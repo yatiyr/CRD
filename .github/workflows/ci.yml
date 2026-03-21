@@ -27,4 +27,9 @@ jobs:
         run: cmake --build --preset win-debug
 
       - name: Test
-        run: ctest --preset win-debug    
+        run: ctest --preset win-debug
+        
+      -name: clang-tidy
+       run: |
+          clang-tidy --version
+          clang-tidy -p build/win-debug engine/core/src/*.cpp
