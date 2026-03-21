@@ -33,3 +33,22 @@ jobs:
         run: |
           clang-tidy --version
           clang-tidy -p build/win-debug engine/core/src/*.cpp
+
+  clang-tidy:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v5
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Configure
+        run: cmake --preset win-tidy
+
+      - name: Build
+        run: cmake --build --preset win-tidy

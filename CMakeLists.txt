@@ -16,6 +16,7 @@ option(CRD_ENABLE_ASSERTS   "Enable CRD_ASSERT macros"        ON)
 option(CRD_ENABLE_PROFILING "Enable profiling instrumentation" OFF)
 option(CRD_ENABLE_ASAN      "Enable Address Sanitizer"         OFF)
 option(CRD_ENABLE_UBSAN     "Enable Undefined Behavior San."   OFF)
+option(CRD_ENABLE_CLANG_TIDY "Run clang-tidy during build" OFF)
 
 # ---- Sanitizers ---------------------------------------------------------
 
@@ -67,7 +68,6 @@ if (CRD_BUILD_TESTS)
     list(APPEND CMAKE_MODULE_PATH ${Catch2_SOURCE_DIR}/extras)
 endif()
 
-
 # ----- Helper: auto-collect sources with CONFIGURE_DEPENDS -----------------
 
 function(crd_collect_sources out_var directory)
@@ -78,6 +78,16 @@ function(crd_collect_sources out_var directory)
     )
     set(${out_var} ${sources} PARENT_SCOPE)
 endfunction()
+
+# ---- CMAKE Tidy ---------------------------------------------------------
+if(CRD_ENABLE_CLANG_TIDY)
+    find_program(CLANG_TIDY_EXE NAMES clang-tidy)
+    if(CLANG_TIDY_EXE)
+        set(CMAKE_CXX_CLANG_TIDY ${CLANG_TIDY_EXE})
+        message(STATUS "[crd] clang-tidy ENABLED")
+    endif()
+endif()
+
 
 # ----- Engine Modules ------------------------------------------------------
 

@@ -62,20 +62,28 @@
             }
         },
         {
-            "name": "win-asan",
-            "displayName": "Windows Debug + ASan",
-            "inherits": "win-debug",
-            "cacheVariables":
-            {
-                "CRD_ENABLE_ASAN": "ON"
-            }
+          "name": "win-asan",
+          "displayName": "Windows Debug + ASan",
+          "inherits": "win-debug",
+          "cacheVariables": {
+            "CRD_ENABLE_ASAN": "ON"
+          }
+        },
+        {
+          "name": "win-tidy",
+          "displayName": "Windows Debug + clang-tidy",
+          "inherits": "win-debug",
+          "cacheVariables": {
+            "CRD_ENABLE_CLANG_TIDY":  "ON"
+          }
         }
     ],
     "buildPresets":
     [
         { "name": "win-debug", "configurePreset": "win-debug" },
         { "name": "win-release", "configurePreset": "win-release" },
-        { "name": "win-asan", "configurePreset": "win-asan" }
+        { "name": "win-asan", "configurePreset": "win-asan" },
+        { "name": "win-tidy", "configurePreset": "win-tidy" }
     ],
     "testPresets":
     [

@@ -1,0 +1,56 @@
+Language: Cpp
+BasedOnStyle: LLVM
+
+# Indentation
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+IndentCaseLabels: true
+NamespaceIndentation: None
+
+# Braces
+BreakBeforeBraces: Allman
+
+# Line length
+ColumnLimit: 120
+
+# Alignment
+AlignAfterOpenBracket: Align
+AlignTrailingComments: true
+
+# Short forms - when to keep things on one line
+AllowShortBlocksOnASingleLine: Empty
+AllowShortCaseLabelsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLambdasOnASingleLine: Inline
+AllowShortLoopsOnASingleLine: false
+
+# Pointers and references
+PointerAlignment: Left
+ReferenceAlignment: Left
+DerivePointerAlignment: false
+
+# Includes
+SortIncludes: CaseSensitive
+IncludeBlocks: Regroup
+IncludeCategories:
+  - Regex: '^"'
+    Priority: 1
+  - Regex: '^<crd/'
+    Priority: 2
+  - Regex: '^<'
+    Priority: 3
+
+# Spaces
+SpaceBeforeParens: ControlStatements
+SpaceBeforeCpp11BracedList: false
+SpaceInEmptyBlock: false
+SpacesInAngles: false
+SpacesInParentheses: false
+
+# Other
+AccessModifierOffset: -4
+ReflowComments: true
+SortUsingDeclarations: true
+Cpp11BracedListStyle: true
