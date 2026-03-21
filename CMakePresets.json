@@ -1,0 +1,98 @@
+{
+    "version": 6,
+    "cmakeMinimumRequired":
+    {
+        "major": 3,
+        "minor": 25,
+        "patch": 0
+    },
+    "configurePresets":
+    [
+        {
+            "name": "base",
+            "hidden": true,
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "cacheVariables":
+            {
+                "CMAKE_CXX_STANDARD": "20",
+                "CMAKE_CXX_STANDARD_REQUIRED": "ON",
+                "CMAKE_CXX_EXTENSIONS": "OFF",
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+                "CRD_BUILD_TESTS": "ON"
+            }
+        },
+        {
+            "name": "win-base",
+            "hidden": true,
+            "inherits": "base",
+            "generator": "Ninja",
+            "condition":
+            {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Windows"
+            },
+            "cacheVariables":
+            {
+                "CMAKE_C_COMPILER": "cl",
+                "CMAKE_CXX_COMPILER": "cl"
+            }
+        },
+        {
+            "name": "win-debug",
+            "displayName": "Windows Debug",
+            "inherits": "win-base",
+            "cacheVariables":
+            {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "CRD_ENABLE_ASSERTS": "ON",
+                "CRD_ENABLE_PROFILING": "ON"
+            }
+        },
+        {
+            "name": "win-release",
+            "displayName": "Windows Release",
+            "inherits": "win-base",
+            "cacheVariables":
+            {
+                "CMAKE_BUILD_TYPE": "Release",
+                "CMAKE_INTERPROCEDURAL_OPTIMIZATION": "ON",
+                "CRD_ENABLE_ASSERTS": "OFF",
+                "CRD_ENABLE_PROFILING": "OFF"
+            }
+        },
+        {
+            "name": "win-asan",
+            "displayName": "Windows Debug + ASan",
+            "inherits": "win-debug",
+            "cacheVariables":
+            {
+                "CRD_ENABLE_ASAN": "ON"
+            }
+        }
+    ],
+    "buildPresets":
+    [
+        { "name": "win-debug", "configurePreset": "win-debug" },
+        { "name": "win-release", "configurePreset": "win-release" },
+        { "name": "win-asan", "configurePreset": "win-asan" }
+    ],
+    "testPresets":
+    [
+        {
+            "name": "win-debug",
+            "configurePreset": "win-debug",
+            "output": { "outputOnFailure": true }
+        },
+            {
+            "name": "win-release",
+            "configurePreset": "win-release",
+            "output": { "outputOnFailure": true }
+        },
+            {
+            "name": "win-asan",
+            "configurePreset": "win-asan",
+            "output": { "outputOnFailure": true }
+        }        
+    ]
+}

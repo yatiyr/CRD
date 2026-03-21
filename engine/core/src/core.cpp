@@ -1,0 +1,1 @@
+// Placeholder - ensures crd-core has at least one translation unit
