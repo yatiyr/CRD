@@ -1,0 +1,28 @@
+# Let git auto-detect text files
+* text=auto
+
+# Source code - always store as LF in the repo
+*.cpp text eol=lf
+*.hpp text eol=lf
+*.h text eol=lf
+*.c text eol=lf
+*.cmake text eol=lf
+
+# Config / docs
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+
+# Windows-specific files can stay CRLF
+*.natvis text eol=crlf
+*.bat text eol=crlf
+*.sln text eol=crlf
+
+# Binary files
+*.png binary
+*.jpg binary
+*.spv binary
+*.ttf binary
+

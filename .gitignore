@@ -1,0 +1,35 @@
+# Build output
+build/
+out/
+cmake-build-*/
+
+# Visual studio
+.vs/
+*.suo
+*.user
+*.sdf
+*.opensdf
+*.VC.db
+*.VC.VC.opendb
+
+# Compiled binaries
+*.obj
+*.o
+*.lib
+*.a
+*.exe
+*.dll
+*.so
+*.pdb
+*.ilk
+*.exp
+
+# CMake files
+CMakeCache.txt
+CMakeFiles/
+compile_commands.json
+_deps/
+
+# OS Junk
+.DS_Store
+Thumbs.db

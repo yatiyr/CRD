@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AutoVisualizer xmlns="http://schemas.microsoft.com/vstudio/debugger/natvis/2010">
+
+    <!--
+        Cerid Engine - Visual Studio Debug Visualizers
+        Add entries here as we create custom types.
+    -->
+
+    <!-- Example: when we build Vec3 later, we'll add this
+    <Type Name="crd::Vec3">
+        <DisplayString>({x}, {y}, {z})</DisplayString>
+        <Expand>
+            <Item Name="x">x</Item>
+            <Item Name="y">y</Item>
+            <Item Name="z">z</Item>
+        </Expand>
+    </Type>
+    -->
+
+    <!-- Example: when we build our dynamic array later
+    <Type Name="crd::Array&lt;*&gt;">
+        <DisplayString>{{ size={m_size} }}</DisplayString>
+        <Expand>
+            <ArrayItems>
+                <Size>m_size</Size>
+                <ValuePointer>m_data</ValuePointer>
+            </ArrayItems>
+        </Expand>
+    </Type>
+    -->
+
+</AutoVisualizer>
