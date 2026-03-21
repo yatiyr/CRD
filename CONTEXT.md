@@ -40,4 +40,39 @@ A modern C++20 game/simulation engine.
 - crd-platform: depends on crd-core, crd-log
 - crd-graphics: depends on crd-core, crd-math, crd-memory, crd-platform
 ```
+## Roadmap
 
+### Phase 1: Core Modules
+- core (types, platform, assert, build config)
+- memory (allocators: linear, stack, pool)
+- math (vec, mat, quat, transform)
+- containers (array, hashmap, string)
+- log (logger, sinks)
+- platform (window, input, filesystem, timer)
+
+### Phase 2: Graphics
+- API-agnostic graphics abstraction
+- Vulkan backend (first), DirectX 12 (future)
+- ImGui (docking branch) for dev tooling
+
+### Phase 3: Scripting
+- Hot-reload C++ scripting via DLLs
+- C API boundary between engine and script modules
+- Plugin system for third-party extensions
+
+### Phase 4: Game UI System
+- crd-ui module on top of crd-graphics
+- Retained mode for game-facing UI (HUD, menus, dialogs)
+- Custom rendering, layout, styling, animation
+
+### Phase 5: Editor
+- Built on crd-ui (replaces ImGui for editor panels)
+- ImGui demoted to debug overlay only
+
+## Architectural Decisions
+- Static libraries for engine modules, dynamic only for scripting/plugins
+- GLOB_RECURSE with CONFIGURE_DEPENDS for automatic source detection
+- Allman brace style, .hpp for C++, .h for C-only
+- ImGui (docking) is temporary dev tooling, not long-term UI solution
+- AI/ML features are future optional modules, not baked into core
+- Engine should stay general enough for both games and simulation (robotics etc.)
