@@ -29,7 +29,7 @@ jobs:
       - name: Test
         run: ctest --preset win-debug
         
-      -name: clang-tidy
-       run: |
+      - name: clang-tidy
+        run: |
           clang-tidy --version
           clang-tidy -p build/win-debug engine/core/src/*.cpp
