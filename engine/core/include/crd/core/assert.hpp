@@ -9,49 +9,54 @@ namespace crd::detail
 		int line, const char* message = nullptr);
 }
 
+#if CRD_COMPILER_MSVC
+    #define CRD_WHILE_FALSE __pragma(warning(push)) __pragma(warning(disable : 4127)) while (false) __pragma(warning(pop))
+#else
+    #define CRD_WHILE_FALSE while (false)
+#endif
 
 #if CRD_ENABLE_ASSERTS
-#define CRD_ASSERT(expr)                                                                                               \
-    do                                                                                                                 \
-    {                                                                                                                  \
-        if (CRD_UNLIKELY(!(expr)))                                                                                     \
-        {                                                                                                              \
-            static bool crd_ignore = false;                                                                            \
-            if (!crd_ignore)                                                                                           \
-            {                                                                                                          \
-                int crd_result = ::crd::detail::report_assert_failure(#expr, __FILE__, __LINE__);                      \
-                if (crd_result == 2)                                                                                   \
-                {                                                                                                      \
-                    CRD_DEBUGBREAK();                                                                                  \
-                }                                                                                                      \
-                else if (crd_result == 0)                                                                              \
-                {                                                                                                      \
-                    crd_ignore = true;                                                                                 \
-                }                                                                                                      \
-            }                                                                                                          \
-        }                                                                                                              \
-    } while (false)
+    #define CRD_ASSERT(expr)                                                                                               \
+        do                                                                                                                 \
+        {                                                                                                                  \
+            if (CRD_UNLIKELY(!(expr)))                                                                                     \
+            {                                                                                                              \
+                static bool crd_ignore = false;                                                                            \
+                if (!crd_ignore)                                                                                           \
+                {                                                                                                          \
+                    int crd_result = ::crd::detail::report_assert_failure(#expr, __FILE__, __LINE__);                      \
+                    if (crd_result == 2)                                                                                   \
+                    {                                                                                                      \
+                        CRD_DEBUGBREAK();                                                                                  \
+                    }                                                                                                      \
+                    else if (crd_result == 0)                                                                              \
+                    {                                                                                                      \
+                        crd_ignore = true;                                                                                 \
+                    }                                                                                                      \
+                }                                                                                                          \
+            }                                                                                                              \
+        } CRD_WHILE_FALSE
 
-#define CRD_ASSERT_MSG(expr, msg)                                                                                      \
-    do                                                                                                                 \
-    {                                                                                                                  \
-        if (CRD_UNLIKELY(!(expr)))                                                                                     \
-        {                                                                                                              \
-            static bool crd_ignore = false;                                                                            \
-            if (!crd_ignore)                                                                                           \
-            {                                                                                                          \
-                int crd_result = ::crd::detail::report_assert_failure(#expr, __FILE__, __LINE__, msg);                 \
-                if (crd_result == 2)                                                                                   \
-                {                                                                                                      \
-                    CRD_DEBUGBREAK();                                                                                  \
-                }                                                                                                      \
-                else if (crd_result == 0)                                                                              \
-                {                                                                                                      \
-                    crd_ignore = true;                                                                                 \
-                }                                                                                                      \
-            }                                                                                                          \
-        }                                                                                                              \
-    } while (false)
+    #define CRD_ASSERT_MSG(expr, msg)                                                                                      \
+        do                                                                                                                 \
+        {                                                                                                                  \
+            if (CRD_UNLIKELY(!(expr)))                                                                                     \
+            {                                                                                                              \
+                static bool crd_ignore = false;                                                                            \
+                if (!crd_ignore)                                                                                           \
+                {                                                                                                          \
+                    int crd_result = ::crd::detail::report_assert_failure(#expr, __FILE__, __LINE__, msg);                 \
+                    if (crd_result == 2)                                                                                   \
+                    {                                                                                                      \
+                        CRD_DEBUGBREAK();                                                                                  \
+                    }                                                                                                      \
+                    else if (crd_result == 0)                                                                              \
+                    {                                                                                                      \
+                        crd_ignore = true;                                                                                 \
+                    }                                                                                                      \
+                }                                                                                                          \
+            }                                                                                                              \
+        } CRD_WHILE_FALSE
 #else
     #define CRD_ASSERT(expr) ((void)0)
     #define CRD_ASSERT_MSG(expr, msg) ((void)0)
@@ -69,4 +74,4 @@ namespace crd::detail
     {                                                                                                                  \
         ::crd::detail::report_assert_failure("FATAL", __FILE__, __LINE__, msg);                                        \
         CRD_DEBUGBREAK();                                                                                              \
-    } while (false)
+    } CRD_WHILE_FALSE
