@@ -21,4 +21,8 @@ namespace crd
     using usize = std::size_t;
     using isize = std::ptrdiff_t;
     
+
+    static_assert(sizeof(f32) == 4, "f32 must be 4 bytes");
+    static_assert(sizeof(f64) == 8, "f64 must be 8 bytes");
+    static_assert(sizeof(usize) == sizeof(void*), "usize must be pointer sized");
 } // namespace crd

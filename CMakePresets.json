@@ -62,6 +62,17 @@
             }
         },
         {
+          "name": "win-relwithdebinfo",
+          "displayName": "Windows RelWithDebInfo",
+          "inherits": "win-base",
+          "cacheVariables": {
+            "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+            "CMAKE_INTERPROCEDURAL_OPTIMIZATION": "ON",
+            "CRD_ENABLE_ASSERTS": "ON",
+            "CRD_ENABLE_PROFILING": "ON"
+          }
+        },
+        {
           "name": "win-asan",
           "displayName": "Windows Debug + ASan",
           "inherits": "win-debug",
@@ -83,7 +94,9 @@
         { "name": "win-debug", "configurePreset": "win-debug" },
         { "name": "win-release", "configurePreset": "win-release" },
         { "name": "win-asan", "configurePreset": "win-asan" },
-        { "name": "win-tidy", "configurePreset": "win-tidy" }
+        { "name": "win-tidy", "configurePreset": "win-tidy" },
+        { "name": "win-relwithdebinfo", "configurePreset": "win-relwithdebinfo" }
+      
     ],
     "testPresets":
     [
