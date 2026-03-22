@@ -16,8 +16,8 @@ int main()
     std::cout << crd::compiler_name() << '\n';
     std::cout << crd::platform_name() << '\n';
     std::cout << CRD_VERSION_STRING << '\n';
-    CRD_ASSERT(1 == 2);
-    CRD_ASSERT_MSG(1 == 2, "math is broken");
+    // CRD_ASSERT(1 == 2);
+    // CRD_ASSERT_MSG(1 == 2, "math is broken");
 
     return 0;
 }
