@@ -4,4 +4,5 @@ add_executable(crd-runtime ${SOURCES})
 
 target_link_libraries(crd-runtime PRIVATE
     crd-core
+    crd-log
 )

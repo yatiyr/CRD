@@ -18,6 +18,39 @@ option(CRD_ENABLE_ASAN      "Enable Address Sanitizer"         OFF)
 option(CRD_ENABLE_UBSAN     "Enable Undefined Behavior San."   OFF)
 option(CRD_ENABLE_CLANG_TIDY "Run clang-tidy during build" OFF)
 
+# ---- Log compile-time minimum level ---------------------------------------
+# Anything strictly below this level is compiled out to ((void)0).
+# Valid values: Trace, Debug, Info, Warn, Error, Critical
+set(CRD_LOG_MIN_LEVEL "" CACHE STRING
+    "Compile-time minimum log level (Trace/Debug/Info/Warn/Error/Critical). Empty = auto.")
+
+if(CRD_LOG_MIN_LEVEL STREQUAL "")
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+        set(CRD_LOG_MIN_LEVEL_RESOLVED "Trace")
+    else()
+        set(CRD_LOG_MIN_LEVEL_RESOLVED "Info")
+    endif()
+else()
+    set(CRD_LOG_MIN_LEVEL_RESOLVED "${CRD_LOG_MIN_LEVEL}")
+endif()
+
+if(CRD_LOG_MIN_LEVEL_RESOLVED STREQUAL "Trace")
+    set(CRD_LOG_MIN_LEVEL_NUM 0)
+elseif(CRD_LOG_MIN_LEVEL_RESOLVED STREQUAL "Debug")
+    set(CRD_LOG_MIN_LEVEL_NUM 1)
+elseif(CRD_LOG_MIN_LEVEL_RESOLVED STREQUAL "Info")
+    set(CRD_LOG_MIN_LEVEL_NUM 2)
+elseif(CRD_LOG_MIN_LEVEL_RESOLVED STREQUAL "Warn")
+    set(CRD_LOG_MIN_LEVEL_NUM 3)
+elseif(CRD_LOG_MIN_LEVEL_RESOLVED STREQUAL "Error")
+    set(CRD_LOG_MIN_LEVEL_NUM 4)
+elseif(CRD_LOG_MIN_LEVEL_RESOLVED STREQUAL "Critical")
+    set(CRD_LOG_MIN_LEVEL_NUM 5)
+else()
+    message(FATAL_ERROR "Invalid CRD_LOG_MIN_LEVEL: '${CRD_LOG_MIN_LEVEL_RESOLVED}'")
+endif()
+message(STATUS "[crd] Log compile-time min level: ${CRD_LOG_MIN_LEVEL_RESOLVED} (${CRD_LOG_MIN_LEVEL_NUM})")
+
 # ---- Sanitizers ---------------------------------------------------------
 
 if(CRD_ENABLE_ASAN)
@@ -48,6 +81,7 @@ if (MSVC)
         /WX
         /permissive-
         /Zc:__cplusplus
+        /Zc:preprocessor
         /utf-8
     )
 else()
@@ -95,7 +129,7 @@ add_subdirectory(engine/core)
 # add_subdirectory(engine/memory)
 # add_subdirectory(engine/math)
 # add_subdirectory(engine/containers)
-# add_subdirectory(engine/log)
+add_subdirectory(engine/log)
 # add_subdirectory(engine/platform)
 # add_subdirectory(engine/graphics)
 # add_subdirectory(engine/scripting)

@@ -10,3 +10,15 @@
 
 #cmakedefine CRD_DEBUG
 #cmakedefine CRD_RELEASE
+
+// --- Log subsystem -----------------------------------------------------
+// Numeric values for log levels (kept in sync with crd::log::LogLevel).
+#define CRD_LOG_LEVEL_TRACE    0
+#define CRD_LOG_LEVEL_DEBUG    1
+#define CRD_LOG_LEVEL_INFO     2
+#define CRD_LOG_LEVEL_WARN     3
+#define CRD_LOG_LEVEL_ERROR    4
+#define CRD_LOG_LEVEL_CRITICAL 5
+
+// Anything strictly below this number is compiled out at the call site.
+#define CRD_LOG_MIN_LEVEL_NUM @CRD_LOG_MIN_LEVEL_NUM@
