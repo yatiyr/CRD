@@ -6,8 +6,15 @@
         Add entries here as we create custom types.
     -->
 
-    <!-- Example: when we build Vec3 later, we'll add this
-    <Type Name="crd::Vec3">
+    <Type Name="crd::math::Vec2&lt;*&gt;">
+        <DisplayString>({x}, {y})</DisplayString>
+        <Expand>
+            <Item Name="x">x</Item>
+            <Item Name="y">y</Item>
+        </Expand>
+    </Type>
+
+    <Type Name="crd::math::Vec3&lt;*&gt;">
         <DisplayString>({x}, {y}, {z})</DisplayString>
         <Expand>
             <Item Name="x">x</Item>
@@ -15,7 +22,61 @@
             <Item Name="z">z</Item>
         </Expand>
     </Type>
-    -->
+
+    <Type Name="crd::math::Vec4&lt;*&gt;">
+        <DisplayString>({x}, {y}, {z}, {w})</DisplayString>
+        <Expand>
+            <Item Name="x">x</Item>
+            <Item Name="y">y</Item>
+            <Item Name="z">z</Item>
+            <Item Name="w">w</Item>
+        </Expand>
+    </Type>
+
+    <Type Name="crd::math::Quat&lt;*&gt;">
+        <DisplayString>xyzw=({x}, {y}, {z}, {w})</DisplayString>
+        <Expand>
+            <Item Name="x">x</Item>
+            <Item Name="y">y</Item>
+            <Item Name="z">z</Item>
+            <Item Name="w">w</Item>
+        </Expand>
+    </Type>
+
+    <Type Name="crd::math::Mat2&lt;*&gt;">
+        <DisplayString>[[{c0.x}, {c1.x}], [{c0.y}, {c1.y}]]</DisplayString>
+        <Expand>
+            <Item Name="col0">c0</Item>
+            <Item Name="col1">c1</Item>
+        </Expand>
+    </Type>
+
+    <Type Name="crd::math::Mat3&lt;*&gt;">
+        <DisplayString>[[{c0.x}, {c1.x}, {c2.x}], [{c0.y}, {c1.y}, {c2.y}], [{c0.z}, {c1.z}, {c2.z}]]</DisplayString>
+        <Expand>
+            <Item Name="col0">c0</Item>
+            <Item Name="col1">c1</Item>
+            <Item Name="col2">c2</Item>
+        </Expand>
+    </Type>
+
+    <Type Name="crd::math::Mat4&lt;*&gt;">
+        <DisplayString>[[{c0.x}, {c1.x}, {c2.x}, {c3.x}], [{c0.y}, {c1.y}, {c2.y}, {c3.y}], [{c0.z}, {c1.z}, {c2.z}, {c3.z}], [{c0.w}, {c1.w}, {c2.w}, {c3.w}]]</DisplayString>
+        <Expand>
+            <Item Name="col0">c0</Item>
+            <Item Name="col1">c1</Item>
+            <Item Name="col2">c2</Item>
+            <Item Name="col3">c3</Item>
+        </Expand>
+    </Type>
+
+    <Type Name="crd::math::Transform&lt;*&gt;">
+        <DisplayString>t=({translation.x}, {translation.y}, {translation.z}) r=({rotation.x}, {rotation.y}, {rotation.z}, {rotation.w})</DisplayString>
+        <Expand>
+            <Item Name="translation">translation</Item>
+            <Item Name="rotation">rotation</Item>
+        </Expand>
+    </Type>
 
     <!-- Example: when we build our dynamic array later
     <Type Name="crd::Array&lt;*&gt;">

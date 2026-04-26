@@ -32,6 +32,14 @@ Notes:
 | `Vec3f` normalize | `0.290291 ns` |
 | `Vec3d` dot | `0.799976 ns` |
 | `Vec3d` normalize | `0.28999 ns` |
+| `Mat4f * Vec4f` | `2.35544 ns` |
+| `Mat4f * Mat4f` | `10.0339 ns` |
+| `Mat4d * Vec4d` | `0.8028 ns` |
+| `Mat4d * Mat4d` | `0.801791 ns` |
+| `Quatf` multiply | `2.75813 ns` |
+| `Quatf` rotate `Vec3f` | `11.7329 ns` |
+| `Transformf` compose | `14.6563 ns` |
+| `Transformf` point | `12.8228 ns` |
 
 ## Interpretation
 
@@ -41,3 +49,8 @@ Notes:
   which is the behavior we want to preserve.
 - The first math slice already has `f32` and `f64` benchmark numbers pinned,
   so future SIMD and matrix work will have a scalar baseline to compare against.
+- Matrix baselines are now pinned too, which gives the future quaternion /
+  transform slice a clean lower-level substrate to regress against.
+- Quaternion and rigid-transform baselines are now pinned as well, which means
+  the upcoming primitive-geometry slice will build on a benchmarked spatial
+  substrate instead of a purely semantic one.

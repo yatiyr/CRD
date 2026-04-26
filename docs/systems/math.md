@@ -6,9 +6,9 @@ Math substrate for graphics, simulation, robotics, and later numerical work.
 
 | Slice | Ships | Status |
 | --- | --- | --- |
-| v1a | scalar helpers, `Vec2/3/4`, `f32/f64` aliases | 🚧 |
-| v1b | `Mat2/3/4` (column-major) | ⏳ |
-| v1c | `Quat`, `Transform` | ⏳ |
+| v1a | scalar helpers, `Vec2/3/4`, `f32/f64` aliases | ✅ |
+| v1b | `Mat2/3/4` (column-major) | ✅ |
+| v1c | `Quat`, `Transform` | ✅ |
 | v1d | `Ray`, `Plane`, `AABB`, `Sphere`, `Triangle`, `Frustum` | ⏳ |
 
 ## Core decisions
@@ -19,6 +19,35 @@ Math substrate for graphics, simulation, robotics, and later numerical work.
 - Public API supports both `float` and `double`
 - Scalar-first implementation, SIMD-ready layout and benchmarks from day one
 - Quaternion convention: Hamilton, stored as `xyzw`, identity = `(0, 0, 0, 1)`
+- Matrix storage contract: columns are stored directly, so `m[0]` is the first
+  column and `transpose(m)` materialises the row/column swap explicitly
+
+## What ships today
+
+- scalar constants and helpers (`pi`, radians/degrees, finite/NaN, approximate compares)
+- ergonomic float/double aliases for the core angle constants
+- `Vec2/3/4<T>` plus `Vec*f` / `Vec*d`
+- `Mat2/3/4<T>` plus `Mat*f` / `Mat*d`
+- `Mat * Vec`, `Mat * Mat`, transpose, identity/zero constructors
+- `Quat<T>` plus `Quatf` / `Quatd`
+- rigid `Transform<T>` plus `Transformf` / `Transformd`
+- quaternion axis-angle, vector rotation, matrix conversion, inverse,
+  `nlerp` / `slerp`
+- `std::format` / log-friendly formatting for vectors, matrices, quaternions,
+  and transforms
+- Visual Studio Natvis views for the same core math types
+
+## Current transform policy
+
+`Transform<T>` currently means **rigid transform**:
+
+- translation: `Vec3<T>`
+- rotation: `Quat<T>`
+- no embedded non-uniform scale yet
+
+This is deliberate. It keeps composition and inversion unambiguous for the
+robotics/simulation path while still giving graphics a clean bridge through
+matrix conversion.
 
 ## Long-term direction
 

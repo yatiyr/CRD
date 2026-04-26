@@ -54,9 +54,9 @@ hold containers, and talk to the OS.
 | 6f   | quality pass     | Run win-tidy preset, triage warnings (fix or explicitly suppress) | ✅ |
 | 6g   | quality pass     | Doxygen-friendly review of public headers (no generation yet)     | ✅ |
 | 6h   | quality pass     | Real CRD_ASSERT(false) bridge test (handler bypass for tests)     | ✅ |
-| 7a   | `crd-math`       | design contract + scalar foundations + Vec2/3/4                  | 🚧     |
-| 7b   | `crd-math`       | Mat2/3/4 (column-major)                                           | ⏳     |
-| 7c   | `crd-math`       | Quat (Hamilton, xyzw) + Transform                                 | ⏳     |
+| 7a   | `crd-math`       | design contract + scalar foundations + Vec2/3/4                  | ✅     |
+| 7b   | `crd-math`       | Mat2/3/4 (column-major)                                           | ✅     |
+| 7c   | `crd-math`       | Quat (Hamilton, xyzw) + Transform                                 | ✅     |
 | 7d   | `crd-math`       | Ray, Plane, AABB, Sphere, Triangle, Frustum                       | ⏳     |
 | 8a   | `crd-platform`   | Window (GLFW), Timer, basic input                                 | ⏳     |
 | 8b   | `crd-platform`   | Filesystem, DynamicLibrary, threading helpers                     | ⏳     |
@@ -413,28 +413,25 @@ allocator interface correctly today (Phase A) makes 2–5 a drop-in addition.
 > Update this section at the end of every session so future-you can re-enter
 > the project without thinking.
 
-**Last session:** 2026-04-26 — `crd-math` v1a kickoff. See
-`docs/sessions/2026-04-26-math-v1a-kickoff.md`.
+**Last session:** 2026-04-26 — math formatting polish. See
+`docs/sessions/2026-04-26-math-formatting-polish.md`.
 
 What landed:
 
-1. Math roadmap expanded from a 3-line placeholder into a staged plan from
-   scalar/vector basics through SIMD, dense numerical work, sparse solves,
-   and later robust computational geometry.
-2. `crd-math` now exists as a real module with scalar helpers and
-   `Vec2/3/4<T>` for both `f32` and `f64`.
-3. Tests, benchmarks, and a smoke example now cover the first shipped math
-   slice.
-4. The kickoff already caught and fixed one Release-only correctness bug:
-   `normalized(v)` was incorrectly relying on an assert side-effect.
+1. Core math types now format cleanly through `std::format`, which means log
+   output for vectors, matrices, quaternions, and transforms is immediately
+   readable.
+2. Visual Studio Natvis visualizers now cover those same types for debugger use.
+3. The added polish passed another regression sweep across Debug / Release /
+   ASan, so the math substrate stayed stable while getting easier to inspect.
 
 Current test counts:
 
-- Debug: `129/129`
-- Release: `128/128`
-- ASan: `129/129`
+- Debug: `141/141`
+- Release: `139/139`
+- ASan: `141/141`
 
-**Next session starts with: continue `crd-math` v1b (matrices).**
+**Next session starts with: continue `crd-math` v1d (primitive geometry).**
 
 The key decisions are now locked in:
 
@@ -442,6 +439,13 @@ The key decisions are now locked in:
 - column-major matrices with `Mat * Vec`
 - scalar-first, SIMD-ready design
 - public `f32` and `f64` support from day one
+- v1 `Transform<T>` is a rigid transform, not a full TRS object. Non-uniform
+  scale remains matrix-level for now so composition semantics stay clean.
+
+One local verification wrinkle to remember: after a targeted clean rebuild of
+only `crd-bench`, `ctest --preset win-release` temporarily surfaced Catch2
+`NOT_BUILT` placeholders. A full rebuild restores the real executables, and
+`ctest --test-dir build/win-release` reflected the correct 133-test set.
 
 Approximately 4–6 sessions from the math session to Phase 1 close
 (2 math sessions, 2 platform sessions, 1 closeout, plus the

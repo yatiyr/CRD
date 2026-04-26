@@ -9,7 +9,11 @@
 //
 // Later slices add matrices, quaternions, transforms, and primitive geometry.
 
+#include <crd/math/format.hpp>
+#include <crd/math/mat.hpp>
+#include <crd/math/quat.hpp>
 #include <crd/math/scalar.hpp>
+#include <crd/math/transform.hpp>
 #include <crd/math/vec.hpp>
 
 namespace crd::math

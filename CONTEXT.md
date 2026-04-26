@@ -46,7 +46,7 @@ A modern C++20 game/simulation engine.
 | `crd-log`        | ✅      |
 | `crd-memory`     | ✅      |
 | `crd-containers` | ✅      |
-| `crd-math`       | ⏳      |
+| `crd-math`       | 🚧      |
 | `crd-platform`   | ⏳      |
 
 Full status table and reasoning live in [`docs/ROADMAP.md`](docs/ROADMAP.md).

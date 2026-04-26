@@ -21,6 +21,13 @@ template <MathScalar T> inline constexpr T k_tau = static_cast<T>(2) * k_pi<T>;
 
 template <MathScalar T> inline constexpr T k_half_pi = static_cast<T>(0.5) * k_pi<T>;
 
+inline constexpr crd::f32 k_pi_f = k_pi<crd::f32>;
+inline constexpr crd::f64 k_pi_d = k_pi<crd::f64>;
+inline constexpr crd::f32 k_tau_f = k_tau<crd::f32>;
+inline constexpr crd::f64 k_tau_d = k_tau<crd::f64>;
+inline constexpr crd::f32 k_half_pi_f = k_half_pi<crd::f32>;
+inline constexpr crd::f64 k_half_pi_d = k_half_pi<crd::f64>;
+
 template <MathScalar T> inline constexpr T default_epsilon() noexcept
 {
     return std::is_same_v<T, crd::f32> ? static_cast<T>(1.0e-5f) : static_cast<T>(1.0e-12);
@@ -83,12 +90,4 @@ template <MathScalar T> [[nodiscard]] constexpr bool approx_zero(T value, T epsi
 {
     return abs(value) <= epsilon;
 }
-
-const static crd::f32 k_pi_f = k_pi<crd::f32>;
-const static crd::f64 k_pi_d = k_pi<crd::f64>;
-const static crd::f32 k_tau_f = k_tau<crd::f32>;
-const static crd::f64 k_tau_d = k_tau<crd::f64>;
-const static crd::f32 k_half_pi_f = k_half_pi<crd::f32>;
-const static crd::f64 k_half_pi_d = k_half_pi<crd::f64>;
-
 } // namespace crd::math
