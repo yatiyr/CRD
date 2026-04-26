@@ -17,6 +17,17 @@ int main()
     const Vec3f rotated = rotate_vector(quarter_turn, Vec3f(1.0f, 0.0f, 0.0f));
     const Transformf pose(Vec3f(10.0f, 0.0f, 0.0f), quarter_turn);
     const Vec3f transformed = transform_point(pose, Vec3f(1.0f, 0.0f, 0.0f));
+    const Planef ground = plane_from_point_normal(Vec3f(0.0f, 0.0f, 0.0f), Vec3f(0.0f, 1.0f, 0.0f));
+    const Rayf drop_ray(Vec3f(0.0f, 10.0f, 0.0f), Vec3f(0.0f, -1.0f, 0.0f));
+    const Trianglef tri(Vec3f(-1.0f, -1.0f, 0.0f), Vec3f(1.0f, -1.0f, 0.0f), Vec3f(0.0f, 1.0f, 0.0f));
+    const Frustumf frustum = frustum_from_view_projection(Mat4f::identity());
+    const AABBf bounds(Vec3f(-0.5f, -0.5f, -0.5f), Vec3f(0.5f, 0.5f, 0.5f));
+    float ray_t = 0.0f;
+    Vec3f bary{};
+    const bool ray_hit_ground = intersect_ray_plane(drop_ray, ground, ray_t);
+    const bool ray_hit_tri =
+        intersect_ray_triangle(Rayf(Vec3f(0.0f, 0.0f, -5.0f), Vec3f(0.0f, 0.0f, 1.0f)), tri, ray_t, bary);
+    const bool frustum_hits_bounds = intersects(frustum, bounds);
 
     std::cout << "pi<float>=" << k_pi<crd::f32> << "\n";
     std::cout << "pi<float> alias=" << k_pi_f << "\n";
@@ -26,6 +37,10 @@ int main()
     std::cout << "basis * (1,2,3) = (" << scaled.x << ", " << scaled.y << ", " << scaled.z << ")\n";
     std::cout << "rotated x by +90deg around z = (" << rotated.x << ", " << rotated.y << ", " << rotated.z << ")\n";
     std::cout << "transform point -> (" << transformed.x << ", " << transformed.y << ", " << transformed.z << ")\n";
+    std::cout << "ray hits ground? " << ray_hit_ground << " at t=" << ray_t << "\n";
+    std::cout << "ray hits triangle? " << ray_hit_tri << " bary=(" << bary.x << ", " << bary.y << ", " << bary.z
+              << ")\n";
+    std::cout << "identity frustum intersects unit-ish bounds? " << frustum_hits_bounds << "\n";
     std::cout << "90 deg in radians = " << deg_to_rad(90.0f) << "\n";
     return 0;
 }

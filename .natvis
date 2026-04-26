@@ -78,6 +78,59 @@
         </Expand>
     </Type>
 
+    <Type Name="crd::math::Ray&lt;*&gt;">
+        <DisplayString>o=({origin.x}, {origin.y}, {origin.z}) d=({direction.x}, {direction.y}, {direction.z})</DisplayString>
+        <Expand>
+            <Item Name="origin">origin</Item>
+            <Item Name="direction">direction</Item>
+        </Expand>
+    </Type>
+
+    <Type Name="crd::math::Plane&lt;*&gt;">
+        <DisplayString>n=({normal.x}, {normal.y}, {normal.z}) d={d}</DisplayString>
+        <Expand>
+            <Item Name="normal">normal</Item>
+            <Item Name="d">d</Item>
+        </Expand>
+    </Type>
+
+    <Type Name="crd::math::Sphere&lt;*&gt;">
+        <DisplayString>c=({center.x}, {center.y}, {center.z}) r={radius}</DisplayString>
+        <Expand>
+            <Item Name="center">center</Item>
+            <Item Name="radius">radius</Item>
+        </Expand>
+    </Type>
+
+    <Type Name="crd::math::AABB&lt;*&gt;">
+        <DisplayString>min=({min.x}, {min.y}, {min.z}) max=({max.x}, {max.y}, {max.z})</DisplayString>
+        <Expand>
+            <Item Name="min">min</Item>
+            <Item Name="max">max</Item>
+        </Expand>
+    </Type>
+
+    <Type Name="crd::math::Triangle&lt;*&gt;">
+        <DisplayString>a=({a.x}, {a.y}, {a.z}) b=({b.x}, {b.y}, {b.z}) c=({c.x}, {c.y}, {c.z})</DisplayString>
+        <Expand>
+            <Item Name="a">a</Item>
+            <Item Name="b">b</Item>
+            <Item Name="c">c</Item>
+        </Expand>
+    </Type>
+
+    <Type Name="crd::math::Frustum&lt;*&gt;">
+        <DisplayString>planes[6]</DisplayString>
+        <Expand>
+            <Item Name="left">planes[0]</Item>
+            <Item Name="right">planes[1]</Item>
+            <Item Name="bottom">planes[2]</Item>
+            <Item Name="top">planes[3]</Item>
+            <Item Name="near">planes[4]</Item>
+            <Item Name="far">planes[5]</Item>
+        </Expand>
+    </Type>
+
     <!-- Example: when we build our dynamic array later
     <Type Name="crd::Array&lt;*&gt;">
         <DisplayString>{{ size={m_size} }}</DisplayString>

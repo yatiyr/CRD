@@ -9,7 +9,7 @@ Math substrate for graphics, simulation, robotics, and later numerical work.
 | v1a | scalar helpers, `Vec2/3/4`, `f32/f64` aliases | ✅ |
 | v1b | `Mat2/3/4` (column-major) | ✅ |
 | v1c | `Quat`, `Transform` | ✅ |
-| v1d | `Ray`, `Plane`, `AABB`, `Sphere`, `Triangle`, `Frustum` | ⏳ |
+| v1d | `Ray`, `Plane`, `AABB`, `Sphere`, `Triangle`, `Frustum` | ✅ |
 
 ## Core decisions
 
@@ -33,8 +33,11 @@ Math substrate for graphics, simulation, robotics, and later numerical work.
 - rigid `Transform<T>` plus `Transformf` / `Transformd`
 - quaternion axis-angle, vector rotation, matrix conversion, inverse,
   `nlerp` / `slerp`
+- `Ray`, `Plane`, `AABB`, `Sphere`, `Triangle`, `Frustum`
+- ray/plane, ray/sphere, ray/triangle intersection helpers
+- barycentric coordinates, triangle normal / centroid, frustum extraction
 - `std::format` / log-friendly formatting for vectors, matrices, quaternions,
-  and transforms
+  transforms, and primitive geometry
 - Visual Studio Natvis views for the same core math types
 
 ## Current transform policy
@@ -48,6 +51,18 @@ Math substrate for graphics, simulation, robotics, and later numerical work.
 This is deliberate. It keeps composition and inversion unambiguous for the
 robotics/simulation path while still giving graphics a clean bridge through
 matrix conversion.
+
+## Primitive geometry policy
+
+The current primitive layer is deliberately **fast and foundational**, not yet a
+full computational-geometry module.
+
+- intersection helpers are branch-light and future SIMD-friendly
+- triangle ray tests use Moller-Trumbore
+- frustum extraction follows the standard clip-plane extraction path from a
+  column-major view-projection matrix
+- barycentric coordinates are present now because later geometry algorithms will
+  build on them directly
 
 ## Long-term direction
 

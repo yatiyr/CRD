@@ -1,15 +1,18 @@
 #pragma once
 
-// Umbrella header for the first shipped slice of crd-math.
+// Umbrella header for the currently shipped slices of crd-math.
 //
-// v1a ships:
+// Shipped today:
 //   - scalar helpers (`pi`, radians/degrees, approx compare)
 //   - `Vec2<T>`, `Vec3<T>`, `Vec4<T>`
-//   - `f32` / `f64` aliases (`Vec3f`, `Vec3d`, ...)
-//
-// Later slices add matrices, quaternions, transforms, and primitive geometry.
+//   - `Mat2/3/4<T>`
+//   - `Quat<T>` and rigid `Transform<T>`
+//   - primitive geometry (`Ray`, `Plane`, `AABB`, `Sphere`, `Triangle`, `Frustum`)
+//   - `f32` / `f64` aliases (`Vec3f`, `Quatd`, ...)
+//   - `std::format` support for the core math types
 
 #include <crd/math/format.hpp>
+#include <crd/math/geometry.hpp>
 #include <crd/math/mat.hpp>
 #include <crd/math/quat.hpp>
 #include <crd/math/scalar.hpp>

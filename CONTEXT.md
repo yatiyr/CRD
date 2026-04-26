@@ -46,7 +46,7 @@ A modern C++20 game/simulation engine.
 | `crd-log`        | ✅      |
 | `crd-memory`     | ✅      |
 | `crd-containers` | ✅      |
-| `crd-math`       | 🚧      |
+| `crd-math`       | ✅      |
 | `crd-platform`   | ⏳      |
 
 Full status table and reasoning live in [`docs/ROADMAP.md`](docs/ROADMAP.md).
@@ -68,6 +68,7 @@ Full status table and reasoning live in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — phase plan, status, decision log
 - [`docs/sessions/`](docs/sessions/) — one file per work session
 - [`docs/systems/`](docs/systems/) — short overview per shipped subsystem
+- [`docs/systems/math.md`](docs/systems/math.md) — current math module overview
 - [`docs/log/LOG_FILE.md`](docs/log/LOG_FILE.md) — long deep-dive on `crd-log`
 - [`docs/memory/MEMORY_FILE.md`](docs/memory/MEMORY_FILE.md) — long deep-dive on `crd-memory`
 - [`docs/containers/CONTAINERS_FILE.md`](docs/containers/CONTAINERS_FILE.md) — long deep-dive on `crd-containers`

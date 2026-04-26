@@ -40,6 +40,9 @@ Notes:
 | `Quatf` rotate `Vec3f` | `11.7329 ns` |
 | `Transformf` compose | `14.6563 ns` |
 | `Transformf` point | `12.8228 ns` |
+| `Rayf` plane intersection | `1.14232 ns` |
+| `Rayf` triangle intersection | `4.41779 ns` |
+| `Frustumf` AABB test | `5.3504 ns` |
 
 ## Interpretation
 
@@ -54,3 +57,6 @@ Notes:
 - Quaternion and rigid-transform baselines are now pinned as well, which means
   the upcoming primitive-geometry slice will build on a benchmarked spatial
   substrate instead of a purely semantic one.
+- Primitive geometry now has its own early micro-baselines, so future
+  computational-geometry and SIMD work can be compared against a known scalar
+  starting point.

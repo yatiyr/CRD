@@ -15,7 +15,7 @@
 | `crd-memory`     | ✅      | 1     | IAllocator + Malloc/Linear/Stack/Pool, streaming-ready iface |
 | `crd-containers` | ✅      | 1     | Array, FixedArray, Span, String, RingBuffer, HashMap, HashSet |
 | Phase 1 quality  | ✅      | 1     | CI, benchmarks, PCH, runtime split, clang-cl, tidy, assert   |
-| `crd-math`       | 🚧      | 1     | float+double, scalar-first, column-major, radians           |
+| `crd-math`       | ✅      | 1     | float+double, scalar-first, column-major, radians           |
 | `crd-platform`   | ⏳      | 1     | window/input/timer/filesystem (GLFW)                         |
 | `crd-graphics`   | ⏳      | 2     | Vulkan-first, RHI abstraction                                |
 | GPU memory + streaming | ⏳ | 2     | TLSF, BuddyAllocator, StreamingAllocator, GPUAllocator       |
@@ -57,7 +57,7 @@ hold containers, and talk to the OS.
 | 7a   | `crd-math`       | design contract + scalar foundations + Vec2/3/4                  | ✅     |
 | 7b   | `crd-math`       | Mat2/3/4 (column-major)                                           | ✅     |
 | 7c   | `crd-math`       | Quat (Hamilton, xyzw) + Transform                                 | ✅     |
-| 7d   | `crd-math`       | Ray, Plane, AABB, Sphere, Triangle, Frustum                       | ⏳     |
+| 7d   | `crd-math`       | Ray, Plane, AABB, Sphere, Triangle, Frustum                       | ✅     |
 | 8a   | `crd-platform`   | Window (GLFW), Timer, basic input                                 | ⏳     |
 | 8b   | `crd-platform`   | Filesystem, DynamicLibrary, threading helpers                     | ⏳     |
 | 9    | closeout         | CONTEXT.md sweep, retrospective session log, Phase 2 prep         | ⏳     |
@@ -413,25 +413,29 @@ allocator interface correctly today (Phase A) makes 2–5 a drop-in addition.
 > Update this section at the end of every session so future-you can re-enter
 > the project without thinking.
 
-**Last session:** 2026-04-26 — math formatting polish. See
-`docs/sessions/2026-04-26-math-formatting-polish.md`.
+**Last session:** 2026-04-26 — `crd-math` v1d primitive geometry. See
+`docs/sessions/2026-04-26-math-v1d-primitive-geometry.md`.
 
 What landed:
 
-1. Core math types now format cleanly through `std::format`, which means log
-   output for vectors, matrices, quaternions, and transforms is immediately
-   readable.
-2. Visual Studio Natvis visualizers now cover those same types for debugger use.
-3. The added polish passed another regression sweep across Debug / Release /
-   ASan, so the math substrate stayed stable while getting easier to inspect.
+1. `crd-math` v1 is now functionally complete for Phase 1: scalar helpers,
+   vectors, matrices, quaternions, rigid transforms, and primitive geometry.
+2. Primitive geometry shipped with fast core helpers: ray/plane, ray/sphere,
+   ray/triangle, AABB/sphere overlap, barycentric coordinates, and frustum
+   extraction from view-projection matrices.
+3. The module now has formatting and debugger support for both spatial-math and
+   primitive-geometry types.
+4. The test suite and benchmark baseline now cover the entire shipped Phase 1
+   math substrate, giving future SIMD and computational-geometry work a known
+   scalar baseline.
 
 Current test counts:
 
-- Debug: `141/141`
-- Release: `139/139`
-- ASan: `141/141`
+- Debug: `152/152`
+- Release: `151/151`
+- ASan: `152/152`
 
-**Next session starts with: continue `crd-math` v1d (primitive geometry).**
+**Next session starts with: `crd-platform` v1a (window, timer, input).**
 
 The key decisions are now locked in:
 
@@ -441,6 +445,10 @@ The key decisions are now locked in:
 - public `f32` and `f64` support from day one
 - v1 `Transform<T>` is a rigid transform, not a full TRS object. Non-uniform
   scale remains matrix-level for now so composition semantics stay clean.
+
+`crd-math` still has long-range expansions planned (SIMD, dense numerical work,
+sparse solvers, robust computational geometry), but the Phase 1 slice is now a
+coherent shipped substrate rather than a work in progress.
 
 One local verification wrinkle to remember: after a targeted clean rebuild of
 only `crd-bench`, `ctest --preset win-release` temporarily surfaced Catch2
