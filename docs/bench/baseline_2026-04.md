@@ -27,6 +27,11 @@ Notes:
 | `HashMap<u32,u32>` erase 1M | `26.6381 ms` |
 | `String` SSO construct + assign | `2.9374 ns` |
 | `String` heap construct + assign | `48.0579 ns` |
+| `Vec3f` add | `0.373036 ns` |
+| `Vec3f` dot | `0.724887 ns` |
+| `Vec3f` normalize | `0.290291 ns` |
+| `Vec3d` dot | `0.799976 ns` |
+| `Vec3d` normalize | `0.28999 ns` |
 
 ## Interpretation
 
@@ -34,3 +39,5 @@ Notes:
 - HashMap numbers are now pinned early, before math/platform grow the codebase.
 - `String` SSO still shows a large gap versus heap-backed text construction,
   which is the behavior we want to preserve.
+- The first math slice already has `f32` and `f64` benchmark numbers pinned,
+  so future SIMD and matrix work will have a scalar baseline to compare against.

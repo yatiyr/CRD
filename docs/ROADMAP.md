@@ -15,7 +15,7 @@
 | `crd-memory`     | ✅      | 1     | IAllocator + Malloc/Linear/Stack/Pool, streaming-ready iface |
 | `crd-containers` | ✅      | 1     | Array, FixedArray, Span, String, RingBuffer, HashMap, HashSet |
 | Phase 1 quality  | ✅      | 1     | CI, benchmarks, PCH, runtime split, clang-cl, tidy, assert   |
-| `crd-math`       | ⏳      | 1     | column-major, radians                                        |
+| `crd-math`       | 🚧      | 1     | float+double, scalar-first, column-major, radians           |
 | `crd-platform`   | ⏳      | 1     | window/input/timer/filesystem (GLFW)                         |
 | `crd-graphics`   | ⏳      | 2     | Vulkan-first, RHI abstraction                                |
 | GPU memory + streaming | ⏳ | 2     | TLSF, BuddyAllocator, StreamingAllocator, GPUAllocator       |
@@ -54,16 +54,17 @@ hold containers, and talk to the OS.
 | 6f   | quality pass     | Run win-tidy preset, triage warnings (fix or explicitly suppress) | ✅ |
 | 6g   | quality pass     | Doxygen-friendly review of public headers (no generation yet)     | ✅ |
 | 6h   | quality pass     | Real CRD_ASSERT(false) bridge test (handler bypass for tests)     | ✅ |
-| 7a   | `crd-math`       | Vec2/3/4 + basic ops                                              | ⏳     |
-| 7b   | `crd-math`       | Mat2/3/4 (column-major) + Quat + Transform                        | ⏳     |
-| 7c   | `crd-math`       | AABB, Sphere, Ray, Plane, Frustum                                 | ⏳     |
+| 7a   | `crd-math`       | design contract + scalar foundations + Vec2/3/4                  | 🚧     |
+| 7b   | `crd-math`       | Mat2/3/4 (column-major)                                           | ⏳     |
+| 7c   | `crd-math`       | Quat (Hamilton, xyzw) + Transform                                 | ⏳     |
+| 7d   | `crd-math`       | Ray, Plane, AABB, Sphere, Triangle, Frustum                       | ⏳     |
 | 8a   | `crd-platform`   | Window (GLFW), Timer, basic input                                 | ⏳     |
 | 8b   | `crd-platform`   | Filesystem, DynamicLibrary, threading helpers                     | ⏳     |
 | 9    | closeout         | CONTEXT.md sweep, retrospective session log, Phase 2 prep         | ⏳     |
 
-Estimate: ~10 sessions to finish Phase 1 from here (1–2 quality pass +
-3 math + 2 platform + 1 closeout, with some headroom for cross-compiler
-shakeout in 6e).
+Estimate: ~11-13 sessions to finish Phase 1 from here (4 math + 2 platform +
+1 closeout, with some headroom for cross-compiler shakeout and follow-up bench
+work).
 
 ---
 
@@ -157,9 +158,36 @@ Each decision is permanent unless explicitly revisited. Add new entries at the b
 ### 2026-04 — Math (planned)
 
 - **Column-major matrices** (Vulkan / GL convention). `Mat * Vec` ordering.
-- **Radians everywhere.** Helpers for degrees → radians, never the other way as
-  default.
-- **Scalar first, SIMD later.** No SSE/NEON in the initial cut.
+- **Radians everywhere.** Helpers for degrees ↔ radians exist, but radians are
+  the default semantic unit everywhere else.
+- **Scalar first, SIMD later.** v1 is the reference implementation; SIMD lands
+  only after scalar semantics are locked and benchmarked.
+- **`float` and `double` are both first-class in the public API.** Template
+  backbone with named aliases (`Vec3f`, `Vec3d`, etc.).
+- **Quaternion convention:** Hamilton, stored as `xyzw`, identity =
+  `(0, 0, 0, 1)`.
+- **`Transform` ships in v1.** Graphics and robotics can share the same engine-
+  owned spatial-math substrate from the start.
+
+### 2026-04 — Math roadmap (long-range)
+
+Planned slices, in order:
+
+- **M0 Design Contract** — semantics, naming, failure policy, SIMD policy,
+  benchmark policy.
+- **M1 Scalar Foundations** — constants, angle helpers, approx compares,
+  finite/NaN helpers.
+- **M2 Vectors** — `Vec2/3/4<T>` with `f32` and `f64` aliases.
+- **M3 Matrices** — `Mat2/3/4<T>`, column-major, `Mat * Vec`.
+- **M4 Quat + Transform** — Hamilton quaternions, `Transform<T>`.
+- **M5 Core Geometry** — `Ray`, `Plane`, `AABB`, `Sphere`, `Triangle`,
+  `Frustum`.
+- **M6 SIMD Foundation** — internal acceleration layer, scalar/SIMD parity,
+  perf baselines.
+- **M7 Dense Numerical** — small dense solves, factorisations, least squares.
+- **M8 Sparse + Solvers** — sparse formats, assembly, iterative solvers.
+- **M9 Robust Computational Geometry** — predicates, clipping, hulls,
+  intersection robustness.
 
 ### 2026-04 — Containers v1 (v1a + v1b shipped, v1c in progress)
 
@@ -385,39 +413,35 @@ allocator interface correctly today (Phase A) makes 2–5 a drop-in addition.
 > Update this section at the end of every session so future-you can re-enter
 > the project without thinking.
 
-**Last session:** 2026-04-26 — quality cleanup before math. See
-`docs/sessions/2026-04-26-quality-cleanup.md`.
+**Last session:** 2026-04-26 — `crd-math` v1a kickoff. See
+`docs/sessions/2026-04-26-math-v1a-kickoff.md`.
 
 What landed:
 
-1. Benchmarks are still built, but no longer part of normal `ctest` runs.
-2. CI now caches CPM downloads.
-3. Linux GCC configure/build validation was added alongside the existing
-   Windows MSVC and clang-cl coverage.
-4. README and systems docs were brought back in sync with the codebase.
+1. Math roadmap expanded from a 3-line placeholder into a staged plan from
+   scalar/vector basics through SIMD, dense numerical work, sparse solves,
+   and later robust computational geometry.
+2. `crd-math` now exists as a real module with scalar helpers and
+   `Vec2/3/4<T>` for both `f32` and `f64`.
+3. Tests, benchmarks, and a smoke example now cover the first shipped math
+   slice.
+4. The kickoff already caught and fixed one Release-only correctness bug:
+   `normalized(v)` was incorrectly relying on an assert side-effect.
 
 Current test counts:
 
-- Debug: `120/120`
-- Release: `119/119`
-- ASan: `120/120`
+- Debug: `129/129`
+- Release: `128/128`
+- ASan: `129/129`
 
-**Next session starts with: `crd-math` v1 design discussion.**
+**Next session starts with: continue `crd-math` v1b (matrices).**
 
-Topics to settle in that design discussion:
+The key decisions are now locked in:
 
-- **Layout**: anonymous union with `.x/.y/.z/.w` + array subscript vs
-  `T m_data[N]` + named accessors. Tradeoff is accessor ergonomics
-  vs. strict-aliasing safety.
-- **SIMD**: scalar v1 confirmed. Compile-time hook for opt-in
-  `Vec4f_simd` later (separate type, scalar code stays the default).
-- **Quaternion convention**: Hamilton vs JPL. Identity = `(0,0,0,1)`
-  (xyzw, GLM-compatible) or `(1,0,0,0)` (wxyz). Must match what
-  Vulkan-side shaders expect later.
-- **Matrix layout**: column-major already decided, so `Mat * Vec`.
-  Confirm storage (`M[0][0..3]` is first column).
-- **Test count target**: ~30 v1 Vec, ~25 v2 Mat+Quat,
-  ~15 v3 primitives.
+- Hamilton quaternions in `xyzw`
+- column-major matrices with `Mat * Vec`
+- scalar-first, SIMD-ready design
+- public `f32` and `f64` support from day one
 
 Approximately 4–6 sessions from the math session to Phase 1 close
 (2 math sessions, 2 platform sessions, 1 closeout, plus the

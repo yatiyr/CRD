@@ -1,5 +1,6 @@
 #include <crd/containers/containers.hpp>
 #include <crd/log/log.hpp>
+#include <crd/math/math.hpp>
 #include <crd/memory/memory.hpp>
 
 #include <catch2/benchmark/catch_benchmark.hpp>
@@ -9,6 +10,7 @@
 using namespace crd;
 using namespace crd::containers;
 using namespace crd::log;
+using namespace crd::math;
 
 CRD_DEFINE_LOG_CHANNEL(g_log_bench, "Bench", crd::log::LogLevel::Trace)
 
@@ -35,6 +37,9 @@ CRD_FORCEINLINE void disabled_trace_call() noexcept
 {
     CRD_LOG_TRACE(g_log_bench, "disabled trace {}", 42);
 }
+
+volatile f32 g_vec3f_bench_bias = 0.0f;
+volatile f64 g_vec3d_bench_bias = 0.0;
 } // namespace
 
 TEST_CASE("Disabled CRD_LOG_TRACE cost", "[bench][log]")
@@ -135,5 +140,46 @@ TEST_CASE("String SSO vs heap workloads", "[bench][containers]")
         String s("this-string-is-definitely-longer-than-the-sso-boundary");
         s.append(StringView{"-and-it-grows-even-more"});
         return s.size();
+    };
+}
+
+TEST_CASE("Vec3 float workloads", "[bench][math]")
+{
+    const Vec3f a(1.0f, 2.0f, 3.0f);
+    const Vec3f b(4.0f, 5.0f, 6.0f);
+
+    BENCHMARK("Vec3f add")
+    {
+        return a + b;
+    };
+
+    BENCHMARK("Vec3f dot")
+    {
+        return dot(a, b);
+    };
+
+    BENCHMARK("Vec3f normalize")
+    {
+        const Vec3f v(3.0f + g_vec3f_bench_bias, 4.0f, 5.0f);
+        const Vec3f n = normalized(v);
+        return n.x + n.y + n.z;
+    };
+}
+
+TEST_CASE("Vec3 double workloads", "[bench][math]")
+{
+    const Vec3d a(1.0, 2.0, 3.0);
+    const Vec3d b(4.0, 5.0, 6.0);
+
+    BENCHMARK("Vec3d dot")
+    {
+        return dot(a, b);
+    };
+
+    BENCHMARK("Vec3d normalize")
+    {
+        const Vec3d v(3.0 + g_vec3d_bench_bias, 4.0, 5.0);
+        const Vec3d n = normalized(v);
+        return n.x + n.y + n.z;
     };
 }

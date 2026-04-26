@@ -142,7 +142,7 @@ endif()
 
 add_subdirectory(engine/core)
 add_subdirectory(engine/memory)
-# add_subdirectory(engine/math)
+add_subdirectory(engine/math)
 add_subdirectory(engine/containers)
 add_subdirectory(engine/log)
 # add_subdirectory(engine/platform)

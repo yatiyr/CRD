@@ -41,3 +41,13 @@ target_link_libraries(smoke_containers PRIVATE
     crd-containers
 )
 crd_enable_default_pch(smoke_containers)
+
+add_executable(smoke_math
+    examples/smoke_math.cpp
+)
+
+target_link_libraries(smoke_math PRIVATE
+    crd-core
+    crd-math
+)
+crd_enable_default_pch(smoke_math)
