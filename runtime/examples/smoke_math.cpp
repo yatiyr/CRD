@@ -13,6 +13,8 @@ int main()
     const Vec3f dir = normalized(velocity);
 
     std::cout << "pi<float>=" << k_pi<crd::f32> << "\n";
+    std::cout << "pi<float> from static variable=" << k_pi_f << "\n";
+    std::cout << "pi<double> from static variable=" << k_pi_d << "\n";
     std::cout << "forward = (" << forward.x << ", " << forward.y << ", " << forward.z << ")\n";
     std::cout << "normalized velocity = (" << dir.x << ", " << dir.y << ", " << dir.z << ")\n";
     std::cout << "90 deg in radians = " << deg_to_rad(90.0f) << "\n";

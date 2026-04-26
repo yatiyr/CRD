@@ -35,6 +35,8 @@ Immediate scope:
   - `math.hpp`
 - added scalar helpers:
   - constants (`pi`, `tau`, `half_pi`)
+  - added static constants for `pi`, `tau` and `half_pi` to use directly as double or float without templates. For example:
+	- `const static crd::f32 k_pi_f = k_pi<crd::f32>;`
   - degree/radian conversion
   - finite / NaN checks
   - absolute / relative approximate comparisons
