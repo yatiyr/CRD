@@ -10,4 +10,6 @@ target_link_libraries(crd-containers-tests PRIVATE
     Catch2::Catch2WithMain
 )
 
+crd_enable_default_pch(crd-containers-tests)
+
 catch_discover_tests(crd-containers-tests)

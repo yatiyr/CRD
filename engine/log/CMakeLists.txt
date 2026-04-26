@@ -22,3 +22,4 @@ target_link_libraries(crd-log
 )
 
 target_compile_features(crd-log PUBLIC cxx_std_20)
+crd_enable_default_pch(crd-log)

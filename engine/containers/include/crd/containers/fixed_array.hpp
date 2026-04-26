@@ -12,7 +12,7 @@
 namespace crd::containers
 {
 // -----------------------------------------------------------------------
-// FixedArray<T, N> — stack-only, sabit kapasite, dinamik size.
+// FixedArray<T, N> — stack-only, fixed-capacity container with dynamic size.
 //
 // Use cases:
 //  - "At most 8 vertex stream slots, at most 16 texture bindings, ..."

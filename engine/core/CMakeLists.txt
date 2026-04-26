@@ -23,3 +23,4 @@ target_include_directories(crd-core
 )
 
 target_compile_features(crd-core PUBLIC cxx_std_20)
+crd_enable_default_pch(crd-core)

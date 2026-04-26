@@ -256,6 +256,12 @@ struct CapturedAssert
 
 CapturedAssert g_capture;
 
+int noop_assert_platform_handler(const char* formatted_message) noexcept
+{
+    (void)formatted_message;
+    return 0;
+}
+
 void test_assert_handler(const char* expr, const char* file, int line, const char* msg) noexcept
 {
     g_capture.expression = expr ? expr : "";
@@ -317,6 +323,33 @@ TEST_CASE("crd-log init installs default assert handler that emits Critical", "[
     REQUIRE(records[0].message.find("bridge smoke") != std::string::npos);
     REQUIRE(records[0].message.find("1234") != std::string::npos);
     // shutdown() (by LoggerScope dtor) will uninstall the handler.
+}
+
+TEST_CASE("CRD_ASSERT(false) reaches log bridge without platform UI", "[log][bridge][assert]")
+{
+#if defined(CRD_RELEASE)
+    static_assert(CRD_ENABLE_ASSERTS == 0);
+    SUCCEED("Assertions are compiled out in release builds.");
+#else
+    crd::set_assert_platform_handler(&noop_assert_platform_handler);
+    crd::set_assert_handler(nullptr);
+
+    LoggerScope scope{};
+    auto ring_owner = std::make_unique<RingBufferSink>(8);
+    RingBufferSink* ring = ring_owner.get();
+    add_sink(std::move(ring_owner));
+
+    CRD_ASSERT_MSG(false, "bridge end-to-end");
+    flush();
+
+    auto records = ring->snapshot();
+    REQUIRE(records.size() == 1);
+    REQUIRE(records[0].level == LogLevel::Critical);
+    REQUIRE(records[0].message.find("ASSERT: false") != std::string::npos);
+    REQUIRE(records[0].message.find("bridge end-to-end") != std::string::npos);
+
+    crd::set_assert_platform_handler(nullptr);
+#endif
 }
 
 TEST_CASE("crd-log shutdown uninstalls the bridge", "[log][bridge][assert]")

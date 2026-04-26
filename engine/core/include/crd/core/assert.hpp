@@ -16,8 +16,21 @@ namespace crd
 // nullptr disables the callback (default behaviour).
 using AssertHandler = void (*)(const char* expression, const char* file, int line, const char* message);
 
+// Optional platform-UI hook used at the tail of report_assert_failure().
+// Tests can replace the default MessageBox path with a no-op handler so a
+// real CRD_ASSERT(false) can run end-to-end without blocking the runner.
+// Return value uses the same contract as the Windows dialog path:
+//   0 = Ignore, 2 = Retry / break.
+using AssertPlatformHandler = int (*)(const char* formatted_message);
+
+// Install/remove the optional assert->subsystem bridge callback.
 void set_assert_handler(AssertHandler h) noexcept;
+// Return the currently installed bridge callback, or nullptr.
 AssertHandler get_assert_handler() noexcept;
+// Override the final platform UI step (MessageBox on Windows).
+void set_assert_platform_handler(AssertPlatformHandler h) noexcept;
+// Return the currently installed platform UI hook, or nullptr.
+AssertPlatformHandler get_assert_platform_handler() noexcept;
 } // namespace crd
 
 namespace crd::detail

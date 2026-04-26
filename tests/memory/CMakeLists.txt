@@ -9,4 +9,6 @@ target_link_libraries(crd-memory-tests PRIVATE
     Catch2::Catch2WithMain
 )
 
+crd_enable_default_pch(crd-memory-tests)
+
 catch_discover_tests(crd-memory-tests)

@@ -19,6 +19,7 @@ namespace
 // installed/uninstalled safely from any thread; we never block in
 // the assert path so a relaxed load on the hot path is enough.
 std::atomic<AssertHandler> g_assert_handler{nullptr};
+std::atomic<AssertPlatformHandler> g_assert_platform_handler{nullptr};
 } // namespace
 
 void set_assert_handler(AssertHandler h) noexcept
@@ -29,6 +30,16 @@ void set_assert_handler(AssertHandler h) noexcept
 AssertHandler get_assert_handler() noexcept
 {
     return g_assert_handler.load(std::memory_order_acquire);
+}
+
+void set_assert_platform_handler(AssertPlatformHandler h) noexcept
+{
+    g_assert_platform_handler.store(h, std::memory_order_release);
+}
+
+AssertPlatformHandler get_assert_platform_handler() noexcept
+{
+    return g_assert_platform_handler.load(std::memory_order_acquire);
 }
 
 namespace detail
@@ -80,6 +91,11 @@ int report_assert_failure(const char* expression, const char* file, int line, co
     (void)fire_assert_handler(expression, file, line, message);
 
     std::fputs(buffer, stderr);
+
+    if (AssertPlatformHandler platform_handler = get_assert_platform_handler())
+    {
+        return platform_handler(buffer);
+    }
 
 #if CRD_OS_WINDOWS
     OutputDebugStringA(buffer);

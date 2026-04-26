@@ -87,6 +87,18 @@
           "cacheVariables": {
             "CRD_ENABLE_CLANG_TIDY":  "ON"
           }
+        },
+        {
+          "name": "win-clang-cl",
+          "displayName": "Windows Debug + clang-cl",
+          "inherits": "win-base",
+          "cacheVariables": {
+            "CMAKE_BUILD_TYPE": "Debug",
+            "CMAKE_C_COMPILER": "clang-cl",
+            "CMAKE_CXX_COMPILER": "clang-cl",
+            "CRD_ENABLE_ASSERTS": "ON",
+            "CRD_ENABLE_PROFILING": "ON"
+          }
         }
     ],
     "buildPresets":
@@ -95,8 +107,9 @@
         { "name": "win-release", "configurePreset": "win-release" },
         { "name": "win-asan", "configurePreset": "win-asan" },
         { "name": "win-tidy", "configurePreset": "win-tidy" },
-        { "name": "win-relwithdebinfo", "configurePreset": "win-relwithdebinfo" }
-      
+        { "name": "win-relwithdebinfo", "configurePreset": "win-relwithdebinfo" },
+        { "name": "win-clang-cl", "configurePreset": "win-clang-cl" }
+       
     ],
     "testPresets":
     [

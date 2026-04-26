@@ -15,3 +15,4 @@ target_link_libraries(crd-memory
 )
 
 target_compile_features(crd-memory PUBLIC cxx_std_20)
+crd_enable_default_pch(crd-memory)

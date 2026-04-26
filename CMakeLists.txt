@@ -17,6 +17,7 @@ option(CRD_ENABLE_PROFILING "Enable profiling instrumentation" OFF)
 option(CRD_ENABLE_ASAN      "Enable Address Sanitizer"         OFF)
 option(CRD_ENABLE_UBSAN     "Enable Undefined Behavior San."   OFF)
 option(CRD_ENABLE_CLANG_TIDY "Run clang-tidy during build" OFF)
+option(CRD_ENABLE_PCH       "Enable default precompiled headers" ON)
 
 # ---- Log compile-time minimum level ---------------------------------------
 # Anything strictly below this level is compiled out to ((void)0).
@@ -81,9 +82,12 @@ if (MSVC)
         /WX
         /permissive-
         /Zc:__cplusplus
-        /Zc:preprocessor
         /utf-8
     )
+
+    if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+        add_compile_options(/Zc:preprocessor)
+    endif()
 else()
     add_compile_options(
         -Wall -Wextra -Wpedantic -Werror
@@ -111,6 +115,16 @@ function(crd_collect_sources out_var directory)
     "${directory}/*.h"
     )
     set(${out_var} ${sources} PARENT_SCOPE)
+endfunction()
+
+function(crd_enable_default_pch target_name)
+    if(NOT CRD_ENABLE_PCH)
+        return()
+    endif()
+
+    target_precompile_headers(${target_name} PRIVATE
+        <crd/core/pch.hpp>
+    )
 endfunction()
 
 # ---- CMAKE Tidy ---------------------------------------------------------

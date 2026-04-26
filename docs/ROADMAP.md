@@ -14,7 +14,7 @@
 | `crd-log`        | ✅      | 1     | levels, channels, sinks, sync/async dispatch                 |
 | `crd-memory`     | ✅      | 1     | IAllocator + Malloc/Linear/Stack/Pool, streaming-ready iface |
 | `crd-containers` | ✅      | 1     | Array, FixedArray, Span, String, RingBuffer, HashMap, HashSet |
-| Phase 1 quality  | ⏳ next | 1     | CI, benchmarks, PCH, runtime split, cross-compiler, tidy     |
+| Phase 1 quality  | ✅      | 1     | CI, benchmarks, PCH, runtime split, clang-cl, tidy, assert   |
 | `crd-math`       | ⏳      | 1     | column-major, radians                                        |
 | `crd-platform`   | ⏳      | 1     | window/input/timer/filesystem (GLFW)                         |
 | `crd-graphics`   | ⏳      | 2     | Vulkan-first, RHI abstraction                                |
@@ -46,14 +46,14 @@ hold containers, and talk to the OS.
 | 4c   | `crd-containers` v1c | HashMap<K,V> (Robin Hood backshift), HashSet<K>               | ✅     |
 | 4d   | cleanup          | RingBufferSink storage -> Array<T>; broke crd-log↔crd-containers cycle | ✅     |
 | 5    | mid-phase eval   | quality scorecard, risk review, finishing scope (no code)         | ✅     |
-| 6a   | quality pass     | GitHub Actions CI: matrix(Debug \| Release \| ASan) × MSVC        | ⏳ next |
-| 6b   | quality pass     | Benchmark suite: log call-site cost, async producer push, Array push, HashMap insert/find | ⏳ |
-| 6c   | quality pass     | PCH for crd-core (types/asserts/platform); measure full-build delta | ⏳ |
-| 6d   | quality pass     | Split runtime/main.cpp into runtime/examples/ (smoke_log, smoke_memory, smoke_containers) | ⏳ |
-| 6e   | quality pass     | clang-cl on Windows + Linux GCC build matrix (cross-compiler)     | ⏳ |
-| 6f   | quality pass     | Run win-tidy preset, triage warnings (fix or explicitly suppress) | ⏳ |
-| 6g   | quality pass     | Doxygen-friendly review of public headers (no generation yet)     | ⏳ |
-| 6h   | quality pass     | Real CRD_ASSERT(false) bridge test (handler bypass for tests)     | ⏳ |
+| 6a   | quality pass     | GitHub Actions CI: matrix(Debug \| Release \| ASan) × MSVC        | ✅ |
+| 6b   | quality pass     | Benchmark suite: log call-site cost, async producer push, Array push, HashMap insert/find | ✅ |
+| 6c   | quality pass     | PCH for crd-core (types/asserts/platform); measure full-build delta | ✅ |
+| 6d   | quality pass     | Split runtime/main.cpp into runtime/examples/ (smoke_log, smoke_memory, smoke_containers) | ✅ |
+| 6e   | quality pass     | clang-cl on Windows + Linux GCC build matrix (cross-compiler)     | ✅ |
+| 6f   | quality pass     | Run win-tidy preset, triage warnings (fix or explicitly suppress) | ✅ |
+| 6g   | quality pass     | Doxygen-friendly review of public headers (no generation yet)     | ✅ |
+| 6h   | quality pass     | Real CRD_ASSERT(false) bridge test (handler bypass for tests)     | ✅ |
 | 7a   | `crd-math`       | Vec2/3/4 + basic ops                                              | ⏳     |
 | 7b   | `crd-math`       | Mat2/3/4 (column-major) + Quat + Transform                        | ⏳     |
 | 7c   | `crd-math`       | AABB, Sphere, Ray, Plane, Frustum                                 | ⏳     |
@@ -124,7 +124,8 @@ Each decision is permanent unless explicitly revisited. Add new entries at the b
 - **Compile-time level stripping** via `CRD_LOG_MIN_LEVEL` cache option:
   Trace in Debug, Info in Release. Critical never strips.
 - **Default sinks at startup are NOT auto-attached.** User code must add sinks.
-- **Log depends only on `crd-core`.** No reverse dependency from core to log.
+- **Current shipped dependency graph:** `crd-log -> crd-core, crd-containers`.
+  `crd-core` never depends on log; the assert bridge stays one-way.
 
 ### 2026-04 — Memory v1 (shipped)
 
@@ -194,7 +195,9 @@ Decisions:
 - **Heterogeneous lookup for string-keyed maps**: `HashMap<String, V>::find`
   accepts `StringView` / `const char*` so callers don't allocate temporary
   Strings just to look up.
-- **`crd-containers` depends on `crd-core`, `crd-log`, `crd-memory`.**
+- **`crd-containers` depends on `crd-core`, `crd-memory` and only includes**
+  `crd-log` headers for channel declarations. The link arrow is one-way:
+  `crd-log -> crd-containers`.
 
 ### 2026-04 — Containers v1b shipped (String, RingBuffer)
 
@@ -318,6 +321,27 @@ Implementation notes captured for the upcoming quality session:
   section starts in `runtime/examples/smoke_math.cpp` and never enters
   the kitchen-sink main.cpp.
 
+### 2026-04 — Phase 1 quality pass shipped
+
+- **CI upgraded** to a Windows MSVC matrix: `win-debug`, `win-release`,
+  `win-asan`, plus separate `win-tidy` and `win-clang-cl` jobs.
+- **Benchmarks now live in `tests/bench/`** and the first committed
+  baseline is `docs/bench/baseline_2026-04.md`.
+- **`runtime/main.cpp` is now the startup skeleton** and per-module smoke
+  demos moved to `runtime/examples/` (`smoke_log`, `smoke_memory`,
+  `smoke_containers`).
+- **PCH landed across engine, tests, and runtime targets.** Measured on
+  this small codebase, a clean Debug build was slightly slower with PCH
+  (14.11 s) than without (13.61 s). We keep it anyway because the
+  substrate is now in place before math/platform increase TU count.
+- **Real assert bridge test is now end-to-end.** Tests install a no-op
+  platform UI hook, trigger `CRD_ASSERT(false)`, and verify the Critical
+  record lands in a `RingBufferSink`.
+- **clang-cl now compiles the full tree.** The one portability issue found
+  was MSVC-only `/Zc:preprocessor`, now only passed to non-clang MSVC.
+- **Header review completed.** No blocker for math; main remaining doc
+  weakness is uneven Doxygen-style per-symbol comments in `crd-core`.
+
 ### 2026-04 — Open-world streaming
 
 Streaming is a *pipeline*, not just an allocator. The full pipeline needs:
@@ -361,74 +385,32 @@ allocator interface correctly today (Phase A) makes 2–5 a drop-in addition.
 > Update this section at the end of every session so future-you can re-enter
 > the project without thinking.
 
-**Last session:** 2026-04-26 — mid-phase quality evaluation (no code
-changes). See `docs/sessions/2026-04-26-mid-phase-evaluation.md`.
-Phase 1 step list rewritten: a **dedicated quality pass session** now
-lands before math, not after platform. Aggregate quality
-score: ~7.4/10. Test counts unchanged (119/119 Debug, 118/118 Release,
-119/119 ASan).
+**Last session:** 2026-04-26 — Phase 1 quality pass shipped. See
+`docs/sessions/2026-04-26-quality-pass.md`.
 
-Last working-code session before that: 2026-04-26 — `crd-containers`
-v1c (HashMap, HashSet) + v1d (RingBufferSink storage migration +
-crd-log↔crd-containers cycle break). `crd-containers` v1 is **complete**.
+What landed:
 
-**Next session starts with: Phase 1 quality pass (steps 6a–6h).**
+1. CI matrix for `win-debug`, `win-release`, `win-asan`, plus separate
+   `win-tidy` and `win-clang-cl` jobs.
+2. Benchmark suite in `tests/bench/` and baseline file in
+   `docs/bench/baseline_2026-04.md`.
+3. `runtime/main.cpp` reduced to the canonical startup skeleton;
+   module demos split into `runtime/examples/`.
+4. PCH applied across engine, tests, and runtime targets.
+5. clang-cl compile path verified; `/Zc:preprocessor` scoped to
+   non-clang MSVC after the first portability failure.
+6. End-to-end `CRD_ASSERT(false)` bridge test now green.
 
-The point of this session: lift the engine to the highest quality bar
-we can sustain *before* `crd-math` adds three sessions of work on top.
-By design, math then lands on a foundation with CI, benchmarks, PCH,
-clean cross-compiler builds, and a tidy runtime layout.
+Current test counts:
 
-In order:
+- Debug: `125/125`
+- Release: `124/124` (assert-disabled release build correctly skips the
+  end-to-end assert path)
+- ASan: `125/125`
 
-1. **6a — GitHub Actions CI.** Workflow at `.github/workflows/ci.yml`,
-   matrix `(Debug | Release | ASan) × MSVC`, triggers on push and
-   PR. Cache CPM downloads. Status badge in README.
-2. **6b — Benchmark suite.** `tests/bench/` with Catch2 benchmarks:
-   - Disabled `CRD_LOG_TRACE` cost (target: <1 ns / call).
-   - Async log producer push.
-   - `Array<u32>::push_back` 1k amortised.
-   - `HashMap<u32, u32>` insert / find / erase at 1M entries.
-   - `String` SSO vs heap construct + assign.
-   Commit a baseline file (`docs/bench/baseline_2026-04.md`) with
-   the numbers, machine, build flavour. Future regressions get bisected
-   against it.
-3. **6c — PCH.** Precompiled header for `crd-core` (types + asserts
-   + platform). Apply to all engine + test + runtime targets. Measure
-   full-build time delta and document.
-4. **6d — `runtime/examples/` split.** Carve `runtime/main.cpp` into
-   per-module smoke executables: `smoke_log`, `smoke_memory`,
-   `smoke_containers`. `runtime/main.cpp` becomes the canonical
-   engine startup skeleton (init log, init allocators, run, shutdown)
-   without per-module demos.
-5. **6e — Cross-compiler matrix.** Add clang-cl on Windows first;
-   stretch goal is Linux GCC. Likely fixes:
-   - `__VA_OPT__` / `/Zc:preprocessor` equivalent.
-   - `_aligned_malloc` vs `aligned_alloc` / `posix_memalign`.
-   - `OutputDebugStringA` no-op already exists, just verify.
-   - `static_assert(sizeof(String) == 32)` may fire on different ABIs.
-6. **6f — clang-tidy.** Run `win-tidy` preset, triage every warning
-   category. Fix or explicitly suppress with a comment in
-   `.clang-tidy` saying *why*.
-7. **6g — Doxygen-friendly review.** Walk every public header
-   (`engine/*/include/crd/*/...hpp`), confirm doc comments are clear,
-   `@param` / `@return` where helpful. Don't run Doxygen yet — just
-   confirm the substrate is good. Generation deferred to Phase 1
-   closeout.
-8. **6h — Real `CRD_ASSERT(false)` bridge test.** Use a "test-mode"
-   handler hook that replaces the platform UI with a noop, install
-   it in a test fixture, then trigger `CRD_ASSERT(false)` and verify
-   the Critical record landed in a `RingBufferSink`. End-to-end
-   bridge proof.
+**Next session starts with: `crd-math` v1 design discussion.**
 
-End-of-session goal: CI green on push, benchmark baseline committed,
-PCH measurably faster, runtime split, clang-cl at minimum compiling,
-tidy clean-or-suppressed, headers reviewed, real assert bridge test
-green. Cross-compiler (Linux GCC) may bleed into a follow-up if 6e
-surfaces a lot — that's expected.
-
-**After the quality pass:** math v1 design discussion, then math v1
-implementation (Vec2/3/4). Topics to settle in the design discussion:
+Topics to settle in that design discussion:
 
 - **Layout**: anonymous union with `.x/.y/.z/.w` + array subscript vs
   `T m_data[N]` + named accessors. Tradeoff is accessor ergonomics

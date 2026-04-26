@@ -8,4 +8,6 @@ target_link_libraries(crd-log-tests PRIVATE
     Catch2::Catch2WithMain
 )
 
+crd_enable_default_pch(crd-log-tests)
+
 catch_discover_tests(crd-log-tests)

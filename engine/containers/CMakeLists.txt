@@ -31,3 +31,4 @@ target_include_directories(crd-containers PUBLIC
 )
 
 target_compile_features(crd-containers PUBLIC cxx_std_20)
+crd_enable_default_pch(crd-containers)
