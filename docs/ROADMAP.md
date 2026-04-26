@@ -385,28 +385,22 @@ allocator interface correctly today (Phase A) makes 2–5 a drop-in addition.
 > Update this section at the end of every session so future-you can re-enter
 > the project without thinking.
 
-**Last session:** 2026-04-26 — Phase 1 quality pass shipped. See
-`docs/sessions/2026-04-26-quality-pass.md`.
+**Last session:** 2026-04-26 — quality cleanup before math. See
+`docs/sessions/2026-04-26-quality-cleanup.md`.
 
 What landed:
 
-1. CI matrix for `win-debug`, `win-release`, `win-asan`, plus separate
-   `win-tidy` and `win-clang-cl` jobs.
-2. Benchmark suite in `tests/bench/` and baseline file in
-   `docs/bench/baseline_2026-04.md`.
-3. `runtime/main.cpp` reduced to the canonical startup skeleton;
-   module demos split into `runtime/examples/`.
-4. PCH applied across engine, tests, and runtime targets.
-5. clang-cl compile path verified; `/Zc:preprocessor` scoped to
-   non-clang MSVC after the first portability failure.
-6. End-to-end `CRD_ASSERT(false)` bridge test now green.
+1. Benchmarks are still built, but no longer part of normal `ctest` runs.
+2. CI now caches CPM downloads.
+3. Linux GCC configure/build validation was added alongside the existing
+   Windows MSVC and clang-cl coverage.
+4. README and systems docs were brought back in sync with the codebase.
 
 Current test counts:
 
-- Debug: `125/125`
-- Release: `124/124` (assert-disabled release build correctly skips the
-  end-to-end assert path)
-- ASan: `125/125`
+- Debug: `120/120`
+- Release: `119/119`
+- ASan: `120/120`
 
 **Next session starts with: `crd-math` v1 design discussion.**
 

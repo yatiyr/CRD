@@ -5,4 +5,7 @@ add_subdirectory(core)
 add_subdirectory(log)
 add_subdirectory(memory)
 add_subdirectory(containers)
-add_subdirectory(bench)
+
+if(CRD_BUILD_BENCHMARKS)
+    add_subdirectory(bench)
+endif()

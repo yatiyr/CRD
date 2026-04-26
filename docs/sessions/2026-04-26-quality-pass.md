@@ -96,9 +96,9 @@ The most useful surprise was clang-cl: it immediately found an assumption we
 
 ## Tests / verification
 
-- `win-debug`: ✅ build clean, `125/125` tests green
-- `win-release`: ✅ build clean, `124/124` tests green
-- `win-asan`: ✅ build clean, `125/125` tests green, no ASan failures
+- `win-debug`: ✅ build clean, `125/125` tests green at session end
+- `win-release`: ✅ build clean, `124/124` tests green at session end
+- `win-asan`: ✅ build clean, `125/125` tests green at session end, no ASan failures
 - `win-tidy`: ✅ config + build clean
 - `win-clang-cl`: ✅ config + full build clean
 

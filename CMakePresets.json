@@ -39,6 +39,22 @@
             }
         },
         {
+            "name": "linux-base",
+            "hidden": true,
+            "inherits": "base",
+            "generator": "Ninja",
+            "condition":
+            {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Linux"
+            },
+            "cacheVariables":
+            {
+                "CMAKE_CXX_COMPILER": "g++"
+            }
+        },
+        {
             "name": "win-debug",
             "displayName": "Windows Debug",
             "inherits": "win-base",
@@ -99,6 +115,16 @@
             "CRD_ENABLE_ASSERTS": "ON",
             "CRD_ENABLE_PROFILING": "ON"
           }
+        },
+        {
+          "name": "linux-gcc-debug",
+          "displayName": "Linux GCC Debug",
+          "inherits": "linux-base",
+          "cacheVariables": {
+            "CMAKE_BUILD_TYPE": "Debug",
+            "CRD_ENABLE_ASSERTS": "ON",
+            "CRD_ENABLE_PROFILING": "ON"
+          }
         }
     ],
     "buildPresets":
@@ -108,8 +134,9 @@
         { "name": "win-asan", "configurePreset": "win-asan" },
         { "name": "win-tidy", "configurePreset": "win-tidy" },
         { "name": "win-relwithdebinfo", "configurePreset": "win-relwithdebinfo" },
-        { "name": "win-clang-cl", "configurePreset": "win-clang-cl" }
-       
+        { "name": "win-clang-cl", "configurePreset": "win-clang-cl" },
+        { "name": "linux-gcc-debug", "configurePreset": "linux-gcc-debug" }
+        
     ],
     "testPresets":
     [

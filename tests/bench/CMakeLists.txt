@@ -12,4 +12,5 @@ target_link_libraries(crd-bench PRIVATE
 
 crd_enable_default_pch(crd-bench)
 
-catch_discover_tests(crd-bench)
+# Benchmarks are intentionally built with the regular test tree but kept out of
+# ctest so CI/unit-test presets stay fast and deterministic.

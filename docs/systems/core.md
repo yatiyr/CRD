@@ -7,13 +7,13 @@ The bottom of the dependency stack. Everything else uses it; it uses nothing.
 - **Fixed-width type aliases** (`u8`, `u16`, `u32`, `u64`, `i8…i64`, `f32`, `f64`,
   `usize`) so types mean the same thing on every compiler.
 - **Platform / compiler / arch detection** macros and helper strings:
-  `CRD_PLATFORM_WINDOWS`, `CRD_COMPILER_MSVC`, `CRD_ARCH_X64`, plus
+  `CRD_OS_WINDOWS`, `CRD_COMPILER_MSVC`, `CRD_ARCH_X64`, plus
   `crd::platform_name()`, `crd::compiler_name()`, `crd::arch_name()`.
 - **`CRD_ASSERT(expr)` / `CRD_ASSERT_MSG(expr, "...")`** for "this must be
   true or the program is broken" checks. Compiled out when
   `CRD_ENABLE_ASSERTS=OFF`.
-- **`CRD_VERIFY(expr)`** for "this must be true; if it's false, log and
-  return false" non-fatal checks (kept in release).
+- **`CRD_VERIFY(expr)`** aliases `CRD_ASSERT(expr)` in assert-enabled builds
+  and becomes plain expression evaluation in release.
 - **`CRD_FATAL("...")`** for explicit, unconditional crash with message.
 - **Generated `build_config.hpp`** containing `CRD_VERSION_*`,
   `CRD_DEBUG`/`CRD_RELEASE`, and `CRD_LOG_MIN_LEVEL_NUM`.
@@ -28,10 +28,7 @@ The bottom of the dependency stack. Everything else uses it; it uses nothing.
 void f(crd::u32 n)
 {
     CRD_ASSERT(n > 0);
-    if (!CRD_VERIFY(n < 1000))
-    {
-        return; // logged, but not fatal
-    }
+    CRD_VERIFY(n < 1000);
 }
 ```
 

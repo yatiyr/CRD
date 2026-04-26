@@ -7,7 +7,7 @@ Modern C++20 game/simulation engine.
 Current Phase 1 status:
 
 - Shipped: `crd-core`, `crd-log`, `crd-memory`, `crd-containers`
-- Quality pass in progress before `crd-math`
+- Quality pass and cleanup pass complete before `crd-math`
 
 Primary project docs live in `docs/`:
 
