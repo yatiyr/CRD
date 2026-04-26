@@ -5,8 +5,12 @@
 
 namespace crd::log
 {
-RingBufferSink::RingBufferSink(usize capacity) noexcept : m_capacity(capacity == 0 ? 1 : capacity), m_buffer(m_capacity)
+RingBufferSink::RingBufferSink(usize capacity, memory::IAllocator* alloc) noexcept
+    : m_capacity(capacity == 0 ? 1 : capacity), m_buffer(m_capacity, alloc)
 {
+    // Pre-fill with default-constructed records so we can index into the
+    // buffer like a fixed-size array.
+    m_buffer.resize(m_capacity);
 }
 
 void RingBufferSink::write(const LogRecord& rec)

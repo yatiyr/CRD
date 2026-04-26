@@ -236,3 +236,95 @@ TEST_CASE("set_all_channels_level affects every channel", "[log][channel]")
     set_all_channels_level(LogLevel::Trace);
     REQUIRE(g_log_test.runtime_level == LogLevel::Trace);
 }
+
+// =============================================================================
+// Bridge: crd-core assert handler -> crd-log Critical
+// =============================================================================
+
+namespace
+{
+// Handler used by the next two tests. We capture all five fields to verify
+// the bridge forwards them correctly.
+struct CapturedAssert
+{
+    std::atomic<int> fire_count{0};
+    std::string expression;
+    std::string file;
+    int line = 0;
+    std::string message;
+};
+
+CapturedAssert g_capture;
+
+void test_assert_handler(const char* expr, const char* file, int line, const char* msg) noexcept
+{
+    g_capture.expression = expr ? expr : "";
+    g_capture.file = file ? file : "";
+    g_capture.line = line;
+    g_capture.message = msg ? msg : "";
+    g_capture.fire_count.fetch_add(1, std::memory_order_relaxed);
+}
+} // namespace
+
+TEST_CASE("set_assert_handler installs a custom handler", "[log][bridge][assert]")
+{
+    // Save whatever crd-log might have installed and restore at the end.
+    auto* prev = crd::get_assert_handler();
+    crd::set_assert_handler(&test_assert_handler);
+    REQUIRE(crd::get_assert_handler() == &test_assert_handler);
+
+    g_capture.fire_count.store(0);
+    g_capture.expression.clear();
+    g_capture.file.clear();
+    g_capture.line = 0;
+    g_capture.message.clear();
+
+    // We can't safely call CRD_ASSERT(false) here (Windows MessageBox), but the
+    // handler is fired inside detail::fire_assert_handler -- which we expose
+    // indirectly by manually invoking the handler ourselves. The point of this
+    // test is the install/get round-trip.
+    crd::get_assert_handler()("test_expr", "tests/log/test_log.cpp", 42, "manual fire");
+    REQUIRE(g_capture.fire_count.load() == 1);
+    REQUIRE(g_capture.expression == "test_expr");
+    REQUIRE(g_capture.line == 42);
+    REQUIRE(g_capture.message == "manual fire");
+
+    crd::set_assert_handler(prev);
+}
+
+TEST_CASE("crd-log init installs default assert handler that emits Critical", "[log][bridge][assert]")
+{
+    // Make sure no handler is installed before init() so the bridge actually runs.
+    crd::set_assert_handler(nullptr);
+
+    LoggerScope scope{};
+    auto ring_owner = std::make_unique<RingBufferSink>(8);
+    RingBufferSink* ring = ring_owner.get();
+    add_sink(std::move(ring_owner));
+
+    // After init() the bridge must have installed a handler.
+    auto* handler = crd::get_assert_handler();
+    REQUIRE(handler != nullptr);
+
+    // Fire it directly, bypassing the platform UI in report_assert_failure().
+    handler("simulated_expr", "tests/log/test_log.cpp", 1234, "bridge smoke");
+    flush();
+
+    auto records = ring->snapshot();
+    REQUIRE(records.size() == 1);
+    REQUIRE(records[0].level == LogLevel::Critical);
+    REQUIRE(records[0].message.find("simulated_expr") != std::string::npos);
+    REQUIRE(records[0].message.find("bridge smoke") != std::string::npos);
+    REQUIRE(records[0].message.find("1234") != std::string::npos);
+    // shutdown() (by LoggerScope dtor) will uninstall the handler.
+}
+
+TEST_CASE("crd-log shutdown uninstalls the bridge", "[log][bridge][assert]")
+{
+    crd::set_assert_handler(nullptr);
+    {
+        LoggerScope scope{};
+        REQUIRE(crd::get_assert_handler() != nullptr);
+    }
+    REQUIRE(crd::get_assert_handler() == nullptr);
+}

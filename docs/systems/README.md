@@ -6,8 +6,10 @@ engine *is*; read `docs/sessions/` to remember how it got that way.
 
 | System | Status | Overview |
 | ------ | ------ | -------- |
-| `crd-core` | ✅ | [core.md](core.md) |
-| `crd-log`  | ✅ | [log.md](log.md) — also see deep-dive at [`docs/log/LOG_FILE.md`](../log/LOG_FILE.md) |
+| `crd-core`       | ✅ | [core.md](core.md) |
+| `crd-log`        | ✅ | [log.md](log.md) — also see deep-dive at [`docs/log/LOG_FILE.md`](../log/LOG_FILE.md) |
+| `crd-memory`     | ✅ | [memory.md](memory.md) — also see deep-dive at [`docs/memory/MEMORY_FILE.md`](../memory/MEMORY_FILE.md) |
+| `crd-containers` | ✅ | [containers.md](containers.md) — also see deep-dive at [`docs/containers/CONTAINERS_FILE.md`](../containers/CONTAINERS_FILE.md) |
 
 When a new module ships, add a short overview here and link it. If a module
 gets a long-form deep-dive document (like `LOG_FILE.md`), link to that too —

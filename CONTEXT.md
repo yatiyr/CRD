@@ -44,19 +44,22 @@ A modern C++20 game/simulation engine.
 | ---------------- | ------ |
 | `crd-core`       | ✅      |
 | `crd-log`        | ✅      |
-| `crd-memory`     | ⏳ next |
+| `crd-memory`     | ✅      |
+| `crd-containers` | ✅      |
 | `crd-math`       | ⏳      |
-| `crd-containers` | ⏳      |
 | `crd-platform`   | ⏳      |
 
 Full status table and reasoning live in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## Module Dependencies
 - `crd-core`: no dependencies (types, platform, assert)
-- `crd-log`: depends on `crd-core`
-- `crd-memory`: depends on `crd-core`
+- `crd-containers`: depends on `crd-core`, `crd-memory`. Headers reference
+  `crd-log`'s `CRD_DECLARE_LOG_CHANNEL` macro but link is one-way.
+- `crd-memory`: depends on `crd-core`, `crd-log`
+- `crd-log`: depends on `crd-core`, `crd-containers`. (Its
+  `RingBufferSink` uses `crd::containers::Array`. First-party channel
+  definitions like `g_log_containers` also live here to break the cycle.)
 - `crd-math`: depends on `crd-core`
-- `crd-containers`: depends on `crd-memory`, `crd-core`
 - `crd-platform`: depends on `crd-core`, `crd-log`
 - `crd-graphics`: depends on `crd-core`, `crd-math`, `crd-memory`, `crd-platform`
 
@@ -66,3 +69,5 @@ Full status table and reasoning live in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 - [`docs/sessions/`](docs/sessions/) — one file per work session
 - [`docs/systems/`](docs/systems/) — short overview per shipped subsystem
 - [`docs/log/LOG_FILE.md`](docs/log/LOG_FILE.md) — long deep-dive on `crd-log`
+- [`docs/memory/MEMORY_FILE.md`](docs/memory/MEMORY_FILE.md) — long deep-dive on `crd-memory`
+- [`docs/containers/CONTAINERS_FILE.md`](docs/containers/CONTAINERS_FILE.md) — long deep-dive on `crd-containers`

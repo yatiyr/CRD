@@ -1,5 +1,6 @@
 #include "log_formatter.hpp"
 
+#include <crd/core/assert.hpp>
 #include <crd/log/log.hpp>
 #include <crd/log/log_channel.hpp>
 #include <crd/log/log_record.hpp>
@@ -142,6 +143,26 @@ void worker_main(LoggerState* st_ptr) noexcept
 } // namespace
 
 // ------------------------------------------------------------------
+// Bridge: crd-core assert handler -> Critical log + flush
+// ------------------------------------------------------------------
+//
+// Installed by init() so any CRD_ASSERT failure that runs WHILE the logger
+// is up gets a Critical record (and a flush) before the platform UI fires.
+// We use the default channel here on purpose: the assert is a global event,
+// not tied to a particular subsystem. Re-entrancy is already prevented by
+// the thread-local guard in crd-core's fire_assert_handler().
+namespace
+{
+void crd_log_default_assert_handler(const char* expression, const char* file, int line, const char* message) noexcept
+{
+    // Best-effort: if message is null, std::format prints "" cleanly.
+    CRD_LOG_CRITICAL(g_log_default, "ASSERT: {} | {}:{} | msg='{}'", expression ? expression : "?", file ? file : "?",
+                     line, message ? message : "");
+    flush();
+}
+} // namespace
+
+// ------------------------------------------------------------------
 // Public API
 // ------------------------------------------------------------------
 
@@ -160,6 +181,13 @@ void init(const LoggerConfig& cfg) noexcept
         st.worker = std::thread(&worker_main, &st);
     }
     st.initialized.store(true, std::memory_order_release);
+
+    // Install the assert -> log bridge. We don't overwrite a handler the user
+    // may have installed manually before init().
+    if (::crd::get_assert_handler() == nullptr)
+    {
+        ::crd::set_assert_handler(&crd_log_default_assert_handler);
+    }
 }
 
 void shutdown() noexcept
@@ -168,6 +196,13 @@ void shutdown() noexcept
     if (!st.initialized.load(std::memory_order_acquire))
     {
         return;
+    }
+
+    // Pull our handler back out of crd-core BEFORE we tear sinks down, so a
+    // race-y assert during shutdown can't try to log into a dead state.
+    if (::crd::get_assert_handler() == &crd_log_default_assert_handler)
+    {
+        ::crd::set_assert_handler(nullptr);
     }
 
     if (st.config.async)

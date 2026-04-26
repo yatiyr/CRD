@@ -39,6 +39,15 @@ Channel* first_channel() noexcept;
 
 // Number of registered channels (for diagnostics / dev UI).
 usize channel_count() noexcept;
+
+// Force-link helper. Some "first-party" channels (e.g. g_log_containers)
+// have their `CRD_DEFINE_LOG_CHANNEL(...)` definition in crd-log itself
+// to break circular module dependencies. Without an anchor, MSVC's linker
+// strips that translation unit when nothing in the consumer's executable
+// references a symbol from it. Including this header and referencing this
+// function from a per-TU anchor (see <crd/containers/log_channel.hpp>)
+// keeps the channel registrars alive.
+int force_link_first_party_channels() noexcept;
 } // namespace crd::log
 
 // --------------- Macros ---------------------------------------------------
