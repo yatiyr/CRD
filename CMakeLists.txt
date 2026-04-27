@@ -107,6 +107,26 @@ if (CRD_BUILD_TESTS)
     list(APPEND CMAKE_MODULE_PATH ${Catch2_SOURCE_DIR}/extras)
 endif()
 
+# GLFW: window + input backend for crd-platform.
+# We pin the 3.4 tag and disable everything we don't ship (docs, examples,
+# tests, the loader stubs). GLFW_BUILD_WAYLAND/X11 stay at their platform
+# defaults so Linux CI can still build later.
+set(GLFW_BUILD_DOCS     OFF CACHE BOOL "" FORCE)
+set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(GLFW_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
+set(GLFW_INSTALL        OFF CACHE BOOL "" FORCE)
+CPMAddPackage("gh:glfw/glfw#3.4")
+
+# GLFW is a third-party C source tree. Its warnings shouldn't fail OUR build,
+# so strip /WX (and the warning level) from GLFW targets only.
+if(TARGET glfw)
+    if(MSVC)
+        target_compile_options(glfw PRIVATE /W0 /WX-)
+    else()
+        target_compile_options(glfw PRIVATE -w)
+    endif()
+endif()
+
 # ----- Helper: auto-collect sources with CONFIGURE_DEPENDS -----------------
 
 function(crd_collect_sources out_var directory)
@@ -145,7 +165,7 @@ add_subdirectory(engine/memory)
 add_subdirectory(engine/math)
 add_subdirectory(engine/containers)
 add_subdirectory(engine/log)
-# add_subdirectory(engine/platform)
+add_subdirectory(engine/platform)
 # add_subdirectory(engine/graphics)
 # add_subdirectory(engine/scripting)
 

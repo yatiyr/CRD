@@ -47,7 +47,7 @@ A modern C++20 game/simulation engine.
 | `crd-memory`     | ✅      |
 | `crd-containers` | ✅      |
 | `crd-math`       | ✅      |
-| `crd-platform`   | ⏳      |
+| `crd-platform`   | 🚧      |
 
 Full status table and reasoning live in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
@@ -60,7 +60,10 @@ Full status table and reasoning live in [`docs/ROADMAP.md`](docs/ROADMAP.md).
   `RingBufferSink` uses `crd::containers::Array`. First-party channel
   definitions like `g_log_containers` also live here to break the cycle.)
 - `crd-math`: depends on `crd-core`
-- `crd-platform`: depends on `crd-core`, `crd-log`
+- `crd-platform`: depends on `crd-core`, `crd-log`, `crd-containers`. Backend
+  is GLFW as a PRIVATE link dependency; no GLFW symbol leaks into public
+  headers. Owns its own `g_log_platform` channel (no cycle, definition
+  inside crd-platform itself).
 - `crd-graphics`: depends on `crd-core`, `crd-math`, `crd-memory`, `crd-platform`
 
 ## Where to look
@@ -69,6 +72,7 @@ Full status table and reasoning live in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 - [`docs/sessions/`](docs/sessions/) — one file per work session
 - [`docs/systems/`](docs/systems/) — short overview per shipped subsystem
 - [`docs/systems/math.md`](docs/systems/math.md) — current math module overview
+- [`docs/systems/platform.md`](docs/systems/platform.md) — current platform module overview
 - [`docs/log/LOG_FILE.md`](docs/log/LOG_FILE.md) — long deep-dive on `crd-log`
 - [`docs/memory/MEMORY_FILE.md`](docs/memory/MEMORY_FILE.md) — long deep-dive on `crd-memory`
 - [`docs/containers/CONTAINERS_FILE.md`](docs/containers/CONTAINERS_FILE.md) — long deep-dive on `crd-containers`

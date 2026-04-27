@@ -16,7 +16,8 @@
 | `crd-containers` | ✅      | 1     | Array, FixedArray, Span, String, RingBuffer, HashMap, HashSet |
 | Phase 1 quality  | ✅      | 1     | CI, benchmarks, PCH, runtime split, clang-cl, tidy, assert   |
 | `crd-math`       | ✅      | 1     | float+double, scalar-first, column-major, radians           |
-| `crd-platform`   | ⏳      | 1     | window/input/timer/filesystem (GLFW)                         |
+| `crd-platform`   | 🚧      | 1     | v1a window+context shipped (GLFW). Timer/Input/FS pending.   |
+| `crd-app`        | ⏳      | 4-pre | LayerStack + Event router; deferred until ImGui/UI/Editor    |
 | `crd-graphics`   | ⏳      | 2     | Vulkan-first, RHI abstraction                                |
 | GPU memory + streaming | ⏳ | 2     | TLSF, BuddyAllocator, StreamingAllocator, GPUAllocator       |
 | `crd-resources`  | ⏳      | 2.5   | async I/O, LRU eviction, open-world streaming pipeline       |
@@ -58,8 +59,10 @@ hold containers, and talk to the OS.
 | 7b   | `crd-math`       | Mat2/3/4 (column-major)                                           | ✅     |
 | 7c   | `crd-math`       | Quat (Hamilton, xyzw) + Transform                                 | ✅     |
 | 7d   | `crd-math`       | Ray, Plane, AABB, Sphere, Triangle, Frustum                       | ✅     |
-| 8a   | `crd-platform`   | Window (GLFW), Timer, basic input                                 | ⏳     |
-| 8b   | `crd-platform`   | Filesystem, DynamicLibrary, threading helpers                     | ⏳     |
+| 8a   | `crd-platform`   | Window (GLFW) + PlatformContext + smoke_window                    | ✅     |
+| 8b   | `crd-platform`   | Timer + FrameClock (chrono-only)                                  | ⏳     |
+| 8c   | `crd-platform`   | Input (polling snapshot + opt-in event queue)                     | ⏳     |
+| 8d   | `crd-platform`   | Filesystem, DynamicLibrary, threading helpers                     | ⏳     |
 | 9    | closeout         | CONTEXT.md sweep, retrospective session log, Phase 2 prep         | ⏳     |
 
 Estimate: ~11-13 sessions to finish Phase 1 from here (4 math + 2 platform +
@@ -370,6 +373,47 @@ Implementation notes captured for the upcoming quality session:
 - **Header review completed.** No blocker for math; main remaining doc
   weakness is uneven Doxygen-style per-symbol comments in `crd-core`.
 
+### 2026-04 — Platform v1a shipped (window + context)
+
+- **Window backend is GLFW**, pulled in via CPM (`gh:glfw/glfw#3.4`) with
+  examples / tests / docs / install all turned off. GLFW's `/W4 /WX` would
+  fail our build, so we strip warnings on the `glfw` target only.
+- **Public API is backend-agnostic.** `PlatformContext` and `Window` never
+  expose a `GLFWwindow*` in their headers. `Window` is a concrete class
+  with a PIMPL (not an `IWindow` interface). Future SDL3 / custom Win32
+  backends are a private rewrite, not a public API change.
+- **Vulkan-ready by default.** `WindowDesc::client_api_none = true` maps
+  to `GLFW_NO_API`, so no OpenGL context is created. The Vulkan surface
+  will go through `Window::native_handle()` from inside `crd-graphics`,
+  not from generic engine code.
+- **GLFW errors bridge to the logger.** Error callback installs at
+  `PlatformContext::create()` time, formats GLFW's error code + message
+  through `CRD_LOG_ERROR` into the `g_log_platform` channel.
+- **`g_log_platform` is owned inside `crd-platform`.** No cycle, so the
+  channel does NOT live inside `crd-log`. The `g_log_containers`
+  cycle-break is a historical exception, not the default pattern.
+- **`Extent2D` is a small platform-local POD**, not `crd::math::Vec2<i32>`.
+  The math `MathScalar` concept is float/double only by design and we
+  don't want to weaken it for window coordinates. Side benefit:
+  `crd-platform → crd-math` is no longer needed in the link graph.
+- **`Window`'s move-assign is hand-written.** Default `unique_ptr`
+  move-assign would not call `glfwDestroyWindow` on the Impl being
+  overwritten, leaking the OS handle.
+- **No layer stack / event router / `Event` base type at this layer.**
+  Those will live in a future `crd-app` module that has real consumers
+  (ImGui debug overlay, editor panels, game UI). Designing them now,
+  with no real consumer, would lock in the wrong shape.
+- **Hybrid input model still planned for v1c**, not v1a:
+  polling-first `InputState` + opt-in `RingBuffer<InputEvent>` queue,
+  hardware-only event POD union, no propagation/consumption semantics.
+- **`std::getenv` warning suppression is scoped to the test target only.**
+  The platform library itself stays under `/W4 /WX` clean.
+- Quality pass at session end:
+  - `win-debug`: 159/159 tests pass
+  - `win-release`: 158/158 (Debug-only stats test correctly skipped)
+  - `win-asan`: 159/159 with no leaks, no UAF, no OOB
+  - `smoke_window` opens a real Vulkan-ready 1280x720 window
+
 ### 2026-04 — Open-world streaming
 
 Streaming is a *pipeline*, not just an allocator. The full pipeline needs:
@@ -413,48 +457,47 @@ allocator interface correctly today (Phase A) makes 2–5 a drop-in addition.
 > Update this section at the end of every session so future-you can re-enter
 > the project without thinking.
 
-**Last session:** 2026-04-26 — `crd-math` v1d primitive geometry. See
-`docs/sessions/2026-04-26-math-v1d-primitive-geometry.md`.
+**Last session:** 2026-04-27 — `crd-platform` v1a (window + context). See
+`docs/sessions/2026-04-27-platform-v1a-window.md`.
 
 What landed:
 
-1. `crd-math` v1 is now functionally complete for Phase 1: scalar helpers,
-   vectors, matrices, quaternions, rigid transforms, and primitive geometry.
-2. Primitive geometry shipped with fast core helpers: ray/plane, ray/sphere,
-   ray/triangle, AABB/sphere overlap, barycentric coordinates, and frustum
-   extraction from view-projection matrices.
-3. The module now has formatting and debugger support for both spatial-math and
-   primitive-geometry types.
-4. The test suite and benchmark baseline now cover the entire shipped Phase 1
-   math substrate, giving future SIMD and computational-geometry work a known
-   scalar baseline.
+1. **GLFW** wired in through CPM (3.4 tag pin), warnings stripped on the
+   GLFW target only so its source tree doesn't fail our `/W4 /WX` policy.
+2. **`PlatformContext`** RAII wrapper around `glfwInit` / `glfwTerminate`,
+   with a GLFW error → log bridge installed at create time. Move-only,
+   default-constructible to an invalid state.
+3. **`Window`** PIMPL'd over `GLFWwindow*`, Vulkan-ready by default
+   (`GLFW_NO_API`). Hand-written move-assign so the OS handle can't leak
+   on overwrite.
+4. **`Extent2D`** small platform-local POD for window/framebuffer sizes,
+   so platform doesn't have to depend on math.
+5. **`g_log_platform`** channel owned inside `crd-platform` itself
+   (no cycle-break needed; the `g_log_containers` pattern is a historical
+   exception, not the default).
+6. **7 new tests** in `tests/platform/`, all green across Debug, Release
+   and ASan. CI/headless-friendly: `CRD_PLATFORM_HEADLESS=1` skips
+   window-creating cases.
+7. **`smoke_window`** runtime example opens a real 1280x720 Vulkan-ready
+   window and pumps events until close.
 
 Current test counts:
 
-- Debug: `152/152`
-- Release: `151/151`
-- ASan: `152/152`
+- Debug: `159/159`
+- Release: `158/158` (Debug-only stats test correctly skipped)
+- ASan: `159/159`
 
-**Next session starts with: `crd-platform` v1a (window, timer, input).**
+**Next session starts with: `crd-platform` v1b — Timer + FrameClock.**
 
-The key decisions are now locked in:
+Key platform decisions now locked in:
 
-- Hamilton quaternions in `xyzw`
-- column-major matrices with `Mat * Vec`
-- scalar-first, SIMD-ready design
-- public `f32` and `f64` support from day one
-- v1 `Transform<T>` is a rigid transform, not a full TRS object. Non-uniform
-  scale remains matrix-level for now so composition semantics stay clean.
+- backend hidden behind PIMPL; GLFW header never appears in a public crd-platform header
+- concrete `Window`, no `IWindow` interface
+- Vulkan-first (`GLFW_NO_API`) — Vulkan surface comes through `native_handle()` from inside `crd-graphics` only
+- `Extent2D` instead of `Vec2<i32>` — math contract stays float/double-only
+- no layer/event stack at platform level; that's a future `crd-app` module's job
+- v1c hybrid input: polling snapshot + opt-in `RingBuffer<InputEvent>`, hardware-only POD union, no consumption semantics
 
-`crd-math` still has long-range expansions planned (SIMD, dense numerical work,
-sparse solvers, robust computational geometry), but the Phase 1 slice is now a
-coherent shipped substrate rather than a work in progress.
-
-One local verification wrinkle to remember: after a targeted clean rebuild of
-only `crd-bench`, `ctest --preset win-release` temporarily surfaced Catch2
-`NOT_BUILT` placeholders. A full rebuild restores the real executables, and
-`ctest --test-dir build/win-release` reflected the correct 133-test set.
-
-Approximately 4–6 sessions from the math session to Phase 1 close
-(2 math sessions, 2 platform sessions, 1 closeout, plus the
-cross-compiler bleed-over budget if any).
+Approximately 3–5 sessions from here to Phase 1 close (1 timer/clock,
+1 input, 1 filesystem/dynlib/threading, 1 closeout, plus headroom for
+cross-compiler / Linux GLFW shakeout).
