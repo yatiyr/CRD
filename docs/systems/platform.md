@@ -10,7 +10,7 @@ touching downstream engine code.
 | Slice | Ships | Status |
 | --- | --- | --- |
 | v1a | `PlatformContext`, `Window` (PIMPL'd over GLFW), `Extent2D` | ✅ |
-| v1b | `Timer`, `FrameClock` (chrono-only, GLFW-independent) | ⏳ |
+| v1b | `Timer`, `FrameClock` (chrono-only, GLFW-independent) | ✅ |
 | v1c | `Input` (polling + opt-in event queue) | ⏳ |
 | v2  | filesystem, dynamic library, threading helpers | ⏳ |
 
@@ -66,6 +66,20 @@ touching downstream engine code.
   pattern reused from previous modules.
 - `smoke_window` example under `runtime/examples/` opens a window, pumps
   events, and shuts down on user close.
+
+## What ships today (v1b)
+
+- `Timer` — monotonic stopwatch over `std::chrono::steady_clock`.
+  Construct to start, `reset()` to re-anchor, `elapsed_seconds() /
+  elapsed_milliseconds() / elapsed_nanoseconds()` to read.
+- `FrameClock` — main-loop timing facade. `tick()` once per frame,
+  read `delta_seconds()` / `total_seconds()` / `frame_count()`. The
+  first tick seeds without a spike (delta is reported as 0 instead of
+  "engine startup time").
+- Both are intentionally GLFW-independent: timing should not require a
+  windowing backend. Tests run without a Window and stay deterministic.
+- `smoke_frame_clock` runtime example exercises a synthetic 5-frame
+  loop without opening a window.
 
 ## How to use it (today)
 

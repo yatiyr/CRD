@@ -16,7 +16,7 @@
 | `crd-containers` | ✅      | 1     | Array, FixedArray, Span, String, RingBuffer, HashMap, HashSet |
 | Phase 1 quality  | ✅      | 1     | CI, benchmarks, PCH, runtime split, clang-cl, tidy, assert   |
 | `crd-math`       | ✅      | 1     | float+double, scalar-first, column-major, radians           |
-| `crd-platform`   | 🚧      | 1     | v1a window+context shipped (GLFW). Timer/Input/FS pending.   |
+| `crd-platform`   | 🚧      | 1     | v1a window+context, v1b timer+frame clock shipped. Input/FS pending. |
 | `crd-app`        | ⏳      | 4-pre | LayerStack + Event router; deferred until ImGui/UI/Editor    |
 | `crd-graphics`   | ⏳      | 2     | Vulkan-first, RHI abstraction                                |
 | GPU memory + streaming | ⏳ | 2     | TLSF, BuddyAllocator, StreamingAllocator, GPUAllocator       |
@@ -60,7 +60,7 @@ hold containers, and talk to the OS.
 | 7c   | `crd-math`       | Quat (Hamilton, xyzw) + Transform                                 | ✅     |
 | 7d   | `crd-math`       | Ray, Plane, AABB, Sphere, Triangle, Frustum                       | ✅     |
 | 8a   | `crd-platform`   | Window (GLFW) + PlatformContext + smoke_window                    | ✅     |
-| 8b   | `crd-platform`   | Timer + FrameClock (chrono-only)                                  | ⏳     |
+| 8b   | `crd-platform`   | Timer + FrameClock (chrono-only)                                  | ✅     |
 | 8c   | `crd-platform`   | Input (polling snapshot + opt-in event queue)                     | ⏳     |
 | 8d   | `crd-platform`   | Filesystem, DynamicLibrary, threading helpers                     | ⏳     |
 | 9    | closeout         | CONTEXT.md sweep, retrospective session log, Phase 2 prep         | ⏳     |
@@ -414,6 +414,31 @@ Implementation notes captured for the upcoming quality session:
   - `win-asan`: 159/159 with no leaks, no UAF, no OOB
   - `smoke_window` opens a real Vulkan-ready 1280x720 window
 
+### 2026-04 — Platform v1b shipped (timer + frame clock)
+
+- **`Timer` and `FrameClock` are built on `std::chrono::steady_clock`**, not
+  `glfwGetTime()`. Tying engine timing to the windowing backend would force
+  every measurement to wait for a context to exist. steady_clock is
+  monotonic, never jumps, and works without any backend.
+- **`FrameClock`'s first `tick()` reports zero delta**, not "time since
+  construction". Otherwise the first frame would always look like a hitch
+  whose magnitude is engine startup time. Subsequent ticks are real
+  inter-tick deltas.
+- **`FrameClock::total_seconds()` is measured from construction**, not from
+  the first tick. This gives a single stable origin for things like log
+  timestamps and replays.
+- **`reset()` zeroes everything** — frame count, delta, total — and
+  re-seeds, so the next tick is again a "zero-delta seed". This is the
+  clean way to handle pause/unpause boundaries.
+- **No tests need a Window.** Timing tests use `std::this_thread::sleep_for`
+  with conservative thresholds (typical: assert >=2ms after a 3ms sleep)
+  to stay deterministic on busy CI runners.
+- Quality pass at session end:
+  - `win-debug`: 167/167 tests pass (8 new timer tests)
+  - `win-release`: 166/166 (Debug-only stats test correctly skipped)
+  - `win-asan`: 167/167, no leaks, no UAF
+  - `smoke_frame_clock` runtime example prints a clean 5-frame loop
+
 ### 2026-04 — Open-world streaming
 
 Streaming is a *pipeline*, not just an allocator. The full pipeline needs:
@@ -457,47 +482,35 @@ allocator interface correctly today (Phase A) makes 2–5 a drop-in addition.
 > Update this section at the end of every session so future-you can re-enter
 > the project without thinking.
 
-**Last session:** 2026-04-27 — `crd-platform` v1a (window + context). See
-`docs/sessions/2026-04-27-platform-v1a-window.md`.
+**Last session:** 2026-04-27 — `crd-platform` v1b (timer + frame clock). See
+`docs/sessions/2026-04-27-platform-v1b-timer.md`.
 
 What landed:
 
-1. **GLFW** wired in through CPM (3.4 tag pin), warnings stripped on the
-   GLFW target only so its source tree doesn't fail our `/W4 /WX` policy.
-2. **`PlatformContext`** RAII wrapper around `glfwInit` / `glfwTerminate`,
-   with a GLFW error → log bridge installed at create time. Move-only,
-   default-constructible to an invalid state.
-3. **`Window`** PIMPL'd over `GLFWwindow*`, Vulkan-ready by default
-   (`GLFW_NO_API`). Hand-written move-assign so the OS handle can't leak
-   on overwrite.
-4. **`Extent2D`** small platform-local POD for window/framebuffer sizes,
-   so platform doesn't have to depend on math.
-5. **`g_log_platform`** channel owned inside `crd-platform` itself
-   (no cycle-break needed; the `g_log_containers` pattern is a historical
-   exception, not the default).
-6. **7 new tests** in `tests/platform/`, all green across Debug, Release
-   and ASan. CI/headless-friendly: `CRD_PLATFORM_HEADLESS=1` skips
-   window-creating cases.
-7. **`smoke_window`** runtime example opens a real 1280x720 Vulkan-ready
-   window and pumps events until close.
+1. **`Timer`** — monotonic stopwatch on `std::chrono::steady_clock`. Construction
+   starts the clock, `reset()` re-anchors, `elapsed_*()` reads.
+2. **`FrameClock`** — main-loop timing facade. First `tick()` seeds without a
+   startup spike (delta = 0). Subsequent ticks report real inter-tick deltas.
+   `total_seconds()` measured from construction. `reset()` zeroes everything
+   and re-seeds for clean pause/unpause boundaries.
+3. **GLFW-independent.** Tests run without a Window; timing module would still
+   work if we swapped backends.
+4. **8 new tests** all green across Debug / Release / ASan.
+5. **`smoke_frame_clock`** runtime example prints a synthetic 5-frame loop.
 
 Current test counts:
 
-- Debug: `159/159`
-- Release: `158/158` (Debug-only stats test correctly skipped)
-- ASan: `159/159`
+- Debug: `167/167`
+- Release: `166/166` (Debug-only stats test correctly skipped)
+- ASan: `167/167`
 
-**Next session starts with: `crd-platform` v1b — Timer + FrameClock.**
+**Next session starts with: `crd-platform` v1c — Input.**
 
-Key platform decisions now locked in:
+The plan for v1c is locked in from v1a: hybrid model — polling-first
+`InputState` snapshot plus an opt-in `RingBuffer<InputEvent>` queue.
+Hardware-level POD union. No layer / propagation / consumption semantics;
+those belong in the future `crd-app` module.
 
-- backend hidden behind PIMPL; GLFW header never appears in a public crd-platform header
-- concrete `Window`, no `IWindow` interface
-- Vulkan-first (`GLFW_NO_API`) — Vulkan surface comes through `native_handle()` from inside `crd-graphics` only
-- `Extent2D` instead of `Vec2<i32>` — math contract stays float/double-only
-- no layer/event stack at platform level; that's a future `crd-app` module's job
-- v1c hybrid input: polling snapshot + opt-in `RingBuffer<InputEvent>`, hardware-only POD union, no consumption semantics
-
-Approximately 3–5 sessions from here to Phase 1 close (1 timer/clock,
-1 input, 1 filesystem/dynlib/threading, 1 closeout, plus headroom for
-cross-compiler / Linux GLFW shakeout).
+Approximately 2–4 sessions from here to Phase 1 close (1 input, 1
+filesystem/dynlib/threading, 1 closeout, plus headroom for cross-compiler
+/ Linux GLFW shakeout).

@@ -63,3 +63,14 @@ target_link_libraries(smoke_window PRIVATE
     crd-platform
 )
 crd_enable_default_pch(smoke_window)
+
+add_executable(smoke_frame_clock
+    examples/smoke_frame_clock.cpp
+)
+
+target_link_libraries(smoke_frame_clock PRIVATE
+    crd-core
+    crd-log
+    crd-platform
+)
+crd_enable_default_pch(smoke_frame_clock)
