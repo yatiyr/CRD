@@ -117,6 +117,6 @@ auto sub = app.event_bus().subscribe<AssetReloadedEvent>([](AssetReloadedEvent&)
   cross-thread producer/consumer need.
 - `crd-app` stays graphics-agnostic. Early graphics work will plug in via
   one or more layers rather than adding a hard dependency from `crd-app`
-  to `crd-graphics`.
+  to `crd-rhi`, `crd-rhi-vulkan`, or `crd-renderer`.
 - The next immediate consumer is the first graphics bootstrap session:
   one render-aware layer driving the first-triangle milestone.

@@ -67,8 +67,11 @@ Full status table and reasoning live in [`docs/ROADMAP.md`](docs/ROADMAP.md).
   inside crd-platform itself).
 - `crd-app`: depends on `crd-core`, `crd-containers`, `crd-platform`.
   Owns Application, LayerStack, propagated Event hierarchy, and a small
-  typed sync EventBus. Deliberately does NOT depend on `crd-graphics`.
-- `crd-graphics`: depends on `crd-core`, `crd-math`, `crd-memory`, `crd-platform`
+  typed sync EventBus. Deliberately does NOT depend on `crd-rhi`,
+  `crd-rhi-vulkan`, or `crd-renderer`.
+- `crd-rhi`: planned dependency target is `crd-core`, `crd-platform`, `crd-memory`
+- `crd-rhi-vulkan`: planned dependency target is `crd-rhi`, `crd-platform`, `crd-log`
+- `crd-renderer`: planned dependency target is `crd-rhi`, `crd-math`, `crd-memory`, `crd-resources`
 
 ## Where to look
 

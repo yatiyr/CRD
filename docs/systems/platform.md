@@ -156,7 +156,7 @@ while (!window.should_close())
     {
         window.request_close();
     }
-    // ... render here when crd-graphics lands ...
+    // ... render here when crd-rhi/crd-renderer land ...
 }
 ```
 

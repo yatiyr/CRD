@@ -807,24 +807,23 @@ allocator interface correctly today (Phase A) makes 2–5 a drop-in addition.
 > Update this section at the end of every session so future-you can re-enter
 > the project without thinking.
 
-**Last session:** 2026-04-27 — `crd-app` v1 (event/layer/application/bus).
-See `docs/sessions/2026-04-27-app-v1-event-layer-application.md`.
+**Last session:** 2026-04-27 — Phase 1 closeout / quality check.
+See `docs/sessions/2026-04-27-phase-1-closeout-quality-check.md`.
 
 What landed:
 
-1. **`crd-app` shipped** as a real engine module: `Application`, `Layer`,
-   `LayerStack`, propagated event hierarchy, `EventDispatcher`, and a small
-   typed sync `EventBus`.
-2. **Custom application-defined events work out of the box.** Event type
-   identity is token-based, so app code can define new event classes without
-   editing engine enums or central registries.
-3. **Cerid's hybrid event model is now real:** Hazel-style layer
-   propagation for input/window/app events, and a separate bus for broadcast
-   notifications.
-4. **`Application` owns layers via `unique_ptr`, is not a singleton, and
-   lifts `crd-platform::InputEvent` into typed app events.**
-5. **`smoke_app`** opens a real app loop and closes on ESC through the new
-   layer/event path.
+1. **Phase 1 is functionally complete.** Core, log, memory, containers,
+   math, platform, and app are all shipped and test-covered.
+2. **The current verification matrix remains strong:**
+   - Debug: `197/197`
+   - Release: `196/196`
+   - ASan: `197/197`
+3. **Benchmark refresh is the one remaining blemish.** The release bench
+   suite now fails to measure the disabled-trace logging microbenchmark
+   because it gets optimized away; the rest of the bench set still runs.
+4. **Docs were swept for the graphics rename.** The important public notes
+   now point at `crd-rhi` / `crd-rhi-vulkan` / `crd-renderer` instead of the
+   older monolithic `crd-graphics` wording.
 
 Current test counts:
 
@@ -832,15 +831,15 @@ Current test counts:
 - Release: `196/196` (Debug-only stats test correctly skipped)
 - ASan: `197/197`
 
-**Next session starts with: closeout / retrospective, then graphics prep.**
+**Next session starts with: `crd-rhi` v1a scaffold / interface design.**
 
-What the closeout should do:
+One small optional cleanup may happen first:
 
-1. Mark Phase 1 complete in the status / overview docs.
-2. Refresh benchmarks so the pre-graphics baseline includes app dispatch too.
-3. Sweep `CONTEXT.md` and system overviews for any stale wording.
-4. Lock the graphics entry checklist: first-triangle gate, RHI bootstrap,
-   and which debug layer owns the earliest render loop integration.
+1. Fix or replace the disabled-trace benchmark so the release bench suite is
+   fully green again.
+2. Refresh `docs/bench/baseline_2026-04.md` only after that microbenchmark is
+   stable.
 
-Roughly 2–4 sessions from here to "first triangle on screen": closeout
-(1) and early graphics bootstrap (1–3).
+Roughly 3–5 sessions from here to "first triangle on screen": one small
+benchmark cleanup if desired, then `crd-rhi` interfaces, Vulkan backend
+bootstrap, command buffers/sync, and the first-triangle milestone.
