@@ -11,7 +11,7 @@ touching downstream engine code.
 | --- | --- | --- |
 | v1a | `PlatformContext`, `Window` (PIMPL'd over GLFW), `Extent2D` | ✅ |
 | v1b | `Timer`, `FrameClock` (chrono-only, GLFW-independent) | ✅ |
-| v1c | `Input` (polling + opt-in event queue) | ⏳ |
+| v1c | `Input` (polling snapshot + opt-in event queue) | ✅ |
 | v2  | filesystem, dynamic library, threading helpers | ⏳ |
 
 ## Core decisions
@@ -80,6 +80,35 @@ touching downstream engine code.
   windowing backend. Tests run without a Window and stay deterministic.
 - `smoke_frame_clock` runtime example exercises a synthetic 5-frame
   loop without opening a window.
+
+## What ships today (v1c — input)
+
+- Backend-agnostic `Key` and `MouseButton` enums. Values are contiguous
+  Cerid indices, NOT GLFW key codes — backend swaps don't reshuffle the
+  enum. Translation tables are isolated in `window.cpp`.
+- `InputState` — frame-coherent snapshot. `is_key_down`,
+  `was_key_pressed`, `was_key_released` and the equivalent mouse
+  accessors. Mouse position, accumulated mouse delta, scroll delta, and
+  the latest `KeyMods` (shift/ctrl/alt/super).
+- `Input` — owned by `Window`, mutated by GLFW callbacks via the
+  user-pointer. Read through `window.input().state()`. Call
+  `window.poll_input()` once per frame, AFTER `context.poll_events()`,
+  to clear edge state and start a fresh frame.
+- `InputEvent` — POD union (tagged `Type`). One event per hardware
+  signal: KeyDown / KeyUp / KeyRepeat / MouseDown / MouseUp / MouseMove /
+  Scroll / Resize. No `handled` flag, no propagation — that lives in
+  the future `crd-app` module.
+- Opt-in event queue. Default state is **off**. Call
+  `window.input().enable_event_queue(64)` (capacity must be a power
+  of two) to allocate, then drain with `try_pop_event()`. Without it,
+  events are dropped after updating `InputState` — most game code
+  doesn't need ordered events.
+- First mouse position seeds without a spurious large delta. Repeat
+  KeyDown without a prior KeyUp does NOT re-trigger
+  `was_key_pressed` (transitions only, not "is held").
+- Gamepad: deliberately not in this slice. Real gamepad support will
+  come through SDL3 / XInput in a later phase; GLFW joystick API is too
+  thin.
 
 ## How to use it (today)
 

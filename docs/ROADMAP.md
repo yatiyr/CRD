@@ -16,7 +16,7 @@
 | `crd-containers` | ✅      | 1     | Array, FixedArray, Span, String, RingBuffer, HashMap, HashSet |
 | Phase 1 quality  | ✅      | 1     | CI, benchmarks, PCH, runtime split, clang-cl, tidy, assert   |
 | `crd-math`       | ✅      | 1     | float+double, scalar-first, column-major, radians           |
-| `crd-platform`   | 🚧      | 1     | v1a window+context, v1b timer+frame clock shipped. Input/FS pending. |
+| `crd-platform`   | 🚧      | 1     | v1a window+context, v1b timer, v1c input shipped. FS/dynlib pending. |
 | `crd-app`        | ⏳      | 4-pre | LayerStack + Event router; deferred until ImGui/UI/Editor    |
 | `crd-graphics`   | ⏳      | 2     | Vulkan-first, RHI abstraction                                |
 | GPU memory + streaming | ⏳ | 2     | TLSF, BuddyAllocator, StreamingAllocator, GPUAllocator       |
@@ -61,7 +61,7 @@ hold containers, and talk to the OS.
 | 7d   | `crd-math`       | Ray, Plane, AABB, Sphere, Triangle, Frustum                       | ✅     |
 | 8a   | `crd-platform`   | Window (GLFW) + PlatformContext + smoke_window                    | ✅     |
 | 8b   | `crd-platform`   | Timer + FrameClock (chrono-only)                                  | ✅     |
-| 8c   | `crd-platform`   | Input (polling snapshot + opt-in event queue)                     | ⏳     |
+| 8c   | `crd-platform`   | Input (polling snapshot + opt-in event queue)                     | ✅     |
 | 8d   | `crd-platform`   | Filesystem, DynamicLibrary, threading helpers                     | ⏳     |
 | 9    | closeout         | CONTEXT.md sweep, retrospective session log, Phase 2 prep         | ⏳     |
 
@@ -439,6 +439,42 @@ Implementation notes captured for the upcoming quality session:
   - `win-asan`: 167/167, no leaks, no UAF
   - `smoke_frame_clock` runtime example prints a clean 5-frame loop
 
+### 2026-04 — Platform v1c shipped (input)
+
+- **Hybrid input model.** Frame-coherent `InputState` snapshot is always
+  there; the ordered event queue is opt-in. Most game code reads
+  `is_key_down(Key::W)`-style polls; code that needs ordered presses
+  (text edit, debug overlay) calls `enable_event_queue(N)` once and
+  drains with `try_pop_event()`.
+- **`Key` / `MouseButton` are Cerid-owned indices, not GLFW codes.**
+  Backend translation lives in `window.cpp` only. Adding a key is a
+  one-line enum append plus one table entry.
+- **`Input` lives inside `Window`'s Impl.** GLFW user-pointer points at
+  the `Input` directly; callbacks dispatch with one indirection.
+- **`Window` move-assign re-binds the GLFW user pointer** after adopting
+  the moved-from Impl. Move ctor doesn't need this because heap-stored
+  Impl keeps its address; assignment swaps Impl objects so the pointer
+  must follow.
+- **First mouse-move seeds without spurious delta.** Same pattern as
+  FrameClock's first-tick zero-delta seed: avoid synthesizing motion
+  from default-init coordinates.
+- **`KeyDown` while already-down does not re-fire `was_key_pressed`.**
+  `pressed`/`released` are transitions, not held-state alternates.
+- **Edge state (pressed/released, mouse delta, scroll delta) clears in
+  `Input::on_poll_begin()`.** `Window::poll_input()` calls this at the
+  start of every frame. The contract: call `context.poll_events()` first,
+  then `window.poll_input()`, then read state.
+- **Events without an enabled queue are silently dropped.** State is
+  always updated regardless. The queue is purely additive.
+- **No `Event` base type, no propagation, no consumption.** Hardware-only
+  POD union. Layer/event router is the future `crd-app` module's job.
+- **No gamepad in this slice.** Real gamepad work needs SDL3 / XInput.
+- Quality pass at session end:
+  - `win-debug`: 179/179 (12 new input tests)
+  - `win-release`: 178/178 (Debug-only stats test correctly skipped)
+  - `win-asan`: 179/179, no leaks (OptionalQueue heap alloc/free clean)
+  - `smoke_window` now closes via ESC through the polling API
+
 ### 2026-04 — Open-world streaming
 
 Streaming is a *pipeline*, not just an allocator. The full pipeline needs:
@@ -482,35 +518,39 @@ allocator interface correctly today (Phase A) makes 2–5 a drop-in addition.
 > Update this section at the end of every session so future-you can re-enter
 > the project without thinking.
 
-**Last session:** 2026-04-27 — `crd-platform` v1b (timer + frame clock). See
-`docs/sessions/2026-04-27-platform-v1b-timer.md`.
+**Last session:** 2026-04-27 — `crd-platform` v1c (input). See
+`docs/sessions/2026-04-27-platform-v1c-input.md`.
 
 What landed:
 
-1. **`Timer`** — monotonic stopwatch on `std::chrono::steady_clock`. Construction
-   starts the clock, `reset()` re-anchors, `elapsed_*()` reads.
-2. **`FrameClock`** — main-loop timing facade. First `tick()` seeds without a
-   startup spike (delta = 0). Subsequent ticks report real inter-tick deltas.
-   `total_seconds()` measured from construction. `reset()` zeroes everything
-   and re-seeds for clean pause/unpause boundaries.
-3. **GLFW-independent.** Tests run without a Window; timing module would still
-   work if we swapped backends.
-4. **8 new tests** all green across Debug / Release / ASan.
-5. **`smoke_frame_clock`** runtime example prints a synthetic 5-frame loop.
+1. **Backend-agnostic `Key` / `MouseButton` enums** — Cerid indices, not
+   GLFW codes. Translation isolated in `window.cpp`.
+2. **`InputState` snapshot** — `is_key_down`, `was_key_pressed`,
+   `was_key_released`, mouse position/delta, scroll delta, KeyMods.
+3. **`Input` owned by `Window`** — GLFW callbacks write through the
+   user-pointer. `window.poll_input()` clears edge state at frame start.
+4. **`InputEvent` POD union** — KeyDown/KeyUp/KeyRepeat/MouseDown/MouseUp/
+   MouseMove/Scroll/Resize. No `handled` flag.
+5. **Opt-in event queue** via `enable_event_queue(capacity_pow2)` →
+   `try_pop_event()`. Default off; without it, events are silently
+   dropped after updating state.
+6. **12 new tests** covering state transitions, mouse seeding, scroll
+   accumulation, queue FIFO + opt-in, and unknown-key drops.
+7. **`smoke_window`** now closes on ESC through the new polling API.
 
 Current test counts:
 
-- Debug: `167/167`
-- Release: `166/166` (Debug-only stats test correctly skipped)
-- ASan: `167/167`
+- Debug: `179/179`
+- Release: `178/178` (Debug-only stats test correctly skipped)
+- ASan: `179/179`
 
-**Next session starts with: `crd-platform` v1c — Input.**
+**Next session starts with: closeout / `crd-platform` v1d — Filesystem +
+DynamicLibrary + threading helpers, OR a Phase 1 retrospective.**
 
-The plan for v1c is locked in from v1a: hybrid model — polling-first
-`InputState` snapshot plus an opt-in `RingBuffer<InputEvent>` queue.
-Hardware-level POD union. No layer / propagation / consumption semantics;
-those belong in the future `crd-app` module.
+`crd-platform` is now Phase-1-complete for engine bring-up: a window
+opens, the loop ticks, the user can type. Filesystem and dynlib are
+useful before graphics, but graphics doesn't strictly need them on day
+one — Vulkan instance creation, surface creation, device selection all
+live in `crd-graphics` and only consume what's already shipped here.
 
-Approximately 2–4 sessions from here to Phase 1 close (1 input, 1
-filesystem/dynlib/threading, 1 closeout, plus headroom for cross-compiler
-/ Linux GLFW shakeout).
+Approximately 1–3 sessions from here to Phase 1 close.

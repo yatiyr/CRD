@@ -13,6 +13,7 @@ target_link_libraries(crd-platform
         crd-core
         crd-log
         crd-containers
+        crd-memory
     PRIVATE
         glfw
 )

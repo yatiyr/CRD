@@ -40,7 +40,13 @@ int main()
 
     while (!window.should_close())
     {
+        window.poll_input();
         context.poll_events();
+        if (window.input().state().was_key_pressed(crd::platform::Key::Escape))
+        {
+            CRD_LOG_INFO(crd::platform::g_log_platform, "ESC pressed, closing");
+            window.request_close();
+        }
     }
 
     CRD_LOG_INFO(crd::platform::g_log_platform, "Window closed by user, exiting");

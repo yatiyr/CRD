@@ -11,7 +11,172 @@ namespace crd::platform
 struct Window::Impl
 {
     GLFWwindow* handle = nullptr;
+    Input input{};
 };
+
+namespace
+{
+[[nodiscard]] Key glfw_key_to_crd(int glfw_key) noexcept
+{
+    // Letters: GLFW_KEY_A is 'A' (65), and Cerid Key::A == 1.
+    if (glfw_key >= GLFW_KEY_A && glfw_key <= GLFW_KEY_Z)
+    {
+        return static_cast<Key>(static_cast<crd::u16>(Key::A) + static_cast<crd::u16>(glfw_key - GLFW_KEY_A));
+    }
+    if (glfw_key >= GLFW_KEY_0 && glfw_key <= GLFW_KEY_9)
+    {
+        return static_cast<Key>(static_cast<crd::u16>(Key::Num0) + static_cast<crd::u16>(glfw_key - GLFW_KEY_0));
+    }
+    if (glfw_key >= GLFW_KEY_F1 && glfw_key <= GLFW_KEY_F12)
+    {
+        return static_cast<Key>(static_cast<crd::u16>(Key::F1) + static_cast<crd::u16>(glfw_key - GLFW_KEY_F1));
+    }
+    switch (glfw_key)
+    {
+        case GLFW_KEY_SPACE:
+            return Key::Space;
+        case GLFW_KEY_ENTER:
+            return Key::Enter;
+        case GLFW_KEY_ESCAPE:
+            return Key::Escape;
+        case GLFW_KEY_TAB:
+            return Key::Tab;
+        case GLFW_KEY_BACKSPACE:
+            return Key::Backspace;
+        case GLFW_KEY_DELETE:
+            return Key::Delete;
+        case GLFW_KEY_LEFT:
+            return Key::Left;
+        case GLFW_KEY_RIGHT:
+            return Key::Right;
+        case GLFW_KEY_UP:
+            return Key::Up;
+        case GLFW_KEY_DOWN:
+            return Key::Down;
+        case GLFW_KEY_LEFT_SHIFT:
+            return Key::LeftShift;
+        case GLFW_KEY_RIGHT_SHIFT:
+            return Key::RightShift;
+        case GLFW_KEY_LEFT_CONTROL:
+            return Key::LeftCtrl;
+        case GLFW_KEY_RIGHT_CONTROL:
+            return Key::RightCtrl;
+        case GLFW_KEY_LEFT_ALT:
+            return Key::LeftAlt;
+        case GLFW_KEY_RIGHT_ALT:
+            return Key::RightAlt;
+        default:
+            return Key::Unknown;
+    }
+}
+
+[[nodiscard]] MouseButton glfw_button_to_crd(int b) noexcept
+{
+    switch (b)
+    {
+        case GLFW_MOUSE_BUTTON_LEFT:
+            return MouseButton::Left;
+        case GLFW_MOUSE_BUTTON_RIGHT:
+            return MouseButton::Right;
+        case GLFW_MOUSE_BUTTON_MIDDLE:
+            return MouseButton::Middle;
+        case GLFW_MOUSE_BUTTON_4:
+            return MouseButton::X1;
+        case GLFW_MOUSE_BUTTON_5:
+            return MouseButton::X2;
+        default:
+            return MouseButton::Count;
+    }
+}
+
+[[nodiscard]] KeyMods unpack_mods(int glfw_mods) noexcept
+{
+    KeyMods m{};
+    m.shift = (glfw_mods & GLFW_MOD_SHIFT) != 0;
+    m.ctrl = (glfw_mods & GLFW_MOD_CONTROL) != 0;
+    m.alt = (glfw_mods & GLFW_MOD_ALT) != 0;
+    m.super = (glfw_mods & GLFW_MOD_SUPER) != 0;
+    return m;
+}
+
+[[nodiscard]] Input* input_from(GLFWwindow* w) noexcept
+{
+    return static_cast<Input*>(glfwGetWindowUserPointer(w));
+}
+
+void key_callback(GLFWwindow* w, int key, int /*scancode*/, int action, int mods) noexcept
+{
+    Input* in = input_from(w);
+    if (in == nullptr)
+    {
+        return;
+    }
+    const Key k = glfw_key_to_crd(key);
+    const KeyMods m = unpack_mods(mods);
+    if (action == GLFW_PRESS)
+    {
+        in->push_key_event(k, InputEvent::Type::KeyDown, m);
+    }
+    else if (action == GLFW_RELEASE)
+    {
+        in->push_key_event(k, InputEvent::Type::KeyUp, m);
+    }
+    else if (action == GLFW_REPEAT)
+    {
+        in->push_key_event(k, InputEvent::Type::KeyRepeat, m);
+    }
+}
+
+void mouse_button_callback(GLFWwindow* w, int button, int action, int mods) noexcept
+{
+    Input* in = input_from(w);
+    if (in == nullptr)
+    {
+        return;
+    }
+    const MouseButton b = glfw_button_to_crd(button);
+    if (b == MouseButton::Count)
+    {
+        return;
+    }
+    const KeyMods m = unpack_mods(mods);
+    if (action == GLFW_PRESS)
+    {
+        in->push_mouse_button_event(b, InputEvent::Type::MouseDown, m);
+    }
+    else if (action == GLFW_RELEASE)
+    {
+        in->push_mouse_button_event(b, InputEvent::Type::MouseUp, m);
+    }
+}
+
+void cursor_pos_callback(GLFWwindow* w, double x, double y) noexcept
+{
+    Input* in = input_from(w);
+    if (in != nullptr)
+    {
+        in->push_mouse_move(static_cast<crd::f32>(x), static_cast<crd::f32>(y));
+    }
+}
+
+void scroll_callback(GLFWwindow* w, double dx, double dy) noexcept
+{
+    Input* in = input_from(w);
+    if (in != nullptr)
+    {
+        in->push_scroll(static_cast<crd::f32>(dx), static_cast<crd::f32>(dy));
+    }
+}
+
+void framebuffer_size_callback(GLFWwindow* w, int width, int height) noexcept
+{
+    Input* in = input_from(w);
+    if (in != nullptr)
+    {
+        in->push_resize(width, height);
+    }
+}
+} // namespace
 
 Window::Window() noexcept : m_impl(std::make_unique<Impl>()) {}
 
@@ -32,6 +197,13 @@ Window& Window::operator=(Window&& other) noexcept
             m_impl->handle = nullptr;
         }
         m_impl = std::move(other.m_impl);
+        // The user pointer in the moved GLFWwindow now points to the OLD
+        // Impl's Input. Re-bind it to the adopted Input so callbacks
+        // continue to write into the right object.
+        if (m_impl && m_impl->handle != nullptr)
+        {
+            glfwSetWindowUserPointer(m_impl->handle, &m_impl->input);
+        }
     }
     return *this;
 }
@@ -60,8 +232,6 @@ Window Window::create(const PlatformContext& context, const WindowDesc& desc) no
     glfwWindowHint(GLFW_RESIZABLE, desc.resizable ? GLFW_TRUE : GLFW_FALSE);
     glfwWindowHint(GLFW_VISIBLE, desc.visible ? GLFW_TRUE : GLFW_FALSE);
 
-    // GLFW takes UTF-8 null-terminated strings; crd::containers::String guarantees a
-    // null terminator on c_str(), so we can pass it directly.
     GLFWwindow* handle = glfwCreateWindow(desc.size.width, desc.size.height, desc.title.c_str(), /*monitor=*/nullptr,
                                           /*share=*/nullptr);
     if (handle == nullptr)
@@ -72,6 +242,16 @@ Window Window::create(const PlatformContext& context, const WindowDesc& desc) no
     }
 
     result.m_impl->handle = handle;
+
+    // Wire callbacks into the Input owned by this Window's Impl. The user
+    // pointer is the Input object directly, so callbacks need a single
+    // indirection to mutate state.
+    glfwSetWindowUserPointer(handle, &result.m_impl->input);
+    glfwSetKeyCallback(handle, &key_callback);
+    glfwSetMouseButtonCallback(handle, &mouse_button_callback);
+    glfwSetCursorPosCallback(handle, &cursor_pos_callback);
+    glfwSetScrollCallback(handle, &scroll_callback);
+    glfwSetFramebufferSizeCallback(handle, &framebuffer_size_callback);
 
     CRD_LOG_INFO(g_log_platform, "Created window '{}' ({}x{})", desc.title.c_str(), desc.size.width, desc.size.height);
     return result;
@@ -125,10 +305,28 @@ void Window::set_title(crd::containers::StringView title) noexcept
     {
         return;
     }
-    // GLFW requires a null-terminated string. StringView is not guaranteed to
-    // be null-terminated, so we copy through a temporary String.
     crd::containers::String owned(title);
     glfwSetWindowTitle(m_impl->handle, owned.c_str());
+}
+
+void Window::poll_input() noexcept
+{
+    if (m_impl)
+    {
+        m_impl->input.on_poll_begin();
+    }
+}
+
+Input& Window::input() noexcept
+{
+    CRD_ASSERT(m_impl != nullptr);
+    return m_impl->input;
+}
+
+const Input& Window::input() const noexcept
+{
+    CRD_ASSERT(m_impl != nullptr);
+    return m_impl->input;
 }
 
 void* Window::native_handle() const noexcept

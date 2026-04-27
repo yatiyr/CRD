@@ -2,6 +2,7 @@
 
 #include <crd/containers/string.hpp>
 #include <crd/core/types.hpp>
+#include <crd/platform/input.hpp>
 
 #include <memory>
 
@@ -68,6 +69,15 @@ public:
     [[nodiscard]] Extent2D window_size() const noexcept;
 
     void set_title(crd::containers::StringView title) noexcept;
+
+    // Per-frame input pump. Call ONCE at the top of every frame, AFTER
+    // PlatformContext::poll_events(). Computes pressed/released
+    // transitions, mouse delta, and clears one-frame state. Read the
+    // resulting snapshot through `input().state()`.
+    void poll_input() noexcept;
+
+    [[nodiscard]] Input& input() noexcept;
+    [[nodiscard]] const Input& input() const noexcept;
 
     // Native handle escape hatch. Returns the underlying GLFWwindow* as a
     // void*. Graphics code (Vulkan surface creation) casts it back when
