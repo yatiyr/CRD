@@ -16,11 +16,17 @@
 | `crd-containers` | ✅      | 1     | Array, FixedArray, Span, String, RingBuffer, HashMap, HashSet |
 | Phase 1 quality  | ✅      | 1     | CI, benchmarks, PCH, runtime split, clang-cl, tidy, assert   |
 | `crd-math`       | ✅      | 1     | float+double, scalar-first, column-major, radians           |
-| `crd-platform`   | 🚧      | 1     | v1a window+context, v1b timer, v1c input shipped. FS/dynlib pending. |
-| `crd-app`        | ⏳      | 4-pre | LayerStack + Event router; deferred until ImGui/UI/Editor    |
-| `crd-graphics`   | ⏳      | 2     | Vulkan-first, RHI abstraction                                |
-| GPU memory + streaming | ⏳ | 2     | TLSF, BuddyAllocator, StreamingAllocator, GPUAllocator       |
-| `crd-resources`  | ⏳      | 2.5   | async I/O, LRU eviction, open-world streaming pipeline       |
+| `crd-platform`   | 🚧      | 1     | v1a window+context, v1b timer, v1c input shipped. v1d FS/dynlib/threading next. |
+| `crd-app`        | ⏳      | 1.5   | Layer + Event router (Hazel-style hierarchy). Lands before graphics. |
+| `crd-graphics`   | ⏳      | 2     | RHI multi-backend interface, Vulkan-only impl day one        |
+| `crd-jobs`       | ⏳      | 2.3   | job system; pulled forward from 2.5 to feed async I/O + GPU recording |
+| GPU memory + streaming | ⏳ | 2.1   | TLSF, BuddyAllocator, StreamingAllocator, GPUAllocator       |
+| Shader system    | ⏳      | 2.2   | GLSL→SPIRV→reflection→cache→hot-reload, ShaderProgram + Material |
+| `crd-resources`  | ⏳      | 2.3   | async I/O, LRU eviction, runtime binary asset format         |
+| `crd-tools/asset_cooker` | ⏳ | 2.3 | offline pipeline: glTF/PNG/HDR → Cerid binary formats. Separate exe. |
+| First scene      | ⏳      | 2.4   | camera + mesh + forward renderer + skybox                    |
+| PBR + lighting   | ⏳      | 2.5   | punctual lights + Cook-Torrance + IBL + CSM shadows          |
+| Post-FX          | ⏳      | 2.6   | HDR + ACES tonemap + bloom + TAA                             |
 | `crd-scripting`  | ⏳      | 3     | hot-reload C++ DLLs, C API boundary                          |
 | `crd-ui`         | ⏳      | 4     | retained-mode game UI, replaces ImGui for non-debug          |
 | Editor           | ⏳      | 5     | built on `crd-ui`                                            |
@@ -62,41 +68,148 @@ hold containers, and talk to the OS.
 | 8a   | `crd-platform`   | Window (GLFW) + PlatformContext + smoke_window                    | ✅     |
 | 8b   | `crd-platform`   | Timer + FrameClock (chrono-only)                                  | ✅     |
 | 8c   | `crd-platform`   | Input (polling snapshot + opt-in event queue)                     | ✅     |
-| 8d   | `crd-platform`   | Filesystem, DynamicLibrary, threading helpers                     | ⏳     |
-| 9    | closeout         | CONTEXT.md sweep, retrospective session log, Phase 2 prep         | ⏳     |
+| 8d   | `crd-platform`   | Filesystem (`<filesystem>`-backed, custom `Path`), DynamicLibrary, threading helpers | ⏳     |
+| 9    | closeout         | Phase 1 retrospective + CONTEXT.md sweep + Phase 1.5 / 2 prep + bench refresh | ⏳     |
 
-Estimate: ~11-13 sessions to finish Phase 1 from here (4 math + 2 platform +
-1 closeout, with some headroom for cross-compiler shakeout and follow-up bench
-work).
+Estimate: 2 sessions remaining in Phase 1 (v1d + closeout). Then 3–4
+sessions for Phase 1.5 (`crd-app`), then Phase 2 begins.
+
+---
+
+## Phase 1.5 — `crd-app` (Layer + Event)
+
+Sits between Phase 1 close and Phase 2. Lands before graphics so the main
+loop, layer stack, and event routing are in place when RHI starts and the
+"first triangle" milestone arrives.
+
+Slices:
+
+| Slice | Scope                                                                       |
+| ----- | --------------------------------------------------------------------------- |
+| v1a   | `Event` base + `EventType`/`EventCategory` + `EventDispatcher` + concrete events (Key/Mouse/Window/App) |
+| v1b   | `Layer` interface + `LayerStack` (single-vector, overlays at tail; update bottom-up, event dispatch top-down) |
+| v1c   | `Application` (main loop owner, `crd-platform` `InputEvent` → `Event` lifting, push_layer/push_overlay API) |
+| v1d   | First real `Layer` example + smoke runtime that wires a custom layer through Application |
+
+Decisions baked in (see decision log entry "2026-04 — App / Event design"):
+
+- **Hazel-style virtual `Event` hierarchy**, not tagged-union. RTTI-free
+  via static `EventType`. Stack-allocated, dispatcher takes a reference,
+  no heap traffic.
+- **Layer ownership:** `Application::push_layer(std::unique_ptr<Layer>)`.
+  Application owns; user code holds raw pointers if it needs them.
+- **`on_render()` lives in the API but is empty until graphics arrives.**
+  Phase 2 layers (a future `RenderLayer`) fill it.
+- **`crd-app` does NOT depend on `crd-graphics`.** It depends only on
+  `crd-core / crd-log / crd-containers / crd-platform`. Render-aware
+  layers are written downstream and pulled in by user code.
+
+Estimate: 3–4 sessions.
 
 ---
 
 ## Phase 2 — Graphics
 
-Vulkan-first, API-agnostic abstraction.
+Vulkan-first, **API-agnostic RHI from day one** (only Vulkan implemented;
+Metal/D3D12 backends are planned headers but not built). Shader system is
+the centrepiece of this phase.
 
-1. Vulkan bootstrap (instance, device, swapchain, command pools)
-2. GPU memory + `crd-memory` v2: TLSF, BuddyAllocator, GPUAllocator
-3. RHI layer (API-agnostic), shader reflection
-4. `crd-resources` module: async I/O, LRU eviction
-5. **StreamingAllocator** — virtual memory reservation, page commit/decommit. Real
-   open-world streaming pipeline lives here.
-6. Frame graph / render graph
-7. ImGui integration (debug overlay only)
-8. First renderable 3D scene
+### 2.0 — RHI + Vulkan bootstrap + first triangle (5–7 sessions)
 
-Estimate: 25–30 sessions.
+1. RHI layer (interface). API-agnostic types: `Device`, `Queue`,
+   `Swapchain`, `CommandBuffer`, `Buffer`, `Image`, `Sampler`,
+   `ShaderModule`, `Pipeline`, `DescriptorSet`. Headers shaped for
+   multi-backend; only Vulkan implements.
+2. Vulkan instance + physical device selection + logical device + queues.
+3. `VK_KHR_swapchain` + surface (consumes `Window::native_handle()`).
+4. Command pool / buffer recycling.
+5. Frame pacing: double/triple buffering, semaphores, fences.
+6. **First triangle.** Hardcoded vertex buffer, hardcoded GLSL shader,
+   single render pass. Hard milestone — gates entry to 2.1.
+7. ImGui debug overlay (debug-only; not the future `crd-ui`).
+
+### 2.1 — GPU memory + streaming (3–4 sessions)
+
+- TLSF general-purpose allocator.
+- BuddyAllocator for fixed-size pools.
+- StreamingAllocator: virtual memory reservation + page commit/decommit.
+- VkBuffer / VkImage abstracted in RHI; sub-allocation from a backing
+  `GPUAllocator`.
+- Frame fence-based deferred deletion.
+
+### 2.2 — Shader system (5–7 sessions, the centrepiece)
+
+Three layers:
+
+- **Authoring:** GLSL via glslang → SPIR-V. No custom DSL. Compute path
+  separate from raster.
+- **Compilation pipeline:** `foo.glsl → SPIR-V (binary cached under
+  <exe>/cache/shaders/) → reflection (SPIRV-Cross): inputs/outputs,
+  descriptor bindings, push constant ranges, specialization constants`.
+  Cache key = source hash + flags.
+- **`ShaderProgram` + `MaterialTemplate` + `Material`:**
+  - `ShaderProgram` owns VS+FS modules, descriptor set layouts,
+    pipeline layout, reflection data.
+  - `MaterialTemplate` = ShaderProgram + default `PipelineState`
+    (blend / depth / cull).
+  - `Material` = template instance + parameter overrides. Parameters
+    are **named in the public API** (string), **indexed in dispatch**
+    (cached `string→index` map from reflection).
+- **Hot-reload:** file watcher (lands here in 2.2, not earlier).
+  Source change → recompile → ShaderProgram rebuild → bound Materials
+  invalidated. Vulkan's `PipelineCache` is reused.
+- **RenderPass validation:** ShaderProgram's reflected I/O is matched
+  against the pass it's bound to at init time; mismatch is a fatal log
+  + assert.
+
+### 2.3 — `crd-jobs` + `crd-resources` + asset_cooker (3–4 sessions)
+
+- **`crd-jobs`** pulled forward from 2.5: thread pool, fiber-free
+  task graph, per-frame allocator. Gates async asset I/O and parallel
+  command recording.
+- **`crd-resources`:** async load, LRU eviction, refcounted handles.
+  Reads runtime binary formats only.
+- **`crd-tools/asset_cooker`** (separate executable, NOT linked into
+  runtime): glTF / PNG / HDR / WAV → Cerid binary formats
+  (`.crd_mesh`, `.crd_tex` (BC-compressed), `.crd_envmap` etc.).
+  Runtime never imports source assets. Editor will eventually drive
+  the cooker.
+
+### 2.4 — First scene (2–3 sessions)
+
+- Camera (FPS controller + orbit camera).
+- Mesh + Material + Transform = `Renderable`.
+- Forward renderer (single-pass, simple light setup).
+- Skybox (cubemap sampling, infinite-plane trick).
+
+### 2.5 — PBR + lighting (4–5 sessions)
+
+- Punctual lights: point, spot, directional.
+- Cook-Torrance BRDF.
+- IBL: HDR cubemap → prefiltered radiance + irradiance + BRDF LUT.
+- CSM (cascaded shadow maps) for directional lights.
+
+### 2.6 — Post-FX (3–4 sessions)
+
+- HDR pipeline + ACES tonemap.
+- Bloom (downsample / upsample chain).
+- TAA (temporal anti-aliasing).
+- SSAO / SSR are deferred — not in this slice.
+
+Estimate: 25–35 sessions across 2.0 → 2.6.
 
 ---
 
 ## Phase 3 — Scripting
 
-Hot-reload C++ via DLLs, C API boundary, plugin system for third-party extensions.
+Hot-reload C++ via DLLs, C API boundary, plugin system for third-party
+extensions. Reuses the file watcher + DynamicLibrary helpers shipped in
+Phases 1 / 2.
 
 ## Phase 4 — Game UI System
 
-`crd-ui` on top of `crd-graphics`. Retained mode, layout, animation. ImGui demoted to
-debug overlay.
+`crd-ui` on top of `crd-graphics`. Retained mode, layout, animation.
+ImGui demoted to debug overlay only.
 
 ## Phase 5 — Editor
 
@@ -475,6 +588,64 @@ Implementation notes captured for the upcoming quality session:
   - `win-asan`: 179/179, no leaks (OptionalQueue heap alloc/free clean)
   - `smoke_window` now closes via ESC through the polling API
 
+### 2026-04 — Phase 1.5 / Phase 2 strategy locked
+
+A planning session at the end of platform v1c set the direction for
+everything between here and the first rendered scene. Decisions:
+
+**Platform v1d scope (next session):**
+
+- **Filesystem implementation: `<filesystem>` standard library**, not
+  raw Win32+POSIX. Cuts implementation time, gets us a battle-tested
+  base.
+- **`Path` is our own `String`-backed type**, not a re-exposed
+  `std::filesystem::path`. Wide-char issues on Windows, UTF-8 SSO
+  consistency in our `String`, and a single-place backend swap (e.g.
+  Android SAF later) all push us toward owning the type.
+- **Threading helpers stay tiny:** `set_current_thread_name`,
+  `current_thread_id`, `hardware_concurrency`, `logical_core_count`,
+  `physical_core_count`, `set_thread_affinity`, `cpu_pause`. No
+  Mutex/CondVar wrappers (std is enough), no thread pool (that's the
+  job system's job in 2.3).
+- **No file watcher in v1d.** Hot-reload arrives in shader system
+  (Phase 2.2) where it has a real consumer.
+
+**`crd-app` (Phase 1.5) shape:**
+
+- **Hazel-style virtual `Event` hierarchy is confirmed.** RTTI-free
+  via static `EventType`. We deliberately picked the polymorphic shape
+  over a tagged-union variant because editor / scripting / UI will
+  benefit from real polymorphism. Stack-allocated, dispatcher takes a
+  reference, no heap traffic.
+- **Layer ownership: `unique_ptr<Layer>` to Application.** User code
+  holds raw pointers if it needs callbacks back into a specific layer.
+- **Lands BEFORE graphics**, not after. Phase 1.5, not "deferred until
+  Phase 4 like the original plan." Reason: the main loop needs an
+  owner; Phase 2's first-triangle milestone wants a real `RenderLayer`
+  hook.
+
+**Phase 2 graphics strategy:**
+
+- **Job system (`crd-jobs`) pulled forward from 2.5 to 2.3.** Async
+  asset I/O, parallel GPU command recording, and parallel shader
+  compilation all need it. Writing 2.3 / 2.4 single-threaded and
+  rewriting later is wasted effort.
+- **RHI is multi-backend from day one in INTERFACE shape**, even though
+  only Vulkan is implemented. Headers are designed assuming Metal /
+  D3D12 will be filled in someday; this disciplines the abstraction.
+  No abstraction-purity exercises just to satisfy the rule.
+- **Asset pipeline is a separate executable**
+  (`crd-tools/asset_cooker`). Runtime only reads Cerid binary
+  formats. glTF / PNG / HDR never enter runtime code. Editor (Phase 5)
+  drives the cooker eventually.
+- **First-triangle gate.** Phase 2.0 cannot be declared shipped until
+  the screen shows a triangle. Prevents the "endless RHI refactor" trap.
+- **Shader system gets its own slice (2.2)**, not folded into 2.0.
+  GLSL → glslang → SPIR-V → SPIRV-Cross reflection → on-disk cache →
+  ShaderProgram → MaterialTemplate → Material, with hot-reload at the
+  source-file level. Material parameters: named in API, indexed in
+  dispatch (cached map from reflection).
+
 ### 2026-04 — Open-world streaming
 
 Streaming is a *pipeline*, not just an allocator. The full pipeline needs:
@@ -544,13 +715,31 @@ Current test counts:
 - Release: `178/178` (Debug-only stats test correctly skipped)
 - ASan: `179/179`
 
-**Next session starts with: closeout / `crd-platform` v1d — Filesystem +
-DynamicLibrary + threading helpers, OR a Phase 1 retrospective.**
+**Next session starts with: `crd-platform` v1d — Filesystem +
+DynamicLibrary + threading helpers.**
 
-`crd-platform` is now Phase-1-complete for engine bring-up: a window
-opens, the loop ticks, the user can type. Filesystem and dynlib are
-useful before graphics, but graphics doesn't strictly need them on day
-one — Vulkan instance creation, surface creation, device selection all
-live in `crd-graphics` and only consume what's already shipped here.
+Locked-in v1d decisions (from the end-of-v1c planning session):
 
-Approximately 1–3 sessions from here to Phase 1 close.
+- **Filesystem on top of `<filesystem>` standard library** (don't roll
+  raw Win32+POSIX).
+- **`Path` is our own `String`-backed type**, not `std::filesystem::path`.
+  Forward-slash internal form, native form available for OS calls.
+- **Threading helpers tiny set:** `set_current_thread_name`,
+  `current_thread_id`, `hardware_concurrency`, `logical_core_count`,
+  `physical_core_count`, `set_thread_affinity`, `cpu_pause`. No mutex /
+  condvar wrappers, no thread pool.
+- **No file watcher in v1d** — that lives in Phase 2.2 (shader hot-reload)
+  with a real consumer.
+- **Asset pipeline already on the roadmap** as `crd-tools/asset_cooker`
+  (Phase 2.3, separate executable).
+
+After v1d:
+
+1. Phase 1 closeout (1 session, no code) — retrospective, CONTEXT sweep,
+   bench refresh, mark Phase 1 ✅.
+2. Phase 1.5 `crd-app` v1a → v1d (3–4 sessions) — Hazel-style Event
+   hierarchy, LayerStack, Application main loop, custom layer demo.
+3. Phase 2 begins with RHI bootstrap. First-triangle is a hard gate
+   before 2.1 lands.
+
+Roughly 5–7 sessions from here to "first triangle on screen".
