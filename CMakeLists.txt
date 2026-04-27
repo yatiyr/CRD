@@ -166,6 +166,7 @@ add_subdirectory(engine/math)
 add_subdirectory(engine/containers)
 add_subdirectory(engine/log)
 add_subdirectory(engine/platform)
+add_subdirectory(engine/app)
 # add_subdirectory(engine/graphics)
 # add_subdirectory(engine/scripting)
 

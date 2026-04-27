@@ -64,16 +64,18 @@ public:
 
     [[nodiscard]] bool should_close() const noexcept;
     void request_close() noexcept;
+    void clear_close_request() noexcept;
 
     [[nodiscard]] Extent2D framebuffer_size() const noexcept;
     [[nodiscard]] Extent2D window_size() const noexcept;
 
     void set_title(crd::containers::StringView title) noexcept;
 
-    // Per-frame input pump. Call ONCE at the top of every frame, AFTER
-    // PlatformContext::poll_events(). Computes pressed/released
-    // transitions, mouse delta, and clears one-frame state. Read the
-    // resulting snapshot through `input().state()`.
+    // Per-frame input pump. Call ONCE at the top of every frame, BEFORE
+    // PlatformContext::poll_events(). Clears one-frame edge state so the
+    // callbacks fired by the upcoming poll can populate a fresh frame's
+    // pressed/released flags, mouse delta, and scroll delta. Read the
+    // resulting snapshot through `input().state()` after polling events.
     void poll_input() noexcept;
 
     [[nodiscard]] Input& input() noexcept;

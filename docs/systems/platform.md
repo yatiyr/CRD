@@ -12,7 +12,7 @@ touching downstream engine code.
 | v1a | `PlatformContext`, `Window` (PIMPL'd over GLFW), `Extent2D` | ✅ |
 | v1b | `Timer`, `FrameClock` (chrono-only, GLFW-independent) | ✅ |
 | v1c | `Input` (polling snapshot + opt-in event queue) | ✅ |
-| v2  | filesystem, dynamic library, threading helpers | ⏳ |
+| v1d | filesystem, dynamic library, threading helpers | ✅ |
 
 ## Core decisions
 
@@ -92,8 +92,9 @@ touching downstream engine code.
   the latest `KeyMods` (shift/ctrl/alt/super).
 - `Input` — owned by `Window`, mutated by GLFW callbacks via the
   user-pointer. Read through `window.input().state()`. Call
-  `window.poll_input()` once per frame, AFTER `context.poll_events()`,
-  to clear edge state and start a fresh frame.
+  `window.poll_input()` once per frame BEFORE `context.poll_events()`
+  to clear the previous frame's edge state; the callbacks from the
+  upcoming OS poll then populate the fresh frame.
 - `InputEvent` — POD union (tagged `Type`). One event per hardware
   signal: KeyDown / KeyUp / KeyRepeat / MouseDown / MouseUp / MouseMove /
   Scroll / Resize. No `handled` flag, no propagation — that lives in
@@ -110,6 +111,30 @@ touching downstream engine code.
   come through SDL3 / XInput in a later phase; GLFW joystick API is too
   thin.
 
+## What ships today (v1d — platform services)
+
+- `fs::Path` — UTF-8, `String`-backed path wrapper with forward-slash
+  canonical internal form. Backend-facing native conversion happens at
+  the platform boundary only.
+- Filesystem helpers on top of `<filesystem>`:
+  - roots: `current_working_dir()`, `executable_dir()`,
+    `user_config_dir(app_name)`
+  - metadata: `exists`, `is_file`, `is_directory`, `file_size`,
+    `last_modified_unix_seconds`
+  - I/O: `read_file_text`, `read_file_binary`, `write_file_text`,
+    `write_file_binary`
+  - directory ops: `create_directories`, `remove_file`, `remove_all`,
+    `list_directory`
+- `DynamicLibrary` — move-only RAII wrapper over the host OS dynamic
+  loader. `open(Path)`, `resolve()`, `resolve_as<Fn>()`, `is_valid()`.
+  The public API stays opaque; no `HMODULE` / `dlopen` handle leaks into
+  headers.
+- `threading` helpers — deliberately tiny v1 baseline:
+  `set_current_thread_name`, `current_thread_id`, `hardware_concurrency`,
+  `logical_core_count`, `physical_core_count`, `set_thread_affinity`,
+  `cpu_pause`.
+- `smoke_filesystem` runtime example prints cwd / exe dir / config dir.
+
 ## How to use it (today)
 
 ```cpp
@@ -125,7 +150,12 @@ if (!window.is_valid()) { /* fatal */ }
 
 while (!window.should_close())
 {
+    window.poll_input();
     ctx.poll_events();
+    if (window.input().state().was_key_pressed(crd::platform::Key::Escape))
+    {
+        window.request_close();
+    }
     // ... render here when crd-graphics lands ...
 }
 ```
@@ -142,7 +172,10 @@ this.
 - Input: polling-first (frame-snapshot `InputState`) plus an opt-in
   `RingBuffer<InputEvent>` for code that needs ordered key presses /
   releases. No layer / propagation / consumption at this layer.
-- Filesystem and dynamic-library helpers before Phase 2 graphics needs them.
+- Filesystem and dynamic-library helpers are now in place before Phase 2.
+- Threading helpers stay intentionally small until `crd-jobs` lands in
+  Phase 2.3; the API is there, but scheduler-grade policy waits for the
+  real job-system consumer.
 - Gamepad support stays out of Phase 1; GLFW's joystick API is too thin
   for real gamepad work and a proper implementation will lean on SDL3 or
   XInput in a later phase.

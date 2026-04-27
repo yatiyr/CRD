@@ -7,6 +7,7 @@ add_subdirectory(memory)
 add_subdirectory(math)
 add_subdirectory(containers)
 add_subdirectory(platform)
+add_subdirectory(app)
 
 if(CRD_BUILD_BENCHMARKS)
     add_subdirectory(bench)

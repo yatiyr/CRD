@@ -275,6 +275,14 @@ void Window::request_close() noexcept
     }
 }
 
+void Window::clear_close_request() noexcept
+{
+    if (is_valid())
+    {
+        glfwSetWindowShouldClose(m_impl->handle, GLFW_FALSE);
+    }
+}
+
 Extent2D Window::framebuffer_size() const noexcept
 {
     if (!is_valid())

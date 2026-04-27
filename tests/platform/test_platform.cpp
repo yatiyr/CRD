@@ -85,6 +85,9 @@ TEST_CASE("Window: create + destroy invisible window", "[platform][window]")
 
     window.request_close();
     REQUIRE(window.should_close());
+
+    window.clear_close_request();
+    REQUIRE_FALSE(window.should_close());
 }
 
 TEST_CASE("Window: invalid-context create returns invalid window", "[platform][window]")
