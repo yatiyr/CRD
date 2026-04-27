@@ -49,6 +49,7 @@ A modern C++20 game/simulation engine.
 | `crd-math`       | ✅      |
 | `crd-platform`   | ✅      |
 | `crd-app`        | ✅      |
+| `crd-rhi`        | 🚧      |
 
 Full status table and reasoning live in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
@@ -69,7 +70,9 @@ Full status table and reasoning live in [`docs/ROADMAP.md`](docs/ROADMAP.md).
   Owns Application, LayerStack, propagated Event hierarchy, and a small
   typed sync EventBus. Deliberately does NOT depend on `crd-rhi`,
   `crd-rhi-vulkan`, or `crd-renderer`.
-- `crd-rhi`: planned dependency target is `crd-core`, `crd-platform`, `crd-memory`
+- `crd-rhi`: depends on `crd-core`, `crd-platform`, `crd-memory`. Ships the
+  low-level API-agnostic GPU interface only; no backend types leak into the
+  public surface.
 - `crd-rhi-vulkan`: planned dependency target is `crd-rhi`, `crd-platform`, `crd-log`
 - `crd-renderer`: planned dependency target is `crd-rhi`, `crd-math`, `crd-memory`, `crd-resources`
 
@@ -81,6 +84,7 @@ Full status table and reasoning live in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 - [`docs/systems/math.md`](docs/systems/math.md) — current math module overview
 - [`docs/systems/platform.md`](docs/systems/platform.md) — current platform module overview
 - [`docs/systems/app.md`](docs/systems/app.md) — current app module overview
+- [`docs/systems/rhi.md`](docs/systems/rhi.md) — current rhi module overview
 - [`docs/log/LOG_FILE.md`](docs/log/LOG_FILE.md) — long deep-dive on `crd-log`
 - [`docs/memory/MEMORY_FILE.md`](docs/memory/MEMORY_FILE.md) — long deep-dive on `crd-memory`
 - [`docs/containers/CONTAINERS_FILE.md`](docs/containers/CONTAINERS_FILE.md) — long deep-dive on `crd-containers`

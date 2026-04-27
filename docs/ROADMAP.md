@@ -17,8 +17,8 @@
 | Phase 1 quality  | ✅      | 1     | CI, benchmarks, PCH, runtime split, clang-cl, tidy, assert   |
 | `crd-math`       | ✅      | 1     | float+double, scalar-first, column-major, radians           |
 | `crd-platform`   | ✅      | 1     | window, timer, input, filesystem, dynlib, threading baseline all shipped. |
-| `crd-app`        | ⏳      | 1.5   | Layer + Event router (Hazel-style hierarchy). Lands before graphics. |
-| `crd-rhi`        | ⏳      | 2.0   | minimal API-agnostic GPU interface: Device, Swapchain, Buffer, Image, CommandBuffer, Pipeline |
+| `crd-app`        | ✅      | 1.5   | Application, LayerStack, propagated events, sync typed EventBus shipped. |
+| `crd-rhi`        | 🚧      | 2.0   | v1a interface scaffold shipped. Vulkan backend and real GPU work next. |
 | `crd-rhi-vulkan` | ⏳      | 2.1   | Vulkan-only backend implementation behind `crd-rhi`          |
 | `crd-renderer`   | ⏳      | 2.5   | high-level rendering: camera, renderables, lighting, materials |
 | `crd-jobs`       | ⏳      | 2.7   | job system; pulled forward to feed async I/O + GPU recording |
@@ -71,10 +71,10 @@ hold containers, and talk to the OS.
 | 8b   | `crd-platform`   | Timer + FrameClock (chrono-only)                                  | ✅     |
 | 8c   | `crd-platform`   | Input (polling snapshot + opt-in event queue)                     | ✅     |
 | 8d   | `crd-platform`   | Filesystem (`<filesystem>`-backed, custom `Path`), DynamicLibrary, threading helpers | ✅     |
-| 9    | closeout         | Phase 1 retrospective + CONTEXT.md sweep + Phase 1.5 / 2 prep + bench refresh | ⏳     |
+| 9    | closeout         | Phase 1 retrospective + CONTEXT.md sweep + Phase 2 prep + bench refresh | 🚧     |
 
-Estimate: 1 session remaining in Phase 1 (closeout). Then 3–4 sessions
-for Phase 1.5 (`crd-app`), then Phase 2 begins.
+Estimate: closeout is functionally done except for one benchmark-suite
+cleanup if we want the book-keeping perfectly clean before deeper graphics.
 
 ---
 
@@ -88,16 +88,17 @@ Slices:
 
 | Slice | Scope                                                                       |
 | ----- | --------------------------------------------------------------------------- |
-| v1a   | `Event` base + `EventType`/`EventCategory` + `EventDispatcher` + concrete events (Key/Mouse/Window/App) |
-| v1b   | `Layer` interface + `LayerStack` (single-vector, overlays at tail; update bottom-up, event dispatch top-down) |
-| v1c   | `Application` (main loop owner, `crd-platform` `InputEvent` → `Event` lifting, push_layer/push_overlay API) |
-| v1d   | First real `Layer` example + smoke runtime that wires a custom layer through Application |
+| v1a   | `Event` base + `EventType`/`EventCategory` + `EventDispatcher` + concrete events (Key/Mouse/Window/App) | ✅ |
+| v1b   | `Layer` interface + `LayerStack` (single-vector, overlays at tail; update bottom-up, event dispatch top-down) | ✅ |
+| v1c   | `Application` (main loop owner, `crd-platform` `InputEvent` → `Event` lifting, push_layer/push_overlay API) | ✅ |
+| v1d   | First real `Layer` example + smoke runtime that wires a custom layer through Application | ✅ |
 
 Decisions baked in (see decision log entry "2026-04 — App / Event design"):
 
-- **Hazel-style virtual `Event` hierarchy**, not tagged-union. RTTI-free
-  via static `EventType`. Stack-allocated, dispatcher takes a reference,
-  no heap traffic.
+- **Hazel-style virtual `Event` hierarchy**, not tagged-union. Stack-
+  allocated, dispatcher takes a reference, no heap traffic. The shipped
+  identity model is per-type static token based, so applications can define
+  custom events without touching engine enums.
 - **Layer ownership:** `Application::push_layer(std::unique_ptr<Layer>)`.
   Application owns; user code holds raw pointers if it needs them.
 - **`on_render()` lives in the API but is empty until graphics arrives.**
@@ -106,8 +107,12 @@ Decisions baked in (see decision log entry "2026-04 — App / Event design"):
   `crd-renderer`.** It depends only on `crd-core / crd-log /
   crd-containers / crd-platform`. Render-aware layers are written
   downstream and pulled in by user code.
+- **EventBus is sync for now.** Async remains a later extension, not part of
+  the shipped Phase 1.5 surface.
+- **Handled semantics belong only to propagated events.** Bus events are
+  broadcast notifications, not consumable routing decisions.
 
-Estimate: 3–4 sessions.
+Estimate: shipped.
 
 ---
 
@@ -739,6 +744,26 @@ everything between here and the first rendered scene. Decisions:
   milestone as a debug layer on top of renderer/RHI, while the long-term UI
   plan remains `crd-ui`.
 
+### 2026-04 — `crd-rhi` v1a shipped (minimal interface scaffold)
+
+- **`crd-rhi` now exists as a real module.** v1a intentionally ships only
+  the API-agnostic types, descriptors, and abstract interfaces needed to
+  describe the first-triangle path.
+- **No Vulkan types leak through the public surface.** The backend module
+  (`crd-rhi-vulkan`) will implement these interfaces later, but the v1a
+  headers are clean and backend-neutral.
+- **The abstraction remains intentionally narrow.** No materials, no scene,
+  no ECS, no lighting, no renderer policy. Just the low-level concepts:
+  `Instance`, `Device`, `Queue`, `Swapchain`, `Buffer`, `Image`,
+  `CommandBuffer`, `ShaderModule`, and `Pipeline`.
+- **Tests use a fake backend, not a real GPU.** That is deliberate: v1a
+  validates ergonomics, ownership, descriptor flow, and first-triangle API
+  shape before any Vulkan implementation exists.
+- Quality pass at session end:
+  - `win-debug`: 200/200 tests pass
+  - `win-release`: 199/199 (Debug-only stats test correctly skipped)
+  - `win-asan`: 200/200, no leaks, no UAF, no OOB
+
 ### 2026-04 — `crd-app` shipped (layer stack + propagated events + sync bus)
 
 - **`crd-app` is not a pure Hazel clone.** Cerid keeps Hazel-style
@@ -807,39 +832,42 @@ allocator interface correctly today (Phase A) makes 2–5 a drop-in addition.
 > Update this section at the end of every session so future-you can re-enter
 > the project without thinking.
 
-**Last session:** 2026-04-27 — Phase 1 closeout / quality check.
-See `docs/sessions/2026-04-27-phase-1-closeout-quality-check.md`.
+**Last session:** 2026-04-27 — `crd-rhi` v1a (interface scaffold).
+See `docs/sessions/2026-04-27-rhi-v1a-interface-scaffold.md`.
 
 What landed:
 
-1. **Phase 1 is functionally complete.** Core, log, memory, containers,
-   math, platform, and app are all shipped and test-covered.
-2. **The current verification matrix remains strong:**
-   - Debug: `197/197`
-   - Release: `196/196`
-   - ASan: `197/197`
-3. **Benchmark refresh is the one remaining blemish.** The release bench
-   suite now fails to measure the disabled-trace logging microbenchmark
-   because it gets optimized away; the rest of the bench set still runs.
-4. **Docs were swept for the graphics rename.** The important public notes
-   now point at `crd-rhi` / `crd-rhi-vulkan` / `crd-renderer` instead of the
-   older monolithic `crd-graphics` wording.
+1. **`crd-rhi` v1a shipped** as a real module: backend-agnostic GPU types,
+   descriptors, and abstract interfaces for the first-triangle path.
+2. **No backend code exists yet.** Vulkan is still the next session in the
+   roadmap (`crd-rhi-vulkan` bootstrap), but the public interface surface is
+   now locked enough to build against.
+3. **Fake-backend tests prove the intended usage path**: create device,
+   create swapchain/buffer/shader modules/pipeline/command buffer, begin,
+   bind, draw, submit.
+4. **The verification matrix stayed green after introducing the new module:**
+   - Debug: `200/200`
+   - Release: `199/199`
+   - ASan: `200/200`
+5. **The benchmark issue from closeout remains visible but non-blocking.**
+   It still affects the disabled-trace microbenchmark only; it does not block
+   the RHI/Vulkan track.
 
 Current test counts:
 
-- Debug: `197/197`
-- Release: `196/196` (Debug-only stats test correctly skipped)
-- ASan: `197/197`
+- Debug: `200/200`
+- Release: `199/199` (Debug-only stats test correctly skipped)
+- ASan: `200/200`
 
-**Next session starts with: `crd-rhi` v1a scaffold / interface design.**
+**Next session starts with: `crd-rhi-vulkan` bootstrap.**
 
-One small optional cleanup may happen first:
+One small optional cleanup from closeout still exists:
 
 1. Fix or replace the disabled-trace benchmark so the release bench suite is
    fully green again.
 2. Refresh `docs/bench/baseline_2026-04.md` only after that microbenchmark is
    stable.
 
-Roughly 3–5 sessions from here to "first triangle on screen": one small
-benchmark cleanup if desired, then `crd-rhi` interfaces, Vulkan backend
-bootstrap, command buffers/sync, and the first-triangle milestone.
+Roughly 2–4 sessions from here to "first triangle on screen": one small
+benchmark cleanup if desired, then Vulkan backend bootstrap,
+command buffers/sync, and the first-triangle milestone.

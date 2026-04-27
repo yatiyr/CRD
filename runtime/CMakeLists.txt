@@ -96,3 +96,14 @@ target_link_libraries(smoke_app PRIVATE
     crd-app
 )
 crd_enable_default_pch(smoke_app)
+
+add_executable(smoke_rhi_api
+    examples/smoke_rhi_api.cpp
+)
+
+target_link_libraries(smoke_rhi_api PRIVATE
+    crd-core
+    crd-log
+    crd-rhi
+)
+crd_enable_default_pch(smoke_rhi_api)
