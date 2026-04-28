@@ -887,6 +887,14 @@ One small optional cleanup from closeout still exists:
 2. Refresh `docs/bench/baseline_2026-04.md` only after that microbenchmark is
    stable.
 
+The concrete short-path from here is now:
+
+1. command pools + command buffers + per-frame sync
+2. `VK_KHR_synchronization2` as the default sync model if supported
+3. stable acquire/present loop
+4. dynamic-rendering-first triangle
+5. then GPU allocation strategy and shader path growth
+
 Roughly 1–3 sessions from here to "first triangle on screen": one small
 benchmark cleanup if desired, then command buffers/sync and the
 first-triangle milestone.
