@@ -1,94 +1,116 @@
-# CRD Engine
+﻿# Cerid — Live Context
 
-A modern C++20 game/simulation engine.
+> Engine'in kısa-vadeli hafızası. "Şu an neredeyiz?" sorusuna cevap verir.
+> "Master plan ne?" sorusunun cevabı `docs/ROADMAP.md` ve oradan
+> dallanan dosyalardadır.
+>
+> Her session sonu `@docs-keeper` günceller. Kısa kalır. Eski session
+> detayları `docs/sessions/YYYY-MM-DD-*.md`'de yaşar, burada değil.
 
-> **Roadmap, status, and per-session notes live under [`docs/`](docs/).**
-> Read [`docs/ROADMAP.md`](docs/ROADMAP.md) first when picking the project
-> back up. Each work session has its own file under `docs/sessions/`.
-> Each shipped subsystem has a short overview under `docs/systems/`.
+---
 
-## Build System
+## Current focus
 
-- CMake 3.25+ with Ninja generator
-- Use CMakePresets.json: win-debug, win-release, win-asan, win-tidy
-- Dependencies managed via CPM.cmake
-- MSVC: `/Zc:preprocessor` is required (for `__VA_OPT__` in log macros)
+**Phase 2.1 — ImGui debug overlay.** `crd-config` core (1.6a) shipped; now the
+overlay becomes its first real consumer.
 
-## Build & Test Commands
-- Configure: `cmake --preset win-debug`
-- Build: `cmake --build --preset win-debug`
-- Test: `ctest --preset win-debug`
-- clang-tidy: `clang-tidy -p build/win-debug <file>`
-- Format: `clang-format -i <file>`
+Aktif phase dosyası: `docs/phases/phase-1.6-config.md`
 
-## Architecture
-- Engine modules are static libraries under `engine/`
-- Each module: `include/crd/<module>/` (public API) and `src/` (implementation)
-- Modules: core, log, memory, math, containers, platform, graphics, scripting, …
-- Runtime executable links all modules statically
-- Scripting/plugins use dynamic libraries with C API boundary
+## Active detour
 
-## Conventions
-- C++20 standard, no compiler extensions
-- Namespace: `crd`
-- Naming: CamelCase classes, lower_case functions/variables, `m_` member prefix,
-  UPPER_CASE macros, `k`-prefixed global constants
-- Allman brace style, 4-space indent, 120 column limit
-- `.hpp` for C++ headers, `.h` for C-only headers
-- Every module has tests using Catch2
-- Use `CRD_ASSERT`/`CRD_VERIFY` for assertions
+_none — running on the main roadmap._
 
-## Module Status
+> When a detour opens, this section names it (e.g. "D-001: investigate
+> shader-cache corruption") and the main roadmap pauses until it closes.
+> Detour file: `docs/detours/D-NNN-<slug>.md`. Queue rules:
+> `docs/detours/README.md`.
 
-| Module           | Status |
-| ---------------- | ------ |
-| `crd-core`       | ✅      |
-| `crd-log`        | ✅      |
-| `crd-memory`     | ✅      |
-| `crd-containers` | ✅      |
-| `crd-math`       | ✅      |
-| `crd-platform`   | ✅      |
-| `crd-app`        | ✅      |
-| `crd-rhi`        | 🚧      |
-| `crd-rhi-vulkan` | 🚧      |
+## Last shipped milestone
 
-Full status table and reasoning live in [`docs/ROADMAP.md`](docs/ROADMAP.md).
+**2026-04-28 — `crd-config` core shipped.**
 
-## Module Dependencies
-- `crd-core`: no dependencies (types, platform, assert)
-- `crd-containers`: depends on `crd-core`, `crd-memory`. Headers reference
-  `crd-log`'s `CRD_DECLARE_LOG_CHANNEL` macro but link is one-way.
-- `crd-memory`: depends on `crd-core`, `crd-log`
-- `crd-log`: depends on `crd-core`, `crd-containers`. (Its
-  `RingBufferSink` uses `crd::containers::Array`. First-party channel
-  definitions like `g_log_containers` also live here to break the cycle.)
-- `crd-math`: depends on `crd-core`
-- `crd-platform`: depends on `crd-core`, `crd-log`, `crd-containers`. Backend
-  is GLFW as a PRIVATE link dependency; no GLFW symbol leaks into public
-  headers. Owns its own `g_log_platform` channel (no cycle, definition
-  inside crd-platform itself).
-- `crd-app`: depends on `crd-core`, `crd-containers`, `crd-platform`.
-  Owns Application, LayerStack, propagated Event hierarchy, and a small
-  typed sync EventBus. Deliberately does NOT depend on `crd-rhi`,
-  `crd-rhi-vulkan`, or `crd-renderer`.
-- `crd-rhi`: depends on `crd-core`, `crd-platform`, `crd-memory`. Ships the
-  low-level API-agnostic GPU interface only; no backend types leak into the
-  public surface.
-- `crd-rhi-vulkan`: depends on `crd-rhi`, `crd-platform`, `crd-log`. Owns the
-  Vulkan instance/device/surface/swapchain bootstrap, the current
-  command-submission/frame-sync path, and the minimal first-triangle path,
-  while keeping all `Vk*` details out of the `crd-rhi` public API.
-- `crd-renderer`: planned dependency target is `crd-rhi`, `crd-math`, `crd-memory`, `crd-resources`
+Typed TOML wrapper over `toml++` with non-fatal schema-with-defaults behavior:
+typed `get<T>(key, fallback)`, typed `set<T>(key, value)`, parse errors via
+`g_log_config`, dot-path nested lookup, sample TOML, and `smoke_config`.
 
-## Where to look
+Three-flavour green:
+- Debug: 209/209
+- Release: 208/208 (Debug-only stats test correctly skipped)
+- ASan: 209/209
 
-- [`docs/ROADMAP.md`](docs/ROADMAP.md) — phase plan, status, decision log
-- [`docs/sessions/`](docs/sessions/) — one file per work session
-- [`docs/systems/`](docs/systems/) — short overview per shipped subsystem
-- [`docs/systems/math.md`](docs/systems/math.md) — current math module overview
-- [`docs/systems/platform.md`](docs/systems/platform.md) — current platform module overview
-- [`docs/systems/app.md`](docs/systems/app.md) — current app module overview
-- [`docs/systems/rhi.md`](docs/systems/rhi.md) — current rhi module overview
-- [`docs/log/LOG_FILE.md`](docs/log/LOG_FILE.md) — long deep-dive on `crd-log`
-- [`docs/memory/MEMORY_FILE.md`](docs/memory/MEMORY_FILE.md) — long deep-dive on `crd-memory`
-- [`docs/containers/CONTAINERS_FILE.md`](docs/containers/CONTAINERS_FILE.md) — long deep-dive on `crd-containers`
+Detail: `docs/sessions/2026-04-28-config-core.md`.
+
+## Previous shipped milestone
+
+**2026-04-28 — First triangle on screen.**
+
+Full RHI/Vulkan path real: instance → device → swapchain → command buffer →
+shader modules → graphics pipeline → vertex buffer → draw → present.
+Dynamic rendering chosen as the minimal path. Triangle stayed narrow: no
+descriptors, materials, scene graph, camera system, or allocator policy
+creep.
+
+Three-flavour green:
+- Debug: 203/203
+- Release: 202/202 (Debug-only stats test correctly skipped)
+- ASan: 203/203
+
+Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
+
+## Next up (next 1–3 sessions)
+
+1. **ImGui debug overlay (2.1).** Docking branch. Reads
+   `runtime/configs/imgui_layer.toml` via `crd-config`. Theme, panels,
+   debug toggles in TOML. ImGui's `imgui.ini` is NOT replaced.
+2. **GPU memory + streaming (2.2).** Allocator strategy stabilizes before
+   renderer widens.
+3. **`crd-config` 1.6b/1.6c.** Explicit reload hook and first real consumers
+   after ImGui settles.
+
+## Open questions
+
+- ImGui multi-viewport — gerek mi? Vulkan multi-viewport rough; default
+  single-viewport docking. Decide in 2.1 session.
+- `crd-config` hot-reload remains 1.6b unless ImGui integration proves it
+  should move earlier.
+- Runtime scene binary format — FlatBuffers vs Cap'n Proto? Park for
+  Phase 3.1c.
+
+## Test counts (last quality pass)
+
+- Debug: 209/209
+- Release: 208/208
+- ASan: 209/209
+
+## Pointers (lazy-load reference)
+
+Agents: don't read everything. Use these breadcrumbs.
+
+- **Hub:** `docs/ROADMAP.md` (small navigation page; safe to read fully)
+- **Principles:** `docs/PRINCIPLES.md` (read every session, short)
+- **Active phase only:** `docs/phases/phase-1.6-config.md`
+- **Other phases:** `docs/phases/phase-<X>.md` (read ONLY when relevant)
+- **Specific decision:** `docs/decisions/<NNNN>-<slug>.md` (find via
+  `docs/decisions/README.md` tag index)
+- **Last session detail:** the single file linked above, not the whole
+  `docs/sessions/` folder
+- **Module overview:** `docs/systems/<module>.md` (when working on that
+  module)
+- **Module deep-dive:** `docs/<module>/<MODULE>_FILE.md` (only when doing
+  surgery)
+- **Open debt:** `docs/debt.md`
+- **Detour queue + rules:** `docs/detours/README.md`
+
+When in doubt, ASK before reading large files.
+
+## Session log (rolling, last 5)
+
+- **2026-04-28** — `crd-config` core shipped.
+- **2026-04-28** — First triangle through full RHI/Vulkan path.
+- **2026-04-27** — `crd-rhi-vulkan` bootstrap (instance/device/surface/swapchain).
+- **2026-04-26** — `crd-rhi` v1a scaffold with fake-backend tests.
+- **2026-04-26** — `crd-app` Phase 1.5 shipped (LayerStack + propagated
+  events + sync EventBus).
+- **2026-04-25** — Platform v1c (input) shipped.
+
+> Older entries: `docs/sessions/`.

@@ -8,6 +8,7 @@ add_subdirectory(math)
 add_subdirectory(containers)
 add_subdirectory(platform)
 add_subdirectory(app)
+add_subdirectory(config)
 add_subdirectory(rhi)
 add_subdirectory(rhi_vulkan)
 

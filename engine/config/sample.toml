@@ -1,0 +1,8 @@
+[app]
+target_fps = 60
+
+[imgui.theme]
+preset = "dark"
+
+[renderer]
+clear_color = [0.08, 0.08, 0.12, 1.0]

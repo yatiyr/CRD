@@ -127,6 +127,8 @@ if(TARGET glfw)
     endif()
 endif()
 
+CPMAddPackage("gh:marzer/tomlplusplus@3.4.0")
+
 # ----- Helper: auto-collect sources with CONFIGURE_DEPENDS -----------------
 
 function(crd_collect_sources out_var directory)
@@ -190,6 +192,7 @@ add_subdirectory(engine/containers)
 add_subdirectory(engine/log)
 add_subdirectory(engine/platform)
 add_subdirectory(engine/app)
+add_subdirectory(engine/config)
 add_subdirectory(engine/rhi)
 add_subdirectory(engine/rhi-vulkan)
 # add_subdirectory(engine/graphics)
