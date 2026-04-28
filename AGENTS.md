@@ -163,11 +163,14 @@ or a `@heavy` escalation.
 2. clang-tidy and clang-format clean for changed files.
 3. New code has unit tests. All existing tests pass.
 4. Three-flavour quality pass: Debug + Release + ASan all green.
-5. Public API change → `context.md` updated; `docs/systems/<module>.md`
+5. Runtime/smoke path is checked when relevant. For graphics/platform slices,
+   validation-layer errors, backend runtime errors, and avoidable warnings in
+   the smoke path are treated as real quality issues, not ignorable noise.
+6. Public API change → `context.md` updated; `docs/systems/<module>.md`
    updated when relevant.
-6. Architectural decision → appended to `docs/ROADMAP.md` Section 4 with
+7. Architectural decision → appended to `docs/ROADMAP.md` Section 4 with
    appropriate tag(s).
-7. Commit message follows Conventional Commits
+8. Commit message follows Conventional Commits
    (`feat(<module>): ...`, `fix(<module>): ...`, ...).
 
 ## Module Status (snapshot)
@@ -191,34 +194,84 @@ informational only.
 The module dependency graph is one-way and curated. Surface any new edge
 before adding it.
 
-## Agent Roster
+## Working Model
 
-You (the human) orchestrate. Local agents do the work. Heavy is for
-escalation only.
+You (the human) orchestrate. The assistant executes the work directly.
 
-| Agent          | Model                | Mode     | Role                                          |
-| -------------- | -------------------- | -------- | --------------------------------------------- |
-| `@planner`     | cerid-coder (64k)    | primary  | Session re-entry, proposes today's plan       |
-| `@researcher`  | cerid-coder (64k)    | subagent | SearXNG research, writes to `docs/research/`  |
-| `@architect`   | cerid-deep (32k)     | subagent | ADRs for new systems / cross-cutting changes  |
-| `@coder`       | cerid-coder (64k)    | subagent | Implementation                                |
-| `@tester`      | cerid-coder (64k)    | subagent | Tests + iterate-to-green build/test loop      |
-| `@debugger`    | cerid-coder (64k)    | subagent | Bug hunt + regression test                    |
-| `@reviewer`    | cerid-deep (32k)     | subagent | Code review against Definition of Done        |
-| `@docs-keeper` | cerid-deep (32k)     | subagent | ROADMAP, context, sessions, systems, deep-dives |
-| `@heavy`       | claude-opus / gpt    | primary  | Escalation only — costs real money            |
+- No multi-agent workflow is assumed by default.
+- Research, architecture, coding, testing, debugging, and docs updates are
+  all handled in one continuous assistant session unless you explicitly ask
+  for a different split.
+- `@heavy` remains an escalation concept only for genuinely hard strategic or
+  contradictory architecture cases.
 
-## Standard Session Flow/session-start             @planner re-orients you, proposes today's plan
-↓ you say "go" (or refine, or open a detour)
-/research <topic>          (optional — only if approach is unclear)
-@architect                 (optional — only for new systems / big changes)
-@coder                     implement
-/verify                    @tester iterates build+tests until green (max 5)
-/review                    @reviewer checks against Definition of Done
-(loop @coder if CHANGES_REQUESTED)
-/session-end               @docs-keeper writes session doc, updates everything
+You commit yourself. **The assistant never runs `git commit` or `git push`.**
 
-You commit yourself. **Agents never run `git commit` or `git push`.**
+## Session Re-entry Prompt (master prompt)
+
+Use this when starting the next session and asking the assistant to pick up
+from where the project left off:
+
+```text
+You are working on the Cerid Engine. Read context surgically.
+
+# Mandatory reads (always, in this order):
+
+1. AGENTS.md — project rules, agent roster, coding standards.
+2. docs/PRINCIPLES.md — engineering principles + pinned cornerstones.
+3. context.md — live state, last shipped, next up, active detour, pointers.
+4. docs/ROADMAP.md — small hub. Read fully (it's tiny).
+
+# Then ONE phase doc
+
+From context.md "Current focus" you'll know the active phase. Open ONLY
+that one phase file under docs/phases/. Do NOT read other phase files.
+
+# Lazy-load everything else
+
+- A specific past decision → docs/decisions/README.md tag index → fetch
+  ONLY the matching ADR file(s).
+- Last session detail → the file linked under "Last shipped milestone".
+- Module surgery → docs/systems/<module>.md, then deep-dive only if needed.
+- Open debt picking → docs/debt.md.
+- Detour rules → docs/detours/README.md.
+
+# Session start ritual
+
+After mandatory reads:
+
+1. Five-bullet summary:
+   - Last shipped milestone (one line + session file ref)
+   - Current focus (phase + slice from context.md)
+   - Active detour, if any
+   - Top 1–3 items in "Next up"
+   - Open questions blocking progress
+
+2. Ask, in priority order:
+   a. "Continue with the planned next item: <name>?"
+      Propose a concrete plan for THIS session. Wait for my approval
+      before implementation.
+   b. If I want a detour: ask for title/why/scope/exit, create
+      docs/detours/D-NNN-<slug>.md, update context.md "Active detour".
+   c. If undecided: surface 2–3 candidates from "Next up" or "Open debt".
+
+3. Honor PRINCIPLES.md throughout. Don't re-litigate cornerstones — those
+   are pinned. Cornerstone change = new ADR or @heavy escalation.
+
+# Session end ritual
+
+When I say session-end:
+1. Write docs/sessions/YYYY-MM-DD-<slug>.md
+2. Update context.md (last shipped, next up, test counts, active detour,
+   session log entry)
+3. Architectural decision → new ADR file under docs/decisions/, plus an
+   entry in docs/decisions/README.md tag index AND chronological table
+4. Slice flipped status → update docs/ROADMAP.md status table AND the
+   phase file's slice status
+5. Phase finished → archive note at top of phase file
+6. NEVER run git commit / push. Propose Conventional Commits message in
+   chat; I commit myself.
+```
 
 ## Detour Queue
 
@@ -245,8 +298,6 @@ four fields. It will register the detour and run it.
 Heavy runs on Claude Opus / GPT — every token costs real money. Use ONLY
 when:
 
-- Two contradictory `@architect` ADRs on the same question.
-- `@debugger` looped 3+ times without progress.
 - Final review of a Phase milestone before merging.
 - Modern C++ pattern where local models gave incorrect or unsafe code.
 - Long-term direction decisions (graphics API, scripting model, render-path
@@ -257,20 +308,13 @@ research, "where is X" questions. Heavy will refuse and redirect you anyway.
 
 Invoke via `/escalate <reason>` or `@heavy`.
 
-## Cheat Sheet — Commands
+## Session expectations
 
-| Command                | What it does                                              |
-| ---------------------- | --------------------------------------------------------- |
-| `/session-start`       | `@planner` re-orients + proposes plan                     |
-| `/session-end`         | `@docs-keeper` updates session, ROADMAP, systems, context |
-| `/status`              | Quick repo glance — git + module status, no planning      |
-| `/feature <desc>`      | Print pipeline as checklist (no auto-run)                 |
-| `/research <topic>`    | `@researcher` writes log to `docs/research/`              |
-| `/bugfix <desc>`       | Diagnose → fix → regression → review                      |
-| `/verify`              | `@tester` iterate to green (max 5 cycles)                 |
-| `/build [preset]`      | One-shot build + test (no iteration)                      |
-| `/review`              | `@reviewer` against current diff                          |
-| `/escalate <reason>`   | Hand off to `@heavy` (costs tokens)                       |
+- Keep compile warnings at **zero**.
+- For graphics/platform slices, check runtime behavior and validation output,
+  not just compile/test success.
+- If a smoke/example reveals a real runtime issue, fix it or document exactly
+  why it is intentionally deferred.
 
 ## Documentation Conventions
 
