@@ -25,6 +25,8 @@ enum class Format : crd::u16
     Undefined,
     R8G8B8A8Unorm,
     B8G8R8A8Unorm,
+    R32G32Sfloat,
+    R32G32B32Sfloat,
     D24UnormS8Uint,
     D32Sfloat,
 };
@@ -221,6 +223,7 @@ struct GraphicsPipelineDesc
     class ShaderModule* vertex_shader = nullptr;
     class ShaderModule* fragment_shader = nullptr;
     PrimitiveTopology topology = PrimitiveTopology::TriangleList;
+    Extent2D viewport_extent{1280, 720};
     Format color_format = Format::B8G8R8A8Unorm;
     Format depth_format = Format::Undefined;
     crd::containers::ConstSpan<VertexBindingDesc> vertex_bindings{};

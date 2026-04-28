@@ -235,17 +235,23 @@ TEST_CASE("RHI device can express the first-triangle resource flow", "[rhi][devi
         device.create_shader_module({crd::rhi::ShaderStage::Vertex, "main", crd::containers::make_span(shader_code)});
     auto fs =
         device.create_shader_module({crd::rhi::ShaderStage::Fragment, "main", crd::containers::make_span(shader_code)});
-    auto vb =
-        device.create_buffer({sizeof(float) * 18u, crd::rhi::BufferUsage::Vertex | crd::rhi::BufferUsage::TransferDst,
-                              crd::rhi::MemoryUsage::CpuToGpu});
+    auto vb = device.create_buffer(
+        {sizeof(float) * 18u, static_cast<crd::u32>(crd::rhi::BufferUsage::Vertex | crd::rhi::BufferUsage::TransferDst),
+         crd::rhi::MemoryUsage::CpuToGpu});
 
     crd::rhi::VertexBindingDesc binding{0, sizeof(float) * 6u, crd::rhi::VertexInputRate::Vertex};
     crd::rhi::VertexAttributeDesc attrs[] = {{0, 0, crd::rhi::Format::R8G8B8A8Unorm, 0},
                                              {1, 0, crd::rhi::Format::R8G8B8A8Unorm, 16}};
-    auto pipeline = device.create_graphics_pipeline({vs.get(), fs.get(), crd::rhi::PrimitiveTopology::TriangleList,
-                                                     crd::rhi::Format::B8G8R8A8Unorm, crd::rhi::Format::Undefined,
+    auto pipeline = device.create_graphics_pipeline({vs.get(),
+                                                     fs.get(),
+                                                     crd::rhi::PrimitiveTopology::TriangleList,
+                                                     {1280, 720},
+                                                     crd::rhi::Format::B8G8R8A8Unorm,
+                                                     crd::rhi::Format::Undefined,
                                                      crd::containers::make_span(&binding, 1),
-                                                     crd::containers::make_span(attrs), false, false});
+                                                     crd::containers::make_span(attrs),
+                                                     false,
+                                                     false});
 
     auto command_buffer = device.create_command_buffer();
     auto* cb = static_cast<FakeCommandBuffer*>(command_buffer.get());

@@ -1,6 +1,15 @@
 crd_collect_sources(TEST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}")
 
+set(RHI_VULKAN_TEST_SHADERS
+    "${CMAKE_SOURCE_DIR}/runtime/examples/shaders/triangle.vert"
+    "${CMAKE_SOURCE_DIR}/runtime/examples/shaders/triangle.frag"
+)
+crd_compile_glsl(RHI_VULKAN_TEST_SPV "${CMAKE_CURRENT_BINARY_DIR}/shaders" ${RHI_VULKAN_TEST_SHADERS})
+
 add_executable(crd-rhi-vulkan-tests ${TEST_SOURCES})
+
+add_custom_target(crd-rhi-vulkan-test-shaders DEPENDS ${RHI_VULKAN_TEST_SPV})
+add_dependencies(crd-rhi-vulkan-tests crd-rhi-vulkan-test-shaders)
 
 target_link_libraries(crd-rhi-vulkan-tests PRIVATE
     crd-core

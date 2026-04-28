@@ -75,9 +75,9 @@ Full status table and reasoning live in [`docs/ROADMAP.md`](docs/ROADMAP.md).
   low-level API-agnostic GPU interface only; no backend types leak into the
   public surface.
 - `crd-rhi-vulkan`: depends on `crd-rhi`, `crd-platform`, `crd-log`. Owns the
-  Vulkan instance/device/surface/swapchain bootstrap and the current
-  command-submission/frame-sync path, while keeping all `Vk*` details out of
-  the `crd-rhi` public API.
+  Vulkan instance/device/surface/swapchain bootstrap, the current
+  command-submission/frame-sync path, and the minimal first-triangle path,
+  while keeping all `Vk*` details out of the `crd-rhi` public API.
 - `crd-renderer`: planned dependency target is `crd-rhi`, `crd-math`, `crd-memory`, `crd-resources`
 
 ## Where to look

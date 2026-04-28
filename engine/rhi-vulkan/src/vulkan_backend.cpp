@@ -31,6 +31,10 @@ namespace
             return VK_FORMAT_R8G8B8A8_UNORM;
         case Format::B8G8R8A8Unorm:
             return VK_FORMAT_B8G8R8A8_UNORM;
+        case Format::R32G32Sfloat:
+            return VK_FORMAT_R32G32_SFLOAT;
+        case Format::R32G32B32Sfloat:
+            return VK_FORMAT_R32G32B32_SFLOAT;
         case Format::D24UnormS8Uint:
             return VK_FORMAT_D24_UNORM_S8_UINT;
         case Format::D32Sfloat:
@@ -39,6 +43,73 @@ namespace
         default:
             return VK_FORMAT_UNDEFINED;
     }
+}
+
+[[nodiscard]] VkPrimitiveTopology to_vk_topology(PrimitiveTopology topology) noexcept
+{
+    switch (topology)
+    {
+        case PrimitiveTopology::TriangleList:
+        default:
+            return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    }
+}
+
+[[nodiscard]] VkVertexInputRate to_vk_input_rate(VertexInputRate rate) noexcept
+{
+    switch (rate)
+    {
+        case VertexInputRate::Instance:
+            return VK_VERTEX_INPUT_RATE_INSTANCE;
+        case VertexInputRate::Vertex:
+        default:
+            return VK_VERTEX_INPUT_RATE_VERTEX;
+    }
+}
+
+[[nodiscard]] VkBufferUsageFlags to_vk_buffer_usage(crd::u32 usage_bits) noexcept
+{
+    VkBufferUsageFlags flags = 0;
+    if (has_flag(usage_bits, BufferUsage::TransferSrc))
+        flags |= VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    if (has_flag(usage_bits, BufferUsage::TransferDst))
+        flags |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    if (has_flag(usage_bits, BufferUsage::Vertex))
+        flags |= VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+    if (has_flag(usage_bits, BufferUsage::Index))
+        flags |= VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+    if (has_flag(usage_bits, BufferUsage::Uniform))
+        flags |= VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+    return flags;
+}
+
+[[nodiscard]] VkMemoryPropertyFlags to_vk_memory_properties(MemoryUsage usage) noexcept
+{
+    switch (usage)
+    {
+        case MemoryUsage::CpuToGpu:
+            return VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+        case MemoryUsage::GpuToCpu:
+            return VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+        case MemoryUsage::GpuOnly:
+        default:
+            return VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+    }
+}
+
+[[nodiscard]] crd::u32 find_memory_type(VkPhysicalDevice physical_device, crd::u32 type_bits,
+                                        VkMemoryPropertyFlags required)
+{
+    VkPhysicalDeviceMemoryProperties memory_properties{};
+    vkGetPhysicalDeviceMemoryProperties(physical_device, &memory_properties);
+    for (crd::u32 i = 0; i < memory_properties.memoryTypeCount; ++i)
+    {
+        if ((type_bits & (1u << i)) != 0u && (memory_properties.memoryTypes[i].propertyFlags & required) == required)
+        {
+            return i;
+        }
+    }
+    return UINT32_MAX;
 }
 
 [[nodiscard]] VkAttachmentLoadOp to_vk_load_op(LoadOp op) noexcept
@@ -136,12 +207,130 @@ public:
     [[nodiscard]] const ImageDesc& desc() const noexcept override { return m_desc; }
     [[nodiscard]] VkImage handle() const noexcept { return m_image; }
     [[nodiscard]] VkImageView image_view() const noexcept { return m_image_view; }
+    [[nodiscard]] VkImageLayout layout() const noexcept { return m_layout; }
+    void set_layout(VkImageLayout layout) noexcept { m_layout = layout; }
 
 private:
     VkDevice m_device = VK_NULL_HANDLE;
     ImageDesc m_desc{};
     VkImage m_image = VK_NULL_HANDLE;
     VkImageView m_image_view = VK_NULL_HANDLE;
+    VkImageLayout m_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+};
+
+class VulkanBuffer final : public Buffer
+{
+public:
+    VulkanBuffer(VkDevice device, BufferDesc desc, VkBuffer buffer, VkDeviceMemory memory)
+        : m_device(device), m_desc(desc), m_buffer(buffer), m_memory(memory)
+    {
+    }
+
+    ~VulkanBuffer() noexcept override
+    {
+        if (m_buffer != VK_NULL_HANDLE)
+        {
+            vkDestroyBuffer(m_device, m_buffer, nullptr);
+            m_buffer = VK_NULL_HANDLE;
+        }
+        if (m_memory != VK_NULL_HANDLE)
+        {
+            vkFreeMemory(m_device, m_memory, nullptr);
+            m_memory = VK_NULL_HANDLE;
+        }
+    }
+
+    [[nodiscard]] const BufferDesc& desc() const noexcept override { return m_desc; }
+
+    [[nodiscard]] void* map() noexcept override
+    {
+        if (m_desc.memory_usage == MemoryUsage::GpuOnly)
+        {
+            return nullptr;
+        }
+        void* mapped = nullptr;
+        if (vkMapMemory(m_device, m_memory, 0, m_desc.size_bytes, 0, &mapped) != VK_SUCCESS)
+        {
+            return nullptr;
+        }
+        return mapped;
+    }
+
+    void unmap() noexcept override
+    {
+        if (m_desc.memory_usage != MemoryUsage::GpuOnly)
+        {
+            vkUnmapMemory(m_device, m_memory);
+        }
+    }
+
+    [[nodiscard]] VkBuffer handle() const noexcept { return m_buffer; }
+
+private:
+    VkDevice m_device = VK_NULL_HANDLE;
+    BufferDesc m_desc{};
+    VkBuffer m_buffer = VK_NULL_HANDLE;
+    VkDeviceMemory m_memory = VK_NULL_HANDLE;
+};
+
+class VulkanShaderModule final : public ShaderModule
+{
+public:
+    VulkanShaderModule(VkDevice device, ShaderModuleDesc desc, VkShaderModule module)
+        : m_device(device), m_stage(desc.stage), m_entry_point(desc.entry_point), m_module(module)
+    {
+    }
+
+    ~VulkanShaderModule() noexcept override
+    {
+        if (m_module != VK_NULL_HANDLE)
+        {
+            vkDestroyShaderModule(m_device, m_module, nullptr);
+            m_module = VK_NULL_HANDLE;
+        }
+    }
+
+    [[nodiscard]] ShaderStage stage() const noexcept override { return m_stage; }
+    [[nodiscard]] crd::containers::StringView entry_point() const noexcept override { return m_entry_point; }
+    [[nodiscard]] VkShaderModule handle() const noexcept { return m_module; }
+
+private:
+    VkDevice m_device = VK_NULL_HANDLE;
+    ShaderStage m_stage = ShaderStage::Vertex;
+    crd::containers::String m_entry_point{};
+    VkShaderModule m_module = VK_NULL_HANDLE;
+};
+
+class VulkanPipeline final : public Pipeline
+{
+public:
+    VulkanPipeline(VkDevice device, GraphicsPipelineDesc desc, VkPipelineLayout layout, VkPipeline pipeline)
+        : m_device(device), m_desc(desc), m_layout(layout), m_pipeline(pipeline)
+    {
+    }
+
+    ~VulkanPipeline() noexcept override
+    {
+        if (m_pipeline != VK_NULL_HANDLE)
+        {
+            vkDestroyPipeline(m_device, m_pipeline, nullptr);
+            m_pipeline = VK_NULL_HANDLE;
+        }
+        if (m_layout != VK_NULL_HANDLE)
+        {
+            vkDestroyPipelineLayout(m_device, m_layout, nullptr);
+            m_layout = VK_NULL_HANDLE;
+        }
+    }
+
+    [[nodiscard]] const GraphicsPipelineDesc& desc() const noexcept override { return m_desc; }
+    [[nodiscard]] VkPipeline handle() const noexcept { return m_pipeline; }
+
+private:
+    VkDevice m_device = VK_NULL_HANDLE;
+    GraphicsPipelineDesc m_desc{};
+    VkPipelineLayout m_layout = VK_NULL_HANDLE;
+    VkPipeline m_pipeline = VK_NULL_HANDLE;
 };
 
 class VulkanSwapchain;
@@ -215,11 +404,26 @@ public:
         m_render_target = nullptr;
     }
 
-    void bind_pipeline(Pipeline& /*pipeline*/) override {}
+    void bind_pipeline(Pipeline& pipeline) override
+    {
+        auto* vk_pipeline = dynamic_cast<VulkanPipeline*>(&pipeline);
+        CRD_ASSERT(vk_pipeline != nullptr);
+        vkCmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk_pipeline->handle());
+    }
 
-    void bind_vertex_buffer(Buffer& /*buffer*/, crd::u64 /*offset_bytes*/) override {}
+    void bind_vertex_buffer(Buffer& buffer, crd::u64 offset_bytes) override
+    {
+        auto* vk_buffer = dynamic_cast<VulkanBuffer*>(&buffer);
+        CRD_ASSERT(vk_buffer != nullptr);
+        const VkBuffer handle = vk_buffer->handle();
+        const VkDeviceSize offset = offset_bytes;
+        vkCmdBindVertexBuffers(m_command_buffer, 0, 1, &handle, &offset);
+    }
 
-    void draw(crd::u32 /*vertex_count*/, crd::u32 /*first_vertex*/) override {}
+    void draw(crd::u32 vertex_count, crd::u32 first_vertex) override
+    {
+        vkCmdDraw(m_command_buffer, vertex_count, 1, first_vertex, 0);
+    }
 
     [[nodiscard]] VkCommandBuffer handle() const noexcept { return m_command_buffer; }
 
@@ -229,7 +433,7 @@ private:
         VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
         barrier.srcAccessMask = 0;
         barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        barrier.oldLayout = image.layout();
         barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         barrier.image = image.handle();
         barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -239,6 +443,7 @@ private:
         barrier.subresourceRange.layerCount = 1;
         vkCmdPipelineBarrier(m_command_buffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                              VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+        image.set_layout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     }
 
     void transition_to_present(VulkanImage& image)
@@ -246,7 +451,7 @@ private:
         VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
         barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
         barrier.dstAccessMask = 0;
-        barrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        barrier.oldLayout = image.layout();
         barrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
         barrier.image = image.handle();
         barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -256,6 +461,7 @@ private:
         barrier.subresourceRange.layerCount = 1;
         vkCmdPipelineBarrier(m_command_buffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
                              VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+        image.set_layout(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
     }
 
     VkDevice m_device = VK_NULL_HANDLE;
@@ -688,10 +894,48 @@ public:
                                                  std::move(wrapped_images));
     }
 
-    [[nodiscard]] std::unique_ptr<Buffer> create_buffer(const BufferDesc& /*desc*/) override
+    [[nodiscard]] std::unique_ptr<Buffer> create_buffer(const BufferDesc& desc) override
     {
-        CRD_LOG_WARN(detail::g_log_rhi_vulkan, "create_buffer not implemented in frame-sync slice");
-        return nullptr;
+        VkBufferCreateInfo create_info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+        create_info.size = desc.size_bytes;
+        create_info.usage = to_vk_buffer_usage(desc.usage);
+        create_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+        VkBuffer buffer = VK_NULL_HANDLE;
+        if (!vk_ok(vkCreateBuffer(m_device, &create_info, nullptr, &buffer), "vkCreateBuffer"))
+        {
+            return nullptr;
+        }
+
+        VkMemoryRequirements requirements{};
+        vkGetBufferMemoryRequirements(m_device, buffer, &requirements);
+        const crd::u32 memory_type_index = find_memory_type(m_physical_device, requirements.memoryTypeBits,
+                                                            to_vk_memory_properties(desc.memory_usage));
+        if (memory_type_index == UINT32_MAX)
+        {
+            CRD_LOG_ERROR(detail::g_log_rhi_vulkan, "No compatible Vulkan memory type for buffer allocation");
+            vkDestroyBuffer(m_device, buffer, nullptr);
+            return nullptr;
+        }
+
+        VkMemoryAllocateInfo alloc_info{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        alloc_info.allocationSize = requirements.size;
+        alloc_info.memoryTypeIndex = memory_type_index;
+
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+        if (!vk_ok(vkAllocateMemory(m_device, &alloc_info, nullptr, &memory), "vkAllocateMemory(buffer)"))
+        {
+            vkDestroyBuffer(m_device, buffer, nullptr);
+            return nullptr;
+        }
+        if (!vk_ok(vkBindBufferMemory(m_device, buffer, memory, 0), "vkBindBufferMemory"))
+        {
+            vkFreeMemory(m_device, memory, nullptr);
+            vkDestroyBuffer(m_device, buffer, nullptr);
+            return nullptr;
+        }
+
+        return std::make_unique<VulkanBuffer>(m_device, desc, buffer, memory);
     }
 
     [[nodiscard]] std::unique_ptr<Image> create_image(const ImageDesc& /*desc*/) override
@@ -700,16 +944,145 @@ public:
         return nullptr;
     }
 
-    [[nodiscard]] std::unique_ptr<ShaderModule> create_shader_module(const ShaderModuleDesc& /*desc*/) override
+    [[nodiscard]] std::unique_ptr<ShaderModule> create_shader_module(const ShaderModuleDesc& desc) override
     {
-        CRD_LOG_WARN(detail::g_log_rhi_vulkan, "create_shader_module not implemented in frame-sync slice");
-        return nullptr;
+        if (desc.code.empty() || (desc.code.size() % 4u) != 0u)
+        {
+            CRD_LOG_ERROR(detail::g_log_rhi_vulkan,
+                          "Shader module code must be non-empty SPIR-V with 4-byte alignment");
+            return nullptr;
+        }
+
+        VkShaderModuleCreateInfo create_info{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+        create_info.codeSize = desc.code.size();
+        create_info.pCode = reinterpret_cast<const crd::u32*>(desc.code.data());
+
+        VkShaderModule module = VK_NULL_HANDLE;
+        if (!vk_ok(vkCreateShaderModule(m_device, &create_info, nullptr, &module), "vkCreateShaderModule"))
+        {
+            return nullptr;
+        }
+
+        return std::make_unique<VulkanShaderModule>(m_device, desc, module);
     }
 
-    [[nodiscard]] std::unique_ptr<Pipeline> create_graphics_pipeline(const GraphicsPipelineDesc& /*desc*/) override
+    [[nodiscard]] std::unique_ptr<Pipeline> create_graphics_pipeline(const GraphicsPipelineDesc& desc) override
     {
-        CRD_LOG_WARN(detail::g_log_rhi_vulkan, "create_graphics_pipeline not implemented in frame-sync slice");
-        return nullptr;
+        auto* vertex_shader = dynamic_cast<VulkanShaderModule*>(desc.vertex_shader);
+        auto* fragment_shader = dynamic_cast<VulkanShaderModule*>(desc.fragment_shader);
+        if (vertex_shader == nullptr || fragment_shader == nullptr)
+        {
+            CRD_LOG_ERROR(detail::g_log_rhi_vulkan,
+                          "Graphics pipeline requires VulkanShaderModule-backed vertex and fragment shaders");
+            return nullptr;
+        }
+
+        VkPipelineShaderStageCreateInfo shader_stages[2]{};
+        shader_stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        shader_stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+        shader_stages[0].module = vertex_shader->handle();
+        shader_stages[0].pName = vertex_shader->entry_point().data();
+        shader_stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        shader_stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+        shader_stages[1].module = fragment_shader->handle();
+        shader_stages[1].pName = fragment_shader->entry_point().data();
+
+        crd::containers::Array<VkVertexInputBindingDescription> binding_descs;
+        for (const auto& binding : desc.vertex_bindings)
+        {
+            binding_descs.push_back(VkVertexInputBindingDescription{binding.binding, binding.stride_bytes,
+                                                                    to_vk_input_rate(binding.input_rate)});
+        }
+
+        crd::containers::Array<VkVertexInputAttributeDescription> attr_descs;
+        for (const auto& attr : desc.vertex_attributes)
+        {
+            attr_descs.push_back(VkVertexInputAttributeDescription{attr.location, attr.binding,
+                                                                   to_vk_format(attr.format), attr.offset_bytes});
+        }
+
+        VkPipelineVertexInputStateCreateInfo vertex_input{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+        vertex_input.vertexBindingDescriptionCount = static_cast<crd::u32>(binding_descs.size());
+        vertex_input.pVertexBindingDescriptions = binding_descs.data();
+        vertex_input.vertexAttributeDescriptionCount = static_cast<crd::u32>(attr_descs.size());
+        vertex_input.pVertexAttributeDescriptions = attr_descs.data();
+
+        VkPipelineInputAssemblyStateCreateInfo input_assembly{
+            VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+        input_assembly.topology = to_vk_topology(desc.topology);
+
+        VkViewport viewport{};
+        viewport.x = 0.0f;
+        viewport.y = 0.0f;
+        viewport.width = static_cast<float>(desc.viewport_extent.width);
+        viewport.height = static_cast<float>(desc.viewport_extent.height);
+        viewport.minDepth = 0.0f;
+        viewport.maxDepth = 1.0f;
+        VkRect2D scissor{{0, 0}, {desc.viewport_extent.width, desc.viewport_extent.height}};
+        VkPipelineViewportStateCreateInfo viewport_state{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+        viewport_state.viewportCount = 1;
+        viewport_state.pViewports = &viewport;
+        viewport_state.scissorCount = 1;
+        viewport_state.pScissors = &scissor;
+
+        VkPipelineRasterizationStateCreateInfo raster{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+        raster.polygonMode = VK_POLYGON_MODE_FILL;
+        raster.cullMode = VK_CULL_MODE_NONE;
+        raster.frontFace = VK_FRONT_FACE_CLOCKWISE;
+        raster.lineWidth = 1.0f;
+
+        VkPipelineMultisampleStateCreateInfo multisample{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+        multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+        VkPipelineColorBlendAttachmentState blend_attachment{};
+        blend_attachment.blendEnable = desc.enable_blend ? VK_TRUE : VK_FALSE;
+        blend_attachment.colorWriteMask =
+            VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+
+        VkPipelineColorBlendStateCreateInfo blend_state{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+        blend_state.attachmentCount = 1;
+        blend_state.pAttachments = &blend_attachment;
+
+        VkPipelineDepthStencilStateCreateInfo depth_stencil{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+        depth_stencil.depthTestEnable = desc.enable_depth_test ? VK_TRUE : VK_FALSE;
+        depth_stencil.depthWriteEnable = desc.enable_depth_test ? VK_TRUE : VK_FALSE;
+        depth_stencil.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+
+        VkPipelineLayoutCreateInfo layout_info{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        VkPipelineLayout layout = VK_NULL_HANDLE;
+        if (!vk_ok(vkCreatePipelineLayout(m_device, &layout_info, nullptr, &layout), "vkCreatePipelineLayout"))
+        {
+            return nullptr;
+        }
+
+        VkPipelineRenderingCreateInfo rendering_info{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
+        const VkFormat color_format = to_vk_format(desc.color_format);
+        rendering_info.colorAttachmentCount = 1;
+        rendering_info.pColorAttachmentFormats = &color_format;
+        rendering_info.depthAttachmentFormat = to_vk_format(desc.depth_format);
+
+        VkGraphicsPipelineCreateInfo pipeline_info{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+        pipeline_info.pNext = &rendering_info;
+        pipeline_info.stageCount = 2;
+        pipeline_info.pStages = shader_stages;
+        pipeline_info.pVertexInputState = &vertex_input;
+        pipeline_info.pInputAssemblyState = &input_assembly;
+        pipeline_info.pViewportState = &viewport_state;
+        pipeline_info.pRasterizationState = &raster;
+        pipeline_info.pMultisampleState = &multisample;
+        pipeline_info.pColorBlendState = &blend_state;
+        pipeline_info.pDepthStencilState = &depth_stencil;
+        pipeline_info.layout = layout;
+
+        VkPipeline pipeline = VK_NULL_HANDLE;
+        if (!vk_ok(vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pipeline_info, nullptr, &pipeline),
+                   "vkCreateGraphicsPipelines"))
+        {
+            vkDestroyPipelineLayout(m_device, layout, nullptr);
+            return nullptr;
+        }
+
+        return std::make_unique<VulkanPipeline>(m_device, desc, layout, pipeline);
     }
 
     [[nodiscard]] std::unique_ptr<CommandBuffer> create_command_buffer() override

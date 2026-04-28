@@ -86,9 +86,12 @@ with Vulkan) implement and that higher-level rendering code builds on.
   - in-flight fence
 - acquire / submit / present loop through the real Vulkan queue path
 - clear-only dynamic-rendering frame path
+- real first-triangle path with shader modules, vertex buffer, pipeline,
+  bind, and draw
 - backend tests now prove:
   - bootstrap + swapchain creation
-  - command buffer + acquire + submit + wait-idle clear-only frame path
+  - command buffer + acquire + submit + wait-idle path
+  - real triangle frame path in debug/ASan
 - `smoke_rhi_vulkan_bootstrap` now exercises a bounded real per-frame loop
 
 Important nuance:
@@ -97,12 +100,13 @@ Important nuance:
   execution path uses the classic barrier / submit flow in this slice because
   it proved more stable across the current release-path testing.
 
-Bootstrap intentionally stops short of higher-level GPU work:
+The current RHI/Vulkan slices still intentionally stop short of higher-level
+GPU work:
 
-- no command-buffer recording path yet
-- no real queue submit/present path yet
-- no buffers/images allocation policy yet
-- no shader-module or graphics-pipeline implementation yet
+- no descriptor sets / resource binding model yet
+- no push constants / camera path yet
+- no GPU allocator policy beyond the minimal host-visible vertex-buffer path
+- no material system or renderer policy yet
 
 ## How to use it (today)
 
@@ -125,7 +129,7 @@ device->graphics_queue().submit(*command_buffer, *swapchain);
 device->graphics_queue().present(*swapchain);
 ```
 
-The full first-triangle path is still the intended end-state:
+The first-triangle path is now real:
 
 ```cpp
 auto device = instance->create_device(device_desc);
@@ -144,14 +148,15 @@ command_buffer->draw(3, 0);
 command_buffer->end_rendering();
 command_buffer->end();
 
-device->graphics_queue().submit(*command_buffer);
+device->graphics_queue().submit(*command_buffer, *swapchain);
 device->graphics_queue().present(*swapchain);
 ```
 
 ## Long-term direction
 
-- Vulkan bootstrap and frame execution are now in place. Next slice is
-  pipelines + shader modules + the first triangle.
+- Vulkan bootstrap, frame execution, and first triangle are now in place.
+- Next immediate slices are ImGui debug overlay, GPU allocation policy, and
+  richer shader/pipeline growth that will feed `crd-renderer`.
 - Only after that path is proven do we climb further into higher-level
   renderer concerns.
 - High-level rendering (`crd-renderer`) stays above this layer.

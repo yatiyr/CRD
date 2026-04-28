@@ -18,17 +18,17 @@
 | `crd-math`       | ✅      | 1     | float+double, scalar-first, column-major, radians           |
 | `crd-platform`   | ✅      | 1     | window, timer, input, filesystem, dynlib, threading baseline all shipped. |
 | `crd-app`        | ✅      | 1.5   | Application, LayerStack, propagated events, sync typed EventBus shipped. |
-| `crd-rhi`        | 🚧      | 2.0   | v1a interface scaffold, v1b Vulkan bootstrap, v1c frame execution shipped. First triangle next. |
-| `crd-rhi-vulkan` | 🚧      | 2.1   | Vulkan instance/device/surface/swapchain + command submission path shipped |
-| `crd-renderer`   | ⏳      | 2.5   | high-level rendering: camera, renderables, lighting, materials |
-| `crd-jobs`       | ⏳      | 2.7   | job system; pulled forward to feed async I/O + GPU recording |
-| GPU memory + streaming | ⏳ | 2.5   | TLSF, BuddyAllocator, StreamingAllocator, GPUAllocator       |
-| Shader system    | ⏳      | 2.6   | GLSL→SPIRV→reflection→cache→hot-reload; layered above RHI triangle milestone |
-| `crd-resources`  | ⏳      | 2.7   | async I/O, LRU eviction, runtime binary asset format         |
-| `crd-tools/asset_cooker` | ⏳ | 2.3 | offline pipeline: glTF/PNG/HDR → Cerid binary formats. Separate exe. |
-| First scene      | ⏳      | 2.8   | camera + mesh + forward renderer + skybox                    |
-| PBR + lighting   | ⏳      | 2.9   | punctual lights + Cook-Torrance + IBL + CSM shadows          |
-| Post-FX          | ⏳      | 2.10  | HDR + ACES tonemap + bloom + TAA                             |
+| `crd-rhi`        | 🚧      | 2.0   | v1a interface scaffold through v1d first triangle shipped. Renderer-facing growth next. |
+| `crd-rhi-vulkan` | 🚧      | 2.1   | Vulkan bootstrap, frame execution, and first-triangle path shipped |
+| `crd-renderer`   | ⏳      | 2.6   | high-level rendering: camera, renderables, lighting, materials |
+| `crd-jobs`       | ⏳      | 2.8   | job system; supports async I/O, uploads, and later parallel recording |
+| GPU memory + streaming | ⏳ | 2.5   | custom GPU allocator strategy: TLSF, BuddyAllocator, StreamingAllocator, GPUAllocator |
+| Shader system    | ⏳      | 2.7   | GLSL→SPIRV→reflection→cache→hot-reload; layered above first triangle |
+| `crd-resources`  | ⏳      | 2.8   | async I/O, LRU eviction, runtime binary asset format         |
+| `crd-tools/asset_cooker` | ⏳ | 2.8 | offline pipeline: glTF/PNG/HDR → Cerid binary formats. Separate exe. |
+| First scene      | ⏳      | 2.9   | camera + mesh + forward renderer + skybox                    |
+| PBR + lighting   | ⏳      | 2.10  | punctual lights + Cook-Torrance + IBL + CSM shadows          |
+| Post-FX          | ⏳      | 2.11  | HDR + ACES tonemap + bloom + TAA                             |
 | `crd-scripting`  | ⏳      | 3     | hot-reload C++ DLLs, C API boundary                          |
 | `crd-ui`         | ⏳      | 4     | retained-mode game UI, replaces ImGui for non-debug          |
 | Editor           | ⏳      | 5     | built on `crd-ui`                                            |
@@ -197,13 +197,31 @@ ImGui is explicitly **not** part of RHI.
 
 ### 2.5 — GPU memory + streaming (3–4 sessions)
 
+- custom Cerid GPU allocator strategy (not a permanent VMA dependency)
 - TLSF general-purpose allocator
 - BuddyAllocator for fixed-size pools
 - StreamingAllocator: virtual memory reservation + page commit/decommit
 - backend memory allocation strategy for buffers and images
+- staging/upload memory policy
 - frame fence-based deferred deletion
+- clear ownership boundary between `crd-memory` and GPU-side allocation logic
 
-### 2.6 — Shader system (5–7 sessions)
+### 2.6 — `crd-renderer` v1 (3–5 sessions)
+
+Now that the triangle milestone is done, the next concrete rendering layer is
+a minimal renderer built on top of RHI rather than more backend work for its
+own sake.
+
+- camera struct(s) and camera matrices
+- explicit `Renderable` list (NOT ECS, NOT scene graph yet)
+- mesh + material binding path
+- first forward render pass over multiple objects
+- skybox hook point
+
+This phase deliberately avoids scene/ECS work. The renderer grows from a
+simple explicit renderable list first.
+
+### 2.7 — Shader system (5–7 sessions)
 
 Three layers:
 
@@ -230,11 +248,12 @@ Three layers:
   against the pass it's bound to at init time; mismatch is a fatal log
   + assert.
 
-### 2.7 — `crd-jobs` + `crd-resources` + asset_cooker (3–4 sessions)
+### 2.8 — `crd-jobs` + `crd-resources` + asset_cooker (3–4 sessions)
 
-- **`crd-jobs`** pulled forward from 2.5: thread pool, fiber-free
-  task graph, per-frame allocator. Gates async asset I/O and parallel
-  command recording.
+- **`crd-jobs`** lands here, after the renderer/debug/allocator/shader path is
+  real enough to tell us what the actual work graph wants to be. Thread pool,
+  fiber-free task graph, per-frame allocator. Gates async asset I/O, uploads,
+  and later parallel recording.
 - **`crd-resources`:** async load, LRU eviction, refcounted handles.
   Reads runtime binary formats only.
 - **`crd-tools/asset_cooker`** (separate executable, NOT linked into
@@ -243,9 +262,7 @@ Three layers:
   Runtime never imports source assets. Editor will eventually drive
   the cooker.
 
-### 2.8 — `crd-renderer` first scene (2–3 sessions)
-
-`crd-renderer` is where high-level rendering policy begins.
+### 2.9 — First scene (2–3 sessions)
 
 - Camera (FPS controller + orbit camera)
 - Mesh + Material + Transform = minimal `Renderable` list
@@ -255,21 +272,76 @@ Three layers:
 Scene / ECS are still intentionally absent here. The renderer starts from a
 simple explicit renderable list rather than waiting for a full scene stack.
 
-### 2.9 — `crd-renderer` PBR + lighting (4–5 sessions)
+### 2.10 — `crd-renderer` PBR + lighting (4–5 sessions)
 
 - Punctual lights: point, spot, directional.
 - Cook-Torrance BRDF.
 - IBL: HDR cubemap → prefiltered radiance + irradiance + BRDF LUT.
 - CSM (cascaded shadow maps) for directional lights.
 
-### 2.10 — Post-FX (3–4 sessions)
+### 2.11 — Post-FX (3–4 sessions)
 
 - HDR pipeline + ACES tonemap.
 - Bloom (downsample / upsample chain).
 - TAA (temporal anti-aliasing).
 - SSAO / SSR are deferred — not in this slice.
 
-Estimate: 25–35 sessions across 2.0 → 2.10.
+Estimate: 25–35 sessions across 2.0 → 2.11.
+
+## Near-term execution order
+
+The concrete next-session order from the current milestone is:
+
+1. **ImGui debug overlay**
+2. **GPU allocation strategy**
+3. **`crd-renderer` v1** (camera + explicit renderable list)
+4. **Shader system** (grow from the now-proven triangle path)
+5. **`crd-jobs` + `crd-resources` + `asset_cooker`**
+6. **First real scene**
+
+This order is deliberate:
+
+- ImGui improves iteration speed immediately.
+- GPU allocation must stabilise before the renderer grows wide.
+- Renderer should start from an explicit renderable list, not wait for ECS.
+- Jobs/resources come after there is enough real work to justify them.
+
+## Long-range direction
+
+### 6–12 months
+
+- stable Vulkan backend
+- allocator strategy in place
+- shader system v1
+- renderer v1 with multiple renderables
+- cooked asset pipeline
+- first real scenes
+- early debug tooling and profiling visibility
+
+Goal: Cerid becomes a real-time rendering engine backbone rather than just a
+graphics bootstrap.
+
+### 12–24 months
+
+- editor shell and tooling flow
+- scene editing / content browser / gizmos
+- improved asset workflows
+- scripting boundary maturation
+- play/edit separation
+- stronger runtime iteration loop
+
+Goal: Cerid becomes a usable development environment, not just a runtime.
+
+### 24–36 months
+
+- retained-mode `crd-ui`
+- mature editor
+- plugin ecosystem basics
+- simulation/robotics-facing differentiation
+- deterministic/replay-friendly workflows where useful
+
+Goal: Cerid develops a clear identity beyond "another Vulkan engine" and grows
+into a modern rendering + simulation-ready platform.
 
 ---
 
@@ -783,6 +855,25 @@ everything between here and the first rendered scene. Decisions:
   - `win-release`: 201/201 (Debug-only stats test correctly skipped)
   - `win-asan`: 202/202, no leaks, no UAF, no OOB
 
+### 2026-04 — first triangle milestone shipped
+
+- **Cerid now renders a real triangle through the full RHI/Vulkan path.**
+  Instance → device → swapchain → command buffer → shader modules → graphics
+  pipeline → vertex buffer → draw call is now a real end-to-end path.
+- **The triangle path stays intentionally minimal and professional.**
+  Host-visible vertex-buffer allocation is enough for this slice; descriptor
+  systems, push constants, camera data, and material policy remain later work.
+- **Shader compilation is now part of the build graph.** Runtime and test
+  targets compile GLSL to SPIR-V with `glslangValidator`, so the milestone is
+  reproducible rather than hand-curated.
+- **The automated matrix proves the path conservatively.** Debug and ASan cover
+  the real triangle integration test; Release keeps the Vulkan triangle test
+  intentionally lightweight to avoid driver/runtime variance becoming noise.
+- Quality pass at session end:
+  - `win-debug`: 203/203 tests pass
+  - `win-release`: 202/202 (Debug-only stats test correctly skipped)
+  - `win-asan`: 203/203, no leaks, no UAF, no OOB
+
 ### 2026-04 — `crd-app` shipped (layer stack + propagated events + sync bus)
 
 - **`crd-app` is not a pure Hazel clone.** Cerid keeps Hazel-style
@@ -851,23 +942,24 @@ allocator interface correctly today (Phase A) makes 2–5 a drop-in addition.
 > Update this section at the end of every session so future-you can re-enter
 > the project without thinking.
 
-**Last session:** 2026-04-28 — `crd-rhi-vulkan` frame execution slice.
-See `docs/sessions/2026-04-28-rhi-vulkan-frame-sync.md`.
+**Last session:** 2026-04-28 — first triangle milestone.
+See `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 What landed:
 
-1. **`crd-rhi-vulkan` now has a real per-frame execution path** on top of the
-   already-landed bootstrap: command pool, command buffers, frame sync,
-   acquire, submit, and present.
-2. **A clear-only frame can now be recorded and submitted** through the real
-   backend; first triangle is the next vertical slice, not the first time a
-   command buffer touches the GPU.
-3. **Dynamic rendering is already the chosen minimal rendering path.** That
-   keeps the backend aligned with the intended lightweight triangle milestone.
-4. **Pragmatism won over forced modernity for this exact slice.** sync2 support
-   is detected, but the shipped execution path uses classic submit/barrier
-   flow because it is currently the most stable path across release testing.
-5. **The verification matrix stayed green after introducing the execution
+1. **The first triangle now renders through the real backend.** The RHI and
+   Vulkan layers can allocate a vertex buffer, compile/load shader modules,
+   create a graphics pipeline, record a draw call, submit it, and present.
+2. **Dynamic rendering is the chosen minimal rendering path.** No early
+   heavyweight render-pass architecture was introduced.
+3. **The triangle path remains intentionally narrow.** No descriptors,
+   materials, scene graph, camera system, or allocator policy creep entered
+   the milestone.
+4. **Pragmatism still wins over forced modernity here.** sync2 support is
+   detected, but the shipped execution path continues to use classic
+   submit/barrier flow because it is the most stable path across the current
+   release/debug/asan validation matrix.
+5. **The verification matrix stayed green after introducing the real triangle
    path:**
    - Debug: `203/203`
    - Release: `202/202`
@@ -879,7 +971,7 @@ Current test counts:
 - Release: `202/202` (Debug-only stats test correctly skipped)
 - ASan: `203/203`
 
-**Next session starts with: pipelines + shader modules + first triangle.**
+**Next session starts with: ImGui debug overlay integration or GPU allocation strategy.**
 
 One small optional cleanup from closeout still exists:
 
@@ -890,11 +982,10 @@ One small optional cleanup from closeout still exists:
 
 The concrete short-path from here is now:
 
-1. minimal shader-module path
-2. minimal graphics pipeline creation
-3. vertex buffer upload path
-4. first triangle through dynamic rendering
-5. then GPU allocation strategy and shader path growth
+1. ImGui debug overlay on top of the now-working backend
+2. GPU allocation strategy for buffers/images
+3. richer shader/pipeline growth (descriptor path, resource bindings)
+4. then `crd-renderer` bring-up
 
-Roughly 1–2 sessions from here to "first triangle on screen": one small
-benchmark cleanup if desired, then the pipeline/shader/triangle milestone.
+The next meaningful medium-term goal is no longer "triangle"; it is
+"triangle plus usable debug tooling and sane GPU allocation policy."

@@ -112,6 +112,15 @@ add_executable(smoke_rhi_vulkan_bootstrap
     examples/smoke_rhi_vulkan_bootstrap.cpp
 )
 
+set(SMOKE_RHI_VULKAN_SHADERS
+    "${CMAKE_SOURCE_DIR}/runtime/examples/shaders/triangle.vert"
+    "${CMAKE_SOURCE_DIR}/runtime/examples/shaders/triangle.frag"
+)
+crd_compile_glsl(SMOKE_RHI_VULKAN_SPV "${CMAKE_CURRENT_BINARY_DIR}/shaders" ${SMOKE_RHI_VULKAN_SHADERS})
+
+add_custom_target(smoke_rhi_vulkan_shaders DEPENDS ${SMOKE_RHI_VULKAN_SPV})
+add_dependencies(smoke_rhi_vulkan_bootstrap smoke_rhi_vulkan_shaders)
+
 target_link_libraries(smoke_rhi_vulkan_bootstrap PRIVATE
     crd-core
     crd-log

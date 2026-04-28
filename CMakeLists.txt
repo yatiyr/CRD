@@ -148,6 +148,29 @@ function(crd_enable_default_pch target_name)
     )
 endfunction()
 
+find_program(CRD_GLSLANG_VALIDATOR NAMES glslangValidator HINTS "$ENV{VULKAN_SDK}/Bin" "$ENV{VULKAN_SDK}/bin")
+
+function(crd_compile_glsl out_var output_dir)
+    if(NOT CRD_GLSLANG_VALIDATOR)
+        message(FATAL_ERROR "glslangValidator not found; required for Vulkan shader compilation")
+    endif()
+
+    file(MAKE_DIRECTORY "${output_dir}")
+    set(outputs)
+    foreach(shader IN LISTS ARGN)
+        get_filename_component(shader_name "${shader}" NAME)
+        set(spv "${output_dir}/${shader_name}.spv")
+        add_custom_command(
+            OUTPUT "${spv}"
+            COMMAND "${CRD_GLSLANG_VALIDATOR}" -V --target-env vulkan1.3 -o "${spv}" "${shader}"
+            DEPENDS "${shader}"
+            VERBATIM
+        )
+        list(APPEND outputs "${spv}")
+    endforeach()
+    set(${out_var} ${outputs} PARENT_SCOPE)
+endfunction()
+
 # ---- CMAKE Tidy ---------------------------------------------------------
 if(CRD_ENABLE_CLANG_TIDY)
     find_program(CLANG_TIDY_EXE NAMES clang-tidy)
