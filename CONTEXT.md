@@ -11,8 +11,9 @@
 
 ## Current focus
 
-**Phase 2.2 — GPU memory + streaming.** ImGui debug overlay (2.1) shipped; the
-next graphics risk to reduce is allocator policy before renderer growth.
+**Phase 2.3 — `crd-shader` / descriptor growth.** GPU memory + streaming (2.2)
+shipped; the backend allocation path is now stable enough for shader and
+binding growth.
 
 Aktif phase dosyası: `docs/phases/phase-2-graphics.md`
 
@@ -26,6 +27,22 @@ _none — running on the main roadmap._
 > `docs/detours/README.md`.
 
 ## Last shipped milestone
+
+**2026-04-29 — GPU memory + streaming foundation shipped.**
+
+Centralized Vulkan allocator helper, backend-owned buffer/image allocation,
+real image creation path, and allocator-backed smoke/test coverage. This is not
+the final allocator architecture, but it stabilizes resource ownership before
+shader/renderer growth.
+
+Three-flavour green:
+- Debug: 210/210
+- Release: 209/209 (Debug-only stats test correctly skipped)
+- ASan: 210/210
+
+Detail: `docs/sessions/2026-04-29-gpu-memory-streaming-foundation.md`.
+
+## Previous shipped milestone
 
 **2026-04-28 — ImGui debug overlay shipped.**
 
@@ -75,10 +92,10 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Next up (next 1–3 sessions)
 
-1. **GPU memory + streaming (2.2).** Allocator strategy stabilizes before
-   renderer widens.
-2. **`crd-shader` / descriptor growth (2.3).** Grow from the now-proven
+1. **`crd-shader` / descriptor growth (2.3).** Grow from the now-proven
    backend + overlay + triangle path.
+2. **`crd-renderer` v1 (2.4).** Start from an explicit renderable list and
+   camera path before wider systems.
 3. **`crd-config` 1.6b/1.6c.** Explicit reload hook and more real consumers
    after ImGui settles.
 
@@ -118,6 +135,7 @@ When in doubt, ASK before reading large files.
 
 ## Session log (rolling, last 5)
 
+- **2026-04-29** — GPU memory + streaming foundation shipped.
 - **2026-04-28** — ImGui debug overlay shipped.
 - **2026-04-28** — `crd-config` core shipped.
 - **2026-04-28** — First triangle through full RHI/Vulkan path.

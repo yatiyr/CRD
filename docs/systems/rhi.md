@@ -12,7 +12,8 @@ with Vulkan) implement and that higher-level rendering code builds on.
 | v1a | types, descriptors, abstract interfaces, fake-backend tests, smoke | ✅ |
 | v1b | Vulkan backend bootstrap in `crd-rhi-vulkan` | ✅ |
 | v1c | command buffers + frame sync | ✅ |
-| v1d | pipeline + first triangle | ⏳ |
+| v1d | pipeline + first triangle | ✅ |
+| v1e | GPU memory + streaming foundation | ✅ |
 
 ## Core decisions
 
@@ -105,8 +106,26 @@ GPU work:
 
 - no descriptor sets / resource binding model yet
 - no push constants / camera path yet
-- no GPU allocator policy beyond the minimal host-visible vertex-buffer path
+- no full allocator policy beyond the current centralized buffer/image
+  allocation foundation
 - no material system or renderer policy yet
+
+## What ships today (v1e — GPU memory + streaming foundation)
+
+- centralized backend-owned Vulkan allocator helper
+- centralized memory-type selection
+- backend-owned buffer allocation path
+- backend-owned image allocation path
+- image memory bind + image-view creation path
+- allocator-backed device-local resources are now possible, even though the
+  more advanced streaming/suballocation strategies are still future work
+
+This is still intentionally not the final allocator architecture:
+
+- no TLSF/Buddy/Streaming allocator policy yet
+- no residency/eviction model yet
+- no broad deferred-destruction system yet
+- no cross-resource suballocation yet
 
 ## How to use it (today)
 
@@ -155,8 +174,8 @@ device->graphics_queue().present(*swapchain);
 ## Long-term direction
 
 - Vulkan bootstrap, frame execution, and first triangle are now in place.
-- Next immediate slices are ImGui debug overlay, GPU allocation policy, and
-  richer shader/pipeline growth that will feed `crd-renderer`.
+- Next immediate slices are shader/descriptor growth and renderer-facing
+  resource binding work on top of the now-stable allocation path.
 - Only after that path is proven do we climb further into higher-level
   renderer concerns.
 - High-level rendering (`crd-renderer`) stays above this layer.

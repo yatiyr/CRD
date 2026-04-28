@@ -73,7 +73,13 @@ int main()
 
     auto vertex_buffer = device->create_buffer(
         {sizeof(vertices), crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex), crd::rhi::MemoryUsage::CpuToGpu});
-    if (vs == nullptr || fs_module == nullptr || vertex_buffer == nullptr)
+    auto color_image = device->create_image(
+        {{256, 256},
+         crd::rhi::Format::B8G8R8A8Unorm,
+         crd::rhi::enum_bits(crd::rhi::ImageUsage::Sampled) | crd::rhi::enum_bits(crd::rhi::ImageUsage::TransferDst),
+         1,
+         1});
+    if (vs == nullptr || fs_module == nullptr || vertex_buffer == nullptr || color_image == nullptr)
     {
         CRD_LOG_ERROR(g_log_smoke_rhi_vk, "Triangle resource bootstrap failed");
         return 3;

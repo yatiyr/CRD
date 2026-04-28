@@ -17,7 +17,7 @@ Vulkan-first, layered:
 | 2.0c  | command buffers + frame sync     |   ✅   | pools, frames-in-flight, present/acquire, resize stability                            |
 | 2.0d  | pipeline + first triangle        |   ✅   | minimal shader, pipeline, vertex buffer, draw — milestone gate passed                 |
 | 2.1   | ImGui debug overlay              |   ✅   | docking branch; debug-only; consumes `crd-config` for theme/style                    |
-| 2.2   | GPU memory + streaming           |   ⏳   | TLSF, BuddyAllocator, StreamingAllocator (vmem reserve + commit/decommit)            |
+| 2.2   | GPU memory + streaming           |   ✅   | centralized allocator-backed buffer/image path shipped; broader policy still ahead   |
 | 2.3   | `crd-shader`                     |   ⏳   | GLSL→SPIR-V (glslang), reflection (SPIRV-Cross), on-disk cache, hot-reload           |
 | 2.4   | `crd-renderer` v1                |   ⏳   | `IRenderPath` interface + Clustered Forward+ implementation; frustum culling; skybox |
 | 2.5   | `crd-jobs`                       |   ⏳   | thread pool + fiber tasks, work-stealing, per-frame allocator, async I/O ready       |
@@ -27,11 +27,10 @@ Vulkan-first, layered:
 
 The concrete next-session sequence:
 
-1. **GPU memory + streaming (2.2)** — stabilize allocators before renderer widens
-2. **`crd-shader` (2.3)** — grow from a proven triangle path
-3. **`crd-renderer` v1 (2.4)**
-4. **`crd-jobs` (2.5)** — pulled in once renderer needs async upload (may swap with 2.4)
-5. **`crd-resources` + `asset_cooker` (2.6)**
+1. **`crd-shader` (2.3)** — grow from a proven triangle path
+2. **`crd-renderer` v1 (2.4)**
+3. **`crd-jobs` (2.5)** — pulled in once renderer needs async upload (may swap with 2.4)
+4. **`crd-resources` + `asset_cooker` (2.6)**
 
 ## Decisions
 

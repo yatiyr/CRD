@@ -191,11 +191,156 @@ struct ImageSync
     VkSemaphore render_finished = VK_NULL_HANDLE;
 };
 
+struct VulkanAllocation
+{
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    VkDeviceSize size_bytes = 0;
+    crd::u32 memory_type_index = 0;
+};
+
+class VulkanAllocator
+{
+public:
+    VulkanAllocator(VkPhysicalDevice physical_device, VkDevice device)
+        : m_physical_device(physical_device), m_device(device)
+    {
+    }
+
+    [[nodiscard]] bool allocate_buffer(const BufferDesc& desc, VkBuffer& out_buffer, VulkanAllocation& out_allocation)
+    {
+        VkBufferCreateInfo create_info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+        create_info.size = desc.size_bytes;
+        create_info.usage = to_vk_buffer_usage(desc.usage);
+        create_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+        if (!vk_ok(vkCreateBuffer(m_device, &create_info, nullptr, &out_buffer), "vkCreateBuffer"))
+        {
+            return false;
+        }
+
+        VkMemoryRequirements requirements{};
+        vkGetBufferMemoryRequirements(m_device, out_buffer, &requirements);
+        if (!allocate_memory(requirements, to_vk_memory_properties(desc.memory_usage), out_allocation,
+                             "vkAllocateMemory(buffer)"))
+        {
+            vkDestroyBuffer(m_device, out_buffer, nullptr);
+            out_buffer = VK_NULL_HANDLE;
+            return false;
+        }
+
+        if (!vk_ok(vkBindBufferMemory(m_device, out_buffer, out_allocation.memory, 0), "vkBindBufferMemory"))
+        {
+            destroy_allocation(out_allocation);
+            vkDestroyBuffer(m_device, out_buffer, nullptr);
+            out_buffer = VK_NULL_HANDLE;
+            return false;
+        }
+
+        return true;
+    }
+
+    [[nodiscard]] bool allocate_image(const ImageDesc& desc, VkImage& out_image, VulkanAllocation& out_allocation)
+    {
+        VkImageUsageFlags usage = 0;
+        if (has_flag(desc.usage, ImageUsage::TransferSrc))
+            usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        if (has_flag(desc.usage, ImageUsage::TransferDst))
+            usage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        if (has_flag(desc.usage, ImageUsage::Sampled))
+            usage |= VK_IMAGE_USAGE_SAMPLED_BIT;
+        if (has_flag(desc.usage, ImageUsage::ColorAttachment))
+            usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        if (has_flag(desc.usage, ImageUsage::DepthStencilAttachment))
+            usage |= VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+
+        VkImageCreateInfo create_info{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+        create_info.imageType = VK_IMAGE_TYPE_2D;
+        create_info.format = to_vk_format(desc.format);
+        create_info.extent = {desc.extent.width, desc.extent.height, 1};
+        create_info.mipLevels = desc.mip_levels;
+        create_info.arrayLayers = desc.array_layers;
+        create_info.samples = VK_SAMPLE_COUNT_1_BIT;
+        create_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+        create_info.usage = usage;
+        create_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        create_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+        if (!vk_ok(vkCreateImage(m_device, &create_info, nullptr, &out_image), "vkCreateImage"))
+        {
+            return false;
+        }
+
+        VkMemoryRequirements requirements{};
+        vkGetImageMemoryRequirements(m_device, out_image, &requirements);
+        if (!allocate_memory(requirements, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, out_allocation,
+                             "vkAllocateMemory(image)"))
+        {
+            vkDestroyImage(m_device, out_image, nullptr);
+            out_image = VK_NULL_HANDLE;
+            return false;
+        }
+
+        if (!vk_ok(vkBindImageMemory(m_device, out_image, out_allocation.memory, 0), "vkBindImageMemory"))
+        {
+            destroy_allocation(out_allocation);
+            vkDestroyImage(m_device, out_image, nullptr);
+            out_image = VK_NULL_HANDLE;
+            return false;
+        }
+
+        return true;
+    }
+
+    void destroy_allocation(VulkanAllocation& allocation) noexcept
+    {
+        if (allocation.memory != VK_NULL_HANDLE)
+        {
+            vkFreeMemory(m_device, allocation.memory, nullptr);
+            allocation.memory = VK_NULL_HANDLE;
+            allocation.size_bytes = 0;
+        }
+    }
+
+private:
+    [[nodiscard]] bool allocate_memory(const VkMemoryRequirements& requirements,
+                                       VkMemoryPropertyFlags required_properties, VulkanAllocation& out_allocation,
+                                       const char* what)
+    {
+        const crd::u32 memory_type_index =
+            find_memory_type(m_physical_device, requirements.memoryTypeBits, required_properties);
+        if (memory_type_index == UINT32_MAX)
+        {
+            CRD_LOG_ERROR(detail::g_log_rhi_vulkan, "No compatible Vulkan memory type for {}", what);
+            return false;
+        }
+
+        VkMemoryAllocateInfo alloc_info{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        alloc_info.allocationSize = requirements.size;
+        alloc_info.memoryTypeIndex = memory_type_index;
+
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+        if (!vk_ok(vkAllocateMemory(m_device, &alloc_info, nullptr, &memory), what))
+        {
+            return false;
+        }
+
+        out_allocation.memory = memory;
+        out_allocation.size_bytes = requirements.size;
+        out_allocation.memory_type_index = memory_type_index;
+        return true;
+    }
+
+    VkPhysicalDevice m_physical_device = VK_NULL_HANDLE;
+    VkDevice m_device = VK_NULL_HANDLE;
+};
+
 class VulkanImage final : public Image
 {
 public:
-    VulkanImage(VkDevice device, ImageDesc desc, VkImage image, VkImageView image_view)
-        : m_device(device), m_desc(std::move(desc)), m_image(image), m_image_view(image_view)
+    VulkanImage(VkDevice device, ImageDesc desc, VkImage image, VkImageView image_view,
+                VulkanAllocation allocation = {}, bool owns_image = false)
+        : m_device(device), m_desc(std::move(desc)), m_image(image), m_image_view(image_view), m_allocation(allocation),
+          m_owns_image(owns_image)
     {
     }
 
@@ -205,6 +350,16 @@ public:
         {
             vkDestroyImageView(m_device, m_image_view, nullptr);
             m_image_view = VK_NULL_HANDLE;
+        }
+        if (m_owns_image && m_image != VK_NULL_HANDLE)
+        {
+            vkDestroyImage(m_device, m_image, nullptr);
+            m_image = VK_NULL_HANDLE;
+        }
+        if (m_allocation.memory != VK_NULL_HANDLE)
+        {
+            vkFreeMemory(m_device, m_allocation.memory, nullptr);
+            m_allocation.memory = VK_NULL_HANDLE;
         }
     }
 
@@ -220,13 +375,15 @@ private:
     VkImage m_image = VK_NULL_HANDLE;
     VkImageView m_image_view = VK_NULL_HANDLE;
     VkImageLayout m_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VulkanAllocation m_allocation{};
+    bool m_owns_image = false;
 };
 
 class VulkanBuffer final : public Buffer
 {
 public:
-    VulkanBuffer(VkDevice device, BufferDesc desc, VkBuffer buffer, VkDeviceMemory memory)
-        : m_device(device), m_desc(desc), m_buffer(buffer), m_memory(memory)
+    VulkanBuffer(VkDevice device, BufferDesc desc, VkBuffer buffer, VulkanAllocation allocation)
+        : m_device(device), m_desc(desc), m_buffer(buffer), m_allocation(allocation)
     {
     }
 
@@ -237,10 +394,10 @@ public:
             vkDestroyBuffer(m_device, m_buffer, nullptr);
             m_buffer = VK_NULL_HANDLE;
         }
-        if (m_memory != VK_NULL_HANDLE)
+        if (m_allocation.memory != VK_NULL_HANDLE)
         {
-            vkFreeMemory(m_device, m_memory, nullptr);
-            m_memory = VK_NULL_HANDLE;
+            vkFreeMemory(m_device, m_allocation.memory, nullptr);
+            m_allocation.memory = VK_NULL_HANDLE;
         }
     }
 
@@ -253,7 +410,7 @@ public:
             return nullptr;
         }
         void* mapped = nullptr;
-        if (vkMapMemory(m_device, m_memory, 0, m_desc.size_bytes, 0, &mapped) != VK_SUCCESS)
+        if (vkMapMemory(m_device, m_allocation.memory, 0, m_desc.size_bytes, 0, &mapped) != VK_SUCCESS)
         {
             return nullptr;
         }
@@ -264,7 +421,7 @@ public:
     {
         if (m_desc.memory_usage != MemoryUsage::GpuOnly)
         {
-            vkUnmapMemory(m_device, m_memory);
+            vkUnmapMemory(m_device, m_allocation.memory);
         }
     }
 
@@ -274,7 +431,7 @@ private:
     VkDevice m_device = VK_NULL_HANDLE;
     BufferDesc m_desc{};
     VkBuffer m_buffer = VK_NULL_HANDLE;
-    VkDeviceMemory m_memory = VK_NULL_HANDLE;
+    VulkanAllocation m_allocation{};
 };
 
 class VulkanShaderModule final : public ShaderModule
@@ -681,7 +838,7 @@ public:
                  DeviceDesc desc, bool sync2_enabled, bool dynamic_rendering_enabled)
         : m_instance(instance), m_physical_device(physical_device), m_device(device),
           m_graphics_family_index(graphics_family_index), m_desc(std::move(desc)), m_sync2_enabled(sync2_enabled),
-          m_dynamic_rendering_enabled(dynamic_rendering_enabled)
+          m_dynamic_rendering_enabled(dynamic_rendering_enabled), m_allocator(physical_device, device)
     {
         vkGetDeviceQueue(m_device, m_graphics_family_index, 0, &m_graphics_queue_handle);
         m_graphics_queue = std::make_unique<VulkanQueue>(m_graphics_queue_handle, m_sync2_enabled);
@@ -918,52 +1075,54 @@ public:
 
     [[nodiscard]] std::unique_ptr<Buffer> create_buffer(const BufferDesc& desc) override
     {
-        VkBufferCreateInfo create_info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-        create_info.size = desc.size_bytes;
-        create_info.usage = to_vk_buffer_usage(desc.usage);
-        create_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
         VkBuffer buffer = VK_NULL_HANDLE;
-        if (!vk_ok(vkCreateBuffer(m_device, &create_info, nullptr, &buffer), "vkCreateBuffer"))
+        VulkanAllocation allocation;
+        if (!m_allocator.allocate_buffer(desc, buffer, allocation))
         {
             return nullptr;
         }
 
-        VkMemoryRequirements requirements{};
-        vkGetBufferMemoryRequirements(m_device, buffer, &requirements);
-        const crd::u32 memory_type_index = find_memory_type(m_physical_device, requirements.memoryTypeBits,
-                                                            to_vk_memory_properties(desc.memory_usage));
-        if (memory_type_index == UINT32_MAX)
-        {
-            CRD_LOG_ERROR(detail::g_log_rhi_vulkan, "No compatible Vulkan memory type for buffer allocation");
-            vkDestroyBuffer(m_device, buffer, nullptr);
-            return nullptr;
-        }
-
-        VkMemoryAllocateInfo alloc_info{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-        alloc_info.allocationSize = requirements.size;
-        alloc_info.memoryTypeIndex = memory_type_index;
-
-        VkDeviceMemory memory = VK_NULL_HANDLE;
-        if (!vk_ok(vkAllocateMemory(m_device, &alloc_info, nullptr, &memory), "vkAllocateMemory(buffer)"))
-        {
-            vkDestroyBuffer(m_device, buffer, nullptr);
-            return nullptr;
-        }
-        if (!vk_ok(vkBindBufferMemory(m_device, buffer, memory, 0), "vkBindBufferMemory"))
-        {
-            vkFreeMemory(m_device, memory, nullptr);
-            vkDestroyBuffer(m_device, buffer, nullptr);
-            return nullptr;
-        }
-
-        return std::make_unique<VulkanBuffer>(m_device, desc, buffer, memory);
+        return std::make_unique<VulkanBuffer>(m_device, desc, buffer, allocation);
     }
 
-    [[nodiscard]] std::unique_ptr<Image> create_image(const ImageDesc& /*desc*/) override
+    [[nodiscard]] std::unique_ptr<Image> create_image(const ImageDesc& desc) override
     {
-        CRD_LOG_WARN(detail::g_log_rhi_vulkan, "create_image not implemented in frame-sync slice");
-        return nullptr;
+        VkImage image = VK_NULL_HANDLE;
+        VulkanAllocation allocation;
+        if (!m_allocator.allocate_image(desc, image, allocation))
+        {
+            return nullptr;
+        }
+
+        VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+        if (desc.format == Format::D24UnormS8Uint)
+        {
+            aspect = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+        }
+        else if (desc.format == Format::D32Sfloat)
+        {
+            aspect = VK_IMAGE_ASPECT_DEPTH_BIT;
+        }
+
+        VkImageViewCreateInfo view_info{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        view_info.image = image;
+        view_info.viewType = desc.array_layers > 1 ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
+        view_info.format = to_vk_format(desc.format);
+        view_info.subresourceRange.aspectMask = aspect;
+        view_info.subresourceRange.baseMipLevel = 0;
+        view_info.subresourceRange.levelCount = desc.mip_levels;
+        view_info.subresourceRange.baseArrayLayer = 0;
+        view_info.subresourceRange.layerCount = desc.array_layers;
+
+        VkImageView view = VK_NULL_HANDLE;
+        if (!vk_ok(vkCreateImageView(m_device, &view_info, nullptr, &view), "vkCreateImageView(image)"))
+        {
+            m_allocator.destroy_allocation(allocation);
+            vkDestroyImage(m_device, image, nullptr);
+            return nullptr;
+        }
+
+        return std::make_unique<VulkanImage>(m_device, desc, image, view, allocation, true);
     }
 
     [[nodiscard]] std::unique_ptr<ShaderModule> create_shader_module(const ShaderModuleDesc& desc) override
@@ -1150,6 +1309,7 @@ private:
     DeviceDesc m_desc{};
     bool m_sync2_enabled = false;
     bool m_dynamic_rendering_enabled = false;
+    VulkanAllocator m_allocator;
     VkQueue m_graphics_queue_handle = VK_NULL_HANDLE;
     std::unique_ptr<VulkanQueue> m_graphics_queue{};
 };

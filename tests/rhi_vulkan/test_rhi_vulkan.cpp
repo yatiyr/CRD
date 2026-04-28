@@ -114,6 +114,19 @@ TEST_CASE("Vulkan command buffer and frame loop can execute a triangle frame", "
     auto vertex_buffer = device->create_buffer(
         {sizeof(vertices), crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex), crd::rhi::MemoryUsage::CpuToGpu});
     REQUIRE(vertex_buffer != nullptr);
+
+    auto gpu_only_buffer = device->create_buffer(
+        {sizeof(vertices), crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex), crd::rhi::MemoryUsage::GpuOnly});
+    REQUIRE(gpu_only_buffer != nullptr);
+    REQUIRE(gpu_only_buffer->map() == nullptr);
+
+    auto color_image = device->create_image(
+        {{128, 128},
+         crd::rhi::Format::B8G8R8A8Unorm,
+         crd::rhi::enum_bits(crd::rhi::ImageUsage::Sampled) | crd::rhi::enum_bits(crd::rhi::ImageUsage::TransferDst),
+         1,
+         1});
+    REQUIRE(color_image != nullptr);
     void* mapped = vertex_buffer->map();
     REQUIRE(mapped != nullptr);
     std::memcpy(mapped, vertices, sizeof(vertices));
