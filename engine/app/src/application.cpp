@@ -40,6 +40,22 @@ void Application::run()
     }
 }
 
+void Application::detach_layer(Layer* layer)
+{
+    layer->on_detach();
+    m_layer_stack.pop_layer(layer);
+}
+
+void Application::detach_all_layers()
+{
+    for (auto it = m_layer_stack.rbegin(); it != m_layer_stack.rend(); ++it)
+    {
+        (*it)->on_detach();
+    }
+
+    m_layer_stack.clear_all_layers();
+}
+
 bool Application::tick()
 {
     if (!m_valid || !m_running)
@@ -50,6 +66,10 @@ bool Application::tick()
     m_clock.tick();
     m_window->poll_input();
     m_context.poll_events();
+    for (Layer* layer : m_layer_stack)
+    {
+        layer->on_frame_begin();
+    }
     dispatch_platform_events();
 
     if (!m_running)

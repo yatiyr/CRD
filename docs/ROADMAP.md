@@ -26,8 +26,8 @@
 | 1.5   Application skeleton      | ✅ shipped       | `docs/phases/phase-1.5-app.md`           |
 | 1.6   Configuration substrate   | 🚧 active        | `docs/phases/phase-1.6-config.md` (1.6a shipped; consumers next) |
 | 2.0   RHI + Vulkan + triangle   | ✅ shipped (a–d) | `docs/phases/phase-2-graphics.md`        |
-| 2.1   ImGui debug overlay       | ⏳ next          | `docs/phases/phase-2-graphics.md`        |
-| 2.2   GPU memory + streaming    | ⏳               | `docs/phases/phase-2-graphics.md`        |
+| 2.1   ImGui debug overlay       | ✅ shipped       | `docs/phases/phase-2-graphics.md`        |
+| 2.2   GPU memory + streaming    | ⏳ next          | `docs/phases/phase-2-graphics.md`        |
 | 2.3   Shader system             | ⏳               | `docs/phases/phase-2-graphics.md`        |
 | 2.4   Renderer v1               | ⏳               | `docs/phases/phase-2-graphics.md`        |
 | 2.5   Jobs (threads + fibers)   | ⏳               | `docs/phases/phase-2-graphics.md`        |

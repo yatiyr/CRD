@@ -11,10 +11,10 @@
 
 ## Current focus
 
-**Phase 2.1 — ImGui debug overlay.** `crd-config` core (1.6a) shipped; now the
-overlay becomes its first real consumer.
+**Phase 2.2 — GPU memory + streaming.** ImGui debug overlay (2.1) shipped; the
+next graphics risk to reduce is allocator policy before renderer growth.
 
-Aktif phase dosyası: `docs/phases/phase-1.6-config.md`
+Aktif phase dosyası: `docs/phases/phase-2-graphics.md`
 
 ## Active detour
 
@@ -26,6 +26,22 @@ _none — running on the main roadmap._
 > `docs/detours/README.md`.
 
 ## Last shipped milestone
+
+**2026-04-28 — ImGui debug overlay shipped.**
+
+Debug-only Dear ImGui layer over `crd-app` + `crd-rhi-vulkan`, configured via
+`crd-config`. Docking on by default, multi-viewport off by default, theme and
+panel visibility from `runtime/configs/imgui_layer.toml`, and a real
+triangle+overlay smoke.
+
+Three-flavour green:
+- Debug: 210/210
+- Release: 209/209 (Debug-only stats test correctly skipped)
+- ASan: 210/210
+
+Detail: `docs/sessions/2026-04-28-imgui-debug-overlay.md`.
+
+## Previous shipped milestone
 
 **2026-04-28 — `crd-config` core shipped.**
 
@@ -59,18 +75,15 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Next up (next 1–3 sessions)
 
-1. **ImGui debug overlay (2.1).** Docking branch. Reads
-   `runtime/configs/imgui_layer.toml` via `crd-config`. Theme, panels,
-   debug toggles in TOML. ImGui's `imgui.ini` is NOT replaced.
-2. **GPU memory + streaming (2.2).** Allocator strategy stabilizes before
+1. **GPU memory + streaming (2.2).** Allocator strategy stabilizes before
    renderer widens.
-3. **`crd-config` 1.6b/1.6c.** Explicit reload hook and first real consumers
+2. **`crd-shader` / descriptor growth (2.3).** Grow from the now-proven
+   backend + overlay + triangle path.
+3. **`crd-config` 1.6b/1.6c.** Explicit reload hook and more real consumers
    after ImGui settles.
 
 ## Open questions
 
-- ImGui multi-viewport — gerek mi? Vulkan multi-viewport rough; default
-  single-viewport docking. Decide in 2.1 session.
 - `crd-config` hot-reload remains 1.6b unless ImGui integration proves it
   should move earlier.
 - Runtime scene binary format — FlatBuffers vs Cap'n Proto? Park for
@@ -78,9 +91,9 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Test counts (last quality pass)
 
-- Debug: 209/209
-- Release: 208/208
-- ASan: 209/209
+- Debug: 210/210
+- Release: 209/209
+- ASan: 210/210
 
 ## Pointers (lazy-load reference)
 
@@ -105,6 +118,7 @@ When in doubt, ASK before reading large files.
 
 ## Session log (rolling, last 5)
 
+- **2026-04-28** — ImGui debug overlay shipped.
 - **2026-04-28** — `crd-config` core shipped.
 - **2026-04-28** — First triangle through full RHI/Vulkan path.
 - **2026-04-27** — `crd-rhi-vulkan` bootstrap (instance/device/surface/swapchain).

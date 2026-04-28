@@ -183,8 +183,12 @@ VKAPI_ATTR VkBool32 VKAPI_CALL debug_callback(VkDebugUtilsMessageSeverityFlagBit
 struct FrameSync
 {
     VkSemaphore image_available = VK_NULL_HANDLE;
-    VkSemaphore render_finished = VK_NULL_HANDLE;
     VkFence in_flight = VK_NULL_HANDLE;
+};
+
+struct ImageSync
+{
+    VkSemaphore render_finished = VK_NULL_HANDLE;
 };
 
 class VulkanImage final : public Image
@@ -489,13 +493,17 @@ public:
             {
                 vkDestroySemaphore(m_device, frame.image_available, nullptr);
             }
-            if (frame.render_finished != VK_NULL_HANDLE)
-            {
-                vkDestroySemaphore(m_device, frame.render_finished, nullptr);
-            }
             if (frame.in_flight != VK_NULL_HANDLE)
             {
                 vkDestroyFence(m_device, frame.in_flight, nullptr);
+            }
+        }
+
+        for (auto& image_sync : m_image_sync_array)
+        {
+            if (image_sync.render_finished != VK_NULL_HANDLE)
+            {
+                vkDestroySemaphore(m_device, image_sync.render_finished, nullptr);
             }
         }
         if (m_swapchain != VK_NULL_HANDLE)
@@ -535,8 +543,10 @@ public:
     [[nodiscard]] crd::u32 current_image_index() const noexcept override { return m_current_image_index; }
     [[nodiscard]] Image& current_image() noexcept override { return *m_images[m_current_image_index]; }
     [[nodiscard]] VkSwapchainKHR handle() const noexcept { return m_swapchain; }
+    [[nodiscard]] crd::u32 image_count() const noexcept { return static_cast<crd::u32>(m_images.size()); }
 
     [[nodiscard]] FrameSync& current_frame_sync() noexcept { return m_frames[m_frame_index]; }
+    [[nodiscard]] ImageSync& current_image_sync() noexcept { return m_image_sync_array[m_current_image_index]; }
     [[nodiscard]] crd::u32 frame_index() const noexcept { return m_frame_index; }
     void advance_frame() noexcept { m_frame_index = (m_frame_index + 1u) % m_frames_in_flight; }
     [[nodiscard]] bool image_acquired() const noexcept { return m_image_acquired; }
@@ -556,12 +566,18 @@ private:
             {
                 return false;
             }
-            if (!vk_ok(vkCreateSemaphore(m_device, &semaphore_info, nullptr, &frame.render_finished),
-                       "vkCreateSemaphore(render_finished)"))
+            if (!vk_ok(vkCreateFence(m_device, &fence_info, nullptr, &frame.in_flight), "vkCreateFence"))
             {
                 return false;
             }
-            if (!vk_ok(vkCreateFence(m_device, &fence_info, nullptr, &frame.in_flight), "vkCreateFence"))
+        }
+
+        m_image_sync_array.resize(m_images.size());
+        for (auto& image_sync : m_image_sync_array)
+        {
+            VkSemaphoreCreateInfo semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+            if (!vk_ok(vkCreateSemaphore(m_device, &semaphore_info, nullptr, &image_sync.render_finished),
+                       "vkCreateSemaphore(render_finished)"))
             {
                 return false;
             }
@@ -574,6 +590,7 @@ private:
     SwapchainDesc m_desc{};
     crd::u32 m_frames_in_flight = 2;
     crd::containers::Array<FrameSync> m_frames{};
+    crd::containers::Array<ImageSync> m_image_sync_array{};
     crd::containers::Array<std::unique_ptr<VulkanImage>> m_images{};
     crd::u32 m_current_image_index = 0;
     crd::u32 m_frame_index = 0;
@@ -601,6 +618,7 @@ public:
         }
 
         FrameSync& frame = vk_swapchain->current_frame_sync();
+        ImageSync& image_sync = vk_swapchain->current_image_sync();
         VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
         VkSubmitInfo submit_info{VK_STRUCTURE_TYPE_SUBMIT_INFO};
         submit_info.waitSemaphoreCount = 1;
@@ -610,7 +628,7 @@ public:
         submit_info.commandBufferCount = 1;
         submit_info.pCommandBuffers = &handle;
         submit_info.signalSemaphoreCount = 1;
-        submit_info.pSignalSemaphores = &frame.render_finished;
+        submit_info.pSignalSemaphores = &image_sync.render_finished;
         return vk_ok(vkQueueSubmit(m_queue, 1, &submit_info, frame.in_flight), "vkQueueSubmit");
     }
 
@@ -623,12 +641,12 @@ public:
             return;
         }
 
-        FrameSync& frame = vk_swapchain->current_frame_sync();
+        ImageSync& image_sync = vk_swapchain->current_image_sync();
         VkSwapchainKHR swapchain_handle = vk_swapchain->handle();
 
         VkPresentInfoKHR present_info{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
         present_info.waitSemaphoreCount = 1;
-        present_info.pWaitSemaphores = &frame.render_finished;
+        present_info.pWaitSemaphores = &image_sync.render_finished;
         present_info.swapchainCount = 1;
         present_info.pSwapchains = &swapchain_handle;
         crd::u32 image_index = vk_swapchain->current_image_index();
@@ -695,6 +713,10 @@ public:
     }
 
     [[nodiscard]] BackendApi api() const noexcept override { return BackendApi::Vulkan; }
+    [[nodiscard]] VkPhysicalDevice physical_device() const noexcept { return m_physical_device; }
+    [[nodiscard]] VkDevice handle() const noexcept { return m_device; }
+    [[nodiscard]] VkQueue graphics_queue_handle() const noexcept { return m_graphics_queue_handle; }
+    [[nodiscard]] crd::u32 graphics_family_index() const noexcept { return m_graphics_family_index; }
 
     [[nodiscard]] std::unique_ptr<Swapchain> create_swapchain(const SwapchainDesc& desc) override
     {
@@ -1267,6 +1289,7 @@ public:
     }
 
     [[nodiscard]] BackendApi api() const noexcept override { return BackendApi::Vulkan; }
+    [[nodiscard]] VkInstance handle() const noexcept { return m_instance; }
 
     void enumerate_adapters(crd::containers::Array<AdapterInfo>& out) const override
     {
@@ -1430,5 +1453,104 @@ private:
 std::unique_ptr<Instance> create_vulkan_instance(const InstanceDesc& desc)
 {
     return std::make_unique<VulkanInstance>(desc);
+}
+
+namespace detail
+{
+VkInstance vulkan_instance_impl(Instance& instance) noexcept
+{
+    auto* vk = dynamic_cast<VulkanInstance*>(&instance);
+    CRD_ASSERT(vk != nullptr);
+    return vk->handle();
+}
+
+VkPhysicalDevice vulkan_physical_device_impl(Device& device) noexcept
+{
+    auto* vk = dynamic_cast<VulkanDevice*>(&device);
+    CRD_ASSERT(vk != nullptr);
+    return vk->physical_device();
+}
+
+VkDevice vulkan_device_impl(Device& device) noexcept
+{
+    auto* vk = dynamic_cast<VulkanDevice*>(&device);
+    CRD_ASSERT(vk != nullptr);
+    return vk->handle();
+}
+
+VkQueue vulkan_graphics_queue_impl(Device& device) noexcept
+{
+    auto* vk = dynamic_cast<VulkanDevice*>(&device);
+    CRD_ASSERT(vk != nullptr);
+    return vk->graphics_queue_handle();
+}
+
+crd::u32 vulkan_graphics_queue_family_index_impl(Device& device) noexcept
+{
+    auto* vk = dynamic_cast<VulkanDevice*>(&device);
+    CRD_ASSERT(vk != nullptr);
+    return vk->graphics_family_index();
+}
+
+VkCommandBuffer vulkan_command_buffer_impl(CommandBuffer& command_buffer) noexcept
+{
+    auto* vk = dynamic_cast<VulkanCommandBuffer*>(&command_buffer);
+    CRD_ASSERT(vk != nullptr);
+    return vk->handle();
+}
+
+VkFormat vulkan_swapchain_color_format_impl(Swapchain& swapchain) noexcept
+{
+    auto* vk = dynamic_cast<VulkanSwapchain*>(&swapchain);
+    CRD_ASSERT(vk != nullptr);
+    return to_vk_format(vk->desc().color_format);
+}
+
+crd::u32 vulkan_swapchain_image_count_impl(Swapchain& swapchain) noexcept
+{
+    auto* vk = dynamic_cast<VulkanSwapchain*>(&swapchain);
+    CRD_ASSERT(vk != nullptr);
+    return vk->image_count();
+}
+} // namespace detail
+
+VkInstance vulkan_instance(Instance& instance) noexcept
+{
+    return detail::vulkan_instance_impl(instance);
+}
+
+VkPhysicalDevice vulkan_physical_device(Device& device) noexcept
+{
+    return detail::vulkan_physical_device_impl(device);
+}
+
+VkDevice vulkan_device(Device& device) noexcept
+{
+    return detail::vulkan_device_impl(device);
+}
+
+VkQueue vulkan_graphics_queue(Device& device) noexcept
+{
+    return detail::vulkan_graphics_queue_impl(device);
+}
+
+crd::u32 vulkan_graphics_queue_family_index(Device& device) noexcept
+{
+    return detail::vulkan_graphics_queue_family_index_impl(device);
+}
+
+VkCommandBuffer vulkan_command_buffer(CommandBuffer& command_buffer) noexcept
+{
+    return detail::vulkan_command_buffer_impl(command_buffer);
+}
+
+VkFormat vulkan_swapchain_color_format(Swapchain& swapchain) noexcept
+{
+    return detail::vulkan_swapchain_color_format_impl(swapchain);
+}
+
+crd::u32 vulkan_swapchain_image_count(Swapchain& swapchain) noexcept
+{
+    return detail::vulkan_swapchain_image_count_impl(swapchain);
 }
 } // namespace crd::rhi

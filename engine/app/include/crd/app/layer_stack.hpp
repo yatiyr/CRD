@@ -15,6 +15,7 @@ public:
     using reverse_iterator = std::reverse_iterator<iterator>;
     using const_reverse_iterator = std::reverse_iterator<const_iterator>;
 
+    void clear_all_layers();
     void push_layer(Layer* layer);
     void push_overlay(Layer* overlay);
     void pop_layer(Layer* layer);

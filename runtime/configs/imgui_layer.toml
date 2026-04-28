@@ -1,0 +1,9 @@
+[imgui]
+docking = true
+multi_viewport = false
+show_demo_window = true
+show_metrics_window = false
+show_stats_panel = true
+
+[imgui.theme]
+preset = "dark"

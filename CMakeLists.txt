@@ -128,6 +128,7 @@ if(TARGET glfw)
 endif()
 
 CPMAddPackage("gh:marzer/tomlplusplus@3.4.0")
+CPMAddPackage("gh:ocornut/imgui#v1.92.0-docking")
 
 # ----- Helper: auto-collect sources with CONFIGURE_DEPENDS -----------------
 
@@ -193,6 +194,7 @@ add_subdirectory(engine/log)
 add_subdirectory(engine/platform)
 add_subdirectory(engine/app)
 add_subdirectory(engine/config)
+add_subdirectory(engine/imgui)
 add_subdirectory(engine/rhi)
 add_subdirectory(engine/rhi-vulkan)
 # add_subdirectory(engine/graphics)

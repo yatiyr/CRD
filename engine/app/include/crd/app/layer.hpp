@@ -13,6 +13,7 @@ public:
 
     virtual void on_attach() {}
     virtual void on_detach() {}
+    virtual void on_frame_begin() {}
     virtual void on_update(crd::f64 /*delta_seconds*/) {}
     virtual void on_render() {}
     virtual void on_event(Event& /*event*/) {}

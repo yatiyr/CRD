@@ -108,6 +108,44 @@ target_link_libraries(smoke_app PRIVATE
 )
 crd_enable_default_pch(smoke_app)
 
+add_executable(smoke_imgui_overlay
+    examples/smoke_imgui_overlay.cpp
+)
+
+add_dependencies(smoke_imgui_overlay smoke_rhi_vulkan_shaders)
+
+set(SMOKE_IMGUI_CONFIGS
+    "${CMAKE_SOURCE_DIR}/runtime/configs/imgui_layer.toml"
+)
+
+set(SMOKE_IMGUI_CONFIG_OUTPUTS)
+foreach(config_file IN LISTS SMOKE_IMGUI_CONFIGS)
+    get_filename_component(config_name "${config_file}" NAME)
+    set(config_copy "${CMAKE_CURRENT_BINARY_DIR}/configs/${config_name}")
+    add_custom_command(
+        OUTPUT "${config_copy}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/configs"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${config_file}" "${config_copy}"
+        DEPENDS "${config_file}"
+        VERBATIM
+    )
+    list(APPEND SMOKE_IMGUI_CONFIG_OUTPUTS "${config_copy}")
+endforeach()
+
+add_custom_target(smoke_imgui_configs DEPENDS ${SMOKE_IMGUI_CONFIG_OUTPUTS})
+add_dependencies(smoke_imgui_overlay smoke_imgui_configs)
+
+target_link_libraries(smoke_imgui_overlay PRIVATE
+    crd-core
+    crd-log
+    crd-app
+    crd-config
+    crd-imgui
+    crd-rhi
+    crd-rhi-vulkan
+)
+crd_enable_default_pch(smoke_imgui_overlay)
+
 add_executable(smoke_rhi_api
     examples/smoke_rhi_api.cpp
 )

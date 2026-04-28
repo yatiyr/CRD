@@ -17,6 +17,11 @@ namespace
 }
 } // namespace
 
+void LayerStack::clear_all_layers()
+{
+    m_layers.clear();
+}
+
 void LayerStack::push_layer(Layer* layer)
 {
     m_layers.insert(m_overlay_insert_index, layer);

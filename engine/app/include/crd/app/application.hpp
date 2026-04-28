@@ -29,7 +29,8 @@ public:
     void run();
     [[nodiscard]] bool tick();
     void close() noexcept;
-
+    void detach_layer(Layer* layer);
+    void detach_all_layers();
     void push_layer(std::unique_ptr<Layer> layer);
     void push_overlay(std::unique_ptr<Layer> overlay);
 

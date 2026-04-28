@@ -80,6 +80,9 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 - ADR-0020 — Scene & ECS hybrid + UI in scene tree
 - ADR-0023 — UI architecture
 
+### `[imgui]` `[vulkan]`
+- ADR-0024 — ImGui single-viewport default
+
 ## All ADRs (chronological)
 
 | ID    | Title                                          | Tags                              | Status   |
@@ -107,3 +110,4 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 | 0021  | Animation architecture                         | animation, arch                   | Accepted |
 | 0022  | Open-world streaming pipeline                  | memory, resources                 | Accepted |
 | 0023  | UI architecture                                | ui, node-editor, arch             | Accepted |
+| 0024  | ImGui single-viewport default                  | imgui, ui, vulkan                 | Accepted |
