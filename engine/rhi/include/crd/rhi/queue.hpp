@@ -10,7 +10,7 @@ class Queue
 public:
     virtual ~Queue() = default;
 
-    virtual void submit(CommandBuffer& command_buffer) = 0;
+    virtual bool submit(CommandBuffer& command_buffer, Swapchain& swapchain) = 0;
     virtual void present(Swapchain& swapchain) = 0;
     virtual void wait_idle() = 0;
 };

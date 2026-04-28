@@ -18,8 +18,8 @@
 | `crd-math`       | ✅      | 1     | float+double, scalar-first, column-major, radians           |
 | `crd-platform`   | ✅      | 1     | window, timer, input, filesystem, dynlib, threading baseline all shipped. |
 | `crd-app`        | ✅      | 1.5   | Application, LayerStack, propagated events, sync typed EventBus shipped. |
-| `crd-rhi`        | 🚧      | 2.0   | v1a interface scaffold + v1b Vulkan bootstrap shipped. Command buffers/sync next. |
-| `crd-rhi-vulkan` | 🚧      | 2.1   | Vulkan instance/device/surface/swapchain bootstrap shipped   |
+| `crd-rhi`        | 🚧      | 2.0   | v1a interface scaffold, v1b Vulkan bootstrap, v1c frame execution shipped. First triangle next. |
+| `crd-rhi-vulkan` | 🚧      | 2.1   | Vulkan instance/device/surface/swapchain + command submission path shipped |
 | `crd-renderer`   | ⏳      | 2.5   | high-level rendering: camera, renderables, lighting, materials |
 | `crd-jobs`       | ⏳      | 2.7   | job system; pulled forward to feed async I/O + GPU recording |
 | GPU memory + streaming | ⏳ | 2.5   | TLSF, BuddyAllocator, StreamingAllocator, GPUAllocator       |
@@ -851,34 +851,35 @@ allocator interface correctly today (Phase A) makes 2–5 a drop-in addition.
 > Update this section at the end of every session so future-you can re-enter
 > the project without thinking.
 
-**Last session:** 2026-04-28 — `crd-rhi-vulkan` bootstrap.
-See `docs/sessions/2026-04-28-rhi-vulkan-bootstrap.md`.
+**Last session:** 2026-04-28 — `crd-rhi-vulkan` frame execution slice.
+See `docs/sessions/2026-04-28-rhi-vulkan-frame-sync.md`.
 
 What landed:
 
-1. **`crd-rhi-vulkan` bootstrap shipped** on top of the already-landed
-   `crd-rhi` interface layer: Vulkan instance, adapter enumeration, logical
-   device, surface creation, and swapchain bootstrap.
-2. **The backend is connected to real windows now.** Invisible-window tests
-   create an actual Vulkan swapchain through `Window::native_handle()`.
-3. **The backend stayed professionally narrow.** No premature pipeline,
-   shader-module, synchronization, or allocation-policy work was forced into
-   the bootstrap slice.
-4. **Failure handling was tightened for release builds.** The Vulkan path now
-   logs and returns `nullptr`/empty results on failure instead of relying only
-   on debug-only asserts.
-5. **The verification matrix stayed green after introducing the real backend:**
-   - Debug: `202/202`
-   - Release: `201/201`
-   - ASan: `202/202`
+1. **`crd-rhi-vulkan` now has a real per-frame execution path** on top of the
+   already-landed bootstrap: command pool, command buffers, frame sync,
+   acquire, submit, and present.
+2. **A clear-only frame can now be recorded and submitted** through the real
+   backend; first triangle is the next vertical slice, not the first time a
+   command buffer touches the GPU.
+3. **Dynamic rendering is already the chosen minimal rendering path.** That
+   keeps the backend aligned with the intended lightweight triangle milestone.
+4. **Pragmatism won over forced modernity for this exact slice.** sync2 support
+   is detected, but the shipped execution path uses classic submit/barrier
+   flow because it is currently the most stable path across release testing.
+5. **The verification matrix stayed green after introducing the execution
+   path:**
+   - Debug: `203/203`
+   - Release: `202/202`
+   - ASan: `203/203`
 
 Current test counts:
 
-- Debug: `202/202`
-- Release: `201/201` (Debug-only stats test correctly skipped)
-- ASan: `202/202`
+- Debug: `203/203`
+- Release: `202/202` (Debug-only stats test correctly skipped)
+- ASan: `203/203`
 
-**Next session starts with: command buffers + frame synchronization.**
+**Next session starts with: pipelines + shader modules + first triangle.**
 
 One small optional cleanup from closeout still exists:
 
@@ -889,12 +890,11 @@ One small optional cleanup from closeout still exists:
 
 The concrete short-path from here is now:
 
-1. command pools + command buffers + per-frame sync
-2. `VK_KHR_synchronization2` as the default sync model if supported
-3. stable acquire/present loop
-4. dynamic-rendering-first triangle
+1. minimal shader-module path
+2. minimal graphics pipeline creation
+3. vertex buffer upload path
+4. first triangle through dynamic rendering
 5. then GPU allocation strategy and shader path growth
 
-Roughly 1–3 sessions from here to "first triangle on screen": one small
-benchmark cleanup if desired, then command buffers/sync and the
-first-triangle milestone.
+Roughly 1–2 sessions from here to "first triangle on screen": one small
+benchmark cleanup if desired, then the pipeline/shader/triangle milestone.

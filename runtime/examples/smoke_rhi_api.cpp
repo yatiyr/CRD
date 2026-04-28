@@ -86,7 +86,11 @@ public:
     {
     }
     [[nodiscard]] const crd::rhi::SwapchainDesc& desc() const noexcept override { return m_desc; }
-    void acquire_next_image() override { CRD_LOG_INFO(g_log_smoke_rhi, "acquire_next_image"); }
+    [[nodiscard]] bool acquire_next_image() override
+    {
+        CRD_LOG_INFO(g_log_smoke_rhi, "acquire_next_image");
+        return true;
+    }
     [[nodiscard]] crd::u32 current_image_index() const noexcept override { return 0; }
     [[nodiscard]] crd::rhi::Image& current_image() noexcept override { return m_image; }
 
@@ -98,7 +102,11 @@ private:
 class SmokeQueue final : public crd::rhi::Queue
 {
 public:
-    void submit(crd::rhi::CommandBuffer& /*command_buffer*/) override { CRD_LOG_INFO(g_log_smoke_rhi, "queue submit"); }
+    [[nodiscard]] bool submit(crd::rhi::CommandBuffer& /*command_buffer*/, crd::rhi::Swapchain& /*swapchain*/) override
+    {
+        CRD_LOG_INFO(g_log_smoke_rhi, "queue submit");
+        return true;
+    }
     void present(crd::rhi::Swapchain& /*swapchain*/) override { CRD_LOG_INFO(g_log_smoke_rhi, "queue present"); }
     void wait_idle() override { CRD_LOG_INFO(g_log_smoke_rhi, "queue wait_idle"); }
 };
@@ -165,8 +173,11 @@ int main()
                                                      crd::rhi::Format::B8G8R8A8Unorm, crd::rhi::Format::Undefined,
                                                      crd::containers::make_span(&binding, 1),
                                                      crd::containers::make_span(attrs), false, false});
+    auto swapchain = device.create_swapchain(
+        {nullptr, {1280, 720}, crd::rhi::Format::B8G8R8A8Unorm, crd::rhi::PresentMode::Fifo, 2});
     auto cb = device.create_command_buffer();
 
+    (void)swapchain->acquire_next_image();
     cb->begin();
     cb->begin_rendering(
         {{1280, 720}, {nullptr, crd::rhi::LoadOp::Clear, crd::rhi::StoreOp::Store, {0.1f, 0.1f, 0.2f, 1.0f}}, nullptr});
@@ -175,7 +186,8 @@ int main()
     cb->draw(3, 0);
     cb->end_rendering();
     cb->end();
-    device.graphics_queue().submit(*cb);
+    device.graphics_queue().submit(*cb, *swapchain);
+    device.graphics_queue().present(*swapchain);
 
     crd::log::flush();
     crd::log::shutdown();

@@ -11,7 +11,7 @@ with Vulkan) implement and that higher-level rendering code builds on.
 | --- | --- | --- |
 | v1a | types, descriptors, abstract interfaces, fake-backend tests, smoke | ✅ |
 | v1b | Vulkan backend bootstrap in `crd-rhi-vulkan` | ✅ |
-| v1c | command buffers + frame sync | ⏳ |
+| v1c | command buffers + frame sync | ✅ |
 | v1d | pipeline + first triangle | ⏳ |
 
 ## Core decisions
@@ -76,6 +76,27 @@ with Vulkan) implement and that higher-level rendering code builds on.
   - instance enumerates at least one adapter
   - device bootstrap creates a swapchain for an invisible window
 
+## What ships today (v1c — frame execution path)
+
+- real Vulkan command-pool creation on the device
+- real command-buffer allocation / reset / begin / end
+- swapchain-owned per-frame synchronization objects
+  - image-available semaphore
+  - render-finished semaphore
+  - in-flight fence
+- acquire / submit / present loop through the real Vulkan queue path
+- clear-only dynamic-rendering frame path
+- backend tests now prove:
+  - bootstrap + swapchain creation
+  - command buffer + acquire + submit + wait-idle clear-only frame path
+- `smoke_rhi_vulkan_bootstrap` now exercises a bounded real per-frame loop
+
+Important nuance:
+
+- sync2 support is detected and kept in mind architecturally, but the shipped
+  execution path uses the classic barrier / submit flow in this slice because
+  it proved more stable across the current release-path testing.
+
 Bootstrap intentionally stops short of higher-level GPU work:
 
 - no command-buffer recording path yet
@@ -85,12 +106,23 @@ Bootstrap intentionally stops short of higher-level GPU work:
 
 ## How to use it (today)
 
-At v1a/v1b, the low-level flow now has a real backend entrypoint:
+At v1a/v1b/v1c, the low-level flow now has a real backend entrypoint and a
+real frame path:
 
 ```cpp
 auto instance = crd::rhi::create_vulkan_instance({});
 auto device = instance->create_device(device_desc);
 auto swapchain = device->create_swapchain(swapchain_desc);
+auto command_buffer = device->create_command_buffer();
+
+swapchain->acquire_next_image();
+command_buffer->begin();
+command_buffer->begin_rendering(rendering_info);
+command_buffer->end_rendering();
+command_buffer->end();
+
+device->graphics_queue().submit(*command_buffer, *swapchain);
+device->graphics_queue().present(*swapchain);
 ```
 
 The full first-triangle path is still the intended end-state:
@@ -118,8 +150,8 @@ device->graphics_queue().present(*swapchain);
 
 ## Long-term direction
 
-- Vulkan bootstrap is now in place. Next slice is command-buffer and frame-
-  synchronization work on top of a real backend.
-- Only after that path is proven do we climb into pipelines, shader modules,
-  and the first triangle on a real GPU.
+- Vulkan bootstrap and frame execution are now in place. Next slice is
+  pipelines + shader modules + the first triangle.
+- Only after that path is proven do we climb further into higher-level
+  renderer concerns.
 - High-level rendering (`crd-renderer`) stays above this layer.

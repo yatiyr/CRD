@@ -37,21 +37,71 @@ int main()
         CRD_LOG_INFO(g_log_smoke_rhi_vk, "Adapter: {}", adapter.name.c_str());
     }
 
-    auto device = instance->create_device({});
+    crd::rhi::DeviceDesc device_desc;
+    auto device = instance->create_device(device_desc);
     auto swapchain = device->create_swapchain(
         {window.native_handle(), {1280, 720}, crd::rhi::Format::B8G8R8A8Unorm, crd::rhi::PresentMode::Fifo, 2});
+    crd::containers::Array<std::unique_ptr<crd::rhi::CommandBuffer>> command_buffers;
+    for (crd::u32 i = 0; i < device_desc.frames_in_flight; ++i)
+    {
+        command_buffers.push_back(device->create_command_buffer());
+    }
+
+    if (swapchain == nullptr || command_buffers.size() != device_desc.frames_in_flight)
+    {
+        CRD_LOG_ERROR(g_log_smoke_rhi_vk, "Frame path bootstrap failed");
+        return 3;
+    }
+    for (const auto& command_buffer : command_buffers)
+    {
+        if (command_buffer == nullptr)
+        {
+            CRD_LOG_ERROR(g_log_smoke_rhi_vk, "Command buffer allocation failed");
+            return 3;
+        }
+    }
+
     CRD_LOG_INFO(g_log_smoke_rhi_vk, "Swapchain bootstrap OK: {}x{}", swapchain->desc().extent.width,
                  swapchain->desc().extent.height);
 
+    crd::u32 frame_count = 0;
     while (!window.should_close())
     {
         window.poll_input();
         context.poll_events();
+
+        if (swapchain->acquire_next_image())
+        {
+            auto& command_buffer = command_buffers[frame_count % command_buffers.size()];
+            command_buffer->begin();
+            command_buffer->begin_rendering({{swapchain->desc().extent.width, swapchain->desc().extent.height},
+                                             {&swapchain->current_image(),
+                                              crd::rhi::LoadOp::Clear,
+                                              crd::rhi::StoreOp::Store,
+                                              {0.07f, 0.08f, 0.12f, 1.0f}},
+                                             nullptr});
+            command_buffer->end_rendering();
+            command_buffer->end();
+            if (device->graphics_queue().submit(*command_buffer, *swapchain))
+            {
+                device->graphics_queue().present(*swapchain);
+            }
+        }
+
+        ++frame_count;
+        if (frame_count >= 120)
+        {
+            CRD_LOG_INFO(g_log_smoke_rhi_vk, "Smoke complete after {} frames", frame_count);
+            window.request_close();
+        }
+
         if (window.input().state().was_key_pressed(crd::platform::Key::Escape))
         {
             window.request_close();
         }
     }
+
+    device->wait_idle();
 
     crd::log::flush();
     crd::log::shutdown();

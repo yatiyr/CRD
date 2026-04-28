@@ -100,7 +100,11 @@ public:
     }
 
     [[nodiscard]] const crd::rhi::SwapchainDesc& desc() const noexcept override { return m_desc; }
-    void acquire_next_image() override { ++acquire_count; }
+    [[nodiscard]] bool acquire_next_image() override
+    {
+        ++acquire_count;
+        return true;
+    }
     [[nodiscard]] crd::u32 current_image_index() const noexcept override { return 0; }
     [[nodiscard]] crd::rhi::Image& current_image() noexcept override { return m_image; }
 
@@ -114,7 +118,11 @@ private:
 class FakeQueue final : public crd::rhi::Queue
 {
 public:
-    void submit(crd::rhi::CommandBuffer& /*command_buffer*/) override { ++submit_count; }
+    [[nodiscard]] bool submit(crd::rhi::CommandBuffer& /*command_buffer*/, crd::rhi::Swapchain& /*swapchain*/) override
+    {
+        ++submit_count;
+        return true;
+    }
     void present(crd::rhi::Swapchain& /*swapchain*/) override { ++present_count; }
     void wait_idle() override { ++wait_idle_count; }
 
@@ -241,6 +249,10 @@ TEST_CASE("RHI device can express the first-triangle resource flow", "[rhi][devi
 
     auto command_buffer = device.create_command_buffer();
     auto* cb = static_cast<FakeCommandBuffer*>(command_buffer.get());
+    auto swapchain = device.create_swapchain(
+        {nullptr, {1280, 720}, crd::rhi::Format::B8G8R8A8Unorm, crd::rhi::PresentMode::Fifo, 2});
+    REQUIRE(swapchain != nullptr);
+    REQUIRE(swapchain->acquire_next_image());
 
     command_buffer->begin();
     command_buffer->begin_rendering(
@@ -251,7 +263,8 @@ TEST_CASE("RHI device can express the first-triangle resource flow", "[rhi][devi
     command_buffer->end_rendering();
     command_buffer->end();
 
-    device.graphics_queue().submit(*command_buffer);
+    REQUIRE(device.graphics_queue().submit(*command_buffer, *swapchain));
+    device.graphics_queue().present(*swapchain);
 
     REQUIRE(device.create_shader_module_count == 2);
     REQUIRE(device.create_buffer_count == 1);
@@ -264,4 +277,5 @@ TEST_CASE("RHI device can express the first-triangle resource flow", "[rhi][devi
     REQUIRE(cb->draw_count == 1);
     REQUIRE(cb->last_vertex_count == 3u);
     REQUIRE(device.m_queue.submit_count == 1);
+    REQUIRE(device.m_queue.present_count == 1);
 }
