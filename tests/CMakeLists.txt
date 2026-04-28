@@ -9,6 +9,7 @@ add_subdirectory(containers)
 add_subdirectory(platform)
 add_subdirectory(app)
 add_subdirectory(rhi)
+add_subdirectory(rhi_vulkan)
 
 if(CRD_BUILD_BENCHMARKS)
     add_subdirectory(bench)

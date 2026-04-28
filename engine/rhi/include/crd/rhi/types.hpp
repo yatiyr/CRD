@@ -159,8 +159,13 @@ struct AdapterInfo
 
 struct DeviceDesc
 {
-    crd::containers::String application_name{"Cerid"};
     crd::u32 frames_in_flight = 2;
+    crd::u32 preferred_adapter_index = 0;
+};
+
+struct InstanceDesc
+{
+    crd::containers::String application_name{"Cerid"};
     bool enable_validation = true;
 };
 

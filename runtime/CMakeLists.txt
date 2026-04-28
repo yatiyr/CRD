@@ -107,3 +107,16 @@ target_link_libraries(smoke_rhi_api PRIVATE
     crd-rhi
 )
 crd_enable_default_pch(smoke_rhi_api)
+
+add_executable(smoke_rhi_vulkan_bootstrap
+    examples/smoke_rhi_vulkan_bootstrap.cpp
+)
+
+target_link_libraries(smoke_rhi_vulkan_bootstrap PRIVATE
+    crd-core
+    crd-log
+    crd-platform
+    crd-rhi
+    crd-rhi-vulkan
+)
+crd_enable_default_pch(smoke_rhi_vulkan_bootstrap)

@@ -50,6 +50,7 @@ A modern C++20 game/simulation engine.
 | `crd-platform`   | ✅      |
 | `crd-app`        | ✅      |
 | `crd-rhi`        | 🚧      |
+| `crd-rhi-vulkan` | 🚧      |
 
 Full status table and reasoning live in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
@@ -73,7 +74,9 @@ Full status table and reasoning live in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 - `crd-rhi`: depends on `crd-core`, `crd-platform`, `crd-memory`. Ships the
   low-level API-agnostic GPU interface only; no backend types leak into the
   public surface.
-- `crd-rhi-vulkan`: planned dependency target is `crd-rhi`, `crd-platform`, `crd-log`
+- `crd-rhi-vulkan`: depends on `crd-rhi`, `crd-platform`, `crd-log`. Owns the
+  Vulkan instance/device/surface/swapchain bootstrap and keeps all `Vk*`
+  details out of the `crd-rhi` public API.
 - `crd-renderer`: planned dependency target is `crd-rhi`, `crd-math`, `crd-memory`, `crd-resources`
 
 ## Where to look

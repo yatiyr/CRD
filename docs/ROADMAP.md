@@ -18,8 +18,8 @@
 | `crd-math`       | ✅      | 1     | float+double, scalar-first, column-major, radians           |
 | `crd-platform`   | ✅      | 1     | window, timer, input, filesystem, dynlib, threading baseline all shipped. |
 | `crd-app`        | ✅      | 1.5   | Application, LayerStack, propagated events, sync typed EventBus shipped. |
-| `crd-rhi`        | 🚧      | 2.0   | v1a interface scaffold shipped. Vulkan backend and real GPU work next. |
-| `crd-rhi-vulkan` | ⏳      | 2.1   | Vulkan-only backend implementation behind `crd-rhi`          |
+| `crd-rhi`        | 🚧      | 2.0   | v1a interface scaffold + v1b Vulkan bootstrap shipped. Command buffers/sync next. |
+| `crd-rhi-vulkan` | 🚧      | 2.1   | Vulkan instance/device/surface/swapchain bootstrap shipped   |
 | `crd-renderer`   | ⏳      | 2.5   | high-level rendering: camera, renderables, lighting, materials |
 | `crd-jobs`       | ⏳      | 2.7   | job system; pulled forward to feed async I/O + GPU recording |
 | GPU memory + streaming | ⏳ | 2.5   | TLSF, BuddyAllocator, StreamingAllocator, GPUAllocator       |
@@ -764,6 +764,25 @@ everything between here and the first rendered scene. Decisions:
   - `win-release`: 199/199 (Debug-only stats test correctly skipped)
   - `win-asan`: 200/200, no leaks, no UAF, no OOB
 
+### 2026-04 — `crd-rhi-vulkan` bootstrap shipped
+
+- **Vulkan is now connected to the real platform window path.** The backend
+  creates a Vulkan instance, enumerates adapters, creates a logical device,
+  creates a surface from `Window::native_handle()`, and bootstraps a
+  swapchain.
+- **Public `crd-rhi` stayed clean.** The backend entrypoint returns an
+  `rhi::Instance`; no `Vk*` type leaks through the public headers.
+- **Bootstrap is intentionally narrower than a rendering backend.** Real
+  command-buffer recording, synchronization, shader modules, pipelines,
+  and buffer/image allocation policy remain later slices.
+- **Release-safety mattered here.** The initial assert-only Vulkan path was
+  tightened into runtime-checked control flow so failure cases return
+  `nullptr` / empty results instead of relying on debug-only asserts.
+- Quality pass at session end:
+  - `win-debug`: 202/202 tests pass
+  - `win-release`: 201/201 (Debug-only stats test correctly skipped)
+  - `win-asan`: 202/202, no leaks, no UAF, no OOB
+
 ### 2026-04 — `crd-app` shipped (layer stack + propagated events + sync bus)
 
 - **`crd-app` is not a pure Hazel clone.** Cerid keeps Hazel-style
@@ -832,34 +851,34 @@ allocator interface correctly today (Phase A) makes 2–5 a drop-in addition.
 > Update this section at the end of every session so future-you can re-enter
 > the project without thinking.
 
-**Last session:** 2026-04-27 — `crd-rhi` v1a (interface scaffold).
-See `docs/sessions/2026-04-27-rhi-v1a-interface-scaffold.md`.
+**Last session:** 2026-04-28 — `crd-rhi-vulkan` bootstrap.
+See `docs/sessions/2026-04-28-rhi-vulkan-bootstrap.md`.
 
 What landed:
 
-1. **`crd-rhi` v1a shipped** as a real module: backend-agnostic GPU types,
-   descriptors, and abstract interfaces for the first-triangle path.
-2. **No backend code exists yet.** Vulkan is still the next session in the
-   roadmap (`crd-rhi-vulkan` bootstrap), but the public interface surface is
-   now locked enough to build against.
-3. **Fake-backend tests prove the intended usage path**: create device,
-   create swapchain/buffer/shader modules/pipeline/command buffer, begin,
-   bind, draw, submit.
-4. **The verification matrix stayed green after introducing the new module:**
-   - Debug: `200/200`
-   - Release: `199/199`
-   - ASan: `200/200`
-5. **The benchmark issue from closeout remains visible but non-blocking.**
-   It still affects the disabled-trace microbenchmark only; it does not block
-   the RHI/Vulkan track.
+1. **`crd-rhi-vulkan` bootstrap shipped** on top of the already-landed
+   `crd-rhi` interface layer: Vulkan instance, adapter enumeration, logical
+   device, surface creation, and swapchain bootstrap.
+2. **The backend is connected to real windows now.** Invisible-window tests
+   create an actual Vulkan swapchain through `Window::native_handle()`.
+3. **The backend stayed professionally narrow.** No premature pipeline,
+   shader-module, synchronization, or allocation-policy work was forced into
+   the bootstrap slice.
+4. **Failure handling was tightened for release builds.** The Vulkan path now
+   logs and returns `nullptr`/empty results on failure instead of relying only
+   on debug-only asserts.
+5. **The verification matrix stayed green after introducing the real backend:**
+   - Debug: `202/202`
+   - Release: `201/201`
+   - ASan: `202/202`
 
 Current test counts:
 
-- Debug: `200/200`
-- Release: `199/199` (Debug-only stats test correctly skipped)
-- ASan: `200/200`
+- Debug: `202/202`
+- Release: `201/201` (Debug-only stats test correctly skipped)
+- ASan: `202/202`
 
-**Next session starts with: `crd-rhi-vulkan` bootstrap.**
+**Next session starts with: command buffers + frame synchronization.**
 
 One small optional cleanup from closeout still exists:
 
@@ -868,6 +887,6 @@ One small optional cleanup from closeout still exists:
 2. Refresh `docs/bench/baseline_2026-04.md` only after that microbenchmark is
    stable.
 
-Roughly 2–4 sessions from here to "first triangle on screen": one small
-benchmark cleanup if desired, then Vulkan backend bootstrap,
-command buffers/sync, and the first-triangle milestone.
+Roughly 1–3 sessions from here to "first triangle on screen": one small
+benchmark cleanup if desired, then command buffers/sync and the
+first-triangle milestone.
