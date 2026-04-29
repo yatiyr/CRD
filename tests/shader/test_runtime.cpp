@@ -103,6 +103,46 @@ TEST_CASE("Shader runtime reports GLSL compile failures non-fatally", "[shader]"
     REQUIRE_FALSE(diagnostics.message.empty());
 }
 
+TEST_CASE("Shader runtime consumes reflection metadata from compiled modules", "[shader]")
+{
+    auto runtime = crd::shader::create_runtime();
+
+    crd::shader::EffectDesc desc;
+    desc.name = crd::containers::String("reflect");
+    desc.frontend_modules.push_back({source_path("runtime/examples/shaders/reflect_triangle.vert"),
+                                     crd::shader::Stage::Vertex, crd::containers::String("main")});
+    desc.frontend_modules.push_back({source_path("runtime/examples/shaders/reflect_triangle.frag"),
+                                     crd::shader::Stage::Fragment, crd::containers::String("main")});
+    const auto effect_handle = runtime->create_effect(desc);
+
+    crd::shader::CompileDiagnostics diagnostics;
+    crd::shader::VariantCompileRequest request;
+    request.effect = effect_handle;
+    request.variant.pass_type = crd::shader::PassType::MainColor;
+
+    const auto variant = runtime->request_variant(request, diagnostics);
+    REQUIRE(variant.is_valid());
+    REQUIRE(diagnostics.succeeded);
+
+    const auto* effect = runtime->find_effect(effect_handle);
+    REQUIRE(effect != nullptr);
+    REQUIRE(effect->descriptor_bindings().size() == 2u);
+    REQUIRE(effect->push_constants().size() == 1u);
+    REQUIRE(effect->vertex_attributes().size() == 2u);
+    REQUIRE(effect->parameters().size() >= 3u);
+
+    const auto modules = runtime->variant_modules(variant);
+    REQUIRE(modules.size() == 2u);
+    const auto* vertex_module = runtime->find_module(modules[0]);
+    const auto* fragment_module = runtime->find_module(modules[1]);
+    REQUIRE(vertex_module != nullptr);
+    REQUIRE(fragment_module != nullptr);
+    REQUIRE(vertex_module->descriptor_bindings().size() == 1u);
+    REQUIRE(vertex_module->push_constants().size() == 1u);
+    REQUIRE(vertex_module->vertex_attributes().size() == 2u);
+    REQUIRE(fragment_module->descriptor_bindings().size() == 1u);
+}
+
 TEST_CASE("Shader runtime exposes observable reload result", "[shader]")
 {
     auto runtime = crd::shader::create_runtime();

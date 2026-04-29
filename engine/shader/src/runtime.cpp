@@ -4,6 +4,7 @@
 
 #include <cstring>
 #include <shaderc/shaderc.h>
+#include <spirv_reflect.h>
 #include <unordered_map>
 
 namespace fs = crd::platform::fs;
@@ -24,6 +25,98 @@ namespace
         default:
             return shaderc_compute_shader;
     }
+}
+
+[[nodiscard]] crd::rhi::Format to_rhi_format(SpvReflectFormat format) noexcept
+{
+    switch (format)
+    {
+        case SPV_REFLECT_FORMAT_R32G32_SFLOAT:
+            return crd::rhi::Format::R32G32Sfloat;
+        case SPV_REFLECT_FORMAT_R32G32B32_SFLOAT:
+            return crd::rhi::Format::R32G32B32Sfloat;
+        case SPV_REFLECT_FORMAT_R32G32B32A32_SFLOAT:
+            return crd::rhi::Format::R8G8B8A8Unorm;
+        default:
+            return crd::rhi::Format::Undefined;
+    }
+}
+
+[[nodiscard]] ParameterClass to_parameter_class(SpvReflectDescriptorType type) noexcept
+{
+    switch (type)
+    {
+        case SPV_REFLECT_DESCRIPTOR_TYPE_SAMPLER:
+            return ParameterClass::Sampler;
+        case SPV_REFLECT_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
+        case SPV_REFLECT_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
+        case SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_IMAGE:
+        case SPV_REFLECT_DESCRIPTOR_TYPE_INPUT_ATTACHMENT:
+            return ParameterClass::Texture;
+        case SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
+        case SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+        case SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:
+        case SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC:
+        case SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
+        case SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
+        default:
+            return ParameterClass::Buffer;
+    }
+}
+
+struct ReflectedData
+{
+    crd::containers::Array<ParameterDesc> parameters{};
+    crd::containers::Array<DescriptorBindingDesc> descriptor_bindings{};
+    crd::containers::Array<PushConstantRangeDesc> push_constants{};
+    crd::containers::Array<VertexAttributeLayoutDesc> vertex_attributes{};
+};
+
+[[nodiscard]] bool reflect_module(const crd::containers::Array<crd::u32>& words, Stage stage, ReflectedData& out,
+                                  crd::containers::String& error)
+{
+    SpvReflectShaderModule module{};
+    const SpvReflectResult create_result =
+        spvReflectCreateShaderModule(words.size() * sizeof(crd::u32), words.data(), &module);
+    if (create_result != SPV_REFLECT_RESULT_SUCCESS)
+    {
+        error = crd::containers::String("spvReflectCreateShaderModule failed");
+        return false;
+    }
+
+    for (crd::u32 i = 0; i < module.descriptor_binding_count; ++i)
+    {
+        const auto& binding = module.descriptor_bindings[i];
+        out.descriptor_bindings.push_back({binding.set, binding.binding, binding.count, stage});
+        out.parameters.push_back({crd::containers::String(binding.name != nullptr ? binding.name : ""),
+                                  to_parameter_class(binding.descriptor_type), binding.set, binding.binding,
+                                  binding.block.size});
+    }
+
+    for (crd::u32 i = 0; i < module.push_constant_block_count; ++i)
+    {
+        const auto& block = module.push_constant_blocks[i];
+        out.push_constants.push_back({block.offset, block.size, stage});
+        out.parameters.push_back({crd::containers::String(block.name != nullptr ? block.name : "push_constants"),
+                                  ParameterClass::PushConstant, 0, 0, block.size});
+    }
+
+    if (stage == Stage::Vertex)
+    {
+        for (crd::u32 i = 0; i < module.input_variable_count; ++i)
+        {
+            const auto* input = module.input_variables[i];
+            if (input == nullptr || input->built_in >= 0)
+            {
+                continue;
+            }
+            out.vertex_attributes.push_back({crd::containers::String(input->name != nullptr ? input->name : ""),
+                                             input->location, to_rhi_format(input->format), 0});
+        }
+    }
+
+    spvReflectDestroyShaderModule(&module);
+    return true;
 }
 
 class StoredEffect final : public Effect
@@ -51,6 +144,7 @@ public:
     }
 
     [[nodiscard]] const EffectDesc& desc() const noexcept { return m_desc; }
+    EffectDesc& mutable_desc() noexcept { return m_desc; }
 
 private:
     EffectHandle m_handle{};
@@ -61,9 +155,9 @@ class StoredModule final : public Module
 {
 public:
     StoredModule(ModuleHandle handle, Stage stage, crd::containers::String entry_point,
-                 crd::containers::Array<crd::u32> words, crd::containers::String source_path)
+                 crd::containers::Array<crd::u32> words, crd::containers::String source_path, ReflectedData reflected)
         : m_handle(handle), m_stage(stage), m_entry_point(std::move(entry_point)), m_words(std::move(words)),
-          m_source_path(std::move(source_path))
+          m_source_path(std::move(source_path)), m_reflected(std::move(reflected))
     {
     }
 
@@ -74,6 +168,22 @@ public:
     {
         return static_cast<crd::u64>(m_words.size() * sizeof(crd::u32));
     }
+    [[nodiscard]] crd::containers::ConstSpan<ParameterDesc> parameters() const noexcept override
+    {
+        return m_reflected.parameters;
+    }
+    [[nodiscard]] crd::containers::ConstSpan<DescriptorBindingDesc> descriptor_bindings() const noexcept override
+    {
+        return m_reflected.descriptor_bindings;
+    }
+    [[nodiscard]] crd::containers::ConstSpan<PushConstantRangeDesc> push_constants() const noexcept override
+    {
+        return m_reflected.push_constants;
+    }
+    [[nodiscard]] crd::containers::ConstSpan<VertexAttributeLayoutDesc> vertex_attributes() const noexcept override
+    {
+        return m_reflected.vertex_attributes;
+    }
 
 private:
     ModuleHandle m_handle{};
@@ -81,6 +191,7 @@ private:
     crd::containers::String m_entry_point{};
     crd::containers::Array<crd::u32> m_words{};
     crd::containers::String m_source_path{};
+    ReflectedData m_reflected{};
 };
 
 struct StoredVariant
@@ -245,7 +356,8 @@ public:
             return {};
         }
 
-        const auto& effect_desc = effect_it->second.desc();
+        StoredEffect& effect = effect_it->second;
+        const auto& effect_desc = effect.desc();
         if (effect_desc.frontend_modules.empty())
         {
             diagnostics.message = crd::containers::String("Effect has no frontend modules to compile");
@@ -254,6 +366,12 @@ public:
 
         StoredVariant stored_variant;
         stored_variant.handle = VariantHandle{m_next_variant_handle++};
+
+        EffectDesc reflected_effect_desc = effect.desc();
+        reflected_effect_desc.parameters.clear();
+        reflected_effect_desc.descriptor_bindings.clear();
+        reflected_effect_desc.push_constants.clear();
+        reflected_effect_desc.vertex_attributes.clear();
 
         for (const auto& compile_request : effect_desc.frontend_modules)
         {
@@ -280,18 +398,46 @@ public:
             words.resize(length / sizeof(crd::u32));
             std::memcpy(words.data(), bytes, length);
 
+            ReflectedData reflected;
+            crd::containers::String reflect_error;
+            if (!reflect_module(words, compile_request.stage, reflected, reflect_error))
+            {
+                diagnostics.message = reflect_error;
+                m_api.result_release(result);
+                return {};
+            }
+
             const ModuleHandle module_handle{m_next_module_handle++};
+            for (const auto& parameter : reflected.parameters)
+            {
+                reflected_effect_desc.parameters.push_back(parameter);
+            }
+            for (const auto& descriptor_binding : reflected.descriptor_bindings)
+            {
+                reflected_effect_desc.descriptor_bindings.push_back(descriptor_binding);
+            }
+            for (const auto& push_constant : reflected.push_constants)
+            {
+                reflected_effect_desc.push_constants.push_back(push_constant);
+            }
+            for (const auto& vertex_attribute : reflected.vertex_attributes)
+            {
+                reflected_effect_desc.vertex_attributes.push_back(vertex_attribute);
+            }
+
             m_modules.emplace(module_handle.value,
                               StoredModule(module_handle, compile_request.stage, compile_request.entry_point,
-                                           std::move(words), compile_request.source_path));
+                                           std::move(words), compile_request.source_path, std::move(reflected)));
             stored_variant.modules.push_back(module_handle);
             m_api.result_release(result);
         }
 
+        effect.mutable_desc() = std::move(reflected_effect_desc);
+
         const VariantHandle handle = stored_variant.handle;
         m_variants.emplace(handle.value, std::move(stored_variant));
         diagnostics.succeeded = true;
-        diagnostics.message = crd::containers::String("GLSL frontend compiled to canonical SPIR-V IR");
+        diagnostics.message = crd::containers::String("GLSL frontend compiled and reflection metadata consumed");
         return handle;
     }
 

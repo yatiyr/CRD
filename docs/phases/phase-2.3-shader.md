@@ -41,7 +41,7 @@ and hot-reload discipline.
 | --- | --- | --- | --- |
 | 2.3a | public envelope + opaque handles | ✅ | no backend/frontend leak in public API |
 | 2.3b | frontend → IR seam + GLSL ingest | ✅ | GLSL via shaderc now, second frontend later |
-| 2.3c | reflection consumption | ⏳ | `spirv-reflect` drives descriptor/push/vertex metadata |
+| 2.3c | reflection consumption | ✅ | `spirv-reflect` drives descriptor/push/vertex metadata |
 | 2.3d | variant key + mechanism policy | ⏳ | typed variant key, rejection criteria, no `#define` soup |
 | 2.3e | cache hierarchy | ⏳ | content-addressed keys, include graph in hash |
 | 2.3f | hot reload | ⏳ | atomic swap, last-good fallback, observability |
@@ -51,11 +51,10 @@ Every slice must be independently shippable and keep the triangle path alive.
 
 ## Near-term execution order
 
-1. **2.3c — reflection consumption**
-2. **2.3d — variant key + mechanism policy**
-3. **2.3e — cache hierarchy**
-4. **2.3f — hot reload**
-5. **2.3g — pipeline handoff / descriptor growth**
+1. **2.3d — variant key + mechanism policy**
+2. **2.3e — cache hierarchy**
+3. **2.3f — hot reload**
+4. **2.3g — pipeline handoff / descriptor growth**
 
 This order is deliberate: it retires the biggest architectural risks early
 without pretending the material/renderer side already exists.
@@ -83,6 +82,19 @@ Delivered:
 - GLSL source file compilation into canonical internal SPIR-V modules
 - module metadata query path (`find_module`, `variant_modules`)
 - tests and smoke for successful and failing GLSL ingest
+
+## 2.3c shipped
+
+Shipped in session: `docs/sessions/2026-04-29-shader-2.3c-reflection.md`
+
+Delivered:
+
+- `spirv-reflect` integration in the compile path
+- descriptor binding extraction
+- push-constant extraction
+- vertex input extraction
+- material-parameter discovery
+- effect-level metadata aggregation from compiled modules
 
 ## Decisions
 

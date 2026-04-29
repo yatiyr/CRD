@@ -17,15 +17,15 @@ int main()
 
     auto runtime = crd::shader::create_runtime();
     crd::shader::EffectDesc desc;
-    desc.name = crd::containers::String("triangle_effect");
-    desc.source_path = crd::containers::String("runtime/examples/shaders/triangle.vert");
+    desc.name = crd::containers::String("reflect_effect");
+    desc.source_path = crd::containers::String("runtime/examples/shaders/reflect_triangle.vert");
     desc.frontend_modules.push_back(
         {crd::containers::String(
-             (fs::Path(CRD_SOURCE_DIR) / "runtime/examples/shaders/triangle.vert").generic().data()),
+             (fs::Path(CRD_SOURCE_DIR) / "runtime/examples/shaders/reflect_triangle.vert").generic().data()),
          crd::shader::Stage::Vertex, crd::containers::String("main")});
     desc.frontend_modules.push_back(
         {crd::containers::String(
-             (fs::Path(CRD_SOURCE_DIR) / "runtime/examples/shaders/triangle.frag").generic().data()),
+             (fs::Path(CRD_SOURCE_DIR) / "runtime/examples/shaders/reflect_triangle.frag").generic().data()),
          crd::shader::Stage::Fragment, crd::containers::String("main")});
     desc.vertex_attributes.push_back({crd::containers::String("POSITION"), 0, crd::rhi::Format::R32G32Sfloat, 0});
     desc.vertex_attributes.push_back({crd::containers::String("COLOR"), 1, crd::rhi::Format::R32G32B32Sfloat, 8});
@@ -39,10 +39,17 @@ int main()
     request.variant.render_path = crd::shader::RenderPath::Forward;
     const auto variant = runtime->request_variant(request, diagnostics);
     const auto modules = runtime->variant_modules(variant);
+    const auto* effect_view = runtime->find_effect(effect);
 
     CRD_LOG_INFO(g_log_smoke_shader, "effect={} variant={} ok={} msg='{}'", effect.value, variant.value,
                  diagnostics.succeeded, diagnostics.message.c_str());
     CRD_LOG_INFO(g_log_smoke_shader, "module_count={}", modules.size());
+    if (effect_view != nullptr)
+    {
+        CRD_LOG_INFO(g_log_smoke_shader, "descriptors={} push_constants={} vertex_attributes={}",
+                     effect_view->descriptor_bindings().size(), effect_view->push_constants().size(),
+                     effect_view->vertex_attributes().size());
+    }
 
     crd::log::flush();
     crd::log::shutdown();

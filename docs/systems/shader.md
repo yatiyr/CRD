@@ -11,7 +11,7 @@ SPIR-V, or Vulkan types through the public API.
 | --- | --- | --- |
 | 2.3a | public envelope + opaque handles | ✅ |
 | 2.3b | frontend → IR seam + GLSL ingest | ✅ |
-| 2.3c | reflection consumption | ⏳ |
+| 2.3c | reflection consumption | ✅ |
 | 2.3d | variant key + mechanism policy | ⏳ |
 | 2.3e | cache hierarchy | ⏳ |
 | 2.3f | hot reload | ⏳ |
@@ -72,6 +72,24 @@ SPIR-V, or Vulkan types through the public API.
 This slice still intentionally stops short of reflection, cache, and hot
 reload. It proves the frontend→IR seam, not the full shader system.
 
+## What ships today (2.3c — reflection consumption)
+
+- `spirv-reflect` is now wired into the compile path
+- compiled modules own reflected metadata for:
+  - descriptor bindings
+  - push constant ranges
+  - vertex attribute requirements
+  - material-parameter discovery
+- effects now aggregate reflection-derived metadata from their compiled modules
+- the frontend→IR seam is no longer abstract only; it has a real consumer
+
+Still intentionally outside this slice:
+
+- cache hierarchy
+- hot reload behavior beyond the observable envelope
+- variant-key policy enforcement
+- PSO/layout handoff details beyond the reflected metadata surface
+
 ## How to use it
 
 ```cpp
@@ -92,12 +110,16 @@ request.variant.render_path = crd::shader::RenderPath::Forward;
 auto variant = runtime->request_variant(request, diagnostics);
 auto modules = runtime->variant_modules(variant);
 auto* module0 = runtime->find_module(modules[0]);
+
+auto descriptors = module0->descriptor_bindings();
+auto push_constants = module0->push_constants();
+auto vertex_attributes = module0->vertex_attributes();
 ```
 
 ## Long-term direction
 
 - 2.3b now proves the real frontend → IR seam and GLSL ingest.
-- 2.3c brings in reflection-driven metadata ownership.
+- 2.3c now proves reflection-driven metadata ownership.
 - 2.3d–g add the real variant/cache/hot-reload/PSO growth.
 - The material system and renderer will eventually consume this layer, not raw
   backend shader objects.

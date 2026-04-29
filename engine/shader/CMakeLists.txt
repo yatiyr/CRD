@@ -16,7 +16,16 @@ if(NOT CRD_SHADERC_INCLUDE_DIR)
     message(FATAL_ERROR "shaderc not found; required for crd-shader 2.3b")
 endif()
 
+find_path(CRD_SPIRV_REFLECT_INCLUDE_DIR spirv_reflect.h HINTS "$ENV{VULKAN_SDK}/Source/SPIRV-Reflect")
+find_file(CRD_SPIRV_REFLECT_SOURCE spirv_reflect.c HINTS "$ENV{VULKAN_SDK}/Source/SPIRV-Reflect")
+
+if(NOT CRD_SPIRV_REFLECT_INCLUDE_DIR OR NOT CRD_SPIRV_REFLECT_SOURCE)
+    message(FATAL_ERROR "spirv-reflect source not found; required for crd-shader 2.3c")
+endif()
+
 crd_collect_sources(SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src")
+list(APPEND SOURCES "${CRD_SPIRV_REFLECT_SOURCE}")
+set_source_files_properties("${CRD_SPIRV_REFLECT_SOURCE}" PROPERTIES LANGUAGE CXX)
 crd_collect_sources(HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
 add_library(crd-shader STATIC ${SOURCES} ${HEADERS})
@@ -26,6 +35,7 @@ target_include_directories(crd-shader
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
     PRIVATE
         "${CRD_SHADERC_INCLUDE_DIR}"
+        "${CRD_SPIRV_REFLECT_INCLUDE_DIR}"
 )
 
 target_link_libraries(crd-shader
