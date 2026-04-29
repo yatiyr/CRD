@@ -15,7 +15,7 @@
 shipped; the backend allocation path is now stable enough for shader and
 binding growth.
 
-Aktif phase dosyası: `docs/phases/phase-2-graphics.md`
+Aktif phase dosyası: `docs/phases/phase-2.3-shader.md`
 
 ## Active detour
 
@@ -118,7 +118,7 @@ Agents: don't read everything. Use these breadcrumbs.
 
 - **Hub:** `docs/ROADMAP.md` (small navigation page; safe to read fully)
 - **Principles:** `docs/PRINCIPLES.md` (read every session, short)
-- **Active phase only:** `docs/phases/phase-1.6-config.md`
+- **Active phase only:** `docs/phases/phase-2.3-shader.md`
 - **Other phases:** `docs/phases/phase-<X>.md` (read ONLY when relevant)
 - **Specific decision:** `docs/decisions/<NNNN>-<slug>.md` (find via
   `docs/decisions/README.md` tag index)

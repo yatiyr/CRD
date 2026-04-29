@@ -83,6 +83,15 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 ### `[imgui]` `[vulkan]`
 - ADR-0024 — ImGui single-viewport default
 
+### `[shader]` `[cache]` `[reflection]`
+- ADR-0025 — Shader mechanism policy
+- ADR-0026 — Shader variant key
+- ADR-0027 — Shader reflection consumption model
+- ADR-0028 — Shader cache hierarchy
+- ADR-0029 — Shader hot reload
+- ADR-0030 — Shader / PSO boundary
+- ADR-0031 — Shader frontend → IR seam
+
 ## All ADRs (chronological)
 
 | ID    | Title                                          | Tags                              | Status   |
@@ -111,3 +120,10 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 | 0022  | Open-world streaming pipeline                  | memory, resources                 | Accepted |
 | 0023  | UI architecture                                | ui, node-editor, arch             | Accepted |
 | 0024  | ImGui single-viewport default                  | imgui, ui, vulkan                 | Accepted |
+| 0025  | Shader mechanism policy                        | shader, renderer, arch            | Accepted    |
+| 0026  | Shader variant key                             | shader, cache, arch               | Accepted    |
+| 0027  | Shader reflection consumption model            | shader, reflection, rhi           | Accepted    |
+| 0028  | Shader cache hierarchy                         | shader, cache, vulkan             | Accepted    |
+| 0029  | Shader hot reload                              | shader, hot-reload, runtime       | Accepted    |
+| 0030  | Shader / PSO boundary                          | shader, rhi, renderer             | Accepted    |
+| 0031  | Shader frontend → IR seam                      | shader, arch, ir                  | Accepted    |

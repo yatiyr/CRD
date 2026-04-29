@@ -18,7 +18,7 @@ Vulkan-first, layered:
 | 2.0d  | pipeline + first triangle        |   ✅   | minimal shader, pipeline, vertex buffer, draw — milestone gate passed                 |
 | 2.1   | ImGui debug overlay              |   ✅   | docking branch; debug-only; consumes `crd-config` for theme/style                    |
 | 2.2   | GPU memory + streaming           |   ✅   | centralized allocator-backed buffer/image path shipped; broader policy still ahead   |
-| 2.3   | `crd-shader`                     |   ⏳   | GLSL→SPIR-V (glslang), reflection (SPIRV-Cross), on-disk cache, hot-reload           |
+| 2.3   | `crd-shader`                     |   ⏳   | detailed design packet lives in `docs/phases/phase-2.3-shader.md`                    |
 | 2.4   | `crd-renderer` v1                |   ⏳   | `IRenderPath` interface + Clustered Forward+ implementation; frustum culling; skybox |
 | 2.5   | `crd-jobs`                       |   ⏳   | thread pool + fiber tasks, work-stealing, per-frame allocator, async I/O ready       |
 | 2.6   | `crd-resources` + `asset_cooker` |   ⏳   | async load, LRU, refcounted handles, runtime binary; cooker is a separate exe        |
@@ -44,6 +44,17 @@ The concrete next-session sequence:
 - ADR-0016 — Render path strategy (Clustered Forward+ first)
 - ADR-0017 — Culling strategy
 - ADR-0024 — ImGui single-viewport default
+
+## 2.3 detail
+
+`crd-shader` now has its own dedicated design packet:
+
+- `docs/phases/phase-2.3-shader.md`
+- `docs/phases/phase-2.3-shader/survey.md`
+- `docs/phases/phase-2.3-shader/api-envelope.md`
+
+Treat this file as the broad graphics-phase umbrella and the 2.3 shader docs
+as the detailed implementation-planning surface.
 
 ## Open questions
 
