@@ -75,6 +75,17 @@ target_link_libraries(smoke_config PRIVATE
 )
 crd_enable_default_pch(smoke_config)
 
+add_executable(smoke_shader
+    examples/smoke_shader.cpp
+)
+
+target_link_libraries(smoke_shader PRIVATE
+    crd-core
+    crd-log
+    crd-shader
+)
+crd_enable_default_pch(smoke_shader)
+
 add_executable(smoke_frame_clock
     examples/smoke_frame_clock.cpp
 )

@@ -1,6 +1,6 @@
 # Phase 2.3 — `crd-shader`
 
-**Status:** ⏳ planned
+**Status:** 🚧 active
 
 `crd-shader` sits between the proven RHI/backend foundation and the future
 renderer/material system. Its job is not to be "GLSL wrappers"; its job is to
@@ -39,7 +39,7 @@ and hot-reload discipline.
 
 | Slice | Topic | Status | Notes |
 | --- | --- | --- | --- |
-| 2.3a | public envelope + opaque handles | ⏳ | no backend/frontend leak in public API |
+| 2.3a | public envelope + opaque handles | ✅ | no backend/frontend leak in public API |
 | 2.3b | frontend → IR seam + GLSL ingest | ⏳ | GLSL via shaderc now, second frontend later |
 | 2.3c | reflection consumption | ⏳ | `spirv-reflect` drives descriptor/push/vertex metadata |
 | 2.3d | variant key + mechanism policy | ⏳ | typed variant key, rejection criteria, no `#define` soup |
@@ -51,16 +51,27 @@ Every slice must be independently shippable and keep the triangle path alive.
 
 ## Near-term execution order
 
-1. **2.3a — public envelope + opaque handles**
-2. **2.3b — frontend → IR seam + GLSL ingest**
-3. **2.3c — reflection consumption**
-4. **2.3d — variant key + mechanism policy**
-5. **2.3e — cache hierarchy**
-6. **2.3f — hot reload**
-7. **2.3g — pipeline handoff / descriptor growth**
+1. **2.3b — frontend → IR seam + GLSL ingest**
+2. **2.3c — reflection consumption**
+3. **2.3d — variant key + mechanism policy**
+4. **2.3e — cache hierarchy**
+5. **2.3f — hot reload**
+6. **2.3g — pipeline handoff / descriptor growth**
 
 This order is deliberate: it retires the biggest architectural risks early
 without pretending the material/renderer side already exists.
+
+## 2.3a shipped
+
+Shipped in session: `docs/sessions/2026-04-29-shader-2.3a-envelope.md`
+
+Delivered:
+
+- `crd-shader` module scaffold
+- opaque public handles (`ModuleHandle`, `EffectHandle`, `VariantHandle`)
+- public metadata/value types and minimal `Effect` / `Runtime` interfaces
+- minimal in-memory runtime proving effect/variant/reload observability
+- tests and smoke for the public envelope
 
 ## Decisions
 

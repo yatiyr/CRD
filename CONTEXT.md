@@ -11,9 +11,8 @@
 
 ## Current focus
 
-**Phase 2.3 — `crd-shader` / descriptor growth.** GPU memory + streaming (2.2)
-shipped; the backend allocation path is now stable enough for shader and
-binding growth.
+**Phase 2.3b — `crd-shader` frontend → IR seam + GLSL ingest.** 2.3a shipped;
+the public envelope is now stable enough to start real frontend ingestion.
 
 Aktif phase dosyası: `docs/phases/phase-2.3-shader.md`
 
@@ -27,6 +26,21 @@ _none — running on the main roadmap._
 > `docs/detours/README.md`.
 
 ## Last shipped milestone
+
+**2026-04-29 — `crd-shader` 2.3a public envelope shipped.**
+
+Opaque handles, backend-neutral metadata types, minimal `Effect` / `Runtime`
+interfaces, and an in-memory runtime seam proving effect/variant/reload
+observability without leaking GLSL/SPIR-V/Vulkan through the public API.
+
+Three-flavour green:
+- Debug: 214/214
+- Release: 213/213 (Debug-only Vulkan triangle integration test correctly skipped)
+- ASan: 214/214
+
+Detail: `docs/sessions/2026-04-29-shader-2.3a-envelope.md`.
+
+## Previous shipped milestone
 
 **2026-04-29 — GPU memory + streaming foundation shipped.**
 
@@ -92,12 +106,10 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Next up (next 1–3 sessions)
 
-1. **`crd-shader` / descriptor growth (2.3).** Grow from the now-proven
-   backend + overlay + triangle path.
-2. **`crd-renderer` v1 (2.4).** Start from an explicit renderable list and
+1. **`crd-shader` 2.3b.** Frontend → IR seam + GLSL ingest.
+2. **`crd-shader` 2.3c.** Reflection consumption.
+3. **`crd-renderer` v1 (2.4).** Start from an explicit renderable list and
    camera path before wider systems.
-3. **`crd-config` 1.6b/1.6c.** Explicit reload hook and more real consumers
-   after ImGui settles.
 
 ## Open questions
 
@@ -108,9 +120,9 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Test counts (last quality pass)
 
-- Debug: 210/210
-- Release: 209/209
-- ASan: 210/210
+- Debug: 214/214
+- Release: 213/213
+- ASan: 214/214
 
 ## Pointers (lazy-load reference)
 
@@ -135,6 +147,7 @@ When in doubt, ASK before reading large files.
 
 ## Session log (rolling, last 5)
 
+- **2026-04-29** — `crd-shader` 2.3a public envelope shipped.
 - **2026-04-29** — GPU memory + streaming foundation shipped.
 - **2026-04-28** — ImGui debug overlay shipped.
 - **2026-04-28** — `crd-config` core shipped.
