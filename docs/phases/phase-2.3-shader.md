@@ -40,7 +40,7 @@ and hot-reload discipline.
 | Slice | Topic | Status | Notes |
 | --- | --- | --- | --- |
 | 2.3a | public envelope + opaque handles | ✅ | no backend/frontend leak in public API |
-| 2.3b | frontend → IR seam + GLSL ingest | ⏳ | GLSL via shaderc now, second frontend later |
+| 2.3b | frontend → IR seam + GLSL ingest | ✅ | GLSL via shaderc now, second frontend later |
 | 2.3c | reflection consumption | ⏳ | `spirv-reflect` drives descriptor/push/vertex metadata |
 | 2.3d | variant key + mechanism policy | ⏳ | typed variant key, rejection criteria, no `#define` soup |
 | 2.3e | cache hierarchy | ⏳ | content-addressed keys, include graph in hash |
@@ -51,12 +51,11 @@ Every slice must be independently shippable and keep the triangle path alive.
 
 ## Near-term execution order
 
-1. **2.3b — frontend → IR seam + GLSL ingest**
-2. **2.3c — reflection consumption**
-3. **2.3d — variant key + mechanism policy**
-4. **2.3e — cache hierarchy**
-5. **2.3f — hot reload**
-6. **2.3g — pipeline handoff / descriptor growth**
+1. **2.3c — reflection consumption**
+2. **2.3d — variant key + mechanism policy**
+3. **2.3e — cache hierarchy**
+4. **2.3f — hot reload**
+5. **2.3g — pipeline handoff / descriptor growth**
 
 This order is deliberate: it retires the biggest architectural risks early
 without pretending the material/renderer side already exists.
@@ -72,6 +71,18 @@ Delivered:
 - public metadata/value types and minimal `Effect` / `Runtime` interfaces
 - minimal in-memory runtime proving effect/variant/reload observability
 - tests and smoke for the public envelope
+
+## 2.3b shipped
+
+Shipped in session: `docs/sessions/2026-04-29-shader-2.3b-glsl-ingest.md`
+
+Delivered:
+
+- runtime-loaded `shaderc_shared` frontend integration
+- `FrontendCompileRequest` used as the real frontend → IR seam
+- GLSL source file compilation into canonical internal SPIR-V modules
+- module metadata query path (`find_module`, `variant_modules`)
+- tests and smoke for successful and failing GLSL ingest
 
 ## Decisions
 

@@ -82,8 +82,10 @@ add_executable(smoke_shader
 target_link_libraries(smoke_shader PRIVATE
     crd-core
     crd-log
+    crd-platform
     crd-shader
 )
+target_compile_definitions(smoke_shader PRIVATE CRD_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 crd_enable_default_pch(smoke_shader)
 
 add_executable(smoke_frame_clock

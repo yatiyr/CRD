@@ -1,9 +1,12 @@
 #include <crd/log/log.hpp>
+#include <crd/platform/filesystem.hpp>
 #include <crd/shader/shader.hpp>
 
 #include <memory>
 
 CRD_DEFINE_LOG_CHANNEL(g_log_smoke_shader, "SmokeShader", crd::log::LogLevel::Trace)
+
+namespace fs = crd::platform::fs;
 
 int main()
 {
@@ -16,6 +19,14 @@ int main()
     crd::shader::EffectDesc desc;
     desc.name = crd::containers::String("triangle_effect");
     desc.source_path = crd::containers::String("runtime/examples/shaders/triangle.vert");
+    desc.frontend_modules.push_back(
+        {crd::containers::String(
+             (fs::Path(CRD_SOURCE_DIR) / "runtime/examples/shaders/triangle.vert").generic().data()),
+         crd::shader::Stage::Vertex, crd::containers::String("main")});
+    desc.frontend_modules.push_back(
+        {crd::containers::String(
+             (fs::Path(CRD_SOURCE_DIR) / "runtime/examples/shaders/triangle.frag").generic().data()),
+         crd::shader::Stage::Fragment, crd::containers::String("main")});
     desc.vertex_attributes.push_back({crd::containers::String("POSITION"), 0, crd::rhi::Format::R32G32Sfloat, 0});
     desc.vertex_attributes.push_back({crd::containers::String("COLOR"), 1, crd::rhi::Format::R32G32B32Sfloat, 8});
 
@@ -27,9 +38,11 @@ int main()
     request.variant.alpha_mode = crd::shader::AlphaMode::Opaque;
     request.variant.render_path = crd::shader::RenderPath::Forward;
     const auto variant = runtime->request_variant(request, diagnostics);
+    const auto modules = runtime->variant_modules(variant);
 
     CRD_LOG_INFO(g_log_smoke_shader, "effect={} variant={} ok={} msg='{}'", effect.value, variant.value,
                  diagnostics.succeeded, diagnostics.message.c_str());
+    CRD_LOG_INFO(g_log_smoke_shader, "module_count={}", modules.size());
 
     crd::log::flush();
     crd::log::shutdown();

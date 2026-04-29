@@ -1,6 +1,17 @@
+#include <crd/platform/filesystem.hpp>
 #include <crd/shader/shader.hpp>
 
 #include <catch2/catch_test_macros.hpp>
+
+namespace fs = crd::platform::fs;
+
+namespace
+{
+[[nodiscard]] crd::containers::String source_path(const char* relative)
+{
+    return crd::containers::String((fs::Path(CRD_SOURCE_DIR) / relative).generic().data());
+}
+} // namespace
 
 TEST_CASE("Shader runtime creates effects and preserves metadata", "[shader]")
 {
@@ -33,6 +44,10 @@ TEST_CASE("Shader runtime issues opaque variant handles", "[shader]")
 
     crd::shader::EffectDesc desc;
     desc.name = crd::containers::String("forward");
+    desc.frontend_modules.push_back({source_path("runtime/examples/shaders/triangle.vert"), crd::shader::Stage::Vertex,
+                                     crd::containers::String("main")});
+    desc.frontend_modules.push_back({source_path("runtime/examples/shaders/triangle.frag"),
+                                     crd::shader::Stage::Fragment, crd::containers::String("main")});
     const auto effect = runtime->create_effect(desc);
 
     crd::shader::CompileDiagnostics diagnostics;
@@ -47,6 +62,12 @@ TEST_CASE("Shader runtime issues opaque variant handles", "[shader]")
     REQUIRE(variant.is_valid());
     REQUIRE(diagnostics.succeeded);
     REQUIRE(runtime->is_variant_ready(variant));
+    const auto modules = runtime->variant_modules(variant);
+    REQUIRE(modules.size() == 2u);
+    const auto* vertex_module = runtime->find_module(modules[0]);
+    REQUIRE(vertex_module != nullptr);
+    REQUIRE(vertex_module->stage() == crd::shader::Stage::Vertex);
+    REQUIRE(vertex_module->code_size_bytes() > 0u);
 }
 
 TEST_CASE("Shader runtime reports bad effect handles without crashing", "[shader]")
@@ -60,6 +81,26 @@ TEST_CASE("Shader runtime reports bad effect handles without crashing", "[shader
     const auto variant = runtime->request_variant(request, diagnostics);
     REQUIRE_FALSE(variant.is_valid());
     REQUIRE_FALSE(diagnostics.succeeded);
+}
+
+TEST_CASE("Shader runtime reports GLSL compile failures non-fatally", "[shader]")
+{
+    auto runtime = crd::shader::create_runtime();
+
+    crd::shader::EffectDesc desc;
+    desc.name = crd::containers::String("broken");
+    desc.frontend_modules.push_back({source_path("runtime/examples/shaders/broken_triangle.vert"),
+                                     crd::shader::Stage::Vertex, crd::containers::String("main")});
+    const auto effect = runtime->create_effect(desc);
+
+    crd::shader::CompileDiagnostics diagnostics;
+    crd::shader::VariantCompileRequest request;
+    request.effect = effect;
+
+    const auto variant = runtime->request_variant(request, diagnostics);
+    REQUIRE_FALSE(variant.is_valid());
+    REQUIRE_FALSE(diagnostics.succeeded);
+    REQUIRE_FALSE(diagnostics.message.empty());
 }
 
 TEST_CASE("Shader runtime exposes observable reload result", "[shader]")

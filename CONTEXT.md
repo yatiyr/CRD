@@ -11,8 +11,9 @@
 
 ## Current focus
 
-**Phase 2.3b — `crd-shader` frontend → IR seam + GLSL ingest.** 2.3a shipped;
-the public envelope is now stable enough to start real frontend ingestion.
+**Phase 2.3c — `crd-shader` reflection consumption.** 2.3a–b shipped; the
+frontend → IR seam is now real enough to start reflection-driven metadata
+ownership.
 
 Aktif phase dosyası: `docs/phases/phase-2.3-shader.md`
 
@@ -26,6 +27,22 @@ _none — running on the main roadmap._
 > `docs/detours/README.md`.
 
 ## Last shipped milestone
+
+**2026-04-29 — `crd-shader` 2.3b frontend → IR seam + GLSL ingest shipped.**
+
+GLSL source file ingestion now compiles through a runtime-loaded `shaderc`
+frontend into canonical internal SPIR-V modules, without leaking GLSL/SPIR-V/
+Vulkan through the public API. Successful and failing compile paths are both
+covered in tests.
+
+Three-flavour green:
+- Debug: 215/215
+- Release: 214/214 (Debug-only Vulkan triangle integration test correctly skipped)
+- ASan: 215/215
+
+Detail: `docs/sessions/2026-04-29-shader-2.3b-glsl-ingest.md`.
+
+## Previous shipped milestone
 
 **2026-04-29 — `crd-shader` 2.3a public envelope shipped.**
 
@@ -106,8 +123,8 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Next up (next 1–3 sessions)
 
-1. **`crd-shader` 2.3b.** Frontend → IR seam + GLSL ingest.
-2. **`crd-shader` 2.3c.** Reflection consumption.
+1. **`crd-shader` 2.3c.** Reflection consumption.
+2. **`crd-shader` 2.3d.** Variant key + mechanism policy implementation.
 3. **`crd-renderer` v1 (2.4).** Start from an explicit renderable list and
    camera path before wider systems.
 
@@ -120,9 +137,9 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Test counts (last quality pass)
 
-- Debug: 214/214
-- Release: 213/213
-- ASan: 214/214
+- Debug: 215/215
+- Release: 214/214
+- ASan: 215/215
 
 ## Pointers (lazy-load reference)
 
@@ -147,6 +164,7 @@ When in doubt, ASK before reading large files.
 
 ## Session log (rolling, last 5)
 
+- **2026-04-29** — `crd-shader` 2.3b frontend → IR seam + GLSL ingest shipped.
 - **2026-04-29** — `crd-shader` 2.3a public envelope shipped.
 - **2026-04-29** — GPU memory + streaming foundation shipped.
 - **2026-04-28** — ImGui debug overlay shipped.

@@ -20,9 +20,12 @@ public:
 
     [[nodiscard]] virtual EffectHandle create_effect(const EffectDesc& desc) = 0;
     [[nodiscard]] virtual const Effect* find_effect(EffectHandle handle) const noexcept = 0;
+    [[nodiscard]] virtual const Module* find_module(ModuleHandle handle) const noexcept = 0;
     [[nodiscard]] virtual VariantHandle request_variant(const VariantCompileRequest& request,
                                                         CompileDiagnostics& diagnostics) = 0;
     [[nodiscard]] virtual bool is_variant_ready(VariantHandle handle) const noexcept = 0;
+    [[nodiscard]] virtual crd::containers::ConstSpan<ModuleHandle>
+    variant_modules(VariantHandle handle) const noexcept = 0;
     [[nodiscard]] virtual bool reload_effect(EffectHandle handle, ReloadEvent& event) = 0;
 };
 

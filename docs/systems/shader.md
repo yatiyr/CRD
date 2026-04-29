@@ -10,7 +10,7 @@ SPIR-V, or Vulkan types through the public API.
 | Slice | Ships | Status |
 | --- | --- | --- |
 | 2.3a | public envelope + opaque handles | ✅ |
-| 2.3b | frontend → IR seam + GLSL ingest | ⏳ |
+| 2.3b | frontend → IR seam + GLSL ingest | ✅ |
 | 2.3c | reflection consumption | ⏳ |
 | 2.3d | variant key + mechanism policy | ⏳ |
 | 2.3e | cache hierarchy | ⏳ |
@@ -20,8 +20,8 @@ SPIR-V, or Vulkan types through the public API.
 ## Core decisions
 
 - No Vulkan / SPIR-V / GLSL types in the public API.
-- SPIR-V will be the canonical IR, but 2.3a does not implement ingestion yet.
-- Reflection is core later, but 2.3a only proves the public envelope and the
+- SPIR-V is the canonical IR, and 2.3b now proves the first real lowering path.
+- Reflection is core later, but 2.3a/2.3b only prove the public envelope and the
   runtime seam.
 - A second frontend (e.g. node editor) must be able to plug in without
   consumer-side API changes.
@@ -50,15 +50,27 @@ SPIR-V, or Vulkan types through the public API.
 - Public interfaces:
   - `Effect`
   - `Runtime`
-- Minimal in-memory runtime implementation:
+- Minimal runtime implementation:
   - `create_effect()`
   - `find_effect()`
+  - `find_module()`
   - `request_variant()`
   - `is_variant_ready()`
+  - `variant_modules()`
   - `reload_effect()`
 
-This runtime does **not** compile shaders yet. It only proves the shape and
-ownership of the public envelope.
+## What ships today (2.3b — frontend → IR seam + GLSL ingest)
+
+- real GLSL textual frontend path
+- runtime-loaded `shaderc_shared` integration through Cerid's own platform
+  dynamic-library layer (no static CRT mismatch)
+- frontend modules described through Cerid-owned `FrontendCompileRequest`
+- internal canonical IR artifact stored as SPIR-V words
+- variant requests now compile frontend modules into canonical IR modules
+- module metadata is queryable without exposing code bytes publicly
+
+This slice still intentionally stops short of reflection, cache, and hot
+reload. It proves the frontend→IR seam, not the full shader system.
 
 ## How to use it
 
@@ -78,11 +90,13 @@ request.variant.pass_type = crd::shader::PassType::MainColor;
 request.variant.render_path = crd::shader::RenderPath::Forward;
 
 auto variant = runtime->request_variant(request, diagnostics);
+auto modules = runtime->variant_modules(variant);
+auto* module0 = runtime->find_module(modules[0]);
 ```
 
 ## Long-term direction
 
-- 2.3b adds the real frontend → IR seam and GLSL ingest.
+- 2.3b now proves the real frontend → IR seam and GLSL ingest.
 - 2.3c brings in reflection-driven metadata ownership.
 - 2.3d–g add the real variant/cache/hot-reload/PSO growth.
 - The material system and renderer will eventually consume this layer, not raw
