@@ -43,7 +43,7 @@ and hot-reload discipline.
 | 2.3b | frontend → IR seam + GLSL ingest | ✅ | GLSL via shaderc now, second frontend later |
 | 2.3c | reflection consumption | ✅ | `spirv-reflect` drives descriptor/push/vertex metadata |
 | 2.3d | variant key + mechanism policy | ✅ | typed variant key, rejection criteria, no `#define` soup |
-| 2.3e | cache hierarchy | ⏳ | content-addressed keys, include graph in hash |
+| 2.3e | cache hierarchy | ✅ | content-addressed keys, include graph in hash |
 | 2.3f | hot reload | ⏳ | atomic swap, last-good fallback, observability |
 | 2.3g | pipeline handoff / descriptor growth | ⏳ | what `crd-shader` produces, what RHI consumes |
 
@@ -51,10 +51,8 @@ Every slice must be independently shippable and keep the triangle path alive.
 
 ## Near-term execution order
 
-1. **2.3d — variant key + mechanism policy**
-2. **2.3e — cache hierarchy**
-3. **2.3f — hot reload**
-4. **2.3g — pipeline handoff / descriptor growth**
+1. **2.3f — hot reload**
+2. **2.3g — pipeline handoff / descriptor growth**
 
 This order is deliberate: it retires the biggest architectural risks early
 without pretending the material/renderer side already exists.
@@ -107,6 +105,18 @@ Delivered:
 - typed mechanism-policy helper surface
 - runtime access to per-variant structural keys
 - tests and smoke for key stability and policy behavior
+
+## 2.3e shipped
+
+Shipped in session: `docs/sessions/2026-04-30-shader-2.3e-cache-hierarchy.md`
+
+Delivered:
+
+- content-addressed source/preprocessed/SPIR-V key path
+- include-graph-aware preprocessing
+- in-memory source/preprocessed/SPIR-V caches
+- on-disk SPIR-V cache
+- cache-hit observability through compile diagnostics
 
 ## Decisions
 

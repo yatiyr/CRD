@@ -13,6 +13,24 @@ namespace crd::shader
 {
 namespace
 {
+[[nodiscard]] constexpr crd::u64 fnv1a_mix(crd::u64 hash, crd::u64 value) noexcept
+{
+    constexpr crd::u64 Prime = 1099511628211ull;
+    hash ^= value;
+    hash *= Prime;
+    return hash;
+}
+
+[[nodiscard]] crd::u64 hash_bytes(const char* data, size_t size) noexcept
+{
+    crd::u64 hash = 14695981039346656037ull;
+    for (size_t i = 0; i < size; ++i)
+    {
+        hash = fnv1a_mix(hash, static_cast<unsigned char>(data[i]));
+    }
+    return hash;
+}
+
 [[nodiscard]] shaderc_shader_kind to_shaderc_kind(Stage stage) noexcept
 {
     switch (stage)
@@ -119,6 +137,86 @@ struct ReflectedData
     return true;
 }
 
+struct PreprocessResult
+{
+    crd::containers::String preprocessed_text{};
+    crd::containers::Array<crd::containers::String> include_paths{};
+};
+
+[[nodiscard]] bool preprocess_file(const fs::Path& path, PreprocessResult& out,
+                                   crd::containers::Array<crd::containers::String>& include_stack,
+                                   crd::containers::String& error)
+{
+    const crd::containers::String path_str(path.generic());
+    for (const auto& active : include_stack)
+    {
+        if (active == path_str)
+        {
+            error = crd::containers::String("Detected cyclic shader include");
+            return false;
+        }
+    }
+
+    crd::containers::String source_text;
+    if (!fs::read_file_text(path, source_text))
+    {
+        error = crd::containers::String("Failed to read shader source file");
+        return false;
+    }
+
+    include_stack.push_back(path_str);
+
+    crd::usize line_start = 0;
+    while (line_start <= source_text.size())
+    {
+        crd::usize line_end = line_start;
+        while (line_end < source_text.size() && source_text.data()[line_end] != '\n')
+        {
+            ++line_end;
+        }
+
+        const crd::containers::StringView line(source_text.data() + line_start, line_end - line_start);
+        if (line.starts_with("#include \"") && line.size() > 11 && line[line.size() - 1] == '"')
+        {
+            const auto include_name = line.substr(10, line.size() - 11);
+            const fs::Path include_path = fs::Path(path.generic()) / ".." / include_name;
+            out.include_paths.push_back(crd::containers::String(include_path.generic()));
+            PreprocessResult nested;
+            if (!preprocess_file(include_path, nested, include_stack, error))
+            {
+                include_stack.pop_back();
+                return false;
+            }
+            out.preprocessed_text.reserve(out.preprocessed_text.size() + nested.preprocessed_text.size() + 8u);
+            out.preprocessed_text.append(nested.preprocessed_text.data(), nested.preprocessed_text.size());
+            for (const auto& nested_include : nested.include_paths)
+            {
+                out.include_paths.push_back(nested_include);
+            }
+        }
+        else
+        {
+            out.preprocessed_text.reserve(out.preprocessed_text.size() + line.size() + 8u);
+            out.preprocessed_text.append(line.data(), line.size());
+            out.preprocessed_text.push_back('\n');
+        }
+
+        line_start = line_end + 1;
+        if (line_end == source_text.size())
+        {
+            break;
+        }
+    }
+
+    include_stack.pop_back();
+    return true;
+}
+
+[[nodiscard]] fs::Path shader_cache_dir() noexcept
+{
+    return fs::executable_dir() / "cache" / "shaders";
+}
+
 class StoredEffect final : public Effect
 {
 public:
@@ -155,9 +253,11 @@ class StoredModule final : public Module
 {
 public:
     StoredModule(ModuleHandle handle, Stage stage, crd::containers::String entry_point,
-                 crd::containers::Array<crd::u32> words, crd::containers::String source_path, ReflectedData reflected)
+                 crd::containers::Array<crd::u32> words, crd::containers::String source_path, ReflectedData reflected,
+                 SourceKey source_key, PreprocessedKey preprocessed_key, SpirvKey spirv_key)
         : m_handle(handle), m_stage(stage), m_entry_point(std::move(entry_point)), m_words(std::move(words)),
-          m_source_path(std::move(source_path)), m_reflected(std::move(reflected))
+          m_source_path(std::move(source_path)), m_reflected(std::move(reflected)), m_source_key(source_key),
+          m_preprocessed_key(preprocessed_key), m_spirv_key(spirv_key)
     {
     }
 
@@ -192,6 +292,9 @@ private:
     crd::containers::Array<crd::u32> m_words{};
     crd::containers::String m_source_path{};
     ReflectedData m_reflected{};
+    SourceKey m_source_key{};
+    PreprocessedKey m_preprocessed_key{};
+    SpirvKey m_spirv_key{};
 };
 
 struct StoredVariant
@@ -199,6 +302,11 @@ struct StoredVariant
     VariantHandle handle{};
     VariantKey key{};
     crd::containers::Array<ModuleHandle> modules{};
+};
+
+struct CachedSpirv
+{
+    crd::containers::Array<crd::u32> words{};
 };
 
 struct ShadercApi
@@ -341,8 +449,7 @@ public:
     [[nodiscard]] VariantHandle request_variant(const VariantCompileRequest& request,
                                                 CompileDiagnostics& diagnostics) override
     {
-        diagnostics.succeeded = false;
-        diagnostics.message = crd::containers::String{};
+        diagnostics = {};
 
         if (m_compiler == nullptr || m_options == nullptr)
         {
@@ -378,68 +485,154 @@ public:
         for (const auto& compile_request : effect_desc.frontend_modules)
         {
             crd::containers::String source_text;
-            if (!fs::read_file_text(fs::Path(compile_request.source_path), source_text))
+            const fs::Path source_path(compile_request.source_path);
+            if (!fs::read_file_text(source_path, source_text))
             {
                 diagnostics.message = crd::containers::String("Failed to read shader source file");
                 return {};
             }
 
-            const shaderc_compilation_result_t result = m_api.compile_into_spv(
-                m_compiler, source_text.c_str(), source_text.size(), to_shaderc_kind(compile_request.stage),
-                compile_request.source_path.c_str(), compile_request.entry_point.c_str(), m_options);
-            if (m_api.result_status(result) != shaderc_compilation_status_success)
+            diagnostics.source_key = SourceKey{hash_bytes(source_text.data(), source_text.size())};
+            diagnostics.source_cache_hit = m_source_cache.find(diagnostics.source_key.value) != m_source_cache.end();
+            if (!diagnostics.source_cache_hit)
             {
-                diagnostics.message = crd::containers::String(m_api.result_error(result));
-                m_api.result_release(result);
+                m_source_cache.emplace(diagnostics.source_key.value, source_text);
+            }
+
+            PreprocessResult preprocessed;
+            crd::containers::Array<crd::containers::String> include_stack;
+            crd::containers::String preprocess_error;
+            if (!preprocess_file(source_path, preprocessed, include_stack, preprocess_error))
+            {
+                diagnostics.message = preprocess_error;
                 return {};
             }
 
-            const char* bytes = m_api.result_bytes(result);
-            const size_t length = m_api.result_length(result);
+            crd::u64 preprocess_hash =
+                hash_bytes(preprocessed.preprocessed_text.data(), preprocessed.preprocessed_text.size());
+            for (const auto& include_path : preprocessed.include_paths)
+            {
+                preprocess_hash = fnv1a_mix(preprocess_hash, hash_bytes(include_path.data(), include_path.size()));
+            }
+            diagnostics.preprocessed_key = PreprocessedKey{preprocess_hash};
+            diagnostics.preprocessed_cache_hit =
+                m_preprocessed_cache.find(diagnostics.preprocessed_key.value) != m_preprocessed_cache.end();
+            if (!diagnostics.preprocessed_cache_hit)
+            {
+                m_preprocessed_cache.emplace(diagnostics.preprocessed_key.value, preprocessed.preprocessed_text);
+            }
+
+            crd::u64 spirv_hash = diagnostics.preprocessed_key.value;
+            spirv_hash = fnv1a_mix(spirv_hash, static_cast<crd::u64>(compile_request.stage));
+            spirv_hash = fnv1a_mix(spirv_hash,
+                                   hash_bytes(compile_request.entry_point.data(), compile_request.entry_point.size()));
+            spirv_hash = fnv1a_mix(spirv_hash, stored_variant.key.value);
+            diagnostics.spirv_key = SpirvKey{spirv_hash};
+
+            ModuleHandle module_handle{};
             crd::containers::Array<crd::u32> words;
-            words.resize(length / sizeof(crd::u32));
-            std::memcpy(words.data(), bytes, length);
+            diagnostics.spirv_cache_hit = false;
 
-            ReflectedData reflected;
-            crd::containers::String reflect_error;
-            if (!reflect_module(words, compile_request.stage, reflected, reflect_error))
+            if (const auto module_it = m_module_cache.find(diagnostics.spirv_key.value);
+                module_it != m_module_cache.end())
             {
-                diagnostics.message = reflect_error;
-                m_api.result_release(result);
-                return {};
+                module_handle = module_it->second;
+                diagnostics.spirv_cache_hit = true;
+            }
+            else
+            {
+                crd::containers::String cache_name(std::to_string(diagnostics.spirv_key.value).c_str());
+                cache_name.append(".spv");
+                const fs::Path cache_path = shader_cache_dir() / cache_name;
+
+                if (const auto spirv_it = m_spirv_cache.find(diagnostics.spirv_key.value);
+                    spirv_it != m_spirv_cache.end())
+                {
+                    words = spirv_it->second.words;
+                    diagnostics.spirv_cache_hit = true;
+                }
+                else
+                {
+                    crd::containers::Array<crd::u8> cached_bytes;
+                    if (fs::read_file_binary(cache_path, cached_bytes) &&
+                        (cached_bytes.size() % sizeof(crd::u32)) == 0u)
+                    {
+                        words.resize(cached_bytes.size() / sizeof(crd::u32));
+                        std::memcpy(words.data(), cached_bytes.data(), cached_bytes.size());
+                        diagnostics.spirv_cache_hit = true;
+                    }
+                    else
+                    {
+                        const shaderc_compilation_result_t result = m_api.compile_into_spv(
+                            m_compiler, preprocessed.preprocessed_text.c_str(), preprocessed.preprocessed_text.size(),
+                            to_shaderc_kind(compile_request.stage), compile_request.source_path.c_str(),
+                            compile_request.entry_point.c_str(), m_options);
+                        if (m_api.result_status(result) != shaderc_compilation_status_success)
+                        {
+                            diagnostics.message = crd::containers::String(m_api.result_error(result));
+                            m_api.result_release(result);
+                            return {};
+                        }
+                        const char* bytes = m_api.result_bytes(result);
+                        const size_t length = m_api.result_length(result);
+                        words.resize(length / sizeof(crd::u32));
+                        std::memcpy(words.data(), bytes, length);
+                        m_api.result_release(result);
+
+                        (void)fs::create_directories(shader_cache_dir());
+                        const auto byte_count = words.size() * sizeof(crd::u32);
+                        (void)fs::write_file_binary(cache_path,
+                                                    crd::containers::ConstSpan<crd::u8>(
+                                                        reinterpret_cast<const crd::u8*>(words.data()), byte_count));
+                    }
+
+                    m_spirv_cache.emplace(diagnostics.spirv_key.value, CachedSpirv{words});
+                }
+
+                ReflectedData reflected;
+                crd::containers::String reflect_error;
+                if (!reflect_module(words, compile_request.stage, reflected, reflect_error))
+                {
+                    diagnostics.message = reflect_error;
+                    return {};
+                }
+
+                module_handle = ModuleHandle{m_next_module_handle++};
+                m_modules.emplace(module_handle.value,
+                                  StoredModule(module_handle, compile_request.stage, compile_request.entry_point,
+                                               std::move(words), compile_request.source_path, std::move(reflected),
+                                               diagnostics.source_key, diagnostics.preprocessed_key,
+                                               diagnostics.spirv_key));
+                m_module_cache.emplace(diagnostics.spirv_key.value, module_handle);
             }
 
-            const ModuleHandle module_handle{m_next_module_handle++};
-            for (const auto& parameter : reflected.parameters)
+            const auto* module = find_module(module_handle);
+            CRD_ASSERT(module != nullptr);
+            for (const auto& parameter : module->parameters())
             {
                 reflected_effect_desc.parameters.push_back(parameter);
             }
-            for (const auto& descriptor_binding : reflected.descriptor_bindings)
+            for (const auto& descriptor_binding : module->descriptor_bindings())
             {
                 reflected_effect_desc.descriptor_bindings.push_back(descriptor_binding);
             }
-            for (const auto& push_constant : reflected.push_constants)
+            for (const auto& push_constant : module->push_constants())
             {
                 reflected_effect_desc.push_constants.push_back(push_constant);
             }
-            for (const auto& vertex_attribute : reflected.vertex_attributes)
+            for (const auto& vertex_attribute : module->vertex_attributes())
             {
                 reflected_effect_desc.vertex_attributes.push_back(vertex_attribute);
             }
 
-            m_modules.emplace(module_handle.value,
-                              StoredModule(module_handle, compile_request.stage, compile_request.entry_point,
-                                           std::move(words), compile_request.source_path, std::move(reflected)));
             stored_variant.modules.push_back(module_handle);
-            m_api.result_release(result);
         }
 
         effect.mutable_desc() = std::move(reflected_effect_desc);
-
         const VariantHandle handle = stored_variant.handle;
         m_variants.emplace(handle.value, std::move(stored_variant));
         diagnostics.succeeded = true;
-        diagnostics.message = crd::containers::String("GLSL frontend compiled and reflection metadata consumed");
+        diagnostics.message = crd::containers::String("GLSL frontend compiled, reflected, and cached");
         return handle;
     }
 
@@ -483,6 +676,10 @@ private:
     std::unordered_map<crd::u64, StoredEffect> m_effects{};
     std::unordered_map<crd::u64, StoredModule> m_modules{};
     std::unordered_map<crd::u64, StoredVariant> m_variants{};
+    std::unordered_map<crd::u64, crd::containers::String> m_source_cache{};
+    std::unordered_map<crd::u64, crd::containers::String> m_preprocessed_cache{};
+    std::unordered_map<crd::u64, CachedSpirv> m_spirv_cache{};
+    std::unordered_map<crd::u64, ModuleHandle> m_module_cache{};
     crd::platform::DynamicLibrary m_library{};
     ShadercApi m_api{};
     shaderc_compiler_t m_compiler = nullptr;

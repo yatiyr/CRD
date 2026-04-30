@@ -2,6 +2,8 @@
 #include <crd/shader/shader.hpp>
 
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
+#include <string>
 
 namespace fs = crd::platform::fs;
 
@@ -10,6 +12,16 @@ namespace
 [[nodiscard]] crd::containers::String source_path(const char* relative)
 {
     return crd::containers::String((fs::Path(CRD_SOURCE_DIR) / relative).generic().data());
+}
+
+[[nodiscard]] fs::Path temp_shader_root()
+{
+    const auto base = fs::current_working_dir() / ".crd_shader_cache_tests";
+    const auto stamp = static_cast<crd::u64>(std::chrono::system_clock::now().time_since_epoch().count());
+    crd::containers::String leaf("cache_");
+    leaf.reserve(leaf.size() + 32u);
+    leaf.append(std::to_string(stamp));
+    return base / leaf.c_str();
 }
 } // namespace
 
@@ -210,4 +222,104 @@ TEST_CASE("Mechanism policy matches pinned decisions", "[shader]")
             crd::shader::Mechanism::ResourceBinding);
     REQUIRE(crd::shader::decide_mechanism(crd::shader::VariantAxis::CheapRuntimeToggle).mechanism ==
             crd::shader::Mechanism::DynamicBranch);
+}
+
+TEST_CASE("Shader runtime records cache keys and hits on repeated compile", "[shader]")
+{
+    const auto root = temp_shader_root();
+    const bool created_root = fs::create_directories(root) || fs::is_directory(root);
+    REQUIRE(created_root);
+    REQUIRE(fs::write_file_text(root / "triangle.vert", "#version 460\nlayout(location=0) in vec2 in_position;\nvoid "
+                                                        "main(){ gl_Position=vec4(in_position,0.0,1.0); }\n"));
+    REQUIRE(fs::write_file_text(
+        root / "triangle.frag",
+        "#version 460\nlayout(location=0) out vec4 out_color;\nvoid main(){ out_color=vec4(1.0); }\n"));
+
+    auto runtime = crd::shader::create_runtime();
+
+    crd::shader::EffectDesc desc;
+    desc.name = crd::containers::String("cache_repeat");
+    desc.frontend_modules.push_back({crd::containers::String((root / "triangle.vert").generic()),
+                                     crd::shader::Stage::Vertex, crd::containers::String("main")});
+    desc.frontend_modules.push_back({crd::containers::String((root / "triangle.frag").generic()),
+                                     crd::shader::Stage::Fragment, crd::containers::String("main")});
+    const auto effect = runtime->create_effect(desc);
+
+    crd::shader::CompileDiagnostics a;
+    crd::shader::CompileDiagnostics b;
+    crd::shader::VariantCompileRequest request;
+    request.effect = effect;
+    const auto v1 = runtime->request_variant(request, a);
+    const auto v2 = runtime->request_variant(request, b);
+    REQUIRE(v1.is_valid());
+    REQUIRE(v2.is_valid());
+    REQUIRE(a.source_key.is_valid());
+    REQUIRE(a.preprocessed_key.is_valid());
+    REQUIRE(a.spirv_key.is_valid());
+    REQUIRE(b.source_key.value == a.source_key.value);
+    REQUIRE(b.preprocessed_key.value == a.preprocessed_key.value);
+    REQUIRE(b.spirv_key.value == a.spirv_key.value);
+    REQUIRE(b.spirv_cache_hit);
+
+    REQUIRE(fs::remove_all(root));
+}
+
+TEST_CASE("Shader cache keys change when included source changes", "[shader]")
+{
+    const auto root = temp_shader_root();
+    const bool created_root = fs::create_directories(root) || fs::is_directory(root);
+    REQUIRE(created_root);
+
+    REQUIRE(fs::write_file_text(root / "common.glsl", "vec3 get_color() { return vec3(1.0, 0.0, 0.0); }\n"));
+    REQUIRE(fs::write_file_text(root / "main.vert",
+                                "#version 460\n#include \"common.glsl\"\nlayout(location=0) in vec2 in_position;\n"
+                                "layout(location=0) out vec3 v_color;\nvoid main(){ "
+                                "gl_Position=vec4(in_position,0.0,1.0); v_color=get_color(); }\n"));
+
+    auto runtime = crd::shader::create_runtime();
+    crd::shader::EffectDesc desc;
+    desc.name = crd::containers::String("include_case");
+    desc.frontend_modules.push_back({crd::containers::String((root / "main.vert").generic()),
+                                     crd::shader::Stage::Vertex, crd::containers::String("main")});
+    const auto effect = runtime->create_effect(desc);
+
+    crd::shader::CompileDiagnostics first;
+    crd::shader::VariantCompileRequest request;
+    request.effect = effect;
+    const auto variant1 = runtime->request_variant(request, first);
+    REQUIRE(variant1.is_valid());
+
+    REQUIRE(fs::write_file_text(root / "common.glsl", "vec3 get_color() { return vec3(0.0, 1.0, 0.0); }\n"));
+
+    crd::shader::CompileDiagnostics second;
+    const auto variant2 = runtime->request_variant(request, second);
+    REQUIRE(variant2.is_valid());
+    REQUIRE(second.source_key.value == first.source_key.value);
+    REQUIRE(second.preprocessed_key.value != first.preprocessed_key.value);
+    REQUIRE(second.spirv_key.value != first.spirv_key.value);
+
+    REQUIRE(fs::remove_all(root));
+}
+
+TEST_CASE("Failed compile does not populate SPIR-V cache hit", "[shader]")
+{
+    auto runtime = crd::shader::create_runtime();
+
+    crd::shader::EffectDesc desc;
+    desc.name = crd::containers::String("broken_cache");
+    desc.frontend_modules.push_back({source_path("runtime/examples/shaders/broken_triangle.vert"),
+                                     crd::shader::Stage::Vertex, crd::containers::String("main")});
+    const auto effect = runtime->create_effect(desc);
+
+    crd::shader::CompileDiagnostics first;
+    crd::shader::VariantCompileRequest request;
+    request.effect = effect;
+    const auto v1 = runtime->request_variant(request, first);
+    REQUIRE_FALSE(v1.is_valid());
+    REQUIRE_FALSE(first.spirv_cache_hit);
+
+    crd::shader::CompileDiagnostics second;
+    const auto v2 = runtime->request_variant(request, second);
+    REQUIRE_FALSE(v2.is_valid());
+    REQUIRE_FALSE(second.spirv_cache_hit);
 }

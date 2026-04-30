@@ -38,6 +38,8 @@ int main()
     request.variant.alpha_mode = crd::shader::AlphaMode::Opaque;
     request.variant.render_path = crd::shader::RenderPath::Forward;
     const auto variant = runtime->request_variant(request, diagnostics);
+    crd::shader::CompileDiagnostics diagnostics2;
+    const auto variant2 = runtime->request_variant(request, diagnostics2);
     const auto modules = runtime->variant_modules(variant);
     const auto* effect_view = runtime->find_effect(effect);
     const auto key = runtime->variant_key(variant);
@@ -49,6 +51,11 @@ int main()
                  diagnostics.succeeded, diagnostics.message.c_str());
     CRD_LOG_INFO(g_log_smoke_shader, "variant_key={}", key.value);
     CRD_LOG_INFO(g_log_smoke_shader, "module_count={}", modules.size());
+    CRD_LOG_INFO(g_log_smoke_shader, "source_key={} preprocessed_key={} spirv_key={} hit={}",
+                 diagnostics.source_key.value, diagnostics.preprocessed_key.value, diagnostics.spirv_key.value,
+                 diagnostics.spirv_cache_hit);
+    CRD_LOG_INFO(g_log_smoke_shader, "second_compile spirv_hit={} variant2={}", diagnostics2.spirv_cache_hit,
+                 variant2.value);
     CRD_LOG_INFO(g_log_smoke_shader, "pass_policy={} material_policy={}", static_cast<int>(pass_policy.mechanism),
                  static_cast<int>(material_policy.mechanism));
     if (effect_view != nullptr)

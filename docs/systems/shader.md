@@ -13,7 +13,7 @@ SPIR-V, or Vulkan types through the public API.
 | 2.3b | frontend → IR seam + GLSL ingest | ✅ |
 | 2.3c | reflection consumption | ✅ |
 | 2.3d | variant key + mechanism policy | ✅ |
-| 2.3e | cache hierarchy | ⏳ |
+| 2.3e | cache hierarchy | ✅ |
 | 2.3f | hot reload | ⏳ |
 | 2.3g | pipeline handoff / descriptor growth | ⏳ |
 
@@ -109,6 +109,29 @@ Still intentionally outside this slice:
 This slice still intentionally stops short of cache and hot reload. It locks in
 the structural-variant rule before cache identity is built on top of it.
 
+## What ships today (2.3e — cache hierarchy)
+
+- explicit key tiers in diagnostics:
+  - `SourceKey`
+  - `PreprocessedKey`
+  - `SpirvKey`
+- local-include preprocessing with include-graph participation in the
+  preprocessed/SPIR-V identity path
+- in-memory caches for:
+  - source text
+  - preprocessed text
+  - SPIR-V words
+  - module handle reuse by SPIR-V key
+- on-disk SPIR-V cache under `cache/shaders/`
+- compile diagnostics now expose cache hit/miss behavior without leaking the
+  backend implementation details into consumers
+
+This is still intentionally not the full cache story:
+
+- no Vulkan `VkPipelineCache` integration yet
+- no hot-reload invalidation policy yet
+- no persistent cache metadata/index file yet
+
 ## How to use it
 
 ```cpp
@@ -134,12 +157,16 @@ auto descriptors = module0->descriptor_bindings();
 auto push_constants = module0->push_constants();
 auto vertex_attributes = module0->vertex_attributes();
 auto key = runtime->variant_key(variant);
+auto source_key = diagnostics.source_key;
+auto spirv_key = diagnostics.spirv_key;
 ```
 
 ## Long-term direction
 
 - 2.3b now proves the real frontend → IR seam and GLSL ingest.
 - 2.3c now proves reflection-driven metadata ownership.
-- 2.3d–g add the real variant/cache/hot-reload/PSO growth.
+- 2.3d now proves structural variant identity and mechanism policy helpers.
+- 2.3e now proves the first real cache hierarchy.
+- 2.3f–g add hot reload and PSO/layout growth.
 - The material system and renderer will eventually consume this layer, not raw
   backend shader objects.

@@ -49,6 +49,24 @@ struct ModuleHandle
     [[nodiscard]] bool is_valid() const noexcept { return value != 0; }
 };
 
+struct SourceKey
+{
+    crd::u64 value = 0;
+    [[nodiscard]] bool is_valid() const noexcept { return value != 0; }
+};
+
+struct PreprocessedKey
+{
+    crd::u64 value = 0;
+    [[nodiscard]] bool is_valid() const noexcept { return value != 0; }
+};
+
+struct SpirvKey
+{
+    crd::u64 value = 0;
+    [[nodiscard]] bool is_valid() const noexcept { return value != 0; }
+};
+
 struct EffectHandle
 {
     crd::u64 value = 0;
@@ -156,6 +174,12 @@ struct CompileDiagnostics
 {
     bool succeeded = false;
     crd::containers::String message{};
+    SourceKey source_key{};
+    PreprocessedKey preprocessed_key{};
+    SpirvKey spirv_key{};
+    bool source_cache_hit = false;
+    bool preprocessed_cache_hit = false;
+    bool spirv_cache_hit = false;
 };
 
 struct ReloadEvent
