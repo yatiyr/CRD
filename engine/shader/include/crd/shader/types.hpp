@@ -96,6 +96,36 @@ struct VertexAttributeLayoutDesc
 struct VariantKey
 {
     crd::u64 value = 0;
+    [[nodiscard]] bool is_valid() const noexcept { return value != 0; }
+};
+
+enum class VariantAxis : crd::u8
+{
+    PassType,
+    Skinning,
+    AlphaMode,
+    RenderPath,
+    CascadeCount,
+    LightCap,
+    LoopBound,
+    MaterialParameter,
+    CheapRuntimeToggle,
+};
+
+enum class Mechanism : crd::u8
+{
+    Permutation,
+    SpecializationConstant,
+    ResourceBinding,
+    DynamicBranch,
+    Rejected,
+};
+
+struct MechanismDecision
+{
+    VariantAxis axis = VariantAxis::PassType;
+    Mechanism mechanism = Mechanism::Rejected;
+    crd::containers::String reason{};
 };
 
 struct VariantRequest
@@ -111,6 +141,9 @@ struct SpecializationValue
     crd::u32 constant_id = 0;
     crd::u64 value = 0;
 };
+
+[[nodiscard]] VariantKey make_variant_key(const VariantRequest& request) noexcept;
+[[nodiscard]] MechanismDecision decide_mechanism(VariantAxis axis) noexcept;
 
 struct FrontendCompileRequest
 {

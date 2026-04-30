@@ -40,10 +40,17 @@ int main()
     const auto variant = runtime->request_variant(request, diagnostics);
     const auto modules = runtime->variant_modules(variant);
     const auto* effect_view = runtime->find_effect(effect);
+    const auto key = runtime->variant_key(variant);
+
+    const auto pass_policy = crd::shader::decide_mechanism(crd::shader::VariantAxis::PassType);
+    const auto material_policy = crd::shader::decide_mechanism(crd::shader::VariantAxis::MaterialParameter);
 
     CRD_LOG_INFO(g_log_smoke_shader, "effect={} variant={} ok={} msg='{}'", effect.value, variant.value,
                  diagnostics.succeeded, diagnostics.message.c_str());
+    CRD_LOG_INFO(g_log_smoke_shader, "variant_key={}", key.value);
     CRD_LOG_INFO(g_log_smoke_shader, "module_count={}", modules.size());
+    CRD_LOG_INFO(g_log_smoke_shader, "pass_policy={} material_policy={}", static_cast<int>(pass_policy.mechanism),
+                 static_cast<int>(material_policy.mechanism));
     if (effect_view != nullptr)
     {
         CRD_LOG_INFO(g_log_smoke_shader, "descriptors={} push_constants={} vertex_attributes={}",

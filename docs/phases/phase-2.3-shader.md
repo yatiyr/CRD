@@ -42,7 +42,7 @@ and hot-reload discipline.
 | 2.3a | public envelope + opaque handles | ✅ | no backend/frontend leak in public API |
 | 2.3b | frontend → IR seam + GLSL ingest | ✅ | GLSL via shaderc now, second frontend later |
 | 2.3c | reflection consumption | ✅ | `spirv-reflect` drives descriptor/push/vertex metadata |
-| 2.3d | variant key + mechanism policy | ⏳ | typed variant key, rejection criteria, no `#define` soup |
+| 2.3d | variant key + mechanism policy | ✅ | typed variant key, rejection criteria, no `#define` soup |
 | 2.3e | cache hierarchy | ⏳ | content-addressed keys, include graph in hash |
 | 2.3f | hot reload | ⏳ | atomic swap, last-good fallback, observability |
 | 2.3g | pipeline handoff / descriptor growth | ⏳ | what `crd-shader` produces, what RHI consumes |
@@ -95,6 +95,18 @@ Delivered:
 - vertex input extraction
 - material-parameter discovery
 - effect-level metadata aggregation from compiled modules
+
+## 2.3d shipped
+
+Shipped in session: `docs/sessions/2026-04-29-shader-2.3d-variant-key.md`
+
+Delivered:
+
+- deterministic structural variant key generation
+- specialization values kept out of structural identity
+- typed mechanism-policy helper surface
+- runtime access to per-variant structural keys
+- tests and smoke for key stability and policy behavior
 
 ## Decisions
 

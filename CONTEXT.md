@@ -11,9 +11,9 @@
 
 ## Current focus
 
-**Phase 2.3d — `crd-shader` variant key + mechanism policy implementation.**
-2.3a–c shipped; the public envelope, ingest seam, and reflection ownership are
-now real enough to lock in the structural variant story.
+**Phase 2.3e — `crd-shader` cache hierarchy.** 2.3a–d shipped; the public
+envelope, ingest seam, reflection ownership, and structural variant identity
+are now stable enough to introduce cache keys and invalidation policy.
 
 Aktif phase dosyası: `docs/phases/phase-2.3-shader.md`
 
@@ -27,6 +27,23 @@ _none — running on the main roadmap._
 > `docs/detours/README.md`.
 
 ## Last shipped milestone
+
+**2026-04-29 — `crd-shader` 2.3d variant key + mechanism policy shipped.**
+
+Structural variant identity is now deterministic and typed. `VariantKey`
+generation uses only structural axes, specialization values are excluded from
+the structural key by design, and the hybrid mechanism policy is now encoded
+as public helper decisions (`Permutation`, `SpecializationConstant`,
+`ResourceBinding`, `DynamicBranch`).
+
+Three-flavour green:
+- Debug: 220/220
+- Release: 219/219 (Debug-only Vulkan triangle integration test correctly skipped)
+- ASan: 220/220
+
+Detail: `docs/sessions/2026-04-29-shader-2.3d-variant-key.md`.
+
+## Previous shipped milestone
 
 **2026-04-29 — `crd-shader` 2.3c reflection consumption shipped.**
 
@@ -139,8 +156,8 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Next up (next 1–3 sessions)
 
-1. **`crd-shader` 2.3d.** Variant key + mechanism policy implementation.
-2. **`crd-shader` 2.3e.** Cache hierarchy.
+1. **`crd-shader` 2.3e.** Cache hierarchy.
+2. **`crd-shader` 2.3f.** Hot reload.
 3. **`crd-renderer` v1 (2.4).** Start from an explicit renderable list and
    camera path before wider systems.
 
@@ -153,9 +170,9 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Test counts (last quality pass)
 
-- Debug: 216/216
-- Release: 215/215
-- ASan: 216/216
+- Debug: 220/220
+- Release: 219/219
+- ASan: 220/220
 
 ## Pointers (lazy-load reference)
 

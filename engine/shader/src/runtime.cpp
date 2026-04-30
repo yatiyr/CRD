@@ -197,6 +197,7 @@ private:
 struct StoredVariant
 {
     VariantHandle handle{};
+    VariantKey key{};
     crd::containers::Array<ModuleHandle> modules{};
 };
 
@@ -366,6 +367,7 @@ public:
 
         StoredVariant stored_variant;
         stored_variant.handle = VariantHandle{m_next_variant_handle++};
+        stored_variant.key = make_variant_key(request.variant);
 
         EffectDesc reflected_effect_desc = effect.desc();
         reflected_effect_desc.parameters.clear();
@@ -444,6 +446,16 @@ public:
     [[nodiscard]] bool is_variant_ready(VariantHandle handle) const noexcept override
     {
         return m_variants.find(handle.value) != m_variants.end();
+    }
+
+    [[nodiscard]] VariantKey variant_key(VariantHandle handle) const noexcept override
+    {
+        const auto it = m_variants.find(handle.value);
+        if (it == m_variants.end())
+        {
+            return {};
+        }
+        return it->second.key;
     }
 
     [[nodiscard]] crd::containers::ConstSpan<ModuleHandle> variant_modules(VariantHandle handle) const noexcept override

@@ -28,7 +28,7 @@
 | 2.0   RHI + Vulkan + triangle   | ✅ shipped (a–d) | `docs/phases/phase-2-graphics.md`        |
 | 2.1   ImGui debug overlay       | ✅ shipped       | `docs/phases/phase-2-graphics.md`        |
 | 2.2   GPU memory + streaming    | ✅ shipped       | `docs/phases/phase-2-graphics.md`        |
-| 2.3   Shader system             | 🚧 active        | `docs/phases/phase-2.3-shader.md` (2.3a–c shipped; variant policy next) |
+| 2.3   Shader system             | 🚧 active        | `docs/phases/phase-2.3-shader.md` (2.3a–d shipped; cache next) |
 | 2.4   Renderer v1               | ⏳               | `docs/phases/phase-2-graphics.md`        |
 | 2.5   Jobs (threads + fibers)   | ⏳               | `docs/phases/phase-2-graphics.md`        |
 | 2.6   Resources + asset cooker  | ⏳               | `docs/phases/phase-2-graphics.md`        |

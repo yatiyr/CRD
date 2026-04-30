@@ -24,6 +24,7 @@ public:
     [[nodiscard]] virtual VariantHandle request_variant(const VariantCompileRequest& request,
                                                         CompileDiagnostics& diagnostics) = 0;
     [[nodiscard]] virtual bool is_variant_ready(VariantHandle handle) const noexcept = 0;
+    [[nodiscard]] virtual VariantKey variant_key(VariantHandle handle) const noexcept = 0;
     [[nodiscard]] virtual crd::containers::ConstSpan<ModuleHandle>
     variant_modules(VariantHandle handle) const noexcept = 0;
     [[nodiscard]] virtual bool reload_effect(EffectHandle handle, ReloadEvent& event) = 0;

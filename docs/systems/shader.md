@@ -12,7 +12,7 @@ SPIR-V, or Vulkan types through the public API.
 | 2.3a | public envelope + opaque handles | ✅ |
 | 2.3b | frontend → IR seam + GLSL ingest | ✅ |
 | 2.3c | reflection consumption | ✅ |
-| 2.3d | variant key + mechanism policy | ⏳ |
+| 2.3d | variant key + mechanism policy | ✅ |
 | 2.3e | cache hierarchy | ⏳ |
 | 2.3f | hot reload | ⏳ |
 | 2.3g | pipeline handoff / descriptor growth | ⏳ |
@@ -90,6 +90,25 @@ Still intentionally outside this slice:
 - variant-key policy enforcement
 - PSO/layout handoff details beyond the reflected metadata surface
 
+## What ships today (2.3d — variant key + mechanism policy)
+
+- deterministic structural `VariantKey` generation from `VariantRequest`
+- typed structural axes encoded in the key:
+  - pass type
+  - skinned/static
+  - alpha mode
+  - render path
+- specialization values are kept out of the structural key by design
+- public mechanism-policy helper surface:
+  - `VariantAxis`
+  - `Mechanism`
+  - `MechanismDecision`
+  - `decide_mechanism()`
+- runtime variants now retain and expose their structural key
+
+This slice still intentionally stops short of cache and hot reload. It locks in
+the structural-variant rule before cache identity is built on top of it.
+
 ## How to use it
 
 ```cpp
@@ -114,6 +133,7 @@ auto* module0 = runtime->find_module(modules[0]);
 auto descriptors = module0->descriptor_bindings();
 auto push_constants = module0->push_constants();
 auto vertex_attributes = module0->vertex_attributes();
+auto key = runtime->variant_key(variant);
 ```
 
 ## Long-term direction

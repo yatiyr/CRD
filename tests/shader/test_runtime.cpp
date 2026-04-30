@@ -154,3 +154,60 @@ TEST_CASE("Shader runtime exposes observable reload result", "[shader]")
     REQUIRE(event.effect.value == handle.value);
     REQUIRE_FALSE(event.using_last_good);
 }
+
+TEST_CASE("Variant key is stable for identical structural requests", "[shader]")
+{
+    const crd::shader::VariantRequest a{};
+    const crd::shader::VariantRequest b{};
+    REQUIRE(crd::shader::make_variant_key(a).value == crd::shader::make_variant_key(b).value);
+}
+
+TEST_CASE("Variant key changes when a structural axis changes", "[shader]")
+{
+    crd::shader::VariantRequest a{};
+    crd::shader::VariantRequest b{};
+    b.alpha_mode = crd::shader::AlphaMode::Translucent;
+    REQUIRE(crd::shader::make_variant_key(a).value != crd::shader::make_variant_key(b).value);
+}
+
+TEST_CASE("Structural variant key ignores specialization values", "[shader]")
+{
+    auto runtime = crd::shader::create_runtime();
+    crd::shader::EffectDesc desc;
+    desc.name = crd::containers::String("forward");
+    desc.frontend_modules.push_back({source_path("runtime/examples/shaders/triangle.vert"), crd::shader::Stage::Vertex,
+                                     crd::containers::String("main")});
+    desc.frontend_modules.push_back({source_path("runtime/examples/shaders/triangle.frag"),
+                                     crd::shader::Stage::Fragment, crd::containers::String("main")});
+    const auto effect = runtime->create_effect(desc);
+
+    crd::shader::SpecializationValue specials_a[] = {{0, 4}, {1, 64}};
+    crd::shader::SpecializationValue specials_b[] = {{0, 8}, {1, 128}};
+
+    crd::shader::VariantCompileRequest request_a;
+    request_a.effect = effect;
+    request_a.specialization_values = crd::containers::make_span(specials_a);
+    crd::shader::VariantCompileRequest request_b;
+    request_b.effect = effect;
+    request_b.specialization_values = crd::containers::make_span(specials_b);
+
+    crd::shader::CompileDiagnostics diagnostics_a;
+    crd::shader::CompileDiagnostics diagnostics_b;
+    const auto variant_a = runtime->request_variant(request_a, diagnostics_a);
+    const auto variant_b = runtime->request_variant(request_b, diagnostics_b);
+    REQUIRE(variant_a.is_valid());
+    REQUIRE(variant_b.is_valid());
+    REQUIRE(runtime->variant_key(variant_a).value == runtime->variant_key(variant_b).value);
+}
+
+TEST_CASE("Mechanism policy matches pinned decisions", "[shader]")
+{
+    REQUIRE(crd::shader::decide_mechanism(crd::shader::VariantAxis::PassType).mechanism ==
+            crd::shader::Mechanism::Permutation);
+    REQUIRE(crd::shader::decide_mechanism(crd::shader::VariantAxis::CascadeCount).mechanism ==
+            crd::shader::Mechanism::SpecializationConstant);
+    REQUIRE(crd::shader::decide_mechanism(crd::shader::VariantAxis::MaterialParameter).mechanism ==
+            crd::shader::Mechanism::ResourceBinding);
+    REQUIRE(crd::shader::decide_mechanism(crd::shader::VariantAxis::CheapRuntimeToggle).mechanism ==
+            crd::shader::Mechanism::DynamicBranch);
+}
