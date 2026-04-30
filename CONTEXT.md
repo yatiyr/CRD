@@ -11,9 +11,9 @@
 
 ## Current focus
 
-**Phase 2.3e — `crd-shader` cache hierarchy.** 2.3a–d shipped; the public
-envelope, ingest seam, reflection ownership, and structural variant identity
-are now stable enough to introduce cache keys and invalidation policy.
+**Phase 2.3f — `crd-shader` hot reload.** 2.3a–e shipped; the public envelope,
+ingest seam, reflection ownership, structural variant identity, and cache
+hierarchy are now stable enough to make reload observable and safe.
 
 Aktif phase dosyası: `docs/phases/phase-2.3-shader.md`
 
@@ -27,6 +27,22 @@ _none — running on the main roadmap._
 > `docs/detours/README.md`.
 
 ## Last shipped milestone
+
+**2026-04-30 — `crd-shader` 2.3e cache hierarchy shipped.**
+
+Source/preprocessed/SPIR-V cache keys are now explicit, local include graphs
+participate in the key path, and the runtime now has both in-memory and on-disk
+SPIR-V cache reuse. Compile diagnostics expose cache hit/miss behavior without
+leaking backend types.
+
+Three-flavour green:
+- Debug: 223/223
+- Release: 222/222 (Debug-only Vulkan triangle integration test correctly skipped)
+- ASan: 223/223
+
+Detail: `docs/sessions/2026-04-30-shader-2.3e-cache-hierarchy.md`.
+
+## Previous shipped milestone
 
 **2026-04-29 — `crd-shader` 2.3d variant key + mechanism policy shipped.**
 
@@ -156,8 +172,8 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Next up (next 1–3 sessions)
 
-1. **`crd-shader` 2.3e.** Cache hierarchy.
-2. **`crd-shader` 2.3f.** Hot reload.
+1. **`crd-shader` 2.3f.** Hot reload.
+2. **`crd-shader` 2.3g.** Pipeline handoff / descriptor growth.
 3. **`crd-renderer` v1 (2.4).** Start from an explicit renderable list and
    camera path before wider systems.
 
@@ -170,9 +186,9 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Test counts (last quality pass)
 
-- Debug: 220/220
-- Release: 219/219
-- ASan: 220/220
+- Debug: 223/223
+- Release: 222/222
+- ASan: 223/223
 
 ## Pointers (lazy-load reference)
 
