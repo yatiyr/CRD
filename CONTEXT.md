@@ -11,9 +11,9 @@
 
 ## Current focus
 
-**Phase 2.4 — `crd-renderer` v1.** `crd-shader` 2.3a–g shipped; the shader side
-is now strong enough that the next meaningful work is a real renderer consumer
-built on top of the current RHI/backend/shader stack.
+**Phase 2.4c — `crd-renderer` material binding growth.** `crd-renderer` v1a–b
+shipped; the next meaningful work is to deepen the renderer’s resource/material
+binding path on top of the now-real execution layer.
 
 Aktif phase dosyası: `docs/phases/phase-2-graphics.md`
 
@@ -27,6 +27,22 @@ _none — running on the main roadmap._
 > `docs/detours/README.md`.
 
 ## Last shipped milestone
+
+**2026-05-01 — `crd-renderer` v1b real draw execution shipped.**
+
+`crd-renderer` now has a real execution layer over the prepared draw items:
+minimal pass orchestration, command buffer recording, pipeline resolution, and
+draw-call submission into one rendering pass without taking ownership of native
+pipeline objects.
+
+Three-flavour green:
+- Debug: 228/228
+- Release: 227/227
+- ASan: 228/228
+
+Detail: `docs/sessions/2026-05-01-renderer-v1b-draw-execution.md`.
+
+## Previous shipped milestone
 
 **2026-05-01 — `crd-renderer` v1a explicit renderables shipped.**
 
@@ -218,8 +234,7 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Next up (next 1–3 sessions)
 
-1. **`crd-renderer` v1b/v1c.** Real draw execution / pass orchestration and
-   material binding growth.
+1. **`crd-renderer` v1c.** Material binding growth.
 2. **`crd-config` 1.6b/1.6c.** Reload hook and more real consumers when useful.
 3. **`crd-jobs` / `crd-resources`.** Pull in once renderer pressure is real.
 
@@ -232,9 +247,9 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Test counts (last quality pass)
 
-- Debug: 227/227
-- Release: 226/226
-- ASan: 227/227
+- Debug: 228/228
+- Release: 227/227
+- ASan: 228/228
 
 ## Pointers (lazy-load reference)
 

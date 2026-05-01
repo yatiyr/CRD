@@ -22,6 +22,55 @@ public:
 private:
     crd::rhi::BufferDesc m_desc{};
 };
+
+class FakePipeline final : public crd::rhi::Pipeline
+{
+public:
+    explicit FakePipeline(crd::rhi::GraphicsPipelineDesc desc) : m_desc(std::move(desc)) {}
+    [[nodiscard]] const crd::rhi::GraphicsPipelineDesc& desc() const noexcept override { return m_desc; }
+
+private:
+    crd::rhi::GraphicsPipelineDesc m_desc{};
+};
+
+class FakeCommandBuffer final : public crd::rhi::CommandBuffer
+{
+public:
+    void begin() override { CRD_LOG_INFO(g_log_smoke_renderer, "begin"); }
+    void end() override { CRD_LOG_INFO(g_log_smoke_renderer, "end"); }
+    void reset() override {}
+    void begin_rendering(const crd::rhi::RenderingInfo& /*info*/) override
+    {
+        CRD_LOG_INFO(g_log_smoke_renderer, "begin_rendering");
+    }
+    void end_rendering() override { CRD_LOG_INFO(g_log_smoke_renderer, "end_rendering"); }
+    void bind_pipeline(crd::rhi::Pipeline& /*pipeline*/) override
+    {
+        CRD_LOG_INFO(g_log_smoke_renderer, "bind_pipeline");
+    }
+    void bind_vertex_buffer(crd::rhi::Buffer& /*buffer*/, crd::u64 /*offset_bytes*/) override
+    {
+        CRD_LOG_INFO(g_log_smoke_renderer, "bind_vertex_buffer");
+    }
+    void draw(crd::u32 vertex_count, crd::u32 /*first_vertex*/) override
+    {
+        CRD_LOG_INFO(g_log_smoke_renderer, "draw vertices={}", vertex_count);
+    }
+};
+
+class SimpleResolver final : public crd::renderer::PipelineResolver
+{
+public:
+    explicit SimpleResolver(crd::rhi::Pipeline& pipeline) : m_pipeline(pipeline) {}
+    [[nodiscard]] crd::rhi::Pipeline*
+    resolve_pipeline(const crd::shader::VariantPipelineDesc& /*handoff*/) noexcept override
+    {
+        return &m_pipeline;
+    }
+
+private:
+    crd::rhi::Pipeline& m_pipeline;
+};
 } // namespace
 
 int main()
@@ -56,6 +105,7 @@ int main()
 
     FakeBuffer vertex_buffer(
         {sizeof(float) * 15u, crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex), crd::rhi::MemoryUsage::CpuToGpu});
+    FakePipeline pipeline({});
 
     crd::renderer::Renderable renderable;
     renderable.vertex_buffer = &vertex_buffer;
@@ -67,9 +117,9 @@ int main()
     renderer.submit(renderable);
 
     crd::renderer::FramePlan plan;
-    const bool ok = renderer.build_frame({}, *runtime, plan);
-    CRD_LOG_INFO(g_log_smoke_renderer, "build_frame={} draw_items={}", ok, plan.draw_items.size());
-    if (ok && !plan.draw_items.empty())
+    const bool built = renderer.build_frame({}, *runtime, plan);
+    CRD_LOG_INFO(g_log_smoke_renderer, "build_frame={} draw_items={}", built, plan.draw_items.size());
+    if (built && !plan.draw_items.empty())
     {
         const auto& item = plan.draw_items[0];
         CRD_LOG_INFO(g_log_smoke_renderer, "modules={} descriptors={} push_constants={} vertex_attributes={}",
@@ -77,7 +127,17 @@ int main()
                      item.handoff.push_constants.size(), item.handoff.vertex_attributes.size());
     }
 
+    FakeCommandBuffer command_buffer;
+    SimpleResolver resolver(pipeline);
+    const bool executed = renderer.execute_frame(
+        plan,
+        {{1280, 720},
+         {nullptr, crd::rhi::LoadOp::Clear, crd::rhi::StoreOp::Store, {0.08f, 0.08f, 0.12f, 1.0f}},
+         nullptr},
+        command_buffer, resolver);
+    CRD_LOG_INFO(g_log_smoke_renderer, "execute_frame={}", executed);
+
     crd::log::flush();
     crd::log::shutdown();
-    return ok ? 0 : 1;
+    return (built && executed) ? 0 : 1;
 }

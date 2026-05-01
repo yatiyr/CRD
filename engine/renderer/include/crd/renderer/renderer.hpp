@@ -4,6 +4,8 @@
 #include <crd/math/mat.hpp>
 #include <crd/math/transform.hpp>
 #include <crd/rhi/buffer.hpp>
+#include <crd/rhi/command_buffer.hpp>
+#include <crd/rhi/pipeline.hpp>
 #include <crd/shader/runtime.hpp>
 
 namespace crd::renderer
@@ -41,6 +43,14 @@ struct FramePlan
     crd::containers::Array<DrawItem> draw_items{};
 };
 
+class PipelineResolver
+{
+public:
+    virtual ~PipelineResolver() = default;
+    [[nodiscard]] virtual crd::rhi::Pipeline*
+    resolve_pipeline(const crd::shader::VariantPipelineDesc& handoff) noexcept = 0;
+};
+
 class Renderer
 {
 public:
@@ -49,6 +59,9 @@ public:
 
     [[nodiscard]] bool build_frame(const Camera& camera, const crd::shader::Runtime& shader_runtime,
                                    FramePlan& out) const;
+    [[nodiscard]] bool execute_frame(const FramePlan& plan, const crd::rhi::RenderingInfo& rendering_info,
+                                     crd::rhi::CommandBuffer& command_buffer,
+                                     PipelineResolver& pipeline_resolver) const;
 
     [[nodiscard]] crd::usize renderable_count() const noexcept { return m_renderables.size(); }
 

@@ -43,4 +43,33 @@ bool Renderer::build_frame(const Camera& camera, const crd::shader::Runtime& sha
 
     return true;
 }
+
+bool Renderer::execute_frame(const FramePlan& plan, const crd::rhi::RenderingInfo& rendering_info,
+                             crd::rhi::CommandBuffer& command_buffer, PipelineResolver& pipeline_resolver) const
+{
+    command_buffer.begin();
+    command_buffer.begin_rendering(rendering_info);
+
+    for (const auto& item : plan.draw_items)
+    {
+        if (item.vertex_buffer == nullptr || item.vertex_count == 0)
+        {
+            return false;
+        }
+
+        crd::rhi::Pipeline* pipeline = pipeline_resolver.resolve_pipeline(item.handoff);
+        if (pipeline == nullptr)
+        {
+            return false;
+        }
+
+        command_buffer.bind_pipeline(*pipeline);
+        command_buffer.bind_vertex_buffer(*item.vertex_buffer, 0);
+        command_buffer.draw(item.vertex_count, 0);
+    }
+
+    command_buffer.end_rendering();
+    command_buffer.end();
+    return true;
+}
 } // namespace crd::renderer

@@ -194,19 +194,6 @@ informational only.
 The module dependency graph is one-way and curated. Surface any new edge
 before adding it.
 
-## Working Model
-
-You (the human) orchestrate. The assistant executes the work directly.
-
-- No multi-agent workflow is assumed by default.
-- Research, architecture, coding, testing, debugging, and docs updates are
-  all handled in one continuous assistant session unless you explicitly ask
-  for a different split.
-- `@heavy` remains an escalation concept only for genuinely hard strategic or
-  contradictory architecture cases.
-
-You commit yourself. **The assistant never runs `git commit` or `git push`.**
-
 ## Session Re-entry Prompt (master prompt)
 
 Use this when starting the next session and asking the assistant to pick up
@@ -292,21 +279,6 @@ Rules:
 
 To open a detour: tell `@planner` "I want a detour for X" and provide the
 four fields. It will register the detour and run it.
-
-## When to Use `@heavy`
-
-Heavy runs on Claude Opus / GPT — every token costs real money. Use ONLY
-when:
-
-- Final review of a Phase milestone before merging.
-- Modern C++ pattern where local models gave incorrect or unsafe code.
-- Long-term direction decisions (graphics API, scripting model, render-path
-  selection criteria, etc.).
-
-DO NOT use heavy for: routine code, tests, docs, simple bugs, initial
-research, "where is X" questions. Heavy will refuse and redirect you anyway.
-
-Invoke via `/escalate <reason>` or `@heavy`.
 
 ## Session expectations
 

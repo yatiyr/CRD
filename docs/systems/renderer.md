@@ -10,7 +10,7 @@ plumbing.
 | Slice | Ships | Status |
 | --- | --- | --- |
 | v1a | explicit renderable list + camera + draw-item preparation | ✅ |
-| v1b | real draw execution / pass orchestration | ⏳ |
+| v1b | real draw execution / pass orchestration | ✅ |
 | v1c | material binding growth | ⏳ |
 
 ## Core decisions
@@ -48,14 +48,33 @@ plumbing.
 
 ## What it does not do yet
 
-- no real draw execution loop
-- no pass graph
+- no full pass graph
 - no scene graph
 - no ECS
 - no material system ownership
 
+## What ships today (v1b)
+
+- `PipelineResolver`
+  - renderer-side interface that resolves a `VariantPipelineDesc` into a
+    backend-owned `rhi::Pipeline`
+- `Renderer::execute_frame()`
+  - begins command buffer
+  - opens one rendering pass
+  - resolves pipeline per draw item
+  - binds vertex buffer and issues draw calls
+  - closes rendering + command buffer
+
+This is intentionally still narrow:
+
+- renderer does not own native pipeline objects
+- renderer does not create shader modules
+- renderer does not own material binding state yet
+- pass orchestration is one minimal pass, not a graph system
+
 ## Long-term direction
 
-- next slices add actual pass execution and richer resource/material binding
+- next slices add richer material/resource binding on top of the now-real
+  execution path
 - scene/world systems can layer on top later
 - renderer stays the first concrete consumer of the full shader packet
