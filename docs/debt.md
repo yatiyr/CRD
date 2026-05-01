@@ -1,4 +1,4 @@
-﻿# Cerid — Open Debt
+﻿i,m# Cerid — Open Debt
 
 Items that are not blockers but should not be forgotten. When picked up,
 move to a session log entry and remove from here.

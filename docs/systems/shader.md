@@ -14,7 +14,7 @@ SPIR-V, or Vulkan types through the public API.
 | 2.3c | reflection consumption | ✅ |
 | 2.3d | variant key + mechanism policy | ✅ |
 | 2.3e | cache hierarchy | ✅ |
-| 2.3f | hot reload | ⏳ |
+| 2.3f | hot reload | ✅ |
 | 2.3g | pipeline handoff / descriptor growth | ⏳ |
 
 ## Core decisions
@@ -132,6 +132,20 @@ This is still intentionally not the full cache story:
 - no hot-reload invalidation policy yet
 - no persistent cache metadata/index file yet
 
+## What ships today (2.3f — hot reload)
+
+- effect reload is now real and observable
+- reload compiles a fresh replacement off to the side
+- live state only swaps if the full compile/reflection/cache path succeeds
+- failed reload preserves the last-good live state
+- `ReloadEvent` now has real meaning:
+  - `succeeded`
+  - `using_last_good`
+- existing `EffectHandle` remains stable across reload
+- existing variant handles remain queryable across reload
+
+This slice still intentionally stops short of the final PSO/layout boundary.
+
 ## How to use it
 
 ```cpp
@@ -167,6 +181,7 @@ auto spirv_key = diagnostics.spirv_key;
 - 2.3c now proves reflection-driven metadata ownership.
 - 2.3d now proves structural variant identity and mechanism policy helpers.
 - 2.3e now proves the first real cache hierarchy.
-- 2.3f–g add hot reload and PSO/layout growth.
+- 2.3f now proves atomic reload + last-good fallback.
+- 2.3g adds PSO/layout growth.
 - The material system and renderer will eventually consume this layer, not raw
   backend shader objects.

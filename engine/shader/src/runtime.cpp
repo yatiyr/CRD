@@ -301,6 +301,7 @@ struct StoredVariant
 {
     VariantHandle handle{};
     VariantKey key{};
+    VariantCompileRequest request{};
     crd::containers::Array<ModuleHandle> modules{};
 };
 
@@ -449,190 +450,21 @@ public:
     [[nodiscard]] VariantHandle request_variant(const VariantCompileRequest& request,
                                                 CompileDiagnostics& diagnostics) override
     {
-        diagnostics = {};
-
-        if (m_compiler == nullptr || m_options == nullptr)
-        {
-            diagnostics.message = crd::containers::String("shaderc runtime is unavailable");
-            return {};
-        }
-
-        const auto effect_it = m_effects.find(request.effect.value);
-        if (request.effect.value == 0 || effect_it == m_effects.end())
-        {
-            diagnostics.message = crd::containers::String("Variant request referenced an unknown effect handle");
-            return {};
-        }
-
-        StoredEffect& effect = effect_it->second;
-        const auto& effect_desc = effect.desc();
-        if (effect_desc.frontend_modules.empty())
-        {
-            diagnostics.message = crd::containers::String("Effect has no frontend modules to compile");
-            return {};
-        }
-
         StoredVariant stored_variant;
         stored_variant.handle = VariantHandle{m_next_variant_handle++};
         stored_variant.key = make_variant_key(request.variant);
+        stored_variant.request = request;
 
-        EffectDesc reflected_effect_desc = effect.desc();
-        reflected_effect_desc.parameters.clear();
-        reflected_effect_desc.descriptor_bindings.clear();
-        reflected_effect_desc.push_constants.clear();
-        reflected_effect_desc.vertex_attributes.clear();
-
-        for (const auto& compile_request : effect_desc.frontend_modules)
+        EffectDesc reflected_effect_desc;
+        if (!compile_variant_modules(request, stored_variant, reflected_effect_desc, diagnostics))
         {
-            crd::containers::String source_text;
-            const fs::Path source_path(compile_request.source_path);
-            if (!fs::read_file_text(source_path, source_text))
-            {
-                diagnostics.message = crd::containers::String("Failed to read shader source file");
-                return {};
-            }
-
-            diagnostics.source_key = SourceKey{hash_bytes(source_text.data(), source_text.size())};
-            diagnostics.source_cache_hit = m_source_cache.find(diagnostics.source_key.value) != m_source_cache.end();
-            if (!diagnostics.source_cache_hit)
-            {
-                m_source_cache.emplace(diagnostics.source_key.value, source_text);
-            }
-
-            PreprocessResult preprocessed;
-            crd::containers::Array<crd::containers::String> include_stack;
-            crd::containers::String preprocess_error;
-            if (!preprocess_file(source_path, preprocessed, include_stack, preprocess_error))
-            {
-                diagnostics.message = preprocess_error;
-                return {};
-            }
-
-            crd::u64 preprocess_hash =
-                hash_bytes(preprocessed.preprocessed_text.data(), preprocessed.preprocessed_text.size());
-            for (const auto& include_path : preprocessed.include_paths)
-            {
-                preprocess_hash = fnv1a_mix(preprocess_hash, hash_bytes(include_path.data(), include_path.size()));
-            }
-            diagnostics.preprocessed_key = PreprocessedKey{preprocess_hash};
-            diagnostics.preprocessed_cache_hit =
-                m_preprocessed_cache.find(diagnostics.preprocessed_key.value) != m_preprocessed_cache.end();
-            if (!diagnostics.preprocessed_cache_hit)
-            {
-                m_preprocessed_cache.emplace(diagnostics.preprocessed_key.value, preprocessed.preprocessed_text);
-            }
-
-            crd::u64 spirv_hash = diagnostics.preprocessed_key.value;
-            spirv_hash = fnv1a_mix(spirv_hash, static_cast<crd::u64>(compile_request.stage));
-            spirv_hash = fnv1a_mix(spirv_hash,
-                                   hash_bytes(compile_request.entry_point.data(), compile_request.entry_point.size()));
-            spirv_hash = fnv1a_mix(spirv_hash, stored_variant.key.value);
-            diagnostics.spirv_key = SpirvKey{spirv_hash};
-
-            ModuleHandle module_handle{};
-            crd::containers::Array<crd::u32> words;
-            diagnostics.spirv_cache_hit = false;
-
-            if (const auto module_it = m_module_cache.find(diagnostics.spirv_key.value);
-                module_it != m_module_cache.end())
-            {
-                module_handle = module_it->second;
-                diagnostics.spirv_cache_hit = true;
-            }
-            else
-            {
-                crd::containers::String cache_name(std::to_string(diagnostics.spirv_key.value).c_str());
-                cache_name.append(".spv");
-                const fs::Path cache_path = shader_cache_dir() / cache_name;
-
-                if (const auto spirv_it = m_spirv_cache.find(diagnostics.spirv_key.value);
-                    spirv_it != m_spirv_cache.end())
-                {
-                    words = spirv_it->second.words;
-                    diagnostics.spirv_cache_hit = true;
-                }
-                else
-                {
-                    crd::containers::Array<crd::u8> cached_bytes;
-                    if (fs::read_file_binary(cache_path, cached_bytes) &&
-                        (cached_bytes.size() % sizeof(crd::u32)) == 0u)
-                    {
-                        words.resize(cached_bytes.size() / sizeof(crd::u32));
-                        std::memcpy(words.data(), cached_bytes.data(), cached_bytes.size());
-                        diagnostics.spirv_cache_hit = true;
-                    }
-                    else
-                    {
-                        const shaderc_compilation_result_t result = m_api.compile_into_spv(
-                            m_compiler, preprocessed.preprocessed_text.c_str(), preprocessed.preprocessed_text.size(),
-                            to_shaderc_kind(compile_request.stage), compile_request.source_path.c_str(),
-                            compile_request.entry_point.c_str(), m_options);
-                        if (m_api.result_status(result) != shaderc_compilation_status_success)
-                        {
-                            diagnostics.message = crd::containers::String(m_api.result_error(result));
-                            m_api.result_release(result);
-                            return {};
-                        }
-                        const char* bytes = m_api.result_bytes(result);
-                        const size_t length = m_api.result_length(result);
-                        words.resize(length / sizeof(crd::u32));
-                        std::memcpy(words.data(), bytes, length);
-                        m_api.result_release(result);
-
-                        (void)fs::create_directories(shader_cache_dir());
-                        const auto byte_count = words.size() * sizeof(crd::u32);
-                        (void)fs::write_file_binary(cache_path,
-                                                    crd::containers::ConstSpan<crd::u8>(
-                                                        reinterpret_cast<const crd::u8*>(words.data()), byte_count));
-                    }
-
-                    m_spirv_cache.emplace(diagnostics.spirv_key.value, CachedSpirv{words});
-                }
-
-                ReflectedData reflected;
-                crd::containers::String reflect_error;
-                if (!reflect_module(words, compile_request.stage, reflected, reflect_error))
-                {
-                    diagnostics.message = reflect_error;
-                    return {};
-                }
-
-                module_handle = ModuleHandle{m_next_module_handle++};
-                m_modules.emplace(module_handle.value,
-                                  StoredModule(module_handle, compile_request.stage, compile_request.entry_point,
-                                               std::move(words), compile_request.source_path, std::move(reflected),
-                                               diagnostics.source_key, diagnostics.preprocessed_key,
-                                               diagnostics.spirv_key));
-                m_module_cache.emplace(diagnostics.spirv_key.value, module_handle);
-            }
-
-            const auto* module = find_module(module_handle);
-            CRD_ASSERT(module != nullptr);
-            for (const auto& parameter : module->parameters())
-            {
-                reflected_effect_desc.parameters.push_back(parameter);
-            }
-            for (const auto& descriptor_binding : module->descriptor_bindings())
-            {
-                reflected_effect_desc.descriptor_bindings.push_back(descriptor_binding);
-            }
-            for (const auto& push_constant : module->push_constants())
-            {
-                reflected_effect_desc.push_constants.push_back(push_constant);
-            }
-            for (const auto& vertex_attribute : module->vertex_attributes())
-            {
-                reflected_effect_desc.vertex_attributes.push_back(vertex_attribute);
-            }
-
-            stored_variant.modules.push_back(module_handle);
+            return {};
         }
 
+        StoredEffect& effect = m_effects.find(request.effect.value)->second;
         effect.mutable_desc() = std::move(reflected_effect_desc);
         const VariantHandle handle = stored_variant.handle;
         m_variants.emplace(handle.value, std::move(stored_variant));
-        diagnostics.succeeded = true;
-        diagnostics.message = crd::containers::String("GLSL frontend compiled, reflected, and cached");
         return handle;
     }
 
@@ -665,11 +497,276 @@ public:
     {
         event.effect = handle;
         event.using_last_good = false;
-        event.succeeded = find_effect(handle) != nullptr;
-        return event.succeeded;
+
+        const auto effect_it = m_effects.find(handle.value);
+        if (handle.value == 0 || effect_it == m_effects.end())
+        {
+            event.succeeded = false;
+            return false;
+        }
+
+        StoredEffect& effect = effect_it->second;
+        const EffectDesc previous_effect_desc = effect.desc();
+
+        struct ReloadedVariant
+        {
+            VariantHandle handle{};
+            StoredVariant variant{};
+            EffectDesc reflected_effect_desc{};
+            CompileDiagnostics diagnostics{};
+        };
+
+        crd::containers::Array<ReloadedVariant> refreshed_variants;
+        for (const auto& [variant_id, variant] : m_variants)
+        {
+            if (variant.request.effect.value != handle.value)
+            {
+                continue;
+            }
+
+            ReloadedVariant refreshed;
+            refreshed.handle = VariantHandle{variant_id};
+            refreshed.variant = variant;
+            refreshed.variant.modules.clear();
+            if (!compile_variant_modules(variant.request, refreshed.variant, refreshed.reflected_effect_desc,
+                                         refreshed.diagnostics, false))
+            {
+                event.succeeded = false;
+                event.using_last_good = true;
+                return false;
+            }
+            refreshed_variants.push_back(std::move(refreshed));
+        }
+
+        // No live variants yet: effect exists, so reload is a no-op success.
+        if (refreshed_variants.empty())
+        {
+            event.succeeded = true;
+            return true;
+        }
+
+        for (auto& refreshed : refreshed_variants)
+        {
+            StoredVariant& live_variant = m_variants.find(refreshed.handle.value)->second;
+
+            const crd::usize reuse_count = std::min(live_variant.modules.size(), refreshed.variant.modules.size());
+            for (crd::usize i = 0; i < reuse_count; ++i)
+            {
+                const auto new_handle = refreshed.variant.modules[i];
+                const auto old_handle = live_variant.modules[i];
+                auto new_module_it = m_modules.find(new_handle.value);
+                auto old_module_it = m_modules.find(old_handle.value);
+                CRD_ASSERT(new_module_it != m_modules.end());
+                CRD_ASSERT(old_module_it != m_modules.end());
+                old_module_it->second = std::move(new_module_it->second);
+                m_modules.erase(new_module_it);
+                refreshed.variant.modules[i] = old_handle;
+            }
+
+            for (crd::usize i = reuse_count; i < live_variant.modules.size(); ++i)
+            {
+                m_modules.erase(live_variant.modules[i].value);
+            }
+
+            live_variant = std::move(refreshed.variant);
+            effect.mutable_desc() = std::move(refreshed.reflected_effect_desc);
+        }
+
+        event.succeeded = true;
+        return true;
     }
 
 private:
+    [[nodiscard]] bool compile_variant_modules(const VariantCompileRequest& request, StoredVariant& stored_variant,
+                                               EffectDesc& reflected_effect_desc, CompileDiagnostics& diagnostics,
+                                               bool reuse_module_handles = true)
+    {
+        diagnostics = {};
+
+        if (m_compiler == nullptr || m_options == nullptr)
+        {
+            diagnostics.message = crd::containers::String("shaderc runtime is unavailable");
+            return false;
+        }
+
+        const auto effect_it = m_effects.find(request.effect.value);
+        if (request.effect.value == 0 || effect_it == m_effects.end())
+        {
+            diagnostics.message = crd::containers::String("Variant request referenced an unknown effect handle");
+            return false;
+        }
+
+        const auto& effect_desc = effect_it->second.desc();
+        if (effect_desc.frontend_modules.empty())
+        {
+            diagnostics.message = crd::containers::String("Effect has no frontend modules to compile");
+            return false;
+        }
+
+        reflected_effect_desc = effect_desc;
+        reflected_effect_desc.parameters.clear();
+        reflected_effect_desc.descriptor_bindings.clear();
+        reflected_effect_desc.push_constants.clear();
+        reflected_effect_desc.vertex_attributes.clear();
+
+        for (const auto& compile_request : effect_desc.frontend_modules)
+        {
+            crd::containers::String source_text;
+            const fs::Path source_path(compile_request.source_path);
+            if (!fs::read_file_text(source_path, source_text))
+            {
+                diagnostics.message = crd::containers::String("Failed to read shader source file");
+                return false;
+            }
+
+            diagnostics.source_key = SourceKey{hash_bytes(source_text.data(), source_text.size())};
+            diagnostics.source_cache_hit = m_source_cache.find(diagnostics.source_key.value) != m_source_cache.end();
+            if (!diagnostics.source_cache_hit)
+            {
+                m_source_cache.emplace(diagnostics.source_key.value, source_text);
+            }
+
+            PreprocessResult preprocessed;
+            crd::containers::Array<crd::containers::String> include_stack;
+            crd::containers::String preprocess_error;
+            if (!preprocess_file(source_path, preprocessed, include_stack, preprocess_error))
+            {
+                diagnostics.message = preprocess_error;
+                return false;
+            }
+
+            crd::u64 preprocess_hash =
+                hash_bytes(preprocessed.preprocessed_text.data(), preprocessed.preprocessed_text.size());
+            for (const auto& include_path : preprocessed.include_paths)
+            {
+                preprocess_hash = fnv1a_mix(preprocess_hash, hash_bytes(include_path.data(), include_path.size()));
+            }
+            diagnostics.preprocessed_key = PreprocessedKey{preprocess_hash};
+            diagnostics.preprocessed_cache_hit =
+                m_preprocessed_cache.find(diagnostics.preprocessed_key.value) != m_preprocessed_cache.end();
+            if (!diagnostics.preprocessed_cache_hit)
+            {
+                m_preprocessed_cache.emplace(diagnostics.preprocessed_key.value, preprocessed.preprocessed_text);
+            }
+
+            crd::u64 spirv_hash = diagnostics.preprocessed_key.value;
+            spirv_hash = fnv1a_mix(spirv_hash, static_cast<crd::u64>(compile_request.stage));
+            spirv_hash = fnv1a_mix(spirv_hash,
+                                   hash_bytes(compile_request.entry_point.data(), compile_request.entry_point.size()));
+            spirv_hash = fnv1a_mix(spirv_hash, stored_variant.key.value);
+            diagnostics.spirv_key = SpirvKey{spirv_hash};
+
+            ModuleHandle module_handle{};
+            crd::containers::Array<crd::u32> words;
+            diagnostics.spirv_cache_hit = false;
+
+            if (reuse_module_handles)
+            {
+                if (const auto module_it = m_module_cache.find(diagnostics.spirv_key.value);
+                    module_it != m_module_cache.end())
+                {
+                    module_handle = module_it->second;
+                    diagnostics.spirv_cache_hit = true;
+                }
+            }
+
+            if (!module_handle.is_valid())
+            {
+                crd::containers::String cache_name(std::to_string(diagnostics.spirv_key.value).c_str());
+                cache_name.append(".spv");
+                const fs::Path cache_path = shader_cache_dir() / cache_name;
+
+                if (const auto spirv_it = m_spirv_cache.find(diagnostics.spirv_key.value);
+                    spirv_it != m_spirv_cache.end())
+                {
+                    words = spirv_it->second.words;
+                    diagnostics.spirv_cache_hit = true;
+                }
+                else
+                {
+                    crd::containers::Array<crd::u8> cached_bytes;
+                    if (fs::read_file_binary(cache_path, cached_bytes) &&
+                        (cached_bytes.size() % sizeof(crd::u32)) == 0u)
+                    {
+                        words.resize(cached_bytes.size() / sizeof(crd::u32));
+                        std::memcpy(words.data(), cached_bytes.data(), cached_bytes.size());
+                        diagnostics.spirv_cache_hit = true;
+                    }
+                    else
+                    {
+                        const shaderc_compilation_result_t result = m_api.compile_into_spv(
+                            m_compiler, preprocessed.preprocessed_text.c_str(), preprocessed.preprocessed_text.size(),
+                            to_shaderc_kind(compile_request.stage), compile_request.source_path.c_str(),
+                            compile_request.entry_point.c_str(), m_options);
+                        if (m_api.result_status(result) != shaderc_compilation_status_success)
+                        {
+                            diagnostics.message = crd::containers::String(m_api.result_error(result));
+                            m_api.result_release(result);
+                            return false;
+                        }
+                        const char* bytes = m_api.result_bytes(result);
+                        const size_t length = m_api.result_length(result);
+                        words.resize(length / sizeof(crd::u32));
+                        std::memcpy(words.data(), bytes, length);
+                        m_api.result_release(result);
+
+                        (void)fs::create_directories(shader_cache_dir());
+                        const auto byte_count = words.size() * sizeof(crd::u32);
+                        (void)fs::write_file_binary(cache_path,
+                                                    crd::containers::ConstSpan<crd::u8>(
+                                                        reinterpret_cast<const crd::u8*>(words.data()), byte_count));
+                    }
+
+                    m_spirv_cache.emplace(diagnostics.spirv_key.value, CachedSpirv{words});
+                }
+
+                ReflectedData reflected;
+                crd::containers::String reflect_error;
+                if (!reflect_module(words, compile_request.stage, reflected, reflect_error))
+                {
+                    diagnostics.message = reflect_error;
+                    return false;
+                }
+
+                module_handle = ModuleHandle{m_next_module_handle++};
+                m_modules.emplace(module_handle.value,
+                                  StoredModule(module_handle, compile_request.stage, compile_request.entry_point,
+                                               std::move(words), compile_request.source_path, std::move(reflected),
+                                               diagnostics.source_key, diagnostics.preprocessed_key,
+                                               diagnostics.spirv_key));
+                if (reuse_module_handles)
+                {
+                    m_module_cache.emplace(diagnostics.spirv_key.value, module_handle);
+                }
+            }
+
+            const auto* module = find_module(module_handle);
+            CRD_ASSERT(module != nullptr);
+            for (const auto& parameter : module->parameters())
+            {
+                reflected_effect_desc.parameters.push_back(parameter);
+            }
+            for (const auto& descriptor_binding : module->descriptor_bindings())
+            {
+                reflected_effect_desc.descriptor_bindings.push_back(descriptor_binding);
+            }
+            for (const auto& push_constant : module->push_constants())
+            {
+                reflected_effect_desc.push_constants.push_back(push_constant);
+            }
+            for (const auto& vertex_attribute : module->vertex_attributes())
+            {
+                reflected_effect_desc.vertex_attributes.push_back(vertex_attribute);
+            }
+
+            stored_variant.modules.push_back(module_handle);
+        }
+
+        diagnostics.succeeded = true;
+        diagnostics.message = crd::containers::String("GLSL frontend compiled, reflected, and cached");
+        return true;
+    }
+
     crd::u64 m_next_effect_handle = 1;
     crd::u64 m_next_variant_handle = 1;
     crd::u64 m_next_module_handle = 1;

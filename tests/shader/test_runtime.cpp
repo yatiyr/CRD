@@ -323,3 +323,97 @@ TEST_CASE("Failed compile does not populate SPIR-V cache hit", "[shader]")
     REQUIRE_FALSE(v2.is_valid());
     REQUIRE_FALSE(second.spirv_cache_hit);
 }
+
+TEST_CASE("Shader runtime hot reload updates live data atomically", "[shader]")
+{
+    const auto root = temp_shader_root();
+    const bool created_root = fs::create_directories(root) || fs::is_directory(root);
+    REQUIRE(created_root);
+
+    REQUIRE(fs::write_file_text(root / "triangle.vert",
+                                "#version 460\nlayout(location=0) in vec2 in_position;\n"
+                                "layout(location=0) out vec3 v_color;\n"
+                                "void main(){ gl_Position=vec4(in_position,0.0,1.0); v_color=vec3(1.0,0.0,0.0); }\n"));
+    REQUIRE(fs::write_file_text(
+        root / "triangle.frag",
+        "#version 460\nlayout(location=0) in vec3 v_color;\nlayout(location=0) out vec4 out_color;\n"
+        "void main(){ out_color=vec4(v_color,1.0); }\n"));
+
+    auto runtime = crd::shader::create_runtime();
+    crd::shader::EffectDesc desc;
+    desc.name = crd::containers::String("reload_case");
+    desc.frontend_modules.push_back({crd::containers::String((root / "triangle.vert").generic()),
+                                     crd::shader::Stage::Vertex, crd::containers::String("main")});
+    desc.frontend_modules.push_back({crd::containers::String((root / "triangle.frag").generic()),
+                                     crd::shader::Stage::Fragment, crd::containers::String("main")});
+    const auto effect = runtime->create_effect(desc);
+
+    crd::shader::CompileDiagnostics diagnostics;
+    crd::shader::VariantCompileRequest request;
+    request.effect = effect;
+    const auto variant = runtime->request_variant(request, diagnostics);
+    REQUIRE(variant.is_valid());
+    const auto original_key = runtime->variant_key(variant);
+
+    REQUIRE(fs::write_file_text(
+        root / "triangle.frag",
+        "#version 460\nlayout(location=0) in vec3 v_color;\nlayout(location=0) out vec4 out_color;\n"
+        "layout(push_constant) uniform T { vec4 tint; } tint_data;\n"
+        "void main(){ out_color=vec4(v_color,1.0)*tint_data.tint; }\n"));
+
+    crd::shader::ReloadEvent event;
+    REQUIRE(runtime->reload_effect(effect, event));
+    REQUIRE(event.succeeded);
+    REQUIRE_FALSE(event.using_last_good);
+    REQUIRE(runtime->variant_key(variant).value == original_key.value);
+    const auto* effect_view = runtime->find_effect(effect);
+    REQUIRE(effect_view != nullptr);
+    REQUIRE(effect_view->push_constants().size() == 1u);
+
+    REQUIRE(fs::remove_all(root));
+}
+
+TEST_CASE("Failed hot reload preserves last-good state", "[shader]")
+{
+    const auto root = temp_shader_root();
+    const bool created_root = fs::create_directories(root) || fs::is_directory(root);
+    REQUIRE(created_root);
+
+    REQUIRE(fs::write_file_text(root / "triangle.vert", "#version 460\nlayout(location=0) in vec2 in_position;\n"
+                                                        "void main(){ gl_Position=vec4(in_position,0.0,1.0); }\n"));
+    REQUIRE(fs::write_file_text(
+        root / "triangle.frag",
+        "#version 460\nlayout(location=0) out vec4 out_color;\nvoid main(){ out_color=vec4(1.0); }\n"));
+
+    auto runtime = crd::shader::create_runtime();
+    crd::shader::EffectDesc desc;
+    desc.name = crd::containers::String("reload_fail_case");
+    desc.frontend_modules.push_back({crd::containers::String((root / "triangle.vert").generic()),
+                                     crd::shader::Stage::Vertex, crd::containers::String("main")});
+    desc.frontend_modules.push_back({crd::containers::String((root / "triangle.frag").generic()),
+                                     crd::shader::Stage::Fragment, crd::containers::String("main")});
+    const auto effect = runtime->create_effect(desc);
+
+    crd::shader::CompileDiagnostics diagnostics;
+    crd::shader::VariantCompileRequest request;
+    request.effect = effect;
+    const auto variant = runtime->request_variant(request, diagnostics);
+    REQUIRE(variant.is_valid());
+    const auto original_modules = runtime->variant_modules(variant);
+    REQUIRE(original_modules.size() == 2u);
+
+    REQUIRE(fs::write_file_text(
+        root / "triangle.frag",
+        "#version 460\nlayout(location=0) out vec4 out_color;\nvoid main( { out_color=vec4(1.0); }\n"));
+
+    crd::shader::ReloadEvent event;
+    REQUIRE_FALSE(runtime->reload_effect(effect, event));
+    REQUIRE_FALSE(event.succeeded);
+    REQUIRE(event.using_last_good);
+    const auto after_modules = runtime->variant_modules(variant);
+    REQUIRE(after_modules.size() == original_modules.size());
+    REQUIRE(after_modules[0].value == original_modules[0].value);
+    REQUIRE(after_modules[1].value == original_modules[1].value);
+
+    REQUIRE(fs::remove_all(root));
+}

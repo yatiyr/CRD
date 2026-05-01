@@ -44,15 +44,14 @@ and hot-reload discipline.
 | 2.3c | reflection consumption | ✅ | `spirv-reflect` drives descriptor/push/vertex metadata |
 | 2.3d | variant key + mechanism policy | ✅ | typed variant key, rejection criteria, no `#define` soup |
 | 2.3e | cache hierarchy | ✅ | content-addressed keys, include graph in hash |
-| 2.3f | hot reload | ⏳ | atomic swap, last-good fallback, observability |
+| 2.3f | hot reload | ✅ | atomic swap, last-good fallback, observability |
 | 2.3g | pipeline handoff / descriptor growth | ⏳ | what `crd-shader` produces, what RHI consumes |
 
 Every slice must be independently shippable and keep the triangle path alive.
 
 ## Near-term execution order
 
-1. **2.3f — hot reload**
-2. **2.3g — pipeline handoff / descriptor growth**
+1. **2.3g — pipeline handoff / descriptor growth**
 
 This order is deliberate: it retires the biggest architectural risks early
 without pretending the material/renderer side already exists.
@@ -117,6 +116,18 @@ Delivered:
 - in-memory source/preprocessed/SPIR-V caches
 - on-disk SPIR-V cache
 - cache-hit observability through compile diagnostics
+
+## 2.3f shipped
+
+Shipped in session: `docs/sessions/2026-04-30-shader-2.3f-hot-reload.md`
+
+Delivered:
+
+- atomic reload path
+- last-good fallback on failed reload
+- stable effect handle across reload
+- stable variant handle lookup across reload
+- tests and smoke for successful + failed reload behavior
 
 ## Decisions
 
