@@ -34,8 +34,8 @@ TEST_CASE("Shader runtime creates effects and preserves metadata", "[shader]")
     desc.name = crd::containers::String("basic");
     desc.source_path = crd::containers::String("shaders/basic.shader");
     desc.parameters.push_back({crd::containers::String("albedo"), crd::shader::ParameterClass::Texture, 0, 0, 0});
-    desc.descriptor_bindings.push_back({0, 0, 1, crd::shader::Stage::Fragment});
-    desc.push_constants.push_back({0, 64, crd::shader::Stage::Vertex});
+    desc.descriptor_bindings.push_back({0, 0, 1, crd::shader::stage_bit(crd::shader::Stage::Fragment)});
+    desc.push_constants.push_back({0, 64, crd::shader::stage_bit(crd::shader::Stage::Vertex)});
     desc.vertex_attributes.push_back({crd::containers::String("POSITION"), 0, crd::rhi::Format::R32G32B32Sfloat, 0});
 
     const auto handle = runtime->create_effect(desc);
@@ -416,4 +416,30 @@ TEST_CASE("Failed hot reload preserves last-good state", "[shader]")
     REQUIRE(after_modules[1].value == original_modules[1].value);
 
     REQUIRE(fs::remove_all(root));
+}
+
+TEST_CASE("Shader runtime describes variant handoff for RHI/pipeline creation", "[shader]")
+{
+    auto runtime = crd::shader::create_runtime();
+    crd::shader::EffectDesc desc;
+    desc.name = crd::containers::String("handoff_case");
+    desc.frontend_modules.push_back({source_path("runtime/examples/shaders/reflect_triangle.vert"),
+                                     crd::shader::Stage::Vertex, crd::containers::String("main")});
+    desc.frontend_modules.push_back({source_path("runtime/examples/shaders/reflect_triangle.frag"),
+                                     crd::shader::Stage::Fragment, crd::containers::String("main")});
+    const auto effect = runtime->create_effect(desc);
+
+    crd::shader::CompileDiagnostics diagnostics;
+    crd::shader::VariantCompileRequest request;
+    request.effect = effect;
+    const auto variant = runtime->request_variant(request, diagnostics);
+    REQUIRE(variant.is_valid());
+
+    crd::shader::VariantPipelineDesc handoff;
+    REQUIRE(runtime->describe_variant(variant, handoff));
+    REQUIRE(handoff.variant.value == variant.value);
+    REQUIRE(handoff.modules.size() == 2u);
+    REQUIRE(handoff.descriptor_bindings.size() == 2u);
+    REQUIRE(handoff.push_constants.size() == 1u);
+    REQUIRE(handoff.vertex_attributes.size() == 2u);
 }

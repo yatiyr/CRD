@@ -11,10 +11,9 @@
 
 ## Current focus
 
-**Phase 2.3g — `crd-shader` pipeline handoff / descriptor growth.** 2.3a–f
-shipped; the public envelope, ingest seam, reflection ownership, structural
-variant identity, cache hierarchy, and hot-reload discipline are now stable
-enough to define what `crd-shader` hands to `crd-rhi` and later renderer code.
+**Phase 2.4 — `crd-renderer` v1.** `crd-shader` 2.3a–g shipped; the shader side
+is now strong enough that the next meaningful work is a real renderer consumer
+built on top of the current RHI/backend/shader stack.
 
 Aktif phase dosyası: `docs/phases/phase-2.3-shader.md`
 
@@ -28,6 +27,22 @@ _none — running on the main roadmap._
 > `docs/detours/README.md`.
 
 ## Last shipped milestone
+
+**2026-05-01 — `crd-shader` 2.3g pipeline handoff / descriptor growth shipped.**
+
+`crd-shader` now produces a backend-neutral handoff surface describing compiled
+module usage, normalized descriptor bindings, push-constant visibility, and
+vertex-input requirements for a variant. This cleanly separates shader-owned
+metadata from backend-owned pipeline objects.
+
+Three-flavour green:
+- Debug: 226/226
+- Release: 225/225 (Debug-only Vulkan triangle integration test correctly skipped)
+- ASan: 226/226
+
+Detail: `docs/sessions/2026-05-01-shader-2.3g-pipeline-handoff.md`.
+
+## Previous shipped milestone
 
 **2026-04-30 — `crd-shader` 2.3f hot reload shipped.**
 
@@ -188,10 +203,10 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Next up (next 1–3 sessions)
 
-1. **`crd-shader` 2.3g.** Pipeline handoff / descriptor growth.
-2. **`crd-renderer` v1 (2.4).** Start from an explicit renderable list and
+1. **`crd-renderer` v1 (2.4).** Start from an explicit renderable list and
    camera path before wider systems.
-3. **`crd-config` 1.6b/1.6c.** Reload hook and more real consumers when useful.
+2. **`crd-config` 1.6b/1.6c.** Reload hook and more real consumers when useful.
+3. **`crd-jobs` / `crd-resources`.** Pull in once renderer pressure is real.
 
 ## Open questions
 
@@ -202,9 +217,9 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Test counts (last quality pass)
 
-- Debug: 225/225
-- Release: 224/224
-- ASan: 225/225
+- Debug: 226/226
+- Release: 225/225
+- ASan: 226/226
 
 ## Pointers (lazy-load reference)
 

@@ -69,6 +69,8 @@ int main()
     const auto modules = runtime->variant_modules(variant);
     const auto* effect_view = runtime->find_effect(effect);
     const auto key = runtime->variant_key(variant);
+    crd::shader::VariantPipelineDesc handoff;
+    const bool has_handoff = runtime->describe_variant(variant, handoff);
 
     const auto pass_policy = crd::shader::decide_mechanism(crd::shader::VariantAxis::PassType);
     const auto material_policy = crd::shader::decide_mechanism(crd::shader::VariantAxis::MaterialParameter);
@@ -90,6 +92,9 @@ int main()
                      effect_view->descriptor_bindings().size(), effect_view->push_constants().size(),
                      effect_view->vertex_attributes().size());
     }
+    CRD_LOG_INFO(g_log_smoke_shader, "handoff={} modules={} descriptors={} push_constants={} vertex_attributes={}",
+                 has_handoff, handoff.modules.size(), handoff.descriptor_bindings.size(), handoff.push_constants.size(),
+                 handoff.vertex_attributes.size());
 
     (void)fs::write_file_text(
         frag_path, "#version 460\nlayout(location = 0) in vec3 v_color;\nlayout(location = 0) out vec4 out_color;\n"

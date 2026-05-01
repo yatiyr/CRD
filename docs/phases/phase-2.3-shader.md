@@ -45,13 +45,13 @@ and hot-reload discipline.
 | 2.3d | variant key + mechanism policy | ✅ | typed variant key, rejection criteria, no `#define` soup |
 | 2.3e | cache hierarchy | ✅ | content-addressed keys, include graph in hash |
 | 2.3f | hot reload | ✅ | atomic swap, last-good fallback, observability |
-| 2.3g | pipeline handoff / descriptor growth | ⏳ | what `crd-shader` produces, what RHI consumes |
+| 2.3g | pipeline handoff / descriptor growth | ✅ | what `crd-shader` produces, what RHI consumes |
 
 Every slice must be independently shippable and keep the triangle path alive.
 
 ## Near-term execution order
 
-1. **2.3g — pipeline handoff / descriptor growth**
+`crd-shader` design packet is now functionally implemented through 2.3g.
 
 This order is deliberate: it retires the biggest architectural risks early
 without pretending the material/renderer side already exists.
@@ -128,6 +128,17 @@ Delivered:
 - stable effect handle across reload
 - stable variant handle lookup across reload
 - tests and smoke for successful + failed reload behavior
+
+## 2.3g shipped
+
+Shipped in session: `docs/sessions/2026-05-01-shader-2.3g-pipeline-handoff.md`
+
+Delivered:
+
+- backend-neutral `VariantPipelineDesc`
+- `Runtime::describe_variant()`
+- normalized descriptor/push visibility across modules
+- explicit shader → RHI handoff surface for later renderer/pipeline work
 
 ## Decisions
 

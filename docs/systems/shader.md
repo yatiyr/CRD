@@ -15,7 +15,7 @@ SPIR-V, or Vulkan types through the public API.
 | 2.3d | variant key + mechanism policy | ✅ |
 | 2.3e | cache hierarchy | ✅ |
 | 2.3f | hot reload | ✅ |
-| 2.3g | pipeline handoff / descriptor growth | ⏳ |
+| 2.3g | pipeline handoff / descriptor growth | ✅ |
 
 ## Core decisions
 
@@ -146,6 +146,19 @@ This is still intentionally not the full cache story:
 
 This slice still intentionally stops short of the final PSO/layout boundary.
 
+## What ships today (2.3g — pipeline handoff / descriptor growth)
+
+- backend-neutral `VariantPipelineDesc`
+- `Runtime::describe_variant()`
+- handoff includes:
+  - compiled module usage list
+  - normalized descriptor bindings
+  - normalized push constant ranges
+  - vertex attribute requirements
+- descriptor visibility is merged across stages at the handoff surface
+- `crd-shader` now explicitly owns the shader-side inputs to PSO creation,
+  while `crd-rhi` continues to own native pipeline objects
+
 ## How to use it
 
 ```cpp
@@ -182,6 +195,6 @@ auto spirv_key = diagnostics.spirv_key;
 - 2.3d now proves structural variant identity and mechanism policy helpers.
 - 2.3e now proves the first real cache hierarchy.
 - 2.3f now proves atomic reload + last-good fallback.
-- 2.3g adds PSO/layout growth.
+- 2.3g now proves the PSO/layout handoff boundary.
 - The material system and renderer will eventually consume this layer, not raw
   backend shader objects.

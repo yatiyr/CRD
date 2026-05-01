@@ -14,6 +14,20 @@ enum class Stage : crd::u8
     Compute,
 };
 
+[[nodiscard]] constexpr crd::u32 stage_bit(Stage stage) noexcept
+{
+    switch (stage)
+    {
+        case Stage::Vertex:
+            return 1u << 0u;
+        case Stage::Fragment:
+            return 1u << 1u;
+        case Stage::Compute:
+        default:
+            return 1u << 2u;
+    }
+}
+
 enum class ParameterClass : crd::u8
 {
     Texture,
@@ -93,14 +107,14 @@ struct DescriptorBindingDesc
     crd::u32 set_index = 0;
     crd::u32 binding = 0;
     crd::u32 count = 1;
-    Stage visibility = Stage::Fragment;
+    crd::u32 visibility_mask = stage_bit(Stage::Fragment);
 };
 
 struct PushConstantRangeDesc
 {
     crd::u32 offset = 0;
     crd::u32 size_bytes = 0;
-    Stage visibility = Stage::Vertex;
+    crd::u32 visibility_mask = stage_bit(Stage::Vertex);
 };
 
 struct VertexAttributeLayoutDesc
@@ -109,6 +123,22 @@ struct VertexAttributeLayoutDesc
     crd::u32 location = 0;
     crd::rhi::Format format = crd::rhi::Format::Undefined;
     crd::u32 offset_bytes = 0;
+};
+
+struct ShaderModuleUsageDesc
+{
+    ModuleHandle module{};
+    Stage stage = Stage::Vertex;
+    crd::containers::String entry_point{};
+};
+
+struct VariantPipelineDesc
+{
+    VariantHandle variant{};
+    crd::containers::Array<ShaderModuleUsageDesc> modules{};
+    crd::containers::Array<DescriptorBindingDesc> descriptor_bindings{};
+    crd::containers::Array<PushConstantRangeDesc> push_constants{};
+    crd::containers::Array<VertexAttributeLayoutDesc> vertex_attributes{};
 };
 
 struct VariantKey

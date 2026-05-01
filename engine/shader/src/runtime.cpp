@@ -90,6 +90,34 @@ struct ReflectedData
     crd::containers::Array<VertexAttributeLayoutDesc> vertex_attributes{};
 };
 
+void merge_descriptor_binding(crd::containers::Array<DescriptorBindingDesc>& out,
+                              const DescriptorBindingDesc& candidate)
+{
+    for (auto& existing : out)
+    {
+        if (existing.set_index == candidate.set_index && existing.binding == candidate.binding)
+        {
+            existing.count = std::max(existing.count, candidate.count);
+            existing.visibility_mask |= candidate.visibility_mask;
+            return;
+        }
+    }
+    out.push_back(candidate);
+}
+
+void merge_push_constant(crd::containers::Array<PushConstantRangeDesc>& out, const PushConstantRangeDesc& candidate)
+{
+    for (auto& existing : out)
+    {
+        if (existing.offset == candidate.offset && existing.size_bytes == candidate.size_bytes)
+        {
+            existing.visibility_mask |= candidate.visibility_mask;
+            return;
+        }
+    }
+    out.push_back(candidate);
+}
+
 [[nodiscard]] bool reflect_module(const crd::containers::Array<crd::u32>& words, Stage stage, ReflectedData& out,
                                   crd::containers::String& error)
 {
@@ -105,7 +133,7 @@ struct ReflectedData
     for (crd::u32 i = 0; i < module.descriptor_binding_count; ++i)
     {
         const auto& binding = module.descriptor_bindings[i];
-        out.descriptor_bindings.push_back({binding.set, binding.binding, binding.count, stage});
+        out.descriptor_bindings.push_back({binding.set, binding.binding, binding.count, stage_bit(stage)});
         out.parameters.push_back({crd::containers::String(binding.name != nullptr ? binding.name : ""),
                                   to_parameter_class(binding.descriptor_type), binding.set, binding.binding,
                                   binding.block.size});
@@ -114,7 +142,7 @@ struct ReflectedData
     for (crd::u32 i = 0; i < module.push_constant_block_count; ++i)
     {
         const auto& block = module.push_constant_blocks[i];
-        out.push_constants.push_back({block.offset, block.size, stage});
+        out.push_constants.push_back({block.offset, block.size, stage_bit(stage)});
         out.parameters.push_back({crd::containers::String(block.name != nullptr ? block.name : "push_constants"),
                                   ParameterClass::PushConstant, 0, 0, block.size});
     }
@@ -481,6 +509,45 @@ public:
             return {};
         }
         return it->second.key;
+    }
+
+    [[nodiscard]] bool describe_variant(VariantHandle handle, VariantPipelineDesc& out) const noexcept override
+    {
+        const auto variant_it = m_variants.find(handle.value);
+        if (variant_it == m_variants.end())
+        {
+            return false;
+        }
+
+        out = {};
+        out.variant = handle;
+        for (const auto& module_handle : variant_it->second.modules)
+        {
+            const auto* module = find_module(module_handle);
+            if (module == nullptr)
+            {
+                return false;
+            }
+
+            out.modules.push_back({module->handle(), module->stage(), crd::containers::String(module->entry_point())});
+            for (const auto& binding : module->descriptor_bindings())
+            {
+                merge_descriptor_binding(out.descriptor_bindings, binding);
+            }
+            for (const auto& push_constant : module->push_constants())
+            {
+                merge_push_constant(out.push_constants, push_constant);
+            }
+            if (module->stage() == Stage::Vertex)
+            {
+                for (const auto& attribute : module->vertex_attributes())
+                {
+                    out.vertex_attributes.push_back(attribute);
+                }
+            }
+        }
+
+        return true;
     }
 
     [[nodiscard]] crd::containers::ConstSpan<ModuleHandle> variant_modules(VariantHandle handle) const noexcept override
