@@ -120,6 +120,8 @@ int main()
 
         auto& command_buffer = command_buffers[frame % command_buffers.size()];
         command_buffer->begin();
+        command_buffer->transition_image(swapchain->current_image(),
+                                         crd::rhi::ImageAccess::Undefined, crd::rhi::ImageAccess::ColorWrite);
         command_buffer->begin_rendering({{swapchain->desc().extent.width, swapchain->desc().extent.height},
                                          {&swapchain->current_image(),
                                           crd::rhi::LoadOp::Clear,
@@ -131,6 +133,8 @@ int main()
         command_buffer->draw(3, 0);
         imgui->render(*command_buffer);
         command_buffer->end_rendering();
+        command_buffer->transition_image(swapchain->current_image(),
+                                         crd::rhi::ImageAccess::ColorWrite, crd::rhi::ImageAccess::Present);
         command_buffer->end();
 
         if (device->graphics_queue().submit(*command_buffer, *swapchain))

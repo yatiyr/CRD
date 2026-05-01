@@ -1,6 +1,8 @@
 #include <crd/platform/filesystem.hpp>
+#include <crd/renderer/forward_render_path.hpp>
 #include <crd/renderer/frame_graph.hpp>
 #include <crd/renderer/material.hpp>
+#include <crd/renderer/per_frame_data.hpp>
 #include <crd/renderer/render_path.hpp>
 #include <crd/renderer/renderer.hpp>
 #include <crd/shader/shader.hpp>
@@ -201,13 +203,15 @@ public:
     {
         return nullptr;
     }
-    [[nodiscard]] std::unique_ptr<crd::rhi::Buffer> create_buffer(const crd::rhi::BufferDesc&) override
+    [[nodiscard]] std::unique_ptr<crd::rhi::Buffer> create_buffer(const crd::rhi::BufferDesc& desc) override
     {
-        return nullptr;
+        ++create_buffer_count;
+        return std::make_unique<FakeBuffer>(desc);
     }
-    [[nodiscard]] std::unique_ptr<crd::rhi::Image> create_image(const crd::rhi::ImageDesc&) override
+    [[nodiscard]] std::unique_ptr<crd::rhi::Image> create_image(const crd::rhi::ImageDesc& desc) override
     {
-        return nullptr;
+        ++create_image_count;
+        return std::make_unique<FakeImage>(desc);
     }
     [[nodiscard]] std::unique_ptr<crd::rhi::ShaderModule>
     create_shader_module(const crd::rhi::ShaderModuleDesc&) override
@@ -243,9 +247,11 @@ public:
     [[nodiscard]] crd::rhi::Queue& graphics_queue() noexcept override { return m_queue; }
     void wait_idle() override {}
 
-    int create_dsl_count   = 0;
-    int create_pl_count    = 0;
-    int create_alloc_count = 0;
+    int create_dsl_count    = 0;
+    int create_pl_count     = 0;
+    int create_alloc_count  = 0;
+    int create_buffer_count = 0;
+    int create_image_count  = 0;
 
 private:
     FakeQueue m_queue{};
@@ -708,4 +714,154 @@ TEST_CASE("DescriptorAllocator ring: begin_frame advances frame index", "[render
     REQUIRE(fake->begin_frame_count == 2);
     REQUIRE(fake->allocate_count == 2);
     REQUIRE(fake->last_frame == 1u);
+}
+
+// =============================================================================
+// ForwardRenderPath tests (v1g)
+// =============================================================================
+
+TEST_CASE("ForwardRenderPath create allocates layouts UBOs and render targets", "[renderer][forward]")
+{
+    FakeDevice device;
+    FakeDescriptorAllocator alloc;
+    FakePipeline pipeline({});
+    FakeResolver resolver(pipeline);
+
+    auto frp = crd::renderer::ForwardRenderPath::create(device, resolver, alloc, {1280, 720}, 2);
+
+    REQUIRE(frp != nullptr);
+    REQUIRE(device.create_dsl_count == 1);   // per-frame set layout
+    REQUIRE(device.create_pl_count  == 1);   // pipeline layout
+    REQUIRE(device.create_buffer_count == 2); // one UBO per frame-in-flight
+    REQUIRE(device.create_image_count  == 2); // color + depth render targets
+}
+
+TEST_CASE("ForwardRenderPath build registers two frame graph passes", "[renderer][forward]")
+{
+    FakeDevice device;
+    FakeDescriptorAllocator alloc;
+    FakePipeline pipeline({});
+    FakeResolver resolver(pipeline);
+
+    auto frp = crd::renderer::ForwardRenderPath::create(device, resolver, alloc, {1280, 720}, 2);
+    REQUIRE(frp != nullptr);
+
+    FakeBuffer vb({12, crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex), crd::rhi::MemoryUsage::CpuToGpu});
+    crd::renderer::DrawItem item;
+    item.vertex_buffer = &vb;
+    item.vertex_count  = 3;
+
+    crd::renderer::DrawList draw_list;
+    draw_list.opaque.push_back(item);
+
+    crd::renderer::FrameContext ctx;
+    ctx.frame_index = 0;
+
+    crd::renderer::FrameGraph fg;
+    alloc.begin_frame(0);
+    frp->build(fg, draw_list, ctx);
+
+    REQUIRE(frp->output_image().is_valid());
+    REQUIRE(fg.build());
+
+    FakeCommandBuffer cmd;
+    fg.execute(device, cmd);
+
+    // Two passes: depth-prepass + main-color.
+    REQUIRE(cmd.begin_rendering_count == 2);
+    REQUIRE(cmd.end_rendering_count == 2);
+    // 1 opaque item drawn in each pass.
+    REQUIRE(cmd.draw_count == 2);
+    // push_constants called once per draw.
+    REQUIRE(cmd.push_constants_count == 2);
+    // model matrix is 64 bytes.
+    REQUIRE(cmd.last_push_size == 64u);
+    // bind_descriptor_sets called once in the color pass (set 0).
+    REQUIRE(cmd.bind_descriptor_sets_count == 1);
+    REQUIRE(cmd.last_first_set == 0u);
+}
+
+TEST_CASE("ForwardRenderPath build draws opaque and masked in color pass", "[renderer][forward]")
+{
+    FakeDevice device;
+    FakeDescriptorAllocator alloc;
+    FakePipeline pipeline({});
+    FakeResolver resolver(pipeline);
+
+    auto frp = crd::renderer::ForwardRenderPath::create(device, resolver, alloc, {1280, 720}, 2);
+    REQUIRE(frp != nullptr);
+
+    FakeBuffer vb({12, crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex), crd::rhi::MemoryUsage::CpuToGpu});
+    crd::renderer::DrawItem opaque_item;
+    opaque_item.vertex_buffer = &vb;
+    opaque_item.vertex_count  = 3;
+    crd::renderer::DrawItem masked_item = opaque_item;
+
+    crd::renderer::DrawList draw_list;
+    draw_list.opaque.push_back(opaque_item);
+    draw_list.masked.push_back(masked_item);
+
+    crd::renderer::FrameContext ctx;
+    ctx.frame_index = 0;
+
+    crd::renderer::FrameGraph fg;
+    alloc.begin_frame(0);
+    frp->build(fg, draw_list, ctx);
+    REQUIRE(fg.build());
+
+    FakeCommandBuffer cmd;
+    fg.execute(device, cmd);
+
+    // depth-prepass draws only opaque (1), color pass draws opaque+masked (2).
+    REQUIRE(cmd.draw_count == 3);
+}
+
+TEST_CASE("ForwardRenderPath resize recreates render targets", "[renderer][forward]")
+{
+    FakeDevice device;
+    FakeDescriptorAllocator alloc;
+    FakePipeline pipeline({});
+    FakeResolver resolver(pipeline);
+
+    auto frp = crd::renderer::ForwardRenderPath::create(device, resolver, alloc, {1280, 720}, 2);
+    REQUIRE(frp != nullptr);
+
+    const int images_before = device.create_image_count;
+
+    frp->resize({1920, 1080});
+    REQUIRE(device.create_image_count == images_before + 2); // color + depth recreated
+
+    // Resize to the same extent must be a no-op.
+    frp->resize({1920, 1080});
+    REQUIRE(device.create_image_count == images_before + 2);
+}
+
+TEST_CASE("ForwardRenderPath per-frame slot advances correctly across frames", "[renderer][forward]")
+{
+    FakeDevice device;
+    FakeDescriptorAllocator alloc;
+    FakePipeline pipeline({});
+    FakeResolver resolver(pipeline);
+
+    auto frp = crd::renderer::ForwardRenderPath::create(device, resolver, alloc, {1280, 720}, 2);
+    REQUIRE(frp != nullptr);
+
+    crd::renderer::DrawList empty_list;
+    crd::renderer::FrameContext ctx;
+
+    for (crd::u32 frame = 0; frame < 4; ++frame)
+    {
+        ctx.frame_index = frame;
+        alloc.begin_frame(frame);
+
+        crd::renderer::FrameGraph fg;
+        frp->build(fg, empty_list, ctx);
+        REQUIRE(fg.build());
+
+        FakeCommandBuffer cmd;
+        fg.execute(device, cmd);
+    }
+
+    // 4 frames × 1 allocate per frame = 4 total allocations.
+    REQUIRE(alloc.allocate_count == 4);
 }

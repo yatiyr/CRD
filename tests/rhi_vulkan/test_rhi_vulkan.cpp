@@ -152,6 +152,8 @@ TEST_CASE("Vulkan command buffer and frame loop can execute a triangle frame", "
 
     REQUIRE(swapchain->acquire_next_image());
     command_buffer->begin();
+    command_buffer->transition_image(swapchain->current_image(),
+                                     crd::rhi::ImageAccess::Undefined, crd::rhi::ImageAccess::ColorWrite);
     command_buffer->begin_rendering(
         {{swapchain->desc().extent.width, swapchain->desc().extent.height},
          {&swapchain->current_image(), crd::rhi::LoadOp::Clear, crd::rhi::StoreOp::Store, {0.0f, 0.1f, 0.2f, 1.0f}},
@@ -160,6 +162,8 @@ TEST_CASE("Vulkan command buffer and frame loop can execute a triangle frame", "
     command_buffer->bind_vertex_buffer(*vertex_buffer, 0);
     command_buffer->draw(3, 0);
     command_buffer->end_rendering();
+    command_buffer->transition_image(swapchain->current_image(),
+                                     crd::rhi::ImageAccess::ColorWrite, crd::rhi::ImageAccess::Present);
     command_buffer->end();
 
     REQUIRE(device->graphics_queue().submit(*command_buffer, *swapchain));

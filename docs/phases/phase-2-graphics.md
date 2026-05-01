@@ -67,12 +67,13 @@ Session history: `docs/sessions/2026-05-01-renderer-v1b-draw-execution.md`
 | :---: | --------------------------------------------------- | :----: | ----- |
 | v1a   | explicit renderables + camera + draw-item prep      |   ✅   | shipped 2026-05-01 |
 | v1b   | real draw execution / pass orchestration            |   ✅   | shipped 2026-05-01 |
-| v1c   | Frame graph v1 — typed handles, pass DAG, automatic barriers | ⏳ | ADR-0032; foundation for all render paths |
-| v1d   | `IRenderPath` on top of frame graph + `FrameContext` rework | ⏳ | render path = a declared set of graph passes |
-| v1e   | push constants + descriptor set RHI surface         |   ⏳   | `push_constants()`, `DescriptorSetLayout`, `DescriptorSet`, `bind_descriptor_sets()` |
-| v1f   | material system v1                                  |   ⏳   | `MaterialLayout`, `Material`, `MaterialInstance`; render-path-agnostic |
-| v1g   | `ForwardRenderPath` v1 — depth prepass + main color as frame graph passes | ⏳ | first real multi-pass path; ForwardRenderPath owns depth image |
+| v1c   | Frame graph v1 — typed handles, pass DAG, automatic barriers | ✅ | shipped 2026-05-01; ADR-0032 |
+| v1d   | `IRenderPath` on top of frame graph + `FrameContext` rework | ✅ | shipped 2026-05-01 |
+| v1e   | push constants + descriptor set RHI surface         |   ✅   | shipped 2026-05-01; `ShaderStage` bitmask, descriptor factory, ring-buffer allocator |
+| v1f   | material system v1                                  |   ✅   | shipped 2026-05-01; `MaterialLayout` + `MaterialInstance` over ring allocator |
+| v1g   | `ForwardRenderPath` v1 — depth prepass + main color as frame graph passes | 🚧 | in progress; `ForwardRenderPath` owns depth + color images; `PerFrameUbo` set 0 |
 | v1h   | index buffer + real mesh support                    |   ⏳   | `draw_indexed()`; `Renderable::index_buffer` |
+| v1i   | swapchain blit + output                             |   ⏳   | `IRenderPath::output_image()` feeds swapchain blit; first full frame loop |
 
 ### Architecture layers
 
@@ -80,7 +81,7 @@ Session history: `docs/sessions/2026-05-01-renderer-v1b-draw-execution.md`
 Layer 0  RHI          API-agnostic GPU surface — backend swap point (Vulkan → DX12 / Metal)
 Layer 1  Frame graph  typed resource handles, pass DAG, automatic barrier insertion, transient aliasing
 Layer 2  IRenderPath  a collection of frame graph passes (Forward, Deferred, Forward+, ...)
-Layer 3  Material     render-path-agnostic parameter binding (set 0 = per-material, push = per-draw)
+Layer 3  Material     render-path-agnostic parameter binding (set 1 = per-material, push = per-draw)
 Layer 4  crd-ui       retained-mode widget tree; rendered as a frame graph UI canvas pass (Phase 5)
 ```
 
@@ -104,10 +105,13 @@ with typed resource inputs/outputs; the compiler inserts barriers and aliases tr
 - `masked` — front-to-back (same)
 - `translucent` — back-to-front (Z descending); correct alpha compositing
 
-**Descriptor set frequency convention:**
-- Push constants → per-draw (model matrix + VP; max ~128 bytes)
-- Set 0 → per-material (textures, material constant buffer)
-- Set 1 → per-frame (camera, lights) — deferred until lights land
+**Descriptor set frequency convention (fixed from v1g onward):**
+- Push constants → per-draw (model matrix; 64 bytes, fits Vulkan 128-byte minimum)
+- Set 0 → per-frame (camera UBO: `PerFrameUbo`; Vertex|Fragment; lowest rebind frequency)
+- Set 1 → per-material (textures, material params; per visible material per frame)
+
+Note: Vulkan `vkCmdBindDescriptorSets` can rebind from set N without disturbing 0..N-1,
+so keeping long-lived bindings at set 0 minimises driver overhead.
 
 **`PipelineResolver` after v1d:**
 Moves inside `IRenderPath` implementations. Each path owns its pipeline cache (map from `VariantKey`

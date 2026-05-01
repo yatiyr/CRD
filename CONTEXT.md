@@ -11,12 +11,11 @@
 
 ## Current focus
 
-**Phase 2.4g — `ForwardRenderPath` v1 (first concrete IRenderPath).**
-`crd-renderer` v1a–f shipped. Push constants + descriptor set RHI surface,
-ring-buffer descriptor allocator, and material system are all live and green.
-Next: first concrete `ForwardRenderPath` implementing `IRenderPath` — depth
-prepass pass + main color pass, pipeline resolver, GPU per-frame UBO, per-draw
-push constants.
+**Phase 2.4h — `crd-renderer` index buffer support.**
+`crd-renderer` v1a–g shipped. `ForwardRenderPath` is live: depth prepass +
+main color pass, per-frame UBO at set 0, per-draw push constants, `PipelineResolver`
+integration. Next: `create_index_buffer()` + `bind_index_buffer()` + `draw_indexed()`
+in RHI and Vulkan backend; `DrawItem.index_buffer`; indexed mesh smoke.
 
 Aktif phase dosyası: `docs/phases/phase-2-graphics.md`
 
@@ -31,6 +30,31 @@ _none — running on the main roadmap._
 
 ## Last shipped milestone
 
+**2026-05-01 — `crd-renderer` v1g `ForwardRenderPath` shipped.**
+
+First concrete `IRenderPath`: depth prepass (opaque items, depth-only) + main color pass
+(opaque + masked, full shading). `PerFrameUbo` (288 bytes) at set 0, `PerDrawPush`
+(model matrix, 64 bytes) as push constants. `ForwardRenderPath::create()` allocates
+ring UBO + descriptor set per frame-in-flight. Render targets (B8G8R8A8Unorm color,
+D32Sfloat depth) owned by path, recreated on `resize()`.
+
+Vulkan backend hardened: `begin_rendering` now caller-managed transitions (no implicit
+layout changes), color attachment optional (null = depth-only), null fragment shader
+supported in `create_graphics_pipeline` (`colorAttachmentCount = 0`). Added `inverse(Mat4f)`
+via Laplace cofactor expansion. 5 new unit tests.
+
+Three-flavour green:
+- win-debug:    253/253
+- win-release:  252/252
+- win-asan:     253/253
+
+Smokes: `smoke_rhi_vulkan_bootstrap` (120 frames, clean), `smoke_renderer` (frame graph
+transitions verified).
+
+Detail: `docs/sessions/2026-05-01-renderer-v1g-forward-render-path.md`.
+
+## Previous shipped milestone
+
 **2026-05-01 — `crd-renderer` v1e+f merged: push constants + descriptor system + material binding shipped.**
 
 Merged v1e + v1f into one slice. RHI surface: `push_constants()`, `bind_descriptor_sets()`,
@@ -42,14 +66,12 @@ added to `GraphicsPipelineDesc` (optional, at end — no positional-init breakag
 material system: `MaterialLayout` + `MaterialInstance` wrapping the allocator-backed
 descriptor set lifecycle. 10 new unit tests, 4 new material tests.
 
-Five-preset green (relwithdebinfo rerun pending user):
+Three-flavour green:
 - win-debug:    248/248
 - win-release:  247/247
 - win-asan:     248/248
-- win-clang-cl: 248/248
-- win-tidy:     248/248
 
-Detail: `docs/sessions/2026-05-01-renderer-v1ef-descriptors.md` (pending).
+Detail: `docs/sessions/2026-05-01-renderer-v1ef-descriptors.md`.
 
 ## Previous shipped milestone
 
@@ -259,13 +281,11 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Next up (next 1–3 sessions)
 
-1. **`crd-renderer` v1g — `ForwardRenderPath` v1.** First concrete `IRenderPath`
-   implementation: depth prepass + main color pass, `PipelineResolver` integration,
-   per-frame UBO (camera matrices at set 0), per-draw push constants (model matrix).
-2. **`crd-renderer` v1h — index buffers.** `create_index_buffer()` in RHI + Vulkan,
+1. **`crd-renderer` v1h — index buffers.** `create_index_buffer()` in RHI + Vulkan,
    `bind_index_buffer()` + `draw_indexed()` in `CommandBuffer`, `DrawItem.index_buffer`.
-3. **`crd-renderer` v1i — swapchain blit + output.** `IRenderPath::output_image()` feeds
+2. **`crd-renderer` v1i — swapchain blit + output.** `IRenderPath::output_image()` feeds
    a swapchain blit pass; first full frame loop end-to-end.
+3. **`crd-jobs` 2.5** — thread pool + fiber tasks; pulled in once renderer needs async upload.
 
 ## Open questions
 
@@ -276,12 +296,9 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Test counts (last quality pass)
 
-- win-debug:          248/248
-- win-release:        247/247
-- win-relwithdebinfo: pending (rerun)
-- win-asan:           248/248
-- win-clang-cl:       248/248
-- win-tidy:           248/248
+- win-debug:    253/253
+- win-release:  252/252
+- win-asan:     253/253
 
 ## Pointers (lazy-load reference)
 
@@ -306,6 +323,7 @@ When in doubt, ASK before reading large files.
 
 ## Session log (rolling, last 5)
 
+- **2026-05-01** — `crd-renderer` v1g `ForwardRenderPath` shipped (253/253 win-debug).
 - **2026-05-01** — `crd-renderer` v1e+f push constants + descriptor system + material binding shipped (248/248 win-debug).
 - **2026-05-01** — `crd-renderer` v1d `IRenderPath` interface shipped (238/238 win-debug).
 - **2026-05-01** — `crd-renderer` v1c frame graph v1 shipped (233/233 win-debug).

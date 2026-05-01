@@ -27,6 +27,7 @@ struct FrameContext
     Camera camera;
     crd::math::Vec3f camera_position{}; // world-space camera origin; used for depth sorting
     rhi::Extent2D viewport{};
+    crd::u32 frame_index = 0;           // monotonically increasing frame counter
 };
 
 // Controls how a renderable is bucketed and depth-sorted within a frame.

@@ -199,6 +199,51 @@ template <MathScalar T> [[nodiscard]] constexpr Mat4<T> transpose(const Mat4<T>&
                    Vec4<T>(m.c0.z, m.c1.z, m.c2.z, m.c3.z), Vec4<T>(m.c0.w, m.c1.w, m.c2.w, m.c3.w));
 }
 
+// Laplace cofactor expansion for 4x4 inverse (column-major: c0..c3, each a Vec4 column).
+// Undefined behaviour if the matrix is singular (det == 0).
+template <MathScalar T> [[nodiscard]] constexpr Mat4<T> inverse(const Mat4<T>& m) noexcept
+{
+    const T c00 = m.c2.z * m.c3.w - m.c3.z * m.c2.w;
+    const T c02 = m.c1.z * m.c3.w - m.c3.z * m.c1.w;
+    const T c03 = m.c1.z * m.c2.w - m.c2.z * m.c1.w;
+    const T c04 = m.c2.y * m.c3.w - m.c3.y * m.c2.w;
+    const T c06 = m.c1.y * m.c3.w - m.c3.y * m.c1.w;
+    const T c07 = m.c1.y * m.c2.w - m.c2.y * m.c1.w;
+    const T c08 = m.c2.y * m.c3.z - m.c3.y * m.c2.z;
+    const T c10 = m.c1.y * m.c3.z - m.c3.y * m.c1.z;
+    const T c11 = m.c1.y * m.c2.z - m.c2.y * m.c1.z;
+    const T c12 = m.c2.x * m.c3.w - m.c3.x * m.c2.w;
+    const T c14 = m.c1.x * m.c3.w - m.c3.x * m.c1.w;
+    const T c15 = m.c1.x * m.c2.w - m.c2.x * m.c1.w;
+    const T c16 = m.c2.x * m.c3.z - m.c3.x * m.c2.z;
+    const T c18 = m.c1.x * m.c3.z - m.c3.x * m.c1.z;
+    const T c19 = m.c1.x * m.c2.z - m.c2.x * m.c1.z;
+    const T c20 = m.c2.x * m.c3.y - m.c3.x * m.c2.y;
+    const T c22 = m.c1.x * m.c3.y - m.c3.x * m.c1.y;
+    const T c23 = m.c1.x * m.c2.y - m.c2.x * m.c1.y;
+
+    const Vec4<T> i0( m.c1.y * c00 - m.c1.z * c04 + m.c1.w * c08,
+                     -(m.c0.y * c00 - m.c0.z * c04 + m.c0.w * c08),
+                      m.c0.y * c02 - m.c0.z * c06 + m.c0.w * c10,
+                     -(m.c0.y * c03 - m.c0.z * c07 + m.c0.w * c11));
+    const Vec4<T> i1(-(m.c1.x * c00 - m.c1.z * c12 + m.c1.w * c16),
+                      m.c0.x * c00 - m.c0.z * c12 + m.c0.w * c16,
+                     -(m.c0.x * c02 - m.c0.z * c14 + m.c0.w * c18),
+                      m.c0.x * c03 - m.c0.z * c15 + m.c0.w * c19);
+    const Vec4<T> i2( m.c1.x * c04 - m.c1.y * c12 + m.c1.w * c20,
+                     -(m.c0.x * c04 - m.c0.y * c12 + m.c0.w * c20),
+                      m.c0.x * c06 - m.c0.y * c14 + m.c0.w * c22,
+                     -(m.c0.x * c07 - m.c0.y * c15 + m.c0.w * c23));
+    const Vec4<T> i3(-(m.c1.x * c08 - m.c1.y * c16 + m.c1.z * c20),
+                      m.c0.x * c08 - m.c0.y * c16 + m.c0.z * c20,
+                     -(m.c0.x * c10 - m.c0.y * c18 + m.c0.z * c22),
+                      m.c0.x * c11 - m.c0.y * c19 + m.c0.z * c23);
+
+    const T det = m.c0.x * i0.x + m.c0.y * i1.x + m.c0.z * i2.x + m.c0.w * i3.x;
+    const T inv_det = static_cast<T>(1) / det;
+    return Mat4<T>(i0 * inv_det, i1 * inv_det, i2 * inv_det, i3 * inv_det);
+}
+
 using Mat2f = Mat2<crd::f32>;
 using Mat3f = Mat3<crd::f32>;
 using Mat4f = Mat4<crd::f32>;

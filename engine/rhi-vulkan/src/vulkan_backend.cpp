@@ -787,7 +787,6 @@ public:
         VkCommandBufferBeginInfo begin_info{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
         begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         CRD_ASSERT(vkBeginCommandBuffer(m_command_buffer, &begin_info) == VK_SUCCESS);
-        m_render_target = nullptr;
     }
 
     void end() override { CRD_ASSERT(vkEndCommandBuffer(m_command_buffer) == VK_SUCCESS); }
@@ -795,41 +794,54 @@ public:
     void reset() override
     {
         CRD_ASSERT(vkResetCommandBuffer(m_command_buffer, 0) == VK_SUCCESS);
-        m_render_target = nullptr;
     }
 
     void begin_rendering(const RenderingInfo& info) override
     {
-        auto* image = dynamic_cast<VulkanImage*>(info.color_attachment.image);
-        CRD_ASSERT(image != nullptr);
-        m_render_target = image;
+        // Color attachment is optional (null = depth-only pass).
+        auto* color_image = dynamic_cast<VulkanImage*>(info.color_attachment.image);
+        const bool has_color = color_image != nullptr;
 
-        transition_to_color_attachment(*image);
+        VkRenderingAttachmentInfo color_attachment_info{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+        if (has_color)
+        {
+            color_attachment_info.imageView   = color_image->image_view();
+            color_attachment_info.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            color_attachment_info.loadOp      = to_vk_load_op(info.color_attachment.load_op);
+            color_attachment_info.storeOp     = to_vk_store_op(info.color_attachment.store_op);
+            color_attachment_info.clearValue.color = {{info.color_attachment.clear_color.r,
+                                                       info.color_attachment.clear_color.g,
+                                                       info.color_attachment.clear_color.b,
+                                                       info.color_attachment.clear_color.a}};
+        }
 
-        VkRenderingAttachmentInfo color_attachment{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-        color_attachment.imageView = image->image_view();
-        color_attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        color_attachment.loadOp = to_vk_load_op(info.color_attachment.load_op);
-        color_attachment.storeOp = to_vk_store_op(info.color_attachment.store_op);
-        color_attachment.clearValue.color = {{info.color_attachment.clear_color.r, info.color_attachment.clear_color.g,
-                                              info.color_attachment.clear_color.b,
-                                              info.color_attachment.clear_color.a}};
+        VkRenderingAttachmentInfo depth_attachment_info{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+        const bool has_depth = info.depth_attachment != nullptr && info.depth_attachment->image != nullptr;
+        if (has_depth)
+        {
+            auto* depth_image = dynamic_cast<VulkanImage*>(info.depth_attachment->image);
+            CRD_ASSERT(depth_image != nullptr);
+            depth_attachment_info.imageView   = depth_image->image_view();
+            depth_attachment_info.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            depth_attachment_info.loadOp      = to_vk_load_op(info.depth_attachment->load_op);
+            depth_attachment_info.storeOp     = to_vk_store_op(info.depth_attachment->store_op);
+            depth_attachment_info.clearValue.depthStencil = {info.depth_attachment->clear_depth_stencil.depth,
+                                                              info.depth_attachment->clear_depth_stencil.stencil};
+        }
 
         VkRenderingInfo rendering_info{VK_STRUCTURE_TYPE_RENDERING_INFO};
-        rendering_info.renderArea.offset = {0, 0};
-        rendering_info.renderArea.extent = {info.extent.width, info.extent.height};
-        rendering_info.layerCount = 1;
-        rendering_info.colorAttachmentCount = 1;
-        rendering_info.pColorAttachments = &color_attachment;
+        rendering_info.renderArea.offset        = {0, 0};
+        rendering_info.renderArea.extent        = {info.extent.width, info.extent.height};
+        rendering_info.layerCount               = 1;
+        rendering_info.colorAttachmentCount     = has_color ? 1u : 0u;
+        rendering_info.pColorAttachments        = has_color ? &color_attachment_info : nullptr;
+        rendering_info.pDepthAttachment         = has_depth ? &depth_attachment_info : nullptr;
         vkCmdBeginRendering(m_command_buffer, &rendering_info);
     }
 
     void end_rendering() override
     {
         vkCmdEndRendering(m_command_buffer);
-        CRD_ASSERT(m_render_target != nullptr);
-        transition_to_present(*m_render_target);
-        m_render_target = nullptr;
     }
 
     void bind_pipeline(Pipeline& pipeline) override
@@ -917,46 +929,9 @@ public:
     [[nodiscard]] VkCommandBuffer handle() const noexcept { return m_command_buffer; }
 
 private:
-    void transition_to_color_attachment(VulkanImage& image)
-    {
-        VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-        barrier.srcAccessMask = 0;
-        barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        barrier.oldLayout = image.layout();
-        barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        barrier.image = image.handle();
-        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        barrier.subresourceRange.baseMipLevel = 0;
-        barrier.subresourceRange.levelCount = 1;
-        barrier.subresourceRange.baseArrayLayer = 0;
-        barrier.subresourceRange.layerCount = 1;
-        vkCmdPipelineBarrier(m_command_buffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                             VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
-        image.set_layout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-    }
-
-    void transition_to_present(VulkanImage& image)
-    {
-        VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-        barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        barrier.dstAccessMask = 0;
-        barrier.oldLayout = image.layout();
-        barrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-        barrier.image = image.handle();
-        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        barrier.subresourceRange.baseMipLevel = 0;
-        barrier.subresourceRange.levelCount = 1;
-        barrier.subresourceRange.baseArrayLayer = 0;
-        barrier.subresourceRange.layerCount = 1;
-        vkCmdPipelineBarrier(m_command_buffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                             VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
-        image.set_layout(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
-    }
-
-    VkDevice m_device = VK_NULL_HANDLE;
-    VkCommandPool m_command_pool = VK_NULL_HANDLE;
+    VkDevice        m_device         = VK_NULL_HANDLE;
+    VkCommandPool   m_command_pool   = VK_NULL_HANDLE;
     VkCommandBuffer m_command_buffer = VK_NULL_HANDLE;
-    VulkanImage* m_render_target = nullptr;
 };
 
 class VulkanSwapchain final : public Swapchain
@@ -1478,23 +1453,31 @@ public:
     [[nodiscard]] std::unique_ptr<Pipeline> create_graphics_pipeline(const GraphicsPipelineDesc& desc) override
     {
         auto* vertex_shader = dynamic_cast<VulkanShaderModule*>(desc.vertex_shader);
-        auto* fragment_shader = dynamic_cast<VulkanShaderModule*>(desc.fragment_shader);
-        if (vertex_shader == nullptr || fragment_shader == nullptr)
+        if (vertex_shader == nullptr)
         {
             CRD_LOG_ERROR(detail::g_log_rhi_vulkan,
-                          "Graphics pipeline requires VulkanShaderModule-backed vertex and fragment shaders");
+                          "Graphics pipeline requires a VulkanShaderModule-backed vertex shader");
             return nullptr;
         }
 
+        // Fragment shader is optional: null means depth-only pipeline (no color output).
+        auto* fragment_shader = dynamic_cast<VulkanShaderModule*>(desc.fragment_shader);
+
+        crd::u32 stage_count = 1;
         VkPipelineShaderStageCreateInfo shader_stages[2]{};
-        shader_stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        shader_stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+        shader_stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        shader_stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
         shader_stages[0].module = vertex_shader->handle();
-        shader_stages[0].pName = vertex_shader->entry_point().data();
-        shader_stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        shader_stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-        shader_stages[1].module = fragment_shader->handle();
-        shader_stages[1].pName = fragment_shader->entry_point().data();
+        shader_stages[0].pName  = vertex_shader->entry_point().data();
+
+        if (fragment_shader != nullptr)
+        {
+            shader_stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            shader_stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+            shader_stages[1].module = fragment_shader->handle();
+            shader_stages[1].pName  = fragment_shader->entry_point().data();
+            stage_count = 2;
+        }
 
         crd::containers::Array<VkVertexInputBindingDescription> binding_descs;
         for (const auto& binding : desc.vertex_bindings)
@@ -1543,14 +1526,16 @@ public:
         VkPipelineMultisampleStateCreateInfo multisample{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
         multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 
+        const bool has_color_output = desc.color_format != Format::Undefined;
+
         VkPipelineColorBlendAttachmentState blend_attachment{};
         blend_attachment.blendEnable = desc.enable_blend ? VK_TRUE : VK_FALSE;
         blend_attachment.colorWriteMask =
             VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
 
         VkPipelineColorBlendStateCreateInfo blend_state{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
-        blend_state.attachmentCount = 1;
-        blend_state.pAttachments = &blend_attachment;
+        blend_state.attachmentCount = has_color_output ? 1u : 0u;
+        blend_state.pAttachments    = has_color_output ? &blend_attachment : nullptr;
 
         VkPipelineDepthStencilStateCreateInfo depth_stencil{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
         depth_stencil.depthTestEnable = desc.enable_depth_test ? VK_TRUE : VK_FALSE;
@@ -1582,15 +1567,15 @@ public:
         }
 
         VkPipelineRenderingCreateInfo rendering_info{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
-        const VkFormat color_format = to_vk_format(desc.color_format);
-        rendering_info.colorAttachmentCount = 1;
-        rendering_info.pColorAttachmentFormats = &color_format;
-        rendering_info.depthAttachmentFormat = to_vk_format(desc.depth_format);
+        const VkFormat color_format = has_color_output ? to_vk_format(desc.color_format) : VK_FORMAT_UNDEFINED;
+        rendering_info.colorAttachmentCount    = has_color_output ? 1u : 0u;
+        rendering_info.pColorAttachmentFormats = has_color_output ? &color_format : nullptr;
+        rendering_info.depthAttachmentFormat   = to_vk_format(desc.depth_format);
 
         VkGraphicsPipelineCreateInfo pipeline_info{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
-        pipeline_info.pNext = &rendering_info;
-        pipeline_info.stageCount = 2;
-        pipeline_info.pStages = shader_stages;
+        pipeline_info.pNext      = &rendering_info;
+        pipeline_info.stageCount = stage_count;
+        pipeline_info.pStages    = shader_stages;
         pipeline_info.pVertexInputState = &vertex_input;
         pipeline_info.pInputAssemblyState = &input_assembly;
         pipeline_info.pViewportState = &viewport_state;
