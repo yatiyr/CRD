@@ -19,7 +19,7 @@ Vulkan-first, layered:
 | 2.1   | ImGui debug overlay              |   ✅   | docking branch; debug-only; consumes `crd-config` for theme/style                    |
 | 2.2   | GPU memory + streaming           |   ✅   | centralized allocator-backed buffer/image path shipped; broader policy still ahead   |
 | 2.3   | `crd-shader`                     |   ⏳   | detailed design packet lives in `docs/phases/phase-2.3-shader.md`                    |
-| 2.4   | `crd-renderer` v1                |   ⏳   | `IRenderPath` interface + Clustered Forward+ implementation; frustum culling; skybox |
+| 2.4   | `crd-renderer` v1                |   🚧   | dedicated renderer packet now active; v1a shipped, execution/material growth next     |
 | 2.5   | `crd-jobs`                       |   ⏳   | thread pool + fiber tasks, work-stealing, per-frame allocator, async I/O ready       |
 | 2.6   | `crd-resources` + `asset_cooker` |   ⏳   | async load, LRU, refcounted handles, runtime binary; cooker is a separate exe        |
 
@@ -55,6 +55,22 @@ The concrete next-session sequence:
 
 Treat this file as the broad graphics-phase umbrella and the 2.3 shader docs
 as the detailed implementation-planning surface.
+
+## 2.4 detail
+
+`crd-renderer` now has its own concrete shipped entry slice in practice:
+
+- `docs/systems/renderer.md`
+- `docs/sessions/2026-05-01-renderer-v1a-explicit-renderables.md`
+
+Current renderer v1 direction:
+
+- **v1a** — explicit renderables + camera + draw-item preparation ✅
+- **v1b** — real draw execution / pass orchestration ⏳
+- **v1c** — material binding growth ⏳
+
+Treat this file as the broad graphics umbrella and the renderer system/session
+docs as the more detailed near-term renderer planning surface.
 
 ## Open questions
 

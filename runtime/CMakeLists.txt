@@ -88,6 +88,22 @@ target_link_libraries(smoke_shader PRIVATE
 target_compile_definitions(smoke_shader PRIVATE CRD_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 crd_enable_default_pch(smoke_shader)
 
+add_executable(smoke_renderer
+    examples/smoke_renderer.cpp
+)
+
+target_link_libraries(smoke_renderer PRIVATE
+    crd-core
+    crd-log
+    crd-platform
+    crd-rhi
+    crd-rhi-vulkan
+    crd-shader
+    crd-renderer
+)
+target_compile_definitions(smoke_renderer PRIVATE CRD_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+crd_enable_default_pch(smoke_renderer)
+
 add_executable(smoke_frame_clock
     examples/smoke_frame_clock.cpp
 )

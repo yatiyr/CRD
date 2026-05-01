@@ -15,7 +15,7 @@
 is now strong enough that the next meaningful work is a real renderer consumer
 built on top of the current RHI/backend/shader stack.
 
-Aktif phase dosyası: `docs/phases/phase-2.3-shader.md`
+Aktif phase dosyası: `docs/phases/phase-2-graphics.md`
 
 ## Active detour
 
@@ -27,6 +27,21 @@ _none — running on the main roadmap._
 > `docs/detours/README.md`.
 
 ## Last shipped milestone
+
+**2026-05-01 — `crd-renderer` v1a explicit renderables shipped.**
+
+The engine now has its first high-level renderer consumer over the completed
+shader packet: camera, explicit renderable list, draw-item preparation, and a
+clean frame-plan handoff without scene/ECS commitments.
+
+Three-flavour green:
+- Debug: 227/227
+- Release: 226/226
+- ASan: 227/227
+
+Detail: `docs/sessions/2026-05-01-renderer-v1a-explicit-renderables.md`.
+
+## Previous shipped milestone
 
 **2026-05-01 — `crd-shader` 2.3g pipeline handoff / descriptor growth shipped.**
 
@@ -203,8 +218,8 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Next up (next 1–3 sessions)
 
-1. **`crd-renderer` v1 (2.4).** Start from an explicit renderable list and
-   camera path before wider systems.
+1. **`crd-renderer` v1b/v1c.** Real draw execution / pass orchestration and
+   material binding growth.
 2. **`crd-config` 1.6b/1.6c.** Reload hook and more real consumers when useful.
 3. **`crd-jobs` / `crd-resources`.** Pull in once renderer pressure is real.
 
@@ -217,9 +232,9 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Test counts (last quality pass)
 
-- Debug: 226/226
-- Release: 225/225
-- ASan: 226/226
+- Debug: 227/227
+- Release: 226/226
+- ASan: 227/227
 
 ## Pointers (lazy-load reference)
 
