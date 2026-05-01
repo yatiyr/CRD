@@ -14,6 +14,7 @@ add_subdirectory(renderer)
 add_subdirectory(shader)
 add_subdirectory(rhi)
 add_subdirectory(rhi_vulkan)
+add_subdirectory(jobs)
 
 if(CRD_BUILD_BENCHMARKS)
     add_subdirectory(bench)

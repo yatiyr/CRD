@@ -82,8 +82,9 @@ private:
     std::unique_ptr<rhi::PipelineLayout>       m_pipeline_layout;
 
     // Set each frame by build(); used by output_image() and execute callbacks.
-    ImageHandle m_color_handle{};
-    ImageHandle m_depth_handle{};
+    ImageHandle        m_color_handle{};
+    ImageHandle        m_depth_handle{};
+    const DrawList*    m_draw_list    = nullptr; // non-owning; valid only between build() and execute()
 };
 
 } // namespace crd::renderer

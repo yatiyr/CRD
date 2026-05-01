@@ -77,6 +77,7 @@ void ForwardRenderPath::resize(rhi::Extent2D new_extent)
 
 void ForwardRenderPath::build(FrameGraph& fg, const DrawList& draw_list, const FrameContext& ctx)
 {
+    m_draw_list = &draw_list;
     const crd::u32 slot = ctx.frame_index % m_frames_in_flight;
 
     // Update per-frame UBO.
@@ -112,7 +113,7 @@ void ForwardRenderPath::build(FrameGraph& fg, const DrawList& draw_list, const F
     {
         auto builder = fg.add_pass("depth-prepass");
         builder.write(m_depth_handle, rhi::ImageAccess::DepthWrite);
-        builder.set_execute([this, &draw_list](FrameResources& res, rhi::CommandBuffer& cmd)
+        builder.set_execute([this](FrameResources& res, rhi::CommandBuffer& cmd)
         {
             auto* depth = res.get(m_depth_handle);
             const rhi::RenderingDepthAttachmentInfo depth_att{depth, rhi::LoadOp::Clear,
@@ -121,7 +122,7 @@ void ForwardRenderPath::build(FrameGraph& fg, const DrawList& draw_list, const F
                                  {nullptr, rhi::LoadOp::DontCare, rhi::StoreOp::DontCare, {}},
                                  &depth_att});
 
-            for (const auto& item : draw_list.opaque)
+            for (const auto& item : m_draw_list->opaque)
             {
                 auto* pipeline = m_resolver->resolve_pipeline(item.handoff);
                 if (!pipeline)
@@ -152,7 +153,7 @@ void ForwardRenderPath::build(FrameGraph& fg, const DrawList& draw_list, const F
         auto builder = fg.add_pass("main-color");
         builder.write(m_color_handle, rhi::ImageAccess::ColorWrite);
         builder.write(m_depth_handle, rhi::ImageAccess::DepthWrite);
-        builder.set_execute([this, &draw_list, slot](FrameResources& res, rhi::CommandBuffer& cmd)
+        builder.set_execute([this, slot](FrameResources& res, rhi::CommandBuffer& cmd)
         {
             auto* color = res.get(m_color_handle);
             auto* depth = res.get(m_depth_handle);
@@ -197,8 +198,8 @@ void ForwardRenderPath::build(FrameGraph& fg, const DrawList& draw_list, const F
                 }
             };
 
-            draw_items(draw_list.opaque);
-            draw_items(draw_list.masked);
+            draw_items(m_draw_list->opaque);
+            draw_items(m_draw_list->masked);
 
             cmd.end_rendering();
         });

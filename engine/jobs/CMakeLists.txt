@@ -1,0 +1,27 @@
+# Enable platform-specific assembly language for the fiber context switch.
+# This is the only non-portable code in crd-jobs; all other files are C++20.
+if(WIN32)
+    enable_language(ASM_MASM)
+    set(CRD_JOBS_ASM_SRC "${CMAKE_CURRENT_SOURCE_DIR}/src/fiber_switch_win64.asm")
+else()
+    enable_language(ASM)
+    set(CRD_JOBS_ASM_SRC "${CMAKE_CURRENT_SOURCE_DIR}/src/fiber_switch_lin64.S")
+endif()
+
+crd_collect_sources(SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src")
+crd_collect_sources(HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
+add_library(crd-jobs STATIC ${SOURCES} ${HEADERS} ${CRD_JOBS_ASM_SRC})
+
+target_include_directories(crd-jobs
+    PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
+
+target_link_libraries(crd-jobs
+    PUBLIC
+        crd-core
+)
+
+target_compile_features(crd-jobs PUBLIC cxx_std_20)
+crd_enable_default_pch(crd-jobs)

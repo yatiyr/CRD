@@ -60,6 +60,7 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 
 ### `[jobs]`
 - ADR-0015 — Job system shape
+- ADR-0033 — crd-jobs implementation architecture (fibers, asm switch, Chase-Lev, SBO, ABA-safe counters)
 
 ### `[renderer]` `[render-path]`
 - ADR-0016 — Render path strategy
@@ -129,3 +130,4 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 | 0030  | Shader / PSO boundary                          | shader, rhi, renderer             | Accepted    |
 | 0031  | Shader frontend → IR seam                      | shader, arch, ir                  | Accepted    |
 | 0032  | Frame graph v1                                 | renderer, render-path, arch       | Accepted    |
+| 0033  | crd-jobs implementation architecture           | jobs, arch, fibers, threading     | Accepted    |

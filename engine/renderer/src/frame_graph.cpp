@@ -74,14 +74,12 @@ bool FrameGraph::build()
 
     const crd::u32 resource_count = static_cast<crd::u32>(m_resources.size());
 
-    // Track access state per resource. External resources start at their declared access;
-    // transient resources start Undefined and must be written before they are read.
-    crd::containers::Array<rhi::ImageAccess> current_access(resource_count);
-    crd::containers::Array<bool> written(resource_count);
+    // Seed per-resource tracking state. External resources count as "already written"
+    // (they arrive with a valid layout); transient resources must be written before read.
     for (crd::u32 i = 0; i < resource_count; ++i)
     {
-        current_access.push_back(m_resources[i].initial_access);
-        written.push_back(m_resources[i].kind == ResourceKind::External);
+        m_resources[i].tracked_access    = m_resources[i].initial_access;
+        m_resources[i].written_this_build = (m_resources[i].kind == ResourceKind::External);
     }
 
     for (auto& pass : m_passes)
@@ -92,23 +90,23 @@ bool FrameGraph::build()
         {
             if (!use.handle.is_valid() || use.handle.index >= resource_count)
                 return false;
-            if (!written[use.handle.index])
+            if (!m_resources[use.handle.index].written_this_build)
                 return false; // reading a transient that hasn't been written
-            const rhi::ImageAccess prev = current_access[use.handle.index];
+            const rhi::ImageAccess prev = m_resources[use.handle.index].tracked_access;
             if (prev != use.access)
                 pass.barriers_before.push_back({use.handle, prev, use.access});
-            // reads don't change the tracked state
+            // reads don't update tracked_access
         }
 
         for (const auto& use : pass.writes)
         {
             if (!use.handle.is_valid() || use.handle.index >= resource_count)
                 return false;
-            const rhi::ImageAccess prev = current_access[use.handle.index];
+            const rhi::ImageAccess prev = m_resources[use.handle.index].tracked_access;
             if (prev != use.access)
                 pass.barriers_before.push_back({use.handle, prev, use.access});
-            current_access[use.handle.index] = use.access;
-            written[use.handle.index] = true;
+            m_resources[use.handle.index].tracked_access    = use.access;
+            m_resources[use.handle.index].written_this_build = true;
         }
     }
 

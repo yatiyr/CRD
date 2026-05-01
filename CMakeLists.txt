@@ -78,23 +78,32 @@ endif()
 # ----- Compiler Warnings --------------------------------------------------
 
 if (MSVC)
+    # Gate flags on CXX/C only — MASM (ASM_MASM) does not accept these options.
     add_compile_options(
-        /W4
-        /WX
-        /permissive-
-        /Zc:__cplusplus
-        /utf-8
+        $<$<COMPILE_LANGUAGE:CXX,C>:/W4>
+        $<$<COMPILE_LANGUAGE:CXX,C>:/WX>
+        $<$<COMPILE_LANGUAGE:CXX,C>:/permissive->
+        $<$<COMPILE_LANGUAGE:CXX,C>:/Zc:__cplusplus>
+        $<$<COMPILE_LANGUAGE:CXX,C>:/utf-8>
     )
 
     if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-        add_compile_options(/Zc:preprocessor)
+        add_compile_options($<$<COMPILE_LANGUAGE:CXX,C>:/Zc:preprocessor>)
     endif()
 else()
+    # Gate on CXX/C so AT&T .S assembly files (ASM language) are not affected.
     add_compile_options(
-        -Wall -Wextra -Wpedantic -Werror
-        -Wconversion -Wshadow -Wdouble-promotion
-        -Wnon-virtual-dtor -Woverloaded-virtual
-        -Wnull-dereference -Wformat=2
+        $<$<COMPILE_LANGUAGE:CXX,C>:-Wall>
+        $<$<COMPILE_LANGUAGE:CXX,C>:-Wextra>
+        $<$<COMPILE_LANGUAGE:CXX,C>:-Wpedantic>
+        $<$<COMPILE_LANGUAGE:CXX,C>:-Werror>
+        $<$<COMPILE_LANGUAGE:CXX,C>:-Wconversion>
+        $<$<COMPILE_LANGUAGE:CXX,C>:-Wshadow>
+        $<$<COMPILE_LANGUAGE:CXX,C>:-Wdouble-promotion>
+        $<$<COMPILE_LANGUAGE:CXX,C>:-Wnon-virtual-dtor>
+        $<$<COMPILE_LANGUAGE:CXX,C>:-Woverloaded-virtual>
+        $<$<COMPILE_LANGUAGE:CXX,C>:-Wnull-dereference>
+        $<$<COMPILE_LANGUAGE:CXX,C>:-Wformat=2>
     )
 endif()
 
@@ -199,6 +208,7 @@ add_subdirectory(engine/renderer)
 add_subdirectory(engine/shader)
 add_subdirectory(engine/rhi)
 add_subdirectory(engine/rhi-vulkan)
+add_subdirectory(engine/jobs)
 # add_subdirectory(engine/graphics)
 # add_subdirectory(engine/scripting)
 

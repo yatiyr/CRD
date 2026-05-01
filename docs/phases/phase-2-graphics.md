@@ -20,7 +20,7 @@ Vulkan-first, layered:
 | 2.2   | GPU memory + streaming           |   ✅   | centralized allocator-backed buffer/image path shipped; broader policy still ahead   |
 | 2.3   | `crd-shader`                     |   ✅   | detailed design packet: `docs/phases/phase-2.3-shader.md`                            |
 | 2.4   | `crd-renderer` v1                |   🚧   | v1a–i shipped; v1j (GPU instancing, Phase 3.2 dep) next                              |
-| 2.5   | `crd-jobs`                       |   ⏳   | thread pool + fiber tasks, work-stealing, per-frame allocator, async I/O ready       |
+| 2.5   | `crd-jobs`                       |   🚧   | fiber job system; v1a–k planned; design packet: `docs/phases/phase-2.5-jobs.md`     |
 | 2.6   | `crd-resources` + `asset_cooker` |   ⏳   | async load, LRU, refcounted handles, runtime binary; cooker is a separate exe        |
 
 ## Near-term execution order
@@ -37,6 +37,7 @@ Vulkan-first, layered:
 - ADR-0013 — Asset pipeline (separate executable)
 - ADR-0014 — Reference counting split
 - ADR-0015 — Job system shape (thread pool + fibers)
+- ADR-0033 — crd-jobs implementation architecture
 - ADR-0016 — Render path strategy (Clustered Forward+ first)
 - ADR-0017 — Culling strategy
 - ADR-0024 — ImGui single-viewport default

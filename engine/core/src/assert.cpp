@@ -106,12 +106,16 @@ int report_assert_failure(const char* expression, const char* file, int line, co
     // already on the call stack, it gets called once.
     (void)fire_assert_handler(expression, file, line, message);
 
-    std::fputs(buffer, stderr);
-
+    // If a platform handler is installed, delegate entirely to it.
+    // The handler receives the formatted buffer and controls output.
+    // Tests use this to suppress stderr noise when intentionally triggering asserts.
     if (AssertPlatformHandler platform_handler = get_assert_platform_handler())
     {
         return platform_handler(buffer);
     }
+
+    // Default path: no platform handler — print to stderr + debugger + OS dialog.
+    std::fputs(buffer, stderr);
 
 #if CRD_OS_WINDOWS
     OutputDebugStringA(buffer);

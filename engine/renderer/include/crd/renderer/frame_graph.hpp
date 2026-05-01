@@ -141,6 +141,8 @@ private:
         ResourceKind kind = ResourceKind::Transient;
         TransientImageDesc transient_desc{};
         rhi::ImageAccess initial_access = rhi::ImageAccess::Undefined;
+        rhi::ImageAccess tracked_access = rhi::ImageAccess::Undefined; // reset+updated each build()
+        bool written_this_build = false;                                // reset+updated each build()
         rhi::Image* image = nullptr;
         std::unique_ptr<rhi::Image> owned_image;
     };

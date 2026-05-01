@@ -11,16 +11,22 @@
 
 ## Current focus
 
-**Phase 2.5 — `crd-jobs` thread pool + fiber tasks.**
-`crd-renderer` v1a–i shipped. The full renderer frame loop is now end-to-end:
-`add_swapchain_blit_pass` (free function in `crd/renderer/swapchain_blit.hpp`) adds a
-blit + present-barrier pass pair into the frame graph; after `fg.execute()`, the
-swapchain image is in `Present` layout. `blit_image` on `CommandBuffer` blits with
-`VK_FILTER_LINEAR` (dynamic resolution ready). ForwardRenderPath color image carries
-`ColorAttachment | TransferSrc`; swapchain images carry `TransferDst`.
-Next: `crd-jobs` (Phase 2.5) — thread pool + fiber tasks for async pipeline compile and upload.
+**Phase 2.5 — `crd-jobs` fiber-based job system. v1a + v1b + v1c shipped.**
 
-Aktif phase dosyası: `docs/phases/phase-2-graphics.md`
+Design complete (ADR-0033). Decisions locked:
+- Main thread converts to fiber and joins the worker pool (pinned-job mechanism for GLFW thread 0).
+- Hand-rolled asm context switch (Windows x64 MASM + Linux x64 AT&T).
+- Chase-Lev work-stealing deques (3 per thread: High/Normal/Low) + Vyukov MPMC injection queues.
+- 64-byte SBO for job closures (48-byte buffer + fn ptr + metadata = one cache line).
+- Pool-allocated counters; ABA-safe double-check wait mechanism.
+- Three priority levels: High / Normal / Low.
+- Stack sizes: Small 64 KB × 128, Medium 512 KB × 64, Large 2 MB × 16.
+
+Full design packet: `docs/phases/phase-2.5-jobs.md`. 11 slices (v1a–v1k).
+**Shipped:** v1a (asm context switch), v1b (fiber pool), v1c (Chase-Lev deque), v1d (Vyukov MPMC queue).
+**Next:** v1e — Priority scheduler (3-level drain + pinned-job slot).
+
+Aktif phase dosyaları: `docs/phases/phase-2.5-jobs.md` (active) + `docs/phases/phase-2-graphics.md` (2.4 ongoing)
 
 ## Active detour
 
@@ -32,6 +38,105 @@ _none — running on the main roadmap._
 > `docs/detours/README.md`.
 
 ## Last shipped milestone
+
+**2026-05-02 — `crd-jobs` v1d Vyukov MPMC injection queue shipped.**
+
+`MpmcQueue<T>` header-only template implementing the Vyukov bounded MPMC queue algorithm
+(Dmitry Vyukov, 1024cores.net). Producers and consumers each have their own `alignas(64)`
+atomic position counter (separate cache lines) to prevent false sharing. Each ring-buffer
+cell holds an `atomic<u64>` sequence and one T. The sequence handshake uses `acquire`/`release`
+orderings: producers read sequence with acquire and publish with release; consumers mirror
+this. enqueue() returns false (non-blocking) when full; dequeue() returns false when empty.
+Capacity must be a power of two.
+
+10 unit tests: construction, single-item round-trip, empty returns false, full returns false,
+FIFO ordering, wrap-around across 3 full laps, SPSC/MPSC/SPMC/MPMC concurrent stress
+(each verifying all items consumed exactly once).
+
+Six-configuration green:
+- win-debug:          301/301
+- win-relwithdebinfo: 301/301
+- win-release:        298/298
+- win-asan:           301/301
+- win-clang-cl:       301/301
+- win-tidy:           301/301
+
+## Previous shipped milestone
+
+**2026-05-02 — `crd-jobs` v1c Chase-Lev work-stealing deque shipped.**
+
+`WorkStealingDeque<T>` header-only template implementing the Lê et al. 2013
+algorithm ("Correct and Efficient Work-Stealing for Weak Memory Models").
+Owner thread uses push() (LIFO via `m_bottom`) and pop(); any thread calls
+steal() (FIFO via `m_top`). Fixed power-of-two capacity; indices are `i64`
+monotonically increasing counters masked with `& (capacity-1)`.
+
+Memory ordering: push uses `release` on `m_bottom`; pop uses `seq_cst` on
+`m_bottom`-store + `seq_cst` on `m_top`-load + `seq_cst` CAS for the last-
+element race; steal uses `acquire` load of `m_top`, `seq_cst` fence (required
+for correctness on weak memory models per Lê et al. Thm 1), `acquire` load
+of `m_bottom`, then `seq_cst` CAS.
+
+`m_bottom` and `m_top` on separate `alignas(64)` cache lines to prevent
+false sharing between owner and thieves. `CRD_COMPILER_MSVC` pragma suppresses
+C4324 (structure padded due to alignment specifier).
+
+12 tests: LIFO/FIFO ordering, exhaustion assertion, last-element race
+(4 000 trials, each must give exactly one winner), two concurrent stress tests
+(pre-fill + concurrent drain; concurrent push + pop + steal with back-pressure).
+
+Six-configuration green:
+- win-debug:          291/291
+- win-relwithdebinfo: 291/291
+- win-release:        288/288
+- win-asan:           291/291
+- win-clang-cl:       291/291
+- win-tidy:           291/291
+
+## Previous shipped milestone
+
+**2026-05-02 — `crd-jobs` v1b fiber pool shipped.**
+
+Three-tier fiber pool (Small 64 KB × 128, Medium 512 KB × 64, Large 2 MB × 16).
+Platform stack allocation: VirtualAlloc (Windows) / mmap+mprotect (Linux) with
+an uncommitted guard page below each stack — overflow crashes immediately.
+Lock-free Treiber free list per tier using a tagged 64-bit head
+`[gen:32 | idx:32]`; generation is bumped on every pop, making ABA structurally
+impossible without CMPXCHG16B. `alignas(64)` on `Tier` struct prevents inter-tier
+false sharing. Debug-only explicit state machine: `Idle / Active / Waiting / Ready`
+with asserted transitions at acquire/release (Waiting/Ready stubs ready for v1f).
+Peak-usage watermark tracked per tier for profiling. Trampoline is injected at
+pool creation (looping, zero re-init cost on the hot acquire path).
+13 new tests; concurrent 4-thread × 8 000-iteration ABA stress test included.
+
+Also fixed in this session: renderer LTO miscompilation under win-relwithdebinfo
+(`FrameGraph::build()` local-array tracking moved to `ImageResource` members;
+`ForwardRenderPath` lambda captures changed from `&draw_list` to `m_draw_list`
+via new member pointer — both were MSVC `/GL` miscompile sites).
+
+Six-configuration green for the first time:
+- win-debug:          279/279
+- win-relwithdebinfo: 279/279
+- win-release:        276/276
+- win-asan:           279/279
+- win-clang-cl:       279/279
+- win-tidy:           279/279
+
+## Previous shipped milestone
+
+**2026-05-01 — `crd-jobs` v1a hand-rolled asm context switch shipped.**
+
+`fiber_switch` in Windows x64 MASM and Linux x86-64 AT&T assembly: saves/restores
+all callee-saved registers mandated by each ABI (Windows: RBX RBP RDI RSI R12–R15
+XMM6–XMM15 MXCSR FCW; Linux: RBX RBP R12–R15). `fiber_init_stack` in C++ sets up
+the initial stack frame so the first `fiber_switch` to a fresh fiber jumps to the
+entry function; a sentinel `fiber_abort` return-address catches runaway fibers.
+5 unit tests: round-trip, multiple re-entries, stack-local data survives,
+callee-saved registers verified, two independent fibers.
+
+Detail: (session combined with v1b above).
+
+## Previous shipped milestone (–2)
 
 **2026-05-01 — `crd-renderer` v1i swapchain blit + first full frame loop shipped.**
 
@@ -51,7 +156,7 @@ Three-flavour green:
 
 Detail: `docs/sessions/2026-05-01-renderer-v1i-swapchain-blit.md` (to be written).
 
-## Previous shipped milestone
+## Previous shipped milestone (–3)
 
 **2026-05-01 — `crd-renderer` v1g `ForwardRenderPath` shipped.**
 
@@ -76,7 +181,7 @@ transitions verified).
 
 Detail: `docs/sessions/2026-05-01-renderer-v1g-forward-render-path.md`.
 
-## Previous shipped milestone
+## Previous shipped milestone (–4)
 
 **2026-05-01 — `crd-renderer` v1e+f merged: push constants + descriptor system + material binding shipped.**
 
@@ -96,7 +201,7 @@ Three-flavour green:
 
 Detail: `docs/sessions/2026-05-01-renderer-v1ef-descriptors.md`.
 
-## Previous shipped milestone
+## Previous shipped milestone (–5)
 
 **2026-05-01 — `crd-renderer` v1b real draw execution shipped.**
 
@@ -112,7 +217,7 @@ Three-flavour green:
 
 Detail: `docs/sessions/2026-05-01-renderer-v1b-draw-execution.md`.
 
-## Previous shipped milestone
+## Previous shipped milestone (–6)
 
 **2026-05-01 — `crd-renderer` v1a explicit renderables shipped.**
 
@@ -127,7 +232,7 @@ Three-flavour green:
 
 Detail: `docs/sessions/2026-05-01-renderer-v1a-explicit-renderables.md`.
 
-## Previous shipped milestone
+## Previous shipped milestone (–7+)
 
 **2026-05-01 — `crd-shader` 2.3g pipeline handoff / descriptor growth shipped.**
 
@@ -304,8 +409,10 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Next up (next 1–3 sessions)
 
-1. **`crd-jobs` 2.5** — thread pool + fiber tasks; pulled in once renderer needs async upload.
-2. **`crd-resources` + `asset_cooker` 2.6** — async load, LRU, refcounted handles, runtime binary.
+1. **`crd-jobs` v1e** — Priority scheduler: 3-level drain (High → Normal → Low), pinned-job slot.
+2. **`crd-jobs` v1e** — Priority scheduler: 3-level drain (High → Normal → Low), pinned-job slot.
+3. **`crd-jobs` v1f** — Counter + wait mechanism: `Counter` pool, Treiber waiter list, ABA-safe double-check.
+4. **`crd-resources` + `asset_cooker` 2.6** — after crd-jobs v1k complete.
 
 ## Open questions
 
@@ -316,9 +423,14 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Test counts (last quality pass)
 
-- win-debug:    261/261
-- win-release:  260/260
-- win-asan:     261/261
+- win-debug:          301/301
+- win-relwithdebinfo: 301/301
+- win-release:        298/298
+- win-asan:           301/301
+- win-clang-cl:       301/301
+- win-tidy:           301/301
+
+(win-release is 3 fewer: debug-only `FiberState` tests excluded by `#if CRD_ENABLE_ASSERTS`)
 
 ## Pointers (lazy-load reference)
 
@@ -343,11 +455,13 @@ When in doubt, ASK before reading large files.
 
 ## Session log (rolling, last 5)
 
+- **2026-05-02** — `crd-jobs` v1d Vyukov MPMC injection queue shipped; all 6 configs green (301/301 win-debug).
+- **2026-05-02** — `crd-jobs` v1c Chase-Lev work-stealing deque shipped; all 6 configs green (291/291 win-debug).
+- **2026-05-02** — `crd-jobs` v1b fiber pool shipped; renderer LTO fix; all 6 configs green (279/279 win-debug).
+- **2026-05-01** — `crd-jobs` v1a hand-rolled asm context switch shipped (266/266 win-debug).
 - **2026-05-01** — `crd-renderer` v1i swapchain blit + first full frame loop shipped (261/261 win-debug).
 - **2026-05-01** — `crd-renderer` v1h index buffer + `draw_indexed` shipped (257/257 win-debug).
 - **2026-05-01** — `crd-renderer` v1g `ForwardRenderPath` shipped (253/253 win-debug).
-- **2026-05-01** — `crd-renderer` v1e+f push constants + descriptor system + material binding shipped (248/248 win-debug).
-- **2026-05-01** — `crd-renderer` v1d `IRenderPath` interface shipped (238/238 win-debug).
 - **2026-05-01** — `crd-renderer` v1c frame graph v1 shipped (233/233 win-debug).
 - **2026-05-01** — `crd-renderer` v1b real draw execution shipped.
 - **2026-05-01** — `crd-renderer` v1a explicit renderables shipped.
