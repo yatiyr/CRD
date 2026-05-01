@@ -11,12 +11,14 @@
 
 ## Current focus
 
-**Phase 2.4i — swapchain blit + output (first full frame loop).**
-`crd-renderer` v1a–h shipped. Index buffer support is live: `IndexType` enum,
-`bind_index_buffer()` + `draw_indexed()` in RHI and Vulkan backend, `Renderable`
-and `DrawItem` carry optional index buffer, `ForwardRenderPath` dispatches
-`draw_indexed` when `index_buffer != nullptr`. Next: `IRenderPath::output_image()`
-feeds a swapchain blit pass; first full frame loop end-to-end.
+**Phase 2.5 — `crd-jobs` thread pool + fiber tasks.**
+`crd-renderer` v1a–i shipped. The full renderer frame loop is now end-to-end:
+`add_swapchain_blit_pass` (free function in `crd/renderer/swapchain_blit.hpp`) adds a
+blit + present-barrier pass pair into the frame graph; after `fg.execute()`, the
+swapchain image is in `Present` layout. `blit_image` on `CommandBuffer` blits with
+`VK_FILTER_LINEAR` (dynamic resolution ready). ForwardRenderPath color image carries
+`ColorAttachment | TransferSrc`; swapchain images carry `TransferDst`.
+Next: `crd-jobs` (Phase 2.5) — thread pool + fiber tasks for async pipeline compile and upload.
 
 Aktif phase dosyası: `docs/phases/phase-2-graphics.md`
 
@@ -31,24 +33,23 @@ _none — running on the main roadmap._
 
 ## Last shipped milestone
 
-**2026-05-01 — `crd-renderer` v1h index buffer support shipped.**
+**2026-05-01 — `crd-renderer` v1i swapchain blit + first full frame loop shipped.**
 
-`IndexType` enum (`Uint16`, `Uint32`) in `rhi/types.hpp`. `bind_index_buffer(buffer,
-offset, type)` and `draw_indexed(index_count, first_index, vertex_offset)` added to
-`CommandBuffer` and implemented in `VulkanCommandBuffer` (`vkCmdBindIndexBuffer` +
-`vkCmdDrawIndexed`). `Renderable` and `DrawItem` gain `index_buffer`, `index_count`,
-`index_type` (null index_buffer = backward-compat non-indexed draw). `build_frame`
-validates: `index_buffer != null → index_count > 0`. `ForwardRenderPath` dispatches
-`draw_indexed()` or `draw()` per item in both depth-prepass and color-pass. All four
-fake `CommandBuffer` implementations updated. 4 new unit tests. GPU instancing
-plan documented in `docs/debt.md` and `docs/phases/phase-2-graphics.md` (v1j, Phase 3.2).
+`CommandBuffer::blit_image(src, dst, src_extent, dst_extent)` added to RHI interface
+and implemented in `VulkanCommandBuffer` via `vkCmdBlitImage` with `VK_FILTER_LINEAR`.
+Swapchain creation now sets `VK_IMAGE_USAGE_TRANSFER_DST_BIT`. `ForwardRenderPath`
+color image adds `TransferSrc` usage. New free function `add_swapchain_blit_pass`
+(in `crd/renderer/swapchain_blit.hpp`) adds two frame graph passes per frame:
+"swapchain-blit" (ColorWrite→TransferSrc, Undefined→TransferDst, blit_image call) and
+"present-barrier" (TransferDst→Present, empty execute). All fake `CommandBuffer`
+implementations updated. 4 new unit tests. Smoke updated with end-to-end blit path.
 
 Three-flavour green:
-- win-debug:    257/257
-- win-release:  256/256
-- win-asan:     257/257
+- win-debug:    261/261
+- win-release:  260/260
+- win-asan:     261/261
 
-Detail: `docs/sessions/2026-05-01-renderer-v1h-index-buffer.md`.
+Detail: `docs/sessions/2026-05-01-renderer-v1i-swapchain-blit.md` (to be written).
 
 ## Previous shipped milestone
 
@@ -303,10 +304,8 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Next up (next 1–3 sessions)
 
-1. **`crd-renderer` v1i — swapchain blit + output.** `IRenderPath::output_image()` feeds
-   a swapchain blit pass; first full frame loop end-to-end (first renderable on screen).
-2. **`crd-jobs` 2.5** — thread pool + fiber tasks; pulled in once renderer needs async upload.
-3. **`crd-resources` + `asset_cooker` 2.6** — async load, LRU, refcounted handles, runtime binary.
+1. **`crd-jobs` 2.5** — thread pool + fiber tasks; pulled in once renderer needs async upload.
+2. **`crd-resources` + `asset_cooker` 2.6** — async load, LRU, refcounted handles, runtime binary.
 
 ## Open questions
 
@@ -317,9 +316,9 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Test counts (last quality pass)
 
-- win-debug:    257/257
-- win-release:  256/256
-- win-asan:     257/257
+- win-debug:    261/261
+- win-release:  260/260
+- win-asan:     261/261
 
 ## Pointers (lazy-load reference)
 
@@ -344,6 +343,7 @@ When in doubt, ASK before reading large files.
 
 ## Session log (rolling, last 5)
 
+- **2026-05-01** — `crd-renderer` v1i swapchain blit + first full frame loop shipped (261/261 win-debug).
 - **2026-05-01** — `crd-renderer` v1h index buffer + `draw_indexed` shipped (257/257 win-debug).
 - **2026-05-01** — `crd-renderer` v1g `ForwardRenderPath` shipped (253/253 win-debug).
 - **2026-05-01** — `crd-renderer` v1e+f push constants + descriptor system + material binding shipped (248/248 win-debug).

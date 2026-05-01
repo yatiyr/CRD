@@ -61,7 +61,7 @@ void ForwardRenderPath::recreate_render_targets()
 {
     m_color_image = m_device->create_image(
         {m_extent, rhi::Format::B8G8R8A8Unorm,
-         rhi::enum_bits(rhi::ImageUsage::ColorAttachment), 1, 1});
+         rhi::ImageUsage::ColorAttachment | rhi::ImageUsage::TransferSrc, 1, 1});
     m_depth_image = m_device->create_image(
         {m_extent, rhi::Format::D32Sfloat,
          rhi::enum_bits(rhi::ImageUsage::DepthStencilAttachment), 1, 1});
@@ -112,7 +112,7 @@ void ForwardRenderPath::build(FrameGraph& fg, const DrawList& draw_list, const F
     {
         auto builder = fg.add_pass("depth-prepass");
         builder.write(m_depth_handle, rhi::ImageAccess::DepthWrite);
-        builder.set_execute([this, &draw_list, slot](FrameResources& res, rhi::CommandBuffer& cmd)
+        builder.set_execute([this, &draw_list](FrameResources& res, rhi::CommandBuffer& cmd)
         {
             auto* depth = res.get(m_depth_handle);
             const rhi::RenderingDepthAttachmentInfo depth_att{depth, rhi::LoadOp::Clear,

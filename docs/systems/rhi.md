@@ -17,6 +17,7 @@ with Vulkan) implement and that higher-level rendering code builds on.
 | v1f | descriptor system — set layouts, pipeline layouts, ring allocator, descriptor sets | ✅ |
 | v1g | caller-managed image transitions; optional color attachment; null fragment shader | ✅ |
 | v1h | `IndexType` enum; `bind_index_buffer()`; `draw_indexed()` | ✅ |
+| v1i | `blit_image()` with linear filter; swapchain `TransferDst` usage | ✅ |
 
 ## Core decisions
 
@@ -167,6 +168,14 @@ Changes that harden `crd-rhi-vulkan` for multi-pass rendering:
   `vkCmdBindIndexBuffer`
 - `CommandBuffer::draw_indexed(index_count, first_index, vertex_offset)` —
   maps to `vkCmdDrawIndexed` with `instance_count=1`
+
+## What ships today (v1i — swapchain blit)
+
+- `CommandBuffer::blit_image(src, dst, src_extent, dst_extent)` — maps to
+  `vkCmdBlitImage` with `VK_FILTER_LINEAR`; both images must already be in
+  `TransferSrc` / `TransferDst` layout (frame graph handles transitions)
+- Swapchain image usage now includes `VK_IMAGE_USAGE_TRANSFER_DST_BIT` so
+  swapchain images can be blit targets
 
 ## How to use it (today)
 

@@ -85,6 +85,12 @@ public:
         CRD_LOG_INFO(g_log_smoke_rhi, "draw_indexed indices={} first={} voffset={}",
                      index_count, first_index, vertex_offset);
     }
+    void blit_image(crd::rhi::Image& /*src*/, crd::rhi::Image& /*dst*/,
+                    crd::rhi::Extent2D src_ext, crd::rhi::Extent2D dst_ext) noexcept override
+    {
+        CRD_LOG_INFO(g_log_smoke_rhi, "blit_image {}x{} → {}x{}",
+                     src_ext.width, src_ext.height, dst_ext.width, dst_ext.height);
+    }
     void transition_image(crd::rhi::Image& /*image*/, crd::rhi::ImageAccess from,
                           crd::rhi::ImageAccess to) noexcept override
     {

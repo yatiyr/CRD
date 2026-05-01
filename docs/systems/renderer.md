@@ -16,7 +16,7 @@ the frame graph, render paths, and material binding live.
 | v1f | material system v1 (`MaterialLayout`, `MaterialInstance`) | ✅ shipped 2026-05-01 |
 | v1g | `ForwardRenderPath` — depth prepass + main color as frame graph passes | ✅ shipped 2026-05-01 |
 | v1h | index buffer + `draw_indexed` | ✅ shipped 2026-05-01 |
-| v1i | swapchain blit + output (first full frame loop) | ⏳ |
+| v1i | swapchain blit + output (first full frame loop) | ✅ shipped 2026-05-01 |
 | v1j | GPU instancing | ⏳ Phase 3.2 dep — see `docs/debt.md` |
 
 ## Core decisions
@@ -161,9 +161,40 @@ struct PerFrameUbo {
 struct PerDrawPush { Mat4f model; };
 ```
 
+### Swapchain blit (v1i)
+
+Free function in `crd/renderer/swapchain_blit.hpp`:
+
+```cpp
+ImageHandle add_swapchain_blit_pass(FrameGraph& fg,
+                                    ImageHandle render_output,
+                                    rhi::Image& sc_image,
+                                    rhi::Extent2D render_extent,
+                                    rhi::Extent2D display_extent);
+```
+
+Adds two passes to the frame graph:
+- **`swapchain-blit`** — reads `render_output` as `TransferSrc`, writes `sc_image` as `TransferDst`, calls `blit_image` (linear filter)
+- **`present-barrier`** — empty execute; triggers `TransferDst → Present` barrier so the swapchain image is layout-ready for `vkQueuePresentKHR`
+
+After `fg.execute()` the full frame loop becomes:
+```cpp
+fg.reset();
+render_path->build(fg, draw_list, ctx);
+add_swapchain_blit_pass(fg, render_path->output_image(),
+                        swapchain->current_image(), render_extent, display_extent);
+fg.build();
+fg.execute(*device, *cmd);
+queue.submit(*cmd, *swapchain);
+queue.present(*swapchain);
+```
+
+`blit_image` uses `VK_FILTER_LINEAR` — renders correctly at any render-to-display scale ratio (dynamic resolution ready).
+
+`ForwardRenderPath` color image carries `ColorAttachment | TransferSrc` usage. Swapchain images carry `ColorAttachment | TransferDst` usage (set at swapchain creation).
+
 ## What it does not do yet
 
-- No swapchain blit / present path (v1i)
 - No translucent pass in `ForwardRenderPath` (draws opaque + masked only)
 - No real mesh loading or asset pipeline (Phase 2.6)
 - No scene graph or ECS (Phase 3)

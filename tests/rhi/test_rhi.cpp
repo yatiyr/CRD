@@ -146,6 +146,11 @@ public:
         last_first_index   = first_index;
         last_vertex_offset = vertex_offset;
     }
+    void blit_image(crd::rhi::Image& /*src*/, crd::rhi::Image& /*dst*/,
+                    crd::rhi::Extent2D /*src_extent*/, crd::rhi::Extent2D /*dst_extent*/) noexcept override
+    {
+        ++blit_image_count;
+    }
     void transition_image(crd::rhi::Image& /*image*/, crd::rhi::ImageAccess /*from*/,
                           crd::rhi::ImageAccess /*to*/) noexcept override
     {
@@ -177,6 +182,7 @@ public:
     int bind_index_buffer_count  = 0;
     int draw_count = 0;
     int draw_indexed_count = 0;
+    int blit_image_count = 0;
     int transition_count = 0;
     int push_constants_count = 0;
     int bind_descriptor_sets_count = 0;

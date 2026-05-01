@@ -5,6 +5,7 @@
 #include <crd/renderer/per_frame_data.hpp>
 #include <crd/renderer/render_path.hpp>
 #include <crd/renderer/renderer.hpp>
+#include <crd/renderer/swapchain_blit.hpp>
 #include <crd/shader/shader.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -87,6 +88,12 @@ public:
         ++draw_indexed_count;
         last_index_count = index_count;
     }
+    void blit_image(crd::rhi::Image& /*src*/, crd::rhi::Image& /*dst*/,
+                    crd::rhi::Extent2D src_extent, crd::rhi::Extent2D /*dst_extent*/) noexcept override
+    {
+        ++blit_image_count;
+        last_blit_src_extent = src_extent;
+    }
     void transition_image(crd::rhi::Image& /*image*/, crd::rhi::ImageAccess from,
                           crd::rhi::ImageAccess to) noexcept override
     {
@@ -117,6 +124,7 @@ public:
     int bind_index_buffer_count = 0;
     int draw_count = 0;
     int draw_indexed_count = 0;
+    int blit_image_count = 0;
     int transition_count = 0;
     int push_constants_count = 0;
     int bind_descriptor_sets_count = 0;
@@ -126,6 +134,7 @@ public:
     crd::u32 last_push_size = 0;
     crd::u32 last_first_set = 0;
     int last_set_count = 0;
+    crd::rhi::Extent2D last_blit_src_extent{};
     crd::containers::Array<TransitionRecord> transitions{};
 };
 
@@ -1017,4 +1026,116 @@ TEST_CASE("ForwardRenderPath mixes indexed and non-indexed items in color pass",
     // color pass:    1 indexed opaque + 1 plain masked → draw_indexed × 1 + draw × 1
     REQUIRE(cmd.draw_indexed_count == 2);
     REQUIRE(cmd.draw_count         == 1);
+}
+
+// =============================================================================
+// Swapchain blit tests (v1i)
+// =============================================================================
+
+TEST_CASE("add_swapchain_blit_pass imports swapchain and adds two passes", "[renderer][blit]")
+{
+    FakeImage render_target({});
+    FakeImage swapchain_image({});
+
+    crd::renderer::FrameGraph fg;
+    auto rt_handle = fg.import(&render_target, crd::rhi::ImageAccess::ColorWrite);
+
+    const crd::rhi::Extent2D render_ext{1280, 720};
+    const crd::rhi::Extent2D display_ext{1280, 720};
+
+    auto sc_handle = crd::renderer::add_swapchain_blit_pass(fg, rt_handle, swapchain_image,
+                                                             render_ext, display_ext);
+
+    REQUIRE(sc_handle.is_valid());
+    REQUIRE(fg.build()); // build must succeed: external rt is pre-written, swapchain external
+}
+
+TEST_CASE("add_swapchain_blit_pass execute calls blit_image once", "[renderer][blit]")
+{
+    FakeImage render_target({});
+    FakeImage swapchain_image({});
+    FakeDevice fake_device;
+
+    crd::renderer::FrameGraph fg;
+    // Render output starts as ColorWrite (post-ForwardRenderPath).
+    auto rt_handle = fg.import(&render_target, crd::rhi::ImageAccess::ColorWrite);
+
+    const crd::rhi::Extent2D render_ext{1280, 720};
+    const crd::rhi::Extent2D display_ext{1920, 1080};
+
+    [[maybe_unused]] auto sc_h = crd::renderer::add_swapchain_blit_pass(fg, rt_handle, swapchain_image, render_ext, display_ext);
+
+    REQUIRE(fg.build());
+
+    FakeCommandBuffer cmd;
+    fg.execute(fake_device, cmd);
+
+    REQUIRE(cmd.blit_image_count == 1);
+    REQUIRE(cmd.last_blit_src_extent.width  == 1280u);
+    REQUIRE(cmd.last_blit_src_extent.height == 720u);
+}
+
+TEST_CASE("add_swapchain_blit_pass inserts correct barrier sequence", "[renderer][blit]")
+{
+    // Verify barrier sequence:
+    //   ColorWrite → TransferSrc (render output, before swapchain-blit)
+    //   Undefined  → TransferDst (swapchain image, before swapchain-blit)
+    //   TransferDst → Present    (swapchain image, before present-barrier)
+    FakeImage render_target({});
+    FakeImage swapchain_image({});
+    FakeDevice fake_device;
+
+    crd::renderer::FrameGraph fg;
+    auto rt_handle = fg.import(&render_target, crd::rhi::ImageAccess::ColorWrite);
+
+    [[maybe_unused]] auto sc_h2 = crd::renderer::add_swapchain_blit_pass(fg, rt_handle, swapchain_image, {1280, 720}, {1280, 720});
+
+    REQUIRE(fg.build());
+
+    FakeCommandBuffer cmd;
+    fg.execute(fake_device, cmd);
+
+    // 3 barriers: ColorWrite→TransferSrc, Undefined→TransferDst, TransferDst→Present
+    REQUIRE(cmd.transition_count == 3);
+    REQUIRE(cmd.transitions[0].from == crd::rhi::ImageAccess::ColorWrite);
+    REQUIRE(cmd.transitions[0].to   == crd::rhi::ImageAccess::TransferSrc);
+    REQUIRE(cmd.transitions[1].from == crd::rhi::ImageAccess::Undefined);
+    REQUIRE(cmd.transitions[1].to   == crd::rhi::ImageAccess::TransferDst);
+    REQUIRE(cmd.transitions[2].from == crd::rhi::ImageAccess::TransferDst);
+    REQUIRE(cmd.transitions[2].to   == crd::rhi::ImageAccess::Present);
+}
+
+TEST_CASE("add_swapchain_blit_pass appended after ForwardRenderPath passes builds correctly",
+          "[renderer][blit][forward]")
+{
+    FakeDevice device;
+    FakeDescriptorAllocator alloc;
+    FakePipeline pipeline({});
+    FakeResolver resolver(pipeline);
+
+    auto frp = crd::renderer::ForwardRenderPath::create(device, resolver, alloc, {1280, 720}, 2);
+    REQUIRE(frp != nullptr);
+
+    crd::renderer::DrawList empty_list;
+    crd::renderer::FrameContext ctx;
+    ctx.frame_index = 0;
+
+    FakeImage swapchain_image({});
+    crd::renderer::FrameGraph fg;
+    alloc.begin_frame(0);
+    frp->build(fg, empty_list, ctx);
+    [[maybe_unused]] auto sc_h3 = crd::renderer::add_swapchain_blit_pass(fg, frp->output_image(), swapchain_image,
+                                                                          {1280, 720}, {1280, 720});
+
+    REQUIRE(fg.build());
+
+    FakeCommandBuffer cmd;
+    fg.execute(device, cmd);
+
+    // blit must have been called exactly once
+    REQUIRE(cmd.blit_image_count == 1);
+    // swapchain image ends in Present layout: last two transitions on the swapchain are
+    // Undefined→TransferDst and TransferDst→Present
+    const auto& t = cmd.transitions;
+    REQUIRE(t.back().to == crd::rhi::ImageAccess::Present);
 }

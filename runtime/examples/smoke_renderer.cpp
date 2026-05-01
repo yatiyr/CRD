@@ -3,6 +3,7 @@
 #include <crd/renderer/frame_graph.hpp>
 #include <crd/renderer/render_path.hpp>
 #include <crd/renderer/renderer.hpp>
+#include <crd/renderer/swapchain_blit.hpp>
 #include <crd/shader/shader.hpp>
 
 #include <memory>
@@ -67,6 +68,13 @@ public:
     {
         CRD_LOG_INFO(g_log_smoke_renderer, "draw_indexed indices={}", index_count);
     }
+    void blit_image(crd::rhi::Image& /*src*/, crd::rhi::Image& /*dst*/,
+                    crd::rhi::Extent2D src_ext, crd::rhi::Extent2D dst_ext) noexcept override
+    {
+        CRD_LOG_INFO(g_log_smoke_renderer, "blit_image {}x{} → {}x{}",
+                     src_ext.width, src_ext.height, dst_ext.width, dst_ext.height);
+        ++blit_count;
+    }
     void transition_image(crd::rhi::Image& /*image*/, crd::rhi::ImageAccess from,
                           crd::rhi::ImageAccess to) noexcept override
     {
@@ -84,6 +92,7 @@ public:
     }
 
     int transition_count = 0;
+    int blit_count = 0;
 };
 
 // Minimal IRenderPath implementation that records one color pass into the frame graph.
@@ -297,7 +306,33 @@ int main()
     CRD_LOG_INFO(g_log_smoke_renderer, "frame_graph.execute() transitions={}", fg_cmd.transition_count);
     const bool multi_fg_ok = multi_fg_built && fg_cmd.transition_count == 3;
 
+    // --- Swapchain blit smoke (v1i) ---
+    // Simulates the full end-of-frame sequence:
+    //   render_output (ColorWrite) → swapchain-blit → present-barrier
+    // Expected barriers: ColorWrite→TransferSrc, Undef→TransferDst, TransferDst→Present
+    // Expected blit call: 1
+    FakeCommandBuffer  blit_cmd;
+    crd::renderer::FrameGraph blit_fg;
+
+    FakeImage render_output_img({});
+    FakeImage swapchain_img({});
+
+    auto render_out_h = blit_fg.import(&render_output_img, crd::rhi::ImageAccess::ColorWrite);
+    [[maybe_unused]] auto blit_sc_h = crd::renderer::add_swapchain_blit_pass(
+        blit_fg, render_out_h, swapchain_img, {1280, 720}, {1280, 720});
+
+    const bool blit_built = blit_fg.build();
+    blit_fg.execute(fake_device, blit_cmd);
+
+    const bool blit_ok = blit_built &&
+                         blit_cmd.blit_count       == 1 &&
+                         blit_cmd.transition_count == 3;
+
+    CRD_LOG_INFO(g_log_smoke_renderer,
+                 "swapchain-blit ok={} (blit={} transitions={})",
+                 blit_ok, blit_cmd.blit_count, blit_cmd.transition_count);
+
     crd::log::flush();
     crd::log::shutdown();
-    return (counts_ok && path_ok && multi_fg_ok) ? 0 : 1;
+    return (counts_ok && path_ok && multi_fg_ok && blit_ok) ? 0 : 1;
 }

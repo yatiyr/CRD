@@ -879,6 +879,36 @@ public:
         vkCmdDrawIndexed(m_command_buffer, index_count, 1, first_index, vertex_offset, 0);
     }
 
+    void blit_image(Image& src, Image& dst,
+                    Extent2D src_extent, Extent2D dst_extent) noexcept override
+    {
+        auto* vk_src = dynamic_cast<VulkanImage*>(&src);
+        auto* vk_dst = dynamic_cast<VulkanImage*>(&dst);
+        CRD_ASSERT(vk_src != nullptr && vk_dst != nullptr);
+
+        VkImageBlit region{};
+        region.srcSubresource.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+        region.srcSubresource.mipLevel       = 0;
+        region.srcSubresource.baseArrayLayer = 0;
+        region.srcSubresource.layerCount     = 1;
+        region.srcOffsets[0]                 = {0, 0, 0};
+        region.srcOffsets[1]                 = {static_cast<crd::i32>(src_extent.width),
+                                                static_cast<crd::i32>(src_extent.height), 1};
+        region.dstSubresource.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+        region.dstSubresource.mipLevel       = 0;
+        region.dstSubresource.baseArrayLayer = 0;
+        region.dstSubresource.layerCount     = 1;
+        region.dstOffsets[0]                 = {0, 0, 0};
+        region.dstOffsets[1]                 = {static_cast<crd::i32>(dst_extent.width),
+                                                static_cast<crd::i32>(dst_extent.height), 1};
+
+        vkCmdBlitImage(m_command_buffer,
+                       vk_src->handle(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                       vk_dst->handle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                       1, &region,
+                       VK_FILTER_LINEAR);
+    }
+
     void push_constants(PipelineLayout& layout, ShaderStage stages,
                         crd::u32 offset, crd::u32 size, const void* data) override
     {
@@ -1323,7 +1353,7 @@ public:
         create_info.imageColorSpace = chosen_format.colorSpace;
         create_info.imageExtent = chosen_extent;
         create_info.imageArrayLayers = 1;
-        create_info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        create_info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
         create_info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
         create_info.preTransform = capabilities.currentTransform;
         create_info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;

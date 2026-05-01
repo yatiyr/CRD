@@ -25,6 +25,11 @@ public:
     virtual void draw(crd::u32 vertex_count, crd::u32 first_vertex) = 0;
     virtual void draw_indexed(crd::u32 index_count, crd::u32 first_index, crd::i32 vertex_offset) = 0;
 
+    // Blit src → dst with linear filtering. Both images must already be in TransferSrc / TransferDst
+    // layout respectively (frame graph transitions handle this before the pass executes).
+    virtual void blit_image(Image& src, Image& dst,
+                            Extent2D src_extent, Extent2D dst_extent) noexcept = 0;
+
     virtual void transition_image(Image& image, ImageAccess from, ImageAccess to) noexcept = 0;
 
     // Write push constant data into the command stream.
