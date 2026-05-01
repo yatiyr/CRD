@@ -65,6 +65,14 @@ public:
                      static_cast<int>(to));
         ++transition_count;
     }
+    void push_constants(crd::rhi::PipelineLayout& /*layout*/, crd::rhi::ShaderStage /*stages*/,
+                        crd::u32 /*offset*/, crd::u32 /*size*/, const void* /*data*/) override
+    {
+    }
+    void bind_descriptor_sets(crd::rhi::PipelineLayout& /*layout*/, crd::u32 /*first_set*/,
+                              crd::containers::ConstSpan<crd::rhi::DescriptorSet*> /*sets*/) override
+    {
+    }
 
     int transition_count = 0;
 };
@@ -146,6 +154,12 @@ int main()
             return nullptr;
         }
         [[nodiscard]] std::unique_ptr<crd::rhi::CommandBuffer> create_command_buffer() override { return nullptr; }
+        [[nodiscard]] std::unique_ptr<crd::rhi::DescriptorSetLayout>
+        create_descriptor_set_layout(const crd::rhi::DescriptorSetLayoutDesc&) override { return nullptr; }
+        [[nodiscard]] std::unique_ptr<crd::rhi::PipelineLayout>
+        create_pipeline_layout(const crd::rhi::PipelineLayoutDesc&) override { return nullptr; }
+        [[nodiscard]] std::unique_ptr<crd::rhi::DescriptorAllocator>
+        create_descriptor_allocator(const crd::rhi::DescriptorAllocatorDesc&) override { return nullptr; }
         [[nodiscard]] crd::rhi::Queue& graphics_queue() noexcept override { return m_queue; }
         void wait_idle() override {}
 

@@ -11,14 +11,12 @@
 
 ## Current focus
 
-**Phase 2.4e — push constants + descriptor set RHI surface.**
-`crd-renderer` v1a–d shipped. `IRenderPath` interface is live and green.
-Next: `push_constants()`, `DescriptorSetLayout`, `DescriptorSet`, and
-`bind_descriptor_sets()` in RHI + Vulkan backend.
-
-Full slice plan: v1e (push constants + descriptor sets) →
-v1f (material system) → v1g (depth + sorted rendering) → v1h (index buffers).
-See `docs/phases/phase-2-graphics.md` 2.4 section.
+**Phase 2.4g — `ForwardRenderPath` v1 (first concrete IRenderPath).**
+`crd-renderer` v1a–f shipped. Push constants + descriptor set RHI surface,
+ring-buffer descriptor allocator, and material system are all live and green.
+Next: first concrete `ForwardRenderPath` implementing `IRenderPath` — depth
+prepass pass + main color pass, pipeline resolver, GPU per-frame UBO, per-draw
+push constants.
 
 Aktif phase dosyası: `docs/phases/phase-2-graphics.md`
 
@@ -33,25 +31,25 @@ _none — running on the main roadmap._
 
 ## Last shipped milestone
 
-**2026-05-01 — `crd-renderer` v1d `IRenderPath` interface shipped.**
+**2026-05-01 — `crd-renderer` v1e+f merged: push constants + descriptor system + material binding shipped.**
 
-`IRenderPath` pure-virtual interface defined: `build(FrameGraph&, DrawList&, FrameContext&)`,
-`output_image()`, `resize(Extent2D)`. `DrawBucket` enum (Opaque/Masked/Translucent) added
-to `Renderable`. `DrawList` replaces `FramePlan` — three sorted `Array<DrawItem>` buckets:
-opaque + masked front-to-back, translucent back-to-front. `FrameContext` now carries
-`camera_position` (world-space Vec3f) for squared-distance depth sort. `execute_frame` and
-`FramePlan` removed. Smoke and unit tests cover bucket routing, depth ordering, and the
-full build + resize + output_image IRenderPath contract.
+Merged v1e + v1f into one slice. RHI surface: `push_constants()`, `bind_descriptor_sets()`,
+`create_descriptor_set_layout()`, `create_pipeline_layout()`, `create_descriptor_allocator()`.
+Vulkan backend: `VulkanDescriptorSetLayout`, `VulkanPipelineLayout`, `VulkanDescriptorSet`,
+`VulkanDescriptorAllocator` (ring-buffer, `frames_in_flight` pools — see session doc).
+`ShaderStage` promoted to bitmask (Vertex=1, Fragment=2, Compute=4). Explicit `PipelineLayout`
+added to `GraphicsPipelineDesc` (optional, at end — no positional-init breakage). Renderer
+material system: `MaterialLayout` + `MaterialInstance` wrapping the allocator-backed
+descriptor set lifecycle. 10 new unit tests, 4 new material tests.
 
-Six-preset green:
-- win-debug:          238/238
-- win-release:        237/237
-- win-relwithdebinfo: 238/238
-- win-asan:           238/238
-- win-clang-cl:       238/238
-- win-tidy:           238/238
+Five-preset green (relwithdebinfo rerun pending user):
+- win-debug:    248/248
+- win-release:  247/247
+- win-asan:     248/248
+- win-clang-cl: 248/248
+- win-tidy:     248/248
 
-Detail: `docs/sessions/2026-05-01-renderer-v1d-irenderpath.md` (pending).
+Detail: `docs/sessions/2026-05-01-renderer-v1ef-descriptors.md` (pending).
 
 ## Previous shipped milestone
 
@@ -261,12 +259,13 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Next up (next 1–3 sessions)
 
-1. **`crd-renderer` v1e — push constants + descriptor set RHI surface.** `push_constants()`,
-   `DescriptorSetLayout`, `DescriptorSet`, `bind_descriptor_sets()` in RHI + Vulkan backend.
-2. **`crd-renderer` v1f — material system.** Per-variant material instances, GPU parameter
-   upload, descriptor set binding per draw item.
-3. **`crd-renderer` v1g — depth prepass + sorted rendering.** First concrete `ForwardRenderPath`
-   implementing `IRenderPath`: depth prepass pass + main color pass, pipeline resolution.
+1. **`crd-renderer` v1g — `ForwardRenderPath` v1.** First concrete `IRenderPath`
+   implementation: depth prepass + main color pass, `PipelineResolver` integration,
+   per-frame UBO (camera matrices at set 0), per-draw push constants (model matrix).
+2. **`crd-renderer` v1h — index buffers.** `create_index_buffer()` in RHI + Vulkan,
+   `bind_index_buffer()` + `draw_indexed()` in `CommandBuffer`, `DrawItem.index_buffer`.
+3. **`crd-renderer` v1i — swapchain blit + output.** `IRenderPath::output_image()` feeds
+   a swapchain blit pass; first full frame loop end-to-end.
 
 ## Open questions
 
@@ -277,12 +276,12 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Test counts (last quality pass)
 
-- win-debug:          238/238
-- win-release:        237/237
-- win-relwithdebinfo: 238/238
-- win-asan:           238/238
-- win-clang-cl:       238/238
-- win-tidy:           238/238
+- win-debug:          248/248
+- win-release:        247/247
+- win-relwithdebinfo: pending (rerun)
+- win-asan:           248/248
+- win-clang-cl:       248/248
+- win-tidy:           248/248
 
 ## Pointers (lazy-load reference)
 
@@ -307,6 +306,7 @@ When in doubt, ASK before reading large files.
 
 ## Session log (rolling, last 5)
 
+- **2026-05-01** — `crd-renderer` v1e+f push constants + descriptor system + material binding shipped (248/248 win-debug).
 - **2026-05-01** — `crd-renderer` v1d `IRenderPath` interface shipped (238/238 win-debug).
 - **2026-05-01** — `crd-renderer` v1c frame graph v1 shipped (233/233 win-debug).
 - **2026-05-01** — `crd-renderer` v1b real draw execution shipped.

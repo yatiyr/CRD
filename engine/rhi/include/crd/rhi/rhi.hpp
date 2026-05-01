@@ -13,6 +13,7 @@
 
 #include <crd/rhi/buffer.hpp>
 #include <crd/rhi/command_buffer.hpp>
+#include <crd/rhi/descriptor.hpp>
 #include <crd/rhi/device.hpp>
 #include <crd/rhi/image.hpp>
 #include <crd/rhi/instance.hpp>

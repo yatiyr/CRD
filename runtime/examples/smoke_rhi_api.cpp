@@ -81,6 +81,14 @@ public:
         CRD_LOG_INFO(g_log_smoke_rhi, "transition_image from={} to={}", static_cast<int>(from),
                      static_cast<int>(to));
     }
+    void push_constants(crd::rhi::PipelineLayout& /*layout*/, crd::rhi::ShaderStage /*stages*/,
+                        crd::u32 /*offset*/, crd::u32 /*size*/, const void* /*data*/) override
+    {
+    }
+    void bind_descriptor_sets(crd::rhi::PipelineLayout& /*layout*/, crd::u32 /*first_set*/,
+                              crd::containers::ConstSpan<crd::rhi::DescriptorSet*> /*sets*/) override
+    {
+    }
 };
 
 class SmokeSwapchain final : public crd::rhi::Swapchain
@@ -147,6 +155,12 @@ public:
     {
         return std::make_unique<SmokeCommandBuffer>();
     }
+    [[nodiscard]] std::unique_ptr<crd::rhi::DescriptorSetLayout>
+    create_descriptor_set_layout(const crd::rhi::DescriptorSetLayoutDesc&) override { return nullptr; }
+    [[nodiscard]] std::unique_ptr<crd::rhi::PipelineLayout>
+    create_pipeline_layout(const crd::rhi::PipelineLayoutDesc&) override { return nullptr; }
+    [[nodiscard]] std::unique_ptr<crd::rhi::DescriptorAllocator>
+    create_descriptor_allocator(const crd::rhi::DescriptorAllocatorDesc&) override { return nullptr; }
     [[nodiscard]] crd::rhi::Queue& graphics_queue() noexcept override { return m_queue; }
     void wait_idle() override { m_queue.wait_idle(); }
 

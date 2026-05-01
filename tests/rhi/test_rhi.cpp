@@ -53,6 +53,63 @@ private:
     crd::rhi::GraphicsPipelineDesc m_desc{};
 };
 
+class FakeDescriptorSetLayout final : public crd::rhi::DescriptorSetLayout
+{
+public:
+    explicit FakeDescriptorSetLayout(crd::rhi::DescriptorSetLayoutDesc desc) : m_desc(std::move(desc)) {}
+    [[nodiscard]] const crd::rhi::DescriptorSetLayoutDesc& desc() const noexcept override { return m_desc; }
+
+private:
+    crd::rhi::DescriptorSetLayoutDesc m_desc{};
+};
+
+class FakePipelineLayout final : public crd::rhi::PipelineLayout
+{
+public:
+    explicit FakePipelineLayout(crd::rhi::PipelineLayoutDesc desc) : m_desc(std::move(desc)) {}
+    [[nodiscard]] const crd::rhi::PipelineLayoutDesc& desc() const noexcept override { return m_desc; }
+
+private:
+    crd::rhi::PipelineLayoutDesc m_desc{};
+};
+
+class FakeDescriptorSet final : public crd::rhi::DescriptorSet
+{
+public:
+    void update_buffer(crd::u32 binding, crd::rhi::Buffer& /*buffer*/,
+                       crd::u64 /*offset_bytes*/, crd::u64 /*size_bytes*/) override
+    {
+        ++update_buffer_count;
+        last_binding = binding;
+    }
+
+    int update_buffer_count = 0;
+    crd::u32 last_binding = 0;
+};
+
+class FakeDescriptorAllocator final : public crd::rhi::DescriptorAllocator
+{
+public:
+    void begin_frame(crd::u32 frame_index) override
+    {
+        ++begin_frame_count;
+        last_frame_index = frame_index;
+    }
+
+    [[nodiscard]] std::unique_ptr<crd::rhi::DescriptorSet>
+    allocate(const crd::rhi::DescriptorSetLayout& layout) override
+    {
+        ++allocate_count;
+        last_allocated_binding_count = static_cast<int>(layout.desc().bindings.size());
+        return std::make_unique<FakeDescriptorSet>();
+    }
+
+    int begin_frame_count = 0;
+    int allocate_count    = 0;
+    crd::u32 last_frame_index = 0;
+    int last_allocated_binding_count = 0;
+};
+
 class FakeCommandBuffer final : public crd::rhi::CommandBuffer
 {
 public:
@@ -81,6 +138,21 @@ public:
     {
         ++transition_count;
     }
+    void push_constants(crd::rhi::PipelineLayout& /*layout*/, crd::rhi::ShaderStage stages,
+                        crd::u32 offset, crd::u32 size, const void* /*data*/) override
+    {
+        ++push_constants_count;
+        last_push_stages = stages;
+        last_push_offset = offset;
+        last_push_size   = size;
+    }
+    void bind_descriptor_sets(crd::rhi::PipelineLayout& /*layout*/, crd::u32 first_set,
+                              crd::containers::ConstSpan<crd::rhi::DescriptorSet*> sets) override
+    {
+        ++bind_descriptor_sets_count;
+        last_first_set     = first_set;
+        last_set_count     = static_cast<int>(sets.size());
+    }
 
     int begin_count = 0;
     int end_count = 0;
@@ -91,9 +163,16 @@ public:
     int bind_vertex_buffer_count = 0;
     int draw_count = 0;
     int transition_count = 0;
+    int push_constants_count = 0;
+    int bind_descriptor_sets_count = 0;
     crd::rhi::Extent2D last_extent{};
     crd::u32 last_vertex_count = 0;
     crd::u32 last_first_vertex = 0;
+    crd::rhi::ShaderStage last_push_stages = crd::rhi::ShaderStage::Vertex;
+    crd::u32 last_push_offset = 0;
+    crd::u32 last_push_size   = 0;
+    crd::u32 last_first_set   = 0;
+    int last_set_count        = 0;
 };
 
 class FakeSwapchain final : public crd::rhi::Swapchain
@@ -180,6 +259,27 @@ public:
         return std::make_unique<FakeCommandBuffer>();
     }
 
+    [[nodiscard]] std::unique_ptr<crd::rhi::DescriptorSetLayout>
+    create_descriptor_set_layout(const crd::rhi::DescriptorSetLayoutDesc& desc) override
+    {
+        ++create_descriptor_set_layout_count;
+        return std::make_unique<FakeDescriptorSetLayout>(desc);
+    }
+
+    [[nodiscard]] std::unique_ptr<crd::rhi::PipelineLayout>
+    create_pipeline_layout(const crd::rhi::PipelineLayoutDesc& desc) override
+    {
+        ++create_pipeline_layout_count;
+        return std::make_unique<FakePipelineLayout>(desc);
+    }
+
+    [[nodiscard]] std::unique_ptr<crd::rhi::DescriptorAllocator>
+    create_descriptor_allocator(const crd::rhi::DescriptorAllocatorDesc& /*desc*/) override
+    {
+        ++create_descriptor_allocator_count;
+        return std::make_unique<FakeDescriptorAllocator>();
+    }
+
     [[nodiscard]] crd::rhi::Queue& graphics_queue() noexcept override { return m_queue; }
     void wait_idle() override { ++wait_idle_count; }
 
@@ -189,6 +289,9 @@ public:
     int create_shader_module_count = 0;
     int create_pipeline_count = 0;
     int create_command_buffer_count = 0;
+    int create_descriptor_set_layout_count = 0;
+    int create_pipeline_layout_count = 0;
+    int create_descriptor_allocator_count = 0;
     int wait_idle_count = 0;
     FakeQueue m_queue{};
 };
@@ -219,6 +322,19 @@ TEST_CASE("RHI flags compose cleanly", "[rhi][types]")
     REQUIRE_FALSE(crd::rhi::has_flag(usage, crd::rhi::BufferUsage::Uniform));
 }
 
+TEST_CASE("ShaderStage is a composable bitmask", "[rhi][types]")
+{
+    using crd::rhi::ShaderStage;
+    const auto vs_fs = ShaderStage::Vertex | ShaderStage::Fragment;
+    REQUIRE(crd::rhi::has_stage(vs_fs, ShaderStage::Vertex));
+    REQUIRE(crd::rhi::has_stage(vs_fs, ShaderStage::Fragment));
+    REQUIRE_FALSE(crd::rhi::has_stage(vs_fs, ShaderStage::Compute));
+
+    // Individual stages are single-bit
+    REQUIRE(crd::rhi::has_stage(ShaderStage::Vertex, ShaderStage::Vertex));
+    REQUIRE_FALSE(crd::rhi::has_stage(ShaderStage::Vertex, ShaderStage::Fragment));
+}
+
 TEST_CASE("RHI instance enumerates adapters and creates a device", "[rhi][instance]")
 {
     FakeInstance instance;
@@ -230,6 +346,121 @@ TEST_CASE("RHI instance enumerates adapters and creates a device", "[rhi][instan
     auto device = instance.create_device({});
     REQUIRE(device != nullptr);
     REQUIRE(device->api() == crd::rhi::BackendApi::Vulkan);
+}
+
+TEST_CASE("DescriptorSetLayout creation from bindings", "[rhi][descriptor]")
+{
+    FakeDevice device;
+
+    crd::rhi::DescriptorBinding bindings[] = {
+        {0, crd::rhi::DescriptorType::UniformBuffer, 1, crd::rhi::ShaderStage::Fragment},
+        {1, crd::rhi::DescriptorType::CombinedImageSampler, 4,
+         crd::rhi::ShaderStage::Fragment | crd::rhi::ShaderStage::Vertex},
+    };
+    auto layout = device.create_descriptor_set_layout({crd::containers::make_span(bindings)});
+    REQUIRE(layout != nullptr);
+    REQUIRE(layout->desc().bindings.size() == 2u);
+    REQUIRE(layout->desc().bindings[0].binding == 0u);
+    REQUIRE(layout->desc().bindings[1].count == 4u);
+    REQUIRE(device.create_descriptor_set_layout_count == 1);
+}
+
+TEST_CASE("PipelineLayout creation with push constants and set layouts", "[rhi][descriptor]")
+{
+    FakeDevice device;
+
+    crd::rhi::DescriptorBinding per_frame_bindings[] = {
+        {0, crd::rhi::DescriptorType::UniformBuffer, 1, crd::rhi::ShaderStage::Vertex | crd::rhi::ShaderStage::Fragment},
+    };
+    auto per_frame_layout = device.create_descriptor_set_layout({crd::containers::make_span(per_frame_bindings)});
+
+    crd::rhi::DescriptorBinding per_mat_bindings[] = {
+        {0, crd::rhi::DescriptorType::UniformBuffer, 1, crd::rhi::ShaderStage::Fragment},
+    };
+    auto per_mat_layout = device.create_descriptor_set_layout({crd::containers::make_span(per_mat_bindings)});
+
+    crd::rhi::PushConstantRange pc_range{crd::rhi::ShaderStage::Vertex, 0, 128};
+    const crd::rhi::DescriptorSetLayout* set_layouts[] = {per_frame_layout.get(), per_mat_layout.get()};
+
+    auto pipeline_layout = device.create_pipeline_layout({
+        crd::containers::make_span(set_layouts),
+        crd::containers::make_span(&pc_range, 1),
+    });
+
+    REQUIRE(pipeline_layout != nullptr);
+    REQUIRE(pipeline_layout->desc().set_layouts.size() == 2u);
+    REQUIRE(pipeline_layout->desc().push_constant_ranges.size() == 1u);
+    REQUIRE(pipeline_layout->desc().push_constant_ranges[0].size == 128u);
+    REQUIRE(device.create_pipeline_layout_count == 1);
+}
+
+TEST_CASE("DescriptorAllocator ring-buffer lifecycle", "[rhi][descriptor]")
+{
+    FakeDevice device;
+
+    crd::rhi::DescriptorBinding bindings[] = {
+        {0, crd::rhi::DescriptorType::UniformBuffer, 1, crd::rhi::ShaderStage::Fragment},
+    };
+    auto set_layout = device.create_descriptor_set_layout({crd::containers::make_span(bindings)});
+    auto allocator  = device.create_descriptor_allocator({2, 64});
+    auto* fake_alloc = static_cast<FakeDescriptorAllocator*>(allocator.get());
+
+    // Frame 0: begin + allocate
+    allocator->begin_frame(0);
+    REQUIRE(fake_alloc->begin_frame_count == 1);
+    REQUIRE(fake_alloc->last_frame_index == 0u);
+
+    auto set0 = allocator->allocate(*set_layout);
+    REQUIRE(set0 != nullptr);
+    REQUIRE(fake_alloc->allocate_count == 1);
+    REQUIRE(fake_alloc->last_allocated_binding_count == 1);
+
+    // Frame 1: begin (resets pool[1]) + allocate
+    allocator->begin_frame(1);
+    REQUIRE(fake_alloc->begin_frame_count == 2);
+    auto set1 = allocator->allocate(*set_layout);
+    REQUIRE(set1 != nullptr);
+    REQUIRE(fake_alloc->allocate_count == 2);
+}
+
+TEST_CASE("DescriptorSet update_buffer is recorded", "[rhi][descriptor]")
+{
+    FakeDevice device;
+    auto buf = device.create_buffer({256, crd::rhi::enum_bits(crd::rhi::BufferUsage::Uniform), crd::rhi::MemoryUsage::CpuToGpu});
+
+    FakeDescriptorSet set;
+    set.update_buffer(2, *buf, 0, 0);
+
+    REQUIRE(set.update_buffer_count == 1);
+    REQUIRE(set.last_binding == 2u);
+}
+
+TEST_CASE("CommandBuffer push_constants and bind_descriptor_sets are recorded", "[rhi][descriptor]")
+{
+    FakeDevice device;
+    auto cmd     = device.create_command_buffer();
+    auto* fake   = static_cast<FakeCommandBuffer*>(cmd.get());
+
+    FakePipelineLayout layout({});
+    FakeDescriptorSet  set0;
+    FakeDescriptorSet  set1;
+
+    struct PushData { float mvp[16]; } push{};
+    crd::rhi::DescriptorSet* sets[] = {&set0, &set1};
+
+    cmd->push_constants(layout, crd::rhi::ShaderStage::Vertex | crd::rhi::ShaderStage::Fragment,
+                        0, sizeof(push), &push);
+    cmd->bind_descriptor_sets(layout, 0, crd::containers::make_span(sets));
+
+    REQUIRE(fake->push_constants_count == 1);
+    REQUIRE(fake->last_push_offset == 0u);
+    REQUIRE(fake->last_push_size   == sizeof(push));
+    REQUIRE(crd::rhi::has_stage(fake->last_push_stages, crd::rhi::ShaderStage::Vertex));
+    REQUIRE(crd::rhi::has_stage(fake->last_push_stages, crd::rhi::ShaderStage::Fragment));
+
+    REQUIRE(fake->bind_descriptor_sets_count == 1);
+    REQUIRE(fake->last_first_set   == 0u);
+    REQUIRE(fake->last_set_count   == 2);
 }
 
 TEST_CASE("RHI device can express the first-triangle resource flow", "[rhi][device]")

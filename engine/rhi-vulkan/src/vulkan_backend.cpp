@@ -175,6 +175,29 @@ struct VkAccessInfo
     }
 }
 
+[[nodiscard]] VkDescriptorType to_vk_descriptor_type(DescriptorType type) noexcept
+{
+    switch (type)
+    {
+        case DescriptorType::StorageBuffer:        return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        case DescriptorType::CombinedImageSampler: return VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        case DescriptorType::SampledImage:         return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        case DescriptorType::Sampler:              return VK_DESCRIPTOR_TYPE_SAMPLER;
+        case DescriptorType::StorageImage:         return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        case DescriptorType::UniformBuffer:
+        default:                                   return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    }
+}
+
+[[nodiscard]] VkShaderStageFlags to_vk_shader_stage_flags(ShaderStage stages) noexcept
+{
+    VkShaderStageFlags flags = 0;
+    if (has_stage(stages, ShaderStage::Vertex))   flags |= VK_SHADER_STAGE_VERTEX_BIT;
+    if (has_stage(stages, ShaderStage::Fragment))  flags |= VK_SHADER_STAGE_FRAGMENT_BIT;
+    if (has_stage(stages, ShaderStage::Compute))   flags |= VK_SHADER_STAGE_COMPUTE_BIT;
+    return flags;
+}
+
 [[nodiscard]] bool has_extension(crd::containers::ConstSpan<VkExtensionProperties> exts, const char* name) noexcept
 {
     for (const auto& ext : exts)
@@ -499,11 +522,218 @@ private:
     VkShaderModule m_module = VK_NULL_HANDLE;
 };
 
+class VulkanDescriptorSetLayout final : public DescriptorSetLayout
+{
+public:
+    VulkanDescriptorSetLayout(VkDevice device, DescriptorSetLayoutDesc desc, VkDescriptorSetLayout layout)
+        : m_device(device), m_desc(std::move(desc)), m_layout(layout)
+    {
+    }
+
+    ~VulkanDescriptorSetLayout() noexcept override
+    {
+        if (m_layout != VK_NULL_HANDLE)
+        {
+            vkDestroyDescriptorSetLayout(m_device, m_layout, nullptr);
+            m_layout = VK_NULL_HANDLE;
+        }
+    }
+
+    [[nodiscard]] const DescriptorSetLayoutDesc& desc() const noexcept override { return m_desc; }
+    [[nodiscard]] VkDescriptorSetLayout handle() const noexcept { return m_layout; }
+
+private:
+    VkDevice m_device = VK_NULL_HANDLE;
+    DescriptorSetLayoutDesc m_desc{};
+    VkDescriptorSetLayout m_layout = VK_NULL_HANDLE;
+};
+
+class VulkanPipelineLayout final : public PipelineLayout
+{
+public:
+    VulkanPipelineLayout(VkDevice device, PipelineLayoutDesc desc, VkPipelineLayout layout)
+        : m_device(device), m_desc(std::move(desc)), m_layout(layout)
+    {
+    }
+
+    ~VulkanPipelineLayout() noexcept override
+    {
+        if (m_layout != VK_NULL_HANDLE)
+        {
+            vkDestroyPipelineLayout(m_device, m_layout, nullptr);
+            m_layout = VK_NULL_HANDLE;
+        }
+    }
+
+    [[nodiscard]] const PipelineLayoutDesc& desc() const noexcept override { return m_desc; }
+    [[nodiscard]] VkPipelineLayout handle() const noexcept { return m_layout; }
+
+private:
+    VkDevice m_device = VK_NULL_HANDLE;
+    PipelineLayoutDesc m_desc{};
+    VkPipelineLayout m_layout = VK_NULL_HANDLE;
+};
+
+class VulkanDescriptorSet final : public DescriptorSet
+{
+public:
+    VulkanDescriptorSet(VkDevice device, VkDescriptorSet set,
+                        crd::containers::Array<DescriptorBinding> bindings)
+        : m_device(device), m_set(set), m_bindings(std::move(bindings))
+    {
+    }
+
+    // The VkDescriptorSet is owned by its pool and not freed individually —
+    // the pool is reset en-masse in VulkanDescriptorAllocator::begin_frame().
+    ~VulkanDescriptorSet() noexcept override = default;
+
+    void update_buffer(crd::u32 binding_slot, Buffer& buffer,
+                       crd::u64 offset_bytes, crd::u64 size_bytes) override
+    {
+        auto* vk_buffer = dynamic_cast<VulkanBuffer*>(&buffer);
+        CRD_ASSERT(vk_buffer != nullptr);
+
+        VkDescriptorType vk_type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        for (const auto& b : m_bindings)
+        {
+            if (b.binding == binding_slot)
+            {
+                vk_type = to_vk_descriptor_type(b.type);
+                break;
+            }
+        }
+
+        VkDescriptorBufferInfo buffer_info{};
+        buffer_info.buffer = vk_buffer->handle();
+        buffer_info.offset = offset_bytes;
+        buffer_info.range  = (size_bytes == 0) ? VK_WHOLE_SIZE : size_bytes;
+
+        VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        write.dstSet          = m_set;
+        write.dstBinding      = binding_slot;
+        write.dstArrayElement = 0;
+        write.descriptorType  = vk_type;
+        write.descriptorCount = 1;
+        write.pBufferInfo     = &buffer_info;
+
+        vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
+    }
+
+    [[nodiscard]] VkDescriptorSet handle() const noexcept { return m_set; }
+
+private:
+    VkDevice m_device = VK_NULL_HANDLE;
+    VkDescriptorSet m_set = VK_NULL_HANDLE;
+    crd::containers::Array<DescriptorBinding> m_bindings{};
+};
+
+// Ring-buffer descriptor allocator.
+//
+// Internally: `frames_in_flight` VkDescriptorPools. begin_frame(i) resets
+// pool[i % N], making all sets from that pool invalid.  allocate() writes into
+// the current frame's pool. No individual vkFreeDescriptorSets is ever called.
+class VulkanDescriptorAllocator final : public DescriptorAllocator
+{
+public:
+    VulkanDescriptorAllocator(VkDevice device, const DescriptorAllocatorDesc& desc) : m_device(device)
+    {
+        m_pools.resize(desc.frames_in_flight);
+        for (auto& pool : m_pools)
+        {
+            pool = create_pool(desc);
+            CRD_ASSERT(pool != VK_NULL_HANDLE);
+        }
+        m_frames_in_flight  = desc.frames_in_flight;
+        m_alloc_desc        = desc;
+    }
+
+    ~VulkanDescriptorAllocator() noexcept override
+    {
+        for (auto& pool : m_pools)
+        {
+            if (pool != VK_NULL_HANDLE)
+            {
+                vkDestroyDescriptorPool(m_device, pool, nullptr);
+                pool = VK_NULL_HANDLE;
+            }
+        }
+    }
+
+    void begin_frame(crd::u32 frame_index) override
+    {
+        m_current_pool_index = frame_index % m_frames_in_flight;
+        vkResetDescriptorPool(m_device, m_pools[m_current_pool_index], 0);
+    }
+
+    [[nodiscard]] std::unique_ptr<DescriptorSet> allocate(const DescriptorSetLayout& layout) override
+    {
+        const auto* vk_layout = dynamic_cast<const VulkanDescriptorSetLayout*>(&layout);
+        CRD_ASSERT(vk_layout != nullptr);
+
+        VkDescriptorSetLayout raw_layout = vk_layout->handle();
+        VkDescriptorSetAllocateInfo alloc_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        alloc_info.descriptorPool     = m_pools[m_current_pool_index];
+        alloc_info.descriptorSetCount = 1;
+        alloc_info.pSetLayouts        = &raw_layout;
+
+        VkDescriptorSet raw_set = VK_NULL_HANDLE;
+        if (!vk_ok(vkAllocateDescriptorSets(m_device, &alloc_info, &raw_set), "vkAllocateDescriptorSets"))
+        {
+            CRD_LOG_ERROR(detail::g_log_rhi_vulkan,
+                          "DescriptorAllocator pool exhausted — increase max_sets_per_frame");
+            return nullptr;
+        }
+
+        // Copy layout bindings into the set for type-aware update_buffer().
+        crd::containers::Array<DescriptorBinding> bindings;
+        for (const auto& b : layout.desc().bindings)
+        {
+            bindings.push_back(b);
+        }
+
+        return std::make_unique<VulkanDescriptorSet>(m_device, raw_set, std::move(bindings));
+    }
+
+private:
+    [[nodiscard]] VkDescriptorPool create_pool(const DescriptorAllocatorDesc& desc) const
+    {
+        VkDescriptorPoolSize pool_sizes[] = {
+            {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         desc.max_uniform_buffers_per_frame},
+            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         desc.max_storage_buffers_per_frame},
+            {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, desc.max_combined_image_samplers_per_frame},
+            {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,          desc.max_sampled_images_per_frame},
+            {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          desc.max_storage_images_per_frame},
+            {VK_DESCRIPTOR_TYPE_SAMPLER,                desc.max_samplers_per_frame},
+        };
+
+        VkDescriptorPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+        pool_info.maxSets       = desc.max_sets_per_frame;
+        pool_info.poolSizeCount = static_cast<crd::u32>(std::size(pool_sizes));
+        pool_info.pPoolSizes    = pool_sizes;
+
+        VkDescriptorPool pool = VK_NULL_HANDLE;
+        if (!vk_ok(vkCreateDescriptorPool(m_device, &pool_info, nullptr, &pool), "vkCreateDescriptorPool"))
+        {
+            return VK_NULL_HANDLE;
+        }
+        return pool;
+    }
+
+    VkDevice m_device = VK_NULL_HANDLE;
+    crd::containers::Array<VkDescriptorPool> m_pools{};
+    DescriptorAllocatorDesc m_alloc_desc{};
+    crd::u32 m_frames_in_flight  = 2;
+    crd::u32 m_current_pool_index = 0;
+};
+
 class VulkanPipeline final : public Pipeline
 {
 public:
-    VulkanPipeline(VkDevice device, GraphicsPipelineDesc desc, VkPipelineLayout layout, VkPipeline pipeline)
-        : m_device(device), m_desc(desc), m_layout(layout), m_pipeline(pipeline)
+    // `owned_layout` is non-null only when create_graphics_pipeline synthesised an empty
+    // layout for a desc.pipeline_layout == nullptr call. User-provided layouts are NOT owned.
+    VulkanPipeline(VkDevice device, GraphicsPipelineDesc desc, VkPipeline pipeline,
+                   VkPipelineLayout owned_layout = VK_NULL_HANDLE)
+        : m_device(device), m_desc(desc), m_pipeline(pipeline), m_owned_layout(owned_layout)
     {
     }
 
@@ -514,10 +744,10 @@ public:
             vkDestroyPipeline(m_device, m_pipeline, nullptr);
             m_pipeline = VK_NULL_HANDLE;
         }
-        if (m_layout != VK_NULL_HANDLE)
+        if (m_owned_layout != VK_NULL_HANDLE)
         {
-            vkDestroyPipelineLayout(m_device, m_layout, nullptr);
-            m_layout = VK_NULL_HANDLE;
+            vkDestroyPipelineLayout(m_device, m_owned_layout, nullptr);
+            m_owned_layout = VK_NULL_HANDLE;
         }
     }
 
@@ -527,8 +757,8 @@ public:
 private:
     VkDevice m_device = VK_NULL_HANDLE;
     GraphicsPipelineDesc m_desc{};
-    VkPipelineLayout m_layout = VK_NULL_HANDLE;
     VkPipeline m_pipeline = VK_NULL_HANDLE;
+    VkPipelineLayout m_owned_layout = VK_NULL_HANDLE; // only set when synthesised internally
 };
 
 class VulkanSwapchain;
@@ -621,6 +851,35 @@ public:
     void draw(crd::u32 vertex_count, crd::u32 first_vertex) override
     {
         vkCmdDraw(m_command_buffer, vertex_count, 1, first_vertex, 0);
+    }
+
+    void push_constants(PipelineLayout& layout, ShaderStage stages,
+                        crd::u32 offset, crd::u32 size, const void* data) override
+    {
+        auto* vk_layout = dynamic_cast<VulkanPipelineLayout*>(&layout);
+        CRD_ASSERT(vk_layout != nullptr);
+        vkCmdPushConstants(m_command_buffer, vk_layout->handle(),
+                           to_vk_shader_stage_flags(stages), offset, size, data);
+    }
+
+    void bind_descriptor_sets(PipelineLayout& layout, crd::u32 first_set,
+                              crd::containers::ConstSpan<DescriptorSet*> sets) override
+    {
+        auto* vk_layout = dynamic_cast<VulkanPipelineLayout*>(&layout);
+        CRD_ASSERT(vk_layout != nullptr);
+
+        crd::containers::Array<VkDescriptorSet> raw_sets;
+        raw_sets.resize(sets.size());
+        for (crd::usize i = 0; i < sets.size(); ++i)
+        {
+            auto* vk_set = dynamic_cast<VulkanDescriptorSet*>(sets[i]);
+            CRD_ASSERT(vk_set != nullptr);
+            raw_sets[i] = vk_set->handle();
+        }
+
+        vkCmdBindDescriptorSets(m_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk_layout->handle(),
+                                first_set, static_cast<crd::u32>(raw_sets.size()), raw_sets.data(),
+                                0, nullptr);
     }
 
     void transition_image(Image& image, ImageAccess from, ImageAccess to) noexcept override
@@ -1298,11 +1557,28 @@ public:
         depth_stencil.depthWriteEnable = desc.enable_depth_test ? VK_TRUE : VK_FALSE;
         depth_stencil.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
 
-        VkPipelineLayoutCreateInfo layout_info{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-        VkPipelineLayout layout = VK_NULL_HANDLE;
-        if (!vk_ok(vkCreatePipelineLayout(m_device, &layout_info, nullptr, &layout), "vkCreatePipelineLayout"))
+        // Resolve pipeline layout: use the provided layout or synthesise an empty one.
+        VkPipelineLayout resolved_layout = VK_NULL_HANDLE;
+        VkPipelineLayout synthesised_empty_layout = VK_NULL_HANDLE;
+        if (desc.pipeline_layout != nullptr)
         {
-            return nullptr;
+            auto* vk_layout = dynamic_cast<VulkanPipelineLayout*>(desc.pipeline_layout);
+            if (vk_layout == nullptr)
+            {
+                CRD_LOG_ERROR(detail::g_log_rhi_vulkan, "GraphicsPipelineDesc::pipeline_layout is not a VulkanPipelineLayout");
+                return nullptr;
+            }
+            resolved_layout = vk_layout->handle();
+        }
+        else
+        {
+            VkPipelineLayoutCreateInfo layout_info{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+            if (!vk_ok(vkCreatePipelineLayout(m_device, &layout_info, nullptr, &synthesised_empty_layout),
+                       "vkCreatePipelineLayout(empty)"))
+            {
+                return nullptr;
+            }
+            resolved_layout = synthesised_empty_layout;
         }
 
         VkPipelineRenderingCreateInfo rendering_info{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
@@ -1322,17 +1598,20 @@ public:
         pipeline_info.pMultisampleState = &multisample;
         pipeline_info.pColorBlendState = &blend_state;
         pipeline_info.pDepthStencilState = &depth_stencil;
-        pipeline_info.layout = layout;
+        pipeline_info.layout = resolved_layout;
 
         VkPipeline pipeline = VK_NULL_HANDLE;
         if (!vk_ok(vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pipeline_info, nullptr, &pipeline),
                    "vkCreateGraphicsPipelines"))
         {
-            vkDestroyPipelineLayout(m_device, layout, nullptr);
+            if (synthesised_empty_layout != VK_NULL_HANDLE)
+            {
+                vkDestroyPipelineLayout(m_device, synthesised_empty_layout, nullptr);
+            }
             return nullptr;
         }
 
-        return std::make_unique<VulkanPipeline>(m_device, desc, layout, pipeline);
+        return std::make_unique<VulkanPipeline>(m_device, desc, pipeline, synthesised_empty_layout);
     }
 
     [[nodiscard]] std::unique_ptr<CommandBuffer> create_command_buffer() override
@@ -1356,6 +1635,77 @@ public:
         }
 
         return std::make_unique<VulkanCommandBuffer>(m_device, m_command_pool, command_buffer, m_sync2_enabled);
+    }
+
+    [[nodiscard]] std::unique_ptr<DescriptorSetLayout>
+    create_descriptor_set_layout(const DescriptorSetLayoutDesc& desc) override
+    {
+        crd::containers::Array<VkDescriptorSetLayoutBinding> vk_bindings;
+        for (const auto& b : desc.bindings)
+        {
+            VkDescriptorSetLayoutBinding vk_binding{};
+            vk_binding.binding            = b.binding;
+            vk_binding.descriptorType     = to_vk_descriptor_type(b.type);
+            vk_binding.descriptorCount    = b.count;
+            vk_binding.stageFlags         = to_vk_shader_stage_flags(b.stages);
+            vk_binding.pImmutableSamplers = nullptr;
+            vk_bindings.push_back(vk_binding);
+        }
+
+        VkDescriptorSetLayoutCreateInfo create_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        create_info.bindingCount = static_cast<crd::u32>(vk_bindings.size());
+        create_info.pBindings    = vk_bindings.data();
+
+        VkDescriptorSetLayout layout = VK_NULL_HANDLE;
+        if (!vk_ok(vkCreateDescriptorSetLayout(m_device, &create_info, nullptr, &layout),
+                   "vkCreateDescriptorSetLayout"))
+        {
+            return nullptr;
+        }
+
+        return std::make_unique<VulkanDescriptorSetLayout>(m_device, desc, layout);
+    }
+
+    [[nodiscard]] std::unique_ptr<PipelineLayout>
+    create_pipeline_layout(const PipelineLayoutDesc& desc) override
+    {
+        crd::containers::Array<VkDescriptorSetLayout> vk_set_layouts;
+        for (const auto* set_layout : desc.set_layouts)
+        {
+            const auto* vk_set_layout = dynamic_cast<const VulkanDescriptorSetLayout*>(set_layout);
+            CRD_ASSERT(vk_set_layout != nullptr);
+            vk_set_layouts.push_back(vk_set_layout->handle());
+        }
+
+        crd::containers::Array<VkPushConstantRange> vk_push_ranges;
+        for (const auto& range : desc.push_constant_ranges)
+        {
+            VkPushConstantRange vk_range{};
+            vk_range.stageFlags = to_vk_shader_stage_flags(range.stages);
+            vk_range.offset     = range.offset;
+            vk_range.size       = range.size;
+            vk_push_ranges.push_back(vk_range);
+        }
+
+        VkPipelineLayoutCreateInfo create_info{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        create_info.setLayoutCount         = static_cast<crd::u32>(vk_set_layouts.size());
+        create_info.pSetLayouts            = vk_set_layouts.data();
+        create_info.pushConstantRangeCount = static_cast<crd::u32>(vk_push_ranges.size());
+        create_info.pPushConstantRanges    = vk_push_ranges.data();
+
+        VkPipelineLayout layout = VK_NULL_HANDLE;
+        if (!vk_ok(vkCreatePipelineLayout(m_device, &create_info, nullptr, &layout), "vkCreatePipelineLayout"))
+        {
+            return nullptr;
+        }
+
+        return std::make_unique<VulkanPipelineLayout>(m_device, desc, layout);
+    }
+
+    [[nodiscard]] std::unique_ptr<DescriptorAllocator>
+    create_descriptor_allocator(const DescriptorAllocatorDesc& desc) override
+    {
+        return std::make_unique<VulkanDescriptorAllocator>(m_device, desc);
     }
 
     [[nodiscard]] Queue& graphics_queue() noexcept override { return *m_graphics_queue; }
