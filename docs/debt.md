@@ -15,6 +15,33 @@ move to a session log entry and remove from here.
 - **Multi-viewport ImGui** deferred — Vulkan multi-viewport has known rough
   edges. Single-viewport docking only in Phase 2.1.
 
+## GPU instancing (planned Phase 3.2)
+
+v1h ships `draw_indexed(index_count, first_index, vertex_offset)` — non-instanced only
+(`instance_count` hardwired to 1 in the Vulkan call). When instancing lands:
+
+**RHI changes:**
+- Add `draw_instanced(vertex_count, instance_count, first_vertex, first_instance)` to
+  `CommandBuffer` (non-indexed instanced path).
+- Add `draw_indexed_instanced(index_count, instance_count, first_index, vertex_offset, first_instance)`
+  to `CommandBuffer` (indexed instanced path, mirrors `vkCmdDrawIndexed` fully).
+- All four draw variants (`draw`, `draw_indexed`, `draw_instanced`, `draw_indexed_instanced`)
+  coexist; `VulkanCommandBuffer` implements all four.
+
+**Renderer changes:**
+- `Renderable` and `DrawItem` gain `instance_count = 1` (default keeps backward compat).
+- `ForwardRenderPath` dispatch logic: `instance_count == 1` → non-instanced path (no
+  regression); `instance_count > 1` → instanced path.
+- GPU instance data buffer (transforms, material indices) is a Phase 3 GPU scene buffer
+  concern — `crd-resources` provides per-frame upload; `ForwardRenderPath` binds it as
+  a storage buffer at set 0 binding 1 or via push constants for the base instance.
+
+**When:** After Phase 3.1 (stable entity/transform storage in the scene system) ships and
+a GPU instance data layout is frozen. Instancing without a stable instance buffer contract
+produces nothing useful. Target: Phase 3.2.
+
+**Do NOT prematurely add `instance_count` to `Renderable` / `DrawItem` before that point.**
+
 ## Renderer optimization backlog (post-v1g)
 
 Intentionally deferred. These require the render path to be working end-to-end

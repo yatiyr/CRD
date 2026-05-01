@@ -9,11 +9,14 @@ with Vulkan) implement and that higher-level rendering code builds on.
 
 | Slice | Ships | Status |
 | --- | --- | --- |
-| v1a | types, descriptors, abstract interfaces, fake-backend tests, smoke | ✅ |
-| v1b | Vulkan backend bootstrap in `crd-rhi-vulkan` | ✅ |
+| v1a | types, abstract interfaces, fake-backend tests, smoke | ✅ |
+| v1b | Vulkan backend bootstrap (`crd-rhi-vulkan`) | ✅ |
 | v1c | command buffers + frame sync | ✅ |
 | v1d | pipeline + first triangle | ✅ |
 | v1e | GPU memory + streaming foundation | ✅ |
+| v1f | descriptor system — set layouts, pipeline layouts, ring allocator, descriptor sets | ✅ |
+| v1g | caller-managed image transitions; optional color attachment; null fragment shader | ✅ |
+| v1h | `IndexType` enum; `bind_index_buffer()`; `draw_indexed()` | ✅ |
 
 ## Core decisions
 
@@ -127,6 +130,44 @@ This is still intentionally not the final allocator architecture:
 - no broad deferred-destruction system yet
 - no cross-resource suballocation yet
 
+## What ships today (v1f — descriptor system)
+
+- `DescriptorBinding` — one slot (binding index, type, array count, stage mask)
+- `DescriptorSetLayoutDesc` + `Device::create_descriptor_set_layout()`
+- `PushConstantRange` + `PipelineLayoutDesc` + `Device::create_pipeline_layout()`
+- `DescriptorAllocatorDesc` + `Device::create_descriptor_allocator()`
+  - ring-buffer allocator; holds N pools (one per frame-in-flight)
+  - `begin_frame(frame_index)` resets the oldest pool
+  - `allocate(layout)` returns a `DescriptorSet` for the current frame
+- `DescriptorSet::update_buffer(binding, buffer, offset, size)`
+- `CommandBuffer::push_constants(layout, stages, offset, size, data)`
+- `CommandBuffer::bind_descriptor_sets(layout, first_set, sets)`
+- `ShaderStage` bitmask: `Vertex=1`, `Fragment=2`, `Compute=4`; combinable with `|`
+
+## What ships today (v1g — caller-managed transitions + depth-only pipeline)
+
+Changes that harden `crd-rhi-vulkan` for multi-pass rendering:
+
+- **`begin_rendering` no longer inserts implicit image transitions.**
+  The old implementation called `transition_to_color_attachment()` at
+  `begin_rendering` and `transition_to_present()` at `end_rendering`. Both
+  helpers and the `m_render_target` member were removed. Callers (frame graph,
+  tests, smokes) are now responsible for explicit `transition_image()` calls.
+  This is the correct design: the frame graph's barrier schedule covers it.
+- **Color attachment is optional.** Pass `info.color_attachment.image == nullptr`
+  for a depth-only pass. `colorAttachmentCount = 0` in `VkRenderingInfo`.
+- **Null fragment shader** accepted by `create_graphics_pipeline`. When
+  `desc.fragment_shader == nullptr`, the pipeline is vertex-only (no fragment
+  stage, `colorAttachmentCount = 0`). Required for depth-only pipeline variants.
+
+## What ships today (v1h — index buffer)
+
+- `IndexType` enum: `Uint16`, `Uint32`
+- `CommandBuffer::bind_index_buffer(buffer, offset_bytes, type)` — maps to
+  `vkCmdBindIndexBuffer`
+- `CommandBuffer::draw_indexed(index_count, first_index, vertex_offset)` —
+  maps to `vkCmdDrawIndexed` with `instance_count=1`
+
 ## How to use it (today)
 
 At v1a/v1b/v1c, the low-level flow now has a real backend entrypoint and a
@@ -148,27 +189,42 @@ device->graphics_queue().submit(*command_buffer, *swapchain);
 device->graphics_queue().present(*swapchain);
 ```
 
-The first-triangle path is now real:
+Non-indexed draw:
 
 ```cpp
-auto device = instance->create_device(device_desc);
-auto swapchain = device->create_swapchain(swapchain_desc);
-auto vertex_buffer = device->create_buffer(buffer_desc);
-auto vs = device->create_shader_module(vertex_shader_desc);
-auto fs = device->create_shader_module(fragment_shader_desc);
-auto pipeline = device->create_graphics_pipeline(pipeline_desc);
-auto command_buffer = device->create_command_buffer();
-
-command_buffer->begin();
+// explicit transition required before recording (frame graph handles this automatically)
+command_buffer->transition_image(*render_target, ImageAccess::Undefined, ImageAccess::ColorWrite);
 command_buffer->begin_rendering(rendering_info);
 command_buffer->bind_pipeline(*pipeline);
 command_buffer->bind_vertex_buffer(*vertex_buffer, 0);
-command_buffer->draw(3, 0);
+command_buffer->draw(vertex_count, 0);
 command_buffer->end_rendering();
-command_buffer->end();
+command_buffer->transition_image(*render_target, ImageAccess::ColorWrite, ImageAccess::Present);
+```
 
-device->graphics_queue().submit(*command_buffer, *swapchain);
-device->graphics_queue().present(*swapchain);
+Indexed draw:
+
+```cpp
+command_buffer->bind_pipeline(*pipeline);
+command_buffer->bind_vertex_buffer(*vertex_buffer, 0);
+command_buffer->bind_index_buffer(*index_buffer, 0, IndexType::Uint32);
+command_buffer->draw_indexed(index_count, 0, 0);
+```
+
+Descriptor binding:
+
+```cpp
+auto layout    = device->create_pipeline_layout(pipeline_layout_desc);
+auto set_layout = device->create_descriptor_set_layout(set_layout_desc);
+auto allocator = device->create_descriptor_allocator(alloc_desc);
+
+allocator->begin_frame(frame_index);
+auto set = allocator->allocate(*set_layout);
+set->update_buffer(0, *ubo_buffer, 0, sizeof(PerFrameUbo));
+
+command_buffer->push_constants(*layout, ShaderStage::Vertex, 0, sizeof(model_matrix), &model_matrix);
+rhi::DescriptorSet* sets[] = { set.get() };
+command_buffer->bind_descriptor_sets(*layout, 0, crd::containers::make_span(sets, 1u));
 ```
 
 ## Long-term direction

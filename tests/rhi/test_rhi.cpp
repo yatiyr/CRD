@@ -127,11 +127,24 @@ public:
     {
         ++bind_vertex_buffer_count;
     }
+    void bind_index_buffer(crd::rhi::Buffer& /*buffer*/, crd::u64 /*offset_bytes*/,
+                           crd::rhi::IndexType type) override
+    {
+        ++bind_index_buffer_count;
+        last_index_type = type;
+    }
     void draw(crd::u32 vertex_count, crd::u32 first_vertex) override
     {
         ++draw_count;
         last_vertex_count = vertex_count;
         last_first_vertex = first_vertex;
+    }
+    void draw_indexed(crd::u32 index_count, crd::u32 first_index, crd::i32 vertex_offset) override
+    {
+        ++draw_indexed_count;
+        last_index_count   = index_count;
+        last_first_index   = first_index;
+        last_vertex_offset = vertex_offset;
     }
     void transition_image(crd::rhi::Image& /*image*/, crd::rhi::ImageAccess /*from*/,
                           crd::rhi::ImageAccess /*to*/) noexcept override
@@ -161,13 +174,19 @@ public:
     int end_rendering_count = 0;
     int bind_pipeline_count = 0;
     int bind_vertex_buffer_count = 0;
+    int bind_index_buffer_count  = 0;
     int draw_count = 0;
+    int draw_indexed_count = 0;
     int transition_count = 0;
     int push_constants_count = 0;
     int bind_descriptor_sets_count = 0;
     crd::rhi::Extent2D last_extent{};
     crd::u32 last_vertex_count = 0;
     crd::u32 last_first_vertex = 0;
+    crd::u32 last_index_count  = 0;
+    crd::u32 last_first_index  = 0;
+    crd::i32 last_vertex_offset = 0;
+    crd::rhi::IndexType last_index_type = crd::rhi::IndexType::Uint32;
     crd::rhi::ShaderStage last_push_stages = crd::rhi::ShaderStage::Vertex;
     crd::u32 last_push_offset = 0;
     crd::u32 last_push_size   = 0;

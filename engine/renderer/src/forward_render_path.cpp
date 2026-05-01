@@ -131,7 +131,15 @@ void ForwardRenderPath::build(FrameGraph& fg, const DrawList& draw_list, const F
                 cmd.push_constants(*m_pipeline_layout, rhi::ShaderStage::Vertex,
                                    0, static_cast<crd::u32>(sizeof(PerDrawPush)), &push);
                 cmd.bind_vertex_buffer(*item.vertex_buffer, 0);
-                cmd.draw(item.vertex_count, 0);
+                if (item.index_buffer)
+                {
+                    cmd.bind_index_buffer(*item.index_buffer, 0, item.index_type);
+                    cmd.draw_indexed(item.index_count, 0, 0);
+                }
+                else
+                {
+                    cmd.draw(item.vertex_count, 0);
+                }
             }
 
             cmd.end_rendering();
@@ -177,7 +185,15 @@ void ForwardRenderPath::build(FrameGraph& fg, const DrawList& draw_list, const F
                     cmd.push_constants(*m_pipeline_layout, rhi::ShaderStage::Vertex,
                                        0, static_cast<crd::u32>(sizeof(PerDrawPush)), &push);
                     cmd.bind_vertex_buffer(*item.vertex_buffer, 0);
-                    cmd.draw(item.vertex_count, 0);
+                    if (item.index_buffer)
+                    {
+                        cmd.bind_index_buffer(*item.index_buffer, 0, item.index_type);
+                        cmd.draw_indexed(item.index_count, 0, 0);
+                    }
+                    else
+                    {
+                        cmd.draw(item.vertex_count, 0);
+                    }
                 }
             };
 

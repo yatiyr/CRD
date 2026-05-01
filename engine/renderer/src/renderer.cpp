@@ -24,6 +24,8 @@ bool Renderer::build_frame(const FrameContext& ctx, const shader::Runtime& shade
     {
         if (renderable.vertex_buffer == nullptr || renderable.vertex_count == 0 || !renderable.variant.is_valid())
             return false;
+        if (renderable.index_buffer != nullptr && renderable.index_count == 0)
+            return false;
 
         shader::VariantPipelineDesc handoff;
         if (!shader_runtime.describe_variant(renderable.variant, handoff))
@@ -33,7 +35,10 @@ bool Renderer::build_frame(const FrameContext& ctx, const shader::Runtime& shade
         item.model = crd::math::to_mat4(renderable.transform);
         item.view_projection = vp;
         item.vertex_buffer = renderable.vertex_buffer;
-        item.vertex_count = renderable.vertex_count;
+        item.vertex_count  = renderable.vertex_count;
+        item.index_buffer  = renderable.index_buffer;
+        item.index_count   = renderable.index_count;
+        item.index_type    = renderable.index_type;
         item.material_instance_id = renderable.material_instance_id;
         item.variant = renderable.variant;
         item.handoff = std::move(handoff);

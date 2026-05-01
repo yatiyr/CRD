@@ -28,7 +28,7 @@ Math substrate for graphics, simulation, robotics, and later numerical work.
 - ergonomic float/double aliases for the core angle constants
 - `Vec2/3/4<T>` plus `Vec*f` / `Vec*d`
 - `Mat2/3/4<T>` plus `Mat*f` / `Mat*d`
-- `Mat * Vec`, `Mat * Mat`, transpose, identity/zero constructors
+- `Mat * Vec`, `Mat * Mat`, `transpose`, `inverse` (Laplace cofactor expansion, UB on singular), identity/zero constructors
 - `Quat<T>` plus `Quatf` / `Quatd`
 - rigid `Transform<T>` plus `Transformf` / `Transformd`
 - quaternion axis-angle, vector rotation, matrix conversion, inverse,

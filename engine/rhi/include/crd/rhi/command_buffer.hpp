@@ -21,7 +21,9 @@ public:
 
     virtual void bind_pipeline(Pipeline& pipeline) = 0;
     virtual void bind_vertex_buffer(Buffer& buffer, crd::u64 offset_bytes) = 0;
+    virtual void bind_index_buffer(Buffer& buffer, crd::u64 offset_bytes, IndexType type) = 0;
     virtual void draw(crd::u32 vertex_count, crd::u32 first_vertex) = 0;
+    virtual void draw_indexed(crd::u32 index_count, crd::u32 first_index, crd::i32 vertex_offset) = 0;
 
     virtual void transition_image(Image& image, ImageAccess from, ImageAccess to) noexcept = 0;
 

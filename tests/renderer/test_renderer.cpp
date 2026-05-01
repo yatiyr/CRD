@@ -71,10 +71,21 @@ public:
     {
         ++bind_vertex_buffer_count;
     }
+    void bind_index_buffer(crd::rhi::Buffer& /*buffer*/, crd::u64 /*offset_bytes*/,
+                           crd::rhi::IndexType type) override
+    {
+        ++bind_index_buffer_count;
+        last_index_type = type;
+    }
     void draw(crd::u32 vertex_count, crd::u32 /*first_vertex*/) override
     {
         ++draw_count;
         last_vertex_count = vertex_count;
+    }
+    void draw_indexed(crd::u32 index_count, crd::u32 /*first_index*/, crd::i32 /*vertex_offset*/) override
+    {
+        ++draw_indexed_count;
+        last_index_count = index_count;
     }
     void transition_image(crd::rhi::Image& /*image*/, crd::rhi::ImageAccess from,
                           crd::rhi::ImageAccess to) noexcept override
@@ -103,11 +114,15 @@ public:
     int end_rendering_count = 0;
     int bind_pipeline_count = 0;
     int bind_vertex_buffer_count = 0;
+    int bind_index_buffer_count = 0;
     int draw_count = 0;
+    int draw_indexed_count = 0;
     int transition_count = 0;
     int push_constants_count = 0;
     int bind_descriptor_sets_count = 0;
     crd::u32 last_vertex_count = 0;
+    crd::u32 last_index_count = 0;
+    crd::rhi::IndexType last_index_type = crd::rhi::IndexType::Uint32;
     crd::u32 last_push_size = 0;
     crd::u32 last_first_set = 0;
     int last_set_count = 0;
@@ -864,4 +879,142 @@ TEST_CASE("ForwardRenderPath per-frame slot advances correctly across frames", "
 
     // 4 frames × 1 allocate per frame = 4 total allocations.
     REQUIRE(alloc.allocate_count == 4);
+}
+
+// =============================================================================
+// Index buffer tests (v1h)
+// =============================================================================
+
+TEST_CASE("build_frame copies index fields from Renderable into DrawItem", "[renderer][index]")
+{
+    ShaderFixture fx;
+    REQUIRE(fx.variant.is_valid());
+
+    FakeBuffer vb({12, crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex), crd::rhi::MemoryUsage::CpuToGpu});
+    FakeBuffer ib({24, crd::rhi::enum_bits(crd::rhi::BufferUsage::Index),  crd::rhi::MemoryUsage::CpuToGpu});
+
+    crd::renderer::Renderable r = make_renderable(vb, fx.variant, crd::renderer::DrawBucket::Opaque);
+    r.index_buffer = &ib;
+    r.index_count  = 6;
+    r.index_type   = crd::rhi::IndexType::Uint16;
+
+    crd::renderer::Renderer renderer;
+    renderer.submit(r);
+
+    crd::renderer::FrameContext ctx;
+    crd::renderer::DrawList draw_list;
+    REQUIRE(renderer.build_frame(ctx, *fx.runtime, draw_list));
+
+    REQUIRE(draw_list.opaque.size() == 1u);
+    const auto& item = draw_list.opaque[0];
+    REQUIRE(item.index_buffer == &ib);
+    REQUIRE(item.index_count  == 6u);
+    REQUIRE(item.index_type   == crd::rhi::IndexType::Uint16);
+}
+
+TEST_CASE("build_frame rejects indexed renderable with zero index_count", "[renderer][index]")
+{
+    ShaderFixture fx;
+    REQUIRE(fx.variant.is_valid());
+
+    FakeBuffer vb({12, crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex), crd::rhi::MemoryUsage::CpuToGpu});
+    FakeBuffer ib({24, crd::rhi::enum_bits(crd::rhi::BufferUsage::Index),  crd::rhi::MemoryUsage::CpuToGpu});
+
+    crd::renderer::Renderable r = make_renderable(vb, fx.variant, crd::renderer::DrawBucket::Opaque);
+    r.index_buffer = &ib;
+    r.index_count  = 0; // invalid: index buffer set but count is zero
+
+    crd::renderer::Renderer renderer;
+    renderer.submit(r);
+
+    crd::renderer::FrameContext ctx;
+    crd::renderer::DrawList draw_list;
+    REQUIRE_FALSE(renderer.build_frame(ctx, *fx.runtime, draw_list));
+}
+
+TEST_CASE("ForwardRenderPath dispatches draw_indexed for indexed items", "[renderer][forward][index]")
+{
+    FakeDevice device;
+    FakeDescriptorAllocator alloc;
+    FakePipeline pipeline({});
+    FakeResolver resolver(pipeline);
+
+    auto frp = crd::renderer::ForwardRenderPath::create(device, resolver, alloc, {1280, 720}, 2);
+    REQUIRE(frp != nullptr);
+
+    FakeBuffer vb({12,  crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex), crd::rhi::MemoryUsage::CpuToGpu});
+    FakeBuffer ib({24,  crd::rhi::enum_bits(crd::rhi::BufferUsage::Index),  crd::rhi::MemoryUsage::CpuToGpu});
+
+    crd::renderer::DrawItem item;
+    item.vertex_buffer = &vb;
+    item.vertex_count  = 3;
+    item.index_buffer  = &ib;
+    item.index_count   = 6;
+    item.index_type    = crd::rhi::IndexType::Uint32;
+
+    crd::renderer::DrawList draw_list;
+    draw_list.opaque.push_back(item);
+
+    crd::renderer::FrameContext ctx;
+    ctx.frame_index = 0;
+
+    crd::renderer::FrameGraph fg;
+    alloc.begin_frame(0);
+    frp->build(fg, draw_list, ctx);
+    REQUIRE(fg.build());
+
+    FakeCommandBuffer cmd;
+    fg.execute(device, cmd);
+
+    // Indexed item: draw_indexed in depth-prepass + color pass; draw never called.
+    REQUIRE(cmd.draw_count         == 0);
+    REQUIRE(cmd.draw_indexed_count == 2);
+    REQUIRE(cmd.bind_index_buffer_count == 2);
+    REQUIRE(cmd.last_index_count   == 6u);
+    REQUIRE(cmd.last_index_type    == crd::rhi::IndexType::Uint32);
+}
+
+TEST_CASE("ForwardRenderPath mixes indexed and non-indexed items in color pass", "[renderer][forward][index]")
+{
+    FakeDevice device;
+    FakeDescriptorAllocator alloc;
+    FakePipeline pipeline({});
+    FakeResolver resolver(pipeline);
+
+    auto frp = crd::renderer::ForwardRenderPath::create(device, resolver, alloc, {1280, 720}, 2);
+    REQUIRE(frp != nullptr);
+
+    FakeBuffer vb({12, crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex), crd::rhi::MemoryUsage::CpuToGpu});
+    FakeBuffer ib({24, crd::rhi::enum_bits(crd::rhi::BufferUsage::Index),  crd::rhi::MemoryUsage::CpuToGpu});
+
+    // One indexed opaque, one non-indexed masked.
+    crd::renderer::DrawItem indexed_item;
+    indexed_item.vertex_buffer = &vb;
+    indexed_item.vertex_count  = 3;
+    indexed_item.index_buffer  = &ib;
+    indexed_item.index_count   = 6;
+
+    crd::renderer::DrawItem plain_item;
+    plain_item.vertex_buffer = &vb;
+    plain_item.vertex_count  = 3;
+
+    crd::renderer::DrawList draw_list;
+    draw_list.opaque.push_back(indexed_item);
+    draw_list.masked.push_back(plain_item);
+
+    crd::renderer::FrameContext ctx;
+    ctx.frame_index = 0;
+
+    crd::renderer::FrameGraph fg;
+    alloc.begin_frame(0);
+    frp->build(fg, draw_list, ctx);
+    REQUIRE(fg.build());
+
+    FakeCommandBuffer cmd;
+    fg.execute(device, cmd);
+
+    // depth-prepass: 1 indexed opaque → draw_indexed × 1
+    // color pass:    1 indexed opaque + 1 plain masked → draw_indexed × 1 + draw × 1
+    REQUIRE(cmd.draw_indexed_count == 2);
+    REQUIRE(cmd.draw_count         == 1);
 }

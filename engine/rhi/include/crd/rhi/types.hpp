@@ -93,6 +93,12 @@ enum class PrimitiveTopology : crd::u8
     TriangleList,
 };
 
+enum class IndexType : crd::u8
+{
+    Uint16,
+    Uint32,
+};
+
 enum class VertexInputRate : crd::u8
 {
     Vertex,

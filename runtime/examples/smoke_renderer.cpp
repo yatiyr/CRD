@@ -54,9 +54,18 @@ public:
     {
         CRD_LOG_INFO(g_log_smoke_renderer, "bind_vertex_buffer");
     }
+    void bind_index_buffer(crd::rhi::Buffer& /*buffer*/, crd::u64 /*offset_bytes*/,
+                           crd::rhi::IndexType /*type*/) override
+    {
+        CRD_LOG_INFO(g_log_smoke_renderer, "bind_index_buffer");
+    }
     void draw(crd::u32 vertex_count, crd::u32 /*first_vertex*/) override
     {
         CRD_LOG_INFO(g_log_smoke_renderer, "draw vertices={}", vertex_count);
+    }
+    void draw_indexed(crd::u32 index_count, crd::u32 /*first_index*/, crd::i32 /*vertex_offset*/) override
+    {
+        CRD_LOG_INFO(g_log_smoke_renderer, "draw_indexed indices={}", index_count);
     }
     void transition_image(crd::rhi::Image& /*image*/, crd::rhi::ImageAccess from,
                           crd::rhi::ImageAccess to) noexcept override

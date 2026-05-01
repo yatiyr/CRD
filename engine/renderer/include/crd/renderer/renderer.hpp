@@ -41,8 +41,11 @@ enum class DrawBucket : crd::u8
 struct Renderable
 {
     crd::math::Transformf transform = crd::math::Transformf::identity();
-    crd::rhi::Buffer* vertex_buffer = nullptr;
-    crd::u32 vertex_count = 0;
+    crd::rhi::Buffer*   vertex_buffer = nullptr;
+    crd::u32            vertex_count  = 0;
+    crd::rhi::Buffer*   index_buffer  = nullptr; // null → non-indexed draw
+    crd::u32            index_count   = 0;
+    crd::rhi::IndexType index_type    = crd::rhi::IndexType::Uint32;
     crd::u64 material_instance_id = 0;
     crd::shader::VariantHandle variant{};
     DrawBucket bucket = DrawBucket::Opaque;
@@ -52,8 +55,11 @@ struct DrawItem
 {
     crd::math::Mat4f model = crd::math::Mat4f::identity();
     crd::math::Mat4f view_projection = crd::math::Mat4f::identity();
-    crd::rhi::Buffer* vertex_buffer = nullptr;
-    crd::u32 vertex_count = 0;
+    crd::rhi::Buffer*   vertex_buffer = nullptr;
+    crd::u32            vertex_count  = 0;
+    crd::rhi::Buffer*   index_buffer  = nullptr;
+    crd::u32            index_count   = 0;
+    crd::rhi::IndexType index_type    = crd::rhi::IndexType::Uint32;
     crd::u64 material_instance_id = 0;
     crd::shader::VariantHandle variant{};
     crd::shader::VariantPipelineDesc handoff{};

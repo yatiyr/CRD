@@ -860,9 +860,23 @@ public:
         vkCmdBindVertexBuffers(m_command_buffer, 0, 1, &handle, &offset);
     }
 
+    void bind_index_buffer(Buffer& buffer, crd::u64 offset_bytes, rhi::IndexType type) override
+    {
+        auto* vk_buffer = dynamic_cast<VulkanBuffer*>(&buffer);
+        CRD_ASSERT(vk_buffer != nullptr);
+        const VkIndexType vk_type = (type == rhi::IndexType::Uint16) ? VK_INDEX_TYPE_UINT16
+                                                                      : VK_INDEX_TYPE_UINT32;
+        vkCmdBindIndexBuffer(m_command_buffer, vk_buffer->handle(), offset_bytes, vk_type);
+    }
+
     void draw(crd::u32 vertex_count, crd::u32 first_vertex) override
     {
         vkCmdDraw(m_command_buffer, vertex_count, 1, first_vertex, 0);
+    }
+
+    void draw_indexed(crd::u32 index_count, crd::u32 first_index, crd::i32 vertex_offset) override
+    {
+        vkCmdDrawIndexed(m_command_buffer, index_count, 1, first_index, vertex_offset, 0);
     }
 
     void push_constants(PipelineLayout& layout, ShaderStage stages,

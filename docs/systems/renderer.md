@@ -1,96 +1,181 @@
 # crd-renderer
 
-High-level rendering layer above `crd-rhi` / `crd-rhi-vulkan` and
-`crd-shader`. `crd-renderer` is where renderables, camera data, and draw-item
-preparation start becoming engine-facing concepts rather than raw backend
-plumbing.
+High-level rendering orchestration above `crd-rhi`, `crd-rhi-vulkan`, and
+`crd-shader`. This is where renderables, camera data, draw-item preparation,
+the frame graph, render paths, and material binding live.
 
 ## Status
 
 | Slice | Ships | Status |
 | --- | --- | --- |
-| v1a | explicit renderable list + camera + draw-item preparation | ✅ |
-| v1b | real draw execution / pass orchestration | ✅ |
-| v1c | frame graph v1 — typed handles, pass DAG, automatic barriers | ⏳ |
-| v1d | `IRenderPath` interface on top of frame graph | ⏳ |
-| v1e | push constants + descriptor set RHI surface | ⏳ |
-| v1f | material system v1 (`MaterialLayout`, `Material`, `MaterialInstance`) | ⏳ |
-| v1g | `ForwardRenderPath` v1 — depth prepass + main color as graph passes | ⏳ |
-| v1h | index buffer + real mesh support (`draw_indexed`) | ⏳ |
+| v1a | explicit renderable list + camera + draw-item preparation | ✅ shipped 2026-05-01 |
+| v1b | real draw execution / pass orchestration | ✅ shipped 2026-05-01 |
+| v1c | frame graph v1 — typed handles, pass DAG, automatic barriers | ✅ shipped 2026-05-01 |
+| v1d | `IRenderPath` on top of frame graph + `FrameContext` rework | ✅ shipped 2026-05-01 |
+| v1e | push constants + descriptor set RHI surface | ✅ shipped 2026-05-01 |
+| v1f | material system v1 (`MaterialLayout`, `MaterialInstance`) | ✅ shipped 2026-05-01 |
+| v1g | `ForwardRenderPath` — depth prepass + main color as frame graph passes | ✅ shipped 2026-05-01 |
+| v1h | index buffer + `draw_indexed` | ✅ shipped 2026-05-01 |
+| v1i | swapchain blit + output (first full frame loop) | ⏳ |
+| v1j | GPU instancing | ⏳ Phase 3.2 dep — see `docs/debt.md` |
 
 ## Core decisions
 
 - Starts from an **explicit renderable list**, not ECS and not a scene graph.
-- Consumes `crd-shader`'s backend-neutral handoff surface instead of talking to
-  backend shader details directly.
-- Owns no native pipeline objects; that remains in `crd-rhi`/backend.
-
-## What ships today
-
-- `Camera`
-  - view matrix
-  - projection matrix
-  - derived `view_projection()`
-- `Renderable`
-  - transform
-  - vertex buffer pointer
-  - vertex count
-  - material instance id
-  - shader variant handle
-- `DrawItem`
-  - model matrix
-  - view-projection matrix
-  - vertex buffer pointer
-  - vertex count
-  - material instance id
-  - `VariantPipelineDesc` handoff
-- `FramePlan`
-  - array of prepared draw items
-- `Renderer`
-  - `submit()`
-  - `clear()`
-  - `build_frame()`
-
-## What it does not do yet
-
-- no full pass graph
-- no scene graph
-- no ECS
-- no material system ownership
-
-## What ships today (v1b)
-
-- `PipelineResolver`
-  - renderer-side interface that resolves a `VariantPipelineDesc` into a
-    backend-owned `rhi::Pipeline`
-- `Renderer::execute_frame()`
-  - begins command buffer
-  - opens one rendering pass
-  - resolves pipeline per draw item
-  - binds vertex buffer and issues draw calls
-  - closes rendering + command buffer
-
-This is intentionally still narrow:
-
-- renderer does not own native pipeline objects
-- renderer does not create shader modules
-- renderer does not own material binding state yet
-- pass orchestration is one minimal pass, not a graph system
+  Scene/world systems layer on top in Phase 3.
+- Consumes `crd-shader`'s backend-neutral `VariantPipelineDesc` handoff
+  instead of owning shader compilation or pipeline objects directly.
+- **Frame graph** is the foundation: all render paths declare passes into it;
+  the compiler inserts Vulkan barriers and aliases transient images.
+- **`IRenderPath`** makes Forward, Deferred, Visibility Buffer pluggable. Each
+  implementation owns its render targets and declares frame graph passes.
+- **`PipelineResolver`** is injectable for testability; concrete render paths
+  own their variant → pipeline cache.
 
 ## Architecture layers
 
 ```
-Layer 0  RHI          API-agnostic GPU surface — backend swap point
-Layer 1  Frame graph  typed resource handles, pass DAG, automatic Vulkan barriers, transient aliasing
-Layer 2  IRenderPath  a set of frame graph passes (Forward, Deferred, Forward+, ...)
+Layer 0  RHI          API-agnostic GPU surface
+Layer 1  Frame graph  typed resource handles, pass DAG, automatic barriers
+Layer 2  IRenderPath  Forward / Deferred / Forward+ / … implement this
 Layer 3  Material     render-path-agnostic parameter binding
-Layer 4  crd-ui       rendered as a frame graph UI canvas pass (Phase 5)
+Layer 4  crd-ui       Phase 5 — UI canvas as a frame graph pass
 ```
+
+## What ships today
+
+### Scene-side types
+
+**`Camera`**
+- `view`, `projection` (Mat4f)
+- derived `view_projection()`
+
+**`Renderable`** — what the caller submits per frame
+- `transform` (Transformf)
+- `vertex_buffer*`, `vertex_count`
+- `index_buffer*`, `index_count`, `index_type` (`Uint16` / `Uint32`) — null = non-indexed
+- `material_instance_id`
+- `variant` (VariantHandle)
+- `bucket` (Opaque / Masked / Translucent)
+
+**`DrawBucket`** — sort policy per bucket
+- Opaque + Masked: front-to-back (minimises overdraw, feeds early-Z)
+- Translucent: back-to-front (correct alpha compositing)
+
+### Renderer
+
+**`Renderer`**
+- `submit(Renderable)` — queue a renderable for the current frame
+- `clear()` — drop all queued renderables
+- `build_frame(ctx, shader_runtime, out)` — classify, validate, and depth-sort
+  into a `DrawList`; returns false on invalid input (null vertex buffer, zero
+  vertex count, index buffer present but index count zero, invalid variant)
+
+**`FrameContext`** — per-frame data passed to `build_frame` and `IRenderPath::build`
+- `camera`, `camera_position`, `viewport`, `frame_index`
+
+**`DrawList`** — bucketed, depth-sorted output
+- `opaque`, `masked`, `translucent` — each an `Array<DrawItem>`
+
+**`DrawItem`** — prepared draw item consumed by render paths
+- `model` (Mat4f), `view_projection` (Mat4f)
+- `vertex_buffer*`, `vertex_count`
+- `index_buffer*`, `index_count`, `index_type`
+- `material_instance_id`, `variant`, `handoff` (VariantPipelineDesc), `depth`
+
+### Frame graph (v1c)
+
+**`FrameGraph`** — the compile-and-execute surface
+- `import(image*, initial_access)` → `ImageHandle`
+- `add_pass(name)` → `PassBuilder`
+  - `builder.read(handle, access)` — declare a read dependency
+  - `builder.write(handle, access)` — declare a write + ownership
+  - `builder.set_execute(lambda)` — the GPU recording callback
+- `build()` — topological sort + barrier schedule computation
+- `execute(device, command_buffer)` — run lambdas, inserting barriers between passes
+- `reset()` — clear for the next frame
+
+Barriers are inserted between passes only when the access state changes.
+No barrier is inserted if two consecutive passes use the same access (e.g.
+two depth-write passes using the same depth target).
+
+### IRenderPath (v1d)
+
+```cpp
+class IRenderPath
+{
+public:
+    virtual void build(FrameGraph&, const DrawList&, const FrameContext&) = 0;
+    virtual ImageHandle output_image() const noexcept = 0;
+    virtual void resize(Extent2D) = 0;
+};
+```
+
+### Material system (v1f)
+
+**`MaterialLayout`**
+- wraps a `DescriptorSetLayout` (set 1 = per-material by convention)
+- `create(device, desc)` — factory; returns `nullptr` on allocation failure
+- `create_instance(allocator)` — allocates a `MaterialInstance` from the ring
+
+**`MaterialInstance`**
+- wraps a `DescriptorSet`
+- `update_buffer(binding, buffer)` — wire a UBO/SSBO into the descriptor
+- `descriptor_set()` — access for `CommandBuffer::bind_descriptor_sets`
+
+### Descriptor frequency convention (fixed from v1g)
+
+| Binding | Frequency | Content |
+|---------|-----------|---------|
+| Push constants | per-draw | model matrix (64 bytes, Vertex) |
+| Set 0 | per-frame | `PerFrameUbo` (camera matrices, 288 bytes) |
+| Set 1 | per-material | textures, material params |
+
+### ForwardRenderPath (v1g–h)
+
+First concrete `IRenderPath`. Two passes declared into the frame graph each frame:
+
+| Pass | Action | Draws |
+|------|--------|-------|
+| `depth-prepass` | clears + fills depth buffer | `draw_list.opaque` |
+| `main-color` | clears color, loads depth | `draw_list.opaque` + `draw_list.masked` |
+
+Draw dispatch per item:
+- `index_buffer != nullptr` → `bind_index_buffer` + `draw_indexed`
+- otherwise → `bind_vertex_buffer` + `draw`
+
+Owns: `B8G8R8A8Unorm` color image + `D32Sfloat` depth image (recreated on `resize()`).
+Ring of `PerFrameUbo` UBOs + descriptor sets, indexed by `frame_index % frames_in_flight`.
+
+### Push / UBO data types (`per_frame_data.hpp`)
+
+```cpp
+// PerFrameUbo — set 0, binding 0, CpuToGpu, 288 bytes
+struct PerFrameUbo {
+    Mat4f view, proj, view_proj, inv_view_proj;
+    Vec4f camera_pos_ws;
+    f32   viewport_width, viewport_height, time_seconds, _pad;
+};
+
+// PerDrawPush — push constants, 64 bytes, Vertex stage
+struct PerDrawPush { Mat4f model; };
+```
+
+## What it does not do yet
+
+- No swapchain blit / present path (v1i)
+- No translucent pass in `ForwardRenderPath` (draws opaque + masked only)
+- No real mesh loading or asset pipeline (Phase 2.6)
+- No scene graph or ECS (Phase 3)
+- No per-material set 1 binding in `ForwardRenderPath` (material system exists but is not wired into ForwardRenderPath yet)
+- No GPU instancing (Phase 3.2 — see `docs/debt.md`)
 
 ## Long-term direction
 
-- Frame graph (v1c) is the foundation — all render paths and techniques build on it
-- `IRenderPath` (v1d) makes Forward+, Deferred, Visibility Buffer all pluggable
-- Material system (v1f) is render-path-agnostic; paths adapt at draw time
-- Scene/world systems layer on top in Phase 3
-- Renderer stays the primary consumer of the full shader packet
+- v1i completes the first end-to-end frame loop (renderable on screen)
+- Phase 2.5 (`crd-jobs`) brings async pipeline compilation and async upload
+- Phase 2.6 (`crd-resources`) brings real mesh loading and GPU streaming
+- Phase 3 brings scene/ECS systems; renderer becomes a scene consumer
+- `ForwardPlusRenderPath` follows `ForwardRenderPath` once the clustered
+  light grid is ready; `DeferredRenderPath` and `VisibilityBufferRenderPath`
+  follow in Phase 5

@@ -11,11 +11,12 @@
 
 ## Current focus
 
-**Phase 2.4h — `crd-renderer` index buffer support.**
-`crd-renderer` v1a–g shipped. `ForwardRenderPath` is live: depth prepass +
-main color pass, per-frame UBO at set 0, per-draw push constants, `PipelineResolver`
-integration. Next: `create_index_buffer()` + `bind_index_buffer()` + `draw_indexed()`
-in RHI and Vulkan backend; `DrawItem.index_buffer`; indexed mesh smoke.
+**Phase 2.4i — swapchain blit + output (first full frame loop).**
+`crd-renderer` v1a–h shipped. Index buffer support is live: `IndexType` enum,
+`bind_index_buffer()` + `draw_indexed()` in RHI and Vulkan backend, `Renderable`
+and `DrawItem` carry optional index buffer, `ForwardRenderPath` dispatches
+`draw_indexed` when `index_buffer != nullptr`. Next: `IRenderPath::output_image()`
+feeds a swapchain blit pass; first full frame loop end-to-end.
 
 Aktif phase dosyası: `docs/phases/phase-2-graphics.md`
 
@@ -29,6 +30,27 @@ _none — running on the main roadmap._
 > `docs/detours/README.md`.
 
 ## Last shipped milestone
+
+**2026-05-01 — `crd-renderer` v1h index buffer support shipped.**
+
+`IndexType` enum (`Uint16`, `Uint32`) in `rhi/types.hpp`. `bind_index_buffer(buffer,
+offset, type)` and `draw_indexed(index_count, first_index, vertex_offset)` added to
+`CommandBuffer` and implemented in `VulkanCommandBuffer` (`vkCmdBindIndexBuffer` +
+`vkCmdDrawIndexed`). `Renderable` and `DrawItem` gain `index_buffer`, `index_count`,
+`index_type` (null index_buffer = backward-compat non-indexed draw). `build_frame`
+validates: `index_buffer != null → index_count > 0`. `ForwardRenderPath` dispatches
+`draw_indexed()` or `draw()` per item in both depth-prepass and color-pass. All four
+fake `CommandBuffer` implementations updated. 4 new unit tests. GPU instancing
+plan documented in `docs/debt.md` and `docs/phases/phase-2-graphics.md` (v1j, Phase 3.2).
+
+Three-flavour green:
+- win-debug:    257/257
+- win-release:  256/256
+- win-asan:     257/257
+
+Detail: `docs/sessions/2026-05-01-renderer-v1h-index-buffer.md`.
+
+## Previous shipped milestone
 
 **2026-05-01 — `crd-renderer` v1g `ForwardRenderPath` shipped.**
 
@@ -281,11 +303,10 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Next up (next 1–3 sessions)
 
-1. **`crd-renderer` v1h — index buffers.** `create_index_buffer()` in RHI + Vulkan,
-   `bind_index_buffer()` + `draw_indexed()` in `CommandBuffer`, `DrawItem.index_buffer`.
-2. **`crd-renderer` v1i — swapchain blit + output.** `IRenderPath::output_image()` feeds
-   a swapchain blit pass; first full frame loop end-to-end.
-3. **`crd-jobs` 2.5** — thread pool + fiber tasks; pulled in once renderer needs async upload.
+1. **`crd-renderer` v1i — swapchain blit + output.** `IRenderPath::output_image()` feeds
+   a swapchain blit pass; first full frame loop end-to-end (first renderable on screen).
+2. **`crd-jobs` 2.5** — thread pool + fiber tasks; pulled in once renderer needs async upload.
+3. **`crd-resources` + `asset_cooker` 2.6** — async load, LRU, refcounted handles, runtime binary.
 
 ## Open questions
 
@@ -296,9 +317,9 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Test counts (last quality pass)
 
-- win-debug:    253/253
-- win-release:  252/252
-- win-asan:     253/253
+- win-debug:    257/257
+- win-release:  256/256
+- win-asan:     257/257
 
 ## Pointers (lazy-load reference)
 
@@ -323,6 +344,7 @@ When in doubt, ASK before reading large files.
 
 ## Session log (rolling, last 5)
 
+- **2026-05-01** — `crd-renderer` v1h index buffer + `draw_indexed` shipped (257/257 win-debug).
 - **2026-05-01** — `crd-renderer` v1g `ForwardRenderPath` shipped (253/253 win-debug).
 - **2026-05-01** — `crd-renderer` v1e+f push constants + descriptor system + material binding shipped (248/248 win-debug).
 - **2026-05-01** — `crd-renderer` v1d `IRenderPath` interface shipped (238/238 win-debug).

@@ -1,6 +1,6 @@
 ﻿# Phase 2 — Graphics foundation
 
-**Status:** 🚧 partially shipped (2.0 done, 2.1+ planned)
+**Status:** 🚧 active — 2.0–2.3 + renderer v1a–h shipped; v1i (swapchain blit) next
 
 Vulkan-first, layered:
 
@@ -19,18 +19,15 @@ Vulkan-first, layered:
 | 2.1   | ImGui debug overlay              |   ✅   | docking branch; debug-only; consumes `crd-config` for theme/style                    |
 | 2.2   | GPU memory + streaming           |   ✅   | centralized allocator-backed buffer/image path shipped; broader policy still ahead   |
 | 2.3   | `crd-shader`                     |   ✅   | detailed design packet: `docs/phases/phase-2.3-shader.md`                            |
-| 2.4   | `crd-renderer` v1                |   🚧   | v1a–b shipped; v1c–h planned (frame graph → IRenderPath → materials → depth → index) |
+| 2.4   | `crd-renderer` v1                |   🚧   | v1a–h shipped; v1i next (swapchain blit + first full frame loop)                     |
 | 2.5   | `crd-jobs`                       |   ⏳   | thread pool + fiber tasks, work-stealing, per-frame allocator, async I/O ready       |
 | 2.6   | `crd-resources` + `asset_cooker` |   ⏳   | async load, LRU, refcounted handles, runtime binary; cooker is a separate exe        |
 
 ## Near-term execution order
 
-The concrete next-session sequence:
-
-1. **`crd-shader` (2.3)** — grow from a proven triangle path
-2. **`crd-renderer` v1 (2.4)**
-3. **`crd-jobs` (2.5)** — pulled in once renderer needs async upload (may swap with 2.4)
-4. **`crd-resources` + `asset_cooker` (2.6)**
+1. **`crd-renderer` v1i** — `IRenderPath::output_image()` feeds swapchain blit; first renderable on screen
+2. **`crd-jobs` (2.5)** — thread pool + fiber tasks; async pipeline compile, async upload
+3. **`crd-resources` + `asset_cooker` (2.6)** — async load, LRU, refcounted handles, runtime binary
 
 ## Decisions
 
@@ -59,7 +56,7 @@ as the detailed implementation-planning surface.
 ## 2.4 detail
 
 `crd-renderer` system overview: `docs/systems/renderer.md`
-Session history: `docs/sessions/2026-05-01-renderer-v1b-draw-execution.md`
+Session history: `docs/sessions/` (2026-05-01 entries; most recent: renderer-v1h-index-buffer)
 
 ### Renderer v1 slice table
 
@@ -71,9 +68,10 @@ Session history: `docs/sessions/2026-05-01-renderer-v1b-draw-execution.md`
 | v1d   | `IRenderPath` on top of frame graph + `FrameContext` rework | ✅ | shipped 2026-05-01 |
 | v1e   | push constants + descriptor set RHI surface         |   ✅   | shipped 2026-05-01; `ShaderStage` bitmask, descriptor factory, ring-buffer allocator |
 | v1f   | material system v1                                  |   ✅   | shipped 2026-05-01; `MaterialLayout` + `MaterialInstance` over ring allocator |
-| v1g   | `ForwardRenderPath` v1 — depth prepass + main color as frame graph passes | 🚧 | in progress; `ForwardRenderPath` owns depth + color images; `PerFrameUbo` set 0 |
-| v1h   | index buffer + real mesh support                    |   ⏳   | `draw_indexed()`; `Renderable::index_buffer` |
+| v1g   | `ForwardRenderPath` v1 — depth prepass + main color as frame graph passes | ✅ | shipped 2026-05-01; `ForwardRenderPath` owns depth + color images; `PerFrameUbo` set 0 |
+| v1h   | index buffer + real mesh support                    |   🚧   | `IndexType` enum; `bind_index_buffer()` + `draw_indexed()`; `Renderable::index_buffer` |
 | v1i   | swapchain blit + output                             |   ⏳   | `IRenderPath::output_image()` feeds swapchain blit; first full frame loop |
+| v1j   | GPU instancing                                      |   ⏳   | Phase 3.2 dep; see `docs/debt.md` §GPU instancing for exact change list |
 
 ### Architecture layers
 
