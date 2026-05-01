@@ -11,12 +11,12 @@
 
 ## Current focus
 
-**Phase 2.4d — `IRenderPath` interface.** `crd-renderer` v1a–c shipped.
-The frame graph (v1c) is live and green. Next: define `IRenderPath` as a
-declared set of frame graph passes; rework `FrameContext`; move
-`PipelineResolver` inside render path implementations.
+**Phase 2.4e — push constants + descriptor set RHI surface.**
+`crd-renderer` v1a–d shipped. `IRenderPath` interface is live and green.
+Next: `push_constants()`, `DescriptorSetLayout`, `DescriptorSet`, and
+`bind_descriptor_sets()` in RHI + Vulkan backend.
 
-Full slice plan: v1d (IRenderPath) → v1e (push constants + descriptor sets) →
+Full slice plan: v1e (push constants + descriptor sets) →
 v1f (material system) → v1g (depth + sorted rendering) → v1h (index buffers).
 See `docs/phases/phase-2-graphics.md` 2.4 section.
 
@@ -33,28 +33,25 @@ _none — running on the main roadmap._
 
 ## Last shipped milestone
 
-**2026-05-01 — `crd-renderer` v1c frame graph v1 shipped.**
+**2026-05-01 — `crd-renderer` v1d `IRenderPath` interface shipped.**
 
-Typed resource handles, external/transient resource import, pass declaration
-with read/write access registration, automatic barrier insertion in `build()`,
-transient image allocation on first `execute()`, and `reset()`. Five new
-frame-graph test cases green. `ImageAccess` enum added to `crd-rhi`; Vulkan
-`transition_image()` emits real `vkCmdPipelineBarrier` calls.
-
-Also fixed: `CRD_ASSERT` macro removed `static bool crd_ignore` (C++23-only in
-`constexpr` context) — per-site ignore now tracked in `report_assert_failure()`;
-clang-cl `-Wsign-compare` / `-Wmissing-field-initializers` / third-party
-linting exclusions added. All six presets now green.
+`IRenderPath` pure-virtual interface defined: `build(FrameGraph&, DrawList&, FrameContext&)`,
+`output_image()`, `resize(Extent2D)`. `DrawBucket` enum (Opaque/Masked/Translucent) added
+to `Renderable`. `DrawList` replaces `FramePlan` — three sorted `Array<DrawItem>` buckets:
+opaque + masked front-to-back, translucent back-to-front. `FrameContext` now carries
+`camera_position` (world-space Vec3f) for squared-distance depth sort. `execute_frame` and
+`FramePlan` removed. Smoke and unit tests cover bucket routing, depth ordering, and the
+full build + resize + output_image IRenderPath contract.
 
 Six-preset green:
-- win-debug:          233/233
-- win-release:        232/232
-- win-relwithdebinfo: 233/233
-- win-asan:           233/233
-- win-clang-cl:       233/233
-- win-tidy:           233/233
+- win-debug:          238/238
+- win-release:        237/237
+- win-relwithdebinfo: 238/238
+- win-asan:           238/238
+- win-clang-cl:       238/238
+- win-tidy:           238/238
 
-Detail: `docs/sessions/2026-05-01-renderer-v1c-frame-graph.md` (pending).
+Detail: `docs/sessions/2026-05-01-renderer-v1d-irenderpath.md` (pending).
 
 ## Previous shipped milestone
 
@@ -264,12 +261,12 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Next up (next 1–3 sessions)
 
-1. **`crd-renderer` v1d — `IRenderPath` interface.** Render path as a declared set of frame
-   graph passes; `FrameContext` rework; `PipelineResolver` moves inside render path impls.
-2. **`crd-renderer` v1e — push constants + descriptor set RHI surface.** `push_constants()`,
+1. **`crd-renderer` v1e — push constants + descriptor set RHI surface.** `push_constants()`,
    `DescriptorSetLayout`, `DescriptorSet`, `bind_descriptor_sets()` in RHI + Vulkan backend.
-3. **`crd-renderer` v1f — material system.** Per-variant material instances, GPU parameter
+2. **`crd-renderer` v1f — material system.** Per-variant material instances, GPU parameter
    upload, descriptor set binding per draw item.
+3. **`crd-renderer` v1g — depth prepass + sorted rendering.** First concrete `ForwardRenderPath`
+   implementing `IRenderPath`: depth prepass pass + main color pass, pipeline resolution.
 
 ## Open questions
 
@@ -280,12 +277,12 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Test counts (last quality pass)
 
-- win-debug:          233/233
-- win-release:        232/232
-- win-relwithdebinfo: 233/233
-- win-asan:           233/233
-- win-clang-cl:       233/233
-- win-tidy:           233/233
+- win-debug:          238/238
+- win-release:        237/237
+- win-relwithdebinfo: 238/238
+- win-asan:           238/238
+- win-clang-cl:       238/238
+- win-tidy:           238/238
 
 ## Pointers (lazy-load reference)
 
@@ -310,6 +307,7 @@ When in doubt, ASK before reading large files.
 
 ## Session log (rolling, last 5)
 
+- **2026-05-01** — `crd-renderer` v1d `IRenderPath` interface shipped (238/238 win-debug).
 - **2026-05-01** — `crd-renderer` v1c frame graph v1 shipped (233/233 win-debug).
 - **2026-05-01** — `crd-renderer` v1b real draw execution shipped.
 - **2026-05-01** — `crd-renderer` v1a explicit renderables shipped.

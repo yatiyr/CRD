@@ -1,6 +1,7 @@
 #include <crd/log/log.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/renderer/frame_graph.hpp>
+#include <crd/renderer/render_path.hpp>
 #include <crd/renderer/renderer.hpp>
 #include <crd/shader/shader.hpp>
 
@@ -22,16 +23,6 @@ public:
 
 private:
     crd::rhi::BufferDesc m_desc{};
-};
-
-class FakePipeline final : public crd::rhi::Pipeline
-{
-public:
-    explicit FakePipeline(crd::rhi::GraphicsPipelineDesc desc) : m_desc(std::move(desc)) {}
-    [[nodiscard]] const crd::rhi::GraphicsPipelineDesc& desc() const noexcept override { return m_desc; }
-
-private:
-    crd::rhi::GraphicsPipelineDesc m_desc{};
 };
 
 class FakeImage final : public crd::rhi::Image
@@ -78,18 +69,46 @@ public:
     int transition_count = 0;
 };
 
-class SimpleResolver final : public crd::renderer::PipelineResolver
+// Minimal IRenderPath implementation that records one color pass into the frame graph.
+class SimpleRenderPath final : public crd::renderer::IRenderPath
 {
 public:
-    explicit SimpleResolver(crd::rhi::Pipeline& pipeline) : m_pipeline(pipeline) {}
-    [[nodiscard]] crd::rhi::Pipeline*
-    resolve_pipeline(const crd::shader::VariantPipelineDesc& /*handoff*/) noexcept override
+    explicit SimpleRenderPath(crd::rhi::Image& color_target) : m_color_target(color_target) {}
+
+    void build(crd::renderer::FrameGraph& fg, const crd::renderer::DrawList& draw_list,
+               const crd::renderer::FrameContext& /*ctx*/) override
     {
-        return &m_pipeline;
+        ++m_build_count;
+        m_last_opaque      = static_cast<int>(draw_list.opaque.size());
+        m_last_masked      = static_cast<int>(draw_list.masked.size());
+        m_last_translucent = static_cast<int>(draw_list.translucent.size());
+
+        auto color_h  = fg.import(&m_color_target, crd::rhi::ImageAccess::Undefined);
+        m_output      = color_h;
+
+        auto builder = fg.add_pass("smoke-color");
+        builder.write(color_h, crd::rhi::ImageAccess::ColorWrite);
+        builder.set_execute([](crd::renderer::FrameResources&, crd::rhi::CommandBuffer&) {});
     }
 
+    [[nodiscard]] crd::renderer::ImageHandle output_image() const noexcept override { return m_output; }
+
+    void resize(crd::rhi::Extent2D new_extent) override
+    {
+        m_last_extent = new_extent;
+        ++m_resize_count;
+    }
+
+    int m_build_count      = 0;
+    int m_last_opaque      = 0;
+    int m_last_masked      = 0;
+    int m_last_translucent = 0;
+    int m_resize_count     = 0;
+    crd::rhi::Extent2D m_last_extent{};
+
 private:
-    crd::rhi::Pipeline& m_pipeline;
+    crd::rhi::Image&          m_color_target;
+    crd::renderer::ImageHandle m_output{};
 };
 } // namespace
 
@@ -100,90 +119,7 @@ int main()
     crd::log::init(cfg);
     crd::log::add_sink(std::make_unique<crd::log::ConsoleSink>());
 
-    auto runtime = crd::shader::create_runtime();
-    crd::shader::EffectDesc desc;
-    desc.name = crd::containers::String("renderer_smoke");
-    desc.frontend_modules.push_back(
-        {crd::containers::String(
-             (fs::Path(CRD_SOURCE_DIR) / "runtime/examples/shaders/reflect_triangle.vert").generic().data()),
-         crd::shader::Stage::Vertex, crd::containers::String("main")});
-    desc.frontend_modules.push_back(
-        {crd::containers::String(
-             (fs::Path(CRD_SOURCE_DIR) / "runtime/examples/shaders/reflect_triangle.frag").generic().data()),
-         crd::shader::Stage::Fragment, crd::containers::String("main")});
-    const auto effect = runtime->create_effect(desc);
-    crd::shader::CompileDiagnostics diagnostics;
-    crd::shader::VariantCompileRequest request;
-    request.effect = effect;
-    const auto variant = runtime->request_variant(request, diagnostics);
-
-    if (!variant.is_valid())
-    {
-        CRD_LOG_ERROR(g_log_smoke_renderer, "Variant compile failed: {}", diagnostics.message.c_str());
-        return 1;
-    }
-
-    FakeBuffer vertex_buffer(
-        {sizeof(float) * 15u, crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex), crd::rhi::MemoryUsage::CpuToGpu});
-    FakePipeline pipeline({});
-
-    crd::renderer::Renderable renderable;
-    renderable.vertex_buffer = &vertex_buffer;
-    renderable.vertex_count = 3;
-    renderable.material_instance_id = 42;
-    renderable.variant = variant;
-
-    crd::renderer::Renderer renderer;
-    renderer.submit(renderable);
-
-    crd::renderer::FramePlan plan;
-    const bool built = renderer.build_frame({}, *runtime, plan);
-    CRD_LOG_INFO(g_log_smoke_renderer, "build_frame={} draw_items={}", built, plan.draw_items.size());
-    if (built && !plan.draw_items.empty())
-    {
-        const auto& item = plan.draw_items[0];
-        CRD_LOG_INFO(g_log_smoke_renderer, "modules={} descriptors={} push_constants={} vertex_attributes={}",
-                     item.handoff.modules.size(), item.handoff.descriptor_bindings.size(),
-                     item.handoff.push_constants.size(), item.handoff.vertex_attributes.size());
-    }
-
-    FakeCommandBuffer command_buffer;
-    SimpleResolver resolver(pipeline);
-    const bool executed = renderer.execute_frame(
-        plan,
-        {{1280, 720},
-         {nullptr, crd::rhi::LoadOp::Clear, crd::rhi::StoreOp::Store, {0.08f, 0.08f, 0.12f, 1.0f}},
-         nullptr},
-        command_buffer, resolver);
-    CRD_LOG_INFO(g_log_smoke_renderer, "execute_frame={}", executed);
-
-    // --- Frame graph smoke ---
-    // Demonstrates: import, multi-pass declaration, build, execute with barrier insertion.
-    FakeCommandBuffer fg_cmd;
-    crd::renderer::FrameGraph frame_graph;
-
-    // Simulate a depth-prepass → main-color pass pipeline with fake external images.
-    FakeImage depth_img({});
-    FakeImage color_img({});
-    auto depth_handle = frame_graph.import(&depth_img, crd::rhi::ImageAccess::Undefined);
-    auto color_handle = frame_graph.import(&color_img, crd::rhi::ImageAccess::Undefined);
-
-    {
-        auto builder = frame_graph.add_pass("depth-prepass");
-        builder.write(depth_handle, crd::rhi::ImageAccess::DepthWrite);
-        builder.set_execute([](crd::renderer::FrameResources&, crd::rhi::CommandBuffer&) {});
-    }
-    {
-        auto builder = frame_graph.add_pass("main-color");
-        builder.read(depth_handle, crd::rhi::ImageAccess::DepthRead);
-        builder.write(color_handle, crd::rhi::ImageAccess::ColorWrite);
-        builder.set_execute([](crd::renderer::FrameResources&, crd::rhi::CommandBuffer&) {});
-    }
-
-    const bool fg_built = frame_graph.build();
-    CRD_LOG_INFO(g_log_smoke_renderer, "frame_graph.build()={}", fg_built);
-
-    // execute() with no transients; device is unused since all images are external (or null).
+    // --- Shared fake device (used by both frame graph execute calls) ---
     struct FakeDevice final : crd::rhi::Device
     {
         [[nodiscard]] crd::rhi::BackendApi api() const noexcept override { return crd::rhi::BackendApi::Vulkan; }
@@ -221,13 +157,124 @@ int main()
         } m_queue;
     } fake_device;
 
+    // --- Shader setup ---
+    auto runtime = crd::shader::create_runtime();
+    crd::shader::EffectDesc desc;
+    desc.name = crd::containers::String("renderer_smoke");
+    desc.frontend_modules.push_back(
+        {crd::containers::String(
+             (fs::Path(CRD_SOURCE_DIR) / "runtime/examples/shaders/reflect_triangle.vert").generic().data()),
+         crd::shader::Stage::Vertex, crd::containers::String("main")});
+    desc.frontend_modules.push_back(
+        {crd::containers::String(
+             (fs::Path(CRD_SOURCE_DIR) / "runtime/examples/shaders/reflect_triangle.frag").generic().data()),
+         crd::shader::Stage::Fragment, crd::containers::String("main")});
+    const auto effect = runtime->create_effect(desc);
+    crd::shader::CompileDiagnostics diagnostics;
+    crd::shader::VariantCompileRequest request;
+    request.effect = effect;
+    const auto variant = runtime->request_variant(request, diagnostics);
+
+    if (!variant.is_valid())
+    {
+        CRD_LOG_ERROR(g_log_smoke_renderer, "Variant compile failed: {}", diagnostics.message.c_str());
+        return 1;
+    }
+
+    // --- Renderer v1d smoke: DrawList bucketing ---
+    FakeBuffer vertex_buffer(
+        {sizeof(float) * 15u, crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex), crd::rhi::MemoryUsage::CpuToGpu});
+
+    crd::renderer::Renderer renderer;
+
+    auto make_renderable = [&](crd::renderer::DrawBucket bucket) -> crd::renderer::Renderable
+    {
+        crd::renderer::Renderable r;
+        r.vertex_buffer = &vertex_buffer;
+        r.vertex_count  = 3;
+        r.variant       = variant;
+        r.bucket        = bucket;
+        return r;
+    };
+
+    // 2 opaque, 1 masked, 1 translucent
+    renderer.submit(make_renderable(crd::renderer::DrawBucket::Opaque));
+    renderer.submit(make_renderable(crd::renderer::DrawBucket::Opaque));
+    renderer.submit(make_renderable(crd::renderer::DrawBucket::Masked));
+    renderer.submit(make_renderable(crd::renderer::DrawBucket::Translucent));
+
+    crd::renderer::FrameContext ctx;
+    ctx.viewport = {1280, 720};
+
+    crd::renderer::DrawList draw_list;
+    const bool built = renderer.build_frame(ctx, *runtime, draw_list);
+
+    CRD_LOG_INFO(g_log_smoke_renderer, "build_frame={} opaque={} masked={} translucent={} total={}",
+                 built, draw_list.opaque.size(), draw_list.masked.size(), draw_list.translucent.size(),
+                 draw_list.total_count());
+
+    const bool counts_ok = built &&
+                           draw_list.opaque.size() == 2 &&
+                           draw_list.masked.size() == 1 &&
+                           draw_list.translucent.size() == 1;
+
+    // --- IRenderPath smoke ---
+    FakeImage          color_img({});
+    FakeCommandBuffer  render_cmd;
+    SimpleRenderPath   render_path(color_img);
+
+    render_path.resize({1280, 720});
+
+    crd::renderer::FrameGraph fg;
+    render_path.build(fg, draw_list, ctx);
+
+    const bool fg_render_built = fg.build();
+    fg.execute(fake_device, render_cmd);
+    // One transition: Undefined → ColorWrite for the imported color image.
+    const bool fg_render_ok = fg_render_built && render_cmd.transition_count == 1;
+
+    const bool path_ok = render_path.m_build_count      == 1 &&
+                         render_path.m_last_opaque       == 2 &&
+                         render_path.m_last_masked       == 1 &&
+                         render_path.m_last_translucent  == 1 &&
+                         render_path.m_resize_count      == 1 &&
+                         render_path.output_image().is_valid() &&
+                         fg_render_ok;
+
+    CRD_LOG_INFO(g_log_smoke_renderer, "IRenderPath ok={} (build_count={} resize_count={} fg_ok={})",
+                 path_ok, render_path.m_build_count, render_path.m_resize_count, fg_render_ok);
+
+    // --- Frame graph multi-pass smoke (depth-prepass → main-color) ---
+    // Demonstrates: import, multi-pass declaration, build, execute with barrier insertion.
+    FakeCommandBuffer  fg_cmd;
+    crd::renderer::FrameGraph frame_graph;
+
+    FakeImage depth_img({});
+    FakeImage color2_img({});
+    auto depth_handle  = frame_graph.import(&depth_img,  crd::rhi::ImageAccess::Undefined);
+    auto color2_handle = frame_graph.import(&color2_img, crd::rhi::ImageAccess::Undefined);
+
+    {
+        auto builder = frame_graph.add_pass("depth-prepass");
+        builder.write(depth_handle, crd::rhi::ImageAccess::DepthWrite);
+        builder.set_execute([](crd::renderer::FrameResources&, crd::rhi::CommandBuffer&) {});
+    }
+    {
+        auto builder = frame_graph.add_pass("main-color");
+        builder.read(depth_handle,  crd::rhi::ImageAccess::DepthRead);
+        builder.write(color2_handle, crd::rhi::ImageAccess::ColorWrite);
+        builder.set_execute([](crd::renderer::FrameResources&, crd::rhi::CommandBuffer&) {});
+    }
+
+    const bool multi_fg_built = frame_graph.build();
+    CRD_LOG_INFO(g_log_smoke_renderer, "frame_graph.build()={}", multi_fg_built);
+
     frame_graph.execute(fake_device, fg_cmd);
     // Expect 3 barriers: Undef→DepthWrite, Undef→ColorWrite, DepthWrite→DepthRead
-    // (depth import starts Undefined; color import starts Undefined)
     CRD_LOG_INFO(g_log_smoke_renderer, "frame_graph.execute() transitions={}", fg_cmd.transition_count);
-    const bool fg_ok = fg_built && fg_cmd.transition_count == 3;
+    const bool multi_fg_ok = multi_fg_built && fg_cmd.transition_count == 3;
 
     crd::log::flush();
     crd::log::shutdown();
-    return (built && executed && fg_ok) ? 0 : 1;
+    return (counts_ok && path_ok && multi_fg_ok) ? 0 : 1;
 }

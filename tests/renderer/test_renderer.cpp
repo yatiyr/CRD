@@ -1,5 +1,6 @@
 #include <crd/platform/filesystem.hpp>
 #include <crd/renderer/frame_graph.hpp>
+#include <crd/renderer/render_path.hpp>
 #include <crd/renderer/renderer.hpp>
 #include <crd/shader/shader.hpp>
 
@@ -13,6 +14,8 @@ namespace
 {
     return crd::containers::String((fs::Path(CRD_SOURCE_DIR) / relative).generic().data());
 }
+
+// ---- RHI fakes -------------------------------------------------------
 
 class FakeBuffer final : public crd::rhi::Buffer
 {
@@ -148,71 +151,254 @@ public:
 private:
     FakeQueue m_queue{};
 };
+
+// ---- IRenderPath fake -----------------------------------------------
+
+class FakeRenderPath final : public crd::renderer::IRenderPath
+{
+public:
+    void build(crd::renderer::FrameGraph& /*fg*/, const crd::renderer::DrawList& draw_list,
+               const crd::renderer::FrameContext& /*ctx*/) override
+    {
+        ++build_count;
+        last_opaque_count = static_cast<int>(draw_list.opaque.size());
+        last_masked_count = static_cast<int>(draw_list.masked.size());
+        last_translucent_count = static_cast<int>(draw_list.translucent.size());
+        last_total_count = static_cast<int>(draw_list.total_count());
+    }
+
+    [[nodiscard]] crd::renderer::ImageHandle output_image() const noexcept override { return {}; }
+
+    void resize(crd::rhi::Extent2D new_extent) override
+    {
+        ++resize_count;
+        last_resize_extent = new_extent;
+    }
+
+    int build_count = 0;
+    int last_opaque_count = 0;
+    int last_masked_count = 0;
+    int last_translucent_count = 0;
+    int last_total_count = 0;
+    int resize_count = 0;
+    crd::rhi::Extent2D last_resize_extent{};
+};
+
+// ---- Shared shader setup helper ------------------------------------
+
+struct ShaderFixture
+{
+    std::unique_ptr<crd::shader::Runtime> runtime;
+    crd::shader::VariantHandle variant;
+
+    ShaderFixture()
+    {
+        runtime = crd::shader::create_runtime();
+        crd::shader::EffectDesc desc;
+        desc.name = crd::containers::String("renderer_case");
+        desc.frontend_modules.push_back({source_path("runtime/examples/shaders/reflect_triangle.vert"),
+                                         crd::shader::Stage::Vertex, crd::containers::String("main")});
+        desc.frontend_modules.push_back({source_path("runtime/examples/shaders/reflect_triangle.frag"),
+                                         crd::shader::Stage::Fragment, crd::containers::String("main")});
+        const auto effect = runtime->create_effect(desc);
+        crd::shader::CompileDiagnostics diagnostics;
+        crd::shader::VariantCompileRequest request;
+        request.effect = effect;
+        variant = runtime->request_variant(request, diagnostics);
+    }
+};
+
+// ---- Renderable factory --------------------------------------------
+
+[[nodiscard]] crd::renderer::Renderable make_renderable(crd::rhi::Buffer& vb,
+                                                         crd::shader::VariantHandle variant,
+                                                         crd::renderer::DrawBucket bucket,
+                                                         crd::math::Vec3f translation = {})
+{
+    crd::renderer::Renderable r;
+    r.transform.translation = translation;
+    r.vertex_buffer = &vb;
+    r.vertex_count = 3;
+    r.material_instance_id = 0;
+    r.variant = variant;
+    r.bucket = bucket;
+    return r;
+}
 } // namespace
 
-TEST_CASE("Renderer builds explicit draw items from renderables and shader handoff", "[renderer]")
-{
-    auto runtime = crd::shader::create_runtime();
-    crd::shader::EffectDesc desc;
-    desc.name = crd::containers::String("renderer_case");
-    desc.frontend_modules.push_back({source_path("runtime/examples/shaders/reflect_triangle.vert"),
-                                     crd::shader::Stage::Vertex, crd::containers::String("main")});
-    desc.frontend_modules.push_back({source_path("runtime/examples/shaders/reflect_triangle.frag"),
-                                     crd::shader::Stage::Fragment, crd::containers::String("main")});
-    const auto effect = runtime->create_effect(desc);
-    crd::shader::CompileDiagnostics diagnostics;
-    crd::shader::VariantCompileRequest request;
-    request.effect = effect;
-    const auto variant = runtime->request_variant(request, diagnostics);
-    REQUIRE(variant.is_valid());
+// =============================================================================
+// Renderer tests
+// =============================================================================
 
-    crd::renderer::Renderer renderer;
+TEST_CASE("Renderer builds DrawList from renderables and shader handoff", "[renderer]")
+{
+    ShaderFixture fx;
+    REQUIRE(fx.variant.is_valid());
+
     FakeBuffer vertex_buffer(
         {sizeof(float) * 15u, crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex), crd::rhi::MemoryUsage::CpuToGpu});
 
-    crd::renderer::Renderable renderable;
-    renderable.vertex_buffer = &vertex_buffer;
-    renderable.vertex_count = 3;
+    crd::renderer::Renderer renderer;
+    crd::renderer::Renderable renderable = make_renderable(vertex_buffer, fx.variant, crd::renderer::DrawBucket::Opaque);
     renderable.material_instance_id = 7;
-    renderable.variant = variant;
     renderer.submit(renderable);
 
-    crd::renderer::FramePlan plan;
-    REQUIRE(renderer.build_frame({}, *runtime, plan));
-    REQUIRE(plan.draw_items.size() == 1u);
-    REQUIRE(plan.draw_items[0].vertex_count == 3u);
-    REQUIRE(plan.draw_items[0].material_instance_id == 7u);
-    REQUIRE(plan.draw_items[0].handoff.modules.size() == 2u);
-    REQUIRE(plan.draw_items[0].handoff.descriptor_bindings.size() == 2u);
+    crd::renderer::FrameContext ctx;
+    crd::renderer::DrawList draw_list;
+    REQUIRE(renderer.build_frame(ctx, *fx.runtime, draw_list));
+
+    REQUIRE(draw_list.opaque.size() == 1u);
+    REQUIRE(draw_list.masked.empty());
+    REQUIRE(draw_list.translucent.empty());
+    REQUIRE(draw_list.opaque[0].vertex_count == 3u);
+    REQUIRE(draw_list.opaque[0].material_instance_id == 7u);
+    REQUIRE(draw_list.opaque[0].handoff.modules.size() == 2u);
+    REQUIRE(draw_list.opaque[0].handoff.descriptor_bindings.size() == 2u);
 }
 
-TEST_CASE("Renderer executes one pass over prepared draw items", "[renderer]")
+TEST_CASE("Renderer routes renderables to correct DrawList buckets", "[renderer]")
 {
-    crd::renderer::FramePlan plan;
-    FakeBuffer vertex_buffer(
-        {sizeof(float) * 15u, crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex), crd::rhi::MemoryUsage::CpuToGpu});
-    plan.draw_items.push_back(
-        {crd::math::Mat4f::identity(), crd::math::Mat4f::identity(), &vertex_buffer, 3, 1, {1}, {}});
+    ShaderFixture fx;
+    REQUIRE(fx.variant.is_valid());
 
-    FakePipeline pipeline({});
-    FakeResolver resolver(pipeline);
-    FakeCommandBuffer command_buffer;
+    FakeBuffer vb(
+        {sizeof(float) * 15u, crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex), crd::rhi::MemoryUsage::CpuToGpu});
+
+    crd::renderer::Renderer renderer;
+    renderer.submit(make_renderable(vb, fx.variant, crd::renderer::DrawBucket::Opaque));
+    renderer.submit(make_renderable(vb, fx.variant, crd::renderer::DrawBucket::Opaque));
+    renderer.submit(make_renderable(vb, fx.variant, crd::renderer::DrawBucket::Masked));
+    renderer.submit(make_renderable(vb, fx.variant, crd::renderer::DrawBucket::Translucent));
+
+    crd::renderer::FrameContext ctx;
+    crd::renderer::DrawList draw_list;
+    REQUIRE(renderer.build_frame(ctx, *fx.runtime, draw_list));
+
+    REQUIRE(draw_list.opaque.size() == 2u);
+    REQUIRE(draw_list.masked.size() == 1u);
+    REQUIRE(draw_list.translucent.size() == 1u);
+    REQUIRE(draw_list.total_count() == 4u);
+    REQUIRE_FALSE(draw_list.empty());
+}
+
+TEST_CASE("Renderer sorts opaque front-to-back and translucent back-to-front", "[renderer]")
+{
+    ShaderFixture fx;
+    REQUIRE(fx.variant.is_valid());
+
+    FakeBuffer vb(
+        {sizeof(float) * 15u, crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex), crd::rhi::MemoryUsage::CpuToGpu});
+
     crd::renderer::Renderer renderer;
 
-    REQUIRE(renderer.execute_frame(
-        plan,
-        {{1280, 720}, {nullptr, crd::rhi::LoadOp::Clear, crd::rhi::StoreOp::Store, {0.1f, 0.1f, 0.1f, 1.0f}}, nullptr},
-        command_buffer, resolver));
-    REQUIRE(resolver.resolve_count == 1);
-    REQUIRE(command_buffer.begin_count == 1);
-    REQUIRE(command_buffer.begin_rendering_count == 1);
-    REQUIRE(command_buffer.bind_pipeline_count == 1);
-    REQUIRE(command_buffer.bind_vertex_buffer_count == 1);
-    REQUIRE(command_buffer.draw_count == 1);
-    REQUIRE(command_buffer.last_vertex_count == 3u);
-    REQUIRE(command_buffer.end_rendering_count == 1);
-    REQUIRE(command_buffer.end_count == 1);
+    // Submit far opaque first, near second — build_frame must reorder to front-to-back.
+    renderer.submit(make_renderable(vb, fx.variant, crd::renderer::DrawBucket::Opaque, {0.f, 0.f, 10.f}));
+    renderer.submit(make_renderable(vb, fx.variant, crd::renderer::DrawBucket::Opaque, {0.f, 0.f,  2.f}));
+    renderer.submit(make_renderable(vb, fx.variant, crd::renderer::DrawBucket::Opaque, {0.f, 0.f,  5.f}));
+
+    // Submit near translucent first — build_frame must reorder to back-to-front.
+    renderer.submit(make_renderable(vb, fx.variant, crd::renderer::DrawBucket::Translucent, {0.f, 0.f, 1.f}));
+    renderer.submit(make_renderable(vb, fx.variant, crd::renderer::DrawBucket::Translucent, {0.f, 0.f, 8.f}));
+
+    crd::renderer::FrameContext ctx;
+    ctx.camera_position = {0.f, 0.f, 0.f};
+
+    crd::renderer::DrawList draw_list;
+    REQUIRE(renderer.build_frame(ctx, *fx.runtime, draw_list));
+
+    REQUIRE(draw_list.opaque.size() == 3u);
+    // Opaque: ascending depth (front-to-back). d^2: 4, 25, 100.
+    REQUIRE(draw_list.opaque[0].depth < draw_list.opaque[1].depth);
+    REQUIRE(draw_list.opaque[1].depth < draw_list.opaque[2].depth);
+
+    REQUIRE(draw_list.translucent.size() == 2u);
+    // Translucent: descending depth (back-to-front). d^2: 64, 1.
+    REQUIRE(draw_list.translucent[0].depth > draw_list.translucent[1].depth);
 }
+
+TEST_CASE("Renderer build_frame returns false for invalid renderables", "[renderer]")
+{
+    ShaderFixture fx;
+    REQUIRE(fx.variant.is_valid());
+
+    crd::renderer::Renderer renderer;
+
+    // Null vertex buffer
+    crd::renderer::Renderable bad;
+    bad.vertex_buffer = nullptr;
+    bad.vertex_count = 3;
+    bad.variant = fx.variant;
+    renderer.submit(bad);
+
+    crd::renderer::FrameContext ctx;
+    crd::renderer::DrawList draw_list;
+    REQUIRE_FALSE(renderer.build_frame(ctx, *fx.runtime, draw_list));
+}
+
+TEST_CASE("IRenderPath build receives draw list counts from Renderer", "[renderer][render_path]")
+{
+    ShaderFixture fx;
+    REQUIRE(fx.variant.is_valid());
+
+    FakeBuffer vb(
+        {sizeof(float) * 15u, crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex), crd::rhi::MemoryUsage::CpuToGpu});
+
+    crd::renderer::Renderer renderer;
+    renderer.submit(make_renderable(vb, fx.variant, crd::renderer::DrawBucket::Opaque));
+    renderer.submit(make_renderable(vb, fx.variant, crd::renderer::DrawBucket::Opaque));
+    renderer.submit(make_renderable(vb, fx.variant, crd::renderer::DrawBucket::Translucent));
+
+    crd::renderer::FrameContext ctx;
+    crd::renderer::DrawList draw_list;
+    REQUIRE(renderer.build_frame(ctx, *fx.runtime, draw_list));
+
+    crd::renderer::FrameGraph fg;
+    FakeRenderPath path;
+    path.build(fg, draw_list, ctx);
+
+    REQUIRE(path.build_count == 1);
+    REQUIRE(path.last_opaque_count == 2);
+    REQUIRE(path.last_masked_count == 0);
+    REQUIRE(path.last_translucent_count == 1);
+    REQUIRE(path.last_total_count == 3);
+}
+
+TEST_CASE("IRenderPath resize notifies path of new viewport extent", "[renderer][render_path]")
+{
+    FakeRenderPath path;
+    REQUIRE(path.resize_count == 0);
+
+    path.resize({1920, 1080});
+    REQUIRE(path.resize_count == 1);
+    REQUIRE(path.last_resize_extent.width == 1920u);
+    REQUIRE(path.last_resize_extent.height == 1080u);
+
+    path.resize({2560, 1440});
+    REQUIRE(path.resize_count == 2);
+    REQUIRE(path.last_resize_extent.width == 2560u);
+    REQUIRE(path.last_resize_extent.height == 1440u);
+}
+
+TEST_CASE("DrawList clear empties all buckets", "[renderer]")
+{
+    crd::renderer::DrawList draw_list;
+    crd::renderer::DrawItem item;
+    draw_list.opaque.push_back(item);
+    draw_list.masked.push_back(item);
+    draw_list.translucent.push_back(item);
+
+    REQUIRE(draw_list.total_count() == 3u);
+    REQUIRE_FALSE(draw_list.empty());
+
+    draw_list.clear();
+
+    REQUIRE(draw_list.total_count() == 0u);
+    REQUIRE(draw_list.empty());
+}
+
+// =============================================================================
+// FrameGraph tests (unchanged from v1c)
+// =============================================================================
 
 TEST_CASE("FrameGraph build succeeds with a single pass writing an external image", "[renderer][frame_graph]")
 {
@@ -274,11 +460,9 @@ TEST_CASE("FrameGraph inserts barrier between two passes sharing a resource", "[
     FakeDevice fake_device;
     fg.execute(fake_device, cmd);
 
-    // Passes run in declaration order
     REQUIRE(depth_prepass_order == 0);
     REQUIRE(main_color_order == 1);
 
-    // Two transitions: Undefined→DepthWrite (before depth-prepass), DepthWrite→DepthRead (before main-color)
     REQUIRE(cmd.transition_count == 2);
     REQUIRE(cmd.transitions[0].from == crd::rhi::ImageAccess::Undefined);
     REQUIRE(cmd.transitions[0].to == crd::rhi::ImageAccess::DepthWrite);
@@ -286,7 +470,8 @@ TEST_CASE("FrameGraph inserts barrier between two passes sharing a resource", "[
     REQUIRE(cmd.transitions[1].to == crd::rhi::ImageAccess::DepthRead);
 }
 
-TEST_CASE("FrameGraph build fails when a transient image is read before being written", "[renderer][frame_graph]")
+TEST_CASE("FrameGraph build fails when a transient image is read before being written",
+          "[renderer][frame_graph]")
 {
     crd::renderer::FrameGraph fg;
 
@@ -294,7 +479,7 @@ TEST_CASE("FrameGraph build fails when a transient image is read before being wr
                                           crd::rhi::enum_bits(crd::rhi::ImageUsage::ColorAttachment)});
 
     auto builder = fg.add_pass("bad-pass");
-    builder.read(transient, crd::rhi::ImageAccess::ShaderRead); // read before any write — invalid
+    builder.read(transient, crd::rhi::ImageAccess::ShaderRead);
 
     REQUIRE_FALSE(fg.build());
 }
@@ -304,10 +489,10 @@ TEST_CASE("FrameGraph no-op barrier when access doesn't change between passes", 
     FakeImage image({});
     crd::renderer::FrameGraph fg;
 
-    auto handle = fg.import(&image, crd::rhi::ImageAccess::ColorWrite); // already in ColorWrite
+    auto handle = fg.import(&image, crd::rhi::ImageAccess::ColorWrite);
 
     auto builder = fg.add_pass("pass-a");
-    builder.write(handle, crd::rhi::ImageAccess::ColorWrite); // same access — no barrier needed
+    builder.write(handle, crd::rhi::ImageAccess::ColorWrite);
     builder.set_execute([](crd::renderer::FrameResources&, crd::rhi::CommandBuffer&) {});
 
     REQUIRE(fg.build());
@@ -316,7 +501,7 @@ TEST_CASE("FrameGraph no-op barrier when access doesn't change between passes", 
     FakeDevice fake_device;
     fg.execute(fake_device, cmd);
 
-    REQUIRE(cmd.transition_count == 0); // no transition needed
+    REQUIRE(cmd.transition_count == 0);
 }
 
 TEST_CASE("FrameGraph reset clears passes and resources", "[renderer][frame_graph]")
@@ -332,11 +517,10 @@ TEST_CASE("FrameGraph reset clears passes and resources", "[renderer][frame_grap
 
     fg.reset();
 
-    // After reset, re-import and re-declare: handle indices restart from 0
     auto handle2 = fg.import(&image, crd::rhi::ImageAccess::Undefined);
-    REQUIRE(handle2.index == 0u); // fresh index after reset
+    REQUIRE(handle2.index == 0u);
     auto builder2 = fg.add_pass("pass-after-reset");
     builder2.write(handle2, crd::rhi::ImageAccess::ColorWrite);
     builder2.set_execute([](crd::renderer::FrameResources&, crd::rhi::CommandBuffer&) {});
-    REQUIRE(fg.build()); // must build cleanly after reset
+    REQUIRE(fg.build());
 }
