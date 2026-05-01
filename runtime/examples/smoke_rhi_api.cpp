@@ -75,6 +75,12 @@ public:
     {
         CRD_LOG_INFO(g_log_smoke_rhi, "draw vertices={} first={}", vertex_count, first_vertex);
     }
+    void transition_image(crd::rhi::Image& /*image*/, crd::rhi::ImageAccess from,
+                          crd::rhi::ImageAccess to) noexcept override
+    {
+        CRD_LOG_INFO(g_log_smoke_rhi, "transition_image from={} to={}", static_cast<int>(from),
+                     static_cast<int>(to));
+    }
 };
 
 class SmokeSwapchain final : public crd::rhi::Swapchain

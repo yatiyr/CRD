@@ -22,6 +22,21 @@ set(CRDI_GUI_HEADERS
 
 add_library(crd-imgui STATIC ${CRDI_GUI_SOURCES} ${CRDI_GUI_HEADERS})
 
+# Suppress clang warnings in third-party imgui sources we don't own.
+set(CRDI_IMGUI_THIRD_PARTY_SOURCES
+    ${imgui_SOURCE_DIR}/imgui.cpp
+    ${imgui_SOURCE_DIR}/imgui_draw.cpp
+    ${imgui_SOURCE_DIR}/imgui_tables.cpp
+    ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+    ${imgui_SOURCE_DIR}/imgui_demo.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp
+)
+set_source_files_properties(${CRDI_IMGUI_THIRD_PARTY_SOURCES} PROPERTIES
+    SKIP_LINTING ON
+    COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:Clang>:-Wno-uninitialized>"
+)
+
 target_include_directories(crd-imgui
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/include"

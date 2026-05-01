@@ -76,6 +76,11 @@ public:
         last_vertex_count = vertex_count;
         last_first_vertex = first_vertex;
     }
+    void transition_image(crd::rhi::Image& /*image*/, crd::rhi::ImageAccess /*from*/,
+                          crd::rhi::ImageAccess /*to*/) noexcept override
+    {
+        ++transition_count;
+    }
 
     int begin_count = 0;
     int end_count = 0;
@@ -85,6 +90,7 @@ public:
     int bind_pipeline_count = 0;
     int bind_vertex_buffer_count = 0;
     int draw_count = 0;
+    int transition_count = 0;
     crd::rhi::Extent2D last_extent{};
     crd::u32 last_vertex_count = 0;
     crd::u32 last_first_vertex = 0;

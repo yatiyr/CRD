@@ -201,7 +201,8 @@ void ImGuiLayer::on_attach()
                                          {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, 1000},
                                          {VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 1000}};
 
-    VkDescriptorPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    VkDescriptorPoolCreateInfo pool_info{};
+    pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     pool_info.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
     pool_info.maxSets = 1000 * IM_ARRAYSIZE(pool_sizes);
     pool_info.poolSizeCount = static_cast<crd::u32>(IM_ARRAYSIZE(pool_sizes));
@@ -225,8 +226,8 @@ void ImGuiLayer::on_attach()
     init_info.ImageCount = crd::rhi::vulkan_swapchain_image_count(m_swapchain);
     init_info.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
     init_info.UseDynamicRendering = true;
-    init_info.PipelineRenderingCreateInfo =
-        VkPipelineRenderingCreateInfo{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
+    init_info.PipelineRenderingCreateInfo = {};
+    init_info.PipelineRenderingCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
     init_info.PipelineRenderingCreateInfo.colorAttachmentCount = 1;
     const VkFormat color_format = crd::rhi::vulkan_swapchain_color_format(m_swapchain);
     init_info.PipelineRenderingCreateInfo.pColorAttachmentFormats = &color_format;

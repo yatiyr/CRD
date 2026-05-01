@@ -1,6 +1,7 @@
 #pragma once
 
 #include <crd/rhi/buffer.hpp>
+#include <crd/rhi/image.hpp>
 #include <crd/rhi/pipeline.hpp>
 
 namespace crd::rhi
@@ -20,5 +21,7 @@ public:
     virtual void bind_pipeline(Pipeline& pipeline) = 0;
     virtual void bind_vertex_buffer(Buffer& buffer, crd::u64 offset_bytes) = 0;
     virtual void draw(crd::u32 vertex_count, crd::u32 first_vertex) = 0;
+
+    virtual void transition_image(Image& image, ImageAccess from, ImageAccess to) noexcept = 0;
 };
 } // namespace crd::rhi

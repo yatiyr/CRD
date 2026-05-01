@@ -145,15 +145,30 @@
             "configurePreset": "win-debug",
             "output": { "outputOnFailure": true }
         },
-            {
+        {
             "name": "win-release",
             "configurePreset": "win-release",
             "output": { "outputOnFailure": true }
         },
-            {
+        {
             "name": "win-asan",
             "configurePreset": "win-asan",
             "output": { "outputOnFailure": true }
-        }        
+        },
+        {
+            "name": "win-relwithdebinfo",
+            "configurePreset": "win-relwithdebinfo",
+            "output": { "outputOnFailure": true }
+        },
+        {
+            "name": "win-clang-cl",
+            "configurePreset": "win-clang-cl",
+            "output": { "outputOnFailure": true }
+        },
+        {
+            "name": "win-tidy",
+            "configurePreset": "win-tidy",
+            "output": { "outputOnFailure": true }
+        }
     ]
 }

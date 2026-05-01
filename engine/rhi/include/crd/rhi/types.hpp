@@ -96,6 +96,18 @@ enum class StoreOp : crd::u8
     DontCare,
 };
 
+enum class ImageAccess : crd::u8
+{
+    Undefined,   // initial / don't-care; no layout commitment
+    ColorWrite,  // color attachment output write
+    DepthWrite,  // depth/stencil attachment read-write
+    DepthRead,   // depth attachment read-only (test without write)
+    ShaderRead,  // sampled in a shader stage
+    TransferSrc, // copy source
+    TransferDst, // copy destination
+    Present,     // swapchain presentation
+};
+
 template <typename EnumType>
 [[nodiscard]] constexpr auto enum_bits(EnumType value) noexcept -> std::underlying_type_t<EnumType>
 {

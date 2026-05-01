@@ -25,7 +25,10 @@ endif()
 
 crd_collect_sources(SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src")
 list(APPEND SOURCES "${CRD_SPIRV_REFLECT_SOURCE}")
-set_source_files_properties("${CRD_SPIRV_REFLECT_SOURCE}" PROPERTIES LANGUAGE CXX)
+set_source_files_properties("${CRD_SPIRV_REFLECT_SOURCE}" PROPERTIES
+    LANGUAGE CXX
+    SKIP_LINTING ON
+    COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:Clang>:-Wno-sign-compare>")
 crd_collect_sources(HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
 add_library(crd-shader STATIC ${SOURCES} ${HEADERS})

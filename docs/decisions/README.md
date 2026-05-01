@@ -63,6 +63,7 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 
 ### `[renderer]` `[render-path]`
 - ADR-0016 — Render path strategy
+- ADR-0032 — Frame graph v1
 
 ### `[culling]`
 - ADR-0017 — Culling strategy
@@ -127,3 +128,4 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 | 0029  | Shader hot reload                              | shader, hot-reload, runtime       | Accepted    |
 | 0030  | Shader / PSO boundary                          | shader, rhi, renderer             | Accepted    |
 | 0031  | Shader frontend → IR seam                      | shader, arch, ir                  | Accepted    |
+| 0032  | Frame graph v1                                 | renderer, render-path, arch       | Accepted    |

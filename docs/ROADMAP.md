@@ -29,7 +29,7 @@
 | 2.1   ImGui debug overlay       | ✅ shipped       | `docs/phases/phase-2-graphics.md`        |
 | 2.2   GPU memory + streaming    | ✅ shipped       | `docs/phases/phase-2-graphics.md`        |
 | 2.3   Shader system             | ✅ shipped (a–g) | `docs/phases/phase-2.3-shader.md`        |
-| 2.4   Renderer v1               | 🚧 active        | `docs/phases/phase-2-graphics.md` (v1a–b shipped; material growth next) |
+| 2.4   Renderer v1               | 🚧 active        | `docs/phases/phase-2-graphics.md` (v1a–b shipped; v1c–h planned: frame graph → IRenderPath → materials → depth → index) |
 | 2.5   Jobs (threads + fibers)   | ⏳               | `docs/phases/phase-2-graphics.md`        |
 | 2.6   Resources + asset cooker  | ⏳               | `docs/phases/phase-2-graphics.md`        |
 | 3     Simulation foundation     | ⏳               | `docs/phases/phase-3-simulation.md`      |

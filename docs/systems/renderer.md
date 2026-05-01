@@ -11,7 +11,12 @@ plumbing.
 | --- | --- | --- |
 | v1a | explicit renderable list + camera + draw-item preparation | ✅ |
 | v1b | real draw execution / pass orchestration | ✅ |
-| v1c | material binding growth | ⏳ |
+| v1c | frame graph v1 — typed handles, pass DAG, automatic barriers | ⏳ |
+| v1d | `IRenderPath` interface on top of frame graph | ⏳ |
+| v1e | push constants + descriptor set RHI surface | ⏳ |
+| v1f | material system v1 (`MaterialLayout`, `Material`, `MaterialInstance`) | ⏳ |
+| v1g | `ForwardRenderPath` v1 — depth prepass + main color as graph passes | ⏳ |
+| v1h | index buffer + real mesh support (`draw_indexed`) | ⏳ |
 
 ## Core decisions
 
@@ -72,9 +77,20 @@ This is intentionally still narrow:
 - renderer does not own material binding state yet
 - pass orchestration is one minimal pass, not a graph system
 
+## Architecture layers
+
+```
+Layer 0  RHI          API-agnostic GPU surface — backend swap point
+Layer 1  Frame graph  typed resource handles, pass DAG, automatic Vulkan barriers, transient aliasing
+Layer 2  IRenderPath  a set of frame graph passes (Forward, Deferred, Forward+, ...)
+Layer 3  Material     render-path-agnostic parameter binding
+Layer 4  crd-ui       rendered as a frame graph UI canvas pass (Phase 5)
+```
+
 ## Long-term direction
 
-- next slices add richer material/resource binding on top of the now-real
-  execution path
-- scene/world systems can layer on top later
-- renderer stays the first concrete consumer of the full shader packet
+- Frame graph (v1c) is the foundation — all render paths and techniques build on it
+- `IRenderPath` (v1d) makes Forward+, Deferred, Visibility Buffer all pluggable
+- Material system (v1f) is render-path-agnostic; paths adapt at draw time
+- Scene/world systems layer on top in Phase 3
+- Renderer stays the primary consumer of the full shader packet

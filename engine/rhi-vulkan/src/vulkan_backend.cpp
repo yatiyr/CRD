@@ -112,6 +112,43 @@ namespace
     return UINT32_MAX;
 }
 
+struct VkAccessInfo
+{
+    VkPipelineStageFlags stage;
+    VkAccessFlags access;
+    VkImageLayout layout;
+};
+
+[[nodiscard]] VkAccessInfo to_vk_access_info(ImageAccess access) noexcept
+{
+    switch (access)
+    {
+        case ImageAccess::ColorWrite:
+            return {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+        case ImageAccess::DepthWrite:
+            return {VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                    VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                    VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
+        case ImageAccess::DepthRead:
+            return {VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
+                    VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
+        case ImageAccess::ShaderRead:
+            return {VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        case ImageAccess::TransferSrc:
+            return {VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL};
+        case ImageAccess::TransferDst:
+            return {VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL};
+        case ImageAccess::Present:
+            return {VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR};
+        case ImageAccess::Undefined:
+        default:
+            return {VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0, VK_IMAGE_LAYOUT_UNDEFINED};
+    }
+}
+
 [[nodiscard]] VkAttachmentLoadOp to_vk_load_op(LoadOp op) noexcept
 {
     switch (op)
@@ -584,6 +621,38 @@ public:
     void draw(crd::u32 vertex_count, crd::u32 first_vertex) override
     {
         vkCmdDraw(m_command_buffer, vertex_count, 1, first_vertex, 0);
+    }
+
+    void transition_image(Image& image, ImageAccess from, ImageAccess to) noexcept override
+    {
+        if (from == to)
+            return;
+        auto* vk_image = dynamic_cast<VulkanImage*>(&image);
+        CRD_ASSERT(vk_image != nullptr);
+
+        const auto src = to_vk_access_info(from);
+        const auto dst = to_vk_access_info(to);
+
+        const VkImageAspectFlags aspect =
+            (to == ImageAccess::DepthWrite || to == ImageAccess::DepthRead ||
+             from == ImageAccess::DepthWrite || from == ImageAccess::DepthRead)
+                ? VK_IMAGE_ASPECT_DEPTH_BIT
+                : VK_IMAGE_ASPECT_COLOR_BIT;
+
+        VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+        barrier.srcAccessMask = src.access;
+        barrier.dstAccessMask = dst.access;
+        barrier.oldLayout = src.layout;
+        barrier.newLayout = dst.layout;
+        barrier.image = vk_image->handle();
+        barrier.subresourceRange.aspectMask = aspect;
+        barrier.subresourceRange.baseMipLevel = 0;
+        barrier.subresourceRange.levelCount = 1;
+        barrier.subresourceRange.baseArrayLayer = 0;
+        barrier.subresourceRange.layerCount = 1;
+
+        vkCmdPipelineBarrier(m_command_buffer, src.stage, dst.stage, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+        vk_image->set_layout(dst.layout);
     }
 
     [[nodiscard]] VkCommandBuffer handle() const noexcept { return m_command_buffer; }

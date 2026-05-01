@@ -4,6 +4,9 @@
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
+#include <mutex>
+#include <set>
+#include <utility>
 
 #if CRD_OS_WINDOWS
 #define WIN32_LEAN_AND_MEAN
@@ -20,6 +23,12 @@ namespace
 // the assert path so a relaxed load on the hot path is enough.
 std::atomic<AssertHandler> g_assert_handler{nullptr};
 std::atomic<AssertPlatformHandler> g_assert_platform_handler{nullptr};
+
+// Per-site ignore table: tracks (file, line) pairs the user has chosen to ignore.
+// __FILE__ string literals have static lifetime so pointer comparison is stable
+// within a single process image.
+std::mutex g_ignore_mutex;
+std::set<std::pair<const char*, int>> g_ignored_sites;
 } // namespace
 
 void set_assert_handler(AssertHandler h) noexcept
@@ -71,6 +80,13 @@ namespace crd::detail
 {
 int report_assert_failure(const char* expression, const char* file, int line, const char* message)
 {
+    // Per-site ignore: if this (file, line) was previously ignored, skip silently.
+    {
+        std::lock_guard<std::mutex> lock(g_ignore_mutex);
+        if (g_ignored_sites.count({file, line}))
+            return 0;
+    }
+
     char buffer[1024];
 
     if (message != nullptr)
@@ -104,7 +120,12 @@ int report_assert_failure(const char* expression, const char* file, int line, co
     {
         std::abort();
     }
-
+    if (result == IDIGNORE)
+    {
+        std::lock_guard<std::mutex> lock(g_ignore_mutex);
+        g_ignored_sites.insert({file, line});
+        return 0;
+    }
     return (result == IDRETRY) ? 2 : 0;
 #else
     return 2;

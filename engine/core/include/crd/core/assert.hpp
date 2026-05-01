@@ -45,23 +45,16 @@ int report_assert_failure(const char* expression, const char* file, int line, co
 #endif
 
 #if CRD_ENABLE_ASSERTS
+// No static locals — safe to use inside constexpr functions (C++20).
+// Per-site ignore state is tracked inside report_assert_failure() itself.
 #define CRD_ASSERT(expr)                                                                                               \
     do                                                                                                                 \
     {                                                                                                                  \
         if (CRD_UNLIKELY(!(expr)))                                                                                     \
         {                                                                                                              \
-            static bool crd_ignore = false;                                                                            \
-            if (!crd_ignore)                                                                                           \
+            if (::crd::detail::report_assert_failure(#expr, __FILE__, __LINE__) == 2)                                  \
             {                                                                                                          \
-                int crd_result = ::crd::detail::report_assert_failure(#expr, __FILE__, __LINE__);                      \
-                if (crd_result == 2)                                                                                   \
-                {                                                                                                      \
-                    CRD_DEBUGBREAK();                                                                                  \
-                }                                                                                                      \
-                else if (crd_result == 0)                                                                              \
-                {                                                                                                      \
-                    crd_ignore = true;                                                                                 \
-                }                                                                                                      \
+                CRD_DEBUGBREAK();                                                                                      \
             }                                                                                                          \
         }                                                                                                              \
     }                                                                                                                  \
@@ -72,18 +65,9 @@ int report_assert_failure(const char* expression, const char* file, int line, co
     {                                                                                                                  \
         if (CRD_UNLIKELY(!(expr)))                                                                                     \
         {                                                                                                              \
-            static bool crd_ignore = false;                                                                            \
-            if (!crd_ignore)                                                                                           \
+            if (::crd::detail::report_assert_failure(#expr, __FILE__, __LINE__, msg) == 2)                             \
             {                                                                                                          \
-                int crd_result = ::crd::detail::report_assert_failure(#expr, __FILE__, __LINE__, msg);                 \
-                if (crd_result == 2)                                                                                   \
-                {                                                                                                      \
-                    CRD_DEBUGBREAK();                                                                                  \
-                }                                                                                                      \
-                else if (crd_result == 0)                                                                              \
-                {                                                                                                      \
-                    crd_ignore = true;                                                                                 \
-                }                                                                                                      \
+                CRD_DEBUGBREAK();                                                                                      \
             }                                                                                                          \
         }                                                                                                              \
     }                                                                                                                  \

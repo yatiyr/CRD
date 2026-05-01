@@ -1,4 +1,5 @@
 #include <crd/platform/filesystem.hpp>
+#include <crd/renderer/frame_graph.hpp>
 #include <crd/renderer/renderer.hpp>
 #include <crd/shader/shader.hpp>
 
@@ -35,6 +36,22 @@ private:
     crd::rhi::GraphicsPipelineDesc m_desc{};
 };
 
+struct TransitionRecord
+{
+    crd::rhi::ImageAccess from;
+    crd::rhi::ImageAccess to;
+};
+
+class FakeImage final : public crd::rhi::Image
+{
+public:
+    explicit FakeImage(crd::rhi::ImageDesc desc) : m_desc(desc) {}
+    [[nodiscard]] const crd::rhi::ImageDesc& desc() const noexcept override { return m_desc; }
+
+private:
+    crd::rhi::ImageDesc m_desc{};
+};
+
 class FakeCommandBuffer final : public crd::rhi::CommandBuffer
 {
 public:
@@ -53,6 +70,12 @@ public:
         ++draw_count;
         last_vertex_count = vertex_count;
     }
+    void transition_image(crd::rhi::Image& /*image*/, crd::rhi::ImageAccess from,
+                          crd::rhi::ImageAccess to) noexcept override
+    {
+        ++transition_count;
+        transitions.push_back({from, to});
+    }
 
     int begin_count = 0;
     int end_count = 0;
@@ -62,7 +85,9 @@ public:
     int bind_pipeline_count = 0;
     int bind_vertex_buffer_count = 0;
     int draw_count = 0;
+    int transition_count = 0;
     crd::u32 last_vertex_count = 0;
+    crd::containers::Array<TransitionRecord> transitions{};
 };
 
 class FakeResolver final : public crd::renderer::PipelineResolver
@@ -80,6 +105,48 @@ public:
 
 private:
     crd::rhi::Pipeline& m_pipeline;
+};
+
+class FakeQueue final : public crd::rhi::Queue
+{
+public:
+    bool submit(crd::rhi::CommandBuffer& /*cmd*/, crd::rhi::Swapchain& /*sc*/) override { return true; }
+    void present(crd::rhi::Swapchain& /*sc*/) override {}
+    void wait_idle() override {}
+};
+
+class FakeDevice final : public crd::rhi::Device
+{
+public:
+    [[nodiscard]] crd::rhi::BackendApi api() const noexcept override { return crd::rhi::BackendApi::Vulkan; }
+    [[nodiscard]] std::unique_ptr<crd::rhi::Swapchain> create_swapchain(const crd::rhi::SwapchainDesc&) override
+    {
+        return nullptr;
+    }
+    [[nodiscard]] std::unique_ptr<crd::rhi::Buffer> create_buffer(const crd::rhi::BufferDesc&) override
+    {
+        return nullptr;
+    }
+    [[nodiscard]] std::unique_ptr<crd::rhi::Image> create_image(const crd::rhi::ImageDesc&) override
+    {
+        return nullptr;
+    }
+    [[nodiscard]] std::unique_ptr<crd::rhi::ShaderModule>
+    create_shader_module(const crd::rhi::ShaderModuleDesc&) override
+    {
+        return nullptr;
+    }
+    [[nodiscard]] std::unique_ptr<crd::rhi::Pipeline>
+    create_graphics_pipeline(const crd::rhi::GraphicsPipelineDesc&) override
+    {
+        return nullptr;
+    }
+    [[nodiscard]] std::unique_ptr<crd::rhi::CommandBuffer> create_command_buffer() override { return nullptr; }
+    [[nodiscard]] crd::rhi::Queue& graphics_queue() noexcept override { return m_queue; }
+    void wait_idle() override {}
+
+private:
+    FakeQueue m_queue{};
 };
 } // namespace
 
@@ -145,4 +212,131 @@ TEST_CASE("Renderer executes one pass over prepared draw items", "[renderer]")
     REQUIRE(command_buffer.last_vertex_count == 3u);
     REQUIRE(command_buffer.end_rendering_count == 1);
     REQUIRE(command_buffer.end_count == 1);
+}
+
+TEST_CASE("FrameGraph build succeeds with a single pass writing an external image", "[renderer][frame_graph]")
+{
+    FakeImage color_image({});
+    crd::renderer::FrameGraph fg;
+
+    auto color = fg.import(&color_image, crd::rhi::ImageAccess::Undefined);
+    REQUIRE(color.is_valid());
+
+    bool pass_executed = false;
+    auto builder = fg.add_pass("main-color");
+    builder.write(color, crd::rhi::ImageAccess::ColorWrite);
+    builder.set_execute([&](crd::renderer::FrameResources& res, crd::rhi::CommandBuffer& /*cmd*/) {
+        pass_executed = true;
+        REQUIRE(res.get(color) == &color_image);
+    });
+
+    REQUIRE(fg.build());
+
+    FakeCommandBuffer cmd;
+    FakeDevice fake_device;
+    fg.execute(fake_device, cmd);
+
+    REQUIRE(pass_executed);
+    REQUIRE(cmd.transition_count == 1);
+    REQUIRE(cmd.transitions[0].from == crd::rhi::ImageAccess::Undefined);
+    REQUIRE(cmd.transitions[0].to == crd::rhi::ImageAccess::ColorWrite);
+}
+
+TEST_CASE("FrameGraph inserts barrier between two passes sharing a resource", "[renderer][frame_graph]")
+{
+    FakeImage depth_image({});
+    crd::renderer::FrameGraph fg;
+
+    auto depth = fg.import(&depth_image, crd::rhi::ImageAccess::Undefined);
+
+    int pass_order = 0;
+    int depth_prepass_order = -1;
+    int main_color_order = -1;
+
+    {
+        auto builder = fg.add_pass("depth-prepass");
+        builder.write(depth, crd::rhi::ImageAccess::DepthWrite);
+        builder.set_execute([&](crd::renderer::FrameResources&, crd::rhi::CommandBuffer&) {
+            depth_prepass_order = pass_order++;
+        });
+    }
+    {
+        auto builder = fg.add_pass("main-color");
+        builder.read(depth, crd::rhi::ImageAccess::DepthRead);
+        builder.set_execute([&](crd::renderer::FrameResources&, crd::rhi::CommandBuffer&) {
+            main_color_order = pass_order++;
+        });
+    }
+
+    REQUIRE(fg.build());
+
+    FakeCommandBuffer cmd;
+    FakeDevice fake_device;
+    fg.execute(fake_device, cmd);
+
+    // Passes run in declaration order
+    REQUIRE(depth_prepass_order == 0);
+    REQUIRE(main_color_order == 1);
+
+    // Two transitions: Undefined→DepthWrite (before depth-prepass), DepthWrite→DepthRead (before main-color)
+    REQUIRE(cmd.transition_count == 2);
+    REQUIRE(cmd.transitions[0].from == crd::rhi::ImageAccess::Undefined);
+    REQUIRE(cmd.transitions[0].to == crd::rhi::ImageAccess::DepthWrite);
+    REQUIRE(cmd.transitions[1].from == crd::rhi::ImageAccess::DepthWrite);
+    REQUIRE(cmd.transitions[1].to == crd::rhi::ImageAccess::DepthRead);
+}
+
+TEST_CASE("FrameGraph build fails when a transient image is read before being written", "[renderer][frame_graph]")
+{
+    crd::renderer::FrameGraph fg;
+
+    auto transient = fg.create_transient({{1280, 720}, crd::rhi::Format::B8G8R8A8Unorm,
+                                          crd::rhi::enum_bits(crd::rhi::ImageUsage::ColorAttachment)});
+
+    auto builder = fg.add_pass("bad-pass");
+    builder.read(transient, crd::rhi::ImageAccess::ShaderRead); // read before any write — invalid
+
+    REQUIRE_FALSE(fg.build());
+}
+
+TEST_CASE("FrameGraph no-op barrier when access doesn't change between passes", "[renderer][frame_graph]")
+{
+    FakeImage image({});
+    crd::renderer::FrameGraph fg;
+
+    auto handle = fg.import(&image, crd::rhi::ImageAccess::ColorWrite); // already in ColorWrite
+
+    auto builder = fg.add_pass("pass-a");
+    builder.write(handle, crd::rhi::ImageAccess::ColorWrite); // same access — no barrier needed
+    builder.set_execute([](crd::renderer::FrameResources&, crd::rhi::CommandBuffer&) {});
+
+    REQUIRE(fg.build());
+
+    FakeCommandBuffer cmd;
+    FakeDevice fake_device;
+    fg.execute(fake_device, cmd);
+
+    REQUIRE(cmd.transition_count == 0); // no transition needed
+}
+
+TEST_CASE("FrameGraph reset clears passes and resources", "[renderer][frame_graph]")
+{
+    FakeImage image({});
+    crd::renderer::FrameGraph fg;
+
+    auto handle = fg.import(&image, crd::rhi::ImageAccess::Undefined);
+    auto builder = fg.add_pass("pass");
+    builder.write(handle, crd::rhi::ImageAccess::ColorWrite);
+    builder.set_execute([](crd::renderer::FrameResources&, crd::rhi::CommandBuffer&) {});
+    REQUIRE(fg.build());
+
+    fg.reset();
+
+    // After reset, re-import and re-declare: handle indices restart from 0
+    auto handle2 = fg.import(&image, crd::rhi::ImageAccess::Undefined);
+    REQUIRE(handle2.index == 0u); // fresh index after reset
+    auto builder2 = fg.add_pass("pass-after-reset");
+    builder2.write(handle2, crd::rhi::ImageAccess::ColorWrite);
+    builder2.set_execute([](crd::renderer::FrameResources&, crd::rhi::CommandBuffer&) {});
+    REQUIRE(fg.build()); // must build cleanly after reset
 }

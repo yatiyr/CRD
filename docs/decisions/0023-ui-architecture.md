@@ -16,6 +16,24 @@
 - Theme/styling via `crd-config` (TOML), not hard-coded.
 - UI nodes are scene-tree members (see ADR-0020).
 
+## Clarifications (2026-05)
+
+**Control nodes require a box-model layout engine, not just positional
+transforms.** Blender-like editor panels (resizable regions, anchored
+widgets, responsive flow containers) demand `HBoxContainer`, `VBoxContainer`,
+`HSplitContainer`, and `anchors + margins` semantics — the same primitives
+Godot's Control nodes expose. Positional placement alone is insufficient for
+tool-quality UI.
+
+**`crd-ui` must be usable standalone, without a 3D scene or `crd-renderer`'s
+3D path active.** For DAW / creative-tool consumers, the entire application is
+Control nodes with no Spatial nodes anywhere. `crd-ui` must not carry a
+mandatory build dependency on `crd-renderer`'s 3D systems. The frame graph
+(ADR-0032) composites a UI canvas pass that operates whether or not a 3D scene
+pass exists in the same frame.
+
 ## References
 
 - `docs/phases/phase-5-ui-rendering.md`
+- ADR-0020 — Scene & ECS hybrid + UI in scene tree
+- ADR-0032 — Frame graph v1 (UI canvas pass is a frame graph pass)

@@ -1,5 +1,6 @@
 #include <crd/log/log.hpp>
 #include <crd/platform/filesystem.hpp>
+#include <crd/renderer/frame_graph.hpp>
 #include <crd/renderer/renderer.hpp>
 #include <crd/shader/shader.hpp>
 
@@ -33,6 +34,16 @@ private:
     crd::rhi::GraphicsPipelineDesc m_desc{};
 };
 
+class FakeImage final : public crd::rhi::Image
+{
+public:
+    explicit FakeImage(crd::rhi::ImageDesc desc) : m_desc(desc) {}
+    [[nodiscard]] const crd::rhi::ImageDesc& desc() const noexcept override { return m_desc; }
+
+private:
+    crd::rhi::ImageDesc m_desc{};
+};
+
 class FakeCommandBuffer final : public crd::rhi::CommandBuffer
 {
 public:
@@ -56,6 +67,15 @@ public:
     {
         CRD_LOG_INFO(g_log_smoke_renderer, "draw vertices={}", vertex_count);
     }
+    void transition_image(crd::rhi::Image& /*image*/, crd::rhi::ImageAccess from,
+                          crd::rhi::ImageAccess to) noexcept override
+    {
+        CRD_LOG_INFO(g_log_smoke_renderer, "transition_image from={} to={}", static_cast<int>(from),
+                     static_cast<int>(to));
+        ++transition_count;
+    }
+
+    int transition_count = 0;
 };
 
 class SimpleResolver final : public crd::renderer::PipelineResolver
@@ -137,7 +157,77 @@ int main()
         command_buffer, resolver);
     CRD_LOG_INFO(g_log_smoke_renderer, "execute_frame={}", executed);
 
+    // --- Frame graph smoke ---
+    // Demonstrates: import, multi-pass declaration, build, execute with barrier insertion.
+    FakeCommandBuffer fg_cmd;
+    crd::renderer::FrameGraph frame_graph;
+
+    // Simulate a depth-prepass → main-color pass pipeline with fake external images.
+    FakeImage depth_img({});
+    FakeImage color_img({});
+    auto depth_handle = frame_graph.import(&depth_img, crd::rhi::ImageAccess::Undefined);
+    auto color_handle = frame_graph.import(&color_img, crd::rhi::ImageAccess::Undefined);
+
+    {
+        auto builder = frame_graph.add_pass("depth-prepass");
+        builder.write(depth_handle, crd::rhi::ImageAccess::DepthWrite);
+        builder.set_execute([](crd::renderer::FrameResources&, crd::rhi::CommandBuffer&) {});
+    }
+    {
+        auto builder = frame_graph.add_pass("main-color");
+        builder.read(depth_handle, crd::rhi::ImageAccess::DepthRead);
+        builder.write(color_handle, crd::rhi::ImageAccess::ColorWrite);
+        builder.set_execute([](crd::renderer::FrameResources&, crd::rhi::CommandBuffer&) {});
+    }
+
+    const bool fg_built = frame_graph.build();
+    CRD_LOG_INFO(g_log_smoke_renderer, "frame_graph.build()={}", fg_built);
+
+    // execute() with no transients; device is unused since all images are external (or null).
+    struct FakeDevice final : crd::rhi::Device
+    {
+        [[nodiscard]] crd::rhi::BackendApi api() const noexcept override { return crd::rhi::BackendApi::Vulkan; }
+        [[nodiscard]] std::unique_ptr<crd::rhi::Swapchain> create_swapchain(const crd::rhi::SwapchainDesc&) override
+        {
+            return nullptr;
+        }
+        [[nodiscard]] std::unique_ptr<crd::rhi::Buffer> create_buffer(const crd::rhi::BufferDesc&) override
+        {
+            return nullptr;
+        }
+        [[nodiscard]] std::unique_ptr<crd::rhi::Image> create_image(const crd::rhi::ImageDesc&) override
+        {
+            return nullptr;
+        }
+        [[nodiscard]] std::unique_ptr<crd::rhi::ShaderModule>
+        create_shader_module(const crd::rhi::ShaderModuleDesc&) override
+        {
+            return nullptr;
+        }
+        [[nodiscard]] std::unique_ptr<crd::rhi::Pipeline>
+        create_graphics_pipeline(const crd::rhi::GraphicsPipelineDesc&) override
+        {
+            return nullptr;
+        }
+        [[nodiscard]] std::unique_ptr<crd::rhi::CommandBuffer> create_command_buffer() override { return nullptr; }
+        [[nodiscard]] crd::rhi::Queue& graphics_queue() noexcept override { return m_queue; }
+        void wait_idle() override {}
+
+        struct FakeQueue final : crd::rhi::Queue
+        {
+            bool submit(crd::rhi::CommandBuffer&, crd::rhi::Swapchain&) override { return true; }
+            void present(crd::rhi::Swapchain&) override {}
+            void wait_idle() override {}
+        } m_queue;
+    } fake_device;
+
+    frame_graph.execute(fake_device, fg_cmd);
+    // Expect 3 barriers: Undef→DepthWrite, Undef→ColorWrite, DepthWrite→DepthRead
+    // (depth import starts Undefined; color import starts Undefined)
+    CRD_LOG_INFO(g_log_smoke_renderer, "frame_graph.execute() transitions={}", fg_cmd.transition_count);
+    const bool fg_ok = fg_built && fg_cmd.transition_count == 3;
+
     crd::log::flush();
     crd::log::shutdown();
-    return (built && executed) ? 0 : 1;
+    return (built && executed && fg_ok) ? 0 : 1;
 }
