@@ -25,6 +25,7 @@ void init(const Config& cfg)
     wc.large_fiber_count  = cfg.large_fiber_count;
     wc.max_counters       = cfg.max_counters;
     wc.injection_capacity = cfg.injection_queue_capacity;
+    wc.frame_arena_bytes  = cfg.frame_alloc_bytes;
 
     [[maybe_unused]] const bool ok = g_pool.init(wc);
     CRD_ASSERT_MSG(ok, "crd::jobs::init: WorkerPool::init failed");
@@ -108,6 +109,22 @@ void run_and_wait(std::span<const JobDecl> jobs)
 void run_and_wait(const JobDecl& job)
 {
     wait(run(job));
+}
+
+// ---------------------------------------------------------------------------
+// Frame allocator
+// ---------------------------------------------------------------------------
+
+void* frame_alloc(crd::usize size, crd::usize alignment)
+{
+    CRD_ASSERT_MSG(g_pool.is_initialized(), "crd::jobs::frame_alloc: call init() first");
+    return detail::tl_frame_arena_ref().alloc(size, alignment);
+}
+
+void frame_reset()
+{
+    CRD_ASSERT_MSG(g_pool.is_initialized(), "crd::jobs::frame_reset: call init() first");
+    g_pool.reset_all_frame_arenas();
 }
 
 // ---------------------------------------------------------------------------

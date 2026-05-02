@@ -11,7 +11,7 @@
 
 ## Current focus
 
-**Phase 2.5 — `crd-jobs` fiber-based job system. v1a–v1i shipped.**
+**Phase 2.5 — `crd-jobs` fiber-based job system. v1a–v1j shipped.**
 
 Design complete (ADR-0033). Decisions locked:
 - Main thread converts to fiber and joins the worker pool (pinned-job mechanism for GLFW thread 0).
@@ -21,10 +21,11 @@ Design complete (ADR-0033). Decisions locked:
 - Pool-allocated counters; ABA-safe double-check wait mechanism.
 - Three priority levels: High / Normal / Low.
 - Stack sizes: Small 64 KB × 128, Medium 512 KB × 64, Large 2 MB × 16.
+- Per-thread frame arena (malloc-backed bump allocator, 1 MB/thread default; `unique_ptr<FrameArena[]>` ownership in WorkerPool for stable thread-local pointer).
 
 Full design packet: `docs/phases/phase-2.5-jobs.md`. 11 slices (v1a–v1k).
-**Shipped:** v1a (asm context switch), v1b (fiber pool), v1c (Chase-Lev deque), v1d (Vyukov MPMC queue), v1e (priority scheduler), v1f (counter + wait mechanism), v1g (worker thread pool), v1h (public API), v1i (make_job SBO + parallel_for).
-**Next:** v1j — per-thread linear frame allocator: `frame_alloc()` / `frame_reset()`.
+**Shipped:** v1a (asm context switch), v1b (fiber pool), v1c (Chase-Lev deque), v1d (Vyukov MPMC queue), v1e (priority scheduler), v1f (counter + wait mechanism), v1g (worker thread pool), v1h (public API), v1i (make_job SBO + parallel_for), v1j (frame allocator).
+**Next:** v1k — integration smoke + crd-app wiring.
 
 Aktif phase dosyaları: `docs/phases/phase-2.5-jobs.md` (active) + `docs/phases/phase-2-graphics.md` (2.4 ongoing)
 
@@ -39,32 +40,27 @@ _none — running on the main roadmap._
 
 ## Last shipped milestone
 
-**2026-05-02 — `crd-jobs` v1i SBO lambda helpers shipped.**
+**2026-05-02 — `crd-jobs` v1j per-thread frame allocator shipped.**
 
-`make_job<F>()` in `jobs.hpp` — wraps a callable into a `JobDecl` using 41-byte inline SBO
-(8 bytes from the `data` field + 33 bytes from `_pad[9..41]`). Requires: `sizeof(F) <= 41`,
-`alignof(F) <= 8`, trivially copyable + destructible. SBO trampoline (`detail::sbo_trampoline<F>`)
-stored as `fn`; `_pad[8] = kSboFlag = 1` marks the job as SBO for `run_job_in_fiber`.
+`FrameArena` class in `engine/jobs/src/frame_arena.hpp` — malloc-backed bump allocator with O(1)
+aligned alloc and O(1) reset. `WorkerPool` owns one arena per thread via `unique_ptr<FrameArena[]>`
+(stable base address prevents thread-local pointer invalidation on resize). Thread-local
+`tl_frame_arena` set during `init()` (thread 0) and `worker_loop` (worker threads). `frame_reset()`
+walks all N arenas and calls `reset()` — callers must ensure no concurrent alloc during reset.
 
-SBO lifetime safety: `run_job_in_fiber` detects `_pad[8] == kSboFlag` and copies the 41 bytes
-into `Fiber::sbo_buf` (new `alignas(8) u8[41]` field) before the first context switch. The fiber
-struct persists across suspension + resume on any thread, so SBO captures survive `run_and_wait`
-calls inside job bodies.
+`parallel_for` updated to allocate the `JobDecl` array from the frame arena (memcpy-based init,
+no heap). `Config::frame_alloc_bytes` (default 1 MB/thread) wires through `WorkerConfig`.
 
-`parallel_for<F>(count, num_jobs, fn)` — creates `min(num_jobs, count)` `make_job`-wrapped jobs
-that split `[0, count)` into contiguous ranges. F must satisfy same constraints as `make_job`.
-`std::vector<JobDecl>` allocates the job array (frame arena replaces this in v1j).
-
-5 new tests: basic SBO lambda, SBO + `run_and_wait` fiber-suspension stress (critical), struct
-capture by value, `parallel_for` range coverage, `parallel_for` num_jobs clamping.
+4 new unit tests: aligned-non-null from main thread, alignment padding, from worker fiber,
+reset allows full capacity reuse.
 
 Six-configuration green:
-- win-debug:          351/351
-- win-relwithdebinfo: 351/351
-- win-release:        348/348
-- win-asan:           351/351
-- win-clang-cl:       351/351
-- win-tidy:           clean
+- win-debug:          355/355
+- win-relwithdebinfo: 355/355
+- win-release:        352/352
+- win-asan:           355/355
+- win-clang-cl:       355/355
+- win-tidy:           355/355 (exit 0)
 
 ## Previous shipped milestone
 

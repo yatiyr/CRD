@@ -6,10 +6,10 @@
 #include <crd/core/types.hpp>
 
 #include <algorithm>
+#include <cstddef>
 #include <cstring>
 #include <span>
 #include <type_traits>
-#include <vector>
 
 namespace crd::jobs
 {
@@ -23,12 +23,13 @@ using Counter = detail::Counter;
 // Init / shutdown — call from the main thread before any run() / wait() use.
 struct Config
 {
-    crd::u32 num_threads              = 0u;      // 0 = hardware_concurrency()
+    crd::u32 num_threads              = 0u;       // 0 = hardware_concurrency()
     crd::u32 small_fiber_count        = 128u;
     crd::u32 medium_fiber_count       = 64u;
     crd::u32 large_fiber_count        = 16u;
     crd::u32 max_counters             = 512u;
     crd::u32 injection_queue_capacity = 4096u;
+    crd::u32 frame_alloc_bytes        = 1u << 20u; // 1 MB per thread
 };
 
 void init(const Config& cfg = {});
@@ -53,6 +54,16 @@ void run_and_wait(const JobDecl& job);
 [[nodiscard]] bool      is_worker_fiber() noexcept; // true when called from inside a job fiber
 [[nodiscard]] crd::u32  worker_index()    noexcept; // thread index of the calling thread
 [[nodiscard]] crd::u32  num_workers()     noexcept; // total thread count (incl. thread 0)
+
+// Per-thread linear frame allocator. Each thread owns a private bump arena sized by
+// Config::frame_alloc_bytes. Allocation is lock-free and O(1).
+//
+// frame_reset() resets ALL threads' arenas. It is NOT thread-safe relative to concurrent
+// frame_alloc() calls — invoke it only at a frame boundary after all jobs of the previous
+// frame have completed (e.g. after the last wait() / run_and_wait() of the frame).
+[[nodiscard]] void* frame_alloc(crd::usize size,
+                                crd::usize alignment = alignof(std::max_align_t));
+void frame_reset();
 
 // ---------------------------------------------------------------------------
 // SBO helper — internal; referenced by make_job<F> below.
@@ -158,14 +169,21 @@ template<typename F>
     num_jobs = std::min(num_jobs, count); // can't have more jobs than items
 
     FD fn_copy(std::forward<F>(fn));
-    std::vector<JobDecl> jobs(num_jobs);
+
+    // Allocate the JobDecl array from the per-thread frame arena — no heap allocation.
+    // The array is valid until the next frame_reset(); run() copies each element into
+    // the scheduler queue before returning so only the run() call must see valid memory.
+    auto* const jobs = static_cast<JobDecl*>(
+        frame_alloc(num_jobs * sizeof(JobDecl), alignof(JobDecl)));
+
     for (crd::u32 i = 0u; i < num_jobs; ++i)
     {
         const crd::u32 begin = i * count / num_jobs;
         const crd::u32 end   = (i + 1u) * count / num_jobs;
-        jobs[i] = make_job(Task{begin, end, fn_copy}, stack, priority);
+        const JobDecl  j     = make_job(Task{begin, end, fn_copy}, stack, priority);
+        std::memcpy(jobs + i, &j, sizeof(JobDecl));
     }
-    return run(std::span<const JobDecl>(jobs));
+    return run(std::span<const JobDecl>(jobs, num_jobs));
 }
 
 } // namespace crd::jobs

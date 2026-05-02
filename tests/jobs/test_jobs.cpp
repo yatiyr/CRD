@@ -568,3 +568,92 @@ TEST_CASE("jobs: parallel_for clamps num_jobs to count", "[jobs][sbo]")
 
     crd::jobs::shutdown();
 }
+
+// ===========================================================================
+// v1j — per-thread frame allocator
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// 21. frame_alloc: returns a non-null pointer with correct alignment (main thread)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("jobs: frame_alloc returns aligned pointer from main thread", "[jobs][frame-alloc]")
+{
+    crd::jobs::Config cfg;
+    cfg.num_threads = 2U;
+    crd::jobs::init(cfg);
+
+    void* p = crd::jobs::frame_alloc(64U, 8U);
+    REQUIRE(p != nullptr);
+    CHECK((reinterpret_cast<crd::usize>(p) & 7U) == 0U);
+
+    crd::jobs::shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// 22. frame_alloc: alignment padding is applied correctly
+//     Alloc 3 bytes (cursor = 3), then alloc with align=8 — must land at offset 8.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("jobs: frame_alloc respects alignment padding", "[jobs][frame-alloc]")
+{
+    crd::jobs::Config cfg;
+    cfg.num_threads = 2U;
+    crd::jobs::init(cfg);
+
+    [[maybe_unused]] const void* first = crd::jobs::frame_alloc(3U, 1U); // cursor → 3
+    void* second                 = crd::jobs::frame_alloc(8U, 8U); // must align to 8
+    REQUIRE(second != nullptr);
+    CHECK((reinterpret_cast<crd::usize>(second) & 7U) == 0U);
+
+    crd::jobs::shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// 23. frame_alloc: works inside a worker fiber
+// ---------------------------------------------------------------------------
+
+TEST_CASE("jobs: frame_alloc works from a worker fiber", "[jobs][frame-alloc]")
+{
+    crd::jobs::Config cfg;
+    cfg.num_threads = 2U;
+    crd::jobs::init(cfg);
+
+    std::atomic<crd::usize> addr{0U};
+
+    auto j = crd::jobs::make_job([&addr]()
+    {
+        const void* p = crd::jobs::frame_alloc(32U, 8U);
+        addr.store(reinterpret_cast<crd::usize>(p), std::memory_order_release);
+    });
+
+    crd::jobs::wait(crd::jobs::run(j));
+    CHECK(addr.load() != 0U);
+    CHECK((addr.load() & 7U) == 0U);
+
+    crd::jobs::shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// 24. frame_reset: resets all arenas — allows the full capacity to be reused
+// ---------------------------------------------------------------------------
+
+TEST_CASE("jobs: frame_reset allows full capacity to be reused", "[jobs][frame-alloc]")
+{
+    crd::jobs::Config cfg;
+    cfg.num_threads       = 2U;
+    cfg.frame_alloc_bytes = 1024U; // small arena so we can fill it
+    crd::jobs::init(cfg);
+
+    // Consume half the arena from the main thread.
+    void* p1 = crd::jobs::frame_alloc(512U, 1U);
+    REQUIRE(p1 != nullptr);
+
+    crd::jobs::frame_reset();
+
+    // After reset, cursor is 0 — the full 1024 bytes are available again.
+    void* p2 = crd::jobs::frame_alloc(1024U, 1U);
+    REQUIRE(p2 != nullptr);
+
+    crd::jobs::shutdown();
+}

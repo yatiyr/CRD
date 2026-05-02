@@ -2,11 +2,13 @@
 
 #include "counter.hpp"
 #include "fiber_pool.hpp"
+#include "frame_arena.hpp"
 #include "scheduler.hpp"
 #include <crd/jobs/job_decl.hpp>
 #include <crd/core/types.hpp>
 
 #include <atomic>
+#include <memory>
 #include <thread>
 #include <vector>
 
@@ -16,13 +18,14 @@ namespace crd::jobs::detail
 // Configuration for WorkerPool::init().
 struct WorkerConfig
 {
-    crd::u32 num_threads        = 0u;     // 0 = hardware_concurrency()
+    crd::u32 num_threads        = 0u;       // 0 = hardware_concurrency()
     crd::u32 deque_capacity     = 256u;
     crd::u32 injection_capacity = 4096u;
     crd::u32 small_fiber_count  = 128u;
     crd::u32 medium_fiber_count = 64u;
     crd::u32 large_fiber_count  = 16u;
     crd::u32 max_counters       = 512u;
+    crd::u32 frame_arena_bytes  = 1u << 20u; // 1 MB per thread
 };
 
 // Owns the Scheduler, FiberPool, and CounterPool. Spawns N-1 OS worker threads;
@@ -76,6 +79,11 @@ public:
     // Returns true if a job was found and executed; false if all queues were empty.
     [[nodiscard]] bool pump();
 
+    // Reset all per-thread frame arenas to cursor 0. Must only be called when no
+    // concurrent frame_alloc() is in flight (i.e. after all jobs of the frame have
+    // completed). Maps to the public frame_reset() call.
+    void reset_all_frame_arenas() noexcept;
+
     [[nodiscard]] Scheduler&   scheduler()      noexcept { return m_scheduler; }
     [[nodiscard]] FiberPool&   fiber_pool()     noexcept { return m_fiber_pool; }
     [[nodiscard]] CounterPool& counter_pool()   noexcept { return m_counter_pool; }
@@ -91,6 +99,11 @@ private:
     Scheduler    m_scheduler;
     FiberPool    m_fiber_pool;
     CounterPool  m_counter_pool;
+
+    // Per-thread frame arenas. unique_ptr<T[]> avoids vector relocation, which would
+    // silently invalidate the tl_frame_arena_ptr thread-locals already set by each thread.
+    std::unique_ptr<FrameArena[]> m_frame_arenas;
+    crd::u32                      m_frame_arena_count = 0u;
 
     std::vector<std::thread> m_threads;
     std::atomic<bool>        m_stopping{false};
@@ -109,5 +122,6 @@ private:
 [[nodiscard]] Fiber*&       tl_current_fiber_ref() noexcept;
 [[nodiscard]] crd::u32      tl_thread_index()      noexcept;
 [[nodiscard]] WorkerPool*   tl_worker_pool()        noexcept;
+[[nodiscard]] FrameArena&   tl_frame_arena_ref()    noexcept;
 
 } // namespace crd::jobs::detail

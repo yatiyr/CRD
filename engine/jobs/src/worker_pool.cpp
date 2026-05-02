@@ -33,12 +33,19 @@ static thread_local void         (*tl_job_fn)(void*) {nullptr};
 static thread_local void*          tl_job_data       {nullptr};
 static thread_local crd::u32       tl_idx      {0u};
 static thread_local WorkerPool*    tl_pool_ptr {nullptr};
+static thread_local FrameArena*    tl_frame_arena {nullptr};
 // NOLINTEND(cppcoreguidelines-avoid-non-const-global-variables)
 
 FiberContext& tl_scheduler_context() noexcept { return tl_sched_ctx; }
 Fiber*&       tl_current_fiber_ref() noexcept { return tl_fiber; }
 crd::u32      tl_thread_index()      noexcept { return tl_idx; }
 WorkerPool*   tl_worker_pool()        noexcept { return tl_pool_ptr; }
+FrameArena&   tl_frame_arena_ref()    noexcept
+{
+    CRD_ASSERT_MSG(tl_frame_arena != nullptr,
+                   "tl_frame_arena_ref: frame arena not set — call jobs::init() first");
+    return *tl_frame_arena;
+}
 
 // ---------------------------------------------------------------------------
 // resume_fiber_fn — sentinel function pointer
@@ -195,8 +202,9 @@ void WorkerPool::run_job_in_fiber(const crd::jobs::JobDecl& job)
 
 void WorkerPool::worker_loop(WorkerPool* self, crd::u32 thread_index)
 {
-    tl_idx      = thread_index;
-    tl_pool_ptr = self;
+    tl_idx         = thread_index;
+    tl_pool_ptr    = self;
+    tl_frame_arena = &self->m_frame_arenas[thread_index];
 
     while (!self->m_stopping.load(std::memory_order_acquire))
     {
@@ -253,9 +261,21 @@ bool WorkerPool::init(const WorkerConfig& cfg)
         return false;
     }
 
+    // Allocate per-thread frame arenas. Use unique_ptr<T[]> so the base address is
+    // stable — setting tl_frame_arena_ptr into each element will never be invalidated
+    // by a reallocation (unlike std::vector).
+    m_frame_arenas       = std::make_unique<FrameArena[]>(m_num_threads);
+    m_frame_arena_count  = m_num_threads;
+    for (crd::u32 i = 0u; i < m_num_threads; ++i)
+    {
+        [[maybe_unused]] const bool ok = m_frame_arenas[i].init(cfg.frame_arena_bytes);
+        CRD_ASSERT_MSG(ok, "WorkerPool::init: failed to allocate frame arena");
+    }
+
     // Enroll the calling (main) thread as thread 0.
-    tl_idx      = 0u;
-    tl_pool_ptr = this;
+    tl_idx         = 0u;
+    tl_pool_ptr    = this;
+    tl_frame_arena = &m_frame_arenas[0];
 
     // Spawn N-1 background worker threads (thread indices 1..N-1).
     const crd::u32 worker_count = m_num_threads > 1u ? m_num_threads - 1u : 0u;
@@ -286,6 +306,10 @@ void WorkerPool::shutdown() noexcept
     m_fiber_pool.shutdown();
     m_scheduler.shutdown();
 
+    // Destroy all frame arenas (each ~FrameArena() calls free()).
+    m_frame_arenas.reset();
+    m_frame_arena_count = 0u;
+
     m_stopping.store(false, std::memory_order_relaxed);
     m_initialized = false;
 }
@@ -293,6 +317,12 @@ void WorkerPool::shutdown() noexcept
 // ---------------------------------------------------------------------------
 // WorkerPool — public interface
 // ---------------------------------------------------------------------------
+
+void WorkerPool::reset_all_frame_arenas() noexcept
+{
+    for (crd::u32 i = 0u; i < m_frame_arena_count; ++i)
+        m_frame_arenas[i].reset();
+}
 
 void WorkerPool::push(const crd::jobs::JobDecl& job)
 {
