@@ -11,23 +11,13 @@
 
 ## Current focus
 
-**Phase 2.5 — `crd-jobs` fiber-based job system. v1a–v1j shipped.**
+**Phase 2.5 — `crd-jobs` fiber-based job system. COMPLETE (v1a–v1k all shipped).**
 
-Design complete (ADR-0033). Decisions locked:
-- Main thread converts to fiber and joins the worker pool (pinned-job mechanism for GLFW thread 0).
-- Hand-rolled asm context switch (Windows x64 MASM + Linux x64 AT&T).
-- Chase-Lev work-stealing deques (3 per thread: High/Normal/Low) + Vyukov MPMC injection queues.
-- 41-byte SBO for job closures (data field 8B + _pad[9..41] 33B; kSboFlag sentinel in _pad[8]).
-- Pool-allocated counters; ABA-safe double-check wait mechanism.
-- Three priority levels: High / Normal / Low.
-- Stack sizes: Small 64 KB × 128, Medium 512 KB × 64, Large 2 MB × 16.
-- Per-thread frame arena (malloc-backed bump allocator, 1 MB/thread default; `unique_ptr<FrameArena[]>` ownership in WorkerPool for stable thread-local pointer).
+All 11 slices done. Phase 2.6 (`crd-resources` + asset cooker) is next.
 
-Full design packet: `docs/phases/phase-2.5-jobs.md`. 11 slices (v1a–v1k).
-**Shipped:** v1a (asm context switch), v1b (fiber pool), v1c (Chase-Lev deque), v1d (Vyukov MPMC queue), v1e (priority scheduler), v1f (counter + wait mechanism), v1g (worker thread pool), v1h (public API), v1i (make_job SBO + parallel_for), v1j (frame allocator).
-**Next:** v1k — integration smoke + crd-app wiring.
+Full design packet: `docs/phases/phase-2.5-jobs.md`.
 
-Aktif phase dosyaları: `docs/phases/phase-2.5-jobs.md` (active) + `docs/phases/phase-2-graphics.md` (2.4 ongoing)
+Aktif phase dosyaları: `docs/phases/phase-2.6-resources.md` (next)
 
 ## Active detour
 
@@ -40,19 +30,16 @@ _none — running on the main roadmap._
 
 ## Last shipped milestone
 
-**2026-05-02 — `crd-jobs` v1j per-thread frame allocator shipped.**
+**2026-05-02 — `crd-jobs` v1k integration smoke + crd-app wiring shipped. Phase 2.5 COMPLETE.**
 
-`FrameArena` class in `engine/jobs/src/frame_arena.hpp` — malloc-backed bump allocator with O(1)
-aligned alloc and O(1) reset. `WorkerPool` owns one arena per thread via `unique_ptr<FrameArena[]>`
-(stable base address prevents thread-local pointer invalidation on resize). Thread-local
-`tl_frame_arena` set during `init()` (thread 0) and `worker_loop` (worker threads). `frame_reset()`
-walks all N arenas and calls `reset()` — callers must ensure no concurrent alloc during reset.
+`smoke_jobs.cpp` rewritten from raw fiber demo (v1a) to full public API exercise: `init/shutdown`,
+`run+wait`, `parallel_for` (1 000-element sum), H/N/L priority all-ran (10/20/40 jobs),
+`frame_alloc/frame_reset`. All sections PASS, exit 0.
 
-`parallel_for` updated to allocate the `JobDecl` array from the frame arena (memcpy-based init,
-no heap). `Config::frame_alloc_bytes` (default 1 MB/thread) wires through `WorkerConfig`.
-
-4 new unit tests: aligned-non-null from main thread, alignment padding, from worker fiber,
-reset allows full capacity reuse.
+`Application::run()` now calls `crd::jobs::init(m_desc.jobs_config)` before the tick loop and
+`crd::jobs::shutdown()` after, guarded by `if (!m_valid) return`. `ApplicationDesc` gained
+`crd::jobs::Config jobs_config{}`. `crd-app` CMakeLists links `crd-jobs` PUBLIC.
+`smoke_renderer` verified clean (exit 0) with the wired Application.
 
 Six-configuration green:
 - win-debug:          355/355
@@ -516,9 +503,9 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Next up (next 1–3 sessions)
 
-1. **`crd-jobs` v1i** — SBO lambda helpers: `make_job<F>()` 48-byte SBO, `parallel_for()`.
-2. **`crd-jobs` v1j** — Per-frame linear allocator.
-3. **`crd-resources` + `asset_cooker` 2.6** — after crd-jobs v1k complete.
+1. **Phase 2.6** — `crd-resources` + asset cooker (handle table, ref-counted assets, on-disk cook cache, hot-reload notifications).
+2. **Phase 3.0** — `crd-scene` / ECS (hybrid hierarchy + SoA components + TOML → binary serialization).
+3. **Phase 3.1** — Physics (PhysX 5 backend + scene integration + fixed-step + deterministic mode).
 
 ## Roadmap ordering (post-jobs)
 
@@ -541,12 +528,12 @@ Full plan: `docs/ROADMAP.md` → `docs/phases/`.
 
 ## Test counts (last quality pass)
 
-- win-debug:          346/346
-- win-relwithdebinfo: 346/346
-- win-release:        343/343
-- win-asan:           346/346
-- win-clang-cl:       346/346
-- win-tidy:           346/346 (no new warnings)
+- win-debug:          355/355
+- win-relwithdebinfo: 355/355
+- win-release:        352/352
+- win-asan:           355/355
+- win-clang-cl:       355/355
+- win-tidy:           355/355 (exit 0)
 
 (win-release is 3 fewer: debug-only `FiberState` tests excluded by `#if CRD_ENABLE_ASSERTS`)
 
@@ -573,6 +560,9 @@ When in doubt, ASK before reading large files.
 
 ## Session log (rolling, last 5)
 
+- **2026-05-02** — `crd-jobs` v1k integration smoke + crd-app wiring shipped; Phase 2.5 COMPLETE; all 6 configs green (355/355 win-debug).
+- **2026-05-02** — `crd-jobs` v1j per-thread frame allocator shipped; 4 new tests; all 6 configs green (355/355 win-debug).
+- **2026-05-02** — `crd-jobs` v1i SBO lambda helpers shipped; `make_job<F>()` + `parallel_for()`; 5 new tests; all 6 configs green (351/351 win-debug).
 - **2026-05-02** — `crd-jobs` v1h Public API shipped; `jobs.cpp` + 5 new public-API tests; `Fiber::job_counter` field (fiber-survives-suspension counter fix); all 6 configs green (346/346 win-debug).
 - **2026-05-02** — `crd-jobs` v1g Worker thread pool + main-thread fiber shipped; 10 new tests; TIB save/restore fix; fiber re-init fix; all 6 configs green (341/341 win-debug).
 - **2026-05-02** — `crd-jobs` v1f Counter + wait mechanism shipped; 14 new tests; NDEBUG fix for Release; all 6 configs green (331/331 win-debug).

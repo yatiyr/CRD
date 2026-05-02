@@ -13,6 +13,7 @@ target_link_libraries(crd-app
         crd-core
         crd-containers
         crd-platform
+        crd-jobs
 )
 
 target_compile_features(crd-app PUBLIC cxx_std_20)

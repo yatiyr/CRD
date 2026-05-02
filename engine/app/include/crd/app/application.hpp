@@ -2,6 +2,7 @@
 
 #include <crd/app/event_bus.hpp>
 #include <crd/app/layer_stack.hpp>
+#include <crd/jobs/jobs.hpp>
 #include <crd/platform/platform.hpp>
 
 #include <memory>
@@ -11,7 +12,8 @@ namespace crd::app
 struct ApplicationDesc
 {
     crd::platform::WindowDesc window{};
-    crd::usize platform_event_queue_capacity = 128;
+    crd::usize                platform_event_queue_capacity = 128;
+    crd::jobs::Config         jobs_config{};
 };
 
 class Application

@@ -35,9 +35,13 @@ Application::~Application() noexcept
 
 void Application::run()
 {
+    if (!m_valid)
+        return;
+    crd::jobs::init(m_desc.jobs_config);
     while (tick())
     {
     }
+    crd::jobs::shutdown();
 }
 
 void Application::detach_layer(Layer* layer)
