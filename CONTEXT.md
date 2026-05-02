@@ -11,7 +11,7 @@
 
 ## Current focus
 
-**Phase 2.5 — `crd-jobs` fiber-based job system. v1a–v1f shipped.**
+**Phase 2.5 — `crd-jobs` fiber-based job system. v1a–v1g shipped.**
 
 Design complete (ADR-0033). Decisions locked:
 - Main thread converts to fiber and joins the worker pool (pinned-job mechanism for GLFW thread 0).
@@ -23,8 +23,8 @@ Design complete (ADR-0033). Decisions locked:
 - Stack sizes: Small 64 KB × 128, Medium 512 KB × 64, Large 2 MB × 16.
 
 Full design packet: `docs/phases/phase-2.5-jobs.md`. 11 slices (v1a–v1k).
-**Shipped:** v1a (asm context switch), v1b (fiber pool), v1c (Chase-Lev deque), v1d (Vyukov MPMC queue), v1e (priority scheduler), v1f (counter + wait mechanism).
-**Next:** v1g — Worker thread pool + main-thread fiber: real OS threads, worker loop, `init()` converts main thread to fiber.
+**Shipped:** v1a (asm context switch), v1b (fiber pool), v1c (Chase-Lev deque), v1d (Vyukov MPMC queue), v1e (priority scheduler), v1f (counter + wait mechanism), v1g (worker thread pool).
+**Next:** v1h — Public API layer: `run()` / `wait()` / `run_and_wait()`, `Config`, `init()` / `shutdown()`.
 
 Aktif phase dosyaları: `docs/phases/phase-2.5-jobs.md` (active) + `docs/phases/phase-2-graphics.md` (2.4 ongoing)
 
@@ -39,32 +39,47 @@ _none — running on the main roadmap._
 
 ## Last shipped milestone
 
+**2026-05-02 — `crd-jobs` v1g Worker thread pool + main-thread fiber shipped.**
+
+`WorkerPool` class in `engine/jobs/src/worker_pool.hpp/.cpp`: owns `Scheduler`, `FiberPool`, and
+`CounterPool`; spawns N-1 background worker threads (indices 1..N-1) each running `worker_loop`;
+thread 0 driven by `pump()` for main-thread use. All jobs run inside fiber context switches via
+`job_fiber_trampoline` (looping entry fn burned into every fiber stack at pool init).
+
+Key fix: `fiber_switch_win64.asm` now saves/restores GS:[8] (StackBase) and GS:[16] (StackLimit)
+alongside RSP, so `__chkstk` and guard pages work correctly when switching between fiber stacks.
+`FiberContext` extended with `tib_stack_base` / `tib_stack_limit` on Windows. `fiber_context.hpp`
+now explicitly includes `platform.hpp` (was relying on PCH ordering).
+
+Key fix: fiber reuse was broken — snapshot copy `target->context = target->initial_ctx` was
+corrupted because `fiber_switch`'s register saves (push r14...) overwrite the initial frame data
+on the fiber stack. Fix: call `fiber_init_stack` on completion to rebuild a fresh initial frame.
+`Fiber` struct: `initial_ctx` field removed; `usable_base`, `usable_size`, `trampoline` fields
+added so `WorkerPool` can re-initialize without pool context.
+
+10 unit tests in `tests/jobs/test_jobs.cpp`: init/shutdown, re-init, default thread count,
+single worker job, pump on thread 0, pinned job via pump, multiple jobs, fiber stack isolation,
+pump empty probe, 1000-job concurrent stress. Also fixed pre-existing clang-tidy warnings in
+`test_scheduler.cpp` (u→U suffix, member m_ prefix, braces-around-statements).
+
+Six-configuration green:
+- win-debug:          341/341
+- win-relwithdebinfo: 341/341
+- win-release:        338/338
+- win-asan:           341/341
+- win-clang-cl:       341/341
+- win-tidy:           341/341
+
+## Previous shipped milestone
+
 **2026-05-02 — `crd-jobs` v1f Counter + wait mechanism shipped.**
 
 `Counter` (alignas(64), one cache line: `atomic<u32> value`, `atomic<Waiter*> waiters`, pool
 metadata) + `CounterPool` (generation-tagged 64-bit Treiber free list `[gen:32|idx:32]`, same
-pattern as FiberPool) in `engine/jobs/src/counter.hpp/.cpp`.
-
-`Waiter` struct (stack-allocated by caller): `Fiber* fiber`, `u32 target`,
-`atomic<bool> canceled`, `atomic<Waiter*> next` (Treiber stack link).
-
-`counter_decrement(counter*, amount)`: `fetch_sub(acq_rel)` → `exchange(nullptr, acq_rel)`
-steals entire waiter list → partition: canceled→discard, target match→woken (sets `FiberState::Ready`
-in debug), else→put-back via Treiber CAS. Returns null-terminated woken list; caller re-queues as
-High-priority jobs.
-
-`counter_wait(counter*, w*, fiber*, scheduler_ctx, target)`: 6-step ABA-safe protocol — fast path
-load (acquire), Treiber push (release), ABA double-check load (acquire, set canceled if hit),
-`fiber_switch` suspend (Active→Waiting), resume assert (Ready→Active).
-
-14 unit tests including two real fiber_switch suspension/resumption tests, a 16-thread concurrent
-decrement stress, and a 4-thread × 500 acquire/release stress.
-
-Also fixed in this session: `CMAKE_CXX_FLAGS_RELEASE` was empty in CMake 4.x + MSVC, so NDEBUG
-was never defined in Release builds. Added `add_compile_definitions($<$<CONFIG:Release>:NDEBUG>)`
-to `CMakeLists.txt`. Restructured the Vulkan triangle integration test from
-`#if NDEBUG ... return; #endif` to `#if NDEBUG ... SUCCEED ... #else ... full test ... #endif` to
-avoid MSVC LTCG C4702 (unreachable code) treated as error via `/WX`.
+pattern as FiberPool). `Waiter` struct: `Fiber* fiber`, `u32 target`, `atomic<bool> canceled`,
+`atomic<Waiter*> next`. `counter_decrement` steals waiter list atomically; `counter_wait` is a
+6-step ABA-safe protocol (fast path, Treiber push, double-check, fiber_switch suspend). 14 unit
+tests incl. real fiber_switch suspension + 16-thread concurrent stress.
 
 Six-configuration green:
 - win-debug:          331/331
@@ -74,7 +89,7 @@ Six-configuration green:
 - win-clang-cl:       331/331
 - win-tidy:           331/331
 
-## Previous shipped milestone
+## Previous shipped milestone (–2)
 
 **2026-05-02 — `crd-jobs` v1e Priority Scheduler shipped.**
 
@@ -465,9 +480,9 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Next up (next 1–3 sessions)
 
-1. **`crd-jobs` v1g** — Worker thread pool + main-thread fiber: real OS threads, worker loop, `init()` converts main thread to fiber.
-2. **`crd-jobs` v1h** — Public API layer: `run()` / `wait()` / `run_and_wait()`, `Config`, `init()` / `shutdown()`.
-3. **`crd-jobs` v1i** — SBO lambda helpers: `make_job<F>()` 48-byte SBO, `parallel_for()`.
+1. **`crd-jobs` v1h** — Public API layer: `run()` / `wait()` / `run_and_wait()`, `Config`, `init()` / `shutdown()`.
+2. **`crd-jobs` v1i** — SBO lambda helpers: `make_job<F>()` 48-byte SBO, `parallel_for()`.
+3. **`crd-jobs` v1j** — Per-frame linear allocator.
 4. **`crd-resources` + `asset_cooker` 2.6** — after crd-jobs v1k complete.
 
 ## Open questions
@@ -479,12 +494,12 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Test counts (last quality pass)
 
-- win-debug:          331/331
-- win-relwithdebinfo: 331/331
-- win-release:        328/328
-- win-asan:           331/331
-- win-clang-cl:       331/331
-- win-tidy:           331/331
+- win-debug:          341/341
+- win-relwithdebinfo: 341/341
+- win-release:        338/338
+- win-asan:           341/341
+- win-clang-cl:       341/341
+- win-tidy:           341/341
 
 (win-release is 3 fewer: debug-only `FiberState` tests excluded by `#if CRD_ENABLE_ASSERTS`)
 
@@ -511,6 +526,7 @@ When in doubt, ASK before reading large files.
 
 ## Session log (rolling, last 5)
 
+- **2026-05-02** — `crd-jobs` v1g Worker thread pool + main-thread fiber shipped; 10 new tests; TIB save/restore fix; fiber re-init fix; all 6 configs green (341/341 win-debug).
 - **2026-05-02** — `crd-jobs` v1f Counter + wait mechanism shipped; 14 new tests; NDEBUG fix for Release; all 6 configs green (331/331 win-debug).
 - **2026-05-02** — `crd-jobs` v1e Priority Scheduler shipped; 16 new tests; /EHsc fix; all 6 configs green (317/317 win-debug).
 - **2026-05-02** — `crd-jobs` v1d Vyukov MPMC injection queue shipped; all 6 configs green (301/301 win-debug).

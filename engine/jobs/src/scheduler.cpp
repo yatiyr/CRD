@@ -3,6 +3,8 @@
 #include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
 
+#include <optional>
+
 namespace crd::jobs::detail
 {
 
@@ -204,6 +206,72 @@ bool Scheduler::execute_one(crd::u32 thread_idx)
 }
 
 // ---------------------------------------------------------------------------
+// try_pop
+//
+// Same drain order as execute_one() but returns the job instead of running it.
+// Used by WorkerPool so jobs run inside fiber context switches rather than
+// directly on the OS thread stack.
+// ---------------------------------------------------------------------------
+
+std::optional<crd::jobs::JobDecl> Scheduler::try_pop(crd::u32 thread_idx)
+{
+    CRD_ASSERT_MSG(m_initialized, "Scheduler::try_pop called before init");
+    CRD_ASSERT_MSG(thread_idx < m_config.num_threads,
+                   "Scheduler::try_pop: thread_idx out of range");
+
+    ThreadState& me = *m_thread_states[thread_idx]; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+
+    // 1. Pinned slot.
+    if (me.pinned_available.load(std::memory_order_acquire))
+    {
+        const crd::jobs::JobDecl job = me.pinned_storage;
+        me.pinned_available.store(false, std::memory_order_release);
+        return job;
+    }
+
+    // 2. High priority: injection → local → steal.
+    {
+        crd::jobs::JobDecl job{};
+        if (m_high_injection->dequeue(job)) return job;
+        if (auto opt = me.high.pop()) return *opt;
+        for (crd::u32 i = 1u; i < m_config.num_threads; ++i)
+        {
+            const crd::u32 peer = (thread_idx + i) % m_config.num_threads;
+            if (auto opt = m_thread_states[peer]->high.steal()) // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+                return *opt;
+        }
+    }
+
+    // 3. Normal priority: injection → local → steal.
+    {
+        crd::jobs::JobDecl job{};
+        if (m_normal_injection->dequeue(job)) return job;
+        if (auto opt = me.normal.pop()) return *opt;
+        for (crd::u32 i = 1u; i < m_config.num_threads; ++i)
+        {
+            const crd::u32 peer = (thread_idx + i) % m_config.num_threads;
+            if (auto opt = m_thread_states[peer]->normal.steal()) // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+                return *opt;
+        }
+    }
+
+    // 4. Low priority: injection → local → steal.
+    {
+        crd::jobs::JobDecl job{};
+        if (m_low_injection->dequeue(job)) return job;
+        if (auto opt = me.low.pop()) return *opt;
+        for (crd::u32 i = 1u; i < m_config.num_threads; ++i)
+        {
+            const crd::u32 peer = (thread_idx + i) % m_config.num_threads;
+            if (auto opt = m_thread_states[peer]->low.steal()) // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+                return *opt;
+        }
+    }
+
+    return std::nullopt;
+}
+
+// ---------------------------------------------------------------------------
 // wait_for_work
 // ---------------------------------------------------------------------------
 
@@ -211,6 +279,17 @@ void Scheduler::wait_for_work()
 {
     CRD_ASSERT_MSG(m_initialized, "Scheduler::wait_for_work called before init");
     m_semaphore.acquire();
+}
+
+// ---------------------------------------------------------------------------
+// wake_all
+// ---------------------------------------------------------------------------
+
+void Scheduler::wake_all(crd::u32 count)
+{
+    CRD_ASSERT_MSG(m_initialized, "Scheduler::wake_all called before init");
+    if (count > 0u)
+        m_semaphore.release(static_cast<std::ptrdiff_t>(count));
 }
 
 // ---------------------------------------------------------------------------

@@ -9,6 +9,7 @@
 
 #include <atomic>
 #include <memory>
+#include <optional>
 #include <semaphore>
 #include <vector>
 
@@ -127,9 +128,18 @@ public:
     // thread_index: identifies the calling thread for deque ownership and steal skip.
     [[nodiscard]] bool execute_one(crd::u32 thread_index);
 
+    // Pop one job without executing it. Same drain order as execute_one().
+    // Returns std::nullopt if all queues are empty.
+    // Used by WorkerPool to run jobs through the fiber context switch.
+    [[nodiscard]] std::optional<crd::jobs::JobDecl> try_pop(crd::u32 thread_index);
+
     // Block until push() or push_local() posts the semaphore.
-    // Call after execute_one() returns false to avoid spinning.
+    // Call after execute_one() / try_pop() returns false/nullopt to avoid spinning.
     void wait_for_work();
+
+    // Release count units on the semaphore to wake up to count sleeping workers.
+    // Called by WorkerPool::shutdown() to unblock workers that are in wait_for_work().
+    void wake_all(crd::u32 count);
 
     [[nodiscard]] crd::u32 num_threads()    const noexcept;
     [[nodiscard]] bool     is_initialized() const noexcept { return m_initialized; }

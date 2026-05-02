@@ -1,10 +1,19 @@
 ; fiber_switch_win64.asm — Windows x64 fiber context switch
 ;
 ; Signature: void fiber_switch(FiberContext* from, FiberContext* to)
-;   RCX = from  (pointer to FiberContext.rsp of the current fiber)
-;   RDX = to    (pointer to FiberContext.rsp of the fiber to resume)
+;   RCX = from  (pointer to FiberContext of the current context)
+;   RDX = to    (pointer to FiberContext of the context to resume)
 ;
-; FiberContext layout: { void* rsp; }  — single pointer at offset 0.
+; FiberContext layout (must match fiber_context.hpp exactly):
+;   [  0.. 7]  rsp            — saved stack pointer
+;   [  8..15]  tib_stack_base — GS:[8]  StackBase saved value
+;   [ 16..23]  tib_stack_limit— GS:[16] StackLimit saved value
+;
+; TIB (Thread Information Block) fields are saved/restored alongside RSP so that
+; Windows stack-bound checking (__chkstk, guard pages) works correctly when
+; switching between fiber stacks on threads that do not own the current stack.
+; Without this, an out-of-bounds RSP relative to GS:[8]/GS:[16] triggers an
+; access violation on any fiber stack other than the OS thread's native stack.
 ;
 ; Stack frame built on the CURRENT fiber's stack (from saved_RSP, low to high):
 ;   [  0..159]  XMM6-XMM15  (10 x 16 bytes, movdqu — unaligned-safe)
@@ -52,9 +61,17 @@ fiber_switch PROC
     movdqu  XMMWORD PTR [rsp + 128], xmm14
     movdqu  XMMWORD PTR [rsp + 144], xmm15
 
-    ; -- Context switch: save current RSP, load next RSP --
-    mov     QWORD PTR [rcx], rsp    ; from->rsp = current RSP
-    mov     rsp, QWORD PTR [rdx]    ; RSP = to->rsp
+    ; -- Context switch: save RSP + TIB stack bounds, load next context --
+    mov     QWORD PTR [rcx], rsp            ; from->rsp = current RSP
+    mov     rax, QWORD PTR gs:[8]           ; save StackBase  (GS:[0x08])
+    mov     QWORD PTR [rcx + 8], rax
+    mov     rax, QWORD PTR gs:[16]          ; save StackLimit (GS:[0x10])
+    mov     QWORD PTR [rcx + 16], rax
+    mov     rsp, QWORD PTR [rdx]            ; RSP = to->rsp
+    mov     rax, QWORD PTR [rdx + 8]        ; restore StackBase
+    mov     QWORD PTR gs:[8], rax
+    mov     rax, QWORD PTR [rdx + 16]       ; restore StackLimit
+    mov     QWORD PTR gs:[16], rax
 
     ; -- Restore XMM6-XMM15 from new stack --
     movdqu  xmm6,  XMMWORD PTR [rsp +   0]

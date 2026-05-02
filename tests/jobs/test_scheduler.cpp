@@ -1,4 +1,4 @@
-#include <catch2/catch_test_macros.hpp>
+﻿#include <catch2/catch_test_macros.hpp>
 
 #include "../../engine/jobs/src/scheduler.hpp"
 #include <crd/core/types.hpp>
@@ -51,16 +51,16 @@ static JobDecl make_count_job(std::atomic<int>* counter, Priority prio = Priorit
 TEST_CASE("scheduler: init and shutdown", "[jobs][scheduler]")
 {
     Scheduler sched;
-    REQUIRE(sched.init({1u, 256u, 16u}));
+    REQUIRE(sched.init({1U, 256U, 16U}));
     CHECK(sched.is_initialized());
-    CHECK(sched.num_threads() == 1u);
+    CHECK(sched.num_threads() == 1U);
 
     sched.shutdown();
     CHECK_FALSE(sched.is_initialized());
 
     // Re-init after shutdown is legal.
-    REQUIRE(sched.init({2u, 64u, 32u}));
-    CHECK(sched.num_threads() == 2u);
+    REQUIRE(sched.init({2U, 64U, 32U}));
+    CHECK(sched.num_threads() == 2U);
     sched.shutdown();
 }
 
@@ -71,12 +71,12 @@ TEST_CASE("scheduler: init and shutdown", "[jobs][scheduler]")
 TEST_CASE("scheduler: num_threads reflects config", "[jobs][scheduler]")
 {
     Scheduler s1;
-    REQUIRE(s1.init({1u, 256u, 16u}));
-    CHECK(s1.num_threads() == 1u);
+    REQUIRE(s1.init({1U, 256U, 16U}));
+    CHECK(s1.num_threads() == 1U);
 
     Scheduler s4;
-    REQUIRE(s4.init({4u, 256u, 16u}));
-    CHECK(s4.num_threads() == 4u);
+    REQUIRE(s4.init({4U, 256U, 16U}));
+    CHECK(s4.num_threads() == 4U);
 }
 
 // ---------------------------------------------------------------------------
@@ -86,14 +86,14 @@ TEST_CASE("scheduler: num_threads reflects config", "[jobs][scheduler]")
 TEST_CASE("scheduler: single High job via injection", "[jobs][scheduler]")
 {
     Scheduler sched;
-    REQUIRE(sched.init({1u, 256u, 16u}));
+    REQUIRE(sched.init({1U, 256U, 16U}));
 
     bool ran = false;
     sched.push(make_flag_job(&ran, Priority::High));
 
-    REQUIRE(sched.execute_one(0u));
+    REQUIRE(sched.execute_one(0U));
     CHECK(ran);
-    CHECK_FALSE(sched.execute_one(0u)); // queue now empty
+    CHECK_FALSE(sched.execute_one(0U)); // queue now empty
 }
 
 // ---------------------------------------------------------------------------
@@ -103,12 +103,12 @@ TEST_CASE("scheduler: single High job via injection", "[jobs][scheduler]")
 TEST_CASE("scheduler: single Normal job via injection", "[jobs][scheduler]")
 {
     Scheduler sched;
-    REQUIRE(sched.init({1u, 256u, 16u}));
+    REQUIRE(sched.init({1U, 256U, 16U}));
 
     bool ran = false;
     sched.push(make_flag_job(&ran, Priority::Normal));
 
-    REQUIRE(sched.execute_one(0u));
+    REQUIRE(sched.execute_one(0U));
     CHECK(ran);
 }
 
@@ -119,12 +119,12 @@ TEST_CASE("scheduler: single Normal job via injection", "[jobs][scheduler]")
 TEST_CASE("scheduler: single Low job via injection", "[jobs][scheduler]")
 {
     Scheduler sched;
-    REQUIRE(sched.init({1u, 256u, 16u}));
+    REQUIRE(sched.init({1U, 256U, 16U}));
 
     bool ran = false;
     sched.push(make_flag_job(&ran, Priority::Low));
 
-    REQUIRE(sched.execute_one(0u));
+    REQUIRE(sched.execute_one(0U));
     CHECK(ran);
 }
 
@@ -138,15 +138,15 @@ TEST_CASE("scheduler: single Low job via injection", "[jobs][scheduler]")
 TEST_CASE("scheduler: drain order High before Normal before Low", "[jobs][scheduler]")
 {
     Scheduler sched;
-    REQUIRE(sched.init({1u, 256u, 32u}));
+    REQUIRE(sched.init({1U, 256U, 32U}));
 
     // Track execution sequence via a shared atomic counter.
     struct SeqData
     {
-        std::atomic<int> counter{0};
-        int high_seq{0};
-        int normal_seq{0};
-        int low_seq{0};
+        std::atomic<int> m_counter{0};
+        int m_high_seq{0};
+        int m_normal_seq{0};
+        int m_low_seq{0};
     };
     SeqData data;
 
@@ -157,7 +157,7 @@ TEST_CASE("scheduler: drain order High before Normal before Low", "[jobs][schedu
         low.fn = [](void* d)
         {
             auto& sd = *static_cast<SeqData*>(d);
-            sd.low_seq = sd.counter.fetch_add(1, std::memory_order_relaxed) + 1;
+            sd.m_low_seq = sd.m_counter.fetch_add(1, std::memory_order_relaxed) + 1;
         };
         low.data     = &data;
         low.priority = Priority::Low;
@@ -168,7 +168,7 @@ TEST_CASE("scheduler: drain order High before Normal before Low", "[jobs][schedu
         normal.fn = [](void* d)
         {
             auto& sd = *static_cast<SeqData*>(d);
-            sd.normal_seq = sd.counter.fetch_add(1, std::memory_order_relaxed) + 1;
+            sd.m_normal_seq = sd.m_counter.fetch_add(1, std::memory_order_relaxed) + 1;
         };
         normal.data     = &data;
         normal.priority = Priority::Normal;
@@ -179,52 +179,52 @@ TEST_CASE("scheduler: drain order High before Normal before Low", "[jobs][schedu
         high.fn = [](void* d)
         {
             auto& sd = *static_cast<SeqData*>(d);
-            sd.high_seq = sd.counter.fetch_add(1, std::memory_order_relaxed) + 1;
+            sd.m_high_seq = sd.m_counter.fetch_add(1, std::memory_order_relaxed) + 1;
         };
         high.data     = &data;
         high.priority = Priority::High;
         sched.push(high);
     }
 
-    REQUIRE(sched.execute_one(0u)); // must pick High
-    REQUIRE(sched.execute_one(0u)); // must pick Normal
-    REQUIRE(sched.execute_one(0u)); // must pick Low
-    CHECK_FALSE(sched.execute_one(0u));
+    REQUIRE(sched.execute_one(0U)); // must pick High
+    REQUIRE(sched.execute_one(0U)); // must pick Normal
+    REQUIRE(sched.execute_one(0U)); // must pick Low
+    CHECK_FALSE(sched.execute_one(0U));
 
-    CHECK(data.high_seq == 1);
-    CHECK(data.normal_seq == 2);
-    CHECK(data.low_seq == 3);
+    CHECK(data.m_high_seq == 1);
+    CHECK(data.m_normal_seq == 2);
+    CHECK(data.m_low_seq == 3);
 }
 
 // ---------------------------------------------------------------------------
 // 7. Same-priority: injection queue drained before local deque
 //
 // Both injection and local hold a Normal job. Injection must be picked first
-// per the drain order: injection → local → steal.
+// per the drain order: injection â†’ local â†’ steal.
 // ---------------------------------------------------------------------------
 
 TEST_CASE("scheduler: injection checked before local for same priority", "[jobs][scheduler]")
 {
     Scheduler sched;
-    REQUIRE(sched.init({1u, 256u, 16u}));
+    REQUIRE(sched.init({1U, 256U, 16U}));
 
     // Use separate bool flags to identify which job ran first.
     bool injection_ran = false;
     bool local_ran     = false;
 
-    sched.push(make_flag_job(&injection_ran, Priority::Normal)); // → injection queue
-    sched.push_local(0u, make_flag_job(&local_ran, Priority::Normal)); // → local deque
+    sched.push(make_flag_job(&injection_ran, Priority::Normal)); // â†’ injection queue
+    sched.push_local(0U, make_flag_job(&local_ran, Priority::Normal)); // â†’ local deque
 
     // First execute_one must drain the injection queue.
-    REQUIRE(sched.execute_one(0u));
+    REQUIRE(sched.execute_one(0U));
     CHECK(injection_ran);
     CHECK_FALSE(local_ran);
 
     // Second execute_one drains the local deque.
-    REQUIRE(sched.execute_one(0u));
+    REQUIRE(sched.execute_one(0U));
     CHECK(local_ran);
 
-    CHECK_FALSE(sched.execute_one(0u));
+    CHECK_FALSE(sched.execute_one(0U));
 }
 
 // ---------------------------------------------------------------------------
@@ -234,12 +234,12 @@ TEST_CASE("scheduler: injection checked before local for same priority", "[jobs]
 TEST_CASE("scheduler: push_local executes on owning thread", "[jobs][scheduler]")
 {
     Scheduler sched;
-    REQUIRE(sched.init({1u, 256u, 16u}));
+    REQUIRE(sched.init({1U, 256U, 16U}));
 
     bool ran = false;
-    sched.push_local(0u, make_flag_job(&ran, Priority::Normal));
+    sched.push_local(0U, make_flag_job(&ran, Priority::Normal));
 
-    REQUIRE(sched.execute_one(0u));
+    REQUIRE(sched.execute_one(0U));
     CHECK(ran);
 }
 
@@ -250,40 +250,40 @@ TEST_CASE("scheduler: push_local executes on owning thread", "[jobs][scheduler]"
 TEST_CASE("scheduler: local deque drains LIFO", "[jobs][scheduler]")
 {
     Scheduler sched;
-    REQUIRE(sched.init({1u, 256u, 16u}));
+    REQUIRE(sched.init({1U, 256U, 16U}));
 
     // Each job records its value into executed_values.
-    // Values pushed: 1, 2, 3 — expected LIFO pop order: 3, 2, 1.
+    // Values pushed: 1, 2, 3 â€” expected LIFO pop order: 3, 2, 1.
     struct PushData
     {
-        int                  value{0};
-        std::vector<int>*    result{nullptr};
+        int                  m_value{0};
+        std::vector<int>*    m_result{nullptr};
     };
 
     std::vector<int> executed_values;
     PushData pd[3];
     for (int i = 0; i < 3; ++i)
     {
-        pd[i].value  = i + 1;        // NOLINT(cppcoreguidelines-pro-bounds-constant-array-index)
-        pd[i].result = &executed_values; // NOLINT(cppcoreguidelines-pro-bounds-constant-array-index)
+        pd[i].m_value  = i + 1;        // NOLINT(cppcoreguidelines-pro-bounds-constant-array-index)
+        pd[i].m_result = &executed_values; // NOLINT(cppcoreguidelines-pro-bounds-constant-array-index)
 
         JobDecl j;
         j.fn = [](void* d)
         {
             auto* data = static_cast<PushData*>(d);
-            data->result->push_back(data->value);
+            data->m_result->push_back(data->m_value);
         };
         j.data     = &pd[i]; // NOLINT(cppcoreguidelines-pro-bounds-constant-array-index)
         j.priority = Priority::Normal;
-        sched.push_local(0u, j);
+        sched.push_local(0U, j);
     }
 
-    REQUIRE(sched.execute_one(0u));
-    REQUIRE(sched.execute_one(0u));
-    REQUIRE(sched.execute_one(0u));
-    CHECK_FALSE(sched.execute_one(0u));
+    REQUIRE(sched.execute_one(0U));
+    REQUIRE(sched.execute_one(0U));
+    REQUIRE(sched.execute_one(0U));
+    CHECK_FALSE(sched.execute_one(0U));
 
-    REQUIRE(executed_values.size() == 3u);
+    REQUIRE(executed_values.size() == 3U);
     CHECK(executed_values.at(0) == 3); // last-in
     CHECK(executed_values.at(1) == 2);
     CHECK(executed_values.at(2) == 1); // first-in
@@ -296,37 +296,37 @@ TEST_CASE("scheduler: local deque drains LIFO", "[jobs][scheduler]")
 TEST_CASE("scheduler: pinned job executes on target thread", "[jobs][scheduler]")
 {
     Scheduler sched;
-    REQUIRE(sched.init({2u, 256u, 16u}));
+    REQUIRE(sched.init({2U, 256U, 16U}));
 
     bool ran = false;
     sched.push(make_flag_job(&ran, Priority::Normal, /*pin=*/0));
 
     // Thread 1 must not consume thread 0's pinned job.
-    CHECK_FALSE(sched.execute_one(1u));
+    CHECK_FALSE(sched.execute_one(1U));
     CHECK_FALSE(ran);
 
     // Thread 0 consumes its own pinned slot.
-    REQUIRE(sched.execute_one(0u));
+    REQUIRE(sched.execute_one(0U));
     CHECK(ran);
 }
 
 // ---------------------------------------------------------------------------
-// 11. Pinned job: slot cleared after execution — second execute_one finds nothing
+// 11. Pinned job: slot cleared after execution â€” second execute_one finds nothing
 // ---------------------------------------------------------------------------
 
 TEST_CASE("scheduler: pinned slot cleared after execution", "[jobs][scheduler]")
 {
     Scheduler sched;
-    REQUIRE(sched.init({1u, 256u, 16u}));
+    REQUIRE(sched.init({1U, 256U, 16U}));
 
     bool ran = false;
     sched.push(make_flag_job(&ran, Priority::Normal, /*pin=*/0));
 
-    REQUIRE(sched.execute_one(0u));
+    REQUIRE(sched.execute_one(0U));
     CHECK(ran);
 
     // Slot is now empty; second call finds no work.
-    CHECK_FALSE(sched.execute_one(0u));
+    CHECK_FALSE(sched.execute_one(0U));
 }
 
 // ---------------------------------------------------------------------------
@@ -336,15 +336,15 @@ TEST_CASE("scheduler: pinned slot cleared after execution", "[jobs][scheduler]")
 TEST_CASE("scheduler: work stealing across threads", "[jobs][scheduler]")
 {
     Scheduler sched;
-    REQUIRE(sched.init({2u, 256u, 16u}));
+    REQUIRE(sched.init({2U, 256U, 16U}));
 
     // Push to thread 0's local Normal deque.
     bool ran = false;
-    sched.push_local(0u, make_flag_job(&ran, Priority::Normal));
+    sched.push_local(0U, make_flag_job(&ran, Priority::Normal));
 
     // Thread 1 has nothing in its own queues or the injection queues.
     // It should steal from thread 0's Normal local deque.
-    REQUIRE(sched.execute_one(1u));
+    REQUIRE(sched.execute_one(1U));
     CHECK(ran);
 }
 
@@ -358,13 +358,13 @@ TEST_CASE("scheduler: work stealing across threads", "[jobs][scheduler]")
 TEST_CASE("scheduler: steal High before Normal", "[jobs][scheduler]")
 {
     Scheduler sched;
-    REQUIRE(sched.init({2u, 256u, 16u}));
+    REQUIRE(sched.init({2U, 256U, 16U}));
 
     struct SeqData
     {
-        std::atomic<int> counter{0};
-        int high_seq{0};
-        int normal_seq{0};
+        std::atomic<int> m_counter{0};
+        int m_high_seq{0};
+        int m_normal_seq{0};
     };
     SeqData data;
 
@@ -373,61 +373,67 @@ TEST_CASE("scheduler: steal High before Normal", "[jobs][scheduler]")
         h.fn = [](void* d)
         {
             auto& sd = *static_cast<SeqData*>(d);
-            sd.high_seq = sd.counter.fetch_add(1, std::memory_order_relaxed) + 1;
+            sd.m_high_seq = sd.m_counter.fetch_add(1, std::memory_order_relaxed) + 1;
         };
         h.data     = &data;
         h.priority = Priority::High;
-        sched.push_local(0u, h);
+        sched.push_local(0U, h);
     }
     {
         JobDecl n;
         n.fn = [](void* d)
         {
             auto& sd = *static_cast<SeqData*>(d);
-            sd.normal_seq = sd.counter.fetch_add(1, std::memory_order_relaxed) + 1;
+            sd.m_normal_seq = sd.m_counter.fetch_add(1, std::memory_order_relaxed) + 1;
         };
         n.data     = &data;
         n.priority = Priority::Normal;
-        sched.push_local(0u, n);
+        sched.push_local(0U, n);
     }
 
     // Thread 1 steals: High steal happens before Normal steal.
-    REQUIRE(sched.execute_one(1u)); // steals High from thread 0
-    REQUIRE(sched.execute_one(1u)); // steals Normal from thread 0
-    CHECK_FALSE(sched.execute_one(1u));
+    REQUIRE(sched.execute_one(1U)); // steals High from thread 0
+    REQUIRE(sched.execute_one(1U)); // steals Normal from thread 0
+    CHECK_FALSE(sched.execute_one(1U));
 
-    CHECK(data.high_seq == 1);
-    CHECK(data.normal_seq == 2);
+    CHECK(data.m_high_seq == 1);
+    CHECK(data.m_normal_seq == 2);
 }
 
 // ---------------------------------------------------------------------------
 // 14. Semaphore count: N pushes allow N immediate wait_for_work() returns
 //
 // This is the timing-independent semaphore correctness test. push() posts the
-// semaphore once; wait_for_work() acquires once. N pushes → N non-blocking acquires.
+// semaphore once; wait_for_work() acquires once. N pushes â†’ N non-blocking acquires.
 // ---------------------------------------------------------------------------
 
 TEST_CASE("scheduler: push increments semaphore for wait_for_work", "[jobs][scheduler]")
 {
     Scheduler sched;
-    REQUIRE(sched.init({1u, 256u, 32u}));
+    REQUIRE(sched.init({1U, 256U, 32U}));
 
-    static constexpr int kCount = 5;
+    static constexpr int count = 5;
     std::atomic<int> dummy{0};
 
-    for (int i = 0; i < kCount; ++i)
+    for (int i = 0; i < count; ++i)
+    {
         sched.push(make_count_job(&dummy, Priority::Normal));
+    }
 
-    // Each wait_for_work() should return immediately (semaphore count = kCount).
-    for (int i = 0; i < kCount; ++i)
+    // Each wait_for_work() should return immediately (semaphore count = count).
+    for (int i = 0; i < count; ++i)
+    {
         sched.wait_for_work();
+    }
 
     // Jobs are still in the injection queue — drain them.
-    for (int i = 0; i < kCount; ++i)
-        REQUIRE(sched.execute_one(0u));
+    for (int i = 0; i < count; ++i)
+    {
+        REQUIRE(sched.execute_one(0U));
+    }
 
-    CHECK(dummy.load() == kCount);
-    CHECK_FALSE(sched.execute_one(0u));
+    CHECK(dummy.load() == count);
+    CHECK_FALSE(sched.execute_one(0U));
 }
 
 // ---------------------------------------------------------------------------
@@ -437,7 +443,7 @@ TEST_CASE("scheduler: push increments semaphore for wait_for_work", "[jobs][sche
 TEST_CASE("scheduler: push wakes blocked wait_for_work", "[jobs][scheduler]")
 {
     Scheduler sched;
-    REQUIRE(sched.init({1u, 256u, 16u}));
+    REQUIRE(sched.init({1U, 256U, 16U}));
 
     std::atomic<bool> woke{false};
 
@@ -450,7 +456,7 @@ TEST_CASE("scheduler: push wakes blocked wait_for_work", "[jobs][scheduler]")
     // Brief sleep to give the waiter thread time to start and block.
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
 
-    // push() posts the semaphore — waiter must wake.
+    // push() posts the semaphore â€” waiter must wake.
     std::atomic<int> dummy{0};
     sched.push(make_count_job(&dummy, Priority::Normal));
 
@@ -458,7 +464,7 @@ TEST_CASE("scheduler: push wakes blocked wait_for_work", "[jobs][scheduler]")
     CHECK(woke.load(std::memory_order_acquire));
 
     // Drain the queued job.
-    REQUIRE(sched.execute_one(0u));
+    REQUIRE(sched.execute_one(0U));
     CHECK(dummy.load() == 1);
 }
 
@@ -472,40 +478,44 @@ TEST_CASE("scheduler: push wakes blocked wait_for_work", "[jobs][scheduler]")
 
 TEST_CASE("scheduler: concurrent multi-thread stress", "[jobs][scheduler][stress]")
 {
-    static constexpr crd::u32 kNumWorkers  = 4u;
-    static constexpr int      kTotalJobs   = 4000;
+    static constexpr crd::u32 num_workers  = 4U;
+    static constexpr int      total_jobs   = 4000;
 
     Scheduler sched;
-    REQUIRE(sched.init({kNumWorkers, 256u, 4096u}));
+    REQUIRE(sched.init({num_workers, 256U, 4096U}));
 
     std::atomic<int> executed{0};
 
     // Push all jobs before starting workers.
-    for (int i = 0; i < kTotalJobs; ++i)
+    for (int i = 0; i < total_jobs; ++i)
     {
-        const Priority prio = (i % 3 == 0)
-                            ? Priority::High
-                            : (i % 3 == 1) ? Priority::Normal : Priority::Low;
+        Priority prio = Priority::Low;
+        if (i % 3 == 0)      { prio = Priority::High; }
+        else if (i % 3 == 1) { prio = Priority::Normal; }
         sched.push(make_count_job(&executed, prio));
     }
 
-    // Workers loop until all kTotalJobs have been run.
+    // Workers loop until all total_jobs have been run.
     std::vector<std::thread> workers;
-    workers.reserve(kNumWorkers);
-    for (crd::u32 t = 0u; t < kNumWorkers; ++t)
+    workers.reserve(num_workers);
+    for (crd::u32 t = 0U; t < num_workers; ++t)
     {
         workers.emplace_back([&sched, &executed, t]()
         {
-            while (executed.load(std::memory_order_acquire) < kTotalJobs)
+            while (executed.load(std::memory_order_acquire) < total_jobs)
             {
                 if (!sched.execute_one(t))
+                {
                     std::this_thread::yield();
+                }
             }
         });
     }
 
     for (auto& w : workers)
+    {
         w.join();
+    }
 
-    CHECK(executed.load() == kTotalJobs);
+    CHECK(executed.load() == total_jobs);
 }

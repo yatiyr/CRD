@@ -136,6 +136,9 @@ bool FiberPool::init_tier(Tier& tier, crd::u32 count, crd::usize usable_bytes,
         // which is the high-address end — correct for a downward-growing stack.
         auto* usable_base = static_cast<crd::u8*>(f.stack_alloc) + guard_bytes;
         fiber_init_stack(f.context, usable_base, usable_bytes, trampoline);
+        f.usable_base = usable_base;
+        f.usable_size = usable_bytes;
+        f.trampoline  = trampoline;
     }
 
     // Point the Treiber head at fiber 0 (generation 0 for a fresh tier).
