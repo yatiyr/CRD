@@ -62,6 +62,12 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 - ADR-0015 — Job system shape
 - ADR-0033 — crd-jobs implementation architecture (fibers, asm switch, Chase-Lev, SBO, ABA-safe counters)
 
+### `[scripting]`
+- ADR-0034 — C++ hot-reload DLL scripting as primary scripting mechanism
+
+### `[networking]` `[determinism]`
+- ADR-0035 — Networking architecture principles (layered, determinism-first)
+
 ### `[renderer]` `[render-path]`
 - ADR-0016 — Render path strategy
 - ADR-0032 — Frame graph v1
@@ -131,3 +137,5 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 | 0031  | Shader frontend → IR seam                      | shader, arch, ir                  | Accepted    |
 | 0032  | Frame graph v1                                 | renderer, render-path, arch       | Accepted    |
 | 0033  | crd-jobs implementation architecture           | jobs, arch, fibers, threading     | Accepted    |
+| 0034  | C++ hot-reload DLL scripting                   | scripting, arch, extensibility    | Accepted    |
+| 0035  | Networking architecture principles             | networking, arch, determinism     | Accepted    |

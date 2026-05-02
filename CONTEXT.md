@@ -485,6 +485,18 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 3. **`crd-jobs` v1j** — Per-frame linear allocator.
 4. **`crd-resources` + `asset_cooker` 2.6** — after crd-jobs v1k complete.
 
+## Roadmap ordering (post-jobs)
+
+After `crd-jobs` v1k ships:
+- **Phase 2.6** — Resource system + asset cooker (handle table, ref-counted assets, on-disk cook cache, hot-reload notifications).
+- **Phase 3.0** — `crd-scene` / ECS (hybrid hierarchy + SoA components + TOML → binary serialization). **Ships before physics** — physics integration requires a scene to sync transforms into.
+- **Phase 3.1** — Physics (PhysX 5 backend + scene integration + fixed-step + deterministic mode).
+- **Phase 4.0** — C++ hot-reload DLL scripting (ADR-0034).
+- **Phase 4.2** — Networking: transport layer → deterministic simulation → client-server sync (ADR-0035).
+- **Phase 8** — Domain modules: robotics, aerospace, cinematic, procedural generation — after Phase 4 + editor foundations.
+
+Full plan: `docs/ROADMAP.md` → `docs/phases/`.
+
 ## Open questions
 
 - `crd-config` hot-reload remains 1.6b unless ImGui integration proves it
