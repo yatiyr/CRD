@@ -38,7 +38,7 @@ if(MSVC)
     set_source_files_properties(
         src/worker_pool.cpp
         src/fiber_init.cpp
-        PROPERTIES COMPILE_FLAGS "/Od"
+        PROPERTIES COMPILE_FLAGS "/Od /Y-"
     )
 endif()
 

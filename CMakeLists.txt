@@ -125,6 +125,19 @@ include(cmake/CPM.cmake)
 if (CRD_BUILD_TESTS)
     CPMAddPackage("gh:catchorg/Catch2@3.7.1")
     list(APPEND CMAKE_MODULE_PATH ${Catch2_SOURCE_DIR}/extras)
+
+    # Catch2 is a third-party source tree; strip our -Werror/-Wconversion flags
+    # from its targets so upstream -Wconversion hits in benchmark code don't
+    # fail our build (same treatment as GLFW below).
+    foreach(_catch2_target IN ITEMS Catch2 Catch2WithMain)
+        if(TARGET ${_catch2_target})
+            if(MSVC)
+                target_compile_options(${_catch2_target} PRIVATE /W0 /WX-)
+            else()
+                target_compile_options(${_catch2_target} PRIVATE -w)
+            endif()
+        endif()
+    endforeach()
 endif()
 
 # GLFW: window + input backend for crd-platform.
