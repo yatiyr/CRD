@@ -85,6 +85,7 @@ if (MSVC)
         $<$<COMPILE_LANGUAGE:CXX,C>:/permissive->
         $<$<COMPILE_LANGUAGE:CXX,C>:/Zc:__cplusplus>
         $<$<COMPILE_LANGUAGE:CXX,C>:/utf-8>
+        $<$<COMPILE_LANGUAGE:CXX,C>:/EHsc>
     )
 
     if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")

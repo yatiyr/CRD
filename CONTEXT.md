@@ -11,7 +11,7 @@
 
 ## Current focus
 
-**Phase 2.5 — `crd-jobs` fiber-based job system. v1a + v1b + v1c shipped.**
+**Phase 2.5 — `crd-jobs` fiber-based job system. v1a–v1e shipped.**
 
 Design complete (ADR-0033). Decisions locked:
 - Main thread converts to fiber and joins the worker pool (pinned-job mechanism for GLFW thread 0).
@@ -23,8 +23,8 @@ Design complete (ADR-0033). Decisions locked:
 - Stack sizes: Small 64 KB × 128, Medium 512 KB × 64, Large 2 MB × 16.
 
 Full design packet: `docs/phases/phase-2.5-jobs.md`. 11 slices (v1a–v1k).
-**Shipped:** v1a (asm context switch), v1b (fiber pool), v1c (Chase-Lev deque), v1d (Vyukov MPMC queue).
-**Next:** v1e — Priority scheduler (3-level drain + pinned-job slot).
+**Shipped:** v1a (asm context switch), v1b (fiber pool), v1c (Chase-Lev deque), v1d (Vyukov MPMC queue), v1e (priority scheduler).
+**Next:** v1f — Counter + wait mechanism (Counter pool, Treiber waiter list, ABA-safe double-check).
 
 Aktif phase dosyaları: `docs/phases/phase-2.5-jobs.md` (active) + `docs/phases/phase-2-graphics.md` (2.4 ongoing)
 
@@ -38,6 +38,38 @@ _none — running on the main roadmap._
 > `docs/detours/README.md`.
 
 ## Last shipped milestone
+
+**2026-05-02 — `crd-jobs` v1e Priority Scheduler shipped.**
+
+`Scheduler` class in `engine/jobs/src/scheduler.hpp/.cpp`. Three global Vyukov MPMC injection
+queues (High/Normal/Low), per-thread three Chase-Lev local deques, and a single-slot pinned-job
+lane per thread (`alignas(64) std::atomic<bool> pinned_available` + `JobDecl pinned_storage`).
+
+Drain order per `execute_one()` call: (1) pinned slot if occupied, then for each priority level
+High → Normal → Low: injection queue → local deque → round-robin steal from peers. `push()` and
+`push_local()` each post `std::counting_semaphore<>` once; workers call `wait_for_work()` to sleep.
+
+`JobDecl` moved to its own public header `include/crd/jobs/job_decl.hpp` (64-byte cache-line
+aligned, no implicit padding). `SchedulerConfig` defined outside `Scheduler` class to fix a
+clang-cl diagnostic about default member initializers in nested classes. Root CMakeLists.txt
+gained `/EHsc` for MSVC to fix VS18 `<chrono>` C4530 warning.
+
+16 unit tests: init/shutdown, num_threads, single High/Normal/Low injection, drain-order proof
+(push in reverse priority order), injection-before-local, push_local, LIFO deque ordering,
+pinned-job isolation (thread 1 cannot consume thread 0's pinned slot), pinned slot cleared after
+execution, work stealing (thread 1 steals from thread 0), steal-High-before-Normal, semaphore
+count (N pushes → N non-blocking wait_for_work()), push wakes blocked thread (threaded test with
+sleep_for(20 ms)), concurrent 4-thread × 4 000-job mixed-priority stress.
+
+Six-configuration green:
+- win-debug:          317/317
+- win-relwithdebinfo: 317/317
+- win-release:        314/314
+- win-asan:           317/317
+- win-clang-cl:       317/317
+- win-tidy:           317/317
+
+## Previous shipped milestone
 
 **2026-05-02 — `crd-jobs` v1d Vyukov MPMC injection queue shipped.**
 
@@ -61,7 +93,7 @@ Six-configuration green:
 - win-clang-cl:       301/301
 - win-tidy:           301/301
 
-## Previous shipped milestone
+## Previous shipped milestone (–2)
 
 **2026-05-02 — `crd-jobs` v1c Chase-Lev work-stealing deque shipped.**
 
@@ -409,9 +441,9 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Next up (next 1–3 sessions)
 
-1. **`crd-jobs` v1e** — Priority scheduler: 3-level drain (High → Normal → Low), pinned-job slot.
-2. **`crd-jobs` v1e** — Priority scheduler: 3-level drain (High → Normal → Low), pinned-job slot.
-3. **`crd-jobs` v1f** — Counter + wait mechanism: `Counter` pool, Treiber waiter list, ABA-safe double-check.
+1. **`crd-jobs` v1f** — Counter + wait mechanism: `Counter` pool, Treiber waiter list, ABA-safe double-check wait.
+2. **`crd-jobs` v1g** — Worker thread pool + main-thread fiber: real OS threads, worker loop, `init()` converts main thread to fiber.
+3. **`crd-jobs` v1h** — Public API layer: `run()` / `wait()` / `run_and_wait()`, `Config`, `init()` / `shutdown()`.
 4. **`crd-resources` + `asset_cooker` 2.6** — after crd-jobs v1k complete.
 
 ## Open questions
@@ -423,12 +455,12 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Test counts (last quality pass)
 
-- win-debug:          301/301
-- win-relwithdebinfo: 301/301
-- win-release:        298/298
-- win-asan:           301/301
-- win-clang-cl:       301/301
-- win-tidy:           301/301
+- win-debug:          317/317
+- win-relwithdebinfo: 317/317
+- win-release:        314/314
+- win-asan:           317/317
+- win-clang-cl:       317/317
+- win-tidy:           317/317
 
 (win-release is 3 fewer: debug-only `FiberState` tests excluded by `#if CRD_ENABLE_ASSERTS`)
 
@@ -455,6 +487,7 @@ When in doubt, ASK before reading large files.
 
 ## Session log (rolling, last 5)
 
+- **2026-05-02** — `crd-jobs` v1e Priority Scheduler shipped; 16 new tests; /EHsc fix; all 6 configs green (317/317 win-debug).
 - **2026-05-02** — `crd-jobs` v1d Vyukov MPMC injection queue shipped; all 6 configs green (301/301 win-debug).
 - **2026-05-02** — `crd-jobs` v1c Chase-Lev work-stealing deque shipped; all 6 configs green (291/291 win-debug).
 - **2026-05-02** — `crd-jobs` v1b fiber pool shipped; renderer LTO fix; all 6 configs green (279/279 win-debug).
