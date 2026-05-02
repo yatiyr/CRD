@@ -145,8 +145,8 @@ else()
         $<$<COMPILE_LANGUAGE:CXX,C>:-Wconversion>
         $<$<COMPILE_LANGUAGE:CXX,C>:-Wshadow>
         $<$<COMPILE_LANGUAGE:CXX,C>:-Wdouble-promotion>
-        $<$<COMPILE_LANGUAGE:CXX,C>:-Wnon-virtual-dtor>
-        $<$<COMPILE_LANGUAGE:CXX,C>:-Woverloaded-virtual>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wnon-virtual-dtor>
+        $<$<COMPILE_LANGUAGE:CXX>:-Woverloaded-virtual>
         $<$<COMPILE_LANGUAGE:CXX,C>:-Wnull-dereference>
         $<$<COMPILE_LANGUAGE:CXX,C>:-Wformat=2>
     )
