@@ -124,12 +124,12 @@ void crash_signal_handler(int sig, siginfo_t* info, void* /*ctx*/) noexcept
     int header_len = snprintf(header, sizeof(header),
                               "signal %d at %p\n", sig, info->si_addr);
 
-    (void)write(STDERR_FILENO, header, static_cast<size_t>(header_len));
+    [[maybe_unused]] ssize_t r = write(STDERR_FILENO, header, static_cast<size_t>(header_len));
 
     int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd >= 0)
     {
-        (void)write(fd, header, static_cast<size_t>(header_len));
+        r = write(fd, header, static_cast<size_t>(header_len));
 
         void* frames[64];
         int count = backtrace(frames, 64);
@@ -138,7 +138,7 @@ void crash_signal_handler(int sig, siginfo_t* info, void* /*ctx*/) noexcept
 
         char msg[576 + 32];
         int msg_len = snprintf(msg, sizeof(msg), "[crd] crash log: %s\n", path);
-        (void)write(STDERR_FILENO, msg, static_cast<size_t>(msg_len));
+        r = write(STDERR_FILENO, msg, static_cast<size_t>(msg_len));
     }
 
     // Re-raise with the default handler so the OS writes a core dump.

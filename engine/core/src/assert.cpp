@@ -91,14 +91,15 @@ int report_assert_failure(const char* expression, const char* file, int line, co
 
     if (message != nullptr)
     {
-        const char* formatted_string_with_msg =
-            "Assertion failed! \n\t expr: %s \n\t file: %s \n\t line: %d \n\t message: %s\n";
-        std::snprintf(buffer, sizeof(buffer), formatted_string_with_msg, expression, file, line, message);
+        std::snprintf(buffer, sizeof(buffer),
+                      "Assertion failed! \n\t expr: %s \n\t file: %s \n\t line: %d \n\t message: %s\n",
+                      expression, file, line, message);
     }
     else
     {
-        const char* formatted_string_without_msg = "Assertion failed! \n\t expr: %s \n\t file: %s \n\t line: %d\n";
-        std::snprintf(buffer, sizeof(buffer), formatted_string_without_msg, expression, file, line);
+        std::snprintf(buffer, sizeof(buffer),
+                      "Assertion failed! \n\t expr: %s \n\t file: %s \n\t line: %d\n",
+                      expression, file, line);
     }
 
     // Optional bridge: route to crd-log (or any other subsystem) BEFORE
