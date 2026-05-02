@@ -24,4 +24,10 @@ target_link_libraries(crd-jobs
 )
 
 target_compile_features(crd-jobs PUBLIC cxx_std_20)
+
+# Hand-rolled asm context switch is incompatible with MSVC LTO (/GL+/LTCG):
+# the linker can rewrite call sequences across TU boundaries in ways that break
+# the fiber trampoline's assumptions about register state on entry.
+set_target_properties(crd-jobs PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
+
 crd_enable_default_pch(crd-jobs)

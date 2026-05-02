@@ -30,7 +30,7 @@
 | 2.2   GPU memory + streaming    | ✅ shipped       | `docs/phases/phase-2-graphics.md`        |
 | 2.3   Shader system             | ✅ shipped (a–g) | `docs/phases/phase-2.3-shader.md`        |
 | 2.4   Renderer v1               | 🚧 active        | `docs/phases/phase-2-graphics.md` (v1a–i shipped; v1j = GPU instancing, Phase 3.2 dep) |
-| 2.5   Jobs (threads + fibers)   | 🚧 active        | `docs/phases/phase-2.5-jobs.md` (v1a–g shipped; v1h–k planned; ADR-0033) |
+| 2.5   Jobs (threads + fibers)   | ✅ shipped       | `docs/phases/phase-2.5-jobs.md` (v1a–v1k all shipped; ADR-0033) |
 | 2.6   Resources + asset cooker  | ⏳               | `docs/phases/phase-2-graphics.md`        |
 | 3     Simulation foundation     | ⏳               | `docs/phases/phase-3-simulation.md` (3.0 scene/ECS → 3.1 physics → 3.2 animation → 3.3 audio → 3.4–3.6) |
 | 4     Extensibility + Networking | ⏳              | `docs/phases/phase-4-extensibility.md` (4.0 C++ scripting, 4.1 advanced math, 4.2 networking; ADR-0034, ADR-0035) |
@@ -63,14 +63,14 @@ Direction, not commitment.
 - Stable Vulkan backend, GPU allocator strategy in place
 - Shader system v1 with hot-reload, variant keys, pipeline handoff
 - Renderer v1a–i (Clustered Forward+, frame graph, descriptor system, material system)
-- Jobs foundation v1a–g (fiber pool, work-stealing deque, scheduler, counter/wait, worker pool)
+- **Jobs system v1 complete** (v1a–v1k): fiber pool, work-stealing deque, ABA-safe scheduler, counter/wait, worker pool, public API (`run`/`wait`/`make_job`/`parallel_for`), 41-byte SBO, per-frame arena, crd-app wired
 - ImGui debug tooling; crd-config TOML substrate
 
 ### 6–12 months (mid-2026 to early 2027)
-- `crd-jobs` v1 complete (v1h–k: public API `run()`/`wait()`, SBO lambdas, `parallel_for`, per-frame allocator)
 - Resource system + asset cooker (Phase 2.6): handle table, ref-counted assets, hot-reload notifications, cooked binary format
 - Scene/ECS foundation (Phase 3.0): hybrid hierarchy + SoA component storage + TOML authoring → cooked binary
 - Physics integration (Phase 3.1): PhysX 5 backend + scene transform sync + fixed-step option
+- Animation foundation (Phase 3.2): skeletal, blend trees, IK
 
 ### 12–24 months (2027–2028)
 - Animation + audio complete (Phase 3.2–3.3): skeletal, blend trees, IK, spatialized audio, DAW plugin host scaffold

@@ -115,8 +115,9 @@ auto sub = app.event_bus().subscribe<AssetReloadedEvent>([](AssetReloadedEvent&)
 
 - Event bus may gain an **async** path later, but only once there is a real
   cross-thread producer/consumer need.
-- `crd-app` stays graphics-agnostic. Early graphics work will plug in via
-  one or more layers rather than adding a hard dependency from `crd-app`
-  to `crd-rhi`, `crd-rhi-vulkan`, or `crd-renderer`.
-- The next immediate consumer is the first graphics bootstrap session:
-  one render-aware layer driving the first-triangle milestone.
+- `crd-app` links `crd-jobs` **PUBLIC** (Phase 2.5 wiring, v1k). `Application::run()`
+  calls `jobs::init(m_desc.jobs_config)` before the tick loop and `jobs::shutdown()` after.
+  `ApplicationDesc` carries a `crd::jobs::Config jobs_config{}` field so callers can tune
+  the thread count, fiber pool sizes, and frame arena capacity without touching the loop.
+- Graphics, physics, and other engine systems plug in as layers. `crd-app` itself does not
+  depend on `crd-rhi`, `crd-rhi-vulkan`, or `crd-renderer`.

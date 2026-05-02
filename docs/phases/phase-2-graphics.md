@@ -1,6 +1,6 @@
 ﻿# Phase 2 — Graphics foundation
 
-**Status:** 🚧 active — 2.0–2.3 + renderer v1a–i shipped; v1j (GPU instancing, Phase 3.2 dep) next
+**Status:** 🚧 active — 2.0–2.5 shipped; renderer v1j (GPU instancing, Phase 3.2 dep) and 2.6 resources next
 
 Vulkan-first, layered:
 
@@ -20,13 +20,13 @@ Vulkan-first, layered:
 | 2.2   | GPU memory + streaming           |   ✅   | centralized allocator-backed buffer/image path shipped; broader policy still ahead   |
 | 2.3   | `crd-shader`                     |   ✅   | detailed design packet: `docs/phases/phase-2.3-shader.md`                            |
 | 2.4   | `crd-renderer` v1                |   🚧   | v1a–i shipped; v1j (GPU instancing, Phase 3.2 dep) next                              |
-| 2.5   | `crd-jobs`                       |   🚧   | fiber job system; v1a–k planned; design packet: `docs/phases/phase-2.5-jobs.md`     |
+| 2.5   | `crd-jobs`                       |   ✅   | fiber job system; v1a–v1k all shipped; design packet: `docs/phases/phase-2.5-jobs.md` |
 | 2.6   | `crd-resources` + `asset_cooker` |   ⏳   | async load, LRU, refcounted handles, runtime binary; cooker is a separate exe        |
 
 ## Near-term execution order
 
-1. **`crd-jobs` (2.5)** — thread pool + fiber tasks; async pipeline compile, async upload
-2. **`crd-resources` + `asset_cooker` (2.6)** — async load, LRU, refcounted handles, runtime binary
+1. **`crd-resources` + `asset_cooker` (2.6)** — async load, LRU, refcounted handles, runtime binary (jobs 2.5 now available as async backbone)
+2. **renderer v1j** — GPU instancing (Phase 3.2 dep; see `docs/debt.md`)
 
 ## Decisions
 

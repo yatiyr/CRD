@@ -204,7 +204,7 @@ queue.present(*swapchain);
 ## Long-term direction
 
 - v1i completes the first end-to-end frame loop (renderable on screen)
-- Phase 2.5 (`crd-jobs`) brings async pipeline compilation and async upload
+- Phase 2.5 (`crd-jobs`) shipped — async pipeline compilation and async upload are now possible
 - Phase 2.6 (`crd-resources`) brings real mesh loading and GPU streaming
 - Phase 3 brings scene/ECS systems; renderer becomes a scene consumer
 - `ForwardPlusRenderPath` follows `ForwardRenderPath` once the clustered

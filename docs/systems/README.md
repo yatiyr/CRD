@@ -17,7 +17,8 @@ engine *is*; read `docs/sessions/` to remember how it got that way.
 | `crd-imgui`      | ✅        | [imgui.md](imgui.md) — debug-only overlay, docking branch |
 | `crd-rhi`        | ✅        | [rhi.md](rhi.md) — Vulkan backend; descriptor system; index buffer |
 | `crd-shader`     | ✅ (2.3g) | [shader.md](shader.md) — GLSL ingest, SPIR-V, reflection, hot-reload, pipeline handoff |
-| `crd-renderer`   | 🚧 (v1h) | [renderer.md](renderer.md) — frame graph, IRenderPath, material system, ForwardRenderPath |
+| `crd-renderer`   | 🚧 (v1i) | [renderer.md](renderer.md) — frame graph, IRenderPath, material system, ForwardRenderPath, swapchain blit |
+| `crd-jobs`       | ✅ (v1k) | [jobs.md](jobs.md) — fiber job system; run/wait/parallel_for; SBO lambdas; frame allocator |
 
 When a new module ships, add a row here and link to its overview. If a module
 gets a long-form deep-dive document (like `LOG_FILE.md`), link to that too —

@@ -11,6 +11,7 @@ jobs:
     runs-on: windows-latest
     env:
       CPM_SOURCE_CACHE: ${{ github.workspace }}\.cpm-cache
+      CRD_PLATFORM_HEADLESS: '1'
 
     strategy:
       fail-fast: false
@@ -200,6 +201,33 @@ jobs:
 
       - name: Setup Ninja
         uses: seanmiddleditch/gha-setup-ninja@v5
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y \
+            libvulkan-dev \
+            glslang-tools \
+            libshaderc-dev \
+            libwayland-dev \
+            wayland-protocols \
+            libxkbcommon-dev \
+            libx11-dev \
+            libxrandr-dev \
+            libxinerama-dev \
+            libxcursor-dev \
+            libxi-dev
+
+      - name: Fetch SPIRV-Reflect source
+        run: |
+          mkdir -p /tmp/vulkan-sdk/Source/SPIRV-Reflect
+          wget -q --fail \
+            https://raw.githubusercontent.com/KhronosGroup/SPIRV-Reflect/vulkan-sdk-1.3.290.0/spirv_reflect.h \
+            -O /tmp/vulkan-sdk/Source/SPIRV-Reflect/spirv_reflect.h
+          wget -q --fail \
+            https://raw.githubusercontent.com/KhronosGroup/SPIRV-Reflect/vulkan-sdk-1.3.290.0/spirv_reflect.c \
+            -O /tmp/vulkan-sdk/Source/SPIRV-Reflect/spirv_reflect.c
+          echo "VULKAN_SDK=/tmp/vulkan-sdk" >> $GITHUB_ENV
 
       - name: Cache CPM downloads
         uses: actions/cache@v4

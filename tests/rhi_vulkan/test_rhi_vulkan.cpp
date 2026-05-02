@@ -19,6 +19,12 @@ namespace
 
 TEST_CASE("Vulkan instance enumerates at least one adapter", "[rhi][vulkan]")
 {
+    if (headless_requested())
+    {
+        SUCCEED("CRD_PLATFORM_HEADLESS=1, skipping Vulkan adapter enumeration test");
+        return;
+    }
+
     auto instance = crd::rhi::create_vulkan_instance({});
     REQUIRE(instance != nullptr);
 
