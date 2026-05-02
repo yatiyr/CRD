@@ -30,4 +30,16 @@ target_compile_features(crd-jobs PUBLIC cxx_std_20)
 # the fiber trampoline's assumptions about register state on entry.
 set_target_properties(crd-jobs PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
 
+# Diagnostic: compile the two files that contain fiber context-switch logic
+# with /Od on MSVC to isolate whether the win-release SEGFAULT is caused by
+# /O2 optimizations in worker_pool.cpp or fiber_init.cpp specifically.
+# Remove once the root cause is identified and fixed.
+if(MSVC)
+    set_source_files_properties(
+        src/worker_pool.cpp
+        src/fiber_init.cpp
+        PROPERTIES COMPILE_FLAGS "/Od"
+    )
+endif()
+
 crd_enable_default_pch(crd-jobs)

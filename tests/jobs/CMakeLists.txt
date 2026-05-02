@@ -5,7 +5,7 @@ add_executable(crd-jobs-tests ${TEST_SOURCES})
 target_link_libraries(crd-jobs-tests PRIVATE
     crd-core
     crd-jobs
-    Catch2::Catch2WithMain
+    Catch2::Catch2
 )
 
 crd_enable_default_pch(crd-jobs-tests)
