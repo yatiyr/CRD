@@ -23,4 +23,9 @@ target_include_directories(crd-core
 )
 
 target_compile_features(crd-core PUBLIC cxx_std_20)
+
+if(WIN32)
+    target_link_libraries(crd-core PRIVATE dbghelp)
+endif()
+
 crd_enable_default_pch(crd-core)

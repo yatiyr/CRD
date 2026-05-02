@@ -2,6 +2,7 @@
 
 #include <crd/app/event_bus.hpp>
 #include <crd/app/layer_stack.hpp>
+#include <crd/core/crash.hpp>
 #include <crd/jobs/jobs.hpp>
 #include <crd/platform/platform.hpp>
 
@@ -14,6 +15,8 @@ struct ApplicationDesc
     crd::platform::WindowDesc window{};
     crd::usize                platform_event_queue_capacity = 128;
     crd::jobs::Config         jobs_config{};
+    const char*               crash_dir             = "./crashes";
+    bool                      install_crash_handler = true;
 };
 
 class Application

@@ -17,6 +17,7 @@ option(CRD_ENABLE_ASSERTS   "Enable CRD_ASSERT macros"        ON)
 option(CRD_ENABLE_PROFILING "Enable profiling instrumentation" OFF)
 option(CRD_ENABLE_ASAN      "Enable Address Sanitizer"         OFF)
 option(CRD_ENABLE_UBSAN     "Enable Undefined Behavior San."   OFF)
+option(CRD_SHIPPING         "Maximum optimizations + debug symbol generation for crash diagnostics" OFF)
 option(CRD_ENABLE_CLANG_TIDY "Run clang-tidy during build" OFF)
 option(CRD_ENABLE_PCH       "Enable default precompiled headers" ON)
 
@@ -83,6 +84,39 @@ if(CRD_ENABLE_UBSAN)
         add_link_options(-fsanitize=undefined)
         message(STATUS "[crd] UB Sanitizer ENABLED")
     endif()
+endif()
+
+# ----- Shipping optimizations + debug symbols --------------------------------
+
+if(CRD_SHIPPING)
+    if(MSVC)
+        # /fp:fast  - allow float reassociation, no NaN/Inf checks
+        # /arch:AVX2 - target AVX2 (all x86 desktops since ~2013)
+        # /Gw        - place each global in its own COMDAT for dead-stripping
+        # /Zi        - emit a separate PDB (required for crash dump symbolication)
+        add_compile_options(
+            $<$<COMPILE_LANGUAGE:CXX,C>:/fp:fast>
+            $<$<COMPILE_LANGUAGE:CXX,C>:/arch:AVX2>
+            $<$<COMPILE_LANGUAGE:CXX,C>:/Gw>
+            $<$<COMPILE_LANGUAGE:CXX,C>:/Zi>
+        )
+        # /DEBUG:FULL  - full PDB (not /DEBUG:FASTLINK) — required for WinDbg post-mortem
+        # /OPT:REF     - strip unreferenced functions (dead code elimination)
+        # /OPT:ICF     - merge identical COMDATs (binary size reduction)
+        add_link_options(/DEBUG:FULL /OPT:REF /OPT:ICF)
+    else()
+        # x86-64-v3 = AVX2 + FMA3 + BMI + BMI2 + MOVBE (2013+ desktops)
+        # -ffast-math   - fast floating point (implies -fno-math-errno etc.)
+        # -g             - always emit DWARF debug info for crash symbolication
+        # --build-id     - embed a unique build ID so crash reports can identify the binary
+        add_compile_options(
+            $<$<COMPILE_LANGUAGE:CXX,C>:-march=x86-64-v3>
+            $<$<COMPILE_LANGUAGE:CXX,C>:-ffast-math>
+            $<$<COMPILE_LANGUAGE:CXX,C>:-g>
+        )
+        add_link_options(-Wl,--build-id)
+    endif()
+    message(STATUS "[crd] Shipping: max optimizations + debug symbols ON")
 endif()
 
 # ----- Compiler Warnings --------------------------------------------------

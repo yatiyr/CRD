@@ -54,31 +54,27 @@
                 "CMAKE_CXX_COMPILER": "g++"
             }
         },
-        {
-            "name": "win-debug",
-            "displayName": "Windows Debug",
-            "inherits": "win-base",
-            "cacheVariables":
-            {
-                "CMAKE_BUILD_TYPE": "Debug",
-                "CRD_ENABLE_ASSERTS": "ON",
-                "CRD_ENABLE_PROFILING": "ON"
-            }
+
+        { "name": "win-debug",
+          "displayName": "Windows Debug",
+          "inherits": "win-base",
+          "cacheVariables": {
+            "CMAKE_BUILD_TYPE": "Debug",
+            "CRD_ENABLE_ASSERTS": "ON",
+            "CRD_ENABLE_PROFILING": "ON"
+          }
         },
-        {
-            "name": "win-release",
-            "displayName": "Windows Release",
-            "inherits": "win-base",
-            "cacheVariables":
-            {
-                "CMAKE_BUILD_TYPE": "Release",
-                "CMAKE_INTERPROCEDURAL_OPTIMIZATION": "ON",
-                "CRD_ENABLE_ASSERTS": "OFF",
-                "CRD_ENABLE_PROFILING": "OFF"
-            }
+        { "name": "win-release",
+          "displayName": "Windows Release",
+          "inherits": "win-base",
+          "cacheVariables": {
+            "CMAKE_BUILD_TYPE": "Release",
+            "CMAKE_INTERPROCEDURAL_OPTIMIZATION": "ON",
+            "CRD_ENABLE_ASSERTS": "OFF",
+            "CRD_ENABLE_PROFILING": "OFF"
+          }
         },
-        {
-          "name": "win-relwithdebinfo",
+        { "name": "win-relwithdebinfo",
           "displayName": "Windows RelWithDebInfo",
           "inherits": "win-base",
           "cacheVariables": {
@@ -88,24 +84,21 @@
             "CRD_ENABLE_PROFILING": "ON"
           }
         },
-        {
-          "name": "win-asan",
+        { "name": "win-asan",
           "displayName": "Windows Debug + ASan",
           "inherits": "win-debug",
           "cacheVariables": {
             "CRD_ENABLE_ASAN": "ON"
           }
         },
-        {
-          "name": "win-tidy",
+        { "name": "win-tidy",
           "displayName": "Windows Debug + clang-tidy",
           "inherits": "win-debug",
           "cacheVariables": {
-            "CRD_ENABLE_CLANG_TIDY":  "ON"
+            "CRD_ENABLE_CLANG_TIDY": "ON"
           }
         },
-        {
-          "name": "win-clang-cl",
+        { "name": "win-clang-cl",
           "displayName": "Windows Debug + clang-cl",
           "inherits": "win-base",
           "cacheVariables": {
@@ -116,8 +109,17 @@
             "CRD_ENABLE_PROFILING": "ON"
           }
         },
-        {
-          "name": "linux-gcc-debug",
+        { "name": "win-shipping",
+          "displayName": "Windows Shipping (max opts + PDB for crash diagnostics)",
+          "inherits": "win-release",
+          "cacheVariables": {
+            "CRD_BUILD_TESTS": "OFF",
+            "CRD_BUILD_BENCHMARKS": "OFF",
+            "CRD_SHIPPING": "ON"
+          }
+        },
+
+        { "name": "linux-gcc-debug",
           "displayName": "Linux GCC Debug",
           "inherits": "linux-base",
           "cacheVariables": {
@@ -125,50 +127,94 @@
             "CRD_ENABLE_ASSERTS": "ON",
             "CRD_ENABLE_PROFILING": "ON"
           }
+        },
+        { "name": "linux-gcc-release",
+          "displayName": "Linux GCC Release",
+          "inherits": "linux-base",
+          "cacheVariables": {
+            "CMAKE_BUILD_TYPE": "Release",
+            "CMAKE_INTERPROCEDURAL_OPTIMIZATION": "ON",
+            "CRD_ENABLE_ASSERTS": "OFF",
+            "CRD_ENABLE_PROFILING": "OFF"
+          }
+        },
+        { "name": "linux-gcc-asan",
+          "displayName": "Linux GCC Debug + ASan + UBSan",
+          "inherits": "linux-base",
+          "cacheVariables": {
+            "CMAKE_BUILD_TYPE": "Debug",
+            "CRD_ENABLE_ASSERTS": "ON",
+            "CRD_ENABLE_PROFILING": "ON",
+            "CRD_ENABLE_ASAN": "ON",
+            "CRD_ENABLE_UBSAN": "ON"
+          }
+        },
+        { "name": "linux-gcc-shipping",
+          "displayName": "Linux GCC Shipping (max opts + DWARF for crash diagnostics)",
+          "inherits": "linux-base",
+          "cacheVariables": {
+            "CMAKE_BUILD_TYPE": "Release",
+            "CMAKE_INTERPROCEDURAL_OPTIMIZATION": "ON",
+            "CRD_BUILD_TESTS": "OFF",
+            "CRD_BUILD_BENCHMARKS": "OFF",
+            "CRD_SHIPPING": "ON"
+          }
         }
     ],
     "buildPresets":
     [
-        { "name": "win-debug", "configurePreset": "win-debug" },
-        { "name": "win-release", "configurePreset": "win-release" },
-        { "name": "win-asan", "configurePreset": "win-asan" },
-        { "name": "win-tidy", "configurePreset": "win-tidy" },
-        { "name": "win-relwithdebinfo", "configurePreset": "win-relwithdebinfo" },
-        { "name": "win-clang-cl", "configurePreset": "win-clang-cl" },
-        { "name": "linux-gcc-debug", "configurePreset": "linux-gcc-debug" }
-        
+        { "name": "win-debug",           "configurePreset": "win-debug" },
+        { "name": "win-release",         "configurePreset": "win-release" },
+        { "name": "win-relwithdebinfo",  "configurePreset": "win-relwithdebinfo" },
+        { "name": "win-asan",            "configurePreset": "win-asan" },
+        { "name": "win-tidy",            "configurePreset": "win-tidy" },
+        { "name": "win-clang-cl",        "configurePreset": "win-clang-cl" },
+        { "name": "win-shipping",        "configurePreset": "win-shipping" },
+        { "name": "linux-gcc-debug",     "configurePreset": "linux-gcc-debug" },
+        { "name": "linux-gcc-release",   "configurePreset": "linux-gcc-release" },
+        { "name": "linux-gcc-asan",      "configurePreset": "linux-gcc-asan" },
+        { "name": "linux-gcc-shipping",  "configurePreset": "linux-gcc-shipping" }
     ],
     "testPresets":
     [
-        {
-            "name": "win-debug",
-            "configurePreset": "win-debug",
-            "output": { "outputOnFailure": true }
+        { "name": "win-debug",
+          "configurePreset": "win-debug",
+          "output": { "outputOnFailure": true }
         },
-        {
-            "name": "win-release",
-            "configurePreset": "win-release",
-            "output": { "outputOnFailure": true }
+        { "name": "win-release",
+          "configurePreset": "win-release",
+          "output": { "outputOnFailure": true }
         },
-        {
-            "name": "win-asan",
-            "configurePreset": "win-asan",
-            "output": { "outputOnFailure": true }
+        { "name": "win-relwithdebinfo",
+          "configurePreset": "win-relwithdebinfo",
+          "output": { "outputOnFailure": true }
         },
-        {
-            "name": "win-relwithdebinfo",
-            "configurePreset": "win-relwithdebinfo",
-            "output": { "outputOnFailure": true }
+        { "name": "win-asan",
+          "configurePreset": "win-asan",
+          "output": { "outputOnFailure": true }
         },
-        {
-            "name": "win-clang-cl",
-            "configurePreset": "win-clang-cl",
-            "output": { "outputOnFailure": true }
+        { "name": "win-clang-cl",
+          "configurePreset": "win-clang-cl",
+          "output": { "outputOnFailure": true }
         },
-        {
-            "name": "win-tidy",
-            "configurePreset": "win-tidy",
-            "output": { "outputOnFailure": true }
+        { "name": "win-tidy",
+          "configurePreset": "win-tidy",
+          "output": { "outputOnFailure": true }
+        },
+        { "name": "linux-gcc-debug",
+          "configurePreset": "linux-gcc-debug",
+          "output": { "outputOnFailure": true }
+        },
+        { "name": "linux-gcc-release",
+          "configurePreset": "linux-gcc-release",
+          "output": { "outputOnFailure": true }
+        },
+        { "name": "linux-gcc-asan",
+          "configurePreset": "linux-gcc-asan",
+          "output": { "outputOnFailure": true },
+          "environment": {
+            "UBSAN_OPTIONS": "print_stacktrace=1"
+          }
         }
     ]
 }

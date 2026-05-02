@@ -194,6 +194,12 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpm-cache
+      CRD_PLATFORM_HEADLESS: '1'
+
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: [linux-gcc-debug, linux-gcc-release, linux-gcc-asan]
 
     steps:
       - name: Checkout
@@ -233,13 +239,16 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.CPM_SOURCE_CACHE }}
-          key: cpm-${{ runner.os }}-linux-gcc-debug-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'cmake/CPM.cmake') }}
+          key: cpm-${{ runner.os }}-${{ matrix.preset }}-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'cmake/CPM.cmake') }}
           restore-keys: |
-            cpm-${{ runner.os }}-linux-gcc-debug-
+            cpm-${{ runner.os }}-${{ matrix.preset }}-
             cpm-${{ runner.os }}-
 
       - name: Configure
-        run: cmake --preset linux-gcc-debug
+        run: cmake --preset ${{ matrix.preset }}
 
       - name: Build
-        run: cmake --build --preset linux-gcc-debug
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Test
+        run: ctest --preset ${{ matrix.preset }} --output-on-failure

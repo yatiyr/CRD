@@ -8,6 +8,9 @@ namespace crd::app
 Application::Application(const ApplicationDesc& desc)
     : m_desc(desc), m_context(crd::platform::PlatformContext::create())
 {
+    if (m_desc.install_crash_handler)
+        crd::crash::install(m_desc.crash_dir);
+
     if (!m_context.is_valid())
     {
         return;
@@ -31,6 +34,9 @@ Application::~Application() noexcept
     {
         (*it)->on_detach();
     }
+
+    if (m_desc.install_crash_handler)
+        crd::crash::uninstall();
 }
 
 void Application::run()
