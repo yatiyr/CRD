@@ -7,6 +7,9 @@
 namespace crd::jobs::detail
 {
 
+// Forward-declared here to avoid a circular include with counter.hpp.
+struct Counter;
+
 enum class FiberTier : crd::u8 { Small, Medium, Large };
 
 // Sentinel value for the Treiber free-list link — means "no next fiber".
@@ -42,6 +45,7 @@ struct Fiber
     crd::u32   pool_index    = kFiberNullIndex; // stable index in the tier's fibers[] array
     crd::u32   next_free     = kFiberNullIndex; // Treiber stack link; kFiberNullIndex = end-of-list
     FiberTier  tier          = FiberTier::Small;
+    Counter*   job_counter   = nullptr;         // counter to decrement when this fiber's job completes
 
 #if CRD_ENABLE_ASSERTS
     FiberState state = FiberState::Idle;

@@ -3,6 +3,7 @@
 #include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
 
+#include <cstring>
 #include <thread>
 
 namespace crd::jobs::detail
@@ -76,8 +77,23 @@ static void job_fiber_trampoline() noexcept
     {
         tl_job_fn(tl_job_data);
 
+        // Decrement the fiber's associated counter (if any) and wake satisfied waiters.
+        // Read from the fiber struct so the counter survives fiber suspension + resume.
         Fiber* const done = tl_fiber;
         tl_fiber = nullptr;    // completion signal: run_job_in_fiber checks this
+        Counter* const c = done->job_counter;
+        done->job_counter = nullptr;
+        if (c != nullptr)
+        {
+            Waiter* woken = counter_decrement(c);
+            while (woken != nullptr)
+            {
+                Waiter* const next = woken->next.load(std::memory_order_relaxed);
+                tl_pool_ptr->enqueue_fiber_resume(woken->fiber);
+                woken = next;
+            }
+        }
+
         fiber_switch(&done->context, &tl_sched_ctx);
     }
 }
@@ -128,6 +144,8 @@ void WorkerPool::run_job_in_fiber(const crd::jobs::JobDecl& job)
         target = static_cast<Fiber*>(job.data);
         CRD_ASSERT_MSG(target != nullptr,
                        "run_job_in_fiber: resume sentinel carries null fiber pointer");
+        // job_counter stays in target->job_counter from when the fiber was first launched;
+        // no update needed here — the fiber's counter survives suspension.
     }
     else
     {
@@ -136,6 +154,9 @@ void WorkerPool::run_job_in_fiber(const crd::jobs::JobDecl& job)
             return; // pool exhausted: CRD_ASSERT already fired inside acquire()
         tl_job_fn   = job.fn;
         tl_job_data = job.data;
+        Counter* cp = nullptr;
+        std::memcpy(&cp, &job._pad[0], sizeof(cp));
+        target->job_counter = cp;
     }
 
     tl_fiber = target;
@@ -144,7 +165,8 @@ void WorkerPool::run_job_in_fiber(const crd::jobs::JobDecl& job)
     // Back on the OS (scheduler) stack.
     if (tl_fiber == nullptr)
     {
-        // Job completed — rebuild the initial stack frame so the fiber is clean on re-use.
+        // Job completed — the trampoline already cleared target->job_counter.
+        // Rebuild the initial stack frame so the fiber is clean on re-use.
         fiber_init_stack(target->context, target->usable_base, target->usable_size, target->trampoline);
         m_fiber_pool.release(target);
     }

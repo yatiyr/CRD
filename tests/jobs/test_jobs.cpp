@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "../../engine/jobs/src/worker_pool.hpp"
+#include <crd/jobs/jobs.hpp>
 #include <crd/core/types.hpp>
 
 #include <atomic>
@@ -250,4 +251,166 @@ TEST_CASE("worker_pool: concurrent multi-thread stress", "[jobs][worker_pool]")
 
     REQUIRE(spin_until(done, kJobs, 10000));
     pool.shutdown();
+}
+
+// ===========================================================================
+// v1h — Public API (crd::jobs::init / run / wait / run_and_wait)
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// 11. init + shutdown + introspection
+// ---------------------------------------------------------------------------
+
+TEST_CASE("jobs: init and shutdown", "[jobs][public-api]")
+{
+    crd::jobs::Config cfg;
+    cfg.num_threads = 2u;
+    crd::jobs::init(cfg);
+
+    CHECK(crd::jobs::num_workers() == 2u);
+    CHECK(crd::jobs::worker_index() == 0u);    // main thread is thread 0
+    CHECK_FALSE(crd::jobs::is_worker_fiber()); // main thread is not inside a fiber
+
+    crd::jobs::shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// 12. run() executes jobs on worker threads; wait() from main thread (spin path)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("jobs: run and wait from main thread", "[jobs][public-api]")
+{
+    crd::jobs::Config cfg;
+    cfg.num_threads = 2u; // background worker required for the spin-wait path
+    crd::jobs::init(cfg);
+
+    constexpr int kN = 20;
+    std::atomic<int> count{0};
+
+    crd::jobs::JobDecl jobs[kN];
+    for (auto& j : jobs)
+    {
+        j.fn   = [](void* d)
+        {
+            static_cast<std::atomic<int>*>(d)->fetch_add(1, std::memory_order_release);
+        };
+        j.data = &count;
+    }
+
+    crd::jobs::Counter* c = crd::jobs::run(std::span(jobs, kN));
+    crd::jobs::wait(c); // spin-waits on main thread until all 20 jobs complete
+
+    CHECK(count.load() == kN);
+
+    crd::jobs::shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// 13. run_and_wait() from inside a worker fiber
+// ---------------------------------------------------------------------------
+
+TEST_CASE("jobs: run_and_wait from inside a worker fiber", "[jobs][public-api]")
+{
+    crd::jobs::Config cfg;
+    cfg.num_threads = 2u;
+    crd::jobs::init(cfg);
+
+    struct RootData
+    {
+        std::atomic<int>* child_count;
+        std::atomic<bool>* root_done;
+    };
+
+    std::atomic<int>  child_count{0};
+    std::atomic<bool> root_done{false};
+    static RootData rd;
+    rd = {&child_count, &root_done};
+
+    crd::jobs::JobDecl root{};
+    root.fn = [](void* d)
+    {
+        auto* data = static_cast<RootData*>(d);
+
+        constexpr int kChildren = 8;
+        crd::jobs::JobDecl children[kChildren];
+        for (auto& child : children)
+        {
+            child.fn   = [](void* dc)
+            {
+                static_cast<std::atomic<int>*>(dc)->fetch_add(1, std::memory_order_release);
+            };
+            child.data = data->child_count;
+        }
+
+        // wait() here runs the fiber-suspend path (we are inside a fiber).
+        crd::jobs::run_and_wait(std::span(children, kChildren));
+
+        data->root_done->store(true, std::memory_order_release);
+    };
+    root.data = &rd;
+
+    // Submit root via run(); wait() from main thread uses the spin path.
+    crd::jobs::Counter* c = crd::jobs::run(root);
+    crd::jobs::wait(c);
+
+    CHECK(child_count.load() == 8);
+    CHECK(root_done.load());
+
+    crd::jobs::shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// 14. is_worker_fiber() returns true inside a job
+// ---------------------------------------------------------------------------
+
+TEST_CASE("jobs: is_worker_fiber returns true inside a job", "[jobs][public-api]")
+{
+    crd::jobs::Config cfg;
+    cfg.num_threads = 2u;
+    crd::jobs::init(cfg);
+
+    std::atomic<bool> saw_fiber{false};
+
+    crd::jobs::JobDecl j{};
+    j.fn   = [](void* d)
+    {
+        static_cast<std::atomic<bool>*>(d)->store(
+            crd::jobs::is_worker_fiber(), std::memory_order_release);
+    };
+    j.data = &saw_fiber;
+
+    crd::jobs::wait(crd::jobs::run(j));
+    CHECK(saw_fiber.load());
+
+    crd::jobs::shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// 15. Stress: many parallel jobs via public API
+// ---------------------------------------------------------------------------
+
+TEST_CASE("jobs: stress many parallel jobs via public API", "[jobs][public-api]")
+{
+    crd::jobs::Config cfg;
+    cfg.num_threads       = 4u;
+    cfg.small_fiber_count = 128u;
+    crd::jobs::init(cfg);
+
+    constexpr int kN = 500;
+    std::atomic<int> count{0};
+
+    crd::jobs::JobDecl jobs[kN];
+    for (auto& j : jobs)
+    {
+        j.fn   = [](void* d)
+        {
+            static_cast<std::atomic<int>*>(d)->fetch_add(1, std::memory_order_release);
+        };
+        j.data = &count;
+    }
+
+    crd::jobs::wait(crd::jobs::run(std::span(jobs, kN)));
+    CHECK(count.load() == kN);
+
+    crd::jobs::shutdown();
 }
