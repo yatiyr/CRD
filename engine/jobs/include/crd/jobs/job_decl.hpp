@@ -57,7 +57,7 @@ namespace detail
 {
 // Sentinel stored in JobDecl::_pad[8] by make_job<F> to signal an SBO callable.
 // run_job_in_fiber copies the callable bytes to Fiber::sbo_buf when this flag is set.
-static constexpr crd::u8 kSboFlag = 1u;
+static constexpr crd::u8 kSboFlag = 1U;
 } // namespace detail
 
 } // namespace crd::jobs

@@ -329,7 +329,7 @@ public:
     void enumerate_adapters(crd::containers::Array<crd::rhi::AdapterInfo>& out) const override
     {
         out.push_back(crd::rhi::AdapterInfo{crd::containers::String("Fake GPU"), crd::rhi::AdapterType::DiscreteGpu,
-                                            8ull * 1024ull * 1024ull * 1024ull, true, true});
+                                            8ULL * 1024ULL * 1024ULL * 1024ULL, true, true});
     }
 
     [[nodiscard]] std::unique_ptr<crd::rhi::Device> create_device(const crd::rhi::DeviceDesc& /*desc*/) override
@@ -365,7 +365,7 @@ TEST_CASE("RHI instance enumerates adapters and creates a device", "[rhi][instan
     FakeInstance instance;
     crd::containers::Array<crd::rhi::AdapterInfo> adapters;
     instance.enumerate_adapters(adapters);
-    REQUIRE(adapters.size() == 1u);
+    REQUIRE(adapters.size() == 1U);
     REQUIRE(adapters[0].name == "Fake GPU");
 
     auto device = instance.create_device({});
@@ -384,9 +384,9 @@ TEST_CASE("DescriptorSetLayout creation from bindings", "[rhi][descriptor]")
     };
     auto layout = device.create_descriptor_set_layout({crd::containers::make_span(bindings)});
     REQUIRE(layout != nullptr);
-    REQUIRE(layout->desc().bindings.size() == 2u);
-    REQUIRE(layout->desc().bindings[0].binding == 0u);
-    REQUIRE(layout->desc().bindings[1].count == 4u);
+    REQUIRE(layout->desc().bindings.size() == 2U);
+    REQUIRE(layout->desc().bindings[0].binding == 0U);
+    REQUIRE(layout->desc().bindings[1].count == 4U);
     REQUIRE(device.create_descriptor_set_layout_count == 1);
 }
 
@@ -413,9 +413,9 @@ TEST_CASE("PipelineLayout creation with push constants and set layouts", "[rhi][
     });
 
     REQUIRE(pipeline_layout != nullptr);
-    REQUIRE(pipeline_layout->desc().set_layouts.size() == 2u);
-    REQUIRE(pipeline_layout->desc().push_constant_ranges.size() == 1u);
-    REQUIRE(pipeline_layout->desc().push_constant_ranges[0].size == 128u);
+    REQUIRE(pipeline_layout->desc().set_layouts.size() == 2U);
+    REQUIRE(pipeline_layout->desc().push_constant_ranges.size() == 1U);
+    REQUIRE(pipeline_layout->desc().push_constant_ranges[0].size == 128U);
     REQUIRE(device.create_pipeline_layout_count == 1);
 }
 
@@ -433,7 +433,7 @@ TEST_CASE("DescriptorAllocator ring-buffer lifecycle", "[rhi][descriptor]")
     // Frame 0: begin + allocate
     allocator->begin_frame(0);
     REQUIRE(fake_alloc->begin_frame_count == 1);
-    REQUIRE(fake_alloc->last_frame_index == 0u);
+    REQUIRE(fake_alloc->last_frame_index == 0U);
 
     auto set0 = allocator->allocate(*set_layout);
     REQUIRE(set0 != nullptr);
@@ -457,7 +457,7 @@ TEST_CASE("DescriptorSet update_buffer is recorded", "[rhi][descriptor]")
     set.update_buffer(2, *buf, 0, 0);
 
     REQUIRE(set.update_buffer_count == 1);
-    REQUIRE(set.last_binding == 2u);
+    REQUIRE(set.last_binding == 2U);
 }
 
 TEST_CASE("CommandBuffer push_constants and bind_descriptor_sets are recorded", "[rhi][descriptor]")
@@ -478,13 +478,13 @@ TEST_CASE("CommandBuffer push_constants and bind_descriptor_sets are recorded", 
     cmd->bind_descriptor_sets(layout, 0, crd::containers::make_span(sets));
 
     REQUIRE(fake->push_constants_count == 1);
-    REQUIRE(fake->last_push_offset == 0u);
+    REQUIRE(fake->last_push_offset == 0U);
     REQUIRE(fake->last_push_size   == sizeof(push));
     REQUIRE(crd::rhi::has_stage(fake->last_push_stages, crd::rhi::ShaderStage::Vertex));
     REQUIRE(crd::rhi::has_stage(fake->last_push_stages, crd::rhi::ShaderStage::Fragment));
 
     REQUIRE(fake->bind_descriptor_sets_count == 1);
-    REQUIRE(fake->last_first_set   == 0u);
+    REQUIRE(fake->last_first_set   == 0U);
     REQUIRE(fake->last_set_count   == 2);
 }
 
@@ -498,10 +498,10 @@ TEST_CASE("RHI device can express the first-triangle resource flow", "[rhi][devi
     auto fs =
         device.create_shader_module({crd::rhi::ShaderStage::Fragment, "main", crd::containers::make_span(shader_code)});
     auto vb = device.create_buffer(
-        {sizeof(float) * 18u, static_cast<crd::u32>(crd::rhi::BufferUsage::Vertex | crd::rhi::BufferUsage::TransferDst),
+        {sizeof(float) * 18U, static_cast<crd::u32>(crd::rhi::BufferUsage::Vertex | crd::rhi::BufferUsage::TransferDst),
          crd::rhi::MemoryUsage::CpuToGpu});
 
-    crd::rhi::VertexBindingDesc binding{0, sizeof(float) * 6u, crd::rhi::VertexInputRate::Vertex};
+    crd::rhi::VertexBindingDesc binding{0, sizeof(float) * 6U, crd::rhi::VertexInputRate::Vertex};
     crd::rhi::VertexAttributeDesc attrs[] = {{0, 0, crd::rhi::Format::R8G8B8A8Unorm, 0},
                                              {1, 0, crd::rhi::Format::R8G8B8A8Unorm, 16}};
     auto pipeline = device.create_graphics_pipeline({vs.get(),
@@ -524,7 +524,7 @@ TEST_CASE("RHI device can express the first-triangle resource flow", "[rhi][devi
 
     command_buffer->begin();
     command_buffer->begin_rendering(
-        {{1280, 720}, {nullptr, crd::rhi::LoadOp::Clear, crd::rhi::StoreOp::Store, {0.1f, 0.2f, 0.3f, 1.0f}}, nullptr});
+        {{1280, 720}, {nullptr, crd::rhi::LoadOp::Clear, crd::rhi::StoreOp::Store, {0.1F, 0.2F, 0.3F, 1.0F}}, nullptr});
     command_buffer->bind_pipeline(*pipeline);
     command_buffer->bind_vertex_buffer(*vb, 0);
     command_buffer->draw(3, 0);
@@ -543,7 +543,7 @@ TEST_CASE("RHI device can express the first-triangle resource flow", "[rhi][devi
     REQUIRE(cb->bind_pipeline_count == 1);
     REQUIRE(cb->bind_vertex_buffer_count == 1);
     REQUIRE(cb->draw_count == 1);
-    REQUIRE(cb->last_vertex_count == 3u);
+    REQUIRE(cb->last_vertex_count == 3U);
     REQUIRE(device.m_queue.submit_count == 1);
     REQUIRE(device.m_queue.present_count == 1);
 }

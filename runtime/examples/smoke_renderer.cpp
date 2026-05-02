@@ -215,7 +215,7 @@ int main()
 
     // --- Renderer v1d smoke: DrawList bucketing ---
     FakeBuffer vertex_buffer(
-        {sizeof(float) * 15u, crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex), crd::rhi::MemoryUsage::CpuToGpu});
+        {sizeof(float) * 15U, crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex), crd::rhi::MemoryUsage::CpuToGpu});
 
     crd::renderer::Renderer renderer;
 

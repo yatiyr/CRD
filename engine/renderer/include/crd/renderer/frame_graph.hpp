@@ -15,7 +15,7 @@ namespace crd::renderer
 // Typed opaque handle to a frame graph image resource.
 struct ImageHandle
 {
-    static constexpr crd::u32 k_invalid = ~0u;
+    static constexpr crd::u32 k_invalid = ~0U;
     crd::u32 index = k_invalid;
     [[nodiscard]] bool is_valid() const noexcept { return index != k_invalid; }
 };

@@ -83,7 +83,7 @@ int report_assert_failure(const char* expression, const char* file, int line, co
     // Per-site ignore: if this (file, line) was previously ignored, skip silently.
     {
         std::lock_guard<std::mutex> lock(g_ignore_mutex);
-        if (g_ignored_sites.count({file, line}))
+        if (g_ignored_sites.contains({file, line}))
             return 0;
     }
 

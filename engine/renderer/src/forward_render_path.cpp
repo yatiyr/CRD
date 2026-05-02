@@ -22,7 +22,7 @@ ForwardRenderPath::create(rhi::Device& device, PipelineResolver& resolver,
     const rhi::DescriptorBinding per_frame_binding{0, rhi::DescriptorType::UniformBuffer, 1,
                                                    rhi::ShaderStage::Vertex | rhi::ShaderStage::Fragment};
     path->m_per_frame_set_layout = device.create_descriptor_set_layout(
-        {crd::containers::make_span(&per_frame_binding, 1u)});
+        {crd::containers::make_span(&per_frame_binding, 1U)});
     if (!path->m_per_frame_set_layout)
         return nullptr;
 
@@ -32,7 +32,7 @@ ForwardRenderPath::create(rhi::Device& device, PipelineResolver& resolver,
                                             static_cast<crd::u32>(sizeof(PerDrawPush))};
     path->m_pipeline_layout = device.create_pipeline_layout({
         crd::containers::make_span(set_layouts_arr),
-        crd::containers::make_span(&push_range, 1u),
+        crd::containers::make_span(&push_range, 1U),
     });
     if (!path->m_pipeline_layout)
         return nullptr;
@@ -91,11 +91,11 @@ void ForwardRenderPath::build(FrameGraph& fg, const DrawList& draw_list, const F
         ubo->view_proj     = vp;
         ubo->inv_view_proj = crd::math::inverse(vp);
         ubo->camera_pos_ws = crd::math::Vec4f(ctx.camera_position.x, ctx.camera_position.y,
-                                              ctx.camera_position.z, 0.0f);
+                                              ctx.camera_position.z, 0.0F);
         ubo->viewport_width  = static_cast<crd::f32>(m_extent.width);
         ubo->viewport_height = static_cast<crd::f32>(m_extent.height);
-        ubo->time_seconds    = 0.0f;
-        ubo->_pad            = 0.0f;
+        ubo->time_seconds    = 0.0F;
+        ubo->_pad            = 0.0F;
         ubo_buf.unmap();
     }
 
@@ -117,7 +117,7 @@ void ForwardRenderPath::build(FrameGraph& fg, const DrawList& draw_list, const F
         {
             auto* depth = res.get(m_depth_handle);
             const rhi::RenderingDepthAttachmentInfo depth_att{depth, rhi::LoadOp::Clear,
-                                                              rhi::StoreOp::Store, {1.0f, 0}};
+                                                              rhi::StoreOp::Store, {1.0F, 0}};
             cmd.begin_rendering({m_extent,
                                  {nullptr, rhi::LoadOp::DontCare, rhi::StoreOp::DontCare, {}},
                                  &depth_att});
@@ -160,7 +160,7 @@ void ForwardRenderPath::build(FrameGraph& fg, const DrawList& draw_list, const F
 
             const rhi::RenderingColorAttachmentInfo color_att{color, rhi::LoadOp::Clear,
                                                               rhi::StoreOp::Store,
-                                                              {0.07f, 0.08f, 0.12f, 1.0f}};
+                                                              {0.07F, 0.08F, 0.12F, 1.0F}};
             const rhi::RenderingDepthAttachmentInfo depth_att{depth, rhi::LoadOp::Load,
                                                               rhi::StoreOp::Store, {}};
 
@@ -171,7 +171,7 @@ void ForwardRenderPath::build(FrameGraph& fg, const DrawList& draw_list, const F
             {
                 rhi::DescriptorSet* sets[] = {m_per_frame_sets[slot].get()};
                 cmd.bind_descriptor_sets(*m_pipeline_layout, 0,
-                                         crd::containers::make_span(sets, 1u));
+                                         crd::containers::make_span(sets, 1U));
             }
 
             auto draw_items = [&](const crd::containers::Array<DrawItem>& items)

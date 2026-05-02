@@ -75,16 +75,16 @@ TEST_CASE("work_stealing_deque: steal empty returns nullopt", "[jobs][deque]")
 
 TEST_CASE("work_stealing_deque: LIFO ordering via pop", "[jobs][deque]")
 {
-    static constexpr crd::u32 n = 5U;
+    static constexpr crd::u32 kN = 5U;
     WorkStealingDeque<crd::u32> d(16U);
 
-    for (crd::u32 i = 0U; i < n; ++i)
+    for (crd::u32 i = 0U; i < kN; ++i)
     {
         REQUIRE(d.push(i));
     }
 
-    // Pop should give n-1, n-2, ..., 0.
-    for (crd::u32 i = n; i-- > 0U;)
+    // Pop should give kN-1, kN-2, ..., 0.
+    for (crd::u32 i = kN; i-- > 0U;)
     {
         auto v = d.pop();
         REQUIRE(v.has_value());
@@ -100,20 +100,20 @@ TEST_CASE("work_stealing_deque: LIFO ordering via pop", "[jobs][deque]")
 
 TEST_CASE("work_stealing_deque: FIFO ordering via steal", "[jobs][deque]")
 {
-    static constexpr crd::u32 n = 6U;
+    static constexpr crd::u32 kN = 6U;
     WorkStealingDeque<crd::u32> d(16U);
 
-    for (crd::u32 i = 0U; i < n; ++i)
+    for (crd::u32 i = 0U; i < kN; ++i)
     {
         REQUIRE(d.push(i));
     }
 
     // Steal from a separate thread to avoid the "owner" restriction.
     std::vector<crd::u32> stolen;
-    stolen.reserve(n);
+    stolen.reserve(kN);
     std::thread thief([&]()
     {
-        for (crd::u32 i = 0U; i < n; ++i)
+        for (crd::u32 i = 0U; i < kN; ++i)
         {
             auto v = d.steal();
             if (v.has_value())
@@ -124,8 +124,8 @@ TEST_CASE("work_stealing_deque: FIFO ordering via steal", "[jobs][deque]")
     });
     thief.join();
 
-    REQUIRE(stolen.size() == n);
-    for (crd::u32 i = 0U; i < n; ++i)
+    REQUIRE(stolen.size() == kN);
+    for (crd::u32 i = 0U; i < kN; ++i)
     {
         CHECK(stolen.at(i) == i); // first pushed is first stolen (FIFO)
     }
@@ -137,28 +137,28 @@ TEST_CASE("work_stealing_deque: FIFO ordering via steal", "[jobs][deque]")
 
 TEST_CASE("work_stealing_deque: full deque returns false on push", "[jobs][deque]")
 {
-    static constexpr crd::u32 cap = 4U;
+    static constexpr crd::u32 kCap = 4U;
 
 #if CRD_ENABLE_ASSERTS
     crd::set_assert_platform_handler([](const char*) -> int { return 0; });
 #endif
 
-    WorkStealingDeque<crd::u32> d(cap);
-    for (crd::u32 i = 0U; i < cap; ++i)
+    WorkStealingDeque<crd::u32> d(kCap);
+    for (crd::u32 i = 0U; i < kCap; ++i)
     {
         REQUIRE(d.push(i));
     }
 
     // One more push on a full deque must fail.
     CHECK_FALSE(d.push(99U));
-    CHECK(d.size() == static_cast<crd::i64>(cap));
+    CHECK(d.size() == static_cast<crd::i64>(kCap));
 
 #if CRD_ENABLE_ASSERTS
     crd::set_assert_platform_handler(nullptr);
 #endif
 
     // Drain.
-    for (crd::u32 i = 0U; i < cap; ++i)
+    for (crd::u32 i = 0U; i < kCap; ++i)
     {
         (void)d.pop();
     }
@@ -245,9 +245,9 @@ TEST_CASE("work_stealing_deque: last element race", "[jobs][deque]")
     // each trial. We do not assert which side wins — that depends on scheduling
     // and is not a correctness property. The invariant is that the item is
     // never lost and never duplicated.
-    static constexpr int trials = 4000;
+    static constexpr int kTrials = 4000;
 
-    for (int trial = 0; trial < trials; ++trial)
+    for (int trial = 0; trial < kTrials; ++trial)
     {
         WorkStealingDeque<crd::u32> d(4U);
         REQUIRE(d.push(1U));
@@ -284,20 +284,20 @@ TEST_CASE("work_stealing_deque: last element race", "[jobs][deque]")
 TEST_CASE("work_stealing_deque: concurrent steal from pre-filled deque (stress)",
           "[jobs][deque][stress]")
 {
-    static constexpr crd::u32 cap     = 512U;
-    static constexpr crd::u32 items   = 400U;
-    static constexpr crd::u32 thieves = 4U;
+    static constexpr crd::u32 kCap     = 512U;
+    static constexpr crd::u32 kItems   = 400U;
+    static constexpr crd::u32 kThieves = 4U;
 
-    WorkStealingDeque<crd::u32> deque(cap);
+    WorkStealingDeque<crd::u32> deque(kCap);
 
     // Phase 1: fill (single-threaded, no concurrent access).
-    for (crd::u32 i = 0U; i < items; ++i)
+    for (crd::u32 i = 0U; i < kItems; ++i)
     {
         REQUIRE(deque.push(i));
     }
 
     // Track how many times each item value was consumed.
-    std::vector<std::atomic<int>> seen(items);
+    std::vector<std::atomic<int>> seen(kItems);
     for (auto& a : seen)
     {
         a.store(0, std::memory_order_relaxed);
@@ -307,8 +307,8 @@ TEST_CASE("work_stealing_deque: concurrent steal from pre-filled deque (stress)"
 
     // Phase 2: thieves drain concurrently.
     std::vector<std::thread> thief_threads;
-    thief_threads.reserve(thieves);
-    for (crd::u32 t = 0U; t < thieves; ++t)
+    thief_threads.reserve(kThieves);
+    for (crd::u32 t = 0U; t < kThieves; ++t)
     {
         thief_threads.emplace_back([&]()
         {
@@ -341,7 +341,7 @@ TEST_CASE("work_stealing_deque: concurrent steal from pre-filled deque (stress)"
     }
 
     // Every item must have been consumed exactly once.
-    for (crd::u32 i = 0U; i < items; ++i)
+    for (crd::u32 i = 0U; i < kItems; ++i)
     {
         CHECK(seen.at(i).load(std::memory_order_relaxed) == 1);
     }
@@ -359,14 +359,14 @@ TEST_CASE("work_stealing_deque: concurrent steal from pre-filled deque (stress)"
 TEST_CASE("work_stealing_deque: concurrent push pop steal stress",
           "[jobs][deque][stress]")
 {
-    static constexpr crd::u32 cap     = 256U;
-    static constexpr crd::u32 items   = 10'000U;
-    static constexpr crd::u32 thieves = 3U;
-    static constexpr auto     hi_water = static_cast<crd::i64>(cap * 3U / 4U);
+    static constexpr crd::u32 kCap     = 256U;
+    static constexpr crd::u32 kItems   = 10'000U;
+    static constexpr crd::u32 kThieves = 3U;
+    static constexpr auto     kHiWater = static_cast<crd::i64>(kCap * 3U / 4U);
 
-    WorkStealingDeque<crd::u32> deque(cap);
+    WorkStealingDeque<crd::u32> deque(kCap);
 
-    std::vector<std::atomic<int>> seen(items);
+    std::vector<std::atomic<int>> seen(kItems);
     for (auto& a : seen)
     {
         a.store(0, std::memory_order_relaxed);
@@ -375,8 +375,8 @@ TEST_CASE("work_stealing_deque: concurrent push pop steal stress",
     std::atomic<bool> done{false};
 
     std::vector<std::thread> thief_threads;
-    thief_threads.reserve(thieves);
-    for (crd::u32 t = 0U; t < thieves; ++t)
+    thief_threads.reserve(kThieves);
+    for (crd::u32 t = 0U; t < kThieves; ++t)
     {
         thief_threads.emplace_back([&]()
         {
@@ -395,9 +395,9 @@ TEST_CASE("work_stealing_deque: concurrent push pop steal stress",
     }
 
     // Owner: push all items, draining via pop when the deque approaches full.
-    for (crd::u32 i = 0U; i < items; ++i)
+    for (crd::u32 i = 0U; i < kItems; ++i)
     {
-        while (deque.size() >= hi_water)
+        while (deque.size() >= kHiWater)
         {
             if (auto v = deque.pop())
             {
@@ -419,7 +419,7 @@ TEST_CASE("work_stealing_deque: concurrent push pop steal stress",
         th.join();
     }
 
-    for (crd::u32 i = 0U; i < items; ++i)
+    for (crd::u32 i = 0U; i < kItems; ++i)
     {
         CHECK(seen.at(i).load(std::memory_order_relaxed) == 1);
     }

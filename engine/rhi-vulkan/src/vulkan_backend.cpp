@@ -104,7 +104,7 @@ namespace
     vkGetPhysicalDeviceMemoryProperties(physical_device, &memory_properties);
     for (crd::u32 i = 0; i < memory_properties.memoryTypeCount; ++i)
     {
-        if ((type_bits & (1u << i)) != 0u && (memory_properties.memoryTypes[i].propertyFlags & required) == required)
+        if ((type_bits & (1U << i)) != 0U && (memory_properties.memoryTypes[i].propertyFlags & required) == required)
         {
             return i;
         }
@@ -833,7 +833,7 @@ public:
         rendering_info.renderArea.offset        = {0, 0};
         rendering_info.renderArea.extent        = {info.extent.width, info.extent.height};
         rendering_info.layerCount               = 1;
-        rendering_info.colorAttachmentCount     = has_color ? 1u : 0u;
+        rendering_info.colorAttachmentCount     = has_color ? 1U : 0U;
         rendering_info.pColorAttachments        = has_color ? &color_attachment_info : nullptr;
         rendering_info.pDepthAttachment         = has_depth ? &depth_attachment_info : nullptr;
         vkCmdBeginRendering(m_command_buffer, &rendering_info);
@@ -1052,7 +1052,7 @@ public:
     [[nodiscard]] FrameSync& current_frame_sync() noexcept { return m_frames[m_frame_index]; }
     [[nodiscard]] ImageSync& current_image_sync() noexcept { return m_image_sync_array[m_current_image_index]; }
     [[nodiscard]] crd::u32 frame_index() const noexcept { return m_frame_index; }
-    void advance_frame() noexcept { m_frame_index = (m_frame_index + 1u) % m_frames_in_flight; }
+    void advance_frame() noexcept { m_frame_index = (m_frame_index + 1U) % m_frames_in_flight; }
     [[nodiscard]] bool image_acquired() const noexcept { return m_image_acquired; }
     void clear_image_acquired() noexcept { m_image_acquired = false; }
 
@@ -1474,7 +1474,7 @@ public:
 
     [[nodiscard]] std::unique_ptr<ShaderModule> create_shader_module(const ShaderModuleDesc& desc) override
     {
-        if (desc.code.empty() || (desc.code.size() % 4u) != 0u)
+        if (desc.code.empty() || (desc.code.size() % 4U) != 0U)
         {
             CRD_LOG_ERROR(detail::g_log_rhi_vulkan,
                           "Shader module code must be non-empty SPIR-V with 4-byte alignment");
@@ -1548,12 +1548,12 @@ public:
         input_assembly.topology = to_vk_topology(desc.topology);
 
         VkViewport viewport{};
-        viewport.x = 0.0f;
-        viewport.y = 0.0f;
+        viewport.x = 0.0F;
+        viewport.y = 0.0F;
         viewport.width = static_cast<float>(desc.viewport_extent.width);
         viewport.height = static_cast<float>(desc.viewport_extent.height);
-        viewport.minDepth = 0.0f;
-        viewport.maxDepth = 1.0f;
+        viewport.minDepth = 0.0F;
+        viewport.maxDepth = 1.0F;
         VkRect2D scissor{{0, 0}, {desc.viewport_extent.width, desc.viewport_extent.height}};
         VkPipelineViewportStateCreateInfo viewport_state{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
         viewport_state.viewportCount = 1;
@@ -1565,7 +1565,7 @@ public:
         raster.polygonMode = VK_POLYGON_MODE_FILL;
         raster.cullMode = VK_CULL_MODE_NONE;
         raster.frontFace = VK_FRONT_FACE_CLOCKWISE;
-        raster.lineWidth = 1.0f;
+        raster.lineWidth = 1.0F;
 
         VkPipelineMultisampleStateCreateInfo multisample{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
         multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
@@ -1578,7 +1578,7 @@ public:
             VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
 
         VkPipelineColorBlendStateCreateInfo blend_state{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
-        blend_state.attachmentCount = has_color_output ? 1u : 0u;
+        blend_state.attachmentCount = has_color_output ? 1U : 0U;
         blend_state.pAttachments    = has_color_output ? &blend_attachment : nullptr;
 
         VkPipelineDepthStencilStateCreateInfo depth_stencil{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
@@ -1612,7 +1612,7 @@ public:
 
         VkPipelineRenderingCreateInfo rendering_info{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
         const VkFormat color_format = has_color_output ? to_vk_format(desc.color_format) : VK_FORMAT_UNDEFINED;
-        rendering_info.colorAttachmentCount    = has_color_output ? 1u : 0u;
+        rendering_info.colorAttachmentCount    = has_color_output ? 1U : 0U;
         rendering_info.pColorAttachmentFormats = has_color_output ? &color_format : nullptr;
         rendering_info.depthAttachmentFormat   = to_vk_format(desc.depth_format);
 
@@ -2018,7 +2018,7 @@ public:
             return nullptr;
         }
 
-        const float queue_priority = 1.0f;
+        const float queue_priority = 1.0F;
         VkDeviceQueueCreateInfo queue_create_info{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
         queue_create_info.queueFamilyIndex = graphics_family_index;
         queue_create_info.queueCount = 1;

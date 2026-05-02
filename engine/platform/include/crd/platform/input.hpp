@@ -211,12 +211,12 @@ private:
     std::array<bool, static_cast<crd::usize>(MouseButton::Count)> m_mouse_pressed{};
     std::array<bool, static_cast<crd::usize>(MouseButton::Count)> m_mouse_released{};
 
-    crd::f32 m_mouse_x = 0.0f;
-    crd::f32 m_mouse_y = 0.0f;
-    crd::f32 m_mouse_dx = 0.0f;
-    crd::f32 m_mouse_dy = 0.0f;
-    crd::f32 m_scroll_dx = 0.0f;
-    crd::f32 m_scroll_dy = 0.0f;
+    crd::f32 m_mouse_x = 0.0F;
+    crd::f32 m_mouse_y = 0.0F;
+    crd::f32 m_mouse_dx = 0.0F;
+    crd::f32 m_mouse_dy = 0.0F;
+    crd::f32 m_scroll_dx = 0.0F;
+    crd::f32 m_scroll_dy = 0.0F;
 
     KeyMods m_mods{};
 

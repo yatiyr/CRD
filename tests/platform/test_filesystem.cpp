@@ -48,7 +48,7 @@ TEST_CASE("filesystem: text roundtrip + metadata", "[platform][fs]")
     REQUIRE(fs::write_file_text(file, "hello cerid"));
     REQUIRE(fs::exists(file));
     REQUIRE(fs::is_file(file));
-    REQUIRE(fs::file_size(file) == 11u);
+    REQUIRE(fs::file_size(file) == 11U);
     REQUIRE(fs::last_modified_unix_seconds(file) > 0);
 
     crd::containers::String text;
@@ -69,7 +69,7 @@ TEST_CASE("filesystem: binary roundtrip", "[platform][fs]")
 
     crd::containers::Array<crd::u8> out;
     REQUIRE(fs::read_file_binary(file, out));
-    REQUIRE(out.size() == 6u);
+    REQUIRE(out.size() == 6U);
     for (crd::usize i = 0; i < out.size(); ++i)
     {
         REQUIRE(out[i] == bytes[i]);
@@ -90,7 +90,7 @@ TEST_CASE("filesystem: list_directory sees created entries", "[platform][fs]")
 
     crd::containers::Array<fs::Path> entries;
     fs::list_directory(root, entries);
-    REQUIRE(entries.size() == 2u);
+    REQUIRE(entries.size() == 2U);
 
     bool saw_a = false;
     bool saw_b = false;

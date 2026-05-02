@@ -12,20 +12,20 @@ namespace crd::jobs::detail
 bool CounterPool::init(crd::u32 capacity) noexcept
 {
     CRD_ASSERT_MSG(!m_initialized, "CounterPool::init called twice");
-    CRD_ASSERT_MSG(capacity >= 1u, "CounterPool: capacity must be >= 1");
+    CRD_ASSERT_MSG(capacity >= 1U, "CounterPool: capacity must be >= 1");
 
     m_capacity = capacity;
     m_counters = std::make_unique<Counter[]>(capacity);
-    m_acquired.store(0u, std::memory_order_relaxed);
+    m_acquired.store(0U, std::memory_order_relaxed);
 
     // Wire the singly-linked free list: 0 → 1 → … → (capacity-1) → nil.
-    for (crd::u32 i = 0u; i < capacity; ++i)
+    for (crd::u32 i = 0U; i < capacity; ++i)
     {
         m_counters[i].pool_index = i;
-        m_counters[i].next_free  = (i + 1u < capacity) ? (i + 1u) : kCounterNullIndex;
+        m_counters[i].next_free  = (i + 1U < capacity) ? (i + 1U) : kCounterNullIndex;
     }
 
-    m_free_head.store(pack_head(0u, 0u), std::memory_order_release);
+    m_free_head.store(pack_head(0U, 0U), std::memory_order_release);
     m_initialized = true;
     return true;
 }
@@ -34,11 +34,11 @@ void CounterPool::shutdown() noexcept
 {
     if (!m_initialized)
         return;
-    CRD_ASSERT_MSG(m_acquired.load(std::memory_order_relaxed) == 0u,
+    CRD_ASSERT_MSG(m_acquired.load(std::memory_order_relaxed) == 0U,
                    "CounterPool::shutdown: counters still acquired — call release() first");
     m_counters.reset();
-    m_capacity = 0u;
-    m_free_head.store(pack_head(kCounterNullIndex, 0u), std::memory_order_relaxed);
+    m_capacity = 0U;
+    m_free_head.store(pack_head(kCounterNullIndex, 0U), std::memory_order_relaxed);
     m_initialized = false;
 }
 
@@ -64,7 +64,7 @@ Counter* CounterPool::acquire(crd::u32 initial_value) noexcept
         }
 
         const crd::u32 next    = m_counters[idx].next_free; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-        const crd::u64 desired = pack_head(next, head_gen(head) + 1u);
+        const crd::u64 desired = pack_head(next, head_gen(head) + 1U);
 
         if (m_free_head.compare_exchange_weak(head, desired,
                 std::memory_order_acq_rel, std::memory_order_acquire))
@@ -73,7 +73,7 @@ Counter* CounterPool::acquire(crd::u32 initial_value) noexcept
             c->value.store(initial_value,  std::memory_order_relaxed);
             c->waiters.store(nullptr,       std::memory_order_relaxed);
             c->next_free = kCounterNullIndex;
-            m_acquired.fetch_add(1u, std::memory_order_relaxed);
+            m_acquired.fetch_add(1U, std::memory_order_relaxed);
             return c;
         }
     }
@@ -103,7 +103,7 @@ void CounterPool::release(Counter* counter) noexcept
     } while (!m_free_head.compare_exchange_weak(head, desired,
                   std::memory_order_release, std::memory_order_relaxed));
 
-    m_acquired.fetch_sub(1u, std::memory_order_relaxed);
+    m_acquired.fetch_sub(1U, std::memory_order_relaxed);
 }
 
 // ---------------------------------------------------------------------------
@@ -113,7 +113,7 @@ void CounterPool::release(Counter* counter) noexcept
 crd::u32 CounterPool::available() const noexcept
 {
     const crd::u32 acq = m_acquired.load(std::memory_order_relaxed);
-    return (acq <= m_capacity) ? (m_capacity - acq) : 0u;
+    return (acq <= m_capacity) ? (m_capacity - acq) : 0U;
 }
 
 // ---------------------------------------------------------------------------
@@ -137,7 +137,7 @@ crd::u32 CounterPool::available() const noexcept
 Waiter* counter_decrement(Counter* counter, crd::u32 amount) noexcept
 {
     CRD_ASSERT_MSG(counter != nullptr, "counter_decrement: null counter");
-    CRD_ASSERT_MSG(amount  >= 1u,      "counter_decrement: amount must be >= 1");
+    CRD_ASSERT_MSG(amount  >= 1U,      "counter_decrement: amount must be >= 1");
 
     const crd::u32 old_val = counter->value.fetch_sub(amount, std::memory_order_acq_rel);
     const crd::u32 new_val = old_val - amount;

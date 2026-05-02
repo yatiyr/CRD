@@ -20,7 +20,7 @@ namespace crd::log
 class FileSink : public ISink
 {
 public:
-    FileSink(std::string path, u64 max_bytes = 10ull * 1024ull * 1024ull, u32 max_files = 5) noexcept;
+    FileSink(std::string path, u64 max_bytes = 10ULL * 1024ULL * 1024ULL, u32 max_files = 5) noexcept;
     ~FileSink() override;
 
     FileSink(const FileSink&) = delete;

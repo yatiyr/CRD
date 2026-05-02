@@ -19,7 +19,7 @@ using crd::jobs::detail::counter_decrement;
 using crd::jobs::detail::counter_wait;
 using crd::jobs::detail::fiber_init_stack;
 using crd::jobs::detail::fiber_switch;
-using crd::jobs::detail::kCounterNullIndex;
+
 
 #if CRD_ENABLE_ASSERTS
 using crd::jobs::detail::FiberState;
@@ -32,17 +32,17 @@ using crd::jobs::detail::FiberState;
 TEST_CASE("counter_pool: init and shutdown", "[jobs][counter]")
 {
     CounterPool pool;
-    REQUIRE(pool.init(8u));
+    REQUIRE(pool.init(8U));
     CHECK(pool.is_initialized());
-    CHECK(pool.capacity() == 8u);
-    CHECK(pool.available() == 8u);
+    CHECK(pool.capacity() == 8U);
+    CHECK(pool.available() == 8U);
 
     pool.shutdown();
     CHECK_FALSE(pool.is_initialized());
 
     // Re-init after shutdown is legal.
-    REQUIRE(pool.init(4u));
-    CHECK(pool.capacity() == 4u);
+    REQUIRE(pool.init(4U));
+    CHECK(pool.capacity() == 4U);
     pool.shutdown();
 }
 
@@ -53,22 +53,22 @@ TEST_CASE("counter_pool: init and shutdown", "[jobs][counter]")
 TEST_CASE("counter_pool: acquire sets value and release restores available", "[jobs][counter]")
 {
     CounterPool pool;
-    REQUIRE(pool.init(4u));
+    REQUIRE(pool.init(4U));
 
-    Counter* c1 = pool.acquire(10u);
+    Counter* c1 = pool.acquire(10U);
     REQUIRE(c1 != nullptr);
-    CHECK(c1->value.load() == 10u);
-    CHECK(pool.available() == 3u);
+    CHECK(c1->value.load() == 10U);
+    CHECK(pool.available() == 3U);
 
-    Counter* c2 = pool.acquire(0u);
+    Counter* c2 = pool.acquire(0U);
     REQUIRE(c2 != nullptr);
-    CHECK(c2->value.load() == 0u);
-    CHECK(pool.available() == 2u);
+    CHECK(c2->value.load() == 0U);
+    CHECK(pool.available() == 2U);
 
     pool.release(c1);
-    CHECK(pool.available() == 3u);
+    CHECK(pool.available() == 3U);
     pool.release(c2);
-    CHECK(pool.available() == 4u);
+    CHECK(pool.available() == 4U);
 
     pool.shutdown();
 }
@@ -80,15 +80,15 @@ TEST_CASE("counter_pool: acquire sets value and release restores available", "[j
 TEST_CASE("counter_pool: all pool_indices distinct", "[jobs][counter]")
 {
     CounterPool pool;
-    static constexpr crd::u32 kCap = 8u;
+    static constexpr crd::u32 kCap = 8U;
     REQUIRE(pool.init(kCap));
 
     Counter* ptrs[kCap]{};
     bool     seen[kCap]{};
 
-    for (crd::u32 i = 0u; i < kCap; ++i)
+    for (crd::u32 i = 0U; i < kCap; ++i)
     {
-        ptrs[i] = pool.acquire(0u); // NOLINT(cppcoreguidelines-pro-bounds-constant-array-index)
+        ptrs[i] = pool.acquire(0U); // NOLINT(cppcoreguidelines-pro-bounds-constant-array-index)
         REQUIRE(ptrs[i] != nullptr);
         const crd::u32 idx = ptrs[i]->pool_index; // NOLINT(cppcoreguidelines-pro-bounds-constant-array-index)
         REQUIRE(idx < kCap);
@@ -96,7 +96,7 @@ TEST_CASE("counter_pool: all pool_indices distinct", "[jobs][counter]")
         seen[idx] = true; // NOLINT(cppcoreguidelines-pro-bounds-constant-array-index)
     }
 
-    for (crd::u32 i = 0u; i < kCap; ++i)
+    for (crd::u32 i = 0U; i < kCap; ++i)
         pool.release(ptrs[i]); // NOLINT(cppcoreguidelines-pro-bounds-constant-array-index)
 
     pool.shutdown();
@@ -109,22 +109,22 @@ TEST_CASE("counter_pool: all pool_indices distinct", "[jobs][counter]")
 TEST_CASE("counter_decrement: no waiters, value reaches zero", "[jobs][counter]")
 {
     CounterPool pool;
-    REQUIRE(pool.init(4u));
+    REQUIRE(pool.init(4U));
 
-    Counter* c = pool.acquire(3u);
+    Counter* c = pool.acquire(3U);
     REQUIRE(c != nullptr);
 
-    Waiter* w = counter_decrement(c, 1u);
+    Waiter* w = counter_decrement(c, 1U);
     CHECK(w == nullptr);
-    CHECK(c->value.load() == 2u);
+    CHECK(c->value.load() == 2U);
 
-    w = counter_decrement(c, 1u);
+    w = counter_decrement(c, 1U);
     CHECK(w == nullptr);
-    CHECK(c->value.load() == 1u);
+    CHECK(c->value.load() == 1U);
 
-    w = counter_decrement(c, 1u);
+    w = counter_decrement(c, 1U);
     CHECK(w == nullptr);
-    CHECK(c->value.load() == 0u);
+    CHECK(c->value.load() == 0U);
 
     pool.release(c);
     pool.shutdown();
@@ -137,16 +137,16 @@ TEST_CASE("counter_decrement: no waiters, value reaches zero", "[jobs][counter]"
 TEST_CASE("counter_decrement: bulk decrement", "[jobs][counter]")
 {
     CounterPool pool;
-    REQUIRE(pool.init(4u));
+    REQUIRE(pool.init(4U));
 
-    Counter* c = pool.acquire(10u);
-    Waiter*  w = counter_decrement(c, 5u);
+    Counter* c = pool.acquire(10U);
+    Waiter*  w = counter_decrement(c, 5U);
     CHECK(w == nullptr);
-    CHECK(c->value.load() == 5u);
+    CHECK(c->value.load() == 5U);
 
-    w = counter_decrement(c, 5u);
+    w = counter_decrement(c, 5U);
     CHECK(w == nullptr);
-    CHECK(c->value.load() == 0u);
+    CHECK(c->value.load() == 0U);
 
     pool.release(c);
     pool.shutdown();
@@ -162,21 +162,21 @@ TEST_CASE("counter_decrement: bulk decrement", "[jobs][counter]")
 TEST_CASE("counter_decrement: canceled waiter is discarded", "[jobs][counter]")
 {
     CounterPool pool;
-    REQUIRE(pool.init(4u));
+    REQUIRE(pool.init(4U));
 
-    Counter* c = pool.acquire(1u);
+    Counter* c = pool.acquire(1U);
 
     Waiter w;
-    w.target = 0u;
+    w.target = 0U;
     w.canceled.store(true, std::memory_order_relaxed);
     // Push directly onto counter->waiters (simulate ABA path already fired).
     Waiter* head = c->waiters.load(std::memory_order_relaxed);
     w.next.store(head, std::memory_order_relaxed);
     c->waiters.store(&w, std::memory_order_release);
 
-    Waiter* woken = counter_decrement(c, 1u);
+    Waiter* woken = counter_decrement(c, 1U);
     CHECK(woken == nullptr);    // waiter was discarded, not returned
-    CHECK(c->value.load() == 0u);
+    CHECK(c->value.load() == 0U);
     CHECK(c->waiters.load() == nullptr); // waiters list is empty
 
     pool.release(c);
@@ -192,9 +192,9 @@ TEST_CASE("counter_decrement: canceled waiter is discarded", "[jobs][counter]")
 TEST_CASE("counter_decrement: non-matching target left in waiter list", "[jobs][counter]")
 {
     CounterPool pool;
-    REQUIRE(pool.init(4u));
+    REQUIRE(pool.init(4U));
 
-    Counter* c = pool.acquire(3u);
+    Counter* c = pool.acquire(3U);
 
     // Need a real Fiber so the debug state check in counter_decrement passes.
     Fiber dummy{};
@@ -204,20 +204,20 @@ TEST_CASE("counter_decrement: non-matching target left in waiter list", "[jobs][
 
     Waiter w;
     w.fiber  = &dummy;
-    w.target = 1u;
+    w.target = 1U;
     w.canceled.store(false, std::memory_order_relaxed);
     Waiter* head = c->waiters.load(std::memory_order_relaxed);
     w.next.store(head, std::memory_order_relaxed);
     c->waiters.store(&w, std::memory_order_release);
 
     // Decrement 3 → 2. Target is 1, not 2. Waiter stays.
-    Waiter* woken = counter_decrement(c, 1u);
+    Waiter* woken = counter_decrement(c, 1U);
     CHECK(woken == nullptr);
-    CHECK(c->value.load() == 2u);
+    CHECK(c->value.load() == 2U);
     CHECK(c->waiters.load() == &w);  // still present
 
     // Decrement 2 → 1. Target is 1. Waiter should be returned now.
-    woken = counter_decrement(c, 1u);
+    woken = counter_decrement(c, 1U);
     REQUIRE(woken == &w);
     CHECK(woken->next.load() == nullptr);
     CHECK(c->waiters.load() == nullptr);
@@ -233,9 +233,9 @@ TEST_CASE("counter_decrement: non-matching target left in waiter list", "[jobs][
 TEST_CASE("counter_wait: fast path when value already at target", "[jobs][counter]")
 {
     CounterPool pool;
-    REQUIRE(pool.init(4u));
+    REQUIRE(pool.init(4U));
 
-    Counter* c = pool.acquire(0u);  // already zero
+    Counter* c = pool.acquire(0U);  // already zero
 
     Fiber  dummy_fiber{};
 #if CRD_ENABLE_ASSERTS
@@ -244,7 +244,7 @@ TEST_CASE("counter_wait: fast path when value already at target", "[jobs][counte
     Waiter    w{};
     FiberContext sched_ctx{};  // never switched to
 
-    counter_wait(c, &w, &dummy_fiber, sched_ctx, 0u);  // must return immediately
+    counter_wait(c, &w, &dummy_fiber, sched_ctx, 0U);  // must return immediately
 
     // No suspension: sched_ctx.rsp should still be nullptr (fiber_switch never called).
     CHECK(sched_ctx.rsp == nullptr);
@@ -265,9 +265,9 @@ TEST_CASE("counter_wait: fast path when value already at target", "[jobs][counte
 TEST_CASE("counter_decrement: two waiters with same target, both woken", "[jobs][counter]")
 {
     CounterPool pool;
-    REQUIRE(pool.init(4u));
+    REQUIRE(pool.init(4U));
 
-    Counter* c = pool.acquire(1u);
+    Counter* c = pool.acquire(1U);
 
     // Build two Waiter nodes with target=0. No real fibers needed here —
     // counter_decrement only reads fiber->state in debug. We'll set state
@@ -282,11 +282,11 @@ TEST_CASE("counter_decrement: two waiters with same target, both woken", "[jobs]
     Waiter w1;
     Waiter w2;
     w1.fiber  = &f1;
-    w1.target = 0u;
+    w1.target = 0U;
     w1.canceled.store(false, std::memory_order_relaxed);
 
     w2.fiber  = &f2;
-    w2.target = 0u;
+    w2.target = 0U;
     w2.canceled.store(false, std::memory_order_relaxed);
 
     // Push both.
@@ -297,8 +297,8 @@ TEST_CASE("counter_decrement: two waiters with same target, both woken", "[jobs]
     w2.next.store(head, std::memory_order_relaxed);
     c->waiters.store(&w2, std::memory_order_release);
 
-    Waiter* woken = counter_decrement(c, 1u);
-    CHECK(c->value.load() == 0u);
+    Waiter* woken = counter_decrement(c, 1U);
+    CHECK(c->value.load() == 0U);
     CHECK(c->waiters.load() == nullptr);
 
     // Both waiters must appear in the returned list (order may vary).
@@ -343,7 +343,7 @@ static WaitTestState g_s10;
 static void wait_job_entry_10()
 {
     // This fiber waits on the counter (value starts at 1, target = 0).
-    counter_wait(g_s10.counter, &g_s10.waiter, &g_s10.job_fiber, g_s10.sched_ctx, 0u);
+    counter_wait(g_s10.counter, &g_s10.waiter, &g_s10.job_fiber, g_s10.sched_ctx, 0U);
     g_s10.job_completed = true;
     // Return control to the scheduler.
     fiber_switch(&g_s10.job_fiber.context, &g_s10.sched_ctx);
@@ -356,20 +356,20 @@ TEST_CASE("counter_wait: full suspension and resumption", "[jobs][counter]")
     g_s10.counter        = nullptr;
     g_s10.job_fiber      = Fiber{};
     g_s10.waiter.fiber   = nullptr;
-    g_s10.waiter.target  = 0u;
+    g_s10.waiter.target  = 0U;
     g_s10.waiter.canceled.store(false, std::memory_order_relaxed);
     g_s10.waiter.next.store(nullptr, std::memory_order_relaxed);
     g_s10.sched_ctx      = FiberContext{};
     g_s10.job_completed  = false;
 
-    REQUIRE(g_s10.pool.init(4u));
-    g_s10.counter = g_s10.pool.acquire(1u);
+    REQUIRE(g_s10.pool.init(4U));
+    g_s10.counter = g_s10.pool.acquire(1U);
 
 #if CRD_ENABLE_ASSERTS
     g_s10.job_fiber.state = FiberState::Active;
 #endif
 
-    constexpr crd::usize kStackSize = 64u * 1024u;
+    constexpr crd::usize kStackSize = 64U * 1024U;
     auto stack = std::make_unique<crd::u8[]>(kStackSize);
     fiber_init_stack(g_s10.job_fiber.context, stack.get(), kStackSize, wait_job_entry_10);
 
@@ -381,7 +381,7 @@ TEST_CASE("counter_wait: full suspension and resumption", "[jobs][counter]")
     CHECK(g_s10.waiter.fiber == &g_s10.job_fiber);
 
     // Decrement brings value to 0 → wakes the waiter.
-    Waiter* woken = counter_decrement(g_s10.counter, 1u);
+    Waiter* woken = counter_decrement(g_s10.counter, 1U);
     REQUIRE(woken == &g_s10.waiter);
     CHECK(g_s10.waiter.next.load() == nullptr);
 
@@ -402,13 +402,13 @@ TEST_CASE("counter_wait: full suspension and resumption", "[jobs][counter]")
 TEST_CASE("counter_wait: fast path fires when counter already zero before call", "[jobs][counter]")
 {
     CounterPool pool;
-    REQUIRE(pool.init(4u));
-    Counter* c = pool.acquire(2u);
+    REQUIRE(pool.init(4U));
+    Counter* c = pool.acquire(2U);
 
     // Decrement all the way to 0 before any waiter is registered.
-    Waiter* w = counter_decrement(c, 2u);
+    Waiter* w = counter_decrement(c, 2U);
     CHECK(w == nullptr);  // no waiters yet
-    CHECK(c->value.load() == 0u);
+    CHECK(c->value.load() == 0U);
 
     // Now wait — value is already 0, so fast path triggers immediately.
     Fiber  f{};
@@ -418,7 +418,7 @@ TEST_CASE("counter_wait: fast path fires when counter already zero before call",
     Waiter    wnode{};
     FiberContext sched{};
 
-    counter_wait(c, &wnode, &f, sched, 0u);
+    counter_wait(c, &wnode, &f, sched, 0U);
 
     // sched.rsp == nullptr → fiber_switch was never called.
     CHECK(sched.rsp == nullptr);
@@ -446,12 +446,12 @@ static WaitTestState12 g_s12;
 static void wait_job_entry_12()
 {
     // First wait.
-    counter_wait(g_s12.counter, &g_s12.waiter, &g_s12.job_fiber, g_s12.sched_ctx, 0u);
+    counter_wait(g_s12.counter, &g_s12.waiter, &g_s12.job_fiber, g_s12.sched_ctx, 0U);
     ++g_s12.run_count;
     fiber_switch(&g_s12.job_fiber.context, &g_s12.sched_ctx);
 
     // Second wait (counter re-acquired externally between the two fiber runs).
-    counter_wait(g_s12.counter, &g_s12.waiter, &g_s12.job_fiber, g_s12.sched_ctx, 0u);
+    counter_wait(g_s12.counter, &g_s12.waiter, &g_s12.job_fiber, g_s12.sched_ctx, 0U);
     ++g_s12.run_count;
     fiber_switch(&g_s12.job_fiber.context, &g_s12.sched_ctx);
 }
@@ -462,19 +462,19 @@ TEST_CASE("counter_wait: two sequential waits on renewed counter", "[jobs][count
     g_s12.counter      = nullptr;
     g_s12.job_fiber    = Fiber{};
     g_s12.waiter.fiber = nullptr;
-    g_s12.waiter.target = 0u;
+    g_s12.waiter.target = 0U;
     g_s12.waiter.canceled.store(false, std::memory_order_relaxed);
     g_s12.waiter.next.store(nullptr, std::memory_order_relaxed);
     g_s12.sched_ctx    = FiberContext{};
     g_s12.run_count    = 0;
 
-    REQUIRE(g_s12.pool.init(4u));
-    g_s12.counter = g_s12.pool.acquire(1u);
+    REQUIRE(g_s12.pool.init(4U));
+    g_s12.counter = g_s12.pool.acquire(1U);
 #if CRD_ENABLE_ASSERTS
     g_s12.job_fiber.state = FiberState::Active;
 #endif
 
-    constexpr crd::usize kStackSize = 64u * 1024u;
+    constexpr crd::usize kStackSize = 64U * 1024U;
     auto stack = std::make_unique<crd::u8[]>(kStackSize);
     fiber_init_stack(g_s12.job_fiber.context, stack.get(), kStackSize, wait_job_entry_12);
 
@@ -482,17 +482,17 @@ TEST_CASE("counter_wait: two sequential waits on renewed counter", "[jobs][count
     fiber_switch(&g_s12.sched_ctx, &g_s12.job_fiber.context);
     CHECK(g_s12.run_count == 0);  // suspended
 
-    Waiter* woken = counter_decrement(g_s12.counter, 1u);
+    Waiter* woken = counter_decrement(g_s12.counter, 1U);
     REQUIRE(woken != nullptr);
     fiber_switch(&g_s12.sched_ctx, &woken->fiber->context);
     CHECK(g_s12.run_count == 1);  // first wait done
 
     // --- Second round: re-acquire a fresh counter ---
     g_s12.pool.release(g_s12.counter);
-    g_s12.counter = g_s12.pool.acquire(1u);
+    g_s12.counter = g_s12.pool.acquire(1U);
     // Reset waiter for second use (can't copy-assign Waiter since it has atomics).
     g_s12.waiter.fiber = nullptr;
-    g_s12.waiter.target = 0u;
+    g_s12.waiter.target = 0U;
     g_s12.waiter.canceled.store(false, std::memory_order_relaxed);
     g_s12.waiter.next.store(nullptr, std::memory_order_relaxed);
 #if CRD_ENABLE_ASSERTS
@@ -504,7 +504,7 @@ TEST_CASE("counter_wait: two sequential waits on renewed counter", "[jobs][count
     fiber_switch(&g_s12.sched_ctx, &g_s12.job_fiber.context);
     CHECK(g_s12.run_count == 1);  // suspended again
 
-    woken = counter_decrement(g_s12.counter, 1u);
+    woken = counter_decrement(g_s12.counter, 1U);
     REQUIRE(woken != nullptr);
     fiber_switch(&g_s12.sched_ctx, &woken->fiber->context);
     CHECK(g_s12.run_count == 2);  // second wait done
@@ -523,21 +523,21 @@ TEST_CASE("counter_wait: two sequential waits on renewed counter", "[jobs][count
 TEST_CASE("counter_decrement: concurrent decrements, exactly one caller reaches zero",
           "[jobs][counter][stress]")
 {
-    static constexpr crd::u32 kN = 16u;
+    static constexpr crd::u32 kN = 16U;
 
     CounterPool pool;
-    REQUIRE(pool.init(4u));
+    REQUIRE(pool.init(4U));
     Counter* c = pool.acquire(kN);
 
     std::atomic<int> zero_count{0};  // how many threads received a non-null woken list
 
     std::vector<std::thread> threads;
     threads.reserve(kN);
-    for (crd::u32 i = 0u; i < kN; ++i)
+    for (crd::u32 i = 0U; i < kN; ++i)
     {
         threads.emplace_back([&]()
         {
-            Waiter* w = counter_decrement(c, 1u);
+            Waiter* w = counter_decrement(c, 1U);
             if (w != nullptr)
                 zero_count.fetch_add(1, std::memory_order_relaxed);
         });
@@ -545,7 +545,7 @@ TEST_CASE("counter_decrement: concurrent decrements, exactly one caller reaches 
     for (auto& t : threads)
         t.join();
 
-    CHECK(c->value.load() == 0u);
+    CHECK(c->value.load() == 0U);
     // No waiters were registered, so woken lists should all be nullptr.
     CHECK(zero_count.load() == 0);
     CHECK(c->waiters.load() == nullptr);
@@ -560,9 +560,9 @@ TEST_CASE("counter_decrement: concurrent decrements, exactly one caller reaches 
 
 TEST_CASE("counter_pool: concurrent acquire/release stress", "[jobs][counter][stress]")
 {
-    static constexpr crd::u32 kPoolSize   = 32u;
+    static constexpr crd::u32 kPoolSize   = 32U;
     static constexpr int      kIterations = 500;
-    static constexpr crd::u32 kThreads    = 4u;
+    static constexpr crd::u32 kThreads    = 4U;
 
     CounterPool pool;
     REQUIRE(pool.init(kPoolSize));
@@ -572,14 +572,14 @@ TEST_CASE("counter_pool: concurrent acquire/release stress", "[jobs][counter][st
     threads.reserve(kThreads);
     std::atomic<int> errors{0};
 
-    for (crd::u32 t = 0u; t < kThreads; ++t)
+    for (crd::u32 t = 0U; t < kThreads; ++t)
     {
         threads.emplace_back([&]()
         {
             for (int iter = 0; iter < kIterations; ++iter)
             {
-                Counter* c = pool.acquire(42u);
-                if (c == nullptr || c->value.load() != 42u)
+                Counter* c = pool.acquire(42U);
+                if (c == nullptr || c->value.load() != 42U)
                 {
                     errors.fetch_add(1, std::memory_order_relaxed);
                     if (c) pool.release(c);

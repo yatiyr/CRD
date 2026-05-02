@@ -13,7 +13,7 @@ using crd::jobs::detail::Fiber;
 using crd::jobs::detail::FiberPool;
 using crd::jobs::detail::FiberPoolConfig;
 using crd::jobs::detail::FiberTier;
-using crd::jobs::detail::kFiberNullIndex;
+
 
 #if CRD_ENABLE_ASSERTS
 using crd::jobs::detail::FiberState;
@@ -39,9 +39,9 @@ using crd::jobs::detail::FiberState;
 // while still exercising multi-element list operations.
 // ---------------------------------------------------------------------------
 
-static FiberPoolConfig make_test_config(crd::u32 small_count  = 8u,
-                                        crd::u32 medium_count = 4u,
-                                        crd::u32 large_count  = 2u)
+static FiberPoolConfig make_test_config(crd::u32 small_count  = 8U,
+                                        crd::u32 medium_count = 4U,
+                                        crd::u32 large_count  = 2U)
 {
     FiberPoolConfig cfg;
     cfg.small_count  = small_count;
@@ -58,12 +58,12 @@ static FiberPoolConfig make_test_config(crd::u32 small_count  = 8u,
 TEST_CASE("fiber_pool: init and shutdown", "[jobs][fiber_pool]")
 {
     FiberPool pool;
-    REQUIRE(pool.init(make_test_config(4u, 2u, 1u)));
+    REQUIRE(pool.init(make_test_config(4U, 2U, 1U)));
     REQUIRE(pool.is_initialized());
 
-    CHECK(pool.available_count(FiberTier::Small)  == 4u);
-    CHECK(pool.available_count(FiberTier::Medium) == 2u);
-    CHECK(pool.available_count(FiberTier::Large)  == 1u);
+    CHECK(pool.available_count(FiberTier::Small)  == 4U);
+    CHECK(pool.available_count(FiberTier::Medium) == 2U);
+    CHECK(pool.available_count(FiberTier::Large)  == 1U);
 
     pool.shutdown();
     CHECK_FALSE(pool.is_initialized());
@@ -107,7 +107,7 @@ TEST_CASE("fiber_pool: acquire returns correct tier", "[jobs][fiber_pool]")
 TEST_CASE("fiber_pool: stack context is initialised", "[jobs][fiber_pool]")
 {
     FiberPool pool;
-    REQUIRE(pool.init(make_test_config(2u, 1u, 1u)));
+    REQUIRE(pool.init(make_test_config(2U, 1U, 1U)));
 
     Fiber* f = pool.acquire(FiberTier::Small);
     REQUIRE(f != nullptr);
@@ -123,9 +123,9 @@ TEST_CASE("fiber_pool: stack context is initialised", "[jobs][fiber_pool]")
 
 TEST_CASE("fiber_pool: pool_index is unique and in range", "[jobs][fiber_pool]")
 {
-    static constexpr crd::u32 kCount = 6u;
+    static constexpr crd::u32 kCount = 6U;
     FiberPool pool;
-    REQUIRE(pool.init(make_test_config(kCount, 1u, 1u)));
+    REQUIRE(pool.init(make_test_config(kCount, 1U, 1U)));
 
     std::vector<Fiber*> acquired;
     acquired.reserve(kCount);
@@ -160,9 +160,9 @@ TEST_CASE("fiber_pool: pool_index is unique and in range", "[jobs][fiber_pool]")
 
 TEST_CASE("fiber_pool: available_count tracks acquires", "[jobs][fiber_pool]")
 {
-    static constexpr crd::u32 kCount = 4u;
+    static constexpr crd::u32 kCount = 4U;
     FiberPool pool;
-    REQUIRE(pool.init(make_test_config(kCount, 1u, 1u)));
+    REQUIRE(pool.init(make_test_config(kCount, 1U, 1U)));
 
     CHECK(pool.available_count(FiberTier::Small) == kCount);
 
@@ -170,13 +170,13 @@ TEST_CASE("fiber_pool: available_count tracks acquires", "[jobs][fiber_pool]")
     for (crd::u32 i = 0; i < kCount; ++i)
     {
         held.push_back(pool.acquire(FiberTier::Small));
-        CHECK(pool.available_count(FiberTier::Small) == (kCount - i - 1u));
+        CHECK(pool.available_count(FiberTier::Small) == (kCount - i - 1U));
     }
 
     for (crd::u32 i = 0; i < kCount; ++i)
     {
         pool.release(held[i]);
-        CHECK(pool.available_count(FiberTier::Small) == i + 1u);
+        CHECK(pool.available_count(FiberTier::Small) == i + 1U);
     }
 
     CHECK(pool.available_count(FiberTier::Small) == kCount);
@@ -189,9 +189,9 @@ TEST_CASE("fiber_pool: available_count tracks acquires", "[jobs][fiber_pool]")
 
 TEST_CASE("fiber_pool: full acquire-release cycle is repeatable", "[jobs][fiber_pool]")
 {
-    static constexpr crd::u32 kCount = 5u;
+    static constexpr crd::u32 kCount = 5U;
     FiberPool pool;
-    REQUIRE(pool.init(make_test_config(kCount, 1u, 1u)));
+    REQUIRE(pool.init(make_test_config(kCount, 1U, 1U)));
 
     for (int cycle = 0; cycle < 3; ++cycle)
     {
@@ -203,7 +203,7 @@ TEST_CASE("fiber_pool: full acquire-release cycle is repeatable", "[jobs][fiber_
             REQUIRE(f != nullptr);
             held.push_back(f);
         }
-        CHECK(pool.available_count(FiberTier::Small) == 0u);
+        CHECK(pool.available_count(FiberTier::Small) == 0U);
 
         for (Fiber* f : held)
             pool.release(f);
@@ -220,17 +220,17 @@ TEST_CASE("fiber_pool: full acquire-release cycle is repeatable", "[jobs][fiber_
 TEST_CASE("fiber_pool: tiers are independent", "[jobs][fiber_pool]")
 {
     FiberPool pool;
-    REQUIRE(pool.init(make_test_config(4u, 3u, 2u)));
+    REQUIRE(pool.init(make_test_config(4U, 3U, 2U)));
 
     // Exhaust the Small tier.
     std::vector<Fiber*> smalls;
-    for (crd::u32 i = 0; i < 4u; ++i)
+    for (crd::u32 i = 0; i < 4U; ++i)
         smalls.push_back(pool.acquire(FiberTier::Small));
-    CHECK(pool.available_count(FiberTier::Small) == 0u);
+    CHECK(pool.available_count(FiberTier::Small) == 0U);
 
     // Medium and Large must still be fully available.
-    CHECK(pool.available_count(FiberTier::Medium) == 3u);
-    CHECK(pool.available_count(FiberTier::Large)  == 2u);
+    CHECK(pool.available_count(FiberTier::Medium) == 3U);
+    CHECK(pool.available_count(FiberTier::Large)  == 2U);
 
     Fiber* m = pool.acquire(FiberTier::Medium);
     Fiber* l = pool.acquire(FiberTier::Large);
@@ -252,7 +252,7 @@ TEST_CASE("fiber_pool: tiers are independent", "[jobs][fiber_pool]")
 
 TEST_CASE("fiber_pool: exhaustion returns nullptr", "[jobs][fiber_pool]")
 {
-    static constexpr crd::u32 kCount = 3u;
+    static constexpr crd::u32 kCount = 3U;
 
 #if CRD_ENABLE_ASSERTS
     // Suppress the assert UI so the test runner does not block.
@@ -260,7 +260,7 @@ TEST_CASE("fiber_pool: exhaustion returns nullptr", "[jobs][fiber_pool]")
 #endif
 
     FiberPool pool;
-    REQUIRE(pool.init(make_test_config(kCount, 1u, 1u)));
+    REQUIRE(pool.init(make_test_config(kCount, 1U, 1U)));
 
     std::vector<Fiber*> held;
     for (crd::u32 i = 0; i < kCount; ++i)
@@ -288,7 +288,7 @@ TEST_CASE("fiber_pool: exhaustion returns nullptr", "[jobs][fiber_pool]")
 TEST_CASE("fiber_pool: reacquire returns correct fiber after release", "[jobs][fiber_pool]")
 {
     FiberPool pool;
-    REQUIRE(pool.init(make_test_config(1u, 1u, 1u)));
+    REQUIRE(pool.init(make_test_config(1U, 1U, 1U)));
 
     Fiber* f1 = pool.acquire(FiberTier::Small);
     REQUIRE(f1 != nullptr);
@@ -309,17 +309,17 @@ TEST_CASE("fiber_pool: reacquire returns correct fiber after release", "[jobs][f
 
 TEST_CASE("fiber_pool: peak usage tracking", "[jobs][fiber_pool]")
 {
-    static constexpr crd::u32 kCount = 6u;
+    static constexpr crd::u32 kCount = 6U;
     FiberPool pool;
-    REQUIRE(pool.init(make_test_config(kCount, 1u, 1u)));
+    REQUIRE(pool.init(make_test_config(kCount, 1U, 1U)));
 
-    CHECK(pool.peak_acquired(FiberTier::Small) == 0u);
+    CHECK(pool.peak_acquired(FiberTier::Small) == 0U);
 
     // Acquire half the tier.
     std::vector<Fiber*> batch1;
-    for (crd::u32 i = 0; i < 3u; ++i)
+    for (crd::u32 i = 0; i < 3U; ++i)
         batch1.push_back(pool.acquire(FiberTier::Small));
-    CHECK(pool.peak_acquired(FiberTier::Small) == 3u);
+    CHECK(pool.peak_acquired(FiberTier::Small) == 3U);
 
     // Release and re-acquire at higher watermark.
     for (Fiber* f : batch1)
@@ -347,7 +347,7 @@ TEST_CASE("fiber_pool: peak usage tracking", "[jobs][fiber_pool]")
 TEST_CASE("fiber_pool: state is Active after acquire", "[jobs][fiber_pool]")
 {
     FiberPool pool;
-    REQUIRE(pool.init(make_test_config(2u, 1u, 1u)));
+    REQUIRE(pool.init(make_test_config(2U, 1U, 1U)));
 
     Fiber* f = pool.acquire(FiberTier::Small);
     REQUIRE(f != nullptr);
@@ -360,7 +360,7 @@ TEST_CASE("fiber_pool: state is Active after acquire", "[jobs][fiber_pool]")
 TEST_CASE("fiber_pool: state is Idle after release", "[jobs][fiber_pool]")
 {
     FiberPool pool;
-    REQUIRE(pool.init(make_test_config(2u, 1u, 1u)));
+    REQUIRE(pool.init(make_test_config(2U, 1U, 1U)));
 
     Fiber* f = pool.acquire(FiberTier::Small);
     REQUIRE(f != nullptr);
@@ -385,12 +385,12 @@ TEST_CASE("fiber_pool: state is Idle after release", "[jobs][fiber_pool]")
 
 TEST_CASE("fiber_pool: concurrent acquire-release stress (ABA safety)", "[jobs][fiber_pool][stress]")
 {
-    static constexpr crd::u32 kSmallCount  = 16u;
-    static constexpr crd::u32 kThreadCount = 4u;
-    static constexpr crd::u32 kIterations  = 8'000u;
+    static constexpr crd::u32 kSmallCount  = 16U;
+    static constexpr crd::u32 kThreadCount = 4U;
+    static constexpr crd::u32 kIterations  = 8'000U;
 
     FiberPool pool;
-    REQUIRE(pool.init(make_test_config(kSmallCount, 1u, 1u)));
+    REQUIRE(pool.init(make_test_config(kSmallCount, 1U, 1U)));
 
     // One flag per fiber index; true while that fiber is held by a thread.
     std::vector<std::atomic<bool>> in_use(kSmallCount);

@@ -12,7 +12,7 @@ int main()
     using namespace crd::memory;
 
     auto* heap = default_allocator();
-    auto* p = construct<crd::u32>(*heap, 0xDEADBEEFu);
+    auto* p = construct<crd::u32>(*heap, 0xDEADBEEFU);
     CRD_LOG_INFO(g_log_runtime_memory, "default_allocator handed out {:p} (= 0x{:08X})", static_cast<const void*>(p),
                  *p);
     destroy(*heap, p);

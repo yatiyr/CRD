@@ -30,7 +30,7 @@ TEST_CASE("Vulkan instance enumerates at least one adapter", "[rhi][vulkan]")
 
     crd::containers::Array<crd::rhi::AdapterInfo> adapters;
     instance->enumerate_adapters(adapters);
-    REQUIRE(adapters.size() >= 1u);
+    REQUIRE(adapters.size() >= 1U);
 }
 
 TEST_CASE("Vulkan device bootstrap creates a swapchain for an invisible window", "[rhi][vulkan]")
@@ -59,8 +59,8 @@ TEST_CASE("Vulkan device bootstrap creates a swapchain for an invisible window",
     auto swapchain = device->create_swapchain(
         {window.native_handle(), {1280, 720}, crd::rhi::Format::B8G8R8A8Unorm, crd::rhi::PresentMode::Fifo, 2});
     REQUIRE(swapchain != nullptr);
-    REQUIRE(swapchain->desc().extent.width > 0u);
-    REQUIRE(swapchain->desc().extent.height > 0u);
+    REQUIRE(swapchain->desc().extent.width > 0U);
+    REQUIRE(swapchain->desc().extent.height > 0U);
 }
 
 TEST_CASE("Vulkan command buffer and frame loop can execute a triangle frame", "[rhi][vulkan]")
@@ -113,7 +113,7 @@ TEST_CASE("Vulkan command buffer and frame loop can execute a triangle frame", "
     };
 
     const Vertex vertices[] = {
-        {{0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}}, {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}}, {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}};
+        {{0.0F, -0.5F}, {1.0F, 0.0F, 0.0F}}, {{0.5F, 0.5F}, {0.0F, 1.0F, 0.0F}}, {{-0.5F, 0.5F}, {0.0F, 0.0F, 1.0F}}};
 
     auto vertex_buffer = device->create_buffer(
         {sizeof(vertices), crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex), crd::rhi::MemoryUsage::CpuToGpu});
@@ -138,7 +138,7 @@ TEST_CASE("Vulkan command buffer and frame loop can execute a triangle frame", "
 
     const crd::rhi::VertexBindingDesc binding{0, sizeof(Vertex), crd::rhi::VertexInputRate::Vertex};
     const crd::rhi::VertexAttributeDesc attributes[] = {{0, 0, crd::rhi::Format::R32G32Sfloat, 0},
-                                                        {1, 0, crd::rhi::Format::R32G32B32Sfloat, sizeof(float) * 2u}};
+                                                        {1, 0, crd::rhi::Format::R32G32B32Sfloat, sizeof(float) * 2U}};
     auto pipeline = device->create_graphics_pipeline({vs.get(),
                                                       fs_module.get(),
                                                       crd::rhi::PrimitiveTopology::TriangleList,
@@ -160,7 +160,7 @@ TEST_CASE("Vulkan command buffer and frame loop can execute a triangle frame", "
                                      crd::rhi::ImageAccess::Undefined, crd::rhi::ImageAccess::ColorWrite);
     command_buffer->begin_rendering(
         {{swapchain->desc().extent.width, swapchain->desc().extent.height},
-         {&swapchain->current_image(), crd::rhi::LoadOp::Clear, crd::rhi::StoreOp::Store, {0.0f, 0.1f, 0.2f, 1.0f}},
+         {&swapchain->current_image(), crd::rhi::LoadOp::Clear, crd::rhi::StoreOp::Store, {0.0F, 0.1F, 0.2F, 1.0F}},
          nullptr});
     command_buffer->bind_pipeline(*pipeline);
     command_buffer->bind_vertex_buffer(*vertex_buffer, 0);

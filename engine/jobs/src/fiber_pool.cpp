@@ -106,9 +106,9 @@ bool FiberPool::init_tier(Tier& tier, crd::u32 count, crd::usize usable_bytes,
     tier.count       = count;
     tier.stack_bytes = usable_bytes;
     tier.fibers      = std::make_unique<Fiber[]>(count);
-    tier.free_head.store(pack_head(kFiberNullIndex, 0u), std::memory_order_relaxed);
-    tier.acquired_count.store(0u, std::memory_order_relaxed);
-    tier.peak_count.store(0u, std::memory_order_relaxed);
+    tier.free_head.store(pack_head(kFiberNullIndex, 0U), std::memory_order_relaxed);
+    tier.acquired_count.store(0U, std::memory_order_relaxed);
+    tier.peak_count.store(0U, std::memory_order_relaxed);
 
     for (crd::u32 i = 0; i < count; ++i)
     {
@@ -129,7 +129,7 @@ bool FiberPool::init_tier(Tier& tier, crd::u32 count, crd::usize usable_bytes,
         f.pool_index = i;
         f.tier       = kind;
         // Wire the singly-linked free list: 0 → 1 → 2 → … → (count-1) → nil.
-        f.next_free  = (i + 1u < count) ? (i + 1u) : kFiberNullIndex;
+        f.next_free  = (i + 1U < count) ? (i + 1U) : kFiberNullIndex;
 
         // The usable stack starts just after the guard page.
         // fiber_init_stack computes the initial stack top as (usable_base + usable_bytes),
@@ -142,7 +142,7 @@ bool FiberPool::init_tier(Tier& tier, crd::u32 count, crd::usize usable_bytes,
     }
 
     // Point the Treiber head at fiber 0 (generation 0 for a fresh tier).
-    tier.free_head.store(pack_head(0u, 0u), std::memory_order_release);
+    tier.free_head.store(pack_head(0U, 0U), std::memory_order_release);
     return true;
 }
 
@@ -150,7 +150,7 @@ void FiberPool::shutdown_tier(Tier& tier) noexcept
 {
     if (!tier.fibers)
         return;
-    CRD_ASSERT_MSG(tier.acquired_count.load(std::memory_order_relaxed) == 0u,
+    CRD_ASSERT_MSG(tier.acquired_count.load(std::memory_order_relaxed) == 0U,
                    "FiberPool::shutdown: fibers are still Active");
     for (crd::u32 i = 0; i < tier.count; ++i)
     {
@@ -174,9 +174,9 @@ bool FiberPool::init(const FiberPoolConfig& cfg)
     CRD_ASSERT_MSG(cfg.trampoline != nullptr,
                    "FiberPool::init: trampoline must not be null");
 
-    static constexpr crd::usize kSmallStack  =   64u * 1024u;
-    static constexpr crd::usize kMediumStack =  512u * 1024u;
-    static constexpr crd::usize kLargeStack  = 2048u * 1024u;
+    static constexpr crd::usize kSmallStack  =   64U * 1024U;
+    static constexpr crd::usize kMediumStack =  512U * 1024U;
+    static constexpr crd::usize kLargeStack  = 2048U * 1024U;
 
     if (!init_tier(m_small, cfg.small_count, kSmallStack, FiberTier::Small, cfg.trampoline))
         return false;
@@ -235,7 +235,7 @@ Fiber* FiberPool::acquire_from(Tier& tier) noexcept
         }
 
         const crd::u32 next    = tier.fibers[idx].next_free;
-        const crd::u64 desired = pack_head(next, head_gen(head) + 1u); // bump gen on every pop
+        const crd::u64 desired = pack_head(next, head_gen(head) + 1U); // bump gen on every pop
 
         if (tier.free_head.compare_exchange_weak(head, desired,
                 std::memory_order_acq_rel, std::memory_order_acquire))
@@ -249,7 +249,7 @@ Fiber* FiberPool::acquire_from(Tier& tier) noexcept
 #endif
             // Update peak-usage watermark. All relaxed: these are profiling stats,
             // slight under-counting under heavy concurrency is acceptable.
-            const crd::u32 now  = tier.acquired_count.fetch_add(1u, std::memory_order_relaxed) + 1u;
+            const crd::u32 now  = tier.acquired_count.fetch_add(1U, std::memory_order_relaxed) + 1U;
             crd::u32       peak = tier.peak_count.load(std::memory_order_relaxed);
             while (now > peak &&
                    !tier.peak_count.compare_exchange_weak(peak, now, std::memory_order_relaxed))
@@ -284,7 +284,7 @@ void FiberPool::release_to(Tier& tier, Fiber* fiber) noexcept
     fiber->state = FiberState::Idle;
 #endif
 
-    tier.acquired_count.fetch_sub(1u, std::memory_order_relaxed);
+    tier.acquired_count.fetch_sub(1U, std::memory_order_relaxed);
 
     const crd::u32 idx = fiber->pool_index;
     crd::u64 head = tier.free_head.load(std::memory_order_relaxed);
@@ -322,7 +322,7 @@ crd::u32 FiberPool::available_count(FiberTier tier_kind) const noexcept
 {
     const Tier& t        = tier_of(tier_kind);
     const crd::u32 acq   = t.acquired_count.load(std::memory_order_relaxed);
-    return (acq <= t.count) ? (t.count - acq) : 0u;
+    return (acq <= t.count) ? (t.count - acq) : 0U;
 }
 
 crd::u32 FiberPool::peak_acquired(FiberTier tier_kind) const noexcept

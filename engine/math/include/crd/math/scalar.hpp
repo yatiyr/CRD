@@ -30,7 +30,7 @@ inline constexpr crd::f64 k_half_pi_d = k_half_pi<crd::f64>;
 
 template <MathScalar T> inline constexpr T default_epsilon() noexcept
 {
-    return std::is_same_v<T, crd::f32> ? static_cast<T>(1.0e-5f) : static_cast<T>(1.0e-12);
+    return std::is_same_v<T, crd::f32> ? static_cast<T>(1.0e-5F) : static_cast<T>(1.0e-12);
 }
 
 template <MathScalar T> [[nodiscard]] constexpr T deg_to_rad(T degrees) noexcept

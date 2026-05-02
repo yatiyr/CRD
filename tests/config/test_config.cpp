@@ -10,7 +10,7 @@ TEST_CASE("Config loads simple TOML and returns typed values", "[config]")
 
     REQUIRE(cfg.get<crd::containers::String>("title", crd::containers::String{}) == "Cerid");
     REQUIRE(cfg.get<int>("count", 0) == 7);
-    REQUIRE(std::fabs(cfg.get<crd::f32>("ratio", 0.0f) - 0.5f) < 0.0001f);
+    REQUIRE(std::fabs(cfg.get<crd::f32>("ratio", 0.0F) - 0.5F) < 0.0001F);
     REQUIRE(cfg.get<bool>("enabled", false));
 }
 
@@ -41,13 +41,13 @@ TEST_CASE("Config supports arrays and Vec4f", "[config]")
     REQUIRE(cfg.load_from_string("nums = [1, 2, 3]\ncolor = [0.1, 0.2, 0.3, 1.0]\n"));
 
     const auto nums = cfg.get<crd::containers::Array<crd::i64>>("nums", crd::containers::Array<crd::i64>{});
-    REQUIRE(nums.size() == 3u);
+    REQUIRE(nums.size() == 3U);
     REQUIRE(nums[0] == 1);
     REQUIRE(nums[2] == 3);
 
     const auto color = cfg.get<crd::math::Vec4f>("color", {});
-    REQUIRE(std::fabs(color.x - 0.1f) < 0.0001f);
-    REQUIRE(std::fabs(color.w - 1.0f) < 0.0001f);
+    REQUIRE(std::fabs(color.x - 0.1F) < 0.0001F);
+    REQUIRE(std::fabs(color.w - 1.0F) < 0.0001F);
 }
 
 TEST_CASE("Config set creates nested tables and roundtrips", "[config]")

@@ -374,8 +374,8 @@ void ImGuiLayer::apply_style()
     if (m_settings.multi_viewport)
     {
         ImGuiStyle& style = ImGui::GetStyle();
-        style.WindowRounding = 0.0f;
-        style.Colors[ImGuiCol_WindowBg].w = 1.0f;
+        style.WindowRounding = 0.0F;
+        style.Colors[ImGuiCol_WindowBg].w = 1.0F;
     }
 }
 
@@ -384,8 +384,8 @@ void ImGuiLayer::build_default_panels()
     if (m_settings.show_stats_panel)
     {
         ImGui::Begin("Cerid Debug");
-        ImGui::Text("FPS: %.2f", m_app.clock().delta_seconds() > 0.0 ? 1.0 / m_app.clock().delta_seconds() : 0.0);
-        ImGui::Text("Frame ms: %.3f", m_app.clock().delta_seconds() * 1000.0);
+        ImGui::Text("FPS: %.2F", m_app.clock().delta_seconds() > 0.0 ? 1.0 / m_app.clock().delta_seconds() : 0.0);
+        ImGui::Text("Frame ms: %.3F", m_app.clock().delta_seconds() * 1000.0);
         const auto size = m_app.window().window_size();
         ImGui::Text("Window: %d x %d", size.width, size.height);
         ImGui::Text("Docking: %s", m_settings.docking ? "on" : "off");

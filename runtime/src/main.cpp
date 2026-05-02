@@ -20,7 +20,7 @@ int main()
 
     crd::log::add_sink(std::make_unique<crd::log::ConsoleSink>());
     crd::log::add_sink(
-        std::make_unique<crd::log::FileSink>("engine.log", /*max_bytes*/ 1ull * 1024ull * 1024ull, /*max_files*/ 3));
+        std::make_unique<crd::log::FileSink>("engine.log", /*max_bytes*/ 1ULL * 1024ULL * 1024ULL, /*max_files*/ 3));
 
     CRD_LOG_INFO(g_log_runtime, "CRD Engine v{}.{}.{} startup skeleton", version_major, version_minor, version_patch);
     CRD_LOG_INFO(g_log_runtime, "platform={} compiler={} arch={}", crd::platform_name(), crd::compiler_name(),

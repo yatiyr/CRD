@@ -31,7 +31,7 @@ static thread_local Fiber*         tl_fiber    {nullptr};
 // Store fn/data separately to avoid thread_local alignas(64) issues on MSVC.
 static thread_local void         (*tl_job_fn)(void*) {nullptr};
 static thread_local void*          tl_job_data       {nullptr};
-static thread_local crd::u32       tl_idx      {0u};
+static thread_local crd::u32       tl_idx      {0U};
 static thread_local WorkerPool*    tl_pool_ptr {nullptr};
 static thread_local FrameArena*    tl_frame_arena {nullptr};
 // NOLINTEND(cppcoreguidelines-avoid-non-const-global-variables)
@@ -168,8 +168,8 @@ void WorkerPool::run_job_in_fiber(const crd::jobs::JobDecl& job)
         // Copy them into the fiber's sbo_buf so they survive suspension + resume on any thread.
         if (job._pad[8] == crd::jobs::detail::kSboFlag)
         {
-            std::memcpy(&target->sbo_buf[0], &job.data, 8u);
-            std::memcpy(&target->sbo_buf[8], &job._pad[9], 33u);
+            std::memcpy(&target->sbo_buf[0], &job.data, 8U);
+            std::memcpy(&target->sbo_buf[8], &job._pad[9], 33U);
             tl_job_data = target->sbo_buf;
         }
         else
@@ -228,11 +228,11 @@ bool WorkerPool::init(const WorkerConfig& cfg)
 {
     CRD_ASSERT_MSG(!m_initialized, "WorkerPool::init called twice");
 
-    m_num_threads = (cfg.num_threads == 0u)
+    m_num_threads = (cfg.num_threads == 0U)
         ? static_cast<crd::u32>(std::thread::hardware_concurrency())
         : cfg.num_threads;
-    if (m_num_threads == 0u)
-        m_num_threads = 1u; // hardware_concurrency() returned 0 on this platform
+    if (m_num_threads == 0U)
+        m_num_threads = 1U; // hardware_concurrency() returned 0 on this platform
 
     SchedulerConfig sched_cfg;
     sched_cfg.num_threads        = m_num_threads;
@@ -266,21 +266,21 @@ bool WorkerPool::init(const WorkerConfig& cfg)
     // by a reallocation (unlike std::vector).
     m_frame_arenas       = std::make_unique<FrameArena[]>(m_num_threads);
     m_frame_arena_count  = m_num_threads;
-    for (crd::u32 i = 0u; i < m_num_threads; ++i)
+    for (crd::u32 i = 0U; i < m_num_threads; ++i)
     {
         [[maybe_unused]] const bool ok = m_frame_arenas[i].init(cfg.frame_arena_bytes);
         CRD_ASSERT_MSG(ok, "WorkerPool::init: failed to allocate frame arena");
     }
 
     // Enroll the calling (main) thread as thread 0.
-    tl_idx         = 0u;
+    tl_idx         = 0U;
     tl_pool_ptr    = this;
     tl_frame_arena = &m_frame_arenas[0];
 
     // Spawn N-1 background worker threads (thread indices 1..N-1).
-    const crd::u32 worker_count = m_num_threads > 1u ? m_num_threads - 1u : 0u;
+    const crd::u32 worker_count = m_num_threads > 1U ? m_num_threads - 1U : 0U;
     m_threads.reserve(worker_count);
-    for (crd::u32 i = 1u; i < m_num_threads; ++i)
+    for (crd::u32 i = 1U; i < m_num_threads; ++i)
         m_threads.emplace_back(&WorkerPool::worker_loop, this, i);
 
     m_initialized = true;
@@ -308,7 +308,7 @@ void WorkerPool::shutdown() noexcept
 
     // Destroy all frame arenas (each ~FrameArena() calls free()).
     m_frame_arenas.reset();
-    m_frame_arena_count = 0u;
+    m_frame_arena_count = 0U;
 
     m_stopping.store(false, std::memory_order_relaxed);
     m_initialized = false;
@@ -320,7 +320,7 @@ void WorkerPool::shutdown() noexcept
 
 void WorkerPool::reset_all_frame_arenas() noexcept
 {
-    for (crd::u32 i = 0u; i < m_frame_arena_count; ++i)
+    for (crd::u32 i = 0U; i < m_frame_arena_count; ++i)
         m_frame_arenas[i].reset();
 }
 

@@ -11,7 +11,7 @@
 using crd::jobs::detail::Scheduler;
 using crd::jobs::JobDecl;
 using crd::jobs::Priority;
-using crd::jobs::StackSize;
+
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -412,27 +412,27 @@ TEST_CASE("scheduler: push increments semaphore for wait_for_work", "[jobs][sche
     Scheduler sched;
     REQUIRE(sched.init({1U, 256U, 32U}));
 
-    static constexpr int count = 5;
+    static constexpr int kCount = 5;
     std::atomic<int> dummy{0};
 
-    for (int i = 0; i < count; ++i)
+    for (int i = 0; i < kCount; ++i)
     {
         sched.push(make_count_job(&dummy, Priority::Normal));
     }
 
-    // Each wait_for_work() should return immediately (semaphore count = count).
-    for (int i = 0; i < count; ++i)
+    // Each wait_for_work() should return immediately (semaphore count = kCount).
+    for (int i = 0; i < kCount; ++i)
     {
         sched.wait_for_work();
     }
 
     // Jobs are still in the injection queue — drain them.
-    for (int i = 0; i < count; ++i)
+    for (int i = 0; i < kCount; ++i)
     {
         REQUIRE(sched.execute_one(0U));
     }
 
-    CHECK(dummy.load() == count);
+    CHECK(dummy.load() == kCount);
     CHECK_FALSE(sched.execute_one(0U));
 }
 
@@ -478,16 +478,16 @@ TEST_CASE("scheduler: push wakes blocked wait_for_work", "[jobs][scheduler]")
 
 TEST_CASE("scheduler: concurrent multi-thread stress", "[jobs][scheduler][stress]")
 {
-    static constexpr crd::u32 num_workers  = 4U;
-    static constexpr int      total_jobs   = 4000;
+    static constexpr crd::u32 kNumWorkers  = 4U;
+    static constexpr int      kTotalJobs   = 4000;
 
     Scheduler sched;
-    REQUIRE(sched.init({num_workers, 256U, 4096U}));
+    REQUIRE(sched.init({kNumWorkers, 256U, 4096U}));
 
     std::atomic<int> executed{0};
 
     // Push all jobs before starting workers.
-    for (int i = 0; i < total_jobs; ++i)
+    for (int i = 0; i < kTotalJobs; ++i)
     {
         Priority prio = Priority::Low;
         if (i % 3 == 0)      { prio = Priority::High; }
@@ -495,14 +495,14 @@ TEST_CASE("scheduler: concurrent multi-thread stress", "[jobs][scheduler][stress
         sched.push(make_count_job(&executed, prio));
     }
 
-    // Workers loop until all total_jobs have been run.
+    // Workers loop until all kTotalJobs have been run.
     std::vector<std::thread> workers;
-    workers.reserve(num_workers);
-    for (crd::u32 t = 0U; t < num_workers; ++t)
+    workers.reserve(kNumWorkers);
+    for (crd::u32 t = 0U; t < kNumWorkers; ++t)
     {
         workers.emplace_back([&sched, &executed, t]()
         {
-            while (executed.load(std::memory_order_acquire) < total_jobs)
+            while (executed.load(std::memory_order_acquire) < kTotalJobs)
             {
                 if (!sched.execute_one(t))
                 {
@@ -517,5 +517,5 @@ TEST_CASE("scheduler: concurrent multi-thread stress", "[jobs][scheduler][stress
         w.join();
     }
 
-    CHECK(executed.load() == total_jobs);
+    CHECK(executed.load() == kTotalJobs);
 }

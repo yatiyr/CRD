@@ -22,7 +22,7 @@ TEST_CASE("DynamicLibrary: open system library and resolve known symbol", "[plat
     using Fn = unsigned long(__stdcall*)();
     const auto fn = lib.resolve_as<Fn>("GetCurrentThreadId");
     REQUIRE(fn != nullptr);
-    REQUIRE(static_cast<crd::u32>(fn()) != 0u);
+    REQUIRE(static_cast<crd::u32>(fn()) != 0U);
 #elif CRD_OS_LINUX
     auto lib = crd::platform::DynamicLibrary::open(crd::platform::fs::Path("libm.so.6"));
     REQUIRE(lib.is_valid());

@@ -86,9 +86,9 @@ private:
         std::unique_ptr<Fiber[]> fibers;
         crd::u32                 count       = 0;
         crd::usize               stack_bytes = 0;
-        std::atomic<crd::u64>    free_head   {pack_head(kFiberNullIndex, 0u)};
-        std::atomic<crd::u32>    acquired_count{0u};
-        std::atomic<crd::u32>    peak_count    {0u};
+        std::atomic<crd::u64>    free_head   {pack_head(kFiberNullIndex, 0U)};
+        std::atomic<crd::u32>    acquired_count{0U};
+        std::atomic<crd::u32>    peak_count    {0U};
     };
 
     // Tagged-head helpers: [gen:32 | idx:32]

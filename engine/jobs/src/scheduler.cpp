@@ -15,15 +15,15 @@ namespace crd::jobs::detail
 bool Scheduler::init(const SchedulerConfig& cfg)
 {
     CRD_ASSERT_MSG(!m_initialized, "Scheduler::init called twice");
-    CRD_ASSERT_MSG(cfg.num_threads >= 1u,
+    CRD_ASSERT_MSG(cfg.num_threads >= 1U,
                    "Scheduler: num_threads must be >= 1");
-    CRD_ASSERT_MSG(cfg.deque_capacity >= 2u,
+    CRD_ASSERT_MSG(cfg.deque_capacity >= 2U,
                    "Scheduler: deque_capacity must be >= 2");
-    CRD_ASSERT_MSG((cfg.deque_capacity & (cfg.deque_capacity - 1u)) == 0u,
+    CRD_ASSERT_MSG((cfg.deque_capacity & (cfg.deque_capacity - 1U)) == 0U,
                    "Scheduler: deque_capacity must be a power of two");
-    CRD_ASSERT_MSG(cfg.injection_capacity >= 2u,
+    CRD_ASSERT_MSG(cfg.injection_capacity >= 2U,
                    "Scheduler: injection_capacity must be >= 2");
-    CRD_ASSERT_MSG((cfg.injection_capacity & (cfg.injection_capacity - 1u)) == 0u,
+    CRD_ASSERT_MSG((cfg.injection_capacity & (cfg.injection_capacity - 1U)) == 0U,
                    "Scheduler: injection_capacity must be a power of two");
 
     m_config = cfg;
@@ -33,7 +33,7 @@ bool Scheduler::init(const SchedulerConfig& cfg)
     m_low_injection    = std::make_unique<MpmcQueue<crd::jobs::JobDecl>>(cfg.injection_capacity);
 
     m_thread_states.reserve(cfg.num_threads);
-    for (crd::u32 i = 0u; i < cfg.num_threads; ++i)
+    for (crd::u32 i = 0U; i < cfg.num_threads; ++i)
     {
         m_thread_states.push_back(
             std::make_unique<ThreadState>(cfg.deque_capacity, i));
@@ -159,7 +159,7 @@ bool Scheduler::execute_one(crd::u32 thread_idx)
         crd::jobs::JobDecl job{};
         if (m_high_injection->dequeue(job))  { run_job(job); return true; }
         if (auto opt = me.high.pop())        { run_job(*opt); return true; }
-        for (crd::u32 i = 1u; i < m_config.num_threads; ++i)
+        for (crd::u32 i = 1U; i < m_config.num_threads; ++i)
         {
             const crd::u32 peer = (thread_idx + i) % m_config.num_threads;
             if (auto opt = m_thread_states[peer]->high.steal()) // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
@@ -175,7 +175,7 @@ bool Scheduler::execute_one(crd::u32 thread_idx)
         crd::jobs::JobDecl job{};
         if (m_normal_injection->dequeue(job)) { run_job(job); return true; }
         if (auto opt = me.normal.pop())       { run_job(*opt); return true; }
-        for (crd::u32 i = 1u; i < m_config.num_threads; ++i)
+        for (crd::u32 i = 1U; i < m_config.num_threads; ++i)
         {
             const crd::u32 peer = (thread_idx + i) % m_config.num_threads;
             if (auto opt = m_thread_states[peer]->normal.steal()) // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
@@ -191,7 +191,7 @@ bool Scheduler::execute_one(crd::u32 thread_idx)
         crd::jobs::JobDecl job{};
         if (m_low_injection->dequeue(job))  { run_job(job); return true; }
         if (auto opt = me.low.pop())        { run_job(*opt); return true; }
-        for (crd::u32 i = 1u; i < m_config.num_threads; ++i)
+        for (crd::u32 i = 1U; i < m_config.num_threads; ++i)
         {
             const crd::u32 peer = (thread_idx + i) % m_config.num_threads;
             if (auto opt = m_thread_states[peer]->low.steal()) // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
@@ -234,7 +234,7 @@ std::optional<crd::jobs::JobDecl> Scheduler::try_pop(crd::u32 thread_idx)
         crd::jobs::JobDecl job{};
         if (m_high_injection->dequeue(job)) return job;
         if (auto opt = me.high.pop()) return *opt;
-        for (crd::u32 i = 1u; i < m_config.num_threads; ++i)
+        for (crd::u32 i = 1U; i < m_config.num_threads; ++i)
         {
             const crd::u32 peer = (thread_idx + i) % m_config.num_threads;
             if (auto opt = m_thread_states[peer]->high.steal()) // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
@@ -247,7 +247,7 @@ std::optional<crd::jobs::JobDecl> Scheduler::try_pop(crd::u32 thread_idx)
         crd::jobs::JobDecl job{};
         if (m_normal_injection->dequeue(job)) return job;
         if (auto opt = me.normal.pop()) return *opt;
-        for (crd::u32 i = 1u; i < m_config.num_threads; ++i)
+        for (crd::u32 i = 1U; i < m_config.num_threads; ++i)
         {
             const crd::u32 peer = (thread_idx + i) % m_config.num_threads;
             if (auto opt = m_thread_states[peer]->normal.steal()) // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
@@ -260,7 +260,7 @@ std::optional<crd::jobs::JobDecl> Scheduler::try_pop(crd::u32 thread_idx)
         crd::jobs::JobDecl job{};
         if (m_low_injection->dequeue(job)) return job;
         if (auto opt = me.low.pop()) return *opt;
-        for (crd::u32 i = 1u; i < m_config.num_threads; ++i)
+        for (crd::u32 i = 1U; i < m_config.num_threads; ++i)
         {
             const crd::u32 peer = (thread_idx + i) % m_config.num_threads;
             if (auto opt = m_thread_states[peer]->low.steal()) // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
@@ -288,7 +288,7 @@ void Scheduler::wait_for_work()
 void Scheduler::wake_all(crd::u32 count)
 {
     CRD_ASSERT_MSG(m_initialized, "Scheduler::wake_all called before init");
-    if (count > 0u)
+    if (count > 0U)
         m_semaphore.release(static_cast<std::ptrdiff_t>(count));
 }
 

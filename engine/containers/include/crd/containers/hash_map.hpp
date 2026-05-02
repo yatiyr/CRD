@@ -50,8 +50,8 @@ namespace detail
 // A slot is empty iff distance == kEmptyDistance.
 // Distance encodes how far the live entry is from its ideal slot.
 // Zero is a valid distance (entry is in its ideal slot).
-inline constexpr u8 kEmptyDistance = 0xFFu;
-inline constexpr u8 kMaxDistance = 0xFEu; // saturates before sentinel
+inline constexpr u8 kEmptyDistance = 0xFFU;
+inline constexpr u8 kMaxDistance = 0xFEU; // saturates before sentinel
 } // namespace detail
 
 template <typename K, typename V, typename Hash = DefaultHash<K>, typename KeyEqual = std::equal_to<>> class HashMap
@@ -156,7 +156,7 @@ public:
 
     f32 load_factor() const noexcept
     {
-        return m_capacity == 0 ? 0.0f : static_cast<f32>(m_size) / static_cast<f32>(m_capacity);
+        return m_capacity == 0 ? 0.0F : static_cast<f32>(m_size) / static_cast<f32>(m_capacity);
     }
 
     static constexpr f32 max_load_factor() noexcept { return kMaxLoadFactor; }
@@ -328,7 +328,7 @@ public:
     memory::IAllocator* allocator() const noexcept { return m_alloc; }
 
 private:
-    static constexpr f32 kMaxLoadFactor = 0.875f;
+    static constexpr f32 kMaxLoadFactor = 0.875F;
     static constexpr usize kInitialCapacity = 8;
 
     // ---- Internal helpers -----------------------------------------

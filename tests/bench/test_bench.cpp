@@ -38,12 +38,12 @@ CRD_FORCEINLINE void disabled_trace_call() noexcept
     CRD_LOG_TRACE(g_log_bench, "disabled trace {}", 42);
 }
 
-volatile f32 g_vec3f_bench_bias = 0.0f;
+volatile f32 g_vec3f_bench_bias = 0.0F;
 volatile f64 g_vec3d_bench_bias = 0.0;
-volatile f32 g_mat4f_bench_bias = 0.0f;
+volatile f32 g_mat4f_bench_bias = 0.0F;
 volatile f64 g_mat4d_bench_bias = 0.0;
-volatile f32 g_quatf_bench_bias = 0.0f;
-volatile f32 g_transformf_bench_bias = 0.0f;
+volatile f32 g_quatf_bench_bias = 0.0F;
+volatile f32 g_transformf_bench_bias = 0.0F;
 } // namespace
 
 TEST_CASE("Disabled CRD_LOG_TRACE cost", "[bench][log]")
@@ -89,7 +89,7 @@ TEST_CASE("Array push_back amortised 1k", "[bench][containers]")
 
 TEST_CASE("HashMap integer workloads", "[bench][containers]")
 {
-    constexpr u32 kCount = 1u << 20;
+    constexpr u32 kCount = 1U << 20;
 
     BENCHMARK("HashMap<u32,u32> insert 1M")
     {
@@ -114,7 +114,7 @@ TEST_CASE("HashMap integer workloads", "[bench][containers]")
         for (u32 i = 0; i < kCount; ++i)
         {
             const u32* value = seeded.find(i);
-            sum += value ? *value : 0u;
+            sum += value ? *value : 0U;
         }
         return sum;
     };
@@ -149,8 +149,8 @@ TEST_CASE("String SSO vs heap workloads", "[bench][containers]")
 
 TEST_CASE("Vec3 float workloads", "[bench][math]")
 {
-    const Vec3f a(1.0f, 2.0f, 3.0f);
-    const Vec3f b(4.0f, 5.0f, 6.0f);
+    const Vec3f a(1.0F, 2.0F, 3.0F);
+    const Vec3f b(4.0F, 5.0F, 6.0F);
 
     BENCHMARK("Vec3f add")
     {
@@ -164,7 +164,7 @@ TEST_CASE("Vec3 float workloads", "[bench][math]")
 
     BENCHMARK("Vec3f normalize")
     {
-        const Vec3f v(3.0f + g_vec3f_bench_bias, 4.0f, 5.0f);
+        const Vec3f v(3.0F + g_vec3f_bench_bias, 4.0F, 5.0F);
         const Vec3f n = normalized(v);
         return n.x + n.y + n.z;
     };
@@ -192,18 +192,18 @@ TEST_CASE("Mat4 float workloads", "[bench][math]")
 {
     BENCHMARK("Mat4f * Vec4f")
     {
-        const Mat4f a(Vec4f(1.0f + g_mat4f_bench_bias, 2.0f, 3.0f, 4.0f), Vec4f(5.0f, 6.0f, 7.0f, 8.0f),
-                      Vec4f(9.0f, 10.0f, 11.0f, 12.0f), Vec4f(13.0f, 14.0f, 15.0f, 16.0f));
-        const Vec4f v(1.0f, 2.0f, 3.0f, 1.0f);
+        const Mat4f a(Vec4f(1.0F + g_mat4f_bench_bias, 2.0F, 3.0F, 4.0F), Vec4f(5.0F, 6.0F, 7.0F, 8.0F),
+                      Vec4f(9.0F, 10.0F, 11.0F, 12.0F), Vec4f(13.0F, 14.0F, 15.0F, 16.0F));
+        const Vec4f v(1.0F, 2.0F, 3.0F, 1.0F);
         return a * v;
     };
 
     BENCHMARK("Mat4f * Mat4f")
     {
-        const Mat4f a(Vec4f(1.0f + g_mat4f_bench_bias, 2.0f, 3.0f, 4.0f), Vec4f(5.0f, 6.0f, 7.0f, 8.0f),
-                      Vec4f(9.0f, 10.0f, 11.0f, 12.0f), Vec4f(13.0f, 14.0f, 15.0f, 16.0f));
-        const Mat4f b(Vec4f(0.5f, 1.5f, 2.5f, 3.5f), Vec4f(4.5f, 5.5f, 6.5f, 7.5f), Vec4f(8.5f, 9.5f, 10.5f, 11.5f),
-                      Vec4f(12.5f, 13.5f, 14.5f, 15.5f));
+        const Mat4f a(Vec4f(1.0F + g_mat4f_bench_bias, 2.0F, 3.0F, 4.0F), Vec4f(5.0F, 6.0F, 7.0F, 8.0F),
+                      Vec4f(9.0F, 10.0F, 11.0F, 12.0F), Vec4f(13.0F, 14.0F, 15.0F, 16.0F));
+        const Mat4f b(Vec4f(0.5F, 1.5F, 2.5F, 3.5F), Vec4f(4.5F, 5.5F, 6.5F, 7.5F), Vec4f(8.5F, 9.5F, 10.5F, 11.5F),
+                      Vec4f(12.5F, 13.5F, 14.5F, 15.5F));
         return a * b;
     };
 }
@@ -232,15 +232,15 @@ TEST_CASE("Quaternion workloads", "[bench][math]")
 {
     BENCHMARK("Quatf multiply")
     {
-        const Quatf a = from_axis_angle(Vec3f(0.0f, 0.0f, 1.0f), k_half_pi_f + g_quatf_bench_bias);
-        const Quatf b = from_axis_angle(Vec3f(0.0f, 1.0f, 0.0f), deg_to_rad(30.0f));
+        const Quatf a = from_axis_angle(Vec3f(0.0F, 0.0F, 1.0F), k_half_pi_f + g_quatf_bench_bias);
+        const Quatf b = from_axis_angle(Vec3f(0.0F, 1.0F, 0.0F), deg_to_rad(30.0F));
         return a * b;
     };
 
     BENCHMARK("Quatf rotate Vec3f")
     {
-        const Quatf a = from_axis_angle(Vec3f(0.0f, 0.0f, 1.0f), k_half_pi_f + g_quatf_bench_bias);
-        const Vec3f v(1.0f, 2.0f, 3.0f);
+        const Quatf a = from_axis_angle(Vec3f(0.0F, 0.0F, 1.0F), k_half_pi_f + g_quatf_bench_bias);
+        const Vec3f v(1.0F, 2.0F, 3.0F);
         return rotate_vector(a, v);
     };
 }
@@ -249,40 +249,40 @@ TEST_CASE("Transform workloads", "[bench][math]")
 {
     BENCHMARK("Transformf compose")
     {
-        const Transformf a(Vec3f(1.0f + g_transformf_bench_bias, 2.0f, 3.0f),
-                           from_axis_angle(Vec3f(0.0f, 0.0f, 1.0f), k_half_pi_f));
-        const Transformf b(Vec3f(-2.0f, 1.0f, 0.5f), from_axis_angle(Vec3f(0.0f, 1.0f, 0.0f), deg_to_rad(30.0f)));
+        const Transformf a(Vec3f(1.0F + g_transformf_bench_bias, 2.0F, 3.0F),
+                           from_axis_angle(Vec3f(0.0F, 0.0F, 1.0F), k_half_pi_f));
+        const Transformf b(Vec3f(-2.0F, 1.0F, 0.5F), from_axis_angle(Vec3f(0.0F, 1.0F, 0.0F), deg_to_rad(30.0F)));
         return a * b;
     };
 
     BENCHMARK("Transformf point")
     {
-        const Transformf a(Vec3f(1.0f + g_transformf_bench_bias, 2.0f, 3.0f),
-                           from_axis_angle(Vec3f(0.0f, 0.0f, 1.0f), k_half_pi_f));
-        const Vec3f p(0.25f, -0.5f, 0.75f);
+        const Transformf a(Vec3f(1.0F + g_transformf_bench_bias, 2.0F, 3.0F),
+                           from_axis_angle(Vec3f(0.0F, 0.0F, 1.0F), k_half_pi_f));
+        const Vec3f p(0.25F, -0.5F, 0.75F);
         return transform_point(a, p);
     };
 }
 
 TEST_CASE("Primitive geometry workloads", "[bench][math]")
 {
-    const Rayf ray(Vec3f(0.0f, 0.0f, -5.0f), Vec3f(0.0f, 0.0f, 1.0f));
-    const Planef plane = plane_from_point_normal(Vec3f(0.0f, 0.0f, 0.0f), Vec3f(0.0f, 0.0f, 1.0f));
-    const Trianglef tri(Vec3f(-1.0f, -1.0f, 0.0f), Vec3f(1.0f, -1.0f, 0.0f), Vec3f(0.0f, 1.0f, 0.0f));
+    const Rayf ray(Vec3f(0.0F, 0.0F, -5.0F), Vec3f(0.0F, 0.0F, 1.0F));
+    const Planef plane = plane_from_point_normal(Vec3f(0.0F, 0.0F, 0.0F), Vec3f(0.0F, 0.0F, 1.0F));
+    const Trianglef tri(Vec3f(-1.0F, -1.0F, 0.0F), Vec3f(1.0F, -1.0F, 0.0F), Vec3f(0.0F, 1.0F, 0.0F));
     const Frustumf frustum = frustum_from_view_projection(Mat4f::identity());
-    const AABBf bounds(Vec3f(-0.5f, -0.5f, -0.5f), Vec3f(0.5f, 0.5f, 0.5f));
+    const AABBf bounds(Vec3f(-0.5F, -0.5F, -0.5F), Vec3f(0.5F, 0.5F, 0.5F));
 
     BENCHMARK("Rayf plane intersection")
     {
-        f32 t = 0.0f;
-        return intersect_ray_plane(ray, plane, t) ? t : -1.0f;
+        f32 t = 0.0F;
+        return intersect_ray_plane(ray, plane, t) ? t : -1.0F;
     };
 
     BENCHMARK("Rayf triangle intersection")
     {
-        f32 t = 0.0f;
+        f32 t = 0.0F;
         Vec3f bary{};
-        return intersect_ray_triangle(ray, tri, t, bary) ? t + bary.x : -1.0f;
+        return intersect_ray_triangle(ray, tri, t, bary) ? t + bary.x : -1.0F;
     };
 
     BENCHMARK("Frustumf AABB test")

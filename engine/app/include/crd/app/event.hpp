@@ -10,12 +10,12 @@ using EventTypeId = const void*;
 enum class EventCategory : crd::u32
 {
     None = 0,
-    Application = 1u << 0u,
-    Input = 1u << 1u,
-    Keyboard = 1u << 2u,
-    Mouse = 1u << 3u,
-    MouseButton = 1u << 4u,
-    Window = 1u << 5u,
+    Application = 1U << 0U,
+    Input = 1U << 1U,
+    Keyboard = 1U << 2U,
+    Mouse = 1U << 3U,
+    MouseButton = 1U << 4U,
+    Window = 1U << 5U,
 };
 
 [[nodiscard]] constexpr crd::u32 operator|(EventCategory a, EventCategory b) noexcept
@@ -34,7 +34,7 @@ public:
 
     [[nodiscard]] bool is_in_category(EventCategory category) const noexcept
     {
-        return (categories() & static_cast<crd::u32>(category)) != 0u;
+        return (categories() & static_cast<crd::u32>(category)) != 0U;
     }
 
     bool handled = false;

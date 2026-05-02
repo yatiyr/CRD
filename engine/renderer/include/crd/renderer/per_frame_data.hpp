@@ -17,10 +17,10 @@ struct PerFrameUbo
     crd::math::Mat4f view_proj;      // proj * view, precomputed
     crd::math::Mat4f inv_view_proj;  // inverse of view_proj (used for depth reconstruction)
     crd::math::Vec4f camera_pos_ws;  // world-space camera origin (w unused)
-    crd::f32 viewport_width  = 0.0f;
-    crd::f32 viewport_height = 0.0f;
-    crd::f32 time_seconds    = 0.0f;
-    crd::f32 _pad            = 0.0f;
+    crd::f32 viewport_width  = 0.0F;
+    crd::f32 viewport_height = 0.0F;
+    crd::f32 time_seconds    = 0.0F;
+    crd::f32 _pad            = 0.0F;
 };
 static_assert(sizeof(PerFrameUbo) == 288,
               "PerFrameUbo must be exactly 288 bytes (4 Mat4f + 1 Vec4f + 4 f32)");

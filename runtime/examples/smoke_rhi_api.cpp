@@ -200,9 +200,9 @@ int main()
     auto fs =
         device.create_shader_module({crd::rhi::ShaderStage::Fragment, "main", crd::containers::make_span(shader_code)});
     auto vb = device.create_buffer(
-        {sizeof(float) * 18u, static_cast<crd::u32>(crd::rhi::BufferUsage::Vertex | crd::rhi::BufferUsage::TransferDst),
+        {sizeof(float) * 18U, static_cast<crd::u32>(crd::rhi::BufferUsage::Vertex | crd::rhi::BufferUsage::TransferDst),
          crd::rhi::MemoryUsage::CpuToGpu});
-    crd::rhi::VertexBindingDesc binding{0, sizeof(float) * 6u, crd::rhi::VertexInputRate::Vertex};
+    crd::rhi::VertexBindingDesc binding{0, sizeof(float) * 6U, crd::rhi::VertexInputRate::Vertex};
     crd::rhi::VertexAttributeDesc attrs[] = {{0, 0, crd::rhi::Format::R8G8B8A8Unorm, 0},
                                              {1, 0, crd::rhi::Format::R8G8B8A8Unorm, 16}};
     auto pipeline = device.create_graphics_pipeline({vs.get(),
@@ -222,7 +222,7 @@ int main()
     (void)swapchain->acquire_next_image();
     cb->begin();
     cb->begin_rendering(
-        {{1280, 720}, {nullptr, crd::rhi::LoadOp::Clear, crd::rhi::StoreOp::Store, {0.1f, 0.1f, 0.2f, 1.0f}}, nullptr});
+        {{1280, 720}, {nullptr, crd::rhi::LoadOp::Clear, crd::rhi::StoreOp::Store, {0.1F, 0.1F, 0.2F, 1.0F}}, nullptr});
     cb->bind_pipeline(*pipeline);
     cb->bind_vertex_buffer(*vb, 0);
     cb->draw(3, 0);

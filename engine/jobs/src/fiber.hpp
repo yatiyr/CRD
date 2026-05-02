@@ -13,7 +13,7 @@ struct Counter;
 enum class FiberTier : crd::u8 { Small, Medium, Large };
 
 // Sentinel value for the Treiber free-list link — means "no next fiber".
-static constexpr crd::u32 kFiberNullIndex = 0xFFFF'FFFFu;
+static constexpr crd::u32 kFiberNullIndex = 0xFFFF'FFFFU;
 
 #if CRD_ENABLE_ASSERTS
 // Explicit state machine. Only Idle↔Active transitions are enforced in v1b.

@@ -52,7 +52,7 @@ void* LinearAllocator::allocate(usize size, usize alignment)
 
     m_offset = new_offset;
     m_stats.on_allocate(size);
-    return reinterpret_cast<void*>(aligned);
+    return m_buffer + (new_offset - size);
 }
 
 void LinearAllocator::deallocate(void* /*p*/) noexcept

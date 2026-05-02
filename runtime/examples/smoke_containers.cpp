@@ -63,8 +63,8 @@ int main()
     asset_versions.insert(String("shader.frag"), 7);
     asset_versions.insert(String("texture.png"), 11);
     const auto* mesh_v = asset_versions.find(StringView{"mesh.obj"});
-    CRD_LOG_INFO(g_log_runtime_containers, "HashMap<String,u32>: size={} cap={} load_factor={:.3f} mesh.obj v={}",
-                 asset_versions.size(), asset_versions.capacity(), asset_versions.load_factor(), mesh_v ? *mesh_v : 0u);
+    CRD_LOG_INFO(g_log_runtime_containers, "HashMap<String,u32>: size={} cap={} load_factor={:.3F} mesh.obj v={}",
+                 asset_versions.size(), asset_versions.capacity(), asset_versions.load_factor(), mesh_v ? *mesh_v : 0U);
 
     HashSet<crd::u32> seen_tags;
     for (crd::u32 i = 0; i < 100; ++i)

@@ -69,7 +69,7 @@ int main()
     };
 
     const Vertex vertices[] = {
-        {{0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}}, {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}}, {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}};
+        {{0.0F, -0.5F}, {1.0F, 0.0F, 0.0F}}, {{0.5F, 0.5F}, {0.0F, 1.0F, 0.0F}}, {{-0.5F, 0.5F}, {0.0F, 0.0F, 1.0F}}};
 
     auto vertex_buffer = device->create_buffer(
         {sizeof(vertices), crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex), crd::rhi::MemoryUsage::CpuToGpu});
@@ -95,7 +95,7 @@ int main()
 
     const crd::rhi::VertexBindingDesc binding{0, sizeof(Vertex), crd::rhi::VertexInputRate::Vertex};
     const crd::rhi::VertexAttributeDesc attributes[] = {{0, 0, crd::rhi::Format::R32G32Sfloat, 0},
-                                                        {1, 0, crd::rhi::Format::R32G32B32Sfloat, sizeof(float) * 2u}};
+                                                        {1, 0, crd::rhi::Format::R32G32B32Sfloat, sizeof(float) * 2U}};
     auto pipeline = device->create_graphics_pipeline({vs.get(),
                                                       fs_module.get(),
                                                       crd::rhi::PrimitiveTopology::TriangleList,
@@ -145,7 +145,7 @@ int main()
                                              {&swapchain->current_image(),
                                               crd::rhi::LoadOp::Clear,
                                               crd::rhi::StoreOp::Store,
-                                              {0.07f, 0.08f, 0.12f, 1.0f}},
+                                              {0.07F, 0.08F, 0.12F, 1.0F}},
                                              nullptr});
             command_buffer->bind_pipeline(*pipeline);
             command_buffer->bind_vertex_buffer(*vertex_buffer, 0);

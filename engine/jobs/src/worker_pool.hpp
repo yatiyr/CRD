@@ -18,14 +18,14 @@ namespace crd::jobs::detail
 // Configuration for WorkerPool::init().
 struct WorkerConfig
 {
-    crd::u32 num_threads        = 0u;       // 0 = hardware_concurrency()
-    crd::u32 deque_capacity     = 256u;
-    crd::u32 injection_capacity = 4096u;
-    crd::u32 small_fiber_count  = 128u;
-    crd::u32 medium_fiber_count = 64u;
-    crd::u32 large_fiber_count  = 16u;
-    crd::u32 max_counters       = 512u;
-    crd::u32 frame_arena_bytes  = 1u << 20u; // 1 MB per thread
+    crd::u32 num_threads        = 0U;       // 0 = hardware_concurrency()
+    crd::u32 deque_capacity     = 256U;
+    crd::u32 injection_capacity = 4096U;
+    crd::u32 small_fiber_count  = 128U;
+    crd::u32 medium_fiber_count = 64U;
+    crd::u32 large_fiber_count  = 16U;
+    crd::u32 max_counters       = 512U;
+    crd::u32 frame_arena_bytes  = 1U << 20U; // 1 MB per thread
 };
 
 // Owns the Scheduler, FiberPool, and CounterPool. Spawns N-1 OS worker threads;
@@ -103,11 +103,11 @@ private:
     // Per-thread frame arenas. unique_ptr<T[]> avoids vector relocation, which would
     // silently invalidate the tl_frame_arena_ptr thread-locals already set by each thread.
     std::unique_ptr<FrameArena[]> m_frame_arenas;
-    crd::u32                      m_frame_arena_count = 0u;
+    crd::u32                      m_frame_arena_count = 0U;
 
     std::vector<std::thread> m_threads;
     std::atomic<bool>        m_stopping{false};
-    crd::u32                 m_num_threads = 0u;
+    crd::u32                 m_num_threads = 0U;
     bool                     m_initialized = false;
 };
 

@@ -12,10 +12,10 @@ TEST_CASE("InputState: default-initialised has nothing held", "[platform][input]
     REQUIRE_FALSE(s.was_key_pressed(Key::W));
     REQUIRE_FALSE(s.was_key_released(Key::W));
     REQUIRE_FALSE(s.is_mouse_down(MouseButton::Left));
-    REQUIRE(s.mouse_x() == 0.0f);
-    REQUIRE(s.mouse_y() == 0.0f);
-    REQUIRE(s.mouse_dx() == 0.0f);
-    REQUIRE(s.mouse_dy() == 0.0f);
+    REQUIRE(s.mouse_x() == 0.0F);
+    REQUIRE(s.mouse_y() == 0.0F);
+    REQUIRE(s.mouse_dx() == 0.0F);
+    REQUIRE(s.mouse_dy() == 0.0F);
 }
 
 TEST_CASE("Input: key down sets pressed for one frame, then sticky-down", "[platform][input][state]")
@@ -89,42 +89,42 @@ TEST_CASE("Input: mouse button transitions mirror keys", "[platform][input][stat
 TEST_CASE("Input: mouse first move seeds without spurious delta", "[platform][input][state]")
 {
     Input in;
-    in.push_mouse_move(100.0f, 200.0f);
-    REQUIRE(in.state().mouse_x() == 100.0f);
-    REQUIRE(in.state().mouse_y() == 200.0f);
-    REQUIRE(in.state().mouse_dx() == 0.0f);
-    REQUIRE(in.state().mouse_dy() == 0.0f);
+    in.push_mouse_move(100.0F, 200.0F);
+    REQUIRE(in.state().mouse_x() == 100.0F);
+    REQUIRE(in.state().mouse_y() == 200.0F);
+    REQUIRE(in.state().mouse_dx() == 0.0F);
+    REQUIRE(in.state().mouse_dy() == 0.0F);
 
-    in.push_mouse_move(105.0f, 195.0f);
-    REQUIRE(in.state().mouse_x() == 105.0f);
-    REQUIRE(in.state().mouse_y() == 195.0f);
-    REQUIRE(in.state().mouse_dx() == 5.0f);
-    REQUIRE(in.state().mouse_dy() == -5.0f);
+    in.push_mouse_move(105.0F, 195.0F);
+    REQUIRE(in.state().mouse_x() == 105.0F);
+    REQUIRE(in.state().mouse_y() == 195.0F);
+    REQUIRE(in.state().mouse_dx() == 5.0F);
+    REQUIRE(in.state().mouse_dy() == -5.0F);
 }
 
 TEST_CASE("Input: mouse delta resets on poll_begin", "[platform][input][state]")
 {
     Input in;
-    in.push_mouse_move(0.0f, 0.0f);   // seed
-    in.push_mouse_move(10.0f, 20.0f); // dx=10, dy=20
-    REQUIRE(in.state().mouse_dx() == 10.0f);
+    in.push_mouse_move(0.0F, 0.0F);   // seed
+    in.push_mouse_move(10.0F, 20.0F); // dx=10, dy=20
+    REQUIRE(in.state().mouse_dx() == 10.0F);
 
     in.on_poll_begin();
-    REQUIRE(in.state().mouse_dx() == 0.0f);
-    REQUIRE(in.state().mouse_dy() == 0.0f);
+    REQUIRE(in.state().mouse_dx() == 0.0F);
+    REQUIRE(in.state().mouse_dy() == 0.0F);
     // Position is preserved across frames.
-    REQUIRE(in.state().mouse_x() == 10.0f);
+    REQUIRE(in.state().mouse_x() == 10.0F);
 }
 
 TEST_CASE("Input: scroll accumulates within a frame and resets on poll", "[platform][input][state]")
 {
     Input in;
-    in.push_scroll(0.0f, 1.0f);
-    in.push_scroll(0.0f, 2.0f);
-    REQUIRE(in.state().scroll_dy() == 3.0f);
+    in.push_scroll(0.0F, 1.0F);
+    in.push_scroll(0.0F, 2.0F);
+    REQUIRE(in.state().scroll_dy() == 3.0F);
 
     in.on_poll_begin();
-    REQUIRE(in.state().scroll_dy() == 0.0f);
+    REQUIRE(in.state().scroll_dy() == 0.0F);
 }
 
 TEST_CASE("Input: event queue is opt-in and FIFO ordered", "[platform][input][queue]")

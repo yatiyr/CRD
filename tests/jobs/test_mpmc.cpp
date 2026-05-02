@@ -65,17 +65,17 @@ TEST_CASE("mpmc_queue: dequeue empty returns false", "[jobs][mpmc]")
 
 TEST_CASE("mpmc_queue: enqueue full returns false", "[jobs][mpmc]")
 {
-    static constexpr crd::u32 cap = 4U;
-    MpmcQueue<crd::u32> q(cap);
+    static constexpr crd::u32 kCap = 4U;
+    MpmcQueue<crd::u32> q(kCap);
 
-    for (crd::u32 i = 0U; i < cap; ++i)
+    for (crd::u32 i = 0U; i < kCap; ++i)
     {
         REQUIRE(q.enqueue(i));
     }
     CHECK_FALSE(q.enqueue(99U)); // full
 
     // Drain.
-    for (crd::u32 i = 0U; i < cap; ++i)
+    for (crd::u32 i = 0U; i < kCap; ++i)
     {
         crd::u32 v;
         REQUIRE(q.dequeue(v));
@@ -90,15 +90,15 @@ TEST_CASE("mpmc_queue: enqueue full returns false", "[jobs][mpmc]")
 
 TEST_CASE("mpmc_queue: FIFO ordering single-threaded", "[jobs][mpmc]")
 {
-    static constexpr crd::u32 n = 6U;
+    static constexpr crd::u32 kN = 6U;
     MpmcQueue<crd::u32> q(16U);
 
-    for (crd::u32 i = 0U; i < n; ++i)
+    for (crd::u32 i = 0U; i < kN; ++i)
     {
         REQUIRE(q.enqueue(i));
     }
 
-    for (crd::u32 i = 0U; i < n; ++i)
+    for (crd::u32 i = 0U; i < kN; ++i)
     {
         crd::u32 val;
         REQUIRE(q.dequeue(val));
@@ -114,25 +114,25 @@ TEST_CASE("mpmc_queue: FIFO ordering single-threaded", "[jobs][mpmc]")
 
 TEST_CASE("mpmc_queue: wrap-around across full cycles", "[jobs][mpmc]")
 {
-    static constexpr crd::u32 cap    = 4U;
-    static constexpr crd::u32 passes = 3U;
+    static constexpr crd::u32 kCap    = 4U;
+    static constexpr crd::u32 kPasses = 3U;
 
-    MpmcQueue<crd::u32> q(cap);
+    MpmcQueue<crd::u32> q(kCap);
 
-    for (crd::u32 pass = 0U; pass < passes; ++pass)
+    for (crd::u32 pass = 0U; pass < kPasses; ++pass)
     {
-        for (crd::u32 i = 0U; i < cap; ++i)
+        for (crd::u32 i = 0U; i < kCap; ++i)
         {
-            REQUIRE(q.enqueue(pass * cap + i));
+            REQUIRE(q.enqueue(pass * kCap + i));
         }
         // Queue must be exactly full.
         CHECK_FALSE(q.enqueue(0xFFFFU));
 
-        for (crd::u32 i = 0U; i < cap; ++i)
+        for (crd::u32 i = 0U; i < kCap; ++i)
         {
             crd::u32 val{0U};
             REQUIRE(q.dequeue(val));
-            CHECK(val == pass * cap + i);
+            CHECK(val == pass * kCap + i);
         }
         // Queue must be exactly empty.
         crd::u32 dummy{0U};
@@ -147,18 +147,18 @@ TEST_CASE("mpmc_queue: wrap-around across full cycles", "[jobs][mpmc]")
 
 TEST_CASE("mpmc_queue: SPSC concurrent stress", "[jobs][mpmc][stress]")
 {
-    static constexpr crd::u32 cap        = 256U;
-    static constexpr crd::u32 total_items = 10000U;
+    static constexpr crd::u32 kCap        = 256U;
+    static constexpr crd::u32 kTotalItems = 10000U;
 
-    MpmcQueue<crd::u32> q(cap);
+    MpmcQueue<crd::u32> q(kCap);
 
-    std::vector<std::atomic<int>> seen(total_items);
+    std::vector<std::atomic<int>> seen(kTotalItems);
     for (auto& a : seen)
     {
         a.store(0, std::memory_order_relaxed);
     }
 
-    std::atomic<crd::u32> remaining{total_items};
+    std::atomic<crd::u32> remaining{kTotalItems};
 
     std::thread consumer([&]()
     {
@@ -173,14 +173,14 @@ TEST_CASE("mpmc_queue: SPSC concurrent stress", "[jobs][mpmc][stress]")
         }
     });
 
-    for (crd::u32 i = 0U; i < total_items; ++i)
+    for (crd::u32 i = 0U; i < kTotalItems; ++i)
     {
         while (!q.enqueue(i)) { /* spin: queue full */ }
     }
 
     consumer.join();
 
-    for (crd::u32 i = 0U; i < total_items; ++i)
+    for (crd::u32 i = 0U; i < kTotalItems; ++i)
     {
         CHECK(seen.at(i).load(std::memory_order_relaxed) == 1);
     }
@@ -193,24 +193,24 @@ TEST_CASE("mpmc_queue: SPSC concurrent stress", "[jobs][mpmc][stress]")
 
 TEST_CASE("mpmc_queue: MPSC concurrent stress", "[jobs][mpmc][stress]")
 {
-    static constexpr crd::u32 cap           = 256U;
-    static constexpr crd::u32 num_producers = 4U;
-    static constexpr crd::u32 per_producer  = 2500U;
-    static constexpr crd::u32 total_items   = num_producers * per_producer;
+    static constexpr crd::u32 kCap          = 256U;
+    static constexpr crd::u32 kNumProducers = 4U;
+    static constexpr crd::u32 kPerProducer  = 2500U;
+    static constexpr crd::u32 kTotalItems   = kNumProducers * kPerProducer;
 
-    MpmcQueue<crd::u32> q(cap);
+    MpmcQueue<crd::u32> q(kCap);
 
-    std::vector<std::atomic<int>> seen(total_items);
+    std::vector<std::atomic<int>> seen(kTotalItems);
     for (auto& a : seen)
     {
         a.store(0, std::memory_order_relaxed);
     }
 
-    // Single consumer: loops until it has consumed exactly total_items items.
+    // Single consumer: loops until it has consumed exactly kTotalItems items.
     std::thread consumer([&]()
     {
         crd::u32 consumed = 0U;
-        while (consumed < total_items)
+        while (consumed < kTotalItems)
         {
             crd::u32 val;
             if (q.dequeue(val))
@@ -222,13 +222,13 @@ TEST_CASE("mpmc_queue: MPSC concurrent stress", "[jobs][mpmc][stress]")
     });
 
     std::vector<std::thread> producers;
-    producers.reserve(num_producers);
-    for (crd::u32 p = 0U; p < num_producers; ++p)
+    producers.reserve(kNumProducers);
+    for (crd::u32 p = 0U; p < kNumProducers; ++p)
     {
         producers.emplace_back([&, p]()
         {
-            const crd::u32 start = p * per_producer;
-            const crd::u32 end   = start + per_producer;
+            const crd::u32 start = p * kPerProducer;
+            const crd::u32 end   = start + kPerProducer;
             for (crd::u32 i = start; i < end; ++i)
             {
                 while (!q.enqueue(i)) { /* spin: queue full */ }
@@ -242,7 +242,7 @@ TEST_CASE("mpmc_queue: MPSC concurrent stress", "[jobs][mpmc][stress]")
     }
     consumer.join();
 
-    for (crd::u32 i = 0U; i < total_items; ++i)
+    for (crd::u32 i = 0U; i < kTotalItems; ++i)
     {
         CHECK(seen.at(i).load(std::memory_order_relaxed) == 1);
     }
@@ -255,24 +255,24 @@ TEST_CASE("mpmc_queue: MPSC concurrent stress", "[jobs][mpmc][stress]")
 
 TEST_CASE("mpmc_queue: SPMC concurrent stress", "[jobs][mpmc][stress]")
 {
-    static constexpr crd::u32 cap           = 256U;
-    static constexpr crd::u32 num_consumers = 4U;
-    static constexpr crd::u32 total_items   = 10000U;
+    static constexpr crd::u32 kCap          = 256U;
+    static constexpr crd::u32 kNumConsumers = 4U;
+    static constexpr crd::u32 kTotalItems   = 10000U;
 
-    MpmcQueue<crd::u32> q(cap);
+    MpmcQueue<crd::u32> q(kCap);
 
-    std::vector<std::atomic<int>> seen(total_items);
+    std::vector<std::atomic<int>> seen(kTotalItems);
     for (auto& a : seen)
     {
         a.store(0, std::memory_order_relaxed);
     }
 
     // remaining tracks items not yet dequeued. Consumers exit when it hits 0.
-    std::atomic<crd::u32> remaining{total_items};
+    std::atomic<crd::u32> remaining{kTotalItems};
 
     std::vector<std::thread> consumers;
-    consumers.reserve(num_consumers);
-    for (crd::u32 c = 0U; c < num_consumers; ++c)
+    consumers.reserve(kNumConsumers);
+    for (crd::u32 c = 0U; c < kNumConsumers; ++c)
     {
         consumers.emplace_back([&]()
         {
@@ -288,7 +288,7 @@ TEST_CASE("mpmc_queue: SPMC concurrent stress", "[jobs][mpmc][stress]")
         });
     }
 
-    for (crd::u32 i = 0U; i < total_items; ++i)
+    for (crd::u32 i = 0U; i < kTotalItems; ++i)
     {
         while (!q.enqueue(i)) { /* spin: queue full */ }
     }
@@ -298,7 +298,7 @@ TEST_CASE("mpmc_queue: SPMC concurrent stress", "[jobs][mpmc][stress]")
         t.join();
     }
 
-    for (crd::u32 i = 0U; i < total_items; ++i)
+    for (crd::u32 i = 0U; i < kTotalItems; ++i)
     {
         CHECK(seen.at(i).load(std::memory_order_relaxed) == 1);
     }
@@ -312,25 +312,25 @@ TEST_CASE("mpmc_queue: SPMC concurrent stress", "[jobs][mpmc][stress]")
 
 TEST_CASE("mpmc_queue: MPMC concurrent stress", "[jobs][mpmc][stress]")
 {
-    static constexpr crd::u32 cap           = 256U;
-    static constexpr crd::u32 num_producers = 4U;
-    static constexpr crd::u32 num_consumers = 4U;
-    static constexpr crd::u32 per_producer  = 2500U;
-    static constexpr crd::u32 total_items   = num_producers * per_producer;
+    static constexpr crd::u32 kCap          = 256U;
+    static constexpr crd::u32 kNumProducers = 4U;
+    static constexpr crd::u32 kNumConsumers = 4U;
+    static constexpr crd::u32 kPerProducer  = 2500U;
+    static constexpr crd::u32 kTotalItems   = kNumProducers * kPerProducer;
 
-    MpmcQueue<crd::u32> q(cap);
+    MpmcQueue<crd::u32> q(kCap);
 
-    std::vector<std::atomic<int>> seen(total_items);
+    std::vector<std::atomic<int>> seen(kTotalItems);
     for (auto& a : seen)
     {
         a.store(0, std::memory_order_relaxed);
     }
 
-    std::atomic<crd::u32> remaining{total_items};
+    std::atomic<crd::u32> remaining{kTotalItems};
 
     std::vector<std::thread> consumers;
-    consumers.reserve(num_consumers);
-    for (crd::u32 c = 0U; c < num_consumers; ++c)
+    consumers.reserve(kNumConsumers);
+    for (crd::u32 c = 0U; c < kNumConsumers; ++c)
     {
         consumers.emplace_back([&]()
         {
@@ -347,13 +347,13 @@ TEST_CASE("mpmc_queue: MPMC concurrent stress", "[jobs][mpmc][stress]")
     }
 
     std::vector<std::thread> producers;
-    producers.reserve(num_producers);
-    for (crd::u32 p = 0U; p < num_producers; ++p)
+    producers.reserve(kNumProducers);
+    for (crd::u32 p = 0U; p < kNumProducers; ++p)
     {
         producers.emplace_back([&, p]()
         {
-            const crd::u32 start = p * per_producer;
-            const crd::u32 end   = start + per_producer;
+            const crd::u32 start = p * kPerProducer;
+            const crd::u32 end   = start + kPerProducer;
             for (crd::u32 i = start; i < end; ++i)
             {
                 while (!q.enqueue(i)) { /* spin: queue full */ }
@@ -370,7 +370,7 @@ TEST_CASE("mpmc_queue: MPMC concurrent stress", "[jobs][mpmc][stress]")
         t.join();
     }
 
-    for (crd::u32 i = 0U; i < total_items; ++i)
+    for (crd::u32 i = 0U; i < kTotalItems; ++i)
     {
         CHECK(seen.at(i).load(std::memory_order_relaxed) == 1);
     }

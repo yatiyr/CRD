@@ -19,12 +19,12 @@ enum class Stage : crd::u8
     switch (stage)
     {
         case Stage::Vertex:
-            return 1u << 0u;
+            return 1U << 0U;
         case Stage::Fragment:
-            return 1u << 1u;
+            return 1U << 1U;
         case Stage::Compute:
         default:
-            return 1u << 2u;
+            return 1U << 2U;
     }
 }
 

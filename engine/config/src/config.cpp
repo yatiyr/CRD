@@ -158,12 +158,12 @@ template <typename ValueType> [[nodiscard]] bool read_array(const toml::node& no
 [[nodiscard]] bool read_vec4f(const toml::node& node, crd::math::Vec4f& out) noexcept
 {
     const auto* arr = node.as_array();
-    if (arr == nullptr || arr->size() != 4u)
+    if (arr == nullptr || arr->size() != 4U)
     {
         return false;
     }
     crd::f32 values[4]{};
-    for (crd::usize i = 0; i < 4u; ++i)
+    for (crd::usize i = 0; i < 4U; ++i)
     {
         if (auto value = arr->get(i)->value<double>())
         {
@@ -232,7 +232,7 @@ bool Config::load_from_string(crd::containers::StringView toml_text) noexcept
     if (!result)
     {
         const auto desc = result.error().description();
-        CRD_LOG_ERROR(g_log_config, "TOML parse failed: {}", std::string(desc.data(), desc.size()).c_str());
+        CRD_LOG_ERROR(g_log_config, "TOML parse failed: {}", std::string_view(desc.data(), desc.size()));
         m_loaded = false;
         return false;
     }

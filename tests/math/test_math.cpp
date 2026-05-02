@@ -70,16 +70,16 @@ template <typename T> void require_plane_close(const Plane<T>& actual, const Pla
 
 TEST_CASE("math scalar constants and angle helpers", "[math][scalar]")
 {
-    REQUIRE(approx_equal_rel(k_pi<f32>, 3.1415927f));
+    REQUIRE(approx_equal_rel(k_pi<f32>, 3.1415927F));
     REQUIRE(approx_equal_rel(k_tau<f64>, 6.283185307179586));
-    REQUIRE(deg_to_rad(180.0f) == Catch::Approx(k_pi<f32>));
+    REQUIRE(deg_to_rad(180.0F) == Catch::Approx(k_pi<f32>));
     REQUIRE(rad_to_deg(k_half_pi<f64>) == Catch::Approx(90.0));
 }
 
 TEST_CASE("math scalar comparison helpers distinguish abs and rel", "[math][scalar]")
 {
-    REQUIRE(approx_equal_abs(1.0f, 1.0f + 1.0e-6f));
-    REQUIRE_FALSE(approx_equal_abs(1.0f, 1.1f));
+    REQUIRE(approx_equal_abs(1.0F, 1.0F + 1.0e-6F));
+    REQUIRE_FALSE(approx_equal_abs(1.0F, 1.1F));
     REQUIRE(approx_equal_rel(1000000.0, 1000000.000001, 2.0e-12));
     REQUIRE(is_finite(42.0));
     REQUIRE(is_nan(std::numeric_limits<f64>::quiet_NaN()));
@@ -87,15 +87,15 @@ TEST_CASE("math scalar comparison helpers distinguish abs and rel", "[math][scal
 
 TEST_CASE("math scalar utility helpers cover clamp epsilon and comparisons", "[math][scalar]")
 {
-    REQUIRE(default_epsilon<f32>() == Catch::Approx(1.0e-5f));
+    REQUIRE(default_epsilon<f32>() == Catch::Approx(1.0e-5F));
     REQUIRE(default_epsilon<f64>() == Catch::Approx(1.0e-12));
-    REQUIRE(abs(-3.5f) == Catch::Approx(3.5f));
+    REQUIRE(abs(-3.5F) == Catch::Approx(3.5F));
     REQUIRE(min(3.0, 4.0) == Catch::Approx(3.0));
     REQUIRE(max(3.0, 4.0) == Catch::Approx(4.0));
     REQUIRE(clamp(5.0, 1.0, 4.0) == Catch::Approx(4.0));
-    REQUIRE(clamp(-1.0f, 0.0f, 10.0f) == Catch::Approx(0.0f));
-    REQUIRE(approx_zero(1.0e-6f));
-    REQUIRE_FALSE(approx_zero(1.0e-2f));
+    REQUIRE(clamp(-1.0F, 0.0F, 10.0F) == Catch::Approx(0.0F));
+    REQUIRE(approx_zero(1.0e-6F));
+    REQUIRE_FALSE(approx_zero(1.0e-2F));
 }
 
 TEST_CASE("math types keep standard-layout trivially-copyable storage", "[math][layout]")
@@ -114,14 +114,14 @@ TEST_CASE("math types keep standard-layout trivially-copyable storage", "[math][
 
 TEST_CASE("Vec2 basic arithmetic works for float", "[math][vec2]")
 {
-    const Vec2f a(1.0f, 2.0f);
-    const Vec2f b(3.0f, -4.0f);
+    const Vec2f a(1.0F, 2.0F);
+    const Vec2f b(3.0F, -4.0F);
 
-    require_vec2_close(a + b, Vec2f(4.0f, -2.0f), 1.0e-6f);
-    require_vec2_close(a - b, Vec2f(-2.0f, 6.0f), 1.0e-6f);
-    require_vec2_close(2.0f * a, Vec2f(2.0f, 4.0f), 1.0e-6f);
-    REQUIRE(dot(a, b) == Catch::Approx(-5.0f));
-    REQUIRE(cross(a, b) == Catch::Approx(-10.0f));
+    require_vec2_close(a + b, Vec2f(4.0F, -2.0F), 1.0e-6F);
+    require_vec2_close(a - b, Vec2f(-2.0F, 6.0F), 1.0e-6F);
+    require_vec2_close(2.0F * a, Vec2f(2.0F, 4.0F), 1.0e-6F);
+    REQUIRE(dot(a, b) == Catch::Approx(-5.0F));
+    REQUIRE(cross(a, b) == Catch::Approx(-10.0F));
 }
 
 TEST_CASE("Vec3 cross product is right-handed", "[math][vec3]")
@@ -137,16 +137,16 @@ TEST_CASE("Vec3 cross product is right-handed", "[math][vec3]")
 
 TEST_CASE("Vec4 indexing and scalar division work", "[math][vec4]")
 {
-    Vec4f v(2.0f, 4.0f, 6.0f, 8.0f);
-    v[2] = 10.0f;
-    require_vec4_close(v / 2.0f, Vec4f(1.0f, 2.0f, 5.0f, 4.0f), 1.0e-6f);
+    Vec4f v(2.0F, 4.0F, 6.0F, 8.0F);
+    v[2] = 10.0F;
+    require_vec4_close(v / 2.0F, Vec4f(1.0F, 2.0F, 5.0F, 4.0F), 1.0e-6F);
 }
 
 TEST_CASE("Vec length and normalization work for float and double", "[math][normalize]")
 {
-    Vec3f vf(3.0f, 4.0f, 0.0f);
-    REQUIRE(length(vf) == Catch::Approx(5.0f));
-    require_vec3_close(normalized(vf), Vec3f(0.6f, 0.8f, 0.0f), 1.0e-4f);
+    Vec3f vf(3.0F, 4.0F, 0.0F);
+    REQUIRE(length(vf) == Catch::Approx(5.0F));
+    require_vec3_close(normalized(vf), Vec3f(0.6F, 0.8F, 0.0F), 1.0e-4F);
 
     Vec3d vd(0.0, 0.0, 2.0);
     REQUIRE(length(vd) == Catch::Approx(2.0));
@@ -162,23 +162,23 @@ TEST_CASE("try_normalize rejects near-zero vectors", "[math][normalize]")
 
 TEST_CASE("distance and lerp helpers behave as expected", "[math][vec]")
 {
-    const Vec3f a(0.0f, 0.0f, 0.0f);
-    const Vec3f b(10.0f, 20.0f, 30.0f);
+    const Vec3f a(0.0F, 0.0F, 0.0F);
+    const Vec3f b(10.0F, 20.0F, 30.0F);
 
-    REQUIRE(distance(a, b) == Catch::Approx(std::sqrt(1400.0f)));
-    REQUIRE(distance_squared(a, b) == Catch::Approx(1400.0f));
-    require_vec3_close(lerp(a, b, 0.25f), Vec3f(2.5f, 5.0f, 7.5f), 1.0e-6f);
+    REQUIRE(distance(a, b) == Catch::Approx(std::sqrt(1400.0F)));
+    REQUIRE(distance_squared(a, b) == Catch::Approx(1400.0F));
+    require_vec3_close(lerp(a, b, 0.25F), Vec3f(2.5F, 5.0F, 7.5F), 1.0e-6F);
 }
 
 TEST_CASE("Vec2 and Vec4 helper families behave consistently", "[math][vec]")
 {
-    Vec2f a(1.0f, -2.0f);
-    Vec2f b(3.0f, 5.0f);
-    REQUIRE(a == Vec2f(1.0f, -2.0f));
-    require_vec2_close(-a, Vec2f(-1.0f, 2.0f), 1.0e-6f);
-    require_vec2_close(hadamard(a, b), Vec2f(3.0f, -10.0f), 1.0e-6f);
-    REQUIRE(distance_squared(a, b) == Catch::Approx(53.0f));
-    require_vec2_close(lerp(a, b, 0.5f), Vec2f(2.0f, 1.5f), 1.0e-6f);
+    Vec2f a(1.0F, -2.0F);
+    Vec2f b(3.0F, 5.0F);
+    REQUIRE(a == Vec2f(1.0F, -2.0F));
+    require_vec2_close(-a, Vec2f(-1.0F, 2.0F), 1.0e-6F);
+    require_vec2_close(hadamard(a, b), Vec2f(3.0F, -10.0F), 1.0e-6F);
+    REQUIRE(distance_squared(a, b) == Catch::Approx(53.0F));
+    require_vec2_close(lerp(a, b, 0.5F), Vec2f(2.0F, 1.5F), 1.0e-6F);
     REQUIRE(try_normalize(a));
 
     Vec4d c(1.0, 2.0, 3.0, 4.0);
@@ -207,14 +207,14 @@ TEST_CASE("Mat identity and zero constructors follow column-major contract", "[m
     const Mat2f identity2 = Mat2f::identity();
     const Mat4f identity4 = Mat4f::identity();
 
-    require_mat3_close(identity, Mat3f(Vec3f(1.0f, 0.0f, 0.0f), Vec3f(0.0f, 1.0f, 0.0f), Vec3f(0.0f, 0.0f, 1.0f)),
-                       1.0e-6f);
-    require_mat3_close(zero, Mat3f{}, 1.0e-6f);
-    require_mat2_close(identity2, Mat2f(Vec2f(1.0f, 0.0f), Vec2f(0.0f, 1.0f)), 1.0e-6f);
+    require_mat3_close(identity, Mat3f(Vec3f(1.0F, 0.0F, 0.0F), Vec3f(0.0F, 1.0F, 0.0F), Vec3f(0.0F, 0.0F, 1.0F)),
+                       1.0e-6F);
+    require_mat3_close(zero, Mat3f{}, 1.0e-6F);
+    require_mat2_close(identity2, Mat2f(Vec2f(1.0F, 0.0F), Vec2f(0.0F, 1.0F)), 1.0e-6F);
     require_mat4_close(identity4,
-                       Mat4f(Vec4f(1.0f, 0.0f, 0.0f, 0.0f), Vec4f(0.0f, 1.0f, 0.0f, 0.0f),
-                             Vec4f(0.0f, 0.0f, 1.0f, 0.0f), Vec4f(0.0f, 0.0f, 0.0f, 1.0f)),
-                       1.0e-6f);
+                       Mat4f(Vec4f(1.0F, 0.0F, 0.0F, 0.0F), Vec4f(0.0F, 1.0F, 0.0F, 0.0F),
+                             Vec4f(0.0F, 0.0F, 1.0F, 0.0F), Vec4f(0.0F, 0.0F, 0.0F, 1.0F)),
+                       1.0e-6F);
 }
 
 TEST_CASE("Mat2 and Mat3 transpose swap rows and columns", "[math][mat]")
@@ -235,11 +235,11 @@ TEST_CASE("Mat2 and Mat3 transpose swap rows and columns", "[math][mat]")
 
 TEST_CASE("Mat2 and Mat3 matrix multiplication and indexing work", "[math][mat]")
 {
-    const Mat2f a(Vec2f(1.0f, 2.0f), Vec2f(3.0f, 4.0f));
-    const Mat2f b(Vec2f(2.0f, 0.0f), Vec2f(1.0f, 2.0f));
-    require_mat2_close(a * b, Mat2f(a * b.c0, a * b.c1), 1.0e-6f);
-    REQUIRE(a[0].x == Catch::Approx(1.0f));
-    REQUIRE(a[1].y == Catch::Approx(4.0f));
+    const Mat2f a(Vec2f(1.0F, 2.0F), Vec2f(3.0F, 4.0F));
+    const Mat2f b(Vec2f(2.0F, 0.0F), Vec2f(1.0F, 2.0F));
+    require_mat2_close(a * b, Mat2f(a * b.c0, a * b.c1), 1.0e-6F);
+    REQUIRE(a[0].x == Catch::Approx(1.0F));
+    REQUIRE(a[1].y == Catch::Approx(4.0F));
 
     const Mat3d c(Vec3d(1.0, 0.0, 2.0), Vec3d(0.0, 1.0, 0.0), Vec3d(3.0, 0.0, 1.0));
     const Mat3d d(Vec3d(2.0, 1.0, 0.0), Vec3d(0.0, 2.0, 1.0), Vec3d(1.0, 0.0, 2.0));
@@ -248,10 +248,10 @@ TEST_CASE("Mat2 and Mat3 matrix multiplication and indexing work", "[math][mat]"
 
 TEST_CASE("Mat3 multiplied by Vec3 uses column-vector semantics", "[math][mat]")
 {
-    const Mat3f basis(Vec3f(1.0f, 0.0f, 0.0f), Vec3f(0.0f, 2.0f, 0.0f), Vec3f(0.0f, 0.0f, 3.0f));
-    const Vec3f v(5.0f, 7.0f, 11.0f);
+    const Mat3f basis(Vec3f(1.0F, 0.0F, 0.0F), Vec3f(0.0F, 2.0F, 0.0F), Vec3f(0.0F, 0.0F, 3.0F));
+    const Vec3f v(5.0F, 7.0F, 11.0F);
 
-    require_vec3_close(basis * v, Vec3f(5.0f, 14.0f, 33.0f), 1.0e-6f);
+    require_vec3_close(basis * v, Vec3f(5.0F, 14.0F, 33.0F), 1.0e-6F);
 }
 
 TEST_CASE("Mat4 composition matches lhs times rhs columns", "[math][mat]")
@@ -268,18 +268,18 @@ TEST_CASE("Mat4 composition matches lhs times rhs columns", "[math][mat]")
 TEST_CASE("Mat4 identity is neutral for matrix and vector multiplication", "[math][mat]")
 {
     const Mat4f identity = Mat4f::identity();
-    const Mat4f m(Vec4f(1.0f, 2.0f, 3.0f, 4.0f), Vec4f(5.0f, 6.0f, 7.0f, 8.0f), Vec4f(9.0f, 10.0f, 11.0f, 12.0f),
-                  Vec4f(13.0f, 14.0f, 15.0f, 16.0f));
-    const Vec4f v(1.0f, 2.0f, 3.0f, 1.0f);
+    const Mat4f m(Vec4f(1.0F, 2.0F, 3.0F, 4.0F), Vec4f(5.0F, 6.0F, 7.0F, 8.0F), Vec4f(9.0F, 10.0F, 11.0F, 12.0F),
+                  Vec4f(13.0F, 14.0F, 15.0F, 16.0F));
+    const Vec4f v(1.0F, 2.0F, 3.0F, 1.0F);
 
-    require_mat4_close(identity * m, m, 1.0e-6f);
-    require_mat4_close(m * identity, m, 1.0e-6f);
-    require_vec4_close(identity * v, v, 1.0e-6f);
+    require_mat4_close(identity * m, m, 1.0e-6F);
+    require_mat4_close(m * identity, m, 1.0e-6F);
+    require_vec4_close(identity * v, v, 1.0e-6F);
 }
 
 TEST_CASE("Quat identity and normalization behave as expected", "[math][quat]")
 {
-    require_quat_close(Quatf::identity(), Quatf(0.0f, 0.0f, 0.0f, 1.0f), 1.0e-6f);
+    require_quat_close(Quatf::identity(), Quatf(0.0F, 0.0F, 0.0F, 1.0F), 1.0e-6F);
 
     Quatd q(0.0, 0.0, 0.0, 2.0);
     REQUIRE(try_normalize(q));
@@ -304,8 +304,8 @@ TEST_CASE("Quat conjugate inverse and failed inverse paths are pinned", "[math][
 
 TEST_CASE("Quat axis-angle rotates vectors with Hamilton xyzw semantics", "[math][quat]")
 {
-    const Quatf quarter_turn = from_axis_angle(Vec3f(0.0f, 0.0f, 1.0f), k_half_pi_f);
-    require_vec3_close(rotate_vector(quarter_turn, Vec3f(1.0f, 0.0f, 0.0f)), Vec3f(0.0f, 1.0f, 0.0f), 1.0e-4f);
+    const Quatf quarter_turn = from_axis_angle(Vec3f(0.0F, 0.0F, 1.0F), k_half_pi_f);
+    require_vec3_close(rotate_vector(quarter_turn, Vec3f(1.0F, 0.0F, 0.0F)), Vec3f(0.0F, 1.0F, 0.0F), 1.0e-4F);
 }
 
 TEST_CASE("Quat multiplication composes rotations in Mat * Vec order", "[math][quat]")
@@ -347,9 +347,9 @@ TEST_CASE("Quat nlerp and slerp preserve unit length and endpoints", "[math][qua
 
 TEST_CASE("Transform point and vector semantics differ by translation", "[math][transform]")
 {
-    const Transformf t(Vec3f(10.0f, 0.0f, 0.0f), from_axis_angle(Vec3f(0.0f, 0.0f, 1.0f), k_half_pi_f));
-    require_vec3_close(transform_vector(t, Vec3f(1.0f, 0.0f, 0.0f)), Vec3f(0.0f, 1.0f, 0.0f), 1.0e-4f);
-    require_vec3_close(transform_point(t, Vec3f(1.0f, 0.0f, 0.0f)), Vec3f(10.0f, 1.0f, 0.0f), 1.0e-4f);
+    const Transformf t(Vec3f(10.0F, 0.0F, 0.0F), from_axis_angle(Vec3f(0.0F, 0.0F, 1.0F), k_half_pi_f));
+    require_vec3_close(transform_vector(t, Vec3f(1.0F, 0.0F, 0.0F)), Vec3f(0.0F, 1.0F, 0.0F), 1.0e-4F);
+    require_vec3_close(transform_point(t, Vec3f(1.0F, 0.0F, 0.0F)), Vec3f(10.0F, 1.0F, 0.0F), 1.0e-4F);
 }
 
 TEST_CASE("Transform inverse and composition round-trip", "[math][transform]")
@@ -366,21 +366,21 @@ TEST_CASE("Transform inverse and composition round-trip", "[math][transform]")
 TEST_CASE("Transform identity and matrix conversion are pinned", "[math][transform][mat]")
 {
     const Transformf identity = Transformf::identity();
-    require_vec3_close(transform_point(identity, Vec3f(1.0f, 2.0f, 3.0f)), Vec3f(1.0f, 2.0f, 3.0f), 1.0e-6f);
-    require_mat4_close(to_mat4(identity), Mat4f::identity(), 1.0e-6f);
+    require_vec3_close(transform_point(identity, Vec3f(1.0F, 2.0F, 3.0F)), Vec3f(1.0F, 2.0F, 3.0F), 1.0e-6F);
+    require_mat4_close(to_mat4(identity), Mat4f::identity(), 1.0e-6F);
 }
 
 TEST_CASE("Math types format cleanly for logs and diagnostics", "[math][format]")
 {
-    const Vec3f v(1.0f, 2.0f, 3.0f);
-    const Mat2f m(Vec2f(1.0f, 2.0f), Vec2f(3.0f, 4.0f));
-    const Quatf q(0.0f, 0.0f, 0.70710677f, 0.70710677f);
-    const Transformf t(Vec3f(10.0f, 20.0f, 30.0f), q);
-    const Rayf ray(Vec3f(0.0f, 1.0f, 2.0f), Vec3f(0.0f, 0.0f, -1.0f));
-    const Planef plane(Vec3f(0.0f, 1.0f, 0.0f), -5.0f);
-    const Spheref sphere(Vec3f(1.0f, 2.0f, 3.0f), 4.0f);
-    const AABBf bounds(Vec3f(-1.0f, -2.0f, -3.0f), Vec3f(4.0f, 5.0f, 6.0f));
-    const Trianglef tri(Vec3f(0.0f, 0.0f, 0.0f), Vec3f(1.0f, 0.0f, 0.0f), Vec3f(0.0f, 1.0f, 0.0f));
+    const Vec3f v(1.0F, 2.0F, 3.0F);
+    const Mat2f m(Vec2f(1.0F, 2.0F), Vec2f(3.0F, 4.0F));
+    const Quatf q(0.0F, 0.0F, 0.70710677F, 0.70710677F);
+    const Transformf t(Vec3f(10.0F, 20.0F, 30.0F), q);
+    const Rayf ray(Vec3f(0.0F, 1.0F, 2.0F), Vec3f(0.0F, 0.0F, -1.0F));
+    const Planef plane(Vec3f(0.0F, 1.0F, 0.0F), -5.0F);
+    const Spheref sphere(Vec3f(1.0F, 2.0F, 3.0F), 4.0F);
+    const AABBf bounds(Vec3f(-1.0F, -2.0F, -3.0F), Vec3f(4.0F, 5.0F, 6.0F));
+    const Trianglef tri(Vec3f(0.0F, 0.0F, 0.0F), Vec3f(1.0F, 0.0F, 0.0F), Vec3f(0.0F, 1.0F, 0.0F));
 
     REQUIRE(std::format("{}", v) == "Vec3(1, 2, 3)");
     REQUIRE(std::format("{}", m) == "Mat2([[1, 3], [2, 4]])");
@@ -410,27 +410,27 @@ TEST_CASE("Primitive geometry utility constructors and relationships behave as e
 
 TEST_CASE("AABB, sphere, and triangle queries handle inside outside and overlap cases", "[math][geom]")
 {
-    const AABBf bounds(Vec3f(-1.0f, -1.0f, -1.0f), Vec3f(1.0f, 1.0f, 1.0f));
-    REQUIRE(contains(bounds, Vec3f(0.25f, 0.5f, -0.5f)));
-    REQUIRE_FALSE(contains(bounds, Vec3f(2.0f, 0.0f, 0.0f)));
-    require_vec3_close(closest_point(bounds, Vec3f(2.0f, -0.5f, -3.0f)), Vec3f(1.0f, -0.5f, -1.0f), 1.0e-6f);
-    REQUIRE(intersects(bounds, AABBf(Vec3f(0.5f, 0.5f, 0.5f), Vec3f(2.0f, 2.0f, 2.0f))));
-    REQUIRE_FALSE(intersects(bounds, AABBf(Vec3f(2.0f, 2.0f, 2.0f), Vec3f(3.0f, 3.0f, 3.0f))));
+    const AABBf bounds(Vec3f(-1.0F, -1.0F, -1.0F), Vec3f(1.0F, 1.0F, 1.0F));
+    REQUIRE(contains(bounds, Vec3f(0.25F, 0.5F, -0.5F)));
+    REQUIRE_FALSE(contains(bounds, Vec3f(2.0F, 0.0F, 0.0F)));
+    require_vec3_close(closest_point(bounds, Vec3f(2.0F, -0.5F, -3.0F)), Vec3f(1.0F, -0.5F, -1.0F), 1.0e-6F);
+    REQUIRE(intersects(bounds, AABBf(Vec3f(0.5F, 0.5F, 0.5F), Vec3f(2.0F, 2.0F, 2.0F))));
+    REQUIRE_FALSE(intersects(bounds, AABBf(Vec3f(2.0F, 2.0F, 2.0F), Vec3f(3.0F, 3.0F, 3.0F))));
 
-    const Spheref s0(Vec3f(0.0f, 0.0f, 0.0f), 1.0f);
-    const Spheref s1(Vec3f(1.5f, 0.0f, 0.0f), 1.0f);
-    REQUIRE(contains(s0, Vec3f(0.5f, 0.0f, 0.0f)));
-    REQUIRE_FALSE(contains(s0, Vec3f(2.0f, 0.0f, 0.0f)));
+    const Spheref s0(Vec3f(0.0F, 0.0F, 0.0F), 1.0F);
+    const Spheref s1(Vec3f(1.5F, 0.0F, 0.0F), 1.0F);
+    REQUIRE(contains(s0, Vec3f(0.5F, 0.0F, 0.0F)));
+    REQUIRE_FALSE(contains(s0, Vec3f(2.0F, 0.0F, 0.0F)));
     REQUIRE(intersects(s0, s1));
     REQUIRE(intersects(bounds, s0));
 
-    const Trianglef tri(Vec3f(0.0f, 0.0f, 0.0f), Vec3f(2.0f, 0.0f, 0.0f), Vec3f(0.0f, 2.0f, 0.0f));
-    const Vec3f bc = barycentric(tri, Vec3f(0.5f, 0.5f, 0.0f));
-    REQUIRE(bc.x == Catch::Approx(0.5f));
-    REQUIRE(bc.y == Catch::Approx(0.25f));
-    REQUIRE(bc.z == Catch::Approx(0.25f));
-    REQUIRE(contains(tri, Vec3f(0.5f, 0.5f, 0.0f)));
-    REQUIRE_FALSE(contains(tri, Vec3f(2.0f, 2.0f, 0.0f)));
+    const Trianglef tri(Vec3f(0.0F, 0.0F, 0.0F), Vec3f(2.0F, 0.0F, 0.0F), Vec3f(0.0F, 2.0F, 0.0F));
+    const Vec3f bc = barycentric(tri, Vec3f(0.5F, 0.5F, 0.0F));
+    REQUIRE(bc.x == Catch::Approx(0.5F));
+    REQUIRE(bc.y == Catch::Approx(0.25F));
+    REQUIRE(bc.z == Catch::Approx(0.25F));
+    REQUIRE(contains(tri, Vec3f(0.5F, 0.5F, 0.0F)));
+    REQUIRE_FALSE(contains(tri, Vec3f(2.0F, 2.0F, 0.0F)));
 }
 
 TEST_CASE("Ray intersections cover plane sphere and triangle", "[math][geom][ray]")
@@ -460,10 +460,10 @@ TEST_CASE("Ray intersections cover plane sphere and triangle", "[math][geom][ray
 TEST_CASE("Frustum extraction and containment work for canonical clip volume", "[math][geom][frustum]")
 {
     const Frustumf frustum = frustum_from_view_projection(Mat4f::identity());
-    REQUIRE(contains(frustum, Vec3f(0.0f, 0.0f, 0.0f)));
-    REQUIRE_FALSE(contains(frustum, Vec3f(2.0f, 0.0f, 0.0f)));
-    REQUIRE(intersects(frustum, Spheref(Vec3f(0.0f, 0.0f, 0.0f), 0.5f)));
-    REQUIRE_FALSE(intersects(frustum, Spheref(Vec3f(4.0f, 0.0f, 0.0f), 0.5f)));
-    REQUIRE(intersects(frustum, AABBf(Vec3f(-0.5f, -0.5f, -0.5f), Vec3f(0.5f, 0.5f, 0.5f))));
-    REQUIRE_FALSE(intersects(frustum, AABBf(Vec3f(2.0f, 2.0f, 2.0f), Vec3f(3.0f, 3.0f, 3.0f))));
+    REQUIRE(contains(frustum, Vec3f(0.0F, 0.0F, 0.0F)));
+    REQUIRE_FALSE(contains(frustum, Vec3f(2.0F, 0.0F, 0.0F)));
+    REQUIRE(intersects(frustum, Spheref(Vec3f(0.0F, 0.0F, 0.0F), 0.5F)));
+    REQUIRE_FALSE(intersects(frustum, Spheref(Vec3f(4.0F, 0.0F, 0.0F), 0.5F)));
+    REQUIRE(intersects(frustum, AABBf(Vec3f(-0.5F, -0.5F, -0.5F), Vec3f(0.5F, 0.5F, 0.5F))));
+    REQUIRE_FALSE(intersects(frustum, AABBf(Vec3f(2.0F, 2.0F, 2.0F), Vec3f(3.0F, 3.0F, 3.0F))));
 }

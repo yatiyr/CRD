@@ -66,7 +66,7 @@ Counter* run(std::span<const JobDecl> jobs)
 
 Counter* run(const JobDecl& job)
 {
-    return submit_jobs({&job, 1u});
+    return submit_jobs({&job, 1U});
 }
 
 // ---------------------------------------------------------------------------

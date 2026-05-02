@@ -38,7 +38,7 @@ class MpmcQueue
                   "MpmcQueue<T>: T must be trivially copyable");
 
 public:
-    explicit MpmcQueue(crd::u32 capacity = 256u);
+    explicit MpmcQueue(crd::u32 capacity = 256U);
     ~MpmcQueue() = default;
 
     MpmcQueue(const MpmcQueue&)            = delete;
@@ -55,7 +55,7 @@ public:
     // Approximate: loads enqueue and dequeue positions with relaxed ordering.
     // May return a transiently stale result under concurrent access.
     [[nodiscard]] bool     empty()    const noexcept;
-    [[nodiscard]] crd::u32 capacity() const noexcept { return m_mask + 1u; }
+    [[nodiscard]] crd::u32 capacity() const noexcept { return m_mask + 1U; }
 
 private:
     // One slot in the ring buffer.
@@ -76,7 +76,7 @@ private:
     alignas(64) std::atomic<crd::u64> m_enqueue_pos{0};
     alignas(64) std::atomic<crd::u64> m_dequeue_pos{0};
 
-    crd::u32                m_mask{0u};
+    crd::u32                m_mask{0U};
     std::unique_ptr<Cell[]> m_cells;
 };
 
@@ -90,15 +90,15 @@ private:
 
 template<typename T>
 MpmcQueue<T>::MpmcQueue(crd::u32 capacity)
-    : m_mask{capacity - 1u}
+    : m_mask{capacity - 1U}
     , m_cells{std::make_unique<Cell[]>(capacity)}
 {
-    CRD_ASSERT_MSG(capacity >= 2u,
+    CRD_ASSERT_MSG(capacity >= 2U,
                    "MpmcQueue: capacity must be >= 2");
-    CRD_ASSERT_MSG((capacity & (capacity - 1u)) == 0u,
+    CRD_ASSERT_MSG((capacity & (capacity - 1U)) == 0U,
                    "MpmcQueue: capacity must be a power of two");
 
-    for (crd::u32 i = 0u; i < capacity; ++i)
+    for (crd::u32 i = 0U; i < capacity; ++i)
     {
         m_cells[i].sequence.store(static_cast<crd::u64>(i), std::memory_order_relaxed);
     }
@@ -131,11 +131,11 @@ bool MpmcQueue<T>::enqueue(T item) noexcept
         if (diff == 0)
         {
             // Slot free — try to claim it. compare_exchange_weak updates pos on failure.
-            if (m_enqueue_pos.compare_exchange_weak(pos, pos + 1u,
+            if (m_enqueue_pos.compare_exchange_weak(pos, pos + 1U,
                     std::memory_order_relaxed, std::memory_order_relaxed))
             {
                 cell.data = item;
-                cell.sequence.store(pos + 1u, std::memory_order_release);
+                cell.sequence.store(pos + 1U, std::memory_order_release);
                 return true;
             }
             // CAS failed; pos is refreshed by compare_exchange_weak. Retry.
@@ -174,17 +174,17 @@ bool MpmcQueue<T>::dequeue(T& out) noexcept
     {
         Cell&    cell = m_cells[pos & static_cast<crd::u64>(m_mask)];
         crd::u64 seq  = cell.sequence.load(std::memory_order_acquire);
-        crd::i64 diff = static_cast<crd::i64>(seq) - static_cast<crd::i64>(pos + 1u);
+        crd::i64 diff = static_cast<crd::i64>(seq) - static_cast<crd::i64>(pos + 1U);
 
         if (diff == 0)
         {
             // Data ready — try to claim the slot.
-            if (m_dequeue_pos.compare_exchange_weak(pos, pos + 1u,
+            if (m_dequeue_pos.compare_exchange_weak(pos, pos + 1U,
                     std::memory_order_relaxed, std::memory_order_relaxed))
             {
                 out = cell.data;
                 // Release this slot for the (pos + capacity)-th enqueue.
-                cell.sequence.store(pos + static_cast<crd::u64>(m_mask) + 1u,
+                cell.sequence.store(pos + static_cast<crd::u64>(m_mask) + 1U,
                                     std::memory_order_release);
                 return true;
             }

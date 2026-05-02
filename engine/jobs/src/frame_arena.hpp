@@ -29,11 +29,11 @@ public:
     [[nodiscard]] bool init(crd::usize capacity)
     {
         CRD_ASSERT_MSG(m_data == nullptr, "FrameArena::init called twice");
-        CRD_ASSERT_MSG(capacity > 0u, "FrameArena::init: capacity must be > 0");
+        CRD_ASSERT_MSG(capacity > 0U, "FrameArena::init: capacity must be > 0");
 
         m_data     = static_cast<crd::u8*>(std::malloc(capacity)); // NOLINT(cppcoreguidelines-no-malloc,cppcoreguidelines-owning-memory)
         m_capacity = capacity;
-        m_cursor   = 0u;
+        m_cursor   = 0U;
         return m_data != nullptr;
     }
 
@@ -43,19 +43,19 @@ public:
             return;
         std::free(m_data); // NOLINT(cppcoreguidelines-no-malloc,cppcoreguidelines-owning-memory)
         m_data     = nullptr;
-        m_capacity = 0u;
-        m_cursor   = 0u;
+        m_capacity = 0U;
+        m_cursor   = 0U;
     }
 
     [[nodiscard]] void* alloc(crd::usize size, crd::usize alignment)
     {
         CRD_ASSERT_MSG(m_data != nullptr, "FrameArena::alloc called before init");
-        CRD_ASSERT_MSG(size > 0u, "FrameArena::alloc: size must be > 0");
-        CRD_ASSERT_MSG(alignment > 0u, "FrameArena::alloc: alignment must be > 0");
-        CRD_ASSERT_MSG((alignment & (alignment - 1u)) == 0u,
+        CRD_ASSERT_MSG(size > 0U, "FrameArena::alloc: size must be > 0");
+        CRD_ASSERT_MSG(alignment > 0U, "FrameArena::alloc: alignment must be > 0");
+        CRD_ASSERT_MSG((alignment & (alignment - 1U)) == 0U,
                        "FrameArena::alloc: alignment must be a power of two");
 
-        const crd::usize aligned = (m_cursor + alignment - 1u) & ~(alignment - 1u);
+        const crd::usize aligned = (m_cursor + alignment - 1U) & ~(alignment - 1U);
         CRD_ASSERT_MSG(aligned + size <= m_capacity,
                        "FrameArena::alloc: arena exhausted — increase frame_alloc_bytes in Config");
 
@@ -63,7 +63,7 @@ public:
         return m_data + aligned;
     }
 
-    void reset() noexcept { m_cursor = 0u; }
+    void reset() noexcept { m_cursor = 0U; }
 
     [[nodiscard]] crd::usize cursor()   const noexcept { return m_cursor;   }
     [[nodiscard]] crd::usize capacity() const noexcept { return m_capacity; }
@@ -71,8 +71,8 @@ public:
 
 private:
     crd::u8*   m_data     = nullptr;
-    crd::usize m_capacity = 0u;
-    crd::usize m_cursor   = 0u;
+    crd::usize m_capacity = 0U;
+    crd::usize m_cursor   = 0U;
 };
 
 } // namespace crd::jobs::detail

@@ -25,10 +25,10 @@ void Input::on_poll_begin() noexcept
     m_state.m_key_released.fill(false);
     m_state.m_mouse_pressed.fill(false);
     m_state.m_mouse_released.fill(false);
-    m_state.m_mouse_dx = 0.0f;
-    m_state.m_mouse_dy = 0.0f;
-    m_state.m_scroll_dx = 0.0f;
-    m_state.m_scroll_dy = 0.0f;
+    m_state.m_mouse_dx = 0.0F;
+    m_state.m_mouse_dy = 0.0F;
+    m_state.m_scroll_dx = 0.0F;
+    m_state.m_scroll_dy = 0.0F;
 }
 
 void Input::enqueue(const InputEvent& evt) noexcept

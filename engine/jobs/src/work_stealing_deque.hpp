@@ -39,7 +39,7 @@ class WorkStealingDeque
                   "WorkStealingDeque<T>: T must be trivially copyable");
 
 public:
-    explicit WorkStealingDeque(crd::u32 capacity = 256u);
+    explicit WorkStealingDeque(crd::u32 capacity = 256U);
     ~WorkStealingDeque() = default;
 
     WorkStealingDeque(const WorkStealingDeque&)            = delete;
@@ -59,7 +59,7 @@ public:
     // Approximate element count. May be transiently <= 0 under concurrent access.
     [[nodiscard]] crd::i64 size() const noexcept;
     [[nodiscard]] bool     empty()    const noexcept;
-    [[nodiscard]] crd::u32 capacity() const noexcept { return m_mask + 1u; }
+    [[nodiscard]] crd::u32 capacity() const noexcept { return m_mask + 1U; }
 
 private:
     // bottom (owner) and top (thieves) on separate cache lines.
@@ -68,7 +68,7 @@ private:
     alignas(64) std::atomic<crd::i64> m_bottom{0};
     alignas(64) std::atomic<crd::i64> m_top{0};
 
-    crd::u32             m_mask{0u};   // capacity - 1; capacity is always a power of two
+    crd::u32             m_mask{0U};   // capacity - 1; capacity is always a power of two
     std::unique_ptr<T[]> m_buf;        // circular buffer; m_buf[i & m_mask]
 
     [[nodiscard]] std::size_t buf_index(crd::i64 i) const noexcept
@@ -86,12 +86,12 @@ private:
 
 template<typename T>
 WorkStealingDeque<T>::WorkStealingDeque(crd::u32 capacity)
-    : m_mask{capacity - 1u}
+    : m_mask{capacity - 1U}
     , m_buf{std::make_unique<T[]>(capacity)}
 {
-    CRD_ASSERT_MSG(capacity >= 2u,
+    CRD_ASSERT_MSG(capacity >= 2U,
                    "WorkStealingDeque: capacity must be >= 2");
-    CRD_ASSERT_MSG((capacity & (capacity - 1u)) == 0u,
+    CRD_ASSERT_MSG((capacity & (capacity - 1U)) == 0U,
                    "WorkStealingDeque: capacity must be a power of two");
 }
 

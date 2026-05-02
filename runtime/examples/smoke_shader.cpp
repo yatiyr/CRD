@@ -16,7 +16,7 @@ namespace
     const auto base = fs::current_working_dir() / ".crd_shader_reload_smoke";
     const auto stamp = static_cast<crd::u64>(std::chrono::system_clock::now().time_since_epoch().count());
     crd::containers::String leaf("reload_");
-    leaf.reserve(leaf.size() + 32u);
+    leaf.reserve(leaf.size() + 32U);
     leaf.append(std::to_string(stamp));
     return base / leaf.c_str();
 }

@@ -22,7 +22,7 @@ TEST_CASE("LayerStack preserves layer/overlay ordering", "[app][layer]")
     stack.push_layer(&layer_b);
     stack.push_overlay(&overlay_a);
 
-    REQUIRE(stack.size() == 3u);
+    REQUIRE(stack.size() == 3U);
     auto it = stack.begin();
     REQUIRE((*it++)->name() == "LayerA");
     REQUIRE((*it++)->name() == "LayerB");
@@ -43,9 +43,9 @@ TEST_CASE("LayerStack pop respects layer and overlay partitions", "[app][layer]"
     stack.push_layer(&layer);
     stack.push_overlay(&overlay);
     stack.pop_layer(&overlay);
-    REQUIRE(stack.size() == 2u);
+    REQUIRE(stack.size() == 2U);
     stack.pop_overlay(&overlay);
-    REQUIRE(stack.size() == 1u);
+    REQUIRE(stack.size() == 1U);
     stack.pop_layer(&layer);
-    REQUIRE(stack.size() == 0u);
+    REQUIRE(stack.size() == 0U);
 }

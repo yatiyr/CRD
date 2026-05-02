@@ -48,32 +48,32 @@ enum class MemoryUsage : crd::u8
 enum class BufferUsage : crd::u32
 {
     None      = 0,
-    TransferSrc = 1u << 0u,
-    TransferDst = 1u << 1u,
-    Vertex    = 1u << 2u,
-    Index     = 1u << 3u,
-    Uniform   = 1u << 4u,
-    Storage   = 1u << 5u,
+    TransferSrc = 1U << 0U,
+    TransferDst = 1U << 1U,
+    Vertex    = 1U << 2U,
+    Index     = 1U << 3U,
+    Uniform   = 1U << 4U,
+    Storage   = 1U << 5U,
 };
 
 enum class ImageUsage : crd::u32
 {
     None                  = 0,
-    TransferSrc           = 1u << 0u,
-    TransferDst           = 1u << 1u,
-    Sampled               = 1u << 2u,
-    ColorAttachment       = 1u << 3u,
-    DepthStencilAttachment = 1u << 4u,
-    Storage               = 1u << 5u,
+    TransferSrc           = 1U << 0U,
+    TransferDst           = 1U << 1U,
+    Sampled               = 1U << 2U,
+    ColorAttachment       = 1U << 3U,
+    DepthStencilAttachment = 1U << 4U,
+    Storage               = 1U << 5U,
 };
 
 // ShaderStage is a bitmask so multiple stages can be combined in push constant ranges
 // and descriptor bindings. Use operator| to combine:  ShaderStage::Vertex | ShaderStage::Fragment
 enum class ShaderStage : crd::u8
 {
-    Vertex   = 1u << 0u,
-    Fragment = 1u << 1u,
-    Compute  = 1u << 2u,
+    Vertex   = 1U << 0U,
+    Fragment = 1U << 1U,
+    Compute  = 1U << 2U,
 };
 
 // DescriptorType mirrors the Vulkan descriptor type taxonomy. Only the types listed
@@ -154,17 +154,17 @@ template <typename EnumType>
 
 [[nodiscard]] constexpr bool has_flag(crd::u32 bits, BufferUsage flag) noexcept
 {
-    return (bits & enum_bits(flag)) != 0u;
+    return (bits & enum_bits(flag)) != 0U;
 }
 
 [[nodiscard]] constexpr bool has_flag(crd::u32 bits, ImageUsage flag) noexcept
 {
-    return (bits & enum_bits(flag)) != 0u;
+    return (bits & enum_bits(flag)) != 0U;
 }
 
 [[nodiscard]] constexpr bool has_stage(ShaderStage mask, ShaderStage stage) noexcept
 {
-    return (static_cast<crd::u8>(mask) & static_cast<crd::u8>(stage)) != 0u;
+    return (static_cast<crd::u8>(mask) & static_cast<crd::u8>(stage)) != 0U;
 }
 
 // One slot in a DescriptorSetLayout. `count` > 1 declares an inline array of that type.
@@ -230,15 +230,15 @@ struct Rect2D
 
 struct ClearColorValue
 {
-    crd::f32 r = 0.0f;
-    crd::f32 g = 0.0f;
-    crd::f32 b = 0.0f;
-    crd::f32 a = 1.0f;
+    crd::f32 r = 0.0F;
+    crd::f32 g = 0.0F;
+    crd::f32 b = 0.0F;
+    crd::f32 a = 1.0F;
 };
 
 struct ClearDepthStencilValue
 {
-    crd::f32 depth   = 1.0f;
+    crd::f32 depth   = 1.0F;
     crd::u32 stencil = 0;
 };
 

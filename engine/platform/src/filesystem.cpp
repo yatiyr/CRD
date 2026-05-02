@@ -123,7 +123,7 @@ Path Path::operator/(containers::StringView segment) const
     }
 
     const bool needs_separator = !joined.empty() && joined.data()[joined.size() - 1] != '/';
-    joined.reserve(joined.size() + (needs_separator ? 1u : 0u) + (segment.size() - start));
+    joined.reserve(joined.size() + (needs_separator ? 1U : 0U) + (segment.size() - start));
 
     if (!joined.empty() && joined.data()[joined.size() - 1] != '/')
     {
@@ -160,7 +160,7 @@ Path current_working_dir() noexcept
     const stdfs::path cwd = stdfs::current_path(ec);
     if (ec)
     {
-        CRD_LOG_ERROR(g_log_platform, "current_path() failed: {}", ec.message().c_str());
+        CRD_LOG_ERROR(g_log_platform, "current_path() failed: {}", ec.message());
         return Path{};
     }
     return from_native_path(cwd);
@@ -250,7 +250,7 @@ u64 file_size(const Path& path) noexcept
 {
     std::error_code ec;
     const auto size = stdfs::file_size(to_native_path(path), ec);
-    return ec ? 0ull : static_cast<u64>(size);
+    return ec ? 0ULL : static_cast<u64>(size);
 }
 
 i64 last_modified_unix_seconds(const Path& path) noexcept

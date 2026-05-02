@@ -1,0 +1,61 @@
+[0/2] Re-checking globbed directories...
+[1/61] Building CXX object engine\core\CMakeFiles\crd-core.dir\src\crash.cpp.obj
+[2/61] Linking CXX static library engine\core\crd-core.lib
+[3/61] Linking CXX static library engine\memory\crd-memory.lib
+[4/61] Linking CXX static library engine\platform\crd-platform.lib
+[5/61] Linking CXX static library engine\rhi\crd-rhi.lib
+[6/61] Linking CXX static library engine\app\crd-app.lib
+[7/61] Linking CXX executable runtime\smoke_jobs.exe
+[8/61] Linking CXX static library engine\config\crd-config.lib
+[9/61] Linking CXX executable runtime\smoke_math.exe
+[10/61] Linking CXX executable runtime\crd-runtime.exe
+[11/61] Linking CXX executable runtime\smoke_log.exe
+[12/61] Linking CXX executable runtime\smoke_containers.exe
+[13/61] Linking CXX executable runtime\smoke_memory.exe
+[14/61] Linking CXX static library engine\shader\crd-shader.lib
+[15/61] Linking CXX static library engine\renderer\crd-renderer.lib
+[16/61] Linking CXX executable tests\math\crd-math-tests.exe
+[17/61] Linking CXX executable runtime\smoke_window.exe
+[18/61] Linking CXX executable runtime\smoke_frame_clock.exe
+[19/61] Linking CXX executable tests\core\crd-core-tests.exe
+[20/61] Linking CXX executable runtime\smoke_filesystem.exe
+[21/61] Linking CXX executable tests\memory\crd-memory-tests.exe
+[22/61] Linking CXX executable runtime\smoke_app.exe
+[23/61] Linking CXX executable tests\log\crd-log-tests.exe
+[24/61] Linking CXX executable runtime\smoke_rhi_api.exe
+[25/61] Linking CXX executable tests\containers\crd-containers-tests.exe
+[26/61] Linking CXX executable runtime\smoke_shader.exe
+[27/61] Linking CXX executable runtime\smoke_config.exe
+[28/61] Building CXX object tests\jobs\CMakeFiles\crd-jobs-tests.dir\test_fiber_switch.cpp.obj
+[29/61] Building CXX object tests\app\CMakeFiles\crd-app-tests.dir\test_layer_stack.cpp.obj
+[30/61] Building CXX object tests\imgui\CMakeFiles\crd-imgui-tests.dir\test_settings.cpp.obj
+[31/61] Building CXX object tests\config\CMakeFiles\crd-config-tests.dir\test_config.cpp.obj
+[32/61] Building CXX object tests\jobs\CMakeFiles\crd-jobs-tests.dir\test_mpmc.cpp.obj
+[33/61] Building CXX object tests\jobs\CMakeFiles\crd-jobs-tests.dir\test_scheduler.cpp.obj
+[34/61] Building CXX object tests\jobs\CMakeFiles\crd-jobs-tests.dir\test_counter.cpp.obj
+[35/61] Building CXX object tests\jobs\CMakeFiles\crd-jobs-tests.dir\test_deque.cpp.obj
+[36/61] Linking CXX executable tests\platform\crd-platform-tests.exe
+[37/61] Building CXX object tests\app\CMakeFiles\crd-app-tests.dir\test_event.cpp.obj
+[38/61] Building CXX object tests\jobs\CMakeFiles\crd-jobs-tests.dir\test_fiber_pool.cpp.obj
+[39/61] Building CXX object tests\shader\CMakeFiles\crd-shader-tests.dir\test_runtime.cpp.obj
+[40/61] Building CXX object tests\jobs\CMakeFiles\crd-jobs-tests.dir\test_jobs.cpp.obj
+[41/61] Building CXX object tests\rhi_vulkan\CMakeFiles\crd-rhi-vulkan-tests.dir\test_rhi_vulkan.cpp.obj
+[42/61] Building CXX object tests\jobs\CMakeFiles\crd-jobs-tests.dir\main_diag.cpp.obj
+[43/61] Building CXX object tests\rhi\CMakeFiles\crd-rhi-tests.dir\test_rhi.cpp.obj
+[44/61] Building CXX object tests\renderer\CMakeFiles\crd-renderer-tests.dir\test_renderer.cpp.obj
+[45/61] Linking CXX executable tests\config\crd-config-tests.exe
+[46/61] Linking CXX executable tests\app\crd-app-tests.exe
+[47/61] Linking CXX executable tests\shader\crd-shader-tests.exe
+[48/61] Building CXX object tests\bench\CMakeFiles\crd-bench.dir\test_bench.cpp.obj
+[49/61] Linking CXX executable tests\rhi\crd-rhi-tests.exe
+[50/61] Linking CXX executable tests\jobs\crd-jobs-tests.exe
+[51/61] Building CXX object engine\rhi-vulkan\CMakeFiles\crd-rhi-vulkan.dir\src\vulkan_backend.cpp.obj
+[52/61] Linking CXX static library engine\rhi-vulkan\crd-rhi-vulkan.lib
+[53/61] Linking CXX static library engine\imgui\crd-imgui.lib
+[54/61] Linking CXX executable tests\bench\crd-bench.exe
+[55/61] Linking CXX executable runtime\smoke_rhi_vulkan_bootstrap.exe
+[56/61] Linking CXX executable runtime\smoke_renderer.exe
+[57/61] Linking CXX executable tests\renderer\crd-renderer-tests.exe
+[58/61] Linking CXX executable tests\rhi_vulkan\crd-rhi-vulkan-tests.exe
+[59/61] Linking CXX executable runtime\smoke_imgui_overlay.exe
+[60/61] Linking CXX executable tests\imgui\crd-imgui-tests.exe

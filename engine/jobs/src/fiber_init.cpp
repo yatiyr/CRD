@@ -1,4 +1,4 @@
-﻿#include <crd/jobs/detail/fiber_context.hpp>
+#include <crd/jobs/detail/fiber_context.hpp>
 #include <crd/core/assert.hpp>
 #include <crd/core/platform.hpp>
 #include <crd/core/types.hpp>
@@ -58,7 +58,7 @@ void fiber_init_stack(FiberContext& ctx, void* stack_base, crd::usize stack_size
     auto p = reinterpret_cast<std::uintptr_t>(top);
     p &= ~std::uintptr_t{15U};  // align down to 16 â€” p % 16 = 0
 
-    auto* frame = reinterpret_cast<crd::u8*>(p - kFrameSize);
+    auto* frame = reinterpret_cast<crd::u8*>(p - kFrameSize); // NOLINT(performance-no-int-to-ptr)
     std::memset(frame, 0, kFrameSize);
 
     // Default FP environment
@@ -98,7 +98,7 @@ void fiber_init_stack(FiberContext& ctx, void* stack_base, crd::usize stack_size
     auto p = reinterpret_cast<std::uintptr_t>(top);
     p &= ~std::uintptr_t{15U};  // align down to 16 â€” p % 16 = 0
 
-    auto* frame = reinterpret_cast<crd::u8*>(p - kFrameSize);
+    auto* frame = reinterpret_cast<crd::u8*>(p - kFrameSize); // NOLINT(performance-no-int-to-ptr)
     std::memset(frame, 0, kFrameSize);
 
     *reinterpret_cast<void**>(frame + 48U) = reinterpret_cast<void*>(entry_fn);

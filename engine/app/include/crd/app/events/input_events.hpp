@@ -96,8 +96,8 @@ public:
     [[nodiscard]] crd::f32 y() const noexcept { return m_y; }
 
 private:
-    crd::f32 m_x = 0.0f;
-    crd::f32 m_y = 0.0f;
+    crd::f32 m_x = 0.0F;
+    crd::f32 m_y = 0.0F;
 };
 
 class MouseScrolledEvent final : public EventT<MouseScrolledEvent, static_cast<crd::u32>(EventCategory::Input) |
@@ -112,7 +112,7 @@ public:
     [[nodiscard]] crd::f32 dy() const noexcept { return m_dy; }
 
 private:
-    crd::f32 m_dx = 0.0f;
-    crd::f32 m_dy = 0.0f;
+    crd::f32 m_dx = 0.0F;
+    crd::f32 m_dy = 0.0F;
 };
 } // namespace crd::app

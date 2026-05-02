@@ -17,7 +17,7 @@
 namespace crd::jobs::detail
 {
 
-static constexpr crd::u32 kCounterNullIndex = 0xFFFF'FFFFu;
+static constexpr crd::u32 kCounterNullIndex = 0xFFFF'FFFFU;
 
 // A Waiter node represents one fiber suspended on a Counter.
 // Stack-allocated by the caller of counter_wait(); remains valid until
@@ -32,7 +32,7 @@ static constexpr crd::u32 kCounterNullIndex = 0xFFFF'FFFFu;
 struct Waiter
 {
     Fiber*               fiber    = nullptr;  // the suspended fiber
-    crd::u32             target   = 0u;       // wake when counter->value == target
+    crd::u32             target   = 0U;       // wake when counter->value == target
     std::atomic<bool>    canceled {false};    // set true if ABA double-check fires
     std::atomic<Waiter*> next     {nullptr};  // Treiber stack link; nullptr = end
 };
@@ -41,15 +41,15 @@ struct Waiter
 // All live modifications go through atomic members.
 struct alignas(64) Counter
 {
-    std::atomic<crd::u32>    value      {0u};
-    crd::u32                 _pad0      = 0u;       // explicit pad → align waiters to 8
+    std::atomic<crd::u32>    value      {0U};
+    crd::u32                 _pad0      = 0U;       // explicit pad → align waiters to 8
     std::atomic<Waiter*>     waiters    {nullptr};  // Treiber stack of pending waiters
     crd::u32                 pool_index  = kCounterNullIndex;
     crd::u32                 next_free   = kCounterNullIndex;
     crd::u8                  _pad1[40]  = {};
 };
-static_assert(sizeof(Counter)  == 64u, "Counter must be exactly one cache line");
-static_assert(alignof(Counter) == 64u, "Counter must be cache-line aligned");
+static_assert(sizeof(Counter)  == 64U, "Counter must be exactly one cache line");
+static_assert(alignof(Counter) == 64U, "Counter must be cache-line aligned");
 
 // Fixed-capacity pool of Counter objects; no heap allocation on the hot path.
 //
@@ -90,15 +90,15 @@ private:
     // Tagged-head helpers — identical to FiberPool.
     static constexpr crd::u64 pack_head(crd::u32 idx, crd::u32 gen) noexcept
     {
-        return (crd::u64(gen) << 32u) | crd::u64(idx);
+        return (crd::u64(gen) << 32U) | crd::u64(idx);
     }
     static constexpr crd::u32 head_idx(crd::u64 h) noexcept { return crd::u32(h); }
-    static constexpr crd::u32 head_gen(crd::u64 h) noexcept { return crd::u32(h >> 32u); }
+    static constexpr crd::u32 head_gen(crd::u64 h) noexcept { return crd::u32(h >> 32U); }
 
     std::unique_ptr<Counter[]>  m_counters;
-    std::atomic<crd::u64>       m_free_head  {pack_head(kCounterNullIndex, 0u)};
-    std::atomic<crd::u32>       m_acquired   {0u};
-    crd::u32                    m_capacity   = 0u;
+    std::atomic<crd::u64>       m_free_head  {pack_head(kCounterNullIndex, 0U)};
+    std::atomic<crd::u32>       m_acquired   {0U};
+    crd::u32                    m_capacity   = 0U;
     bool                        m_initialized = false;
 };
 
@@ -116,7 +116,7 @@ private:
 // The returned list is null-terminated via Waiter::next. The caller is
 // responsible for re-queuing each fiber (Waiter::fiber) as a High-priority job.
 // Thread-safe, lock-free.
-[[nodiscard]] Waiter* counter_decrement(Counter* counter, crd::u32 amount = 1u) noexcept;
+[[nodiscard]] Waiter* counter_decrement(Counter* counter, crd::u32 amount = 1U) noexcept;
 
 // ABA-safe wait: block until counter->value == target.
 //
@@ -136,7 +136,7 @@ private:
 //   Active → Waiting  (before fiber_switch)
 //   Ready  → Active   (after fiber_switch returns)
 void counter_wait(Counter* counter, Waiter* w, Fiber* current_fiber,
-                  FiberContext& scheduler_ctx, crd::u32 target = 0u) noexcept;
+                  FiberContext& scheduler_ctx, crd::u32 target = 0U) noexcept;
 
 } // namespace crd::jobs::detail
 

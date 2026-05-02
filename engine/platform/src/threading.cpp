@@ -21,7 +21,7 @@ u32 current_thread_id() noexcept
 u32 hardware_concurrency() noexcept
 {
     const unsigned int n = std::thread::hardware_concurrency();
-    return n == 0 ? 1u : static_cast<u32>(n);
+    return n == 0 ? 1U : static_cast<u32>(n);
 }
 
 u32 logical_core_count() noexcept

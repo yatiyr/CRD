@@ -24,14 +24,14 @@ int main()
     for (int i = 0; i < 5; ++i)
     {
         clock.tick();
-        CRD_LOG_INFO(g_log_smoke, "frame={} delta_ms={:.3f} total_ms={:.3f}", clock.frame_count(),
+        CRD_LOG_INFO(g_log_smoke, "frame={} delta_ms={:.3F} total_ms={:.3F}", clock.frame_count(),
                      clock.delta_seconds() * 1000.0, clock.total_seconds() * 1000.0);
         std::this_thread::sleep_for(8ms);
     }
 
     crd::platform::Timer t;
     std::this_thread::sleep_for(10ms);
-    CRD_LOG_INFO(g_log_smoke, "Timer elapsed after 10ms sleep: {:.3f} ms", t.elapsed_milliseconds());
+    CRD_LOG_INFO(g_log_smoke, "Timer elapsed after 10ms sleep: {:.3F} ms", t.elapsed_milliseconds());
 
     crd::log::flush();
     crd::log::shutdown();

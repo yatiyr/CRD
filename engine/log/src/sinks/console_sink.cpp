@@ -13,12 +13,12 @@
 #endif
 #include <io.h>
 #include <windows.h>
-#define crd_isatty _isatty
-#define crd_fileno _fileno
+#define CRD_ISATTY _isatty
+#define CRD_FILENO _fileno
 #else
 #include <unistd.h>
-#define crd_isatty isatty
-#define crd_fileno fileno
+#define CRD_ISATTY isatty
+#define CRD_FILENO fileno
 #endif
 
 namespace crd::log
@@ -27,7 +27,7 @@ namespace
 {
 bool stream_is_tty(std::FILE* f) noexcept
 {
-    return f && crd_isatty(crd_fileno(f)) != 0;
+    return f && CRD_ISATTY(CRD_FILENO(f)) != 0;
 }
 
 // Best-effort enable of ANSI virtual-terminal handling on a Windows console.
@@ -35,7 +35,7 @@ bool stream_is_tty(std::FILE* f) noexcept
 void enable_vt_processing(std::FILE* f) noexcept
 {
 #if defined(_WIN32)
-    HANDLE h = reinterpret_cast<HANDLE>(_get_osfhandle(crd_fileno(f)));
+    auto h = reinterpret_cast<HANDLE>(_get_osfhandle(CRD_FILENO(f))); // NOLINT(performance-no-int-to-ptr)
     if (h == INVALID_HANDLE_VALUE)
     {
         return;

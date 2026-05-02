@@ -10,7 +10,6 @@
 using namespace crd;
 using namespace crd::containers;
 using crd::memory::default_allocator;
-using crd::memory::IAllocator;
 using crd::memory::LinearAllocator;
 
 // =============================================================================
@@ -836,15 +835,15 @@ TEST_CASE("HashMap: operator[] inserts default and returns reference", "[contain
 TEST_CASE("HashMap: many inserts trigger rehash, all entries findable", "[containers][hash_map]")
 {
     HashMap<u32, u32> m;
-    constexpr u32 N = 1000;
-    for (u32 i = 0; i < N; ++i)
+    constexpr u32 kN = 1000;
+    for (u32 i = 0; i < kN; ++i)
     {
         REQUIRE(m.insert(i, i * 10));
     }
-    REQUIRE(m.size() == N);
-    REQUIRE(m.capacity() >= N);
+    REQUIRE(m.size() == kN);
+    REQUIRE(m.capacity() >= kN);
 
-    for (u32 i = 0; i < N; ++i)
+    for (u32 i = 0; i < kN; ++i)
     {
         auto* p = m.find(i);
         REQUIRE(p != nullptr);
@@ -855,20 +854,20 @@ TEST_CASE("HashMap: many inserts trigger rehash, all entries findable", "[contai
 TEST_CASE("HashMap: backshift preserves lookups after random erases", "[containers][hash_map]")
 {
     HashMap<u32, u32> m;
-    constexpr u32 N = 500;
-    for (u32 i = 0; i < N; ++i)
+    constexpr u32 kN = 500;
+    for (u32 i = 0; i < kN; ++i)
     {
         m.insert(i, i + 1);
     }
 
     // Erase every third key
-    for (u32 i = 0; i < N; i += 3)
+    for (u32 i = 0; i < kN; i += 3)
     {
         REQUIRE(m.erase(i));
     }
 
     // Verify remaining keys are still findable, erased keys are gone
-    for (u32 i = 0; i < N; ++i)
+    for (u32 i = 0; i < kN; ++i)
     {
         if (i % 3 == 0)
         {
@@ -965,8 +964,8 @@ TEST_CASE("HashMap: iterator visits every live entry exactly once", "[containers
         val_sum += it.value();
     }
     REQUIRE(count == 50);
-    REQUIRE(key_sum == (50ull * 49ull / 2ull));
-    REQUIRE(val_sum == (50ull * 49ull / 2ull) + 50ull * 100ull);
+    REQUIRE(key_sum == (50ULL * 49ULL / 2ULL));
+    REQUIRE(val_sum == (50ULL * 49ULL / 2ULL) + 50ULL * 100ULL);
 }
 
 TEST_CASE("HashMap: heterogeneous lookup with String keys + StringView queries", "[containers][hash_map][string]")
@@ -1003,28 +1002,28 @@ TEST_CASE("HashMap<String, V>: erase by StringView (heterogeneous)", "[container
 TEST_CASE("HashMap: stress test insert+erase keeps invariants", "[containers][hash_map][stress]")
 {
     HashMap<u32, u32> m;
-    constexpr u32 N = 2000;
-    for (u32 i = 0; i < N; ++i)
+    constexpr u32 kN = 2000;
+    for (u32 i = 0; i < kN; ++i)
     {
         m.insert(i, i);
     }
-    REQUIRE(m.size() == N);
+    REQUIRE(m.size() == kN);
 
     // Erase even keys
-    for (u32 i = 0; i < N; i += 2)
+    for (u32 i = 0; i < kN; i += 2)
     {
         REQUIRE(m.erase(i));
     }
-    REQUIRE(m.size() == N / 2);
+    REQUIRE(m.size() == kN / 2);
 
     // Re-insert with different values
-    for (u32 i = 0; i < N; i += 2)
+    for (u32 i = 0; i < kN; i += 2)
     {
         REQUIRE(m.insert(i, i + 10000));
     }
-    REQUIRE(m.size() == N);
+    REQUIRE(m.size() == kN);
 
-    for (u32 i = 0; i < N; ++i)
+    for (u32 i = 0; i < kN; ++i)
     {
         auto* p = m.find(i);
         REQUIRE(p != nullptr);
@@ -1041,12 +1040,12 @@ TEST_CASE("HashMap: dtors run on all live entries", "[containers][hash_map][life
         C() = default;
         explicit C(u32 x) : v(x) {}
         C(const C& o) = default;
-        C(C&& o) noexcept : v(o.v) { o.v = 0xFFFFFFFFu; }
+        C(C&& o) noexcept : v(o.v) { o.v = 0xFFFFFFFFU; }
         C& operator=(const C&) = default;
         C& operator=(C&& o) noexcept
         {
             v = o.v;
-            o.v = 0xFFFFFFFFu;
+            o.v = 0xFFFFFFFFU;
             return *this;
         }
         ~C() { ++dtor_count; }

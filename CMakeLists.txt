@@ -119,11 +119,15 @@ if(CRD_SHIPPING)
     message(STATUS "[crd] Shipping: max optimizations + debug symbols ON")
 endif()
 
-# ----- Compiler Warnings --------------------------------------------------
+# ----- Compiler Warnings (Cerid targets only — propagates via crd-core) -----
+# Third-party CPM packages never see these flags; they inherit them only
+# if they transitively link crd-core, which they don't.
 
-if (MSVC)
+add_library(crd-warnings INTERFACE)
+
+if(MSVC)
     # Gate flags on CXX/C only — MASM (ASM_MASM) does not accept these options.
-    add_compile_options(
+    target_compile_options(crd-warnings INTERFACE
         $<$<COMPILE_LANGUAGE:CXX,C>:/W4>
         $<$<COMPILE_LANGUAGE:CXX,C>:/WX>
         $<$<COMPILE_LANGUAGE:CXX,C>:/permissive->
@@ -131,13 +135,14 @@ if (MSVC)
         $<$<COMPILE_LANGUAGE:CXX,C>:/utf-8>
         $<$<COMPILE_LANGUAGE:CXX,C>:/EHsc>
     )
-
     if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-        add_compile_options($<$<COMPILE_LANGUAGE:CXX,C>:/Zc:preprocessor>)
+        target_compile_options(crd-warnings INTERFACE
+            $<$<COMPILE_LANGUAGE:CXX,C>:/Zc:preprocessor>
+        )
     endif()
 else()
     # Gate on CXX/C so AT&T .S assembly files (ASM language) are not affected.
-    add_compile_options(
+    target_compile_options(crd-warnings INTERFACE
         $<$<COMPILE_LANGUAGE:CXX,C>:-Wall>
         $<$<COMPILE_LANGUAGE:CXX,C>:-Wextra>
         $<$<COMPILE_LANGUAGE:CXX,C>:-Wpedantic>
@@ -159,19 +164,6 @@ include(cmake/CPM.cmake)
 if (CRD_BUILD_TESTS)
     CPMAddPackage("gh:catchorg/Catch2@3.7.1")
     list(APPEND CMAKE_MODULE_PATH ${Catch2_SOURCE_DIR}/extras)
-
-    # Catch2 is a third-party source tree; strip our -Werror/-Wconversion flags
-    # from its targets so upstream -Wconversion hits in benchmark code don't
-    # fail our build (same treatment as GLFW below).
-    foreach(_catch2_target IN ITEMS Catch2 Catch2WithMain)
-        if(TARGET ${_catch2_target})
-            if(MSVC)
-                target_compile_options(${_catch2_target} PRIVATE /W0 /WX-)
-            else()
-                target_compile_options(${_catch2_target} PRIVATE -w)
-            endif()
-        endif()
-    endforeach()
 endif()
 
 # GLFW: window + input backend for crd-platform.
@@ -183,16 +175,6 @@ set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
 set(GLFW_INSTALL        OFF CACHE BOOL "" FORCE)
 CPMAddPackage("gh:glfw/glfw#3.4")
-
-# GLFW is a third-party C source tree. Its warnings shouldn't fail OUR build,
-# so strip /WX (and the warning level) from GLFW targets only.
-if(TARGET glfw)
-    if(MSVC)
-        target_compile_options(glfw PRIVATE /W0 /WX-)
-    else()
-        target_compile_options(glfw PRIVATE -w)
-    endif()
-endif()
 
 CPMAddPackage("gh:marzer/tomlplusplus@3.4.0")
 CPMAddPackage("gh:ocornut/imgui#v1.92.0-docking")

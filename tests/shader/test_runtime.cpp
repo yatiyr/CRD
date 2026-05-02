@@ -19,7 +19,7 @@ namespace
     const auto base = fs::current_working_dir() / ".crd_shader_cache_tests";
     const auto stamp = static_cast<crd::u64>(std::chrono::system_clock::now().time_since_epoch().count());
     crd::containers::String leaf("cache_");
-    leaf.reserve(leaf.size() + 32u);
+    leaf.reserve(leaf.size() + 32U);
     leaf.append(std::to_string(stamp));
     return base / leaf.c_str();
 }
@@ -44,10 +44,10 @@ TEST_CASE("Shader runtime creates effects and preserves metadata", "[shader]")
     const auto* effect = runtime->find_effect(handle);
     REQUIRE(effect != nullptr);
     REQUIRE(effect->name() == "basic");
-    REQUIRE(effect->parameters().size() == 1u);
-    REQUIRE(effect->descriptor_bindings().size() == 1u);
-    REQUIRE(effect->push_constants().size() == 1u);
-    REQUIRE(effect->vertex_attributes().size() == 1u);
+    REQUIRE(effect->parameters().size() == 1U);
+    REQUIRE(effect->descriptor_bindings().size() == 1U);
+    REQUIRE(effect->push_constants().size() == 1U);
+    REQUIRE(effect->vertex_attributes().size() == 1U);
 }
 
 TEST_CASE("Shader runtime issues opaque variant handles", "[shader]")
@@ -75,11 +75,11 @@ TEST_CASE("Shader runtime issues opaque variant handles", "[shader]")
     REQUIRE(diagnostics.succeeded);
     REQUIRE(runtime->is_variant_ready(variant));
     const auto modules = runtime->variant_modules(variant);
-    REQUIRE(modules.size() == 2u);
+    REQUIRE(modules.size() == 2U);
     const auto* vertex_module = runtime->find_module(modules[0]);
     REQUIRE(vertex_module != nullptr);
     REQUIRE(vertex_module->stage() == crd::shader::Stage::Vertex);
-    REQUIRE(vertex_module->code_size_bytes() > 0u);
+    REQUIRE(vertex_module->code_size_bytes() > 0U);
 }
 
 TEST_CASE("Shader runtime reports bad effect handles without crashing", "[shader]")
@@ -138,21 +138,21 @@ TEST_CASE("Shader runtime consumes reflection metadata from compiled modules", "
 
     const auto* effect = runtime->find_effect(effect_handle);
     REQUIRE(effect != nullptr);
-    REQUIRE(effect->descriptor_bindings().size() == 2u);
-    REQUIRE(effect->push_constants().size() == 1u);
-    REQUIRE(effect->vertex_attributes().size() == 2u);
-    REQUIRE(effect->parameters().size() >= 3u);
+    REQUIRE(effect->descriptor_bindings().size() == 2U);
+    REQUIRE(effect->push_constants().size() == 1U);
+    REQUIRE(effect->vertex_attributes().size() == 2U);
+    REQUIRE(effect->parameters().size() >= 3U);
 
     const auto modules = runtime->variant_modules(variant);
-    REQUIRE(modules.size() == 2u);
+    REQUIRE(modules.size() == 2U);
     const auto* vertex_module = runtime->find_module(modules[0]);
     const auto* fragment_module = runtime->find_module(modules[1]);
     REQUIRE(vertex_module != nullptr);
     REQUIRE(fragment_module != nullptr);
-    REQUIRE(vertex_module->descriptor_bindings().size() == 1u);
-    REQUIRE(vertex_module->push_constants().size() == 1u);
-    REQUIRE(vertex_module->vertex_attributes().size() == 2u);
-    REQUIRE(fragment_module->descriptor_bindings().size() == 1u);
+    REQUIRE(vertex_module->descriptor_bindings().size() == 1U);
+    REQUIRE(vertex_module->push_constants().size() == 1U);
+    REQUIRE(vertex_module->vertex_attributes().size() == 2U);
+    REQUIRE(fragment_module->descriptor_bindings().size() == 1U);
 }
 
 TEST_CASE("Shader runtime exposes observable reload result", "[shader]")
@@ -368,7 +368,7 @@ TEST_CASE("Shader runtime hot reload updates live data atomically", "[shader]")
     REQUIRE(runtime->variant_key(variant).value == original_key.value);
     const auto* effect_view = runtime->find_effect(effect);
     REQUIRE(effect_view != nullptr);
-    REQUIRE(effect_view->push_constants().size() == 1u);
+    REQUIRE(effect_view->push_constants().size() == 1U);
 
     REQUIRE(fs::remove_all(root));
 }
@@ -400,7 +400,7 @@ TEST_CASE("Failed hot reload preserves last-good state", "[shader]")
     const auto variant = runtime->request_variant(request, diagnostics);
     REQUIRE(variant.is_valid());
     const auto original_modules = runtime->variant_modules(variant);
-    REQUIRE(original_modules.size() == 2u);
+    REQUIRE(original_modules.size() == 2U);
 
     REQUIRE(fs::write_file_text(
         root / "triangle.frag",
@@ -438,8 +438,8 @@ TEST_CASE("Shader runtime describes variant handoff for RHI/pipeline creation", 
     crd::shader::VariantPipelineDesc handoff;
     REQUIRE(runtime->describe_variant(variant, handoff));
     REQUIRE(handoff.variant.value == variant.value);
-    REQUIRE(handoff.modules.size() == 2u);
-    REQUIRE(handoff.descriptor_bindings.size() == 2u);
-    REQUIRE(handoff.push_constants.size() == 1u);
-    REQUIRE(handoff.vertex_attributes.size() == 2u);
+    REQUIRE(handoff.modules.size() == 2U);
+    REQUIRE(handoff.descriptor_bindings.size() == 2U);
+    REQUIRE(handoff.push_constants.size() == 1U);
+    REQUIRE(handoff.vertex_attributes.size() == 2U);
 }

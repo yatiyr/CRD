@@ -15,15 +15,15 @@ namespace
 {
 [[nodiscard]] constexpr crd::u64 fnv1a_mix(crd::u64 hash, crd::u64 value) noexcept
 {
-    constexpr crd::u64 Prime = 1099511628211ull;
+    constexpr crd::u64 kPrime = 1099511628211ULL;
     hash ^= value;
-    hash *= Prime;
+    hash *= kPrime;
     return hash;
 }
 
 [[nodiscard]] crd::u64 hash_bytes(const char* data, size_t size) noexcept
 {
-    crd::u64 hash = 14695981039346656037ull;
+    crd::u64 hash = 14695981039346656037ULL;
     for (size_t i = 0; i < size; ++i)
     {
         hash = fnv1a_mix(hash, static_cast<unsigned char>(data[i]));
@@ -215,7 +215,7 @@ struct PreprocessResult
                 include_stack.pop_back();
                 return false;
             }
-            out.preprocessed_text.reserve(out.preprocessed_text.size() + nested.preprocessed_text.size() + 8u);
+            out.preprocessed_text.reserve(out.preprocessed_text.size() + nested.preprocessed_text.size() + 8U);
             out.preprocessed_text.append(nested.preprocessed_text.data(), nested.preprocessed_text.size());
             for (const auto& nested_include : nested.include_paths)
             {
@@ -224,7 +224,7 @@ struct PreprocessResult
         }
         else
         {
-            out.preprocessed_text.reserve(out.preprocessed_text.size() + line.size() + 8u);
+            out.preprocessed_text.reserve(out.preprocessed_text.size() + line.size() + 8U);
             out.preprocessed_text.append(line.data(), line.size());
             out.preprocessed_text.push_back('\n');
         }
@@ -498,7 +498,7 @@ public:
 
     [[nodiscard]] bool is_variant_ready(VariantHandle handle) const noexcept override
     {
-        return m_variants.find(handle.value) != m_variants.end();
+        return m_variants.contains(handle.value);
     }
 
     [[nodiscard]] VariantKey variant_key(VariantHandle handle) const noexcept override
@@ -687,7 +687,7 @@ private:
             }
 
             diagnostics.source_key = SourceKey{hash_bytes(source_text.data(), source_text.size())};
-            diagnostics.source_cache_hit = m_source_cache.find(diagnostics.source_key.value) != m_source_cache.end();
+            diagnostics.source_cache_hit = m_source_cache.contains(diagnostics.source_key.value);
             if (!diagnostics.source_cache_hit)
             {
                 m_source_cache.emplace(diagnostics.source_key.value, source_text);
@@ -710,7 +710,7 @@ private:
             }
             diagnostics.preprocessed_key = PreprocessedKey{preprocess_hash};
             diagnostics.preprocessed_cache_hit =
-                m_preprocessed_cache.find(diagnostics.preprocessed_key.value) != m_preprocessed_cache.end();
+                m_preprocessed_cache.contains(diagnostics.preprocessed_key.value);
             if (!diagnostics.preprocessed_cache_hit)
             {
                 m_preprocessed_cache.emplace(diagnostics.preprocessed_key.value, preprocessed.preprocessed_text);
@@ -753,7 +753,7 @@ private:
                 {
                     crd::containers::Array<crd::u8> cached_bytes;
                     if (fs::read_file_binary(cache_path, cached_bytes) &&
-                        (cached_bytes.size() % sizeof(crd::u32)) == 0u)
+                        (cached_bytes.size() % sizeof(crd::u32)) == 0U)
                     {
                         words.resize(cached_bytes.size() / sizeof(crd::u32));
                         std::memcpy(words.data(), cached_bytes.data(), cached_bytes.size());

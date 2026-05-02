@@ -365,7 +365,7 @@ TEST_CASE("Renderer builds DrawList from renderables and shader handoff", "[rend
     REQUIRE(fx.variant.is_valid());
 
     FakeBuffer vertex_buffer(
-        {sizeof(float) * 15u, crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex), crd::rhi::MemoryUsage::CpuToGpu});
+        {sizeof(float) * 15U, crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex), crd::rhi::MemoryUsage::CpuToGpu});
 
     crd::renderer::Renderer renderer;
     crd::renderer::Renderable renderable = make_renderable(vertex_buffer, fx.variant, crd::renderer::DrawBucket::Opaque);
@@ -376,13 +376,13 @@ TEST_CASE("Renderer builds DrawList from renderables and shader handoff", "[rend
     crd::renderer::DrawList draw_list;
     REQUIRE(renderer.build_frame(ctx, *fx.runtime, draw_list));
 
-    REQUIRE(draw_list.opaque.size() == 1u);
+    REQUIRE(draw_list.opaque.size() == 1U);
     REQUIRE(draw_list.masked.empty());
     REQUIRE(draw_list.translucent.empty());
-    REQUIRE(draw_list.opaque[0].vertex_count == 3u);
-    REQUIRE(draw_list.opaque[0].material_instance_id == 7u);
-    REQUIRE(draw_list.opaque[0].handoff.modules.size() == 2u);
-    REQUIRE(draw_list.opaque[0].handoff.descriptor_bindings.size() == 2u);
+    REQUIRE(draw_list.opaque[0].vertex_count == 3U);
+    REQUIRE(draw_list.opaque[0].material_instance_id == 7U);
+    REQUIRE(draw_list.opaque[0].handoff.modules.size() == 2U);
+    REQUIRE(draw_list.opaque[0].handoff.descriptor_bindings.size() == 2U);
 }
 
 TEST_CASE("Renderer routes renderables to correct DrawList buckets", "[renderer]")
@@ -391,7 +391,7 @@ TEST_CASE("Renderer routes renderables to correct DrawList buckets", "[renderer]
     REQUIRE(fx.variant.is_valid());
 
     FakeBuffer vb(
-        {sizeof(float) * 15u, crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex), crd::rhi::MemoryUsage::CpuToGpu});
+        {sizeof(float) * 15U, crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex), crd::rhi::MemoryUsage::CpuToGpu});
 
     crd::renderer::Renderer renderer;
     renderer.submit(make_renderable(vb, fx.variant, crd::renderer::DrawBucket::Opaque));
@@ -403,10 +403,10 @@ TEST_CASE("Renderer routes renderables to correct DrawList buckets", "[renderer]
     crd::renderer::DrawList draw_list;
     REQUIRE(renderer.build_frame(ctx, *fx.runtime, draw_list));
 
-    REQUIRE(draw_list.opaque.size() == 2u);
-    REQUIRE(draw_list.masked.size() == 1u);
-    REQUIRE(draw_list.translucent.size() == 1u);
-    REQUIRE(draw_list.total_count() == 4u);
+    REQUIRE(draw_list.opaque.size() == 2U);
+    REQUIRE(draw_list.masked.size() == 1U);
+    REQUIRE(draw_list.translucent.size() == 1U);
+    REQUIRE(draw_list.total_count() == 4U);
     REQUIRE_FALSE(draw_list.empty());
 }
 
@@ -416,31 +416,31 @@ TEST_CASE("Renderer sorts opaque front-to-back and translucent back-to-front", "
     REQUIRE(fx.variant.is_valid());
 
     FakeBuffer vb(
-        {sizeof(float) * 15u, crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex), crd::rhi::MemoryUsage::CpuToGpu});
+        {sizeof(float) * 15U, crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex), crd::rhi::MemoryUsage::CpuToGpu});
 
     crd::renderer::Renderer renderer;
 
     // Submit far opaque first, near second — build_frame must reorder to front-to-back.
-    renderer.submit(make_renderable(vb, fx.variant, crd::renderer::DrawBucket::Opaque, {0.f, 0.f, 10.f}));
-    renderer.submit(make_renderable(vb, fx.variant, crd::renderer::DrawBucket::Opaque, {0.f, 0.f,  2.f}));
-    renderer.submit(make_renderable(vb, fx.variant, crd::renderer::DrawBucket::Opaque, {0.f, 0.f,  5.f}));
+    renderer.submit(make_renderable(vb, fx.variant, crd::renderer::DrawBucket::Opaque, {0.F, 0.F, 10.F}));
+    renderer.submit(make_renderable(vb, fx.variant, crd::renderer::DrawBucket::Opaque, {0.F, 0.F,  2.F}));
+    renderer.submit(make_renderable(vb, fx.variant, crd::renderer::DrawBucket::Opaque, {0.F, 0.F,  5.F}));
 
     // Submit near translucent first — build_frame must reorder to back-to-front.
-    renderer.submit(make_renderable(vb, fx.variant, crd::renderer::DrawBucket::Translucent, {0.f, 0.f, 1.f}));
-    renderer.submit(make_renderable(vb, fx.variant, crd::renderer::DrawBucket::Translucent, {0.f, 0.f, 8.f}));
+    renderer.submit(make_renderable(vb, fx.variant, crd::renderer::DrawBucket::Translucent, {0.F, 0.F, 1.F}));
+    renderer.submit(make_renderable(vb, fx.variant, crd::renderer::DrawBucket::Translucent, {0.F, 0.F, 8.F}));
 
     crd::renderer::FrameContext ctx;
-    ctx.camera_position = {0.f, 0.f, 0.f};
+    ctx.camera_position = {0.F, 0.F, 0.F};
 
     crd::renderer::DrawList draw_list;
     REQUIRE(renderer.build_frame(ctx, *fx.runtime, draw_list));
 
-    REQUIRE(draw_list.opaque.size() == 3u);
+    REQUIRE(draw_list.opaque.size() == 3U);
     // Opaque: ascending depth (front-to-back). d^2: 4, 25, 100.
     REQUIRE(draw_list.opaque[0].depth < draw_list.opaque[1].depth);
     REQUIRE(draw_list.opaque[1].depth < draw_list.opaque[2].depth);
 
-    REQUIRE(draw_list.translucent.size() == 2u);
+    REQUIRE(draw_list.translucent.size() == 2U);
     // Translucent: descending depth (back-to-front). d^2: 64, 1.
     REQUIRE(draw_list.translucent[0].depth > draw_list.translucent[1].depth);
 }
@@ -470,7 +470,7 @@ TEST_CASE("IRenderPath build receives draw list counts from Renderer", "[rendere
     REQUIRE(fx.variant.is_valid());
 
     FakeBuffer vb(
-        {sizeof(float) * 15u, crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex), crd::rhi::MemoryUsage::CpuToGpu});
+        {sizeof(float) * 15U, crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex), crd::rhi::MemoryUsage::CpuToGpu});
 
     crd::renderer::Renderer renderer;
     renderer.submit(make_renderable(vb, fx.variant, crd::renderer::DrawBucket::Opaque));
@@ -499,13 +499,13 @@ TEST_CASE("IRenderPath resize notifies path of new viewport extent", "[renderer]
 
     path.resize({1920, 1080});
     REQUIRE(path.resize_count == 1);
-    REQUIRE(path.last_resize_extent.width == 1920u);
-    REQUIRE(path.last_resize_extent.height == 1080u);
+    REQUIRE(path.last_resize_extent.width == 1920U);
+    REQUIRE(path.last_resize_extent.height == 1080U);
 
     path.resize({2560, 1440});
     REQUIRE(path.resize_count == 2);
-    REQUIRE(path.last_resize_extent.width == 2560u);
-    REQUIRE(path.last_resize_extent.height == 1440u);
+    REQUIRE(path.last_resize_extent.width == 2560U);
+    REQUIRE(path.last_resize_extent.height == 1440U);
 }
 
 TEST_CASE("DrawList clear empties all buckets", "[renderer]")
@@ -516,12 +516,12 @@ TEST_CASE("DrawList clear empties all buckets", "[renderer]")
     draw_list.masked.push_back(item);
     draw_list.translucent.push_back(item);
 
-    REQUIRE(draw_list.total_count() == 3u);
+    REQUIRE(draw_list.total_count() == 3U);
     REQUIRE_FALSE(draw_list.empty());
 
     draw_list.clear();
 
-    REQUIRE(draw_list.total_count() == 0u);
+    REQUIRE(draw_list.total_count() == 0U);
     REQUIRE(draw_list.empty());
 }
 
@@ -647,7 +647,7 @@ TEST_CASE("FrameGraph reset clears passes and resources", "[renderer][frame_grap
     fg.reset();
 
     auto handle2 = fg.import(&image, crd::rhi::ImageAccess::Undefined);
-    REQUIRE(handle2.index == 0u);
+    REQUIRE(handle2.index == 0U);
     auto builder2 = fg.add_pass("pass-after-reset");
     builder2.write(handle2, crd::rhi::ImageAccess::ColorWrite);
     builder2.set_execute([](crd::renderer::FrameResources&, crd::rhi::CommandBuffer&) {});
@@ -669,7 +669,7 @@ TEST_CASE("MaterialLayout creates a DescriptorSetLayout on the device", "[render
 
     REQUIRE(layout != nullptr);
     REQUIRE(device.create_dsl_count == 1);
-    REQUIRE(layout->descriptor_set_layout().desc().bindings.size() == 1u);
+    REQUIRE(layout->descriptor_set_layout().desc().bindings.size() == 1U);
     REQUIRE(layout->descriptor_set_layout().desc().bindings[0].type
             == crd::rhi::DescriptorType::UniformBuffer);
 }
@@ -712,7 +712,7 @@ TEST_CASE("MaterialInstance update_buffer forwards to the underlying DescriptorS
     instance.update_buffer(0, buf);
 
     REQUIRE(raw_set->update_count == 1);
-    REQUIRE(raw_set->last_binding == 0u);
+    REQUIRE(raw_set->last_binding == 0U);
     REQUIRE(&instance.descriptor_set() == raw_set);
 }
 
@@ -737,7 +737,7 @@ TEST_CASE("DescriptorAllocator ring: begin_frame advances frame index", "[render
 
     REQUIRE(fake->begin_frame_count == 2);
     REQUIRE(fake->allocate_count == 2);
-    REQUIRE(fake->last_frame == 1u);
+    REQUIRE(fake->last_frame == 1U);
 }
 
 // =============================================================================
@@ -799,10 +799,10 @@ TEST_CASE("ForwardRenderPath build registers two frame graph passes", "[renderer
     // push_constants called once per draw.
     REQUIRE(cmd.push_constants_count == 2);
     // model matrix is 64 bytes.
-    REQUIRE(cmd.last_push_size == 64u);
+    REQUIRE(cmd.last_push_size == 64U);
     // bind_descriptor_sets called once in the color pass (set 0).
     REQUIRE(cmd.bind_descriptor_sets_count == 1);
-    REQUIRE(cmd.last_first_set == 0u);
+    REQUIRE(cmd.last_first_set == 0U);
 }
 
 TEST_CASE("ForwardRenderPath build draws opaque and masked in color pass", "[renderer][forward]")
@@ -914,10 +914,10 @@ TEST_CASE("build_frame copies index fields from Renderable into DrawItem", "[ren
     crd::renderer::DrawList draw_list;
     REQUIRE(renderer.build_frame(ctx, *fx.runtime, draw_list));
 
-    REQUIRE(draw_list.opaque.size() == 1u);
+    REQUIRE(draw_list.opaque.size() == 1U);
     const auto& item = draw_list.opaque[0];
     REQUIRE(item.index_buffer == &ib);
-    REQUIRE(item.index_count  == 6u);
+    REQUIRE(item.index_count  == 6U);
     REQUIRE(item.index_type   == crd::rhi::IndexType::Uint16);
 }
 
@@ -979,7 +979,7 @@ TEST_CASE("ForwardRenderPath dispatches draw_indexed for indexed items", "[rende
     REQUIRE(cmd.draw_count         == 0);
     REQUIRE(cmd.draw_indexed_count == 2);
     REQUIRE(cmd.bind_index_buffer_count == 2);
-    REQUIRE(cmd.last_index_count   == 6u);
+    REQUIRE(cmd.last_index_count   == 6U);
     REQUIRE(cmd.last_index_type    == crd::rhi::IndexType::Uint32);
 }
 
@@ -1071,8 +1071,8 @@ TEST_CASE("add_swapchain_blit_pass execute calls blit_image once", "[renderer][b
     fg.execute(fake_device, cmd);
 
     REQUIRE(cmd.blit_image_count == 1);
-    REQUIRE(cmd.last_blit_src_extent.width  == 1280u);
-    REQUIRE(cmd.last_blit_src_extent.height == 720u);
+    REQUIRE(cmd.last_blit_src_extent.width  == 1280U);
+    REQUIRE(cmd.last_blit_src_extent.height == 720U);
 }
 
 TEST_CASE("add_swapchain_blit_pass inserts correct barrier sequence", "[renderer][blit]")

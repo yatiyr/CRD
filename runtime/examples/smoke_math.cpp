@@ -6,27 +6,27 @@ int main()
 {
     using namespace crd::math;
 
-    const Vec3f right(1.0f, 0.0f, 0.0f);
-    const Vec3f up(0.0f, 1.0f, 0.0f);
+    const Vec3f right(1.0F, 0.0F, 0.0F);
+    const Vec3f up(0.0F, 1.0F, 0.0F);
     const Vec3f forward = cross(right, up);
-    const Vec3f velocity(3.0f, 4.0f, 0.0f);
+    const Vec3f velocity(3.0F, 4.0F, 0.0F);
     const Vec3f dir = normalized(velocity);
-    const Mat3f basis(Vec3f(1.0f, 0.0f, 0.0f), Vec3f(0.0f, 2.0f, 0.0f), Vec3f(0.0f, 0.0f, 3.0f));
-    const Vec3f scaled = basis * Vec3f(1.0f, 2.0f, 3.0f);
-    const Quatf quarter_turn = from_axis_angle(Vec3f(0.0f, 0.0f, 1.0f), k_half_pi_f);
-    const Vec3f rotated = rotate_vector(quarter_turn, Vec3f(1.0f, 0.0f, 0.0f));
-    const Transformf pose(Vec3f(10.0f, 0.0f, 0.0f), quarter_turn);
-    const Vec3f transformed = transform_point(pose, Vec3f(1.0f, 0.0f, 0.0f));
-    const Planef ground = plane_from_point_normal(Vec3f(0.0f, 0.0f, 0.0f), Vec3f(0.0f, 1.0f, 0.0f));
-    const Rayf drop_ray(Vec3f(0.0f, 10.0f, 0.0f), Vec3f(0.0f, -1.0f, 0.0f));
-    const Trianglef tri(Vec3f(-1.0f, -1.0f, 0.0f), Vec3f(1.0f, -1.0f, 0.0f), Vec3f(0.0f, 1.0f, 0.0f));
+    const Mat3f basis(Vec3f(1.0F, 0.0F, 0.0F), Vec3f(0.0F, 2.0F, 0.0F), Vec3f(0.0F, 0.0F, 3.0F));
+    const Vec3f scaled = basis * Vec3f(1.0F, 2.0F, 3.0F);
+    const Quatf quarter_turn = from_axis_angle(Vec3f(0.0F, 0.0F, 1.0F), k_half_pi_f);
+    const Vec3f rotated = rotate_vector(quarter_turn, Vec3f(1.0F, 0.0F, 0.0F));
+    const Transformf pose(Vec3f(10.0F, 0.0F, 0.0F), quarter_turn);
+    const Vec3f transformed = transform_point(pose, Vec3f(1.0F, 0.0F, 0.0F));
+    const Planef ground = plane_from_point_normal(Vec3f(0.0F, 0.0F, 0.0F), Vec3f(0.0F, 1.0F, 0.0F));
+    const Rayf drop_ray(Vec3f(0.0F, 10.0F, 0.0F), Vec3f(0.0F, -1.0F, 0.0F));
+    const Trianglef tri(Vec3f(-1.0F, -1.0F, 0.0F), Vec3f(1.0F, -1.0F, 0.0F), Vec3f(0.0F, 1.0F, 0.0F));
     const Frustumf frustum = frustum_from_view_projection(Mat4f::identity());
-    const AABBf bounds(Vec3f(-0.5f, -0.5f, -0.5f), Vec3f(0.5f, 0.5f, 0.5f));
-    float ray_t = 0.0f;
+    const AABBf bounds(Vec3f(-0.5F, -0.5F, -0.5F), Vec3f(0.5F, 0.5F, 0.5F));
+    float ray_t = 0.0F;
     Vec3f bary{};
     const bool ray_hit_ground = intersect_ray_plane(drop_ray, ground, ray_t);
     const bool ray_hit_tri =
-        intersect_ray_triangle(Rayf(Vec3f(0.0f, 0.0f, -5.0f), Vec3f(0.0f, 0.0f, 1.0f)), tri, ray_t, bary);
+        intersect_ray_triangle(Rayf(Vec3f(0.0F, 0.0F, -5.0F), Vec3f(0.0F, 0.0F, 1.0F)), tri, ray_t, bary);
     const bool frustum_hits_bounds = intersects(frustum, bounds);
 
     std::cout << "pi<float>=" << k_pi<crd::f32> << "\n";
@@ -41,6 +41,6 @@ int main()
     std::cout << "ray hits triangle? " << ray_hit_tri << " bary=(" << bary.x << ", " << bary.y << ", " << bary.z
               << ")\n";
     std::cout << "identity frustum intersects unit-ish bounds? " << frustum_hits_bounds << "\n";
-    std::cout << "90 deg in radians = " << deg_to_rad(90.0f) << "\n";
+    std::cout << "90 deg in radians = " << deg_to_rad(90.0F) << "\n";
     return 0;
 }

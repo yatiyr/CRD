@@ -63,7 +63,7 @@ struct DrawItem
     crd::u64 material_instance_id = 0;
     crd::shader::VariantHandle variant{};
     crd::shader::VariantPipelineDesc handoff{};
-    crd::f32 depth = 0.0f; // squared camera distance; populated by build_frame for sorting
+    crd::f32 depth = 0.0F; // squared camera distance; populated by build_frame for sorting
 };
 
 // Pre-bucketed, depth-sorted output of Renderer::build_frame().

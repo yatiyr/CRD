@@ -320,7 +320,7 @@ private:
     // SSO buffer holds 23 visible chars (one byte is the size/flag). The
     // 24th byte (size_or_flag) is the discriminant.
     static constexpr usize kSsoCapacity = 23;
-    static constexpr u8 kHeapFlag = 0xFFu;
+    static constexpr u8 kHeapFlag = 0xFFU;
 
     union
     {

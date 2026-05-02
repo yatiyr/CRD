@@ -54,10 +54,10 @@ TEST_CASE("worker_pool: init and shutdown", "[jobs][worker_pool]")
 {
     WorkerPool pool;
     WorkerConfig cfg;
-    cfg.num_threads = 2u;
+    cfg.num_threads = 2U;
     REQUIRE(pool.init(cfg));
     CHECK(pool.is_initialized());
-    CHECK(pool.num_threads() == 2u);
+    CHECK(pool.num_threads() == 2U);
     CHECK(pool.scheduler().is_initialized());
     CHECK(pool.fiber_pool().is_initialized());
     CHECK(pool.counter_pool().is_initialized());
@@ -74,7 +74,7 @@ TEST_CASE("worker_pool: re-init after shutdown", "[jobs][worker_pool]")
 {
     WorkerPool pool;
     WorkerConfig cfg;
-    cfg.num_threads = 2u;
+    cfg.num_threads = 2U;
     REQUIRE(pool.init(cfg));
     pool.shutdown();
     REQUIRE(pool.init(cfg));
@@ -89,11 +89,11 @@ TEST_CASE("worker_pool: default num_threads uses hardware_concurrency", "[jobs][
 {
     WorkerPool pool;
     WorkerConfig cfg;
-    cfg.num_threads = 0u; // request automatic
+    cfg.num_threads = 0U; // request automatic
     REQUIRE(pool.init(cfg));
 
     const crd::u32 hw = static_cast<crd::u32>(std::thread::hardware_concurrency());
-    const crd::u32 expected = (hw > 0u) ? hw : 1u;
+    const crd::u32 expected = (hw > 0U) ? hw : 1U;
     CHECK(pool.num_threads() == expected);
 
     pool.shutdown();
@@ -107,7 +107,7 @@ TEST_CASE("worker_pool: single job executes on worker thread", "[jobs][worker_po
 {
     WorkerPool pool;
     WorkerConfig cfg;
-    cfg.num_threads = 2u;
+    cfg.num_threads = 2U;
     REQUIRE(pool.init(cfg));
 
     std::atomic<int> done{0};
@@ -125,7 +125,7 @@ TEST_CASE("worker_pool: pump executes job on thread 0", "[jobs][worker_pool]")
 {
     WorkerPool pool;
     WorkerConfig cfg;
-    cfg.num_threads = 1u; // only thread 0, no background workers
+    cfg.num_threads = 1U; // only thread 0, no background workers
     REQUIRE(pool.init(cfg));
 
     std::atomic<int> done{0};
@@ -146,7 +146,7 @@ TEST_CASE("worker_pool: pinned job executes via pump on thread 0", "[jobs][worke
 {
     WorkerPool pool;
     WorkerConfig cfg;
-    cfg.num_threads = 2u;
+    cfg.num_threads = 2U;
     REQUIRE(pool.init(cfg));
 
     std::atomic<int> done{0};
@@ -169,8 +169,8 @@ TEST_CASE("worker_pool: multiple jobs all execute", "[jobs][worker_pool]")
 {
     WorkerPool pool;
     WorkerConfig cfg;
-    cfg.num_threads       = 4u;
-    cfg.small_fiber_count = 64u;
+    cfg.num_threads       = 4U;
+    cfg.small_fiber_count = 64U;
     REQUIRE(pool.init(cfg));
 
     constexpr int kJobs = 100;
@@ -190,13 +190,13 @@ TEST_CASE("worker_pool: job runs on a fiber stack", "[jobs][worker_pool]")
 {
     WorkerPool pool;
     WorkerConfig cfg;
-    cfg.num_threads = 1u;
+    cfg.num_threads = 1U;
     REQUIRE(pool.init(cfg));
 
     // Capture a rough stack address from inside the job; the job runs in a fiber,
     // so its stack is the pool-allocated fiber stack — not the OS thread's stack.
     // We just verify a value is captured (not nullptr), indicating the job ran.
-    std::atomic<crd::usize> captured_sp{0u};
+    std::atomic<crd::usize> captured_sp{0U};
 
     JobDecl j{};
     j.fn = [](void* data)
@@ -211,7 +211,7 @@ TEST_CASE("worker_pool: job runs on a fiber stack", "[jobs][worker_pool]")
 
     REQUIRE(pool.pump());
 
-    REQUIRE(captured_sp.load() != 0u);
+    REQUIRE(captured_sp.load() != 0U);
     pool.shutdown();
 }
 
@@ -223,7 +223,7 @@ TEST_CASE("worker_pool: pump returns false when queue empty", "[jobs][worker_poo
 {
     WorkerPool pool;
     WorkerConfig cfg;
-    cfg.num_threads = 1u;
+    cfg.num_threads = 1U;
     REQUIRE(pool.init(cfg));
 
     const bool result = pool.pump();
@@ -240,8 +240,8 @@ TEST_CASE("worker_pool: concurrent multi-thread stress", "[jobs][worker_pool]")
 {
     WorkerPool pool;
     WorkerConfig cfg;
-    cfg.num_threads       = 4u;
-    cfg.small_fiber_count = 128u;
+    cfg.num_threads       = 4U;
+    cfg.small_fiber_count = 128U;
     REQUIRE(pool.init(cfg));
 
     constexpr int kJobs = 1000;
@@ -264,11 +264,11 @@ TEST_CASE("worker_pool: concurrent multi-thread stress", "[jobs][worker_pool]")
 TEST_CASE("jobs: init and shutdown", "[jobs][public-api]")
 {
     crd::jobs::Config cfg;
-    cfg.num_threads = 2u;
+    cfg.num_threads = 2U;
     crd::jobs::init(cfg);
 
-    CHECK(crd::jobs::num_workers() == 2u);
-    CHECK(crd::jobs::worker_index() == 0u);    // main thread is thread 0
+    CHECK(crd::jobs::num_workers() == 2U);
+    CHECK(crd::jobs::worker_index() == 0U);    // main thread is thread 0
     CHECK_FALSE(crd::jobs::is_worker_fiber()); // main thread is not inside a fiber
 
     crd::jobs::shutdown();
@@ -281,7 +281,7 @@ TEST_CASE("jobs: init and shutdown", "[jobs][public-api]")
 TEST_CASE("jobs: run and wait from main thread", "[jobs][public-api]")
 {
     crd::jobs::Config cfg;
-    cfg.num_threads = 2u; // background worker required for the spin-wait path
+    cfg.num_threads = 2U; // background worker required for the spin-wait path
     crd::jobs::init(cfg);
 
     constexpr int kN = 20;
@@ -312,7 +312,7 @@ TEST_CASE("jobs: run and wait from main thread", "[jobs][public-api]")
 TEST_CASE("jobs: run_and_wait from inside a worker fiber", "[jobs][public-api]")
 {
     crd::jobs::Config cfg;
-    cfg.num_threads = 2u;
+    cfg.num_threads = 2U;
     crd::jobs::init(cfg);
 
     struct RootData
@@ -366,7 +366,7 @@ TEST_CASE("jobs: run_and_wait from inside a worker fiber", "[jobs][public-api]")
 TEST_CASE("jobs: is_worker_fiber returns true inside a job", "[jobs][public-api]")
 {
     crd::jobs::Config cfg;
-    cfg.num_threads = 2u;
+    cfg.num_threads = 2U;
     crd::jobs::init(cfg);
 
     std::atomic<bool> saw_fiber{false};
@@ -392,8 +392,8 @@ TEST_CASE("jobs: is_worker_fiber returns true inside a job", "[jobs][public-api]
 TEST_CASE("jobs: stress many parallel jobs via public API", "[jobs][public-api]")
 {
     crd::jobs::Config cfg;
-    cfg.num_threads       = 4u;
-    cfg.small_fiber_count = 128u;
+    cfg.num_threads       = 4U;
+    cfg.small_fiber_count = 128U;
     crd::jobs::init(cfg);
 
     constexpr int kN = 500;
@@ -426,7 +426,7 @@ TEST_CASE("jobs: stress many parallel jobs via public API", "[jobs][public-api]"
 TEST_CASE("jobs: make_job basic SBO lambda", "[jobs][sbo]")
 {
     crd::jobs::Config cfg;
-    cfg.num_threads = 2u;
+    cfg.num_threads = 2U;
     crd::jobs::init(cfg);
 
     std::atomic<int> count{0};
@@ -453,7 +453,7 @@ TEST_CASE("jobs: make_job basic SBO lambda", "[jobs][sbo]")
 TEST_CASE("jobs: make_job SBO survives fiber suspension", "[jobs][sbo]")
 {
     crd::jobs::Config cfg;
-    cfg.num_threads = 2u; // two threads so inner job can run while outer fiber waits
+    cfg.num_threads = 2U; // two threads so inner job can run while outer fiber waits
     crd::jobs::init(cfg);
 
     std::atomic<int>  child_count{0};
@@ -489,7 +489,7 @@ TEST_CASE("jobs: make_job SBO survives fiber suspension", "[jobs][sbo]")
 TEST_CASE("jobs: make_job captures struct by value", "[jobs][sbo]")
 {
     crd::jobs::Config cfg;
-    cfg.num_threads = 2u;
+    cfg.num_threads = 2U;
     crd::jobs::init(cfg);
 
     struct Payload
@@ -520,11 +520,11 @@ TEST_CASE("jobs: make_job captures struct by value", "[jobs][sbo]")
 TEST_CASE("jobs: parallel_for splits range and executes all items", "[jobs][sbo]")
 {
     crd::jobs::Config cfg;
-    cfg.num_threads = 4u;
+    cfg.num_threads = 4U;
     crd::jobs::init(cfg);
 
-    constexpr crd::u32 kCount   = 100u;
-    constexpr crd::u32 kNumJobs = 4u;
+    constexpr crd::u32 kCount   = 100U;
+    constexpr crd::u32 kNumJobs = 4U;
     std::atomic<int> sum{0};
 
     // Each job accumulates (end - begin) into sum. Total must equal kCount.
@@ -548,15 +548,15 @@ TEST_CASE("jobs: parallel_for splits range and executes all items", "[jobs][sbo]
 TEST_CASE("jobs: parallel_for clamps num_jobs to count", "[jobs][sbo]")
 {
     crd::jobs::Config cfg;
-    cfg.num_threads = 4u;
+    cfg.num_threads = 4U;
     crd::jobs::init(cfg);
 
     // count=3, num_jobs=10 → clamped to 3. Each of the 3 items is processed once.
-    constexpr crd::u32 kCount = 3u;
+    constexpr crd::u32 kCount = 3U;
     std::atomic<int> processed{0};
 
     crd::jobs::Counter* c = crd::jobs::parallel_for(
-        kCount, 10u,
+        kCount, 10U,
         [&processed](crd::u32 /*begin*/, crd::u32 /*end*/)
         {
             processed.fetch_add(1, std::memory_order_release);

@@ -51,11 +51,11 @@ TEST_CASE("Timer: nanoseconds match seconds within tolerance", "[platform][timer
 TEST_CASE("FrameClock: first tick reports zero delta", "[platform][frameclock]")
 {
     crd::platform::FrameClock clock;
-    REQUIRE(clock.frame_count() == 0u);
+    REQUIRE(clock.frame_count() == 0U);
     REQUIRE(clock.delta_seconds() == 0.0);
 
     clock.tick();
-    REQUIRE(clock.frame_count() == 1u);
+    REQUIRE(clock.frame_count() == 1U);
     REQUIRE(clock.delta_seconds() == 0.0); // first tick seeds, no spike
 }
 
@@ -66,13 +66,13 @@ TEST_CASE("FrameClock: subsequent ticks report real deltas", "[platform][framecl
 
     std::this_thread::sleep_for(3ms);
     clock.tick();
-    REQUIRE(clock.frame_count() == 2u);
+    REQUIRE(clock.frame_count() == 2U);
     REQUIRE(clock.delta_seconds() >= 0.002);
     REQUIRE(clock.delta_seconds() < 1.0); // sanity upper bound
 
     std::this_thread::sleep_for(3ms);
     clock.tick();
-    REQUIRE(clock.frame_count() == 3u);
+    REQUIRE(clock.frame_count() == 3U);
     REQUIRE(clock.delta_seconds() >= 0.002);
 }
 
@@ -91,16 +91,16 @@ TEST_CASE("FrameClock: reset zeroes everything", "[platform][frameclock]")
     clock.tick();
     std::this_thread::sleep_for(3ms);
     clock.tick();
-    REQUIRE(clock.frame_count() == 2u);
+    REQUIRE(clock.frame_count() == 2U);
     REQUIRE(clock.delta_seconds() > 0.0);
 
     clock.reset();
-    REQUIRE(clock.frame_count() == 0u);
+    REQUIRE(clock.frame_count() == 0U);
     REQUIRE(clock.delta_seconds() == 0.0);
     REQUIRE(clock.total_seconds() < 0.005); // freshly reset
 
     // After reset, the next tick should still be a seed (zero delta).
     clock.tick();
     REQUIRE(clock.delta_seconds() == 0.0);
-    REQUIRE(clock.frame_count() == 1u);
+    REQUIRE(clock.frame_count() == 1U);
 }

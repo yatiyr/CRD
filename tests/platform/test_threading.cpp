@@ -4,10 +4,10 @@
 
 TEST_CASE("threading: core counts are sane", "[platform][threading]")
 {
-    REQUIRE(crd::platform::threading::current_thread_id() != 0u);
-    REQUIRE(crd::platform::threading::hardware_concurrency() >= 1u);
-    REQUIRE(crd::platform::threading::logical_core_count() >= 1u);
-    REQUIRE(crd::platform::threading::physical_core_count() >= 1u);
+    REQUIRE(crd::platform::threading::current_thread_id() != 0U);
+    REQUIRE(crd::platform::threading::hardware_concurrency() >= 1U);
+    REQUIRE(crd::platform::threading::logical_core_count() >= 1U);
+    REQUIRE(crd::platform::threading::physical_core_count() >= 1U);
 }
 
 TEST_CASE("threading: naming and cpu_pause are safe no-ops", "[platform][threading]")
