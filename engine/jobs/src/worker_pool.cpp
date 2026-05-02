@@ -152,11 +152,23 @@ void WorkerPool::run_job_in_fiber(const crd::jobs::JobDecl& job)
         target = m_fiber_pool.acquire(stack_size_to_tier(job.stack));
         if (!target)
             return; // pool exhausted: CRD_ASSERT already fired inside acquire()
-        tl_job_fn   = job.fn;
-        tl_job_data = job.data;
+        tl_job_fn = job.fn;
         Counter* cp = nullptr;
         std::memcpy(&cp, &job._pad[0], sizeof(cp));
         target->job_counter = cp;
+
+        // SBO path: callable bytes were packed into data + _pad[9..41] by make_job<F>.
+        // Copy them into the fiber's sbo_buf so they survive suspension + resume on any thread.
+        if (job._pad[8] == crd::jobs::detail::kSboFlag)
+        {
+            std::memcpy(&target->sbo_buf[0], &job.data, 8u);
+            std::memcpy(&target->sbo_buf[8], &job._pad[9], 33u);
+            tl_job_data = target->sbo_buf;
+        }
+        else
+        {
+            tl_job_data = job.data;
+        }
     }
 
     tl_fiber = target;

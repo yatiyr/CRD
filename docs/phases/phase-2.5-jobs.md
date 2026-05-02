@@ -191,14 +191,20 @@ void shutdown();
 
 ```cpp
 // Internal — not part of the public header.
-// The 48-byte buffer occupies the fn + data + _pad fields of JobDecl.
-// fn is set to a trampoline that calls operator() on the buffered F.
+// 41-byte SBO: data field (8 B) + _pad[9..41] (33 B).
+// _pad[8] is set to kSboFlag = 1u to mark SBO jobs.
+// fn is set to sbo_trampoline<F>, which calls operator() via the buffered bytes.
+// run_job_in_fiber copies the 41 bytes into Fiber::sbo_buf before the first context
+// switch so the callable survives fiber suspension + resume on any thread.
 template<typename F>
-requires (sizeof(F) <= 48 && std::is_trivially_destructible_v<F>)
-JobDecl make_job_sbo(F&& f, StackSize stack, Priority prio);
+requires (sizeof(std::decay_t<F>)  <= 41u &&
+          alignof(std::decay_t<F>) <= 8u  &&
+          std::is_trivially_copyable_v<std::decay_t<F>> &&
+          std::is_trivially_destructible_v<std::decay_t<F>>)
+[[nodiscard]] JobDecl make_job(F&& f, StackSize stack, Priority priority);
 ```
 
-Large-closure fallback (>48 bytes): caller must ensure lifetime; `fn(data)` form is the escape hatch.
+Large-closure fallback (>41 bytes): caller must ensure lifetime; `fn(data)` form is the escape hatch.
 
 ---
 
@@ -259,7 +265,7 @@ Semaphore           worker_sem     // posted on every push
 | v1f | Counter + wait mechanism | ✅ | `Counter` pool (alignas(64), 64-byte cache line, Treiber free list with generation tag); `Waiter` (canceled atomic for ABA double-check); `counter_decrement` steals waiter list atomically, partitions into woken/put-back/discarded; `counter_wait` ABA-safe 6-step protocol (fast path, Treiber push, double-check, fiber_switch); `FiberState` transitions debug-asserted; 14 unit tests incl. real fiber_switch suspension + 16-thread concurrent stress |
 | v1g | Worker thread pool + main-thread fiber | ✅ | `WorkerPool` owns `Scheduler` + `FiberPool` + `CounterPool`; N-1 background threads; thread 0 driven via `pump()`; all jobs run inside fiber context switches via `job_fiber_trampoline`; TIB StackBase/StackLimit saved/restored in `fiber_switch` (Windows guard-page fix); fiber re-init via `fiber_init_stack` on completion (fixes initial frame corruption on reuse); 10 unit tests incl. pinned dispatch, fiber stack isolation, pump/empty probe, 1000-job concurrent stress |
 | v1h | Public API layer | ✅ | `jobs.hpp` + `jobs.cpp`: global `WorkerPool g_pool` singleton; `run()` embeds `Counter*` in `JobDecl::_pad[0..7]` via memcpy; `wait()` — fiber path: cooperative `counter_wait()` + suspension; non-fiber path: spin+yield (requires `num_threads >= 2`); `Fiber::job_counter` field ensures counter survives suspension+resume on different threads (replaces flawed `tl_job_counter` TLS); 5 public-API unit tests incl. nested `run_and_wait` from inside a worker fiber; all 6 configs green (346/346 win-debug, 343/343 win-release) |
-| v1i | SBO lambda helpers | ⏳ | `make_job<F>()` 48-byte SBO; `parallel_for()`; large-closure fallback documented |
+| v1i | SBO lambda helpers | ✅ | `make_job<F>()` 41-byte SBO (data 8B + _pad[9..41] 33B); `parallel_for()`; kSboFlag sentinel in _pad[8]; run_job_in_fiber copies SBO bytes into Fiber::sbo_buf (stable across suspension+resume); 5 unit tests incl. SBO + run_and_wait suspension stress; all 6 configs green (351/351 debug, 348/348 release) |
 | v1j | Per-frame linear allocator | ⏳ | Per-thread bump arena; `frame_alloc()` / `frame_reset()`; reset is collective (all threads) |
 | v1k | Integration smoke + crd-app wiring | ⏳ | `smoke_jobs`; `Application::run()` calls `jobs::init()` / `shutdown()`; all 6 configs green |
 

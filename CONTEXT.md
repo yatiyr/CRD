@@ -11,20 +11,20 @@
 
 ## Current focus
 
-**Phase 2.5 — `crd-jobs` fiber-based job system. v1a–v1h shipped.**
+**Phase 2.5 — `crd-jobs` fiber-based job system. v1a–v1i shipped.**
 
 Design complete (ADR-0033). Decisions locked:
 - Main thread converts to fiber and joins the worker pool (pinned-job mechanism for GLFW thread 0).
 - Hand-rolled asm context switch (Windows x64 MASM + Linux x64 AT&T).
 - Chase-Lev work-stealing deques (3 per thread: High/Normal/Low) + Vyukov MPMC injection queues.
-- 64-byte SBO for job closures (48-byte buffer + fn ptr + metadata = one cache line).
+- 41-byte SBO for job closures (data field 8B + _pad[9..41] 33B; kSboFlag sentinel in _pad[8]).
 - Pool-allocated counters; ABA-safe double-check wait mechanism.
 - Three priority levels: High / Normal / Low.
 - Stack sizes: Small 64 KB × 128, Medium 512 KB × 64, Large 2 MB × 16.
 
 Full design packet: `docs/phases/phase-2.5-jobs.md`. 11 slices (v1a–v1k).
-**Shipped:** v1a (asm context switch), v1b (fiber pool), v1c (Chase-Lev deque), v1d (Vyukov MPMC queue), v1e (priority scheduler), v1f (counter + wait mechanism), v1g (worker thread pool), v1h (public API).
-**Next:** v1i — SBO lambda helpers: `make_job<F>()` 48-byte SBO, `parallel_for()`.
+**Shipped:** v1a (asm context switch), v1b (fiber pool), v1c (Chase-Lev deque), v1d (Vyukov MPMC queue), v1e (priority scheduler), v1f (counter + wait mechanism), v1g (worker thread pool), v1h (public API), v1i (make_job SBO + parallel_for).
+**Next:** v1j — per-thread linear frame allocator: `frame_alloc()` / `frame_reset()`.
 
 Aktif phase dosyaları: `docs/phases/phase-2.5-jobs.md` (active) + `docs/phases/phase-2-graphics.md` (2.4 ongoing)
 
@@ -39,32 +39,43 @@ _none — running on the main roadmap._
 
 ## Last shipped milestone
 
+**2026-05-02 — `crd-jobs` v1i SBO lambda helpers shipped.**
+
+`make_job<F>()` in `jobs.hpp` — wraps a callable into a `JobDecl` using 41-byte inline SBO
+(8 bytes from the `data` field + 33 bytes from `_pad[9..41]`). Requires: `sizeof(F) <= 41`,
+`alignof(F) <= 8`, trivially copyable + destructible. SBO trampoline (`detail::sbo_trampoline<F>`)
+stored as `fn`; `_pad[8] = kSboFlag = 1` marks the job as SBO for `run_job_in_fiber`.
+
+SBO lifetime safety: `run_job_in_fiber` detects `_pad[8] == kSboFlag` and copies the 41 bytes
+into `Fiber::sbo_buf` (new `alignas(8) u8[41]` field) before the first context switch. The fiber
+struct persists across suspension + resume on any thread, so SBO captures survive `run_and_wait`
+calls inside job bodies.
+
+`parallel_for<F>(count, num_jobs, fn)` — creates `min(num_jobs, count)` `make_job`-wrapped jobs
+that split `[0, count)` into contiguous ranges. F must satisfy same constraints as `make_job`.
+`std::vector<JobDecl>` allocates the job array (frame arena replaces this in v1j).
+
+5 new tests: basic SBO lambda, SBO + `run_and_wait` fiber-suspension stress (critical), struct
+capture by value, `parallel_for` range coverage, `parallel_for` num_jobs clamping.
+
+Six-configuration green:
+- win-debug:          351/351
+- win-relwithdebinfo: 351/351
+- win-release:        348/348
+- win-asan:           351/351
+- win-clang-cl:       351/351
+- win-tidy:           clean
+
+## Previous shipped milestone
+
 **2026-05-02 — `crd-jobs` v1h Public API layer shipped.**
 
 `engine/jobs/include/crd/jobs/jobs.hpp` — full public API: `Config`, `init()`, `shutdown()`,
 `run(span)` / `run(single)`, `wait()`, `run_and_wait(span)` / `run_and_wait(single)`,
 `is_worker_fiber()`, `worker_index()`, `num_workers()`.
 
-`engine/jobs/src/jobs.cpp` — global `WorkerPool g_pool` singleton; `submit_jobs` embeds the
-`Counter*` in `JobDecl::_pad[0..7]` via `memcpy` before pushing; `wait()` takes two paths:
-inside a fiber → cooperative `counter_wait()` + fiber suspension; outside a fiber (main thread)
-→ spin with `std::this_thread::yield()` (requires `num_threads >= 2`).
-
 Key design decision: counter pointer stored in `Fiber::job_counter` (not TLS) so it survives
-fiber suspension and correct `counter_decrement` call happens after the job completes even when
-the fiber was resumed on a different thread. `tl_job_counter` TLS eliminated.
-
-5 new public-API tests: init/shutdown + introspection, `run()`+`wait()` from main thread,
-`run_and_wait()` from inside a worker fiber (with child jobs), `is_worker_fiber()` probe,
-500-job parallel stress. Total: 346 tests.
-
-Six-configuration green:
-- win-debug:          346/346
-- win-relwithdebinfo: 346/346
-- win-release:        343/343
-- win-asan:           346/346
-- win-clang-cl:       346/346
-- win-tidy:           no new warnings
+fiber suspension. 5 public-API tests. Total at v1h: 346 tests.
 
 ## Previous shipped milestone
 

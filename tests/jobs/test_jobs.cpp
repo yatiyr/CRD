@@ -414,3 +414,157 @@ TEST_CASE("jobs: stress many parallel jobs via public API", "[jobs][public-api]"
 
     crd::jobs::shutdown();
 }
+
+// ===========================================================================
+// v1i — make_job<F> SBO helpers + parallel_for
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// 16. make_job: basic SBO lambda dispatched via public run/wait
+// ---------------------------------------------------------------------------
+
+TEST_CASE("jobs: make_job basic SBO lambda", "[jobs][sbo]")
+{
+    crd::jobs::Config cfg;
+    cfg.num_threads = 2u;
+    crd::jobs::init(cfg);
+
+    std::atomic<int> count{0};
+
+    // Lambda captures one pointer — 8 bytes, well within 41-byte SBO limit.
+    auto j = crd::jobs::make_job([&count]()
+    {
+        count.fetch_add(1, std::memory_order_release);
+    });
+
+    crd::jobs::wait(crd::jobs::run(j));
+    CHECK(count.load() == 1);
+
+    crd::jobs::shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// 17. make_job: SBO callable survives fiber suspension + resume on another thread.
+//     This is the critical test: the outer lambda calls run_and_wait internally,
+//     which triggers fiber suspension. The SBO bytes must be readable when the
+//     fiber resumes (possibly on a different OS thread).
+// ---------------------------------------------------------------------------
+
+TEST_CASE("jobs: make_job SBO survives fiber suspension", "[jobs][sbo]")
+{
+    crd::jobs::Config cfg;
+    cfg.num_threads = 2u; // two threads so inner job can run while outer fiber waits
+    crd::jobs::init(cfg);
+
+    std::atomic<int>  child_count{0};
+    std::atomic<bool> outer_done{false};
+
+    // Outer lambda: captures two references (16 bytes — within 41-byte SBO).
+    // Calls run_and_wait internally → fiber suspends here → resumes later.
+    // After resume, stores outer_done = true using data from its SBO closure.
+    auto outer = crd::jobs::make_job([&child_count, &outer_done]()
+    {
+        auto inner = crd::jobs::make_job([&child_count]()
+        {
+            child_count.fetch_add(1, std::memory_order_release);
+        });
+        crd::jobs::run_and_wait(inner); // suspends outer fiber until inner completes
+
+        // This line only executes after resume — proves SBO bytes survived.
+        outer_done.store(true, std::memory_order_release);
+    });
+
+    crd::jobs::wait(crd::jobs::run(outer));
+
+    CHECK(child_count.load() == 1);
+    CHECK(outer_done.load());
+
+    crd::jobs::shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// 18. make_job: captures non-pointer state by value (struct capture)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("jobs: make_job captures struct by value", "[jobs][sbo]")
+{
+    crd::jobs::Config cfg;
+    cfg.num_threads = 2u;
+    crd::jobs::init(cfg);
+
+    struct Payload
+    {
+        int      addend;
+        std::atomic<int>* out;
+    };
+
+    std::atomic<int> result{0};
+    Payload p{42, &result};
+
+    // Lambda captures Payload by value (8 bytes pointer + int = 12 bytes — within 41).
+    auto j = crd::jobs::make_job([p]()
+    {
+        p.out->fetch_add(p.addend, std::memory_order_release);
+    });
+
+    crd::jobs::wait(crd::jobs::run(j));
+    CHECK(result.load() == 42);
+
+    crd::jobs::shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// 19. parallel_for: splits range correctly and executes all items
+// ---------------------------------------------------------------------------
+
+TEST_CASE("jobs: parallel_for splits range and executes all items", "[jobs][sbo]")
+{
+    crd::jobs::Config cfg;
+    cfg.num_threads = 4u;
+    crd::jobs::init(cfg);
+
+    constexpr crd::u32 kCount   = 100u;
+    constexpr crd::u32 kNumJobs = 4u;
+    std::atomic<int> sum{0};
+
+    // Each job accumulates (end - begin) into sum. Total must equal kCount.
+    crd::jobs::Counter* c = crd::jobs::parallel_for(
+        kCount, kNumJobs,
+        [&sum](crd::u32 begin, crd::u32 end)
+        {
+            sum.fetch_add(static_cast<int>(end - begin), std::memory_order_release);
+        });
+
+    crd::jobs::wait(c);
+    CHECK(sum.load() == static_cast<int>(kCount));
+
+    crd::jobs::shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// 20. parallel_for: num_jobs clamped to count when num_jobs > count
+// ---------------------------------------------------------------------------
+
+TEST_CASE("jobs: parallel_for clamps num_jobs to count", "[jobs][sbo]")
+{
+    crd::jobs::Config cfg;
+    cfg.num_threads = 4u;
+    crd::jobs::init(cfg);
+
+    // count=3, num_jobs=10 → clamped to 3. Each of the 3 items is processed once.
+    constexpr crd::u32 kCount = 3u;
+    std::atomic<int> processed{0};
+
+    crd::jobs::Counter* c = crd::jobs::parallel_for(
+        kCount, 10u,
+        [&processed](crd::u32 /*begin*/, crd::u32 /*end*/)
+        {
+            processed.fetch_add(1, std::memory_order_release);
+        });
+
+    crd::jobs::wait(c);
+    // 3 jobs ran (one per item after clamping), covering all 3 items.
+    CHECK(processed.load() == static_cast<int>(kCount));
+
+    crd::jobs::shutdown();
+}

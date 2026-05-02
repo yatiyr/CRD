@@ -47,6 +47,11 @@ struct Fiber
     FiberTier  tier          = FiberTier::Small;
     Counter*   job_counter   = nullptr;         // counter to decrement when this fiber's job completes
 
+    // SBO callable storage — valid when the running job was created by make_job<F>.
+    // Copied from JobDecl (data + _pad[9..41]) by run_job_in_fiber on initial dispatch.
+    // Persists across fiber suspension + resume on any thread; outlives the JobDecl copy.
+    alignas(8) crd::u8 sbo_buf[41] = {}; // NOLINT(modernize-avoid-c-arrays)
+
 #if CRD_ENABLE_ASSERTS
     FiberState state = FiberState::Idle;
 #endif
