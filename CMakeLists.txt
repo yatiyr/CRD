@@ -53,6 +53,16 @@ else()
 endif()
 message(STATUS "[crd] Log compile-time min level: ${CRD_LOG_MIN_LEVEL_RESOLVED} (${CRD_LOG_MIN_LEVEL_NUM})")
 
+# ---- NDEBUG for optimised configs ---------------------------------------
+# CMake's MSVC toolchain may leave CMAKE_CXX_FLAGS_RELEASE empty (unlike the
+# C toolchain), so NDEBUG is not always propagated automatically. Ensure the
+# standard Release/MinSizeRel configs always get the define, matching the
+# intent of every #if defined(NDEBUG) guard in the codebase.
+add_compile_definitions(
+    $<$<CONFIG:Release>:NDEBUG>
+    $<$<CONFIG:MinSizeRel>:NDEBUG>
+)
+
 # ---- Sanitizers ---------------------------------------------------------
 
 if(CRD_ENABLE_ASAN)

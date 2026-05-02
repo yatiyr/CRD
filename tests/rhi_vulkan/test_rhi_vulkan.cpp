@@ -62,9 +62,7 @@ TEST_CASE("Vulkan command buffer and frame loop can execute a triangle frame", "
 #if defined(NDEBUG)
     SUCCEED("Release build: triangle frame integration test is skipped due to driver-dependent optimization/runtime "
             "variance");
-    return;
-#endif
-
+#else
     if (headless_requested())
     {
         SUCCEED("CRD_PLATFORM_HEADLESS=1, skipping Vulkan/window-backed test");
@@ -168,4 +166,5 @@ TEST_CASE("Vulkan command buffer and frame loop can execute a triangle frame", "
 
     REQUIRE(device->graphics_queue().submit(*command_buffer, *swapchain));
     device->wait_idle();
+#endif
 }

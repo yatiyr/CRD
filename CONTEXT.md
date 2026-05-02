@@ -11,7 +11,7 @@
 
 ## Current focus
 
-**Phase 2.5 — `crd-jobs` fiber-based job system. v1a–v1e shipped.**
+**Phase 2.5 — `crd-jobs` fiber-based job system. v1a–v1f shipped.**
 
 Design complete (ADR-0033). Decisions locked:
 - Main thread converts to fiber and joins the worker pool (pinned-job mechanism for GLFW thread 0).
@@ -23,8 +23,8 @@ Design complete (ADR-0033). Decisions locked:
 - Stack sizes: Small 64 KB × 128, Medium 512 KB × 64, Large 2 MB × 16.
 
 Full design packet: `docs/phases/phase-2.5-jobs.md`. 11 slices (v1a–v1k).
-**Shipped:** v1a (asm context switch), v1b (fiber pool), v1c (Chase-Lev deque), v1d (Vyukov MPMC queue), v1e (priority scheduler).
-**Next:** v1f — Counter + wait mechanism (Counter pool, Treiber waiter list, ABA-safe double-check).
+**Shipped:** v1a (asm context switch), v1b (fiber pool), v1c (Chase-Lev deque), v1d (Vyukov MPMC queue), v1e (priority scheduler), v1f (counter + wait mechanism).
+**Next:** v1g — Worker thread pool + main-thread fiber: real OS threads, worker loop, `init()` converts main thread to fiber.
 
 Aktif phase dosyaları: `docs/phases/phase-2.5-jobs.md` (active) + `docs/phases/phase-2-graphics.md` (2.4 ongoing)
 
@@ -39,37 +39,61 @@ _none — running on the main roadmap._
 
 ## Last shipped milestone
 
-**2026-05-02 — `crd-jobs` v1e Priority Scheduler shipped.**
+**2026-05-02 — `crd-jobs` v1f Counter + wait mechanism shipped.**
 
-`Scheduler` class in `engine/jobs/src/scheduler.hpp/.cpp`. Three global Vyukov MPMC injection
-queues (High/Normal/Low), per-thread three Chase-Lev local deques, and a single-slot pinned-job
-lane per thread (`alignas(64) std::atomic<bool> pinned_available` + `JobDecl pinned_storage`).
+`Counter` (alignas(64), one cache line: `atomic<u32> value`, `atomic<Waiter*> waiters`, pool
+metadata) + `CounterPool` (generation-tagged 64-bit Treiber free list `[gen:32|idx:32]`, same
+pattern as FiberPool) in `engine/jobs/src/counter.hpp/.cpp`.
 
-Drain order per `execute_one()` call: (1) pinned slot if occupied, then for each priority level
-High → Normal → Low: injection queue → local deque → round-robin steal from peers. `push()` and
-`push_local()` each post `std::counting_semaphore<>` once; workers call `wait_for_work()` to sleep.
+`Waiter` struct (stack-allocated by caller): `Fiber* fiber`, `u32 target`,
+`atomic<bool> canceled`, `atomic<Waiter*> next` (Treiber stack link).
 
-`JobDecl` moved to its own public header `include/crd/jobs/job_decl.hpp` (64-byte cache-line
-aligned, no implicit padding). `SchedulerConfig` defined outside `Scheduler` class to fix a
-clang-cl diagnostic about default member initializers in nested classes. Root CMakeLists.txt
-gained `/EHsc` for MSVC to fix VS18 `<chrono>` C4530 warning.
+`counter_decrement(counter*, amount)`: `fetch_sub(acq_rel)` → `exchange(nullptr, acq_rel)`
+steals entire waiter list → partition: canceled→discard, target match→woken (sets `FiberState::Ready`
+in debug), else→put-back via Treiber CAS. Returns null-terminated woken list; caller re-queues as
+High-priority jobs.
 
-16 unit tests: init/shutdown, num_threads, single High/Normal/Low injection, drain-order proof
-(push in reverse priority order), injection-before-local, push_local, LIFO deque ordering,
-pinned-job isolation (thread 1 cannot consume thread 0's pinned slot), pinned slot cleared after
-execution, work stealing (thread 1 steals from thread 0), steal-High-before-Normal, semaphore
-count (N pushes → N non-blocking wait_for_work()), push wakes blocked thread (threaded test with
-sleep_for(20 ms)), concurrent 4-thread × 4 000-job mixed-priority stress.
+`counter_wait(counter*, w*, fiber*, scheduler_ctx, target)`: 6-step ABA-safe protocol — fast path
+load (acquire), Treiber push (release), ABA double-check load (acquire, set canceled if hit),
+`fiber_switch` suspend (Active→Waiting), resume assert (Ready→Active).
+
+14 unit tests including two real fiber_switch suspension/resumption tests, a 16-thread concurrent
+decrement stress, and a 4-thread × 500 acquire/release stress.
+
+Also fixed in this session: `CMAKE_CXX_FLAGS_RELEASE` was empty in CMake 4.x + MSVC, so NDEBUG
+was never defined in Release builds. Added `add_compile_definitions($<$<CONFIG:Release>:NDEBUG>)`
+to `CMakeLists.txt`. Restructured the Vulkan triangle integration test from
+`#if NDEBUG ... return; #endif` to `#if NDEBUG ... SUCCEED ... #else ... full test ... #endif` to
+avoid MSVC LTCG C4702 (unreachable code) treated as error via `/WX`.
 
 Six-configuration green:
-- win-debug:          317/317
-- win-relwithdebinfo: 317/317
-- win-release:        314/314
-- win-asan:           317/317
-- win-clang-cl:       317/317
-- win-tidy:           317/317
+- win-debug:          331/331
+- win-relwithdebinfo: 331/331
+- win-release:        328/328
+- win-asan:           331/331
+- win-clang-cl:       331/331
+- win-tidy:           331/331
 
 ## Previous shipped milestone
+
+**2026-05-02 — `crd-jobs` v1e Priority Scheduler shipped.**
+
+`Scheduler` class: three global Vyukov MPMC injection queues (High/Normal/Low), per-thread three
+Chase-Lev local deques, and a single-slot pinned-job lane per thread. Drain order: pinned →
+H-inject → H-local → H-steal → N-inject → N-local → N-steal → L-inject → L-local → L-steal.
+`std::counting_semaphore<>` sleep/wake. 16 unit tests.
+
+Detail: `docs/sessions/2026-05-02-jobs-v1e-scheduler.md`.
+
+Six-configuration green:
+- win-debug:          317/317  
+- win-relwithdebinfo: 317/317  
+- win-release:        314/314  
+- win-asan:           317/317  
+- win-clang-cl:       317/317  
+- win-tidy:           317/317  
+
+## Previous shipped milestone (–2)
 
 **2026-05-02 — `crd-jobs` v1d Vyukov MPMC injection queue shipped.**
 
@@ -441,9 +465,9 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Next up (next 1–3 sessions)
 
-1. **`crd-jobs` v1f** — Counter + wait mechanism: `Counter` pool, Treiber waiter list, ABA-safe double-check wait.
-2. **`crd-jobs` v1g** — Worker thread pool + main-thread fiber: real OS threads, worker loop, `init()` converts main thread to fiber.
-3. **`crd-jobs` v1h** — Public API layer: `run()` / `wait()` / `run_and_wait()`, `Config`, `init()` / `shutdown()`.
+1. **`crd-jobs` v1g** — Worker thread pool + main-thread fiber: real OS threads, worker loop, `init()` converts main thread to fiber.
+2. **`crd-jobs` v1h** — Public API layer: `run()` / `wait()` / `run_and_wait()`, `Config`, `init()` / `shutdown()`.
+3. **`crd-jobs` v1i** — SBO lambda helpers: `make_job<F>()` 48-byte SBO, `parallel_for()`.
 4. **`crd-resources` + `asset_cooker` 2.6** — after crd-jobs v1k complete.
 
 ## Open questions
@@ -455,12 +479,12 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Test counts (last quality pass)
 
-- win-debug:          317/317
-- win-relwithdebinfo: 317/317
-- win-release:        314/314
-- win-asan:           317/317
-- win-clang-cl:       317/317
-- win-tidy:           317/317
+- win-debug:          331/331
+- win-relwithdebinfo: 331/331
+- win-release:        328/328
+- win-asan:           331/331
+- win-clang-cl:       331/331
+- win-tidy:           331/331
 
 (win-release is 3 fewer: debug-only `FiberState` tests excluded by `#if CRD_ENABLE_ASSERTS`)
 
@@ -487,6 +511,7 @@ When in doubt, ASK before reading large files.
 
 ## Session log (rolling, last 5)
 
+- **2026-05-02** — `crd-jobs` v1f Counter + wait mechanism shipped; 14 new tests; NDEBUG fix for Release; all 6 configs green (331/331 win-debug).
 - **2026-05-02** — `crd-jobs` v1e Priority Scheduler shipped; 16 new tests; /EHsc fix; all 6 configs green (317/317 win-debug).
 - **2026-05-02** — `crd-jobs` v1d Vyukov MPMC injection queue shipped; all 6 configs green (301/301 win-debug).
 - **2026-05-02** — `crd-jobs` v1c Chase-Lev work-stealing deque shipped; all 6 configs green (291/291 win-debug).
