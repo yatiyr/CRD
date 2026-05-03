@@ -11,6 +11,7 @@
 #include <crd/resources/resource_id.hpp>
 
 #include <memory>
+#include <mutex>
 
 namespace crd::resources
 {
@@ -35,19 +36,24 @@ struct MountEntry
     crd::u32                     mount_id     = 0;
 };
 
-// Central resource registry (v1c — synchronous load with refcounted handles).
+// Central resource registry.
 //
 // Startup sequence:
 //   1. Construct ResourceManager with an IAllocator*.
 //   2. register_loader() for each resource type.
 //   3. mount_manifest() for each cooked pack (engine → project → DLC order).
-//   4. load_sync<T>() to load resources.
+//   4. load_sync<T>() or load_async<T>() to load resources.
 //
 // Multi-mount precedence: newest mount wins on ResourceId collision.
 // Collisions are logged at Warn level.
 //
-// Thread safety: registration and mounting are NOT thread-safe; perform them
-// on the main thread before any worker fibers call load_*.
+// Thread safety (v1d):
+//   - Registration and mounting are NOT thread-safe; perform them on the main
+//     thread before any worker fibers call load_*.
+//   - load_sync() and load_async() are thread-safe after registration/mount.
+//   - The ResourceManager must outlive all in-flight async loads. Callers must
+//     wait() on every Counter returned by read_async() (or call jobs::shutdown())
+//     before destroying the manager.
 class ResourceManager
 {
 public:
@@ -66,7 +72,6 @@ public:
 
     // ── Mounts ─────────────────────────────────────────────────────────────
     // Mount a cooked PACK file. Returns an invalid MountId on failure.
-    // Caller must keep the returned MountId to unmount later if needed.
     [[nodiscard]] MountId mount_manifest(crd::containers::StringView path);
 
     // Remove a mounted pack. Entries from this mount are evicted from the
@@ -74,37 +79,46 @@ public:
     void unmount(MountId id);
 
     // ── Synchronous load ───────────────────────────────────────────────────
-    // Reads artifact bytes from the pack file, dispatches to the registered
-    // loader, and returns a handle. Handles are refcounted; the payload lives
-    // until all handles are dropped (v1g eviction) or the manager is destroyed.
-    //
-    // Transitive dependency resolution: loaders may call load_sync<Dep> on
-    // ctx.manager. Cycles are detected via a thread-local visiting stack and
-    // terminate with a Failed handle (logged at Error).
-    //
-    // Failed loads are NOT cached; a second call will retry the load.
-    // Successful loads ARE cached; a second call returns the cached block.
+    // Blocks the calling thread. Safe from any context (fiber or thread).
+    // Coalesces with in-flight async loads for the same id.
     template <typename T>
     [[nodiscard]] ResourceHandle<T> load_sync(ResourceId id);
 
+    // ── Asynchronous load ──────────────────────────────────────────────────
+    // Submits a load job to the crd-jobs pool. Returns immediately with a
+    // handle whose state() is Queued (or Ready if cached).
+    // Call handle.wait_ready() to block until the load completes.
+    //
+    // Coalescing: if another load for the same id is already in flight, the
+    // returned handle shares the same control block — no duplicate I/O.
+    //
+    // Requires crd::jobs to be initialised before the call.
+    template <typename T>
+    [[nodiscard]] ResourceHandle<T> load_async(ResourceId id);
+
     // ── Lookup ─────────────────────────────────────────────────────────────
-    // Find the mount entry for a ResourceId, or nullptr if not mounted.
     [[nodiscard]] const MountEntry* find_entry(ResourceId id) const noexcept;
 
     // ── Diagnostics ────────────────────────────────────────────────────────
-    [[nodiscard]] crd::usize loader_count()  const noexcept;
-    [[nodiscard]] crd::usize mount_count()   const noexcept;
-    [[nodiscard]] crd::usize entry_count()   const noexcept;
-    [[nodiscard]] crd::usize handle_count()  const noexcept;
+    [[nodiscard]] crd::usize loader_count()   const noexcept;
+    [[nodiscard]] crd::usize mount_count()    const noexcept;
+    [[nodiscard]] crd::usize entry_count()    const noexcept;
+    [[nodiscard]] crd::usize handle_count()   const noexcept;
+    [[nodiscard]] crd::usize in_flight_count() const noexcept;
 
 private:
     crd::memory::IAllocator* m_alloc;
     crd::u32                 m_next_mount_id = 1U;
 
+    // Guards m_handles, m_in_flight, m_live, m_loaders, and m_mounts
+    // for concurrent load_sync / load_async calls. The mutex is NOT held
+    // during I/O or loader dispatch, so recursive load_sync (transitive
+    // dependency resolution) does not deadlock.
+    mutable std::mutex m_mutex;
+
     // Loader registry: FourCC → ILoader.
     crd::containers::HashMap<crd::u32, std::unique_ptr<ILoader>> m_loaders;
 
-    // Per-mount bookkeeping: mount_id → list of ResourceIds in that mount.
     struct MountRecord
     {
         crd::u32                           id = 0;
@@ -122,20 +136,37 @@ private:
     crd::containers::HashMap<ResourceId, MountEntry> m_live;
 
     // Handle table: ResourceId → ResourceControlBlock* (permanent blocks only).
-    // Blocks are allocated by the manager and freed in ~ResourceManager().
     crd::containers::HashMap<ResourceId, ResourceControlBlock*> m_handles;
+
+    // In-flight table: ResourceId → ResourceControlBlock* (loads in progress).
+    // Both load_sync and load_async insert here before starting I/O; removed on completion.
+    // Enables coalescing: a second request for the same id shares the same block.
+    crd::containers::HashMap<ResourceId, ResourceControlBlock*> m_in_flight;
 
     // Internal helpers.
     [[nodiscard]] ResourceControlBlock* load_sync_impl(ResourceId id);
+    [[nodiscard]] ResourceControlBlock* load_async_impl(ResourceId id);
     [[nodiscard]] const MountRecord*    find_mount(crd::u32 mount_id) const noexcept;
+
+public:
+    // Job entry point for async loads. Receives a heap-allocated AsyncLoadCtx*.
+    // Public so the internal SBO-job closure (anonymous namespace) can call it.
+    // Not part of the user-facing API; do not call directly.
+    static void run_load_job(void* ctx) noexcept;
 };
 
-// ── Template implementation (must be in header) ─────────────────────────────
+// ── Template implementations (must be in header) ────────────────────────────
 
 template <typename T>
 ResourceHandle<T> ResourceManager::load_sync(ResourceId id)
 {
     return ResourceHandle<T>(load_sync_impl(id));
+}
+
+template <typename T>
+ResourceHandle<T> ResourceManager::load_async(ResourceId id)
+{
+    return ResourceHandle<T>(load_async_impl(id));
 }
 
 } // namespace crd::resources

@@ -167,13 +167,18 @@ if (CRD_BUILD_TESTS)
 endif()
 
 # GLFW: window + input backend for crd-platform.
-# We pin the 3.4 tag and disable everything we don't ship (docs, examples,
-# tests, the loader stubs). GLFW_BUILD_WAYLAND/X11 stay at their platform
-# defaults so Linux CI can still build later.
+# We pin the 3.4 tag and disable everything we don't ship.
+# GLFW 3.4 on Linux: disable the X11 backend so its GLX context code (which needs
+# GL/gl.h) is never compiled. Wayland packages are installed in CI and suffice for
+# headless test runs. X11 users can opt back in by overriding GLFW_BUILD_X11.
 set(GLFW_BUILD_DOCS     OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
 set(GLFW_INSTALL        OFF CACHE BOOL "" FORCE)
+if(UNIX AND NOT APPLE)
+    set(GLFW_BUILD_X11     OFF CACHE BOOL "" FORCE)
+    set(GLFW_BUILD_WAYLAND ON  CACHE BOOL "" FORCE)
+endif()
 CPMAddPackage("gh:glfw/glfw#3.4")
 
 CPMAddPackage("gh:marzer/tomlplusplus@3.4.0")

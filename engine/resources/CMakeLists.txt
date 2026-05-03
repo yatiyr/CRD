@@ -17,6 +17,7 @@ target_link_libraries(crd-resources
         crd-platform
     PRIVATE
         libzstd_static
+        crd-jobs
 )
 
 target_include_directories(crd-resources

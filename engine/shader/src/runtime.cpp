@@ -375,7 +375,7 @@ struct ShadercApi
 
 [[nodiscard]] fs::Path shaderc_library_path() noexcept
 {
-#if defined(CRD_OS_WINDOWS)
+#if CRD_OS_WINDOWS
     char* sdk = nullptr;
     std::size_t len = 0;
     const errno_t rc = _dupenv_s(&sdk, &len, "VULKAN_SDK");
@@ -387,7 +387,7 @@ struct ShadercApi
     }
     free(sdk);
     return fs::Path("shaderc_shared.dll");
-#elif defined(CRD_OS_LINUX)
+#elif CRD_OS_LINUX
     return fs::Path("libshaderc_shared.so");
 #else
     return fs::Path("libshaderc_shared.dylib");

@@ -81,11 +81,11 @@ public:
         return m_block ? m_block->generation.load(std::memory_order_relaxed) : 0U;
     }
 
-    // Fiber-cooperative wait (v1d+). In v1c this is a no-op synchronous return.
-    LoadState wait_ready()
-    {
-        return state();
-    }
+    // Fiber-cooperative wait (v1d+).
+    // If an async counter is available, suspends the calling fiber (or spins on the
+    // main thread) until the load job completes. Safe to call on sync-loaded handles
+    // (counter is null; returns immediately from the terminal-state fast path).
+    LoadState wait_ready();
 
 protected:
     friend class ResourceManager;
@@ -97,26 +97,7 @@ protected:
 private:
     ResourceControlBlock* m_block = nullptr;
 
-    void release_block() noexcept
-    {
-        if (!m_block)
-        {
-            return;
-        }
-        if (m_block->release() == 0U && !m_block->permanent)
-        {
-            // Non-permanent (failed) block: free it.
-            if (m_block->payload && m_block->loader)
-            {
-                m_block->loader->unload(m_block->payload);
-                m_block->payload = nullptr;
-            }
-            crd::memory::IAllocator* alloc = m_block->alloc;
-            m_block->~ResourceControlBlock();
-            alloc->deallocate(m_block);
-        }
-        m_block = nullptr;
-    }
+    void release_block() noexcept;
 };
 
 // Typed resource handle. sizeof == sizeof(ResourceHandleBase) == one pointer.

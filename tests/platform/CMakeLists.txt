@@ -6,6 +6,7 @@ target_link_libraries(crd-platform-tests PRIVATE
     crd-core
     crd-log
     crd-platform
+    crd-jobs
     Catch2::Catch2WithMain
 )
 

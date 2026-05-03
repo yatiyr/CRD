@@ -5,9 +5,18 @@
 #include <crd/log/log.hpp>
 #include <crd/rhi/vulkan_native.hpp>
 
+// ImGui backend headers contain C-style casts that trigger -Wconversion on GCC.
+// Suppress for these headers only; the cast is intentional ImGui sentinel idiom.
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wconversion"
+#endif
 #include <backends/imgui_impl_glfw.h>
 #include <backends/imgui_impl_vulkan.h>
 #include <imgui.h>
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 
 namespace crd::imgui
 {
@@ -210,7 +219,7 @@ void ImGuiLayer::on_attach()
 
     auto vk_device = crd::rhi::vulkan_device(m_device);
     VkDescriptorPool descriptor_pool = VK_NULL_HANDLE;
-    CRD_ASSERT(vkCreateDescriptorPool(vk_device, &pool_info, nullptr, &descriptor_pool) == VK_SUCCESS);
+    CRD_VERIFY(vkCreateDescriptorPool(vk_device, &pool_info, nullptr, &descriptor_pool) == VK_SUCCESS);
     m_descriptor_pool = descriptor_pool;
 
     ImGui_ImplVulkan_InitInfo init_info{};

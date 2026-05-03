@@ -16,6 +16,7 @@ target_link_libraries(crd-platform
         crd-memory
     PRIVATE
         glfw
+        crd-jobs
 )
 
 target_compile_features(crd-platform PUBLIC cxx_std_20)

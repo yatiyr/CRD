@@ -222,7 +222,8 @@ jobs:
             libxrandr-dev \
             libxinerama-dev \
             libxcursor-dev \
-            libxi-dev
+            libxi-dev \
+            mesa-common-dev
 
       - name: Fetch SPIRV-Reflect source
         run: |
@@ -336,7 +337,8 @@ jobs:
             libxrandr-dev \
             libxinerama-dev \
             libxcursor-dev \
-            libxi-dev
+            libxi-dev \
+            mesa-common-dev
 
       - name: Fetch SPIRV-Reflect source
         run: |

@@ -5,7 +5,10 @@
 #include <crd/rhi/instance.hpp>
 #include <crd/rhi/swapchain.hpp>
 
-#define GLFW_INCLUDE_VULKAN
+// In GLFW 3.4, GLFW_INCLUDE_VULKAN does NOT suppress GL/gl.h; only GLFW_INCLUDE_NONE does.
+// Include Vulkan first so GLFW sees VK_VERSION_1_0 and declares glfwCreateWindowSurface.
+#include <vulkan/vulkan.h>
+#define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 
 namespace crd::rhi

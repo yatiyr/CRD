@@ -33,6 +33,9 @@ struct ResourceControlBlock : public crd::memory::RefCounted<ResourceControlBloc
     bool                     permanent   = false;
     std::atomic<crd::u32>   generation{0};
     std::atomic<LoadState>   state{LoadState::Unloaded};
+    // Stores crd::jobs::Counter* as void* to avoid jobs.hpp in this header.
+    // Written once by load_async_impl; claimed by wait_ready() or the leak-fix in load_async_impl.
+    std::atomic<void*>       load_counter{nullptr};
     void*                    payload     = nullptr;
     ILoader*                 loader      = nullptr;
     crd::memory::IAllocator* alloc       = nullptr;

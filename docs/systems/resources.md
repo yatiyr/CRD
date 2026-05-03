@@ -4,7 +4,7 @@ General-purpose resource substrate: typed payloads loaded from cooked binary pac
 intrusive reference counts, with synchronous (v1c) and async (v1d) delivery. Plus `tools/asset_cooker/`
 — a separate CLI that ingests source assets and emits runtime-consumed binary packs.
 
-**Phase 2.6 in progress** — v1a, v1b, v1c shipped.
+**Phase 2.6 in progress** — v1a, v1b, v1c, v1d shipped.
 
 Depends on: `crd-core`, `crd-log`, `crd-memory`, `crd-containers`, `crd-platform`.  
 Does NOT depend on: `crd-rhi`, `crd-shader`, `crd-renderer` (loader-registry pattern keeps this low in
@@ -17,7 +17,7 @@ the graph — a DAW build can link `crd-resources` without any GPU code). ADR-00
 | v1a | `ResourceId` (UUID v4/v5), CRDR container, `ResourceManager` shell, `manifest_dump` CLI | ✅ |
 | v1b | Cooker CLI (`cook` sub-command), zstd per-chunk compression, `crd-cooker` static lib | ✅ |
 | v1c | `RefCounted<T>`, `ResourceHandle<T>`, `load_sync<T>`, cycle detection, `smoke_resources` | ✅ |
-| v1d | `crd-platform::AsyncFile`, `load_async<T>`, `wait_ready()` fiber-cooperative | 🔜 |
+| v1d | `crd-platform::AsyncFile`, `load_async<T>`, `wait_ready()` fiber-cooperative, load coalescing | ✅ |
 | v1e | `ShaderResourceLoader`, `MaterialResourceLoader`, end-to-end cooked render smoke | 🔜 |
 | v1f | Hot-reload (file watcher, atomic payload swap, last-good preservation) | 🔜 |
 | v1g | Streaming, 2Q LRU eviction, memory budget, pinning | 🔜 |
@@ -103,7 +103,7 @@ if there is a circular dependency.
 `load_placeholder()` is optional. Override it to return a magenta-checker texture, an error material,
 a silence buffer — any typed fallback that lets the engine keep running after a broken artifact.
 
-## Public API (v1c surface)
+## Public API (v1d surface)
 
 ```cpp
 namespace crd::resources {
@@ -125,14 +125,46 @@ public:
     template<typename T>
     [[nodiscard]] ResourceHandle<T> load_sync(ResourceId id);
 
+    // Asynchronous load — submits a job; returns immediately with Queued (or Ready if cached).
+    // Coalesces with in-flight loads for the same id (no duplicate I/O).
+    // Requires crd::jobs to be initialised.
+    template<typename T>
+    [[nodiscard]] ResourceHandle<T> load_async(ResourceId id);
+
     // Diagnostics
-    [[nodiscard]] crd::usize loader_count() const noexcept;
-    [[nodiscard]] crd::usize mount_count()  const noexcept;
-    [[nodiscard]] crd::usize entry_count()  const noexcept;
-    [[nodiscard]] crd::usize handle_count() const noexcept;
+    [[nodiscard]] crd::usize loader_count()    const noexcept;
+    [[nodiscard]] crd::usize mount_count()     const noexcept;
+    [[nodiscard]] crd::usize entry_count()     const noexcept;
+    [[nodiscard]] crd::usize handle_count()    const noexcept;
+    [[nodiscard]] crd::usize in_flight_count() const noexcept;
 };
 
 } // namespace crd::resources
+```
+
+### `wait_ready()` — fiber-cooperative block
+
+```cpp
+// On ResourceHandle<T> (and ResourceHandleBase):
+LoadState wait_ready();
+```
+
+Atomically claims the `load_counter` stored in the control block and calls `crd::jobs::wait()`. The calling fiber suspends (releasing the OS thread to the scheduler) until the load job signals completion. Safe to call from any worker fiber or non-fiber thread (falls back to `yield`-spin on the main thread). Also safe on sync-loaded handles — no counter is stored; the terminal-state fast path returns immediately.
+
+### `crd::platform::AsyncFile`
+
+```cpp
+namespace crd::platform {
+class AsyncFile
+{
+public:
+    [[nodiscard]] static AsyncFile open(crd::containers::StringView path);
+    [[nodiscard]] bool              is_open() const noexcept;
+    [[nodiscard]] u64               size()    const noexcept;
+    // Returns nullptr if offset+size > file size.
+    [[nodiscard]] crd::jobs::Counter* read_async(u64 offset, crd::containers::Span<u8> dst);
+};
+} // namespace crd::platform
 ```
 
 ## RefCounted<T> (crd-memory prerequisite)
@@ -177,9 +209,10 @@ Thread-local visiting stack (64 entries max, depth-first). Pushed before `loader
 A transitive `load_sync` call that finds its own id already on the stack logs an error and returns a
 Failed block for that sub-load. The parent load then also fails (its dep is Failed).
 
-v1c limitation: thread-local storage is per-OS-thread. Fiber migration across a suspend point inside
-`loader->load()` would corrupt the stack. Safe in v1c (all synchronous; no suspension). Revisit in v1d
-when `load_async` runs loaders on fiber-scheduled jobs.
+v1c limitation (still open): thread-local storage is per-OS-thread. Fiber migration across a suspend
+point inside `loader->load()` would corrupt the visiting stack. Safe in v1d (loaders in async jobs do
+not suspend mid-`load()`; transitive `load_sync` calls are synchronous and complete before the fiber
+can migrate). A full fix requires passing a per-load visit set in `LoadContext` instead of TLS.
 
 ## Cook pipeline
 
@@ -206,17 +239,24 @@ engine/resources/
     crdr.hpp                 ← v1a + v1b (compression added)
     loader.hpp               ← v1a (ILoader, LoadContext)
     load_state.hpp           ← v1c
-    resource_control_block.hpp  ← v1c
-    resource_handle.hpp      ← v1c
-    resource_manager.hpp     ← v1a shell, v1c extended
+    resource_control_block.hpp  ← v1c + v1d (load_counter field)
+    resource_handle.hpp      ← v1c + v1d (wait_ready decl; release_block non-inline)
+    resource_manager.hpp     ← v1a shell, v1c extended, v1d (load_async, m_in_flight, mutex)
     log_channel.hpp          ← v1a
     resources.hpp            ← umbrella
   src/
     resource_id.cpp
     crdr.cpp
-    resource_manager.cpp
+    resource_handle.cpp      ← v1d (release_block + wait_ready impl)
+    resource_manager.cpp     ← v1c impl + v1d (AsyncLoadCtx, LoadJobFn, load_async_impl, run_load_job)
     log_channel.cpp
     detail/sha1.hpp          ← vendored, UUID v5
+
+engine/platform/
+  include/crd/platform/
+    async_file.hpp           ← v1d
+  src/
+    async_file.cpp           ← v1d
 
 tools/asset_cooker/
   include/crd/cooker/
@@ -241,10 +281,11 @@ engine/platform/include/crd/platform/
 - [v1a — ResourceId + CRDR + ResourceManager shell](../sessions/2026-05-03-resources-v1a.md)
 - [v1b — Cooker CLI + zstd](../sessions/2026-05-03-resources-v1b.md)
 - [v1c — RefCounted + ResourceHandle + load_sync](../sessions/2026-05-03-resources-v1c.md)
+- [v1d — AsyncFile + load_async + wait_ready](../sessions/2026-05-04-resources-v1d.md)
 
 ## Long-term direction
 
-- v1d adds `crd::platform::AsyncFile` (IOCP on Windows, io_uring on Linux) and `load_async<T>`. `wait_ready()` becomes fiber-cooperative: suspends the calling fiber, releases the OS thread.
+- v1d SHIPPED: `crd::platform::AsyncFile` (job-pool async reads) + `load_async<T>` + fiber-cooperative `wait_ready()` + load coalescing via `m_in_flight`.
 - v1e wires `ShaderResourceLoader` and `MaterialResourceLoader` for an end-to-end cooked render path.
 - v1f adds dev-mode file watching and atomic hot-reload with generation-bump notification.
 - v1g closes the streaming story: `load_streamed<T>` for large blobs, 2Q LRU eviction, memory budget, pinning.

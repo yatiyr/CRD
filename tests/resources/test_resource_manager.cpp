@@ -1,6 +1,9 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/reporters/catch_reporter_event_listener.hpp>
+#include <catch2/reporters/catch_reporter_registrars.hpp>
 #include <crd/resources/resource_manager.hpp>
 
+#include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocators/malloc_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/resources/crdr.hpp>
@@ -12,6 +15,24 @@
 using namespace crd::resources;
 
 static crd::memory::MallocAllocator s_alloc;
+
+// Initialise / shut down the job system around the full test run.
+// Using a listener avoids calling jobs::init() during catch_discover_tests' listing phase.
+struct ResourcesJobsListener final : Catch::EventListenerBase
+{
+    using Catch::EventListenerBase::EventListenerBase;
+
+    void testRunStarting(Catch::TestRunInfo const&) override
+    {
+        crd::jobs::init(crd::jobs::Config{.num_threads = 2});
+    }
+
+    void testRunEnded(Catch::TestRunStats const&) override
+    {
+        crd::jobs::shutdown();
+    }
+};
+CATCH_REGISTER_LISTENER(ResourcesJobsListener)
 
 // ── Helpers: write a minimal PACK to a temp file ───────────────────────────
 
@@ -685,6 +706,158 @@ TEST_CASE("load_sync: cycle detection makes both resources Failed", "[resources]
 
     // Neither resource should be permanently cached.
     CHECK(rm.handle_count() == 0U);
+
+    (void)crd::platform::fs::remove_file(path);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v1d — load_async / wait_ready
+// ═══════════════════════════════════════════════════════════════════════════
+
+TEST_CASE("load_async: BlobResource round-trip", "[resources][manager][v1d]")
+{
+    const ResourceId blob_id = ResourceId::mint_random();
+    const crd::u8 kPayload[] = {0x0A, 0x0B, 0x0C, 0x0D};
+    const auto payload_span  = crd::containers::ConstSpan<crd::u8>(kPayload, 4);
+
+    crd::containers::Array<TestArtifact> arts(&s_alloc);
+    arts.push_back(TestArtifact(&s_alloc));
+    arts[0].id          = blob_id;
+    arts[0].type_fourcc = kFourCC_BLOB;
+    arts[0].crdr_bytes  = make_blob_artifact(blob_id, payload_span);
+    arts[0].name        = crd::containers::String("async_blob", &s_alloc);
+    const auto path = write_pack_with_artifacts(arts);
+
+    ResourceManager rm(&s_alloc);
+    rm.register_loader(std::make_unique<BlobResourceLoader>());
+    REQUIRE(rm.mount_manifest(path.generic()).is_valid());
+
+    auto handle = rm.load_async<BlobResource>(blob_id);
+    CHECK(handle.wait_ready() == LoadState::Ready);
+    CHECK(handle.state() == LoadState::Ready);
+
+    const BlobResource* res = handle.get();
+    REQUIRE(res != nullptr);
+    REQUIRE(res->bytes.size() == 4U);
+    CHECK(res->bytes[0] == 0x0A);
+    CHECK(res->bytes[3] == 0x0D);
+    CHECK(rm.handle_count() == 1U);
+    CHECK(rm.in_flight_count() == 0U);
+
+    (void)crd::platform::fs::remove_file(path);
+}
+
+TEST_CASE("load_async: coalesced requests share one block", "[resources][manager][v1d]")
+{
+    const ResourceId blob_id = ResourceId::mint_random();
+    const crd::u8 kPayload[] = {0xFF, 0xEE};
+    const auto payload_span  = crd::containers::ConstSpan<crd::u8>(kPayload, 2);
+
+    crd::containers::Array<TestArtifact> arts(&s_alloc);
+    arts.push_back(TestArtifact(&s_alloc));
+    arts[0].id          = blob_id;
+    arts[0].type_fourcc = kFourCC_BLOB;
+    arts[0].crdr_bytes  = make_blob_artifact(blob_id, payload_span);
+    arts[0].name        = crd::containers::String("coalesce_blob", &s_alloc);
+    const auto path = write_pack_with_artifacts(arts);
+
+    ResourceManager rm(&s_alloc);
+    rm.register_loader(std::make_unique<BlobResourceLoader>());
+    REQUIRE(rm.mount_manifest(path.generic()).is_valid());
+
+    // Submit two async loads for the same id before either completes.
+    auto h1 = rm.load_async<BlobResource>(blob_id);
+    auto h2 = rm.load_async<BlobResource>(blob_id);
+
+    CHECK(h1.wait_ready() == LoadState::Ready);
+    CHECK(h2.wait_ready() == LoadState::Ready);
+
+    // Same underlying data implies the same block was reused.
+    CHECK(h1.get() == h2.get());
+    CHECK(rm.handle_count() == 1U);
+    CHECK(rm.in_flight_count() == 0U);
+
+    (void)crd::platform::fs::remove_file(path);
+}
+
+TEST_CASE("load_async: unknown id returns Failed block immediately", "[resources][manager][v1d]")
+{
+    ResourceManager rm(&s_alloc);
+    const ResourceId unknown = ResourceId::mint_random();
+
+    auto handle = rm.load_async<BlobResource>(unknown);
+    CHECK(handle.state() == LoadState::Failed);
+    CHECK(handle.get() == nullptr);
+    CHECK(rm.handle_count() == 0U);
+}
+
+TEST_CASE("load_async: four concurrent loads all reach Ready", "[resources][manager][v1d]")
+{
+    constexpr crd::usize kCount = 4U;
+    const crd::u8 kPayload[] = {0xCA, 0xFE};
+    const auto payload_span  = crd::containers::ConstSpan<crd::u8>(kPayload, 2);
+
+    ResourceId ids[kCount];
+    crd::containers::Array<TestArtifact> arts(&s_alloc);
+    for (crd::usize i = 0; i < kCount; ++i)
+    {
+        ids[i] = ResourceId::mint_random();
+        arts.push_back(TestArtifact(&s_alloc));
+        arts[i].id          = ids[i];
+        arts[i].type_fourcc = kFourCC_BLOB;
+        arts[i].crdr_bytes  = make_blob_artifact(ids[i], payload_span);
+        arts[i].name        = crd::containers::String("concurrent_blob", &s_alloc);
+    }
+    const auto path = write_pack_with_artifacts(arts);
+
+    ResourceManager rm(&s_alloc);
+    rm.register_loader(std::make_unique<BlobResourceLoader>());
+    REQUIRE(rm.mount_manifest(path.generic()).is_valid());
+
+    // Submit all 4 async loads before waiting on any.
+    ResourceHandle<BlobResource> handles[kCount];
+    for (crd::usize i = 0; i < kCount; ++i)
+    {
+        handles[i] = rm.load_async<BlobResource>(ids[i]);
+    }
+
+    for (crd::usize i = 0; i < kCount; ++i)
+    {
+        CHECK(handles[i].wait_ready() == LoadState::Ready);
+        CHECK(handles[i].get() != nullptr);
+    }
+
+    CHECK(rm.handle_count() == kCount);
+    CHECK(rm.in_flight_count() == 0U);
+
+    (void)crd::platform::fs::remove_file(path);
+}
+
+TEST_CASE("load_async: wait_ready on sync-loaded handle returns Ready immediately", "[resources][manager][v1d]")
+{
+    const ResourceId blob_id = ResourceId::mint_random();
+    const crd::u8 kPayload[] = {0x42};
+    const auto payload_span  = crd::containers::ConstSpan<crd::u8>(kPayload, 1);
+
+    crd::containers::Array<TestArtifact> arts(&s_alloc);
+    arts.push_back(TestArtifact(&s_alloc));
+    arts[0].id          = blob_id;
+    arts[0].type_fourcc = kFourCC_BLOB;
+    arts[0].crdr_bytes  = make_blob_artifact(blob_id, payload_span);
+    arts[0].name        = crd::containers::String("sync_then_wait", &s_alloc);
+    const auto path = write_pack_with_artifacts(arts);
+
+    ResourceManager rm(&s_alloc);
+    rm.register_loader(std::make_unique<BlobResourceLoader>());
+    REQUIRE(rm.mount_manifest(path.generic()).is_valid());
+
+    // Synchronous load — wait_ready must return Ready without spinning.
+    auto handle = rm.load_sync<BlobResource>(blob_id);
+    REQUIRE(handle.state() == LoadState::Ready);
+
+    const LoadState ws = handle.wait_ready();
+    CHECK(ws == LoadState::Ready);
+    CHECK(handle.get() != nullptr);
 
     (void)crd::platform::fs::remove_file(path);
 }

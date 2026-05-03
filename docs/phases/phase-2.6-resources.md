@@ -1,6 +1,6 @@
 # Phase 2.6 — `crd-resources`: resource system + asset cooker
 
-**Status:** 🚢 v1c shipped (2026-05-03); v1d next
+**Status:** 🚢 v1d shipped (2026-05-04); v1e next
 **ADRs:** ADR-0036 (module + loader registry), ADR-0037 (ResourceId UUID scheme), ADR-0038 (cooked binary container), ADR-0039 (ResourceHandle semantics), ADR-0040 (cooker CLI + CMake), ADR-0041 (platform async I/O)
 **Module:** `engine/resources/` + `tools/asset_cooker/`
 **Depends on:** `crd-core`, `crd-log`, `crd-memory`, `crd-containers`, `crd-jobs`, `crd-platform`, `crd-config`
@@ -535,27 +535,29 @@ unknown id, hard fail, placeholder, transitive dep, cycle detection.
 
 All 6 configs green: win-debug/relwithdebinfo/asan/clang-cl/tidy 420/420, win-release 417/417.
 
-### v1d — `crd-platform` async I/O + `ResourceManager::load_async` + `wait_ready`
+### v1d — `crd-platform` async I/O + `ResourceManager::load_async` + `wait_ready` ✅ SHIPPED 2026-05-04
 
-**Scope:**
-- `crd::platform::AsyncFile` with `open_read` and `read_async` returning `crd::jobs::Counter*`.
-  IOCP backend on Windows, `io_uring` on Linux (`aio` fallback for old kernels).
-- `ResourceManager::load_async<T>` — submits a `crd::jobs::run` of a load job that itself calls
-  `AsyncFile::read_async` and `crd::jobs::wait` on the read counter (fiber-cooperative).
-- `ResourceHandle<T>::wait_ready()` — finds the pending load counter, calls `crd::jobs::wait`.
-  Safe from worker fibers (suspends fiber, releases OS thread); safe from non-fiber threads
-  (spin + yield).
-- Concurrent load coalescing: parallel `load_async` calls for the same id share one in-flight
-  load.
+**Scope shipped:**
+- `crd::platform::AsyncFile`: `open()`, `is_open()`, `size()`, `read_async()` submitting a
+  `crd-jobs` job. Returns `nullptr` counter if `offset + size > file_size`. Job-pool backend
+  (ReadJob struct, 40 bytes, SBO-compatible).
+- `ResourceManager::load_async<T>`: heap-allocated `AsyncLoadCtx` submitted as a `LoadJobFn`
+  closure (8-byte SBO). `m_in_flight` HashMap prevents duplicate I/O when concurrent calls race
+  for the same id. `m_mutex` released before all I/O and loader dispatch.
+- `ResourceHandleBase::wait_ready()`: atomic exchange on `block->load_counter` (first caller
+  claims it); fiber-cooperative via `crd::jobs::wait`; spin+yield fallback for non-fiber callers.
+  Terminal-state fast path also attempts counter claim to handle the job-completes-before-store
+  race (counter leak fix).
+- `resource_handle.cpp` (new): `release_block()` + `wait_ready()` moved out of headers so they
+  can include `loader.hpp` and `jobs.hpp` without polluting public includes.
+- `run_load_job` moved to `public` in `ResourceManager` so the anonymous-namespace `LoadJobFn`
+  closure can call it.
 
-**Tests:**
-- Single `load_async` of a 4 MB blob completes correctly; `wait_ready()` returns `Ready`.
-- 64 concurrent `load_async` calls for 64 distinct ids all complete; total wall time ~ single
-  load time (parallelism proven).
-- 64 concurrent `load_async` calls for the SAME id all return the same payload pointer with one
-  underlying load (coalescing proven).
-- `wait_ready()` from a worker fiber suspends correctly (no OS-thread block); other workers
-  continue draining unrelated jobs.
+**Tests shipped:** 4 AsyncFile tests (`tests/platform/test_async_file.cpp`) + 5 load_async tests
+(in `tests/resources/test_resource_manager.cpp`). All 6 configs green: 429/429 win-debug, 426/426
+win-release.
+
+**Session log:** `docs/sessions/2026-05-04-resources-v1d.md`
 
 ### v1e — `ShaderResourceLoader` + `MaterialResourceLoader` + end-to-end smoke
 

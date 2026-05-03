@@ -10,6 +10,7 @@ target_link_libraries(crd-resources-tests PRIVATE
     crd-platform
     crd-resources
     crd-cooker
+    crd-jobs
     Catch2::Catch2WithMain
 )
 
