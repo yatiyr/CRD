@@ -41,6 +41,10 @@ target_compile_features(crd-rhi-vulkan PUBLIC cxx_std_20)
 # unspecified; clang warns about this but it's intentional — Vulkan zeroes all
 # unset fields. Suppress only on clang to avoid masking real issues on MSVC.
 target_compile_options(crd-rhi-vulkan PRIVATE
+    # Vulkan C structs are designed to be partially initialized; pNext and
+    # unused flags are intentionally left zero. Suppress both the classic and
+    # the designated-initializer variant of this warning for this target only.
     $<$<CXX_COMPILER_ID:Clang>:-Wno-missing-field-initializers>
+    $<$<CXX_COMPILER_ID:Clang>:-Wno-missing-designated-field-initializers>
 )
 crd_enable_default_pch(crd-rhi-vulkan)

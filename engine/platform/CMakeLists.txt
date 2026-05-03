@@ -19,4 +19,5 @@ target_link_libraries(crd-platform
 )
 
 target_compile_features(crd-platform PUBLIC cxx_std_20)
+target_compile_definitions(crd-platform PRIVATE GLFW_INCLUDE_NONE)
 crd_enable_default_pch(crd-platform)
