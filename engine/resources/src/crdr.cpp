@@ -3,6 +3,8 @@
 #include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
 
+#include <zstd.h>
+
 #include <algorithm>
 #include <cstring>
 
@@ -29,7 +31,7 @@ crd::u16 read_u16_le(const crd::u8* p) noexcept
 {
     crd::u16 v = 0;
     std::memcpy(&v, p, 2);
-#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#if CRD_BIG_ENDIAN
     v = static_cast<crd::u16>((v << 8U) | (v >> 8U));
 #endif
     return v;
@@ -39,7 +41,7 @@ crd::u32 read_u32_le(const crd::u8* p) noexcept
 {
     crd::u32 v = 0;
     std::memcpy(&v, p, 4);
-#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#if CRD_BIG_ENDIAN
     v = ((v & 0x000000FFU) << 24U) | ((v & 0x0000FF00U) << 8U)
       | ((v & 0x00FF0000U) >>  8U) | ((v & 0xFF000000U) >> 24U);
 #endif
@@ -50,7 +52,7 @@ crd::u64 read_u64_le(const crd::u8* p) noexcept
 {
     crd::u64 v = 0;
     std::memcpy(&v, p, 8);
-#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#if CRD_BIG_ENDIAN
     v = ((v & 0x00000000000000FFULL) << 56U) | ((v & 0x000000000000FF00ULL) << 40U)
       | ((v & 0x0000000000FF0000ULL) << 24U) | ((v & 0x00000000FF000000ULL) <<  8U)
       | ((v & 0x000000FF00000000ULL) >>  8U) | ((v & 0x0000FF0000000000ULL) >> 24U)
@@ -62,7 +64,7 @@ crd::u64 read_u64_le(const crd::u8* p) noexcept
 // Little-endian write helpers.
 void write_u16_le(crd::u8* p, crd::u16 v) noexcept
 {
-#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#if CRD_BIG_ENDIAN
     v = static_cast<crd::u16>((v << 8U) | (v >> 8U));
 #endif
     std::memcpy(p, &v, 2);
@@ -70,7 +72,7 @@ void write_u16_le(crd::u8* p, crd::u16 v) noexcept
 
 void write_u32_le(crd::u8* p, crd::u32 v) noexcept
 {
-#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#if CRD_BIG_ENDIAN
     v = ((v & 0x000000FFU) << 24U) | ((v & 0x0000FF00U) << 8U)
       | ((v & 0x00FF0000U) >>  8U) | ((v & 0xFF000000U) >> 24U);
 #endif
@@ -79,7 +81,7 @@ void write_u32_le(crd::u8* p, crd::u32 v) noexcept
 
 void write_u64_le(crd::u8* p, crd::u64 v) noexcept
 {
-#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#if CRD_BIG_ENDIAN
     v = ((v & 0x00000000000000FFULL) << 56U) | ((v & 0x000000000000FF00ULL) << 40U)
       | ((v & 0x0000000000FF0000ULL) << 24U) | ((v & 0x00000000FF000000ULL) <<  8U)
       | ((v & 0x000000FF00000000ULL) >>  8U) | ((v & 0x0000FF0000000000ULL) >> 24U)
@@ -143,9 +145,44 @@ CrdrError crdr_read(
     out.version      = version;
     out.flags        = file_flags;
     out.chunks       = crd::containers::Array<CrdrChunk>(a);
+    out.decompressed_backing = crd::containers::Array<crd::u8>(a);
 
-    // Parse chunks.
+    // Pass 1: scan chunk headers to compute total decompressed bytes needed,
+    // so we can pre-allocate decompressed_backing in one shot (no reallocations
+    // that would invalidate any ConstSpan views into it).
+    {
+        crd::usize scan_offset = kHeaderSize;
+        crd::usize total_decompressed = 0U;
+        for (crd::u32 i = 0U; i < chunk_count; ++i)
+        {
+            if (scan_offset + kChunkHeaderSize > bytes.size())
+            {
+                return CrdrError::Truncated;
+            }
+            const crd::u32 chunk_flags     = read_u32_le(bytes.data() + scan_offset + 4U);
+            const crd::u64 uncomp_size     = read_u64_le(bytes.data() + scan_offset + 8U);
+            const crd::u64 compressed_size = read_u64_le(bytes.data() + scan_offset + 16U);
+            scan_offset += kChunkHeaderSize;
+
+            if (compressed_size > bytes.size() - scan_offset)
+            {
+                return CrdrError::Truncated;
+            }
+            if (chunk_flags & 0x1U)
+            {
+                total_decompressed += static_cast<crd::usize>(uncomp_size);
+            }
+            scan_offset += payload_padded_size(static_cast<crd::usize>(compressed_size));
+        }
+        if (total_decompressed > 0U)
+        {
+            out.decompressed_backing.resize(total_decompressed);
+        }
+    }
+
+    // Pass 2: parse chunk headers and payloads; decompress into backing buffer.
     crd::usize offset = kHeaderSize;
+    crd::usize backing_write = 0U;
     for (crd::u32 i = 0U; i < chunk_count; ++i)
     {
         if (offset + kChunkHeaderSize > bytes.size())
@@ -174,11 +211,34 @@ CrdrError crdr_read(
         chunk.fourcc            = fourcc;
         chunk.flags             = chunk_flags;
         chunk.uncompressed_size = uncompressed_size;
-        chunk.payload           = bytes.subspan(offset, static_cast<crd::usize>(compressed_size));
+
+        const crd::usize comp_size = static_cast<crd::usize>(compressed_size);
+
+        if (chunk_flags & 0x1U)
+        {
+            // Compressed chunk: decompress into pre-allocated backing buffer.
+            const crd::usize uncomp_size = static_cast<crd::usize>(uncompressed_size);
+            crd::u8* dst = out.decompressed_backing.data() + backing_write;
+            const std::size_t result = ZSTD_decompress(
+                dst, uncomp_size,
+                bytes.data() + offset, comp_size);
+            if (ZSTD_isError(result))
+            {
+                return CrdrError::DecompressFailed;
+            }
+            chunk.payload = crd::containers::ConstSpan<crd::u8>(dst, uncomp_size);
+            backing_write += uncomp_size;
+        }
+        else
+        {
+            // Uncompressed: payload is a view directly into `bytes`.
+            chunk.payload = bytes.subspan(offset, comp_size);
+        }
+
         out.chunks.push_back(chunk);
 
         // Advance past payload (including padding).
-        offset += payload_padded_size(static_cast<crd::usize>(compressed_size));
+        offset += payload_padded_size(comp_size);
     }
 
     return CrdrError::Ok;
@@ -209,14 +269,48 @@ void CrdrWriter::add_chunk(
     crd::u32                              chunk_flags)
 {
     PendingChunk chunk;
-    chunk.fourcc = fourcc;
-    chunk.flags  = chunk_flags;
-    chunk.payload = crd::containers::Array<crd::u8>(m_alloc);
+    chunk.fourcc            = fourcc;
+    chunk.flags             = chunk_flags;
+    chunk.uncompressed_size = static_cast<crd::u64>(payload.size());
+    chunk.payload           = crd::containers::Array<crd::u8>(m_alloc);
     chunk.payload.reserve(payload.size());
     for (crd::u8 byte : payload)
     {
         chunk.payload.push_back(byte);
     }
+    m_chunks.push_back(std::move(chunk));
+}
+
+void CrdrWriter::add_chunk_compressed(
+    crd::u32                             fourcc,
+    crd::containers::ConstSpan<crd::u8> payload,
+    int                                  zstd_level)
+{
+    const crd::usize src_size = payload.size();
+    const std::size_t bound   = ZSTD_compressBound(src_size);
+
+    crd::containers::Array<crd::u8> compressed(m_alloc);
+    compressed.resize(bound);
+
+    const std::size_t compressed_size = ZSTD_compress(
+        compressed.data(), bound,
+        payload.data(), src_size,
+        zstd_level);
+
+    // Fall back to uncompressed if zstd failed or didn't help.
+    if (ZSTD_isError(compressed_size) || compressed_size >= src_size)
+    {
+        add_chunk(fourcc, payload, 0U);
+        return;
+    }
+
+    compressed.resize(compressed_size);
+
+    PendingChunk chunk;
+    chunk.fourcc            = fourcc;
+    chunk.flags             = 0x1U; // bit 0: compressed
+    chunk.uncompressed_size = static_cast<crd::u64>(src_size);
+    chunk.payload           = std::move(compressed);
     m_chunks.push_back(std::move(chunk));
 }
 
@@ -257,19 +351,19 @@ crd::containers::Array<crd::u8> CrdrWriter::finish()
     crd::usize offset = kHeaderSize;
     for (const PendingChunk& chunk : m_chunks)
     {
-        const crd::usize payload_size = chunk.payload.size();
+        const crd::usize compressed_size = chunk.payload.size();
         write_u32_le(buf + offset + 0U, chunk.fourcc);
         write_u32_le(buf + offset + 4U, chunk.flags);
-        write_u64_le(buf + offset + 8U,  static_cast<crd::u64>(payload_size)); // uncompressed
-        write_u64_le(buf + offset + 16U, static_cast<crd::u64>(payload_size)); // compressed == uncompressed (v1a)
+        write_u64_le(buf + offset + 8U,  chunk.uncompressed_size);
+        write_u64_le(buf + offset + 16U, static_cast<crd::u64>(compressed_size));
         offset += kChunkHeaderSize;
 
-        if (payload_size > 0U)
+        if (compressed_size > 0U)
         {
-            std::memcpy(buf + offset, chunk.payload.data(), payload_size);
+            std::memcpy(buf + offset, chunk.payload.data(), compressed_size);
         }
         // padding bytes already zero from memset.
-        offset += payload_padded_size(payload_size);
+        offset += payload_padded_size(compressed_size);
     }
 
     return out;

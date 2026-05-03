@@ -1,5 +1,7 @@
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
+#include <crd/cooker/cook_command.hpp>
+#include <crd/cooker/cook_handler.hpp>
 #include <crd/memory/allocators/malloc_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/resources/crdr.hpp>
@@ -41,11 +43,12 @@ static int cmd_manifest_dump(const char* pack_path)
         const char* err_str = "unknown";
         switch (err)
         {
-            case CrdrError::BadMagic:    err_str = "bad magic";    break;
-            case CrdrError::BadVersion:  err_str = "bad version";  break;
-            case CrdrError::Truncated:   err_str = "truncated";    break;
-            case CrdrError::InvalidChunk:err_str = "invalid chunk"; break;
-            case CrdrError::Ok:          break;
+            case CrdrError::BadMagic:        err_str = "bad magic";       break;
+            case CrdrError::BadVersion:      err_str = "bad version";     break;
+            case CrdrError::Truncated:       err_str = "truncated";       break;
+            case CrdrError::InvalidChunk:    err_str = "invalid chunk";   break;
+            case CrdrError::DecompressFailed:err_str = "decompress failed"; break;
+            case CrdrError::Ok:              break;
         }
         std::fprintf(stderr, "asset_cooker: CRDR parse error (%s): %s\n", err_str, pack_path);
         return 1;
@@ -134,10 +137,8 @@ static void print_usage(const char* argv0)
     std::printf(
         "Cerid asset cooker\n"
         "Usage:\n"
-        "  %s manifest_dump <pack.crdr>   Print all entries in a PACK file\n"
-        "\n"
-        "Future sub-commands (v1b+):\n"
-        "  %s cook --root <src> --out <pack.crdr>  Cook source assets into a pack\n",
+        "  %s manifest_dump <pack.crdr>                 Print all entries in a PACK file\n"
+        "  %s cook --root <src_dir> --out <pack.crdr>   Cook source assets into a pack\n",
         argv0, argv0);
 }
 
@@ -159,6 +160,32 @@ int main(int argc, char* argv[])
             return 1;
         }
         return cmd_manifest_dump(argv[2]);
+    }
+
+    if (std::strcmp(subcmd, "cook") == 0)
+    {
+        const char* root_arg = nullptr;
+        const char* out_arg  = nullptr;
+        for (int i = 2; i < argc - 1; ++i)  // NOLINT(cppcoreguidelines-avoid-magic-numbers)
+        {
+            if (std::strcmp(argv[i], "--root") == 0)
+            {
+                root_arg = argv[i + 1];
+            }
+            else if (std::strcmp(argv[i], "--out") == 0)
+            {
+                out_arg = argv[i + 1];
+            }
+        }
+        if (root_arg == nullptr || out_arg == nullptr)
+        {
+            std::fprintf(stderr,
+                         "Usage: %s cook --root <src_dir> --out <pack.crdr>\n",
+                         argv[0]);
+            return 1;
+        }
+        crd::cooker::register_builtin_handlers();
+        return crd::cooker::cmd_cook(root_arg, out_arg);
     }
 
     std::fprintf(stderr, "asset_cooker: unknown sub-command '%s'\n", subcmd);

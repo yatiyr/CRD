@@ -58,6 +58,24 @@
 #error "Unsupported architecture!"
 #endif
 
+/// 1 when the target byte order is little-endian (least significant byte at the lowest address); 0 otherwise.
+/// MSVC only targets little-endian architectures (x86, x64, ARM/ARM64). GCC and Clang expose
+/// __BYTE_ORDER__ for explicit detection on bi-endian hardware (MIPS, PowerPC, …).
+/// All architectures currently gated by this header are little-endian; the macro exists so
+/// serialization code uses a single, auditable symbol instead of raw __BYTE_ORDER__ checks.
+#if CRD_COMPILER_MSVC
+#define CRD_LITTLE_ENDIAN 1
+#define CRD_BIG_ENDIAN 0
+#elif defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && \
+      __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#define CRD_LITTLE_ENDIAN 0
+/// 1 when the target byte order is big-endian (most significant byte at the lowest address); 0 otherwise.
+#define CRD_BIG_ENDIAN 1
+#else
+#define CRD_LITTLE_ENDIAN 1
+#define CRD_BIG_ENDIAN 0
+#endif
+
 /// Trigger an immediate debugger break (int3 on x64). In a non-debug session this raises SIGTRAP / STATUS_BREAKPOINT.
 #if CRD_COMPILER_MSVC
 #define CRD_DEBUGBREAK() __debugbreak()

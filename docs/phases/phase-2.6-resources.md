@@ -1,6 +1,6 @@
 # Phase 2.6 — `crd-resources`: resource system + asset cooker
 
-**Status:** 🚢 v1a shipped (2026-05-03); v1b next
+**Status:** 🚢 v1b shipped (2026-05-03); v1c next
 **ADRs:** ADR-0036 (module + loader registry), ADR-0037 (ResourceId UUID scheme), ADR-0038 (cooked binary container), ADR-0039 (ResourceHandle semantics), ADR-0040 (cooker CLI + CMake), ADR-0041 (platform async I/O)
 **Module:** `engine/resources/` + `tools/asset_cooker/`
 **Depends on:** `crd-core`, `crd-log`, `crd-memory`, `crd-containers`, `crd-jobs`, `crd-platform`, `crd-config`
@@ -482,26 +482,26 @@ All 6 configs green (393/393 win-debug, 390/390 win-release).
 by MSVC 14.50.35717 optimizer. A full-capacity SSO string (23 chars) now has `size_or_flag = 0`
 which serves as the null terminator, making `c_str()` correct without any UB writes.
 
-### v1b — Cooker CLI skeleton + chunked container writer + first cook handler
+### v1b — Cooker CLI skeleton + chunked container writer + first cook handler ✅ SHIPPED 2026-05-03
 
 **Scope:**
-- `tools/asset_cooker/` CMake target. Separate exe, links `crd-core`, `crd-log`, `crd-memory`,
+- [x] `tools/asset_cooker/` CMake target. Separate exe, links `crd-core`, `crd-log`, `crd-memory`,
   `crd-containers`, plus tools-only `cgltf` (declared but not used in v1b).
-- `cook` CLI sub-command with `--root` and `--out`.
-- Compile-time `register_cook_handler(ext, fn)` registry inside the cooker.
-- One trivial cook handler: `.bin` (extension passthrough → wraps file bytes in a `BLOB`-only
+- [x] `cook` CLI sub-command with `--root` and `--out`.
+- [x] Compile-time `register_cook_handler(ext, fn)` registry inside the cooker.
+- [x] One trivial cook handler: `.bin` (extension passthrough → wraps file bytes in a `BLOB`-only
   artifact under `type='BLOB'`).
-- Manifest assembly (collects every cooked artifact, writes the PACK file).
-- `cook.log.toml` written next to the pack output.
-- CMake top-level `cook` target.
-- zstd compression wired through the chunk writer (level 3 default; per-chunk opt-in).
+- [x] Manifest assembly (collects every cooked artifact, writes the PACK file).
+- [x] `cook.log.toml` written next to the pack output.
+- [x] CMake top-level `cook` target.
+- [x] zstd compression wired through the chunk writer (level 3 default; per-chunk opt-in).
 
 **Tests:**
-- Cook a directory of 10 `.bin` files → resulting pack contains all 10 entries with stable ids.
-- Re-running the cooker without source changes produces a byte-identical pack (no timestamps,
+- [x] Cook a directory of 10 `.bin` files → resulting pack contains all 10 entries with stable ids.
+- [x] Re-running the cooker without source changes produces a byte-identical pack (no timestamps,
   chunks sorted by FourCC).
-- `cook.log.toml` records "skipped (incremental key match)" on the second run.
-- zstd round-trip of compressed chunks (write → read → bytes match).
+- [x] `cook.log.toml` records "skipped (incremental key match)" on the second run.
+- [x] zstd round-trip of compressed chunks (write → read → bytes match).
 
 ### v1c — Synchronous `ResourceHandle<T>` + `ILoader` + dependency resolution
 

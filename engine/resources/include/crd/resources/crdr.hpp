@@ -85,9 +85,11 @@ struct CrdrFile
     crd::u16   version      = 0;
     crd::u16   flags        = 0;
     crd::containers::Array<CrdrChunk> chunks;
+    // Owns decompressed bytes for compressed chunks; chunk payloads point here.
+    crd::containers::Array<crd::u8>   decompressed_backing;
 
     explicit CrdrFile(crd::memory::IAllocator* a = crd::memory::default_allocator())
-        : chunks(a)
+        : chunks(a), decompressed_backing(a)
     {
     }
 };
@@ -101,6 +103,7 @@ enum class CrdrError : crd::u8
     BadVersion,
     Truncated,
     InvalidChunk,
+    DecompressFailed,
 };
 
 // ── Reader ──────────────────────────────────────────────────────────────────
@@ -133,6 +136,13 @@ public:
         crd::containers::ConstSpan<crd::u8>  payload,
         crd::u32                             chunk_flags = 0U);
 
+    // Compress `payload` with zstd (level `zstd_level`) and store the chunk.
+    // Falls back to uncompressed storage if compression doesn't help.
+    void add_chunk_compressed(
+        crd::u32                             fourcc,
+        crd::containers::ConstSpan<crd::u8> payload,
+        int                                  zstd_level = 3);
+
     // Finalise: sort chunks by fourcc and assemble the binary.
     [[nodiscard]] crd::containers::Array<crd::u8> finish();
 
@@ -141,7 +151,8 @@ private:
     {
         crd::u32                        fourcc;
         crd::u32                        flags;
-        crd::containers::Array<crd::u8> payload;
+        crd::u64                        uncompressed_size; // original size before compression
+        crd::containers::Array<crd::u8> payload;           // compressed bytes (or raw if uncompressed)
     };
 
     crd::memory::IAllocator*                 m_alloc;

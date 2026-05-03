@@ -11,13 +11,11 @@
 
 ## Current focus
 
-**Phase 2.6 — `crd-resources` + asset cooker. v1a SHIPPED.**
+**Phase 2.6 — `crd-resources` + asset cooker. v1b SHIPPED.**
 
-v1a shipped: `ResourceId` (UUID v4/v5), CRDR chunked binary container, `ManifestEntry` (48-byte
-disk format), `ResourceManager` shell (register + mount + unmount + collision), `manifest_dump`
-CLI sub-command. 38 new tests. String SSO regression (new MSVC 14.50.35717) fixed simultaneously.
+v1b shipped: zstd compression wired into `CrdrWriter` (`add_chunk_compressed()`, two-pass decompression reader, `decompressed_backing`). `crd-cooker` static library extracted from `asset_cooker`. `cook` CLI sub-command: recursive scan, .meta sidecars, FNV1a-64 incremental cache (cook_key = source_hash ^ handler_version), `.bin` blob passthrough handler, two-pass PACK assembly, `cook.log.toml`. Optional CMake `cook` target. 4 new tests.
 
-Next: v1b (cooker cook subcommand + zstd), then v1c (`RefCounted<T>` + `ResourceHandle<T>`).
+Next: v1c (`RefCounted<T>` in crd-memory → `ResourceHandle<T>` + `ILoader` + `load_sync<T>`).
 
 Full design packet: `docs/phases/phase-2.6-resources.md`.
 
@@ -33,6 +31,22 @@ _none — running on the main roadmap._
 > `docs/detours/README.md`.
 
 ## Last shipped milestone
+
+**2026-05-03 — Phase 2.6 v1b shipped: cooker CLI + zstd compression.**
+
+zstd v1.5.5 wired as per-chunk opt-in in `CrdrWriter::add_chunk_compressed()` (level 3 default; falls back to uncompressed if compression doesn't help). Two-pass reader in `crdr_read()` pre-allocates `decompressed_backing` before decompression loop (no span invalidation). `CrdrError::DecompressFailed` added; `main.cpp` switch updated.
+
+`crd-cooker` static library split from `asset_cooker` executable (tests can link it directly). New headers: `cook_handler.hpp` (CookContext, CookResult, CookHandlerFn), `cook_command.hpp` (cmd_cook). `cmd_cook()`: recursive directory scan (excludes .meta + .cook_cache/), sorted for determinism, .meta sidecar mint/read, FNV1a-64 source hash, cook_key = source_hash ^ handler_version stored in `.cook_cache/<uuid>.key`, artifact stored in `.cook_cache/<uuid>.crdr`, two-pass PACK assembly (pass 1 measures CRDR size, pass 2 fills real blob_offsets), `cook.log.toml` written adjacent to the pack. `blob_passthrough_handler` for `.bin` files. Optional CMake `cook` target (CRD_COOK_ROOT + CRD_COOK_OUT). 4 new tests: registry, .bin round-trip, zstd round-trip, integration (10 files → 10 entries, byte-identical second run, "skipped" log entries).
+
+Six-configuration green:
+- win-debug:          408/408
+- win-relwithdebinfo: 408/408
+- win-release:        405/405
+- win-asan:           408/408
+- win-clang-cl:       408/408
+- win-tidy:           408/408
+
+## Previous shipped milestone
 
 **2026-05-03 — Phase 2.6 v1a shipped: `crd-resources` + `asset_cooker` manifest_dump.**
 
@@ -531,9 +545,9 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Next up (next 1–3 sessions)
 
-1. **Phase 2.6 v1b** — `tools/asset_cooker/` cook subcommand, blob passthrough cook handler, CMake `cook` target, `cook.log.toml` determinism, zstd compression wired.
-2. **Phase 2.6 v1c** — `crd::memory::RefCounted<T>` (ADR-0014 prerequisite) → `ResourceHandle<T>` + `ILoader` + `load_sync<T>` + transitive dependency resolution.
-3. **Phase 2.6 v1d** — Async I/O via `crd-platform` `AsyncFile`; `load_async<T>`.
+1. **Phase 2.6 v1c** — `crd::memory::RefCounted<T>` (ADR-0014 prerequisite) → `ResourceHandle<T>` + `ILoader` + `load_sync<T>` + transitive dependency resolution.
+2. **Phase 2.6 v1d** — Async I/O via `crd-platform` `AsyncFile`; `load_async<T>`.
+3. **Phase 2.6 v1e** — Shader + material loaders end-to-end.
 
 ## Roadmap ordering (post-jobs)
 
@@ -561,12 +575,12 @@ Full plan: `docs/ROADMAP.md` → `docs/phases/`.
 
 ## Test counts (last quality pass)
 
-- win-debug:          404/404  (debt clearing session 2026-05-03: +11 — 7 SpscQueue, 4 FileWatcher)
-- win-relwithdebinfo: 393/393  (not re-run after debt clearing — pending next full pass)
-- win-release:        390/390  (not re-run after debt clearing)
-- win-asan:           393/393  (not re-run after debt clearing)
-- win-clang-cl:       393/393  (not re-run after debt clearing)
-- win-tidy:           393/393  (not re-run after debt clearing)
+- win-debug:          408/408
+- win-relwithdebinfo: 408/408
+- win-release:        405/405
+- win-asan:           408/408
+- win-clang-cl:       408/408
+- win-tidy:           408/408
 
 (win-release is 3 fewer than debug: debug-only `FiberState` tests excluded by `#if CRD_ENABLE_ASSERTS`)
 
@@ -593,6 +607,7 @@ When in doubt, ASK before reading large files.
 
 ## Session log (rolling, last 5)
 
+- **2026-05-03** — Phase 2.6 v1b shipped: zstd compression + cooker CLI + .bin handler + 4 tests; all 6 configs green (408/408 win-debug).
 - **2026-05-03** — Debt cleared: SpscQueue<T> lock-free SPSC queue (+7 tests), FileWatcher polling mtime watcher (+4 tests), Doxygen per-symbol docs in crd-core, runtime-disabled log benchmark fix, multi-viewport ImGui moved to long-term deferred. 404/404 win-debug.
 - **2026-05-03** — Phase 2.6 v1a shipped: `crd-resources` (ResourceId, CRDR, ResourceManager shell) + `asset_cooker manifest_dump`; String SSO remaining-capacity fix; all 6 configs green (393/393).
 - **2026-05-03** — Phase 2.6 architecture designed and documented; ADRs 0036–0041 written; `phase-2.6-resources.md` created; `crd-resources` placement, ResourceId UUID scheme, CRDR container format, ResourceHandle semantics, cooker CLI + CMake, and `crd-platform` async I/O all locked. No code shipped this session.

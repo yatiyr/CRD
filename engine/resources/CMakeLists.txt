@@ -15,6 +15,13 @@ target_link_libraries(crd-resources
         crd-containers
         crd-log
         crd-platform
+    PRIVATE
+        libzstd_static
+)
+
+target_include_directories(crd-resources
+    PRIVATE
+        "${zstd_SOURCE_DIR}/lib"
 )
 
 target_compile_features(crd-resources PUBLIC cxx_std_20)

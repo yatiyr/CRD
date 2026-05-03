@@ -177,6 +177,23 @@ set(GLFW_INSTALL        OFF CACHE BOOL "" FORCE)
 CPMAddPackage("gh:glfw/glfw#3.4")
 
 CPMAddPackage("gh:marzer/tomlplusplus@3.4.0")
+
+# zstd 1.5.5 has cmake_minimum_required(VERSION 2.8.12.2) which modern CMake rejects.
+# Setting CMAKE_POLICY_VERSION_MINIMUM tells CMake to treat it as 3.5.
+set(CMAKE_POLICY_VERSION_MINIMUM "3.5")
+CPMAddPackage(
+    NAME zstd
+    GITHUB_REPOSITORY facebook/zstd
+    GIT_TAG v1.5.5
+    SOURCE_SUBDIR build/cmake
+    OPTIONS
+        "ZSTD_BUILD_PROGRAMS OFF"
+        "ZSTD_BUILD_TESTS OFF"
+        "ZSTD_BUILD_SHARED OFF"
+        "ZSTD_BUILD_STATIC ON"
+)
+unset(CMAKE_POLICY_VERSION_MINIMUM)
+
 CPMAddPackage("gh:ocornut/imgui#v1.92.0-docking")
 
 # ----- Helper: auto-collect sources with CONFIGURE_DEPENDS -----------------
@@ -256,6 +273,16 @@ add_subdirectory(engine/resources)
 # ----- Tools ----------------------------------------------------------------
 
 add_subdirectory(tools/asset_cooker)
+
+# Optional 'cook' target: cmake --build --preset win-debug --target cook
+# Requires CRD_COOK_ROOT and CRD_COOK_OUT to be set (e.g. via -D flags).
+if(CRD_COOK_ROOT AND CRD_COOK_OUT)
+    add_custom_target(cook
+        COMMAND asset_cooker cook --root "${CRD_COOK_ROOT}" --out "${CRD_COOK_OUT}"
+        DEPENDS asset_cooker
+        COMMENT "Cooking assets from ${CRD_COOK_ROOT} into ${CRD_COOK_OUT}"
+    )
+endif()
 
 # ----- Runtime executable ---------------------------------------------------
 

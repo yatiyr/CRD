@@ -9,6 +9,7 @@ target_link_libraries(crd-resources-tests PRIVATE
     crd-log
     crd-platform
     crd-resources
+    crd-cooker
     Catch2::Catch2WithMain
 )
 
