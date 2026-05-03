@@ -26,8 +26,8 @@ namespace crd::containers
 // snapshot    appends a chronological copy into an Array<T>; useful for
 //             debug overlays.
 //
-// Move-only. Single-threaded use only. v1: trade-off chosen for
-// simplicity; an SPSC lock-free version comes when job system lands.
+// Move-only. Single-threaded use only. For concurrent producer/consumer
+// use SpscQueue<T> instead (see spsc_queue.hpp).
 // -----------------------------------------------------------------------
 template <typename T> class RingBuffer
 {

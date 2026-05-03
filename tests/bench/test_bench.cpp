@@ -33,9 +33,12 @@ struct BenchLoggerScope
     ~BenchLoggerScope() { shutdown(); }
 };
 
-CRD_FORCEINLINE void disabled_trace_call() noexcept
+// Calls CRD_LOG_INFO with the channel's runtime_level set above Error, so the
+// call compiles in all configurations but is filtered at runtime. Measures the
+// cost of the runtime level check + early-out, not compile-time elimination.
+CRD_FORCEINLINE void runtime_disabled_info_call() noexcept
 {
-    CRD_LOG_TRACE(g_log_bench, "disabled trace {}", 42);
+    CRD_LOG_INFO(g_log_bench, "runtime-disabled info {}", 42);
 }
 
 volatile f32 g_vec3f_bench_bias = 0.0F;
@@ -46,13 +49,14 @@ volatile f32 g_quatf_bench_bias = 0.0F;
 volatile f32 g_transformf_bench_bias = 0.0F;
 } // namespace
 
-TEST_CASE("Disabled CRD_LOG_TRACE cost", "[bench][log]")
+TEST_CASE("Runtime-disabled log call cost", "[bench][log]")
 {
     BenchLoggerScope scope{};
+    g_log_bench.runtime_level = LogLevel::Error; // gate below Error at runtime
 
-    BENCHMARK("disabled trace call")
+    BENCHMARK("runtime-disabled INFO call")
     {
-        disabled_trace_call();
+        runtime_disabled_info_call();
         return 0;
     };
 }

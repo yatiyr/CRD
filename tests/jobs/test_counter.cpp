@@ -13,7 +13,6 @@ using crd::jobs::detail::Counter;
 using crd::jobs::detail::CounterPool;
 using crd::jobs::detail::Fiber;
 using crd::jobs::detail::FiberContext;
-using crd::jobs::detail::FiberTier;
 using crd::jobs::detail::Waiter;
 using crd::jobs::detail::counter_decrement;
 using crd::jobs::detail::counter_wait;

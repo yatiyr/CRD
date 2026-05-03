@@ -31,6 +31,9 @@
 // v1c adds:
 //   - HashMap<K, V>  (open addressing + Robin Hood + backshift, no tombstones)
 //   - HashSet<K>     (HashMap<K, EmptySetValue> wrapper)
+//
+// v1d adds:
+//   - SpscQueue<T>   (lock-free single-producer / single-consumer queue)
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/fixed_array.hpp>
@@ -40,6 +43,7 @@
 #include <crd/containers/log_channel.hpp>
 #include <crd/containers/ring_buffer.hpp>
 #include <crd/containers/span.hpp>
+#include <crd/containers/spsc_queue.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/containers/string_view.hpp>
 

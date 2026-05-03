@@ -34,7 +34,7 @@ set(CRDI_IMGUI_THIRD_PARTY_SOURCES
 )
 set_source_files_properties(${CRDI_IMGUI_THIRD_PARTY_SOURCES} PROPERTIES
     SKIP_LINTING ON
-    COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:Clang>:-Wno-uninitialized>"
+    COMPILE_OPTIONS "$<IF:$<CXX_COMPILER_ID:MSVC>,/w,-w>"
 )
 
 target_include_directories(crd-imgui

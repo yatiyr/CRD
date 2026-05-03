@@ -561,14 +561,14 @@ Full plan: `docs/ROADMAP.md` → `docs/phases/`.
 
 ## Test counts (last quality pass)
 
-- win-debug:          393/393
-- win-relwithdebinfo: 393/393
-- win-release:        390/390
-- win-asan:           393/393
-- win-clang-cl:       393/393
-- win-tidy:           393/393
+- win-debug:          404/404  (debt clearing session 2026-05-03: +11 — 7 SpscQueue, 4 FileWatcher)
+- win-relwithdebinfo: 393/393  (not re-run after debt clearing — pending next full pass)
+- win-release:        390/390  (not re-run after debt clearing)
+- win-asan:           393/393  (not re-run after debt clearing)
+- win-clang-cl:       393/393  (not re-run after debt clearing)
+- win-tidy:           393/393  (not re-run after debt clearing)
 
-(win-release is 3 fewer: debug-only `FiberState` tests excluded by `#if CRD_ENABLE_ASSERTS`)
+(win-release is 3 fewer than debug: debug-only `FiberState` tests excluded by `#if CRD_ENABLE_ASSERTS`)
 
 ## Pointers (lazy-load reference)
 
@@ -593,6 +593,7 @@ When in doubt, ASK before reading large files.
 
 ## Session log (rolling, last 5)
 
+- **2026-05-03** — Debt cleared: SpscQueue<T> lock-free SPSC queue (+7 tests), FileWatcher polling mtime watcher (+4 tests), Doxygen per-symbol docs in crd-core, runtime-disabled log benchmark fix, multi-viewport ImGui moved to long-term deferred. 404/404 win-debug.
 - **2026-05-03** — Phase 2.6 v1a shipped: `crd-resources` (ResourceId, CRDR, ResourceManager shell) + `asset_cooker manifest_dump`; String SSO remaining-capacity fix; all 6 configs green (393/393).
 - **2026-05-03** — Phase 2.6 architecture designed and documented; ADRs 0036–0041 written; `phase-2.6-resources.md` created; `crd-resources` placement, ResourceId UUID scheme, CRDR container format, ResourceHandle semantics, cooker CLI + CMake, and `crd-platform` async I/O all locked. No code shipped this session.
 - **2026-05-02** — `crd-jobs` v1k integration smoke + crd-app wiring shipped; Phase 2.5 COMPLETE; all 6 configs green (355/355 win-debug).

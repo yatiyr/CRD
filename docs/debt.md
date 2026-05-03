@@ -1,19 +1,18 @@
-﻿# Cerid — Open Debt
+# Cerid — Open Debt
 
 Items that are not blockers but should not be forgotten. When picked up,
 move to a session log entry and remove from here.
 
 ## Active debt
 
-- **Disabled-trace benchmark** is broken in the Release bench suite. Fix or
-  replace before refreshing `docs/bench/baseline_2026-04.md`.
-- **Doxygen-style per-symbol comments** are uneven in `crd-core`.
-- **No SPSC `RingBuffer`** yet; v1 is single-threaded refuse-on-full.
-  Lock-free version arrives with `crd-jobs` (Phase 2.5).
-- **No file watcher in `crd-platform`.** Lands with shader hot-reload
-  (Phase 2.3).
-- **Multi-viewport ImGui** deferred — Vulkan multi-viewport has known rough
-  edges. Single-viewport docking only in Phase 2.1.
+_(none — all items cleared as of 2026-05-03)_
+
+## Long-term deferred
+
+- **Multi-viewport ImGui** — Vulkan multi-viewport has known rough edges.
+  Single-viewport docking only until `crd-ui` ships (planned Phase 5+).
+  At that point, game/editor surfaces move to `crd-ui`; ImGui stays debug-only
+  and multi-viewport is no longer needed.
 
 ## GPU instancing (planned Phase 3.2)
 
@@ -87,4 +86,18 @@ before they pay off. Implement in order of demonstrated need, not in anticipatio
 
 ## Cleared debt
 
-(empty — items move here with a date when resolved)
+- **Disabled-trace benchmark** (2026-05-03) — Replaced compile-time-eliminated
+  `CRD_LOG_TRACE` call with `CRD_LOG_INFO` gated by `runtime_level = Error`. The
+  benchmark now measures the runtime short-circuit cost in all build configurations.
+- **Doxygen per-symbol comments in crd-core** (2026-05-03) — Added `///` docs to all
+  symbols in `types.hpp` (14 aliases), `platform.hpp` (18 macros + 3 functions), and
+  `assert.hpp` (2 type aliases + 4 functions + 4 macros).
+- **No SPSC RingBuffer** (2026-05-03) — Added `SpscQueue<T>` in
+  `engine/containers/include/crd/containers/spsc_queue.hpp`. Lock-free, cache-line
+  padded head/tail atomics, wait-free push and pop. Tested single-threaded and with
+  concurrent 1M-item producer/consumer.
+- **No file watcher in crd-platform** (2026-05-03) — Added polling-based `FileWatcher`
+  in `engine/platform/`. Uses `fs::last_modified_unix_seconds()` on each polled path.
+  Handles add/remove by handle, fires callbacks synchronously in `poll()`.
+- **Multi-viewport ImGui deferred** (2026-05-03) — Moved to "Long-term deferred" above.
+  Will not land until `crd-ui` ships; ImGui stays debug-only forever.

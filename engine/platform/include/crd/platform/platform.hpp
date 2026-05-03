@@ -8,9 +8,11 @@
 //   - Timer + FrameClock: chrono-based monotonic timing                   (v1b)
 //   - Input: polling snapshot + opt-in event queue                        (v1c)
 //   - Filesystem / DynamicLibrary / threading helpers                     (v1d)
+//   - FileWatcher: polling mtime watcher for hot-reload scenarios         (v1e)
 
 #include <crd/platform/context.hpp>
 #include <crd/platform/dynamic_library.hpp>
+#include <crd/platform/file_watcher.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/platform/log_channel.hpp>
 #include <crd/platform/threading.hpp>

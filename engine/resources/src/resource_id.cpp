@@ -97,11 +97,11 @@ ResourceId ResourceId::mint_random() noexcept
 
     // Set UUID v4 version: byte[6] high nibble = 0x4.
     // byte[6] lives at bits 15..8 of hi; its high nibble is bits 15..12.
-    id.hi = (id.hi & 0xFFFFFFFFFFFF0FFFull) | 0x0000000000004000ULL;
+    id.hi = (id.hi & 0xFFFFFFFFFFFF0FFFULL) | 0x0000000000004000ULL;
 
     // Set RFC 4122 variant: byte[8] high 2 bits = 0b10.
     // byte[8] is the MSByte of lo; its high 2 bits are lo bits 63..62.
-    id.lo = (id.lo & 0x3FFFFFFFFFFFFFFFull) | 0x8000000000000000ULL;
+    id.lo = (id.lo & 0x3FFFFFFFFFFFFFFFULL) | 0x8000000000000000ULL;
 
     return id;
 }
@@ -145,7 +145,7 @@ ResourceId ResourceId::parse(crd::containers::StringView text) noexcept
             continue;
         }
         const int hi_nib = hex_nibble(text[static_cast<crd::usize>(i)]);
-        const int lo_nib = hex_nibble(text[static_cast<crd::usize>(i + 1)]);
+        const int lo_nib = hex_nibble(text[static_cast<crd::usize>(i) + 1U]);
         if (hi_nib < 0 || lo_nib < 0 || byte_idx >= 16)
         {
             return kNullResourceId;

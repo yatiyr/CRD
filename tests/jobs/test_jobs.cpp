@@ -12,7 +12,6 @@ using crd::jobs::detail::WorkerConfig;
 using crd::jobs::detail::WorkerPool;
 using crd::jobs::JobDecl;
 using crd::jobs::Priority;
-using crd::jobs::StackSize;
 
 // ---------------------------------------------------------------------------
 // Helpers
