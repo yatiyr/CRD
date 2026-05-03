@@ -39,7 +39,7 @@ that plug in on top of the same core.
 │                          SOURCE TREE (VCS)                                │
 │  shaders/sky.glsl    materials/wall.mat.toml    audio/kick.wav            │
 │  shaders/sky.glsl.meta materials/wall.mat.toml.meta audio/kick.wav.meta   │
-│         (UUID v4)              (UUID v4)              (UUID v4)            │
+│         (UUID v4)              (UUID v4)              (UUID v4)           │
 └────────────────────────────────────┬─────────────────────────────────────┘
                                      │ asset_cooker (separate exe — ADR-0013)
                                      ▼

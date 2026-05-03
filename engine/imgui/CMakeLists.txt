@@ -58,4 +58,5 @@ target_link_libraries(crd-imgui
         glfw
 )
 target_compile_features(crd-imgui PUBLIC cxx_std_20)
+target_compile_definitions(crd-imgui PRIVATE GLFW_INCLUDE_NONE)
 crd_enable_default_pch(crd-imgui)
