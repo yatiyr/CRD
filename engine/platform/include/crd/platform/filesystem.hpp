@@ -48,6 +48,7 @@ private:
 
 [[nodiscard]] bool read_file_text(const Path& path, containers::String& out) noexcept;
 [[nodiscard]] bool read_file_binary(const Path& path, containers::Array<u8>& out) noexcept;
+[[nodiscard]] bool read_file_range(const Path& path, crd::u64 offset, crd::u64 size, containers::Array<u8>& out) noexcept;
 [[nodiscard]] bool write_file_text(const Path& path, containers::StringView contents) noexcept;
 [[nodiscard]] bool write_file_binary(const Path& path, containers::ConstSpan<u8> contents) noexcept;
 

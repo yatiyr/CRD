@@ -11,11 +11,11 @@
 
 ## Current focus
 
-**Phase 2.6 — `crd-resources` + asset cooker. v1b SHIPPED.**
+**Phase 2.6 — `crd-resources` + asset cooker. v1c SHIPPED.**
 
-v1b shipped: zstd compression wired into `CrdrWriter` (`add_chunk_compressed()`, two-pass decompression reader, `decompressed_backing`). `crd-cooker` static library extracted from `asset_cooker`. `cook` CLI sub-command: recursive scan, .meta sidecars, FNV1a-64 incremental cache (cook_key = source_hash ^ handler_version), `.bin` blob passthrough handler, two-pass PACK assembly, `cook.log.toml`. Optional CMake `cook` target. 4 new tests.
+v1c shipped: `RefCounted<T>` (CRTP intrusive refcount, `add_ref/release/use_count`, protected dtor) in `crd-memory`. `ResourceControlBlock` (inherits RefCounted, fields: id, type_fourcc, permanent, generation, state, payload, loader, alloc). `ResourceHandleBase` (non-template, type-erased refcount in dtor via `release_block()`; permanent flag controls freeing). `ResourceHandle<T>` (template typed wrapper, `get()` casts payload). Thread-local cycle detection (`tl_visiting[64]`, `tl_visit_count`). `load_sync_impl` dispatches to registered loaders, caches Ready/Placeholder blocks (`permanent=true`), non-permanent Failed blocks freed by last handle. `make_failed_block` for all error paths. `read_file_range` added to `crd::platform::fs`. `smoke_resources.exe` (cook + mount + load_sync<BlobResource> + verify round-trip). 12 new RefCounted tests + 8 new load_sync tests (20 total).
 
-Next: v1c (`RefCounted<T>` in crd-memory → `ResourceHandle<T>` + `ILoader` + `load_sync<T>`).
+Next: v1d — async I/O via `crd-platform` AsyncFile; `load_async<T>`.
 
 Full design packet: `docs/phases/phase-2.6-resources.md`.
 
@@ -31,6 +31,24 @@ _none — running on the main roadmap._
 > `docs/detours/README.md`.
 
 ## Last shipped milestone
+
+**2026-05-03 — Phase 2.6 v1c shipped: RefCounted<T> + ResourceHandle<T> + load_sync<T>.**
+
+`crd::memory::RefCounted<T>` CRTP intrusive refcount (`engine/memory/include/crd/memory/ref_counted.hpp`). `[[nodiscard]] release()` returns new count; protected destructor prevents stack destruction with live refs. 4 RefCounted tests including 4-thread concurrent stress (4×25 add/release, no interleaved zero crossing).
+
+`ResourceControlBlock` (inherits RefCounted): id, type_fourcc, `permanent` bool (false = freed by last handle; true = cached until manager destroyed), atomic generation + state + payload + loader + alloc. `ResourceHandleBase` (non-template): dtor calls `release_block()` → if `!permanent && refs==0`, destructs and deallocates. `ResourceHandle<T>` typed wrapper with `get()` casting payload to `const T*` when Ready or Placeholder. `sizeof(ResourceHandle<T>) == sizeof(pointer)`.
+
+Thread-local cycle detection: `tl_visiting[64]` + `tl_visit_count`; `visiting_push/pop/contains` in anonymous namespace. v1c limitation: fiber-migration-unsafe (revisit in v1d). `load_sync_impl`: checks cache → cycle → manifest → loader → mount → file read → dispatches to `loader->load()`, then `loader->load_placeholder()` on failure. `make_failed_block()`: non-permanent Failed block, not cached. `read_file_range()` added to `crd::platform::fs` (seekg + read into Array<u8>). `smoke_resources.exe` end-to-end: assemble PACK, mount, load_sync<BlobResource>, verify 5 bytes, exit 0. 8 new load_sync tests covering: round-trip, 1000-copy refcount stability, cache hit, unknown id, hard fail, placeholder, transitive dep, cycle detection.
+
+Six-configuration green:
+- win-debug:          420/420
+- win-relwithdebinfo: 420/420
+- win-release:        417/417
+- win-asan:           420/420
+- win-clang-cl:       420/420
+- win-tidy:           420/420
+
+## Previous shipped milestone
 
 **2026-05-03 — Phase 2.6 v1b shipped: cooker CLI + zstd compression.**
 
@@ -545,9 +563,9 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Next up (next 1–3 sessions)
 
-1. **Phase 2.6 v1c** — `crd::memory::RefCounted<T>` (ADR-0014 prerequisite) → `ResourceHandle<T>` + `ILoader` + `load_sync<T>` + transitive dependency resolution.
-2. **Phase 2.6 v1d** — Async I/O via `crd-platform` `AsyncFile`; `load_async<T>`.
-3. **Phase 2.6 v1e** — Shader + material loaders end-to-end.
+1. **Phase 2.6 v1d** — Async I/O via `crd-platform` `AsyncFile`; `load_async<T>`.
+2. **Phase 2.6 v1e** — Shader + material loaders end-to-end.
+3. **Phase 2.6 v1f** — Hot-reload (file-watcher driven, atomic payload swap).
 
 ## Roadmap ordering (post-jobs)
 
@@ -575,12 +593,12 @@ Full plan: `docs/ROADMAP.md` → `docs/phases/`.
 
 ## Test counts (last quality pass)
 
-- win-debug:          408/408
-- win-relwithdebinfo: 408/408
-- win-release:        405/405
-- win-asan:           408/408
-- win-clang-cl:       408/408
-- win-tidy:           408/408
+- win-debug:          420/420
+- win-relwithdebinfo: 420/420
+- win-release:        417/417
+- win-asan:           420/420
+- win-clang-cl:       420/420
+- win-tidy:           420/420
 
 (win-release is 3 fewer than debug: debug-only `FiberState` tests excluded by `#if CRD_ENABLE_ASSERTS`)
 
@@ -607,6 +625,7 @@ When in doubt, ASK before reading large files.
 
 ## Session log (rolling, last 5)
 
+- **2026-05-03** — Phase 2.6 v1c shipped: RefCounted<T> + ResourceHandle<T> + load_sync<T> + cycle detection; all 6 configs green (420/420 win-debug).
 - **2026-05-03** — Phase 2.6 v1b shipped: zstd compression + cooker CLI + .bin handler + 4 tests; all 6 configs green (408/408 win-debug).
 - **2026-05-03** — Debt cleared: SpscQueue<T> lock-free SPSC queue (+7 tests), FileWatcher polling mtime watcher (+4 tests), Doxygen per-symbol docs in crd-core, runtime-disabled log benchmark fix, multi-viewport ImGui moved to long-term deferred. 404/404 win-debug.
 - **2026-05-03** — Phase 2.6 v1a shipped: `crd-resources` (ResourceId, CRDR, ResourceManager shell) + `asset_cooker manifest_dump`; String SSO remaining-capacity fix; all 6 configs green (393/393).

@@ -7,6 +7,7 @@
 #include <crd/memory/allocator.hpp>
 #include <crd/resources/crdr.hpp>
 #include <crd/resources/loader.hpp>
+#include <crd/resources/resource_handle.hpp>
 #include <crd/resources/resource_id.hpp>
 
 #include <memory>
@@ -34,13 +35,13 @@ struct MountEntry
     crd::u32                     mount_id     = 0;
 };
 
-// Central resource registry (v1a shell — no loading yet).
+// Central resource registry (v1c — synchronous load with refcounted handles).
 //
 // Startup sequence:
 //   1. Construct ResourceManager with an IAllocator*.
 //   2. register_loader() for each resource type.
 //   3. mount_manifest() for each cooked pack (engine → project → DLC order).
-//   4. (v1c+) load_sync / load_async.
+//   4. load_sync<T>() to load resources.
 //
 // Multi-mount precedence: newest mount wins on ResourceId collision.
 // Collisions are logged at Warn level.
@@ -72,7 +73,21 @@ public:
     // live table only when no other mount provides the same ResourceId.
     void unmount(MountId id);
 
-    // ── Lookup (v1c+: these become load_sync / load_async) ─────────────────
+    // ── Synchronous load ───────────────────────────────────────────────────
+    // Reads artifact bytes from the pack file, dispatches to the registered
+    // loader, and returns a handle. Handles are refcounted; the payload lives
+    // until all handles are dropped (v1g eviction) or the manager is destroyed.
+    //
+    // Transitive dependency resolution: loaders may call load_sync<Dep> on
+    // ctx.manager. Cycles are detected via a thread-local visiting stack and
+    // terminate with a Failed handle (logged at Error).
+    //
+    // Failed loads are NOT cached; a second call will retry the load.
+    // Successful loads ARE cached; a second call returns the cached block.
+    template <typename T>
+    [[nodiscard]] ResourceHandle<T> load_sync(ResourceId id);
+
+    // ── Lookup ─────────────────────────────────────────────────────────────
     // Find the mount entry for a ResourceId, or nullptr if not mounted.
     [[nodiscard]] const MountEntry* find_entry(ResourceId id) const noexcept;
 
@@ -80,6 +95,7 @@ public:
     [[nodiscard]] crd::usize loader_count()  const noexcept;
     [[nodiscard]] crd::usize mount_count()   const noexcept;
     [[nodiscard]] crd::usize entry_count()   const noexcept;
+    [[nodiscard]] crd::usize handle_count()  const noexcept;
 
 private:
     crd::memory::IAllocator* m_alloc;
@@ -92,17 +108,34 @@ private:
     struct MountRecord
     {
         crd::u32                           id = 0;
+        crd::containers::String            pack_path;
         crd::containers::Array<ResourceId> entries;
 
-        explicit MountRecord(crd::memory::IAllocator* a, crd::u32 mount_id)
-            : id(mount_id), entries(a)
+        MountRecord(crd::memory::IAllocator* a, crd::u32 mount_id, crd::containers::StringView path)
+            : id(mount_id), pack_path(path.data(), path.size(), a), entries(a)
         {
         }
     };
     crd::containers::Array<MountRecord> m_mounts;
 
-    // Live table: ResourceId → MountEntry (newest-mount-wins).
+    // Live manifest table: ResourceId → MountEntry (newest-mount-wins).
     crd::containers::HashMap<ResourceId, MountEntry> m_live;
+
+    // Handle table: ResourceId → ResourceControlBlock* (permanent blocks only).
+    // Blocks are allocated by the manager and freed in ~ResourceManager().
+    crd::containers::HashMap<ResourceId, ResourceControlBlock*> m_handles;
+
+    // Internal helpers.
+    [[nodiscard]] ResourceControlBlock* load_sync_impl(ResourceId id);
+    [[nodiscard]] const MountRecord*    find_mount(crd::u32 mount_id) const noexcept;
 };
+
+// ── Template implementation (must be in header) ─────────────────────────────
+
+template <typename T>
+ResourceHandle<T> ResourceManager::load_sync(ResourceId id)
+{
+    return ResourceHandle<T>(load_sync_impl(id));
+}
 
 } // namespace crd::resources

@@ -1,7 +1,9 @@
 #include <crd/memory/memory.hpp>
+#include <crd/memory/ref_counted.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 #include <cstring>
+#include <thread>
 #include <vector>
 
 using namespace crd;
@@ -365,4 +367,74 @@ TEST_CASE("Stats snapshot is callable in any build", "[memory][stats]")
     const auto snap = a.stats().snapshot();
     (void)snap;
     SUCCEED();
+}
+
+// =============================================================================
+// RefCounted<T>
+// =============================================================================
+
+namespace
+{
+struct Widget : public RefCounted<Widget>
+{
+    int value = 0;
+};
+} // namespace
+
+TEST_CASE("RefCounted: starts at 1", "[memory][ref_counted]")
+{
+    Widget w;
+    CHECK(w.use_count() == 1U);
+}
+
+TEST_CASE("RefCounted: add_ref increments count", "[memory][ref_counted]")
+{
+    Widget w;
+    w.add_ref();
+    CHECK(w.use_count() == 2U);
+    static_cast<void>(w.release()); // restore to 1 so stack destruction is clean
+}
+
+TEST_CASE("RefCounted: release decrements and returns new count", "[memory][ref_counted]")
+{
+    Widget w;
+    w.add_ref(); // refs = 2
+    { const auto r = w.release(); CHECK(r == 1U); }
+    CHECK(w.use_count() == 1U);
+    { const auto r = w.release(); CHECK(r == 0U); } // refs = 0 — caller would free here
+    // w is on the stack; we don't actually free but the count is 0
+}
+
+TEST_CASE("RefCounted: concurrent add_ref/release preserves count", "[memory][ref_counted]")
+{
+    Widget w;
+    // Start at 1; four threads each add 25 refs then remove 25.
+    constexpr int kThreads = 4;
+    constexpr int kOps     = 25;
+
+    w.add_ref(); // bump to 2 so we never hit 0 during the parallel ops
+    {
+        std::vector<std::thread> threads;
+        threads.reserve(kThreads);
+        for (int i = 0; i < kThreads; ++i)
+        {
+            threads.emplace_back([&]
+            {
+                for (int j = 0; j < kOps; ++j)
+                {
+                    w.add_ref();
+                }
+                for (int j = 0; j < kOps; ++j)
+                {
+                    static_cast<void>(w.release());
+                }
+            });
+        }
+        for (auto& t : threads)
+        {
+            t.join();
+        }
+    }
+    CHECK(w.use_count() == 2U); // back to 2 (original 1 + the bump we added)
+    static_cast<void>(w.release()); // back to 1 for clean stack destruction
 }

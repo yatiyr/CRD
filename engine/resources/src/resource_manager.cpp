@@ -2,19 +2,60 @@
 
 #include <crd/core/assert.hpp>
 #include <crd/log/log.hpp>
+#include <crd/memory/construct.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/resources/log_channel.hpp>
+#include <crd/resources/resource_control_block.hpp>
 
 #include <cstring>
 
 namespace crd::resources
 {
 
+// ── Cycle-detection visiting stack (v1c; thread-local) ────────────────────────
+//
+// When load_sync_impl is called, it pushes `id` before dispatching to the loader
+// and pops it after. A recursive call from inside the loader that finds its id
+// already on the stack signals a cycle.
+//
+// v1c limitation: thread-local storage is per-OS-thread. crd-jobs fibers may
+// migrate between OS threads at await points. This is safe in v1c because all
+// loads are synchronous and no fiber suspend can occur mid-load. Revisit when
+// load_async runs on fibers (v1d).
+
 namespace
 {
 
+constexpr crd::usize kMaxVisitDepth = 64;
+thread_local ResourceId  tl_visiting[kMaxVisitDepth];
+thread_local crd::usize  tl_visit_count = 0;
+
+[[nodiscard]] bool visiting_contains(ResourceId id) noexcept
+{
+    for (crd::usize i = 0; i < tl_visit_count; ++i)
+    {
+        if (tl_visiting[i] == id)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+void visiting_push(ResourceId id) noexcept
+{
+    CRD_ASSERT_MSG(tl_visit_count < kMaxVisitDepth,
+                   "ResourceManager: dependency chain exceeds maximum depth (64)");
+    tl_visiting[tl_visit_count++] = id;
+}
+
+void visiting_pop() noexcept
+{
+    CRD_ASSERT_MSG(tl_visit_count > 0, "ResourceManager: visiting stack underflow");
+    --tl_visit_count;
+}
+
 // Look up a null-terminated string in the STRP pool at byte offset `idx`.
-// Returns an empty StringView if `idx` is out of range.
 crd::containers::StringView strp_get(
     crd::containers::ConstSpan<crd::u8> pool,
     crd::u32                            idx) noexcept
@@ -24,8 +65,7 @@ crd::containers::StringView strp_get(
         return {};
     }
     const char* begin = reinterpret_cast<const char*>(pool.data() + idx);
-    // Find null terminator, but do not walk past the pool boundary.
-    const char* end = begin;
+    const char* end   = begin;
     const char* limit = reinterpret_cast<const char*>(pool.data() + pool.size());
     while (end < limit && *end != '\0')
     {
@@ -43,10 +83,24 @@ ResourceManager::ResourceManager(crd::memory::IAllocator* a)
     , m_loaders(a)
     , m_mounts(a)
     , m_live(a)
+    , m_handles(a)
 {
 }
 
-ResourceManager::~ResourceManager() = default;
+ResourceManager::~ResourceManager()
+{
+    // Unload and free all permanent control blocks.
+    for (auto it = m_handles.begin(); it != m_handles.end(); ++it)
+    {
+        ResourceControlBlock* block = it.value();
+        if (block->payload && block->loader)
+        {
+            block->loader->unload(block->payload);
+        }
+        block->~ResourceControlBlock();
+        m_alloc->deallocate(block);
+    }
+}
 
 // ── Registration ───────────────────────────────────────────────────────────
 
@@ -113,7 +167,7 @@ MountId ResourceManager::mount_manifest(crd::containers::StringView path)
     }
 
     const crd::u32 mount_id = m_next_mount_id++;
-    MountRecord record(m_alloc, mount_id);
+    MountRecord record(m_alloc, mount_id, path);
 
     for (const ManifestEntry& e : entries)
     {
@@ -166,7 +220,6 @@ void ResourceManager::unmount(MountId id)
             continue;
         }
 
-        // Remove live entries that belong only to this mount.
         for (const ResourceId& rid : m_mounts[i].entries)
         {
             const MountEntry* e = m_live.find(rid);
@@ -190,19 +243,151 @@ const MountEntry* ResourceManager::find_entry(ResourceId id) const noexcept
 
 // ── Diagnostics ────────────────────────────────────────────────────────────
 
-crd::usize ResourceManager::loader_count() const noexcept
+crd::usize ResourceManager::loader_count() const noexcept { return m_loaders.size(); }
+crd::usize ResourceManager::mount_count()  const noexcept { return m_mounts.size(); }
+crd::usize ResourceManager::entry_count()  const noexcept { return m_live.size(); }
+crd::usize ResourceManager::handle_count() const noexcept { return m_handles.size(); }
+
+// ── Internal helpers ───────────────────────────────────────────────────────
+
+const ResourceManager::MountRecord* ResourceManager::find_mount(crd::u32 mount_id) const noexcept
 {
-    return m_loaders.size();
+    for (const MountRecord& r : m_mounts)
+    {
+        if (r.id == mount_id)
+        {
+            return &r;
+        }
+    }
+    return nullptr;
 }
 
-crd::usize ResourceManager::mount_count() const noexcept
+// ── Synchronous load ───────────────────────────────────────────────────────
+
+// Allocate a non-permanent Failed control block owned by the caller's handle.
+// Used for all error paths where no cached block exists.
+static ResourceControlBlock* make_failed_block(crd::memory::IAllocator* alloc, ResourceId id)
 {
-    return m_mounts.size();
+    void* raw = alloc->allocate(sizeof(ResourceControlBlock), alignof(ResourceControlBlock));
+    auto* block = new (raw) ResourceControlBlock();
+    block->id    = id;
+    block->alloc = alloc;
+    // permanent = false (default) → freed by the last handle when refs drops to 0
+    block->state.store(LoadState::Failed, std::memory_order_release);
+    return block;
 }
 
-crd::usize ResourceManager::entry_count() const noexcept
+ResourceControlBlock* ResourceManager::load_sync_impl(ResourceId id)
 {
-    return m_live.size();
+    // Return cached block if already loaded successfully.
+    ResourceControlBlock** existing = m_handles.find(id);
+    if (existing != nullptr)
+    {
+        (*existing)->add_ref();
+        return *existing;
+    }
+
+    // Cycle detection.
+    if (visiting_contains(id))
+    {
+        const auto id_str = id.to_string(m_alloc);
+        CRD_LOG_ERROR(g_log_resources,
+                      "ResourceManager::load_sync: dependency cycle detected for id {}",
+                      id_str.c_str());
+        return make_failed_block(m_alloc, id);
+    }
+
+    // Resolve manifest entry.
+    const MountEntry* entry = m_live.find(id);
+    if (entry == nullptr)
+    {
+        const auto id_str = id.to_string(m_alloc);
+        CRD_LOG_ERROR(g_log_resources,
+                      "ResourceManager::load_sync: id {} not found in any mounted pack",
+                      id_str.c_str());
+        return make_failed_block(m_alloc, id);
+    }
+
+    // Resolve loader.
+    std::unique_ptr<ILoader>* loader_ptr = m_loaders.find(entry->type_fourcc);
+    if (loader_ptr == nullptr)
+    {
+        char fc[5];
+        fourcc_to_str(entry->type_fourcc, fc);
+        CRD_LOG_ERROR(g_log_resources,
+                      "ResourceManager::load_sync: no loader registered for FourCC '{}'", fc);
+        return make_failed_block(m_alloc, id);
+    }
+    ILoader* loader = loader_ptr->get();
+
+    // Resolve pack file path.
+    const MountRecord* mount = find_mount(entry->mount_id);
+    if (mount == nullptr)
+    {
+        CRD_LOG_ERROR(g_log_resources,
+                      "ResourceManager::load_sync: internal error — mount record missing");
+        return make_failed_block(m_alloc, id);
+    }
+
+    // Read artifact bytes from pack file.
+    crd::containers::Array<crd::u8> artifact_bytes(m_alloc);
+    const crd::platform::fs::Path pack_path(mount->pack_path);
+    if (!crd::platform::fs::read_file_range(pack_path,
+                                            entry->blob_offset,
+                                            entry->blob_size,
+                                            artifact_bytes))
+    {
+        CRD_LOG_ERROR(g_log_resources,
+                      "ResourceManager::load_sync: failed to read artifact bytes");
+        return make_failed_block(m_alloc, id);
+    }
+
+    // Allocate control block.
+    void* raw = m_alloc->allocate(sizeof(ResourceControlBlock), alignof(ResourceControlBlock));
+    auto* block = new (raw) ResourceControlBlock();
+    block->id          = id;
+    block->type_fourcc = entry->type_fourcc;
+    block->alloc       = m_alloc;
+    block->loader      = loader;
+
+    // Push onto the visiting stack before dispatching to the loader so that
+    // any transitive load_sync call for the same id is detected as a cycle.
+    visiting_push(id);
+
+    const LoadContext ctx{id, crd::containers::as_const_span(artifact_bytes), this, m_alloc};
+    void* payload = loader->load(ctx);
+
+    visiting_pop();
+
+    if (payload != nullptr)
+    {
+        block->payload   = payload;
+        block->permanent = true;
+        block->state.store(LoadState::Ready, std::memory_order_release);
+        m_handles.insert(id, block);
+        CRD_LOG_DEBUG(g_log_resources, "ResourceManager: loaded resource (Ready)");
+    }
+    else
+    {
+        // Attempt placeholder fallback.
+        void* placeholder = loader->load_placeholder(ctx);
+        if (placeholder != nullptr)
+        {
+            block->payload   = placeholder;
+            block->permanent = true;
+            block->state.store(LoadState::Placeholder, std::memory_order_release);
+            m_handles.insert(id, block);
+            CRD_LOG_WARN(g_log_resources, "ResourceManager: loaded resource with placeholder");
+        }
+        else
+        {
+            // Hard failure — non-permanent block; freed by the last handle.
+            block->state.store(LoadState::Failed, std::memory_order_release);
+            CRD_LOG_ERROR(g_log_resources, "ResourceManager: hard failure loading resource");
+        }
+    }
+
+    return block;
 }
 
 } // namespace crd::resources

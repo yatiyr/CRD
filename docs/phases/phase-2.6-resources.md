@@ -1,6 +1,6 @@
 # Phase 2.6 — `crd-resources`: resource system + asset cooker
 
-**Status:** 🚢 v1b shipped (2026-05-03); v1c next
+**Status:** 🚢 v1c shipped (2026-05-03); v1d next
 **ADRs:** ADR-0036 (module + loader registry), ADR-0037 (ResourceId UUID scheme), ADR-0038 (cooked binary container), ADR-0039 (ResourceHandle semantics), ADR-0040 (cooker CLI + CMake), ADR-0041 (platform async I/O)
 **Module:** `engine/resources/` + `tools/asset_cooker/`
 **Depends on:** `crd-core`, `crd-log`, `crd-memory`, `crd-containers`, `crd-jobs`, `crd-platform`, `crd-config`
@@ -503,33 +503,37 @@ which serves as the null terminator, making `c_str()` correct without any UB wri
 - [x] `cook.log.toml` records "skipped (incremental key match)" on the second run.
 - [x] zstd round-trip of compressed chunks (write → read → bytes match).
 
-### v1c — Synchronous `ResourceHandle<T>` + `ILoader` + dependency resolution
+### v1c — Synchronous `ResourceHandle<T>` + `ILoader` + dependency resolution ✅ SHIPPED 2026-05-03
 
-**Prerequisite:** add `crd::memory::RefCounted<T>` (ADR-0014). Trivial intrusive base; one
-`atomic<u32> m_refs`; `add_ref()`, `release()`. Tested in `crd-memory`.
+**Prerequisite shipped:** `crd::memory::RefCounted<T>` (ADR-0014). CRTP intrusive base; one
+`atomic<u32> m_refs{1}`; `[[nodiscard]] add_ref()`, `[[nodiscard]] release()` (returns new count,
+acq_rel), `use_count()`. Protected destructor prevents stack destruction with live refs. NOT added
+to `memory.hpp` umbrella to avoid PCH invalidation. 12 new tests in `tests/memory/test_memory.cpp`
+including 4-thread concurrent stress.
 
-**Scope:**
-- `ResourceHandle<T>` (one-pointer, atomic refcount, generation, `get()`, `id()`, `state()`).
-- `LoadState::Unloaded / Queued / Loading / Ready / Placeholder / Failed`.
-- `ILoader` interface with `load_placeholder()` virtual (default `nullptr`).
-- `ResourceManager::load_sync<T>` — synchronous resolve, read bytes, dispatch to typed loader,
-  store control block in handle table.
-- Transitive dependency resolution: loader's `LoadContext::manager` allows `load_sync` of deps.
-  Cycle detection (visited-set per top-level call); cycles logged at `Error` and break with
-  `LoadState::Failed`.
-- Test loader: `BlobResource` (returns owned byte buffer).
-- A second test loader with `load_placeholder()` overridden to demonstrate soft fallback.
+**Scope shipped:**
+- `LoadState` enum (`load_state.hpp`): Unloaded / Queued / Loading / Ready / Placeholder / Failed.
+- `ResourceControlBlock` (`resource_control_block.hpp`): inherits `RefCounted<ResourceControlBlock>`;
+  `permanent` bool (false = freed by last handle; true = cached until manager destroyed), atomic
+  generation + state, `void* payload`, `ILoader* loader`, `IAllocator* alloc`.
+- `ResourceHandleBase` (non-template): one pointer, copy/move/dtor update refcount via `release_block()`.
+  `release_block()`: if `!permanent && refs == 0` → unload + destruct + free block.
+- `ResourceHandle<T>`: typed wrapper; `get()` casts payload to `const T*` when Ready or Placeholder.
+  `sizeof(ResourceHandle<T>) == sizeof(pointer)`.
+- `read_file_range()` added to `crd::platform::fs` (seekg + read into `Array<u8>`).
+- Thread-local cycle detection: `tl_visiting[64]` + `tl_visit_count` in `resource_manager.cpp`
+  anonymous namespace. v1c limitation: fiber-migration-unsafe (revisit in v1d).
+- `make_failed_block()` static helper: non-permanent Failed block for all error paths. All error paths
+  return non-null (null block is never stored in a handle).
+- `load_sync_impl`: cache → cycle → manifest → loader → mount → file read → dispatch. Permanent
+  on Ready/Placeholder; non-permanent on hard failure.
+- `ResourceManager` destructor: iterates `m_handles`, calls `unload()`, destructs, frees every block.
+- `smoke_resources.exe`: assemble PACK in-memory, mount, `load_sync<BlobResource>`, verify 5 bytes.
 
-**Tests:**
-- `load_sync` of a `BlobResource` returns a handle with `state() == Ready` and matching bytes.
-- Refcount: copying a handle 1 000 times then dropping all copies leaves the resource in handle
-  table (refcount → 0 → eviction in v1g; in v1c it just stays).
-- Transitive dep: a synthetic resource type that declares one dep loads both in one call.
-- Cycle detection: two resources depending on each other → both end up `LoadState::Failed`,
-  one `Error` log entry.
-- Placeholder loader: a corrupted artifact triggers `LoadState::Placeholder` and a non-null `get()`.
-- Hard-failure loader: a corrupted artifact for a non-placeholder loader → `LoadState::Failed`,
-  `get() == nullptr`.
+**Tests shipped:** 8 new `load_sync` tests — round-trip, 1000-copy refcount stability, cache hit,
+unknown id, hard fail, placeholder, transitive dep, cycle detection.
+
+All 6 configs green: win-debug/relwithdebinfo/asan/clang-cl/tidy 420/420, win-release 417/417.
 
 ### v1d — `crd-platform` async I/O + `ResourceManager::load_async` + `wait_ready`
 

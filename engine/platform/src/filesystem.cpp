@@ -318,6 +318,31 @@ bool read_file_binary(const Path& path, containers::Array<u8>& out) noexcept
     return true;
 }
 
+bool read_file_range(const Path& path, crd::u64 offset, crd::u64 size, containers::Array<u8>& out) noexcept
+{
+    std::ifstream in(to_native_path(path), std::ios::binary);
+    if (!in)
+    {
+        return false;
+    }
+    in.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
+    if (!in)
+    {
+        return false;
+    }
+    out.resize(static_cast<crd::usize>(size));
+    if (size > 0)
+    {
+        in.read(reinterpret_cast<char*>(out.data()), static_cast<std::streamsize>(size));
+        if (!in)
+        {
+            out.clear();
+            return false;
+        }
+    }
+    return true;
+}
+
 bool write_file_text(const Path& path, containers::StringView contents) noexcept
 {
     std::ofstream out(to_native_path(path), std::ios::binary | std::ios::trunc);

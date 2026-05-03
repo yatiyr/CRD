@@ -196,6 +196,20 @@ target_link_libraries(smoke_jobs PRIVATE
 )
 crd_enable_default_pch(smoke_jobs)
 
+add_executable(smoke_resources
+    examples/smoke_resources.cpp
+)
+
+target_link_libraries(smoke_resources PRIVATE
+    crd-core
+    crd-log
+    crd-memory
+    crd-containers
+    crd-platform
+    crd-resources
+)
+crd_enable_default_pch(smoke_resources)
+
 add_executable(smoke_rhi_vulkan_bootstrap
     examples/smoke_rhi_vulkan_bootstrap.cpp
 )
