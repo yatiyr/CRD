@@ -40,6 +40,7 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 
 ### `[platform]`
 - ADR-0006 — Platform v1
+- ADR-0041 — `crd-platform` async filesystem I/O
 
 ### `[app]` `[event]`
 - ADR-0007 — `crd-app` shape
@@ -57,6 +58,14 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 - ADR-0013 — Asset pipeline
 - ADR-0014 — Reference counting split
 - ADR-0022 — Streaming pipeline
+- ADR-0036 — `crd-resources` module placement + loader-registry pattern
+- ADR-0037 — ResourceId hybrid UUID scheme
+- ADR-0038 — Cooked binary container format
+- ADR-0039 — `ResourceHandle<T>` semantics
+- ADR-0040 — Cooker CLI + CMake integration
+
+### `[cooker]`
+- ADR-0040 — Cooker CLI + CMake integration
 
 ### `[jobs]`
 - ADR-0015 — Job system shape
@@ -139,3 +148,9 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 | 0033  | crd-jobs implementation architecture           | jobs, arch, fibers, threading     | Accepted    |
 | 0034  | C++ hot-reload DLL scripting                   | scripting, arch, extensibility    | Accepted    |
 | 0035  | Networking architecture principles             | networking, arch, determinism     | Accepted    |
+| 0036  | `crd-resources` module + loader registry       | resources, arch                   | Accepted    |
+| 0037  | ResourceId hybrid UUID scheme                  | resources, arch                   | Accepted    |
+| 0038  | Cooked binary container format                 | resources, arch, cooker           | Accepted    |
+| 0039  | `ResourceHandle<T>` semantics                  | resources, arch                   | Accepted    |
+| 0040  | Cooker CLI + CMake integration                 | resources, cooker, build, arch    | Accepted    |
+| 0041  | `crd-platform` async filesystem I/O            | platform, resources, jobs         | Accepted    |

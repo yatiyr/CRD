@@ -23,10 +23,11 @@ namespace crd::containers
 //   IAllocator* m_alloc;          (8 bytes)
 //
 // SSO state discriminant is the LAST byte of the 24-byte payload union:
-//   - In small mode it holds the live size (0..23).
+//   - In small mode it holds the REMAINING capacity (kSsoCapacity - size).
+//     Range 0..23. When 0 (string is full at 23 chars) it doubles as the
+//     null terminator for c_str(), eliminating the buf[kSsoCapacity] UB.
 //   - In heap mode it holds 0xFF (sentinel — chosen so it can never be a
-//     valid small-mode size and never be the top byte of any reasonable
-//     heap capacity, which is bounded to ~63 bits anyway).
+//     valid remaining-capacity value since max remaining is 23, i.e. 0x17).
 //
 // The last byte of m_small.size_or_flag and the top byte of
 // m_heap.cap_and_flag share the same offset (byte 23), which is how we
@@ -138,7 +139,7 @@ public:
 
     usize size() const noexcept
     {
-        return sso_state() ? static_cast<usize>(m_small.size_or_flag) : heap_size_internal();
+        return sso_state() ? (kSsoCapacity - static_cast<usize>(m_small.size_or_flag)) : heap_size_internal();
     }
 
     usize capacity() const noexcept { return sso_state() ? kSsoCapacity : heap_capacity_internal(); }
@@ -153,7 +154,7 @@ public:
         if (sso_state())
         {
             m_small.buf[0] = '\0';
-            m_small.size_or_flag = 0;
+            m_small.size_or_flag = kSsoCapacity; // remaining = kSsoCapacity, size = 0
         }
         else
         {
@@ -188,11 +189,17 @@ public:
             reserve(n);
             char* p = data();
             std::memset(p + old, static_cast<unsigned char>(fill), n - old);
-            p[n] = '\0';
+            if (!sso_state() || n < kSsoCapacity)
+            {
+                p[n] = '\0';
+            }
         }
         else
         {
-            data()[n] = '\0';
+            if (!sso_state() || n < kSsoCapacity)
+            {
+                data()[n] = '\0';
+            }
         }
         set_size(n);
     }
@@ -203,8 +210,14 @@ public:
         reserve(old + 1);
         char* p = data();
         p[old] = c;
-        p[old + 1] = '\0';
-        set_size(old + 1);
+        const usize new_size = old + 1;
+        // In SSO mode at capacity, set_size places '\0' via size_or_flag = 0;
+        // writing p[kSsoCapacity] directly would be UB (past buf end).
+        if (!sso_state() || new_size < kSsoCapacity)
+        {
+            p[new_size] = '\0';
+        }
+        set_size(new_size);
     }
 
     void pop_back() noexcept
@@ -230,8 +243,12 @@ public:
         reserve(old + n);
         char* p = data();
         std::memcpy(p + old, s, n);
-        p[old + n] = '\0';
-        set_size(old + n);
+        const usize new_size = old + n;
+        if (!sso_state() || new_size < kSsoCapacity)
+        {
+            p[new_size] = '\0';
+        }
+        set_size(new_size);
     }
 
     void shrink_to_fit()
@@ -247,8 +264,11 @@ public:
             char* heap_data = m_heap.data;
             memory::IAllocator* alloc = m_alloc;
             std::memcpy(m_small.buf, heap_data, n);
-            m_small.buf[n] = '\0';
-            m_small.size_or_flag = static_cast<u8>(n);
+            m_small.size_or_flag = static_cast<u8>(kSsoCapacity - n); // remaining-capacity encoding
+            if (n < kSsoCapacity)
+            {
+                m_small.buf[n] = '\0';
+            }
             alloc->deallocate(heap_data);
             return;
         }
@@ -327,7 +347,7 @@ private:
         struct
         {
             char buf[kSsoCapacity];
-            u8 size_or_flag; // 0..23 = small; 0xFF = heap sentinel
+            u8 size_or_flag; // 0..23 = remaining SSO capacity; 0xFF = heap sentinel
         } m_small;
 
         struct
@@ -364,7 +384,7 @@ private:
         if (sso_state())
         {
             CRD_ASSERT(n <= kSsoCapacity);
-            m_small.size_or_flag = static_cast<u8>(n);
+            m_small.size_or_flag = static_cast<u8>(kSsoCapacity - n); // remaining capacity
         }
         else
         {
@@ -376,7 +396,7 @@ private:
     void init_empty() noexcept
     {
         m_small.buf[0] = '\0';
-        m_small.size_or_flag = 0;
+        m_small.size_or_flag = kSsoCapacity; // remaining = kSsoCapacity, size = 0
     }
 
     void init_from(const char* s, usize n)
@@ -387,8 +407,14 @@ private:
             {
                 std::memcpy(m_small.buf, s, n);
             }
-            m_small.buf[n] = '\0';
-            m_small.size_or_flag = static_cast<u8>(n);
+            // remaining-capacity encoding: size_or_flag = kSsoCapacity - n.
+            // When n == kSsoCapacity, size_or_flag = 0 = '\0', which serves as
+            // the null terminator so buf[kSsoCapacity] is never accessed (UB avoided).
+            m_small.size_or_flag = static_cast<u8>(kSsoCapacity - n);
+            if (n < kSsoCapacity)
+            {
+                m_small.buf[n] = '\0';
+            }
             return;
         }
         // Heap.

@@ -249,8 +249,13 @@ add_subdirectory(engine/shader)
 add_subdirectory(engine/rhi)
 add_subdirectory(engine/rhi-vulkan)
 add_subdirectory(engine/jobs)
+add_subdirectory(engine/resources)
 # add_subdirectory(engine/graphics)
 # add_subdirectory(engine/scripting)
+
+# ----- Tools ----------------------------------------------------------------
+
+add_subdirectory(tools/asset_cooker)
 
 # ----- Runtime executable ---------------------------------------------------
 

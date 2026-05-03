@@ -31,7 +31,7 @@
 | 2.3   Shader system             | ✅ shipped (a–g) | `docs/phases/phase-2.3-shader.md`        |
 | 2.4   Renderer v1               | 🚧 active        | `docs/phases/phase-2-graphics.md` (v1a–i shipped; v1j = GPU instancing, Phase 3.2 dep) |
 | 2.5   Jobs (threads + fibers)   | ✅ shipped       | `docs/phases/phase-2.5-jobs.md` (v1a–v1k all shipped; ADR-0033) |
-| 2.6   Resources + asset cooker  | ⏳               | `docs/phases/phase-2-graphics.md`        |
+| 2.6   Resources + asset cooker  | 🚧 active        | `docs/phases/phase-2.6-resources.md` (architecture locked v1a–v1g; ADRs 0036–0041) |
 | 3     Simulation foundation     | ⏳               | `docs/phases/phase-3-simulation.md` (3.0 scene/ECS → 3.1 physics → 3.2 animation → 3.3 audio → 3.4–3.6) |
 | 4     Extensibility + Networking | ⏳              | `docs/phases/phase-4-extensibility.md` (4.0 C++ scripting, 4.1 advanced math, 4.2 networking; ADR-0034, ADR-0035) |
 | 5     UI + node + advanced render | ⏳             | `docs/phases/phase-5-ui-rendering.md`    |

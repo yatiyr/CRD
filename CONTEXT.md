@@ -11,13 +11,17 @@
 
 ## Current focus
 
-**Phase 2.5 — `crd-jobs` fiber-based job system. COMPLETE (v1a–v1k all shipped).**
+**Phase 2.6 — `crd-resources` + asset cooker. v1a SHIPPED.**
 
-All 11 slices done. Phase 2.6 (`crd-resources` + asset cooker) is next.
+v1a shipped: `ResourceId` (UUID v4/v5), CRDR chunked binary container, `ManifestEntry` (48-byte
+disk format), `ResourceManager` shell (register + mount + unmount + collision), `manifest_dump`
+CLI sub-command. 38 new tests. String SSO regression (new MSVC 14.50.35717) fixed simultaneously.
 
-Full design packet: `docs/phases/phase-2.5-jobs.md`.
+Next: v1b (cooker cook subcommand + zstd), then v1c (`RefCounted<T>` + `ResourceHandle<T>`).
 
-Aktif phase dosyaları: `docs/phases/phase-2.6-resources.md` (next)
+Full design packet: `docs/phases/phase-2.6-resources.md`.
+
+Aktif phase dosyası: `docs/phases/phase-2.6-resources.md` (active)
 
 ## Active detour
 
@@ -29,6 +33,30 @@ _none — running on the main roadmap._
 > `docs/detours/README.md`.
 
 ## Last shipped milestone
+
+**2026-05-03 — Phase 2.6 v1a shipped: `crd-resources` + `asset_cooker` manifest_dump.**
+
+`ResourceId` (UUID v4 via mt19937_64, UUID v5 via SHA-1 SHA-1 + Cerid namespace, parse/to_string,
+36-char hyphenated format). CRDR chunked binary container (reader + writer, chunk sort, 16-byte
+padding, LE serialization). `ManifestEntry` 48-byte disk format (MFST/STRP/DEPS chunks).
+`ResourceManager` shell: `register_loader`, `mount_manifest` (reads CRDR PACK, populates live
+index, newest-mount-wins collision), `unmount` (by MountId). `asset_cooker manifest_dump` CLI
+sub-command. 38 new tests across three test files.
+
+Also fixed: `crd-containers String` SSO encoding changed to remaining-capacity (`size_or_flag =
+kSsoCapacity - size`) to eliminate `buf[kSsoCapacity]` UB exposed by new MSVC 14.50.35717
+optimizer. A 23-char SSO string now has `size_or_flag = 0 = '\\0'` which doubles as the null
+terminator, so `c_str()` is always correct and no out-of-bounds array access occurs.
+
+Six-configuration green:
+- win-debug:          393/393
+- win-relwithdebinfo: 393/393
+- win-release:        390/390
+- win-asan:           393/393
+- win-clang-cl:       393/393
+- win-tidy:           393/393
+
+## Previous shipped milestone
 
 **2026-05-02 — `crd-jobs` v1k integration smoke + crd-app wiring shipped. Phase 2.5 COMPLETE.**
 
@@ -503,17 +531,22 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Next up (next 1–3 sessions)
 
-1. **Phase 2.6** — `crd-resources` + asset cooker (handle table, ref-counted assets, on-disk cook cache, hot-reload notifications).
-2. **Phase 3.0** — `crd-scene` / ECS (hybrid hierarchy + SoA components + TOML → binary serialization).
-3. **Phase 3.1** — Physics (PhysX 5 backend + scene integration + fixed-step + deterministic mode).
+1. **Phase 2.6 v1b** — `tools/asset_cooker/` cook subcommand, blob passthrough cook handler, CMake `cook` target, `cook.log.toml` determinism, zstd compression wired.
+2. **Phase 2.6 v1c** — `crd::memory::RefCounted<T>` (ADR-0014 prerequisite) → `ResourceHandle<T>` + `ILoader` + `load_sync<T>` + transitive dependency resolution.
+3. **Phase 2.6 v1d** — Async I/O via `crd-platform` `AsyncFile`; `load_async<T>`.
 
 ## Roadmap ordering (post-jobs)
 
-After `crd-jobs` v1k ships:
-- **Phase 2.6** — Resource system + asset cooker (handle table, ref-counted assets, on-disk cook cache, hot-reload notifications).
-- **Phase 3.0** — `crd-scene` / ECS (hybrid hierarchy + SoA components + TOML → binary serialization). **Ships before physics** — physics integration requires a scene to sync transforms into.
+- **Phase 2.6** — `crd-resources` + asset cooker. Seven slices v1a–v1g: binary manifest +
+  ResourceId (UUID hybrid), cooker CLI, sync handles + loaders, async via `crd-platform`
+  `AsyncFile`, shader + material loaders end-to-end, hot-reload, streaming + 2Q eviction.
+  Architecture: ADRs 0036–0041. Loader-registry pattern keeps `crd-resources` LOW in the
+  dependency graph (no `crd-rhi`/`crd-shader`/`crd-renderer` deps).
+- **Phase 3.0** — `crd-scene` / ECS (hybrid hierarchy + SoA components + TOML → binary
+  serialization). **Ships before physics** — physics integration requires a scene to sync
+  transforms into. Plugs into `crd-resources` as a `SceneLoader`.
 - **Phase 3.1** — Physics (PhysX 5 backend + scene integration + fixed-step + deterministic mode).
-- **Phase 4.0** — C++ hot-reload DLL scripting (ADR-0034).
+- **Phase 4.0** — C++ hot-reload DLL scripting (ADR-0034). Cooker handler plug-ins ride this same DLL substrate.
 - **Phase 4.2** — Networking: transport layer → deterministic simulation → client-server sync (ADR-0035).
 - **Phase 8** — Domain modules: robotics, aerospace, cinematic, procedural generation — after Phase 4 + editor foundations.
 
@@ -528,12 +561,12 @@ Full plan: `docs/ROADMAP.md` → `docs/phases/`.
 
 ## Test counts (last quality pass)
 
-- win-debug:          355/355
-- win-relwithdebinfo: 355/355
-- win-release:        352/352
-- win-asan:           355/355
-- win-clang-cl:       355/355
-- win-tidy:           355/355 (exit 0)
+- win-debug:          393/393
+- win-relwithdebinfo: 393/393
+- win-release:        390/390
+- win-asan:           393/393
+- win-clang-cl:       393/393
+- win-tidy:           393/393
 
 (win-release is 3 fewer: debug-only `FiberState` tests excluded by `#if CRD_ENABLE_ASSERTS`)
 
@@ -543,7 +576,7 @@ Agents: don't read everything. Use these breadcrumbs.
 
 - **Hub:** `docs/ROADMAP.md` (small navigation page; safe to read fully)
 - **Principles:** `docs/PRINCIPLES.md` (read every session, short)
-- **Active phase only:** `docs/phases/phase-2-graphics.md` (2.6 resources next) and `docs/phases/phase-2.5-jobs.md` (reference; complete)
+- **Active phase only:** `docs/phases/phase-2.6-resources.md` (active) and `docs/phases/phase-2.5-jobs.md` (reference; complete)
 - **Other phases:** `docs/phases/phase-<X>.md` (read ONLY when relevant)
 - **Specific decision:** `docs/decisions/<NNNN>-<slug>.md` (find via
   `docs/decisions/README.md` tag index)
@@ -560,6 +593,8 @@ When in doubt, ASK before reading large files.
 
 ## Session log (rolling, last 5)
 
+- **2026-05-03** — Phase 2.6 v1a shipped: `crd-resources` (ResourceId, CRDR, ResourceManager shell) + `asset_cooker manifest_dump`; String SSO remaining-capacity fix; all 6 configs green (393/393).
+- **2026-05-03** — Phase 2.6 architecture designed and documented; ADRs 0036–0041 written; `phase-2.6-resources.md` created; `crd-resources` placement, ResourceId UUID scheme, CRDR container format, ResourceHandle semantics, cooker CLI + CMake, and `crd-platform` async I/O all locked. No code shipped this session.
 - **2026-05-02** — `crd-jobs` v1k integration smoke + crd-app wiring shipped; Phase 2.5 COMPLETE; all 6 configs green (355/355 win-debug).
 - **2026-05-02** — `crd-jobs` v1j per-thread frame allocator shipped; 4 new tests; all 6 configs green (355/355 win-debug).
 - **2026-05-02** — `crd-jobs` v1i SBO lambda helpers shipped; `make_job<F>()` + `parallel_for()`; 5 new tests; all 6 configs green (351/351 win-debug).
