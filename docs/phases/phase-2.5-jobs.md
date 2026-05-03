@@ -119,17 +119,17 @@ enum class StackSize : u8 { Small, Medium, Large };
 // use make_job<F> for closure convenience.
 struct alignas(64) JobDecl
 {
-    void      (*fn)(void*) = nullptr;
-    void*       data       = nullptr;
-    StackSize   stack      = StackSize::Small;
-    Priority    priority   = Priority::Normal;
-    i32         pin_thread = -1;         // -1 = any thread; 0 = main OS thread
-    u8          _pad[38]   = {};
+    void     (*fn)(void*) = nullptr;
+    void*      data       = nullptr;
+    i32        pin_thread = -1;        // -1 = any thread; 0 = main OS thread
+    StackSize  stack      = StackSize::Small;
+    Priority   priority   = Priority::Normal;
+    u8         _pad[42]   = {};        // [0..7] Counter*; [8] SBO flag; [9..41] SBO bytes
 };
 static_assert(sizeof(JobDecl) == 64);
 
-// make_job — wraps a callable into a JobDecl using 48-byte SBO.
-// Callables larger than 48 bytes must use the raw fn/data form.
+// make_job — wraps a callable into a JobDecl using 41-byte SBO.
+// Callables larger than 41 bytes must use the raw fn/data form.
 template<typename F>
 [[nodiscard]] JobDecl make_job(F&& fn,
                                StackSize stack    = StackSize::Small,

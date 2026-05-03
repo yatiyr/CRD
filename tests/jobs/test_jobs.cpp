@@ -657,3 +657,151 @@ TEST_CASE("jobs: frame_reset allows full capacity to be reused", "[jobs][frame-a
 
     crd::jobs::shutdown();
 }
+
+// ===========================================================================
+// Main-thread pump + wait() deadlock fix
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// 25. pump_main_thread_once() returns true when there is a queued job,
+//     false when the queues are empty.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("jobs: pump_main_thread_once returns true/false correctly", "[jobs][pump]")
+{
+    crd::jobs::Config cfg;
+    cfg.num_threads = 1U; // only thread 0 — no background workers
+    crd::jobs::init(cfg);
+
+    std::atomic<int> done{0};
+    auto j = crd::jobs::make_job([&done]()
+    {
+        done.fetch_add(1, std::memory_order_release);
+    });
+    crd::jobs::Counter* c = crd::jobs::run(j);
+
+    // Queue has one job — pump must return true.
+    const bool had_work = crd::jobs::pump_main_thread_once();
+    REQUIRE(had_work);
+    CHECK(done.load() == 1);
+
+    // Queue is now empty — pump must return false.
+    const bool no_work = crd::jobs::pump_main_thread_once();
+    CHECK_FALSE(no_work);
+
+    // Counter was acquired by run() — wait() releases it.
+    crd::jobs::wait(c);
+    crd::jobs::shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// 26. wait() from main thread on a thread-0-pinned job with a single-thread
+//     pool does NOT deadlock. Before the fix, the spin loop called yield()
+//     only, so the pinned job never ran and wait() spun forever.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("jobs: wait on thread-0-pinned job single-thread no deadlock", "[jobs][pump]")
+{
+    crd::jobs::Config cfg;
+    cfg.num_threads = 1U; // only thread 0 — no background workers
+    crd::jobs::init(cfg);
+
+    std::atomic<int> done{0};
+
+    // Raw job pinned to thread 0.
+    crd::jobs::JobDecl pinned{};
+    pinned.fn = [](void* d)
+    {
+        static_cast<std::atomic<int>*>(d)->fetch_add(1, std::memory_order_release);
+    };
+    pinned.data       = &done;
+    pinned.pin_thread = 0;
+    pinned.priority   = crd::jobs::Priority::Normal;
+
+    crd::jobs::Counter* c = crd::jobs::run(pinned);
+    // wait() must pump thread 0's queues internally — must not deadlock.
+    crd::jobs::wait(c);
+    CHECK(done.load() == 1);
+
+    crd::jobs::shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// 27. JobFence basic usage: run → fence → fence.wait() → job complete.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("jobs: JobFence basic usage", "[jobs][fence]")
+{
+    crd::jobs::Config cfg;
+    cfg.num_threads = 2U;
+    crd::jobs::init(cfg);
+
+    std::atomic<int> done{0};
+    auto j = crd::jobs::make_job([&done]()
+    {
+        done.fetch_add(1, std::memory_order_release);
+    });
+
+    crd::jobs::JobFence fence(crd::jobs::run(j));
+    CHECK(fence.valid());
+
+    fence.wait();
+    CHECK_FALSE(fence.valid());
+    CHECK(done.load() == 1);
+
+    crd::jobs::shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// 28. JobFence move semantics: moved-from fence is empty; moved-to fence owns it.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("jobs: JobFence move semantics", "[jobs][fence]")
+{
+    crd::jobs::Config cfg;
+    cfg.num_threads = 2U;
+    crd::jobs::init(cfg);
+
+    std::atomic<int> done{0};
+    auto j = crd::jobs::make_job([&done]()
+    {
+        done.fetch_add(1, std::memory_order_release);
+    });
+
+    crd::jobs::JobFence a(crd::jobs::run(j));
+    REQUIRE(a.valid());
+
+    crd::jobs::JobFence b(std::move(a));
+    CHECK_FALSE(a.valid()); // NOLINT(clang-analyzer-cplusplus.Move) — intentional post-move check
+    CHECK(b.valid());
+
+    b.wait();
+    CHECK(done.load() == 1);
+    CHECK_FALSE(b.valid());
+
+    crd::jobs::shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// 29. Shutdown with raw (no-counter) pending jobs in the queue does not crash.
+//     Jobs pushed via pool.push() bypass the counter system; they may not run
+//     at all if workers are stopped first.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("worker_pool: shutdown with pending raw jobs does not crash", "[jobs][worker_pool]")
+{
+    WorkerPool pool;
+    WorkerConfig cfg;
+    cfg.num_threads = 1U; // only thread 0
+    REQUIRE(pool.init(cfg));
+
+    // Push raw jobs (no counter) without consuming them.
+    // Shutdown must not assert or crash due to leftover items in the queue.
+    std::atomic<int> counter{0};
+    for (int i = 0; i < 8; ++i)
+        pool.push(make_inc_job(&counter));
+
+    pool.shutdown(); // must succeed cleanly
+    // counter may be < 8 — no jobs ran — that is expected and acceptable.
+    CHECK(pool.is_initialized() == false);
+}

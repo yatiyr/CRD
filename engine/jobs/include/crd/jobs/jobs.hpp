@@ -42,13 +42,83 @@ void shutdown();
 
 // Block until counter->value == target, then release the counter.
 // Inside a fiber: suspends the fiber cooperatively; the thread remains available for other work.
-// Outside a fiber (e.g. main thread): spins with yield() — requires at least one background
-// worker thread to be present (num_threads >= 2), otherwise deadlocks.
+// Outside a fiber on the main thread (thread 0): spins, calling pump() on each iteration so
+// thread-0-pinned jobs can make progress. Safe even with a single-thread pool.
+// Outside a fiber on any other unenrolled thread: spins with yield(); requires at least one
+// background worker thread (num_threads >= 2) to decrement the counter, otherwise deadlocks.
 void wait(Counter* counter, crd::u32 target = 0U);
 
 // Convenience: submit + wait; counter released before returning.
 void run_and_wait(std::span<const JobDecl> jobs);
 void run_and_wait(const JobDecl& job);
+
+// ---------------------------------------------------------------------------
+// JobFence — RAII owner of a Counter* returned by run().
+//
+// In debug builds the destructor asserts if wait() was never called, catching
+// accidental counter leaks before they reach the pool's shutdown assert.
+// No auto-blocking: if you want fire-and-forget call release_without_wait().
+// ---------------------------------------------------------------------------
+
+class JobFence
+{
+public:
+    JobFence()                       noexcept = default;
+    explicit JobFence(Counter* c)    noexcept : m_counter(c) {}
+
+    ~JobFence() noexcept
+    {
+        CRD_ASSERT_MSG(m_counter == nullptr,
+                       "JobFence destroyed without wait() — counter pool slot leaked");
+    }
+
+    JobFence(const JobFence&)              = delete;
+    JobFence& operator=(const JobFence&)   = delete;
+
+    JobFence(JobFence&& o) noexcept : m_counter(o.m_counter) { o.m_counter = nullptr; }
+    JobFence& operator=(JobFence&& o) noexcept
+    {
+        CRD_ASSERT_MSG(m_counter == nullptr,
+                       "JobFence: move-assigned over an uncompleted fence — counter leaked");
+        m_counter   = o.m_counter;
+        o.m_counter = nullptr;
+        return *this;
+    }
+
+    void wait(crd::u32 target = 0U)
+    {
+        CRD_ASSERT_MSG(m_counter != nullptr, "JobFence::wait called on an empty fence");
+        crd::jobs::wait(m_counter, target);
+        m_counter = nullptr;
+    }
+
+    [[nodiscard]] bool valid() const noexcept { return m_counter != nullptr; }
+
+    // Suppress the destructor assert — caller explicitly accepts responsibility.
+    // Note: the counter slot remains acquired; this leaks unless another call
+    // to crd::jobs::wait() on the same pointer clears it externally.
+    void release_without_wait() noexcept { m_counter = nullptr; }
+
+private:
+    Counter* m_counter = nullptr;
+};
+
+// ---------------------------------------------------------------------------
+// Main-thread pump — drain one (or all) jobs from thread 0's queues.
+//
+// Must be called from the main thread (thread 0) after init(). Returns true
+// if at least one job was found and executed, false if all queues were empty.
+//
+// pump_main_thread_once()    — drain-execute one job and return.
+// pump_main_thread_until_idle() — loop until all queues are empty; returns
+//                                 true if any work was done.
+//
+// Application::tick() calls pump_main_thread_once() automatically. Explicit
+// calls are only needed in hand-rolled game loops or unit tests.
+// ---------------------------------------------------------------------------
+
+[[nodiscard]] bool pump_main_thread_once();
+[[nodiscard]] bool pump_main_thread_until_idle();
 
 // Introspection — valid after init().
 [[nodiscard]] bool      is_worker_fiber() noexcept; // true when called from inside a job fiber

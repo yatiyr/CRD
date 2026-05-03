@@ -81,11 +81,18 @@ void wait(Counter* counter, crd::u32 target)
 
     if (current_fiber == nullptr)
     {
-        // Non-fiber path (e.g. main thread): spin until counter reaches target.
-        // Background worker threads must be present to decrement the counter;
-        // calling wait() from a non-fiber context with num_threads == 1 deadlocks.
+        // Non-fiber spin path.
+        // If we are on thread 0 (main/enrolled), call pump() each iteration so
+        // thread-0-pinned jobs can make progress even with a single-thread pool.
+        // For any other unenrolled thread just yield — background workers must exist.
+        const bool is_main = (detail::tl_worker_pool() == &g_pool)
+                              && (detail::tl_thread_index() == 0U);
         while (counter->value.load(std::memory_order_acquire) != target)
+        {
+            if (is_main && g_pool.pump())
+                continue;
             std::this_thread::yield();
+        }
     }
     else
     {
@@ -109,6 +116,31 @@ void run_and_wait(std::span<const JobDecl> jobs)
 void run_and_wait(const JobDecl& job)
 {
     wait(run(job));
+}
+
+// ---------------------------------------------------------------------------
+// Main-thread pump
+// ---------------------------------------------------------------------------
+
+bool pump_main_thread_once()
+{
+    CRD_ASSERT_MSG(g_pool.is_initialized(),
+                   "crd::jobs::pump_main_thread_once: call init() first");
+    CRD_ASSERT_MSG((detail::tl_worker_pool() == &g_pool) && (detail::tl_thread_index() == 0U),
+                   "pump_main_thread_once: must be called from the enrolled main thread (thread 0)");
+    return g_pool.pump();
+}
+
+bool pump_main_thread_until_idle()
+{
+    CRD_ASSERT_MSG(g_pool.is_initialized(),
+                   "crd::jobs::pump_main_thread_until_idle: call init() first");
+    CRD_ASSERT_MSG((detail::tl_worker_pool() == &g_pool) && (detail::tl_thread_index() == 0U),
+                   "pump_main_thread_until_idle: must be called from the enrolled main thread (thread 0)");
+    bool did_work = false;
+    while (g_pool.pump())
+        did_work = true;
+    return did_work;
 }
 
 // ---------------------------------------------------------------------------

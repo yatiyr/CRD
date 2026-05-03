@@ -109,6 +109,7 @@ bool Application::tick()
         layer->on_render();
     }
 
+    (void)crd::jobs::pump_main_thread_once();
     return m_running;
 }
 
