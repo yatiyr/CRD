@@ -40,7 +40,7 @@ set_source_files_properties(${CRDI_IMGUI_THIRD_PARTY_SOURCES} PROPERTIES
 target_include_directories(crd-imgui
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
-    PRIVATE
+    SYSTEM PRIVATE
         "${imgui_SOURCE_DIR}"
         "${imgui_SOURCE_DIR}/backends"
 )
