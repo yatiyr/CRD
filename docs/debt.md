@@ -9,14 +9,15 @@ _(none — all items cleared as of 2026-05-03)_
 
 ---
 
-## Material system v1 known gaps (tackle after Phase 2.6 v1g ships)
+## Material system v1 known gaps
 
 `MaterialResource` as shipped in v1e is a loader proof-of-concept, not a production material abstraction.
-The gaps below are **not blockers** for v1f/v1g, but should be the first thing addressed when we return
-to the renderer after the resource system is complete. Work roughly in the order listed — each item
-builds on the previous.
+Status per Phase 2.7 / 2.8 planning (ADR-0044):
+- **Item 1** — Closed by Phase 2.7 v1c (TextureResource + material params/textures).
+- **Items 2–3** — Scheduled for Phase 2.8 (PSO state + pass-keyed variants). Prerequisites for Phase 3.0 scene/ECS.
+- **Items 4–5** — Deferred to Phase 3.4+ (no consumer until CSM / post-FX / compute passes exist).
 
-### 1. Material parameters (uniforms + textures)
+### 1. Material parameters (uniforms + textures) ✅ Closes Phase 2.7 v1c
 
 **What's missing:** `MaterialResource` holds two shader handles and nothing else. There is no place to
 store per-material uniform values (albedo color, roughness, metallic factor, emissive scale, tiling) or
@@ -34,7 +35,7 @@ texture slot bindings (albedo map UUID, normal map UUID, roughness/metallic map 
 **Why deferred:** `TextureResource` and `TextureResourceLoader` don't exist yet (no texture asset cooker
 path). Land texture cooker first, then wire material parameters.
 
-### 2. PSO state in the material artifact
+### 2. PSO state in the material artifact — Scheduled Phase 2.8 v1a
 
 **What's missing:** Blend mode, depth test, depth write, stencil, cull mode, alpha mode, fill mode —
 all the per-pipeline-state that varies wildly across opaque / masked / transparent / decal / wireframe
@@ -52,7 +53,7 @@ in `ForwardRenderPath`.
 **Why deferred:** `PipelineResolver` is currently a stub with no per-material pipeline cache. Landing a
 real pipeline cache (keyed by `(VariantKey, RasterState)`) is a prerequisite.
 
-### 3. Shader variant awareness (VariantKey integration)
+### 3. Shader variant awareness (VariantKey integration) — Scheduled Phase 2.8 v1b
 
 **What's missing:** The `VariantKey` / `VariantPipelineDesc` machinery from `crd-shader` (ADR-0026,
 Phase 2.3d/g) is entirely disconnected from `MaterialResource`. The material has no concept of render
@@ -74,7 +75,7 @@ in before the artifact format can be defined. Also needs at least two distinct r
 `ForwardRenderPath` (depth prepass + main color) to be worth exercising — those exist in v1g but
 the depth pipeline is currently using the full vertex+fragment pipeline.
 
-### 4. Descriptor layout — per-material bindings
+### 4. Descriptor layout — per-material bindings — Deferred Phase 3.4
 
 **What's missing:** Nothing in `MaterialResource` drives descriptor set creation or layout at set 1+
 (per-material bindings). The existing `VulkanDescriptorAllocator` and `MaterialInstance` (in `crd-renderer`)
@@ -91,7 +92,7 @@ exist but are wired to hardcoded descriptor set layouts, not material-artifact-d
 **Why deferred:** Blocked on item 1 (texture slot table) and item 2 (stable pipeline key). Without
 real texture slots the descriptor layout is always trivial and the value isn't visible.
 
-### 5. Additional shader stages
+### 5. Additional shader stages — Deferred Phase 3.5+
 
 **What's missing:** The 32-byte META chunk has exactly two UUID slots (vert + frag). There is no room
 for a compute shader, geometry shader, mesh shader, or task shader. A compute-only material (post-FX,
@@ -111,14 +112,12 @@ so defer until all the other format changes above are batched in.
 
 ---
 
-**Suggested order:** 1 (parameters/textures) → 2 (PSO state + pipeline cache) → 3 (variant awareness) →
-4 (descriptor layout) → 5 (additional stages). Items 1–3 can be partially parallelised once
-`TextureResource` exists. All five should land before Phase 3.0 scene integration so the scene loader
-can reference fully-specified materials.
+**Execution plan (ADR-0044):**
+- Phase 2.7 v1c closes item 1.
+- Phase 2.8 closes items 2 and 3 (prerequisites for scene/ECS draw classification).
+- Items 4 and 5 remain open; deferred until CSM/post-FX consumers in Phase 3.4+ create real demand.
 
-**Phase 2.7 closes item 1.** `TextureResource` (Phase 2.7 v1a) and the material parameter extension
-(Phase 2.7 v1c) directly address item 1. Items 2–5 remain open after Phase 2.7 and should be the first
-renderer work when we return from scene/ECS. See `docs/phases/phase-2.7-asset-import.md`.
+See `docs/phases/phase-2.7-asset-import.md`, `docs/phases/phase-2.8-material-completion.md`, ADR-0044.
 
 ## Long-term deferred
 

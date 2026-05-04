@@ -11,15 +11,20 @@
 
 ## Current focus
 
-**Phase 2.6 — `crd-resources` + asset cooker. v1g SHIPPED. Phase 2.6 COMPLETE.**
+**Phase 2.7 — Asset import bootstrap. Next: v1a (`TextureResource` + texture cooker).**
 
-v1g shipped: 2Q LRU eviction (Johnson & Shasha 1994), memory budget (`set_memory_budget`/`current_memory_use`), `pin`/`unpin` (ref-counted, eviction-exempt), `load_streamed<T>` (delivers payload via `crd::platform::AsyncFile` inside a job fiber). Evicted blocks stay in `m_handles` as `Unloaded`; re-load reuses the existing block and bumps `generation`. 5 new unit tests in `test_eviction.cpp`. `smoke_resources_stream.exe` end-to-end smoke.
+Phase 2.7 slices:
+- v1a: `TextureResource` + stb_image texture cooker (RGBA8/BC7, mip gen, TXTR artifact)
+- v1b: `MeshResource` + cgltf glTF import (static meshes, interleaved 48B/vert, MESH artifact)
+- v1c: Material parameter wiring — extends `MaterialResource` with `HashMap<String,Vec4f>` parameters + texture slots; closes debt item 1
+- v1d: `GpuTextureUploader` + `GpuMeshUploader` + `smoke_asset_import.exe` (first real mesh+texture on screen)
+- v1e: **`crd-meshgen`** (CPU-side procedural geometry: sphere/icosphere/box/capsule/cylinder/cone/plane/torus; `smoke_meshgen.exe`; headless) + **`crd-sandbox`** bootstrap (`crd-app` + `LayerStack`, ImGui asset browser, `--headless` CI mode, `assets/source/` demo assets: BoxTextured.glb, Duck.glb, Suzanne.glb + CC0 textures)
 
-Next: Phase 2.7 — `TextureResource` + `MeshResource` + glTF import (cgltf) + material parameter wiring; first real mesh + texture on screen.
+After Phase 2.7: **Phase 2.8** — material completion (debt items 2–3: per-material PSO state + `MaterialDomain` enum + pass-keyed variants + depth-only prepass). Then Phase 3.0 scene/ECS. See ADR-0044, ADR-0046.
 
-Full design packet: `docs/phases/phase-2.6-resources.md`.
+Full design packet: `docs/phases/phase-2.7-asset-import.md`.
 
-Aktif phase dosyası: `docs/phases/phase-2.6-resources.md` (active)
+Aktif phase dosyası: `docs/phases/phase-2.7-asset-import.md` (active)
 
 ## Active detour
 
@@ -635,22 +640,27 @@ Three-flavour green:
 
 Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
-## Next up (next 1–3 sessions)
+## Next up (next 1–5 sessions)
 
-1. **Phase 2.7** — Asset import bootstrap: `TextureResource` + `MeshResource` + glTF import (cgltf) + material parameter wiring; first real mesh + texture on screen. Closes material debt item 1. See `docs/phases/phase-2.7-asset-import.md`.
+1. **Phase 2.7 v1a** — `TextureResource` + stb_image texture cooker. `smoke_texture.exe`. See `docs/phases/phase-2.7-asset-import.md`.
+2. **Phase 2.7 v1b** — `MeshResource` + cgltf glTF import (static meshes only). Mesh cooker handler.
+3. **Phase 2.7 v1c** — Material parameter wiring: extend `MaterialResource` with parameters + texture slots. Closes debt item 1.
+4. **Phase 2.7 v1d** — GPU upload (`GpuTextureUploader`, `GpuMeshUploader`) + `smoke_asset_import.exe`. First real mesh+texture on screen.
+5. **Phase 2.7 v1e** — `crd-meshgen` (procedural geometry, headless) + `crd-sandbox` bootstrap (ImGui asset browser, `--headless` CI mode, `assets/source/` demo assets).
+6. **Phase 2.8** — Material completion: per-material PSO state + `MaterialDomain` + pass-keyed variants + depth-only prepass. ADRs 0044, 0046.
 
-## Roadmap ordering (post-jobs)
+## Roadmap ordering
 
-- **Phase 2.6** — `crd-resources` + asset cooker. Seven slices v1a–v1g: binary manifest +
-  ResourceId (UUID hybrid), cooker CLI, sync handles + loaders, async via `crd-platform`
-  `AsyncFile`, shader + material loaders end-to-end, hot-reload, streaming + 2Q eviction.
-  Architecture: ADRs 0036–0041. Loader-registry pattern keeps `crd-resources` LOW in the
-  dependency graph (no `crd-rhi`/`crd-shader`/`crd-renderer` deps).
-- **Phase 3.0** — `crd-scene` / ECS (hybrid hierarchy + SoA components + TOML → binary
-  serialization). **Ships before physics** — physics integration requires a scene to sync
-  transforms into. Plugs into `crd-resources` as a `SceneLoader`.
+- **Phase 2.6** — `crd-resources` + asset cooker. ✅ COMPLETE (v1a–v1g, 2026-05-04). ADRs 0036–0041.
+- **Phase 2.7** — Asset import bootstrap: `TextureResource` + `MeshResource` + glTF (cgltf) + material params + GPU upload + `crd-meshgen` + `crd-sandbox`. ADRs 0042–0043, 0045.
+- **Phase 2.8** — Material completion: per-material PSO state (RAST chunk) + `MaterialDomain` (DOMN chunk) + pass-keyed variants (PASS chunk) + depth-only prepass. Closes debt items 2–3. ADRs 0044, 0046.
+- **Phase 3.0** — `crd-scene` / ECS (hybrid hierarchy + SoA components + TOML → binary serialization + renderer integration). Seven sub-ADRs needed before coding. Plugs into `crd-resources` as `SceneLoader`.
 - **Phase 3.1** — Physics (PhysX 5 backend + scene integration + fixed-step + deterministic mode).
-- **Phase 4.0** — C++ hot-reload DLL scripting (ADR-0034). Cooker handler plug-ins ride this same DLL substrate.
+- **Phase 3.2** — Animation (skeletal, blend trees, IK). First rig + skin data in `MeshResource`.
+- **Phase 3.3** — `crd-font` (MTSDF atlas, FreeType+msdfgen cooker, HarfBuzz shaping, billboard text, dynamic atlas, extruded text mesh). ADR-0047.
+- **Phase 3.4** — Audio (spatialized, DAW plugin host scaffold).
+- **Phase 3.5–3.7** — PBR + post-FX + culling (IBL, CSM, ACES, bloom, TAA, BVH, GPU-driven). Closes debt items 4–5.
+- **Phase 4.0** — C++ hot-reload DLL scripting (ADR-0034).
 - **Phase 4.2** — Networking: transport layer → deterministic simulation → client-server sync (ADR-0035).
 - **Phase 8** — Domain modules: robotics, aerospace, cinematic, procedural generation — after Phase 4 + editor foundations.
 
@@ -680,7 +690,7 @@ Agents: don't read everything. Use these breadcrumbs.
 
 - **Hub:** `docs/ROADMAP.md` (small navigation page; safe to read fully)
 - **Principles:** `docs/PRINCIPLES.md` (read every session, short)
-- **Active phase only:** `docs/phases/phase-2.6-resources.md` (active) and `docs/phases/phase-2.5-jobs.md` (reference; complete)
+- **Active phase only:** `docs/phases/phase-2.7-asset-import.md` (active); `docs/phases/phase-2.8-material-completion.md` (next); `docs/phases/phase-3.3-font.md` (planned); `docs/phases/phase-2.6-resources.md` (reference; complete)
 - **Other phases:** `docs/phases/phase-<X>.md` (read ONLY when relevant)
 - **Specific decision:** `docs/decisions/<NNNN>-<slug>.md` (find via
   `docs/decisions/README.md` tag index)

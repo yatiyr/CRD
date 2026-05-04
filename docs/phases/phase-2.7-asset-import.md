@@ -21,7 +21,11 @@ This slice pays off three things simultaneously:
 
 **Out of scope for Phase 2.7:**
 - Skybox / IBL / environment maps — needs HDR pipeline + tonemap pass (Phase 3.4).
-- Skeletal animation or morph targets in glTF.
+- Skeletal animation or morph targets in glTF — **firmly deferred to Phase 3.2.** Joint hierarchies,
+  skin weights, and blend shapes stored without a scene transform hierarchy or animation sampler are
+  bytes-on-disk with no consumer (violates vertical-slice principle). The binary format would also be
+  designed without Phase 3.2's input. Re-cook from source when Phase 3.2 lands; the cooker is idempotent
+  by design. Decision recorded in ADR-0044.
 - BC7 GPU texture compression (gated behind `CRD_COOK_BC7`; optional in v1a, not required).
 - Physics collision shapes derived from mesh data (Phase 3.1).
 - GPU-driven rendering or instanced mesh draws (Phase 3.2 dep).
@@ -222,6 +226,49 @@ Vertex layout rationale: see ADR-0043.
 **Note:** `smoke_asset_import` requires a GPU; it is skipped on headless CI. A flag or
 environment variable guards the smoke skip path.
 
+### v1e — `crd-meshgen` + sandbox bootstrap
+
+**Scope:**
+- New module `engine/meshgen/` — CPU-side procedural geometry generator. No deps on `crd-rhi`,
+  `crd-renderer`, or `crd-resources`. Depends only on `crd-math`, `crd-containers`, `crd-memory`.
+- Output: `crd::meshgen::MeshData` — interleaved 48B/vertex (pos+normal+uv0+tangent), same layout
+  as `MeshResource`. Compatible with `GpuMeshUploader` directly.
+- Shapes: `make_sphere(slices, stacks)`, `make_icosphere(subdivisions)`, `make_box(half_extents)`,
+  `make_capsule(radius, half_height, slices, stacks)`, `make_cylinder(radius, half_height, slices)`,
+  `make_cone(radius, height, slices)`, `make_plane(subdiv_x, subdiv_y, half_extents)`,
+  `make_torus(major_r, minor_r, major_seg, minor_seg)`.
+- CPU regeneration is the correct approach for changing resolution at runtime (e.g. ImGui slider).
+  Geometry shaders are NOT used (deprecated, slow on AMD, absent on Metal). See ADR-0045.
+- `smoke_meshgen.exe` (headless): generate sphere + box, assert vertex/index counts, normals unit
+  length, UVs in [0,1], tangent W = ±1, exit 0.
+- `crd-sandbox` bootstrap (gated by `CRD_BUILD_SANDBOX=ON`, default ON): `SandboxLayer` loads cooked
+  assets from `assets/source/` (BoxTextured.glb, Duck.glb, Suzanne.glb + CC0 textures), renders via
+  `ForwardRenderPath`, adds ImGui asset browser panel (browse loaded meshes/textures, click to switch),
+  and uses `crd-meshgen` shapes for comparison. `--headless` flag for CI.
+
+**Tests:**
+- `make_box` vertex count = 24 (6 faces × 4 vertices, no shared vertices).
+- `make_sphere(8,8)` vertex/index count formula check.
+- All normals have unit length (within 1e-5).
+- UV coordinates in [0,1] range for all shapes.
+- Tangent W = ±1 (bitangent sign).
+
+---
+
+## Demo assets (`assets/source/`)
+
+Initial assets committed with Phase 2.7 v1e. Attribution in `assets/source/LICENSES.md`.
+
+| File | License | Source |
+|------|---------|--------|
+| `meshes/BoxTextured.glb` | CC0 | Khronos glTF-Sample-Assets |
+| `meshes/Duck.glb` | Apache 2.0 | Khronos glTF-Sample-Assets |
+| `meshes/Suzanne.glb` | CC0 | Blender Foundation |
+| `textures/checker_512.png` | CC0 | Synthetically generated |
+| `textures/bricks_512.png` | CC0 | ambientCG.com |
+
+Phase 2.8 adds `DamagedHelmet.glb` (CC BY 4.0) when PBR shading lands.
+
 ---
 
 ## Module layout (planned additions)
@@ -239,6 +286,11 @@ engine/renderer/
     mesh_resource_loader.cpp      ← v1b
     gpu_uploader.cpp              ← v1d
 
+engine/meshgen/                   ← v1e (new module)
+  include/crd/meshgen/meshgen.hpp
+  src/meshgen.cpp
+  CMakeLists.txt
+
 tools/asset_cooker/src/cook_handlers/
   texture.cpp                     ← v1a
   gltf.cpp                        ← v1b (cgltf; emits MESH artifacts)
@@ -247,30 +299,42 @@ tests/resources/
   test_texture_loader.cpp         ← v1a
   test_mesh_loader.cpp            ← v1b
   test_material_params.cpp        ← v1c
+tests/meshgen/
+  test_meshgen.cpp                ← v1e
 
 tests/assets/                     ← bundled test assets (tiny PNG, minimal GLB, mat TOML)
   test_quad.glb
   test_checker.png
   test_basic.mat.toml
 
+assets/source/                    ← demo assets (v1e; see LICENSES.md)
+  meshes/  textures/  materials/  LICENSES.md
+
 runtime/examples/
   smoke_texture.cpp               ← v1a (CPU data only)
   smoke_asset_import.cpp          ← v1d (full GPU pipeline)
+  smoke_meshgen.cpp               ← v1e (headless, CPU data only)
+
+sandbox/                          ← v1e (crd-sandbox, CRD_BUILD_SANDBOX gate)
+  src/main.cpp
+  src/sandbox_layer.hpp/.cpp
+  src/asset_browser.hpp/.cpp
+  CMakeLists.txt
 ```
 
 ---
 
 ## Definition of done (Phase 2.7)
 
-1. All four slices (v1a–v1d) shipped with unit tests.
-2. `smoke_asset_import.exe` runs to completion (exit 0) on a Vulkan-capable machine,
-   draws one frame from a real glTF mesh + real PNG texture, no validation errors.
-3. Material debt item 1 (parameters + texture slots) closed — `MaterialResource` has
-   named texture and parameter maps populated from the artifact.
-4. Six-configuration green: win-debug / win-relwithdebinfo / win-release / win-asan /
-   win-clang-cl / win-tidy. (win-tidy skips the GPU smoke on headless CI.)
-5. ADR-0042 + ADR-0043 filed and cross-referenced here.
-6. `TextureResource` and `MeshResource` documented in `docs/systems/renderer.md`.
+1. All five slices (v1a–v1e) shipped with unit tests.
+2. `smoke_asset_import.exe` runs exit 0 on a Vulkan-capable machine; no Vulkan validation errors.
+3. `smoke_meshgen.exe` runs exit 0 on headless CI; all geometry invariants pass.
+4. `crd-sandbox --headless` exits 0 (CPU-side resource validation).
+5. `crd-sandbox` (GPU) renders BoxTextured.glb and Duck.glb interactively; asset browser switches mesh.
+6. Material debt item 1 (parameters + texture slots) closed.
+7. Six-configuration green: win-debug / win-relwithdebinfo / win-release / win-asan / win-clang-cl / win-tidy.
+8. ADR-0042, ADR-0043, ADR-0045 filed and cross-referenced here.
+9. `TextureResource`, `MeshResource`, and `crd-meshgen` documented in `docs/systems/`.
 
 ---
 
@@ -294,8 +358,10 @@ runtime/examples/
 
 - ADR-0042 — Texture cooked format + GPU upload strategy
 - ADR-0043 — MeshResource vertex layout + glTF import scope
+- ADR-0045 — Sandbox, asset layout, cook workflow, crd-meshgen
 - ADR-0013 — Asset pipeline (cooker is always a separate exe)
 - ADR-0038 — CRDR container format (chunk registry extended here)
 - ADR-0040 — Cooker CLI + CMake (cgltf and stb_image already declared as cooker deps)
 - `docs/debt.md` — Material system v1 gaps (item 1 closed by v1c; items 2–5 follow)
+- `docs/systems/sandbox.md` — crd-sandbox scope contract
 - `docs/phases/phase-2-graphics.md` — Renderer v1 context

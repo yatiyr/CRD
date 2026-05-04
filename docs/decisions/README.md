@@ -86,6 +86,9 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 - ADR-0032 — Frame graph v1
 - ADR-0042 — Texture cooked format + GPU upload strategy
 - ADR-0043 — MeshResource vertex layout + glTF import scope
+- ADR-0044 — Phase ordering: material PSO/variant completion precedes scene/ECS
+- ADR-0046 — MaterialDomain enum, node-editor future-proofing, RT hybrid strategy
+- ADR-0047 — Font rendering system (MTSDF shader, billboard text, Surface domain)
 
 ### `[culling]`
 - ADR-0017 — Culling strategy
@@ -95,6 +98,19 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 
 ### `[scene]` `[ecs]`
 - ADR-0020 — Scene & ECS hybrid + UI in scene tree
+- ADR-0044 — Phase ordering: material PSO/variant completion precedes scene/ECS
+
+### `[sandbox]` `[build]`
+- ADR-0045 — Sandbox executable, asset layout, cook workflow, crd-meshgen
+
+### `[meshgen]`
+- ADR-0045 — Sandbox executable, asset layout, cook workflow, crd-meshgen
+
+### `[post-fx]` `[rt]`
+- ADR-0046 — MaterialDomain enum, node-editor future-proofing, RT hybrid strategy
+
+### `[font]` `[text]`
+- ADR-0047 — Font rendering system (MTSDF, FreeType+msdfgen, HarfBuzz, offline+dynamic atlas, extruded text)
 
 ### `[animation]`
 - ADR-0021 — Animation architecture
@@ -102,6 +118,7 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 ### `[ui]` `[node-editor]`
 - ADR-0020 — Scene & ECS hybrid + UI in scene tree
 - ADR-0023 — UI architecture
+- ADR-0047 — Font rendering system (crd-font, crd-ui dependency)
 
 ### `[imgui]` `[vulkan]`
 - ADR-0024 — ImGui single-viewport default
@@ -162,3 +179,7 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 | 0041  | `crd-platform` async filesystem I/O            | platform, resources, jobs         | Accepted    |
 | 0042  | Texture cooked format + GPU upload strategy    | resources, renderer, cooker       | Accepted    |
 | 0043  | MeshResource vertex layout + glTF import scope | resources, renderer, cooker       | Accepted    |
+| 0044  | Phase ordering: material PSO/variant before scene/ECS | arch, renderer, scene, resources | Accepted |
+| 0045  | Sandbox executable, asset layout, cook workflow, crd-meshgen | arch, sandbox, resources, cooker, build | Accepted |
+| 0046  | MaterialDomain enum, node-editor future-proofing, RT hybrid strategy | arch, renderer, shader, materials, rt | Accepted |
+| 0047  | Font rendering system (MTSDF, FreeType+msdfgen, HarfBuzz, offline+dynamic atlas, extruded text) | arch, font, renderer, ui, text | Accepted |
