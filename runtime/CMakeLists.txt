@@ -225,6 +225,20 @@ target_link_libraries(smoke_resources_async PRIVATE
 )
 crd_enable_default_pch(smoke_resources_async)
 
+add_executable(smoke_resources_reload
+    examples/smoke_resources_reload.cpp
+)
+
+target_link_libraries(smoke_resources_reload PRIVATE
+    crd-core
+    crd-log
+    crd-memory
+    crd-containers
+    crd-platform
+    crd-resources
+)
+crd_enable_default_pch(smoke_resources_reload)
+
 add_executable(smoke_resources_render
     examples/smoke_resources_render.cpp
 )

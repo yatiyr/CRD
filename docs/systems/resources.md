@@ -4,7 +4,7 @@ General-purpose resource substrate: typed payloads loaded from cooked binary pac
 intrusive reference counts, with synchronous (v1c) and async (v1d) delivery. Plus `tools/asset_cooker/`
 — a separate CLI that ingests source assets and emits runtime-consumed binary packs.
 
-**Phase 2.6 in progress** — v1a, v1b, v1c, v1d, v1e shipped.
+**Phase 2.6 in progress** — v1a, v1b, v1c, v1d, v1e, v1f shipped.
 
 Depends on: `crd-core`, `crd-log`, `crd-memory`, `crd-containers`, `crd-platform`.  
 Does NOT depend on: `crd-rhi`, `crd-shader`, `crd-renderer` (loader-registry pattern keeps this low in
@@ -19,7 +19,7 @@ the graph — a DAW build can link `crd-resources` without any GPU code). ADR-00
 | v1c | `RefCounted<T>`, `ResourceHandle<T>`, `load_sync<T>`, cycle detection, `smoke_resources` | ✅ |
 | v1d | `crd-platform::AsyncFile`, `load_async<T>`, `wait_ready()` fiber-cooperative, load coalescing | ✅ |
 | v1e | `ShaderResourceLoader`, `MaterialResourceLoader`, `compile_glsl()`, GLSL/material cooker handlers, `smoke_resources_render` | ✅ |
-| v1f | Hot-reload (file watcher, atomic payload swap, last-good preservation) | 🔜 |
+| v1f | Hot-reload: PACK-file mtime polling, atomic payload swap, last-good preservation, `subscribe_reload`/`unsubscribe_reload`, `poll_hot_reload`, `reload_mount_now` | ✅ |
 | v1g | Streaming, 2Q LRU eviction, memory budget, pinning | 🔜 |
 
 ## Core concepts
@@ -162,6 +162,38 @@ if (r.ok)
 ```
 
 Returns `CompileResult::ok = false` when shaderc is unavailable (graceful degradation).
+
+## Hot-reload (v1f)
+
+```cpp
+// Callback type: fired after a successful reload. Called on the poll/reload-now thread, outside
+// the manager mutex. `new_generation` matches handle.generation() after the swap.
+using ReloadCallback = void (*)(ResourceId id, crd::u32 new_generation, void* user);
+
+// Subscribe for a specific resource. Returns a token for unsubscribe.
+crd::u32 subscribe_reload(ResourceId id, ReloadCallback cb, void* user);
+
+// Unsubscribe by token. No-op if invalid.
+void unsubscribe_reload(ResourceId id, crd::u32 token);
+
+// Call once per frame from the main thread. Checks all mounted PACKs for mtime changes.
+// Reloads after debounce_ms elapses. Returns the number of payloads successfully swapped.
+// Old payloads freed at the START of the next poll/reload-now call (one-frame grace period).
+crd::usize poll_hot_reload(crd::u32 debounce_ms = 200U);
+
+// Force-reload all loaded resources from a mounted pack, bypassing mtime check.
+// Useful in tests and external tools. Returns the number of resources successfully reloaded.
+crd::usize reload_mount_now(MountId id);
+```
+
+**Contract for raw-pointer holders:** `get()` returns a raw `const T*`. Callers must not cache
+this pointer past the next `poll_hot_reload` or `reload_mount_now` call. The one-frame grace
+period guarantees the old payload is alive for the rest of the current frame.
+
+**Atomicity:** `ResourceControlBlock::payload` is `std::atomic<void*>`. Writers (hot-reload) do
+`payload.exchange(new, acq_rel)` then `state.store(Ready, release)`. Readers (`get()`) do
+`state.load(acquire)` then `payload.load(acquire)`. This prevents a data race between a reader
+mid-`get()` and a concurrent reload.
 
 ## Public API (v1d surface)
 

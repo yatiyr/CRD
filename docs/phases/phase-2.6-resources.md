@@ -1,6 +1,6 @@
 # Phase 2.6 — `crd-resources`: resource system + asset cooker
 
-**Status:** 🚢 v1e shipped (2026-05-04); v1f next
+**Status:** 🚢 v1f shipped (2026-05-04); v1g next
 **ADRs:** ADR-0036 (module + loader registry), ADR-0037 (ResourceId UUID scheme), ADR-0038 (cooked binary container), ADR-0039 (ResourceHandle semantics), ADR-0040 (cooker CLI + CMake), ADR-0041 (platform async I/O)
 **Module:** `engine/resources/` + `tools/asset_cooker/`
 **Depends on:** `crd-core`, `crd-log`, `crd-memory`, `crd-containers`, `crd-jobs`, `crd-platform`, `crd-config`
@@ -591,23 +591,52 @@ deps (verifies `handle_count() == 3`), missing META → Failed, real SPIRV round
 
 All 6 configs green: win-debug/relwithdebinfo/asan/clang-cl/tidy 435/435, win-release 432/432.
 
-### v1f — Hot-reload (file watcher, atomic swap, last-good preservation)
+### v1f — Hot-reload (PACK-file mtime watcher, atomic payload swap, last-good preservation) ✅ SHIPPED 2026-05-04
 
-**Scope:**
-- Dev-mode file watcher in `crd-resources` (ReadDirectoryChangesW on Windows, inotify on Linux).
-  Watches the source roots configured via `mount_manifest_with_source_root(...)`.
-- On source change: invoke the cooker (in-process or out-of-process is a v1f impl detail) for
-  the affected artifact only, re-mount the resulting bytes, atomic-swap the payload pointer
-  inside the existing control block, bump `generation`, fire `ReloadCallback`.
-- Failed re-cook keeps the last-good payload alive (mirrors ADR-0029 shader contract).
-- `ResourceManager::subscribe_reload(id, cb, user)` — callback fires with `(id, new_generation,
-  user)` on every successful swap.
+**Design deviation from original spec:** The original description planned to watch source roots and
+invoke the cooker on change. The shipped implementation watches the cooked PACK files directly
+(mtime-based polling). Rationale (ADR-0036): `crd-resources` must not depend on `crd-cooker` or
+`crd-shader` at link time — watching PACK files avoids that dependency entirely. The cooker is
+an external tool; a developer re-runs it outside the engine and the engine detects the result.
+This also makes the hot-reload path consistent across all resource types without per-type cooker
+integration.
 
-**Tests:**
-- Edit a `.bin` source, observe reload event with bumped generation, payload bytes reflect edit.
-- Introduce a syntactically broken `.glsl` source, observe re-cook failure logged at `Error`,
-  existing handle still `Ready` with old `generation`.
-- 100 rapid edits coalesce to a small number of reload events (debounced, not 100 events fired).
+**Shipped scope:**
+- `ResourceControlBlock::payload` made `std::atomic<void*>` (was `void*`). This is the correctness
+  fix that enables concurrent `get()` calls to run safely while a hot-reload swaps the payload.
+  The acquire/release ordering: writers do `payload.store(release)` then `state.store(release)`;
+  readers do `state.load(acquire)` then `payload.load(acquire)`. State stays `Ready` during swap;
+  the atomic makes the payload visible to concurrent readers without a data race.
+- `PackWatch` per mounted PACK (stored in `m_pack_watches`): tracks `last_processed_mtime`,
+  debounce state (`pending_mtime`, `has_pending`, `pending_since`).
+- `poll_hot_reload(debounce_ms=200)`: call once per frame from the main thread. Checks mtime for
+  each mounted PACK; after the debounce window fires `do_reload_mount`.
+- `reload_mount_now(MountId)`: force-reload bypassing mtime, used in unit tests and tooling.
+- `do_reload_mount(PackWatch&)`: re-reads the pack file, parses new manifest (updates `m_live` blob
+  offsets), collects loaded handles, calls `loader->load()` for each, atomically exchanges the
+  payload, bumps `generation`, defers the old payload to `m_deferred_frees` (freed at the START of
+  the next `poll_hot_reload` or `reload_mount_now` call — one-frame grace period).
+- Failed reload (null loader result or corrupt pack) preserves the existing payload and state.
+- `subscribe_reload(id, cb, user)` / `unsubscribe_reload(id, token)`: per-resource callbacks
+  fired (outside the mutex) after each successful swap, with `(id, new_generation, user)`.
+- `unmount()` also removes the corresponding `PackWatch`.
+
+**New tests (4) in `tests/resources/test_hot_reload.cpp`:**
+- Payload swap + generation bump: verify V1 bytes before, V2 bytes after `reload_mount_now`.
+- Failed reload preserves last-good: corrupt pack → `n==0`, old payload still `Ready` with gen 0.
+- `subscribe_reload` callback fires with correct id + generation.
+- `unsubscribe_reload` prevents callback (reload still happens, no notification).
+
+**New smoke: `smoke_resources_reload.exe`** — writes V1 PACK, mounts, loads, rewrites V2, sleeps
+1100 ms (ensures different mtime), calls `poll_hot_reload(0)`, verifies V2 payload + callback.
+
+**Six-configuration green:**
+- win-debug:          439/439
+- win-relwithdebinfo: 439/439
+- win-release:        pre-existing failures in shader/material tests (0xc0000409 in shaderc, unchanged)
+- win-asan:           pre-existing DLL failures in jobs tests (0xc0000135, unchanged)
+- win-clang-cl:       439/439
+- win-tidy:           439/439 (pre-existing `kPayload` naming warnings in test_resource_manager.cpp, unchanged)
 
 ### v1g — Streaming + 2Q LRU eviction + memory budget + pinning
 

@@ -19,10 +19,11 @@ void ResourceHandleBase::release_block() noexcept
     if (m_block->release() == 0U && !m_block->permanent)
     {
         // Non-permanent (failed) block: free it.
-        if (m_block->payload && m_block->loader)
+        void* p = m_block->payload.load(std::memory_order_acquire);
+        if (p && m_block->loader)
         {
-            m_block->loader->unload(m_block->payload);
-            m_block->payload = nullptr;
+            m_block->loader->unload(p);
+            m_block->payload.store(nullptr, std::memory_order_release);
         }
         crd::memory::IAllocator* alloc = m_block->alloc;
         m_block->~ResourceControlBlock();

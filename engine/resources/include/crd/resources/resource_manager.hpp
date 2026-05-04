@@ -10,11 +10,18 @@
 #include <crd/resources/resource_handle.hpp>
 #include <crd/resources/resource_id.hpp>
 
+#include <chrono>
 #include <memory>
 #include <mutex>
 
 namespace crd::resources
 {
+
+// Callback fired after a successful hot-reload.
+// Called on the thread that invokes poll_hot_reload() or reload_mount_now().
+// `new_generation` matches ResourceHandle::generation() after the reload.
+// Fired outside the manager's internal mutex — safe to call load_sync() inside.
+using ReloadCallback = void (*)(ResourceId id, crd::u32 new_generation, void* user);
 
 // Opaque handle to an active manifest mount.
 struct MountId
@@ -96,6 +103,28 @@ public:
     template <typename T>
     [[nodiscard]] ResourceHandle<T> load_async(ResourceId id);
 
+    // ── Hot-reload ─────────────────────────────────────────────────────────
+    // Subscribe a callback for a specific resource. Returns a token for
+    // unsubscribe. Safe to call before mount or load. Callback fires on the
+    // poll_hot_reload / reload_mount_now caller thread after a successful swap.
+    crd::u32 subscribe_reload(ResourceId id, ReloadCallback cb, void* user);
+
+    // Remove a previously-registered callback. Token from subscribe_reload().
+    // No-op if the token is invalid or already removed.
+    void unsubscribe_reload(ResourceId id, crd::u32 token);
+
+    // Poll all mounted PACK files for mtime changes. Reloads resources after
+    // the debounce window expires. Call once per frame from the main thread.
+    // Returns the number of resource payloads successfully swapped.
+    // Old payloads are freed at the START of the next poll_hot_reload() or
+    // reload_mount_now() call (one-frame grace period for raw-pointer holders).
+    crd::usize poll_hot_reload(crd::u32 debounce_ms = 200U);
+
+    // Force-reload all loaded resources from a mounted pack, bypassing mtime
+    // detection. Useful in tests and external tooling. Returns the number of
+    // resources successfully reloaded.
+    crd::usize reload_mount_now(MountId id);
+
     // ── Lookup ─────────────────────────────────────────────────────────────
     [[nodiscard]] const MountEntry* find_entry(ResourceId id) const noexcept;
 
@@ -143,10 +172,47 @@ private:
     // Enables coalescing: a second request for the same id shares the same block.
     crd::containers::HashMap<ResourceId, ResourceControlBlock*> m_in_flight;
 
+    // ── Hot-reload private state ────────────────────────────────────────────
+    struct ReloadSub
+    {
+        ReloadCallback cb    = nullptr;
+        void*          user  = nullptr;
+        crd::u32       token = 0U;
+    };
+
+    struct PackWatch
+    {
+        crd::u32                              mount_id             = 0U;
+        crd::containers::String               pack_path;
+        crd::i64                              last_processed_mtime = 0;
+        crd::i64                              pending_mtime        = 0;
+        bool                                  has_pending          = false;
+        std::chrono::steady_clock::time_point pending_since{};
+
+        PackWatch(crd::memory::IAllocator* a, crd::u32 id,
+                  crd::containers::StringView path, crd::i64 initial_mtime)
+            : mount_id(id)
+            , pack_path(path.data(), path.size(), a)
+            , last_processed_mtime(initial_mtime)
+        {}
+    };
+
+    struct DeferredFree
+    {
+        void*    payload = nullptr;
+        ILoader* loader  = nullptr;
+    };
+
+    crd::u32                                                                   m_next_reload_token = 1U;
+    crd::containers::HashMap<ResourceId, crd::containers::Array<ReloadSub>>   m_reload_subs;
+    crd::containers::Array<PackWatch>                                          m_pack_watches;
+    crd::containers::Array<DeferredFree>                                       m_deferred_frees;
+
     // Internal helpers.
     [[nodiscard]] ResourceControlBlock* load_sync_impl(ResourceId id);
     [[nodiscard]] ResourceControlBlock* load_async_impl(ResourceId id);
     [[nodiscard]] const MountRecord*    find_mount(crd::u32 mount_id) const noexcept;
+    crd::usize                          do_reload_mount(PackWatch& watch);
 
 public:
     // Job entry point for async loads. Receives a heap-allocated AsyncLoadCtx*.

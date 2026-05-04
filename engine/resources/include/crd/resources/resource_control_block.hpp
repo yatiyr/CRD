@@ -36,7 +36,9 @@ struct ResourceControlBlock : public crd::memory::RefCounted<ResourceControlBloc
     // Stores crd::jobs::Counter* as void* to avoid jobs.hpp in this header.
     // Written once by load_async_impl; claimed by wait_ready() or the leak-fix in load_async_impl.
     std::atomic<void*>       load_counter{nullptr};
-    void*                    payload     = nullptr;
+    // Atomic so hot-reload can swap the payload concurrently with get() calls.
+    // Writers: store(release) before state.store(release); readers: load(acquire) after state.load(acquire).
+    std::atomic<void*>       payload{nullptr};
     ILoader*                 loader      = nullptr;
     crd::memory::IAllocator* alloc       = nullptr;
 };

@@ -129,7 +129,7 @@ public:
         {
             return nullptr;
         }
-        return static_cast<const T*>(b->payload);
+        return static_cast<const T*>(b->payload.load(std::memory_order_acquire));
     }
 
 private:

@@ -126,6 +126,9 @@ ResourceManager::ResourceManager(crd::memory::IAllocator* a)
     , m_live(a)
     , m_handles(a)
     , m_in_flight(a)
+    , m_reload_subs(a)
+    , m_pack_watches(a)
+    , m_deferred_frees(a)
 {
 }
 
@@ -137,12 +140,18 @@ ResourceManager::~ResourceManager()
                    "ResourceManager destroyed while async loads are in flight; "
                    "call jobs::shutdown() or wait_ready() on all handles first");
 
+    for (DeferredFree& df : m_deferred_frees)
+    {
+        df.loader->unload(df.payload);
+    }
+
     for (auto it = m_handles.begin(); it != m_handles.end(); ++it)
     {
         ResourceControlBlock* block = it.value();
-        if (block->payload && block->loader)
+        void* p = block->payload.load(std::memory_order_acquire);
+        if (p && block->loader)
         {
-            block->loader->unload(block->payload);
+            block->loader->unload(p);
         }
         block->~ResourceControlBlock();
         m_alloc->deallocate(block);
@@ -246,6 +255,9 @@ MountId ResourceManager::mount_manifest(crd::containers::StringView path)
 
     m_mounts.push_back(std::move(record));
 
+    const crd::i64 initial_mtime = crd::platform::fs::last_modified_unix_seconds(fs_path);
+    m_pack_watches.push_back(PackWatch(m_alloc, mount_id, path, initial_mtime));
+
     CRD_LOG_INFO(g_log_resources,
                  "ResourceManager: mounted '{}' ({} entries, mount_id={})",
                  path, entries.size(), mount_id);
@@ -277,6 +289,15 @@ void ResourceManager::unmount(MountId id)
         }
 
         m_mounts.swap_remove(i);
+
+        for (crd::usize j = 0U; j < m_pack_watches.size(); ++j)
+        {
+            if (m_pack_watches[j].mount_id == id.value)
+            {
+                m_pack_watches.swap_remove(j);
+                break;
+            }
+        }
         return;
     }
 }
@@ -465,7 +486,7 @@ ResourceControlBlock* ResourceManager::load_sync_impl(ResourceId id)
 
         if (payload != nullptr)
         {
-            block->payload   = payload;
+            block->payload.store(payload, std::memory_order_release);
             block->permanent = true;  // must be set before state store (memory ordering)
             block->state.store(final_state, std::memory_order_release);
             m_handles.insert(id, block);
@@ -649,7 +670,7 @@ void ResourceManager::run_load_job(void* raw_ctx) noexcept
 
         if (payload != nullptr)
         {
-            block->payload   = payload;
+            block->payload.store(payload, std::memory_order_release);
             block->permanent = true;  // must be set before state store (memory ordering)
             mgr->m_handles.insert(ctx->id, block);
         }
@@ -663,10 +684,11 @@ void ResourceManager::run_load_job(void* raw_ctx) noexcept
     const crd::u32 remaining = block->release();
     if (remaining == 0U && !block->permanent)
     {
-        if (block->payload && block->loader)
+        void* p = block->payload.load(std::memory_order_acquire);
+        if (p && block->loader)
         {
-            block->loader->unload(block->payload);
-            block->payload = nullptr;
+            block->loader->unload(p);
+            block->payload.store(nullptr, std::memory_order_release);
         }
         crd::memory::IAllocator* blk_alloc = block->alloc;
         block->~ResourceControlBlock();
@@ -677,6 +699,272 @@ void ResourceManager::run_load_job(void* raw_ctx) noexcept
     crd::memory::IAllocator* ctx_alloc = mgr->m_alloc;
     ctx->~AsyncLoadCtx();
     ctx_alloc->deallocate(ctx);
+}
+
+// ── Hot-reload ─────────────────────────────────────────────────────────────
+
+crd::u32 ResourceManager::subscribe_reload(ResourceId id, ReloadCallback cb, void* user)
+{
+    std::lock_guard<std::mutex> lk(m_mutex);
+    const crd::u32 token = m_next_reload_token++;
+
+    crd::containers::Array<ReloadSub>* subs = m_reload_subs.find(id);
+    if (subs == nullptr)
+    {
+        crd::containers::Array<ReloadSub> arr(m_alloc);
+        arr.push_back(ReloadSub{cb, user, token});
+        m_reload_subs.insert(id, std::move(arr));
+    }
+    else
+    {
+        subs->push_back(ReloadSub{cb, user, token});
+    }
+    return token;
+}
+
+void ResourceManager::unsubscribe_reload(ResourceId id, crd::u32 token)
+{
+    std::lock_guard<std::mutex> lk(m_mutex);
+    crd::containers::Array<ReloadSub>* subs = m_reload_subs.find(id);
+    if (subs == nullptr)
+    {
+        return;
+    }
+    for (crd::usize i = 0U; i < subs->size(); ++i)
+    {
+        if ((*subs)[i].token == token)
+        {
+            subs->swap_remove(i);
+            return;
+        }
+    }
+}
+
+crd::usize ResourceManager::poll_hot_reload(crd::u32 debounce_ms)
+{
+    // Drain deferred frees from the previous reload (one-frame grace period).
+    for (DeferredFree& df : m_deferred_frees)
+    {
+        df.loader->unload(df.payload);
+    }
+    m_deferred_frees.clear();
+
+    const auto now = std::chrono::steady_clock::now();
+    crd::usize reloaded = 0U;
+
+    for (PackWatch& watch : m_pack_watches)
+    {
+        const crd::platform::fs::Path fs_path(watch.pack_path);
+        const crd::i64 current_mtime = crd::platform::fs::last_modified_unix_seconds(fs_path);
+
+        if (current_mtime > 0 && current_mtime != watch.last_processed_mtime)
+        {
+            if (!watch.has_pending || current_mtime != watch.pending_mtime)
+            {
+                watch.pending_mtime = current_mtime;
+                watch.has_pending   = true;
+                watch.pending_since = now;
+            }
+        }
+
+        if (!watch.has_pending)
+        {
+            continue;
+        }
+
+        const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            now - watch.pending_since).count();
+        if (debounce_ms > 0U && elapsed_ms < static_cast<decltype(elapsed_ms)>(debounce_ms))
+        {
+            continue;
+        }
+
+        reloaded += do_reload_mount(watch);
+        watch.last_processed_mtime = watch.pending_mtime;
+        watch.has_pending          = false;
+    }
+
+    return reloaded;
+}
+
+crd::usize ResourceManager::reload_mount_now(MountId id)
+{
+    if (!id.is_valid())
+    {
+        return 0U;
+    }
+
+    // Drain deferred frees so the grace period contract is consistent with poll_hot_reload.
+    for (DeferredFree& df : m_deferred_frees)
+    {
+        df.loader->unload(df.payload);
+    }
+    m_deferred_frees.clear();
+
+    for (PackWatch& watch : m_pack_watches)
+    {
+        if (watch.mount_id != id.value)
+        {
+            continue;
+        }
+
+        const crd::usize n = do_reload_mount(watch);
+        // Reset debounce state — the forced reload is now the baseline.
+        const crd::platform::fs::Path fs_path(watch.pack_path);
+        watch.last_processed_mtime = crd::platform::fs::last_modified_unix_seconds(fs_path);
+        watch.has_pending          = false;
+        return n;
+    }
+    return 0U;
+}
+
+crd::usize ResourceManager::do_reload_mount(PackWatch& watch)
+{
+    // Step 1: re-read and parse the pack file.
+    const crd::containers::StringView pv{watch.pack_path.data(), watch.pack_path.size()};
+    crd::containers::Array<crd::u8> file_bytes(m_alloc);
+    const crd::platform::fs::Path   fs_path(watch.pack_path);
+    if (!crd::platform::fs::read_file_binary(fs_path, file_bytes))
+    {
+        CRD_LOG_WARN(g_log_resources,
+                     "ResourceManager: hot-reload: failed to read '{}'", pv);
+        return 0U;
+    }
+
+    CrdrFile crdr_file(m_alloc);
+    const CrdrError err = crdr_read(crd::containers::as_const_span(file_bytes), crdr_file, m_alloc);
+    if (err != CrdrError::Ok || crdr_file.type_fourcc != kFourCC_PACK)
+    {
+        CRD_LOG_WARN(g_log_resources,
+                     "ResourceManager: hot-reload: '{}' parse error ({})",
+                     pv, static_cast<int>(err));
+        return 0U;
+    }
+
+    const CrdrChunk* mfst_chunk = crdr_find_chunk(crdr_file, kFourCC_MFST);
+    if (mfst_chunk == nullptr)
+    {
+        CRD_LOG_WARN(g_log_resources,
+                     "ResourceManager: hot-reload: '{}' missing MFST chunk", pv);
+        return 0U;
+    }
+
+    crd::containers::Array<ManifestEntry> new_entries(m_alloc);
+    if (!manifest_read_entries(mfst_chunk->payload, new_entries, m_alloc))
+    {
+        CRD_LOG_WARN(g_log_resources,
+                     "ResourceManager: hot-reload: '{}' MFST chunk malformed", pv);
+        return 0U;
+    }
+
+    // Step 2: under lock — update m_live blob offsets and collect reload tasks.
+    struct ReloadTask
+    {
+        ResourceControlBlock* block;
+        ILoader*              loader;
+        crd::u64              blob_offset;
+        crd::u64              blob_size;
+        ResourceId            id;
+    };
+    crd::containers::Array<ReloadTask> tasks(m_alloc);
+
+    {
+        std::lock_guard<std::mutex> lk(m_mutex);
+
+        for (const ManifestEntry& e : new_entries)
+        {
+            MountEntry* existing = m_live.find(e.id);
+            if (existing != nullptr && existing->mount_id == watch.mount_id)
+            {
+                existing->blob_offset = e.blob_offset;
+                existing->blob_size   = e.blob_size;
+            }
+        }
+
+        for (const ManifestEntry& e : new_entries)
+        {
+            ResourceControlBlock** pp = m_handles.find(e.id);
+            if (pp == nullptr)
+            {
+                continue;
+            }
+            ResourceControlBlock* block = *pp;
+            const LoadState s = block->state.load(std::memory_order_acquire);
+            if (s != LoadState::Ready && s != LoadState::Placeholder)
+            {
+                continue;
+            }
+            std::unique_ptr<ILoader>* lp = m_loaders.find(e.type_fourcc);
+            if (lp == nullptr)
+            {
+                continue;
+            }
+            block->add_ref();
+            tasks.push_back(ReloadTask{block, lp->get(), e.blob_offset, e.blob_size, e.id});
+        }
+    }
+
+    // Step 3: reload each task — I/O and loader dispatch outside the lock.
+    crd::usize reloaded = 0U;
+    for (ReloadTask& task : tasks)
+    {
+        if (task.blob_offset + task.blob_size > static_cast<crd::u64>(file_bytes.size()))
+        {
+            CRD_LOG_WARN(g_log_resources,
+                         "ResourceManager: hot-reload: artifact bounds out of range; skipping");
+            [[maybe_unused]] const crd::u32 r = task.block->release();
+            continue;
+        }
+
+        const crd::containers::ConstSpan<crd::u8> artifact_span(
+            file_bytes.data() + task.blob_offset, task.blob_size);
+
+        const LoadContext ctx{task.id, artifact_span, this, m_alloc};
+        void* new_payload = task.loader->load(ctx);
+
+        if (new_payload == nullptr)
+        {
+            CRD_LOG_WARN(g_log_resources,
+                         "ResourceManager: hot-reload: loader returned null; preserving last-good payload");
+            [[maybe_unused]] const crd::u32 r = task.block->release();
+            continue;
+        }
+
+        // Atomic swap: exchange old payload for new before re-publishing the state.
+        void* old_payload = task.block->payload.exchange(new_payload, std::memory_order_acq_rel);
+        const crd::u32 new_gen =
+            task.block->generation.fetch_add(1U, std::memory_order_acq_rel) + 1U;
+        task.block->state.store(LoadState::Ready, std::memory_order_release);
+
+        if (old_payload != nullptr)
+        {
+            m_deferred_frees.push_back(DeferredFree{old_payload, task.loader});
+        }
+
+        ++reloaded;
+
+        // Copy subscribers under lock, then fire outside.
+        crd::containers::Array<ReloadSub> subs_copy(m_alloc);
+        {
+            std::lock_guard<std::mutex> lk(m_mutex);
+            crd::containers::Array<ReloadSub>* subs = m_reload_subs.find(task.id);
+            if (subs != nullptr)
+            {
+                for (const ReloadSub& sub : *subs)
+                {
+                    subs_copy.push_back(sub);
+                }
+            }
+        }
+        for (const ReloadSub& sub : subs_copy)
+        {
+            sub.cb(task.id, new_gen, sub.user);
+        }
+
+        [[maybe_unused]] const crd::u32 r = task.block->release();
+    }
+
+    return reloaded;
 }
 
 } // namespace crd::resources

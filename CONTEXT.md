@@ -11,11 +11,11 @@
 
 ## Current focus
 
-**Phase 2.6 — `crd-resources` + asset cooker. v1e SHIPPED.**
+**Phase 2.6 — `crd-resources` + asset cooker. v1f SHIPPED.**
 
-v1e shipped: `ShaderResourceLoader` (in `crd-shader`; reads SPVV/SPVF/SPVC chunk from `type='SHDR'` artifact, copies SPIRV bytes, runs spirv-reflect to populate descriptor bindings, push constants, vertex attributes; registers via `register_shader_loader(rm)`). `MaterialResourceLoader` (in `crd-renderer`; reads META chunk from `type='MATR'` artifact, extracts vert/frag UUIDs, calls `ctx.manager->load_sync<ShaderResource>` transitively; registers via `register_material_loader(rm)`). `compile_glsl()` free function (shaderc wrapper for tests and cooker). GLSL cooker handler (`.glsl` → `type='SHDR'` CRDR artifact with SPVV/SPVF/SPVC chunk). Material cooker handler (`.mat.toml` → `type='MATR'` CRDR artifact with META chunk). `smoke_resources_render.exe` end-to-end cooked render round-trip. 6 new tests in `test_shader_material_loaders.cpp`.
+v1f shipped: Hot-reload for the resource system. `ResourceControlBlock::payload` made `std::atomic<void*>` to permit lock-free concurrent reads during payload swap. `poll_hot_reload(debounce_ms)` polls mounted PACK files for mtime changes (main-thread, once per frame). `reload_mount_now(MountId)` forces a reload bypassing mtime (used in tests). `subscribe_reload` / `unsubscribe_reload` for per-resource callbacks fired after successful swaps. Deferred-free grace period for old payloads. 4 new unit tests in `test_hot_reload.cpp`. `smoke_resources_reload.exe` end-to-end smoke.
 
-Next: v1f — Hot-reload (file-watcher driven, atomic payload swap, last-good preservation).
+Next: v1g — Streaming, 2Q LRU eviction, memory budget, pinning.
 
 Full design packet: `docs/phases/phase-2.6-resources.md`.
 

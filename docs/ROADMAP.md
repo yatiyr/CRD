@@ -31,7 +31,7 @@
 | 2.3   Shader system             | ✅ shipped (a–g) | `docs/phases/phase-2.3-shader.md`        |
 | 2.4   Renderer v1               | 🚧 active        | `docs/phases/phase-2-graphics.md` (v1a–i shipped; v1j = GPU instancing, Phase 3.2 dep); material system v1 gaps documented in `docs/debt.md` |
 | 2.5   Jobs (threads + fibers)   | ✅ shipped       | `docs/phases/phase-2.5-jobs.md` (v1a–v1k all shipped; ADR-0033) |
-| 2.6   Resources + asset cooker  | 🚧 active        | `docs/phases/phase-2.6-resources.md` (architecture locked v1a–v1g; ADRs 0036–0041) |
+| 2.6   Resources + asset cooker  | 🚧 active        | `docs/phases/phase-2.6-resources.md` (v1f shipped 2026-05-04; architecture locked v1a–v1g; ADRs 0036–0041) |
 | 2.7   Asset import bootstrap    | ⏳               | `docs/phases/phase-2.7-asset-import.md` (TextureResource + MeshResource + glTF + material params; ADRs 0042–0043) |
 | 3     Simulation foundation     | ⏳               | `docs/phases/phase-3-simulation.md` (3.0 scene/ECS → 3.1 physics → 3.2 animation → 3.3 audio → 3.4–3.6) |
 | 4     Extensibility + Networking | ⏳              | `docs/phases/phase-4-extensibility.md` (4.0 C++ scripting, 4.1 advanced math, 4.2 networking; ADR-0034, ADR-0035) |
@@ -66,6 +66,7 @@ Direction, not commitment.
 - Renderer v1a–i (Clustered Forward+, frame graph, descriptor system, material system)
 - **Jobs system v1 complete** (v1a–v1k): fiber pool, work-stealing deque, ABA-safe scheduler, counter/wait, worker pool, public API (`run`/`wait`/`make_job`/`parallel_for`), 41-byte SBO, per-frame arena, crd-app wired
 - ImGui debug tooling; crd-config TOML substrate
+- **Resource system v1f in progress** (v1a–v1f): handle table, ref-counting, async loading, typed loaders (shader, material), hot-reload with atomic payload swap + mtime polling + callback notifications
 
 ### 6–12 months (mid-2026 to early 2027)
 - Resource system + asset cooker (Phase 2.6): handle table, ref-counted assets, hot-reload notifications, cooked binary format
