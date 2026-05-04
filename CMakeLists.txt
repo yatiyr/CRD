@@ -211,6 +211,31 @@ CPMAddPackage(
 add_library(stb INTERFACE)
 target_include_directories(stb SYSTEM INTERFACE "${stb_SOURCE_DIR}")
 
+# cgltf: single-header glTF 2.0 parser (DOWNLOAD_ONLY — no cmake build).
+# Phase 2.7: used by the glTF mesh cook handler.
+CPMAddPackage(
+    NAME cgltf
+    GITHUB_REPOSITORY jkuhlmann/cgltf
+    GIT_TAG v1.14
+    DOWNLOAD_ONLY YES
+)
+add_library(cgltf INTERFACE)
+target_include_directories(cgltf SYSTEM INTERFACE "${cgltf_SOURCE_DIR}")
+
+# MikkTSpace: tangent-space generation (two C files, MIT license).
+# Phase 2.7: used by the glTF mesh cook handler to generate tangents when glTF
+# meshes omit TANGENT data. Compiled as a STATIC C99 library.
+CPMAddPackage(
+    NAME MikkTSpace
+    GITHUB_REPOSITORY mmikk/MikkTSpace
+    GIT_TAG master
+    DOWNLOAD_ONLY YES
+)
+add_library(mikktspace INTERFACE)
+target_include_directories(mikktspace SYSTEM INTERFACE "${MikkTSpace_SOURCE_DIR}")
+# mikktspace.c is included directly inside mesh.cpp (within an extern "C" block)
+# so it compiles as C++ without triggering C-compiler detection in CMake.
+
 CPMAddPackage("gh:ocornut/imgui#v1.92.0-docking")
 
 # ----- Helper: auto-collect sources with CONFIGURE_DEPENDS -----------------

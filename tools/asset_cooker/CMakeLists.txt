@@ -21,6 +21,8 @@ target_link_libraries(crd-cooker
         crd-shader
     PRIVATE
         stb
+        cgltf
+        mikktspace
 )
 
 target_compile_features(crd-cooker PUBLIC cxx_std_20)

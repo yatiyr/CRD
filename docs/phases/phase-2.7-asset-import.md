@@ -1,6 +1,6 @@
 # Phase 2.7 — Asset import bootstrap
 
-**Status:** 🚧 active — v1a shipped 2026-05-04
+**Status:** 🚧 active — v1a shipped 2026-05-04, v1b shipped 2026-05-05
 **ADRs:** ADR-0042 (texture cooked format), ADR-0043 (mesh resource + glTF import scope)
 **New modules:** loaders in `crd-renderer`; cooker handlers in `tools/asset_cooker/`
 **Depends on:** Phase 2.6 complete (ResourceManager, ILoader registry, CRDR cooker pipeline)
@@ -341,17 +341,12 @@ sandbox/                          ← v1e (crd-sandbox, CRD_BUILD_SANDBOX gate)
 
 ## Open questions
 
-- **MikkTSpace tangent generation.** Does cgltf embed MikkTSpace, or do we need to vendor
-  `mikktspace.h` separately? Check at implementation time.
-- **stb_image already in CPM?** Phase 2.6 listed it as a tools-only dep; verify the CMake
-  wiring before the v1a session.
+- ~~**MikkTSpace tangent generation.** Does cgltf embed MikkTSpace, or do we need to vendor `mikktspace.h` separately?~~ **Resolved (v1b):** Vendored separately via CPM DOWNLOAD_ONLY + INTERFACE. `mikktspace.c` compiled inline in `mesh.cpp` within an `extern "C"` block to avoid C compiler detection in a `LANGUAGES CXX`-only CMake project.
+- ~~**stb_image already in CPM?**~~ **Resolved (v1a):** Yes — added as CPM INTERFACE SYSTEM in root CMakeLists.txt.
 - **Staging buffer lifetime.** GPU upload submits a one-shot command buffer. Does the staging
   buffer need to outlive the submission? Fence + immediate wait is simplest for v1d; async
   upload can be deferred.
-- **One artifact per glTF mesh node vs one per file.** v1b emits one MESH artifact per mesh
-  node. If a glTF file has 50 nodes, that's 50 artifacts. Could batch into one MESH artifact
-  with a node table. Decision deferred — v1b takes the simple path; reconsider at Phase 3.1
-  when scene/ECS has real instancing needs.
+- ~~**One artifact per glTF mesh node vs one per file.**~~ **Resolved (v1b, ADR-0043):** One MESH artifact per glTF mesh. Multi-mesh files use `CookResult::extra_artifacts` (backward-compatible extension). Extra meshes get `.mesh.<name>.meta` sidecars.
 
 ---
 

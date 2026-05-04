@@ -11,11 +11,11 @@
 
 ## Current focus
 
-**Phase 2.7 — Asset import bootstrap. v1a shipped. Next: v1b (`MeshResource` + cgltf glTF import).**
+**Phase 2.7 — Asset import bootstrap. v1a + v1b shipped. Next: v1c (material parameter wiring).**
 
 Phase 2.7 slices:
-- v1a: `TextureResource` + stb_image texture cooker (RGBA8/BC7, mip gen, TXTR artifact)
-- v1b: `MeshResource` + cgltf glTF import (static meshes, interleaved 48B/vert, MESH artifact)
+- v1a: `TextureResource` + stb_image texture cooker (RGBA8/BC7, mip gen, TXTR artifact) ✅
+- v1b: `MeshResource` + cgltf glTF import (static meshes, interleaved 48B/vert, MESH artifact) ✅
 - v1c: Material parameter wiring — extends `MaterialResource` with `HashMap<String,Vec4f>` parameters + texture slots; closes debt item 1
 - v1d: `GpuTextureUploader` + `GpuMeshUploader` + `smoke_asset_import.exe` (first real mesh+texture on screen)
 - v1e: **`crd-meshgen`** (CPU-side procedural geometry: sphere/icosphere/box/capsule/cylinder/cone/plane/torus; `smoke_meshgen.exe`; headless) + **`crd-sandbox`** bootstrap (`crd-app` + `LayerStack`, ImGui asset browser, `--headless` CI mode, `assets/source/` demo assets: BoxTextured.glb, Duck.glb, Suzanne.glb + CC0 textures)
@@ -37,25 +37,35 @@ _none — running on the main roadmap._
 
 ## Last shipped milestone
 
+**2026-05-05 — Phase 2.7 v1b SHIPPED: `MeshResource` + cgltf glTF import + MikkTSpace tangent generation.**
+
+`MeshPrimitive` + `MeshResource` in `engine/renderer/include/crd/renderer/mesh_resource.hpp`. Interleaved 48-byte vertex layout: float3 pos (0–11) + float3 normal (12–23) + float2 uv0 (24–31) + float4 tangent (32–47, w = bitangent sign). `MeshResourceLoader` (`engine/renderer/src/mesh_resource_loader.cpp`): reads `type='MESH'` CRDR artifact, parses VERT + INDX + PRIM chunks. PRIM chunk is 4-byte count + N × 32-byte entries (vertex_count, index_count, vertex_byte_offset, index_byte_offset, u8[16] material_id). Registered via `crd::renderer::register_mesh_loader(rm)`.
+
+glTF cooker handler in `tools/asset_cooker/src/cook_handlers/mesh.cpp`: cgltf for parsing (CPM DOWNLOAD_ONLY + INTERFACE; header + impl in same TU), MikkTSpace for tangent generation (CPM DOWNLOAD_ONLY + INTERFACE; `mikktspace.c` included inline within `extern "C"` block — avoids C compiler detection in a LANGUAGES CXX-only project). Static meshes only (no skinning/morph targets). Reads POSITION/NORMAL/TEXCOORD_0/TANGENT accessors; generates tangents via `genTangSpaceDefault()` if TANGENT absent. Indices always upcast to u32. First glTF mesh → main `CookResult`; additional meshes → `ExtraArtifact` array (new `CookResult::extra_artifacts` field, backward-compatible; each extra artifact gets a `.mesh.<name>.meta` sidecar). Registers `.glb` + `.gltf`. `cook_command.cpp` extended to process extra_artifacts loop.
+
+CRDR FourCCs added: `kFourCC_MESH`, `kFourCC_VERT`, `kFourCC_INDX`, `kFourCC_PRIM` (in `crdr.hpp`).
+
+4 new tests in `tests/resources/test_mesh_loader.cpp`: MESH artifact round-trip, multi-primitive count, missing VERT → Failed, GLB cook + load round-trip (hand-assembled 152-byte binary GLB). `smoke_mesh.exe` (headless, 2-primitive MESH artifact, mounts, loads, verifies primitive sizes + null material UUIDs, exit 0).
+
+Six-configuration green:
+- win-debug:          452/452
+- win-relwithdebinfo: 452/452
+- win-release:        449/449
+- win-asan:           452/452
+- win-clang-cl:       452/452
+- win-tidy:           ✅ (build clean)
+
+## Previous shipped milestone
+
 **2026-05-04 — Phase 2.7 v1a SHIPPED: `TextureResource` + stb_image texture cooker.**
 
 `TextureResource` + `MipLevel` in `engine/renderer/include/crd/renderer/texture_resource.hpp`. `TextureFormat` enum (RGBA8Unorm/BC7Unorm/BC7UnormSrgb — on-disk byte values, never reorder). `TextureResourceLoader` (in `engine/renderer/src/texture_resource_loader.cpp`): reads `type='TXTR'` CRDR artifact, parses 16-byte `HEAD` chunk (width u32, height u32, mip_count u32, format u8, padding[3]), validates dims/format/mip count (max 16), reads and validates per-mip pixel size for RGBA8, copies mip pixel data into `MipLevel::pixels`. Registered via `crd::renderer::register_texture_loader(rm)`.
 
-Texture cook handler in `tools/asset_cooker/src/cook_handlers/texture.cpp`: stb_image for decode (STBI_rgb_alpha → 4 channels, TGA BGRA→RGBA swap handled by stb), box-filter mip chain generation to 1×1 with ping-pong scratch buffers (O(W×H) memory), writes HEAD chunk + MIP0..MIPn chunks. Registers `.png`/`.jpg`/`.jpeg`/`.tga`/`.bmp` via `register_texture_handler()`, called from `register_builtin_handlers()`. stb added as CPM INTERFACE SYSTEM library (GIT_TAG master; stb has no semver tags).
+Texture cook handler in `tools/asset_cooker/src/cook_handlers/texture.cpp`: stb_image for decode (STBI_rgb_alpha → 4 channels, TGA BGRA→RGBA swap handled by stb), box-filter mip chain generation to 1×1 with ping-pong scratch buffers (O(W×H) memory), writes HEAD chunk + MIP0..MIPn chunks. Registers `.png`/`.jpg`/`.jpeg`/`.tga`/`.bmp` via `register_texture_handler()`, called from `register_builtin_handlers()`.
 
-CRDR FourCCs added to `crdr.hpp`: `kFourCC_TXTR`, `kFourCC_HEAD`, `kFourCC_MIP0`–`kFourCC_MIP15` (via `make_mip_fourcc()`).
+CRDR FourCCs added to `crdr.hpp`: `kFourCC_TXTR`, `kFourCC_HEAD`, `kFourCC_MIP0`–`kFourCC_MIP15` (via `make_mip_fourcc()`). 4 new tests; `smoke_texture.exe`. Six-configuration green (448/448 win-debug).
 
-4 new tests in `tests/resources/test_texture_loader.cpp`: TXTR artifact round-trip, mip chain dimensions, missing HEAD → Failed, TGA cook round-trip (red pixel R=255). `smoke_texture.exe` (headless, builds TXTR artifact programmatically, mounts, loads, verifies 3 mip dims + pixel values, exit 0).
-
-Six-configuration green:
-- win-debug:          448/448
-- win-relwithdebinfo: 448/448
-- win-release:        445/445
-- win-asan:           448/448
-- win-clang-cl:       448/448
-- win-tidy:           ✅ (build clean)
-
-## Previous shipped milestone
+## Previous shipped milestone (–2)
 
 **2026-05-04 — Phase 2.6 v1g SHIPPED: load_streamed + 2Q LRU eviction + memory budget + pinning. Phase 2.6 COMPLETE.**
 
@@ -646,11 +656,11 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Next up (next 1–5 sessions)
 
-1. **Phase 2.7 v1b** — `MeshResource` + cgltf glTF import (static meshes only). Mesh cooker handler (`.glb`/`.gltf`).
-2. **Phase 2.7 v1c** — Material parameter wiring: extend `MaterialResource` with parameters + texture slots. Closes debt item 1.
-3. **Phase 2.7 v1d** — GPU upload (`GpuTextureUploader`, `GpuMeshUploader`) + `smoke_asset_import.exe`. First real mesh+texture on screen.
-4. **Phase 2.7 v1e** — `crd-meshgen` (procedural geometry, headless) + `crd-sandbox` bootstrap (ImGui asset browser, `--headless` CI mode, `assets/source/` demo assets).
-5. **Phase 2.8** — Material completion: per-material PSO state + `MaterialDomain` + pass-keyed variants + depth-only prepass. ADRs 0044, 0046.
+1. **Phase 2.7 v1c** — Material parameter wiring: extend `MaterialResource` with `HashMap<String,Vec4f>` parameters + texture slots (`PARM`/`TEXS` CRDR chunks). Closes debt item 1.
+2. **Phase 2.7 v1d** — GPU upload (`GpuTextureUploader`, `GpuMeshUploader`) + `smoke_asset_import.exe`. First real mesh+texture on screen.
+3. **Phase 2.7 v1e** — `crd-meshgen` (procedural geometry, headless) + `crd-sandbox` bootstrap (ImGui asset browser, `--headless` CI mode, `assets/source/` demo assets).
+4. **Phase 2.8** — Material completion: per-material PSO state + `MaterialDomain` + pass-keyed variants + depth-only prepass. ADRs 0044, 0046.
+5. **Phase 3.0** — `crd-scene` / ECS (hybrid hierarchy + SoA + TOML → binary serialization + renderer integration).
 
 ## Roadmap ordering
 
@@ -678,11 +688,11 @@ Full plan: `docs/ROADMAP.md` → `docs/phases/`.
 
 ## Test counts (last quality pass)
 
-- win-debug:          448/448
-- win-relwithdebinfo: 448/448
-- win-release:        445/445
-- win-asan:           448/448
-- win-clang-cl:       448/448
+- win-debug:          452/452
+- win-relwithdebinfo: 452/452
+- win-release:        449/449
+- win-asan:           452/452
+- win-clang-cl:       452/452
 - win-tidy:           ✅ build clean
 
 (win-release is 3 fewer than debug: debug-only `FiberState` tests excluded by `#if CRD_ENABLE_ASSERTS`)
@@ -710,6 +720,7 @@ When in doubt, ASK before reading large files.
 
 ## Session log (rolling, last 5)
 
+- **2026-05-05** — Phase 2.7 v1b SHIPPED: MeshResource + MeshResourceLoader + glTF cooker handler (cgltf, MikkTSpace, multi-mesh via ExtraArtifact); 4 new tests in test_mesh_loader.cpp; smoke_mesh.exe; all 6 configs green (452/452 win-debug).
 - **2026-05-04** — Phase 2.7 v1a SHIPPED: TextureResource + MipLevel + TextureFormat + TextureResourceLoader + texture cook handler (stb_image, box-filter mip gen); 4 new tests; smoke_texture.exe; all 6 configs green (448/448 win-debug).
 - **2026-05-04** — Phase 2.6 v1g SHIPPED: load_streamed + 2Q LRU eviction + memory budget + pinning; 5 new tests in test_eviction.cpp; smoke_resources_stream.exe; all 6 configs green (444/444 win-debug). Phase 2.6 COMPLETE.
 - **2026-05-04** — Phase 2.6 v1f shipped: hot-reload (mtime poll, atomic payload swap, subscribe/unsubscribe callbacks, deferred-free); 4 new tests; smoke_resources_reload.exe; all 6 configs green (439/439 win-debug).

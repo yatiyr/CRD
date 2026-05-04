@@ -381,6 +381,75 @@ int cmd_cook(const char* root_cstr, const char* out_cstr)
             le.status   = from_cache ? "skipped" : "cooked";
             log_entries.push_back(std::move(le));
         }
+
+        // Process any extra artifacts produced by multi-output handlers (e.g. glTF meshes).
+        for (crd::usize ei = 0U; ei < result.extra_artifacts.size(); ++ei)
+        {
+            crd::cooker::ExtraArtifact& extra = result.extra_artifacts[ei];
+
+            const fs::Path extra_key_file      = cache_key_path(root, extra.id);
+            const fs::Path extra_artifact_file = cache_artifact_path(root, extra.id);
+
+            crd::u64 extra_cached_key = 0;
+            const bool has_extra_cached_key = cache_read_key(extra_key_file, extra_cached_key);
+
+            bool                            extra_from_cache = false;
+            crd::containers::Array<crd::u8> extra_bytes(&g_cook_alloc);
+
+            if (has_extra_cached_key && cook_key == extra_cached_key
+                && fs::is_file(extra_artifact_file))
+            {
+                if (fs::read_file_binary(extra_artifact_file, extra_bytes))
+                {
+                    extra_from_cache = true;
+                }
+            }
+
+            if (!extra_from_cache)
+            {
+                extra_bytes = std::move(extra.cooked_bytes);
+                (void)cache_write_key(extra_key_file, cook_key);
+                if (!fs::write_file_binary(extra_artifact_file,
+                        crd::containers::as_const_span(extra_bytes)))
+                {
+                    std::fprintf(stderr, "cook: failed to write extra artifact cache for %s\n",
+                                 extra.name.c_str());
+                    return 1;
+                }
+            }
+
+            crd::resources::CrdrFile extra_crdr(&g_cook_alloc);
+            const crd::resources::CrdrError extra_err =
+                crd::resources::crdr_read(
+                    crd::containers::as_const_span(extra_bytes), extra_crdr, &g_cook_alloc);
+            if (extra_err != crd::resources::CrdrError::Ok)
+            {
+                std::fprintf(stderr, "cook: extra artifact parse failed for %s\n",
+                             extra.name.c_str());
+                return 1;
+            }
+
+            const auto extra_id_str = extra.id.to_string(&g_cook_alloc);
+
+            ArtifactInfo einfo;
+            einfo.id          = extra.id;
+            einfo.rel_path    = std::move(extra.name);
+            einfo.type_fourcc = extra_crdr.type_fourcc;
+            einfo.bytes       = std::move(extra_bytes);
+            einfo.from_cache  = extra_from_cache;
+            artifacts.push_back(std::move(einfo));
+
+            {
+                LogEntry le;
+                le.rel_path = crd::containers::String(
+                    artifacts.back().rel_path.data(),
+                    artifacts.back().rel_path.size(),
+                    &g_cook_alloc);
+                le.uuid   = crd::containers::String(extra_id_str.c_str(), &g_cook_alloc);
+                le.status = extra_from_cache ? "skipped" : "cooked";
+                log_entries.push_back(std::move(le));
+            }
+        }
     }
 
     // Assemble PACK.

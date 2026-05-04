@@ -47,6 +47,7 @@ CookResult blob_passthrough_handler(const CookContext& ctx)
 void register_glsl_handler();
 void register_material_handler();
 void register_texture_handler();
+void register_mesh_handler();
 
 void register_builtin_handlers()
 {
@@ -54,6 +55,7 @@ void register_builtin_handlers()
     register_glsl_handler();
     register_material_handler();
     register_texture_handler();
+    register_mesh_handler();
 }
 
 } // namespace crd::cooker

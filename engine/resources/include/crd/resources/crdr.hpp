@@ -92,6 +92,12 @@ inline constexpr crd::u32 kFourCC_MIP13 = make_mip_fourcc(13U);
 inline constexpr crd::u32 kFourCC_MIP14 = make_mip_fourcc(14U);
 inline constexpr crd::u32 kFourCC_MIP15 = make_mip_fourcc(15U);
 
+// Phase 2.7 — mesh artifact FourCCs (ADR-0043)
+inline constexpr crd::u32 kFourCC_MESH = make_fourcc('M', 'E', 'S', 'H');
+inline constexpr crd::u32 kFourCC_VERT = make_fourcc('V', 'E', 'R', 'T');
+inline constexpr crd::u32 kFourCC_INDX = make_fourcc('I', 'N', 'D', 'X');
+inline constexpr crd::u32 kFourCC_PRIM = make_fourcc('P', 'R', 'I', 'M');
+
 // Convert a fourcc back to a 4-char printable string (for logging).
 // Result is null-terminated; stored in caller-provided buf[5].
 void fourcc_to_str(crd::u32 fourcc, char (&buf)[5]) noexcept;
