@@ -47,3 +47,6 @@ CLAUDE.md
 CONTEXT.md
 AGENTS.md
 opencode.json
+
+run_*.bat
+test_pack_*.crdr

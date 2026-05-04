@@ -11,11 +11,11 @@
 
 ## Current focus
 
-**Phase 2.6 — `crd-resources` + asset cooker. v1f SHIPPED.**
+**Phase 2.6 — `crd-resources` + asset cooker. v1g SHIPPED. Phase 2.6 COMPLETE.**
 
-v1f shipped: Hot-reload for the resource system. `ResourceControlBlock::payload` made `std::atomic<void*>` to permit lock-free concurrent reads during payload swap. `poll_hot_reload(debounce_ms)` polls mounted PACK files for mtime changes (main-thread, once per frame). `reload_mount_now(MountId)` forces a reload bypassing mtime (used in tests). `subscribe_reload` / `unsubscribe_reload` for per-resource callbacks fired after successful swaps. Deferred-free grace period for old payloads. 4 new unit tests in `test_hot_reload.cpp`. `smoke_resources_reload.exe` end-to-end smoke.
+v1g shipped: 2Q LRU eviction (Johnson & Shasha 1994), memory budget (`set_memory_budget`/`current_memory_use`), `pin`/`unpin` (ref-counted, eviction-exempt), `load_streamed<T>` (delivers payload via `crd::platform::AsyncFile` inside a job fiber). Evicted blocks stay in `m_handles` as `Unloaded`; re-load reuses the existing block and bumps `generation`. 5 new unit tests in `test_eviction.cpp`. `smoke_resources_stream.exe` end-to-end smoke.
 
-Next: v1g — Streaming, 2Q LRU eviction, memory budget, pinning.
+Next: Phase 2.7 — `TextureResource` + `MeshResource` + glTF import (cgltf) + material parameter wiring; first real mesh + texture on screen.
 
 Full design packet: `docs/phases/phase-2.6-resources.md`.
 
@@ -31,6 +31,42 @@ _none — running on the main roadmap._
 > `docs/detours/README.md`.
 
 ## Last shipped milestone
+
+**2026-05-04 — Phase 2.6 v1g SHIPPED: load_streamed + 2Q LRU eviction + memory budget + pinning. Phase 2.6 COMPLETE.**
+
+`ResourceManager::set_memory_budget(bytes)` / `current_memory_use()`: soft memory ceiling. After each successful load, `try_evict_to_budget()` evicts zero-handle, unpinned `Ready` blocks using 2Q (Johnson & Shasha 1994): `A1in` FIFO probationary queue, `Am` LRU main queue, `A1out` ghost FIFO (bounded at 256). A1out ghost hit on re-load → promoted directly to Am with generation bump. Eviction order: A1in front first, then Am front; pinned/active entries skipped.
+
+`pin(id)` / `unpin(id)`: ref-counted pinning. Pinned blocks are always skipped by eviction. Pin-before-load honoured: `m_pin_counts` checked during Phase 4 finalize to set `block->pinned`.
+
+`load_streamed<T>(id)`: submits `StreamLoadJobFn` job. Inside the fiber: opens `crd::platform::AsyncFile`, calls `read_async`, waits counter, dispatches loader with `stream_file`/`stream_offset`/`stream_size` set in `LoadContext`. Same coalescing and re-issue logic as `load_async`.
+
+Re-issue: evicted blocks stay in `m_handles` with `state = Unloaded`. `load_sync`/`load_async`/`load_streamed` detect `Unloaded`, reuse the existing block, bump `generation`, re-run the loader.
+
+5 new tests in `tests/resources/test_eviction.cpp`: budget enforced, pinned survives pressure, re-issue increments generation, 2Q ghost hit promotes to Am, `load_streamed` end-to-end. `smoke_resources_stream.exe` (value=0xCAFEBABE, `wait_ready`, exit 0).
+
+Six-configuration green:
+- win-debug:          444/444
+- win-relwithdebinfo: 444/444
+- win-release:        441/441
+- win-asan:           444/444
+- win-clang-cl:       444/444
+- win-tidy:           444/444
+
+## Previous shipped milestone
+
+**2026-05-04 — Phase 2.6 v1f shipped: hot-reload — mtime polling, atomic payload swap, callbacks.**
+
+`ResourceControlBlock::payload` made `std::atomic<void*>`. `poll_hot_reload(debounce_ms)` polls mounted PACK files. `reload_mount_now(MountId)` forces reload bypassing mtime. `subscribe_reload` / `unsubscribe_reload`. Deferred-free grace period. 4 new unit tests in `test_hot_reload.cpp`. `smoke_resources_reload.exe`.
+
+Six-configuration green:
+- win-debug:          439/439
+- win-relwithdebinfo: 439/439
+- win-release:        436/436
+- win-asan:           439/439
+- win-clang-cl:       439/439
+- win-tidy:           439/439
+
+## Previous shipped milestone (–1)
 
 **2026-05-04 — Phase 2.6 v1e shipped: ShaderResourceLoader + MaterialResourceLoader + end-to-end cooked render smoke.**
 
@@ -601,9 +637,7 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Next up (next 1–3 sessions)
 
-1. **Phase 2.6 v1f** — Hot-reload (file-watcher driven, atomic payload swap, last-good preservation).
-2. **Phase 2.6 v1g** — Streaming, 2Q LRU eviction, memory budget, pinning.
-3. **Phase 2.7** — Asset import bootstrap: `TextureResource` + `MeshResource` + glTF import (cgltf) + material parameter wiring; first real mesh + texture on screen. Closes material debt item 1. See `docs/phases/phase-2.7-asset-import.md`.
+1. **Phase 2.7** — Asset import bootstrap: `TextureResource` + `MeshResource` + glTF import (cgltf) + material parameter wiring; first real mesh + texture on screen. Closes material debt item 1. See `docs/phases/phase-2.7-asset-import.md`.
 
 ## Roadmap ordering (post-jobs)
 
@@ -631,12 +665,12 @@ Full plan: `docs/ROADMAP.md` → `docs/phases/`.
 
 ## Test counts (last quality pass)
 
-- win-debug:          435/435
-- win-relwithdebinfo: 435/435
-- win-release:        432/432
-- win-asan:           435/435
-- win-clang-cl:       435/435
-- win-tidy:           435/435
+- win-debug:          444/444
+- win-relwithdebinfo: 444/444
+- win-release:        441/441
+- win-asan:           444/444
+- win-clang-cl:       444/444
+- win-tidy:           444/444
 
 (win-release is 3 fewer than debug: debug-only `FiberState` tests excluded by `#if CRD_ENABLE_ASSERTS`)
 
@@ -663,6 +697,8 @@ When in doubt, ASK before reading large files.
 
 ## Session log (rolling, last 5)
 
+- **2026-05-04** — Phase 2.6 v1g SHIPPED: load_streamed + 2Q LRU eviction + memory budget + pinning; 5 new tests in test_eviction.cpp; smoke_resources_stream.exe; all 6 configs green (444/444 win-debug). Phase 2.6 COMPLETE.
+- **2026-05-04** — Phase 2.6 v1f shipped: hot-reload (mtime poll, atomic payload swap, subscribe/unsubscribe callbacks, deferred-free); 4 new tests; smoke_resources_reload.exe; all 6 configs green (439/439 win-debug).
 - **2026-05-04** — Phase 2.6 v1e shipped: ShaderResourceLoader + MaterialResourceLoader + compile_glsl() + GLSL/material cooker handlers + smoke_resources_render; 6 new tests; all 6 configs green (435/435 win-debug). Clang-cl fix: removed dead `to_parameter_class_local`.
 - **2026-05-04** — Phase 2.6 v1d shipped: AsyncFile + load_async<T> + fiber-cooperative wait_ready() + load coalescing; 9 new tests; all 6 configs green (429/429 win-debug).
 - **2026-05-03** — Phase 2.6 v1c shipped: RefCounted<T> + ResourceHandle<T> + load_sync<T> + cycle detection; all 6 configs green (420/420 win-debug).

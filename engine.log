@@ -1,0 +1,36 @@
+2026-05-04 12:49:08.674 [INF] [Engine] tid=18406751177588601317 smoke_log.cpp:26 - platform=WINDOWS compiler=MSVC arch=X64
+2026-05-04 12:49:08.674 [TRC] [Engine] tid=18406751177588601317 smoke_log.cpp:28 - trace: this is the chattiest level
+2026-05-04 12:49:08.674 [DBG] [Engine] tid=18406751177588601317 smoke_log.cpp:29 - debug: useful while building things
+2026-05-04 12:49:08.674 [INF] [Renderer] tid=18406751177588601317 smoke_log.cpp:30 - Renderer initialised, backend=Vulkan
+2026-05-04 12:49:08.674 [DBG] [Physics] tid=18406751177588601317 smoke_log.cpp:31 - physics tick budget = 4 ms
+2026-05-04 12:49:08.674 [WRN] [Audio] tid=18406751177588601317 smoke_log.cpp:32 - no audio device found, falling back to silence
+2026-05-04 12:49:08.674 [INF] [Renderer] tid=2739616173816496741 smoke_log.cpp:40 - frame 0 submitted
+2026-05-04 12:49:08.677 [INF] [Renderer] tid=2739616173816496741 smoke_log.cpp:40 - frame 1 submitted
+2026-05-04 12:49:08.680 [INF] [Renderer] tid=2739616173816496741 smoke_log.cpp:40 - frame 2 submitted
+2026-05-04 12:49:08.681 [DBG] [Physics] tid=17504372086516489008 smoke_log.cpp:49 - stepped 32 bodies
+2026-05-04 12:49:08.684 [DBG] [Physics] tid=17504372086516489008 smoke_log.cpp:49 - stepped 33 bodies
+2026-05-04 12:49:08.686 [DBG] [Physics] tid=17504372086516489008 smoke_log.cpp:49 - stepped 34 bodies
+2026-05-04 12:49:08.689 [CRT] [Engine] tid=18406751177588601317 smoke_log.cpp:58 - fatal subsystem failure simulated -- shutting down
+2026-05-04 12:49:08.689 [ERR] [Renderer] tid=18406751177588601317 smoke_log.cpp:57 - shader compile failed: 'tonemap.frag'
+2026-05-04 12:49:16.891 [INF] [Engine] tid=58354873709530250 smoke_log.cpp:26 - platform=WINDOWS compiler=MSVC arch=X64
+2026-05-04 12:49:16.891 [INF] [Renderer] tid=58354873709530250 smoke_log.cpp:30 - Renderer initialised, backend=Vulkan
+2026-05-04 12:49:16.891 [WRN] [Audio] tid=58354873709530250 smoke_log.cpp:32 - no audio device found, falling back to silence
+2026-05-04 12:49:16.892 [INF] [Renderer] tid=12312571344213424093 smoke_log.cpp:40 - frame 0 submitted
+2026-05-04 12:49:16.894 [INF] [Renderer] tid=12312571344213424093 smoke_log.cpp:40 - frame 1 submitted
+2026-05-04 12:49:16.897 [INF] [Renderer] tid=12312571344213424093 smoke_log.cpp:40 - frame 2 submitted
+2026-05-04 12:49:16.900 [CRT] [Engine] tid=58354873709530250 smoke_log.cpp:58 - fatal subsystem failure simulated -- shutting down
+2026-05-04 12:49:16.900 [ERR] [Renderer] tid=58354873709530250 smoke_log.cpp:57 - shader compile failed: 'tonemap.frag'
+2026-05-04 12:49:26.510 [INF] [Engine] tid=4137300305244360629 smoke_log.cpp:26 - platform=WINDOWS compiler=MSVC arch=X64
+2026-05-04 12:49:26.510 [TRC] [Engine] tid=4137300305244360629 smoke_log.cpp:28 - trace: this is the chattiest level
+2026-05-04 12:49:26.510 [DBG] [Engine] tid=4137300305244360629 smoke_log.cpp:29 - debug: useful while building things
+2026-05-04 12:49:26.510 [INF] [Renderer] tid=4137300305244360629 smoke_log.cpp:30 - Renderer initialised, backend=Vulkan
+2026-05-04 12:49:26.510 [DBG] [Physics] tid=4137300305244360629 smoke_log.cpp:31 - physics tick budget = 4 ms
+2026-05-04 12:49:26.510 [WRN] [Audio] tid=4137300305244360629 smoke_log.cpp:32 - no audio device found, falling back to silence
+2026-05-04 12:49:26.514 [INF] [Renderer] tid=2750479065389051324 smoke_log.cpp:40 - frame 0 submitted
+2026-05-04 12:49:26.514 [DBG] [Physics] tid=16936903421815239373 smoke_log.cpp:49 - stepped 32 bodies
+2026-05-04 12:49:26.516 [INF] [Renderer] tid=2750479065389051324 smoke_log.cpp:40 - frame 1 submitted
+2026-05-04 12:49:26.516 [DBG] [Physics] tid=16936903421815239373 smoke_log.cpp:49 - stepped 33 bodies
+2026-05-04 12:49:26.519 [DBG] [Physics] tid=16936903421815239373 smoke_log.cpp:49 - stepped 34 bodies
+2026-05-04 12:49:26.519 [INF] [Renderer] tid=2750479065389051324 smoke_log.cpp:40 - frame 2 submitted
+2026-05-04 12:49:26.522 [ERR] [Renderer] tid=4137300305244360629 smoke_log.cpp:57 - shader compile failed: 'tonemap.frag'
+2026-05-04 12:49:26.522 [CRT] [Engine] tid=4137300305244360629 smoke_log.cpp:58 - fatal subsystem failure simulated -- shutting down

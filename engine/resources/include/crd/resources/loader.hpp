@@ -5,18 +5,29 @@
 #include <crd/memory/allocator.hpp>
 #include <crd/resources/resource_id.hpp>
 
+// Forward-declare AsyncFile to avoid pulling platform headers into loaders.
+namespace crd::platform { class AsyncFile; }
+
 namespace crd::resources
 {
 
 class ResourceManager; // forward-declared; full type available in resource_manager.hpp
 
 // Context passed to ILoader::load() and ILoader::load_placeholder().
+//
+// When stream_file is non-null the loader is running on a fiber (load_streamed path).
+// The loader may submit additional reads via stream_file->read_async(offset, dst) and
+// suspend on the returned Counter. All Counters must be waited on before load() returns
+// — the AsyncFile's lifetime is bounded by the streaming job body.
 struct LoadContext
 {
     ResourceId                           id;
-    crd::containers::ConstSpan<crd::u8>  bytes;     // entire cooked artifact (raw CRDR bytes)
-    ResourceManager*                     manager;   // for transitive load_sync of dependencies
-    crd::memory::IAllocator*             allocator; // payload allocator (per-loader policy)
+    crd::containers::ConstSpan<crd::u8>  bytes;         // entire cooked artifact (raw CRDR bytes)
+    ResourceManager*                     manager;       // for transitive load_sync of dependencies
+    crd::memory::IAllocator*             allocator;     // payload allocator (per-loader policy)
+    crd::platform::AsyncFile*            stream_file    = nullptr; // non-null on load_streamed path (v1g)
+    crd::u64                             stream_offset  = 0;       // byte offset of artifact in pack file
+    crd::u64                             stream_size    = 0;       // byte size of artifact in pack file
 };
 
 // Type-erased resource loader. One implementation per FourCC type.

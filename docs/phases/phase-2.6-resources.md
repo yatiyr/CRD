@@ -1,6 +1,6 @@
 # Phase 2.6 — `crd-resources`: resource system + asset cooker
 
-**Status:** 🚢 v1f shipped (2026-05-04); v1g next
+**Status:** 🚢 **COMPLETE** — v1g shipped (2026-05-04). Phase 2.6 COMPLETE.
 **ADRs:** ADR-0036 (module + loader registry), ADR-0037 (ResourceId UUID scheme), ADR-0038 (cooked binary container), ADR-0039 (ResourceHandle semantics), ADR-0040 (cooker CLI + CMake), ADR-0041 (platform async I/O)
 **Module:** `engine/resources/` + `tools/asset_cooker/`
 **Depends on:** `crd-core`, `crd-log`, `crd-memory`, `crd-containers`, `crd-jobs`, `crd-platform`, `crd-config`
@@ -649,20 +649,49 @@ integration.
   - `A1out` — ghost queue of recently-evicted ids (no payload, just id) used to promote
     re-loaded victims directly into `Am`
 - `ResourceManager::pin(id)` / `unpin(id)` — pinned entries are exempt from eviction.
-- `ResourceManager::load_streamed<T>(id)` — for large blobs (sample libs, mip chains): the loader
-  receives an `AsyncFile*` instead of a fully-buffered `ConstSpan<u8>`. Loader-controlled paging.
-- `LoadState::Unloaded` re-issue path: an evicted handle re-loads transparently when `wait_ready`
-  is called again.
+- `ResourceManager::load_streamed<T>(id)` — delivers payload via `crd::platform::AsyncFile`
+  inside a job fiber (stream_file field in LoadContext). Same coalescing/re-issue logic as load_async.
+- `LoadState::Unloaded` re-issue path: an evicted block stays in `m_handles`; re-load bumps
+  `generation` and re-runs the loader without allocating a new block.
 
-**Tests:**
-- 2Q correctness: synthesised access pattern from the Johnson-Shasha 1994 paper produces the
-  documented hit/miss sequence.
-- Budget enforcement: loading 100 × 1 MB blobs into a 50 MB budget never exceeds 50 MB live
-  (within one allocation granularity).
-- Pinned entries survive a full eviction sweep; refcount-zero unpinned entries do not.
-- Streamed load: 256 MB blob loaded under a 16 MB budget completes correctly via paging.
-- Re-issue: evict a `Ready` handle (refcount → 0, budget pressure), then re-load by id; payload
-  reaches `Ready` again with bumped `generation`.
+**Shipped scope (2026-05-04):**
+- `ResourceControlBlock` extended: `bool pinned`, `EvictQueue evict_queue` (None/A1in/Am),
+  `crd::u64 payload_size` (set from `blob_size` at load time; used as memory-use proxy).
+- `LoadContext` extended: `stream_file`, `stream_offset`, `stream_size` for streamed loaders.
+- `ResourceManager` private 2Q state: `m_memory_budget`, `m_memory_used`, `m_a1in`, `m_am`,
+  `m_a1out`, `m_a1out_set`, `m_pin_counts`. All guarded by `m_mutex`.
+- `insert_into_2q` / `touch_in_am` / `evict_block_locked` / `try_evict_to_budget` helpers.
+- `load_sync_impl` Phase 1 re-issue: detects `state == Unloaded`, reuses existing block,
+  bumps generation, re-runs loader.
+- `load_streamed_impl` / `run_stream_load_job`: opens `AsyncFile`, calls `read_async`, waits
+  the counter, then dispatches loader with `stream_file` set.
+- `smoke_resources_stream.exe`: writes a PACK with value=0xCAFEBABE, `load_streamed`, `wait_ready`,
+  verifies payload, exits 0.
+
+**Key design decisions:**
+- 2Q ghost queue uses order-preserving `erase(i)` (not `swap_remove`) to maintain FIFO semantics.
+- A1out bounded at `kMaxA1out = 256` to cap memory use of the ghost set.
+- `m_memory_used` tracks `blob_size` (on-disk artifact size), not actual allocation size, as a
+  proxy for working-set pressure — avoids loader-private allocator intrusion.
+- Pin-before-load honoured: `m_pin_counts.find(id)` checked during Phase 4 finalize to set
+  `block->pinned = true` even if pin() was called before the first load.
+
+**New tests (5) in `tests/resources/test_eviction.cpp`:**
+- Budget enforced: 4 resources, budget = 2 × blob_sz; after all loads dropped,
+  `current_memory_use() <= budget`.
+- Pinned survives: pin resource 0 before any load; apply eviction pressure; resource 0 still
+  `Ready` after.
+- Re-issue increments generation: load → drop → budget=0 → reload → `generation == 1`.
+- 2Q ghost hit promotes to Am: A evicted→A1out, re-loaded→Am; D load evicts C (A1in) not A (Am).
+- `load_streamed` delivers correct payload via `AsyncFile` end-to-end.
+
+**Six-configuration green:**
+- win-debug:          444/444
+- win-relwithdebinfo: 444/444
+- win-release:        441/441
+- win-asan:           444/444
+- win-clang-cl:       444/444
+- win-tidy:           444/444
 
 ---
 

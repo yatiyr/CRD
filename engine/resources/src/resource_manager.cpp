@@ -4,6 +4,7 @@
 #include <crd/jobs/jobs.hpp>
 #include <crd/log/log.hpp>
 #include <crd/memory/construct.hpp>
+#include <crd/platform/async_file.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/resources/log_channel.hpp>
 #include <crd/resources/resource_control_block.hpp>
@@ -90,7 +91,6 @@ ResourceControlBlock* make_failed_block(crd::memory::IAllocator* alloc, Resource
 }
 
 // Heap-allocated context for an in-flight async load job.
-// Captured as a void* in the SBO job closure (8 bytes ≤ 41).
 struct AsyncLoadCtx
 {
     ResourceManager*          manager;
@@ -101,9 +101,10 @@ struct AsyncLoadCtx
     crd::u64                  blob_size;
     ResourceId                id;
     crd::u32                  type_fourcc;
+    bool                      re_issue = false;
 };
 
-// SBO-compatible job callable — holds only an 8-byte pointer.
+// SBO-compatible job callable for async (buffered) loads.
 struct LoadJobFn
 {
     void* ctx_ptr;
@@ -114,6 +115,35 @@ static_assert(sizeof(LoadJobFn)  <= 41U, "LoadJobFn must fit in 41-byte SBO");
 static_assert(alignof(LoadJobFn) <= 8U,  "LoadJobFn alignment must be ≤ 8");
 static_assert(std::is_trivially_copyable_v<LoadJobFn>);
 static_assert(std::is_trivially_destructible_v<LoadJobFn>);
+
+// Heap-allocated context for a streaming load job (v1g).
+struct StreamLoadCtx
+{
+    ResourceManager*          manager;
+    ResourceControlBlock*     block;
+    ILoader*                  loader;
+    crd::containers::String   pack_path;
+    crd::u64                  blob_offset;
+    crd::u64                  blob_size;
+    ResourceId                id;
+    crd::u32                  type_fourcc;
+    bool                      re_issue = false;
+};
+
+// SBO-compatible job callable for streaming loads.
+struct StreamLoadJobFn
+{
+    void* ctx_ptr;
+    void operator()() noexcept { ResourceManager::run_stream_load_job(ctx_ptr); }
+};
+
+static_assert(sizeof(StreamLoadJobFn)  <= 41U, "StreamLoadJobFn must fit in 41-byte SBO");
+static_assert(alignof(StreamLoadJobFn) <= 8U,  "StreamLoadJobFn alignment must be ≤ 8");
+static_assert(std::is_trivially_copyable_v<StreamLoadJobFn>);
+static_assert(std::is_trivially_destructible_v<StreamLoadJobFn>);
+
+// Maximum number of ghost entries kept in A1out before the oldest is dropped.
+constexpr crd::usize kMaxA1out = 256U;
 
 } // anonymous namespace
 
@@ -129,13 +159,18 @@ ResourceManager::ResourceManager(crd::memory::IAllocator* a)
     , m_reload_subs(a)
     , m_pack_watches(a)
     , m_deferred_frees(a)
+    , m_a1in(a)
+    , m_am(a)
+    , m_a1out(a)
+    , m_a1out_set(a)
+    , m_pin_counts(a)
 {
 }
 
 ResourceManager::~ResourceManager()
 {
     // Callers must drain all async loads before destruction (e.g. call
-    // jobs::shutdown() or wait on every async counter).
+    // jobs::shutdown() or wait_ready() on all handles first).
     CRD_ASSERT_MSG(m_in_flight.empty(),
                    "ResourceManager destroyed while async loads are in flight; "
                    "call jobs::shutdown() or wait_ready() on all handles first");
@@ -145,14 +180,23 @@ ResourceManager::~ResourceManager()
         df.loader->unload(df.payload);
     }
 
+    // Two-pass teardown: unload payloads before freeing blocks.
+    // Payloads (e.g. MaterialResource) may hold ResourceHandles to other blocks
+    // in m_handles. Destroying them calls release_block() which touches those
+    // blocks' ref counts. All blocks must still be alive during unload or we
+    // get UAF on the ref-count field of an already-freed block.
     for (auto it = m_handles.begin(); it != m_handles.end(); ++it)
     {
         ResourceControlBlock* block = it.value();
-        void* p = block->payload.load(std::memory_order_acquire);
+        void* p = block->payload.exchange(nullptr, std::memory_order_acq_rel);
         if (p && block->loader)
         {
             block->loader->unload(p);
         }
+    }
+    for (auto it = m_handles.begin(); it != m_handles.end(); ++it)
+    {
+        ResourceControlBlock* block = it.value();
         block->~ResourceControlBlock();
         m_alloc->deallocate(block);
     }
@@ -321,6 +365,198 @@ crd::usize ResourceManager::in_flight_count() const noexcept
     return m_in_flight.size();
 }
 
+// ── Memory budget and eviction (v1g) ───────────────────────────────────────
+
+void ResourceManager::set_memory_budget(crd::u64 bytes)
+{
+    std::lock_guard<std::mutex> lk(m_mutex);
+    m_memory_budget = bytes;
+    try_evict_to_budget();
+}
+
+crd::u64 ResourceManager::current_memory_use() const noexcept
+{
+    std::lock_guard<std::mutex> lk(m_mutex);
+    return m_memory_used;
+}
+
+void ResourceManager::pin(ResourceId id)
+{
+    std::lock_guard<std::mutex> lk(m_mutex);
+    crd::u32* count = m_pin_counts.find(id);
+    if (count != nullptr)
+    {
+        ++(*count);
+    }
+    else
+    {
+        m_pin_counts.insert(id, 1U);
+    }
+    // If the block is already loaded, set pinned immediately.
+    ResourceControlBlock** pp = m_handles.find(id);
+    if (pp != nullptr)
+    {
+        (*pp)->pinned = true;
+    }
+}
+
+void ResourceManager::unpin(ResourceId id)
+{
+    std::lock_guard<std::mutex> lk(m_mutex);
+    crd::u32* count = m_pin_counts.find(id);
+    if (count == nullptr || *count == 0U)
+    {
+        return;
+    }
+    --(*count);
+    if (*count == 0U)
+    {
+        m_pin_counts.erase(id);
+        ResourceControlBlock** pp = m_handles.find(id);
+        if (pp != nullptr)
+        {
+            (*pp)->pinned = false;
+        }
+    }
+}
+
+// ── 2Q helpers (all called under m_mutex) ─────────────────────────────────
+
+void ResourceManager::insert_into_2q(ResourceId id, ResourceControlBlock* block)
+{
+    if (m_a1out_set.contains(id))
+    {
+        // A1out ghost hit — promote to Am (MRU position = back).
+        m_a1out_set.erase(id);
+        for (crd::usize i = 0U; i < m_a1out.size(); ++i)
+        {
+            if (m_a1out[i] == id)
+            {
+                m_a1out.erase(i); // order-preserving
+                break;
+            }
+        }
+        block->evict_queue = EvictQueue::Am;
+        m_am.push_back(id);
+    }
+    else
+    {
+        // New resource — add to A1in (FIFO back).
+        block->evict_queue = EvictQueue::A1in;
+        m_a1in.push_back(id);
+    }
+}
+
+void ResourceManager::touch_in_am(ResourceId id)
+{
+    // Move id from wherever it is in m_am to the MRU end (back).
+    for (crd::usize i = 0U; i < m_am.size(); ++i)
+    {
+        if (m_am[i] == id)
+        {
+            m_am.erase(i); // order-preserving
+            m_am.push_back(id);
+            return;
+        }
+    }
+}
+
+void ResourceManager::evict_block_locked(ResourceId id, ResourceControlBlock* block)
+{
+    CRD_ASSERT_MSG(block->use_count() == 0U, "evict_block_locked: block has active handles");
+    CRD_ASSERT_MSG(!block->pinned, "evict_block_locked: block is pinned");
+    CRD_ASSERT_MSG(block->state.load(std::memory_order_acquire) == LoadState::Ready,
+                   "evict_block_locked: block state is not Ready");
+
+    void* p = block->payload.load(std::memory_order_acquire);
+    if (p != nullptr && block->loader != nullptr)
+    {
+        block->loader->unload(p);
+        block->payload.store(nullptr, std::memory_order_release);
+    }
+
+    m_memory_used -= block->payload_size;
+    block->payload_size = 0U;
+    block->state.store(LoadState::Unloaded, std::memory_order_release);
+    block->evict_queue = EvictQueue::None;
+
+    // Add id to A1out ghost list (FIFO bounded at kMaxA1out).
+    if (!m_a1out_set.contains(id))
+    {
+        if (m_a1out.size() >= kMaxA1out)
+        {
+            // Remove the oldest ghost (front of FIFO). Use erase(0) to preserve
+            // FIFO order in the remaining entries (Bug-3 fix: not swap_remove).
+            const ResourceId oldest = m_a1out[0];
+            m_a1out.erase(0);
+            m_a1out_set.erase(oldest);
+        }
+        m_a1out.push_back(id);
+        m_a1out_set.insert(id, true);
+    }
+}
+
+void ResourceManager::try_evict_to_budget()
+{
+    // Called under m_mutex. Evict zero-handle, un-pinned, Ready blocks until
+    // m_memory_used <= m_memory_budget, preferring A1in (FIFO) over Am (LRU).
+    while (m_memory_used > m_memory_budget)
+    {
+        ResourceId victim_id{};
+        bool       found = false;
+
+        // Prefer A1in front (oldest probationary entry).
+        for (crd::usize i = 0U; i < m_a1in.size(); ++i)
+        {
+            const ResourceId rid = m_a1in[i];
+            ResourceControlBlock** pp = m_handles.find(rid);
+            if (pp == nullptr) { continue; }
+            ResourceControlBlock* b = *pp;
+            if (b->state.load(std::memory_order_acquire) == LoadState::Ready
+                && b->use_count() == 0U
+                && !b->pinned)
+            {
+                victim_id = rid;
+                found     = true;
+                m_a1in.erase(i); // remove from queue before eviction
+                break;
+            }
+        }
+
+        if (!found)
+        {
+            // Fall back to Am front (least recently used main entry).
+            for (crd::usize i = 0U; i < m_am.size(); ++i)
+            {
+                const ResourceId rid = m_am[i];
+                ResourceControlBlock** pp = m_handles.find(rid);
+                if (pp == nullptr) { continue; }
+                ResourceControlBlock* b = *pp;
+                if (b->state.load(std::memory_order_acquire) == LoadState::Ready
+                    && b->use_count() == 0U
+                    && !b->pinned)
+                {
+                    victim_id = rid;
+                    found     = true;
+                    m_am.erase(i);
+                    break;
+                }
+            }
+        }
+
+        if (!found)
+        {
+            break; // nothing evictable; stop (budget stays violated for pinned/live resources)
+        }
+
+        ResourceControlBlock** pp = m_handles.find(victim_id);
+        if (pp != nullptr)
+        {
+            evict_block_locked(victim_id, *pp);
+        }
+    }
+}
+
 // ── Internal helpers ───────────────────────────────────────────────────────
 
 const ResourceManager::MountRecord* ResourceManager::find_mount(crd::u32 mount_id) const noexcept
@@ -348,19 +584,38 @@ ResourceControlBlock* ResourceManager::load_sync_impl(ResourceId id)
     crd::containers::String pack_path(m_alloc);
     ResourceControlBlock*   block       = nullptr;
     bool                    coalescing  = false;
+    bool                    re_issue    = false;
 
     {
         std::lock_guard<std::mutex> lk(m_mutex);
 
-        // 1. Cache hit — return the existing permanent block.
+        // 1. Cache hit — check state to determine how to respond.
         if (ResourceControlBlock** p = m_handles.find(id))
         {
-            (*p)->add_ref();
-            return *p;
+            ResourceControlBlock* b = *p;
+            const LoadState s = b->state.load(std::memory_order_acquire);
+
+            if (s == LoadState::Ready || s == LoadState::Placeholder || s == LoadState::Failed)
+            {
+                // Terminal state: return immediately with a new ref.
+                if (b->evict_queue == EvictQueue::Am)
+                {
+                    touch_in_am(id); // LRU bump for Am cache hits
+                }
+                b->add_ref();
+                return b;
+            }
+
+            if (s == LoadState::Unloaded)
+            {
+                // Block was evicted — re-issue the load using the existing block.
+                re_issue = true;
+                // Fall through to resolve loader/manifest below.
+            }
+            // s == Loading or Queued: fall through to in-flight coalescing.
         }
 
-        // 2. Cycle detection — must happen before m_in_flight check so that
-        //    recursive calls from inside loader->load() hit this path.
+        // 2. Cycle detection — must happen before m_in_flight check.
         if (visiting_contains(id))
         {
             const auto id_str = id.to_string(m_alloc);
@@ -370,7 +625,7 @@ ResourceControlBlock* ResourceManager::load_sync_impl(ResourceId id)
             return make_failed_block(m_alloc, id);
         }
 
-        // 3. In-flight coalescing — another sync or async load is already running.
+        // 3. In-flight coalescing — share the existing in-flight block.
         if (ResourceControlBlock** p = m_in_flight.find(id))
         {
             (*p)->add_ref();
@@ -412,20 +667,30 @@ ResourceControlBlock* ResourceManager::load_sync_impl(ResourceId id)
                 return make_failed_block(m_alloc, id);
             }
 
-            // Capture everything needed outside the lock.
             pack_path   = mount->pack_path;
             blob_offset = entry->blob_offset;
             blob_size   = entry->blob_size;
             type_fourcc = entry->type_fourcc;
 
-            // Allocate control block and mark it Loading.
-            void* raw = m_alloc->allocate(sizeof(ResourceControlBlock), alignof(ResourceControlBlock));
-            block = new (raw) ResourceControlBlock();
-            block->id          = id;
-            block->type_fourcc = type_fourcc;
-            block->alloc       = m_alloc;
-            block->loader      = loader;
-            block->state.store(LoadState::Loading, std::memory_order_release);
+            if (re_issue)
+            {
+                // Reuse the evicted block. Give the caller their ref.
+                block         = *m_handles.find(id);
+                block->loader = loader;
+                block->add_ref(); // caller's ref
+                block->state.store(LoadState::Loading, std::memory_order_release);
+            }
+            else
+            {
+                // First-ever load: allocate a new block.
+                void* raw = m_alloc->allocate(sizeof(ResourceControlBlock), alignof(ResourceControlBlock));
+                block = new (raw) ResourceControlBlock();
+                block->id          = id;
+                block->type_fourcc = type_fourcc;
+                block->alloc       = m_alloc;
+                block->loader      = loader;
+                block->state.store(LoadState::Loading, std::memory_order_release);
+            }
 
             m_in_flight.insert(id, block);
         }
@@ -487,9 +752,32 @@ ResourceControlBlock* ResourceManager::load_sync_impl(ResourceId id)
         if (payload != nullptr)
         {
             block->payload.store(payload, std::memory_order_release);
-            block->permanent = true;  // must be set before state store (memory ordering)
+            block->payload_size = blob_size;
+
+            // Honour pin-before-load: if the resource was pinned before its block
+            // was created, apply the flag now.
+            if (m_pin_counts.find(id) != nullptr)
+            {
+                block->pinned = true;
+            }
+
+            if (re_issue)
+            {
+                // Re-issued evicted block: bump generation and re-queue.
+                block->generation.fetch_add(1U, std::memory_order_acq_rel);
+                insert_into_2q(id, block);
+            }
+            else
+            {
+                block->permanent = true;
+                m_handles.insert(id, block);
+                insert_into_2q(id, block);
+            }
+
             block->state.store(final_state, std::memory_order_release);
-            m_handles.insert(id, block);
+            m_memory_used += blob_size;
+            try_evict_to_budget();
+
             CRD_LOG_DEBUG(g_log_resources, "ResourceManager: loaded resource (Ready)");
         }
         else
@@ -512,22 +800,39 @@ ResourceControlBlock* ResourceManager::load_async_impl(ResourceId id)
     crd::u32                type_fourcc = 0;
     crd::containers::String pack_path(m_alloc);
     ResourceControlBlock*   block       = nullptr;
+    bool                    re_issue    = false;
 
     {
         std::lock_guard<std::mutex> lk(m_mutex);
 
-        // 1. Cache hit — return terminal block with an extra ref for the caller.
+        // 1. Cache hit — check state.
         if (ResourceControlBlock** p = m_handles.find(id))
         {
-            (*p)->add_ref();
-            return *p;
+            ResourceControlBlock* b = *p;
+            const LoadState s = b->state.load(std::memory_order_acquire);
+
+            if (s == LoadState::Ready || s == LoadState::Placeholder || s == LoadState::Failed)
+            {
+                if (b->evict_queue == EvictQueue::Am)
+                {
+                    touch_in_am(id);
+                }
+                b->add_ref();
+                return b;
+            }
+
+            if (s == LoadState::Unloaded)
+            {
+                re_issue = true;
+            }
+            // Loading/Queued: fall through to in-flight coalescing.
         }
 
         // 2. In-flight coalescing — share the existing in-flight block.
         if (ResourceControlBlock** p = m_in_flight.find(id))
         {
             (*p)->add_ref();
-            return *p;  // caller uses wait_ready()
+            return *p;
         }
 
         // 3. Resolve manifest, loader, and mount.
@@ -565,16 +870,28 @@ ResourceControlBlock* ResourceManager::load_async_impl(ResourceId id)
         blob_size   = entry->blob_size;
         type_fourcc = entry->type_fourcc;
 
-        // Allocate block (state=Queued). Hold one extra manager ref for the in-flight
-        // period; released in run_load_job after the job finishes.
-        void* raw = m_alloc->allocate(sizeof(ResourceControlBlock), alignof(ResourceControlBlock));
-        block = new (raw) ResourceControlBlock();
-        block->id          = id;
-        block->type_fourcc = type_fourcc;
-        block->alloc       = m_alloc;
-        block->loader      = loader;
-        block->state.store(LoadState::Queued, std::memory_order_release);
-        block->add_ref();  // manager's in-flight ref
+        if (re_issue)
+        {
+            // Reuse the evicted block.
+            block         = *m_handles.find(id);
+            block->loader = loader;
+            block->add_ref(); // caller's ref
+            block->add_ref(); // manager's in-flight ref
+            block->state.store(LoadState::Queued, std::memory_order_release);
+        }
+        else
+        {
+            // Allocate block (state=Queued). Ref=1 (initial, becomes caller's);
+            // manager adds one more for the in-flight period.
+            void* raw = m_alloc->allocate(sizeof(ResourceControlBlock), alignof(ResourceControlBlock));
+            block = new (raw) ResourceControlBlock();
+            block->id          = id;
+            block->type_fourcc = type_fourcc;
+            block->alloc       = m_alloc;
+            block->loader      = loader;
+            block->state.store(LoadState::Queued, std::memory_order_release);
+            block->add_ref(); // manager's in-flight ref
+        }
 
         m_in_flight.insert(id, block);
     } // lock released
@@ -589,7 +906,8 @@ ResourceControlBlock* ResourceManager::load_async_impl(ResourceId id)
         blob_offset,
         blob_size,
         id,
-        type_fourcc
+        type_fourcc,
+        re_issue
     };
 
     // Submit job and store the returned Counter so wait_ready() can claim it.
@@ -634,8 +952,6 @@ void ResourceManager::run_load_job(void* raw_ctx) noexcept
 
     if (read_ok)
     {
-        // visiting_push/pop enables cycle detection for transitive load_sync calls
-        // made from inside the loader (which runs on this fiber's thread).
         visiting_push(ctx->id);
         const LoadContext load_ctx{
             ctx->id,
@@ -671,8 +987,27 @@ void ResourceManager::run_load_job(void* raw_ctx) noexcept
         if (payload != nullptr)
         {
             block->payload.store(payload, std::memory_order_release);
-            block->permanent = true;  // must be set before state store (memory ordering)
-            mgr->m_handles.insert(ctx->id, block);
+            block->payload_size = ctx->blob_size;
+
+            if (mgr->m_pin_counts.find(ctx->id) != nullptr)
+            {
+                block->pinned = true;
+            }
+
+            if (ctx->re_issue)
+            {
+                block->generation.fetch_add(1U, std::memory_order_acq_rel);
+                mgr->insert_into_2q(ctx->id, block);
+            }
+            else
+            {
+                block->permanent = true;
+                mgr->m_handles.insert(ctx->id, block);
+                mgr->insert_into_2q(ctx->id, block);
+            }
+
+            mgr->m_memory_used += ctx->blob_size;
+            mgr->try_evict_to_budget();
         }
 
         // Release store — visible to wait_ready()'s acquire load after jobs::wait() returns.
@@ -698,6 +1033,249 @@ void ResourceManager::run_load_job(void* raw_ctx) noexcept
     // Free the AsyncLoadCtx.
     crd::memory::IAllocator* ctx_alloc = mgr->m_alloc;
     ctx->~AsyncLoadCtx();
+    ctx_alloc->deallocate(ctx);
+}
+
+// ── Streamed load (v1g) ────────────────────────────────────────────────────
+
+ResourceControlBlock* ResourceManager::load_streamed_impl(ResourceId id)
+{
+    ILoader*                loader      = nullptr;
+    crd::u64                blob_offset = 0;
+    crd::u64                blob_size   = 0;
+    crd::u32                type_fourcc = 0;
+    crd::containers::String pack_path(m_alloc);
+    ResourceControlBlock*   block       = nullptr;
+    bool                    re_issue    = false;
+
+    {
+        std::lock_guard<std::mutex> lk(m_mutex);
+
+        // 1. Cache hit.
+        if (ResourceControlBlock** p = m_handles.find(id))
+        {
+            ResourceControlBlock* b = *p;
+            const LoadState s = b->state.load(std::memory_order_acquire);
+
+            if (s == LoadState::Ready || s == LoadState::Placeholder || s == LoadState::Failed)
+            {
+                if (b->evict_queue == EvictQueue::Am)
+                {
+                    touch_in_am(id);
+                }
+                b->add_ref();
+                return b;
+            }
+
+            if (s == LoadState::Unloaded)
+            {
+                re_issue = true;
+            }
+        }
+
+        // 2. In-flight coalescing.
+        if (ResourceControlBlock** p = m_in_flight.find(id))
+        {
+            (*p)->add_ref();
+            return *p;
+        }
+
+        // 3. Resolve manifest, loader, and mount.
+        const MountEntry* entry = m_live.find(id);
+        if (entry == nullptr)
+        {
+            return make_failed_block(m_alloc, id);
+        }
+
+        std::unique_ptr<ILoader>* lp = m_loaders.find(entry->type_fourcc);
+        if (lp == nullptr)
+        {
+            return make_failed_block(m_alloc, id);
+        }
+        loader = lp->get();
+
+        const MountRecord* mount = find_mount(entry->mount_id);
+        if (mount == nullptr)
+        {
+            return make_failed_block(m_alloc, id);
+        }
+
+        pack_path   = mount->pack_path;
+        blob_offset = entry->blob_offset;
+        blob_size   = entry->blob_size;
+        type_fourcc = entry->type_fourcc;
+
+        if (re_issue)
+        {
+            block         = *m_handles.find(id);
+            block->loader = loader;
+            block->add_ref(); // caller's ref
+            block->add_ref(); // manager's in-flight ref
+            block->state.store(LoadState::Queued, std::memory_order_release);
+        }
+        else
+        {
+            void* raw = m_alloc->allocate(sizeof(ResourceControlBlock), alignof(ResourceControlBlock));
+            block = new (raw) ResourceControlBlock();
+            block->id          = id;
+            block->type_fourcc = type_fourcc;
+            block->alloc       = m_alloc;
+            block->loader      = loader;
+            block->state.store(LoadState::Queued, std::memory_order_release);
+            block->add_ref(); // manager's in-flight ref
+        }
+
+        m_in_flight.insert(id, block);
+    }
+
+    // Heap-allocate the context.
+    void* ctx_raw = m_alloc->allocate(sizeof(StreamLoadCtx), alignof(StreamLoadCtx));
+    auto* ctx = new (ctx_raw) StreamLoadCtx{
+        this,
+        block,
+        loader,
+        crd::containers::String(pack_path.data(), pack_path.size(), m_alloc),
+        blob_offset,
+        blob_size,
+        id,
+        type_fourcc,
+        re_issue
+    };
+
+    // Submit job and store Counter.
+    const StreamLoadJobFn fn{ctx};
+    crd::jobs::Counter* c = crd::jobs::run(crd::jobs::make_job(fn));
+    block->load_counter.store(c, std::memory_order_release);
+
+    // Counter leak fix.
+    const LoadState s = block->state.load(std::memory_order_acquire);
+    if (s != LoadState::Queued && s != LoadState::Loading)
+    {
+        void* raw_c = block->load_counter.exchange(nullptr, std::memory_order_acquire);
+        if (raw_c != nullptr)
+        {
+            crd::jobs::wait(static_cast<crd::jobs::Counter*>(raw_c));
+        }
+    }
+
+    return block;
+}
+
+void ResourceManager::run_stream_load_job(void* raw_ctx) noexcept
+{
+    auto* ctx  = static_cast<StreamLoadCtx*>(raw_ctx);
+    ResourceControlBlock* block = ctx->block;
+    ResourceManager*      mgr   = ctx->manager;
+
+    block->state.store(LoadState::Loading, std::memory_order_release);
+
+    // Open the pack file via AsyncFile and submit a read for the artifact range.
+    crd::platform::AsyncFile af = crd::platform::AsyncFile::open(
+        crd::containers::StringView(ctx->pack_path.data(), ctx->pack_path.size()));
+
+    void*     payload     = nullptr;
+    LoadState final_state = LoadState::Failed;
+
+    if (af.is_open() && ctx->blob_offset + ctx->blob_size <= af.size())
+    {
+        crd::containers::Array<crd::u8> buf(mgr->m_alloc);
+        buf.resize(ctx->blob_size);
+
+        crd::jobs::Counter* c = af.read_async(
+            ctx->blob_offset,
+            crd::containers::Span<crd::u8>(buf.data(), buf.size()));
+
+        if (c != nullptr)
+        {
+            crd::jobs::wait(c); // suspend fiber or spin until read completes
+
+            LoadContext load_ctx{};
+            load_ctx.id            = ctx->id;
+            load_ctx.bytes         = crd::containers::as_const_span(buf);
+            load_ctx.manager       = mgr;
+            load_ctx.allocator     = mgr->m_alloc;
+            load_ctx.stream_file   = &af;
+            load_ctx.stream_offset = ctx->blob_offset;
+            load_ctx.stream_size   = ctx->blob_size;
+
+            visiting_push(ctx->id);
+            payload = ctx->loader->load(load_ctx);
+            visiting_pop();
+
+            if (payload != nullptr)
+            {
+                final_state = LoadState::Ready;
+            }
+            else
+            {
+                payload     = ctx->loader->load_placeholder(load_ctx);
+                final_state = payload ? LoadState::Placeholder : LoadState::Failed;
+            }
+        }
+        else
+        {
+            CRD_LOG_ERROR(g_log_resources,
+                          "ResourceManager::run_stream_load_job: read_async returned null counter");
+        }
+    }
+    else
+    {
+        CRD_LOG_ERROR(g_log_resources,
+                      "ResourceManager::run_stream_load_job: failed to open pack or invalid range");
+    }
+
+    // Finalize under lock.
+    {
+        std::lock_guard<std::mutex> lk(mgr->m_mutex);
+
+        mgr->m_in_flight.erase(ctx->id);
+
+        if (payload != nullptr)
+        {
+            block->payload.store(payload, std::memory_order_release);
+            block->payload_size = ctx->blob_size;
+
+            if (mgr->m_pin_counts.find(ctx->id) != nullptr)
+            {
+                block->pinned = true;
+            }
+
+            if (ctx->re_issue)
+            {
+                block->generation.fetch_add(1U, std::memory_order_acq_rel);
+                mgr->insert_into_2q(ctx->id, block);
+            }
+            else
+            {
+                block->permanent = true;
+                mgr->m_handles.insert(ctx->id, block);
+                mgr->insert_into_2q(ctx->id, block);
+            }
+
+            mgr->m_memory_used += ctx->blob_size;
+            mgr->try_evict_to_budget();
+        }
+
+        block->state.store(final_state, std::memory_order_release);
+    }
+
+    // Release manager's in-flight ref.
+    const crd::u32 remaining = block->release();
+    if (remaining == 0U && !block->permanent)
+    {
+        void* p = block->payload.load(std::memory_order_acquire);
+        if (p && block->loader)
+        {
+            block->loader->unload(p);
+            block->payload.store(nullptr, std::memory_order_release);
+        }
+        crd::memory::IAllocator* blk_alloc = block->alloc;
+        block->~ResourceControlBlock();
+        blk_alloc->deallocate(block);
+    }
+
+    crd::memory::IAllocator* ctx_alloc = mgr->m_alloc;
+    ctx->~StreamLoadCtx();
     ctx_alloc->deallocate(ctx);
 }
 

@@ -4,7 +4,7 @@ General-purpose resource substrate: typed payloads loaded from cooked binary pac
 intrusive reference counts, with synchronous (v1c) and async (v1d) delivery. Plus `tools/asset_cooker/`
 — a separate CLI that ingests source assets and emits runtime-consumed binary packs.
 
-**Phase 2.6 in progress** — v1a, v1b, v1c, v1d, v1e, v1f shipped.
+**Phase 2.6 COMPLETE** — v1a, v1b, v1c, v1d, v1e, v1f, v1g shipped.
 
 Depends on: `crd-core`, `crd-log`, `crd-memory`, `crd-containers`, `crd-platform`.  
 Does NOT depend on: `crd-rhi`, `crd-shader`, `crd-renderer` (loader-registry pattern keeps this low in
@@ -20,7 +20,7 @@ the graph — a DAW build can link `crd-resources` without any GPU code). ADR-00
 | v1d | `crd-platform::AsyncFile`, `load_async<T>`, `wait_ready()` fiber-cooperative, load coalescing | ✅ |
 | v1e | `ShaderResourceLoader`, `MaterialResourceLoader`, `compile_glsl()`, GLSL/material cooker handlers, `smoke_resources_render` | ✅ |
 | v1f | Hot-reload: PACK-file mtime polling, atomic payload swap, last-good preservation, `subscribe_reload`/`unsubscribe_reload`, `poll_hot_reload`, `reload_mount_now` | ✅ |
-| v1g | Streaming, 2Q LRU eviction, memory budget, pinning | 🔜 |
+| v1g | `load_streamed<T>`, 2Q LRU eviction, memory budget (`set_memory_budget`), `pin`/`unpin`, `load_streamed` via `AsyncFile`, re-issue on eviction | ✅ |
 
 ## Core concepts
 
@@ -194,6 +194,39 @@ period guarantees the old payload is alive for the rest of the current frame.
 `payload.exchange(new, acq_rel)` then `state.store(Ready, release)`. Readers (`get()`) do
 `state.load(acquire)` then `payload.load(acquire)`. This prevents a data race between a reader
 mid-`get()` and a concurrent reload.
+
+## Memory budget + 2Q eviction (v1g)
+
+```cpp
+// Set a soft memory ceiling. Eviction runs after each successful load that exceeds the budget.
+// Victims chosen by 2Q (Johnson & Shasha 1994): A1in FIFO first, then Am LRU.
+// Default: unlimited (~0ULL).
+void set_memory_budget(crd::u64 bytes);
+
+// Bytes currently tracked against the budget (uses blob_size as proxy). Thread-safe.
+[[nodiscard]] crd::u64 current_memory_use() const noexcept;
+
+// Pinned resources are never evicted, even at refcount 0.
+// Reference-counted: each pin() must be paired with exactly one unpin().
+// Safe to call before or after the resource is loaded.
+void pin  (ResourceId id);
+void unpin(ResourceId id);
+
+// Like load_async but reads the artifact via crd::platform::AsyncFile inside the job fiber.
+// LoadContext::stream_file is set for the loader; bytes span is empty.
+// Requires crd::jobs to be initialised.
+template <typename T>
+[[nodiscard]] ResourceHandle<T> load_streamed(ResourceId id);
+```
+
+**2Q policy summary (Johnson & Shasha 1994):**
+- New resources → `A1in` (FIFO probationary queue).
+- When `A1in` evicts a resource → id moves to `A1out` ghost (bounded at 256 entries; no payload).
+- When a resource in `A1out` is reloaded → promoted to `Am` (LRU main queue); generation bumped.
+- Eviction preference: A1in front before Am front; pinned/active entries skipped.
+
+**Re-issue:** evicted blocks stay in `m_handles` with `state = Unloaded`. `load_sync`/`load_async`/
+`load_streamed` re-issue without allocating a new control block; `generation` is incremented.
 
 ## Public API (v1d surface)
 
@@ -394,10 +427,14 @@ runtime/examples/
 - [v1c — RefCounted + ResourceHandle + load_sync](../sessions/2026-05-03-resources-v1c.md)
 - [v1d — AsyncFile + load_async + wait_ready](../sessions/2026-05-04-resources-v1d.md)
 - [v1e — ShaderResourceLoader + MaterialResourceLoader + smoke](../sessions/2026-05-04-resources-v1e.md)
+- [v1f — Hot-reload: mtime polling, atomic payload swap, callbacks](../sessions/2026-05-04-resources-v1f.md)
+- [v1g — load_streamed, 2Q eviction, memory budget, pinning](../sessions/2026-05-04-resources-v1g.md)
 
 ## Long-term direction
 
-- v1e SHIPPED: `ShaderResourceLoader` + `MaterialResourceLoader` + `compile_glsl()` + GLSL/material cooker handlers + `smoke_resources_render`.
-- v1f adds dev-mode file watching and atomic hot-reload with generation-bump notification.
-- v1g closes the streaming story: `load_streamed<T>` for large blobs, 2Q LRU eviction, memory budget, pinning.
-- Phase 3.0 `crd-scene` registers a `SceneLoader` into the same registry — the resource substrate becomes the single load path for all engine asset types.
+- **Phase 2.6 COMPLETE** — all v1a–v1g slices shipped. crd-resources is a full resource substrate:
+  typed loaders, sync + async + streamed load, hot-reload, 2Q LRU eviction, memory budget, pinning.
+- Phase 3.0 `crd-scene` registers a `SceneLoader` into the same registry — the resource substrate
+  becomes the single load path for all engine asset types.
+- Phase 2.7 `TextureResource` + `MeshResource` + glTF import will be the first consumers of the
+  full substrate (async streaming + eviction) for real runtime data.

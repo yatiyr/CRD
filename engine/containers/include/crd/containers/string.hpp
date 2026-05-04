@@ -273,13 +273,13 @@ public:
             return;
         }
         // Already in heap mode and won't fit inline; shrink heap allocation.
-        if (n + 1 < heap_capacity_internal())
+        if (n < heap_capacity_internal()) // n usable chars needed; cap > n means wasted space
         {
             char* new_buf = static_cast<char*>(m_alloc->allocate(n + 1, alignof(char)));
             std::memcpy(new_buf, m_heap.data, n + 1);
             m_alloc->deallocate(m_heap.data);
             m_heap.data = new_buf;
-            set_heap_capacity(n + 1);
+            set_heap_capacity(n); // usable chars only
         }
     }
 
@@ -424,7 +424,7 @@ private:
         p[n] = '\0';
         m_heap.data = p;
         set_heap_size(n);
-        set_heap_capacity(cap);
+        set_heap_capacity(n); // usable chars only; allocation is n+1 (incl. NUL)
         // Touch top byte to set the sentinel — covered by set_heap_capacity().
     }
 
@@ -468,7 +468,7 @@ private:
         }
         m_heap.data = new_buf;
         set_heap_size(old_size);
-        set_heap_capacity(new_cap_chars + 1);
+        set_heap_capacity(new_cap_chars); // usable chars only; allocation is new_cap_chars+1
     }
 
     [[nodiscard]] bool try_grow_to(usize target) noexcept
@@ -492,7 +492,7 @@ private:
         }
         m_heap.data = new_buf;
         set_heap_size(old_size);
-        set_heap_capacity(new_cap_chars + 1);
+        set_heap_capacity(new_cap_chars); // usable chars only; allocation is new_cap_chars+1
         return true;
     }
 

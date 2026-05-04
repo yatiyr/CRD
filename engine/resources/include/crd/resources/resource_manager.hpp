@@ -3,6 +3,7 @@
 #include <crd/containers/array.hpp>
 #include <crd/containers/hash_map.hpp>
 #include <crd/containers/string.hpp>
+#include <crd/core/platform.hpp>
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
 #include <crd/resources/crdr.hpp>
@@ -102,6 +103,30 @@ public:
     // Requires crd::jobs to be initialised before the call.
     template <typename T>
     [[nodiscard]] ResourceHandle<T> load_async(ResourceId id);
+
+    // ── Memory budget and eviction (v1g) ──────────────────────────────────────
+    // Set a soft memory ceiling (bytes). When the ceiling is exceeded after a
+    // load, ResourceManager evicts zero-handle, un-pinned, Ready blocks using
+    // the 2Q (Johnson & Shasha) policy: A1in (FIFO probationary) then Am (LRU
+    // main). Default is unlimited (~0ULL).
+    void set_memory_budget(crd::u64 bytes);
+
+    // Total bytes currently tracked against the budget. Thread-safe.
+    [[nodiscard]] crd::u64 current_memory_use() const noexcept;
+
+    // Pin / unpin a resource by id. Pinned resources are never evicted.
+    // Reference-counted — each pin() must be paired with exactly one unpin().
+    // Safe to call before or after the resource is loaded.
+    void pin  (ResourceId id);
+    void unpin(ResourceId id);
+
+    // ── Streamed load (v1g) ────────────────────────────────────────────────────
+    // Like load_async but reads the artifact via crd::platform::AsyncFile
+    // inside the job fiber rather than buffering the whole blob up-front.
+    // Requires crd::jobs to be initialised.
+    // Call handle.wait_ready() to synchronise.
+    template <typename T>
+    [[nodiscard]] ResourceHandle<T> load_streamed(ResourceId id);
 
     // ── Hot-reload ─────────────────────────────────────────────────────────
     // Subscribe a callback for a specific resource. Returns a token for
@@ -208,17 +233,39 @@ private:
     crd::containers::Array<PackWatch>                                          m_pack_watches;
     crd::containers::Array<DeferredFree>                                       m_deferred_frees;
 
+    // ── 2Q eviction state (v1g) ────────────────────────────────────────────────
+    // Johnson & Shasha 1994 two-queue policy.
+    //   A1in  — FIFO probationary queue. New resources land here.
+    //   Am    — LRU main queue. Promoted from A1in on an A1out ghost hit.
+    //   A1out — Ghost FIFO (bounded at kMaxA1out). Remembers recently evicted ids.
+    //   A1out_set — O(1) membership check for A1out.
+    //   m_pin_counts — refcounted pin records; pinned blocks skip eviction.
+    crd::u64                                           m_memory_budget  = ~0ULL;
+    crd::u64                                           m_memory_used    = 0;
+    crd::containers::Array<ResourceId>                 m_a1in;
+    crd::containers::Array<ResourceId>                 m_am;
+    crd::containers::Array<ResourceId>                 m_a1out;
+    crd::containers::HashMap<ResourceId, bool>         m_a1out_set;
+    crd::containers::HashMap<ResourceId, crd::u32>     m_pin_counts;
+
     // Internal helpers.
     [[nodiscard]] ResourceControlBlock* load_sync_impl(ResourceId id);
     [[nodiscard]] ResourceControlBlock* load_async_impl(ResourceId id);
+    [[nodiscard]] ResourceControlBlock* load_streamed_impl(ResourceId id);
     [[nodiscard]] const MountRecord*    find_mount(crd::u32 mount_id) const noexcept;
     crd::usize                          do_reload_mount(PackWatch& watch);
 
+    // 2Q queue management — all called under m_mutex.
+    void insert_into_2q    (ResourceId id, ResourceControlBlock* block); // new load or re-issue
+    void touch_in_am       (ResourceId id);                              // LRU bump for Am hit
+    CRD_NOINLINE void evict_block_locked(ResourceId id, ResourceControlBlock* block); // evict one block
+    CRD_NOINLINE void try_evict_to_budget();                                          // evict until within budget
+
 public:
-    // Job entry point for async loads. Receives a heap-allocated AsyncLoadCtx*.
-    // Public so the internal SBO-job closure (anonymous namespace) can call it.
+    // Job entry points. Public so anonymous-namespace SBO closures can call them.
     // Not part of the user-facing API; do not call directly.
-    static void run_load_job(void* ctx) noexcept;
+    static void run_load_job   (void* ctx) noexcept;
+    static void run_stream_load_job(void* ctx) noexcept;
 };
 
 // ── Template implementations (must be in header) ────────────────────────────
@@ -233,6 +280,12 @@ template <typename T>
 ResourceHandle<T> ResourceManager::load_async(ResourceId id)
 {
     return ResourceHandle<T>(load_async_impl(id));
+}
+
+template <typename T>
+ResourceHandle<T> ResourceManager::load_streamed(ResourceId id)
+{
+    return ResourceHandle<T>(load_streamed_impl(id));
 }
 
 } // namespace crd::resources
