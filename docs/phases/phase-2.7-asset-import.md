@@ -1,6 +1,6 @@
 # Phase 2.7 — Asset import bootstrap
 
-**Status:** ⏳ planned — begins after Phase 2.6 v1g ships
+**Status:** 🚧 active — v1a shipped 2026-05-04
 **ADRs:** ADR-0042 (texture cooked format), ADR-0043 (mesh resource + glTF import scope)
 **New modules:** loaders in `crd-renderer`; cooker handlers in `tools/asset_cooker/`
 **Depends on:** Phase 2.6 complete (ResourceManager, ILoader registry, CRDR cooker pipeline)
@@ -141,7 +141,7 @@ Vertex layout rationale: see ADR-0043.
 
 **Scope:**
 - `TextureFormat` enum + `TextureResource` struct in `engine/renderer/`.
-- `TextureResourceLoader`: reads `type='TXTR'` artifact; parses `HEAD` chunk (12 bytes:
+- `TextureResourceLoader`: reads `type='TXTR'` artifact; parses `HEAD` chunk (16 bytes:
   width u32, height u32, mip_count u32, format u8, padding u8[3]); reads one `MIPn` chunk
   per mip level into `TextureResource::mips`. Registered via `register_texture_loader(rm)`.
 - Texture cooker handler (`.png`, `.jpg`, `.tga`, `.bmp` → `type='TXTR'`):
@@ -152,11 +152,12 @@ Vertex layout rationale: see ADR-0043.
   - Writes `HEAD` chunk + one `MIPn` chunk per level.
 - `kFourCC_TXTR`, `kFourCC_HEAD`, `kFourCC_MIP0`–`kFourCC_MIP15` added to `crdr.hpp`.
 
-**Tests:**
-- TXTR artifact round-trip: cook a 4×4 RGBA8 PNG → load via `ResourceManager` → pixel bytes match.
-- Mip count correct: 4×4 → 3 mips (4×4, 2×2, 1×1).
-- Missing HEAD chunk → `LoadState::Failed`.
-- `smoke_texture.exe`: load a real PNG (bundled test asset), assert `mips[0].width == expected`.
+**Tests (shipped):**
+- `TextureResource loads from CRDR artifact` — round-trip: hand-assembled TXTR artifact → load → verify mip_count=3, mips[0].width=4, format=RGBA8Unorm.
+- `TextureResource mip chain has correct dimensions` — mip dims 4×4, 2×2, 1×1.
+- `TextureResource fails when HEAD chunk is absent` — missing HEAD → `LoadState::Failed`.
+- `TextureResource cooked from TGA round-trip` — cook a 4×4 TGA via the texture handler, mount, load, verify R=255.
+- `smoke_texture.exe` (headless): builds a TXTR artifact directly, mounts, loads, verifies all mip dims and pixel values.
 
 ### v1b — `MeshResource` + glTF import
 

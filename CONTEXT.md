@@ -11,7 +11,7 @@
 
 ## Current focus
 
-**Phase 2.7 — Asset import bootstrap. Next: v1a (`TextureResource` + texture cooker).**
+**Phase 2.7 — Asset import bootstrap. v1a shipped. Next: v1b (`MeshResource` + cgltf glTF import).**
 
 Phase 2.7 slices:
 - v1a: `TextureResource` + stb_image texture cooker (RGBA8/BC7, mip gen, TXTR artifact)
@@ -37,27 +37,31 @@ _none — running on the main roadmap._
 
 ## Last shipped milestone
 
-**2026-05-04 — Phase 2.6 v1g SHIPPED: load_streamed + 2Q LRU eviction + memory budget + pinning. Phase 2.6 COMPLETE.**
+**2026-05-04 — Phase 2.7 v1a SHIPPED: `TextureResource` + stb_image texture cooker.**
 
-`ResourceManager::set_memory_budget(bytes)` / `current_memory_use()`: soft memory ceiling. After each successful load, `try_evict_to_budget()` evicts zero-handle, unpinned `Ready` blocks using 2Q (Johnson & Shasha 1994): `A1in` FIFO probationary queue, `Am` LRU main queue, `A1out` ghost FIFO (bounded at 256). A1out ghost hit on re-load → promoted directly to Am with generation bump. Eviction order: A1in front first, then Am front; pinned/active entries skipped.
+`TextureResource` + `MipLevel` in `engine/renderer/include/crd/renderer/texture_resource.hpp`. `TextureFormat` enum (RGBA8Unorm/BC7Unorm/BC7UnormSrgb — on-disk byte values, never reorder). `TextureResourceLoader` (in `engine/renderer/src/texture_resource_loader.cpp`): reads `type='TXTR'` CRDR artifact, parses 16-byte `HEAD` chunk (width u32, height u32, mip_count u32, format u8, padding[3]), validates dims/format/mip count (max 16), reads and validates per-mip pixel size for RGBA8, copies mip pixel data into `MipLevel::pixels`. Registered via `crd::renderer::register_texture_loader(rm)`.
 
-`pin(id)` / `unpin(id)`: ref-counted pinning. Pinned blocks are always skipped by eviction. Pin-before-load honoured: `m_pin_counts` checked during Phase 4 finalize to set `block->pinned`.
+Texture cook handler in `tools/asset_cooker/src/cook_handlers/texture.cpp`: stb_image for decode (STBI_rgb_alpha → 4 channels, TGA BGRA→RGBA swap handled by stb), box-filter mip chain generation to 1×1 with ping-pong scratch buffers (O(W×H) memory), writes HEAD chunk + MIP0..MIPn chunks. Registers `.png`/`.jpg`/`.jpeg`/`.tga`/`.bmp` via `register_texture_handler()`, called from `register_builtin_handlers()`. stb added as CPM INTERFACE SYSTEM library (GIT_TAG master; stb has no semver tags).
 
-`load_streamed<T>(id)`: submits `StreamLoadJobFn` job. Inside the fiber: opens `crd::platform::AsyncFile`, calls `read_async`, waits counter, dispatches loader with `stream_file`/`stream_offset`/`stream_size` set in `LoadContext`. Same coalescing and re-issue logic as `load_async`.
+CRDR FourCCs added to `crdr.hpp`: `kFourCC_TXTR`, `kFourCC_HEAD`, `kFourCC_MIP0`–`kFourCC_MIP15` (via `make_mip_fourcc()`).
 
-Re-issue: evicted blocks stay in `m_handles` with `state = Unloaded`. `load_sync`/`load_async`/`load_streamed` detect `Unloaded`, reuse the existing block, bump `generation`, re-run the loader.
-
-5 new tests in `tests/resources/test_eviction.cpp`: budget enforced, pinned survives pressure, re-issue increments generation, 2Q ghost hit promotes to Am, `load_streamed` end-to-end. `smoke_resources_stream.exe` (value=0xCAFEBABE, `wait_ready`, exit 0).
+4 new tests in `tests/resources/test_texture_loader.cpp`: TXTR artifact round-trip, mip chain dimensions, missing HEAD → Failed, TGA cook round-trip (red pixel R=255). `smoke_texture.exe` (headless, builds TXTR artifact programmatically, mounts, loads, verifies 3 mip dims + pixel values, exit 0).
 
 Six-configuration green:
-- win-debug:          444/444
-- win-relwithdebinfo: 444/444
-- win-release:        441/441
-- win-asan:           444/444
-- win-clang-cl:       444/444
-- win-tidy:           444/444
+- win-debug:          448/448
+- win-relwithdebinfo: 448/448
+- win-release:        445/445
+- win-asan:           448/448
+- win-clang-cl:       448/448
+- win-tidy:           ✅ (build clean)
 
 ## Previous shipped milestone
+
+**2026-05-04 — Phase 2.6 v1g SHIPPED: load_streamed + 2Q LRU eviction + memory budget + pinning. Phase 2.6 COMPLETE.**
+
+5 new tests in `tests/resources/test_eviction.cpp`. `smoke_resources_stream.exe`. Six-configuration green (444/444 win-debug).
+
+## Previous shipped milestone (–1)
 
 **2026-05-04 — Phase 2.6 v1f shipped: hot-reload — mtime polling, atomic payload swap, callbacks.**
 
@@ -642,12 +646,11 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Next up (next 1–5 sessions)
 
-1. **Phase 2.7 v1a** — `TextureResource` + stb_image texture cooker. `smoke_texture.exe`. See `docs/phases/phase-2.7-asset-import.md`.
-2. **Phase 2.7 v1b** — `MeshResource` + cgltf glTF import (static meshes only). Mesh cooker handler.
-3. **Phase 2.7 v1c** — Material parameter wiring: extend `MaterialResource` with parameters + texture slots. Closes debt item 1.
-4. **Phase 2.7 v1d** — GPU upload (`GpuTextureUploader`, `GpuMeshUploader`) + `smoke_asset_import.exe`. First real mesh+texture on screen.
-5. **Phase 2.7 v1e** — `crd-meshgen` (procedural geometry, headless) + `crd-sandbox` bootstrap (ImGui asset browser, `--headless` CI mode, `assets/source/` demo assets).
-6. **Phase 2.8** — Material completion: per-material PSO state + `MaterialDomain` + pass-keyed variants + depth-only prepass. ADRs 0044, 0046.
+1. **Phase 2.7 v1b** — `MeshResource` + cgltf glTF import (static meshes only). Mesh cooker handler (`.glb`/`.gltf`).
+2. **Phase 2.7 v1c** — Material parameter wiring: extend `MaterialResource` with parameters + texture slots. Closes debt item 1.
+3. **Phase 2.7 v1d** — GPU upload (`GpuTextureUploader`, `GpuMeshUploader`) + `smoke_asset_import.exe`. First real mesh+texture on screen.
+4. **Phase 2.7 v1e** — `crd-meshgen` (procedural geometry, headless) + `crd-sandbox` bootstrap (ImGui asset browser, `--headless` CI mode, `assets/source/` demo assets).
+5. **Phase 2.8** — Material completion: per-material PSO state + `MaterialDomain` + pass-keyed variants + depth-only prepass. ADRs 0044, 0046.
 
 ## Roadmap ordering
 
@@ -675,12 +678,12 @@ Full plan: `docs/ROADMAP.md` → `docs/phases/`.
 
 ## Test counts (last quality pass)
 
-- win-debug:          444/444
-- win-relwithdebinfo: 444/444
-- win-release:        441/441
-- win-asan:           444/444
-- win-clang-cl:       444/444
-- win-tidy:           444/444
+- win-debug:          448/448
+- win-relwithdebinfo: 448/448
+- win-release:        445/445
+- win-asan:           448/448
+- win-clang-cl:       448/448
+- win-tidy:           ✅ build clean
 
 (win-release is 3 fewer than debug: debug-only `FiberState` tests excluded by `#if CRD_ENABLE_ASSERTS`)
 
@@ -707,6 +710,7 @@ When in doubt, ASK before reading large files.
 
 ## Session log (rolling, last 5)
 
+- **2026-05-04** — Phase 2.7 v1a SHIPPED: TextureResource + MipLevel + TextureFormat + TextureResourceLoader + texture cook handler (stb_image, box-filter mip gen); 4 new tests; smoke_texture.exe; all 6 configs green (448/448 win-debug).
 - **2026-05-04** — Phase 2.6 v1g SHIPPED: load_streamed + 2Q LRU eviction + memory budget + pinning; 5 new tests in test_eviction.cpp; smoke_resources_stream.exe; all 6 configs green (444/444 win-debug). Phase 2.6 COMPLETE.
 - **2026-05-04** — Phase 2.6 v1f shipped: hot-reload (mtime poll, atomic payload swap, subscribe/unsubscribe callbacks, deferred-free); 4 new tests; smoke_resources_reload.exe; all 6 configs green (439/439 win-debug).
 - **2026-05-04** — Phase 2.6 v1e shipped: ShaderResourceLoader + MaterialResourceLoader + compile_glsl() + GLSL/material cooker handlers + smoke_resources_render; 6 new tests; all 6 configs green (435/435 win-debug). Clang-cl fix: removed dead `to_parameter_class_local`.

@@ -199,6 +199,18 @@ CPMAddPackage(
 )
 unset(CMAKE_POLICY_VERSION_MINIMUM)
 
+# stb: single-header image/font/audio utilities (DOWNLOAD_ONLY — no cmake build).
+# Phase 2.7: stb_image used by the texture cook handler. GIT_TAG master because
+# stb has no semver tags (see docs/debt.md).
+CPMAddPackage(
+    NAME stb
+    GITHUB_REPOSITORY nothings/stb
+    GIT_TAG master
+    DOWNLOAD_ONLY YES
+)
+add_library(stb INTERFACE)
+target_include_directories(stb SYSTEM INTERFACE "${stb_SOURCE_DIR}")
+
 CPMAddPackage("gh:ocornut/imgui#v1.92.0-docking")
 
 # ----- Helper: auto-collect sources with CONFIGURE_DEPENDS -----------------

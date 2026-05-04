@@ -46,12 +46,14 @@ CookResult blob_passthrough_handler(const CookContext& ctx)
 // Forward declarations for other handler registration functions in this directory.
 void register_glsl_handler();
 void register_material_handler();
+void register_texture_handler();
 
 void register_builtin_handlers()
 {
     register_cook_handler(".bin", blob_passthrough_handler);
     register_glsl_handler();
     register_material_handler();
+    register_texture_handler();
 }
 
 } // namespace crd::cooker

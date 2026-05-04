@@ -61,6 +61,37 @@ inline constexpr crd::u32 kFourCC_SPVV = make_fourcc('S', 'P', 'V', 'V'); // ver
 inline constexpr crd::u32 kFourCC_SPVF = make_fourcc('S', 'P', 'V', 'F'); // fragment SPIRV chunk
 inline constexpr crd::u32 kFourCC_SPVC = make_fourcc('S', 'P', 'V', 'C'); // compute SPIRV chunk
 
+// Phase 2.7 — texture artifact FourCCs (ADR-0042)
+inline constexpr crd::u32 kFourCC_TXTR = make_fourcc('T', 'X', 'T', 'R');
+inline constexpr crd::u32 kFourCC_HEAD = make_fourcc('H', 'E', 'A', 'D');
+
+// Mip-level chunk FourCCs for TXTR artifacts.
+// Level 0 = full-res → level 15 = smallest (1×1).
+// Digits 0–9 use ASCII '0'–'9'; levels 10–15 use 'A'–'F'.
+[[nodiscard]] constexpr crd::u32 make_mip_fourcc(crd::u8 level) noexcept
+{
+    const char digit = (level < 10U) ? static_cast<char>('0' + level)
+                                     : static_cast<char>('A' + (level - 10U));
+    return make_fourcc('M', 'I', 'P', digit);
+}
+
+inline constexpr crd::u32 kFourCC_MIP0  = make_mip_fourcc(0U);
+inline constexpr crd::u32 kFourCC_MIP1  = make_mip_fourcc(1U);
+inline constexpr crd::u32 kFourCC_MIP2  = make_mip_fourcc(2U);
+inline constexpr crd::u32 kFourCC_MIP3  = make_mip_fourcc(3U);
+inline constexpr crd::u32 kFourCC_MIP4  = make_mip_fourcc(4U);
+inline constexpr crd::u32 kFourCC_MIP5  = make_mip_fourcc(5U);
+inline constexpr crd::u32 kFourCC_MIP6  = make_mip_fourcc(6U);
+inline constexpr crd::u32 kFourCC_MIP7  = make_mip_fourcc(7U);
+inline constexpr crd::u32 kFourCC_MIP8  = make_mip_fourcc(8U);
+inline constexpr crd::u32 kFourCC_MIP9  = make_mip_fourcc(9U);
+inline constexpr crd::u32 kFourCC_MIP10 = make_mip_fourcc(10U);
+inline constexpr crd::u32 kFourCC_MIP11 = make_mip_fourcc(11U);
+inline constexpr crd::u32 kFourCC_MIP12 = make_mip_fourcc(12U);
+inline constexpr crd::u32 kFourCC_MIP13 = make_mip_fourcc(13U);
+inline constexpr crd::u32 kFourCC_MIP14 = make_mip_fourcc(14U);
+inline constexpr crd::u32 kFourCC_MIP15 = make_mip_fourcc(15U);
+
 // Convert a fourcc back to a 4-char printable string (for logging).
 // Result is null-terminated; stored in caller-provided buf[5].
 void fourcc_to_str(crd::u32 fourcc, char (&buf)[5]) noexcept;
