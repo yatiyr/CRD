@@ -3,6 +3,8 @@
 #include <crd/memory/allocators/malloc_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/renderer/material_resource_loader.hpp>
+#include <crd/renderer/material_template.hpp>
+#include <crd/renderer/pass_type.hpp>
 #include <crd/resources/crdr.hpp>
 #include <crd/resources/load_state.hpp>
 #include <crd/resources/loader.hpp>
@@ -114,6 +116,65 @@ static crd::containers::Array<crd::u8> make_matr_artifact(
 
     CrdrWriter w(&s_alloc, id, kFourCC_MATR);
     w.add_chunk(kFourCC_META, crd::containers::ConstSpan<crd::u8>(meta, 32U));
+    return w.finish();
+}
+
+// Build a MATR artifact with INFO + PASS chunks (v1c format).
+// Each entry in `pass_entries` is {pass_type, vert_id, frag_id}.
+struct PassEntry
+{
+    crd::u8                    pass_type;
+    crd::resources::ResourceId vert_id;
+    crd::resources::ResourceId frag_id;
+};
+
+static crd::containers::Array<crd::u8> make_matr_v2_artifact(
+    ResourceId id,
+    crd::containers::ConstSpan<PassEntry> entries,
+    crd::containers::ConstSpan<crd::renderer::CookedParameter> params = {},
+    crd::containers::ConstSpan<crd::u8> defaults = {})
+{
+    // INFO chunk (4 bytes)
+    crd::u8 info[4] = {2U, 0U, 0U, 0U}; // version=2, domain=Surface
+
+    // PASS chunk
+    const crd::u32 count = static_cast<crd::u32>(entries.size());
+    constexpr crd::usize kEntrySize = 36U;
+    crd::containers::Array<crd::u8> pass_bytes(&s_alloc);
+    pass_bytes.resize(sizeof(crd::u32) + count * kEntrySize);
+    std::memcpy(pass_bytes.data(), &count, sizeof(crd::u32));
+    for (crd::u32 i = 0; i < count; ++i)
+    {
+        crd::u8* e = pass_bytes.data() + sizeof(crd::u32) + i * kEntrySize;
+        e[0] = entries[i].pass_type;
+        e[1] = 0U; e[2] = 0U; e[3] = 0U;
+        std::memcpy(e + 4,  &entries[i].vert_id.hi, 8);
+        std::memcpy(e + 12, &entries[i].vert_id.lo, 8);
+        std::memcpy(e + 20, &entries[i].frag_id.hi, 8);
+        std::memcpy(e + 28, &entries[i].frag_id.lo, 8);
+    }
+
+    CrdrWriter w(&s_alloc, id, kFourCC_MATR);
+    w.add_chunk(kFourCC_INFO, crd::containers::ConstSpan<crd::u8>(info, 4U));
+    w.add_chunk(kFourCC_PASS, crd::containers::as_const_span(pass_bytes));
+
+    if (!params.empty())
+    {
+        crd::containers::Array<crd::u8> prms_bytes(&s_alloc);
+        const crd::u32 pc = static_cast<crd::u32>(params.size());
+        prms_bytes.resize(sizeof(crd::u32) + pc * sizeof(crd::renderer::CookedParameter));
+        std::memcpy(prms_bytes.data(), &pc, sizeof(crd::u32));
+        std::memcpy(prms_bytes.data() + sizeof(crd::u32),
+                    params.data(),
+                    pc * sizeof(crd::renderer::CookedParameter));
+        w.add_chunk(kFourCC_PRMS, crd::containers::as_const_span(prms_bytes));
+    }
+
+    if (!defaults.empty())
+    {
+        w.add_chunk(kFourCC_DFLT, defaults);
+    }
+
     return w.finish();
 }
 
@@ -264,16 +325,19 @@ TEST_CASE("MaterialResourceLoader: loads material and resolves shader deps", "[r
     crd::renderer::register_material_loader(&rm);
     REQUIRE(rm.mount_manifest(path.generic()).is_valid());
 
-    auto handle = rm.load_sync<crd::renderer::MaterialResource>(matr_id);
+    auto handle = rm.load_sync<crd::renderer::MaterialTemplate>(matr_id);
     REQUIRE(handle.state() == LoadState::Ready);
 
-    const crd::renderer::MaterialResource* mat = handle.get();
+    const crd::renderer::MaterialTemplate* mat = handle.get();
     REQUIRE(mat != nullptr);
-    CHECK(mat->vertex_shader.is_ready());
-    CHECK(mat->fragment_shader.is_ready());
 
-    const crd::shader::ShaderResource* vert = mat->vertex_shader.get();
-    const crd::shader::ShaderResource* frag = mat->fragment_shader.get();
+    // Legacy META artifact → synthesized into pass_shaders[Forward].
+    const auto fwd_idx = static_cast<crd::u8>(crd::renderer::PassType::Forward);
+    CHECK(mat->pass_shaders[fwd_idx].vert.is_ready());
+    CHECK(mat->pass_shaders[fwd_idx].frag.is_ready());
+
+    const crd::shader::ShaderResource* vert = mat->pass_shaders[fwd_idx].vert.get();
+    const crd::shader::ShaderResource* frag = mat->pass_shaders[fwd_idx].frag.get();
     REQUIRE(vert != nullptr);
     REQUIRE(frag != nullptr);
     CHECK(vert->stage == crd::shader::Stage::Vertex);
@@ -289,7 +353,7 @@ TEST_CASE("MaterialResourceLoader: loads material and resolves shader deps", "[r
     (void)crd::platform::fs::remove_file(path);
 }
 
-TEST_CASE("MaterialResourceLoader: missing META chunk returns Failed", "[resources][material][v1e]")
+TEST_CASE("MaterialResourceLoader: missing PASS and META chunks returns Failed", "[resources][material][v1e]")
 {
     const ResourceId id = ResourceId::mint_random();
 
@@ -313,7 +377,7 @@ TEST_CASE("MaterialResourceLoader: missing META chunk returns Failed", "[resourc
     crd::renderer::register_material_loader(&rm);
     REQUIRE(rm.mount_manifest(path.generic()).is_valid());
 
-    auto handle = rm.load_sync<crd::renderer::MaterialResource>(id);
+    auto handle = rm.load_sync<crd::renderer::MaterialTemplate>(id);
     CHECK(handle.state() == LoadState::Failed);
 
     (void)crd::platform::fs::remove_file(path);
@@ -368,6 +432,323 @@ void main() { gl_Position = vec4(inPos, 1.0); }
     CHECK(res->spirv.size() == compiled.spirv.size());
     // Reflection should have found the vertex input (inPos).
     CHECK(!res->vertex_attributes.empty());
+
+    (void)crd::platform::fs::remove_file(path);
+}
+
+// =============================================================================
+// MaterialTemplate v1c tests — PASS chunk, MaterialInstance (ADR-0048)
+// =============================================================================
+
+TEST_CASE("MaterialResourceLoader: PASS chunk artifact loads Forward shader pair", "[resources][material][v1c]")
+{
+    const ResourceId vert_id = ResourceId::mint_random();
+    const ResourceId frag_id = ResourceId::mint_random();
+    const ResourceId matr_id = ResourceId::mint_random();
+
+    crd::containers::Array<TestArt> arts(&s_alloc);
+
+    TestArt vert_art;
+    vert_art.id          = vert_id;
+    vert_art.type_fourcc = kFourCC_SHDR;
+    vert_art.crdr_bytes  = make_shdr_artifact(vert_id, kFourCC_SPVV, min_spirv_span());
+    vert_art.name        = "v.shader";
+    arts.push_back(std::move(vert_art));
+
+    TestArt frag_art;
+    frag_art.id          = frag_id;
+    frag_art.type_fourcc = kFourCC_SHDR;
+    frag_art.crdr_bytes  = make_shdr_artifact(frag_id, kFourCC_SPVF, min_spirv_span());
+    frag_art.name        = "f.shader";
+    arts.push_back(std::move(frag_art));
+
+    const PassEntry entries[] = {
+        {static_cast<crd::u8>(crd::renderer::PassType::Forward), vert_id, frag_id}
+    };
+
+    TestArt matr_art;
+    matr_art.id          = matr_id;
+    matr_art.type_fourcc = kFourCC_MATR;
+    matr_art.crdr_bytes  = make_matr_v2_artifact(
+        matr_id, crd::containers::ConstSpan<PassEntry>(entries, 1U));
+    matr_art.name        = "mat.material";
+    arts.push_back(std::move(matr_art));
+
+    const auto path = write_pack(arts);
+
+    ResourceManager rm(&s_alloc);
+    crd::shader::register_shader_loader(&rm);
+    crd::renderer::register_material_loader(&rm);
+    REQUIRE(rm.mount_manifest(path.generic()).is_valid());
+
+    auto handle = rm.load_sync<crd::renderer::MaterialTemplate>(matr_id);
+    REQUIRE(handle.state() == LoadState::Ready);
+
+    const crd::renderer::MaterialTemplate* mat = handle.get();
+    REQUIRE(mat != nullptr);
+
+    const auto fwd_idx = static_cast<crd::u8>(crd::renderer::PassType::Forward);
+    CHECK(mat->pass_shaders[fwd_idx].vert.is_ready());
+    CHECK(mat->pass_shaders[fwd_idx].frag.is_ready());
+    CHECK(mat->pass_shaders[fwd_idx].vert.get()->stage == crd::shader::Stage::Vertex);
+    CHECK(mat->pass_shaders[fwd_idx].frag.get()->stage == crd::shader::Stage::Fragment);
+    CHECK(mat->domain == crd::renderer::MaterialDomain::Surface);
+
+    (void)crd::platform::fs::remove_file(path);
+}
+
+TEST_CASE("MaterialResourceLoader: PASS chunk with DepthPrepass loads two pairs", "[resources][material][v1c]")
+{
+    const ResourceId v_fwd  = ResourceId::mint_random();
+    const ResourceId f_fwd  = ResourceId::mint_random();
+    const ResourceId v_dep  = ResourceId::mint_random();
+    const ResourceId f_dep  = ResourceId::mint_random();
+    const ResourceId mat_id = ResourceId::mint_random();
+
+    crd::containers::Array<TestArt> arts(&s_alloc);
+
+    auto push_shader = [&](ResourceId id, crd::u32 fourcc)
+    {
+        TestArt art;
+        art.id          = id;
+        art.type_fourcc = kFourCC_SHDR;
+        art.crdr_bytes  = make_shdr_artifact(id, fourcc, min_spirv_span());
+        art.name        = "s.shader";
+        arts.push_back(std::move(art));
+    };
+
+    push_shader(v_fwd, kFourCC_SPVV);
+    push_shader(f_fwd, kFourCC_SPVF);
+    push_shader(v_dep, kFourCC_SPVV);
+    push_shader(f_dep, kFourCC_SPVF);
+
+    const PassEntry entries[] = {
+        {static_cast<crd::u8>(crd::renderer::PassType::Forward),      v_fwd, f_fwd},
+        {static_cast<crd::u8>(crd::renderer::PassType::DepthPrepass), v_dep, f_dep},
+    };
+
+    TestArt matr_art;
+    matr_art.id          = mat_id;
+    matr_art.type_fourcc = kFourCC_MATR;
+    matr_art.crdr_bytes  = make_matr_v2_artifact(
+        mat_id, crd::containers::ConstSpan<PassEntry>(entries, 2U));
+    matr_art.name        = "mat2.material";
+    arts.push_back(std::move(matr_art));
+
+    const auto path = write_pack(arts);
+
+    ResourceManager rm(&s_alloc);
+    crd::shader::register_shader_loader(&rm);
+    crd::renderer::register_material_loader(&rm);
+    REQUIRE(rm.mount_manifest(path.generic()).is_valid());
+
+    auto handle = rm.load_sync<crd::renderer::MaterialTemplate>(mat_id);
+    REQUIRE(handle.state() == LoadState::Ready);
+
+    const crd::renderer::MaterialTemplate* mat = handle.get();
+    REQUIRE(mat != nullptr);
+
+    const auto fwd_idx   = static_cast<crd::u8>(crd::renderer::PassType::Forward);
+    const auto depth_idx = static_cast<crd::u8>(crd::renderer::PassType::DepthPrepass);
+
+    CHECK(mat->pass_shaders[fwd_idx].vert.is_ready());
+    CHECK(mat->pass_shaders[fwd_idx].frag.is_ready());
+    CHECK(mat->pass_shaders[depth_idx].vert.is_ready());
+    CHECK(mat->pass_shaders[depth_idx].frag.is_ready());
+
+    // Different shader blocks for different passes.
+    CHECK(mat->pass_shaders[fwd_idx].vert.get() != mat->pass_shaders[depth_idx].vert.get());
+
+    (void)crd::platform::fs::remove_file(path);
+}
+
+TEST_CASE("MaterialTemplate: PRMS chunk populates parameter schema", "[resources][material][v1c]")
+{
+    const ResourceId vert_id = ResourceId::mint_random();
+    const ResourceId frag_id = ResourceId::mint_random();
+    const ResourceId matr_id = ResourceId::mint_random();
+
+    crd::containers::Array<TestArt> arts(&s_alloc);
+
+    TestArt va;
+    va.id = vert_id; va.type_fourcc = kFourCC_SHDR;
+    va.crdr_bytes = make_shdr_artifact(vert_id, kFourCC_SPVV, min_spirv_span());
+    va.name = "v.shader";
+    arts.push_back(std::move(va));
+
+    TestArt fa;
+    fa.id = frag_id; fa.type_fourcc = kFourCC_SHDR;
+    fa.crdr_bytes = make_shdr_artifact(frag_id, kFourCC_SPVF, min_spirv_span());
+    fa.name = "f.shader";
+    arts.push_back(std::move(fa));
+
+    crd::renderer::CookedParameter param{};
+    param.name_hash  = 0xDEADBEEFCAFEBABEULL;
+    param.type       = crd::renderer::ParameterType::Float4;
+    param.ubo_offset = 0U;
+
+    const crd::u8 defaults[16] = {};
+
+    const PassEntry entries[] = {
+        {static_cast<crd::u8>(crd::renderer::PassType::Forward), vert_id, frag_id}
+    };
+    const crd::renderer::CookedParameter params_span[] = {param};
+
+    TestArt ma;
+    ma.id          = matr_id;
+    ma.type_fourcc = kFourCC_MATR;
+    ma.crdr_bytes  = make_matr_v2_artifact(
+        matr_id,
+        crd::containers::ConstSpan<PassEntry>(entries, 1U),
+        crd::containers::ConstSpan<crd::renderer::CookedParameter>(params_span, 1U),
+        crd::containers::ConstSpan<crd::u8>(defaults, 16U));
+    ma.name = "mat3.material";
+    arts.push_back(std::move(ma));
+
+    const auto path = write_pack(arts);
+
+    ResourceManager rm(&s_alloc);
+    crd::shader::register_shader_loader(&rm);
+    crd::renderer::register_material_loader(&rm);
+    REQUIRE(rm.mount_manifest(path.generic()).is_valid());
+
+    auto handle = rm.load_sync<crd::renderer::MaterialTemplate>(matr_id);
+    REQUIRE(handle.state() == LoadState::Ready);
+
+    const crd::renderer::MaterialTemplate* mat = handle.get();
+    REQUIRE(mat != nullptr);
+    REQUIRE(mat->parameters.size() == 1U);
+    CHECK(mat->parameters[0].name_hash == 0xDEADBEEFCAFEBABEULL);
+    CHECK(mat->parameters[0].type      == crd::renderer::ParameterType::Float4);
+    CHECK(mat->parameters[0].ubo_offset == 0U);
+    CHECK(mat->defaults_blob.size() == 16U);
+
+    (void)crd::platform::fs::remove_file(path);
+}
+
+TEST_CASE("MaterialInstance: set_vec4 writes to values_blob at ubo_offset", "[resources][material][v1c]")
+{
+    const ResourceId vert_id = ResourceId::mint_random();
+    const ResourceId frag_id = ResourceId::mint_random();
+    const ResourceId matr_id = ResourceId::mint_random();
+
+    crd::containers::Array<TestArt> arts(&s_alloc);
+
+    TestArt va;
+    va.id = vert_id; va.type_fourcc = kFourCC_SHDR;
+    va.crdr_bytes = make_shdr_artifact(vert_id, kFourCC_SPVV, min_spirv_span());
+    va.name = "v.shader";
+    arts.push_back(std::move(va));
+
+    TestArt fa;
+    fa.id = frag_id; fa.type_fourcc = kFourCC_SHDR;
+    fa.crdr_bytes = make_shdr_artifact(frag_id, kFourCC_SPVF, min_spirv_span());
+    fa.name = "f.shader";
+    arts.push_back(std::move(fa));
+
+    crd::renderer::CookedParameter param{};
+    param.name_hash  = 0x1122334455667788ULL;
+    param.type       = crd::renderer::ParameterType::Float4;
+    param.ubo_offset = 0U;
+
+    const crd::u8 defaults[16] = {};
+
+    const PassEntry entries[] = {
+        {static_cast<crd::u8>(crd::renderer::PassType::Forward), vert_id, frag_id}
+    };
+    const crd::renderer::CookedParameter params_span[] = {param};
+
+    TestArt ma;
+    ma.id          = matr_id;
+    ma.type_fourcc = kFourCC_MATR;
+    ma.crdr_bytes  = make_matr_v2_artifact(
+        matr_id,
+        crd::containers::ConstSpan<PassEntry>(entries, 1U),
+        crd::containers::ConstSpan<crd::renderer::CookedParameter>(params_span, 1U),
+        crd::containers::ConstSpan<crd::u8>(defaults, 16U));
+    ma.name = "mat4.material";
+    arts.push_back(std::move(ma));
+
+    const auto path = write_pack(arts);
+
+    ResourceManager rm(&s_alloc);
+    crd::shader::register_shader_loader(&rm);
+    crd::renderer::register_material_loader(&rm);
+    REQUIRE(rm.mount_manifest(path.generic()).is_valid());
+
+    auto handle = rm.load_sync<crd::renderer::MaterialTemplate>(matr_id);
+    REQUIRE(handle.state() == LoadState::Ready);
+
+    crd::renderer::MaterialInstance inst(handle, &s_alloc);
+    inst.set_vec4(0x1122334455667788ULL, 1.0F, 2.0F, 3.0F, 4.0F);
+
+    const auto& blob = inst.values_blob();
+    REQUIRE(blob.size() >= 16U);
+
+    float v[4];
+    std::memcpy(v, blob.data(), sizeof(v));
+    CHECK(v[0] == 1.0F);
+    CHECK(v[1] == 2.0F);
+    CHECK(v[2] == 3.0F);
+    CHECK(v[3] == 4.0F);
+
+    (void)crd::platform::fs::remove_file(path);
+}
+
+TEST_CASE("MaterialInstance: variant_for_pass falls back to Forward for missing DepthPrepass", "[resources][material][v1c]")
+{
+    const ResourceId vert_id = ResourceId::mint_random();
+    const ResourceId frag_id = ResourceId::mint_random();
+    const ResourceId matr_id = ResourceId::mint_random();
+
+    crd::containers::Array<TestArt> arts(&s_alloc);
+
+    TestArt va;
+    va.id = vert_id; va.type_fourcc = kFourCC_SHDR;
+    va.crdr_bytes = make_shdr_artifact(vert_id, kFourCC_SPVV, min_spirv_span());
+    va.name = "v.shader";
+    arts.push_back(std::move(va));
+
+    TestArt fa;
+    fa.id = frag_id; fa.type_fourcc = kFourCC_SHDR;
+    fa.crdr_bytes = make_shdr_artifact(frag_id, kFourCC_SPVF, min_spirv_span());
+    fa.name = "f.shader";
+    arts.push_back(std::move(fa));
+
+    // Only Forward pass — no DepthPrepass entry.
+    const PassEntry entries[] = {
+        {static_cast<crd::u8>(crd::renderer::PassType::Forward), vert_id, frag_id}
+    };
+
+    TestArt ma;
+    ma.id          = matr_id;
+    ma.type_fourcc = kFourCC_MATR;
+    ma.crdr_bytes  = make_matr_v2_artifact(
+        matr_id, crd::containers::ConstSpan<PassEntry>(entries, 1U));
+    ma.name = "mat5.material";
+    arts.push_back(std::move(ma));
+
+    const auto path = write_pack(arts);
+
+    ResourceManager rm(&s_alloc);
+    crd::shader::register_shader_loader(&rm);
+    crd::renderer::register_material_loader(&rm);
+    REQUIRE(rm.mount_manifest(path.generic()).is_valid());
+
+    auto handle = rm.load_sync<crd::renderer::MaterialTemplate>(matr_id);
+    REQUIRE(handle.state() == LoadState::Ready);
+
+    crd::renderer::MaterialInstance inst(handle, &s_alloc);
+
+    // Requesting DepthPrepass — no such shader → should fall back to Forward.
+    const auto& pair = inst.variant_for_pass(crd::renderer::PassType::DepthPrepass);
+    CHECK(pair.vert.is_ready());
+    CHECK(pair.frag.is_ready());
+
+    // Same handles as the Forward pair.
+    const auto fwd_idx = static_cast<crd::u8>(crd::renderer::PassType::Forward);
+    const auto* mat = handle.get();
+    CHECK(pair.vert.get() == mat->pass_shaders[fwd_idx].vert.get());
 
     (void)crd::platform::fs::remove_file(path);
 }

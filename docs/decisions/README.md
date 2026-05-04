@@ -89,6 +89,7 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 - ADR-0044 — Phase ordering: material PSO/variant completion precedes scene/ECS
 - ADR-0046 — MaterialDomain enum, node-editor future-proofing, RT hybrid strategy
 - ADR-0047 — Font rendering system (MTSDF shader, billboard text, Surface domain)
+- ADR-0048 — Material system architecture foundation (two-tier Template/Instance, surface function, MATR format, ShaderOptions)
 
 ### `[culling]`
 - ADR-0017 — Culling strategy
@@ -131,6 +132,7 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 - ADR-0029 — Shader hot reload
 - ADR-0030 — Shader / PSO boundary
 - ADR-0031 — Shader frontend → IR seam
+- ADR-0048 — Material system architecture foundation (ShaderOptions, inline functor, ParameterType)
 
 ## All ADRs (chronological)
 
@@ -183,3 +185,4 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 | 0045  | Sandbox executable, asset layout, cook workflow, crd-meshgen | arch, sandbox, resources, cooker, build | Accepted |
 | 0046  | MaterialDomain enum, node-editor future-proofing, RT hybrid strategy | arch, renderer, shader, materials, rt | Accepted |
 | 0047  | Font rendering system (MTSDF, FreeType+msdfgen, HarfBuzz, offline+dynamic atlas, extruded text) | arch, font, renderer, ui, text | Accepted |
+| 0048  | Material system architecture foundation (two-tier Template/Instance, surface fn, MATR chunks, ShaderOptions, ParameterType) | arch, renderer, shader, materials, resources, cooker | Accepted |

@@ -1,9 +1,9 @@
-// smoke_resources_render.cpp — Phase 2.6 v1e smoke test.
+// smoke_resources_render.cpp — Phase 2.6 v1e / Phase 2.7 v1c regression smoke.
 //
 // Programmatically cooks vertex + fragment GLSL shaders into SHDR artifacts,
-// assembles a MATR artifact that references them by UUID, mounts everything
-// in a single in-memory PACK, then loads the MaterialResource and verifies
-// all handles reach Ready state.
+// assembles a legacy MATR artifact (META chunk, backward-compat path), mounts
+// everything in a single in-memory PACK, then loads the MaterialTemplate and
+// verifies all handles reach Ready state via pass_shaders[Forward].
 //
 // Does NOT do actual rendering — verifies the resource loading path only.
 // Exits 0 on success.
@@ -13,6 +13,7 @@
 #include <crd/memory/allocators/malloc_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/renderer/material_resource_loader.hpp>
+#include <crd/renderer/pass_type.hpp>
 #include <crd/resources/crdr.hpp>
 #include <crd/resources/load_state.hpp>
 #include <crd/resources/resource_handle.hpp>
@@ -232,7 +233,7 @@ int main()
     }
 
     // Load material (triggers transitive shader loads).
-    auto matr_handle = rm.load_sync<crd::renderer::MaterialResource>(matr_id);
+    auto matr_handle = rm.load_sync<crd::renderer::MaterialTemplate>(matr_id);
     if (!matr_handle.is_ready())
     {
         std::fprintf(stderr, "smoke_resources_render: material load failed (state=%d)\n",
@@ -241,7 +242,7 @@ int main()
         return 1;
     }
 
-    const crd::renderer::MaterialResource* mat = matr_handle.get();
+    const crd::renderer::MaterialTemplate* mat = matr_handle.get();
     if (mat == nullptr)
     {
         std::fprintf(stderr, "smoke_resources_render: material payload is null\n");
@@ -249,22 +250,25 @@ int main()
         return 1;
     }
 
-    if (!mat->vertex_shader.is_ready())
+    // Legacy META artifact synthesizes into pass_shaders[Forward].
+    const auto& fwd = mat->pass_shaders[static_cast<crd::u8>(crd::renderer::PassType::Forward)];
+
+    if (!fwd.vert.is_ready())
     {
-        std::fprintf(stderr, "smoke_resources_render: vertex shader not ready\n");
+        std::fprintf(stderr, "smoke_resources_render: Forward vert shader not ready\n");
         (void)fs::remove_file(pack_path);
         return 1;
     }
 
-    if (!mat->fragment_shader.is_ready())
+    if (!fwd.frag.is_ready())
     {
-        std::fprintf(stderr, "smoke_resources_render: fragment shader not ready\n");
+        std::fprintf(stderr, "smoke_resources_render: Forward frag shader not ready\n");
         (void)fs::remove_file(pack_path);
         return 1;
     }
 
-    const crd::shader::ShaderResource* vert = mat->vertex_shader.get();
-    const crd::shader::ShaderResource* frag = mat->fragment_shader.get();
+    const crd::shader::ShaderResource* vert = fwd.vert.get();
+    const crd::shader::ShaderResource* frag = fwd.frag.get();
 
     if (vert->spirv.empty() || frag->spirv.empty())
     {
@@ -290,7 +294,7 @@ int main()
     matr_handle = {};
     (void)fs::remove_file(pack_path);
 
-    std::printf("smoke_resources_render: OK — MaterialResource loaded with vert+frag SPIRV "
+    std::printf("smoke_resources_render: OK — MaterialTemplate loaded with vert+frag SPIRV "
                 "(vert=%zu bytes, frag=%zu bytes)\n",
                 vert->spirv.size(), frag->spirv.size());
     return 0;

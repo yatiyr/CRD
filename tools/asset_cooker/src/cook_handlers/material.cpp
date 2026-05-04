@@ -8,6 +8,14 @@
 #include <crd/resources/crdr.hpp>
 #include <crd/resources/resource_id.hpp>
 
+// Mirror on-disk enum values from ADR-0048 — do not include renderer headers.
+// Values must match MaterialDomain and PassType in material_domain.hpp / pass_type.hpp.
+static constexpr crd::u8 kDomainSurface = 0U;
+
+static constexpr crd::u8 kPassDepthPrepass = 0U;
+// static constexpr crd::u8 kPassShadow    = 1U;  // reserved
+static constexpr crd::u8 kPassForward   = 2U;
+
 #include <cstring>
 
 namespace fs = crd::platform::fs;
@@ -17,7 +25,7 @@ namespace crd::cooker
 namespace
 {
 
-constexpr crd::u32 kMaterialHandlerVersion = 1U;
+constexpr crd::u32 kMaterialHandlerVersion = 2U;
 
 // Parse: key = "value"  (returns the quoted string without surrounding quotes)
 // Returns empty view on failure.
@@ -47,6 +55,36 @@ constexpr crd::u32 kMaterialHandlerVersion = 1U;
     return line.substr(q_open + 1U, q_close - q_open - 1U);
 }
 
+// Return true if the line contains the given section header (e.g. "[passes.forward]").
+[[nodiscard]] bool is_section(crd::containers::StringView line,
+                              crd::containers::StringView section) noexcept
+{
+    const auto p = line.find(section);
+    return p != crd::containers::StringView::npos;
+}
+
+// Per-pass shader UUID pair parsed from the .mat.toml [passes.*] sections.
+struct PassEntry
+{
+    crd::u8                    pass_type;
+    crd::resources::ResourceId vert_id;
+    crd::resources::ResourceId frag_id;
+};
+
+// Emit one PASS chunk entry (36 bytes) into `buf`.
+void write_pass_entry(crd::u8*                          buf,
+                      const PassEntry&                  e) noexcept
+{
+    buf[0] = e.pass_type;
+    buf[1] = 0U;
+    buf[2] = 0U;
+    buf[3] = 0U;
+    std::memcpy(buf +  4, &e.vert_id.hi, 8);
+    std::memcpy(buf + 12, &e.vert_id.lo, 8);
+    std::memcpy(buf + 20, &e.frag_id.hi, 8);
+    std::memcpy(buf + 28, &e.frag_id.lo, 8);
+}
+
 CookResult material_handler(const CookContext& ctx)
 {
     CookResult result(ctx.allocator);
@@ -57,36 +95,80 @@ CookResult material_handler(const CookContext& ctx)
         return result;
     }
 
-    crd::resources::ResourceId vert_id;
-    crd::resources::ResourceId frag_id;
+    // ── Parse .mat.toml ────────────────────────────────────────────────────
+    // Supported keys:
+    //   vertex_shader   = "<uuid>"   (legacy flat format → [passes.forward])
+    //   fragment_shader = "<uuid>"   (legacy flat format → [passes.forward])
+    //
+    //   [passes.forward]
+    //     vertex_shader   = "<uuid>"
+    //     fragment_shader = "<uuid>"
+    //
+    //   [passes.depth_prepass]
+    //     vertex_shader   = "<uuid>"
+    //     fragment_shader = "<uuid>"
 
-    // Walk lines and parse vertex_shader / fragment_shader UUID keys.
+    crd::resources::ResourceId fwd_vert;
+    crd::resources::ResourceId fwd_frag;
+    crd::resources::ResourceId depth_vert;
+    crd::resources::ResourceId depth_frag;
+
+    enum class Section : crd::u8 { None, Forward, DepthPrepass } cur_section = Section::None;
+
     crd::containers::StringView sv(text.data(), text.size());
     while (!sv.empty())
     {
         const auto nl = sv.find('\n');
-        const crd::containers::StringView line =
+        crd::containers::StringView line =
             (nl != crd::containers::StringView::npos) ? sv.substr(0U, nl) : sv;
 
-        // Strip carriage return for Windows line endings.
-        crd::containers::StringView clean = line;
-        if (!clean.empty() && clean.back() == '\r')
+        // Strip carriage return.
+        if (!line.empty() && line.back() == '\r')
         {
-            clean = clean.substr(0U, clean.size() - 1U);
+            line = line.substr(0U, line.size() - 1U);
         }
 
-        const crd::containers::StringView vert_val =
-            parse_quoted_value(clean, "vertex_shader");
-        if (!vert_val.empty())
+        // Section headers.
+        if (is_section(line, "[passes.forward]"))
         {
-            vert_id = crd::resources::ResourceId::parse(vert_val);
+            cur_section = Section::Forward;
+        }
+        else if (is_section(line, "[passes.depth_prepass]"))
+        {
+            cur_section = Section::DepthPrepass;
+        }
+        else if (!line.empty() && line[0] == '[')
+        {
+            cur_section = Section::None;
         }
 
-        const crd::containers::StringView frag_val =
-            parse_quoted_value(clean, "fragment_shader");
-        if (!frag_val.empty())
+        // Key parsing.
+        const auto vval = parse_quoted_value(line, "vertex_shader");
+        if (!vval.empty())
         {
-            frag_id = crd::resources::ResourceId::parse(frag_val);
+            const auto id = crd::resources::ResourceId::parse(vval);
+            if (cur_section == Section::Forward || cur_section == Section::None)
+            {
+                fwd_vert = id;
+            }
+            else if (cur_section == Section::DepthPrepass)
+            {
+                depth_vert = id;
+            }
+        }
+
+        const auto fval = parse_quoted_value(line, "fragment_shader");
+        if (!fval.empty())
+        {
+            const auto id = crd::resources::ResourceId::parse(fval);
+            if (cur_section == Section::Forward || cur_section == Section::None)
+            {
+                fwd_frag = id;
+            }
+            else if (cur_section == Section::DepthPrepass)
+            {
+                depth_frag = id;
+            }
         }
 
         if (nl == crd::containers::StringView::npos)
@@ -96,24 +178,55 @@ CookResult material_handler(const CookContext& ctx)
         sv = sv.substr(nl + 1U);
     }
 
-    if (vert_id.is_null() || frag_id.is_null())
+    // At minimum the Forward pass must have both shaders.
+    if (fwd_vert.is_null() || fwd_frag.is_null())
     {
-        return result; // missing keys → failure
+        return result;
     }
 
-    // META chunk: 32 bytes (vertex UUID hi+lo, fragment UUID hi+lo)
-    crd::u8 meta[32];
-    std::memcpy(meta +  0, &vert_id.hi, 8);
-    std::memcpy(meta +  8, &vert_id.lo, 8);
-    std::memcpy(meta + 16, &frag_id.hi, 8);
-    std::memcpy(meta + 24, &frag_id.lo, 8);
+    // ── Collect valid pass entries ─────────────────────────────────────────
+    crd::containers::Array<PassEntry> passes(ctx.allocator);
+
+    passes.push_back({kPassForward, fwd_vert, fwd_frag});
+    result.dependencies.push_back(fwd_vert);
+    result.dependencies.push_back(fwd_frag);
+
+    if (!depth_vert.is_null() && !depth_frag.is_null())
+    {
+        passes.push_back({kPassDepthPrepass, depth_vert, depth_frag});
+        result.dependencies.push_back(depth_vert);
+        result.dependencies.push_back(depth_frag);
+    }
+
+    // ── INFO chunk (4 bytes) ────────────────────────────────────────────────
+    crd::u8 info[4] = {
+        static_cast<crd::u8>(kMaterialHandlerVersion),
+        kDomainSurface,
+        0U, // flags
+        0U, // pad
+    };
+
+    // ── PASS chunk ──────────────────────────────────────────────────────────
+    // Header: count u32 (4 bytes)
+    // Per entry: 36 bytes (pass_type u8, pad u8[3], vert_id u8[16], frag_id u8[16])
+    const crd::u32 pass_count = static_cast<crd::u32>(passes.size());
+    constexpr crd::usize kPassEntrySize = 36U;
+    const crd::usize pass_chunk_size = sizeof(crd::u32) + pass_count * kPassEntrySize;
+
+    crd::containers::Array<crd::u8> pass_bytes(ctx.allocator);
+    pass_bytes.resize(pass_chunk_size);
+    std::memcpy(pass_bytes.data(), &pass_count, sizeof(crd::u32));
+    for (crd::u32 i = 0; i < pass_count; ++i)
+    {
+        write_pass_entry(pass_bytes.data() + sizeof(crd::u32) + i * kPassEntrySize, passes[i]);
+    }
 
     crd::resources::CrdrWriter writer(ctx.allocator, ctx.id, crd::resources::kFourCC_MATR);
-    writer.add_chunk(crd::resources::kFourCC_META,
-                     crd::containers::ConstSpan<crd::u8>(meta, 32U));
+    writer.add_chunk(crd::resources::kFourCC_INFO,
+                     crd::containers::ConstSpan<crd::u8>(info, sizeof(info)));
+    writer.add_chunk(crd::resources::kFourCC_PASS,
+                     crd::containers::as_const_span(pass_bytes));
 
-    result.dependencies.push_back(vert_id);
-    result.dependencies.push_back(frag_id);
     result.type_fourcc     = crd::resources::kFourCC_MATR;
     result.cooked_bytes    = writer.finish();
     result.handler_version = kMaterialHandlerVersion;

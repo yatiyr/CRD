@@ -32,8 +32,8 @@
 | 2.4   Renderer v1               | 🚧 active        | `docs/phases/phase-2-graphics.md` (v1a–i shipped; v1j = GPU instancing, Phase 3.2 dep); material system v1 gaps documented in `docs/debt.md` |
 | 2.5   Jobs (threads + fibers)   | ✅ shipped       | `docs/phases/phase-2.5-jobs.md` (v1a–v1k all shipped; ADR-0033) |
 | 2.6   Resources + asset cooker  | ✅ shipped       | `docs/phases/phase-2.6-resources.md` (v1a–v1g COMPLETE 2026-05-04; ADRs 0036–0041) |
-| 2.7   Asset import bootstrap    | ⏳               | `docs/phases/phase-2.7-asset-import.md` (TextureResource + MeshResource + glTF + material params + GPU upload + **crd-meshgen** + **crd-sandbox** bootstrap; ADRs 0042–0043, 0045) |
-| 2.8   Material completion       | ⏳               | `docs/phases/phase-2.8-material-completion.md` (per-material PSO state + pass-keyed variants + **MaterialDomain** + depth-only prepass; closes debt items 2–3; ADRs 0044, 0046) |
+| 2.7   Asset import bootstrap    | ⏳               | `docs/phases/phase-2.7-asset-import.md` (TextureResource + MeshResource + glTF + **full material foundation** (ADR-0048): MaterialTemplate/Instance, ParameterType, ShaderOptions, SurfaceData contract, new MATR format + GPU upload + **crd-meshgen** + **crd-sandbox** bootstrap; ADRs 0042–0043, 0045, 0048) |
+| 2.8   Material completion       | ⏳               | `docs/phases/phase-2.8-material-completion.md` (GPU-side wiring only: per-material Vulkan pipeline cache + multi-pass ForwardRenderPath + depth-only prepass; artifact format done in 2.7 v1c; ADRs 0044, 0046, 0048) |
 | 3     Simulation foundation     | ⏳               | `docs/phases/phase-3-simulation.md` (3.0 scene/ECS → 3.1 physics → 3.2 animation → **3.3 crd-font** → 3.4 audio → 3.5 lights+shadows+IBL → 3.6 SSAO+TAA+area lights → 3.7 GPU culling+DoF; ADR-0047) |
 | 5     RT + advanced rendering   | ⏳               | `docs/phases/phase-5-ui-rendering.md` (crd-ui + node editor + HybridRenderPath: RT AO/reflections/GI + denoiser; ADR-0046) |
 | 4     Extensibility + Networking | ⏳              | `docs/phases/phase-4-extensibility.md` (4.0 C++ scripting, 4.1 advanced math, 4.2 networking; ADR-0034, ADR-0035) |

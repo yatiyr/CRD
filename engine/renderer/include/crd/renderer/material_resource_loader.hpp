@@ -1,7 +1,6 @@
 #pragma once
 
-#include <crd/resources/resource_handle.hpp>
-#include <crd/shader/shader_resource_loader.hpp>
+#include <crd/renderer/material_template.hpp>
 
 namespace crd::resources
 {
@@ -11,17 +10,9 @@ class ResourceManager;
 namespace crd::renderer
 {
 
-// Runtime payload for a cooked MATR artifact.
-// Holds ready handles to the vertex and fragment ShaderResource dependencies.
-struct MaterialResource
-{
-    crd::resources::ResourceHandle<crd::shader::ShaderResource> vertex_shader;
-    crd::resources::ResourceHandle<crd::shader::ShaderResource> fragment_shader;
-};
-
 // Register the MaterialResourceLoader (handles kFourCC_MATR) with the given manager.
-// Both ShaderResourceLoader and MaterialResourceLoader must be registered before
-// any material is loaded (vertex/fragment deps are loaded transitively).
+// Must be called after register_shader_loader() — MATR loading transitively
+// loads SHDR artifacts for each pass shader pair.
 void register_material_loader(crd::resources::ResourceManager* rm);
 
 } // namespace crd::renderer

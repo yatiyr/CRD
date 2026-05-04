@@ -11,16 +11,16 @@
 
 ## Current focus
 
-**Phase 2.7 — Asset import bootstrap. v1a + v1b shipped. Next: v1c (material parameter wiring).**
+**Phase 2.7 — Asset import bootstrap. v1a + v1b + v1c shipped. Next: v1d (GPU upload + first real mesh+texture on screen).**
 
 Phase 2.7 slices:
 - v1a: `TextureResource` + stb_image texture cooker (RGBA8/BC7, mip gen, TXTR artifact) ✅
 - v1b: `MeshResource` + cgltf glTF import (static meshes, interleaved 48B/vert, MESH artifact) ✅
-- v1c: Material parameter wiring — extends `MaterialResource` with `HashMap<String,Vec4f>` parameters + texture slots; closes debt item 1
+- v1c: **Full material system foundation (ADR-0048)** — `MaterialTemplate` + `MaterialInstance` two-tier split; `ParameterType` enum + `CookedParameter` schema; `ShaderOption` system; new MATR v2 artifact format (INFO + PASS chunks; PRMS/DFLT/PSOS/OPTS reserved); `MaterialDomain` enum; `PassType` enum + `RasterState`; cooker rewrite (INFO + PASS, no more META); renames: `MaterialResource`→`MaterialTemplate`, `MaterialLayout`→`MaterialBindLayout`, `MaterialInstance` (transient)→`MaterialBindGroup`; legacy META backward-compat in loader ✅
 - v1d: `GpuTextureUploader` + `GpuMeshUploader` + `smoke_asset_import.exe` (first real mesh+texture on screen)
 - v1e: **`crd-meshgen`** (CPU-side procedural geometry: sphere/icosphere/box/capsule/cylinder/cone/plane/torus; `smoke_meshgen.exe`; headless) + **`crd-sandbox`** bootstrap (`crd-app` + `LayerStack`, ImGui asset browser, `--headless` CI mode, `assets/source/` demo assets: BoxTextured.glb, Duck.glb, Suzanne.glb + CC0 textures)
 
-After Phase 2.7: **Phase 2.8** — material completion (debt items 2–3: per-material PSO state + `MaterialDomain` enum + pass-keyed variants + depth-only prepass). Then Phase 3.0 scene/ECS. See ADR-0044, ADR-0046.
+After Phase 2.7: **Phase 2.8** — GPU-side wiring: per-material Vulkan pipeline cache (PSOS data → VkPipeline), multi-pass `ForwardRenderPath` (PASS chunk → per-pass shader selection), depth-only prepass pipeline. Then Phase 3.0 scene/ECS. See ADR-0044, ADR-0046, ADR-0048.
 
 Full design packet: `docs/phases/phase-2.7-asset-import.md`.
 
@@ -36,6 +36,28 @@ _none — running on the main roadmap._
 > `docs/detours/README.md`.
 
 ## Last shipped milestone
+
+**2026-05-05 — Phase 2.7 v1c SHIPPED: Full material system foundation (ADR-0048).**
+
+New headers: `engine/renderer/include/crd/renderer/material_domain.hpp` (`MaterialDomain` enum: Surface/PostProcess/Compute/Decal/UI), `engine/renderer/include/crd/renderer/pass_type.hpp` (`PassType` enum: DepthPrepass=0/Shadow=1/Forward=2; `AlphaMode`, `CullMode`, `FillMode`, `BlendMode`, `RasterState` — 8 bytes per state), `engine/renderer/include/crd/renderer/material_template.hpp` (`ParameterType` enum, `CookedParameter` 24-byte struct, `ShaderOptionDecl` 16-byte struct, `PassShaderPair` {vert + frag `ResourceHandle<ShaderResource>`}, `MaterialTemplate` with `Array<CookedParameter> parameters`, `Array<u8> defaults_blob`, `PassShaderPair pass_shaders[3]`, `RasterState pso_states[3]`, `Array<ShaderOptionDecl> options`, `MaterialInstance` with `set_float`/`set_vec4` binary-search parameter write + `variant_for_pass` fallback).
+
+Renames: `MaterialLayout` → `MaterialBindLayout`, `MaterialInstance` (transient GPU binding) → `MaterialBindGroup` (both in `engine/renderer/include/crd/renderer/material.hpp`). `MaterialResource` struct removed from `material_resource_loader.hpp` — replaced by `MaterialTemplate` in new header.
+
+New MATR v2 artifact format: INFO chunk (4 bytes: loader_version, domain, flags, pad) + PASS chunk (4-byte count + N × 36-byte entries: pass_type u8, pad[3], vert_id u8[16], frag_id u8[16]). PRMS/DFLT/PSOS/OPTS chunks defined but not yet emitted by cooker (reserved for Phase 2.8). CRDR FourCCs added: `kFourCC_INFO`, `kFourCC_PRMS`, `kFourCC_DFLT`, `kFourCC_PASS`, `kFourCC_PSOS`, `kFourCC_OPTS`.
+
+`MaterialResourceLoader` rewritten (version → 2): reads INFO → domain, PASS → `pass_shaders[]` indexed by `PassType` ordinal (load_sync<ShaderResource> for each vert+frag pair), falls back to legacy META chunk (synthesizes Forward entry) for backward-compat. Cooker rewritten (version → 2): emits INFO + PASS chunks; parses `[passes.forward]` and `[passes.depth_prepass]` TOML sections; legacy flat `vertex_shader`/`fragment_shader` keys treated as Forward pass.
+
+5 new tests in `tests/resources/test_shader_material_loaders.cpp` tagged `[v1c]`: v2 PASS chunk round-trip, two-pass material (fwd + depth), missing PASS+META → Failed, MaterialInstance set_float round-trip, MaterialInstance variant_for_pass fallback. `smoke_material.exe` (headless, 2 scenarios: v2 + MaterialInstance + legacy META, exit 0).
+
+Six-configuration green:
+- win-debug:          457/457
+- win-relwithdebinfo: 457/457
+- win-release:        454/454
+- win-asan:           457/457
+- win-clang-cl:       457/457
+- win-tidy:           ✅ (build clean)
+
+## Previous shipped milestone (–1)
 
 **2026-05-05 — Phase 2.7 v1b SHIPPED: `MeshResource` + cgltf glTF import + MikkTSpace tangent generation.**
 
@@ -55,7 +77,7 @@ Six-configuration green:
 - win-clang-cl:       452/452
 - win-tidy:           ✅ (build clean)
 
-## Previous shipped milestone
+## Previous shipped milestone (–2)
 
 **2026-05-04 — Phase 2.7 v1a SHIPPED: `TextureResource` + stb_image texture cooker.**
 
@@ -656,8 +678,7 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Next up (next 1–5 sessions)
 
-1. **Phase 2.7 v1c** — Material parameter wiring: extend `MaterialResource` with `HashMap<String,Vec4f>` parameters + texture slots (`PARM`/`TEXS` CRDR chunks). Closes debt item 1.
-2. **Phase 2.7 v1d** — GPU upload (`GpuTextureUploader`, `GpuMeshUploader`) + `smoke_asset_import.exe`. First real mesh+texture on screen.
+1. **Phase 2.7 v1d** — GPU upload (`GpuTextureUploader`, `GpuMeshUploader`) + `smoke_asset_import.exe`. First real mesh+texture on screen.
 3. **Phase 2.7 v1e** — `crd-meshgen` (procedural geometry, headless) + `crd-sandbox` bootstrap (ImGui asset browser, `--headless` CI mode, `assets/source/` demo assets).
 4. **Phase 2.8** — Material completion: per-material PSO state + `MaterialDomain` + pass-keyed variants + depth-only prepass. ADRs 0044, 0046.
 5. **Phase 3.0** — `crd-scene` / ECS (hybrid hierarchy + SoA + TOML → binary serialization + renderer integration).
@@ -688,11 +709,11 @@ Full plan: `docs/ROADMAP.md` → `docs/phases/`.
 
 ## Test counts (last quality pass)
 
-- win-debug:          452/452
-- win-relwithdebinfo: 452/452
-- win-release:        449/449
-- win-asan:           452/452
-- win-clang-cl:       452/452
+- win-debug:          457/457
+- win-relwithdebinfo: 457/457
+- win-release:        454/454
+- win-asan:           457/457
+- win-clang-cl:       457/457
 - win-tidy:           ✅ build clean
 
 (win-release is 3 fewer than debug: debug-only `FiberState` tests excluded by `#if CRD_ENABLE_ASSERTS`)
@@ -720,6 +741,7 @@ When in doubt, ASK before reading large files.
 
 ## Session log (rolling, last 5)
 
+- **2026-05-05** — Phase 2.7 v1c SHIPPED: full material system foundation (ADR-0048): MaterialTemplate + MaterialInstance, MaterialDomain, PassType, RasterState, CookedParameter, ShaderOptionDecl, MATR v2 artifact (INFO+PASS), legacy META backward-compat, cooker rewrite, renames (MaterialResource→MaterialTemplate, MaterialLayout→MaterialBindLayout, MaterialInstance→MaterialBindGroup); 5 new tests; smoke_material.exe; all 6 configs green (457/457 win-debug).
 - **2026-05-05** — Phase 2.7 v1b SHIPPED: MeshResource + MeshResourceLoader + glTF cooker handler (cgltf, MikkTSpace, multi-mesh via ExtraArtifact); 4 new tests in test_mesh_loader.cpp; smoke_mesh.exe; all 6 configs green (452/452 win-debug).
 - **2026-05-04** — Phase 2.7 v1a SHIPPED: TextureResource + MipLevel + TextureFormat + TextureResourceLoader + texture cook handler (stb_image, box-filter mip gen); 4 new tests; smoke_texture.exe; all 6 configs green (448/448 win-debug).
 - **2026-05-04** — Phase 2.6 v1g SHIPPED: load_streamed + 2Q LRU eviction + memory budget + pinning; 5 new tests in test_eviction.cpp; smoke_resources_stream.exe; all 6 configs green (444/444 win-debug). Phase 2.6 COMPLETE.

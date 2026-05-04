@@ -1,7 +1,7 @@
 # Phase 2.7 — Asset import bootstrap
 
 **Status:** 🚧 active — v1a shipped 2026-05-04, v1b shipped 2026-05-05
-**ADRs:** ADR-0042 (texture cooked format), ADR-0043 (mesh resource + glTF import scope)
+**ADRs:** ADR-0042 (texture cooked format), ADR-0043 (mesh resource + glTF import scope), ADR-0048 (material system architecture foundation)
 **New modules:** loaders in `crd-renderer`; cooker handlers in `tools/asset_cooker/`
 **Depends on:** Phase 2.6 complete (ResourceManager, ILoader registry, CRDR cooker pipeline)
 
@@ -130,8 +130,12 @@ Vertex layout rationale: see ADR-0043.
 | `VERT`  | Vertex buffer chunk |
 | `INDX`  | Index buffer chunk |
 | `PRIM`  | Primitive table chunk |
-| `PARM`  | Material parameter chunk (v1c) |
-| `TEXS`  | Material texture slot chunk (v1c) |
+| `INFO`  | Material template info chunk: loader_version, domain (v1c) |
+| `PRMS`  | Material parameter schema chunk (v1c) |
+| `DFLT`  | Material parameter defaults blob (v1c) |
+| `PASS`  | Material pass-keyed shader table (v1c) |
+| `PSOS`  | Material PSO state per pass (v1c) |
+| `OPTS`  | Material shader option declarations (v1c) |
 
 ---
 
@@ -182,28 +186,102 @@ Vertex layout rationale: see ADR-0043.
 - Primitive count correct for a multi-primitive glTF mesh.
 - Missing VERT chunk → `LoadState::Failed`.
 
-### v1c — Material parameter wiring (closes debt item 1)
+### v1c — Material system foundation (closes debt items 1–3 artifact layer; ADR-0048)
 
-**Scope:**
-- Extend `MaterialResource` with:
-  - `HashMap<String, Vec4f> parameters` — scalar/vector uniform values.
-  - `HashMap<String, ResourceHandle<TextureResource>> textures` — named texture slots.
-- New MATR artifact chunks: `PARM` (serialised parameter table) + `TEXS` (serialised texture
-  slot table: `[name_len u32, name u8[], resource_id u8[16]][]`).
-- `MaterialResourceLoader` updated: after loading shaders, parse `PARM` and `TEXS` chunks
-  (both optional — backward compatible with v1e artifacts which have neither). For each
-  texture slot, call `ctx.manager->load_sync<TextureResource>(tex_id)`.
-- Cooker `.mat.toml` handler extended: parse `[parameters]` (key = scalar/vec TOML) and
-  `[textures]` (key = relative source path → look up UUID from adjacent `.meta`).
-- `kFourCC_PARM`, `kFourCC_TEXS` added.
-- Bump `kMaterialLoaderVersion` to 2 (new chunks; old artifacts without them still load cleanly
-  via the optional-chunk path).
+This slice replaces the original "simple parameter wiring" scope with a full material system foundation.
+See ADR-0048 for the full design rationale and all decisions.
 
-**Tests:**
-- Material with texture slot: cook `.mat.toml` referencing a PNG → load → `mat->textures` non-empty,
-  texture handle is Ready, pixel data accessible.
-- Material with scalar parameter: cook → load → `mat->parameters["roughness"] == Vec4f(0.5, ...)`.
-- Old v1 MATR artifact (no PARM/TEXS chunks) loads cleanly with empty maps.
+**Scope — renaming and cleanup (no semantic change):**
+- `MaterialLayout` → `MaterialBindLayout` (internal to `ForwardRenderPath`, not in public API).
+- `MaterialInstance` (per-frame transient bind group) → `MaterialBindGroup` (same scope).
+- `MaterialResource` → `MaterialTemplate` (same FourCC `MATR`, same loader registration point;
+  all `load_sync<MaterialResource>` call sites updated to `load_sync<MaterialTemplate>`).
+
+**Scope — new public types:**
+- `MaterialDomain` enum: `Surface(0)`, `PostProcess(1)`, `Compute(2)`, `Decal(3)`, `UI(4)` (ADR-0046,
+  pulled forward from Phase 2.8 into the `INFO` chunk).
+- `PassType` enum: `DepthPrepass(0)`, `Shadow(1)` (reserved), `Forward(2)` — values frozen.
+- `ParameterType` enum: `Float`, `Float2`, `Float3`, `Float4`, `Color`, `Bool`, `Int`, `Enum`,
+  `Texture2D`, `TextureCube`, `Sampler` — semantic annotations on Color; Texture types use binding_slot.
+- `CookedParameter` struct: `name_hash u64, type u8, ubo_offset u16, binding_slot u8, enables_option_hash u64`.
+- `ShaderOptionDecl` struct: `name_hash u64, default_enabled u8`.
+- `RasterState` struct: `AlphaMode, CullMode, FillMode, depth_test bool, depth_write bool, src/dst BlendMode`.
+
+**Scope — `MaterialTemplate` (loaded from MATR artifact):**
+
+```cpp
+struct MaterialTemplate
+{
+    MaterialDomain                                                       domain;
+    crd::containers::Array<CookedParameter>                             parameters;    // schema sorted by name_hash
+    crd::containers::Array<crd::u8>                                     defaults_blob; // packed default values
+    crd::containers::HashMap<PassType, ResourceHandle<ShaderResource>>  pass_shaders;
+    crd::containers::Array<RasterState>                                 pso_states;    // indexed by PassType ordinal
+    crd::containers::Array<ShaderOptionDecl>                            options;
+
+    explicit MaterialTemplate(crd::IAllocator* a);
+};
+```
+
+**Scope — `MaterialInstance` (caller-owned, not a ResourceManager resource):**
+
+```cpp
+struct MaterialInstance
+{
+    ResourceHandle<MaterialTemplate>                                      tmpl;
+    crd::containers::Array<crd::u8>                                       values_blob;
+    crd::containers::HashMap<crd::u32, ResourceHandle<TextureResource>>   texture_overrides;
+
+    explicit MaterialInstance(crd::IAllocator* a, ResourceHandle<MaterialTemplate> t);
+
+    [[nodiscard]] ResourceHandle<ShaderResource> variant_for_pass(PassType pass) const;
+    void set_float  (crd::containers::StringView name, float v);
+    void set_vec4   (crd::containers::StringView name, crd::math::Vec4f v);
+    void set_texture(crd::containers::StringView name, ResourceHandle<TextureResource> h);
+};
+```
+
+**Scope — `SurfaceData` GLSL contract:**
+- New file `crd/renderer/surface_data.glsl.inc` containing `VertexAttrs`, `SurfaceData` struct, and
+  declaration of `crd_evaluate_surface(in VertexAttrs, inout SurfaceData)`.
+- Stability contract: fields never removed; new fields appended with default=0.
+
+**Scope — New MATR artifact format (kFourCC_INFO/PRMS/DFLT/PASS/PSOS/OPTS):**
+- `INFO` chunk (4 bytes): `loader_version u8, domain u8, flags u8, pad u8`.
+- `PRMS` chunk: parameter schema array sorted by `name_hash` for binary search at bind time.
+- `DFLT` chunk: packed default values blob parallel to `PRMS` entries.
+- `PASS` chunk: `count u32` + `{pass_type u8, pad[3], resource_id[16]}` per entry.
+- `PSOS` chunk: `present_mask u8` + `RasterState` per present PassType.
+- `OPTS` chunk: shader option declarations.
+- Reader: unknown FourCCs skipped; missing chunks load gracefully with defaults.
+- Legacy `META` chunk (32-byte vert+frag pair from v1e) synthesized into `PassType::Forward` entry.
+- `kMaterialLoaderVersion` → 2.
+
+**Scope — Cooker `.mat.toml` handler rewrite:**
+- Parses `[[parameter]]` entries with `name`, `type`, `binding_slot`, `enables_option` (inline functor).
+- Parses `[[option]]` entries with `name` and `default`.
+- Compiles pass shaders to SPIR-V via shaderc; runs spirv-reflect to extract UBO offsets for each parameter.
+- Emits `CookedParameter` entries sorted by `name_hash`; emits all six new chunks.
+- No longer emits legacy `META` chunk.
+- Parses optional `[raster]` table per pass for `PSOS` chunk.
+
+**FourCCs added:** `kFourCC_INFO`, `kFourCC_PRMS`, `kFourCC_DFLT`, `kFourCC_PASS`, `kFourCC_PSOS`,
+`kFourCC_OPTS`.
+
+**Tests (in `tests/resources/test_material_loader.cpp`):**
+- `MaterialTemplate` round-trip: hand-assembled MATR CRDR (INFO+PRMS+DFLT+PASS+PSOS) → load → verify
+  domain, parameter schema, pass_shaders entries, pso_states.
+- Legacy `META`-only artifact loads → synthesized `PassType::Forward` entry, empty parameter list.
+- `MaterialInstance` parameter override: set_vec4 → `values_blob` updated correctly.
+- `MaterialInstance` texture override: set_texture → `texture_overrides` populated, `variant_for_pass`
+  returns permuted variant (inline functor evaluation).
+- Cook `.mat.toml` with `[[parameter]]` and `[[option]]` → load → schema matches declared types.
+- Missing `INFO` chunk → domain defaults to `Surface`, load succeeds.
+
+**Smoke:** `smoke_material.exe` (headless): builds MATR artifact with two pass shaders and one
+`Float4` parameter, mounts, loads as `MaterialTemplate`, creates `MaterialInstance`, calls
+`set_vec4("base_color", ...)`, verifies `values_blob` updated, calls `variant_for_pass(Forward)`,
+verifies handle is valid. Deletes temp file, exits 0.
 
 ### v1d — GPU upload + real render smoke
 
@@ -299,7 +377,7 @@ tools/asset_cooker/src/cook_handlers/
 tests/resources/
   test_texture_loader.cpp         ← v1a
   test_mesh_loader.cpp            ← v1b
-  test_material_params.cpp        ← v1c
+  test_material_loader.cpp        ← v1c (replaces test_material_params.cpp — full foundation scope)
 tests/meshgen/
   test_meshgen.cpp                ← v1e
 
@@ -313,6 +391,8 @@ assets/source/                    ← demo assets (v1e; see LICENSES.md)
 
 runtime/examples/
   smoke_texture.cpp               ← v1a (CPU data only)
+  smoke_mesh.cpp                  ← v1b (CPU data only)
+  smoke_material.cpp              ← v1c (CPU data only, no GPU required)
   smoke_asset_import.cpp          ← v1d (full GPU pipeline)
   smoke_meshgen.cpp               ← v1e (headless, CPU data only)
 
@@ -332,9 +412,10 @@ sandbox/                          ← v1e (crd-sandbox, CRD_BUILD_SANDBOX gate)
 3. `smoke_meshgen.exe` runs exit 0 on headless CI; all geometry invariants pass.
 4. `crd-sandbox --headless` exits 0 (CPU-side resource validation).
 5. `crd-sandbox` (GPU) renders BoxTextured.glb and Duck.glb interactively; asset browser switches mesh.
-6. Material debt item 1 (parameters + texture slots) closed.
+6. Material system foundation (ADR-0048) landed: `MaterialTemplate`, `MaterialInstance`, `SurfaceData` contract,
+   full MATR chunk set, ShaderOptions, inline functor. Material debt items 1–3 (artifact layer) closed.
 7. Six-configuration green: win-debug / win-relwithdebinfo / win-release / win-asan / win-clang-cl / win-tidy.
-8. ADR-0042, ADR-0043, ADR-0045 filed and cross-referenced here.
+8. ADR-0042, ADR-0043, ADR-0045, ADR-0048 filed and cross-referenced here.
 9. `TextureResource`, `MeshResource`, and `crd-meshgen` documented in `docs/systems/`.
 
 ---
@@ -355,9 +436,12 @@ sandbox/                          ← v1e (crd-sandbox, CRD_BUILD_SANDBOX gate)
 - ADR-0042 — Texture cooked format + GPU upload strategy
 - ADR-0043 — MeshResource vertex layout + glTF import scope
 - ADR-0045 — Sandbox, asset layout, cook workflow, crd-meshgen
+- ADR-0046 — MaterialDomain enum, node-editor future-proofing, RT hybrid strategy
+- ADR-0048 — Material system architecture foundation (full v1c design rationale)
 - ADR-0013 — Asset pipeline (cooker is always a separate exe)
 - ADR-0038 — CRDR container format (chunk registry extended here)
 - ADR-0040 — Cooker CLI + CMake (cgltf and stb_image already declared as cooker deps)
-- `docs/debt.md` — Material system v1 gaps (item 1 closed by v1c; items 2–5 follow)
+- `docs/debt.md` — Material system v1 gaps (items 1–3 artifact layer closed by v1c; GPU wiring in Phase 2.8)
 - `docs/systems/sandbox.md` — crd-sandbox scope contract
 - `docs/phases/phase-2-graphics.md` — Renderer v1 context
+- `docs/phases/phase-2.8-material-completion.md` — GPU-side wiring of v1c artifact data

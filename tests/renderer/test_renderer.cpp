@@ -658,14 +658,14 @@ TEST_CASE("FrameGraph reset clears passes and resources", "[renderer][frame_grap
 // Material system tests (v1e+f)
 // =============================================================================
 
-TEST_CASE("MaterialLayout creates a DescriptorSetLayout on the device", "[renderer][material]")
+TEST_CASE("MaterialBindLayout creates a DescriptorSetLayout on the device", "[renderer][material]")
 {
     FakeDevice device;
 
     crd::rhi::DescriptorBinding bindings[] = {
         {0, crd::rhi::DescriptorType::UniformBuffer, 1, crd::rhi::ShaderStage::Fragment},
     };
-    auto layout = crd::renderer::MaterialLayout::create(device, {crd::containers::make_span(bindings)});
+    auto layout = crd::renderer::MaterialBindLayout::create(device, {crd::containers::make_span(bindings)});
 
     REQUIRE(layout != nullptr);
     REQUIRE(device.create_dsl_count == 1);
@@ -674,7 +674,7 @@ TEST_CASE("MaterialLayout creates a DescriptorSetLayout on the device", "[render
             == crd::rhi::DescriptorType::UniformBuffer);
 }
 
-TEST_CASE("MaterialInstance allocates a DescriptorSet from the ring allocator", "[renderer][material]")
+TEST_CASE("MaterialBindGroup allocates a DescriptorSet from the ring allocator", "[renderer][material]")
 {
     FakeDevice device;
     FakeDescriptorAllocator allocator;
@@ -683,7 +683,7 @@ TEST_CASE("MaterialInstance allocates a DescriptorSet from the ring allocator", 
         {0, crd::rhi::DescriptorType::UniformBuffer, 1, crd::rhi::ShaderStage::Fragment},
         {1, crd::rhi::DescriptorType::UniformBuffer, 1, crd::rhi::ShaderStage::Fragment},
     };
-    auto layout = crd::renderer::MaterialLayout::create(device, {crd::containers::make_span(bindings)});
+    auto layout = crd::renderer::MaterialBindLayout::create(device, {crd::containers::make_span(bindings)});
     REQUIRE(layout != nullptr);
 
     allocator.begin_frame(0);
@@ -694,19 +694,19 @@ TEST_CASE("MaterialInstance allocates a DescriptorSet from the ring allocator", 
     REQUIRE(allocator.last_binding_count == 2);
 }
 
-TEST_CASE("MaterialInstance update_buffer forwards to the underlying DescriptorSet", "[renderer][material]")
+TEST_CASE("MaterialBindGroup update_buffer forwards to the underlying DescriptorSet", "[renderer][material]")
 {
     FakeDevice device;
 
     crd::rhi::DescriptorBinding bindings[] = {
         {0, crd::rhi::DescriptorType::UniformBuffer, 1, crd::rhi::ShaderStage::Fragment},
     };
-    auto layout = crd::renderer::MaterialLayout::create(device, {crd::containers::make_span(bindings)});
+    auto layout = crd::renderer::MaterialBindLayout::create(device, {crd::containers::make_span(bindings)});
 
-    // Build a MaterialInstance directly with a FakeDescriptorSet
+    // Build a MaterialBindGroup directly with a FakeDescriptorSet
     auto fake_set = std::make_unique<FakeDescriptorSet>();
     auto* raw_set = fake_set.get();
-    crd::renderer::MaterialInstance instance(std::move(fake_set));
+    crd::renderer::MaterialBindGroup instance(std::move(fake_set));
 
     FakeBuffer buf({64, crd::rhi::enum_bits(crd::rhi::BufferUsage::Uniform), crd::rhi::MemoryUsage::CpuToGpu});
     instance.update_buffer(0, buf);
@@ -723,7 +723,7 @@ TEST_CASE("DescriptorAllocator ring: begin_frame advances frame index", "[render
     crd::rhi::DescriptorBinding bindings[] = {
         {0, crd::rhi::DescriptorType::UniformBuffer, 1, crd::rhi::ShaderStage::Vertex},
     };
-    auto layout = crd::renderer::MaterialLayout::create(device, {crd::containers::make_span(bindings)});
+    auto layout = crd::renderer::MaterialBindLayout::create(device, {crd::containers::make_span(bindings)});
     auto alloc  = device.create_descriptor_allocator({2, 128});
     auto* fake  = static_cast<FakeDescriptorAllocator*>(alloc.get());
 

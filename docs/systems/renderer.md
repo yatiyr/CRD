@@ -13,11 +13,17 @@ the frame graph, render paths, and material binding live.
 | v1c | frame graph v1 — typed handles, pass DAG, automatic barriers | ✅ shipped 2026-05-01 |
 | v1d | `IRenderPath` on top of frame graph + `FrameContext` rework | ✅ shipped 2026-05-01 |
 | v1e | push constants + descriptor set RHI surface | ✅ shipped 2026-05-01 |
-| v1f | material system v1 (`MaterialLayout`, `MaterialInstance`) | ✅ shipped 2026-05-01 |
+| v1f | material system v1 (`MaterialBindLayout`, `MaterialBindGroup`) | ✅ shipped 2026-05-01 (renamed in v1c) |
 | v1g | `ForwardRenderPath` — depth prepass + main color as frame graph passes | ✅ shipped 2026-05-01 |
 | v1h | index buffer + `draw_indexed` | ✅ shipped 2026-05-01 |
 | v1i | swapchain blit + output (first full frame loop) | ✅ shipped 2026-05-01 |
 | v1j | GPU instancing | ⏳ Phase 3.2 dep — see `docs/debt.md` |
+
+**Phase 2.7 v1c — Material system foundation (resource side)**
+
+| Slice | Ships | Status |
+| --- | --- | --- |
+| v1c | `MaterialTemplate` + `MaterialInstance` + `MaterialDomain` + `PassType` + `RasterState` (ADR-0048) | ✅ shipped 2026-05-05 |
 
 ## Core decisions
 
@@ -111,17 +117,35 @@ public:
 };
 ```
 
-### Material system (v1f)
+### Material system (v1f, renamed in v1c)
 
-**`MaterialLayout`**
+**`MaterialBindLayout`** (was `MaterialLayout`)
 - wraps a `DescriptorSetLayout` (set 1 = per-material by convention)
 - `create(device, desc)` — factory; returns `nullptr` on allocation failure
-- `create_instance(allocator)` — allocates a `MaterialInstance` from the ring
+- `create_instance(allocator)` — allocates a `MaterialBindGroup` from the ring
 
-**`MaterialInstance`**
+**`MaterialBindGroup`** (was `MaterialInstance`)
 - wraps a `DescriptorSet`
 - `update_buffer(binding, buffer)` — wire a UBO/SSBO into the descriptor
 - `descriptor_set()` — access for `CommandBuffer::bind_descriptor_sets`
+
+### Material resource types (Phase 2.7 v1c / ADR-0048)
+
+**`MaterialDomain`** — enum class u8: `Surface=0`, `PostProcess=1`, `Compute=2`, `Decal=3`, `UI=4`
+
+**`PassType`** — enum class u8: `DepthPrepass=0`, `Shadow=1`, `Forward=2` (`kPassTypeCount=3`)
+
+**`RasterState`** — 8 bytes: `alpha_mode`, `cull_mode`, `fill_mode`, `depth_test`, `depth_write`, `src_blend`, `dst_blend`, `pad`
+
+**`CookedParameter`** — 24 bytes: `name_hash u64`, `enables_option_hash u64`, `ubo_offset u16`, `type ParameterType`, `binding_slot u8`, `pad[4]`
+
+**`ShaderOptionDecl`** — 16 bytes: `name_hash u64`, `default_enabled u8`, `pad[7]`
+
+**`PassShaderPair`** — `{ResourceHandle<ShaderResource> vert; ResourceHandle<ShaderResource> frag;}`
+
+**`MaterialTemplate`** — loaded asset type. Constructor takes `IAllocator*`. Fields: `MaterialDomain domain`, `Array<CookedParameter> parameters`, `Array<u8> defaults_blob`, `PassShaderPair pass_shaders[3]`, `RasterState pso_states[3]`, `Array<ShaderOptionDecl> options`.
+
+**`MaterialInstance`** — caller-owned transient instance. `MaterialInstance(ResourceHandle<MaterialTemplate>, IAllocator*)` copies defaults into `values_blob`. `set_float(name_hash, value)` / `set_vec4(name_hash, Vec4f)` binary-search by `name_hash` and write to `values_blob` at `ubo_offset`. `variant_for_pass(PassType)` returns the `PassShaderPair` for that pass, falling back to `PassType::Forward` if the requested pass has no shader.
 
 ### Descriptor frequency convention (fixed from v1g)
 

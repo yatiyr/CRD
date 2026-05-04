@@ -299,6 +299,21 @@ target_link_libraries(smoke_mesh PRIVATE
 )
 crd_enable_default_pch(smoke_mesh)
 
+add_executable(smoke_material
+    examples/smoke_material.cpp
+)
+
+target_link_libraries(smoke_material PRIVATE
+    crd-core
+    crd-memory
+    crd-containers
+    crd-platform
+    crd-resources
+    crd-renderer
+    crd-shader
+)
+crd_enable_default_pch(smoke_material)
+
 add_executable(smoke_rhi_vulkan_bootstrap
     examples/smoke_rhi_vulkan_bootstrap.cpp
 )

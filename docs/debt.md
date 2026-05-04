@@ -11,113 +11,96 @@ _(none — all items cleared as of 2026-05-03)_
 
 ## Material system v1 known gaps
 
-`MaterialResource` as shipped in v1e is a loader proof-of-concept, not a production material abstraction.
-Status per Phase 2.7 / 2.8 planning (ADR-0044):
-- **Item 1** — Closed by Phase 2.7 v1c (TextureResource + material params/textures).
-- **Items 2–3** — Scheduled for Phase 2.8 (PSO state + pass-keyed variants). Prerequisites for Phase 3.0 scene/ECS.
-- **Items 4–5** — Deferred to Phase 3.4+ (no consumer until CSM / post-FX / compute passes exist).
+`MaterialResource` as shipped in Phase 2.6 v1e is a loader proof-of-concept, not a production material
+abstraction. Phase 2.7 v1c (ADR-0048) redesigns it as a full material system foundation: `MaterialTemplate`
++ `MaterialInstance` two-tier split, new MATR artifact format (INFO/PRMS/DFLT/PASS/PSOS/OPTS chunks),
+`ParameterType` enum, `ShaderOption` system with inline functor, `SurfaceData` GLSL contract, `PassType` enum,
+`MaterialDomain` (pulled forward from Phase 2.8), `RasterState` encoding in the artifact.
 
-### 1. Material parameters (uniforms + textures) ✅ Closes Phase 2.7 v1c
+**Updated status (post-ADR-0048):**
+- **Items 1–3 (artifact layer)** — Closed by Phase 2.7 v1c. The artifact format now carries: parameter
+  schema (PRMS), defaults (DFLT), pass-keyed shaders (PASS), PSO state per pass (PSOS), shader options (OPTS).
+- **Items 1–3 (GPU wiring)** — Phase 2.8 wires the artifact data to Vulkan pipeline compilation
+  (per-material pipeline cache, multi-pass ForwardRenderPath, depth-only prepass).
+- **Items 4–5** — Still deferred to Phase 3.4+ (no consumer until CSM / post-FX / compute passes exist).
 
-**What's missing:** `MaterialResource` holds two shader handles and nothing else. There is no place to
-store per-material uniform values (albedo color, roughness, metallic factor, emissive scale, tiling) or
-texture slot bindings (albedo map UUID, normal map UUID, roughness/metallic map UUID, AO UUID, emissive UUID).
+### 1. Material parameters, texture slots, and full parameter system ✅ Closes Phase 2.7 v1c
 
-**What to add:**
-- Extend the MATR artifact META / BLOB chunk to carry a parameter table: typed key→value pairs for
-  scalars/vectors and a texture slot table (`slot_name → ResourceId`).
-- `MaterialResource` stores these as a `HashMap<String, ParameterValue>` and a
-  `HashMap<String, ResourceHandle<TextureResource>>`.
-- `MaterialResourceLoader::load()` calls `ctx.manager->load_sync<TextureResource>(tex_id)` transitively
-  for each texture slot (same pattern as the shader dep load today).
-- The cooker's `.mat.toml` handler parses `[parameters]` and `[textures]` sections and serialises them.
+**What was missing:** `MaterialResource` held two shader handles and nothing else. No parameter schema,
+no texture slots, no shader variants, no material domain, no render-pass awareness.
 
-**Why deferred:** `TextureResource` and `TextureResourceLoader` don't exist yet (no texture asset cooker
-path). Land texture cooker first, then wire material parameters.
+**What v1c delivers:**
+- `MaterialTemplate` (replaces `MaterialResource`): loaded from MATR artifact. Carries parameter schema
+  (`Array<CookedParameter>` sorted by name_hash), default values blob, pass-keyed shader handles
+  (`HashMap<PassType, ResourceHandle<ShaderResource>>`), PSO state per pass, shader option declarations.
+- `MaterialInstance` (caller-owned, not in ResourceManager): mutable overrides atop a `MaterialTemplate`.
+  `set_float` / `set_vec4` / `set_texture` write into a `values_blob`. `variant_for_pass(pass)` evaluates
+  inline functor rules and returns the correct `ShaderResource` permutation.
+- `ParameterType` enum: Float/Float2/Float3/Float4/Color/Bool/Int/Enum/Texture2D/TextureCube/Sampler.
+- Cook-time SPIR-V reflection: spirv-reflect extracts UBO offsets; cooker emits `CookedParameter` entries
+  sorted by name_hash for O(log N) binary search at bind time.
+- Inline functor: `enables_option = "USE_NORMAL_MAP"` on a texture parameter — no C++ subclass needed.
 
-### 2. PSO state in the material artifact — Scheduled Phase 2.8 v1a
+### 2. PSO state in the material artifact — ✅ Artifact layer closes Phase 2.7 v1c; GPU wiring Phase 2.8 v1a
 
-**What's missing:** Blend mode, depth test, depth write, stencil, cull mode, alpha mode, fill mode —
-all the per-pipeline-state that varies wildly across opaque / masked / transparent / decal / wireframe
-materials — are not encoded anywhere in the MATR artifact. The renderer currently has these hardwired
-in `ForwardRenderPath`.
+**Artifact layer (v1c):** `PSOS` chunk carries a `RasterState` per PassType (present_mask + RasterState
+array). `RasterState`: AlphaMode, CullMode, FillMode, depth_test, depth_write, src/dst BlendMode.
 
-**What to add:**
-- A `RasterState` struct: `{ AlphaMode alpha_mode; CullMode cull_face; FillMode fill; bool depth_test;
-  bool depth_write; BlendMode src_blend; BlendMode dst_blend; }`.
-- Serialise into the MATR artifact (either extend META or add a `RAST` chunk, 16 bytes).
-- `MaterialResource` stores a `RasterState` field.
-- `ForwardRenderPath`'s `PipelineResolver::resolve_pipeline()` reads the material's `RasterState`
-  and includes it in the `GraphicsPipelineDesc` key.
+**GPU wiring (Phase 2.8 v1a):** `ForwardRenderPath` reads `material->pso_states[pass_type]` and
+incorporates it into the `GraphicsPipelineDesc` key. Per-material pipeline cache keyed by
+`(VariantKey, RasterState)`. `ForwardRenderPath` skips non-`Surface` domain materials.
 
-**Why deferred:** `PipelineResolver` is currently a stub with no per-material pipeline cache. Landing a
-real pipeline cache (keyed by `(VariantKey, RasterState)`) is a prerequisite.
+### 3. Shader variant awareness (VariantKey + pass-keyed variants) — ✅ Artifact layer closes Phase 2.7 v1c; GPU wiring Phase 2.8 v1b
 
-### 3. Shader variant awareness (VariantKey integration) — Scheduled Phase 2.8 v1b
+**Artifact layer (v1c):** `PASS` chunk stores `HashMap<PassType, ResourceId>`. `OPTS` chunk stores shader
+option declarations. `MaterialInstance::variant_for_pass(pass)` evaluates inline functor rules, constructs
+a `VariantKey`, and returns the appropriate `ShaderResource` from `tmpl->pass_shaders[pass]`.
 
-**What's missing:** The `VariantKey` / `VariantPipelineDesc` machinery from `crd-shader` (ADR-0026,
-Phase 2.3d/g) is entirely disconnected from `MaterialResource`. The material has no concept of render
-passes, skinning axes, or shadow vs. color variants. It stores a single vert+frag pair with no way to
-express "use this variant for the depth prepass, that variant for the shadow map pass, another for the
-main color pass."
-
-**What to add:**
-- `MaterialResource` stores a `HashMap<PassType, ResourceId>` mapping each render pass type to a
-  specific `ShaderResource` (or a `VariantKey` that the resolver uses to look up a compiled variant).
-- The MATR artifact encodes this table (replace the hardcoded vert/frag pair with a pass-keyed table).
-- `ForwardRenderPath` asks the material for the shader appropriate to the current pass type rather than
-  always using the same shader.
-- The cooker's `.mat.toml` can declare `[passes.depth]`, `[passes.shadow]`, `[passes.main_color]`
-  sections pointing to different GLSL source files or variant overrides.
-
-**Why deferred:** Requires the PSO pipeline cache (item 2) and a stable `PassType` enum to be locked
-in before the artifact format can be defined. Also needs at least two distinct render passes in
-`ForwardRenderPath` (depth prepass + main color) to be worth exercising — those exist in v1g but
-the depth pipeline is currently using the full vertex+fragment pipeline.
+**GPU wiring (Phase 2.8 v1b):** `ForwardRenderPath` calls `mat_inst.variant_for_pass(DepthPrepass)` in
+the depth prepass and `mat_inst.variant_for_pass(Forward)` in the color pass. Each pass uses the shader
+selected by the instance, not a hardcoded vert+frag pair.
 
 ### 4. Descriptor layout — per-material bindings — Deferred Phase 3.4
 
-**What's missing:** Nothing in `MaterialResource` drives descriptor set creation or layout at set 1+
-(per-material bindings). The existing `VulkanDescriptorAllocator` and `MaterialInstance` (in `crd-renderer`)
-exist but are wired to hardcoded descriptor set layouts, not material-artifact-driven layouts.
+**What's missing:** Nothing in `MaterialTemplate` drives descriptor set creation or layout for set 1+
+(per-material bindings). The `VulkanDescriptorAllocator` and `MaterialBindGroup` (formerly `MaterialInstance`)
+are wired to hardcoded layouts, not artifact-driven layouts.
 
-**What to add:**
-- `MaterialResource` carries a derived `DescriptorSetLayout` (or enough data to construct one) based
-  on what the reflected shaders declare at set 1.
-- `MaterialResourceLoader` runs `spirv-reflect` results from both shader stages through a merge pass
-  (same stage-merge logic as `VariantPipelineDesc`) to build the per-material binding table.
-- The renderer's `MaterialInstance` is rebuilt from `MaterialResource` rather than from a
-  manually-constructed layout.
+**What to add (Phase 3.4):**
+- `MaterialTemplate` carries enough reflected binding data to construct a `VkDescriptorSetLayout` at load
+  time (or defer to the first bind).
+- `MaterialResourceLoader` merges spirv-reflect results across pass shaders to build the per-material
+  binding table.
+- `MaterialBindGroup` is rebuilt from `MaterialTemplate` rather than from a manually-constructed layout.
 
-**Why deferred:** Blocked on item 1 (texture slot table) and item 2 (stable pipeline key). Without
-real texture slots the descriptor layout is always trivial and the value isn't visible.
+**Why deferred:** No concrete consumer (texture arrays, multiple samplers) until CSM and post-FX land
+in Phase 3.4+.
 
 ### 5. Additional shader stages — Deferred Phase 3.5+
 
-**What's missing:** The 32-byte META chunk has exactly two UUID slots (vert + frag). There is no room
-for a compute shader, geometry shader, mesh shader, or task shader. A compute-only material (post-FX,
-particle simulation) cannot be expressed at all.
+**What's missing:** The PASS chunk stores vertex+fragment shader pairs (one `ShaderResource` per PassType).
+There is no slot for compute, mesh, or task shaders. A compute-only material (post-FX, particle simulation)
+cannot be expressed.
 
-**What to add:**
-- Replace the hardcoded 32-byte META layout with a small typed table:
-  `[stage_type u8, padding u8[3], resource_id u8[16]][]` — one entry per stage present.
-- `MaterialResource` stores a `HashMap<Stage, ResourceHandle<ShaderResource>>` instead of two named fields.
-- Update `MaterialResourceLoader` to parse the variable-length stage table.
-- Update the cooker's `.mat.toml` handler to accept any combination of `[stages.vertex]`,
-  `[stages.fragment]`, `[stages.compute]`, `[stages.mesh]`, etc.
+**What to add (Phase 3.5):**
+- Extend `ShaderResource` to carry multiple stages (vertex/fragment/compute/mesh as a tagged union).
+- Update `MaterialTemplate::pass_shaders` value type to `ResourceHandle<ShaderResource>` where each
+  `ShaderResource` declares its own stage set (already possible via the existing shader mechanism).
+- The PASS chunk format is already stage-agnostic (one ResourceId per PassType entry). Only the shader
+  artifact format changes — the material artifact format is unaffected.
 
-**Why deferred:** Post-FX (compute) and mesh shaders are Phase 5 concerns. Keep the format simple
-until there's a concrete consumer. The format change is backward-incompatible (bump `kMaterialLoaderVersion`),
-so defer until all the other format changes above are batched in.
+**Why deferred:** Compute and mesh shaders are Phase 5 concerns. The PASS chunk format already accommodates
+them — the `ShaderResource` inside can carry any combination of stages.
 
 ---
 
-**Execution plan (ADR-0044):**
-- Phase 2.7 v1c closes item 1.
-- Phase 2.8 closes items 2 and 3 (prerequisites for scene/ECS draw classification).
-- Items 4 and 5 remain open; deferred until CSM/post-FX consumers in Phase 3.4+ create real demand.
+**Updated execution plan:**
+- Phase 2.7 v1c closes the artifact layer of items 1–3 (full material foundation: ADR-0048).
+- Phase 2.8 wires items 2–3 to actual Vulkan pipeline compilation and multi-pass rendering.
+- Items 4 and 5 remain open; deferred until CSM/post-FX/compute consumers in Phase 3.4+ create real demand.
 
-See `docs/phases/phase-2.7-asset-import.md`, `docs/phases/phase-2.8-material-completion.md`, ADR-0044.
+See `docs/phases/phase-2.7-asset-import.md`, `docs/phases/phase-2.8-material-completion.md`,
+ADR-0044, ADR-0046, ADR-0048.
 
 ## Long-term deferred
 

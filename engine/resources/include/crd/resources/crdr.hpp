@@ -98,6 +98,14 @@ inline constexpr crd::u32 kFourCC_VERT = make_fourcc('V', 'E', 'R', 'T');
 inline constexpr crd::u32 kFourCC_INDX = make_fourcc('I', 'N', 'D', 'X');
 inline constexpr crd::u32 kFourCC_PRIM = make_fourcc('P', 'R', 'I', 'M');
 
+// Phase 2.7 v1c — material artifact FourCCs (ADR-0048)
+inline constexpr crd::u32 kFourCC_INFO = make_fourcc('I', 'N', 'F', 'O'); // domain + version + flags
+inline constexpr crd::u32 kFourCC_PRMS = make_fourcc('P', 'R', 'M', 'S'); // parameter schema
+inline constexpr crd::u32 kFourCC_DFLT = make_fourcc('D', 'F', 'L', 'T'); // default values blob
+inline constexpr crd::u32 kFourCC_PASS = make_fourcc('P', 'A', 'S', 'S'); // pass-keyed shader pairs
+inline constexpr crd::u32 kFourCC_PSOS = make_fourcc('P', 'S', 'O', 'S'); // per-pass PSO state
+inline constexpr crd::u32 kFourCC_OPTS = make_fourcc('O', 'P', 'T', 'S'); // shader option decls
+
 // Convert a fourcc back to a 4-char printable string (for logging).
 // Result is null-terminated; stored in caller-provided buf[5].
 void fourcc_to_str(crd::u32 fourcc, char (&buf)[5]) noexcept;

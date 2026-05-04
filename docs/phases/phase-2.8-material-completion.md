@@ -1,26 +1,28 @@
-# Phase 2.8 — Material System Completion (debt items 2–3) + Depth-Only Prepass
+# Phase 2.8 — Material GPU Wiring + Depth-Only Prepass
 
 **Status:** ⏳ planned — begins after Phase 2.7 v1d ships
-**ADRs:** ADR-0044 (phase ordering decision)
+**ADRs:** ADR-0044 (phase ordering decision), ADR-0048 (material system architecture — artifact format done in Phase 2.7 v1c)
 **New modules:** none — extends `crd-renderer` only
-**Depends on:** Phase 2.7 complete (TextureResource, MeshResource, MaterialResource with params/textures)
+**Depends on:** Phase 2.7 complete (TextureResource, MeshResource, MaterialTemplate with full MATR format)
 
 ---
 
 ## Goal
 
-Close material debt items 2 and 3 from `docs/debt.md` before Phase 3.0 scene/ECS starts.
+Wire the material artifact data established by Phase 2.7 v1c (ADR-0048) into actual GPU pipeline
+compilation and multi-pass rendering. The MATR artifact format is already complete — Phase 2.8 does
+no format changes. It reads the data and drives Vulkan.
 
-These two items are **prerequisites for the scene system**, not post-scene cleanup:
-- **Item 2 (PSO state):** Without per-material blend/depth/cull state in the MATR artifact, the scene system
-  cannot classify draw items correctly. Every renderable would share one pipeline regardless of alpha mode or
-  cull hints. Installing this after scene coding starts means designing the scene system around a known gap.
-- **Item 3 (pass-keyed variants):** Multi-pass rendering (depth prepass, future shadow maps) has no plumbing
-  without a per-pass shader slot. `ForwardRenderPath` already has a depth prepass and a color pass; making each
-  draw item advertise which shader it uses per pass is the missing piece.
+These wiring steps are **prerequisites for the scene system** (Phase 3.0), not post-scene cleanup:
+- **PSO state wiring:** `MaterialTemplate::pso_states` (from `PSOS` chunk) must drive `VkGraphicsPipeline`
+  compilation. Without a per-material pipeline cache, every renderable shares one pipeline regardless of
+  alpha mode or cull hints.
+- **Multi-pass rendering:** `ForwardRenderPath` must call `mat_inst.variant_for_pass(DepthPrepass)` and
+  `mat_inst.variant_for_pass(Forward)` to use the correct shader per pass. The `PASS` chunk is in the
+  artifact; the render path just needs to call it.
 
-Items 4 (artifact-driven descriptor layouts) and 5 (additional shader stages) are deferred to Phase 3.4+ where
-CSM, post-FX, and GPU culling create real consumers. Closing them now is horizontal scaffolding with no payoff.
+Items 4 (artifact-driven descriptor layouts) and 5 (additional shader stages) are deferred to Phase 3.4+
+where CSM, post-FX, and GPU culling create real consumers.
 
 **Out of scope for Phase 2.8:**
 - HDR render target / tone mapping (Phase 3.4)
@@ -34,132 +36,64 @@ CSM, post-FX, and GPU culling create real consumers. Closing them now is horizon
 
 ## Architecture
 
-### `RasterState` — new shared struct
+Phase 2.7 v1c already ships: `MaterialTemplate`, `MaterialInstance`, `ParameterType`, `CookedParameter`,
+`ShaderOptionDecl`, `MaterialDomain`, `PassType`, `RasterState`. The full MATR artifact format (INFO/PRMS/DFLT/PASS/PSOS/OPTS) is also complete. See ADR-0048.
 
-```cpp
-// engine/renderer/include/crd/renderer/raster_state.hpp
-namespace crd::renderer
-{
-enum class AlphaMode : crd::u8 { Opaque, Masked, Transparent };
-enum class CullMode  : crd::u8 { Back, Front, None };
-enum class FillMode  : crd::u8 { Solid, Wireframe };
-enum class BlendMode : crd::u8 { Zero, One, SrcAlpha, OneMinusSrcAlpha, SrcColor, OneMinusSrcColor };
+Phase 2.8 adds **no new types and no new FourCCs**. It extends `ForwardRenderPath` and the pipeline resolver to consume the data that Phase 2.7 put in the artifact.
 
-struct RasterState
-{
-    AlphaMode alpha_mode   = AlphaMode::Opaque;
-    CullMode  cull_face    = CullMode::Back;
-    FillMode  fill_mode    = FillMode::Solid;
-    bool      depth_test   = true;
-    bool      depth_write  = true;
-    BlendMode src_blend    = BlendMode::One;
-    BlendMode dst_blend    = BlendMode::Zero;
-    crd::u8   _pad[1]      = {};
-};
-static_assert(sizeof(RasterState) == 8);
-} // namespace crd::renderer
-```
+### What Phase 2.8 wires
 
-### `PassType` enum
+**v1a — Per-material pipeline cache:**
+`ForwardRenderPath` currently has no per-material pipeline cache. v1a adds one keyed by
+`(VariantKey, RasterState)`. Cache miss → compile a new `GraphicsPipelineDesc` incorporating
+the material's `pso_states[pass]` into the VkPipeline. `ForwardRenderPath` also skips materials
+with `domain != MaterialDomain::Surface`.
 
-```cpp
-// engine/renderer/include/crd/renderer/pass_type.hpp
-namespace crd::renderer
-{
-enum class PassType : crd::u8
-{
-    Depth      = 0,   // depth prepass / shadow map depth fill
-    MainColor  = 1,   // primary shaded color pass
-    // future: ShadowMap = 2, Overlay = 3, ...
-};
-} // namespace crd::renderer
-```
+**v1b — Multi-pass shader selection:**
+`ForwardRenderPath` calls `mat_inst.variant_for_pass(DepthPrepass)` in the depth prepass and
+`mat_inst.variant_for_pass(Forward)` in the color pass. Each pass gets the correct shader from
+the `PASS` chunk, with ShaderOptions evaluated by `MaterialInstance`.
 
-### Extended `MaterialResource`
-
-After Phase 2.8 v1a + v1b:
-
-```cpp
-struct MaterialResource
-{
-    // v2.8a — PSO state (from RAST chunk)
-    RasterState raster_state;
-
-    // v2.8b — per-pass shader handles (from PASS chunk; replaces flat vert+frag pair)
-    crd::containers::HashMap<PassType, ResourceHandle<ShaderResource>> pass_shaders;
-
-    // v2.7c — parameters and textures
-    crd::containers::HashMap<crd::containers::String, crd::math::Vec4f>                    parameters;
-    crd::containers::HashMap<crd::containers::String, ResourceHandle<TextureResource>>     textures;
-
-    explicit MaterialResource(crd::IAllocator* a);
-};
-```
-
-### CRDR FourCCs added in 2.8
-
-| FourCC | Meaning |
-|--------|---------|
-| `RAST` | RasterState chunk (8 bytes: AlphaMode, CullMode, FillMode, depth_test/write flags, src/dst blend) |
-| `PASS` | Pass-keyed shader table chunk: `[pass_type u8, pad u8[3], resource_id u8[16]][]` |
-
-The old hardcoded `META` 32-byte chunk (vert UUID + frag UUID) from Phase 2.6 v1e is superseded by `PASS`.
-Old v1 MATR artifacts (without `RAST` or `PASS` chunks) load with default `RasterState` and a `MainColor` entry
-synthesized from the `META` chunk — fully backward compatible.
+**v1c — Depth-only prepass pipeline:**
+The depth prepass builds a vertex-only `GraphicsPipelineDesc` (no fragment shader, `color_format =
+Format::Undefined`, `depth_format = Format::D32Sfloat`). Pipeline resolver stores per-material
+`{depth_pipeline, color_pipeline}` pairs.
 
 ---
 
 ## Slices
 
-### v1a — PSO state + MaterialDomain in MATR artifact
+### v1a — Per-material pipeline cache (PSO state wiring)
 
 **Scope:**
-- `RasterState` struct in `engine/renderer/include/crd/renderer/raster_state.hpp`.
-- `kFourCC_RAST` added to `crdr.hpp`.
-- `MaterialDomain` enum in `engine/renderer/include/crd/renderer/material_domain.hpp`:
-  `Surface` (0), `PostProcess` (1), `Compute` (2), `Decal` (3), `UI` (4). See ADR-0046.
-- `kFourCC_DOMN` added to `crdr.hpp`. `DOMN` chunk: 4 bytes (MaterialDomain u8 + pad u8[3]).
-- `MaterialResource` gains a `MaterialDomain domain` field.
-- `MaterialResourceLoader` parses optional `DOMN` chunk; missing → `MaterialDomain::Surface` (backward compat).
-- Cooker `.mat.toml` handler: parse optional `domain` key (`"surface"` / `"post_process"` / `"compute"` / etc.); emit `DOMN` chunk.
-- `ForwardRenderPath` skips non-`Surface` materials (no-op; PostProcess/Compute materials are dispatched by their own systems in Phase 3.4).
-- `MaterialResourceLoader` updated: parse optional `RAST` chunk into `MaterialResource::raster_state`; missing chunk
-  → default `RasterState{}` (backward compatible with v1e artifacts).
-- Cooker `.mat.toml` handler extended: parse optional `[raster]` table
-  (`alpha_mode`, `cull_face`, `fill_mode`, `depth_test`, `depth_write`, `src_blend`, `dst_blend`); emit `RAST` chunk.
-- Per-material pipeline cache in `ForwardRenderPath`: keyed by `(VariantKey, RasterState)` hash. Cache miss →
-  compile new `GraphicsPipelineDesc` incorporating the material's `RasterState`.
-- Bump `kMaterialLoaderVersion` to 2.
+- Per-material pipeline cache in `ForwardRenderPath` keyed by `(VariantKey, RasterState)` hash.
+  Cache miss → compile a new `GraphicsPipelineDesc` incorporating `material->pso_states[pass_type]`
+  (from the Phase 2.7 `PSOS` chunk) into the `VkGraphicsPipelineCreateInfo`.
+- `ForwardRenderPath` checks `material->domain` and skips non-`Surface` materials (PostProcess/Compute
+  materials are dispatched by their own systems in Phase 3.4).
+- No new types, no new FourCCs, no loader changes — all artifact data was populated by Phase 2.7 v1c.
 
 **Tests:**
 - Opaque material (default RasterState, Surface domain) → same pipeline as before (regression guard).
 - Transparent material (`alpha_mode = Transparent`, `depth_write = false`) → distinct pipeline key.
-- Two-sided material (`cull_face = None`) → third pipeline key.
-- PostProcess domain material → `ForwardRenderPath` skips it (no pipeline created for it).
-- Old v1 MATR artifact (no RAST/DOMN chunks) loads without error, defaults correct.
-- `.mat.toml` with `[raster]` + `domain` field → round-trip through cooker + loader.
+- Two-sided material (`cull_face = None`) → third distinct pipeline key.
+- PostProcess domain material → `ForwardRenderPath` skips it (no pipeline created).
 
-### v1b — Pass-keyed shader variants in MaterialResource
+### v1b — Multi-pass shader selection
 
 **Scope:**
-- `PassType` enum in `engine/renderer/include/crd/renderer/pass_type.hpp`.
-- `kFourCC_PASS` added to `crdr.hpp`.
-- `MaterialResource` replaces flat `vert_handle` + `frag_handle` fields with
-  `HashMap<PassType, ResourceHandle<ShaderResource>> pass_shaders`.
-- `MaterialResourceLoader` updated: parse `PASS` chunk (preferred) or synthesize from legacy `META` chunk
-  (two UUIDs → create a `MainColor` entry, calling `load_sync<ShaderResource>` for each).
-- Cooker `.mat.toml` handler extended: parse `[passes.depth]` + `[passes.main_color]` sections (each names
-  a GLSL source file path); each → its own `ShaderResource` UUID + artifact; emits one `PASS` chunk entry per section.
-- `ForwardRenderPath` queries `mat->pass_shaders[PassType::Depth]` in the depth prepass and
-  `mat->pass_shaders[PassType::MainColor]` in the color pass.
-- Bump `kMaterialLoaderVersion` to 3.
+- `ForwardRenderPath` calls `mat_inst.variant_for_pass(PassType::DepthPrepass)` in the depth prepass
+  and `mat_inst.variant_for_pass(PassType::Forward)` in the color pass.
+- ShaderOptions evaluated by `MaterialInstance::variant_for_pass()` drive the `VariantKey` used to
+  look up the compiled SPIR-V permutation from `ShaderResource`.
+- Fallback policy when a pass shader is absent: use `PassType::Forward` shader for all passes (render-path
+  policy; consistent with the Phase 2.7 loader's legacy META synthesis).
+- No format changes — `PASS` chunk data already loaded by `MaterialTemplate`.
 
 **Tests:**
-- Material with explicit depth + main color variant → loader populates both slots; ForwardRenderPath picks
-  the correct one per pass.
-- Material with only `main_color` → depth prepass falls back to `MainColor` variant (render-path policy).
-- Legacy META-only artifact → synthesized `MainColor` slot; no crash in ForwardRenderPath.
-- `.mat.toml` with `[passes.depth]` and `[passes.main_color]` sections → end-to-end round-trip.
+- Material with explicit `DepthPrepass` + `Forward` variant → render path picks the correct one per pass.
+- Material with only `Forward` variant → depth prepass uses it as fallback; no crash.
+- Legacy `META`-only artifact → synthesized `Forward` slot; `ForwardRenderPath` operates normally.
 
 ### v1c — Depth-only prepass pipeline
 
@@ -182,14 +116,13 @@ synthesized from the `META` chunk — fully backward compatible.
 
 ## Module layout (planned additions)
 
+All new types (`RasterState`, `PassType`, `MaterialTemplate`, `MaterialInstance`, etc.) were shipped in
+Phase 2.7 v1c. Phase 2.8 changes are confined to `ForwardRenderPath` implementation.
+
 ```
 engine/renderer/
-  include/crd/renderer/
-    raster_state.hpp              ← v1a (RasterState, AlphaMode, CullMode, FillMode, BlendMode)
-    pass_type.hpp                 ← v1b (PassType)
   src/
-    material_resource_loader.cpp  ← v1a + v1b (extended)
-    forward_render_path.cpp       ← v1a + v1b + v1c (pipeline cache, pass dispatch)
+    forward_render_path.cpp       ← v1a + v1b + v1c (pipeline cache, domain skip, pass dispatch, depth-only pipeline)
 
 runtime/examples/
   smoke_depth_prepass.cpp         ← v1c (GPU smoke)
@@ -203,9 +136,9 @@ runtime/examples/
 2. `smoke_depth_prepass.exe` runs exit 0 on a Vulkan-capable machine, one frame rendered with
    distinct depth and color pipelines, no Vulkan validation errors.
 3. `smoke_asset_import.exe` from Phase 2.7 continues to pass (no regression).
-4. Material debt items 2 and 3 closed; `docs/debt.md` updated.
+4. Material debt items 2–3 GPU wiring closed; `docs/debt.md` updated.
 5. Six-configuration green: win-debug / win-relwithdebinfo / win-release / win-asan / win-clang-cl / win-tidy.
-6. `docs/systems/renderer.md` updated to document `RasterState`, `PassType`, and per-material pipeline cache.
+6. `docs/systems/renderer.md` updated to document the per-material pipeline cache and multi-pass dispatch.
 
 ---
 
@@ -224,10 +157,11 @@ runtime/examples/
 
 - ADR-0044 — Phase ordering decision (material PSO/variant before scene/ECS)
 - ADR-0046 — MaterialDomain enum, node-editor future-proofing, RT hybrid strategy
+- ADR-0048 — Material system architecture foundation (artifact format + all new types — Phase 2.7 v1c)
 - ADR-0025 — Shader mechanism policy
 - ADR-0026 — Shader variant key
 - ADR-0030 — Shader / PSO boundary
 - ADR-0032 — Frame graph v1
-- `docs/debt.md` — Material system v1 gaps (items 2 and 3 closed here; items 4–5 deferred to Phase 3.4)
-- `docs/phases/phase-2.7-asset-import.md` — Predecessor phase
+- `docs/debt.md` — Material system v1 gaps (artifact layer of items 2–3 closed by Phase 2.7 v1c; GPU wiring closed here)
+- `docs/phases/phase-2.7-asset-import.md` — Predecessor phase (all new types shipped in v1c)
 - `docs/phases/phase-3.0-scene-ecs.md` — Successor phase
