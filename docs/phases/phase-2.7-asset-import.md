@@ -283,54 +283,107 @@ struct MaterialInstance
 `set_vec4("base_color", ...)`, verifies `values_blob` updated, calls `variant_for_pass(Forward)`,
 verifies handle is valid. Deletes temp file, exits 0.
 
-### v1d — GPU upload + real render smoke
+### v1d — GPU upload + thin automated smoke + crd-sandbox bootstrap
 
-**Scope:**
-- `GpuTextureUploader` (or static helpers on `ForwardRenderPath`): given a `TextureResource` and
-  a `Device*`, allocates a `crd::rhi::Image`, stages pixels via a CPU-visible staging buffer,
-  submits a one-shot command buffer to copy to device-local memory, waits for fence, returns the
-  Image handle. Mip upload loop covers all mip levels.
-- `GpuMeshUploader`: given a `MeshResource` and a `Device*`, allocates vertex + index `Buffer`s,
-  uploads via staging, returns handles.
-- `smoke_asset_import.exe`: uses the full pipeline end-to-end:
-  1. Cook a bundled glTF mesh + texture + material TOML (in-process, using cooker handlers
-     directly, or from pre-cooked test assets in `tests/assets/`).
-  2. Mount the resulting PACK.
-  3. `load_sync<MeshResource>` + `load_sync<MaterialResource>` (which transitively loads
-     `TextureResource` and both `ShaderResource`s).
-  4. GPU-upload mesh + texture.
-  5. Build a `Renderable`, push to `DrawList`, run `ForwardRenderPath` for one frame.
-  6. Assert no Vulkan validation errors, exit 0.
+This slice combines what was originally two separate slices (v1d GPU upload, v1e sandbox) into
+one cohesive session. The GPU upload infrastructure is the prerequisite; the sandbox is built
+on top immediately so there is something interactive to show.
 
-**Note:** `smoke_asset_import` requires a GPU; it is skipped on headless CI. A flag or
-environment variable guards the smoke skip path.
+#### GPU upload infrastructure
 
-### v1e — `crd-meshgen` + sandbox bootstrap
+**`GpuUploader`** — new helper in `engine/renderer/`:
+- `GpuUploader::upload_texture(TextureResource&, Device&)` → `GpuTexture`
+  - Creates a host-visible staging buffer, `memcpy`s all mip levels, creates a device-local
+    `rhi::Image` (`sampled | transfer_dst`), submits a one-shot command buffer
+    (layout Undefined → TransferDst → ShaderReadOnlyOptimal, per-mip `CopyBufferToImage`),
+    fence + wait, destroys staging buffer. Returns image + image view + sampler handles.
+- `GpuUploader::upload_mesh(MeshResource&, Device&)` → `GpuMesh`
+  - Same staging pattern for vertex + index buffers (device-local, `vertex_buffer | transfer_dst`
+    and `index_buffer | transfer_dst`). Memory barrier for vertex attribute read.
+- Both uploads are **synchronous** (fence + immediate wait). Async upload is a future ADR.
 
-**Scope:**
-- New module `engine/meshgen/` — CPU-side procedural geometry generator. No deps on `crd-rhi`,
-  `crd-renderer`, or `crd-resources`. Depends only on `crd-math`, `crd-containers`, `crd-memory`.
-- Output: `crd::meshgen::MeshData` — interleaved 48B/vertex (pos+normal+uv0+tangent), same layout
-  as `MeshResource`. Compatible with `GpuMeshUploader` directly.
-- Shapes: `make_sphere(slices, stacks)`, `make_icosphere(subdivisions)`, `make_box(half_extents)`,
-  `make_capsule(radius, half_height, slices, stacks)`, `make_cylinder(radius, half_height, slices)`,
-  `make_cone(radius, height, slices)`, `make_plane(subdiv_x, subdiv_y, half_extents)`,
-  `make_torus(major_r, minor_r, major_seg, minor_seg)`.
-- CPU regeneration is the correct approach for changing resolution at runtime (e.g. ImGui slider).
-  Geometry shaders are NOT used (deprecated, slow on AMD, absent on Metal). See ADR-0045.
-- `smoke_meshgen.exe` (headless): generate sphere + box, assert vertex/index counts, normals unit
-  length, UVs in [0,1], tangent W = ±1, exit 0.
-- `crd-sandbox` bootstrap (gated by `CRD_BUILD_SANDBOX=ON`, default ON): `SandboxLayer` loads cooked
-  assets from `assets/source/` (BoxTextured.glb, Duck.glb, Suzanne.glb + CC0 textures), renders via
-  `ForwardRenderPath`, adds ImGui asset browser panel (browse loaded meshes/textures, click to switch),
-  and uses `crd-meshgen` shapes for comparison. `--headless` flag for CI.
+**`GpuTexture`** — `{rhi::Image*, rhi::ImageView*, rhi::Sampler*}`
 
-**Tests:**
-- `make_box` vertex count = 24 (6 faces × 4 vertices, no shared vertices).
-- `make_sphere(8,8)` vertex/index count formula check.
-- All normals have unit length (within 1e-5).
-- UV coordinates in [0,1] range for all shapes.
-- Tangent W = ±1 (bitangent sign).
+**`GpuMesh`** — `{rhi::Buffer* vertex_buffer, rhi::Buffer* index_buffer}`
+
+#### smoke_asset_import.exe — thin automated GPU smoke
+
+**Decision: `smoke_asset_import` is a regression test, not an interactive viewer.**
+
+- No interactive window, no camera, no ImGui.
+- Creates a Vulkan instance + device, cooks a minimal quad mesh + 4×4 checker texture in-process,
+  mounts, loads, uploads via `GpuUploader`, builds a `Renderable`, runs one frame through
+  `ForwardRenderPath`, asserts no Vulkan validation layer errors, exits 0.
+- CI-compatible when a GPU is present. Skipped gracefully (exit 0) when no Vulkan device is found.
+- Registered as a **GPU/window smoke** (not headless); runs manually and in GPU-capable CI slots.
+- Purpose: permanent regression guard that GPU upload + ForwardRenderPath pipeline does not break.
+
+**Note:** the mesh will be visible as lit geometry. The texture will not be sampled in the
+shader yet — that requires Phase 2.8 (per-material descriptor set binding). The smoke verifies
+the pipeline does not crash and produces no validation errors; visual correctness of the texture
+comes in Phase 2.8.
+
+#### crd-sandbox — interactive editor predecessor
+
+**Decision: `crd-sandbox` is the editor's embryo, not a demo.**
+
+The sandbox is built on `crd-app` (the same `LayerStack` + `EventBus` foundation that the
+Phase 7 editor will use). When Phase 7 lands, `crd-ui` replaces the ImGui panels while the
+`Application`, `LayerStack`, asset loading, renderer integration, and camera all carry over
+unchanged. The editor is not a rewrite — it is the sandbox with a professional UI shell.
+
+Each new system shipped to Cerid adds a sandbox panel:
+- Phase 2.7 v1d: asset browser (loaded mesh name, vertex count, texture name + resolution)
+- Phase 2.8: material inspector (show loaded parameters, raster state per pass)
+- Phase 3.0: scene hierarchy panel (entity tree)
+- Phase 3.1: physics debug panel (rigid body extents, collision shapes overlay)
+- Phase 3.5+: renderer settings panel (toggle SSAO, bloom, shadows, etc.)
+
+**`crd-sandbox` scope for v1d:**
+
+- **`SandboxApp`**: `Application`-derived; creates window + `SandboxLayer` + `ImGuiLayer`.
+  Gated by `CRD_BUILD_SANDBOX=ON` (default ON). Separate executable: `crd-sandbox`.
+- **`SandboxLayer`**: owns `ForwardRenderPath`, resource manager, GPU-uploaded assets.
+  Initial load: one hard-coded cooked test mesh (`test_quad`) + one texture to verify the pipeline.
+  Later extended to load from `assets/source/` (v1e meshgen session).
+- **`OrbitCamera`**: smooth, framerate-independent orbit camera. Not a renderer type — a
+  plain struct owned by `SandboxLayer`.
+  ```
+  struct OrbitCamera {
+      float   yaw, pitch, distance;    // target state (driven by input)
+      float   s_yaw, s_pitch, s_dist;  // smoothed state (rendered from)
+      Vec3f   target, s_target;        // focus point + smoothed focus
+  };
+  ```
+  Update: `s_val = lerp(s_val, val, 1.0f - exp(-SPEED * dt))` — exponential ease-out,
+  framerate-independent. `SPEED = 8.0f` (tunable via ImGui slider).
+  Controls:
+  - **Left-drag**: orbit (yaw + pitch)
+  - **Ctrl + Middle-drag**: pan focus point
+  - **Scroll wheel**: zoom (distance)
+  Pitch clamped to `[-89°, +89°]` to avoid gimbal flip.
+- **ImGui panel (`Sandbox` window)**:
+  - Loaded asset info: mesh name, primitive count, vertex count, index count, texture resolution
+  - Camera: yaw/pitch/distance/target readout + smoothing speed slider
+  - Render: placeholder for Phase 2.8 material inspector
+- **`--headless` flag**: exits 0 after resource validation without opening a window. Used in CI.
+
+**`crd-sandbox` is NOT headless-capable for rendering** — it requires a Vulkan GPU + display.
+The `--headless` mode only validates asset loading, not GPU upload or rendering.
+
+#### v1e — `crd-meshgen` + sandbox asset browser expansion
+
+Separate session. Scope unchanged from original plan:
+- `engine/meshgen/`: sphere, icosphere, box, capsule, cylinder, cone, plane, torus
+- `smoke_meshgen.exe` (headless): geometry invariants
+- Sandbox `SandboxLayer` extended: load from `assets/source/` (BoxTextured.glb, Duck.glb,
+  Suzanne.glb), asset browser panel with click-to-switch, meshgen shape comparison
+
+**Tests (v1d):**
+- `GpuUploader` test (requires GPU): upload a 4-pixel RGBA texture, verify `GpuTexture` non-null.
+- `GpuUploader` mesh test: upload minimal quad mesh, verify vertex buffer non-null.
+- `smoke_asset_import.exe`: exits 0, no validation errors (GPU CI only).
+- `crd-sandbox --headless`: exits 0 (CPU asset validation, headless CI).
 
 ---
 

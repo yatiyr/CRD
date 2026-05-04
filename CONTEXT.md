@@ -17,8 +17,8 @@ Phase 2.7 slices:
 - v1a: `TextureResource` + stb_image texture cooker (RGBA8/BC7, mip gen, TXTR artifact) ✅
 - v1b: `MeshResource` + cgltf glTF import (static meshes, interleaved 48B/vert, MESH artifact) ✅
 - v1c: **Full material system foundation (ADR-0048)** — `MaterialTemplate` + `MaterialInstance` two-tier split; `ParameterType` enum + `CookedParameter` schema; `ShaderOption` system; new MATR v2 artifact format (INFO + PASS chunks; PRMS/DFLT/PSOS/OPTS reserved); `MaterialDomain` enum; `PassType` enum + `RasterState`; cooker rewrite (INFO + PASS, no more META); renames: `MaterialResource`→`MaterialTemplate`, `MaterialLayout`→`MaterialBindLayout`, `MaterialInstance` (transient)→`MaterialBindGroup`; legacy META backward-compat in loader ✅
-- v1d: `GpuTextureUploader` + `GpuMeshUploader` + `smoke_asset_import.exe` (first real mesh+texture on screen)
-- v1e: **`crd-meshgen`** (CPU-side procedural geometry: sphere/icosphere/box/capsule/cylinder/cone/plane/torus; `smoke_meshgen.exe`; headless) + **`crd-sandbox`** bootstrap (`crd-app` + `LayerStack`, ImGui asset browser, `--headless` CI mode, `assets/source/` demo assets: BoxTextured.glb, Duck.glb, Suzanne.glb + CC0 textures)
+- v1d: **GPU upload + first interactive sandbox** — `GpuTextureUploader` + `GpuMeshUploader`; `smoke_asset_import.exe` (thin automated GPU regression test, GPU/window smoke category, exits 0/1, CI-compatible via `--headless`); **`crd-sandbox`** bootstrap (`crd-app` + `LayerStack`, `OrbitCamera` with exponential-lerp smoothing, ImGui panels, `--headless` CI mode, `assets/source/` demo assets: BoxTextured.glb + CC0 textures)
+- v1e: **`crd-meshgen`** (CPU-side procedural geometry: sphere/icosphere/box/capsule/cylinder/cone/plane/torus; `smoke_meshgen.exe`; headless) + expand `crd-sandbox` with meshgen primitives + material inspector panel
 
 After Phase 2.7: **Phase 2.8** — GPU-side wiring: per-material Vulkan pipeline cache (PSOS data → VkPipeline), multi-pass `ForwardRenderPath` (PASS chunk → per-pass shader selection), depth-only prepass pipeline. Then Phase 3.0 scene/ECS. See ADR-0044, ADR-0046, ADR-0048.
 
@@ -678,8 +678,8 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Next up (next 1–5 sessions)
 
-1. **Phase 2.7 v1d** — GPU upload (`GpuTextureUploader`, `GpuMeshUploader`) + `smoke_asset_import.exe`. First real mesh+texture on screen.
-3. **Phase 2.7 v1e** — `crd-meshgen` (procedural geometry, headless) + `crd-sandbox` bootstrap (ImGui asset browser, `--headless` CI mode, `assets/source/` demo assets).
+1. **Phase 2.7 v1d** — GPU upload (`GpuTextureUploader`, `GpuMeshUploader`) + `smoke_asset_import.exe` (thin automated GPU smoke, `--headless` for CI) + **`crd-sandbox`** bootstrap (`crd-app` + `LayerStack`, `OrbitCamera` with exponential-lerp smoothing, ImGui asset/mesh/material panels). First real mesh+texture on screen, interactively controllable.
+2. **Phase 2.7 v1e** — `crd-meshgen` (procedural geometry, headless) + expand `crd-sandbox` with meshgen primitives + material inspector panel.
 4. **Phase 2.8** — Material completion: per-material PSO state + `MaterialDomain` + pass-keyed variants + depth-only prepass. ADRs 0044, 0046.
 5. **Phase 3.0** — `crd-scene` / ECS (hybrid hierarchy + SoA + TOML → binary serialization + renderer integration).
 
