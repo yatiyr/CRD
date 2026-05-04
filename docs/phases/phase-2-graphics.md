@@ -1,6 +1,6 @@
 ﻿# Phase 2 — Graphics foundation
 
-**Status:** 🚧 active — 2.0–2.5 shipped; renderer v1j (GPU instancing, Phase 3.2 dep) and 2.6 resources next
+**Status:** 🚧 active — 2.0–2.5 shipped; renderer v1j (GPU instancing, Phase 3.2 dep), 2.6 resources, and 2.7 asset import next
 
 Vulkan-first, layered:
 
@@ -21,12 +21,14 @@ Vulkan-first, layered:
 | 2.3   | `crd-shader`                     |   ✅   | detailed design packet: `docs/phases/phase-2.3-shader.md`                            |
 | 2.4   | `crd-renderer` v1                |   🚧   | v1a–i shipped; v1j (GPU instancing, Phase 3.2 dep) next                              |
 | 2.5   | `crd-jobs`                       |   ✅   | fiber job system; v1a–v1k all shipped; design packet: `docs/phases/phase-2.5-jobs.md` |
-| 2.6   | `crd-resources` + `asset_cooker` |   ⏳   | async load, LRU, refcounted handles, runtime binary; cooker is a separate exe        |
+| 2.6   | `crd-resources` + `asset_cooker` |   🚧   | async load, LRU, refcounted handles, runtime binary; cooker is a separate exe        |
+| 2.7   | Asset import bootstrap           |   ⏳   | TextureResource + MeshResource + glTF import + material params; first real asset on screen; ADRs 0042–0043 |
 
 ## Near-term execution order
 
 1. **`crd-resources` + `asset_cooker` (2.6)** — async load, LRU, refcounted handles, runtime binary (jobs 2.5 now available as async backbone)
-2. **renderer v1j** — GPU instancing (Phase 3.2 dep; see `docs/debt.md`)
+2. **Asset import bootstrap (2.7)** — TextureResource + MeshResource + glTF import + material parameter wiring; validates the full resource pipeline with real assets; unblocks Phase 3.0 scene/ECS with real geometry
+3. **renderer v1j** — GPU instancing (Phase 3.2 dep; see `docs/debt.md`)
 
 ## Decisions
 

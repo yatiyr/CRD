@@ -48,6 +48,7 @@ target_link_libraries(crd-shader
         crd-rhi
     PRIVATE
         crd-platform
+        crd-resources
 )
 
 target_compile_features(crd-shader PUBLIC cxx_std_20)

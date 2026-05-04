@@ -48,17 +48,16 @@ crd::u64 fnv1a64(const crd::u8* data, crd::usize size) noexcept
 crd::containers::StringView path_extension(const fs::Path& p)
 {
     const crd::containers::StringView sv    = p.generic();
-    const auto                        dot   = sv.rfind('.');
     const auto                        slash = sv.rfind('/');
+    const crd::usize                  fname_start =
+        (slash != crd::containers::StringView::npos) ? slash + 1U : 0U;
+    const crd::containers::StringView fname = sv.substr(fname_start);
+    const auto                        dot   = fname.find('.');
     if (dot == crd::containers::StringView::npos)
     {
         return {};
     }
-    if (slash != crd::containers::StringView::npos && dot < slash)
-    {
-        return {};
-    }
-    return sv.substr(dot);
+    return sv.substr(fname_start + dot);
 }
 
 crd::containers::StringView path_filename(const fs::Path& p)

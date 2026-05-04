@@ -11,11 +11,11 @@
 
 ## Current focus
 
-**Phase 2.6 — `crd-resources` + asset cooker. v1d SHIPPED.**
+**Phase 2.6 — `crd-resources` + asset cooker. v1e SHIPPED.**
 
-v1d shipped: `crd::platform::AsyncFile` (job-pool async reads via `crd-jobs`; `open/is_open/size/read_async`). `ResourceManager::load_async<T>` (SBO-job submission via `AsyncLoadCtx` / `LoadJobFn`; m_in_flight coalescing HashMap; non-recursive m_mutex released before all I/O). `ResourceHandleBase::wait_ready()` (fiber-cooperative via atomic `load_counter` exchange + `crd::jobs::wait`; terminal-state fast path also claims counter to fix the job-completes-before-store leak race). `resource_handle.cpp` new TU (release_block + wait_ready moved out of headers). `smoke_resources_async.exe` end-to-end async round-trip. 9 new tests (4 platform, 5 resources).
+v1e shipped: `ShaderResourceLoader` (in `crd-shader`; reads SPVV/SPVF/SPVC chunk from `type='SHDR'` artifact, copies SPIRV bytes, runs spirv-reflect to populate descriptor bindings, push constants, vertex attributes; registers via `register_shader_loader(rm)`). `MaterialResourceLoader` (in `crd-renderer`; reads META chunk from `type='MATR'` artifact, extracts vert/frag UUIDs, calls `ctx.manager->load_sync<ShaderResource>` transitively; registers via `register_material_loader(rm)`). `compile_glsl()` free function (shaderc wrapper for tests and cooker). GLSL cooker handler (`.glsl` → `type='SHDR'` CRDR artifact with SPVV/SPVF/SPVC chunk). Material cooker handler (`.mat.toml` → `type='MATR'` CRDR artifact with META chunk). `smoke_resources_render.exe` end-to-end cooked render round-trip. 6 new tests in `test_shader_material_loaders.cpp`.
 
-Next: v1e — `ShaderResourceLoader` + `MaterialResourceLoader` + end-to-end cooked render smoke.
+Next: v1f — Hot-reload (file-watcher driven, atomic payload swap, last-good preservation).
 
 Full design packet: `docs/phases/phase-2.6-resources.md`.
 
@@ -31,6 +31,28 @@ _none — running on the main roadmap._
 > `docs/detours/README.md`.
 
 ## Last shipped milestone
+
+**2026-05-04 — Phase 2.6 v1e shipped: ShaderResourceLoader + MaterialResourceLoader + end-to-end cooked render smoke.**
+
+`ShaderResourceLoader` (`engine/shader/src/shader_resource_loader.cpp`, registered via `crd::shader::register_shader_loader(rm)`): reads SPVV/SPVF/SPVC chunk from a `type='SHDR'` artifact to determine stage, copies SPIRV bytes into `ShaderResource::spirv`, then drives spirv-reflect to populate `descriptor_bindings`, `push_constants`, and (for vertex stage) `vertex_attributes`. Version 1. Clang-cl fix: removed dead `to_parameter_class_local` helper (caught by `-Werror,-Wunused-function`; MSVC `/W4 /WX` doesn't flag unused statics).
+
+`MaterialResourceLoader` (`engine/renderer/src/material_resource_loader.cpp`, registered via `crd::renderer::register_material_loader(rm)`): reads 32-byte META chunk from a `type='MATR'` artifact, extracts vert/frag `ResourceId` pairs, calls `ctx.manager->load_sync<ShaderResource>(id)` transitively for each, builds a `MaterialResource` holding both handles. Version 1.
+
+`compile_glsl()` free function (`engine/shader/src/compile.cpp`): shaderc-backed GLSL→SPIRV helper usable in tests and the cooker without pulling in the full shader runtime. `.glsl` cooker handler: emits `type='SHDR'` CRDR with a SPVV/SPVF/SPVC chunk. `.mat.toml` cooker handler: parses TOML vert/frag source-path references, looks up UUIDs from adjacent `.meta` sidecars, emits `type='MATR'` CRDR with 32-byte META chunk.
+
+`smoke_resources_render.exe`: cooks one `.vert.glsl` + one `.frag.glsl` inline, assembles them into a PACK with a MATR artifact, mounts, calls `load_sync<MaterialResource>`, asserts both shader handles are Ready, prints SPIRV sizes, exits 0. Output: `smoke_resources_render: OK — MaterialResource loaded with vert+frag SPIRV (vert=1040 bytes, frag=572 bytes)`.
+
+Six new tests in `tests/resources/test_shader_material_loaders.cpp`: vertex SHDR round-trip, fragment SHDR round-trip, missing SPIRV chunk → Failed, material loads + resolves deps (verifies transitive cache and `handle_count() == 3`), missing META → Failed, real SPIRV round-trip via `compile_glsl()` (shaderc-dependent, skips gracefully if unavailable).
+
+Six-configuration green:
+- win-debug:          435/435
+- win-relwithdebinfo: 435/435
+- win-release:        432/432
+- win-asan:           435/435
+- win-clang-cl:       435/435
+- win-tidy:           435/435
+
+## Previous shipped milestone
 
 **2026-05-04 — Phase 2.6 v1d shipped: AsyncFile + load_async<T> + fiber-cooperative wait_ready().**
 
@@ -50,9 +72,9 @@ Six-configuration green:
 - win-clang-cl:       429/429
 - win-tidy:           429/429
 
-## Previous shipped milestone
+## Previous shipped milestone (–1)
 
-**2026-05-03 — Phase 2.6 v1c shipped: RefCounted<T> + ResourceHandle<T> + load_sync<T>.**
+**2026-05-03 — Phase 2.6 v1c shipped: RefCounted<T> + ResourceHandle<T> + load_sync<T> + cycle detection + smoke_resources.**
 
 `crd::memory::RefCounted<T>` CRTP intrusive refcount. `ResourceControlBlock`, `ResourceHandleBase`, `ResourceHandle<T>`, thread-local cycle detection, `load_sync_impl`, `make_failed_block()`, `read_file_range()`, `smoke_resources.exe`. 20 new tests.
 
@@ -579,9 +601,9 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Next up (next 1–3 sessions)
 
-1. **Phase 2.6 v1e** — `ShaderResourceLoader` + `MaterialResourceLoader` + end-to-end cooked render smoke.
-2. **Phase 2.6 v1f** — Hot-reload (file-watcher driven, atomic payload swap, last-good preservation).
-3. **Phase 2.6 v1g** — Streaming, 2Q LRU eviction, memory budget, pinning.
+1. **Phase 2.6 v1f** — Hot-reload (file-watcher driven, atomic payload swap, last-good preservation).
+2. **Phase 2.6 v1g** — Streaming, 2Q LRU eviction, memory budget, pinning.
+3. **Phase 2.7** — Asset import bootstrap: `TextureResource` + `MeshResource` + glTF import (cgltf) + material parameter wiring; first real mesh + texture on screen. Closes material debt item 1. See `docs/phases/phase-2.7-asset-import.md`.
 
 ## Roadmap ordering (post-jobs)
 
@@ -609,12 +631,12 @@ Full plan: `docs/ROADMAP.md` → `docs/phases/`.
 
 ## Test counts (last quality pass)
 
-- win-debug:          429/429
-- win-relwithdebinfo: 429/429
-- win-release:        426/426
-- win-asan:           429/429
-- win-clang-cl:       429/429
-- win-tidy:           429/429
+- win-debug:          435/435
+- win-relwithdebinfo: 435/435
+- win-release:        432/432
+- win-asan:           435/435
+- win-clang-cl:       435/435
+- win-tidy:           435/435
 
 (win-release is 3 fewer than debug: debug-only `FiberState` tests excluded by `#if CRD_ENABLE_ASSERTS`)
 
@@ -641,6 +663,7 @@ When in doubt, ASK before reading large files.
 
 ## Session log (rolling, last 5)
 
+- **2026-05-04** — Phase 2.6 v1e shipped: ShaderResourceLoader + MaterialResourceLoader + compile_glsl() + GLSL/material cooker handlers + smoke_resources_render; 6 new tests; all 6 configs green (435/435 win-debug). Clang-cl fix: removed dead `to_parameter_class_local`.
 - **2026-05-04** — Phase 2.6 v1d shipped: AsyncFile + load_async<T> + fiber-cooperative wait_ready() + load coalescing; 9 new tests; all 6 configs green (429/429 win-debug).
 - **2026-05-03** — Phase 2.6 v1c shipped: RefCounted<T> + ResourceHandle<T> + load_sync<T> + cycle detection; all 6 configs green (420/420 win-debug).
 - **2026-05-03** — Phase 2.6 v1b shipped: zstd compression + cooker CLI + .bin handler + 4 tests; all 6 configs green (408/408 win-debug).

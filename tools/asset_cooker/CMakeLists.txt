@@ -18,6 +18,7 @@ target_link_libraries(crd-cooker
         crd-log
         crd-platform
         crd-resources
+        crd-shader
 )
 
 target_compile_features(crd-cooker PUBLIC cxx_std_20)

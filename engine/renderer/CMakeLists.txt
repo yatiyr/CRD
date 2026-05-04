@@ -14,6 +14,7 @@ target_link_libraries(crd-renderer
         crd-math
         crd-rhi
         crd-shader
+        crd-resources
 )
 
 target_compile_features(crd-renderer PUBLIC cxx_std_20)

@@ -11,6 +11,8 @@ target_link_libraries(crd-resources-tests PRIVATE
     crd-resources
     crd-cooker
     crd-jobs
+    crd-shader
+    crd-renderer
     Catch2::Catch2WithMain
 )
 

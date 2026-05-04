@@ -34,6 +34,13 @@ _deps/
 .DS_Store
 Thumbs.db
 
+# Test-generated cook cache
+.crd_cook_test_tmp/
+
+# CI / diagnostic capture files
+asan_stdout.txt
+asan_stderr.txt
+
 # non necessary ai stuff
 .claude/
 CLAUDE.md

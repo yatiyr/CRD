@@ -8,7 +8,9 @@
 // In GLFW 3.4, GLFW_INCLUDE_VULKAN does NOT suppress GL/gl.h; only GLFW_INCLUDE_NONE does.
 // Include Vulkan first so GLFW sees VK_VERSION_1_0 and declares glfwCreateWindowSurface.
 #include <vulkan/vulkan.h>
+#ifndef GLFW_INCLUDE_NONE
 #define GLFW_INCLUDE_NONE
+#endif
 #include <GLFW/glfw3.h>
 
 namespace crd::rhi

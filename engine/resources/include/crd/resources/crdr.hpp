@@ -57,6 +57,9 @@ inline constexpr crd::u32 kFourCC_MFST = make_fourcc('M', 'F', 'S', 'T');
 inline constexpr crd::u32 kFourCC_STRP = make_fourcc('S', 'T', 'R', 'P');
 inline constexpr crd::u32 kFourCC_DEPS = make_fourcc('D', 'E', 'P', 'S');
 inline constexpr crd::u32 kFourCC_META = make_fourcc('M', 'E', 'T', 'A');
+inline constexpr crd::u32 kFourCC_SPVV = make_fourcc('S', 'P', 'V', 'V'); // vertex SPIRV chunk
+inline constexpr crd::u32 kFourCC_SPVF = make_fourcc('S', 'P', 'V', 'F'); // fragment SPIRV chunk
+inline constexpr crd::u32 kFourCC_SPVC = make_fourcc('S', 'P', 'V', 'C'); // compute SPIRV chunk
 
 // Convert a fourcc back to a 4-char printable string (for logging).
 // Result is null-terminated; stored in caller-provided buf[5].

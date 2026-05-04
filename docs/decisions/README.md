@@ -63,9 +63,13 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 - ADR-0038 — Cooked binary container format
 - ADR-0039 — `ResourceHandle<T>` semantics
 - ADR-0040 — Cooker CLI + CMake integration
+- ADR-0042 — Texture cooked format + GPU upload strategy
+- ADR-0043 — MeshResource vertex layout + glTF import scope
 
 ### `[cooker]`
 - ADR-0040 — Cooker CLI + CMake integration
+- ADR-0042 — Texture cooked format + GPU upload strategy
+- ADR-0043 — MeshResource vertex layout + glTF import scope
 
 ### `[jobs]`
 - ADR-0015 — Job system shape
@@ -80,6 +84,8 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 ### `[renderer]` `[render-path]`
 - ADR-0016 — Render path strategy
 - ADR-0032 — Frame graph v1
+- ADR-0042 — Texture cooked format + GPU upload strategy
+- ADR-0043 — MeshResource vertex layout + glTF import scope
 
 ### `[culling]`
 - ADR-0017 — Culling strategy
@@ -154,3 +160,5 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 | 0039  | `ResourceHandle<T>` semantics                  | resources, arch                   | Accepted    |
 | 0040  | Cooker CLI + CMake integration                 | resources, cooker, build, arch    | Accepted    |
 | 0041  | `crd-platform` async filesystem I/O            | platform, resources, jobs         | Accepted    |
+| 0042  | Texture cooked format + GPU upload strategy    | resources, renderer, cooker       | Accepted    |
+| 0043  | MeshResource vertex layout + glTF import scope | resources, renderer, cooker       | Accepted    |

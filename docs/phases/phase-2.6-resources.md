@@ -1,6 +1,6 @@
 # Phase 2.6 — `crd-resources`: resource system + asset cooker
 
-**Status:** 🚢 v1d shipped (2026-05-04); v1e next
+**Status:** 🚢 v1e shipped (2026-05-04); v1f next
 **ADRs:** ADR-0036 (module + loader registry), ADR-0037 (ResourceId UUID scheme), ADR-0038 (cooked binary container), ADR-0039 (ResourceHandle semantics), ADR-0040 (cooker CLI + CMake), ADR-0041 (platform async I/O)
 **Module:** `engine/resources/` + `tools/asset_cooker/`
 **Depends on:** `crd-core`, `crd-log`, `crd-memory`, `crd-containers`, `crd-jobs`, `crd-platform`, `crd-config`
@@ -559,28 +559,37 @@ win-release.
 
 **Session log:** `docs/sessions/2026-05-04-resources-v1d.md`
 
-### v1e — `ShaderResourceLoader` + `MaterialResourceLoader` + end-to-end smoke
+### v1e — `ShaderResourceLoader` + `MaterialResourceLoader` + end-to-end smoke ✅ SHIPPED 2026-05-04
 
-**Scope:**
-- `ShaderResourceLoader` (in `crd-shader`): unpacks `SPRV` + `REFL` chunks from a `type='SHDR'`
-  artifact, hands them to the existing shader runtime to construct an `Effect`. Registers itself
-  with the `ResourceManager` via a free function `register_shader_loader(rm)`.
-- `MaterialResourceLoader` (in `crd-renderer`): parses `META` + `BLOB` from a `type='MATR'`
-  artifact, resolves shader dep via `ctx.manager->load_sync<Effect>(shader_id)`, builds
-  `MaterialInstance`. Registers via `register_material_loader(rm)`.
-- Cooker handlers: `.glsl` → cook to `type='SHDR'` (uses existing shader compile path);
-  `.mat.toml` → cook to `type='MATR'` (parses TOML, references shader by source path → looks
-  up id from `.meta`).
-- `smoke_resources_render` runtime example: cooks one shader + one material, mounts the pack,
-  loads the material via `ResourceManager`, renders a triangle using cooked assets only (no
-  source files at runtime).
+**Scope shipped:**
+- `ShaderResourceLoader` (`engine/shader/src/shader_resource_loader.cpp`): reads SPVV/SPVF/SPVC
+  chunk from a `type='SHDR'` artifact to determine stage, copies SPIRV bytes, runs spirv-reflect
+  to populate `descriptor_bindings`, `push_constants`, `vertex_attributes`. Registered via
+  `crd::shader::register_shader_loader(rm)`. Version 1.
+- `MaterialResourceLoader` (`engine/renderer/src/material_resource_loader.cpp`): reads 32-byte
+  META chunk, extracts vert/frag `ResourceId` pairs, calls `ctx.manager->load_sync<ShaderResource>`
+  transitively, builds `MaterialResource` with two typed handles. Registered via
+  `crd::renderer::register_material_loader(rm)`. Version 1.
+- `compile_glsl()` free function (`engine/shader/src/compile.cpp`): shaderc-backed GLSL→SPIRV
+  helper used by tests and the cooker without requiring the full shader runtime.
+- GLSL cooker handler: `.glsl` files → `type='SHDR'` CRDR artifact with a single SPVV/SPVF/SPVC
+  chunk based on detected stage suffix.
+- Material cooker handler: `.mat.toml` → `type='MATR'` CRDR artifact with 32-byte META chunk
+  encoding vert/frag `ResourceId` pairs.
+- `smoke_resources_render.exe`: assembles two SHDR + one MATR artifacts in-memory, mounts as a
+  PACK, `load_sync<MaterialResource>`, asserts both shader handles are Ready. Output confirms
+  SPIRV sizes (vert=1040, frag=572 bytes).
 
-**Tests:**
-- Shader artifact round-trip: cook GLSL → load via `ResourceManager` → constructed `Effect`
-  matches a directly-compiled control.
-- Material artifact dependency: loading a `MaterialInstance` triggers transitive shader load,
-  both end up `Ready`.
-- `smoke_resources_render` runs to completion (exit 0), draws one frame from cooked assets.
+**Clang-cl fix:** Removed dead `to_parameter_class_local` from `shader_resource_loader.cpp`
+(MSVC `/W4 /WX` silently accepts unused statics; `-Werror,-Wunused-function` under clang-cl
+treats them as errors).
+
+**Tests:** 6 new test cases in `tests/resources/test_shader_material_loaders.cpp`: vertex SHDR
+round-trip, fragment SHDR round-trip, missing SPIRV → Failed, material loads + resolves transitive
+deps (verifies `handle_count() == 3`), missing META → Failed, real SPIRV round-trip via
+`compile_glsl()` (gracefully skipped when shaderc unavailable).
+
+All 6 configs green: win-debug/relwithdebinfo/asan/clang-cl/tidy 435/435, win-release 432/432.
 
 ### v1f — Hot-reload (file watcher, atomic swap, last-good preservation)
 

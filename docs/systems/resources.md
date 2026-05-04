@@ -4,7 +4,7 @@ General-purpose resource substrate: typed payloads loaded from cooked binary pac
 intrusive reference counts, with synchronous (v1c) and async (v1d) delivery. Plus `tools/asset_cooker/`
 — a separate CLI that ingests source assets and emits runtime-consumed binary packs.
 
-**Phase 2.6 in progress** — v1a, v1b, v1c, v1d shipped.
+**Phase 2.6 in progress** — v1a, v1b, v1c, v1d, v1e shipped.
 
 Depends on: `crd-core`, `crd-log`, `crd-memory`, `crd-containers`, `crd-platform`.  
 Does NOT depend on: `crd-rhi`, `crd-shader`, `crd-renderer` (loader-registry pattern keeps this low in
@@ -18,7 +18,7 @@ the graph — a DAW build can link `crd-resources` without any GPU code). ADR-00
 | v1b | Cooker CLI (`cook` sub-command), zstd per-chunk compression, `crd-cooker` static lib | ✅ |
 | v1c | `RefCounted<T>`, `ResourceHandle<T>`, `load_sync<T>`, cycle detection, `smoke_resources` | ✅ |
 | v1d | `crd-platform::AsyncFile`, `load_async<T>`, `wait_ready()` fiber-cooperative, load coalescing | ✅ |
-| v1e | `ShaderResourceLoader`, `MaterialResourceLoader`, end-to-end cooked render smoke | 🔜 |
+| v1e | `ShaderResourceLoader`, `MaterialResourceLoader`, `compile_glsl()`, GLSL/material cooker handlers, `smoke_resources_render` | ✅ |
 | v1f | Hot-reload (file watcher, atomic payload swap, last-good preservation) | 🔜 |
 | v1g | Streaming, 2Q LRU eviction, memory budget, pinning | 🔜 |
 
@@ -102,6 +102,66 @@ if there is a circular dependency.
 
 `load_placeholder()` is optional. Override it to return a magenta-checker texture, an error material,
 a silence buffer — any typed fallback that lets the engine keep running after a broken artifact.
+
+## Typed loaders (v1e)
+
+### `ShaderResourceLoader` — `crd-shader`
+
+Handles `type='SHDR'` artifacts. Registered by calling `crd::shader::register_shader_loader(rm)` at startup.
+
+Reads the first SPVV/SPVF/SPVC chunk from the artifact to determine shader stage, copies the raw SPIRV bytes into `ShaderResource::spirv`, then runs spirv-reflect to populate `descriptor_bindings`, `push_constants`, and (for vertex stage) `vertex_attributes`. The loader owns a `MallocAllocator` and placement-new constructs `ShaderResource` from it.
+
+```cpp
+#include <crd/shader/shader_resource_loader.hpp>
+
+// at startup:
+crd::shader::register_shader_loader(&rm);
+
+// then:
+auto h = rm.load_sync<crd::shader::ShaderResource>(shader_id);
+const crd::shader::ShaderResource* s = h.get();
+// s->stage, s->spirv, s->descriptor_bindings, s->push_constants, s->vertex_attributes
+```
+
+### `MaterialResourceLoader` — `crd-renderer`
+
+Handles `type='MATR'` artifacts. Registered by calling `crd::renderer::register_material_loader(rm)` at startup. Requires `ShaderResourceLoader` to also be registered.
+
+Reads the 32-byte META chunk (two serialised `ResourceId` pairs: vert hi/lo, frag hi/lo), calls `ctx.manager->load_sync<ShaderResource>(id)` for each, and constructs a `MaterialResource` holding both handles. Transitive loads are safe because the manager mutex is not held during loader dispatch.
+
+```cpp
+#include <crd/renderer/material_resource_loader.hpp>
+
+// at startup (register shader loader first):
+crd::renderer::register_material_loader(&rm);
+
+// then:
+auto h = rm.load_sync<crd::renderer::MaterialResource>(mat_id);
+const crd::renderer::MaterialResource* m = h.get();
+const crd::shader::ShaderResource* vert = m->vertex_shader.get();
+const crd::shader::ShaderResource* frag = m->fragment_shader.get();
+```
+
+### `compile_glsl()` — shaderc wrapper
+
+Free function in `crd-shader` usable without the full shader runtime:
+
+```cpp
+#include <crd/shader/compile.hpp>
+
+crd::shader::CompileResult r = crd::shader::compile_glsl(
+    crd::shader::Stage::Vertex,
+    crd::containers::StringView(src, len),
+    "debug_name",
+    &alloc);
+
+if (r.ok)
+{
+    // r.spirv contains the SPIRV bytes
+}
+```
+
+Returns `CompileResult::ok = false` when shaderc is unavailable (graceful degradation).
 
 ## Public API (v1d surface)
 
@@ -268,12 +328,31 @@ tools/asset_cooker/
     manifest_dump.cpp
     cook_handlers/
       blob_passthrough.cpp
+      glsl.cpp               ← v1e (.glsl → type='SHDR' artifact)
+      material.cpp           ← v1e (.mat.toml → type='MATR' artifact)
+
+engine/shader/
+  include/crd/shader/
+    shader_resource_loader.hpp  ← v1e
+    compile.hpp                 ← v1e (compile_glsl free function)
+  src/
+    shader_resource_loader.cpp  ← v1e
+    compile.cpp                 ← v1e
+
+engine/renderer/
+  include/crd/renderer/
+    material_resource_loader.hpp  ← v1e
+  src/
+    material_resource_loader.cpp  ← v1e
 
 engine/memory/include/crd/memory/
   ref_counted.hpp            ← v1c (not in memory.hpp umbrella)
 
 engine/platform/include/crd/platform/
   filesystem.hpp             ← read_file_range() added in v1c
+
+runtime/examples/
+  smoke_resources_render.cpp ← v1e
 ```
 
 ## Session logs
@@ -282,11 +361,11 @@ engine/platform/include/crd/platform/
 - [v1b — Cooker CLI + zstd](../sessions/2026-05-03-resources-v1b.md)
 - [v1c — RefCounted + ResourceHandle + load_sync](../sessions/2026-05-03-resources-v1c.md)
 - [v1d — AsyncFile + load_async + wait_ready](../sessions/2026-05-04-resources-v1d.md)
+- [v1e — ShaderResourceLoader + MaterialResourceLoader + smoke](../sessions/2026-05-04-resources-v1e.md)
 
 ## Long-term direction
 
-- v1d SHIPPED: `crd::platform::AsyncFile` (job-pool async reads) + `load_async<T>` + fiber-cooperative `wait_ready()` + load coalescing via `m_in_flight`.
-- v1e wires `ShaderResourceLoader` and `MaterialResourceLoader` for an end-to-end cooked render path.
+- v1e SHIPPED: `ShaderResourceLoader` + `MaterialResourceLoader` + `compile_glsl()` + GLSL/material cooker handlers + `smoke_resources_render`.
 - v1f adds dev-mode file watching and atomic hot-reload with generation-bump notification.
 - v1g closes the streaming story: `load_streamed<T>` for large blobs, 2Q LRU eviction, memory budget, pinning.
 - Phase 3.0 `crd-scene` registers a `SceneLoader` into the same registry — the resource substrate becomes the single load path for all engine asset types.
