@@ -1,0 +1,19 @@
+'vswhere.exe' is not recognized as an internal or external command,
+operable program or batch file.
+CMake Deprecation Warning at build/win-debug/_deps/zstd-src/build/cmake/CMakeLists.txt:10 (cmake_minimum_required):
+  Compatibility with CMake < 3.10 will be removed from a future version of
+  CMake.
+
+  Update the VERSION argument <min> value.  Or, use the <min>...<max> syntax
+  to tell CMake that the project requires at least <min> but has been updated
+  to work with policies introduced by <max> or earlier.
+
+
+CMake Warning (dev) at C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineASMCompiler.cmake:234 (message):
+  Policy CMP194 is not set: MSVC is not an assembler for language ASM.  Run
+  "cmake --help-policy CMP194" for policy details.  Use the cmake_policy
+  command to set the policy and suppress this warning.
+Call Stack (most recent call first):
+  build/win-debug/_deps/zstd-src/build/cmake/CMakeLists.txt:46 (project)
+This warning is for project developers.  Use -Wno-dev to suppress it.
+

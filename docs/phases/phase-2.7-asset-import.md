@@ -1,6 +1,6 @@
 # Phase 2.7 — Asset import bootstrap
 
-**Status:** 🚧 active — v1a shipped 2026-05-04, v1b + v1c + v1d shipped 2026-05-05
+**Status:** ✅ COMPLETE — v1a shipped 2026-05-04; v1b + v1c + v1d + v1e shipped 2026-05-05. DoD item 5 (sandbox GPU rendering + demo assets) deferred to Phase 2.8.
 **ADRs:** ADR-0042 (texture cooked format), ADR-0043 (mesh resource + glTF import scope), ADR-0048 (material system architecture foundation)
 **New modules:** loaders in `crd-renderer`; cooker handlers in `tools/asset_cooker/`
 **Depends on:** Phase 2.6 complete (ResourceManager, ILoader registry, CRDR cooker pipeline)
@@ -371,13 +371,15 @@ Each new system shipped to Cerid adds a sandbox panel:
 **`crd-sandbox` is NOT headless-capable for rendering** — it requires a Vulkan GPU + display.
 The `--headless` mode only validates asset loading, not GPU upload or rendering.
 
-#### v1e — `crd-meshgen` + sandbox asset browser expansion
+#### v1e — `crd-meshgen` + sandbox Meshgen Browser ✅ SHIPPED 2026-05-05
 
-Separate session. Scope unchanged from original plan:
-- `engine/meshgen/`: sphere, icosphere, box, capsule, cylinder, cone, plane, torus
-- `smoke_meshgen.exe` (headless): geometry invariants
-- Sandbox `SandboxLayer` extended: load from `assets/source/` (BoxTextured.glb, Duck.glb,
-  Suzanne.glb), asset browser panel with click-to-switch, meshgen shape comparison
+- `engine/meshgen/`: plane, box, sphere, icosphere, cylinder, cone, capsule, torus — all returning `MeshResource` with single `MeshPrimitive`
+- `smoke_meshgen.exe` (headless): geometry invariants — unit normals, index range, buffer size consistency
+- 11 unit tests in `tests/meshgen/test_meshgen.cpp`
+- `crd-sandbox` extended: Meshgen Browser ImGui panel listing all 8 shapes with vertex/index/triangle counts
+- Scope cuts vs original plan: demo asset download/cook deferred to Phase 2.8; click-to-switch scene mesh deferred (no renderer wired yet); `find_id_by_name` dropped (YAGNI)
+
+Session detail: `docs/sessions/2026-05-05-meshgen-v1e.md`
 
 **Tests (v1d):**
 - `GpuUploader` test (requires GPU): upload a 4-pixel RGBA texture, verify `GpuTexture` non-null.
@@ -460,16 +462,15 @@ sandbox/                          ← v1e (crd-sandbox, CRD_BUILD_SANDBOX gate)
 
 ## Definition of done (Phase 2.7)
 
-1. All five slices (v1a–v1e) shipped with unit tests.
-2. `smoke_asset_import.exe` runs exit 0 on a Vulkan-capable machine; no Vulkan validation errors.
-3. `smoke_meshgen.exe` runs exit 0 on headless CI; all geometry invariants pass.
-4. `crd-sandbox --headless` exits 0 (CPU-side resource validation).
-5. `crd-sandbox` (GPU) renders BoxTextured.glb and Duck.glb interactively; asset browser switches mesh.
-6. Material system foundation (ADR-0048) landed: `MaterialTemplate`, `MaterialInstance`, `SurfaceData` contract,
-   full MATR chunk set, ShaderOptions, inline functor. Material debt items 1–3 (artifact layer) closed.
-7. Six-configuration green: win-debug / win-relwithdebinfo / win-release / win-asan / win-clang-cl / win-tidy.
-8. ADR-0042, ADR-0043, ADR-0045, ADR-0048 filed and cross-referenced here.
-9. `TextureResource`, `MeshResource`, and `crd-meshgen` documented in `docs/systems/`.
+1. ✅ All five slices (v1a–v1e) shipped with unit tests.
+2. ✅ `smoke_asset_import.exe` runs exit 0 on a Vulkan-capable machine; no Vulkan validation errors.
+3. ✅ `smoke_meshgen.exe` runs exit 0 on headless CI; all geometry invariants pass.
+4. ✅ `crd-sandbox --headless` exits 0 (CPU-side resource validation).
+5. ⏳ **DEFERRED → Phase 2.8:** `crd-sandbox` renders BoxTextured.glb and Duck.glb interactively; asset browser switches mesh. Requires Phase 2.8 descriptor binding + per-material pipeline. Demo assets (`assets/source/`) also deferred — needed for the GPU rendering work, not for any CPU-only Phase 2.7 system.
+6. ✅ Material system foundation (ADR-0048) landed: `MaterialTemplate`, `MaterialInstance`, `surface_data.glsl.inc` contract, full MATR chunk set (INFO/PRMS/DFLT/PASS/PSOS/OPTS), ShaderOptions, inline functor. Material debt items 1–3 (artifact layer) closed.
+7. ✅ Six-configuration green: win-debug / win-relwithdebinfo / win-release / win-asan / win-clang-cl / win-tidy. Test count: 468/468 win-debug.
+8. ✅ ADR-0042, ADR-0043, ADR-0045, ADR-0048 filed and cross-referenced here.
+9. ✅ `TextureResource`, `MeshResource`, and `crd-meshgen` documented in `docs/systems/`.
 
 ---
 

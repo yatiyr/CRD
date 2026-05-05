@@ -2,8 +2,10 @@
 
 #include <crd/app/application.hpp>
 #include <crd/app/layer.hpp>
+#include <crd/containers/array.hpp>
 #include <crd/core/types.hpp>
 #include <crd/math/vec.hpp>
+#include <crd/memory/allocators/malloc_allocator.hpp>
 #include <crd/rhi/swapchain.hpp>
 
 namespace crd::sandbox
@@ -25,6 +27,13 @@ struct OrbitCamera
     crd::math::Vec3f s_target{};
 };
 
+struct ShapeInfo
+{
+    const char* name;
+    crd::u32    verts;
+    crd::u32    indices;
+};
+
 class SandboxLayer final : public crd::app::Layer
 {
 public:
@@ -34,9 +43,12 @@ public:
     void on_render() override;
 
 private:
-    crd::app::Application& m_app;
-    crd::rhi::Swapchain&   m_swapchain;
-    OrbitCamera            m_cam{};
+    crd::app::Application&            m_app;
+    crd::rhi::Swapchain&              m_swapchain;
+    OrbitCamera                       m_cam{};
+    crd::memory::MallocAllocator      m_alloc;
+    crd::containers::Array<ShapeInfo> m_shapes;
+    int                               m_selected = -1;
 };
 
 } // namespace crd::sandbox

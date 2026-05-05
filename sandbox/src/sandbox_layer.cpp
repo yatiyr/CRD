@@ -1,6 +1,7 @@
 #include "sandbox_layer.hpp"
 
 #include <crd/app/events/input_events.hpp>
+#include <crd/meshgen/meshgen.hpp>
 #include <crd/platform/input.hpp>
 #include <imgui.h>
 
@@ -32,8 +33,21 @@ crd::math::Vec3f exp_lerp3(crd::math::Vec3f a, crd::math::Vec3f b, float speed, 
 } // namespace
 
 SandboxLayer::SandboxLayer(crd::app::Application& app, crd::rhi::Swapchain& swapchain)
-    : Layer("SandboxLayer"), m_app(app), m_swapchain(swapchain)
+    : Layer("SandboxLayer"), m_app(app), m_swapchain(swapchain), m_shapes(&m_alloc)
 {
+    crd::memory::MallocAllocator tmp;
+    auto record = [&](const char* nm, crd::renderer::MeshResource mesh)
+    {
+        m_shapes.push_back(ShapeInfo{nm, mesh.primitives[0].vertex_count, mesh.primitives[0].index_count});
+    };
+    record("Plane",     crd::meshgen::make_plane(&tmp));
+    record("Box",       crd::meshgen::make_box(&tmp));
+    record("Sphere",    crd::meshgen::make_sphere(&tmp));
+    record("Icosphere", crd::meshgen::make_icosphere(&tmp));
+    record("Cylinder",  crd::meshgen::make_cylinder(&tmp));
+    record("Cone",      crd::meshgen::make_cone(&tmp));
+    record("Capsule",   crd::meshgen::make_capsule(&tmp));
+    record("Torus",     crd::meshgen::make_torus(&tmp));
 }
 
 void SandboxLayer::on_update(crd::f64 delta_seconds)
@@ -97,6 +111,32 @@ void SandboxLayer::on_render()
                 static_cast<double>(m_cam.s_target.z));
     ImGui::Separator();
     ImGui::TextDisabled("LMB drag=orbit  Ctrl+MMB=pan  Scroll=zoom");
+    ImGui::End();
+
+    ImGui::SetNextWindowPos({8.0F, 176.0F}, ImGuiCond_Always);
+    ImGui::SetNextWindowSize({320.0F, 280.0F}, ImGuiCond_Always);
+    ImGui::Begin("Meshgen Browser", nullptr,
+                 ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse);
+    ImGui::Text("Procedural Shapes (%u)", static_cast<unsigned>(m_shapes.size()));
+    ImGui::Separator();
+    for (int i = 0; i < static_cast<int>(m_shapes.size()); ++i)
+    {
+        if (ImGui::Selectable(m_shapes[i].name, m_selected == i))
+            m_selected = i;
+    }
+    ImGui::Separator();
+    if (m_selected >= 0 && m_selected < static_cast<int>(m_shapes.size()))
+    {
+        const auto& s = m_shapes[static_cast<crd::usize>(m_selected)];
+        ImGui::Text("Name:    %s",  s.name);
+        ImGui::Text("Verts:   %u",  s.verts);
+        ImGui::Text("Indices: %u",  s.indices);
+        ImGui::Text("Tris:    %u",  s.indices / 3U);
+    }
+    else
+    {
+        ImGui::TextDisabled("(select a shape)");
+    }
     ImGui::End();
 }
 

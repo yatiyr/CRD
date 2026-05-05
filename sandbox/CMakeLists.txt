@@ -14,6 +14,7 @@ target_link_libraries(crd-sandbox PRIVATE
     crd-imgui
     crd-log
     crd-math
+    crd-meshgen
     crd-rhi
     crd-rhi-vulkan
 )
