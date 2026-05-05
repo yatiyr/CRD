@@ -88,6 +88,10 @@ public:
         ++draw_indexed_count;
         last_index_count = index_count;
     }
+    void copy_buffer(crd::rhi::Buffer& /*src*/, crd::rhi::Buffer& /*dst*/,
+                     crd::u64 /*src_off*/, crd::u64 /*dst_off*/, crd::u64 /*size*/) override {}
+    void copy_buffer_to_image(crd::rhi::Buffer& /*src*/, crd::rhi::Image& /*dst*/,
+                              crd::containers::ConstSpan<crd::rhi::BufferImageCopy> /*regions*/) override {}
     void blit_image(crd::rhi::Image& /*src*/, crd::rhi::Image& /*dst*/,
                     crd::rhi::Extent2D src_extent, crd::rhi::Extent2D /*dst_extent*/) noexcept override
     {
@@ -159,6 +163,7 @@ class FakeQueue final : public crd::rhi::Queue
 {
 public:
     bool submit(crd::rhi::CommandBuffer& /*cmd*/, crd::rhi::Swapchain& /*sc*/) override { return true; }
+    void submit_and_wait(crd::rhi::CommandBuffer& /*cmd*/) override {}
     void present(crd::rhi::Swapchain& /*sc*/) override {}
     void wait_idle() override {}
 };

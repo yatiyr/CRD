@@ -11,13 +11,13 @@
 
 ## Current focus
 
-**Phase 2.7 — Asset import bootstrap. v1a + v1b + v1c shipped. Next: v1d (GPU upload + first real mesh+texture on screen).**
+**Phase 2.7 — Asset import bootstrap. v1a + v1b + v1c + v1d shipped. Next: v1e (crd-meshgen + sandbox asset browser expansion).**
 
 Phase 2.7 slices:
 - v1a: `TextureResource` + stb_image texture cooker (RGBA8/BC7, mip gen, TXTR artifact) ✅
 - v1b: `MeshResource` + cgltf glTF import (static meshes, interleaved 48B/vert, MESH artifact) ✅
 - v1c: **Full material system foundation (ADR-0048)** — `MaterialTemplate` + `MaterialInstance` two-tier split; `ParameterType` enum + `CookedParameter` schema; `ShaderOption` system; new MATR v2 artifact format (INFO + PASS chunks; PRMS/DFLT/PSOS/OPTS reserved); `MaterialDomain` enum; `PassType` enum + `RasterState`; cooker rewrite (INFO + PASS, no more META); renames: `MaterialResource`→`MaterialTemplate`, `MaterialLayout`→`MaterialBindLayout`, `MaterialInstance` (transient)→`MaterialBindGroup`; legacy META backward-compat in loader ✅
-- v1d: **GPU upload + first interactive sandbox** — `GpuTextureUploader` + `GpuMeshUploader`; `smoke_asset_import.exe` (thin automated GPU regression test, GPU/window smoke category, exits 0/1, CI-compatible via `--headless`); **`crd-sandbox`** bootstrap (`crd-app` + `LayerStack`, `OrbitCamera` with exponential-lerp smoothing, ImGui panels, `--headless` CI mode, `assets/source/` demo assets: BoxTextured.glb + CC0 textures)
+- v1d: **GPU upload + interactive sandbox bootstrap** — `GpuUploader` (`upload_texture` → `GpuTexture`, `upload_mesh` → `GpuMesh`, staging-buffer pattern); RHI additions (`copy_buffer`, `copy_buffer_to_image`, `submit_and_wait`, `VK_REMAINING_MIP_LEVELS` fix); `smoke_asset_import.exe` (GPU/window smoke, graceful skip without Vulkan, exits 0); **`crd-sandbox`** (`OrbitCamera` with exponential-lerp smoothing, ImGui info panel, `--headless` CI mode) ✅
 - v1e: **`crd-meshgen`** (CPU-side procedural geometry: sphere/icosphere/box/capsule/cylinder/cone/plane/torus; `smoke_meshgen.exe`; headless) + expand `crd-sandbox` with meshgen primitives + material inspector panel
 
 After Phase 2.7: **Phase 2.8** — GPU-side wiring: per-material Vulkan pipeline cache (PSOS data → VkPipeline), multi-pass `ForwardRenderPath` (PASS chunk → per-pass shader selection), depth-only prepass pipeline. Then Phase 3.0 scene/ECS. See ADR-0044, ADR-0046, ADR-0048.
@@ -36,6 +36,26 @@ _none — running on the main roadmap._
 > `docs/detours/README.md`.
 
 ## Last shipped milestone
+
+**2026-05-05 — Phase 2.7 v1d SHIPPED: GPU upload infrastructure + smoke_asset_import + crd-sandbox bootstrap.**
+
+`GpuUploader` in `engine/renderer/`: `upload_texture(TextureResource&, Device&)` → `GpuTexture{unique_ptr<rhi::Image>}` and `upload_mesh(MeshResource&, Device&)` → `GpuMesh{unique_ptr<rhi::Buffer> vertex_buffer, unique_ptr<rhi::Buffer> index_buffer}`. Both use the staging-buffer pattern: host-visible CpuToGpu staging buffer → memcpy → device-local GpuOnly buffer/image → one-shot command buffer → `submit_and_wait`. No sampler/imageview yet — those are Phase 2.8 (per-material descriptor binding).
+
+RHI interface extended: `CommandBuffer::copy_buffer(src, dst, src_offset, dst_offset, size_bytes)` + `CommandBuffer::copy_buffer_to_image(src, dst, ConstSpan<BufferImageCopy>)` (new `BufferImageCopy` struct in `types.hpp`). `Queue::submit_and_wait(CommandBuffer&)` added. `transition_image` subresource range fix: now covers all mips via `VK_REMAINING_MIP_LEVELS` (was hardcoded to 1). All five fake-RHI implementations kept in sync (`test_rhi.cpp`, `test_renderer.cpp`, `smoke_renderer.cpp`, `smoke_rhi_api.cpp`).
+
+`smoke_asset_import.exe` (GPU/window smoke): creates Vulkan instance+device, builds inline 4×4 RGBA8 checkerboard `TextureResource` + quad `MeshResource`, calls `GpuUploader::upload_texture` + `upload_mesh`, asserts non-null GPU handles, exits 0. Skips gracefully (exit 0) if no Vulkan device is found.
+
+`crd-sandbox` (`sandbox/`): `Application` + `LayerStack` with `SandboxLayer` (regular layer) + `ImGuiLayer` (overlay). `OrbitCamera` struct: target `{yaw, pitch, distance, target}` + smoothed `{s_yaw, s_pitch, s_dist, s_target}`, driven by left-drag orbit / Ctrl+MMB pan / scroll zoom, exponential lerp smoothing (`speed=8.0`, framerate-independent). Fixed-position ImGui panel shows viewport size, smoothed camera yaw/pitch/distance/target, help text. `--headless` flag: runs one frame then calls `app.close()`; ESC also closes. Gated by `CRD_BUILD_SANDBOX=ON`.
+
+No new unit tests (GPU upload tests require a Vulkan device; deferred to Phase 2.8 GPU smoke). Six-configuration green:
+- win-debug:          457/457
+- win-relwithdebinfo: 457/457
+- win-release:        454/454
+- win-asan:           457/457
+- win-clang-cl:       457/457
+- win-tidy:           ✅ (build clean)
+
+## Previous shipped milestone (-1)
 
 **2026-05-05 — Phase 2.7 v1c SHIPPED: Full material system foundation (ADR-0048).**
 
@@ -678,10 +698,9 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Next up (next 1–5 sessions)
 
-1. **Phase 2.7 v1d** — GPU upload (`GpuTextureUploader`, `GpuMeshUploader`) + `smoke_asset_import.exe` (thin automated GPU smoke, `--headless` for CI) + **`crd-sandbox`** bootstrap (`crd-app` + `LayerStack`, `OrbitCamera` with exponential-lerp smoothing, ImGui asset/mesh/material panels). First real mesh+texture on screen, interactively controllable.
-2. **Phase 2.7 v1e** — `crd-meshgen` (procedural geometry, headless) + expand `crd-sandbox` with meshgen primitives + material inspector panel.
-4. **Phase 2.8** — Material completion: per-material PSO state + `MaterialDomain` + pass-keyed variants + depth-only prepass. ADRs 0044, 0046.
-5. **Phase 3.0** — `crd-scene` / ECS (hybrid hierarchy + SoA + TOML → binary serialization + renderer integration).
+1. **Phase 2.7 v1e** — `crd-meshgen` (CPU-side procedural geometry: sphere/icosphere/box/capsule/cylinder/cone/plane/torus; `smoke_meshgen.exe` headless; new `engine/meshgen/` module) + expand `crd-sandbox` with meshgen shapes in asset browser + material inspector panel.
+2. **Phase 2.8** — Material completion: per-material PSO state + `MaterialDomain` + pass-keyed variants + depth-only prepass pipeline. ADRs 0044, 0046.
+3. **Phase 3.0** — `crd-scene` / ECS (hybrid hierarchy + SoA + TOML → binary serialization + renderer integration).
 
 ## Roadmap ordering
 
@@ -741,11 +760,11 @@ When in doubt, ASK before reading large files.
 
 ## Session log (rolling, last 5)
 
-- **2026-05-05** — Phase 2.7 v1c SHIPPED: full material system foundation (ADR-0048): MaterialTemplate + MaterialInstance, MaterialDomain, PassType, RasterState, CookedParameter, ShaderOptionDecl, MATR v2 artifact (INFO+PASS), legacy META backward-compat, cooker rewrite, renames (MaterialResource→MaterialTemplate, MaterialLayout→MaterialBindLayout, MaterialInstance→MaterialBindGroup); 5 new tests; smoke_material.exe; all 6 configs green (457/457 win-debug).
+- **2026-05-05** — Phase 2.7 v1d SHIPPED: GpuUploader (upload_texture→GpuTexture, upload_mesh→GpuMesh, staging-buffer pattern); RHI additions (copy_buffer, copy_buffer_to_image, submit_and_wait, VK_REMAINING_MIP_LEVELS fix); smoke_asset_import.exe (GPU smoke, graceful skip); crd-sandbox (OrbitCamera exponential-lerp, ImGui panel, --headless); all 6 configs green (457/457 win-debug).
+- **2026-05-05** — Phase 2.7 v1c SHIPPED: full material system foundation (ADR-0048): MaterialTemplate + MaterialInstance, MaterialDomain, PassType, RasterState, CookedParameter, ShaderOptionDecl, MATR v2 artifact (INFO+PASS), legacy META backward-compat, cooker rewrite, renames; 5 new tests; smoke_material.exe; all 6 configs green (457/457 win-debug).
 - **2026-05-05** — Phase 2.7 v1b SHIPPED: MeshResource + MeshResourceLoader + glTF cooker handler (cgltf, MikkTSpace, multi-mesh via ExtraArtifact); 4 new tests in test_mesh_loader.cpp; smoke_mesh.exe; all 6 configs green (452/452 win-debug).
 - **2026-05-04** — Phase 2.7 v1a SHIPPED: TextureResource + MipLevel + TextureFormat + TextureResourceLoader + texture cook handler (stb_image, box-filter mip gen); 4 new tests; smoke_texture.exe; all 6 configs green (448/448 win-debug).
 - **2026-05-04** — Phase 2.6 v1g SHIPPED: load_streamed + 2Q LRU eviction + memory budget + pinning; 5 new tests in test_eviction.cpp; smoke_resources_stream.exe; all 6 configs green (444/444 win-debug). Phase 2.6 COMPLETE.
-- **2026-05-04** — Phase 2.6 v1f shipped: hot-reload (mtime poll, atomic payload swap, subscribe/unsubscribe callbacks, deferred-free); 4 new tests; smoke_resources_reload.exe; all 6 configs green (439/439 win-debug).
 - **2026-05-04** — Phase 2.6 v1e shipped: ShaderResourceLoader + MaterialResourceLoader + compile_glsl() + GLSL/material cooker handlers + smoke_resources_render; 6 new tests; all 6 configs green (435/435 win-debug). Clang-cl fix: removed dead `to_parameter_class_local`.
 - **2026-05-04** — Phase 2.6 v1d shipped: AsyncFile + load_async<T> + fiber-cooperative wait_ready() + load coalescing; 9 new tests; all 6 configs green (429/429 win-debug).
 - **2026-05-03** — Phase 2.6 v1c shipped: RefCounted<T> + ResourceHandle<T> + load_sync<T> + cycle detection; all 6 configs green (420/420 win-debug).

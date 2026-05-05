@@ -1,7 +1,7 @@
 # crd-sandbox — System Overview
 
 **Module:** `sandbox/` (repo root, not under `engine/`)
-**Status:** ⏳ planned — Phase 2.7
+**Status:** ✅ shipped v1d — 2026-05-05 (bootstrap: OrbitCamera + ImGui panel + --headless)
 **ADR:** ADR-0045
 
 ---
@@ -23,17 +23,26 @@ running with real content.
 ```
 sandbox/
   src/
-    main.cpp                    ← Application entry, SandboxDesc configuration
-    sandbox_layer.hpp/.cpp      ← ILayer implementation (render + update)
-    asset_browser.hpp/.cpp      ← ImGui panel: browse loaded assets, switch displayed mesh/texture
-  CMakeLists.txt                ← CRD_BUILD_SANDBOX gate; cook_sandbox_assets dependency
+    main.cpp                    ← Application entry, --headless flag, explicit render loop
+    sandbox_layer.hpp/.cpp      ← ILayer implementation: OrbitCamera + ImGui panel
+  CMakeLists.txt                ← CRD_BUILD_SANDBOX gate; imgui_layer.toml copy
 ```
 
-The sandbox uses `crd-app::Application` + `LayerStack`. `SandboxLayer` is the only layer.
-`Application::run()` owns the frame loop and jobs lifecycle.
+The sandbox uses `crd-app::Application` + `LayerStack`. `SandboxLayer` is a regular layer; `ImGuiLayer` is an overlay. The render loop is explicit (not `app.run()`) to allow sandbox control over acquire/submit/present. `Application::tick()` is called once per frame.
 
-**Dependencies:** `crd-app`, `crd-resources`, `crd-renderer`, `crd-imgui`, `crd-rhi`,
-`crd-rhi-vulkan`, `crd-jobs`, `crd-meshgen`, `crd-config`
+**`OrbitCamera`** struct (owned by `SandboxLayer`):
+- Target state: `yaw, pitch, distance` (driven by input)
+- Smoothed state: `s_yaw, s_pitch, s_dist, s_target` (rendered from)
+- Controls: left-drag orbit, Ctrl+MMB pan, scroll zoom; pitch clamped to ±89°
+- Smoothing: exponential lerp `s = s + (target - s) * (1 - exp(-kOrbitSpeed * dt))` where `kOrbitSpeed = 8.0`
+
+**`--headless` flag**: runs one frame then calls `app.close()`; exits 0. Used in CI for sandbox build verification (no GPU required — just proves the binary runs).
+
+**ImGui panel** (fixed-position, top-left): shows viewport size, smoothed camera yaw/pitch/distance/target, help text (`LMB drag=orbit  Ctrl+MMB=pan  Scroll=zoom`).
+
+**v1d dependencies:** `crd-app`, `crd-config`, `crd-imgui`, `crd-log`, `crd-math`, `crd-rhi`, `crd-rhi-vulkan`
+
+**Planned v1e dependencies (when asset browser lands):** `crd-resources`, `crd-renderer`, `crd-meshgen`
 
 ---
 

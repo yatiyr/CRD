@@ -798,16 +798,16 @@ public:
 
     void begin() override
     {
-        CRD_ASSERT(vkResetCommandBuffer(m_command_buffer, 0) == VK_SUCCESS);
+        CRD_VERIFY(vkResetCommandBuffer(m_command_buffer, 0) == VK_SUCCESS);
         VkCommandBufferBeginInfo begin_info{};
         begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        CRD_ASSERT(vkBeginCommandBuffer(m_command_buffer, &begin_info) == VK_SUCCESS);
+        CRD_VERIFY(vkBeginCommandBuffer(m_command_buffer, &begin_info) == VK_SUCCESS);
     }
 
-    void end() override { CRD_ASSERT(vkEndCommandBuffer(m_command_buffer) == VK_SUCCESS); }
+    void end() override { CRD_VERIFY(vkEndCommandBuffer(m_command_buffer) == VK_SUCCESS); }
 
-    void reset() override { CRD_ASSERT(vkResetCommandBuffer(m_command_buffer, 0) == VK_SUCCESS); }
+    void reset() override { CRD_VERIFY(vkResetCommandBuffer(m_command_buffer, 0) == VK_SUCCESS); }
 
     void begin_rendering(const RenderingInfo& info) override
     {
@@ -889,6 +889,48 @@ public:
         vkCmdDrawIndexed(m_command_buffer, index_count, 1, first_index, vertex_offset, 0);
     }
 
+    void copy_buffer(Buffer& src, Buffer& dst,
+                     crd::u64 src_offset, crd::u64 dst_offset, crd::u64 size_bytes) override
+    {
+        auto* vk_src = dynamic_cast<VulkanBuffer*>(&src);
+        auto* vk_dst = dynamic_cast<VulkanBuffer*>(&dst);
+        CRD_ASSERT(vk_src != nullptr && vk_dst != nullptr);
+
+        VkBufferCopy region{};
+        region.srcOffset = src_offset;
+        region.dstOffset = dst_offset;
+        region.size      = size_bytes;
+        vkCmdCopyBuffer(m_command_buffer, vk_src->handle(), vk_dst->handle(), 1, &region);
+    }
+
+    void copy_buffer_to_image(Buffer& src, Image& dst,
+                              crd::containers::ConstSpan<BufferImageCopy> regions) override
+    {
+        auto* vk_src = dynamic_cast<VulkanBuffer*>(&src);
+        auto* vk_dst = dynamic_cast<VulkanImage*>(&dst);
+        CRD_ASSERT(vk_src != nullptr && vk_dst != nullptr);
+
+        crd::containers::Array<VkBufferImageCopy> vk_regions;
+        vk_regions.resize(regions.size());
+        for (crd::usize i = 0; i < regions.size(); ++i)
+        {
+            const auto& r = regions[i];
+            auto& vk_r    = vk_regions[i];
+            vk_r.bufferOffset      = r.buffer_offset;
+            vk_r.bufferRowLength   = 0;
+            vk_r.bufferImageHeight = 0;
+            vk_r.imageSubresource.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+            vk_r.imageSubresource.mipLevel       = r.mip_level;
+            vk_r.imageSubresource.baseArrayLayer = 0;
+            vk_r.imageSubresource.layerCount     = 1;
+            vk_r.imageOffset = {0, 0, 0};
+            vk_r.imageExtent = {r.extent.width, r.extent.height, 1U};
+        }
+        vkCmdCopyBufferToImage(m_command_buffer, vk_src->handle(), vk_dst->handle(),
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                               static_cast<crd::u32>(vk_regions.size()), vk_regions.data());
+    }
+
     void blit_image(Image& src, Image& dst, Extent2D src_extent, Extent2D dst_extent) noexcept override
     {
         auto* vk_src = dynamic_cast<VulkanImage*>(&src);
@@ -962,7 +1004,7 @@ public:
         barrier.oldLayout = src.layout;
         barrier.newLayout = dst.layout;
         barrier.image = vk_image->handle();
-        barrier.subresourceRange = {aspect, 0, 1, 0, 1};
+        barrier.subresourceRange = {aspect, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS};
 
         vkCmdPipelineBarrier(m_command_buffer, src.stage, dst.stage, 0, 0, nullptr, 0, nullptr, 1, &barrier);
         vk_image->set_layout(dst.layout);
@@ -984,7 +1026,10 @@ public:
         : m_device(device), m_swapchain(swapchain), m_desc(std::move(desc)), m_frames_in_flight(frames_in_flight),
           m_images(std::move(images))
     {
-        CRD_ASSERT(create_frame_sync_objects());
+        if (!create_frame_sync_objects())
+        {
+            CRD_LOG_ERROR(detail::g_log_rhi_vulkan, "Fatal: swapchain frame sync object creation failed");
+        }
     }
 
     ~VulkanSwapchain() noexcept override
@@ -1138,6 +1183,20 @@ public:
         return vk_ok(vkQueueSubmit(m_queue, 1, &submit_info, frame.in_flight), "vkQueueSubmit");
     }
 
+    void submit_and_wait(CommandBuffer& command_buffer) override
+    {
+        auto* vk_cmd = dynamic_cast<VulkanCommandBuffer*>(&command_buffer);
+        CRD_ASSERT(vk_cmd != nullptr);
+
+        VkCommandBuffer handle = vk_cmd->handle();
+        VkSubmitInfo submit_info{};
+        submit_info.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submit_info.commandBufferCount = 1;
+        submit_info.pCommandBuffers    = &handle;
+        static_cast<void>(vk_ok(vkQueueSubmit(m_queue, 1, &submit_info, VK_NULL_HANDLE), "vkQueueSubmit(headless)"));
+        vkQueueWaitIdle(m_queue);
+    }
+
     void present(Swapchain& swapchain) override
     {
         auto* vk_swapchain = dynamic_cast<VulkanSwapchain*>(&swapchain);
@@ -1196,7 +1255,10 @@ public:
         pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
         pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
         pool_info.queueFamilyIndex = m_graphics_family_index;
-        CRD_ASSERT(vkCreateCommandPool(m_device, &pool_info, nullptr, &m_command_pool) == VK_SUCCESS);
+        if (!vk_ok(vkCreateCommandPool(m_device, &pool_info, nullptr, &m_command_pool), "vkCreateCommandPool"))
+        {
+            CRD_LOG_ERROR(detail::g_log_rhi_vulkan, "Fatal: command pool creation failed — device unusable");
+        }
     }
 
     ~VulkanDevice() noexcept override

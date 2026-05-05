@@ -13,6 +13,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(CRD_BUILD_TESTS      "Build test executables"           ON)
 option(CRD_BUILD_BENCHMARKS "Build benchmark executable"       ON)
+option(CRD_BUILD_SANDBOX    "Build crd-sandbox interactive app" ON)
 option(CRD_ENABLE_ASSERTS   "Enable CRD_ASSERT macros"        ON)
 option(CRD_ENABLE_PROFILING "Enable profiling instrumentation" OFF)
 option(CRD_ENABLE_ASAN      "Enable Address Sanitizer"         OFF)
@@ -329,6 +330,12 @@ endif()
 # ----- Runtime executable ---------------------------------------------------
 
 add_subdirectory(runtime)
+
+# ----- Sandbox --------------------------------------------------------------
+
+if(CRD_BUILD_SANDBOX)
+    add_subdirectory(sandbox)
+endif()
 
 # ----- Tests ----------------------------------------------------------------
 

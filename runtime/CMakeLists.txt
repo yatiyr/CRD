@@ -335,3 +335,17 @@ target_link_libraries(smoke_rhi_vulkan_bootstrap PRIVATE
     crd-rhi-vulkan
 )
 crd_enable_default_pch(smoke_rhi_vulkan_bootstrap)
+
+add_executable(smoke_asset_import
+    examples/smoke_asset_import.cpp
+)
+
+target_link_libraries(smoke_asset_import PRIVATE
+    crd-core
+    crd-log
+    crd-memory
+    crd-rhi
+    crd-rhi-vulkan
+    crd-renderer
+)
+crd_enable_default_pch(smoke_asset_import)

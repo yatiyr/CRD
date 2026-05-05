@@ -146,6 +146,10 @@ public:
         last_first_index   = first_index;
         last_vertex_offset = vertex_offset;
     }
+    void copy_buffer(crd::rhi::Buffer& /*src*/, crd::rhi::Buffer& /*dst*/,
+                     crd::u64 /*src_off*/, crd::u64 /*dst_off*/, crd::u64 /*size*/) override {}
+    void copy_buffer_to_image(crd::rhi::Buffer& /*src*/, crd::rhi::Image& /*dst*/,
+                              crd::containers::ConstSpan<crd::rhi::BufferImageCopy> /*regions*/) override {}
     void blit_image(crd::rhi::Image& /*src*/, crd::rhi::Image& /*dst*/,
                     crd::rhi::Extent2D /*src_extent*/, crd::rhi::Extent2D /*dst_extent*/) noexcept override
     {
@@ -233,6 +237,7 @@ public:
         ++submit_count;
         return true;
     }
+    void submit_and_wait(crd::rhi::CommandBuffer& /*command_buffer*/) override { ++submit_count; }
     void present(crd::rhi::Swapchain& /*swapchain*/) override { ++present_count; }
     void wait_idle() override { ++wait_idle_count; }
 

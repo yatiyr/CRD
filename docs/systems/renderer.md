@@ -19,6 +19,13 @@ the frame graph, render paths, and material binding live.
 | v1i | swapchain blit + output (first full frame loop) | ✅ shipped 2026-05-01 |
 | v1j | GPU instancing | ⏳ Phase 3.2 dep — see `docs/debt.md` |
 
+**Phase 2.7 additions**
+
+| Slice | Ships | Status |
+| --- | --- | --- |
+| v1c | `MaterialTemplate` + `MaterialInstance` + `MaterialDomain` + `PassType` + `RasterState` (ADR-0048) | ✅ shipped 2026-05-05 |
+| v1d | `GpuUploader` + `GpuTexture` + `GpuMesh`; RHI `copy_buffer` / `copy_buffer_to_image` / `submit_and_wait` | ✅ shipped 2026-05-05 |
+
 **Phase 2.7 v1c — Material system foundation (resource side)**
 
 | Slice | Ships | Status |
@@ -217,13 +224,34 @@ queue.present(*swapchain);
 
 `ForwardRenderPath` color image carries `ColorAttachment | TransferSrc` usage. Swapchain images carry `ColorAttachment | TransferDst` usage (set at swapchain creation).
 
+### GPU upload helpers (Phase 2.7 v1d)
+
+**`GpuTexture`** — `{ std::unique_ptr<rhi::Image> image }`. Wraps a device-local image with `Sampled | TransferDst` usage. No sampler or image view yet — those land in Phase 2.8 with per-material descriptor binding.
+
+**`GpuMesh`** — `{ std::unique_ptr<rhi::Buffer> vertex_buffer; std::unique_ptr<rhi::Buffer> index_buffer; }`. Both buffers are device-local (`GpuOnly`) with `Vertex/Index | TransferDst` usage.
+
+**`GpuUploader`** — static helper class:
+```cpp
+[[nodiscard]] static GpuTexture upload_texture(TextureResource& cpu, rhi::Device& device);
+[[nodiscard]] static GpuMesh    upload_mesh(MeshResource& cpu, rhi::Device& device);
+```
+Both methods use the staging-buffer pattern: allocate a host-visible (`CpuToGpu`) staging buffer, `memcpy` the CPU data in, create the device-local resource, record a one-shot command buffer (transition + copy), call `queue.submit_and_wait()`, then let the staging buffer destruct. Uploads are **synchronous** — the call returns only after the GPU has finished consuming the staging buffer.
+
+`upload_texture` inserts layout transitions: `Undefined → TransferDst` before the copy regions, `TransferDst → ShaderRead` after. Only `RGBA8Unorm` format is supported in v1d; `BC7` asserts false (deferred to Phase 2.8).
+
+**RHI additions shipped with v1d:**
+- `CommandBuffer::copy_buffer(src, dst, src_off, dst_off, size)` — maps to `vkCmdCopyBuffer`
+- `CommandBuffer::copy_buffer_to_image(src, dst, ConstSpan<BufferImageCopy>)` — maps to `vkCmdCopyBufferToImage`; `BufferImageCopy` struct in `rhi/types.hpp`: `{buffer_offset u64, mip_level u32, extent Extent2D}`
+- `Queue::submit_and_wait(CommandBuffer&)` — headless submit + `vkQueueWaitIdle`
+- `transition_image` subresource range fix: `VK_REMAINING_MIP_LEVELS` (was hardcoded to 1)
+
 ## What it does not do yet
 
 - No translucent pass in `ForwardRenderPath` (draws opaque + masked only)
-- No real mesh loading or asset pipeline (Phase 2.6)
 - No scene graph or ECS (Phase 3)
-- No per-material set 1 binding in `ForwardRenderPath` (material system exists but is not wired into ForwardRenderPath yet)
+- No per-material set 1 binding in `ForwardRenderPath` (Phase 2.8 — `GpuTexture` has no sampler/imageview yet)
 - No GPU instancing (Phase 3.2 — see `docs/debt.md`)
+- No async GPU upload (Phase 2.8+ — v1d uploads are synchronous fence+wait)
 
 ## Long-term direction
 

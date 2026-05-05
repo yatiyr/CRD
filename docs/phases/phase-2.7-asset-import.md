@@ -1,6 +1,6 @@
 # Phase 2.7 — Asset import bootstrap
 
-**Status:** 🚧 active — v1a shipped 2026-05-04, v1b shipped 2026-05-05
+**Status:** 🚧 active — v1a shipped 2026-05-04, v1b + v1c + v1d shipped 2026-05-05
 **ADRs:** ADR-0042 (texture cooked format), ADR-0043 (mesh resource + glTF import scope), ADR-0048 (material system architecture foundation)
 **New modules:** loaders in `crd-renderer`; cooker handlers in `tools/asset_cooker/`
 **Depends on:** Phase 2.6 complete (ResourceManager, ILoader registry, CRDR cooker pipeline)

@@ -85,6 +85,10 @@ public:
         CRD_LOG_INFO(g_log_smoke_rhi, "draw_indexed indices={} first={} voffset={}",
                      index_count, first_index, vertex_offset);
     }
+    void copy_buffer(crd::rhi::Buffer& /*src*/, crd::rhi::Buffer& /*dst*/,
+                     crd::u64 /*src_off*/, crd::u64 /*dst_off*/, crd::u64 /*size*/) override {}
+    void copy_buffer_to_image(crd::rhi::Buffer& /*src*/, crd::rhi::Image& /*dst*/,
+                              crd::containers::ConstSpan<crd::rhi::BufferImageCopy> /*regions*/) override {}
     void blit_image(crd::rhi::Image& /*src*/, crd::rhi::Image& /*dst*/,
                     crd::rhi::Extent2D src_ext, crd::rhi::Extent2D dst_ext) noexcept override
     {
@@ -136,6 +140,10 @@ public:
     {
         CRD_LOG_INFO(g_log_smoke_rhi, "queue submit");
         return true;
+    }
+    void submit_and_wait(crd::rhi::CommandBuffer& /*command_buffer*/) override
+    {
+        CRD_LOG_INFO(g_log_smoke_rhi, "queue submit_and_wait");
     }
     void present(crd::rhi::Swapchain& /*swapchain*/) override { CRD_LOG_INFO(g_log_smoke_rhi, "queue present"); }
     void wait_idle() override { CRD_LOG_INFO(g_log_smoke_rhi, "queue wait_idle"); }

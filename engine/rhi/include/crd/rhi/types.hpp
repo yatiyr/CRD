@@ -349,4 +349,12 @@ struct RenderingInfo
     RenderingColorAttachmentInfo        color_attachment{};
     const RenderingDepthAttachmentInfo* depth_attachment = nullptr;
 };
+
+// Describes one region of a buffer-to-image copy operation.
+struct BufferImageCopy
+{
+    crd::u64 buffer_offset = 0;
+    crd::u32 mip_level     = 0;
+    Extent2D extent{};
+};
 } // namespace crd::rhi

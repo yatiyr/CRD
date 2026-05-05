@@ -68,6 +68,10 @@ public:
     {
         CRD_LOG_INFO(g_log_smoke_renderer, "draw_indexed indices={}", index_count);
     }
+    void copy_buffer(crd::rhi::Buffer& /*src*/, crd::rhi::Buffer& /*dst*/,
+                     crd::u64 /*src_off*/, crd::u64 /*dst_off*/, crd::u64 /*size*/) override {}
+    void copy_buffer_to_image(crd::rhi::Buffer& /*src*/, crd::rhi::Image& /*dst*/,
+                              crd::containers::ConstSpan<crd::rhi::BufferImageCopy> /*regions*/) override {}
     void blit_image(crd::rhi::Image& /*src*/, crd::rhi::Image& /*dst*/,
                     crd::rhi::Extent2D src_ext, crd::rhi::Extent2D dst_ext) noexcept override
     {
@@ -184,6 +188,7 @@ int main()
         struct FakeQueue final : crd::rhi::Queue
         {
             bool submit(crd::rhi::CommandBuffer&, crd::rhi::Swapchain&) override { return true; }
+            void submit_and_wait(crd::rhi::CommandBuffer&) override {}
             void present(crd::rhi::Swapchain&) override {}
             void wait_idle() override {}
         } m_queue;
