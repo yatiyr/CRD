@@ -38,6 +38,8 @@ namespace
             return VK_FORMAT_R32G32_SFLOAT;
         case Format::R32G32B32Sfloat:
             return VK_FORMAT_R32G32B32_SFLOAT;
+        case Format::R32G32B32A32Sfloat:
+            return VK_FORMAT_R32G32B32A32_SFLOAT;
         case Format::D24UnormS8Uint:
             return VK_FORMAT_D24_UNORM_S8_UINT;
         case Format::D32Sfloat:
@@ -982,6 +984,24 @@ public:
                                 static_cast<crd::u32>(raw_sets.size()), raw_sets.data(), 0, nullptr);
     }
 
+    void set_viewport(Extent2D extent) noexcept override
+    {
+        VkViewport viewport{};
+        viewport.x        = 0.0F;
+        viewport.y        = 0.0F;
+        viewport.width    = static_cast<float>(extent.width);
+        viewport.height   = static_cast<float>(extent.height);
+        viewport.minDepth = 0.0F;
+        viewport.maxDepth = 1.0F;
+        vkCmdSetViewport(m_command_buffer, 0, 1, &viewport);
+    }
+
+    void set_scissor(Rect2D rect) noexcept override
+    {
+        VkRect2D vk_rect{{rect.x, rect.y}, {rect.width, rect.height}};
+        vkCmdSetScissor(m_command_buffer, 0, 1, &vk_rect);
+    }
+
     void transition_image(Image& image, ImageAccess from, ImageAccess to) noexcept override
     {
         if (from == to)
@@ -1021,9 +1041,13 @@ private:
 class VulkanSwapchain final : public Swapchain
 {
 public:
-    VulkanSwapchain(VkDevice device, VkSwapchainKHR swapchain, SwapchainDesc desc, crd::u32 frames_in_flight,
+    VulkanSwapchain(VkDevice device, VkPhysicalDevice physical_device, VkSurfaceKHR surface,
+                    VkSurfaceFormatKHR chosen_format, VkPresentModeKHR chosen_present_mode,
+                    VkSwapchainKHR swapchain, SwapchainDesc desc, crd::u32 frames_in_flight,
                     crd::containers::Array<std::unique_ptr<VulkanImage>> images)
-        : m_device(device), m_swapchain(swapchain), m_desc(std::move(desc)), m_frames_in_flight(frames_in_flight),
+        : m_device(device), m_physical_device(physical_device), m_surface(surface),
+          m_chosen_format(chosen_format), m_chosen_present_mode(chosen_present_mode),
+          m_swapchain(swapchain), m_desc(std::move(desc)), m_frames_in_flight(frames_in_flight),
           m_images(std::move(images))
     {
         if (!create_frame_sync_objects())
@@ -1069,22 +1093,28 @@ public:
         {
             return false;
         }
+
+        const VkResult result = vkAcquireNextImageKHR(m_device, m_swapchain, UINT64_MAX, frame.image_available,
+                                                      VK_NULL_HANDLE, &m_current_image_index);
+        if (result == VK_ERROR_OUT_OF_DATE_KHR)
+        {
+            // Swapchain is stale — leave the fence signaled so the next acquire can wait correctly.
+            return false;
+        }
+        if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR)
+        {
+            CRD_LOG_ERROR(detail::g_log_rhi_vulkan, "vkAcquireNextImageKHR failed with VkResult={}",
+                          static_cast<int>(result));
+            return false;
+        }
+
+        // Reset fence only after a successful acquire — prevents a hang if acquire fails next frame.
         if (!vk_ok(vkResetFences(m_device, 1, &frame.in_flight), "vkResetFences"))
         {
             return false;
         }
-
-        const VkResult result = vkAcquireNextImageKHR(m_device, m_swapchain, UINT64_MAX, frame.image_available,
-                                                      VK_NULL_HANDLE, &m_current_image_index);
-        if (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR)
-        {
-            m_image_acquired = true;
-            return true;
-        }
-
-        CRD_LOG_ERROR(detail::g_log_rhi_vulkan, "vkAcquireNextImageKHR failed with VkResult={}",
-                      static_cast<int>(result));
-        return false;
+        m_image_acquired = true;
+        return true;
     }
 
     [[nodiscard]] crd::u32 current_image_index() const noexcept override { return m_current_image_index; }
@@ -1098,6 +1128,115 @@ public:
     void advance_frame() noexcept { m_frame_index = (m_frame_index + 1U) % m_frames_in_flight; }
     [[nodiscard]] bool image_acquired() const noexcept { return m_image_acquired; }
     void clear_image_acquired() noexcept { m_image_acquired = false; }
+
+    void resize(Extent2D new_extent) noexcept override
+    {
+        if (new_extent.width == 0 || new_extent.height == 0)
+            return;
+
+        // Destroy old image views (VkImages are owned by the swapchain driver).
+        m_images.clear();
+
+        // Build new swapchain; pass old handle so the driver can recycle resources.
+        VkSurfaceCapabilitiesKHR caps{};
+        if (!vk_ok(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(m_physical_device, m_surface, &caps),
+                   "vkGetPhysicalDeviceSurfaceCapabilitiesKHR(resize)"))
+        {
+            return;
+        }
+
+        // Use the driver's reported currentExtent when it's well-defined (not UINT32_MAX).
+        // On Windows the driver always sets currentExtent = the actual surface size, and
+        // minImageExtent == maxImageExtent == currentExtent, so the window-event extent is
+        // just a hint — using it directly causes VUID-VkSwapchainCreateInfoKHR-pNext-07781.
+        VkExtent2D chosen_extent;
+        if (caps.currentExtent.width != UINT32_MAX)
+        {
+            chosen_extent = caps.currentExtent;
+        }
+        else
+        {
+            chosen_extent.width  = std::clamp(new_extent.width,  caps.minImageExtent.width,  caps.maxImageExtent.width);
+            chosen_extent.height = std::clamp(new_extent.height, caps.minImageExtent.height, caps.maxImageExtent.height);
+        }
+
+        VkSwapchainCreateInfoKHR create_info{};
+        create_info.sType            = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+        create_info.surface          = m_surface;
+        create_info.minImageCount    = static_cast<crd::u32>(m_image_sync_array.size());
+        create_info.imageFormat      = m_chosen_format.format;
+        create_info.imageColorSpace  = m_chosen_format.colorSpace;
+        create_info.imageExtent      = chosen_extent;
+        create_info.imageArrayLayers = 1;
+        create_info.imageUsage       = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        create_info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        create_info.preTransform     = caps.currentTransform;
+        create_info.compositeAlpha   = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+        create_info.presentMode      = m_chosen_present_mode;
+        create_info.clipped          = VK_TRUE;
+        create_info.oldSwapchain     = m_swapchain;
+
+        VkSwapchainKHR new_swapchain = VK_NULL_HANDLE;
+        if (!vk_ok(vkCreateSwapchainKHR(m_device, &create_info, nullptr, &new_swapchain),
+                   "vkCreateSwapchainKHR(resize)"))
+        {
+            return;
+        }
+
+        // Destroy old swapchain after creating the new one (oldSwapchain reference is now transferred).
+        vkDestroySwapchainKHR(m_device, m_swapchain, nullptr);
+        m_swapchain = new_swapchain;
+
+        // Acquire new image handles and wrap them.
+        crd::u32 image_count = 0;
+        vkGetSwapchainImagesKHR(m_device, m_swapchain, &image_count, nullptr);
+        crd::containers::Array<VkImage> images;
+        images.resize(image_count);
+        vkGetSwapchainImagesKHR(m_device, m_swapchain, &image_count, images.data());
+
+        for (const VkImage image : images)
+        {
+            VkImageViewCreateInfo view_info{};
+            view_info.sType            = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            view_info.image            = image;
+            view_info.viewType         = VK_IMAGE_VIEW_TYPE_2D;
+            view_info.format           = m_chosen_format.format;
+            view_info.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
+            VkImageView view = VK_NULL_HANDLE;
+            if (!vk_ok(vkCreateImageView(m_device, &view_info, nullptr, &view), "vkCreateImageView(resize)"))
+                return;
+
+            m_images.push_back(
+                std::make_unique<VulkanImage>(m_device,
+                                              ImageDesc{{chosen_extent.width, chosen_extent.height},
+                                                        Format::B8G8R8A8Unorm,
+                                                        enum_bits(ImageUsage::ColorAttachment), 1, 1},
+                                              image, view));
+        }
+
+        // Rebuild image sync semaphores if image count changed.
+        if (image_count != static_cast<crd::u32>(m_image_sync_array.size()))
+        {
+            for (auto& s : m_image_sync_array)
+            {
+                if (s.render_finished != VK_NULL_HANDLE)
+                    vkDestroySemaphore(m_device, s.render_finished, nullptr);
+            }
+            m_image_sync_array.clear();
+            m_image_sync_array.resize(image_count);
+            for (auto& s : m_image_sync_array)
+            {
+                VkSemaphoreCreateInfo semaphore_info{};
+                semaphore_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+                static_cast<void>(vk_ok(vkCreateSemaphore(m_device, &semaphore_info, nullptr, &s.render_finished),
+                                        "vkCreateSemaphore(resize)"));
+            }
+        }
+
+        m_desc.extent = {chosen_extent.width, chosen_extent.height};
+        m_current_image_index = 0;
+    }
 
 private:
     [[nodiscard]] bool create_frame_sync_objects()
@@ -1136,6 +1275,10 @@ private:
     }
 
     VkDevice m_device = VK_NULL_HANDLE;
+    VkPhysicalDevice m_physical_device = VK_NULL_HANDLE;
+    VkSurfaceKHR m_surface = VK_NULL_HANDLE;
+    VkSurfaceFormatKHR m_chosen_format{};
+    VkPresentModeKHR m_chosen_present_mode = VK_PRESENT_MODE_FIFO_KHR;
     VkSwapchainKHR m_swapchain = VK_NULL_HANDLE;
     SwapchainDesc m_desc{};
     crd::u32 m_frames_in_flight = 2;
@@ -1479,7 +1622,9 @@ public:
         SwapchainDesc resolved_desc = desc;
         resolved_desc.extent = {chosen_extent.width, chosen_extent.height};
         resolved_desc.color_format = Format::B8G8R8A8Unorm;
-        return std::make_unique<VulkanSwapchain>(m_device, swapchain, std::move(resolved_desc), m_desc.frames_in_flight,
+        return std::make_unique<VulkanSwapchain>(m_device, m_physical_device, m_surface,
+                                                 chosen_format, chosen_present_mode,
+                                                 swapchain, std::move(resolved_desc), m_desc.frames_in_flight,
                                                  std::move(wrapped_images));
     }
 
@@ -1620,13 +1765,22 @@ public:
         VkPipelineViewportStateCreateInfo viewport_state{};
         viewport_state.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
         viewport_state.viewportCount = 1;
-        viewport_state.pViewports = &viewport;
-        viewport_state.scissorCount = 1;
-        viewport_state.pScissors = &scissor;
+        viewport_state.scissorCount  = 1;
+        if (!desc.use_dynamic_viewport)
+        {
+            viewport_state.pViewports = &viewport;
+            viewport_state.pScissors  = &scissor;
+        }
+
+        VkDynamicState dynamic_states[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+        VkPipelineDynamicStateCreateInfo dynamic_state{};
+        dynamic_state.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+        dynamic_state.dynamicStateCount = 2;
+        dynamic_state.pDynamicStates    = dynamic_states;
 
         VkPipelineRasterizationStateCreateInfo raster{};
         raster.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-        raster.polygonMode = VK_POLYGON_MODE_FILL;
+        raster.polygonMode = desc.wireframe ? VK_POLYGON_MODE_LINE : VK_POLYGON_MODE_FILL;
         raster.cullMode = VK_CULL_MODE_NONE;
         raster.frontFace = VK_FRONT_FACE_CLOCKWISE;
         raster.lineWidth = 1.0F;
@@ -1649,9 +1803,10 @@ public:
 
         VkPipelineDepthStencilStateCreateInfo depth_stencil{};
         depth_stencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-        depth_stencil.depthTestEnable = desc.enable_depth_test ? VK_TRUE : VK_FALSE;
-        depth_stencil.depthWriteEnable = desc.enable_depth_test ? VK_TRUE : VK_FALSE;
-        depth_stencil.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+        depth_stencil.depthTestEnable  = desc.enable_depth_test ? VK_TRUE : VK_FALSE;
+        depth_stencil.depthWriteEnable = (desc.enable_depth_test && desc.depth_write) ? VK_TRUE : VK_FALSE;
+        // Reverse-Z projection (near→1, inf→0): closer = larger depth, so use GREATER_OR_EQUAL.
+        depth_stencil.depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL;
 
         // Resolve pipeline layout: use the provided layout or synthesise an empty one.
         VkPipelineLayout resolved_layout = VK_NULL_HANDLE;
@@ -1698,6 +1853,7 @@ public:
         pipeline_info.pMultisampleState = &multisample;
         pipeline_info.pDepthStencilState = &depth_stencil;
         pipeline_info.pColorBlendState = &blend_state;
+        pipeline_info.pDynamicState = desc.use_dynamic_viewport ? &dynamic_state : nullptr;
         pipeline_info.layout = resolved_layout;
 
         VkPipeline pipeline = VK_NULL_HANDLE;
@@ -2066,6 +2222,7 @@ public:
         features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
         features2.pNext = &dynamic_rendering_features;
         vkGetPhysicalDeviceFeatures2(physical_device, &features2);
+        const bool fill_mode_non_solid_supported = features2.features.fillModeNonSolid == VK_TRUE;
 
         const bool dynamic_rendering_supported = dynamic_rendering_features.dynamicRendering == VK_TRUE;
         const bool sync2_supported = synchronization2_features.synchronization2 == VK_TRUE;
@@ -2111,10 +2268,16 @@ public:
         enabled_dynamic_rendering.pNext = &enabled_sync2;
         enabled_dynamic_rendering.dynamicRendering = VK_TRUE;
 
+        // Enable base features (fillModeNonSolid for wireframe rendering) via features2 pNext chain.
+        VkPhysicalDeviceFeatures2 enabled_features2{};
+        enabled_features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        enabled_features2.features.fillModeNonSolid = fill_mode_non_solid_supported ? VK_TRUE : VK_FALSE;
+        enabled_features2.pNext = &enabled_dynamic_rendering;
+
         const char* device_extensions[] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
         VkDeviceCreateInfo create_info{};
         create_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-        create_info.pNext = &enabled_dynamic_rendering;
+        create_info.pNext = &enabled_features2;
         create_info.queueCreateInfoCount = 1;
         create_info.pQueueCreateInfos = &queue_create_info;
         create_info.enabledExtensionCount = 1;

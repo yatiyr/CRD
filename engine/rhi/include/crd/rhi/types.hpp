@@ -27,6 +27,7 @@ enum class Format : crd::u16
     B8G8R8A8Unorm,
     R32G32Sfloat,
     R32G32B32Sfloat,
+    R32G32B32A32Sfloat,
     D24UnormS8Uint,
     D32Sfloat,
 };
@@ -320,8 +321,11 @@ struct GraphicsPipelineDesc
     Format                depth_format    = Format::Undefined;
     crd::containers::ConstSpan<VertexBindingDesc>   vertex_bindings{};
     crd::containers::ConstSpan<VertexAttributeDesc> vertex_attributes{};
-    bool enable_depth_test = false;
-    bool enable_blend      = false;
+    bool enable_depth_test    = false;
+    bool enable_blend         = false;
+    bool use_dynamic_viewport = false; // when true, viewport/scissor are set per-cmd (vkCmdSetViewport/Scissor)
+    bool wireframe            = false; // VK_POLYGON_MODE_LINE; requires fillModeNonSolid device feature
+    bool depth_write          = true;  // set false for overlay passes; ignored when enable_depth_test=false
     // Optional explicit pipeline layout. nullptr = synthesise an empty layout (no push constants
     // or descriptor sets). Pass an explicit PipelineLayout for push constants + descriptor sets.
     class PipelineLayout* pipeline_layout = nullptr;

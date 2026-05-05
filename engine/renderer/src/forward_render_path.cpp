@@ -75,6 +75,111 @@ void ForwardRenderPath::resize(rhi::Extent2D new_extent)
     recreate_render_targets();
 }
 
+// Standard 48-byte interleaved vertex layout for all surface geometry.
+static const rhi::VertexBindingDesc   k_surface_binding{0, 48, rhi::VertexInputRate::Vertex};
+static const rhi::VertexAttributeDesc k_surface_attrs[4] = {
+    {0, 0, rhi::Format::R32G32B32Sfloat,    0},   // position
+    {1, 0, rhi::Format::R32G32B32Sfloat,    12},  // normal
+    {2, 0, rhi::Format::R32G32Sfloat,       24},  // uv0
+    {3, 0, rhi::Format::R32G32B32A32Sfloat, 32},  // tangent
+};
+
+ForwardRenderPath::MatPipelineEntry&
+ForwardRenderPath::get_or_compile_mat_pipelines(const MaterialInstance& mat)
+{
+    const MaterialTemplate* tmpl = mat.tmpl().get();
+
+    // Search by template pointer identity.
+    for (auto& entry : m_mat_cache)
+    {
+        if (entry.tmpl == tmpl)
+            return entry;
+    }
+
+    MatPipelineEntry entry;
+    entry.tmpl = tmpl;
+
+    if (tmpl == nullptr || tmpl->domain != MaterialDomain::Surface)
+    {
+        m_mat_cache.push_back(entry);
+        return m_mat_cache[m_mat_cache.size() - 1U];
+    }
+
+    // Depth prepass: vertex-only pipeline using the depth prepass (or Forward fallback) vert shader.
+    const PassShaderPair& depth_pair = mat.variant_for_pass(PassType::DepthPrepass);
+    const crd::shader::ShaderResource* depth_vert_res = depth_pair.vert.get();
+    if (depth_vert_res != nullptr && !depth_vert_res->spirv.empty())
+    {
+        auto vert_mod = m_device->create_shader_module(
+            {rhi::ShaderStage::Vertex, "main",
+             crd::containers::make_span(depth_vert_res->spirv.data(), depth_vert_res->spirv.size())});
+        if (vert_mod)
+        {
+            rhi::GraphicsPipelineDesc desc;
+            desc.vertex_shader        = vert_mod.get();
+            desc.fragment_shader      = nullptr;
+            desc.topology             = rhi::PrimitiveTopology::TriangleList;
+            desc.viewport_extent      = m_extent;
+            desc.color_format         = rhi::Format::Undefined;
+            desc.depth_format         = rhi::Format::D32Sfloat;
+            desc.vertex_bindings      = crd::containers::make_span(&k_surface_binding, 1U);
+            desc.vertex_attributes    = crd::containers::make_span(k_surface_attrs, 4U);
+            desc.enable_depth_test    = true;
+            desc.enable_blend         = false;
+            desc.use_dynamic_viewport = true;
+            desc.pipeline_layout      = m_pipeline_layout.get();
+
+            auto pipeline = m_device->create_graphics_pipeline(desc);
+            if (pipeline)
+            {
+                entry.depth = pipeline.get();
+                m_owned_mat_pipelines.push_back(std::move(pipeline));
+            }
+        }
+    }
+
+    // Color pass: full vert+frag pipeline using the Forward pair.
+    const PassShaderPair& color_pair = mat.variant_for_pass(PassType::Forward);
+    const crd::shader::ShaderResource* color_vert_res = color_pair.vert.get();
+    const crd::shader::ShaderResource* color_frag_res = color_pair.frag.get();
+    if (color_vert_res != nullptr && !color_vert_res->spirv.empty() &&
+        color_frag_res != nullptr && !color_frag_res->spirv.empty())
+    {
+        auto vert_mod = m_device->create_shader_module(
+            {rhi::ShaderStage::Vertex, "main",
+             crd::containers::make_span(color_vert_res->spirv.data(), color_vert_res->spirv.size())});
+        auto frag_mod = m_device->create_shader_module(
+            {rhi::ShaderStage::Fragment, "main",
+             crd::containers::make_span(color_frag_res->spirv.data(), color_frag_res->spirv.size())});
+        if (vert_mod && frag_mod)
+        {
+            rhi::GraphicsPipelineDesc desc;
+            desc.vertex_shader        = vert_mod.get();
+            desc.fragment_shader      = frag_mod.get();
+            desc.topology             = rhi::PrimitiveTopology::TriangleList;
+            desc.viewport_extent      = m_extent;
+            desc.color_format         = rhi::Format::B8G8R8A8Unorm;
+            desc.depth_format         = rhi::Format::D32Sfloat;
+            desc.vertex_bindings      = crd::containers::make_span(&k_surface_binding, 1U);
+            desc.vertex_attributes    = crd::containers::make_span(k_surface_attrs, 4U);
+            desc.enable_depth_test    = true;
+            desc.enable_blend         = false;
+            desc.use_dynamic_viewport = true;
+            desc.pipeline_layout      = m_pipeline_layout.get();
+
+            auto pipeline = m_device->create_graphics_pipeline(desc);
+            if (pipeline)
+            {
+                entry.color = pipeline.get();
+                m_owned_mat_pipelines.push_back(std::move(pipeline));
+            }
+        }
+    }
+
+    m_mat_cache.push_back(entry);
+    return m_mat_cache[m_mat_cache.size() - 1U];
+}
+
 void ForwardRenderPath::build(FrameGraph& fg, const DrawList& draw_list, const FrameContext& ctx)
 {
     m_draw_list = &draw_list;
@@ -113,18 +218,40 @@ void ForwardRenderPath::build(FrameGraph& fg, const DrawList& draw_list, const F
     {
         auto builder = fg.add_pass("depth-prepass");
         builder.write(m_depth_handle, rhi::ImageAccess::DepthWrite);
-        builder.set_execute([this](FrameResources& res, rhi::CommandBuffer& cmd)
+        builder.set_execute([this, slot](FrameResources& res, rhi::CommandBuffer& cmd)
         {
             auto* depth = res.get(m_depth_handle);
+            // Reverse-Z: clear to 0.0 (the "far" sentinel; GREATER_OR_EQUAL lets anything closer pass).
             const rhi::RenderingDepthAttachmentInfo depth_att{depth, rhi::LoadOp::Clear,
-                                                              rhi::StoreOp::Store, {1.0F, 0}};
+                                                              rhi::StoreOp::Store, {0.0F, 0}};
             cmd.begin_rendering({m_extent,
                                  {nullptr, rhi::LoadOp::DontCare, rhi::StoreOp::DontCare, {}},
                                  &depth_att});
+            cmd.set_viewport(m_extent);
+            cmd.set_scissor({0, 0, m_extent.width, m_extent.height});
+
+            // Bind per-frame descriptor set (set 0: camera matrices) — vertex shader uses it.
+            if (m_per_frame_sets[slot])
+            {
+                rhi::DescriptorSet* sets[] = {m_per_frame_sets[slot].get()};
+                cmd.bind_descriptor_sets(*m_pipeline_layout, 0,
+                                         crd::containers::make_span(sets, 1U));
+            }
+
+            m_resolver->begin_pass(PassType::DepthPrepass);
 
             for (const auto& item : m_draw_list->opaque)
             {
-                auto* pipeline = m_resolver->resolve_pipeline(item.handoff);
+                rhi::Pipeline* pipeline = nullptr;
+                if (item.material != nullptr)
+                {
+                    auto& mat_entry = get_or_compile_mat_pipelines(*item.material);
+                    pipeline = mat_entry.depth;
+                }
+                else
+                {
+                    pipeline = m_resolver->resolve_pipeline(item.handoff);
+                }
                 if (!pipeline)
                     continue;
                 cmd.bind_pipeline(*pipeline);
@@ -165,6 +292,8 @@ void ForwardRenderPath::build(FrameGraph& fg, const DrawList& draw_list, const F
                                                               rhi::StoreOp::Store, {}};
 
             cmd.begin_rendering({m_extent, color_att, &depth_att});
+            cmd.set_viewport(m_extent);
+            cmd.set_scissor({0, 0, m_extent.width, m_extent.height});
 
             // Bind per-frame descriptor set (set 0: camera matrices).
             if (m_per_frame_sets[slot])
@@ -174,11 +303,22 @@ void ForwardRenderPath::build(FrameGraph& fg, const DrawList& draw_list, const F
                                          crd::containers::make_span(sets, 1U));
             }
 
+            m_resolver->begin_pass(PassType::Forward);
+
             auto draw_items = [&](const crd::containers::Array<DrawItem>& items)
             {
                 for (const auto& item : items)
                 {
-                    auto* pipeline = m_resolver->resolve_pipeline(item.handoff);
+                    rhi::Pipeline* pipeline = nullptr;
+                    if (item.material != nullptr)
+                    {
+                        auto& mat_entry = get_or_compile_mat_pipelines(*item.material);
+                        pipeline = mat_entry.color;
+                    }
+                    else
+                    {
+                        pipeline = m_resolver->resolve_pipeline(item.handoff);
+                    }
                     if (!pipeline)
                         continue;
                     cmd.bind_pipeline(*pipeline);

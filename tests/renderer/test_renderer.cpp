@@ -1,7 +1,9 @@
+#include <crd/memory/allocators/malloc_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/renderer/forward_render_path.hpp>
 #include <crd/renderer/frame_graph.hpp>
 #include <crd/renderer/material.hpp>
+#include <crd/renderer/material_template.hpp>
 #include <crd/renderer/per_frame_data.hpp>
 #include <crd/renderer/render_path.hpp>
 #include <crd/renderer/renderer.hpp>
@@ -117,6 +119,8 @@ public:
         last_first_set = first_set;
         last_set_count = static_cast<int>(sets.size());
     }
+    void set_viewport(crd::rhi::Extent2D /*extent*/) noexcept override {}
+    void set_scissor(crd::rhi::Rect2D /*rect*/) noexcept override {}
 
     int begin_count = 0;
     int end_count = 0;
@@ -805,8 +809,8 @@ TEST_CASE("ForwardRenderPath build registers two frame graph passes", "[renderer
     REQUIRE(cmd.push_constants_count == 2);
     // model matrix is 64 bytes.
     REQUIRE(cmd.last_push_size == 64U);
-    // bind_descriptor_sets called once in the color pass (set 0).
-    REQUIRE(cmd.bind_descriptor_sets_count == 1);
+    // bind_descriptor_sets called once per pass (depth prepass + color pass) for set 0.
+    REQUIRE(cmd.bind_descriptor_sets_count == 2);
     REQUIRE(cmd.last_first_set == 0U);
 }
 
@@ -1143,4 +1147,112 @@ TEST_CASE("add_swapchain_blit_pass appended after ForwardRenderPath passes build
     // Undefined→TransferDst and TransferDst→Present
     const auto& t = cmd.transitions;
     REQUIRE(t.back().to == crd::rhi::ImageAccess::Present);
+}
+
+// =============================================================================
+// Phase 2.8 v1a/v1b — material-path renderable support
+// =============================================================================
+
+TEST_CASE("Renderer build_frame accepts material-path renderable with invalid variant", "[renderer][material_path]")
+{
+    crd::memory::MallocAllocator alloc;
+    crd::resources::ResourceHandle<crd::renderer::MaterialTemplate> null_tmpl{};
+    crd::renderer::MaterialInstance mat_inst(std::move(null_tmpl), &alloc);
+
+    FakeBuffer vb({12, crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex), crd::rhi::MemoryUsage::CpuToGpu});
+
+    crd::renderer::Renderable r;
+    r.vertex_buffer = &vb;
+    r.vertex_count  = 3;
+    r.material      = &mat_inst;
+    // variant intentionally left invalid — material path should not require it
+    r.bucket        = crd::renderer::DrawBucket::Opaque;
+
+    crd::renderer::Renderer renderer;
+    renderer.submit(r);
+
+    ShaderFixture fx;
+    crd::renderer::FrameContext ctx;
+    crd::renderer::DrawList draw_list;
+    REQUIRE(renderer.build_frame(ctx, *fx.runtime, draw_list));
+
+    REQUIRE(draw_list.opaque.size() == 1U);
+    REQUIRE(draw_list.opaque[0].material == &mat_inst);
+}
+
+TEST_CASE("Renderer build_frame copies material pointer into DrawItem", "[renderer][material_path]")
+{
+    crd::memory::MallocAllocator alloc;
+    crd::resources::ResourceHandle<crd::renderer::MaterialTemplate> null_tmpl{};
+    crd::renderer::MaterialInstance mat_inst(std::move(null_tmpl), &alloc);
+
+    FakeBuffer vb({12, crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex), crd::rhi::MemoryUsage::CpuToGpu});
+
+    crd::renderer::Renderable r;
+    r.vertex_buffer = &vb;
+    r.vertex_count  = 3;
+    r.material      = &mat_inst;
+    r.bucket        = crd::renderer::DrawBucket::Opaque;
+
+    crd::renderer::Renderer renderer;
+    renderer.submit(r);
+
+    ShaderFixture fx;
+    crd::renderer::FrameContext ctx;
+    crd::renderer::DrawList draw_list;
+    REQUIRE(renderer.build_frame(ctx, *fx.runtime, draw_list));
+
+    REQUIRE(draw_list.opaque[0].material == &mat_inst);
+}
+
+TEST_CASE("ForwardRenderPath skips resolver for material-path items (null template)",
+          "[renderer][forward][material_path]")
+{
+    // FakeDevice returns nullptr from create_shader_module and create_graphics_pipeline,
+    // so material-path items end up with null depth/color pipelines and are skipped.
+    // Legacy-path items use FakeResolver which returns a real FakePipeline.
+    FakeDevice device;
+    FakeDescriptorAllocator fa;
+    FakePipeline pipeline({});
+    FakeResolver resolver(pipeline);
+
+    auto frp = crd::renderer::ForwardRenderPath::create(device, resolver, fa, {1280, 720}, 2);
+    REQUIRE(frp != nullptr);
+
+    FakeBuffer vb({12, crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex), crd::rhi::MemoryUsage::CpuToGpu});
+
+    // One legacy item (goes through resolver).
+    crd::renderer::DrawItem legacy_item;
+    legacy_item.vertex_buffer = &vb;
+    legacy_item.vertex_count  = 3;
+
+    // One material-path item (null template → null pipelines → skipped).
+    crd::memory::MallocAllocator mat_alloc;
+    crd::resources::ResourceHandle<crd::renderer::MaterialTemplate> null_tmpl{};
+    crd::renderer::MaterialInstance mat_inst(std::move(null_tmpl), &mat_alloc);
+
+    crd::renderer::DrawItem mat_item;
+    mat_item.vertex_buffer = &vb;
+    mat_item.vertex_count  = 3;
+    mat_item.material      = &mat_inst;
+
+    crd::renderer::DrawList draw_list;
+    draw_list.opaque.push_back(legacy_item);
+    draw_list.opaque.push_back(mat_item);
+
+    crd::renderer::FrameContext ctx;
+    ctx.frame_index = 0;
+
+    crd::renderer::FrameGraph fg;
+    fa.begin_frame(0);
+    frp->build(fg, draw_list, ctx);
+    REQUIRE(fg.build());
+
+    FakeCommandBuffer cmd;
+    fg.execute(device, cmd);
+
+    // resolver called once per pass for the legacy item only.
+    REQUIRE(resolver.resolve_count == 2);
+    // legacy item draws in depth-prepass + color pass; material item skipped (null pipeline).
+    REQUIRE(cmd.draw_count == 2);
 }

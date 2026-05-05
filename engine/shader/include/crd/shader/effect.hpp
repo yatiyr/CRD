@@ -37,6 +37,7 @@ public:
     [[nodiscard]] virtual Stage stage() const noexcept = 0;
     [[nodiscard]] virtual crd::containers::StringView entry_point() const noexcept = 0;
     [[nodiscard]] virtual crd::u64 code_size_bytes() const noexcept = 0;
+    [[nodiscard]] virtual crd::containers::ConstSpan<crd::u8> code_bytes() const noexcept = 0;
     [[nodiscard]] virtual crd::containers::ConstSpan<ParameterDesc> parameters() const noexcept = 0;
     [[nodiscard]] virtual crd::containers::ConstSpan<DescriptorBindingDesc> descriptor_bindings() const noexcept = 0;
     [[nodiscard]] virtual crd::containers::ConstSpan<PushConstantRangeDesc> push_constants() const noexcept = 0;

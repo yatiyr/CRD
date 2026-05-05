@@ -94,6 +94,8 @@ public:
                               crd::containers::ConstSpan<crd::rhi::DescriptorSet*> /*sets*/) override
     {
     }
+    void set_viewport(crd::rhi::Extent2D /*extent*/) noexcept override {}
+    void set_scissor(crd::rhi::Rect2D /*rect*/) noexcept override {}
 
     int transition_count = 0;
     int blit_count = 0;

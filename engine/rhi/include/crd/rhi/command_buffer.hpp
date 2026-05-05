@@ -53,5 +53,9 @@ public:
     // Only rebind what changes — lower-indexed sets remain bound across compatible pipelines.
     virtual void bind_descriptor_sets(PipelineLayout& layout, crd::u32 first_set,
                                       crd::containers::ConstSpan<DescriptorSet*> sets) = 0;
+
+    // Dynamic viewport/scissor — only valid when the bound pipeline was created with use_dynamic_viewport = true.
+    virtual void set_viewport(Extent2D extent) noexcept = 0;
+    virtual void set_scissor(Rect2D rect) noexcept = 0;
 };
 } // namespace crd::rhi

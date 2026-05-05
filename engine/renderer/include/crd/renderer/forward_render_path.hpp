@@ -2,6 +2,7 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/renderer/frame_graph.hpp>
+#include <crd/renderer/material_template.hpp>
 #include <crd/renderer/render_path.hpp>
 #include <crd/renderer/renderer.hpp>
 #include <crd/rhi/buffer.hpp>
@@ -48,6 +49,9 @@ public:
     // Pass this to PipelineResolver implementations so pipelines are compatible.
     [[nodiscard]] rhi::PipelineLayout& pipeline_layout() noexcept { return *m_pipeline_layout; }
 
+    // Direct access to the color render target — used by sandbox to blit to swapchain.
+    [[nodiscard]] rhi::Image& color_image() noexcept { return *m_color_image; }
+
     // IRenderPath interface --------------------------------------------------
 
     // Register depth-prepass + main-color-pass into fg for the current frame.
@@ -66,6 +70,16 @@ private:
 
     void recreate_render_targets();
 
+    // Per-template pipeline pair compiled by get_or_compile_mat_pipelines().
+    struct MatPipelineEntry
+    {
+        const MaterialTemplate* tmpl  = nullptr; // pointer-identity cache key
+        rhi::Pipeline*          depth = nullptr; // non-owning; points into m_owned_mat_pipelines
+        rhi::Pipeline*          color = nullptr;
+    };
+
+    MatPipelineEntry& get_or_compile_mat_pipelines(const MaterialInstance& mat);
+
     rhi::Device*              m_device            = nullptr;
     PipelineResolver*         m_resolver          = nullptr;
     rhi::DescriptorAllocator* m_allocator         = nullptr;
@@ -77,6 +91,9 @@ private:
 
     crd::containers::Array<std::unique_ptr<rhi::Buffer>>        m_per_frame_ubos;
     crd::containers::Array<std::unique_ptr<rhi::DescriptorSet>> m_per_frame_sets;
+
+    crd::containers::Array<MatPipelineEntry>                    m_mat_cache;
+    crd::containers::Array<std::unique_ptr<rhi::Pipeline>>      m_owned_mat_pipelines;
 
     std::unique_ptr<rhi::DescriptorSetLayout> m_per_frame_set_layout;
     std::unique_ptr<rhi::PipelineLayout>       m_pipeline_layout;

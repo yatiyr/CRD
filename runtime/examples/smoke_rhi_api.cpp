@@ -109,6 +109,8 @@ public:
                               crd::containers::ConstSpan<crd::rhi::DescriptorSet*> /*sets*/) override
     {
     }
+    void set_viewport(crd::rhi::Extent2D /*extent*/) noexcept override {}
+    void set_scissor(crd::rhi::Rect2D /*rect*/) noexcept override {}
 };
 
 class SmokeSwapchain final : public crd::rhi::Swapchain
@@ -127,6 +129,7 @@ public:
     }
     [[nodiscard]] crd::u32 current_image_index() const noexcept override { return 0; }
     [[nodiscard]] crd::rhi::Image& current_image() noexcept override { return m_image; }
+    void resize(crd::rhi::Extent2D new_extent) noexcept override { m_desc.extent = new_extent; }
 
 private:
     crd::rhi::SwapchainDesc m_desc{};

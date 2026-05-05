@@ -15,9 +15,12 @@ target_link_libraries(crd-sandbox PRIVATE
     crd-log
     crd-math
     crd-meshgen
+    crd-renderer
     crd-rhi
     crd-rhi-vulkan
+    crd-shader
 )
+target_compile_definitions(crd-sandbox PRIVATE CRD_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 crd_enable_default_pch(crd-sandbox)
 
 # Copy imgui config so the sandbox can find it at runtime.

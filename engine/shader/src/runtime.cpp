@@ -54,7 +54,7 @@ namespace
         case SPV_REFLECT_FORMAT_R32G32B32_SFLOAT:
             return crd::rhi::Format::R32G32B32Sfloat;
         case SPV_REFLECT_FORMAT_R32G32B32A32_SFLOAT:
-            return crd::rhi::Format::R8G8B8A8Unorm;
+            return crd::rhi::Format::R32G32B32A32Sfloat;
         default:
             return crd::rhi::Format::Undefined;
     }
@@ -295,6 +295,11 @@ public:
     [[nodiscard]] crd::u64 code_size_bytes() const noexcept override
     {
         return static_cast<crd::u64>(m_words.size() * sizeof(crd::u32));
+    }
+    [[nodiscard]] crd::containers::ConstSpan<crd::u8> code_bytes() const noexcept override
+    {
+        return crd::containers::ConstSpan<crd::u8>(reinterpret_cast<const crd::u8*>(m_words.data()),
+                                                    m_words.size() * sizeof(crd::u32));
     }
     [[nodiscard]] crd::containers::ConstSpan<ParameterDesc> parameters() const noexcept override
     {

@@ -202,6 +202,9 @@ public:
     crd::u32 last_push_size   = 0;
     crd::u32 last_first_set   = 0;
     int last_set_count        = 0;
+
+    void set_viewport(crd::rhi::Extent2D /*extent*/) noexcept override {}
+    void set_scissor(crd::rhi::Rect2D /*rect*/) noexcept override {}
 };
 
 class FakeSwapchain final : public crd::rhi::Swapchain
@@ -221,6 +224,7 @@ public:
     }
     [[nodiscard]] crd::u32 current_image_index() const noexcept override { return 0; }
     [[nodiscard]] crd::rhi::Image& current_image() noexcept override { return m_image; }
+    void resize(crd::rhi::Extent2D new_extent) noexcept override { m_desc.extent = new_extent; }
 
     int acquire_count = 0;
 

@@ -26,11 +26,17 @@ the frame graph, render paths, and material binding live.
 | v1c | `MaterialTemplate` + `MaterialInstance` + `MaterialDomain` + `PassType` + `RasterState` (ADR-0048) | ✅ shipped 2026-05-05 |
 | v1d | `GpuUploader` + `GpuTexture` + `GpuMesh`; RHI `copy_buffer` / `copy_buffer_to_image` / `submit_and_wait` | ✅ shipped 2026-05-05 |
 
-**Phase 2.7 v1c — Material system foundation (resource side)**
+**Phase 2.8 additions**
 
 | Slice | Ships | Status |
 | --- | --- | --- |
-| v1c | `MaterialTemplate` + `MaterialInstance` + `MaterialDomain` + `PassType` + `RasterState` (ADR-0048) | ✅ shipped 2026-05-05 |
+| v1a | Per-material pipeline cache in `ForwardRenderPath` (`m_mat_cache`, `get_or_compile_mat_pipelines()`) | ✅ shipped 2026-05-05 |
+| v1b | Multi-pass shader selection — `PipelineResolver::begin_pass()` default impl; FRP calls before each pass | ✅ shipped 2026-05-05 |
+| v1c | Depth-only prepass pipeline (vertex-only, `Undefined` color); `smoke_depth_prepass.exe` | ✅ shipped 2026-05-05 |
+| v1d | Default lit shaders (`surface.vert`, `surface.frag`); `assets/materials/default_lit.mat.toml` | ✅ shipped 2026-05-05 |
+| v1e | Sandbox 3D rendering via `ForwardRenderPath` + `SandboxPipelineResolver` | ✅ shipped 2026-05-05 |
+| v1f | Demo assets (BoxTextured/Duck/Suzanne GLB + textures) | ⏳ deferred — assets not in repo |
+| v1g | Unified asset browser panel | ⏳ deferred — depends on v1f |
 
 ## Core decisions
 
@@ -245,13 +251,46 @@ Both methods use the staging-buffer pattern: allocate a host-visible (`CpuToGpu`
 - `Queue::submit_and_wait(CommandBuffer&)` — headless submit + `vkQueueWaitIdle`
 - `transition_image` subresource range fix: `VK_REMAINING_MIP_LEVELS` (was hardcoded to 1)
 
+### Per-material pipeline cache (Phase 2.8 v1a–v1c)
+
+`ForwardRenderPath` holds `m_mat_cache` (HashMap keyed by `MaterialTemplate*`) and a list of `m_owned_mat_pipelines` owning all compiled `rhi::Pipeline` objects.
+
+`get_or_compile_mat_pipelines(mat_template)` is called on first encounter of a `MaterialTemplate`:
+- Looks up `pass_shaders[DepthPrepass]` and `pass_shaders[Forward]` on the template.
+- Each `PassShaderPair` holds `ResourceHandle<ShaderResource>` — the loader already resolved these transitive deps.
+- Compiles a **depth-only pipeline** (vertex shader only, `color_format = Undefined`, `depth_format = D32Sfloat`) and a **color pipeline** (vert + frag, `color_format = B8G8R8A8Unorm`, `depth_format = D32Sfloat`).
+- Uses the standard 48-byte interleaved vertex layout (pos/normal/uv0/tangent) for both.
+- `PostProcess` / non-`Surface` domain materials are skipped (no pipeline created).
+- The cache miss on the first draw, cache hit on subsequent frames.
+
+`PipelineResolver::begin_pass(PassType)` (default no-op in the interface) is called by `ForwardRenderPath` before each draw loop:
+- Depth prepass: `m_resolver->begin_pass(PassType::DepthPrepass)` → resolver can switch its internal state.
+- Color pass: `m_resolver->begin_pass(PassType::Forward)`.
+- Material-path items bypass the resolver entirely; legacy items (null material) continue to use it.
+
+### Default lit material (Phase 2.8 v1d)
+
+`engine/renderer/shaders/surface.vert`:
+- Reads the 48-byte interleaved vertex layout at locations 0–3 (pos/normal/uv0/tangent).
+- Push constants: `PerDrawPush { mat4 model; }`.
+- Set 0 binding 0: `PerFrameUbo { mat4 view, proj, view_proj, inv_view_proj; vec4 camera_pos_ws; ... }`.
+- Outputs `VertexAttrs { vec3 position_ws; vec3 normal_ws; vec2 uv0; vec4 tangent_ws; }` to the fragment stage.
+
+`engine/renderer/shaders/surface.frag`:
+- Includes `surface_data.glsl.inc` (shipped Phase 2.7) for the `SurfaceData` + `crd_evaluate_surface()` contract.
+- Implements `crd_evaluate_surface()` with default-lit values: `base_color = vec3(1.0)`, `metallic = 0.0`, `roughness = 1.0`, `emissive = vec3(0.0)`, `occlusion = 1.0`.
+- Lambertian diffuse with a single hardcoded directional light at `vec3(0.5, 1.0, 0.5)` (normalized). Placeholder — real light system in Phase 3.0.
+
+`assets/materials/default_lit.mat.toml` declares `domain = "Surface"`, `alpha_mode = "Opaque"` and references the two shaders.
+
 ## What it does not do yet
 
 - No translucent pass in `ForwardRenderPath` (draws opaque + masked only)
 - No scene graph or ECS (Phase 3)
-- No per-material set 1 binding in `ForwardRenderPath` (Phase 2.8 — `GpuTexture` has no sampler/imageview yet)
+- No per-material set 1 binding in `ForwardRenderPath` (`GpuTexture` has no sampler/imageview yet — Phase 3.0)
 - No GPU instancing (Phase 3.2 — see `docs/debt.md`)
-- No async GPU upload (Phase 2.8+ — v1d uploads are synchronous fence+wait)
+- No async GPU upload (uploads are synchronous fence+wait — Phase 3.4)
+- No demo GLB/PNG assets in repo yet (Phase 2.8 v1f+v1g deferred)
 
 ## Long-term direction
 

@@ -11,20 +11,23 @@
 
 ## Current focus
 
-**Phase 2.7 — Asset import bootstrap. v1a–v1e shipped. Phase 2.7 COMPLETE. Next: Phase 2.8 (material completion: per-material PSO, passes, depth-only prepass).**
+**Phase 2.8 — Material GPU wiring. v1a–v1e SHIPPED 2026-05-05. v1f (demo assets) and v1g (asset browser) deferred — GLB/PNG source assets not in repo. Phase 2.8 functionally complete. Next: Phase 3.0 (scene/ECS).**
 
-Phase 2.7 slices:
-- v1a: `TextureResource` + stb_image texture cooker (RGBA8/BC7, mip gen, TXTR artifact) ✅
-- v1b: `MeshResource` + cgltf glTF import (static meshes, interleaved 48B/vert, MESH artifact) ✅
-- v1c: **Full material system foundation (ADR-0048)** — `MaterialTemplate` + `MaterialInstance` two-tier split; `ParameterType` enum + `CookedParameter` schema; `ShaderOption` system; new MATR v2 artifact format (INFO + PASS chunks; PRMS/DFLT/PSOS/OPTS reserved); `MaterialDomain` enum; `PassType` enum + `RasterState`; cooker rewrite (INFO + PASS, no more META); renames: `MaterialResource`→`MaterialTemplate`, `MaterialLayout`→`MaterialBindLayout`, `MaterialInstance` (transient)→`MaterialBindGroup`; legacy META backward-compat in loader ✅
-- v1d: **GPU upload + interactive sandbox bootstrap** — `GpuUploader` (`upload_texture` → `GpuTexture`, `upload_mesh` → `GpuMesh`, staging-buffer pattern); RHI additions (`copy_buffer`, `copy_buffer_to_image`, `submit_and_wait`, `VK_REMAINING_MIP_LEVELS` fix); `smoke_asset_import.exe` (GPU/window smoke, graceful skip without Vulkan, exits 0); **`crd-sandbox`** (`OrbitCamera` with exponential-lerp smoothing, ImGui info panel, `--headless` CI mode) ✅
-- v1e: **`crd-meshgen`** (CPU-side procedural geometry: plane/box/sphere/icosphere/cylinder/cone/capsule/torus; `smoke_meshgen.exe` headless; 11 unit tests in `tests/meshgen/`) + `crd-sandbox` **Meshgen Browser** panel (lists all 8 shapes with vertex/index/triangle counts) ✅
+Phase 2.8 slices:
+- v1a: Per-material pipeline cache in `ForwardRenderPath` (`m_mat_cache`, keyed by material pointer) ✅
+- v1b: Multi-pass shader selection — `PipelineResolver::begin_pass()` default impl + `ForwardRenderPath` calls it before each pass ✅
+- v1c: Depth-only prepass pipeline (vertex-only, `Format::Undefined` color, `D32Sfloat` depth); `SandboxPipelineResolver` compiles depth + color pipelines lazily; `smoke_depth_prepass.exe` GPU smoke ✅
+- v1d: Default lit material shaders — `engine/renderer/shaders/surface.vert`, `surface.frag`, `assets/materials/default_lit.mat.toml`; standard 48B vertex layout in shaders ✅
+- v1e: Sandbox rendering wired to `ForwardRenderPath` + `SandboxPipelineResolver`; orbit-camera view+projection; mesh upload on shape selection; blit color RT → swapchain; ImGui overlay on top ✅
+- v1f: Demo assets (BoxTextured/Duck/Suzanne GLB + textures) — **DEFERRED** (assets not in repo)
+- v1g: Asset browser panel — **DEFERRED** (depends on v1f)
 
-After Phase 2.7: **Phase 2.8** — GPU-side wiring: per-material Vulkan pipeline cache (PSOS data → VkPipeline), multi-pass `ForwardRenderPath` (PASS chunk → per-pass shader selection), depth-only prepass pipeline. Then Phase 3.0 scene/ECS. See ADR-0044, ADR-0046, ADR-0048.
+RHI additions in this phase: `Format::R32G32B32A32Sfloat` + VkFormat mapping; `Module::code_bytes()` on shader interface + `StoredModule` impl.
+Bugfixes: SPV_REFLECT_FORMAT_R32G32B32A32_SFLOAT was mapped to R8G8B8A8Unorm — corrected.
 
-Full design packet: `docs/phases/phase-2.7-asset-import.md`.
+Full design packet: `docs/phases/phase-2.8-material-completion.md`.
 
-Aktif phase dosyası: `docs/phases/phase-2.7-asset-import.md` (active)
+Aktif phase dosyası: `docs/phases/phase-2.8-material-completion.md` (active)
 
 ## Active detour
 
@@ -37,27 +40,51 @@ _none — running on the main roadmap._
 
 ## Last shipped milestone
 
-**2026-05-05 — Phase 2.7 v1e SHIPPED: `crd-meshgen` + sandbox Meshgen Browser. Phase 2.7 COMPLETE.**
+**2026-05-05 — Phase 2.8 v1a–v1e SHIPPED: per-material pipeline cache + multi-pass + depth prepass + default lit shaders + sandbox 3D rendering.**
 
-New module `engine/meshgen/`: 8 CPU-side procedural geometry generators, each returning a `crd::renderer::MeshResource` with a single `MeshPrimitive`. All use the 48-byte interleaved vertex format (float3 pos + float3 normal + float2 uv0 + float4 tangent, w=+1). Generators: `make_plane` (subdivided quad grid, CCW from +Y), `make_box` (6 separate faces × 4 verts, flat normals), `make_sphere` (UV sphere, lat/lon bands), `make_icosphere` (icosahedron + midpoint-subdivision, `HashMap<u64,u32>` edge-midpoint cache), `make_cylinder` (side quads + top/bottom fans), `make_cone` (side tris + bottom fan), `make_capsule` (hemisphere caps + cylinder body), `make_torus` (major × minor rings).
+Key changes across v1a–v1e:
 
-`smoke_meshgen.exe` (headless): calls all 8 generators, verifies primitive count, vertex/index counts, buffer size consistency (vertex_count × 48 = vertices.size()), and normal unit-length. Exits 0.
+**ForwardRenderPath (`engine/renderer/src/forward_render_path.cpp`):**
+- `get_or_compile_mat_pipelines()` — lazy pipeline cache keyed by `MaterialTemplate*`; compiles depth-only (vertex-only, `Undefined` color, `D32Sfloat` depth) and color (vert+frag, `B8G8R8A8Unorm`) pipelines from `ShaderResource::spirv` directly.
+- `PipelineResolver::begin_pass(PassType)` default no-op added to interface; `ForwardRenderPath` calls `m_resolver->begin_pass()` before each draw loop to inform resolvers of the current pass.
+- Material-path branching: `DrawItem::material != nullptr` uses the compiled cache; legacy items (null material) continue to use the `PipelineResolver`.
 
-11 unit tests in `tests/meshgen/test_meshgen.cpp`: primitives.size()==1, vertex/index counts non-zero, normals unit-length, tangent w=±1, all indices in-range, sphere normals = normalized positions, icosphere vertices on unit sphere, plane subdivision math (4 verts for 1×1 grid, 12 for 2×3), box exactly 24 verts / 36 indices.
+**Renderer (`engine/renderer/`):**
+- `DrawItem::material` + `Renderable::material` fields added (`const MaterialInstance* material = nullptr`).
+- `build_frame()` validation relaxed: accepts `material != nullptr` even when `variant` is invalid; copies material pointer into `DrawItem`.
 
-`crd-sandbox` Meshgen Browser: `SandboxLayer` generates all 8 shapes at startup (local `MallocAllocator tmp`), extracts vertex/index counts into `Array<ShapeInfo>`, displays a fixed-position ImGui "Meshgen Browser" panel with a selectable list of shape names and per-selection stats (verts, indices, tris). `crd-meshgen` added to sandbox link libs; `sandbox/CMakeLists.txt` updated.
+**Shader (`engine/shader/`):**
+- `Module::code_bytes()` pure virtual added to interface; `StoredModule` implements it via word-buffer reinterpret. Required so `SandboxPipelineResolver` can extract SPIR-V bytes from a compiled module without going through the resource system.
 
-Clang-cl fix: `normalize3` helper removed from `meshgen.cpp` anonymous namespace (was unused; triggered `-Werror,-Wunused-function`).
+**RHI (`engine/rhi/`, `engine/rhi-vulkan/`):**
+- `Format::R32G32B32A32Sfloat` added + VkFormat mapping.
+- SPV_REFLECT_FORMAT_R32G32B32A32_SFLOAT was wrongly returning `R8G8B8A8Unorm` — corrected to `R32G32B32A32Sfloat`.
+
+**Default lit shaders (`engine/renderer/shaders/`):**
+- `surface.vert`: reads 48B interleaved vertex (pos/normal/uv0/tangent at locations 0–3); writes `VertexAttrs` (position_ws, normal_ws, uv0, tangent_ws) to fragment.
+- `surface.frag`: implements `crd_evaluate_surface()` with default-lit values; Lambertian diffuse with hardcoded directional light.
+- `assets/materials/default_lit.mat.toml`: domain=Surface, alpha_mode=Opaque.
+
+**Sandbox (`sandbox/src/`):**
+- `SandboxPipelineResolver`: compiles depth + color pipelines lazily from `Module::code_bytes()` on first `resolve_pipeline` call; `begin_pass()` tracks current pass.
+- `SandboxLayer`: holds `ForwardRenderPath`, `GpuMesh`, `Renderer`; `render_scene()` builds camera matrices (local `look_at` + reverse-Z `perspective`), submits legacy-path renderable with `m_surface_variant`, runs frame graph, blits color RT → swapchain (ColorWrite→TransferSrc→blit→TransferDst→ColorWrite).
+- `smoke_depth_prepass.exe`: GPU/window smoke — creates FRP, submits empty draw list, executes one frame, exits 0.
 
 Six-configuration green:
-- win-debug:          468/468
-- win-relwithdebinfo: 468/468
-- win-release:        465/465
-- win-asan:           468/468
-- win-clang-cl:       468/468
+- win-debug:          471/471
+- win-relwithdebinfo: 471/471
+- win-release:        468/468
+- win-asan:           471/471
+- win-clang-cl:       471/471
 - win-tidy:           ✅ (build clean)
 
 ## Previous shipped milestone (-1)
+
+**2026-05-05 — Phase 2.7 v1e SHIPPED: `crd-meshgen` + sandbox Meshgen Browser. Phase 2.7 COMPLETE.**
+
+New module `engine/meshgen/`: 8 CPU-side procedural geometry generators. `smoke_meshgen.exe` headless. 11 unit tests. `crd-sandbox` Meshgen Browser ImGui panel. Six-configuration green (468/468 win-debug).
+
+## Previous shipped milestone (–2)
 
 **2026-05-05 — Phase 2.7 v1c SHIPPED: Full material system foundation (ADR-0048).**
 
@@ -700,15 +727,15 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Next up (next 1–5 sessions)
 
-1. **Phase 2.8** — Material completion: per-material PSO state (RAST chunk) + `MaterialDomain` (DOMN chunk) + pass-keyed variants (PASS chunk) + depth-only prepass pipeline. Closes debt items 2–3. ADRs 0044, 0046.
+1. **Phase 2.8 v1f+v1g** (optional) — Demo assets (BoxTextured/Duck/Suzanne GLB + textures) + unified Asset Browser panel. Currently deferred — source assets not in repo. Can resume when assets are added.
 2. **Phase 3.0** — `crd-scene` / ECS (hybrid hierarchy + SoA + TOML → binary serialization + renderer integration).
 3. **Phase 3.3** — `crd-font` (MTSDF atlas, FreeType+msdfgen cooker, HarfBuzz shaping, billboard text, dynamic atlas, extruded text mesh). ADR-0047.
 
 ## Roadmap ordering
 
 - **Phase 2.6** — `crd-resources` + asset cooker. ✅ COMPLETE (v1a–v1g, 2026-05-04). ADRs 0036–0041.
-- **Phase 2.7** — Asset import bootstrap: `TextureResource` + `MeshResource` + glTF (cgltf) + material params + GPU upload + `crd-meshgen` + `crd-sandbox`. ADRs 0042–0043, 0045.
-- **Phase 2.8** — Material completion: per-material PSO state (RAST chunk) + `MaterialDomain` (DOMN chunk) + pass-keyed variants (PASS chunk) + depth-only prepass. Closes debt items 2–3. ADRs 0044, 0046.
+- **Phase 2.7** — Asset import bootstrap: `TextureResource` + `MeshResource` + glTF (cgltf) + material params + GPU upload + `crd-meshgen` + `crd-sandbox`. ADRs 0042–0043, 0045. ✅ COMPLETE.
+- **Phase 2.8** — Material GPU wiring: per-material pipeline cache, multi-pass shader selection, depth prepass, default lit shaders, sandbox 3D rendering. ADRs 0044, 0046. ✅ v1a–v1e COMPLETE; v1f+v1g deferred.
 - **Phase 3.0** — `crd-scene` / ECS (hybrid hierarchy + SoA components + TOML → binary serialization + renderer integration). Seven sub-ADRs needed before coding. Plugs into `crd-resources` as `SceneLoader`.
 - **Phase 3.1** — Physics (PhysX 5 backend + scene integration + fixed-step + deterministic mode).
 - **Phase 3.2** — Animation (skeletal, blend trees, IK). First rig + skin data in `MeshResource`.
@@ -730,11 +757,11 @@ Full plan: `docs/ROADMAP.md` → `docs/phases/`.
 
 ## Test counts (last quality pass)
 
-- win-debug:          468/468
-- win-relwithdebinfo: 468/468
-- win-release:        465/465
-- win-asan:           468/468
-- win-clang-cl:       468/468
+- win-debug:          471/471
+- win-relwithdebinfo: 471/471
+- win-release:        468/468
+- win-asan:           471/471
+- win-clang-cl:       471/471
 - win-tidy:           ✅ build clean
 
 (win-release is 3 fewer than debug: debug-only `FiberState` tests excluded by `#if CRD_ENABLE_ASSERTS`)
@@ -745,7 +772,7 @@ Agents: don't read everything. Use these breadcrumbs.
 
 - **Hub:** `docs/ROADMAP.md` (small navigation page; safe to read fully)
 - **Principles:** `docs/PRINCIPLES.md` (read every session, short)
-- **Active phase only:** `docs/phases/phase-2.7-asset-import.md` (active); `docs/phases/phase-2.8-material-completion.md` (next); `docs/phases/phase-3.3-font.md` (planned); `docs/phases/phase-2.6-resources.md` (reference; complete)
+- **Active phase only:** `docs/phases/phase-2.8-material-completion.md` (v1a–v1e complete; active); `docs/phases/phase-2.7-asset-import.md` (reference; complete); `docs/phases/phase-2.6-resources.md` (reference; complete)
 - **Other phases:** `docs/phases/phase-<X>.md` (read ONLY when relevant)
 - **Specific decision:** `docs/decisions/<NNNN>-<slug>.md` (find via
   `docs/decisions/README.md` tag index)
@@ -762,6 +789,7 @@ When in doubt, ASK before reading large files.
 
 ## Session log (rolling, last 5)
 
+- **2026-05-05** — Phase 2.8 v1a–v1e SHIPPED: per-material pipeline cache + multi-pass begin_pass() + depth-only prepass pipeline + surface.vert/frag default lit shaders + SandboxPipelineResolver + sandbox render_scene() wired to ForwardRenderPath; Module::code_bytes() + Format::R32G32B32A32Sfloat added; SPV_REFLECT bug fixed; smoke_depth_prepass.exe; [[maybe_unused]] release fixes; all 6 configs green (471/471 win-debug). v1f+v1g deferred.
 - **2026-05-05** — Phase 2.7 trailing items closed: surface_data.glsl.inc (GLSL contract for material shaders); docs/systems/texture_resource.md + mesh_resource.md + meshgen.md; phase-2.7 DoD marked complete; sandbox GPU rendering + demo assets formally deferred to Phase 2.8 (added to phase-2.8 doc).
 - **2026-05-05** — Phase 2.7 v1e SHIPPED: crd-meshgen module (8 generators: plane/box/sphere/icosphere/cylinder/cone/capsule/torus); smoke_meshgen.exe headless; 11 unit tests; crd-sandbox Meshgen Browser ImGui panel (8 shapes, vertex/index/tri counts); clang-cl normalize3 unused-function fix; all 6 configs green (468/468 win-debug). Phase 2.7 COMPLETE.
 - **2026-05-05** — Phase 2.7 v1d SHIPPED: GpuUploader (upload_texture→GpuTexture, upload_mesh→GpuMesh, staging-buffer pattern); RHI additions (copy_buffer, copy_buffer_to_image, submit_and_wait, VK_REMAINING_MIP_LEVELS fix); smoke_asset_import.exe (GPU smoke, graceful skip); crd-sandbox (OrbitCamera exponential-lerp, ImGui panel, --headless); all 6 configs green (457/457 win-debug).

@@ -22,13 +22,11 @@ bool Renderer::build_frame(const FrameContext& ctx, const shader::Runtime& shade
 
     for (const auto& renderable : m_renderables)
     {
-        if (renderable.vertex_buffer == nullptr || renderable.vertex_count == 0 || !renderable.variant.is_valid())
+        if (renderable.vertex_buffer == nullptr || renderable.vertex_count == 0)
+            return false;
+        if (renderable.material == nullptr && !renderable.variant.is_valid())
             return false;
         if (renderable.index_buffer != nullptr && renderable.index_count == 0)
-            return false;
-
-        shader::VariantPipelineDesc handoff;
-        if (!shader_runtime.describe_variant(renderable.variant, handoff))
             return false;
 
         DrawItem item;
@@ -40,8 +38,16 @@ bool Renderer::build_frame(const FrameContext& ctx, const shader::Runtime& shade
         item.index_count   = renderable.index_count;
         item.index_type    = renderable.index_type;
         item.material_instance_id = renderable.material_instance_id;
+        item.material = renderable.material;
         item.variant = renderable.variant;
-        item.handoff = std::move(handoff);
+
+        if (renderable.material == nullptr)
+        {
+            shader::VariantPipelineDesc handoff;
+            if (!shader_runtime.describe_variant(renderable.variant, handoff))
+                return false;
+            item.handoff = std::move(handoff);
+        }
 
         // Squared camera distance: no sqrt, stable sort key, no branch on zero length.
         const crd::math::Vec3f obj_pos{item.model.c3.x, item.model.c3.y, item.model.c3.z};

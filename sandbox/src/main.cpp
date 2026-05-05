@@ -79,7 +79,14 @@ int main(int argc, char** argv)
         CRD_LOG_WARN(g_log_sandbox, "imgui_layer.toml not found — using defaults");
     }
 
-    app.push_layer(std::make_unique<crd::sandbox::SandboxLayer>(app, *swapchain));
+    // SandboxLayer now owns the ForwardRenderPath and shader compilation.
+    auto* sandbox_layer = [&]() -> crd::sandbox::SandboxLayer*
+    {
+        auto layer = std::make_unique<crd::sandbox::SandboxLayer>(app, *device, *swapchain);
+        auto* ptr  = layer.get();
+        app.push_layer(std::move(layer));
+        return ptr;
+    }();
 
     auto* imgui = [&]() -> crd::imgui::ImGuiLayer*
     {
@@ -103,22 +110,26 @@ int main(int argc, char** argv)
 
         if (!swapchain->acquire_next_image())
         {
-            break;
+            continue; // swapchain out-of-date or minimized — on_event will resize before next acquire
         }
 
         auto& cmd = *cmds[frame % kFramesInFlight];
         cmd.begin();
-        cmd.transition_image(swapchain->current_image(),
-                             crd::rhi::ImageAccess::Undefined, crd::rhi::ImageAccess::ColorWrite);
+
+        // 3D scene: ForwardRenderPath → blit to swapchain (leaves it in ColorWrite).
+        sandbox_layer->render_scene(cmd, swapchain->current_image(), frame);
+
+        // ImGui renders on top of the 3D output.
         cmd.begin_rendering({
             .extent           = {swapchain->desc().extent.width, swapchain->desc().extent.height},
             .color_attachment = {.image     = &swapchain->current_image(),
-                                 .load_op   = crd::rhi::LoadOp::Clear,
+                                 .load_op   = crd::rhi::LoadOp::Load,
                                  .store_op  = crd::rhi::StoreOp::Store,
-                                 .clear_color = {0.10F, 0.11F, 0.15F, 1.0F}},
+                                 .clear_color = {}},
         });
         imgui->render(cmd);
         cmd.end_rendering();
+
         cmd.transition_image(swapchain->current_image(),
                              crd::rhi::ImageAccess::ColorWrite, crd::rhi::ImageAccess::Present);
         cmd.end();

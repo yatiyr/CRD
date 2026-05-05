@@ -2,6 +2,8 @@
 
 #include <crd/math/vec.hpp>
 
+#include <cmath>
+
 namespace crd::math
 {
 template <MathScalar T> struct Mat2
@@ -242,6 +244,37 @@ template <MathScalar T> [[nodiscard]] constexpr Mat4<T> inverse(const Mat4<T>& m
     const T det = m.c0.x * i0.x + m.c0.y * i1.x + m.c0.z * i2.x + m.c0.w * i3.x;
     const T inv_det = static_cast<T>(1) / det;
     return Mat4<T>(i0 * inv_det, i1 * inv_det, i2 * inv_det, i3 * inv_det);
+}
+
+// Right-handed view matrix from eye position, target, and up hint.
+template <MathScalar T>
+[[nodiscard]] inline Mat4<T> look_at(const Vec3<T>& eye, const Vec3<T>& target, const Vec3<T>& up_hint) noexcept
+{
+    const Vec3<T> f = normalized(target - eye);
+    const Vec3<T> r = normalized(cross(f, up_hint));
+    const Vec3<T> u = cross(r, f);
+    Mat4<T> view    = Mat4<T>::identity();
+    view.c0.x =  r.x; view.c1.x =  r.y; view.c2.x =  r.z;
+    view.c0.y =  u.x; view.c1.y =  u.y; view.c2.y =  u.z;
+    view.c0.z = -f.x; view.c1.z = -f.y; view.c2.z = -f.z;
+    view.c3.x = -dot(r, eye);
+    view.c3.y = -dot(u, eye);
+    view.c3.z =  dot(f, eye);
+    return view;
+}
+
+// Infinite-far reverse-Z perspective with Vulkan clip-space Y flip.
+// z_near maps to NDC z=1; infinity maps to NDC z=0.
+template <MathScalar T>
+[[nodiscard]] inline Mat4<T> perspective_reverse_z(T fov_y_rad, T aspect, T z_near) noexcept
+{
+    const T tan_half = std::tan(fov_y_rad * static_cast<T>(0.5));
+    Mat4<T> p{};
+    p.c0.x = static_cast<T>(1) / (aspect * tan_half);
+    p.c1.y = -static_cast<T>(1) / tan_half;
+    p.c2.w = -static_cast<T>(1);
+    p.c3.z = z_near;
+    return p;
 }
 
 using Mat2f = Mat2<crd::f32>;

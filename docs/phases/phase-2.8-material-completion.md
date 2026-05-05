@@ -1,6 +1,6 @@
 # Phase 2.8 — Material GPU Wiring + Depth Prepass + Sandbox Rendering
 
-**Status:** ⏳ planned — begins after Phase 2.7 COMPLETE (v1a–v1e shipped 2026-05-05)
+**Status:** ✅ v1a–v1e SHIPPED 2026-05-05. v1f+v1g DEFERRED (source GLB/PNG assets not in repo).
 **ADRs:** ADR-0044 (phase ordering decision), ADR-0048 (material system architecture — artifact format done in Phase 2.7 v1c)
 **New modules:** none — extends `crd-renderer` and `crd-sandbox` only
 **Depends on:** Phase 2.7 complete (TextureResource, MeshResource, MaterialTemplate with full MATR format, GpuUploader, crd-meshgen)

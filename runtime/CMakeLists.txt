@@ -362,3 +362,17 @@ target_link_libraries(smoke_asset_import PRIVATE
     crd-renderer
 )
 crd_enable_default_pch(smoke_asset_import)
+
+add_executable(smoke_depth_prepass
+    examples/smoke_depth_prepass.cpp
+)
+
+target_link_libraries(smoke_depth_prepass PRIVATE
+    crd-core
+    crd-log
+    crd-memory
+    crd-rhi
+    crd-rhi-vulkan
+    crd-renderer
+)
+crd_enable_default_pch(smoke_depth_prepass)

@@ -7,10 +7,13 @@
 #include <crd/rhi/buffer.hpp>
 #include <crd/rhi/pipeline.hpp>
 #include <crd/rhi/types.hpp>
+#include <crd/renderer/pass_type.hpp>
 #include <crd/shader/runtime.hpp>
 
 namespace crd::renderer
 {
+
+class MaterialInstance;
 
 struct Camera
 {
@@ -47,6 +50,7 @@ struct Renderable
     crd::u32            index_count   = 0;
     crd::rhi::IndexType index_type    = crd::rhi::IndexType::Uint32;
     crd::u64 material_instance_id = 0;
+    const MaterialInstance* material = nullptr;
     crd::shader::VariantHandle variant{};
     DrawBucket bucket = DrawBucket::Opaque;
 };
@@ -61,6 +65,7 @@ struct DrawItem
     crd::u32            index_count   = 0;
     crd::rhi::IndexType index_type    = crd::rhi::IndexType::Uint32;
     crd::u64 material_instance_id = 0;
+    const MaterialInstance* material = nullptr;
     crd::shader::VariantHandle variant{};
     crd::shader::VariantPipelineDesc handoff{};
     crd::f32 depth = 0.0F; // squared camera distance; populated by build_frame for sorting
@@ -99,6 +104,7 @@ class PipelineResolver
 {
 public:
     virtual ~PipelineResolver() = default;
+    virtual void begin_pass(PassType /*pass*/) noexcept {}
     [[nodiscard]] virtual crd::rhi::Pipeline*
     resolve_pipeline(const crd::shader::VariantPipelineDesc& handoff) noexcept = 0;
 };

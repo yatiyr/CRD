@@ -457,6 +457,40 @@ TEST_CASE("Ray intersections cover plane sphere and triangle", "[math][geom][ray
     REQUIRE_FALSE(intersect_ray_triangle(parallel, tri, t, bary));
 }
 
+TEST_CASE("look_at produces a correct right-handed view matrix", "[math][mat]")
+{
+    // Camera on the +Z axis looking at the origin — should produce a pure -Z translation.
+    const Vec3f eye{0.0F, 0.0F, 5.0F};
+    const Vec3f target{0.0F, 0.0F, 0.0F};
+    const Vec3f up{0.0F, 1.0F, 0.0F};
+    const Mat4f view = look_at(eye, target, up);
+
+    require_mat4_close(view,
+        Mat4f(Vec4f(1.0F, 0.0F, 0.0F, 0.0F),
+              Vec4f(0.0F, 1.0F, 0.0F, 0.0F),
+              Vec4f(0.0F, 0.0F, 1.0F, 0.0F),
+              Vec4f(0.0F, 0.0F, -5.0F, 1.0F)),
+        1.0e-5F);
+
+    // View matrix must map the eye to the origin.
+    require_vec4_close(view * Vec4f(eye, 1.0F), Vec4f(0.0F, 0.0F, 0.0F, 1.0F), 1.0e-5F);
+}
+
+TEST_CASE("perspective_reverse_z maps z_near to NDC 1 and infinity to NDC 0", "[math][mat]")
+{
+    // 90-degree fov, square aspect: tan(45deg)=1, so scale_x=1, scale_y=-1.
+    const Mat4f p = perspective_reverse_z(k_half_pi_f, 1.0F, 1.0F);
+    REQUIRE(p.c0.x == Catch::Approx(1.0F));
+    REQUIRE(p.c1.y == Catch::Approx(-1.0F));
+    REQUIRE(p.c2.w == Catch::Approx(-1.0F));
+    REQUIRE(p.c3.z == Catch::Approx(1.0F));
+
+    // A point at view-space z=-z_near should produce clip w=z_near, clip z=z_near (NDC z=1).
+    const Vec4f clip = p * Vec4f(0.0F, 0.0F, -1.0F, 1.0F);
+    REQUIRE(clip.z == Catch::Approx(1.0F));
+    REQUIRE(clip.w == Catch::Approx(1.0F));
+}
+
 TEST_CASE("Frustum extraction and containment work for canonical clip volume", "[math][geom][frustum]")
 {
     const Frustumf frustum = frustum_from_view_projection(Mat4f::identity());
