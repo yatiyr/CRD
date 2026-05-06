@@ -11,7 +11,34 @@
 
 ## Current focus
 
-**Phase 2.8 — Material GPU wiring. v1a–v1e SHIPPED 2026-05-05. v1f (demo assets) and v1g (asset browser) deferred — GLB/PNG source assets not in repo. Phase 2.8 functionally complete. Next: Phase 3.0 (scene/ECS).**
+**Phase 3.0 — Scene/ECS foundation. v1a SHIPPED 2026-05-06 (`crd-scene` skeleton: EntityId + SlotMap + World). 13 slices remaining. Next: v1b — `ComponentRegistry` + `IStorageBackend` interface + storage-hint registration grammar (ADRs 0050, 0053, 0056).**
+
+The architecture is the **eight-layer slot-shaped ECS** designed for million-entity scenes, agents-as-components-with-scripts, UI on the same machinery (game and editor), with every novel ECS extension as a registered slot:
+
+```
+L8 Reflection / Editor          (Phase 7)        — API reserved
+L7 Scripting & Behaviors        (Phase 4.0+)     — API reserved
+L6 Replication / Networking     (Phase 4.2)      — API reserved
+L5 Indexes                       (Phase 3.0+)
+   ChangeDetect, AsyncAware                       — ship in 3.0
+   History, SpatialBVH, GpuResident               — API only in 3.0
+L4 Query · System · Schedule    (Phase 3.0)
+L3 Relations                     (Phase 3.0)
+L2 Storage backends              (Phase 3.0)
+   ArchetypeChunk + SparseSet hybrid
+L1 Entity / SlotMap              (Phase 3.0)
+L0 Memory · Containers · Jobs    (already shipped)
+```
+
+Cerid signature: a uniform `IComponentIndex` extension framework where every novel ECS extension (history, change detect, spatial, GPU-mirror, async, replication, scripts, reflection) is a registered slot consuming the same component-lifecycle event stream. Adding the next extension is a one-day job.
+
+Slices: ~~v1a (Entity+SlotMap)~~ ✅ → **v1b (registry)** ← active → v1c (Archetype storage) → v1d (SparseSet storage) → v1e (mixed-backend chunk visitor) → v1f (relations) → v1g (query DSL) → v1h (system+schedule) → v1i (index framework + ChangeDetect + AsyncAware) → v1j (Transform + propagation) → v1k (SceneResource+Loader) → v1l (cook_scene cooker handler) → v1m (sandbox renderer integration) → v1n (reserved-slot freeze).
+
+Active phase doc: `docs/phases/phase-3.0-scene-ecs.md`.
+
+## Previous focus (closed)
+
+**Phase 2.8 — Material GPU wiring + sandbox rendering + asset import. ALL SLICES SHIPPED 2026-05-06. Phase 2.8 COMPLETE.**
 
 Phase 2.8 slices:
 - v1a: Per-material pipeline cache in `ForwardRenderPath` (`m_mat_cache`, keyed by material pointer) ✅
@@ -19,8 +46,10 @@ Phase 2.8 slices:
 - v1c: Depth-only prepass pipeline (vertex-only, `Format::Undefined` color, `D32Sfloat` depth); `SandboxPipelineResolver` compiles depth + color pipelines lazily; `smoke_depth_prepass.exe` GPU smoke ✅
 - v1d: Default lit material shaders — `engine/renderer/shaders/surface.vert`, `surface.frag`, `assets/materials/default_lit.mat.toml`; standard 48B vertex layout in shaders ✅
 - v1e: Sandbox rendering wired to `ForwardRenderPath` + `SandboxPipelineResolver`; orbit-camera view+projection; mesh upload on shape selection; blit color RT → swapchain; ImGui overlay on top ✅
-- v1f: Demo assets (BoxTextured/Duck/Suzanne GLB + textures) — **DEFERRED** (assets not in repo)
-- v1g: Asset browser panel — **DEFERRED** (depends on v1f)
+- v1f: Demo glTF assets (BoxTextured CC-BY, Duck SCEA, BoomBox CC0) + checker_512/bricks_512 procedural PNGs (CC0) under `assets/source/`; `cook-demo-assets` CMake target produces `assets/cooked/demo_assets.crdr` (5 entries); `LICENSES.md` ✅
+- v1g: Unified `Asset Browser` ImGui panel — replaces Meshgen Browser; "Procedural Shapes" + "Imported Assets" collapsing sections; click swaps mesh; `SandboxLayer` mounts the cooked pack via `ResourceManager` and `load_sync<MeshResource>` for imports ✅
+
+Bug fix landed alongside v1f/v1g: device-destroy crash on application close — `Application::detach_all_layers()` was leaving layer instances alive in `m_owned_layers`, so layer destructors (which free GPU resources) ran during `~Application` *after* the `Device` local in `main` had been destroyed. Fixed by clearing `m_owned_layers` inside `detach_all_layers()`, and re-ordering `sandbox/src/main.cpp` so `device->wait_idle()` precedes `app.detach_all_layers()`. Same fix applied to `runtime/examples/smoke_imgui_overlay.cpp`.
 
 RHI additions in this phase: `Format::R32G32B32A32Sfloat` + VkFormat mapping; `Module::code_bytes()` on shader interface + `StoredModule` impl.
 Bugfixes: SPV_REFLECT_FORMAT_R32G32B32A32_SFLOAT was mapped to R8G8B8A8Unorm — corrected.
@@ -39,6 +68,139 @@ _none — running on the main roadmap._
 > `docs/detours/README.md`.
 
 ## Last shipped milestone
+
+**2026-05-06 — Phase 3.0 v1a SHIPPED: `crd-scene` module bootstrapped (EntityId + SlotMap + World shell).**
+
+New module `engine/scene/` (`crd-scene`), depends on `crd-core` + `crd-containers` + `crd-memory`.
+
+API surface (per ADR-0049):
+- `crd::scene::EntityId` — 64-bit `[generation:32 | index:32]`, trivially copyable, default-zero is `null()`. `index()`, `generation()`, `is_null()`, `make(idx, gen)`, `null()`. `static_assert(sizeof == 8)`.
+- `crd::scene::Slot` — `{ u32 generation; u32 next_free; bool alive; }`. Slot 0 reserved permanently as null sentinel.
+- `crd::scene::SlotMap` — owns `Array<Slot>` + free-list head + alive count. `allocate()` (O(1)), `free()` (O(1), bumps generation), `is_alive()`, `alive_count()`, `slot_count()`, `begin()`/`end()` iterator that yields alive entities only and skips holes.
+- `crd::scene::World` — wraps `SlotMap` + `Array<EntityId> m_pending_destroy`. `spawn()`, `destroy(e)` (deferred), `destroy_immediate(e)` (synchronous), `flush_destroys()` (drain queue, skip stale handles), `is_alive()`, `entity_count()`, `pending_destroy_count()`, range-for over alive entities.
+
+Two minor divergences from ADR-0049 (defensible, called out for the next reader):
+- §5 says `CRD_VERIFY` traps on generation overflow; impl instead silently bumps `0 → 1` in `SlotMap::free` to keep generation 0 reserved as the dead-slot sentinel value. The alive bit prevents handle resurrection within the same frame anyway.
+- §4 commentary says `actually_free_slot` asserts on stale handle; impl makes `World::destroy_immediate(e)` lenient (no-op when `!is_alive(e)`) so double-destroy across the deferred queue + immediate path is safe. Pinned by test `destroy_immediate of stale handle is a no-op`.
+
+Tests added (`tests/scene/`, +22 cases, +3448 assertions):
+- `test_entity.cpp` (5): default null, `make` round-trip across u32 boundaries, equality/inequality, `is_null` semantics, trivial-copy + 8-byte size invariants.
+- `test_slot_map.cpp` (9): fresh map empty, allocate-never-zero, generation collision after free, free-list LIFO reuse, multi-step alloc/free order, mixed alloc/free stress (1000 ops, deterministic seed), iterator skips holes, slot-0 sentinel never alive, out-of-range index dead.
+- `test_world.cpp` (8): empty world, spawn/alive, destroy-is-deferred, flush drains all queued, `destroy_immediate` synchronous, lenient stale `destroy_immediate`, double-destroy across flush, iteration after destroy/flush.
+
+Six-configuration green:
+- win-debug:          503/503  (was 481, +22 new)
+- win-relwithdebinfo: 503/503
+- win-release:        500/500  (was 478, +22 new)
+- win-asan:           503/503  (DLL PATH fix applied as documented)
+- win-clang-cl:       503/503
+- win-tidy:           ✅ build clean (no clang-tidy warnings or errors)
+
+All 17 headless smokes pass on every non-tidy config.
+
+## Previous shipped milestone
+
+**2026-05-06 — Phase 3.0 architecture locked: nine ADRs accepted, 14 slices planned.**
+
+ADRs accepted (in `Accepted` status under `docs/decisions/`):
+- ADR-0049 — L1 Entity identity & SlotMap (32:32 EntityId, dense slot map, deferred destroy)
+- ADR-0050 — L2 Storage backends (ArchetypeChunk + SparseSet hybrid behind `IStorageBackend`)
+- ADR-0051 — L3 Relations as first-class (`Relation<Tag>` with ChildOf/AttachedTo/generic)
+- ADR-0052 — L4 Query · System · Schedule (composable DSL, ISystem with Reads/Writes, phase scheduler, command buffers)
+- ADR-0053 — L5 Component index slot framework (`IComponentIndex`, ChangeDetect+AsyncAware ship; History/SpatialBVH/GpuResident API only)
+- ADR-0054 — Transform hierarchy update (TRS authored, world cached, push dirty propagation, single-thread serial v1)
+- ADR-0055 — Scene serialization (TOML authoring → SCEN CRDR cooked; closes ADR-0020's FlatBuffers vs Cap'n Proto deferral with "neither — CRDR")
+- ADR-0056 — L6–L8 reserved slots (Replication, Scripts, Reflection — registration grammar accepts traits, impls defer to 4.2 / 4.0 / 7)
+- ADR-0057 — UI in scene tree boundary (`ControlNodeTag` reserved, all UI components live in `crd-ui`)
+
+Also updated:
+- `docs/phases/phase-3.0-scene-ecs.md` — rewritten around the 8-layer architecture and 14 slices, with explicit "ships now / API only" matrix per layer
+- `docs/decisions/README.md` — ADR index extended with 9 new entries
+- `docs/ROADMAP.md` — Phase 2.8 marked shipped; Phase 3.0 row added with link to architecture
+
+## Previous shipped milestone
+
+**2026-05-06 — `crd-math` interpolation primitives + Penner easing curves shipped.**
+
+`crd-math/scalar.hpp` extended with the standard interpolation family:
+- `lerp(a, b, t)`, `mix(a, b, t)` (GLSL alias), `saturate(x)`, `step(edge, x)`
+- `smoothstep(e0, e1, x)` (Hermite C¹), `smootherstep(e0, e1, x)` (Perlin C²)
+- `inverse_lerp(a, b, x)`, `remap(x, ia, ib, oa, ob)`
+- `damp(a, b, lambda, dt)` — frame-rate-independent exponential approach
+
+`crd-math/vec.hpp` extended:
+- `lerp` for `Vec2/3/4` already existed; added `mix` aliases and `damp` componentwise overloads.
+
+New header `crd-math/easing.hpp` — full Penner easing family (31 functions), all `T t ∈ [0,1] → T`:
+- `ease_linear`
+- `ease_in_*` / `ease_out_*` / `ease_in_out_*` for: Sine, Quad, Cubic, Quart, Quint, Expo, Circ, Back, Elastic, Bounce.
+- Polynomial families (Quad/Cubic/Quart/Quint, Back, Bounce, Linear) are `constexpr noexcept`. Trig/exp families (Sine, Expo, Circ, Elastic) are `inline noexcept` (C++20 doesn't make `<cmath>` `constexpr` yet — moves to constexpr automatically when we adopt C++26).
+- Curves are decoupled from value type: combine with `lerp` at the call site, e.g. `lerp(a, b, ease_out_cubic(t))`. No `Tween` class, no `EasingChannel`, no animation runtime.
+
+`crd-math/math.hpp` umbrella includes `easing.hpp`.
+
+Sandbox migration:
+- Removed file-local `exp_lerp` / `exp_lerp3` helpers from `sandbox_layer.cpp`.
+- `OrbitCamera` smoothing now uses `crd::math::damp` for both scalar (`s_dist`) and vector (`s_target`) channels.
+
+Tests added (`tests/math/test_math.cpp`, +8 cases):
+- scalar lerp/mix/saturate/step/inverse_lerp/remap with extrapolation past `t > 1`.
+- smoothstep / smootherstep boundary saturation, midpoint exactness, monotonicity over 33 sample points.
+- `damp` identity at `dt = 0`, convergence at large `dt`, frame-rate-stability cross-check (60 ticks at `dt = 1/60` ≈ 1 tick at `dt = 1`).
+- Vec3 lerp / mix / damp componentwise.
+- All 31 easings: `f(0) ≈ 0` and `f(1) ≈ 1` boundary anchors.
+- In/Out reflection identity for the strictly monotone families.
+- Monotone non-decreasing on [0,1] for Sine/Quad/Cubic/Quart/Quint/Circ/Expo (sampling 65 points each).
+- Back undershoot, Elastic overshoot, Bounce stays in [0, 1].
+
+Six-configuration green:
+- win-debug:          481/481
+- win-relwithdebinfo: 481/481
+- win-release:        478/478
+- win-asan:           481/481
+- win-clang-cl:       481/481
+- win-tidy:           ✅ (build clean)
+
+## Previous shipped milestone
+
+**2026-05-06 — Phase 2.8 v1f + v1g SHIPPED: glTF demo asset bundle + cook-demo-assets target + unified Asset Browser panel; device-destroy crash fix. Phase 2.8 COMPLETE.**
+
+Source asset bundle (`assets/source/`):
+- `BoxTextured.glb` (5 KB, CC-BY 4.0, Cesium/Khronos),
+- `Duck.glb` (118 KB, SCEA Shared Source 1.0, Sony/Khronos),
+- `BoomBox.glb` (10 MB, CC0, UX3D/Khronos),
+- `checker_512.png` + `bricks_512.png` (procedural CC0, generated by `generate_textures.ps1`),
+- `LICENSES.md` documenting per-file license terms.
+
+`cook-demo-assets` CMake target (`sandbox/CMakeLists.txt`):
+- `add_custom_command(OUTPUT demo_assets.crdr COMMAND $<TARGET_FILE:asset_cooker> cook ...)` with explicit DEPENDS on each source file — recooks on source change.
+- `crd-sandbox` adds `add_dependencies(crd-sandbox cook-demo-assets)` so building sandbox triggers a cook; `CRD_DEMO_ASSETS_PACK` compile def points sandbox to the cooked pack.
+- Verified output: 5 manifest entries (3 MESH + 2 TXTR), stable UUIDs across re-cooks.
+
+`Asset Browser` panel (`sandbox/src/sandbox_layer.cpp`):
+- Replaces former "Meshgen Browser". Two collapsing sections: **Procedural Shapes** (8 meshgen entries) and **Imported Assets** (3 glTF entries when the pack is mounted).
+- `SandboxLayer` owns a `ResourceManager`; mounts `CRD_DEMO_ASSETS_PACK` and registers `MeshResourceLoader`. Reads each `<file>.glb.meta` sidecar to recover the cooker-minted UUID.
+- Click an imported entry → `load_sync<MeshResource>` → `GpuUploader::upload_mesh()` → swap. Per-selection metadata: vertex count, index count, triangle count, source ("Procedural" or "glTF").
+- Graceful fallback: missing pack / missing meta sidecar / UUID-not-in-pack each log a warning and hide the affected entry rather than aborting.
+
+Crash fix:
+- `Application::detach_all_layers()` now clears `m_owned_layers` — previously it cleared the stack but kept the unique_ptrs alive. Their destructors ran during `~Application` *after* the `Device` local in `main` had been destroyed, producing a use-after-free during VK destroy calls in layer dtors.
+- `sandbox/src/main.cpp` reordered: `device->wait_idle()` is now called *before* `app.detach_all_layers()` (was the other way around). `smoke_imgui_overlay.cpp` reordered identically.
+
+Other API changes:
+- `GpuUploader::upload_texture` and `upload_mesh` now take `const&` (was non-const&). Required so `load_sync<T>::handle.get()` (returns `const T*`) can be passed directly. No behavioural change — both functions only read the CPU resource.
+
+Six-configuration green:
+- win-debug:          473/473
+- win-relwithdebinfo: 473/473
+- win-release:        470/470
+- win-asan:           473/473
+- win-clang-cl:       473/473
+- win-tidy:           ✅ (build clean)
+
+Headless smokes (17/17 across all five non-tidy configs): `smoke_config`, `smoke_containers`, `smoke_filesystem`, `smoke_frame_clock`, `smoke_jobs`, `smoke_log`, `smoke_math`, `smoke_memory`, `smoke_shader`, `smoke_resources`, `smoke_resources_async`, `smoke_resources_reload`, `smoke_resources_stream`, `smoke_resources_render`, `smoke_texture`, `smoke_mesh`, `smoke_material`. `crd-sandbox --headless` exits 0 with the demo pack mounted (5 entries, mount_id=1).
+
+## Previous shipped milestone
 
 **2026-05-05 — Phase 2.8 v1a–v1e SHIPPED: per-material pipeline cache + multi-pass + depth prepass + default lit shaders + sandbox 3D rendering.**
 
@@ -727,15 +889,20 @@ Detail: `docs/sessions/2026-04-28-rhi-vulkan-first-triangle.md`.
 
 ## Next up (next 1–5 sessions)
 
-1. **Phase 2.8 v1f+v1g** (optional) — Demo assets (BoxTextured/Duck/Suzanne GLB + textures) + unified Asset Browser panel. Currently deferred — source assets not in repo. Can resume when assets are added.
-2. **Phase 3.0** — `crd-scene` / ECS (hybrid hierarchy + SoA + TOML → binary serialization + renderer integration).
-3. **Phase 3.3** — `crd-font` (MTSDF atlas, FreeType+msdfgen cooker, HarfBuzz shaping, billboard text, dynamic atlas, extruded text mesh). ADR-0047.
+1. **Phase 3.0 v1a** — `EntityId` + `SlotMap` + `World` shell. Locked design (ADR-0049). ~250 LOC + tests.
+2. **Phase 3.0 v1b** — `ComponentRegistry` + `register_component` variadic-trait grammar. ~200 LOC + tests.
+3. **Phase 3.0 v1c** — `ArchetypeChunkStorage`. ~600 LOC + tests. Largest slice; may sub-divide into v1c1 (chunk allocator + SoA layout) and v1c2 (archetype graph + entity move).
+4. **Phase 3.0 v1d** — `SparseSetStorage`. ~250 LOC + tests.
+5. **Phase 3.0 v1e** — Mixed-backend chunk visitor. ~200 LOC + tests.
+
+After v1e the foundation is in place; v1f (Relations) → v1g (Query DSL) → v1h (System+Schedule) → v1i (Index framework + ChangeDetect + AsyncAware) → v1j (Transform + propagation) → v1k (SceneResource + Loader) → v1l (cook_scene handler) → v1m (sandbox renderer integration) → v1n (reserved-slot freeze) follow in order.
 
 ## Roadmap ordering
 
 - **Phase 2.6** — `crd-resources` + asset cooker. ✅ COMPLETE (v1a–v1g, 2026-05-04). ADRs 0036–0041.
 - **Phase 2.7** — Asset import bootstrap: `TextureResource` + `MeshResource` + glTF (cgltf) + material params + GPU upload + `crd-meshgen` + `crd-sandbox`. ADRs 0042–0043, 0045. ✅ COMPLETE.
-- **Phase 2.8** — Material GPU wiring: per-material pipeline cache, multi-pass shader selection, depth prepass, default lit shaders, sandbox 3D rendering. ADRs 0044, 0046. ✅ v1a–v1e COMPLETE; v1f+v1g deferred.
+- **Phase 2.8** — Material GPU wiring + sandbox rendering + asset import: per-material pipeline cache, multi-pass shader selection, depth prepass, default lit shaders, sandbox 3D rendering, glTF demo assets, cook-demo-assets target, unified Asset Browser. ADRs 0044, 0046. ✅ COMPLETE (v1a–v1g, 2026-05-06).
+- **Phase 3.0** — Scene/ECS foundation: 8-layer slot-shaped architecture (Entity → Storage hybrid → Relations → Query/System/Schedule → Index framework → reserved L6–L8). 14 slices. Cerid signature: every novel ECS extension rides the L5 index framework. ADRs 0049–0057 locked 2026-05-06. **Architecture ready, awaiting user start command.**
 - **Phase 3.0** — `crd-scene` / ECS (hybrid hierarchy + SoA components + TOML → binary serialization + renderer integration). Seven sub-ADRs needed before coding. Plugs into `crd-resources` as `SceneLoader`.
 - **Phase 3.1** — Physics (PhysX 5 backend + scene integration + fixed-step + deterministic mode).
 - **Phase 3.2** — Animation (skeletal, blend trees, IK). First rig + skin data in `MeshResource`.
@@ -757,11 +924,11 @@ Full plan: `docs/ROADMAP.md` → `docs/phases/`.
 
 ## Test counts (last quality pass)
 
-- win-debug:          471/471
-- win-relwithdebinfo: 471/471
-- win-release:        468/468
-- win-asan:           471/471
-- win-clang-cl:       471/471
+- win-debug:          481/481
+- win-relwithdebinfo: 481/481
+- win-release:        478/478
+- win-asan:           481/481
+- win-clang-cl:       481/481
 - win-tidy:           ✅ build clean
 
 (win-release is 3 fewer than debug: debug-only `FiberState` tests excluded by `#if CRD_ENABLE_ASSERTS`)
@@ -789,6 +956,10 @@ When in doubt, ASK before reading large files.
 
 ## Session log (rolling, last 5)
 
+- **2026-05-06** — Phase 3.0 architecture locked. Nine ADRs accepted (0049–0057): Entity & SlotMap, Storage backends (Archetype + SparseSet hybrid), Relations as first-class, Query/System/Schedule, Component index slot framework, Transform hierarchy update, Scene serialization (TOML + SCEN CRDR — closes ADR-0020's FlatBuffers/Cap'n Proto deferral), Reserved L6–L8 slots, UI-in-tree boundary. Phase 3.0 doc rewritten around 8-layer architecture and 14 slices. ADR index + ROADMAP updated. Ready to start v1a on user command.
+- **2026-05-06** — Sandbox async asset load: `load_sync<MeshResource>` swapped for `load_async` + per-frame `is_ready()` polling on `SandboxLayer`; pending-handle state (`m_pending_load`, `m_pending_index`) added; selection re-click is a no-op while same id is in flight; "Status: loading…" appears in the metadata pane until Ready; clicking a procedural shape mid-load drops the pending import. Shutdown order in sandbox/main.cpp updated to drain `jobs::shutdown()` *before* `app.detach_all_layers()` (ResourceManager outlives in-flight load jobs). GPU upload (`GpuUploader::upload_mesh`) still synchronous — the remaining hitch — formally tracked in `docs/debt.md` and pulled forward as a Phase 3.0 prerequisite (`docs/phases/phase-3.0-scene-ecs.md`). All 6 configs green (481/481 win-debug, 478/478 release).
+- **2026-05-06** — `crd-math` interpolation primitives + Penner easings shipped: scalar lerp/mix/saturate/step/smoothstep/smootherstep/inverse_lerp/remap/damp added to scalar.hpp; mix + damp componentwise added to vec.hpp; new easing.hpp with 31 Penner curves (Linear + In/Out/InOut for Sine/Quad/Cubic/Quart/Quint/Expo/Circ/Back/Elastic/Bounce); sandbox `OrbitCamera` migrated to `crd::math::damp`; 8 new tests; all 6 configs green (481/481 win-debug, 478/478 release).
+- **2026-05-06** — Phase 2.8 v1f+v1g SHIPPED: glTF demo asset bundle (BoxTextured CC-BY, Duck SCEA, BoomBox CC0) + procedural CC0 PNGs (checker_512, bricks_512); `cook-demo-assets` CMake target → `assets/cooked/demo_assets.crdr` (5 entries); unified Asset Browser ImGui panel (replaces Meshgen Browser, two collapsing sections, click-to-load via `ResourceManager::load_sync<MeshResource>`); device-destroy crash fix in `Application::detach_all_layers()` + sandbox/main.cpp shutdown reorder; `GpuUploader` taken from non-const& to const&; cooker `.meta.meta` chain-growth bug fixed (`scan_recursive` now filters via `name.ends_with(".meta")`, not first-dot extension); cooker no longer writes `.meta` sidecars for handler-less files (handler lookup moved before sidecar resolution); all 6 configs green (473/473 win-debug, 470/470 release). Phase 2.8 COMPLETE.
 - **2026-05-05** — Phase 2.8 v1a–v1e SHIPPED: per-material pipeline cache + multi-pass begin_pass() + depth-only prepass pipeline + surface.vert/frag default lit shaders + SandboxPipelineResolver + sandbox render_scene() wired to ForwardRenderPath; Module::code_bytes() + Format::R32G32B32A32Sfloat added; SPV_REFLECT bug fixed; smoke_depth_prepass.exe; [[maybe_unused]] release fixes; all 6 configs green (471/471 win-debug). v1f+v1g deferred.
 - **2026-05-05** — Phase 2.7 trailing items closed: surface_data.glsl.inc (GLSL contract for material shaders); docs/systems/texture_resource.md + mesh_resource.md + meshgen.md; phase-2.7 DoD marked complete; sandbox GPU rendering + demo assets formally deferred to Phase 2.8 (added to phase-2.8 doc).
 - **2026-05-05** — Phase 2.7 v1e SHIPPED: crd-meshgen module (8 generators: plane/box/sphere/icosphere/cylinder/cone/capsule/torus); smoke_meshgen.exe headless; 11 unit tests; crd-sandbox Meshgen Browser ImGui panel (8 shapes, vertex/index/tri counts); clang-cl normalize3 unused-function fix; all 6 configs green (468/468 win-debug). Phase 2.7 COMPLETE.

@@ -64,6 +64,12 @@ void Application::detach_all_layers()
     }
 
     m_layer_stack.clear_all_layers();
+    // Destroy owned layer instances now (not at ~Application). Layers commonly hold
+    // GPU resources whose lifetime must end before the Device/Instance they reference
+    // — those typically outlive the Application as locals in main(). Calling this
+    // explicitly between device->wait_idle() and Device destruction is the supported
+    // shutdown protocol.
+    m_owned_layers.clear();
 }
 
 bool Application::tick()

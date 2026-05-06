@@ -24,7 +24,7 @@ namespace
 }
 } // namespace
 
-GpuTexture GpuUploader::upload_texture(TextureResource& cpu, crd::rhi::Device& device)
+GpuTexture GpuUploader::upload_texture(const TextureResource& cpu, crd::rhi::Device& device)
 {
     CRD_ASSERT(!cpu.mips.empty());
 
@@ -90,7 +90,7 @@ GpuTexture GpuUploader::upload_texture(TextureResource& cpu, crd::rhi::Device& d
     return GpuTexture{std::move(image)};
 }
 
-GpuMesh GpuUploader::upload_mesh(MeshResource& cpu, crd::rhi::Device& device)
+GpuMesh GpuUploader::upload_mesh(const MeshResource& cpu, crd::rhi::Device& device)
 {
     CRD_ASSERT(!cpu.vertices.empty());
     CRD_ASSERT(!cpu.indices.empty());

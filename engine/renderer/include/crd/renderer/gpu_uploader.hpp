@@ -28,8 +28,8 @@ struct GpuMesh
 class GpuUploader
 {
 public:
-    [[nodiscard]] static GpuTexture upload_texture(TextureResource& cpu, crd::rhi::Device& device);
-    [[nodiscard]] static GpuMesh    upload_mesh(MeshResource& cpu, crd::rhi::Device& device);
+    [[nodiscard]] static GpuTexture upload_texture(const TextureResource& cpu, crd::rhi::Device& device);
+    [[nodiscard]] static GpuMesh    upload_mesh(const MeshResource& cpu, crd::rhi::Device& device);
 };
 
 } // namespace crd::renderer

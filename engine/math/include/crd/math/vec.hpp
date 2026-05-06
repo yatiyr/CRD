@@ -500,6 +500,38 @@ template <MathScalar T> [[nodiscard]] constexpr Vec4<T> lerp(const Vec4<T>& a, c
     return a + (b - a) * t;
 }
 
+// GLSL alias for vector lerp.
+template <MathScalar T> [[nodiscard]] constexpr Vec2<T> mix(const Vec2<T>& a, const Vec2<T>& b, T t) noexcept
+{
+    return lerp(a, b, t);
+}
+
+template <MathScalar T> [[nodiscard]] constexpr Vec3<T> mix(const Vec3<T>& a, const Vec3<T>& b, T t) noexcept
+{
+    return lerp(a, b, t);
+}
+
+template <MathScalar T> [[nodiscard]] constexpr Vec4<T> mix(const Vec4<T>& a, const Vec4<T>& b, T t) noexcept
+{
+    return lerp(a, b, t);
+}
+
+// Componentwise frame-rate-independent exponential approach. See `damp` in scalar.hpp.
+template <MathScalar T> [[nodiscard]] inline Vec2<T> damp(const Vec2<T>& a, const Vec2<T>& b, T lambda, T dt) noexcept
+{
+    return lerp(a, b, static_cast<T>(1) - std::exp(-lambda * dt));
+}
+
+template <MathScalar T> [[nodiscard]] inline Vec3<T> damp(const Vec3<T>& a, const Vec3<T>& b, T lambda, T dt) noexcept
+{
+    return lerp(a, b, static_cast<T>(1) - std::exp(-lambda * dt));
+}
+
+template <MathScalar T> [[nodiscard]] inline Vec4<T> damp(const Vec4<T>& a, const Vec4<T>& b, T lambda, T dt) noexcept
+{
+    return lerp(a, b, static_cast<T>(1) - std::exp(-lambda * dt));
+}
+
 using Vec2f = Vec2<crd::f32>;
 using Vec3f = Vec3<crd::f32>;
 using Vec4f = Vec4<crd::f32>;

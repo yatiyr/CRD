@@ -153,9 +153,18 @@ int main(int argc, char** argv)
         }
     }
 
-    app.detach_all_layers();
+    // Shutdown order matters:
+    //   1. device->wait_idle() — drain in-flight GPU work before any GPU resource
+    //      held by a layer is freed.
+    //   2. jobs::shutdown()    — drain in-flight crd-jobs, including any
+    //      load_async() resource loads. Required *before* destroying the
+    //      ResourceManager that those jobs may still call into. Contract is
+    //      documented on `crd::resources::ResourceManager`.
+    //   3. detach_all_layers() — now safe to destroy layers (which own GPU
+    //      resources AND the ResourceManager).
     device->wait_idle();
     crd::jobs::shutdown();
+    app.detach_all_layers();
 
     crd::log::flush();
     crd::log::shutdown();

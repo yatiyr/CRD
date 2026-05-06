@@ -5,7 +5,23 @@ move to a session log entry and remove from here.
 
 ## Active debt
 
-_(none — all items cleared as of 2026-05-03)_
+### Async GPU upload (`GpuUploader`)
+
+**Why it matters:** the sandbox now kicks `load_async<MeshResource>` on click and finalises the upload on the first frame after the load fiber signals Ready (Phase 2.8 follow-up, 2026-05-06). That removes the disk-I/O + parse hitch from the main thread. But `GpuUploader::upload_mesh` / `upload_texture` still end with a synchronous `device.graphics_queue().submit_and_wait(*cmd)` — a `vkQueueWaitIdle` on the main thread. For BoomBox-class assets (~10 MB GLB → ~30 MB raw mesh) that's a visible hitch even though the CPU-side load is now off the main thread.
+
+**What's needed:** an async upload contract.
+- `GpuUploader::upload_mesh_async(const MeshResource&, Device&) → UploadHandle` (and the texture twin).
+- The job pool runs the staging fill + `vkCmdCopyBuffer` recording on a worker fiber.
+- Submission goes onto the graphics queue without `wait`. A fence (or timeline semaphore) tracks completion.
+- Caller polls `UploadHandle::is_ready()` per frame and only swaps the GPU resource pointer (e.g. `m_gpu_mesh`) once the fence signals.
+- Concurrent uploads share a transfer queue if the device exposes one; otherwise they batch onto graphics behind the existing graphics submissions.
+
+**Why it's deferred:** designing the upload-handle contract well requires at least two real consumers shaping it. Today there's exactly one (sandbox click). The right moment is **Phase 3.0+** — once the scene/ECS layer can spawn a streaming load (terrain tile, LOD swap, scene-load preload), the contract has two callers and the design surface is informed by both. Until then, premature design risks baking in a single-callsite assumption.
+
+**Where it's referenced:**
+- `docs/phases/phase-3.0-scene-ecs.md` — listed as a prerequisite for streamed scene loads.
+- `engine/renderer/src/gpu_uploader.cpp` — current implementation.
+- `sandbox/src/sandbox_layer.cpp::try_finalize_pending_load()` — comment points here when the synchronous upload runs.
 
 ---
 

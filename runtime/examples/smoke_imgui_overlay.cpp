@@ -149,8 +149,8 @@ int main()
         }
     }
 
-    app.detach_all_layers();
     device->wait_idle();
+    app.detach_all_layers();
     crd::log::flush();
     crd::log::shutdown();
     return 0;

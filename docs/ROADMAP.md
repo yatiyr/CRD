@@ -33,7 +33,8 @@
 | 2.5   Jobs (threads + fibers)   | ✅ shipped       | `docs/phases/phase-2.5-jobs.md` (v1a–v1k all shipped; ADR-0033) |
 | 2.6   Resources + asset cooker  | ✅ shipped       | `docs/phases/phase-2.6-resources.md` (v1a–v1g COMPLETE 2026-05-04; ADRs 0036–0041) |
 | 2.7   Asset import bootstrap    | ⏳               | `docs/phases/phase-2.7-asset-import.md` (TextureResource + MeshResource + glTF + **full material foundation** (ADR-0048): MaterialTemplate/Instance, ParameterType, ShaderOptions, SurfaceData contract, new MATR format + GPU upload + **crd-meshgen** + **crd-sandbox** bootstrap; ADRs 0042–0043, 0045, 0048) |
-| 2.8   Material completion       | ⏳               | `docs/phases/phase-2.8-material-completion.md` (GPU-side wiring only: per-material Vulkan pipeline cache + multi-pass ForwardRenderPath + depth-only prepass; artifact format done in 2.7 v1c; ADRs 0044, 0046, 0048) |
+| 2.8   Material completion       | ✅ shipped       | `docs/phases/phase-2.8-material-completion.md` (v1a–v1g all complete 2026-05-06; ADRs 0044, 0046, 0048) |
+| 3.0   Scene / ECS foundation    | ⏳ ready to start | `docs/phases/phase-3.0-scene-ecs.md` (8-layer slot architecture; 14 slices; ADRs 0049–0057 all locked 2026-05-06) |
 | 3     Simulation + visual effects | ⏳             | `docs/phases/phase-3-simulation.md` (3.0 scene/ECS → 3.1 physics → 3.2 animation → **3.3 crd-font** → 3.4 audio → **3.5** PBR+IBL+CSM+SSS+NPR+area lights → **3.6** sky atmosphere+volumetric fog+clouds+god rays+aurora → **3.7** bloom+GTAO+SSR+TAA+DoF+motion blur+upscaling → **3.8** GPU particles+ocean+decals+indirect rendering → **3.9** SSGI+DDGI+radiance cascades+lightmap baking; ADR-0047) |
 | 5     RT + advanced rendering   | ⏳               | `docs/phases/phase-5-ui-rendering.md` (crd-ui + node editor + HybridRenderPath: RT AO/reflections/GI + denoiser; ADR-0046) |
 | 4     Extensibility + Networking | ⏳              | `docs/phases/phase-4-extensibility.md` (4.0 C++ scripting, 4.1 advanced math, 4.2 networking; ADR-0034, ADR-0035) |
@@ -69,6 +70,9 @@ Direction, not commitment.
 - **Jobs system v1 complete** (v1a–v1k): fiber pool, work-stealing deque, ABA-safe scheduler, counter/wait, worker pool, public API (`run`/`wait`/`make_job`/`parallel_for`), 41-byte SBO, per-frame arena, crd-app wired
 - ImGui debug tooling; crd-config TOML substrate
 - **Resource system v1 complete** (v1a–v1g): handle table, ref-counting, sync/async/streamed loading, typed loaders (shader, material), hot-reload with atomic payload swap + mtime polling + callbacks, 2Q LRU eviction, memory budget, pin/unpin
+- **Asset import bootstrap** (Phase 2.7): TextureResource + MeshResource + glTF + MaterialTemplate/Instance + GpuUploader + crd-meshgen + crd-sandbox
+- **Material GPU wiring** (Phase 2.8): per-material pipeline cache + multi-pass ForwardRenderPath + depth-only prepass + sandbox 3D rendering + glTF demo asset bundle + unified Asset Browser
+- **`crd-scene` architecture locked** (2026-05-06, ADRs 0049–0057): 8-layer slot-shaped ECS — Entity/SlotMap, Archetype+SparseSet hybrid storage, first-class Relations, Query/System/Schedule, Component index framework (ChangeDetect+AsyncAware ship now; History/SpatialBVH/GpuResident reserve API), reserved L6–L8 slots (Replication, Scripts, Reflection)
 
 ### 6–12 months (mid-2026 to early 2027)
 - Resource system + asset cooker (Phase 2.6): handle table, ref-counted assets, hot-reload, cooked binary format ✅ SHIPPED

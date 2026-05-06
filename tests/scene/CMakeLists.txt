@@ -1,0 +1,17 @@
+add_executable(crd-scene-tests
+    test_entity.cpp
+    test_slot_map.cpp
+    test_world.cpp
+)
+
+target_link_libraries(crd-scene-tests PRIVATE
+    crd-core
+    crd-containers
+    crd-memory
+    crd-scene
+    Catch2::Catch2WithMain
+)
+
+crd_enable_default_pch(crd-scene-tests)
+
+catch_discover_tests(crd-scene-tests)

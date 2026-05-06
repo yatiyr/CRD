@@ -90,4 +90,85 @@ template <MathScalar T> [[nodiscard]] constexpr bool approx_zero(T value, T epsi
 {
     return abs(value) <= epsilon;
 }
+
+// ─── Interpolation primitives ────────────────────────────────────────────────
+//
+// Standard scalar interpolation utilities. Vector overloads (Vec2/3/4) live in
+// vec.hpp. Easing curves live in easing.hpp. The convention is:
+//   - lerp/mix:       value-space interpolation `a + (b - a) * t`.
+//   - inverse_lerp:   given an interpolated value, recover `t`.
+//   - remap:          rescale a value from one range to another.
+//   - saturate/step/smoothstep: GLSL/HLSL-style fragment helpers.
+//   - damp:           frame-rate-independent exponential approach.
+//
+// `t` is NOT clamped by lerp/mix — pass any value, including >1 or <0, when
+// extrapolation is desired. saturate(t) at the call site if you need clamping.
+
+template <MathScalar T> [[nodiscard]] constexpr T lerp(T a, T b, T t) noexcept
+{
+    return a + (b - a) * t;
+}
+
+// GLSL alias for lerp — provided so shader-port code reads naturally and so
+// users from a GLSL background find the function they expect.
+template <MathScalar T> [[nodiscard]] constexpr T mix(T a, T b, T t) noexcept
+{
+    return lerp(a, b, t);
+}
+
+template <MathScalar T> [[nodiscard]] constexpr T saturate(T value) noexcept
+{
+    return clamp(value, static_cast<T>(0), static_cast<T>(1));
+}
+
+template <MathScalar T> [[nodiscard]] constexpr T step(T edge, T x) noexcept
+{
+    return x < edge ? static_cast<T>(0) : static_cast<T>(1);
+}
+
+// Hermite C¹ smoothstep: `3t² − 2t³` after re-mapping `x` to [0,1].
+// f(edge0)=0, f(edge1)=1, f'(edge0)=f'(edge1)=0.
+template <MathScalar T> [[nodiscard]] constexpr T smoothstep(T edge0, T edge1, T x) noexcept
+{
+    CRD_ASSERT(!approx_equal_abs(edge0, edge1));
+    const T t = saturate((x - edge0) / (edge1 - edge0));
+    return t * t * (static_cast<T>(3) - static_cast<T>(2) * t);
+}
+
+// Ken Perlin's quintic smootherstep: `6t⁵ − 15t⁴ + 10t³`.
+// f(edge0)=0, f(edge1)=1, f'(edge*)=f''(edge*)=0 — better for animation curves
+// and heightmap blending where the second derivative being zero at the edges
+// matters (no visible "kink" at the transition).
+template <MathScalar T> [[nodiscard]] constexpr T smootherstep(T edge0, T edge1, T x) noexcept
+{
+    CRD_ASSERT(!approx_equal_abs(edge0, edge1));
+    const T t = saturate((x - edge0) / (edge1 - edge0));
+    return t * t * t * (t * (t * static_cast<T>(6) - static_cast<T>(15)) + static_cast<T>(10));
+}
+
+// Recover the parameter `t` such that `lerp(a, b, t) == x`.
+// Asserts a != b (the inverse is undefined for a degenerate range).
+template <MathScalar T> [[nodiscard]] constexpr T inverse_lerp(T a, T b, T x) noexcept
+{
+    CRD_ASSERT(!approx_equal_abs(a, b));
+    return (x - a) / (b - a);
+}
+
+// Linearly remap `x` from [in_min, in_max] to [out_min, out_max].
+// Equivalent to lerp(out_min, out_max, inverse_lerp(in_min, in_max, x)).
+template <MathScalar T>
+[[nodiscard]] constexpr T remap(T x, T in_min, T in_max, T out_min, T out_max) noexcept
+{
+    return lerp(out_min, out_max, inverse_lerp(in_min, in_max, x));
+}
+
+// Frame-rate-independent exponential approach toward `target`.
+//   damp(a, b, λ, dt) = a + (b - a) * (1 - exp(-λ * dt))
+// `lambda` is the time constant (1/seconds) — larger = faster convergence.
+// Reduces to identity at dt == 0 and (essentially) reaches the target as
+// dt → ∞. Stable across frame-rate variation, unlike a fixed-`t` lerp.
+template <MathScalar T> [[nodiscard]] inline T damp(T a, T b, T lambda, T dt) noexcept
+{
+    return lerp(a, b, static_cast<T>(1) - std::exp(-lambda * dt));
+}
 } // namespace crd::math

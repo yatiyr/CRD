@@ -12,6 +12,8 @@
 #include <crd/platform/filesystem.hpp>
 #include <crd/platform/input.hpp>
 #include <crd/renderer/frame_graph.hpp>
+#include <crd/renderer/mesh_resource.hpp>
+#include <crd/renderer/mesh_resource_loader.hpp>
 #include <crd/renderer/per_frame_data.hpp>
 #include <crd/shader/effect.hpp>
 #include <imgui.h>
@@ -35,17 +37,25 @@ constexpr float kZoomSpeed   = 0.5F;
 constexpr float kMinDistance = 0.1F;
 constexpr float kMaxDistance = 500.0F;
 
-float exp_lerp(float a, float b, float speed, float dt) noexcept
+// Read the UUID stored in a `.meta` sidecar produced by the asset cooker.
+// File format: `[id]\nuuid = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"\n`.
+[[nodiscard]] crd::resources::ResourceId read_meta_uuid(const fs::Path& meta_path)
 {
-    return a + (b - a) * (1.0F - std::exp(-speed * dt));
+    crd::memory::MallocAllocator a;
+    crd::containers::String text(&a);
+    if (!fs::read_file_text(meta_path, text))
+        return {};
+    const std::string_view sv(text.data(), text.size());
+    const std::string_view key = "uuid = \"";
+    const auto pos = sv.find(key);
+    if (pos == std::string_view::npos)
+        return {};
+    const auto start = pos + key.size();
+    const auto end   = sv.find('"', start);
+    if (end == std::string_view::npos)
+        return {};
+    return crd::resources::ResourceId::parse(sv.substr(start, end - start));
 }
-
-crd::math::Vec3f exp_lerp3(crd::math::Vec3f a, crd::math::Vec3f b, float speed, float dt) noexcept
-{
-    const float t = 1.0F - std::exp(-speed * dt);
-    return {a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t};
-}
-
 
 } // namespace
 
@@ -175,22 +185,10 @@ void SandboxPipelineResolver::ensure_compiled(const crd::shader::VariantPipeline
 SandboxLayer::SandboxLayer(crd::app::Application& app, crd::rhi::Device& device,
                            crd::rhi::Swapchain& swapchain)
     : Layer("SandboxLayer"), m_app(app), m_device(device), m_swapchain(swapchain),
-      m_shapes(&m_alloc), m_gpu_mesh(nullptr, nullptr)
+      m_assets(&m_alloc), m_gpu_mesh(nullptr, nullptr)
 {
-    // Populate shape list (metadata only — no GPU upload yet).
-    crd::memory::MallocAllocator tmp;
-    auto record = [&](const char* nm, crd::renderer::MeshResource mesh)
-    {
-        m_shapes.push_back(ShapeInfo{nm, mesh.primitives[0].vertex_count, mesh.primitives[0].index_count});
-    };
-    record("Plane",     crd::meshgen::make_plane(&tmp));
-    record("Box",       crd::meshgen::make_box(&tmp));
-    record("Sphere",    crd::meshgen::make_sphere(&tmp));
-    record("Icosphere", crd::meshgen::make_icosphere(&tmp));
-    record("Cylinder",  crd::meshgen::make_cylinder(&tmp));
-    record("Cone",      crd::meshgen::make_cone(&tmp));
-    record("Capsule",   crd::meshgen::make_capsule(&tmp));
-    record("Torus",     crd::meshgen::make_torus(&tmp));
+    register_procedural_assets();
+    try_register_imported_assets();
 
     // Compile surface shaders via Runtime.
     m_shader_runtime = crd::shader::create_runtime();
@@ -231,6 +229,114 @@ SandboxLayer::SandboxLayer(crd::app::Application& app, crd::rhi::Device& device,
 
     // Build wireframe overlay pipeline.
     build_wireframe_pipeline(source_dir);
+}
+
+void SandboxLayer::register_procedural_assets()
+{
+    crd::memory::MallocAllocator tmp;
+    auto add = [&](const char* nm, crd::u32 idx, crd::renderer::MeshResource mesh)
+    {
+        AssetEntry e;
+        e.display_name    = crd::containers::String(nm, &m_alloc);
+        e.kind            = AssetKind::Procedural;
+        e.procedural_idx  = idx;
+        e.cached_verts    = mesh.primitives[0].vertex_count;
+        e.cached_indices  = mesh.primitives[0].index_count;
+        m_assets.push_back(std::move(e));
+    };
+    add("Plane",     0, crd::meshgen::make_plane(&tmp));
+    add("Box",       1, crd::meshgen::make_box(&tmp));
+    add("Sphere",    2, crd::meshgen::make_sphere(&tmp));
+    add("Icosphere", 3, crd::meshgen::make_icosphere(&tmp));
+    add("Cylinder",  4, crd::meshgen::make_cylinder(&tmp));
+    add("Cone",      5, crd::meshgen::make_cone(&tmp));
+    add("Capsule",   6, crd::meshgen::make_capsule(&tmp));
+    add("Torus",     7, crd::meshgen::make_torus(&tmp));
+}
+
+void SandboxLayer::try_register_imported_assets()
+{
+#ifdef CRD_DEMO_ASSETS_PACK
+    const fs::Path pack_path(CRD_DEMO_ASSETS_PACK);
+    if (!fs::is_file(pack_path))
+    {
+        CRD_LOG_WARN(g_log_sandbox_layer,
+                     "Demo asset pack not found at '{}'. Run the cook-demo-assets target. "
+                     "Imported Assets section will be hidden.",
+                     pack_path.generic().data());
+        return;
+    }
+
+    m_resource_mgr = std::make_unique<crd::resources::ResourceManager>(&m_alloc);
+    crd::renderer::register_mesh_loader(m_resource_mgr.get());
+
+    const auto mount = m_resource_mgr->mount_manifest(pack_path.generic());
+    if (!mount.is_valid())
+    {
+        CRD_LOG_ERROR(g_log_sandbox_layer, "Failed to mount demo asset pack '{}'",
+                      pack_path.generic().data());
+        m_resource_mgr.reset();
+        return;
+    }
+
+    const fs::Path source_dir = fs::Path(CRD_SOURCE_DIR) / "assets/source";
+
+    struct ImportedDesc
+    {
+        const char* display;
+        const char* glb_filename;
+    };
+    const ImportedDesc imports[] = {
+        {"BoxTextured (glTF)", "BoxTextured.glb"},
+        {"Duck (glTF)",        "Duck.glb"},
+        {"BoomBox (glTF)",     "BoomBox.glb"},
+    };
+
+    for (const auto& imp : imports)
+    {
+        const fs::Path glb_path  = source_dir / imp.glb_filename;
+        // Cooker writes "<source>.meta" — append to filename, do not change extension.
+        crd::containers::String meta_str(&m_alloc);
+        meta_str.append(glb_path.generic().data(), glb_path.generic().size());
+        meta_str.append(".meta");
+        const fs::Path meta_path(crd::containers::StringView(meta_str.data(), meta_str.size()));
+
+        if (!fs::is_file(meta_path))
+        {
+            CRD_LOG_WARN(g_log_sandbox_layer, "Skipping '{}' — meta sidecar missing at '{}'",
+                         imp.glb_filename, meta_path.generic().data());
+            continue;
+        }
+
+        const auto id = read_meta_uuid(meta_path);
+        if (id.is_null())
+        {
+            CRD_LOG_WARN(g_log_sandbox_layer, "Skipping '{}' — malformed meta sidecar",
+                         imp.glb_filename);
+            continue;
+        }
+
+        if (m_resource_mgr->find_entry(id) == nullptr)
+        {
+            CRD_LOG_WARN(g_log_sandbox_layer,
+                         "Skipping '{}' — UUID not present in pack (re-cook the assets)",
+                         imp.glb_filename);
+            continue;
+        }
+
+        AssetEntry e;
+        e.display_name = crd::containers::String(imp.display, &m_alloc);
+        e.kind         = AssetKind::Imported;
+        e.imported_id  = id;
+        m_assets.push_back(std::move(e));
+    }
+
+    m_imported_available = true;
+    CRD_LOG_INFO(g_log_sandbox_layer, "Mounted demo asset pack '{}'", pack_path.generic().data());
+#else
+    CRD_LOG_WARN(g_log_sandbox_layer,
+                 "CRD_DEMO_ASSETS_PACK not defined — imported assets unavailable");
+#endif
 }
 
 void SandboxLayer::build_wireframe_pipeline(const crd::platform::fs::Path& source_dir)
@@ -364,27 +470,51 @@ void SandboxLayer::on_update(crd::f64 delta_seconds)
 
     const float smooth_t = 1.0F - std::exp(-kOrbitSpeed * dt);
     m_cam.q_smooth = crd::math::slerp(m_cam.q_smooth, m_cam.q_target, smooth_t);
-    m_cam.s_dist   = exp_lerp(m_cam.s_dist,  m_cam.distance, kOrbitSpeed, dt);
-    m_cam.s_target = exp_lerp3(m_cam.s_target, m_cam.target, kOrbitSpeed, dt);
+    m_cam.s_dist   = crd::math::damp(m_cam.s_dist,   m_cam.distance, kOrbitSpeed, dt);
+    m_cam.s_target = crd::math::damp(m_cam.s_target, m_cam.target,   kOrbitSpeed, dt);
 
-    // Upload mesh when selection changes or parameters are edited.
-    const bool shape_changed  = m_selected != m_last_uploaded;
-    const bool params_changed = m_mesh_dirty;
-    if ((shape_changed || params_changed) && m_selected >= 0 && m_selected < static_cast<int>(m_shapes.size()))
+    // Decide what asset (if any) the user wants to see right now. Compare against
+    // (m_pending_index when a load is in-flight, else m_last_uploaded) so that
+    // re-clicking the asset that's already loading is a no-op rather than
+    // re-kicking the same job.
+    const int target_index =
+        (m_pending_index >= 0) ? m_pending_index : m_last_uploaded;
+    const bool selection_changed = m_selected != target_index;
+    const bool params_changed    = m_mesh_dirty;
+    if ((selection_changed || params_changed) &&
+        m_selected >= 0 && m_selected < static_cast<int>(m_assets.size()))
     {
-        upload_selected_shape();
+        const AssetEntry& entry = m_assets[static_cast<crd::usize>(m_selected)];
+        if (entry.kind == AssetKind::Procedural)
+        {
+            // Drop any in-flight import — user picked a procedural shape, the
+            // pending load is no longer wanted. Procedural meshgen + GPU
+            // upload are fast (microseconds CPU, <1ms GPU) and run inline.
+            m_pending_load  = {};
+            m_pending_index = -1;
+            upload_procedural(m_selected);
+        }
+        else // Imported
+        {
+            kick_async_import_load(m_selected);
+        }
         m_mesh_dirty = false;
     }
+
+    // Async pump: if the in-flight import has reached Ready/Failed, finalise it.
+    // Runs every frame so the GPU swap happens on the first frame after the
+    // load fiber signals completion.
+    try_finalize_pending_load();
 }
 
-void SandboxLayer::upload_selected_shape()
+void SandboxLayer::upload_procedural(int idx)
 {
-    m_last_uploaded = m_selected;
     m_device.wait_idle(); // safe: previous frame complete before we free old buffers
 
+    AssetEntry& entry = m_assets[static_cast<crd::usize>(idx)];
     crd::memory::MallocAllocator tmp;
     crd::renderer::MeshResource cpu_mesh(&tmp);
-    switch (m_selected)
+    switch (entry.procedural_idx)
     {
     case 0:
         cpu_mesh = crd::meshgen::make_plane(&tmp, m_plane.w, m_plane.d,
@@ -421,17 +551,100 @@ void SandboxLayer::upload_selected_shape()
                                             static_cast<crd::u32>(m_torus.maj_segs),
                                             static_cast<crd::u32>(m_torus.min_segs));
         break;
-    default: return;
+    default:
+        CRD_LOG_ERROR(g_log_sandbox_layer, "unknown procedural index {}", entry.procedural_idx);
+        return;
+    }
+    entry.cached_verts   = cpu_mesh.primitives[0].vertex_count;
+    entry.cached_indices = cpu_mesh.primitives[0].index_count;
+    m_gpu_mesh = crd::renderer::GpuUploader::upload_mesh(cpu_mesh, m_device);
+    m_last_uploaded = idx;
+    CRD_LOG_INFO(g_log_sandbox_layer, "Uploaded procedural '{}': {} verts, {} indices",
+                 entry.display_name.c_str(), entry.cached_verts, entry.cached_indices);
+}
+
+void SandboxLayer::kick_async_import_load(int idx)
+{
+    if (m_resource_mgr == nullptr)
+    {
+        CRD_LOG_ERROR(g_log_sandbox_layer, "ResourceManager unavailable for imported asset");
+        return;
     }
 
-    // Update display counts for the new parameters.
-    auto& si   = m_shapes[static_cast<crd::usize>(m_selected)];
-    si.verts   = cpu_mesh.primitives[0].vertex_count;
-    si.indices = cpu_mesh.primitives[0].index_count;
+    const AssetEntry& entry = m_assets[static_cast<crd::usize>(idx)];
 
-    m_gpu_mesh = crd::renderer::GpuUploader::upload_mesh(cpu_mesh, m_device);
-    CRD_LOG_INFO(g_log_sandbox_layer, "Uploaded shape '{}': {} verts, {} indices",
-                 si.name, si.verts, si.indices);
+    // Move-assign clears any prior in-flight handle (release_block decrements
+    // the refcount; the load may still complete on its worker fiber but we
+    // simply won't observe its result). The currently-rendered mesh in
+    // m_gpu_mesh stays on screen until the new load's GPU swap lands.
+    m_pending_load  = m_resource_mgr->load_async<crd::renderer::MeshResource>(entry.imported_id);
+    m_pending_index = idx;
+    CRD_LOG_TRACE(g_log_sandbox_layer, "Kicked async load for imported '{}'",
+                  entry.display_name.c_str());
+}
+
+void SandboxLayer::try_finalize_pending_load()
+{
+    if (m_pending_index < 0)
+    {
+        return; // nothing in flight
+    }
+
+    const auto state = m_pending_load.state();
+    if (state != crd::resources::LoadState::Ready &&
+        state != crd::resources::LoadState::Failed &&
+        state != crd::resources::LoadState::Placeholder)
+    {
+        return; // still Queued / Loading — try again next frame
+    }
+
+    if (state == crd::resources::LoadState::Failed)
+    {
+        AssetEntry& entry = m_assets[static_cast<crd::usize>(m_pending_index)];
+        CRD_LOG_ERROR(g_log_sandbox_layer, "Async load failed for imported '{}'",
+                      entry.display_name.c_str());
+        m_pending_load  = {};
+        m_pending_index = -1;
+        return;
+    }
+
+    // Ready (or Placeholder): the CPU payload is on hand. The remaining work
+    // — staging buffer fill + vkCmdCopy + queue submit_and_wait — is still
+    // synchronous on the main thread. See docs/debt.md → "Async GPU upload"
+    // for the design that eliminates this final hitch (deferred until a real
+    // frame-budget consumer demands it; tracked for Phase 3.0+).
+    AssetEntry& entry = m_assets[static_cast<crd::usize>(m_pending_index)];
+    const crd::renderer::MeshResource* cpu = m_pending_load.get();
+    if (cpu == nullptr || cpu->primitives.empty() ||
+        cpu->vertices.empty() || cpu->indices.empty())
+    {
+        CRD_LOG_ERROR(g_log_sandbox_layer, "Imported mesh '{}' arrived empty",
+                      entry.display_name.c_str());
+        m_pending_load  = {};
+        m_pending_index = -1;
+        return;
+    }
+
+    crd::u32 total_verts = 0;
+    crd::u32 total_idx   = 0;
+    for (const auto& p : cpu->primitives)
+    {
+        total_verts += p.vertex_count;
+        total_idx   += p.index_count;
+    }
+    entry.cached_verts   = total_verts;
+    entry.cached_indices = total_idx;
+
+    m_device.wait_idle(); // safe: previous frame complete before we free old buffers
+    m_gpu_mesh = crd::renderer::GpuUploader::upload_mesh(*cpu, m_device);
+    m_last_uploaded = m_pending_index;
+    CRD_LOG_INFO(g_log_sandbox_layer,
+                 "Uploaded imported '{}': {} verts, {} indices, {} primitive(s) (async)",
+                 entry.display_name.c_str(), total_verts, total_idx,
+                 static_cast<unsigned>(cpu->primitives.size()));
+
+    m_pending_load  = {};
+    m_pending_index = -1;
 }
 
 void SandboxLayer::on_render()
@@ -458,8 +671,8 @@ void SandboxLayer::on_render()
     ImGui::End();
 
     ImGui::SetNextWindowPos({8.0F, 176.0F}, ImGuiCond_Always);
-    ImGui::SetNextWindowSize({320.0F, 560.0F}, ImGuiCond_FirstUseEver);
-    ImGui::Begin("Meshgen Browser", nullptr,
+    ImGui::SetNextWindowSize({340.0F, 580.0F}, ImGuiCond_FirstUseEver);
+    ImGui::Begin("Asset Browser", nullptr,
                  ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse);
 
     // Render mode.
@@ -469,77 +682,135 @@ void SandboxLayer::on_render()
     ImGui::Checkbox("Wireframe", &m_show_wireframe);
     ImGui::Separator();
 
-    ImGui::Text("Procedural Shapes (%u)", static_cast<unsigned>(m_shapes.size()));
-    ImGui::Separator();
-    for (int i = 0; i < static_cast<int>(m_shapes.size()); ++i)
+    // Procedural shapes section.
+    crd::u32 procedural_count = 0;
+    crd::u32 imported_count   = 0;
+    for (const auto& a : m_assets)
     {
-        if (ImGui::Selectable(m_shapes[i].name, m_selected == i))
-            m_selected = i;
+        if (a.kind == AssetKind::Procedural) ++procedural_count;
+        else                                 ++imported_count;
     }
-    ImGui::Separator();
-    if (m_selected >= 0 && m_selected < static_cast<int>(m_shapes.size()))
+
+    if (ImGui::CollapsingHeader("Procedural Shapes", ImGuiTreeNodeFlags_DefaultOpen))
     {
-        const auto& s = m_shapes[static_cast<crd::usize>(m_selected)];
-        ImGui::Text("Name:    %s",  s.name);
-        ImGui::Text("Verts:   %u",  s.verts);
-        ImGui::Text("Indices: %u",  s.indices);
-        ImGui::Text("Tris:    %u",  s.indices / 3U);
-
-        ImGui::Separator();
-        ImGui::Text("Parameters");
-
-        auto dirty = [this]() { if (ImGui::IsItemDeactivatedAfterEdit()) m_mesh_dirty = true; };
-
-        switch (m_selected)
+        ImGui::Text("(%u)", procedural_count);
+        ImGui::Indent();
+        for (int i = 0; i < static_cast<int>(m_assets.size()); ++i)
         {
-        case 0: // Plane
-            ImGui::SliderFloat("Width##pl",  &m_plane.w, 0.1F, 10.0F); dirty();
-            ImGui::SliderFloat("Depth##pl",  &m_plane.d, 0.1F, 10.0F); dirty();
-            ImGui::SliderInt("Divs X##pl",   &m_plane.divs_x, 1, 32);  dirty();
-            ImGui::SliderInt("Divs Z##pl",   &m_plane.divs_z, 1, 32);  dirty();
-            break;
-        case 1: // Box
-            ImGui::SliderFloat("Width##bx",  &m_box.w, 0.1F, 5.0F); dirty();
-            ImGui::SliderFloat("Height##bx", &m_box.h, 0.1F, 5.0F); dirty();
-            ImGui::SliderFloat("Depth##bx",  &m_box.d, 0.1F, 5.0F); dirty();
-            break;
-        case 2: // Sphere
-            ImGui::SliderFloat("Radius##sp", &m_sphere.radius, 0.1F, 5.0F); dirty();
-            ImGui::SliderInt("Lat bands##sp", &m_sphere.lat,   4, 64);      dirty();
-            ImGui::SliderInt("Lon bands##sp", &m_sphere.lon,   4, 64);      dirty();
-            break;
-        case 3: // Icosphere
-            ImGui::SliderFloat("Radius##ic",       &m_ico.radius, 0.1F, 5.0F); dirty();
-            ImGui::SliderInt("Subdivisions##ic",   &m_ico.subdiv, 0, 5);       dirty();
-            break;
-        case 4: // Cylinder
-            ImGui::SliderFloat("Radius##cy",  &m_cylinder.radius, 0.05F, 3.0F); dirty();
-            ImGui::SliderFloat("Height##cy",  &m_cylinder.h,      0.1F,  5.0F); dirty();
-            ImGui::SliderInt("Segments##cy",  &m_cylinder.segs,   3, 64);       dirty();
-            break;
-        case 5: // Cone
-            ImGui::SliderFloat("Radius##co",  &m_cone.radius, 0.05F, 3.0F); dirty();
-            ImGui::SliderFloat("Height##co",  &m_cone.h,      0.1F,  5.0F); dirty();
-            ImGui::SliderInt("Segments##co",  &m_cone.segs,   3, 64);       dirty();
-            break;
-        case 6: // Capsule
-            ImGui::SliderFloat("Radius##ca",  &m_capsule.radius, 0.05F, 3.0F); dirty();
-            ImGui::SliderFloat("Height##ca",  &m_capsule.h,      0.1F,  5.0F); dirty();
-            ImGui::SliderInt("Segments##ca",  &m_capsule.segs,   3, 64);       dirty();
-            ImGui::SliderInt("Rings##ca",     &m_capsule.rings,  2, 16);       dirty();
-            break;
-        case 7: // Torus
-            ImGui::SliderFloat("Major R##to",  &m_torus.maj_r,    0.2F, 5.0F); dirty();
-            ImGui::SliderFloat("Minor R##to",  &m_torus.min_r,    0.05F, 2.0F); dirty();
-            ImGui::SliderInt("Maj segs##to",   &m_torus.maj_segs, 4, 64);      dirty();
-            ImGui::SliderInt("Min segs##to",   &m_torus.min_segs, 4, 32);      dirty();
-            break;
-        default: break;
+            const auto& a = m_assets[static_cast<crd::usize>(i)];
+            if (a.kind != AssetKind::Procedural) continue;
+            if (ImGui::Selectable(a.display_name.c_str(), m_selected == i))
+                m_selected = i;
+        }
+        ImGui::Unindent();
+    }
+
+    if (m_imported_available)
+    {
+        if (ImGui::CollapsingHeader("Imported Assets", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            ImGui::Text("(%u)", imported_count);
+            ImGui::Indent();
+            if (imported_count == 0)
+            {
+                ImGui::TextDisabled("(no imports cooked — run cook-demo-assets)");
+            }
+            for (int i = 0; i < static_cast<int>(m_assets.size()); ++i)
+            {
+                const auto& a = m_assets[static_cast<crd::usize>(i)];
+                if (a.kind != AssetKind::Imported) continue;
+                if (ImGui::Selectable(a.display_name.c_str(), m_selected == i))
+                    m_selected = i;
+            }
+            ImGui::Unindent();
         }
     }
     else
     {
-        ImGui::TextDisabled("(select a shape)");
+        ImGui::TextDisabled("Imported Assets: pack not mounted");
+    }
+
+    ImGui::Separator();
+
+    if (m_selected >= 0 && m_selected < static_cast<int>(m_assets.size()))
+    {
+        const auto& a = m_assets[static_cast<crd::usize>(m_selected)];
+        const bool is_loading = (m_pending_index == m_selected);
+        ImGui::Text("Name:    %s",  a.display_name.c_str());
+        ImGui::Text("Source:  %s",  a.kind == AssetKind::Procedural ? "Procedural" : "glTF");
+        if (is_loading)
+        {
+            ImGui::TextColored({0.9F, 0.7F, 0.2F, 1.0F}, "Status:  loading...");
+        }
+        else
+        {
+            ImGui::Text("Verts:   %u",  a.cached_verts);
+            ImGui::Text("Indices: %u",  a.cached_indices);
+            ImGui::Text("Tris:    %u",  a.cached_indices / 3U);
+        }
+
+        if (a.kind == AssetKind::Procedural)
+        {
+            ImGui::Separator();
+            ImGui::Text("Parameters");
+
+            auto dirty = [this]() { if (ImGui::IsItemDeactivatedAfterEdit()) m_mesh_dirty = true; };
+
+            switch (a.procedural_idx)
+            {
+            case 0: // Plane
+                ImGui::SliderFloat("Width##pl",  &m_plane.w, 0.1F, 10.0F); dirty();
+                ImGui::SliderFloat("Depth##pl",  &m_plane.d, 0.1F, 10.0F); dirty();
+                ImGui::SliderInt("Divs X##pl",   &m_plane.divs_x, 1, 32);  dirty();
+                ImGui::SliderInt("Divs Z##pl",   &m_plane.divs_z, 1, 32);  dirty();
+                break;
+            case 1: // Box
+                ImGui::SliderFloat("Width##bx",  &m_box.w, 0.1F, 5.0F); dirty();
+                ImGui::SliderFloat("Height##bx", &m_box.h, 0.1F, 5.0F); dirty();
+                ImGui::SliderFloat("Depth##bx",  &m_box.d, 0.1F, 5.0F); dirty();
+                break;
+            case 2: // Sphere
+                ImGui::SliderFloat("Radius##sp", &m_sphere.radius, 0.1F, 5.0F); dirty();
+                ImGui::SliderInt("Lat bands##sp", &m_sphere.lat,   4, 64);      dirty();
+                ImGui::SliderInt("Lon bands##sp", &m_sphere.lon,   4, 64);      dirty();
+                break;
+            case 3: // Icosphere
+                ImGui::SliderFloat("Radius##ic",       &m_ico.radius, 0.1F, 5.0F); dirty();
+                ImGui::SliderInt("Subdivisions##ic",   &m_ico.subdiv, 0, 5);       dirty();
+                break;
+            case 4: // Cylinder
+                ImGui::SliderFloat("Radius##cy",  &m_cylinder.radius, 0.05F, 3.0F); dirty();
+                ImGui::SliderFloat("Height##cy",  &m_cylinder.h,      0.1F,  5.0F); dirty();
+                ImGui::SliderInt("Segments##cy",  &m_cylinder.segs,   3, 64);       dirty();
+                break;
+            case 5: // Cone
+                ImGui::SliderFloat("Radius##co",  &m_cone.radius, 0.05F, 3.0F); dirty();
+                ImGui::SliderFloat("Height##co",  &m_cone.h,      0.1F,  5.0F); dirty();
+                ImGui::SliderInt("Segments##co",  &m_cone.segs,   3, 64);       dirty();
+                break;
+            case 6: // Capsule
+                ImGui::SliderFloat("Radius##ca",  &m_capsule.radius, 0.05F, 3.0F); dirty();
+                ImGui::SliderFloat("Height##ca",  &m_capsule.h,      0.1F,  5.0F); dirty();
+                ImGui::SliderInt("Segments##ca",  &m_capsule.segs,   3, 64);       dirty();
+                ImGui::SliderInt("Rings##ca",     &m_capsule.rings,  2, 16);       dirty();
+                break;
+            case 7: // Torus
+                ImGui::SliderFloat("Major R##to",  &m_torus.maj_r,    0.2F, 5.0F); dirty();
+                ImGui::SliderFloat("Minor R##to",  &m_torus.min_r,    0.05F, 2.0F); dirty();
+                ImGui::SliderInt("Maj segs##to",   &m_torus.maj_segs, 4, 64);      dirty();
+                ImGui::SliderInt("Min segs##to",   &m_torus.min_segs, 4, 32);      dirty();
+                break;
+            default: break;
+            }
+        }
+        else
+        {
+            ImGui::TextDisabled("(imported assets have no parameters)");
+        }
+    }
+    else
+    {
+        ImGui::TextDisabled("(select an asset)");
     }
     ImGui::End();
 }
@@ -570,12 +841,13 @@ void SandboxLayer::render_scene(crd::rhi::CommandBuffer& cmd, crd::rhi::Image& s
     const bool has_mesh = m_gpu_mesh.vertex_buffer != nullptr && m_last_uploaded >= 0;
     if (has_mesh && m_show_solid && m_surface_variant.is_valid())
     {
+        const auto& a = m_assets[static_cast<crd::usize>(m_last_uploaded)];
         crd::renderer::Renderable r;
         r.transform     = crd::math::Transformf::identity();
         r.vertex_buffer = m_gpu_mesh.vertex_buffer.get();
-        r.vertex_count  = m_shapes[static_cast<crd::usize>(m_last_uploaded)].verts;
+        r.vertex_count  = a.cached_verts;
         r.index_buffer  = m_gpu_mesh.index_buffer.get();
-        r.index_count   = m_shapes[static_cast<crd::usize>(m_last_uploaded)].indices;
+        r.index_count   = a.cached_indices;
         r.index_type    = crd::rhi::IndexType::Uint32;
         r.variant       = m_surface_variant;
         r.bucket        = crd::renderer::DrawBucket::Opaque;
@@ -596,7 +868,7 @@ void SandboxLayer::render_scene(crd::rhi::CommandBuffer& cmd, crd::rhi::Image& s
     // Wireframe overlay — rendered on the FRP color image (still in ColorWrite after fg.execute()).
     if (m_show_wireframe && m_wf_pipeline && has_mesh)
     {
-        const auto& shape = m_shapes[static_cast<crd::usize>(m_last_uploaded)];
+        const auto& a = m_assets[static_cast<crd::usize>(m_last_uploaded)];
         const crd::rhi::RenderingColorAttachmentInfo wf_att{
             &m_frp->color_image(), crd::rhi::LoadOp::Load, crd::rhi::StoreOp::Store, {}};
         cmd.begin_rendering({ext, wf_att, nullptr});
@@ -612,11 +884,11 @@ void SandboxLayer::render_scene(crd::rhi::CommandBuffer& cmd, crd::rhi::Image& s
         if (m_gpu_mesh.index_buffer)
         {
             cmd.bind_index_buffer(*m_gpu_mesh.index_buffer, 0, crd::rhi::IndexType::Uint32);
-            cmd.draw_indexed(shape.indices, 0, 0);
+            cmd.draw_indexed(a.cached_indices, 0, 0);
         }
         else
         {
-            cmd.draw(shape.verts, 0);
+            cmd.draw(a.cached_verts, 0);
         }
         cmd.end_rendering();
     }

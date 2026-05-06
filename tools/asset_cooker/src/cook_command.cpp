@@ -176,8 +176,12 @@ void scan_recursive(const fs::Path& dir, crd::containers::Array<fs::Path>& out)
                 scan_recursive(entry, out);
             }
         }
-        else if (fs::is_file(entry) && path_extension(entry) != ".meta")
+        else if (fs::is_file(entry) && !name.ends_with(".meta"))
         {
+            // Filter on filename suffix, not path_extension(): the latter uses
+            // first-dot semantics (so `BoomBox.glb.meta` returns `.glb.meta`),
+            // which would let .meta sidecars leak back into the next scan and
+            // grow `.meta.meta.meta...` chains across runs.
             out.push_back(entry);
         }
     }
@@ -254,7 +258,21 @@ int cmd_cook(const char* root_cstr, const char* out_cstr)
             }
         }
 
-        // Resolve .meta sidecar.
+        // Look up the handler BEFORE touching the .meta sidecar. Files without
+        // a registered handler (LICENSES.md, .gitignore, generator scripts) are
+        // not assets and must not pollute the source tree with stale sidecars.
+        const CookHandlerFn handler = find_cook_handler(ext);
+        if (handler == nullptr)
+        {
+            LogEntry le;
+            le.rel_path = crd::containers::String(rel_sv.data(), rel_sv.size(), &g_cook_alloc);
+            le.uuid     = crd::containers::String(&g_cook_alloc);
+            le.status   = "no_handler";
+            log_entries.push_back(std::move(le));
+            continue;
+        }
+
+        // Resolve .meta sidecar (cookable files only).
         crd::containers::String meta_str(&g_cook_alloc);
         meta_str.append(src.generic().data(), src.generic().size());
         meta_str.append(".meta");
@@ -284,17 +302,6 @@ int cmd_cook(const char* root_cstr, const char* out_cstr)
         }
 
         const auto id_str = asset_id.to_string(&g_cook_alloc);
-
-        const CookHandlerFn handler = find_cook_handler(ext);
-        if (handler == nullptr)
-        {
-            LogEntry le;
-            le.rel_path = crd::containers::String(rel_sv.data(), rel_sv.size(), &g_cook_alloc);
-            le.uuid     = crd::containers::String(id_str.c_str(), &g_cook_alloc);
-            le.status   = "no_handler";
-            log_entries.push_back(std::move(le));
-            continue;
-        }
 
         // Read source bytes for hash.
         crd::containers::Array<crd::u8> src_bytes(&g_cook_alloc);

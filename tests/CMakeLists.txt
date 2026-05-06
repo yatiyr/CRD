@@ -17,6 +17,7 @@ add_subdirectory(rhi_vulkan)
 add_subdirectory(jobs)
 add_subdirectory(resources)
 add_subdirectory(meshgen)
+add_subdirectory(scene)
 
 if(CRD_BUILD_BENCHMARKS)
     add_subdirectory(bench)

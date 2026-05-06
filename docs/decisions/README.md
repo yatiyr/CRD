@@ -77,9 +77,11 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 
 ### `[scripting]`
 - ADR-0034 — C++ hot-reload DLL scripting as primary scripting mechanism
+- ADR-0056 — Scene/ECS L6–L8: Reserved API slots (ScriptComponent slot)
 
 ### `[networking]` `[determinism]`
 - ADR-0035 — Networking architecture principles (layered, determinism-first)
+- ADR-0056 — Scene/ECS L6–L8: Reserved API slots (Replication slot)
 
 ### `[renderer]` `[render-path]`
 - ADR-0016 — Render path strategy
@@ -100,6 +102,15 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 ### `[scene]` `[ecs]`
 - ADR-0020 — Scene & ECS hybrid + UI in scene tree
 - ADR-0044 — Phase ordering: material PSO/variant completion precedes scene/ECS
+- ADR-0049 — Scene/ECS L1: Entity identity & SlotMap
+- ADR-0050 — Scene/ECS L2: Storage backends (Archetype + SparseSet hybrid)
+- ADR-0051 — Scene/ECS L3: Relations as first-class
+- ADR-0052 — Scene/ECS L4: Query · System · Schedule
+- ADR-0053 — Scene/ECS L5: Component index slot framework
+- ADR-0054 — Scene/ECS: Transform hierarchy update model
+- ADR-0055 — Scene serialization: TOML authoring + SCEN CRDR cooked
+- ADR-0056 — Scene/ECS L6–L8: Reserved API slots (Replication, Scripts, Reflection)
+- ADR-0057 — Scene/ECS: UI nodes in scene tree (boundary declaration)
 
 ### `[sandbox]` `[build]`
 - ADR-0045 — Sandbox executable, asset layout, cook workflow, crd-meshgen
@@ -120,6 +131,7 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 - ADR-0020 — Scene & ECS hybrid + UI in scene tree
 - ADR-0023 — UI architecture
 - ADR-0047 — Font rendering system (crd-font, crd-ui dependency)
+- ADR-0057 — Scene/ECS: UI nodes in scene tree (boundary declaration)
 
 ### `[imgui]` `[vulkan]`
 - ADR-0024 — ImGui single-viewport default
@@ -186,3 +198,12 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 | 0046  | MaterialDomain enum, node-editor future-proofing, RT hybrid strategy | arch, renderer, shader, materials, rt | Accepted |
 | 0047  | Font rendering system (MTSDF, FreeType+msdfgen, HarfBuzz, offline+dynamic atlas, extruded text) | arch, font, renderer, ui, text | Accepted |
 | 0048  | Material system architecture foundation (two-tier Template/Instance, surface fn, MATR chunks, ShaderOptions, ParameterType) | arch, renderer, shader, materials, resources, cooker | Accepted |
+| 0049  | Scene/ECS L1: Entity identity & SlotMap                | scene, ecs, arch, layer-1               | Accepted |
+| 0050  | Scene/ECS L2: Storage backends (Archetype + SparseSet hybrid) | scene, ecs, arch, layer-2, performance | Accepted |
+| 0051  | Scene/ECS L3: Relations as first-class                 | scene, ecs, arch, layer-3, relations    | Accepted |
+| 0052  | Scene/ECS L4: Query · System · Schedule                | scene, ecs, arch, layer-4, query, scheduler | Accepted |
+| 0053  | Scene/ECS L5: Component index slot framework           | scene, ecs, arch, layer-5, indexes, extensibility | Accepted |
+| 0054  | Scene/ECS: Transform hierarchy update model            | scene, ecs, math, performance           | Accepted |
+| 0055  | Scene serialization: TOML authoring + SCEN CRDR cooked | scene, ecs, resources, cooker, arch     | Accepted |
+| 0056  | Scene/ECS L6–L8: Reserved API slots (Replication, Scripts, Reflection) | scene, ecs, arch, layer-6, layer-7, layer-8, networking, scripting, editor | Accepted |
+| 0057  | Scene/ECS: UI nodes in scene tree (boundary declaration) | scene, ecs, ui, arch                  | Accepted |

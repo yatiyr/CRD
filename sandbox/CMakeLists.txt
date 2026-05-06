@@ -14,14 +14,53 @@ target_link_libraries(crd-sandbox PRIVATE
     crd-imgui
     crd-log
     crd-math
+    crd-memory
     crd-meshgen
     crd-renderer
+    crd-resources
     crd-rhi
     crd-rhi-vulkan
     crd-shader
 )
 target_compile_definitions(crd-sandbox PRIVATE CRD_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 crd_enable_default_pch(crd-sandbox)
+
+# ── cook-demo-assets ────────────────────────────────────────────────────────
+# Cooks committed glTF/PNG demo assets from assets/source/ into a single PACK
+# at assets/cooked/demo_assets.crdr. crd-sandbox depends on this target so the
+# pack is regenerated automatically when source assets change.
+
+set(DEMO_ASSETS_SRC_DIR "${CMAKE_SOURCE_DIR}/assets/source")
+set(DEMO_ASSETS_OUT_DIR "${CMAKE_SOURCE_DIR}/assets/cooked")
+set(DEMO_ASSETS_PACK    "${DEMO_ASSETS_OUT_DIR}/demo_assets.crdr")
+
+# Glob source files explicitly so add_custom_command's DEPENDS triggers a recook
+# whenever any committed source asset changes.
+file(GLOB DEMO_ASSETS_SOURCES CONFIGURE_DEPENDS
+    "${DEMO_ASSETS_SRC_DIR}/*.glb"
+    "${DEMO_ASSETS_SRC_DIR}/*.gltf"
+    "${DEMO_ASSETS_SRC_DIR}/*.png"
+    "${DEMO_ASSETS_SRC_DIR}/*.jpg"
+    "${DEMO_ASSETS_SRC_DIR}/*.jpeg"
+    "${DEMO_ASSETS_SRC_DIR}/*.tga"
+    "${DEMO_ASSETS_SRC_DIR}/*.bmp"
+)
+
+add_custom_command(
+    OUTPUT  "${DEMO_ASSETS_PACK}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${DEMO_ASSETS_OUT_DIR}"
+    COMMAND $<TARGET_FILE:asset_cooker> cook --root "${DEMO_ASSETS_SRC_DIR}" --out "${DEMO_ASSETS_PACK}"
+    DEPENDS asset_cooker ${DEMO_ASSETS_SOURCES}
+    COMMENT "Cooking sandbox demo assets → ${DEMO_ASSETS_PACK}"
+    VERBATIM
+)
+
+add_custom_target(cook-demo-assets DEPENDS "${DEMO_ASSETS_PACK}")
+add_dependencies(crd-sandbox cook-demo-assets)
+
+target_compile_definitions(crd-sandbox PRIVATE
+    CRD_DEMO_ASSETS_PACK="${DEMO_ASSETS_PACK}"
+)
 
 # Copy imgui config so the sandbox can find it at runtime.
 set(SANDBOX_IMGUI_CONFIG "${CMAKE_SOURCE_DIR}/runtime/configs/imgui_layer.toml")
