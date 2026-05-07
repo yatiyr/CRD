@@ -3,6 +3,9 @@ add_executable(crd-scene-tests
     test_slot_map.cpp
     test_world.cpp
     test_component_registry.cpp
+    test_archetype_chunk.cpp
+    test_archetype_graph.cpp
+    test_archetype_storage.cpp
 )
 
 target_link_libraries(crd-scene-tests PRIVATE

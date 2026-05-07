@@ -299,7 +299,7 @@ namespace
 class StubBackend : public IStorageBackend
 {
 public:
-    void insert(EntityId, ComponentId, const void*) override { ++m_inserts; }
+    void insert(EntityId, ComponentId, void*) override { ++m_inserts; }
     void remove(EntityId, ComponentId) override { ++m_removes; }
     [[nodiscard]] bool has(EntityId, ComponentId) const override { return false; }
     [[nodiscard]] void* get_mut(EntityId, ComponentId) override { return nullptr; }

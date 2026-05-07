@@ -1,12 +1,17 @@
 #pragma once
 
 #include <crd/containers/array.hpp>
+#include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
+#include <crd/scene/archetype_chunk_storage.hpp>
 #include <crd/scene/component.hpp>
 #include <crd/scene/component_registry.hpp>
 #include <crd/scene/entity.hpp>
 #include <crd/scene/slot_map.hpp>
+#include <crd/scene/storage_event_sink.hpp>
+
+#include <utility>
 
 namespace crd::scene
 {
@@ -33,8 +38,8 @@ public:
 
     World(const World&) = delete;
     World& operator=(const World&) = delete;
-    World(World&&) = default;
-    World& operator=(World&&) = default;
+    World(World&&) = delete; // m_storage references *this; non-movable
+    World& operator=(World&&) = delete;
 
     // ---- Entity lifecycle ----------------------------------------------
 
@@ -78,10 +83,98 @@ public:
 
     [[nodiscard]] const ComponentRegistry& components() const noexcept { return m_components; }
 
+    // ---- Typed component API (Phase 3.0 v1c2; ADR-0050) ---------------
+    //
+    // add_component<T>(e, value)    UPSERT — value replaces any prior T on e.
+    //                                Asserts T is registered + e is alive.
+    // has_component<T>(e)           O(1) — archetype mask test.
+    // get_component<T>(e)           const access; does not bump version.
+    // get_component_mut<T>(e)       mutable access; bumps chunk version on entry.
+    // remove_component<T>(e)        moves e to (mask & ~T) archetype.
+
+    template <typename T> ComponentId require_component_id() const
+    {
+        ComponentId id = m_components.id_of<T>();
+        CRD_ASSERT(!id.is_null());
+        return id;
+    }
+
+    template <typename T> void add_component(EntityId e, T value)
+    {
+        CRD_ASSERT(is_alive(e));
+        const ComponentId id = require_component_id<T>();
+        // `value` is a local; storage may move-from it.
+        m_storage.insert(e, id, static_cast<void*>(&value));
+    }
+
+    template <typename T> [[nodiscard]] bool has_component(EntityId e) const noexcept
+    {
+        if (!is_alive(e))
+        {
+            return false;
+        }
+        const ComponentId id = m_components.id_of<T>();
+        if (id.is_null())
+        {
+            return false;
+        }
+        return m_storage.has(e, id);
+    }
+
+    template <typename T> [[nodiscard]] const T* get_component(EntityId e) const
+    {
+        if (!is_alive(e))
+        {
+            return nullptr;
+        }
+        const ComponentId id = m_components.id_of<T>();
+        if (id.is_null())
+        {
+            return nullptr;
+        }
+        return static_cast<const T*>(m_storage.get_const(e, id));
+    }
+
+    template <typename T> [[nodiscard]] T* get_component_mut(EntityId e)
+    {
+        if (!is_alive(e))
+        {
+            return nullptr;
+        }
+        const ComponentId id = m_components.id_of<T>();
+        if (id.is_null())
+        {
+            return nullptr;
+        }
+        return static_cast<T*>(m_storage.get_mut(e, id));
+    }
+
+    template <typename T> void remove_component(EntityId e)
+    {
+        if (!is_alive(e))
+        {
+            return;
+        }
+        const ComponentId id = m_components.id_of<T>();
+        if (id.is_null())
+        {
+            return;
+        }
+        m_storage.remove(e, id);
+    }
+
+    [[nodiscard]] ArchetypeChunkStorage& storage() noexcept { return m_storage; }
+    [[nodiscard]] const ArchetypeChunkStorage& storage() const noexcept { return m_storage; }
+
+    [[nodiscard]] crd::u32 archetype_count() const noexcept { return m_storage.graph().archetype_count(); }
+
+    void set_storage_event_sink(IStorageEventSink* sink) noexcept { m_storage.set_event_sink(sink); }
+
 private:
     SlotMap m_slots;
     crd::containers::Array<EntityId> m_pending_destroy;
     ComponentRegistry m_components;
+    ArchetypeChunkStorage m_storage;
 };
 
 } // namespace crd::scene

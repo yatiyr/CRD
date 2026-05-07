@@ -22,7 +22,7 @@ engine *is*; read `docs/sessions/` to remember how it got that way.
 | `crd-resources`  | ✅ (v1g) | [resources.md](resources.md) — handle table, sync/async/streamed loading, 2Q LRU eviction, hot-reload, asset cooker (CRDR), texture + mesh + material loaders |
 | `crd-meshgen`    | ✅        | [meshgen.md](meshgen.md) — procedural geometry primitives (cube, sphere, cylinder, cone, plane, capsule, torus, icosphere) producing standard 48B vertex layout |
 | `crd-sandbox`    | ✅        | [sandbox.md](sandbox.md) — interactive desktop app: orbit camera, ForwardRenderPath, unified Asset Browser (procedural shapes + cooked glTF imports), ImGui overlay |
-| `crd-scene`      | 🚧 (v1b) | [scene.md](scene.md) — Phase 3.0 foundation: `EntityId`/`SlotMap`/`World`, `ComponentRegistry` + variadic trait grammar, `IStorageBackend` interface (declared). 8-layer slot architecture; v1c–v1n in flight |
+| `crd-scene`      | 🚧 (v1c2)| [scene.md](scene.md) — Phase 3.0 foundation: `EntityId`/`SlotMap`/`World`, `ComponentRegistry` + trait grammar, archetype storage (`Archetype` + `ArchetypeGraph` + `ArchetypeChunkStorage`), typed `add_component<T>`/`get`/`remove`, `IStorageEventSink` (the L5 plug point). 8-layer slot architecture; v1d–v1n in flight |
 
 When a new module ships, add a row here and link to its overview. If a module
 gets a long-form deep-dive document (like `LOG_FILE.md`), link to that too —

@@ -5,6 +5,22 @@ move to a session log entry and remove from here.
 
 ## Active debt
 
+### TLSF allocator — three deferred enhancements (D-001-a, 2026-05-07)
+
+`TlsfAllocator` ships in production-grade form: arbitrary alignment, O(1) operations under ASan stress (1000 iterations × 16/32/64/128/256-byte alignments), `try_allocate` non-throwing path. Three enhancements are consciously deferred:
+
+1. **Conte's 8-byte block-header overlap trick.** Saves 8 B per allocation by overlapping the next block's `prev_phys_block` field with the previous block's payload tail. Documented in `docs/sessions/2026-05-07-detour-D-001a-tlsf.md`. Layout change is high-risk; the 8-byte saving is marginal at engine scale (1000 allocations of 100 bytes each saves ~8 KB). Pick up if memory pressure ever justifies — likely never.
+
+2. **32-bit pointer support.** Cerid CI is 64-bit. Constants (`kFlIndexMax = 32`, the `unsigned long long` cast in `fls_size`) assume 64-bit. Adding template parameterization on pointer width adds bug surface for zero current benefit. Pick up if a 32-bit embedded target ever appears.
+
+3. **Multi-threaded TLSF.** `IAllocator` base class documents "not thread-safe by default; hand them out per-thread or wrap them yourself" — this is the engine-wide convention. Lock-based TLSF kills the O(1) latency claim; lock-free TLSF is research-tier (Marotta et al. 2018). The standard scaling pattern is per-thread arenas. Don't pick up — this isn't TLSF-specific debt; it's a project architecture decision.
+
+**Where it's referenced:**
+- `engine/memory/src/allocators/tlsf_allocator.cpp` — current implementation comments document each deferred item at the relevant code site.
+- `docs/sessions/2026-05-07-detour-D-001a-tlsf.md` — full design rationale.
+
+---
+
 ### Async GPU upload (`GpuUploader`)
 
 **Why it matters:** the sandbox now kicks `load_async<MeshResource>` on click and finalises the upload on the first frame after the load fiber signals Ready (Phase 2.8 follow-up, 2026-05-06). That removes the disk-I/O + parse hitch from the main thread. But `GpuUploader::upload_mesh` / `upload_texture` still end with a synchronous `device.graphics_queue().submit_and_wait(*cmd)` — a `vkQueueWaitIdle` on the main thread. For BoomBox-class assets (~10 MB GLB → ~30 MB raw mesh) that's a visible hitch even though the CPU-side load is now off the main thread.

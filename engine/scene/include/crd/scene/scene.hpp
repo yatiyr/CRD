@@ -4,9 +4,14 @@
 // Subsequent slices grow this with components, storage backends, relations,
 // query DSL, schedule, and indexes (see docs/phases/phase-3.0-scene-ecs.md).
 
+#include <crd/scene/archetype.hpp>
+#include <crd/scene/archetype_chunk.hpp>
+#include <crd/scene/archetype_chunk_storage.hpp>
+#include <crd/scene/archetype_graph.hpp>
 #include <crd/scene/component.hpp>
 #include <crd/scene/component_registry.hpp>
 #include <crd/scene/entity.hpp>
 #include <crd/scene/slot_map.hpp>
 #include <crd/scene/storage_backend.hpp>
+#include <crd/scene/storage_event_sink.hpp>
 #include <crd/scene/world.hpp>

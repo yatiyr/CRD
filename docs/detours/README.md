@@ -20,7 +20,7 @@ external request).
 
 ## Active detours
 
-(none)
+- **D-001 — Memory infrastructure for elite-tier allocator coverage** (opened 2026-05-07). Pauses Phase 3.0 v1d. TLSF allocator (D-001-a) + GrowablePool + ChunkAllocator refactor (D-001-b). See `D-001-memory-infrastructure.md`.
 
 ## Closed detours
 

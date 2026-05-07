@@ -1,6 +1,6 @@
 # Phase 3.0 — Scene / ECS Foundation
 
-**Status:** 🚧 active — v1a + v1b shipped (2026-05-06, 2026-05-07); 12 slices remaining
+**Status:** 🚧 active — v1a + v1b + v1c (whole) shipped 2026-05-06 / 07; 11 of 14 slices remaining. v1d (SparseSet escape-hatch backend) is next.
 **ADRs:** ADR-0049, ADR-0050, ADR-0051, ADR-0052, ADR-0053, ADR-0054, ADR-0055, ADR-0056, ADR-0057
 **Cornerstone:** ADR-0020 (scene/ECS hybrid, UI in tree)
 **New module:** `crd-scene` (bootstrapped 2026-05-06)
@@ -22,10 +22,12 @@ This is the **highest-leverage single block of work in the engine**. Every Phase
 |---|---|---|
 | v1a | `EntityId` + `SlotMap` + `World` shell | ✅ shipped 2026-05-06 — `docs/sessions/2026-05-06-scene-v1a-slotmap.md` |
 | v1b | `ComponentRegistry` + `IStorageBackend` + storage-hint registration grammar | ✅ shipped 2026-05-07 — `docs/sessions/2026-05-07-scene-v1b-registry.md` |
-| v1c | `ArchetypeChunkStorage` (16 KB chunks, SoA, archetype graph, version counters) | ⏳ next |
-| v1d–v1n | see slice list below | ⏳ |
+| v1c1 | Chunk allocator + SoA layout + per-chunk version-counter array | ✅ shipped 2026-05-07 — `docs/sessions/2026-05-07-scene-v1c1-chunk-layout.md` |
+| v1c2 | Archetype + ArchetypeGraph + ArchetypeChunkStorage + IStorageEventSink + typed `World::add_component<T>` | ✅ shipped 2026-05-07 — `docs/sessions/2026-05-07-scene-v1c2-archetype-storage.md` |
+| v1d | `SparseSetStorage` (escape hatch for high-churn / sparse / lookup-dominated) | ⏳ next |
+| v1e–v1n | see slice list below | ⏳ |
 
-`crd-scene` carries `EntityId`, `SlotMap`, `World` (deferred destroy + synchronous escape hatch), `ComponentRegistry` (variadic trait grammar, idempotent re-registration, type-erased lifecycle ops captured via `if constexpr`), `ComponentMask` (256-bit), and the `IStorageBackend` interface (declared only — Archetype lands v1c, SparseSet lands v1d). 44 unit tests / 3579 assertions; six-config green. No entity-component bindings yet — those land starting v1c.
+`crd-scene` now has its first real "entity owns components" capability. `World::add_component<Transform>(e, t)` actually stores data in archetype chunks; `for_each_chunk` walks any superset query; per-chunk version counters bump automatically on writes (free `ChangeDetect` foundation for v1i); `IStorageEventSink` is the single hook into which every L5 IComponentIndex (v1i) and beyond will fan out. 82 unit tests / 7012 assertions; six-config green.
 
 ---
 
@@ -58,7 +60,8 @@ The architecture is "extensible from day one" because adding any future ECS exte
 |---|---|---|
 | L1 Entity / SlotMap | Full impl | v1a ✅ shipped 2026-05-06 |
 | L2 ComponentRegistry + `IStorageBackend` interface | Full impl (interface only) | v1b ✅ shipped 2026-05-07 |
-| L2 ArchetypeChunkStorage | Full impl | v1c |
+| L2 Chunk machinery (ChunkLayout / ChunkHeader / Chunk / ChunkAllocator) | Full impl | v1c1 ✅ shipped 2026-05-07 |
+| L2 ArchetypeChunkStorage + ArchetypeGraph + IStorageEventSink + typed World API | Full impl | v1c2 ✅ shipped 2026-05-07 |
 | L2 SparseSetStorage | Full impl | v1d |
 | L3 Relations | Full impl + ChildOf, AttachedTo | v1f |
 | L4 Query DSL | Full impl | v1g |
@@ -113,13 +116,34 @@ Re-registration is idempotent: registering the same `T` twice returns the existi
 **ADR:** 0050, 0053, 0056 (registration grammar)
 **Session:** `docs/sessions/2026-05-07-scene-v1b-registry.md`
 
-### v1c — `ArchetypeChunkStorage` (~600 LOC + tests)
+### v1c — `ArchetypeChunkStorage` (split — see v1c1 + v1c2)
 
-16 KB chunks, 64-byte aligned SoA, archetype graph (memoised lazy build), per-chunk version counters. Tests: chunk allocation, archetype creation, entity insert/move/remove across archetypes, chunk fill/spill, version-counter increment on write.
+Per the slice's own "may split" allowance, v1c was divided into two reviewable halves once the architecture got concrete. v1c1 ships the in-chunk machinery; v1c2 builds the archetype graph + entity lifecycle on top.
 
-May further split into v1c1 (chunk allocator + SoA layout) and v1c2 (archetype graph + entity move) if scope grows.
+#### v1c1 — Chunk allocator + SoA layout ✅ shipped 2026-05-07
+
+`ChunkLayout` (per-archetype byte plan: sorted `ComponentId` list, sizes, alignments, offsets, entity-id offset, capacity), `ChunkHeader` (entity_count, entity_capacity, archetype_id back-ref, layout-local `version_counter[kMaxComponentsPerArchetype]`), `Chunk` (raw 16 KB block + accessors — no entity ops; those live on `Archetype`), `ChunkAllocator` (aligned alloc/free with dtor cleanup).
+
+Two design choices documented in the v1c1 session log:
+
+- `kMaxComponentsPerArchetype` (32) is independent of per-World `kMaxComponents` (256). Caps the in-chunk version-counter array at 256 B; archetypes wider than 32 components return an invalid layout (`entity_capacity == 0`).
+- `version_counter` is *layout-local* indexed (0..K-1 where K is this archetype's component count), not by global `ComponentId`. Saves ~1.7 KB per chunk vs the original sketch.
+
+11 tests / 88 assertions; six-config green (536/536 / 533/533 release). 17/17 headless smokes per non-tidy config.
 
 **ADR:** 0050
+**Session:** `docs/sessions/2026-05-07-scene-v1c1-chunk-layout.md`
+
+#### v1c2 — Archetype + Graph + Storage + Event Sink + typed World API ✅ shipped 2026-05-07
+
+`Archetype` (mask + ChunkLayout + dense `Array<Chunk>` + dense `Array<ArchetypeId>` edge tables sized `kMaxComponents`). `ArchetypeGraph` (`HashMap<ComponentMask, ArchetypeId>` + 256-bit boost-style hash + memoised `after_add` / `after_remove` edges). `ArchetypeChunkStorage : IStorageBackend` (insert is upsert; bytewise entity move via the registry's lifecycle ops; swap-remove updates trailing entity's location; trailing-chunk-only free; `for_each_chunk` walks superset archetypes). `IStorageEventSink` (the Cerid signature — every storage mutation calls `on_insert` / `on_update` / `on_remove` / `on_entity_destroyed` through this interface; v1c2 ships `NullStorageEventSink` as the default; v1i swaps in the `IComponentIndex` fan-out without touching storage call sites). `World` gains the typed templates: `add_component<T>(e, value)`, `has_component<T>(e)`, `get_component<T>(e)`, `get_component_mut<T>(e)` (declared write — bumps version), `remove_component<T>(e)`. World becomes non-movable (storage references registry).
+
+ADR-0050 §1 amended in place: `IStorageBackend::insert` takes `void* data` rather than `const void*` (storage may move-from); `for_each_chunk` carries an opaque `void* user_data` pointer.
+
+27 tests / 1345 assertions added. Six-config green (563/563 / 560/560 release).
+
+**ADR:** 0050, 0053
+**Session:** `docs/sessions/2026-05-07-scene-v1c2-archetype-storage.md`
 
 ### v1d — `SparseSetStorage` (~250 LOC + tests)
 

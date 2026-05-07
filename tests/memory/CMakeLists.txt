@@ -6,6 +6,7 @@ target_link_libraries(crd-memory-tests PRIVATE
     crd-core
     crd-log
     crd-memory
+    crd-containers
     Catch2::Catch2WithMain
 )
 

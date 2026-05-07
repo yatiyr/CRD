@@ -11,7 +11,7 @@
 
 ## Current focus
 
-**Phase 3.0 — Scene/ECS foundation. v1a + v1b SHIPPED. v1a (entity identity) 2026-05-06; v1b (component registry + IStorageBackend + storage-hint grammar) 2026-05-07. 12 slices remaining. Next: v1c — `ArchetypeChunkStorage` (16 KB chunks, SoA, archetype graph, per-chunk version counters) per ADR-0050.**
+**Phase 3.0 — Scene/ECS foundation. v1a + v1b + v1c (whole) SHIPPED. v1a (entity identity) 2026-05-06; v1b (registry + IStorageBackend + trait grammar) 2026-05-07; v1c1 (chunk allocator + SoA layout) + v1c2 (archetype graph + bytewise entity move + `ArchetypeChunkStorage : IStorageBackend` + typed `World::add_component<T>`/`has`/`get`/`remove` + IStorageEventSink lifecycle hooks for the L5 IComponentIndex framework) 2026-05-07. The engine has its first real "entity owns components" capability. 11 slices remaining in Phase 3.0. Next: v1d — `SparseSetStorage` (escape hatch for high-churn / sparse / lookup-dominated components) per ADR-0050.**
 
 The architecture is the **eight-layer slot-shaped ECS** designed for million-entity scenes, agents-as-components-with-scripts, UI on the same machinery (game and editor), with every novel ECS extension as a registered slot:
 
@@ -32,7 +32,7 @@ L0 Memory · Containers · Jobs    (already shipped)
 
 Cerid signature: a uniform `IComponentIndex` extension framework where every novel ECS extension (history, change detect, spatial, GPU-mirror, async, replication, scripts, reflection) is a registered slot consuming the same component-lifecycle event stream. Adding the next extension is a one-day job.
 
-Slices: ~~v1a (Entity+SlotMap)~~ ✅ → ~~v1b (registry)~~ ✅ → **v1c (Archetype storage)** ← active → v1d (SparseSet storage) → v1e (mixed-backend chunk visitor) → v1f (relations) → v1g (query DSL) → v1h (system+schedule) → v1i (index framework + ChangeDetect + AsyncAware) → v1j (Transform + propagation) → v1k (SceneResource+Loader) → v1l (cook_scene cooker handler) → v1m (sandbox renderer integration) → v1n (reserved-slot freeze).
+Slices: ~~v1a (Entity+SlotMap)~~ ✅ → ~~v1b (registry)~~ ✅ → ~~v1c1 (chunk allocator + layout)~~ ✅ → ~~v1c2 (graph + entity move + IStorageBackend impl + sink hooks)~~ ✅ → **v1d (SparseSet storage)** ← active → v1e (mixed-backend chunk visitor) → v1f (relations) → v1g (query DSL) → v1h (system+schedule) → v1i (index framework + ChangeDetect + AsyncAware) → v1j (Transform + propagation) → v1k (SceneResource+Loader) → v1l (cook_scene cooker handler) → v1m (sandbox renderer integration) → v1n (reserved-slot freeze).
 
 Active phase doc: `docs/phases/phase-3.0-scene-ecs.md`.
 
@@ -60,7 +60,12 @@ Aktif phase dosyası: `docs/phases/phase-2.8-material-completion.md` (active)
 
 ## Active detour
 
-_none — running on the main roadmap._
+**D-001 — Memory infrastructure for elite-tier allocator coverage.** Opened 2026-05-07. Pauses Phase 3.0 v1d.
+
+- **D-001-a — `TlsfAllocator`** (active): canonical Two-Level Segregated Fit. O(1) allocate/free/coalesce with bounded fragmentation. Replaces nothing; ships as opt-in `IAllocator*` consumers can pick.
+- **D-001-b — `GrowablePoolAllocator` + `ChunkAllocator` refactor** (pending): fixed-size aligned blocks from auto-growing pages. ChunkAllocator becomes a thin wrapper. Closes the v1c1 O(N) `free` perf debt.
+
+Detour file: `docs/detours/D-001-memory-infrastructure.md`. Main roadmap resumes at v1d after D-001-b closes.
 
 > When a detour opens, this section names it (e.g. "D-001: investigate
 > shader-cache corruption") and the main roadmap pauses until it closes.
@@ -68,6 +73,159 @@ _none — running on the main roadmap._
 > `docs/detours/README.md`.
 
 ## Last shipped milestone
+
+**2026-05-07 — Detour D-001-a SHIPPED + alignment fix landed: `TlsfAllocator` is fully production-grade.**
+
+Canonical Masmano/Conte TLSF — O(1) allocate / deallocate / coalesce with bounded internal fragmentation. The general-purpose real-time allocator promised in CLAUDE.md since Phase 1. Ships as opt-in `IAllocator*` consumer; **`MallocAllocator` remains the engine default** (the cutover is a separate change).
+
+### Capabilities (shipped)
+
+- Pool sizes: up to 4 GB (`kFlIndexMax = 32`), three-sentinel layout, ~7 KB metadata.
+- Alignment: **arbitrary power-of-two**, tested 16/32/64/128/256 under ASan stress.
+- O(1) `allocate` / `deallocate` / coalesce via `std::countr_zero` bitmap searches.
+- `reallocate` with in-place grow/shrink + alloc-copy fallback.
+- **Non-throwing `try_allocate`** path returns nullptr on OOM (the `IAllocator::allocate` override wraps with `CRD_FATAL` on null).
+- Owning + non-owning constructors.
+- `MemoryStats` integration (debug-only counters).
+
+### Three ASan-caught bugs fixed
+
+1. **Off-by-16 in `init_pool`** — pool has 3 block headers (start_sentinel + free_block + end_sentinel), not 2. Free block sized `capacity - 3 × 16`, not `capacity - 2 × 16`.
+2. **Insufficient `requested` size for alignment-shift** — Conte's algorithm needs `adjusted + alignment + gap_minimum` (where `gap_minimum = sizeof(BlockHeader) = 32`) to cover the worst case where the leading-gap is too small and gets advanced past `alignment`. Old code requested only `adjusted + alignment` and corrupted memory under stress.
+3. **Missing `block_set_prev_used(after_new)` in leading-split** — after carving a leading remainder out of a free block, the block immediately after the new user-block had stale `kPrevFreeBit` (set when the original block was free; predecessor is now in-use). Without clearing, a later deallocate followed `prev_phys_block` to an absorbed (garbage) address. Pinned by `CRD_ASSERT(!block_prev_is_free(after_new))` in `trim_free_leading`.
+
+### Documented as `docs/debt.md`
+
+Three out-of-scope items consciously deferred (none are real v1 limitations for Cerid's actual platforms):
+- **Thread-safety**: `IAllocator` documents project-wide convention "not thread-safe by default; per-thread arenas". Architectural decision, not specific to TLSF.
+- **32-bit support**: Cerid CI is 64-bit. No 32-bit consumer or roadmap target. Adding parameterization is bug surface for zero benefit.
+- **Conte's 8-byte overhead trick**: marginal optimization (saves 8 B per allocation), high-risk layout change. Defer.
+
+### Final numbers
+
+21 unit tests / 2208 assertions including a 1000-iteration mixed-alignment stress (16/32/64/128/256) under ASan. Six configs green: win-debug 584/584, win-relwithdebinfo 584/584, win-release 581/581, win-asan 584/584, win-clang-cl 584/584, win-tidy clean. 17/17 headless smokes per non-tidy config.
+
+Detour D-001-b is next: `GrowablePoolAllocator` + `ChunkAllocator` refactor. After D-001-b closes, the detour ends and Phase 3.0 v1d resumes.
+
+## Previous shipped milestone
+
+**2026-05-07 — Phase 3.0 v1c2 SHIPPED: `ArchetypeChunkStorage : IStorageBackend` + memoised archetype graph + bytewise entity move + typed `World::add_component<T>` + `IStorageEventSink` lifecycle hooks (the Cerid L5 plug point).**
+
+This is the architectural moment Phase 3.0 was building toward — entity-component bindings, archetype graph, and the lifecycle hook every L5 IComponentIndex (ChangeDetect, AsyncAware, History, SpatialBVH, GpuResident, Replication, Reflection, Scripts) will plug into. v1d–v1n now have something to consume.
+
+### New public API (`engine/scene/`)
+
+- `crd::scene::ArchetypeId` — 32-bit per-World identifier with null sentinel `0xFFFFFFFFU`. Stable for the life of the World; ids never recycle.
+- `crd::scene::EntityLocation` — 16 bytes: `archetype_id`, `chunk_index`, `slot_in_chunk`. Indexed by `EntityId::index()` in the storage's `m_locations` array. Lazy-resized.
+- `crd::scene::Archetype` — owns `ChunkLayout` (computed once), `Array<Chunk> chunks` (dense, append-only growth), and two dense edge tables (`add_edges` and `remove_edges`, each sized `kMaxComponents`, indexed by `ComponentId.raw`). 1 KB of edge metadata per archetype guarantees O(1) add/remove navigation with zero hashing on the hot path.
+- `crd::scene::ArchetypeGraph` — `archetype_for(mask)` (O(1) avg via `HashMap<ComponentMask, ArchetypeId>` + a 256-bit boost-style hash), `after_add(arch, c)` and `after_remove(arch, c)` (memoised on first lookup, pointer-identity stable across rehashes thanks to `Array<unique_ptr<Archetype>>`).
+- `crd::scene::IStorageEventSink` (the Cerid signature at L5) — virtual `on_insert` / `on_update` / `on_remove` / `on_entity_destroyed`. Default impl `NullStorageEventSink` (singleton) is wired by every storage at construction; v1i swaps in the `IComponentIndex` fan-out without touching storage call sites or any user code.
+- `crd::scene::ArchetypeChunkStorage : IStorageBackend` — the primary L2 backend. Owns one `ChunkAllocator`, one `ArchetypeGraph`, one `m_locations` array. Implements `insert` (UPSERT semantics — second insert overwrites), `remove`, `has`, `get_mut` (declared write — bumps the chunk's per-component layout-local version counter), `for_each_chunk(required, visitor, user_data)` (walks **superset archetypes** — every archetype whose mask is a superset of `required`), `on_entity_destroyed` (tears down all components, fires per-component `on_remove` events to the sink, then clears the location). Plus a non-IStorageBackend `get_const` accessor that does NOT bump the version counter.
+- `World` extended with typed templates: `add_component<T>(e, value)`, `has_component<T>(e)`, `get_component<T>(e)`, `get_component_mut<T>(e)`, `remove_component<T>(e)`. `add_component<T>` requires `T` to be registered. `get_component_mut` returns a pointer; the version bump happened on entry. World now owns the `ArchetypeChunkStorage`. World is non-movable (storage references World's registry).
+
+### Behaviour pins documented in v1c2 session log
+
+1. **Entity move is bytewise.** Components shared between source and destination archetypes are moved via the lifecycle ops captured in the registry (move_construct + destruct), with a memcpy fallback. Storage never sees concrete C++ types.
+2. **`insert` is UPSERT.** Calling `add_component<Transform>(e, t1); add_component<Transform>(e, t2);` leaves t2 visible. The first registration's traits are canonical (already pinned in v1b).
+3. **`for_each_chunk` walks supersets.** `required = {Position}` matches every archetype whose mask is `⊇ {Position}` — including `(Position, Velocity)` and `(Position, Renderable)`. The visitor sees `ChunkView::present_mask` set to the actual archetype mask so it knows what's beyond the required set.
+4. **Edge tables are dense `Array<ArchetypeId>` indexed by `ComponentId.raw`.** 1 KB/archetype, zero allocation on the hot navigation path. Considered HashMap; rejected — at the per-mutation cost, the indexed-load is faster.
+5. **Trailing-chunk-only free.** When an entity leaves a chunk and the chunk drops to 0 entities AND it's the last chunk in the archetype, the chunk is freed back to the allocator. Mid-archetype empty chunks are kept (matches Bevy — avoids fragmentation under steady-state churn).
+6. **Last-entity swap-remove updates the swapped entity's location.** The release path patches `m_locations[swapped.index()].slot_in_chunk` after every byte-move.
+7. **`IStorageBackend::insert` takes `void* data`, not `const void*`.** Honest API contract: storage may move-from the source. This was an ADR-0050 §1 amendment alongside v1b's `void* user_data` addition; the ADR text now matches.
+8. **Bytes after `destruct` are uninitialised.** Move paths must not read source slot bytes after destructing. Documented inline in the move helper.
+
+### Tests added (`tests/scene/test_archetype_graph.cpp` + `test_archetype_storage.cpp`, +27 cases / +1345 assertions)
+
+Graph (10):
+- Fresh graph empty; `by_id(null)` returns nullptr.
+- `archetype_for(empty mask)` returns the empty archetype.
+- `archetype_for` is memoised; same mask → same archetype reference.
+- Different masks produce different archetypes.
+- `after_add` navigates A → A∪{C}; new archetype gets the union mask.
+- `after_add` of an existing component is idempotent.
+- `after_add` edge memoisation: cached on first lookup; reverse `remove_edges` primed simultaneously.
+- `after_remove` navigates A → A\{C}.
+- `after_remove` of an absent component is idempotent.
+- `Archetype::add_edges` / `remove_edges` sized to `kMaxComponents`, all entries default to `null` until populated.
+
+Storage end-to-end (14):
+- Empty World: no archetypes, location is invalid for any entity, has_component returns false.
+- `add_component<T>` creates archetype, places entity in chunk 0 slot 0, value populated.
+- `get_component_mut` returns a pointer; writes round-trip.
+- `add_component` is upsert — second add overwrites; no new archetype.
+- Adding a second component moves entity to a new archetype; both components survive.
+- `remove_component` moves entity to (mask & ~T).
+- Removing the last component clears `EntityLocation` (entity has no archetype-stored components).
+- Two entities in the same archetype get distinct slots.
+- swap_remove updates the trailing entity's location after a middle removal.
+- Chunk fill+spill: 1500 entities allocate ≥ 2 chunks for the archetype.
+- `destroy_immediate` clears storage location and tears down all components.
+- `flush_destroys` tears down components for queued entities.
+- `for_each_chunk` visits SUPERSET archetypes only (verified via three entities split across {Pos}, {Pos, Vel}, {Vel} — required {Pos} matches first two only).
+
+Version counter (1):
+- Bumps on insert; bumps on get_mut; does NOT bump on get_const.
+
+Storage event sink (3):
+- Default storage uses `NullStorageEventSink` (no-op).
+- `CountingSink` records insert / update / remove / destroyed counts across full lifecycle.
+- Sink receives `on_entity_destroyed` exactly once + per-component `on_remove` events (2 components → 2 on_remove + 1 on_destroyed).
+
+### Six-configuration green
+
+- win-debug:          563/563  (was 536, +27 new)
+- win-relwithdebinfo: 563/563
+- win-release:        560/560  (was 533, +27 new)
+- win-asan:           563/563  (DLL PATH fix applied; clean rebuild needed first time due to stale objs from v1c1's smaller World)
+- win-clang-cl:       563/563
+- win-tidy:           ✅ build clean
+
+All 17 headless smokes pass on every non-tidy config.
+
+## Previous shipped milestone
+
+**2026-05-07 — Phase 3.0 v1c1 SHIPPED: archetype chunk allocator + SoA layout + per-chunk version-counter array.**
+
+v1c was split into v1c1 (chunk machinery) and v1c2 (archetype graph + entity move) per phase doc allowance, so reviewable surface stays tight and v1c2 doesn't refactor anything in v1c1.
+
+New public API in `engine/scene/`:
+- `kChunkSize = 16 KB`, `kChunkAlignment = 64`, `kMaxComponentsPerArchetype = 32` (per-archetype cap, sized in advance for the in-chunk version-counter array — independent of per-World `kMaxComponents = 256`).
+- `crd::scene::ChunkHeader` — at byte 0 of every 16 KB chunk: `entity_count`, `entity_capacity`, `archetype_id` back-ref (populated by Archetype in v1c2), `version_counter[kMaxComponentsPerArchetype]` indexed by *layout-local* component index, not global `ComponentId`. ChangeDetectIndex (v1i) reads these.
+- `crd::scene::ChunkLayout` — once-computed plan: `components_sorted` (canonical archetype identity, ascending `ComponentId`), `sizes`, `alignments`, `offsets`, `entity_id_offset`, `entity_capacity`. `is_valid()` returns `entity_capacity > 0`. Failure paths (component count > `kMaxComponentsPerArchetype`, or one entity does not fit a chunk) leave `entity_capacity == 0`; v1c2 decides whether to reject at registration or `CRD_FATAL`.
+- `crd::scene::compute_chunk_layout(mask, registry, alloc)` — emits a `ChunkLayout`. Walks `ComponentId` ascending, pulls size/alignment from registry, computes capacity by trying a conservative initial estimate then decrementing until the layout fits inside `kChunkSize`.
+- `crd::scene::Chunk` — a dumb `void* memory` + accessors (`header()`, `entity_id_array(layout)`, `component_array(layout, layout_index)`). No entity ops; those land on Archetype in v1c2 because they need the entity-location array too.
+- `crd::scene::ChunkAllocator` — owns the lifetime of every chunk it hands out. `allocate()` returns a 64-byte aligned 16 KB block with the header zero-initialised; `free(chunk)` returns memory to the underlying `IAllocator` and clears the chunk's pointer; dtor frees outstanding chunks (verified under win-asan). Aligned-malloc-per-chunk in v1c1; a heap-pooled backing allocator can land later without API changes.
+
+Design choices documented under "Design choices made and why" in the v1c1 session log:
+- Per-archetype cap (32) is independent of per-World cap (256). Caps the per-chunk version-counter array at 256 B; archetypes wider than 32 components are rejected at layout time.
+- `version_counter` is layout-local indexed (0..K-1 where K = this archetype's component count), not global `ComponentId`. Saves ~1.7 KB per chunk vs the original sketch.
+- `Chunk` is a dumb 16 KB block — no `add_entity` / `remove_entity` / `component_array` methods. Those live on `Archetype` in v1c2 because they require both the layout *and* the entity-location array. Keeps v1c1 reviewable and v1c2 refactor-free.
+- `compute_chunk_layout` returns an invalid layout (entity_capacity == 0) on failure rather than `CRD_FATAL` — caller decides recovery (v1c2 `Archetype` will reject at registration).
+
+Tests added (`tests/scene/test_archetype_chunk.cpp`, +11 cases, +88 assertions):
+- Empty-mask layout (only EntityId array; capacity bounded purely by EntityId array).
+- Single-component layout with 64-byte aligned offsets; total fits 16 KB.
+- Two-component layout: both arrays aligned, total fits, component count ≤ cap.
+- Sorted-by-`ComponentId` regardless of mask order (set bits in reverse); offsets monotonically increasing.
+- Layout invalid when component count exceeds `kMaxComponentsPerArchetype` (registers 33 distinct types via `TestSlot<N>` template).
+- `ChunkAllocator::allocate` → 64-byte aligned memory + header zeroed (entity_count, entity_capacity, archetype_id, all version counters).
+- Multiple chunks have distinct memory.
+- `ChunkAllocator::free` clears chunk pointer + decrements outstanding count.
+- ASan leak check: dtor frees outstanding chunks (3 allocated, 0 freed → no leak under asan).
+- `Chunk::header` / `entity_id_array` / `component_array` return correct pointers (offset arithmetic verified against `chunk.memory`).
+- `static_assert` that `version_counter` array is sized exactly `kMaxComponentsPerArchetype × u64`.
+
+Six-configuration green:
+- win-debug:          536/536  (was 525, +11 new)
+- win-relwithdebinfo: 536/536
+- win-release:        533/533  (was 522, +11 new)
+- win-asan:           536/536
+- win-clang-cl:       536/536
+- win-tidy:           ✅ build clean
+
+All 17 headless smokes pass on every non-tidy config.
+
+## Previous shipped milestone
 
 **2026-05-07 — Phase 3.0 v1b SHIPPED: `ComponentRegistry` + `IStorageBackend` interface + storage-hint registration grammar.**
 

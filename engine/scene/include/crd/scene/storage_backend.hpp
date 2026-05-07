@@ -40,7 +40,11 @@ public:
     virtual ~IStorageBackend() = default;
 
     // Component lifecycle
-    virtual void insert(EntityId e, ComponentId c, const void* data) = 0;
+    // `data` points to a fully-constructed component value. Storage
+    // implementations may move-from it (e.g. via the registry's
+    // move_construct callback). Caller's source value is left in a
+    // moved-from state and must not be read afterwards.
+    virtual void insert(EntityId e, ComponentId c, void* data) = 0;
     virtual void remove(EntityId e, ComponentId c) = 0;
     [[nodiscard]] virtual bool has(EntityId e, ComponentId c) const = 0;
     [[nodiscard]] virtual void* get_mut(EntityId e, ComponentId c) = 0;

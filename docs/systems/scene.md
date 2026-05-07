@@ -2,7 +2,7 @@
 
 The Scene / ECS foundation. Entities, components, relations, queries, systems, and the index slot framework that makes the architecture extensible. Every Phase 3.x onwards consumes it.
 
-**Phase 3.0 active.** v1a shipped 2026-05-06 (entity identity layer); v1b shipped 2026-05-07 (component registry + storage-backend interface + trait grammar). 12 of 14 slices remaining.
+**Phase 3.0 active.** v1a (entity identity, 2026-05-06), v1b (component registry + trait grammar, 2026-05-07), v1c1 (chunk machinery, 2026-05-07), v1c2 (archetype graph + bytewise entity move + `ArchetypeChunkStorage` + `IStorageEventSink` lifecycle hooks + typed `World::add_component<T>`, 2026-05-07) all shipped. **The engine has its first real "entity owns components" capability.** 11 of 14 slices remaining; v1d (SparseSet escape-hatch backend) is next.
 
 Depends on `crd-core` + `crd-containers` + `crd-memory`. Future slices link `crd-jobs` (parallel queries), `crd-resources` (`SceneLoader`), and feed `crd-renderer` (extract via query). ADR-0020 cornerstone; ADRs 0049–0057 lock the eight layers.
 
@@ -12,7 +12,9 @@ Depends on `crd-core` + `crd-containers` + `crd-memory`. Future slices link `crd
 | --- | --- | --- |
 | v1a | `EntityId` + `SlotMap` + `World` shell | ✅ shipped 2026-05-06 |
 | v1b | `ComponentRegistry` + `IStorageBackend` + storage-hint registration grammar | ✅ shipped 2026-05-07 |
-| v1c | `ArchetypeChunkStorage` (16 KB chunks, SoA, archetype graph, per-chunk version counters) | ⏳ next |
+| v1c1 | Chunk allocator + SoA layout + per-chunk version-counter array | ✅ shipped 2026-05-07 |
+| v1c2 | Archetype + ArchetypeGraph + ArchetypeChunkStorage + IStorageEventSink + typed World API | ✅ shipped 2026-05-07 |
+| v1d | `SparseSetStorage` (escape hatch for high-churn / sparse / lookup-dominated components) | ⏳ next |
 | v1d | `SparseSetStorage` (escape hatch for high-churn / sparse / lookup-dominated components) | ⏳ |
 | v1e | Mixed-backend chunk visitor (queries walk Archetype + SparseSet uniformly) | ⏳ |
 | v1f | Relations (`Relation<Tag>` + built-in `ChildOf`, `AttachedTo`) | ⏳ |
@@ -239,12 +241,57 @@ assert(same == pos_id);
 const auto* info = world.component_info(vel_id);
 // info->size, info->alignment, info->history_window == 8, etc.
 
-// What happens when you try to add a component to an entity? Not in v1b.
-// Storage bindings (add_component / has_component / get_component) land in v1c
-// once ArchetypeChunkStorage exists. v1b is grammar-only.
+// ---- v1c2: the entity actually owns components --------------------------
+
+EntityId entity = world.spawn();
+
+// Place data on the entity. Creates the {Transform} archetype on first call;
+// on subsequent calls with different component types, the entity moves
+// archetype (e.g. {Transform} → {Transform, Velocity}) — bytewise.
+world.add_component<Transform>(entity, Transform{ ... });
+world.add_component<Velocity>(entity, Velocity{ ... });
+
+// Read access — does NOT bump change-detection version counter.
+const Transform* t = world.get_component<Transform>(entity);
+
+// Mutable access — bumps the chunk's version counter for Transform
+// (chunk-grain change detection — ADR-0053 v1i ChangeDetectIndex consumes this).
+Transform* mt = world.get_component_mut<Transform>(entity);
+mt->translation += Vec3f{1, 0, 0};
+
+// Membership test (O(1) — archetype mask test).
+bool has_vel = world.has_component<Velocity>(entity);
+
+// Remove → entity moves to (mask & ~Velocity) archetype.
+world.remove_component<Velocity>(entity);
+
+// Bulk iteration (the foundation v1g's query DSL builds on). Walks every
+// archetype whose mask is a SUPERSET of `required` and visits each chunk.
+crd::scene::ComponentMask required;
+required.set(world.component_id<Transform>());
+
+world.storage().for_each_chunk(required,
+    [](const crd::scene::ChunkView& chunk, void* /*user*/) {
+        // chunk.entities, chunk.entity_count, chunk.present_mask
+        // SoA per-component pointers come via the chunk + archetype layout
+        // (v1g's query DSL packages this into a typed accessor).
+    },
+    /*user_data=*/nullptr);
+
+// Storage event hook — every mutation fires through here. v1i wires this to
+// the IComponentIndex fan-out; v1c2 ships the call sites with a no-op default
+// so future indexes plug in without changing storage code or user code.
+struct MyIndex : crd::scene::IStorageEventSink {
+    void on_insert(EntityId, ComponentId, const void*) override { /* ... */ }
+    void on_update(EntityId, ComponentId, const void*, const void*) override { /* ... */ }
+    void on_remove(EntityId, ComponentId, const void*) override { /* ... */ }
+    void on_entity_destroyed(EntityId) override { /* ... */ }
+};
+MyIndex idx;
+world.set_storage_event_sink(&idx);
 ```
 
-The post-v1b slices grow `World` with two storage backends, relations, a query DSL, a phase-ordered scheduler, an index framework, a `Transform` system, scene serialization, and the cooker handler — see the slice table above and `docs/phases/phase-3.0-scene-ecs.md`.
+The post-v1c2 slices grow `World` with: a SparseSet escape-hatch backend (v1d), the mixed-backend chunk visitor (v1e), first-class relations (v1f), a query DSL (v1g), a phase-ordered scheduler (v1h), the index framework + ChangeDetect + AsyncAware (v1i), Transform + propagation (v1j), scene serialization (v1k–v1l), sandbox renderer integration (v1m), and the reserved-slot freeze (v1n). See the slice table above and `docs/phases/phase-3.0-scene-ecs.md`.
 
 ## Architectural notes for future slices
 
