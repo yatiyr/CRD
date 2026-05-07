@@ -43,6 +43,15 @@ struct Health
     int hp = 100;
 };
 
+// A SparseSet-hinted component so the TLSF deployment proof covers BOTH
+// backends — every byte the World allocates (Archetype chunks AND SparseSet
+// pools + dense buffers + sparse tables) must flow through the TLSF pool.
+struct DialogTrigger
+{
+    crd::u32 dialog_id = 0;
+    crd::u32 priority = 0;
+};
+
 constexpr crd::usize kPoolBytes = 16U * 1024U * 1024U; // 16 MB scene heap
 } // namespace
 
@@ -70,6 +79,8 @@ TEST_CASE("Full ECS lifecycle on a TLSF-backed World", "[scene][world][tlsf]")
     w.register_component<Position>();
     w.register_component<Velocity>();
     w.register_component<Health>();
+    // SparseSet-hinted component routed to SparseSetStorage by World dispatch.
+    w.register_component<DialogTrigger>(crd::scene::StorageHint::SparseSet);
 
     // Spawn a bunch of entities with mixed component sets.
     crd::containers::Array<EntityId> entities;
@@ -85,11 +96,20 @@ TEST_CASE("Full ECS lifecycle on a TLSF-backed World", "[scene][world][tlsf]")
         {
             w.add_component<Health>(e, Health{50 + i});
         }
+        // Sparse: every 5th entity gets a dialog trigger. <5% would be more
+        // realistic, but we want enough density to force a sparse-table
+        // resize and a dense-buffer grow.
+        if ((i % 5) == 0)
+        {
+            w.add_component<DialogTrigger>(e, DialogTrigger{static_cast<crd::u32>(i), 1U});
+        }
         entities.push_back(e);
     }
 
     CHECK(w.entity_count() == 200U);
     CHECK(w.archetype_count() >= 4U); // {P}, {P,V}, {P,H}, {P,V,H} … at least
+    CHECK(w.sparse_storage().pool_count() == 1U);
+    CHECK(w.sparse_storage().entity_count(w.component_id<DialogTrigger>()) == 40U);
 
     // Read everything back.
     for (int i = 0; i < 200; ++i)

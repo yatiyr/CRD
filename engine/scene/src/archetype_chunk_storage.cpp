@@ -460,8 +460,9 @@ void ArchetypeChunkStorage::for_each_chunk(ComponentMask required, ChunkVisitor 
 
 void ArchetypeChunkStorage::on_entity_destroyed(EntityId e)
 {
-    m_sink->on_entity_destroyed(e);
-
+    // sink->on_entity_destroyed is fired by World (once per destroy across
+    // all backends — see world.cpp). This backend only drains its own
+    // components, emitting per-component on_remove events.
     const EntityLocation loc = location_or_invalid(e);
     if (loc.archetype.is_null())
     {

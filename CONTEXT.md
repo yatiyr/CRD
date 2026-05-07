@@ -11,7 +11,7 @@
 
 ## Current focus
 
-**Phase 3.0 — Scene/ECS foundation. v1a + v1b + v1c (whole) shipped. Detour D-001 (memory infrastructure) opened and closed 2026-05-07: `TlsfAllocator` + `GrowablePoolAllocator` + refactored `ChunkAllocator` to use the pool (closes v1c1's O(N) free perf debt). Same day, allocator-audit Option C wired the new pool into `ArchetypeGraph` (closes the `std::make_unique<Archetype>` bypass) + landed `test_world_tlsf.cpp` proving the TLSF-backed-World deployment pattern end-to-end. The engine has its first real "entity owns components" capability AND a production-grade memory subsystem with every Phase-3.0 byte routed through one `IAllocator`. 11 slices remaining in Phase 3.0. Next: v1d — `SparseSetStorage` (escape hatch for high-churn / sparse / lookup-dominated components) per ADR-0050.**
+**Phase 3.0 — Scene/ECS foundation. v1a + v1b + v1c (whole) + v1d shipped 2026-05-06 / 07. Detour D-001 (memory infrastructure) closed 2026-05-07: TLSF + GrowablePool + ChunkAllocator pooled. Allocator-audit Option C closed the make_unique<Archetype> bypass. v1d ships the SparseSet escape-hatch backend behind `IStorageBackend`, World dispatch by `StorageHint`, and consolidated `on_entity_destroyed` fan-out (sink fires exactly once per destroy across both backends). Phase 3.0 now ships both L2 backends per ADR-0050. 10 slices remaining. Next: v1e — mixed-backend chunk visitor + multi-component intersection.**
 
 The architecture is the **eight-layer slot-shaped ECS** designed for million-entity scenes, agents-as-components-with-scripts, UI on the same machinery (game and editor), with every novel ECS extension as a registered slot:
 
@@ -32,7 +32,7 @@ L0 Memory · Containers · Jobs    (already shipped)
 
 Cerid signature: a uniform `IComponentIndex` extension framework where every novel ECS extension (history, change detect, spatial, GPU-mirror, async, replication, scripts, reflection) is a registered slot consuming the same component-lifecycle event stream. Adding the next extension is a one-day job.
 
-Slices: ~~v1a (Entity+SlotMap)~~ ✅ → ~~v1b (registry)~~ ✅ → ~~v1c1 (chunk allocator + layout)~~ ✅ → ~~v1c2 (graph + entity move + IStorageBackend impl + sink hooks)~~ ✅ → **v1d (SparseSet storage)** ← active → v1e (mixed-backend chunk visitor) → v1f (relations) → v1g (query DSL) → v1h (system+schedule) → v1i (index framework + ChangeDetect + AsyncAware) → v1j (Transform + propagation) → v1k (SceneResource+Loader) → v1l (cook_scene cooker handler) → v1m (sandbox renderer integration) → v1n (reserved-slot freeze).
+Slices: ~~v1a (Entity+SlotMap)~~ ✅ → ~~v1b (registry)~~ ✅ → ~~v1c1 (chunk allocator + layout)~~ ✅ → ~~v1c2 (graph + entity move + IStorageBackend impl + sink hooks)~~ ✅ → ~~v1d (SparseSet storage)~~ ✅ → **v1e (mixed-backend chunk visitor)** ← active → v1f (relations) → v1g (query DSL) → v1h (system+schedule) → v1i (index framework + ChangeDetect + AsyncAware) → v1j (Transform + propagation) → v1k (SceneResource+Loader) → v1l (cook_scene cooker handler) → v1m (sandbox renderer integration) → v1n (reserved-slot freeze).
 
 Active phase doc: `docs/phases/phase-3.0-scene-ecs.md`.
 
@@ -69,7 +69,63 @@ _none — D-001 closed 2026-05-07. Main roadmap resumed at Phase 3.0 v1d._
 
 ## Last shipped milestone
 
-**2026-05-07 — Allocator-audit Option C: `ArchetypeGraph` pools `Archetype` structs via `GrowablePoolAllocator` (parent = World allocator) — closes the `std::make_unique<Archetype>` bypass. New `test_world_tlsf.cpp` (5 cases) proves end-to-end that a `World` on a `TlsfAllocator` pool runs the full ECS lifecycle, including chunk fill/spill. Six-config green at 603/603 (was 598/598).**
+**2026-05-07 — Phase 3.0 v1d: `SparseSetStorage` (the L2 escape-hatch backend per ADR-0050 §3) + World dispatch by `StorageHint` + consolidated `on_entity_destroyed` fan-out. Per-pool version counter pre-wired so v1i ChangeDetect doesn't have to retrofit. Six-config green at 618/618 / 615 release / 17 smokes (was 603 baseline post-Option-C).**
+
+### v1d: `SparseSetStorage`
+
+Second L2 backend ships behind the same `IStorageBackend` interface as `ArchetypeChunkStorage`. One pool per registered SparseSet component:
+
+```
+sparse[entity.index()] -> dense_index | kInvalid    (lazy-grown crd::containers::Array<u32>)
+dense (raw bytes)      -> T                          (count*info.size, info.alignment, exp ×2 grow)
+entities[dense_index]  -> EntityId                   (parallel back-resolution array)
++ pool.version : u64                                 (bumped on insert/update/remove — pool-grain ChangeDetect)
+```
+
+O(1) insert (free-list-free, append-only on dense), O(1) remove (swap-with-last), O(1) lookup. Pools are allocated lazily through the World's `IAllocator` and live the World's lifetime. Pool count is bounded by `kMaxComponents` (256) so direct allocation is the right shape (no GrowablePool — ≤256 long-lived structs).
+
+UPSERT via `insert(e, c, data)` when c already present → destruct + move-construct + `on_update` (matches archetype precedent at `archetype_chunk_storage.cpp:279`).
+
+`for_each_chunk(required, fn, ud)` semantics:
+- empty `required` → yield every non-empty pool
+- single-bit `required` → yield exactly the matching pool
+- multi-bit `required` → yield nothing (deferred to v1e mixed-backend visitor — a single SparseSet pool can't satisfy multi-bit AND alone)
+
+### World dispatch by `StorageHint`
+
+`World` grows a second member `SparseSetStorage m_sparse_storage` and dispatches `add_component` / `has_component` / `get_component` / `get_component_mut` / `remove_component` to either backend based on `ComponentInfo::storage_hint`:
+
+```cpp
+world.register_component<Position>();                              // -> ArchetypeChunkStorage
+world.register_component<DialogTrigger>(StorageHint::SparseSet);   // -> SparseSetStorage
+```
+
+`world.storage()` keeps returning the archetype storage (primary backend). New `world.sparse_storage()` accesses the sparse backend for diagnostics / tests.
+
+### Sink fan-out consolidated through World
+
+`IStorageEventSink::on_entity_destroyed` now fires from `World` (once per destroy), not from each backend. Both backends drain their own components and emit per-component `on_remove` events through the same sink. Contract change: archetype storage's `on_entity_destroyed` no longer fires `sink->on_entity_destroyed` itself — that line is removed in `archetype_chunk_storage.cpp`.
+
+### Allocator chain (closes the audit's promise)
+
+Every byte the SparseSetStorage holds — sparse table, dense buffer, entities array, the Pool struct itself — flows through `m_alloc`. World on TLSF means SparseSet on TLSF too. `test_world_tlsf.cpp` extended: the lifecycle case now registers a `DialogTrigger` (SparseSet) component alongside Position/Velocity/Health, and asserts `sparse_storage().pool_count() == 1U` and `entity_count(...) == 40U`.
+
+### Six-configuration green (post-v1d)
+
+- win-debug:          618/618
+- win-relwithdebinfo: 618/618
+- win-release:        615/615
+- win-asan:           618/618
+- win-clang-cl:       618/618
+- win-tidy:           ✅ build clean
+
+17/17 headless smokes per non-tidy config. Scene tests: 102 cases / 34420 assertions (was 87 / 11024).
+
+Session log: `docs/sessions/2026-05-07-scene-v1d-sparseset.md`.
+
+### Earlier the same day: allocator-audit Option C
+
+`ArchetypeGraph` pools `Archetype` structs via `GrowablePoolAllocator` (parent = World allocator) — closes the `std::make_unique<Archetype>` bypass. `test_world_tlsf.cpp` (5 cases) proves end-to-end that a `World` on a `TlsfAllocator` pool runs the full ECS lifecycle. Six-config baseline 603/603.
 
 ### Option C: archetype pool + TLSF-backed World test
 

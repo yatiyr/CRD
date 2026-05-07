@@ -4,7 +4,8 @@ namespace crd::scene
 {
 
 World::World(crd::memory::IAllocator* alloc)
-    : m_slots(alloc), m_pending_destroy(alloc), m_components(alloc), m_storage(alloc, m_components)
+    : m_slots(alloc), m_pending_destroy(alloc), m_components(alloc), m_storage(alloc, m_components),
+      m_sparse_storage(alloc, m_components), m_event_sink(NullStorageEventSink::instance())
 {
 }
 
@@ -25,10 +26,14 @@ void World::destroy_immediate(EntityId e)
 {
     if (m_slots.is_alive(e))
     {
-        // Drain the entity's archetype-stored components first so storage
-        // observers (Layer-5 indexes) see the on_remove + on_entity_destroyed
-        // events while the slot is still alive. Slot-free comes last.
+        // World fires the singular sink->on_entity_destroyed event ONCE so
+        // observers (Layer-5 indexes) see exactly one event per destroy
+        // regardless of how many backends hold the entity's components.
+        // Both backends then drain their own components, emitting per-
+        // component on_remove events through the same sink.
+        m_event_sink->on_entity_destroyed(e);
         m_storage.on_entity_destroyed(e);
+        m_sparse_storage.on_entity_destroyed(e);
         m_slots.free(e);
     }
 }
@@ -39,7 +44,9 @@ void World::flush_destroys()
     {
         if (m_slots.is_alive(e))
         {
+            m_event_sink->on_entity_destroyed(e);
             m_storage.on_entity_destroyed(e);
+            m_sparse_storage.on_entity_destroyed(e);
             m_slots.free(e);
         }
     }

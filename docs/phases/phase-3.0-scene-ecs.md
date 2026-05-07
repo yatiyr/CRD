@@ -1,6 +1,6 @@
 # Phase 3.0 — Scene / ECS Foundation
 
-**Status:** 🚧 active — v1a + v1b + v1c (whole) shipped 2026-05-06 / 07; 11 of 14 slices remaining. v1d (SparseSet escape-hatch backend) is next.
+**Status:** 🚧 active — v1a + v1b + v1c (whole) + v1d shipped 2026-05-06 / 07; 10 of 14 slices remaining. Next: v1e (mixed-backend chunk visitor + multi-component intersection).
 **ADRs:** ADR-0049, ADR-0050, ADR-0051, ADR-0052, ADR-0053, ADR-0054, ADR-0055, ADR-0056, ADR-0057
 **Cornerstone:** ADR-0020 (scene/ECS hybrid, UI in tree)
 **New module:** `crd-scene` (bootstrapped 2026-05-06)
@@ -24,10 +24,11 @@ This is the **highest-leverage single block of work in the engine**. Every Phase
 | v1b | `ComponentRegistry` + `IStorageBackend` + storage-hint registration grammar | ✅ shipped 2026-05-07 — `docs/sessions/2026-05-07-scene-v1b-registry.md` |
 | v1c1 | Chunk allocator + SoA layout + per-chunk version-counter array | ✅ shipped 2026-05-07 — `docs/sessions/2026-05-07-scene-v1c1-chunk-layout.md` |
 | v1c2 | Archetype + ArchetypeGraph + ArchetypeChunkStorage + IStorageEventSink + typed `World::add_component<T>` | ✅ shipped 2026-05-07 — `docs/sessions/2026-05-07-scene-v1c2-archetype-storage.md` |
-| v1d | `SparseSetStorage` (escape hatch for high-churn / sparse / lookup-dominated) | ⏳ next |
-| v1e–v1n | see slice list below | ⏳ |
+| v1d | `SparseSetStorage` (escape hatch for high-churn / sparse / lookup-dominated) + World dispatch by `StorageHint` | ✅ shipped 2026-05-07 — `docs/sessions/2026-05-07-scene-v1d-sparseset.md` |
+| v1e | Mixed-backend chunk visitor + multi-component intersection | ⏳ next |
+| v1f–v1n | see slice list below | ⏳ |
 
-`crd-scene` now has its first real "entity owns components" capability. `World::add_component<Transform>(e, t)` actually stores data in archetype chunks; `for_each_chunk` walks any superset query; per-chunk version counters bump automatically on writes (free `ChangeDetect` foundation for v1i); `IStorageEventSink` is the single hook into which every L5 IComponentIndex (v1i) and beyond will fan out. 82 unit tests / 7012 assertions; six-config green.
+`crd-scene` now ships **both L2 backends behind one interface** per ADR-0050: `ArchetypeChunkStorage` (primary, cache-coherent SoA) and `SparseSetStorage` (O(1) churn, no archetype-explosion). Components route to either backend by `StorageHint` at registration; the same World transparently holds Position (Archetype) and DialogTrigger (SparseSet) on the same entity. `IStorageEventSink` fan-out is now consolidated through World — the sink fires `on_entity_destroyed` exactly once per destroy across both backends. Per-pool version counter ships on SparseSet so v1i ChangeDetect doesn't have to retrofit. 102 unit tests / 34420 assertions; six-config green.
 
 ---
 

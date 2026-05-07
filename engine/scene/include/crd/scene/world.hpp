@@ -9,6 +9,8 @@
 #include <crd/scene/component_registry.hpp>
 #include <crd/scene/entity.hpp>
 #include <crd/scene/slot_map.hpp>
+#include <crd/scene/sparse_set_storage.hpp>
+#include <crd/scene/storage_backend.hpp>
 #include <crd/scene/storage_event_sink.hpp>
 
 #include <utility>
@@ -103,8 +105,9 @@ public:
     {
         CRD_ASSERT(is_alive(e));
         const ComponentId id = require_component_id<T>();
-        // `value` is a local; storage may move-from it.
-        m_storage.insert(e, id, static_cast<void*>(&value));
+        // `value` is a local; storage may move-from it. Backend selection
+        // routes by ComponentInfo::storage_hint (ADR-0050).
+        backend_for(id).insert(e, id, static_cast<void*>(&value));
     }
 
     template <typename T> [[nodiscard]] bool has_component(EntityId e) const noexcept
@@ -118,7 +121,7 @@ public:
         {
             return false;
         }
-        return m_storage.has(e, id);
+        return backend_for_const(id).has(e, id);
     }
 
     template <typename T> [[nodiscard]] const T* get_component(EntityId e) const
@@ -131,6 +134,12 @@ public:
         if (id.is_null())
         {
             return nullptr;
+        }
+        const ComponentInfo* info = m_components.info(id);
+        CRD_ASSERT(info != nullptr);
+        if (info->storage_hint == StorageHint::SparseSet)
+        {
+            return static_cast<const T*>(m_sparse_storage.get_const(e, id));
         }
         return static_cast<const T*>(m_storage.get_const(e, id));
     }
@@ -146,7 +155,7 @@ public:
         {
             return nullptr;
         }
-        return static_cast<T*>(m_storage.get_mut(e, id));
+        return static_cast<T*>(backend_for(id).get_mut(e, id));
     }
 
     template <typename T> void remove_component(EntityId e)
@@ -160,21 +169,50 @@ public:
         {
             return;
         }
-        m_storage.remove(e, id);
+        backend_for(id).remove(e, id);
     }
 
     [[nodiscard]] ArchetypeChunkStorage& storage() noexcept { return m_storage; }
     [[nodiscard]] const ArchetypeChunkStorage& storage() const noexcept { return m_storage; }
 
+    [[nodiscard]] SparseSetStorage& sparse_storage() noexcept { return m_sparse_storage; }
+    [[nodiscard]] const SparseSetStorage& sparse_storage() const noexcept { return m_sparse_storage; }
+
     [[nodiscard]] crd::u32 archetype_count() const noexcept { return m_storage.graph().archetype_count(); }
 
-    void set_storage_event_sink(IStorageEventSink* sink) noexcept { m_storage.set_event_sink(sink); }
+    // Install one sink across both storage backends. World drives
+    // on_entity_destroyed itself (once per destroy), so backends never fire
+    // sink->on_entity_destroyed — they only emit per-component on_remove.
+    void set_storage_event_sink(IStorageEventSink* sink) noexcept
+    {
+        m_event_sink = (sink != nullptr) ? sink : NullStorageEventSink::instance();
+        m_storage.set_event_sink(m_event_sink);
+        m_sparse_storage.set_event_sink(m_event_sink);
+    }
 
 private:
+    [[nodiscard]] IStorageBackend& backend_for(ComponentId id) noexcept
+    {
+        const ComponentInfo* info = m_components.info(id);
+        CRD_ASSERT(info != nullptr);
+        return (info->storage_hint == StorageHint::SparseSet) ? static_cast<IStorageBackend&>(m_sparse_storage)
+                                                              : static_cast<IStorageBackend&>(m_storage);
+    }
+
+    [[nodiscard]] const IStorageBackend& backend_for_const(ComponentId id) const noexcept
+    {
+        const ComponentInfo* info = m_components.info(id);
+        CRD_ASSERT(info != nullptr);
+        return (info->storage_hint == StorageHint::SparseSet) ? static_cast<const IStorageBackend&>(m_sparse_storage)
+                                                              : static_cast<const IStorageBackend&>(m_storage);
+    }
+
     SlotMap m_slots;
     crd::containers::Array<EntityId> m_pending_destroy;
     ComponentRegistry m_components;
     ArchetypeChunkStorage m_storage;
+    SparseSetStorage m_sparse_storage;
+    IStorageEventSink* m_event_sink;
 };
 
 } // namespace crd::scene
