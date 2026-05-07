@@ -1,17 +1,22 @@
-// v1g pipeline
+// v1g pipeline + v1i index filters
 // Phase 3.0 v1g — Query DSL filter pipeline (ADR-0052 §1).
+// Phase 3.0 v1i — extended with ChangeDetect / SkipPending filters
+//                  (ADR-0053 §3, §4).
 //
 // `run_query_pipeline` is the single non-template entry point that does the
 // heavy lifting: drives World::for_each_chunk(required) and applies
-// forbidden / relation / predicate filters per chunk. All Query<Cs...>
-// instantiations call into it, so the per-instantiation cost is one
-// trampoline call — no template bloat in the filter loop.
+// forbidden / relation / change-detect / skip-pending / custom predicate
+// filters per chunk. All Query<Cs...> instantiations call into it, so the
+// per-instantiation cost is one trampoline call — no template bloat in
+// the filter loop.
 //
 // Per-entity dereference (yielding (EntityId, Cs&...) tuples for range-for)
 // lives in Iterator::operator* in world.hpp; that part is necessarily
 // template-on-Cs because the tuple type is.
 
 #include <crd/core/assert.hpp>
+#include <crd/scene/async_aware_index.hpp>
+#include <crd/scene/change_detect_index.hpp>
 #include <crd/scene/query.hpp>
 #include <crd/scene/world.hpp>
 
@@ -45,16 +50,20 @@ template <typename Fn> void for_each_set_bit(const ComponentMask& mask, Fn&& fn)
 
 struct VisitContext
 {
-    const PredicateFilter* predicates       = nullptr;
-    crd::u32               predicate_count  = 0;
-    const RelationFilter*  relations        = nullptr;
-    crd::u32               relation_count   = 0;
-    ComponentMask          archetype_forbidden{};
-    ComponentMask          sparse_forbidden{};
-    World*                 world            = nullptr;
-    ChunkVisitor           user_visitor     = nullptr;
-    void*                  user_data        = nullptr;
-    crd::containers::Array<EntityId>* scratch = nullptr;
+    const PredicateFilter*    predicates           = nullptr;
+    crd::u32                  predicate_count      = 0;
+    const RelationFilter*     relations            = nullptr;
+    crd::u32                  relation_count       = 0;
+    const ChangeDetectFilter* change_filters       = nullptr;
+    crd::u32                  change_filter_count  = 0;
+    const SkipPendingFilter*  skip_pending_filters = nullptr;
+    crd::u32                  skip_pending_count   = 0;
+    ComponentMask             archetype_forbidden{};
+    ComponentMask             sparse_forbidden{};
+    World*                    world                = nullptr;
+    ChunkVisitor              user_visitor         = nullptr;
+    void*                     user_data            = nullptr;
+    crd::containers::Array<EntityId>* scratch      = nullptr;
 };
 
 // Per-entity gate. Returns true iff `e` passes ALL post-required filters
@@ -124,6 +133,33 @@ struct VisitContext
         }
     }
 
+    // Change-detect filters: pass iff the index reports a change at
+    // frame >= since_frame. v1i (ADR-0053 §3).
+    for (crd::u32 i = 0; i < ctx.change_filter_count; ++i)
+    {
+        const auto& cf = ctx.change_filters[i];
+        if (cf.index == nullptr)
+        {
+            return false; // index not registered → no entry can pass
+        }
+        if (!cf.index->changed_since(e, cf.component, cf.since_frame))
+        {
+            return false;
+        }
+    }
+
+    // Skip-pending filters: exclude entities in LoadState::Loading.
+    // v1i (ADR-0053 §4). Null index = no AsyncAware-tagged component
+    // exists — operator no-ops (passes everything).
+    for (crd::u32 i = 0; i < ctx.skip_pending_count; ++i)
+    {
+        const auto& sf = ctx.skip_pending_filters[i];
+        if (sf.index != nullptr && sf.index->is_pending(e, sf.component))
+        {
+            return false;
+        }
+    }
+
     // Predicates — last because they're caller-provided and may be heavy.
     for (crd::u32 i = 0; i < ctx.predicate_count; ++i)
     {
@@ -172,6 +208,10 @@ void run_query_pipeline(World& world,
                         const ComponentMask& forbidden,
                         const RelationFilter* relations,
                         crd::u32 relation_count,
+                        const ChangeDetectFilter* change_filters,
+                        crd::u32 change_filter_count,
+                        const SkipPendingFilter* skip_pending_filters,
+                        crd::u32 skip_pending_count,
                         const PredicateFilter* predicates,
                         crd::u32 predicate_count,
                         ChunkVisitor user_fn,
@@ -204,16 +244,20 @@ void run_query_pipeline(World& world,
     crd::containers::Array<EntityId> scratch{world.allocator()};
 
     VisitContext ctx{};
-    ctx.predicates          = predicates;
-    ctx.predicate_count     = predicate_count;
-    ctx.relations           = relations;
-    ctx.relation_count      = relation_count;
-    ctx.archetype_forbidden = archetype_forbidden;
-    ctx.sparse_forbidden    = sparse_forbidden;
-    ctx.world               = &world;
-    ctx.user_visitor        = user_fn;
-    ctx.user_data           = user_data;
-    ctx.scratch             = &scratch;
+    ctx.predicates           = predicates;
+    ctx.predicate_count      = predicate_count;
+    ctx.relations            = relations;
+    ctx.relation_count       = relation_count;
+    ctx.change_filters       = change_filters;
+    ctx.change_filter_count  = change_filter_count;
+    ctx.skip_pending_filters = skip_pending_filters;
+    ctx.skip_pending_count   = skip_pending_count;
+    ctx.archetype_forbidden  = archetype_forbidden;
+    ctx.sparse_forbidden     = sparse_forbidden;
+    ctx.world                = &world;
+    ctx.user_visitor         = user_fn;
+    ctx.user_data            = user_data;
+    ctx.scratch              = &scratch;
 
     world.for_each_chunk(required, &chunk_filter_visitor, &ctx);
 }

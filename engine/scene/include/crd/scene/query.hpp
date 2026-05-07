@@ -32,16 +32,39 @@ struct PredicateFilter
     void*             user_data = nullptr;
 };
 
+// v1i index-driven filters. Each is a typed POD context that the query
+// owns directly (no heap, no aliasing concerns); the pipeline applies
+// them per-entity alongside relation + custom predicate filters.
+class ChangeDetectIndex;
+class AsyncAwareIndex;
+
+struct ChangeDetectFilter
+{
+    const ChangeDetectIndex* index;
+    ComponentId              component;
+    crd::u32                 since_frame;
+};
+
+struct SkipPendingFilter
+{
+    const AsyncAwareIndex* index;
+    ComponentId            component;
+};
+
 // Non-template filter pipeline. Drives World::for_each_chunk(required) and
-// applies forbidden / relations / predicates per chunk; yields filtered
-// ChunkViews to `user_fn`. Defined in query.cpp; called from
-// Query<Cs...>::drive_filtered_chunks (in world.hpp's inline section)
-// so all Cs... packs share one implementation.
+// applies forbidden / relations / change-detect / skip-pending / custom
+// predicates per chunk; yields filtered ChunkViews to `user_fn`.
+// Defined in query.cpp; called from Query<Cs...>::drive_filtered_chunks
+// (in world.hpp's inline section) so all Cs... packs share one implementation.
 void run_query_pipeline(World& world,
                         const ComponentMask& required,
                         const ComponentMask& forbidden,
                         const RelationFilter* relations,
                         crd::u32 relation_count,
+                        const ChangeDetectFilter* change_filters,
+                        crd::u32 change_filter_count,
+                        const SkipPendingFilter* skip_pending_filters,
+                        crd::u32 skip_pending_count,
                         const PredicateFilter* predicates,
                         crd::u32 predicate_count,
                         ChunkVisitor user_fn,
@@ -116,6 +139,24 @@ public:
     Query& filter(FilterPredicateFn fn, void* user_data = nullptr) &;
     Query  filter(FilterPredicateFn fn, void* user_data = nullptr) &&;
 
+    // ---- v1i: index-driven filters ------------------------------------
+    //
+    // .changed<T>() emits only entities whose T was modified during the
+    // CURRENT FRAME. Snapshot semantics: captures `world.current_frame()`
+    // at chain time; per-entity filter passes iff the index reports
+    // `last_change_frame[(c, e)] >= snapshot`. Cross-phase pattern works
+    // (PrePhysics writes Transform → PreRender's `.changed<Transform>()`
+    // sees those entities).
+    //
+    // .skip_pending<T>() excludes entities whose T is in LoadState::Loading
+    // (data present but not ready). Loaded and Failed entities pass. The
+    // AsyncAwareIndex is auto-registered when the component is registered
+    // with `AsyncAware{}`.
+    template <typename T> Query& changed() &;
+    template <typename T> Query  changed() &&;
+    template <typename T> Query& skip_pending() &;
+    template <typename T> Query  skip_pending() &&;
+
     // ---- Chunk-level visitor ------------------------------------------
 
     void for_each_chunk(ChunkVisitor fn, void* user_data);
@@ -166,8 +207,10 @@ private:
 
     ComponentMask m_required{};
     ComponentMask m_forbidden{};
-    crd::containers::Array<RelationFilter>  m_relations;
-    crd::containers::Array<PredicateFilter> m_predicates;
+    crd::containers::Array<RelationFilter>     m_relations;
+    crd::containers::Array<PredicateFilter>    m_predicates;
+    crd::containers::Array<ChangeDetectFilter> m_change_filters;
+    crd::containers::Array<SkipPendingFilter>  m_skip_pending_filters;
 
     crd::containers::Array<EntityId> m_match_cache;
     bool                             m_materialised = false;

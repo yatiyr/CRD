@@ -51,8 +51,8 @@ template <typename Fn> void for_each_set_bit(const ComponentMask& mask, Fn&& fn)
 
 World::World(crd::memory::IAllocator* alloc)
     : m_slots(alloc), m_pending_destroy(alloc), m_components(alloc), m_storage(alloc, m_components),
-      m_sparse_storage(alloc, m_components), m_event_sink(NullStorageEventSink::instance()),
-      m_relations(alloc), m_commands_buffer(*this)
+      m_sparse_storage(alloc, m_components), m_relations(alloc), m_commands_buffer(*this),
+      m_indexes(alloc), m_fanout_sink(*this), m_external_sink(NullStorageEventSink::instance())
 {
     // Lazy slots indexed by ComponentId.raw. Always nullptr until
     // register_relation() allocates a RelationInfo for that slot.
@@ -63,6 +63,12 @@ World::World(crd::memory::IAllocator* alloc)
     {
         bucket = crd::containers::Array<std::unique_ptr<ISystem>>{alloc};
     }
+
+    // v1i: install the index fan-out on both storage backends. The
+    // backends never see anything else — external sinks reach the events
+    // through the fan-out's forward path.
+    m_storage.set_event_sink(&m_fanout_sink);
+    m_sparse_storage.set_event_sink(&m_fanout_sink);
 }
 
 World::~World()
@@ -694,13 +700,98 @@ void World::drain_destruction_worklist(crd::containers::Array<EntityId>& worklis
         // Phase 2: outgoing reverse-index cleanup.
         cleanup_outgoing_relations(current);
 
-        // Phase 3: sink fan-out (once per destroy) + backend drains + slot free.
-        m_event_sink->on_entity_destroyed(current);
+        // Phase 3: backends drain (fire per-component on_remove), then
+        // sink fan-out fires the singular on_entity_destroyed AFTER the
+        // drain. Pinned 2026-05-07 v1i: this order lets indexes record
+        // per-component on_remove during teardown without their
+        // on_entity_destroyed clears being clobbered by trailing
+        // on_remove events.
         m_storage.on_entity_destroyed(current);
         m_sparse_storage.on_entity_destroyed(current);
+        m_fanout_sink.on_entity_destroyed(current);
         m_slots.free(current);
     }
 }
+
+// ---- v1i: Index framework — fan-out sink + auto-registration ------------
+
+void World::IndexFanOutSink::on_insert(EntityId e, ComponentId c, const void* data)
+{
+    for (auto& slot : m_world->m_indexes)
+    {
+        if (slot != nullptr && slot->observed().test(c))
+        {
+            slot->on_insert(e, c, data);
+        }
+    }
+    m_world->m_external_sink->on_insert(e, c, data);
+}
+
+void World::IndexFanOutSink::on_update(EntityId e, ComponentId c, const void* old_data, const void* new_data)
+{
+    for (auto& slot : m_world->m_indexes)
+    {
+        if (slot != nullptr && slot->observed().test(c))
+        {
+            slot->on_update(e, c, old_data, new_data);
+        }
+    }
+    m_world->m_external_sink->on_update(e, c, old_data, new_data);
+}
+
+void World::IndexFanOutSink::on_remove(EntityId e, ComponentId c, const void* data)
+{
+    for (auto& slot : m_world->m_indexes)
+    {
+        if (slot != nullptr && slot->observed().test(c))
+        {
+            slot->on_remove(e, c, data);
+        }
+    }
+    m_world->m_external_sink->on_remove(e, c, data);
+}
+
+void World::IndexFanOutSink::on_entity_destroyed(EntityId e)
+{
+    // Entity destruction is fan-out unconditionally — every index gets
+    // the chance to clean up its per-entity state regardless of which
+    // components it observes.
+    for (auto& slot : m_world->m_indexes)
+    {
+        if (slot != nullptr)
+        {
+            slot->on_entity_destroyed(e);
+        }
+    }
+    m_world->m_external_sink->on_entity_destroyed(e);
+}
+
+void World::notify_frame_begin()
+{
+    for (auto& slot : m_indexes)
+    {
+        if (slot != nullptr)
+        {
+            slot->on_frame_begin(m_frame_index);
+        }
+    }
+}
+
+void World::notify_frame_end()
+{
+    for (auto& slot : m_indexes)
+    {
+        if (slot != nullptr)
+        {
+            slot->on_frame_end(m_frame_index);
+        }
+    }
+}
+
+// auto_register_indexes_for is defined in world.hpp's inline section
+// because it dispatches by trait flags into make_unique<...> calls
+// (templates that need the concrete index types). See the bottom of
+// world.hpp.
 
 // ---- v1h: Schedule + step / step_fixed ----------------------------------
 
@@ -744,6 +835,8 @@ void World::step(crd::f64 dt)
     // step() runs every system exactly once. Variable-rate AND fixed-step
     // systems are dispatched together — fixed-step opt-in only matters
     // under step_fixed.
+    ++m_frame_index;
+    notify_frame_begin();
     for (crd::u8 phase = 0; phase < kSchedulePhaseCount; ++phase)
     {
         auto& bucket = m_systems[phase];
@@ -757,6 +850,7 @@ void World::step(crd::f64 dt)
         }
         m_commands_buffer.flush();
     }
+    notify_frame_end();
     (void)dt; // v1h ISystem::run is dt-agnostic; systems pull dt from their own state
 }
 
@@ -787,6 +881,12 @@ void World::step_fixed(crd::f64 dt, crd::f64 fixed_dt, crd::u32 max_substeps)
     // its variable-rate systems once. This interleaving matches Bevy's
     // FixedUpdate semantics — variable systems see the world AFTER the
     // current phase's fixed substeps have settled.
+    //
+    // Frame lifecycle hooks fire ONCE per step_fixed call (not per
+    // substep) — ChangeDetectIndex's "modified during current frame"
+    // semantic takes the whole step_fixed as a single frame.
+    ++m_frame_index;
+    notify_frame_begin();
     for (crd::u8 phase = 0; phase < kSchedulePhaseCount; ++phase)
     {
         auto& bucket = m_systems[phase];
@@ -796,6 +896,7 @@ void World::step_fixed(crd::f64 dt, crd::f64 fixed_dt, crd::u32 max_substeps)
         }
         run_phase_pass(*this, bucket, /*is_variable_pass=*/true);
     }
+    notify_frame_end();
 }
 
 void World::register_builtin_relations()

@@ -11,6 +11,7 @@ add_executable(crd-scene-tests
     test_relations.cpp
     test_query.cpp
     test_schedule.cpp
+    test_index_framework.cpp
     test_world_tlsf.cpp
 )
 

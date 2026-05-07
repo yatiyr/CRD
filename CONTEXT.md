@@ -11,7 +11,7 @@
 
 ## Current focus
 
-**Phase 3.0 — Scene/ECS foundation. v1a + v1b + v1c (whole) + v1d + v1e + v1f + v1g + v1h shipped 2026-05-06 / 07. Detour D-001 (memory infrastructure) closed 2026-05-07. Allocator-audit Option C closed the make_unique<Archetype> bypass. v1h ships Layer 4's scheduling half (ADR-0052 §3-§5): `ISystem` virtual class with `Reads`/`Writes` `ComponentSet` aliases, 7-phase fixed schedule (PrePhysics → PostRender), `World::register_system` / `step(dt)` / `step_fixed(dt, fixed_dt, max_substeps)` with accumulator math + spiral-of-death clamp + Bevy FixedUpdate-style fixed/variable interleaving per phase, `Commands` deferred-mutation buffer with payload-byte type erasure flushed at every phase boundary. 6 slices remaining. Next: v1i — Index framework + ChangeDetect + AsyncAware (`IComponentIndex` interface, fan-out from `IStorageEventSink`, `.changed<T>()` and `.skip_pending<T>()` query operators per ADR-0053).**
+**Phase 3.0 — Scene/ECS foundation. v1a-v1i shipped 2026-05-06 / 07. Detour D-001 (memory infrastructure) closed 2026-05-07. Allocator-audit Option C closed the make_unique<Archetype> bypass. v1i ships Layer 5 — the Cerid signature (ADR-0053): `IComponentIndex` plug-point + `IndexFanOutSink` + auto-registration of trait-implied indexes; `ChangeDetectIndex` + `AsyncAwareIndex` ship as full impls; History / SpatialBVH / GpuResident / Replication / Reflection ship as no-op shells ready for their consumer phases (3.2 / 3.5 / 3.8 / 4.2 / 7) to drop in real impls without caller code changes. Query DSL gains `.changed<T>()` and `.skip_pending<T>()`. 5 slices remaining. Next: v1j — Transform + TransformPropagation system (consumes v1f relations + v1g query + v1h schedule + v1i ChangeDetect end-to-end; first concrete `ISystem` consumer of the architecture).**
 
 The architecture is the **eight-layer slot-shaped ECS** designed for million-entity scenes, agents-as-components-with-scripts, UI on the same machinery (game and editor), with every novel ECS extension as a registered slot:
 
@@ -32,7 +32,7 @@ L0 Memory · Containers · Jobs    (already shipped)
 
 Cerid signature: a uniform `IComponentIndex` extension framework where every novel ECS extension (history, change detect, spatial, GPU-mirror, async, replication, scripts, reflection) is a registered slot consuming the same component-lifecycle event stream. Adding the next extension is a one-day job.
 
-Slices: ~~v1a (Entity+SlotMap)~~ ✅ → ~~v1b (registry)~~ ✅ → ~~v1c1 (chunk allocator + layout)~~ ✅ → ~~v1c2 (graph + entity move + IStorageBackend impl + sink hooks)~~ ✅ → ~~v1d (SparseSet storage)~~ ✅ → ~~v1e (mixed-backend chunk visitor)~~ ✅ → ~~v1f (relations)~~ ✅ → ~~v1g (query DSL)~~ ✅ → ~~v1h (system+schedule)~~ ✅ → **v1i (index framework + ChangeDetect + AsyncAware)** ← active → v1j (Transform + propagation) → v1k (SceneResource+Loader) → v1l (cook_scene cooker handler) → v1m (sandbox renderer integration) → v1n (reserved-slot freeze).
+Slices: ~~v1a (Entity+SlotMap)~~ ✅ → ~~v1b (registry)~~ ✅ → ~~v1c1 (chunk allocator + layout)~~ ✅ → ~~v1c2 (graph + entity move + IStorageBackend impl + sink hooks)~~ ✅ → ~~v1d (SparseSet storage)~~ ✅ → ~~v1e (mixed-backend chunk visitor)~~ ✅ → ~~v1f (relations)~~ ✅ → ~~v1g (query DSL)~~ ✅ → ~~v1h (system+schedule)~~ ✅ → ~~v1i (index framework + ChangeDetect + AsyncAware)~~ ✅ → **v1j (Transform + propagation)** ← active → v1k (SceneResource+Loader) → v1l (cook_scene cooker handler) → v1m (sandbox renderer integration) → v1n (reserved-slot freeze).
 
 Active phase doc: `docs/phases/phase-3.0-scene-ecs.md`.
 
@@ -69,7 +69,57 @@ _none — D-001 closed 2026-05-07. Main roadmap resumed at Phase 3.0 v1d._
 
 ## Last shipped milestone
 
-**2026-05-07 — Phase 3.0 v1h: System + Schedule + Commands (ADR-0052 §3-§5). `ISystem` virtual class with `Reads`/`Writes` `ComponentSet` type aliases (computed into masks via `World::component_set_mask<Set>()`); 7-phase fixed schedule (PrePhysics → PostRender); `step(dt)` runs everything once; `step_fixed(dt, fixed_dt, max_substeps)` interleaves fixed-step systems N times then variable-rate once per phase, with accumulator carry-over and spiral-of-death clamp; `Commands` deferred-mutation buffer flushed at every phase boundary (spawn immediate, all other ops queued). Six-config green at 688/688 / 685 release / 17 smokes (was 673 baseline post-v1g).**
+**2026-05-07 — Phase 3.0 v1i: Layer 5 plug-point (ADR-0053) — `IComponentIndex` interface, `IndexFanOutSink`, auto-registration of trait-implied indexes on `register_component`. `ChangeDetectIndex` (drives `.changed<T>()` for cross-phase change tracking) and `AsyncAwareIndex` (drives `.skip_pending<T>()` for filter-out-loading-data) ship as full impls; History / SpatialBVH / GpuResident / Replication / Reflection ship as no-op shells with their `observed()` masks correctly populated — ready for their consumer phases to drop in real impls without any caller code change. Six-config green at 708/708 / 705 release / 17 smokes (was 688 baseline post-v1h).**
+
+### v1i: Index framework + ChangeDetect + AsyncAware
+
+```cpp
+// Trait-driven auto-registration — no manual register_index<...> call needed.
+World w;
+w.register_component<Transform>(History{60}, SpatialBVH{}, GpuResident{}); // 4 indexes auto-register
+w.register_component<Mesh>(AsyncAware{});                                  // AsyncAwareIndex auto-registers
+
+// Index-driven query operators
+auto changed_q = w.query<Transform>().changed<Transform>();          // v1i ChangeDetect
+auto ready_q   = w.query<Mesh>().skip_pending<Mesh>();              // v1i AsyncAware
+
+// Custom indexes — same plug-point grammar
+auto* metrics = w.register_index<MyMetricsIndex>(args...);
+```
+
+**Architecture:**
+- `IComponentIndex : IStorageEventSink` — adds `observed()` mask + `on_frame_begin/end` hooks + `name()`. Single inheritance unifies index events with the existing sink shape.
+- `IndexFanOutSink` (private, owned by World) installed on both storage backends. Routes every event to every registered index whose `observed()` matches; forwards to optional external test sink.
+- `register_component<T>(traits...)` ends by calling `auto_register_indexes_for(id)` — lazy-creates ChangeDetect (always) + the reserved-slot indexes implied by the trait flags.
+- `Query<Cs...>::changed<T>()` captures `current_frame()` at chain time; predicate filter passes iff `index.changed_since(e, c, snapshot) == true`.
+- `Query<Cs...>::skip_pending<T>()` filters out entities in `LoadState::Loading` (Failed entities pass).
+- Destruction order changed: backends drain (per-component on_remove) BEFORE the fan-out fires `on_entity_destroyed` — so `ChangeDetect::on_entity_destroyed`'s entry-clear isn't clobbered by trailing on_remove events.
+
+**Five built-in trait-implied indexes:**
+- `ChangeDetectIndex` — every component (always-on); drives `.changed<T>()`
+- `AsyncAwareIndex` — `AsyncAware{}` trait; drives `.skip_pending<T>()`
+- `HistoryIndex` — `History{N}` trait; no-op shell, real impl Phase 3.2
+- `SpatialBVHIndex` — `SpatialBVH{}` trait; no-op shell, real impl Phase 3.5
+- `GpuResidentIndex` — `GpuResident{}` trait; no-op shell, real impl Phase 3.8
+- `ReplicationIndex` — `Replication != Local`; no-op shell, real impl Phase 4.2
+- `ReflectionIndex` — `Reflection.fields != nullptr`; no-op shell, real impl Phase 7
+
+### Six-configuration green (post-v1i, 2026-05-07)
+
+- win-debug:          708/708
+- win-relwithdebinfo: 708/708
+- win-release:        705/705
+- win-asan:           708/708
+- win-clang-cl:       708/708
+- win-tidy:           ✅ build clean
+
+17/17 headless smokes per non-tidy config. Scene tests: 192 cases / 34669 assertions (was 172 / 34602 post-v1h).
+
+Session log: `docs/sessions/2026-05-07-scene-v1i-index-framework.md`.
+
+### Earlier the same day: Phase 3.0 v1h
+
+System + Schedule + Commands (ADR-0052 §3-§5). `ISystem` virtual class with `Reads`/`Writes` `ComponentSet` type aliases; 7-phase fixed schedule; `step(dt)` and `step_fixed(dt, fixed_dt, max_substeps)`; `Commands` deferred-mutation buffer flushed at every phase boundary. Six-config baseline 688/688.
 
 ### v1h: System + Schedule + Commands
 

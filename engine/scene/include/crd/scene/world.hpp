@@ -6,12 +6,16 @@
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
 #include <crd/scene/archetype_chunk_storage.hpp>
+#include <crd/scene/async_aware_index.hpp>
+#include <crd/scene/change_detect_index.hpp>
 #include <crd/scene/commands.hpp>
 #include <crd/scene/component.hpp>
+#include <crd/scene/component_index.hpp>
 #include <crd/scene/component_registry.hpp>
 #include <crd/scene/entity.hpp>
 #include <crd/scene/query.hpp>
 #include <crd/scene/relation.hpp>
+#include <crd/scene/reserved_indexes.hpp>
 #include <crd/scene/slot_map.hpp>
 #include <crd/scene/sparse_set_storage.hpp>
 #include <crd/scene/storage_backend.hpp>
@@ -86,7 +90,14 @@ public:
 
     template <typename T, typename... Traits> ComponentId register_component(Traits&&... traits)
     {
-        return m_components.register_type<T>(std::forward<Traits>(traits)...);
+        const ComponentId id = m_components.register_type<T>(std::forward<Traits>(traits)...);
+        // v1i: auto-register the indexes implied by the trait flags
+        // stamped onto ComponentInfo by register_type. Honours ADR-0053's
+        // "trait registration is enough" contract — users opt in once
+        // via register_component(History{60}) and the corresponding
+        // index appears automatically.
+        auto_register_indexes_for(id);
+        return id;
     }
 
     [[nodiscard]] const ComponentInfo* component_info(ComponentId id) const noexcept { return m_components.info(id); }
@@ -230,14 +241,19 @@ public:
     // expected parallel path (the visitor dispatches one job per chunk).
     void for_each_chunk(ComponentMask required, ChunkVisitor fn, void* user_data);
 
-    // Install one sink across both storage backends. World drives
-    // on_entity_destroyed itself (once per destroy), so backends never fire
-    // sink->on_entity_destroyed — they only emit per-component on_remove.
+    // Install an EXTERNAL test/debug sink that runs alongside any
+    // registered indexes. Pre-v1i contract: this sink received every
+    // event. v1i contract: this sink runs ALONGSIDE indexes; in code
+    // that doesn't register any indexes (matches every test prior to
+    // v1i), behaviour is identical. Code that mixes registered indexes
+    // and a test sink: the sink sees every event the fan-out dispatches.
+    //
+    // World drives on_entity_destroyed itself (once per destroy across
+    // both backends — see destroy_immediate / flush_destroys). Storage
+    // backends still fire per-component on_remove during their drain.
     void set_storage_event_sink(IStorageEventSink* sink) noexcept
     {
-        m_event_sink = (sink != nullptr) ? sink : NullStorageEventSink::instance();
-        m_storage.set_event_sink(m_event_sink);
-        m_sparse_storage.set_event_sink(m_event_sink);
+        m_external_sink = (sink != nullptr) ? sink : NullStorageEventSink::instance();
     }
 
     // ---- Relation API (Phase 3.0 v1f, ADR-0051) ------------------------
@@ -391,6 +407,69 @@ public:
     // the elided rvalue.
     template <typename... Cs> [[nodiscard]] Query<Cs...> query() { return Query<Cs...>{*this}; }
 
+    // ---- Index framework (Phase 3.0 v1i, ADR-0053) ---------------------
+    //
+    // Layer 5 plug-point. Indexes register with the World; the storage
+    // backends fan events out to every registered index whose observed()
+    // mask matches the touched component. v1i ships ChangeDetectIndex and
+    // AsyncAwareIndex; ADR-0053's reserved indexes (History, SpatialBVH,
+    // GpuResident, Replication, Reflection) ship as auto-registered no-op
+    // shells that round-trip the trait grammar.
+    //
+    // Auto-registration: register_component<T>(traits...) inspects the
+    // resulting ComponentInfo and lazy-creates the indexes implied by the
+    // trait flags (AsyncAware{} → AsyncAwareIndex, History{N} →
+    // HistoryIndex, etc.). ChangeDetectIndex auto-registers on first
+    // component registration.
+    //
+    // Manual registration (for user-defined indexes):
+    //   auto* metrics = world.register_index<MetricsIndex>(args...);
+    //
+    // The unique_ptr<IComponentIndex> is owned by World; the raw return
+    // pointer is non-owning and remains valid for the World's lifetime.
+
+    template <typename Idx, typename... Args> Idx* register_index(Args&&... args)
+    {
+        auto owned = std::make_unique<Idx>(std::forward<Args>(args)...);
+        Idx* raw = owned.get();
+        m_indexes.push_back(std::move(owned));
+        return raw;
+    }
+
+    // Find a registered index by exact dynamic type. Returns nullptr if
+    // not registered. Used by query operators (.changed<T>(), etc.) to
+    // discover their backing index.
+    template <typename Idx> [[nodiscard]] Idx* find_index() noexcept
+    {
+        for (auto& slot : m_indexes)
+        {
+            if (Idx* casted = dynamic_cast<Idx*>(slot.get()); casted != nullptr)
+            {
+                return casted;
+            }
+        }
+        return nullptr;
+    }
+    template <typename Idx> [[nodiscard]] const Idx* find_index() const noexcept
+    {
+        for (const auto& slot : m_indexes)
+        {
+            if (const Idx* casted = dynamic_cast<const Idx*>(slot.get()); casted != nullptr)
+            {
+                return casted;
+            }
+        }
+        return nullptr;
+    }
+
+    // Number of registered indexes. Diagnostics / tests.
+    [[nodiscard]] crd::usize index_count() const noexcept { return m_indexes.size(); }
+
+    // Current frame index. Incremented at the START of every step() and
+    // step_fixed() call. ChangeDetectIndex consumes this to drive the
+    // ".changed<T>() = modified during current frame" semantic.
+    [[nodiscard]] crd::u32 current_frame() const noexcept { return m_frame_index; }
+
     // ---- Schedule + Commands (Phase 3.0 v1h, ADR-0052 §3-§5) -----------
 
     // Register a system into the fixed 7-phase schedule. The system runs
@@ -527,7 +606,6 @@ private:
     ComponentRegistry m_components;
     ArchetypeChunkStorage m_storage;
     SparseSetStorage m_sparse_storage;
-    IStorageEventSink* m_event_sink;
     // Per-relation info, indexed by ComponentId.raw. Pre-sized to
     // kMaxComponents; entries are nullptr until register_relation() lazily
     // allocates them.
@@ -547,6 +625,55 @@ private:
     // Accumulator for step_fixed. Carries the unused fraction of the
     // previous frame's dt forward.
     crd::f64 m_fixed_accumulator = 0.0;
+
+    // ---- v1i: Index framework members ----------------------------------
+
+    // Internal fan-out sink — installed on both storage backends. Routes
+    // every storage event to every registered index whose observed() mask
+    // includes the touched component, AND forwards to m_external_sink for
+    // backward-compatible test sinks.
+    class IndexFanOutSink : public IStorageEventSink
+    {
+    public:
+        explicit IndexFanOutSink(World& w) noexcept : m_world(&w) {}
+
+        void on_insert(EntityId e, ComponentId c, const void* data) override;
+        void on_update(EntityId e, ComponentId c, const void* old_data, const void* new_data) override;
+        void on_remove(EntityId e, ComponentId c, const void* data) override;
+        void on_entity_destroyed(EntityId e) override;
+
+    private:
+        World* m_world;
+    };
+
+    // Indexes registered with the World, fan-out targets in registration
+    // order. Auto-population for ADR-0053 reserved-slot traits happens
+    // inside register_component<T>(traits...) post-stamp.
+    crd::containers::Array<std::unique_ptr<IComponentIndex>> m_indexes;
+
+    // Fan-out sink instance. Always installed on both backends (set in
+    // ctor); never replaced. The external test sink coexists.
+    IndexFanOutSink m_fanout_sink;
+
+    // External test/debug sink. Runs alongside indexes via the fan-out's
+    // forward path. Default: NullStorageEventSink::instance().
+    IStorageEventSink* m_external_sink;
+
+    // Auto-registration helper for ADR-0053 reserved-slot traits. Called
+    // by register_component<T>(traits...) AFTER ComponentInfo is stamped.
+    // Inspects the new component's flags (async_aware, history_window,
+    // spatial_bvh, gpu_resident, replication, reflection) and lazy-
+    // creates the corresponding global index (if not already present),
+    // then extends the index's observed mask with the new ComponentId.
+    void auto_register_indexes_for(ComponentId id);
+
+    // Per-frame counter incremented at start of step() / step_fixed().
+    // Drives ChangeDetectIndex's "modified during current frame" semantic.
+    crd::u32 m_frame_index = 0;
+
+    // Frame lifecycle dispatch — fired before / after the 7-phase loop.
+    void notify_frame_begin();
+    void notify_frame_end();
 };
 
 // ---- Query<Cs...> template method bodies --------------------------------
@@ -561,6 +688,8 @@ Query<Cs...>::Query(World& world)
     : m_world(&world),
       m_relations(world.allocator()),
       m_predicates(world.allocator()),
+      m_change_filters(world.allocator()),
+      m_skip_pending_filters(world.allocator()),
       m_match_cache(world.allocator())
 {
     // Stamp Cs... into the required mask. Each Cs must be a registered
@@ -647,6 +776,50 @@ Query<Cs...> Query<Cs...>::filter(FilterPredicateFn fn, void* user_data) &&
 }
 
 template <typename... Cs>
+template <typename T> Query<Cs...>& Query<Cs...>::changed() &
+{
+    const ComponentId id = m_world->components().template id_of<T>();
+    CRD_ASSERT(!id.is_null() && "Query::changed<T>: T must be a registered component type");
+    const ChangeDetectIndex* index = m_world->template find_index<ChangeDetectIndex>();
+    // ChangeDetectIndex is auto-registered on the first register_component;
+    // it should always exist by query-construction time. If it doesn't,
+    // the predicate naturally returns false (no entries match).
+    m_change_filters.push_back(ChangeDetectFilter{index, id, m_world->current_frame()});
+    invalidate_cache();
+    return *this;
+}
+
+template <typename... Cs>
+template <typename T> Query<Cs...> Query<Cs...>::changed() &&
+{
+    this->template changed<T>();
+    return std::move(*this);
+}
+
+template <typename... Cs>
+template <typename T> Query<Cs...>& Query<Cs...>::skip_pending() &
+{
+    const ComponentId id = m_world->components().template id_of<T>();
+    CRD_ASSERT(!id.is_null() && "Query::skip_pending<T>: T must be a registered component type");
+    const AsyncAwareIndex* index = m_world->template find_index<AsyncAwareIndex>();
+    // If no AsyncAwareIndex is registered (T wasn't tagged with AsyncAware{}),
+    // the predicate falls back to "pass everything" (the index's null check
+    // in run_query_pipeline). That's the documented v1i contract: the
+    // operator works as a query no-op on non-async components, matching the
+    // ADR-0053 §2 reserved-slot grammar.
+    m_skip_pending_filters.push_back(SkipPendingFilter{index, id});
+    invalidate_cache();
+    return *this;
+}
+
+template <typename... Cs>
+template <typename T> Query<Cs...> Query<Cs...>::skip_pending() &&
+{
+    this->template skip_pending<T>();
+    return std::move(*this);
+}
+
+template <typename... Cs>
 void Query<Cs...>::for_each_chunk(ChunkVisitor fn, void* user_data)
 {
     drive_filtered_chunks(fn, user_data);
@@ -656,7 +829,9 @@ template <typename... Cs>
 void Query<Cs...>::drive_filtered_chunks(ChunkVisitor fn, void* user_data)
 {
     run_query_pipeline(*m_world, m_required, m_forbidden, m_relations.data(),
-                       static_cast<crd::u32>(m_relations.size()), m_predicates.data(),
+                       static_cast<crd::u32>(m_relations.size()), m_change_filters.data(),
+                       static_cast<crd::u32>(m_change_filters.size()), m_skip_pending_filters.data(),
+                       static_cast<crd::u32>(m_skip_pending_filters.size()), m_predicates.data(),
                        static_cast<crd::u32>(m_predicates.size()), fn, user_data);
 }
 
@@ -808,5 +983,116 @@ template <typename Tag> void Commands::remove_relation(EntityId src)
     cmd.entity    = src;
     enqueue(cmd);
 }
+
+// ---- v1i: Auto-registration of reserved-slot indexes ---------------------
+//
+// register_component<T>(traits...) ends by calling this hook with the
+// freshly-stamped ComponentInfo. Each trait flag triggers a lazy
+// instantiation of the corresponding global index (one per kind), and
+// adds the new ComponentId to that index's observed mask.
+//
+// ChangeDetectIndex auto-registers on EVERY component registration
+// (every component is "watchable"). The other reserved indexes register
+// only when their trait flag is set.
+
+inline void World::auto_register_indexes_for(ComponentId id)
+{
+    const ComponentInfo* info = m_components.info(id);
+    if (info == nullptr)
+    {
+        return;
+    }
+
+    // Helper lambda — finds an index by exact dynamic type or lazy-creates it.
+    auto ensure_and_watch = [&]<typename Idx>(ComponentId watched)
+    {
+        Idx* existing = nullptr;
+        for (auto& slot : m_indexes)
+        {
+            if (Idx* casted = dynamic_cast<Idx*>(slot.get()); casted != nullptr)
+            {
+                existing = casted;
+                break;
+            }
+        }
+        if (existing == nullptr)
+        {
+            // Indexes that need an allocator (ChangeDetect, AsyncAware)
+            // construct with the World's allocator; the no-op shells take
+            // no ctor args.
+            if constexpr (requires { Idx{allocator()}; })
+            {
+                existing = register_index<Idx>(allocator());
+            }
+            else
+            {
+                existing = register_index<Idx>();
+            }
+        }
+        existing->watch(watched);
+    };
+
+    // ChangeDetect — every component is observable.
+    ensure_and_watch.template operator()<ChangeDetectIndex>(id);
+
+    if (info->async_aware)
+    {
+        ensure_and_watch.template operator()<AsyncAwareIndex>(id);
+    }
+    if (info->history_window > 0)
+    {
+        ensure_and_watch.template operator()<HistoryIndex>(id);
+    }
+    if (info->spatial_bvh)
+    {
+        ensure_and_watch.template operator()<SpatialBVHIndex>(id);
+    }
+    if (info->gpu_resident)
+    {
+        ensure_and_watch.template operator()<GpuResidentIndex>(id);
+    }
+    if (info->replication != Replication::Local)
+    {
+        ensure_and_watch.template operator()<ReplicationIndex>(id);
+    }
+    if (info->reflection.fields != nullptr)
+    {
+        ensure_and_watch.template operator()<ReflectionIndex>(id);
+    }
+}
+
+// ---- v1i: Query DSL operators that consume indexes -----------------------
+
+namespace detail
+{
+struct ChangedSinceCtx
+{
+    const ChangeDetectIndex* index;
+    ComponentId              component;
+    crd::u32                 since_frame;
+};
+
+inline bool changed_since_predicate(EntityId e, const World*, void* ud)
+{
+    const auto* ctx = static_cast<const ChangedSinceCtx*>(ud);
+    return ctx->index != nullptr && ctx->index->changed_since(e, ctx->component, ctx->since_frame);
+}
+
+struct SkipPendingCtx
+{
+    const AsyncAwareIndex* index;
+    ComponentId            component;
+};
+
+inline bool skip_pending_predicate(EntityId e, const World*, void* ud)
+{
+    const auto* ctx = static_cast<const SkipPendingCtx*>(ud);
+    if (ctx->index == nullptr)
+    {
+        return true; // no index registered → can't filter; pass everything
+    }
+    return !ctx->index->is_pending(e, ctx->component);
+}
+} // namespace detail
 
 } // namespace crd::scene

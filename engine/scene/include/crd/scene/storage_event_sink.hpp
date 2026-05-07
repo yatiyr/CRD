@@ -42,9 +42,12 @@ public:
     // before the storage destructs the slot.
     virtual void on_remove(EntityId entity, ComponentId component, const void* data) = 0;
 
-    // The entity itself was destroyed. Storage has not yet torn down its
-    // components — the sink may iterate `entity` once more if needed.
-    // Called from `IStorageBackend::on_entity_destroyed`.
+    // The entity has been fully destroyed: backends have already drained
+    // its components (firing per-component on_remove events first), and
+    // this fires last as the "all done — clean up your state" signal.
+    // Called once per destroy by World (the fan-out dispatches to every
+    // registered IComponentIndex). v1i ordering pin: on_remove events
+    // for the destroyed entity ALWAYS precede on_entity_destroyed.
     virtual void on_entity_destroyed(EntityId entity) = 0;
 };
 
