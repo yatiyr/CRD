@@ -7,6 +7,7 @@
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
 #include <crd/scene/component.hpp>
+#include <crd/scene/relation.hpp>
 
 #include <type_traits>
 #include <typeinfo>
@@ -66,6 +67,33 @@ inline void apply_trait(ComponentInfo& info, Reflection r) noexcept
 {
     info.reflection = r;
 }
+
+// Relation traits (ADR-0051). Set by `register_relation<Tag>(...)` which
+// forwards to `register_type<Relation<Tag>>(traits...)`. Components that
+// aren't relations leave these flags at their defaults.
+inline void apply_trait(ComponentInfo& info, ReverseIndex) noexcept
+{
+    info.has_reverse_index = true;
+}
+inline void apply_trait(ComponentInfo& info, Acyclic) noexcept
+{
+    info.acyclic = true;
+}
+inline void apply_trait(ComponentInfo& info, OnTargetDestroyed otd) noexcept
+{
+    info.has_on_target_destroyed = true;
+    info.on_target_destroyed_policy = static_cast<crd::u8>(otd.policy);
+}
+
+// is_relation_instance_v<T> — true when T is a Relation<Tag> instantiation.
+// Used by register_type to stamp ComponentInfo::is_relation = true.
+template <typename T> struct IsRelationInstance : std::false_type
+{
+};
+template <typename Tag> struct IsRelationInstance<Relation<Tag>> : std::true_type
+{
+};
+template <typename T> inline constexpr bool is_relation_instance_v = IsRelationInstance<T>::value;
 
 template <typename T> void capture_lifecycle_ops(ComponentInfo& info) noexcept
 {
@@ -139,6 +167,12 @@ public:
         info.name = crd::containers::StringView{typeid(T).name()};
         info.size = sizeof(T);
         info.alignment = alignof(T);
+        // Mark Relation<Tag> instantiations so the World relation API can
+        // distinguish them from plain components without a separate table.
+        if constexpr (detail::is_relation_instance_v<T>)
+        {
+            info.is_relation = true;
+        }
 
         // Apply traits in argument order. Later traits override earlier ones
         // for fields that overlap (e.g. two StorageHints — last one wins).

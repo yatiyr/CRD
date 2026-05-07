@@ -1,6 +1,7 @@
 #pragma once
 
 #include <crd/containers/array.hpp>
+#include <crd/containers/hash_map.hpp>
 #include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
@@ -8,6 +9,7 @@
 #include <crd/scene/component.hpp>
 #include <crd/scene/component_registry.hpp>
 #include <crd/scene/entity.hpp>
+#include <crd/scene/relation.hpp>
 #include <crd/scene/slot_map.hpp>
 #include <crd/scene/sparse_set_storage.hpp>
 #include <crd/scene/storage_backend.hpp>
@@ -37,6 +39,7 @@ class World
 {
 public:
     explicit World(crd::memory::IAllocator* alloc = crd::memory::default_allocator());
+    ~World();
 
     World(const World&) = delete;
     World& operator=(const World&) = delete;
@@ -219,6 +222,144 @@ public:
         m_sparse_storage.set_event_sink(m_event_sink);
     }
 
+    // ---- Relation API (Phase 3.0 v1f, ADR-0051) ------------------------
+    //
+    // A relation is `(Tag, target)` modelled as a component of type
+    // `Relation<Tag>` carrying the target EntityId. The full grammar:
+    //
+    //   register_relation<Tag>(traits...)        registers Relation<Tag> as a
+    //                                            component with relation traits
+    //                                            (ReverseIndex, Acyclic,
+    //                                            OnTargetDestroyed); idempotent.
+    //   add_relation<Tag>(src, target)           UPSERT — installs the relation;
+    //                                            updates reverse index; debug-
+    //                                            mode cycle assert when Acyclic.
+    //   remove_relation<Tag>(src)                drops relation + reverse-index
+    //                                            entry; no-op when absent.
+    //   get_relation_target<Tag>(src)            current target or null.
+    //   has_relation<Tag>(src)                   bool.
+    //   would_form_cycle<Tag>(src, target)       public predicate; tests use
+    //                                            this to verify cycle detection
+    //                                            without tripping assertions.
+    //   traverse_relation<Tag>(root, visitor)    DFS pre-order using the
+    //                                            reverse index; visitor sees
+    //                                            (entity, depth) starting at
+    //                                            (root, 0). Requires
+    //                                            ReverseIndex on the relation.
+    //   register_builtin_relations()             registers all six built-ins
+    //                                            (ChildOf / AttachedTo / Owns /
+    //                                            Targets / DependsOn /
+    //                                            PossessedBy) with canonical
+    //                                            defaults. Idempotent — call
+    //                                            override-registrations BEFORE
+    //                                            this if you want non-default
+    //                                            traits.
+    //
+    // `OnTargetDestroyed` fires inside `destroy_immediate` and `flush_destroys`
+    // via an iterative worklist: when an entity is destroyed, every registered
+    // relation looks up its reverse_sources entry and applies its policy
+    // (Cascade / Detach / SetNull). A Cascade enqueues affected sources back
+    // onto the worklist — recursion is iterative, so a 100-deep ChildOf tree
+    // never overflows the stack.
+
+    template <typename Tag, typename... Traits>
+    ComponentId register_relation(Traits&&... traits)
+    {
+        // Forward to the component registry; trait dispatchers in
+        // component_registry.hpp set the relation flags on ComponentInfo.
+        // is_relation = true is stamped automatically because T = Relation<Tag>.
+        const ComponentId id = m_components.register_type<Relation<Tag>>(std::forward<Traits>(traits)...);
+        on_relation_registered(id);
+        return id;
+    }
+
+    template <typename Tag> [[nodiscard]] ComponentId relation_id() const noexcept
+    {
+        return m_components.id_of<Relation<Tag>>();
+    }
+
+    template <typename Tag> void add_relation(EntityId src, EntityId target)
+    {
+        CRD_ASSERT(is_alive(src));
+        const ComponentId id = require_component_id<Relation<Tag>>();
+        add_relation_impl(id, src, target);
+    }
+
+    template <typename Tag> void remove_relation(EntityId src)
+    {
+        if (!is_alive(src))
+        {
+            return;
+        }
+        const ComponentId id = m_components.id_of<Relation<Tag>>();
+        if (id.is_null())
+        {
+            return;
+        }
+        remove_relation_impl(id, src);
+    }
+
+    template <typename Tag> [[nodiscard]] EntityId get_relation_target(EntityId src) const
+    {
+        if (!is_alive(src))
+        {
+            return EntityId::null();
+        }
+        const ComponentId id = m_components.id_of<Relation<Tag>>();
+        if (id.is_null())
+        {
+            return EntityId::null();
+        }
+        const Relation<Tag>* r = static_cast<const Relation<Tag>*>(get_relation_payload_const(id, src));
+        return (r != nullptr) ? r->target : EntityId::null();
+    }
+
+    template <typename Tag> [[nodiscard]] bool has_relation(EntityId src) const
+    {
+        return !get_relation_target<Tag>(src).is_null();
+    }
+
+    template <typename Tag> [[nodiscard]] bool would_form_cycle(EntityId src, EntityId target) const
+    {
+        const ComponentId id = m_components.id_of<Relation<Tag>>();
+        if (id.is_null())
+        {
+            return false;
+        }
+        return would_form_cycle_impl(id, src, target);
+    }
+
+    using RelationVisitorFn = void (*)(EntityId entity, crd::u32 depth, void* user_data);
+
+    template <typename Tag, typename Visitor> void traverse_relation(EntityId root, Visitor&& visitor) const
+    {
+        const ComponentId id = m_components.id_of<Relation<Tag>>();
+        if (id.is_null())
+        {
+            return;
+        }
+        // Tunnel the visitor through a stateless function pointer + ud.
+        // Keeps the DFS body uninlined and avoids std::function overhead.
+        struct Ctx
+        {
+            Visitor* vis;
+        };
+        Ctx ctx{&visitor};
+        traverse_relation_impl(
+            id, root,
+            [](EntityId entity, crd::u32 depth, void* ud)
+            {
+                Ctx* c = static_cast<Ctx*>(ud);
+                (*c->vis)(entity, depth);
+            },
+            &ctx);
+    }
+
+    // Built-in relations — registers all six with canonical defaults.
+    // Idempotent: re-registering a built-in already explicitly registered
+    // (e.g. with custom traits) is a no-op.
+    void register_builtin_relations();
+
 private:
     [[nodiscard]] IStorageBackend& backend_for(ComponentId id) noexcept
     {
@@ -236,12 +377,63 @@ private:
                                                               : static_cast<const IStorageBackend&>(m_storage);
     }
 
+    // Per-relation reverse-index payload. Lazy-allocated by
+    // on_relation_registered() when ReverseIndex{} was passed at registration.
+    // Indexed by ComponentId.raw in m_relations; null otherwise.
+    struct RelationInfo
+    {
+        crd::containers::HashMap<EntityId, crd::containers::Array<EntityId>> reverse_sources;
+        crd::memory::IAllocator* alloc = nullptr;
+
+        explicit RelationInfo(crd::memory::IAllocator* a) noexcept : reverse_sources(a), alloc(a) {}
+
+        // Add `src` to reverse_sources[target]. Lazy-creates the inner Array
+        // with the World's allocator so we don't fall back to default_allocator.
+        void add_reverse(EntityId target, EntityId src);
+        // Remove `src` from reverse_sources[target]; erase the key if empty.
+        void remove_reverse(EntityId target, EntityId src);
+        // Pop and return the entire sources array for `target`, erasing the key.
+        // Returns empty Array if the key is absent.
+        [[nodiscard]] crd::containers::Array<EntityId> take_sources(EntityId target);
+    };
+
+    // Hooks called from the relation API templates; keep the heavy code out
+    // of the header.
+    void on_relation_registered(ComponentId id);
+    void add_relation_impl(ComponentId id, EntityId src, EntityId target);
+    void remove_relation_impl(ComponentId id, EntityId src);
+    [[nodiscard]] bool would_form_cycle_impl(ComponentId id, EntityId src, EntityId target) const noexcept;
+    void traverse_relation_impl(ComponentId id, EntityId root, RelationVisitorFn fn, void* user_data) const;
+    [[nodiscard]] const void* get_relation_payload_const(ComponentId id, EntityId src) const;
+
+    // Apply OnTargetDestroyed policy across every registered relation when an
+    // entity is being destroyed. Pushes Cascade-affected sources onto the
+    // worklist for iterative drain in destroy paths.
+    void apply_on_target_destroyed(EntityId destroyed, crd::containers::Array<EntityId>& worklist);
+
+    // Walk every registered relation; if `e` has Relation<Tag>{target}, remove
+    // (target, e) from that relation's reverse_sources. Called once before
+    // backend drain — after the backend tears the components down, the targets
+    // are unrecoverable. The "outgoing" half of relation cleanup; the
+    // "incoming" half is `apply_on_target_destroyed`.
+    void cleanup_outgoing_relations(EntityId e);
+
+    // Iterative destruction loop. Each iteration: alive-check (diamond
+    // dedup), apply incoming on-destroy policy, scrub outgoing reverse-index
+    // entries, fire sink, drain both backends, free the slot. Cascades push
+    // new entities onto the worklist; loop terminates when worklist empties.
+    void drain_destruction_worklist(crd::containers::Array<EntityId>& worklist);
+
     SlotMap m_slots;
     crd::containers::Array<EntityId> m_pending_destroy;
     ComponentRegistry m_components;
     ArchetypeChunkStorage m_storage;
     SparseSetStorage m_sparse_storage;
     IStorageEventSink* m_event_sink;
+    // Per-relation info, indexed by ComponentId.raw. Pre-sized to
+    // kMaxComponents; entries are nullptr until register_relation() lazily
+    // allocates them.
+    crd::containers::Array<RelationInfo*> m_relations;
 };
 
 } // namespace crd::scene

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <crd/containers/hash.hpp>
 #include <crd/core/types.hpp>
 
 namespace crd::scene
@@ -34,3 +35,18 @@ struct EntityId
 static_assert(sizeof(EntityId) == 8, "EntityId must pack to 8 bytes");
 
 } // namespace crd::scene
+
+namespace crd::containers
+{
+// Hash EntityId by mixing its 64-bit raw representation through hash_u64.
+// Defined here (rather than in hash.hpp) so the hash specialisation lives
+// alongside the type and HashMap<EntityId, V> just works without bespoke
+// hashing predicates at every call site.
+template <> struct DefaultHash<crd::scene::EntityId>
+{
+    [[nodiscard]] crd::u64 operator()(const crd::scene::EntityId& e) const noexcept
+    {
+        return hash_u64(e.raw);
+    }
+};
+} // namespace crd::containers

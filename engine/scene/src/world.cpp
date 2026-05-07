@@ -1,6 +1,8 @@
+// v1f: relations + iterative destruction worklist
 #include <crd/core/assert.hpp>
 #include <crd/scene/world.hpp>
 
+#include <new>
 #include <utility>
 
 namespace crd::scene
@@ -48,8 +50,25 @@ template <typename Fn> void for_each_set_bit(const ComponentMask& mask, Fn&& fn)
 
 World::World(crd::memory::IAllocator* alloc)
     : m_slots(alloc), m_pending_destroy(alloc), m_components(alloc), m_storage(alloc, m_components),
-      m_sparse_storage(alloc, m_components), m_event_sink(NullStorageEventSink::instance())
+      m_sparse_storage(alloc, m_components), m_event_sink(NullStorageEventSink::instance()), m_relations(alloc)
 {
+    // Lazy slots indexed by ComponentId.raw. Always nullptr until
+    // register_relation() allocates a RelationInfo for that slot.
+    m_relations.resize(kMaxComponents, nullptr);
+}
+
+World::~World()
+{
+    crd::memory::IAllocator* alloc = m_pending_destroy.allocator();
+    for (RelationInfo*& slot : m_relations)
+    {
+        if (slot != nullptr)
+        {
+            slot->~RelationInfo();
+            alloc->deallocate(slot);
+            slot = nullptr;
+        }
+    }
 }
 
 EntityId World::spawn()
@@ -65,35 +84,39 @@ void World::destroy(EntityId e)
     m_pending_destroy.push_back(e);
 }
 
+namespace
+{
+// Drain a worklist of entities, applying full destruction (cascade + sink +
+// backends + slot free) iteratively. Cascades from OnTargetDestroyed::Cascade
+// push new entities onto the worklist — recursion is iterative, so a 100+
+// deep ChildOf tree never overflows the stack. Diamond shapes (an entity
+// reachable via two cascades) are deduped by the alive-check at the top of
+// each iteration.
+} // namespace
+
 void World::destroy_immediate(EntityId e)
 {
-    if (m_slots.is_alive(e))
+    if (!m_slots.is_alive(e))
     {
-        // World fires the singular sink->on_entity_destroyed event ONCE so
-        // observers (Layer-5 indexes) see exactly one event per destroy
-        // regardless of how many backends hold the entity's components.
-        // Both backends then drain their own components, emitting per-
-        // component on_remove events through the same sink.
-        m_event_sink->on_entity_destroyed(e);
-        m_storage.on_entity_destroyed(e);
-        m_sparse_storage.on_entity_destroyed(e);
-        m_slots.free(e);
+        return;
     }
+    crd::containers::Array<EntityId> worklist{m_pending_destroy.allocator()};
+    worklist.push_back(e);
+    drain_destruction_worklist(worklist);
 }
 
 void World::flush_destroys()
 {
+    crd::containers::Array<EntityId> worklist{m_pending_destroy.allocator()};
     for (EntityId e : m_pending_destroy)
     {
         if (m_slots.is_alive(e))
         {
-            m_event_sink->on_entity_destroyed(e);
-            m_storage.on_entity_destroyed(e);
-            m_sparse_storage.on_entity_destroyed(e);
-            m_slots.free(e);
+            worklist.push_back(e);
         }
     }
     m_pending_destroy.clear();
+    drain_destruction_worklist(worklist);
 }
 
 // ---- v1e: mixed-backend chunk visitor ------------------------------------
@@ -298,6 +321,401 @@ void World::for_each_chunk(ComponentMask required, ChunkVisitor fn, void* user_d
             fn(view, user_data);
         }
     }
+}
+
+// ---- v1f: Relations -----------------------------------------------------
+
+void World::RelationInfo::add_reverse(EntityId target, EntityId src)
+{
+    if (target.is_null())
+    {
+        return;
+    }
+    crd::containers::Array<EntityId>* arr = reverse_sources.find(target);
+    if (arr == nullptr)
+    {
+        // Lazy-create the inner Array with the World's allocator. operator[]
+        // would default-construct with default_allocator — wrong for memory
+        // budgeting. Emplace explicitly with `alloc`.
+        reverse_sources.emplace(target, alloc);
+        arr = reverse_sources.find(target);
+        CRD_ASSERT(arr != nullptr);
+    }
+    arr->push_back(src);
+}
+
+void World::RelationInfo::remove_reverse(EntityId target, EntityId src)
+{
+    if (target.is_null())
+    {
+        return;
+    }
+    crd::containers::Array<EntityId>* arr = reverse_sources.find(target);
+    if (arr == nullptr)
+    {
+        return;
+    }
+    // Linear scan + swap-with-last. Source arrays are typically small
+    // (children of one parent); n^2 in the rare degenerate case is fine.
+    for (crd::usize i = 0; i < arr->size(); ++i)
+    {
+        if ((*arr)[i].raw == src.raw)
+        {
+            (*arr)[i] = arr->back();
+            arr->pop_back();
+            break;
+        }
+    }
+    // Erase empty entries so HashMap probe length stays bounded under churn.
+    if (arr->size() == 0)
+    {
+        reverse_sources.erase(target);
+    }
+}
+
+crd::containers::Array<EntityId> World::RelationInfo::take_sources(EntityId target)
+{
+    crd::containers::Array<EntityId> result{alloc};
+    crd::containers::Array<EntityId>* arr = reverse_sources.find(target);
+    if (arr == nullptr)
+    {
+        return result;
+    }
+    // Move-out + erase. Avoids a copy of the entity-id array under load.
+    result = std::move(*arr);
+    reverse_sources.erase(target);
+    return result;
+}
+
+void World::on_relation_registered(ComponentId id)
+{
+    CRD_ASSERT(!id.is_null() && id.raw < m_relations.size());
+    const ComponentInfo* info = m_components.info(id);
+    CRD_ASSERT(info != nullptr && info->is_relation);
+
+    // v1f invariant: OnTargetDestroyed requires ReverseIndex. Without the
+    // reverse index, "find every source pointing at the dying target" is
+    // an O(N) scan of every entity — out of scope for v1f. v1g+ may relax.
+    if (info->has_on_target_destroyed)
+    {
+        CRD_ASSERT(info->has_reverse_index &&
+                   "OnTargetDestroyed policy requires ReverseIndex on the same relation");
+    }
+
+    // Lazy-allocate RelationInfo only when ReverseIndex is set. Relations
+    // without it pay zero memory tax for the unused HashMap.
+    if (info->has_reverse_index && m_relations[id.raw] == nullptr)
+    {
+        crd::memory::IAllocator* alloc = m_pending_destroy.allocator();
+        void* mem = alloc->allocate(sizeof(RelationInfo), alignof(RelationInfo));
+        CRD_ASSERT(mem != nullptr);
+        m_relations[id.raw] = ::new (mem) RelationInfo(alloc);
+    }
+}
+
+void World::add_relation_impl(ComponentId id, EntityId src, EntityId target)
+{
+    CRD_ASSERT(!id.is_null());
+    const ComponentInfo* info = m_components.info(id);
+    CRD_ASSERT(info != nullptr && info->is_relation);
+
+    // Read the prior target (if any) before the storage UPSERT.
+    EntityId old_target = EntityId::null();
+    if (const void* old_payload = get_relation_payload_const(id, src); old_payload != nullptr)
+    {
+        old_target = *static_cast<const EntityId*>(old_payload);
+    }
+
+    // UPSERT short-circuit: re-targeting to the same target is a no-op.
+    // Avoids spurious storage events (on_remove + on_insert) that v1i
+    // ChangeDetect would otherwise see as a real change.
+    if (old_target.raw == target.raw && !old_target.is_null())
+    {
+        return;
+    }
+
+    // Acyclic check (debug only). Enforced via CRD_ASSERT — release builds
+    // trust the caller. The public `would_form_cycle<Tag>(src, target)`
+    // predicate is the testability lever for callers that want to verify
+    // before attempting the add.
+    if (info->acyclic)
+    {
+        CRD_ASSERT(!would_form_cycle_impl(id, src, target) &&
+                   "add_relation: would form a cycle on an Acyclic relation");
+    }
+
+    RelationInfo* ri = m_relations[id.raw];
+
+    // Reverse-index maintenance: drop the old (old_target, src) edge before
+    // installing the new one. Idempotent if old_target was null.
+    if (ri != nullptr && !old_target.is_null())
+    {
+        ri->remove_reverse(old_target, src);
+    }
+
+    // Storage UPSERT. Relation<Tag>'s payload is layout-equivalent to a
+    // single EntityId, so we pass &target directly — the registered
+    // move_construct callback for Relation<Tag> will placement-new at the
+    // slot, copying the EntityId byte-identically.
+    EntityId payload_target = target;
+    backend_for(id).insert(src, id, &payload_target);
+
+    // Install the new (target, src) edge.
+    if (ri != nullptr && !target.is_null())
+    {
+        ri->add_reverse(target, src);
+    }
+}
+
+void World::remove_relation_impl(ComponentId id, EntityId src)
+{
+    CRD_ASSERT(!id.is_null());
+    const ComponentInfo* info = m_components.info(id);
+    if (info == nullptr || !info->is_relation)
+    {
+        return;
+    }
+    // Read current target before the storage path destroys it.
+    EntityId current_target = EntityId::null();
+    if (const void* payload = get_relation_payload_const(id, src); payload != nullptr)
+    {
+        current_target = *static_cast<const EntityId*>(payload);
+    }
+    if (current_target.is_null())
+    {
+        return; // src has no Relation<Tag> — no-op
+    }
+
+    if (RelationInfo* ri = m_relations[id.raw]; ri != nullptr)
+    {
+        ri->remove_reverse(current_target, src);
+    }
+    backend_for(id).remove(src, id);
+}
+
+const void* World::get_relation_payload_const(ComponentId id, EntityId src) const
+{
+    if (id.is_null() || !is_alive(src))
+    {
+        return nullptr;
+    }
+    const ComponentInfo* info = m_components.info(id);
+    if (info == nullptr || !info->is_relation)
+    {
+        return nullptr;
+    }
+    if (info->storage_hint == StorageHint::SparseSet)
+    {
+        return m_sparse_storage.get_const(src, id);
+    }
+    return m_storage.get_const(src, id);
+}
+
+bool World::would_form_cycle_impl(ComponentId id, EntityId src, EntityId target) const noexcept
+{
+    if (src.raw == target.raw && !src.is_null())
+    {
+        return true;
+    }
+    // Walk target → target's target → ... up the chain, looking for src.
+    // Bound the walk at kMaxComponents (defensive against pre-existing
+    // cycles in untyped inputs); legitimate trees never approach this depth.
+    EntityId current = target;
+    for (crd::u32 step = 0; step < 4096; ++step)
+    {
+        if (current.is_null())
+        {
+            return false;
+        }
+        const void* payload = get_relation_payload_const(id, current);
+        if (payload == nullptr)
+        {
+            return false; // chain ends — no cycle
+        }
+        current = *static_cast<const EntityId*>(payload);
+        if (current.raw == src.raw && !current.is_null())
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+void World::traverse_relation_impl(ComponentId id, EntityId root, RelationVisitorFn fn, void* user_data) const
+{
+    if (fn == nullptr || id.is_null())
+    {
+        return;
+    }
+    const ComponentInfo* info = m_components.info(id);
+    if (info == nullptr || !info->is_relation || !info->has_reverse_index)
+    {
+        // No reverse index → can't walk parent → children. v1g+ may add a
+        // query-and-filter fallback; v1f requires reverse index.
+        return;
+    }
+    const RelationInfo* ri = m_relations[id.raw];
+    if (ri == nullptr)
+    {
+        return;
+    }
+
+    // Iterative DFS pre-order. Stack-local frame buffer avoids recursion
+    // and keeps deep trees safe (UI hierarchies, particle attachment chains).
+    struct Frame
+    {
+        EntityId entity;
+        crd::u32 depth;
+    };
+    crd::containers::Array<Frame> stack{m_pending_destroy.allocator()};
+    stack.push_back(Frame{root, 0U});
+
+    while (stack.size() > 0)
+    {
+        const Frame f = stack.back();
+        stack.pop_back();
+
+        fn(f.entity, f.depth, user_data);
+
+        // Push children in reverse order so DFS visits them in insertion order.
+        const crd::containers::Array<EntityId>* children = ri->reverse_sources.find(f.entity);
+        if (children == nullptr)
+        {
+            continue;
+        }
+        for (crd::usize i = children->size(); i > 0; --i)
+        {
+            stack.push_back(Frame{(*children)[i - 1U], f.depth + 1U});
+        }
+    }
+}
+
+void World::cleanup_outgoing_relations(EntityId e)
+{
+    // For every registered reverse-indexed relation that `e` has, remove
+    // (target, e) from its reverse_sources. Must run BEFORE backend drain;
+    // once backends destroy the components, the targets are unrecoverable.
+    for (crd::u32 i = 0; i < m_relations.size(); ++i)
+    {
+        RelationInfo* ri = m_relations[i];
+        if (ri == nullptr)
+        {
+            continue;
+        }
+        const ComponentId id{static_cast<crd::u16>(i)};
+        const void* payload = get_relation_payload_const(id, e);
+        if (payload == nullptr)
+        {
+            continue;
+        }
+        const EntityId target = *static_cast<const EntityId*>(payload);
+        ri->remove_reverse(target, e);
+    }
+}
+
+void World::apply_on_target_destroyed(EntityId destroyed, crd::containers::Array<EntityId>& worklist)
+{
+    for (crd::u32 i = 0; i < m_relations.size(); ++i)
+    {
+        RelationInfo* ri = m_relations[i];
+        if (ri == nullptr)
+        {
+            continue;
+        }
+        const ComponentId id{static_cast<crd::u16>(i)};
+        const ComponentInfo* info = m_components.info(id);
+        if (info == nullptr || !info->is_relation || !info->has_on_target_destroyed)
+        {
+            continue;
+        }
+
+        // Drain (and erase) the sources entry for `destroyed`. The bulk
+        // move-out avoids walking the array twice and frees the HashMap
+        // slot immediately.
+        crd::containers::Array<EntityId> sources = ri->take_sources(destroyed);
+        if (sources.size() == 0)
+        {
+            continue;
+        }
+
+        const auto policy = static_cast<OnTargetDestroyed::Policy>(info->on_target_destroyed_policy);
+
+        for (EntityId source : sources)
+        {
+            if (!is_alive(source))
+            {
+                continue; // already destroyed (diamond shape) — no-op
+            }
+            switch (policy)
+            {
+                case OnTargetDestroyed::Policy::Cascade:
+                    worklist.push_back(source);
+                    break;
+                case OnTargetDestroyed::Policy::Detach:
+                    backend_for(id).remove(source, id);
+                    break;
+                case OnTargetDestroyed::Policy::SetNull:
+                {
+                    void* p = backend_for(id).get_mut(source, id);
+                    if (p != nullptr)
+                    {
+                        *static_cast<EntityId*>(p) = EntityId::null();
+                    }
+                    break;
+                }
+            }
+        }
+    }
+}
+
+void World::drain_destruction_worklist(crd::containers::Array<EntityId>& worklist)
+{
+    while (worklist.size() > 0)
+    {
+        const EntityId current = worklist.back();
+        worklist.pop_back();
+
+        if (!m_slots.is_alive(current))
+        {
+            continue; // diamond dedup — second visit is a no-op
+        }
+
+        // Phase 1: incoming relation policy (Cascade may push onto worklist).
+        apply_on_target_destroyed(current, worklist);
+
+        // Phase 2: outgoing reverse-index cleanup.
+        cleanup_outgoing_relations(current);
+
+        // Phase 3: sink fan-out (once per destroy) + backend drains + slot free.
+        m_event_sink->on_entity_destroyed(current);
+        m_storage.on_entity_destroyed(current);
+        m_sparse_storage.on_entity_destroyed(current);
+        m_slots.free(current);
+    }
+}
+
+void World::register_builtin_relations()
+{
+    using namespace crd::scene::relations;
+
+    // Canonical defaults — see relation.hpp for the rationale table.
+    register_relation<ChildOf>(StorageHint::Archetype, ReverseIndex{}, Acyclic{},
+                               OnTargetDestroyed{OnTargetDestroyed::Policy::Cascade});
+
+    register_relation<AttachedTo>(StorageHint::Archetype, ReverseIndex{}, Acyclic{},
+                                  OnTargetDestroyed{OnTargetDestroyed::Policy::Detach});
+
+    register_relation<Owns>(StorageHint::Archetype, ReverseIndex{}, Acyclic{},
+                            OnTargetDestroyed{OnTargetDestroyed::Policy::Cascade});
+
+    register_relation<Targets>(StorageHint::SparseSet, ReverseIndex{},
+                               OnTargetDestroyed{OnTargetDestroyed::Policy::SetNull});
+
+    register_relation<DependsOn>(StorageHint::SparseSet, ReverseIndex{}, Acyclic{},
+                                 OnTargetDestroyed{OnTargetDestroyed::Policy::SetNull});
+
+    register_relation<PossessedBy>(StorageHint::SparseSet, ReverseIndex{},
+                                   OnTargetDestroyed{OnTargetDestroyed::Policy::Detach});
 }
 
 } // namespace crd::scene

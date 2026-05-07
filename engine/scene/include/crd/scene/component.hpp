@@ -191,6 +191,22 @@ struct ComponentInfo
     ComponentSerialize serialize{};
     Reflection reflection{};
 
+    // ---- Relation flags (ADR-0051, Phase 3.0 v1f) ----------------------
+    // These are populated when `register_relation<Tag>(...)` is called for
+    // this component (since `Relation<Tag>` is registered as a component).
+    // For non-relation components they remain at defaults (false / SetNull).
+    //
+    // The relation system in World reads these directly to drive reverse-
+    // index maintenance, cycle detection, and on-destroy policy. Keeping
+    // the flags in ComponentInfo (rather than a parallel table) matches
+    // the existing trait-dispatch grammar and keeps lookups branch-free.
+
+    bool is_relation              = false; // marks this component as a Relation<Tag> instance
+    bool acyclic                  = false; // Acyclic{} trait
+    bool has_reverse_index        = false; // ReverseIndex{} trait
+    bool has_on_target_destroyed  = false; // OnTargetDestroyed{...} trait present
+    crd::u8 on_target_destroyed_policy = 0;        // raw OnTargetDestroyed::Policy value
+
     // Type-erased lifecycle ops. Captured via if-constexpr at registration;
     // any op may be nullptr if the type does not provide it (storage layer
     // checks and CRD_ASSERTs at use time).

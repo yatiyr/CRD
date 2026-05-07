@@ -11,7 +11,7 @@
 
 ## Current focus
 
-**Phase 3.0 — Scene/ECS foundation. v1a + v1b + v1c (whole) + v1d + v1e shipped 2026-05-06 / 07. Detour D-001 (memory infrastructure) closed 2026-05-07: TLSF + GrowablePool + ChunkAllocator pooled. Allocator-audit Option C closed the make_unique<Archetype> bypass. v1e ships `World::for_each_chunk(required, fn, ud)` — the mixed-backend chunk visitor that splits `required` by `StorageHint` and yields filtered chunks via stack-local scratch (recursive queries safe). v1g (query DSL) sits on top of this. Phase 3.0 now has both L2 backends + the unified iteration primitive. 9 slices remaining. Next: v1f — Relations (`Relation<Tag>` + `add_relation` / `traverse_relation`, ChildOf / AttachedTo built-ins, ADR-0051).**
+**Phase 3.0 — Scene/ECS foundation. v1a + v1b + v1c (whole) + v1d + v1e + v1f shipped 2026-05-06 / 07. Detour D-001 (memory infrastructure) closed 2026-05-07. Allocator-audit Option C closed the make_unique<Archetype> bypass. v1f ships Layer 3 — relations as first-class components-with-target-payload (ADR-0051): six built-in tag types in `crd::scene::relations` (ChildOf / AttachedTo / Owns / Targets / DependsOn / PossessedBy) covering every (storage × acyclic × policy) combination, three opt-in traits (ReverseIndex / Acyclic / OnTargetDestroyed), iterative destruction worklist that handles 500-deep cascade trees without stack overflow. 8 slices remaining. Next: v1g — Query DSL (`world.query<Cs...>().with<>().without<>().with_relation<>().changed<>()` per ADR-0052), built on top of `World::for_each_chunk` + relation reverse indexes.**
 
 The architecture is the **eight-layer slot-shaped ECS** designed for million-entity scenes, agents-as-components-with-scripts, UI on the same machinery (game and editor), with every novel ECS extension as a registered slot:
 
@@ -32,7 +32,7 @@ L0 Memory · Containers · Jobs    (already shipped)
 
 Cerid signature: a uniform `IComponentIndex` extension framework where every novel ECS extension (history, change detect, spatial, GPU-mirror, async, replication, scripts, reflection) is a registered slot consuming the same component-lifecycle event stream. Adding the next extension is a one-day job.
 
-Slices: ~~v1a (Entity+SlotMap)~~ ✅ → ~~v1b (registry)~~ ✅ → ~~v1c1 (chunk allocator + layout)~~ ✅ → ~~v1c2 (graph + entity move + IStorageBackend impl + sink hooks)~~ ✅ → ~~v1d (SparseSet storage)~~ ✅ → ~~v1e (mixed-backend chunk visitor)~~ ✅ → **v1f (relations)** ← active → v1g (query DSL) → v1h (system+schedule) → v1i (index framework + ChangeDetect + AsyncAware) → v1j (Transform + propagation) → v1k (SceneResource+Loader) → v1l (cook_scene cooker handler) → v1m (sandbox renderer integration) → v1n (reserved-slot freeze).
+Slices: ~~v1a (Entity+SlotMap)~~ ✅ → ~~v1b (registry)~~ ✅ → ~~v1c1 (chunk allocator + layout)~~ ✅ → ~~v1c2 (graph + entity move + IStorageBackend impl + sink hooks)~~ ✅ → ~~v1d (SparseSet storage)~~ ✅ → ~~v1e (mixed-backend chunk visitor)~~ ✅ → ~~v1f (relations)~~ ✅ → **v1g (query DSL)** ← active → v1h (system+schedule) → v1i (index framework + ChangeDetect + AsyncAware) → v1j (Transform + propagation) → v1k (SceneResource+Loader) → v1l (cook_scene cooker handler) → v1m (sandbox renderer integration) → v1n (reserved-slot freeze).
 
 Active phase doc: `docs/phases/phase-3.0-scene-ecs.md`.
 
@@ -69,7 +69,55 @@ _none — D-001 closed 2026-05-07. Main roadmap resumed at Phase 3.0 v1d._
 
 ## Last shipped milestone
 
-**2026-05-07 — Phase 3.0 v1e: `World::for_each_chunk(required, fn, ud)` mixed-backend chunk visitor (ADR-0050 §5). Splits `required` by `StorageHint`; pure-archetype and pure-SparseSet single-bit forward to the per-backend method (zero overhead); pure-sparse multi-bit anchors on the smallest pool then sparse-checks the rest; mixed walks archetypes ⊇ archetype_bits and sparse-checks remaining sparse_bits per entity, yielding filtered chunks into stack-local scratch (recursive queries safe). Six-config green at 629/629 / 626 release / 17 smokes (was 618 baseline post-v1d).**
+**2026-05-07 — Phase 3.0 v1f: Relations layer (ADR-0051) with SIX built-in tag types — `ChildOf` / `AttachedTo` / `Owns` / `Targets` / `DependsOn` / `PossessedBy` — covering every (storage × acyclic × policy) combination that occurs in real engine work. Three opt-in traits (`ReverseIndex` / `Acyclic` / `OnTargetDestroyed`) compose orthogonally. Iterative destruction worklist replaces recursive cascade — 500-deep ChildOf trees never overflow the stack. Six-config green at 651/651 / 648 release / 17 smokes (was 629 baseline post-v1e).**
+
+### v1f: Relations as first-class
+
+Six built-in relation tag types in `crd::scene::relations` namespace, each with the canonical default trait combination registered by `World::register_builtin_relations()`:
+
+| Tag           | Storage    | Acyclic | OnTargetDestroyed | Use case |
+|---------------|------------|---------|-------------------|----------|
+| `ChildOf`     | Archetype  | yes     | Cascade           | Scene tree, UI tree, prefab, replication scope |
+| `AttachedTo`  | Archetype  | yes     | Detach            | Sockets (weapons, decals, audio sources) |
+| `Owns`        | Archetype  | yes     | Cascade           | Lifetime ownership (effects own particles) |
+| `Targets`     | SparseSet  | no      | SetNull           | AI lock-on, missile tracking, camera focus |
+| `DependsOn`   | SparseSet  | yes     | SetNull           | Asset deps, system order, animation graph |
+| `PossessedBy` | SparseSet  | no      | Detach            | Input/AI/script control link |
+
+```cpp
+World w;
+w.register_builtin_relations();             // registers all six with canonical defaults
+EntityId child = w.spawn();
+EntityId parent = w.spawn();
+w.add_relation<relations::ChildOf>(child, parent);
+w.traverse_relation<relations::ChildOf>(parent, [](EntityId e, u32 depth) { ... });
+w.destroy_immediate(parent);                 // cascades — child also destroyed
+```
+
+### Architecture decisions pinned
+
+- **UPSERT short-circuit** when `old_target == target` prevents spurious storage events (v1i ChangeDetect would otherwise see a real change).
+- **Iterative destruction worklist**: cascade pushes affected sources onto a stack-local Array; diamond shapes are deduped by the alive-check at each iteration.
+- **`OnTargetDestroyed` requires `ReverseIndex`** (asserted at registration) — without it, "find every source pointing at the dying target" is an O(N) full scan; v1g+ may relax.
+- **`would_form_cycle<Tag>(src, target)` is the public predicate** for cycle detection; tests verify it directly so they never trip the internal `CRD_ASSERT`.
+- **Built-in registration is opt-in** via `register_builtin_relations()` — v1k SceneLoader will call it before SCEN deserialisation.
+
+### Six-configuration green (post-v1f, 2026-05-07)
+
+- win-debug:          651/651
+- win-relwithdebinfo: 651/651
+- win-release:        648/648
+- win-asan:           651/651
+- win-clang-cl:       651/651
+- win-tidy:           ✅ build clean
+
+17/17 headless smokes per non-tidy config. Scene tests: 135 cases / 34520 assertions (was 113 / 34450 post-v1e).
+
+Session log: `docs/sessions/2026-05-07-scene-v1f-relations.md`.
+
+### Earlier the same day: Phase 3.0 v1e
+
+`World::for_each_chunk(required, fn, ud)` mixed-backend chunk visitor (ADR-0050 §5). Splits `required` by `StorageHint`; pure-archetype and pure-SparseSet single-bit forward to the per-backend method (zero overhead); pure-sparse multi-bit anchors on the smallest pool then sparse-checks the rest; mixed walks archetypes ⊇ archetype_bits and sparse-checks remaining sparse_bits per entity, yielding filtered chunks into stack-local scratch. Six-config baseline 629/629.
 
 ### v1e: mixed-backend chunk visitor
 
