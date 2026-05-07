@@ -5,6 +5,12 @@ move to a session log entry and remove from here.
 
 ## Active debt
 
+### Memory allocator infrastructure (D-001 closed 2026-05-07)
+
+`TlsfAllocator` (D-001-a) and `GrowablePoolAllocator` + ChunkAllocator-pooled (D-001-b) shipped. The v1c1 O(N) `ChunkAllocator::free` perf debt is closed — chunk allocate / free are now both O(1) via the GrowablePool's intrusive free-list. See `docs/sessions/2026-05-07-detour-D-001b-growable-pool.md` for the closing summary.
+
+**Implicit-but-untracked debt also closed 2026-05-07 (allocator-audit Option C):** `ArchetypeGraph` was using `std::make_unique<Archetype>` — the only place in Phase 3.0 that bypassed the World's `IAllocator` chain. Closed by pooling Archetype structs via `GrowablePoolAllocator(slots_per_page = 32, parent = m_alloc)`. `test_world_tlsf.cpp` (5 cases) proves the deployment pattern: a `World` on a `TlsfAllocator` pool runs full ECS lifecycle and returns every byte to the pool on destruction. Session log: `docs/sessions/2026-05-07-archetype-pool-tlsf-world.md`.
+
 ### TLSF allocator — three deferred enhancements (D-001-a, 2026-05-07)
 
 `TlsfAllocator` ships in production-grade form: arbitrary alignment, O(1) operations under ASan stress (1000 iterations × 16/32/64/128/256-byte alignments), `try_allocate` non-throwing path. Three enhancements are consciously deferred:

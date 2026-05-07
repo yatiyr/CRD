@@ -20,8 +20,8 @@ external request).
 
 ## Active detours
 
-- **D-001 — Memory infrastructure for elite-tier allocator coverage** (opened 2026-05-07). Pauses Phase 3.0 v1d. TLSF allocator (D-001-a) + GrowablePool + ChunkAllocator refactor (D-001-b). See `D-001-memory-infrastructure.md`.
+(none — main roadmap resumes at Phase 3.0 v1d)
 
 ## Closed detours
 
-(none yet)
+- **D-001 — Memory infrastructure for elite-tier allocator coverage** (opened + closed 2026-05-07). Shipped `TlsfAllocator` (canonical Conte/Masmano TLSF, arbitrary alignment, `try_allocate` non-throwing path) + `GrowablePoolAllocator` (auto-growing pages of fixed-size aligned blocks) + refactored `crd::scene::ChunkAllocator` to wrap GrowablePool. Closed the v1c1 O(N) `ChunkAllocator::free` perf debt. See `D-001-memory-infrastructure.md` (closed) and the two session logs.

@@ -3,6 +3,7 @@
 #include <crd/containers/array.hpp>
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
+#include <crd/memory/allocators/growable_pool_allocator.hpp>
 #include <crd/scene/component.hpp>
 #include <crd/scene/component_registry.hpp>
 #include <crd/scene/entity.hpp>
@@ -97,9 +98,11 @@ struct Chunk
     }
 };
 
-// ChunkAllocator — owns the lifetime of every Chunk it hands out. Aligned
-// allocate-per-chunk in v1c1; a heap-pooled backing allocator can land later
-// without changing the API.
+// ChunkAllocator — owns the lifetime of every Chunk it hands out.
+//
+// Backed by `crd::memory::GrowablePoolAllocator` (D-001-b): 16 KB slots at
+// 64-byte alignment, 64 slots per page (= 1 MB pages). O(1) allocate /
+// deallocate via free-list pop / push — closes the v1c1 O(N) `free` perf debt.
 //
 // Construction of a chunk zero-initialises the header (so consumers can rely
 // on entity_count == 0 and version_counter[]==0 from day one).
@@ -110,23 +113,21 @@ public:
 
     ChunkAllocator(const ChunkAllocator&) = delete;
     ChunkAllocator& operator=(const ChunkAllocator&) = delete;
-    ChunkAllocator(ChunkAllocator&&) noexcept;
-    ChunkAllocator& operator=(ChunkAllocator&&) noexcept;
+    ChunkAllocator(ChunkAllocator&&) noexcept = default;
+    ChunkAllocator& operator=(ChunkAllocator&&) noexcept = default;
 
-    ~ChunkAllocator();
+    ~ChunkAllocator() = default;
 
     [[nodiscard]] Chunk allocate();
 
-    // Free a chunk obtained from this allocator. The chunk's memory is returned
-    // to the underlying IAllocator. After `free`, the Chunk's `memory` is
-    // cleared to nullptr.
+    // Free a chunk obtained from this allocator. The slot returns to the pool's
+    // free list (O(1)). After `free`, the Chunk's `memory` is cleared to nullptr.
     void free(Chunk& chunk) noexcept;
 
     [[nodiscard]] crd::u32 outstanding() const noexcept;
 
 private:
-    crd::memory::IAllocator* m_alloc;
-    crd::containers::Array<void*> m_blocks; // book-keeping for dtor cleanup
+    crd::memory::GrowablePoolAllocator m_pool;
 };
 
 } // namespace crd::scene

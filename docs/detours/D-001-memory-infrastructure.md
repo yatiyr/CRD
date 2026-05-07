@@ -1,8 +1,9 @@
 # D-001 — Memory infrastructure for elite-tier allocator coverage
 
 **Opened:** 2026-05-07
-**Status:** 🚧 active — D-001-a in flight (TLSF allocator), D-001-b pending (GrowablePoolAllocator + ChunkAllocator refactor)
-**Pauses:** Phase 3.0 v1d (`SparseSetStorage`)
+**Closed:** 2026-05-07 (same day)
+**Status:** ✅ closed — both halves shipped, all exit criteria met
+**Pauses:** ~~Phase 3.0 v1d (`SparseSetStorage`)~~ → resumed 2026-05-07
 
 ---
 

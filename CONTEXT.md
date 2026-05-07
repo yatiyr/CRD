@@ -11,7 +11,7 @@
 
 ## Current focus
 
-**Phase 3.0 — Scene/ECS foundation. v1a + v1b + v1c (whole) SHIPPED. v1a (entity identity) 2026-05-06; v1b (registry + IStorageBackend + trait grammar) 2026-05-07; v1c1 (chunk allocator + SoA layout) + v1c2 (archetype graph + bytewise entity move + `ArchetypeChunkStorage : IStorageBackend` + typed `World::add_component<T>`/`has`/`get`/`remove` + IStorageEventSink lifecycle hooks for the L5 IComponentIndex framework) 2026-05-07. The engine has its first real "entity owns components" capability. 11 slices remaining in Phase 3.0. Next: v1d — `SparseSetStorage` (escape hatch for high-churn / sparse / lookup-dominated components) per ADR-0050.**
+**Phase 3.0 — Scene/ECS foundation. v1a + v1b + v1c (whole) shipped. Detour D-001 (memory infrastructure) opened and closed 2026-05-07: `TlsfAllocator` + `GrowablePoolAllocator` + refactored `ChunkAllocator` to use the pool (closes v1c1's O(N) free perf debt). Same day, allocator-audit Option C wired the new pool into `ArchetypeGraph` (closes the `std::make_unique<Archetype>` bypass) + landed `test_world_tlsf.cpp` proving the TLSF-backed-World deployment pattern end-to-end. The engine has its first real "entity owns components" capability AND a production-grade memory subsystem with every Phase-3.0 byte routed through one `IAllocator`. 11 slices remaining in Phase 3.0. Next: v1d — `SparseSetStorage` (escape hatch for high-churn / sparse / lookup-dominated components) per ADR-0050.**
 
 The architecture is the **eight-layer slot-shaped ECS** designed for million-entity scenes, agents-as-components-with-scripts, UI on the same machinery (game and editor), with every novel ECS extension as a registered slot:
 
@@ -60,12 +60,7 @@ Aktif phase dosyası: `docs/phases/phase-2.8-material-completion.md` (active)
 
 ## Active detour
 
-**D-001 — Memory infrastructure for elite-tier allocator coverage.** Opened 2026-05-07. Pauses Phase 3.0 v1d.
-
-- **D-001-a — `TlsfAllocator`** (active): canonical Two-Level Segregated Fit. O(1) allocate/free/coalesce with bounded fragmentation. Replaces nothing; ships as opt-in `IAllocator*` consumers can pick.
-- **D-001-b — `GrowablePoolAllocator` + `ChunkAllocator` refactor** (pending): fixed-size aligned blocks from auto-growing pages. ChunkAllocator becomes a thin wrapper. Closes the v1c1 O(N) `free` perf debt.
-
-Detour file: `docs/detours/D-001-memory-infrastructure.md`. Main roadmap resumes at v1d after D-001-b closes.
+_none — D-001 closed 2026-05-07. Main roadmap resumed at Phase 3.0 v1d._
 
 > When a detour opens, this section names it (e.g. "D-001: investigate
 > shader-cache corruption") and the main roadmap pauses until it closes.
@@ -74,7 +69,56 @@ Detour file: `docs/detours/D-001-memory-infrastructure.md`. Main roadmap resumes
 
 ## Last shipped milestone
 
-**2026-05-07 — Detour D-001-a SHIPPED + alignment fix landed: `TlsfAllocator` is fully production-grade.**
+**2026-05-07 — Allocator-audit Option C: `ArchetypeGraph` pools `Archetype` structs via `GrowablePoolAllocator` (parent = World allocator) — closes the `std::make_unique<Archetype>` bypass. New `test_world_tlsf.cpp` (5 cases) proves end-to-end that a `World` on a `TlsfAllocator` pool runs the full ECS lifecycle, including chunk fill/spill. Six-config green at 603/603 (was 598/598).**
+
+### Option C: archetype pool + TLSF-backed World test
+
+Three layers:
+
+- **Layer 1** — `ArchetypeGraph` no longer uses `std::make_unique<Archetype>`. Storage changed from `Array<unique_ptr<Archetype>>` to `Array<Archetype*>` with manual `pool.allocate()` + placement-new.
+- **Layer 2** — Archetype structs come from a dedicated `GrowablePoolAllocator(slot_size = sizeof(Archetype), slot_alignment = alignof(Archetype), slots_per_page = 32, parent = m_alloc)`. One parent allocate amortises 32 archetypes; 1000 archetypes ≈ 32 pages.
+- **Layer 3** — `tests/scene/test_world_tlsf.cpp`: 5 cases construct a `World` on a 16 MB `TlsfAllocator` pool and run register / spawn / add / get / get_mut / remove / destroy / chunk-fill-spill (1500 entities) / destruction-returns-bytes-to-pool. ASan-clean.
+
+Every byte the `World` allocates now flows through one root `IAllocator`: SlotMap, pending-destroy queue, ComponentRegistry's Array + HashMap, ArchetypeGraph's Array + HashMap, the per-archetype edge tables, the EntityLocation array, **the Archetype structs themselves (via the graph's GrowablePool whose parent is the World allocator)**, and the ArchetypeChunkStorage's 16 KB chunks (via ChunkAllocator's GrowablePool whose parent is also the World allocator).
+
+Scene tests: 87 / 11024 (was 82 / 7012).
+Session log: `docs/sessions/2026-05-07-archetype-pool-tlsf-world.md`.
+
+### Earlier the same day: Detour D-001 CLOSED
+
+**`TlsfAllocator` (production-grade, arbitrary alignment, try-allocate) + `GrowablePoolAllocator` + `ChunkAllocator` refactored to wrap the pool. v1c1 O(N) free perf debt closed.**
+
+### D-001-b: `GrowablePoolAllocator` + ChunkAllocator refactor
+
+`crd::memory::GrowablePoolAllocator` ships: auto-growing pages of fixed-size aligned blocks. O(1) `allocate` (free-list pop) and `deallocate` (free-list push). When the free list is empty, allocates a new page from the parent containing `slots_per_page` contiguous slots and links them into the free list. Pages are kept allocated for the life of the allocator (no auto-shrink); repeated alloc/free cycles do not thrash the parent. `owns()` is O(pages) — pages are typically few (logarithmic in allocations). Tests cover construction, page growth, free-list reuse, alignment up to 64, owns() across pages, allocation_size, move semantics, ASan leak check, and a 2000-iteration random alloc/free stress.
+
+`crd::scene::ChunkAllocator` refactored to wrap `GrowablePoolAllocator(slot_size = 16 KB, slot_alignment = 64, slots_per_page = 64)` (= 1 MB pages). Public API unchanged. v1c2 archetype storage tests (82/82 / 7012 assertions) pass unchanged. **Closes the v1c1 perf debt:** `ChunkAllocator::free` is now O(1) instead of O(outstanding).
+
+### Six-configuration green (post-Option-C close, 2026-05-07)
+
+- win-debug:          603/603
+- win-relwithdebinfo: 603/603
+- win-release:        600/600
+- win-asan:           603/603
+- win-clang-cl:       603/603
+- win-tidy:           ✅ build clean
+
+17/17 headless smokes per non-tidy config. (D-001 close baseline: 598/598; +5 cases for `test_world_tlsf.cpp`.)
+
+### Memory subsystem state after D-001 close
+
+| Allocator | Use case | Complexity |
+|---|---|---|
+| `MallocAllocator` | engine default; libc fallback | malloc-roundtrip |
+| `LinearAllocator` | per-frame scratch; reset wipes everything | O(1) alloc, no per-item free |
+| `StackAllocator` | nested LIFO scratch (recursive parsing) | O(1) alloc, marker-based unwind |
+| `PoolAllocator` | fixed-slot-count object pools | O(1) alloc / free |
+| `GrowablePoolAllocator` (NEW) | growable pool of fixed-size aligned blocks (chunks, particle records, ...) | O(1) alloc / free, page-pooled |
+| `TlsfAllocator` (NEW) | general-purpose real-time heap; arbitrary alignment | O(1) alloc / free / coalesce |
+
+`MallocAllocator` remains the engine default. TLSF and GrowablePool are opt-in `IAllocator*` consumers choose. Three deferred enhancements documented in `docs/debt.md` (Conte 8-byte trick, 32-bit support, multi-threaded TLSF — none are real Cerid v1 limitations).
+
+### Previous: D-001-a `TlsfAllocator` (also 2026-05-07)
 
 Canonical Masmano/Conte TLSF — O(1) allocate / deallocate / coalesce with bounded internal fragmentation. The general-purpose real-time allocator promised in CLAUDE.md since Phase 1. Ships as opt-in `IAllocator*` consumer; **`MallocAllocator` remains the engine default** (the cutover is a separate change).
 

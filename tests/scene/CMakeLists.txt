@@ -6,6 +6,7 @@ add_executable(crd-scene-tests
     test_archetype_chunk.cpp
     test_archetype_graph.cpp
     test_archetype_storage.cpp
+    test_world_tlsf.cpp
 )
 
 target_link_libraries(crd-scene-tests PRIVATE

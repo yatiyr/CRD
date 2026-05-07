@@ -5,12 +5,11 @@
 #include <crd/containers/hash_map.hpp>
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
+#include <crd/memory/allocators/growable_pool_allocator.hpp>
 #include <crd/scene/archetype.hpp>
 #include <crd/scene/archetype_chunk.hpp>
 #include <crd/scene/component.hpp>
 #include <crd/scene/component_registry.hpp>
-
-#include <memory>
 
 namespace crd::scene
 {
@@ -42,19 +41,28 @@ struct ComponentMaskHash
 //                      target mask + archetype_for + caches the edge.
 // after_remove(arch,c) O(1) — symmetric to after_add.
 //
-// Pointer stability: archetypes live in `m_archetypes`, an Array of
-// std::unique_ptr<Archetype>. Resizing the Array does not invalidate
-// Archetype pointers (the Array stores pointers, not the structs themselves).
-// ArchetypeId.raw is the index into m_archetypes; ids never recycle.
+// Allocator integration:
+//   - Member arrays / hash maps go through `m_alloc` (the World's IAllocator).
+//   - The Archetype STRUCTS themselves come from a dedicated
+//     `GrowablePoolAllocator m_archetype_pool` whose parent is `m_alloc`.
+//     This pools Archetype allocations (1000 archetypes → ~32 pages) and
+//     keeps every byte of the graph routed through the World's allocator
+//     chain — no `std::make_unique` / global `operator new`.
+//
+// Pointer stability: archetypes live in `m_archetypes`, an Array of raw
+// `Archetype*`. Each pointer is allocated from the pool and never moves.
+// `ArchetypeId.raw` is the index into m_archetypes; ids never recycle.
 class ArchetypeGraph
 {
 public:
     ArchetypeGraph(crd::memory::IAllocator* alloc, ChunkAllocator& chunks, const ComponentRegistry& registry);
 
+    ~ArchetypeGraph();
+
     ArchetypeGraph(const ArchetypeGraph&) = delete;
     ArchetypeGraph& operator=(const ArchetypeGraph&) = delete;
-    ArchetypeGraph(ArchetypeGraph&&) noexcept = default;
-    ArchetypeGraph& operator=(ArchetypeGraph&&) noexcept = default;
+    ArchetypeGraph(ArchetypeGraph&&) noexcept;
+    ArchetypeGraph& operator=(ArchetypeGraph&&) noexcept;
 
     // Find or create the archetype with `mask`. Allocates a new chunk for
     // empty archetypes.
@@ -72,11 +80,20 @@ public:
     [[nodiscard]] ChunkAllocator& chunks() noexcept { return *m_chunks; }
     [[nodiscard]] const ComponentRegistry& registry() const noexcept { return *m_registry; }
 
+    // Pool diagnostics (mostly useful for tests / smokes).
+    [[nodiscard]] crd::usize archetype_pool_pages() const noexcept;
+
 private:
+    void destroy_all_archetypes() noexcept;
+
     crd::memory::IAllocator* m_alloc;
     ChunkAllocator* m_chunks;
     const ComponentRegistry* m_registry;
-    crd::containers::Array<std::unique_ptr<Archetype>> m_archetypes;
+
+    // Pool for the Archetype structs. Allocated lazily on first archetype.
+    // Parent allocator = m_alloc, so the chain stays intact end-to-end.
+    crd::memory::GrowablePoolAllocator m_archetype_pool;
+    crd::containers::Array<Archetype*> m_archetypes;
     crd::containers::HashMap<ComponentMask, ArchetypeId, ComponentMaskHash> m_by_mask;
 };
 

@@ -1122,3 +1122,131 @@
 2026-05-07 06:23:48.109 [DBG] [Physics] tid=4348733100056837201 smoke_log.cpp:49 - stepped 34 bodies
 2026-05-07 06:23:48.111 [ERR] [Renderer] tid=14555759850290018466 smoke_log.cpp:57 - shader compile failed: 'tonemap.frag'
 2026-05-07 06:23:48.111 [CRT] [Engine] tid=14555759850290018466 smoke_log.cpp:58 - fatal subsystem failure simulated -- shutting down
+2026-05-07 12:08:14.285 [INF] [Engine] tid=3996344789145849226 smoke_log.cpp:26 - platform=WINDOWS compiler=MSVC arch=X64
+2026-05-07 12:08:14.285 [TRC] [Engine] tid=3996344789145849226 smoke_log.cpp:28 - trace: this is the chattiest level
+2026-05-07 12:08:14.285 [DBG] [Engine] tid=3996344789145849226 smoke_log.cpp:29 - debug: useful while building things
+2026-05-07 12:08:14.285 [INF] [Renderer] tid=3996344789145849226 smoke_log.cpp:30 - Renderer initialised, backend=Vulkan
+2026-05-07 12:08:14.285 [DBG] [Physics] tid=3996344789145849226 smoke_log.cpp:31 - physics tick budget = 4 ms
+2026-05-07 12:08:14.285 [WRN] [Audio] tid=3996344789145849226 smoke_log.cpp:32 - no audio device found, falling back to silence
+2026-05-07 12:08:14.285 [INF] [Renderer] tid=9124007419317219311 smoke_log.cpp:40 - frame 0 submitted
+2026-05-07 12:08:14.285 [DBG] [Physics] tid=17308050081881550884 smoke_log.cpp:49 - stepped 32 bodies
+2026-05-07 12:08:14.288 [INF] [Renderer] tid=9124007419317219311 smoke_log.cpp:40 - frame 1 submitted
+2026-05-07 12:08:14.288 [DBG] [Physics] tid=17308050081881550884 smoke_log.cpp:49 - stepped 33 bodies
+2026-05-07 12:08:14.291 [INF] [Renderer] tid=9124007419317219311 smoke_log.cpp:40 - frame 2 submitted
+2026-05-07 12:08:14.291 [DBG] [Physics] tid=17308050081881550884 smoke_log.cpp:49 - stepped 34 bodies
+2026-05-07 12:08:14.293 [CRT] [Engine] tid=3996344789145849226 smoke_log.cpp:58 - fatal subsystem failure simulated -- shutting down
+2026-05-07 12:08:14.293 [ERR] [Renderer] tid=3996344789145849226 smoke_log.cpp:57 - shader compile failed: 'tonemap.frag'
+2026-05-07 12:08:16.451 [INF] [Engine] tid=3004421897828836155 smoke_log.cpp:26 - platform=WINDOWS compiler=MSVC arch=X64
+2026-05-07 12:08:16.451 [TRC] [Engine] tid=3004421897828836155 smoke_log.cpp:28 - trace: this is the chattiest level
+2026-05-07 12:08:16.451 [DBG] [Engine] tid=3004421897828836155 smoke_log.cpp:29 - debug: useful while building things
+2026-05-07 12:08:16.451 [INF] [Renderer] tid=3004421897828836155 smoke_log.cpp:30 - Renderer initialised, backend=Vulkan
+2026-05-07 12:08:16.451 [DBG] [Physics] tid=3004421897828836155 smoke_log.cpp:31 - physics tick budget = 4 ms
+2026-05-07 12:08:16.451 [WRN] [Audio] tid=3004421897828836155 smoke_log.cpp:32 - no audio device found, falling back to silence
+2026-05-07 12:08:16.451 [INF] [Renderer] tid=5875455572253580969 smoke_log.cpp:40 - frame 0 submitted
+2026-05-07 12:08:16.451 [DBG] [Physics] tid=8700687885562388004 smoke_log.cpp:49 - stepped 32 bodies
+2026-05-07 12:08:16.454 [INF] [Renderer] tid=5875455572253580969 smoke_log.cpp:40 - frame 1 submitted
+2026-05-07 12:08:16.454 [DBG] [Physics] tid=8700687885562388004 smoke_log.cpp:49 - stepped 33 bodies
+2026-05-07 12:08:16.456 [DBG] [Physics] tid=8700687885562388004 smoke_log.cpp:49 - stepped 34 bodies
+2026-05-07 12:08:16.456 [INF] [Renderer] tid=5875455572253580969 smoke_log.cpp:40 - frame 2 submitted
+2026-05-07 12:08:16.459 [CRT] [Engine] tid=3004421897828836155 smoke_log.cpp:58 - fatal subsystem failure simulated -- shutting down
+2026-05-07 12:08:16.459 [ERR] [Renderer] tid=3004421897828836155 smoke_log.cpp:57 - shader compile failed: 'tonemap.frag'
+2026-05-07 12:08:19.093 [INF] [Engine] tid=12131472884850191284 smoke_log.cpp:26 - platform=WINDOWS compiler=MSVC arch=X64
+2026-05-07 12:08:19.093 [INF] [Renderer] tid=12131472884850191284 smoke_log.cpp:30 - Renderer initialised, backend=Vulkan
+2026-05-07 12:08:19.093 [WRN] [Audio] tid=12131472884850191284 smoke_log.cpp:32 - no audio device found, falling back to silence
+2026-05-07 12:08:19.093 [INF] [Renderer] tid=18379464685232998373 smoke_log.cpp:40 - frame 0 submitted
+2026-05-07 12:08:19.096 [INF] [Renderer] tid=18379464685232998373 smoke_log.cpp:40 - frame 1 submitted
+2026-05-07 12:08:19.098 [INF] [Renderer] tid=18379464685232998373 smoke_log.cpp:40 - frame 2 submitted
+2026-05-07 12:08:19.100 [CRT] [Engine] tid=12131472884850191284 smoke_log.cpp:58 - fatal subsystem failure simulated -- shutting down
+2026-05-07 12:08:19.100 [ERR] [Renderer] tid=12131472884850191284 smoke_log.cpp:57 - shader compile failed: 'tonemap.frag'
+2026-05-07 12:08:21.188 [INF] [Engine] tid=7828432666204629996 smoke_log.cpp:27 - platform=WINDOWS compiler=MSVC arch=X64
+2026-05-07 12:08:21.188 [TRC] [Engine] tid=7828432666204629996 smoke_log.cpp:28 - trace: this is the chattiest level
+2026-05-07 12:08:21.188 [DBG] [Engine] tid=7828432666204629996 smoke_log.cpp:29 - debug: useful while building things
+2026-05-07 12:08:21.188 [INF] [Renderer] tid=7828432666204629996 smoke_log.cpp:30 - Renderer initialised, backend=Vulkan
+2026-05-07 12:08:21.188 [DBG] [Physics] tid=7828432666204629996 smoke_log.cpp:31 - physics tick budget = 4 ms
+2026-05-07 12:08:21.188 [WRN] [Audio] tid=7828432666204629996 smoke_log.cpp:32 - no audio device found, falling back to silence
+2026-05-07 12:08:21.191 [DBG] [Physics] tid=17375511863492186912 smoke_log.cpp:49 - stepped 32 bodies
+2026-05-07 12:08:21.191 [INF] [Renderer] tid=8354736449874392963 smoke_log.cpp:40 - frame 0 submitted
+2026-05-07 12:08:21.194 [INF] [Renderer] tid=8354736449874392963 smoke_log.cpp:40 - frame 1 submitted
+2026-05-07 12:08:21.194 [DBG] [Physics] tid=17375511863492186912 smoke_log.cpp:49 - stepped 33 bodies
+2026-05-07 12:08:21.197 [INF] [Renderer] tid=8354736449874392963 smoke_log.cpp:40 - frame 2 submitted
+2026-05-07 12:08:21.197 [DBG] [Physics] tid=17375511863492186912 smoke_log.cpp:49 - stepped 34 bodies
+2026-05-07 12:08:21.199 [CRT] [Engine] tid=7828432666204629996 smoke_log.cpp:58 - fatal subsystem failure simulated -- shutting down
+2026-05-07 12:08:21.199 [ERR] [Renderer] tid=7828432666204629996 smoke_log.cpp:57 - shader compile failed: 'tonemap.frag'
+2026-05-07 12:08:23.374 [INF] [Engine] tid=7922532537430126680 smoke_log.cpp:26 - platform=WINDOWS compiler=MSVC arch=X64
+2026-05-07 12:08:23.374 [TRC] [Engine] tid=7922532537430126680 smoke_log.cpp:28 - trace: this is the chattiest level
+2026-05-07 12:08:23.374 [DBG] [Engine] tid=7922532537430126680 smoke_log.cpp:29 - debug: useful while building things
+2026-05-07 12:08:23.374 [INF] [Renderer] tid=7922532537430126680 smoke_log.cpp:30 - Renderer initialised, backend=Vulkan
+2026-05-07 12:08:23.374 [DBG] [Physics] tid=7922532537430126680 smoke_log.cpp:31 - physics tick budget = 4 ms
+2026-05-07 12:08:23.374 [WRN] [Audio] tid=7922532537430126680 smoke_log.cpp:32 - no audio device found, falling back to silence
+2026-05-07 12:08:23.375 [DBG] [Physics] tid=16937827650941282040 smoke_log.cpp:49 - stepped 32 bodies
+2026-05-07 12:08:23.375 [INF] [Renderer] tid=8021917291480816763 smoke_log.cpp:40 - frame 0 submitted
+2026-05-07 12:08:23.377 [INF] [Renderer] tid=8021917291480816763 smoke_log.cpp:40 - frame 1 submitted
+2026-05-07 12:08:23.377 [DBG] [Physics] tid=16937827650941282040 smoke_log.cpp:49 - stepped 33 bodies
+2026-05-07 12:08:23.380 [DBG] [Physics] tid=16937827650941282040 smoke_log.cpp:49 - stepped 34 bodies
+2026-05-07 12:08:23.380 [INF] [Renderer] tid=8021917291480816763 smoke_log.cpp:40 - frame 2 submitted
+2026-05-07 12:08:23.383 [ERR] [Renderer] tid=7922532537430126680 smoke_log.cpp:57 - shader compile failed: 'tonemap.frag'
+2026-05-07 12:08:23.383 [CRT] [Engine] tid=7922532537430126680 smoke_log.cpp:58 - fatal subsystem failure simulated -- shutting down
+2026-05-07 12:55:18.692 [INF] [Engine] tid=2260070326379025898 smoke_log.cpp:26 - platform=WINDOWS compiler=MSVC arch=X64
+2026-05-07 12:55:18.692 [TRC] [Engine] tid=2260070326379025898 smoke_log.cpp:28 - trace: this is the chattiest level
+2026-05-07 12:55:18.692 [DBG] [Engine] tid=2260070326379025898 smoke_log.cpp:29 - debug: useful while building things
+2026-05-07 12:55:18.692 [INF] [Renderer] tid=2260070326379025898 smoke_log.cpp:30 - Renderer initialised, backend=Vulkan
+2026-05-07 12:55:18.692 [DBG] [Physics] tid=2260070326379025898 smoke_log.cpp:31 - physics tick budget = 4 ms
+2026-05-07 12:55:18.692 [WRN] [Audio] tid=2260070326379025898 smoke_log.cpp:32 - no audio device found, falling back to silence
+2026-05-07 12:55:18.693 [INF] [Renderer] tid=1462556289464242261 smoke_log.cpp:40 - frame 0 submitted
+2026-05-07 12:55:18.693 [DBG] [Physics] tid=3398639497636078423 smoke_log.cpp:49 - stepped 32 bodies
+2026-05-07 12:55:18.695 [DBG] [Physics] tid=3398639497636078423 smoke_log.cpp:49 - stepped 33 bodies
+2026-05-07 12:55:18.695 [INF] [Renderer] tid=1462556289464242261 smoke_log.cpp:40 - frame 1 submitted
+2026-05-07 12:55:18.698 [INF] [Renderer] tid=1462556289464242261 smoke_log.cpp:40 - frame 2 submitted
+2026-05-07 12:55:18.698 [DBG] [Physics] tid=3398639497636078423 smoke_log.cpp:49 - stepped 34 bodies
+2026-05-07 12:55:18.701 [CRT] [Engine] tid=2260070326379025898 smoke_log.cpp:58 - fatal subsystem failure simulated -- shutting down
+2026-05-07 12:55:18.701 [ERR] [Renderer] tid=2260070326379025898 smoke_log.cpp:57 - shader compile failed: 'tonemap.frag'
+2026-05-07 12:55:20.983 [INF] [Engine] tid=9904319398077178026 smoke_log.cpp:26 - platform=WINDOWS compiler=MSVC arch=X64
+2026-05-07 12:55:20.983 [TRC] [Engine] tid=9904319398077178026 smoke_log.cpp:28 - trace: this is the chattiest level
+2026-05-07 12:55:20.983 [DBG] [Engine] tid=9904319398077178026 smoke_log.cpp:29 - debug: useful while building things
+2026-05-07 12:55:20.983 [INF] [Renderer] tid=9904319398077178026 smoke_log.cpp:30 - Renderer initialised, backend=Vulkan
+2026-05-07 12:55:20.983 [DBG] [Physics] tid=9904319398077178026 smoke_log.cpp:31 - physics tick budget = 4 ms
+2026-05-07 12:55:20.983 [WRN] [Audio] tid=9904319398077178026 smoke_log.cpp:32 - no audio device found, falling back to silence
+2026-05-07 12:55:20.983 [INF] [Renderer] tid=17598196131356685313 smoke_log.cpp:40 - frame 0 submitted
+2026-05-07 12:55:20.983 [DBG] [Physics] tid=6264014754209606864 smoke_log.cpp:49 - stepped 32 bodies
+2026-05-07 12:55:20.985 [INF] [Renderer] tid=17598196131356685313 smoke_log.cpp:40 - frame 1 submitted
+2026-05-07 12:55:20.985 [DBG] [Physics] tid=6264014754209606864 smoke_log.cpp:49 - stepped 33 bodies
+2026-05-07 12:55:20.988 [DBG] [Physics] tid=6264014754209606864 smoke_log.cpp:49 - stepped 34 bodies
+2026-05-07 12:55:20.988 [INF] [Renderer] tid=17598196131356685313 smoke_log.cpp:40 - frame 2 submitted
+2026-05-07 12:55:20.991 [ERR] [Renderer] tid=9904319398077178026 smoke_log.cpp:57 - shader compile failed: 'tonemap.frag'
+2026-05-07 12:55:20.991 [CRT] [Engine] tid=9904319398077178026 smoke_log.cpp:58 - fatal subsystem failure simulated -- shutting down
+2026-05-07 12:55:23.516 [INF] [Engine] tid=3221691228237106884 smoke_log.cpp:26 - platform=WINDOWS compiler=MSVC arch=X64
+2026-05-07 12:55:23.516 [INF] [Renderer] tid=3221691228237106884 smoke_log.cpp:30 - Renderer initialised, backend=Vulkan
+2026-05-07 12:55:23.516 [WRN] [Audio] tid=3221691228237106884 smoke_log.cpp:32 - no audio device found, falling back to silence
+2026-05-07 12:55:23.516 [INF] [Renderer] tid=1246697478302204040 smoke_log.cpp:40 - frame 0 submitted
+2026-05-07 12:55:23.518 [INF] [Renderer] tid=1246697478302204040 smoke_log.cpp:40 - frame 1 submitted
+2026-05-07 12:55:23.521 [INF] [Renderer] tid=1246697478302204040 smoke_log.cpp:40 - frame 2 submitted
+2026-05-07 12:55:23.524 [CRT] [Engine] tid=3221691228237106884 smoke_log.cpp:58 - fatal subsystem failure simulated -- shutting down
+2026-05-07 12:55:23.524 [ERR] [Renderer] tid=3221691228237106884 smoke_log.cpp:57 - shader compile failed: 'tonemap.frag'
+2026-05-07 12:55:25.577 [INF] [Engine] tid=14495025816741120023 smoke_log.cpp:27 - platform=WINDOWS compiler=MSVC arch=X64
+2026-05-07 12:55:25.577 [TRC] [Engine] tid=14495025816741120023 smoke_log.cpp:28 - trace: this is the chattiest level
+2026-05-07 12:55:25.577 [DBG] [Engine] tid=14495025816741120023 smoke_log.cpp:29 - debug: useful while building things
+2026-05-07 12:55:25.577 [INF] [Renderer] tid=14495025816741120023 smoke_log.cpp:30 - Renderer initialised, backend=Vulkan
+2026-05-07 12:55:25.577 [DBG] [Physics] tid=14495025816741120023 smoke_log.cpp:31 - physics tick budget = 4 ms
+2026-05-07 12:55:25.577 [WRN] [Audio] tid=14495025816741120023 smoke_log.cpp:32 - no audio device found, falling back to silence
+2026-05-07 12:55:25.578 [INF] [Renderer] tid=1178003295189913288 smoke_log.cpp:40 - frame 0 submitted
+2026-05-07 12:55:25.578 [DBG] [Physics] tid=14227674880621615972 smoke_log.cpp:49 - stepped 32 bodies
+2026-05-07 12:55:25.581 [DBG] [Physics] tid=14227674880621615972 smoke_log.cpp:49 - stepped 33 bodies
+2026-05-07 12:55:25.581 [INF] [Renderer] tid=1178003295189913288 smoke_log.cpp:40 - frame 1 submitted
+2026-05-07 12:55:25.584 [INF] [Renderer] tid=1178003295189913288 smoke_log.cpp:40 - frame 2 submitted
+2026-05-07 12:55:25.584 [DBG] [Physics] tid=14227674880621615972 smoke_log.cpp:49 - stepped 34 bodies
+2026-05-07 12:55:25.587 [CRT] [Engine] tid=14495025816741120023 smoke_log.cpp:58 - fatal subsystem failure simulated -- shutting down
+2026-05-07 12:55:25.587 [ERR] [Renderer] tid=14495025816741120023 smoke_log.cpp:57 - shader compile failed: 'tonemap.frag'
+2026-05-07 12:55:27.743 [INF] [Engine] tid=3189297970800888325 smoke_log.cpp:26 - platform=WINDOWS compiler=MSVC arch=X64
+2026-05-07 12:55:27.743 [TRC] [Engine] tid=3189297970800888325 smoke_log.cpp:28 - trace: this is the chattiest level
+2026-05-07 12:55:27.743 [DBG] [Engine] tid=3189297970800888325 smoke_log.cpp:29 - debug: useful while building things
+2026-05-07 12:55:27.743 [INF] [Renderer] tid=3189297970800888325 smoke_log.cpp:30 - Renderer initialised, backend=Vulkan
+2026-05-07 12:55:27.743 [DBG] [Physics] tid=3189297970800888325 smoke_log.cpp:31 - physics tick budget = 4 ms
+2026-05-07 12:55:27.743 [WRN] [Audio] tid=3189297970800888325 smoke_log.cpp:32 - no audio device found, falling back to silence
+2026-05-07 12:55:27.744 [INF] [Renderer] tid=17970299366539351169 smoke_log.cpp:40 - frame 0 submitted
+2026-05-07 12:55:27.744 [DBG] [Physics] tid=12245790311333842031 smoke_log.cpp:49 - stepped 32 bodies
+2026-05-07 12:55:27.746 [DBG] [Physics] tid=12245790311333842031 smoke_log.cpp:49 - stepped 33 bodies
+2026-05-07 12:55:27.746 [INF] [Renderer] tid=17970299366539351169 smoke_log.cpp:40 - frame 1 submitted
+2026-05-07 12:55:27.749 [INF] [Renderer] tid=17970299366539351169 smoke_log.cpp:40 - frame 2 submitted
+2026-05-07 12:55:27.749 [DBG] [Physics] tid=12245790311333842031 smoke_log.cpp:49 - stepped 34 bodies
+2026-05-07 12:55:27.753 [CRT] [Engine] tid=3189297970800888325 smoke_log.cpp:58 - fatal subsystem failure simulated -- shutting down
+2026-05-07 12:55:27.753 [ERR] [Renderer] tid=3189297970800888325 smoke_log.cpp:57 - shader compile failed: 'tonemap.frag'

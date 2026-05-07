@@ -136,60 +136,29 @@ ChunkLayout compute_chunk_layout(const ComponentMask& mask, const ComponentRegis
 }
 
 // ---- ChunkAllocator ------------------------------------------------------
+// Backed by GrowablePoolAllocator (D-001-b). 64 chunks per 1 MB page.
+// O(1) allocate (free-list pop) and O(1) free (free-list push) — closes the
+// v1c1 O(N) free perf debt.
 
-ChunkAllocator::ChunkAllocator(crd::memory::IAllocator* alloc) : m_alloc(alloc), m_blocks(alloc) {}
-
-ChunkAllocator::ChunkAllocator(ChunkAllocator&& other) noexcept
-    : m_alloc(other.m_alloc), m_blocks(std::move(other.m_blocks))
+namespace
 {
-    other.m_alloc = nullptr;
+constexpr crd::usize kChunksPerPage = 64; // 64 × 16 KB = 1 MB pages
 }
 
-ChunkAllocator& ChunkAllocator::operator=(ChunkAllocator&& other) noexcept
+ChunkAllocator::ChunkAllocator(crd::memory::IAllocator* alloc)
+    : m_pool(kChunkSize, kChunkAlignment, kChunksPerPage, alloc, "crd-scene::ChunkPool")
 {
-    if (this == &other)
-    {
-        return *this;
-    }
-    // Free anything we still hold before adopting the rhs's blocks.
-    for (void* p : m_blocks)
-    {
-        if (m_alloc != nullptr && p != nullptr)
-        {
-            m_alloc->deallocate(p);
-        }
-    }
-    m_blocks.clear();
-
-    m_alloc = other.m_alloc;
-    m_blocks = std::move(other.m_blocks);
-    other.m_alloc = nullptr;
-    return *this;
-}
-
-ChunkAllocator::~ChunkAllocator()
-{
-    for (void* p : m_blocks)
-    {
-        if (m_alloc != nullptr && p != nullptr)
-        {
-            m_alloc->deallocate(p);
-        }
-    }
 }
 
 Chunk ChunkAllocator::allocate()
 {
-    CRD_ASSERT(m_alloc != nullptr);
-    void* mem = m_alloc->allocate(kChunkSize, kChunkAlignment);
+    void* mem = m_pool.allocate(kChunkSize, kChunkAlignment);
     CRD_ASSERT(mem != nullptr);
 
     // Zero header so consumers can rely on entity_count == 0 and version
-    // counters == 0 from day one. We zero only the header — SoA bytes stay
-    // uninitialised until populated.
+    // counters == 0 from day one. SoA bytes stay uninitialised until populated.
     std::memset(mem, 0, sizeof(ChunkHeader));
 
-    m_blocks.push_back(mem);
     return Chunk{mem};
 }
 
@@ -199,23 +168,14 @@ void ChunkAllocator::free(Chunk& chunk) noexcept
     {
         return;
     }
-    for (crd::usize i = 0; i < m_blocks.size(); ++i)
-    {
-        if (m_blocks[i] == chunk.memory)
-        {
-            m_alloc->deallocate(m_blocks[i]);
-            m_blocks.swap_remove(i);
-            chunk.memory = nullptr;
-            return;
-        }
-    }
-    // Caller passed a chunk we don't own — programming error.
-    CRD_ASSERT(false);
+    CRD_ASSERT(m_pool.owns(chunk.memory));
+    m_pool.deallocate(chunk.memory);
+    chunk.memory = nullptr;
 }
 
 crd::u32 ChunkAllocator::outstanding() const noexcept
 {
-    return static_cast<crd::u32>(m_blocks.size());
+    return static_cast<crd::u32>(m_pool.slots_in_use());
 }
 
 } // namespace crd::scene
