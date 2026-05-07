@@ -1,6 +1,6 @@
 # Phase 3.0 — Scene / ECS Foundation
 
-**Status:** 🚧 active — v1a + v1b + v1c (whole) + v1d + v1e + v1f + v1g shipped 2026-05-06 / 07; 7 of 14 slices remaining. Next: v1h (System + Schedule).
+**Status:** 🚧 active — v1a + v1b + v1c (whole) + v1d + v1e + v1f + v1g + v1h shipped 2026-05-06 / 07; 6 of 14 slices remaining. Next: v1i (Index framework + ChangeDetect + AsyncAware).
 **ADRs:** ADR-0049, ADR-0050, ADR-0051, ADR-0052, ADR-0053, ADR-0054, ADR-0055, ADR-0056, ADR-0057
 **Cornerstone:** ADR-0020 (scene/ECS hybrid, UI in tree)
 **New module:** `crd-scene` (bootstrapped 2026-05-06)
@@ -28,10 +28,11 @@ This is the **highest-leverage single block of work in the engine**. Every Phase
 | v1e | `World::for_each_chunk` mixed-backend visitor (split required by hint, archetype-as-anchor for mixed, smallest-pool-as-anchor for pure-sparse multi-bit) | ✅ shipped 2026-05-07 — `docs/sessions/2026-05-07-scene-v1e-mixed-visitor.md` |
 | v1f | Relations + 6 built-ins (ChildOf / AttachedTo / Owns / Targets / DependsOn / PossessedBy) + ReverseIndex / Acyclic / OnTargetDestroyed traits + iterative destruction worklist | ✅ shipped 2026-05-07 — `docs/sessions/2026-05-07-scene-v1f-relations.md` |
 | v1g | Query DSL — `world.query<Cs...>().with/without/with_relation/filter` chain + range-for + chunk visitor; built on v1e's mixed-backend visitor and v1f's reverse indexes | ✅ shipped 2026-05-07 — `docs/sessions/2026-05-07-scene-v1g-query-dsl.md` |
-| v1h | System + Schedule | ⏳ next |
-| v1i–v1n | see slice list below | ⏳ |
+| v1h | System + Schedule + Commands — `ISystem` virtual class, 7-phase fixed schedule, `register_system` / `step` / `step_fixed`, deferred-mutation `Commands` buffer flushed at phase boundaries | ✅ shipped 2026-05-07 — `docs/sessions/2026-05-07-scene-v1h-system-schedule.md` |
+| v1i | Index framework + ChangeDetect + AsyncAware | ⏳ next |
+| v1j–v1n | see slice list below | ⏳ |
 
-`crd-scene` now ships **the L4 user-facing composer** per ADR-0052 §1. `world.query<Cs...>()` returns a move-only `Query<Cs...>`; chain `.with<T>()` / `.without<T>()` / `.with_relation<Tag>(target)` / `.filter(fn, ud)` and iterate via range-for (yields `(EntityId, Cs&...)`) or `.for_each_chunk(visitor)` (chunk-level, the v1h `par_each` target). Forbidden mask split into archetype/sparse backends mirrors v1e's required split. Move-only with ref-qualified filter overloads makes factory chains (`auto q = world.query<T>().with<U>().without<V>()`) compile without copying via guaranteed copy elision + move on rvalue. Filter pipeline is a single non-template free function; per-Cs template bodies are thin trampolines. 157 unit tests / 34559 assertions; six-config green.
+`crd-scene` now ships **the L4 scheduling half** per ADR-0052 §3-§5. `ISystem` has `Reads`/`Writes` `ComponentSet` type aliases (computed into masks via `World::component_set_mask<Set>()`) — auto-parallel scheduling reads them in Phase 3.5; v1h dispatches serially. The 7-phase schedule (PrePhysics → PostRender) runs systems in registration order within each phase. `step_fixed(dt, fixed_dt, max_substeps)` interleaves fixed-step systems N times then variable-rate once per phase, with accumulator carry-over and spiral-of-death clamp. `Commands` queues mutations during iteration and flushes at every phase boundary; spawn is immediate (single-threaded v1h), all other ops deferred. 172 unit tests / 34602 assertions; six-config green.
 
 ---
 

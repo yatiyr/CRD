@@ -1,4 +1,5 @@
 // v1f: relations + iterative destruction worklist
+// v1h: schedule + commands flush
 #include <crd/core/assert.hpp>
 #include <crd/scene/world.hpp>
 
@@ -50,11 +51,18 @@ template <typename Fn> void for_each_set_bit(const ComponentMask& mask, Fn&& fn)
 
 World::World(crd::memory::IAllocator* alloc)
     : m_slots(alloc), m_pending_destroy(alloc), m_components(alloc), m_storage(alloc, m_components),
-      m_sparse_storage(alloc, m_components), m_event_sink(NullStorageEventSink::instance()), m_relations(alloc)
+      m_sparse_storage(alloc, m_components), m_event_sink(NullStorageEventSink::instance()),
+      m_relations(alloc), m_commands_buffer(*this)
 {
     // Lazy slots indexed by ComponentId.raw. Always nullptr until
     // register_relation() allocates a RelationInfo for that slot.
     m_relations.resize(kMaxComponents, nullptr);
+
+    // Pre-construct the per-phase system arrays with the World allocator.
+    for (auto& bucket : m_systems)
+    {
+        bucket = crd::containers::Array<std::unique_ptr<ISystem>>{alloc};
+    }
 }
 
 World::~World()
@@ -691,6 +699,102 @@ void World::drain_destruction_worklist(crd::containers::Array<EntityId>& worklis
         m_storage.on_entity_destroyed(current);
         m_sparse_storage.on_entity_destroyed(current);
         m_slots.free(current);
+    }
+}
+
+// ---- v1h: Schedule + step / step_fixed ----------------------------------
+
+void World::register_system(std::unique_ptr<ISystem> system)
+{
+    CRD_ASSERT(system != nullptr);
+    const SchedulePhase ph = system->phase();
+    const auto idx = static_cast<crd::usize>(ph);
+    CRD_ASSERT(idx < kSchedulePhaseCount);
+    m_systems[idx].push_back(std::move(system));
+}
+
+namespace
+{
+// Run one phase of systems. Variable-rate systems run only on the
+// variable pass; fixed-step systems only on fixed passes. step_fixed()
+// runs each phase as N fixed passes followed by one variable pass.
+void run_phase_pass(World& world, crd::containers::Array<std::unique_ptr<ISystem>>& bucket,
+                    bool is_variable_pass)
+{
+    for (crd::usize i = 0; i < bucket.size(); ++i)
+    {
+        ISystem* sys = bucket[i].get();
+        if (sys == nullptr)
+        {
+            continue;
+        }
+        const bool is_fixed = sys->fixed_step();
+        if (is_variable_pass != !is_fixed)
+        {
+            continue; // wrong pass for this system
+        }
+        sys->run(world);
+    }
+    world.commands().flush();
+}
+} // namespace
+
+void World::step(crd::f64 dt)
+{
+    // step() runs every system exactly once. Variable-rate AND fixed-step
+    // systems are dispatched together — fixed-step opt-in only matters
+    // under step_fixed.
+    for (crd::u8 phase = 0; phase < kSchedulePhaseCount; ++phase)
+    {
+        auto& bucket = m_systems[phase];
+        for (crd::usize i = 0; i < bucket.size(); ++i)
+        {
+            ISystem* sys = bucket[i].get();
+            if (sys != nullptr)
+            {
+                sys->run(*this);
+            }
+        }
+        m_commands_buffer.flush();
+    }
+    (void)dt; // v1h ISystem::run is dt-agnostic; systems pull dt from their own state
+}
+
+void World::step_fixed(crd::f64 dt, crd::f64 fixed_dt, crd::u32 max_substeps)
+{
+    CRD_ASSERT(fixed_dt > 0.0);
+
+    m_fixed_accumulator += dt;
+    crd::u32 substeps = 0;
+    if (fixed_dt > 0.0)
+    {
+        const crd::f64 raw = m_fixed_accumulator / fixed_dt;
+        substeps = static_cast<crd::u32>(raw < 0.0 ? 0.0 : raw);
+    }
+    if (substeps > max_substeps)
+    {
+        // Spiral-of-death clamp. Drop the excess accumulator instead of
+        // running unbounded work this frame.
+        m_fixed_accumulator -= static_cast<crd::f64>(substeps - max_substeps) * fixed_dt;
+        substeps = max_substeps;
+    }
+    if (substeps > 0)
+    {
+        m_fixed_accumulator -= static_cast<crd::f64>(substeps) * fixed_dt;
+    }
+
+    // Phase order: each phase runs its fixed-step systems N times, then
+    // its variable-rate systems once. This interleaving matches Bevy's
+    // FixedUpdate semantics — variable systems see the world AFTER the
+    // current phase's fixed substeps have settled.
+    for (crd::u8 phase = 0; phase < kSchedulePhaseCount; ++phase)
+    {
+        auto& bucket = m_systems[phase];
+        for (crd::u32 substep = 0; substep < substeps; ++substep)
+        {
+            run_phase_pass(*this, bucket, /*is_variable_pass=*/false);
+        }
+        run_phase_pass(*this, bucket, /*is_variable_pass=*/true);
     }
 }
 

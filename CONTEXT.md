@@ -11,7 +11,7 @@
 
 ## Current focus
 
-**Phase 3.0 — Scene/ECS foundation. v1a + v1b + v1c (whole) + v1d + v1e + v1f + v1g shipped 2026-05-06 / 07. Detour D-001 (memory infrastructure) closed 2026-05-07. Allocator-audit Option C closed the make_unique<Archetype> bypass. v1g ships the Layer 4 user-facing composer (ADR-0052 §1): `world.query<Cs...>().with<>().without<>().with_relation<>().filter()` returns a move-only `Query<Cs...>` iterable via range-for `(EntityId, Cs&...)` tuples or `for_each_chunk(visitor)`. Built on v1e mixed-backend visitor + v1f relation reverse indexes; ref-qualified filter overloads make factory chains compile without copying. 7 slices remaining. Next: v1h — System + Schedule (`ISystem` virtual interface, `Reads`/`Writes` declarations, fixed-phase dispatch, command buffers for parallel mutation per ADR-0052 §3-§5).**
+**Phase 3.0 — Scene/ECS foundation. v1a + v1b + v1c (whole) + v1d + v1e + v1f + v1g + v1h shipped 2026-05-06 / 07. Detour D-001 (memory infrastructure) closed 2026-05-07. Allocator-audit Option C closed the make_unique<Archetype> bypass. v1h ships Layer 4's scheduling half (ADR-0052 §3-§5): `ISystem` virtual class with `Reads`/`Writes` `ComponentSet` aliases, 7-phase fixed schedule (PrePhysics → PostRender), `World::register_system` / `step(dt)` / `step_fixed(dt, fixed_dt, max_substeps)` with accumulator math + spiral-of-death clamp + Bevy FixedUpdate-style fixed/variable interleaving per phase, `Commands` deferred-mutation buffer with payload-byte type erasure flushed at every phase boundary. 6 slices remaining. Next: v1i — Index framework + ChangeDetect + AsyncAware (`IComponentIndex` interface, fan-out from `IStorageEventSink`, `.changed<T>()` and `.skip_pending<T>()` query operators per ADR-0053).**
 
 The architecture is the **eight-layer slot-shaped ECS** designed for million-entity scenes, agents-as-components-with-scripts, UI on the same machinery (game and editor), with every novel ECS extension as a registered slot:
 
@@ -32,7 +32,7 @@ L0 Memory · Containers · Jobs    (already shipped)
 
 Cerid signature: a uniform `IComponentIndex` extension framework where every novel ECS extension (history, change detect, spatial, GPU-mirror, async, replication, scripts, reflection) is a registered slot consuming the same component-lifecycle event stream. Adding the next extension is a one-day job.
 
-Slices: ~~v1a (Entity+SlotMap)~~ ✅ → ~~v1b (registry)~~ ✅ → ~~v1c1 (chunk allocator + layout)~~ ✅ → ~~v1c2 (graph + entity move + IStorageBackend impl + sink hooks)~~ ✅ → ~~v1d (SparseSet storage)~~ ✅ → ~~v1e (mixed-backend chunk visitor)~~ ✅ → ~~v1f (relations)~~ ✅ → ~~v1g (query DSL)~~ ✅ → **v1h (system+schedule)** ← active → v1i (index framework + ChangeDetect + AsyncAware) → v1j (Transform + propagation) → v1k (SceneResource+Loader) → v1l (cook_scene cooker handler) → v1m (sandbox renderer integration) → v1n (reserved-slot freeze).
+Slices: ~~v1a (Entity+SlotMap)~~ ✅ → ~~v1b (registry)~~ ✅ → ~~v1c1 (chunk allocator + layout)~~ ✅ → ~~v1c2 (graph + entity move + IStorageBackend impl + sink hooks)~~ ✅ → ~~v1d (SparseSet storage)~~ ✅ → ~~v1e (mixed-backend chunk visitor)~~ ✅ → ~~v1f (relations)~~ ✅ → ~~v1g (query DSL)~~ ✅ → ~~v1h (system+schedule)~~ ✅ → **v1i (index framework + ChangeDetect + AsyncAware)** ← active → v1j (Transform + propagation) → v1k (SceneResource+Loader) → v1l (cook_scene cooker handler) → v1m (sandbox renderer integration) → v1n (reserved-slot freeze).
 
 Active phase doc: `docs/phases/phase-3.0-scene-ecs.md`.
 
@@ -69,7 +69,57 @@ _none — D-001 closed 2026-05-07. Main roadmap resumed at Phase 3.0 v1d._
 
 ## Last shipped milestone
 
-**2026-05-07 — Phase 3.0 v1g: Query DSL (ADR-0052 §1). `world.query<Cs...>()` returns a move-only `Query<Cs...>`; chain `.with<T>()` / `.without<T>()` / `.with_relation<Tag>(target)` / `.filter(fn, ud)` and iterate via range-for (yields `(EntityId, Cs&...)` tuples) or `for_each_chunk(visitor)` (chunk-level — the v1h `par_each` target). Six-config green at 673/673 / 670 release / 17 smokes (was 651 baseline post-v1f).**
+**2026-05-07 — Phase 3.0 v1h: System + Schedule + Commands (ADR-0052 §3-§5). `ISystem` virtual class with `Reads`/`Writes` `ComponentSet` type aliases (computed into masks via `World::component_set_mask<Set>()`); 7-phase fixed schedule (PrePhysics → PostRender); `step(dt)` runs everything once; `step_fixed(dt, fixed_dt, max_substeps)` interleaves fixed-step systems N times then variable-rate once per phase, with accumulator carry-over and spiral-of-death clamp; `Commands` deferred-mutation buffer flushed at every phase boundary (spawn immediate, all other ops queued). Six-config green at 688/688 / 685 release / 17 smokes (was 673 baseline post-v1g).**
+
+### v1h: System + Schedule + Commands
+
+```cpp
+class ApplyVelocity : public crd::scene::ISystem {
+public:
+    using Reads  = crd::scene::ComponentSet<Velocity>;
+    using Writes = crd::scene::ComponentSet<Position>;
+
+    crd::scene::SchedulePhase phase() const override { return crd::scene::SchedulePhase::Update; }
+    void run(crd::scene::World& w) override {
+        auto q = w.query<Position, Velocity>();
+        for (auto&& [e, p, v] : q) { p.x += v.dx; p.y += v.dy; p.z += v.dz; }
+    }
+    crd::containers::StringView name() const override { return "ApplyVelocity"; }
+};
+
+w.register_system(std::make_unique<ApplyVelocity>());
+w.step(dt);                                      // run all phases once
+w.step_fixed(dt, 1.0 / 60.0, /*max_substeps=*/4); // determinism mode
+```
+
+**Architecture:**
+- 7 phases run in fixed order each frame; systems within a phase run in registration order.
+- `Commands` buffer: tagged-record queue + parallel `Array<u8>` payload bytes. Each command stores `ComponentId` + payload offset/size; flush dispatches by kind through the storage backends. `~Commands()` runs `info->destruct` on remaining unflushed payloads (no leaks).
+- Per-phase interleaving for `step_fixed`: substep N fixed-step systems → 1 variable-rate system → next phase. Matches Bevy `FixedUpdate` semantics.
+- Mid-frame system registration is allowed (registered system runs from next phase visit).
+
+**Deferred to v1h+1 / later:**
+- `par_each(jobs, fn)` — needs a caller-managed jobs Counter handle the current API doesn't expose.
+- `ISystem::run(World&, Counter& fence)` — restored when par_each lands.
+- `ComponentRef<T>` with auto-bump-on-write — v1h or v1i depending on ChangeDetect's needs.
+- Per-system `fixed_dt()` — Phase 3.1 physics use case.
+
+### Six-configuration green (post-v1h, 2026-05-07)
+
+- win-debug:          688/688
+- win-relwithdebinfo: 688/688
+- win-release:        685/685
+- win-asan:           688/688
+- win-clang-cl:       688/688
+- win-tidy:           ✅ build clean
+
+17/17 headless smokes per non-tidy config. Scene tests: 172 cases / 34602 assertions (was 157 / 34559 post-v1g).
+
+Session log: `docs/sessions/2026-05-07-scene-v1h-system-schedule.md`.
+
+### Earlier the same day: Phase 3.0 v1g
+
+Query DSL (ADR-0052 §1). `world.query<Cs...>()` returns a move-only `Query<Cs...>`; chain `.with<T>()` / `.without<T>()` / `.with_relation<Tag>(target)` / `.filter(fn, ud)` and iterate via range-for or `for_each_chunk(visitor)`. Six-config baseline 673/673.
 
 ### v1g: Query DSL
 

@@ -6,6 +6,7 @@
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
 #include <crd/scene/archetype_chunk_storage.hpp>
+#include <crd/scene/commands.hpp>
 #include <crd/scene/component.hpp>
 #include <crd/scene/component_registry.hpp>
 #include <crd/scene/entity.hpp>
@@ -15,8 +16,15 @@
 #include <crd/scene/sparse_set_storage.hpp>
 #include <crd/scene/storage_backend.hpp>
 #include <crd/scene/storage_event_sink.hpp>
+#include <crd/scene/system.hpp>
 
+#include <memory>
 #include <utility>
+
+namespace crd::jobs
+{
+class Counter;
+}
 
 namespace crd::scene
 {
@@ -383,6 +391,73 @@ public:
     // the elided rvalue.
     template <typename... Cs> [[nodiscard]] Query<Cs...> query() { return Query<Cs...>{*this}; }
 
+    // ---- Schedule + Commands (Phase 3.0 v1h, ADR-0052 §3-§5) -----------
+
+    // Register a system into the fixed 7-phase schedule. The system runs
+    // in its declared phase (per ISystem::phase()), in registration order
+    // among other systems in the same phase. Mid-frame registration is
+    // allowed: a system registered from another system's run() runs from
+    // the next phase the schedule visits.
+    void register_system(std::unique_ptr<ISystem> system);
+
+    // Run all 7 phases once with `dt`. Variable-rate systems run with this
+    // `dt`; fixed-step systems are also invoked once (with the same dt).
+    // Use step_fixed for determinism-mode dispatch.
+    //
+    // After each phase's systems run, the World waits on the phase fence
+    // (no-op if no jobs were submitted) and flushes the command buffer.
+    void step(crd::f64 dt);
+
+    // Run all 7 phases under deterministic fixed-step semantics. Each
+    // phase runs:
+    //   1. Fixed-step systems N times where N = floor(accum / fixed_dt),
+    //      clamped to max_substeps. Accumulator persists across calls so
+    //      remainders carry forward.
+    //   2. Variable-rate systems exactly once with the real `dt`.
+    //
+    // Standard Bevy `FixedUpdate` shape. v1h uses a SINGLE GLOBAL
+    // fixed_dt (the function argument); per-system fixed_dt is reserved
+    // for v1h+1 along with per-system accumulators.
+    void step_fixed(crd::f64 dt, crd::f64 fixed_dt, crd::u32 max_substeps);
+
+    // World's deferred-mutation buffer. Used by systems iterating in
+    // parallel; v1h serial users may also use it for ergonomic batched
+    // entity construction. Drained at every phase boundary.
+    [[nodiscard]] Commands& commands() noexcept { return m_commands_buffer; }
+
+    // Compute the ComponentMask of a ComponentSet<Ts...>. Used by tooling
+    // (and Phase 3.5 auto-parallel scheduling). Reads the registry — must
+    // be called after every Cs in Set is registered.
+    template <typename Set> [[nodiscard]] ComponentMask component_set_mask() const noexcept;
+
+    // ---- Type-erased access for Commands / future tooling --------------
+    //
+    // These mirror the private template paths but take a runtime
+    // ComponentId. Used by Commands' flush path to apply queued mutations
+    // without re-instantiating templates per command. Public so any
+    // tooling code that builds id-driven mutations (editor undo/redo,
+    // serialisation, scripting) can call them.
+
+    [[nodiscard]] IStorageBackend& backend_for_public(ComponentId id) noexcept
+    {
+        return backend_for(id);
+    }
+
+    void add_relation_via_id(ComponentId relation_id, EntityId src, EntityId target)
+    {
+        CRD_ASSERT(is_alive(src));
+        add_relation_impl(relation_id, src, target);
+    }
+
+    void remove_relation_via_id(ComponentId relation_id, EntityId src)
+    {
+        if (!is_alive(src))
+        {
+            return;
+        }
+        remove_relation_impl(relation_id, src);
+    }
+
 private:
     [[nodiscard]] IStorageBackend& backend_for(ComponentId id) noexcept
     {
@@ -457,6 +532,21 @@ private:
     // kMaxComponents; entries are nullptr until register_relation() lazily
     // allocates them.
     crd::containers::Array<RelationInfo*> m_relations;
+
+    // Schedule (v1h). Per-phase array of owned systems. Iteration order
+    // within a phase = registration order.
+    crd::containers::Array<std::unique_ptr<ISystem>> m_systems[kSchedulePhaseCount];
+
+    // Single-allocator command buffer drained at every phase boundary.
+    // (v1h ships single-threaded; v1h+1 will introduce per-fiber stripes
+    // for parallel par_each.) Initialised AFTER m_pending_destroy because
+    // Commands' allocator-aware Arrays read World::allocator() which
+    // reads m_pending_destroy.allocator().
+    Commands m_commands_buffer;
+
+    // Accumulator for step_fixed. Carries the unused fraction of the
+    // previous frame's dt forward.
+    crd::f64 m_fixed_accumulator = 0.0;
 };
 
 // ---- Query<Cs...> template method bodies --------------------------------
@@ -632,6 +722,91 @@ auto Query<Cs...>::Iterator::operator*() const
 {
     EntityId e = m_query->m_match_cache[m_index];
     return std::tuple<EntityId, Cs&...>{e, *m_query->m_world->template get_component_mut<Cs>(e)...};
+}
+
+// ---- Commands<T> templated mutations + ComponentSet helpers -------------
+//
+// These bodies live below World because they call into World's templated
+// methods (require_component_id<T>, components(), etc.). The same
+// header-bottom pattern that Query<Cs...>'s methods use.
+
+namespace detail
+{
+template <typename Set> struct ComponentSetMaskHelper;
+template <typename... Ts> struct ComponentSetMaskHelper<ComponentSet<Ts...>>
+{
+    static ComponentMask compute(const ComponentRegistry& reg) noexcept
+    {
+        ComponentMask m{};
+        ((void)((reg.template id_of<Ts>().is_null() ? false : (m.set(reg.template id_of<Ts>()), true))), ...);
+        return m;
+    }
+};
+} // namespace detail
+
+template <typename Set>
+ComponentMask World::component_set_mask() const noexcept
+{
+    return detail::ComponentSetMaskHelper<Set>::compute(m_components);
+}
+
+template <typename T> void Commands::add_component(EntityId e, T value)
+{
+    const ComponentId id = m_world->components().template id_of<T>();
+    CRD_ASSERT(!id.is_null() && "Commands::add_component<T>: T must be registered");
+    const ComponentInfo* info = m_world->components().info(id);
+    Command cmd{};
+    cmd.kind      = CommandKind::AddComponent;
+    cmd.component = id;
+    cmd.entity    = e;
+    enqueue_with_payload(cmd, &value, info);
+}
+
+template <typename T> void Commands::remove_component(EntityId e)
+{
+    const ComponentId id = m_world->components().template id_of<T>();
+    if (id.is_null())
+    {
+        return; // un-registered T → noop, matches World::remove_component
+    }
+    Command cmd{};
+    cmd.kind      = CommandKind::RemoveComponent;
+    cmd.component = id;
+    cmd.entity    = e;
+    enqueue(cmd);
+}
+
+template <typename T> void Commands::set_component(EntityId e, T value)
+{
+    // UPSERT semantics — same as add_component for v1h (storage already
+    // upserts internally). Kept as a separate API name for caller intent.
+    add_component<T>(e, std::move(value));
+}
+
+template <typename Tag> void Commands::add_relation(EntityId src, EntityId target)
+{
+    const ComponentId id = m_world->components().template id_of<Relation<Tag>>();
+    CRD_ASSERT(!id.is_null() && "Commands::add_relation<Tag>: Relation<Tag> must be registered");
+    Command cmd{};
+    cmd.kind            = CommandKind::AddRelation;
+    cmd.component       = id;
+    cmd.entity          = src;
+    cmd.relation_target = target;
+    enqueue(cmd);
+}
+
+template <typename Tag> void Commands::remove_relation(EntityId src)
+{
+    const ComponentId id = m_world->components().template id_of<Relation<Tag>>();
+    if (id.is_null())
+    {
+        return;
+    }
+    Command cmd{};
+    cmd.kind      = CommandKind::RemoveRelation;
+    cmd.component = id;
+    cmd.entity    = src;
+    enqueue(cmd);
 }
 
 } // namespace crd::scene
