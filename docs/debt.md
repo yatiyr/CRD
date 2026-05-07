@@ -5,6 +5,31 @@ move to a session log entry and remove from here.
 
 ## Active debt
 
+### Phase 3.0 v1j Transform — seven deferred follow-ups (2026-05-07)
+
+`Transform` + `TransformPropagation` shipped in v1j with cross-domain robustness for games / robotics / aerospace / DAW. The following items are explicitly out of v1j scope; each has its own pickup phase or trigger condition.
+
+1. **Polar decomposition for skewed Mat4** — `crd::math::to_trs` uses `from_mat3` on the post-scale-removal columns, which silently loses skew. True polar decomposition (SVD or iterative orthogonalisation) is reserved for a v1j+1 follow-up if a use case (CAD / mesh-import shear) appears. Documented in `to_trs`'s doc-block.
+
+2. **TransformF64 (f64 precision) component + propagation system** — orbital / aerospace / atomic-resolution domains need f64 precision. Math layer already ships `crd::math::Transformd`. The v1j architecture supports it: register a `TransformF64` component + write a `TransformPropagationF64` `ISystem` that mirrors the f32 path. v1n's reserved-slot freeze test will verify the registration grammar accepts the custom type. v1k SceneLoader will accept it without changes.
+
+3. **Parallel propagation** — single-threaded per ADR-0054. Phase 3.5 evolution once `par_each` over Query chunks lands. Per-subtree parallelism is straightforward (independent dirty roots → independent subtree DFS); each dirty root is one work-item.
+
+4. **AttachedTo socket propagation** — Phase 3.2 (animation) ships an attachment-pose system that composes with TransformPropagation (sockets snap to bones).
+
+5. **Per-system change tracking for `.changed<T>()`** — current ChangeDetect snapshot is "modified during current frame" (v1i pin). Cross-frame "what changed since my system last ran" needs per-system state. v1h+1 evolution.
+
+6. **Auto-renormalize rotation policy** — v1j makes renormalize OFF-by-default. A registration trait (`AutoNormalizeRotation{}`) could opt-in per component. Reserved slot if accumulated drift becomes visible in real workloads.
+
+7. **`set_rotation_look_at` direction convention** — current implementation uses (right, up, -forward) columns matching the right-handed convention. Some domains (aerospace yaw-pitch-roll) need (forward, right, up) variants. Reserved as a follow-up trait or alternative API if a domain needs the explicit convention.
+
+**Where referenced:**
+- `engine/scene/include/crd/scene/transform.hpp` — doc-block points at this debt entry for items 2 and 6.
+- `engine/math/include/crd/math/quat.hpp` — `to_trs` doc-block points at item 1.
+- `docs/sessions/2026-05-07-scene-v1j-transform-propagation.md` — full session log with the seven decisions.
+
+---
+
 ### Memory allocator infrastructure (D-001 closed 2026-05-07)
 
 `TlsfAllocator` (D-001-a) and `GrowablePoolAllocator` + ChunkAllocator-pooled (D-001-b) shipped. The v1c1 O(N) `ChunkAllocator::free` perf debt is closed — chunk allocate / free are now both O(1) via the GrowablePool's intrusive free-list. See `docs/sessions/2026-05-07-detour-D-001b-growable-pool.md` for the closing summary.

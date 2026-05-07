@@ -11,7 +11,7 @@
 
 ## Current focus
 
-**Phase 3.0 — Scene/ECS foundation. v1a-v1i shipped 2026-05-06 / 07. Detour D-001 (memory infrastructure) closed 2026-05-07. Allocator-audit Option C closed the make_unique<Archetype> bypass. v1i ships Layer 5 — the Cerid signature (ADR-0053): `IComponentIndex` plug-point + `IndexFanOutSink` + auto-registration of trait-implied indexes; `ChangeDetectIndex` + `AsyncAwareIndex` ship as full impls; History / SpatialBVH / GpuResident / Replication / Reflection ship as no-op shells ready for their consumer phases (3.2 / 3.5 / 3.8 / 4.2 / 7) to drop in real impls without caller code changes. Query DSL gains `.changed<T>()` and `.skip_pending<T>()`. 5 slices remaining. Next: v1j — Transform + TransformPropagation system (consumes v1f relations + v1g query + v1h schedule + v1i ChangeDetect end-to-end; first concrete `ISystem` consumer of the architecture).**
+**Phase 3.0 — Scene/ECS foundation. v1a–v1j shipped 2026-05-06 / 07. Detour D-001 (memory infrastructure) closed 2026-05-07. v1j ships the FIRST CONCRETE `ISystem` consumer: `Transform` (TRS + cached world matrix) + `TransformPropagation` system in PreRender phase. Cross-domain robust per design (games / robotics / aerospace / DAW): six rotation-set APIs (quat / quat_unnormalized / axis_angle / euler with explicit ordering / from_to / look_at), set_world / try_set_world with negative-determinant CAD handling, determinism guaranteed and verified by bit-exact world-matrix hash test, kMaxTransformDepth=256 hierarchy depth check. Math layer extended with `EulerOrder` + `from_euler` + `from_to_rotation` + `from_trs` + `to_trs`. f64 escape hatch via `crd::math::Transformd` + custom component path (verified by v1n freeze). Seven follow-ups pinned in `docs/debt.md`. 4 slices remaining. Next: v1k — SceneResource + SceneLoader (loads cooked SCEN packs; populates entity-component graph; Transform / TransformPropagation get tested under streaming-load workflow).**
 
 The architecture is the **eight-layer slot-shaped ECS** designed for million-entity scenes, agents-as-components-with-scripts, UI on the same machinery (game and editor), with every novel ECS extension as a registered slot:
 
@@ -32,7 +32,7 @@ L0 Memory · Containers · Jobs    (already shipped)
 
 Cerid signature: a uniform `IComponentIndex` extension framework where every novel ECS extension (history, change detect, spatial, GPU-mirror, async, replication, scripts, reflection) is a registered slot consuming the same component-lifecycle event stream. Adding the next extension is a one-day job.
 
-Slices: ~~v1a (Entity+SlotMap)~~ ✅ → ~~v1b (registry)~~ ✅ → ~~v1c1 (chunk allocator + layout)~~ ✅ → ~~v1c2 (graph + entity move + IStorageBackend impl + sink hooks)~~ ✅ → ~~v1d (SparseSet storage)~~ ✅ → ~~v1e (mixed-backend chunk visitor)~~ ✅ → ~~v1f (relations)~~ ✅ → ~~v1g (query DSL)~~ ✅ → ~~v1h (system+schedule)~~ ✅ → ~~v1i (index framework + ChangeDetect + AsyncAware)~~ ✅ → **v1j (Transform + propagation)** ← active → v1k (SceneResource+Loader) → v1l (cook_scene cooker handler) → v1m (sandbox renderer integration) → v1n (reserved-slot freeze).
+Slices: ~~v1a (Entity+SlotMap)~~ ✅ → ~~v1b (registry)~~ ✅ → ~~v1c1 (chunk allocator + layout)~~ ✅ → ~~v1c2 (graph + entity move + IStorageBackend impl + sink hooks)~~ ✅ → ~~v1d (SparseSet storage)~~ ✅ → ~~v1e (mixed-backend chunk visitor)~~ ✅ → ~~v1f (relations)~~ ✅ → ~~v1g (query DSL)~~ ✅ → ~~v1h (system+schedule)~~ ✅ → ~~v1i (index framework + ChangeDetect + AsyncAware)~~ ✅ → ~~v1j (Transform + propagation)~~ ✅ → **v1k (SceneResource+Loader)** ← active → v1l (cook_scene cooker handler) → v1m (sandbox renderer integration) → v1n (reserved-slot freeze).
 
 Active phase doc: `docs/phases/phase-3.0-scene-ecs.md`.
 
@@ -69,7 +69,66 @@ _none — D-001 closed 2026-05-07. Main roadmap resumed at Phase 3.0 v1d._
 
 ## Last shipped milestone
 
-**2026-05-07 — Phase 3.0 v1i: Layer 5 plug-point (ADR-0053) — `IComponentIndex` interface, `IndexFanOutSink`, auto-registration of trait-implied indexes on `register_component`. `ChangeDetectIndex` (drives `.changed<T>()` for cross-phase change tracking) and `AsyncAwareIndex` (drives `.skip_pending<T>()` for filter-out-loading-data) ship as full impls; History / SpatialBVH / GpuResident / Replication / Reflection ship as no-op shells with their `observed()` masks correctly populated — ready for their consumer phases to drop in real impls without any caller code change. Six-config green at 708/708 / 705 release / 17 smokes (was 688 baseline post-v1h).**
+**2026-05-07 — Phase 3.0 v1j: `Transform` + `TransformPropagation` (ADR-0054). The FIRST concrete `ISystem` consumer that ties the 8-layer architecture end-to-end. Cross-domain robust per explicit design: games / robotics / aerospace / DAW spatial audio all serviced by the same propagation algorithm. Six rotation-set APIs (quat / quat_unnormalized / axis_angle / euler with explicit ordering / from_to / look_at). `set_world` / `try_set_world` with negative-determinant CAD-mirror handling. Determinism contract verified by bit-exact world-matrix hash test. Math layer extended with `EulerOrder` + `from_euler` + `from_to_rotation` + `from_trs` + `to_trs` (header-only `crd-math`). Six-config green at 727/727 / 724 release / 17 smokes (was 708 baseline post-v1i).**
+
+### v1j: Transform + TransformPropagation
+
+```cpp
+World w;
+w.register_component<Transform>();
+w.register_component<TransformDirtyFlag>(StorageHint::SparseSet);
+w.register_builtin_relations();
+w.register_system(std::make_unique<TransformPropagation>());
+
+EntityId arm = w.spawn();
+w.add_component<Transform>(arm, Transform{});
+w.set_translation(arm, Vec3f{0, 1.5F, 0});
+
+EntityId hand = w.spawn();
+w.add_component<Transform>(hand, Transform{});
+w.set_local(hand, Vec3f{0.4F, 0, 0}, Quatf::identity());
+w.add_relation<relations::ChildOf>(hand, arm);
+
+w.step(dt);   // PreRender phase runs TransformPropagation;
+              // hand.world = arm.world * hand.local
+```
+
+**Six rotation-set APIs (cross-domain ergonomics):**
+- `set_rotation_quat(e, q)` — auto-normalised (default).
+- `set_rotation_quat_unnormalized(e, q)` — explicit opt-out for IMU integration / precision-preserving robotics control loops.
+- `set_rotation_axis_angle(e, axis, rad)` — servo controller / joint actuator input.
+- `set_rotation_euler(e, x, y, z, order)` — explicit `EulerOrder` enum (XYZ_Intrinsic / ZYX_Intrinsic / XYZ_Extrinsic / ZYX_Extrinsic) avoids Tait-Bryan ambiguity.
+- `set_rotation_from_to(e, from_dir, to_dir)` — shortest-arc; missile lock-on / arrow alignment.
+- `set_rotation_look_at(e, forward, up)` — camera / gun / sensor pointing.
+
+**Math primitives added** (`engine/math/include/crd/math/quat.hpp`):
+- `EulerOrder` enum + `from_euler(x, y, z, order)`.
+- `from_to_rotation(from, to)` with antiparallel axis-seed fallback.
+- `from_trs(t, r, s)` column-major matrix construction.
+- `to_trs(m, t_out, r_out, s_out) -> bool` robust decomposition. Returns false on singular columns; succeeds with negative X-scale on negative-determinant input (CAD/URDF mirror handedness preserved).
+
+**Determinism guarantee** (verified by `test_transform.cpp::"Determinism: identical input order produces bit-exact world matrices"`): build the same scene twice + step + FNV-hash every world matrix → hashes match bit-exact. ChildOf reverse-index iteration order is `Array<EntityId>` insertion order. Floating-point order in `parent.world * local` is fixed by code. No threading, no atomics. Robotics replay, networking rollback (Phase 4.2), simulation bisection (Phase 8) all consume this.
+
+**Numerical precision contract**: f32 default (~7 decimal digits); deep chains (>30 ChildOf depth) MAY exhibit drift over seconds at 60 Hz. Mitigations: `Transform::renormalize_rotation()`, HistoryIndex (Phase 3.2), or custom `TransformF64` component (math layer already ships `crd::math::Transformd`; v1n freeze verifies the registration grammar).
+
+**Seven follow-ups pinned in `docs/debt.md`**: polar decomposition for skewed Mat4, TransformF64 path, parallel propagation, AttachedTo socket pose, per-system change tracking, auto-renormalize trait, look_at convention variants.
+
+### Six-configuration green (post-v1j, 2026-05-07)
+
+- win-debug:          727/727
+- win-relwithdebinfo: 727/727
+- win-release:        724/724
+- win-asan:           727/727
+- win-clang-cl:       727/727
+- win-tidy:           ✅ build clean (5 pre-existing warnings in unrelated renderer + math test files; none v1j-introduced)
+
+17/17 headless smokes per non-tidy config. Scene tests: 211 cases / 34716 assertions (was 192 / 34669 post-v1i).
+
+Session log: `docs/sessions/2026-05-07-scene-v1j-transform-propagation.md`.
+
+### Earlier the same day: Phase 3.0 v1i
+
+`IComponentIndex` framework + `ChangeDetectIndex` + `AsyncAwareIndex` + 5 reserved no-op shells. Layer 5 plug-point that makes new ECS extensions a one-day job. Six-config baseline 708/708.
 
 ### v1i: Index framework + ChangeDetect + AsyncAware
 

@@ -21,6 +21,7 @@
 #include <crd/scene/storage_backend.hpp>
 #include <crd/scene/storage_event_sink.hpp>
 #include <crd/scene/system.hpp>
+#include <crd/scene/transform.hpp>
 
 #include <memory>
 #include <utility>
@@ -255,6 +256,66 @@ public:
     {
         m_external_sink = (sink != nullptr) ? sink : NullStorageEventSink::instance();
     }
+
+    // ---- Transform writer API (Phase 3.0 v1j, ADR-0054) ----------------
+    //
+    // Six rotation-set entry points covering the cross-domain space:
+    //   - quat: direct (auto-normalised) — the default.
+    //   - quat_unnormalized: explicit opt-out for precision-preserving
+    //     domains (robotics control loops, aerospace IMU integration).
+    //   - axis_angle: servo / joint controller input.
+    //   - euler: explicit-order Euler input — pass an EulerOrder enum to
+    //     avoid Tait-Bryan ambiguity.
+    //   - from_to: shortest-arc rotation (look-at semantics for arrows /
+    //     missile lock-on).
+    //   - look_at: forward + up convention.
+    //
+    // All writers:
+    //   1. Mutate the Transform via get_component_mut<Transform>(e) →
+    //      fires ChangeDetect on_update for downstream consumers.
+    //   2. Add TransformDirtyFlag to `e` AND every ChildOf descendant
+    //      via mark_transform_subtree_dirty (debug-asserts depth <
+    //      kMaxTransformDepth = 256).
+    //
+    // Propagation system in PreRender phase consumes the dirty flags,
+    // recomputes world matrices, removes the flags via Commands.
+    //
+    // Robustness pin: write APIs CRD_ASSERT(is_alive(e)) in debug.
+    // Releasing on a dead entity is a programmer error — silent failure
+    // would corrupt downstream state.
+
+    void set_translation(EntityId e, crd::math::Vec3f t);
+    void set_rotation_quat(EntityId e, crd::math::Quatf q);
+    void set_rotation_quat_unnormalized(EntityId e, crd::math::Quatf q);
+    void set_rotation_axis_angle(EntityId e, crd::math::Vec3f axis, crd::f32 radians);
+    void set_rotation_euler(EntityId e, crd::f32 x, crd::f32 y, crd::f32 z,
+                            crd::math::EulerOrder order = crd::math::EulerOrder::XYZ_Intrinsic);
+    void set_rotation_from_to(EntityId e, crd::math::Vec3f from_dir, crd::math::Vec3f to_dir);
+    void set_rotation_look_at(EntityId e, crd::math::Vec3f forward,
+                              crd::math::Vec3f up = crd::math::Vec3f{static_cast<crd::f32>(0), static_cast<crd::f32>(1),
+                                                                     static_cast<crd::f32>(0)});
+    void set_scale(EntityId e, crd::math::Vec3f s);
+
+    // Whole-transform setters.
+    void set_local(EntityId e, const crd::math::Vec3f& translation, const crd::math::Quatf& rotation,
+                   const crd::math::Vec3f& scale = crd::math::Vec3f{static_cast<crd::f32>(1), static_cast<crd::f32>(1),
+                                                                   static_cast<crd::f32>(1)});
+
+    // set_world(world) — best-effort decompose; CRD_ASSERT in debug on
+    // singular matrix. Negative-determinant succeeds with X-scale negated
+    // (mirror handedness preserved per advisor decision #4).
+    void set_world(EntityId e, const crd::math::Mat4f& world);
+
+    // try_set_world — validates the matrix; returns false WITHOUT mutating
+    // the Transform on degenerate input. Same negative-determinant
+    // semantic as set_world.
+    [[nodiscard]] bool try_set_world(EntityId e, const crd::math::Mat4f& world);
+
+    // Mark `e` and every ChildOf descendant dirty for the next
+    // TransformPropagation pass. Public so user systems that bypass the
+    // typed setters above (e.g. raw get_component_mut<Transform>) can
+    // notify propagation explicitly.
+    void mark_transform_subtree_dirty(EntityId e);
 
     // ---- Relation API (Phase 3.0 v1f, ADR-0051) ------------------------
     //

@@ -13,6 +13,7 @@ target_link_libraries(crd-scene
         crd-core
         crd-containers
         crd-memory
+        crd-math
 )
 
 target_compile_features(crd-scene PUBLIC cxx_std_20)

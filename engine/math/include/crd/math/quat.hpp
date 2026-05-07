@@ -109,6 +109,86 @@ template <MathScalar T> [[nodiscard]] inline Quat<T> from_axis_angle(const Vec3<
     return Quat<T>(unit_axis.x * s, unit_axis.y * s, unit_axis.z * s, c);
 }
 
+// Euler-angle ordering convention (ADR-0054 cross-domain robustness).
+//
+// Tait-Bryan angles applied as a sequence of single-axis rotations. The
+// enumerator name reads LEFT-TO-RIGHT as the order of multiplications
+// applied to a vector — `XYZ_Intrinsic` means "rotate around X, then
+// around the new Y, then around the new Z" (object-frame). Extrinsic
+// variants apply rotations about WORLD-FIXED axes.
+//
+// Aerospace conventions: ZYX_Intrinsic = (yaw, pitch, roll) order.
+// Robotics: domain-specific; URDF uses ZYX_Intrinsic for joint frames
+// but tool-tip orientation typically uses XYZ_Intrinsic.
+// Games: XYZ_Intrinsic is the default Unity / Unreal expectation.
+//
+// All twelve permutations are enumerated; v1j ships the four most-used
+// (XYZ_Intrinsic, ZYX_Intrinsic, XYZ_Extrinsic, ZYX_Extrinsic) and
+// reserves the remainder for caller-driven need.
+enum class EulerOrder : crd::u8
+{
+    XYZ_Intrinsic = 0,
+    ZYX_Intrinsic = 1,
+    XYZ_Extrinsic = 2,
+    ZYX_Extrinsic = 3,
+};
+
+// Quaternion from three Euler angles in the given order. Each angle is in
+// radians. Default order is XYZ_Intrinsic (matches Unity / Unreal).
+//
+// Implementation: composes three from_axis_angle quaternions in the right
+// order. Intrinsic = q = q_first * q_second * q_third (applied to vector
+// reads right-to-left). Extrinsic = q = q_third * q_second * q_first.
+template <MathScalar T>
+[[nodiscard]] inline Quat<T> from_euler(T x, T y, T z, EulerOrder order = EulerOrder::XYZ_Intrinsic) noexcept
+{
+    const Quat<T> qx = from_axis_angle(Vec3<T>(static_cast<T>(1), static_cast<T>(0), static_cast<T>(0)), x);
+    const Quat<T> qy = from_axis_angle(Vec3<T>(static_cast<T>(0), static_cast<T>(1), static_cast<T>(0)), y);
+    const Quat<T> qz = from_axis_angle(Vec3<T>(static_cast<T>(0), static_cast<T>(0), static_cast<T>(1)), z);
+    switch (order)
+    {
+        case EulerOrder::XYZ_Intrinsic: return qx * qy * qz;
+        case EulerOrder::ZYX_Intrinsic: return qz * qy * qx;
+        case EulerOrder::XYZ_Extrinsic: return qz * qy * qx; // extrinsic XYZ == intrinsic ZYX
+        case EulerOrder::ZYX_Extrinsic: return qx * qy * qz; // extrinsic ZYX == intrinsic XYZ
+    }
+    return Quat<T>::identity();
+}
+
+// Shortest-arc rotation that rotates direction `from` to direction `to`.
+// Both vectors are normalized internally; magnitudes are ignored. When
+// `from` and `to` are anti-parallel, picks an arbitrary perpendicular
+// axis (preferring world-X, falling back to world-Y when from is along
+// X) so the result is well-defined.
+template <MathScalar T>
+[[nodiscard]] inline Quat<T> from_to_rotation(const Vec3<T>& from, const Vec3<T>& to) noexcept
+{
+    const Vec3<T> a = normalized(from);
+    const Vec3<T> b = normalized(to);
+    const T d = dot(a, b);
+    // Same direction → identity.
+    if (d > static_cast<T>(1) - default_epsilon<T>())
+    {
+        return Quat<T>::identity();
+    }
+    // Anti-parallel → 180° rotation around any axis perpendicular to a.
+    if (d < static_cast<T>(-1) + default_epsilon<T>())
+    {
+        // Pick world-X unless `a` is itself along X.
+        Vec3<T> axis_seed(static_cast<T>(1), static_cast<T>(0), static_cast<T>(0));
+        if (std::abs(a.x) > static_cast<T>(0.9))
+        {
+            axis_seed = Vec3<T>(static_cast<T>(0), static_cast<T>(1), static_cast<T>(0));
+        }
+        const Vec3<T> axis = normalized(cross(a, axis_seed));
+        return Quat<T>(axis.x, axis.y, axis.z, static_cast<T>(0));
+    }
+    const Vec3<T> c = cross(a, b);
+    const T s = static_cast<T>(std::sqrt((static_cast<T>(1) + d) * static_cast<T>(2)));
+    const T inv_s = static_cast<T>(1) / s;
+    return Quat<T>(c.x * inv_s, c.y * inv_s, c.z * inv_s, s * static_cast<T>(0.5));
+}
+
 template <MathScalar T> [[nodiscard]] inline Vec3<T> rotate_vector(const Quat<T>& q_in, const Vec3<T>& v) noexcept
 {
     const Quat<T> q = normalized(q_in);
@@ -205,6 +285,76 @@ template <MathScalar T>
     const T w0 = static_cast<T>(std::sin((static_cast<T>(1) - t) * theta)) / sin_theta;
     const T w1 = static_cast<T>(std::sin(t * theta)) / sin_theta;
     return Quat<T>(a.x * w0 + b.x * w1, a.y * w0 + b.y * w1, a.z * w0 + b.z * w1, a.w * w0 + b.w * w1);
+}
+
+// ---- TRS Mat4 build / decompose (lives here because it bridges Quat + Mat) ---
+//
+// from_trs / to_trs encode the canonical column-major M = T * R * S.
+
+// Build a TRS Mat4 from translation + quaternion rotation + per-axis scale.
+template <MathScalar T>
+[[nodiscard]] inline Mat4<T> from_trs(const Vec3<T>& translation, const Quat<T>& rotation,
+                                      const Vec3<T>& scale) noexcept
+{
+    const Mat3<T> r = to_mat3(rotation);
+    Mat4<T>       m;
+    m.c0 = Vec4<T>(r.c0 * scale.x, static_cast<T>(0));
+    m.c1 = Vec4<T>(r.c1 * scale.y, static_cast<T>(0));
+    m.c2 = Vec4<T>(r.c2 * scale.z, static_cast<T>(0));
+    m.c3 = Vec4<T>(translation, static_cast<T>(1));
+    return m;
+}
+
+// Decompose a TRS Mat4 into translation + rotation quat + per-axis scale.
+//
+// Returns false ONLY when any column has near-zero length (singular). In
+// that case the outputs are left UNCHANGED — callers' prior values are
+// preserved.
+//
+// Negative-determinant matrices succeed with the X-scale axis negated
+// (mirror-handedness preserved). This is the standard CAD/robotics-URDF
+// convention; documented per v1j cross-domain pin (advisor decision #4).
+// Callers needing "all positive scale" check `s_out.x * s_out.y * s_out.z
+// > 0` after the call.
+//
+// Skewed matrices (columns non-orthogonal after scale-removal) decompose
+// best-effort via from_mat3; the recovered rotation loses the skew.
+// True skew handling via polar decomposition is reserved as a v1j+1
+// follow-up — see docs/debt.md.
+template <MathScalar T>
+[[nodiscard]] inline bool to_trs(const Mat4<T>& m, Vec3<T>& t_out, Quat<T>& r_out, Vec3<T>& s_out,
+                                 T epsilon = default_epsilon<T>()) noexcept
+{
+    const Vec3<T> col0(m.c0.x, m.c0.y, m.c0.z);
+    const Vec3<T> col1(m.c1.x, m.c1.y, m.c1.z);
+    const Vec3<T> col2(m.c2.x, m.c2.y, m.c2.z);
+
+    T       sx = static_cast<T>(std::sqrt(dot(col0, col0)));
+    const T sy = static_cast<T>(std::sqrt(dot(col1, col1)));
+    const T sz = static_cast<T>(std::sqrt(dot(col2, col2)));
+
+    if (sx <= epsilon || sy <= epsilon || sz <= epsilon)
+    {
+        return false;
+    }
+
+    const Vec3<T> rcol0_raw = col0 * (static_cast<T>(1) / sx);
+    const Vec3<T> rcol1_raw = col1 * (static_cast<T>(1) / sy);
+    const Vec3<T> rcol2_raw = col2 * (static_cast<T>(1) / sz);
+    const T       det_check = dot(rcol0_raw, cross(rcol1_raw, rcol2_raw));
+
+    Vec3<T> rcol0 = rcol0_raw;
+    if (det_check < static_cast<T>(0))
+    {
+        sx    = -sx;
+        rcol0 = -rcol0;
+    }
+
+    const Mat3<T> rot_mat(rcol0, rcol1_raw, rcol2_raw);
+    t_out = Vec3<T>(m.c3.x, m.c3.y, m.c3.z);
+    r_out = from_mat3(rot_mat);
+    s_out = Vec3<T>(sx, sy, sz);
+    return true;
 }
 
 using Quatf = Quat<crd::f32>;

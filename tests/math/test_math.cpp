@@ -1,4 +1,4 @@
-#include <crd/math/math.hpp>
+﻿#include <crd/math/math.hpp>
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -459,7 +459,7 @@ TEST_CASE("Ray intersections cover plane sphere and triangle", "[math][geom][ray
 
 TEST_CASE("look_at produces a correct right-handed view matrix", "[math][mat]")
 {
-    // Camera on the +Z axis looking at the origin — should produce a pure -Z translation.
+    // Camera on the +Z axis looking at the origin â€” should produce a pure -Z translation.
     const Vec3f eye{0.0F, 0.0F, 5.0F};
     const Vec3f target{0.0F, 0.0F, 0.0F};
     const Vec3f up{0.0F, 1.0F, 0.0F};
@@ -502,9 +502,9 @@ TEST_CASE("Frustum extraction and containment work for canonical clip volume", "
     REQUIRE_FALSE(intersects(frustum, AABBf(Vec3f(2.0F, 2.0F, 2.0F), Vec3f(3.0F, 3.0F, 3.0F))));
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Interpolation primitives
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 TEST_CASE("scalar lerp/mix/saturate/step/inverse_lerp/remap", "[math][interp]")
 {
@@ -519,7 +519,7 @@ TEST_CASE("scalar lerp/mix/saturate/step/inverse_lerp/remap", "[math][interp]")
     REQUIRE(saturate(2.0F)  == Catch::Approx(1.0F));
 
     REQUIRE(step(0.5F, 0.4F) == Catch::Approx(0.0F));
-    REQUIRE(step(0.5F, 0.5F) == Catch::Approx(1.0F)); // x == edge → 1
+    REQUIRE(step(0.5F, 0.5F) == Catch::Approx(1.0F)); // x == edge â†’ 1
     REQUIRE(step(0.5F, 0.6F) == Catch::Approx(1.0F));
 
     REQUIRE(inverse_lerp(2.0F, 6.0F, 4.0F) == Catch::Approx(0.5F));
@@ -558,14 +558,14 @@ TEST_CASE("smoothstep / smootherstep boundary and midpoint", "[math][interp]")
 
 TEST_CASE("damp converges, frame-rate-stable, identity at dt=0", "[math][interp]")
 {
-    // dt = 0 → no progress, return current.
+    // dt = 0 â†’ no progress, return current.
     REQUIRE(damp(3.0F, 7.0F, 5.0F, 0.0F) == Catch::Approx(3.0F));
 
-    // Large dt → essentially target.
+    // Large dt â†’ essentially target.
     REQUIRE(damp(3.0F, 7.0F, 5.0F, 100.0F) == Catch::Approx(7.0F).margin(1e-6F));
 
     // 60 fixed-step ticks at dt=1/60 must equal one tick at dt=1 for the same lambda
-    // — this is the property that makes damp frame-rate independent. Tolerance is
+    // â€” this is the property that makes damp frame-rate independent. Tolerance is
     // generous because float rounding accumulates over 60 iterations.
     constexpr float lambda = 4.0F;
     float multi = 0.0F;
@@ -598,9 +598,9 @@ TEST_CASE("Vec lerp / damp componentwise", "[math][interp][vec]")
     REQUIRE(near_b.z == Catch::Approx(12.0F).margin(1e-6F));
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Penner easings
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 TEST_CASE("All easings: f(0) == 0 and f(1) == 1", "[math][easing]")
 {
@@ -688,7 +688,7 @@ TEST_CASE("Easings: In/Out reflection identity ease_in_X(t) == 1 - ease_out_X(1 
     // The reflection identity holds for the strictly-monotone families
     // (Sine/Quad/Cubic/Quart/Quint/Expo/Circ). Back/Elastic/Bounce use slightly
     // different In vs Out formulations and don't satisfy this exactly, so we
-    // skip them here — their reflection is checked separately in the
+    // skip them here â€” their reflection is checked separately in the
     // monotonicity / overshoot tests.
     constexpr float eps = 1e-5F;
     for (int i = 1; i <= 31; ++i)

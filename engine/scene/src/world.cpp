@@ -899,6 +899,176 @@ void World::step_fixed(crd::f64 dt, crd::f64 fixed_dt, crd::u32 max_substeps)
     notify_frame_end();
 }
 
+// ---- v1j: Transform writer API ------------------------------------------
+
+namespace
+{
+// Mark dirty by adding a TransformDirtyFlag (SparseSet) component if the
+// entity doesn't already carry one. add_component on a SparseSet pool is
+// O(1) and idempotent on UPSERT (replaces with the same payload).
+void mark_one_dirty(World& w, EntityId e)
+{
+    if (!w.has_component<TransformDirtyFlag>(e))
+    {
+        w.add_component<TransformDirtyFlag>(e, TransformDirtyFlag{});
+    }
+}
+
+// DFS subtree marking via traverse_relation<ChildOf>. CRD_ASSERTs depth
+// in debug builds (advisor pin #7); release skips the check.
+void mark_subtree_via_childof(World& w, EntityId e)
+{
+    crd::u32 max_observed_depth = 0;
+    w.traverse_relation<crd::scene::relations::ChildOf>(e,
+                                                        [&](EntityId visited, crd::u32 depth)
+                                                        {
+                                                            if (depth > max_observed_depth)
+                                                            {
+                                                                max_observed_depth = depth;
+                                                            }
+                                                            mark_one_dirty(w, visited);
+                                                        });
+    CRD_ASSERT(max_observed_depth < kMaxTransformDepth &&
+               "Transform subtree depth exceeded kMaxTransformDepth (256). Split via Owns or use a flat propagation.");
+}
+} // namespace
+
+void World::mark_transform_subtree_dirty(EntityId e)
+{
+    if (!is_alive(e))
+    {
+        return;
+    }
+    mark_subtree_via_childof(*this, e);
+}
+
+void World::set_translation(EntityId e, crd::math::Vec3f t)
+{
+    CRD_ASSERT(is_alive(e));
+    Transform* tr = get_component_mut<Transform>(e);
+    CRD_ASSERT(tr != nullptr && "set_translation: entity has no Transform component");
+    tr->translation = t;
+    mark_transform_subtree_dirty(e);
+}
+
+void World::set_rotation_quat(EntityId e, crd::math::Quatf q)
+{
+    CRD_ASSERT(is_alive(e));
+    Transform* tr = get_component_mut<Transform>(e);
+    CRD_ASSERT(tr != nullptr);
+    (void)crd::math::try_normalize(q);
+    tr->rotation = q;
+    mark_transform_subtree_dirty(e);
+}
+
+void World::set_rotation_quat_unnormalized(EntityId e, crd::math::Quatf q)
+{
+    CRD_ASSERT(is_alive(e));
+    Transform* tr = get_component_mut<Transform>(e);
+    CRD_ASSERT(tr != nullptr);
+    tr->rotation = q;
+    mark_transform_subtree_dirty(e);
+}
+
+void World::set_rotation_axis_angle(EntityId e, crd::math::Vec3f axis, crd::f32 radians)
+{
+    CRD_ASSERT(is_alive(e));
+    Transform* tr = get_component_mut<Transform>(e);
+    CRD_ASSERT(tr != nullptr);
+    tr->rotation = crd::math::from_axis_angle(axis, radians);
+    mark_transform_subtree_dirty(e);
+}
+
+void World::set_rotation_euler(EntityId e, crd::f32 x, crd::f32 y, crd::f32 z, crd::math::EulerOrder order)
+{
+    CRD_ASSERT(is_alive(e));
+    Transform* tr = get_component_mut<Transform>(e);
+    CRD_ASSERT(tr != nullptr);
+    tr->rotation = crd::math::from_euler(x, y, z, order);
+    mark_transform_subtree_dirty(e);
+}
+
+void World::set_rotation_from_to(EntityId e, crd::math::Vec3f from_dir, crd::math::Vec3f to_dir)
+{
+    CRD_ASSERT(is_alive(e));
+    Transform* tr = get_component_mut<Transform>(e);
+    CRD_ASSERT(tr != nullptr);
+    tr->rotation = crd::math::from_to_rotation(from_dir, to_dir);
+    mark_transform_subtree_dirty(e);
+}
+
+void World::set_rotation_look_at(EntityId e, crd::math::Vec3f forward, crd::math::Vec3f up)
+{
+    CRD_ASSERT(is_alive(e));
+    Transform* tr = get_component_mut<Transform>(e);
+    CRD_ASSERT(tr != nullptr);
+    // Convert look_at view-matrix orientation back to a quat. The view
+    // matrix's upper-left 3x3 is the inverse rotation; we pull it out via
+    // from_mat3 of the transposed columns. Cleaner: recompose directly.
+    const crd::math::Vec3f f = crd::math::normalized(forward);
+    const crd::math::Vec3f r = crd::math::normalized(crd::math::cross(f, up));
+    const crd::math::Vec3f u = crd::math::cross(r, f);
+    // Object-space rotation: columns are (right, up, -forward) — matches
+    // the right-handed convention. f points OUT of the camera/object so
+    // we negate it for the Z column to make it the FORWARD-FACING axis.
+    const crd::math::Mat3f rot_mat(r, u, -f);
+    tr->rotation = crd::math::from_mat3(rot_mat);
+    mark_transform_subtree_dirty(e);
+}
+
+void World::set_scale(EntityId e, crd::math::Vec3f s)
+{
+    CRD_ASSERT(is_alive(e));
+    Transform* tr = get_component_mut<Transform>(e);
+    CRD_ASSERT(tr != nullptr);
+    tr->scale = s;
+    mark_transform_subtree_dirty(e);
+}
+
+void World::set_local(EntityId e, const crd::math::Vec3f& translation, const crd::math::Quatf& rotation,
+                      const crd::math::Vec3f& scale)
+{
+    CRD_ASSERT(is_alive(e));
+    Transform* tr = get_component_mut<Transform>(e);
+    CRD_ASSERT(tr != nullptr);
+    tr->translation = translation;
+    tr->rotation    = rotation;
+    (void)crd::math::try_normalize(tr->rotation);
+    tr->scale = scale;
+    mark_transform_subtree_dirty(e);
+}
+
+void World::set_world(EntityId e, const crd::math::Mat4f& world)
+{
+    crd::math::Vec3f t{};
+    crd::math::Quatf r{};
+    crd::math::Vec3f s{};
+    const bool ok = crd::math::to_trs(world, t, r, s);
+    CRD_ASSERT(ok && "set_world: input matrix is singular (zero column). Use try_set_world for validation.");
+    if (!ok)
+    {
+        return;
+    }
+    set_local(e, t, r, s);
+}
+
+bool World::try_set_world(EntityId e, const crd::math::Mat4f& world)
+{
+    if (!is_alive(e) || get_component_mut<Transform>(e) == nullptr)
+    {
+        return false;
+    }
+    crd::math::Vec3f t{};
+    crd::math::Quatf r{};
+    crd::math::Vec3f s{};
+    if (!crd::math::to_trs(world, t, r, s))
+    {
+        return false;
+    }
+    set_local(e, t, r, s);
+    return true;
+}
+
 void World::register_builtin_relations()
 {
     using namespace crd::scene::relations;
