@@ -1,9 +1,9 @@
 # Phase 3.0 — Scene / ECS Foundation
 
-**Status:** ⏳ ready to start (ADRs locked 2026-05-06; all 9 sub-ADRs accepted)
+**Status:** 🚧 active — v1a + v1b shipped (2026-05-06, 2026-05-07); 12 slices remaining
 **ADRs:** ADR-0049, ADR-0050, ADR-0051, ADR-0052, ADR-0053, ADR-0054, ADR-0055, ADR-0056, ADR-0057
 **Cornerstone:** ADR-0020 (scene/ECS hybrid, UI in tree)
-**New module:** `crd-scene`
+**New module:** `crd-scene` (bootstrapped 2026-05-06)
 **Depends on:** Phase 2.8 complete (MaterialResource with PSO state + pass-keyed variants)
 
 ---
@@ -13,6 +13,19 @@
 Land the foundation `crd-scene` module: a layered, slot-shaped ECS where every novel ECS extension (change detection, time-tunneling, spatial queries, GPU-residency, replication, scripts, reflection) is a slot in the same registration grammar — most filled in Phase 3.0, the rest reserved for their consumer phases.
 
 This is the **highest-leverage single block of work in the engine**. Every Phase 3.x onwards consumes it.
+
+---
+
+## Progress
+
+| Slice | What | State |
+|---|---|---|
+| v1a | `EntityId` + `SlotMap` + `World` shell | ✅ shipped 2026-05-06 — `docs/sessions/2026-05-06-scene-v1a-slotmap.md` |
+| v1b | `ComponentRegistry` + `IStorageBackend` + storage-hint registration grammar | ✅ shipped 2026-05-07 — `docs/sessions/2026-05-07-scene-v1b-registry.md` |
+| v1c | `ArchetypeChunkStorage` (16 KB chunks, SoA, archetype graph, version counters) | ⏳ next |
+| v1d–v1n | see slice list below | ⏳ |
+
+`crd-scene` carries `EntityId`, `SlotMap`, `World` (deferred destroy + synchronous escape hatch), `ComponentRegistry` (variadic trait grammar, idempotent re-registration, type-erased lifecycle ops captured via `if constexpr`), `ComponentMask` (256-bit), and the `IStorageBackend` interface (declared only — Archetype lands v1c, SparseSet lands v1d). 44 unit tests / 3579 assertions; six-config green. No entity-component bindings yet — those land starting v1c.
 
 ---
 
@@ -43,7 +56,8 @@ The architecture is "extensible from day one" because adding any future ECS exte
 
 | Layer | Ships | Status |
 |---|---|---|
-| L1 Entity / SlotMap | Full impl | v1a |
+| L1 Entity / SlotMap | Full impl | v1a ✅ shipped 2026-05-06 |
+| L2 ComponentRegistry + `IStorageBackend` interface | Full impl (interface only) | v1b ✅ shipped 2026-05-07 |
 | L2 ArchetypeChunkStorage | Full impl | v1c |
 | L2 SparseSetStorage | Full impl | v1d |
 | L3 Relations | Full impl + ChildOf, AttachedTo | v1f |
@@ -68,17 +82,36 @@ The architecture is "extensible from day one" because adding any future ECS exte
 
 14 slices, each individually shippable per the project's Definition of Done (six-config green, unit tests, headless smoke where applicable). Larger slices (v1c, v1g) may further sub-divide during implementation.
 
-### v1a — `EntityId` + `SlotMap` + `World` shell (~250 LOC + tests)
+### v1a — `EntityId` + `SlotMap` + `World` shell ✅ shipped 2026-05-06
 
-`EntityId` (32:32 gen+idx), `SlotMap` (dense `Array<Slot>` + free list, deferred destroy queue), `World` shell that owns the slot map. Unit tests: spawn/destroy round-trip, generation collision detection, deferred destroy semantics, null sentinel.
+`EntityId` (32:32 gen+idx, 8 bytes, trivially copyable, default-zero is `null()`), `SlotMap` (dense `Array<Slot>` + free-list head, slot 0 reserved permanently as the null sentinel, alive-only iterator that skips holes), `World` shell that owns the slot map and a deferred-destroy queue (`destroy` queues, `flush_destroys` drains end-of-frame, `destroy_immediate` is the synchronous escape hatch and is lenient on stale handles).
+
+Two intentional divergences from ADR-0049 captured in the session log:
+
+- `SlotMap::free` skips generation 0 on overflow rather than trapping (keeps generation 0 reserved as the dead-slot sentinel value).
+- `World::destroy_immediate` is lenient on stale handles (no-op rather than assert), so `destroy(e); flush_destroys(); destroy_immediate(e);` is safe.
+
+22 unit tests / 3448 assertions; six-config green (win-debug 503/503, win-release 500/500, win-asan 503/503, win-clang-cl 503/503, win-relwithdebinfo 503/503, win-tidy clean); 17/17 headless smokes per non-tidy config.
 
 **ADR:** 0049
+**Session:** `docs/sessions/2026-05-06-scene-v1a-slotmap.md`
 
-### v1b — `ComponentRegistry` + storage-hint registration (~200 LOC + tests)
+### v1b — `ComponentRegistry` + storage-hint registration ✅ shipped 2026-05-07
 
-`register_component<T>(StorageHint, ...traits)` accepts the variadic trait grammar. `ComponentId` (`u16`) assigned at registration. The `IStorageBackend` interface declared. Tests: registration round-trip, duplicate-registration rejected, ComponentId stability across re-registration order.
+`World::register_component<T>(traits...)` accepts the variadic trait grammar from ADR-0056 (`StorageHint`, `Replication`, `AsyncAware`, `SpatialBVH`, `GpuResident`, `History{N}`, `ComponentSerialize`, `Reflection`). Trait dispatch is an overload set in `detail::apply_trait` — unknown trait types fail at compile time, so the grammar is closed by the type system.
+
+`ComponentId` is a 16-bit per-World monotonic identifier; the null sentinel is `0xFFFF` (default-constructed). `ComponentMask` is a 256-bit fixed bitset (`std::array<u64, 4>`) — chosen over the ADR-0053 "64-bit AND" reading because v1c's archetype keys would silently truncate to a 64-mask once the 65th component was registered. Four-word AND lives on a single cache line and is indistinguishable from one-word AND at the dispatch granularity (per-chunk-batch, not per-entity).
+
+Type identity uses a per-`T` static tag (`ComponentTypeTag<T>::value` — C++17 inline static, ODR-safe across TUs) keyed by address — no RTTI on the registration hot path. typeid().name() is still used for the debug `ComponentInfo::name` field (StringView, no allocation since typeid name has static storage).
+
+Re-registration is idempotent: registering the same `T` twice returns the existing `ComponentId` and ignores the second call's trait arguments. This lets libraries register defensively without coordination. The ADR's "duplicate-registration rejected" wording is honoured at the level of "no second registration committed" rather than "second call asserts."
+
+`IStorageBackend` interface, `ChunkView`, and `ChunkVisitor` are declared. No backend implementations in v1b — `ArchetypeChunkStorage` lands in v1c, `SparseSetStorage` in v1d. The query layer (v1g) and index dispatcher (v1i) are written against `IStorageBackend`.
+
+22 unit tests / 131 assertions added. Six-config green (525/525 / 522/522 release). 17/17 headless smokes per non-tidy config.
 
 **ADR:** 0050, 0053, 0056 (registration grammar)
+**Session:** `docs/sessions/2026-05-07-scene-v1b-registry.md`
 
 ### v1c — `ArchetypeChunkStorage` (~600 LOC + tests)
 
@@ -181,7 +214,7 @@ Final pass: confirm every reserved trait (`History`, `SpatialBVH`, `GpuResident`
 ## Out of scope for Phase 3.0
 
 - Auto-parallel scheduling within a phase — reserved API; impl Phase 3.5+.
-- Implementations of `History`, `SpatialBVH`, `GpuResident` — API only here; impl in 3.2 / 3.5 / 3.4 respectively.
+- Implementations of `History`, `SpatialBVH`, `GpuResident` — API only here; impl in 3.2 (animation interp), 3.5 (light culling at scale), 3.8 (GPU-driven rendering) respectively.
 - Replication packets and rollback — Phase 4.2.
 - Script execution, hot-reload — Phase 4.0.
 - Editor inspector, reflection walker — Phase 7.

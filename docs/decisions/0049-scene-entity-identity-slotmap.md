@@ -49,11 +49,12 @@ Trivial copy, fits one register, default-initialises to `null()`.
 ```cpp
 struct Slot
 {
-    crd::u32           generation = 1;     // bumped on destroy
+    crd::u32           generation = 1;     // bumped on destroy; never 0 for live slots
     crd::u32           next_free  = kInvalidIdx; // free-list link when vacant
     bool               alive      = false;
-    // Component presence and component index pointers live in adjacent SoA arrays
-    // owned by World, not in Slot — keeps Slot 8 bytes for cache friendliness.
+    // 12 bytes with default alignment (u32 + u32 + bool padded). Component presence
+    // and component index pointers live in adjacent SoA arrays owned by World, not
+    // in Slot — keeps Slot itself compact.
 };
 
 class SlotMap
@@ -93,7 +94,7 @@ class World
 
 Reasoning: a system iterating `view<Transform, RenderableComponent>` cannot safely have entity X freed underneath it by another system (or a script) running on a different fiber. Deferring destroy to a single sync point at end-of-frame is the standard Bevy / EnTT / Unity DOTS shape and the only model that composes cleanly with parallel iteration.
 
-For the rare case where immediate destroy is needed (test code, transient scratch entities, asset reload), we expose `world.destroy_immediate(EntityId)` with a precondition that no parallel iteration is in flight. Used sparingly.
+For the rare case where immediate destroy is needed (test code, transient scratch entities, asset reload), we expose `world.destroy_immediate(EntityId)` with a precondition that no parallel iteration is in flight. Implementation is lenient on stale handles (no-op when `!is_alive(e)`), so `destroy(e); flush_destroys(); destroy_immediate(e);` (and double `destroy_immediate`) are safe. The strict precondition is enforced one layer below at `SlotMap::free` — `World` is the lenient layer. Used sparingly.
 
 ### 5. Generation policy on slot reuse
 
@@ -103,9 +104,16 @@ void actually_free_slot(EntityId e)
     Slot& s = m_slots[e.index()];
     CRD_ASSERT(s.alive && s.generation == e.generation());
 
-    ++s.generation;        // wrap-around at 2^32 is documented as "extreme abuse";
-                           // CRD_VERIFY traps if generation ever overflows in
-                           // debug — practically unreachable.
+    // Bump generation. Wrap-around at 2^32 is documented as "extreme abuse";
+    // implementation skips the value 0 on overflow so generation 0 stays
+    // reserved as the dead-slot sentinel value (matches default-constructed
+    // Slot{} and EntityId{}.generation() == 0). The alive bit prevents handle
+    // resurrection within the same frame regardless.
+    ++s.generation;
+    if (s.generation == 0)
+    {
+        s.generation = 1;
+    }
     s.alive     = false;
     s.next_free = m_free_head;
     m_free_head = e.index();
@@ -131,7 +139,7 @@ A handle from the previous generation never matches the new generation; lookup r
 
 The 32/32 split is sized by the realistic upper bound of Cerid's targeted use cases (UE5 World Partition, RTS armies, particle simulations, UI populations) plus comfortable headroom. The cost relative to 16/16 is one extra cache line per ~150 entity slots — invisible. The cost relative to 8/24 is the absence of a class of subtle bugs.
 
-Dense `Array<Slot>` is the canonical implementation. ChunkedSlotMap (per-chunk allocation, pointer stability) is appropriate when the slots themselves carry meaningful state that callers reference by pointer; in our design they don't. Storage backends own component data; slots only contain (generation, next_free, alive) — 8 bytes packed.
+Dense `Array<Slot>` is the canonical implementation. ChunkedSlotMap (per-chunk allocation, pointer stability) is appropriate when the slots themselves carry meaningful state that callers reference by pointer; in our design they don't. Storage backends own component data; slots only contain (generation, next_free, alive) — 12 bytes per slot with default alignment (u32 + u32 + bool padded).
 
 Deferred destroy is non-negotiable once parallel iteration is on the table, which it is from day one (jobified queries are ADR-0052). Immediate-destroy semantics could not coexist safely with ADR-0052's `par_each`.
 
@@ -140,11 +148,11 @@ Deferred destroy is non-negotiable once parallel iteration is on the table, whic
 ## Consequences
 
 - `EntityId` is 8 bytes, trivially copyable, default-zero is `null()`.
-- A `World` with N alive entities and M holes has memory cost `(N + M) * sizeof(Slot)` = `(N + M) * 8` bytes for the slot map alone — 80 MB at 10 M live entities, well within budget.
+- A `World` with N alive entities and M holes has memory cost `(N + M) * sizeof(Slot)` = `(N + M) * 12` bytes for the slot map alone — 120 MB at 10 M live entities, well within budget.
 - Destroying an entity costs O(1) at submission; the work happens at `flush_destroys()` once per frame.
 - Storage backends and indexes (Layer 5) receive a single `on_entity_destroyed` event per entity per frame, dispatched in `flush_destroys()`.
 - The reserved index-0 sentinel is documented; tests cover the case `world.is_alive(EntityId{0}) == false`.
-- Generation overflow at 2^32 is treated as "the application has slot-thrashed for years" — `CRD_VERIFY` traps in debug; release silently wraps but the alive/dead bit prevents handle resurrection within the same frame.
+- Generation overflow at 2^32 is treated as "the application has slot-thrashed for years" — the implementation skips value 0 on overflow (`++gen; if (gen == 0) gen = 1;`) to keep generation 0 reserved as the dead-slot sentinel. The alive bit prevents handle resurrection within the same frame regardless.
 
 ---
 

@@ -35,7 +35,11 @@ public:
     // Bulk iteration over (chunked) storage. Visitor sees one storage chunk
     // at a time with packed SoA pointers — the API the query layer hands to
     // par_each, vectorised loops, and the GPU-resident extract path.
-    virtual void  for_each_chunk(ComponentMask required, ChunkVisitor fn) = 0;
+    //
+    // ChunkVisitor is a C-callback + opaque user-data pointer (rather than a
+    // std::function) so the dispatch path stays heap-free. Implemented in
+    // v1b alongside the interface declaration.
+    virtual void  for_each_chunk(ComponentMask required, ChunkVisitor fn, void* user_data) = 0;
 
     // Destruction notification (driven by SlotMap::flush_destroys).
     virtual void  on_entity_destroyed(EntityId e) = 0;

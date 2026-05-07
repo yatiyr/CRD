@@ -3,7 +3,7 @@
 namespace crd::scene
 {
 
-World::World(crd::memory::IAllocator* alloc) : m_slots(alloc), m_pending_destroy(alloc) {}
+World::World(crd::memory::IAllocator* alloc) : m_slots(alloc), m_pending_destroy(alloc), m_components(alloc) {}
 
 EntityId World::spawn()
 {

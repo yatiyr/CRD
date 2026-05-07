@@ -11,7 +11,7 @@
 
 ## Current focus
 
-**Phase 3.0 — Scene/ECS foundation. v1a SHIPPED 2026-05-06 (`crd-scene` skeleton: EntityId + SlotMap + World). 13 slices remaining. Next: v1b — `ComponentRegistry` + `IStorageBackend` interface + storage-hint registration grammar (ADRs 0050, 0053, 0056).**
+**Phase 3.0 — Scene/ECS foundation. v1a + v1b SHIPPED. v1a (entity identity) 2026-05-06; v1b (component registry + IStorageBackend + storage-hint grammar) 2026-05-07. 12 slices remaining. Next: v1c — `ArchetypeChunkStorage` (16 KB chunks, SoA, archetype graph, per-chunk version counters) per ADR-0050.**
 
 The architecture is the **eight-layer slot-shaped ECS** designed for million-entity scenes, agents-as-components-with-scripts, UI on the same machinery (game and editor), with every novel ECS extension as a registered slot:
 
@@ -32,7 +32,7 @@ L0 Memory · Containers · Jobs    (already shipped)
 
 Cerid signature: a uniform `IComponentIndex` extension framework where every novel ECS extension (history, change detect, spatial, GPU-mirror, async, replication, scripts, reflection) is a registered slot consuming the same component-lifecycle event stream. Adding the next extension is a one-day job.
 
-Slices: ~~v1a (Entity+SlotMap)~~ ✅ → **v1b (registry)** ← active → v1c (Archetype storage) → v1d (SparseSet storage) → v1e (mixed-backend chunk visitor) → v1f (relations) → v1g (query DSL) → v1h (system+schedule) → v1i (index framework + ChangeDetect + AsyncAware) → v1j (Transform + propagation) → v1k (SceneResource+Loader) → v1l (cook_scene cooker handler) → v1m (sandbox renderer integration) → v1n (reserved-slot freeze).
+Slices: ~~v1a (Entity+SlotMap)~~ ✅ → ~~v1b (registry)~~ ✅ → **v1c (Archetype storage)** ← active → v1d (SparseSet storage) → v1e (mixed-backend chunk visitor) → v1f (relations) → v1g (query DSL) → v1h (system+schedule) → v1i (index framework + ChangeDetect + AsyncAware) → v1j (Transform + propagation) → v1k (SceneResource+Loader) → v1l (cook_scene cooker handler) → v1m (sandbox renderer integration) → v1n (reserved-slot freeze).
 
 Active phase doc: `docs/phases/phase-3.0-scene-ecs.md`.
 
@@ -68,6 +68,53 @@ _none — running on the main roadmap._
 > `docs/detours/README.md`.
 
 ## Last shipped milestone
+
+**2026-05-07 — Phase 3.0 v1b SHIPPED: `ComponentRegistry` + `IStorageBackend` interface + storage-hint registration grammar.**
+
+New public API in `engine/scene/`:
+- `crd::scene::ComponentId` — 16-bit per-World identity, default-zero is null (`raw == 0xFFFF`), monotonic from registration order.
+- `crd::scene::ComponentMask` — 256-bit bitset (`std::array<u64, 4>`) with set/test/clear/AND/OR/popcount; supports up to 256 components, single cache line. Eliminates the v1c-archetype-truncation landmine the original 64-bit mask would have created.
+- `crd::scene::StorageHint` — enum (`Archetype` default / `SparseSet`).
+- `crd::scene::Replication` — enum (`Local` / `ServerAuthoritative` / `ClientPredicted` / `Remote`); stored, honoured by Phase 4.2.
+- Trait markers — `AsyncAware`, `SpatialBVH`, `GpuResident` (empty), `History{u8 window}`, `ComponentSerialize{...}` (4 callbacks all defaulted), `Reflection{display_name, fields}`.
+- `crd::scene::ComponentInfo` — id, name (StringView into typeid name), size, alignment, storage_hint, trait flags, replication, serialize record, reflection record, type-erased lifecycle ops (default_construct / destruct / move_construct, captured via `if constexpr`).
+- `crd::scene::ComponentRegistry` — owns `Array<ComponentInfo>` + `HashMap<const void*, ComponentId>`. `register_type<T>(traits...)` variadic template, `info(id)`, `id_of<T>()`. Idempotent re-registration: registering same T twice returns the first ComponentId; second-call traits are ignored. kMaxComponents = 256, enforced via CRD_ASSERT.
+- `crd::scene::IStorageBackend` interface — declared only (Archetype impl in v1c, SparseSet in v1d). `insert` / `remove` / `has` / `get_mut` / `for_each_chunk(mask, visitor, user_data)` / `on_entity_destroyed`.
+- `crd::scene::ChunkView` + `ChunkVisitor` — abstract chunk view (entities pointer + count + present mask); per-component pointer tables populated by backends in v1c–v1d.
+- `World` extended: `register_component<T>(traits...)`, `component_info(id)`, `component_id<T>()`, `registered_component_count()`, `components()` (registry accessor).
+
+Type-identity strategy: per-`T` static tag (`ComponentTypeTag<T>::value`) keyed by address — no RTTI on hot path, ODR-safe via C++17 inline static. typeid().name() is still used for the debug `ComponentInfo::name` (StringView, no allocation).
+
+Tests added (`tests/scene/test_component_registry.cpp`, +22 cases / +131 assertions):
+- ComponentId default null + equality.
+- Fresh registry empty; info(null/zero) returns nullptr.
+- First registration produces non-null id; size/alignment/name round-trip.
+- Multiple registrations get distinct, monotonic ids (0, 1, 2, ...).
+- Idempotent re-registration: same id, first-call traits win, second-call ignored.
+- id_of<T>() null for unregistered T.
+- Default StorageHint is Archetype; explicit SparseSet stored.
+- All four index trait markers (AsyncAware, SpatialBVH, GpuResident, History{N}) round-trip through ComponentInfo.
+- Replication enum stored; default Local.
+- Reflection record stub round-trips display_name.
+- Lifecycle ops captured for default-constructible types; verified by exercising default_construct + destruct on a raw byte buffer.
+- Tag-only (empty struct) component registers cleanly.
+- Non-default-constructible type leaves default_construct null while destruct/move are populated.
+- ComponentMask: default empty, set/test/clear, popcount across word boundaries (0/63/64/255), AND/OR.
+- IStorageBackend stub class verifies polymorphic dispatch and virtual destructor; `static_assert(std::has_virtual_destructor_v<IStorageBackend>)`.
+- `World::register_component` proxies through; `World::component_id<T>()` round-trips.
+- `World::register_component` is idempotent.
+
+Six-configuration green:
+- win-debug:          525/525  (was 503, +22 new)
+- win-relwithdebinfo: 525/525
+- win-release:        522/522  (was 500, +22 new)
+- win-asan:           525/525
+- win-clang-cl:       525/525
+- win-tidy:           ✅ build clean
+
+All 17 headless smokes pass on every non-tidy config.
+
+## Previous shipped milestone
 
 **2026-05-06 — Phase 3.0 v1a SHIPPED: `crd-scene` module bootstrapped (EntityId + SlotMap + World shell).**
 

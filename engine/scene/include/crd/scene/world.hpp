@@ -3,6 +3,8 @@
 #include <crd/containers/array.hpp>
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
+#include <crd/scene/component.hpp>
+#include <crd/scene/component_registry.hpp>
 #include <crd/scene/entity.hpp>
 #include <crd/scene/slot_map.hpp>
 
@@ -59,9 +61,27 @@ public:
     [[nodiscard]] SlotMap::Iterator begin() const noexcept { return m_slots.begin(); }
     [[nodiscard]] SlotMap::Iterator end() const noexcept { return m_slots.end(); }
 
+    // ---- Component registry --------------------------------------------
+    // Phase 3.0 v1b: registration grammar. Storage backends and indexes that
+    // act on the registered metadata land in v1c–v1i. ADRs 0050, 0053, 0056.
+
+    template <typename T, typename... Traits> ComponentId register_component(Traits&&... traits)
+    {
+        return m_components.register_type<T>(std::forward<Traits>(traits)...);
+    }
+
+    [[nodiscard]] const ComponentInfo* component_info(ComponentId id) const noexcept { return m_components.info(id); }
+
+    template <typename T> [[nodiscard]] ComponentId component_id() const noexcept { return m_components.id_of<T>(); }
+
+    [[nodiscard]] crd::u16 registered_component_count() const noexcept { return m_components.size(); }
+
+    [[nodiscard]] const ComponentRegistry& components() const noexcept { return m_components; }
+
 private:
     SlotMap m_slots;
     crd::containers::Array<EntityId> m_pending_destroy;
+    ComponentRegistry m_components;
 };
 
 } // namespace crd::scene

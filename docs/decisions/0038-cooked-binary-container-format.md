@@ -126,12 +126,14 @@ The cooker exe ships with a `manifest_dump <pack.crdr>` sub-command from day one
 This is the debug interface for "what's in this pack" without needing a hex editor. A
 `resource_dump <pack.crdr> <uuid>` companion sub-command prints the chunks of one entry.
 
-### 8. Per-payload format inside `BLOB` is deferred to Phase 3.1c
+### 8. Per-payload format inside `BLOB` — resolved by ADR-0055
 
-Whether per-loader payloads use FlatBuffers, Cap'n Proto, or hand-rolled POD layouts is left
-open. v1a–v1g use hand-rolled POD layouts because the loaders we ship in this phase (shader,
-material, blob) have small, fixed schemas. The schema-language choice becomes load-bearing when
-scene/ECS data lands in Phase 3.0+, so the decision belongs in Phase 3.1c.
+The original ADR deferred this to a "Phase 3.1c" slice. With the Phase 3.0 architecture
+locked (ADRs 0049–0057), the question is closed by ADR-0055: scene data uses **hand-rolled
+POD layouts inside a CRDR `SCEN` artifact** — no FlatBuffers, no Cap'n Proto. Reasoning:
+single language, single platform, controlled writer + reader, smallest mmap-friendly layout
+wins. Per-loader payloads remain hand-rolled POD across the board (shader, material, mesh,
+texture, scene), with explicit `version` fields and registered migration callbacks.
 
 ## Consequences
 
@@ -155,13 +157,14 @@ scene/ECS data lands in Phase 3.0+, so the decision belongs in Phase 3.1c.
   thousands of entries we may need a paged or sharded manifest — see open question in
   `phase-2.6-resources.md`.
 - Hand-rolled per-loader `BLOB` schemas mean each loader pays a small evolution cost when its
-  format changes (versioning is loader-private). Acceptable through Phase 2.6; revisited in
-  Phase 3.1c.
+  format changes (versioning is loader-private). Closed permanently by ADR-0055 — POD blobs
+  are the engine-wide policy for cooked artifacts.
 
 ## References
 
 - `docs/phases/phase-2.6-resources.md`
 - ADR-0013 — Asset pipeline (separate cooker exe; runtime never sees sources)
+- ADR-0055 — Scene serialization (closes the per-payload-format deferral with `SCEN` CRDR)
 - ADR-0036 — `crd-resources` module placement + loader-registry pattern
 - ADR-0040 — Cooker CLI + CMake integration
 - id Tech `.pak`, Frostbite `.toc`/`.cas`, Unreal `.uasset` — prior-art chunked container patterns

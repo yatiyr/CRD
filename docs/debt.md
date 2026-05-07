@@ -38,7 +38,8 @@ abstraction. Phase 2.7 v1c (ADR-0048) redesigns it as a full material system fou
   schema (PRMS), defaults (DFLT), pass-keyed shaders (PASS), PSO state per pass (PSOS), shader options (OPTS).
 - **Items 1–3 (GPU wiring)** — Phase 2.8 wires the artifact data to Vulkan pipeline compilation
   (per-material pipeline cache, multi-pass ForwardRenderPath, depth-only prepass).
-- **Items 4–5** — Still deferred to Phase 3.4+ (no consumer until CSM / post-FX / compute passes exist).
+- **Items 4–5** — Still deferred (item 4 → Phase 3.5 CSM; item 5 → Phase 3.7 post-FX or Phase 3.8 GPU-driven).
+  No consumer exists yet.
 
 ### 1. Material parameters, texture slots, and full parameter system ✅ Closes Phase 2.7 v1c
 
@@ -76,21 +77,21 @@ a `VariantKey`, and returns the appropriate `ShaderResource` from `tmpl->pass_sh
 the depth prepass and `mat_inst.variant_for_pass(Forward)` in the color pass. Each pass uses the shader
 selected by the instance, not a hardcoded vert+frag pair.
 
-### 4. Descriptor layout — per-material bindings — Deferred Phase 3.4
+### 4. Descriptor layout — per-material bindings — Deferred Phase 3.5
 
 **What's missing:** Nothing in `MaterialTemplate` drives descriptor set creation or layout for set 1+
 (per-material bindings). The `VulkanDescriptorAllocator` and `MaterialBindGroup` (formerly `MaterialInstance`)
 are wired to hardcoded layouts, not artifact-driven layouts.
 
-**What to add (Phase 3.4):**
+**What to add (Phase 3.5):**
 - `MaterialTemplate` carries enough reflected binding data to construct a `VkDescriptorSetLayout` at load
   time (or defer to the first bind).
 - `MaterialResourceLoader` merges spirv-reflect results across pass shaders to build the per-material
   binding table.
 - `MaterialBindGroup` is rebuilt from `MaterialTemplate` rather than from a manually-constructed layout.
 
-**Why deferred:** No concrete consumer (texture arrays, multiple samplers) until CSM and post-FX land
-in Phase 3.4+.
+**Why deferred:** No concrete consumer (texture arrays, multiple samplers) until CSM and area-light
+materials land in Phase 3.5, and post-FX materials in Phase 3.7.
 
 ### 5. Additional shader stages — Deferred Phase 3.5+
 
@@ -113,7 +114,8 @@ them — the `ShaderResource` inside can carry any combination of stages.
 **Updated execution plan:**
 - Phase 2.7 v1c closes the artifact layer of items 1–3 (full material foundation: ADR-0048).
 - Phase 2.8 wires items 2–3 to actual Vulkan pipeline compilation and multi-pass rendering.
-- Items 4 and 5 remain open; deferred until CSM/post-FX/compute consumers in Phase 3.4+ create real demand.
+- Items 4 and 5 remain open; deferred until consumers create real demand (item 4 → Phase 3.5 CSM /
+  area lights; item 5 → Phase 3.7 post-FX compute / Phase 3.8 GPU-driven culling).
 
 See `docs/phases/phase-2.7-asset-import.md`, `docs/phases/phase-2.8-material-completion.md`,
 ADR-0044, ADR-0046, ADR-0048.

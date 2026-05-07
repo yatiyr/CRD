@@ -239,13 +239,13 @@ hand-authored `.mat.toml` materials. This fulfils the zero-runtime-change requir
 enum class PassType : crd::u8
 {
     DepthPrepass = 0,
-    Shadow       = 1,   // reserved — no shadow pass until Phase 3.4
+    Shadow       = 1,   // reserved — no shadow pass until Phase 3.5 (CSM + PCSS)
     Forward      = 2,   // main shaded color pass (was "MainColor")
     // future: Overlay, Decal — append only
 };
 ```
 
-The reserved `Shadow` slot prevents on-disk value shifts when shadow maps land in Phase 3.4.
+The reserved `Shadow` slot prevents on-disk value shifts when shadow maps land in Phase 3.5.
 Values 0–2 are frozen; new values may only be appended.
 
 ---
@@ -277,8 +277,9 @@ Values 0–2 are frozen; new values may only be appended.
 
 - Phase 7 node editor: zero runtime changes. Five-file contract → same MATR artifact format.
 - Phase 5 RT: `HybridRenderPath` queries `pass_shaders[Shadow]` (reserved slot) without format bump.
-- Phase 3.4: `PostProcessStack` dispatches `PostProcess` domain materials via the existing `domain` field.
-- Items 4–5 from `docs/debt.md` remain deferred to Phase 3.4+.
+- Phase 3.7: `PostProcessStack` dispatches `PostProcess` domain materials via the existing `domain` field.
+- Items 4–5 from `docs/debt.md` remain deferred to their respective consumer phases (item 4 → Phase 3.5
+  CSM; item 5 → Phase 3.7 post-FX or Phase 3.8 GPU-driven).
 
 ---
 

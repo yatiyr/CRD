@@ -95,7 +95,8 @@ The procedural geometry module is named **`crd-meshgen`**, namespace **`crd::mes
 - Geometry shaders are **not added** as a first-class engine feature. They are deprecated on AMD/RDNA,
   absent on Metal, and architecturally hostile (serialize pipeline output). CPU regeneration is correct
   for runtime parameter changes (e.g. changing sphere resolution in ImGui).
-- Tessellation shaders (TCS/TES) reserved for Phase 3.4 when terrain LOD creates a real consumer.
+- Tessellation shaders (TCS/TES) reserved for Phase 3.8 (GPU-driven rendering) or later when terrain
+  LOD or displacement-mapping consumers materialise. No specific phase is committed.
 - Mesh shaders reserved for Phase 5 alongside hardware RT.
 
 **Module location:** `engine/meshgen/`

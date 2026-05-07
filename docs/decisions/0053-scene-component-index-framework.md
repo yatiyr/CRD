@@ -56,7 +56,7 @@ Indexes are registered with the World and routed events automatically. Storage l
 | `AsyncAwareIndex` | ✅ ship | Implemented v1i |
 | `HistoryIndex<N>` | API frozen, no impl | Implemented Phase 3.2 (animation interp) |
 | `SpatialBVHIndex` | API frozen, no impl | Implemented Phase 3.5 (frustum culling) |
-| `GpuResidentIndex` | API frozen, no impl | Implemented Phase 3.4 (GPU-driven render) |
+| `GpuResidentIndex` | API frozen, no impl | Implemented Phase 3.8 (GPU-driven render) |
 
 **Each index, including the deferred ones, is registered at component-registration time.** Registering for a deferred index in Phase 3.0 silently no-ops at runtime; when the index is implemented in its consumer phase, the runtime starts honoring the registration without caller code changes.
 
@@ -66,7 +66,7 @@ world.register_component<Transform>(
     StorageHint::Archetype,
     History{60},               // reserve slot — impl in Phase 3.2
     SpatialBVH{},              // reserve slot — impl in Phase 3.5
-    GpuResident{},             // reserve slot — impl in Phase 3.4
+    GpuResident{},             // reserve slot — impl in Phase 3.8
     AsyncAware{}               // shipping in 3.0
 );
 
@@ -103,7 +103,7 @@ auto q = world.query<Transform, Renderable>().skip_pending<Renderable>();
 // Renderer iterates only entities whose Renderable is fully resident
 ```
 
-This eliminates the manual "is the mesh ready yet?" checks from every consumer. It's also what closes the open question in `docs/debt.md`'s async GPU upload entry — once `GpuResidentIndex` ships in Phase 3.4, `skip_pending<Renderable>` will also gate on GPU upload state, not just CPU load state.
+This eliminates the manual "is the mesh ready yet?" checks from every consumer. It's also what closes the open question in `docs/debt.md`'s async GPU upload entry — once `GpuResidentIndex` ships in Phase 3.8, `skip_pending<Renderable>` will also gate on GPU upload state, not just CPU load state.
 
 ### 5. `HistoryIndex<N>` — API frozen, impl deferred to Phase 3.2
 
@@ -144,16 +144,16 @@ auto nearby  = world.query<Transform>()
 
 Implements a BVH (or grid; choice locked in Phase 3.5 ADR) over the registered component's spatial extents. Frustum culling, range queries, broadphase contact tests all consume this — eliminates the "every system maintains its own spatial index" anti-pattern.
 
-### 7. `GpuResidentIndex` — API frozen, impl deferred to Phase 3.4
+### 7. `GpuResidentIndex` — API frozen, impl deferred to Phase 3.8
 
 ```cpp
 // Registration
 world.register_component<Transform>(StorageHint::Archetype, GpuResident{});
 ```
 
-The index maintains a CPU-mirrored GPU SSBO of the component data. Render extract becomes a single barrier (no per-entity copy) — matches GPU-driven rendering's staging needs (Phase 3.4+).
+The index maintains a CPU-mirrored GPU SSBO of the component data. Render extract becomes a single barrier (no per-entity copy) — matches GPU-driven rendering's staging needs (Phase 3.8+).
 
-This is what enables million-entity rendering at 60 Hz. The CPU iteration path stays the same; the GPU upload path becomes O(1) chunks-changed instead of O(N) entities.
+This is what enables million-entity rendering at 60 Hz. The CPU iteration path stays the same; the GPU upload path becomes O(1) chunks-changed instead of O(N) entities. Implementation lands alongside the rest of GPU-driven rendering in Phase 3.8.
 
 ### 8. Wiring: indexes register, storage dispatches
 
@@ -178,7 +178,7 @@ class World
 
 The dispatch loop is hot-path — it runs on every component insert/update/remove. Two optimisations:
 
-- The observed-mask check is a 64-bit bitwise AND — faster than function-call overhead.
+- The observed-mask check is a 256-bit bitwise AND (4 × u64 fitting in one cache line — see Phase 3.0 v1b session log for the amendment from 64-bit to 256-bit). Still faster than function-call overhead.
 - Indexes that observe nothing in a given chunk's archetype are pre-filtered (their `observed()` mask is computed once at registration, intersected with archetype masks once).
 
 For change detection specifically, the chunk-version counter is bumped inside the storage write path *before* the index dispatch — most index work is just "remember which chunks changed." Cheap.
@@ -203,7 +203,7 @@ The cost is one observer-pattern indirection. At million-entity scale, the dispa
 
 ### Why ship ChangeDetect and AsyncAware now
 
-Both are nearly-free given existing machinery. ChangeDetect uses the chunk version counters that storage maintains for free. AsyncAware uses the LoadState we already have (ADR-0039). Their consumers exist today (transform propagation only walks `changed<Transform>`; renderer skips entities whose mesh is still streaming). Shipping them now both validates the framework and removes existing debt (the open issue in `docs/debt.md` § "Async GPU upload" partly resolves once AsyncAware lands; fully resolves when GpuResident lands in 3.4).
+Both are nearly-free given existing machinery. ChangeDetect uses the chunk version counters that storage maintains for free. AsyncAware uses the LoadState we already have (ADR-0039). Their consumers exist today (transform propagation only walks `changed<Transform>`; renderer skips entities whose mesh is still streaming). Shipping them now both validates the framework and removes existing debt (the open issue in `docs/debt.md` § "Async GPU upload" partly resolves once AsyncAware lands; fully resolves when GpuResident lands in 3.8).
 
 ### Why reserve API for the deferred indexes
 

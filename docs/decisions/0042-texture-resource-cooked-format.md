@@ -93,7 +93,7 @@ FourCCs: `kFourCC_TXTR`, `kFourCC_HEAD`, `kFourCC_MIP0` through `kFourCC_MIP15`.
 
 - **Basis Universal / KTX2** — hardware-agnostic compressed formats. Excellent long-term
   choice. Deferred because the Basis transcoder is a significant dependency and Phase 2.7
-  just needs "texture on screen," not optimal compression. Revisit in Phase 3.4 (PBR + IBL).
+  just needs "texture on screen," not optimal compression. Revisit in Phase 3.5 (PBR + IBL).
 - **DDS container** — Windows-native. Rejected: non-portable and redundant with CRDR.
 - **Upload in a background job** — Desirable for streaming. Out of scope for v1d; the
   `load_streamed<T>` path in v1g is the right place for this.

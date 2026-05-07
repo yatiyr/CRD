@@ -27,7 +27,7 @@ The question is: which subset of items 2–5 must close before Phase 3.0 scene/E
 
 **Material debt items 2 and 3 ship as Phase 2.8 before Phase 3.0 scene/ECS.**
 
-**Material debt items 4 and 5 are deferred to Phase 3.4+ (CSM / post-FX consumers).**
+**Material debt items 4 and 5 are deferred to Phase 3.5+ (CSM / post-FX / compute consumers).**
 
 **Skeletal animation data in MeshResource is deferred to Phase 3.2 (Animation foundation).**
 
@@ -39,8 +39,13 @@ Phase 2.8 — Material completion: per-material PSO state + pass-keyed variants 
 Phase 3.0 — Scene / ECS foundation
 Phase 3.1 — Physics (PhysX 5 backend)
 Phase 3.2 — Animation (skeletal, blend trees, IK)
-Phase 3.3 — Audio
-Phase 3.4–3.6 — PBR, post-FX, culling (IBL, CSM, ACES, bloom, TAA, BVH)
+Phase 3.3 — crd-font (MTSDF, HarfBuzz)
+Phase 3.4 — Audio (spatialized, mix graph, DAW host scaffold)
+Phase 3.5 — PBR + lighting + NPR (IBL, CSM, PCSS, area lights, SSS, NPR)
+Phase 3.6 — Atmosphere + volumetrics (Hillaire sky, fog, clouds, aurora)
+Phase 3.7 — Post-processing (bloom, GTAO, SSR, TAA, DoF, motion blur, upscaling)
+Phase 3.8 — GPU-driven rendering + particles + water (Hi-Z, indirect, ocean, decals)
+Phase 3.9 — GI pre-RT (SSGI, DDGI, lightmap baking)
 ```
 
 ---
@@ -69,12 +74,13 @@ on day one. They are prerequisites, not cleanup.
 
 Item 4 (artifact-driven descriptor layouts) has value when materials drive complex per-material descriptor
 sets at set 1. The current `VulkanDescriptorAllocator` ring pool works for the current use case. The real
-demand arrives when CSM (Phase 3.4) or post-FX materials require GPU-sampled shadow maps or G-buffer reads
+demand arrives when CSM (Phase 3.5) or post-FX materials require GPU-sampled shadow maps or G-buffer reads
 bound at set 1+ via material-owned layouts.
 
-Item 5 (compute/mesh shader stages in MATR) has no consumer until post-FX (particle simulation, bloom
-compute, GPU culling) lands in Phase 3.4–3.6. Changing the MATR format now for a hypothetical future
-consumer violates the "real workload before optimization/scaffolding" principle.
+Item 5 (compute/mesh shader stages in MATR) has no consumer until post-FX (Phase 3.7: bloom compute, TAA,
+DoF) and GPU-driven rendering (Phase 3.8: particle simulation, indirect-draw culling) land. Changing the
+MATR format now for a hypothetical future consumer violates the "real workload before optimization /
+scaffolding" principle.
 
 ### Rigging deferral
 
@@ -93,7 +99,8 @@ cost when Phase 3.2 lands is acceptable — the cooker is designed for idempoten
 - `ForwardRenderPath` gains a per-material pipeline cache keyed by `(VariantKey, RasterState)` in v2.8a.
 - `MaterialResource` gains a `HashMap<PassType, ResourceHandle<ShaderResource>>` replacing the flat
   `vert_handle + frag_handle` in v2.8b.
-- Material debt items 2 and 3 are closed. Items 4 and 5 remain open in `docs/debt.md` until Phase 3.4.
+- Material debt items 2 and 3 are closed. Items 4 and 5 remain open in `docs/debt.md` until their
+  consumers land (item 4 → Phase 3.5 CSM; item 5 → Phase 3.7 post-FX or Phase 3.8 GPU-driven).
 - Phase 3.0 receives a material system where draw items carry real PSO state and per-pass shaders,
   eliminating one class of architecture churn.
 - glTF files with rigging data will need re-cook when Phase 3.2 animation lands. Acceptable by design.

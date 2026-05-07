@@ -2,6 +2,7 @@ add_executable(crd-scene-tests
     test_entity.cpp
     test_slot_map.cpp
     test_world.cpp
+    test_component_registry.cpp
 )
 
 target_link_libraries(crd-scene-tests PRIVATE

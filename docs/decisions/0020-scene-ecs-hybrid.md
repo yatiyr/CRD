@@ -22,10 +22,15 @@
   UI canvases at the end of the frame; they are different *render* paths
   but the same *scene* tree. This unifies authoring, persistence,
   scripting, and editor tooling. (Phase 5.0e ties `crd-ui` into the tree.)
-- Authoring scenes are TOML. Runtime scenes are cooked binary
-  (FlatBuffers vs Cap'n Proto chosen during the Phase 3.1c slice).
+- Authoring scenes are TOML. Runtime scenes are cooked binary —
+  the FlatBuffers vs Cap'n Proto deferral is closed by ADR-0055,
+  which picks neither: a CRDR `SCEN` artifact reusing the existing
+  resource container (chunking, zstd, manifest, hot-reload, mounting).
 
 ## References
 
+- `docs/phases/phase-3.0-scene-ecs.md` — Phase 3.0 plan implementing this cornerstone
 - `docs/phases/phase-3-simulation.md`
 - `docs/phases/phase-5-ui-rendering.md`
+- ADR-0049…ADR-0057 — eight-layer architecture sub-ADRs (locked 2026-05-06)
+- ADR-0055 — closes this ADR's "FlatBuffers vs Cap'n Proto" deferral with `SCEN` CRDR

@@ -58,7 +58,7 @@ enum class MaterialDomain : crd::u8
 
 **Frame graph routing:** `ForwardRenderPath` checks `material->domain` and skips materials with
 non-`Surface` domains (they are routed to dedicated passes by the respective render systems).
-Post-process materials are owned and dispatched by `PostProcessStack` (Phase 3.4).
+Post-process materials are owned and dispatched by `PostProcessStack` (Phase 3.7).
 
 ### 2. Node editor shaders — zero runtime changes required
 
@@ -95,7 +95,7 @@ HybridRenderPath (Phase 5) — implements IRenderPath
     ↓ RT passes: RTAO, RT reflections, RT shadows, RTGI probes
     ↓ denoiser (DLSS / FSR / Intel OIDN)
     ↓ composite into final color
-PostProcessStack (Phase 3.4)
+PostProcessStack (Phase 3.7)
     ↓ bloom, TAA, tone map, DoF
 Swapchain blit
 ```
@@ -103,10 +103,10 @@ Swapchain blit
 **Fallback policy (software substitution for non-RT hardware):**
 | RT effect | Software fallback |
 |-----------|------------------|
-| RT ambient occlusion | SSAO / GTAO (Phase 3.5) |
-| RT reflections | SSR (Phase 3.5) |
-| RT shadows | CSM (Phase 3.4) |
-| RT global illumination | IBL + SSAO (Phase 3.4) |
+| RT ambient occlusion | SSAO / GTAO (Phase 3.7) |
+| RT reflections | SSR (Phase 3.7) |
+| RT shadows | CSM (Phase 3.5) |
+| RT global illumination | IBL (Phase 3.5) + DDGI (Phase 3.9) |
 
 **RHI extensions required (Phase 5):**
 - `AccelerationStructure` resource type (BLAS per MeshResource, TLAS per scene)
@@ -131,12 +131,13 @@ the Lumen/RTXGI model: rasterized primary + RT secondary, fallback on all hardwa
 
 - Phase 2.8 v1a adds `MaterialDomain` enum + `DOMN` chunk to MATR artifact. `kMaterialLoaderVersion` → 2.
 - `ForwardRenderPath` skips non-`Surface` materials (no regression for current path).
-- Phase 3.4 introduces `PostProcessStack` (owns PostProcess domain dispatch) and `PostProcessMaterial` GLSL template.
+- Phase 3.7 introduces `PostProcessStack` (owns PostProcess domain dispatch) and `PostProcessMaterial` GLSL template.
 - Phase 7 node editor compiles to existing `ShaderResource` artifacts — no loader changes.
 - Phase 5 RHI extensions: `AccelerationStructure`, `RayTracingPipeline` — opt-in, backward compatible.
 - Phase 5 `HybridRenderPath` requires: MeshResource on GPU (Phase 2.7), scene TLAS (Phase 3.0), denoiser integration.
 - Geometry shaders: never added as first-class engine feature (deprecated, slow on AMD, absent on Metal).
-- Tessellation shaders: Phase 3.4 when terrain LOD has a real consumer.
+- Tessellation shaders: Phase 3.8 (GPU-driven rendering) or later when terrain LOD / displacement-mapping
+  has a real consumer. No specific phase committed.
 - Mesh shaders: Phase 5 alongside RT.
 
 ---
