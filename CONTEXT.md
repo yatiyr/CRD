@@ -11,7 +11,7 @@
 
 ## Current focus
 
-**Phase 3.0 — Scene/ECS foundation. v1a + v1b + v1c (whole) + v1d + v1e + v1f shipped 2026-05-06 / 07. Detour D-001 (memory infrastructure) closed 2026-05-07. Allocator-audit Option C closed the make_unique<Archetype> bypass. v1f ships Layer 3 — relations as first-class components-with-target-payload (ADR-0051): six built-in tag types in `crd::scene::relations` (ChildOf / AttachedTo / Owns / Targets / DependsOn / PossessedBy) covering every (storage × acyclic × policy) combination, three opt-in traits (ReverseIndex / Acyclic / OnTargetDestroyed), iterative destruction worklist that handles 500-deep cascade trees without stack overflow. 8 slices remaining. Next: v1g — Query DSL (`world.query<Cs...>().with<>().without<>().with_relation<>().changed<>()` per ADR-0052), built on top of `World::for_each_chunk` + relation reverse indexes.**
+**Phase 3.0 — Scene/ECS foundation. v1a + v1b + v1c (whole) + v1d + v1e + v1f + v1g shipped 2026-05-06 / 07. Detour D-001 (memory infrastructure) closed 2026-05-07. Allocator-audit Option C closed the make_unique<Archetype> bypass. v1g ships the Layer 4 user-facing composer (ADR-0052 §1): `world.query<Cs...>().with<>().without<>().with_relation<>().filter()` returns a move-only `Query<Cs...>` iterable via range-for `(EntityId, Cs&...)` tuples or `for_each_chunk(visitor)`. Built on v1e mixed-backend visitor + v1f relation reverse indexes; ref-qualified filter overloads make factory chains compile without copying. 7 slices remaining. Next: v1h — System + Schedule (`ISystem` virtual interface, `Reads`/`Writes` declarations, fixed-phase dispatch, command buffers for parallel mutation per ADR-0052 §3-§5).**
 
 The architecture is the **eight-layer slot-shaped ECS** designed for million-entity scenes, agents-as-components-with-scripts, UI on the same machinery (game and editor), with every novel ECS extension as a registered slot:
 
@@ -32,7 +32,7 @@ L0 Memory · Containers · Jobs    (already shipped)
 
 Cerid signature: a uniform `IComponentIndex` extension framework where every novel ECS extension (history, change detect, spatial, GPU-mirror, async, replication, scripts, reflection) is a registered slot consuming the same component-lifecycle event stream. Adding the next extension is a one-day job.
 
-Slices: ~~v1a (Entity+SlotMap)~~ ✅ → ~~v1b (registry)~~ ✅ → ~~v1c1 (chunk allocator + layout)~~ ✅ → ~~v1c2 (graph + entity move + IStorageBackend impl + sink hooks)~~ ✅ → ~~v1d (SparseSet storage)~~ ✅ → ~~v1e (mixed-backend chunk visitor)~~ ✅ → ~~v1f (relations)~~ ✅ → **v1g (query DSL)** ← active → v1h (system+schedule) → v1i (index framework + ChangeDetect + AsyncAware) → v1j (Transform + propagation) → v1k (SceneResource+Loader) → v1l (cook_scene cooker handler) → v1m (sandbox renderer integration) → v1n (reserved-slot freeze).
+Slices: ~~v1a (Entity+SlotMap)~~ ✅ → ~~v1b (registry)~~ ✅ → ~~v1c1 (chunk allocator + layout)~~ ✅ → ~~v1c2 (graph + entity move + IStorageBackend impl + sink hooks)~~ ✅ → ~~v1d (SparseSet storage)~~ ✅ → ~~v1e (mixed-backend chunk visitor)~~ ✅ → ~~v1f (relations)~~ ✅ → ~~v1g (query DSL)~~ ✅ → **v1h (system+schedule)** ← active → v1i (index framework + ChangeDetect + AsyncAware) → v1j (Transform + propagation) → v1k (SceneResource+Loader) → v1l (cook_scene cooker handler) → v1m (sandbox renderer integration) → v1n (reserved-slot freeze).
 
 Active phase doc: `docs/phases/phase-3.0-scene-ecs.md`.
 
@@ -69,7 +69,48 @@ _none — D-001 closed 2026-05-07. Main roadmap resumed at Phase 3.0 v1d._
 
 ## Last shipped milestone
 
-**2026-05-07 — Phase 3.0 v1f: Relations layer (ADR-0051) with SIX built-in tag types — `ChildOf` / `AttachedTo` / `Owns` / `Targets` / `DependsOn` / `PossessedBy` — covering every (storage × acyclic × policy) combination that occurs in real engine work. Three opt-in traits (`ReverseIndex` / `Acyclic` / `OnTargetDestroyed`) compose orthogonally. Iterative destruction worklist replaces recursive cascade — 500-deep ChildOf trees never overflow the stack. Six-config green at 651/651 / 648 release / 17 smokes (was 629 baseline post-v1e).**
+**2026-05-07 — Phase 3.0 v1g: Query DSL (ADR-0052 §1). `world.query<Cs...>()` returns a move-only `Query<Cs...>`; chain `.with<T>()` / `.without<T>()` / `.with_relation<Tag>(target)` / `.filter(fn, ud)` and iterate via range-for (yields `(EntityId, Cs&...)` tuples) or `for_each_chunk(visitor)` (chunk-level — the v1h `par_each` target). Six-config green at 673/673 / 670 release / 17 smokes (was 651 baseline post-v1f).**
+
+### v1g: Query DSL
+
+```cpp
+auto q = world.query<Transform, Renderable>()
+             .with<Visible>()
+             .without<Hidden>()
+             .with_relation<relations::ChildOf>(parent)
+             .filter(&is_in_frustum, &camera);
+
+for (auto [e, t, r] : q) { submit(e, t, r); }
+q.for_each_chunk(&visit_chunk, &ctx);
+```
+
+**Architecture:**
+- Move-only `Query<Cs...>` with ref-qualified filter overloads (`Query& with() &` + `Query with() &&`) — factory chains `auto q = world.query<T>().with<U>()` compile via guaranteed copy elision + move on rvalue.
+- Filter pipeline is a single non-template free function `run_query_pipeline(...)` in query.cpp; per-Cs template bodies in world.hpp are thin trampolines into it. No template bloat in the filter loop.
+- Forbidden mask split into `archetype_forbidden` + `sparse_forbidden`, mirroring v1e's required split. Each forbidden bit hits the right backend probe.
+- `RelationFilter` and `PredicateFilter` are free types (NOT nested in Query<Cs...>) so the non-template pipeline takes them by pointer without seeing any Cs... pack.
+- Range-for: lazy materialisation on first `begin()`; subsequent iterations reuse the cached `Array<EntityId>`. Mutating filter calls invalidate the cache.
+
+**Filter primitives (v1g):** `with<T>` / `without<T>` / `with_relation<Tag>(target)` / `with_relation<Tag>()` / `filter(fn, ud)`.
+
+**Deferred to v1h / v1i / later:** `par_each(jobs, fn)` (v1h), `ComponentRef<T>` with auto-bump on write (v1h or v1i), `.changed<T>()` and `.skip_pending<T>()` (v1i ChangeDetectIndex / AsyncAwareIndex), `.in_aabb()` (Phase 3.5 SpatialBVHIndex), `.at(frame, -N)` (Phase 4.0+ HistoryIndex), single-relation-anchor optimisation (v1h profile-driven).
+
+### Six-configuration green (post-v1g, 2026-05-07)
+
+- win-debug:          673/673
+- win-relwithdebinfo: 673/673
+- win-release:        670/670
+- win-asan:           673/673
+- win-clang-cl:       673/673
+- win-tidy:           ✅ build clean
+
+17/17 headless smokes per non-tidy config. Scene tests: 157 cases / 34559 assertions (was 135 / 34520 post-v1f).
+
+Session log: `docs/sessions/2026-05-07-scene-v1g-query-dsl.md`.
+
+### Earlier the same day: Phase 3.0 v1f
+
+Relations layer (ADR-0051) with SIX built-in tag types — `ChildOf` / `AttachedTo` / `Owns` / `Targets` / `DependsOn` / `PossessedBy` — covering every (storage × acyclic × policy) combination. Three opt-in traits (`ReverseIndex` / `Acyclic` / `OnTargetDestroyed`) compose orthogonally. Iterative destruction worklist handles 500-deep ChildOf trees without stack overflow. Six-config baseline 651/651.
 
 ### v1f: Relations as first-class
 

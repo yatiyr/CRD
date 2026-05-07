@@ -9,6 +9,7 @@ add_executable(crd-scene-tests
     test_sparse_set_storage.cpp
     test_mixed_chunk_visitor.cpp
     test_relations.cpp
+    test_query.cpp
     test_world_tlsf.cpp
 )
 

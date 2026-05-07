@@ -9,6 +9,7 @@
 #include <crd/scene/component.hpp>
 #include <crd/scene/component_registry.hpp>
 #include <crd/scene/entity.hpp>
+#include <crd/scene/query.hpp>
 #include <crd/scene/relation.hpp>
 #include <crd/scene/slot_map.hpp>
 #include <crd/scene/sparse_set_storage.hpp>
@@ -87,6 +88,15 @@ public:
     [[nodiscard]] crd::u16 registered_component_count() const noexcept { return m_components.size(); }
 
     [[nodiscard]] const ComponentRegistry& components() const noexcept { return m_components; }
+
+    // Allocator the World was constructed with — every Array / HashMap /
+    // backend allocates through this. Exposed for higher-level constructs
+    // (Query, future System helpers) that want to extend the chain rather
+    // than fall back to default_allocator.
+    [[nodiscard]] crd::memory::IAllocator* allocator() const noexcept
+    {
+        return m_pending_destroy.allocator();
+    }
 
     // ---- Typed component API (Phase 3.0 v1c2; ADR-0050) ---------------
     //
@@ -360,6 +370,19 @@ public:
     // (e.g. with custom traits) is a no-op.
     void register_builtin_relations();
 
+    // ---- Query DSL factory (Phase 3.0 v1g, ADR-0052) -------------------
+    //
+    // Constructs a Query<Cs...> over this world. The Cs... pack defines
+    // the per-entity tuple yielded by range-for iteration. Add filters via
+    // .with<>() / .without<>() / .with_relation<>() / .filter() — see
+    // query.hpp.
+    //
+    // Returned by value via guaranteed copy elision (C++17+). The chain
+    // syntax `world.query<A>().with<B>().without<C>()` makes ZERO copies
+    // — each .with<>() returns Query& and the final assignment binds to
+    // the elided rvalue.
+    template <typename... Cs> [[nodiscard]] Query<Cs...> query() { return Query<Cs...>{*this}; }
+
 private:
     [[nodiscard]] IStorageBackend& backend_for(ComponentId id) noexcept
     {
@@ -435,5 +458,180 @@ private:
     // allocates them.
     crd::containers::Array<RelationInfo*> m_relations;
 };
+
+// ---- Query<Cs...> template method bodies --------------------------------
+//
+// These live below the World definition so they can name World::-prefixed
+// template methods (require_component_id, get_component_mut, etc.). The
+// forward declaration in query.hpp is enough for the class skeleton; the
+// bodies below complete the picture for any TU that includes world.hpp.
+
+template <typename... Cs>
+Query<Cs...>::Query(World& world)
+    : m_world(&world),
+      m_relations(world.allocator()),
+      m_predicates(world.allocator()),
+      m_match_cache(world.allocator())
+{
+    // Stamp Cs... into the required mask. Each Cs must be a registered
+    // component type by the time the query is constructed; the DSL is
+    // a runtime tool, not a registration-time one.
+    (m_required.set(world.components().template id_of<Cs>()), ...);
+    if constexpr (sizeof...(Cs) > 0)
+    {
+        ComponentId ids[] = {world.components().template id_of<Cs>()...};
+        for (ComponentId id : ids)
+        {
+            CRD_ASSERT(!id.is_null() && "Query<Cs...>: every Cs must be a registered component type");
+        }
+    }
+}
+
+template <typename... Cs>
+template <typename T> Query<Cs...>& Query<Cs...>::with() &
+{
+    const ComponentId id = m_world->components().template id_of<T>();
+    CRD_ASSERT(!id.is_null() && "Query::with<T>: T must be a registered component type");
+    m_required.set(id);
+    invalidate_cache();
+    return *this;
+}
+
+template <typename... Cs>
+template <typename T> Query<Cs...> Query<Cs...>::with() &&
+{
+    this->template with<T>();
+    return std::move(*this);
+}
+
+template <typename... Cs>
+template <typename T> Query<Cs...>& Query<Cs...>::without() &
+{
+    const ComponentId id = m_world->components().template id_of<T>();
+    CRD_ASSERT(!id.is_null() && "Query::without<T>: T must be a registered component type");
+    m_forbidden.set(id);
+    invalidate_cache();
+    return *this;
+}
+
+template <typename... Cs>
+template <typename T> Query<Cs...> Query<Cs...>::without() &&
+{
+    this->template without<T>();
+    return std::move(*this);
+}
+
+template <typename... Cs>
+template <typename Tag> Query<Cs...>& Query<Cs...>::with_relation(EntityId target) &
+{
+    const ComponentId id = m_world->components().template id_of<Relation<Tag>>();
+    CRD_ASSERT(!id.is_null() && "Query::with_relation<Tag>: Relation<Tag> must be a registered relation");
+    m_relations.push_back(RelationFilter{id, target});
+    invalidate_cache();
+    return *this;
+}
+
+template <typename... Cs>
+template <typename Tag> Query<Cs...> Query<Cs...>::with_relation(EntityId target) &&
+{
+    this->template with_relation<Tag>(target);
+    return std::move(*this);
+}
+
+template <typename... Cs>
+Query<Cs...>& Query<Cs...>::filter(FilterPredicateFn fn, void* user_data) &
+{
+    if (fn != nullptr)
+    {
+        m_predicates.push_back(PredicateFilter{fn, user_data});
+        invalidate_cache();
+    }
+    return *this;
+}
+
+template <typename... Cs>
+Query<Cs...> Query<Cs...>::filter(FilterPredicateFn fn, void* user_data) &&
+{
+    this->filter(fn, user_data);
+    return std::move(*this);
+}
+
+template <typename... Cs>
+void Query<Cs...>::for_each_chunk(ChunkVisitor fn, void* user_data)
+{
+    drive_filtered_chunks(fn, user_data);
+}
+
+template <typename... Cs>
+void Query<Cs...>::drive_filtered_chunks(ChunkVisitor fn, void* user_data)
+{
+    run_query_pipeline(*m_world, m_required, m_forbidden, m_relations.data(),
+                       static_cast<crd::u32>(m_relations.size()), m_predicates.data(),
+                       static_cast<crd::u32>(m_predicates.size()), fn, user_data);
+}
+
+template <typename... Cs>
+void Query<Cs...>::materialise()
+{
+    m_match_cache.clear();
+    drive_filtered_chunks(
+        [](const ChunkView& view, void* ud)
+        {
+            auto* arr = static_cast<crd::containers::Array<EntityId>*>(ud);
+            for (crd::u32 i = 0; i < view.entity_count; ++i)
+            {
+                arr->push_back(view.entities[i]);
+            }
+        },
+        &m_match_cache);
+    m_materialised = true;
+}
+
+template <typename... Cs>
+typename Query<Cs...>::Iterator Query<Cs...>::begin()
+{
+    if (!m_materialised)
+    {
+        materialise();
+    }
+    return Iterator{this, 0U};
+}
+
+template <typename... Cs>
+typename Query<Cs...>::Iterator Query<Cs...>::end()
+{
+    if (!m_materialised)
+    {
+        materialise();
+    }
+    return Iterator{this, m_match_cache.size()};
+}
+
+template <typename... Cs>
+crd::u32 Query<Cs...>::count()
+{
+    if (!m_materialised)
+    {
+        materialise();
+    }
+    return static_cast<crd::u32>(m_match_cache.size());
+}
+
+template <typename... Cs>
+const crd::containers::Array<EntityId>& Query<Cs...>::matches()
+{
+    if (!m_materialised)
+    {
+        materialise();
+    }
+    return m_match_cache;
+}
+
+template <typename... Cs>
+auto Query<Cs...>::Iterator::operator*() const
+{
+    EntityId e = m_query->m_match_cache[m_index];
+    return std::tuple<EntityId, Cs&...>{e, *m_query->m_world->template get_component_mut<Cs>(e)...};
+}
 
 } // namespace crd::scene
