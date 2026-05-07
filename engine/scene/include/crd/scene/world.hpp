@@ -180,6 +180,35 @@ public:
 
     [[nodiscard]] crd::u32 archetype_count() const noexcept { return m_storage.graph().archetype_count(); }
 
+    // Mixed-backend chunk visitor (Phase 3.0 v1e, ADR-0050 §5).
+    //
+    // Yields chunks containing entities that satisfy `required` ACROSS both
+    // storage backends. The DSL (v1g) sits on top of this primitive; callers
+    // that already know `required` is pure-archetype or pure-SparseSet should
+    // call the per-backend method directly to skip the dispatch.
+    //
+    // ChunkView semantics by path:
+    //   - Pure-archetype path: chunk view forwarded from ArchetypeChunkStorage.
+    //     `present_mask = archetype.mask` (a superset of required); `entities`
+    //     points into the chunk's entity_id_array.
+    //   - Pure-SparseSet single-bit path: forwarded from SparseSetStorage.
+    //     `present_mask = {c}`; `entities` points into the pool's entities
+    //     array.
+    //   - Pure-SparseSet multi-bit OR mixed path: chunk view is constructed
+    //     from a stack-local scratch buffer. `present_mask = required` (exact);
+    //     `entities` points into the scratch and is valid ONLY for the
+    //     duration of the visitor call.
+    //
+    // Visitors that compare `present_mask` should treat it as a superset of
+    // `required` regardless of path. To access component data, prefer
+    // `world.get_component_mut<T>(entity)` per entity in the mixed/multi-sparse
+    // path — direct chunk-slot indexing only works for the pure-archetype
+    // forwarded path.
+    //
+    // Threading: not thread-safe. par_each across yielded chunks is the
+    // expected parallel path (the visitor dispatches one job per chunk).
+    void for_each_chunk(ComponentMask required, ChunkVisitor fn, void* user_data);
+
     // Install one sink across both storage backends. World drives
     // on_entity_destroyed itself (once per destroy), so backends never fire
     // sink->on_entity_destroyed — they only emit per-component on_remove.

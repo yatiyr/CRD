@@ -11,7 +11,7 @@
 
 ## Current focus
 
-**Phase 3.0 — Scene/ECS foundation. v1a + v1b + v1c (whole) + v1d shipped 2026-05-06 / 07. Detour D-001 (memory infrastructure) closed 2026-05-07: TLSF + GrowablePool + ChunkAllocator pooled. Allocator-audit Option C closed the make_unique<Archetype> bypass. v1d ships the SparseSet escape-hatch backend behind `IStorageBackend`, World dispatch by `StorageHint`, and consolidated `on_entity_destroyed` fan-out (sink fires exactly once per destroy across both backends). Phase 3.0 now ships both L2 backends per ADR-0050. 10 slices remaining. Next: v1e — mixed-backend chunk visitor + multi-component intersection.**
+**Phase 3.0 — Scene/ECS foundation. v1a + v1b + v1c (whole) + v1d + v1e shipped 2026-05-06 / 07. Detour D-001 (memory infrastructure) closed 2026-05-07: TLSF + GrowablePool + ChunkAllocator pooled. Allocator-audit Option C closed the make_unique<Archetype> bypass. v1e ships `World::for_each_chunk(required, fn, ud)` — the mixed-backend chunk visitor that splits `required` by `StorageHint` and yields filtered chunks via stack-local scratch (recursive queries safe). v1g (query DSL) sits on top of this. Phase 3.0 now has both L2 backends + the unified iteration primitive. 9 slices remaining. Next: v1f — Relations (`Relation<Tag>` + `add_relation` / `traverse_relation`, ChildOf / AttachedTo built-ins, ADR-0051).**
 
 The architecture is the **eight-layer slot-shaped ECS** designed for million-entity scenes, agents-as-components-with-scripts, UI on the same machinery (game and editor), with every novel ECS extension as a registered slot:
 
@@ -32,7 +32,7 @@ L0 Memory · Containers · Jobs    (already shipped)
 
 Cerid signature: a uniform `IComponentIndex` extension framework where every novel ECS extension (history, change detect, spatial, GPU-mirror, async, replication, scripts, reflection) is a registered slot consuming the same component-lifecycle event stream. Adding the next extension is a one-day job.
 
-Slices: ~~v1a (Entity+SlotMap)~~ ✅ → ~~v1b (registry)~~ ✅ → ~~v1c1 (chunk allocator + layout)~~ ✅ → ~~v1c2 (graph + entity move + IStorageBackend impl + sink hooks)~~ ✅ → ~~v1d (SparseSet storage)~~ ✅ → **v1e (mixed-backend chunk visitor)** ← active → v1f (relations) → v1g (query DSL) → v1h (system+schedule) → v1i (index framework + ChangeDetect + AsyncAware) → v1j (Transform + propagation) → v1k (SceneResource+Loader) → v1l (cook_scene cooker handler) → v1m (sandbox renderer integration) → v1n (reserved-slot freeze).
+Slices: ~~v1a (Entity+SlotMap)~~ ✅ → ~~v1b (registry)~~ ✅ → ~~v1c1 (chunk allocator + layout)~~ ✅ → ~~v1c2 (graph + entity move + IStorageBackend impl + sink hooks)~~ ✅ → ~~v1d (SparseSet storage)~~ ✅ → ~~v1e (mixed-backend chunk visitor)~~ ✅ → **v1f (relations)** ← active → v1g (query DSL) → v1h (system+schedule) → v1i (index framework + ChangeDetect + AsyncAware) → v1j (Transform + propagation) → v1k (SceneResource+Loader) → v1l (cook_scene cooker handler) → v1m (sandbox renderer integration) → v1n (reserved-slot freeze).
 
 Active phase doc: `docs/phases/phase-3.0-scene-ecs.md`.
 
@@ -69,7 +69,44 @@ _none — D-001 closed 2026-05-07. Main roadmap resumed at Phase 3.0 v1d._
 
 ## Last shipped milestone
 
-**2026-05-07 — Phase 3.0 v1d: `SparseSetStorage` (the L2 escape-hatch backend per ADR-0050 §3) + World dispatch by `StorageHint` + consolidated `on_entity_destroyed` fan-out. Per-pool version counter pre-wired so v1i ChangeDetect doesn't have to retrofit. Six-config green at 618/618 / 615 release / 17 smokes (was 603 baseline post-Option-C).**
+**2026-05-07 — Phase 3.0 v1e: `World::for_each_chunk(required, fn, ud)` mixed-backend chunk visitor (ADR-0050 §5). Splits `required` by `StorageHint`; pure-archetype and pure-SparseSet single-bit forward to the per-backend method (zero overhead); pure-sparse multi-bit anchors on the smallest pool then sparse-checks the rest; mixed walks archetypes ⊇ archetype_bits and sparse-checks remaining sparse_bits per entity, yielding filtered chunks into stack-local scratch (recursive queries safe). Six-config green at 629/629 / 626 release / 17 smokes (was 618 baseline post-v1d).**
+
+### v1e: mixed-backend chunk visitor
+
+```cpp
+// On World — the unified iteration primitive that v1g query DSL sits on top of.
+void World::for_each_chunk(ComponentMask required, ChunkVisitor fn, void* user_data);
+```
+
+Algorithm:
+1. Split `required` into `archetype_bits` and `sparse_bits` by walking the registry's `ComponentInfo::storage_hint`.
+2. **Pure-archetype path** (`sparse_bits == 0`): forward to `m_storage.for_each_chunk(required)`. Empty `required` additionally forwards to `m_sparse_storage.for_each_chunk(required)` so visitors see all chunks of either backend.
+3. **Pure-SparseSet single-bit path**: forward to `m_sparse_storage.for_each_chunk(required)`.
+4. **Pure-SparseSet multi-bit path**: pick the smallest pool as anchor; if any named pool is missing or empty, intersection is empty (yield nothing). Otherwise walk anchor entities, sparse-check every other bit, build filtered scratch, yield one ChunkView.
+5. **Mixed path**: walk archetypes whose `mask ⊇ archetype_bits`. For each chunk, sparse-check every `sparse_bit` per entity slot. Build filtered scratch per chunk, yield ChunkView.
+
+ChunkView semantic: forwarded chunks carry `present_mask = arch.mask` (a superset of `required`); constructed chunks carry `present_mask = required` (exact). Visitors should treat `present_mask` as ≥ `required`. Filtered `entities` lifetime is the visitor call only — re-call clobbers scratch.
+
+Anchor selection rationales (pinned for v1g):
+- Mixed: archetype-as-anchor is the cache-coherent default. Sparse-as-anchor when the smallest sparse pool dwarfs the archetype's chunks is a future profile-driven optimisation.
+- Pure-sparse multi-bit: smallest-pool-as-anchor minimises probes per entity; no cache-coherent path exists for pure-sparse intersection.
+
+### Six-configuration green (post-v1e, 2026-05-07)
+
+- win-debug:          629/629
+- win-relwithdebinfo: 629/629
+- win-release:        626/626
+- win-asan:           629/629
+- win-clang-cl:       629/629
+- win-tidy:           ✅ build clean
+
+17/17 headless smokes per non-tidy config. Scene tests: 113 cases / 34450 assertions (was 102 / 34420 post-v1d).
+
+Session log: `docs/sessions/2026-05-07-scene-v1e-mixed-visitor.md`.
+
+### Earlier the same day: Phase 3.0 v1d
+
+`SparseSetStorage` (the L2 escape-hatch backend per ADR-0050 §3) + World dispatch by `StorageHint` + consolidated `on_entity_destroyed` fan-out. Per-pool version counter pre-wired so v1i ChangeDetect doesn't have to retrofit. Six-config baseline 618/618.
 
 ### v1d: `SparseSetStorage`
 
