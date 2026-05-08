@@ -18,7 +18,7 @@ namespace
         case TextureFormat::RGBA8Unorm:
             return crd::rhi::Format::R8G8B8A8Unorm;
         default:
-            CRD_ASSERT(false && "unsupported TextureFormat in GpuUploader (BC7 deferred to Phase 2.8)");
+            CRD_ASSERT_UNREACHABLE("unsupported TextureFormat in GpuUploader (BC7 deferred to Phase 2.8)");
             return crd::rhi::Format::Undefined;
     }
 }

@@ -138,6 +138,16 @@
             "CRD_ENABLE_PROFILING": "OFF"
           }
         },
+        { "name": "linux-gcc-relwithdebinfo",
+          "displayName": "Linux GCC RelWithDebInfo (LTO + debug info)",
+          "inherits": "linux-base",
+          "cacheVariables": {
+            "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+            "CMAKE_INTERPROCEDURAL_OPTIMIZATION": "ON",
+            "CRD_ENABLE_ASSERTS": "ON",
+            "CRD_ENABLE_PROFILING": "ON"
+          }
+        },
         { "name": "linux-gcc-asan",
           "displayName": "Linux GCC Debug + ASan + UBSan",
           "inherits": "linux-base",
@@ -170,10 +180,11 @@
         { "name": "win-tidy",            "configurePreset": "win-tidy" },
         { "name": "win-clang-cl",        "configurePreset": "win-clang-cl" },
         { "name": "win-shipping",        "configurePreset": "win-shipping" },
-        { "name": "linux-gcc-debug",     "configurePreset": "linux-gcc-debug" },
-        { "name": "linux-gcc-release",   "configurePreset": "linux-gcc-release" },
-        { "name": "linux-gcc-asan",      "configurePreset": "linux-gcc-asan" },
-        { "name": "linux-gcc-shipping",  "configurePreset": "linux-gcc-shipping" }
+        { "name": "linux-gcc-debug",            "configurePreset": "linux-gcc-debug" },
+        { "name": "linux-gcc-release",          "configurePreset": "linux-gcc-release" },
+        { "name": "linux-gcc-relwithdebinfo",   "configurePreset": "linux-gcc-relwithdebinfo" },
+        { "name": "linux-gcc-asan",             "configurePreset": "linux-gcc-asan" },
+        { "name": "linux-gcc-shipping",         "configurePreset": "linux-gcc-shipping" }
     ],
     "testPresets":
     [
@@ -207,6 +218,10 @@
         },
         { "name": "linux-gcc-release",
           "configurePreset": "linux-gcc-release",
+          "output": { "outputOnFailure": true }
+        },
+        { "name": "linux-gcc-relwithdebinfo",
+          "configurePreset": "linux-gcc-relwithdebinfo",
           "output": { "outputOnFailure": true }
         },
         { "name": "linux-gcc-asan",

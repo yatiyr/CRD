@@ -1352,7 +1352,10 @@ crd::usize ResourceManager::poll_hot_reload(crd::u32 debounce_ms)
 
         const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
             now - watch.pending_since).count();
-        if (debounce_ms > 0U && elapsed_ms < static_cast<decltype(elapsed_ms)>(debounce_ms))
+        // Cast to the underlying integer type rather than `decltype(elapsed_ms)` —
+        // the latter carries the `const` qualifier from the variable declaration,
+        // which trips GCC's `-Wignored-qualifiers` (and `-Werror` on CI).
+        if (debounce_ms > 0U && elapsed_ms < static_cast<std::chrono::milliseconds::rep>(debounce_ms))
         {
             continue;
         }

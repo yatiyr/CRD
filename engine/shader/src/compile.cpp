@@ -46,24 +46,60 @@ struct ShadercApi
     ResultLength        result_length         = nullptr;
 };
 
-[[nodiscard]] fs::Path shaderc_library_path() noexcept
+// shaderc ships under different SONAMEs depending on where it came from:
+//   - Vulkan SDK (Windows / Linux .tar.gz / macOS):  shaderc_shared.{dll,so,dylib}
+//   - Ubuntu / Debian `libshaderc-dev`:               libshaderc.so / libshaderc.so.1
+//   - Conda / vcpkg / homebrew:                       libshaderc.so or libshaderc_combined.a
+//
+// We probe a small list of candidates per OS so the engine works on both
+// SDK-installed and distro-packaged shaderc without manual symlinks.
+[[nodiscard]] crd::platform::DynamicLibrary try_open_shaderc() noexcept
 {
+    auto try_open = [](const fs::Path& p) {
+        return crd::platform::DynamicLibrary::open(p);
+    };
+
 #if CRD_OS_WINDOWS
     char*       sdk = nullptr;
     std::size_t len = 0;
     const errno_t rc = _dupenv_s(&sdk, &len, "VULKAN_SDK");
     if (rc == 0 && sdk != nullptr && sdk[0] != '\0')
     {
-        fs::Path path = fs::Path(sdk) / "Bin" / "shaderc_shared.dll";
+        fs::Path sdk_path = fs::Path(sdk) / "Bin" / "shaderc_shared.dll";
         free(sdk);
-        return path;
+        auto lib = try_open(sdk_path);
+        if (lib.is_valid())
+        {
+            return lib;
+        }
     }
-    free(sdk);
-    return fs::Path("shaderc_shared.dll");
+    else
+    {
+        free(sdk);
+    }
+    return try_open(fs::Path("shaderc_shared.dll"));
 #elif CRD_OS_LINUX
-    return fs::Path("libshaderc_shared.so");
+    const char* const candidates[] = {
+        "libshaderc_shared.so",   // Vulkan SDK convention
+        "libshaderc.so.1",        // Ubuntu / Debian (libshaderc1 package)
+        "libshaderc.so",          // Ubuntu / Debian dev symlink
+    };
+    for (const char* name : candidates)
+    {
+        auto lib = try_open(fs::Path(name));
+        if (lib.is_valid())
+        {
+            return lib;
+        }
+    }
+    return crd::platform::DynamicLibrary{};
 #else
-    return fs::Path("libshaderc_shared.dylib");
+    auto lib = try_open(fs::Path("libshaderc_shared.dylib"));
+    if (lib.is_valid())
+    {
+        return lib;
+    }
+    return try_open(fs::Path("libshaderc.dylib"));
 #endif
 }
 
@@ -86,7 +122,7 @@ class ShadercLoader
 public:
     ShadercLoader()
     {
-        m_lib = crd::platform::DynamicLibrary::open(shaderc_library_path());
+        m_lib = try_open_shaderc();
         if (!m_lib.is_valid())
         {
             return;

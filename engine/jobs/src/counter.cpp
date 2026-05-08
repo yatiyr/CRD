@@ -90,8 +90,26 @@ void CounterPool::release(Counter* counter) noexcept
 {
     CRD_ASSERT_MSG(m_initialized, "CounterPool::release called before init");
     CRD_ASSERT_MSG(counter != nullptr, "CounterPool::release: null pointer");
-    CRD_ASSERT_MSG(counter->waiters.load(std::memory_order_relaxed) == nullptr,
-                   "CounterPool::release: counter still has pending waiters");
+
+    // Waiters list may legitimately contain canceled nodes from the
+    // counter_wait ABA fast-path race: the waiter pushed itself, the value
+    // already matched target, so the waiter set canceled=true and returned
+    // without suspending. counter_decrement may not have exchanged-and-drained
+    // the list yet by the time we land here. The leftover canceled node is
+    // harmless — acquire() resets waiters=nullptr so the next user sees a
+    // clean list. The real-bug check is "is any waiter still parked on a fiber"
+    // (i.e. uncanceled), which would deadlock on resume.
+#if CRD_ENABLE_ASSERTS
+    {
+        const Waiter* w = counter->waiters.load(std::memory_order_acquire);
+        while (w != nullptr)
+        {
+            CRD_ASSERT_MSG(w->canceled.load(std::memory_order_acquire),
+                           "CounterPool::release: counter has a non-canceled waiter (fiber still parked)");
+            w = w->next.load(std::memory_order_relaxed);
+        }
+    }
+#endif
 
     const crd::u32 idx = counter->pool_index;
     crd::u64 head      = m_free_head.load(std::memory_order_relaxed);

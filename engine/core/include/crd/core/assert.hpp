@@ -85,3 +85,27 @@ int report_assert_failure(const char* expression, const char* file, int line, co
         CRD_DEBUGBREAK();                                                                                              \
     }                                                                                                                  \
     CRD_WHILE_FALSE
+
+
+/// "This branch should be unreachable" — debug-only assert.
+///
+/// Reports `msg` and breaks into the debugger when CRD_ENABLE_ASSERTS is set; no-op in Release.
+/// Use at unreachable switch defaults / programming-error branches where the runtime path
+/// either has a recovery (skip/continue/early-return) or genuinely cannot be reached.
+///
+/// Prefer over `CRD_ASSERT(false && "...")` — the latter trips MSVC C4127 (constant
+/// conditional) under /WX since the `if (!false)` test inside CRD_ASSERT folds to a constant.
+/// This macro has no constant test, so it is C4127-clean across MSVC / clang-cl / GCC.
+#if CRD_ENABLE_ASSERTS
+#define CRD_ASSERT_UNREACHABLE(msg)                                                                                    \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        if (::crd::detail::report_assert_failure("UNREACHABLE", __FILE__, __LINE__, msg) == 2)                         \
+        {                                                                                                              \
+            CRD_DEBUGBREAK();                                                                                          \
+        }                                                                                                              \
+    }                                                                                                                  \
+    CRD_WHILE_FALSE
+#else
+#define CRD_ASSERT_UNREACHABLE(msg) ((void)0)
+#endif

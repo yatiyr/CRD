@@ -33,7 +33,11 @@ target_compile_options(crd-imgui-vendor PRIVATE
 target_compile_definitions(crd-imgui-vendor PRIVATE GLFW_INCLUDE_NONE)
 
 set_target_properties(crd-imgui-vendor PROPERTIES
+    # Skip clang-tidy on third-party imgui sources. SKIP_LINTING is the
+    # CMake-3.27+ way; CXX_CLANG_TIDY="" works on every CMake ≥ 3.6 and is
+    # what actually disables tidy on CI runners with older CMake versions.
     SKIP_LINTING ON
+    CXX_CLANG_TIDY ""
     POSITION_INDEPENDENT_CODE ON
 )
 

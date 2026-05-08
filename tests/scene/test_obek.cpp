@@ -765,6 +765,7 @@ TEST_CASE("Distinct Inherit values get distinct pool entries", "[obek][inherit][
     // Two distinct values → two pool entries.
     const crd::scene::ComponentId cid = target.component_id<SharedData>();
     CHECK(target.sparse_storage().shared_pool_live_count(cid) == 2U);
+    unload_obek(res);
 }
 
 TEST_CASE("Refcount eviction: pool entry freed when last sharer destroyed",
@@ -953,6 +954,7 @@ TEST_CASE("revert_component restores Transform after runtime mutation", "[obek][
     // Revert the whole Transform — back to source bytes (5, 0, 0).
     target.revert_component(inst, 0U, crd::scene::kFourCC_Transform);
     CHECK(approx(target.get_component<Transform>(inst.entities[0])->translation.x, 5.0F));
+    unload_obek(res);
 }
 
 TEST_CASE("revert_field restores only the targeted byte range", "[obek][revert]")
@@ -983,6 +985,7 @@ TEST_CASE("revert_field restores only the targeted byte range", "[obek][revert]"
     CHECK(approx(t->translation.x, 1.0F));
     CHECK(approx(t->translation.y, 2.0F));
     CHECK(approx(t->translation.z, 3.0F));
+    unload_obek(res);
 }
 
 TEST_CASE("revert_all restores every entity's components", "[obek][revert]")
@@ -1011,6 +1014,7 @@ TEST_CASE("revert_all restores every entity's components", "[obek][revert]")
     target.revert_all(inst);
     CHECK(approx(target.get_component<Transform>(inst.entities[0])->translation.x, 10.0F));
     CHECK(approx(target.get_component<Transform>(inst.entities[1])->translation.x, 20.0F));
+    unload_obek(res);
 }
 
 TEST_CASE("unpack_obek reverts and severs the source link", "[obek][revert][unpack]")
@@ -1037,6 +1041,7 @@ TEST_CASE("unpack_obek reverts and severs the source link", "[obek][revert][unpa
     CHECK(inst.source == nullptr);
     // Reverted to source value (99 → 42).
     CHECK(approx(target.get_component<Transform>(inst.entities[0])->translation.x, 42.0F));
+    unload_obek(res);
 }
 
 TEST_CASE("unpack_obek_keep_overrides preserves current state", "[obek][revert][unpack]")
@@ -1061,6 +1066,7 @@ TEST_CASE("unpack_obek_keep_overrides preserves current state", "[obek][revert][
     CHECK(inst.source == nullptr);
     // Mutated value preserved (kept overrides).
     CHECK(approx(target.get_component<Transform>(inst.entities[0])->translation.x, 99.0F));
+    unload_obek(res);
 }
 
 TEST_CASE("enumerate_overrides exposes cook-time records", "[obek][revert][enumerate]")

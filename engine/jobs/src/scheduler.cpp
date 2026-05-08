@@ -81,7 +81,7 @@ void Scheduler::push(const crd::jobs::JobDecl& job)
         return;
     }
 
-    bool ok = false;
+    [[maybe_unused]] bool ok = false;
     switch (job.priority)
     {
     case crd::jobs::Priority::High:
@@ -112,7 +112,7 @@ void Scheduler::push_local(crd::u32 thread_index, const crd::jobs::JobDecl& job)
                    "Scheduler::push_local: thread_index out of range");
 
     ThreadState& ts = *m_thread_states[thread_index]; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-    bool ok = false;
+    [[maybe_unused]] bool ok = false;
     switch (job.priority)
     {
     case crd::jobs::Priority::High:   ok = ts.high.push(job);   break;

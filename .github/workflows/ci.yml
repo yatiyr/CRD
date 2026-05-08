@@ -199,7 +199,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        preset: [linux-gcc-debug, linux-gcc-release, linux-gcc-asan]
+        preset: [linux-gcc-debug, linux-gcc-release, linux-gcc-relwithdebinfo, linux-gcc-asan]
 
     steps:
       - name: Checkout

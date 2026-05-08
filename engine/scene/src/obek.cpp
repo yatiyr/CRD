@@ -933,7 +933,7 @@ ObekInstantiation World::instantiate_obek(const ObekResource& res,
         const crd::usize end = static_cast<crd::usize>(patch.field_offset) + patch.payload.size();
         if (end > info->size)
         {
-            CRD_ASSERT(false && "ObekOverride: field_offset + payload.size() exceeds component size");
+            CRD_ASSERT_UNREACHABLE("ObekOverride: field_offset + payload.size() exceeds component size");
             ++result.overrides_skipped;
             continue;
         }

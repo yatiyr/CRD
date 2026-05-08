@@ -256,7 +256,10 @@ struct CapturedAssert
 
 CapturedAssert g_capture;
 
-int noop_assert_platform_handler(const char* formatted_message) noexcept
+// In Release builds (CRD_RELEASE defined → CRD_ENABLE_ASSERTS == 0), the test
+// case below short-circuits before this handler is referenced, so the symbol
+// would otherwise trip GCC's -Wunused-function under -Werror.
+[[maybe_unused]] int noop_assert_platform_handler(const char* formatted_message) noexcept
 {
     (void)formatted_message;
     return 0;
