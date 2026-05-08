@@ -2,9 +2,9 @@
 
 The Scene / ECS foundation. Entities, components, relations, queries, systems, and the index slot framework that makes the architecture extensible. Every Phase 3.x onwards consumes it.
 
-**Phase 3.0 active.** v1a (entity identity, 2026-05-06), v1b (component registry + trait grammar, 2026-05-07), v1c1 (chunk machinery, 2026-05-07), v1c2 (archetype graph + bytewise entity move + `ArchetypeChunkStorage` + `IStorageEventSink` lifecycle hooks + typed `World::add_component<T>`, 2026-05-07) all shipped. **The engine has its first real "entity owns components" capability.** 11 of 14 slices remaining; v1d (SparseSet escape-hatch backend) is next.
+**Phase 3.0 active.** v1a–v1m all shipped 2026-05-06 / 07 / 08. **v1m (Öbek system) FULLY DELIVERED 2026-05-08** across 12 sub-slices (~2700 LOC, 58 öbek tests; ADR-0058 fully realised). Phase 3.0 expanded from 14 to 17 slices on 2026-05-08 to land the elite-tier authoring substrate (Öbek + Preset + Profile). 3 slices remaining: v1n (Preset + Profile, ADRs 0059/0060), v1o (sandbox integration), v1p (reserved-slot + API freeze).
 
-Depends on `crd-core` + `crd-containers` + `crd-memory`. Future slices link `crd-jobs` (parallel queries), `crd-resources` (`SceneLoader`), and feed `crd-renderer` (extract via query). ADR-0020 cornerstone; ADRs 0049–0057 lock the eight layers.
+Depends on `crd-core` + `crd-containers` + `crd-memory`. Links `crd-resources` (SceneLoader / ObekLoader); `crd-cooker` extended with SceneCooker + ObekCooker. Future slices link `crd-jobs` (parallel queries) and feed `crd-renderer` (extract via query). ADR-0020 cornerstone; ADRs 0049–0057 lock the eight layers; ADRs 0058 (Öbek) / 0059 (Preset) / 0060 (Profile) lock the authoring substrate.
 
 ## Status
 
@@ -14,18 +14,19 @@ Depends on `crd-core` + `crd-containers` + `crd-memory`. Future slices link `crd
 | v1b | `ComponentRegistry` + `IStorageBackend` + storage-hint registration grammar | ✅ shipped 2026-05-07 |
 | v1c1 | Chunk allocator + SoA layout + per-chunk version-counter array | ✅ shipped 2026-05-07 |
 | v1c2 | Archetype + ArchetypeGraph + ArchetypeChunkStorage + IStorageEventSink + typed World API | ✅ shipped 2026-05-07 |
-| v1d | `SparseSetStorage` (escape hatch for high-churn / sparse / lookup-dominated components) | ⏳ next |
-| v1d | `SparseSetStorage` (escape hatch for high-churn / sparse / lookup-dominated components) | ⏳ |
-| v1e | Mixed-backend chunk visitor (queries walk Archetype + SparseSet uniformly) | ⏳ |
-| v1f | Relations (`Relation<Tag>` + built-in `ChildOf`, `AttachedTo`) | ⏳ |
-| v1g | Query DSL (`world.query<Cs...>().with<>()...`, range-for, `par_each`) | ⏳ |
-| v1h | System + Schedule (phase-ordered serial v1; auto-parallel reserved) | ⏳ |
-| v1i | Index framework + `ChangeDetectIndex` + `AsyncAwareIndex` | ⏳ |
-| v1j | `Transform` component + `TransformPropagation` system | ⏳ |
-| v1k | `SceneResource` + `SceneLoader` (FourCC `'SCEN'`, CRDR artifact) | ⏳ |
-| v1l | `cook_scene` cooker handler (`.scene.toml` → SCEN CRDR) | ⏳ |
-| v1m | Sandbox renderer integration (replace explicit `Renderer::submit` with `world.query<...>().par_each`) | ⏳ |
-| v1n | Reserved-slot freeze (`History`, `SpatialBVH`, `GpuResident`, `Replication`, `Reflection`, `ScriptComponent`) | ⏳ |
+| v1d | `SparseSetStorage` (escape hatch for high-churn / sparse / lookup-dominated components) | ✅ shipped 2026-05-07 |
+| v1e | Mixed-backend chunk visitor (queries walk Archetype + SparseSet uniformly) | ✅ shipped 2026-05-07 |
+| v1f | Relations + 6 built-ins (ChildOf / AttachedTo / Owns / Targets / DependsOn / PossessedBy) + ReverseIndex / Acyclic / OnTargetDestroyed traits | ✅ shipped 2026-05-07 |
+| v1g | Query DSL (`world.query<Cs...>().with<>().without<>().with_relation<>().filter()`, range-for, chunk visitor) | ✅ shipped 2026-05-07 |
+| v1h | System + Schedule + Commands (`ISystem`, 7-phase fixed schedule, `step` / `step_fixed`, deferred-mutation `Commands` flushed at phase boundaries) | ✅ shipped 2026-05-07 |
+| v1i | Index framework + `ChangeDetectIndex` + `AsyncAwareIndex` + 5 reserved no-op shells (History / SpatialBVH / GpuResident / Replication / Reflection); `.changed<T>()` / `.skip_pending<T>()` operators | ✅ shipped 2026-05-07 |
+| v1j | `Transform` (TRS + cached world) + `TransformPropagation` (PreRender phase) + 6 rotation-set APIs + `set_world` / `try_set_world` + cross-domain robust + bit-exact deterministic | ✅ shipped 2026-05-07 |
+| v1k | `SceneResource` + `SceneLoader` (FourCC `'SCEN'`) + `SceneArtifactBuilder` + `World::instantiate_scene` + 6 built-in relations get serialize traits | ✅ shipped 2026-05-07 |
+| v1l | `cook_scene` cooker handler (`.scene.toml` → SCEN CRDR; `crd-cooker` SceneCooker; cooker-side TransformPropagation bakes world matrices) | ✅ shipped 2026-05-08 |
+| v1m | **Öbek system** — full ADR-0058 surface (12 sub-slices: substrate / overrides + OCHN / full ObekCooker / InheritPolicy + DontInherit / Inherit transparent CoW backend / revert + unpack + AAAA reservations) | ✅ shipped 2026-05-08 |
+| v1n | **Preset + Profile system** — `PresetResource` + per-type `PresetLoader` + `QualityPreset` (`'PRQL'`) + `CameraPreset` (`'PRCM'`); `ProfileResolver` with closed predicates + additive composition; ADRs 0059 / 0060 | ⏳ next |
+| v1o | **Sandbox renderer integration with Öbek + Preset + Profile** — sandbox loads `.scene.toml` referencing öbeks; profile auto-resolves at boot; ImGui live override panel | ⏳ |
+| v1p | **Reserved-slot freeze** — registration grammar test for L6/L7/L8 reserved indexes; öbek/preset/profile API surface frozen; closes Phase 3.0 | ⏳ |
 
 ## The eight-layer architecture
 

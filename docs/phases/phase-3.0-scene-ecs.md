@@ -1,7 +1,7 @@
 # Phase 3.0 — Scene / ECS Foundation
 
-**Status:** 🚧 active — v1a–v1l shipped 2026-05-06 / 07 / 08; phase expanded from 14 to **17 slices** (2026-05-08) to land the elite-tier authoring substrate (Öbek + Preset + Profile) before Phase 3.0 closes. Next: v1m (Öbek system).
-**ADRs:** ADR-0049, ADR-0050, ADR-0051, ADR-0052, ADR-0053, ADR-0054, ADR-0055, ADR-0056, ADR-0057, **ADR-0058 (Öbek), ADR-0059 (Preset), ADR-0060 (Profile)**
+**Status:** 🚧 active — v1a–v1m shipped 2026-05-06 / 07 / 08; phase expanded from 14 to **17 slices** (2026-05-08) to land the elite-tier authoring substrate (Öbek + Preset + Profile) before Phase 3.0 closes. **v1m (Öbek system) FULLY DELIVERED 2026-05-08** across 12 sub-slices (~2700 LOC, 58 öbek tests). Next: **v1n (Preset + Profile system)**, then v1o (sandbox integration), then v1p (reserved-slot freeze).
+**ADRs:** ADR-0049, ADR-0050, ADR-0051, ADR-0052, ADR-0053, ADR-0054, ADR-0055, ADR-0056, ADR-0057, **ADR-0058 (Öbek)** ✅ realised, **ADR-0059 (Preset), ADR-0060 (Profile)** ⏳ next slice
 **Cornerstone:** ADR-0020 (scene/ECS hybrid, UI in tree)
 **New module:** `crd-scene` (bootstrapped 2026-05-06)
 **Depends on:** Phase 2.8 complete (MaterialResource with PSO state + pass-keyed variants)
@@ -33,10 +33,19 @@ This is the **highest-leverage single block of work in the engine**. Every Phase
 | v1j | Transform (TRS + cached world) + TransformPropagation system in PreRender; `TransformDirtyFlag` SparseSet marker; six rotation-set APIs (quat/axis_angle/euler/from_to/look_at/quat_unnormalized); `set_world` / `try_set_world` with negative-determinant handling; cross-domain robust (games/robotics/aerospace/DAW); determinism bit-exact verified | ✅ shipped 2026-05-07 — `docs/sessions/2026-05-07-scene-v1j-transform-propagation.md` |
 | v1k | SceneResource + SceneLoader (FourCC `'SCEN'`) + SceneArtifactBuilder + `World::instantiate_scene` + 6 built-in relations get serialize traits; forward-compat by FourCC, hard-fail on size/version mismatch; determinism bit-exact verified | ✅ shipped 2026-05-07 — `docs/sessions/2026-05-07-scene-v1k-scene-resource.md` |
 | v1l | `cook_scene` cooker handler — `crd-cooker` extended with `SceneCooker` + `scene_cooker_inline()`; built-in TOML readers (Transform + 6 built-in relations); three-pass cooker (collect → apply alphabetical → install relations); cooker-side `TransformPropagation::step()` bakes world matrices into SCEN bytes; determinism bit-exact verified | ✅ shipped 2026-05-08 — `docs/sessions/2026-05-08-scene-v1l-cooker.md` |
-| v1m | **Öbek system** — `ObekResource` + `ObekLoader` (FourCC `'OBEK'`) + `ObekArtifactBuilder`; full cooker (rides on v1l SceneCooker); `extends` chain + nested öbek composition + cycle detection; override patches with stable file_idx + symbolic name fallback; `World::instantiate_obek` + sub-instantiation API + batch API; **all three `InheritPolicy` values** (Override / Inherit-CoW / DontInherit) with backend storage CoW write interception; per-instance ADD + soft-DELETE; apply/revert at four granularities; unpack semantics; hot-reload graph-aware; **AAAA-tier format reservations** (OBAT batch / OLNK lazy / replication / streaming.lod / static_bake); `ObekEntityGuid` 64-bit cross-machine identity; `obekc extract` CLI tool | ⏳ next |
-| v1n | **Preset + Profile system** — `PresetResource` + per-type `PresetLoader` + `PresetRegistry`; first concrete types `QualityPreset` (`'PRQL'`) + `CameraPreset` (`'PRCM'`) wired into `IRenderPath` and `Camera`; `extends` chain (shares Öbek resolver); five-layer resolution stack (default → extends → preset → instance → runtime); `ProfileResolver` with closed typed predicates (os / gpu_tier / domain / mode / target_fps / cpu_cores); additive profile composition (priority-sorted stack, Cerid-unique vs Unreal first-match-wins); runtime context detection; hot-reload + atomic swap | ⏳ |
-| v1o | **Sandbox renderer integration with Öbek + Preset + Profile** — sandbox loads a `.scene.toml` referencing öbeks; profile auto-resolves at boot; renderer driven by applied `QualityPreset` + `CameraPreset`; ImGui panel toggles profile + reverts overrides live; visual proof of the full authoring stack; ships demo `default.profile.toml` with game / sim / DAW / cinematic baselines (originally planned as v1m) | ⏳ |
-| v1p | **Reserved-slot freeze** — registration grammar test for L6/L7/L8 reserved indexes (Replication / ScriptComponent / Reflection trait acceptance); öbek/preset/profile API surface frozen; closes Phase 3.0 (originally planned as v1n) | ⏳ |
+| v1m | **Öbek system** — full ADR-0058 surface: `ObekResource` + `ObekLoader` (FourCC `'OBEK'`) + `ObekArtifactBuilder`; full `ObekCooker` (rides v1l SceneCooker, ~70% reuse); `extends` chain + nested öbek composition + cycle detection; runtime override patches with stable file_idx + symbolic name fallback + cook-time `overrides=[...]` → OOVR; `World::instantiate_obek` (+ batch API) with parent reparenting; **all three `InheritPolicy` values** (Override / Inherit-CoW with content-hash dedup / DontInherit); revert at four granularities (field/component/entity/all) + unpack/unpack_keep_overrides + enumerate_overrides; AAAA reservations (OBAT/OLNK FourCCs, ReplicationMode, streaming.lod/region, static_bake, ObekEntityGuid); 12 sub-slices, ~2700 LOC, 58 tests | ✅ shipped 2026-05-08 (12 sub-slices) — see v1m sub-table below |
+| v1m1 | Öbek substrate — ObekResource + ObekLoader + ObekArtifactBuilder + World::instantiate_obek with parent reparenting; CRDR layout OINF/OETB/OCMP/D###/ORLS; ObekEntityGuid (FNV-1a 64) | ✅ shipped 2026-05-08 — `docs/sessions/2026-05-08-scene-v1m1-obek-substrate.md` |
+| v1m2 | Runtime ObekOverride + bounds-check + symbolic-name fallback; OCHN format substrate (ObekChainEntryRecord + add_chain_dependency + chunk emit/parse) | ✅ shipped 2026-05-08 — `docs/sessions/2026-05-08-scene-v1m2-overrides-and-ochn.md` |
+| v1m3a | ObekCooker class + `obek_cooker_inline` (TOML → flat OBEK CRDR; reader registry shared with SceneCooker) | ✅ shipped 2026-05-08 — `docs/sessions/2026-05-08-scene-v1m3a-obek-cooker-substrate.md` |
+| v1m3b | `extends` chain resolution: iterative walk, cycle detection, deepest-first apply, OCHN entries | ✅ shipped 2026-05-08 — `docs/sessions/2026-05-08-scene-v1m3b-extends-chain.md` |
+| v1m3c | Nested öbek refs (`obek = "..."`); recursive walk_and_apply_chain; ChildOf splice; nested name scoping | ✅ shipped 2026-05-08 — `docs/sessions/2026-05-08-scene-v1m3c-nested-obek.md` |
+| v1m3d | Cook-time `overrides = [...]` → OOVR chunk; auto-applied at instantiate before caller patches | ✅ shipped 2026-05-08 — `docs/sessions/2026-05-08-scene-v1m3d-cook-time-overrides.md` |
+| v1m4 | InheritPolicy enum + apply_trait dispatch; DontInherit fully implemented; Inherit-as-stub | ✅ shipped 2026-05-08 — `docs/sessions/2026-05-08-scene-v1m4-inherit-policy.md` |
+| v1m4b | InheritPolicy::Inherit transparent CoW backend (3 sub-slices: SharedComponentPool / per-slot ownership + force-SparseSet / content-hash dedup); demonstrated 2× memory savings on "1000 trees from same öbek" pattern | ✅ shipped 2026-05-08 — `docs/sessions/2026-05-08-scene-v1m4b-cow-backend.md` |
+| v1m5 | revert/unpack/enumerate APIs (`ObekInstantiation::source` + revert_field/component/entity/all + unpack_obek + unpack_obek_keep_overrides + enumerate_overrides) + AAAA-tier batch reservations (BatchHints + BatchInstanceTag + ObekBatchHandle + instantiate_obek_batch) | ✅ shipped 2026-05-08 — `docs/sessions/2026-05-08-scene-v1m5-revert-batch.md` |
+| v1n | **Preset + Profile system** — `PresetResource` + per-type `PresetLoader` + `PresetRegistry`; first concrete types `QualityPreset` (`'PRQL'`) + `CameraPreset` (`'PRCM'`) wired into `IRenderPath` and `Camera`; `extends` chain (shares Öbek resolver); five-layer resolution stack (default → extends → preset → instance → runtime); `ProfileResolver` with closed typed predicates (os / gpu_tier / domain / mode / target_fps / cpu_cores); additive profile composition (priority-sorted stack, Cerid-unique vs Unreal first-match-wins); runtime context detection; hot-reload + atomic swap | ⏳ next |
+| v1o | **Sandbox renderer integration with Öbek + Preset + Profile** — sandbox loads a `.scene.toml` referencing öbeks; profile auto-resolves at boot; renderer driven by applied `QualityPreset` + `CameraPreset`; ImGui panel toggles profile + reverts overrides live; visual proof of the full authoring stack; ships demo `default.profile.toml` with game / sim / DAW / cinematic baselines | ⏳ |
+| v1p | **Reserved-slot freeze** — registration grammar test for L6/L7/L8 reserved indexes (Replication / ScriptComponent / Reflection trait acceptance); öbek/preset/profile API surface frozen; closes Phase 3.0 | ⏳ |
 
 `crd-scene` now ships **the L4 scheduling half** per ADR-0052 §3-§5. `ISystem` has `Reads`/`Writes` `ComponentSet` type aliases (computed into masks via `World::component_set_mask<Set>()`) — auto-parallel scheduling reads them in Phase 3.5; v1h dispatches serially. The 7-phase schedule (PrePhysics → PostRender) runs systems in registration order within each phase. `step_fixed(dt, fixed_dt, max_substeps)` interleaves fixed-step systems N times then variable-rate once per phase, with accumulator carry-over and spiral-of-death clamp. `Commands` queues mutations during iteration and flushes at every phase boundary; spawn is immediate (single-threaded v1h), all other ops deferred. 172 unit tests / 34602 assertions; six-config green.
 
@@ -73,24 +82,24 @@ The architecture is "extensible from day one" because adding any future ECS exte
 | L2 ComponentRegistry + `IStorageBackend` interface | Full impl (interface only) | v1b ✅ shipped 2026-05-07 |
 | L2 Chunk machinery (ChunkLayout / ChunkHeader / Chunk / ChunkAllocator) | Full impl | v1c1 ✅ shipped 2026-05-07 |
 | L2 ArchetypeChunkStorage + ArchetypeGraph + IStorageEventSink + typed World API | Full impl | v1c2 ✅ shipped 2026-05-07 |
-| L2 SparseSetStorage | Full impl | v1d |
-| L3 Relations | Full impl + ChildOf, AttachedTo | v1f |
-| L4 Query DSL | Full impl | v1g |
-| L4 System + Schedule | Phase-based v1; auto-parallel reserved | v1h |
-| L5 Index framework | Full impl | v1i |
-| L5 ChangeDetect | Full impl (chunk-grain) | v1i |
-| L5 AsyncAware | Full impl | v1i |
-| L5 History\<N\> | API only — `at(frame)` returns current frame | v1n |
-| L5 SpatialBVH | API only — filters return full set | v1n |
-| L5 GpuResident | API only — no GPU mirror yet | v1n |
-| L6 Replication | API only — `Replication::*` accepted at registration | v1n |
-| L7 ScriptComponent type | API only — type defined, system is no-op | v1n |
-| L8 Reflection | Compile-time hooks reserved | v1n |
-| Transform component | Full impl + propagation system | v1j |
-| Scene serialization | TOML cooker + SCEN CRDR + SceneLoader | v1k–v1l |
-| **Öbek system** | Full impl — entity-graph templates with composition, variation, override patches, all three InheritPolicy values (CoW), batch API, format-reserved AAAA hooks | **v1m** |
-| **Preset + Profile system** | QualityPreset + CameraPreset; ProfileResolver with closed typed predicates; additive composition; hot-reload | **v1n** |
-| Renderer integration | Sandbox loads `.scene.toml` referencing öbeks; profile-driven preset application; ImGui live override panel | **v1o** |
+| L2 SparseSetStorage | Full impl | v1d ✅ shipped 2026-05-07 |
+| L3 Relations | Full impl + 6 built-ins (ChildOf, AttachedTo, Owns, Targets, DependsOn, PossessedBy) | v1f ✅ shipped 2026-05-07 |
+| L4 Query DSL | Full impl | v1g ✅ shipped 2026-05-07 |
+| L4 System + Schedule | 7-phase serial v1; auto-parallel reserved | v1h ✅ shipped 2026-05-07 |
+| L5 Index framework | Full impl | v1i ✅ shipped 2026-05-07 |
+| L5 ChangeDetect | Full impl (chunk-grain) | v1i ✅ shipped 2026-05-07 |
+| L5 AsyncAware | Full impl | v1i ✅ shipped 2026-05-07 |
+| L5 History\<N\> | API only — `at(frame)` returns current frame | v1p (freeze) |
+| L5 SpatialBVH | API only — filters return full set | v1p (freeze) |
+| L5 GpuResident | API only — no GPU mirror yet | v1p (freeze) |
+| L6 Replication | API only — `Replication::*` accepted at registration | v1p (freeze) |
+| L7 ScriptComponent type | API only — type defined, system is no-op | v1p (freeze) |
+| L8 Reflection | Compile-time hooks reserved | v1p (freeze) |
+| Transform component | Full impl + propagation system | v1j ✅ shipped 2026-05-07 |
+| Scene serialization | TOML cooker + SCEN CRDR + SceneLoader | v1k–v1l ✅ shipped 2026-05-07/08 |
+| **Öbek system** | **Full impl** — entity-graph templates with composition, variation, override patches (cook-time + runtime), all three InheritPolicy values including transparent CoW, revert at four granularities + unpack semantics, batch API, format-reserved AAAA hooks | **v1m ✅ shipped 2026-05-08 (12 sub-slices)** |
+| **Preset + Profile system** | QualityPreset + CameraPreset; ProfileResolver with closed typed predicates; additive composition; hot-reload | **v1n ⏳ next** |
+| Renderer integration | Sandbox loads `.scene.toml` referencing öbeks; profile-driven preset application; ImGui live override panel | **v1o ⏳** |
 
 ---
 
@@ -212,9 +221,9 @@ Storage-side `for_each_chunk` interface. The plumbing that lets queries (next sl
 
 **ADR:** 0055
 
-### v1m — Öbek system (~2000 LOC + ~30 tests, 6–8 days)
+### v1m — Öbek system ✅ shipped 2026-05-08 (12 sub-slices, ~2700 LOC, 58 öbek tests)
 
-The single largest slice in Phase 3.0. Ships the elite-tier entity-graph-template substrate per ADR-0058's 19 design pillars.
+The single largest slice in Phase 3.0. **Delivered the elite-tier entity-graph-template substrate per ADR-0058's 19 design pillars** across 12 reviewable sub-slices. See the v1m sub-table above for sub-slice-level status; the description below documents the design surface that shipped (not a forward plan). Two follow-ups deferred to post-Phase-3.0 task #108: hot-reload watcher with OCHN graph awareness + `obekc extract` CLI tool. Six-config 814/814 / 811 release post-v1m close.
 
 **Substrate:**
 - `crd::scene::Obek`, `ObekResource`, `ObekLoader` (FourCC `'OBEK'`), `ObekArtifactBuilder`.
@@ -370,7 +379,7 @@ Tests: registration accepts all traits without compilation error; deferred-impl 
 - **Async GPU upload** (`GpuUploader::upload_mesh_async` / `upload_texture_async`). Phase 2.8 v1g shipped CPU-side `load_async`, but GPU upload is still synchronous. Streaming scene loads will hit this hitch every time a scene mounts new geometry. The `AsyncAwareIndex` (Layer 5, Phase 3.0 v1i) provides the query-side filter; the GPU-side completion machinery still needs to be designed and shipped.
   - Full debt note: `docs/debt.md` → "Async GPU upload (`GpuUploader`)".
   - Open question: does `crd-scene` own the polling, or does each `RenderableComponent` carry an `UploadHandle` field that the renderer's `skip_pending<Renderable>` filter consults?
-  - Recommended decision: ship async upload as part of v1m (sandbox integration) — that is the first slice where streaming-load pressure becomes visible; design forced by real consumer.
+  - Recommended decision: ship async upload as part of v1o (sandbox integration) — that is the first slice where streaming-load pressure becomes visible; design forced by real consumer.
 
 ---
 
