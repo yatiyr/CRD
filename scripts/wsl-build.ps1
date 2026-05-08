@@ -59,10 +59,15 @@ $bashLines = @(
     # honouring an externally-set VULKAN_SDK if the user has another one.
     ': "${VULKAN_SDK:=$HOME/cerid-deps/vulkan-sdk}"'
     'export VULKAN_SDK'
+    # Mirror the CI workflow (.github/workflows/ci.yml) — runs the GLFW null
+    # platform path in tests that would otherwise need a real Wayland / X11
+    # session. Lets PlatformContext tests pass without a display.
+    'export CRD_PLATFORM_HEADLESS=1'
     "cd '$repoRootWsl'"
     'echo "[wsl-build] gcc=$(gcc --version | head -1)"'
     'echo "[wsl-build] cmake=$(cmake --version | head -1)"'
     'echo "[wsl-build] VULKAN_SDK=$VULKAN_SDK"'
+    'echo "[wsl-build] CRD_PLATFORM_HEADLESS=$CRD_PLATFORM_HEADLESS"'
     'echo "[wsl-build] ===== configure ====="'
 )
 
