@@ -27,11 +27,13 @@ crd_enable_default_pch(crd-sandbox)
 
 # ── cook-demo-assets ────────────────────────────────────────────────────────
 # Cooks committed glTF/PNG demo assets from assets/source/ into a single PACK
-# at assets/cooked/demo_assets.crdr. crd-sandbox depends on this target so the
-# pack is regenerated automatically when source assets change.
+# at <exe_dir>/assets/cooked/demo_assets.crdr (i.e. next to the executable in
+# the build tree). The sandbox resolves the path at runtime via
+# crd::platform::fs::executable_dir(), so the build/<preset>/sandbox/ folder is
+# self-contained and shippable. The repo source tree never holds cook output.
 
 set(DEMO_ASSETS_SRC_DIR "${CMAKE_SOURCE_DIR}/assets/source")
-set(DEMO_ASSETS_OUT_DIR "${CMAKE_SOURCE_DIR}/assets/cooked")
+set(DEMO_ASSETS_OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/assets/cooked")
 set(DEMO_ASSETS_PACK    "${DEMO_ASSETS_OUT_DIR}/demo_assets.crdr")
 
 # Glob source files explicitly so add_custom_command's DEPENDS triggers a recook
@@ -58,8 +60,11 @@ add_custom_command(
 add_custom_target(cook-demo-assets DEPENDS "${DEMO_ASSETS_PACK}")
 add_dependencies(crd-sandbox cook-demo-assets)
 
+# Sandbox computes the pack path at runtime as `executable_dir() / kDemoAssetsRelPack`.
+# The relative form is exposed as a compile definition so the C++ side stays
+# free of a hardcoded string.
 target_compile_definitions(crd-sandbox PRIVATE
-    CRD_DEMO_ASSETS_PACK="${DEMO_ASSETS_PACK}"
+    CRD_DEMO_ASSETS_REL_PACK="assets/cooked/demo_assets.crdr"
 )
 
 # Copy imgui config so the sandbox can find it at runtime.

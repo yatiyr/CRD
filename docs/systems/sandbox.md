@@ -55,7 +55,7 @@ The imported-assets branch is best-effort. If the cooked pack is missing, or a `
 
 ## Cook target
 
-`sandbox/CMakeLists.txt` declares `cook-demo-assets`, an `add_custom_command(OUTPUT demo_assets.crdr)` that runs `asset_cooker cook --root assets/source --out assets/cooked/demo_assets.crdr`. The DEPENDS list is the explicit set of source files plus the `asset_cooker` target, so the pack rebuilds whenever any source asset changes. `crd-sandbox` declares `add_dependencies(crd-sandbox cook-demo-assets)` and reads `CRD_DEMO_ASSETS_PACK` (a compile def carrying the absolute path) at runtime.
+`sandbox/CMakeLists.txt` declares `cook-demo-assets`, an `add_custom_command(OUTPUT demo_assets.crdr)` that runs `asset_cooker cook --root assets/source --out <build_dir>/sandbox/assets/cooked/demo_assets.crdr` — i.e. the pack lands **next to the executable** (`build/<preset>/sandbox/`), so `build/<preset>/sandbox/` is a self-contained shippable folder. The DEPENDS list is the explicit set of source files plus the `asset_cooker` target, so the pack rebuilds whenever any source asset changes. `crd-sandbox` declares `add_dependencies(crd-sandbox cook-demo-assets)` and resolves the pack at runtime as `crd::platform::fs::executable_dir() / CRD_DEMO_ASSETS_REL_PACK` (where `CRD_DEMO_ASSETS_REL_PACK = "assets/cooked/demo_assets.crdr"` — a compile def carrying only the relative path; no compile-time absolute paths bake into the binary).
 
 ---
 

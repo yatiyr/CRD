@@ -1,4 +1,0 @@
-# Cooked artifacts are produced by the `cook-demo-assets` CMake target from the
-# committed source assets in `assets/source/`. They are not committed to git.
-*
-!.gitignore

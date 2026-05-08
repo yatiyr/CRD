@@ -3,6 +3,7 @@
 #include <crd/imgui/imgui_layer.hpp>
 #include <crd/imgui/log_channel.hpp>
 #include <crd/log/log.hpp>
+#include <crd/platform/filesystem.hpp>
 #include <crd/rhi/vulkan_native.hpp>
 
 // ImGui backend headers contain C-style casts that trigger -Wconversion on GCC.
@@ -185,6 +186,23 @@ void ImGuiLayer::on_attach()
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
+
+    // Pin imgui.ini next to the executable so the repo root stays clean.
+    // ImGui requires the IniFilename pointer to outlive the context, so we own the storage.
+    {
+        const auto exe_dir = crd::platform::fs::executable_dir();
+        if (!exe_dir.empty())
+        {
+            const auto ini = exe_dir / crd::containers::StringView{"imgui.ini"};
+            m_ini_path = crd::containers::String{ini.generic()};
+        }
+        else
+        {
+            m_ini_path = crd::containers::String{crd::containers::StringView{"imgui.ini"}};
+        }
+        io.IniFilename = m_ini_path.c_str();
+    }
+
     if (m_settings.docking)
     {
         io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;

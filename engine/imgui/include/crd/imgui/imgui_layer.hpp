@@ -3,6 +3,7 @@
 #include <crd/app/application.hpp>
 #include <crd/app/layer.hpp>
 #include <crd/config/config.hpp>
+#include <crd/containers/string.hpp>
 #include <crd/imgui/settings.hpp>
 #include <crd/rhi/rhi.hpp>
 
@@ -41,5 +42,6 @@ private:
     Settings m_settings{};
     void* m_descriptor_pool = nullptr;
     bool m_attached = false;
+    crd::containers::String m_ini_path{}; // backing storage for ImGuiIO::IniFilename
 };
 } // namespace crd::imgui

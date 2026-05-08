@@ -256,8 +256,14 @@ void SandboxLayer::register_procedural_assets()
 
 void SandboxLayer::try_register_imported_assets()
 {
-#ifdef CRD_DEMO_ASSETS_PACK
-    const fs::Path pack_path(CRD_DEMO_ASSETS_PACK);
+#ifdef CRD_DEMO_ASSETS_REL_PACK
+    // Resolve the cooked pack relative to the executable so build/<preset>/sandbox/
+    // is self-contained. Avoids any compile-time absolute path baked into the binary.
+    const fs::Path exe_dir = fs::executable_dir();
+    const fs::Path pack_path = exe_dir.empty()
+        ? fs::Path(CRD_DEMO_ASSETS_REL_PACK)
+        : exe_dir / crd::containers::StringView{CRD_DEMO_ASSETS_REL_PACK};
+
     if (!fs::is_file(pack_path))
     {
         CRD_LOG_WARN(g_log_sandbox_layer,
@@ -335,7 +341,7 @@ void SandboxLayer::try_register_imported_assets()
     CRD_LOG_INFO(g_log_sandbox_layer, "Mounted demo asset pack '{}'", pack_path.generic().data());
 #else
     CRD_LOG_WARN(g_log_sandbox_layer,
-                 "CRD_DEMO_ASSETS_PACK not defined — imported assets unavailable");
+                 "CRD_DEMO_ASSETS_REL_PACK not defined — imported assets unavailable");
 #endif
 }
 

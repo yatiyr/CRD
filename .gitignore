@@ -30,23 +30,48 @@ CMakeFiles/
 compile_commands.json
 _deps/
 
-# OS Junk
+# OS junk
 .DS_Store
 Thumbs.db
 
-# Test-generated cook cache
+# Test / runtime temp dirs
 .crd_cook_test_tmp/
+.crd_platform_test_tmp/
+.crd_shader_cache_tests/
+.crd_shader_reload_smoke/
 
-# CI / diagnostic capture files
+# Ad-hoc captured runs (build/test/tidy stdout/stderr/logs)
+*.log
+*_stdout.txt
+*_stderr.txt
+
+# Ad-hoc one-shot scripts at repo root
+/build_*.bat
+/do_*.bat
+/run_*.bat
+
+# Test artifacts spilled to root
+test_pack_*.crdr
+
+# ASan / cooker / build diagnostic captures
+asan_err.txt
 asan_stdout.txt
 asan_stderr.txt
 
-# non necessary ai stuff
+# Crash dumps + review bundles + tooling caches
+crashes/
+review-bundle/
+.ruff_cache/
+
+# ImGui runtime state (lives next to executable now, not in repo root)
+imgui.ini
+
+# Cooked asset output (now in build/<preset>/runtime/assets/cooked)
+assets/cooked/
+
+# AI tooling — not part of repo
 .claude/
 CLAUDE.md
 CONTEXT.md
 AGENTS.md
 opencode.json
-
-run_*.bat
-test_pack_*.crdr
