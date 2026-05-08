@@ -5,6 +5,70 @@ move to a session log entry and remove from here.
 
 ## Active debt
 
+### Phase 3.0 v1m Öbek system — three deferred follow-ups (2026-05-08)
+
+The full Öbek system (ADR-0058) shipped across v1m1–v1m5b in twelve sub-slices. Three items were explicitly carved out as post-Phase-3.0 follow-ups so the v1m closure stayed focused.
+
+1. **Hot-reload watcher with OCHN graph awareness** (v1m5c) — the öbek format already emits OCHN entries listing every transitive dependency (extends + nested) with FNV-1a 64 source-byte content hashes. What's missing: a filesystem watcher that consumes OCHN, detects upstream changes, and triggers transitive re-cook + atomic ResourceManager swap (matching the existing shader hot-reload pattern). Lands when filesystem-watching infrastructure is established (likely Phase 7 editor or earlier if a content workflow needs it).
+
+2. **`obekc extract <source.obek.toml> --root <name> --output <new>` CLI tool** (v1m5c, ADR-0058 pillar 14 "Decompose") — extract a sub-graph rooted at a named entity into a new standalone `.obek.toml` file, with optional `--rewrite-source` to convert the original's inlined entities into a nested `obek = "..."` reference. Editor "make this a sub-prefab" operation. Needs its own binary entry point under `tools/`. Defer until the editor (Phase 7) or a real content workflow surfaces the need.
+
+3. **InheritPolicy CoW: dense-buffer optimization** (v1m4b future) — v1m4b's CoW backend wastes `sizeof(component)` bytes per shared slot in the dense buffer (the bytes are unused for shared slots; only used after CoW write-break). For sizeof(component) >> sizeof(pool_idx), this dilutes the memory savings. A future optimization could allocate dense bytes lazily per-slot (e.g., a separate "owned slots only" dense buffer indexed by per-entity offset). Acceptable trade-off at v1m4b — pool-side dedup still gives N→1 sharing across instances, which is the dominant savings axis for the canonical "10k tree forest" workload.
+
+**Where referenced:**
+- `engine/scene/include/crd/scene/obek.hpp` — doc-block at the top of the file points at this debt entry.
+- `docs/sessions/2026-05-08-scene-v1m5-revert-batch.md` — v1m closure session log.
+- `docs/sessions/2026-05-08-scene-v1m4b-cow-backend.md` — pin #8 about wasted dense-buffer bytes.
+
+---
+
+### Phase 3.0 v1l cook_scene cooker — eight deferred follow-ups (2026-05-08)
+
+`SceneCooker` + `scene_cooker_inline()` + `Transform`/six-relation built-in TOML readers + cooker-side propagation bake shipped in v1l. The authoring layer is in place; the following items are explicitly out of v1l scope.
+
+1. **asset_cooker file-handler integration** — v1l ships the `SceneCooker` API but not the `.scene.toml` extension dispatcher. `tools/asset_cooker/src/cook_command.cpp`'s extension router does not yet route `.scene.toml` to `SceneCooker::cook_inline`. v1m (sandbox) or earliest content workflow will wire it; the API is ready and tested.
+
+2. **Hierarchical entity addressing** — `[entity.player.weapon]` is rejected at cook time (test case in `test_scene_cooker.cpp`). A first-class child-as-nested-table syntax with cycle detection would simplify deep hierarchies; deferred to v1m+ once the sandbox surfaces a real authoring need.
+
+3. **Per-instance prefab overrides** (v1k debt #5 reframed) — TOML `extends = "base.scene.toml"` with override blocks. The cooker is the right layer (instantiation-time merge). Reserved.
+
+4. **Multi-file scene composition** — `[include = "level/region_a.scene.toml"]` recursive include with hot-reload-aware dependency tracking. Reserved for the streaming-load era (Phase 3.5+).
+
+5. **Hot-reload of `.scene.toml`** — TOML watcher → recook → `SceneLoader.reload`. Same pattern as shader hot-reload but at the cooker layer. Reserved until the editor needs it.
+
+6. **TOML schema migration** — when a component bumps its FourCC version, TOML migration tables let old `.scene.toml` files cook correctly without manual edits. Pairs with v1k debt #3 (binary-side migration).
+
+7. **Compressed SCEN at the cooker** (v1k debt #7 picked up here) — CRDR supports zstd-compressed chunks (chunk-flag bit 0). v1l emits uncompressed. Multi-MB scenes will benefit; one-line flip in `SceneArtifactBuilder` once the cooker has size-based heuristics.
+
+8. **Big-endian cooker output** (v1k debt #6 picked up here) — v1l SCEN is little-endian per CRDR. Cross-platform byte-order swap at cook time is a v1n+ concern.
+
+**Where referenced:**
+- `tools/asset_cooker/include/crd/cooker/scene_cooker.hpp` — doc-block points at this debt entry.
+- `docs/sessions/2026-05-08-scene-v1l-cooker.md` — full session log with the propagation-bake fix and decisions.
+
+---
+
+### Phase 3.0 v1k SceneResource — seven deferred follow-ups (2026-05-07)
+
+`SceneResource` + `SceneLoader` + `SceneArtifactBuilder` shipped in v1k. The persistence layer is in place; the following items are explicitly out of v1k scope. (Item #1 of the original eight closed by v1l on 2026-05-08; items #6 big-endian and #7 compressed SCEN repointed to the cooker layer in v1l's debt list above.)
+
+1. **Streaming / incremental scene loading** — v1k loads-all-or-fail. Streaming visible-only entities (camera-frustum LOD, region-of-interest persistence) is Phase 3.5+. The current `SceneArtifactBuilder` filters at build time but the loader instantiates everything; partial-instantiation API is reserved.
+
+2. **Schema migration** between SCEN versions — `kSceneSchemaVersion = 1` is fixed. v1n+ adds migration tables (v1 → v2 → ... transformer functions) once a layout change is needed. Pairs with v1l debt #6 (TOML-side migration).
+
+3. **Entity-name lookup** post-load — finding a spawned entity by string name. Out of v1k scope; user-defined `Name` component or query-by-component is the path. v1m sandbox may want explicit name lookup; addressed there.
+
+4. **Per-instance component overrides** — prefab+override pattern (instantiate scene, then override specific component values per entity). v1k loads verbatim. Now reframed as v1l debt #3 (cooker is the right layer).
+
+5. **`World::mark_all_transforms_dirty()` helper** — convenience for callers loading a SCEN with stale world matrices who want propagation to re-derive. v1l's cooker bakes world matrices into SCEN bytes, so most callers no longer need this; the helper is still reserved if a use case appears.
+
+**Where referenced:**
+- `engine/scene/include/crd/scene/scene_resource.hpp` — doc-block points at this debt entry.
+- `docs/sessions/2026-05-07-scene-v1k-scene-resource.md` — full session log with the eight decisions.
+- `docs/sessions/2026-05-08-scene-v1l-cooker.md` — cooker session that closed item #1 and repointed #6/#7.
+
+---
+
 ### Phase 3.0 v1j Transform — seven deferred follow-ups (2026-05-07)
 
 `Transform` + `TransformPropagation` shipped in v1j with cross-domain robustness for games / robotics / aerospace / DAW. The following items are explicitly out of v1j scope; each has its own pickup phase or trigger condition.

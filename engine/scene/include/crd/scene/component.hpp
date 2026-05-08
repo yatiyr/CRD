@@ -119,6 +119,35 @@ enum class Replication : crd::u8
     Remote,              // read-only mirror of remote owner's state
 };
 
+// Per-component inheritance policy when an entity is spawned via
+// `World::instantiate_obek` (ADR-0058 pillar 5). Default Override matches
+// pre-v1m4 behavior — every spawned instance gets a private copy of the
+// component bytes.
+//
+// v1m4 ships:
+//   - `Override` — full impl (default; current behavior)
+//   - `DontInherit` — full impl (component skipped at instantiate; entity
+//                     spawns without the component, even if the source öbek
+//                     has it). Use case: runtime-only state (NetworkId,
+//                     LoadState, EditorSelectionFlag) that should never
+//                     cross the cook → instantiate boundary.
+//   - `Inherit` — API surface only; falls back to `Override` semantics in
+//                 v1m4. The transparent CoW backend (per-entity per-component
+//                 owned/shared flag in storage; copy-on-first-write; shared
+//                 backing pool with reference counting) lands in v1m4b when
+//                 actual memory pressure justifies the backend work. The
+//                 OBSERVABLE BEHAVIOR of Inherit IS Override — reading a
+//                 component returns a value, writing updates that entity's
+//                 copy without affecting siblings. CoW is purely an
+//                 optimization that conserves memory when many instances
+//                 share a static component (mesh, material, skeleton).
+enum class InheritPolicy : crd::u8
+{
+    Override    = 0, // default — private copy per instance
+    Inherit     = 1, // API-only stub in v1m4; full CoW in v1m4b
+    DontInherit = 2, // skipped during instantiate_obek
+};
+
 // ---- Trait markers ------------------------------------------------------
 // Empty / value structs accepted at registration. ADR-0053.
 
@@ -186,6 +215,9 @@ struct ComponentInfo
     crd::u8 history_window = 0;
 
     Replication replication = Replication::Local;
+
+    // ADR-0058 pillar 5. Default Override = unchanged from pre-v1m4 behavior.
+    InheritPolicy inherit_policy = InheritPolicy::Override;
 
     // Reserved trait records — accepted from day one (ADR-0056).
     ComponentSerialize serialize{};

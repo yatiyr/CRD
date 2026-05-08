@@ -13,6 +13,9 @@ add_executable(crd-scene-tests
     test_schedule.cpp
     test_index_framework.cpp
     test_transform.cpp
+    test_scene_resource.cpp
+    test_obek.cpp
+    test_shared_component_pool.cpp
     test_world_tlsf.cpp
 )
 

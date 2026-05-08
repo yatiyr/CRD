@@ -43,6 +43,10 @@ inline void apply_trait(ComponentInfo& info, Replication r) noexcept
 {
     info.replication = r;
 }
+inline void apply_trait(ComponentInfo& info, InheritPolicy p) noexcept
+{
+    info.inherit_policy = p;
+}
 inline void apply_trait(ComponentInfo& info, AsyncAware) noexcept
 {
     info.async_aware = true;
@@ -177,6 +181,18 @@ public:
         // Apply traits in argument order. Later traits override earlier ones
         // for fields that overlap (e.g. two StorageHints — last one wins).
         (detail::apply_trait(info, std::forward<Traits>(traits)), ...);
+
+        // ADR-0058 pillar 5 v1m4b: Inherit policy requires SparseSet storage
+        // (the CoW backend lives in SparseSetStorage::Pool). If the caller
+        // explicitly requested Archetype, override silently — Inherit's
+        // memory benefit dominates the storage-hint preference. Documented
+        // in component.hpp's InheritPolicy doc-block; tests verify the
+        // override.
+        if (info.inherit_policy == InheritPolicy::Inherit
+            && info.storage_hint == StorageHint::Archetype)
+        {
+            info.storage_hint = StorageHint::SparseSet;
+        }
 
         detail::capture_lifecycle_ops<T>(info);
 

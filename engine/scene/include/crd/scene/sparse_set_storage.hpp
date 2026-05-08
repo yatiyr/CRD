@@ -6,6 +6,7 @@
 #include <crd/scene/component.hpp>
 #include <crd/scene/component_registry.hpp>
 #include <crd/scene/entity.hpp>
+#include <crd/scene/shared_component_pool.hpp>
 #include <crd/scene/storage_backend.hpp>
 #include <crd/scene/storage_event_sink.hpp>
 
@@ -81,6 +82,26 @@ public:
     void for_each_chunk(ComponentMask required, ChunkVisitor fn, void* user_data) override;
     void on_entity_destroyed(EntityId e) override;
 
+    // ---- v1m4b2 — Inherit / shared-pool entry point --------------------
+    //
+    // Insert `e` with a SHARED component for `c`. The bytes at `data`
+    // are uploaded to the pool's SharedComponentPool exactly once;
+    // subsequent calls with byte-identical `data` (identified by a content
+    // hash; v1m4b3 adds the hash table) reuse the existing pool entry and
+    // bump its refcount. The entity's dense slot stores the pool_idx and
+    // is flagged as shared — read paths follow the pool indirection;
+    // write paths (v1m4b3) copy-on-first-write to break the share.
+    //
+    // Currently uses per-call acquisition (no cross-call dedup yet —
+    // v1m4b3 adds content-hash dedup so spawning N copies of the same
+    // öbek shares one pool entry across all N).
+    //
+    // Caller MUST ensure `c`'s component is registered with InheritPolicy::Inherit.
+    // The component's storage hint is forced to SparseSet at registration
+    // time so the pool lives here. Calling `insert_shared` for a
+    // non-Inherit component is a programming error (CRD_ASSERT in debug).
+    void insert_shared(EntityId e, ComponentId c, const void* data);
+
     // ---- Read accessor (mirror of ArchetypeChunkStorage::get_const) ----
 
     [[nodiscard]] const void* get_const(EntityId e, ComponentId c) const;
@@ -95,6 +116,11 @@ public:
 
     // Per-pool version counter — ChangeDetect (v1i) reads this. 0 if no pool.
     [[nodiscard]] crd::u64 pool_version(ComponentId c) const noexcept;
+
+    // v1m4b3 diagnostics — number of LIVE entries in the shared-pool for `c`.
+    // 0 if no pool, no shared_pool yet, or all entries released. Used by
+    // tests to verify dedup + refcount eviction.
+    [[nodiscard]] crd::u32 shared_pool_live_count(ComponentId c) const noexcept;
 
     // ---- Event sink wiring ---------------------------------------------
 
@@ -117,6 +143,15 @@ private:
         crd::u32    capacity = 0;                    // slots
         crd::u32    count = 0;                       // live slots
         crd::u64    version = 0;                     // bumped on insert / update / remove
+
+        // v1m4b2 — Inherit CoW backend.
+        // `shared_pool` is lazy-allocated on first call to `insert_shared`.
+        // `shared_pool_idx[d]` is `kInvalidPoolIdx` for owned slots (read
+        // bytes from `dense`); a valid idx means SHARED — the bytes live
+        // in `shared_pool` and the dense slot is unused.
+        // Parallel to `entities` array; resized in lockstep with grow_dense.
+        SharedComponentPool*             shared_pool = nullptr; // lazy
+        crd::containers::Array<crd::u32> shared_pool_idx;       // dense_idx -> pool_idx | kInvalidPoolIdx
 
         Pool(const ComponentInfo& i, crd::memory::IAllocator* a) noexcept;
         ~Pool();

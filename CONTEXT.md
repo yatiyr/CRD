@@ -11,7 +11,7 @@
 
 ## Current focus
 
-**Phase 3.0 — Scene/ECS foundation. v1a–v1j shipped 2026-05-06 / 07. Detour D-001 (memory infrastructure) closed 2026-05-07. v1j ships the FIRST CONCRETE `ISystem` consumer: `Transform` (TRS + cached world matrix) + `TransformPropagation` system in PreRender phase. Cross-domain robust per design (games / robotics / aerospace / DAW): six rotation-set APIs (quat / quat_unnormalized / axis_angle / euler with explicit ordering / from_to / look_at), set_world / try_set_world with negative-determinant CAD handling, determinism guaranteed and verified by bit-exact world-matrix hash test, kMaxTransformDepth=256 hierarchy depth check. Math layer extended with `EulerOrder` + `from_euler` + `from_to_rotation` + `from_trs` + `to_trs`. f64 escape hatch via `crd::math::Transformd` + custom component path (verified by v1n freeze). Seven follow-ups pinned in `docs/debt.md`. 4 slices remaining. Next: v1k — SceneResource + SceneLoader (loads cooked SCEN packs; populates entity-component graph; Transform / TransformPropagation get tested under streaming-load workflow).**
+**Phase 3.0 — Scene/ECS foundation. v1a–v1l shipped 2026-05-06 / 07 / 08. Detour D-001 (memory infrastructure) closed 2026-05-07. Phase **expanded from 14 to 17 slices** on 2026-05-08 to land the elite-tier authoring substrate (Öbek + Preset + Profile) inside Phase 3.0 — see ADR-0058 (Öbek), ADR-0059 (Preset), ADR-0060 (Profile). 5 slices remaining: v1m → v1n → v1o → v1p. Next: v1m — **Öbek system** (entity-graph templates with composition + variation + override patches + all three `InheritPolicy` values including transparent CoW + AAAA-tier format reservations for GPU instancing / streaming / replication / replay).**
 
 The architecture is the **eight-layer slot-shaped ECS** designed for million-entity scenes, agents-as-components-with-scripts, UI on the same machinery (game and editor), with every novel ECS extension as a registered slot:
 
@@ -32,7 +32,7 @@ L0 Memory · Containers · Jobs    (already shipped)
 
 Cerid signature: a uniform `IComponentIndex` extension framework where every novel ECS extension (history, change detect, spatial, GPU-mirror, async, replication, scripts, reflection) is a registered slot consuming the same component-lifecycle event stream. Adding the next extension is a one-day job.
 
-Slices: ~~v1a (Entity+SlotMap)~~ ✅ → ~~v1b (registry)~~ ✅ → ~~v1c1 (chunk allocator + layout)~~ ✅ → ~~v1c2 (graph + entity move + IStorageBackend impl + sink hooks)~~ ✅ → ~~v1d (SparseSet storage)~~ ✅ → ~~v1e (mixed-backend chunk visitor)~~ ✅ → ~~v1f (relations)~~ ✅ → ~~v1g (query DSL)~~ ✅ → ~~v1h (system+schedule)~~ ✅ → ~~v1i (index framework + ChangeDetect + AsyncAware)~~ ✅ → ~~v1j (Transform + propagation)~~ ✅ → **v1k (SceneResource+Loader)** ← active → v1l (cook_scene cooker handler) → v1m (sandbox renderer integration) → v1n (reserved-slot freeze).
+Slices: ~~v1a (Entity+SlotMap)~~ ✅ → ~~v1b (registry)~~ ✅ → ~~v1c1 (chunk allocator + layout)~~ ✅ → ~~v1c2 (graph + entity move + IStorageBackend impl + sink hooks)~~ ✅ → ~~v1d (SparseSet storage)~~ ✅ → ~~v1e (mixed-backend chunk visitor)~~ ✅ → ~~v1f (relations)~~ ✅ → ~~v1g (query DSL)~~ ✅ → ~~v1h (system+schedule)~~ ✅ → ~~v1i (index framework + ChangeDetect + AsyncAware)~~ ✅ → ~~v1j (Transform + propagation)~~ ✅ → ~~v1k (SceneResource+Loader)~~ ✅ → ~~v1l (cook_scene cooker handler)~~ ✅ → **v1m (Öbek system — composition + variation + InheritPolicy CoW + AAAA hooks)** ← active → v1n (Preset + Profile system) → v1o (sandbox renderer integration with Öbek + Preset + Profile) → v1p (reserved-slot freeze + API surface freeze).
 
 Active phase doc: `docs/phases/phase-3.0-scene-ecs.md`.
 
@@ -58,6 +58,16 @@ Full design packet: `docs/phases/phase-2.8-material-completion.md`.
 
 Aktif phase dosyası: `docs/phases/phase-2.8-material-completion.md` (active)
 
+## Coming up next — Phase 3.0 v1m–v1p (planned 2026-05-08, ADRs 0058/0059/0060 accepted)
+
+**v1m — Öbek system (~6–8 days, the largest single slice in Phase 3.0).** Cooked entity-graph templates per ADR-0058's 19 design pillars: `crd::scene::Obek` + `ObekResource` + `ObekLoader` (FourCC `'OBEK'`) + `ObekArtifactBuilder`. Composition (nested öbek references) + variation (`extends` chain) + override patches with stable file_idx + symbolic-name fallback. **All three `InheritPolicy` values fully implemented** including transparent CoW (storage backend gains per-entity per-component owned-vs-shared flag bit; write paths intercept and copy-on-first-write; ref-counted shared backing). Per-instance ADD + soft-DELETE + apply/revert at four granularities + unpack semantics + hot-reload graph-aware. **AAAA-tier format reservations** ship at v1m: `instantiate_obek_batch` API + `OBAT` chunk for GPU instanced rendering; `GpuResident` + `static_bake` per-component flags reserved in OINF; `ObekEntityGuid` (64-bit hash of `obek_root_id` + `file_idx`) for stable cross-machine identity (replay + replication); `ReplicationMode` + `streaming.lod` + `streaming.region` reserved fields; `mode = "lazy"` opt-in flag for streaming worlds (Phase 3.5+ runtime backend). `obekc extract` CLI tool ships in v1m. ~30 test cases.
+
+**v1n — Preset + Profile system (~3–4 days).** ADR-0059 Preset substrate (`PresetResource` + per-type `PresetLoader` + `PresetRegistry` closed by C++ types; `register_type<T>` registers FourCC + schema + reader + apply dispatch; five-layer resolution stack: default → extends → preset → instance → runtime; `extends` chain shares the Öbek resolver). First concrete preset types ship: `QualityPreset` (FourCC `'PRQL'`) wired into `IRenderPath::apply(QualityPreset)` and `CameraPreset` (FourCC `'PRCM'`) wired into `Camera::apply(CameraPreset)`. ADR-0060 Profile substrate (`ProfileResolver` with closed typed predicates: `os` / `gpu_tier` / `domain` / `mode` / `target_fps` / `cpu_cores`; **additive composition** — Cerid-unique vs Unreal first-match-wins; priority-sorted stack composes all matching profiles cleanly). Hot-reload + atomic swap. ~20 test cases.
+
+**v1o — Sandbox renderer integration with Öbek + Preset + Profile (~2–3 days).** Visual proof of the full authoring stack. `SandboxLayer` registers `IRenderPath` + `Camera` as `IPresetTarget` impls; app boot resolves `ProfileContext` and applies bundle; sandbox loads `assets/sources/sandbox.scene.toml` referencing 2–3 demo öbeks. ImGui adds: profile picker (`game / simulation / daw / cinematic`), quality slider (Low / Medium / High / Ultra runtime override at L4), "override window" with revert buttons at field/component/entity/all granularities, "Unpack öbek" button. Ships demo `assets/profiles/default.profile.toml` with cross-domain baselines.
+
+**v1p — Reserved-slot freeze + API surface freeze (~1 day).** Phase 3.0 closer. Confirms reserved traits (`History`, `SpatialBVH`, `GpuResident`, `Replication`, `Reflection`, `ScriptComponent`) accepted by `register_component`; reserved DSL operators round-trip; **Öbek + Preset + Profile API surfaces formally frozen** — Phase 3.5+ consumer phases implement against them but cannot change them.
+
 ## Active detour
 
 _none — D-001 closed 2026-05-07. Main roadmap resumed at Phase 3.0 v1d._
@@ -69,7 +79,192 @@ _none — D-001 closed 2026-05-07. Main roadmap resumed at Phase 3.0 v1d._
 
 ## Last shipped milestone
 
-**2026-05-07 — Phase 3.0 v1j: `Transform` + `TransformPropagation` (ADR-0054). The FIRST concrete `ISystem` consumer that ties the 8-layer architecture end-to-end. Cross-domain robust per explicit design: games / robotics / aerospace / DAW spatial audio all serviced by the same propagation algorithm. Six rotation-set APIs (quat / quat_unnormalized / axis_angle / euler with explicit ordering / from_to / look_at). `set_world` / `try_set_world` with negative-determinant CAD-mirror handling. Determinism contract verified by bit-exact world-matrix hash test. Math layer extended with `EulerOrder` + `from_euler` + `from_to_rotation` + `from_trs` + `to_trs` (header-only `crd-math`). Six-config green at 727/727 / 724 release / 17 smokes (was 708 baseline post-v1i).**
+**2026-05-08 — Phase 3.0 v1m5: revert/unpack/enumerate APIs + AAAA-tier batch reservations (closes v1m entirely).** Two sub-slices shipped: **v1m5a** ObekInstantiation gains `source` pointer; revert_field/component/entity/all (rebuild bytes from source + cook-time overrides, preserving cook-time bake while undoing runtime mutations); unpack_obek (revert + sever) + unpack_obek_keep_overrides (sever only, preserve runtime state); enumerate_overrides exposes cook-time records. **v1m5b** BatchHints + BatchInstanceTag + ObekBatchHandle reserved structs; instantiate_obek_batch API (auto-tags entities with BatchInstanceTag when registered; renderer-instanced-draw path lands Phase 3.5+). Hot-reload watcher + `obekc extract` CLI deferred to task #108 (post-Phase-3.0). **Six-config 814/814 / 811 release / 17 smokes; 9 new tests.**
+
+**Phase 3.0 v1m FULLY DELIVERED.** Twelve sub-slices, ~2700 LOC, 58 tests across the v1m series. All five published v1m sub-slices closed: substrate, override patches + OCHN, full ObekCooker (4 sub-slices), InheritPolicy + DontInherit, Inherit CoW backend (3 sub-slices), revert/unpack + AAAA reservations.
+
+Session log: `docs/sessions/2026-05-08-scene-v1m5-revert-batch.md`.
+
+### Earlier this phase: v1m4b — InheritPolicy::Inherit transparent CoW backend
+
+ADR-0058 pillar 5 implementation. Three sub-slices: SharedComponentPool data structure; per-slot ownership in SparseSetStorage::Pool with force-SparseSet at registration + CoW write-break; content-hash dedup with FNV-1a 64 + acquire_or_retain. Demonstrated 2× memory savings for "spawn 1000 trees from same öbek" pattern. Six-config 805/805 / 802 release; 16 new tests. Session log: `docs/sessions/2026-05-08-scene-v1m4b-cow-backend.md`. Three sub-slices shipped: **v1m4b1** SharedComponentPool data structure (refcounted byte pool, exponential growth, freelist; ~170 LOC, 7 unit tests). **v1m4b2** Per-slot ownership flag in SparseSetStorage::Pool (shared_pool + shared_pool_idx[]); insert_shared API; force-SparseSet at registration for Inherit components; read-path indirection in get_const; CoW write-break in get_mut; instantiate_obek wires Inherit→insert_shared. **v1m4b3** Content-hash dedup via FNV-1a 64 + acquire_or_retain (HashMap<u64, u32> in pool); refcount eviction on entity destroy verified; shared_pool_live_count diagnostic. **Demonstrated 2× memory savings** for "spawn 1000 trees from same öbek" pattern: 1 pool entry × sizeof(component) + 1000 × 4-byte pool_idx vs 1000 × sizeof(component) before. CoW write-break on mutation: that entity gets its own copy; siblings continue sharing. Six-config 805/805 / 802 release / 17 smokes; 16 new tests across 3 sub-slices.
+
+Session log: `docs/sessions/2026-05-08-scene-v1m4b-cow-backend.md`.
+
+### Earlier this phase: v1m4 — InheritPolicy enum + DontInherit semantics
+
+ADR-0058 pillar 5 API surface. `crd::scene::InheritPolicy` enum (Override / Inherit / DontInherit) + ComponentInfo.inherit_policy field with Override default + apply_trait overload. DontInherit fully implemented: instantiate_obek skips component bytes for any registered as DontInherit while still spawning the entity. Inherit was API-only stub at v1m4; CoW backend delivered in v1m4b above. Six-config 792/792 / 789 release; 5 tests. Session log: `docs/sessions/2026-05-08-scene-v1m4-inherit-policy.md`. `crd::scene::InheritPolicy` enum (`Override` / `Inherit` / `DontInherit`) declared in `component.hpp`. `ComponentInfo::inherit_policy` field stamped at `register_component<T>(InheritPolicy::X)` time via new `apply_trait` overload — default is `Override` (matches pre-v1m4 behavior). **`DontInherit` semantics fully implemented**: `instantiate_obek` consults `info->inherit_policy` and skips the component bytes for any registered as DontInherit, while still spawning the entity. Use case: runtime-only state (NetworkId, LoadState, EditorSelectionFlag, ChangeDetectVersion) that should never persist through cook → instantiate. Policy is a TARGET-WORLD concern — same öbek file can be loaded by different Worlds with different inheritance choices. **`Inherit` is API-only at v1m4** with documented contract that observable behavior matches Override; transparent CoW backend optimization (per-entity owned/shared flag in storage; copy-on-first-write; shared backing pool with refcount) deferred to v1m4b (task #102) when either authoring memory pressure or actual consumer module justifies the multi-day backend work. 5 new tests covering enum default, DontInherit stamp, DontInherit skip semantics, Inherit-as-Override read/write parity, mixed-policy registration on the same World. **Six-config 792/792 / 789 release / 17 smokes.**
+
+Session log: `docs/sessions/2026-05-08-scene-v1m4-inherit-policy.md`.
+
+### Earlier this phase: v1m3d — Cook-time `overrides = [...]` → OOVR chunk (closed v1m3 entirely)
+
+ADR-0058 pillar 3 cook-time half. Top-level `overrides = [...]` array bakes into OOVR chunk via `ObekArtifactBuilder::add_override`. Runtime auto-applies cook-time overrides BEFORE caller-supplied patches in `instantiate_obek` — caller wins on overlap. Whole-component overrides only at v1m3d. Six-config 787/787 / 784 release; 15 cooker tests. Session log: `docs/sessions/2026-05-08-scene-v1m3d-cook-time-overrides.md`. TOML `overrides = [...]` array at top level of an `.obek.toml` bakes into the OOVR chunk: `ObekOverrideRecord` (24 bytes on disk: file_idx + component_fourcc + field_offset + payload_offset + payload_size + reserved) + self-contained payload pool. **`ObekArtifactBuilder::add_override(file_idx, fourcc, field_offset, payload)`** API + `PendingOverride` internal storage + emit OOVR in `build()`. `ObekLoader` parses OOVR into `ObekResource::cook_override_records` + `cook_override_payload_pool`. **`World::instantiate_obek` auto-applies cook-time overrides BEFORE caller-supplied patches** in a new Step D2 — caller wins on overlap (caller is deepest in resolution stack per ADR-0058 pillar 4). Cooker resolves entity name via linear scan of `accumulated_names`, component name via reader registry, `value` parsed by registered reader to whole-component bytes. Whole-component overrides only at v1m3d; field-level slicing reserved for v1m5+. 15 cooker tests (+3 new: bake, precedence, unknown-entity error). **Six-config 787/787 / 784 release / 17 smokes.**
+
+Session log: `docs/sessions/2026-05-08-scene-v1m3d-cook-time-overrides.md`.
+
+### v1m3 ALL FOUR SUB-SLICES COMPLETE — full ObekCooker pipeline shipped
+
+`.obek.toml` files now cook end-to-end through ADR-0058's full surface:
+- `extends = "..."` chain (v1m3b)
+- `[entity.NAME]` with components, relations, and nested `obek = "..."` refs (v1m3c)
+- Top-level `overrides = [...]` baked into OOVR (v1m3d)
+- → OBEK CRDR bytes
+- → `ObekLoader` → `World::instantiate_obek(parent, runtime_overrides)`
+- → live ECS entities, hierarchies, components, with cook-time + runtime overrides applied in deepest-wins order
+
+### Earlier this phase: v1m3c — nested öbek references
+
+ADR-0058 pillar 11 second half + pillar 12. Per-entity `obek = "..."` field — placeholder for the referenced öbek's flattened entity graph. Recursive cook of nested öbeks via `walk_and_apply_chain` helper. `RecCtx` struct bundles recursion state. Splice via `ChildOf(nested_root → placeholder)` at cook time. Nested name scoping via saved/restored `name_to_entity`. Cycle detection unified across extends + nested. OCHN entries with `kind = Nested`. Six-config 784/784 / 781 release; 12 cooker tests. Session log: `docs/sessions/2026-05-08-scene-v1m3c-nested-obek.md`. Per-entity `obek = "..."` field in TOML — the entity becomes a placeholder under which the referenced öbek's flattened entity graph is spliced. Recursive cook of nested öbeks (including their own extends chains, nested öbeks, etc.) handled by `walk_and_apply_chain` helper called from `apply_table_to_world` when a per-entity `obek = "..."` is found. **`RecCtx` struct** introduced to bundle recursion state (world, name_to_entity, accumulated_names, ochn, visited_path_hashes, readers, errors, depth) — clean signatures across the recursive descent. **Splice via ChildOf**: nested entities without a ChildOf get `ChildOf(nested_e → placeholder_entity)` installed at cook time so the cooked OBEK bytes carry the correct hierarchy. **Nested name scoping**: parent's `name_to_entity` is saved/restored across nested cooks so nested entity names don't collide with parent names. **Cycle detection unified** across extends + nested via shared `visited_path_hashes` set. OCHN entries with `kind = Nested` per nested ref. 12 cooker tests (-1 stale reservation, +3 new: single nested splice, two-level nesting, nested cycle detection). **Six-config 784/784 / 781 release / 17 smokes.**
+
+Session log: `docs/sessions/2026-05-08-scene-v1m3c-nested-obek.md`.
+
+### v1m3 sub-slicing (4 sub-slices ALL COMPLETE)
+
+- ✅ **v1m3a** — ObekCooker substrate. Session log: `docs/sessions/2026-05-08-scene-v1m3a-obek-cooker-substrate.md`.
+- ✅ **v1m3b** — `extends = "..."` chain resolution. Session log: `docs/sessions/2026-05-08-scene-v1m3b-extends-chain.md`.
+- ✅ **v1m3c** — `obek = "..."` nested öbek refs. Session log: `docs/sessions/2026-05-08-scene-v1m3c-nested-obek.md`.
+- ✅ **v1m3d** — `overrides = [...]` cook-time patches → OOVR chunk. Session log: `docs/sessions/2026-05-08-scene-v1m3d-cook-time-overrides.md`.
+
+### Earlier this phase: v1m2 — runtime override patches + OCHN format substrate
+
+ADR-0058 pillars 3 + 11. **Phase A:** `ObekOverride` runtime patch struct + `World::instantiate_obek(res, parent, overrides)` overload + bounds-checking + symbolic-name fallback when `file_idx == kObekOverrideUseName` + overrides_applied/skipped counters. **Phase B:** `ObekChainKind` enum + `ObekChainEntryRecord` (24 bytes) + `ObekArtifactBuilder::add_chain_dependency()` API + OCHN chunk emit/parse with self-contained path pool + `ObekResource::chain_dependencies` exposed on load. Six-config 772/772 / 769 release; 14 öbek tests (+6). Session log: `docs/sessions/2026-05-08-scene-v1m2-overrides-and-ochn.md`.
+
+### Earlier this phase: v1m1 — Öbek substrate
+
+ADR-0058 sub-slice 1 of 5. `crd::scene::ObekResource` + `ObekLoader` (FourCC `'OBEK'`) + `ObekArtifactBuilder` + `World::instantiate_obek(parent)`. CRDR layout shipped: OINF (24 bytes, includes `obek_root_id : u64`), OSTR, OCMP, OETB, D### per-component, ORLS. Reserved FourCCs declared for v1m2+ (OOVR/OCHN) and Phase 3.5+ (OBAT/OLNK). **Reparent policy:** `instantiate_obek(parent=alive)` installs `Relation<ChildOf>(root → parent)` for each entity that has no ChildOf in the source öbek. **`ObekEntityGuid`** = FNV-1a 64 of (obek_root_id, file_idx). Six-config 766/766 / 763 release; 8 round-trip tests. Session log: `docs/sessions/2026-05-08-scene-v1m1-obek-substrate.md`.
+
+### v1m sub-slicing (5 sub-slices, re-shaped 2026-05-08)
+
+- ✅ **v1m1** — substrate + minimal round-trip.
+- ✅ **v1m2** — runtime override patches + OCHN format substrate.
+- ✅ **v1m3** — full ObekCooker (4 sub-slices ALL COMPLETE).
+- ✅ **v1m4** — InheritPolicy enum + DontInherit semantics.
+- ✅ **v1m4b** — Inherit transparent CoW backend (3 sub-slices: SharedComponentPool / per-slot ownership + force-SparseSet / content-hash dedup + eviction).
+- ✅ **v1m5** — revert/unpack/enumerate APIs (v1m5a) + AAAA reservations: BatchHints/BatchInstanceTag/instantiate_obek_batch (v1m5b). Hot-reload watcher + `obekc extract` CLI deferred to post-Phase-3.0 follow-up.
+
+**v1m FULLY SHIPPED — entire Öbek system delivered per ADR-0058. 12 sub-slices, ~2700 LOC, 58 öbek tests. Phase 3.0 next: v1n (Preset + Profile), v1o (sandbox integration), v1p (reserved-slot freeze).**
+
+### Earlier this phase: v1l — cook_scene cooker
+
+ADR-0055 authoring half. The AUTHORING LAYER — `.scene.toml` files cook to deterministic SCEN bytes via `crd-cooker`'s new `SceneCooker` class. Built-in TOML readers ship for `Transform` + the six built-in relations; user-defined components register their own readers. Three-pass cook: collect entities (document order) → apply components (alphabetical key order, advisor pin #8 determinism) → install relations (FNV-keyed name resolver). Cooker-side `TransformPropagation::step()` bakes world matrices into SCEN bytes before serialisation — loaded scenes are immediately renderable without consumer-side propagation. 17 cooker test cases. Six-config 758/758 / 755 release / 17 smokes.
+
+### v1l: SceneCooker + scene_cooker_inline
+
+```cpp
+// Test pattern (cook_inline takes TOML text, returns SCEN bytes)
+SceneCookContext ctx{resource_id, allocator};
+crd::containers::Array<CookError> errors{allocator};
+auto scen_bytes = scene_cooker_inline(toml_text, ctx, &errors);
+
+// Cook + load + use
+SceneLoader loader;
+auto* res = static_cast<SceneResource*>(loader.load({.bytes = scen_bytes, ...}));
+auto inst = target_world.instantiate_scene(*res);
+// world matrices already baked — read inst.entities[idx].world directly
+```
+
+**TOML schema:** `[entity.NAME]` tables with inline-table components and string/array relation fields.
+
+```toml
+[entity.arm]
+Transform = { translation = [0.0, 1.5, 0.0], rotation = [0,0,0,1], scale = [1,1,1] }
+
+[entity.hand]
+Transform = { translation = [0.4, 0.0, 0.0] }
+ChildOf   = "arm"             # acyclic — single target only
+
+[entity.controller]
+Targets   = ["arm", "hand"]   # non-acyclic — array allowed
+```
+
+**Five architectural decisions pinned:**
+1. **Cooker bakes world matrices, not the loader** — temp World runs `TransformPropagation::step()` before `SceneArtifactBuilder.build`. SCEN packs are immediately renderable; networking/replay/snapshot consumers don't need propagation registered. (Verified by `"Cooked hierarchy + step propagation"` test.)
+2. **Content-driven reader registry** (advisor pin #4) — built-ins (`Transform` + six relations) auto-register; user components register before cooking via `register_component_reader<T>(name, reader, fourcc)`. No hard-coded type knowledge.
+3. **Multi-error accumulation** (advisor pin #3) — every error collects before the cooker fails. Reports all problems in one run.
+4. **Determinism via document-order + alphabetical key walk** (advisor pin #8) — entities take file-local indices in TOML document order; component fields apply alphabetically. Same TOML → bit-exact SCEN bytes (FNV-hash-verified).
+5. **Acyclic relations reject array form at cook time** — `ChildOf`/`AttachedTo`/`Owns`/`DependsOn` accept only single-target strings; `Targets`/`PossessedBy` accept arrays.
+
+**Eight follow-ups pinned in `docs/debt.md`**: asset_cooker file-handler integration (next), hierarchical entity addressing, prefab overrides, multi-file scene composition, hot-reload, TOML schema migration, compressed SCEN, big-endian cooker output.
+
+### Six-configuration green (post-v1l, 2026-05-08)
+
+- win-debug:          758/758
+- win-relwithdebinfo: 758/758
+- win-release:        755/755
+- win-asan:           758/758
+- win-clang-cl:       758/758
+- win-tidy:           ✅ build clean
+
+17/17 headless smokes per non-tidy config. Scene + scene-cooker tests: 242 cases / ~35200 assertions (was 225 / 34783 post-v1k).
+
+Session log: `docs/sessions/2026-05-08-scene-v1l-cooker.md`.
+
+### Earlier this phase: Phase 3.0 v1k
+
+`SceneResource` + `SceneLoader` + `SceneArtifactBuilder` + `World::instantiate_scene` (ADR-0055). The PERSISTENCE LAYER — a World's entity-component-relation graph round-trips through a CRDR-formatted `'SCEN'` container, bit-exact deterministic, forward-compatible by FourCC. Six built-in relations + Transform persist for free via the existing `ComponentSerialize` trait grammar. Six-config baseline 741/741 post-v1k.
+
+### v1k: SceneResource + SceneLoader + SceneArtifactBuilder
+
+```cpp
+// Build a SCEN blob from a World
+SceneArtifactBuilder builder{alloc, resource_id};
+auto bytes = builder.build(source_world);
+
+// Load + instantiate into a target World
+SceneLoader loader;
+auto* res = static_cast<SceneResource*>(loader.load({/*ctx=*/...}));
+auto inst = target_world.instantiate_scene(*res);
+// inst.entities[file_idx] = the live EntityId for that file-local index
+```
+
+**SCEN artifact format** (CRDR container with `type_fourcc = 'SCEN'`):
+
+| Chunk | Purpose |
+|---|---|
+| `INFO` | Schema version + entity/component/relation counts |
+| `STRP` | String pool (component / relation tag names; diagnostic only) |
+| `CMPS` | Per-component descriptors (FourCC + version + size + alignment + record count + storage hint) |
+| `ETBL` | Per-entity reserved-flags slot (future: Pinned / Static / EditorOnly) |
+| `C000`-`C0FF` | Per-component payload chunks (SoA: indices array + payload bytes) |
+| `RELS` | Relation records (src_idx, target_idx, relation_fourcc) |
+
+**Eight architectural decisions pinned:**
+1. Forward-compat by FourCC (unknown skipped, counted in `components_skipped` / `relations_skipped`); hard-fail on size/alignment/version mismatch.
+2. FourCC primary + name diagnostic — name in STRP is for logs only; FourCC is identity.
+3. `SceneInstantiation` move-only (matches `Query` pattern).
+4. `SceneArtifactBuilder` lives in scene_resource.hpp (public-ish; v1l cooker promotes).
+5. Hard-fail on size/alignment mismatch — silent corruption is worse than clear error.
+6. Determinism: walk order = registry-ascending + slot-iteration + file-idx. CRDR sorts chunks by FourCC. Same World → same bytes (verified by test).
+7. Endianness: little-endian, inherits CRDR.
+8. ETBL reserved-flags field reserved at v1k (future flags slot in without bumping schema).
+
+**Cross-domain robustness:**
+- **Games**: standard scene save/load. Just works.
+- **Robotics**: deterministic snapshots for replay; URDF-imported scenes round-trip.
+- **Aerospace**: domain-defined `TransformF64` component with its own `ComponentSerialize{fourcc}` round-trips through SCEN — math layer + scene layer both support custom types.
+- **DAW**: same f32 Transform + spatial-audio-source components; persists for project saves.
+- **Networking (Phase 4.2)**: server snapshots are SCEN packs. Bit-exact determinism = same World produces same snapshot regardless of when serialised.
+- **Replay (Phase 8)**: every N frames, snapshot to SCEN. Replay = walk pack list and `instantiate_scene` each in order.
+
+**Eight follow-ups pinned in `docs/debt.md`**: TOML cooker (v1l), streaming loads (Phase 3.5+), schema migration (v1n+), name-lookup (v1m), prefab overrides (v1m+), big-endian (v1n+), compressed chunks (v1l), `mark_all_transforms_dirty` helper.
+
+### Six-configuration green (post-v1k, 2026-05-07)
+
+- win-debug:          741/741
+- win-relwithdebinfo: 741/741
+- win-release:        738/738
+- win-asan:           741/741
+- win-clang-cl:       741/741
+- win-tidy:           ✅ build clean
+
+17/17 headless smokes per non-tidy config. Scene tests: 225 cases / 34783 assertions (was 211 / 34716 post-v1j).
+
+Session log: `docs/sessions/2026-05-07-scene-v1k-scene-resource.md`.
+
+### Earlier the same day: Phase 3.0 v1j
+
+`Transform` + `TransformPropagation` system (ADR-0054). Cross-domain robust (games / robotics / aerospace / DAW). Six rotation-set APIs. `set_world` / `try_set_world` with negative-determinant CAD-mirror handling. Math layer extended with `EulerOrder` + `from_euler` + `from_to_rotation` + `from_trs` + `to_trs`. Six-config baseline 727/727.
 
 ### v1j: Transform + TransformPropagation
 

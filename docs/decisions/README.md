@@ -20,6 +20,9 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 - ADR-0020 — Scene & ECS hybrid + UI in scene tree
 - ADR-0021 — Animation architecture
 - ADR-0023 — UI architecture
+- ADR-0058 — Öbek system
+- ADR-0059 — Preset system
+- ADR-0060 — Profile system
 
 ### `[build]` `[lang]`
 - ADR-0001 — Build & language
@@ -70,6 +73,10 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 - ADR-0040 — Cooker CLI + CMake integration
 - ADR-0042 — Texture cooked format + GPU upload strategy
 - ADR-0043 — MeshResource vertex layout + glTF import scope
+- ADR-0055 — Scene serialization: TOML authoring + SCEN CRDR cooked
+- ADR-0058 — Öbek system
+- ADR-0059 — Preset system
+- ADR-0060 — Profile system
 
 ### `[jobs]`
 - ADR-0015 — Job system shape
@@ -111,6 +118,16 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 - ADR-0055 — Scene serialization: TOML authoring + SCEN CRDR cooked
 - ADR-0056 — Scene/ECS L6–L8: Reserved API slots (Replication, Scripts, Reflection)
 - ADR-0057 — Scene/ECS: UI nodes in scene tree (boundary declaration)
+- ADR-0058 — Öbek system: cooked entity-graph templates with composition, variation, AAAA-tier future-proofing
+- ADR-0059 — Preset system: typed system-config bags with five-layer resolution
+- ADR-0060 — Profile system: typed predicate selectors with additive composition
+
+### `[obek]` `[prefab]`
+- ADR-0058 — Öbek system: cooked entity-graph templates with composition, variation, AAAA-tier future-proofing
+
+### `[preset]` `[profile]`
+- ADR-0059 — Preset system: typed system-config bags with five-layer resolution
+- ADR-0060 — Profile system: typed predicate selectors with additive composition
 
 ### `[sandbox]` `[build]`
 - ADR-0045 — Sandbox executable, asset layout, cook workflow, crd-meshgen
@@ -207,3 +224,6 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 | 0055  | Scene serialization: TOML authoring + SCEN CRDR cooked | scene, ecs, resources, cooker, arch     | Accepted |
 | 0056  | Scene/ECS L6–L8: Reserved API slots (Replication, Scripts, Reflection) | scene, ecs, arch, layer-6, layer-7, layer-8, networking, scripting, editor | Accepted |
 | 0057  | Scene/ECS: UI nodes in scene tree (boundary declaration) | scene, ecs, ui, arch                  | Accepted |
+| 0058  | Öbek system: cooked entity-graph templates with composition, variation, AAAA-tier future-proofing | scene, ecs, cooker, resources, arch, renderer, networking, determinism, obek, prefab | Accepted |
+| 0059  | Preset system: typed system-config bags with five-layer resolution | scene, resources, cooker, arch, renderer, audio, physics, input, config, preset | Accepted |
+| 0060  | Profile system: typed predicate selectors with additive composition | scene, resources, cooker, arch, config, networking, app, profile | Accepted |

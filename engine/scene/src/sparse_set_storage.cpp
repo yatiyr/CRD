@@ -16,13 +16,38 @@ SparseSetStorage::Pool::Pool(const ComponentInfo& i, crd::memory::IAllocator* a)
 
 SparseSetStorage::Pool::~Pool()
 {
-    // Destruct any live elements first — sparse/entities Arrays already
-    // release their own buffers on member-dtor below.
+    // v1m4b2: release any live shared-pool entries first. These don't
+    // own destructible state in their own dense slot; the pool itself
+    // owns the bytes.
+    if (shared_pool != nullptr)
+    {
+        for (crd::u32 d = 0; d < count; ++d)
+        {
+            const crd::u32 pool_idx = (d < shared_pool_idx.size())
+                                          ? shared_pool_idx[d]
+                                          : SharedComponentPool::kInvalidIdx;
+            if (pool_idx != SharedComponentPool::kInvalidIdx)
+            {
+                shared_pool->release(pool_idx);
+            }
+        }
+        shared_pool->~SharedComponentPool();
+        alloc->deallocate(shared_pool);
+        shared_pool = nullptr;
+    }
+
+    // Destruct any live OWNED elements (shared slots have no inline state).
     if (info != nullptr && info->destruct != nullptr && dense != nullptr)
     {
         for (crd::u32 i = 0; i < count; ++i)
         {
-            info->destruct(slot_bytes(i));
+            const crd::u32 pool_idx = (i < shared_pool_idx.size())
+                                          ? shared_pool_idx[i]
+                                          : SharedComponentPool::kInvalidIdx;
+            if (pool_idx == SharedComponentPool::kInvalidIdx)
+            {
+                info->destruct(slot_bytes(i));
+            }
         }
     }
     if (dense != nullptr && alloc != nullptr)
@@ -242,6 +267,80 @@ void SparseSetStorage::insert(EntityId e, ComponentId c, void* data)
     m_sink->on_insert(e, c, slot);
 }
 
+// v1m4b2 helper — read pool-idx from a parallel shared-pool-idx array.
+// Returns kInvalidIdx if the dense slot is owned OR if the array hasn't
+// been resized to cover the index yet (defaults to "owned").
+namespace
+{
+inline crd::u32 pool_idx_at(const crd::containers::Array<crd::u32>& spi, crd::u32 dense_idx) noexcept
+{
+    if (dense_idx >= spi.size())
+    {
+        return SharedComponentPool::kInvalidIdx;
+    }
+    return spi[dense_idx];
+}
+} // namespace
+
+void SparseSetStorage::insert_shared(EntityId e, ComponentId c, const void* data)
+{
+    CRD_ASSERT(data != nullptr);
+    Pool& pool = ensure_pool(c);
+    CRD_ASSERT(pool.info->inherit_policy == InheritPolicy::Inherit
+               && "insert_shared called for non-Inherit component — programmer error");
+
+    const crd::u32 ei       = e.index();
+    const crd::u32 existing = pool.get_sparse(ei);
+    CRD_ASSERT(existing == kInvalidDenseIndex
+               && "insert_shared: entity already has this component (UPSERT path NYI for shared)");
+    (void)existing; // Used only by CRD_ASSERT in debug; silence release-mode unused-var warning.
+
+    // Lazy-create the shared pool on first shared insert.
+    if (pool.shared_pool == nullptr)
+    {
+        void* mem = m_alloc->allocate(sizeof(SharedComponentPool), alignof(SharedComponentPool));
+        CRD_ASSERT(mem != nullptr);
+        pool.shared_pool = ::new (mem)
+            SharedComponentPool(m_alloc, pool.info->size, pool.info->alignment);
+    }
+
+    // v1m4b3: content-hash dedup. Byte-identical inserts (cross-call too)
+    // share ONE pool entry — refcount tracks the share count. FNV-1a 64.
+    crd::u64 hash = 14695981039346656037ULL;
+    const crd::u8* src_bytes = static_cast<const crd::u8*>(data);
+    for (crd::usize i = 0; i < pool.info->size; ++i)
+    {
+        hash ^= src_bytes[i];
+        hash *= 1099511628211ULL;
+    }
+    // 0 is a sentinel for "no hash" inside the pool (`acquire`-only path);
+    // ensure a non-zero hash by setting bit 63 if all bytes happened to mix
+    // to 0. Probability is negligible but the sentinel must be unambiguous.
+    if (hash == 0U)
+    {
+        hash = 1ULL;
+    }
+    const crd::u32 pool_idx = pool.shared_pool->acquire_or_retain(data, hash);
+
+    // Allocate the dense slot, but DON'T write to dense bytes — shared slots
+    // read through the pool indirection. The dense buffer is wasted memory
+    // for shared slots in v1m4b2; v1m4b3's dedup mitigates this in the
+    // common case (many instances → one pool entry).
+    pool.grow_dense(pool.count + 1U);
+    const crd::u32 new_dense = pool.count;
+
+    pool.entities.push_back(e);
+    pool.set_sparse(ei, new_dense);
+    if (pool.shared_pool_idx.size() <= new_dense)
+    {
+        pool.shared_pool_idx.resize(new_dense + 1U, SharedComponentPool::kInvalidIdx);
+    }
+    pool.shared_pool_idx[new_dense] = pool_idx;
+    pool.count   += 1U;
+    pool.version += 1;
+    m_sink->on_insert(e, c, pool.shared_pool->entry_bytes(pool_idx));
+}
+
 void SparseSetStorage::remove(EntityId e, ComponentId c)
 {
     Pool* pool = find_pool(c);
@@ -256,40 +355,73 @@ void SparseSetStorage::remove(EntityId e, ComponentId c)
         return; // entity does not have this component — no-op (matches archetype semantics)
     }
 
+    const crd::u32 our_pool_idx = pool_idx_at(pool->shared_pool_idx, dense_idx);
+    const bool is_shared = (our_pool_idx != SharedComponentPool::kInvalidIdx);
+
     // Fire on_remove before any destruct so the sink may inspect the value.
     {
-        const crd::u8* slot = pool->slot_bytes(dense_idx);
+        const crd::u8* slot = is_shared
+                                  ? pool->shared_pool->entry_bytes(our_pool_idx)
+                                  : pool->slot_bytes(dense_idx);
         m_sink->on_remove(e, c, slot);
     }
 
-    crd::u8* slot = pool->slot_bytes(dense_idx);
-    if (pool->info->destruct != nullptr)
+    if (is_shared)
     {
-        pool->info->destruct(slot);
+        pool->shared_pool->release(our_pool_idx);
+    }
+    else if (pool->info->destruct != nullptr)
+    {
+        pool->info->destruct(pool->slot_bytes(dense_idx));
     }
 
     const crd::u32 last = pool->count - 1U;
     if (dense_idx != last)
     {
-        // swap-with-last: move-construct trailing into the freed slot, then
-        // destruct trailing. The trailing entity's sparse pointer follows.
-        crd::u8* trailing = pool->slot_bytes(last);
-        if (pool->info->move_construct != nullptr)
+        const crd::u32 trailing_pool_idx = pool_idx_at(pool->shared_pool_idx, last);
+        const bool trailing_is_shared = (trailing_pool_idx != SharedComponentPool::kInvalidIdx);
+
+        // Move dense bytes only when the TRAILING slot is owned. Shared
+        // trailing slots have no relevant dense bytes; only the pool_idx
+        // moves.
+        if (!trailing_is_shared)
         {
-            pool->info->move_construct(slot, trailing);
-            if (pool->info->destruct != nullptr)
+            crd::u8* slot     = pool->slot_bytes(dense_idx);
+            crd::u8* trailing = pool->slot_bytes(last);
+            if (pool->info->move_construct != nullptr)
             {
-                pool->info->destruct(trailing);
+                pool->info->move_construct(slot, trailing);
+                if (pool->info->destruct != nullptr)
+                {
+                    pool->info->destruct(trailing);
+                }
+            }
+            else
+            {
+                std::memcpy(slot, trailing, pool->info->size);
             }
         }
-        else
+
+        // Move the shared_pool_idx in lockstep with entities[].
+        if (last < pool->shared_pool_idx.size())
         {
-            std::memcpy(slot, trailing, pool->info->size);
+            if (dense_idx >= pool->shared_pool_idx.size())
+            {
+                pool->shared_pool_idx.resize(dense_idx + 1U, SharedComponentPool::kInvalidIdx);
+            }
+            pool->shared_pool_idx[dense_idx] = pool->shared_pool_idx[last];
         }
 
         const EntityId moved = pool->entities[last];
         pool->entities[dense_idx] = moved;
         pool->set_sparse(moved.index(), dense_idx);
+    }
+
+    // Reset the (now-unused) trailing slot's shared_pool_idx so it doesn't
+    // leak past pool->count's range.
+    if (last < pool->shared_pool_idx.size())
+    {
+        pool->shared_pool_idx[last] = SharedComponentPool::kInvalidIdx;
     }
 
     pool->entities.pop_back();
@@ -320,6 +452,25 @@ void* SparseSetStorage::get_mut(EntityId e, ComponentId c)
     {
         return nullptr;
     }
+
+    // v1m4b2/v1m4b3: CoW break. If this slot is shared, copy pool bytes
+    // into the dense slot, decrement the pool entry's refcount, and clear
+    // the shared_pool_idx so subsequent reads/writes hit the inline path.
+    // Idempotent — calling get_mut twice on a previously-shared slot is
+    // safe; the second call sees an owned slot and goes straight through.
+    if (dense_idx < pool->shared_pool_idx.size())
+    {
+        const crd::u32 pool_idx = pool->shared_pool_idx[dense_idx];
+        if (pool_idx != SharedComponentPool::kInvalidIdx && pool->shared_pool != nullptr)
+        {
+            std::memcpy(pool->slot_bytes(dense_idx),
+                        pool->shared_pool->entry_bytes(pool_idx),
+                        pool->info->size);
+            pool->shared_pool->release(pool_idx);
+            pool->shared_pool_idx[dense_idx] = SharedComponentPool::kInvalidIdx;
+        }
+    }
+
     crd::u8* slot = pool->slot_bytes(dense_idx);
     pool->version += 1;             // declared write — pool-grain change detect
     m_sink->on_update(e, c, slot, slot);
@@ -337,6 +488,15 @@ const void* SparseSetStorage::get_const(EntityId e, ComponentId c) const
     if (dense_idx == kInvalidDenseIndex)
     {
         return nullptr;
+    }
+    // v1m4b2: shared slots read through the SharedComponentPool indirection.
+    if (dense_idx < pool->shared_pool_idx.size())
+    {
+        const crd::u32 pool_idx = pool->shared_pool_idx[dense_idx];
+        if (pool_idx != SharedComponentPool::kInvalidIdx && pool->shared_pool != nullptr)
+        {
+            return pool->shared_pool->entry_bytes(pool_idx);
+        }
     }
     return pool->slot_bytes(dense_idx);
 }
@@ -440,36 +600,67 @@ void SparseSetStorage::on_entity_destroyed(EntityId e)
 
         const ComponentId c{static_cast<crd::u16>(i)};
 
-        // Fire on_remove before destruct.
-        m_sink->on_remove(e, c, p->slot_bytes(dense_idx));
+        const crd::u32 our_pool_idx = pool_idx_at(p->shared_pool_idx, dense_idx);
+        const bool is_shared = (our_pool_idx != SharedComponentPool::kInvalidIdx);
 
-        // Destruct the slot.
-        crd::u8* slot = p->slot_bytes(dense_idx);
-        if (p->info->destruct != nullptr)
+        // Fire on_remove before destruct.
+        const crd::u8* report_bytes = is_shared
+                                          ? p->shared_pool->entry_bytes(our_pool_idx)
+                                          : p->slot_bytes(dense_idx);
+        m_sink->on_remove(e, c, report_bytes);
+
+        if (is_shared)
         {
-            p->info->destruct(slot);
+            p->shared_pool->release(our_pool_idx);
+        }
+        else if (p->info->destruct != nullptr)
+        {
+            p->info->destruct(p->slot_bytes(dense_idx));
         }
 
         // Swap-with-last.
         const crd::u32 last = p->count - 1U;
         if (dense_idx != last)
         {
-            crd::u8* trailing = p->slot_bytes(last);
-            if (p->info->move_construct != nullptr)
+            const crd::u32 trailing_pool_idx = pool_idx_at(p->shared_pool_idx, last);
+            const bool trailing_is_shared = (trailing_pool_idx != SharedComponentPool::kInvalidIdx);
+
+            if (!trailing_is_shared)
             {
-                p->info->move_construct(slot, trailing);
-                if (p->info->destruct != nullptr)
+                crd::u8* slot     = p->slot_bytes(dense_idx);
+                crd::u8* trailing = p->slot_bytes(last);
+                if (p->info->move_construct != nullptr)
                 {
-                    p->info->destruct(trailing);
+                    p->info->move_construct(slot, trailing);
+                    if (p->info->destruct != nullptr)
+                    {
+                        p->info->destruct(trailing);
+                    }
+                }
+                else
+                {
+                    std::memcpy(slot, trailing, p->info->size);
                 }
             }
-            else
+
+            // Move shared_pool_idx in lockstep with entities[].
+            if (last < p->shared_pool_idx.size())
             {
-                std::memcpy(slot, trailing, p->info->size);
+                if (dense_idx >= p->shared_pool_idx.size())
+                {
+                    p->shared_pool_idx.resize(dense_idx + 1U, SharedComponentPool::kInvalidIdx);
+                }
+                p->shared_pool_idx[dense_idx] = p->shared_pool_idx[last];
             }
             const EntityId moved = p->entities[last];
             p->entities[dense_idx] = moved;
             p->set_sparse(moved.index(), dense_idx);
+        }
+
+        // Clear the (now-unused) trailing slot's pool_idx.
+        if (last < p->shared_pool_idx.size())
+        {
+            p->shared_pool_idx[last] = SharedComponentPool::kInvalidIdx;
         }
 
         p->entities.pop_back();
@@ -504,6 +695,16 @@ crd::u64 SparseSetStorage::pool_version(ComponentId c) const noexcept
 {
     const Pool* p = find_pool(c);
     return (p != nullptr) ? p->version : 0U;
+}
+
+crd::u32 SparseSetStorage::shared_pool_live_count(ComponentId c) const noexcept
+{
+    const Pool* p = find_pool(c);
+    if (p == nullptr || p->shared_pool == nullptr)
+    {
+        return 0U;
+    }
+    return p->shared_pool->live_count();
 }
 
 } // namespace crd::scene

@@ -20,6 +20,8 @@
 #include <crd/scene/sparse_set_storage.hpp>
 #include <crd/scene/storage_backend.hpp>
 #include <crd/scene/storage_event_sink.hpp>
+#include <crd/scene/obek.hpp>
+#include <crd/scene/scene_resource.hpp>
 #include <crd/scene/system.hpp>
 #include <crd/scene/transform.hpp>
 
@@ -256,6 +258,116 @@ public:
     {
         m_external_sink = (sink != nullptr) ? sink : NullStorageEventSink::instance();
     }
+
+    // ---- Scene serialisation (Phase 3.0 v1k, ADR-0055) -----------------
+    //
+    // Instantiate a loaded SceneResource into this World. Spawns one
+    // EntityId per file-local index, restores components by FourCC
+    // lookup, and installs relations.
+    //
+    // Forward-compatibility (advisor pin #1):
+    //   - Unknown FourCC on a component-or-relation → skipped (counted
+    //     in `components_skipped` / `relations_skipped`); the entity
+    //     itself is still spawned with whatever known components it has.
+    //   - Known FourCC + size or alignment mismatch with the registered
+    //     type → CRD_FATAL during instantiation. Silent best-effort
+    //     would corrupt downstream state; loaders sit at the trust
+    //     boundary, fail loudly.
+    //   - Known FourCC + version mismatch with registered ComponentSerialize
+    //     → CRD_FATAL. Versions are explicit migration opt-ins.
+    //
+    // Result: a SceneInstantiation move-only struct mapping file-local
+    // index → live EntityId. Caller code uses this to find spawned
+    // entities by name, hand them to systems, etc.
+    [[nodiscard]] SceneInstantiation instantiate_scene(const SceneResource& res);
+
+    // ---- Öbek instantiation (Phase 3.0 v1m, ADR-0058) ------------------
+    //
+    // Spawn one EntityId per file-local index in the öbek; restore
+    // components by FourCC lookup; install relations. If `parent` is
+    // alive, every öbek root (an entity with no ChildOf relation in the
+    // source) gets a Relation<ChildOf> to `parent` installed during
+    // instantiation. Pass EntityId::null() to disable reparenting (the
+    // öbek roots become top-level entities in this World).
+    //
+    // Forward-compat + hard-fail rules match instantiate_scene:
+    //   - Unknown FourCC → skipped (counted in components_skipped /
+    //     relations_skipped); entity still spawned.
+    //   - Known FourCC + size/alignment/version mismatch → CRD_FATAL.
+    //
+    // v1m1 ships the basic restore + reparent path; v1m2 layers override
+    // patches; v1m3 lights up nested öbek sub-instance tracking; v1m5
+    // adds unpack / revert APIs.
+    [[nodiscard]] ObekInstantiation instantiate_obek(
+        const ObekResource& res,
+        EntityId parent = EntityId::null(),
+        crd::containers::ConstSpan<ObekOverride> overrides = {});
+
+    // ---- v1m5a — revert / unpack / enumerate APIs (ADR-0058 pillar 7) ---
+    //
+    // These rebuild entity component bytes from the öbek's stored source
+    // payload + cook-time OOVR overrides, ignoring any runtime mutations
+    // the caller has made through `get_component_mut`. The instance's
+    // `source` pointer must be valid (set by `instantiate_obek`); calling
+    // any revert API on an unpacked instance is a no-op.
+    //
+    // All APIs are idempotent and safe to call repeatedly.
+
+    // Revert a specific byte range within a component on the entity at
+    // `file_idx` to the value baked at instantiation time (source +
+    // cook-time overrides). Out-of-range or unknown component → no-op.
+    void revert_field(ObekInstantiation& inst, crd::u32 file_idx, crd::u32 component_fourcc,
+                      crd::u32 field_offset, crd::u32 field_size);
+
+    // Revert the whole component (every byte) on the entity at `file_idx`.
+    void revert_component(ObekInstantiation& inst, crd::u32 file_idx, crd::u32 component_fourcc);
+
+    // Revert every component on the entity at `file_idx`.
+    void revert_entity(ObekInstantiation& inst, crd::u32 file_idx);
+
+    // Revert every entity in the instance.
+    void revert_all(ObekInstantiation& inst);
+
+    // Sever the instance ↔ source link AND revert all entities to their
+    // post-instantiate state. After this call, the instance's entities are
+    // plain World data; the öbek source can be safely unloaded.
+    void unpack_obek(ObekInstantiation& inst);
+
+    // Sever the link WITHOUT reverting. Entities keep whatever state they
+    // currently have (including any runtime mutations). After this call,
+    // the öbek source can be safely unloaded.
+    void unpack_obek_keep_overrides(ObekInstantiation& inst);
+
+    // Return the cook-time override records that were baked into the
+    // öbek's OOVR chunk (i.e. authored in the `.obek.toml`'s
+    // `overrides = [...]` block). Returns an empty span if the instance
+    // has been unpacked. Used by editor "override window" UIs to display
+    // what overrides exist on a given instance.
+    [[nodiscard]] crd::containers::ConstSpan<ObekOverrideRecord>
+        enumerate_overrides(const ObekInstantiation& inst) const noexcept;
+
+    // ---- v1m5b — AAAA-tier batch instantiation (ADR-0058 pillar 15a) ---
+    //
+    // Spawn `count` instances of `res` at once. Returns an `ObekBatchHandle`
+    // that the renderer (Phase 3.5+) reads to detect shared-draw eligibility.
+    //
+    // For each slot i in [0, count):
+    //   1. instantiate_obek(res, parent) is called once per slot.
+    //   2. If `BatchInstanceTag` is registered on this World, every spawned
+    //      entity for slot i is tagged with `BatchInstanceTag{batch, i}`.
+    //
+    // The transforms[] argument is reserved at v1m5b — the caller passes
+    // a transform per slot today, but the path that applies them to root
+    // entities lands when the renderer's instanced-draw path ships in
+    // Phase 3.5+. Pass an empty span if you don't have transforms yet.
+    //
+    // Each call returns a unique `ObekBatchHandle`. v1m5b uses a monotonic
+    // per-World counter; no persistence concerns.
+    [[nodiscard]] ObekBatchHandle instantiate_obek_batch(
+        const ObekResource& res,
+        crd::u32 count,
+        EntityId parent = EntityId::null(),
+        BatchHints hints = {});
 
     // ---- Transform writer API (Phase 3.0 v1j, ADR-0054) ----------------
     //

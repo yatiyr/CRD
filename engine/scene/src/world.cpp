@@ -1,6 +1,9 @@
 // v1f: relations + iterative destruction worklist
 // v1h: schedule + commands flush
+// v1j: transform writers + dirty subtree marking
+// v1k: serialize traits attached to built-in relations
 #include <crd/core/assert.hpp>
+#include <crd/scene/serialize.hpp>
 #include <crd/scene/world.hpp>
 
 #include <new>
@@ -1074,23 +1077,31 @@ void World::register_builtin_relations()
     using namespace crd::scene::relations;
 
     // Canonical defaults — see relation.hpp for the rationale table.
+    // ComponentSerialize traits attached so SCEN round-trip works for the
+    // built-in hierarchy/attachment/ownership/etc relations (v1k).
     register_relation<ChildOf>(StorageHint::Archetype, ReverseIndex{}, Acyclic{},
-                               OnTargetDestroyed{OnTargetDestroyed::Policy::Cascade});
+                               OnTargetDestroyed{OnTargetDestroyed::Policy::Cascade},
+                               relation_serialize_trait(kFourCC_RelChildOf));
 
     register_relation<AttachedTo>(StorageHint::Archetype, ReverseIndex{}, Acyclic{},
-                                  OnTargetDestroyed{OnTargetDestroyed::Policy::Detach});
+                                  OnTargetDestroyed{OnTargetDestroyed::Policy::Detach},
+                                  relation_serialize_trait(kFourCC_RelAttachedTo));
 
     register_relation<Owns>(StorageHint::Archetype, ReverseIndex{}, Acyclic{},
-                            OnTargetDestroyed{OnTargetDestroyed::Policy::Cascade});
+                            OnTargetDestroyed{OnTargetDestroyed::Policy::Cascade},
+                            relation_serialize_trait(kFourCC_RelOwns));
 
     register_relation<Targets>(StorageHint::SparseSet, ReverseIndex{},
-                               OnTargetDestroyed{OnTargetDestroyed::Policy::SetNull});
+                               OnTargetDestroyed{OnTargetDestroyed::Policy::SetNull},
+                               relation_serialize_trait(kFourCC_RelTargets));
 
     register_relation<DependsOn>(StorageHint::SparseSet, ReverseIndex{}, Acyclic{},
-                                 OnTargetDestroyed{OnTargetDestroyed::Policy::SetNull});
+                                 OnTargetDestroyed{OnTargetDestroyed::Policy::SetNull},
+                                 relation_serialize_trait(kFourCC_RelDependsOn));
 
     register_relation<PossessedBy>(StorageHint::SparseSet, ReverseIndex{},
-                                   OnTargetDestroyed{OnTargetDestroyed::Policy::Detach});
+                                   OnTargetDestroyed{OnTargetDestroyed::Policy::Detach},
+                                   relation_serialize_trait(kFourCC_RelPossessedBy));
 }
 
 } // namespace crd::scene

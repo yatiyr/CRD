@@ -19,11 +19,23 @@ target_link_libraries(crd-cooker
         crd-platform
         crd-resources
         crd-shader
+        crd-math
+        crd-scene
     PRIVATE
         stb
         cgltf
         mikktspace
 )
+
+# v1l: scene cooker uses toml++ (same dep used by crd-config).
+# TOML_EXCEPTIONS=0 selects toml++'s no-exception API (parse() returns a
+# parse_result with operator! / .error() / .table()). Matches crd-config.
+target_compile_definitions(crd-cooker PRIVATE TOML_EXCEPTIONS=0)
+if(TARGET tomlplusplus::tomlplusplus)
+    target_link_libraries(crd-cooker PRIVATE tomlplusplus::tomlplusplus)
+else()
+    target_link_libraries(crd-cooker PRIVATE tomlplusplus)
+endif()
 
 target_compile_features(crd-cooker PUBLIC cxx_std_20)
 

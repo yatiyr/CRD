@@ -1,7 +1,7 @@
 # Phase 3.0 — Scene / ECS Foundation
 
-**Status:** 🚧 active — v1a–v1j shipped 2026-05-06 / 07; 4 of 14 slices remaining. Next: v1k (SceneResource + SceneLoader).
-**ADRs:** ADR-0049, ADR-0050, ADR-0051, ADR-0052, ADR-0053, ADR-0054, ADR-0055, ADR-0056, ADR-0057
+**Status:** 🚧 active — v1a–v1l shipped 2026-05-06 / 07 / 08; phase expanded from 14 to **17 slices** (2026-05-08) to land the elite-tier authoring substrate (Öbek + Preset + Profile) before Phase 3.0 closes. Next: v1m (Öbek system).
+**ADRs:** ADR-0049, ADR-0050, ADR-0051, ADR-0052, ADR-0053, ADR-0054, ADR-0055, ADR-0056, ADR-0057, **ADR-0058 (Öbek), ADR-0059 (Preset), ADR-0060 (Profile)**
 **Cornerstone:** ADR-0020 (scene/ECS hybrid, UI in tree)
 **New module:** `crd-scene` (bootstrapped 2026-05-06)
 **Depends on:** Phase 2.8 complete (MaterialResource with PSO state + pass-keyed variants)
@@ -31,8 +31,12 @@ This is the **highest-leverage single block of work in the engine**. Every Phase
 | v1h | System + Schedule + Commands — `ISystem` virtual class, 7-phase fixed schedule, `register_system` / `step` / `step_fixed`, deferred-mutation `Commands` buffer flushed at phase boundaries | ✅ shipped 2026-05-07 — `docs/sessions/2026-05-07-scene-v1h-system-schedule.md` |
 | v1i | Index framework (`IComponentIndex` + fan-out sink + auto-register) + `ChangeDetectIndex` + `AsyncAwareIndex` + 5 reserved no-op shells (History / SpatialBVH / GpuResident / Replication / Reflection); `.changed<T>()` and `.skip_pending<T>()` query operators | ✅ shipped 2026-05-07 — `docs/sessions/2026-05-07-scene-v1i-index-framework.md` |
 | v1j | Transform (TRS + cached world) + TransformPropagation system in PreRender; `TransformDirtyFlag` SparseSet marker; six rotation-set APIs (quat/axis_angle/euler/from_to/look_at/quat_unnormalized); `set_world` / `try_set_world` with negative-determinant handling; cross-domain robust (games/robotics/aerospace/DAW); determinism bit-exact verified | ✅ shipped 2026-05-07 — `docs/sessions/2026-05-07-scene-v1j-transform-propagation.md` |
-| v1k | SceneResource + SceneLoader | ⏳ next |
-| v1l–v1n | see slice list below | ⏳ |
+| v1k | SceneResource + SceneLoader (FourCC `'SCEN'`) + SceneArtifactBuilder + `World::instantiate_scene` + 6 built-in relations get serialize traits; forward-compat by FourCC, hard-fail on size/version mismatch; determinism bit-exact verified | ✅ shipped 2026-05-07 — `docs/sessions/2026-05-07-scene-v1k-scene-resource.md` |
+| v1l | `cook_scene` cooker handler — `crd-cooker` extended with `SceneCooker` + `scene_cooker_inline()`; built-in TOML readers (Transform + 6 built-in relations); three-pass cooker (collect → apply alphabetical → install relations); cooker-side `TransformPropagation::step()` bakes world matrices into SCEN bytes; determinism bit-exact verified | ✅ shipped 2026-05-08 — `docs/sessions/2026-05-08-scene-v1l-cooker.md` |
+| v1m | **Öbek system** — `ObekResource` + `ObekLoader` (FourCC `'OBEK'`) + `ObekArtifactBuilder`; full cooker (rides on v1l SceneCooker); `extends` chain + nested öbek composition + cycle detection; override patches with stable file_idx + symbolic name fallback; `World::instantiate_obek` + sub-instantiation API + batch API; **all three `InheritPolicy` values** (Override / Inherit-CoW / DontInherit) with backend storage CoW write interception; per-instance ADD + soft-DELETE; apply/revert at four granularities; unpack semantics; hot-reload graph-aware; **AAAA-tier format reservations** (OBAT batch / OLNK lazy / replication / streaming.lod / static_bake); `ObekEntityGuid` 64-bit cross-machine identity; `obekc extract` CLI tool | ⏳ next |
+| v1n | **Preset + Profile system** — `PresetResource` + per-type `PresetLoader` + `PresetRegistry`; first concrete types `QualityPreset` (`'PRQL'`) + `CameraPreset` (`'PRCM'`) wired into `IRenderPath` and `Camera`; `extends` chain (shares Öbek resolver); five-layer resolution stack (default → extends → preset → instance → runtime); `ProfileResolver` with closed typed predicates (os / gpu_tier / domain / mode / target_fps / cpu_cores); additive profile composition (priority-sorted stack, Cerid-unique vs Unreal first-match-wins); runtime context detection; hot-reload + atomic swap | ⏳ |
+| v1o | **Sandbox renderer integration with Öbek + Preset + Profile** — sandbox loads a `.scene.toml` referencing öbeks; profile auto-resolves at boot; renderer driven by applied `QualityPreset` + `CameraPreset`; ImGui panel toggles profile + reverts overrides live; visual proof of the full authoring stack; ships demo `default.profile.toml` with game / sim / DAW / cinematic baselines (originally planned as v1m) | ⏳ |
+| v1p | **Reserved-slot freeze** — registration grammar test for L6/L7/L8 reserved indexes (Replication / ScriptComponent / Reflection trait acceptance); öbek/preset/profile API surface frozen; closes Phase 3.0 (originally planned as v1n) | ⏳ |
 
 `crd-scene` now ships **the L4 scheduling half** per ADR-0052 §3-§5. `ISystem` has `Reads`/`Writes` `ComponentSet` type aliases (computed into masks via `World::component_set_mask<Set>()`) — auto-parallel scheduling reads them in Phase 3.5; v1h dispatches serially. The 7-phase schedule (PrePhysics → PostRender) runs systems in registration order within each phase. `step_fixed(dt, fixed_dt, max_substeps)` interleaves fixed-step systems N times then variable-rate once per phase, with accumulator carry-over and spiral-of-death clamp. `Commands` queues mutations during iteration and flushes at every phase boundary; spawn is immediate (single-threaded v1h), all other ops deferred. 172 unit tests / 34602 assertions; six-config green.
 
@@ -84,13 +88,15 @@ The architecture is "extensible from day one" because adding any future ECS exte
 | L8 Reflection | Compile-time hooks reserved | v1n |
 | Transform component | Full impl + propagation system | v1j |
 | Scene serialization | TOML cooker + SCEN CRDR + SceneLoader | v1k–v1l |
-| Renderer integration | Sandbox uses scene query for render extract | v1m |
+| **Öbek system** | Full impl — entity-graph templates with composition, variation, override patches, all three InheritPolicy values (CoW), batch API, format-reserved AAAA hooks | **v1m** |
+| **Preset + Profile system** | QualityPreset + CameraPreset; ProfileResolver with closed typed predicates; additive composition; hot-reload | **v1n** |
+| Renderer integration | Sandbox loads `.scene.toml` referencing öbeks; profile-driven preset application; ImGui live override panel | **v1o** |
 
 ---
 
 ## Slices
 
-14 slices, each individually shippable per the project's Definition of Done (six-config green, unit tests, headless smoke where applicable). Larger slices (v1c, v1g) may further sub-divide during implementation.
+17 slices, each individually shippable per the project's Definition of Done (six-config green, unit tests, headless smoke where applicable). Larger slices (v1c, v1g, **v1m**) may further sub-divide during implementation. Phase expanded from 14 to 17 slices on 2026-05-08 to land the elite-tier authoring substrate (Öbek + Preset + Profile) inside Phase 3.0 — see ADRs 0058/0059/0060.
 
 ### v1a — `EntityId` + `SlotMap` + `World` shell ✅ shipped 2026-05-06
 
@@ -206,30 +212,156 @@ Storage-side `for_each_chunk` interface. The plumbing that lets queries (next sl
 
 **ADR:** 0055
 
-### v1m — Sandbox renderer integration (~200 LOC)
+### v1m — Öbek system (~2000 LOC + ~30 tests, 6–8 days)
 
-`SandboxLayer` constructs a `World`, populates from a cooked scene, registers `TransformPropagation`. The current explicit `Renderer::submit` calls become a query `world.query<Transform, Renderable>().par_each(...)` driving the existing `ForwardRenderPath`. Procedural-shape clicks now spawn entities into the world rather than uploading directly. Tests: `crd-sandbox --headless` mounts a cooked scene and exits 0; manually verify the sandbox panel shows scene entities under the Asset Browser's existing UI.
+The single largest slice in Phase 3.0. Ships the elite-tier entity-graph-template substrate per ADR-0058's 19 design pillars.
 
-**ADR:** none new — integrates 0049–0055.
+**Substrate:**
+- `crd::scene::Obek`, `ObekResource`, `ObekLoader` (FourCC `'OBEK'`), `ObekArtifactBuilder`.
+- CRDR layout: OINF / OETB / OCMP / ORLS / OOVR / OCHN chunks; OLNK + OBAT chunks reserved (Phase 3.5+).
+- `ObekCooker` extends `crd-cooker` riding the v1l SceneCooker substrate (~70% code reuse).
 
-### v1n — Reserved-slot freeze (~150 LOC + tests)
+**Composition + variation:**
+- Nested öbek references (`obek = "..."`) — eager flatten by default, lazy reference reserved.
+- Variant chains (`extends = "..."`) — depth-unbounded, cycle-detected at cook time.
+- Cooker pass schedule: parse extends → flatten variant chain → walk entities (document order) → walk components (alphabetical) → resolve nested → resolve relations → validate overrides → bake world matrices → emit CRDR.
 
-Final pass: confirm every reserved trait (`History`, `SpatialBVH`, `GpuResident`, `Replication`, `Reflection`, `ScriptComponent`) is accepted by `register_component`, stored, and otherwise no-ops. Reserved DSL operators (`.at(frame)`, `.in_aabb()`, `.within_radius()`, `.group_by<>()`) parse and return correct empty/passthrough behaviour. Tests: registration accepts all traits without compilation error; deferred-impl operators round-trip without crashing; documentation in code points at the consumer-phase ADR for each.
+**Override patches:**
+- Typed `ObekOverride` struct with packed `field_path` (no string lookup at runtime).
+- Cook-time validated against öbek schema manifest.
+- Sortable, diffable, persistable into SCEN.
+- Symbolic-name fallback when `file_idx` fails to validate.
 
-**ADR:** 0053, 0056 (formal API freeze)
+**InheritPolicy — all three values fully implemented:**
+- `Override` (default) — private copy per instance.
+- `Inherit` — shared backing with **transparent CoW write interception**. Backend storage (ArchetypeChunkStorage + SparseSetStorage) gains per-entity per-component "owned vs shared" flag bit; write paths check the bit and copy-on-first-write. Eviction tracks shared backing via reference count.
+- `DontInherit` — skipped on instantiation.
+
+**Per-instance freedom:**
+- ADD entities not in source (`spawn_into_obek_instance`, tagged `instance_only`).
+- Soft-DELETE source entities (`disabled = true` flag; file_idx remains stable).
+- No reorder; restructure source via `obekc migrate` tool (ships in v1m or later).
+
+**Apply / Revert at four granularities:**
+- `revert_field` / `revert_component` / `revert_entity` / `revert_all`.
+- `apply_back_to_source(instance, override_subset, target_path)` re-cooks source.
+- `enumerate_overrides(instance)` for editor "override window" UI.
+
+**Unpack semantics:**
+- `unpack_obek(instance)` — sever öbek link, all Inherit components forcibly unlinked, overrides discarded.
+- `unpack_obek_keep_overrides(instance)` — sever link but bake overrides into entities.
+
+**Hot-reload graph-aware:**
+- `OCHN` chunk lists every transitive dependency (extends + nested) with content hashes.
+- Watcher tracks chain; any link change triggers transitive re-cook + atomic swap.
+- Reload event lists changed `file_idx`s for selective re-apply on live instances.
+
+**AAAA-tier future-proofing (format-reserved at v1m, runtime backends in consumer phases):**
+- `instantiate_obek_batch(obek, transforms[], parent, BatchHints)` API + `OBAT` chunk for GPU instanced rendering (Phase 3.5+ renderer wires it up).
+- `GpuResident` + `static_bake` per-component flags reserved in OINF (already declared in ADR-0053; v1m populates the bits).
+- `ObekEntityGuid` (64-bit hash of `obek_root_id` + `file_idx`) — stable cross-machine identity for replay (Phase 8) + replication (Phase 4.2).
+- `ReplicationMode` + `streaming.lod` + `streaming.region` per-entity reserved fields.
+- `mode = "lazy"` opt-in flag accepted; OLNK chunk format-reserved (lazy loader lands Phase 3.5+).
+
+**Tests (~30 cases):**
+- Empty öbek cooks + round-trips.
+- Single-entity Transform öbek instantiates correctly.
+- Composition: vehicle with 4 nested wheels.
+- Variant: sports-car extends vehicle-base; field overrides win.
+- Variant chain (3 deep) resolves correctly.
+- Cycle detection in extends + nested.
+- All three InheritPolicy values with read + write semantics including CoW.
+- Override patch validation + symbolic-name fallback.
+- Per-instance ADD + soft-DELETE + override revert at all four granularities.
+- `unpack_obek` + `unpack_obek_keep_overrides`.
+- Hot-reload of leaf öbek triggers re-cook of consumers.
+- Determinism: same source files → bit-exact CRDR bytes (FNV hash verified).
+- Batch instantiation tags entities with `BatchInstanceTag`.
+- `ObekEntityGuid` stable across cook re-runs.
+- 100-entity stress test with mix of variants + nesting + overrides.
+
+**ADR:** 0058 (full architecture + 19 pillars)
+
+### v1n — Preset + Profile system (~800 LOC + ~20 tests, 3–4 days)
+
+Phase 3.0's second new substrate: ADR-0059 (Preset) + ADR-0060 (Profile). Together they map runtime context → ordered preset bundle → typed apply callbacks against live `IPresetTarget` impls.
+
+**Preset substrate (ADR-0059):**
+- `PresetResource` + per-type `PresetLoader` + `PresetRegistry` (closed by C++ types).
+- `register_type<T>(name)` registers FourCC + schema + TOML reader + apply dispatch.
+- Five-layer resolution: schema default → extends chain → active preset → per-instance → runtime override.
+- CRDR layout: PINF / PDAT / PCHN per cooked preset.
+- `extends` chain shares the Öbek resolver (single cooker pipeline).
+- Hot-reload with atomic swap + last-good fallback.
+
+**First concrete preset types (ship in v1n):**
+- `QualityPreset` (FourCC `'PRQL'`) — shadow_resolution, MSAA, SSR/SSAO quality, post-fx list. Wired into `IRenderPath::apply(QualityPreset)`.
+- `CameraPreset` (FourCC `'PRCM'`) — FOV, near/far, lens, exposure curve. Wired into `Camera::apply(CameraPreset)`.
+
+**Profile substrate (ADR-0060):**
+- `ProfileResource` + `ProfileLoader` (FourCC `'PROF'`) + `ProfileResolver`.
+- Closed predicate schema: `os` / `gpu_tier` / `domain` / `mode` / `target_fps` / `cpu_cores`.
+- Additive composition: priority-sorted stack, all matching profiles compose, deepest priority wins per field.
+- Runtime context detection (platform / RHI capability / config-driven).
+- CRDR layout: FINF / FRLE / FBND chunks.
+
+**Tests (~20 cases):**
+- QualityPreset cooks + round-trips + applies to mock IRenderPath.
+- CameraPreset same.
+- `extends` chain depth 3 resolves correctly per field.
+- Hot-reload of leaf preset re-cooks + re-applies.
+- Profile single-rule match.
+- Profile additive composition (3 profiles match → applied in priority order).
+- Predicate operators (`==`, `>=`, `<=`, `in [...]`).
+- Runtime context detection mocked + driving resolver.
+- Determinism: same context + same profiles → same applied bundle bytes.
+- Failed cook keeps last-good preset.
+
+**ADR:** 0059 (Preset), 0060 (Profile)
+
+### v1o — Sandbox renderer integration with Öbek + Preset + Profile (~400 LOC, 2–3 days)
+
+The visual proof of the full authoring stack. Originally planned as a small "wire renderer to scene query" slice; expanded to demonstrate Öbek + Preset + Profile end-to-end.
+
+**Implementation:**
+- `SandboxLayer` constructs a `World`, registers `TransformPropagation`, registers `IRenderPath` + `Camera` as `IPresetTarget` impls.
+- App boot resolves `ProfileContext` (os / gpu_tier / domain=game / mode=runtime / target_fps / cpu_cores), runs `ProfileResolver`, applies bundle → renderer + camera reconfigure.
+- Sandbox loads `assets/sources/sandbox.scene.toml` referencing 2–3 demo öbeks (procedural shapes graduate into öbeks; imported glTF assets become öbek-wrapped meshes).
+- ImGui panel adds:
+  - Profile picker (`game / simulation / daw / cinematic` — re-resolves on change).
+  - Quality slider (`Low / Medium / High / Ultra` — runtime override at L4).
+  - "Override window" enumerating any override patches on the currently-selected entity, with revert buttons at field / component / entity / all granularities.
+  - "Unpack öbek" button — visualises the unpack operation.
+- Ships demo profile bundle: `assets/profiles/default.profile.toml` with sensible game/sim/DAW/cinematic baselines.
+
+**Tests:**
+- `crd-sandbox --headless --domain=simulation` mounts a cooked scene + profile, exits 0.
+- GPU smoke: sandbox renders a scene of öbeks with applied quality preset; visual verification.
+
+**ADR:** none new — integrates 0049–0060.
+
+### v1p — Reserved-slot freeze (~150 LOC + tests)
+
+Phase 3.0's closer. Final pass: confirm every reserved trait (`History`, `SpatialBVH`, `GpuResident`, `Replication`, `Reflection`, `ScriptComponent`) is accepted by `register_component`, stored, and otherwise no-ops. Reserved DSL operators (`.at(frame)`, `.in_aabb()`, `.within_radius()`, `.group_by<>()`) parse and return correct empty/passthrough behaviour. Öbek + Preset + Profile API surfaces are formally frozen — Phase 3.5+ consumer phases implement against them but cannot change them.
+
+Tests: registration accepts all traits without compilation error; deferred-impl operators round-trip without crashing; documentation in code points at the consumer-phase ADR for each; öbek/preset/profile API surface freeze verified by API hash.
+
+**ADR:** 0053, 0056, 0058, 0059, 0060 (formal API freeze)
 
 ---
 
 ## Definition of done (Phase 3.0)
 
-1. All 14 slices shipped with unit tests.
-2. ADRs 0049–0057 written and in `Accepted` status. (Done 2026-05-06.)
-3. Six-configuration green for the entire `crd-scene` module across all changes.
+1. All **17 slices** shipped with unit tests.
+2. ADRs 0049–0057 written and in `Accepted` status. (Done 2026-05-06.) **ADRs 0058–0060 written and in `Accepted` status. (Done 2026-05-08.)**
+3. Six-configuration green for the entire `crd-scene` + `crd-cooker` modules across all changes.
 4. `smoke_scene.exe` (headless): cook a TOML scene, mount it, instantiate entities, run one frame, assert entity count + transform correctness, exit 0.
-5. `smoke_scene_render.exe` (GPU): cook a scene with one mesh + transform, load, render one frame via `ForwardRenderPath` driven by query, exit 0.
-6. `smoke_scene_stress.exe` (GPU/perf, optional): 100K entities with `(Transform, Renderable)`, propagate, render, log average frame ms. Used to validate the architecture meets million-entity targets at the chunk-iteration level (extrapolation).
-7. `crd-sandbox` Asset Browser unchanged in UI; under the hood it now constructs a scene rather than directly calling `Renderer::submit`.
-8. `docs/systems/scene.md` written.
+5. `smoke_obek.exe` (headless): cook a `.obek.toml` with composition + variant + overrides, instantiate into a World, validate file_idx stability + override application + InheritPolicy semantics, exit 0.
+6. `smoke_preset_profile.exe` (headless): cook QualityPreset + CameraPreset + Profile; resolve against mock context; apply to mock IPresetTargets; verify five-layer resolution precedence, exit 0.
+7. `smoke_scene_render.exe` (GPU): cook a scene with one mesh + transform, load, render one frame via `ForwardRenderPath` driven by query, exit 0.
+8. `smoke_scene_stress.exe` (GPU/perf, optional): 100K entities with `(Transform, Renderable)`, propagate, render, log average frame ms. Used to validate the architecture meets million-entity targets at the chunk-iteration level (extrapolation).
+9. `crd-sandbox` reads a `.scene.toml` referencing öbeks; profile auto-resolves at boot; ImGui override-window panel works live.
+10. `docs/systems/scene.md` written; `docs/systems/obek.md` written; `docs/systems/preset.md` written.
 
 ---
 
