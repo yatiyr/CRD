@@ -17,8 +17,20 @@ void glfw_error_to_log(int error_code, const char* description) noexcept
 
 [[nodiscard]] bool headless_env_requested() noexcept
 {
+#if CRD_OS_WINDOWS
+    // The MSVC CRT deprecates std::getenv (used by both cl.exe under /WX and
+    // clang-cl under -Werror=deprecated-declarations). Use _dupenv_s — same
+    // pattern as engine/shader/src/compile.cpp's VULKAN_SDK lookup.
+    char*       value = nullptr;
+    std::size_t len   = 0;
+    const errno_t rc  = _dupenv_s(&value, &len, "CRD_PLATFORM_HEADLESS");
+    const bool requested = (rc == 0) && (value != nullptr) && (value[0] == '1');
+    std::free(value);
+    return requested;
+#else
     const char* v = std::getenv("CRD_PLATFORM_HEADLESS");
     return v != nullptr && v[0] == '1';
+#endif
 }
 } // namespace
 
