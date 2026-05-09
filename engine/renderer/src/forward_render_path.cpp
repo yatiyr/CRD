@@ -6,6 +6,16 @@
 namespace crd::renderer
 {
 
+void ForwardRenderPath::apply(const crd::preset::QualityPreset& preset)
+{
+    // Cache the resolved value. The next `build()` will read
+    // `m_quality.enable_depth_prepass` and skip prepass draws when 0.
+    // Other fields (msaa_samples / shadow_resolution / ssr_quality /
+    // ssao_quality / post_fx[]) ride along for read-back via
+    // `quality_preset()`; their consuming systems light up in Phase 3.5+.
+    m_quality = preset;
+}
+
 std::unique_ptr<ForwardRenderPath>
 ForwardRenderPath::create(rhi::Device& device, PipelineResolver& resolver,
                           rhi::DescriptorAllocator& allocator, rhi::Extent2D initial_extent,
@@ -240,33 +250,46 @@ void ForwardRenderPath::build(FrameGraph& fg, const DrawList& draw_list, const F
 
             m_resolver->begin_pass(PassType::DepthPrepass);
 
-            for (const auto& item : m_draw_list->opaque)
+            // Phase 3.0 v1o3 (ADR-0061 §QualityPreset wiring): when the
+            // applied QualityPreset has `enable_depth_prepass = 0`, the
+            // pass declaration stays (so FrameGraph topology / barrier
+            // insertion / transient aliasing stay invariant) but the
+            // draws are skipped. The depth buffer ends up with just the
+            // reverse-Z clear value (0.0F = far). The color pass still
+            // does `LoadOp::Load` on depth — under reverse-Z + GREATER
+            // depth test, a "far" depth means everything passes, so
+            // disabled-prepass produces correct geometry without the
+            // early-Z optimization.
+            if (m_quality.enable_depth_prepass != 0U)
             {
-                rhi::Pipeline* pipeline = nullptr;
-                if (item.material != nullptr)
+                for (const auto& item : m_draw_list->opaque)
                 {
-                    auto& mat_entry = get_or_compile_mat_pipelines(*item.material);
-                    pipeline = mat_entry.depth;
-                }
-                else
-                {
-                    pipeline = m_resolver->resolve_pipeline(item.handoff);
-                }
-                if (!pipeline)
-                    continue;
-                cmd.bind_pipeline(*pipeline);
-                const PerDrawPush push{item.model};
-                cmd.push_constants(*m_pipeline_layout, rhi::ShaderStage::Vertex,
-                                   0, static_cast<crd::u32>(sizeof(PerDrawPush)), &push);
-                cmd.bind_vertex_buffer(*item.vertex_buffer, 0);
-                if (item.index_buffer)
-                {
-                    cmd.bind_index_buffer(*item.index_buffer, 0, item.index_type);
-                    cmd.draw_indexed(item.index_count, 0, 0);
-                }
-                else
-                {
-                    cmd.draw(item.vertex_count, 0);
+                    rhi::Pipeline* pipeline = nullptr;
+                    if (item.material != nullptr)
+                    {
+                        auto& mat_entry = get_or_compile_mat_pipelines(*item.material);
+                        pipeline = mat_entry.depth;
+                    }
+                    else
+                    {
+                        pipeline = m_resolver->resolve_pipeline(item.handoff);
+                    }
+                    if (!pipeline)
+                        continue;
+                    cmd.bind_pipeline(*pipeline);
+                    const PerDrawPush push{item.model};
+                    cmd.push_constants(*m_pipeline_layout, rhi::ShaderStage::Vertex,
+                                       0, static_cast<crd::u32>(sizeof(PerDrawPush)), &push);
+                    cmd.bind_vertex_buffer(*item.vertex_buffer, 0);
+                    if (item.index_buffer)
+                    {
+                        cmd.bind_index_buffer(*item.index_buffer, 0, item.index_type);
+                        cmd.draw_indexed(item.index_count, 0, 0);
+                    }
+                    else
+                    {
+                        cmd.draw(item.vertex_count, 0);
+                    }
                 }
             }
 

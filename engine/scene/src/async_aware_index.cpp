@@ -27,14 +27,35 @@ void AsyncAwareIndex::on_insert(EntityId e, ComponentId c, const void* /*data*/)
     set_state(e, c, LoadState::Loading);
 }
 
-void AsyncAwareIndex::on_update(EntityId e, ComponentId c, const void* /*old_data*/, const void* /*new_data*/)
+void AsyncAwareIndex::on_update(EntityId /*e*/, ComponentId /*c*/,
+                                const void* /*old_data*/, const void* /*new_data*/)
 {
-    // UPSERT replays as a fresh insert from the index's POV — the new
-    // payload may be a re-stream of the same asset, restart the
-    // Loading lifecycle. Callers that want to keep the previous Loaded
-    // state across in-place updates should NOT mutate AsyncAware
-    // components in place.
-    set_state(e, c, LoadState::Loading);
+    // INTENTIONALLY a no-op (corrected v1o3, 2026-05-09).
+    //
+    // The old behaviour reset state to Loading on every on_update event.
+    // That's incorrect because storage backends fire on_update every
+    // time `get_component_mut` is called — including the no-op case
+    // where the caller only READS through the returned reference (the
+    // SparseSet/Archetype "declared write" semantic exists for
+    // ChangeDetectIndex's pool-grain dirty-tracking, not for
+    // AsyncAware). Crucially `Query<...>::Iterator::operator*` calls
+    // `get_component_mut` to yield mutable refs to consumers — so any
+    // query of a `skip_pending<T>()`-filtered AsyncAware component
+    // would self-evict on the very next frame.
+    //
+    // The lifecycle is now driven exclusively by explicit
+    // `mark_loading` / `mark_loaded` / `mark_failed` calls from the
+    // consumer that owns the async work. That matches the intent of
+    // the AsyncAware{} trait (the data is asynchronously prepared by
+    // the consumer; the index just observes the consumer's signals).
+    // The cleanup transitions (on_remove / on_entity_destroyed) stay
+    // as they were — those reflect "the entity is gone" which is
+    // genuinely a state change.
+    //
+    // If a caller really IS re-streaming an asset and wants the
+    // Loading lifecycle to restart, they call `mark_loading(e, c)`
+    // explicitly at the start of the re-stream — no different from
+    // the initial insert path.
 }
 
 void AsyncAwareIndex::on_remove(EntityId e, ComponentId c, const void* /*data*/)

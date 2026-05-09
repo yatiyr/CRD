@@ -1,0 +1,22 @@
+# Cerid Phase 3.0 v1o3 — default Quality preset.
+#
+# Fed into PresetCooker (.preset.toml handler) which dispatches by
+# `type` and writes a v2 QualityPreset payload (144 bytes) into a
+# PINF/PDAT CRDR blob. The sandbox loads this at boot via the
+# resolved profile bundle; ForwardRenderPath consumes it through
+# `IPresetTarget::apply(const QualityPreset&)`.
+
+type = "Quality"
+
+# Fields (defaults shown explicitly so the cooked artifact matches the
+# documented schema even if QualityPreset's struct defaults change).
+shadow_resolution    = 2048
+msaa_samples         = 4
+ssr_quality          = 2
+ssao_quality         = 2
+post_fx_count        = 0
+
+# v2 field — drives ForwardRenderPath behaviour today (skips depth-
+# prepass DRAWS when 0 while keeping the pass declaration in the
+# FrameGraph for invariant topology).
+enable_depth_prepass = 1

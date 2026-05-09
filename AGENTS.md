@@ -48,6 +48,39 @@ are explicit, justified, and recorded in `docs/ROADMAP.md` Section 4.
   flavours. No exceptions.
 - **The engine is allowed to be slow before it is allowed to be wrong.**
 
+## Agent Conduct (non-negotiable)
+
+These are the rules for any AI agent (Claude, OpenCode, etc.) working on
+Cerid. They sit alongside the engineering principles above and are equally
+binding.
+
+- **Never silently reduce a slice's scope.** The phase doc row + relevant
+  ADR sections + the prior session log's "Next" pointers define the
+  contract for the slice you're shipping. If you think a deliverable
+  should be deferred, surface it as a scope-check question to the user
+  (with concrete options + a recommendation) BEFORE writing code. Wait
+  for confirmation. Pragmatic-sounding silent reductions are a hard no.
+- **Treat "elegantly" / "elite" / "no shortcuts" as a quality multiplier,
+  not a scope reducer.** Ship the proper architectural choice — even
+  when the slice could ship with less.
+- **No dual code paths for "demo" vs "real" content.** When the sandbox
+  uses the engine, it goes through the same surface a downstream
+  consumer would. If a legacy path exists, the slice that adds the new
+  path replaces the legacy — it does not run alongside it.
+- **Hook-based contracts > explicit-call APIs.** When a prior slice left a
+  cleanup contract for a follow-up to pin (e.g. "per-component drop
+  callback"), build the proper hook. Do not paper over with an
+  explicit-call API the consumer remembers to invoke.
+- **Stub targets are not integration.** A consumer of a system (e.g. an
+  `IPresetTarget`) must consume at least one real field that drives
+  observable behaviour. "Display the value in ImGui" is observability,
+  not integration.
+- **Phase doc deliverables are the contract.** Aspirational-sounding lines
+  remain in scope until the user explicitly defers them. Author the
+  TOML, wire the cooker, ship the UI.
+- **Call the advisor on every non-trivial slice plan before
+  implementing.** Catches silent-narrowing reliably.
+
 ## Tech Stack
 
 - C++20, no compiler extensions

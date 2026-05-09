@@ -21,6 +21,8 @@ target_link_libraries(crd-cooker
         crd-shader
         crd-math
         crd-scene
+        crd-preset
+        crd-profile
     PRIVATE
         stb
         cgltf

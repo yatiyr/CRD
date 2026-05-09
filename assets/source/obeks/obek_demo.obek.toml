@@ -1,0 +1,27 @@
+# Cerid Phase 3.0 v1o3 — demo öbek for the sandbox.
+#
+# A minimal two-entity öbek that exercises:
+#   1. World::instantiate_obek — spawns both entities with a parent/child
+#      ChildOf relation;
+#   2. The runtime override patch path — the sandbox's "override demo"
+#      ImGui button changes the child's Transform.translation.x and
+#      revert clears it back to the cooked default;
+#   3. The unpack path — the "Unpack öbek" button transfers ownership
+#      of the spawned entities away from the öbek instance, severing
+#      the source link.
+#
+# Schema: a flat öbek (no extends, no nested obek refs, no cook-time
+# overrides). Component fields are alphabetical for determinism. The
+# entity TOML key (e.g. "root") becomes the file_idx-stable name used
+# by `World::instantiate_obek` overrides.
+
+[entity.root]
+[entity.root.Transform]
+scale = [1.0, 1.0, 1.0]
+translation = [0.0, 0.0, 0.0]
+
+[entity.child]
+ChildOf = "root"
+[entity.child.Transform]
+scale = [0.5, 0.5, 0.5]
+translation = [1.0, 0.0, 0.0]

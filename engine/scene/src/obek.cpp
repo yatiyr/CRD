@@ -470,16 +470,6 @@ crd::containers::Array<crd::u8> ObekArtifactBuilder::build(const World& world)
 
 void* ObekLoader::load(const crd::resources::LoadContext& ctx)
 {
-    crd::resources::CrdrFile file{ctx.allocator};
-    if (crd::resources::crdr_read(ctx.bytes, file, ctx.allocator) != crd::resources::CrdrError::Ok)
-    {
-        return nullptr;
-    }
-    if (file.type_fourcc != kFourCC_OBEK)
-    {
-        return nullptr;
-    }
-
     auto* res = static_cast<ObekResource*>(
         ctx.allocator->allocate(sizeof(ObekResource), alignof(ObekResource)));
     if (res == nullptr)
@@ -487,6 +477,33 @@ void* ObekLoader::load(const crd::resources::LoadContext& ctx)
         return nullptr;
     }
     ::new (res) ObekResource(ctx.allocator);
+
+    // Copy the source bytes into the resource so our parsed chunk
+    // payloads (which are non-owning ConstSpan views) live as long as
+    // the resource itself. ctx.bytes points into a transient buffer
+    // owned by ResourceManager that is freed as soon as load() returns.
+    res->owned_bytes.resize(ctx.bytes.size());
+    if (ctx.bytes.size() > 0U)
+    {
+        std::memcpy(res->owned_bytes.data(), ctx.bytes.data(), ctx.bytes.size());
+    }
+
+    if (crd::resources::crdr_read(
+            crd::containers::ConstSpan<crd::u8>{
+                res->owned_bytes.data(), res->owned_bytes.size()},
+            res->parsed_file, ctx.allocator) != crd::resources::CrdrError::Ok)
+    {
+        res->~ObekResource();
+        ctx.allocator->deallocate(res);
+        return nullptr;
+    }
+    if (res->parsed_file.type_fourcc != kFourCC_OBEK)
+    {
+        res->~ObekResource();
+        ctx.allocator->deallocate(res);
+        return nullptr;
+    }
+    crd::resources::CrdrFile& file = res->parsed_file;
 
     // OINF chunk — required.
     const crd::resources::CrdrChunk* info_chunk = crd::resources::crdr_find_chunk(file, kFourCC_ObekOINF);

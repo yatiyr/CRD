@@ -6,6 +6,7 @@
 #include <crd/containers/string_view.hpp>
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
+#include <crd/resources/crdr.hpp>
 #include <crd/resources/loader.hpp>
 #include <crd/resources/resource_id.hpp>
 #include <crd/scene/entity.hpp>
@@ -300,7 +301,23 @@ struct ObekResource
     };
     crd::containers::Array<PerComponentPayload> component_payloads;
 
-    explicit ObekResource(crd::memory::IAllocator* alloc) : component_payloads(alloc) {}
+    // Owned copy of the source CRDR bytes + its parsed chunk view.
+    // Every ConstSpan above (string_pool, component_descriptors,
+    // entity_table, relations, chain_dependencies, override records +
+    // payload pool, per-component indices/payloads) ultimately points
+    // into one of these two containers. Loaders MUST populate spans
+    // AFTER copying the bytes here and re-parsing — references into
+    // the LoadContext's transient byte buffer would dangle as soon as
+    // ResourceManager drops it (v1o3 fix; bug surfaced when the
+    // sandbox started calling instantiate_obek across the load
+    // boundary).
+    crd::containers::Array<crd::u8> owned_bytes;
+    crd::resources::CrdrFile        parsed_file;
+
+    explicit ObekResource(crd::memory::IAllocator* alloc)
+        : component_payloads(alloc), owned_bytes(alloc), parsed_file(alloc)
+    {
+    }
 };
 
 // ObekLoader — ILoader for the 'OBEK' container. Parses CRDR bytes into

@@ -79,22 +79,24 @@ TEST_CASE("QualityPreset has the documented schema defaults and identity",
 {
     crd::preset::QualityPreset p{};
 
-    // Schema identity (ADR-0059 §1).
+    // Schema identity (ADR-0059 §1; v2 since v1o3 added enable_depth_prepass).
     CHECK(crd::preset::QualityPreset::fourcc  == crd::resources::make_fourcc('P', 'R', 'Q', 'L'));
-    CHECK(crd::preset::QualityPreset::version == 1U);
+    CHECK(crd::preset::QualityPreset::version == 2U);
 
     // Documented defaults.
-    CHECK(p.shadow_resolution == 2048U);
-    CHECK(p.msaa_samples      == 4U);
-    CHECK(p.ssr_quality       == 2U);
-    CHECK(p.ssao_quality      == 2U);
-    CHECK(p.post_fx_count     == 0U);
+    CHECK(p.shadow_resolution    == 2048U);
+    CHECK(p.msaa_samples         == 4U);
+    CHECK(p.ssr_quality          == 2U);
+    CHECK(p.ssao_quality         == 2U);
+    CHECK(p.post_fx_count        == 0U);
+    CHECK(p.enable_depth_prepass == 1U);
     for (const auto& ref : p.post_fx)
     {
         CHECK(ref.is_null());
     }
 
-    // Binary-layout pin — adding fields would bump version=1.
+    // Binary-layout pin — v2 keeps the v1 144-byte layout by repurposing
+    // one byte of the original `_reserved[8]`.
     CHECK(sizeof(crd::preset::QualityPreset)  == 144U);
     CHECK(alignof(crd::preset::QualityPreset) == 8U);
 }
@@ -134,11 +136,12 @@ TEST_CASE("QualityPreset round-trips bit-exact through artifact + loader",
 
     // Populate every field with non-default values so a memcmp is meaningful.
     crd::preset::QualityPreset src{};
-    src.shadow_resolution = 4096U;
-    src.msaa_samples      = 8U;
-    src.ssr_quality       = 3U;
-    src.ssao_quality      = 3U;
-    src.post_fx_count     = 3U;
+    src.shadow_resolution    = 4096U;
+    src.msaa_samples         = 8U;
+    src.ssr_quality          = 3U;
+    src.ssao_quality         = 3U;
+    src.post_fx_count        = 3U;
+    src.enable_depth_prepass = 0U; // toggle off — covers the v2 field
     src.post_fx[0]        = crd::resources::ResourceId{0x1111'1111ULL, 0x2222'2222ULL};
     src.post_fx[1]        = crd::resources::ResourceId{0x3333'3333ULL, 0x4444'4444ULL};
     src.post_fx[2]        = crd::resources::ResourceId{0x5555'5555ULL, 0x6666'6666ULL};
@@ -174,11 +177,12 @@ TEST_CASE("QualityPreset round-trips bit-exact through artifact + loader",
     crd::preset::QualityPreset round_tripped{};
     std::memcpy(&round_tripped, res->bytes().data(), sizeof(round_tripped));
 
-    CHECK(round_tripped.shadow_resolution == src.shadow_resolution);
-    CHECK(round_tripped.msaa_samples      == src.msaa_samples);
-    CHECK(round_tripped.ssr_quality       == src.ssr_quality);
-    CHECK(round_tripped.ssao_quality      == src.ssao_quality);
-    CHECK(round_tripped.post_fx_count     == src.post_fx_count);
+    CHECK(round_tripped.shadow_resolution    == src.shadow_resolution);
+    CHECK(round_tripped.msaa_samples         == src.msaa_samples);
+    CHECK(round_tripped.ssr_quality          == src.ssr_quality);
+    CHECK(round_tripped.ssao_quality         == src.ssao_quality);
+    CHECK(round_tripped.post_fx_count        == src.post_fx_count);
+    CHECK(round_tripped.enable_depth_prepass == src.enable_depth_prepass);
     for (crd::usize i = 0; i < 8U; ++i)
     {
         CHECK(round_tripped.post_fx[i] == src.post_fx[i]);

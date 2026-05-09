@@ -16,6 +16,24 @@ void ResourceHandleBase::release_block() noexcept
     {
         return;
     }
+
+    // Counter-leak fix (v1o3, 2026-05-09):
+    // Every `load_async` acquires a `crd::jobs::Counter` on the
+    // CounterPool. The counter is released only when someone calls
+    // `crd::jobs::wait()` on it — typically through `wait_ready()`.
+    // If a handle is released without a prior `wait_ready` call, the
+    // counter sits in the pool until `jobs::shutdown()` asserts on
+    // the still-acquired count. Reap any orphaned counter here so
+    // dropping a handle is unconditionally safe — this matches the
+    // intent of `release_block()` ("undo what load_async() did") and
+    // makes the API robust to fire-and-forget callers that simply
+    // poll `state()`.
+    void* raw = m_block->load_counter.exchange(nullptr, std::memory_order_acquire);
+    if (raw != nullptr)
+    {
+        crd::jobs::wait(static_cast<crd::jobs::Counter*>(raw));
+    }
+
     if (m_block->release() == 0U && !m_block->permanent)
     {
         // Non-permanent (failed) block: free it.

@@ -174,3 +174,62 @@ TEST_CASE("Vulkan command buffer and frame loop can execute a triangle frame", "
     device->wait_idle();
 #endif
 }
+
+// ─── Phase 3.0 v1o1 — RHI Fence + non-blocking submit (ADR-0061 §"Layer 1") ───
+//
+// Exercises the real Vulkan path: vkCreateFence → vkQueueSubmit(fence) →
+// vkWaitForFences → vkResetFences → vkDestroyFence. Skipped on
+// CRD_PLATFORM_HEADLESS=1 (CI runners) since device creation needs a real
+// GPU.
+TEST_CASE("Vulkan Fence: non-blocking submit signals fence on completion",
+          "[rhi][vulkan][fence]")
+{
+    if (headless_requested())
+    {
+        SUCCEED("CRD_PLATFORM_HEADLESS=1, skipping Vulkan fence/submit test");
+        return;
+    }
+
+    auto instance = crd::rhi::create_vulkan_instance({});
+    REQUIRE(instance != nullptr);
+    auto device = instance->create_device({});
+    REQUIRE(device != nullptr);
+
+    auto fence = device->create_fence();
+    REQUIRE(fence != nullptr);
+
+    // Newly-created fence is unsignalled.
+    CHECK_FALSE(fence->is_signaled());
+
+    // Reset on a fresh fence is a no-op (still unsignalled).
+    fence->reset();
+    CHECK_FALSE(fence->is_signaled());
+
+    // Empty-but-valid command buffer.
+    auto cmd = device->create_command_buffer();
+    REQUIRE(cmd != nullptr);
+    cmd->begin();
+    cmd->end();
+
+    // Non-blocking submit. The fence flips when the GPU completes the
+    // (empty) command buffer; we wait synchronously to assert the
+    // transition.
+    device->graphics_queue().submit(*cmd, *fence);
+    fence->wait();
+    CHECK(fence->is_signaled());
+
+    // Reset re-arms the fence; reused for a second submit.
+    fence->reset();
+    CHECK_FALSE(fence->is_signaled());
+
+    auto cmd2 = device->create_command_buffer();
+    REQUIRE(cmd2 != nullptr);
+    cmd2->begin();
+    cmd2->end();
+    device->graphics_queue().submit(*cmd2, *fence);
+    fence->wait();
+    CHECK(fence->is_signaled());
+
+    // Drain before destroying device-owned objects.
+    device->wait_idle();
+}

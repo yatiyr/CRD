@@ -17,12 +17,16 @@ add_executable(crd-scene-tests
     test_obek.cpp
     test_shared_component_pool.cpp
     test_world_tlsf.cpp
+    test_phase_3_0_freeze.cpp
 )
 
 target_link_libraries(crd-scene-tests PRIVATE
     crd-core
     crd-containers
+    crd-math
     crd-memory
+    crd-preset
+    crd-profile
     crd-scene
     Catch2::Catch2WithMain
 )

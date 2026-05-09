@@ -1,6 +1,8 @@
 #pragma once
 
 #include <crd/containers/array.hpp>
+#include <crd/preset/preset_target.hpp>
+#include <crd/preset/quality_preset.hpp>
 #include <crd/renderer/frame_graph.hpp>
 #include <crd/renderer/material_template.hpp>
 #include <crd/renderer/render_path.hpp>
@@ -31,7 +33,7 @@ namespace crd::renderer
 //   - Per-frame UBOs and descriptor sets are indexed by (frame_index % frames_in_flight).
 //   - The DescriptorAllocator is NOT owned; callers manage its begin_frame() lifecycle.
 //   - The PipelineResolver is NOT owned; must outlive this object.
-class ForwardRenderPath final : public IRenderPath
+class ForwardRenderPath final : public IRenderPath, public crd::preset::IPresetTarget
 {
 public:
     // Create a ForwardRenderPath. Returns nullptr if any allocation fails.
@@ -64,6 +66,34 @@ public:
 
     // Recreate size-dependent resources (render targets). Call before build() after a resize.
     void resize(rhi::Extent2D new_extent) override;
+
+    // IPresetTarget interface ------------------------------------------------
+    //
+    // Phase 3.0 v1o3: ForwardRenderPath consumes `QualityPreset` directly,
+    // making it a real `IPresetTarget` rather than a stub recipient.
+    // The first wired field is `enable_depth_prepass` — toggling it skips
+    // the depth-prepass DRAWS inside an always-declared depth-prepass.
+    // Other fields (shadow_resolution, msaa_samples, ssr_quality,
+    // ssao_quality, post_fx[]) are cached on the path and read back by
+    // observability surfaces (sandbox ImGui panel) until their consuming
+    // systems (shadow path, MSAA target, SSR/SSAO/post-fx passes) ship in
+    // Phase 3.5+. The pass-declaration topology never changes — only the
+    // draw count does — so framegraph barriers / transient aliasing /
+    // tests stay invariant under preset changes.
+    //
+    // `using IPresetTarget::apply;` imports the un-overridden `CameraPreset`
+    // overload so GCC's `-Woverloaded-virtual` doesn't fire under the
+    // partial-override convention pinned in `preset_target.hpp`.
+    using crd::preset::IPresetTarget::apply;
+    void apply(const crd::preset::QualityPreset& preset) override;
+
+    // Read-back the most-recently-applied QualityPreset. Default-
+    // constructed before the first `apply()` call (matches schema
+    // defaults, observably equivalent to a fresh QualityPreset{}).
+    [[nodiscard]] const crd::preset::QualityPreset& quality_preset() const noexcept
+    {
+        return m_quality;
+    }
 
 private:
     ForwardRenderPath() = default;
@@ -102,6 +132,11 @@ private:
     ImageHandle        m_color_handle{};
     ImageHandle        m_depth_handle{};
     const DrawList*    m_draw_list    = nullptr; // non-owning; valid only between build() and execute()
+
+    // Most-recently-applied QualityPreset. Default = schema defaults so
+    // build() works without an explicit apply() call (the v1 behaviour
+    // — depth prepass enabled).
+    crd::preset::QualityPreset m_quality{};
 };
 
 } // namespace crd::renderer

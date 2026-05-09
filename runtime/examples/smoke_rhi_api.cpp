@@ -148,6 +148,10 @@ public:
     {
         CRD_LOG_INFO(g_log_smoke_rhi, "queue submit_and_wait");
     }
+    void submit(crd::rhi::CommandBuffer& /*command_buffer*/, crd::rhi::Fence& /*fence*/) override
+    {
+        CRD_LOG_INFO(g_log_smoke_rhi, "queue submit(cmd, fence)");
+    }
     void present(crd::rhi::Swapchain& /*swapchain*/) override { CRD_LOG_INFO(g_log_smoke_rhi, "queue present"); }
     void wait_idle() override { CRD_LOG_INFO(g_log_smoke_rhi, "queue wait_idle"); }
 };
@@ -181,6 +185,10 @@ public:
     [[nodiscard]] std::unique_ptr<crd::rhi::CommandBuffer> create_command_buffer() override
     {
         return std::make_unique<SmokeCommandBuffer>();
+    }
+    [[nodiscard]] std::unique_ptr<crd::rhi::Fence> create_fence() override
+    {
+        return nullptr; // smoke doesn't exercise fences
     }
     [[nodiscard]] std::unique_ptr<crd::rhi::DescriptorSetLayout>
     create_descriptor_set_layout(const crd::rhi::DescriptorSetLayoutDesc&) override { return nullptr; }

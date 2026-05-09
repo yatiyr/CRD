@@ -48,6 +48,9 @@ void register_glsl_handler();
 void register_material_handler();
 void register_texture_handler();
 void register_mesh_handler();
+void register_preset_handler();
+void register_profile_handler();
+void register_obek_handler();
 
 void register_builtin_handlers()
 {
@@ -56,6 +59,9 @@ void register_builtin_handlers()
     register_material_handler();
     register_texture_handler();
     register_mesh_handler();
+    register_preset_handler();
+    register_profile_handler();
+    register_obek_handler();
 }
 
 } // namespace crd::cooker

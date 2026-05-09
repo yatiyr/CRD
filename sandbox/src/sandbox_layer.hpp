@@ -9,15 +9,28 @@
 #include <crd/math/vec.hpp>
 #include <crd/memory/allocators/malloc_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
+#include <crd/preset/camera_preset.hpp>
+#include <crd/preset/preset_target.hpp>
+#include <crd/preset/preset_resource.hpp>
+#include <crd/preset/quality_preset.hpp>
+#include <crd/preset/preset_loader.hpp>
+#include <crd/profile/profile_context.hpp>
+#include <crd/profile/profile_loader.hpp>
+#include <crd/profile/profile_resource.hpp>
 #include <crd/renderer/forward_render_path.hpp>
 #include <crd/renderer/gpu_uploader.hpp>
 #include <crd/renderer/mesh_resource.hpp>
+#include <crd/renderer/render_mesh_index.hpp>
+#include <crd/renderer/render_upload_system.hpp>
 #include <crd/renderer/renderer.hpp>
 #include <crd/resources/resource_handle.hpp>
 #include <crd/resources/resource_id.hpp>
 #include <crd/resources/resource_manager.hpp>
 #include <crd/rhi/descriptor.hpp>
 #include <crd/rhi/swapchain.hpp>
+#include <crd/scene/entity.hpp>
+#include <crd/scene/obek.hpp>
+#include <crd/scene/world.hpp>
 #include <crd/shader/runtime.hpp>
 
 #include <memory>
@@ -90,10 +103,33 @@ private:
     bool m_compiled = false;
 };
 
+// Phase 3.0 v1o3 — IPresetTarget adapter that funnels CameraPreset values
+// into the sandbox's runtime camera state. Lives next to SandboxLayer
+// rather than directly on it because IPresetTarget's deleted-move ctor
+// would conflict with the layer being constructed via `Application::add_layer<>`.
+class SandboxCameraTarget final : public crd::preset::IPresetTarget
+{
+public:
+    using crd::preset::IPresetTarget::apply;
+    void apply(const crd::preset::CameraPreset& preset) override
+    {
+        m_preset = preset;
+        ++m_apply_count;
+    }
+
+    [[nodiscard]] const crd::preset::CameraPreset& preset() const noexcept { return m_preset; }
+    [[nodiscard]] crd::u32 apply_count() const noexcept { return m_apply_count; }
+
+private:
+    crd::preset::CameraPreset m_preset{};
+    crd::u32                  m_apply_count = 0U;
+};
+
 class SandboxLayer final : public crd::app::Layer
 {
 public:
     SandboxLayer(crd::app::Application& app, crd::rhi::Device& device, crd::rhi::Swapchain& swapchain);
+    ~SandboxLayer() override;
 
     void on_update(crd::f64 delta_seconds) override;
     void on_render() override;
@@ -104,12 +140,36 @@ public:
     void render_scene(crd::rhi::CommandBuffer& cmd, crd::rhi::Image& sc_image, crd::u32 frame_index);
 
 private:
-    void upload_procedural(int idx);
-    void kick_async_import_load(int idx);
+    // ECS scene init — registers Renderable + PendingMeshUpload, the
+    // RenderMeshIndex (drop-callback hook), and RenderUploadSystem.
+    void init_scene_world();
+
+    // Profile + Preset boot path — loads default.profile.toml from the
+    // demo asset pack, resolves to a bundle, applies presets to the
+    // ForwardRenderPath (QualityPreset) and the SandboxCameraTarget
+    // (CameraPreset). Programmatic fallback on failure.
+    void try_boot_profile_pipeline();
+
+    // Asset selection paths. Both end up spawning a single ECS entity
+    // carrying Renderable; imports also carry PendingMeshUpload until
+    // the GPU upload's fence signals.
+    void select_asset(int idx);
+    void respawn_procedural(int idx);
+    void kick_async_import(int idx);
     void try_finalize_pending_load();
+    void destroy_current_entity_if_any();
+
     void build_wireframe_pipeline(const crd::platform::fs::Path& source_dir);
     void register_procedural_assets();
     void try_register_imported_assets();
+
+    // Öbek runtime — instantiates obek_demo.obek.toml at boot if available.
+    // The override / revert / unpack buttons in the ImGui panel exercise
+    // ADR-0058's pillar 4 (override patches) and pillar 6 (unpack).
+    void try_load_demo_obek();
+    void apply_obek_translation_override();
+    void revert_obek_translation_override();
+    void unpack_obek_instantiation();
 
     crd::app::Application&            m_app;
     crd::rhi::Device&                 m_device;
@@ -120,17 +180,12 @@ private:
     // Unified asset list: procedural + imported.
     crd::containers::Array<AssetEntry> m_assets;
     int                                m_selected      = -1;
-    int                                m_last_uploaded = -1;
+    int                                m_pending_index = -1;   // -1 = none in flight
+    int                                m_last_displayed = -1;  // last index whose entity is visible
     bool                               m_mesh_dirty    = false;
 
-    // Async load tracking for imported assets. m_pending_index >= 0 means a
-    // load_async() is in flight for that asset; m_pending_load is the typed
-    // handle whose state() advances Queued → Loading → Ready/Failed on the
-    // job pool. We poll it once per frame in try_finalize_pending_load() and
-    // only invoke the (still-synchronous) GpuUploader when the CPU payload
-    // has landed. The currently-rendered mesh keeps rendering until the swap.
+    // Async load tracking for imported assets.
     crd::resources::ResourceHandle<crd::renderer::MeshResource> m_pending_load;
-    int                                                         m_pending_index = -1;
 
     // Per-shape parameters (only meaningful for procedural entries).
     PlaneParams    m_plane{};
@@ -151,12 +206,47 @@ private:
     SandboxPipelineResolver                           m_resolver;
     std::unique_ptr<crd::rhi::DescriptorAllocator>    m_desc_alloc;
     std::unique_ptr<crd::renderer::ForwardRenderPath> m_frp;
-    crd::renderer::GpuMesh                            m_gpu_mesh;
     crd::renderer::Renderer                           m_renderer;
+
+    // ECS world hosting all renderable entities (procedurals + imports +
+    // öbek instantiations). RenderMeshIndex owns the GpuMeshes; the
+    // RenderUploadSystem promotes async uploads in the RenderExtract
+    // phase. Both are registered with the World below.
+    std::unique_ptr<crd::scene::World>  m_world;
+    crd::renderer::RenderMeshIndex*     m_mesh_idx       = nullptr; // owned by m_world
+    crd::scene::EntityId                m_current_entity = crd::scene::EntityId::null();
 
     // Resource system for imported assets (cooked demo_assets.crdr).
     std::unique_ptr<crd::resources::ResourceManager> m_resource_mgr;
     bool                                             m_imported_available = false;
+
+    // Profile + Preset state ------------------------------------------------
+    crd::profile::ProfileContext m_profile_context{};
+    crd::resources::ResourceHandle<crd::profile::ProfileResource> m_profile_handle;
+    crd::resources::ResourceHandle<crd::preset::PresetResource>   m_quality_handle;
+    crd::resources::ResourceHandle<crd::preset::PresetResource>   m_camera_handle;
+    SandboxCameraTarget                                           m_camera_target{};
+
+    // L4 runtime overrides — sliders in the Quality / Camera panel mutate
+    // these and re-apply to the targets. Default-init = same as schema
+    // default = same as cooked default until the user touches a slider.
+    crd::preset::QualityPreset m_quality_runtime{};
+    crd::preset::CameraPreset  m_camera_runtime{};
+    bool                       m_quality_runtime_dirty = false;
+    bool                       m_camera_runtime_dirty  = false;
+    bool                       m_profile_applied       = false;
+    bool                       m_boot_kicked           = false;  // load_async kicks deferred
+                                                                  // to first on_update so the
+                                                                  // jobs system is initialised.
+    crd::containers::String    m_profile_status;
+
+    // Öbek demo state -------------------------------------------------------
+    crd::resources::ResourceHandle<crd::scene::ObekResource>      m_obek_handle;
+    std::unique_ptr<crd::scene::ObekInstantiation>                m_obek_instantiation;
+    bool                                                          m_obek_loaded             = false;
+    bool                                                          m_obek_child_override_active = false;
+    crd::math::Vec3f                                              m_obek_child_override_translation{2.0F, 0.0F, 0.0F};
+    crd::containers::String                                       m_obek_status;
 
     // Wireframe overlay pipeline (built once; no descriptor sets; 64-byte MVP push constant).
     std::unique_ptr<crd::rhi::PipelineLayout> m_wf_layout;

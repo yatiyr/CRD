@@ -178,6 +178,7 @@ int main()
             return nullptr;
         }
         [[nodiscard]] std::unique_ptr<crd::rhi::CommandBuffer> create_command_buffer() override { return nullptr; }
+        [[nodiscard]] std::unique_ptr<crd::rhi::Fence>         create_fence() override { return nullptr; }
         [[nodiscard]] std::unique_ptr<crd::rhi::DescriptorSetLayout>
         create_descriptor_set_layout(const crd::rhi::DescriptorSetLayoutDesc&) override { return nullptr; }
         [[nodiscard]] std::unique_ptr<crd::rhi::PipelineLayout>
@@ -191,6 +192,7 @@ int main()
         {
             bool submit(crd::rhi::CommandBuffer&, crd::rhi::Swapchain&) override { return true; }
             void submit_and_wait(crd::rhi::CommandBuffer&) override {}
+            void submit(crd::rhi::CommandBuffer&, crd::rhi::Fence&) override {}
             void present(crd::rhi::Swapchain&) override {}
             void wait_idle() override {}
         } m_queue;

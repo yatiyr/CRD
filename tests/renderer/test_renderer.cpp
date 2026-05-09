@@ -168,6 +168,7 @@ class FakeQueue final : public crd::rhi::Queue
 public:
     bool submit(crd::rhi::CommandBuffer& /*cmd*/, crd::rhi::Swapchain& /*sc*/) override { return true; }
     void submit_and_wait(crd::rhi::CommandBuffer& /*cmd*/) override {}
+    void submit(crd::rhi::CommandBuffer& /*cmd*/, crd::rhi::Fence& /*fence*/) override {}
     void present(crd::rhi::Swapchain& /*sc*/) override {}
     void wait_idle() override {}
 };
@@ -257,6 +258,7 @@ public:
         return nullptr;
     }
     [[nodiscard]] std::unique_ptr<crd::rhi::CommandBuffer> create_command_buffer() override { return nullptr; }
+    [[nodiscard]] std::unique_ptr<crd::rhi::Fence>         create_fence() override { return nullptr; }
 
     [[nodiscard]] std::unique_ptr<crd::rhi::DescriptorSetLayout>
     create_descriptor_set_layout(const crd::rhi::DescriptorSetLayoutDesc& desc) override

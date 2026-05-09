@@ -28,10 +28,13 @@
 #include <memory>
 #include <utility>
 
-namespace crd::jobs
-{
-class Counter;
-}
+// Forward-declare crd::jobs::Counter for the (currently unused) job-system
+// hooks reserved on World. `Counter` is a type alias of
+// `detail::Counter` in <crd/jobs/jobs.hpp>; matching that shape here lets
+// TUs that include both world.hpp and jobs.hpp coexist without the alias
+// conflicting with a class-style forward declaration.
+namespace crd::jobs::detail { struct Counter; }
+namespace crd::jobs { using Counter = detail::Counter; }
 
 namespace crd::scene
 {
@@ -989,6 +992,51 @@ template <typename... Cs>
 template <typename T> Query<Cs...> Query<Cs...>::skip_pending() &&
 {
     this->template skip_pending<T>();
+    return std::move(*this);
+}
+
+// ---- v1p: Reserved spatial DSL operators (ADR-0053 §6) -------------------
+//
+// `.in_aabb(box)` and `.within_radius(center, radius)` are formally frozen
+// as Query<>'s spatial filters in Phase 3.0 v1p. The backing
+// SpatialBVHIndex is a no-op shell — the operators currently pass every
+// entity matching the required components (no per-entity bounds test).
+// When Phase 3.5 ships the real BVH, the operators start filtering
+// without any caller code change. The argument types
+// (`crd::math::AABB<f32>` / `Vec3<f32>` + `f32`) are FROZEN: a different
+// bounding shape ships as a new operator, never as a signature change.
+
+template <typename... Cs>
+Query<Cs...>& Query<Cs...>::in_aabb(const crd::math::AABB<crd::f32>& /*box*/) &
+{
+    // v1p reservation: SpatialBVHIndex is a no-op stub; passing through
+    // every match is the contracted behaviour. No per-entity filter is
+    // appended. The chain still composes (range-for + count() etc. all
+    // work) so caller code written today continues to compile + iterate
+    // unchanged once Phase 3.5 wires the BVH.
+    return *this;
+}
+
+template <typename... Cs>
+Query<Cs...> Query<Cs...>::in_aabb(const crd::math::AABB<crd::f32>& box) &&
+{
+    this->in_aabb(box);
+    return std::move(*this);
+}
+
+template <typename... Cs>
+Query<Cs...>& Query<Cs...>::within_radius(
+    const crd::math::Vec3<crd::f32>& /*center*/, crd::f32 /*radius*/) &
+{
+    // Same passthrough contract as in_aabb — see comment above.
+    return *this;
+}
+
+template <typename... Cs>
+Query<Cs...> Query<Cs...>::within_radius(
+    const crd::math::Vec3<crd::f32>& center, crd::f32 radius) &&
+{
+    this->within_radius(center, radius);
     return std::move(*this);
 }
 

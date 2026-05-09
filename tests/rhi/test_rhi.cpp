@@ -233,6 +233,24 @@ private:
     FakeImage m_image;
 };
 
+// Phase 3.0 v1o1 — fake fence for the non-blocking submit path.
+//
+// The fake auto-signals the moment Queue::submit(cmd, fence) is called.
+// Real Vulkan signalling is asynchronous (GPU completes work, fence flips);
+// the fake doesn't model that timing — it just records the dispatch. The
+// Vulkan-backend test in tests/rhi_vulkan exercises the real GPU path.
+class FakeFence final : public crd::rhi::Fence
+{
+public:
+    [[nodiscard]] bool is_signaled() const noexcept override { return signaled; }
+    void               wait()                       override { ++wait_count;  signaled = true; }
+    void               reset()                      override { ++reset_count; signaled = false; }
+
+    bool signaled    = false;
+    int  wait_count  = 0;
+    int  reset_count = 0;
+};
+
 class FakeQueue final : public crd::rhi::Queue
 {
 public:
@@ -242,10 +260,22 @@ public:
         return true;
     }
     void submit_and_wait(crd::rhi::CommandBuffer& /*command_buffer*/) override { ++submit_count; }
+    void submit(crd::rhi::CommandBuffer& /*command_buffer*/, crd::rhi::Fence& fence) override
+    {
+        ++submit_with_fence_count;
+        // Fake: pretend the GPU finished instantly and signal the fence.
+        // Real Vulkan does this asynchronously when the command buffer
+        // completes on the GPU; only the dispatch is observable here.
+        if (auto* f = dynamic_cast<FakeFence*>(&fence); f != nullptr)
+        {
+            f->signaled = true;
+        }
+    }
     void present(crd::rhi::Swapchain& /*swapchain*/) override { ++present_count; }
     void wait_idle() override { ++wait_idle_count; }
 
     int submit_count = 0;
+    int submit_with_fence_count = 0;
     int present_count = 0;
     int wait_idle_count = 0;
 };
@@ -293,6 +323,12 @@ public:
         return std::make_unique<FakeCommandBuffer>();
     }
 
+    [[nodiscard]] std::unique_ptr<crd::rhi::Fence> create_fence() override
+    {
+        ++create_fence_count;
+        return std::make_unique<FakeFence>();
+    }
+
     [[nodiscard]] std::unique_ptr<crd::rhi::DescriptorSetLayout>
     create_descriptor_set_layout(const crd::rhi::DescriptorSetLayoutDesc& desc) override
     {
@@ -323,6 +359,7 @@ public:
     int create_shader_module_count = 0;
     int create_pipeline_count = 0;
     int create_command_buffer_count = 0;
+    int create_fence_count = 0;
     int create_descriptor_set_layout_count = 0;
     int create_pipeline_layout_count = 0;
     int create_descriptor_allocator_count = 0;
@@ -555,4 +592,80 @@ TEST_CASE("RHI device can express the first-triangle resource flow", "[rhi][devi
     REQUIRE(cb->last_vertex_count == 3U);
     REQUIRE(device.m_queue.submit_count == 1);
     REQUIRE(device.m_queue.present_count == 1);
+}
+
+// ─── Phase 3.0 v1o1 — RHI Fence + non-blocking submit (ADR-0061 §"Layer 1") ───
+
+TEST_CASE("Fence: factory creates an unsignalled fence", "[rhi][fence]")
+{
+    FakeDevice device{};
+    auto fence = device.create_fence();
+    REQUIRE(fence != nullptr);
+    CHECK(device.create_fence_count == 1);
+    // ADR-0061 contract: a freshly-created fence is unsignalled until a
+    // submission completes against it.
+    CHECK_FALSE(fence->is_signaled());
+}
+
+TEST_CASE("Fence: wait() transitions to signalled state", "[rhi][fence]")
+{
+    FakeDevice device{};
+    auto fence = device.create_fence();
+    REQUIRE(fence != nullptr);
+
+    auto* fake = static_cast<FakeFence*>(fence.get());
+    REQUIRE(fake->wait_count == 0);
+    fence->wait();
+    CHECK(fake->wait_count == 1);
+    CHECK(fence->is_signaled());
+}
+
+TEST_CASE("Fence: reset() re-arms the fence", "[rhi][fence]")
+{
+    FakeDevice device{};
+    auto fence = device.create_fence();
+    REQUIRE(fence != nullptr);
+
+    auto* fake = static_cast<FakeFence*>(fence.get());
+    fence->wait();
+    REQUIRE(fence->is_signaled());
+
+    fence->reset();
+    CHECK(fake->reset_count == 1);
+    CHECK_FALSE(fence->is_signaled());
+
+    // Multiple reset cycles must be safe.
+    fence->wait();
+    fence->reset();
+    fence->reset();
+    CHECK(fake->reset_count == 3);
+    CHECK_FALSE(fence->is_signaled());
+}
+
+TEST_CASE("Queue::submit(cmd, fence) signals the fence on completion",
+          "[rhi][fence][queue]")
+{
+    FakeDevice device{};
+    auto cmd   = device.create_command_buffer();
+    auto fence = device.create_fence();
+    REQUIRE(cmd != nullptr);
+    REQUIRE(fence != nullptr);
+
+    // Pre-submit: the fence is unsignalled and the queue has no fence-submits.
+    CHECK_FALSE(fence->is_signaled());
+    CHECK(device.m_queue.submit_with_fence_count == 0);
+
+    device.graphics_queue().submit(*cmd, *fence);
+
+    CHECK(device.m_queue.submit_with_fence_count == 1);
+    // FakeQueue auto-signals (real Vulkan signals once the GPU completes the
+    // command-buffer's work; the fake doesn't model timing).
+    CHECK(fence->is_signaled());
+
+    // Reset + re-submit → fence flips back to unsignalled, then signalled again.
+    fence->reset();
+    CHECK_FALSE(fence->is_signaled());
+    device.graphics_queue().submit(*cmd, *fence);
+    CHECK(device.m_queue.submit_with_fence_count == 2);
+    CHECK(fence->is_signaled());
 }

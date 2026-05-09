@@ -1290,6 +1290,64 @@ private:
     bool m_image_acquired = false;
 };
 
+// Phase 3.0 v1o1 — VulkanFence wraps a VkFence + the owning device handle
+// (needed for vkResetFences / vkDestroyFence). Created in the unsignalled
+// state via vkCreateFence with no flags; destroyed by the unique_ptr.
+class VulkanFence final : public Fence
+{
+public:
+    VulkanFence(VkDevice device, VkFence handle) noexcept
+        : m_device(device), m_handle(handle)
+    {
+    }
+
+    ~VulkanFence() override
+    {
+        if (m_handle != VK_NULL_HANDLE && m_device != VK_NULL_HANDLE)
+        {
+            vkDestroyFence(m_device, m_handle, nullptr);
+        }
+    }
+
+    [[nodiscard]] bool is_signaled() const noexcept override
+    {
+        if (m_handle == VK_NULL_HANDLE)
+        {
+            return false;
+        }
+        const VkResult status = vkGetFenceStatus(m_device, m_handle);
+        // VK_SUCCESS → signaled; VK_NOT_READY → not yet; other → error (treat as not signaled).
+        return status == VK_SUCCESS;
+    }
+
+    void wait() override
+    {
+        if (m_handle == VK_NULL_HANDLE)
+        {
+            return;
+        }
+        // UINT64_MAX = wait indefinitely.
+        static_cast<void>(vk_ok(
+            vkWaitForFences(m_device, 1, &m_handle, VK_TRUE, UINT64_MAX),
+            "vkWaitForFences"));
+    }
+
+    void reset() override
+    {
+        if (m_handle == VK_NULL_HANDLE)
+        {
+            return;
+        }
+        static_cast<void>(vk_ok(vkResetFences(m_device, 1, &m_handle), "vkResetFences"));
+    }
+
+    [[nodiscard]] VkFence handle() const noexcept { return m_handle; }
+
+private:
+    VkDevice m_device = VK_NULL_HANDLE;
+    VkFence  m_handle = VK_NULL_HANDLE;
+};
+
 class VulkanQueue final : public Queue
 {
 public:
@@ -1338,6 +1396,26 @@ public:
         submit_info.pCommandBuffers    = &handle;
         static_cast<void>(vk_ok(vkQueueSubmit(m_queue, 1, &submit_info, VK_NULL_HANDLE), "vkQueueSubmit(headless)"));
         vkQueueWaitIdle(m_queue);
+    }
+
+    void submit(CommandBuffer& command_buffer, Fence& fence) override
+    {
+        // Phase 3.0 v1o1 — non-blocking submit (ADR-0061 §"Layer 1"). Records
+        // and submits without waiting; the fence is signalled when the GPU
+        // completes the work. Caller polls fence.is_signaled() per frame.
+        auto* vk_cmd   = dynamic_cast<VulkanCommandBuffer*>(&command_buffer);
+        auto* vk_fence = dynamic_cast<VulkanFence*>(&fence);
+        CRD_ASSERT_MSG(vk_cmd   != nullptr, "Queue::submit(cmd, fence): non-Vulkan CommandBuffer");
+        CRD_ASSERT_MSG(vk_fence != nullptr, "Queue::submit(cmd, fence): non-Vulkan Fence");
+
+        VkCommandBuffer handle = vk_cmd->handle();
+        VkSubmitInfo submit_info{};
+        submit_info.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submit_info.commandBufferCount = 1;
+        submit_info.pCommandBuffers    = &handle;
+        static_cast<void>(vk_ok(
+            vkQueueSubmit(m_queue, 1, &submit_info, vk_fence->handle()),
+            "vkQueueSubmit(fence)"));
     }
 
     void present(Swapchain& swapchain) override
@@ -1892,6 +1970,19 @@ public:
         }
 
         return std::make_unique<VulkanCommandBuffer>(m_device, m_command_pool, command_buffer, m_sync2_enabled);
+    }
+
+    [[nodiscard]] std::unique_ptr<Fence> create_fence() override
+    {
+        VkFenceCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        info.flags = 0; // start unsignalled — matches Fence::is_signaled() initial contract
+        VkFence fence = VK_NULL_HANDLE;
+        if (!vk_ok(vkCreateFence(m_device, &info, nullptr, &fence), "vkCreateFence"))
+        {
+            return nullptr;
+        }
+        return std::make_unique<VulkanFence>(m_device, fence);
     }
 
     [[nodiscard]] std::unique_ptr<DescriptorSetLayout>

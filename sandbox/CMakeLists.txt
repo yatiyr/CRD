@@ -16,10 +16,13 @@ target_link_libraries(crd-sandbox PRIVATE
     crd-math
     crd-memory
     crd-meshgen
+    crd-preset
+    crd-profile
     crd-renderer
     crd-resources
     crd-rhi
     crd-rhi-vulkan
+    crd-scene
     crd-shader
 )
 target_compile_definitions(crd-sandbox PRIVATE CRD_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
@@ -38,7 +41,7 @@ set(DEMO_ASSETS_PACK    "${DEMO_ASSETS_OUT_DIR}/demo_assets.crdr")
 
 # Glob source files explicitly so add_custom_command's DEPENDS triggers a recook
 # whenever any committed source asset changes.
-file(GLOB DEMO_ASSETS_SOURCES CONFIGURE_DEPENDS
+file(GLOB_RECURSE DEMO_ASSETS_SOURCES CONFIGURE_DEPENDS
     "${DEMO_ASSETS_SRC_DIR}/*.glb"
     "${DEMO_ASSETS_SRC_DIR}/*.gltf"
     "${DEMO_ASSETS_SRC_DIR}/*.png"
@@ -46,6 +49,9 @@ file(GLOB DEMO_ASSETS_SOURCES CONFIGURE_DEPENDS
     "${DEMO_ASSETS_SRC_DIR}/*.jpeg"
     "${DEMO_ASSETS_SRC_DIR}/*.tga"
     "${DEMO_ASSETS_SRC_DIR}/*.bmp"
+    "${DEMO_ASSETS_SRC_DIR}/*.preset.toml"
+    "${DEMO_ASSETS_SRC_DIR}/*.profile.toml"
+    "${DEMO_ASSETS_SRC_DIR}/*.obek.toml"
 )
 
 add_custom_command(

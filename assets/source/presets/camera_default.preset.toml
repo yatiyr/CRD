@@ -1,0 +1,27 @@
+# Cerid Phase 3.0 v1o3 — default Camera preset.
+#
+# Fed into PresetCooker (.preset.toml handler) which writes a 40-byte
+# CameraPreset v1 payload. The sandbox's SandboxCameraTarget consumes
+# it through `IPresetTarget::apply(const CameraPreset&)` and the
+# resolved fields drive the runtime camera (FOV, near/far planes).
+
+type = "Camera"
+
+# Projection.
+fov_y_radians = 1.0471975512   # ≈ 60° (matches sandbox's pre-v1o3 hardcoded value)
+near_plane    = 0.01
+far_plane     = 1000.0
+
+# Physical exposure triplet.
+aperture_f_stop  = 2.8
+shutter_seconds  = 0.0166667   # 1/60s
+iso              = 100.0
+exposure_comp_ev = 0.0
+
+# Auto-exposure clamps (only honored when exposure_mode = "AutoEV100").
+ev100_min = -8.0
+ev100_max = 16.0
+
+# Mode.
+lens_model    = "Perspective"
+exposure_mode = "Manual"

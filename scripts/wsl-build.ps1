@@ -15,8 +15,17 @@
 #   ./scripts/wsl-build.ps1 linux-gcc-release -Reconfigure
 #
 # The Windows path D:\Dev\cerid is accessed via /mnt/d/Dev/cerid from WSL.
-# That mount is the 9P bridge, ~2-3× slower than native Linux FS. For
-# heavy iteration consider keeping a second checkout in WSL's home.
+# That mount is the 9P bridge, ~2-3× slower than native Linux FS for the
+# many small file ops CMake/Ninja do (configure, _deps clones, .o writes,
+# stat checks). To dodge the bottleneck WITHOUT cloning a second source
+# tree, this script overrides the preset's binaryDir to a path under
+# WSL's native ext4 (~/cerid-build/<preset>) so all generated artefacts
+# live on native FS. Source files still live on /mnt/d but get cached
+# after the first read.
+#
+# CI on GitHub keeps using the in-tree build/<preset> path — that's
+# decided by the CMakePresets.json `binaryDir` and our -B override only
+# applies to local invocations.
 
 [CmdletBinding()]
 param(
@@ -31,6 +40,12 @@ param(
     [string]$Preset,
 
     [switch]$SkipTests,
+    # Reconfigure wipes the build dir before re-running cmake, forcing
+    # every CPM dep + engine source to rebuild. Default OFF — the cached
+    # build dir on $HOME/cerid-build/<preset> drives down repeat-sweep
+    # time from ~5min/preset to ~30s/preset (only changed sources
+    # recompile). Enable explicitly for first-run after a CMakePresets
+    # change, or when you want a known-clean state.
     [switch]$Reconfigure,
     [string]$Distro = 'Ubuntu'
 )
@@ -51,6 +66,10 @@ $skipTestsForPreset = $SkipTests -or ($Preset -eq 'linux-gcc-shipping')
 
 # Build the bash command. `set -e` so any failing step exits non-zero.
 # We source ~/.bashrc to pick up VULKAN_SDK from setup-wsl-deps.sh.
+# Native build dir on WSL ext4 — drives the speed-up. The path is
+# preset-specific so multiple presets coexist.
+$nativeBuildDir = "`$HOME/cerid-build/$Preset"
+
 $bashLines = @(
     'set -euo pipefail'
     # Ubuntu's default ~/.bashrc returns early for non-interactive shells,
@@ -64,24 +83,29 @@ $bashLines = @(
     # session. Lets PlatformContext tests pass without a display.
     'export CRD_PLATFORM_HEADLESS=1'
     "cd '$repoRootWsl'"
+    "BUILD_DIR=$nativeBuildDir"
+    'mkdir -p "$BUILD_DIR"'
     'echo "[wsl-build] gcc=$(gcc --version | head -1)"'
     'echo "[wsl-build] cmake=$(cmake --version | head -1)"'
     'echo "[wsl-build] VULKAN_SDK=$VULKAN_SDK"'
     'echo "[wsl-build] CRD_PLATFORM_HEADLESS=$CRD_PLATFORM_HEADLESS"'
+    'echo "[wsl-build] BUILD_DIR=$BUILD_DIR (native ext4)"'
     'echo "[wsl-build] ===== configure ====="'
 )
 
 if ($Reconfigure) {
-    $bashLines += "rm -rf 'build/$Preset'"
+    $bashLines += 'rm -rf "$BUILD_DIR"'
+    $bashLines += 'mkdir -p "$BUILD_DIR"'
 }
 
-$bashLines += "cmake --preset $Preset"
+# -B overrides the preset's binaryDir; CTest --test-dir does the same.
+$bashLines += "cmake --preset $Preset -B `"`$BUILD_DIR`""
 $bashLines += 'echo "[wsl-build] ===== build ====="'
-$bashLines += "cmake --build --preset $Preset"
+$bashLines += "cmake --build `"`$BUILD_DIR`""
 
 if (-not $skipTestsForPreset) {
     $bashLines += 'echo "[wsl-build] ===== ctest ====="'
-    $bashLines += "ctest --preset $Preset --output-on-failure"
+    $bashLines += "ctest --preset $Preset --test-dir `"`$BUILD_DIR`" --output-on-failure"
 }
 
 $bashLines += 'echo "[wsl-build] ===== DONE ====="'
@@ -97,7 +121,10 @@ Write-Host "[wsl-build.ps1] tests=$(if ($skipTestsForPreset) { 'skipped' } else 
 # not found`). Writing bytes directly bypasses that.
 $tmpDir = Join-Path $repoRootWin 'build'
 if (-not (Test-Path $tmpDir)) { New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null }
-$tmpWin = Join-Path $tmpDir '.wsl-build-tmp.sh'
+# Per-preset temp file so parallel invocations of this script (one per
+# preset) don't race on the same path. The earlier shared-name version
+# silently swapped each other's bash scripts when run concurrently.
+$tmpWin = Join-Path $tmpDir ".wsl-build-tmp-$Preset.sh"
 $bashLF = $bashScript -replace "`r`n", "`n"
 [System.IO.File]::WriteAllBytes($tmpWin, [System.Text.UTF8Encoding]::new($false).GetBytes($bashLF))
 $tmpDriveLower = $tmpWin.Substring(0, 1).ToLower()

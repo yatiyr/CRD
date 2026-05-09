@@ -1,0 +1,19 @@
+# Cerid Phase 3.0 v1o3 — default profile.
+#
+# Resolves at sandbox boot via ProfileResolver. The single rule has no
+# predicates → matches every ProfileContext; the bundle list points at
+# the cooked Quality + Camera presets which the sandbox applies to its
+# IPresetTarget consumers (ForwardRenderPath + SandboxCameraTarget).
+#
+# Authoring multiple profiles + predicates (e.g. game / simulation /
+# daw / cinematic, or os = "Linux") is supported by the schema; v1o3
+# ships only this default to keep the demo scope honest. Adding more
+# is a content task, not a cooker task.
+
+[[profile]]
+priority = 0
+# No predicates → match-everything.
+bundle = [
+    "../presets/quality_default.preset.toml",
+    "../presets/camera_default.preset.toml",
+]

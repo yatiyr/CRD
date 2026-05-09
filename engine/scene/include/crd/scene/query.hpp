@@ -3,6 +3,8 @@
 #include <crd/containers/array.hpp>
 #include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
+#include <crd/math/geometry.hpp>
+#include <crd/math/vec.hpp>
 #include <crd/scene/component.hpp>
 #include <crd/scene/entity.hpp>
 #include <crd/scene/relation.hpp>
@@ -156,6 +158,25 @@ public:
     template <typename T> Query  changed() &&;
     template <typename T> Query& skip_pending() &;
     template <typename T> Query  skip_pending() &&;
+
+    // ---- v1p: Reserved spatial DSL operators (ADR-0053 §6) ------------
+    //
+    // `.in_aabb(box)` and `.within_radius(point, radius)` are the two
+    // public spatial filters consumers can chain on a query today. The
+    // backing `SpatialBVHIndex` is a no-op shell in Phase 3.0 — the
+    // operators currently PASS THROUGH (every entity matching the
+    // required components is yielded, regardless of bounds). When
+    // Phase 3.5 ships the real BVH, the operators start filtering
+    // without any caller code change.
+    //
+    // The shape is FROZEN by v1p: bounding-volume types are
+    // `crd::math::AABB<f32>` / `crd::math::Sphere<f32>` from
+    // `crd/math/geometry.hpp`. Adding a different bounding shape means
+    // a new operator (e.g. `.in_obb(...)`), not a signature change here.
+    Query& in_aabb(const crd::math::AABB<crd::f32>& box) &;
+    Query  in_aabb(const crd::math::AABB<crd::f32>& box) &&;
+    Query& within_radius(const crd::math::Vec3<crd::f32>& center, crd::f32 radius) &;
+    Query  within_radius(const crd::math::Vec3<crd::f32>& center, crd::f32 radius) &&;
 
     // ---- Chunk-level visitor ------------------------------------------
 
