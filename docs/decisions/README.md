@@ -53,6 +53,7 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 - ADR-0009 — RHI v1a scaffold
 - ADR-0010 — Vulkan bootstrap
 - ADR-0011 — First triangle
+- ADR-0061 — Async GPU upload contract (adds `crd::rhi::Fence` + non-waiting `Queue::submit(cmd, fence)`)
 
 ### `[config]`
 - ADR-0012 — Config substrate
@@ -99,6 +100,7 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 - ADR-0046 — MaterialDomain enum, node-editor future-proofing, RT hybrid strategy
 - ADR-0047 — Font rendering system (MTSDF shader, billboard text, Surface domain)
 - ADR-0048 — Material system architecture foundation (two-tier Template/Instance, surface function, MATR format, ShaderOptions)
+- ADR-0061 — Async GPU upload contract (`UploadHandle` + per-module polling system)
 
 ### `[culling]`
 - ADR-0017 — Culling strategy
@@ -128,6 +130,13 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 ### `[preset]` `[profile]`
 - ADR-0059 — Preset system: typed system-config bags with five-layer resolution
 - ADR-0060 — Profile system: typed predicate selectors with additive composition
+
+### `[async]` `[upload]`
+- ADR-0014 — Reference counting split (resource handle async-load substrate)
+- ADR-0022 — Open-world streaming pipeline (forward-looking)
+- ADR-0039 — `ResourceHandle<T>` semantics (CPU-side async load)
+- ADR-0053 — Component index slot framework (`AsyncAwareIndex` consumer-facing surface)
+- ADR-0061 — Async GPU upload contract (closes the design half of the GPU-side polling protocol)
 
 ### `[sandbox]` `[build]`
 - ADR-0045 — Sandbox executable, asset layout, cook workflow, crd-meshgen
@@ -227,3 +236,4 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 | 0058  | Öbek system: cooked entity-graph templates with composition, variation, AAAA-tier future-proofing | scene, ecs, cooker, resources, arch, renderer, networking, determinism, obek, prefab | Accepted |
 | 0059  | Preset system: typed system-config bags with five-layer resolution | scene, resources, cooker, arch, renderer, audio, physics, input, config, preset | Accepted |
 | 0060  | Profile system: typed predicate selectors with additive composition | scene, resources, cooker, arch, config, networking, app, profile | Accepted |
+| 0061  | Async GPU upload contract: `UploadHandle` + per-module polling system | arch, renderer, rhi, scene, resources, async | Accepted |

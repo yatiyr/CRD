@@ -116,23 +116,28 @@ The full Öbek system (ADR-0058) shipped across v1m1–v1m5b in twelve sub-slice
 
 ---
 
-### Async GPU upload (`GpuUploader`)
+### Async GPU upload (`GpuUploader`) — design closed by ADR-0061; impl lands in v1o1+v1o2
 
-**Why it matters:** the sandbox now kicks `load_async<MeshResource>` on click and finalises the upload on the first frame after the load fiber signals Ready (Phase 2.8 follow-up, 2026-05-06). That removes the disk-I/O + parse hitch from the main thread. But `GpuUploader::upload_mesh` / `upload_texture` still end with a synchronous `device.graphics_queue().submit_and_wait(*cmd)` — a `vkQueueWaitIdle` on the main thread. For BoomBox-class assets (~10 MB GLB → ~30 MB raw mesh) that's a visible hitch even though the CPU-side load is now off the main thread.
+**Status (2026-05-09):** **Design half closed.** ADR-0061 locks the contract: three layers, owned by three modules.
+- `crd-rhi`: adds `Fence` + non-waiting `Queue::submit(cmd, fence)`.
+- `crd-renderer`: adds `UploadHandle` + `GpuUploader::upload_mesh_async` / `upload_texture_async` + `PendingMeshUpload` component + `RenderUploadSystem` (RenderExtract phase).
+- `crd-scene`: unchanged — already exposes `AsyncAwareIndex` + `query<...>().skip_pending<Renderable>()`.
 
-**What's needed:** an async upload contract.
-- `GpuUploader::upload_mesh_async(const MeshResource&, Device&) → UploadHandle` (and the texture twin).
-- The job pool runs the staging fill + `vkCmdCopyBuffer` recording on a worker fiber.
-- Submission goes onto the graphics queue without `wait`. A fence (or timeline semaphore) tracks completion.
-- Caller polls `UploadHandle::is_ready()` per frame and only swaps the GPU resource pointer (e.g. `m_gpu_mesh`) once the fence signals.
-- Concurrent uploads share a transfer queue if the device exposes one; otherwise they batch onto graphics behind the existing graphics submissions.
+**Implementation half:** lands as Phase 3.0 v1o1 (RHI fence) + v1o2 (UploadHandle plumbing + RenderUploadSystem). v1o3 is the sandbox integration that uses the async path — the first real consumer.
 
-**Why it's deferred:** designing the upload-handle contract well requires at least two real consumers shaping it. Today there's exactly one (sandbox click). The right moment is **Phase 3.0+** — once the scene/ECS layer can spawn a streaming load (terrain tile, LOD swap, scene-load preload), the contract has two callers and the design surface is informed by both. Until then, premature design risks baking in a single-callsite assumption.
+**Why it matters:** `GpuUploader::upload_mesh` / `upload_texture` today end with `device.graphics_queue().submit_and_wait(*cmd)` — a `vkQueueWaitIdle` on the main thread. For BoomBox-class assets (~10 MB GLB → ~30 MB raw mesh) that's a visible hitch even though the CPU-side load is already async (Phase 2.8 v1g). The sync entry points stay (some smokes/tests need immediate readiness); the async siblings join them.
+
+**Reserved follow-ups (NOT blocking v1o):**
+- `Device::transfer_queue()` — opportunistic dedicated transfer queue (Vulkan: separate `VK_QUEUE_TRANSFER_BIT` family); falls back to graphics when absent. Reserved for Phase 3.5+ when streaming pressure makes it worthwhile.
+- Timeline semaphores — replace binary fences when a consumer needs multi-step ordering or batched waits.
+- Streaming budget — at most N concurrent uploads; queue the rest. Phase 3.5+ when terrain/LOD streaming arrives.
+- Async texture upload consumer — `PendingTextureUpload` sibling component. Lands when a real texture-streaming workload surfaces (likely Phase 3.5 IBL or 3.8 GPU-driven rendering).
 
 **Where it's referenced:**
-- `docs/phases/phase-3.0-scene-ecs.md` — listed as a prerequisite for streamed scene loads.
-- `engine/renderer/src/gpu_uploader.cpp` — current implementation.
-- `sandbox/src/sandbox_layer.cpp::try_finalize_pending_load()` — comment points here when the synchronous upload runs.
+- `docs/decisions/0061-async-gpu-upload-contract.md` — full design + module ownership + caller pattern.
+- `docs/phases/phase-3.0-scene-ecs.md::v1o` — implementation slicing.
+- `engine/renderer/src/gpu_uploader.cpp` — current synchronous implementation; v1o1+v1o2 add the async siblings.
+- `sandbox/src/sandbox_layer.cpp::try_finalize_pending_load()` — current consumer; v1o3 migrates to async.
 
 ---
 

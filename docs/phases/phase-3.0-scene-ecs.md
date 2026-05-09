@@ -1,7 +1,7 @@
 # Phase 3.0 — Scene / ECS Foundation
 
 **Status:** 🚧 active — v1a–v1m shipped 2026-05-06 / 07 / 08; phase expanded from 14 to **17 slices** (2026-05-08) to land the elite-tier authoring substrate (Öbek + Preset + Profile) before Phase 3.0 closes. **v1m (Öbek system) FULLY DELIVERED 2026-05-08** across 12 sub-slices (~2700 LOC, 58 öbek tests). Next: **v1n (Preset + Profile system)**, then v1o (sandbox integration), then v1p (reserved-slot freeze).
-**ADRs:** ADR-0049, ADR-0050, ADR-0051, ADR-0052, ADR-0053, ADR-0054, ADR-0055, ADR-0056, ADR-0057, **ADR-0058 (Öbek)** ✅ realised, **ADR-0059 (Preset), ADR-0060 (Profile)** ⏳ next slice
+**ADRs:** ADR-0049, ADR-0050, ADR-0051, ADR-0052, ADR-0053, ADR-0054, ADR-0055, ADR-0056, ADR-0057, **ADR-0058 (Öbek)** ✅ realised, **ADR-0059 (Preset), ADR-0060 (Profile)** ⏳ v1n, **ADR-0061 (Async GPU upload contract)** ⏳ v1o1+v1o2 (locked 2026-05-09)
 **Cornerstone:** ADR-0020 (scene/ECS hybrid, UI in tree)
 **New module:** `crd-scene` (bootstrapped 2026-05-06)
 **Depends on:** Phase 2.8 complete (MaterialResource with PSO state + pass-keyed variants)
@@ -44,7 +44,7 @@ This is the **highest-leverage single block of work in the engine**. Every Phase
 | v1m4b | InheritPolicy::Inherit transparent CoW backend (3 sub-slices: SharedComponentPool / per-slot ownership + force-SparseSet / content-hash dedup); demonstrated 2× memory savings on "1000 trees from same öbek" pattern | ✅ shipped 2026-05-08 — `docs/sessions/2026-05-08-scene-v1m4b-cow-backend.md` |
 | v1m5 | revert/unpack/enumerate APIs (`ObekInstantiation::source` + revert_field/component/entity/all + unpack_obek + unpack_obek_keep_overrides + enumerate_overrides) + AAAA-tier batch reservations (BatchHints + BatchInstanceTag + ObekBatchHandle + instantiate_obek_batch) | ✅ shipped 2026-05-08 — `docs/sessions/2026-05-08-scene-v1m5-revert-batch.md` |
 | v1n | **Preset + Profile system** — `PresetResource` + per-type `PresetLoader` + `PresetRegistry`; first concrete types `QualityPreset` (`'PRQL'`) + `CameraPreset` (`'PRCM'`) wired into `IRenderPath` and `Camera`; `extends` chain (shares Öbek resolver); five-layer resolution stack (default → extends → preset → instance → runtime); `ProfileResolver` with closed typed predicates (os / gpu_tier / domain / mode / target_fps / cpu_cores); additive profile composition (priority-sorted stack, Cerid-unique vs Unreal first-match-wins); runtime context detection; hot-reload + atomic swap | ⏳ next |
-| v1o | **Sandbox renderer integration with Öbek + Preset + Profile** — sandbox loads a `.scene.toml` referencing öbeks; profile auto-resolves at boot; renderer driven by applied `QualityPreset` + `CameraPreset`; ImGui panel toggles profile + reverts overrides live; visual proof of the full authoring stack; ships demo `default.profile.toml` with game / sim / DAW / cinematic baselines | ⏳ |
+| v1o | **Async GPU upload contract (ADR-0061) + Sandbox integration with Öbek + Preset + Profile** — 3 sub-slices: **v1o1** `crd::rhi::Fence` + non-waiting `Queue::submit(cmd, fence)`; **v1o2** `UploadHandle` + `GpuUploader::upload_*_async` + `PendingMeshUpload` component + `RenderUploadSystem` (RenderExtract); **v1o3** sandbox uses async upload + profile + öbek end-to-end; ImGui panel toggles profile + reverts overrides live; visual proof of full authoring stack | ⏳ |
 | v1p | **Reserved-slot freeze** — registration grammar test for L6/L7/L8 reserved indexes (Replication / ScriptComponent / Reflection trait acceptance); öbek/preset/profile API surface frozen; closes Phase 3.0 | ⏳ |
 
 `crd-scene` now ships **the L4 scheduling half** per ADR-0052 §3-§5. `ISystem` has `Reads`/`Writes` `ComponentSet` type aliases (computed into masks via `World::component_set_mask<Set>()`) — auto-parallel scheduling reads them in Phase 3.5; v1h dispatches serially. The 7-phase schedule (PrePhysics → PostRender) runs systems in registration order within each phase. `step_fixed(dt, fixed_dt, max_substeps)` interleaves fixed-step systems N times then variable-rate once per phase, with accumulator carry-over and spiral-of-death clamp. `Commands` queues mutations during iteration and flushes at every phase boundary; spawn is immediate (single-threaded v1h), all other ops deferred. 172 unit tests / 34602 assertions; six-config green.
@@ -328,14 +328,29 @@ Phase 3.0's second new substrate: ADR-0059 (Preset) + ADR-0060 (Profile). Togeth
 
 **ADR:** 0059 (Preset), 0060 (Profile)
 
-### v1o — Sandbox renderer integration with Öbek + Preset + Profile (~400 LOC, 2–3 days)
+### v1o — Sandbox renderer integration with Öbek + Preset + Profile + async GPU upload (~800 LOC, 4–5 days)
 
-The visual proof of the full authoring stack. Originally planned as a small "wire renderer to scene query" slice; expanded to demonstrate Öbek + Preset + Profile end-to-end.
+The visual proof of the full authoring stack PLUS the first consumer of the async GPU upload contract (ADR-0061). Originally planned as a small "wire renderer to scene query" slice; expanded twice — first to demonstrate Öbek + Preset + Profile end-to-end (2026-05-08), then to host the async-upload contract's first real consumer (2026-05-09).
+
+#### v1o1 — `crd::rhi::Fence` + non-waiting `Queue::submit(cmd, fence)` (~150 LOC, 4 tests)
+
+Adds the RHI primitive needed by the async upload contract. Vulkan backend wraps `VkFence`. Fence interface: `is_signaled()` (non-blocking), `wait()` (blocking), `reset()`. Device gains `create_fence()`. Queue gains `submit(CommandBuffer&, Fence&)` — submits without waiting and signals the fence on completion.
+
+ADR: 0061 §"Layer 1 — `crd-rhi`".
+
+#### v1o2 — `UploadHandle` + `GpuUploader::upload_*_async` + `PendingMeshUpload` + `RenderUploadSystem` (~250 LOC, 6 tests)
+
+Layers 2 + 3 of ADR-0061. `UploadHandle` (move-only; owns fence + staging buffer + produced GpuMesh/GpuTexture). `GpuUploader::upload_mesh_async` / `upload_texture_async` (record + submit + return handle). `PendingMeshUpload` component. `RenderUploadSystem` (RenderExtract phase; polls handle, consumes on ready, populates Renderable buffer pointers, removes the marker, calls `world.async_aware().mark_loaded(e, ComponentTypeTag<Renderable>)`). Existing renderer code's `world.query<Transform, Renderable>().skip_pending<Renderable>()` automatically skips pending entities.
+
+ADR: 0061 §"Layer 2" + §"Layer 3".
+
+#### v1o3 — Sandbox integration: Öbek + Preset + Profile + async upload end-to-end (~400 LOC)
 
 **Implementation:**
-- `SandboxLayer` constructs a `World`, registers `TransformPropagation`, registers `IRenderPath` + `Camera` as `IPresetTarget` impls.
+- `SandboxLayer` constructs a `World`, registers `TransformPropagation` + `RenderUploadSystem`, registers `IRenderPath` + `Camera` as `IPresetTarget` impls.
 - App boot resolves `ProfileContext` (os / gpu_tier / domain=game / mode=runtime / target_fps / cpu_cores), runs `ProfileResolver`, applies bundle → renderer + camera reconfigure.
 - Sandbox loads `assets/sources/sandbox.scene.toml` referencing 2–3 demo öbeks (procedural shapes graduate into öbeks; imported glTF assets become öbek-wrapped meshes).
+- Asset Browser click now uses the async path: `load_async<MeshResource>` → on CPU ready, `upload_mesh_async` → spawn entity with Renderable + `PendingMeshUpload` → RenderUploadSystem flips state to Loaded automatically; render queries skip until ready.
 - ImGui panel adds:
   - Profile picker (`game / simulation / daw / cinematic` — re-resolves on change).
   - Quality slider (`Low / Medium / High / Ultra` — runtime override at L4).
@@ -346,8 +361,9 @@ The visual proof of the full authoring stack. Originally planned as a small "wir
 **Tests:**
 - `crd-sandbox --headless --domain=simulation` mounts a cooked scene + profile, exits 0.
 - GPU smoke: sandbox renders a scene of öbeks with applied quality preset; visual verification.
+- Async upload smoke: load BoomBox via the async path, verify per-frame rendering remains within target frame time during upload (no `vkQueueWaitIdle` hitch).
 
-**ADR:** none new — integrates 0049–0060.
+**ADR:** 0061 (async GPU upload); integrates 0049–0060.
 
 ### v1p — Reserved-slot freeze (~150 LOC + tests)
 
@@ -376,10 +392,14 @@ Tests: registration accepts all traits without compilation error; deferred-impl 
 
 ## Pulled-forward prerequisites (must land before or alongside this phase)
 
-- **Async GPU upload** (`GpuUploader::upload_mesh_async` / `upload_texture_async`). Phase 2.8 v1g shipped CPU-side `load_async`, but GPU upload is still synchronous. Streaming scene loads will hit this hitch every time a scene mounts new geometry. The `AsyncAwareIndex` (Layer 5, Phase 3.0 v1i) provides the query-side filter; the GPU-side completion machinery still needs to be designed and shipped.
-  - Full debt note: `docs/debt.md` → "Async GPU upload (`GpuUploader`)".
-  - Open question: does `crd-scene` own the polling, or does each `RenderableComponent` carry an `UploadHandle` field that the renderer's `skip_pending<Renderable>` filter consults?
-  - Recommended decision: ship async upload as part of v1o (sandbox integration) — that is the first slice where streaming-load pressure becomes visible; design forced by real consumer.
+- **Async GPU upload** (`GpuUploader::upload_mesh_async` / `upload_texture_async`). Phase 2.8 v1g shipped CPU-side `load_async`, but GPU upload is still synchronous. Streaming scene loads would hit this hitch every time a scene mounts new geometry.
+  - **Design decision LOCKED 2026-05-09: ADR-0061** — three-layer contract:
+    1. `crd-rhi` adds `Fence` + `Queue::submit(cmd, fence)` non-waiting variant.
+    2. `crd-renderer` adds `UploadHandle` + `GpuUploader::upload_*_async` + `PendingMeshUpload` component + `RenderUploadSystem` (RenderExtract phase).
+    3. `crd-scene` is unchanged — already exposes `AsyncAwareIndex` + `skip_pending<Renderable>()`.
+  - **Implementation timing:** v1o sub-slices v1o1 (RHI fence) + v1o2 (UploadHandle + PendingMeshUpload + RenderUploadSystem). v1n needs no GPU-upload changes.
+  - Full ADR: `docs/decisions/0061-async-gpu-upload-contract.md`.
+  - Original debt note: `docs/debt.md` → "Async GPU upload (`GpuUploader`)" — design half closed by ADR-0061; implementation half closes when v1o ships.
 
 ---
 
