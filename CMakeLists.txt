@@ -312,6 +312,8 @@ add_subdirectory(engine/rhi-vulkan)
 add_subdirectory(engine/jobs)
 add_subdirectory(engine/resources)
 add_subdirectory(engine/scene)
+add_subdirectory(engine/preset)
+add_subdirectory(engine/profile)
 # add_subdirectory(engine/graphics)
 # add_subdirectory(engine/scripting)
 

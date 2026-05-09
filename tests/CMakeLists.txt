@@ -19,6 +19,8 @@ add_subdirectory(resources)
 add_subdirectory(meshgen)
 add_subdirectory(scene)
 add_subdirectory(scene_cooker)
+add_subdirectory(preset)
+add_subdirectory(profile)
 
 if(CRD_BUILD_BENCHMARKS)
     add_subdirectory(bench)
