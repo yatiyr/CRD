@@ -51,3 +51,15 @@ fiber_switch:
     ret
 
 .size fiber_switch, .-fiber_switch
+
+/*
+ * Mark the stack as non-executable. Without this section, GNU ld emits
+ *   "missing .note.GNU-stack section implies executable stack ... deprecated
+ *    and will be removed in a future version of the linker"
+ * and the resulting binary is linked with an executable stack. Hand-written
+ * assembly (.S files) does NOT get this section auto-emitted by the
+ * assembler the way .c files do, so we add it explicitly.
+ */
+#if defined(__linux__) && defined(__ELF__)
+.section .note.GNU-stack,"",@progbits
+#endif
