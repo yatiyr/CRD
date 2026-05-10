@@ -37,9 +37,10 @@ consumers. The architecture serves all of them; no domain is privileged.
 - **API stable across backends.** Public surfaces (RHI, physics, audio,
   render path) are designed assuming multiple implementations even when
   only one exists. Vendor types do not leak.
-- **Tak-çıkar (plug-out) third-party.** Where Cerid uses an external (PhysX,
-  glslang, ImGui), the integration is a backend behind a Cerid-owned
-  interface.
+- **Tak-çıkar (plug-out) third-party.** Where Cerid uses an external
+  (glslang/shaderc, spirv-reflect, ImGui, toml++), the integration is a
+  backend behind a Cerid-owned interface. Core simulation surfaces
+  (renderer, physics/eylem, audio) are Cerid-native — no vendor wraps.
 - **Determinism is a first-class option.** Not the default, but reachable:
   fixed-step physics, deterministic random, replay-friendly event log.
 - **Every shipped slice ends green on Debug + Release + ASan.** Three
@@ -62,9 +63,13 @@ If circumstances genuinely change, open a new ADR or escalate to `@heavy`.
   not naive scene graph. → ADR-0020
 - **UI in the scene tree:** Godot-style. Spatial nodes (3D) and Control
   nodes (UI) coexist as children of the same scene root. → ADR-0020
-- **Physics tak-çıkar:** PhysX is the first backend behind a Cerid-owned
-  `crd-physics` interface. Cerid-native backend arrives in Phase 6. →
-  ADR-0018
+- **Physics — Cerid-native (eylem) from day 1.** No third-party wrap. The
+  `crd-eylem` module is built deterministic-by-construction (compile +
+  runtime FP contract), ECS-native, fiber-jobified, multi-domain (games
+  + robotics + medical + cinematic + DAW), templated 2D + 3D from a
+  single substrate, and GPU-extensible. → ADR-0062, ADR-0063
+  (supersedes ADR-0018; phase plan: `docs/phases/phase-3.1-eylem.md`;
+  research: `docs/research/cerid-eylem.md`)
 - **Authoring vs runtime:** Configs and scenes authored in TOML; scenes
   cooked to binary for runtime. → ADR-0012, ADR-0013
 - **ImGui's role:** Debug-only forever. After `crd-ui` ships, ImGui never

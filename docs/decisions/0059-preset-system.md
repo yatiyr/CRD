@@ -127,7 +127,7 @@ CRDR sorts chunks by FourCC → deterministic byte order. Same source files + sa
 | `CameraPreset` | `'PRCM'` | 3.0 v1n | `Camera` |
 | `PostFXPreset` | `'PRPP'` | 3.5+ | `IRenderPath` post-fx slot |
 | `AudioDevicePreset` | `'PRAD'` | 5 | `crd-audio` |
-| `PhysicsPreset` | `'PRPH'` | 6 | `crd-physics` |
+| `PhysicsPreset` | `'PRPH'` | 3.1 | `crd-eylem` |
 | `InputMapPreset` | `'PRIN'` | 4 | `crd-input` |
 | `ProjectTemplate` | `'PRPJ'` | 4 | `crd-app` boot |
 

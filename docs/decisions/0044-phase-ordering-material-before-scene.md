@@ -37,7 +37,7 @@ Phase 2.6 — crd-resources (COMPLETE)
 Phase 2.7 — Asset import: TextureResource + MeshResource + material params + GPU upload
 Phase 2.8 — Material completion: per-material PSO state + pass-keyed variants + depth-only prepass
 Phase 3.0 — Scene / ECS foundation
-Phase 3.1 — Physics (PhysX 5 backend)
+Phase 3.1 — Eylem (Cerid-native physics — see ADR-0062 / ADR-0063 / phase-3.1-eylem.md; supersedes earlier PhysX-wrap plan)
 Phase 3.2 — Animation (skeletal, blend trees, IK)
 Phase 3.3 — crd-font (MTSDF, HarfBuzz)
 Phase 3.4 — Audio (spatialized, mix graph, DAW host scaffold)

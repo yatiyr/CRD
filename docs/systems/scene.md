@@ -303,7 +303,7 @@ The post-v1c2 slices grow `World` with: a SparseSet escape-hatch backend (v1d), 
 ## Long-term direction
 
 - v1b–v1n complete the eight-layer machine: components, storage, relations, queries, schedule, indexes, transform, serialization, sandbox integration, and the reserved-slot freeze.
-- Phase 3.1 (Physics) registers `RigidBody`, `Collider`, `PhysicsConstraint` components. PhysX backend behind `crd-physics` interface.
+- Phase 3.1 (eylem — Cerid-native physics) registers `RigidBody`, `Collider`, `Joint` components. ECS-native integration via `BodyHandle ↔ EntityId` mapping; `PhysicsTransform` writeback into the existing `Transform` component during `PostPhysics` schedule phase. ADR-0062 / ADR-0063 / `docs/phases/phase-3.1-eylem.md`.
 - Phase 3.2 (Animation) ships the `HistoryIndex<N>` implementation for time-tunneled queries (animation interpolation reads `Transform` at `frame - 1`).
 - Phase 3.3+ (font, audio, PBR, etc.) each register their own component set; `SpatialBVHIndex` impl ships with Phase 3.5 light culling at scale.
 - Phase 3.8 (GPU-driven rendering) ships the `GpuResidentIndex` implementation: components flagged `GpuResident` are mirrored to GPU buffers automatically.

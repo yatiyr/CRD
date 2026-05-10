@@ -1,0 +1,444 @@
+# ADR-0065 — `crd-hesap` numerical computing substrate
+
+**Date:** 2026-05-10
+**Status:** Accepted
+**Tags:** [arch] [hesap] [math] [solvers] [autodiff] [optimization] [dsp] [gpu] [scripting]
+
+## Context
+
+Cerid's multi-domain mandate (games + robotics + medical + cinematic +
+DAW + scientific computing tools) demands a **MATLAB-class numerical
+substrate**. Every domain pulls on a different part of this substrate:
+
+| Domain | Pulls |
+| --- | --- |
+| Games | small dense LA (already in `crd-math`); minor stats |
+| Eylem v7 (FEM) | sparse CG/PCG, sparse Cholesky, AMG preconditioner |
+| Eylem v9 (differentiable) | reverse-mode autodiff, gradient propagation |
+| Robotics | constrained optimization (SQP, IPOPT-class), QP, ODE solvers, motion planning |
+| Medical | ODE/DAE (stiff biological systems), PDE primitives, statistics |
+| Cinematic VFX | numerical sim (fluids, deformation), FFT, large sparse |
+| DAW | DSP (FIR/IIR filters, biquad, FFT, convolution, resampling, spectral) |
+| MATLAB-class tool | **all of the above** + REPL + plug-in API + notebook surface |
+
+Currently `crd-math` is a small primitive layer (Vec/Mat/Quat/Transform
++ SIMD wrappers + deterministic stdlib). Pushing 50–100 KLOC of
+sparse / iterative / direct / eig / opt / ODE / FFT / stats / autodiff
+into it would:
+
+1. Bloat every dependent module's compile time (RHI, renderer, scene,
+   eylem, sdf, app — all pull `crd-math`).
+2. Violate module isolation (CLAUDE.md §7) — a DAW build doesn't need
+   GMRES; a pure-game build doesn't need eigenvalue solvers.
+3. Conflate two very different testing tiers — `crd-math` correctness
+   vs `crd-hesap` numerical accuracy benchmarks (convergence rates,
+   condition-number stress, residual norms vs LAPACK reference).
+4. Make the MATLAB-class tool ambition harder to surface as a
+   first-class engine pillar.
+
+`docs/research/sparsematrices.md` (existing Cerid research) already
+established the sparse-matrix background. ADR-0065 extends that into a
+full substrate decision.
+
+## Decision
+
+Cerid ships **`crd-hesap`** (Turkish: *computation / calculation /
+reckoning*) as a standalone numerical substrate — peer of
+`crd-math`, `crd-jobs`, `crd-eylem`, `crd-sdf`. The name follows the
+existing Turkish-named-module pattern (Eylem = action/physics, Öbek =
+cluster/prefab, Hesap = computation/numerics).
+
+**The substrate IS the interface.** No third-party wrap. Reference
+implementations (LAPACK/BLAS, SuiteSparse, FFTW, Eigen, MKL, SUNDIALS,
+IPOPT, OSQP, Stan, JAX) inform algorithm choice — not source code.
+
+### 1. Module split
+
+```
+crd-hesap                                ← this ADR locks
+  └─ engine/hesap/
+       include/crd/hesap/                — public umbrella headers
+       src/                               — top-level glue
+       sub-modules (each compiles independently, opt-in link):
+         crd-hesap-dense                  — BLAS L1/L2/L3 + LAPACK-class dense LA
+         crd-hesap-sparse                 — CSR/CSC/BSR/COO/ELL/HYB + spmv/spmm/spgemm
+         crd-hesap-iterative              — CG/PCG/BiCGSTAB/GMRES/MINRES/LSQR/IDR(s)
+         crd-hesap-direct                 — sparse LU/Cholesky/QR/LDLT (multifrontal)
+         crd-hesap-eig                    — eigenvalue solvers (dense + sparse)
+         crd-hesap-opt                    — L-BFGS / SQP / IPOPT-class / OSQP / LP / MIP
+         crd-hesap-ode                    — ODE / DAE / PDE primitive solvers
+         crd-hesap-fft                    — FFT + DCT/DST/Hartley
+         crd-hesap-dsp                    — FIR/IIR filters, biquad, resample, spectral
+         crd-hesap-stats                  — distributions, RNG, statistical tests
+         crd-hesap-tensor                 — N-dim arrays + broadcasting + einsum
+         crd-hesap-autodiff               — forward + reverse mode AD over BLAS
+         crd-hesap-gpu                    — GPU dense + sparse + FFT + iterative
+         crd-hesap-repl                   — interactive REPL + plug-in C ABI surface
+```
+
+Each sub-module is a separate CMake target. Consumers link only the
+parts they need. `crd-hesap` (the umbrella) is a meta-target that
+pulls the common foundation; downstream code typically links one or
+two sub-modules, not the whole stack.
+
+### 2. Module dependencies (one-way, no cycles)
+
+```
+crd-hesap-* depend on:
+  crd-core        (types, asserts, platform)
+  crd-memory      (IAllocator, GrowablePool)
+  crd-containers  (Array, HashMap, sort)
+  crd-math        (Vec/Mat/Quat — small fixed-size; SIMD wrappers from Phase 3.1 v0)
+  crd-jobs        (parallel_for for parallel BLAS, parallel CG, parallel reductions)
+
+crd-hesap-gpu also depends on:
+  crd-rhi         (compute shader dispatch + buffer upload)
+  crd-renderer    (UploadHandle / Fence reuse from ADR-0061)
+
+crd-hesap-repl also depends on:
+  crd-imgui       (debug REPL panel; Phase 7 editor takes over later)
+  crd-platform    (file watcher for notebook reload)
+
+crd-hesap does NOT depend on:
+  crd-scene, crd-eylem, crd-sdf
+  (those depend on us)
+```
+
+`crd-math` stays lean. `crd-hesap` is the heavy substrate.
+
+### 3. Algorithm choice posture (closed)
+
+For each problem class, ADR-0065 commits to one canonical algorithm
+with documented alternatives reserved. The phase plan
+(`docs/phases/phase-3.1.6-hesap.md`) implements them.
+
+| Problem | Chosen algorithm | Reference | Reserved alternatives |
+| --- | --- | --- | --- |
+| Dense `gemm` | Goto/BLIS layered (microkernel + outer panels) | BLIS 2014, OpenBLAS | Strassen for very large; intrinsics-tuned |
+| Dense LU | Doolittle + partial pivoting | LAPACK `dgetrf` | Recursive blocked LU |
+| Dense Cholesky | Right-looking blocked | LAPACK `dpotrf` | Left-looking |
+| Dense QR | Householder | LAPACK `dgeqrf` | Givens (banded), randomized |
+| Dense SVD | Golub-Reinsch (Hou + bidiag QR) | Golub & Van Loan | Jacobi (small); randomized SVD (large) |
+| Symmetric eig | QR with Wilkinson shift after Householder tridiag | LAPACK `dsyevr` | Divide-and-conquer; bisection |
+| Non-sym eig | Schur via QR with double-shift | LAPACK `dgeev` | Hessenberg form; Krylov |
+| Sparse CG | Saad classic | Saad 2003 | Pipelined CG; chronopoulos-Gear |
+| Sparse PCG | Jacobi / IC(0) / ILU(0) preconditioners | Saad 2003 | block-Jacobi, AMG (own slice) |
+| Sparse BiCGSTAB | Van der Vorst 1992 | — | TFQMR |
+| Sparse GMRES | Restarted GMRES(m) + classical Gram-Schmidt + reorthog | Saad 2003 | Pipelined GMRES |
+| Sparse Cholesky | Supernodal (CHOLMOD-class) | Davis 2006 | Multifrontal (own variant) |
+| Sparse LU | Left-looking (Gilbert-Peierls) | Davis 2006 | Supernodal LU |
+| Sparse QR | Multifrontal | Davis 2011 | Householder+SuiteSparseQR-class |
+| Fill-reduce ordering | AMD (approximate minimum degree) | Amestoy 1996 | Nested dissection (METIS-class own port); RCM |
+| Sparse symmetric eig | Lanczos with restart | Saad 2011 | LOBPCG; FEAST |
+| Sparse non-sym eig | Implicitly restarted Arnoldi (IRA) | ARPACK | Krylov-Schur; Jacobi-Davidson |
+| Unconstrained opt | L-BFGS + Wolfe line search | Nocedal-Wright | trust-region Steihaug; Newton |
+| QP | OSQP-style ADMM | OSQP 2020 | Active-set; interior-point |
+| NLP | Mehrotra interior-point | IPOPT model | SQP |
+| LP | Revised primal simplex | — | Mehrotra interior-point |
+| Stiff ODE | BDF (1–6) with Newton-Krylov inner | SUNDIALS CVODE | Rosenbrock |
+| Non-stiff ODE | DOPRI5 + DOPRI8 (FSAL) | Hairer-Wanner | Cash-Karp; PI step controller |
+| DAE | BDF with Pantelides index reduction | SUNDIALS IDA | RADAU5 |
+| FFT | Cooley-Tukey mixed-radix + Bluestein for primes | Frigo-Johnson FFTW | Stockham; Rader |
+| Real FFT | RFFT via half-size complex + post-processing | FFTPack | Split-radix |
+| FIR design | Windowed sinc + Parks-McClellan (Remez) | Oppenheim-Schafer | Frequency sampling |
+| IIR design | Bilinear transform + analog Butterworth/Cheb/Elliptic | Oppenheim-Schafer | Impulse invariance |
+| RNG | PCG splittable (counter-based) + Xoshiro256** for fast non-splittable | O'Neill 2014 / Blackman-Vigna 2018 | Philox; ChaCha20 |
+| Reverse-mode AD | Tape-based with operator overloading | Stan-math model | Source transformation; expression templates |
+| Forward-mode AD | Dual numbers (Jet types) | Hyper-dual for second-order | — |
+| GPU dense | Compute-shader BLIS-style microkernels | cuBLAS pattern | Tensor cores when Vulkan exposes |
+| GPU sparse | Per-row CSR spmv with warp-reduce | cuSPARSE pattern | Block-CSR; ELLPACK on GPU |
+| GPU FFT | Stockham radix-mix on GPU | cuFFT pattern | Bluestein on GPU |
+| GPU iterative | CG/PCG with GPU spmv + GPU axpy/dot | — | Communication-avoiding variants |
+
+### 4. Determinism contract (inherits ADR-0063)
+
+Every `crd-hesap` algorithm obeys ADR-0063 (eylem determinism contract):
+
+- `-ffp-contract=off` / `/fp:precise` — no fused multiply-add reordering.
+- No fast-math; no x87.
+- Cerid-internal trig / exp / sqrt via `crd::math::deterministic`
+  (Cephes-style; bit-exact across platforms / compilers / SIMD widths).
+- `crd::containers::sort` for any sort (no `std::sort`).
+- FNV-1a 64 for any hash (no `std::hash`).
+- Cross-thread reductions are commutative + associative (Kahan
+  summation in parallel reductions; pairwise summation as the
+  default reduction tree).
+- Splittable RNG with deterministic seed → identical output across
+  platforms.
+- `same input → same output`, byte-exact, on the 9-config replay-hash
+  CI matrix.
+
+This is non-negotiable for two reasons:
+
+1. **Eylem v7 FEM** refactors to use `crd-hesap-iterative` (sparse PCG)
+   inside its deterministic physics step. Non-determinism in the
+   solver breaks replay-hash CI.
+2. **Differentiable physics (eylem v9)** + **MATLAB-class tool**
+   both rely on bit-reproducible numerics for trust.
+
+Numerical accuracy is a separate axis from determinism. ADR-0065
+commits to:
+
+- Backward error within `O(n × eps)` for direct dense solvers (`eps =
+  machine epsilon`).
+- Forward error within tolerance × condition number for iterative.
+- Convergence rate tests as separate test tier (not just unit tests
+  but **numerical benchmark tests** with documented tolerances).
+
+### 5. API ergonomics — Eigen-class core + MATLAB-class facade
+
+Two layers, same data:
+
+**Layer A — Eigen-class typed C++ API** (primary, used by engine code):
+
+```cpp
+// crd::hesap::dense
+auto A = Matrix<f64>::random(alloc, 1000, 1000);
+auto b = Vector<f64>::random(alloc, 1000);
+auto x = solve(A, b);                              // LU under the hood
+auto qr = qr_factorize(A);                          // returns QR object
+auto y  = qr.solve(b);                              // re-use factorization
+
+// crd::hesap::sparse
+SparseMatrix<f64, CsrLayout> K = build_stiffness(...);
+auto pcg = PCG<f64>{}
+  .matrix(K)
+  .preconditioner(Preconditioner::Jacobi)
+  .tolerance(1e-8)
+  .max_iter(1000);
+auto u = pcg.solve(f);
+
+// crd::hesap::ode
+auto sol = solve_ivp(rhs_fn, /*t_span=*/{0, 10}, /*y0=*/{1, 0},
+                     IntegratorMethod::DOPRI5, /*rtol=*/1e-6);
+
+// crd::hesap::autodiff (reverse-mode)
+auto loss = [](const Vector<Var>& x) -> Var {
+    return sum(x * x) + sin(x[0]);
+};
+auto [value, grad] = value_and_gradient(loss, x);
+```
+
+**Layer B — MATLAB-class facade** (for the REPL + scripting layer):
+
+```cpp
+// crd::hesap::matlab (thin sugar over the Eigen-class API)
+using namespace crd::hesap::matlab;
+A = randn(1000, 1000);                              // double-precision dense
+b = randn(1000);
+x = A \ b;                                          // backslash = solve
+[U, S, V] = svd(A);                                 // structured binding
+y = fft(signal);
+plot(t, y);                                         // routes to crd-renderer in tool mode
+```
+
+The MATLAB-class facade is **opt-in syntactic sugar**, not the
+canonical API. It exists for the MATLAB-tool use case and for
+prototyping inside the REPL. Engine production code uses Layer A.
+
+### 6. Memory + allocation discipline
+
+Every container takes `IAllocator*` at construction (CLAUDE.md hard
+rule). No owning STL containers anywhere. `crd::containers::Array`,
+`crd::containers::HashMap`, `crd::containers::String` for storage;
+`crd::containers::ConstSpan` for views.
+
+Sparse matrix storage uses a compact two-array `(rowptr, colind,
+values)` layout (CSR) plus optional per-row sort (CSC variant). All
+allocations route through the user's `IAllocator` so a `TlsfAllocator`
+can host a giant sparse system in a single arena.
+
+### 7. Threading model
+
+`crd-hesap` integrates into `crd-jobs` with the same posture as
+`crd-eylem` and `crd-sdf` (ADR-0062 §7, ADR-0064 §10): **never spawns
+its own threads**. Every parallel operation fans out via
+`jobs::parallel_for` / `run_and_wait`. From the schedule's
+perspective, a `gemm` or `pcg.solve()` call is one atomic phase
+boundary; internally it's saturated parallel.
+
+This is the critical reason `crd-hesap` is not "another OpenMP-style
+library":
+
+- A user calling `solve(A, b)` from a system inside the eylem
+  `Physics` schedule phase fans out across the whole job pool for
+  that solve, then yields the cores back to the next system.
+- No oversubscription (no separate `crd-hesap` thread pool competing
+  with `crd-jobs`).
+- No nested OpenMP-style parallelism issues.
+
+### 8. C ABI + plug-in surface (per ADR-0034 hot-reload pattern)
+
+`crd-hesap-repl` exposes a stable **C ABI** so external code can:
+
+- Load `crd-hesap` from a DLL / .so / .dylib at runtime.
+- Call the full numerical surface from Lua / Python / external tools.
+- Hot-reload during a long-running tool session.
+
+Pattern matches ADR-0034 (C++ hot-reload scripting). The C ABI is a
+narrow envelope: handle-based factory + opaque function pointers + a
+typed dispatch table. The C++ API is the source of truth; the C ABI
+is a generated-or-handwritten wrapper.
+
+### 9. REPL + notebook surface
+
+`crd-hesap-repl` ships an interactive surface so the MATLAB-class
+tool ambition has a concrete entry point:
+
+- **Inline REPL** — line-by-line execution; reads MATLAB-class
+  facade syntax (Layer B above); prints results with auto-formatting
+  (column-width-aware matrix print, scalar with sig figs).
+- **File-backed notebook** — `.cnb` file (Cerid notebook; CRDR-format
+  with `'CNBK'` FourCC). Cells are typed: code, markdown, plot.
+- **Plot integration** — when running inside the engine (sandbox or
+  editor), `plot()` / `imshow()` / `surf()` route to a `crd-renderer`
+  panel via ImGui's per-frame widget. Outside the engine (headless
+  CLI use), they emit PNG / SVG via a CPU rasteriser sub-slice.
+- **Inspector** — runtime introspection of variables (matrix size,
+  sparsity, condition number estimate).
+
+The full editor experience (syntax highlighting, debugger,
+breakpoints in numerical scripts) lands in Phase 7.
+
+### 10. GPU surface
+
+`crd-hesap-gpu` mirrors the CPU API on GPU via Vulkan compute shaders
++ the existing `UploadHandle` / `Fence` infrastructure (ADR-0061). No
+new RHI primitives needed.
+
+```cpp
+auto x_gpu = upload_to_gpu(x_cpu);              // returns GpuVector<f64>
+auto y_gpu = gpu::pcg_solve(K_gpu, f_gpu, ...); // solver runs on GPU
+auto y_cpu = download_from_gpu(y_gpu);
+```
+
+The contract: any algorithm with a `crd::hesap::xxx` CPU
+implementation has (eventually) a `crd::hesap::gpu::xxx` mirror.
+The GPU sub-module is opt-in (one of the heaviest by LOC); a CPU-only
+build leaves it unlinked.
+
+### 11. Scope clarifications
+
+**In scope** (Phase 3.1.6):
+
+- Dense + sparse linear algebra, all storage formats, all standard
+  factorisations.
+- Iterative + direct solvers + AMG preconditioner.
+- Eigenvalue solvers (dense + sparse).
+- Optimisation: unconstrained, constrained, QP, LP.
+- ODE / DAE solvers (stiff + non-stiff).
+- FFT (any size) + DCT/DST/Hartley.
+- DSP: FIR/IIR filter design + biquads + resampling + spectral
+  analysis.
+- Statistics: distributions + sampling + tests.
+- Special functions: gamma, beta, erf, Bessel, polynomials.
+- Polynomial / interpolation / quadrature.
+- N-dim tensors with broadcasting + einsum.
+- Forward + reverse mode autodiff.
+- GPU acceleration mirror.
+- REPL + notebook + plug-in C ABI.
+
+**Reserved** (post-Phase-3.1.6):
+
+- Symbolic computation (CAS — separate concern; potential `crd-sembol`).
+- Distributed memory parallelism (MPI-style — Phase 8+ when scientific
+  computing tool needs cluster scaling).
+- Mixed-integer programming (MIP) beyond basic branch-and-bound —
+  full MIP needs cuts + heuristics + warm-start; reserve as a v17+
+  extension.
+- Stochastic programming, robust optimisation — reserved.
+- Geometric algebra primitives — reserved.
+
+### 12. Versioning + format freeze
+
+`.cnb` notebook format and any cooked-artifact data carry (FourCC,
+schema_version, payload_size). Same pattern as Phase 3.0 v1p freeze:
+
+- `'CNBK'` notebook v1: cell list with typed payloads.
+- `'HSPS'` solver-state snapshot v1: factorisation snapshot for
+  long-running solvers (resume from checkpoint).
+- `'HEDV'` densely-stored matrix v1: row-major dense matrix on disk.
+- `'HSPM'` sparse-matrix v1: CSR storage with sorted column indices.
+
+Bumps require a deliberate schema break visible in source; loader
+rejects mismatched versions with `LoadState::Failed`.
+
+## Consequences
+
+**Positive:**
+
+- One numerical substrate consumed by **every** Cerid domain (games +
+  robotics + medical + cinematic + DAW + scientific tool).
+- MATLAB-class tool ambition gets a first-class engine pillar — not a
+  bolt-on.
+- Eylem v7 (FEM), eylem v9 (differentiable), audio v? (DSP), robotics
+  motion planning (opt + ODE), medical sim (ODE), cinematic VFX (FFT,
+  large sparse) all draw from one well.
+- Determinism contract (ADR-0063) inherits cleanly — replay-hash CI
+  catches regressions in the solvers automatically.
+- Plug-in C ABI (per ADR-0034 pattern) makes Cerid's numerical layer
+  callable from external tools / Lua / Python.
+
+**Negative:**
+
+- **~6–8 months of work for the full substrate.** Comparable in scope
+  to eylem itself. Justified by the breadth of consumers but not a
+  small commitment.
+- **Numerical testing is hard.** Convergence-rate tests, condition-
+  number stress, residual-norm benchmarks — all require careful
+  reference data (we generate against LAPACK / SuiteSparse / FFTW
+  reference outputs and pin them as fixtures).
+- **GPU sub-module doubles the surface.** Each CPU algorithm needs
+  a GPU mirror. Mitigated by sequencing GPU as a late slice (v16);
+  the CPU substrate ships first and proves itself.
+- **Algorithm coverage is wide.** No one engineer holds full mental
+  context across BLAS + sparse + iterative + direct + eig + opt +
+  ODE + FFT + autodiff. Mitigated by sub-module isolation — each
+  sub-module is independently maintainable.
+
+**Insertion point:**
+
+`crd-hesap` ships as **Phase 3.1.6** — after Phase 3.1 (eylem) closes,
+before Phase 3.2 (animation) begins. Phase ordering rationale:
+
+- Phase 3.1 (eylem v0–v9) **does not block** on `crd-hesap`. Eylem v7
+  (FEM) ships its own narrow PCG solver internally — ~1500 LOC, scoped
+  to FEM's exact need; refactored to use `crd-hesap-iterative` once
+  the substrate lands. (See `phase-3.1-eylem.md` v7 dependency note.)
+- Phase 3.2+ (animation, font, audio, PBR) consumes `crd-hesap` as
+  needed but doesn't strictly block on it (animation = small dense LA
+  in `crd-math`; font = no numerical solver; audio = wants
+  `crd-hesap-dsp` but can ship first slices without).
+- The MATLAB-class tool becomes feasible once Phase 3.1.6 reaches
+  ~v10 (roughly half the substrate).
+
+Phase plan: `docs/phases/phase-3.1.6-hesap.md`.
+Research: `docs/research/cerid-hesap.md`.
+
+## References
+
+- Goto & van de Geijn (2008) — *Anatomy of high-performance matrix multiplication*. ACM TOMS.
+- van Zee & van de Geijn (2015) — *BLIS: A framework for rapidly instantiating BLAS functionality*. ACM TOMS.
+- Anderson et al. (1999) — *LAPACK Users' Guide* (3rd ed.). SIAM.
+- Davis (2006) — *Direct Methods for Sparse Linear Systems*. SIAM. (CHOLMOD, UMFPACK, KLU foundation.)
+- Saad (2003) — *Iterative Methods for Sparse Linear Systems* (2nd ed.). SIAM.
+- Amestoy, Davis & Duff (1996) — *An Approximate Minimum Degree ordering algorithm*. SIAM J. Matrix Anal.
+- Karypis & Kumar (1998) — *METIS: A software package for partitioning unstructured graphs*. (Reordering reference.)
+- Hairer, Nørsett & Wanner (1993) — *Solving Ordinary Differential Equations I (non-stiff)* / *II (stiff)*. Springer.
+- Hindmarsh et al. (2005) — *SUNDIALS: Suite of Nonlinear and Differential/Algebraic Equation Solvers*. ACM TOMS. (CVODE, IDA, ARKODE.)
+- Nocedal & Wright (2006) — *Numerical Optimization* (2nd ed.). Springer.
+- Wächter & Biegler (2006) — *On the implementation of an interior-point filter line-search algorithm for large-scale nonlinear programming*. (IPOPT.)
+- Stellato et al. (2020) — *OSQP: an operator splitting solver for quadratic programs*. Math. Prog. Comp.
+- Frigo & Johnson (2005) — *The design and implementation of FFTW3*. Proc. IEEE.
+- Oppenheim & Schafer (2010) — *Discrete-Time Signal Processing* (3rd ed.). (FIR/IIR filter design canon.)
+- O'Neill (2014) — *PCG: A Family of Simple Fast Space-Efficient Statistically Good Algorithms for Random Number Generation*.
+- Blackman & Vigna (2018) — *Scrambled linear pseudorandom number generators*. (Xoshiro family.)
+- Carpenter et al. (2017) — *Stan: A Probabilistic Programming Language* — reverse-mode autodiff over BLAS reference.
+- Bradbury et al. (2018) — *JAX: composable transformations of Python+NumPy programs* — modern AD reference.
+- Lubin et al. (2023) — *JuMP 1.0*. Math. Prog. Comp. (Algebraic modelling reference.)
+- ADR-0034 — C++ hot-reload DLL scripting (C ABI pattern reused for plug-in API).
+- ADR-0061 — Async GPU upload contract (`UploadHandle` + `Fence` reused for `crd-hesap-gpu`).
+- ADR-0063 — Eylem determinism contract (inherited wholesale).
+- ADR-0064 — `crd-sdf` substrate (sibling substrate; same architectural posture).
+- `docs/research/cerid-hesap.md` — full industry survey + algorithm rationale.
+- `docs/research/sparsematrices.md` — pre-existing Cerid sparse-matrix research.

@@ -34,12 +34,13 @@
 | 2.6   Resources + asset cooker  | ✅ shipped       | `docs/phases/phase-2.6-resources.md` (v1a–v1g COMPLETE 2026-05-04; ADRs 0036–0041) |
 | 2.7   Asset import bootstrap    | ⏳               | `docs/phases/phase-2.7-asset-import.md` (TextureResource + MeshResource + glTF + **full material foundation** (ADR-0048): MaterialTemplate/Instance, ParameterType, ShaderOptions, SurfaceData contract, new MATR format + GPU upload + **crd-meshgen** + **crd-sandbox** bootstrap; ADRs 0042–0043, 0045, 0048) |
 | 2.8   Material completion       | ✅ shipped       | `docs/phases/phase-2.8-material-completion.md` (v1a–v1g all complete 2026-05-06; ADRs 0044, 0046, 0048) |
-| 3.0   Scene / ECS foundation    | 🚧 active (v1a–v1m shipped; v1n–v1p remaining) | `docs/phases/phase-3.0-scene-ecs.md` (8-layer slot architecture; **17 slices** — expanded 2026-05-08 to land Öbek + Preset + Profile authoring substrate inside Phase 3.0; ADRs 0049–0057 locked 2026-05-06; **ADRs 0058 (Öbek) / 0059 (Preset) / 0060 (Profile) locked 2026-05-08**; **v1m Öbek system fully delivered 2026-05-08 across 12 sub-slices**) |
-| 3     Simulation + visual effects | ⏳             | `docs/phases/phase-3-simulation.md` (3.0 scene/ECS → 3.1 physics → 3.2 animation → **3.3 crd-font** → 3.4 audio → **3.5** PBR+IBL+CSM+SSS+NPR+area lights → **3.6** sky atmosphere+volumetric fog+clouds+god rays+aurora → **3.7** bloom+GTAO+SSR+TAA+DoF+motion blur+upscaling → **3.8** GPU particles+ocean+decals+indirect rendering → **3.9** SSGI+DDGI+radiance cascades+lightmap baking; ADR-0047) |
+| 3.0   Scene / ECS foundation    | ✅ shipped 2026-05-10 (v1a–v1p, all 17 slices) | `docs/phases/phase-3.0-scene-ecs.md` (8-layer slot architecture; ADRs 0049–0061 all realised; 856 unit tests across 12 build configs) |
+| 3.1   **Eylem (Cerid-native physics)** | ⏳ next | `docs/phases/phase-3.1-eylem.md` (~30 slices, v0–v9; v0 = `crd-math` SIMD substrate; v1 = rigid 3D substrate (SI solver, AABB tree, joints, queries, character ctrl, snapshot/replay); v2 = rigid 2D specialisation (templated single codebase); v3 = XPBD soft / cloth / rope; v4 = maximal-coord articulations; v5 = vehicles; v6 = CCD + reduced-coord articulations; v7 = FEM mesh deformation; v8 = GPU acceleration (LBVH + GPU XPBD + MPM); v9 = differentiable + 9-config replay-hash CI hardening; ADRs 0062 + 0063; supersedes ADR-0018 + Phase 6 native physics) |
+| 3     Simulation + visual effects | ⏳             | `docs/phases/phase-3-simulation.md` (3.0 ✅ → 3.1 eylem → 3.2 animation → **3.3 crd-font** → 3.4 audio → **3.5** PBR+IBL+CSM+SSS+NPR+area lights → **3.6** sky atmosphere+volumetric fog+clouds+god rays+aurora → **3.7** bloom+GTAO+SSR+TAA+DoF+motion blur+upscaling → **3.8** GPU particles+ocean+decals+indirect rendering → **3.9** SSGI+DDGI+radiance cascades+lightmap baking; ADR-0047) |
 | 5     RT + advanced rendering   | ⏳               | `docs/phases/phase-5-ui-rendering.md` (crd-ui + node editor + HybridRenderPath: RT AO/reflections/GI + denoiser; ADR-0046) |
 | 4     Extensibility + Networking | ⏳              | `docs/phases/phase-4-extensibility.md` (4.0 C++ scripting, 4.1 advanced math, 4.2 networking; ADR-0034, ADR-0035) |
 | 5     RT + UI + advanced rendering | ⏳            | `docs/phases/phase-5-ui-rendering.md` (HybridRenderPath: BLAS/TLAS, RT AO/reflections/shadows/GI, denoiser; crd-ui; node editor; ADR-0046) |
-| 6     Native physics            | ⏳               | `docs/phases/phase-6-native-physics.md`  |
+| ~~6     Native physics~~ | folded into 3.1 (eylem ships native from day 1) | `docs/phases/phase-3.1-eylem.md` |
 | 7     Editor                    | ⏳               | `docs/phases/phase-7-editor.md`          |
 | 8     Domain modules            | ⏳               | `docs/phases/phase-8-domain-modules.md` (robotics, aerospace, advanced math, cinematic, procgen) |
 
@@ -81,9 +82,11 @@ Direction, not commitment.
 - Asset import bootstrap (Phase 2.7): TextureResource + MeshResource + glTF + material foundation + GPU upload + **crd-meshgen** + **crd-sandbox**; ADRs 0042–0043, 0045, 0048
 - Material completion (Phase 2.8): per-material PSO cache + pass-keyed shader variants + depth-only prepass; ADRs 0044, 0046
 - Scene/ECS foundation (Phase 3.0): hybrid hierarchy + SoA components + TOML → cooked binary
-- Physics (Phase 3.1): PhysX 5 backend + scene integration + fixed-step
+- **Eylem — Cerid-native physics (Phase 3.1)**: built from day 1 (no PhysX wrap step). Module split: `crd-eylem` substrate + rigid3d / rigid2d / soft / articulation / vehicles / ccd / fem / gpu / diff sub-modules. v0 lands `crd-math` SIMD substrate (AoSoA-8 + deterministic stdlib substitutions). v1 lands rigid 3D substrate with deterministic snapshot/replay across 9 CI configs. v2–v9 stage 2D, XPBD soft, articulations, vehicles, CCD, FEM, GPU, differentiable. ADRs 0062/0063; supersedes ADR-0018 + Phase 6.
+- **`crd-sdf` substrate (Phase 3.1.5)**: signed-distance-field module consumed by eylem (mesh colliders + closest-point), font (MTSDF), renderer (DFAO/DFGI in 3.5+), audio (acoustic occlusion in 3.4), editor (CSG modelling in 7). 8 slices over ~5–6 wk: v0 analytic primitives → v1 dense 3D grid + CRDR → v2 mesh-bake (Jacobson 2013 winding-number sign + BVH closest-point, parallel) → v3 narrow-band sparse → v4 CSG + smooth-min → v5 GPU 3D-texture upload + GLSL helper → v6 cooker → v7 Marching Cubes extraction → v8 reserved (GPU baker / VDB / Dual Contouring). ADR-0064; deterministic per ADR-0063; plan: `docs/phases/phase-3.1.5-sdf.md`; research: `docs/research/cerid-sdf.md`. Slots between eylem v2 (rigid 2D done) and eylem v3 (XPBD soft uses SDF colliders).
+- **`crd-hesap` substrate (Phase 3.1.6)**: MATLAB-class numerical computing substrate. Sequential successor to Phase 3.1 (eylem). 18 slices over ~6–8 months. Sub-modules: dense (BLAS L1/L2/L3 + LAPACK-class direct + SVD + eig), sparse (CSR/CSC/BSR/COO/ELL/HYB + spmv/spmm/spgemm), iterative (CG/PCG/BiCGSTAB/GMRES/MINRES/LSQR/IDR + Jacobi/IC/ILU/AMG preconditioners), direct (sparse LU/Cholesky/QR multifrontal + AMD/RCM/nested-dissection reorderings), eig (Lanczos/Arnoldi/IRA/LOBPCG), opt (L-BFGS/SQP/IPOPT-class NLP/OSQP-style QP/simplex+IPM LP), ode (DOPRI5/8 + BDF + Rosenbrock + Pantelides DAE), fft (Cooley-Tukey + Bluestein + DCT/DST/Hartley), dsp (FIR/IIR + biquad + polyphase resample + Welch spectral), stats (20+ distributions + tests + special functions + splittable PCG + Xoshiro256\*\*), tensor (N-dim + broadcasting + einsum), autodiff (forward dual/Jet + reverse tape over BLAS), gpu (mirrors CPU API via Vulkan compute + ADR-0061 UploadHandle/Fence), repl (interactive + `.cnb` notebook + plug-in C ABI per ADR-0034). Inherits ADR-0063 determinism contract; deterministic same-input → byte-exact-output across compilers/platforms/SIMD widths. Eylem v7 (FEM) ships its own narrow internal PCG until `crd-hesap` arrives, then refactors to use it. Underwrites the MATLAB-class scientific tool ambition. ADR-0065; plan: `docs/phases/phase-3.1.6-hesap.md`; research: `docs/research/cerid-hesap.md`.
 - Animation (Phase 3.2): skeletal + blend trees + IK
-- Font rendering (Phase 3.3): `crd-font` — MTSDF, HarfBuzz, billboard + 3D text; ADR-0047
+- Font rendering (Phase 3.3): `crd-font` — MTSDF (consumes `crd-sdf`), HarfBuzz, billboard + 3D text; ADR-0047
 
 ### 12–24 months (2027–2028)
 
@@ -160,7 +163,12 @@ Direction, not commitment.
 
 - **Domain modules (Phase 8)**: robotics substrate (URDF, SE(3), ROS2 bridge), cinematic tools, procedural generation
 
-- **Cerid-native physics backend (Phase 6)**: alongside PhysX
+- **Cerid-native physics (Phase 3.1, eylem)**: built from day 1 — no
+  PhysX wrap step. Deterministic-by-construction, ECS-native,
+  fiber-jobified, multi-domain (games + robotics + medical + cinematic
+  + DAW), templated 2D + 3D, GPU-extensible. ADR-0062, ADR-0063;
+  research: `docs/research/cerid-eylem.md`; plan:
+  `docs/phases/phase-3.1-eylem.md`. Supersedes ADR-0018.
 
 The goal: Cerid becomes a real-time substrate for interactive applications
 across games, simulation, creative tools, and engineering — not "another Vulkan engine."

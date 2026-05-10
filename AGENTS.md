@@ -11,13 +11,28 @@ one consumer; **simulation (incl. robotics), medical visualization,
 DAW-class creative tools, and offline cinematic pipelines** are equal-class
 consumers. The architecture serves all of them; no domain is privileged.
 
-Modules in scope: core, log, memory, containers, math, platform, app,
-config, RHI (API-agnostic, Vulkan first), GPU memory, shader system,
-renderer, jobs (thread pool + fibers), resources, asset cooker, physics
-(PhysX backend → Cerid-native), scene, animation (skeletal + IK +
-cinematic), audio (DAW-grade), scripting (hot-reload C++), advanced math
-(dense / sparse / iterative solvers), retained-mode UI, node editor,
-editor application.
+Modules in scope: core, log, memory, containers, math (lean primitive
+layer — Vec/Mat/Quat/Transform + SIMD wrappers + deterministic stdlib),
+platform, app, config, RHI (API-agnostic, Vulkan first), GPU memory,
+shader system, renderer, jobs (thread pool + fibers), resources, asset
+cooker, scene (ECS + Öbek + Preset + Profile), **eylem (Cerid-native
+physics — built from day 1, deterministic, ECS-native, fiber-jobified,
+multi-domain, templated 2D + 3D, GPU-extensible)**, **`crd-sdf`
+(signed distance field substrate — analytic + dense + narrow-band +
+CSG; mesh→SDF baker via Jacobson 2013 generalised winding number;
+consumed by eylem mesh colliders, font MTSDF, renderer DFAO/DFGI,
+audio acoustic occlusion, editor CSG modelling)**, **`crd-hesap`
+(MATLAB-class numerical computing substrate — 14 sub-modules: dense /
+sparse / iterative / direct / eig / opt / ode / fft / dsp / stats /
+tensor / autodiff / gpu / repl; covers BLAS-LAPACK-class dense LA,
+CHOLMOD-class sparse direct, Saad-class iterative + AMG, IPOPT-class
+NLP + OSQP-class QP, SUNDIALS-class ODE/DAE, FFTW-class FFT,
+Stan-class autodiff; underwrites the MATLAB-class scientific-tool
+ambition; consumed by eylem v7 FEM + v9 differentiable, audio DSP,
+robotics motion planning, medical sim, cinematic VFX, plus any
+external scientific-tool consumer via the C ABI plug-in surface)**,
+animation (skeletal + IK + cinematic), audio (DAW-grade), scripting
+(hot-reload C++), retained-mode UI, node editor, editor application.
 
 ## Engineering Principles (non-negotiable)
 
@@ -40,8 +55,10 @@ are explicit, justified, and recorded in `docs/ROADMAP.md` Section 4.
 - **API stable across backends.** Public surfaces (RHI, physics, audio,
   render path) are designed assuming multiple implementations even when
   only one exists. Vendor types do not leak.
-- **Tak-çıkar (plug-out) third-party.** External dependencies (PhysX,
-  glslang, ImGui) are integrated as backends behind Cerid-owned interfaces.
+- **Tak-çıkar (plug-out) third-party.** External dependencies
+  (glslang/shaderc, spirv-reflect, ImGui, toml++) are integrated as
+  backends behind Cerid-owned interfaces. Core simulation surfaces
+  (renderer, physics/eylem, audio) are Cerid-native — no vendor wraps.
 - **Determinism is a first-class option.** Not the default, but reachable:
   fixed-step physics, deterministic random, replay-friendly event log.
 - **Every shipped slice ends green on Debug + Release + ASan.** Three
@@ -177,9 +194,16 @@ or a `@heavy` escalation.
   nodes (UI) coexist as children of the same scene root. UI is part of the
   scene, not an overlay. Composited at frame end via separate render
   layers.
-- **Physics tak-çıkar:** PhysX is the first backend behind a Cerid-owned
-  `crd-physics` interface. `Px*` types do not leak. Cerid-native backend
-  arrives in Phase 6, alongside parity tests.
+- **Physics — Cerid-native (eylem) from day 1.** No third-party wrap;
+  no `crd-physics` interface layer (the `crd-eylem` substrate IS the
+  interface). Built deterministic-by-construction (compile + runtime FP
+  contract), ECS-native (Body↔Entity mapping, PhysicsTransform writeback
+  in PostPhysics), fiber-jobified (uses `crd-jobs`, never spawns its
+  own threads), multi-domain (games + robotics + medical + cinematic +
+  DAW), templated 2D + 3D from a single substrate, GPU-extensible.
+  Phase 3.1 ships v0–v9 (~30 slices). ADR-0062, ADR-0063 (supersedes
+  ADR-0018; folds in Phase 6); plan: `docs/phases/phase-3.1-eylem.md`;
+  research: `docs/research/cerid-eylem.md`.
 - **Authoring vs runtime:** Configs and scenes are authored in TOML;
   scenes are cooked to binary for runtime. Configs are parsed directly
   (small, not hot-path).

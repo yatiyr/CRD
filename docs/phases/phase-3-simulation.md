@@ -32,12 +32,30 @@ optionally new resource types; none requires structural changes to the ones befo
 | 3.0c  | Scene serialization          | TOML authoring → cooked binary; asset_cooker integration      |
 | 3.0d  | First real scene             | camera (FPS + orbit) + meshes via cooked assets + skybox      |
 
-### 3.1 — Physics
+### 3.1 — Eylem (Cerid-native physics)
 
-| Slice | Topic                        | Notes                                                         |
-| :---: | ---------------------------- | ------------------------------------------------------------- |
-| 3.1a  | `crd-physics` interface      | rigid body, collider, constraint, world, query API; backend-neutral |
-| 3.1b  | `crd-physics-physx` backend  | PhysX 5.x as the first backend                               |
+⚠ **This section is a stub kept for back-compatibility.** The full
+phase plan moved to `docs/phases/phase-3.1-eylem.md` on 2026-05-10
+when Cerid abandoned the PhysX-wrap approach (ADR-0018 superseded by
+ADR-0062). Eylem is the Cerid-native physics module, built from day 1
+with deterministic snapshot/replay (ADR-0063), ECS-native integration,
+fiber-jobified solver, multi-domain support (games + robotics + medical
++ cinematic + DAW), templated 2D + 3D codebase, and GPU-extensibility.
+~30 slices over v0–v9. See `docs/phases/phase-3.1-eylem.md` and
+`docs/research/cerid-eylem.md`.
+
+| Slice cluster | Topic | Notes |
+| :---: | --- | --- |
+| v0 | `crd-math` SIMD substrate | AoSoA-8 + deterministic stdlib substitutions; ~1.5 wk |
+| v1 | Rigid 3D substrate | SI solver, AABB tree, joints, queries, char ctrl, snapshot/replay; ~6–8 wk |
+| v2 | Rigid 2D specialisation | Templated single codebase (Rapier model) |
+| v3 | XPBD soft / cloth / rope | Macklin substep XPBD substrate |
+| v4 | Maximal-coord articulations | Ragdolls, robot arms via existing rigid solver |
+| v5 | Vehicles | Raycast suspension + tire model |
+| v6 | CCD + Featherstone reduced-coord articulations | Conservative advancement; O(n) reduced-coord chain |
+| v7 | FEM mesh deformation | Co-rotated linear FEM + Stable Neo-Hookean + hydroelastic |
+| v8 | GPU acceleration | LBVH broadphase + GPU XPBD + MPM |
+| v9 | Differentiable + 9-config replay-hash CI | Differentiable rigid path; cross-platform deterministic CI matrix |
 | 3.1c  | Physics ↔ scene integration  | transform sync; fixed-step option; deterministic mode flag    |
 
 ### 3.2 — Animation

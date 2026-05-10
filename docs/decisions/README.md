@@ -16,13 +16,24 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 - ADR-0013 — Asset pipeline
 - ADR-0015 — Job system shape
 - ADR-0016 — Render path strategy
-- ADR-0018 — Physics architecture
+- ~~ADR-0018 — Physics architecture~~ — **superseded by ADR-0062**
 - ADR-0020 — Scene & ECS hybrid + UI in scene tree
 - ADR-0021 — Animation architecture
 - ADR-0023 — UI architecture
 - ADR-0058 — Öbek system
 - ADR-0059 — Preset system
 - ADR-0060 — Profile system
+- ADR-0061 — Async GPU upload contract
+- ADR-0062 — **Eylem: Cerid-native physics architecture** (supersedes ADR-0018)
+- ADR-0063 — Eylem determinism contract
+- ADR-0064 — **`crd-sdf` substrate architecture**
+- ADR-0065 — **`crd-hesap` numerical computing substrate (MATLAB-class)**
+
+### `[sdf]`
+- ADR-0064 — `crd-sdf` substrate architecture (analytic + dense + narrow-band + CSG; mesh→SDF baker via Jacobson 2013 generalised winding number; CPU first, GPU 3D-texture path; consumed by eylem / font / renderer / audio / editor)
+
+### `[hesap]` `[math]` `[solvers]` `[autodiff]` `[opt]` `[ode]` `[fft]` `[dsp]`
+- ADR-0065 — `crd-hesap` numerical computing substrate (MATLAB-class; dense + sparse + iterative + direct + eig + opt + ODE + FFT + DSP + stats + tensor + autodiff + GPU + REPL; consumed by eylem / audio / robotics / medical / cinematic / DAW / scientific tool)
 
 ### `[build]` `[lang]`
 - ADR-0001 — Build & language
@@ -39,7 +50,8 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 - ADR-0004 — Containers v1
 
 ### `[math]`
-- ADR-0005 — Math v1
+- ADR-0005 — Math v1 (`crd-math` lean primitive layer — Vec/Mat/Quat/Transform + SIMD wrappers + deterministic stdlib)
+- ADR-0065 — `crd-hesap` numerical computing substrate (heavy LA + solvers + autodiff + DSP + stats; peer module, NOT inside `crd-math`)
 
 ### `[platform]`
 - ADR-0006 — Platform v1
@@ -105,8 +117,12 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 ### `[culling]`
 - ADR-0017 — Culling strategy
 
-### `[physics]`
-- ADR-0018 — Physics architecture
+### `[physics]` `[eylem]`
+- ~~ADR-0018 — Physics architecture~~ — **superseded by ADR-0062**
+- ADR-0062 — Eylem: Cerid-native physics architecture
+- ADR-0063 — Eylem determinism contract
+- ADR-0064 — `crd-sdf` substrate (eylem consumes for mesh colliders + closest-point; v3 XPBD uses SDF environment colliders)
+- ADR-0065 — `crd-hesap` substrate (eylem v7 FEM refactors to consume sparse PCG + sparse Cholesky once `crd-hesap` ships; eylem v9 differentiable refactors to consume reverse-mode autodiff)
 
 ### `[scene]` `[ecs]`
 - ADR-0020 — Scene & ECS hybrid + UI in scene tree
@@ -149,6 +165,7 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 
 ### `[font]` `[text]`
 - ADR-0047 — Font rendering system (MTSDF, FreeType+msdfgen, HarfBuzz, offline+dynamic atlas, extruded text)
+- ADR-0064 — `crd-sdf` substrate (font consumes for MTSDF baker + sampler patterns)
 
 ### `[animation]`
 - ADR-0021 — Animation architecture
@@ -193,7 +210,7 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 | 0015  | Job system shape                               | jobs, arch                        | Accepted |
 | 0016  | Render path strategy                           | renderer, render-path, arch       | Accepted |
 | 0017  | Culling strategy                               | culling, renderer                 | Accepted |
-| 0018  | Physics architecture                           | physics, arch                     | Accepted |
+| 0018  | Physics architecture                           | physics, arch                     | **Superseded by 0062** |
 | 0019  | (reserved)                                     | —                                 | Reserved |
 | 0020  | Scene & ECS hybrid + UI in scene tree          | scene, ecs, ui, arch              | Accepted |
 | 0021  | Animation architecture                         | animation, arch                   | Accepted |
@@ -237,3 +254,7 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 | 0059  | Preset system: typed system-config bags with five-layer resolution | scene, resources, cooker, arch, renderer, audio, physics, input, config, preset | Accepted |
 | 0060  | Profile system: typed predicate selectors with additive composition | scene, resources, cooker, arch, config, networking, app, profile | Accepted |
 | 0061  | Async GPU upload contract: `UploadHandle` + per-module polling system | arch, renderer, rhi, scene, resources, async | Accepted |
+| 0062  | **Eylem: Cerid-native physics architecture** (supersedes 0018) | arch, physics, eylem, ecs, jobs, simd, determinism | Accepted |
+| 0063  | Eylem determinism contract                     | arch, physics, eylem, determinism, ci, fp | Accepted |
+| 0064  | `crd-sdf` substrate architecture               | arch, sdf, eylem, renderer, font, audio, editor, resources | Accepted |
+| 0065  | `crd-hesap` numerical computing substrate (MATLAB-class) | arch, hesap, math, solvers, autodiff, opt, ode, fft, dsp, scripting | Accepted |
