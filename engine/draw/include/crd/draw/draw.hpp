@@ -19,6 +19,7 @@
 #include <crd/draw/debug_viz_system.hpp>
 #include <crd/draw/default_visualizers.hpp>
 #include <crd/draw/render_buffer.hpp>
+#include <crd/draw/serialize.hpp>
 #include <crd/draw/shapes.hpp>
 #include <crd/draw/theme.hpp>
 #include <crd/draw/types.hpp>

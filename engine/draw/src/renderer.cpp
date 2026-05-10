@@ -366,4 +366,25 @@ bool is_initialised() noexcept
     return state().initialised;
 }
 
+// d4: master overlay enable. Stored as a process-global bool, same set-once-
+// read-many contract as the active theme.
+namespace
+{
+bool& mutable_overlay_enabled() noexcept
+{
+    static bool s = true;
+    return s;
+}
+} // namespace
+
+bool is_overlay_enabled() noexcept
+{
+    return mutable_overlay_enabled();
+}
+
+void set_overlay_enabled(bool enabled) noexcept
+{
+    mutable_overlay_enabled() = enabled;
+}
+
 } // namespace crd::draw

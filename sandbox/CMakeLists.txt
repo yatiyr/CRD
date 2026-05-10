@@ -12,6 +12,7 @@ target_link_libraries(crd-sandbox PRIVATE
     crd-app
     crd-config
     crd-draw
+    crd-draw-imgui
     crd-imgui
     crd-log
     crd-math

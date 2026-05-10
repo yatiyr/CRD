@@ -5,6 +5,7 @@
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/core/types.hpp>
+#include <crd/draw/overlay_pass.hpp>
 #include <crd/draw/render_buffer.hpp>
 #include <crd/draw/visualizer_registry.hpp>
 #include <crd/math/quat.hpp>
@@ -232,6 +233,13 @@ private:
     // System lifetime is bound to m_world (registered via register_system),
     // so the registry must outlive the world.
     crd::draw::VisualizerRegistry m_viz_registry;
+
+    // d4: persistent OverlayPassConfig that the ImGui control panel
+    // mutates across frames. render_scene re-applies the per-frame
+    // fields (view_proj, viewport_px, frame_in_flight_index, camera_pos)
+    // every frame; everything else (grid params, category mask) is
+    // panel-driven and persists.
+    crd::draw::OverlayPassConfig m_draw_cfg{};
 
     // Profile + Preset state ------------------------------------------------
     crd::profile::ProfileContext m_profile_context{};

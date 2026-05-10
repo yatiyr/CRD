@@ -7,6 +7,7 @@
 #include <crd/draw/draw.hpp>
 #include <crd/draw/overlay_pass.hpp>
 #include <crd/draw/renderer.hpp>
+#include <crd/draw_imgui/control_panel.hpp>
 #include <crd/log/log.hpp>
 #include <crd/math/mat.hpp>
 #include <crd/math/quat.hpp>
@@ -553,6 +554,14 @@ void SandboxLayer::try_register_imported_assets()
             else
             {
                 CRD_LOG_INFO(g_log_sandbox_layer, "crd-draw initialised (overlay path live)");
+                // d4: prime the persistent OverlayPassConfig with the
+                // active theme + grid defaults. The ImGui control panel
+                // mutates m_draw_cfg from here on; per-frame fields
+                // (view_proj, viewport_px, frame_in_flight_index,
+                // camera_pos) are written every frame in render_scene.
+                m_draw_cfg.grid.apply_theme();
+                m_draw_cfg.grid.enabled = true;
+                m_draw_cfg.grid.plane_y = -1.0F;
             }
         }
     }
@@ -1204,6 +1213,14 @@ void SandboxLayer::on_render()
     else
         ImGui::TextDisabled("(select an asset)");
     ImGui::End();
+
+    // d4: crd-draw control panel. Mutates m_draw_cfg + the crd-draw
+    // process globals (set_overlay_enabled, set_theme); changes take
+    // effect on the next submitted frame.
+    if (crd::draw::is_initialised())
+    {
+        crd::draw_imgui::draw_control_panel(m_draw_cfg);
+    }
 }
 
 void SandboxLayer::render_scene(crd::rhi::CommandBuffer& cmd, crd::rhi::Image& sc_image,
@@ -1312,20 +1329,17 @@ void SandboxLayer::render_scene(crd::rhi::CommandBuffer& cmd, crd::rhi::Image& s
                                                  crd::rhi::ImageAccess::ColorWrite);
         const auto depth_handle = draw_fg.import(&m_frp->depth_image(),
                                                  crd::rhi::ImageAccess::DepthRead);
-        crd::draw::OverlayPassConfig draw_cfg;
-        draw_cfg.view_proj             = ctx.camera.projection * ctx.camera.view;
-        draw_cfg.viewport_px           = {static_cast<crd::f32>(ext.width),
-                                          static_cast<crd::f32>(ext.height)};
-        draw_cfg.frame_in_flight_index = frame_index % 2;
-        // d2-grid + d2-theme: pull cell sizes + grid + axis colors from the
-        // active DrawTheme (Blender / RViz palette by default). Per-frame
-        // fields (enabled, camera_pos, plane_y) are set explicitly.
-        draw_cfg.grid.apply_theme();
-        draw_cfg.grid.enabled    = true;
-        draw_cfg.grid.camera_pos = ctx.camera_position;
-        draw_cfg.grid.plane_y    = -1.0F;
+        // d4: m_draw_cfg persists across frames so the ImGui control
+        // panel can edit it (category mask, grid params, theme). Per-
+        // frame fields are written here every frame; panel-driven fields
+        // (grid colors / cell sizes / fade / category_mask) carry forward.
+        m_draw_cfg.view_proj             = ctx.camera.projection * ctx.camera.view;
+        m_draw_cfg.viewport_px           = {static_cast<crd::f32>(ext.width),
+                                            static_cast<crd::f32>(ext.height)};
+        m_draw_cfg.frame_in_flight_index = frame_index % 2;
+        m_draw_cfg.grid.camera_pos       = ctx.camera_position;
         crd::draw::add_draw_overlay_pass(draw_fg, color_handle,
-                                         depth_handle, m_draw_buffer, draw_cfg);
+                                         depth_handle, m_draw_buffer, m_draw_cfg);
         if (draw_fg.build())
         {
             draw_fg.execute(m_device, cmd);

@@ -67,4 +67,22 @@ void shutdown() noexcept;
 
 [[nodiscard]] bool is_initialised() noexcept;
 
+// d4: master overlay enable -- runtime toggle queried by `add_draw_overlay_pass`
+// and `DebugVizSystem::run` for zero-CPU early-outs (a single bool check per
+// call site). Default = enabled.
+//
+// Profile gating contract per ADR-0066 §19.6: the application is responsible
+// for flipping this based on its own profile state. Typical wiring:
+//
+//     // After resolving the active profile (dev / shipping / ...):
+//     crd::draw::set_overlay_enabled(profile.allow_debug_overlay);
+//
+// `crd-draw` deliberately does not pull in `crd-profile` to query directly
+// (would spread the dep edge); the application owns the policy.
+//
+// Thread-safety: not safe with concurrent reads. Set at startup or between
+// frames, same contract as `set_theme()`.
+[[nodiscard]] bool is_overlay_enabled() noexcept;
+void               set_overlay_enabled(bool enabled) noexcept;
+
 } // namespace crd::draw

@@ -54,4 +54,10 @@ struct DebugVizComponent
     }
 };
 
+// API surface freeze pin (ADR-0066 §19.6).
+// Layout: u32 flags (4) + Color tint (4) + f32 scale (4) = 12 bytes.
+// Any growth here is an API break -- bump kDrawApiVersion in types.hpp.
+static_assert(sizeof(DebugVizComponent) == 12, "DebugVizComponent must pack to 12 bytes");
+static_assert(alignof(DebugVizComponent) == 4, "DebugVizComponent alignment");
+
 } // namespace crd::draw

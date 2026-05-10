@@ -4,6 +4,7 @@
 
 #include <crd/draw/debug_viz_component.hpp>
 #include <crd/draw/render_buffer.hpp>
+#include <crd/draw/renderer.hpp>
 #include <crd/draw/visualizer_registry.hpp>
 #include <crd/scene/world.hpp>
 
@@ -26,6 +27,14 @@ crd::containers::StringView DebugVizSystem::name() const
 
 void DebugVizSystem::run(crd::scene::World& world)
 {
+    // d4: profile-gated zero-CPU early-out. The system stays registered in
+    // the schedule so toggling at runtime takes effect immediately, but
+    // produces no work when the master overlay is disabled.
+    if (!is_overlay_enabled())
+    {
+        return;
+    }
+
     // Iterate every entity carrying DebugVizComponent. For each, dispatch
     // every registered visualizer; the registry skips entries whose
     // component type the entity doesn't carry.

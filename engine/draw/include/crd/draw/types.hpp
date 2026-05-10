@@ -45,6 +45,15 @@ struct Color
 
 static_assert(sizeof(Color) == 4, "Color must pack to 4 bytes");
 
+// ---------------------------------------------------------------------------
+// Public API version -- frozen at d4 close (ADR-0066 §19.6).
+//
+// Bumped only on a deliberate API-breaking release. Phase 7 capture / replay
+// tooling uses this to decide if a stored capture is loadable. Keep in sync
+// with `serialize_render_buffer`'s wire-format version when that lands.
+// ---------------------------------------------------------------------------
+inline constexpr crd::u32 kDrawApiVersion = 1;
+
 // Pack an 8-bit RGB(A) triple to a single u32 in the engine's RGBA8 wire
 // format (the same byte order `Color::packed_rgba()` produces). Useful
 // when callers have raw bytes from a hex literal / color picker / theme

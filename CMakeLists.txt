@@ -330,6 +330,7 @@ add_subdirectory(engine/preset)
 add_subdirectory(engine/profile)
 add_subdirectory(engine/eylem)
 add_subdirectory(engine/draw)
+add_subdirectory(engine/draw-imgui)
 # add_subdirectory(engine/graphics)
 # add_subdirectory(engine/scripting)
 

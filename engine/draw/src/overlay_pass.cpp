@@ -32,7 +32,11 @@ void add_draw_overlay_pass(crd::renderer::FrameGraph&  fg,
     // Early-out (no-op) if the renderer wasn't initialised. Lets consumers
     // wire add_draw_overlay_pass unconditionally during development without
     // crashing on a missing init() call.
-    if (!is_initialised())
+    //
+    // d4: also early-out when the master overlay enable is off (profile-
+    // gated zero-CPU path per ADR-0066 §19.6). Single bool check; the pass
+    // is never registered with the FrameGraph in this case.
+    if (!is_initialised() || !is_overlay_enabled())
     {
         return;
     }
