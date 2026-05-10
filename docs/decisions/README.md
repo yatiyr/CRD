@@ -28,6 +28,10 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 - ADR-0063 — Eylem determinism contract
 - ADR-0064 — **`crd-sdf` substrate architecture**
 - ADR-0065 — **`crd-hesap` numerical computing substrate (MATLAB-class)**
+- ADR-0066 — **`crd-draw` substrate architecture**
+
+### `[draw]`
+- ADR-0066 — `crd-draw` substrate architecture (peer module; retained `RenderBuffer` + immediate-mode API; vertex-shader quad-expanded AA lines + sort-by-centroid translucent solids; 3 depth modes; per-component visualizer plug-in registry; ImGui projection day-one text + reserved SDF text; consumed by eylem / sdf / audio / nav / editor / renderer / sandbox)
 
 ### `[sdf]`
 - ADR-0064 — `crd-sdf` substrate architecture (analytic + dense + narrow-band + CSG; mesh→SDF baker via Jacobson 2013 generalised winding number; CPU first, GPU 3D-texture path; consumed by eylem / font / renderer / audio / editor)
@@ -258,3 +262,4 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 | 0063  | Eylem determinism contract                     | arch, physics, eylem, determinism, ci, fp | Accepted |
 | 0064  | `crd-sdf` substrate architecture               | arch, sdf, eylem, renderer, font, audio, editor, resources | Accepted |
 | 0065  | `crd-hesap` numerical computing substrate (MATLAB-class) | arch, hesap, math, solvers, autodiff, opt, ode, fft, dsp, scripting | Accepted |
+| 0066  | `crd-draw` substrate architecture        | arch, draw, eylem, sdf, audio, renderer, editor, resources | Accepted |

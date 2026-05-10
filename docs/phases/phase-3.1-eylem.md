@@ -36,7 +36,7 @@ Definition of Done (12-config sweep green; tests; ADR pointer; docs).
 | v | Domain | Slices | Time est | What works at the end |
 |---|---|---|---|---|
 | **v0** | `crd-math` SIMD substrate | 5 (v0a–v0e) | ~1.5 wk | AoSoA-8 / AoSoA-4 SIMD types in `crd-math`; deterministic trig + sort + hash; bit-exact across MSVC/clang/gcc × x64/ARM |
-| **v1** | Rigid 3D substrate | 12 (v1a–v1l) | ~6–8 wk | Boxes / spheres / capsules / hulls stack stably, ragdoll falls, character runs around, raycasts work, snapshot-replay deterministic across the v9b CI matrix |
+| **v1** | Rigid 3D substrate + draw substrate | 18 (v1a, v1a-sandbox-smoke, v1a-draw × 5, v1b–v1l) | ~7–9 wk | Boxes / spheres / capsules / hulls stack stably, ragdoll falls, character runs around, raycasts work, snapshot-replay deterministic across the v9b CI matrix; **`crd-draw` substrate live** (peer module per ADR-0066) — wireframe + solid translucent, three depth modes, per-component visualizer plug-in registry, replay-friendly retained buffer; **sandbox `--smoke-test` flag** wired into `scripts/full-sweep.ps1` |
 | **v2** | Rigid 2D specialisation | 3 (v2a–v2c) | ~2 wk | Sprites + edge-chain terrain + 2D wheel/motor joints |
 | **v3** | XPBD soft / cloth / rope | 5 (v3a–v3e) | ~3–4 wk | Cloth, rope, soft body, two-way coupling with rigid |
 | **v4** | Maximal-coord articulations | 3 (v4a–v4c) | ~2 wk | Ragdolls, robot arms (maximal-coords first; reduced-coords queued for v6/v7) |
@@ -72,16 +72,31 @@ trig CI check.**
 
 ---
 
-## v1 — Rigid 3D substrate (~6–8 weeks)
+## v1 — Rigid 3D substrate + `crd-draw` (~7–9 weeks)
 
 The core physics engine. After this, the engine has real, deterministic,
 ECS-integrated physics with snapshot/replay — enough for a vertical-slice
-demo without any of the fancy features.
+demo without any of the fancy features. **And visual debugging from
+day 1** thanks to the `crd-draw` substrate slipped in between
+v1a (interface) and v1b (storage), so v1c (broadphase) / v1d (GJK/EPA) /
+v1e (solver) are all debuggable visually rather than via printf + faith.
+
+ADR-0066 locks the draw substrate architecture; research dossier:
+`docs/research/cerid-draw.md`. Companion module `crd-eylem-viz`
+ships in v1a-draw d3 to bridge eylem components into the visualizer
+plug-in registry — keeps `crd-eylem` itself free of any rendering
+dependency (dependency-inverted plug-in pattern).
 
 | Slice | What | LOC est | Tests |
 |---|---|---|---|
 | **v1a** | `crd-eylem` interface module: `IPhysicsScene`, `RigidBody`, `Collider` (Sphere/Box/Capsule/ConvexHull/Plane), `Material`, `Joint` interface, `PhysicsConfig`. Determinism guarantees in the public contract. | ~600 | ~15 |
-| **v1b** | Body / shape AoSoA-8 storage in `crd-eylem-rigid3d`. Hooks into ECS as `RigidBodyComponent` + `ColliderComponent` (SparseSet hint per ADR-0050). | ~400 | ~10 |
+| **v1a-sandbox-smoke** | Add `--smoke-test [duration_seconds]` flag to `crd-sandbox` (boots normally, runs main loop for N seconds, exits 0 on clean shutdown). Extend `scripts/full-sweep.ps1` to call it after each per-config ctest on the 6 Win configs (skipped on win-tidy / win-shipping which are build-only). Catches Vulkan validation, resource init order, profile/preset apply-cycle bugs the build doesn't. ~50 LOC sandbox + ~80 LOC sweep extension. | ~150 | smokes |
+| **v1a-draw-d0** | `crd-draw` module skeleton + `RenderBuffer` (PhysX-style retained SoA: DebugPoint/DebugLine/DebugTriangle/DebugText, packed RGBA8 color, PrimFlags u32 with 3 depth modes + 7 categories + picking_id reserved) + line + box wireframe primitives + screen-space quad expansion shader (Three.js / Mapbox technique) + `add_draw_overlay_pass(fg, color, depth, buffer)` helper for IRenderPath integration. Asset pipeline: GLSL source in `engine/draw/shaders/` → cooked SPIR-V in `cooked_assets/draw_shaders.crdr` → mounted at `init(rm)`. Per ADR-0066 §1-4. | ~1000 | ~12 |
+| **v1a-draw-d1** | Solid translucent rendering pipeline (sort-by-centroid + alpha blend; WBOIT reserved for SDF cell viz Phase 3.1.5+) + per-shape unit primitives baked at compile time (`kUnitBoxLines`, `kUnitBoxTriangles`, `kUnitSphereWireframe16x8`, `kUnitSphereIcosphere1`, `kUnitCapsuleWireframe16x8`, `kUnitCapsuleSolid24x8` — total ~10-30 KB static const). Adds `sphere_solid` / `capsule_solid` / `box_solid` immediate-mode functions. UV sphere for wireframe (recognisable equator/axis) + icosphere for solid (vertex regularity). Per ADR-0066 §5, §7. | ~600 | ~8 |
+| **v1a-draw-d2** | Full immediate-mode API surface: `arrow` / `axis_triad` (RGB triad, RViz convention) / `arc` / `cross_3d` / `grid` / `frustum` / `aabb` + master scale (PhysX `eSCALE` lesson) + category mask filtering (Gameplay Debugger lesson) + lifetime decay (Unreal lesson, alpha-fades in last 0.25s). Per ADR-0066 §3, §13. | ~400 | ~6 |
+| **v1a-draw-d3** | `DebugVizSystem : ISystem` registered in `PostRender` phase + `DebugVizComponent` (per-entity flags: wireframe / solid / show_velocity / show_aabb / show_joints / show_contacts / highlight) + `VisualizerRegistry` (per-component visualizer plug-in pattern) + **`crd-eylem-viz` companion module** (depends on both `crd-eylem` and `crd-draw`; registers visualizers for `RigidBodyComponent`, `ColliderComponent`, `JointComponent`; keeps `crd-eylem` itself free of rendering deps via dependency-inverted plug-in pattern). Per ADR-0066 §11-12. | ~400 | ~5 |
+| **v1a-draw-d4** | ImGui control panel (per-category toggles, master scale slider, body picker reserved for Phase 7 editor) + sandbox demo (1k boxes falling + ragdoll articulation visualization showcasing wireframe + solid + axis triads on every body) + sandbox-smoke verification picks up draw render path. Profile-system gating per ADR-0060: `dev` profile = overlay ON, `shipping` profile = overlay OFF (zero CPU overhead via early-out). | ~150 | smokes |
+| **v1b** | Body / shape AoSoA-8 storage in `crd-eylem-rigid3d`. Hooks into ECS as `RigidBodyComponent` + `ColliderComponent` (SparseSet hint per ADR-0050). **First real consumer of v0 SIMD substrate + first eylem entity visible in the debug renderer.** | ~400 | ~10 |
 | **v1c** | Dynamic AABB tree broadphase (Catto GDC 2019). Insert / remove / query / raycast. Single-threaded first. | ~700 | ~20 |
 | **v1d** | Narrow phase: GJK distance + EPA penetration over a `support<T>(d)` template family (specialise per shape); Sutherland-Hodgman manifold reduction; SAT fast path for box-box. Regression battery of pre-baked contact pairs. | ~900 | ~25 |
 | **v1e** | Sequential Impulses contact solver (Catto GDC 2005), warm-started, persistent contact cache hashed by feature pair, Baumgarte stabilisation. Single-threaded. 8 vel / 3 pos iter default, configurable. Golden 10-box vertical stack stable. | ~700 | ~20 |
