@@ -171,6 +171,76 @@ A single sentence to add to the v0e session log + closure dossier:
 > verified clean across all 14 build steps. See
 > `docs/sessions/2026-05-10-v0-postmortem-c4714-and-utf8-argv.md`.
 
+## Addendum (2026-05-10 evening, while shipping v1a-sandbox-smoke)
+
+A third instance of the "stale state silently shadows fresh state"
+pattern surfaced and was fixed:
+
+**`ctest --preset linux-gcc-*` was reading from a stale Windows-mount
+build dir.** `wsl-build.ps1` builds Linux artifacts into native ext4
+at `~/cerid-build/<preset>` (drives down 9p I/O cost). It passed
+`ctest --preset $Preset --test-dir $BUILD_DIR`. We discovered that
+**CMake's test-preset machinery honours the preset's `binaryDir`
+(`${sourceDir}/build/${presetName}` from base preset, which on Linux
+resolves to the 9p mount path) over `--test-dir` for test enumeration.**
+A leftover build dir from a prior (non-WSL) Linux build session
+shadowed the freshly-populated native ext4 directory. ctest reported
+849 tests (yesterday's enumeration) instead of 991 (today's, with the
+new eylem v1a tests).
+
+**Fix:** wiped the stale 9p-mount Linux build dirs + permanently
+changed `wsl-build.ps1` to call `ctest --test-dir "$BUILD_DIR"
+--output-on-failure` (no `--preset`). The preset's only useful test
+config (`outputOnFailure: true`) is passed explicitly. Test enumeration
+now reads exclusively from the native ext4 build dir.
+
+**Lesson 5 (added):** when a tool offers both a preset and an explicit
+override, verify the override actually wins for *all* operations that
+matter — for ctest, test enumeration is one of those operations and
+the preset wins despite `--test-dir`. Skip the preset and use explicit
+flags when in doubt.
+
+## Addendum (2026-05-10 late evening, while shipping v1a-draw d1)
+
+A fourth latent bug surfaced and was fixed while bringing up `crd-draw`:
+
+**`VkPipelineColorBlendAttachmentState` had `blendEnable=VK_TRUE` but
+never set the blend factors.** All RHI consumers prior to `crd-draw`
+used `enable_blend=false` (Forward render path is opaque-only; ImGui
+sets up its own pipeline directly via the imgui Vulkan backend),
+so the blend-state code path in `engine/rhi-vulkan/src/vulkan_backend.cpp`
+had been silently mis-defaulted since crd-rhi-vulkan v1a. With the
+factors zero-initialised, the default `srcColorBlendFactor =
+VK_BLEND_FACTOR_ZERO` and `dstColorBlendFactor = VK_BLEND_FACTOR_ZERO`
+produced `srcColor * 0 + dstColor * 0 = (0,0,0,0)` for every blended
+fragment -> every "translucent" debug primitive wrote pure black to
+the framebuffer.
+
+User-visible symptom: lines rendered (rasterisation working, geometry
+correct) but appeared black instead of their intended colors. Three
+escalating diagnostic shaders narrowed it to "even hardcoded
+`vec4(1, 0, 0, 1)` writes black", which pointed at the pipeline
+state layer rather than the shader.
+
+**Fix:** added the standard alpha-blending factors when blendEnable is
+true:
+```cpp
+blend_attachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+blend_attachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+blend_attachment.colorBlendOp        = VK_BLEND_OP_ADD;
+blend_attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+blend_attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+blend_attachment.alphaBlendOp        = VK_BLEND_OP_ADD;
+```
+
+**Lesson 6 (added):** "feature is unused" is not the same as "feature
+works". Cross-cutting infrastructure (RHI surface, shader frontend,
+allocator, scheduler) needs a smoke test for every flag combination at
+the layer that sets it, even when no consumer exercises that combo
+yet. The Vulkan validation layer never warned about the default-zero
+blend factors -- it's a valid Vulkan configuration, just one that
+produces black pixels. Only an end-to-end visual test caught it.
+
 ## Lessons for future slice closure
 
 1. **A slice is closed only when `scripts/full-sweep.ps1` returns `PASS`

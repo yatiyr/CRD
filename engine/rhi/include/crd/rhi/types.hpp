@@ -20,6 +20,24 @@ enum class AdapterType : crd::u8
     Cpu,
 };
 
+// Depth comparison ops. Maps to Vulkan VK_COMPARE_OP_*. Default for
+// pipelines is GreaterOrEqual (Cerid's reverse-Z convention: closer =
+// larger depth value, so visible-when-closer means GREATER_OR_EQUAL).
+//
+// Used by crd-draw d2-depth to express XRay's "occluded portion" via the
+// inverted Less compare op alongside the standard Test pipeline.
+enum class DepthCompareOp : crd::u8
+{
+    Never          = 0,
+    Less           = 1,
+    Equal          = 2,
+    LessOrEqual    = 3,
+    Greater        = 4,
+    NotEqual       = 5,
+    GreaterOrEqual = 6,
+    Always         = 7
+};
+
 enum class Format : crd::u16
 {
     Undefined,
@@ -28,6 +46,8 @@ enum class Format : crd::u16
     R32G32Sfloat,
     R32G32B32Sfloat,
     R32G32B32A32Sfloat,
+    R32Uint,    // 32-bit unsigned (vertex attr packed colors / flags)
+    R32Sfloat,  // 32-bit float (vertex attr scalar widths / weights)
     D24UnormS8Uint,
     D32Sfloat,
 };
@@ -326,6 +346,10 @@ struct GraphicsPipelineDesc
     bool use_dynamic_viewport = false; // when true, viewport/scissor are set per-cmd (vkCmdSetViewport/Scissor)
     bool wireframe            = false; // VK_POLYGON_MODE_LINE; requires fillModeNonSolid device feature
     bool depth_write          = true;  // set false for overlay passes; ignored when enable_depth_test=false
+    // Depth comparison op. Default GreaterOrEqual matches Cerid's reverse-Z
+    // convention. Override to Less for "render where occluded" semantics
+    // (used by crd-draw d2-depth XRay's GreaterDimmed pipeline).
+    DepthCompareOp depth_compare_op = DepthCompareOp::GreaterOrEqual;
     // Optional explicit pipeline layout. nullptr = synthesise an empty layout (no push constants
     // or descriptor sets). Pass an explicit PipelineLayout for push constants + descriptor sets.
     class PipelineLayout* pipeline_layout = nullptr;

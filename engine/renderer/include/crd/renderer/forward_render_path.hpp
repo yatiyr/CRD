@@ -54,6 +54,11 @@ public:
     // Direct access to the color render target — used by sandbox to blit to swapchain.
     [[nodiscard]] rhi::Image& color_image() noexcept { return *m_color_image; }
 
+    // Direct access to the depth render target — used by overlay passes
+    // (e.g. crd-draw infinite-grid) that need to depth-test against scene
+    // geometry. Read-only; never bind as DepthWrite.
+    [[nodiscard]] rhi::Image& depth_image() noexcept { return *m_depth_image; }
+
     // IRenderPath interface --------------------------------------------------
 
     // Register depth-prepass + main-color-pass into fg for the current frame.

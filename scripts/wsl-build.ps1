@@ -106,7 +106,15 @@ $bashLines += "cmake --build `"`$BUILD_DIR`""
 
 if (-not $skipTestsForPreset) {
     $bashLines += 'echo "[wsl-build] ===== ctest ====="'
-    $bashLines += "ctest --preset $Preset --test-dir `"`$BUILD_DIR`" --output-on-failure"
+    # Note: do NOT use --preset here. CMake test-preset machinery honours the
+    # preset's binaryDir (`${sourceDir}/build/${presetName}` from base preset)
+    # over --test-dir for test enumeration, so a stale leftover build dir on
+    # the 9p mount silently shadows the fresh native ext4 build dir we just
+    # populated. Passing --test-dir without --preset makes ctest read the
+    # CTestTestfile.cmake from exactly where we built it.
+    # (Phase 3.1 v1a-sandbox-smoke debugging surfaced this — Linux ctest was
+    # running yesterday's enumeration, missing the new eylem tests.)
+    $bashLines += "ctest --test-dir `"`$BUILD_DIR`" --output-on-failure"
 }
 
 $bashLines += 'echo "[wsl-build] ===== DONE ====="'

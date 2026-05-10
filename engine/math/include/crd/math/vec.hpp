@@ -1,5 +1,26 @@
 #pragma once
 
+// Public scalar Vec types (Vec2/Vec3/Vec4 over MathScalar T).
+//
+// **Vec3f / Vec4f are intentionally NOT SIMD-ified at the per-instance
+// API level.** Empirical data (v0e bench, win-release AVX2):
+//   - per-instance Quatf compose under SIMD: 0.65× scalar speed
+//     (load/store dominates the single op)
+//   - Vec3f is 12 bytes — SIMD-ifying bloats sizeof to 16 (33% memory
+//     waste in arrays + 1 wasted lane per op)
+//   - compiler auto-vectorisation already SIMDifies tight loops over
+//     scalar Vec3f/Vec4f at /O2; per-instance SIMD gives nothing extra
+//
+// For batched workloads (physics, animation, particles), use the
+// `crd::math::simd::Soa<TChunk, Lane>` AoSoA substrate from v0b — the
+// `BodyChunk8`-style pattern processes 8 entities × 3 axes per AVX op
+// with zero waste. That's the SIMD path for Vec3-shaped data; do NOT
+// reach for Vec3-as-__m128 (that's the Bullet btVector3 mistake).
+//
+// Mat4f IS SIMD-ified internally — it fills the SIMD register
+// completely (4×4 = 64 bytes) and Mat*Mat does enough work to amortise
+// the load cost (12.7× measured speedup). See mat_simd_f32.hpp.
+
 #include <crd/core/assert.hpp>
 #include <crd/math/scalar.hpp>
 

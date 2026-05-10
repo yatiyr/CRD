@@ -40,6 +40,10 @@ namespace
             return VK_FORMAT_R32G32B32_SFLOAT;
         case Format::R32G32B32A32Sfloat:
             return VK_FORMAT_R32G32B32A32_SFLOAT;
+        case Format::R32Uint:
+            return VK_FORMAT_R32_UINT;
+        case Format::R32Sfloat:
+            return VK_FORMAT_R32_SFLOAT;
         case Format::D24UnormS8Uint:
             return VK_FORMAT_D24_UNORM_S8_UINT;
         case Format::D32Sfloat:
@@ -889,6 +893,12 @@ public:
     void draw_indexed(crd::u32 index_count, crd::u32 first_index, crd::i32 vertex_offset) override
     {
         vkCmdDrawIndexed(m_command_buffer, index_count, 1, first_index, vertex_offset, 0);
+    }
+
+    void draw_instanced(crd::u32 vertex_count, crd::u32 instance_count,
+                        crd::u32 first_vertex, crd::u32 first_instance) override
+    {
+        vkCmdDraw(m_command_buffer, vertex_count, instance_count, first_vertex, first_instance);
     }
 
     void copy_buffer(Buffer& src, Buffer& dst,
@@ -1871,6 +1881,16 @@ public:
 
         VkPipelineColorBlendAttachmentState blend_attachment{};
         blend_attachment.blendEnable = desc.enable_blend ? VK_TRUE : VK_FALSE;
+        // Standard alpha blending: srcRGB * srcAlpha + dstRGB * (1 - srcAlpha).
+        // Without these factors the defaults are VK_BLEND_FACTOR_ZERO -> every
+        // blended pixel renders as (0,0,0,0). Bug surfaced by crd-draw d0d when
+        // it became the first RHI consumer of enable_blend=true.
+        blend_attachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+        blend_attachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        blend_attachment.colorBlendOp        = VK_BLEND_OP_ADD;
+        blend_attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        blend_attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        blend_attachment.alphaBlendOp        = VK_BLEND_OP_ADD;
         blend_attachment.colorWriteMask =
             VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
 
@@ -1879,12 +1899,28 @@ public:
         blend_state.attachmentCount = has_color_output ? 1U : 0U;
         blend_state.pAttachments = has_color_output ? &blend_attachment : nullptr;
 
+        auto to_vk_compare = [](DepthCompareOp op) noexcept -> VkCompareOp {
+            switch (op)
+            {
+                case DepthCompareOp::Never:          return VK_COMPARE_OP_NEVER;
+                case DepthCompareOp::Less:           return VK_COMPARE_OP_LESS;
+                case DepthCompareOp::Equal:          return VK_COMPARE_OP_EQUAL;
+                case DepthCompareOp::LessOrEqual:    return VK_COMPARE_OP_LESS_OR_EQUAL;
+                case DepthCompareOp::Greater:        return VK_COMPARE_OP_GREATER;
+                case DepthCompareOp::NotEqual:       return VK_COMPARE_OP_NOT_EQUAL;
+                case DepthCompareOp::GreaterOrEqual: return VK_COMPARE_OP_GREATER_OR_EQUAL;
+                case DepthCompareOp::Always:         return VK_COMPARE_OP_ALWAYS;
+            }
+            return VK_COMPARE_OP_GREATER_OR_EQUAL;
+        };
+
         VkPipelineDepthStencilStateCreateInfo depth_stencil{};
         depth_stencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
         depth_stencil.depthTestEnable  = desc.enable_depth_test ? VK_TRUE : VK_FALSE;
         depth_stencil.depthWriteEnable = (desc.enable_depth_test && desc.depth_write) ? VK_TRUE : VK_FALSE;
-        // Reverse-Z projection (near→1, inf→0): closer = larger depth, so use GREATER_OR_EQUAL.
-        depth_stencil.depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL;
+        // Default GreaterOrEqual matches Cerid's reverse-Z. crd-draw d2-depth
+        // overrides to Less for the GreaterDimmed pipeline (XRay occluded).
+        depth_stencil.depthCompareOp = to_vk_compare(desc.depth_compare_op);
 
         // Resolve pipeline layout: use the provided layout or synthesise an empty one.
         VkPipelineLayout resolved_layout = VK_NULL_HANDLE;

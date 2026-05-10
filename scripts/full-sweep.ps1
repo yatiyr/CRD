@@ -25,6 +25,8 @@ param(
     [switch]$SkipWin,
     [switch]$SkipLinux,
     [switch]$Reconfigure,
+    [switch]$SkipSandboxSmoke,
+    [double]$SandboxSmokeDurationSeconds = 3.0,
     [string]$VcvarsPath = 'C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat',
     [string]$AsanRuntimeDir = 'C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.50.35717\bin\Hostx64\x64'
 )
@@ -72,7 +74,33 @@ foreach ($p in $presets) {
     Write-Host "----- ctest $p -----"
     & ctest --preset $p --output-on-failure
     $ec = $LASTEXITCODE
-    if ($ec -ne 0) { $results[$p] = "CTEST-FAIL exit=$ec" } else { $results[$p] = 'PASS' }
+    if ($ec -ne 0) { $results[$p] = "CTEST-FAIL exit=$ec"; continue }
+
+    # ---- Sandbox smoke-test ----
+    # Boots the sandbox normally and runs the main loop for $SMOKE_DURATION
+    # seconds. Catches Vulkan validation, resource init order, profile/preset
+    # apply-cycle bugs that ctest doesn't (those only fire when actual draws
+    # are issued + actual assets load + render path executes end-to-end).
+    # Skipped if -SkipSandboxSmoke or sandbox exe missing (e.g. running on a
+    # headless CI box without GPU; gate-on-presence rather than per-config).
+    if (-not $SKIP_SANDBOX) {
+        $sandboxExe = Join-Path $REPO_ROOT "build/$p/sandbox/crd-sandbox.exe"
+        if (Test-Path $sandboxExe) {
+            Write-Host "----- sandbox-smoke $p ($SMOKE_DURATION s) -----"
+            & $sandboxExe --smoke-test $SMOKE_DURATION
+            $ssec = $LASTEXITCODE
+            if ($ssec -ne 0) {
+                $results[$p] = "SANDBOX-SMOKE-FAIL exit=$ssec"
+                continue
+            }
+            $results[$p] = 'PASS (build+ctest+sandbox)'
+        } else {
+            Write-Host "[full-sweep] sandbox exe not found at $sandboxExe -- skipping smoke" -ForegroundColor DarkYellow
+            $results[$p] = 'PASS (build+ctest, no sandbox)'
+        }
+    } else {
+        $results[$p] = 'PASS (build+ctest, sandbox skipped)'
+    }
 }
 
 foreach ($p in $buildOnly) {
@@ -93,8 +121,13 @@ foreach ($k in $results.Keys) { Write-Host ("  {0,-22} {1}" -f $k, $results[$k])
 foreach ($k in $results.Keys) { Write-Host ("CRD_RESULT {0} {1}" -f $k, $results[$k]) }
 '@ | Out-File -FilePath $winSweepScript -Encoding utf8
 
-    # Inject -Reconfigure preference via env var (script reads $USE_RECONFIGURE).
-    $reconfFlag = if ($Reconfigure) { '$true' } else { '$false' }
+    # Inject -Reconfigure / -SkipSandboxSmoke / smoke duration / repo root via
+    # variables read by the inner script (single-quoted here-string protects
+    # the rest from PS expansion).
+    $reconfFlag    = if ($Reconfigure)       { '$true' } else { '$false' }
+    $skipSandFlag  = if ($SkipSandboxSmoke)  { '$true' } else { '$false' }
+    $smokeSecs     = $SandboxSmokeDurationSeconds
+    $repoRootEsc   = $repoRoot.Replace('\', '/')
 
     # Bat shim sources vcvars + ASan PATH then runs the PS script.
     $batShim = Join-Path $repoRoot 'scripts\.full-sweep-win-tmp.bat'
@@ -102,7 +135,7 @@ foreach ($k in $results.Keys) { Write-Host ("CRD_RESULT {0} {1}" -f $k, $results
 @echo off
 call "$VcvarsPath" >NUL
 set "PATH=$AsanRuntimeDir;%PATH%"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "`$USE_RECONFIGURE = $reconfFlag; & '$winSweepScript'"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "`$USE_RECONFIGURE = $reconfFlag; `$SKIP_SANDBOX = $skipSandFlag; `$SMOKE_DURATION = $smokeSecs; `$REPO_ROOT = '$repoRootEsc'; & '$winSweepScript'"
 exit /b %ERRORLEVEL%
 "@ | Out-File -FilePath $batShim -Encoding ascii
 
@@ -139,11 +172,31 @@ if (-not $SkipLinux) {
 
     foreach ($p in $linuxPresets) {
         Write-Host "===== $p =====" -ForegroundColor Yellow
-        $args = @('-Preset', $p)
-        if ($Reconfigure) { $args += '-Reconfigure' }
-        & $wslScript @args
+        # Note: never use `$args` here — it's a PowerShell automatic variable
+        # bound to the enclosing script's arguments; splatting it ignores
+        # local assignment and breaks wsl-build.ps1's -Preset binding.
+        # Also: use a HASHTABLE for splatting (named args), not an array.
+        # Array splatting is POSITIONAL — `@('-Preset', $p)` would bind the
+        # literal string "-Preset" to wsl-build.ps1's first positional
+        # parameter (which is `Preset`), tripping its ValidateSet.
+        $wslArgs = @{Preset = $p}
+        if ($Reconfigure) { $wslArgs['Reconfigure'] = $true }
+        # Defensive: clear $LASTEXITCODE before the call so a PowerShell-
+        # side error (e.g. parameter binding failure that prevents the
+        # target script from ever running) is caught via $? rather than
+        # silently inheriting the previous command's success code. The
+        # 2026-05-10 sweep silently reported PASS for Linux configs that
+        # never built because $args was being shadowed; never trust
+        # $LASTEXITCODE alone here.
+        $LASTEXITCODE = 0
+        & $wslScript @wslArgs
         $ec = $LASTEXITCODE
-        if ($ec -ne 0) { $results[$p] = "FAIL exit=$ec" } else { $results[$p] = 'PASS' }
+        $ok = $?
+        if (-not $ok -or $ec -ne 0) {
+            $results[$p] = "FAIL exit=$ec"
+        } else {
+            $results[$p] = 'PASS'
+        }
     }
 }
 

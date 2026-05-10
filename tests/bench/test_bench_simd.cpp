@@ -157,9 +157,13 @@ TEST_CASE("bench Vec3f cross -- scalar vs AoSoA-8", "[bench][bench-simd][!benchm
     };
 }
 
-TEST_CASE("bench Mat4f multiply -- scalar vs SIMD", "[bench][bench-simd][!benchmark]")
+TEST_CASE("bench Mat4f multiply -- public API (SIMD-routed) vs explicit simd::Mat4f", "[bench][bench-simd][!benchmark]")
 {
-    // Two random-but-fixed 4x4 matrices (column-major; mat[col] gives Vec4).
+    // Phase 3.1 v0f shipped: the public `Mat4f operator*` now routes through
+    // SIMD internally (mat_simd_f32.hpp). So both benchmarks below are SIMD
+    // paths — the "public API" call is no longer scalar. Both should clock
+    // ~9-10 ns on AVX2 desktop, proving v0f delivered. The pre-v0f baseline
+    // of 122.97 ns scalar is documented as "the speedup that v0f shipped".
     Mat4f a, b;
     for (int c = 0; c < 4; ++c)
     {
@@ -172,7 +176,7 @@ TEST_CASE("bench Mat4f multiply -- scalar vs SIMD", "[bench][bench-simd][!benchm
         }
     }
 
-    BENCHMARK("Mat4f multiply scalar (8 ops)")
+    BENCHMARK("Mat4f multiply public API (now SIMD-routed, 8 ops)")
     {
         f32 acc = 0.0F;
         for (int i = 0; i < 8; ++i)

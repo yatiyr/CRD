@@ -5,6 +5,8 @@
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/core/types.hpp>
+#include <crd/draw/render_buffer.hpp>
+#include <crd/draw/visualizer_registry.hpp>
 #include <crd/math/quat.hpp>
 #include <crd/math/vec.hpp>
 #include <crd/memory/allocators/malloc_allocator.hpp>
@@ -219,6 +221,17 @@ private:
     // Resource system for imported assets (cooked demo_assets.crdr).
     std::unique_ptr<crd::resources::ResourceManager> m_resource_mgr;
     bool                                             m_imported_available = false;
+
+    // crd-draw retained per-frame buffer (v1a-draw d0d). Cleared at the
+    // top of every render_scene; populated with debug primitives; consumed
+    // by add_draw_overlay_pass.
+    crd::draw::RenderBuffer m_draw_buffer;
+
+    // d3: VisualizerRegistry teaches DebugVizSystem how to render each
+    // component type. Owned here; non-owning pointer handed to the system.
+    // System lifetime is bound to m_world (registered via register_system),
+    // so the registry must outlive the world.
+    crd::draw::VisualizerRegistry m_viz_registry;
 
     // Profile + Preset state ------------------------------------------------
     crd::profile::ProfileContext m_profile_context{};

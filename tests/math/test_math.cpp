@@ -2,6 +2,7 @@
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <bit>
 #include <format>
 #include <limits>
 #include <type_traits>
@@ -275,6 +276,96 @@ TEST_CASE("Mat4 identity is neutral for matrix and vector multiplication", "[mat
     require_mat4_close(identity * m, m, 1.0e-6F);
     require_mat4_close(m * identity, m, 1.0e-6F);
     require_vec4_close(identity * v, v, 1.0e-6F);
+}
+
+// ---------------------------------------------------------------------------
+// v0f — Mat4<f32> SIMD specialization parity vs scalar reference.
+//
+// The non-template Mat4<f32> operator* overloads in mat_simd_f32.hpp must
+// produce **bit-exact** identical results to the scalar template path. Same
+// accumulation order (c0*x + c1*y + c2*z + c3*w, left-to-right), same
+// mul_add two-rounding semantics. ADR-0063 §1: bit-exact across SIMD and
+// scalar backends.
+// ---------------------------------------------------------------------------
+
+namespace
+{
+// Manual scalar reference Mat4f * Vec4f (replicates what the scalar
+// template path would compute, lane by lane). Bypasses the SIMD overload.
+Vec4f mat4f_vec4f_scalar_reference(const Mat4f& m, const Vec4f& v) noexcept
+{
+    Vec4f r;
+    r.x = m.c0.x * v.x + m.c1.x * v.y + m.c2.x * v.z + m.c3.x * v.w;
+    r.y = m.c0.y * v.x + m.c1.y * v.y + m.c2.y * v.z + m.c3.y * v.w;
+    r.z = m.c0.z * v.x + m.c1.z * v.y + m.c2.z * v.z + m.c3.z * v.w;
+    r.w = m.c0.w * v.x + m.c1.w * v.y + m.c2.w * v.z + m.c3.w * v.w;
+    return r;
+}
+
+Mat4f mat4f_mat4f_scalar_reference(const Mat4f& a, const Mat4f& b) noexcept
+{
+    return Mat4f(mat4f_vec4f_scalar_reference(a, b.c0), mat4f_vec4f_scalar_reference(a, b.c1),
+                 mat4f_vec4f_scalar_reference(a, b.c2), mat4f_vec4f_scalar_reference(a, b.c3));
+}
+
+// Bit-exact equality (memcmp-style; no epsilon).
+bool vec4f_bit_eq(const Vec4f& a, const Vec4f& b) noexcept
+{
+    return std::bit_cast<crd::u32>(a.x) == std::bit_cast<crd::u32>(b.x)
+        && std::bit_cast<crd::u32>(a.y) == std::bit_cast<crd::u32>(b.y)
+        && std::bit_cast<crd::u32>(a.z) == std::bit_cast<crd::u32>(b.z)
+        && std::bit_cast<crd::u32>(a.w) == std::bit_cast<crd::u32>(b.w);
+}
+
+bool mat4f_bit_eq(const Mat4f& a, const Mat4f& b) noexcept
+{
+    return vec4f_bit_eq(a.c0, b.c0) && vec4f_bit_eq(a.c1, b.c1)
+        && vec4f_bit_eq(a.c2, b.c2) && vec4f_bit_eq(a.c3, b.c3);
+}
+} // namespace
+
+TEST_CASE("v0f Mat4<f32> * Vec4<f32> is bit-exact with scalar reference", "[math][mat][simd][v0f]")
+{
+    // Pseudo-random but deterministic Mat4 + Vec4 (same input every run, so
+    // any FP discrepancy across builds is a real divergence, not RNG noise).
+    const Mat4f m(Vec4f( 1.5F,  -2.25F,  3.125F, -4.0625F),
+                  Vec4f(-5.5F,   6.75F, -7.875F,  8.9375F),
+                  Vec4f( 9.5F, -10.25F, 11.125F,-12.0625F),
+                  Vec4f(13.5F, -14.75F, 15.875F,-16.9375F));
+    const Vec4f v(0.125F, -0.25F, 0.5F, -1.0F);
+
+    const Vec4f simd_result   = m * v;                            // routes through SIMD overload
+    const Vec4f scalar_result = mat4f_vec4f_scalar_reference(m, v); // bypasses overload
+
+    REQUIRE(vec4f_bit_eq(simd_result, scalar_result));
+}
+
+TEST_CASE("v0f Mat4<f32> * Mat4<f32> is bit-exact with scalar reference", "[math][mat][simd][v0f]")
+{
+    const Mat4f a(Vec4f( 1.5F,  -2.25F,  3.125F, -4.0625F),
+                  Vec4f(-5.5F,   6.75F, -7.875F,  8.9375F),
+                  Vec4f( 9.5F, -10.25F, 11.125F,-12.0625F),
+                  Vec4f(13.5F, -14.75F, 15.875F,-16.9375F));
+    const Mat4f b(Vec4f( 0.125F,  -0.25F,  0.5F,  -1.0F),
+                  Vec4f( 0.625F,   1.25F,  2.5F,   5.0F),
+                  Vec4f(-0.0625F,  0.125F,-0.25F,  0.5F),
+                  Vec4f( 1.0F,    -2.0F,   4.0F,  -8.0F));
+
+    const Mat4f simd_result   = a * b;
+    const Mat4f scalar_result = mat4f_mat4f_scalar_reference(a, b);
+
+    REQUIRE(mat4f_bit_eq(simd_result, scalar_result));
+}
+
+TEST_CASE("v0f Mat4<f64> still goes through scalar template (no SIMD f64 overload)", "[math][mat][simd][v0f]")
+{
+    // Sanity check: the SIMD specialization is f32-only. f64 path is
+    // unaffected. Doesn't bit-eq check (no SIMD f64 path to compare to);
+    // just verifies the scalar template still handles f64.
+    const Mat4d a(Vec4d(1.0,  2.0,  3.0,  4.0),  Vec4d(5.0,  6.0,  7.0,  8.0),
+                  Vec4d(9.0, 10.0, 11.0, 12.0),  Vec4d(13.0, 14.0, 15.0, 16.0));
+    const Mat4d identity = Mat4d::identity();
+    require_mat4_close(a * identity, a, 1.0e-12);
 }
 
 TEST_CASE("Quat identity and normalization behave as expected", "[math][quat]")

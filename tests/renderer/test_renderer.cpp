@@ -85,6 +85,7 @@ public:
         ++draw_count;
         last_vertex_count = vertex_count;
     }
+    void draw_instanced(crd::u32, crd::u32, crd::u32, crd::u32) override {}
     void draw_indexed(crd::u32 index_count, crd::u32 /*first_index*/, crd::i32 /*vertex_offset*/) override
     {
         ++draw_indexed_count;

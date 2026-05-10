@@ -21,6 +21,8 @@ add_subdirectory(scene)
 add_subdirectory(scene_cooker)
 add_subdirectory(preset)
 add_subdirectory(profile)
+add_subdirectory(eylem)
+add_subdirectory(draw)
 
 if(CRD_BUILD_BENCHMARKS)
     add_subdirectory(bench)

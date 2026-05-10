@@ -432,6 +432,129 @@ CPU cost: per-primitive `add_line()` ~100 ns (push_back + flag pack).
 `RenderBuffer`; merge at end of phase via `append()` in
 deterministic order.** Matches the eylem job pattern (ADR-0063).
 
+### 19. Substrate solidification decisions (locked 2026-05-10 mid-d2)
+
+After shipping d0+d1+d2 the user requested locking 7 architecture
+choices to make the substrate genuinely future-proof for Phase 7
+editor manipulators + multi-domain consumers (eylem v1c+ at 100k
+primitives/frame, sdf v3 narrow-band cells, audio occlusion overlays).
+The chosen options below maximise long-term leverage even where the
+short-term implementation is more involved.
+
+#### 19.1 DepthMode pipeline strategy: 6-pipeline matrix
+
+Build 6 pre-baked pipelines = `(line, triangle) x (Test, Always,
+GreaterDimmed)`. At submit time the overlay-pass execute lambda bins
+each primitive by `flags.depth_mode` into one of 4 buckets:
+
+- `Depth_Test`         -> `[primitive_kind][Test]`
+- `Depth_Always`       -> `[primitive_kind][Always]`
+- `Depth_XRay` emits TWICE: once into `[*][GreaterDimmed]` (color
+  alpha-multiplied by ~0.3 at submit) AND once into `[*][Test]` (full
+  color, depth-tested so only the visible portion shows).
+
+Why pre-baked over `VK_EXT_dynamic_state2`: extension support is
+weak on Apple Silicon + older ARM + WSL2 GPU passthrough; pre-baked
+pipelines are universal Vulkan 1.3 baseline. Pipeline switches are
+microseconds; 6 switches per frame is noise.
+
+#### 19.2 VisualizerRegistry: typed function-pointer with category iteration
+
+```cpp
+template <typename T>
+using Visualizer = void(*)(const T&, const Transform&,
+                           RenderBuffer&, const VizConfig&);
+
+class VisualizerRegistry {
+    template <typename T> void register_visualizer(Visualizer<T> fn);
+    void run_all(const World&, RenderBuffer&, const VizConfig&) const;
+};
+```
+
+Per-category iteration order (Physics -> Audio -> SDF -> Nav -> Scene
+-> Renderer -> User0..User2 -> Debug -> Gizmo -> Brush) matches the
+Category enum (decision 13) so UI filtering is predictable.
+
+Companion modules (`crd-eylem-viz`, `crd-sdf-viz`, etc.) call
+`register_with(reg)` once at app init. Direct bulk emission (eylem
+v1c+ broadphase calls `add_line_to(buf, ...)` on per-fiber buffers)
+remains supported and bypasses the registry; both paths coexist.
+
+Rejected: std::function (overhead + allocations on registration);
+CRTP (template ugliness, harder downstream registration).
+
+#### 19.3 Current-buffer pattern: explicit canonical + thread-local convenience
+
+Two-tier API:
+- **Canonical**: every primitive function has a `*_to(buf, ...)` form
+  taking an explicit `RenderBuffer&`. Stateless-safe; supports
+  per-fiber fan-out emission.
+- **Convenience wrappers**: thin `line(a, b, color)` / `box_wire(...)`
+  forms that route to `active_buffer()` (a thread-local pointer).
+  Consumers install one via `set_active_buffer(buf)`. Calling a
+  convenience wrapper without an active buffer is `CRD_ASSERT` in
+  debug, no-op in release.
+
+Best of both: physics solver fan-out emission stays clean (explicit
+threading); editor + dev-console one-liner calls become ergonomic
+(`crd::draw::line({0,0,0}, {1,1,1}, kRed);`). Avoids the Unity
+`Gizmos.color = ...` global-state footgun (decision via Unity lesson
+in section 2.2 above).
+
+#### 19.4 Buffer overflow: multi-batch submit (no truncation, no auto-grow)
+
+When `N > max_per_frame`, the overlay pass loops over batches:
+```cpp
+for (offset = 0; offset < N; offset += cap) {
+    map -> fill batch [offset, min(offset+cap, N)) -> unmap
+    bind_vertex_buffer + draw_instanced(batch_size)
+}
+```
+
+Same buffer reused per batch. Eylem v1c+ visualising 100k+ AABBs
+runs unbounded with no warning, no truncation, no GPU memory churn.
+The `max_per_frame` cap becomes "minimum batch size" rather than
+"max work."
+
+Rejected: hard-cap-and-warn (loses primitives when needed most),
+auto-grow (complex GPU memory recreation mid-frame).
+
+#### 19.5 MSAA quality tier mapping (locks d2-aa scope)
+
+**Status (2026-05-10):** d2-aa execution deferred until a real MSAA consumer exists (e.g. scene-wide MSAA in a later phase). The mapping below stays as the design of record; only the *when* slipped, not the *what*.
+
+| Tier   | Strategy                                              | VRAM cost |
+|--------|-------------------------------------------------------|-----------|
+| Off    | `add_draw_overlay_pass` no-ops entirely               | 0         |
+| Low    | Per-pixel distance AA only (current d0 behavior)      | 0         |
+| Med    | 2x MSAA overlay attachment + resolve to scene_color   | ~2 MB     |
+| High   | 4x MSAA overlay + resolve                             | ~4 MB     |
+| Ultra  | 8x MSAA + reserved slot for temporal accumulation     | ~8 MB     |
+
+`QualityPreset` schema bumps v1 -> v2; new `crd::u8 debug_overlay_aa`
+field (5-value enum). v1 loaders default the new field to `Low` for
+backward compatibility.
+
+#### 19.6 API surface freeze at d4 close
+
+When v1a-draw d4 (ImGui control panel + 1k-box ragdoll demo + the
+final substrate piece) closes, the public API of `crd-draw` is
+**frozen**. No breaking changes ever after. This commitment exists
+because Phase 7 editor builds manipulator gizmos against this
+surface; future Cerid modules build against it. Consumers can
+trust the API across the rest of the engine's lifetime.
+
+Internal types in `crd::draw::detail::` namespace stay free to
+change.
+
+#### 19.7 Replay capture: API surface reserved, impl deferred to Phase 7
+
+Add `crd::draw::serialize_render_buffer(const RenderBuffer&,
+std::ostream&)` as a no-op stub in d4. Real binary wire format +
+out-of-process replay viewer (Migdalskiy/PVD pattern from section
+2.4) lands in Phase 7 editor. Substrate API surface stays stable
+across the deferral.
+
 ## Consequences
 
 ### Positive

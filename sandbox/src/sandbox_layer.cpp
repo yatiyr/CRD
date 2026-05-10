@@ -4,6 +4,9 @@
 #include <crd/app/events/input_events.hpp>
 #include <crd/app/events/window_events.hpp>
 #include <crd/core/assert.hpp>
+#include <crd/draw/draw.hpp>
+#include <crd/draw/overlay_pass.hpp>
+#include <crd/draw/renderer.hpp>
 #include <crd/log/log.hpp>
 #include <crd/math/mat.hpp>
 #include <crd/math/quat.hpp>
@@ -24,6 +27,7 @@
 #include <crd/scene/transform.hpp>
 #include <crd/scene/transform_propagation.hpp>
 #include <crd/shader/effect.hpp>
+#include <crd/shader/shader_resource_loader.hpp>
 #include <imgui.h>
 
 #include <algorithm>
@@ -231,6 +235,9 @@ SandboxLayer::~SandboxLayer()
     // resources doesn't race with in-flight frames.
     m_device.wait_idle();
 
+    // Tear down crd-draw before any owned RHI resources die.
+    crd::draw::shutdown();
+
     // Drop the öbek instantiation FIRST so the world's destruction
     // doesn't double-free the öbek's source-payload back-reference.
     if (m_obek_instantiation)
@@ -297,6 +304,35 @@ void SandboxLayer::init_scene_world()
         crd::scene::StorageHint::SparseSet);
     m_world->register_builtin_relations();
     m_world->register_system(std::make_unique<crd::scene::TransformPropagation>());
+
+    // d3: DebugVizComponent + VisualizerRegistry + DebugVizSystem.
+    // Component registration -> registry teaches the system how to draw
+    // each component type -> system runs in PostRender phase, dispatches
+    // every registered visualizer for every entity carrying DebugVizComponent.
+    // The buffer is cleared in update() right before world.step() (see
+    // SandboxLayer::on_update) so the system writes into a fresh buffer
+    // every frame.
+    m_world->register_component<crd::draw::DebugVizComponent>(
+        crd::scene::StorageHint::SparseSet);
+    crd::draw::register_default_visualizers(m_viz_registry);
+    m_world->register_system(
+        std::make_unique<crd::draw::DebugVizSystem>(m_viz_registry, m_draw_buffer));
+
+    // d3 demo: spawn three entities at distinct positions so the
+    // DebugVizSystem auto-emits an axis triad at each. set_translation
+    // marks dirty so TransformPropagation populates Transform.world before
+    // PostRender runs.
+    for (const auto pos : {crd::math::Vec3f{4.0F, 0.0F, 0.0F},
+                           crd::math::Vec3f{4.0F, 0.0F, 3.0F},
+                           crd::math::Vec3f{4.0F, 0.0F, -3.0F}})
+    {
+        const auto e = m_world->spawn();
+        m_world->add_component(e, crd::scene::Transform{});
+        m_world->set_translation(e, pos);
+        crd::draw::DebugVizComponent viz{};
+        viz.scale = 0.5F;
+        m_world->add_component(e, viz);
+    }
 
     // RenderMeshIndex — observes Renderable's lifecycle and evicts GpuMeshes
     // automatically when entities are destroyed (the proper drop-callback
@@ -479,6 +515,47 @@ void SandboxLayer::try_register_imported_assets()
     m_imported_available = true;
     CRD_LOG_INFO(g_log_sandbox_layer, "Mounted '{}'", pack_path.generic().data());
 #endif
+
+    // crd-draw integration (v1a-draw d0d).
+    // 1. Register the SHDR loader so the ResourceManager can deserialise
+    //    cooked shader resources (line_aa.vert.glsl + line_aa.frag.glsl).
+    // 2. Mount the draw_shaders.crdr pack copied next to this exe by the
+    //    sandbox CMake's `sandbox-draw-pack` target.
+    // 3. Initialise the renderer + line pipeline.
+    crd::shader::register_shader_loader(m_resource_mgr.get());
+
+    const fs::Path draw_pack_path = fs::executable_dir() / CRD_DRAW_SHADERS_REL_PACK;
+    if (!fs::is_file(draw_pack_path))
+    {
+        CRD_LOG_WARN(g_log_sandbox_layer, "crd-draw pack not found at '{}'; debug overlay disabled",
+                     draw_pack_path.generic().data());
+    }
+    else
+    {
+        const auto draw_mount = m_resource_mgr->mount_manifest(draw_pack_path.generic());
+        if (!draw_mount.is_valid())
+        {
+            CRD_LOG_WARN(g_log_sandbox_layer, "Failed to mount crd-draw pack '{}'; debug overlay disabled",
+                         draw_pack_path.generic().data());
+        }
+        else
+        {
+            crd::draw::InitConfig draw_cfg{};
+            draw_cfg.color_format            = crd::rhi::Format::B8G8R8A8Unorm;
+            draw_cfg.depth_format            = crd::rhi::Format::D32Sfloat;
+            draw_cfg.frames_in_flight        = 2;
+            draw_cfg.max_lines_per_frame     = 4096;
+            draw_cfg.max_triangles_per_frame = 4096;
+            if (!crd::draw::init(*m_resource_mgr, m_device, draw_cfg))
+            {
+                CRD_LOG_WARN(g_log_sandbox_layer, "crd::draw::init failed; debug overlay disabled");
+            }
+            else
+            {
+                CRD_LOG_INFO(g_log_sandbox_layer, "crd-draw initialised (overlay path live)");
+            }
+        }
+    }
 }
 
 void SandboxLayer::build_wireframe_pipeline(const crd::platform::fs::Path& source_dir)
@@ -663,6 +740,15 @@ void SandboxLayer::on_update(crd::f64 delta_seconds)
     }
 
     try_finalize_pending_load();
+
+    // d3: clear the draw buffer BEFORE world.step so DebugVizSystem
+    // (PostRender phase) writes into a fresh buffer. Showroom emissions
+    // in render_scene() append to the same buffer afterwards. The
+    // overlay-pass at end-of-render submits the merged buffer.
+    if (crd::draw::is_initialised())
+    {
+        m_draw_buffer.clear();
+    }
 
     // Drive the schedule so RenderUploadSystem promotes pending uploads.
     if (m_world) m_world->step(delta_seconds);
@@ -1169,6 +1255,82 @@ void SandboxLayer::render_scene(crd::rhi::CommandBuffer& cmd, crd::rhi::Image& s
     [[maybe_unused]] const bool ok = fg.build();
     CRD_ASSERT(ok);
     fg.execute(m_device, cmd);
+
+    // crd-draw overlay (v1a-draw d0d). Build a tiny demo set: an axis triad
+    // at origin + a wire box per spawned entity at a fixed offset. Then
+    // graft an overlay pass onto a fresh FrameGraph so add_draw_overlay_pass
+    // exercises the full pipeline path.
+    if (crd::draw::is_initialised())
+    {
+        // d3: m_draw_buffer is cleared at the top of on_update (BEFORE
+        // world.step) so DebugVizSystem (PostRender) writes into a fresh
+        // buffer; showroom emissions below append to the same buffer.
+
+        // d2-curbuf: install the active buffer for this frame, then use the
+        // ergonomic wrappers (`crd::draw::axis_triad(...)` etc.) instead of
+        // the verbose `*_to(buffer, ...)` form. Both APIs coexist; the
+        // canonical form is preferred for fan-out emission, the wrapper
+        // form is preferred for one-line dev-console / editor calls.
+        crd::draw::ScopedActiveBuffer scoped_buf{&m_draw_buffer};
+
+        // World-axis triad at origin (3 arrows, RGB convention).
+        crd::draw::axis_triad(crd::math::Mat4f::identity(), 1.0F);
+
+        // (Floor grid is now drawn by the shader-based infinite grid pipeline,
+        // wired through OverlayPassConfig::grid below. d2-grid superseded the
+        // line-based grid call here.)
+
+        // Box: wire + translucent solid fill at (2, 0, 0).
+        crd::math::Mat4f box_world = crd::math::Mat4f::identity();
+        box_world.c3.x = 2.0F;
+        crd::draw::box_wire(box_world, {0.5F, 0.5F, 0.5F}, crd::draw::kBodyDynamic, 1.5F);
+        crd::draw::box_solid(box_world, {0.5F, 0.5F, 0.5F}, crd::draw::Color{200, 200, 100, 80});
+
+        // Sphere: wire + translucent solid at (-2, 0, 0). UV-everywhere = perfect alignment.
+        crd::draw::sphere_wire({-2.0F, 0.0F, 0.0F}, 0.6F, crd::draw::kCyan);
+        crd::draw::sphere_solid({-2.0F, 0.0F, 0.0F}, 0.6F, crd::draw::Color{0, 255, 255, 60});
+
+        // Capsule: wire + translucent solid at (0, 0, 2).
+        crd::draw::capsule_wire({0.0F, -0.4F, 2.0F}, {0.0F, 0.4F, 2.0F}, 0.4F,
+                                crd::draw::kBodyKinematic);
+        crd::draw::capsule_solid({0.0F, -0.4F, 2.0F}, {0.0F, 0.4F, 2.0F}, 0.4F,
+                                 crd::draw::Color{80, 200, 240, 70});
+
+        // Velocity-style arrow at (0, 1.5, 0) pointing +X.
+        crd::draw::arrow({0.0F, 1.5F, 0.0F}, {1.0F, 0.0F, 0.0F}, 1.0F,
+                         crd::draw::kVelocityArrow);
+
+        // 3D cross marker (contact-point-style indicator).
+        crd::draw::cross_3d({0.0F, 0.0F, -2.0F}, 0.3F, crd::draw::kContactPoint);
+
+        // Joint-limit-style arc (90 degree sweep around Y axis).
+        crd::draw::arc({0.0F, 0.5F, -2.0F}, {0.0F, 1.0F, 0.0F}, {1.0F, 0.0F, 0.0F},
+                       0.5F, 0.0F, 1.5707963F, crd::draw::kJointFrame);
+
+        crd::renderer::FrameGraph draw_fg;
+        const auto color_handle = draw_fg.import(&m_frp->color_image(),
+                                                 crd::rhi::ImageAccess::ColorWrite);
+        const auto depth_handle = draw_fg.import(&m_frp->depth_image(),
+                                                 crd::rhi::ImageAccess::DepthRead);
+        crd::draw::OverlayPassConfig draw_cfg;
+        draw_cfg.view_proj             = ctx.camera.projection * ctx.camera.view;
+        draw_cfg.viewport_px           = {static_cast<crd::f32>(ext.width),
+                                          static_cast<crd::f32>(ext.height)};
+        draw_cfg.frame_in_flight_index = frame_index % 2;
+        // d2-grid + d2-theme: pull cell sizes + grid + axis colors from the
+        // active DrawTheme (Blender / RViz palette by default). Per-frame
+        // fields (enabled, camera_pos, plane_y) are set explicitly.
+        draw_cfg.grid.apply_theme();
+        draw_cfg.grid.enabled    = true;
+        draw_cfg.grid.camera_pos = ctx.camera_position;
+        draw_cfg.grid.plane_y    = -1.0F;
+        crd::draw::add_draw_overlay_pass(draw_fg, color_handle,
+                                         depth_handle, m_draw_buffer, draw_cfg);
+        if (draw_fg.build())
+        {
+            draw_fg.execute(m_device, cmd);
+        }
+    }
 
     if (m_show_wireframe && m_wf_pipeline && m_world)
     {

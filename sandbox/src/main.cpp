@@ -8,7 +8,9 @@
 #include <crd/platform/filesystem.hpp>
 #include <crd/rhi/vulkan_backend.hpp>
 
+#include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 
@@ -20,12 +22,39 @@ int main(int argc, char** argv)
 {
     std::setvbuf(stdout, nullptr, _IONBF, 0); // unbuffered so log lines survive a crash
 
-    bool headless = false;
+    // CLI flags:
+    //   --headless                    — exit after 1 frame; minimal boot smoke
+    //   --smoke-test [duration_secs]  — run main loop for N seconds (default 3.0)
+    //                                   then exit cleanly. Used by
+    //                                   scripts/full-sweep.ps1 to verify each
+    //                                   per-config sandbox boots + renders +
+    //                                   shuts down without crashing. Catches
+    //                                   Vulkan validation, resource init
+    //                                   order, profile/preset apply-cycle
+    //                                   bugs the unit tests don't.
+    bool      headless          = false;
+    bool      smoke_test        = false;
+    crd::f64  smoke_duration_s  = 3.0;
     for (int i = 1; i < argc; ++i)
     {
         if (std::strcmp(argv[i], "--headless") == 0)
         {
             headless = true;
+        }
+        else if (std::strcmp(argv[i], "--smoke-test") == 0)
+        {
+            smoke_test = true;
+            // Optional duration argument: --smoke-test 5
+            if (i + 1 < argc)
+            {
+                char*           end = nullptr;
+                const crd::f64  v   = std::strtod(argv[i + 1], &end);
+                if (end != argv[i + 1] && v > 0.0)
+                {
+                    smoke_duration_s = v;
+                    ++i;
+                }
+            }
         }
     }
 
@@ -96,11 +125,14 @@ int main(int argc, char** argv)
         return ptr;
     }();
 
-    CRD_LOG_INFO(g_log_sandbox, "Sandbox started (headless={})", headless);
+    CRD_LOG_INFO(g_log_sandbox, "Sandbox started (headless={} smoke_test={} smoke_duration_s={})", headless, smoke_test,
+                 smoke_duration_s);
 
     crd::jobs::init(app_desc.jobs_config);
 
     crd::u32 frame = 0;
+    crd::u32 frames_with_present = 0;
+    const auto smoke_start_time  = std::chrono::steady_clock::now();
     while (app.is_running())
     {
         if (!app.tick())
@@ -137,6 +169,7 @@ int main(int argc, char** argv)
         if (device->graphics_queue().submit(cmd, *swapchain))
         {
             device->graphics_queue().present(*swapchain);
+            ++frames_with_present;
         }
 
         ++frame;
@@ -145,6 +178,30 @@ int main(int argc, char** argv)
         {
             CRD_LOG_INFO(g_log_sandbox, "Headless: exiting after {} frame(s)", frame);
             app.close();
+        }
+
+        if (smoke_test)
+        {
+            const auto    now      = std::chrono::steady_clock::now();
+            const crd::f64 elapsed = std::chrono::duration<crd::f64>(now - smoke_start_time).count();
+            if (elapsed >= smoke_duration_s)
+            {
+                if (frames_with_present == 0)
+                {
+                    // Boot succeeded but never presented — likely a swapchain
+                    // acquire failure loop. Treat as smoke-test failure so
+                    // the sweep notices.
+                    CRD_LOG_ERROR(g_log_sandbox, "Smoke-test: 0 frames presented in {:.2f}s — failure", elapsed);
+                    crd::log::flush();
+                    crd::log::shutdown();
+                    return 2;
+                }
+                CRD_LOG_INFO(g_log_sandbox,
+                             "Smoke-test: PASS — {} frames presented over {:.2f}s ({:.1f} fps avg)",
+                             frames_with_present, elapsed,
+                             static_cast<crd::f64>(frames_with_present) / elapsed);
+                app.close();
+            }
         }
 
         if (app.window().input().state().was_key_pressed(crd::platform::Key::Escape))

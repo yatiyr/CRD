@@ -25,6 +25,13 @@ public:
     virtual void draw(crd::u32 vertex_count, crd::u32 first_vertex) = 0;
     virtual void draw_indexed(crd::u32 index_count, crd::u32 first_index, crd::i32 vertex_offset) = 0;
 
+    // Instanced variant. Issues `vertex_count` x `instance_count` invocations
+    // of the vertex shader, with gl_InstanceIndex ranging over
+    // [first_instance, first_instance + instance_count). Used by crd-draw
+    // for screen-space-quad-expanded line rendering (6 verts/instance).
+    virtual void draw_instanced(crd::u32 vertex_count, crd::u32 instance_count,
+                                crd::u32 first_vertex, crd::u32 first_instance) = 0;
+
     // Copy bytes from a host-visible staging buffer into a device buffer.
     virtual void copy_buffer(Buffer& src, Buffer& dst,
                              crd::u64 src_offset, crd::u64 dst_offset,

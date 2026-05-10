@@ -139,6 +139,7 @@ public:
         last_vertex_count = vertex_count;
         last_first_vertex = first_vertex;
     }
+    void draw_instanced(crd::u32, crd::u32, crd::u32, crd::u32) override {}
     void draw_indexed(crd::u32 index_count, crd::u32 first_index, crd::i32 vertex_offset) override
     {
         ++draw_indexed_count;

@@ -11,6 +11,7 @@ target_include_directories(crd-sandbox PRIVATE
 target_link_libraries(crd-sandbox PRIVATE
     crd-app
     crd-config
+    crd-draw
     crd-imgui
     crd-log
     crd-math
@@ -65,6 +66,26 @@ add_custom_command(
 
 add_custom_target(cook-demo-assets DEPENDS "${DEMO_ASSETS_PACK}")
 add_dependencies(crd-sandbox cook-demo-assets)
+
+# Copy the crd-draw shader pack next to the sandbox executable (same
+# layout as demo_assets so the runtime resolves both via executable_dir()).
+# Pack is produced by the `crd-draw-shaders` target in engine/draw/CMakeLists.txt.
+set(SANDBOX_DRAW_PACK_OUT "${CMAKE_CURRENT_BINARY_DIR}/assets/cooked/draw_shaders.crdr")
+add_custom_command(
+    OUTPUT  "${SANDBOX_DRAW_PACK_OUT}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${DEMO_ASSETS_OUT_DIR}"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${CMAKE_BINARY_DIR}/assets/cooked/draw_shaders.crdr" "${SANDBOX_DRAW_PACK_OUT}"
+    DEPENDS crd-draw-shaders "${CMAKE_BINARY_DIR}/assets/cooked/draw_shaders.crdr"
+    COMMENT "Copying crd-draw shader pack -> ${SANDBOX_DRAW_PACK_OUT}"
+    VERBATIM
+)
+add_custom_target(sandbox-draw-pack DEPENDS "${SANDBOX_DRAW_PACK_OUT}")
+add_dependencies(crd-sandbox sandbox-draw-pack)
+
+target_compile_definitions(crd-sandbox PRIVATE
+    CRD_DRAW_SHADERS_REL_PACK="assets/cooked/draw_shaders.crdr"
+)
 
 # Sandbox computes the pack path at runtime as `executable_dir() / kDemoAssetsRelPack`.
 # The relative form is exposed as a compile definition so the C++ side stays

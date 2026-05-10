@@ -5,6 +5,32 @@ move to a session log entry and remove from here.
 
 ## Active debt
 
+### `linux-gcc-release` ctest intermittent flake (2026-05-10, 3rd occurrence)
+
+Pattern: `wsl-build.ps1 -Preset linux-gcc-release` fails with opaque
+`Errors while running CTest` (exit 8), no per-test failure shown.
+Retrying the same preset alone immediately afterward succeeds with
+1000/1000 tests passing. Other Linux configs (debug / relwithdebinfo /
+asan / debug-scalar) never exhibit this — only release.
+
+**Observed instances:**
+- Phase 3.1 v1a Linux verification (bw3j1vlks) — release alone failed
+- v1a-draw-d1 verification (b905ysrgo) — release alone failed
+- (one earlier instance documented in v0 post-mortem addendum)
+
+**Hypotheses (untested):**
+- catch_discover_tests race with the just-built optimised binary on the
+  9p mount path
+- Per-process-lifetime issue specific to release-built tests under WSL
+- LTO / LTCG link timing causing CTestTestfile to be read mid-rewrite
+
+**Why deferred:** retry always clears it; no test correctness issue;
+investigating opaque CMake/CTest internals is high-cost low-value at
+this point. Worth a focused investigation when it bites CI (which it
+hasn't yet — CI uses a separate Linux runner, different filesystem).
+
+
+
 ### Phase 3.1 v0c `crd::math::deterministic` — debt paid 2026-05-10
 
 The v0c original deferral list (5 items) was closed in a same-day v0c-debt-A pass. Status:

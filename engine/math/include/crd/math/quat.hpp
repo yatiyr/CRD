@@ -1,5 +1,19 @@
 #pragma once
 
+// Public scalar Quat type.
+//
+// **Quat is intentionally NOT SIMD-ified at the per-instance API level.**
+// v0e bench measured per-instance Quatf compose under SIMD at 0.65× scalar
+// speed — the Hamilton product (16 muls + 12 adds) doesn't amortise the
+// SIMD register load/store cost for a single quaternion.
+//
+// For batched quaternion work (eylem v4 articulation joint composition,
+// animation skinning, particle orientations), use `simd::Soa<TChunk>` with
+// `Vec8f qx, qy, qz, qw` columns — 8 quaternions per AVX op, zero waste.
+//
+// See vec.hpp + mat_simd_f32.hpp for the wider SIMD-vs-scalar architectural
+// rationale.
+
 #include <crd/math/mat.hpp>
 
 #include <cmath>

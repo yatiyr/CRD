@@ -80,6 +80,7 @@ public:
     {
         CRD_LOG_INFO(g_log_smoke_rhi, "draw vertices={} first={}", vertex_count, first_vertex);
     }
+    void draw_instanced(crd::u32, crd::u32, crd::u32, crd::u32) override {}
     void draw_indexed(crd::u32 index_count, crd::u32 first_index, crd::i32 vertex_offset) override
     {
         CRD_LOG_INFO(g_log_smoke_rhi, "draw_indexed indices={} first={} voffset={}",
