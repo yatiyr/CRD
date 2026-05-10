@@ -18,7 +18,9 @@
                 "CMAKE_CXX_STANDARD_REQUIRED": "ON",
                 "CMAKE_CXX_EXTENSIONS": "OFF",
                 "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-                "CRD_BUILD_TESTS": "ON"
+                "CRD_BUILD_TESTS": "ON",
+                "CRD_SIMD_LEVEL": "auto",
+                "CRD_DETERMINISTIC_FP": "ON"
             }
         },
         {
@@ -118,6 +120,13 @@
             "CRD_SHIPPING": "ON"
           }
         },
+        { "name": "win-debug-scalar",
+          "displayName": "Windows Debug + force scalar SIMD (parity check)",
+          "inherits": "win-debug",
+          "cacheVariables": {
+            "CRD_SIMD_LEVEL": "scalar"
+          }
+        },
 
         { "name": "linux-gcc-debug",
           "displayName": "Linux GCC Debug",
@@ -169,6 +178,13 @@
             "CRD_BUILD_BENCHMARKS": "OFF",
             "CRD_SHIPPING": "ON"
           }
+        },
+        { "name": "linux-gcc-debug-scalar",
+          "displayName": "Linux GCC Debug + force scalar SIMD (parity check)",
+          "inherits": "linux-gcc-debug",
+          "cacheVariables": {
+            "CRD_SIMD_LEVEL": "scalar"
+          }
         }
     ],
     "buildPresets":
@@ -180,11 +196,13 @@
         { "name": "win-tidy",            "configurePreset": "win-tidy" },
         { "name": "win-clang-cl",        "configurePreset": "win-clang-cl" },
         { "name": "win-shipping",        "configurePreset": "win-shipping" },
+        { "name": "win-debug-scalar",    "configurePreset": "win-debug-scalar" },
         { "name": "linux-gcc-debug",            "configurePreset": "linux-gcc-debug" },
         { "name": "linux-gcc-release",          "configurePreset": "linux-gcc-release" },
         { "name": "linux-gcc-relwithdebinfo",   "configurePreset": "linux-gcc-relwithdebinfo" },
         { "name": "linux-gcc-asan",             "configurePreset": "linux-gcc-asan" },
-        { "name": "linux-gcc-shipping",         "configurePreset": "linux-gcc-shipping" }
+        { "name": "linux-gcc-shipping",         "configurePreset": "linux-gcc-shipping" },
+        { "name": "linux-gcc-debug-scalar",     "configurePreset": "linux-gcc-debug-scalar" }
     ],
     "testPresets":
     [
@@ -230,6 +248,14 @@
           "environment": {
             "UBSAN_OPTIONS": "print_stacktrace=1"
           }
+        },
+        { "name": "win-debug-scalar",
+          "configurePreset": "win-debug-scalar",
+          "output": { "outputOnFailure": true }
+        },
+        { "name": "linux-gcc-debug-scalar",
+          "configurePreset": "linux-gcc-debug-scalar",
+          "output": { "outputOnFailure": true }
         }
     ]
 }

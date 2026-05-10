@@ -22,6 +22,12 @@ option(CRD_SHIPPING         "Maximum optimizations + debug symbol generation for
 option(CRD_ENABLE_CLANG_TIDY "Run clang-tidy during build" OFF)
 option(CRD_ENABLE_PCH       "Enable default precompiled headers" ON)
 
+# SIMD level + ADR-0063 deterministic-FP contract live in their own module.
+# Any target that links crd-math (everything, transitively) inherits the
+# /arch:AVX2 (or -mavx2 / NEON / scalar) flags + the determinism guarantees.
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+include(CrdSimd)
+
 # ---- Log compile-time minimum level ---------------------------------------
 # Anything strictly below this level is compiled out to ((void)0).
 # Valid values: Trace, Debug, Info, Warn, Error, Critical
@@ -90,34 +96,33 @@ endif()
 # ----- Shipping optimizations + debug symbols --------------------------------
 
 if(CRD_SHIPPING)
+    # Note: /arch:AVX2 / -march come from CrdSimd.cmake (CRD_SIMD_LEVEL).
+    # Note: fast-math intentionally NOT used here — the eylem replay-hash CI
+    #       (ADR-0063) requires bit-exact reproducibility, which fast-math
+    #       breaks (operator reordering, FMA contraction, NaN assumptions).
+    #       Performance gap vs fast-math is a few percent and not worth
+    #       sacrificing determinism. Override with -DCRD_DETERMINISTIC_FP=OFF
+    #       only for benchmark configs that explicitly opt out.
     if(MSVC)
-        # /fp:fast  - allow float reassociation, no NaN/Inf checks
-        # /arch:AVX2 - target AVX2 (all x86 desktops since ~2013)
-        # /Gw        - place each global in its own COMDAT for dead-stripping
-        # /Zi        - emit a separate PDB (required for crash dump symbolication)
+        # /Gw — each global in its own COMDAT for dead-stripping
+        # /Zi — emit a separate PDB (required for crash dump symbolication)
         add_compile_options(
-            $<$<COMPILE_LANGUAGE:CXX,C>:/fp:fast>
-            $<$<COMPILE_LANGUAGE:CXX,C>:/arch:AVX2>
             $<$<COMPILE_LANGUAGE:CXX,C>:/Gw>
             $<$<COMPILE_LANGUAGE:CXX,C>:/Zi>
         )
-        # /DEBUG:FULL  - full PDB (not /DEBUG:FASTLINK) — required for WinDbg post-mortem
-        # /OPT:REF     - strip unreferenced functions (dead code elimination)
-        # /OPT:ICF     - merge identical COMDATs (binary size reduction)
+        # /DEBUG:FULL  — full PDB (not /DEBUG:FASTLINK), required for WinDbg post-mortem
+        # /OPT:REF     — strip unreferenced functions (dead code elimination)
+        # /OPT:ICF     — merge identical COMDATs (binary size reduction)
         add_link_options(/DEBUG:FULL /OPT:REF /OPT:ICF)
     else()
-        # x86-64-v3 = AVX2 + FMA3 + BMI + BMI2 + MOVBE (2013+ desktops)
-        # -ffast-math   - fast floating point (implies -fno-math-errno etc.)
-        # -g             - always emit DWARF debug info for crash symbolication
-        # --build-id     - embed a unique build ID so crash reports can identify the binary
+        # -g          — always emit DWARF debug info for crash symbolication
+        # --build-id  — embed a unique build ID so crash reports can identify the binary
         add_compile_options(
-            $<$<COMPILE_LANGUAGE:CXX,C>:-march=x86-64-v3>
-            $<$<COMPILE_LANGUAGE:CXX,C>:-ffast-math>
             $<$<COMPILE_LANGUAGE:CXX,C>:-g>
         )
         add_link_options(-Wl,--build-id)
     endif()
-    message(STATUS "[crd] Shipping: max optimizations + debug symbols ON")
+    message(STATUS "[crd] Shipping: max optimizations + debug symbols ON (determinism preserved per ADR-0063)")
 endif()
 
 # ----- Compiler Warnings (Cerid targets only — propagates via crd-core) -----
@@ -135,6 +140,15 @@ if(MSVC)
         $<$<COMPILE_LANGUAGE:CXX,C>:/Zc:__cplusplus>
         $<$<COMPILE_LANGUAGE:CXX,C>:/utf-8>
         $<$<COMPILE_LANGUAGE:CXX,C>:/EHsc>
+        # /wd4714 — silence "__forceinline function not inlined". MSVC LTCG
+        # decides inlining at link time based on the whole-program TU mix; when
+        # the cost model declines to inline a hot helper (e.g. crd-log's
+        # should_log) the warning fires inside LNK1257 with no actionable fix
+        # at the source level. Suppressing it globally is the correct call —
+        # the prior per-target suppression on crd-bench just shifted the
+        # symptom to other release-class targets (smoke_imgui_overlay,
+        # smoke_renderer, crd-config-tests, crd-imgui-tests, ...).
+        $<$<COMPILE_LANGUAGE:CXX,C>:/wd4714>
     )
     if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
         target_compile_options(crd-warnings INTERFACE

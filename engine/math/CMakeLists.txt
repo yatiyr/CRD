@@ -11,6 +11,7 @@ target_include_directories(crd-math
 target_link_libraries(crd-math
     PUBLIC
         crd-core
+        crd-simd-flags
 )
 
 if(MSVC)

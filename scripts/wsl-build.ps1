@@ -35,7 +35,8 @@ param(
         'linux-gcc-release',
         'linux-gcc-relwithdebinfo',
         'linux-gcc-asan',
-        'linux-gcc-shipping'
+        'linux-gcc-shipping',
+        'linux-gcc-debug-scalar'
     )]
     [string]$Preset,
 

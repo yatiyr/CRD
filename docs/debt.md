@@ -5,6 +5,29 @@ move to a session log entry and remove from here.
 
 ## Active debt
 
+### Phase 3.1 v0c `crd::math::deterministic` — debt paid 2026-05-10
+
+The v0c original deferral list (5 items) was closed in a same-day v0c-debt-A pass. Status:
+
+- ✅ **f64 overloads** — all 26 functions ship with Cephes f64 coefficients (sin/cos/tan/asin/acos/atan/atan2/exp/exp2/log/log2/log10/pow/expm1/log1p/sinh/cosh/tanh + rounding/abs/copysign/fmod). Proper Cephes Padé for atan (full f64 precision, ≤4 ulp).
+- ✅ **`Vec4f` / `Vec8f` SIMD-batched overloads — full branchless implementation.** sin/cos/exp/log overloads ship for both Vec4f and Vec8f with the same Cephes coefficients as the scalar versions, evaluated branchlessly via `select()` for octant routing + bitwise-mask sign tracking. AVX2 builds emit 256-bit `vaddps/vmulps ymm` for the inner polynomial; SSE2/NEON builds use 128-bit lanes; scalar fallback gives correct lane-wise results. Lane-wise bit-exact parity with scalar is verified across all 12 configs.
+- ✅ **Hyperbolic `sinh`/`cosh`/`tanh`** — f32 + f64.
+- ✅ **`erf`/`erfc`/`gamma`/`lgamma`/`beta`** — f32 + f64 (f32 forwards to f64; f64 uses Cephes erf.c / erfc.c / gamma.c).
+- ✅ **`expm1`/`log1p`** — f32 + f64 (Taylor band for tiny x, exp/log fallback otherwise).
+
+Remaining v0c-related items (re-scoped):
+
+#### Bessel + orthogonal polynomials (deferred to `crd-hesap-stats` v13)
+
+`bessel_j0`/`j1`/`y0`/`y1`/`i0`/`i1`/`k0`/`k1` (Bessel of first/second/modified kind) and `legendre_p`/`hermite_h`/`chebyshev_t` (orthogonal polynomials) are statistics-module concerns — they belong in `crd-hesap-stats` v13 (Phase 3.1.6, ADR-0065) where they sit alongside distribution PDFs/CDFs that consume them. Cephes has battle-tested implementations; the cooker over there will copy them.
+
+**Where referenced:**
+- `engine/math/include/crd/math/deterministic.hpp` — doc-block at the top of the file points at this debt entry.
+- `docs/sessions/2026-05-10-v0c-deterministic.md` — closing session log (original v0c).
+- Pending: `docs/sessions/2026-05-10-v0c-debt-A-paydown.md` — debt-paydown session log.
+
+---
+
 ### Phase 3.0 v1m Öbek system — three deferred follow-ups (2026-05-08)
 
 The full Öbek system (ADR-0058) shipped across v1m1–v1m5b in twelve sub-slices. Three items were explicitly carved out as post-Phase-3.0 follow-ups so the v1m closure stayed focused.
