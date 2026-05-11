@@ -62,8 +62,9 @@ $drive = $repoRootWin.Substring(0, 1).ToLower()
 $tail  = $repoRootWin.Substring(2).Replace('\', '/')
 $repoRootWsl = "/mnt/$drive$tail"
 
-# linux-gcc-shipping is configure+build only on CI (no ctest step) — match.
-$skipTestsForPreset = $SkipTests -or ($Preset -eq 'linux-gcc-shipping')
+# linux-gcc-shipping ran tests + sandbox starting 2026-05-11 (shipping
+# config hardening). All Linux configs run ctest unless -SkipTests.
+$skipTestsForPreset = $SkipTests.IsPresent
 
 # Build the bash command. `set -e` so any failing step exits non-zero.
 # We source ~/.bashrc to pick up VULKAN_SDK from setup-wsl-deps.sh.

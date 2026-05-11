@@ -1,10 +1,17 @@
 # scripts/full-sweep.ps1
 #
 # Single-command Definition-of-Done sweep across every Cerid preset:
-#   Win x 8: debug, relwithdebinfo, release, asan, clang-cl, debug-scalar
-#            (build + ctest) + tidy, shipping (build-only)
+#   Win x 9: debug, relwithdebinfo, release, asan, clang-cl, debug-scalar,
+#            shipping, clang-cl-shipping  (build + ctest + sandbox-smoke)
+#            + tidy (build-only)
 #   Linux x 6: linux-gcc-{debug, relwithdebinfo, release, asan, debug-scalar,
-#              shipping}  (build + ctest; shipping is build-only, mirroring CI)
+#              shipping}  (build + ctest)
+#
+# Shipping configs (win-shipping, win-clang-cl-shipping, linux-gcc-shipping)
+# now run tests + sandbox-smoke per the 2026-05-11 shipping hardening pass —
+# they were build-only previously. Note: win-clang-cl-shipping has thin-LTO
+# DISABLED pending investigation of a clang-cl LTO miscompile in the async
+# resource path (see docs/debt.md). MSVC + GCC shipping retain full LTO.
 #
 # This is the script slice closure must run -- bench-target sweeps and
 # incremental builds DO NOT count, since they miss release-class LNK errors
@@ -42,7 +49,7 @@ $results = [ordered]@{}
 
 if (-not $SkipWin) {
     Write-Host '====================================================================' -ForegroundColor Cyan
-    Write-Host '  WINDOWS x 8                                                       ' -ForegroundColor Cyan
+    Write-Host '  WINDOWS x 9                                                       ' -ForegroundColor Cyan
     Write-Host '====================================================================' -ForegroundColor Cyan
 
     $winSweepScript = Join-Path $repoRoot 'scripts\.full-sweep-win-tmp.ps1'
@@ -52,8 +59,8 @@ if (-not $SkipWin) {
     # "...powershell -Command \"...\"..." blows up with quoting on non-trivial
     # scripts (the v0e closure attempted that and failed silently every time).
     @'
-$presets = @('win-debug','win-relwithdebinfo','win-release','win-asan','win-clang-cl','win-debug-scalar')
-$buildOnly = @('win-tidy','win-shipping')
+$presets = @('win-debug','win-relwithdebinfo','win-release','win-asan','win-clang-cl','win-debug-scalar','win-shipping','win-clang-cl-shipping')
+$buildOnly = @('win-tidy')
 $results = [ordered]@{}
 
 foreach ($p in $presets) {

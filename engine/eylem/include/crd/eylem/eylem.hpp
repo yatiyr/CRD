@@ -14,7 +14,9 @@
 #include <crd/eylem/collision_filter.hpp>
 #include <crd/eylem/force_field.hpp>
 #include <crd/eylem/joint.hpp>
+#include <crd/eylem/mass_properties.hpp>
 #include <crd/eylem/material.hpp>
+#include <crd/eylem/material_pool.hpp>
 #include <crd/eylem/physics_config.hpp>
 #include <crd/eylem/physics_scene.hpp>
 #include <crd/eylem/rigid_body.hpp>

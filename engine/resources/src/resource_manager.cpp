@@ -461,7 +461,7 @@ void ResourceManager::touch_in_am(ResourceId id)
     }
 }
 
-void ResourceManager::evict_block_locked(ResourceId id, ResourceControlBlock* block)
+CRD_NOINLINE void ResourceManager::evict_block_locked(ResourceId id, ResourceControlBlock* block)
 {
     CRD_ASSERT_MSG(block->use_count() == 0U, "evict_block_locked: block has active handles");
     CRD_ASSERT_MSG(!block->pinned, "evict_block_locked: block is pinned");
@@ -496,7 +496,7 @@ void ResourceManager::evict_block_locked(ResourceId id, ResourceControlBlock* bl
     }
 }
 
-void ResourceManager::try_evict_to_budget()
+CRD_NOINLINE void ResourceManager::try_evict_to_budget()
 {
     // Called under m_mutex. Evict zero-handle, un-pinned, Ready blocks until
     // m_memory_used <= m_memory_budget, preferring A1in (FIFO) over Am (LRU).
@@ -932,7 +932,7 @@ ResourceControlBlock* ResourceManager::load_async_impl(ResourceId id)
 
 // ── Async job body ─────────────────────────────────────────────────────────
 
-void ResourceManager::run_load_job(void* raw_ctx) noexcept
+CRD_NOINLINE void ResourceManager::run_load_job(void* raw_ctx) noexcept
 {
     auto* ctx  = static_cast<AsyncLoadCtx*>(raw_ctx);
     ResourceControlBlock* block = ctx->block;
@@ -1161,7 +1161,7 @@ ResourceControlBlock* ResourceManager::load_streamed_impl(ResourceId id)
     return block;
 }
 
-void ResourceManager::run_stream_load_job(void* raw_ctx) noexcept
+CRD_NOINLINE void ResourceManager::run_stream_load_job(void* raw_ctx) noexcept
 {
     auto* ctx  = static_cast<StreamLoadCtx*>(raw_ctx);
     ResourceControlBlock* block = ctx->block;

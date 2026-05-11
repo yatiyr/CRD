@@ -875,7 +875,7 @@ Query<Cs...>::Query(World& world)
     if constexpr (sizeof...(Cs) > 0)
     {
         ComponentId ids[] = {world.components().template id_of<Cs>()...};
-        for (ComponentId id : ids)
+        for ([[maybe_unused]] ComponentId id : ids)
         {
             CRD_ASSERT(!id.is_null() && "Query<Cs...>: every Cs must be a registered component type");
         }

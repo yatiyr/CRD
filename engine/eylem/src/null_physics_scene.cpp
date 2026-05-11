@@ -6,6 +6,8 @@
 // interface; v1b ships the real implementation in crd-eylem-rigid3d.
 
 #include <crd/containers/array.hpp>
+#include <crd/eylem/mass_properties.hpp>
+#include <crd/eylem/material_pool.hpp>
 #include <crd/eylem/physics_scene.hpp>
 
 #include <memory>
@@ -53,12 +55,68 @@ public:
 
     [[nodiscard]] crd::usize body_count() const noexcept override { return m_bodies.size(); }
 
-    [[nodiscard]] ColliderId add_collider(BodyId          /*body*/,
-                                          const Collider& collider,
-                                          const Material& material) override
+    // ---- ADR-0069 §11 — material pool surface --------------------------
+    [[nodiscard]] MaterialId create_material(const Material& material) override
+    {
+        return m_materials.insert(material);
+    }
+
+    void update_material(MaterialId id, const Material& material) noexcept override
+    {
+        m_materials.update(id, material);
+    }
+
+    [[nodiscard]] const Material& material(MaterialId id) const noexcept override
+    {
+        return m_materials.get(id);
+    }
+
+    [[nodiscard]] bool has_material(MaterialId id) const noexcept override
+    {
+        return m_materials.contains(id);
+    }
+
+    [[nodiscard]] DerivedMassProperties derive_body_mass(BodyId id) const override
+    {
+        if (!has_body(id))
+        {
+            return DerivedMassProperties{};
+        }
+
+        // Collect colliders for this body in storage order — which is
+        // ascending ColliderId order in the null impl (m_colliders is
+        // append-only and ColliderId.index() = position + 1). The free
+        // function then runs the deterministic Σ in that exact order.
+        crd::containers::Array<Collider> body_colliders{m_colliders.allocator()};
+        body_colliders.reserve(m_colliders.size());
+        for (const StoredCollider& sc : m_colliders)
+        {
+            if (sc.body == id)
+            {
+                body_colliders.push_back(sc.collider);
+            }
+        }
+
+        const auto accessor = +[](void* user_data, MaterialId mid) -> const Material&
+        {
+            return static_cast<const MaterialPool*>(user_data)->get(mid);
+        };
+        // const_cast: MaterialPool::get is const-correct; the accessor
+        // signature uses void* for type erasure across cooker / scene
+        // callers and discards const at the boundary.
+        return derive_mass_properties(
+            crd::containers::ConstSpan<Collider>(body_colliders.data(), body_colliders.size()),
+            accessor,
+            const_cast<MaterialPool*>(&m_materials));
+    }
+
+    using IPhysicsScene::add_collider; // bring the 3-arg convenience overload into scope
+
+    [[nodiscard]] ColliderId add_collider(BodyId          body,
+                                          const Collider& collider) override
     {
         const crd::u32 idx = static_cast<crd::u32>(m_colliders.size()) + 1U;
-        m_colliders.push_back(StoredCollider{collider, material});
+        m_colliders.push_back(StoredCollider{body, collider});
         return ColliderId::make(idx, /*generation=*/1U);
     }
 
@@ -153,13 +211,20 @@ public:
     }
 
 private:
+    // v1a-material-c: per-collider material is referenced via Collider::material
+    // (a MaterialId handle into m_materials). The collider record no longer
+    // stores Material inline.
+    // v1a-material-d: track the owning body so derive_body_mass can walk
+    // the body's collider compound in ascending ColliderId order (storage
+    // order == ColliderId order in the null impl).
     struct StoredCollider
     {
+        BodyId   body;
         Collider collider;
-        Material material;
     };
 
     PhysicsConfig                  m_config;
+    MaterialPool                           m_materials;
     crd::containers::Array<RigidBody>      m_bodies;
     crd::containers::Array<StoredCollider> m_colliders;
     crd::containers::Array<Joint>          m_joints;

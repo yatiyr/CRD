@@ -112,12 +112,28 @@
           }
         },
         { "name": "win-shipping",
-          "displayName": "Windows Shipping (max opts + PDB for crash diagnostics)",
+          "displayName": "Windows MSVC Shipping (max opts + PDB; tests + sandbox enabled)",
           "inherits": "win-release",
           "cacheVariables": {
-            "CRD_BUILD_TESTS": "OFF",
+            "CRD_BUILD_TESTS": "ON",
             "CRD_BUILD_BENCHMARKS": "OFF",
             "CRD_SHIPPING": "ON"
+          }
+        },
+        { "name": "win-clang-cl-shipping",
+          "displayName": "Windows clang-cl Shipping (max opts + thin-LTO + PDB; tests + sandbox enabled)",
+          "inherits": "win-base",
+          "cacheVariables": {
+            "CMAKE_BUILD_TYPE": "Release",
+            "CMAKE_C_COMPILER": "clang-cl",
+            "CMAKE_CXX_COMPILER": "clang-cl",
+            "CMAKE_INTERPROCEDURAL_OPTIMIZATION": "ON",
+            "CRD_ENABLE_ASSERTS": "OFF",
+            "CRD_ENABLE_PROFILING": "OFF",
+            "CRD_BUILD_TESTS": "ON",
+            "CRD_BUILD_BENCHMARKS": "OFF",
+            "CRD_SHIPPING": "ON",
+            "_NOTE_lto_isolation": "engine/resources/CMakeLists.txt isolates crdr.cpp from clang-cl thin-LTO (single-file -fno-lto, mirrors crd-jobs worker_pool.cpp/Od pattern); rest of shipping module gets full LTO"
           }
         },
         { "name": "win-debug-scalar",
@@ -169,12 +185,14 @@
           }
         },
         { "name": "linux-gcc-shipping",
-          "displayName": "Linux GCC Shipping (max opts + DWARF for crash diagnostics)",
+          "displayName": "Linux GCC Shipping (max opts + DWARF; tests + sandbox enabled)",
           "inherits": "linux-base",
           "cacheVariables": {
             "CMAKE_BUILD_TYPE": "Release",
             "CMAKE_INTERPROCEDURAL_OPTIMIZATION": "ON",
-            "CRD_BUILD_TESTS": "OFF",
+            "CRD_ENABLE_ASSERTS": "OFF",
+            "CRD_ENABLE_PROFILING": "OFF",
+            "CRD_BUILD_TESTS": "ON",
             "CRD_BUILD_BENCHMARKS": "OFF",
             "CRD_SHIPPING": "ON"
           }
@@ -196,6 +214,7 @@
         { "name": "win-tidy",            "configurePreset": "win-tidy" },
         { "name": "win-clang-cl",        "configurePreset": "win-clang-cl" },
         { "name": "win-shipping",        "configurePreset": "win-shipping" },
+        { "name": "win-clang-cl-shipping", "configurePreset": "win-clang-cl-shipping" },
         { "name": "win-debug-scalar",    "configurePreset": "win-debug-scalar" },
         { "name": "linux-gcc-debug",            "configurePreset": "linux-gcc-debug" },
         { "name": "linux-gcc-release",          "configurePreset": "linux-gcc-release" },
@@ -255,6 +274,18 @@
         },
         { "name": "linux-gcc-debug-scalar",
           "configurePreset": "linux-gcc-debug-scalar",
+          "output": { "outputOnFailure": true }
+        },
+        { "name": "win-shipping",
+          "configurePreset": "win-shipping",
+          "output": { "outputOnFailure": true }
+        },
+        { "name": "win-clang-cl-shipping",
+          "configurePreset": "win-clang-cl-shipping",
+          "output": { "outputOnFailure": true }
+        },
+        { "name": "linux-gcc-shipping",
+          "configurePreset": "linux-gcc-shipping",
           "output": { "outputOnFailure": true }
         }
     ]

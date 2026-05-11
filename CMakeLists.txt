@@ -103,24 +103,58 @@ if(CRD_SHIPPING)
     #       Performance gap vs fast-math is a few percent and not worth
     #       sacrificing determinism. Override with -DCRD_DETERMINISTIC_FP=OFF
     #       only for benchmark configs that explicitly opt out.
+    # Note: stack-buffer security checks (/GS on MSVC, -fstack-protector
+    #       on GCC/Clang) intentionally LEFT ON — disabling them is a real
+    #       security regression for a few percent of perf, never worth it.
     if(MSVC)
-        # /Gw — each global in its own COMDAT for dead-stripping
-        # /Zi — emit a separate PDB (required for crash dump symbolication)
+        # /O2          — max optimisation (set by Release build type; restated
+        #                here for documentation: /Og /Oi /Ot /Oy /Ob2 /GF /Gy)
+        # /Gw          — each global in its own COMDAT for dead-stripping
+        # /Gy          — function-level linking (already in /O2; restated)
+        # /Zc:inline   — strip inline-only functions never called externally;
+        #                helps the linker dead-strip more aggressively
+        # /Zi          — emit a separate PDB (required for crash dump symbolication)
+        #
+        # Note: /Ob3 (extra-aggressive inlining) was tried as a shipping
+        # flag but caused SEGFAULTs in the resource async-load path under
+        # clang-cl thin-LTO via dead-store-propagation across inlined
+        # `payload.store(nullptr)` callbacks. /Ob2 (the /O2 default) is the
+        # ceiling that survives the elite-tier shipping bar across all
+        # three compilers (MSVC / clang-cl / GCC). The cost: a few percent
+        # of inlining the LTO pass would otherwise pick up — worth it for
+        # shipping correctness under the strictest LTO settings the
+        # toolchain offers.
         add_compile_options(
             $<$<COMPILE_LANGUAGE:CXX,C>:/Gw>
+            $<$<COMPILE_LANGUAGE:CXX,C>:/Gy>
+            $<$<COMPILE_LANGUAGE:CXX,C>:/Zc:inline>
             $<$<COMPILE_LANGUAGE:CXX,C>:/Zi>
         )
         # /DEBUG:FULL  — full PDB (not /DEBUG:FASTLINK), required for WinDbg post-mortem
         # /OPT:REF     — strip unreferenced functions (dead code elimination)
         # /OPT:ICF     — merge identical COMDATs (binary size reduction)
+        # /LTCG        — link-time codegen (driven via CMAKE_INTERPROCEDURAL_OPTIMIZATION)
         add_link_options(/DEBUG:FULL /OPT:REF /OPT:ICF)
     else()
-        # -g          — always emit DWARF debug info for crash symbolication
-        # --build-id  — embed a unique build ID so crash reports can identify the binary
+        # -g                       — always emit DWARF debug info for crash symbolication
+        # -ffunction-sections      — each function in its own section
+        # -fdata-sections          — each global in its own section
+        #                            (the two above let the linker drop unused
+        #                            funcs/data via --gc-sections without LTO
+        #                            having to fold them at IR time)
+        # -funroll-loops           — aggressive loop unrolling; safe vs ADR-0063
+        #                            because it does not reorder FP ops, only
+        #                            duplicates the loop body
+        # -Wl,--gc-sections        — discard unreferenced sections at link time
+        # -Wl,--build-id           — embed a unique build ID so crash reports
+        #                            can identify the binary
         add_compile_options(
             $<$<COMPILE_LANGUAGE:CXX,C>:-g>
+            $<$<COMPILE_LANGUAGE:CXX,C>:-ffunction-sections>
+            $<$<COMPILE_LANGUAGE:CXX,C>:-fdata-sections>
+            $<$<COMPILE_LANGUAGE:CXX,C>:-funroll-loops>
         )
-        add_link_options(-Wl,--build-id)
+        add_link_options(-Wl,--build-id -Wl,--gc-sections)
     endif()
     message(STATUS "[crd] Shipping: max optimizations + debug symbols ON (determinism preserved per ADR-0063)")
 endif()

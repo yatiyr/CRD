@@ -264,8 +264,16 @@ private:
 public:
     // Job entry points. Public so anonymous-namespace SBO closures can call them.
     // Not part of the user-facing API; do not call directly.
-    static void run_load_job   (void* ctx) noexcept;
-    static void run_stream_load_job(void* ctx) noexcept;
+    //
+    // CRD_NOINLINE for the same reason as evict_block_locked /
+    // try_evict_to_budget above — these contain `payload.store(nullptr)`
+    // after-unload paths that LTO (clang-cl thin-LTO + /Ob3, MSVC LTCG)
+    // can miscompile via dead-store-propagation if inlined into the
+    // job-system fiber dispatch code. First surfaced as 4 SEGFAULTs in
+    // load_async / load_streamed tests under win-clang-cl-shipping;
+    // mirrors the documented MSVC-LTCG fix for evict_block_locked.
+    CRD_NOINLINE static void run_load_job   (void* ctx) noexcept;
+    CRD_NOINLINE static void run_stream_load_job(void* ctx) noexcept;
 };
 
 // ── Template implementations (must be in header) ────────────────────────────

@@ -19,31 +19,18 @@ namespace
 // Vec8f / Vec4f don't expose a per-lane write directly. The store/modify/
 // load round-trip is the canonical pattern (also used by gather4/scatter8
 // in crd-math::simd::soa).
-CRD_FORCEINLINE void put_lane8(crd::math::simd::Vec8f& col, crd::usize lane_idx, crd::f32 value) noexcept
+// Per-lane scalar write into a SIMD column. Templated on column type so
+// exactly one specialisation gets emitted per build (Vec8f on AVX2,
+// Vec4f on scalar fallback) — no unused-function warnings under
+// -Werror,-Wunused-function.
+template <typename ColT>
+CRD_FORCEINLINE void put_lane(ColT& col, crd::usize lane_idx, crd::f32 value) noexcept
 {
-    crd::f32 buf[8];
+    constexpr crd::usize kLanes = sizeof(ColT) / sizeof(crd::f32);
+    crd::f32 buf[kLanes];
     col.store(buf);
     buf[lane_idx] = value;
-    col = crd::math::simd::Vec8f::load(buf);
-}
-
-CRD_FORCEINLINE void put_lane4(crd::math::simd::Vec4f& col, crd::usize lane_idx, crd::f32 value) noexcept
-{
-    crd::f32 buf[4];
-    col.store(buf);
-    buf[lane_idx] = value;
-    col = crd::math::simd::Vec4f::load(buf);
-}
-
-// Single-name overload set so call sites stay terse regardless of which
-// column type the active build uses (Vec8f on AVX2, Vec4f elsewhere).
-CRD_FORCEINLINE void put_lane(crd::math::simd::Vec8f& col, crd::usize lane_idx, crd::f32 value) noexcept
-{
-    put_lane8(col, lane_idx, value);
-}
-CRD_FORCEINLINE void put_lane(crd::math::simd::Vec4f& col, crd::usize lane_idx, crd::f32 value) noexcept
-{
-    put_lane4(col, lane_idx, value);
+    col = ColT::load(buf);
 }
 } // namespace
 

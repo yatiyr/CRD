@@ -157,10 +157,21 @@ static_assert(sizeof(ColliderFlags) == 1, "ColliderFlags must pack to 1 byte");
 // `local_position` and `local_rotation` express the collider's pose in the
 // owning body's local frame. A body with multiple colliders forms a
 // compound shape (PhysX `PxShape` family).
+//
+// `material` is the per-collider MaterialId handle (ADR-0069 §3 + §11).
+// Every collider on every body references exactly one MaterialPool slot.
+// Default = MaterialId::default_material() (slot 1, always allocated by
+// the scene's MaterialPool — safe to read on any freshly constructed
+// collider). Cooker / scene loader pre-allocates materials via
+// scene->create_material() then sets this field on streamed colliders;
+// the scene's add_collider(body, collider) then references the existing
+// pool slot rather than allocating a new one.
 struct Collider
 {
     ColliderShape    shape           = ColliderShape::Sphere;
     ColliderFlags    flags{};
+    // 2 bytes pad here (compiler-inserted) before the 4-byte MaterialId.
+    MaterialId       material        = MaterialId::default_material();
     crd::math::Vec3f local_position{0.0F, 0.0F, 0.0F};
     crd::math::Quatf local_rotation{0.0F, 0.0F, 0.0F, 1.0F};
 

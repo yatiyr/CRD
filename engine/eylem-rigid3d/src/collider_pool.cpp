@@ -14,23 +14,18 @@ namespace crd::eylem_rigid3d
 {
 namespace
 {
-// Same store/modify/load pattern as BodyPool's put_lane. Vec8f / Vec4f
-// don't expose per-lane writes directly. Overload set keeps call sites
-// agnostic to the active lane width.
-CRD_FORCEINLINE void put_lane(crd::math::simd::Vec8f& col, crd::usize lane_idx, crd::f32 value) noexcept
+// Same store/modify/load pattern as BodyPool's put_lane. Templated on
+// column type so exactly one specialisation gets emitted per build
+// (Vec8f on AVX2, Vec4f on scalar fallback) — no unused-function
+// warnings under -Werror,-Wunused-function.
+template <typename ColT>
+CRD_FORCEINLINE void put_lane(ColT& col, crd::usize lane_idx, crd::f32 value) noexcept
 {
-    crd::f32 buf[8];
+    constexpr crd::usize kLanes = sizeof(ColT) / sizeof(crd::f32);
+    crd::f32 buf[kLanes];
     col.store(buf);
     buf[lane_idx] = value;
-    col = crd::math::simd::Vec8f::load(buf);
-}
-
-CRD_FORCEINLINE void put_lane(crd::math::simd::Vec4f& col, crd::usize lane_idx, crd::f32 value) noexcept
-{
-    crd::f32 buf[4];
-    col.store(buf);
-    buf[lane_idx] = value;
-    col = crd::math::simd::Vec4f::load(buf);
+    col = ColT::load(buf);
 }
 
 // Bump generation, wrapping 0xFF -> 1 (0 stays reserved as "never allocated").

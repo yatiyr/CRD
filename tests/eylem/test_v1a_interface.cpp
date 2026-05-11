@@ -72,26 +72,112 @@ TEST_CASE("eylem v1a ID generation/index round-trips correctly", "[eylem][v1a][f
     STATIC_REQUIRE_FALSE(std::is_same_v<BodyId, ColliderId>);
 }
 
-TEST_CASE("eylem v1a Material defaults match documented contract", "[eylem][v1a][freeze]")
+TEST_CASE("eylem v1a-material Material defaults match ADR-0069 contract",
+          "[eylem][v1a][material][freeze]")
 {
-    STATIC_REQUIRE(sizeof(Material) == 20);
+    // ADR-0069 §1: 64-byte cache-line struct, alignment 4, locked at v1a freeze.
+    STATIC_REQUIRE(sizeof(Material)  == 64);
+    STATIC_REQUIRE(alignof(Material) ==  4);
     STATIC_REQUIRE(std::is_trivially_copyable_v<Material>);
 
     constexpr Material m{};
-    REQUIRE(m.static_friction  == 0.5F);
-    REQUIRE(m.dynamic_friction == 0.5F);
-    REQUIRE(m.restitution      == 0.0F);
-    REQUIRE(m.density          == 1000.0F);
-    REQUIRE(m.friction_combine    == CombineMode::Average);
-    REQUIRE(m.restitution_combine == CombineMode::Max);
+    // Friction defaults
+    REQUIRE(m.friction_model       == FrictionModel::Coulomb);
+    REQUIRE(m.friction_combine     == CombineMode::GeometricMean); // ADR-0069 §2 default
+    REQUIRE(m.friction_static      == 0.5F);
+    REQUIRE(m.friction_dynamic     == 0.5F);
+    REQUIRE(m.friction_anisotropy.x == 1.0F);
+    REQUIRE(m.friction_anisotropy.y == 1.0F);
+    REQUIRE(m.friction_anisotropy.z == 1.0F);
+    REQUIRE(m.stribeck_velocity    == 0.01F);
+    REQUIRE(m.viscous_coefficient  == 0.0F);
+    // Restitution defaults
+    REQUIRE(m.restitution_model    == RestitutionModel::Constant);
+    REQUIRE(m.restitution_combine  == CombineMode::Max); // ADR-0069 §2 default (PhysX convention)
+    REQUIRE(m.restitution          == 0.0F);
+    REQUIRE(m.restitution_decay    == 0.0F);
+    // Surface defaults
+    REQUIRE(m.surface_velocity.x == 0.0F);
+    REQUIRE(m.surface_velocity.y == 0.0F);
+    REQUIRE(m.surface_velocity.z == 0.0F);
+    // Mass derivation default — water; designer-friendly (1m³ box → 1000 kg)
+    REQUIRE(m.density              == 1000.0F);
+    // Damage / fracture reservation (post-v1; v1 reads but ignores)
+    REQUIRE(m.yield_stress         == 0.0F);
 }
 
-TEST_CASE("eylem v1a CombineMode enum values are pinned", "[eylem][v1a][freeze]")
+TEST_CASE("eylem v1a-material CombineMode enum values are pinned",
+          "[eylem][v1a][material][freeze]")
 {
-    STATIC_REQUIRE(static_cast<int>(CombineMode::Average)  == 0);
-    STATIC_REQUIRE(static_cast<int>(CombineMode::Min)      == 1);
-    STATIC_REQUIRE(static_cast<int>(CombineMode::Max)      == 2);
-    STATIC_REQUIRE(static_cast<int>(CombineMode::Multiply) == 3);
+    STATIC_REQUIRE(static_cast<int>(CombineMode::Average)       == 0);
+    STATIC_REQUIRE(static_cast<int>(CombineMode::Min)           == 1);
+    STATIC_REQUIRE(static_cast<int>(CombineMode::Max)           == 2);
+    STATIC_REQUIRE(static_cast<int>(CombineMode::Multiply)      == 3);
+    STATIC_REQUIRE(static_cast<int>(CombineMode::GeometricMean) == 4); // ADR-0069 additive slot
+}
+
+TEST_CASE("eylem v1a-material FrictionModel enum values are pinned",
+          "[eylem][v1a][material][freeze]")
+{
+    // ADR-0069 §2 — closed enum; new formulas require major-version bump.
+    STATIC_REQUIRE(static_cast<int>(FrictionModel::Coulomb)        == 0);
+    STATIC_REQUIRE(static_cast<int>(FrictionModel::Stribeck)       == 1);
+    STATIC_REQUIRE(static_cast<int>(FrictionModel::LuGre)          == 2);
+    STATIC_REQUIRE(static_cast<int>(FrictionModel::Karnopp)        == 3);
+    STATIC_REQUIRE(static_cast<int>(FrictionModel::Anisotropic)    == 4);
+    STATIC_REQUIRE(static_cast<int>(FrictionModel::FrictionTriple) == 5);
+}
+
+TEST_CASE("eylem v1a-material RestitutionModel enum values are pinned",
+          "[eylem][v1a][material][freeze]")
+{
+    STATIC_REQUIRE(static_cast<int>(RestitutionModel::Constant)     == 0);
+    STATIC_REQUIRE(static_cast<int>(RestitutionModel::Newton)       == 1);
+    STATIC_REQUIRE(static_cast<int>(RestitutionModel::HuntCrossley) == 2);
+}
+
+TEST_CASE("eylem v1a-material MaterialId layout matches Body/Collider/Joint pattern",
+          "[eylem][v1a][material][freeze]")
+{
+    // ADR-0069 §3: [generation:8 | index:24]; same as BodyId/ColliderId/JointId.
+    STATIC_REQUIRE(sizeof(MaterialId) == 4);
+    STATIC_REQUIRE(std::is_trivially_copyable_v<MaterialId>);
+    STATIC_REQUIRE(std::is_standard_layout_v<MaterialId>);
+
+    REQUIRE(MaterialId{}.is_null());
+    REQUIRE(MaterialId::null().is_null());
+
+    // Slot 1 / generation 1 — the shipped `Default` material.
+    REQUIRE_FALSE(MaterialId::default_material().is_null());
+    REQUIRE(MaterialId::default_material().index()      == 1U);
+    REQUIRE(MaterialId::default_material().generation() == 1U);
+
+    const auto id = MaterialId::make(/*index=*/12345U, /*generation=*/7U);
+    REQUIRE(id.index()      == 12345U);
+    REQUIRE(id.generation() == 7U);
+
+    // Max addressable: index = 2^24 - 1, generation = 255.
+    const auto idmax = MaterialId::make(0x00FF'FFFFU, 255U);
+    REQUIRE(idmax.index()      == 0x00FF'FFFFU);
+    REQUIRE(idmax.generation() == 255U);
+
+    // Strong typing: MaterialId distinct from BodyId / ColliderId / JointId.
+    STATIC_REQUIRE_FALSE(std::is_same_v<MaterialId, BodyId>);
+    STATIC_REQUIRE_FALSE(std::is_same_v<MaterialId, ColliderId>);
+    STATIC_REQUIRE_FALSE(std::is_same_v<MaterialId, JointId>);
+}
+
+TEST_CASE("eylem v1a-material default_material_value matches Material{}",
+          "[eylem][v1a][material]")
+{
+    constexpr Material a = default_material_value();
+    constexpr Material b{};
+    REQUIRE(a.friction_model    == b.friction_model);
+    REQUIRE(a.friction_static   == b.friction_static);
+    REQUIRE(a.friction_dynamic  == b.friction_dynamic);
+    REQUIRE(a.restitution_model == b.restitution_model);
+    REQUIRE(a.restitution       == b.restitution);
+    REQUIRE(a.density           == b.density);
 }
 
 TEST_CASE("eylem v1a DeterminismMode enum values are pinned", "[eylem][v1a][freeze]")
@@ -256,6 +342,374 @@ TEST_CASE("eylem v1a NullPhysicsScene add_collider + add_joint round-trip", "[ey
     const JointId jid = scene->add_joint(j);
     REQUIRE_FALSE(jid.is_null());
     REQUIRE(scene->has_joint(jid));
+}
+
+// ===========================================================================
+// v1a-material-b — MaterialPool + IPhysicsScene material API behaviour
+// ===========================================================================
+
+TEST_CASE("eylem v1a-material-b MaterialPool default-allocates slot 1",
+          "[eylem][v1a][material]")
+{
+    crd::eylem::MaterialPool pool;
+    // Slot 0 is the null sentinel; slot 1 is default_material.
+    // size() reports user-visible count = 1 (the default).
+    REQUIRE(pool.size() == 1U);
+
+    // The default MaterialId resolves to the shipped default.
+    REQUIRE(pool.contains(MaterialId::default_material()));
+    const Material& def = pool.get(MaterialId::default_material());
+    REQUIRE(def.friction_static  == default_material_value().friction_static);
+    REQUIRE(def.friction_dynamic == default_material_value().friction_dynamic);
+    REQUIRE(def.density          == default_material_value().density);
+
+    // Null id is not contained; get() falls back to the default.
+    REQUIRE_FALSE(pool.contains(MaterialId::null()));
+    const Material& fallback = pool.get(MaterialId::null());
+    REQUIRE(fallback.friction_static == def.friction_static);
+}
+
+TEST_CASE("eylem v1a-material-b MaterialPool insert / update round-trips",
+          "[eylem][v1a][material]")
+{
+    crd::eylem::MaterialPool pool;
+
+    Material rubber{};
+    rubber.friction_static  = 1.20F;
+    rubber.friction_dynamic = 1.10F;
+    rubber.restitution      = 0.83F;
+    rubber.density          = 1100.0F;
+
+    const MaterialId id = pool.insert(rubber);
+    REQUIRE_FALSE(id.is_null());
+    REQUIRE(id.index() == 2U);     // slot 0=null, slot 1=default, first user slot=2
+    REQUIRE(id.generation() == 1U);
+    REQUIRE(pool.contains(id));
+    REQUIRE(pool.size() == 2U);    // default + rubber
+
+    const Material& read = pool.get(id);
+    REQUIRE(read.friction_static  == 1.20F);
+    REQUIRE(read.friction_dynamic == 1.10F);
+    REQUIRE(read.restitution      == 0.83F);
+    REQUIRE(read.density          == 1100.0F);
+
+    // Update mutates in place; the handle stays valid.
+    Material rubber_v2 = rubber;
+    rubber_v2.friction_static = 1.50F;
+    pool.update(id, rubber_v2);
+    REQUIRE(pool.get(id).friction_static == 1.50F);
+
+    // Out-of-range / null updates are silent no-ops.
+    pool.update(MaterialId::null(), rubber);
+    pool.update(MaterialId::make(99999U, 1U), rubber);
+    REQUIRE(pool.get(id).friction_static == 1.50F); // unchanged
+}
+
+TEST_CASE("eylem v1a-material-b MaterialPool determinism index sequence is insert order",
+          "[eylem][v1a][material][determinism]")
+{
+    // Two pools constructed in the same way + given the same insert sequence
+    // produce identical index assignments. This is the core determinism
+    // contract for content-addressed cooker materials (ADR-0067 §3 pattern).
+    crd::eylem::MaterialPool a;
+    crd::eylem::MaterialPool b;
+    Material m1{}; m1.density = 7850.0F;  // steel-ish
+    Material m2{}; m2.density = 920.0F;   // ice-ish
+    Material m3{}; m3.density = 700.0F;   // oak-ish
+    REQUIRE(a.insert(m1).index() == b.insert(m1).index());
+    REQUIRE(a.insert(m2).index() == b.insert(m2).index());
+    REQUIRE(a.insert(m3).index() == b.insert(m3).index());
+    REQUIRE(a.size() == b.size());
+}
+
+TEST_CASE("eylem v1a-material-b NullPhysicsScene exposes MaterialPool API",
+          "[eylem][v1a][material][null]")
+{
+    auto scene = make_null_physics_scene(PhysicsConfig{});
+
+    // Default material is always available, even without any create_material calls.
+    REQUIRE(scene->has_material(MaterialId::default_material()));
+    const Material& def = scene->material(MaterialId::default_material());
+    REQUIRE(def.density == default_material_value().density);
+
+    Material steel{};
+    steel.friction_static  = 0.74F;
+    steel.friction_dynamic = 0.57F;
+    steel.restitution      = 0.50F;
+    steel.density          = 7850.0F;
+
+    const MaterialId steel_id = scene->create_material(steel);
+    REQUIRE_FALSE(steel_id.is_null());
+    REQUIRE(scene->has_material(steel_id));
+
+    const Material& read = scene->material(steel_id);
+    REQUIRE(read.friction_static == 0.74F);
+    REQUIRE(read.density         == 7850.0F);
+
+    // update_material mutates in place; the handle stays valid.
+    Material steel_v2 = steel;
+    steel_v2.restitution = 0.30F;
+    scene->update_material(steel_id, steel_v2);
+    REQUIRE(scene->material(steel_id).restitution == 0.30F);
+
+    // Null and out-of-range queries return false; material(null) falls back to default.
+    REQUIRE_FALSE(scene->has_material(MaterialId::null()));
+    REQUIRE_FALSE(scene->has_material(MaterialId::make(99999U, 1U)));
+    REQUIRE(scene->material(MaterialId::null()).density == default_material_value().density);
+}
+
+// ===========================================================================
+// v1a-material-c — per-collider Collider::material (MaterialId handle)
+// ===========================================================================
+
+TEST_CASE("eylem v1a-material-c Collider defaults material to MaterialId::default_material",
+          "[eylem][v1a][material]")
+{
+    constexpr Collider c{};
+    REQUIRE(c.material.index()      == MaterialId::default_material().index());
+    REQUIRE(c.material.generation() == MaterialId::default_material().generation());
+    REQUIRE_FALSE(c.material.is_null());
+}
+
+TEST_CASE("eylem v1a-material-c add_collider 2-arg overload reads pre-set Collider::material",
+          "[eylem][v1a][material][null]")
+{
+    auto scene = make_null_physics_scene(PhysicsConfig{});
+    const BodyId body = scene->add_body(RigidBody{});
+
+    Material rubber{};
+    rubber.friction_static  = 1.20F;
+    rubber.friction_dynamic = 1.10F;
+    rubber.restitution      = 0.83F;
+    rubber.density          = 1100.0F;
+    const MaterialId rubber_id = scene->create_material(rubber);
+    REQUIRE_FALSE(rubber_id.is_null());
+
+    Collider col{};
+    col.shape           = ColliderShape::Box;
+    col.box.half_extents = {0.5F, 0.5F, 0.5F};
+    col.material        = rubber_id;
+
+    const ColliderId cid = scene->add_collider(body, col);
+    REQUIRE_FALSE(cid.is_null());
+    REQUIRE(scene->has_collider(cid));
+
+    // Material handle on the collider survives round-trip and resolves to
+    // the same pool entry.
+    REQUIRE(scene->material(rubber_id).friction_static == 1.20F);
+    REQUIRE(scene->material(rubber_id).density         == 1100.0F);
+}
+
+TEST_CASE("eylem v1a-material-c add_collider 3-arg convenience allocates pool slot",
+          "[eylem][v1a][material][null]")
+{
+    auto scene = make_null_physics_scene(PhysicsConfig{});
+    const BodyId body = scene->add_body(RigidBody{});
+
+    Material steel{};
+    steel.friction_static  = 0.74F;
+    steel.friction_dynamic = 0.57F;
+    steel.density          = 7850.0F;
+
+    Collider col{};
+    col.shape           = ColliderShape::Sphere;
+    col.sphere.radius   = 0.25F;
+    // Note: leaving col.material at its default — the 3-arg overload
+    // overwrites it with the freshly created material's id.
+
+    // 3-arg convenience overload: creates the material, attaches the
+    // returned MaterialId on a copy of `col`, then forwards to add_collider(body, c).
+    const ColliderId cid = scene->add_collider(body, col, steel);
+    REQUIRE_FALSE(cid.is_null());
+    REQUIRE(scene->has_collider(cid));
+
+    // The pool now contains the steel material — there's exactly one user
+    // material (steel) on top of the auto-allocated default.
+    // (The 3-arg path inserts via create_material; index = 2 since slot 0
+    // = null sentinel and slot 1 = default.)
+    const MaterialId expected = MaterialId::make(2U, 1U);
+    REQUIRE(scene->has_material(expected));
+    REQUIRE(scene->material(expected).density         == 7850.0F);
+    REQUIRE(scene->material(expected).friction_static == 0.74F);
+}
+
+// ===========================================================================
+// v1a-material-d — mass derivation (volume × density, ColliderId-stable Σ)
+// ===========================================================================
+
+#include <cmath>
+
+namespace
+{
+constexpr crd::f32 kTestPi = 3.14159265358979323846F;
+
+// Tiny accessor that resolves through a one-element table for unit tests
+// that exercise the free function without a scene.
+const crd::eylem::Material& test_accessor(void* user_data, crd::eylem::MaterialId id)
+{
+    const auto* mat = static_cast<const crd::eylem::Material*>(user_data);
+    (void)id;
+    return *mat;
+}
+} // namespace
+
+TEST_CASE("eylem v1a-material-d derive_mass_properties sphere matches analytic formula",
+          "[eylem][v1a][material]")
+{
+    Collider sphere{};
+    sphere.shape         = ColliderShape::Sphere;
+    sphere.sphere.radius = 2.0F;
+
+    Material steel{};
+    steel.density = 7850.0F;
+
+    Collider arr[] = {sphere};
+    const auto props = derive_mass_properties(
+        crd::containers::ConstSpan<Collider>(arr, 1),
+        &test_accessor,
+        &steel);
+
+    const crd::f32 expected_v = (4.0F / 3.0F) * kTestPi * 2.0F * 2.0F * 2.0F;
+    const crd::f32 expected_m = expected_v * 7850.0F;
+    REQUIRE(std::fabs(props.mass - expected_m)            < 1e-2F);
+    REQUIRE(props.com_local.x                             == 0.0F);
+    REQUIRE(props.com_local.y                             == 0.0F);
+    REQUIRE(props.com_local.z                             == 0.0F);
+    // Sphere inertia diagonal: I = 2/5 m r²  for all axes.
+    const crd::f32 expected_i = (2.0F / 5.0F) * expected_m * 4.0F;
+    REQUIRE(std::fabs(props.inertia_diagonal.x - expected_i) < 1e-1F);
+    REQUIRE(std::fabs(props.inertia_diagonal.y - expected_i) < 1e-1F);
+    REQUIRE(std::fabs(props.inertia_diagonal.z - expected_i) < 1e-1F);
+}
+
+TEST_CASE("eylem v1a-material-d derive_mass_properties unit-density box at origin",
+          "[eylem][v1a][material]")
+{
+    Collider box{};
+    box.shape          = ColliderShape::Box;
+    box.box.half_extents = {1.0F, 1.0F, 1.0F}; // 2×2×2 = 8 m³
+
+    Material water{}; // default density 1000 kg/m³
+    Collider arr[] = {box};
+    const auto props = derive_mass_properties(
+        crd::containers::ConstSpan<Collider>(arr, 1),
+        &test_accessor,
+        &water);
+
+    REQUIRE(std::fabs(props.mass - 8000.0F) < 1e-3F);
+    REQUIRE(props.com_local.x == 0.0F);
+    REQUIRE(props.com_local.y == 0.0F);
+    REQUIRE(props.com_local.z == 0.0F);
+    // Box inertia: I_xx = 1/3 * m * (hy² + hz²) = 1/3 * 8000 * 2 = 16000/3
+    const crd::f32 expected_i = (8000.0F / 3.0F) * 2.0F;
+    REQUIRE(std::fabs(props.inertia_diagonal.x - expected_i) < 1e-1F);
+    REQUIRE(std::fabs(props.inertia_diagonal.y - expected_i) < 1e-1F);
+    REQUIRE(std::fabs(props.inertia_diagonal.z - expected_i) < 1e-1F);
+}
+
+TEST_CASE("eylem v1a-material-d derive_mass_properties two-box compound shifts COM",
+          "[eylem][v1a][material]")
+{
+    // Two unit-density 1m³ cubes side-by-side along +X. Body COM should
+    // sit halfway between their centroids.
+    Collider a{};
+    a.shape          = ColliderShape::Box;
+    a.box.half_extents = {0.5F, 0.5F, 0.5F};
+    a.local_position = {0.0F, 0.0F, 0.0F};
+
+    Collider b{};
+    b.shape          = ColliderShape::Box;
+    b.box.half_extents = {0.5F, 0.5F, 0.5F};
+    b.local_position = {2.0F, 0.0F, 0.0F};
+
+    Material water{};
+    Collider arr[] = {a, b}; // ascending ColliderId order = storage order
+    const auto props = derive_mass_properties(
+        crd::containers::ConstSpan<Collider>(arr, 2),
+        &test_accessor,
+        &water);
+
+    REQUIRE(std::fabs(props.mass         - 2000.0F) < 1e-3F);
+    REQUIRE(std::fabs(props.com_local.x  - 1.0F)    < 1e-4F);
+    REQUIRE(props.com_local.y == 0.0F);
+    REQUIRE(props.com_local.z == 0.0F);
+    // Inertia about COM, X axis: each box contributes
+    //   I_box_about_own_centroid_x = 1/3 m (hy² + hz²) = 1/3 * 1000 * (0.25 + 0.25) = 500/3
+    // Plus parallel axis for each at d_x = 1m (dist from box centroid to COM):
+    //   PAT for X axis: rotation axis is X; d perpendicular to X is in YZ plane.
+    //   Each box d = (±1, 0, 0); ||d||² = 1, d·d^T diagonal = (1, 0, 0).
+    //   I_xx_PAT = m * (1 - 1) = 0   (rotation axis aligned with displacement)
+    //   I_yy_PAT = m * (1 - 0) = m
+    //   I_zz_PAT = m * (1 - 0) = m
+    // So I_xx = 2 * 500/3 = 1000/3 ≈ 333.33
+    REQUIRE(std::fabs(props.inertia_diagonal.x - (1000.0F / 3.0F)) < 1e-1F);
+    // I_yy = 2*(1/3*1000*0.5) + 2*1000 = 1000/3 + 2000 ≈ 2333.33
+    REQUIRE(std::fabs(props.inertia_diagonal.y - (1000.0F / 3.0F + 2000.0F)) < 1e-1F);
+    REQUIRE(std::fabs(props.inertia_diagonal.z - (1000.0F / 3.0F + 2000.0F)) < 1e-1F);
+}
+
+TEST_CASE("eylem v1a-material-d derive_mass_properties returns zeros for plane-only / empty",
+          "[eylem][v1a][material]")
+{
+    Material water{};
+
+    // Empty collider list → zeroed result.
+    const auto props_empty = derive_mass_properties(
+        crd::containers::ConstSpan<Collider>{},
+        &test_accessor,
+        &water);
+    REQUIRE(props_empty.mass == 0.0F);
+
+    // Plane-only compound: V = 0 → mass stays 0.
+    Collider plane{};
+    plane.shape       = ColliderShape::Plane;
+    plane.plane.normal = {0.0F, 1.0F, 0.0F};
+    plane.plane.d      = 0.0F;
+    Collider arr[] = {plane};
+    const auto props_plane = derive_mass_properties(
+        crd::containers::ConstSpan<Collider>(arr, 1),
+        &test_accessor,
+        &water);
+    REQUIRE(props_plane.mass == 0.0F);
+    REQUIRE(props_plane.com_local.x == 0.0F);
+}
+
+TEST_CASE("eylem v1a-material-d NullPhysicsScene::derive_body_mass walks per-body colliders",
+          "[eylem][v1a][material][null]")
+{
+    auto scene = make_null_physics_scene(PhysicsConfig{});
+    const BodyId b1 = scene->add_body(RigidBody{});
+    const BodyId b2 = scene->add_body(RigidBody{});
+
+    // Body 1 = single 1m³ cube at origin (uses default material, density 1000).
+    Collider cube{};
+    cube.shape          = ColliderShape::Box;
+    cube.box.half_extents = {0.5F, 0.5F, 0.5F};
+    REQUIRE_FALSE(scene->add_collider(b1, cube).is_null());
+
+    // Body 2 = single sphere, radius 1 m, custom denser material.
+    Material denser{};
+    denser.density = 2000.0F;
+    const MaterialId denser_id = scene->create_material(denser);
+
+    Collider sphere{};
+    sphere.shape         = ColliderShape::Sphere;
+    sphere.sphere.radius = 1.0F;
+    sphere.material      = denser_id;
+    REQUIRE_FALSE(scene->add_collider(b2, sphere).is_null());
+
+    const auto props_b1 = scene->derive_body_mass(b1);
+    REQUIRE(std::fabs(props_b1.mass - 1000.0F) < 1e-3F); // 1 m³ × 1000 kg/m³
+    REQUIRE(props_b1.com_local.x == 0.0F);
+
+    const auto props_b2 = scene->derive_body_mass(b2);
+    const crd::f32 sphere_v = (4.0F / 3.0F) * kTestPi;
+    const crd::f32 expected_b2 = sphere_v * 2000.0F;
+    REQUIRE(std::fabs(props_b2.mass - expected_b2) < 1e-2F);
+
+    // Invalid body returns zero-init.
+    const auto props_null = scene->derive_body_mass(BodyId::null());
+    REQUIRE(props_null.mass == 0.0F);
 }
 
 TEST_CASE("eylem v1a NullPhysicsScene step + raycast + force/torque/impulse no-op cleanly", "[eylem][v1a][null]")
