@@ -30,7 +30,7 @@ void VisualizerRegistry::invoke_all(const crd::scene::World& world,
         {
             continue;
         }
-        const VisualizerContext ctx{entity, &viz, e.category};
+        const VisualizerContext ctx{entity, &viz, e.category, &world};
         e.visualize(comp, buf, ctx);
     }
 }

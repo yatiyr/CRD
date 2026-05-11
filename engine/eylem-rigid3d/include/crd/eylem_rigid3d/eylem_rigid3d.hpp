@@ -18,3 +18,4 @@
 
 #include <crd/eylem_rigid3d/body_pool.hpp>
 #include <crd/eylem_rigid3d/collider_pool.hpp>
+#include <crd/eylem_rigid3d/eylem_system.hpp>

@@ -26,6 +26,9 @@ target_link_libraries(crd-sandbox PRIVATE
     crd-rhi-vulkan
     crd-scene
     crd-shader
+    crd-eylem
+    crd-eylem-rigid3d
+    crd-eylem-viz
 )
 target_compile_definitions(crd-sandbox PRIVATE CRD_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 crd_enable_default_pch(crd-sandbox)

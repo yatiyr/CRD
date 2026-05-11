@@ -8,6 +8,11 @@
 #include <crd/draw/overlay_pass.hpp>
 #include <crd/draw/renderer.hpp>
 #include <crd/draw_imgui/control_panel.hpp>
+#include <crd/eylem/components.hpp>
+#include <crd/eylem/rigid_body.hpp>
+#include <crd/eylem_rigid3d/eylem_system.hpp>
+#include <crd/eylem_rigid3d/interpolation_system.hpp>
+#include <crd/eylem_viz/eylem_viz.hpp>
 #include <crd/log/log.hpp>
 #include <crd/math/mat.hpp>
 #include <crd/math/quat.hpp>
@@ -304,6 +309,35 @@ void SandboxLayer::init_scene_world()
     m_world->register_component<crd::scene::TransformDirtyFlag>(
         crd::scene::StorageHint::SparseSet);
     m_world->register_builtin_relations();
+
+    // ── v1b-e: eylem pool init must happen BEFORE PreRender system
+    //          registration so the InterpolationSystem can be registered
+    //          AHEAD of TransformPropagation (registration order ==
+    //          run order within a phase per world.cpp:807). The
+    //          interpolation system writes lerped local poses; the
+    //          propagation system then refreshes Transform.world from
+    //          them. Reverse that order and the renderer sees one-frame-
+    //          stale world matrices computed from un-interpolated locals.
+    m_eylem_alloc = std::make_unique<crd::memory::TlsfAllocator>(
+        crd::usize{16U} << 20U, /*parent=*/nullptr, "eylem-tlsf");
+    m_body_pool = std::make_unique<crd::eylem_rigid3d::BodyPool>(
+        m_eylem_alloc.get(), /*max_bodies=*/256U);
+    m_collider_pool = std::make_unique<crd::eylem_rigid3d::ColliderPool>(
+        m_eylem_alloc.get(), /*capacity_per_kind=*/256U);
+
+    m_physics_config = crd::eylem::PhysicsConfig{};
+    m_physics_config.fixed_dt = 1.0F / 64.0F; // exactly representable f32
+    m_physics_config.gravity  = crd::math::Vec3f{0.0F, -9.81F, 0.0F};
+
+    // PreRender phase, runs FIRST. Reads BodyPool prev/curr columns,
+    // lerps by World::fixed_step_alpha(fixed_dt), writes through World
+    // setters so TransformDirtyFlag is tagged for TransformPropagation
+    // (registered immediately below).
+    m_world->register_system(std::make_unique<crd::eylem_rigid3d::RigidBodyInterpolationSystem>(
+        *m_body_pool, m_physics_config));
+
+    // PreRender phase, runs SECOND. Reads dirty Transforms (now holding
+    // the interpolated pose) + parent.world; writes Transform.world.
     m_world->register_system(std::make_unique<crd::scene::TransformPropagation>());
 
     // d3: DebugVizComponent + VisualizerRegistry + DebugVizSystem.
@@ -314,6 +348,14 @@ void SandboxLayer::init_scene_world()
     // SandboxLayer::on_update) so the system writes into a fresh buffer
     // every frame.
     m_world->register_component<crd::draw::DebugVizComponent>(
+        crd::scene::StorageHint::SparseSet);
+    // v1b-e: register eylem components BEFORE any entity is spawned
+    // (registration order matters when sparse-set pools auto-grow on
+    // first-use — registering after live entities triggered a runtime
+    // crash bisected to register_component<RBC>+<CC> together).
+    m_world->register_component<crd::eylem::RigidBodyComponent>(
+        crd::scene::StorageHint::SparseSet);
+    m_world->register_component<crd::eylem::ColliderComponent>(
         crd::scene::StorageHint::SparseSet);
     crd::draw::register_default_visualizers(m_viz_registry);
     m_world->register_system(
@@ -334,6 +376,100 @@ void SandboxLayer::init_scene_world()
         viz.scale = 0.5F;
         m_world->add_component(e, viz);
     }
+
+    // ── v1b-e: eylem rigid-3D demo ─────────────────────────────────────
+    //
+    // Pool init + InterpolationSystem registration happened above (must
+    // precede TransformPropagation in PreRender). Here we register the
+    // EylemSystem (Physics phase — order-independent vs PreRender),
+    // wire visualizers, and spawn 3 demo entities (sphere/box/capsule)
+    // at +y=5 with full Transform + RigidBodyComponent +
+    // ColliderComponent + DebugVizComponent{Wireframe+ShowVelocity}.
+    // Bodies fall through the world (no collision until v1c broadphase
+    // + v1d narrow phase) — honest v1b-e framing per phase plan §v1b-e.
+    //
+    // EylemSystem registered into the schedule (Physics phase, fixed-step).
+    m_world->register_system(std::make_unique<crd::eylem_rigid3d::EylemSystem>(
+        *m_body_pool, m_physics_config));
+
+    // Visualizers wired into the same registry the d3 default visualizers
+    // use. eylem-viz captures pool refs as file-scope statics for the
+    // captureless visualizer functions.
+    crd::eylem_viz::register_eylem_visualizers(m_viz_registry, *m_body_pool, *m_collider_pool);
+
+    // Spawn 3 demo bodies: sphere, box, capsule. All at +y=5, separated
+    // along X so the wireframes don't overlap. inv_mass = 1 (dynamic);
+    // zero damping so the closed-form Δp = ½·g·t² holds visibly.
+    struct DemoSpec
+    {
+        crd::math::Vec3f         position;
+        crd::eylem::ColliderShape shape;
+    };
+    const DemoSpec demos[] = {
+        {{-2.0F, 5.0F, 0.0F}, crd::eylem::ColliderShape::Sphere},
+        {{ 0.0F, 5.0F, 0.0F}, crd::eylem::ColliderShape::Box},
+        {{ 2.0F, 5.0F, 0.0F}, crd::eylem::ColliderShape::Capsule},
+    };
+    for (const DemoSpec& d : demos)
+    {
+        // Body in pool.
+        crd::eylem::RigidBody body{};
+        body.position        = d.position;
+        body.inv_mass        = 1.0F;
+        body.linear_damping  = 0.0F;
+        body.angular_damping = 0.0F;
+        const auto body_id = m_body_pool->insert(body);
+
+        // Collider in pool.
+        crd::eylem::Collider collider{};
+        collider.shape = d.shape;
+        switch (d.shape)
+        {
+        case crd::eylem::ColliderShape::Sphere:
+            collider.sphere.radius = 0.5F;
+            break;
+        case crd::eylem::ColliderShape::Box:
+            collider.box.half_extents = {0.5F, 0.5F, 0.5F};
+            break;
+        case crd::eylem::ColliderShape::Capsule:
+            collider.capsule.radius      = 0.4F;
+            collider.capsule.half_height = 0.5F;
+            break;
+        default:
+            break;
+        }
+        const auto collider_id = m_collider_pool->insert(body_id, collider);
+
+        // Entity with the full v1b-e component set. Pre-fill Transform.world
+        // (via from_trs) so first-frame visualizers see the body's position
+        // before TransformPropagation has run; EylemSystem then overwrites
+        // each fixed step via World setters which mark dirty.
+        const auto e = m_world->spawn();
+        crd::scene::Transform tr{};
+        tr.translation = d.position;
+        tr.world = crd::math::from_trs(tr.translation, tr.rotation, tr.scale);
+        m_world->add_component(e, tr);
+
+        crd::eylem::RigidBodyComponent rbc{};
+        rbc.body_id = body_id;
+        m_world->add_component(e, rbc);
+
+        crd::eylem::ColliderComponent cc{};
+        cc.collider_id = collider_id;
+        m_world->add_component(e, cc);
+
+        crd::draw::DebugVizComponent viz{};
+        viz.flags = crd::draw::DebugVizComponent::AxisTriad
+                  | crd::draw::DebugVizComponent::Wireframe
+                  | crd::draw::DebugVizComponent::ShowVelocity;
+        viz.scale = 0.5F;
+        m_world->add_component(e, viz);
+    }
+    m_eylem_initialised = true;
+    CRD_LOG_INFO(g_log_sandbox_layer,
+                 "eylem v1b-e: 3 rigid bodies (sphere/box/capsule) spawned at +y=5; "
+                 "gravity (0, -9.81, 0) m/s^2; fixed_dt={:.5f}s ({:.1f} Hz)",
+                 m_physics_config.fixed_dt, 1.0F / m_physics_config.fixed_dt);
 
     // RenderMeshIndex — observes Renderable's lifecycle and evicts GpuMeshes
     // automatically when entities are destroyed (the proper drop-callback
@@ -759,8 +895,23 @@ void SandboxLayer::on_update(crd::f64 delta_seconds)
         m_draw_buffer.clear();
     }
 
-    // Drive the schedule so RenderUploadSystem promotes pending uploads.
-    if (m_world) m_world->step(delta_seconds);
+    // v1b-e: switched from step→step_fixed so the EylemSystem
+    // (fixed_step()=true) fires N times per frame where N =
+    // floor(accum / fixed_dt). RenderUploadSystem (variable-rate)
+    // still runs once per call. Single-fixed-dt API per ADR-0052 §3 v1h.
+    if (m_world)
+    {
+        if (m_eylem_initialised)
+        {
+            m_world->step_fixed(delta_seconds,
+                                static_cast<crd::f64>(m_physics_config.fixed_dt),
+                                /*max_substeps=*/8U);
+        }
+        else
+        {
+            m_world->step(delta_seconds);
+        }
+    }
 }
 
 void SandboxLayer::select_asset(int idx)

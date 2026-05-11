@@ -366,6 +366,7 @@ add_subdirectory(engine/eylem)
 add_subdirectory(engine/eylem-rigid3d)
 add_subdirectory(engine/draw)
 add_subdirectory(engine/draw-imgui)
+add_subdirectory(engine/eylem-viz)
 # add_subdirectory(engine/graphics)
 # add_subdirectory(engine/scripting)
 

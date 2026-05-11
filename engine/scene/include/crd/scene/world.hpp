@@ -646,6 +646,29 @@ public:
     // ".changed<T>() = modified during current frame" semantic.
     [[nodiscard]] crd::u32 current_frame() const noexcept { return m_frame_index; }
 
+    // Leftover seconds in the fixed-step accumulator AFTER the most
+    // recent step_fixed call ran its substeps. Variable-rate render-
+    // path systems consume this for "fixed timestep with interpolation"
+    // (Glenn Fiedler, "Fix Your Timestep") — render frames between two
+    // fixed substeps interpolate via:
+    //
+    //     alpha = world.fixed_step_alpha(fixed_dt);
+    //     render_state = lerp(prev_state, curr_state, alpha);
+    //
+    // where prev_state is the body state BEFORE the most recent integrate
+    // and curr_state is the state AFTER. Returns 0.0 if step_fixed has
+    // never been called (or the leftover happens to be exactly 0).
+    [[nodiscard]] crd::f64 fixed_step_accumulator() const noexcept { return m_fixed_accumulator; }
+    [[nodiscard]] crd::f64 fixed_step_alpha(crd::f64 fixed_dt) const noexcept
+    {
+        if (fixed_dt <= 0.0)
+        {
+            return 0.0;
+        }
+        const crd::f64 a = m_fixed_accumulator / fixed_dt;
+        return (a < 0.0) ? 0.0 : (a > 1.0 ? 1.0 : a);
+    }
+
     // ---- Schedule + Commands (Phase 3.0 v1h, ADR-0052 §3-§5) -----------
 
     // Register a system into the fixed 7-phase schedule. The system runs

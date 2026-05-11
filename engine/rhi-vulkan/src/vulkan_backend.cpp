@@ -546,9 +546,25 @@ private:
 class VulkanDescriptorSetLayout final : public DescriptorSetLayout
 {
 public:
-    VulkanDescriptorSetLayout(VkDevice device, DescriptorSetLayoutDesc desc, VkDescriptorSetLayout layout)
-        : m_device(device), m_desc(std::move(desc)), m_layout(layout)
+    VulkanDescriptorSetLayout(VkDevice device, const DescriptorSetLayoutDesc& desc, VkDescriptorSetLayout layout)
+        : m_device(device), m_layout(layout)
     {
+        // Deep-copy the binding data into owned storage. `desc.bindings` is a
+        // ConstSpan (non-owning view); the canonical caller pattern at
+        // forward_render_path.cpp:32-35 builds the desc with a span pointing
+        // to a stack-local `DescriptorBinding`, then lets the local fall out
+        // of scope before the layout is queried. Without this copy, every
+        // later `desc().bindings` access would read freed stack memory —
+        // ASan surfaced exactly this in the win-asan sandbox-smoke on
+        // 2026-05-11 (vulkan_backend.cpp:711, push_back from
+        // VulkanDescriptorAllocator::allocate).
+        m_bindings_owned = crd::containers::Array<DescriptorBinding>(desc.bindings.size());
+        for (const auto& b : desc.bindings)
+        {
+            m_bindings_owned.push_back(b);
+        }
+        m_desc.bindings = crd::containers::make_span(m_bindings_owned.data(),
+                                                     m_bindings_owned.size());
     }
 
     ~VulkanDescriptorSetLayout() noexcept override
@@ -565,6 +581,7 @@ public:
 
 private:
     VkDevice m_device = VK_NULL_HANDLE;
+    crd::containers::Array<DescriptorBinding> m_bindings_owned{};
     DescriptorSetLayoutDesc m_desc{};
     VkDescriptorSetLayout m_layout = VK_NULL_HANDLE;
 };
@@ -572,9 +589,27 @@ private:
 class VulkanPipelineLayout final : public PipelineLayout
 {
 public:
-    VulkanPipelineLayout(VkDevice device, PipelineLayoutDesc desc, VkPipelineLayout layout)
-        : m_device(device), m_desc(std::move(desc)), m_layout(layout)
+    VulkanPipelineLayout(VkDevice device, const PipelineLayoutDesc& desc, VkPipelineLayout layout)
+        : m_device(device), m_layout(layout)
     {
+        // Deep-copy both spans into owned storage — same lifetime hazard as
+        // VulkanDescriptorSetLayout (callers pass stack-locals via spans,
+        // expecting the layout object to own its desc). Fix companion to
+        // the 2026-05-11 ASan finding in VulkanDescriptorSetLayout.
+        m_set_layouts_owned = crd::containers::Array<const DescriptorSetLayout*>(desc.set_layouts.size());
+        for (const auto* sl : desc.set_layouts)
+        {
+            m_set_layouts_owned.push_back(sl);
+        }
+        m_push_ranges_owned = crd::containers::Array<PushConstantRange>(desc.push_constant_ranges.size());
+        for (const auto& r : desc.push_constant_ranges)
+        {
+            m_push_ranges_owned.push_back(r);
+        }
+        m_desc.set_layouts = crd::containers::make_span(m_set_layouts_owned.data(),
+                                                        m_set_layouts_owned.size());
+        m_desc.push_constant_ranges = crd::containers::make_span(m_push_ranges_owned.data(),
+                                                                 m_push_ranges_owned.size());
     }
 
     ~VulkanPipelineLayout() noexcept override
@@ -591,6 +626,8 @@ public:
 
 private:
     VkDevice m_device = VK_NULL_HANDLE;
+    crd::containers::Array<const DescriptorSetLayout*> m_set_layouts_owned{};
+    crd::containers::Array<PushConstantRange> m_push_ranges_owned{};
     PipelineLayoutDesc m_desc{};
     VkPipelineLayout m_layout = VK_NULL_HANDLE;
 };

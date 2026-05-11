@@ -145,6 +145,54 @@ void BodyPool::write(BodyId id, const RigidBody& state) noexcept
     store_lane(id.index(), state);
 }
 
+void BodyPool::write_curr_only(BodyId id, const RigidBody& state) noexcept
+{
+    if (!contains(id)) return;
+    store_curr_only_lane(id.index(), state);
+}
+
+BodyPool::PrevState BodyPool::read_prev(BodyId id) const noexcept
+{
+    PrevState out{};
+    out.rotation = crd::math::Quatf{0.0F, 0.0F, 0.0F, 1.0F};
+    if (!contains(id)) return out;
+
+    const BodyChunk& tile = m_storage.chunk(chunk_of(id.index()));
+    const crd::u32   lane = lane_of(id.index());
+
+    out.position.x = tile.prev_pos_x.lane(lane);
+    out.position.y = tile.prev_pos_y.lane(lane);
+    out.position.z = tile.prev_pos_z.lane(lane);
+
+    out.rotation.x = tile.prev_rot_x.lane(lane);
+    out.rotation.y = tile.prev_rot_y.lane(lane);
+    out.rotation.z = tile.prev_rot_z.lane(lane);
+    out.rotation.w = tile.prev_rot_w.lane(lane);
+
+    return out;
+}
+
+void BodyPool::snapshot_state_to_prev() noexcept
+{
+    // Whole-column copy across every chunk. The Soa storage hands out
+    // chunks that are contiguous and ABI-aligned; SIMD `=` is one mov
+    // per column on AVX2 (Vec8f) / SSE (Vec4f). Free-slot lanes get
+    // copied too, but that is harmless: live[lane]==0 guards every
+    // consumer that reads prev_*.
+    const crd::usize n = m_storage.chunk_count();
+    for (crd::usize c = 0; c < n; ++c)
+    {
+        BodyChunk& tile = m_storage.chunk(c);
+        tile.prev_pos_x = tile.pos_x;
+        tile.prev_pos_y = tile.pos_y;
+        tile.prev_pos_z = tile.pos_z;
+        tile.prev_rot_x = tile.rot_x;
+        tile.prev_rot_y = tile.rot_y;
+        tile.prev_rot_z = tile.rot_z;
+        tile.prev_rot_w = tile.rot_w;
+    }
+}
+
 BodyPool::Slot BodyPool::resolve(BodyId id) const noexcept
 {
     if (!contains(id)) return Slot{0U, 0U};
@@ -160,7 +208,7 @@ void BodyPool::ensure_slot(crd::u32 idx)
     }
 }
 
-void BodyPool::store_lane(crd::u32 idx, const RigidBody& body) noexcept
+void BodyPool::store_curr_only_lane(crd::u32 idx, const RigidBody& body) noexcept
 {
     BodyChunk&     tile = m_storage.chunk(chunk_of(idx));
     const crd::u32 lane = lane_of(idx);
@@ -195,6 +243,28 @@ void BodyPool::store_lane(crd::u32 idx, const RigidBody& body) noexcept
     crd::u32 flags_raw = 0;
     std::memcpy(&flags_raw, &body.flags, sizeof(flags_raw));
     tile.flags[lane] = flags_raw;
+}
+
+void BodyPool::store_lane(crd::u32 idx, const RigidBody& body) noexcept
+{
+    // Curr columns + flags first.
+    store_curr_only_lane(idx, body);
+
+    // Then mirror pos/rot into prev columns. This is what gives `write()`
+    // and `insert()` teleport semantics: the renderer's next interpolation
+    // alpha lerp(prev, curr) returns the same point regardless of alpha,
+    // so spawning / teleporting a body produces no visual jump.
+    BodyChunk&     tile = m_storage.chunk(chunk_of(idx));
+    const crd::u32 lane = lane_of(idx);
+
+    put_lane(tile.prev_pos_x, lane, body.position.x);
+    put_lane(tile.prev_pos_y, lane, body.position.y);
+    put_lane(tile.prev_pos_z, lane, body.position.z);
+
+    put_lane(tile.prev_rot_x, lane, body.rotation.x);
+    put_lane(tile.prev_rot_y, lane, body.rotation.y);
+    put_lane(tile.prev_rot_z, lane, body.rotation.z);
+    put_lane(tile.prev_rot_w, lane, body.rotation.w);
 }
 
 void BodyPool::load_lane(crd::u32 idx, RigidBody& body) const noexcept

@@ -13,7 +13,10 @@ target_include_directories(crd-eylem-rigid3d
 #   crd-containers:          Array (free-list side-table)
 #   crd-math:                Vec/Quat AoS + simd::Soa + Vec8f/Vec4f columns
 #   crd-eylem:               public RigidBody + BodyId + PhysicsConfig contract
-# v1b-c will add crd-scene (RigidBodyComponent + EylemSystem hook into ECS).
+# v1b-c added crd-scene PUBLIC: EylemSystem inherits ISystem, queries
+# (Transform, RigidBodyComponent), calls World setters. Component types
+# themselves live in crd-eylem so other modules can register / serialise
+# them without depending on the concrete pool family.
 target_link_libraries(crd-eylem-rigid3d
     PUBLIC
         crd-core
@@ -21,6 +24,7 @@ target_link_libraries(crd-eylem-rigid3d
         crd-containers
         crd-math
         crd-eylem
+        crd-scene
     PRIVATE
         crd-log
 )

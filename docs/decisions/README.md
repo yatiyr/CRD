@@ -272,3 +272,4 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 | 0073  | Eylem aerospace substrate (variable mass + aero + atm + propulsion + J2 + sep)    | arch, physics, eylem, aerospace, aero, atmosphere, propulsion, fields         | Planned   |
 | 0074  | Eylem cinematic / animation-physics bridge (`crd-eylem-cine` module)              | arch, physics, eylem, cinematic, animation, film                              | Planned   |
 | 0075  | Eylem testing rigor + conservation-law CI                                          | arch, physics, eylem, testing, ci, conservation, scientific-computing        | Accepted  |
+| 0076  | `crd-geometry` substrate (BVH + GJK/EPA + mesh queries + polygon ops + Delaunay)  | arch, substrate, computational-geometry, bvh, gjk-epa, mesh-processing, determinism | Accepted  |

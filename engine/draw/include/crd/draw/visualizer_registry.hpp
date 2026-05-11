@@ -39,6 +39,14 @@ struct VisualizerContext
     crd::scene::EntityId     entity;
     const DebugVizComponent* viz;
     Category                 category;
+    // World pointer added v1b-d (eylem-viz needs cross-component lookup —
+    // ColliderComponent visualizer reads Transform; RigidBodyComponent
+    // visualizer reads Transform). Defaulted to nullptr so existing
+    // visualizers (default_visualizers' Transform→axis_triad) that don't
+    // use it remain source-compatible. Visualizers that DO use it must
+    // null-check (current invocation paths always set it; the default
+    // exists for unit tests that pass synthetic contexts).
+    const crd::scene::World* world = nullptr;
     // Reserved: lifetime / time_s / pick_id range. Wired in d4 alongside
     // the ImGui control panel.
 };

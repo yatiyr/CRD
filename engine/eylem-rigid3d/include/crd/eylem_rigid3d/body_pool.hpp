@@ -63,7 +63,8 @@ template <>
 struct alignas(32) BodyChunkT<8>
 {
     using Col = crd::math::simd::Vec8f;
-    // ── State columns (3 + 4 + 3 + 3 + 1 + 3 + 1 + 1 = 19 columns × 32 B = 608 B) ──
+    // ── State columns (current-frame integrated values) ────────────────
+    // 3 + 4 + 3 + 3 + 1 + 3 + 1 + 1 = 19 columns × 32 B = 608 B
     Col pos_x{};         Col pos_y{};         Col pos_z{};
     Col rot_x{};         Col rot_y{};         Col rot_z{};         Col rot_w{};
     Col linvel_x{};      Col linvel_y{};      Col linvel_z{};
@@ -72,6 +73,17 @@ struct alignas(32) BodyChunkT<8>
     Col inv_inertia_x{}; Col inv_inertia_y{}; Col inv_inertia_z{};
     Col linear_damping{};
     Col angular_damping{};
+    // ── Previous-frame snapshot columns (added v1b-e) ──────────────────
+    // Used by RigidBodyInterpolationSystem for "fixed timestep with
+    // interpolation" per Glenn Fiedler. EylemSystem snapshots curr→prev
+    // at the START of each substep (before integrating), then writes
+    // new curr values. The InterpolationSystem (variable-rate) reads
+    // both and lerps with alpha = world.fixed_step_alpha(fixed_dt).
+    // 3 (pos) + 4 (rot) = 7 extra columns × 32 B = 224 B → chunk grows
+    // from 608 B to 832 B (~37% memory bump; acceptable for the
+    // smooth-render gain on every dynamic body).
+    Col prev_pos_x{};    Col prev_pos_y{};    Col prev_pos_z{};
+    Col prev_rot_x{};    Col prev_rot_y{};    Col prev_rot_z{};    Col prev_rot_w{};
     // ── Per-lane integer side-bands (kept in same chunk for cache locality) ──
     crd::u32 flags[8]{};
     // generation = the BodyId generation last issued for this slot.
@@ -94,6 +106,8 @@ struct alignas(16) BodyChunkT<4>
     Col inv_inertia_x{}; Col inv_inertia_y{}; Col inv_inertia_z{};
     Col linear_damping{};
     Col angular_damping{};
+    Col prev_pos_x{};    Col prev_pos_y{};    Col prev_pos_z{};
+    Col prev_rot_x{};    Col prev_rot_y{};    Col prev_rot_z{};    Col prev_rot_w{};
     crd::u32 flags[4]{};
     crd::u8  generation[4]{};
     crd::u8  live[4]{};
@@ -121,7 +135,41 @@ public:
     void                    remove(BodyId id) noexcept;
     [[nodiscard]] bool      contains(BodyId id) const noexcept;
     [[nodiscard]] RigidBody read(BodyId id) const noexcept;
+    // TELEPORT semantics: also resets prev = curr so the renderer does
+    // not visually lerp from the old pose to the new one. Use this for
+    // user-level "set state" calls (spawning, level resets, network
+    // snap corrections).
     void                    write(BodyId id, const RigidBody& state) noexcept;
+    // INTEGRATOR semantics: writes only the curr columns and leaves
+    // prev untouched. Use this from the physics integrator step where
+    // the prev snapshot was already captured by snapshot_state_to_prev()
+    // earlier in the substep — overwriting prev here would destroy the
+    // interpolation source.
+    void                    write_curr_only(BodyId id, const RigidBody& state) noexcept;
+
+    // Read just the previous-frame snapshot pos+rot for `id`. Used by
+    // RigidBodyInterpolationSystem to lerp between prev and curr at
+    // alpha = world.fixed_step_alpha(fixed_dt). Returns (pos=zero,
+    // rot=identity) if `id` is invalid — callers normally guarantee
+    // validity via component-storage iteration.
+    struct PrevState
+    {
+        crd::math::Vec3f position;
+        crd::math::Quatf rotation;
+    };
+    [[nodiscard]] PrevState read_prev(BodyId id) const noexcept;
+
+    // Copy ALL current-frame columns (pos, rot) into the prev-frame
+    // columns across every live chunk. Called by EylemSystem at the
+    // START of each fixed substep, BEFORE integrating, so the prev
+    // snapshot captures the exact state the renderer was last shown.
+    // After this call, the integration step writes new curr values;
+    // prev stays frozen for the duration of the substep.
+    //
+    // O(chunk_count) — full SIMD column assignment, no per-lane loop.
+    // Touches free slots too; harmless because their lanes are unused
+    // and read by no one (live[lane]==0 guards every consumer path).
+    void snapshot_state_to_prev() noexcept;
 
     // Number of currently-live bodies (excluding the null sentinel).
     [[nodiscard]] crd::usize size() const noexcept { return m_live_count; }
@@ -154,8 +202,13 @@ private:
     void ensure_slot(crd::u32 idx);
 
     // Per-lane pack/unpack between AoS RigidBody and AoSoA columns.
-    void store_lane (crd::u32 idx, const RigidBody& body) noexcept;
-    void load_lane  (crd::u32 idx, RigidBody& body) const noexcept;
+    // `store_lane` writes curr cols AND mirrors pos/rot into prev cols
+    // (teleport semantics). `store_curr_only_lane` writes curr cols and
+    // leaves prev untouched (integrator semantics — prev was snapshotted
+    // earlier in the substep by snapshot_state_to_prev()).
+    void store_lane           (crd::u32 idx, const RigidBody& body) noexcept;
+    void store_curr_only_lane (crd::u32 idx, const RigidBody& body) noexcept;
+    void load_lane            (crd::u32 idx, RigidBody& body) const noexcept;
 
     Storage  m_storage;
     crd::u32 m_capacity     = 0;

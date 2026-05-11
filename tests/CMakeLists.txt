@@ -24,6 +24,7 @@ add_subdirectory(profile)
 add_subdirectory(eylem)
 add_subdirectory(eylem-rigid3d)
 add_subdirectory(draw)
+add_subdirectory(eylem-viz)
 
 if(CRD_BUILD_BENCHMARKS)
     add_subdirectory(bench)

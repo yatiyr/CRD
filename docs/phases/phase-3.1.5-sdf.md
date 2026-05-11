@@ -1,9 +1,14 @@
 # Phase 3.1.5 — `crd-sdf` substrate
 
-**Status:** ⏳ Planned (between Phase 3.1 eylem v2 and Phase 3.1 v3
-XPBD soft, then runs in parallel with v3+).
+**Status:** ⏳ Planned (interleaved between Phase 3.1 eylem v2 and
+Phase 3.1 v3 XPBD soft, then runs in parallel with v3+). **Slot
+unchanged by the ADR-0076 §12 amendment (2026-05-11)**, but v2
+mesh-bake now consumes `crd-geometry-mesh` + `crd-geometry-bvh`
+directly from day 1 — the original "ship own narrow BVH +
+winding-number, refactor later" plan (ADR-0064 §4) is OBSOLETE.
 **Estimated duration:** ~5–6 weeks.
-**Locked architecture:** ADR-0064.
+**Locked architecture:** ADR-0064 (amended consumer pattern per
+ADR-0076 §12).
 **Research:** `docs/research/cerid-sdf.md`.
 
 ## Why this phase exists

@@ -11,6 +11,10 @@
 #include <crd/math/quat.hpp>
 #include <crd/math/vec.hpp>
 #include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/tlsf_allocator.hpp>
+#include <crd/eylem/physics_config.hpp>
+#include <crd/eylem_rigid3d/body_pool.hpp>
+#include <crd/eylem_rigid3d/collider_pool.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/preset/camera_preset.hpp>
 #include <crd/preset/preset_target.hpp>
@@ -233,6 +237,28 @@ private:
     // System lifetime is bound to m_world (registered via register_system),
     // so the registry must outlive the world.
     crd::draw::VisualizerRegistry m_viz_registry;
+
+    // v1b-e: eylem rigid-3D substrate wired into the sandbox.
+    //
+    //   - TLSF heap dedicated to eylem (named instance per the
+    //     `feedback_named_allocators_in_tests.md` convention; production
+    //     code follows the same discipline as test fixtures).
+    //   - BodyPool + ColliderPool live for the sandbox's lifetime;
+    //     EylemSystem (registered with m_world) reads/writes them every
+    //     fixed step.
+    //   - register_eylem_visualizers wires the rigid-body + collider
+    //     visualizers into m_viz_registry alongside the default Transform
+    //     visualizer.
+    //   - 3 demo entities (sphere/box/capsule) spawned at +y=5 with
+    //     Transform + RigidBodyComponent + ColliderComponent +
+    //     DebugVizComponent{Wireframe+ShowVelocity}. Bodies fall through
+    //     the world (no collision until v1c+v1d) — that's the honest
+    //     v1b-e framing.
+    std::unique_ptr<crd::memory::TlsfAllocator>     m_eylem_alloc;
+    std::unique_ptr<crd::eylem_rigid3d::BodyPool>   m_body_pool;
+    std::unique_ptr<crd::eylem_rigid3d::ColliderPool> m_collider_pool;
+    crd::eylem::PhysicsConfig                       m_physics_config{};
+    bool                                            m_eylem_initialised = false;
 
     // d4: persistent OverlayPassConfig that the ImGui control panel
     // mutates across frames. render_scene re-applies the per-frame
