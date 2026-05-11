@@ -143,6 +143,42 @@ substrate sits in `crd-math` (v0a–v0e of Phase 3.1) and the physics code
 is platform-agnostic — the wrapper picks SSE2 / AVX2 / NEON at compile
 time.
 
+### 4.5 Five-category collider model (locked 2026-05-11)
+
+eylem ships **five canonical collider categories**, every one a real
+runtime path. No "we don't support that" gaps when v1 closes. Each
+category is best at a different problem; mixing them is how engines
+serve every domain (games / robotics / sim / cinematic / DAW) without
+compromise:
+
+| Category | `ColliderShape` | Narrow phase | Slice | Best for |
+|---|---|---|---|---|
+| Primitives | `Sphere`, `Box`, `Capsule` | analytic contact gen | v1d | universal — characters, dynamic objects |
+| Convex | `ConvexHull` | GJK + EPA | v1d | dynamic shapes, manually-decomposed compounds |
+| Plane | `Plane` | analytic | v1d | infinite ground / wall / sky planes |
+| Static triangle mesh | `TriangleMesh` | BVH + per-tri SAT | v1d-mesh | level geometry where SDF voxel cost is wasteful |
+| Terrain | `Heightfield` | per-cell analytic | v1d-hf | terrain — 100× cheaper than SDF for large landscapes |
+| Smooth dynamic mesh | `Sdf` | closest-point + gradient on baked SDF | Phase 3.1.5 | smooth dynamic mesh colliders; unified with renderer DFAO / font MTSDF / audio occlusion via `crd-sdf` |
+
+**ColliderId encoding:** `[generation:8 | kind:4 | per_kind_idx:20]`. 4
+kind bits → 16 shape kinds (8 used today, 8 reserved for compound /
+soft-body / fluid / future). 20 per-kind index bits → 1,048,575
+colliders per kind, ample for any practical scene. The handle itself
+dispatches — no global record table, no extra cache miss on lookup.
+
+**Convex decomposition tooling (V-HACD / HACD)** is a Phase 7 editor
+concern. Artists decompose offline at authoring time; runtime sees N
+`ConvexHull` colliders. eylem itself never runs decomposition.
+
+**Why five and not just SDF:** SDF is a brilliant unified mesh path
+but pays in voxel memory. A 4096×4096 height map for terrain is
+~64 MB; an equivalent SDF at 0.5 m resolution is ~640 MB with worse
+precision near the surface. A static level mesh's BVH is proportional
+to triangle count; the equivalent SDF could be 10–100× the memory.
+Picking ONE shape category locks Cerid out of workloads where another
+is 10–100× better. Best physics engine ever does not have arbitrary
+"not supported" answers — it picks the right tool per shape.
+
 ### 5. Snapshot-replay is the core deliverable, not a feature
 
 Per `docs/research/cerid-eylem.md` § *Recommended phasing for Cerid*:
@@ -156,6 +192,45 @@ v1j is non-negotiable in v1: world snapshot serialise / restore + replay
 test harness (record inputs + RNG seed → re-run on a different host →
 assert world snapshot hash matches) + CI matrix asserting the hash matches
 across MSVC / clang / gcc × x64 / ARM.
+
+### 5.5 Reservations for downstream-substrate ADRs (added 2026-05-11)
+
+Six substrates ship as their own ADRs but reserve schema room here so
+the v1l API surface freeze covers them without a breaking version bump
+when their impl arrives:
+
+- **Material struct shape** — locked in [ADR-0069](0069-eylem-materials-substrate.md)
+  before v1a interface freeze. Friction (Coulomb / Stribeck / LuGre /
+  Karnopp / Anisotropic) + restitution (Constant / Newton / Hunt-Crossley)
+  + surface velocity + density. P0 per coverage audit §3.1.
+- **`FieldFormula` enum reservations** — [ADR-0067](0067-eylem-force-field-architecture.md) §3
+  closes nine values; two reserved slots (`Reserved_J2` for J2-oblateness
+  gravity, fills via [ADR-0073](0073-eylem-aerospace-substrate.md) when
+  aerospace ships) prevent post-freeze bumps. Aerodynamics is **not**
+  field-shaped (reads body velocity at evaluation time) — separate
+  `AeroDynamicsComponent` per ADR-0073.
+- **Solver catalog** — [ADR-0070](0070-eylem-solver-catalog.md) locks
+  the per-solver opt-in API + the "when to use which" guidance doc.
+- **Robotics importers + actuator catalogue** — [ADR-0071](0071-eylem-robotics-importers-actuators.md)
+  ships URDF / SDF / MJCF importers + motor models (servos / BLDC /
+  stepper / hydraulic / pneumatic). New v6 cluster.
+- **Sensor substrate** — [ADR-0072](0072-eylem-sensor-substrate.md)
+  ships IMU / LIDAR / proximity / tactile / threshold-event sensors.
+  Companion to ADR-0068's contact callback substrate.
+- **Aerospace substrate** — [ADR-0073](0073-eylem-aerospace-substrate.md)
+  ships variable-mass bodies (Tsiolkovsky), aerodynamic forces,
+  US Standard Atmosphere 1976, propulsion / thrust vector / gimbal,
+  J2 oblateness gravity, multi-body separation. New `crd-eylem-aero`
+  module + new v6 cluster.
+- **Cinematic / animation-physics bridge** — [ADR-0074](0074-eylem-cinematic-bridge.md)
+  ships `crd-eylem-cine` module (animation curves driving kinematic
+  bodies, pre-roll, per-shot overrides, slow-motion substeps).
+- **Testing rigor** — [ADR-0075](0075-eylem-testing-rigor.md) ships
+  conservation-law CI + closed-form regression suite + cross-engine
+  comparison benchmarks. P0 per coverage audit §3.7.
+
+The full coverage audit rationale lives in
+[`docs/research/cerid-eylem-coverage-audit.md`](../research/cerid-eylem-coverage-audit.md).
 
 ### 6. ECS integration: components + systems + commands
 

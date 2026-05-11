@@ -8,8 +8,10 @@
 //
 // Per ADR-0062 §6, this is the interface; no third-party SDK wraps it.
 
+#include <crd/containers/span.hpp>
 #include <crd/core/types.hpp>
 #include <crd/eylem/collider.hpp>
+#include <crd/eylem/collision_filter.hpp>
 #include <crd/eylem/joint.hpp>
 #include <crd/eylem/material.hpp>
 #include <crd/eylem/physics_config.hpp>
@@ -73,6 +75,42 @@ public:
     virtual void apply_force(BodyId id, crd::math::Vec3f force)                          = 0;
     virtual void apply_torque(BodyId id, crd::math::Vec3f torque)                        = 0;
     virtual void apply_impulse(BodyId id, crd::math::Vec3f impulse, crd::math::Vec3f world_pos) = 0;
+
+    // ---- Collision filtering — Tier 3 (excluded pairs) -----------------
+    // Per ADR-0068 §10.4 Tier 3. Round-trips with URDF / SDF / MJCF
+    // importers (v4 articulation slice). Internal storage = hash set of
+    // (min(a.raw), max(b.raw)); O(1) test per pair. Unordered: exclude(a,b)
+    // == exclude(b,a). Idempotent.
+    virtual void                 exclude_pair(BodyId a, BodyId b) noexcept                = 0;
+    virtual void                 include_pair(BodyId a, BodyId b) noexcept                = 0;
+    [[nodiscard]] virtual bool   is_pair_excluded(BodyId a, BodyId b) const noexcept     = 0;
+
+    // ---- Collision filtering — Tier 4 (ECS predicate) ------------------
+    // One predicate per scene; pure function of substep-start state with
+    // closed read set declared at registration. nullptr = remove the
+    // predicate (universal pair allowance). Per ADR-0068 §10.4 Tier 4.
+    virtual void set_collision_predicate(ICollisionPredicate* predicate) noexcept = 0;
+    [[nodiscard]] virtual ICollisionPredicate* collision_predicate() const noexcept = 0;
+
+    // ---- ContactModify hook (v1g+) -------------------------------------
+    // One callback per scene; pure function with API-enforced no-external-
+    // state. nullptr = no contact modification. Per ADR-0068 §10.6.
+    virtual void set_contact_modify_callback(IContactModifyCallback* callback) noexcept = 0;
+    [[nodiscard]] virtual IContactModifyCallback* contact_modify_callback() const noexcept = 0;
+
+    // ---- Contact / trigger event drains --------------------------------
+    // Deferred ECS event-stream dispatch per ADR-0068 §10.5. Events
+    // written during step() in PostPhysics phase, drained here in the
+    // user phase that follows. Sort key:
+    // (min(body_a, body_b), max(body_a, body_b), kind) — deterministic
+    // delivery regardless of which fibre generated which contact.
+    //
+    // Drain semantics: the returned span is valid until the next step()
+    // call (events live in scene-managed scratch from PhysicsConfig::
+    // solver_scratch). Caller may iterate but must not retain pointers
+    // past the next step.
+    [[nodiscard]] virtual crd::containers::ConstSpan<ContactEvent> drain_contact_events() noexcept = 0;
+    [[nodiscard]] virtual crd::containers::ConstSpan<TriggerEvent> drain_trigger_events() noexcept = 0;
 
     // ---- Stepping -------------------------------------------------------
     // Advance the simulation by dt seconds. Implementations are expected to

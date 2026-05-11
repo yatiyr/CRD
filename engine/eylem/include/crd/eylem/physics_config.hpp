@@ -8,6 +8,11 @@
 #include <crd/eylem/types.hpp>
 #include <crd/math/vec.hpp>
 
+namespace crd::memory
+{
+class IAllocator;
+}
+
 namespace crd::eylem
 {
 struct PhysicsConfig
@@ -45,6 +50,36 @@ struct PhysicsConfig
     // Solver tunables.
     bool warm_starting_enabled = true;
     bool ccd_enabled           = false; // global default; per-body override via flag
+
+    // ---------------------------------------------------------------------------
+    // Allocator strategy (Phase 3.1 v1b-a; doc: docs/systems/eylem-allocators.md)
+    //
+    // The eylem scene draws from a tiered allocator model:
+    //
+    //   1. `persistent_alloc` — scene-lifetime. Hosts body / collider / joint
+    //      pools, the contact cache, persistent islands, and variable-size
+    //      geometry (hull vertices, mesh data). Expected to be a
+    //      `crd::memory::TlsfAllocator` (O(1) alloc/free, bounded
+    //      fragmentation; the canonical real-time choice). May be nullptr,
+    //      in which case the scene falls back to `default_allocator()`.
+    //
+    //   2. `solver_scratch` — per-step bump arena. Reset every `step()` call.
+    //      Hosts the broadphase pair list, the contact manifold staging
+    //      area, and per-island solver scratch buffers. Expected to be a
+    //      `crd::memory::LinearAllocator`. May be nullptr → fallback to
+    //      `default_allocator()`. The scene NEVER `deallocate()`s through
+    //      this; it `reset()`s the arena at end of step.
+    //
+    //   3. Per-fiber broadphase / narrow-phase scratch uses the existing
+    //      `crd::jobs::frame_alloc()` (frame-lifetime, free at frame end).
+    //      NOT held in PhysicsConfig because it's a process-wide singleton
+    //      from `crd-jobs`.
+    //
+    // Pointers are non-owning. The application owns the allocators and
+    // guarantees they outlive the scene. Captured at scene construction;
+    // changing them after the first step() is undefined.
+    crd::memory::IAllocator* persistent_alloc = nullptr;
+    crd::memory::IAllocator* solver_scratch   = nullptr;
 };
 
 } // namespace crd::eylem

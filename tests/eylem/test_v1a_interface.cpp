@@ -27,6 +27,20 @@ TEST_CASE("eylem v1a strong-type IDs are 4 bytes and trivially copyable", "[eyle
     STATIC_REQUIRE(sizeof(ColliderId) == 4);
     STATIC_REQUIRE(sizeof(JointId)    == 4);
 
+    // ADR-0067 — force-field surface enum values + size sanity check
+    // (formula impls land per slice in v1f-fields-a..i; the surface
+    // freezes here at v1l alongside everything else in crd-eylem).
+    STATIC_REQUIRE(static_cast<crd::u8>(FieldFormula::Directional) == 0);
+    STATIC_REQUIRE(static_cast<crd::u8>(FieldFormula::Script)      == 8);
+    STATIC_REQUIRE(static_cast<crd::u8>(FieldFalloff::Constant)    == 0);
+    STATIC_REQUIRE(static_cast<crd::u8>(FieldFalloff::Polynomial)  == 5);
+    STATIC_REQUIRE(static_cast<crd::u8>(FieldMassCoupling::Force)  == 0);
+    STATIC_REQUIRE(static_cast<crd::u8>(FieldComposition::Add)     == 0);
+    STATIC_REQUIRE(static_cast<crd::u8>(FieldTrigger::Continuous)  == 0);
+    REQUIRE(ForceFieldComponent{}.formula     == FieldFormula::Directional);
+    REQUIRE(ForceFieldComponent{}.composition == FieldComposition::Add);
+    REQUIRE(ForceFieldComponent{}.field_id    == 0ULL);
+
     STATIC_REQUIRE(std::is_trivially_copyable_v<BodyId>);
     STATIC_REQUIRE(std::is_trivially_copyable_v<ColliderId>);
     STATIC_REQUIRE(std::is_trivially_copyable_v<JointId>);

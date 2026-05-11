@@ -23,7 +23,7 @@
 
 ## `PhysicsConfig` allocator slots
 
-v1b adds two slots to `PhysicsConfig`:
+v1b-a adds two slots to `PhysicsConfig`:
 
 ```cpp
 struct PhysicsConfig {
@@ -35,11 +35,15 @@ struct PhysicsConfig {
     // sized to the worst-case scene budget.
     crd::memory::IAllocator* persistent_alloc = nullptr;
 
-    // Per-frame solver scratch. Wiped every step() via reset(). nullptr
-    // falls back to a scene-internal LinearAllocator sized from the
-    // max_bodies hint. Production can pass an externally-managed one
-    // (e.g. shared across the scene + the renderer's per-frame arena).
-    crd::memory::LinearAllocator* solver_scratch = nullptr;
+    // Per-frame solver scratch. The scene NEVER calls deallocate() through
+    // this; it calls reset() at end of step(). Expected to be a
+    // LinearAllocator (or any IAllocator that supports the bump-and-reset
+    // pattern). Typed as IAllocator* (not LinearAllocator*) so tests +
+    // tools can swap in MallocAllocator without standing up a real arena.
+    // nullptr falls back to default_allocator() with reset() becoming a
+    // no-op (the application's general allocator absorbs the lifetime
+    // mismatch). Production passes an explicit LinearAllocator.
+    crd::memory::IAllocator* solver_scratch = nullptr;
 };
 ```
 
@@ -135,15 +139,16 @@ when storage actually matters.
 
 ## What v1b adds
 
-1. `PhysicsConfig::persistent_alloc` + `solver_scratch` fields.
-2. `crd-eylem-rigid3d` impl uses them: TLSF for persistent storage,
-   LinearAllocator for solver scratch, PoolAllocator for the
-   contact-manifold cache, frame_alloc for per-fiber scratch in
-   broadphase + narrow phase fan-out.
-3. Tests verify allocator-injection works (`make_rigid3d_scene(cfg)`
-   round-trips a custom allocator through to body storage).
-4. Sandbox demo (v1k) shows wiring a real TLSF pool sized to the demo's
-   1k-body scene.
+1. ✅ **v1b-a (shipped 2026-05-11):** `PhysicsConfig::persistent_alloc` +
+   `solver_scratch` fields (both `IAllocator*` for flexibility; expected
+   concrete types are `TlsfAllocator` + `LinearAllocator` respectively).
+   Plus `BodyPool` AoSoA-8 storage that consumes `persistent_alloc` for
+   body state + free-list side-table. 8 unit tests, 140 assertions.
+2. **v1b-b** will add `ColliderPool` (per-shape-kind pools — Sphere /
+   Box / Capsule — also from `persistent_alloc`).
+3. **v1b-c** will add `RigidBodyComponent` + `EylemSystem` (ECS hooks).
+4. **v1b-e** sandbox demo will show wiring a real TLSF pool sized to the
+   demo's body count.
 
 ## What v1+ adds
 

@@ -22,6 +22,7 @@ add_subdirectory(scene_cooker)
 add_subdirectory(preset)
 add_subdirectory(profile)
 add_subdirectory(eylem)
+add_subdirectory(eylem-rigid3d)
 add_subdirectory(draw)
 
 if(CRD_BUILD_BENCHMARKS)

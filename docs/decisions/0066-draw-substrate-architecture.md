@@ -483,6 +483,19 @@ remains supported and bypasses the registry; both paths coexist.
 Rejected: std::function (overhead + allocations on registration);
 CRTP (template ugliness, harder downstream registration).
 
+#### 19.2.1 Reserved diagnostic-viewer hook category (added 2026-05-11)
+
+Per coverage audit §1.13, the **solver-convergence viewer** (penetration
+depth heat-map, contact-force arrows, per-iteration residual plot,
+island-boundary outlines) ships as a `Category::Diagnostic` registry
+slot reserved here. Concrete impl arrives with the eylem v1k sandbox
+demo + Phase 7 editor integration. The Diagnostic category value is
+reserved at slot 12 (above the existing 0-11 closed enum, with the 4
+remaining bits providing 16-slot headroom for future diagnostic
+viewers — replay-snapshot scrubber UI, profiler ribbon, etc.). The
+existing per-category iteration order extends to Diagnostic last
+(rendered on top of all other viz).
+
 #### 19.3 Current-buffer pattern: explicit canonical + thread-local convenience
 
 Two-tier API:

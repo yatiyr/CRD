@@ -119,6 +119,32 @@ public:
         // No integration in the null impl. Real impl in v1b+ runs the SI solver.
     }
 
+    // ---- ADR-0068 surface — null impl returns nothing / accepts nothing ----
+    void exclude_pair(BodyId /*a*/, BodyId /*b*/) noexcept override {}
+    void include_pair(BodyId /*a*/, BodyId /*b*/) noexcept override {}
+    [[nodiscard]] bool is_pair_excluded(BodyId /*a*/, BodyId /*b*/) const noexcept override
+    {
+        return false;
+    }
+    void set_collision_predicate(ICollisionPredicate* /*predicate*/) noexcept override {}
+    [[nodiscard]] ICollisionPredicate* collision_predicate() const noexcept override
+    {
+        return nullptr;
+    }
+    void set_contact_modify_callback(IContactModifyCallback* /*callback*/) noexcept override {}
+    [[nodiscard]] IContactModifyCallback* contact_modify_callback() const noexcept override
+    {
+        return nullptr;
+    }
+    [[nodiscard]] crd::containers::ConstSpan<ContactEvent> drain_contact_events() noexcept override
+    {
+        return {};
+    }
+    [[nodiscard]] crd::containers::ConstSpan<TriggerEvent> drain_trigger_events() noexcept override
+    {
+        return {};
+    }
+
     [[nodiscard]] std::optional<RaycastHit> raycast(crd::math::Vec3f /*origin*/,
                                                     crd::math::Vec3f /*direction*/,
                                                     crd::f32         /*max_distance*/) const override

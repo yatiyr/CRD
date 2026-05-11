@@ -11,6 +11,8 @@
 // Phase plan: docs/phases/phase-3.1-eylem.md.
 
 #include <crd/eylem/collider.hpp>
+#include <crd/eylem/collision_filter.hpp>
+#include <crd/eylem/force_field.hpp>
 #include <crd/eylem/joint.hpp>
 #include <crd/eylem/material.hpp>
 #include <crd/eylem/physics_config.hpp>

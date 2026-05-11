@@ -263,3 +263,12 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 | 0064  | `crd-sdf` substrate architecture               | arch, sdf, eylem, renderer, font, audio, editor, resources | Accepted |
 | 0065  | `crd-hesap` numerical computing substrate (MATLAB-class) | arch, hesap, math, solvers, autodiff, opt, ode, fft, dsp, scripting | Accepted |
 | 0066  | `crd-draw` substrate architecture        | arch, draw, eylem, sdf, audio, renderer, editor, resources | Accepted |
+| 0067  | Eylem force-field architecture (three-tier substrate)        | arch, physics, eylem, fields, sdf, draw, ecs, obek, determinism | Accepted |
+| 0068  | Eylem body types + collision filtering + callbacks (3 motion types + sensor + 5-tier filter + deferred ECS events + ContactModify) | arch, physics, eylem, collision, filtering, callbacks, ecs, determinism | Accepted |
+| 0069  | Eylem materials substrate (friction + restitution + surface velocity + density)  | arch, physics, eylem, materials, friction, restitution                       | Accepted  |
+| 0070  | Eylem solver catalog + selection guidance (incl. Nonsmooth Newton)              | arch, physics, eylem, solvers                                                 | Planned   |
+| 0071  | Robotics importers (URDF / SDF / MJCF) + actuator catalogue                       | arch, physics, eylem, robotics, importers, actuators, urdf, sdf, mjcf         | Planned   |
+| 0072  | Eylem sensor substrate (IMU / LIDAR / proximity / threshold events / diagnostics) | arch, physics, eylem, sensors, robotics                                       | Planned   |
+| 0073  | Eylem aerospace substrate (variable mass + aero + atm + propulsion + J2 + sep)    | arch, physics, eylem, aerospace, aero, atmosphere, propulsion, fields         | Planned   |
+| 0074  | Eylem cinematic / animation-physics bridge (`crd-eylem-cine` module)              | arch, physics, eylem, cinematic, animation, film                              | Planned   |
+| 0075  | Eylem testing rigor + conservation-law CI                                          | arch, physics, eylem, testing, ci, conservation, scientific-computing        | Accepted  |
