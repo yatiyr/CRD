@@ -1,13 +1,24 @@
 # Phase 3.1.7 — `crd-geometry`: computational-geometry substrate
 
-**Status:** ⏳ **next-active** (research dossier closed 2026-05-11;
-ADR-0076 Accepted + Amended 2026-05-11 §12; slice list locked;
+**Status:** ⏳ **next-active** (research dossier closed 2026-05-11
++ addendum §13 added 2026-05-11; ADR-0076 Accepted + Amended
+2026-05-11 §12 + §13; slice list locked at **30 slices**;
 **first-light kickoff IMMEDIATELY after Phase 3.1 v1b cluster close
 (sweep-PASS gates the pivot)** — not after Phase 3.1.6 `crd-hesap`
-as originally locked. Sequence pivot per ADR-0076 §12: full 29-slice
+as originally locked. Sequence pivot per ADR-0076 §12: full 30-slice
 phase executes BEFORE Phase 3.1 v1c so eylem v1c+v1d+v1d-mesh and
 sdf v2 consume geometry from day 1, dissolving the deferred-refactor
-debt the original sequence required.)
+debt the original sequence required. ADR-0076 §13 (2026-05-11): the
+pre-existing `crd::math::geometry` (404 LOC — `Ray`/`Plane`/`Sphere`/
+`AABB`/`Triangle`/`Frustum` + ~16 closest-point/intersect helpers,
+~9 consumers) is **moved-and-deleted** into `crd-geometry-primitives`
+v0a — `crd-math` keeps only Vec/Mat/Quat/Transform/SIMD/deterministic;
+and a new **v0f cutting-edge / branchless / SIMD intersection corpus**
+sub-slice lands after v0e — watertight ray-tri (Woop 2013),
+Baldwin-Weber 2016, branchless NaN-safe slab ray-AABB, Williams/Ize
+robust-traversal ray precompute, Plücker edge classification, Ericson
+Voronoi-region closest-point-on-triangle, + `Vec4f`/`Vec8f` batch
+kernels + ULP-conformance tests.)
 
 **Research dossier:** `docs/research/cerid-geometry.md` (11,523 words —
 industry survey, algorithmic scope, determinism contract, module split,
@@ -138,8 +149,12 @@ dependency.
 
 | Slice | Scope | LOC | Calendar |
 |---|---|---|---|
-| **v0a–v0d** | primitives substrate: types (`Plane`/`Ray`/`AABB`/`OBB`/`Sphere`/`Capsule`/`Triangle3`/`Frustum`) + closest-point formulas + intersection tests + barycentric utilities | ~3000 | ~1 wk |
+| **v0a** | `crd-geometry-primitives` module skeleton + primitive types (`Point` aliases, `Line`/`Segment`/`Ray`, `Plane`, `AABB`, `OBB`, `Sphere`, `Capsule`, `Triangle3`, `Frustum`). **ADR-0076 §13 move-and-delete:** absorbs the existing `crd::math::geometry` (`Ray`/`Plane`/`Sphere`/`AABB`/`Triangle`/`Frustum` + ~16 helpers) — types + helpers move to `crd::geometry::primitives::*`, `engine/math/include/crd/math/geometry.hpp` is deleted, ~9 consumers (`crd-scene` `world.hpp`/`query.hpp`, math tests, smokes, bench) repointed. `crd-math` thereafter ships only Vec/Mat/Quat/Transform/SIMD/deterministic. | ~700 + refactor | ~3 days |
+| **v0b** | closest-point formulas (point → line/segment/ray/plane/triangle/AABB/OBB/sphere/capsule); **Ericson Voronoi-region** closest-point-on-triangle (the near-branchless form GJK fallback / EPA / capsule-vs-mesh need, not a naive plane-project+clamp) | ~800 | ~3 days |
+| **v0c** | intersection tests, everything-vs-everything — ray-{plane, triangle (Möller-Trumbore 1997), AABB slab, OBB, sphere, capsule, cylinder}, AABB-triangle (Akenine-Möller 2001 13-axis SAT), OBB-OBB (15-axis SAT), tri-tri (Möller 1997), sphere-X, capsule-capsule (segment-pair closest), frustum-vs-{AABB, sphere, OBB} | ~1500 | ~4 days |
+| **v0d** | barycentric (point-in-triangle/tetrahedron, Ericson §3.4) + 3-tetrahedron utilities | ~200 | ~1 day |
 | **v0e** | iq-formulary primitives substrate — polynomial + exponential smin operators (`smin_poly`, `smin_exp`) + domain-repeat / domain-mirror / domain-warp ops + the shader-helpers cooker generator skeleton (no GPU side yet); ALSO lands the `crd::math::simd::reduce_argmax_with_lex_tiebreak` substrate primitive that v3 Quickhull SIMD reduction needs | ~1000 | ~3 days |
+| **v0f** | **cutting-edge / branchless / SIMD intersection corpus** (ADR-0076 §13; research dossier §13) — **watertight ray-tri** (Woop/Benthin/Wald 2013 — shear+scale ray transform, edge-function form, consistent sign across shared edges; becomes the default ray-tri for `-mesh` v4d leaves + `crd-sdf` v2 mesh-bake) + **Baldwin-Weber 2016** ray-tri (precomputed 3×4 unit-triangle transform, 9 mul + 6 add/ray, branchless — opt-in default for cooked static meshes, 48 B/tri) + **branchless NaN-safe slab ray-AABB** (Tavianator form + Williams 2005 precomputed `inv_dir`/sign-mask, zero hot-path conditionals) + **robust BVH-traversal ray precompute** (`RayPacket` per Ize 2013 — `inv_dir` + per-axis sign flags + boundary-consistent constants; consumed by `-bvh` v1g) + **Plücker-coordinate edge classification** (sign-only line/segment/ray-vs-triangle + segment-vs-segment side tests, fully branchless, `Vec8f`-batchable) + **SIMD batch kernels** (`Vec4f`/`Vec8f` over the scalar cores: ray-vs-N-AABB, ray-vs-N-triangle [Woop & Möller-Trumbore variants], N-sphere-vs-N-sphere, segment-vs-N-segment closest-pair, AABB-vs-N-AABB overlap mask; AoSoA via `crd::math::simd::Soa`) + ULP-conformance tests (SIMD batch vs scalar core) + watertight-shared-edge consistency property test + cross-check vs the migrated `crd::math::geometry` Möller-Trumbore | ~700–900 | ~4 days |
 | **v1a–v1f** | binned-SAH BVH + O(n) refit + insert/erase via Catto 2019 tree rotations + quad-BVH + closest-point + Embree benchmark | ~5000 | ~2 wk |
 | **v1g** | BVH4 quad-topology promoted to default + SIMD ray-vs-4-AABB intersect kernel (`Vec4f` lanes) | ~500 | ~3 days |
 | **v2a–v2f** | GJK distance + GJK boolean + EPA penetration + SAT box-pair fast path + tiebreak conformance tests | ~3000 | ~2 wk |
@@ -153,9 +168,11 @@ dependency.
 | **v9a–v9d** | GPU LBVH builder (Karras 2012+2013) + GPU BVH refit + V-HACD convex decomposition (Mamou 2014, editor-tier) + REPL bindings | ~8000 | ~3 wk |
 | **v9e** | `crd-geometry-shader-helpers` GLSL/HLSL output side — cooker emits primitive library + iq smin/domain-ops from formula-IR manifest seeded at v0e; ULP-conformance test against C++ reference; first-light consumer = `crd-renderer` Phase 3.5+ DFAO/DF-soft-shadow | ~4000 | ~2 wk |
 
-**Total: ~29 slices, ~15.8 KLOC engine + ~5 KLOC editor-tier + ~4 KLOC
+**Total: ~30 slices, ~16.6 KLOC engine + ~5 KLOC editor-tier + ~4 KLOC
 cooker-emitted GLSL/HLSL, ~5–7 months calendar** (was 25 / 14 + 5 /
-4–6 months prior to supplement-dossier additions).
+4–6 months prior to supplement-dossier additions; +v0e/v1g/v4g/v9e
+from the supplement; +v0f from the ADR-0076 §13 amendment; the §13
+move-and-delete also nets ~−0.4 KLOC out of `crd-math` into v0a).
 
 ## Performance budgets (per supplement dossier §4.1)
 
@@ -164,6 +181,12 @@ full LTO + AVX2). Per-slice DoD measures against these:
 
 | Sub-module / op | Target | Reference |
 |---|---|---|
+| Ray-vs-AABB — branchless NaN-safe slab (scalar) | ~2 ns/test | Tavianator / Williams 2005; no hot-path branches |
+| Ray-vs-4-AABB — `Vec4f` batch slab | ~3–4 ns/4-test | one `Vec4f` min/max chain |
+| Ray-vs-triangle — Möller-Trumbore (scalar) | baseline (~10 ns) | Möller-Trumbore 1997 |
+| Ray-vs-triangle — watertight Woop 2013 (scalar) | ≤ 1.3× Möller-Trumbore | shear+scale overhead bought back by shared-edge consistency |
+| Ray-vs-triangle — Baldwin-Weber precomputed | ≤ 0.8× Möller-Trumbore on read-mostly meshes | 9 mul + 6 add/ray; 48 B/tri storage |
+| Ray-vs-8-triangle — `Vec8f` Woop / M-T batch | <10 ns/8-tri batch on AVX2 | matches the v4g per-leaf SIMD budget shape |
 | BVH4 traversal — ray-vs-4-AABB node test | ~8 ns/node on AVX2 | Embree publishes ~6 ns; ~30% gap accepted for determinism |
 | GJK — convex pair distance | 50–200 ns/pair, 2–6 iterations typical | Box2D v3 published envelope |
 | Quickhull — 100k points to closed 3D hull | <30 ms | qhull reference: ~25 ms on identical input |
@@ -196,6 +219,28 @@ scalar; `-gpu` already SIMT.
 - **Foundational web reference:** [iquilezles.org](https://iquilezles.org/articles/)
   — Inigo Quilez's article catalog (analytic distance functions 2D + 3D,
   smooth-blending operators, domain ops, raymarching, soft shadows, AO).
+- **v0f cutting-edge intersection corpus** (research dossier §13):
+  - Woop, Benthin, Wald (2013) — *Watertight Ray/Triangle Intersection*.
+    JCGT 2(1). (Embree's default ray-tri; consistent sign across shared
+    edges — the v4d `-mesh` leaf default + `crd-sdf` v2 mesh-bake.)
+  - Baldwin, Weber (2016) — *Fast Ray-Triangle Intersections by
+    Coordinate Transformation*. JCGT 5(3). (Precomputed unit-triangle
+    transform; the cooked-static-mesh default.)
+  - Williams, Barrus, Morley, Shirley (2005) — *An Efficient and Robust
+    Ray-Box Intersection Algorithm*. JGT 10(1). (Precomputed
+    `inv_dir` + sign-mask slab test.)
+  - Ize (2013) — *Robust BVH Ray Traversal*. JCGT 2(2). (Boundary-
+    consistent traversal — partner to Woop watertight tri; the v1g
+    `RayPacket` precompute.)
+  - "Tavianator" branchless slab form — Tavian Barnes (2011, 2015, 2022
+    revisions), *Fast, Branchless Ray/Bounding Box Intersections* — the
+    de-facto NaN-safe `tmin/tmax` formulation; mathematically equivalent
+    to Williams 2005 with IEEE min/max ordering.
+  - Plücker-coordinate edge tests — see Erickson (1997) *Plücker
+    Coordinates Tutorial* + Ericson *RTCD* §5.3 / Eberly GTE
+    line-triangle classification (sign-only, branchless edge functions).
+  - Ericson *Real-Time Collision Detection* §5.1.5 — the Voronoi-region
+    `closest_point(Triangle, p)` (v0b).
 
 ## Open questions (resolved by dossier)
 

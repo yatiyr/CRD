@@ -19,8 +19,6 @@
 //   5. sync_to_transform = 0 → Transform untouched (user owns it).
 //   6. Null body_id / stale handle → no crash, no write.
 
-#include <catch2/catch_test_macros.hpp>
-
 #include <crd/eylem/components.hpp>
 #include <crd/eylem/physics_config.hpp>
 #include <crd/eylem/rigid_body.hpp>
@@ -31,6 +29,7 @@
 #include <crd/scene/transform.hpp>
 #include <crd/scene/world.hpp>
 
+#include <catch2/catch_test_macros.hpp>
 #include <cmath>
 #include <memory>
 
@@ -50,9 +49,8 @@ class InterpFixture
 {
 public:
     InterpFixture()
-        : m_alloc(crd::usize{4U} << 20U, /*parent=*/nullptr, "interp-test")
-        , m_pool(&m_alloc, /*max_bodies=*/64U)
-        , m_world(&m_alloc)
+        : m_alloc(crd::usize{4U} << 20U, /*parent=*/nullptr, "interp-test"), m_pool(&m_alloc, /*max_bodies=*/64U),
+          m_world(&m_alloc)
     {
         m_world.register_component<crd::scene::Transform>(crd::scene::StorageHint::Archetype);
         m_world.register_component<crd::scene::TransformDirtyFlag>(crd::scene::StorageHint::SparseSet);
@@ -60,33 +58,31 @@ public:
     }
 
     crd::memory::TlsfAllocator m_alloc;
-    BodyPool                   m_pool;
-    crd::scene::World          m_world;
+    BodyPool m_pool;
+    crd::scene::World m_world;
 };
 } // namespace
 
-TEST_CASE("eylem v1b-e RigidBodyInterpolationSystem reports PreRender + variable",
-          "[eylem][v1b-e][interp][system]")
+TEST_CASE("eylem v1b-e RigidBodyInterpolationSystem reports PreRender + variable", "[eylem][v1b-e][interp][system]")
 {
     InterpFixture fix;
     PhysicsConfig cfg{};
     cfg.fixed_dt = 1.0F / 60.0F;
     RigidBodyInterpolationSystem sys{fix.m_pool, cfg};
 
-    REQUIRE(sys.phase()      == crd::scene::SchedulePhase::PreRender);
+    REQUIRE(sys.phase() == crd::scene::SchedulePhase::PreRender);
     REQUIRE(sys.fixed_step() == false);
-    REQUIRE(sys.name()       == crd::containers::StringView{"RigidBodyInterpolationSystem"});
+    REQUIRE(sys.name() == crd::containers::StringView{"RigidBodyInterpolationSystem"});
 }
 
-TEST_CASE("eylem v1b-e interpolator at alpha=0 emits prev pose",
-          "[eylem][v1b-e][interp][lerp]")
+TEST_CASE("eylem v1b-e interpolator at alpha=0 emits prev pose", "[eylem][v1b-e][interp][lerp]")
 {
     InterpFixture fix;
     PhysicsConfig cfg{};
     cfg.fixed_dt = 1.0F / 64.0F;
-    cfg.gravity  = crd::math::Vec3f{0.0F, -9.81F, 0.0F};
+    cfg.gravity = crd::math::Vec3f{0.0F, -9.81F, 0.0F};
 
-    EylemSystem                  integ{fix.m_pool, cfg};
+    EylemSystem integ{fix.m_pool, cfg};
     RigidBodyInterpolationSystem interp{fix.m_pool, cfg};
 
     // Body at origin, dynamic.
@@ -111,7 +107,7 @@ TEST_CASE("eylem v1b-e interpolator at alpha=0 emits prev pose",
 
     // Check pool-level invariants first: prev=origin, curr is one step.
     const RigidBody curr_body = fix.m_pool.read(body_id);
-    const auto      prev      = fix.m_pool.read_prev(body_id);
+    const auto prev = fix.m_pool.read_prev(body_id);
     REQUIRE(prev.position.y == 0.0F);
     const crd::f32 expected_curr_y = cfg.gravity.y * cfg.fixed_dt * cfg.fixed_dt;
     // Tolerance accounts for one float multiply-and-add per axis under
@@ -135,13 +131,12 @@ TEST_CASE("eylem v1b-e interpolator at alpha=0 emits prev pose",
     REQUIRE(std::fabs(tr->translation.y - 0.0F) < 1e-6F);
 }
 
-TEST_CASE("eylem v1b-e interpolator at alpha=0.5 emits midpoint",
-          "[eylem][v1b-e][interp][lerp]")
+TEST_CASE("eylem v1b-e interpolator at alpha=0.5 emits midpoint", "[eylem][v1b-e][interp][lerp]")
 {
     InterpFixture fix;
     PhysicsConfig cfg{};
     cfg.fixed_dt = 1.0F / 64.0F;
-    cfg.gravity  = crd::math::Vec3f{0.0F, 0.0F, 0.0F}; // no gravity for this test
+    cfg.gravity = crd::math::Vec3f{0.0F, 0.0F, 0.0F}; // no gravity for this test
 
     RigidBodyInterpolationSystem interp{fix.m_pool, cfg};
 
@@ -178,7 +173,8 @@ TEST_CASE("eylem v1b-e interpolator at alpha=0.5 emits midpoint",
     // only public way to set it is through step_fixed. step_fixed(dt,
     // fixed_dt, max=0) advances the accumulator without running any
     // substep — exactly what we need.
-    fix.m_world.step_fixed(0.5 * cfg.fixed_dt, cfg.fixed_dt, /*max_substeps=*/0U);
+    fix.m_world.step_fixed(0.5 * static_cast<crd::f64>(cfg.fixed_dt), static_cast<crd::f64>(cfg.fixed_dt),
+                           /*max_substeps=*/0U);
     REQUIRE(std::fabs(fix.m_world.fixed_step_alpha(cfg.fixed_dt) - 0.5) < 1e-6);
 
     interp.run(fix.m_world);
@@ -190,8 +186,7 @@ TEST_CASE("eylem v1b-e interpolator at alpha=0.5 emits midpoint",
     REQUIRE(std::fabs(tr->translation.z - 5.0F) < 1e-5F); // (3+7)/2
 }
 
-TEST_CASE("eylem v1b-e nlerp takes short arc when dot(prev,curr) < 0",
-          "[eylem][v1b-e][interp][quat]")
+TEST_CASE("eylem v1b-e nlerp takes short arc when dot(prev,curr) < 0", "[eylem][v1b-e][interp][quat]")
 {
     InterpFixture fix;
     PhysicsConfig cfg{};
@@ -209,8 +204,8 @@ TEST_CASE("eylem v1b-e nlerp takes short arc when dot(prev,curr) < 0",
     //
     // theta = 0.2 rad → small but well above FP noise.
     const crd::f32 half = 0.1F; // theta/2
-    const crd::f32 s    = std::sin(half);
-    const crd::f32 c    = std::cos(half);
+    const crd::f32 s = std::sin(half);
+    const crd::f32 c = std::cos(half);
 
     RigidBody body{};
     body.position = {0.0F, 0.0F, 0.0F};
@@ -221,7 +216,7 @@ TEST_CASE("eylem v1b-e nlerp takes short arc when dot(prev,curr) < 0",
     // curr = negated Y rotation: (0, -s, 0, -c). Same orientation as
     // (0, s, 0, c) but opposite hemisphere → dot(identity, curr) = -c < 0.
     RigidBody curr_body = body;
-    curr_body.rotation  = crd::math::Quatf{0.0F, -s, 0.0F, -c};
+    curr_body.rotation = crd::math::Quatf{0.0F, -s, 0.0F, -c};
     fix.m_pool.write_curr_only(body_id, curr_body);
 
     const auto e = fix.m_world.spawn();
@@ -231,7 +226,8 @@ TEST_CASE("eylem v1b-e nlerp takes short arc when dot(prev,curr) < 0",
     rbc.sync_to_transform = 1U;
     fix.m_world.add_component(e, rbc);
 
-    fix.m_world.step_fixed(0.5 * cfg.fixed_dt, cfg.fixed_dt, /*max_substeps=*/0U);
+    fix.m_world.step_fixed(0.5 * static_cast<crd::f64>(cfg.fixed_dt), static_cast<crd::f64>(cfg.fixed_dt),
+                           /*max_substeps=*/0U);
     interp.run(fix.m_world);
 
     const auto* tr = fix.m_world.get_component<crd::scene::Transform>(e);
@@ -247,10 +243,8 @@ TEST_CASE("eylem v1b-e nlerp takes short arc when dot(prev,curr) < 0",
     REQUIRE(tr->rotation.y > 0.0F);
     REQUIRE(std::fabs(tr->rotation.y) < 0.2F);
     // Magnitude must be ~1 (renormalisation succeeded).
-    const crd::f32 mag = std::sqrt(tr->rotation.x * tr->rotation.x
-                                 + tr->rotation.y * tr->rotation.y
-                                 + tr->rotation.z * tr->rotation.z
-                                 + tr->rotation.w * tr->rotation.w);
+    const crd::f32 mag = std::sqrt(tr->rotation.x * tr->rotation.x + tr->rotation.y * tr->rotation.y +
+                                   tr->rotation.z * tr->rotation.z + tr->rotation.w * tr->rotation.w);
     REQUIRE(std::fabs(mag - 1.0F) < 1e-5F);
 }
 
@@ -271,19 +265,19 @@ TEST_CASE("eylem v1b-e multi-substep flow: prev = pose_after_substep_1, curr = p
     InterpFixture fix;
     PhysicsConfig cfg{};
     cfg.fixed_dt = 1.0F / 64.0F;
-    cfg.gravity  = crd::math::Vec3f{0.0F, -9.81F, 0.0F};
+    cfg.gravity = crd::math::Vec3f{0.0F, -9.81F, 0.0F};
 
     RigidBody body{};
     body.position = {0.0F, 0.0F, 0.0F};
     body.inv_mass = 1.0F;
-    body.linear_damping  = 0.0F;
+    body.linear_damping = 0.0F;
     body.angular_damping = 0.0F;
     const auto body_id = fix.m_pool.insert(body);
 
     const auto e = fix.m_world.spawn();
     fix.m_world.add_component(e, crd::scene::Transform{});
     RigidBodyComponent rbc{};
-    rbc.body_id           = body_id;
+    rbc.body_id = body_id;
     rbc.sync_to_transform = 1U;
     fix.m_world.add_component(e, rbc);
 
@@ -301,9 +295,9 @@ TEST_CASE("eylem v1b-e multi-substep flow: prev = pose_after_substep_1, curr = p
 
     // Pool: prev = pose_1, curr = pose_2.
     const RigidBody curr = fix.m_pool.read(body_id);
-    const auto      prev = fix.m_pool.read_prev(body_id);
-    const crd::f32  pose_1_y = cfg.gravity.y * cfg.fixed_dt * cfg.fixed_dt;       //  g·dt²
-    const crd::f32  pose_2_y = 3.0F * cfg.gravity.y * cfg.fixed_dt * cfg.fixed_dt; // 3g·dt²
+    const auto prev = fix.m_pool.read_prev(body_id);
+    const crd::f32 pose_1_y = cfg.gravity.y * cfg.fixed_dt * cfg.fixed_dt;        //  g·dt²
+    const crd::f32 pose_2_y = 3.0F * cfg.gravity.y * cfg.fixed_dt * cfg.fixed_dt; // 3g·dt²
     REQUIRE(std::fabs(prev.position.y - pose_1_y) < 1e-5F);
     REQUIRE(std::fabs(curr.position.y - pose_2_y) < 1e-5F);
 
@@ -314,8 +308,7 @@ TEST_CASE("eylem v1b-e multi-substep flow: prev = pose_after_substep_1, curr = p
     REQUIRE(std::fabs(tr->translation.y - expected_y) < 1e-5F);
 }
 
-TEST_CASE("eylem v1b-e interpolator skips entities with sync_to_transform=0",
-          "[eylem][v1b-e][interp][opt-out]")
+TEST_CASE("eylem v1b-e interpolator skips entities with sync_to_transform=0", "[eylem][v1b-e][interp][opt-out]")
 {
     InterpFixture fix;
     PhysicsConfig cfg{};
@@ -336,11 +329,12 @@ TEST_CASE("eylem v1b-e interpolator skips entities with sync_to_transform=0",
     tr_seed.translation = {7.0F, 8.0F, 9.0F};
     fix.m_world.add_component(e, tr_seed);
     RigidBodyComponent rbc{};
-    rbc.body_id           = body_id;
+    rbc.body_id = body_id;
     rbc.sync_to_transform = 0U; // user owns transform
     fix.m_world.add_component(e, rbc);
 
-    fix.m_world.step_fixed(0.5 * cfg.fixed_dt, cfg.fixed_dt, /*max_substeps=*/0U);
+    fix.m_world.step_fixed(0.5 * static_cast<crd::f64>(cfg.fixed_dt), static_cast<crd::f64>(cfg.fixed_dt),
+                           /*max_substeps=*/0U);
     interp.run(fix.m_world);
 
     const auto* tr = fix.m_world.get_component<crd::scene::Transform>(e);
@@ -350,8 +344,7 @@ TEST_CASE("eylem v1b-e interpolator skips entities with sync_to_transform=0",
     REQUIRE(tr->translation.z == 9.0F);
 }
 
-TEST_CASE("eylem v1b-e interpolator no-ops on null/stale body handles",
-          "[eylem][v1b-e][interp][safety]")
+TEST_CASE("eylem v1b-e interpolator no-ops on null/stale body handles", "[eylem][v1b-e][interp][safety]")
 {
     InterpFixture fix;
     PhysicsConfig cfg{};
@@ -364,7 +357,7 @@ TEST_CASE("eylem v1b-e interpolator no-ops on null/stale body handles",
     t1.translation = {10.0F, 20.0F, 30.0F};
     fix.m_world.add_component(e1, t1);
     RigidBodyComponent rbc1{};
-    rbc1.body_id           = crd::eylem::BodyId::null();
+    rbc1.body_id = crd::eylem::BodyId::null();
     rbc1.sync_to_transform = 1U;
     fix.m_world.add_component(e1, rbc1);
 
@@ -379,11 +372,12 @@ TEST_CASE("eylem v1b-e interpolator no-ops on null/stale body handles",
     t2.translation = {40.0F, 50.0F, 60.0F};
     fix.m_world.add_component(e2, t2);
     RigidBodyComponent rbc2{};
-    rbc2.body_id           = dead_id;
+    rbc2.body_id = dead_id;
     rbc2.sync_to_transform = 1U;
     fix.m_world.add_component(e2, rbc2);
 
-    fix.m_world.step_fixed(0.5 * cfg.fixed_dt, cfg.fixed_dt, /*max_substeps=*/0U);
+    fix.m_world.step_fixed(0.5 * static_cast<crd::f64>(cfg.fixed_dt), static_cast<crd::f64>(cfg.fixed_dt),
+                           /*max_substeps=*/0U);
     // REQUIRE_NOTHROW expands to `try { ... }` which is illegal under
     // win-tidy's exceptions-disabled mode. The system's run() is noexcept-
     // adjacent (no `throw` in any reachable path; failure modes are
@@ -405,7 +399,7 @@ TEST_CASE("eylem v1b-e World::fixed_step_alpha clamps to [0,1] across irregular 
           "[eylem][v1b-e][interp][world]")
 {
     crd::memory::TlsfAllocator alloc{crd::usize{1U} << 20U, nullptr, "interp-alpha-test"};
-    crd::scene::World          world{&alloc};
+    crd::scene::World world{&alloc};
 
     // Brand-new world: accumulator = 0 → alpha = 0.
     REQUIRE(world.fixed_step_alpha(1.0 / 60.0) == 0.0);

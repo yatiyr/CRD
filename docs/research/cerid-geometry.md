@@ -1556,6 +1556,22 @@ Reserved for a future scientific-computing consumer if it materialises.
 - Möller & Trumbore (1997) — *Fast, Minimum Storage Ray-Triangle
   Intersection*. JGT.
 - Akenine-Möller (2001) — *Fast 3D Triangle-Box Overlap Testing*. JGT.
+- Williams, Barrus, Morley & Shirley (2005) — *An Efficient and Robust
+  Ray-Box Intersection Algorithm*. JGT 10(1). (Precomputed
+  `inv_dir` + sign-mask slab test; the v0f branchless ray-AABB.)
+- Woop, Benthin & Wald (2013) — *Watertight Ray/Triangle Intersection*.
+  JCGT 2(1). (Embree's default ray-tri; shared-edge sign consistency.)
+- Ize (2013) — *Robust BVH Ray Traversal*. JCGT 2(2). (Boundary-
+  consistent BVH traversal; partner to Woop watertight tri.)
+- Baldwin & Weber (2016) — *Fast Ray-Triangle Intersections by
+  Coordinate Transformation*. JCGT 5(3). (Precomputed unit-triangle
+  transform; the cooked-static-mesh ray-tri default.)
+- Erickson, J. (1997) — *Plücker Coordinates* (Ray Tracing News
+  10(3)) — sign-only line/segment/ray-vs-triangle edge classification.
+- Barnes, T. ("Tavianator", 2011 / 2015 / 2022 revisions) — *Fast,
+  Branchless Ray/Bounding Box Intersections* — the de-facto NaN-safe
+  `tmin/tmax` slab formulation (equivalent to Williams 2005 with IEEE
+  min/max ordering).
 
 ### 12.4 Papers — convex hull
 
@@ -1688,3 +1704,141 @@ Reserved for a future scientific-computing consumer if it materialises.
 - `docs/research/cerid-sdf.md` — Phase 3.1.5 implicit-surface research.
 - `docs/research/cerid-hesap.md` — Phase 3.1.6 numerical-substrate
   research.
+
+---
+
+## 13. Addendum 2026-05-11 — v0f cutting-edge / branchless / SIMD intersection corpus
+
+**Context.** The base dossier (§4.13) catalogs the curated Ericson /
+Eberly "GTE" intersection set — solid, but it is the 2005-era state of
+the art. The user asked for the cutting-edge bar raised explicitly:
+"lots of cutting edge and branchless and fast (possibly using our SIMD
+operations) intersection functions". This addendum is the research
+record behind the **v0f sub-slice** (added to the slice plan + ADR-0076
+§13 the same day) and behind the **`crd::math::geometry` move-and-delete**
+(ADR-0076 §13.1).
+
+### 13.1 `crd::math::geometry` move-and-delete
+
+`engine/math/include/crd/math/geometry.hpp` already ships `Ray<T>` /
+`Plane<T>` / `Sphere<T>` / `AABB<T>` / `Triangle<T>` / `Frustum<T>`
++ ~16 helpers (`closest_point` / `intersects` / `contains` /
+`signed_distance` / `intersect_ray_plane` / `intersect_ray_sphere` /
+`intersect_ray_triangle` / `intersects(Frustum, AABB|Sphere)`),
+consumed by ~9 files. `crd-geometry-primitives` v0a would re-declare
+the same names. Three options were considered:
+
+| Option | Up-front cost | Long-term cost |
+|---|---|---|
+| (a) **Move-and-delete** | ~1 day refactor across math + scene + tests | none — one source of truth |
+| (b) Thin `using`-alias shim in `crd-math/geometry.hpp` | ~0 (one include hop) | a perpetual indirection layer; the shim never naturally dies |
+| (c) Coexist (geometry strictly additive) | ~0 | two `AABB`/`Sphere`/etc. definitions that drift over a decade; the exact failure mode §2.3 warns about for *external* libs, internalised |
+
+**Decision: (a) move-and-delete.** The leaf math module's design intent
+(§2.2) is Vec/Mat/Quat/Transform/SIMD/`deterministic` — geometric
+primitives over those types are the next tier up, which is precisely
+why `crd-geometry` is a separate module (§2). Keeping a half-copy in
+`crd-math` would re-introduce the scope conflation the module split
+exists to prevent. The ~1-day refactor is the smallest total cost of
+the three. `crd-math`'s scalar `intersect_ray_triangle` (Möller-Trumbore)
+becomes the v0f cross-check reference before it is deleted.
+
+### 13.2 The cutting-edge corpus — algorithm-by-algorithm
+
+Each entry is the *why* behind a v0f deliverable. Format mirrors §4
+(chosen / reference / disposition).
+
+#### Ray–triangle
+
+| Algorithm | Year | Property | Disposition |
+|---|---|---|---|
+| **Möller-Trumbore** | 1997 | minimal storage; fast; **not** edge-consistent (a ray can slip between two triangles sharing an edge) | already in §4.13 — kept as the general-purpose scalar default + the v0f cross-check reference |
+| **Watertight (Woop / Benthin / Wald)** | 2013 | shear+scale ray transform → edge-function form; **edge-consistent** — for two triangles sharing an edge a ray hits both or the consistent one, never neither; ~1.3× M-T cost | **CHOSEN — v0f.** Embree's default. Becomes the default ray-tri for `crd-geometry-mesh` v4d BVH leaves and `crd-sdf` v2 mesh-bake (correctness on imperfect meshes — narrows the §11.1 robust-predicates open question to the non-ray-tri cases). |
+| **Baldwin-Weber** | 2016 | precomputed 3×4 unit-triangle affine transform per tri; per-ray test 9 mul + 6 add, branchless; ~0.8× M-T on read-mostly meshes; +48 B/tri | **CHOSEN — v0f.** Opt-in default for cooked static meshes (`MeshResource` BVH, static colliders) where the storage pays off. |
+| Plücker ray-triangle | classical | sign-only edge tests via Plücker side-operator; fully branchless; no division until a hit is confirmed | **CHOSEN — v0f** (as the edge-classification primitive; the "which side / does it cross" form, used by GJK / clipping too). Reference: Erickson 1997 *Plücker Coordinates*; Ericson RTCD §5.3; Eberly GTE. |
+| Segura-Feito | 2001 | predicate-only ray-tri (no intersection point) | Reserved — Plücker covers the same need. |
+
+#### Ray–AABB
+
+| Algorithm | Property | Disposition |
+|---|---|---|
+| Naive 6-plane slab with branches | conditional per axis; branch-mispredict-prone | Rejected for the hot path. |
+| **Williams 2005 + Tavianator branchless slab** | precompute `inv_dir` (3 reciprocals once) + sign mask; per-test `tmin = max(min(t0,t1)...)`, `tmax = min(max(t0,t1)...)` with IEEE min/max ordering so a NaN from `0·∞` resolves the "right" way; zero hot-path conditionals; ~2 ns scalar | **CHOSEN — v0f.** The de-facto industry-standard ray-box; what every modern BVH traverser uses. |
+| `Vec4f` ray-vs-4-AABB | one min/max chain over 4 boxes' interleaved planes | **CHOSEN — v0f** (the scalar core for BVH4 traversal — `-bvh` v1g consumes it). |
+| `Vec8f` ray-vs-8-AABB | AVX2 8-wide | **CHOSEN — v0f** (for the wide-BVH path). |
+
+#### Robust BVH traversal precompute
+
+| Algorithm | Property | Disposition |
+|---|---|---|
+| **Ize 2013 — Robust BVH Ray Traversal** | the boundary-consistent comparison constants + the precomputed-`inv_dir`/sign-flag `RayPacket`; guarantees a ray whose origin lies exactly on a node-split plane is not lost | **CHOSEN — v0f** (ships the `RayPacket` type; `-bvh` v1g uses it). The partner to Woop watertight tri — together they make BVH ray queries hole-free. |
+| Pharr-Humphreys (PBRT) ray-AABB with rounding-error bounds | analytic conservative epsilon on `tHit` | Reserved — relevant if a renderer consumer needs sub-pixel-precise primary visibility; physics doesn't. |
+
+#### Closest-point-on-triangle
+
+| Algorithm | Property | Disposition |
+|---|---|---|
+| Plane-project + clamp-to-edges | branchy; subtly wrong near vertices | Rejected. |
+| **Ericson Voronoi-region** (RTCD §5.1.5) | classifies the query against the 7 Voronoi regions (3 vertex + 3 edge + 1 face) of the triangle with a fixed sequence of barycentric sign tests; near-branchless; the canonical physics form | **CHOSEN — v0b** (and the `Vec8f` batched variant in v0f for capsule-vs-mesh / EPA / GJK-fallback inner loops). |
+
+#### SIMD batch kernels (v0f)
+
+`Vec4f` / `Vec8f` wrappers over the scalar cores above, AoSoA storage
+via `crd::math::simd::Soa`:
+
+- `ray_vs_n_aabb` — broadphase prefilter + BVH leaf test.
+- `ray_vs_n_triangle` — Woop (watertight) and Möller-Trumbore variants;
+  `Vec8f` over 8 triangles per leaf (the v4g pattern, but the kernel
+  itself lands here in v0f as the reusable primitive).
+- `n_sphere_vs_n_sphere` — particle / fluid neighbour prefilter.
+- `segment_vs_n_segment` closest-pair — the capsule-vs-mesh / capsule-
+  vs-capsule-array inner loop.
+- `aabb_vs_n_aabb` overlap mask — the per-node child-overlap test that
+  the dynamic-tree query (`-bvh` v1) calls.
+
+All batch reductions go through `crd::math::simd::reduce_*` pairwise
+binary trees (ADR-0076 §4 pin 7) — never lane-order accumulation.
+
+### 13.3 Reference catalogues / prior art for the corpus
+
+- **Embree** (Intel) — the reference for what a production CPU BVH +
+  primitive intersector ships: Woop 2013 watertight tri is its default;
+  Ize 2013 robust traversal; BVH4/BVH8 SIMD ray-vs-N-AABB. Apache-2.0
+  — algorithm reference, not source (we re-implement deterministically).
+- **PBRT (Pharr, Jakob, Humphreys)** — *Physically Based Rendering*
+  4th ed., Ch. 6 — the canonical exposition of robust ray-bounds and
+  ray-triangle with explicit floating-point error analysis.
+- **Tavian Barnes' "Fast, Branchless Ray/Bounding Box Intersections"**
+  (tavianator.com, 2011 + 2015 + 2022 revisions) — the widely-cited
+  derivation of the NaN-safe branchless slab test; the 2022 revision
+  covers the SIMD packing.
+- **JCGT (Journal of Computer Graphics Techniques)** — Woop 2013,
+  Ize 2013, Baldwin-Weber 2016 all published here; the modern home of
+  practical-intersection-algorithm papers.
+- **Inigo Quilez's "intersectors"** (iquilezles.org) — analytic
+  ray-vs-{sphere, ellipsoid, box, plane, disk, capsule, cylinder,
+  capped-cylinder, torus, triangle, ...} — the branch-minimal closed
+  forms; already pulled into v0e for the SDF-side primitives, the
+  ray-intersector forms feed v0c + v0f.
+- **Ericson, RTCD Ch. 5** — the curated physics-grade subset (the
+  v0b/v0c anchor); §5.1.5 closest-point-on-triangle, §5.3 line/segment
+  classification, §5.5 ray queries.
+- **Eberly, GTE / "3D Game Engine Design" Ch. 14–17** — the exhaustive
+  primitive-pair catalogue (the v0c anchor; ~70 pairs).
+
+### 13.4 Determinism
+
+v0f inherits the ADR-0063 contract wholesale; the corpus-specific
+tiebreak pins are ADR-0076 §4 items 12 (watertight ray-tri axis
+selection + closed on-edge tests) and 13 (Plücker fixed sum order +
+sign-zero = "on the line"). The branchless slab test is naturally
+deterministic — it is pure min/max/mul/sub with no compiler-reorderable
+reductions and no transcendentals. SIMD batch kernels: pin 7 (pairwise-
+tree reductions). Cross-platform byte-exact and the eylem v9b
+replay-hash CI cover regressions (§5.8).
+
+### 13.5 New references (added to §12.3 above)
+
+Williams-Barrus-Morley-Shirley 2005 · Woop-Benthin-Wald 2013 · Ize
+2013 · Baldwin-Weber 2016 · Erickson 1997 (Plücker) · Barnes
+("Tavianator") — see §12.3.

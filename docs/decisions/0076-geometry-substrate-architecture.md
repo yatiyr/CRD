@@ -42,9 +42,20 @@ mesh processing + Delaunay/Voronoi + convex decomposition (editor tier)
 Module split (10 sub-modules, ~14 KLOC engine + ~5 KLOC editor-tier
 across ~25 slices over ~4-6 months):
 
-1. **`crd-geometry-primitives`** (v0, ~3 KLOC) — point/line/segment/ray/
+1. **`crd-geometry-primitives`** (v0, ~3.8 KLOC) — point/line/segment/ray/
    plane/triangle/sphere/AABB/OBB/capsule distance + intersection +
-   closest-point + frustum tests + barycentric utilities.
+   closest-point + frustum tests + barycentric utilities; plus (v0e) the
+   iq smooth-blending / domain-op formulary; plus (v0f — added by the §13
+   amendment) the cutting-edge / branchless / SIMD intersection corpus
+   (watertight ray-tri Woop 2013, Baldwin-Weber 2016 ray-tri, branchless
+   NaN-safe slab ray-AABB, Ize 2013 robust-traversal ray precompute,
+   Plücker edge classification, Ericson Voronoi-region closest-point-on-
+   triangle, `Vec4f`/`Vec8f` batch kernels). **The §13 amendment also
+   move-and-deletes the pre-existing `crd::math::geometry`** (404 LOC —
+   `Ray`/`Plane`/`Sphere`/`AABB`/`Triangle`/`Frustum` + ~16 closest-point/
+   intersect helpers) into `crd::geometry::primitives::*`; `crd-math`
+   thereafter ships only Vec/Mat/Quat/Transform/SIMD/`deterministic`. See
+   §13.
 2. **`crd-geometry-bvh`** (v1, ~5 KLOC) — `BvhTree<AABB>` with binned-
    SAH builder + O(n) refit + O(log n) insert/remove via tree rotations
    (Catto GDC 2019). Quad-BVH topology default; binary-BVH variant.
@@ -182,6 +193,28 @@ dossier §4.3):
     at-f32 conformance budget** against the C++ scalar reference;
     cooker validates per-emit, CI gates on the assertion.
 
+**Cutting-edge intersection corpus tiebreak pins** (added 2026-05-11
+with the §13 amendment, for the v0f sub-slice):
+
+12. **Watertight ray-triangle (Woop 2013)**: the ray-transform axis
+    selection (Woop picks the largest-magnitude component of the ray
+    direction as the "z" axis) is pinned to **X-then-Y-then-Z on
+    magnitude ties**; the edge-function products `U = Cx·By − Cy·Bx`
+    etc. are evaluated in the published fixed order; the back-face /
+    on-edge tests use `>= 0` / `<= 0` (closed) so that for two
+    triangles sharing an edge, the ray either hits both or hits the
+    consistent one — never neither. The 2-1-0 edge-permutation order
+    is the dossier §13 reference order, identical regardless of input
+    vertex winding.
+13. **Plücker-coordinate edge classification**: the six permuted
+    coordinate products of the Plücker side-operator are summed in a
+    fixed `(d0·m1 + d1·m2 + d2·m0) − (m0·d1 + m1·d2 + m2·d0)`-shaped
+    order (no compiler reassociation — the sum goes through the
+    `crd::math` deterministic-FP path); a result of exactly `±0.0` is
+    counted as **on the line** (Cerid convention), not on either side.
+    Batched `Vec8f` Plücker tests use `crd::math::simd` pairwise-tree
+    reductions, same as pin 7.
+
 GPU geometry kernels (v9 onward) match CPU bit-exactly via the same
 predicate strategy — same approach as `crd-hesap-gpu` (ADR-0065).
 
@@ -268,8 +301,12 @@ Per research dossier §8 + phase plan `docs/phases/phase-3.1.7-geometry.md`:
 
 | Slice | Scope | LOC | Calendar |
 |---|---|---|---|
-| **v0a–v0d** | primitives substrate (types + closest-point + intersection + barycentric) | ~3000 | ~1 wk |
+| **v0a** | `crd-geometry-primitives` skeleton + primitive types (`Line`/`Segment`/`Ray`/`Plane`/`AABB`/`OBB`/`Sphere`/`Capsule`/`Triangle3`/`Frustum`). **§13 move-and-delete:** absorbs `crd::math::geometry` (types + ~16 helpers → `crd::geometry::primitives::*`), deletes `engine/math/include/crd/math/geometry.hpp`, repoints ~9 consumers; `crd-math` thereafter lean | ~700 + refactor | ~3 days |
+| **v0b** | closest-point formulas (point → everything) + Ericson Voronoi-region closest-point-on-triangle | ~800 | ~3 days |
+| **v0c** | intersection tests (everything-vs-everything: ray-X, AABB-tri Akenine-Möller 2001, OBB-OBB 15-axis SAT, tri-tri Möller 1997, sphere-X, capsule-capsule, frustum-X) | ~1500 | ~4 days |
+| **v0d** | barycentric + 3-tetrahedron utilities | ~200 | ~1 day |
 | **v0e** | iq-formulary primitives substrate — polynomial + exponential smin operators + domain-repeat / domain-mirror / domain-warp ops + the shader-helpers cooker generator skeleton (no GPU side yet); ALSO lands the `crd::math::simd::reduce_argmax_with_lex_tiebreak` substrate primitive that v3 Quickhull SIMD reduction needs | ~1000 | ~3 days |
+| **v0f** | cutting-edge / branchless / SIMD intersection corpus (§13) — watertight ray-tri (Woop/Benthin/Wald 2013) + Baldwin-Weber 2016 ray-tri (precomputed) + branchless NaN-safe slab ray-AABB (Tavianator / Williams 2005) + Ize 2013 robust-traversal ray precompute (`RayPacket` for `-bvh` v1g) + Plücker edge classification + `Vec4f`/`Vec8f` batch kernels (ray-vs-N-AABB, ray-vs-N-triangle, N-sphere, segment-vs-N-segment, AABB-vs-N-AABB) + ULP-conformance + watertight-shared-edge property tests | ~700–900 | ~4 days |
 | **v1a–v1f** | binned-SAH BVH + refit + insert/erase + quad-BVH + closest-point + Embree benchmark | ~5000 | ~2 wk |
 | **v1g** | BVH4 quad-topology promoted to default + SIMD ray-vs-4-AABB intersect kernel (`Vec4f` lanes) | ~500 | ~3 days |
 | **v2a–v2f** | GJK distance + GJK boolean + EPA + SAT box-pair + tiebreak conformance | ~3000 | ~2 wk |
@@ -283,11 +320,12 @@ Per research dossier §8 + phase plan `docs/phases/phase-3.1.7-geometry.md`:
 | **v9a–v9d** | GPU LBVH builder + GPU refit + V-HACD (editor-tier) + REPL bindings | ~8000 | ~3 wk |
 | **v9e** | `crd-geometry-shader-helpers` GLSL/HLSL output side — cooker emits primitive library + iq smin/domain-ops from formula-IR manifest seeded at v0e; ULP-conformance test against C++ reference; first-light consumer = `crd-renderer` Phase 3.5+ DFAO/DF-soft-shadow | ~4000 | ~2 wk |
 
-**Total: ~29 slices, ~15.8 KLOC engine + ~5 KLOC editor-tier + ~4 KLOC
+**Total: ~30 slices, ~16.6 KLOC engine + ~5 KLOC editor-tier + ~4 KLOC
 cooker-emitted GLSL/HLSL, ~5–7 months calendar** (was 25 / 14 + 5 /
 4–6 months prior to supplement-dossier additions; supplement adds v0e,
 v1g, v4g, v9e plus the 11th sub-module `crd-geometry-shader-helpers`
-which is mostly cooker-emitted).
+which is mostly cooker-emitted; the §13 amendment adds v0f and folds
+the move-and-deleted `crd::math::geometry` ~0.4 KLOC into v0a).
 
 ## 8. What's OUT of scope
 
@@ -447,3 +485,115 @@ zero substrate refactor debt.
 **Memory cross-reference.** Saved as project memory
 `project_phase_sequencing_pivot.md` so the decision survives context
 compaction.
+
+## 13. Amendment 2026-05-11 — `crd::math::geometry` move-and-delete + v0f cutting-edge intersection corpus
+
+**What changed (two coupled decisions, reviewed by the user before
+v0a kickoff).**
+
+### 13.1 `crd::math::geometry` → `crd-geometry-primitives` (move-and-delete)
+
+`engine/math/include/crd/math/geometry.hpp` (404 LOC) already ships
+`Ray<T>` / `Plane<T>` / `Sphere<T>` / `AABB<T>` / `Triangle<T>` /
+`Frustum<T>` plus ~16 helpers (`closest_point`, `intersects`,
+`contains`, `signed_distance`, `intersect_ray_plane`,
+`intersect_ray_sphere`, `intersect_ray_triangle`, `intersects(Frustum,
+AABB|Sphere)`), consumed by ~9 files (`crd-scene` `world.hpp` +
+`query.hpp` — the reserved spatial-DSL operators; `crd-math` umbrella +
+`format.hpp`; `tests/math`, `tests/bench`, `tests/scene`,
+`runtime/examples/smoke_math.cpp`).
+
+**Decision: move-and-delete** (option (a) of the three the user was
+shown — vs (b) thin alias shim, (c) coexist additive). v0a of
+`crd-geometry-primitives` absorbs these types + helpers as
+`crd::geometry::primitives::*` (extended with the dossier's full v0
+catalogue — `Line`/`Segment`, `OBB`, `Capsule`, `Triangle3` etc.);
+`engine/math/include/crd/math/geometry.hpp` is **deleted**; the ~9
+consumers are repointed to `<crd/geometry/primitives/*.hpp>`. After
+v0a, `crd-math` ships **only** Vec / Mat / Quat / Transform / SIMD
+wrappers / `crd::math::deterministic` — the lean leaf substrate its
+design intent always was (§2.2 of the research dossier). Rationale:
+one source of truth for `AABB`/`Sphere`/etc. semantics, no decade-long
+drift between two copies, and the leaf math module stays small (the
+same reasoning that motivated the separate-module decision in §2). The
+refactor is ~1 day across math + scene + tests; it is the smallest of
+the three options' long-term cost even though it carries the only
+non-zero up-front churn.
+
+`crd-math`'s existing scalar Möller-Trumbore (`intersect_ray_triangle`)
+becomes the v0f cross-check reference before deletion (v0f asserts the
+new watertight + Baldwin-Weber + batch implementations agree with it on
+the non-degenerate corpus).
+
+### 13.2 New v0f sub-slice — cutting-edge / branchless / SIMD intersection corpus
+
+The dossier's §4.13 "GTE catalogue" is the curated 2005-era Ericson /
+Eberly set. The user asked for the cutting-edge bar raised; v0f adds
+the modern production-renderer corpus that the base dossier + supplement
+did not enumerate (all branchless, all SIMD-friendly, all shipped in
+Embree / production engines):
+
+- **Watertight ray–triangle** — Woop, Benthin, Wald (2013), JCGT 2(1).
+  Shear+scale ray transform → edge-function form; guarantees a ray
+  hits both or the consistent one of two triangles sharing an edge
+  (Möller-Trumbore does not). Becomes the default ray-tri for
+  `crd-geometry-mesh` v4d BVH leaves and for `crd-sdf` v2 mesh-bake
+  (correctness on imperfect / non-watertight meshes; resolves part of
+  the §10.1 robust-predicates open question for the ray-tri case).
+- **Baldwin–Weber (2016)**, JCGT 5(3) — ray-tri via a precomputed
+  3×4 unit-triangle affine transform; per-ray test is 9 mul + 6 add,
+  branchless. The opt-in default for cooked static meshes
+  (`MeshResource` BVH, static colliders), 48 B/tri storage cost.
+- **Branchless NaN-safe slab ray–AABB** — Tavianator formulation
+  (`tmin = max(min(...))` / `tmax = min(max(...))` with IEEE min/max
+  ordering) over Williams, Barrus, Morley, Shirley (2005), JGT 10(1)
+  precomputed `inv_dir` + sign-mask. Zero hot-path conditionals.
+- **Robust BVH-traversal ray precompute** — `RayPacket` per Ize
+  (2013), JCGT 2(2): `inv_dir` + per-axis sign flags + the
+  boundary-consistent comparison constants. Consumed by `-bvh` v1g
+  (the partner to Woop watertight tri — no holes at node boundaries).
+- **Plücker-coordinate edge classification** — sign-only line /
+  segment / ray vs triangle, and segment vs segment, side tests.
+  Fully branchless; `Vec8f`-batchable. The clean "which side"
+  primitive for GJK / clipping / triangle-orientation.
+- **Ericson Voronoi-region closest-point-on-triangle** (RTCD §5.1.5)
+  — the near-branchless `closest_point(Triangle3, p)` (v0b) — the
+  form GJK fallback / EPA / capsule-vs-mesh need, not a naive
+  plane-project + clamp.
+- **SIMD batch kernels** (`Vec4f` / `Vec8f` wrappers over the scalar
+  cores; AoSoA via `crd::math::simd::Soa`): ray-vs-N-AABB (broadphase
+  prefilter + BVH leaf), ray-vs-N-triangle (Woop & Möller-Trumbore
+  variants), N-sphere-vs-N-sphere, segment-vs-N-segment closest-pair
+  (capsule-vs-mesh inner loop), AABB-vs-N-AABB overlap mask.
+- **Tests** — per-algorithm scalar correctness + degenerate-input
+  torture (zero-area tri, ray ∥ tri, ray origin on AABB face,
+  antipodal segments) + ULP-conformance of each SIMD batch kernel
+  vs its scalar core + watertight-shared-edge consistency property
+  test + cross-check vs `crd-math`'s migrated Möller-Trumbore.
+
+~700–900 LOC + ~25–35 test cases; slots after v0e (last v0 sub-slice,
+still inside the v0 primitives block — i.e. at the *beginning* of the
+phase, per the user's ask). Determinism pins: ADR §4 items 12–13.
+
+**Why a discrete v0f rather than folding into v0c** (the user picked
+v0f over the fold): the corpus is a coherent deliverable with its own
+DoD (the ULP-conformance + watertight-property tests), it has
+downstream consumers named at the substrate level (`-mesh` v4d,
+`-bvh` v1g, `crd-sdf` v2), and a distinct slice keeps it visible in
+the slice ledger rather than buried in a 2200-LOC v0c.
+
+### 13.3 What is not affected by this amendment
+
+- §1–§5 architecture (modulo the §1 sub-module-1 description edit and
+  the §4 pins 12–13 above), §6 sequencing, §8 out-of-scope, §9 risks,
+  §10 open questions (the robust-predicates question narrows slightly
+  — watertight ray-tri removes the ray-tri sub-case from it).
+- Slice list (§7): now **30 slices** (was 29); LOC ~16.6 KLOC engine
+  (was 15.8); calendar unchanged (~5–7 months — v0f's ~4 days absorb
+  into the v0 week-plus, the move-and-delete refactor is ~1 day).
+
+### 13.4 Research record
+
+The cutting-edge corpus + the move-and-delete rationale are documented
+in `docs/research/cerid-geometry.md` §13 (addendum, 2026-05-11) with
+full citations added to that dossier's §12.3.
