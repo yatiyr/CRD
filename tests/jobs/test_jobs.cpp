@@ -804,3 +804,73 @@ TEST_CASE("worker_pool: shutdown with pending raw jobs does not crash", "[jobs][
     // counter may be < 8 — no jobs ran — that is expected and acceptable.
     CHECK(pool.is_initialized() == false);
 }
+
+// ---------------------------------------------------------------------------
+// 30. Regression: cross-thread fiber resume under contention.
+//
+// A root job that calls run_and_wait() from inside its fiber suspends and is
+// frequently resumed on a *different* OS thread than the one that dispatched it.
+// Many workers (> hardware_concurrency on a small box) + many deeply-nested
+// run_and_wait cycles drive both the fiber-migration rate and the park / wakeup
+// race window high. This is the runtime backstop for two fixes it would crash
+// without:
+//   (1) job_fiber_trampoline re-reads the thread-local scheduler context and
+//       current-fiber slot AFTER the job returns (CRD_JOBS_TLS_OPAQUE in
+//       worker_pool.cpp) — pre-fix, an optimized build cached the per-thread TLS
+//       base across the job call and, on a cross-thread resume, switched onto the
+//       wrong thread's scheduler stack (the historical linux-gcc-release
+//       "transient SEGFAULT in jobs: run_and_wait from inside a worker fiber").
+//   (2) counter_wait is "switch then publish": the fiber switches to the
+//       scheduler (saving its context) *before* its Waiter is published, and the
+//       cancel/wakeup handoff is a single CAS on WaiterClaim — so a resume can
+//       never fire into a not-yet-parked fiber, and a Waiter is never both
+//       canceled by its fiber and woken by a decrement (counter.cpp).
+// ---------------------------------------------------------------------------
+
+TEST_CASE("jobs: cross-thread fiber resume stress", "[jobs][stress]")
+{
+    // Kept to a unit-test-sized workload (a few thousand fiber switches): enough
+    // to hit cross-thread resumes + the park/wakeup race window on a CI box,
+    // without being a multi-minute fuzz run on a 1-core VM. Heavier fuzzing of
+    // this path lives outside the suite.
+    crd::jobs::Config cfg;
+    cfg.num_threads       = 4U; // > 1 so fibers migrate; oversubscribes typical CI runners
+    cfg.small_fiber_count = 128U;
+    crd::jobs::init(cfg);
+
+    struct RootData { std::atomic<long>* total; };
+    std::atomic<long> total{0};
+    static RootData rd; rd.total = &total;
+
+    constexpr int kRounds   = 30;
+    constexpr int kRoots    = 6;
+    constexpr int kChildren = 5;
+
+    for (int r = 0; r < kRounds; ++r)
+    {
+        crd::jobs::JobDecl roots[kRoots];
+        for (auto& root : roots)
+        {
+            root.fn = [](void* d)
+            {
+                auto* data = static_cast<RootData*>(d);
+                crd::jobs::JobDecl children[kChildren];
+                for (auto& child : children)
+                {
+                    child.fn   = [](void* dc)
+                    {
+                        static_cast<std::atomic<long>*>(dc)->fetch_add(1, std::memory_order_relaxed);
+                    };
+                    child.data = data->total;
+                }
+                // Suspends this fiber; resume may land on any worker thread.
+                crd::jobs::run_and_wait(std::span(children, kChildren));
+            };
+            root.data = &rd;
+        }
+        crd::jobs::wait(crd::jobs::run(std::span(roots, kRoots)));
+    }
+
+    crd::jobs::shutdown();
+    CHECK(total.load() == static_cast<long>(kRounds) * kRoots * kChildren);
+}

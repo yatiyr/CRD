@@ -1,0 +1,55 @@
+{
+    // ---------------------------------------------------------------------
+    // Cerid — VS Code workspace settings (Linux dev VM).
+    //
+    // Open THIS folder (CRD/) as the workspace root — it's where CMakeLists.txt
+    // and CMakePresets.json live.  CMake Tools will offer the `linux-gcc-*`
+    // presets; pick `linux-gcc-debug` to get going.
+    // ---------------------------------------------------------------------
+
+    // CMake Tools drives the build via the CMakePresets.json in the repo.
+    "cmake.useCMakePresets": "always",
+    "cmake.configureOnOpen": true,
+
+    // The shader stack needs VULKAN_SDK.  On this VM it points at the
+    // SPIRV-Reflect headers fetched into the home dir (mirrors the repo's
+    // scripts/setup-wsl-deps.sh layout).
+    "cmake.environment": {
+        "VULKAN_SDK": "${userHome}/cerid-deps/vulkan-sdk"
+    },
+
+    // This VM's CPU is SSE4.2-only (no AVX2/FMA), so the default
+    // CRD_SIMD_LEVEL=auto -> avx2 would SIGILL.  Force SSE2 for every preset.
+    // Harmless (just slower) on an AVX2 host; drop this line there.
+    "cmake.configureArgs": [
+        "-DCRD_SIMD_LEVEL=sse2"
+    ],
+
+    // Headless smokes / tests behave better without a real GPU/window.
+    "cmake.testEnvironment": {
+        "CRD_PLATFORM_HEADLESS": "1"
+    },
+
+    // Let CMake Tools feed compile_commands.json to the C/C++ extension so
+    // IntelliSense matches the actual build flags.
+    "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
+    "C_Cpp.default.cppStandard": "c++20",
+
+    // Match the repo's .clang-format / .clang-tidy (system clang 21 on this VM).
+    "editor.formatOnSave": true,
+    "[cpp]": { "editor.defaultFormatter": "ms-vscode.cpptools" },
+    "[c]":   { "editor.defaultFormatter": "ms-vscode.cpptools" },
+    "C_Cpp.clang_format_path": "/usr/bin/clang-format",
+    "C_Cpp.clang_format_style": "file",
+    "C_Cpp.codeAnalysis.clangTidy.enabled": true,
+    "C_Cpp.codeAnalysis.clangTidy.path": "/usr/bin/clang-tidy",
+
+    "files.associations": {
+        "*.hpp": "cpp",
+        "*.inl": "cpp"
+    },
+    "files.exclude": {
+        "**/build": true,
+        "**/.cpm-cache": true
+    }
+}

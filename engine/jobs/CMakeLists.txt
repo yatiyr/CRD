@@ -30,10 +30,15 @@ target_compile_features(crd-jobs PUBLIC cxx_std_20)
 # the fiber trampoline's assumptions about register state on entry.
 set_target_properties(crd-jobs PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
 
-# Diagnostic: compile the two files that contain fiber context-switch logic
-# with /Od on MSVC to isolate whether the win-release SEGFAULT is caused by
-# /O2 optimizations in worker_pool.cpp or fiber_init.cpp specifically.
-# Remove once the root cause is identified and fixed.
+# Root cause of the historical win-release / linux-gcc-release SEGFAULT in
+# "jobs: run_and_wait from inside a worker fiber" is now understood and fixed in
+# source: job_fiber_trampoline reads thread-locals on the far side of a fiber
+# resume that can migrate the fiber to a different OS thread, and the optimizer
+# was caching the pre-resume TLS base across the hand-rolled fiber_switch. The
+# fix is the CRD_JOBS_TLS_OPAQUE accessors in worker_pool.cpp (portable; covers
+# every compiler). The /Od on MSVC below is retained as belt-and-suspenders for
+# this context-switch-adjacent TU until a Windows sweep confirms it can be
+# dropped — it is no longer load-bearing, just conservative.
 if(MSVC)
     set_source_files_properties(
         src/worker_pool.cpp

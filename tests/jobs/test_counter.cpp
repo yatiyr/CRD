@@ -2,6 +2,7 @@
 
 #include "../../engine/jobs/src/counter.hpp"
 #include "../../engine/jobs/src/fiber.hpp"
+#include "../../engine/jobs/src/worker_pool.hpp"  // PendingPark / tl_take_pending_park
 #include <crd/jobs/detail/fiber_context.hpp>
 #include <crd/core/types.hpp>
 
@@ -13,11 +14,15 @@ using crd::jobs::detail::Counter;
 using crd::jobs::detail::CounterPool;
 using crd::jobs::detail::Fiber;
 using crd::jobs::detail::FiberContext;
+using crd::jobs::detail::PendingPark;
 using crd::jobs::detail::Waiter;
+using crd::jobs::detail::WaiterClaim;
 using crd::jobs::detail::counter_decrement;
+using crd::jobs::detail::counter_finish_park;
 using crd::jobs::detail::counter_wait;
 using crd::jobs::detail::fiber_init_stack;
 using crd::jobs::detail::fiber_switch;
+using crd::jobs::detail::tl_take_pending_park;
 
 
 #if CRD_ENABLE_ASSERTS
@@ -167,7 +172,7 @@ TEST_CASE("counter_decrement: canceled waiter is discarded", "[jobs][counter]")
 
     Waiter w;
     w.target = 0U;
-    w.canceled.store(true, std::memory_order_relaxed);
+    w.claim.store(WaiterClaim::Canceled, std::memory_order_relaxed);
     // Push directly onto counter->waiters (simulate ABA path already fired).
     Waiter* head = c->waiters.load(std::memory_order_relaxed);
     w.next.store(head, std::memory_order_relaxed);
@@ -183,12 +188,15 @@ TEST_CASE("counter_decrement: canceled waiter is discarded", "[jobs][counter]")
 }
 
 // ---------------------------------------------------------------------------
-// 7. counter_decrement: waiter with non-matching target stays in list
+// 7. counter_decrement: the list is touched only at zero
 //
-// Counter goes from 3 → 2. Waiter with target=1 must remain on the counter.
+// Decrements above zero leave counter->waiters completely untouched (no steal,
+// no rebuild — that is what makes it race-free with many concurrent
+// decrementers); the decrement that reaches zero drains and wakes every parked
+// waiter.
 // ---------------------------------------------------------------------------
 
-TEST_CASE("counter_decrement: non-matching target left in waiter list", "[jobs][counter]")
+TEST_CASE("counter_decrement: waiters list untouched until zero", "[jobs][counter]")
 {
     CounterPool pool;
     REQUIRE(pool.init(4U));
@@ -198,28 +206,36 @@ TEST_CASE("counter_decrement: non-matching target left in waiter list", "[jobs][
     // Need a real Fiber so the debug state check in counter_decrement passes.
     Fiber dummy{};
 #if CRD_ENABLE_ASSERTS
-    dummy.state = FiberState::Waiting;  // pre-set: the fiber is "suspended"
+    dummy.state = FiberState::Waiting;  // pre-set: the fiber is "parked"
 #endif
 
     Waiter w;
     w.fiber  = &dummy;
-    w.target = 1U;
-    w.canceled.store(false, std::memory_order_relaxed);
-    Waiter* head = c->waiters.load(std::memory_order_relaxed);
-    w.next.store(head, std::memory_order_relaxed);
+    w.target = 0U;
+    w.claim.store(WaiterClaim::Pending, std::memory_order_relaxed);
+    w.next.store(nullptr, std::memory_order_relaxed);
     c->waiters.store(&w, std::memory_order_release);
 
-    // Decrement 3 → 2. Target is 1, not 2. Waiter stays.
+    // 3 → 2: above zero, waiter must stay exactly where it is.
     Waiter* woken = counter_decrement(c, 1U);
     CHECK(woken == nullptr);
     CHECK(c->value.load() == 2U);
-    CHECK(c->waiters.load() == &w);  // still present
+    CHECK(c->waiters.load() == &w);
 
-    // Decrement 2 → 1. Target is 1. Waiter should be returned now.
+    // 2 → 1: still above zero.
+    woken = counter_decrement(c, 1U);
+    CHECK(woken == nullptr);
+    CHECK(c->value.load() == 1U);
+    CHECK(c->waiters.load() == &w);
+
+    // 1 → 0: now drain and wake.
     woken = counter_decrement(c, 1U);
     REQUIRE(woken == &w);
     CHECK(woken->next.load() == nullptr);
     CHECK(c->waiters.load() == nullptr);
+#if CRD_ENABLE_ASSERTS
+    CHECK(dummy.state == FiberState::Ready);
+#endif
 
     pool.release(c);
     pool.shutdown();
@@ -282,11 +298,11 @@ TEST_CASE("counter_decrement: two waiters with same target, both woken", "[jobs]
     Waiter w2;
     w1.fiber  = &f1;
     w1.target = 0U;
-    w1.canceled.store(false, std::memory_order_relaxed);
+    w1.claim.store(WaiterClaim::Pending, std::memory_order_relaxed);
 
     w2.fiber  = &f2;
     w2.target = 0U;
-    w2.canceled.store(false, std::memory_order_relaxed);
+    w2.claim.store(WaiterClaim::Pending, std::memory_order_relaxed);
 
     // Push both.
     w1.next.store(nullptr, std::memory_order_relaxed);
@@ -356,7 +372,7 @@ TEST_CASE("counter_wait: full suspension and resumption", "[jobs][counter]")
     g_s10.job_fiber      = Fiber{};
     g_s10.waiter.fiber   = nullptr;
     g_s10.waiter.target  = 0U;
-    g_s10.waiter.canceled.store(false, std::memory_order_relaxed);
+    g_s10.waiter.claim.store(WaiterClaim::Pending, std::memory_order_relaxed);
     g_s10.waiter.next.store(nullptr, std::memory_order_relaxed);
     g_s10.sched_ctx      = FiberContext{};
     g_s10.job_completed  = false;
@@ -375,16 +391,22 @@ TEST_CASE("counter_wait: full suspension and resumption", "[jobs][counter]")
     // Switch into the job fiber — it will call counter_wait and suspend.
     fiber_switch(&g_s10.sched_ctx, &g_s10.job_fiber.context);
 
-    // We're back in the scheduler. The job fiber suspended.
+    // We're back in the "scheduler". The job fiber suspended (context now saved)
+    // and handed us a park request; publish its Waiter on its behalf.
     CHECK_FALSE(g_s10.job_completed);
     CHECK(g_s10.waiter.fiber == &g_s10.job_fiber);
+    const PendingPark park = tl_take_pending_park();
+    REQUIRE(park.counter == g_s10.counter);
+    REQUIRE(park.waiter  == &g_s10.waiter);
+    CHECK_FALSE(counter_finish_park(park.counter, park.waiter)); // value (1) != target (0)
+    CHECK(g_s10.counter->waiters.load() == &g_s10.waiter);       // now published
 
     // Decrement brings value to 0 → wakes the waiter.
     Waiter* woken = counter_decrement(g_s10.counter, 1U);
     REQUIRE(woken == &g_s10.waiter);
     CHECK(g_s10.waiter.next.load() == nullptr);
 
-    // Resume the job fiber (in a real worker this would be a pushed job).
+    // Resume the job fiber (in a real worker this would be a pushed resume job).
     fiber_switch(&g_s10.sched_ctx, &woken->fiber->context);
 
     // Job fiber finished.
@@ -462,7 +484,7 @@ TEST_CASE("counter_wait: two sequential waits on renewed counter", "[jobs][count
     g_s12.job_fiber    = Fiber{};
     g_s12.waiter.fiber = nullptr;
     g_s12.waiter.target = 0U;
-    g_s12.waiter.canceled.store(false, std::memory_order_relaxed);
+    g_s12.waiter.claim.store(WaiterClaim::Pending, std::memory_order_relaxed);
     g_s12.waiter.next.store(nullptr, std::memory_order_relaxed);
     g_s12.sched_ctx    = FiberContext{};
     g_s12.run_count    = 0;
@@ -480,6 +502,12 @@ TEST_CASE("counter_wait: two sequential waits on renewed counter", "[jobs][count
     // --- First round ---
     fiber_switch(&g_s12.sched_ctx, &g_s12.job_fiber.context);
     CHECK(g_s12.run_count == 0);  // suspended
+    {
+        const PendingPark p = tl_take_pending_park();
+        REQUIRE(p.counter == g_s12.counter);
+        REQUIRE(p.waiter  == &g_s12.waiter);
+        CHECK_FALSE(counter_finish_park(p.counter, p.waiter)); // value 1 != target 0
+    }
 
     Waiter* woken = counter_decrement(g_s12.counter, 1U);
     REQUIRE(woken != nullptr);
@@ -492,7 +520,7 @@ TEST_CASE("counter_wait: two sequential waits on renewed counter", "[jobs][count
     // Reset waiter for second use (can't copy-assign Waiter since it has atomics).
     g_s12.waiter.fiber = nullptr;
     g_s12.waiter.target = 0U;
-    g_s12.waiter.canceled.store(false, std::memory_order_relaxed);
+    g_s12.waiter.claim.store(WaiterClaim::Pending, std::memory_order_relaxed);
     g_s12.waiter.next.store(nullptr, std::memory_order_relaxed);
 #if CRD_ENABLE_ASSERTS
     // After returning from fiber_switch inside counter_wait, state was set back to Active.
@@ -502,6 +530,12 @@ TEST_CASE("counter_wait: two sequential waits on renewed counter", "[jobs][count
     // Re-enter the job fiber for the second wait.
     fiber_switch(&g_s12.sched_ctx, &g_s12.job_fiber.context);
     CHECK(g_s12.run_count == 1);  // suspended again
+    {
+        const PendingPark p = tl_take_pending_park();
+        REQUIRE(p.counter == g_s12.counter);
+        REQUIRE(p.waiter  == &g_s12.waiter);
+        CHECK_FALSE(counter_finish_park(p.counter, p.waiter));
+    }
 
     woken = counter_decrement(g_s12.counter, 1U);
     REQUIRE(woken != nullptr);

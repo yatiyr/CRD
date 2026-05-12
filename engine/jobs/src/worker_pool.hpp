@@ -124,4 +124,24 @@ private:
 [[nodiscard]] WorkerPool*   tl_worker_pool()        noexcept;
 [[nodiscard]] FrameArena&   tl_frame_arena_ref()    noexcept;
 
+// ---------------------------------------------------------------------------
+// Park-request handoff (scheduler side)
+//
+// counter_wait() (in counter.cpp) runs on the waiting fiber; it cannot publish
+// its Waiter itself — the fiber isn't parked until it has switched to the
+// scheduler, which is what saves its context. So it stashes the Waiter via
+// tl_set_pending_park (declared in counter.hpp) and switches; the scheduler
+// (run_job_in_fiber), running on the *same* OS thread, picks it up after the
+// switch returns and calls counter_finish_park(). One thread only — a plain
+// thread_local suffices.
+// ---------------------------------------------------------------------------
+
+struct PendingPark
+{
+    Counter* counter = nullptr;
+    Waiter*  waiter  = nullptr;
+};
+
+[[nodiscard]] PendingPark tl_take_pending_park() noexcept; // scheduler consumes (clears the slot)
+
 } // namespace crd::jobs::detail

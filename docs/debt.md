@@ -5,30 +5,85 @@ move to a session log entry and remove from here.
 
 ## Active debt
 
-### `linux-gcc-release` ctest intermittent flake (2026-05-10, 3rd occurrence)
+### ~~`linux-gcc-release` ctest intermittent flake~~ — ROOT-CAUSED + FIXED 2026-05-12 (jobs hardening)
 
-Pattern: `wsl-build.ps1 -Preset linux-gcc-release` fails with opaque
-`Errors while running CTest` (exit 8), no per-test failure shown.
-Retrying the same preset alone immediately afterward succeeds with
-1000/1000 tests passing. Other Linux configs (debug / relwithdebinfo /
-asan / debug-scalar) never exhibit this — only release.
+Was: `linux-gcc-release` intermittently failed ctest with an opaque
+`Errors while running CTest` (exit 8); a retry passed. The opaque exit
+masked a crash in the test `jobs: run_and_wait from inside a worker
+fiber`. Diagnosed on a native Linux VM (gdb on core dumps / live hangs);
+**four distinct, all pre-existing, bugs in the fiber job system** were
+behind it, fixed together:
 
-**Observed instances:**
-- Phase 3.1 v1a Linux verification (bw3j1vlks) — release alone failed
-- v1a-draw-d1 verification (b905ysrgo) — release alone failed
-- (one earlier instance documented in v0 post-mortem addendum)
+1. **Optimizer caching the per-thread TLS base across `fiber_switch`**
+   (`worker_pool.cpp`). `job_fiber_trampoline` reads thread-locals after
+   the job call; a job that `jobs::wait()`s from inside its fiber can
+   resume on a *different* OS thread, but the C++ abstract machine has no
+   notion of that, so GCC `-O3` hoisted `lea tl_sched_ctx@tpoff(%fs:0)`
+   out of the trampoline loop into a callee-saved register and reused it
+   across the job call → on a cross-thread resume the trailing
+   `fiber_switch` jumped onto the *wrong* thread's scheduler stack. (MSVC
+   was masked by the pre-existing `/Od` on this TU.) **Fix:**
+   `CRD_JOBS_TLS_OPAQUE` (`__attribute__((noipa))` on GCC, `CRD_NOINLINE`
+   elsewhere) on the `tl_scheduler_context` / `tl_current_fiber_ref` /
+   `tl_worker_pool` accessors, and the trampoline reaches every
+   post-resume thread-local through them — forcing a fresh TLS-base load.
+   This is the textbook fix for the issue (LLVM #98479 / #47179 / #63022,
+   LDC #666: "define TLS accessors in a separate TU and call them").
 
-**Hypotheses (untested):**
-- catch_discover_tests race with the just-built optimised binary on the
-  9p mount path
-- Per-process-lifetime issue specific to release-built tests under WSL
-- LTO / LTCG link timing causing CTestTestfile to be read mid-rewrite
+2. **`run_job_in_fiber` left `tl_fiber` set to the parked fiber** when a
+   fiber suspended (`worker_pool.cpp`) — the completed path nulled it (via
+   the trampoline) but the suspended path didn't. So after a `pump()`-
+   driven job suspended inside `jobs::wait()`'s spin, the *main thread's*
+   `tl_fiber` was stale, and the next `jobs::wait()` on the main thread
+   read it, took the fiber-suspend path with a garbage "current fiber" →
+   `counter_wait` corrupted the runtime / asserted `fiber must be Active`.
+   (Caught via a core dump: the asserting thread's backtrace was
+   `main → jobs::wait → counter_wait`, impossible if `tl_fiber` were
+   correct.) **Fix:** `run_job_in_fiber` clears `tl_fiber` on the
+   suspended path before returning.
 
-**Why deferred:** retry always clears it; no test correctness issue;
-investigating opaque CMake/CTest internals is high-cost low-value at
-this point. Worth a focused investigation when it bites CI (which it
-hasn't yet — CI uses a separate Linux runner, different filesystem).
+3. **`counter_wait` published the `Waiter` before the fiber parked.** A
+   `counter_decrement` could grab a just-published `Waiter`, wake the
+   fiber, and enqueue a resume before the fiber's own `fiber_switch` had
+   saved its context → the resume `fiber_switch`'d into a stale context.
+   And the `canceled`-bool cancel/wake handoff had a TOCTOU window
+   (a decrement could see a published `Waiter` as "not canceled, target
+   matches" before `counter_wait` decided to cancel → phantom resume into
+   a still-running fiber). **Fix:** *switch-then-publish* — the fiber
+   stashes a park request (`tl_set_pending_park`) and switches to the
+   scheduler *first* (saving its context); the scheduler then publishes
+   the `Waiter` (`counter_finish_park`), ABA-re-checks, and on a satisfied
+   re-check resumes the fiber itself. Cancel/wake is now a single CAS on a
+   3-state token `WaiterClaim {Pending, Canceled, Wakeup}`. A
+   `Waiter::park_finalized` flag (set by `counter_finish_park` at its end,
+   spun on by `counter_wait` after the switch) keeps the resumed fiber
+   from racing ahead and freeing the counter / unwinding the `Waiter`
+   while `counter_finish_park` is still mid-flight.
 
+4. **`counter_decrement`'s "steal list → partition → re-push" raced
+   concurrent decrements.** Decrement A steals a not-yet-satisfied
+   `Waiter`, is about to re-push it; decrement C (the one to 0) runs its
+   `exchange` in the gap, sees an empty list; A re-pushes onto a list
+   nobody will ever drain again → lost wakeup → deadlock. **Fix:** since
+   the job system only ever waits for the counter to reach 0,
+   `counter_decrement` now touches the waiters list at *exactly one* point
+   — the decrement that hits 0 — and only ever drains it, never partially
+   rebuilds (no `put_back`). `counter_wait` / `counter_finish_park` assert
+   `target == 0`.
+
+**Verification:** disassembly (the trampoline no longer caches the TLS
+base); ~9,000+ aggressive cross-thread-resume stress runs (4/6/8 worker
+threads, deeply-nested `run_and_wait`) across release / `-O2 -g` asserts-on
+/ `-O0` asserts-on builds — 0 failures (vs ~1-in-100-to-400 crashes before
+the `tl_fiber` fix); full Linux ctest sweep (debug / debug-scalar / asan /
+relwithdebinfo / release) green; in-tree regression test
+`jobs: cross-thread fiber resume stress` (`[jobs][stress]`). The MSVC `/Od`
+on `worker_pool.cpp` + `fiber_init.cpp` is now belt-and-suspenders, not
+load-bearing — a Windows sweep can drop it. Files: `engine/jobs/src/worker_pool.{cpp,hpp}`,
+`engine/jobs/src/counter.{cpp,hpp}`, `engine/jobs/CMakeLists.txt`,
+`tests/jobs/test_jobs.cpp`, `tests/jobs/test_counter.cpp`. Windows
+verification steps: `docs/jobs/WINDOWS_VERIFICATION.md`. Session log:
+`docs/sessions/2026-05-12-jobs-fiber-tls-hoist-fix.md`.
 
 
 ### Phase 3.1 v0c `crd::math::deterministic` — debt paid 2026-05-10

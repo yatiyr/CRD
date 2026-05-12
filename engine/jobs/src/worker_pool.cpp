@@ -1,6 +1,7 @@
 #include "worker_pool.hpp"
 #include <crd/jobs/detail/fiber_context.hpp>
 #include <crd/core/assert.hpp>
+#include <crd/core/platform.hpp>
 #include <crd/core/types.hpp>
 
 #include <cstring>
@@ -8,6 +9,32 @@
 
 namespace crd::jobs::detail
 {
+
+// ---------------------------------------------------------------------------
+// CRD_JOBS_TLS_OPAQUE — load-bearing optimization barrier for the fiber runtime.
+//
+// A fiber may suspend on OS thread A inside a job and be resumed on OS thread B.
+// The C++ abstract machine has no concept of that migration, so an optimizing
+// compiler is entitled to materialise the TLS base (the %fs / TEB pointer) once
+// and reuse it across an opaque call — and GCC at -O3 does exactly that: it
+// hoists `lea tl_sched_ctx@tpoff(%fs:0)` out of job_fiber_trampoline's loop and
+// keeps it in a callee-saved register across the job call. After a cross-thread
+// resume that cached address points at the *wrong* thread's tl_sched_ctx, so the
+// trailing fiber_switch jumps onto another live thread's scheduler stack — two
+// threads, one stack — corrupting it and crashing later (the historical
+// `linux-gcc-release` "transient SEGFAULT in jobs: run_and_wait from inside a
+// worker fiber" flake; MSVC was masked by the /Od on this TU).
+//
+// Routing every post-resume thread-local access through a function that the
+// optimizer may neither inline nor IPA-analyse forces the TLS base to be re-read
+// from the live CPU register each time, which is correct after a migration.
+// `noipa` (GCC) is required, not just `noinline`: without it IPA-PURE-CONST can
+// still prove the accessor "const" and CSE two calls back together.
+#if defined(__GNUC__) && !defined(__clang__)
+#define CRD_JOBS_TLS_OPAQUE __attribute__((noipa))
+#else
+#define CRD_JOBS_TLS_OPAQUE CRD_NOINLINE
+#endif
 
 // ---------------------------------------------------------------------------
 // Thread-local state
@@ -34,17 +61,40 @@ static thread_local void*          tl_job_data       {nullptr};
 static thread_local crd::u32       tl_idx      {0U};
 static thread_local WorkerPool*    tl_pool_ptr {nullptr};
 static thread_local FrameArena*    tl_frame_arena {nullptr};
+// Park request handed from counter_wait (on the fiber) to run_job_in_fiber (the
+// scheduler) after the fiber switches out — same OS thread, so a plain TLS slot.
+static thread_local PendingPark    tl_pending_park{};
 // NOLINTEND(cppcoreguidelines-avoid-non-const-global-variables)
 
-FiberContext& tl_scheduler_context() noexcept { return tl_sched_ctx; }
-Fiber*&       tl_current_fiber_ref() noexcept { return tl_fiber; }
+// The first three are CRD_JOBS_TLS_OPAQUE because job_fiber_trampoline reads
+// them on the far side of a fiber resume that may have migrated this fiber to a
+// different OS thread — see the macro comment above. tl_thread_index /
+// tl_frame_arena_ref / the pending-park slot are only ever touched on the same
+// thread that set them.
+CRD_JOBS_TLS_OPAQUE FiberContext& tl_scheduler_context() noexcept { return tl_sched_ctx; }
+CRD_JOBS_TLS_OPAQUE Fiber*&       tl_current_fiber_ref() noexcept { return tl_fiber; }
+CRD_JOBS_TLS_OPAQUE WorkerPool*   tl_worker_pool()       noexcept { return tl_pool_ptr; }
 crd::u32      tl_thread_index()      noexcept { return tl_idx; }
-WorkerPool*   tl_worker_pool()        noexcept { return tl_pool_ptr; }
 FrameArena&   tl_frame_arena_ref()    noexcept
 {
     CRD_ASSERT_MSG(tl_frame_arena != nullptr,
                    "tl_frame_arena_ref: frame arena not set — call jobs::init() first");
     return *tl_frame_arena;
+}
+
+void tl_set_pending_park(Counter* counter, Waiter* waiter) noexcept
+{
+    CRD_ASSERT_MSG(tl_pending_park.counter == nullptr,
+                   "tl_set_pending_park: a previous park request was not consumed");
+    tl_pending_park.counter = counter;
+    tl_pending_park.waiter  = waiter;
+}
+
+PendingPark tl_take_pending_park() noexcept
+{
+    const PendingPark p = tl_pending_park;
+    tl_pending_park = PendingPark{};
+    return p;
 }
 
 // ---------------------------------------------------------------------------
@@ -76,6 +126,14 @@ static void resume_fiber_fn(void* /*data*/) noexcept
 // The while(true) is a safety net; in normal operation WorkerPool calls
 // fiber_init_stack before releasing the fiber to the pool, so re-acquired
 // fibers always restart here rather than resuming mid-loop.
+//
+// THREAD-MIGRATION HAZARD: if the job suspended (jobs::wait from inside a fiber)
+// it may resume — and therefore return to us here — on a *different* OS thread
+// than the one that dispatched it. Every thread-local touched after that point
+// (the scheduler context to switch back to, the current-fiber slot, the pool
+// back-pointer) must be re-read through the CRD_JOBS_TLS_OPAQUE accessors, never
+// the raw `tl_*` globals — otherwise the optimizer caches the pre-resume TLS
+// base and we switch onto the wrong thread's stack. See CRD_JOBS_TLS_OPAQUE.
 // ---------------------------------------------------------------------------
 
 static void job_fiber_trampoline() noexcept
@@ -83,25 +141,29 @@ static void job_fiber_trampoline() noexcept
     while (true)
     {
         tl_job_fn(tl_job_data);
+        // --- past this line we may be on a different OS thread (see above) ---
 
         // Decrement the fiber's associated counter (if any) and wake satisfied waiters.
-        // Read from the fiber struct so the counter survives fiber suspension + resume.
-        Fiber* const done = tl_fiber;
-        tl_fiber = nullptr;    // completion signal: run_job_in_fiber checks this
+        // Read the fiber pointer from this thread's slot via the opaque accessor;
+        // the counter is read off the fiber struct so it survives suspension + resume.
+        Fiber*& cur_fiber = tl_current_fiber_ref();
+        Fiber* const done = cur_fiber;
+        cur_fiber = nullptr;    // completion signal: run_job_in_fiber checks this
         Counter* const c = done->job_counter;
         done->job_counter = nullptr;
         if (c != nullptr)
         {
+            WorkerPool* const pool = tl_worker_pool();
             Waiter* woken = counter_decrement(c);
             while (woken != nullptr)
             {
                 Waiter* const next = woken->next.load(std::memory_order_relaxed);
-                tl_pool_ptr->enqueue_fiber_resume(woken->fiber);
+                pool->enqueue_fiber_resume(woken->fiber);
                 woken = next;
             }
         }
 
-        fiber_switch(&done->context, &tl_sched_ctx);
+        fiber_switch(&done->context, &tl_scheduler_context());
     }
 }
 
@@ -181,15 +243,47 @@ void WorkerPool::run_job_in_fiber(const crd::jobs::JobDecl& job)
     tl_fiber = target;
     fiber_switch(&tl_sched_ctx, &target->context);
 
-    // Back on the OS (scheduler) stack.
+    // Back on the OS (scheduler) stack. By now `target`'s context is fully saved.
     if (tl_fiber == nullptr)
     {
-        // Job completed — the trampoline already cleared target->job_counter.
-        // Rebuild the initial stack frame so the fiber is clean on re-use.
+        // Job completed — the trampoline already cleared target->job_counter
+        // *and* tl_fiber. Rebuild the initial stack frame so the fiber is clean
+        // on re-use.
         fiber_init_stack(target->context, target->usable_base, target->usable_size, target->trampoline);
         m_fiber_pool.release(target);
     }
-    // else: fiber suspended on a counter; it remains active until enqueue_fiber_resume().
+    else
+    {
+        // The fiber suspended inside counter_wait — it handed us a park request.
+        // Publish its Waiter now that its context is saved (so it only becomes
+        // wakeable once it's safe to resume). counter_finish_park returns true iff
+        // the ABA re-check found the value already at target and won the cancel
+        // CAS, in which case nothing else owes the fiber a resume — we do it.
+        const PendingPark park = tl_take_pending_park();
+        CRD_ASSERT_MSG(park.counter != nullptr && park.waiter != nullptr,
+                       "run_job_in_fiber: fiber suspended without a valid park request");
+        if (counter_finish_park(park.counter, park.waiter))
+        {
+#if CRD_ENABLE_ASSERTS
+            // counter_finish_park left it Waiting; promote like a normal wakeup
+            // so counter_wait's post-switch assert (state == Ready) holds.
+            CRD_ASSERT_MSG(target->state == FiberState::Waiting,
+                           "run_job_in_fiber: parked fiber was not Waiting");
+            target->state = FiberState::Ready;
+#endif
+            enqueue_fiber_resume(target);
+        }
+        // else: a counter_decrement claimed Wakeup and will (or already did)
+        // enqueue the resume. Either way `target` stays parked until then.
+
+        // Crucial: the suspended path leaves tl_fiber == target. Clear it — the
+        // caller (worker_loop / pump) is back on the bare OS thread, NOT running
+        // a fiber. A stale tl_fiber would make a later jobs::wait() on this
+        // thread take the fiber-suspend path with a garbage "current fiber",
+        // corrupting the runtime. (The completed path above is fine: the
+        // trampoline already nulled tl_fiber.)
+        tl_fiber = nullptr;
+    }
 }
 
 // ---------------------------------------------------------------------------

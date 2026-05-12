@@ -1,0 +1,7 @@
+{
+    // Open the Extensions view → "Recommended" to install these in one click.
+    "recommendations": [
+        "ms-vscode.cpptools-extension-pack", // C/C++ IntelliSense + CMake Tools + debugger
+        "twxs.cmake"                          // CMakeLists.txt syntax highlighting
+    ]
+}

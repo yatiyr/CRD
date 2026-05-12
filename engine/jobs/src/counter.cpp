@@ -91,21 +91,20 @@ void CounterPool::release(Counter* counter) noexcept
     CRD_ASSERT_MSG(m_initialized, "CounterPool::release called before init");
     CRD_ASSERT_MSG(counter != nullptr, "CounterPool::release: null pointer");
 
-    // Waiters list may legitimately contain canceled nodes from the
-    // counter_wait ABA fast-path race: the waiter pushed itself, the value
-    // already matched target, so the waiter set canceled=true and returned
-    // without suspending. counter_decrement may not have exchanged-and-drained
-    // the list yet by the time we land here. The leftover canceled node is
-    // harmless — acquire() resets waiters=nullptr so the next user sees a
-    // clean list. The real-bug check is "is any waiter still parked on a fiber"
-    // (i.e. uncanceled), which would deadlock on resume.
+    // The waiters list may legitimately contain Canceled nodes: counter_finish_
+    // park's ABA re-check found the value already at target and claimed Canceled,
+    // and counter_decrement hasn't drained the list yet. Harmless — acquire()
+    // resets waiters=nullptr so the next user sees a clean list. A Pending node
+    // here, though, means a fiber is parked awaiting a decrement that won't come
+    // (a leak/deadlock bug); a Wakeup node is never on the list (counter_decrement
+    // removes it the instant it claims it).
 #if CRD_ENABLE_ASSERTS
     {
         const Waiter* w = counter->waiters.load(std::memory_order_acquire);
         while (w != nullptr)
         {
-            CRD_ASSERT_MSG(w->canceled.load(std::memory_order_acquire),
-                           "CounterPool::release: counter has a non-canceled waiter (fiber still parked)");
+            CRD_ASSERT_MSG(w->claim.load(std::memory_order_acquire) == WaiterClaim::Canceled,
+                           "CounterPool::release: counter has an unresolved waiter (fiber still parked)");
             w = w->next.load(std::memory_order_relaxed);
         }
     }
@@ -137,19 +136,26 @@ crd::u32 CounterPool::available() const noexcept
 // ---------------------------------------------------------------------------
 // counter_decrement
 //
+// The job-counter wait protocol only ever waits for the counter to reach 0 (see
+// counter_wait), and a counter only ever decreases. So the waiters list is
+// touched at exactly one point — the decrement that brings the value to 0 — and
+// only ever drained, never partially rebuilt. That is what makes this safe with
+// many concurrent decrementers: there is no "steal the list, put some back"
+// step that a later decrement could race against (an earlier design had that and
+// it could lose a wakeup: A steals + is about to re-push a not-yet-satisfied
+// waiter while C — the decrement to 0 — runs its exchange in the gap, sees an
+// empty list, and then A re-pushes onto a list nobody will ever drain again).
+//
 // Memory ordering:
-//   fetch_sub(acq_rel): the acquire half synchronises with the release in the
-//   Treiber push inside counter_wait(), making every Waiter field written
-//   before that push visible here. The release half makes the new value visible
-//   to any concurrent counter_wait() that loads it with acquire.
-//
-//   exchange(nullptr, acq_rel) on waiters: atomically steals the entire waiter
-//   list. Any concurrent counter_wait() that loses its CAS will retry and see
-//   the empty list, then its double-check (step 4) will observe the new value
-//   and set canceled=true — so the fiber never suspends.
-//
-//   Re-push of unsatisfied waiters uses release CAS so the next_free chain
-//   is visible to a subsequent acquire on the same counter.
+//   fetch_sub(acq_rel): the acquire half synchronises with the release in
+//   counter_finish_park()'s publish CAS, making every Waiter field (and the
+//   parked fiber's Waiting state, written before that publish) visible here. The
+//   release half makes the new value visible to a concurrent counter_finish_park
+//   that loads it with acquire.
+//   exchange(nullptr, acq_rel) on waiters: steals the list to drain it.
+//   Per-waiter claim CAS (Pending→Wakeup): arbitrates against counter_finish_
+//   park()'s ABA re-check (Pending→Canceled). RMWs on one atomic form a total
+//   modification order, so exactly one of the two wins; the loser backs off.
 // ---------------------------------------------------------------------------
 
 Waiter* counter_decrement(Counter* counter, crd::u32 amount) noexcept
@@ -158,29 +164,36 @@ Waiter* counter_decrement(Counter* counter, crd::u32 amount) noexcept
     CRD_ASSERT_MSG(amount  >= 1U,      "counter_decrement: amount must be >= 1");
 
     const crd::u32 old_val = counter->value.fetch_sub(amount, std::memory_order_acq_rel);
+    CRD_ASSERT_MSG(amount <= old_val, "counter_decrement: underflow — decremented past zero");
     const crd::u32 new_val = old_val - amount;
 
-    // Atomically steal the entire waiter list.
+    // Waiters only ever wait for 0 (see counter_wait's assert). Until we hit it,
+    // leave the list alone — they stay parked.
+    if (new_val != 0U)
+        return nullptr;
+
+    // We are the decrement that satisfies every waiter. Drain the list.
     Waiter* list = counter->waiters.exchange(nullptr, std::memory_order_acq_rel);
 
-    Waiter* woken    = nullptr;  // fibers whose target matches new_val
-    Waiter* put_back = nullptr;  // fibers whose target does not yet match
-
+    Waiter* woken = nullptr;  // fibers this call owes a resume
     while (list != nullptr)
     {
         Waiter* nxt = list->next.load(std::memory_order_relaxed);
 
-        if (list->canceled.load(std::memory_order_acquire))
+        if (list->claim.load(std::memory_order_acquire) == WaiterClaim::Canceled)
         {
-            // ABA path: the waiter already returned from counter_wait without
-            // suspending. Discard — there is no fiber to resume.
+            // Leftover from counter_finish_park's ABA cancel — the fiber is being
+            // resumed by the scheduler, not by us. Discard.
             list = nxt;
             continue;
         }
+        // Otherwise it is Pending (Wakeup is only set here, on a node we remove).
 
-        if (list->target == new_val)
+        WaiterClaim expected = WaiterClaim::Pending;
+        if (list->claim.compare_exchange_strong(expected, WaiterClaim::Wakeup,
+                std::memory_order_acq_rel, std::memory_order_acquire))
         {
-            // Satisfied: transition fiber to Ready (debug builds only).
+            // We own the resume for this fiber.
 #if CRD_ENABLE_ASSERTS
             CRD_ASSERT_MSG(list->fiber != nullptr,
                            "counter_decrement: woken Waiter has null fiber");
@@ -191,47 +204,29 @@ Waiter* counter_decrement(Counter* counter, crd::u32 amount) noexcept
             list->next.store(woken, std::memory_order_relaxed);
             woken = list;
         }
-        else
-        {
-            // Not yet satisfied — push back for a future decrement.
-            list->next.store(put_back, std::memory_order_relaxed);
-            put_back = list;
-        }
+        // else: counter_finish_park canceled it between our load and CAS — drop it.
         list = nxt;
-    }
-
-    // Re-push unsatisfied waiters back onto counter->waiters (Treiber push).
-    while (put_back != nullptr)
-    {
-        Waiter* nxt  = put_back->next.load(std::memory_order_relaxed);
-        Waiter* head = counter->waiters.load(std::memory_order_relaxed);
-        do
-        {
-            put_back->next.store(head, std::memory_order_relaxed);
-        } while (!counter->waiters.compare_exchange_weak(
-                     head, put_back,
-                     std::memory_order_release, std::memory_order_relaxed));
-        put_back = nxt;
     }
 
     return woken;
 }
 
 // ---------------------------------------------------------------------------
-// counter_wait
+// counter_wait — runs on the waiting fiber
 //
-// ABA-safe protocol — see header comment for the full step-by-step.
+// Switch-then-publish: the fiber does NOT put its Waiter on the list itself.
+// Becoming wakeable must happen *after* the fiber's context is saved, and the
+// only thing that saves it is the fiber_switch to the scheduler. So the fiber
+// fills in its Waiter, stashes a park request, and switches; the scheduler —
+// see worker_pool.cpp's run_job_in_fiber → counter_finish_park — publishes the
+// Waiter once we're safely parked.
 //
-// FiberState note (debug builds):
-//   The Waiting → Ready transition for the suspended fiber is performed by
-//   counter_decrement() on whichever thread runs it. FiberState is not an
-//   atomic type; the transition is safe because:
-//     - The fiber_switch call (step 5) provides a full memory fence on x86-64
-//       via the RSP store in the asm stub.
-//     - counter_decrement's fetch_sub(acq_rel) synchronises with the push CAS
-//       (release) that published this Waiter, ordering the state write before
-//       the state read.
-//   This is a debug-only best-effort check, not a hard guarantee.
+// FiberState (debug builds): the fiber sets Active → Waiting before the switch;
+// whoever resumes it (counter_decrement, or the scheduler on an ABA-cancel) sets
+// Waiting → Ready before queueing the resume; this function then sets Ready →
+// Active after the switch returns. Each transition is performed by exactly one
+// party (serialised by the Waiter::claim CAS), so there is no data race despite
+// FiberState being a plain (non-atomic) enum.
 // ---------------------------------------------------------------------------
 
 void counter_wait(Counter* counter, Waiter* w, Fiber* current_fiber,
@@ -240,18 +235,65 @@ void counter_wait(Counter* counter, Waiter* w, Fiber* current_fiber,
     CRD_ASSERT_MSG(counter       != nullptr, "counter_wait: null counter");
     CRD_ASSERT_MSG(w             != nullptr, "counter_wait: null Waiter");
     CRD_ASSERT_MSG(current_fiber != nullptr, "counter_wait: null current_fiber");
+    CRD_ASSERT_MSG(target == 0U,
+                   "counter_wait: only target == 0 is supported — counter_decrement "
+                   "drains the waiters list exactly at zero (see counter_decrement)");
 
-    // Fast path: value is already at target.
+    // Fast path: value is already at target — no need to park at all.
     if (counter->value.load(std::memory_order_acquire) == target)
         return;
 
-    // Set up the Waiter node.
+    // Prepare the Waiter and hand parking off to the scheduler.
     w->fiber  = current_fiber;
     w->target = target;
-    w->canceled.store(false, std::memory_order_relaxed);
+    w->claim.store(WaiterClaim::Pending, std::memory_order_relaxed);
+    w->next.store(nullptr,               std::memory_order_relaxed);
+    w->park_finalized.store(false,       std::memory_order_relaxed);
 
-    // Push w onto counter->waiters (Treiber push — release so all writes to
-    // w->fiber / w->target / w->canceled are visible to counter_decrement).
+#if CRD_ENABLE_ASSERTS
+    CRD_ASSERT_MSG(current_fiber->state == FiberState::Active,
+                   "counter_wait: fiber must be Active before parking");
+    current_fiber->state = FiberState::Waiting;
+#endif
+
+    tl_set_pending_park(counter, w);
+    fiber_switch(&current_fiber->context, &scheduler_ctx);
+
+    // --- Resumed (by counter_decrement having claimed Wakeup, or by the
+    //     scheduler if the value had already reached target at publish time) --- //
+
+    // Don't unwind this frame (which would free `w` and let jobs::wait() release
+    // the counter) until counter_finish_park has finished touching both. The
+    // resume chain (decrement → enqueue → scheduler pop → fiber_switch) is far
+    // longer than counter_finish_park's tail, so this almost never actually
+    // spins; it's strictly defensive against the tight interleaving.
+    while (!w->park_finalized.load(std::memory_order_acquire))
+    { /* counter_finish_park is a handful of instructions away */ }
+
+#if CRD_ENABLE_ASSERTS
+    CRD_ASSERT_MSG(current_fiber->state == FiberState::Ready,
+                   "counter_wait: fiber should be in Ready state on resume");
+    current_fiber->state = FiberState::Active;
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// counter_finish_park — runs on the scheduler thread, after the fiber switched out
+//
+// Memory ordering: the publish CAS is release; counter_decrement reads the
+// Waiter after its exchange(acq_rel), so it sees w->fiber / w->target / claim
+// (and, transitively, the fiber's Waiting state, which counter_wait wrote before
+// the switch — sequenced-before this publish on the same OS thread). The ABA
+// re-check load is acquire; the claim CAS is acq_rel / acquire.
+// ---------------------------------------------------------------------------
+
+bool counter_finish_park(Counter* counter, Waiter* w) noexcept
+{
+    CRD_ASSERT_MSG(counter != nullptr, "counter_finish_park: null counter");
+    CRD_ASSERT_MSG(w       != nullptr, "counter_finish_park: null Waiter");
+    CRD_ASSERT_MSG(w->target == 0U,    "counter_finish_park: only target == 0 is supported");
+
+    // Publish w onto counter->waiters (Treiber push).
     Waiter* head = counter->waiters.load(std::memory_order_relaxed);
     do
     {
@@ -260,32 +302,22 @@ void counter_wait(Counter* counter, Waiter* w, Fiber* current_fiber,
                  head, w,
                  std::memory_order_release, std::memory_order_relaxed));
 
-    // ABA double-check: did the counter reach target while we were pushing?
-    if (counter->value.load(std::memory_order_acquire) == target)
+    // ABA re-check: did the counter reach target while the fiber was switching
+    // out / we were publishing? If yes, race counter_decrement for this Waiter:
+    // if we win the cancel CAS, no decrement owes the fiber a resume — the caller
+    // does it.
+    bool resumed_by_scheduler = false;
+    if (counter->value.load(std::memory_order_acquire) == w->target)
     {
-        // Signal to counter_decrement that this waiter must not cause a resume.
-        // counter_decrement may or may not have already drained the list; either
-        // way it will see canceled == true and discard this node.
-        w->canceled.store(true, std::memory_order_release);
-        return;
+        WaiterClaim expected = WaiterClaim::Pending;
+        resumed_by_scheduler = w->claim.compare_exchange_strong(expected, WaiterClaim::Canceled,
+                                   std::memory_order_acq_rel, std::memory_order_acquire);
     }
 
-    // Suspend — switch to the scheduler fiber.
-#if CRD_ENABLE_ASSERTS
-    CRD_ASSERT_MSG(current_fiber->state == FiberState::Active,
-                   "counter_wait: fiber must be Active before suspending");
-    current_fiber->state = FiberState::Waiting;
-#endif
-
-    fiber_switch(&current_fiber->context, &scheduler_ctx);
-
-    // --- Resumed by counter_decrement --- //
-
-#if CRD_ENABLE_ASSERTS
-    CRD_ASSERT_MSG(current_fiber->state == FiberState::Ready,
-                   "counter_wait: fiber should be in Ready state on resume");
-    current_fiber->state = FiberState::Active;
-#endif
+    // Done touching `counter` and `w`. Release the fiber to complete jobs::wait()
+    // — counter_wait spins on this before returning.
+    w->park_finalized.store(true, std::memory_order_release);
+    return resumed_by_scheduler;
 }
 
 } // namespace crd::jobs::detail

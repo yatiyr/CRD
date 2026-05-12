@@ -1,0 +1,23 @@
+{
+    // F5 launches whatever target CMake Tools has selected (status-bar →
+    // "Set Launch/Debug Target").  Pick e.g. crd-jobs-tests or crd-sandbox.
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug (CMake launch target)",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${command:cmake.launchTargetPath}",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "environment": [
+                { "name": "VULKAN_SDK", "value": "${userHome}/cerid-deps/vulkan-sdk" },
+                { "name": "CRD_PLATFORM_HEADLESS", "value": "1" }
+            ],
+            "MIMode": "gdb",
+            "setupCommands": [
+                { "text": "-enable-pretty-printing", "ignoreFailures": true }
+            ]
+        }
+    ]
+}
