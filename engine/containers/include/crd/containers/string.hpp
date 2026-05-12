@@ -224,6 +224,10 @@ public:
     {
         const usize old = size();
         CRD_ASSERT(old > 0);
+        if (old == 0) // unreachable per contract; without it GCC can't prove `old - 1`
+        {             // doesn't underflow → -Wstringop-overflow on the p[old-1] write.
+            return;
+        }
         char* p = data();
         p[old - 1] = '\0';
         set_size(old - 1);

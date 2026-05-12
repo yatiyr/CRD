@@ -41,6 +41,13 @@ endif()
 
 target_compile_features(crd-cooker PUBLIC cxx_std_20)
 
+# mesh.cpp #includes mikktspace.c directly; that third-party tangent-space code
+# does several `x << 32` on 32-bit ints (benign hash mixing) which trips UBSan's
+# shift-exponent check on the linux-gcc-asan config. Disable only the shift check
+# for this one TU (no-op when UBSan isn't active; not applicable to MSVC).
+set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/src/cook_handlers/mesh.cpp" PROPERTIES
+    COMPILE_OPTIONS "$<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-fno-sanitize=shift>")
+
 crd_enable_default_pch(crd-cooker)
 
 # ── asset_cooker executable ─────────────────────────────────────────────────

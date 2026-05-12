@@ -48,7 +48,10 @@ public:
     WorkStealingDeque& operator=(WorkStealingDeque&&)      = delete;
 
     // Push item (owner only). Returns false and asserts in debug if full.
-    bool push(T item) noexcept;
+    // By const-ref: T can be over-aligned (JobDecl is alignas(64)), and passing
+    // such a type by value triggers GCC's "ABI for 64-byte-aligned params has
+    // changed" diagnostic — and copies 64 B onto the call stack for nothing.
+    bool push(const T& item) noexcept;
 
     // Pop item LIFO (owner only). Returns nullopt if empty.
     [[nodiscard]] std::optional<T> pop() noexcept;
@@ -107,7 +110,7 @@ WorkStealingDeque<T>::WorkStealingDeque(crd::u32 capacity)
 // ---------------------------------------------------------------------------
 
 template<typename T>
-bool WorkStealingDeque<T>::push(T item) noexcept
+bool WorkStealingDeque<T>::push(const T& item) noexcept
 {
     const crd::i64 b = m_bottom.load(std::memory_order_relaxed);
     const crd::i64 t = m_top.load(std::memory_order_acquire);
