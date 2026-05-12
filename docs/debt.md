@@ -360,6 +360,14 @@ ADR-0044, ADR-0046, ADR-0048.
 
 ## Long-term deferred
 
+- **Stress `[.soak]` nightly lane** (deferred by detour D-002, 2026-05-12) — `tests/stress/`
+  ships four `[.soak]`-tagged tests (TLSF churn, freeze + parallel_for, `ConcurrentQueue`
+  MPMC, `AtomicArray`) with deliberately huge iteration counts (catch a 1-in-10M torn-write
+  / false-share that the bounded variants miss). They're Catch-`[.]`-hidden so CI `ctest`
+  skips them; today they only run on demand via `crd-stress-tests "[.soak]"`. Wanted: a
+  scheduled nightly CI job (and a place to add future `[.soak]` tests as v3–v6's primitives
+  pick up consumers). Until then, run the soak suite manually before relying on a new
+  consumer of these primitives.
 - **Concurrent hash map** (deferred by detour D-002, 2026-05-12) — a split-ordered /
   Cliff-Click-style lock-free hash map is genuinely hard and should not be built
   speculatively. D-002 ships `crd::containers::ConcurrentQueue<T>` (MPMC) and
