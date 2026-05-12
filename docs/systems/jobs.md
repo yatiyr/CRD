@@ -68,6 +68,17 @@ template<typename F>
                                     StackSize stack    = StackSize::Small,
                                     Priority  priority = Priority::Normal);
 
+// parallel_reduce (D-002 v2): split [0,count) into num_jobs ranges, map each to
+// a partial result, fold left-to-right in job order from `init`. Synchronous —
+// submits, waits, folds, returns. R must be trivially copyable; MapFn under the
+// same 41-byte SBO constraint as parallel_for's F; ReduceFn runs only on the
+// caller. (Freezing an Array around a parallel pass is not a jobs function — it
+// would force a crd-jobs->crd-containers edge; use crd::containers::FrozenView +
+// parallel_for + wait at the call site.)
+template<typename R, typename MapFn, typename ReduceFn>
+[[nodiscard]] R parallel_reduce(u32 count, u32 num_jobs, R init, MapFn&& map, ReduceFn&& reduce,
+                                StackSize stack = StackSize::Small, Priority priority = Priority::Normal);
+
 // Per-thread frame allocator
 [[nodiscard]] void* frame_alloc(usize size, usize alignment = alignof(std::max_align_t));
 void frame_reset(); // non-thread-safe; call at frame boundary only

@@ -1,9 +1,9 @@
 #pragma once
 
-#include <crd/jobs/detail/fiber_context.hpp>
-#include <crd/jobs/job_decl.hpp>
 #include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
+#include <crd/jobs/detail/fiber_context.hpp>
+#include <crd/jobs/job_decl.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -17,19 +17,22 @@ namespace crd::jobs
 // Counter — opaque handle returned by run(). Pool-allocated; valid until wait() returns.
 // Caller must eventually call wait() on every Counter* returned by run(); failing to do
 // so leaks the counter slot from the internal pool.
-namespace detail { struct Counter; }
+namespace detail
+{
+struct Counter;
+}
 using Counter = detail::Counter;
 
 // Init / shutdown — call from the main thread before any run() / wait() use.
 struct Config
 {
-    crd::u32 num_threads              = 0U;       // 0 = hardware_concurrency()
-    crd::u32 small_fiber_count        = 128U;
-    crd::u32 medium_fiber_count       = 64U;
-    crd::u32 large_fiber_count        = 16U;
-    crd::u32 max_counters             = 512U;
+    crd::u32 num_threads = 0U; // 0 = hardware_concurrency()
+    crd::u32 small_fiber_count = 128U;
+    crd::u32 medium_fiber_count = 64U;
+    crd::u32 large_fiber_count = 16U;
+    crd::u32 max_counters = 512U;
     crd::u32 injection_queue_capacity = 4096U;
-    crd::u32 frame_alloc_bytes        = 1U << 20U; // 1 MB per thread
+    crd::u32 frame_alloc_bytes = 1U << 20U; // 1 MB per thread
 };
 
 void init(const Config& cfg = {});
@@ -63,24 +66,22 @@ void run_and_wait(const JobDecl& job);
 class JobFence
 {
 public:
-    JobFence()                       noexcept = default;
-    explicit JobFence(Counter* c)    noexcept : m_counter(c) {}
+    JobFence() noexcept = default;
+    explicit JobFence(Counter* c) noexcept : m_counter(c) {}
 
     ~JobFence() noexcept
     {
-        CRD_ASSERT_MSG(m_counter == nullptr,
-                       "JobFence destroyed without wait() — counter pool slot leaked");
+        CRD_ASSERT_MSG(m_counter == nullptr, "JobFence destroyed without wait() — counter pool slot leaked");
     }
 
-    JobFence(const JobFence&)              = delete;
-    JobFence& operator=(const JobFence&)   = delete;
+    JobFence(const JobFence&) = delete;
+    JobFence& operator=(const JobFence&) = delete;
 
     JobFence(JobFence&& o) noexcept : m_counter(o.m_counter) { o.m_counter = nullptr; }
     JobFence& operator=(JobFence&& o) noexcept
     {
-        CRD_ASSERT_MSG(m_counter == nullptr,
-                       "JobFence: move-assigned over an uncompleted fence — counter leaked");
-        m_counter   = o.m_counter;
+        CRD_ASSERT_MSG(m_counter == nullptr, "JobFence: move-assigned over an uncompleted fence — counter leaked");
+        m_counter = o.m_counter;
         o.m_counter = nullptr;
         return *this;
     }
@@ -121,9 +122,9 @@ private:
 [[nodiscard]] bool pump_main_thread_until_idle();
 
 // Introspection — valid after init().
-[[nodiscard]] bool      is_worker_fiber() noexcept; // true when called from inside a job fiber
-[[nodiscard]] crd::u32  worker_index()    noexcept; // thread index of the calling thread
-[[nodiscard]] crd::u32  num_workers()     noexcept; // total thread count (incl. thread 0)
+[[nodiscard]] bool is_worker_fiber() noexcept;  // true when called from inside a job fiber
+[[nodiscard]] crd::u32 worker_index() noexcept; // thread index of the calling thread
+[[nodiscard]] crd::u32 num_workers() noexcept;  // total thread count (incl. thread 0)
 
 // Per-thread linear frame allocator. Each thread owns a private bump arena sized by
 // Config::frame_alloc_bytes. Allocation is lock-free and O(1).
@@ -131,8 +132,7 @@ private:
 // frame_reset() resets All threads' arenas. It is NOT thread-safe relative to concurrent
 // frame_alloc() calls — invoke it only at a frame boundary after all jobs of the previous
 // frame have completed (e.g. after the last wait() / run_and_wait() of the frame).
-[[nodiscard]] void* frame_alloc(crd::usize size,
-                                crd::usize alignment = alignof(std::max_align_t));
+[[nodiscard]] void* frame_alloc(crd::usize size, crd::usize alignment = alignof(std::max_align_t));
 void frame_reset();
 
 // ---------------------------------------------------------------------------
@@ -143,8 +143,7 @@ namespace detail
 {
 // Entry point stored in JobDecl::fn for SBO jobs. Receives a pointer to the callable
 // (residing in Fiber::sbo_buf) and invokes it.
-template<typename F>
-void sbo_trampoline(void* buf) noexcept
+template <typename F> void sbo_trampoline(void* buf) noexcept
 {
     (*static_cast<F*>(buf))();
 }
@@ -162,22 +161,18 @@ void sbo_trampoline(void* buf) noexcept
 // Callables that exceed these limits must use the raw fn/data form instead.
 // ---------------------------------------------------------------------------
 
-template<typename F>
-requires (sizeof(std::decay_t<F>)  <= 41U &&
-          alignof(std::decay_t<F>) <= 8U  &&
-          std::is_trivially_copyable_v<std::decay_t<F>> &&
-          std::is_trivially_destructible_v<std::decay_t<F>>)
-[[nodiscard]] JobDecl make_job(F&& f,
-                               StackSize stack    = StackSize::Small,
-                               Priority  priority = Priority::Normal)
+template <typename F>
+    requires(sizeof(std::decay_t<F>) <= 41U && alignof(std::decay_t<F>) <= 8U &&
+             std::is_trivially_copyable_v<std::decay_t<F>> && std::is_trivially_destructible_v<std::decay_t<F>>)
+[[nodiscard]] JobDecl make_job(F&& f, StackSize stack = StackSize::Small, Priority priority = Priority::Normal)
 {
     using FD = std::decay_t<F>;
 
     JobDecl j;
-    j.fn       = &detail::sbo_trampoline<FD>;
-    j.stack    = stack;
+    j.fn = &detail::sbo_trampoline<FD>;
+    j.stack = stack;
     j.priority = priority;
-    j._pad[8]  = detail::kSboFlag;
+    j._pad[8] = detail::kSboFlag;
 
     // Construct F into a local, then pack its bytes into data + _pad[9..].
     // Both fields survive queue copies (the full 64-byte JobDecl is copied by value).
@@ -190,9 +185,7 @@ requires (sizeof(std::decay_t<F>)  <= 41U &&
     else
     {
         std::memcpy(&j.data, &tmp, 8U);
-        std::memcpy(&j._pad[9],
-                    reinterpret_cast<const crd::u8*>(&tmp) + 8U,
-                    sizeof(FD) - 8U);
+        std::memcpy(&j._pad[9], reinterpret_cast<const crd::u8*>(&tmp) + 8U, sizeof(FD) - 8U);
     }
     return j;
 }
@@ -209,10 +202,9 @@ requires (sizeof(std::decay_t<F>)  <= 41U &&
 // (v1j) will replace this allocation on the hot path.
 // ---------------------------------------------------------------------------
 
-template<typename F>
-[[nodiscard]] Counter* parallel_for(crd::u32 count, crd::u32 num_jobs, F&& fn,
-                                     StackSize stack    = StackSize::Small,
-                                     Priority  priority = Priority::Normal)
+template <typename F>
+[[nodiscard]] Counter* parallel_for(crd::u32 count, crd::u32 num_jobs, F&& fn, StackSize stack = StackSize::Small,
+                                    Priority priority = Priority::Normal)
 {
     using FD = std::decay_t<F>;
 
@@ -220,20 +212,16 @@ template<typename F>
     {
         crd::u32 begin;
         crd::u32 end;
-        FD       fn;
+        FD fn;
         void operator()() { fn(begin, end); }
     };
 
-    static_assert(sizeof(Task)  <= 41U,
-        "parallel_for: sizeof({begin,end,F}) exceeds 41-byte SBO; use raw fn/data form");
-    static_assert(alignof(Task) <= 8U,
-        "parallel_for: alignment of Task exceeds 8 bytes");
-    static_assert(std::is_trivially_copyable_v<Task>,
-        "parallel_for: F must be trivially copyable");
-    static_assert(std::is_trivially_destructible_v<Task>,
-        "parallel_for: F must be trivially destructible");
+    static_assert(sizeof(Task) <= 41U, "parallel_for: sizeof({begin,end,F}) exceeds 41-byte SBO; use raw fn/data form");
+    static_assert(alignof(Task) <= 8U, "parallel_for: alignment of Task exceeds 8 bytes");
+    static_assert(std::is_trivially_copyable_v<Task>, "parallel_for: F must be trivially copyable");
+    static_assert(std::is_trivially_destructible_v<Task>, "parallel_for: F must be trivially destructible");
 
-    CRD_ASSERT_MSG(count    > 0U, "parallel_for: count must be > 0");
+    CRD_ASSERT_MSG(count > 0U, "parallel_for: count must be > 0");
     CRD_ASSERT_MSG(num_jobs > 0U, "parallel_for: num_jobs must be > 0");
 
     num_jobs = std::min(num_jobs, count); // can't have more jobs than items
@@ -243,17 +231,102 @@ template<typename F>
     // Allocate the JobDecl array from the per-thread frame arena — no heap allocation.
     // The array is valid until the next frame_reset(); run() copies each element into
     // the scheduler queue before returning so only the run() call must see valid memory.
-    auto* const jobs = static_cast<JobDecl*>(
-        frame_alloc(num_jobs * sizeof(JobDecl), alignof(JobDecl)));
+    auto* const jobs = static_cast<JobDecl*>(frame_alloc(num_jobs * sizeof(JobDecl), alignof(JobDecl)));
 
     for (crd::u32 i = 0U; i < num_jobs; ++i)
     {
         const crd::u32 begin = i * count / num_jobs;
-        const crd::u32 end   = (i + 1U) * count / num_jobs;
-        const JobDecl  j     = make_job(Task{begin, end, fn_copy}, stack, priority);
+        const crd::u32 end = (i + 1U) * count / num_jobs;
+        const JobDecl j = make_job(Task{begin, end, fn_copy}, stack, priority);
         std::memcpy(jobs + i, &j, sizeof(JobDecl));
     }
     return run(std::span<const JobDecl>(jobs, num_jobs));
+}
+
+// ---------------------------------------------------------------------------
+// Freezing an Array for the duration of a parallel pass is intentionally NOT a
+// jobs function — that would force a crd-jobs -> crd-containers module edge for
+// pure sugar. The freeze guard lives in crd-containers (Array::freeze /
+// FrozenView, detour D-002 v2); combine them at the call site:
+//
+//     {
+//         crd::containers::FrozenView fv(my_array);   // frozen for this scope
+//         crd::jobs::Counter* c = crd::jobs::parallel_for(static_cast<crd::u32>(fv.size()), num_jobs,
+//             [&fv](crd::u32 b, crd::u32 e){ for (crd::u32 i = b; i < e; ++i) fv[i] = compute(i); });
+//         crd::jobs::wait(c);                         // FrozenView stays alive across the whole pass
+//     }                                               // unfrozen here
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// parallel_reduce — split [0, count) into num_jobs ranges, map each range to a
+// partial result, then fold the partials. Synchronous: submits, waits, folds,
+// returns. The map function runs on worker fibers; the fold runs on the caller.
+//
+//   map    : R (crd::u32 begin, crd::u32 end)   — partial result over [begin,end)
+//   reduce : R (R acc, R partial)               — combine; should be associative.
+//                                                 Partials are folded LEFT-TO-RIGHT
+//                                                 in job order starting from `init`,
+//                                                 so the result is deterministic for
+//                                                 a fixed num_jobs.
+//   init   : R                                  — fold seed / identity.
+//
+// R must be trivially copyable (it lives in the per-thread frame arena and is
+// written by a worker via assignment). MapFn must satisfy the same SBO
+// constraints as parallel_for's F. ReduceFn runs only on the caller — no SBO
+// constraint, may be any callable.
+// ---------------------------------------------------------------------------
+template <typename R, typename MapFn, typename ReduceFn>
+    requires(std::is_trivially_copyable_v<R>)
+[[nodiscard]] R parallel_reduce(crd::u32 count, crd::u32 num_jobs, R init, MapFn&& map, ReduceFn&& reduce,
+                                StackSize stack = StackSize::Small, Priority priority = Priority::Normal)
+{
+    CRD_ASSERT_MSG(count > 0U, "parallel_reduce: count must be > 0");
+    CRD_ASSERT_MSG(num_jobs > 0U, "parallel_reduce: num_jobs must be > 0");
+
+    num_jobs = std::min(num_jobs, count);
+
+    using MFD = std::decay_t<MapFn>;
+    struct Task
+    {
+        crd::u32 begin;
+        crd::u32 end;
+        R* out;
+        MFD map;
+        void operator()() { *out = map(begin, end); }
+    };
+
+    static_assert(sizeof(Task) <= 41U,
+                  "parallel_reduce: sizeof({begin,end,R*,MapFn}) exceeds 41-byte SBO; use raw fn/data form");
+    static_assert(alignof(Task) <= 8U, "parallel_reduce: Task alignment exceeds 8 bytes");
+    static_assert(std::is_trivially_copyable_v<Task>, "parallel_reduce: MapFn must be trivially copyable");
+    static_assert(std::is_trivially_destructible_v<Task>, "parallel_reduce: MapFn must be trivially destructible");
+
+    MFD map_copy(std::forward<MapFn>(map));
+
+    // Partials + JobDecl array from the per-thread frame arena. JobDecls only
+    // need to outlive run(); partials must outlive wait() + the fold below —
+    // both live until the next frame_reset(), so we're safe.
+    R* const partials = static_cast<R*>(frame_alloc(static_cast<crd::usize>(num_jobs) * sizeof(R), alignof(R)));
+    auto* const jobs =
+        static_cast<JobDecl*>(frame_alloc(static_cast<crd::usize>(num_jobs) * sizeof(JobDecl), alignof(JobDecl)));
+
+    for (crd::u32 i = 0U; i < num_jobs; ++i)
+    {
+        const crd::u32 begin = i * count / num_jobs;
+        const crd::u32 end = (i + 1U) * count / num_jobs;
+        const JobDecl j = make_job(Task{begin, end, partials + i, map_copy}, stack, priority);
+        std::memcpy(jobs + i, &j, sizeof(JobDecl));
+    }
+
+    Counter* const c = run(std::span<const JobDecl>(jobs, num_jobs));
+    wait(c); // happens-before: the partial writes are visible after the wait
+
+    R acc = init;
+    for (crd::u32 i = 0U; i < num_jobs; ++i)
+    {
+        acc = reduce(acc, partials[i]);
+    }
+    return acc;
 }
 
 } // namespace crd::jobs

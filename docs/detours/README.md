@@ -20,7 +20,7 @@ external request).
 
 ## Active detours
 
-(none — main roadmap resumes at Phase 3.0 v1d)
+- **D-002 — Concurrent containers + stress-hardening of containers, allocators & scene storages** (opened 2026-05-12). Mini-phase, slices v0…v6: stress harness → scene-storage concurrency-contract inventory → `freeze()`/`FrozenView` + `parallel_reduce` → `ConcurrentQueue<T>` (promoted Vyukov MPMC) → `AtomicArray<T>` + atomic-element helper → allocator stress matrix → scene-storage stress matrix. Pauses Phase 3.1.7 `crd-geometry` v0a. See `D-002-concurrent-containers-and-stress-hardening.md`.
 
 ## Closed detours
 

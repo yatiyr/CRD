@@ -1,11 +1,11 @@
 # scripts/full-sweep.ps1
 #
 # Single-command Definition-of-Done sweep across every Cerid preset:
-#   Win x 9: debug, relwithdebinfo, release, asan, clang-cl, debug-scalar,
-#            shipping, clang-cl-shipping  (build + ctest + sandbox-smoke)
-#            + tidy (build-only)
-#   Linux x 6: linux-gcc-{debug, relwithdebinfo, release, asan, debug-scalar,
-#              shipping}  (build + ctest)
+#   Win x 10: debug, relwithdebinfo, release, asan, clang-cl, debug-scalar,
+#             debug-sse2, shipping, clang-cl-shipping  (build + ctest + sandbox-smoke)
+#             + tidy (build-only)
+#   Linux x 7: linux-gcc-{debug, relwithdebinfo, release, asan, debug-scalar,
+#              debug-sse2, shipping}  (build + ctest)
 #
 # Shipping configs (win-shipping, win-clang-cl-shipping, linux-gcc-shipping)
 # now run tests + sandbox-smoke per the 2026-05-11 shipping hardening pass —
@@ -59,7 +59,7 @@ if (-not $SkipWin) {
     # "...powershell -Command \"...\"..." blows up with quoting on non-trivial
     # scripts (the v0e closure attempted that and failed silently every time).
     @'
-$presets = @('win-debug','win-relwithdebinfo','win-release','win-asan','win-clang-cl','win-debug-scalar','win-shipping','win-clang-cl-shipping')
+$presets = @('win-debug','win-relwithdebinfo','win-release','win-asan','win-clang-cl','win-debug-scalar','win-debug-sse2','win-shipping','win-clang-cl-shipping')
 $buildOnly = @('win-tidy')
 $results = [ordered]@{}
 
@@ -172,6 +172,7 @@ if (-not $SkipLinux) {
         'linux-gcc-release',
         'linux-gcc-asan',
         'linux-gcc-debug-scalar',
+        'linux-gcc-debug-sse2',
         'linux-gcc-shipping'
     )
 

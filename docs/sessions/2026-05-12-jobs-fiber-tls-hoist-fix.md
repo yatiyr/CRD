@@ -117,17 +117,47 @@ hits 0 — and only ever drains it, never partially rebuilds (the `put_back` pat
   no asserts), `-O2 -g` (asserts on), and `-O0 -g` (asserts on). Pre-`tl_fiber`-fix: ~1-in-100-to-400.
 - `crd-jobs-tests` full `[jobs]` + `[jobs][counter]` suites: pass; `jobs: cross-thread fiber
   resume stress` ran 300× clean.
-- **Full Linux ctest sweep:** `linux-gcc-debug` 1060/1060; `linux-gcc-debug-scalar`, `-asan`
-  (ASan+UBSan), `-relwithdebinfo`, `-release` — all green. <fill in exact counts>
-- **Not run here:** Windows configs (MSVC / clang-cl), AVX2 codegen. The fixes are plain C++ +
-  a portable attribute macro; no platform-specific codegen. See `docs/jobs/WINDOWS_VERIFICATION.md`.
+- **Full Linux ctest sweep (this VM, SSE2, asserts-on configs):** `linux-gcc-debug` 1060/1060;
+  `-debug-scalar` 1060/1060; `-asan` (ASan+UBSan) 1060/1060; `-relwithdebinfo` 1060/1060;
+  `-release` 1057/1057; `-shipping` 1057/1057 — all green. (1060 vs 1057 = the 3
+  `#if CRD_ENABLE_ASSERTS`-gated `FiberState` tests; the +1 over the pre-fix count is the new
+  `jobs: cross-thread fiber resume stress` test.)
+- **Windows + AVX2 verification (follow-up, 2026-05-12 — done on the Windows dev box):** full
+  14-config `scripts/full-sweep.ps1` PASS — all 9 Windows configs (MSVC debug/relwithdebinfo/
+  release/asan/debug-scalar/shipping, clang-cl, clang-cl-shipping — each build+ctest+sandbox-smoke;
+  tidy build-only) and all 6 Linux configs (now AVX2, since `auto`→`avx2` on the runner CPU),
+  with `jobs: cross-thread fiber resume stress` passing on every config. Then a targeted AVX2
+  stress on the `linux-gcc-release` (AVX2) build: the old reliable repro `crd-resources-tests
+  "Eviction: load_streamed delivers correct payload via AsyncFile"` at 24-way parallel × 220
+  rounds (~5,300 invocations; the old code crashed within ~28 under that load) → 0 failures;
+  `jobs: cross-thread fiber resume stress` 12-way × 120 (~1,400 invocations) → 0; full `[jobs]`
+  ×20 → 0. The race is gone, on AVX2 as well as SSE2. `docs/jobs/WINDOWS_VERIFICATION.md` is
+  therefore satisfied; the MSVC `/Od` is dropped (see CMakeLists note + the follow-up below).
 
 ## Notes / follow-ups
 
-- The CI sweep has `scalar` and `avx2` SIMD lanes but no plain-`sse2` lane — minor coverage gap
-  (unrelated to this fix), worth a lane.
-- The MSVC `/Od` on `worker_pool.cpp` + `fiber_init.cpp` is now redundant with the source fixes;
-  drop it after a Windows sweep confirms.
+- ~~The sweep has `scalar` and `avx2` SIMD lanes but no plain-`sse2` lane~~ — **closed
+  2026-05-12 follow-up:** added `win-debug-sse2` + `linux-gcc-debug-sse2` config/build/test
+  presets (`CMakePresets.json`), the `linux-gcc-debug-sse2` CI lane + `win-debug-sse2` CI lane
+  (`.github/workflows/ci.yml`), and both to `scripts/full-sweep.ps1` (Win ×10 / Linux ×7 now).
+- ~~The MSVC `/Od` on `worker_pool.cpp` + `fiber_init.cpp` is now redundant with the source
+  fixes; drop it after a Windows sweep confirms~~ — **dropped 2026-05-12 follow-up** after the
+  full Windows+Linux sweep + the Windows jobs stress run above confirmed the source fix holds
+  without it. (`INTERPROCEDURAL_OPTIMIZATION OFF` on `crd-jobs` stays — the hand-rolled asm
+  context switch is still LTO-incompatible.)
+- The `CounterPool::release` debug assert-walk over leftover `Waiter`s was removed in the
+  2026-05-12 follow-up — post the switch-then-publish protocol, no Pending waiter can survive
+  to `release()` time (the zero-decrement drains and claims every entry), so the walk could only
+  ever inspect already-unwound `counter_wait()` frames (a stack use-after-read) while asserting
+  a thing that's now provably true. `acquire()` still clears `counter->waiters` for the next user.
+- `scripts/wsl-build.ps1` hardened in the same follow-up (it was surfaced when the cleanup sweep
+  hit a fresh `_deps` re-configure): (a) `linux-gcc-debug-sse2` added to its `[ValidateSet]`;
+  (b) the `& wsl.exe -- bash …` call no longer runs under `$ErrorActionPreference='Stop'` — the
+  inner bash's stderr (e.g. CMake's zstd `cmake_minimum_required` deprecation warning) was being
+  surfaced by PowerShell 5.1 as a native-command error record and terminating the whole sweep on
+  a benign warning. Now scoped to `Continue` around that call (restored after), trusting
+  `$LASTEXITCODE` — which was always the real failure signal. (This is the long-noted
+  `wsl-build.ps1` stderr brittleness from the v0e post-mortem; now actually fixed.)
 
 ## Proposed commit message
 

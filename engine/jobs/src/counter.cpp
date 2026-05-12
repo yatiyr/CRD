@@ -91,24 +91,17 @@ void CounterPool::release(Counter* counter) noexcept
     CRD_ASSERT_MSG(m_initialized, "CounterPool::release called before init");
     CRD_ASSERT_MSG(counter != nullptr, "CounterPool::release: null pointer");
 
-    // The waiters list may legitimately contain Canceled nodes: counter_finish_
-    // park's ABA re-check found the value already at target and claimed Canceled,
-    // and counter_decrement hasn't drained the list yet. Harmless — acquire()
-    // resets waiters=nullptr so the next user sees a clean list. A Pending node
-    // here, though, means a fiber is parked awaiting a decrement that won't come
-    // (a leak/deadlock bug); a Wakeup node is never on the list (counter_decrement
-    // removes it the instant it claims it).
-#if CRD_ENABLE_ASSERTS
-    {
-        const Waiter* w = counter->waiters.load(std::memory_order_acquire);
-        while (w != nullptr)
-        {
-            CRD_ASSERT_MSG(w->claim.load(std::memory_order_acquire) == WaiterClaim::Canceled,
-                           "CounterPool::release: counter has an unresolved waiter (fiber still parked)");
-            w = w->next.load(std::memory_order_relaxed);
-        }
-    }
-#endif
+    // No leftover-waiter assert walk here, deliberately. By the time this counter
+    // is released, jobs::wait() has returned, which means the value reached 0,
+    // which means the zero-decrement (counter_decrement) ran — and that drains
+    // counter->waiters and claims/skips every entry, so no Pending waiter can
+    // survive to here. The only nodes that may still hang off counter->waiters
+    // are Canceled ones published by counter_finish_park's ABA win *after* the
+    // zero-decrement's drain — and those Waiters live in already-unwound
+    // counter_wait() frames, so walking the list to inspect them would be a
+    // use-after-read of reclaimed stack. Harmless to leave dangling: nothing
+    // dereferences counter->waiters between here and acquire(), which overwrites
+    // it with nullptr.
 
     const crd::u32 idx = counter->pool_index;
     crd::u64 head      = m_free_head.load(std::memory_order_relaxed);

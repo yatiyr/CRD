@@ -1,7 +1,7 @@
 #pragma once
 
-#include "mpmc_queue.hpp"
 #include "work_stealing_deque.hpp"
+#include <crd/containers/concurrent_queue.hpp>
 #include <crd/jobs/job_decl.hpp>
 #include <crd/core/assert.hpp>
 #include <crd/core/platform.hpp>
@@ -148,9 +148,12 @@ private:
     static void run_job(const crd::jobs::JobDecl& job);
 
     // Injection queues — MPMC, shared across all threads. Allocated in init().
-    std::unique_ptr<MpmcQueue<crd::jobs::JobDecl>> m_high_injection;
-    std::unique_ptr<MpmcQueue<crd::jobs::JobDecl>> m_normal_injection;
-    std::unique_ptr<MpmcQueue<crd::jobs::JobDecl>> m_low_injection;
+    // crd::containers::ConcurrentQueue is the promoted (allocator-aware) form of
+    // what used to be jobs/src/mpmc_queue.hpp — same Vyukov algorithm (D-002 v3).
+    using JobInjectionQueue = crd::containers::ConcurrentQueue<crd::jobs::JobDecl>;
+    std::unique_ptr<JobInjectionQueue> m_high_injection;
+    std::unique_ptr<JobInjectionQueue> m_normal_injection;
+    std::unique_ptr<JobInjectionQueue> m_low_injection;
 
     // Per-thread state, indexed by thread_index.
     std::vector<std::unique_ptr<ThreadState>> m_thread_states;

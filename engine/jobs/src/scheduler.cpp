@@ -28,9 +28,9 @@ bool Scheduler::init(const SchedulerConfig& cfg)
 
     m_config = cfg;
 
-    m_high_injection   = std::make_unique<MpmcQueue<crd::jobs::JobDecl>>(cfg.injection_capacity);
-    m_normal_injection = std::make_unique<MpmcQueue<crd::jobs::JobDecl>>(cfg.injection_capacity);
-    m_low_injection    = std::make_unique<MpmcQueue<crd::jobs::JobDecl>>(cfg.injection_capacity);
+    m_high_injection   = std::make_unique<JobInjectionQueue>(cfg.injection_capacity);
+    m_normal_injection = std::make_unique<JobInjectionQueue>(cfg.injection_capacity);
+    m_low_injection    = std::make_unique<JobInjectionQueue>(cfg.injection_capacity);
 
     m_thread_states.reserve(cfg.num_threads);
     for (crd::u32 i = 0U; i < cfg.num_threads; ++i)
@@ -85,13 +85,13 @@ void Scheduler::push(const crd::jobs::JobDecl& job)
     switch (job.priority)
     {
     case crd::jobs::Priority::High:
-        ok = m_high_injection->enqueue(job);
+        ok = m_high_injection->try_push(job);
         break;
     case crd::jobs::Priority::Normal:
-        ok = m_normal_injection->enqueue(job);
+        ok = m_normal_injection->try_push(job);
         break;
     case crd::jobs::Priority::Low:
-        ok = m_low_injection->enqueue(job);
+        ok = m_low_injection->try_push(job);
         break;
     }
     CRD_ASSERT_MSG(ok, "Scheduler::push: injection queue full — raise injection_capacity");
@@ -157,7 +157,7 @@ bool Scheduler::execute_one(crd::u32 thread_idx)
     // 2. High priority: injection → local → steal.
     {
         crd::jobs::JobDecl job{};
-        if (m_high_injection->dequeue(job))  { run_job(job); return true; }
+        if (m_high_injection->try_pop(job))  { run_job(job); return true; }
         if (auto opt = me.high.pop())        { run_job(*opt); return true; }
         for (crd::u32 i = 1U; i < m_config.num_threads; ++i)
         {
@@ -173,7 +173,7 @@ bool Scheduler::execute_one(crd::u32 thread_idx)
     // 3. Normal priority: injection → local → steal.
     {
         crd::jobs::JobDecl job{};
-        if (m_normal_injection->dequeue(job)) { run_job(job); return true; }
+        if (m_normal_injection->try_pop(job)) { run_job(job); return true; }
         if (auto opt = me.normal.pop())       { run_job(*opt); return true; }
         for (crd::u32 i = 1U; i < m_config.num_threads; ++i)
         {
@@ -189,7 +189,7 @@ bool Scheduler::execute_one(crd::u32 thread_idx)
     // 4. Low priority: injection → local → steal.
     {
         crd::jobs::JobDecl job{};
-        if (m_low_injection->dequeue(job))  { run_job(job); return true; }
+        if (m_low_injection->try_pop(job))  { run_job(job); return true; }
         if (auto opt = me.low.pop())        { run_job(*opt); return true; }
         for (crd::u32 i = 1U; i < m_config.num_threads; ++i)
         {
@@ -232,7 +232,7 @@ std::optional<crd::jobs::JobDecl> Scheduler::try_pop(crd::u32 thread_idx)
     // 2. High priority: injection → local → steal.
     {
         crd::jobs::JobDecl job{};
-        if (m_high_injection->dequeue(job)) return job;
+        if (m_high_injection->try_pop(job)) return job;
         if (auto opt = me.high.pop()) return *opt;
         for (crd::u32 i = 1U; i < m_config.num_threads; ++i)
         {
@@ -245,7 +245,7 @@ std::optional<crd::jobs::JobDecl> Scheduler::try_pop(crd::u32 thread_idx)
     // 3. Normal priority: injection → local → steal.
     {
         crd::jobs::JobDecl job{};
-        if (m_normal_injection->dequeue(job)) return job;
+        if (m_normal_injection->try_pop(job)) return job;
         if (auto opt = me.normal.pop()) return *opt;
         for (crd::u32 i = 1U; i < m_config.num_threads; ++i)
         {
@@ -258,7 +258,7 @@ std::optional<crd::jobs::JobDecl> Scheduler::try_pop(crd::u32 thread_idx)
     // 4. Low priority: injection → local → steal.
     {
         crd::jobs::JobDecl job{};
-        if (m_low_injection->dequeue(job)) return job;
+        if (m_low_injection->try_pop(job)) return job;
         if (auto opt = me.low.pop()) return *opt;
         for (crd::u32 i = 1U; i < m_config.num_threads; ++i)
         {

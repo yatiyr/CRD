@@ -143,6 +143,13 @@
             "CRD_SIMD_LEVEL": "scalar"
           }
         },
+        { "name": "win-debug-sse2",
+          "displayName": "Windows Debug + force SSE2 SIMD (codegen-path check)",
+          "inherits": "win-debug",
+          "cacheVariables": {
+            "CRD_SIMD_LEVEL": "sse2"
+          }
+        },
 
         { "name": "linux-gcc-debug",
           "displayName": "Linux GCC Debug",
@@ -203,6 +210,13 @@
           "cacheVariables": {
             "CRD_SIMD_LEVEL": "scalar"
           }
+        },
+        { "name": "linux-gcc-debug-sse2",
+          "displayName": "Linux GCC Debug + force SSE2 SIMD (codegen-path check)",
+          "inherits": "linux-gcc-debug",
+          "cacheVariables": {
+            "CRD_SIMD_LEVEL": "sse2"
+          }
         }
     ],
     "buildPresets":
@@ -216,12 +230,14 @@
         { "name": "win-shipping",        "configurePreset": "win-shipping" },
         { "name": "win-clang-cl-shipping", "configurePreset": "win-clang-cl-shipping" },
         { "name": "win-debug-scalar",    "configurePreset": "win-debug-scalar" },
+        { "name": "win-debug-sse2",      "configurePreset": "win-debug-sse2" },
         { "name": "linux-gcc-debug",            "configurePreset": "linux-gcc-debug" },
         { "name": "linux-gcc-release",          "configurePreset": "linux-gcc-release" },
         { "name": "linux-gcc-relwithdebinfo",   "configurePreset": "linux-gcc-relwithdebinfo" },
         { "name": "linux-gcc-asan",             "configurePreset": "linux-gcc-asan" },
         { "name": "linux-gcc-shipping",         "configurePreset": "linux-gcc-shipping" },
-        { "name": "linux-gcc-debug-scalar",     "configurePreset": "linux-gcc-debug-scalar" }
+        { "name": "linux-gcc-debug-scalar",     "configurePreset": "linux-gcc-debug-scalar" },
+        { "name": "linux-gcc-debug-sse2",       "configurePreset": "linux-gcc-debug-sse2" }
     ],
     "testPresets":
     [
@@ -272,8 +288,16 @@
           "configurePreset": "win-debug-scalar",
           "output": { "outputOnFailure": true }
         },
+        { "name": "win-debug-sse2",
+          "configurePreset": "win-debug-sse2",
+          "output": { "outputOnFailure": true }
+        },
         { "name": "linux-gcc-debug-scalar",
           "configurePreset": "linux-gcc-debug-scalar",
+          "output": { "outputOnFailure": true }
+        },
+        { "name": "linux-gcc-debug-sse2",
+          "configurePreset": "linux-gcc-debug-sse2",
           "output": { "outputOnFailure": true }
         },
         { "name": "win-shipping",

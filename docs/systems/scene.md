@@ -313,6 +313,7 @@ The post-v1c2 slices grow `World` with: a SparseSet escape-hatch backend (v1d), 
 
 ## References
 
+- `docs/systems/scene-concurrency.md` — concurrency contracts per storage (what parallel access is legal; the spec the D-002 stress matrix tests against)
 - `docs/phases/phase-3.0-scene-ecs.md` — phase plan, 14 slices, definition of done
 - `docs/decisions/0020-scene-ecs-hybrid.md` — cornerstone decision (UI in tree, hybrid storage)
 - `docs/decisions/0049-scene-entity-identity-slotmap.md` — L1 (this slice)

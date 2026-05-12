@@ -21,6 +21,8 @@ target_include_directories(crd-jobs
 target_link_libraries(crd-jobs
     PUBLIC
         crd-core
+    PRIVATE
+        crd-containers  # internal: scheduler injection queues use crd::containers::ConcurrentQueue
 )
 
 target_compile_features(crd-jobs PUBLIC cxx_std_20)
@@ -30,21 +32,16 @@ target_compile_features(crd-jobs PUBLIC cxx_std_20)
 # the fiber trampoline's assumptions about register state on entry.
 set_target_properties(crd-jobs PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
 
-# Root cause of the historical win-release / linux-gcc-release SEGFAULT in
-# "jobs: run_and_wait from inside a worker fiber" is now understood and fixed in
-# source: job_fiber_trampoline reads thread-locals on the far side of a fiber
-# resume that can migrate the fiber to a different OS thread, and the optimizer
-# was caching the pre-resume TLS base across the hand-rolled fiber_switch. The
-# fix is the CRD_JOBS_TLS_OPAQUE accessors in worker_pool.cpp (portable; covers
-# every compiler). The /Od on MSVC below is retained as belt-and-suspenders for
-# this context-switch-adjacent TU until a Windows sweep confirms it can be
-# dropped — it is no longer load-bearing, just conservative.
-if(MSVC)
-    set_source_files_properties(
-        src/worker_pool.cpp
-        src/fiber_init.cpp
-        PROPERTIES COMPILE_FLAGS "/Od /Y-"
-    )
-endif()
+# Historical note: worker_pool.cpp + fiber_init.cpp used to carry a `/Od /Y-`
+# pin on MSVC, guarding the long-standing win-release / linux-gcc-release
+# SEGFAULT in "jobs: run_and_wait from inside a worker fiber". That root cause —
+# job_fiber_trampoline reading thread-locals on the far side of a fiber resume
+# that can migrate the fiber to a different OS thread, with the optimizer caching
+# the pre-resume TLS base across the hand-rolled fiber_switch — is now fixed in
+# source (the CRD_JOBS_TLS_OPAQUE accessors in worker_pool.cpp; portable, covers
+# every compiler: `noipa` on GCC, `__declspec(noinline)` elsewhere). The /Od was
+# dropped 2026-05-12 after a full Windows+Linux sweep plus a Windows jobs stress
+# run confirmed the source fix holds without it. INTERPROCEDURAL_OPTIMIZATION OFF
+# above stays — the hand-rolled asm context switch is still incompatible with LTO.
 
 crd_enable_default_pch(crd-jobs)

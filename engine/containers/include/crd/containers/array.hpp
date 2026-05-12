@@ -79,6 +79,7 @@ public:
     Array(Array&& other) noexcept
         : m_alloc(other.m_alloc), m_data(other.m_data), m_size(other.m_size), m_capacity(other.m_capacity)
     {
+        other.check_mutable(); // moving a frozen array is a misuse
         other.m_data = nullptr;
         other.m_size = 0;
         other.m_capacity = 0;
@@ -119,6 +120,7 @@ public:
         {
             return *this;
         }
+        other.check_mutable(); // moving a frozen array is a misuse (this side is covered by clear())
         clear();
         free_buffer();
         m_alloc = other.m_alloc;
@@ -177,6 +179,7 @@ public:
     // Reserve at least `n` slots. OOM/exhaustion is fatal.
     void reserve(usize n)
     {
+        check_mutable();
         if (n > m_capacity)
         {
             grow_to_at_least(n);
@@ -188,6 +191,7 @@ public:
     // out of room, PoolAllocator wrong slot size, etc).
     [[nodiscard]] bool try_reserve(usize n) noexcept
     {
+        check_mutable();
         if (n <= m_capacity)
         {
             return true;
@@ -197,6 +201,7 @@ public:
 
     void shrink_to_fit()
     {
+        check_mutable();
         if (m_size == m_capacity)
         {
             return;
@@ -218,6 +223,7 @@ public:
     // Default-construct elements up to size n. Shrinks (calling dtors) if smaller.
     void resize(usize n)
     {
+        check_mutable();
         if (n < m_size)
         {
             destroy_range(m_data + n, m_data + m_size);
@@ -236,6 +242,7 @@ public:
     // Resize with a fill value.
     void resize(usize n, const T& fill)
     {
+        check_mutable();
         if (n < m_size)
         {
             destroy_range(m_data + n, m_data + m_size);
@@ -254,6 +261,7 @@ public:
     // Destroy all elements; capacity is unchanged.
     void clear() noexcept
     {
+        check_mutable();
         destroy_range(m_data, m_data + m_size);
         m_size = 0;
     }
@@ -261,6 +269,7 @@ public:
     // OOM/exhaustion is fatal (via underlying allocator).
     void push_back(const T& v)
     {
+        check_mutable();
         if (m_size == m_capacity)
         {
             grow_to_at_least(m_size + 1);
@@ -271,6 +280,7 @@ public:
 
     void push_back(T&& v)
     {
+        check_mutable();
         if (m_size == m_capacity)
         {
             grow_to_at_least(m_size + 1);
@@ -281,6 +291,7 @@ public:
 
     template <typename... Args> T& emplace_back(Args&&... args)
     {
+        check_mutable();
         if (m_size == m_capacity)
         {
             grow_to_at_least(m_size + 1);
@@ -293,6 +304,7 @@ public:
     // Returns false if the allocator refused (sub-budget exhaustion).
     [[nodiscard]] bool try_push_back(const T& v) noexcept
     {
+        check_mutable();
         if (m_size == m_capacity && !try_grow_to_at_least(m_size + 1))
         {
             return false;
@@ -304,6 +316,7 @@ public:
 
     [[nodiscard]] bool try_push_back(T&& v) noexcept
     {
+        check_mutable();
         if (m_size == m_capacity && !try_grow_to_at_least(m_size + 1))
         {
             return false;
@@ -315,6 +328,7 @@ public:
 
     void pop_back() noexcept
     {
+        check_mutable();
         CRD_ASSERT(m_size > 0);
         --m_size;
         if constexpr (!std::is_trivially_destructible_v<T>)
@@ -327,6 +341,7 @@ public:
     // O(n) — preserves order.
     void erase(usize i)
     {
+        check_mutable();
         CRD_ASSERT(i < m_size);
         for (usize k = i; k + 1 < m_size; ++k)
         {
@@ -344,6 +359,7 @@ public:
     // (entity lists, draw call buckets, free lists).
     void swap_remove(usize i) noexcept
     {
+        check_mutable();
         CRD_ASSERT(i < m_size);
         const usize last = m_size - 1;
         if (i != last)
@@ -361,6 +377,7 @@ public:
     // O(n) — call push_back if you can.
     void insert(usize i, const T& v)
     {
+        check_mutable();
         CRD_ASSERT(i <= m_size);
         if (m_size == m_capacity)
         {
@@ -397,7 +414,62 @@ public:
 
     memory::IAllocator* allocator() const noexcept { return m_alloc; }
 
+    // ---- Debug freeze guard (detour D-002 v2) ----------------------
+    //
+    // freeze() / unfreeze() bracket a scope during which this Array must NOT
+    // be structurally mutated (push/pop/erase/insert/clear/resize/reserve/
+    // shrink/assign/move-from). Element access — operator[], data(), begin/end,
+    // mutating individual elements in place — stays allowed: the canonical use
+    // is "many fibers writing disjoint elements of a frozen Array during a
+    // parallel for_each / par_each pass".
+    //
+    // A structural mutation while frozen trips a CRD_ASSERT at the point of
+    // misuse. Like every CRD_ASSERT this is a *development net*, not a hard
+    // barrier — in a debug/ASan run it fires loudly (and breaks under a
+    // debugger); in a Release build the check (and the mutation) proceed. So
+    // freeze() catches "a structural change leaked into a parallel pass" during
+    // testing; it does not make the operation safe at runtime.
+    //
+    // Debug-only: in non-assert builds (Release/Shipping) these are no-ops and
+    // the depth counter does not exist — zero size, zero ABI cost. freeze() is
+    // const so a `const Array&` handed to read-only workers can be frozen too.
+    // Re-entrant: nested freeze() calls are counted; the array is mutable again
+    // only after the matching unfreeze(). Prefer FrozenView (below) for RAII.
+    void freeze() const noexcept
+    {
+#if CRD_ENABLE_ASSERTS
+        ++m_freeze_depth;
+#endif
+    }
+    void unfreeze() const noexcept
+    {
+#if CRD_ENABLE_ASSERTS
+        CRD_ASSERT_MSG(m_freeze_depth > 0, "Array::unfreeze() with no matching freeze()");
+        --m_freeze_depth;
+#endif
+    }
+    [[nodiscard]] bool is_frozen() const noexcept
+    {
+#if CRD_ENABLE_ASSERTS
+        return m_freeze_depth != 0;
+#else
+        return false;
+#endif
+    }
+
 private:
+    // Asserts that no freeze() scope is active. Called at the top of every
+    // structural mutator. No-op (and elided) in non-assert builds.
+    void check_mutable() const noexcept
+    {
+#if CRD_ENABLE_ASSERTS
+        CRD_ASSERT_MSG(m_freeze_depth == 0,
+                       "Array structurally mutated while frozen — a push/pop/erase/insert/clear/resize/"
+                       "reserve/shrink/assign/move-from happened inside a freeze() scope (e.g. during a "
+                       "parallel for_each / par_each pass)");
+#endif
+    }
+
     // 1.5x growth strategy with a minimum initial capacity.
     // Returns the new capacity that would result.
     static constexpr usize kInitialCapacity = 8;
@@ -496,6 +568,58 @@ private:
     T* m_data = nullptr;
     usize m_size = 0;
     usize m_capacity = 0;
+#if CRD_ENABLE_ASSERTS
+    // Active freeze() scope count. Debug-only — absent in Release/Shipping.
+    // Not transferred on move: the moved-FROM array is being emptied (and
+    // moving a frozen array is itself a misuse caught by check_mutable); the
+    // moved-TO array starts unfrozen.
+    mutable int m_freeze_depth = 0;
+#endif
+};
+
+// -----------------------------------------------------------------------
+// FrozenView<T> — RAII handle that freeze()s an Array<T> on construction and
+// unfreeze()s it on destruction (detour D-002 v2). Move-only. Hand it (by
+// reference) to a parallel for_each / par_each so the structural-mutation
+// guard is scoped to exactly the parallel region:
+//
+//     {
+//         crd::containers::FrozenView fv(my_array);          // frozen here
+//         crd::jobs::run_and_wait(parallel_for(fv.size(), k,
+//             [&fv](u32 b, u32 e){ for (u32 i = b; i < e; ++i) fv[i] = f(i); }));
+//     }                                                       // unfrozen here
+//
+// Element access through the view reads AND writes individual elements (the
+// disjoint-write use case); you cannot resize through it. In non-assert builds
+// freeze()/unfreeze() are no-ops, so FrozenView compiles to a thin pointer.
+// -----------------------------------------------------------------------
+template <typename T> class FrozenView
+{
+public:
+    explicit FrozenView(Array<T>& a) noexcept : m_arr(&a) { m_arr->freeze(); }
+    ~FrozenView()
+    {
+        if (m_arr != nullptr)
+        {
+            m_arr->unfreeze();
+        }
+    }
+
+    FrozenView(const FrozenView&) = delete;
+    FrozenView& operator=(const FrozenView&) = delete;
+    FrozenView(FrozenView&& o) noexcept : m_arr(o.m_arr) { o.m_arr = nullptr; }
+    FrozenView& operator=(FrozenView&&) = delete;
+
+    [[nodiscard]] usize size() const noexcept { return m_arr->size(); }
+    [[nodiscard]] bool empty() const noexcept { return m_arr->empty(); }
+    [[nodiscard]] T* data() const noexcept { return m_arr->data(); }
+    [[nodiscard]] T& operator[](usize i) const noexcept { return (*m_arr)[i]; }
+    [[nodiscard]] T* begin() const noexcept { return m_arr->begin(); }
+    [[nodiscard]] T* end() const noexcept { return m_arr->end(); }
+    [[nodiscard]] Array<T>& array() const noexcept { return *m_arr; }
+
+private:
+    Array<T>* m_arr;
 };
 
 // ---- Free-function helpers ------------------------------------------

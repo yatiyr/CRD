@@ -1,5 +1,16 @@
 # Windows verification — crd-jobs fiber-runtime hardening (2026-05-12)
 
+> **STATUS: COMPLETED — 2026-05-12 (Windows dev box).** All steps below were run:
+> full 17-config `scripts/full-sweep.ps1` (`-Reconfigure`; Win ×10 incl. the new
+> `win-debug-sse2`, Linux ×7 incl. `linux-gcc-debug-sse2`, all on AVX2) → all PASS;
+> `crd-jobs-tests.exe "jobs: cross-thread fiber resume stress"` hammered ×500 under
+> `win-release` / `win-relwithdebinfo` / `win-clang-cl` / `win-asan` → 0 failures;
+> the old `crd-resources-tests` streaming repro ×200 on `win-release` → 0 failures;
+> the MSVC `/Od` on `worker_pool.cpp` + `fiber_init.cpp` was removed (step 4) and the
+> sweep stayed green without it. Results recorded in
+> `docs/sessions/2026-05-12-jobs-fiber-tls-hoist-fix.md` § Verification and
+> `docs/debt.md`. This checklist is now historical.
+
 The four fiber-job-system fixes from `docs/sessions/2026-05-12-jobs-fiber-tls-hoist-fix.md`
 (TLS-hoist `CRD_JOBS_TLS_OPAQUE`, stale-`tl_fiber` clear, `counter_wait` switch-then-publish,
 `counter_decrement` drain-only-at-zero) were developed and verified on a Linux dev VM. They are

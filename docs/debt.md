@@ -77,13 +77,31 @@ threads, deeply-nested `run_and_wait`) across release / `-O2 -g` asserts-on
 / `-O0` asserts-on builds — 0 failures (vs ~1-in-100-to-400 crashes before
 the `tl_fiber` fix); full Linux ctest sweep (debug / debug-scalar / asan /
 relwithdebinfo / release) green; in-tree regression test
-`jobs: cross-thread fiber resume stress` (`[jobs][stress]`). The MSVC `/Od`
-on `worker_pool.cpp` + `fiber_init.cpp` is now belt-and-suspenders, not
-load-bearing — a Windows sweep can drop it. Files: `engine/jobs/src/worker_pool.{cpp,hpp}`,
-`engine/jobs/src/counter.{cpp,hpp}`, `engine/jobs/CMakeLists.txt`,
-`tests/jobs/test_jobs.cpp`, `tests/jobs/test_counter.cpp`. Windows
-verification steps: `docs/jobs/WINDOWS_VERIFICATION.md`. Session log:
+`jobs: cross-thread fiber resume stress` (`[jobs][stress]`). Files (the fix):
+`engine/jobs/src/worker_pool.{cpp,hpp}`, `engine/jobs/src/counter.{cpp,hpp}`,
+`engine/jobs/CMakeLists.txt`, `tests/jobs/test_jobs.cpp`,
+`tests/jobs/test_counter.cpp`. Session log:
 `docs/sessions/2026-05-12-jobs-fiber-tls-hoist-fix.md`.
+
+**Follow-up cleanups (2026-05-12, on the Windows dev box):** full 14→17-config
+`scripts/full-sweep.ps1` (Win ×10 + Linux ×7, now incl. AVX2 codegen) PASS +
+Windows `[jobs][stress]` hammered ×500/config + the old `crd-resources-tests`
+streaming repro ×200 on `win-release` — all clean. With that confirmed: the
+MSVC `/Od` on `worker_pool.cpp` + `fiber_init.cpp` was **dropped**
+(`engine/jobs/CMakeLists.txt`); a plain-`sse2` SIMD lane was **added**
+(`win-debug-sse2` / `linux-gcc-debug-sse2` config/build/test presets, CI matrix
+entries, `full-sweep.ps1` lanes); the `CounterPool::release` debug assert-walk
+over leftover `Waiter`s was **removed** (post the switch-then-publish protocol,
+no Pending waiter can survive to `release()`, so the walk could only ever read
+already-unwound `counter_wait()` stack frames); and `scripts/wsl-build.ps1` was
+**hardened** — `linux-gcc-debug-sse2` added to its `[ValidateSet]`, and the
+`& wsl.exe -- bash …` call moved out from under `$ErrorActionPreference='Stop'`
+(PowerShell 5.1 was surfacing the inner bash's stderr — a benign CMake
+`cmake_minimum_required` deprecation warning on a fresh `_deps` configure — as a
+native-command error and killing the whole sweep; the v0e-post-mortem stderr
+brittleness, now actually fixed; `$LASTEXITCODE` is still the real failure
+signal). `docs/jobs/WINDOWS_VERIFICATION.md` is satisfied. This debt item is
+fully closed.
 
 
 ### Phase 3.1 v0c `crd::math::deterministic` — debt paid 2026-05-10
@@ -341,6 +359,20 @@ See `docs/phases/phase-2.7-asset-import.md`, `docs/phases/phase-2.8-material-com
 ADR-0044, ADR-0046, ADR-0048.
 
 ## Long-term deferred
+
+- **Concurrent hash map** (deferred by detour D-002, 2026-05-12) — a split-ordered /
+  Cliff-Click-style lock-free hash map is genuinely hard and should not be built
+  speculatively. D-002 ships `crd::containers::ConcurrentQueue<T>` (MPMC) and
+  `crd::containers::AtomicArray<T>` (bounded atomic-append); a concurrent map lands
+  only when a concrete consumer demands it. Until then: per-fiber scratch maps + a
+  serial merge, or a `ConcurrentQueue` of update-requests drained by one fiber.
+- **Thread-safe / sharded global allocator** (deferred by detour D-002, 2026-05-12) —
+  `TlsfAllocator` and the pool/linear/stack allocators are single-threaded-by-contract
+  and will *not* get a lock bolted on. If a shared cross-fiber heap is ever needed it is
+  a new sharded/thread-caching allocator (tcmalloc-style: per-thread free lists + a
+  locked central heap), built then, not now. `RefCounted` objects whose final release can
+  occur off the creating thread must be backed by a thread-safe allocator or a
+  deferred-free queue.
 
 - **Multi-viewport ImGui** — Vulkan multi-viewport has known rough edges.
   Single-viewport docking only until `crd-ui` ships (planned Phase 5+).

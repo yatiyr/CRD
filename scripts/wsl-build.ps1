@@ -36,7 +36,8 @@ param(
         'linux-gcc-relwithdebinfo',
         'linux-gcc-asan',
         'linux-gcc-shipping',
-        'linux-gcc-debug-scalar'
+        'linux-gcc-debug-scalar',
+        'linux-gcc-debug-sse2'
     )]
     [string]$Preset,
 
@@ -140,11 +141,21 @@ $bashLF = $bashScript -replace "`r`n", "`n"
 $tmpDriveLower = $tmpWin.Substring(0, 1).ToLower()
 $tmpWsl = "/mnt/$tmpDriveLower" + $tmpWin.Substring(2).Replace('\', '/')
 
+$prevEAP = $ErrorActionPreference
 try {
+    # wsl.exe relays the inner bash's stderr verbatim — and CMake writes its
+    # warnings (e.g. zstd's "CMake Deprecation Warning" the first time _deps is
+    # configured) to stderr. PowerShell 5.1 surfaces a native command's stderr
+    # lines as error records, and under $ErrorActionPreference='Stop' (set above)
+    # the first one terminates the script — a spurious failure that has nothing
+    # to do with the build. The real failure signal is the wsl.exe exit code, so
+    # run the call under 'Continue' and trust $LASTEXITCODE.
+    $ErrorActionPreference = 'Continue'
     & wsl.exe -d $Distro -- bash "$tmpWsl"
     $code = $LASTEXITCODE
 }
 finally {
+    $ErrorActionPreference = $prevEAP
     Remove-Item -Force $tmpWin -ErrorAction SilentlyContinue
 }
 

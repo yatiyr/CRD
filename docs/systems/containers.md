@@ -44,6 +44,24 @@ ids.shrink_to_fit();
 Growth is 1.5x with an initial capacity of 8 elements. Iterators are raw
 pointers — `range-for`, `std::sort`, `std::find`, etc. all "just work".
 
+**Debug freeze guard (D-002 v2).** `arr.freeze()` / `arr.unfreeze()` (re-entrant;
+`freeze()` is `const`) bracket a scope during which any *structural* mutation
+(push/pop/erase/insert/clear/resize/reserve/shrink/assign/move-from) trips a
+`CRD_ASSERT` — element access stays allowed. The canonical use is "many fibers
+write disjoint elements of a frozen `Array` during a parallel pass". It's
+debug-only (zero size / zero cost in Release) and a development net, not a hard
+barrier. `FrozenView<T>` is a move-only RAII wrapper that freeze()s for its
+lifetime and exposes `operator[]` / `data()` / iterators:
+
+```cpp
+{
+    crd::containers::FrozenView<f32> fv(my_array);   // frozen for this scope
+    crd::jobs::Counter* c = crd::jobs::parallel_for(static_cast<u32>(fv.size()), k,
+        [&fv](u32 b, u32 e){ for (u32 i = b; i < e; ++i) fv[i] = compute(i); });
+    crd::jobs::wait(c);
+}                                                     // unfrozen here
+```
+
 ### `FixedArray<T, N>` — stack-only, no allocator
 
 A bounded counterpart for places where the upper bound is known at compile
@@ -160,6 +178,35 @@ if (seen.contains(StringView{"alpha"})) { ... }   // heterogeneous
 
 for (const String& key : seen) { ... }
 ```
+
+### Concurrent containers — `SpscQueue` / `ConcurrentQueue` / `AtomicArray`
+
+All `IAllocator*`-backed, fixed-capacity, lock-free. Use only when the access
+pattern genuinely needs it — a serial reduction or `jobs::parallel_reduce`
+beats shared mutable state when you can use it (see `docs/systems/scene-concurrency.md`
+for the "match the structure to the access pattern" rationale).
+
+- **`SpscQueue<T>`** — single-producer / single-consumer FIFO. `try_push` /
+  `try_pop` (non-blocking; false when full/empty). Cache-line-split head/tail.
+  Supports non-trivially-copyable `T`.
+- **`ConcurrentQueue<T>`** (D-002 v3) — bounded MPMC FIFO (Vyukov 1024cores
+  algorithm; the public, allocator-aware form of what was the `crd-jobs`
+  scheduler's internal injection queue). `try_push` / `try_emplace` / `try_pop`,
+  power-of-two capacity, zero post-construction allocation. `T` must be trivially
+  copyable.
+- **`AtomicArray<T>`** (D-002 v4) — bounded lock-free *append-only* vector. A
+  producer claims the next slot with one `m_head.fetch_add(1)` and constructs
+  there; slots never recycled or moved (addresses stable). `push`/`emplace`
+  return the index or `npos` on overflow (a sizing bug). Reads are valid after
+  the parallel pass joins; `clear()` reuses it between passes. The canonical use
+  is "collect ≤N results from a parallel pass". Supports non-trivial `T`.
+- **`CacheLinePadded<T>`** (D-002 v4) — `alignas(64)` one-element-per-cache-line
+  wrapper. For an array of atomic counters many fibers `fetch_add`, the pattern
+  is `Array<CacheLinePadded<u32>>` + `std::atomic_ref<u32>(slot.value)` (the
+  element stays trivially copyable so `Array` works *and* can grow; cache-line
+  separated so adjacent RMWs don't false-share). Do **not** wrap `std::atomic<T>`
+  and put it in `Array` — `std::atomic` isn't movable and `Array` relocates on
+  growth.
 
 ## v1d — log RingBufferSink migration + cycle break
 
