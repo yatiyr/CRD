@@ -399,10 +399,8 @@ struct ShadercApi
 // SDK-installed and distro-packaged shaderc without manual symlinks.
 [[nodiscard]] crd::platform::DynamicLibrary try_open_shaderc() noexcept
 {
-    auto try_open = [](const fs::Path& p) {
-        return crd::platform::DynamicLibrary::open(p);
-    };
-
+    // Quiet per-candidate probe — a SONAME that isn't installed is expected;
+    // the final candidate uses the loud open so a total miss still surfaces.
 #if CRD_OS_WINDOWS
     char* sdk = nullptr;
     std::size_t len = 0;
@@ -411,7 +409,7 @@ struct ShadercApi
     {
         const fs::Path sdk_path = fs::Path(sdk) / "Bin" / "shaderc_shared.dll";
         free(sdk);
-        auto lib = try_open(sdk_path);
+        auto lib = crd::platform::DynamicLibrary::open(sdk_path, /*log_on_failure=*/false);
         if (lib.is_valid())
         {
             return lib;
@@ -421,30 +419,30 @@ struct ShadercApi
     {
         free(sdk);
     }
-    return try_open(fs::Path("shaderc_shared.dll"));
+    const fs::Path candidates[] = {fs::Path("shaderc_shared.dll")};
 #elif CRD_OS_LINUX
-    const char* const candidates[] = {
-        "libshaderc_shared.so",   // Vulkan SDK convention
-        "libshaderc.so.1",        // Ubuntu / Debian (libshaderc1 package)
-        "libshaderc.so",          // Ubuntu / Debian dev symlink
+    const fs::Path candidates[] = {
+        fs::Path("libshaderc_shared.so"),   // Vulkan SDK convention
+        fs::Path("libshaderc.so.1"),        // Ubuntu / Debian (libshaderc1 package)
+        fs::Path("libshaderc.so"),          // Ubuntu / Debian dev symlink
     };
-    for (const char* name : candidates)
+#else
+    const fs::Path candidates[] = {
+        fs::Path("libshaderc_shared.dylib"),
+        fs::Path("libshaderc.dylib"),
+    };
+#endif
+    const std::size_t n = sizeof(candidates) / sizeof(candidates[0]);
+    for (std::size_t i = 0; i < n; ++i)
     {
-        auto lib = try_open(fs::Path(name));
+        const bool last = (i + 1 == n);
+        auto lib = crd::platform::DynamicLibrary::open(candidates[i], /*log_on_failure=*/last);
         if (lib.is_valid())
         {
             return lib;
         }
     }
     return crd::platform::DynamicLibrary{};
-#else
-    auto lib = try_open(fs::Path("libshaderc_shared.dylib"));
-    if (lib.is_valid())
-    {
-        return lib;
-    }
-    return try_open(fs::Path("libshaderc.dylib"));
-#endif
 }
 
 class LocalRuntime final : public Runtime

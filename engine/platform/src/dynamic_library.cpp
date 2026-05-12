@@ -35,13 +35,16 @@ namespace
 #endif
 } // namespace
 
-DynamicLibrary DynamicLibrary::open(const fs::Path& path) noexcept
+DynamicLibrary DynamicLibrary::open(const fs::Path& path, bool log_on_failure) noexcept
 {
 #if CRD_OS_WINDOWS
     HMODULE handle = LoadLibraryW(utf8_to_wide(path.generic()).c_str());
     if (handle == nullptr)
     {
-        CRD_LOG_ERROR(g_log_platform, "LoadLibraryW failed for '{}'", path.generic().data());
+        if (log_on_failure)
+        {
+            CRD_LOG_ERROR(g_log_platform, "LoadLibraryW failed for '{}'", path.generic().data());
+        }
         return DynamicLibrary{};
     }
     return DynamicLibrary{static_cast<void*>(handle)};
@@ -49,7 +52,10 @@ DynamicLibrary DynamicLibrary::open(const fs::Path& path) noexcept
     void* handle = dlopen(path.generic().data(), RTLD_NOW | RTLD_LOCAL);
     if (handle == nullptr)
     {
-        CRD_LOG_ERROR(g_log_platform, "dlopen failed for '{}': {}", path.generic().data(), dlerror());
+        if (log_on_failure)
+        {
+            CRD_LOG_ERROR(g_log_platform, "dlopen failed for '{}': {}", path.generic().data(), dlerror());
+        }
         return DynamicLibrary{};
     }
     return DynamicLibrary{handle};

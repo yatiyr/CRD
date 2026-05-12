@@ -32,16 +32,26 @@ target_compile_features(crd-jobs PUBLIC cxx_std_20)
 # the fiber trampoline's assumptions about register state on entry.
 set_target_properties(crd-jobs PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
 
-# Historical note: worker_pool.cpp + fiber_init.cpp used to carry a `/Od /Y-`
-# pin on MSVC, guarding the long-standing win-release / linux-gcc-release
-# SEGFAULT in "jobs: run_and_wait from inside a worker fiber". That root cause —
-# job_fiber_trampoline reading thread-locals on the far side of a fiber resume
-# that can migrate the fiber to a different OS thread, with the optimizer caching
-# the pre-resume TLS base across the hand-rolled fiber_switch — is now fixed in
-# source (the CRD_JOBS_TLS_OPAQUE accessors in worker_pool.cpp; portable, covers
-# every compiler: `noipa` on GCC, `__declspec(noinline)` elsewhere). The /Od was
-# dropped 2026-05-12 after a full Windows+Linux sweep plus a Windows jobs stress
-# run confirmed the source fix holds without it. INTERPROCEDURAL_OPTIMIZATION OFF
-# above stays — the hand-rolled asm context switch is still incompatible with LTO.
+# worker_pool.cpp + fiber_init.cpp are the context-switch-adjacent TUs: they run
+# code on the far side of the hand-rolled fiber_switch, where a fiber can resume
+# on a *different* OS thread than it suspended on. The MSVC optimizer at /O2
+# caches the thread-local segment base across the asm switch (which it treats as
+# an ordinary call), so a post-resume TLS read returns the *pre-resume* thread's
+# slot → wild pointer → SEGFAULT in essentially every job. The portable source
+# guard (CRD_JOBS_TLS_OPAQUE accessors in worker_pool.cpp — `noipa` on GCC,
+# `__declspec(noinline)` elsewhere) is necessary but, on the MSVC toolset GitHub
+# `windows-latest` ships (VS 2022 / older optimizer), NOT sufficient: dropping
+# the /Od pin in May 2026 turned every crd-jobs test SEGFAULT in win-release and
+# win-shipping on CI even though a local VS 2026 sweep was clean. So the pin is
+# back, and load-bearing again — do not remove it without a clean CI run on the
+# *exact* runner toolset, not just the dev box. (INTERPROCEDURAL_OPTIMIZATION OFF
+# above is separate — the asm context switch is also incompatible with LTO.)
+if(MSVC)
+    set_source_files_properties(
+        src/worker_pool.cpp
+        src/fiber_init.cpp
+        PROPERTIES COMPILE_FLAGS "/Od /Y-"
+    )
+endif()
 
 crd_enable_default_pch(crd-jobs)

@@ -8,7 +8,11 @@ class DynamicLibrary
 {
 public:
     DynamicLibrary() noexcept = default;
-    [[nodiscard]] static DynamicLibrary open(const fs::Path& path) noexcept;
+
+    // Opens `path`. On failure returns an invalid handle; an ERROR is logged
+    // unless `log_on_failure` is false — pass false when probing a list of
+    // candidate SONAMEs (only the final exhausted probe should be loud).
+    [[nodiscard]] static DynamicLibrary open(const fs::Path& path, bool log_on_failure = true) noexcept;
 
     DynamicLibrary(const DynamicLibrary&) = delete;
     DynamicLibrary& operator=(const DynamicLibrary&) = delete;

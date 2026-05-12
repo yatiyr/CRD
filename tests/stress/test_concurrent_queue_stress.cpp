@@ -9,9 +9,15 @@
 //     token shows up here);
 //   - XOR checksum of consumed tokens == XOR of produced tokens.
 //
-// Normative lane: RunMode::Threads (TSan-on-Linux can instrument it). RunMode::
-// Fibers is additional coverage — note nested parallelism is fine here because
-// the stress worker fibers don't themselves call into the scheduler.
+// Lane: RunMode::Threads ONLY (TSan-on-Linux can instrument it). The Fibers lane
+// was removed: the producer/consumer loops busy-spin on try_push/try_pop with
+// std::this_thread::yield(), which yields the OS thread but NOT the fiber — there
+// is no cooperative fiber-yield in the public jobs API. With more spinning
+// producer fibers than scheduler worker threads (e.g. a 2-core CI runner: 1–2
+// runners vs 4 producer jobs that fill the bounded queue and then spin forever),
+// the consumer fibers never get scheduled → deadlock. A pure lock-free data
+// structure does not need fiber-shaped coverage; the Threads lane is the
+// normative one and is already TSan-instrumented.
 //
 // `seen` is a frozen Array for the parallel phase (debug-only guard, v2): each
 // token's slot is written by exactly the consumer that popped it.
@@ -162,14 +168,7 @@ void drive(crd::stress::RunMode mode)
 
 TEST_CASE("ConcurrentQueue stress -- MPMC token round-trip", "[stress][containers]")
 {
-    SECTION("threads") // normative lane
-    {
-        drive(crd::stress::RunMode::Threads);
-    }
-    SECTION("fibers")
-    {
-        drive(crd::stress::RunMode::Fibers);
-    }
+    drive(crd::stress::RunMode::Threads); // Threads-only — see the header comment on why there is no fibers lane.
 }
 
 TEST_CASE("ConcurrentQueue stress -- MPMC soak", "[stress][containers][.soak]")
