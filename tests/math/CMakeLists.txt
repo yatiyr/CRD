@@ -3,6 +3,7 @@ add_executable(crd-math-tests
     test_simd.cpp
     test_soa.cpp
     test_deterministic.cpp
+    test_reduce.cpp
 )
 
 target_link_libraries(crd-math-tests PRIVATE

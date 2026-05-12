@@ -163,15 +163,15 @@ public:
     // without any caller code change.
     //
     // The shape is FROZEN by v1p: bounding-volume types are
-    // `crd::geometry::primitives::AABB<f32>` (and a `Vec3<f32>` + radius pair
+    // `crd::geometry::primitives::AABB3<f32>` (and a `Vec3<f32>` + radius pair
     // for `within_radius`, conceptually a `Sphere<f32>`) from
     // `<crd/geometry/primitives/primitives.hpp>`. (These moved out of crd-math
     // into crd-geometry-primitives in Phase 3.1.7 v0a, ADR-0076 §13 — the
     // signatures' *meaning* is unchanged, only the namespace.) Adding a
     // different bounding shape means a new operator (e.g. `.in_obb(...)`), not
     // a signature change here.
-    Query& in_aabb(const crd::geometry::primitives::AABB<crd::f32>& box) &;
-    Query in_aabb(const crd::geometry::primitives::AABB<crd::f32>& box) &&;
+    Query& in_aabb(const crd::geometry::primitives::AABB3<crd::f32>& box) &;
+    Query in_aabb(const crd::geometry::primitives::AABB3<crd::f32>& box) &&;
     Query& within_radius(const crd::math::Vec3<crd::f32>& center, crd::f32 radius) &;
     Query within_radius(const crd::math::Vec3<crd::f32>& center, crd::f32 radius) &&;
 

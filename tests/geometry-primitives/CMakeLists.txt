@@ -1,5 +1,11 @@
 add_executable(crd-geometry-primitives-tests
     test_primitives.cpp
+    test_closest_point.cpp
+    test_intersect.cpp
+    test_barycentric.cpp
+    test_formulary.cpp
+    test_v0f_corpus.cpp
+    test_v0f_simd.cpp
 )
 
 target_link_libraries(crd-geometry-primitives-tests PRIVATE

@@ -20,15 +20,15 @@ int main()
     const Transformf pose(Vec3f(10.0F, 0.0F, 0.0F), quarter_turn);
     const Vec3f transformed = transform_point(pose, Vec3f(1.0F, 0.0F, 0.0F));
     const Planef ground = plane_from_point_normal(Vec3f(0.0F, 0.0F, 0.0F), Vec3f(0.0F, 1.0F, 0.0F));
-    const Rayf drop_ray(Vec3f(0.0F, 10.0F, 0.0F), Vec3f(0.0F, -1.0F, 0.0F));
+    const Ray3f drop_ray(Vec3f(0.0F, 10.0F, 0.0F), Vec3f(0.0F, -1.0F, 0.0F));
     const Triangle3f tri(Vec3f(-1.0F, -1.0F, 0.0F), Vec3f(1.0F, -1.0F, 0.0F), Vec3f(0.0F, 1.0F, 0.0F));
     const Frustumf frustum = frustum_from_view_projection(Mat4f::identity());
-    const AABBf bounds(Vec3f(-0.5F, -0.5F, -0.5F), Vec3f(0.5F, 0.5F, 0.5F));
+    const AABB3f bounds(Vec3f(-0.5F, -0.5F, -0.5F), Vec3f(0.5F, 0.5F, 0.5F));
     float ray_t = 0.0F;
     Vec3f bary{};
     const bool ray_hit_ground = intersect_ray_plane(drop_ray, ground, ray_t);
     const bool ray_hit_tri =
-        intersect_ray_triangle(Rayf(Vec3f(0.0F, 0.0F, -5.0F), Vec3f(0.0F, 0.0F, 1.0F)), tri, ray_t, bary);
+        intersect_ray_triangle(Ray3f(Vec3f(0.0F, 0.0F, -5.0F), Vec3f(0.0F, 0.0F, 1.0F)), tri, ray_t, bary);
     const bool frustum_hits_bounds = intersects(frustum, bounds);
 
     std::cout << "pi<float>=" << k_pi<crd::f32> << "\n";

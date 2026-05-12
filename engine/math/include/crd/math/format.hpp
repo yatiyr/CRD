@@ -1,7 +1,7 @@
 #pragma once
 
 // std::format support for the core crd-math types (Vec / Mat / Quat / Transform).
-// The geometry-primitive formatters (Ray / Plane / Sphere / AABB / Triangle3 /
+// The geometry-primitive formatters (Ray3 / Plane / Sphere / AABB3 / Triangle3 /
 // Frustum) moved to <crd/geometry/primitives/format.hpp> with their types
 // (Phase 3.1.7 v0a, ADR-0076 §13) — they reuse `detail::ScalarFormatter` from here.
 

@@ -194,7 +194,7 @@ TEST_CASE("v1p: .in_aabb / .within_radius compile, chain, and pass through "
 
     // .in_aabb passthrough: every entity matches.
     {
-        const crd::geometry::primitives::AABB<crd::f32> box{crd::math::Vec3f{-1, -1, -1}, crd::math::Vec3f{1, 1, 1}};
+        const crd::geometry::primitives::AABB3<crd::f32> box{crd::math::Vec3f{-1, -1, -1}, crd::math::Vec3f{1, 1, 1}};
         crd::u32 count = 0;
         for (auto&& [e, c] : world.query<CompSpatial>().in_aabb(box))
         {
@@ -219,7 +219,7 @@ TEST_CASE("v1p: .in_aabb / .within_radius compile, chain, and pass through "
 
     // Both chained — composition is part of the API freeze.
     {
-        const crd::geometry::primitives::AABB<crd::f32> box{crd::math::Vec3f{-100, -100, -100},
+        const crd::geometry::primitives::AABB3<crd::f32> box{crd::math::Vec3f{-100, -100, -100},
                                                             crd::math::Vec3f{100, 100, 100}};
         crd::u32 count = 0;
         for (auto&& [e, c] : world.query<CompSpatial>().in_aabb(box).within_radius(crd::math::Vec3f{0, 0, 0}, 50.0F))

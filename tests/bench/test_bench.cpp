@@ -272,26 +272,26 @@ TEST_CASE("Transform workloads", "[bench][math]")
 
 TEST_CASE("Primitive geometry workloads", "[bench][math]")
 {
-    const Rayf ray(Vec3f(0.0F, 0.0F, -5.0F), Vec3f(0.0F, 0.0F, 1.0F));
+    const Ray3f ray(Vec3f(0.0F, 0.0F, -5.0F), Vec3f(0.0F, 0.0F, 1.0F));
     const Planef plane = plane_from_point_normal(Vec3f(0.0F, 0.0F, 0.0F), Vec3f(0.0F, 0.0F, 1.0F));
     const Triangle3f tri(Vec3f(-1.0F, -1.0F, 0.0F), Vec3f(1.0F, -1.0F, 0.0F), Vec3f(0.0F, 1.0F, 0.0F));
     const Frustumf frustum = frustum_from_view_projection(Mat4f::identity());
-    const AABBf bounds(Vec3f(-0.5F, -0.5F, -0.5F), Vec3f(0.5F, 0.5F, 0.5F));
+    const AABB3f bounds(Vec3f(-0.5F, -0.5F, -0.5F), Vec3f(0.5F, 0.5F, 0.5F));
 
-    BENCHMARK("Rayf plane intersection")
+    BENCHMARK("Ray3f plane intersection")
     {
         f32 t = 0.0F;
         return intersect_ray_plane(ray, plane, t) ? t : -1.0F;
     };
 
-    BENCHMARK("Rayf triangle intersection")
+    BENCHMARK("Ray3f triangle intersection")
     {
         f32 t = 0.0F;
         Vec3f bary{};
         return intersect_ray_triangle(ray, tri, t, bary) ? t + bary.x : -1.0F;
     };
 
-    BENCHMARK("Frustumf AABB test")
+    BENCHMARK("Frustumf AABB3 test")
     {
         return intersects(frustum, bounds);
     };

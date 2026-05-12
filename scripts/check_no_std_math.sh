@@ -21,6 +21,7 @@ scopes=(
     "$repo_root/engine/eylem"
     "$repo_root/engine/hesap"
     "$repo_root/engine/geometry-primitives"
+    "$repo_root/engine/geometry-shader-helpers"
 )
 
 failures=()

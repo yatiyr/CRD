@@ -1004,13 +1004,13 @@ template <typename... Cs> template <typename T> Query<Cs...> Query<Cs...>::skip_
 // entity matching the required components (no per-entity bounds test).
 // When Phase 3.5 ships the real BVH, the operators start filtering
 // without any caller code change. The argument types
-// (`crd::geometry::primitives::AABB<f32>` / `Vec3<f32>` + `f32`) are FROZEN: a
+// (`crd::geometry::primitives::AABB3<f32>` / `Vec3<f32>` + `f32`) are FROZEN: a
 // different bounding shape ships as a new operator, never as a signature change.
-// (The AABB type moved out of crd-math into crd-geometry-primitives in Phase
+// (The AABB3 type moved out of crd-math into crd-geometry-primitives in Phase
 // 3.1.7 v0a, ADR-0076 §13 — namespace change only, not a signature change.)
 
 template <typename... Cs>
-Query<Cs...>& Query<Cs...>::in_aabb(const crd::geometry::primitives::AABB<crd::f32>& /*box*/) &
+Query<Cs...>& Query<Cs...>::in_aabb(const crd::geometry::primitives::AABB3<crd::f32>& /*box*/) &
 {
     // v1p reservation: SpatialBVHIndex is a no-op stub; passing through
     // every match is the contracted behaviour. No per-entity filter is
@@ -1020,7 +1020,7 @@ Query<Cs...>& Query<Cs...>::in_aabb(const crd::geometry::primitives::AABB<crd::f
     return *this;
 }
 
-template <typename... Cs> Query<Cs...> Query<Cs...>::in_aabb(const crd::geometry::primitives::AABB<crd::f32>& box) &&
+template <typename... Cs> Query<Cs...> Query<Cs...>::in_aabb(const crd::geometry::primitives::AABB3<crd::f32>& box) &&
 {
     this->in_aabb(box);
     return std::move(*this);

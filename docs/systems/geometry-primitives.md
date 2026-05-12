@@ -9,50 +9,101 @@
 
 | Slice | What | State |
 |---|---|---|
-| v0a | Module skeleton + v0 type catalogue (`Line`/`Segment`/`Ray`/`Plane`/`AABB`/`OBB`/`Sphere`/`Capsule`/`Triangle3`/`Frustum`) + **the `crd::math::geometry` move-and-delete** (ADR-0076 §13): the old `Ray`/`Plane`/`Sphere`/`AABB`/`Triangle`/`Frustum` + ~16 helpers + their formatters migrated here as `crd::geometry::primitives::*`; `crd/math/geometry.hpp` deleted; the 9 consumers (`crd-scene` query/world, `crd-math` umbrella + format, `tests/math` + `tests/bench` + `tests/scene`, `runtime/examples/smoke_math.cpp`) repointed; `crd-math` thereafter ships only Vec/Mat/Quat/Transform/SIMD/`deterministic`. | ✅ 2026-05-12 |
-| v0b | closest-point catalogue (point → line/segment/ray/plane/triangle/AABB/OBB/sphere/capsule) — incl. Ericson Voronoi-region closest-point-on-`Triangle3` | ⏳ next |
-| v0c | intersection tests, everything-vs-everything (ray-{plane,triangle,AABB-slab,OBB,sphere,capsule}, AABB-triangle 13-axis SAT, OBB-OBB 15-axis SAT, tri-tri, sphere-X, capsule-capsule, frustum-X) | ⏳ |
-| v0d | barycentric / tetrahedron utilities (Ericson §3.4) | ⏳ |
-| v0e | iq smin/domain-op formulary substrate + the shader-helpers cooker-generator skeleton + `crd::math::simd::reduce_argmax_with_lex_tiebreak` | ⏳ |
-| v0f | cutting-edge / branchless / SIMD intersection corpus (watertight ray-tri Woop 2013, Baldwin-Weber 2016, branchless NaN-safe slab ray-AABB, Ize 2013 `RayPacket`, Plücker edge classification, `Vec4f`/`Vec8f` batch kernels) — `intersect_ray_triangle` here becomes its cross-check reference | ⏳ |
+| v0a | Module skeleton + v0 type catalogue + **the `crd::math::geometry` move-and-delete** (ADR-0076 §13): the old `Ray`/`Plane`/`Sphere`/`AABB`/`Triangle`/`Frustum` + ~16 helpers + their formatters migrated here as `crd::geometry::primitives::*`; `crd/math/geometry.hpp` deleted; the 9 consumers repointed; `crd-math` thereafter ships only Vec/Mat/Quat/Transform/SIMD/`deterministic`. | ✅ 2026-05-12 |
+| v0b | **2D peer set + closest-point catalogue (2D + 3D) + segment↔segment** (ADR-0076 §14): added `Line2`/`Segment2`/`Ray2`/`AABB2`/`OBB2`/`Circle`/`Capsule2`/`Triangle2`/`Point2`; renamed the v0a 3D types to their `…3` forms (dimension-suffix naming rule); `closest_point.hpp` with `closest_point` + `closest_param` + `distance` + `distance_squared` for every primitive and `closest_points(Segment,Segment)` (the mutually-closest pair), 2D and 3D, sharing dimension-agnostic cores (Ericson Voronoi-region triangle, Ericson segment↔segment). | ✅ 2026-05-13 |
+| v0c | **intersection corpus (2D + 3D)** — `intersect.hpp`: ray casts (`intersect_ray_{aabb,obb,cylinder,capsule}` + 2D `intersect_ray2_{aabb,obb,line,segment,circle,capsule,cylinder}`); SAT pairs (`intersects(AABB3,Triangle3)` Akenine-Möller 13-axis, `intersects(OBB3,OBB3)` 15-axis, `intersects(OBB2,OBB2)` 4-axis, `intersects(Triangle2,Triangle2)` 6-axis), `intersects(Triangle3,Triangle3)` Möller 1997, `segments_intersect(Segment2,Segment2)`; sphere/circle/capsule ↔ X reductions via the v0b distance API; frustum↔OBB3. **Added types `Cylinder3`/`Cylinder2`** (flat-cap segment-with-radius — distinct from `Capsule3`'s hemispherical caps) + their `operator==`/formatters/`contains`. | ✅ 2026-05-13 |
+| v0d | **`Tetrahedron` type + barycentric / tetrahedron utilities** (ADR-0076 §7; Ericson §3.4) — `barycentric.hpp`: `barycentric(Tetrahedron,p)→Vec4` (signed-volume ratios; orientation-stable), `contains(Tetrahedron,p)`, `from_barycentric` (the inverse, for `Triangle3`/`Triangle2`/`Tetrahedron`), `decompose_prism_to_tets(bottom,top)` (the canonical 3-tet split of a triangular wedge — Marching-Tetrahedra / FEM-meshing form, fixed diagonal). Type `Tetrahedron` (3D-only → no suffix) + `operator==`/formatter/aliases + `centroid`/`signed_volume`/`volume` in `primitives.hpp`. | ✅ 2026-05-13 |
+| v0e | **iq formulary + `reduce_argmax_with_lex_tiebreak` + shader-helpers skeleton** (ADR-0076 §7) — `formulary.hpp`: smooth-min/max (`smin_poly`/`smin_cubic`/`smin_exp` + `smax_*`; `smin_exp` via `crd::math::deterministic::exp2/log2`), value-domain ops (`op_round`/`op_onion`/`extrude_2d`), position-domain ops (`domain_repeat`/`domain_mirror`/`domain_elongate` exact + `domain_twist`/`domain_bend` via `crd::math::deterministic::sin/cos`). New `crd::math::simd::reduce_argmax_with_lex_tiebreak` (`crd/math/simd/reduce.hpp` — scalar-deterministic argmax with score-desc / (x,y,z)-asc-lex / earliest-index tiebreak; ADR-0076 §4 pin #10, what geometry v3 Quickhull needs). New module `crd-geometry-shader-helpers` (skeleton — the GLSL/HLSL twin of these formulas; v9e fills in the cooker + the ULP-conformance test). | ✅ 2026-05-13 |
+| v0f | **cutting-edge / branchless / SIMD intersection corpus — closes the v0 sub-phase.** Scalar: `watertight_ray_tri.hpp` (Woop/Benthin/Wald 2013 watertight ray-tri w/ per-ray shear precompute + closed-on-edge double-fallback; Baldwin-Weber-style precomputed per-triangle affine transform), `robust_ray_aabb.hpp` (Williams 2005 precomputed slab + Ize 2013 conservative `tmax` widening; `RayAABBPrecompute` = the single-ray "RayPacket"), `plucker.hpp` (Plücker side test + sign-only ray-tri boolean). SIMD (`simd_batch.hpp` + out-of-line `simd_batch.cpp`, f32/`Vec8f`): `ray_vs_8_aabb` (1 ray × 8 boxes — leaf-batch), `ray_packet8_vs_aabb` (8 rays × 1 box — packet), `ray_vs_8_triangle` (MT × 8), `aabb8_vs_aabb`, `sphere8_vs_sphere`, `segment8_vs_segment_distsq` + `precompute_ray_packet8`. All cross-checked vs the v0b/v0c/`robust_ray_aabb` scalar references. ADR-0076 §4 pins #12 (watertight axis selection + closed-on-edge) & #13 (Plücker fixed sum order, sign-zero = on-the-line) realised. | ✅ 2026-05-13 |
 
 Then v1+ are the other crd-geometry sub-modules (`-bvh`, `-convex`, …) — separate libraries, see `docs/phases/phase-3.1.7-geometry.md`.
 
-## What you get today (v0a)
+## What you get today (v0a + v0b + v0c + v0d + v0e + v0f — the v0 sub-phase, complete)
 
-`#include <crd/geometry/primitives/primitives.hpp>` — all types + the migrated
-helpers. `#include <crd/geometry/primitives/format.hpp>` — `std::format` support.
-Namespace `crd::geometry::primitives`. Link `crd-geometry-primitives` (it pulls
-`crd-core` + `crd-math` PUBLIC).
+`#include <crd/geometry/primitives/primitives.hpp>` — all types + the basic
+helpers. `#include <crd/geometry/primitives/closest_point.hpp>` — the closest-
+point / distance catalogue (2D + 3D) + `closest_points(Segment,Segment)`.
+`#include <crd/geometry/primitives/intersect.hpp>` — the intersection corpus (ray
+casts + boolean overlap, 2D + 3D). `#include <crd/geometry/primitives/barycentric.hpp>`
+— tetrahedron barycentric/contains, `from_barycentric`, the 3-tet prism split.
+`#include <crd/geometry/primitives/formulary.hpp>` — the iq smooth-blend & domain
+operators. `#include <crd/geometry/primitives/format.hpp>` — `std::format` support.
+Namespace `crd::geometry::primitives`. Link `crd-geometry-primitives` (it pulls `crd-core` +
+`crd-math` PUBLIC).
 
-Types (all 3D, templated on `T : crd::math::MathScalar`):
-`Line`, `Segment`, `Ray` (linear primitives), `Plane`, `AABB`, `OBB`, `Sphere`,
-`Capsule`, `Triangle3`, `Frustum` — plus `Point3<T>` (= `Vec3<T>`, for call-site
-readability) and `Linef`/`Rayf`/`AABBf`/`Triangle3f`/… aliases.
+Types (templated on `T : crd::math::MathScalar`):
+- **3D** — `Line3`, `Segment3`, `Ray3`, `Plane`, `AABB3`, `OBB3`, `Sphere`,
+  `Capsule3`, `Cylinder3`, `Triangle3`, `Tetrahedron`, `Frustum`, `Point3<T>` (= `Vec3<T>`).
+- **2D** — `Line2`, `Segment2`, `Ray2`, `AABB2`, `OBB2`, `Circle`, `Capsule2`,
+  `Cylinder2`, `Triangle2`, `Point2<T>` (= `Vec2<T>`). (No `Plane2` — a 2D
+  oriented line *is* the `Plane`-analog; `signed_distance(Line2,·)` covers it.
+  No `Frustum2`.) `Cylinder` = a flat-cap segment-with-radius (contrast
+  `Capsule`'s hemispherical caps); `Cylinder2` is the "thick segment" /
+  axis-parameterised rectangle.
+- Scalar aliases throughout: `Line3f`/`AABB3d`/`Circlef`/`Cylinder3f`/`Triangle2d`/…
 
-Helpers migrated from `crd::math::geometry` (the v0/v0b basics; v0b–v0f extend):
-`point_at`, `try_normalize`/`normalized`/`plane_from_point_normal`/`signed_distance`/`closest_point(Plane)`,
-`center`/`extents`/`contains(AABB)`/`closest_point(AABB)`/`intersects(AABB,AABB)`/`positive_vertex`,
-`contains(Sphere)`/`intersects(Sphere,Sphere)`/`intersects(AABB,Sphere)`,
-`centroid`/`normal`/`barycentric`/`contains(Triangle3)`,
-`intersect_ray_plane`/`intersect_ray_sphere`/`intersect_ray_triangle` (Möller-Trumbore),
-`frustum_from_view_projection`/`contains(Frustum)`/`intersects(Frustum,Sphere|AABB)`.
+Basic helpers (migrated v0a + the 2D peers): `point_at`, plane normalise/
+construct/`signed_distance`/`closest_point(Plane)`, `center`/`extents`/`contains`/
+`intersects`/`positive_vertex` for AABB2/AABB3, `contains`/`intersects` for
+Sphere & Circle (incl. AABB↔Sphere/Circle), `centroid`/`normal`/`barycentric`/
+`contains`/`signed_area` for triangles, `intersect_ray_plane`/`_sphere`/`_triangle`
+(Möller-Trumbore — 3D), `frustum_from_view_projection`/`contains`/`intersects`.
+
+Closest-point catalogue (v0b — `closest_point.hpp`): for every primitive,
+`closest_point(shape, p)` + `distance(shape, p)` + `distance_squared(shape, p)`;
+plus `closest_param(Segment, p)` (the t∈[0,1]) and `closest_points(seg1, seg2,
+out_c1, out_c2)` + `distance(seg1, seg2)`. Triangle uses the **Ericson §5.1.5
+Voronoi-region cascade** (7 dot-product regions, branch-light); segment↔segment
+the **Ericson §5.1.9** form (robust on parallel & degenerate). Sphere/Circle/
+Capsule return the closest point on the *surface/boundary* (well-defined for an
+interior `p`); a degenerate query (on the center/spine) resolves to a fixed `+x`
+direction so the result is deterministic. The dimension-agnostic cores are
+written once over a vector concept and used by both the 2D and 3D overloads.
+
+Intersection corpus (v0c — `intersect.hpp`):
+- **Ray casts** — `intersect_ray_{aabb,obb,cylinder,capsule}(ray, shape, T& out_t, eps)` (3D) and `intersect_ray2_{aabb,obb,line,segment,circle,capsule,cylinder}` (2D) — nearest hit with t ≥ 0 (the `intersect_ray_plane/_sphere/_triangle` convention from `primitives.hpp`). Ray↔AABB/OBB is the branch-light Tavianator slab (the robust precomputed-`RayPacket` form is v0f).
+- **Boolean overlap** — extends the `intersects` set: `intersects(AABB3,Triangle3)` (Akenine-Möller 2001, 13-axis SAT), `intersects(OBB3,OBB3)` (15-axis SAT), `intersects(OBB2,OBB2)` (4-axis), `intersects(Triangle2,Triangle2)` (6-axis SAT), `intersects(Triangle3,Triangle3)` (Möller 1997 — coplanar case delegates to the 2D test), `segments_intersect(Segment2,Segment2)` (orientation tests; an out-point overload too), the `Sphere`/`Circle`/`Capsule` ↔ `{AABB,OBB,Triangle,Segment,Plane,Capsule}` reductions (exact — `distance_squared(X, center/spine) ≤ r²` via the v0b machinery), `intersects(Plane,{AABB3,OBB3,Sphere})`, `intersects(Frustum,OBB3)`, `intersects(Triangle2,{AABB2,Segment2,Circle})`, `intersects(Line2,{AABB2,OBB2})`. `intersects(Capsule3,{AABB3,OBB3})` is **conservative** (segment-vs-box-grown-by-r — no false negatives; false positives only in the box's rounded-corner Minkowski region; the exact SAT-box-pair is eylem v2). Determinism: SAT axes in a fixed enumeration order; a near-zero cross-product axis is skipped (never a false "separated").
+
+Barycentric / tetrahedron (v0d — `barycentric.hpp`; the triangle barycentric forms are in `primitives.hpp`): `barycentric(Tetrahedron, p) → Vec4` (the 4 weights as signed-volume ratios — orientation-stable, asserts on a flat tetra), `contains(Tetrahedron, p)` (all weights ≥ −ε), `from_barycentric(Triangle3|Triangle2|Tetrahedron, weights)` (the inverse — reconstruct the point), `decompose_prism_to_tets(Triangle3 bottom, Triangle3 top) → StaticArray<Tetrahedron,3>` (the canonical 3-tet split of a triangular wedge through `a₀`, fixed diagonal so neighbouring wedges share matching tets — the Marching-Tetrahedra / FEM-meshing form). Plus `centroid`/`signed_volume`/`volume` for `Tetrahedron` (in `primitives.hpp`; `signed_volume = (1/6)·det[b−a|c−a|d−a]`, positive when (a,b,c,d) is positively oriented).
+
+iq formulary (v0e — `formulary.hpp`; SDF combinators after Inigo Quilez): smooth-min/max — `smin_poly`/`smin_cubic` (C¹/C² quadratic & cubic polynomial; exact `min` outside the ±k blend band, dip = k at the crossover, collapse to `min` as k→0) and `smin_exp` (associative — order-free chaining; always a hair below `min`; via `crd::math::deterministic::exp2/log2`), plus the `smax_*` counterparts. Value-domain ops — `op_round(d, r)` (inflate by r), `op_onion(d, t)` (shell of half-thickness t), `extrude_2d(d2, p_z, h)` (2D-SDF + z → 3D-SDF). Position-domain ops — `domain_repeat`/`domain_mirror` (tile / mirror-tile a centered cell; 2D/3D/scalar; exact, no trig — `std::floor`-based modulo), `domain_elongate(p, h)` (stretch a shape's domain by ±h), `domain_twist(p, k)` / `domain_bend(p, k)` (rigid rotational warps; via `crd::math::deterministic::sin/cos`). These are the ULP-conformance reference for the GLSL/HLSL twins that `crd-geometry-shader-helpers` (v9e) will emit.
+
+`reduce_argmax_with_lex_tiebreak` (v0e — `crd/math/simd/reduce.hpp`, `crd::math::simd`): a scalar-deterministic horizontal argmax over a `Vec8f`/`Vec4f` chunk (fold chunk-by-chunk via an `ArgmaxLex{index,score,x,y,z}` running-best and `argmax_lex_beats`) — wins by highest `score`, ties by lexicographically-smallest `(x,y,z)`, then by earliest global index; NaN-scores never win; partition-independent (folding 16 lanes as 8+8 / 4×4 / 1×16 gives the same result). ADR-0076 §4 pin #10 — what geometry v3 Quickhull needs to pick the furthest point from a face identically on every SIMD width.
+
+Cutting-edge / branchless / SIMD ray corpus (v0f — closes the v0 sub-phase):
+- `watertight_ray_tri.hpp` — **Woop / Benthin / Wald 2013** watertight ray-tri: `precompute_ray_tri(Ray3) → RayTriShear` (per-ray shear+permuted-axes — pick the dominant `dir` axis max-then-X-then-Y-then-Z, then map `dir` to +Z) + `intersect_ray_triangle_watertight(Ray3, RayTriShear, Triangle3, t, bary, cull_back, tnear)` (2D edge functions; an edge function landing exactly on 0 is re-evaluated in `double` and accepted if still 0 — "closed on-edge"; a ray grazing an edge shared by two triangles hits ≥1 of them, never falls through). Plus a Baldwin-Weber-style **precomputed per-triangle affine transform**: `precompute_triangle_affine(Triangle3) → TriAffine` (the inverse of `[edge1 | edge2 | normal]` — robust by construction, det = ‖normal‖²; 12 f32 / 48 B) + `intersect_ray_triangle_precomputed(Ray3, TriAffine, t, bary)` (branchless per-ray). `crd-geometry-mesh` v4d picks: Woop for dynamic / BVH-leaf, the precomputed affine for cooked statics.
+- `robust_ray_aabb.hpp` — **Williams 2005** precomputed slab + **Ize 2013** conservative `tmax` widening (`× (1 + 2γ₃)` so accumulated `inv_dir` rounding never drops a true surface hit): `RayAABBPrecompute<T>{inv_dir, sign[3]}` (the single-ray precompute the `-bvh` v1g traversal consumes) + `intersect_ray_aabb_robust(Ray3, RayAABBPrecompute, AABB3, t0, t1, out_t)`. NaN/∞-safe (a zero `dir` component → `inv = ±∞` and the IEEE `min`/`max` drop that axis). `intersect_ray_aabb` (the un-precomputed slab) stays in `intersect.hpp` (v0c) as the cross-check reference.
+- `plucker.hpp` — Plücker-coordinate edge classification: `PluckerLine<T>{d, m}` + `plucker_from(Line3|Segment3|Ray3|p,q)` + `plucker_side(a, b)` (= `dot(a.d, b.m) + dot(b.d, a.m)` — fixed sum order, sign-zero = "the lines are coplanar / on each other"; ADR-0076 §4 #13) + `intersect_ray_triangle_plucker(Ray3, Triangle3, tmax, tnear)` (sign-only all-same-side test as the reject; only on a pierce does it compute the one plane-`t` to clip the ray — the cheapest ray-tri *boolean*, watertight on shared edges).
+
+SIMD batch kernels (v0f — `simd_batch.hpp` declarations, `simd_batch.cpp` out-of-line, f32/`Vec8f`) — **the two BVH-traversal shapes**:
+- **leaf-batch** (one ray vs N primitives held as AoSoA columns): `ray_vs_8_aabb(Ray3f, RayAABBPrecompute<f32>, Aabb8, t0, t1) → {Vec8f t_enter, Vec8f hit_mask}` (Williams slab × 8 child boxes), `ray_vs_8_triangle(Ray3f, Triangle38, cull_back, tnear) → {Vec8f t, u, v, hit_mask}` (Möller-Trumbore × 8 leaf triangles), `aabb8_vs_aabb(Aabb8, AABB3f) → Vec8f mask`, `sphere8_vs_sphere(Sphere8, Spheref) → Vec8f mask`.
+- **packet** (N coherent rays vs one box per node — Wald-style; each lane an independent ray): `precompute_ray_packet8(ox8,oy8,oz8, dx8,dy8,dz8) → RayPacket8` + `ray_packet8_vs_aabb(RayPacket8, AABB3f, t0, t1) → {Vec8f t_enter, Vec8f hit_mask}` (per-lane signs handled by the `min(t1,t2)`/`max(t1,t2)` form — no explicit sign bits).
+- `segment8_vs_segment_distsq(Segment38Pair) → Vec8f` — eight segment-pair squared closest distances (Ericson §5.1.9 in SIMD with masked selects; robust on parallel / degenerate; eylem broadphase capsule-vs-N-capsule).
+
+All comparisons return all-bits-set masks; feed the kernels' `Vec8f` outputs to `reduce_argmax_with_lex_tiebreak` when a "best lane" is wanted. A partial tail (< 8 valid items) is the caller's mask. Each kernel is ULP-cross-checked lane-by-lane against its scalar reference (`intersect.hpp` / `closest_point.hpp` / `robust_ray_aabb.hpp`). (Follow-up: wire `simd_batch.cpp`'s `.obj` into the `crd-simd-emission-check` scan — currently it inspects only `crd-math`'s SIMD `.obj`.)
 
 ```cpp
 using namespace crd::geometry::primitives;
 const Triangle3f tri(Vec3f(-1,-1,0), Vec3f(1,-1,0), Vec3f(0,1,0));
-float t = 0.0F; Vec3f bary{};
-if (intersect_ray_triangle(Rayf(Vec3f(0,0,-5), Vec3f(0,0,1)), tri, t, bary)) { /* ... */ }
+const Vec3f q = closest_point(tri, Vec3f(0.25F, 0.25F, 9.0F)); // → (0.25, 0.25, 0)
+const float d = distance(Capsule3f(Vec3f(0,0,0), Vec3f(0,0,10), 1.0F), Vec3f(5,0,4)); // → 4
+float t = 0.0F;
+if (intersect_ray_obb(Ray3f(Vec3f(-5,0,0), Vec3f(1,0,0)), OBB3f({}, Vec3f(1,1,1), Mat3f::identity()), t)) { /* t == 4 */ }
+const bool overlap = intersects(AABB3f(Vec3f(-1,-1,-1), Vec3f(1,1,1)), tri); // 13-axis SAT
+Vec2f c1{}, c2{};
+closest_points(Segment2f(Vec2f(-1,0), Vec2f(1,0)), Segment2f(Vec2f(0,-1), Vec2f(0,1)), c1, c2); // ≈ origin, origin
 ```
 
-## Naming rule (pin — read before adding a type)
+## Naming rule (pin — read before adding a type; ADR-0076 §14)
 
-Primitives here are **3D** and carry **no dimension suffix unless a 2D peer is
-planned**. `Triangle3` carries the `3` because `crd-geometry-polygon` (v6) will
-add `Triangle2`; `Ray`/`Line`/`Segment`/`Plane`/`AABB`/`OBB`/`Sphere`/`Capsule`/
-`Frustum` have no 2D peer on the roadmap, so no suffix. If a 2D `Ray`/`AABB`/etc.
-ever lands, revisit the whole set holistically rather than spot-renaming. (This
-asymmetry is intentional and matches ADR-0076 §1's literal type list.)
+All shape types are templated on the scalar `T`. **Where a concept has both a 2D
+and a 3D form under the same name, BOTH carry a dimension suffix** — `Line2`/
+`Line3`, `Segment2`/`Segment3`, `Ray2`/`Ray3`, `AABB2`/`AABB3`, `OBB2`/`OBB3`,
+`Triangle2`/`Triangle3`, `Capsule2`/`Capsule3` — mirroring `crd::math::Vec2`/
+`Vec3`/`Mat2`/`Mat3`. Where the forms have distinct natural names, neither is
+suffixed: `Circle` (2D) / `Sphere` (3D). Where only one dimension exists, no
+suffix: `Plane`, `Frustum`, `Tetrahedron` (3D-only). `Point2`/`Point3` alias
+`Vec2`/`Vec3`.
 
 ## API layers
 
@@ -73,6 +124,10 @@ correctly-rounded single-rounding sqrt everywhere). Algorithm-specific tiebreaks
 (GJK simplex Ericson-not-vandenBergen, SAH-split X-then-Y-then-Z, Quickhull lex
 order, watertight ray-tri axis selection, Plücker sign-zero) are pinned in
 ADR-0076 §4 and land with their algorithms in v0c–v0f / v2+.
+
+## Sibling: `crd-geometry-shader-helpers`
+
+v0e created `engine/geometry-shader-helpers/` (target `crd-geometry-shader-helpers`, namespace `crd::geometry::shader_helpers`) — currently a **skeleton** (a force-link stub + a reserved header). It is the 11th `crd-geometry` sub-module (ADR-0076 §1): the GLSL/HLSL twin of this module's primitive distance functions + the iq formulary, *cooked* at build time and consumed by the renderer's DFAO / DF-soft-shadow passes (Phase 3.5+), font MTSDF, and the editor preview. v9e fills in the formula-IR cooker, the GLSL/HLSL backends, and the ULP-conformance test that checks the emitted shader math against `formulary.hpp` (the C++ scalar reference).
 
 ## References
 

@@ -597,3 +597,51 @@ the slice ledger rather than buried in a 2200-LOC v0c.
 The cutting-edge corpus + the move-and-delete rationale are documented
 in `docs/research/cerid-geometry.md` §13 (addendum, 2026-05-11) with
 full citations added to that dossier's §12.3.
+
+## 14. Amendment 2026-05-13 — v0b: 2D peer set + dimension-suffix naming rule
+
+**What changed (reviewed by the user before v0b kickoff).** v0a's
+"Naming rule" pin said `crd-geometry-primitives` was 3D-only and 2D
+types would land later in `crd-geometry-polygon` (v6) — `Triangle3`
+carried the `3` solely because `Triangle2` was foreseen there. The
+user's multi-domain mandate (robotics, aerospace, mechanics, PCB /
+electrical sims, animation, games) wants 2D as a first-class peer of
+3D in the *primitive* tier, not deferred. So v0b adds the full 2D peer
+catalogue to `crd-geometry-primitives` now, and the naming rule is
+re-pinned:
+
+* All shape types are templated on the scalar `T` (`crd::math::MathScalar`).
+* Where a concept has both a 2D and a 3D form **under the same name**,
+  BOTH carry a dimension suffix — `Line2`/`Line3`, `Segment2`/`Segment3`,
+  `Ray2`/`Ray3`, `AABB2`/`AABB3`, `OBB2`/`OBB3`, `Triangle2`/`Triangle3`,
+  `Capsule2`/`Capsule3` — mirroring `crd::math::Vec2`/`Vec3`/`Mat2`/`Mat3`.
+  This means `Line`/`Segment`/`Ray`/`AABB`/`OBB`/`Capsule` from v0a are
+  **renamed** to their `…3` forms (mechanical; ~8 consumer files, no
+  behaviour change — the same set v0a's move-and-delete touched).
+* Where the 2D and 3D forms have distinct natural names, neither is
+  suffixed — `Circle` (2D) / `Sphere` (3D).
+* Where only one dimension exists, no suffix — `Plane` and `Frustum`
+  stay 3D-only (a 2D half-space boundary is a `Line2` carrying a
+  normal+offset; there is no 2D frustum). `Point2`/`Point3` are aliases
+  of `Vec2<T>`/`Vec3<T>`.
+
+ADR-0053's "frozen" `Query::in_aabb(crd::geometry::primitives::AABB<f32>)`
+signature is unaffected in shape; the type spelling becomes `AABB3<f32>`
+as part of this rename (the freeze pinned the parameter *form*, not the
+literal identifier).
+
+`crd-geometry-polygon` (v6) keeps its 2D-mesh-processing scope (ear-
+clipping, Vatti, CDT, Bentley-Ottmann); it now consumes the `…2`
+primitive types from this tier instead of declaring its own.
+
+**Slice impact.** v0b grows from the dossier's ~800 LOC to ~1.6 KLOC
+engine (the 2D type catalogue + 2D closest-point overloads + the
+segment↔segment pair `closest_points`) + ~450 LOC tests; the +~0.8 KLOC
+absorbs into the v0 budget (the v0 week-plus has slack). Slice count
+unchanged (still 30). Calendar unchanged. v0c–v0f gain 2D counterparts
+of their intersection / barycentric / formulary / SIMD work as they land
+(no new slices — the 2D path rides each existing slice).
+
+**What is not affected.** §1–§5 architecture, §6 sequencing, §8
+out-of-scope, §9 risks, §10 open questions, the §12 sequence pivot, the
+§13 move-and-delete + v0f corpus — all unchanged.

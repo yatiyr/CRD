@@ -40,7 +40,8 @@ $banned = @(
 $scopes = @(
     "$RepoRoot/engine/eylem",
     "$RepoRoot/engine/hesap",
-    "$RepoRoot/engine/geometry-primitives"
+    "$RepoRoot/engine/geometry-primitives",
+    "$RepoRoot/engine/geometry-shader-helpers"
 )
 
 $failures = @()

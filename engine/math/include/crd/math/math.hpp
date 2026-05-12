@@ -12,8 +12,8 @@
 //   - `f32` / `f64` aliases (`Vec3f`, `Quatd`, ...)
 //   - `std::format` support for the core math types
 //
-// NOT here (Phase 3.1.7 v0a, ADR-0076 §13): primitive geometry — `Ray` /
-// `Plane` / `AABB` / `Sphere` / `Triangle3` / `Frustum` + their closest-point /
+// NOT here (Phase 3.1.7 v0a, ADR-0076 §13): primitive geometry — `Ray3` /
+// `Plane` / `AABB3` / `Sphere` / `Triangle3` / `Frustum` + their closest-point /
 // intersection helpers live in `crd-geometry-primitives`
 // (`<crd/geometry/primitives/primitives.hpp>`). crd-math is the lean leaf
 // numerics substrate; computational geometry is `crd-geometry`'s tier.

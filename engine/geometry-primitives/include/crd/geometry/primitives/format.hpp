@@ -15,38 +15,38 @@ namespace std
 {
 
 template <crd::math::MathScalar T>
-struct formatter<crd::geometry::primitives::Ray<T>, char> : crd::math::detail::ScalarFormatter<T>
+struct formatter<crd::geometry::primitives::Ray3<T>, char> : crd::math::detail::ScalarFormatter<T>
 {
     constexpr auto parse(std::format_parse_context& ctx) { return ctx.begin(); }
 
     template <typename FormatContext>
-    auto format(const crd::geometry::primitives::Ray<T>& ray, FormatContext& ctx) const
+    auto format(const crd::geometry::primitives::Ray3<T>& ray, FormatContext& ctx) const
     {
-        return std::format_to(ctx.out(), "Ray(o={}, d={})", ray.origin, ray.direction);
+        return std::format_to(ctx.out(), "Ray3(o={}, d={})", ray.origin, ray.direction);
     }
 };
 
 template <crd::math::MathScalar T>
-struct formatter<crd::geometry::primitives::Line<T>, char> : crd::math::detail::ScalarFormatter<T>
+struct formatter<crd::geometry::primitives::Line3<T>, char> : crd::math::detail::ScalarFormatter<T>
 {
     constexpr auto parse(std::format_parse_context& ctx) { return ctx.begin(); }
 
     template <typename FormatContext>
-    auto format(const crd::geometry::primitives::Line<T>& line, FormatContext& ctx) const
+    auto format(const crd::geometry::primitives::Line3<T>& line, FormatContext& ctx) const
     {
-        return std::format_to(ctx.out(), "Line(p={}, d={})", line.point, line.direction);
+        return std::format_to(ctx.out(), "Line3(p={}, d={})", line.point, line.direction);
     }
 };
 
 template <crd::math::MathScalar T>
-struct formatter<crd::geometry::primitives::Segment<T>, char> : crd::math::detail::ScalarFormatter<T>
+struct formatter<crd::geometry::primitives::Segment3<T>, char> : crd::math::detail::ScalarFormatter<T>
 {
     constexpr auto parse(std::format_parse_context& ctx) { return ctx.begin(); }
 
     template <typename FormatContext>
-    auto format(const crd::geometry::primitives::Segment<T>& seg, FormatContext& ctx) const
+    auto format(const crd::geometry::primitives::Segment3<T>& seg, FormatContext& ctx) const
     {
-        return std::format_to(ctx.out(), "Segment(a={}, b={})", seg.a, seg.b);
+        return std::format_to(ctx.out(), "Segment3(a={}, b={})", seg.a, seg.b);
     }
 };
 
@@ -71,36 +71,48 @@ struct formatter<crd::geometry::primitives::Sphere<T>, char> : crd::math::detail
 };
 
 template <crd::math::MathScalar T>
-struct formatter<crd::geometry::primitives::AABB<T>, char> : crd::math::detail::ScalarFormatter<T>
+struct formatter<crd::geometry::primitives::AABB3<T>, char> : crd::math::detail::ScalarFormatter<T>
 {
     template <typename FormatContext>
-    auto format(const crd::geometry::primitives::AABB<T>& bounds, FormatContext& ctx) const
+    auto format(const crd::geometry::primitives::AABB3<T>& bounds, FormatContext& ctx) const
     {
-        return std::format_to(ctx.out(), "AABB(min={}, max={})", bounds.min, bounds.max);
+        return std::format_to(ctx.out(), "AABB3(min={}, max={})", bounds.min, bounds.max);
     }
 };
 
 template <crd::math::MathScalar T>
-struct formatter<crd::geometry::primitives::OBB<T>, char> : crd::math::detail::ScalarFormatter<T>
+struct formatter<crd::geometry::primitives::OBB3<T>, char> : crd::math::detail::ScalarFormatter<T>
 {
     constexpr auto parse(std::format_parse_context& ctx) { return ctx.begin(); }
 
     template <typename FormatContext>
-    auto format(const crd::geometry::primitives::OBB<T>& obb, FormatContext& ctx) const
+    auto format(const crd::geometry::primitives::OBB3<T>& obb, FormatContext& ctx) const
     {
-        return std::format_to(ctx.out(), "OBB(c={}, h={}, R={})", obb.center, obb.half_extents, obb.orientation);
+        return std::format_to(ctx.out(), "OBB3(c={}, h={}, R={})", obb.center, obb.half_extents, obb.orientation);
     }
 };
 
 template <crd::math::MathScalar T>
-struct formatter<crd::geometry::primitives::Capsule<T>, char> : crd::math::detail::ScalarFormatter<T>
+struct formatter<crd::geometry::primitives::Capsule3<T>, char> : crd::math::detail::ScalarFormatter<T>
 {
     constexpr auto parse(std::format_parse_context& ctx) { return ctx.begin(); }
 
     template <typename FormatContext>
-    auto format(const crd::geometry::primitives::Capsule<T>& cap, FormatContext& ctx) const
+    auto format(const crd::geometry::primitives::Capsule3<T>& cap, FormatContext& ctx) const
     {
-        return std::format_to(ctx.out(), "Capsule(a={}, b={}, r={})", cap.a, cap.b, cap.radius);
+        return std::format_to(ctx.out(), "Capsule3(a={}, b={}, r={})", cap.a, cap.b, cap.radius);
+    }
+};
+
+template <crd::math::MathScalar T>
+struct formatter<crd::geometry::primitives::Cylinder3<T>, char> : crd::math::detail::ScalarFormatter<T>
+{
+    constexpr auto parse(std::format_parse_context& ctx) { return ctx.begin(); }
+
+    template <typename FormatContext>
+    auto format(const crd::geometry::primitives::Cylinder3<T>& cyl, FormatContext& ctx) const
+    {
+        return std::format_to(ctx.out(), "Cylinder3(a={}, b={}, r={})", cyl.a, cyl.b, cyl.radius);
     }
 };
 
@@ -115,6 +127,16 @@ struct formatter<crd::geometry::primitives::Triangle3<T>, char> : crd::math::det
 };
 
 template <crd::math::MathScalar T>
+struct formatter<crd::geometry::primitives::Tetrahedron<T>, char> : crd::math::detail::ScalarFormatter<T>
+{
+    template <typename FormatContext>
+    auto format(const crd::geometry::primitives::Tetrahedron<T>& tet, FormatContext& ctx) const
+    {
+        return std::format_to(ctx.out(), "Tetrahedron(a={}, b={}, c={}, d={})", tet.a, tet.b, tet.c, tet.d);
+    }
+};
+
+template <crd::math::MathScalar T>
 struct formatter<crd::geometry::primitives::Frustum<T>, char> : crd::math::detail::ScalarFormatter<T>
 {
     constexpr auto parse(std::format_parse_context& ctx) { return ctx.begin(); }
@@ -125,6 +147,110 @@ struct formatter<crd::geometry::primitives::Frustum<T>, char> : crd::math::detai
         return std::format_to(ctx.out(), "Frustum(l={}, r={}, b={}, t={}, n={}, f={})", frustum.planes[0],
                               frustum.planes[1], frustum.planes[2], frustum.planes[3], frustum.planes[4],
                               frustum.planes[5]);
+    }
+};
+
+// ---- 2D peers (v0b) --------------------------------------------------------
+
+template <crd::math::MathScalar T>
+struct formatter<crd::geometry::primitives::Line2<T>, char> : crd::math::detail::ScalarFormatter<T>
+{
+    constexpr auto parse(std::format_parse_context& ctx) { return ctx.begin(); }
+
+    template <typename FormatContext>
+    auto format(const crd::geometry::primitives::Line2<T>& line, FormatContext& ctx) const
+    {
+        return std::format_to(ctx.out(), "Line2(p={}, d={})", line.point, line.direction);
+    }
+};
+
+template <crd::math::MathScalar T>
+struct formatter<crd::geometry::primitives::Segment2<T>, char> : crd::math::detail::ScalarFormatter<T>
+{
+    constexpr auto parse(std::format_parse_context& ctx) { return ctx.begin(); }
+
+    template <typename FormatContext>
+    auto format(const crd::geometry::primitives::Segment2<T>& seg, FormatContext& ctx) const
+    {
+        return std::format_to(ctx.out(), "Segment2(a={}, b={})", seg.a, seg.b);
+    }
+};
+
+template <crd::math::MathScalar T>
+struct formatter<crd::geometry::primitives::Ray2<T>, char> : crd::math::detail::ScalarFormatter<T>
+{
+    constexpr auto parse(std::format_parse_context& ctx) { return ctx.begin(); }
+
+    template <typename FormatContext>
+    auto format(const crd::geometry::primitives::Ray2<T>& ray, FormatContext& ctx) const
+    {
+        return std::format_to(ctx.out(), "Ray2(o={}, d={})", ray.origin, ray.direction);
+    }
+};
+
+template <crd::math::MathScalar T>
+struct formatter<crd::geometry::primitives::AABB2<T>, char> : crd::math::detail::ScalarFormatter<T>
+{
+    template <typename FormatContext>
+    auto format(const crd::geometry::primitives::AABB2<T>& bounds, FormatContext& ctx) const
+    {
+        return std::format_to(ctx.out(), "AABB2(min={}, max={})", bounds.min, bounds.max);
+    }
+};
+
+template <crd::math::MathScalar T>
+struct formatter<crd::geometry::primitives::OBB2<T>, char> : crd::math::detail::ScalarFormatter<T>
+{
+    constexpr auto parse(std::format_parse_context& ctx) { return ctx.begin(); }
+
+    template <typename FormatContext>
+    auto format(const crd::geometry::primitives::OBB2<T>& obb, FormatContext& ctx) const
+    {
+        return std::format_to(ctx.out(), "OBB2(c={}, h={}, R={})", obb.center, obb.half_extents, obb.orientation);
+    }
+};
+
+template <crd::math::MathScalar T>
+struct formatter<crd::geometry::primitives::Circle<T>, char> : crd::math::detail::ScalarFormatter<T>
+{
+    template <typename FormatContext>
+    auto format(const crd::geometry::primitives::Circle<T>& circle, FormatContext& ctx) const
+    {
+        return std::format_to(ctx.out(), "Circle(c={}, r={})", circle.center, circle.radius);
+    }
+};
+
+template <crd::math::MathScalar T>
+struct formatter<crd::geometry::primitives::Capsule2<T>, char> : crd::math::detail::ScalarFormatter<T>
+{
+    constexpr auto parse(std::format_parse_context& ctx) { return ctx.begin(); }
+
+    template <typename FormatContext>
+    auto format(const crd::geometry::primitives::Capsule2<T>& cap, FormatContext& ctx) const
+    {
+        return std::format_to(ctx.out(), "Capsule2(a={}, b={}, r={})", cap.a, cap.b, cap.radius);
+    }
+};
+
+template <crd::math::MathScalar T>
+struct formatter<crd::geometry::primitives::Cylinder2<T>, char> : crd::math::detail::ScalarFormatter<T>
+{
+    constexpr auto parse(std::format_parse_context& ctx) { return ctx.begin(); }
+
+    template <typename FormatContext>
+    auto format(const crd::geometry::primitives::Cylinder2<T>& cyl, FormatContext& ctx) const
+    {
+        return std::format_to(ctx.out(), "Cylinder2(a={}, b={}, r={})", cyl.a, cyl.b, cyl.radius);
+    }
+};
+
+template <crd::math::MathScalar T>
+struct formatter<crd::geometry::primitives::Triangle2<T>, char> : crd::math::detail::ScalarFormatter<T>
+{
+    template <typename FormatContext>
+    auto format(const crd::geometry::primitives::Triangle2<T>& tri, FormatContext& ctx) const
+    {
+        return std::format_to(ctx.out(), "Triangle2(a={}, b={}, c={})", tri.a, tri.b, tri.c);
     }
 };
 

@@ -16,4 +16,5 @@
 #include <crd/math/simd/convert.hpp>
 #include <crd/math/simd/mat4f.hpp>
 #include <crd/math/simd/quatf.hpp>
+#include <crd/math/simd/reduce.hpp>
 #include <crd/math/simd/soa.hpp>
