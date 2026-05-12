@@ -160,7 +160,7 @@ void drive(crd::stress::RunMode mode)
 }
 } // namespace
 
-TEST_CASE("ConcurrentQueue stress — MPMC token round-trip", "[stress][containers]")
+TEST_CASE("ConcurrentQueue stress -- MPMC token round-trip", "[stress][containers]")
 {
     SECTION("threads") // normative lane
     {
@@ -172,7 +172,7 @@ TEST_CASE("ConcurrentQueue stress — MPMC token round-trip", "[stress][containe
     }
 }
 
-TEST_CASE("ConcurrentQueue stress — MPMC soak", "[stress][containers][.soak]")
+TEST_CASE("ConcurrentQueue stress -- MPMC soak", "[stress][containers][.soak]")
 {
     drive(crd::stress::RunMode::Threads);
 }

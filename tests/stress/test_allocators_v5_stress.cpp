@@ -318,7 +318,7 @@ void drive_growable_pool(crd::stress::RunMode mode)
 }
 } // namespace
 
-TEST_CASE("allocators stress — LinearAllocator isolated arenas", "[stress][memory]")
+TEST_CASE("allocators stress -- LinearAllocator isolated arenas", "[stress][memory]")
 {
     SECTION("threads")
     {
@@ -330,7 +330,7 @@ TEST_CASE("allocators stress — LinearAllocator isolated arenas", "[stress][mem
     }
 }
 
-TEST_CASE("allocators stress — StackAllocator nested LIFO", "[stress][memory]")
+TEST_CASE("allocators stress -- StackAllocator nested LIFO", "[stress][memory]")
 {
     SECTION("threads")
     {
@@ -342,7 +342,7 @@ TEST_CASE("allocators stress — StackAllocator nested LIFO", "[stress][memory]"
     }
 }
 
-TEST_CASE("allocators stress — PoolAllocator isolated pools", "[stress][memory]")
+TEST_CASE("allocators stress -- PoolAllocator isolated pools", "[stress][memory]")
 {
     SECTION("threads")
     {
@@ -354,7 +354,7 @@ TEST_CASE("allocators stress — PoolAllocator isolated pools", "[stress][memory
     }
 }
 
-TEST_CASE("allocators stress — GrowablePoolAllocator isolated pools with growth", "[stress][memory]")
+TEST_CASE("allocators stress -- GrowablePoolAllocator isolated pools with growth", "[stress][memory]")
 {
     SECTION("threads")
     {
@@ -370,7 +370,7 @@ TEST_CASE("allocators stress — GrowablePoolAllocator isolated pools with growt
 // TlsfAllocator — adversarial *sequential* patterns. Single-threaded; ASan is
 // the lane that earns these. (v0 covers TLSF isolated concurrent churn.)
 // ---------------------------------------------------------------------------
-TEST_CASE("allocators stress — TlsfAllocator adversarial sequential", "[stress][memory]")
+TEST_CASE("allocators stress -- TlsfAllocator adversarial sequential", "[stress][memory]")
 {
     crd::memory::MallocAllocator parent("v5-tlsf-parent");
     crd::memory::TlsfAllocator tlsf(usize{8} << 20, &parent, "v5-tlsf");
@@ -551,7 +551,7 @@ TEST_CASE("allocators stress — TlsfAllocator adversarial sequential", "[stress
 // MallocAllocator — one cheap sanity test (the system allocator's own
 // correctness isn't ours to prove).
 // ---------------------------------------------------------------------------
-TEST_CASE("allocators stress — MallocAllocator sanity", "[stress][memory]")
+TEST_CASE("allocators stress -- MallocAllocator sanity", "[stress][memory]")
 {
     crd::memory::MallocAllocator a("v5-malloc-sanity");
     const usize sizes[] = {1U, 7U, 64U, 4096U, 1U << 20U};

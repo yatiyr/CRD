@@ -69,7 +69,7 @@ void write_and_verify_round(crd::containers::Array<u64>& data, u32 num_jobs, u32
 }
 } // namespace
 
-TEST_CASE("freeze stress — FrozenView + parallel_for disjoint writes", "[stress][containers][jobs]")
+TEST_CASE("freeze stress -- FrozenView + parallel_for disjoint writes", "[stress][containers][jobs]")
 {
     crd::memory::MallocAllocator alloc("freeze-stress");
 
@@ -88,7 +88,7 @@ TEST_CASE("freeze stress — FrozenView + parallel_for disjoint writes", "[stres
     crd::jobs::frame_reset(); // release the per-thread frame arenas this test consumed
 }
 
-TEST_CASE("freeze stress — parallel_reduce matches a serial reference", "[stress][jobs]")
+TEST_CASE("freeze stress -- parallel_reduce matches a serial reference", "[stress][jobs]")
 {
     const u32 counts[] = {1U, 2U, 7U, 64U, 1000U, 50'000U};
     const u32 jobs_choices[] = {1U, 2U, 8U, 64U, 1024U}; // includes num_jobs > count cases
@@ -146,7 +146,7 @@ TEST_CASE("freeze stress — parallel_reduce matches a serial reference", "[stre
     crd::jobs::frame_reset();
 }
 
-TEST_CASE("freeze stress — FrozenView + parallel_for long soak", "[stress][containers][jobs][.soak]")
+TEST_CASE("freeze stress -- FrozenView + parallel_for long soak", "[stress][containers][jobs][.soak]")
 {
     crd::memory::MallocAllocator alloc("freeze-soak");
     constexpr usize n = 200'003U;

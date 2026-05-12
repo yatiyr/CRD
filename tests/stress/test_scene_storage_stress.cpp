@@ -122,7 +122,7 @@ void collect_chunks(World& w, crd::memory::IAllocator* alloc,
 }
 } // namespace
 
-TEST_CASE("scene stress — parallel chunk read (archetype)", "[stress][scene]")
+TEST_CASE("scene stress -- parallel chunk read (archetype)", "[stress][scene]")
 {
     crd::memory::MallocAllocator alloc("scene-stress-read");
     World w(&alloc);
@@ -177,7 +177,7 @@ TEST_CASE("scene stress — parallel chunk read (archetype)", "[stress][scene]")
     crd::jobs::frame_reset();
 }
 
-TEST_CASE("scene stress — parallel disjoint chunk write (archetype + sparse)", "[stress][scene]")
+TEST_CASE("scene stress -- parallel disjoint chunk write (archetype + sparse)", "[stress][scene]")
 {
     crd::memory::MallocAllocator alloc("scene-stress-write");
     World w(&alloc);
@@ -238,7 +238,7 @@ TEST_CASE("scene stress — parallel disjoint chunk write (archetype + sparse)",
     crd::jobs::frame_reset();
 }
 
-TEST_CASE("scene stress — concurrent reads of frozen scene state", "[stress][scene]")
+TEST_CASE("scene stress -- concurrent reads of frozen scene state", "[stress][scene]")
 {
     crd::memory::MallocAllocator alloc("scene-stress-frozen");
     World w(&alloc);

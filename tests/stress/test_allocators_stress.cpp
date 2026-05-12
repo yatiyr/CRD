@@ -150,7 +150,7 @@ void drive_tlsf(crd::stress::Config cfg)
 }
 } // namespace
 
-TEST_CASE("allocators stress — isolated TlsfAllocator alloc/free/realloc churn", "[stress][memory]")
+TEST_CASE("allocators stress -- isolated TlsfAllocator alloc/free/realloc churn", "[stress][memory]")
 {
     SECTION("fibers")
     {
@@ -162,7 +162,7 @@ TEST_CASE("allocators stress — isolated TlsfAllocator alloc/free/realloc churn
     }
 }
 
-TEST_CASE("allocators stress — isolated TlsfAllocator churn (soak)", "[stress][memory][.soak]")
+TEST_CASE("allocators stress -- isolated TlsfAllocator churn (soak)", "[stress][memory][.soak]")
 {
     drive_tlsf(crd::stress::soak(crd::stress::RunMode::Fibers));
 }

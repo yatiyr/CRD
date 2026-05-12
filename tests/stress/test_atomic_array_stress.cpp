@@ -157,7 +157,7 @@ void drive_counters(crd::stress::RunMode mode)
 }
 } // namespace
 
-TEST_CASE("AtomicArray stress — concurrent append, every token once", "[stress][containers]")
+TEST_CASE("AtomicArray stress -- concurrent append, every token once", "[stress][containers]")
 {
     SECTION("threads")
     {
@@ -169,7 +169,7 @@ TEST_CASE("AtomicArray stress — concurrent append, every token once", "[stress
     }
 }
 
-TEST_CASE("AtomicArray stress — padded atomic counter array, sum is exact", "[stress][containers]")
+TEST_CASE("AtomicArray stress -- padded atomic counter array, sum is exact", "[stress][containers]")
 {
     SECTION("threads")
     {
@@ -181,7 +181,7 @@ TEST_CASE("AtomicArray stress — padded atomic counter array, sum is exact", "[
     }
 }
 
-TEST_CASE("AtomicArray stress — soak", "[stress][containers][.soak]")
+TEST_CASE("AtomicArray stress -- soak", "[stress][containers][.soak]")
 {
     drive_append(crd::stress::RunMode::Threads);
     drive_counters(crd::stress::RunMode::Threads);

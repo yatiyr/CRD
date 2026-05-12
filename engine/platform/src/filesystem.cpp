@@ -2,12 +2,18 @@
 #include <crd/platform/filesystem.hpp>
 #include <crd/platform/log_channel.hpp>
 
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <string>
 
 #if CRD_OS_WINDOWS
 #include <windows.h>
+#elif CRD_OS_MAC
+#include <mach-o/dyld.h>
+#else // Linux / other POSIX
+#include <unistd.h>
 #endif
 
 namespace crd::platform::fs
@@ -185,8 +191,37 @@ Path executable_dir() noexcept
         }
         buffer.resize(buffer.size() * 2);
     }
-#else
-    return current_working_dir();
+#elif CRD_OS_MAC
+    // _NSGetExecutablePath needs a buffer big enough for the path; it tells us
+    // the required size via the in/out length on the first (failing) call.
+    std::uint32_t size = 0;
+    _NSGetExecutablePath(nullptr, &size);
+    std::string buffer(size, '\0');
+    if (_NSGetExecutablePath(buffer.data(), &size) != 0)
+    {
+        CRD_LOG_ERROR(g_log_platform, "_NSGetExecutablePath failed");
+        return current_working_dir();
+    }
+    std::error_code ec;
+    const stdfs::path resolved = stdfs::canonical(stdfs::path(buffer.c_str()), ec);
+    return from_native_path((ec ? stdfs::path(buffer.c_str()) : resolved).parent_path());
+#else // Linux / other POSIX with /proc
+    std::string buffer(1024, '\0');
+    for (;;)
+    {
+        const ssize_t written = ::readlink("/proc/self/exe", buffer.data(), buffer.size());
+        if (written < 0)
+        {
+            CRD_LOG_ERROR(g_log_platform, "readlink(/proc/self/exe) failed");
+            return current_working_dir();
+        }
+        if (static_cast<std::size_t>(written) < buffer.size())
+        {
+            buffer.resize(static_cast<std::size_t>(written));
+            return from_native_path(stdfs::path(buffer).parent_path());
+        }
+        buffer.resize(buffer.size() * 2); // truncated — grow and retry
+    }
 #endif
 }
 

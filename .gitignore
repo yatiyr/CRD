@@ -50,6 +50,9 @@ Thumbs.db
 /do_*.bat
 /run_*.bat
 
+# full-sweep.ps1 generated temp shims (created + removed per run; never commit)
+/scripts/.full-sweep-win-tmp.*
+
 # Test artifacts spilled to root
 test_pack_*.crdr
 

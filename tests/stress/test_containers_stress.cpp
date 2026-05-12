@@ -62,7 +62,7 @@ u32 bounded_workers(crd::stress::RunMode mode) noexcept
 }
 } // namespace
 
-TEST_CASE("containers stress — disjoint parallel writes to a shared Array", "[stress][containers]")
+TEST_CASE("containers stress -- disjoint parallel writes to a shared Array", "[stress][containers]")
 {
     const auto body = [](crd::stress::RunMode mode)
     {
@@ -124,7 +124,7 @@ TEST_CASE("containers stress — disjoint parallel writes to a shared Array", "[
     }
 }
 
-TEST_CASE("containers stress — many concurrent readers of an immutable Array", "[stress][containers]")
+TEST_CASE("containers stress -- many concurrent readers of an immutable Array", "[stress][containers]")
 {
     const auto body = [](crd::stress::RunMode mode)
     {
@@ -182,7 +182,7 @@ TEST_CASE("containers stress — many concurrent readers of an immutable Array",
     }
 }
 
-TEST_CASE("containers stress — per-worker isolated TlsfAllocator + HashMap churn", "[stress][containers]")
+TEST_CASE("containers stress -- per-worker isolated TlsfAllocator + HashMap churn", "[stress][containers]")
 {
     const auto body = [](crd::stress::RunMode mode)
     {
