@@ -1,3 +1,4 @@
+#include <crd/geometry/primitives/primitives.hpp>
 #include <crd/math/math.hpp>
 
 #include <iostream>
@@ -5,6 +6,7 @@
 int main()
 {
     using namespace crd::math;
+    using namespace crd::geometry::primitives;
 
     const Vec3f right(1.0F, 0.0F, 0.0F);
     const Vec3f up(0.0F, 1.0F, 0.0F);
@@ -19,7 +21,7 @@ int main()
     const Vec3f transformed = transform_point(pose, Vec3f(1.0F, 0.0F, 0.0F));
     const Planef ground = plane_from_point_normal(Vec3f(0.0F, 0.0F, 0.0F), Vec3f(0.0F, 1.0F, 0.0F));
     const Rayf drop_ray(Vec3f(0.0F, 10.0F, 0.0F), Vec3f(0.0F, -1.0F, 0.0F));
-    const Trianglef tri(Vec3f(-1.0F, -1.0F, 0.0F), Vec3f(1.0F, -1.0F, 0.0F), Vec3f(0.0F, 1.0F, 0.0F));
+    const Triangle3f tri(Vec3f(-1.0F, -1.0F, 0.0F), Vec3f(1.0F, -1.0F, 0.0F), Vec3f(0.0F, 1.0F, 0.0F));
     const Frustumf frustum = frustum_from_view_projection(Mat4f::identity());
     const AABBf bounds(Vec3f(-0.5F, -0.5F, -0.5F), Vec3f(0.5F, 0.5F, 0.5F));
     float ray_t = 0.0F;

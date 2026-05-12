@@ -7,6 +7,7 @@ target_link_libraries(crd-bench PRIVATE
     crd-core
     crd-log
     crd-math
+    crd-geometry-primitives
     crd-memory
     crd-containers
     Catch2::Catch2WithMain

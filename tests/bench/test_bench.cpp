@@ -1,4 +1,5 @@
 #include <crd/containers/containers.hpp>
+#include <crd/geometry/primitives/primitives.hpp>
 #include <crd/log/log.hpp>
 #include <crd/math/math.hpp>
 #include <crd/memory/memory.hpp>
@@ -11,6 +12,7 @@ using namespace crd;
 using namespace crd::containers;
 using namespace crd::log;
 using namespace crd::math;
+using namespace crd::geometry::primitives;
 
 CRD_DEFINE_LOG_CHANNEL(g_log_bench, "Bench", crd::log::LogLevel::Trace)
 
@@ -272,7 +274,7 @@ TEST_CASE("Primitive geometry workloads", "[bench][math]")
 {
     const Rayf ray(Vec3f(0.0F, 0.0F, -5.0F), Vec3f(0.0F, 0.0F, 1.0F));
     const Planef plane = plane_from_point_normal(Vec3f(0.0F, 0.0F, 0.0F), Vec3f(0.0F, 0.0F, 1.0F));
-    const Trianglef tri(Vec3f(-1.0F, -1.0F, 0.0F), Vec3f(1.0F, -1.0F, 0.0F), Vec3f(0.0F, 1.0F, 0.0F));
+    const Triangle3f tri(Vec3f(-1.0F, -1.0F, 0.0F), Vec3f(1.0F, -1.0F, 0.0F), Vec3f(0.0F, 1.0F, 0.0F));
     const Frustumf frustum = frustum_from_view_projection(Mat4f::identity());
     const AABBf bounds(Vec3f(-0.5F, -0.5F, -0.5F), Vec3f(0.5F, 0.5F, 0.5F));
 

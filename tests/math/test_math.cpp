@@ -1,8 +1,8 @@
 ﻿#include <crd/math/math.hpp>
 
+#include <bit>
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
-#include <bit>
 #include <format>
 #include <limits>
 #include <type_traits>
@@ -60,12 +60,6 @@ template <typename T> void require_quat_close(const Quat<T>& actual, const Quat<
     REQUIRE(approx_equal_abs(actual.y, expected.y, epsilon));
     REQUIRE(approx_equal_abs(actual.z, expected.z, epsilon));
     REQUIRE(approx_equal_abs(actual.w, expected.w, epsilon));
-}
-
-template <typename T> void require_plane_close(const Plane<T>& actual, const Plane<T>& expected, T epsilon)
-{
-    require_vec3_close(actual.normal, expected.normal, epsilon);
-    REQUIRE(approx_equal_abs(actual.d, expected.d, epsilon));
 }
 } // namespace
 
@@ -311,16 +305,15 @@ Mat4f mat4f_mat4f_scalar_reference(const Mat4f& a, const Mat4f& b) noexcept
 // Bit-exact equality (memcmp-style; no epsilon).
 bool vec4f_bit_eq(const Vec4f& a, const Vec4f& b) noexcept
 {
-    return std::bit_cast<crd::u32>(a.x) == std::bit_cast<crd::u32>(b.x)
-        && std::bit_cast<crd::u32>(a.y) == std::bit_cast<crd::u32>(b.y)
-        && std::bit_cast<crd::u32>(a.z) == std::bit_cast<crd::u32>(b.z)
-        && std::bit_cast<crd::u32>(a.w) == std::bit_cast<crd::u32>(b.w);
+    return std::bit_cast<crd::u32>(a.x) == std::bit_cast<crd::u32>(b.x) &&
+           std::bit_cast<crd::u32>(a.y) == std::bit_cast<crd::u32>(b.y) &&
+           std::bit_cast<crd::u32>(a.z) == std::bit_cast<crd::u32>(b.z) &&
+           std::bit_cast<crd::u32>(a.w) == std::bit_cast<crd::u32>(b.w);
 }
 
 bool mat4f_bit_eq(const Mat4f& a, const Mat4f& b) noexcept
 {
-    return vec4f_bit_eq(a.c0, b.c0) && vec4f_bit_eq(a.c1, b.c1)
-        && vec4f_bit_eq(a.c2, b.c2) && vec4f_bit_eq(a.c3, b.c3);
+    return vec4f_bit_eq(a.c0, b.c0) && vec4f_bit_eq(a.c1, b.c1) && vec4f_bit_eq(a.c2, b.c2) && vec4f_bit_eq(a.c3, b.c3);
 }
 } // namespace
 
@@ -328,13 +321,11 @@ TEST_CASE("v0f Mat4<f32> * Vec4<f32> is bit-exact with scalar reference", "[math
 {
     // Pseudo-random but deterministic Mat4 + Vec4 (same input every run, so
     // any FP discrepancy across builds is a real divergence, not RNG noise).
-    const Mat4f m(Vec4f( 1.5F,  -2.25F,  3.125F, -4.0625F),
-                  Vec4f(-5.5F,   6.75F, -7.875F,  8.9375F),
-                  Vec4f( 9.5F, -10.25F, 11.125F,-12.0625F),
-                  Vec4f(13.5F, -14.75F, 15.875F,-16.9375F));
+    const Mat4f m(Vec4f(1.5F, -2.25F, 3.125F, -4.0625F), Vec4f(-5.5F, 6.75F, -7.875F, 8.9375F),
+                  Vec4f(9.5F, -10.25F, 11.125F, -12.0625F), Vec4f(13.5F, -14.75F, 15.875F, -16.9375F));
     const Vec4f v(0.125F, -0.25F, 0.5F, -1.0F);
 
-    const Vec4f simd_result   = m * v;                            // routes through SIMD overload
+    const Vec4f simd_result = m * v;                                // routes through SIMD overload
     const Vec4f scalar_result = mat4f_vec4f_scalar_reference(m, v); // bypasses overload
 
     REQUIRE(vec4f_bit_eq(simd_result, scalar_result));
@@ -342,16 +333,12 @@ TEST_CASE("v0f Mat4<f32> * Vec4<f32> is bit-exact with scalar reference", "[math
 
 TEST_CASE("v0f Mat4<f32> * Mat4<f32> is bit-exact with scalar reference", "[math][mat][simd][v0f]")
 {
-    const Mat4f a(Vec4f( 1.5F,  -2.25F,  3.125F, -4.0625F),
-                  Vec4f(-5.5F,   6.75F, -7.875F,  8.9375F),
-                  Vec4f( 9.5F, -10.25F, 11.125F,-12.0625F),
-                  Vec4f(13.5F, -14.75F, 15.875F,-16.9375F));
-    const Mat4f b(Vec4f( 0.125F,  -0.25F,  0.5F,  -1.0F),
-                  Vec4f( 0.625F,   1.25F,  2.5F,   5.0F),
-                  Vec4f(-0.0625F,  0.125F,-0.25F,  0.5F),
-                  Vec4f( 1.0F,    -2.0F,   4.0F,  -8.0F));
+    const Mat4f a(Vec4f(1.5F, -2.25F, 3.125F, -4.0625F), Vec4f(-5.5F, 6.75F, -7.875F, 8.9375F),
+                  Vec4f(9.5F, -10.25F, 11.125F, -12.0625F), Vec4f(13.5F, -14.75F, 15.875F, -16.9375F));
+    const Mat4f b(Vec4f(0.125F, -0.25F, 0.5F, -1.0F), Vec4f(0.625F, 1.25F, 2.5F, 5.0F),
+                  Vec4f(-0.0625F, 0.125F, -0.25F, 0.5F), Vec4f(1.0F, -2.0F, 4.0F, -8.0F));
 
-    const Mat4f simd_result   = a * b;
+    const Mat4f simd_result = a * b;
     const Mat4f scalar_result = mat4f_mat4f_scalar_reference(a, b);
 
     REQUIRE(mat4f_bit_eq(simd_result, scalar_result));
@@ -362,8 +349,8 @@ TEST_CASE("v0f Mat4<f64> still goes through scalar template (no SIMD f64 overloa
     // Sanity check: the SIMD specialization is f32-only. f64 path is
     // unaffected. Doesn't bit-eq check (no SIMD f64 path to compare to);
     // just verifies the scalar template still handles f64.
-    const Mat4d a(Vec4d(1.0,  2.0,  3.0,  4.0),  Vec4d(5.0,  6.0,  7.0,  8.0),
-                  Vec4d(9.0, 10.0, 11.0, 12.0),  Vec4d(13.0, 14.0, 15.0, 16.0));
+    const Mat4d a(Vec4d(1.0, 2.0, 3.0, 4.0), Vec4d(5.0, 6.0, 7.0, 8.0), Vec4d(9.0, 10.0, 11.0, 12.0),
+                  Vec4d(13.0, 14.0, 15.0, 16.0));
     const Mat4d identity = Mat4d::identity();
     require_mat4_close(a * identity, a, 1.0e-12);
 }
@@ -467,85 +454,13 @@ TEST_CASE("Math types format cleanly for logs and diagnostics", "[math][format]"
     const Mat2f m(Vec2f(1.0F, 2.0F), Vec2f(3.0F, 4.0F));
     const Quatf q(0.0F, 0.0F, 0.70710677F, 0.70710677F);
     const Transformf t(Vec3f(10.0F, 20.0F, 30.0F), q);
-    const Rayf ray(Vec3f(0.0F, 1.0F, 2.0F), Vec3f(0.0F, 0.0F, -1.0F));
-    const Planef plane(Vec3f(0.0F, 1.0F, 0.0F), -5.0F);
-    const Spheref sphere(Vec3f(1.0F, 2.0F, 3.0F), 4.0F);
-    const AABBf bounds(Vec3f(-1.0F, -2.0F, -3.0F), Vec3f(4.0F, 5.0F, 6.0F));
-    const Trianglef tri(Vec3f(0.0F, 0.0F, 0.0F), Vec3f(1.0F, 0.0F, 0.0F), Vec3f(0.0F, 1.0F, 0.0F));
 
     REQUIRE(std::format("{}", v) == "Vec3(1, 2, 3)");
     REQUIRE(std::format("{}", m) == "Mat2([[1, 3], [2, 4]])");
     REQUIRE(std::format("{}", q) == "Quat(0, 0, 0.70710677, 0.70710677)");
     REQUIRE(std::format("{}", t) == "Transform(t=Vec3(10, 20, 30), r=Quat(0, 0, 0.70710677, 0.70710677))");
-    REQUIRE(std::format("{}", ray) == "Ray(o=Vec3(0, 1, 2), d=Vec3(0, 0, -1))");
-    REQUIRE(std::format("{}", plane) == "Plane(n=Vec3(0, 1, 0), d=-5)");
-    REQUIRE(std::format("{}", sphere) == "Sphere(c=Vec3(1, 2, 3), r=4)");
-    REQUIRE(std::format("{}", bounds) == "AABB(min=Vec3(-1, -2, -3), max=Vec3(4, 5, 6))");
-    REQUIRE(std::format("{}", tri) == "Triangle(a=Vec3(0, 0, 0), b=Vec3(1, 0, 0), c=Vec3(0, 1, 0))");
-}
-
-TEST_CASE("Primitive geometry utility constructors and relationships behave as expected", "[math][geom]")
-{
-    const Planed plane = plane_from_point_normal(Vec3d(0.0, 5.0, 0.0), Vec3d(0.0, 2.0, 0.0));
-    require_plane_close(plane, Planed(Vec3d(0.0, 1.0, 0.0), -5.0), 1.0e-12);
-    REQUIRE(signed_distance(plane, Vec3d(0.0, 8.0, 0.0)) == Catch::Approx(3.0));
-
-    const AABBd bounds(Vec3d(-1.0, -2.0, -3.0), Vec3d(3.0, 2.0, 1.0));
-    require_vec3_close(center(bounds), Vec3d(1.0, 0.0, -1.0), 1.0e-12);
-    require_vec3_close(extents(bounds), Vec3d(2.0, 2.0, 2.0), 1.0e-12);
-
-    const Triangled tri(Vec3d(0.0, 0.0, 0.0), Vec3d(2.0, 0.0, 0.0), Vec3d(0.0, 2.0, 0.0));
-    require_vec3_close(centroid(tri), Vec3d(2.0 / 3.0, 2.0 / 3.0, 0.0), 1.0e-12);
-    require_vec3_close(normal(tri), Vec3d(0.0, 0.0, 1.0), 1.0e-12);
-}
-
-TEST_CASE("AABB, sphere, and triangle queries handle inside outside and overlap cases", "[math][geom]")
-{
-    const AABBf bounds(Vec3f(-1.0F, -1.0F, -1.0F), Vec3f(1.0F, 1.0F, 1.0F));
-    REQUIRE(contains(bounds, Vec3f(0.25F, 0.5F, -0.5F)));
-    REQUIRE_FALSE(contains(bounds, Vec3f(2.0F, 0.0F, 0.0F)));
-    require_vec3_close(closest_point(bounds, Vec3f(2.0F, -0.5F, -3.0F)), Vec3f(1.0F, -0.5F, -1.0F), 1.0e-6F);
-    REQUIRE(intersects(bounds, AABBf(Vec3f(0.5F, 0.5F, 0.5F), Vec3f(2.0F, 2.0F, 2.0F))));
-    REQUIRE_FALSE(intersects(bounds, AABBf(Vec3f(2.0F, 2.0F, 2.0F), Vec3f(3.0F, 3.0F, 3.0F))));
-
-    const Spheref s0(Vec3f(0.0F, 0.0F, 0.0F), 1.0F);
-    const Spheref s1(Vec3f(1.5F, 0.0F, 0.0F), 1.0F);
-    REQUIRE(contains(s0, Vec3f(0.5F, 0.0F, 0.0F)));
-    REQUIRE_FALSE(contains(s0, Vec3f(2.0F, 0.0F, 0.0F)));
-    REQUIRE(intersects(s0, s1));
-    REQUIRE(intersects(bounds, s0));
-
-    const Trianglef tri(Vec3f(0.0F, 0.0F, 0.0F), Vec3f(2.0F, 0.0F, 0.0F), Vec3f(0.0F, 2.0F, 0.0F));
-    const Vec3f bc = barycentric(tri, Vec3f(0.5F, 0.5F, 0.0F));
-    REQUIRE(bc.x == Catch::Approx(0.5F));
-    REQUIRE(bc.y == Catch::Approx(0.25F));
-    REQUIRE(bc.z == Catch::Approx(0.25F));
-    REQUIRE(contains(tri, Vec3f(0.5F, 0.5F, 0.0F)));
-    REQUIRE_FALSE(contains(tri, Vec3f(2.0F, 2.0F, 0.0F)));
-}
-
-TEST_CASE("Ray intersections cover plane sphere and triangle", "[math][geom][ray]")
-{
-    const Rayd ray(Vec3d(0.0, 0.0, -5.0), Vec3d(0.0, 0.0, 1.0));
-    const Planed plane = plane_from_point_normal(Vec3d(0.0, 0.0, 0.0), Vec3d(0.0, 0.0, 1.0));
-    double t = 0.0;
-    REQUIRE(intersect_ray_plane(ray, plane, t));
-    REQUIRE(t == Catch::Approx(5.0));
-    require_vec3_close(point_at(ray, t), Vec3d(0.0, 0.0, 0.0), 1.0e-12);
-
-    const Sphered sphere(Vec3d(0.0, 0.0, 0.0), 1.0);
-    REQUIRE(intersect_ray_sphere(ray, sphere, t));
-    REQUIRE(t == Catch::Approx(4.0));
-
-    const Triangled tri(Vec3d(-1.0, -1.0, 0.0), Vec3d(1.0, -1.0, 0.0), Vec3d(0.0, 1.0, 0.0));
-    Vec3d bary{};
-    REQUIRE(intersect_ray_triangle(ray, tri, t, bary));
-    REQUIRE(t == Catch::Approx(5.0));
-    REQUIRE(bary.x + bary.y + bary.z == Catch::Approx(1.0));
-
-    const Rayd parallel(Vec3d(0.0, 0.0, -5.0), Vec3d(1.0, 0.0, 0.0));
-    REQUIRE_FALSE(intersect_ray_plane(parallel, plane, t));
-    REQUIRE_FALSE(intersect_ray_triangle(parallel, tri, t, bary));
+    // Geometry-primitive formatters (Ray/Plane/Sphere/AABB/Triangle3/Frustum)
+    // moved to crd-geometry-primitives — see tests/geometry-primitives/test_primitives.cpp.
 }
 
 TEST_CASE("look_at produces a correct right-handed view matrix", "[math][mat]")
@@ -557,11 +472,9 @@ TEST_CASE("look_at produces a correct right-handed view matrix", "[math][mat]")
     const Mat4f view = look_at(eye, target, up);
 
     require_mat4_close(view,
-        Mat4f(Vec4f(1.0F, 0.0F, 0.0F, 0.0F),
-              Vec4f(0.0F, 1.0F, 0.0F, 0.0F),
-              Vec4f(0.0F, 0.0F, 1.0F, 0.0F),
-              Vec4f(0.0F, 0.0F, -5.0F, 1.0F)),
-        1.0e-5F);
+                       Mat4f(Vec4f(1.0F, 0.0F, 0.0F, 0.0F), Vec4f(0.0F, 1.0F, 0.0F, 0.0F),
+                             Vec4f(0.0F, 0.0F, 1.0F, 0.0F), Vec4f(0.0F, 0.0F, -5.0F, 1.0F)),
+                       1.0e-5F);
 
     // View matrix must map the eye to the origin.
     require_vec4_close(view * Vec4f(eye, 1.0F), Vec4f(0.0F, 0.0F, 0.0F, 1.0F), 1.0e-5F);
@@ -582,20 +495,9 @@ TEST_CASE("perspective_reverse_z maps z_near to NDC 1 and infinity to NDC 0", "[
     REQUIRE(clip.w == Catch::Approx(1.0F));
 }
 
-TEST_CASE("Frustum extraction and containment work for canonical clip volume", "[math][geom][frustum]")
-{
-    const Frustumf frustum = frustum_from_view_projection(Mat4f::identity());
-    REQUIRE(contains(frustum, Vec3f(0.0F, 0.0F, 0.0F)));
-    REQUIRE_FALSE(contains(frustum, Vec3f(2.0F, 0.0F, 0.0F)));
-    REQUIRE(intersects(frustum, Spheref(Vec3f(0.0F, 0.0F, 0.0F), 0.5F)));
-    REQUIRE_FALSE(intersects(frustum, Spheref(Vec3f(4.0F, 0.0F, 0.0F), 0.5F)));
-    REQUIRE(intersects(frustum, AABBf(Vec3f(-0.5F, -0.5F, -0.5F), Vec3f(0.5F, 0.5F, 0.5F))));
-    REQUIRE_FALSE(intersects(frustum, AABBf(Vec3f(2.0F, 2.0F, 2.0F), Vec3f(3.0F, 3.0F, 3.0F))));
-}
-
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// Interpolation primitives
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+//  Interpolation primitives
+//  â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 TEST_CASE("scalar lerp/mix/saturate/step/inverse_lerp/remap", "[math][interp]")
 {
@@ -606,8 +508,8 @@ TEST_CASE("scalar lerp/mix/saturate/step/inverse_lerp/remap", "[math][interp]")
     REQUIRE(mix(2.0F, 6.0F, 0.25F) == Catch::Approx(3.0F));   // alias
 
     REQUIRE(saturate(-3.0F) == Catch::Approx(0.0F));
-    REQUIRE(saturate(0.5F)  == Catch::Approx(0.5F));
-    REQUIRE(saturate(2.0F)  == Catch::Approx(1.0F));
+    REQUIRE(saturate(0.5F) == Catch::Approx(0.5F));
+    REQUIRE(saturate(2.0F) == Catch::Approx(1.0F));
 
     REQUIRE(step(0.5F, 0.4F) == Catch::Approx(0.0F));
     REQUIRE(step(0.5F, 0.5F) == Catch::Approx(1.0F)); // x == edge â†’ 1
@@ -621,28 +523,28 @@ TEST_CASE("smoothstep / smootherstep boundary and midpoint", "[math][interp]")
 {
     // At and past the edges, both saturate to 0 / 1.
     REQUIRE(smoothstep(0.0F, 1.0F, -0.5F) == Catch::Approx(0.0F));
-    REQUIRE(smoothstep(0.0F, 1.0F,  0.0F) == Catch::Approx(0.0F));
-    REQUIRE(smoothstep(0.0F, 1.0F,  1.0F) == Catch::Approx(1.0F));
-    REQUIRE(smoothstep(0.0F, 1.0F,  1.5F) == Catch::Approx(1.0F));
+    REQUIRE(smoothstep(0.0F, 1.0F, 0.0F) == Catch::Approx(0.0F));
+    REQUIRE(smoothstep(0.0F, 1.0F, 1.0F) == Catch::Approx(1.0F));
+    REQUIRE(smoothstep(0.0F, 1.0F, 1.5F) == Catch::Approx(1.0F));
 
-    REQUIRE(smootherstep(0.0F, 1.0F,  0.0F) == Catch::Approx(0.0F));
-    REQUIRE(smootherstep(0.0F, 1.0F,  1.0F) == Catch::Approx(1.0F));
+    REQUIRE(smootherstep(0.0F, 1.0F, 0.0F) == Catch::Approx(0.0F));
+    REQUIRE(smootherstep(0.0F, 1.0F, 1.0F) == Catch::Approx(1.0F));
 
     // Midpoint of both is exactly 0.5 by construction.
-    REQUIRE(smoothstep(0.0F, 1.0F, 0.5F)   == Catch::Approx(0.5F));
+    REQUIRE(smoothstep(0.0F, 1.0F, 0.5F) == Catch::Approx(0.5F));
     REQUIRE(smootherstep(0.0F, 1.0F, 0.5F) == Catch::Approx(0.5F));
 
     // Both are monotone non-decreasing on [0, 1].
-    float prev_smooth   = -1.0F;
+    float prev_smooth = -1.0F;
     float prev_smoother = -1.0F;
     for (int i = 0; i <= 32; ++i)
     {
         const float t = static_cast<float>(i) / 32.0F;
-        const float s  = smoothstep(0.0F, 1.0F, t);
+        const float s = smoothstep(0.0F, 1.0F, t);
         const float ss = smootherstep(0.0F, 1.0F, t);
-        REQUIRE(s  >= prev_smooth);
+        REQUIRE(s >= prev_smooth);
         REQUIRE(ss >= prev_smoother);
-        prev_smooth   = s;
+        prev_smooth = s;
         prev_smoother = ss;
     }
 }
@@ -699,82 +601,81 @@ TEST_CASE("All easings: f(0) == 0 and f(1) == 1", "[math][easing]")
 
     // All curves anchor at endpoints. Bounce/Elastic use exact early-outs at the
     // domain edges, so the equality is exact for those.
-    REQUIRE(ease_linear(0.0F)         == Catch::Approx(0.0F).margin(eps));
-    REQUIRE(ease_linear(1.0F)         == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_linear(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_linear(1.0F) == Catch::Approx(1.0F).margin(eps));
 
-    REQUIRE(ease_in_sine(0.0F)        == Catch::Approx(0.0F).margin(eps));
-    REQUIRE(ease_in_sine(1.0F)        == Catch::Approx(1.0F).margin(eps));
-    REQUIRE(ease_out_sine(0.0F)       == Catch::Approx(0.0F).margin(eps));
-    REQUIRE(ease_out_sine(1.0F)       == Catch::Approx(1.0F).margin(eps));
-    REQUIRE(ease_in_out_sine(0.0F)    == Catch::Approx(0.0F).margin(eps));
-    REQUIRE(ease_in_out_sine(1.0F)    == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_in_sine(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_in_sine(1.0F) == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_out_sine(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_out_sine(1.0F) == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_in_out_sine(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_in_out_sine(1.0F) == Catch::Approx(1.0F).margin(eps));
 
-    REQUIRE(ease_in_quad(0.0F)        == Catch::Approx(0.0F).margin(eps));
-    REQUIRE(ease_in_quad(1.0F)        == Catch::Approx(1.0F).margin(eps));
-    REQUIRE(ease_out_quad(0.0F)       == Catch::Approx(0.0F).margin(eps));
-    REQUIRE(ease_out_quad(1.0F)       == Catch::Approx(1.0F).margin(eps));
-    REQUIRE(ease_in_out_quad(0.0F)    == Catch::Approx(0.0F).margin(eps));
-    REQUIRE(ease_in_out_quad(1.0F)    == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_in_quad(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_in_quad(1.0F) == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_out_quad(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_out_quad(1.0F) == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_in_out_quad(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_in_out_quad(1.0F) == Catch::Approx(1.0F).margin(eps));
 
-    REQUIRE(ease_in_cubic(0.0F)       == Catch::Approx(0.0F).margin(eps));
-    REQUIRE(ease_in_cubic(1.0F)       == Catch::Approx(1.0F).margin(eps));
-    REQUIRE(ease_out_cubic(0.0F)      == Catch::Approx(0.0F).margin(eps));
-    REQUIRE(ease_out_cubic(1.0F)      == Catch::Approx(1.0F).margin(eps));
-    REQUIRE(ease_in_out_cubic(0.0F)   == Catch::Approx(0.0F).margin(eps));
-    REQUIRE(ease_in_out_cubic(1.0F)   == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_in_cubic(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_in_cubic(1.0F) == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_out_cubic(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_out_cubic(1.0F) == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_in_out_cubic(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_in_out_cubic(1.0F) == Catch::Approx(1.0F).margin(eps));
 
-    REQUIRE(ease_in_quart(0.0F)       == Catch::Approx(0.0F).margin(eps));
-    REQUIRE(ease_in_quart(1.0F)       == Catch::Approx(1.0F).margin(eps));
-    REQUIRE(ease_out_quart(0.0F)      == Catch::Approx(0.0F).margin(eps));
-    REQUIRE(ease_out_quart(1.0F)      == Catch::Approx(1.0F).margin(eps));
-    REQUIRE(ease_in_out_quart(0.0F)   == Catch::Approx(0.0F).margin(eps));
-    REQUIRE(ease_in_out_quart(1.0F)   == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_in_quart(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_in_quart(1.0F) == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_out_quart(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_out_quart(1.0F) == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_in_out_quart(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_in_out_quart(1.0F) == Catch::Approx(1.0F).margin(eps));
 
-    REQUIRE(ease_in_quint(0.0F)       == Catch::Approx(0.0F).margin(eps));
-    REQUIRE(ease_in_quint(1.0F)       == Catch::Approx(1.0F).margin(eps));
-    REQUIRE(ease_out_quint(0.0F)      == Catch::Approx(0.0F).margin(eps));
-    REQUIRE(ease_out_quint(1.0F)      == Catch::Approx(1.0F).margin(eps));
-    REQUIRE(ease_in_out_quint(0.0F)   == Catch::Approx(0.0F).margin(eps));
-    REQUIRE(ease_in_out_quint(1.0F)   == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_in_quint(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_in_quint(1.0F) == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_out_quint(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_out_quint(1.0F) == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_in_out_quint(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_in_out_quint(1.0F) == Catch::Approx(1.0F).margin(eps));
 
-    REQUIRE(ease_in_expo(0.0F)        == Catch::Approx(0.0F).margin(eps));
-    REQUIRE(ease_in_expo(1.0F)        == Catch::Approx(1.0F).margin(eps));
-    REQUIRE(ease_out_expo(0.0F)       == Catch::Approx(0.0F).margin(eps));
-    REQUIRE(ease_out_expo(1.0F)       == Catch::Approx(1.0F).margin(eps));
-    REQUIRE(ease_in_out_expo(0.0F)    == Catch::Approx(0.0F).margin(eps));
-    REQUIRE(ease_in_out_expo(1.0F)    == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_in_expo(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_in_expo(1.0F) == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_out_expo(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_out_expo(1.0F) == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_in_out_expo(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_in_out_expo(1.0F) == Catch::Approx(1.0F).margin(eps));
 
-    REQUIRE(ease_in_circ(0.0F)        == Catch::Approx(0.0F).margin(eps));
-    REQUIRE(ease_in_circ(1.0F)        == Catch::Approx(1.0F).margin(eps));
-    REQUIRE(ease_out_circ(0.0F)       == Catch::Approx(0.0F).margin(eps));
-    REQUIRE(ease_out_circ(1.0F)       == Catch::Approx(1.0F).margin(eps));
-    REQUIRE(ease_in_out_circ(0.0F)    == Catch::Approx(0.0F).margin(eps));
-    REQUIRE(ease_in_out_circ(1.0F)    == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_in_circ(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_in_circ(1.0F) == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_out_circ(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_out_circ(1.0F) == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_in_out_circ(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_in_out_circ(1.0F) == Catch::Approx(1.0F).margin(eps));
 
-    REQUIRE(ease_in_back(0.0F)        == Catch::Approx(0.0F).margin(eps));
-    REQUIRE(ease_in_back(1.0F)        == Catch::Approx(1.0F).margin(eps));
-    REQUIRE(ease_out_back(0.0F)       == Catch::Approx(0.0F).margin(eps));
-    REQUIRE(ease_out_back(1.0F)       == Catch::Approx(1.0F).margin(eps));
-    REQUIRE(ease_in_out_back(0.0F)    == Catch::Approx(0.0F).margin(eps));
-    REQUIRE(ease_in_out_back(1.0F)    == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_in_back(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_in_back(1.0F) == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_out_back(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_out_back(1.0F) == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_in_out_back(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_in_out_back(1.0F) == Catch::Approx(1.0F).margin(eps));
 
-    REQUIRE(ease_in_elastic(0.0F)     == Catch::Approx(0.0F).margin(eps));
-    REQUIRE(ease_in_elastic(1.0F)     == Catch::Approx(1.0F).margin(eps));
-    REQUIRE(ease_out_elastic(0.0F)    == Catch::Approx(0.0F).margin(eps));
-    REQUIRE(ease_out_elastic(1.0F)    == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_in_elastic(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_in_elastic(1.0F) == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_out_elastic(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_out_elastic(1.0F) == Catch::Approx(1.0F).margin(eps));
     REQUIRE(ease_in_out_elastic(0.0F) == Catch::Approx(0.0F).margin(eps));
     REQUIRE(ease_in_out_elastic(1.0F) == Catch::Approx(1.0F).margin(eps));
 
-    REQUIRE(ease_in_bounce(0.0F)      == Catch::Approx(0.0F).margin(eps));
-    REQUIRE(ease_in_bounce(1.0F)      == Catch::Approx(1.0F).margin(eps));
-    REQUIRE(ease_out_bounce(0.0F)     == Catch::Approx(0.0F).margin(eps));
-    REQUIRE(ease_out_bounce(1.0F)     == Catch::Approx(1.0F).margin(eps));
-    REQUIRE(ease_in_out_bounce(0.0F)  == Catch::Approx(0.0F).margin(eps));
-    REQUIRE(ease_in_out_bounce(1.0F)  == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_in_bounce(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_in_bounce(1.0F) == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_out_bounce(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_out_bounce(1.0F) == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_in_out_bounce(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_in_out_bounce(1.0F) == Catch::Approx(1.0F).margin(eps));
 }
 
-TEST_CASE("Easings: In/Out reflection identity ease_in_X(t) == 1 - ease_out_X(1 - t)",
-          "[math][easing]")
+TEST_CASE("Easings: In/Out reflection identity ease_in_X(t) == 1 - ease_out_X(1 - t)", "[math][easing]")
 {
     // The reflection identity holds for the strictly-monotone families
     // (Sine/Quad/Cubic/Quart/Quint/Expo/Circ). Back/Elastic/Bounce use slightly
@@ -787,12 +688,12 @@ TEST_CASE("Easings: In/Out reflection identity ease_in_X(t) == 1 - ease_out_X(1 
         const float t = static_cast<float>(i) / 32.0F;
         const float u = 1.0F - t;
 
-        REQUIRE(ease_in_sine(t)  == Catch::Approx(1.0F - ease_out_sine(u)).margin(eps));
-        REQUIRE(ease_in_quad(t)  == Catch::Approx(1.0F - ease_out_quad(u)).margin(eps));
+        REQUIRE(ease_in_sine(t) == Catch::Approx(1.0F - ease_out_sine(u)).margin(eps));
+        REQUIRE(ease_in_quad(t) == Catch::Approx(1.0F - ease_out_quad(u)).margin(eps));
         REQUIRE(ease_in_cubic(t) == Catch::Approx(1.0F - ease_out_cubic(u)).margin(eps));
         REQUIRE(ease_in_quart(t) == Catch::Approx(1.0F - ease_out_quart(u)).margin(eps));
         REQUIRE(ease_in_quint(t) == Catch::Approx(1.0F - ease_out_quint(u)).margin(eps));
-        REQUIRE(ease_in_circ(t)  == Catch::Approx(1.0F - ease_out_circ(u)).margin(eps));
+        REQUIRE(ease_in_circ(t) == Catch::Approx(1.0F - ease_out_circ(u)).margin(eps));
     }
 }
 
@@ -836,25 +737,29 @@ TEST_CASE("Easings: Quad/Cubic/Quart/Quint/Sine/Circ are monotone non-decreasing
 TEST_CASE("Easings: Back/Elastic overshoot, Bounce stays in [0,1]", "[math][easing]")
 {
     // Back overshoots below zero on the way out (in) and above one on the way out (out).
-    bool back_in_undershot  = false;
-    bool back_out_overshot  = false;
+    bool back_in_undershot = false;
+    bool back_out_overshot = false;
     for (int i = 1; i < 32; ++i)
     {
         const float t = static_cast<float>(i) / 32.0F;
-        if (ease_in_back(t)  < 0.0F)  back_in_undershot  = true;
-        if (ease_out_back(t) > 1.0F)  back_out_overshot  = true;
+        if (ease_in_back(t) < 0.0F)
+            back_in_undershot = true;
+        if (ease_out_back(t) > 1.0F)
+            back_out_overshot = true;
     }
     REQUIRE(back_in_undershot);
     REQUIRE(back_out_overshot);
 
     // Elastic overshoots above 1 on out (and below 0 on in).
-    bool elastic_out_overshot  = false;
-    bool elastic_in_undershot  = false;
+    bool elastic_out_overshot = false;
+    bool elastic_in_undershot = false;
     for (int i = 1; i < 32; ++i)
     {
         const float t = static_cast<float>(i) / 32.0F;
-        if (ease_out_elastic(t) > 1.0F) elastic_out_overshot  = true;
-        if (ease_in_elastic(t)  < 0.0F) elastic_in_undershot  = true;
+        if (ease_out_elastic(t) > 1.0F)
+            elastic_out_overshot = true;
+        if (ease_in_elastic(t) < 0.0F)
+            elastic_in_undershot = true;
     }
     REQUIRE(elastic_out_overshot);
     REQUIRE(elastic_in_undershot);
@@ -868,4 +773,3 @@ TEST_CASE("Easings: Back/Elastic overshoot, Bounce stays in [0,1]", "[math][easi
         REQUIRE(v <= 1.0F + 1e-5F);
     }
 }
-

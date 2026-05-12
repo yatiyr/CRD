@@ -1,11 +1,14 @@
 # check_no_std_math.ps1 — bans std::sin / std::cos / std::tan / std::atan2 /
-# std::exp / std::log / std::pow / std::asin / std::acos / std::atan in
-# engine/eylem/** and engine/hesap/**. Per ADR-0063 §2: those modules must
-# use crd::math::deterministic::* substitutes for cross-platform bit-exact
-# results.
+# std::exp / std::log / std::pow / std::asin / std::acos / std::atan in the
+# determinism-contract modules (ADR-0063 §2): they must use
+# crd::math::deterministic::* substitutes for cross-platform bit-exact results.
+# (std::sqrt is NOT banned — IEEE-754 mandates correctly-rounded single-rounding
+# sqrt everywhere, so it is deterministic.)
 #
-# Today (Phase 3.1 v0c) eylem and hesap don't exist yet, so this script
-# is a no-op. It lights up the moment eylem v1a or hesap v0a lands.
+# Scoped to engine/eylem, engine/hesap (ADR-0063), and engine/geometry-primitives
+# (ADR-0076 §4 — crd-geometry inherits the determinism contract). Sub-modules in
+# sibling directories (engine/eylem-rigid3d, engine/geometry-bvh, ...) are added
+# here as they land.
 #
 # Run as a CTest test (registered in tests/math/CMakeLists.txt next to
 # the SIMD-emission check) so any CI build catches the regression.
@@ -36,7 +39,8 @@ $banned = @(
 
 $scopes = @(
     "$RepoRoot/engine/eylem",
-    "$RepoRoot/engine/hesap"
+    "$RepoRoot/engine/hesap",
+    "$RepoRoot/engine/geometry-primitives"
 )
 
 $failures = @()

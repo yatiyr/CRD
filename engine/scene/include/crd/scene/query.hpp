@@ -3,7 +3,7 @@
 #include <crd/containers/array.hpp>
 #include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
-#include <crd/math/geometry.hpp>
+#include <crd/geometry/primitives/primitives.hpp>
 #include <crd/math/vec.hpp>
 #include <crd/scene/component.hpp>
 #include <crd/scene/entity.hpp>
@@ -23,7 +23,7 @@ class World; // forward — query.hpp must NOT pull world.hpp (cyclic).
 struct RelationFilter
 {
     ComponentId relation_id; // ComponentId of Relation<Tag>
-    EntityId    target;      // null → "any target" (relation present)
+    EntityId target;         // null → "any target" (relation present)
 };
 
 using FilterPredicateFn = bool (*)(EntityId entity, const World* world, void* user_data);
@@ -31,7 +31,7 @@ using FilterPredicateFn = bool (*)(EntityId entity, const World* world, void* us
 struct PredicateFilter
 {
     FilterPredicateFn fn = nullptr;
-    void*             user_data = nullptr;
+    void* user_data = nullptr;
 };
 
 // v1i index-driven filters. Each is a typed POD context that the query
@@ -43,14 +43,14 @@ class AsyncAwareIndex;
 struct ChangeDetectFilter
 {
     const ChangeDetectIndex* index;
-    ComponentId              component;
-    crd::u32                 since_frame;
+    ComponentId component;
+    crd::u32 since_frame;
 };
 
 struct SkipPendingFilter
 {
     const AsyncAwareIndex* index;
-    ComponentId            component;
+    ComponentId component;
 };
 
 // Non-template filter pipeline. Drives World::for_each_chunk(required) and
@@ -58,18 +58,11 @@ struct SkipPendingFilter
 // predicates per chunk; yields filtered ChunkViews to `user_fn`.
 // Defined in query.cpp; called from Query<Cs...>::drive_filtered_chunks
 // (in world.hpp's inline section) so all Cs... packs share one implementation.
-void run_query_pipeline(World& world,
-                        const ComponentMask& required,
-                        const ComponentMask& forbidden,
-                        const RelationFilter* relations,
-                        crd::u32 relation_count,
-                        const ChangeDetectFilter* change_filters,
-                        crd::u32 change_filter_count,
-                        const SkipPendingFilter* skip_pending_filters,
-                        crd::u32 skip_pending_count,
-                        const PredicateFilter* predicates,
-                        crd::u32 predicate_count,
-                        ChunkVisitor user_fn,
+void run_query_pipeline(World& world, const ComponentMask& required, const ComponentMask& forbidden,
+                        const RelationFilter* relations, crd::u32 relation_count,
+                        const ChangeDetectFilter* change_filters, crd::u32 change_filter_count,
+                        const SkipPendingFilter* skip_pending_filters, crd::u32 skip_pending_count,
+                        const PredicateFilter* predicates, crd::u32 predicate_count, ChunkVisitor user_fn,
                         void* user_data);
 
 // Query<Cs...> — Phase 3.0 v1g (ADR-0052 §1).
@@ -132,14 +125,14 @@ public:
     // Without the rvalue overload, `auto q = ...` on a chained rvalue tries
     // to copy-construct from the chain's lvalue ref — and copy is deleted.
 
-    template <typename T> Query&  with() &;
-    template <typename T> Query   with() &&;
-    template <typename T> Query&  without() &;
-    template <typename T> Query   without() &&;
+    template <typename T> Query& with() &;
+    template <typename T> Query with() &&;
+    template <typename T> Query& without() &;
+    template <typename T> Query without() &&;
     template <typename Tag> Query& with_relation(EntityId target = EntityId::null()) &;
-    template <typename Tag> Query  with_relation(EntityId target = EntityId::null()) &&;
+    template <typename Tag> Query with_relation(EntityId target = EntityId::null()) &&;
     Query& filter(FilterPredicateFn fn, void* user_data = nullptr) &;
-    Query  filter(FilterPredicateFn fn, void* user_data = nullptr) &&;
+    Query filter(FilterPredicateFn fn, void* user_data = nullptr) &&;
 
     // ---- v1i: index-driven filters ------------------------------------
     //
@@ -155,9 +148,9 @@ public:
     // AsyncAwareIndex is auto-registered when the component is registered
     // with `AsyncAware{}`.
     template <typename T> Query& changed() &;
-    template <typename T> Query  changed() &&;
+    template <typename T> Query changed() &&;
     template <typename T> Query& skip_pending() &;
-    template <typename T> Query  skip_pending() &&;
+    template <typename T> Query skip_pending() &&;
 
     // ---- v1p: Reserved spatial DSL operators (ADR-0053 §6) ------------
     //
@@ -170,13 +163,17 @@ public:
     // without any caller code change.
     //
     // The shape is FROZEN by v1p: bounding-volume types are
-    // `crd::math::AABB<f32>` / `crd::math::Sphere<f32>` from
-    // `crd/math/geometry.hpp`. Adding a different bounding shape means
-    // a new operator (e.g. `.in_obb(...)`), not a signature change here.
-    Query& in_aabb(const crd::math::AABB<crd::f32>& box) &;
-    Query  in_aabb(const crd::math::AABB<crd::f32>& box) &&;
+    // `crd::geometry::primitives::AABB<f32>` (and a `Vec3<f32>` + radius pair
+    // for `within_radius`, conceptually a `Sphere<f32>`) from
+    // `<crd/geometry/primitives/primitives.hpp>`. (These moved out of crd-math
+    // into crd-geometry-primitives in Phase 3.1.7 v0a, ADR-0076 §13 — the
+    // signatures' *meaning* is unchanged, only the namespace.) Adding a
+    // different bounding shape means a new operator (e.g. `.in_obb(...)`), not
+    // a signature change here.
+    Query& in_aabb(const crd::geometry::primitives::AABB<crd::f32>& box) &;
+    Query in_aabb(const crd::geometry::primitives::AABB<crd::f32>& box) &&;
     Query& within_radius(const crd::math::Vec3<crd::f32>& center, crd::f32 radius) &;
-    Query  within_radius(const crd::math::Vec3<crd::f32>& center, crd::f32 radius) &&;
+    Query within_radius(const crd::math::Vec3<crd::f32>& center, crd::f32 radius) &&;
 
     // ---- Chunk-level visitor ------------------------------------------
 
@@ -205,7 +202,7 @@ public:
 
     private:
         const Query* m_query;
-        crd::usize   m_index;
+        crd::usize m_index;
     };
 
     [[nodiscard]] Iterator begin();
@@ -213,11 +210,11 @@ public:
 
     // ---- Diagnostics ---------------------------------------------------
 
-    [[nodiscard]] crd::u32                                  count();
-    [[nodiscard]] const crd::containers::Array<EntityId>&   matches();
+    [[nodiscard]] crd::u32 count();
+    [[nodiscard]] const crd::containers::Array<EntityId>& matches();
 
     [[nodiscard]] const World& world() const noexcept { return *m_world; }
-    [[nodiscard]] World&       world() noexcept { return *m_world; }
+    [[nodiscard]] World& world() noexcept { return *m_world; }
 
 private:
     void invalidate_cache() noexcept { m_materialised = false; }
@@ -228,13 +225,13 @@ private:
 
     ComponentMask m_required{};
     ComponentMask m_forbidden{};
-    crd::containers::Array<RelationFilter>     m_relations;
-    crd::containers::Array<PredicateFilter>    m_predicates;
+    crd::containers::Array<RelationFilter> m_relations;
+    crd::containers::Array<PredicateFilter> m_predicates;
     crd::containers::Array<ChangeDetectFilter> m_change_filters;
-    crd::containers::Array<SkipPendingFilter>  m_skip_pending_filters;
+    crd::containers::Array<SkipPendingFilter> m_skip_pending_filters;
 
     crd::containers::Array<EntityId> m_match_cache;
-    bool                             m_materialised = false;
+    bool m_materialised = false;
 };
 
 } // namespace crd::scene

@@ -49,6 +49,7 @@ add_executable(smoke_math
 target_link_libraries(smoke_math PRIVATE
     crd-core
     crd-math
+    crd-geometry-primitives
 )
 crd_enable_default_pch(smoke_math)
 

@@ -13,15 +13,15 @@
 #include <crd/scene/component_index.hpp>
 #include <crd/scene/component_registry.hpp>
 #include <crd/scene/entity.hpp>
+#include <crd/scene/obek.hpp>
 #include <crd/scene/query.hpp>
 #include <crd/scene/relation.hpp>
 #include <crd/scene/reserved_indexes.hpp>
+#include <crd/scene/scene_resource.hpp>
 #include <crd/scene/slot_map.hpp>
 #include <crd/scene/sparse_set_storage.hpp>
 #include <crd/scene/storage_backend.hpp>
 #include <crd/scene/storage_event_sink.hpp>
-#include <crd/scene/obek.hpp>
-#include <crd/scene/scene_resource.hpp>
 #include <crd/scene/system.hpp>
 #include <crd/scene/transform.hpp>
 
@@ -33,8 +33,14 @@
 // `detail::Counter` in <crd/jobs/jobs.hpp>; matching that shape here lets
 // TUs that include both world.hpp and jobs.hpp coexist without the alias
 // conflicting with a class-style forward declaration.
-namespace crd::jobs::detail { struct Counter; }
-namespace crd::jobs { using Counter = detail::Counter; }
+namespace crd::jobs::detail
+{
+struct Counter;
+}
+namespace crd::jobs
+{
+using Counter = detail::Counter;
+}
 
 namespace crd::scene
 {
@@ -118,10 +124,7 @@ public:
     // backend allocates through this. Exposed for higher-level constructs
     // (Query, future System helpers) that want to extend the chain rather
     // than fall back to default_allocator.
-    [[nodiscard]] crd::memory::IAllocator* allocator() const noexcept
-    {
-        return m_pending_destroy.allocator();
-    }
+    [[nodiscard]] crd::memory::IAllocator* allocator() const noexcept { return m_pending_destroy.allocator(); }
 
     // ---- Typed component API (Phase 3.0 v1c2; ADR-0050) ---------------
     //
@@ -301,10 +304,8 @@ public:
     // v1m1 ships the basic restore + reparent path; v1m2 layers override
     // patches; v1m3 lights up nested öbek sub-instance tracking; v1m5
     // adds unpack / revert APIs.
-    [[nodiscard]] ObekInstantiation instantiate_obek(
-        const ObekResource& res,
-        EntityId parent = EntityId::null(),
-        crd::containers::ConstSpan<ObekOverride> overrides = {});
+    [[nodiscard]] ObekInstantiation instantiate_obek(const ObekResource& res, EntityId parent = EntityId::null(),
+                                                     crd::containers::ConstSpan<ObekOverride> overrides = {});
 
     // ---- v1m5a — revert / unpack / enumerate APIs (ADR-0058 pillar 7) ---
     //
@@ -319,8 +320,8 @@ public:
     // Revert a specific byte range within a component on the entity at
     // `file_idx` to the value baked at instantiation time (source +
     // cook-time overrides). Out-of-range or unknown component → no-op.
-    void revert_field(ObekInstantiation& inst, crd::u32 file_idx, crd::u32 component_fourcc,
-                      crd::u32 field_offset, crd::u32 field_size);
+    void revert_field(ObekInstantiation& inst, crd::u32 file_idx, crd::u32 component_fourcc, crd::u32 field_offset,
+                      crd::u32 field_size);
 
     // Revert the whole component (every byte) on the entity at `file_idx`.
     void revert_component(ObekInstantiation& inst, crd::u32 file_idx, crd::u32 component_fourcc);
@@ -347,7 +348,7 @@ public:
     // has been unpacked. Used by editor "override window" UIs to display
     // what overrides exist on a given instance.
     [[nodiscard]] crd::containers::ConstSpan<ObekOverrideRecord>
-        enumerate_overrides(const ObekInstantiation& inst) const noexcept;
+    enumerate_overrides(const ObekInstantiation& inst) const noexcept;
 
     // ---- v1m5b — AAAA-tier batch instantiation (ADR-0058 pillar 15a) ---
     //
@@ -366,11 +367,8 @@ public:
     //
     // Each call returns a unique `ObekBatchHandle`. v1m5b uses a monotonic
     // per-World counter; no persistence concerns.
-    [[nodiscard]] ObekBatchHandle instantiate_obek_batch(
-        const ObekResource& res,
-        crd::u32 count,
-        EntityId parent = EntityId::null(),
-        BatchHints hints = {});
+    [[nodiscard]] ObekBatchHandle instantiate_obek_batch(const ObekResource& res, crd::u32 count,
+                                                         EntityId parent = EntityId::null(), BatchHints hints = {});
 
     // ---- Transform writer API (Phase 3.0 v1j, ADR-0054) ----------------
     //
@@ -414,7 +412,7 @@ public:
     // Whole-transform setters.
     void set_local(EntityId e, const crd::math::Vec3f& translation, const crd::math::Quatf& rotation,
                    const crd::math::Vec3f& scale = crd::math::Vec3f{static_cast<crd::f32>(1), static_cast<crd::f32>(1),
-                                                                   static_cast<crd::f32>(1)});
+                                                                    static_cast<crd::f32>(1)});
 
     // set_world(world) — best-effort decompose; CRD_ASSERT in debug on
     // singular matrix. Negative-determinant succeeds with X-scale negated
@@ -472,8 +470,7 @@ public:
     // onto the worklist — recursion is iterative, so a 100-deep ChildOf tree
     // never overflows the stack.
 
-    template <typename Tag, typename... Traits>
-    ComponentId register_relation(Traits&&... traits)
+    template <typename Tag, typename... Traits> ComponentId register_relation(Traits&&... traits)
     {
         // Forward to the component registry; trait dispatchers in
         // component_registry.hpp set the relation flags on ComponentInfo.
@@ -716,10 +713,7 @@ public:
     // tooling code that builds id-driven mutations (editor undo/redo,
     // serialisation, scripting) can call them.
 
-    [[nodiscard]] IStorageBackend& backend_for_public(ComponentId id) noexcept
-    {
-        return backend_for(id);
-    }
+    [[nodiscard]] IStorageBackend& backend_for_public(ComponentId id) noexcept { return backend_for(id); }
 
     void add_relation_via_id(ComponentId relation_id, EntityId src, EntityId target)
     {
@@ -884,12 +878,8 @@ private:
 
 template <typename... Cs>
 Query<Cs...>::Query(World& world)
-    : m_world(&world),
-      m_relations(world.allocator()),
-      m_predicates(world.allocator()),
-      m_change_filters(world.allocator()),
-      m_skip_pending_filters(world.allocator()),
-      m_match_cache(world.allocator())
+    : m_world(&world), m_relations(world.allocator()), m_predicates(world.allocator()),
+      m_change_filters(world.allocator()), m_skip_pending_filters(world.allocator()), m_match_cache(world.allocator())
 {
     // Stamp Cs... into the required mask. Each Cs must be a registered
     // component type by the time the query is constructed; the DSL is
@@ -905,8 +895,7 @@ Query<Cs...>::Query(World& world)
     }
 }
 
-template <typename... Cs>
-template <typename T> Query<Cs...>& Query<Cs...>::with() &
+template <typename... Cs> template <typename T> Query<Cs...>& Query<Cs...>::with() &
 {
     const ComponentId id = m_world->components().template id_of<T>();
     CRD_ASSERT(!id.is_null() && "Query::with<T>: T must be a registered component type");
@@ -915,15 +904,13 @@ template <typename T> Query<Cs...>& Query<Cs...>::with() &
     return *this;
 }
 
-template <typename... Cs>
-template <typename T> Query<Cs...> Query<Cs...>::with() &&
+template <typename... Cs> template <typename T> Query<Cs...> Query<Cs...>::with() &&
 {
     this->template with<T>();
     return std::move(*this);
 }
 
-template <typename... Cs>
-template <typename T> Query<Cs...>& Query<Cs...>::without() &
+template <typename... Cs> template <typename T> Query<Cs...>& Query<Cs...>::without() &
 {
     const ComponentId id = m_world->components().template id_of<T>();
     CRD_ASSERT(!id.is_null() && "Query::without<T>: T must be a registered component type");
@@ -932,15 +919,13 @@ template <typename T> Query<Cs...>& Query<Cs...>::without() &
     return *this;
 }
 
-template <typename... Cs>
-template <typename T> Query<Cs...> Query<Cs...>::without() &&
+template <typename... Cs> template <typename T> Query<Cs...> Query<Cs...>::without() &&
 {
     this->template without<T>();
     return std::move(*this);
 }
 
-template <typename... Cs>
-template <typename Tag> Query<Cs...>& Query<Cs...>::with_relation(EntityId target) &
+template <typename... Cs> template <typename Tag> Query<Cs...>& Query<Cs...>::with_relation(EntityId target) &
 {
     const ComponentId id = m_world->components().template id_of<Relation<Tag>>();
     CRD_ASSERT(!id.is_null() && "Query::with_relation<Tag>: Relation<Tag> must be a registered relation");
@@ -949,15 +934,13 @@ template <typename Tag> Query<Cs...>& Query<Cs...>::with_relation(EntityId targe
     return *this;
 }
 
-template <typename... Cs>
-template <typename Tag> Query<Cs...> Query<Cs...>::with_relation(EntityId target) &&
+template <typename... Cs> template <typename Tag> Query<Cs...> Query<Cs...>::with_relation(EntityId target) &&
 {
     this->template with_relation<Tag>(target);
     return std::move(*this);
 }
 
-template <typename... Cs>
-Query<Cs...>& Query<Cs...>::filter(FilterPredicateFn fn, void* user_data) &
+template <typename... Cs> Query<Cs...>& Query<Cs...>::filter(FilterPredicateFn fn, void* user_data) &
 {
     if (fn != nullptr)
     {
@@ -967,15 +950,13 @@ Query<Cs...>& Query<Cs...>::filter(FilterPredicateFn fn, void* user_data) &
     return *this;
 }
 
-template <typename... Cs>
-Query<Cs...> Query<Cs...>::filter(FilterPredicateFn fn, void* user_data) &&
+template <typename... Cs> Query<Cs...> Query<Cs...>::filter(FilterPredicateFn fn, void* user_data) &&
 {
     this->filter(fn, user_data);
     return std::move(*this);
 }
 
-template <typename... Cs>
-template <typename T> Query<Cs...>& Query<Cs...>::changed() &
+template <typename... Cs> template <typename T> Query<Cs...>& Query<Cs...>::changed() &
 {
     const ComponentId id = m_world->components().template id_of<T>();
     CRD_ASSERT(!id.is_null() && "Query::changed<T>: T must be a registered component type");
@@ -988,15 +969,13 @@ template <typename T> Query<Cs...>& Query<Cs...>::changed() &
     return *this;
 }
 
-template <typename... Cs>
-template <typename T> Query<Cs...> Query<Cs...>::changed() &&
+template <typename... Cs> template <typename T> Query<Cs...> Query<Cs...>::changed() &&
 {
     this->template changed<T>();
     return std::move(*this);
 }
 
-template <typename... Cs>
-template <typename T> Query<Cs...>& Query<Cs...>::skip_pending() &
+template <typename... Cs> template <typename T> Query<Cs...>& Query<Cs...>::skip_pending() &
 {
     const ComponentId id = m_world->components().template id_of<T>();
     CRD_ASSERT(!id.is_null() && "Query::skip_pending<T>: T must be a registered component type");
@@ -1011,8 +990,7 @@ template <typename T> Query<Cs...>& Query<Cs...>::skip_pending() &
     return *this;
 }
 
-template <typename... Cs>
-template <typename T> Query<Cs...> Query<Cs...>::skip_pending() &&
+template <typename... Cs> template <typename T> Query<Cs...> Query<Cs...>::skip_pending() &&
 {
     this->template skip_pending<T>();
     return std::move(*this);
@@ -1026,11 +1004,13 @@ template <typename T> Query<Cs...> Query<Cs...>::skip_pending() &&
 // entity matching the required components (no per-entity bounds test).
 // When Phase 3.5 ships the real BVH, the operators start filtering
 // without any caller code change. The argument types
-// (`crd::math::AABB<f32>` / `Vec3<f32>` + `f32`) are FROZEN: a different
-// bounding shape ships as a new operator, never as a signature change.
+// (`crd::geometry::primitives::AABB<f32>` / `Vec3<f32>` + `f32`) are FROZEN: a
+// different bounding shape ships as a new operator, never as a signature change.
+// (The AABB type moved out of crd-math into crd-geometry-primitives in Phase
+// 3.1.7 v0a, ADR-0076 §13 — namespace change only, not a signature change.)
 
 template <typename... Cs>
-Query<Cs...>& Query<Cs...>::in_aabb(const crd::math::AABB<crd::f32>& /*box*/) &
+Query<Cs...>& Query<Cs...>::in_aabb(const crd::geometry::primitives::AABB<crd::f32>& /*box*/) &
 {
     // v1p reservation: SpatialBVHIndex is a no-op stub; passing through
     // every match is the contracted behaviour. No per-entity filter is
@@ -1040,47 +1020,40 @@ Query<Cs...>& Query<Cs...>::in_aabb(const crd::math::AABB<crd::f32>& /*box*/) &
     return *this;
 }
 
-template <typename... Cs>
-Query<Cs...> Query<Cs...>::in_aabb(const crd::math::AABB<crd::f32>& box) &&
+template <typename... Cs> Query<Cs...> Query<Cs...>::in_aabb(const crd::geometry::primitives::AABB<crd::f32>& box) &&
 {
     this->in_aabb(box);
     return std::move(*this);
 }
 
 template <typename... Cs>
-Query<Cs...>& Query<Cs...>::within_radius(
-    const crd::math::Vec3<crd::f32>& /*center*/, crd::f32 /*radius*/) &
+Query<Cs...>& Query<Cs...>::within_radius(const crd::math::Vec3<crd::f32>& /*center*/, crd::f32 /*radius*/) &
 {
     // Same passthrough contract as in_aabb — see comment above.
     return *this;
 }
 
 template <typename... Cs>
-Query<Cs...> Query<Cs...>::within_radius(
-    const crd::math::Vec3<crd::f32>& center, crd::f32 radius) &&
+Query<Cs...> Query<Cs...>::within_radius(const crd::math::Vec3<crd::f32>& center, crd::f32 radius) &&
 {
     this->within_radius(center, radius);
     return std::move(*this);
 }
 
-template <typename... Cs>
-void Query<Cs...>::for_each_chunk(ChunkVisitor fn, void* user_data)
+template <typename... Cs> void Query<Cs...>::for_each_chunk(ChunkVisitor fn, void* user_data)
 {
     drive_filtered_chunks(fn, user_data);
 }
 
-template <typename... Cs>
-void Query<Cs...>::drive_filtered_chunks(ChunkVisitor fn, void* user_data)
+template <typename... Cs> void Query<Cs...>::drive_filtered_chunks(ChunkVisitor fn, void* user_data)
 {
-    run_query_pipeline(*m_world, m_required, m_forbidden, m_relations.data(),
-                       static_cast<crd::u32>(m_relations.size()), m_change_filters.data(),
-                       static_cast<crd::u32>(m_change_filters.size()), m_skip_pending_filters.data(),
-                       static_cast<crd::u32>(m_skip_pending_filters.size()), m_predicates.data(),
-                       static_cast<crd::u32>(m_predicates.size()), fn, user_data);
+    run_query_pipeline(*m_world, m_required, m_forbidden, m_relations.data(), static_cast<crd::u32>(m_relations.size()),
+                       m_change_filters.data(), static_cast<crd::u32>(m_change_filters.size()),
+                       m_skip_pending_filters.data(), static_cast<crd::u32>(m_skip_pending_filters.size()),
+                       m_predicates.data(), static_cast<crd::u32>(m_predicates.size()), fn, user_data);
 }
 
-template <typename... Cs>
-void Query<Cs...>::materialise()
+template <typename... Cs> void Query<Cs...>::materialise()
 {
     m_match_cache.clear();
     drive_filtered_chunks(
@@ -1096,8 +1069,7 @@ void Query<Cs...>::materialise()
     m_materialised = true;
 }
 
-template <typename... Cs>
-typename Query<Cs...>::Iterator Query<Cs...>::begin()
+template <typename... Cs> typename Query<Cs...>::Iterator Query<Cs...>::begin()
 {
     if (!m_materialised)
     {
@@ -1106,8 +1078,7 @@ typename Query<Cs...>::Iterator Query<Cs...>::begin()
     return Iterator{this, 0U};
 }
 
-template <typename... Cs>
-typename Query<Cs...>::Iterator Query<Cs...>::end()
+template <typename... Cs> typename Query<Cs...>::Iterator Query<Cs...>::end()
 {
     if (!m_materialised)
     {
@@ -1116,8 +1087,7 @@ typename Query<Cs...>::Iterator Query<Cs...>::end()
     return Iterator{this, m_match_cache.size()};
 }
 
-template <typename... Cs>
-crd::u32 Query<Cs...>::count()
+template <typename... Cs> crd::u32 Query<Cs...>::count()
 {
     if (!m_materialised)
     {
@@ -1126,8 +1096,7 @@ crd::u32 Query<Cs...>::count()
     return static_cast<crd::u32>(m_match_cache.size());
 }
 
-template <typename... Cs>
-const crd::containers::Array<EntityId>& Query<Cs...>::matches()
+template <typename... Cs> const crd::containers::Array<EntityId>& Query<Cs...>::matches()
 {
     if (!m_materialised)
     {
@@ -1136,8 +1105,7 @@ const crd::containers::Array<EntityId>& Query<Cs...>::matches()
     return m_match_cache;
 }
 
-template <typename... Cs>
-auto Query<Cs...>::Iterator::operator*() const
+template <typename... Cs> auto Query<Cs...>::Iterator::operator*() const
 {
     EntityId e = m_query->m_match_cache[m_index];
     return std::tuple<EntityId, Cs&...>{e, *m_query->m_world->template get_component_mut<Cs>(e)...};
@@ -1163,8 +1131,7 @@ template <typename... Ts> struct ComponentSetMaskHelper<ComponentSet<Ts...>>
 };
 } // namespace detail
 
-template <typename Set>
-ComponentMask World::component_set_mask() const noexcept
+template <typename Set> ComponentMask World::component_set_mask() const noexcept
 {
     return detail::ComponentSetMaskHelper<Set>::compute(m_components);
 }
@@ -1175,9 +1142,9 @@ template <typename T> void Commands::add_component(EntityId e, T value)
     CRD_ASSERT(!id.is_null() && "Commands::add_component<T>: T must be registered");
     const ComponentInfo* info = m_world->components().info(id);
     Command cmd{};
-    cmd.kind      = CommandKind::AddComponent;
+    cmd.kind = CommandKind::AddComponent;
     cmd.component = id;
-    cmd.entity    = e;
+    cmd.entity = e;
     enqueue_with_payload(cmd, &value, info);
 }
 
@@ -1189,9 +1156,9 @@ template <typename T> void Commands::remove_component(EntityId e)
         return; // un-registered T → noop, matches World::remove_component
     }
     Command cmd{};
-    cmd.kind      = CommandKind::RemoveComponent;
+    cmd.kind = CommandKind::RemoveComponent;
     cmd.component = id;
-    cmd.entity    = e;
+    cmd.entity = e;
     enqueue(cmd);
 }
 
@@ -1207,9 +1174,9 @@ template <typename Tag> void Commands::add_relation(EntityId src, EntityId targe
     const ComponentId id = m_world->components().template id_of<Relation<Tag>>();
     CRD_ASSERT(!id.is_null() && "Commands::add_relation<Tag>: Relation<Tag> must be registered");
     Command cmd{};
-    cmd.kind            = CommandKind::AddRelation;
-    cmd.component       = id;
-    cmd.entity          = src;
+    cmd.kind = CommandKind::AddRelation;
+    cmd.component = id;
+    cmd.entity = src;
     cmd.relation_target = target;
     enqueue(cmd);
 }
@@ -1222,9 +1189,9 @@ template <typename Tag> void Commands::remove_relation(EntityId src)
         return;
     }
     Command cmd{};
-    cmd.kind      = CommandKind::RemoveRelation;
+    cmd.kind = CommandKind::RemoveRelation;
     cmd.component = id;
-    cmd.entity    = src;
+    cmd.entity = src;
     enqueue(cmd);
 }
 
@@ -1312,8 +1279,8 @@ namespace detail
 struct ChangedSinceCtx
 {
     const ChangeDetectIndex* index;
-    ComponentId              component;
-    crd::u32                 since_frame;
+    ComponentId component;
+    crd::u32 since_frame;
 };
 
 inline bool changed_since_predicate(EntityId e, const World*, void* ud)
@@ -1325,7 +1292,7 @@ inline bool changed_since_predicate(EntityId e, const World*, void* ud)
 struct SkipPendingCtx
 {
     const AsyncAwareIndex* index;
-    ComponentId            component;
+    ComponentId component;
 };
 
 inline bool skip_pending_predicate(EntityId e, const World*, void* ud)

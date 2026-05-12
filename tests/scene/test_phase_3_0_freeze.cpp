@@ -35,7 +35,6 @@
 #include <crd/scene/world.hpp>
 
 #include <catch2/catch_test_macros.hpp>
-
 #include <type_traits>
 
 namespace
@@ -43,11 +42,26 @@ namespace
 
 // Per-test component types. Each carries one reserved trait so the
 // auto-register pathway picks up the matching no-op shell index.
-struct CompHistorical { crd::f32 v = 0.0F; };
-struct CompSpatial    { crd::f32 v = 0.0F; };
-struct CompGpuBound   { crd::f32 v = 0.0F; };
-struct CompReplicated { crd::f32 v = 0.0F; };
-struct CompReflected  { crd::f32 v = 0.0F; };
+struct CompHistorical
+{
+    crd::f32 v = 0.0F;
+};
+struct CompSpatial
+{
+    crd::f32 v = 0.0F;
+};
+struct CompGpuBound
+{
+    crd::f32 v = 0.0F;
+};
+struct CompReplicated
+{
+    crd::f32 v = 0.0F;
+};
+struct CompReflected
+{
+    crd::f32 v = 0.0F;
+};
 struct CompAllReserved
 {
     // One component carrying every reserved trait at once. Verifies the
@@ -82,31 +96,29 @@ TEST_CASE("v1p: every reserved trait is accepted by register_component "
     crd::scene::World world{crd::memory::default_allocator()};
 
     // History{N>0} → history_window stored.
-    const auto cid_h = world.register_component<CompHistorical>(
-        crd::scene::StorageHint::Archetype, crd::scene::History{60});
+    const auto cid_h =
+        world.register_component<CompHistorical>(crd::scene::StorageHint::Archetype, crd::scene::History{60});
     REQUIRE(!cid_h.is_null());
     CHECK(world.component_info(cid_h)->history_window == 60U);
 
     // SpatialBVH{} → spatial_bvh flag.
-    const auto cid_s = world.register_component<CompSpatial>(
-        crd::scene::StorageHint::Archetype, crd::scene::SpatialBVH{});
+    const auto cid_s =
+        world.register_component<CompSpatial>(crd::scene::StorageHint::Archetype, crd::scene::SpatialBVH{});
     CHECK(world.component_info(cid_s)->spatial_bvh);
 
     // GpuResident{} → gpu_resident flag.
-    const auto cid_g = world.register_component<CompGpuBound>(
-        crd::scene::StorageHint::Archetype, crd::scene::GpuResident{});
+    const auto cid_g =
+        world.register_component<CompGpuBound>(crd::scene::StorageHint::Archetype, crd::scene::GpuResident{});
     CHECK(world.component_info(cid_g)->gpu_resident);
 
     // Replication::ServerAuthoritative → replication enum.
-    const auto cid_r = world.register_component<CompReplicated>(
-        crd::scene::StorageHint::Archetype,
-        crd::scene::Replication::ServerAuthoritative);
-    CHECK(world.component_info(cid_r)->replication
-          == crd::scene::Replication::ServerAuthoritative);
+    const auto cid_r = world.register_component<CompReplicated>(crd::scene::StorageHint::Archetype,
+                                                                crd::scene::Replication::ServerAuthoritative);
+    CHECK(world.component_info(cid_r)->replication == crd::scene::Replication::ServerAuthoritative);
 
     // Reflection{...} → reflection record stored.
-    const auto cid_x = world.register_component<CompReflected>(
-        crd::scene::StorageHint::Archetype, make_dummy_reflection());
+    const auto cid_x =
+        world.register_component<CompReflected>(crd::scene::StorageHint::Archetype, make_dummy_reflection());
     CHECK(world.component_info(cid_x)->reflection.fields != nullptr);
 }
 
@@ -117,25 +129,20 @@ TEST_CASE("v1p: registering all reserved traits at once on a single "
     crd::scene::World world{crd::memory::default_allocator()};
 
     const auto cid = world.register_component<CompAllReserved>(
-        crd::scene::StorageHint::Archetype,
-        crd::scene::AsyncAware{},
-        crd::scene::History{8},
-        crd::scene::SpatialBVH{},
-        crd::scene::GpuResident{},
-        crd::scene::Replication::ClientPredicted,
-        make_dummy_reflection());
+        crd::scene::StorageHint::Archetype, crd::scene::AsyncAware{}, crd::scene::History{8}, crd::scene::SpatialBVH{},
+        crd::scene::GpuResident{}, crd::scene::Replication::ClientPredicted, make_dummy_reflection());
     REQUIRE(!cid.is_null());
 
     // ChangeDetect always auto-registers (every component is observable).
     REQUIRE(world.find_index<crd::scene::ChangeDetectIndex>() != nullptr);
 
     // The other five fire only because their trait was set.
-    REQUIRE(world.find_index<crd::scene::AsyncAwareIndex>()   != nullptr);
-    REQUIRE(world.find_index<crd::scene::HistoryIndex>()      != nullptr);
-    REQUIRE(world.find_index<crd::scene::SpatialBVHIndex>()   != nullptr);
-    REQUIRE(world.find_index<crd::scene::GpuResidentIndex>()  != nullptr);
-    REQUIRE(world.find_index<crd::scene::ReplicationIndex>()  != nullptr);
-    REQUIRE(world.find_index<crd::scene::ReflectionIndex>()   != nullptr);
+    REQUIRE(world.find_index<crd::scene::AsyncAwareIndex>() != nullptr);
+    REQUIRE(world.find_index<crd::scene::HistoryIndex>() != nullptr);
+    REQUIRE(world.find_index<crd::scene::SpatialBVHIndex>() != nullptr);
+    REQUIRE(world.find_index<crd::scene::GpuResidentIndex>() != nullptr);
+    REQUIRE(world.find_index<crd::scene::ReplicationIndex>() != nullptr);
+    REQUIRE(world.find_index<crd::scene::ReflectionIndex>() != nullptr);
 }
 
 // =====================================================================
@@ -150,18 +157,16 @@ TEST_CASE("v1p: ScriptComponent is a regular registrable component, not a "
 
     // ADR-0056 §2: ScriptComponent registers as a normal component with
     // SparseSet hint (sparse across the world; few entities script).
-    const auto cid = world.register_component<crd::scene::ScriptComponent>(
-        crd::scene::StorageHint::SparseSet);
+    const auto cid = world.register_component<crd::scene::ScriptComponent>(crd::scene::StorageHint::SparseSet);
     REQUIRE(!cid.is_null());
-    CHECK(world.component_info(cid)->storage_hint
-          == crd::scene::StorageHint::SparseSet);
-    CHECK(world.component_info(cid)->size      == sizeof(crd::scene::ScriptComponent));
+    CHECK(world.component_info(cid)->storage_hint == crd::scene::StorageHint::SparseSet);
+    CHECK(world.component_info(cid)->size == sizeof(crd::scene::ScriptComponent));
     CHECK(world.component_info(cid)->alignment == alignof(crd::scene::ScriptComponent));
 
     // Round-trip an inert script attachment (handle = 0 = "no script").
     const auto e = world.spawn();
-    world.add_component<crd::scene::ScriptComponent>(
-        e, crd::scene::ScriptComponent{crd::scene::ScriptHandle{}, 0U, 0U});
+    world.add_component<crd::scene::ScriptComponent>(e,
+                                                     crd::scene::ScriptComponent{crd::scene::ScriptHandle{}, 0U, 0U});
 
     const auto* sc = world.get_component<crd::scene::ScriptComponent>(e);
     REQUIRE(sc != nullptr);
@@ -178,8 +183,7 @@ TEST_CASE("v1p: .in_aabb / .within_radius compile, chain, and pass through "
           "[scene][v1p][freeze][query][spatial]")
 {
     crd::scene::World world{crd::memory::default_allocator()};
-    world.register_component<CompSpatial>(
-        crd::scene::StorageHint::SparseSet, crd::scene::SpatialBVH{});
+    world.register_component<CompSpatial>(crd::scene::StorageHint::SparseSet, crd::scene::SpatialBVH{});
 
     const auto e1 = world.spawn();
     const auto e2 = world.spawn();
@@ -190,12 +194,13 @@ TEST_CASE("v1p: .in_aabb / .within_radius compile, chain, and pass through "
 
     // .in_aabb passthrough: every entity matches.
     {
-        const crd::math::AABB<crd::f32> box{
-            crd::math::Vec3f{-1, -1, -1}, crd::math::Vec3f{1, 1, 1}};
+        const crd::geometry::primitives::AABB<crd::f32> box{crd::math::Vec3f{-1, -1, -1}, crd::math::Vec3f{1, 1, 1}};
         crd::u32 count = 0;
         for (auto&& [e, c] : world.query<CompSpatial>().in_aabb(box))
         {
-            (void)e; (void)c; ++count;
+            (void)e;
+            (void)c;
+            ++count;
         }
         CHECK(count == 3U);
     }
@@ -203,24 +208,25 @@ TEST_CASE("v1p: .in_aabb / .within_radius compile, chain, and pass through "
     // .within_radius passthrough: every entity matches.
     {
         crd::u32 count = 0;
-        for (auto&& [e, c] : world.query<CompSpatial>()
-                                  .within_radius(crd::math::Vec3f{0, 0, 0}, 100.0F))
+        for (auto&& [e, c] : world.query<CompSpatial>().within_radius(crd::math::Vec3f{0, 0, 0}, 100.0F))
         {
-            (void)e; (void)c; ++count;
+            (void)e;
+            (void)c;
+            ++count;
         }
         CHECK(count == 3U);
     }
 
     // Both chained — composition is part of the API freeze.
     {
-        const crd::math::AABB<crd::f32> box{
-            crd::math::Vec3f{-100, -100, -100}, crd::math::Vec3f{100, 100, 100}};
+        const crd::geometry::primitives::AABB<crd::f32> box{crd::math::Vec3f{-100, -100, -100},
+                                                            crd::math::Vec3f{100, 100, 100}};
         crd::u32 count = 0;
-        for (auto&& [e, c] : world.query<CompSpatial>()
-                                  .in_aabb(box)
-                                  .within_radius(crd::math::Vec3f{0, 0, 0}, 50.0F))
+        for (auto&& [e, c] : world.query<CompSpatial>().in_aabb(box).within_radius(crd::math::Vec3f{0, 0, 0}, 50.0F))
         {
-            (void)e; (void)c; ++count;
+            (void)e;
+            (void)c;
+            ++count;
         }
         CHECK(count == 3U);
     }
@@ -243,66 +249,57 @@ TEST_CASE("v1p: .in_aabb / .within_radius compile, chain, and pass through "
 // re-cooked.
 
 // ---- Öbek (ADR-0058) ----
-static_assert(sizeof(crd::scene::ObekInfo)                == 24U,
-              "ObekInfo size pinned at 24 bytes for OBEK schema v1");
-static_assert(sizeof(crd::scene::ObekComponentDescriptor) == 32U,
-              "ObekComponentDescriptor size pinned at 32 bytes");
-static_assert(sizeof(crd::scene::ObekEntityRecord)        == 16U,
-              "ObekEntityRecord size pinned at 16 bytes");
-static_assert(sizeof(crd::scene::ObekRelationRecord)      == 16U,
-              "ObekRelationRecord size pinned at 16 bytes");
-static_assert(sizeof(crd::scene::ObekChainEntryRecord)    == 24U,
-              "ObekChainEntryRecord size pinned at 24 bytes");
+static_assert(sizeof(crd::scene::ObekInfo) == 24U, "ObekInfo size pinned at 24 bytes for OBEK schema v1");
+static_assert(sizeof(crd::scene::ObekComponentDescriptor) == 32U, "ObekComponentDescriptor size pinned at 32 bytes");
+static_assert(sizeof(crd::scene::ObekEntityRecord) == 16U, "ObekEntityRecord size pinned at 16 bytes");
+static_assert(sizeof(crd::scene::ObekRelationRecord) == 16U, "ObekRelationRecord size pinned at 16 bytes");
+static_assert(sizeof(crd::scene::ObekChainEntryRecord) == 24U, "ObekChainEntryRecord size pinned at 24 bytes");
 static_assert(crd::scene::kObekSchemaVersion == 1U,
               "Öbek schema version pinned at 1 — bump on any record-layout change");
 
 // ---- Preset (ADR-0059) ----
-static_assert(sizeof(crd::preset::QualityPreset)  == 144U,
+static_assert(sizeof(crd::preset::QualityPreset) == 144U,
               "QualityPreset size pinned at 144 bytes (v2 layout — repurposed _reserved byte)");
 static_assert(alignof(crd::preset::QualityPreset) == 8U);
-static_assert(crd::preset::QualityPreset::version == 2U,
-              "QualityPreset version pinned at 2 (v1o3); bump on field add");
+static_assert(crd::preset::QualityPreset::version == 2U, "QualityPreset version pinned at 2 (v1o3); bump on field add");
 
-static_assert(sizeof(crd::preset::CameraPreset)   == 40U,
-              "CameraPreset size pinned at 40 bytes for v1");
-static_assert(alignof(crd::preset::CameraPreset)  == 4U);
-static_assert(crd::preset::CameraPreset::version  == 1U);
+static_assert(sizeof(crd::preset::CameraPreset) == 40U, "CameraPreset size pinned at 40 bytes for v1");
+static_assert(alignof(crd::preset::CameraPreset) == 4U);
+static_assert(crd::preset::CameraPreset::version == 1U);
 
 // ---- Profile (ADR-0060) ----
-static_assert(sizeof(crd::profile::ProfileFileInfo) == 16U,
-              "ProfileFileInfo size pinned at 16 bytes for PROF v1");
+static_assert(sizeof(crd::profile::ProfileFileInfo) == 16U, "ProfileFileInfo size pinned at 16 bytes for PROF v1");
 static_assert(sizeof(crd::profile::PredicateRecord) == 8U,
               "PredicateRecord size pinned at 8 bytes — predicate schema is closed");
 static_assert(alignof(crd::profile::PredicateRecord) == 4U);
 
 // ---- Closed enum value-pinning (ADR-0058 / 0060) ----
-static_assert(static_cast<crd::u8>(crd::scene::InheritPolicy::Override)    == 0U);
-static_assert(static_cast<crd::u8>(crd::scene::InheritPolicy::Inherit)     == 1U);
+static_assert(static_cast<crd::u8>(crd::scene::InheritPolicy::Override) == 0U);
+static_assert(static_cast<crd::u8>(crd::scene::InheritPolicy::Inherit) == 1U);
 static_assert(static_cast<crd::u8>(crd::scene::InheritPolicy::DontInherit) == 2U);
 
-static_assert(static_cast<crd::u8>(crd::scene::Replication::Local)               == 0U);
+static_assert(static_cast<crd::u8>(crd::scene::Replication::Local) == 0U);
 static_assert(static_cast<crd::u8>(crd::scene::Replication::ServerAuthoritative) == 1U);
-static_assert(static_cast<crd::u8>(crd::scene::Replication::ClientPredicted)     == 2U);
-static_assert(static_cast<crd::u8>(crd::scene::Replication::Remote)              == 3U);
+static_assert(static_cast<crd::u8>(crd::scene::Replication::ClientPredicted) == 2U);
+static_assert(static_cast<crd::u8>(crd::scene::Replication::Remote) == 3U);
 
-static_assert(static_cast<crd::u8>(crd::profile::PredicateField::Os)        == 0U);
-static_assert(static_cast<crd::u8>(crd::profile::PredicateField::GpuTier)   == 1U);
-static_assert(static_cast<crd::u8>(crd::profile::PredicateField::Domain)    == 2U);
-static_assert(static_cast<crd::u8>(crd::profile::PredicateField::Mode)      == 3U);
+static_assert(static_cast<crd::u8>(crd::profile::PredicateField::Os) == 0U);
+static_assert(static_cast<crd::u8>(crd::profile::PredicateField::GpuTier) == 1U);
+static_assert(static_cast<crd::u8>(crd::profile::PredicateField::Domain) == 2U);
+static_assert(static_cast<crd::u8>(crd::profile::PredicateField::Mode) == 3U);
 static_assert(static_cast<crd::u8>(crd::profile::PredicateField::TargetFps) == 4U);
-static_assert(static_cast<crd::u8>(crd::profile::PredicateField::CpuCores)  == 5U);
+static_assert(static_cast<crd::u8>(crd::profile::PredicateField::CpuCores) == 5U);
 
-static_assert(static_cast<crd::u8>(crd::profile::PredicateOp::Equal)     == 0U);
+static_assert(static_cast<crd::u8>(crd::profile::PredicateOp::Equal) == 0U);
 static_assert(static_cast<crd::u8>(crd::profile::PredicateOp::GreaterEq) == 1U);
-static_assert(static_cast<crd::u8>(crd::profile::PredicateOp::LessEq)    == 2U);
-static_assert(static_cast<crd::u8>(crd::profile::PredicateOp::InMask)    == 3U);
+static_assert(static_cast<crd::u8>(crd::profile::PredicateOp::LessEq) == 2U);
+static_assert(static_cast<crd::u8>(crd::profile::PredicateOp::InMask) == 3U);
 
 // ---- ScriptComponent (ADR-0056 §2) ----
-static_assert(sizeof(crd::scene::ScriptHandle)    == 8U);
+static_assert(sizeof(crd::scene::ScriptHandle) == 8U);
 static_assert(sizeof(crd::scene::ScriptComponent) == 16U);
 
-TEST_CASE("v1p: API surface freeze static-asserts all hold (compile-time)",
-          "[scene][v1p][freeze][api]")
+TEST_CASE("v1p: API surface freeze static-asserts all hold (compile-time)", "[scene][v1p][freeze][api]")
 {
     // The asserts above run at translation-unit load. If any tripped,
     // the file would not have compiled. This case exists so the freeze

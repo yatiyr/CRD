@@ -14,12 +14,5 @@ target_link_libraries(crd-math
         crd-simd-flags
 )
 
-if(MSVC)
-    # Guarded reciprocal code in geometry helpers triggers a conservative
-    # C4723 path under LTCG in Release even though the runtime branch keeps
-    # the divisor non-zero. Scope the suppression to crd-math only.
-    target_compile_options(crd-math PUBLIC /wd4723)
-endif()
-
 target_compile_features(crd-math PUBLIC cxx_std_20)
 crd_enable_default_pch(crd-math)

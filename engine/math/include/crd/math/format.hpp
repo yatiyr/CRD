@@ -1,6 +1,10 @@
 #pragma once
 
-#include <crd/math/geometry.hpp>
+// std::format support for the core crd-math types (Vec / Mat / Quat / Transform).
+// The geometry-primitive formatters (Ray / Plane / Sphere / AABB / Triangle3 /
+// Frustum) moved to <crd/geometry/primitives/format.hpp> with their types
+// (Phase 3.1.7 v0a, ADR-0076 §13) — they reuse `detail::ScalarFormatter` from here.
+
 #include <crd/math/mat.hpp>
 #include <crd/math/quat.hpp>
 #include <crd/math/transform.hpp>
@@ -180,61 +184,6 @@ struct formatter<crd::math::Transform<T>, char> : crd::math::detail::ScalarForma
     template <typename FormatContext> auto format(const crd::math::Transform<T>& t, FormatContext& ctx) const
     {
         return std::format_to(ctx.out(), "Transform(t={}, r={})", t.translation, t.rotation);
-    }
-};
-
-template <crd::math::MathScalar T> struct formatter<crd::math::Ray<T>, char> : crd::math::detail::ScalarFormatter<T>
-{
-    constexpr auto parse(std::format_parse_context& ctx) { return ctx.begin(); }
-
-    template <typename FormatContext> auto format(const crd::math::Ray<T>& ray, FormatContext& ctx) const
-    {
-        return std::format_to(ctx.out(), "Ray(o={}, d={})", ray.origin, ray.direction);
-    }
-};
-
-template <crd::math::MathScalar T> struct formatter<crd::math::Plane<T>, char> : crd::math::detail::ScalarFormatter<T>
-{
-    template <typename FormatContext> auto format(const crd::math::Plane<T>& plane, FormatContext& ctx) const
-    {
-        return std::format_to(ctx.out(), "Plane(n={}, d={})", plane.normal, plane.d);
-    }
-};
-
-template <crd::math::MathScalar T> struct formatter<crd::math::Sphere<T>, char> : crd::math::detail::ScalarFormatter<T>
-{
-    template <typename FormatContext> auto format(const crd::math::Sphere<T>& sphere, FormatContext& ctx) const
-    {
-        return std::format_to(ctx.out(), "Sphere(c={}, r={})", sphere.center, sphere.radius);
-    }
-};
-
-template <crd::math::MathScalar T> struct formatter<crd::math::AABB<T>, char> : crd::math::detail::ScalarFormatter<T>
-{
-    template <typename FormatContext> auto format(const crd::math::AABB<T>& bounds, FormatContext& ctx) const
-    {
-        return std::format_to(ctx.out(), "AABB(min={}, max={})", bounds.min, bounds.max);
-    }
-};
-
-template <crd::math::MathScalar T>
-struct formatter<crd::math::Triangle<T>, char> : crd::math::detail::ScalarFormatter<T>
-{
-    template <typename FormatContext> auto format(const crd::math::Triangle<T>& tri, FormatContext& ctx) const
-    {
-        return std::format_to(ctx.out(), "Triangle(a={}, b={}, c={})", tri.a, tri.b, tri.c);
-    }
-};
-
-template <crd::math::MathScalar T> struct formatter<crd::math::Frustum<T>, char> : crd::math::detail::ScalarFormatter<T>
-{
-    constexpr auto parse(std::format_parse_context& ctx) { return ctx.begin(); }
-
-    template <typename FormatContext> auto format(const crd::math::Frustum<T>& frustum, FormatContext& ctx) const
-    {
-        return std::format_to(ctx.out(), "Frustum(l={}, r={}, b={}, t={}, n={}, f={})", frustum.planes[0],
-                              frustum.planes[1], frustum.planes[2], frustum.planes[3], frustum.planes[4],
-                              frustum.planes[5]);
     }
 };
 } // namespace std

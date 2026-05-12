@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 # check_no_std_math.sh — bans std::sin / std::cos / std::tan / std::atan2 /
-# std::exp / std::log / std::pow / std::asin / std::acos / std::atan in
-# engine/eylem/** and engine/hesap/**. Per ADR-0063 §2: those modules must
-# use crd::math::deterministic::* substitutes for cross-platform bit-exact
-# results.
+# std::exp / std::log / std::pow / std::asin / std::acos / std::atan in the
+# determinism-contract modules (ADR-0063 §2): they must use
+# crd::math::deterministic::* substitutes for cross-platform bit-exact results.
+# (std::sqrt is NOT banned — IEEE-754 mandates correctly-rounded single-rounding
+# sqrt everywhere, so it is deterministic.)
 #
-# Today (Phase 3.1 v0c) eylem and hesap don't exist yet, so this script
-# is a no-op. It lights up the moment eylem v1a or hesap v0a lands.
+# Scoped to engine/eylem, engine/hesap (ADR-0063), and engine/geometry-primitives
+# (ADR-0076 §4 — crd-geometry inherits the determinism contract). Sub-modules in
+# sibling directories (engine/eylem-rigid3d, engine/geometry-bvh, ...) are added
+# here as they land.
 
 set -uo pipefail
 
@@ -17,6 +20,7 @@ banned='std::(sin|cos|tan|asin|acos|atan|atan2|exp|exp2|log|log2|log10|pow|fmod)
 scopes=(
     "$repo_root/engine/eylem"
     "$repo_root/engine/hesap"
+    "$repo_root/engine/geometry-primitives"
 )
 
 failures=()

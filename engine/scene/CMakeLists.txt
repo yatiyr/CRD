@@ -14,6 +14,7 @@ target_link_libraries(crd-scene
         crd-containers
         crd-memory
         crd-math
+        crd-geometry-primitives  # query.hpp's frozen spatial-DSL operators take crd::geometry::primitives::AABB<f32> (ADR-0076 §13)
         crd-resources
 )
 
