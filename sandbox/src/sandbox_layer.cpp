@@ -899,9 +899,15 @@ void SandboxLayer::on_update(crd::f64 delta_seconds)
     // (fixed_step()=true) fires N times per frame where N =
     // floor(accum / fixed_dt). RenderUploadSystem (variable-rate)
     // still runs once per call. Single-fixed-dt API per ADR-0052 §3 v1h.
+    //
+    // v1j-b: when the user picks the GeometryViz scene we still step the
+    // world (Transform propagation / RenderUploadSystem need it) but skip
+    // the fixed-step eylem path so the physics state stays paused while
+    // they explore the geometry showcase. Switching back to the Physics
+    // scene resumes the simulation from wherever it was.
     if (m_world)
     {
-        if (m_eylem_initialised)
+        if (m_eylem_initialised && m_scene == SandboxScene::Physics)
         {
             m_world->step_fixed(delta_seconds,
                                 static_cast<crd::f64>(m_physics_config.fixed_dt),
@@ -910,6 +916,34 @@ void SandboxLayer::on_update(crd::f64 delta_seconds)
         else
         {
             m_world->step(delta_seconds);
+        }
+    }
+
+    // v1j-b: emit the active showcase's primitives into the same draw
+    // buffer the overlay pass consumes. Each non-Physics scene is its own
+    // canvas — the Physics-scene debug-viz stamps from DebugVizSystem
+    // (PostRender phase, just ran above) must NOT bleed through. Re-clear
+    // the buffer here for any non-Physics scene; the showcase appends.
+    if (m_scene != SandboxScene::Physics && m_eylem_alloc)
+    {
+        if (crd::draw::is_initialised())
+        {
+            m_draw_buffer.clear();
+        }
+        if (m_scene == SandboxScene::GeometryViz)
+        {
+            // v1-close debt-payment: lazy-construct the BVH viewer cache
+            // once the eylem TLSF is alive. The cache reuses the built
+            // tree across frames; only the depth-coloured walk re-runs.
+            if (!m_bvh_cache)
+            {
+                m_bvh_cache = std::make_unique<BvhViewerCache>(m_eylem_alloc.get());
+            }
+            render_geometry_showcase(m_showcase, m_draw_buffer, *m_eylem_alloc, *m_bvh_cache);
+        }
+        else if (m_scene == SandboxScene::DrawShowcase)
+        {
+            render_draw_showcase(m_showcase, m_draw_buffer);
         }
     }
 }
@@ -1165,6 +1199,60 @@ void SandboxLayer::on_render()
     ImGui::TextDisabled("LMB drag=orbit  Ctrl+MMB=pan  Scroll=zoom");
     ImGui::End();
 
+    // ── Scene selector (v1j-b) ────────────────────────────────────────────
+    ImGui::SetNextWindowPos({356.0F, 8.0F}, ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize({420.0F, 480.0F}, ImGuiCond_FirstUseEver);
+    ImGui::Begin("Scene", nullptr);
+    {
+        static const char* k_scene_names[] = {"Physics demo", "Geometry showcase", "Draw API showcase"};
+        int sc = static_cast<int>(m_scene);
+        if (ImGui::Combo("Scene", &sc, k_scene_names, IM_ARRAYSIZE(k_scene_names)))
+        {
+            m_scene = static_cast<SandboxScene>(sc);
+        }
+        ImGui::Separator();
+        if (m_scene == SandboxScene::Physics)
+        {
+            ImGui::TextWrapped(
+                "Physics demo: 3 falling rigid bodies (sphere/box/capsule) under -y gravity. "
+                "Fixed-step integration; eylem v1c+ broadphase lands later. Switch scenes to "
+                "validate the crd-geometry-* substrate or exercise the crd-draw API.");
+        }
+        else if (m_scene == SandboxScene::GeometryViz)
+        {
+            ImGui::TextWrapped(
+                "Geometry showcase: interactive validation of the crd-geometry-* substrate. "
+                "Physics simulation paused; eylem state preserved across the toggle.");
+            ImGui::Separator();
+            // Shared controls — visible regardless of sub-mode.
+            ImGui::DragFloat("line width (px)", &m_showcase.line_width, 0.1F, 0.5F, 8.0F);
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("Pixel width passed to every viz::draw line emission in the "
+                                   "showcase. Higher = thicker / more visible.");
+            }
+            ImGui::Checkbox("show origin triad", &m_showcase.show_origin_triad);
+            if (m_showcase.show_origin_triad)
+            {
+                ImGui::SameLine();
+                ImGui::DragFloat("triad size", &m_showcase.origin_triad_size, 0.05F, 0.05F, 5.0F);
+            }
+            ImGui::Separator();
+            draw_geometry_showcase_imgui(m_showcase);
+        }
+        else // DrawShowcase
+        {
+            ImGui::TextWrapped(
+                "Draw API showcase: exercises crd-draw's high-level shape API (axis_triad, "
+                "box_wire/solid, sphere_wire/solid, capsule_wire/solid, arrow, cross, arc). "
+                "Same fixed scene as the historic v1a-draw d0d demo. Physics paused.");
+            ImGui::Separator();
+            ImGui::DragFloat("line width (px)", &m_showcase.line_width, 0.1F, 0.5F, 8.0F);
+            ImGui::Checkbox("show origin triad", &m_showcase.show_origin_triad);
+        }
+    }
+    ImGui::End();
+
     // ── Profile + Quality + Camera ────────────────────────────────────────
     ImGui::SetNextWindowPos({8.0F, 296.0F}, ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize({340.0F, 360.0F}, ImGuiCond_FirstUseEver);
@@ -1401,7 +1489,10 @@ void SandboxLayer::render_scene(crd::rhi::CommandBuffer& cmd, crd::rhi::Image& s
     // filters entities still mid-async-upload; procedural-spawned
     // entities are flagged Loaded immediately so they pass.
     m_renderer.clear();
-    if (m_world && m_show_solid && m_surface_variant.is_valid())
+    // v1j-b: in GeometryViz mode skip submitting Renderable entities (procedural
+    // assets / öbek demo / asset-browser selection) so the showcase has the
+    // canvas to itself. The overlay pass below still consumes m_draw_buffer.
+    if (m_world && m_show_solid && m_surface_variant.is_valid() && m_scene == SandboxScene::Physics)
     {
         for (auto&& [entity, r] : m_world->query<crd::renderer::Renderable>()
                                        .skip_pending<crd::renderer::Renderable>())
@@ -1424,57 +1515,18 @@ void SandboxLayer::render_scene(crd::rhi::CommandBuffer& cmd, crd::rhi::Image& s
     CRD_ASSERT(ok);
     fg.execute(m_device, cmd);
 
-    // crd-draw overlay (v1a-draw d0d). Build a tiny demo set: an axis triad
-    // at origin + a wire box per spawned entity at a fixed offset. Then
-    // graft an overlay pass onto a fresh FrameGraph so add_draw_overlay_pass
-    // exercises the full pipeline path.
+    // crd-draw overlay pass. Submits `m_draw_buffer` (populated earlier in
+    // `on_update`: physics DebugVizSystem stamps in Physics mode, geometry
+    // showcase emissions in GeometryViz mode, the historic d0d demo block
+    // in DrawShowcase mode — each scene gets the canvas to itself, see
+    // `on_update`'s scene-conditional clear-after-step).
+    //
+    // (v1j-b note: the per-frame axis_triad/box/sphere/capsule/arrow/arc
+    // emissions that used to live here unconditionally moved to
+    // `render_draw_showcase` and now fire only when `m_scene ==
+    // DrawShowcase`. Same shapes, same positions — just gated.)
     if (crd::draw::is_initialised())
     {
-        // d3: m_draw_buffer is cleared at the top of on_update (BEFORE
-        // world.step) so DebugVizSystem (PostRender) writes into a fresh
-        // buffer; showroom emissions below append to the same buffer.
-
-        // d2-curbuf: install the active buffer for this frame, then use the
-        // ergonomic wrappers (`crd::draw::axis_triad(...)` etc.) instead of
-        // the verbose `*_to(buffer, ...)` form. Both APIs coexist; the
-        // canonical form is preferred for fan-out emission, the wrapper
-        // form is preferred for one-line dev-console / editor calls.
-        crd::draw::ScopedActiveBuffer scoped_buf{&m_draw_buffer};
-
-        // World-axis triad at origin (3 arrows, RGB convention).
-        crd::draw::axis_triad(crd::math::Mat4f::identity(), 1.0F);
-
-        // (Floor grid is now drawn by the shader-based infinite grid pipeline,
-        // wired through OverlayPassConfig::grid below. d2-grid superseded the
-        // line-based grid call here.)
-
-        // Box: wire + translucent solid fill at (2, 0, 0).
-        crd::math::Mat4f box_world = crd::math::Mat4f::identity();
-        box_world.c3.x = 2.0F;
-        crd::draw::box_wire(box_world, {0.5F, 0.5F, 0.5F}, crd::draw::kBodyDynamic, 1.5F);
-        crd::draw::box_solid(box_world, {0.5F, 0.5F, 0.5F}, crd::draw::Color{200, 200, 100, 80});
-
-        // Sphere: wire + translucent solid at (-2, 0, 0). UV-everywhere = perfect alignment.
-        crd::draw::sphere_wire({-2.0F, 0.0F, 0.0F}, 0.6F, crd::draw::kCyan);
-        crd::draw::sphere_solid({-2.0F, 0.0F, 0.0F}, 0.6F, crd::draw::Color{0, 255, 255, 60});
-
-        // Capsule: wire + translucent solid at (0, 0, 2).
-        crd::draw::capsule_wire({0.0F, -0.4F, 2.0F}, {0.0F, 0.4F, 2.0F}, 0.4F,
-                                crd::draw::kBodyKinematic);
-        crd::draw::capsule_solid({0.0F, -0.4F, 2.0F}, {0.0F, 0.4F, 2.0F}, 0.4F,
-                                 crd::draw::Color{80, 200, 240, 70});
-
-        // Velocity-style arrow at (0, 1.5, 0) pointing +X.
-        crd::draw::arrow({0.0F, 1.5F, 0.0F}, {1.0F, 0.0F, 0.0F}, 1.0F,
-                         crd::draw::kVelocityArrow);
-
-        // 3D cross marker (contact-point-style indicator).
-        crd::draw::cross_3d({0.0F, 0.0F, -2.0F}, 0.3F, crd::draw::kContactPoint);
-
-        // Joint-limit-style arc (90 degree sweep around Y axis).
-        crd::draw::arc({0.0F, 0.5F, -2.0F}, {0.0F, 1.0F, 0.0F}, {1.0F, 0.0F, 0.0F},
-                       0.5F, 0.0F, 1.5707963F, crd::draw::kJointFrame);
-
         crd::renderer::FrameGraph draw_fg;
         const auto color_handle = draw_fg.import(&m_frp->color_image(),
                                                  crd::rhi::ImageAccess::ColorWrite);

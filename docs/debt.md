@@ -5,6 +5,49 @@ move to a session log entry and remove from here.
 
 ## Active debt
 
+### Transient MSVC LTCG internal compiler error on `win-shipping` `crd-sandbox.exe` link (observed 2026-05-13 v1-debts-paid sweep)
+
+`scripts/full-sweep.ps1` returned 16/17 PASS during the v1-debts-paid verification sweep — only `win-shipping` failed, and only at the `crd-sandbox.exe` LTCG codegen phase with a fatal MSVC C1001 internal compiler error:
+
+```
+LINK : ... failed (exit code 0) with the following output:
+Kod üretiliyor
+D:\Dev\cerid\engine\config\src\config.cpp(245) : fatal error C1001: İç derleyici hatası.
+(derleyici dosyası 'D:\a\_work\1\s\src\vctools\Compiler\Utc\src\p2\main.cpp', satır 263)
+... link!DllGetObjHandler()+0x1fe99 ... CloseTypeServerPDB()+0x19fe ...
+Access violation
+ninja: build stopped: subcommand failed.
+```
+
+**The C1001 is not in our code.** `engine/config/src/config.cpp(245)` is plain `Config::load_from_file()` — pre-existing, unchanged in this slice. The line pointer is just where MSVC's whole-program optimizer happened to access-violate. Standalone retry of `cmake --build --preset win-shipping --target crd-sandbox` linked clean immediately with **no source change**. `win-clang-cl-shipping` (same shipping flags, different compiler) was green on the same sweep.
+
+**Verdict:** non-deterministic MSVC LTCG internals bug, likely sensitive to the cross-TU template instantiation graph after v1 cluster's additions (new `BvhViewerCache`, `closest_point(Cylinder3)` + `closest_point(Tetrahedron)`, `tests/sandbox/test_showcase.cpp` adds new TU consumers of the same shared headers). One incident is upstream noise — the slice closes per `feedback_transient_msvc_ltcg_ice_accept.md`.
+
+**Trigger to investigate:** recurrence on a subsequent sweep, or the same C1001 pointing at the same line range, would promote this from "transient" to "actionable upstream-workaround". Workaround candidates if it recurs:
+1. `CRD_NOINLINE` on a suspected hot function in `config.cpp` or in the v1-cluster headers that LTO'd into sandbox.
+2. `#pragma optimize("", off)` around `Config::load_from_file` (or the actual culprit if found).
+3. Split a TU to reduce the LTCG working set.
+4. Update MSVC toolchain (the canonical fix path but user-action).
+
+**Where referenced:**
+- `docs/sessions/2026-05-13-v1-debts-paid.md` — the sweep transcript, decision to close on retry-success.
+- `build/sweep-2026-05-13-v1-debts.log` (UTF-16) — original sweep log with the ICE.
+
+
+
+### ~~`find_overlapping_pairs(DynamicBvh)` allocates work-stack `Array`s per call~~ — PAID 2026-05-13 (v1i-c debt-payment pass)
+
+Added scratch-taking overload `DynamicBvh::find_overlapping_pairs(Fn&&, DynamicBvhPairScratch&)` with a `DynamicBvhPairScratch{Array<u32> walk; Array<DynamicBvhPairWork> cross}` POD constructed once from the consumer's allocator and reused across calls (`clear()` happens inside; capacity grows monotonically to the high-water mark). Existing alloc-per-call overload stays for non-hot-path callers. Facade overload mirrored. Test verifies the scratch path produces identical results to the alloc-per-call path across 5 reuse iterations with tree mutations between. Eylem v1c can now wrap the scratch overload on its broadphase hot path without per-tick alloc churn.
+
+### ~~`Vec4f` inflate-and-slab kernel for `bvh4_shapecast_*`~~ — PAID 2026-05-13 (v1i-c debt-payment pass)
+
+Added `ray_vs_4_aabb_inflated(...)` in `bvh4_simd.hpp/cpp` — splats `pad_{x,y,z}` to all 4 lanes, inflates each lane's bounds (`bmin − pad` / `bmax + pad`), then forwards to the existing `ray_vs_4_aabb` slab kernel. `bvh4_inflated_raycast` (the `bvh4_shapecast_*` traversal) now transposes ≤4 child bounds into SoA `Vec4f` columns and does one kernel call per node instead of four sequential scalar `inflate` + `intersect_ray_aabb_robust` calls. 2000-trial lane-by-lane test (varying pad — zero / small / moderate) confirms bit-identical results to the scalar form for finite/well-formed inputs. Mirrors v1g pattern.
+
+### ~~Advisor #3 polish on `test_validation.cpp` BVH shift-invariance~~ — PAID 2026-05-13 (v1i-c debt-payment pass)
+
+`BVH raycast at +1e6 origin` test now asserts AABB equivalence (named hit box at far origin shifts back to match named hit box at origin within local ULP tolerance) instead of comparing prim payload indices. A future SAH-tiebreak refactor that swaps the chosen prim on a tied hit no longer surfaces as a false test failure.
+
+
 ### ~~`linux-gcc-release` ctest intermittent flake~~ — ROOT-CAUSED + FIXED 2026-05-12 (jobs hardening)
 
 Was: `linux-gcc-release` intermittently failed ctest with an opaque

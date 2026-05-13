@@ -247,13 +247,127 @@ std::optional<BvhRayHit> bvh4_raycast(const Bvh4Tree& tree, crd::containers::Con
     {
         return std::nullopt;
     }
-    return BvhRayHit{best_prim, best_t};
+    return BvhRayHit{best_t, best_prim};
 }
 
 void bvh4_overlap(const Bvh4Tree& tree, crd::containers::ConstSpan<AABB3<f32>> prims, const AABB3<f32>& box,
                   crd::containers::Array<u32>& out)
 {
     bvh4_overlap(tree, prims, box, [&out](u32 p) { out.push_back(p); });
+}
+
+// ---- closest point (v1i-a) -------------------------------------------------
+//
+// Branch-and-bound DFS over the 4-wide tree. The per-child fat-AABB squared
+// distance is a lower bound on every leaf below it, so a child whose lower
+// bound ≥ the current `best_d2` is skipped (and re-checked on pop, since the
+// best may have tightened). Nearer children are pushed last so they pop first
+// and tighten `best_d2` before the far subtrees are reached. Squared throughout
+// — no `sqrt` on the hot path; `max_dist²` stored. Same semantics as
+// `bvh_closest_point` over the source binary tree (the collapse only changes
+// fan-out).
+
+namespace
+{
+[[nodiscard]] f32 aabb_dist2(const AABB3<f32>& b, const Vec3<f32>& q) noexcept
+{
+    const Vec3<f32> d = crd::geometry::primitives::closest_point(b, q) - q;
+    return crd::math::dot(d, d);
+}
+} // namespace
+
+std::optional<BvhClosestPoint> bvh4_closest_point(const Bvh4Tree& tree,
+                                                  crd::containers::ConstSpan<AABB3<f32>> prims, const Vec3<f32>& query,
+                                                  f32 max_dist)
+{
+    if (tree.is_empty())
+    {
+        return std::nullopt;
+    }
+    const crd::containers::ConstSpan<Bvh4Node> nodes = tree.nodes();
+    const crd::containers::ConstSpan<u32> prim_idx = tree.prim_indices();
+
+    f32 best_d2 =
+        (max_dist >= std::numeric_limits<f32>::infinity()) ? std::numeric_limits<f32>::infinity() : max_dist * max_dist;
+    u32 best_prim = 0;
+    Vec3<f32> best_point{};
+    bool hit = false;
+
+    u32 stack[k_max_bvh4_stack];
+    usize sp = 0;
+    stack[sp++] = tree.root();
+    while (sp > 0)
+    {
+        const Bvh4Node& node = nodes[stack[--sp]];
+        // Re-check the node's AABB against the (possibly tightened) best — same
+        // pruning shape as `bvh_closest_point` (`bvh_query.cpp`).
+        if (aabb_dist2(node.bounds, query) >= best_d2)
+        {
+            continue;
+        }
+        // Score every live child by its AABB distance; visit nearer children
+        // later so they pop first. With ≤4 children, an insertion-sort by
+        // ascending distance is cheap and deterministic.
+        struct Cand
+        {
+            u8 idx;
+            f32 d2;
+        };
+        Cand cand[4]{};
+        u8 nc = 0;
+        for (u8 c = 0; c < node.child_count; ++c)
+        {
+            const Bvh4Child& ch = node.children[c];
+            const f32 d2 = aabb_dist2(ch.bounds, query);
+            if (d2 >= best_d2)
+            {
+                continue;
+            }
+            // Insertion-sort into descending-d2 order: push order = visit-far-first;
+            // pop order = visit-near-first. Tiebreak on lower child index (deterministic).
+            u8 ins = nc;
+            while (ins > 0 && (cand[ins - 1].d2 < d2 || (cand[ins - 1].d2 == d2 && cand[ins - 1].idx > c)))
+            {
+                cand[ins] = cand[ins - 1];
+                --ins;
+            }
+            cand[ins] = Cand{c, d2};
+            ++nc;
+        }
+        // `cand[0..nc)` is sorted descending by d2 → push-then-pop order visits
+        // the nearest child first. Process leaf children directly (no recursion).
+        for (u8 k = 0; k < nc; ++k)
+        {
+            const Bvh4Child& ch = node.children[cand[k].idx];
+            if (ch.is_leaf())
+            {
+                for (u32 i = ch.first; i < ch.first + ch.count; ++i)
+                {
+                    const u32 p = prim_idx[i];
+                    const Vec3<f32> cp = crd::geometry::primitives::closest_point(prims[p], query);
+                    const Vec3<f32> d = cp - query;
+                    const f32 d2 = crd::math::dot(d, d);
+                    if (d2 < best_d2)
+                    {
+                        best_d2 = d2;
+                        best_prim = p;
+                        best_point = cp;
+                        hit = true;
+                    }
+                }
+            }
+            else
+            {
+                CRD_ASSERT(sp + 1 <= k_max_bvh4_stack);
+                stack[sp++] = ch.first;
+            }
+        }
+    }
+    if (!hit)
+    {
+        return std::nullopt;
+    }
+    return BvhClosestPoint{best_point, best_d2, best_prim};
 }
 
 } // namespace crd::geometry::bvh

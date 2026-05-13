@@ -35,6 +35,7 @@ using crd::geometry::bvh::BvhRayHit;
 using crd::geometry::bvh::BvhTree;
 using crd::geometry::bvh::Ray4AabbResult;
 using crd::geometry::bvh::ray_vs_4_aabb;
+using crd::geometry::bvh::ray_vs_4_aabb_inflated;
 using crd::geometry::primitives::AABB3;
 using crd::geometry::primitives::intersect_ray_aabb_robust;
 using crd::geometry::primitives::intersects;
@@ -204,7 +205,7 @@ TEST_CASE("BVH4 raycast matches the binary tree it was collapsed from", "[geomet
             {
                 REQUIRE(q4->t == q2->t);
                 f32 check = 0.0F;
-                REQUIRE(intersect_ray_aabb_robust(ray, prims[q4->prim_index], 0.0F,
+                REQUIRE(intersect_ray_aabb_robust(ray, prims[q4->payload], 0.0F,
                                                   std::numeric_limits<f32>::infinity(), check));
                 REQUIRE(check == q4->t);
             }
@@ -330,6 +331,68 @@ TEST_CASE("BVH4: ray_vs_4_aabb (Vec4f kernel) lane-by-lane vs the scalar robust 
         {
             f32 ts = 0.0F;
             const bool hs = intersect_ray_aabb_robust(ray, pre, boxes[c], 0.0F, tmax, ts);
+            REQUIRE((h4[c] != 0.0F) == hs);
+            if (hs)
+            {
+                REQUIRE(t4[c] == ts);
+            }
+        }
+    }
+}
+
+TEST_CASE("BVH4: ray_vs_4_aabb_inflated (Vec4f shapecast kernel) lane-by-lane vs scalar inflated slab",
+          "[geometry][bvh][bvh4][simd]")
+{
+    // Mirror of the v1g kernel test, with the shapecast inflation path. The
+    // SIMD form broadcasts `pad_{x,y,z}` and inflates each lane's bounds
+    // before the slab chain; the scalar form does the same inflate per lane
+    // then a robust slab. Results must be bit-identical for finite /
+    // well-formed inputs across 2000 random trials at varying pad magnitudes
+    // (zero / small / moderate). Pays v1i-b's deferred SIMD-shapecast debt.
+    Rng rng(0x5A1AD);
+    for (usize trial = 0; trial < 2000; ++trial)
+    {
+        AABB3<f32> boxes[4];
+        f32 minx[4];
+        f32 miny[4];
+        f32 minz[4];
+        f32 maxx[4];
+        f32 maxy[4];
+        f32 maxz[4];
+        for (int c = 0; c < 4; ++c)
+        {
+            boxes[c] = random_box(rng, 40.0F, 3.0F);
+            minx[c] = boxes[c].min.x;
+            miny[c] = boxes[c].min.y;
+            minz[c] = boxes[c].min.z;
+            maxx[c] = boxes[c].max.x;
+            maxy[c] = boxes[c].max.y;
+            maxz[c] = boxes[c].max.z;
+        }
+        const Ray3<f32> ray{Vec3<f32>(rng.range(-80, 80), rng.range(-80, 80), rng.range(-80, 80)),
+                            normalized(Vec3<f32>(rng.range(-1, 1), rng.range(-1, 1), rng.range(-1, 1)))};
+        const auto pre = precompute_ray_aabb(ray);
+        const f32 tmax = (trial % 4U == 0U) ? rng.range(5.0F, 40.0F) : std::numeric_limits<f32>::infinity();
+        // Vary the pad — zero (degenerate; should match `ray_vs_4_aabb`),
+        // small isotropic, larger anisotropic — all forms `bvh4_shapecast`
+        // hits in practice.
+        const f32 pad_x = (trial % 3U == 0U) ? 0.0F : rng.range(0.05F, 2.5F);
+        const f32 pad_y = (trial % 3U == 0U) ? 0.0F : rng.range(0.05F, 2.5F);
+        const f32 pad_z = (trial % 3U == 0U) ? 0.0F : rng.range(0.05F, 2.5F);
+
+        const Ray4AabbResult r = ray_vs_4_aabb_inflated(
+            ray, pre, Vec4f::load(minx), Vec4f::load(miny), Vec4f::load(minz), Vec4f::load(maxx), Vec4f::load(maxy),
+            Vec4f::load(maxz), pad_x, pad_y, pad_z, 0.0F, tmax);
+        f32 h4[4];
+        f32 t4[4];
+        r.hit_mask.store(h4);
+        r.t_enter.store(t4);
+        for (int c = 0; c < 4; ++c)
+        {
+            const AABB3<f32> inflated(Vec3<f32>(boxes[c].min.x - pad_x, boxes[c].min.y - pad_y, boxes[c].min.z - pad_z),
+                                      Vec3<f32>(boxes[c].max.x + pad_x, boxes[c].max.y + pad_y, boxes[c].max.z + pad_z));
+            f32 ts = 0.0F;
+            const bool hs = intersect_ray_aabb_robust(ray, pre, inflated, 0.0F, tmax, ts);
             REQUIRE((h4[c] != 0.0F) == hs);
             if (hs)
             {

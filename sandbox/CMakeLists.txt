@@ -1,6 +1,7 @@
 add_executable(crd-sandbox
     src/main.cpp
     src/sandbox_layer.cpp
+    src/geometry_showcase.cpp  # v1j-b: geometry-viz showcase scene
 )
 
 target_include_directories(crd-sandbox PRIVATE
@@ -29,6 +30,10 @@ target_link_libraries(crd-sandbox PRIVATE
     crd-eylem
     crd-eylem-rigid3d
     crd-eylem-viz
+    # v1j-b: geometry-viz substrate + its transitive geometry-* deps.
+    crd-geometry-primitives
+    crd-geometry-bvh
+    crd-geometry-viz
 )
 target_compile_definitions(crd-sandbox PRIVATE CRD_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 crd_enable_default_pch(crd-sandbox)

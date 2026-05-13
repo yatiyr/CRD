@@ -88,7 +88,7 @@ std::optional<BvhRayHit> bvh_raycast(const BvhTree& tree, crd::containers::Const
     {
         return std::nullopt;
     }
-    return BvhRayHit{best_prim, best_t};
+    return BvhRayHit{best_t, best_prim};
 }
 
 void bvh_overlap(const BvhTree& tree, crd::containers::ConstSpan<AABB3<f32>> prims, const AABB3<f32>& box,
@@ -182,7 +182,7 @@ std::optional<BvhClosestPoint> bvh_closest_point(const BvhTree& tree, crd::conta
     {
         return std::nullopt;
     }
-    return BvhClosestPoint{best_prim, best_point, best_d2};
+    return BvhClosestPoint{best_point, best_d2, best_prim};
 }
 
 } // namespace crd::geometry::bvh

@@ -41,4 +41,17 @@ struct Ray4AabbResult
                                            const Vec4f& bmax_x, const Vec4f& bmax_y, const Vec4f& bmax_z, crd::f32 t0,
                                            crd::f32 t1) noexcept;
 
+// As above, but inflate each lane's AABB by per-axis `pad_{x,y,z}` (broadcast
+// to all 4 lanes) before the slab test — the shapecast Minkowski reduction
+// kernel that `bvh4_shapecast_sphere` / `bvh4_shapecast_box` consume. Splat
+// the pad once, then one slab chain over the inflated `(bmin − pad, bmax +
+// pad)` columns. Bit-identical (for finite/well-formed inputs) to the
+// four-sequential `intersect_ray_aabb_robust(inflate(child.bounds, pad))`
+// calls it replaces — `min`/`max` is associative + commutative for finites
+// and the `pad` is the same value the scalar form subtracts/adds.
+[[nodiscard]] Ray4AabbResult ray_vs_4_aabb_inflated(
+    const Ray3<crd::f32>& ray, const crd::geometry::primitives::RayAABBPrecompute<crd::f32>& pre, const Vec4f& bmin_x,
+    const Vec4f& bmin_y, const Vec4f& bmin_z, const Vec4f& bmax_x, const Vec4f& bmax_y, const Vec4f& bmax_z,
+    crd::f32 pad_x, crd::f32 pad_y, crd::f32 pad_z, crd::f32 t0, crd::f32 t1) noexcept;
+
 } // namespace crd::geometry::bvh

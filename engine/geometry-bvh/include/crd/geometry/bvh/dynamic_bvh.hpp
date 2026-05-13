@@ -24,8 +24,10 @@
 #include <crd/core/types.hpp>
 #include <crd/geometry/primitives/primitives.hpp>      // AABB3, Ray3, intersects(AABB3,AABB3)
 #include <crd/geometry/primitives/robust_ray_aabb.hpp> // precompute_ray_aabb / intersect_ray_aabb_robust
+#include <crd/geometry/result_types.hpp>               // ClosestPointResult<P> — v1i-a
 
 #include <limits>
+#include <optional>
 
 namespace crd::geometry::bvh
 {
@@ -57,6 +59,62 @@ struct DynamicBvhConfig
 // Maximum traversal-stack depth for queries (the tree is height-balanced, so
 // real depths are ~2·log₂(n); 256 covers any practical scene). Asserted.
 inline constexpr crd::usize k_max_dynamic_bvh_stack = 256;
+
+// A self-overlap pair: two leaves' user_data with `a < b` (sorted for
+// determinism — `find_overlapping_pairs` emits each unordered pair exactly
+// once in the lower-then-higher form). Eylem v1c broadphase wraps this.
+struct DynamicBvhPair
+{
+    crd::u32 a;
+    crd::u32 b;
+
+    [[nodiscard]] friend constexpr bool operator==(DynamicBvhPair x, DynamicBvhPair y) noexcept
+    {
+        return x.a == y.a && x.b == y.b;
+    }
+    [[nodiscard]] friend constexpr bool operator<(DynamicBvhPair x, DynamicBvhPair y) noexcept
+    {
+        return x.a != y.a ? x.a < y.a : x.b < y.b;
+    }
+};
+
+// A work-pair on the cross-walk stack of `find_overlapping_pairs`: two
+// internal node indices to test for overlap. Surfaced here so the
+// caller-owned scratch struct below can hold a typed `Array` of them.
+struct DynamicBvhPairWork
+{
+    crd::u32 a;
+    crd::u32 b;
+};
+
+// Caller-owned scratch buffers for `find_overlapping_pairs`. The
+// alloc-per-call overload makes one allocation per call from the tree's
+// own allocator (TLSF O(1), amortised fine for non-hot-path callers).
+// Broadphase consumers — eylem v1c will call this every physics tick at
+// 60-1000 Hz — should construct one `DynamicBvhPairScratch` once and pass
+// it in, avoiding the per-tick alloc/free churn. Capacity is retained
+// across `clear()` so subsequent calls allocate only on growth.
+struct DynamicBvhPairScratch
+{
+    crd::containers::Array<crd::u32> walk;
+    crd::containers::Array<DynamicBvhPairWork> cross;
+
+    explicit DynamicBvhPairScratch(crd::memory::IAllocator* alloc) noexcept : walk(alloc), cross(alloc) {}
+
+    DynamicBvhPairScratch(const DynamicBvhPairScratch&) = delete;
+    DynamicBvhPairScratch& operator=(const DynamicBvhPairScratch&) = delete;
+    DynamicBvhPairScratch(DynamicBvhPairScratch&&) noexcept = default;
+    DynamicBvhPairScratch& operator=(DynamicBvhPairScratch&&) noexcept = default;
+    ~DynamicBvhPairScratch() = default;
+
+    // Reset for the next call. Storage is retained — only `size()` resets
+    // — so capacity grows monotonically up to the high-water mark.
+    void clear() noexcept
+    {
+        walk.clear();
+        cross.clear();
+    }
+};
 
 class DynamicBvh
 {
@@ -138,6 +196,121 @@ public:
 
     // Append every overlapping leaf's `user_data` to `out`.
     void query(const AABB3<crd::f32>& box, crd::containers::Array<crd::u32>& out) const;
+
+    // Closest leaf (by *fat* AABB — broadphase) within `max_dist`. Reports the
+    // leaf's `user_data` in the payload, the point on its fat AABB, and the
+    // squared distance. Branch-and-bound: per-node AABB squared distance is a
+    // lower bound on every leaf below it; the nearer child is descended first
+    // so `best_d2` tightens before the far subtree is reached. Squared
+    // throughout (no `sqrt` on the hot path); `max_dist²` stored as the cutoff.
+    // For a *narrowphase* per-primitive closest-point, the caller refines
+    // against its own tight prim AABBs / mesh / SDF afterwards (this is the
+    // broadphase: the same shape as `query` and `raycast`).
+    [[nodiscard]] std::optional<crd::geometry::ClosestPointResult<crd::u32>>
+    closest_point(const crd::math::Vec3<crd::f32>& query,
+                  crd::f32 max_dist = std::numeric_limits<crd::f32>::infinity()) const;
+
+    // ---- broadphase self-overlap (v1i-c) -----------------------------------
+
+    // Invoke `on_pair(u32 ud_a, u32 ud_b)` for every pair of leaves whose fat
+    // AABBs overlap, with `ud_a < ud_b` (each unordered pair emitted exactly
+    // once in sorted order — deterministic). Dual-descent algorithm:
+    // `find_pairs(node)` recurses into each subtree for its internal pairs,
+    // then crosses `(child1, child2)` to find pairs spanning the two subtrees;
+    // `cross(a, b)` skips when `a.aabb` and `b.aabb` don't overlap, otherwise
+    // recurses into the larger side until both are leaves. Total work
+    // `O(n + |pairs|)` for typical trees (vs. `O(n²)` brute force).
+    //
+    // **Scratch buffers.** The scratch-taking overload `find_overlapping_pairs
+    // (Fn&&, DynamicBvhPairScratch&)` reuses caller-owned work stacks
+    // (`scratch.walk` + `scratch.cross`) across calls — eylem v1c's broadphase
+    // calls this every physics tick (~60-1000 Hz), and per-tick alloc churn
+    // on the broadphase hot path is real overhead; caller-owned scratch
+    // amortises capacity growth across calls. The `scratch.clear()` happens
+    // inside the call. The convenience overload below allocates one
+    // `DynamicBvhPairScratch` on the tree's allocator per call for non-hot-
+    // path callers.
+    template <typename Fn> void find_overlapping_pairs(Fn&& on_pair, DynamicBvhPairScratch& scratch) const
+    {
+        scratch.clear();
+        if (m_root == k_null || m_nodes[m_root].is_leaf())
+        {
+            return;
+        }
+        scratch.walk.push_back(m_root);
+
+        while (scratch.walk.size() > 0)
+        {
+            const crd::u32 ni = scratch.walk[scratch.walk.size() - 1];
+            scratch.walk.resize(scratch.walk.size() - 1);
+            const Node& n = m_nodes[ni];
+            if (n.is_leaf())
+            {
+                continue;
+            }
+
+            // (1) Find pairs spanning child1 ⊗ child2.
+            scratch.cross.push_back(DynamicBvhPairWork{n.child1, n.child2});
+            while (scratch.cross.size() > 0)
+            {
+                const DynamicBvhPairWork cw = scratch.cross[scratch.cross.size() - 1];
+                scratch.cross.resize(scratch.cross.size() - 1);
+                const Node& a = m_nodes[cw.a];
+                const Node& b = m_nodes[cw.b];
+                if (!crd::geometry::primitives::intersects(a.aabb, b.aabb))
+                {
+                    continue;
+                }
+                const bool a_leaf = a.is_leaf();
+                const bool b_leaf = b.is_leaf();
+                if (a_leaf && b_leaf)
+                {
+                    const crd::u32 lo = a.user_data < b.user_data ? a.user_data : b.user_data;
+                    const crd::u32 hi = a.user_data < b.user_data ? b.user_data : a.user_data;
+                    on_pair(lo, hi);
+                }
+                else if (a_leaf)
+                {
+                    scratch.cross.push_back(DynamicBvhPairWork{cw.a, b.child1});
+                    scratch.cross.push_back(DynamicBvhPairWork{cw.a, b.child2});
+                }
+                else if (b_leaf)
+                {
+                    scratch.cross.push_back(DynamicBvhPairWork{a.child1, cw.b});
+                    scratch.cross.push_back(DynamicBvhPairWork{a.child2, cw.b});
+                }
+                else
+                {
+                    // Two interior nodes — descend into all 4 child-pair combos.
+                    scratch.cross.push_back(DynamicBvhPairWork{a.child1, b.child1});
+                    scratch.cross.push_back(DynamicBvhPairWork{a.child1, b.child2});
+                    scratch.cross.push_back(DynamicBvhPairWork{a.child2, b.child1});
+                    scratch.cross.push_back(DynamicBvhPairWork{a.child2, b.child2});
+                }
+            }
+
+            // (2) Recurse into each child for its own internal pairs.
+            scratch.walk.push_back(n.child1);
+            scratch.walk.push_back(n.child2);
+        }
+    }
+
+    // Convenience: allocates a `DynamicBvhPairScratch` per call from the
+    // tree's own allocator. Use the scratch-taking overload above on the
+    // broadphase hot path.
+    template <typename Fn> void find_overlapping_pairs(Fn&& on_pair) const
+    {
+        DynamicBvhPairScratch scratch(m_nodes.allocator());
+        find_overlapping_pairs(static_cast<Fn&&>(on_pair), scratch);
+    }
+
+    // Append every overlapping fat-AABB leaf pair to `out` in `(min, max)`
+    // user_data order. The scratch-taking overload reuses caller-owned work
+    // stacks; the alloc-per-call overload constructs a scratch on the tree's
+    // allocator each call.
+    void find_overlapping_pairs(crd::containers::Array<DynamicBvhPair>& out,
+                                DynamicBvhPairScratch& scratch) const;
+    void find_overlapping_pairs(crd::containers::Array<DynamicBvhPair>& out) const;
 
     // Invoke `on_leaf(u32 user_data)` for every leaf whose fat AABB the ray
     // (within [0, ∞)) enters. (No nearest-hit ordering — broadphase; the caller

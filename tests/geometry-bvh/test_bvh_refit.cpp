@@ -108,7 +108,7 @@ std::optional<BvhRayHit> brute_raycast(const std::vector<AABB3<f32>>& prims, con
     {
         return std::nullopt;
     }
-    return BvhRayHit{best_p, best_t};
+    return BvhRayHit{best_t, best_p};
 }
 
 // Validates that every node's bounds match the exact union it should hold, given `prims`.

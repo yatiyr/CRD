@@ -37,6 +37,7 @@
 // and 3D public overloads — 2D/3D parity by construction.
 // ---------------------------------------------------------------------------
 
+#include <crd/geometry/primitives/barycentric.hpp> // contains(Tetrahedron, p) — used by closest_point(Tetrahedron) v1-close
 #include <crd/geometry/primitives/primitives.hpp>
 
 #include <cmath>
@@ -363,6 +364,124 @@ template <MathScalar T> [[nodiscard]] inline T distance_squared(const Capsule3<T
 template <MathScalar T> [[nodiscard]] inline T distance(const Capsule3<T>& cap, const Vec3<T>& p) noexcept
 {
     return static_cast<T>(std::sqrt(distance_squared(cap, p)));
+}
+
+// ---- Cylinder3 (closest point on a flat-cap finite cylinder) --------------
+//
+// Two-case classification (Ericson §5.1.6-adjacent):
+//   1. Project `p` onto the cylinder's axis line; the axial parameter `t` is
+//      clamped to `[0, 1]`. The radial direction `r = p - (a + t*axis)` is
+//      the offset from the axis to the query.
+//   2. If `t == 0 or t == 1` (the query is "past" an end-cap along the axis),
+//      the closest point sits on that cap's disc: project `p` onto the disc
+//      plane and clamp the radial offset to `cyl.radius`.
+//   3. Otherwise the closest point is on the cylindrical body: clamp the
+//      radial offset to `cyl.radius` at axial position `t`.
+//
+// Degenerate-input contract: zero-length axis (a == b) collapses to the
+// shared point; zero radius collapses to the axis itself.
+template <MathScalar T> [[nodiscard]] inline Vec3<T> closest_point(const Cylinder3<T>& cyl, const Vec3<T>& p) noexcept
+{
+    const Vec3<T> axis = cyl.b - cyl.a;
+    const T len_sq = crd::math::dot(axis, axis);
+    if (!(len_sq > std::numeric_limits<T>::min()))
+    {
+        // Degenerate axis — collapse to the shared endpoint.
+        return cyl.a;
+    }
+    const T len = static_cast<T>(std::sqrt(len_sq));
+    const Vec3<T> axis_unit(axis.x / len, axis.y / len, axis.z / len);
+    const Vec3<T> ap = p - cyl.a;
+
+    // Axial / radial decomposition. `axial` is the signed distance along the
+    // axis from `cyl.a`; `radial_vec` is the perpendicular offset (in the
+    // plane through `cyl.a` orthogonal to the axis).
+    const T axial = crd::math::dot(ap, axis_unit);
+    const Vec3<T> radial_vec(ap.x - axis_unit.x * axial, ap.y - axis_unit.y * axial, ap.z - axis_unit.z * axial);
+    const T radial_sq = crd::math::dot(radial_vec, radial_vec);
+    const T r2 = cyl.radius * cyl.radius;
+
+    // Inside-the-solid identity case.
+    if (axial >= static_cast<T>(0) && axial <= len && radial_sq <= r2)
+    {
+        return p;
+    }
+    // Clamp axial to the cylinder's extent.
+    const T clamped_axial = crd::math::clamp(axial, static_cast<T>(0), len);
+    const Vec3<T> on_axis(cyl.a.x + axis_unit.x * clamped_axial, cyl.a.y + axis_unit.y * clamped_axial,
+                          cyl.a.z + axis_unit.z * clamped_axial);
+    if (radial_sq <= r2)
+    {
+        // Radial component is inside the rim (so query was past a cap):
+        // closest point is the cap-disc point at the query's radial offset.
+        return Vec3<T>(on_axis.x + radial_vec.x, on_axis.y + radial_vec.y, on_axis.z + radial_vec.z);
+    }
+    // Radial outside the rim: clamp to the rim. Works whether axial was in
+    // range (cylindrical-body case) or clamped (cap-rim case).
+    const T inv = cyl.radius / static_cast<T>(std::sqrt(radial_sq));
+    return Vec3<T>(on_axis.x + radial_vec.x * inv, on_axis.y + radial_vec.y * inv, on_axis.z + radial_vec.z * inv);
+}
+template <MathScalar T> [[nodiscard]] inline T distance_squared(const Cylinder3<T>& cyl, const Vec3<T>& p) noexcept
+{
+    return crd::math::distance_squared(closest_point(cyl, p), p);
+}
+template <MathScalar T> [[nodiscard]] inline T distance(const Cylinder3<T>& cyl, const Vec3<T>& p) noexcept
+{
+    return static_cast<T>(std::sqrt(distance_squared(cyl, p)));
+}
+
+// ---- Tetrahedron (closest point inside-or-on a solid tetra) ---------------
+//
+// Algorithm (Ericson §5.1.6-style, generalised from triangle to tet):
+//   1. Compute the 4 barycentric coordinates of `p` w.r.t. the tet via
+//      `barycentric.hpp::barycentric(Tetrahedron, p)`.
+//   2. If all 4 weights are ≥ 0, `p` is inside the tet → closest_point = p.
+//   3. Otherwise `p` is outside; the closest point lies on one of the 4
+//      faces. Per face: build the `Triangle3` of its 3 vertices and run
+//      `closest_point(Triangle3, p)`. Take the minimum-squared-distance
+//      result across the 4 faces.
+//
+// Degenerate-input contract: a flat tetrahedron (signed volume == 0) makes
+// the barycentric call assert in debug; in release the face fallback still
+// produces a valid result (each face's `closest_point` handles its own
+// degeneracy).
+template <MathScalar T> [[nodiscard]] inline Vec3<T> closest_point(const Tetrahedron<T>& tet, const Vec3<T>& p) noexcept
+{
+    // Inside test via signed-volume ratios; reuses the orientation-stable
+    // form pinned in v0d. If any weight is < 0, the query is outside.
+    if (contains(tet, p))
+    {
+        return p;
+    }
+    // Outside: check the 4 faces. Canonical face ordering (matches
+    // `decompose_prism_to_tets` convention): { (a,b,c), (a,c,d), (a,d,b), (b,d,c) }.
+    const Triangle3<T> faces[4] = {
+        Triangle3<T>(tet.a, tet.b, tet.c),
+        Triangle3<T>(tet.a, tet.c, tet.d),
+        Triangle3<T>(tet.a, tet.d, tet.b),
+        Triangle3<T>(tet.b, tet.d, tet.c),
+    };
+    Vec3<T> best = closest_point(faces[0], p);
+    T best_d2 = crd::math::distance_squared(best, p);
+    for (int i = 1; i < 4; ++i)
+    {
+        const Vec3<T> cp = closest_point(faces[i], p);
+        const T d2 = crd::math::distance_squared(cp, p);
+        if (d2 < best_d2)
+        {
+            best_d2 = d2;
+            best = cp;
+        }
+    }
+    return best;
+}
+template <MathScalar T> [[nodiscard]] inline T distance_squared(const Tetrahedron<T>& tet, const Vec3<T>& p) noexcept
+{
+    return crd::math::distance_squared(closest_point(tet, p), p);
+}
+template <MathScalar T> [[nodiscard]] inline T distance(const Tetrahedron<T>& tet, const Vec3<T>& p) noexcept
+{
+    return static_cast<T>(std::sqrt(distance_squared(tet, p)));
 }
 
 // ---- Segment3 ↔ Segment3 (mutually-closest point pair) --------------------

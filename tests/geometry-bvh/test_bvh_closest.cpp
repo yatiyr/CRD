@@ -72,7 +72,7 @@ std::optional<BvhClosestPoint> brute_closest(const std::vector<AABB3<f32>>& prim
     {
         return std::nullopt;
     }
-    return BvhClosestPoint{best_p, best_pt, best};
+    return BvhClosestPoint{best_pt, best, best_p};
 }
 
 } // namespace
@@ -116,7 +116,7 @@ TEST_CASE("BVH closest-point: matches brute force on a random corpus", "[geometr
                 REQUIRE(got->distance_squared == ref->distance_squared);
                 const Vec3<f32> d = got->point - q;
                 REQUIRE(dot(d, d) == got->distance_squared);
-                REQUIRE(closest_point(prims[got->prim_index], q) == got->point);
+                REQUIRE(closest_point(prims[got->payload], q) == got->point);
             }
         }
     }
@@ -132,7 +132,7 @@ TEST_CASE("BVH closest-point: query inside a box gives distance 0 at the query p
     const Vec3<f32> q(0.5F, -1.0F, 1.3F); // inside box 0
     const std::optional<BvhClosestPoint> got = bvh_closest_point(tree, pspan, q);
     REQUIRE(got.has_value());
-    REQUIRE(got->prim_index == 0U);
+    REQUIRE(got->payload == 0U);
     REQUIRE(got->distance_squared == 0.0F);
     REQUIRE(got->point == q);
 }
@@ -161,6 +161,6 @@ TEST_CASE("BVH closest-point: single primitive", "[geometry][bvh][closest]")
     const Vec3<f32> q(100, 0, 0);
     const std::optional<BvhClosestPoint> got = bvh_closest_point(tree, pspan, q);
     REQUIRE(got.has_value());
-    REQUIRE(got->prim_index == 0U);
+    REQUIRE(got->payload == 0U);
     REQUIRE(got->point == closest_point(box, q));
 }

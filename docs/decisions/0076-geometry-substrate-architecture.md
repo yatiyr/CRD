@@ -215,6 +215,30 @@ with the §13 amendment, for the v0f sub-slice):
     Batched `Vec8f` Plücker tests use `crd::math::simd` pairwise-tree
     reductions, same as pin 7.
 
+**Convex-substrate tiebreak pin** (added 2026-05-13, v2 substrate
+decisions locked):
+
+14. **Support-function witness indexing & EPA face tiebreak**:
+    `support(Shape, dir_local) → SupportPoint{point, vertex_idx}` —
+    the `vertex_idx` is the deterministic identity of the chosen
+    support point, used by GJK simplex management AND EPA polytope
+    expansion to break ties on coincident extrema. Three rules:
+    (a) `ConvexHullView` support returns the **lowest vertex index**
+    among all vertices tied for the argmax `dot(vertex, dir)` — the
+    canonical Quickhull/Box2D pin extended to support; (b) analytic
+    shapes (Sphere/OBB/Capsule) return `k_invalid_vertex = ~u32{0}`
+    (no enumerable vertices); when EPA encounters two analytic-shape
+    support points sharing `vertex_idx == k_invalid_vertex`, it falls
+    back to positional tiebreak on the world-space point (X-then-Y-
+    then-Z lex order on the local frame coordinates, identical regardless
+    of pose); (c) EPA's polytope face-priority queue breaks ties on
+    coincident origin-distance faces by **lowest face-index** (insertion
+    order in the polytope), matching the Quickhull lex-order pin shape.
+    Together these three rules make GJK + EPA cross-platform bit-exact —
+    the determinism contract no shipped physics engine offers as a
+    documented promise. Documented in `-convex` v2a impl; conformance
+    tests in v2-close.
+
 GPU geometry kernels (v9 onward) match CPU bit-exactly via the same
 predicate strategy — same approach as `crd-hesap-gpu` (ADR-0065).
 

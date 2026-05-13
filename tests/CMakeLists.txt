@@ -28,6 +28,8 @@ add_subdirectory(eylem)
 add_subdirectory(eylem-rigid3d)
 add_subdirectory(draw)
 add_subdirectory(eylem-viz)
+add_subdirectory(geometry-viz)
+add_subdirectory(sandbox)
 
 if(CRD_BUILD_BENCHMARKS)
     add_subdirectory(bench)

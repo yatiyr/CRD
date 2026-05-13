@@ -150,4 +150,16 @@ inline void bvh4_overlap(const Bvh4Tree& tree, crd::containers::ConstSpan<AABB3<
 void bvh4_overlap(const Bvh4Tree& tree, crd::containers::ConstSpan<AABB3<crd::f32>> prims, const AABB3<crd::f32>& box,
                   crd::containers::Array<crd::u32>& out);
 
+// ---- closest point (v1i-a) -------------------------------------------------
+
+// The primitive (and the point on its AABB) closest to `query`, considering
+// only primitives within `max_dist`. Same semantics as `bvh_closest_point` over
+// the source binary tree — the collapse changes only fan-out. Branch-and-bound:
+// each child's AABB squared distance is a lower bound on every leaf below it;
+// children sorted near-first per popped node so `best_d2` tightens before far
+// subtrees are reached. Squared throughout; `max_dist²` stored as the cutoff.
+[[nodiscard]] std::optional<BvhClosestPoint> bvh4_closest_point(
+    const Bvh4Tree& tree, crd::containers::ConstSpan<AABB3<crd::f32>> prims, const crd::math::Vec3<crd::f32>& query,
+    crd::f32 max_dist = std::numeric_limits<crd::f32>::infinity());
+
 } // namespace crd::geometry::bvh

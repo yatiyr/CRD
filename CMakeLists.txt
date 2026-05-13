@@ -287,6 +287,52 @@ target_include_directories(mikktspace SYSTEM INTERFACE "${MikkTSpace_SOURCE_DIR}
 
 CPMAddPackage("gh:ocornut/imgui#v1.92.0-docking")
 
+# Phase 3.1.7 v1-close debt payment: patch ImGui's Vulkan backend so
+# `vkFlushMappedMemoryRanges` in the texture-upload path doesn't trip the
+# Vulkan validation layer's VUID-VkMappedMemoryRange-size-01390 (size must
+# either be a multiple of `nonCoherentAtomSize` or `VK_WHOLE_SIZE`).
+# Upstream uses `range[0].size = upload_size;` which is the raw unaligned
+# upload size — we switch to `VK_WHOLE_SIZE` since the upload buffer is
+# allocated single-use for that texture and a whole-flush is always safe.
+# Idempotent: if the patch is already applied (re-configure with a populated
+# build dir) the string-find misses and the write is a no-op. See
+# docs/debt.md for the original diagnostic.
+if(imgui_SOURCE_DIR)
+    set(_crd_imgui_vk_file "${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp")
+    if(EXISTS "${_crd_imgui_vk_file}")
+        file(READ "${_crd_imgui_vk_file}" _crd_imgui_vk_text)
+        # Patch 1 — flush size: VK_WHOLE_SIZE means "from offset to end-of-
+        # mapping". Combined with patch 2 below (the map call uses
+        # VK_WHOLE_SIZE), end-of-mapping equals the memory size which IS
+        # aligned (req.size is buffer-alignment-padded). Satisfies VUID
+        # 01389/01390 both.
+        string(FIND "${_crd_imgui_vk_text}" "range[0].size = upload_size;" _crd_imgui_vk_idx1)
+        if(NOT _crd_imgui_vk_idx1 EQUAL -1)
+            string(REPLACE
+                "range[0].size = upload_size;"
+                "range[0].size = VK_WHOLE_SIZE; // crd-patch v1-close: nonCoherentAtomSize alignment"
+                _crd_imgui_vk_text "${_crd_imgui_vk_text}"
+            )
+        endif()
+        # Patch 2 — map call: map the whole allocation so end-of-mapping
+        # coincides with end-of-memory (which IS atom-aligned via
+        # req.size). The map'd extra bytes past `upload_size` are never
+        # written, which is fine.
+        string(FIND "${_crd_imgui_vk_text}" "vkMapMemory(v->Device, upload_buffer_memory, 0, upload_size, 0, (void**)(&map))" _crd_imgui_vk_idx2)
+        if(NOT _crd_imgui_vk_idx2 EQUAL -1)
+            string(REPLACE
+                "vkMapMemory(v->Device, upload_buffer_memory, 0, upload_size, 0, (void**)(&map))"
+                "vkMapMemory(v->Device, upload_buffer_memory, 0, VK_WHOLE_SIZE, 0, (void**)(&map)) /* crd-patch v1-close */"
+                _crd_imgui_vk_text "${_crd_imgui_vk_text}"
+            )
+        endif()
+        if(NOT _crd_imgui_vk_idx1 EQUAL -1 OR NOT _crd_imgui_vk_idx2 EQUAL -1)
+            file(WRITE "${_crd_imgui_vk_file}" "${_crd_imgui_vk_text}")
+            message(STATUS "[crd] Patched imgui_impl_vulkan.cpp texture-upload map/flush -> VK_WHOLE_SIZE (VUID 01389/01390)")
+        endif()
+    endif()
+endif()
+
 # ----- Helper: auto-collect sources with CONFIGURE_DEPENDS -----------------
 
 function(crd_collect_sources out_var directory)
@@ -349,6 +395,8 @@ add_subdirectory(engine/math)
 add_subdirectory(engine/geometry-primitives)
 add_subdirectory(engine/geometry-bvh)
 add_subdirectory(engine/geometry-shader-helpers)
+# crd-geometry-viz must come AFTER crd-draw (its declaration is below) — moved
+# down to engine/eylem-viz neighbourhood. See the second add_subdirectory below.
 add_subdirectory(engine/containers)
 add_subdirectory(engine/log)
 add_subdirectory(engine/platform)
@@ -370,6 +418,7 @@ add_subdirectory(engine/eylem-rigid3d)
 add_subdirectory(engine/draw)
 add_subdirectory(engine/draw-imgui)
 add_subdirectory(engine/eylem-viz)
+add_subdirectory(engine/geometry-viz)
 # add_subdirectory(engine/graphics)
 # add_subdirectory(engine/scripting)
 

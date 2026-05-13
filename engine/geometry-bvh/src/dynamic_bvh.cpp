@@ -359,6 +359,115 @@ void DynamicBvh::query(const AABB3<f32>& box, crd::containers::Array<u32>& out) 
     query(box, [&out](u32 ud) { out.push_back(ud); });
 }
 
+// ---- closest point (v1i-a) ------------------------------------------------
+//
+// Branch-and-bound over the *fat* AABB tree — broadphase semantics. Per-node
+// AABB squared distance is a lower bound on every leaf below it; nearer child
+// descended first so `best_d2` tightens before the far subtree. Squared
+// throughout; `max_dist²` stored as the cutoff. Same algorithmic shape as
+// `bvh_closest_point` and `bvh4_closest_point`, just over the dynamic tree's
+// fat-AABB internal nodes (no external prims span — the leaves *are* the
+// primitives in this structure).
+
+namespace
+{
+[[nodiscard]] f32 aabb_dist2(const AABB3<f32>& b, const Vec3<f32>& q) noexcept
+{
+    const Vec3<f32> d = crd::geometry::primitives::closest_point(b, q) - q;
+    return crd::math::dot(d, d);
+}
+} // namespace
+
+std::optional<crd::geometry::ClosestPointResult<u32>>
+DynamicBvh::closest_point(const Vec3<f32>& query, f32 max_dist) const
+{
+    if (m_root == k_null)
+    {
+        return std::nullopt;
+    }
+    f32 best_d2 =
+        (max_dist >= std::numeric_limits<f32>::infinity()) ? std::numeric_limits<f32>::infinity() : max_dist * max_dist;
+    u32 best_ud = 0;
+    Vec3<f32> best_point{};
+    bool hit = false;
+
+    u32 stack[k_max_dynamic_bvh_stack];
+    usize sp = 0;
+    stack[sp++] = m_root;
+    while (sp > 0)
+    {
+        const Node& n = m_nodes[stack[--sp]];
+        // Re-check the node's AABB against the (possibly tightened) best.
+        if (aabb_dist2(n.aabb, query) >= best_d2)
+        {
+            continue;
+        }
+        if (n.is_leaf())
+        {
+            const Vec3<f32> cp = crd::geometry::primitives::closest_point(n.aabb, query);
+            const Vec3<f32> d = cp - query;
+            const f32 d2 = crd::math::dot(d, d);
+            if (d2 < best_d2)
+            {
+                best_d2 = d2;
+                best_ud = n.user_data;
+                best_point = cp;
+                hit = true;
+            }
+        }
+        else
+        {
+            // Push far child first, near child last (popped first to tighten
+            // `best_d2`). Skip a child already known not to beat the best.
+            const u32 c1 = n.child1;
+            const u32 c2 = n.child2;
+            const f32 d1 = aabb_dist2(m_nodes[c1].aabb, query);
+            const f32 d2 = aabb_dist2(m_nodes[c2].aabb, query);
+            CRD_ASSERT(sp + 2 <= k_max_dynamic_bvh_stack);
+            if (d1 <= d2)
+            {
+                if (d2 < best_d2)
+                {
+                    stack[sp++] = c2;
+                }
+                if (d1 < best_d2)
+                {
+                    stack[sp++] = c1;
+                }
+            }
+            else
+            {
+                if (d1 < best_d2)
+                {
+                    stack[sp++] = c1;
+                }
+                if (d2 < best_d2)
+                {
+                    stack[sp++] = c2;
+                }
+            }
+        }
+    }
+    if (!hit)
+    {
+        return std::nullopt;
+    }
+    return crd::geometry::ClosestPointResult<u32>{best_point, best_d2, best_ud};
+}
+
+// ---- broadphase self-overlap (v1i-c) --------------------------------------
+
+void DynamicBvh::find_overlapping_pairs(crd::containers::Array<DynamicBvhPair>& out,
+                                        DynamicBvhPairScratch& scratch) const
+{
+    find_overlapping_pairs([&out](u32 a, u32 b) { out.push_back(DynamicBvhPair{a, b}); }, scratch);
+}
+
+void DynamicBvh::find_overlapping_pairs(crd::containers::Array<DynamicBvhPair>& out) const
+{
+    find_overlapping_pairs([&out](u32 a, u32 b) { out.push_back(DynamicBvhPair{a, b}); });
+}
+
 // ---- diagnostics ----------------------------------------------------------
 
 f32 DynamicBvh::sah_cost() const noexcept

@@ -40,6 +40,8 @@
 #include <crd/scene/world.hpp>
 #include <crd/shader/runtime.hpp>
 
+#include "geometry_showcase.hpp" // v1j-b: scene-selector enum + showcase state
+
 #include <memory>
 
 namespace crd::sandbox
@@ -298,6 +300,18 @@ private:
     // Wireframe overlay pipeline (built once; no descriptor sets; 64-byte MVP push constant).
     std::unique_ptr<crd::rhi::PipelineLayout> m_wf_layout;
     std::unique_ptr<crd::rhi::Pipeline>       m_wf_pipeline;
+
+    // v1j-b — geometry-viz showcase. Default scene = Physics so existing
+    // boot behaviour is preserved; user switches to GeometryViz via the
+    // ImGui "Scene" dropdown.
+    SandboxScene             m_scene = SandboxScene::Physics;
+    GeometryShowcaseState    m_showcase{};
+    // v1-close debt-payment: BVH viewer rebuild cache. Owned by the layer
+    // (lifetime = layer), allocator = the eylem TLSF. Constructed lazily
+    // once m_eylem_alloc is alive; until then nullptr and the BVH viewer
+    // takes its allocation-per-call path. After construction the cache is
+    // reused across frames, only rebuilding when slider fingerprint changes.
+    std::unique_ptr<BvhViewerCache> m_bvh_cache;
 };
 
 } // namespace crd::sandbox

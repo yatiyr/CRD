@@ -372,3 +372,114 @@ TEMPLATE_TEST_CASE("closest_points 2D -- Segment2 <-> Segment2", "[geometry][clo
         REQUIRE(distance(s1, s2) == Catch::Approx(static_cast<T>(std::sqrt(static_cast<T>(45)))).margin(tol<T>()));
     }
 }
+
+// ---- Cylinder3 ------------------------------------------------------------
+// Phase 3.1.7 v1-close debt payment.
+
+TEMPLATE_TEST_CASE("closest_point 3D -- Cylinder3 (axis-aligned)", "[geometry][closest_point]", float, double)
+{
+    using T = TestType;
+    // Unit cylinder along Y, radius 1, from y=0 to y=2.
+    const Cylinder3<T> cyl(Vec3<T>(0, 0, 0), Vec3<T>(0, 2, 0), static_cast<T>(1));
+
+    SECTION("interior point -> identity")
+    {
+        const Vec3<T> p(static_cast<T>(0.3), static_cast<T>(1.0), static_cast<T>(-0.2));
+        close3(closest_point(cyl, p), p);
+        REQUIRE(distance(cyl, p) == Catch::Approx(static_cast<T>(0)).margin(tol<T>()));
+    }
+    SECTION("outside body (above axis) -> radial clamp at the same Y")
+    {
+        const Vec3<T> p(static_cast<T>(3), static_cast<T>(1), 0);
+        close3(closest_point(cyl, p), Vec3<T>(static_cast<T>(1), static_cast<T>(1), 0));
+        REQUIRE(distance(cyl, p) == Catch::Approx(static_cast<T>(2)).margin(tol<T>()));
+    }
+    SECTION("beyond top cap, off-axis -> radial clamp on top disc")
+    {
+        const Vec3<T> p(static_cast<T>(3), static_cast<T>(5), 0);
+        // Cap at y=2, radial clamp to radius 1 in the disc plane.
+        close3(closest_point(cyl, p), Vec3<T>(static_cast<T>(1), static_cast<T>(2), 0));
+    }
+    SECTION("beyond top cap, on axis -> top center")
+    {
+        const Vec3<T> p(0, static_cast<T>(5), 0);
+        close3(closest_point(cyl, p), Vec3<T>(0, static_cast<T>(2), 0));
+        REQUIRE(distance(cyl, p) == Catch::Approx(static_cast<T>(3)).margin(tol<T>()));
+    }
+    SECTION("degenerate axis (a == b) -> collapses to a")
+    {
+        const Cylinder3<T> deg(Vec3<T>(1, 2, 3), Vec3<T>(1, 2, 3), static_cast<T>(1));
+        const Vec3<T> p(10, 20, 30);
+        close3(closest_point(deg, p), Vec3<T>(1, 2, 3));
+    }
+}
+
+// ---- Tetrahedron ----------------------------------------------------------
+
+TEMPLATE_TEST_CASE("closest_point 3D -- Tetrahedron", "[geometry][closest_point]", float, double)
+{
+    using T = TestType;
+    // Canonical unit tetrahedron with vertices at origin + 3 unit axes.
+    const Tetrahedron<T> tet(Vec3<T>(0, 0, 0), Vec3<T>(1, 0, 0), Vec3<T>(0, 1, 0), Vec3<T>(0, 0, 1));
+
+    SECTION("interior point -> identity")
+    {
+        const Vec3<T> p(static_cast<T>(0.2), static_cast<T>(0.2), static_cast<T>(0.2));
+        close3(closest_point(tet, p), p);
+        REQUIRE(distance(tet, p) == Catch::Approx(static_cast<T>(0)).margin(tol<T>()));
+    }
+    SECTION("outside along -X axis -> closest on the y/z face through origin")
+    {
+        const Vec3<T> p(static_cast<T>(-1), static_cast<T>(0.25), static_cast<T>(0.25));
+        // Closest point is the same y/z on the x=0 face (origin/y-axis/z-axis triangle).
+        close3(closest_point(tet, p), Vec3<T>(0, static_cast<T>(0.25), static_cast<T>(0.25)));
+    }
+    SECTION("vertex projection -> matches vertex")
+    {
+        // Far above the (1,0,0) vertex along +X.
+        const Vec3<T> p(static_cast<T>(5), 0, 0);
+        close3(closest_point(tet, p), Vec3<T>(static_cast<T>(1), 0, 0));
+        REQUIRE(distance(tet, p) == Catch::Approx(static_cast<T>(4)).margin(tol<T>()));
+    }
+    SECTION("centroid -> closest is centroid (inside)")
+    {
+        const Vec3<T> c(static_cast<T>(0.25), static_cast<T>(0.25), static_cast<T>(0.25));
+        close3(closest_point(tet, c), c);
+    }
+    SECTION("matches brute-force per-face min over a random sample")
+    {
+        // For 12 random outside points, the result must equal the min over
+        // closest_point(face_i, p) for i in {0..3}.
+        for (int trial = 0; trial < 12; ++trial)
+        {
+            const T sx = static_cast<T>(((trial * 31) % 7) - 3);
+            const T sy = static_cast<T>(((trial * 17) % 5) - 2);
+            const T sz = static_cast<T>(((trial * 13) % 9) - 4);
+            const Vec3<T> p(sx, sy, sz);
+            const Vec3<T> got = closest_point(tet, p);
+            const Triangle3<T> faces[4] = {
+                Triangle3<T>(tet.a, tet.b, tet.c), Triangle3<T>(tet.a, tet.c, tet.d),
+                Triangle3<T>(tet.a, tet.d, tet.b), Triangle3<T>(tet.b, tet.d, tet.c),
+            };
+            Vec3<T> best = closest_point(faces[0], p);
+            T best_d2 = crd::math::distance_squared(best, p);
+            for (int i = 1; i < 4; ++i)
+            {
+                const Vec3<T> cp = closest_point(faces[i], p);
+                const T d2 = crd::math::distance_squared(cp, p);
+                if (d2 < best_d2) { best_d2 = d2; best = cp; }
+            }
+            // If the query is inside, both agree on `p`. If outside, both
+            // agree on the same face point (modulo ULP).
+            if (contains(tet, p))
+            {
+                close3(got, p, static_cast<T>(1e-3));
+            }
+            else
+            {
+                REQUIRE(distance_squared(tet, p) ==
+                        Catch::Approx(static_cast<T>(best_d2)).margin(static_cast<T>(1e-4)));
+            }
+        }
+    }
+}

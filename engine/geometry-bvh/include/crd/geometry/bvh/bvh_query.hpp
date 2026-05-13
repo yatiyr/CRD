@@ -22,6 +22,7 @@
 #include <crd/geometry/bvh/bvh_tree.hpp>
 #include <crd/geometry/primitives/primitives.hpp>      // intersects(AABB3, AABB3)
 #include <crd/geometry/primitives/robust_ray_aabb.hpp> // precompute_ray_aabb / intersect_ray_aabb_robust
+#include <crd/geometry/result_types.hpp>               // RayHit<P> / ClosestPointResult<P> — v1i-a
 
 #include <limits>
 #include <optional>
@@ -30,11 +31,9 @@ namespace crd::geometry::bvh
 {
 using crd::geometry::primitives::Ray3;
 
-struct BvhRayHit
-{
-    crd::u32 prim_index{0};
-    crd::f32 t{0.0F}; // ray parameter at the entry point of `prims[prim_index]`
-};
+// `BvhRayHit::payload` is the leaf-prim index (a `u32` into the caller's prims
+// span). `RayHit{t, payload}` field order pinned by ADR-0076 §16 pin #2.
+using BvhRayHit = crd::geometry::RayHit<crd::u32>;
 
 // Nearest-hit raycast. `nullopt` if the ray (within `[0, tmax]`) misses every
 // primitive AABB, or the tree is empty.
@@ -92,12 +91,9 @@ void bvh_overlap(const BvhTree& tree, crd::containers::ConstSpan<AABB3<crd::f32>
 
 // ---- closest point (v1e) --------------------------------------------------
 
-struct BvhClosestPoint
-{
-    crd::u32 prim_index{0};
-    crd::math::Vec3<crd::f32> point{}; // the closest point on `prims[prim_index]` to the query
-    crd::f32 distance_squared{0.0F};   // squared distance from the query to `point`
-};
+// `BvhClosestPoint::payload` is the leaf-prim index; `point` is on that prim's
+// AABB. Field order pinned by ADR-0076 §16 pin #2: {point, distance_squared, payload}.
+using BvhClosestPoint = crd::geometry::ClosestPointResult<crd::u32>;
 
 // The primitive (and the point on its AABB) closest to `query`, considering
 // only primitives within `max_dist`. `nullopt` if the tree is empty or nothing

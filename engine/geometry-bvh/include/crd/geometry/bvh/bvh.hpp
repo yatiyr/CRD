@@ -37,6 +37,7 @@
 #include <crd/geometry/bvh/bvh_build.hpp>
 #include <crd/geometry/bvh/bvh_build_parallel.hpp>
 #include <crd/geometry/bvh/bvh_query.hpp>
+#include <crd/geometry/bvh/bvh_shapecast.hpp>
 #include <crd/geometry/bvh/bvh_tree.hpp>
 #include <crd/geometry/bvh/bvh_update.hpp>
 #include <crd/geometry/bvh/dynamic_bvh.hpp>
