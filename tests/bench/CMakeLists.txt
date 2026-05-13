@@ -1,6 +1,7 @@
 add_executable(crd-bench
     test_bench.cpp
     test_bench_simd.cpp
+    test_bench_bvh.cpp
 )
 
 target_link_libraries(crd-bench PRIVATE
@@ -8,6 +9,8 @@ target_link_libraries(crd-bench PRIVATE
     crd-log
     crd-math
     crd-geometry-primitives
+    crd-geometry-bvh           # v1f BVH build/query benchmarks
+    crd-jobs                   # bvh_build_parallel needs the job system up in the bench body
     crd-memory
     crd-containers
     Catch2::Catch2WithMain

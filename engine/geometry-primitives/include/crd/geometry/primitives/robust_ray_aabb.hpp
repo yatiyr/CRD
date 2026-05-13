@@ -21,6 +21,7 @@
 // and stays as the cross-check reference for the non-degenerate corpus.
 // ---------------------------------------------------------------------------
 
+#include <crd/geometry/primitives/constants.hpp>
 #include <crd/geometry/primitives/primitives.hpp>
 
 #include <limits>
@@ -30,14 +31,17 @@ namespace crd::geometry::primitives
 using crd::math::MathScalar;
 using crd::math::Vec3;
 
-// The conservative `tmax` widening from Ize 2013 (γ₃ = 3u/(1−3u), u = ½ulp):
-// (1 + 2γ₃) bounds the relative error of `inv_dir`·(box − origin) so the slab
-// test never rejects a true surface hit.
+// The conservative `tmax` widening from Ize 2013 (γ_n = n·u/(1−n·u), u = ½ulp,
+// n = `k_robust_aabb_pad_ulps` = 3): (1 + 2·γ_n) bounds the relative error of
+// `inv_dir`·(box − origin) so the slab test never rejects a true surface hit.
+// `n` comes from the geometry epsilon policy (`constants.hpp`, v1h) — the value
+// is the same 3-ulp slack the v0f form always used.
 template <MathScalar T> [[nodiscard]] constexpr T ray_aabb_robust_pad() noexcept
 {
     const T u = std::numeric_limits<T>::epsilon() / static_cast<T>(2);
-    const T gamma3 = (static_cast<T>(3) * u) / (static_cast<T>(1) - static_cast<T>(3) * u);
-    return static_cast<T>(1) + static_cast<T>(2) * gamma3;
+    const T n = static_cast<T>(k_robust_aabb_pad_ulps<T>());
+    const T gamma_n = (n * u) / (static_cast<T>(1) - n * u);
+    return static_cast<T>(1) + static_cast<T>(2) * gamma_n;
 }
 
 // Per-ray precompute for the slab test. `inv_dir[i] = 1/dir[i]` (±∞ for a zero

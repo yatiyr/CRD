@@ -645,3 +645,128 @@ of their intersection / barycentric / formulary / SIMD work as they land
 **What is not affected.** §1–§5 architecture, §6 sequencing, §8
 out-of-scope, §9 risks, §10 open questions, the §12 sequence pivot, the
 §13 move-and-delete + v0f corpus — all unchanged.
+
+## 15. Amendment 2026-05-13 — checklist-driven additions (3 new slices + the `crd-geometry-viz` companion module)
+
+**What changed (reviewed by the user against a domain-checklist after
+`-bvh` v1a–v1d landed).** The user's checklist — *primitives* (incl.
+convex hull + mesh views), a *unified query API* (raycasts / overlaps /
+contains / distance / sweep tests / intersection tests / signed-distance
++ iq-style SDF utilities), *acceleration* (BVH / dynamic BVH / uniform
+grid / spatial hash / loose octree / broadphase query API), *validation*
+(brute-force-vs-BVH / randomized / degenerate / large-coordinate /
+epsilon policy / NaN-Inf guards), *debug draw* (ray hits / normals /
+closest points / BVH nodes / frustum culling / overlap pairs) — overlaps
+the existing plan heavily but surfaces real gaps. The gaps are folded in
+as **three new slices** plus tweaks to v2 / v5 / v9e; the architecture
+principles are pinned in §16.
+
+**New slices (slot: after `-bvh` v1g, before `-convex` v2):**
+
+* **v1h — primitives-substrate hardening.** `crd/geometry/primitives/
+  constants.hpp` — the geometry-wide *epsilon / tolerance policy* named
+  by intent, not magnitude (`k_distance_epsilon`, `k_area_epsilon`,
+  `k_parallel_epsilon`, `k_degenerate_extent_epsilon`, `k_sah_cost_epsilon`,
+  `k_default_fat_margin`, `k_robust_aabb_pad_ulps`, …); the ad-hoc
+  `1e-6F` / `default_epsilon` uses (v1a SAH-cost ε, v0f Ize ray-AABB
+  pad, …) retrofit onto it. `is_finite.hpp` — `is_finite(primitive)`
+  for every type, plus the **NaN/Inf contract** (§16.3). `signed_distance.hpp`
+  — Inigo Quilez's ~30 **analytic signed distance functions in C++**
+  (`sd_sphere` / `sd_box` / `sd_round_box` / `sd_box_frame` / `sd_plane`
+  / `sd_capsule` / `sd_cylinder` / `sd_cone` / `sd_torus` / `sd_triangle`
+  / `sd_ellipsoid` / `sd_octahedron` / … + 2D peers) — `closest_point.hpp`
+  (v0b) gives the *unsigned* distance; this adds the *signed,
+  negative-inside* form; it is the C++ scalar reference
+  `crd-geometry-shader-helpers` (v9e) emits GLSL/HLSL twins of and
+  `crd-sdf` v0 reuses (so `crd-sdf` v0's "analytic primitives" become a
+  thin domain-side wrapper, not a re-derivation). New view type
+  `ConvexHullView<T>` in `primitives.hpp` (non-owning: `ConstSpan<Vec3>`
+  vertices + `ConstSpan<Plane>` faces + `ConstSpan<u32>` face-vertex
+  indices — the *query-side* hull; `-convex` v3 *produces* one;
+  `crd-eylem`'s `Collider::ConvexHull` references one).
+* **v1i — unified query facade + shapecast + broadphase-pair API +
+  validation discipline.** `crd/geometry/queries.hpp` — `raycast` /
+  `overlap` / `closest_point` / `contains` / `distance` as **compile-time
+  overload-polymorphic** free functions over `{primitive, BvhTree,
+  Bvh4Tree, DynamicBvh}` (and the `-spatial` structures at v5), with the
+  shared result types `RayHit{t, payload}` / `ClosestPointResult{point,
+  distance², payload}` and the overlap-callback convention — one "give me
+  hits" surface that forwards to the right backend. **Shapecast (sweep
+  tests):** `cast_ray` / `cast_sphere` / `cast_box` vs a primitive *and*
+  a BVH — closed-form TOI (sphere-cast vs AABB = ray-vs-AABB-grown-by-r;
+  box-cast vs AABB = ray-vs-Minkowski-AABB; capsule-cast vs triangle; …),
+  no GJK needed; the general convex-cast (GJK-cast) extends this in v2;
+  eylem v6 CCD's *two moving convex shapes* case stays in eylem.
+  **Broadphase pairs:** `find_overlapping_pairs(const DynamicBvh&, OutFn)`
+  — the dual-descent self-overlap (all `(i<j)` fat-AABB-overlapping leaf
+  pairs in one traversal, not n separate queries) — the all-pairs
+  primitive eylem v1c's broadphase wraps. **Validation discipline:** a
+  systematic **degenerate-geometry corpus** (zero-volume AABBs / collinear
+  or zero-area triangles / coincident points / NaN-Inf inputs) and a
+  **large-coordinate** sweep (geometry shifted to a +1e6 / +1e7 far origin
+  — queries still correct within an f32-precision tolerance; flags where
+  f64 staging is wanted) added across the `crd-geometry` test suite + as
+  reusable test helpers.
+* **v1j — `crd-geometry-viz` companion module (NEW, 12th sub-module).**
+  Debug-only; depends `crd-geometry-*` + `crd-draw`. `crd-geometry`
+  itself **never** depends on `crd-draw` — the lean-substrate /
+  `crd-eylem` + `crd-eylem-viz` precedent (a headless/server build links
+  the geometry substrate without the draw layer). Pure functions emitting
+  `crd::draw::RenderBuffer` primitives: `draw_aabb` / `draw_obb` /
+  `draw_sphere` / `draw_capsule` / `draw_frustum` / `draw_triangle` /
+  `draw_ray` (primitive wireframes); `draw_ray_hit` (hit point + normal
+  arrow + the `t`-segment); `draw_closest_point` (segment query→closest);
+  `draw_normals` (normal hairs on a mesh view); `draw_bvh(BvhTree |
+  Bvh4Tree | DynamicBvh, depth_limit)` (node AABBs colour-keyed by depth);
+  `draw_frustum_cull(Frustum, BvhTree)` (kept vs culled in two colours);
+  `draw_overlap_pairs(DynamicBvh)` (lines between overlapping leaf
+  centroids). Extended incrementally — v4 adds mesh-query draws, v5 adds
+  octree/grid-cell draws, v6 adds polygon-clip draws.
+
+**v2 / v5 / v9e tweaks:** v2 (`-convex`) also lands `ConvexHullView`
+queries (ray-vs-hull / closest-point-on-hull / contains-point-in-hull) +
+the GJK-based convex shapecast (extends v1i's). v5 (`-spatial`) adds a
+dense `UniformGrid` (3D cell array for small bounded domains — distinct
+from the hashed grid) and extends the v1i query facade over the spatial
+structures; sweep-and-prune stays Reserved. v9e (`-shader-helpers`) emits
+GLSL/HLSL twins of v1h's `signed_distance.hpp` analytic SDFs (alongside
+v0e's formulary), ULP-conformance-tested against those C++ references.
+
+## 16. Pinned architecture principles (from the §15 amendment)
+
+1. **Query API is compile-time overload-polymorphic, not virtual.**
+   `raycast(const BvhTree&, …)`, `raycast(const Bvh4Tree&, …)`,
+   `raycast(const DynamicBvh&, …)`, `raycast(const Sphere<T>&, …)` are
+   free functions resolved at compile time — no `IAcceleration` vtable.
+   Zero-overhead, matches the §5 "Eigen-class typed layer". A
+   runtime-polymorphic "pick whichever structure" (e.g. for the editor)
+   is a thin `std::variant<…>` wrapper if ever needed, not a vtable.
+2. **`RayHit` carries a templated payload, not a fat union.** `RayHit{t,
+   payload}` where `payload` is `u32 prim_index` for `BvhTree`, `{u32
+   tri_index; f32 u, v;}` for a mesh raycast (`-mesh` v4), an entity id
+   for a scene raycast. Distinct concrete result types per backend rather
+   than one over-generic struct — clarity over genericity.
+3. **NaN/Inf: queries tolerate, builders reject (in debug).** A query
+   against a possibly-garbage scene must never crash — `intersects` etc.
+   are NaN-safe by IEEE comparison semantics (a NaN/∞ primitive is
+   silently never-hit / never-closest), and that is the contract. A
+   *builder* fed garbage must scream in debug (`CRD_ASSERT` finite
+   inputs) — it is a programmer error — and produce a defined-but-useless
+   structure in release, never UB. `is_finite()` helpers let cookers /
+   importers validate upstream.
+4. **Epsilon policy lives in one place, named by intent.**
+   `k_parallel_epsilon` (directions parallel?) ≠ `k_distance_epsilon`
+   (points the same?) ≠ `k_sah_cost_epsilon` (SAH split-cost tie) —
+   independently tunable, all in `crd/geometry/primitives/constants.hpp`
+   (the leaf substrate); every other sub-module consumes them.
+5. **Viz is a companion module, never woven in.** `crd-geometry-viz`
+   functions are pure (`RenderBuffer&` + a const-ref to the geometry
+   structure, no state) and live in their own module — `crd-geometry`
+   stays clean for headless builds.
+
+**What is not affected.** §1–§5 architecture (modulo the new `-viz`
+sub-module and the `queries.hpp` / `constants.hpp` / `is_finite.hpp` /
+`signed_distance.hpp` / `ConvexHullView` additions to `-primitives`),
+§6 sequencing, §8 out-of-scope (the GPU / decomposition lines unchanged),
+§9 risks, the §12 sequence pivot, the §13/§14 amendments. Slice count
+30 → 33; engine LOC ~16.6 → ~18.5 KLOC; calendar ~5–7 → ~6–8 months.

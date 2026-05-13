@@ -35,7 +35,9 @@
                 : 4723) // Guarded reciprocal code in the intersection helpers stays non-zero; MSVC is conservative.
 #endif
 
+#include <crd/containers/span.hpp>
 #include <crd/containers/static_array.hpp>
+#include <crd/core/types.hpp>
 #include <crd/math/mat.hpp>
 
 #include <cmath>
@@ -216,6 +218,37 @@ template <MathScalar T> struct Frustum
 
     constexpr Frustum() noexcept = default;
     constexpr explicit Frustum(const crd::containers::StaticArray<Plane<T>, 6>& planes_in) noexcept : planes(planes_in)
+    {
+    }
+};
+
+// ---- ConvexHullView: a non-owning view of a convex polyhedron --------------
+//
+// The query-side hull (ADR-0076 §15): `vertices` (the hull's extreme points),
+// `faces` (one outward-facing plane per face — `dot(n, x) + d <= 0` is the
+// inside half-space), and `face_vertex_indices` packed CCW per face with a
+// matching `face_vertex_offsets` (size `faces.size() + 1`, a prefix-sum so
+// face `f` owns `face_vertex_indices[offsets[f] .. offsets[f+1])`). Owns
+// nothing — the data lives in a cooked collider / a `crd-convex` v3 result;
+// `crd-eylem`'s `Collider::ConvexHull` references one. Ray-vs-hull /
+// closest-point-on-hull / contains-point-in-hull-via-GJK land in `-convex`
+// (Phase 3.1.7 v2); v1h ships the type plus the two trivially-correct queries
+// (`support`, plane-based `contains` — defined just below the 3D helpers,
+// after `signed_distance`).
+template <MathScalar T> struct ConvexHullView
+{
+    crd::containers::ConstSpan<Vec3<T>> vertices{};
+    crd::containers::ConstSpan<Plane<T>> faces{};
+    crd::containers::ConstSpan<crd::u32> face_vertex_indices{};
+    crd::containers::ConstSpan<crd::u32> face_vertex_offsets{};
+
+    constexpr ConvexHullView() noexcept = default;
+    constexpr ConvexHullView(crd::containers::ConstSpan<Vec3<T>> vertices_in,
+                             crd::containers::ConstSpan<Plane<T>> faces_in,
+                             crd::containers::ConstSpan<crd::u32> face_vertex_indices_in,
+                             crd::containers::ConstSpan<crd::u32> face_vertex_offsets_in) noexcept
+        : vertices(vertices_in), faces(faces_in), face_vertex_indices(face_vertex_indices_in),
+          face_vertex_offsets(face_vertex_offsets_in)
     {
     }
 };
@@ -589,6 +622,47 @@ template <MathScalar T> [[nodiscard]] inline bool intersects(const Frustum<T>& f
     for (const Plane<T>& plane : frustum.planes)
     {
         if (signed_distance(plane, positive_vertex(bounds, plane.normal)) < static_cast<T>(0))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+// ---- ConvexHullView queries (the trivially-correct pair; rest in v2) -------
+
+// Support point: the hull vertex maximising `dot(v, direction)`. Ties resolved
+// by lowest index (deterministic) — replace the running best only on a strictly
+// greater projection.
+template <MathScalar T>
+[[nodiscard]] inline Vec3<T> support(const ConvexHullView<T>& hull, const Vec3<T>& direction) noexcept
+{
+    CRD_ASSERT(!hull.vertices.empty());
+    Vec3<T> best = hull.vertices[0];
+    T best_proj = crd::math::dot(best, direction);
+    for (crd::usize i = 1; i < hull.vertices.size(); ++i)
+    {
+        const T proj = crd::math::dot(hull.vertices[i], direction);
+        if (proj > best_proj)
+        {
+            best_proj = proj;
+            best = hull.vertices[i];
+        }
+    }
+    return best;
+}
+
+// Point-in-hull: inside iff on the inner side of every face plane (faces are
+// outward-facing, so `signed_distance <= epsilon` for all). Exact for a true
+// convex hull; for an arbitrary face set this is the intersection of the
+// half-spaces (still well-defined, just not "the mesh").
+template <MathScalar T>
+[[nodiscard]] inline bool contains(const ConvexHullView<T>& hull, const Vec3<T>& point,
+                                   T epsilon = crd::math::default_epsilon<T>()) noexcept
+{
+    for (const Plane<T>& face : hull.faces)
+    {
+        if (signed_distance(face, point) > epsilon)
         {
             return false;
         }

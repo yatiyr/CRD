@@ -15,21 +15,25 @@
 | v0d | **`Tetrahedron` type + barycentric / tetrahedron utilities** (ADR-0076 §7; Ericson §3.4) — `barycentric.hpp`: `barycentric(Tetrahedron,p)→Vec4` (signed-volume ratios; orientation-stable), `contains(Tetrahedron,p)`, `from_barycentric` (the inverse, for `Triangle3`/`Triangle2`/`Tetrahedron`), `decompose_prism_to_tets(bottom,top)` (the canonical 3-tet split of a triangular wedge — Marching-Tetrahedra / FEM-meshing form, fixed diagonal). Type `Tetrahedron` (3D-only → no suffix) + `operator==`/formatter/aliases + `centroid`/`signed_volume`/`volume` in `primitives.hpp`. | ✅ 2026-05-13 |
 | v0e | **iq formulary + `reduce_argmax_with_lex_tiebreak` + shader-helpers skeleton** (ADR-0076 §7) — `formulary.hpp`: smooth-min/max (`smin_poly`/`smin_cubic`/`smin_exp` + `smax_*`; `smin_exp` via `crd::math::deterministic::exp2/log2`), value-domain ops (`op_round`/`op_onion`/`extrude_2d`), position-domain ops (`domain_repeat`/`domain_mirror`/`domain_elongate` exact + `domain_twist`/`domain_bend` via `crd::math::deterministic::sin/cos`). New `crd::math::simd::reduce_argmax_with_lex_tiebreak` (`crd/math/simd/reduce.hpp` — scalar-deterministic argmax with score-desc / (x,y,z)-asc-lex / earliest-index tiebreak; ADR-0076 §4 pin #10, what geometry v3 Quickhull needs). New module `crd-geometry-shader-helpers` (skeleton — the GLSL/HLSL twin of these formulas; v9e fills in the cooker + the ULP-conformance test). | ✅ 2026-05-13 |
 | v0f | **cutting-edge / branchless / SIMD intersection corpus — closes the v0 sub-phase.** Scalar: `watertight_ray_tri.hpp` (Woop/Benthin/Wald 2013 watertight ray-tri w/ per-ray shear precompute + closed-on-edge double-fallback; Baldwin-Weber-style precomputed per-triangle affine transform), `robust_ray_aabb.hpp` (Williams 2005 precomputed slab + Ize 2013 conservative `tmax` widening; `RayAABBPrecompute` = the single-ray "RayPacket"), `plucker.hpp` (Plücker side test + sign-only ray-tri boolean). SIMD (`simd_batch.hpp` + out-of-line `simd_batch.cpp`, f32/`Vec8f`): `ray_vs_8_aabb` (1 ray × 8 boxes — leaf-batch), `ray_packet8_vs_aabb` (8 rays × 1 box — packet), `ray_vs_8_triangle` (MT × 8), `aabb8_vs_aabb`, `sphere8_vs_sphere`, `segment8_vs_segment_distsq` + `precompute_ray_packet8`. All cross-checked vs the v0b/v0c/`robust_ray_aabb` scalar references. ADR-0076 §4 pins #12 (watertight axis selection + closed-on-edge) & #13 (Plücker fixed sum order, sign-zero = on-the-line) realised. | ✅ 2026-05-13 |
+| v1h | **Primitives-substrate hardening** (ADR-0076 §15) — `constants.hpp` (the geometry epsilon/tolerance policy named by intent — `k_distance/area/parallel/degenerate_extent_epsilon`, `k_sah_cost_epsilon`, `k_default_fat_margin`, `k_robust_aabb_pad_ulps`; value-preserving retrofit of `bvh_build_internal.hpp`'s `k_sah_cost_epsilon` + `robust_ray_aabb.hpp`'s `ray_aabb_robust_pad`), `is_finite.hpp` (`is_finite(x)` for every primitive + `all_finite(span)` + **the NaN/Inf contract**: queries tolerate, builders reject in debug — asserts added to `bvh_build`/`bvh_build_parallel`/`DynamicBvh::insert`/`update`/`bvh4_collapse`), `signed_distance.hpp` (20 Inigo Quilez analytic SDFs in C++ — 3D sphere/box/round_box/box_frame/plane/capsule/cylinder/cone/torus/triangle/ellipsoid/octahedron + 2D circle/box/round_box/segment/triangle/equilateral_triangle/pentagon/hexagon; sqrt/abs/min/max only — the C++ reference for `crd-geometry-shader-helpers` v9e + `crd-sdf` v0), `ConvexHullView<T>` in `primitives.hpp` (non-owning hull view + `support`/`contains`). | ✅ 2026-05-13 |
 
-Then v1+ are the other crd-geometry sub-modules (`-bvh`, `-convex`, …) — separate libraries, see `docs/phases/phase-3.1.7-geometry.md`.
+Then v1a–v1g (the `-bvh` sub-module, complete) and v1i/v1j+ are the other crd-geometry sub-modules / slices — separate libraries, see `docs/phases/phase-3.1.7-geometry.md`.
 
-## What you get today (v0a + v0b + v0c + v0d + v0e + v0f — the v0 sub-phase, complete)
+## What you get today (v0a–v0f — the v0 sub-phase, complete — plus v1h hardening)
 
 `#include <crd/geometry/primitives/primitives.hpp>` — all types + the basic
-helpers. `#include <crd/geometry/primitives/closest_point.hpp>` — the closest-
-point / distance catalogue (2D + 3D) + `closest_points(Segment,Segment)`.
+helpers + `ConvexHullView`. `#include <crd/geometry/primitives/closest_point.hpp>` —
+the closest-point / distance catalogue (2D + 3D) + `closest_points(Segment,Segment)`.
 `#include <crd/geometry/primitives/intersect.hpp>` — the intersection corpus (ray
 casts + boolean overlap, 2D + 3D). `#include <crd/geometry/primitives/barycentric.hpp>`
 — tetrahedron barycentric/contains, `from_barycentric`, the 3-tet prism split.
 `#include <crd/geometry/primitives/formulary.hpp>` — the iq smooth-blend & domain
-operators. `#include <crd/geometry/primitives/format.hpp>` — `std::format` support.
-Namespace `crd::geometry::primitives`. Link `crd-geometry-primitives` (it pulls `crd-core` +
-`crd-math` PUBLIC).
+operators. `#include <crd/geometry/primitives/signed_distance.hpp>` — the iq analytic
+SDFs (`sd_*`). `#include <crd/geometry/primitives/constants.hpp>` — the epsilon/tolerance
+policy (`k_*`). `#include <crd/geometry/primitives/is_finite.hpp>` — `is_finite` /
+`all_finite` + the NaN/Inf contract. `#include <crd/geometry/primitives/format.hpp>` —
+`std::format` support. Namespace `crd::geometry::primitives`. Link `crd-geometry-primitives`
+(it pulls `crd-core` + `crd-math` PUBLIC).
 
 Types (templated on `T : crd::math::MathScalar`):
 - **3D** — `Line3`, `Segment3`, `Ray3`, `Plane`, `AABB3`, `OBB3`, `Sphere`,
@@ -82,6 +86,12 @@ SIMD batch kernels (v0f — `simd_batch.hpp` declarations, `simd_batch.cpp` out-
 
 All comparisons return all-bits-set masks; feed the kernels' `Vec8f` outputs to `reduce_argmax_with_lex_tiebreak` when a "best lane" is wanted. A partial tail (< 8 valid items) is the caller's mask. Each kernel is ULP-cross-checked lane-by-lane against its scalar reference (`intersect.hpp` / `closest_point.hpp` / `robust_ray_aabb.hpp`). (Follow-up: wire `simd_batch.cpp`'s `.obj` into the `crd-simd-emission-check` scan — currently it inspects only `crd-math`'s SIMD `.obj`.)
 
+Hardening (v1h — `constants.hpp`, `is_finite.hpp`, `signed_distance.hpp`, `ConvexHullView`):
+- **`constants.hpp`** — `template <MathScalar T> constexpr T k_*()`: `k_distance_epsilon` / `k_area_epsilon` / `k_parallel_epsilon` (dot near-zero) / `k_degenerate_extent_epsilon` (zero-extent test) — `1e-6F` for `f32`, `1e-12` for `f64`; `k_sah_cost_epsilon` (`bvh_build_internal.hpp` re-exports this — one source of truth); `k_default_fat_margin` = `0.1` (a *world unit*, matches `DynamicBvhConfig`); `k_robust_aabb_pad_ulps` = `3` (`ray_aabb_robust_pad<T>()` derives `γ_n` from it). A value-preserving rename — the existing function-signature defaults still bind `crd::math::default_epsilon<T>()`; migrating them onto the named constants is a later pass.
+- **`is_finite.hpp`** — `is_finite(x)` for `Vec2`/`Vec3` and every primitive (3D Line3/Segment3/Ray3/Plane/Sphere/AABB3/OBB3/Capsule3/Cylinder3/Triangle3/Tetrahedron/Frustum/ConvexHullView; 2D peers) + `all_finite(ConstSpan<Primitive>)`. **The NaN/Inf contract:** queries tolerate (a NaN/∞ primitive is never-hit / never-closest, never UB — the v0c/v0f IEEE-comparison corpus already gives this; finiteness predicates are *not* on the query path), builders reject in debug — `bvh_build` / `bvh_build_parallel` `CRD_ASSERT(all_finite(prims))`, `DynamicBvh::insert`/`update` `CRD_ASSERT(is_finite(aabb))`, `bvh4_collapse` `CRD_ASSERT(is_finite(binary.bounds()))`; release → valid-but-possibly-degenerate, still no UB. Internal sentinels are exempt: `aabb_empty() = {+∞,−∞}` is a deliberate non-finite union identity.
+- **`signed_distance.hpp`** — 20 Inigo Quilez analytic SDFs: 3D `sd_sphere`/`sd_box`/`sd_round_box`/`sd_box_frame`/`sd_plane`/`sd_capsule`/`sd_cylinder`/`sd_cone`/`sd_torus`/`sd_triangle` (unsigned)/`sd_ellipsoid` (iq bound)/`sd_octahedron`; 2D `sd_circle`/`sd_box_2d`/`sd_round_box_2d`/`sd_segment_2d` (unsigned)/`sd_triangle_2d` (signed)/`sd_equilateral_triangle_2d`/`sd_pentagon_2d`/`sd_hexagon_2d`. `sqrt`/`abs`/`min`/`max`/`clamp`/`dot`/`length` only (no transcendental libm); component-wise helpers (`vabs`/`vmax0`/`max3`/`sgn`) in a `sd_detail` sub-namespace so `crd-math` stays lean. The C++ scalar reference `crd-geometry-shader-helpers` (v9e) emits GLSL/HLSL twins of and `crd-sdf` v0 reuses (`closest_point.hpp` gives the unsigned distance + point on the *primitive structs* in world space; this gives the signed, negative-inside value in *shape-local* space). Strong tests: cross-checked vs `closest_point.hpp`'s `distance()` for sphere/box/circle/box_2d/segment_2d/capsule/plane/triangle, sign vs `contains`, closed-form spot values for the rest, 1-Lipschitz on random pairs (ellipsoid exempt — it is a bound).
+- **`ConvexHullView<T>`** (in `primitives.hpp`) — non-owning view: `ConstSpan<Vec3> vertices` + `ConstSpan<Plane> faces` (outward-facing) + `ConstSpan<u32> face_vertex_indices` + `ConstSpan<u32> face_vertex_offsets` (prefix-sum, size `faces+1`, so face `f` owns `indices[offsets[f]..offsets[f+1])`). `support(hull, dir)` (extreme vertex, lowest-index tiebreak), `contains(hull, point)` (inside iff `signed_distance ≤ ε` for every face). `crd-convex` v3 *produces* one, `crd-eylem`'s `Collider::ConvexHull` references one; ray-vs-hull / closest-point-on-hull / GJK-contains land in v2.
+
 ```cpp
 using namespace crd::geometry::primitives;
 const Triangle3f tri(Vec3f(-1,-1,0), Vec3f(1,-1,0), Vec3f(0,1,0));
@@ -123,7 +133,17 @@ in this module (the `crd-no-std-math-check` CI guard now scopes
 correctly-rounded single-rounding sqrt everywhere). Algorithm-specific tiebreaks
 (GJK simplex Ericson-not-vandenBergen, SAH-split X-then-Y-then-Z, Quickhull lex
 order, watertight ray-tri axis selection, Plücker sign-zero) are pinned in
-ADR-0076 §4 and land with their algorithms in v0c–v0f / v2+.
+ADR-0076 §4 and land with their algorithms in v0c–v0f / v2+. The `signed_distance.hpp`
+SDFs (v1h) are deliberately `sqrt`/`abs`/`min`/`max` only — no transcendental
+needed for any of the 20, so the GLSL/HLSL twins are ULP-portable.
+
+**Tolerance policy (v1h):** every geometry tolerance is named in `constants.hpp`
+by intent (`k_distance_epsilon`, `k_parallel_epsilon`, …) — when adding a helper
+that needs an ε, reach for the named constant whose *meaning* matches, don't
+introduce a fresh `1e-6F`. **NaN/Inf (v1h):** queries tolerate (return
+no-hit/false/NaN, never UB); accelerator builders `CRD_ASSERT` finite *inputs*
+in debug — never assert on internal accumulators (the `aabb_empty()` sentinel is
+non-finite on purpose).
 
 ## Sibling: `crd-geometry-shader-helpers`
 

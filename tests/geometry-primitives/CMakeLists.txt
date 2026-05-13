@@ -6,6 +6,10 @@ add_executable(crd-geometry-primitives-tests
     test_formulary.cpp
     test_v0f_corpus.cpp
     test_v0f_simd.cpp
+    test_constants.cpp
+    test_is_finite.cpp
+    test_signed_distance.cpp
+    test_convex_hull_view.cpp
 )
 
 target_link_libraries(crd-geometry-primitives-tests PRIVATE
