@@ -2,6 +2,7 @@ add_executable(crd-bench
     test_bench.cpp
     test_bench_simd.cpp
     test_bench_bvh.cpp
+    test_bench_gjk.cpp
 )
 
 target_link_libraries(crd-bench PRIVATE
@@ -10,6 +11,7 @@ target_link_libraries(crd-bench PRIVATE
     crd-math
     crd-geometry-primitives
     crd-geometry-bvh           # v1f BVH build/query benchmarks
+    crd-geometry-convex        # v2b gjk_distance / gjk_overlap benchmarks
     crd-jobs                   # bvh_build_parallel needs the job system up in the bench body
     crd-memory
     crd-containers

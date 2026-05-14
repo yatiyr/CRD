@@ -42,6 +42,7 @@ $scopes = @(
     "$RepoRoot/engine/hesap",
     "$RepoRoot/engine/geometry-primitives",
     "$RepoRoot/engine/geometry-bvh",
+    "$RepoRoot/engine/geometry-convex",
     "$RepoRoot/engine/geometry-shader-helpers"
 )
 

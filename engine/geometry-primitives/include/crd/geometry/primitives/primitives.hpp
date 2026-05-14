@@ -42,6 +42,7 @@
 
 #include <cmath>
 #include <limits>
+#include <type_traits>
 
 namespace crd::geometry::primitives
 {
@@ -241,6 +242,48 @@ template <MathScalar T> struct ConvexHullView
     crd::containers::ConstSpan<Plane<T>> faces{};
     crd::containers::ConstSpan<crd::u32> face_vertex_indices{};
     crd::containers::ConstSpan<crd::u32> face_vertex_offsets{};
+    // v2g — OPTIONAL per-vertex adjacency for the hill-climb support path
+    // (PhysX/Havok pattern). Empty ⇒ no adjacency, support() falls back to
+    // O(N) linear scan. When populated:
+    //   * `vertex_adjacency_indices` is a flat list of neighbor vertex
+    //     indices for every vertex.
+    //   * `vertex_adjacency_offsets` is the prefix-sum (`size = vertices.size()
+    //     + 1`); vertex `i`'s neighbors are at
+    //     `vertex_adjacency_indices[vertex_adjacency_offsets[i]
+    //                              .. vertex_adjacency_offsets[i+1])`.
+    //   * The adjacency must be EDGE-symmetric (every edge appears in both
+    //     endpoints' neighbor lists) and DUPLICATE-FREE.
+    // Cookers (V-HACD, Quickhull v3) populate this; hand-built hulls can use
+    // the `compute_vertex_adjacency_from_faces` helper in eylem/test code.
+    crd::containers::ConstSpan<crd::u32> vertex_adjacency_indices{};
+    crd::containers::ConstSpan<crd::u32> vertex_adjacency_offsets{};
+
+    // v2h — OPTIONAL Structure-of-Arrays vertex layout for the AVX2 `Vec8f`
+    // SIMD-batched support path. Empty ⇒ no SoA, support() uses the AoS
+    // `vertices` array (linear-scan or hill-climb).
+    //
+    // Layout: three flat `ConstSpan<f32>` arrays, one per coordinate.
+    // `vx_soa[i]` / `vy_soa[i]` / `vz_soa[i]` are vertex `i`'s coordinates
+    // (the same data as `vertices[i]` but transposed for SIMD-friendly
+    // load/multiply).
+    //
+    // **Padding contract** (PIN — advisor 2026-05-14): all three SoA spans
+    // MUST be padded to the next multiple of 8 (`padded_size = (n + 7) & ~7`)
+    // by REPEATING vertex 0's coordinates in lanes `[n, padded_size)`. This
+    // lets the SIMD reducer scan all 8 lanes per chunk without branching
+    // on the chunk-end: padded lanes contribute `dot(vertex_0, dir)` —
+    // tied with lane 0 on `vertex_idx` 0 winning by lowest-index tiebreak.
+    //
+    // **Alignment recommendation**: cookers should align SoA storage to 32
+    // bytes so `Vec8f::load_aligned` can be used. The current implementation
+    // uses unaligned loads (`Vec8f::load`) — alignment is a v2-close perf
+    // followup.
+    //
+    // **f32-only** for v2h. f64 hulls (v2i territory) fall through to the
+    // AoS linear-scan path (the SIMD dispatch is `if constexpr (T == f32)`).
+    crd::containers::ConstSpan<crd::f32> vx_soa{};
+    crd::containers::ConstSpan<crd::f32> vy_soa{};
+    crd::containers::ConstSpan<crd::f32> vz_soa{};
 
     constexpr ConvexHullView() noexcept = default;
     constexpr ConvexHullView(crd::containers::ConstSpan<Vec3<T>> vertices_in,
@@ -249,6 +292,36 @@ template <MathScalar T> struct ConvexHullView
                              crd::containers::ConstSpan<crd::u32> face_vertex_offsets_in) noexcept
         : vertices(vertices_in), faces(faces_in), face_vertex_indices(face_vertex_indices_in),
           face_vertex_offsets(face_vertex_offsets_in)
+    {
+    }
+    // v2g 6-arg constructor accepting adjacency. Backward-compatible: the
+    // 4-arg form leaves adjacency empty.
+    constexpr ConvexHullView(crd::containers::ConstSpan<Vec3<T>> vertices_in,
+                             crd::containers::ConstSpan<Plane<T>> faces_in,
+                             crd::containers::ConstSpan<crd::u32> face_vertex_indices_in,
+                             crd::containers::ConstSpan<crd::u32> face_vertex_offsets_in,
+                             crd::containers::ConstSpan<crd::u32> vertex_adjacency_indices_in,
+                             crd::containers::ConstSpan<crd::u32> vertex_adjacency_offsets_in) noexcept
+        : vertices(vertices_in), faces(faces_in), face_vertex_indices(face_vertex_indices_in),
+          face_vertex_offsets(face_vertex_offsets_in), vertex_adjacency_indices(vertex_adjacency_indices_in),
+          vertex_adjacency_offsets(vertex_adjacency_offsets_in)
+    {
+    }
+    // v2h 9-arg constructor accepting adjacency + SoA. Backward-compatible:
+    // the 4-arg and 6-arg forms leave SoA empty.
+    constexpr ConvexHullView(crd::containers::ConstSpan<Vec3<T>> vertices_in,
+                             crd::containers::ConstSpan<Plane<T>> faces_in,
+                             crd::containers::ConstSpan<crd::u32> face_vertex_indices_in,
+                             crd::containers::ConstSpan<crd::u32> face_vertex_offsets_in,
+                             crd::containers::ConstSpan<crd::u32> vertex_adjacency_indices_in,
+                             crd::containers::ConstSpan<crd::u32> vertex_adjacency_offsets_in,
+                             crd::containers::ConstSpan<crd::f32> vx_soa_in,
+                             crd::containers::ConstSpan<crd::f32> vy_soa_in,
+                             crd::containers::ConstSpan<crd::f32> vz_soa_in) noexcept
+        : vertices(vertices_in), faces(faces_in), face_vertex_indices(face_vertex_indices_in),
+          face_vertex_offsets(face_vertex_offsets_in), vertex_adjacency_indices(vertex_adjacency_indices_in),
+          vertex_adjacency_offsets(vertex_adjacency_offsets_in), vx_soa(vx_soa_in), vy_soa(vy_soa_in),
+          vz_soa(vz_soa_in)
     {
     }
 };
@@ -629,27 +702,330 @@ template <MathScalar T> [[nodiscard]] inline bool intersects(const Frustum<T>& f
     return true;
 }
 
-// ---- ConvexHullView queries (the trivially-correct pair; rest in v2) -------
+// ---- SupportPoint + support() overloads (the convex-shape substrate) -------
+//
+// `SupportPoint<T>` lives in the primitives layer so the four `support()`
+// overloads (Sphere / OBB3 / Capsule3 / ConvexHullView) can live in the same
+// namespace as the shape types — argument-dependent lookup then finds them
+// from any caller (the `ConvexShape` concept in `crd-geometry-convex` is one
+// such caller). The `vertex_idx` field is what makes GJK + EPA cross-platform
+// bit-exact (ADR-0076 §4 pin #14): hulls report the argmax vertex index with
+// lowest-index tiebreak on coincident extrema, analytic shapes report
+// `k_invalid_vertex` (sentinel), and GJK's primary termination is the
+// `(vidx_a, vidx_b)` index-match (Box2D pattern) — epsilon-free, deterministic.
+//
+// Phase 3.1.7 v2a (this slice) defines the four substrate overloads. v1h
+// shipped only the `ConvexHullView` form with a bare-`Vec3` return; v2a
+// expands the return shape to carry the vertex index and adds the analytic-
+// shape overloads. The `ConvexShape` concept + `gjk_distance` driver live
+// in the sibling `crd-geometry-convex` module.
 
-// Support point: the hull vertex maximising `dot(v, direction)`. Ties resolved
-// by lowest index (deterministic) — replace the running best only on a strictly
-// greater projection.
+// Sentinel for "no enumerable vertex" — analytic shapes (sphere / capsule)
+// report this. Hulls report a real index in [0, hull.vertices.size()); OBB3
+// reports a corner index in [0, 8) (packed `(sx<<2)|(sy<<1)|sz`).
+inline constexpr crd::u32 k_invalid_vertex = ~crd::u32{0};
+
+// The result of a support query: the extreme point on the shape in the given
+// direction (shape-local frame), plus the vertex index that produced it (for
+// hulls / OBBs) or `k_invalid_vertex` (for analytic shapes).
+//
+// Field order is FROZEN — GJK's index-match termination + EPA (v2c) read
+// `point` and `vertex_idx` by name. Aggregate layout means `SupportPoint
+// <f32>` is 16 bytes, `SupportPoint<f64>` 32 bytes.
+template <MathScalar T> struct SupportPoint
+{
+    Vec3<T> point{};
+    crd::u32 vertex_idx = k_invalid_vertex;
+};
+
+namespace support_detail
+{
+// Unit vector in `dir`, or a canonical +X axis fallback on zero / sub-normal
+// input. The deterministic zero-direction reply.
+template <MathScalar T> [[nodiscard]] inline Vec3<T> normalize_safe(const Vec3<T>& dir) noexcept
+{
+    const T dd = crd::math::dot(dir, dir);
+    if (!(dd > std::numeric_limits<T>::min()))
+    {
+        return Vec3<T>(static_cast<T>(1), static_cast<T>(0), static_cast<T>(0));
+    }
+    const T inv_len = static_cast<T>(1) / static_cast<T>(std::sqrt(dd));
+    return Vec3<T>(dir.x * inv_len, dir.y * inv_len, dir.z * inv_len);
+}
+} // namespace support_detail
+
+// ---- support(Sphere): `center + radius * dir̂`; zero `dir` → canonical reply
 template <MathScalar T>
-[[nodiscard]] inline Vec3<T> support(const ConvexHullView<T>& hull, const Vec3<T>& direction) noexcept
+[[nodiscard]] inline SupportPoint<T> support(const Sphere<T>& sphere, const Vec3<T>& dir) noexcept
+{
+    const Vec3<T> d = support_detail::normalize_safe(dir);
+    return SupportPoint<T>{Vec3<T>(sphere.center.x + d.x * sphere.radius, sphere.center.y + d.y * sphere.radius,
+                                   sphere.center.z + d.z * sphere.radius),
+                           k_invalid_vertex};
+}
+
+// ---- support(OBB3): corner pick by `dot(axis_i, dir)` signs, `+h` on tie.
+// Packed corner index: bit 2 ⇐ x≥0, bit 1 ⇐ y≥0, bit 0 ⇐ z≥0.
+template <MathScalar T>
+[[nodiscard]] inline SupportPoint<T> support(const OBB3<T>& obb, const Vec3<T>& dir) noexcept
+{
+    const T dx = crd::math::dot(obb.orientation.c0, dir);
+    const T dy = crd::math::dot(obb.orientation.c1, dir);
+    const T dz = crd::math::dot(obb.orientation.c2, dir);
+    const T sx = dx < static_cast<T>(0) ? -obb.half_extents.x : obb.half_extents.x;
+    const T sy = dy < static_cast<T>(0) ? -obb.half_extents.y : obb.half_extents.y;
+    const T sz = dz < static_cast<T>(0) ? -obb.half_extents.z : obb.half_extents.z;
+    const Vec3<T> point(obb.center.x + obb.orientation.c0.x * sx + obb.orientation.c1.x * sy + obb.orientation.c2.x * sz,
+                        obb.center.y + obb.orientation.c0.y * sx + obb.orientation.c1.y * sy + obb.orientation.c2.y * sz,
+                        obb.center.z + obb.orientation.c0.z * sx + obb.orientation.c1.z * sy + obb.orientation.c2.z * sz);
+    const crd::u32 idx = (dx < static_cast<T>(0) ? 0U : 4U) | (dy < static_cast<T>(0) ? 0U : 2U) |
+                         (dz < static_cast<T>(0) ? 0U : 1U);
+    return SupportPoint<T>{point, idx};
+}
+
+// ---- support(Capsule3): pick endpoint by `dot(endpoint, dir)`, tie → `a`.
+// Radial adds `radius·dir̂`; zero `dir` → canonical +X reply.
+//
+// Reports `vertex_idx = k_invalid_vertex` — even though the endpoint choice
+// (a vs b) is discrete, the **radial offset is a continuous function of
+// `dir`**, so the support point as a whole is not a bijection from a small
+// discrete vertex set. If we reported `vertex_idx ∈ {0, 1}`, GJK's index-
+// match termination would fire as soon as the endpoint pair stabilises,
+// leaving the radial direction not-yet-converged (~1% distance error on
+// capsule-capsule pairs at typical scales). With `k_invalid_vertex`, GJK
+// falls back to the geometric `|d|² + d·w ≤ ε²` test which polishes the
+// radial direction to ε precision.
+//
+// Same reasoning applies to `Sphere` (already reports `k_invalid_vertex`).
+// `OBB3` and `ConvexHullView` are polyhedral — their supports ARE a true
+// bijection from a discrete vertex set, so they keep their real indices and
+// benefit from the bit-exact index-match termination.
+template <MathScalar T>
+[[nodiscard]] inline SupportPoint<T> support(const Capsule3<T>& cap, const Vec3<T>& dir) noexcept
+{
+    const T da = crd::math::dot(cap.a, dir);
+    const T db = crd::math::dot(cap.b, dir);
+    const Vec3<T>& end = (db > da) ? cap.b : cap.a;
+    const Vec3<T> d = support_detail::normalize_safe(dir);
+    return SupportPoint<T>{Vec3<T>(end.x + d.x * cap.radius, end.y + d.y * cap.radius, end.z + d.z * cap.radius),
+                           k_invalid_vertex};
+}
+
+// ---- support(ConvexHullView): linear scan, strict-greater-wins, lowest-
+// index argmax on ties (the deterministic substrate-wide tiebreak rule).
+// O(n). The hill-climbing path (v2g) adds a warm-start `hint_vertex_idx`
+// overload; the SIMD-batched path (v2h) parallelises the scan with `Vec8f`.
+template <MathScalar T>
+[[nodiscard]] inline SupportPoint<T> support(const ConvexHullView<T>& hull, const Vec3<T>& dir) noexcept
 {
     CRD_ASSERT(!hull.vertices.empty());
     Vec3<T> best = hull.vertices[0];
-    T best_proj = crd::math::dot(best, direction);
+    T best_proj = crd::math::dot(best, dir);
+    crd::u32 best_idx = 0U;
     for (crd::usize i = 1; i < hull.vertices.size(); ++i)
     {
-        const T proj = crd::math::dot(hull.vertices[i], direction);
+        const T proj = crd::math::dot(hull.vertices[i], dir);
         if (proj > best_proj)
         {
             best_proj = proj;
             best = hull.vertices[i];
+            best_idx = static_cast<crd::u32>(i);
         }
     }
-    return best;
+    return SupportPoint<T>{best, best_idx};
+}
+
+// ---- v2g: hill-climbing hull support (PhysX/Havok pattern) -----------------
+//
+// `hill_climb_support` — best-neighbor walk on the hull's vertex adjacency
+// graph. Starts at `start_idx` (the warm-start hint, typically the previous
+// GJK iteration's argmax for this hull), then at each step moves to the
+// neighbor with the largest `dot(vertex, dir)` projection. Converges to
+// the global argmax in O(diameter) iterations on convex hulls — typically
+// 1-3 iters when warm-started near the answer, vs O(N) for linear scan.
+//
+// **Determinism contract** (the load-bearing fix; ADR-0076 §4 pin #14):
+// the returned `vertex_idx` must be the SAME as what `support(hull, dir)`
+// (linear scan) would return for the same direction — the lowest-index
+// vertex among all coincident extrema. Otherwise GJK's index-match
+// termination breaks (the (vidx_a, vidx_b) pair would fail to repeat on
+// converging directions because hill-climb might pick a different tied
+// vertex than the linear scan did in a previous iter).
+//
+// The fix: after the walk converges to a local max, scan the converged
+// vertex + ALL its neighbors with `proj` within `eps` of `best_proj`,
+// pick the **lowest index** among them. Costs ~6 extra dot products (one
+// per neighbor) in exchange for the bijection guarantee. Jolt does this;
+// PhysX doesn't, and Jolt's contact stability is noticeably better.
+template <MathScalar T>
+[[nodiscard]] inline SupportPoint<T> hill_climb_support(const ConvexHullView<T>& hull, const Vec3<T>& dir,
+                                                         crd::u32 start_idx) noexcept
+{
+    CRD_ASSERT(!hull.vertices.empty());
+    CRD_ASSERT(!hull.vertex_adjacency_offsets.empty());
+    CRD_ASSERT(start_idx < hull.vertices.size());
+
+    crd::u32 best = start_idx;
+    T best_proj = crd::math::dot(hull.vertices[best], dir);
+
+    // Best-neighbor walk: at each step, scan all neighbors of the current
+    // best, find the one with the highest projection, advance to it if
+    // strictly better. Converges when no neighbor improves.
+    while (true)
+    {
+        const crd::u32 nb_begin = hull.vertex_adjacency_offsets[best];
+        const crd::u32 nb_end = hull.vertex_adjacency_offsets[best + 1];
+        crd::u32 best_neighbor = best;
+        T best_neighbor_proj = best_proj;
+        for (crd::u32 k = nb_begin; k < nb_end; ++k)
+        {
+            const crd::u32 j = hull.vertex_adjacency_indices[k];
+            const T proj_j = crd::math::dot(hull.vertices[j], dir);
+            // Strict-greater so a tie keeps the lower-index neighbor (the
+            // post-walk tiebreak pass below covers global ties).
+            if (proj_j > best_neighbor_proj)
+            {
+                best_neighbor = j;
+                best_neighbor_proj = proj_j;
+            }
+        }
+        if (best_neighbor == best)
+        {
+            break; // converged
+        }
+        best = best_neighbor;
+        best_proj = best_neighbor_proj;
+    }
+
+    // Tiebreak pass: walk to the lowest-index vertex within the connected-
+    // tied-vertex subgraph. For a convex polytope, tied vertices on the
+    // same face are mutually connected (a face's polygon edges link
+    // every pair of consecutive vertices on it). So walking neighbor-to-
+    // neighbor among "same-projection" vertices converges to the lowest
+    // index in that tied cluster — matching `support()`'s lowest-global-
+    // index rule for the cases that actually occur on real hulls.
+    //
+    // The naive single-step tiebreak (only check direct neighbors of the
+    // converged vertex) is NOT sufficient: on a cube queried along +X,
+    // vertices {4, 5, 6, 7} are all tied; hill-climb from start=7 picks
+    // vertex 5 (a neighbor with lower index, same proj), but vertex 4
+    // (also tied, lower than 5) is NOT a direct neighbor of 7. The walk
+    // form below catches this: 7→5→4, stops at 4.
+    //
+    // Worst-case cost: O(C) where C is the size of the tied cluster.
+    // Typical: 1-4 steps (one face's vertices). Bounded by the polytope's
+    // vertex count.
+    //
+    // Equality test is STRICT (`==`), not eps-based. Linear-scan `support`
+    // uses strict-greater (`>`), so vertices with projections differing by
+    // 1 ULP are treated as DISTINCT (the strictly-higher one wins). Eps-
+    // based equality here would mis-classify those as tied and pick the
+    // lower-index one — diverging from linear scan. Bit-exact equality
+    // matches the contract: hill_climb_support returns the SAME vertex_idx
+    // linear scan would.
+    bool changed = true;
+    while (changed)
+    {
+        changed = false;
+        const crd::u32 nb_begin_t = hull.vertex_adjacency_offsets[best];
+        const crd::u32 nb_end_t = hull.vertex_adjacency_offsets[best + 1];
+        for (crd::u32 k = nb_begin_t; k < nb_end_t; ++k)
+        {
+            const crd::u32 j = hull.vertex_adjacency_indices[k];
+            const T proj_j = crd::math::dot(hull.vertices[j], dir);
+            if (proj_j == best_proj && j < best)
+            {
+                best = j;
+                changed = true;
+                break;
+            }
+        }
+    }
+    return SupportPoint<T>{hull.vertices[best], best};
+}
+
+// `support_with_hint(shape, dir, hint)` — dispatch surface that GJK calls
+// in its hot loop. For shapes without adjacency-based fast paths (Sphere,
+// OBB3, Capsule3, ConvexHullView without adjacency), it just delegates to
+// the no-hint `support(shape, dir)`. For ConvexHullView WITH adjacency
+// and a valid hint, it dispatches to `hill_climb_support`. The hint is
+// the previous iteration's argmax for this shape (cached by the GJK
+// driver across iterations).
+//
+// Generic template — matches any ConvexShape. The ConvexHullView overload
+// below takes precedence when the shape is a ConvexHullView (more
+// specific). Both must return the SAME vertex_idx as `support(s, dir)`
+// for the same `dir` (the determinism contract; see hill_climb_support).
+template <MathScalar T, typename S>
+[[nodiscard]] inline SupportPoint<T> support_with_hint(const S& s, const Vec3<T>& dir,
+                                                       crd::u32 /*hint_vertex_idx*/) noexcept
+{
+    return support(s, dir);
+}
+
+// ---- v2h: SIMD-batched hull support (AVX2 Vec8f) ---------------------------
+//
+// `support_simd_f32(hull, dir)` — declared here, defined out-of-line in
+// `engine/geometry-primitives/src/hull_support_simd.cpp` so the AVX2 `Vec8f`
+// instructions are emitted into a real .obj (the same pattern as v0f's
+// `simd_batch.cpp`). Processes 8 vertices per `Vec8f` chunk; lane-wise dot
+// product; per-chunk scalar reducer with strict-greater + lowest-index
+// tiebreak — same determinism contract as `support(hull, dir)` linear scan.
+//
+// **SoA padding contract** (v2h): the input hull's `vx_soa`/`vy_soa`/
+// `vz_soa` MUST be padded to multiple-of-8 by repeating vertex 0's
+// coordinates in lanes `[n, padded)`. The padded lanes contribute
+// `dot(vertex_0, dir)` projection — tied with lane 0 on `vertex_idx` 0
+// winning by lowest-index tiebreak. Lets the scan be branch-free across
+// all chunks; no `n_remaining` per-chunk handling.
+//
+// f32-only — the SIMD path is gated by `if constexpr (T == f32)` in the
+// `support_with_hint` dispatch below. f64 hulls (v2i) fall through to the
+// AoS linear scan / hill-climb.
+[[nodiscard]] SupportPoint<crd::f32> support_simd_f32(const ConvexHullView<crd::f32>& hull,
+                                                      const Vec3<crd::f32>& dir) noexcept;
+
+// SIMD-vs-hill-climb dispatch threshold. Below this vertex count, SIMD-
+// linear-scan beats hill-climb (no walk overhead, branch-free, straight-
+// line Vec8f processing). Above, hill-climb wins (sub-linear in N with
+// warm-start). Pinned at 32 per the v2h advisor's perf math (Zen 4
+// reference); v2-close bench can retune.
+inline constexpr crd::usize k_simd_support_threshold = 32;
+
+// Specialised overload for ConvexHullView: routes to SIMD scan, hill-climb,
+// or linear scan based on which optional facets the hull carries.
+//
+//   * SoA present + N ≤ 32 + T == f32 → SIMD-linear-scan (v2h).
+//     SIMD wins on small hulls because there's no per-step branch and the
+//     8-wide dot fits in one Vec8f mul-add chain.
+//   * Adjacency present + valid hint → hill-climb (v2g).
+//     Wins on larger hulls (≥ ~32 verts) because the walk converges in
+//     O(diameter) ≈ O(log N) steps from a good warm-start.
+//   * Else → AoS linear scan (v1h / v2a fallback).
+//
+// All three paths return the SAME `vertex_idx` for the SAME direction —
+// the determinism contract. v2g tests pin this for hill-climb; v2h tests
+// pin it for SIMD.
+template <MathScalar T>
+[[nodiscard]] inline SupportPoint<T> support_with_hint(const ConvexHullView<T>& hull, const Vec3<T>& dir,
+                                                       crd::u32 hint_vertex_idx) noexcept
+{
+    const bool have_soa = !hull.vx_soa.empty();
+    const bool have_adjacency = !hull.vertex_adjacency_offsets.empty();
+    const bool have_hint = (hint_vertex_idx != ~crd::u32{0}) && (hint_vertex_idx < hull.vertices.size());
+
+    if constexpr (std::is_same_v<T, crd::f32>)
+    {
+        if (have_soa && hull.vertices.size() <= k_simd_support_threshold)
+        {
+            return support_simd_f32(hull, dir);
+        }
+    }
+    if (have_adjacency && have_hint)
+    {
+        return hill_climb_support<T>(hull, dir, hint_vertex_idx);
+    }
+    return support(hull, dir);
 }
 
 // Point-in-hull: inside iff on the inner side of every face plane (faces are

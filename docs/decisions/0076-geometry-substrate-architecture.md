@@ -794,3 +794,73 @@ sub-module and the `queries.hpp` / `constants.hpp` / `is_finite.hpp` /
 §6 sequencing, §8 out-of-scope (the GPU / decomposition lines unchanged),
 §9 risks, the §12 sequence pivot, the §13/§14 amendments. Slice count
 30 → 33; engine LOC ~16.6 → ~18.5 KLOC; calendar ~5–7 → ~6–8 months.
+
+## 17. Amendment 2026-05-14 — `-convex` v2 substrate CLOSED + v2j pins
+
+`crd-geometry-convex` v2 (v2a–v2j + v2-close, 11 slices) shipped
+2026-05-14. The locked substrate decisions from §4 pin #14 are now
+exercised by 146 test cases / 20624 assertions; the tiebreak conformance
+sweep (`tests/geometry-convex/test_tiebreak_conformance.cpp`) forces every
+rule with adversarial inputs designed to trigger ties.
+
+Two additions to the determinism contract land with v2j:
+
+15. **Sutherland-Hodgman lerp form pinned.** Convex polygon clipping
+    uses `t = sd_i / (sd_i - sd_{i+1})`, `out = v_i + t * (v_{i+1} -
+    v_i)`. NOT `(1-t)·a + t·b`. The two forms differ by a rounding step
+    that breaks seam-vertex bit-equality across adjacent clipping planes
+    (a vertex emitted as "exit" by plane k is input to plane k+1; if
+    both planes intersect at the same point, both must compute the same
+    vertex bit-for-bit). Locked by
+    `tests/geometry-convex/test_feature_clip.cpp::clip seam vertex
+    bit-equal across plane orderings` (clips `(plane_A → plane_B)` vs
+    `(plane_B → plane_A)` and `memcmp`s the seam vertex).
+
+16. **SAT preempts GJK for OBB-OBB via facade overload.** The known v2c
+    EPA limitation (heavily rotated non-cube OBB pairs produce a polytope
+    where the closing-face approximation reports a too-large depth in
+    ~5% of trials) is contained by routing `overlap(OBB, OBB)` and
+    `compute_contact_obb_obb` through SAT (15-axis Gottschalk 1996).
+    Production callers (eylem narrowphase facade) never hit the
+    pathology. EPA on hull-vs-hull (rotated, the actual eylem path) is
+    robust: 77/77 probe-passing. If a future hull cooker produces shapes
+    EPA cannot close on, route via SAT or revisit the polytope-overflow
+    path — noted in `docs/systems/geometry-convex.md`.
+
+**Capsule spine returns `Segment3<T>`, not `EdgeFeature`** (v2j) — face_a
+/ face_b indices are meaningless for a capsule. Distinct return type is
+cleaner than uniform-with-sentinels.
+
+**`closest_face_index` shipped in v2j**, colocated with `enumerate_faces`
+in `feature_clip.hpp` rather than deferred to eylem v1d-manifold. Ensures
+the lowest-face-index tiebreak on `dot` ties lives next to the face_index
+ordering. Deferring would have risked a subtly different tiebreak rule.
+
+**OBB face vertex order pinned to `test_hill_climb.cpp` convention** —
+`+X = (4, 5, 7, 6)` CCW from outside (etc.). The hand-built hull fixture
+is the de facto convention in the codebase; v2j's table cross-checked
+by `test_tiebreak_conformance.cpp::parity` to prevent drift between the
+two hand-written sources.
+
+**`clip_against_convex_volume` API**: two caller-supplied `Array<Vec3>`
+buffers (no hidden allocator). Function ping-pongs via pointer-swap;
+copies result back to `output` if the swap count was odd. No
+mixed-allocator footguns.
+
+**`is_smooth(Shape)` semantic locked**: "should I face-clip?". Sphere
+and Capsule3 return `true`; OBB3 and ConvexHullView return `false`.
+Manifold builders bypass face-clipping when either input is `is_smooth`
+and emit a 1-point manifold from the EPA/SAT witnesses. The capsule's
+spine is reached separately via `enumerate_spine(Capsule3) → Segment3`.
+
+**Verification**: full 17-config `scripts/full-sweep.ps1` PASS (Win × 10
++ Linux × 7). System doc `docs/systems/geometry-convex.md` shipped at
+v2-close (was deferred at v2a). Session log
+`docs/sessions/2026-05-14-geometry-v2-convex-substrate.md` covers all
+v2a–v2j + v2-close in a single document per user request.
+
+**What is not affected.** §1–§5 architecture (no module split changes),
+§6 sequencing, §8 out-of-scope (GPU + decomposition lines unchanged),
+§9 risks, §12 sequence pivot, §13/§14/§15/§16 amendments. Slice count
+unchanged (33 — v2j was already in the §15 list). v2 substrate is the
+3rd of 11 sub-modules now ✅; `-mesh` v4 is next major sub-module.

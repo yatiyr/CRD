@@ -54,12 +54,14 @@ TEST_CASE("ConvexHullView: support picks the extreme vertex along the direction"
 {
     const CubeHull cube;
     const ConvexHullView<f32> h = cube.view();
-    REQUIRE(support(h, Vec3<f32>(1, 1, 1)) == Vec3<f32>(1, 1, 1));
-    REQUIRE(support(h, Vec3<f32>(-1, -1, -1)) == Vec3<f32>(-1, -1, -1));
-    REQUIRE(support(h, Vec3<f32>(1, -1, 1)) == Vec3<f32>(1, -1, 1));
+    // v2a expanded `support()` to return `SupportPoint{point, vertex_idx}`
+    // (ADR-0076 §4 pin #14). Read `.point` for the v1h-equivalent value.
+    REQUIRE(support(h, Vec3<f32>(1, 1, 1)).point == Vec3<f32>(1, 1, 1));
+    REQUIRE(support(h, Vec3<f32>(-1, -1, -1)).point == Vec3<f32>(-1, -1, -1));
+    REQUIRE(support(h, Vec3<f32>(1, -1, 1)).point == Vec3<f32>(1, -1, 1));
     // A face-normal direction: ties on .y/.z resolve to the lowest index among
     // the four +x vertices -> index 1 = (1,-1,-1).
-    REQUIRE(support(h, Vec3<f32>(1, 0, 0)) == Vec3<f32>(1, -1, -1));
+    REQUIRE(support(h, Vec3<f32>(1, 0, 0)).point == Vec3<f32>(1, -1, -1));
 }
 
 TEST_CASE("ConvexHullView: contains == inside every face half-space", "[geometry][hull]")

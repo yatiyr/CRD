@@ -22,6 +22,7 @@ scopes=(
     "$repo_root/engine/hesap"
     "$repo_root/engine/geometry-primitives"
     "$repo_root/engine/geometry-bvh"
+    "$repo_root/engine/geometry-convex"
     "$repo_root/engine/geometry-shader-helpers"
 )
 
