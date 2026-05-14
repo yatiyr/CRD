@@ -1,14 +1,14 @@
-// crd-geometry-convex v3c — 3D Quickhull tests.
+// crd-geometry-convex v3c -- 3D Quickhull tests.
 //
 // Coverage:
 //   (1) Closed-form hulls: regular tetrahedron, unit cube, regular octahedron.
 //   (2) Hull invariants: every input point is inside-or-on the hull; every
 //       face is CCW from outside (orient3d against interior witness > 0);
 //       hull is closed (every edge appears in exactly 2 faces).
-//   (3) Random point clouds: 50 / 500 / 5000 random points → hull contains
+//   (3) Random point clouds: 50 / 500 / 5000 random points -> hull contains
 //       all + invariants hold.
 //   (4) Degenerate inputs: 0 / 1 / 2 / coincident / colinear / coplanar.
-//   (5) Determinism replay: identical input → identical hull vertices/faces.
+//   (5) Determinism replay: identical input -> identical hull vertices/faces.
 //   (6) f32 + f64 both work.
 //   (7) Large-coordinate stability (scale 1e3).
 
@@ -207,7 +207,7 @@ TEST_CASE("quickhull: cube with interior points excluded from hull", "[v3c][quic
     {
         points.push_back(Vec3<f64>((i & 4) ? 1.0 : 0.0, (i & 2) ? 1.0 : 0.0, (i & 1) ? 1.0 : 0.0));
     }
-    // 5 interior points — must not appear in the hull.
+    // 5 interior points -- must not appear in the hull.
     points.push_back(Vec3<f64>(0.5, 0.5, 0.5));
     points.push_back(Vec3<f64>(0.3, 0.3, 0.3));
     points.push_back(Vec3<f64>(0.7, 0.2, 0.4));
@@ -227,7 +227,7 @@ TEST_CASE("quickhull: cube with interior points excluded from hull", "[v3c][quic
 // (3) Random point clouds
 // ---------------------------------------------------------------------------
 
-TEST_CASE("quickhull: 50 random points in unit cube — hull contains all + CCW",
+TEST_CASE("quickhull: 50 random points in unit cube -- hull contains all + CCW",
           "[v3c][quickhull][random]")
 {
     crd::memory::TlsfAllocator alloc(128U * 1024U);
@@ -248,7 +248,7 @@ TEST_CASE("quickhull: 50 random points in unit cube — hull contains all + CCW"
         r, crd::containers::ConstSpan<Vec3<f64>>(points.data(), points.size())));
 }
 
-TEST_CASE("quickhull: 500 random points in unit sphere — Euler characteristic check",
+TEST_CASE("quickhull: 500 random points in unit sphere -- Euler characteristic check",
           "[v3c][quickhull][random]")
 {
     crd::memory::TlsfAllocator alloc(512U * 1024U);
@@ -282,7 +282,7 @@ TEST_CASE("quickhull: 500 random points in unit sphere — Euler characteristic 
 // (4) Degenerate inputs
 // ---------------------------------------------------------------------------
 
-TEST_CASE("quickhull: empty input → empty result", "[v3c][quickhull][degen]")
+TEST_CASE("quickhull: empty input -> empty result", "[v3c][quickhull][degen]")
 {
     crd::memory::TlsfAllocator alloc(8U * 1024U);
     auto r = quickhull<f64>(crd::containers::ConstSpan<Vec3<f64>>{}, &alloc);
@@ -290,7 +290,7 @@ TEST_CASE("quickhull: empty input → empty result", "[v3c][quickhull][degen]")
     CHECK(r.faces.empty());
 }
 
-TEST_CASE("quickhull: single point → 1-vertex result, is_coincident flag",
+TEST_CASE("quickhull: single point -> 1-vertex result, is_coincident flag",
           "[v3c][quickhull][degen]")
 {
     crd::memory::TlsfAllocator alloc(8U * 1024U);
@@ -302,7 +302,7 @@ TEST_CASE("quickhull: single point → 1-vertex result, is_coincident flag",
     CHECK(r.faces.empty());
 }
 
-TEST_CASE("quickhull: two coincident points → 1-vertex result, is_coincident",
+TEST_CASE("quickhull: two coincident points -> 1-vertex result, is_coincident",
           "[v3c][quickhull][degen]")
 {
     crd::memory::TlsfAllocator alloc(8U * 1024U);
@@ -314,7 +314,7 @@ TEST_CASE("quickhull: two coincident points → 1-vertex result, is_coincident",
     CHECK(r.is_coincident);
 }
 
-TEST_CASE("quickhull: collinear input → 2 vertices, is_colinear flag",
+TEST_CASE("quickhull: collinear input -> 2 vertices, is_colinear flag",
           "[v3c][quickhull][degen]")
 {
     crd::memory::TlsfAllocator alloc(8U * 1024U);
@@ -329,7 +329,7 @@ TEST_CASE("quickhull: collinear input → 2 vertices, is_colinear flag",
     CHECK(r.vertices.size() == 2);
 }
 
-TEST_CASE("quickhull: all-coplanar input → is_coplanar flag set",
+TEST_CASE("quickhull: all-coplanar input -> is_coplanar flag set",
           "[v3c][quickhull][degen]")
 {
     crd::memory::TlsfAllocator alloc(64U * 1024U);
@@ -403,10 +403,10 @@ TEST_CASE("quickhull: f32 tetrahedron", "[v3c][quickhull][f32]")
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// (8) v3c-c — enrich_for_gjk: vertex adjacency + SoA SIMD arrays
+// (8) v3c-c -- enrich_for_gjk: vertex adjacency + SoA SIMD arrays
 // ---------------------------------------------------------------------------
 
-TEST_CASE("enrich_for_gjk: tetrahedron — each vertex has 3 neighbors",
+TEST_CASE("enrich_for_gjk: tetrahedron -- each vertex has 3 neighbors",
           "[v3c][quickhull][enrich]")
 {
     crd::memory::TlsfAllocator alloc(64U * 1024U);
@@ -444,7 +444,7 @@ TEST_CASE("enrich_for_gjk: tetrahedron — each vertex has 3 neighbors",
     }
 }
 
-TEST_CASE("enrich_for_gjk: cube — each vertex has 3 neighbors (cube edges)",
+TEST_CASE("enrich_for_gjk: cube -- each vertex has 3 neighbors (cube edges)",
           "[v3c][quickhull][enrich]")
 {
     crd::memory::TlsfAllocator alloc(64U * 1024U);
@@ -498,7 +498,7 @@ TEST_CASE("enrich_for_gjk: cube — each vertex has 3 neighbors (cube edges)",
     }
 }
 
-TEST_CASE("enrich_for_gjk: f32 cube — SoA arrays populated + padded to multiple of 8",
+TEST_CASE("enrich_for_gjk: f32 cube -- SoA arrays populated + padded to multiple of 8",
           "[v3c][quickhull][enrich][f32]")
 {
     crd::memory::TlsfAllocator alloc(64U * 1024U);
@@ -524,7 +524,7 @@ TEST_CASE("enrich_for_gjk: f32 cube — SoA arrays populated + padded to multipl
     }
 }
 
-TEST_CASE("enrich_for_gjk: f32 tetrahedron — SoA padded to 8 (4 vertices + 4 pad)",
+TEST_CASE("enrich_for_gjk: f32 tetrahedron -- SoA padded to 8 (4 vertices + 4 pad)",
           "[v3c][quickhull][enrich][f32]")
 {
     crd::memory::TlsfAllocator alloc(64U * 1024U);
@@ -554,7 +554,7 @@ TEST_CASE("enrich_for_gjk: f32 tetrahedron — SoA padded to 8 (4 vertices + 4 p
     }
 }
 
-TEST_CASE("enrich_for_gjk: f64 hull — SoA arrays stay empty (f32-only path)",
+TEST_CASE("enrich_for_gjk: f64 hull -- SoA arrays stay empty (f32-only path)",
           "[v3c][quickhull][enrich][f64]")
 {
     crd::memory::TlsfAllocator alloc(64U * 1024U);
@@ -575,10 +575,10 @@ TEST_CASE("enrich_for_gjk: f64 hull — SoA arrays stay empty (f32-only path)",
 }
 
 // ---------------------------------------------------------------------------
-// (9) v3c-c — coplanar reconstruction (flat 3D hull)
+// (9) v3c-c -- coplanar reconstruction (flat 3D hull)
 // ---------------------------------------------------------------------------
 
-TEST_CASE("coplanar: 4-point square on z=0 plane — flat 3D hull with 2 faces",
+TEST_CASE("coplanar: 4-point square on z=0 plane -- flat 3D hull with 2 faces",
           "[v3c][quickhull][coplanar]")
 {
     crd::memory::TlsfAllocator alloc(64U * 1024U);
@@ -605,7 +605,7 @@ TEST_CASE("coplanar: 4-point square on z=0 plane — flat 3D hull with 2 faces",
     CHECK(r.face_vertex_offsets[2] - r.face_vertex_offsets[1] == 4);
 }
 
-TEST_CASE("coplanar: 5-point pentagon — flat 3D hull excludes interior point",
+TEST_CASE("coplanar: 5-point pentagon -- flat 3D hull excludes interior point",
           "[v3c][quickhull][coplanar]")
 {
     crd::memory::TlsfAllocator alloc(64U * 1024U);
@@ -614,7 +614,7 @@ TEST_CASE("coplanar: 5-point pentagon — flat 3D hull excludes interior point",
     points.push_back(Vec3<f64>(2, 0, 0));
     points.push_back(Vec3<f64>(2, 2, 0));
     points.push_back(Vec3<f64>(0, 2, 0));
-    points.push_back(Vec3<f64>(1, 1, 0)); // interior — must NOT appear
+    points.push_back(Vec3<f64>(1, 1, 0)); // interior -- must NOT appear
 
     auto r = quickhull<f64>(crd::containers::ConstSpan<Vec3<f64>>(points.data(), points.size()), &alloc);
 

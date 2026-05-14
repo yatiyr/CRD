@@ -187,8 +187,8 @@ dependency.
 | **v3a** ✅ 2026-05-14 | **Shewchuk 1997 adaptive-precision predicates** (NEW substrate foundation, 2026-05-14 user-approved). `orient2d` / `orient3d` / `incircle` / `insphere` with adaptive expansion arithmetic per Shewchuk "Adaptive Precision Floating-Point Arithmetic and Fast Robust Geometric Predicates" (1997). Lives in `engine/geometry-primitives/include/crd/geometry/primitives/predicates.hpp` (the leaf substrate — every higher-tier module consumes without depending on `-convex`). Resolves ADR-0076 §164 / §397 open question; consumers: v3b 2D hull, v3c Quickhull, future v6 Vatti polygon Boolean, v8 Bowyer-Watson Delaunay, v9 V-HACD, CFD AMR, FEA contact, CAD boolean (Phase 3.1.8 `crd-brep`). ULP-conformance test against Shewchuk's published reference results. | ~600 + ~400 tests | 3-5 days |
 | **v3b** ✅ 2026-05-14 | **2D convex hull (Andrew's monotone chain).** `convex_hull_2d_indices(points, out_hull_indices)` primitive + `convex_hull_2d_points(points, out_hull_points)` convenience. Lex-sort with `crd::containers::stable_sort` + exact `orient2d` from v3a + lowest-input-index tiebreak. Output: CCW polygon (vertices + indices into input). Degenerate corpus: 0/1/2/3 points, all-colinear, all-coincident, very-large coord. Lives in `engine/geometry-convex/include/crd/geometry/convex/convex_hull_2d.hpp`. | ~200 + ~250 tests | 1-2 days |
 | **v3c** ✅ 2026-05-14 (a+b+c all done) | **3D Quickhull (Barber-Dobkin-Huhdanpaa 1996, robust).** **Split 2026-05-14 into a/b/c per advisor's per-seam discipline**: v3c-a (skeleton + types + initial tetrahedron + degenerate fallbacks) ✅; v3c-b (main iteration loop — eye selection + visible-face DFS using full Stage D `orient3d` + horizon walk + face replacement + neighbor relink + conflict-list redistribution, 14 test cases passing first-try) ✅; v3c-c (`enrich_for_gjk` populates v2g vertex adjacency + v2h SoA SIMD f32-only arrays + flat-3D-hull coplanar reconstruction via v3b on dominant plane, 8 new test cases passing first-try). Total ~1020 LOC engine + ~660 tests / 22 cases / 401 assertions across win-debug + win-asan + win-shipping + win-tidy clean. Promoted `compute_vertex_adjacency_from_faces` to `crd-geometry-primitives::hull_adjacency.hpp` for multi-consumer use. `QuickhullResult<T>{vertices, faces (outward Planes), face_vertex_indices, face_vertex_offsets}` + `convex_hull_view_of(QuickhullResult) → ConvexHullView` helper + `enrich_for_gjk(QuickhullResult&)` mutator appending v2g vertex-adjacency + v2h SoA SIMD arrays. Outer-set partition + horizon walk. Determinism: ADR-0076 §4 pin #11 Quickhull lex order (lowest-input-index on furthest-point ties; deterministic horizon-walk order; coplanar-points-to-face assignment uses lowest input index). Robust: exact `orient3d` from v3a; coplanar input falls back to v3b 2D hull on dominant plane + flat-3D-hull marker; near-degenerate input snaps below `k_distance_epsilon`. Builder-reject contract (ADR-0076 §15): `CRD_ASSERT(all_finite(points))` at entry. Honest LOC sizing per Q3 recommendation (~1500 vs original ~900). Lives in `engine/geometry-convex/include/crd/geometry/convex/quickhull.hpp` + `engine/geometry-convex/src/quickhull.cpp`. | ~1500 + ~800 tests | 6-7 days |
-| **v3d** | **Hull simplification — QEM cost-driven decimation + locked-vertex constraint.** Greedy edge-collapse re-triangulation targeting `target_vertex_count` (default 32 — eylem `Collider::ConvexHull` sweet spot). Hard cap on `max_relative_volume_change` (default 5%). `HullSimplifyOptions::keep_vertex_indices: ConstSpan<u32>` (default empty) locks specific vertices via cost=+∞ in the QEM function (multi-domain payoff per Q4 recommendation: V-HACD output uses empty, CAD/FEA/robotics use populated to preserve feature corners / attachment points / boundary nodes). API: `simplify_hull(QuickhullResult, opts) → QuickhullResult`. Lives in `engine/geometry-convex/include/crd/geometry/convex/hull_simplify.hpp`. | ~400 + ~300 tests | 2-3 days |
-| **v3-close** | Tiebreak conformance sweep (ADR-0076 §4 pin #11 — Quickhull lex order on all tied configurations) + degenerate corpus (coplanar / colinear / coincident / single-point / near-degenerate / very-large-coord 1e6+1e7) + cross-check (3D Quickhull on coplanar input matches 2D monotone-chain on dominant plane within ULP) + perf bench (`tests/bench/test_bench_quickhull.cpp` vs raw input 100 / 1k / 10k / 100k points; compare to Qhull and CGAL reference targets where licensable) + full 17-config `scripts/full-sweep.ps1`. Doc updates: session log + ADR-0076 §18 amendment locking Shewchuk predicates + Quickhull decisions per Q1-Q4. | ~50 + ~250 tests | 1-2 days |
+| **v3d** ✅ 2026-05-15 | **Hull simplification — greedy vertex removal with shrinkage-distance cost + locked-vertex preservation + convexity guard.** Greedy vertex-removal re-triangulation targeting `target_vertex_count` (caller-specified; default 0 = no target) OR `max_error_threshold` (caller-specified shrinkage distance, length units; default 0 = no threshold; with both 0 → identity copy). Per-vertex cost = max signed distance from removed vertex to any fan-triangle plane that would replace it; pivot for fan = lowest-index ring vertex (ADR-0076 §4 pin #11 determinism). **Convexity guard**: every candidate fan triangle's outward plane must have all OTHER live hull vertices below within `k_distance_epsilon`; failures tombstone the candidate, try next-cheapest. `HullSimplifyOptions::keep_vertex_indices: ConstSpan<u32>` (default empty) excludes locked vertices from candidate selection — multi-domain pin per Q4 (V-HACD uses empty, CAD/FEA/robotics/eylem-contact use populated to preserve feature corners / attachment points / boundary nodes / contact-critical IDs). Degenerate sources (empty / 1-/2-/3-vertex / coplanar / colinear / coincident) return identity copies. Output: fresh `QuickhullResult<T>` with vertices in increasing-original-input-index order (matches v3c convention); output vertices are a strict subset of input vertices (output ⊆ input AABB trivially). API: `simplify_hull(source, alloc, opts) → QuickhullResult<T>`. Lives in `engine/geometry-convex/include/crd/geometry/convex/hull_simplify.hpp` + `engine/geometry-convex/src/hull_simplify.cpp`. Templated `T ∈ {f32, f64}` with explicit instantiations. **16 test cases / 191 assertions** (identity / tetrahedron-no-op / cube→4 / octahedron→4 / locked-vertex-preservation / all-locked-no-op / tiny-threshold-no-removal / huge-threshold-full-reduction / determinism-replay / random-cloud / f32-cube / AABB-containment / random-cloud-locked). **Built+run green on win-debug + win-asan + win-shipping + win-tidy** (1546/1546 on debug/asan/tidy, 1541/1541 on shipping). Full convex suite 198 cases / 21270 assertions. Drive-by: fixed pre-existing non-ASCII characters (`→`, `—`) in v3b + v3c TEST_CASE names that were Windows-ctest-mojibaking; `crd-no-non-ascii-test-names` guard now clean across `tests/geometry-convex/`. Session log `docs/sessions/2026-05-15-geometry-v3d-hull-simplify.md`. | ~440 + ~440 tests | done |
+| **v3-close** ✅ 2026-05-15 | **Tiebreak conformance + cross-check + large-coord stability + perf bench + full 17-config sweep.** New `tests/geometry-convex/test_v3_close.cpp` (9 cases / 243 assertions): (1) Quickhull shuffled-input preserves hull vertex SET (5 perms × 80-point cloud) — same-SET-different-input-indices invariant per ADR-0076 §4 pin #11; (2) 2D monotone-chain shuffled-input preserves hull vertex SET; (3) Large-coord 1e6 origin shift preserves Quickhull topology; (4) Large-coord 1e7 origin shift preserves Quickhull topology; (5) 3D Quickhull coplanar fallback matches v3b 2D monotone-chain on Z=0 plane (geometric set equality); (6) v3d threshold-respect against measured ground-truth shrinkage (tiny eps → no removal; generous threshold → reduces); (7) v3d all-locked + huge threshold = no removal; (8) v3d large-coord 1e6 simplification stays convex + locked preserved; (9) v3d shuffled-input simplification stays valid (weak invariants — greedy trajectory depends on hull vertex order). New `tests/bench/test_bench_quickhull.cpp` (8 benchmarks: Quickhull build 100/1k/10k; monotone-chain 1k/10k; simplify 200→8, 500→16). Full convex suite **207 cases / 21513 assertions** (was 198 / 21270 at v3d close, +9 / +243). **Full 17-config `scripts/full-sweep.ps1` PASS**: 10 Win (debug / relwithdebinfo / release / asan / clang-cl / debug-scalar / debug-sse2 / shipping / clang-cl-shipping / tidy) + 7 Linux (debug / relwithdebinfo / release / asan / debug-scalar / debug-sse2 / shipping) all green. **Pre-existing v3a debt paid en route**: `engine/geometry-primitives/src/predicates.cpp`'s `two_two_sum` Shewchuk-primitive helper was unused on the live code paths (only `two_two_diff` is reached); clang-cl `-Werror=unused-function` flagged it; marked `[[maybe_unused]]` with comment that it stays as a documented Shewchuk-expansion helper for the future Stage D `insphere` consumer. **Drive-by**: also paid the pre-existing non-ASCII test-name debt in v3b/v3c (19 TEST_CASE names with `→` / `—` mojibaking through Windows ctest argv — `crd-no-non-ascii-test-names` guard now green across `tests/geometry-convex/`). Session log `docs/sessions/2026-05-15-geometry-v3-close.md`. ADR-0076 §18 amendment locks Shewchuk-predicates + Quickhull + hull-simplify substrate decisions per the Q1–Q4 user-approved choices on 2026-05-14. | ~360 + ~280 tests + ~250 bench | done |
 
 **v3 sub-phase total: ~2750 LOC engine + ~2000 LOC tests, ~13–19 days calendar (~2.5 weeks).** (Was ~2000 / ~1 wk in the original phase-doc plan; expanded per the 2026-05-14 user-approved recommendations on the 4 substrate-foundation questions — Shewchuk predicates added as v3a; honest Quickhull LOC sizing; no owning-view type; `keep_vertex_indices` from day 1.)
 
@@ -224,6 +224,191 @@ loses Sutherland-Hodgman to v2j, becomes v6a–v6d. ADR-0076 §16 pin #12
 added: witness-index tiebreak rule for EPA & hull support.** Geometry
 phase grows by 9 slices net (10 added in v2, 1 removed from v6) and
 ~1.5 KLOC engine.).
+
+## Renewed scope coverage (2026-05-14)
+
+A comprehensive scope review against the multi-domain mandate (gaming +
+simulation + manufacturing + CAD + CFD + aerospace + robotics + medical
+viz + DAW + cinematic) was run 2026-05-14 against the existing 42-slice
+plan. **Most of the missing-work inventory is already covered** by the
+v0–v9e structure — the table below maps inventory items to the slice
+that owns them. **Four genuine gaps surfaced**, captured as new in-phase
+slice clusters (v4-validate, v10a–e curves, v11 transform-aware
+helpers); the renewed total is **49 slices / ~7.5–9.5 months / ~22 KLOC
+engine + ~5 KLOC editor-tier + ~4 KLOC cooker-emitted GLSL/HLSL**.
+
+**Cerid is becoming an engineering-first real-time application /
+simulation platform**, and `crd-geometry` is its shared computational-
+geometry substrate for simulation, physics, robotics, rendering, CAD/CAE
+preparation, manufacturing geometry, and editor tooling. The renewed
+scope below makes that explicit — captures missing/future work, classifies
+it, maps consumers, lists risks. It does **not** widen the active phase
+to solve the full CAD/CAE/EDA/manufacturing problem; those are separate
+future domain phases (3.1.8 `crd-brep`, 3.1.10 `crd-cfd`, 3.1.12
+`crd-fea`, 3.1.13 `crd-cam`, the newly-added `crd-eda` ROADMAP stub).
+
+### Priority classification
+
+**Must-have-before-3.1.7-close** (in-phase slices — see "New in-phase
+slices" table below for v4-validate / v10a–e / v11):
+
+1. **v10 `-curves` sub-module** — curve primitives + sampling + arc-length + closest-point + tangent/normal/binormal frames. Cinematic camera paths, robot trajectories, debug-draw smoothed polylines all need this.
+2. **v11 transform-aware query helpers** in `crd-geometry-primitives` — `TransformedShape<T>` + `transform_aabb` / `transform_obb` / `transform_capsule3` / `transform_cylinder3` + `transform_ray3_to_local`. Pin: `crd-geometry` stays local-space pure; world-space *dispatch* is a consumer concern.
+3. **v4-validate** — formal mesh-validation pass extracted from v7's scattered manifoldness-fix / self-intersection-removal. Cooker pipeline + editor mesh-import gate.
+4. **Units / scale / precision policy ADR candidate** — see "ADR candidates" section below; brief inline policy in this doc, ADR minted at v10 or v11 close.
+5. **Hull simplification** (v3d, in flight) — locked-vertex `keep_vertex_indices` constraint already designed in 2026-05-14 scoping. **Untouched by this renewal — the user directive 2026-05-14 was: "we don't need to touch the current slice we are working on we can finish them."**
+6. **Debug visualization** (v1j ✅) — primitives, ray hits + normals, closest points, BVH nodes by depth, frustum-cull, overlap pairs. Curve viz lands as part of v10e.
+7. **Benchmark / validation infrastructure** — Embree-comparison bench (v1f ✅), per-cluster perf budgets (v2-close ✅, v3-close, v4-close, …), `crd-no-non-ascii-test-names` + `crd-no-std-math-check` + `crd-no-std-sort-check` + `crd-simd-emission-check` guards (v1i-c ✅).
+8. **Consumer mapping** — see expanded table below.
+
+**Should-have-soon-after-3.1.7-close** (reserved follow-up under existing sub-modules, NOT in 3.1.7 close):
+
+- **Curve self-intersection + curve-curve intersection** — reserved under `-curves` follow-up; ships when a real consumer asks (cinematic doesn't need it).
+- **Polygon offsetting** (miter / bevel / round joins, stroke expansion, PCB clearance zones, CNC toolpath compensation) — reserved under `-polygon` follow-up; primary consumer is future `crd-eda` + `crd-cam`.
+- **KD-tree k-nearest + radius search** — `-spatial` v5 ships unconstrained KD-tree; k-nearest / radius are a follow-up if a point-cloud consumer surfaces (lidar batch, particle nearest-neighbor).
+- **SDF mesh sampling + gradient/normal + raymarch helper** — `crd-sdf` (3.1.5) consumes 3.1.7 mesh-bake + closest-point; the SDF-side query facade lives in `crd-sdf`, not here.
+- **Curve-along-mesh / tube-along-curve / ribbon-along-curve** — procedural shape helpers; ship in `crd-procgen` (3.1.15) or `crd-animation` (3.2) when those land.
+- **Quality triangulation** (minimum-angle improvement, Steiner-point insertion) — `-delaunay` v8 ships unconstrained + constrained Delaunay; quality-driven refinement is a follow-up for FEA mesh prep.
+
+**Future-major (separate sub-phases or domain phases, NOT 3.1.7 slices):**
+
+- **BRep / NURBS / CAD kernel** → Phase 3.1.8 `crd-brep` (parametric surfaces, B-rep solid topology, exact booleans, fillet/chamfer/sweep/loft, STEP/IGES/Parasolid import).
+- **Parametric feature trees + GD&T** → Phase 3.1.9 `crd-cad-feature`.
+- **CFD geometry** (unstructured grid topology, FVM/FEM, AMR, multiphase VOF) → Phase 3.1.10 `crd-cfd`.
+- **Estimation / control / path planning** (Kalman / EKF / SLAM, PID / LQR / MPC, RRT / RRT*, PRM, A*) → Phase 3.1.11 `crd-estimation` + `crd-control`.
+- **Engineering FEA** (static structural / modal / buckling / fatigue; thermal-structural coupling) → Phase 3.1.12 `crd-fea` (distinct from eylem v7 dynamic FEM).
+- **Manufacturing toolpaths / CAM** (3- / 5-axis milling, turning, additive slicing, G-code post-processors) → Phase 3.1.13 `crd-cam`.
+- **PCB / EDA geometry** (board outline, traces, vias, pads, copper zones, DRC, Gerber export, routing helpers) → NEW Phase `crd-eda` future-major stub in ROADMAP. Added 2026-05-14 to surface the EDA ambition without committing scope.
+- **Scientific visualization** (isosurfaces, streamlines, slice planes, vector-field LIC, perceptual color maps, in-engine plots) → Phase 3.1.16 `crd-sciviz`.
+- **Procedural geometry** (Wave Function Collapse, L-systems, terrain erosion, city/building generation) → Phase 3.1.15 `crd-procgen`.
+- **ML-inference geometry** (denoising / SR over geometry-derived G-buffers, content-generation mesh decode) → Phase 3.1.14 `crd-ml-inference`.
+
+### Consumer mapping (expanded)
+
+| Geometry feature | Primary consumer | Secondary consumers | Phase priority |
+|---|---|---|---|
+| Dynamic BVH (v1c ✅) | eylem v1c broadphase | crd-scene `SpatialBVHIndex`, robotics sensors | current ✅ |
+| BVH4 + Vec4f SIMD (v1g ✅) | crd-renderer 3.5+ frustum cull | crd-audio acoustic raycasts, editor picking | current ✅ |
+| Unified query facade (v1i ✅) | every consumer | n/a | current ✅ |
+| Shapecast / sweep TOI (v1i-b ✅) | eylem v6 CCD | character controller, editor manipulator | current ✅ |
+| GJK / EPA / SAT (v2a–v2d ✅) | eylem v1d narrowphase | robotics collision, CAD validation | current ✅ |
+| Hill-climb hull support (v2g ✅) | eylem PhysX-class hull contact | CAD/robotics convex queries | current ✅ |
+| `Vec4f/Vec8f` SIMD support (v2h ✅) | eylem N≤32 hull pairs | offline batch (cooker convex prep) | current ✅ |
+| Sutherland-Hodgman + feature enumeration (v2j ✅) | eylem v1d-manifold | CAD boolean prep, polygon clip in UI | current ✅ |
+| Shewchuk adaptive predicates (v3a ✅) | v3b/v3c Quickhull | v6 Vatti, v8 Bowyer-Watson, future CAD boolean, future FEA contact | current ✅ |
+| 2D convex hull (v3b ✅) | future UI/editor hull tools | future PCB outline simplification | current ✅ |
+| 3D Quickhull (v3c ✅) | eylem convex collider cooker | CAD conditioning, future V-HACD pipeline | current ✅ |
+| Hull simplification + `keep_vertex_indices` (v3d ✅ 2026-05-15) | eylem stable contact (vertex budget cap) | CAD remap, FEA attachment-point preservation, robotics gripper-finger hull | current ✅ |
+| Mesh raycast + closest-point + winding (v4a–f) | editor picking | lidar/depth sensor, SDF bake, eylem mesh collider | current |
+| Mesh BVH leaf SIMD (v4g) | mesh-vs-ray batched queries | renderer cull, acoustic raycasts | current |
+| **Mesh validation pass (v4-validate) — NEW** | editor cooker mesh import | eylem mesh collider import gate, SDF-bake input gate, manufacturing pre-flight | current — NEW |
+| Spatial structures beyond BVH (v5a–e) | scene `IComponentIndex` (KD/octree/R-tree/hash/grid) | UI/editor selection, particle systems | current |
+| Polygon ops (v6a–d) | UI / editor 2D | navmesh, sketch tool, future PCB outline | current |
+| Mesh processing (v7a–g) | cooker LOD / editor remesh | CAD/CAE preparation, manufacturing prep | current |
+| Delaunay 2D/3D + Voronoi (v8a–d) | navmesh, future FEA mesh prep | scientific viz (Voronoi cells) | current |
+| GPU LBVH + V-HACD + REPL (v9a–d) | crd-renderer Phase 3.5+ | offline batch raycast, eylem cooker, REPL scripting | current |
+| Shader-helpers GLSL/HLSL (v9e) | crd-renderer 3.5+ DFAO / DF-soft-shadow | crd-sdf shader twins | current |
+| **Curves (v10a–e) — NEW** | cinematic camera spline paths | robot trajectories, debug-draw smoothed polylines, road/path authoring, animation curve viz | current — NEW |
+| **TransformedShape helpers (v11) — NEW** | crd-scene world-space queries | crd-eylem world API, editor picking, renderer cull | current — NEW |
+| Debug viz (v1j ✅) | sandbox + editor | every algorithm with a visual artifact | current ✅ |
+| BRep / NURBS surface eval | CAD substrate | manufacturing toolpath base, CAE meshing input | Phase 3.1.8 |
+| Polygon offset + clearance | future `crd-eda` DRC + `crd-cam` toolpath | UI/editor, CAD sketch offset | Phase 3.1.13 / future `crd-eda` |
+| Unstructured-grid topology + FVM/FEM | CFD substrate | scientific viz CFD overlays | Phase 3.1.10 |
+| Volumetric meshing (tet, hex) | FEA substrate | CFD inlet/outlet patch tagging | Phase 3.1.10 / 3.1.12 |
+| Sensor-ray geometry (lidar pattern, depth sensor) | robotics simulation | aerospace radar/lidar | Phase 3.1.11 + Phase 8 robotics |
+| Robot footprint + swept volume | robotics navigation | manufacturing AGV planning | Phase 3.1.11 + Phase 8 |
+| Toolpath geometry (pocket / contour / drill) | manufacturing substrate | CAD/CAM editor | Phase 3.1.13 |
+| Board outline + trace + DRC + Gerber | PCB substrate | manufacturing fab export | future `crd-eda` |
+
+### Risk register
+
+- **CAD topology naming problem** (re-evaluation of features through edits, fillet/Boolean robustness across topology rebuilds) — out of 3.1.7 scope; lives in Phase 3.1.8 `crd-brep` where it's a substantial sub-problem. v3a Shewchuk predicates form the foundation but do not solve the topology-graph identification problem.
+- **Large-coordinate f32 precision** — aerospace consumers (orbital scales, 1e7 m) need f64 staging. v2i (f64 GJK ✅), v3a (Shewchuk f64 predicates ✅), v3c (f64 Quickhull ✅). Mesh-side f64 staging (v4 `-mesh`) deferred until a real consumer surfaces (eylem-aero or eylem-cine reservation).
+- **Robust polygon Boolean** — Vatti (v6c) handles the common case; pathological self-intersections + coincident-coplanar cases need v3a `orient2d_exact` + custom handling. Risk: edge cases not covered by reference implementations (Clipper2, GPC). Mitigation: degenerate corpus + adversarial test sweep at v6c close.
+- **Mesh validation as a pipeline-stage concern** — v4-validate is a *cooker + editor-import* stage. Runtime never re-validates. Risk: developer authors a non-manifold mesh and only discovers it at integration time. Mitigation: v4-validate emits a validation report that the cooker + sandbox surface; CRDR pack format carries a `'MVAL'` chunk (or equivalent) noting which validation rules were verified at cook time.
+- **Transform-aware queries crossing modules** — `crd-geometry-primitives` stays local-space pure; world-space *dispatch* (the `world_raycast(scene, ray)` adapter) belongs to `crd-scene` / `crd-eylem`. Risk: an inattentive consumer adds world-space helpers to `crd-geometry`. Mitigation: v11 ships only the wrapper types + transform helpers, and the consumer-side adapter pattern is documented as a Pin in §11 below + ADR candidate.
+- **Curve sampling tolerance** — adaptive flattening's tolerance value flows through to render LOD + physics step + manufacturing toolpath. Risk: per-consumer epsilon drift causes visual seams, physics-mesh divergence, or manufacturing tolerance violations. Mitigation: v10b ties tolerance to the v1h `k_distance_epsilon` policy by default; per-call overrides allowed but the default is anchored.
+- **`-curves` sub-module sizing risk** — v10 is ~2.5 KLOC across 5 sub-slices. If the GLSL/HLSL twin emit becomes a real consumer requirement, v9e expands. Mitigation: ship v10a–e against C++ scalar consumers first; the GLSL/HLSL curve emit is a follow-up.
+- **Mesh validation false-positives at editor-import** — coplanar near-degenerate triangles may trip "degenerate" rule when the artist intent was deliberate (e.g., flat decals). Mitigation: validation reports a *severity* (info / warning / error) per rule; the editor surfaces warnings without blocking import.
+- **Robust ray-AABB Williams/Ize widening overconservatism** — for very-far-origin scenes (1e7+ m, aerospace large-world) the conservative widening may admit false positives at the BVH-traversal step. Mitigation: f64 BVH refit + traversal for those domains lives behind a future `BvhTreeF64` opt-in. v2i precedent (f64 GJK) shows the pattern.
+
+### ADR candidates (mint at slice time, NOT this session)
+
+1. **`crd-geometry` precision + epsilon policy** (mint at v10 or v11 close, whichever lands first). **The unit-system question is RESOLVED at engine-wide scope by Phase 3.1.7.5 `crd-units`** (locked 2026-05-14, `docs/phases/phase-3.1.7.5-units.md`) — *NOT* a geometry-local ADR. Geometry's local ADR covers only the residual *precision-tier* and *epsilon* questions. Pin:
+   - **Unit system: deferred to `crd-units` substrate (Phase 3.1.7.5).** SI everywhere, compile-time-dimensional types at API surface, `crd-geometry-primitives` AABB3 / OBB / Sphere / Triangle3 / Plane / Capsule / Cylinder / Tetrahedron / Frustum / ConvexHullView all become `Vec3<Length<T>>`-parametrised at the API surface in Phase 3.1.7.5 v0c adoption pass. The per-domain mm/m/μm split is **OBSOLETED** — every domain (games / robotics / CAD / PCB / aerospace / CFD / FEA / CAM / medical) reads `Length<T>` from `crd-units`, no domain-local unit choice.
+   - **Precision tier:** geometry hot paths are `T ∈ {f32, f64}` templated already (Quickhull v3c shipped both); aerospace large-world consumers stage to `Length<f64>`, games stay on `Length<f32>`. The dimensional type is the same.
+   - **Epsilon policy: per-query, not global.** Geometry-wide intent-named constants live in v1h `constants.hpp`; specific algorithms (GJK termination, predicate Stage A/B/C/D thresholds, SAH cost tie) carry their own; consumers call with overrides for adversarial inputs.
+   - **Large-coordinate test corpus is mandatory** in `tests/geometry-*/test_validation.cpp` (v1i-c ✅ shipped the +1e6/+1e7 origin sweep precedent). Once `crd-units` adoption lands, the large-coord sweep uses `Length<f64>` explicitly.
+   - **Geometry's API-surface adoption is sized in Phase 3.1.7.5 v0c, NOT inside Phase 3.1.7.** Phase 3.1.7 ships pre-`crd-units`; the v0c adoption pass re-tags AABB / OBB / etc. mechanically (the SIMD kernels are unchanged — layout is bit-equal).
+
+2. **Transform-aware adapter pattern** (mint at v11 close). Pin:
+   - `crd-geometry-primitives` stays local-space pure. World-space dispatch is a *consumer* concern.
+   - `TransformedShape<T>` is a value-type wrapper that pairs `T` (local-space primitive) with `Mat4 to_world`; it lives in `crd-geometry-primitives` but carries no world-space queries — those are owned by `crd-scene-spatial`, `crd-eylem` world API, or `crd-renderer` cull.
+   - `transform_aabb` (8-corner) / `transform_obb` (rigid-exact, affine-conservative-via-AABB) / `transform_capsule3` / `transform_cylinder3` / `transform_ray3_to_local` ship as free functions.
+   - Future opt-in `crd-geometry-runtime` sub-module remains a possibility if a consumer-side facade duplication problem surfaces (Cerid's pattern: do not pre-create modules). Tracked as a reserved slot, not a slice.
+
+3. **Curve mathematics ownership** (mint at v10 close). Pin:
+   - `crd-geometry-curves` owns curve math (sampling, flattening, arc-length, closest-point, frames).
+   - `crd-draw` consumes sampled points and debug primitives; it never owns curve math. Existing `crd-draw` is unchanged by v10.
+   - Renderer / animation / cinematic / robotics never reach into curve internals; they consume `to_polyline(curve, tolerance) → Polyline3` or the streaming sampler.
+   - Curve self-intersection + curve-curve intersection are reserved follow-ups; v10 ships sampling + AABB + closest-point only.
+
+4. **Mesh validation pipeline stage** (mint at v4-validate close). Pin:
+   - Manifoldness / duplicate-vertex / non-manifold-edge / inverted-normal / self-intersection / open-boundary / disconnected-component checks run at **cook time + editor import**.
+   - Runtime never re-validates. The CRDR mesh chunk carries a `validated_at: timestamp` + rule list at cook time.
+   - Severity: info / warning / error per rule (artist intent may admit warnings).
+   - Self-intersection check is BVH-accelerated (v4-validate consumes v1a–g + v4a–f).
+
+5. **ADR-0076 §19 amendment formalizing the renewed-scope review** (mint at next ADR session; structurally identical to the §15 precedent). Captures: the 7 new slices (v4-validate + v10a–e + v11), the slice-count revision (42 → 49), the 4 candidate ADRs above as deferred follow-ups, the architectural rules pinned in §11 above, the cross-reference to Phase 3.1.17 `crd-eda` for the PCB/EDA elevation. Justifies-by-precedent: §12 amendment 2026-05-11 (pivot before eylem v1c), §13 amendment 2026-05-11 (`crd::math::geometry` move-and-delete + v0f corpus), §15 amendment 2026-05-13 (v1h/v1i/v1j checklist additions), §16 (architecture pins), §17 (v2 substrate locks), §18 (v3 Shewchuk predicates) all set the pattern of treating substantive scope amendments as in-place numbered sections appended to ADR-0076 rather than minting a new ADR per amendment. §19 follows that pattern.
+
+### Validation + benchmark expectations
+
+For each new in-phase slice cluster:
+
+- **v4-validate** — Golden-mesh corpus: known-watertight, known-non-manifold, known-degenerate-triangle, known-self-intersecting, known-inverted-normal. v4-validate reports each issue with exact triangle index + edge incident pair. Cross-platform / cross-config: `scripts/full-sweep.ps1` 17-config sweep at v4-validate close.
+- **v10 curves** — Scalar vs adaptive-flattening parity (tolerance honored to within `1.1·tolerance` chord error); arc-length table monotone in `t`; `t_at_distance ∘ distance_at_t` is identity within `1e-6` for `t ∈ [0, 1]`; curvature continuity at segment joins for C2 splines; closed-curve roundtrip identity (`sample_uniform(closed_curve, N)[0] == [N-1]`). Determinism: bit-exact builds across compilers / SIMD widths (no `std::sort`, no transcendental libm outside `crd::math::deterministic`).
+- **v11 transform-aware helpers** — `transform_aabb(M, box)` matches `aabb_of_8_corners(M·box.corners())` within `k_distance_epsilon`; rigid-transform OBB is exact (rotation + translation, det(M)=1); identity transform is a value-preserving no-op; degenerate scale (zero / negative axis) does not produce NaN — reports zero-volume AABB instead.
+- **Existing pre-renewal expectations** — every shipped slice already meets the §4.1 performance budgets (Embree-comparison bench v1f, per-cluster perf suite at each `-close`). The renewed scope inherits these.
+
+### Architectural rules (pinned, do not relitigate)
+
+1. **`crd-geometry` does NOT depend on domain modules** (robotics, CAD, EDA, manufacturing, eylem internals). Domain modules may depend on `crd-geometry`.
+2. **`crd-draw` consumes sampled points and debug primitives**; it does not own curve mathematics, mesh processing, or BVH traversal. v10e curves ship via `crd-geometry-viz` (which already depends on `crd-draw`).
+3. **`crd-geometry-primitives` stays mostly pure / local-space.** World-space integration goes through consumer-side adapters (v11 helpers are *primitives* of the adapter, not the adapter itself).
+4. **Heavy / offline geometry** (mesh repair, Boolean, remeshing, CAD topology, CAM toolpath, EDA DRC) is **separated from hot runtime query paths**. v7 mesh-processing is cooker/editor-tier; runtime never re-runs QEM.
+5. **Every optimized path has a scalar / reference path** (v0f branchless + SIMD, v1g BVH4 SIMD vs scalar slab, v2h SIMD support vs scalar) — equivalence tested.
+6. **Determinism is a substrate concern**: stable IDs, stable sorting (no `std::sort`), stable tie-breaks (lexicographic vertex tiebreak, lowest-index witness, X→Y→Z SAH axis), reproducible outputs across compilers / SIMD widths / OSes.
+7. **Large-coordinate / degenerate / near-coplanar / near-collinear cases are part of the validation culture** (v1i-c degenerate corpus + large-coord sweep is the template).
+8. **The active phase stays consumer-driven.** Algorithms are added because a Cerid consumer needs them, not because they are interesting. (V-HACD is in v9c because the editor needs it; B-spline curves are in v10a because cinematic + robotics need them; PCB DRC is NOT in 3.1.7 because `crd-eda` is its consumer and is a separate future phase.)
+
+## New in-phase slices (renewed scope, 2026-05-14)
+
+The four genuine gaps surfaced by the 2026-05-14 scope review land as
+new in-phase slice clusters. **In-flight wording unchanged: v3d hull
+simplification remains the next immediate slice** (per user directive
+"we don't need to touch the current slice we are working on we can
+finish them"). The renewed-scope additions ship *after* the v3 cluster
+closes and the v4 / v5 / v6 / v7 / v8 / v9 clusters proceed —
+v4-validate is inside the v4 cluster (after v4a–f), v10 lands as its
+own cluster between v9 and v9e (or alongside v9e — schedule TBD when v9
+lands), v11 lands at the v0 hardening tail or alongside v4-validate.
+
+| Slice | Scope | LOC | Calendar |
+|---|---|---|---|
+| **v4-validate** | **Formal mesh validation pass** (extracted from v7 manifoldness-fix + self-intersection-removal so the validation pipeline lands inside the `-mesh` cluster, not after `-mesh-processing`). New `crd-geometry-mesh::validate.hpp`: `validate_mesh(TriangleMeshView, MeshValidationOptions) → MeshValidationReport` reporting (a) duplicate vertices within `k_distance_epsilon`, (b) degenerate triangles (zero-area + sliver via aspect-ratio threshold), (c) non-manifold edges (>2 incident faces), (d) inverted normals (winding inconsistent with majority of neighbors via half-edge traversal), (e) self-intersections (Möller 1997 triangle-triangle over BVH-accelerated candidate pairs), (f) open boundaries (loops of unmatched half-edges, returns boundary loop count + total length), (g) disconnected components (union-find over half-edge graph). Severity per rule: `Info` / `Warning` / `Error`; artist-intent overrides admit warnings without blocking cooker. Each issue carries triangle index + adjacency context for editor visualization. Cooker pipeline calls `validate_mesh` on glTF import; sandbox emits validation report panel; CRDR mesh chunk gains `validated_at: timestamp` + `rules_verified: bitset`. Runtime never re-validates. Consumer: editor cooker mesh import (primary), eylem mesh collider import gate (secondary), SDF bake input gate (secondary), manufacturing pre-flight (future). | ~600 + ~500 tests | ~3 days |
+| **v10a** | **`crd-geometry-curves` module substrate.** New module `engine/geometry-curves/` (target `crd-geometry-curves`, ns `crd::geometry::curves`, deps `crd-core` + `crd-math` + `crd-containers` + `crd-geometry-primitives`). Curve primitive types: `Polyline3` (non-owning view + owning variant), `QuadBezier3`, `CubicBezier3`, `CubicHermite3` (position + tangent at each end), `CatmullRom3` (uniform + centripetal parameterization — the cinematic camera default), `BSpline3` (degree-3, owns knot vector `Array<f32>`), `CircularArc3` (center + plane + start_angle + sweep), `EllipseArc3`. 2D peers (`Polyline2`, `QuadBezier2`, `CubicBezier2`, `CircularArc2`, `EllipseArc2`) shipped same slice (mirrors the v0a/v0b 2D-peer-set discipline). Closed-curve flag on each primitive (closed B-spline / closed Catmull-Rom for loop paths). Templated on `T ∈ {f32, f64}` (matches v3 Quickhull + v2i f64 GJK precedent). System doc `docs/systems/geometry-curves.md`. | ~700 + ~400 tests | ~3 days |
+| **v10b** | **Sampling + flattening.** `sample_uniform(curve, n_samples) → Array<Vec3>` (parameter-uniform — fastest, lowest quality at high curvature); `sample_adaptive(curve, tolerance) → Array<Vec3>` (chord-error subdivision: de Casteljau midpoint test for Bezier, recursive split for splines until segment chord-error < tolerance; the LOD default); `sample_by_curvature(curve, max_angle_step) → Array<Vec3>` (camera-banking / banking-quality default); `to_polyline(curve, tolerance) → Polyline3` convenience. Tolerance ties to `k_distance_epsilon` from v1h `constants.hpp`; per-call overrides allowed. Closed-curve sampling produces a closed polyline (first == last, marked). Determinism: no `std::sort`, no transcendental outside `crd::math::deterministic`. | ~500 + ~400 tests | ~3 days |
+| **v10c** | **Arc-length system.** `build_arclength_table(curve, n_samples=64) → ArclengthTable` (cumulative-distance over a sufficiently-dense uniform sample; `Array<{t, distance}>`); `length_of(curve) → f32` total; `t_at_distance(table, distance) → f32` (binary search + linear interpolation) for constant-speed traversal; `distance_at_t(table, t) → f32` (inverse). Closed-curve modular distance (wraps mod length). Consumer: cinematic camera spline traversal (constant-speed dollying), robot trajectory constant-speed sampling, animation keyframe timing remap. Validation: `t_at_distance ∘ distance_at_t == identity` within `1e-6`; arc-length monotone in `t`. | ~300 + ~250 tests | ~2 days |
+| **v10d** | **Curve queries.** `aabb_of(curve) → AABB3` (subdivision-bounded for Bezier/spline — recursive split until chord-AABB stable; exact for circular/elliptic arcs); `closest_point(curve, p, tolerance) → CurveClosestPoint{t, point, distance²}` (Newton-Raphson on `d/dt|curve(t) - p|² = 0`, initialized via subdivision rejection — global minimum, not local); `distance(curve, p)` convenience; `intersect_ray(curve, ray, tolerance) → optional<{t_curve, t_ray, point}>` against flattened polyline (curve-curve intersection deferred to v10 follow-up). Hooked into the unified `crd/geometry/queries.hpp` facade overload set. Consumer: editor curve-edit gizmo (closest-point), cinematic camera trigger volumes (ray-vs-spline-path), debug-draw cursor-pick on smoothed polyline. | ~400 + ~300 tests | ~2 days |
+| **v10e** | **Frames + viz + sandbox showcase.** `tangent(curve, t) → Vec3` (first derivative); `normal(curve, t) → Vec3` (Frenet via second-derivative + Gram-Schmidt; defaults to a deterministic up-vector when the curvature is zero); `binormal(curve, t) → Vec3`; **rotation-minimizing frame** (`compute_rmf(curve, samples) → Array<{tangent, normal, binormal}>` via double-reflection method, Wang 2008 — the smooth-banked camera / smooth-banked trajectory default). `crd-geometry-viz` companion (already shipped v1j) extended with `draw_curve(buf, curve, samples)` / `draw_polyline(buf, polyline)` / `draw_tangent_frame(buf, curve, n_samples)` / `draw_rmf(buf, frames)`. Sandbox showcase scene added (`SandboxScene::CurvesShowcase`) — pickable curve type + control-point dragging + sample slider + frame mode toggle. **Curve-curve intersection deferred** to follow-up (advisor: ships when a real consumer asks; v10 ships sampling + AABB + closest-point + frames, the cinematic+robotics MVP). | ~400 + ~350 tests | ~2 days |
+| **v11** | **Transform-aware query helpers in `crd-geometry-primitives`.** New `crd/geometry/primitives/transform.hpp` (in the existing `crd-geometry-primitives` module — NO new module per the 2026-05-14 scope decision; `crd-geometry-runtime` is a reserved-not-created slot, see ADR candidate 2). `TransformedShape<T>{ T shape; Mat4 to_world }` lightweight value-type wrapper; free functions `transform_aabb(Mat4, AABB3) → AABB3` (8-corner method — conservative AABB-of-transformed-corners, the standard pattern), `transform_obb(Mat4, OBB3) → OBB3` (rigid-exact for orthogonal + uniform-scale `M`; conservative-via-AABB for general affine — detected by checking `M` for orthogonality + uniform-scale at construction), `transform_capsule3` / `transform_cylinder3` (axis-line transform + radius scale by `|M|` average), `transform_ray3_to_local(world_ray, world_to_local) → Ray3` (the inverse-direction pattern that lets a raycast happen in local space then transform the hit back). Cross-domain decision pin (already in §11.3 above): **`crd-geometry` stays local-space pure**; world-space dispatch is a *consumer* concern (`crd-scene-spatial` / `crd-eylem` already adapt). v11 ships only the transform-shape helpers — the dispatch layer (`world_raycast(scene, ray)` / `world_overlap(scene, box)`) lives at consumer time, NOT here. Tests: `transform_aabb(M, box) ≈ aabb_of_8_corners(M·box.corners())` within `k_distance_epsilon` on rigid + scale + skew; identity transform is a value-preserving no-op (`transform_aabb(Mat4::identity(), b) == b` bit-exact); degenerate scale (zero / negative axis) does not produce NaN; OBB rigid-transform is exact (orthogonal `M`); 2D peers (`transform_aabb2` / `transform_obb2`) shipped same slice. | ~400 + ~300 tests | ~2 days |
+
+**Renewed total: 49 slices, ~22 KLOC engine + ~5 KLOC editor-tier + ~4
+KLOC cooker-emitted GLSL/HLSL, ~7.5–9.5 months calendar** (was 42
+slices / 20.0 KLOC / 7–9 months prior to renewed-scope additions
+2026-05-14; +1 v4-validate + 5 v10a–e + 1 v11 = +7 slices net, +~2
+KLOC, +~2.5 wk calendar). The earlier "Total" paragraph (42 / 20.0
+KLOC / 7–9 months) is the pre-renewal historical sizing.
 
 ## Performance budgets (per supplement dossier §4.1)
 

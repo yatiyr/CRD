@@ -24,6 +24,8 @@
 #include <crd/geometry/convex/feature_clip.hpp>
 #include <crd/geometry/convex/gjk.hpp>
 #include <crd/geometry/convex/hull_queries.hpp>
+#include <crd/geometry/convex/hull_simplify.hpp>
+#include <crd/geometry/convex/quickhull.hpp>
 #include <crd/geometry/convex/sat.hpp>
 #include <crd/geometry/convex/shapecast.hpp>
 #include <crd/geometry/convex/support.hpp>

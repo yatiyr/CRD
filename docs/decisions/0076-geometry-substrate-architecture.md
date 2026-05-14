@@ -926,3 +926,47 @@ The 2026-05-11 phase doc had `v3a-v3c` as a single row (2D monotone chain + 3D Q
 **Total:** ~2750 LOC engine + ~2000 LOC tests, ~13-19 days calendar (~2.5 weeks).
 
 **What is not affected.** §1–§17 architecture (no module split changes), §6 sequencing (geometry still executes before Phase 3.1 v1c resume per §12), §12-§17 prior amendments. Slice count: 33 → 34 (the v3a Shewchuk slice was previously bundled inside the original v3a-c row; now broken out). Phase 3.1.7 total LOC bumps from ~18.5 KLOC engine to ~19.7 KLOC engine.
+
+## 18.5. v3 cluster CLOSED 2026-05-15 — verification + locked decisions
+
+All v3 slices shipped on the 2026-05-14 / 2026-05-15 dates:
+
+- **v3a Shewchuk adaptive predicates** ✅ 2026-05-14 (orient2d / orient3d / incircle / insphere with adaptive expansion arithmetic; f32 promotes to f64; bit-exact across compilers / SIMD widths / OSes; full Stage D `orient3d` shipped during v3a-debt-paydown 2026-05-14; full Stage D `incircle` shipped same paydown; `insphere` Stage-D upgrade reserved for v8c-pre per `docs/debt.md`).
+- **v3b 2D convex hull (Andrew's monotone chain)** ✅ 2026-05-14 (lex-sort + dedup + lower/upper-hull sweeps; v3a `orient2d` for left-turn decisions; output is CCW polygon; bit-exact determinism on identical input).
+- **v3c 3D Quickhull (Barber-Dobkin-Huhdanpaa 1996)** ✅ 2026-05-14 (3 sub-slices a + b + c same day: skeleton + iteration + enrich-for-gjk + coplanar reconstruction; honest 1500-LOC sizing came in under budget at ~1020 LOC; `QuickhullResult` owning-arrays form + `convex_hull_view_of` non-owning helper + `enrich_for_gjk` mutator).
+- **v3d hull simplification** ✅ 2026-05-15 (greedy vertex-removal + shrinkage-distance cost + convexity guard + `keep_vertex_indices` locked-vertex constraint multi-domain pin for eylem / CAD / FEA / robotics; first-test-run bug caught + fixed: ring walk direction CW-vs-CCW from `(k+1)%3` → `(k+2)%3`).
+- **v3-close** ✅ 2026-05-15 (tiebreak conformance under input permutations + 2D cross-check + large-coord 1e6/1e7 stability + v3d threshold-respect + v3d locked-vertex interaction; `tests/geometry-convex/test_v3_close.cpp` 9 cases / 243 assertions; `tests/bench/test_bench_quickhull.cpp` 8 benchmarks).
+
+**Locked substrate decisions** (carried forward from §18.1–§18.4
+recommendations, validated in flight):
+
+1. **Q1 — `ConvexHullViewOwning<T>` type? NO.** `QuickhullResult<T>` is the owning form (it owns `vertices` + `faces` + `face_vertex_indices` + `face_vertex_offsets` + optional v2g adjacency + optional v2h SoA); `convex_hull_view_of(QuickhullResult)` builds the non-owning view inline. Shipped; binds cleanly to v2 GJK/EPA + v3d simplify + future V-HACD.
+
+2. **Q2 — Honest Quickhull LOC sizing? YES, 1500 LOC target.** Came in at ~1020 LOC actual across v3c-a + v3c-b + v3c-c (the per-seam discipline + advisor's design pass before code surfaced the right algorithmic decisions early — interior-witness CCW verification, Shewchuk "below = positive" convention, deterministic horizon-walk order, exact Stage D `orient3d` for visibility decisions). The 1500-LOC budget held as a ceiling; actual was 32% under.
+
+3. **Q3 — Shewchuk adaptive predicates as substrate foundation? YES.** v3a substrate-foundation slice lives in `crd-geometry-primitives::predicates.hpp`; consumed by v3b/v3c/v3d immediately + reserved for v6 Vatti polygon Boolean + v8 Bowyer-Watson 3D Delaunay + v9c V-HACD + future Phase 3.1.8 `crd-brep` CAD boolean + Phase 3.1.10 `crd-cfd` AMR + Phase 3.1.12 `crd-fea` contact. `orient3d` ships with full Stage D adaptive expansion arithmetic; `incircle` ships full Stage D; `insphere` ships 5-cofactor Laplacian structure with f64 inner products (honest Stage-A-equivalent re-expression) — full Stage D deferred to v8c-pre paydown when Bowyer-Watson surfaces it.
+
+4. **Q4 — `keep_vertex_indices` locked-vertex constraint from day 1? YES.** v3d's `HullSimplifyOptions::keep_vertex_indices: ConstSpan<u32>` ships with full multi-domain integration. Consumers: eylem stable contact (warm-start vertex IDs), CAD remap (Phase 3.1.8 B-rep feature edge boundary preservation), FEA attachment-point preservation (Phase 3.1.12 bolt-hole / weld-point / load-application vertices), robotics gripper-finger hull (fingertip + contact-pad vertices), V-HACD post-processing (empty by default).
+
+**Verification (DoD compliance).** Full 17-config `scripts/full-sweep.ps1`
+PASS:
+- **Windows × 10**: debug / relwithdebinfo / release / asan / clang-cl / debug-scalar / debug-sse2 / shipping / clang-cl-shipping / tidy.
+- **Linux × 7**: gcc-debug / relwithdebinfo / release / asan / debug-scalar / debug-sse2 / shipping.
+
+Convex test suite at v3-close: **207 cases / 21513 assertions** across
+the v3 cluster + v3-close conformance corpus.
+
+**Drive-by debts paid en route:**
+
+1. **`engine/geometry-primitives/src/predicates.cpp::two_two_sum`** — Shewchuk-primitive helper was unused on live code paths (only `two_two_diff` is reached); clang-cl `-Werror=unused-function` failed both `win-clang-cl` and `win-clang-cl-shipping`. Marked `[[maybe_unused]]` with a documentation comment that it stays as a Shewchuk-expansion helper for the future Stage D `insphere` consumer. This was latent v3a debt — MSVC was lenient about unused static functions, clang-cl is strict.
+
+2. **Non-ASCII characters in v3b/v3c TEST_CASE names** — 19 test names containing `→` / `—` mojibaked through Windows ctest argv via the Active Code Page (Turkish CP1254 → `ÔåÆ` / `ÔÇö`), exactly the bug class the `crd-no-non-ascii-test-names` guard was created for in v1i-c. The guard was wired correctly into ctest at v1i-c but v3b/v3c shipped past it (the v3b/v3c per-slice verification was test-binary-direct, not ctest, per the in-flight `-bvh` verification directive). v3-close ran ctest, exposed it, and `→` / `—` were mechanically replaced with `->` / `--`. Guard now green across `tests/geometry-convex/`.
+
+**ADR-0076 §18.5 outcome:** v3 substrate is the **4th of 11 sub-modules
+COMPLETE** (`-primitives` ✅ + `-bvh` ✅ + `-convex` ✅ + v3 convex-hull
+extension ✅). Phase 3.1.7 progress: roughly 50% of slices shipped
+(v0a–v0f + v1a–v1j + v2a–v2-close + v3a–v3-close = 32 of the renewed-
+scope 49 total). **Next sub-module: `-mesh` v4 cluster** (TriangleMeshView
++ half-edge + mesh closest-point + Möller-Trumbore raycast + Jacobson
+2013 winding number + v4g per-leaf SIMD + v4-validate formal mesh
+validation pass).

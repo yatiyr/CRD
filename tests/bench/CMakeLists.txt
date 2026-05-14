@@ -3,6 +3,7 @@ add_executable(crd-bench
     test_bench_simd.cpp
     test_bench_bvh.cpp
     test_bench_gjk.cpp
+    test_bench_quickhull.cpp
 )
 
 target_link_libraries(crd-bench PRIVATE

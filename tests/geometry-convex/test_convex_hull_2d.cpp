@@ -79,7 +79,7 @@ bool hull_contains_all_inputs(crd::containers::ConstSpan<Vec2<T>> points,
             const Vec2<T>& b = points[hull_indices[(i + 1) % n_hull]];
             if (orient2d(a, b, p) < 0)
             {
-                return false; // p is to the right of edge a→b → outside hull
+                return false; // p is to the right of edge a->b -> outside hull
             }
         }
     }
@@ -186,7 +186,7 @@ TEST_CASE("convex_hull_2d: hexagon with interior cluster", "[v3b][hull2d]")
 // (2) Degenerate inputs
 // ---------------------------------------------------------------------------
 
-TEST_CASE("convex_hull_2d: empty input → empty hull", "[v3b][hull2d][degen]")
+TEST_CASE("convex_hull_2d: empty input -> empty hull", "[v3b][hull2d][degen]")
 {
     crd::memory::TlsfAllocator alloc(8U * 1024U);
     crd::containers::Array<u32> hull(&alloc);
@@ -194,7 +194,7 @@ TEST_CASE("convex_hull_2d: empty input → empty hull", "[v3b][hull2d][degen]")
     CHECK(hull.empty());
 }
 
-TEST_CASE("convex_hull_2d: single point → 1-vertex hull", "[v3b][hull2d][degen]")
+TEST_CASE("convex_hull_2d: single point -> 1-vertex hull", "[v3b][hull2d][degen]")
 {
     crd::memory::TlsfAllocator alloc(8U * 1024U);
     crd::containers::Array<Vec2<f64>> points(&alloc);
@@ -205,7 +205,7 @@ TEST_CASE("convex_hull_2d: single point → 1-vertex hull", "[v3b][hull2d][degen
     CHECK(hull[0] == 0);
 }
 
-TEST_CASE("convex_hull_2d: two distinct points → 2-vertex hull", "[v3b][hull2d][degen]")
+TEST_CASE("convex_hull_2d: two distinct points -> 2-vertex hull", "[v3b][hull2d][degen]")
 {
     crd::memory::TlsfAllocator alloc(8U * 1024U);
     crd::containers::Array<Vec2<f64>> points(&alloc);
@@ -218,7 +218,7 @@ TEST_CASE("convex_hull_2d: two distinct points → 2-vertex hull", "[v3b][hull2d
     CHECK(points[hull[0]].x <= points[hull[1]].x);
 }
 
-TEST_CASE("convex_hull_2d: collinear input → 2-vertex hull (lex extremes)",
+TEST_CASE("convex_hull_2d: collinear input -> 2-vertex hull (lex extremes)",
           "[v3b][hull2d][degen]")
 {
     crd::memory::TlsfAllocator alloc(8U * 1024U);
@@ -234,7 +234,7 @@ TEST_CASE("convex_hull_2d: collinear input → 2-vertex hull (lex extremes)",
     REQUIRE(hull.size() == 2);
 }
 
-TEST_CASE("convex_hull_2d: all-coincident input → 1-vertex hull", "[v3b][hull2d][degen]")
+TEST_CASE("convex_hull_2d: all-coincident input -> 1-vertex hull", "[v3b][hull2d][degen]")
 {
     crd::memory::TlsfAllocator alloc(8U * 1024U);
     crd::containers::Array<Vec2<f64>> points(&alloc);

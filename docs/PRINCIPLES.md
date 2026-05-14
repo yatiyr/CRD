@@ -46,6 +46,24 @@ consumers. The architecture serves all of them; no domain is privileged.
 - **Every shipped slice ends green on Debug + Release + ASan.** Three
   flavours. No exceptions.
 - **The engine is allowed to be slow before it is allowed to be wrong.**
+- **Every physical and scientific quantity carries a unit, always.** No
+  module's public API exposes a bare `f32` / `f64` for a length, mass,
+  time, angle, force, pressure, energy, voltage, current, temperature,
+  frequency, or any other dimensional quantity. The internal canonical
+  unit is **SI base** (meters / kg / seconds / radians / kelvin / ampere
+  / candela / mole); zero-overhead compile-time-dimensional wrappers
+  (`Length<T>` / `Mass<T>` / `Force<T>` / `Velocity<T>` / `Torque<T>` /
+  etc.) live in `crd-units`. Precision tier (f32 / f64) is orthogonal
+  to the dimensional type and varies per domain (games + runtime stay
+  f32; aerospace large-world + CAD micrometer + scientific stage to
+  f64). Asset / file / UI boundaries normalise to SI at load; runtime
+  never sees non-SI; `.value_in<TargetUnit>()` is the only
+  egress path. SIMD / GPU hot paths reach the raw scalar via `.value`
+  (zero-overhead bit-equal layout); the safety lives at the API
+  surface, not inside the inner loop. **There is no opt-out** —
+  bare-float-for-physical-quantity is a code-review block and a
+  CI-guard violation. → `crd-units` (Phase 3.1.7.5); ADR-0078
+  candidate (mint at v0a close)
 
 ## Architectural Cornerstones (pinned)
 

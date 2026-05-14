@@ -112,8 +112,14 @@ inline void two_one_diff(crd::f64 a1, crd::f64 a0, crd::f64 b, crd::f64& x2, crd
 }
 
 // Two-Two-Sum: add two length-2 expansions. Result is length-4.
-inline void two_two_sum(crd::f64 a1, crd::f64 a0, crd::f64 b1, crd::f64 b0, crd::f64& x3, crd::f64& x2,
-                         crd::f64& x1, crd::f64& x0) noexcept
+// Marked [[maybe_unused]]: currently only `two_two_diff` is reached on
+// the live code paths; `two_two_sum` is kept as a documented Shewchuk-
+// primitive helper for future expansion arithmetic (full Stage D
+// `insphere` will reach it). clang-cl `-Werror=unused-function` otherwise
+// fails the build.
+[[maybe_unused]] inline void two_two_sum(crd::f64 a1, crd::f64 a0, crd::f64 b1, crd::f64 b0,
+                                          crd::f64& x3, crd::f64& x2, crd::f64& x1,
+                                          crd::f64& x0) noexcept
 {
     crd::f64 j;
     crd::f64 k;

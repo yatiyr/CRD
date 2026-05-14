@@ -16,6 +16,8 @@ add_executable(crd-geometry-convex-tests
     test_degenerate_corpus.cpp
     test_convex_hull_2d.cpp
     test_quickhull.cpp
+    test_hull_simplify.cpp
+    test_v3_close.cpp
     # test_epa_probe.cpp        # answered: EPA robust on rotated hull-hull (77/77); pathology was OBB-OBB-rotated only, covered by SAT (v2d). probe kept on disk for reference; not built.
     # test_simplex_size_probe.cpp  # design-phase probe (kept on disk; not built)
 )
