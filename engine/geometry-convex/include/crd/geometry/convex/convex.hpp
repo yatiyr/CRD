@@ -19,6 +19,7 @@
 //   v2j — Sutherland-Hodgman clipping + feature enumeration
 // ---------------------------------------------------------------------------
 
+#include <crd/geometry/convex/convex_hull_2d.hpp>
 #include <crd/geometry/convex/epa.hpp>
 #include <crd/geometry/convex/feature_clip.hpp>
 #include <crd/geometry/convex/gjk.hpp>

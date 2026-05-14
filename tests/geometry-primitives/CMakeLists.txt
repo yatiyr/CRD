@@ -11,6 +11,7 @@ add_executable(crd-geometry-primitives-tests
     test_signed_distance.cpp
     test_convex_hull_view.cpp
     test_validation.cpp
+    test_predicates.cpp
 )
 
 target_include_directories(crd-geometry-primitives-tests PRIVATE

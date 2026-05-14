@@ -28,6 +28,7 @@ target_link_libraries(crd-geometry-convex
         crd-core                # types, asserts
         crd-math                # Vec3 / Mat3 / Quat / Transform + scalar helpers
         crd-containers          # ConstSpan / StaticArray (the canonical view containers per ADR-0076 §5)
+        crd-memory              # IAllocator (Quickhull result-arrays carry one)
         crd-geometry-primitives # Sphere / OBB3 / Capsule3 / ConvexHullView / k_distance_epsilon
         crd-simd-flags
 )

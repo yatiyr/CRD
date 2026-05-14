@@ -864,3 +864,65 @@ v2a–v2j + v2-close in a single document per user request.
 §9 risks, §12 sequence pivot, §13/§14/§15/§16 amendments. Slice count
 unchanged (33 — v2j was already in the §15 list). v2 substrate is the
 3rd of 11 sub-modules now ✅; `-mesh` v4 is next major sub-module.
+
+## 18. Amendment 2026-05-14 — v3 substrate-foundation decisions (4 questions, user-approved)
+
+Before starting `crd-geometry-convex` v3 (convex hull construction), four
+substrate-foundation questions were resolved. The 4 decisions land at v3 and
+propagate through the rest of the geometry phase + downstream consumers (CFD /
+FEA / CAD / V-HACD / Vatti / Bowyer-Watson):
+
+### 18.1 — Shewchuk 1997 adaptive predicates: shipped at v3a (not deferred)
+
+§164 / §397 left adaptive-precision predicates as an open question for v1+,
+conditioned on sdf v2 mesh-bake stress data. **Decision (2026-05-14):** ship
+Shewchuk 1997 adaptive predicates AT v3a, BEFORE Quickhull, not after.
+
+**Where they live:** `engine/geometry-primitives/include/crd/geometry/primitives/predicates.hpp` (the leaf substrate). Every higher-tier module — `-convex` v3, `-polygon` v6 (Vatti / Bentley-Ottmann), `-delaunay` v8 (Bowyer-Watson), `-decomposition` v9c (V-HACD), `crd-cfd` (Phase 3.1.10 AMR), `crd-fea` (Phase 3.1.12 contact), `crd-brep` (Phase 3.1.8 exact boolean) — consumes them without depending on `-convex`.
+
+**What ships:** `orient2d` / `orient3d` / `incircle` / `insphere` with adaptive expansion arithmetic per Shewchuk "Adaptive Precision Floating-Point Arithmetic and Fast Robust Geometric Predicates" (1997). Replaces the existing float-based `intersect.hpp::orient2d` (line 83-86, a plain `cross(b-a, c-a)`) — the float version stays but the adaptive version is preferred for builder code paths.
+
+**Why now, not deferred:** Quickhull, V-HACD, Vatti, Bowyer-Watson all fail catastrophically on coplanar/cospherical/colinear input when float predicates are used. Multi-domain consumers (CAD, CFD, scientific computing per ADR-0077 §3.1.10/§3.1.12) will not tolerate predicate-driven non-determinism. Pay the cost while the team is in the geometry substrate; resolves the §164/§397 risk pre-emptively.
+
+**ULP-conformance test:** verify against Shewchuk's published reference results (the values in his test corpus, including the canonical "incircle near-cospherical" stress cases that break naïve float implementations).
+
+### 18.2 — No `ConvexHullViewOwning<T>` type
+
+**Decision (2026-05-14):** keep the v2 substrate pattern. `ConvexHullView<T>` stays non-owning. `QuickhullResult<T>` is the owning form (owns vertices + faces + face_vertex_indices + face_vertex_offsets arrays). A free helper `convex_hull_view_of(const QuickhullResult<T>&) → ConvexHullView<T>` builds the non-owning view inline.
+
+**Adjacency + SoA enrichment:** a separate post-processor `enrich_for_gjk(QuickhullResult&) → void` mutates the result in place to append v2g vertex-adjacency + v2h SoA SIMD vertex arrays. Caller decides whether to enrich (cost: ~O(V log V) for adjacency build). Still no new type.
+
+**Rationale:** adding a second owning type for the same data is "introducing abstractions beyond what the task requires" (`CLAUDE.md`). One owning shape, one view shape — clean.
+
+### 18.3 — Honest Quickhull LOC sizing
+
+**Decision (2026-05-14):** v3c Quickhull plans for ~1500 LOC engine + ~800 LOC tests, NOT the originally-estimated ~900 LOC. Robust Quickhull needs degeneracy handling (coplanar / colinear / coincident input fallback paths), half-edge adjacency maintenance during face replacement, robust initial-tetrahedron construction, and explicit horizon-walk + visible-face tracking. Skimping = the "Quickhull is broken on flat input" debt the multi-domain users will not accept.
+
+Calendar: v3c moves from 4-5 days to 6-7 days. v3 sub-phase total: ~13-19 days calendar (~2.5 weeks) vs original ~1 week.
+
+### 18.4 — `keep_vertex_indices` constraint on hull simplification
+
+**Decision (2026-05-14):** `HullSimplifyOptions::keep_vertex_indices: ConstSpan<u32>` ships in v3d FROM DAY 1 (default empty = pure cost-driven decimation; populated = locked vertices via cost=+∞ in the QEM cost function).
+
+**Multi-domain consumers:**
+- V-HACD output → empty (pure cost).
+- CAD (Phase 3.1.8 `crd-brep` cooker) → locked feature corners.
+- Engineering FEA (Phase 3.1.12) → locked boundary nodes.
+- Robotics (Phase 8 robotics) → locked gripper attachment frames on tool colliders.
+- Editor (Phase 7) → artist-locked vertices via UI.
+
+**Cost:** ~30 LOC engine + ~50 LOC tests. Day-1 inclusion keeps the API shape stable; adding later forces every caller to migrate.
+
+### 18.5 — Slice catalog (replaces the original v3a-v3c)
+
+The 2026-05-11 phase doc had `v3a-v3c` as a single row (2D monotone chain + 3D Quickhull + hull simplification, ~2000 LOC / ~1 week). The 2026-05-14 amendment expands to **four slices + close**:
+
+- **v3a** — Shewchuk adaptive predicates (NEW, §18.1).
+- **v3b** — 2D convex hull (Andrew's monotone chain; was original v3a).
+- **v3c** — 3D Quickhull (Barber 1996; was original v3b; +600 LOC honest sizing per §18.3).
+- **v3d** — Hull simplification (was original v3c; +30 LOC for `keep_vertex_indices` per §18.4).
+- **v3-close** — tiebreak conformance + degenerate corpus + perf bench + full 17-config sweep + doc updates.
+
+**Total:** ~2750 LOC engine + ~2000 LOC tests, ~13-19 days calendar (~2.5 weeks).
+
+**What is not affected.** §1–§17 architecture (no module split changes), §6 sequencing (geometry still executes before Phase 3.1 v1c resume per §12), §12-§17 prior amendments. Slice count: 33 → 34 (the v3a Shewchuk slice was previously bundled inside the original v3a-c row; now broken out). Phase 3.1.7 total LOC bumps from ~18.5 KLOC engine to ~19.7 KLOC engine.

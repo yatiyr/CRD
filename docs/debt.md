@@ -5,6 +5,40 @@ move to a session log entry and remove from here.
 
 ## Active debt
 
+### Shewchuk adaptive predicates — partial paydown 2026-05-14 (orient3d + incircle full Stage D shipped; insphere remains Stage A-equivalent)
+
+> **TL;DR — WHEN TO PAY THIS DEBT:**
+>
+> 1. **PRIMARY TRIGGER (mandatory paydown):** **At the start of Phase 3.1.7 v8a (2D Bowyer-Watson Delaunay)** — re-verify `incircle` Stage D against Bowyer-Watson's stress corpus (cocircular point clouds; the canonical case where any robust 2D Delaunay impl is judged). If failure surfaces, it's a Stage D bug in `incircle_exact` — fix BEFORE shipping v8a.
+> 2. **PRIMARY TRIGGER for insphere (mandatory paydown):** **At the start of Phase 3.1.7 v8c (3D Bowyer-Watson Delaunay)** — `insphere_exact` MUST be upgraded from the current Stage-A-equivalent re-expression to full Shewchuk expansion arithmetic BEFORE v8c writes any tetrahedron-flip logic. Upgrading at v8c-time means the implementation lands with a real workload (Bowyer-Watson's cospherical adversarial corpus) to validate against — eliminates the silent-correctness-debt risk the advisor flagged. v8c session log must explicitly verify this paydown.
+> 3. **EARLY TRIGGER:** Any consumer (V-HACD v9c, CFD AMR Phase 3.1.10, FEA contact Phase 3.1.12, CAD boolean Phase 3.1.8) reporting wrong-sign behavior on cospherical-class input → promote this entry to "blocker" + fix immediately. The current `insphere_exact` will silently mis-sign true cospherical input, so the trigger isn't "tests fail" — it's "downstream geometry surfaces wrong topology" (flipped tetrahedra in a mesh / wrong inside-outside on a thin shell / etc.).
+> 4. **DO NOT SPECULATIVELY PAY:** Shipping ~2000 LOC of intricate expansion arithmetic without a workload to validate against is silent-correctness debt of its own — see the "Why insphere stopped" rationale below.
+
+**Paid 2026-05-14:**
+- **`orient3d`** ✅ — Full Stage D shipped (`orient3d_exact` in `predicates.cpp` lines ~610-680). Six 4-element 2x2-minor expansions + four 24-element triangle-cofactor expansions + cascaded sums to a 96-element final expansion. Returns the exact sign of the highest-magnitude nonzero term. Validated with the v3a-debt adversarial corpus: 4-truly-coplanar-points-on-slanted-plane returns exact zero; near-coplanar tiny-perpendicular-perturbation at scale 100 returns correct sign.
+- **`incircle`** ✅ — Full Stage D shipped (`incircle_exact`). New helper `expansion_product` does general N×M expansion-by-expansion multiplication (used to multiply the 4-element x²+y² lift expansions by the 4-element xy-minors). Each cofactor is a 96-element expansion; final det is up to 384 elements. Validated: 4 cocircular points on radius-1e3 circle return exact zero; tiny-perturbation-outside returns negative. **Re-verification scheduled at Phase 3.1.7 v8a Bowyer-Watson 2D Delaunay start** — the consumer-validation step that confirms the Stage D port is correct on a real workload.
+
+**Still deferred:**
+- **`insphere`** ⚠️ — The 5x5-cofactor Laplacian STRUCTURE is in place (`insphere_exact` decomposes into 5 `det4_3d` sub-determinants per the published Shewchuk pattern), BUT the inner products in each `det4_3d` use f64 multiplication directly (not expansion arithmetic). This means `insphere_exact` is **algorithmically equivalent to a clean re-expression of Stage A**, not a full Stage D in the expansion-arithmetic sense. On cospherical input where Stage A misses the sign, `insphere_exact` will also miss it.
+
+**Why insphere stopped at Stage-A-equivalent:**
+1. Full Shewchuk `insphereexact` is ~2000 LOC of cascading expansion sums (each of the 5 sub-determinants needs full 3D lift expansion through 6 minors + 4 cofactors with mixed-precision products). The complexity is one tier above incircle.
+2. The advisor flagged the validation-gap problem: there is no consumer surfacing cospherical pathology to validate against. v8 Bowyer-Watson 3D Delaunay is months out.
+3. Shipping ~2000 LOC of intricate expansion arithmetic without a workload to verify against is silent-correctness debt — the code can compile, pass simple tests, and harbor sign-flip bugs invisible until the v8 consumer exercises adversarial input.
+
+The current `insphere_exact` IS a structural improvement over the previous Stage-A-only fallthrough: it reuses the 5-cofactor Laplacian decomposition that future Stage D will need, and the API surface is stable. When v8 lands, upgrading the inner products to expansion arithmetic is a localized change.
+
+**API surface remains stable** — adaptive form drops in without API change when v8c (3D Delaunay) surfaces the requirement.
+
+**Paydown plan (when v8c starts):**
+- **Slot:** v8c-pre — the first sub-slice of Phase 3.1.7 v8c. Mandatory.
+- **Scope:** upgrade `det3_lift` and the outer 4x4 cofactor sums in `insphere_exact` (`predicates.cpp`) from f64 multiplication to `expansion_product`-based expansion arithmetic. Analogous to incircle's pattern, scaled up to 3D (6-element lifts via 3 squares + 2 sums; ~3000-element worst-case final expansion).
+- **Estimate:** ~800–1200 LOC engine + ~300 LOC tests + ~4–5 days calendar.
+- **Validation:** v8c Bowyer-Watson 3D Delaunay's cospherical-input stress corpus is the workload — port should produce flip-free tetrahedra on Shewchuk's canonical adversarial input.
+- **Session log entry required:** v8c's session log must explicitly mark this paydown complete, with a link back to this debt entry. Don't let the debt slide silently into v8c — make the paydown a NAMED v8c-pre slice.
+
+**Reference implementation:** Shewchuk's `predicates.c` v4.0.0 from https://www.cs.cmu.edu/~quake/robust.html. The `insphereexact` function (lines ~3500-3800 of the v4.0.0 source) is the literal port target. The general `expansion_product` helper already shipped in 2026-05-14 paydown makes the inner-product upgrade mechanical rather than algorithmic — most of the v8c-pre slice is structural translation, not new algorithm design.
+
 ### Transient MSVC LTCG internal compiler error on `win-shipping` `crd-sandbox.exe` link (observed 2026-05-13 v1-debts-paid sweep)
 
 `scripts/full-sweep.ps1` returned 16/17 PASS during the v1-debts-paid verification sweep — only `win-shipping` failed, and only at the `crd-sandbox.exe` LTCG codegen phase with a fatal MSVC C1001 internal compiler error:
