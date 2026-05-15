@@ -14,6 +14,7 @@ target_link_libraries(crd-platform
         crd-log
         crd-containers
         crd-memory
+        crd-time   # crd::platform::Timer / FrameClock are aliases into crd::time::* (Detour D-006)
     PRIVATE
         glfw
         crd-jobs

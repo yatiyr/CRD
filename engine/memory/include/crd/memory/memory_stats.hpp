@@ -10,9 +10,18 @@ namespace crd::memory
 // Per-allocator counters. Cheap to read, cheap to update.
 //
 // We keep the *fields* always present (so the public API never changes
-// between Debug and Release) but only update them when CRD_DEBUG is set.
-// Production builds pay zero overhead while still letting tools query
-// a stats() block that's filled with zeros.
+// between Debug and Release) but only update them when tracking is active:
+//   - CRD_DEBUG               -> always track (historical default)
+//   - CRD_ENABLE_PROFILING=1  -> track even in optimised builds (D-003 v0e,
+//                                so `win-shipping-profile` gets real numbers
+//                                instead of zeros from the profiler's
+//                                allocator panel)
+// Builds where both are off pay zero overhead and the stats block reads as
+// zeros -- the previous "production zero-cost" contract is preserved.
+//
+// Cost when tracking is on: ~3 atomic fetch_add + a peak-bytes CAS loop
+// per allocation. Negligible for engine code; if a future hot path is
+// measurable, it can wrap its allocator pool to skip stats updates.
 struct MemoryStats
 {
     std::atomic<u64> alloc_count{0};
@@ -43,10 +52,17 @@ struct MemoryStats
     }
 
     // ---- Mutators (called by allocator implementations) -------------
-    // In release builds, these are no-ops so we don't pay for tracking.
+    // When neither CRD_DEBUG nor CRD_ENABLE_PROFILING is on, these are
+    // no-ops so we don't pay for tracking in shipping builds.
+#if defined(CRD_DEBUG) || (CRD_ENABLE_PROFILING != 0)
+#define CRD_MEMORY_STATS_TRACKING 1
+#else
+#define CRD_MEMORY_STATS_TRACKING 0
+#endif
+
     void on_allocate(u64 bytes) noexcept
     {
-#if defined(CRD_DEBUG)
+#if CRD_MEMORY_STATS_TRACKING
         alloc_count.fetch_add(1, std::memory_order_relaxed);
         total_bytes.fetch_add(bytes, std::memory_order_relaxed);
         const u64 in_use = bytes_in_use.fetch_add(bytes, std::memory_order_relaxed) + bytes;
@@ -64,7 +80,7 @@ struct MemoryStats
 
     void on_deallocate(u64 bytes) noexcept
     {
-#if defined(CRD_DEBUG)
+#if CRD_MEMORY_STATS_TRACKING
         dealloc_count.fetch_add(1, std::memory_order_relaxed);
         bytes_in_use.fetch_sub(bytes, std::memory_order_relaxed);
 #else

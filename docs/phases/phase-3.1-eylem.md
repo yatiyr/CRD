@@ -18,6 +18,46 @@ discriminating-question answers. Read it once before starting.
 
 ---
 
+## Strategic Execution Plan 2026-05-15 — eylem v1c+ resume sequencing
+
+Per `docs/ROADMAP.md` § Strategic Execution Plan (locked 2026-05-15),
+eylem v1c+ resume is scheduled at **~+6 to +9 months** from 2026-05-15
+(after Phase 3.1.7 geometry CLOSE + Phase 3.1.6 `crd-hesap-dense` v0).
+The pre-conditions when v1c+ resumes:
+
+- **Units throughout.** Phase 3.1.7.5 `crd-units` shipped; eylem v1c+ ships with `RigidBody` / integrator / force fields / contacts / constraints all dimensional from day 1.
+- **Geometry consumed from day 1.** Phase 3.1.7 CLOSED; `crd-geometry-bvh::DynamicBvh` consumed by v1c broadphase; v2 GJK/EPA + v2j feature clipping consumed by v1d narrowphase + v1d-manifold; v4 mesh closest-point + raycast consumed by v1d-mesh.
+- **`crd-hesap-dense` v0 available.** BLAS L1/L2/L3 + LAPACK-class direct (Cholesky / LU / QR) shipped; eylem v7 FEM later consumes hesap natively (no narrow internal PCG → refactor pattern; v7 FEM ships hesap-consuming from day 1).
+- **Profiler instrumentation.** Detour D-003 shipped; eylem v1c+ instrumented from day 1.
+- **Deterministic-replay validated.** Detour D-004 shipped; eylem v1c+'s determinism contract gets its first cross-config replay-hash CI lane (the early version of the v9 9-config CI gate).
+
+### Eylem cold-storage mitigation (in-flight during Phase 3.1.7)
+
+Eylem v1b shipped 2026-05-11; resume target ~2026-12. To prevent code
+rot over the ~7-month gap, as each Phase 3.1.7 geometry sub-module
+ships run a **~30-min integration smoke** against the corresponding
+eylem v1c+ stub path (per [[feedback_per_slice_run_ctest]] memory):
+
+| Geometry sub-module ships | Eylem v1c+ stub smoke |
+|---|---|
+| v1 BVH (already shipped) | `eylem::Broadphase` builds + minimal overlap-query against a 100-AABB scene |
+| v2 convex (already shipped) | `eylem::Narrowphase` builds + minimal GJK pair-test on box/box |
+| v3 hull construction + simplification (already shipped) | `eylem::Collider::ConvexHull` builds + simplification of a 100-vertex cube |
+| v4 mesh (NEXT in geometry phase) | `eylem::TriangleMeshCollider` builds + minimal raycast against a baked CRDR mesh |
+| v5 spatial | `eylem::SpatialIndex` builds + minimal point-query |
+| v6 polygon | (no eylem consumer; smoke skipped) |
+| v7 mesh-processing | `eylem::ColliderCooker::simplify_for_physics` builds + QEM-reduces a test mesh |
+| v8 delaunay | (no eylem consumer until eylem v7 FEM; smoke skipped) |
+| v9 GPU LBVH | `eylem::Broadphase::gpu_path` builds (compile-only; no GPU execution required for smoke) |
+| v9c V-HACD | `eylem::ColliderCooker::vhacd_decompose` builds + decomposes a test mesh into N sub-convexes |
+
+These smokes are NOT formal slices and do NOT block geometry
+sub-module close. They catch eylem build breakage before it
+accumulates. If a smoke fails: file a short debt entry in
+`docs/debt.md` and continue. eylem v1c+ resume will pay it down.
+
+---
+
 ## Goal
 
 Build the Cerid-native physics module from day 1: deterministic by

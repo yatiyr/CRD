@@ -31,6 +31,7 @@ target_link_libraries(crd-rhi-vulkan
         crd-rhi
         crd-platform
         crd-log
+        crd-perf   # v0d profiler GPU backend (VulkanProfilerBackend implements crd::perf::IProfilerGpuBackend)
     PRIVATE
         Vulkan::Vulkan
         glfw

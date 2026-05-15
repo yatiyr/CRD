@@ -136,6 +136,14 @@
             "_NOTE_lto_isolation": "engine/resources/CMakeLists.txt isolates crdr.cpp from clang-cl thin-LTO (single-file -fno-lto, mirrors crd-jobs worker_pool.cpp/Od pattern); rest of shipping module gets full LTO"
           }
         },
+        { "name": "win-shipping-profile",
+          "displayName": "Windows MSVC Shipping + Profiling (max opts + LTCG + PDB + crd-perf compiled in)",
+          "inherits": "win-shipping",
+          "cacheVariables": {
+            "CRD_ENABLE_PROFILING": "ON",
+            "_NOTE_crd_perf_under_ltcg": "Validates crd-perf substrate under MSVC shipping LTCG + /OPT:ICF + /O2. Catches LTCG-class bugs in profiler hot paths (atomic stores, CAS-loops, thread-local indirection). Per-slice DoD config #4 added 2026-05-15 in D-003 v0b post-discussion. Runtime is still gated on Profiler::init() -- a 'ship with profiler compiled in, players pay nothing until init()' binary uses this preset."
+          }
+        },
         { "name": "win-debug-scalar",
           "displayName": "Windows Debug + force scalar SIMD (parity check)",
           "inherits": "win-debug",
@@ -228,6 +236,7 @@
         { "name": "win-tidy",            "configurePreset": "win-tidy" },
         { "name": "win-clang-cl",        "configurePreset": "win-clang-cl" },
         { "name": "win-shipping",        "configurePreset": "win-shipping" },
+        { "name": "win-shipping-profile", "configurePreset": "win-shipping-profile" },
         { "name": "win-clang-cl-shipping", "configurePreset": "win-clang-cl-shipping" },
         { "name": "win-debug-scalar",    "configurePreset": "win-debug-scalar" },
         { "name": "win-debug-sse2",      "configurePreset": "win-debug-sse2" },
@@ -302,6 +311,10 @@
         },
         { "name": "win-shipping",
           "configurePreset": "win-shipping",
+          "output": { "outputOnFailure": true }
+        },
+        { "name": "win-shipping-profile",
+          "configurePreset": "win-shipping-profile",
           "output": { "outputOnFailure": true }
         },
         { "name": "win-clang-cl-shipping",

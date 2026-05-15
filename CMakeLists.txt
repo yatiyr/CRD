@@ -390,7 +390,12 @@ endif()
 # ----- Engine Modules ------------------------------------------------------
 
 add_subdirectory(engine/core)
+add_subdirectory(engine/units)
+add_subdirectory(engine/time)
+add_subdirectory(engine/perf)
 add_subdirectory(engine/memory)
+# crd-perf-ui depends on crd-imgui (which depends on crd-rhi-vulkan/crd-app/crd-config);
+# declared further below after those modules are added.
 add_subdirectory(engine/math)
 add_subdirectory(engine/geometry-primitives)
 add_subdirectory(engine/geometry-bvh)
@@ -404,6 +409,7 @@ add_subdirectory(engine/platform)
 add_subdirectory(engine/app)
 add_subdirectory(engine/config)
 add_subdirectory(engine/imgui)
+add_subdirectory(engine/perf-ui)  # D-003 v0g -- ImGui frontend for crd-perf; needs crd-imgui above
 add_subdirectory(engine/renderer)
 add_subdirectory(engine/meshgen)
 add_subdirectory(engine/shader)

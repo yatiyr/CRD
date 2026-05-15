@@ -34,6 +34,17 @@ in hot paths" — algorithms work over `crd::containers::Array` /
 
 **Supersedes:** none — net-new module slot.
 
+**Strategic Execution Plan 2026-05-15** (`docs/ROADMAP.md` § Strategic
+Execution Plan; memory [[feedback_strategic_execution_plan_2026_05_15]]):
+this phase ships in FULL — the renewed-scope 49-slice plan stays
+intact (no Pathway-B consumer-driven cutting). The Phase 3.1.7.5
+`crd-units` substrate ships FIRST (immediate next phase, before v4
+mesh resumes) so v4–v11 + v4-validate land with dimensional types
+from day 1. Per-sub-module eylem-stub integration smoke runs as
+hygiene during this phase to mitigate the ~7-month eylem cold-storage
+gap (see `phase-3.1-eylem.md` § Eylem cold-storage mitigation for the
+smoke matrix).
+
 ## Why this exists
 
 Computational geometry is genuinely cross-cutting in Cerid. The

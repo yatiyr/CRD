@@ -56,6 +56,11 @@ if(WIN32)
         COMMAND powershell -NoProfile -ExecutionPolicy Bypass
                 -File "${CMAKE_SOURCE_DIR}/scripts/check_no_non_ascii_test_names.ps1"
     )
+    add_test(
+        NAME    crd-no-untagged-physical-numeric
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+                -File "${CMAKE_SOURCE_DIR}/scripts/check_no_untagged_physical_numeric.ps1"
+    )
 elseif(UNIX)
     add_test(
         NAME    crd-simd-emission-check
@@ -76,6 +81,11 @@ elseif(UNIX)
     add_test(
         NAME    crd-no-non-ascii-test-names
         COMMAND bash "${CMAKE_SOURCE_DIR}/scripts/check_no_non_ascii_test_names.sh"
+                "${CMAKE_SOURCE_DIR}"
+    )
+    add_test(
+        NAME    crd-no-untagged-physical-numeric
+        COMMAND bash "${CMAKE_SOURCE_DIR}/scripts/check_no_untagged_physical_numeric.sh"
                 "${CMAKE_SOURCE_DIR}"
     )
 endif()

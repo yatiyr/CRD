@@ -5,8 +5,12 @@
 #include <crd/imgui/imgui.hpp>
 #include <crd/jobs/jobs.hpp>
 #include <crd/log/log.hpp>
+#include <crd/memory/allocator.hpp>
+#include <crd/perf/perf.hpp>
+#include <crd/perf/ui/ui.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/rhi/vulkan_backend.hpp>
+#include <crd/rhi/vulkan_profiler_backend.hpp>
 
 #include <chrono>
 #include <cstdio>
@@ -117,6 +121,32 @@ int main(int argc, char** argv)
         return ptr;
     }();
 
+    // crd-perf bring-up. Order matters: init the substrate first so the
+    // jobs adapter sees the gate when jobs::init runs; install allocator
+    // tracking + Vulkan GPU backend before any work that wants to be
+    // measured. Teardown is the mirror at the end of main().
+    crd::perf::init({});
+    [[maybe_unused]] const auto perf_alloc_idx =
+        crd::perf::register_allocator("default (malloc)", crd::memory::default_allocator());
+    auto perf_gpu = crd::rhi::create_vulkan_profiler_backend(*device);
+    crd::perf::set_gpu_backend(perf_gpu.get());
+    crd::perf::install_jobs_adapter();
+
+    // Minimal layer that drives ProfilerPanel rendering. Sits between the
+    // SandboxLayer (regular layer) and the ImGui overlay so its on_render
+    // runs inside the ImGui frame the overlay set up. Owns the panel.
+    struct ProfilerPanelLayer final : crd::app::Layer
+    {
+        ProfilerPanelLayer() : crd::app::Layer("ProfilerPanel") {}
+        crd::perf::ui::ProfilerPanel panel;
+        void on_render() override { panel.draw(); }
+    };
+
+    {
+        auto layer = std::make_unique<ProfilerPanelLayer>();
+        app.push_overlay(std::move(layer));
+    }
+
     auto* imgui = [&]() -> crd::imgui::ImGuiLayer*
     {
         auto layer = std::make_unique<crd::imgui::ImGuiLayer>(app, *instance, *device, *swapchain, imgui_config);
@@ -172,6 +202,12 @@ int main(int argc, char** argv)
             ++frames_with_present;
         }
 
+        // Resolve any GPU spans that retired since last call + advance the
+        // profiler's frame counter. Order: resolve BEFORE frame_mark so the
+        // resolved samples land in this frame's history slot.
+        crd::perf::resolve_gpu_frames();
+        crd::perf::frame_mark();
+
         ++frame;
 
         if (headless && frame >= 1)
@@ -224,6 +260,15 @@ int main(int argc, char** argv)
     device->wait_idle();
     app.detach_all_layers();
     crd::jobs::shutdown();
+
+    // crd-perf teardown mirrors the bring-up order. Uninstall the jobs
+    // adapter before perf::shutdown so the scheduler can't fire a
+    // callback into a torn-down profiler. Clear the GPU backend pointer
+    // before destroying it.
+    crd::perf::uninstall_jobs_adapter();
+    crd::perf::set_gpu_backend(nullptr);
+    perf_gpu.reset();
+    crd::perf::shutdown();
 
     crd::log::flush();
     crd::log::shutdown();

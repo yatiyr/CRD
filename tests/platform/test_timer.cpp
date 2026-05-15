@@ -1,4 +1,8 @@
-#include <crd/platform/timer.hpp>
+// Note: crd::platform::Timer is now an alias for crd::time::Stopwatch
+// (Detour D-006 2026-05-15 move-and-delete). This test exercises the
+// compat shim's drop-in elapsed_seconds()/elapsed_milliseconds()/elapsed_nanoseconds()
+// API. The canonical replacement is crd::time::Stopwatch + .elapsed() → Duration.
+#include <crd/time/platform_compat.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>

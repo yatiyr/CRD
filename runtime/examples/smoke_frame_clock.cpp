@@ -2,8 +2,11 @@
 // delta and total time. No window, no GLFW: this exercises only the
 // chrono-based timing facade.
 
+// crd::platform::Timer + FrameClock are now aliases into crd::time::*
+// (Detour D-006 2026-05-15 move-and-delete). The smoke continues to
+// compile via the compat shim. New code should `#include <crd/time/time.hpp>`.
 #include <crd/log/log.hpp>
-#include <crd/platform/timer.hpp>
+#include <crd/time/platform_compat.hpp>
 
 #include <chrono>
 #include <memory>

@@ -17,6 +17,41 @@ ADR-0065 locks the decisions; this file is the slice plan.
 
 ## Phase posture
 
+**AMENDED 2026-05-15 per Strategic Execution Plan** (`docs/ROADMAP.md` §
+Strategic Execution Plan): `crd-hesap-dense` **v0 ships BEFORE Phase
+3.1 eylem v1c resume**, not after the entire eylem phase completes.
+This is the first concrete artifact of the engineering-platform pivot
+(Pathway E).
+
+**v0 minimum scope:** BLAS L1/L2/L3 (axpy / dot / nrm2 / scal /
+copy / swap / asum / iamax / gemv / trmv / trsv / ger / gemm / trmm /
+trsm) + LAPACK-class direct (Cholesky `potrf/potrs`, LU `getrf/getrs`,
+QR `geqrf/orgqr`) — minimum to unblock eylem v7 FEM (Cholesky on the
+mass matrix) + future CFD / FEA / estimation+control (Cholesky / LU /
+QR everywhere).
+
+**Sized:** ~3–4 weeks calendar for v0 (1 slice). The full
+`crd-hesap` phase (18 slices over 6–8 months) continues to ship after
+eylem CLOSE per the unchanged-sub-slice plan below — but eylem v7
+FEM **ships hesap-consuming from day 1** rather than the original
+narrow-PCG-then-refactor pattern. This obsoletes the
+"narrow-version-then-refactor" precedent for eylem v7 the same way
+ADR-0076 §12 obsoleted it for eylem v1c/v1d.
+
+**Sequencing after the 2026-05-15 amendment:**
+
+1. Phase 3.1.7 geometry CLOSE (full 49 slices)
+2. **Phase 3.1.6 v0 hesap-dense (NEW EARLY SLOT — ~3–4 weeks)**
+3. Phase 3.1 eylem v1c+ resume (consuming geometry + units + hesap-dense)
+4. Eylem v1c → v9 ships in full
+5. Phase 3.1.5 sdf (interleaved between eylem v2 and v3 — unchanged)
+6. **Phase 3.1.6 v1–v17 (rest of hesap)** ships after eylem v9 close — sparse / iterative / direct / eig / opt / ode / fft / dsp / stats / tensor / autodiff / gpu / repl
+7. Phase 3.1.8+ domain substrates (brep / cad-feature / cfd / etc.) — unchanged
+
+---
+
+### Original phase posture (pre-amendment 2026-05-15)
+
 - **Sequential successor to Phase 3.1.** Eylem v0–v9 ships first (with
   eylem v7 FEM using a narrow internal PCG); `crd-hesap` ships after.
   Eylem v7's internal PCG is refactored to use `crd-hesap-iterative`

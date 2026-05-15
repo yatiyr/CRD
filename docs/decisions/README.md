@@ -29,6 +29,7 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 - ADR-0064 — **`crd-sdf` substrate architecture**
 - ADR-0065 — **`crd-hesap` numerical computing substrate (MATLAB-class)**
 - ADR-0066 — **`crd-draw` substrate architecture**
+- ADR-0079 — **`crd-perf` profiler substrate + `crd-perf-ui` ImGui frontend** (region timing + jobs auto-instrument + GPU timestamps + memory tracking + CPROF v1 capture format + 7-panel ImGui UI)
 
 ### `[draw]`
 - ADR-0066 — `crd-draw` substrate architecture (peer module; retained `RenderBuffer` + immediate-mode API; vertex-shader quad-expanded AA lines + sort-by-centroid translucent solids; 3 depth modes; per-component visualizer plug-in registry; ImGui projection day-one text + reserved SDF text; consumed by eylem / sdf / audio / nav / editor / renderer / sandbox)
@@ -273,3 +274,6 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 | 0074  | Eylem cinematic / animation-physics bridge (`crd-eylem-cine` module)              | arch, physics, eylem, cinematic, animation, film                              | Planned   |
 | 0075  | Eylem testing rigor + conservation-law CI                                          | arch, physics, eylem, testing, ci, conservation, scientific-computing        | Accepted  |
 | 0076  | `crd-geometry` substrate (BVH + GJK/EPA + mesh queries + polygon ops + Delaunay)  | arch, substrate, computational-geometry, bvh, gjk-epa, mesh-processing, determinism | Accepted  |
+| 0077  | Multi-domain substrate expansion (9 new peer modules + Phase 3.5 prologue + Phase 6 platform expansion)  | arch, strategy, multi-domain, manufacturing, cad, cfd, aerospace, ml, scientific-computing | Accepted  |
+| 0078  | `crd-units` substrate (dimensional types + 6-layer conversion system)              | arch, substrate, units, dimensional-analysis, type-safety, determinism                       | Accepted  |
+| 0079  | `crd-perf` profiler substrate + `crd-perf-ui` ImGui frontend (D-003 v0a-v0h)       | arch, substrate, perf, profiler, instrumentation, gpu-timing, capture-format, ui            | Accepted  |

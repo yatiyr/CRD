@@ -19,6 +19,8 @@ target_link_libraries(crd-sandbox PRIVATE
     crd-math
     crd-memory
     crd-meshgen
+    crd-perf       # D-003 v0h: profiler substrate
+    crd-perf-ui    # D-003 v0h: profiler ImGui frontend (ProfilerPanel)
     crd-preset
     crd-profile
     crd-renderer

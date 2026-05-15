@@ -1,5 +1,6 @@
 #include "worker_pool.hpp"
 #include <crd/jobs/detail/fiber_context.hpp>
+#include <crd/jobs/observer.hpp>
 #include <crd/core/assert.hpp>
 #include <crd/core/platform.hpp>
 #include <crd/core/types.hpp>
@@ -208,13 +209,26 @@ void WorkerPool::run_job_in_fiber(const crd::jobs::JobDecl& job)
 {
     Fiber* target = nullptr;
 
-    if (job.fn == &resume_fiber_fn)
+    // Cache the observer pointer once for the entire dispatch. set_observer
+    // may race with this read (well-defined, atomic-acquire load); we use
+    // the snapshot consistently for the begin/end/yield/resume pair so we
+    // don't fire a mismatched event sequence under concurrent replacement.
+    const crd::jobs::JobObserver* const obs = crd::jobs::current_observer();
+    const crd::u8 thread_idx = static_cast<crd::u8>(tl_thread_index());
+
+    const bool is_resume = (job.fn == &resume_fiber_fn);
+
+    if (is_resume)
     {
         target = static_cast<Fiber*>(job.data);
         CRD_ASSERT_MSG(target != nullptr,
                        "run_job_in_fiber: resume sentinel carries null fiber pointer");
         // job_counter stays in target->job_counter from when the fiber was first launched;
         // no update needed here — the fiber's counter survives suspension.
+        if (obs != nullptr && obs->on_fiber_resume != nullptr)
+        {
+            obs->on_fiber_resume(static_cast<crd::jobs::FiberHandle>(target), thread_idx);
+        }
     }
     else
     {
@@ -238,23 +252,47 @@ void WorkerPool::run_job_in_fiber(const crd::jobs::JobDecl& job)
         {
             tl_job_data = job.data;
         }
+
+        if (obs != nullptr && obs->on_job_begin != nullptr)
+        {
+            obs->on_job_begin(static_cast<crd::jobs::FiberHandle>(target), thread_idx,
+                              static_cast<crd::u8>(job.priority),
+                              static_cast<crd::u8>(job.stack));
+        }
     }
 
     tl_fiber = target;
     fiber_switch(&tl_sched_ctx, &target->context);
 
     // Back on the OS (scheduler) stack. By now `target`'s context is fully saved.
+    //
+    // Re-read the thread index post-switch: the OS thread that we now resume on
+    // is the one that was waiting in worker_loop / pump; it may differ from
+    // `thread_idx` captured before the switch (it doesn't differ today for the
+    // immediate-return paths -- run_job_in_fiber returns to its caller on the
+    // same OS thread -- but the OS thread that woke up to handle the next event
+    // is the one whose index we should report to the observer).
+    const crd::u8 post_thread_idx = static_cast<crd::u8>(tl_thread_index());
+
     if (tl_fiber == nullptr)
     {
         // Job completed — the trampoline already cleared target->job_counter
         // *and* tl_fiber. Rebuild the initial stack frame so the fiber is clean
         // on re-use.
+        if (obs != nullptr && obs->on_job_end != nullptr)
+        {
+            obs->on_job_end(static_cast<crd::jobs::FiberHandle>(target), post_thread_idx);
+        }
         fiber_init_stack(target->context, target->usable_base, target->usable_size, target->trampoline);
         m_fiber_pool.release(target);
     }
     else
     {
         // The fiber suspended inside counter_wait — it handed us a park request.
+        if (obs != nullptr && obs->on_fiber_yield != nullptr)
+        {
+            obs->on_fiber_yield(static_cast<crd::jobs::FiberHandle>(target), post_thread_idx);
+        }
         // Publish its Waiter now that its context is saved (so it only becomes
         // wakeable once it's safe to resume). counter_finish_park returns true iff
         // the ABA re-check found the value already at target and won the cancel

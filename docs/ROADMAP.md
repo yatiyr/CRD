@@ -57,6 +57,55 @@
 
 Legend: ✅ shipped · 🚧 active · ⏳ planned · ❌ blocked
 
+## Strategic Execution Plan (locked 2026-05-15)
+
+After a step-back strategic review (Pathways A–E + cross-cuts) on
+2026-05-15, the user locked the following execution sequence. **This
+is the canonical near-to-medium-term plan. Future sessions read this
+first when they don't know what to work on.**
+
+### Pinned strategic decisions
+
+1. **Pathway A — Units-first.** Phase 3.1.7.5 `crd-units` is the *immediate next phase*. Project-wide dimensional safety lands before any further geometry slices ship so the v4–v11 + v4-validate API surfaces are typed from day 1 (no retroactive-typing cost).
+
+2. **Engineering-platform leader is the long-term direction (Pathway E).** Reason (user 2026-05-15): *"if engineering work is performant and good, it is easier to put game and animation and entertainment related stuff there."* Engineering rigor (deterministic + dimensional + numerically robust + differentiable) can't be retrofitted; rendering can. Cerid picks the harder-to-fake direction and lets entertainment features grow on top.
+
+3. **Geometry phase ships in FULL (no consumer-driven cutting).** Per user 2026-05-15: *"I need curves, I need all the other things it is the base, we will plug in where we need them in the future and our needs are not secret."* The renewed-scope 49-slice plan stays intact. Pathway B (cut to consumer-driven) is rejected — the user has product clarity on every substrate's eventual consumer (curves → cinematic + robotics + path tools; polygon → PCB + navmesh + CAD sketches; mesh-processing → cooker LOD + FEA prep; delaunay → navmesh + FEA tetmesh; transform-aware → every consumer; v4-validate → cooker + editor mesh-import gate).
+
+4. **`crd-hesap-dense` v0 ships BEFORE eylem v1c resume** (after 3.1.7 close). Aligns with the engineering-platform pivot. Eylem v7 FEM and v9 differentiable later consume hesap natively (no ship-narrow-then-refactor pattern — same precedent that ADR-0076 §12 set for geometry / eylem v1c-d).
+
+5. **C++ scripting + DLL hot-reload DEFERRED to Phase 4.0 as planned.** Not pulled forward. Reasoning (locked 2026-05-15 after user-prompted argument): (a) no consumer-tier code exists yet to reload; (b) the DLL supervisor's state-migration design depends on the first domain consumer (robotics control-loop vs. CAD parametric expression vs. CFD boundary condition have very different shapes); (c) ECS-attached script-as-component may be the wrong shape for engineering use cases — script-as-system over a domain may be the right shape, but can't know without consumer pull; (d) the iteration-speed productivity gain the user wants from "hot-reload today" is available cheaper via config/resource hot-reload polish (detour D-005).
+
+6. **Cross-cuts run in flight with units adoption + through geometry phase.** Four detours: **D-006 `crd-time` substrate** ✅ shipped 2026-05-15 (absorbs `platform::Timer`/`FrameClock`, ships `Instant`/`Duration`/`Stopwatch`/`FrameClock` fixed-step + alpha/`DeterministicClock`/`Deadline`/GPU timestamp delegation; first adopter of `crd-units::Time<f64>`; foundation for D-003 + D-004 + eylem v1c+ fixed-step); **D-003 `crd-perf` profiler 🚧 ACTIVE 2026-05-15** (renamed from `crd-profiler` at v0a — collision with existing `crd-profile` quality-preset module; 8 slices v0a-v0h; v0a ✅ shipped substrate skeleton with 32 B Sample + per-thread SPSC ring + name interning + fiber-migration wire format + determinism-contract pin; v0b counters next); D-004 deterministic-replay sandbox (uses D-006 DeterministicClock; opens after D-003 close so capture is profiler-instrumented); D-005 config/resource hot-reload polish (opens after D-004). Per-slice protocol fix lands as a 1-day pre-3.1.7.5 hygiene pass (codified in `feedback_per_slice_run_ctest.md`).
+
+7. **Eylem cold-storage mitigation.** Eylem v1b shipped 2026-05-11; v1c resumes ~7 months from now per this plan. To prevent code rot: as each geometry sub-module ships (v4 mesh / v5 spatial / v6 polygon / …), run a ~30-min integration smoke against the corresponding eylem v1c+ stub path (e.g. v4 mesh → smoke `eylem::TriangleMeshCollider` stub; v2 GJK → smoke eylem v1d narrowphase stub). Not a slice; a per-sub-module hygiene practice. See `feedback_per_slice_run_ctest.md` for the protocol.
+
+### Calendar (target)
+
+| Window | Work | Outcome |
+|---|---|---|
+| Now → +2-3 weeks | **🚧 ACTIVE — Detour D-003 `crd-perf` profiler substrate + ImGui frontend** (8 slices v0a-v0h; v0a ✅ shipped 2026-05-15; v0b counters next, then v0c auto-instrument jobs+scene+frame-graph+RHI, v0d GPU timestamps, v0e memory tracking, v0f CPROF capture format, v0g ImGui frontend panels, v0h sandbox + ADR-0079 + 17-config sweep). Main roadmap (units v0a) paused until D-003 closes. See `docs/detours/README.md` § Active detours for the full slice plan. | Live frame metrics (CPU per-thread + GPU per-pass + memory per-allocator + user counters) + ImGui flame graph + capture/replay file export. Productivity multiplier for every later perf decision. |
+| After D-003 close (+2-3 weeks → +3 weeks) | **Per-slice protocol fix** (codify ctest-not-binary rule + eylem-smoke practice) + start **Phase 3.1.7.5 v0a** (`crd-units` substrate + 6-layer conversion system) | DoD-aligned per-slice protocol; `Quantity<D, T>` zero-overhead wrapper in flight |
+| +3 → +7 weeks | **Phase 3.1.7.5 v0b/c/d** adoption pass (`crd-config` + `crd-scene Transform` + glTF cooker + `crd-eylem RigidBody` + `crd-geometry-primitives` API surface + `crd-renderer` + cookers + ImGui + Layer-6 format/parse/UnitPreferences + cross-engine readers + 17-config sweep close) — IN PARALLEL with **D-004 replay sandbox**, **D-005 config/resource hot-reload polish** | Project-wide dimensional safety + deterministic-replay validated + config-tier iteration speed |
+| +5 weeks → +5 months | **Resume Phase 3.1.7** geometry: v4 `-mesh` (+ v4-validate) → v5 `-spatial` → v6 `-polygon` → v7 `-mesh-processing` → v8 `-delaunay` (with v8c-pre `insphere` Stage D paydown) → v9 `-gpu` + V-HACD + REPL → v9e shader-helpers GLSL/HLSL emit → v10 `-curves` (a–e) → v11 transform-aware. Per-sub-module eylem smoke against the relevant v1c+ stub. | All planned substrate consumers (sdf, renderer-cull, audio raycasts, editor picking, navmesh, V-HACD, cinematic paths, robotics trajectories, eylem mesh-collider) light up |
+| +5 → +6 months | **Phase 3.1.7 CLOSE** (full 17-config sweep + ADR-0076 §19 amendment) + **Phase 3.1.6 `crd-hesap-dense` v0** (BLAS L1/L2/L3 + LAPACK-class direct: Cholesky / LU / QR — minimum to unblock eylem v7 FEM + future CFD/FEA/control) | Engineering-platform pivot officially starts; first real numerical-computing substrate slice |
+| +6 → +9 months | **Resume Phase 3.1 eylem v1c+**: broadphase consuming `crd-geometry-bvh::DynamicBvh` → v1d narrowphase consuming v2 GJK/EPA → v1d-manifold consuming v2j → v1d-mesh consuming v4 mesh closest-point + raycast. **First playable physics demo** in the sandbox with units-throughout + profiler instrumentation + deterministic-replay validation. | Cerid's first integrated end-to-end demo; substrate dogfood |
+| +9 months → … | Continue engineering-platform pivot: full hesap rollout (sparse / iterative / direct / eig / opt / ode / fft / dsp / stats / tensor / autodiff / gpu), then 3.1.5 sdf, then 3.1.8+ domain substrates (brep / cad-feature / cfd / estimation+control / fea / cam / ml-inference / procgen / sciviz / eda) | The 8-domain mandate per ADR-0077 starts shipping |
+
+### What this plan does NOT change
+
+- ADR-0076 §1-§18 architecture (sub-module split, dimension exponents, predicate tiering, query API shape) — all stays as before.
+- The renewed-scope 49 slices stay intact (no cutting).
+- The substrate-first principle — extended with the engineering-platform priority for the medium-term sequencing.
+- ADR-0077 multi-domain expansion — unchanged; the engineering-platform pivot just reorders WHEN these phases start (after physics demo, not after a hypothetical "game-first" milestone that no longer exists).
+
+### What this plan REPLACES
+
+- The implicit "geometry → eylem v1c+ resume → sdf interleave → hesap (3.1.6) after eylem" sequence is REPLACED with: **geometry → units (3.1.7.5) → cross-cuts (D-003/D-004/D-005) → hesap-dense-v0 → eylem v1c+ resume → physics demo → full hesap → sdf → domain substrates.** The early hesap-dense-v0 is the engineering-platform pivot's first concrete artifact.
+- The implicit "C++ scripting + DLL hot-reload land in Phase 4.0 someday" was already correct; this plan explicitly says **do not pull it forward** until a domain module's consumer pulls it.
+
+ADR-0076 §19 amendment will record this plan formally at the next ADR session.
+
 ## Decision log
 
 All architectural decisions are individual ADRs under `docs/decisions/`.
