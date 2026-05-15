@@ -37,6 +37,7 @@
 namespace crd::geometry::primitives
 {
 using crd::math::MathScalar;
+using crd::math::MathValue;
 using crd::math::Vec3;
 
 // ===========================================================================

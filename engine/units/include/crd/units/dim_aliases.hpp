@@ -66,6 +66,14 @@ using Momentum          = DimMul<Mass, Velocity>;
 using MomentOfInertia   = DimMul<Mass, Area>;
 using AngularMomentum   = DimMul<MomentOfInertia, AngularVelocity>;
 
+// Inverse forms (Phase 3.1.7.5 v0c-1) — eylem RigidBody stores 1/mass and
+// 1/inertia for div-by-zero-free constraint math (Bullet / Box2D / PhysX
+// convention). Typing them as DimInv<Mass> / DimInv<MomentOfInertia> lets
+// `Force * InverseMass -> Acceleration` and `Torque * InverseMOI ->
+// AngularAccel` type-check end-to-end.
+using InverseMass         = DimInv<Mass>;
+using InverseMomentOfInertia = DimInv<MomentOfInertia>;
+
 // Force / pressure / energy / power
 using Force             = DimMul<Mass, Acceleration>;
 using Pressure          = DimDiv<Force, Area>;

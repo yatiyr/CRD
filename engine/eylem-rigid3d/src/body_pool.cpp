@@ -160,9 +160,9 @@ BodyPool::PrevState BodyPool::read_prev(BodyId id) const noexcept
     const BodyChunk& tile = m_storage.chunk(chunk_of(id.index()));
     const crd::u32   lane = lane_of(id.index());
 
-    out.position.x = tile.prev_pos_x.lane(lane);
-    out.position.y = tile.prev_pos_y.lane(lane);
-    out.position.z = tile.prev_pos_z.lane(lane);
+    out.position.x = crd::units::Length32{tile.prev_pos_x.lane(lane)};
+    out.position.y = crd::units::Length32{tile.prev_pos_y.lane(lane)};
+    out.position.z = crd::units::Length32{tile.prev_pos_z.lane(lane)};
 
     out.rotation.x = tile.prev_rot_x.lane(lane);
     out.rotation.y = tile.prev_rot_y.lane(lane);
@@ -213,27 +213,27 @@ void BodyPool::store_curr_only_lane(crd::u32 idx, const RigidBody& body) noexcep
     BodyChunk&     tile = m_storage.chunk(chunk_of(idx));
     const crd::u32 lane = lane_of(idx);
 
-    put_lane(tile.pos_x, lane, body.position.x);
-    put_lane(tile.pos_y, lane, body.position.y);
-    put_lane(tile.pos_z, lane, body.position.z);
+    put_lane(tile.pos_x, lane, body.position.x.value);
+    put_lane(tile.pos_y, lane, body.position.y.value);
+    put_lane(tile.pos_z, lane, body.position.z.value);
 
     put_lane(tile.rot_x, lane, body.rotation.x);
     put_lane(tile.rot_y, lane, body.rotation.y);
     put_lane(tile.rot_z, lane, body.rotation.z);
     put_lane(tile.rot_w, lane, body.rotation.w);
 
-    put_lane(tile.linvel_x, lane, body.linear_velocity.x);
-    put_lane(tile.linvel_y, lane, body.linear_velocity.y);
-    put_lane(tile.linvel_z, lane, body.linear_velocity.z);
+    put_lane(tile.linvel_x, lane, body.linear_velocity.x.value);
+    put_lane(tile.linvel_y, lane, body.linear_velocity.y.value);
+    put_lane(tile.linvel_z, lane, body.linear_velocity.z.value);
 
-    put_lane(tile.angvel_x, lane, body.angular_velocity.x);
-    put_lane(tile.angvel_y, lane, body.angular_velocity.y);
-    put_lane(tile.angvel_z, lane, body.angular_velocity.z);
+    put_lane(tile.angvel_x, lane, body.angular_velocity.x.value);
+    put_lane(tile.angvel_y, lane, body.angular_velocity.y.value);
+    put_lane(tile.angvel_z, lane, body.angular_velocity.z.value);
 
-    put_lane(tile.inv_mass,        lane, body.inv_mass);
-    put_lane(tile.inv_inertia_x,   lane, body.inv_inertia.x);
-    put_lane(tile.inv_inertia_y,   lane, body.inv_inertia.y);
-    put_lane(tile.inv_inertia_z,   lane, body.inv_inertia.z);
+    put_lane(tile.inv_mass,        lane, body.inv_mass.value);
+    put_lane(tile.inv_inertia_x,   lane, body.inv_inertia.x.value);
+    put_lane(tile.inv_inertia_y,   lane, body.inv_inertia.y.value);
+    put_lane(tile.inv_inertia_z,   lane, body.inv_inertia.z.value);
 
     put_lane(tile.linear_damping,  lane, body.linear_damping);
     put_lane(tile.angular_damping, lane, body.angular_damping);
@@ -257,9 +257,9 @@ void BodyPool::store_lane(crd::u32 idx, const RigidBody& body) noexcept
     BodyChunk&     tile = m_storage.chunk(chunk_of(idx));
     const crd::u32 lane = lane_of(idx);
 
-    put_lane(tile.prev_pos_x, lane, body.position.x);
-    put_lane(tile.prev_pos_y, lane, body.position.y);
-    put_lane(tile.prev_pos_z, lane, body.position.z);
+    put_lane(tile.prev_pos_x, lane, body.position.x.value);
+    put_lane(tile.prev_pos_y, lane, body.position.y.value);
+    put_lane(tile.prev_pos_z, lane, body.position.z.value);
 
     put_lane(tile.prev_rot_x, lane, body.rotation.x);
     put_lane(tile.prev_rot_y, lane, body.rotation.y);
@@ -272,27 +272,27 @@ void BodyPool::load_lane(crd::u32 idx, RigidBody& body) const noexcept
     const BodyChunk& tile = m_storage.chunk(chunk_of(idx));
     const crd::u32   lane = lane_of(idx);
 
-    body.position.x = tile.pos_x.lane(lane);
-    body.position.y = tile.pos_y.lane(lane);
-    body.position.z = tile.pos_z.lane(lane);
+    body.position.x = crd::units::Length32{tile.pos_x.lane(lane)};
+    body.position.y = crd::units::Length32{tile.pos_y.lane(lane)};
+    body.position.z = crd::units::Length32{tile.pos_z.lane(lane)};
 
     body.rotation.x = tile.rot_x.lane(lane);
     body.rotation.y = tile.rot_y.lane(lane);
     body.rotation.z = tile.rot_z.lane(lane);
     body.rotation.w = tile.rot_w.lane(lane);
 
-    body.linear_velocity.x = tile.linvel_x.lane(lane);
-    body.linear_velocity.y = tile.linvel_y.lane(lane);
-    body.linear_velocity.z = tile.linvel_z.lane(lane);
+    body.linear_velocity.x = crd::units::Velocity32{tile.linvel_x.lane(lane)};
+    body.linear_velocity.y = crd::units::Velocity32{tile.linvel_y.lane(lane)};
+    body.linear_velocity.z = crd::units::Velocity32{tile.linvel_z.lane(lane)};
 
-    body.angular_velocity.x = tile.angvel_x.lane(lane);
-    body.angular_velocity.y = tile.angvel_y.lane(lane);
-    body.angular_velocity.z = tile.angvel_z.lane(lane);
+    body.angular_velocity.x = crd::units::AngularVelocity32{tile.angvel_x.lane(lane)};
+    body.angular_velocity.y = crd::units::AngularVelocity32{tile.angvel_y.lane(lane)};
+    body.angular_velocity.z = crd::units::AngularVelocity32{tile.angvel_z.lane(lane)};
 
-    body.inv_mass     = tile.inv_mass.lane(lane);
-    body.inv_inertia.x = tile.inv_inertia_x.lane(lane);
-    body.inv_inertia.y = tile.inv_inertia_y.lane(lane);
-    body.inv_inertia.z = tile.inv_inertia_z.lane(lane);
+    body.inv_mass      = crd::units::InverseMass32{tile.inv_mass.lane(lane)};
+    body.inv_inertia.x = crd::units::InverseMomentOfInertia32{tile.inv_inertia_x.lane(lane)};
+    body.inv_inertia.y = crd::units::InverseMomentOfInertia32{tile.inv_inertia_y.lane(lane)};
+    body.inv_inertia.z = crd::units::InverseMomentOfInertia32{tile.inv_inertia_z.lane(lane)};
 
     body.linear_damping  = tile.linear_damping.lane(lane);
     body.angular_damping = tile.angular_damping.lane(lane);

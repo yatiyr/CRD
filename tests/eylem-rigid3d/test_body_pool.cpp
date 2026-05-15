@@ -31,12 +31,12 @@ namespace
 RigidBody make_body(crd::f32 x, crd::f32 mass = 1.0F)
 {
     RigidBody b{};
-    b.position        = {x, 2.0F * x, 3.0F * x};
+    b.position = crd::math::from_raw_vec<crd::units::dim::Length>(crd::math::Vec3f{x, 2.0F * x, 3.0F * x});
     b.rotation        = {0.0F, 0.0F, 0.0F, 1.0F};
-    b.linear_velocity = {0.5F * x, 0.0F, -0.25F * x};
-    b.angular_velocity = {0.0F, 0.1F * x, 0.0F};
-    b.inv_mass        = (mass > 0.0F) ? (1.0F / mass) : 0.0F;
-    b.inv_inertia     = {0.5F, 0.5F, 0.5F};
+    b.linear_velocity = crd::math::from_raw_vec<crd::units::dim::Velocity>(crd::math::Vec3f{0.5F * x, 0.0F, -0.25F * x});
+    b.angular_velocity = crd::math::from_raw_vec<crd::units::dim::AngularVelocity>(crd::math::Vec3f{0.0F, 0.1F * x, 0.0F});
+    b.inv_mass = crd::units::InverseMass32{(mass > 0.0F) ? (1.0F / mass) : 0.0F};
+    b.inv_inertia = crd::math::from_raw_vec<crd::units::dim::InverseMomentOfInertia>(crd::math::Vec3f{0.5F, 0.5F, 0.5F});
     b.linear_damping  = 0.05F;
     b.angular_damping = 0.05F;
     b.flags.type = static_cast<crd::u32>(RigidBodyType::Dynamic);
@@ -70,17 +70,17 @@ TEST_CASE("BodyPool: insert + read round-trips state", "[eylem-rigid3d][bodypool
     REQUIRE(pool.size() == 1U);
 
     RigidBody got = pool.read(id);
-    REQUIRE(got.position.x == src.position.x);
-    REQUIRE(got.position.y == src.position.y);
-    REQUIRE(got.position.z == src.position.z);
+    REQUIRE(got.position.x.value == src.position.x.value);
+    REQUIRE(got.position.y.value == src.position.y.value);
+    REQUIRE(got.position.z.value == src.position.z.value);
     REQUIRE(got.rotation.x == src.rotation.x);
     REQUIRE(got.rotation.y == src.rotation.y);
     REQUIRE(got.rotation.z == src.rotation.z);
     REQUIRE(got.rotation.w == src.rotation.w);
-    REQUIRE(got.linear_velocity.x == src.linear_velocity.x);
-    REQUIRE(got.angular_velocity.y == src.angular_velocity.y);
-    REQUIRE(got.inv_mass     == src.inv_mass);
-    REQUIRE(got.inv_inertia.x == src.inv_inertia.x);
+    REQUIRE(got.linear_velocity.x.value == src.linear_velocity.x.value);
+    REQUIRE(got.angular_velocity.y.value == src.angular_velocity.y.value);
+    REQUIRE(got.inv_mass.value == src.inv_mass.value);
+    REQUIRE(got.inv_inertia.x.value == src.inv_inertia.x.value);
     REQUIRE(got.linear_damping  == src.linear_damping);
     REQUIRE(got.angular_damping == src.angular_damping);
     REQUIRE(got.flags.type             == src.flags.type);
@@ -118,7 +118,7 @@ TEST_CASE("BodyPool: remove invalidates handle, re-insert reuses slot",
 
     // b is untouched.
     REQUIRE(pool.contains(b));
-    REQUIRE(pool.read(b).position.x == 2.0F);
+    REQUIRE(pool.read(b).position.x.value == 2.0F);
 }
 
 TEST_CASE("BodyPool: write mutates lane in place", "[eylem-rigid3d][bodypool]")
@@ -128,15 +128,15 @@ TEST_CASE("BodyPool: write mutates lane in place", "[eylem-rigid3d][bodypool]")
 
     BodyId id = pool.insert(make_body(1.0F));
     RigidBody updated = make_body(1.0F);
-    updated.position = {99.0F, 100.0F, 101.0F};
-    updated.linear_velocity = {0.0F, 0.0F, 0.0F};
+    updated.position = crd::math::from_raw_vec<crd::units::dim::Length>(crd::math::Vec3f{99.0F, 100.0F, 101.0F});
+    updated.linear_velocity = crd::math::from_raw_vec<crd::units::dim::Velocity>(crd::math::Vec3f{0.0F, 0.0F, 0.0F});
 
     pool.write(id, updated);
     RigidBody got = pool.read(id);
-    REQUIRE(got.position.x == 99.0F);
-    REQUIRE(got.position.y == 100.0F);
-    REQUIRE(got.position.z == 101.0F);
-    REQUIRE(got.linear_velocity.x == 0.0F);
+    REQUIRE(got.position.x.value == 99.0F);
+    REQUIRE(got.position.y.value == 100.0F);
+    REQUIRE(got.position.z.value == 101.0F);
+    REQUIRE(got.linear_velocity.x.value == 0.0F);
 }
 
 TEST_CASE("BodyPool: AoSoA storage grows in lane-sized chunks",
@@ -171,7 +171,7 @@ TEST_CASE("BodyPool: AoSoA storage grows in lane-sized chunks",
     {
         REQUIRE(pool.contains(ids[i]));
         const RigidBody got = pool.read(ids[i]);
-        REQUIRE(got.position.x == static_cast<crd::f32>(i));
+        REQUIRE(got.position.x.value == static_cast<crd::f32>(i));
     }
 }
 
@@ -229,7 +229,7 @@ TEST_CASE("BodyPool: capacity exhaustion returns null",
     pool.remove(b);
     BodyId e = pool.insert(make_body(5.0F));
     REQUIRE_FALSE(e.is_null());
-    REQUIRE(pool.read(e).position.x == 5.0F);
+    REQUIRE(pool.read(e).position.x.value == 5.0F);
 }
 
 TEST_CASE("BodyPool: nullptr persistent_alloc falls back to default",
@@ -238,5 +238,5 @@ TEST_CASE("BodyPool: nullptr persistent_alloc falls back to default",
     BodyPool pool(nullptr, 16);
     BodyId id = pool.insert(make_body(7.0F));
     REQUIRE_FALSE(id.is_null());
-    REQUIRE(pool.read(id).position.x == 7.0F);
+    REQUIRE(pool.read(id).position.x.value == 7.0F);
 }

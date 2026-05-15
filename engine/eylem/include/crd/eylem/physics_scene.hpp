@@ -19,6 +19,7 @@
 #include <crd/eylem/rigid_body.hpp>
 #include <crd/eylem/types.hpp>
 #include <crd/math/vec.hpp>
+#include <crd/units/quantity_aliases.hpp>
 
 #include <memory>
 #include <optional>
@@ -28,11 +29,11 @@ namespace crd::eylem
 // Result of a successful raycast. Returned in std::optional from raycast().
 struct RaycastHit
 {
-    BodyId           body;
-    ColliderId       collider;
-    crd::math::Vec3f point{0.0F, 0.0F, 0.0F};   // world-space hit point
-    crd::math::Vec3f normal{0.0F, 1.0F, 0.0F};  // world-space surface normal
-    crd::f32         distance = 0.0F;            // along the ray, in metres
+    BodyId                                 body;
+    ColliderId                             collider;
+    crd::math::Vec3<crd::units::Length32>  point{};                            // world-space hit point
+    crd::math::Vec3f                       normal{0.0F, 1.0F, 0.0F};           // world-space surface normal (unit, dimensionless)
+    crd::units::Length32                   distance{0.0F};                      // along the ray, in metres
 };
 
 class IPhysicsScene
@@ -42,8 +43,8 @@ public:
 
     // ---- Configuration --------------------------------------------------
     [[nodiscard]] virtual const PhysicsConfig& config() const noexcept = 0;
-    virtual void set_gravity(crd::math::Vec3f g) noexcept            = 0;
-    [[nodiscard]] virtual crd::math::Vec3f gravity() const noexcept  = 0;
+    virtual void set_gravity(crd::math::Vec3<crd::units::Acceleration32> g) noexcept = 0;
+    [[nodiscard]] virtual crd::math::Vec3<crd::units::Acceleration32> gravity() const noexcept = 0;
 
     // ---- Body management ------------------------------------------------
     [[nodiscard]] virtual BodyId add_body(const RigidBody& body)            = 0;
@@ -126,10 +127,13 @@ public:
     virtual void                    set_body_state(BodyId id, const RigidBody& state) = 0;
 
     // Force / torque application. Accumulated until next step(); cleared at
-    // step end.
-    virtual void apply_force(BodyId id, crd::math::Vec3f force)                          = 0;
-    virtual void apply_torque(BodyId id, crd::math::Vec3f torque)                        = 0;
-    virtual void apply_impulse(BodyId id, crd::math::Vec3f impulse, crd::math::Vec3f world_pos) = 0;
+    // step end. ADR-0078 §3 D20 typing — Force / Torque / Momentum (impulse
+    // is integral of force over time = momentum-change), positions in metres.
+    virtual void apply_force(BodyId id, crd::math::Vec3<crd::units::Force32> force)        = 0;
+    virtual void apply_torque(BodyId id, crd::math::Vec3<crd::units::Torque32> torque)     = 0;
+    virtual void apply_impulse(BodyId id,
+                               crd::math::Vec3<crd::units::Momentum32> impulse,
+                               crd::math::Vec3<crd::units::Length32>   world_pos)          = 0;
 
     // ---- Collision filtering — Tier 3 (excluded pairs) -----------------
     // Per ADR-0068 §10.4 Tier 3. Round-trips with URDF / SDF / MJCF
@@ -168,15 +172,18 @@ public:
     [[nodiscard]] virtual crd::containers::ConstSpan<TriggerEvent> drain_trigger_events() noexcept = 0;
 
     // ---- Stepping -------------------------------------------------------
-    // Advance the simulation by dt seconds. Implementations are expected to
-    // step in fixed-dt sub-frames per config().fixed_dt; passing arbitrary
-    // dt is supported but loses determinism.
-    virtual void step(crd::f32 dt) = 0;
+    // Advance the simulation by `dt`. Implementations are expected to step
+    // in fixed-dt sub-frames per config().fixed_dt; passing arbitrary dt is
+    // supported but loses determinism.
+    virtual void step(crd::units::Duration32 dt) = 0;
 
     // ---- Scene queries (v1a stubs the surface; v1h delivers full impl) -
-    [[nodiscard]] virtual std::optional<RaycastHit> raycast(crd::math::Vec3f origin,
-                                                            crd::math::Vec3f direction,
-                                                            crd::f32         max_distance) const = 0;
+    // direction is a unit vector — dimensionless. origin / max_distance are
+    // typed lengths.
+    [[nodiscard]] virtual std::optional<RaycastHit> raycast(
+        crd::math::Vec3<crd::units::Length32> origin,
+        crd::math::Vec3f                       direction,
+        crd::units::Length32                   max_distance) const = 0;
 };
 
 // Factory for the v1a null implementation. v1b+ adds real scene factories

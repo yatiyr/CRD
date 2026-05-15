@@ -64,9 +64,9 @@ TEST_CASE("eylem v1b-d register_eylem_visualizers fires on RBC + CC entities",
     crd::scene::World world{&alloc};
     register_test_components(world);
     crd::eylem::RigidBody body{};
-    body.position        = {0.0F, 5.0F, 0.0F};
-    body.linear_velocity = {1.0F, 0.0F, 0.0F};
-    body.inv_mass        = 1.0F;
+    body.position = crd::math::from_raw_vec<crd::units::dim::Length>(crd::math::Vec3f{0.0F, 5.0F, 0.0F});
+    body.linear_velocity = crd::math::from_raw_vec<crd::units::dim::Velocity>(crd::math::Vec3f{1.0F, 0.0F, 0.0F});
+    body.inv_mass = crd::units::InverseMass32{1.0F};
     const BodyId body_id = body_pool.insert(body);
     REQUIRE_FALSE(body_id.is_null());
 
@@ -195,7 +195,7 @@ TEST_CASE("eylem v1b-d RigidBodyComponent visualizer respects ShowVelocity flag"
     crd::scene::World world{&alloc};
     register_test_components(world);
     crd::eylem::RigidBody body{};
-    body.linear_velocity = {3.0F, 0.0F, 0.0F}; // moving along +X
+    body.linear_velocity = crd::math::from_raw_vec<crd::units::dim::Velocity>(crd::math::Vec3f{3.0F, 0.0F, 0.0F}); // moving along +X
     const BodyId body_id = body_pool.insert(body);
 
     const auto e = world.spawn();
@@ -237,7 +237,7 @@ TEST_CASE("eylem v1b-d static body (zero velocity) emits no arrow even with Show
     crd::scene::World world{&alloc};
     register_test_components(world);
     crd::eylem::RigidBody body{};
-    body.linear_velocity = {0.0F, 0.0F, 0.0F}; // at rest
+    body.linear_velocity = crd::math::from_raw_vec<crd::units::dim::Velocity>(crd::math::Vec3f{0.0F, 0.0F, 0.0F}); // at rest
     const BodyId body_id = body_pool.insert(body);
 
     const auto e = world.spawn();

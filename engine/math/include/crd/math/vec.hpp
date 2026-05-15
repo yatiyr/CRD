@@ -486,6 +486,179 @@ template <MathScalar T> [[nodiscard]] inline bool try_normalize(Vec4<T>& v, T ep
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// Vec<Quantity<D, T>> reductions (Phase 3.1.7.5 v0d-1 / ADR-0078 §4 D26).
+//
+// Per ADR-0078 §1 D2 + §3 D24, reductions on `Vec<Quantity>` are scoped to
+// the cases where the typed return type follows mechanically from DimMul /
+// re-tag, WITHOUT needing fractional-exponent `DimRoot<>`:
+//
+//   dot(Vec<Q1>, Vec<Q2>)           -> Quantity<DimMul<D1, D2>, T>
+//   length_squared(Vec<Q>)          -> Quantity<DimMul<D, D>, T>     (Q²)
+//   length(Vec<Q>)                  -> Quantity<D, T>                (Q — sqrt of Q² re-tagged)
+//   cross(Vec<Q>, Vec<Q>)           -> Vec3<Quantity<DimMul<D, D>, T>> (Vec<Q²>)
+//   distance(Vec<Q>, Vec<Q>)        -> Quantity<D, T>                (Q — length of delta)
+//   distance_squared(Vec<Q>,Vec<Q>) -> Quantity<DimMul<D, D>, T>     (Q²)
+//   hadamard(Vec<Q1>, Vec<Q2>)      -> Vec<Quantity<DimMul<D1, D2>, T>>
+//   normalized(Vec<Q>)              -> Vec<T>                        (dimensionless unit vector)
+//
+// `try_normalize(Vec<Q>&)` mutation-in-place is intentionally NOT widened —
+// the result type (Vec<f32>) differs from the input (Vec<Quantity>), so the
+// in-place signature doesn't compose. Callers use `normalized(...)` by value.
+//
+// Cases the v0d-1 surface deliberately does NOT cover (need fractional-
+// exponent dims): `sqrt(area_quantity) -> length_quantity` where the user
+// hands a raw Area Quantity and wants a Length Quantity back; this requires
+// `DimRoot<>`. Deferred to v0d-5 if a consumer surfaces; the length(Vec<Q>)
+// pattern above sidesteps the issue because the return type is known
+// statically from the input Vec<Q>.
+
+template <typename D1, typename D2, typename T>
+[[nodiscard]] constexpr crd::units::Quantity<crd::units::DimMul<D1, D2>, T>
+dot(const Vec2<crd::units::Quantity<D1, T>>& a, const Vec2<crd::units::Quantity<D2, T>>& b) noexcept
+{
+    return a.x * b.x + a.y * b.y;
+}
+
+template <typename D1, typename D2, typename T>
+[[nodiscard]] constexpr crd::units::Quantity<crd::units::DimMul<D1, D2>, T>
+dot(const Vec3<crd::units::Quantity<D1, T>>& a, const Vec3<crd::units::Quantity<D2, T>>& b) noexcept
+{
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+template <typename D1, typename D2, typename T>
+[[nodiscard]] constexpr crd::units::Quantity<crd::units::DimMul<D1, D2>, T>
+dot(const Vec4<crd::units::Quantity<D1, T>>& a, const Vec4<crd::units::Quantity<D2, T>>& b) noexcept
+{
+    return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;
+}
+
+template <typename D, typename T>
+[[nodiscard]] constexpr crd::units::Quantity<crd::units::DimMul<D, D>, T>
+length_squared(const Vec2<crd::units::Quantity<D, T>>& v) noexcept
+{
+    return dot(v, v);
+}
+
+template <typename D, typename T>
+[[nodiscard]] constexpr crd::units::Quantity<crd::units::DimMul<D, D>, T>
+length_squared(const Vec3<crd::units::Quantity<D, T>>& v) noexcept
+{
+    return dot(v, v);
+}
+
+template <typename D, typename T>
+[[nodiscard]] constexpr crd::units::Quantity<crd::units::DimMul<D, D>, T>
+length_squared(const Vec4<crd::units::Quantity<D, T>>& v) noexcept
+{
+    return dot(v, v);
+}
+
+template <typename D, typename T>
+[[nodiscard]] inline crd::units::Quantity<D, T>
+length(const Vec2<crd::units::Quantity<D, T>>& v) noexcept
+{
+    return crd::units::Quantity<D, T>{static_cast<T>(std::sqrt(length_squared(v).value))};
+}
+
+template <typename D, typename T>
+[[nodiscard]] inline crd::units::Quantity<D, T>
+length(const Vec3<crd::units::Quantity<D, T>>& v) noexcept
+{
+    return crd::units::Quantity<D, T>{static_cast<T>(std::sqrt(length_squared(v).value))};
+}
+
+template <typename D, typename T>
+[[nodiscard]] inline crd::units::Quantity<D, T>
+length(const Vec4<crd::units::Quantity<D, T>>& v) noexcept
+{
+    return crd::units::Quantity<D, T>{static_cast<T>(std::sqrt(length_squared(v).value))};
+}
+
+template <typename D, typename T>
+[[nodiscard]] constexpr Vec3<crd::units::Quantity<crd::units::DimMul<D, D>, T>>
+cross(const Vec3<crd::units::Quantity<D, T>>& a, const Vec3<crd::units::Quantity<D, T>>& b) noexcept
+{
+    return {a.y * b.z - a.z * b.y,
+            a.z * b.x - a.x * b.z,
+            a.x * b.y - a.y * b.x};
+}
+
+template <typename D1, typename D2, typename T>
+[[nodiscard]] constexpr Vec2<crd::units::Quantity<crd::units::DimMul<D1, D2>, T>>
+hadamard(const Vec2<crd::units::Quantity<D1, T>>& a, const Vec2<crd::units::Quantity<D2, T>>& b) noexcept
+{
+    return {a.x * b.x, a.y * b.y};
+}
+
+template <typename D1, typename D2, typename T>
+[[nodiscard]] constexpr Vec3<crd::units::Quantity<crd::units::DimMul<D1, D2>, T>>
+hadamard(const Vec3<crd::units::Quantity<D1, T>>& a, const Vec3<crd::units::Quantity<D2, T>>& b) noexcept
+{
+    return {a.x * b.x, a.y * b.y, a.z * b.z};
+}
+
+template <typename D1, typename D2, typename T>
+[[nodiscard]] constexpr Vec4<crd::units::Quantity<crd::units::DimMul<D1, D2>, T>>
+hadamard(const Vec4<crd::units::Quantity<D1, T>>& a, const Vec4<crd::units::Quantity<D2, T>>& b) noexcept
+{
+    return {a.x * b.x, a.y * b.y, a.z * b.z, a.w * b.w};
+}
+
+template <typename D, typename T>
+[[nodiscard]] constexpr crd::units::Quantity<crd::units::DimMul<D, D>, T>
+distance_squared(const Vec2<crd::units::Quantity<D, T>>& a, const Vec2<crd::units::Quantity<D, T>>& b) noexcept
+{
+    return length_squared(a - b);
+}
+
+template <typename D, typename T>
+[[nodiscard]] constexpr crd::units::Quantity<crd::units::DimMul<D, D>, T>
+distance_squared(const Vec3<crd::units::Quantity<D, T>>& a, const Vec3<crd::units::Quantity<D, T>>& b) noexcept
+{
+    return length_squared(a - b);
+}
+
+template <typename D, typename T>
+[[nodiscard]] inline crd::units::Quantity<D, T>
+distance(const Vec2<crd::units::Quantity<D, T>>& a, const Vec2<crd::units::Quantity<D, T>>& b) noexcept
+{
+    return length(a - b);
+}
+
+template <typename D, typename T>
+[[nodiscard]] inline crd::units::Quantity<D, T>
+distance(const Vec3<crd::units::Quantity<D, T>>& a, const Vec3<crd::units::Quantity<D, T>>& b) noexcept
+{
+    return length(a - b);
+}
+
+template <typename D, typename T>
+[[nodiscard]] inline Vec2<T> normalized(const Vec2<crd::units::Quantity<D, T>>& v) noexcept
+{
+    const crd::units::Quantity<D, T> len_q = length(v);
+    CRD_ASSERT(len_q.value > default_epsilon<T>());
+    return Vec2<T>{v.x.value / len_q.value, v.y.value / len_q.value};
+}
+
+template <typename D, typename T>
+[[nodiscard]] inline Vec3<T> normalized(const Vec3<crd::units::Quantity<D, T>>& v) noexcept
+{
+    const crd::units::Quantity<D, T> len_q = length(v);
+    CRD_ASSERT(len_q.value > default_epsilon<T>());
+    return Vec3<T>{v.x.value / len_q.value, v.y.value / len_q.value, v.z.value / len_q.value};
+}
+
+template <typename D, typename T>
+[[nodiscard]] inline Vec4<T> normalized(const Vec4<crd::units::Quantity<D, T>>& v) noexcept
+{
+    const crd::units::Quantity<D, T> len_q = length(v);
+    CRD_ASSERT(len_q.value > default_epsilon<T>());
+    return Vec4<T>{v.x.value / len_q.value, v.y.value / len_q.value,
+                   v.z.value / len_q.value, v.w.value / len_q.value};
+}
+
 template <MathScalar T> [[nodiscard]] inline Vec2<T> normalized(Vec2<T> v) noexcept
 {
     const bool ok = try_normalize(v);
@@ -610,6 +783,78 @@ template <typename D, typename T>
                                              crd::units::Quantity<D, T>{v.y},
                                              crd::units::Quantity<D, T>{v.z},
                                              crd::units::Quantity<D, T>{v.w}};
+}
+
+// Cross-Dim Vec<Quantity> * Quantity overloads (Phase 3.1.7.5 v0c-1).
+// Element-wise multiplication where the per-element result Dim differs
+// from the source Dim. Lets integrator math compose end-to-end at the
+// type level: Vec3<Velocity> * Time -> Vec3<Length>, Vec3<Force> *
+// InverseMass -> Vec3<Acceleration>, etc.
+//
+// Same Vec semantics as the same-result-Dim operator: element-wise only,
+// no reductions. Result Dim = DimMul<source Dim, scalar Dim>.
+
+template <typename D1, typename D2, typename T>
+[[nodiscard]] constexpr Vec2<crd::units::Quantity<crd::units::DimMul<D1, D2>, T>>
+operator*(const Vec2<crd::units::Quantity<D1, T>>& v, crd::units::Quantity<D2, T> q) noexcept
+{
+    return {v.x * q, v.y * q};
+}
+
+template <typename D1, typename D2, typename T>
+[[nodiscard]] constexpr Vec2<crd::units::Quantity<crd::units::DimMul<D1, D2>, T>>
+operator*(crd::units::Quantity<D1, T> q, const Vec2<crd::units::Quantity<D2, T>>& v) noexcept
+{
+    return {q * v.x, q * v.y};
+}
+
+template <typename D1, typename D2, typename T>
+[[nodiscard]] constexpr Vec3<crd::units::Quantity<crd::units::DimMul<D1, D2>, T>>
+operator*(const Vec3<crd::units::Quantity<D1, T>>& v, crd::units::Quantity<D2, T> q) noexcept
+{
+    return {v.x * q, v.y * q, v.z * q};
+}
+
+template <typename D1, typename D2, typename T>
+[[nodiscard]] constexpr Vec3<crd::units::Quantity<crd::units::DimMul<D1, D2>, T>>
+operator*(crd::units::Quantity<D1, T> q, const Vec3<crd::units::Quantity<D2, T>>& v) noexcept
+{
+    return {q * v.x, q * v.y, q * v.z};
+}
+
+template <typename D1, typename D2, typename T>
+[[nodiscard]] constexpr Vec4<crd::units::Quantity<crd::units::DimMul<D1, D2>, T>>
+operator*(const Vec4<crd::units::Quantity<D1, T>>& v, crd::units::Quantity<D2, T> q) noexcept
+{
+    return {v.x * q, v.y * q, v.z * q, v.w * q};
+}
+
+template <typename D1, typename D2, typename T>
+[[nodiscard]] constexpr Vec4<crd::units::Quantity<crd::units::DimMul<D1, D2>, T>>
+operator*(crd::units::Quantity<D1, T> q, const Vec4<crd::units::Quantity<D2, T>>& v) noexcept
+{
+    return {q * v.x, q * v.y, q * v.z, q * v.w};
+}
+
+template <typename D1, typename D2, typename T>
+[[nodiscard]] constexpr Vec2<crd::units::Quantity<crd::units::DimDiv<D1, D2>, T>>
+operator/(const Vec2<crd::units::Quantity<D1, T>>& v, crd::units::Quantity<D2, T> q) noexcept
+{
+    return {v.x / q, v.y / q};
+}
+
+template <typename D1, typename D2, typename T>
+[[nodiscard]] constexpr Vec3<crd::units::Quantity<crd::units::DimDiv<D1, D2>, T>>
+operator/(const Vec3<crd::units::Quantity<D1, T>>& v, crd::units::Quantity<D2, T> q) noexcept
+{
+    return {v.x / q, v.y / q, v.z / q};
+}
+
+template <typename D1, typename D2, typename T>
+[[nodiscard]] constexpr Vec4<crd::units::Quantity<crd::units::DimDiv<D1, D2>, T>>
+operator/(const Vec4<crd::units::Quantity<D1, T>>& v, crd::units::Quantity<D2, T> q) noexcept
+{
+    return {v.x / q, v.y / q, v.z / q, v.w / q};
 }
 
 } // namespace crd::math

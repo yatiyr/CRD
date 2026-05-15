@@ -43,6 +43,18 @@ template <MathScalar T> inline constexpr T default_epsilon() noexcept
     return std::is_same_v<T, crd::f32> ? static_cast<T>(1.0e-5F) : static_cast<T>(1.0e-12);
 }
 
+// Widened default_epsilon for Quantity<D, T> (Phase 3.1.7.5 v0d-2). Returns a
+// dimensional epsilon — `Quantity<D, T>{default_epsilon<T>()}`. Lets geometry
+// algorithms templated on MathValue use the same `default_epsilon<T>()`
+// boilerplate when T is a Quantity. The numeric magnitude matches the
+// underlying scalar — comparisons against `len_sq` etc. require the same
+// magnitude convention as raw arithmetic.
+template <typename D, typename T>
+inline constexpr crd::units::Quantity<D, T> default_epsilon_quantity() noexcept
+{
+    return crd::units::Quantity<D, T>{default_epsilon<T>()};
+}
+
 template <MathScalar T> [[nodiscard]] constexpr T deg_to_rad(T degrees) noexcept
 {
     return degrees * (k_pi<T> / static_cast<T>(180));
@@ -99,6 +111,77 @@ template <MathScalar T>
 template <MathScalar T> [[nodiscard]] constexpr bool approx_zero(T value, T epsilon = default_epsilon<T>()) noexcept
 {
     return abs(value) <= epsilon;
+}
+
+// ---------------------------------------------------------------------------
+// crd-math foundation widening for Quantity (Phase 3.1.7.5 v0d-2 / ADR-0078 §4 D27).
+//
+// Lets geometry-primitives algorithms templated on MathValue compose
+// arithmetic / comparison / clamp patterns over Quantity<D, T> exactly as
+// they do for raw scalars. Each overload delegates to the underlying
+// scalar; the dimensional tag rides through unchanged.
+
+template <typename D, typename T>
+[[nodiscard]] constexpr crd::units::Quantity<D, T> abs(crd::units::Quantity<D, T> q) noexcept
+{
+    return crd::units::Quantity<D, T>{abs(q.value)};
+}
+
+template <typename D, typename T>
+[[nodiscard]] constexpr crd::units::Quantity<D, T>
+min(crd::units::Quantity<D, T> a, crd::units::Quantity<D, T> b) noexcept
+{
+    return crd::units::Quantity<D, T>{min(a.value, b.value)};
+}
+
+template <typename D, typename T>
+[[nodiscard]] constexpr crd::units::Quantity<D, T>
+max(crd::units::Quantity<D, T> a, crd::units::Quantity<D, T> b) noexcept
+{
+    return crd::units::Quantity<D, T>{max(a.value, b.value)};
+}
+
+template <typename D, typename T>
+[[nodiscard]] constexpr crd::units::Quantity<D, T>
+clamp(crd::units::Quantity<D, T> value, crd::units::Quantity<D, T> lo, crd::units::Quantity<D, T> hi) noexcept
+{
+    return min(max(value, lo), hi);
+}
+
+template <typename D, typename T>
+[[nodiscard]] inline bool is_finite(crd::units::Quantity<D, T> q) noexcept
+{
+    return std::isfinite(q.value);
+}
+
+template <typename D, typename T>
+[[nodiscard]] inline bool is_nan(crd::units::Quantity<D, T> q) noexcept
+{
+    return std::isnan(q.value);
+}
+
+// `default_epsilon<Q>()` for Q = Quantity<D, T>. Returns a typed epsilon
+// with the raw magnitude inherited from `default_epsilon<T>()`.
+template <typename Q>
+    requires crd::units::IsQuantity<Q>
+[[nodiscard]] inline constexpr Q default_epsilon() noexcept
+{
+    return Q{default_epsilon<typename Q::scalar>()};
+}
+
+// `sqrt(Quantity<DimMul<D, D>, T>) -> Quantity<D, T>` (Phase 3.1.7.5 v0d-2).
+// Scoped sqrt: the only general form we ship is "sqrt of an even-exponent
+// Quantity returns the half-exponent Quantity, when the half-exponent is
+// known from context". The common case is `sqrt(length_squared(v)) ->
+// length(v)`. The free function below is a TARGETED overload — accepts a
+// `Quantity<DimMul<D, D>, T>` and returns `Quantity<D, T>` — that requires
+// the caller to spell out `D` (so the result type is unambiguous). General
+// fractional-exponent dimensions are deferred per ADR-0078 §3 D24.
+template <typename D, typename T>
+[[nodiscard]] inline crd::units::Quantity<D, T>
+sqrt_as(crd::units::Quantity<crd::units::DimMul<D, D>, T> q_sq) noexcept
+{
+    return crd::units::Quantity<D, T>{static_cast<T>(std::sqrt(q_sq.value))};
 }
 
 // ─── Interpolation primitives ────────────────────────────────────────────────

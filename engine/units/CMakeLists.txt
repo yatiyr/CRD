@@ -23,7 +23,9 @@ target_include_directories(crd-units
 
 target_link_libraries(crd-units
     PUBLIC
-        crd-core   # types only (f32 / f64 / i32 / usize)
+        crd-core         # types only (f32 / f64 / i32 / usize)
+        crd-containers   # v0d-5: String / StringView for unit_preferences format/parse
+        crd-memory       # v0d-5: IAllocator + default_allocator() for String ctor
 )
 
 target_compile_features(crd-units PUBLIC cxx_std_20)

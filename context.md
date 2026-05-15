@@ -29,11 +29,36 @@
 - **v0b-4 ✅** — glTF cooker `.meta` `[cook] position_scale` key (cm/mm/in exports converted to SI at cook time); SI sanity-warn at `> 1e6 m`. 12 cases / 15 assertions. Pure-string parser is testable without filesystem.
 - **v0b-close ✅** — ADR-0078 §2 amendment (D15-D19), `docs/systems/units.md` updated with status + boundary stencils, session log `docs/sessions/2026-05-15-units-v0b-adoption-a.md`, full 5-config sweep green (win-debug 1882/1882, win-asan 1882/1882, win-shipping 1795/1795, win-shipping-profile 1877/1877, win-tidy build-clean).
 
-**🎯 NEXT — Phase 3.1.7.5 v0c adoption pass B** (~1 week, ~800 LOC):
-- `crd-eylem` `RigidBody` dimensional — `position`/`linear_velocity`/`linear_acceleration`/`mass`/`inertia`/forces all typed `Quantity<>`.
-- Integrator typed-math (verify `v += a * dt` etc. type-check end-to-end under `Vec<Quantity>` per ADR-0078 D15).
-- Force-field substrate (gravity, drag, custom F = m·a producer interfaces).
-- `crd-geometry-primitives` API-surface re-tag (closest-point / raycast / overlap returning typed distances).
+**Phase 3.1.7.5 v0c adoption pass B ✅ SHIPPED 2026-05-15** (v0c-1 + v0c-2 + v0c-3 + v0c-close, all 5-config green; v0c-4 deferred):
+- **v0c-1 ✅** — `crd-eylem RigidBody` dimensional surface (`position: Vec3<Length32>`, `linear_velocity: Vec3<Velocity32>`, `angular_velocity: Vec3<AngularVelocity32>`, `inv_mass: InverseMass32 = Quantity<DimInv<Mass>, f32>`, `inv_inertia: Vec3<InverseMomentOfInertia32>`). `PhysicsConfig` typed end-to-end (`gravity: Vec3<Acceleration32>`, `fixed_dt: Duration32`, sleep thresholds typed, contact offsets typed). `IPhysicsScene` public surface typed (`set_gravity`, `apply_force(Force)`, `apply_torque(Torque)`, `apply_impulse(Momentum, Length)`, `step(Duration32)`, `raycast(Length, Vec3f direction, Length max)`, `RaycastHit { point: Vec3<Length32>; normal: Vec3f; distance: Length32 }`). 80-byte `RigidBody` freeze pin preserved (ADR-0062 §15) — precision-tier orthogonal to dimension per ADR-0078 §1 D12. New `InverseMass` / `InverseMomentOfInertia` dim aliases + `Momentum32` / `MomentOfInertia32` / `Duration32` concrete aliases.
+- **v0c-2 ✅** — Integrator typed-math end-to-end via 6 new cross-Dim `Vec<Q1> * Q2 -> Vec<DimMul<Q1,Q2>>` overloads in `crd/math/vec.hpp`. The integrator pattern `v += gravity * dt; p += v * dt` now type-checks: `Acceleration * Time -> Velocity`, `Velocity * Time -> Length` close at compile time without `.value` escapes in the hot path. Damping factor (dimensionless rate) bridges raw at compute site only. `crd::math::lerp` stays `MathScalar`-only per ADR-0078 §1 D2; interpolation bridges through `to_raw_vec`. Quaternion `q̇ = 0.5·ω·q` escapes angular_velocity via `.value` at the unit-norm quat ctor.
+- **v0c-3 ✅** — `ForceFieldComponent` geometric params typed: `origin: Vec3<Length32>`, `radius_min/radius_max/noise_scale: Length32`. Formula coefficients (`magnitude`/`polarity`/`falloff_p`/`poly_coeffs`/`noise_time`/`noise_octaves`) stay raw — formula-polymorphic per `FieldFormula` + `FieldMassCoupling`, set at use-time by the v1f `EylemFieldSystem` impl.
+- **v0c-4 DEFERRED** — `crd-geometry-primitives` API re-tag blocked on `DimRoot<>` (fractional-exponent dimensions for `length(Vec3<Length>) -> Length` etc., explicitly deferred per ADR-0078 §1 D2). Primitives carry SI interpretation by documentation contract (D24) until DimRoot lands in v0d.
+- **v0c-close ✅** — ADR-0078 §3 amendment (D20-D25 — RigidBody/Config/Scene dimensional surface, cross-Dim Vec*Q overloads, SIMD-boundary raw-f32 pin, signed_distance.hpp stays raw, geometry-primitives surface re-tag deferred to post-DimRoot, 5-config DoD carried forward). Session log `docs/sessions/2026-05-15-units-v0c-adoption-b.md`. 5-config sweep green (win-debug 1882/1882, win-asan 1882/1882, win-shipping 1795/1795, win-shipping-profile 1877/1877, win-tidy build-clean).
+
+**Phase 3.1.7.5 v0d adoption pass C ✅ SHIPPED 2026-05-15 — Phase 3.1.7.5 CLOSED**:
+- **v0d-1 ✅** — `Vec<Quantity>` reductions widened (length/dot/cross/distance/normalized/hadamard) via DimMul-then-retag. The earlier "DimRoot needed" framing was overstated.
+- **v0d-2 ✅** — `crd-geometry-primitives` API re-tag: struct widening (95 sites in primitives.hpp) + new `queries_typed.hpp` boundary-wrapper layer (8 closest_point + 5 distance + 4 distance_squared typed overloads). Algorithms stay `<MathScalar T>`; typed surface lives one layer above with strip-compute-retag at the boundary. Foundation widening in scalar.hpp (Quantity overloads for abs/min/max/clamp/is_finite/is_nan/default_epsilon + new sqrt_as helper).
+- **v0d-3 ✅** — `crd-renderer` raw-Mat4f boundary contract pinned in `FrameContext`. Renderer never imports `crd/units/*`. SIMD upload bit-identical to pre-units.
+- **v0d-4 ✅** — `crd-resources` byte-buffer contract pinned in `mesh_resource.hpp`. Typed boundary lives at cooker + ECS.
+- **v0d-5 ✅** — Layer-6 `UnitPreferences` + `format_*` / `parse_*` for 13 Dims (Length/Mass/Time/Angle/Velocity/Force/Pressure/Energy/Power/Voltage/Current/Frequency/Temperature) + 11 discipline-preset factories (game/CAD/robotics-REP-103/aerospace/PCB/audio/3D-print/CAM/cinematic/imperial/SI-strict/scientific). Affine temperature (K↔C↔F↔Ra). 14 cases / 42 assertions.
+- **v0d-6 ✅** — `crd-imgui` `unit_preferences_inspector.hpp` header-only ImGui inspector (preset picker + per-Dim combos + precision/suffix/sci-notation toggles).
+- **v0d-close ✅** — ADR-0078 §4 amendment (D26-D31 — Vec reductions widened without DimRoot, geometry-primitives struct + boundary-wrapper pattern, renderer raw-Mat4f contract, resources byte-buffer contract, Layer-6 UnitPreferences, Phase 3.1.7.5 CLOSE marker). Session log `docs/sessions/2026-05-15-units-v0d-phase-close.md`. 11-config Windows full sweep PASS.
+
+🎉 **Phase 3.1.7.5 `crd-units` CLOSED 2026-05-15** — 19 sub-slices / ~4.5 KLOC engine / ~2.3 KLOC tests / 31 locked design decisions in ADR-0078 (§1-§4). Full project ctest 1546 → **1913 win-debug** across the phase (+367 cases). Every physical/scientific quantity at every API boundary carries a compile-time dimension tag. **Mars Climate Orbiter at the engine surface is now a compile error.**
+
+---
+
+**🎯 NEXT — Resume Phase 3.1.7 v2 `-convex` (GJK + EPA + SAT + Quickhull + ConvexHullView queries + GJK-cast).** Per the Strategic Execution Plan locked 2026-05-15 (`feedback_strategic_execution_plan_2026_05_15.md`): geometry phase finishes in FULL (no consumer-driven cutting) before eylem v1c resumes. v2 is the v1-close milestone after the 7-slice `-bvh` sub-module (v1a-v1g all shipped 2026-05-13 + the v1h/v1i hardening). ~2 weeks. Then `crd-hesap-dense` v0 BEFORE eylem v1c resume per the engineering-platform pivot. In parallel: detour D-004 deterministic-replay sandbox (uses D-006 `DeterministicClock`); D-005 config/resource hot-reload polish.
+
+Phase 3.1.7.5 deferred (~~retained~~):
+- `crd-renderer` uniform-upload boundary (typed `.value` egress at GPU push-constant / SSBO write sites).
+- `crd-resources` cookers (texture / material / scene / mesh resource fields typed where geometric).
+- `crd-imgui` user-preferred-unit display (Layer-6 `UnitPreferences` + per-discipline preset table: game / CAD / robotics / aerospace / PCB / audio / 3D-print / CAM / cinematic / imperial / SI-strict / scientific).
+- Layer-6 full format / parse / `UnitPreferences` 11-discipline-preset table.
+- **`DimRoot<>` fractional-exponent dimensions** design + impl (unblocks v0c-4 follow-on + `length(Vec3<Length>)` reductions on `Vec<Quantity>`).
+- v0c-4 follow-on after DimRoot lands: `crd-geometry-primitives` API surface re-tag (Sphere::radius / Box::half_extents / closest_point returns / raycast t-parameter).
+- 17-config sweep close.
 
 Then **v0d adoption C** (`crd-renderer` uniform-upload boundary + `crd-resources` cookers + `crd-imgui` user-preferred-unit display + Layer-6 full format/parse/UnitPreferences + cross-engine readers + full 17-config sweep close, ~700 LOC). In parallel: D-004 deterministic-replay sandbox; D-005 config/resource hot-reload polish.
 

@@ -465,7 +465,10 @@ void draw_counters(IProfilerSource& src) noexcept
                 }
                 else if (info.type == CounterType::F64)
                 {
-                    const double d = *reinterpret_cast<const double*>(&rec->values[i].bits);
+                    // memcpy bit-cast — strict-aliasing safe (clang-cl
+                    // -Werror=strict-aliasing rejects the reinterpret_cast form).
+                    double d;
+                    std::memcpy(&d, &rec->values[i].bits, sizeof(d));
                     std::snprintf(buf, sizeof(buf), "%.3f", d);
                 }
                 else
@@ -510,8 +513,11 @@ void draw_counters(IProfilerSource& src) noexcept
             }
             else if (info.type == CounterType::F64)
             {
-                values[k] = static_cast<float>(
-                    *reinterpret_cast<const double*>(&rec->values[i].bits));
+                // memcpy bit-cast — strict-aliasing safe (clang-cl
+                // -Werror=strict-aliasing rejects the reinterpret_cast form).
+                double d_val;
+                std::memcpy(&d_val, &rec->values[i].bits, sizeof(d_val));
+                values[k] = static_cast<float>(d_val);
             }
             else
             {

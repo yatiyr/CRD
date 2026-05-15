@@ -309,6 +309,266 @@ win-shipping-profile + win-tidy. v0b-1/-2/-3/-4 all closed under
 this protocol; the new typed surfaces ship under LTCG +
 profiling-on as well as debug + ASan.
 
+## §3 Amendment — v0c adoption pass B (Accepted 2026-05-15)
+
+Adoption sub-slices v0c-1 / v0c-2 / v0c-3 shipped 2026-05-15 all green
+across the 5-config DoD (win-debug + win-asan + win-shipping +
+win-shipping-profile + win-tidy). v0c-4 (`crd-geometry-primitives`
+API re-tag) is DEFERRED to a successor slice once fractional-exponent
+dimensions (`DimRoot<>`) ship — see D24.
+
+### D20. `crd-eylem RigidBody` is dimensional end-to-end
+
+`RigidBody` fields gain compile-time dimension tags via `Vec<Quantity>`
++ `Quantity<DimInv<Mass>>`:
+
+```cpp
+struct RigidBody {
+    Vec3<Length32>                    position;
+    Quatf                              rotation;             // unit, dimensionless
+    Vec3<Velocity32>                  linear_velocity;
+    Vec3<AngularVelocity32>           angular_velocity;
+    InverseMass32                     inv_mass;             // = Quantity<DimInv<Mass>, f32>
+    Vec3<InverseMomentOfInertia32>    inv_inertia;
+    f32                                linear_damping;       // dimensionless rate
+    f32                                angular_damping;
+    RigidBodyFlags                     flags;
+};
+static_assert(sizeof(RigidBody) == 80, ...);
+```
+
+**Layout is preserved bit-for-bit** because precision tier is
+orthogonal to dimension (D12). The 80-byte API freeze pin (ADR-0062
+§15) holds. The integrator now type-checks:
+`Force * InverseMass -> Acceleration`, `Acceleration * Time -> Velocity`,
+`Velocity * Time -> Length` close at compile time.
+
+`PhysicsConfig` typed in the same pass: `gravity = Vec3<Acceleration32>`,
+`fixed_dt = Duration32`, `sleep_linear_threshold = Velocity32`,
+`sleep_angular_threshold = AngularVelocity32`,
+`sleep_time_threshold = Duration32`,
+`contact_offset/breaking_threshold = Length32`.
+
+`IPhysicsScene` typed at the public surface:
+`set_gravity(Vec3<Acceleration32>)`,
+`apply_force(BodyId, Vec3<Force32>)`,
+`apply_torque(BodyId, Vec3<Torque32>)`,
+`apply_impulse(BodyId, Vec3<Momentum32>, Vec3<Length32>)`,
+`step(Duration32)`,
+`raycast(Vec3<Length32> origin, Vec3f direction, Length32 max_distance)`,
+`RaycastHit { Vec3<Length32> point; Vec3f normal; Length32 distance; }`.
+
+### D21. Cross-Dim `Vec<Q1> * Q2 -> Vec<DimMul<Q1, Q2>>` overloads
+
+`engine/math/include/crd/math/vec.hpp` gains six overloads
+(Vec2/Vec3/Vec4 × {mul, div}) for cross-Dim element-wise scalar product.
+Previously `Vec3<Velocity> * Time` failed the same-result-type constraint;
+the new overload returns `Vec3<Length>`. Integrator math now composes
+end-to-end without `.value` escapes in the hot path.
+
+Same-Dim `Vec<T> * S -> Vec<T>` (raw scalar multiply, dimensionless
+rate) remains the primary overload; cross-Dim only fires when the
+constraint `t * s -> T` would fail — orthogonal overload resolution.
+
+### D22. SIMD-boundary pin — `Vec4f` / `Vec8f` batch kernels stay raw
+
+`bvh4_simd.cpp`, watertight ray-tri, Plücker SIMD, Ize robust slab
+test, every AVX2 lane-shuffle kernel — these consume raw `f32` /
+`Vec4f` / `Vec8f`. The Dim tag cannot ride through an `_mm256_*`
+intrinsic; pretending otherwise dead-ends in the first SIMD load.
+
+Callers bridge at the function boundary with `to_raw_vec` /
+`from_raw_vec` / column transpose. The SIMD kernel signature stays
+dimensionless; the typed surface lives one layer up.
+
+### D23. `signed_distance.hpp` is a `MathScalar` reduction
+
+The 20 iq analytic SDFs (`sd_sphere`, `sd_box`, `sd_capsule`, ...)
+take raw `f32` and return raw `f32`. Same status as `dot` / `cross` /
+`length` per D2 — mathematical primitives, dimensionless contract.
+Re-tagging propagates through every SDF caller (renderer DFAO/DFGI,
+mesh-baking, ray marching) for no semantic gain. They stay raw.
+
+### D24. `crd-geometry-primitives` API re-tag DEFERRED to post-DimRoot
+
+`Sphere<T>` / `Box<T>` / `Capsule3<T>` / etc. are templated on
+`MathScalar T`. Re-templating to `MathValue` requires:
+
+- `length(Vec3<Length>) -> Length` (square-root reduction).
+- `dot(Vec3<Length>, Vec3<Length>) -> Area` (multiply reduction).
+- `cross(Vec3<Length>, Vec3<Length>) -> Vec3<Area>`.
+
+These need fractional-exponent dimensions (`DimRoot<Area> -> Length`)
+or a separate fixed-norm type. Out of scope for v0c per D2.
+
+**Defer plan:** v0c-4 lands once `DimRoot<>` ships (v0d adoption C or
+a follow-on slice). Until then, geometry-primitives carry the SI
+interpretation by *documentation contract* — `Sphere<f32>::center` is
+a position in metres, `Sphere<f32>::radius` is a length in metres.
+Callers bridge at the boundary with `from_raw_vec<dim::Length>` /
+`to_raw_vec` when they hand the primitive to a typed surface
+(`scene::Transform`, `eylem::RigidBody`).
+
+### D25. Per-slice DoD = 5 configs (carried from v0b)
+
+v0c sub-slices inherit the 5-config protocol from
+[[feedback_per_slice_run_ctest]] + §2 D19 + ADR-0079 D7:
+win-debug + win-asan + win-shipping + win-shipping-profile + win-tidy.
+v0c-1 + v0c-2 + v0c-3 all closed under this protocol; final
+full-sweep at v0c-close per `feedback_full_sweep_required.md`.
+
+## §4 Amendment — v0d adoption pass C + Phase 3.1.7.5 CLOSE (Accepted 2026-05-15)
+
+Adoption sub-slices v0d-1 / v0d-2 / v0d-3 / v0d-4 / v0d-5 / v0d-6 shipped
+2026-05-15 all green across the 5-config DoD. Phase 3.1.7.5 `crd-units`
+closes after this slice. Six decisions locked.
+
+### D26. `Vec<Quantity>` reductions widened (no DimRoot needed)
+
+`crd::math::length` / `length_squared` / `dot` / `cross` / `distance` /
+`distance_squared` / `hadamard` / `normalized` add Quantity overloads:
+
+| Operation              | Input              | Return                              |
+|---|---|---|
+| `length(Vec<Q>)`        | Vec3<Q>             | Q (via `sqrt(dot(v,v).value)` re-tag) |
+| `length_squared(Vec<Q>)` | Vec3<Q>             | Quantity<DimMul<D,D>, T> (Q²)        |
+| `dot(Vec<Q1>, Vec<Q2>)` | Vec3<Q1>, Vec3<Q2>  | Quantity<DimMul<D1,D2>, T>           |
+| `cross(Vec<Q>, Vec<Q>)` | Vec3<Q>, Vec3<Q>    | Vec3<Quantity<DimMul<D,D>, T>>       |
+| `distance(Vec<Q>, Vec<Q>)` | Vec3<Q>, Vec3<Q> | Q                                    |
+| `normalized(Vec<Q>)`    | Vec3<Q>             | Vec3<T> (unit, dimensionless)        |
+
+The earlier ADR-0078 §3 D24 framing — "geometry-primitives re-tag needs
+`DimRoot<>`" — was overstated. `length(Vec<Q>) → Q` works through
+`DimMul<D,D>` (Q²) then re-tagging `sqrt(Q².value)` back as Q. Each typed
+reduction has the result Dim known a priori from the input Dim; no
+fractional-exponent machinery required. `DimRoot<>` is deferred to a
+future slice only if an unknown-Dim sqrt actually appears (none in v0a/b/c/d).
+
+`try_normalize(Vec<Q>&)` is intentionally NOT widened — the result type
+(Vec<f32>) differs from the input (Vec<Q>), so the in-place mutation
+signature doesn't compose. Callers use `normalized(...)` by value.
+
+### D27. `crd-geometry-primitives` API re-tag — struct widening + typed-overload wrappers
+
+Pattern: keep the algorithm bodies templated on `<MathScalar T>` (raw
+arithmetic — `static_cast<T>(0)`, `std::numeric_limits<T>::min()`,
+`std::sqrt(T)`, all the dimensionless internals that would dead-end for
+Quantity). Widen ONLY the leaf struct templates from `<MathScalar T>`
+to `<MathValue T>` so `Sphere<Length32>` / `Box<Length32>` / etc. exist
+as typed data. Add a separate header `queries_typed.hpp` with
+Quantity-overload wrappers (`closest_point`, `distance`, `distance_squared`)
+that strip-compute-retag at the call boundary.
+
+Files touched:
+- `engine/geometry-primitives/include/crd/geometry/primitives/primitives.hpp` (95 sites widened).
+- `engine/geometry-primitives/include/crd/geometry/primitives/{closest_point,intersect,barycentric,formulary,plucker,watertight_ray_tri,robust_ray_aabb,is_finite,constants}.hpp` reverted to MathScalar (algorithms stay raw).
+- `engine/geometry-primitives/include/crd/geometry/primitives/queries_typed.hpp` (NEW — strip helpers + 8 closest_point + 5 distance + 4 distance_squared typed-overload wrappers).
+- `engine/math/include/crd/math/scalar.hpp` — Quantity overloads for `abs`/`min`/`max`/`clamp`/`is_finite`/`is_nan`/`default_epsilon<Q>` + new `sqrt_as<D, T>(Quantity<DimMul<D,D>, T>) → Quantity<D, T>` helper.
+- `engine/geometry-primitives/include/crd/geometry/primitives/primitives.hpp` — `Plane::d` default `static_cast<T>(0)` → `T{}` (works for both raw and Quantity).
+
+Cost-benefit pin: the alternative (widen every algorithm template +
+sqrt/numeric_limits/cast patterns through closest_point.hpp + intersect.hpp
++ ...) is the 2-day scope the advisor flagged. The strip-compute-retag
+boundary pattern delivers the same typed-query API surface with zero
+algorithm-body rewrites and zero runtime overhead (`to_raw_vec` /
+`from_raw_vec` are `constexpr`, `.value` accessors compile away).
+
+### D28. `crd-renderer` is the raw-Mat4f boundary
+
+Renderer consumes `Mat4f` / `Vec3f` exclusively. Dimensional types live
+one layer above in `crd-scene` (`Transform::translation = Vec3<Length32>`,
+v0b-3) — bridging happens in `TransformPropagation` via
+`from_trs(to_raw_vec(translation), ...)`. The renderer NEVER imports
+`crd/units/*` and NEVER includes `crd-scene::Transform`. Documented as
+a contract pin in `engine/renderer/include/crd/renderer/renderer.hpp:FrameContext`.
+
+This keeps the SIMD upload path, push-constant writes, and the existing
+LTCG path bit-identical to the pre-units build. Adoption Mars-Climate-
+Orbiter safety lives upstream where typed values are constructed and
+combined; by the time data reaches `cmd.push_constants`, it is raw
+`Mat4f` with semantic interpretation pinned by ADR documentation.
+
+### D29. Resources layer is byte-based — typed contract lives at cooker + ECS boundaries
+
+`crd-resources` types (`MeshResource`, `TextureResource`, `MaterialResource`,
+`SceneResource`) hold raw byte buffers. The dimensional contract lives:
+
+1. At the COOKER — glTF cooker reads `.meta [cook] position_scale` per
+   ADR-0078 §2 D18 and multiplies vertex positions to SI metres at cook
+   time. The bytes stored on disk are always SI.
+2. At the ECS LIFT — when a `Renderable` parents under `scene::Transform`,
+   the typed `translation = Vec3<Length32>` carries the dim tag at the
+   ECS layer (ADR-0078 §3 D17, v0b-3).
+
+Re-tagging on every vertex read would defeat the SIMD upload path (D22).
+Documented as a contract pin in `mesh_resource.hpp`.
+
+### D30. Layer-6 `UnitPreferences` + format/parse + 11-discipline preset table
+
+`engine/units/include/crd/units/unit_preferences.hpp` ships the runtime-
+selectable display-unit-per-Dim layer:
+
+```cpp
+UnitPreferences prefs = make_cad_prefs();
+Length32 height = Length32{1.85F};
+auto s = format_length(height, prefs);              // "1850_mm"
+auto q = parse_length<f32>("39.37_in", prefs);      // optional<Length32{1.0}>
+```
+
+13 typed `UnitChoice` enums (length / mass / time / angle / velocity /
+force / pressure / energy / power / voltage / current / frequency /
+temperature). 11 discipline-preset factories shipped:
+
+| Preset | Length | Mass | Angle | Temp | Velocity | Frequency | Pressure |
+|---|---|---|---|---|---|---|---|
+| Game        | m     | kg | deg  | C  | m/s   | Hz  | Pa  |
+| CAD         | mm    | kg | deg  | K  | m/s   | Hz  | MPa |
+| Robotics    | m     | kg | rad  | K  | m/s   | Hz  | Pa  | (ROS REP 103)
+| Aerospace   | m     | kg | deg  | K  | knots | Hz  | kPa |
+| PCB / EDA   | mil   | g  | rad  | K  | m/s   | MHz | Pa  |
+| Audio       | m     | kg | rad  | K  | m/s   | Hz  | Pa  |
+| 3D Print    | mm    | g  | rad  | C  | m/s   | Hz  | Pa  |
+| CAM         | in    | lb | rad  | K  | m/s   | RPM | Pa  |
+| Cinematic   | cm    | kg | deg  | K  | m/s   | Hz  | Pa  |
+| Imperial    | in    | lb | deg  | F  | mph   | Hz  | psi |
+| SI Strict   | m     | kg | rad  | K  | m/s   | Hz  | Pa  |
+| Scientific  | m     | kg | rad  | K  | m/s   | Hz  | Pa  | (9-digit + sci notation)
+
+Format uses `std::snprintf("%.*g", prec_digits, ...)` for predictable
+behaviour. Parse is the inverse of v0b-2's `crd-config` TOML
+unit-suffix accessors — same suffix tables; returns
+`std::optional<Q>` on success / `nullopt` on malformed input. Temperature
+is affine (Kelvin canonical SI; Celsius / Fahrenheit / Rankine convert
+through scale + offset).
+
+`crd-imgui` ships an optional inspector header
+`crd/imgui/unit_preferences_inspector.hpp` (header-only; pulls `<imgui.h>`)
+with a discipline-preset picker + per-Dim combo boxes + precision /
+suffix / scientific-notation toggles. Caller drives persistence to
+`crd-config`.
+
+### D31. Phase 3.1.7.5 `crd-units` CLOSES after v0d
+
+The v0a substrate + v0b adoption A + v0c adoption B + v0d adoption C
+ship the full 6-layer conversion system + every consumer adopted. Phase
+3.1.7.5 → CLOSED 2026-05-15. Net: ~4.5 KLOC engine + ~2.3 KLOC tests
+across 19 sub-slices. Full project ctest grew from 1546 (Phase 3.0 close)
+through 1844 (D-006 + D-003 end of day) to **1913 win-debug at Phase
+3.1.7.5 close**.
+
+**Bug class eliminated:** Mars Climate Orbiter at the engine surface.
+Eylem `RigidBody`, `PhysicsConfig`, `IPhysicsScene`, `ForceFieldComponent`
+all carry dimensional tags. The new typed Vec reductions + geometry
+typed-query overloads mean geometry consumers (eylem narrow-phase, scene
+spatial queries, future SDF) cross the typed boundary without
+information loss. Adoption-by-doc-contract (D29) covers byte-buffer
+resources where typed access would defeat SIMD.
+
+**Open follow-ups (not blockers):**
+- `DimRoot<>` for unknown-Dim sqrt (deferred until a real consumer surfaces).
+- Layer-6 dB / cents / RPM cross-paths (a sandbox might trip `2π · frequency` and need an `Angle{2π}` bridge — documented in v0c session log).
+- `Mat<Quantity>` wrappers (deferred per ADR-0078 §2 D24; no homogeneous-Dim matrix consumer yet).
+
 ## References
 
 - `docs/phases/phase-3.1.7.5-units.md` — full phase plan + 6-layer conversion system spec.

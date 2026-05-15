@@ -29,6 +29,7 @@
 namespace crd::geometry::primitives
 {
 using crd::math::MathScalar;
+using crd::math::MathValue;
 using crd::math::Vec3;
 
 // The conservative `tmax` widening from Ize 2013 (γ_n = n·u/(1−n·u), u = ½ulp,

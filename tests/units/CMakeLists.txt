@@ -8,6 +8,8 @@ add_executable(crd-units-tests
     test_nonlinear_units.cpp
     test_literals.cpp
     test_vec_quantity.cpp  # v0b-1
+    test_vec_quantity_reductions.cpp  # v0d-1
+    test_unit_preferences.cpp  # v0d-5
 )
 
 target_link_libraries(crd-units-tests PRIVATE

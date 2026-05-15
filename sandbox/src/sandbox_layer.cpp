@@ -326,8 +326,9 @@ void SandboxLayer::init_scene_world()
         m_eylem_alloc.get(), /*capacity_per_kind=*/256U);
 
     m_physics_config = crd::eylem::PhysicsConfig{};
-    m_physics_config.fixed_dt = 1.0F / 64.0F; // exactly representable f32
-    m_physics_config.gravity  = crd::math::Vec3f{0.0F, -9.81F, 0.0F};
+    m_physics_config.fixed_dt = crd::units::Duration32{1.0F / 64.0F}; // exactly representable f32
+    m_physics_config.gravity  = crd::math::from_raw_vec<crd::units::dim::Acceleration>(
+                                    crd::math::Vec3f{0.0F, -9.81F, 0.0F});
 
     // PreRender phase, runs FIRST. Reads BodyPool prev/curr columns,
     // lerps by World::fixed_step_alpha(fixed_dt), writes through World
@@ -412,10 +413,11 @@ void SandboxLayer::init_scene_world()
     };
     for (const DemoSpec& d : demos)
     {
-        // Body in pool.
+        // Body in pool. v0c-1: typed RigidBody surface — bridge the demo
+        // initialiser-list literal through from_raw_vec at the boundary.
         crd::eylem::RigidBody body{};
-        body.position        = d.position;
-        body.inv_mass        = 1.0F;
+        body.position        = crd::math::from_raw_vec<crd::units::dim::Length>(d.position);
+        body.inv_mass        = crd::units::InverseMass32{1.0F};
         body.linear_damping  = 0.0F;
         body.angular_damping = 0.0F;
         const auto body_id = m_body_pool->insert(body);
@@ -471,7 +473,7 @@ void SandboxLayer::init_scene_world()
     CRD_LOG_INFO(g_log_sandbox_layer,
                  "eylem v1b-e: 3 rigid bodies (sphere/box/capsule) spawned at +y=5; "
                  "gravity (0, -9.81, 0) m/s^2; fixed_dt={:.5f}s ({:.1f} Hz)",
-                 m_physics_config.fixed_dt, 1.0F / m_physics_config.fixed_dt);
+                 m_physics_config.fixed_dt.value, 1.0F / m_physics_config.fixed_dt.value);
 
     // RenderMeshIndex — observes Renderable's lifecycle and evicts GpuMeshes
     // automatically when entities are destroyed (the proper drop-callback
@@ -912,7 +914,7 @@ void SandboxLayer::on_update(crd::f64 delta_seconds)
         if (m_eylem_initialised && m_scene == SandboxScene::Physics)
         {
             m_world->step_fixed(delta_seconds,
-                                static_cast<crd::f64>(m_physics_config.fixed_dt),
+                                static_cast<crd::f64>(m_physics_config.fixed_dt.value),
                                 /*max_substeps=*/8U);
         }
         else

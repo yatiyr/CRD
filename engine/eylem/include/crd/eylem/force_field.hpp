@@ -29,6 +29,7 @@
 #include <crd/core/types.hpp>
 #include <crd/math/quat.hpp>
 #include <crd/math/vec.hpp>
+#include <crd/units/quantity_aliases.hpp>
 
 namespace crd::eylem
 {
@@ -150,18 +151,25 @@ struct ForceFieldComponent
     // ── Formula parameters ─────────────────────────────────────────────
     // Interpreted per `formula`. Fields that the formula doesn't read
     // are ignored (cooker zeroes them for clean serialisation hash).
-    crd::math::Vec3f  direction      {0.0F, -1.0F, 0.0F}; // Directional / Magnetic (B vector)
-    crd::math::Vec3f  axis           {0.0F,  1.0F, 0.0F}; // Vortex axis / GravityStyle up
-    crd::math::Vec3f  origin         {0.0F,  0.0F, 0.0F}; // Vortex centre / Radial centre (local-space)
-    crd::f32          magnitude      = 1.0F;
-    crd::f32          radius_min     = 0.01F; // Radial / Magnetic — singularity guard
-    crd::f32          radius_max     = 1.0F;  // Linear / Smoothstep cutoff
-    crd::f32          falloff_p      = 2.0F;  // Radial exponent / Drag exponent
-    crd::f32          polarity       = 1.0F;  // Radial / Magnetic / Gradient sign (+1, −1)
-    crd::math::Vec4f  poly_coeffs    {0.0F, 0.0F, 0.0F, 0.0F}; // Polynomial falloff
-    crd::f32          noise_scale    = 1.0F;  // Noise spatial frequency
-    crd::f32          noise_time     = 0.0F;  // Noise time advance (animator-driven)
-    crd::u32          noise_octaves  = 4U;    // Noise octave count
+    //
+    // Typing rule (ADR-0078 §3 D21): GEOMETRIC parameters (positions /
+    // distances / lengths) carry SI Length32; DIRECTIONS are unit vectors
+    // (dimensionless f32); FORMULA COEFFICIENTS (magnitude / polarity /
+    // falloff_p / poly_coeffs / noise_*) stay polymorphic raw f32 because
+    // their dimension depends on `formula` + `mass_coupling`. The cooker
+    // emits raw and EylemFieldSystem re-tags at use time per formula.
+    crd::math::Vec3f                       direction  {0.0F, -1.0F, 0.0F}; // Directional / Magnetic (B vector) — dimensionless unit vector
+    crd::math::Vec3f                       axis       {0.0F,  1.0F, 0.0F}; // Vortex axis / GravityStyle up — dimensionless unit vector
+    crd::math::Vec3<crd::units::Length32>  origin     {};                   // Vortex centre / Radial centre (local-space)
+    crd::f32                               magnitude      = 1.0F;          // formula-polymorphic
+    crd::units::Length32                   radius_min     {0.01F};         // Radial / Magnetic — singularity guard
+    crd::units::Length32                   radius_max     {1.0F};          // Linear / Smoothstep cutoff
+    crd::f32                               falloff_p      = 2.0F;          // dimensionless exponent
+    crd::f32                               polarity       = 1.0F;          // +1 / -1 sign
+    crd::math::Vec4f                       poly_coeffs    {0.0F, 0.0F, 0.0F, 0.0F}; // Polynomial falloff coefficients (dimensionless)
+    crd::units::Length32                   noise_scale    {1.0F};          // Noise spatial frequency (= 1/wavelength, but stored as wavelength in m)
+    crd::f32                               noise_time     = 0.0F;          // Noise time advance (seconds — could be Duration32 but treated as raw at the noise() call site)
+    crd::u32                               noise_octaves  = 4U;            // Noise octave count
 
     // ── Tier 2 / Tier 3 handles (only one is used, by formula) ─────────
     // Type-erased pointers — concrete types ship in their owning

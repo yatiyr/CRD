@@ -47,18 +47,19 @@
 namespace crd::geometry::primitives
 {
 using crd::math::MathScalar;
+using crd::math::MathValue;
 using crd::math::Vec2;
 using crd::math::Vec3;
 
 // A point in space — just `Vec2<T>` / `Vec3<T>`. Aliased for call-site
 // readability where a parameter is conceptually a position, not a free vector.
-template <MathScalar T> using Point2 = Vec2<T>;
-template <MathScalar T> using Point3 = Vec3<T>;
+template <MathValue T> using Point2 = Vec2<T>;
+template <MathValue T> using Point3 = Vec3<T>;
 
 // ---- Linear primitives: Line3 / Segment3 / Ray3 ------------------------------
 
 // Infinite line through `point` along `direction` (direction need not be unit).
-template <MathScalar T> struct Line3
+template <MathValue T> struct Line3
 {
     Vec3<T> point{};
     Vec3<T> direction{};
@@ -71,7 +72,7 @@ template <MathScalar T> struct Line3
 };
 
 // Finite segment from `a` to `b`.
-template <MathScalar T> struct Segment3
+template <MathValue T> struct Segment3
 {
     Vec3<T> a{};
     Vec3<T> b{};
@@ -81,7 +82,7 @@ template <MathScalar T> struct Segment3
 };
 
 // Ray3 from `origin` along `direction` (parameter t >= 0; direction need not be unit).
-template <MathScalar T> struct Ray3
+template <MathValue T> struct Ray3
 {
     Vec3<T> origin{};
     Vec3<T> direction{};
@@ -95,10 +96,10 @@ template <MathScalar T> struct Ray3
 
 // ---- Plane: normal·x + d = 0 ----------------------------------------------
 
-template <MathScalar T> struct Plane
+template <MathValue T> struct Plane
 {
     Vec3<T> normal{};
-    T d = static_cast<T>(0);
+    T d{}; // v0d-2: was `= static_cast<T>(0)` — broken for Quantity (explicit ctor). T{} works for both raw and Quantity (= 0).
 
     constexpr Plane() noexcept = default;
     constexpr Plane(const Vec3<T>& normal_in, T d_in) noexcept : normal(normal_in), d(d_in) {}
@@ -106,7 +107,7 @@ template <MathScalar T> struct Plane
 
 // ---- Sphere ----------------------------------------------------------------
 
-template <MathScalar T> struct Sphere
+template <MathValue T> struct Sphere
 {
     Vec3<T> center{};
     T radius = static_cast<T>(0);
@@ -117,7 +118,7 @@ template <MathScalar T> struct Sphere
 
 // ---- Axis-aligned bounding box --------------------------------------------
 
-template <MathScalar T> struct AABB3
+template <MathValue T> struct AABB3
 {
     Vec3<T> min{};
     Vec3<T> max{};
@@ -132,7 +133,7 @@ template <MathScalar T> struct AABB3
 // `orientation` (orthonormal). World point = center + orientation * (local
 // coordinate in [-half_extents, +half_extents]). Algorithms (SAT, closest-point)
 // land in v0b/v0c — v0a defines the type.
-template <MathScalar T> struct OBB3
+template <MathValue T> struct OBB3
 {
     Vec3<T> center{};
     Vec3<T> half_extents{};
@@ -147,7 +148,7 @@ template <MathScalar T> struct OBB3
 
 // ---- Capsule3: segment a→b with a swept radius -----------------------------
 
-template <MathScalar T> struct Capsule3
+template <MathValue T> struct Capsule3
 {
     Vec3<T> a{};
     Vec3<T> b{};
@@ -165,7 +166,7 @@ template <MathScalar T> struct Capsule3
 // Like Capsule3 but the ends are flat disks, not hemispheres. The axis need not
 // be unit-length. (Useful for picking / robotics joints / vehicle wheels — eylem
 // colliders use Capsule, not Cylinder, so this lives only in -primitives.)
-template <MathScalar T> struct Cylinder3
+template <MathValue T> struct Cylinder3
 {
     Vec3<T> a{};
     Vec3<T> b{};
@@ -180,7 +181,7 @@ template <MathScalar T> struct Cylinder3
 
 // ---- Triangle (3D) --------------------------------------------------------
 
-template <MathScalar T> struct Triangle3
+template <MathValue T> struct Triangle3
 {
     Vec3<T> a{};
     Vec3<T> b{};
@@ -197,7 +198,7 @@ template <MathScalar T> struct Triangle3
 //
 // Vertex order matters for orientation: `signed_volume` is positive when
 // (a, b, c, d) is "positively oriented" (d on the positive side of plane abc).
-template <MathScalar T> struct Tetrahedron
+template <MathValue T> struct Tetrahedron
 {
     Vec3<T> a{};
     Vec3<T> b{};
@@ -213,7 +214,7 @@ template <MathScalar T> struct Tetrahedron
 
 // ---- Frustum: 6 inward-facing planes (L, R, B, T, near, far) --------------
 
-template <MathScalar T> struct Frustum
+template <MathValue T> struct Frustum
 {
     crd::containers::StaticArray<Plane<T>, 6> planes{};
 
@@ -236,7 +237,7 @@ template <MathScalar T> struct Frustum
 // (Phase 3.1.7 v2); v1h ships the type plus the two trivially-correct queries
 // (`support`, plane-based `contains` — defined just below the 3D helpers,
 // after `signed_distance`).
-template <MathScalar T> struct ConvexHullView
+template <MathValue T> struct ConvexHullView
 {
     crd::containers::ConstSpan<Vec3<T>> vertices{};
     crd::containers::ConstSpan<Plane<T>> faces{};
@@ -328,49 +329,49 @@ template <MathScalar T> struct ConvexHullView
 
 // ---- Equality --------------------------------------------------------------
 
-template <MathScalar T> [[nodiscard]] constexpr bool operator==(const Line3<T>& lhs, const Line3<T>& rhs) noexcept
+template <MathValue T> [[nodiscard]] constexpr bool operator==(const Line3<T>& lhs, const Line3<T>& rhs) noexcept
 {
     return lhs.point == rhs.point && lhs.direction == rhs.direction;
 }
-template <MathScalar T> [[nodiscard]] constexpr bool operator==(const Segment3<T>& lhs, const Segment3<T>& rhs) noexcept
+template <MathValue T> [[nodiscard]] constexpr bool operator==(const Segment3<T>& lhs, const Segment3<T>& rhs) noexcept
 {
     return lhs.a == rhs.a && lhs.b == rhs.b;
 }
-template <MathScalar T> [[nodiscard]] constexpr bool operator==(const Ray3<T>& lhs, const Ray3<T>& rhs) noexcept
+template <MathValue T> [[nodiscard]] constexpr bool operator==(const Ray3<T>& lhs, const Ray3<T>& rhs) noexcept
 {
     return lhs.origin == rhs.origin && lhs.direction == rhs.direction;
 }
-template <MathScalar T> [[nodiscard]] constexpr bool operator==(const Plane<T>& lhs, const Plane<T>& rhs) noexcept
+template <MathValue T> [[nodiscard]] constexpr bool operator==(const Plane<T>& lhs, const Plane<T>& rhs) noexcept
 {
     return lhs.normal == rhs.normal && lhs.d == rhs.d;
 }
-template <MathScalar T> [[nodiscard]] constexpr bool operator==(const Sphere<T>& lhs, const Sphere<T>& rhs) noexcept
+template <MathValue T> [[nodiscard]] constexpr bool operator==(const Sphere<T>& lhs, const Sphere<T>& rhs) noexcept
 {
     return lhs.center == rhs.center && lhs.radius == rhs.radius;
 }
-template <MathScalar T> [[nodiscard]] constexpr bool operator==(const AABB3<T>& lhs, const AABB3<T>& rhs) noexcept
+template <MathValue T> [[nodiscard]] constexpr bool operator==(const AABB3<T>& lhs, const AABB3<T>& rhs) noexcept
 {
     return lhs.min == rhs.min && lhs.max == rhs.max;
 }
-template <MathScalar T> [[nodiscard]] constexpr bool operator==(const OBB3<T>& lhs, const OBB3<T>& rhs) noexcept
+template <MathValue T> [[nodiscard]] constexpr bool operator==(const OBB3<T>& lhs, const OBB3<T>& rhs) noexcept
 {
     return lhs.center == rhs.center && lhs.half_extents == rhs.half_extents && lhs.orientation == rhs.orientation;
 }
-template <MathScalar T> [[nodiscard]] constexpr bool operator==(const Capsule3<T>& lhs, const Capsule3<T>& rhs) noexcept
+template <MathValue T> [[nodiscard]] constexpr bool operator==(const Capsule3<T>& lhs, const Capsule3<T>& rhs) noexcept
 {
     return lhs.a == rhs.a && lhs.b == rhs.b && lhs.radius == rhs.radius;
 }
-template <MathScalar T>
+template <MathValue T>
 [[nodiscard]] constexpr bool operator==(const Cylinder3<T>& lhs, const Cylinder3<T>& rhs) noexcept
 {
     return lhs.a == rhs.a && lhs.b == rhs.b && lhs.radius == rhs.radius;
 }
-template <MathScalar T>
+template <MathValue T>
 [[nodiscard]] constexpr bool operator==(const Triangle3<T>& lhs, const Triangle3<T>& rhs) noexcept
 {
     return lhs.a == rhs.a && lhs.b == rhs.b && lhs.c == rhs.c;
 }
-template <MathScalar T>
+template <MathValue T>
 [[nodiscard]] constexpr bool operator==(const Tetrahedron<T>& lhs, const Tetrahedron<T>& rhs) noexcept
 {
     return lhs.a == rhs.a && lhs.b == rhs.b && lhs.c == rhs.c && lhs.d == rhs.d;
@@ -378,14 +379,14 @@ template <MathScalar T>
 
 // ---- Ray3 helpers -----------------------------------------------------------
 
-template <MathScalar T> [[nodiscard]] constexpr Vec3<T> point_at(const Ray3<T>& ray, T t) noexcept
+template <MathValue T> [[nodiscard]] constexpr Vec3<T> point_at(const Ray3<T>& ray, T t) noexcept
 {
     return ray.origin + ray.direction * t;
 }
 
 // ---- Plane helpers ---------------------------------------------------------
 
-template <MathScalar T>
+template <MathValue T>
 [[nodiscard]] inline bool try_normalize(Plane<T>& plane, T epsilon = crd::math::default_epsilon<T>()) noexcept
 {
     const T len = crd::math::length(plane.normal);
@@ -398,7 +399,7 @@ template <MathScalar T>
     return true;
 }
 
-template <MathScalar T> [[nodiscard]] inline Plane<T> normalized(Plane<T> plane) noexcept
+template <MathValue T> [[nodiscard]] inline Plane<T> normalized(Plane<T> plane) noexcept
 {
     const bool ok = try_normalize(plane);
     CRD_ASSERT(ok);
@@ -406,42 +407,42 @@ template <MathScalar T> [[nodiscard]] inline Plane<T> normalized(Plane<T> plane)
     return plane;
 }
 
-template <MathScalar T>
+template <MathValue T>
 [[nodiscard]] inline Plane<T> plane_from_point_normal(const Vec3<T>& point, const Vec3<T>& normal) noexcept
 {
     const Vec3<T> unit_normal = crd::math::normalized(normal);
     return Plane<T>(unit_normal, -crd::math::dot(unit_normal, point));
 }
 
-template <MathScalar T> [[nodiscard]] constexpr T signed_distance(const Plane<T>& plane, const Vec3<T>& point) noexcept
+template <MathValue T> [[nodiscard]] constexpr T signed_distance(const Plane<T>& plane, const Vec3<T>& point) noexcept
 {
     return crd::math::dot(plane.normal, point) + plane.d;
 }
 
-template <MathScalar T> [[nodiscard]] inline Vec3<T> closest_point(const Plane<T>& plane, const Vec3<T>& point) noexcept
+template <MathValue T> [[nodiscard]] inline Vec3<T> closest_point(const Plane<T>& plane, const Vec3<T>& point) noexcept
 {
     return point - plane.normal * signed_distance(plane, point);
 }
 
 // ---- AABB3 helpers ----------------------------------------------------------
 
-template <MathScalar T> [[nodiscard]] constexpr Vec3<T> center(const AABB3<T>& bounds) noexcept
+template <MathValue T> [[nodiscard]] constexpr Vec3<T> center(const AABB3<T>& bounds) noexcept
 {
     return (bounds.min + bounds.max) * static_cast<T>(0.5);
 }
 
-template <MathScalar T> [[nodiscard]] constexpr Vec3<T> extents(const AABB3<T>& bounds) noexcept
+template <MathValue T> [[nodiscard]] constexpr Vec3<T> extents(const AABB3<T>& bounds) noexcept
 {
     return (bounds.max - bounds.min) * static_cast<T>(0.5);
 }
 
-template <MathScalar T> [[nodiscard]] constexpr bool contains(const AABB3<T>& bounds, const Vec3<T>& point) noexcept
+template <MathValue T> [[nodiscard]] constexpr bool contains(const AABB3<T>& bounds, const Vec3<T>& point) noexcept
 {
     return point.x >= bounds.min.x && point.x <= bounds.max.x && point.y >= bounds.min.y && point.y <= bounds.max.y &&
            point.z >= bounds.min.z && point.z <= bounds.max.z;
 }
 
-template <MathScalar T>
+template <MathValue T>
 [[nodiscard]] constexpr Vec3<T> closest_point(const AABB3<T>& bounds, const Vec3<T>& point) noexcept
 {
     return Vec3<T>(crd::math::clamp(point.x, bounds.min.x, bounds.max.x),
@@ -449,7 +450,7 @@ template <MathScalar T>
                    crd::math::clamp(point.z, bounds.min.z, bounds.max.z));
 }
 
-template <MathScalar T> [[nodiscard]] constexpr bool intersects(const AABB3<T>& lhs, const AABB3<T>& rhs) noexcept
+template <MathValue T> [[nodiscard]] constexpr bool intersects(const AABB3<T>& lhs, const AABB3<T>& rhs) noexcept
 {
     return lhs.min.x <= rhs.max.x && lhs.max.x >= rhs.min.x && lhs.min.y <= rhs.max.y && lhs.max.y >= rhs.min.y &&
            lhs.min.z <= rhs.max.z && lhs.max.z >= rhs.min.z;
@@ -457,7 +458,7 @@ template <MathScalar T> [[nodiscard]] constexpr bool intersects(const AABB3<T>& 
 
 // The "positive vertex" of `bounds` w.r.t. a direction — the corner furthest
 // along `normal`. Used by plane/frustum-vs-AABB3.
-template <MathScalar T>
+template <MathValue T>
 [[nodiscard]] constexpr Vec3<T> positive_vertex(const AABB3<T>& bounds, const Vec3<T>& normal) noexcept
 {
     return Vec3<T>(normal.x >= static_cast<T>(0) ? bounds.max.x : bounds.min.x,
@@ -467,18 +468,18 @@ template <MathScalar T>
 
 // ---- Sphere helpers --------------------------------------------------------
 
-template <MathScalar T> [[nodiscard]] constexpr bool contains(const Sphere<T>& sphere, const Vec3<T>& point) noexcept
+template <MathValue T> [[nodiscard]] constexpr bool contains(const Sphere<T>& sphere, const Vec3<T>& point) noexcept
 {
     return crd::math::distance_squared(sphere.center, point) <= sphere.radius * sphere.radius;
 }
 
-template <MathScalar T> [[nodiscard]] constexpr bool intersects(const Sphere<T>& lhs, const Sphere<T>& rhs) noexcept
+template <MathValue T> [[nodiscard]] constexpr bool intersects(const Sphere<T>& lhs, const Sphere<T>& rhs) noexcept
 {
     const T r = lhs.radius + rhs.radius;
     return crd::math::distance_squared(lhs.center, rhs.center) <= r * r;
 }
 
-template <MathScalar T>
+template <MathValue T>
 [[nodiscard]] constexpr bool intersects(const AABB3<T>& bounds, const Sphere<T>& sphere) noexcept
 {
     return crd::math::distance_squared(closest_point(bounds, sphere.center), sphere.center) <=
@@ -487,17 +488,17 @@ template <MathScalar T>
 
 // ---- Triangle helpers ------------------------------------------------------
 
-template <MathScalar T> [[nodiscard]] constexpr Vec3<T> centroid(const Triangle3<T>& tri) noexcept
+template <MathValue T> [[nodiscard]] constexpr Vec3<T> centroid(const Triangle3<T>& tri) noexcept
 {
     return (tri.a + tri.b + tri.c) / static_cast<T>(3);
 }
 
-template <MathScalar T> [[nodiscard]] inline Vec3<T> normal(const Triangle3<T>& tri) noexcept
+template <MathValue T> [[nodiscard]] inline Vec3<T> normal(const Triangle3<T>& tri) noexcept
 {
     return crd::math::normalized(crd::math::cross(tri.b - tri.a, tri.c - tri.a));
 }
 
-template <MathScalar T>
+template <MathValue T>
 [[nodiscard]] constexpr Vec3<T> barycentric(const Triangle3<T>& tri, const Vec3<T>& point) noexcept
 {
     const Vec3<T> v0 = tri.b - tri.a;
@@ -516,7 +517,7 @@ template <MathScalar T>
     return Vec3<T>(u, v, w);
 }
 
-template <MathScalar T>
+template <MathValue T>
 [[nodiscard]] constexpr bool contains(const Triangle3<T>& tri, const Vec3<T>& point,
                                       T epsilon = crd::math::default_epsilon<T>()) noexcept
 {
@@ -527,18 +528,18 @@ template <MathScalar T>
 // ---- Tetrahedron helpers ---------------------------------------------------
 // (barycentric / contains for tetrahedra live in `barycentric.hpp` — v0d.)
 
-template <MathScalar T> [[nodiscard]] constexpr Vec3<T> centroid(const Tetrahedron<T>& tet) noexcept
+template <MathValue T> [[nodiscard]] constexpr Vec3<T> centroid(const Tetrahedron<T>& tet) noexcept
 {
     return (tet.a + tet.b + tet.c + tet.d) * static_cast<T>(0.25);
 }
 
 // Signed volume: (1/6)·det[ b−a | c−a | d−a ]. Positive when (a,b,c,d) is
 // positively oriented (d on the positive side of the plane abc).
-template <MathScalar T> [[nodiscard]] constexpr T signed_volume(const Tetrahedron<T>& tet) noexcept
+template <MathValue T> [[nodiscard]] constexpr T signed_volume(const Tetrahedron<T>& tet) noexcept
 {
     return crd::math::dot(tet.b - tet.a, crd::math::cross(tet.c - tet.a, tet.d - tet.a)) / static_cast<T>(6);
 }
-template <MathScalar T> [[nodiscard]] constexpr T volume(const Tetrahedron<T>& tet) noexcept
+template <MathValue T> [[nodiscard]] constexpr T volume(const Tetrahedron<T>& tet) noexcept
 {
     const T sv = signed_volume(tet);
     return sv < static_cast<T>(0) ? -sv : sv;
@@ -546,7 +547,7 @@ template <MathScalar T> [[nodiscard]] constexpr T volume(const Tetrahedron<T>& t
 
 // ---- Ray3 vs primitive ------------------------------------------------------
 
-template <MathScalar T>
+template <MathValue T>
 [[nodiscard]] inline bool intersect_ray_plane(const Ray3<T>& ray, const Plane<T>& plane, T& out_t,
                                               T epsilon = crd::math::default_epsilon<T>()) noexcept
 {
@@ -564,7 +565,7 @@ template <MathScalar T>
     return true;
 }
 
-template <MathScalar T>
+template <MathValue T>
 [[nodiscard]] inline bool intersect_ray_sphere(const Ray3<T>& ray, const Sphere<T>& sphere, T& out_t,
                                                T epsilon = crd::math::default_epsilon<T>()) noexcept
 {
@@ -605,7 +606,7 @@ template <MathScalar T>
 #pragma warning(push)
 #pragma warning(disable : 4723) // MSVC cannot prove the guarded determinant path stays non-zero.
 #endif
-template <MathScalar T>
+template <MathValue T>
 [[nodiscard]] inline bool intersect_ray_triangle(const Ray3<T>& ray, const Triangle3<T>& tri, T& out_t,
                                                  Vec3<T>& out_barycentric,
                                                  T epsilon = crd::math::default_epsilon<T>()) noexcept
@@ -651,7 +652,7 @@ template <MathScalar T>
 
 // Extract the 6 (normalised, inward-facing) clip planes from a view-projection
 // matrix. Column-major `Mat4` per crd-math; planes ordered L, R, B, T, near, far.
-template <MathScalar T>
+template <MathValue T>
 [[nodiscard]] inline Frustum<T> frustum_from_view_projection(const crd::math::Mat4<T>& m) noexcept
 {
     const Plane<T> left(Vec3<T>(m.c3.x + m.c0.x, m.c3.y + m.c0.y, m.c3.z + m.c0.z), m.c3.w + m.c0.w);
@@ -665,7 +666,7 @@ template <MathScalar T>
                                                                 normalized(far_plane)}};
 }
 
-template <MathScalar T> [[nodiscard]] inline bool contains(const Frustum<T>& frustum, const Vec3<T>& point) noexcept
+template <MathValue T> [[nodiscard]] inline bool contains(const Frustum<T>& frustum, const Vec3<T>& point) noexcept
 {
     for (const Plane<T>& plane : frustum.planes)
     {
@@ -677,7 +678,7 @@ template <MathScalar T> [[nodiscard]] inline bool contains(const Frustum<T>& fru
     return true;
 }
 
-template <MathScalar T>
+template <MathValue T>
 [[nodiscard]] inline bool intersects(const Frustum<T>& frustum, const Sphere<T>& sphere) noexcept
 {
     for (const Plane<T>& plane : frustum.planes)
@@ -690,7 +691,7 @@ template <MathScalar T>
     return true;
 }
 
-template <MathScalar T> [[nodiscard]] inline bool intersects(const Frustum<T>& frustum, const AABB3<T>& bounds) noexcept
+template <MathValue T> [[nodiscard]] inline bool intersects(const Frustum<T>& frustum, const AABB3<T>& bounds) noexcept
 {
     for (const Plane<T>& plane : frustum.planes)
     {
@@ -732,7 +733,7 @@ inline constexpr crd::u32 k_invalid_vertex = ~crd::u32{0};
 // Field order is FROZEN — GJK's index-match termination + EPA (v2c) read
 // `point` and `vertex_idx` by name. Aggregate layout means `SupportPoint
 // <f32>` is 16 bytes, `SupportPoint<f64>` 32 bytes.
-template <MathScalar T> struct SupportPoint
+template <MathValue T> struct SupportPoint
 {
     Vec3<T> point{};
     crd::u32 vertex_idx = k_invalid_vertex;
@@ -742,7 +743,7 @@ namespace support_detail
 {
 // Unit vector in `dir`, or a canonical +X axis fallback on zero / sub-normal
 // input. The deterministic zero-direction reply.
-template <MathScalar T> [[nodiscard]] inline Vec3<T> normalize_safe(const Vec3<T>& dir) noexcept
+template <MathValue T> [[nodiscard]] inline Vec3<T> normalize_safe(const Vec3<T>& dir) noexcept
 {
     const T dd = crd::math::dot(dir, dir);
     if (!(dd > std::numeric_limits<T>::min()))
@@ -755,7 +756,7 @@ template <MathScalar T> [[nodiscard]] inline Vec3<T> normalize_safe(const Vec3<T
 } // namespace support_detail
 
 // ---- support(Sphere): `center + radius * dir̂`; zero `dir` → canonical reply
-template <MathScalar T>
+template <MathValue T>
 [[nodiscard]] inline SupportPoint<T> support(const Sphere<T>& sphere, const Vec3<T>& dir) noexcept
 {
     const Vec3<T> d = support_detail::normalize_safe(dir);
@@ -766,7 +767,7 @@ template <MathScalar T>
 
 // ---- support(OBB3): corner pick by `dot(axis_i, dir)` signs, `+h` on tie.
 // Packed corner index: bit 2 ⇐ x≥0, bit 1 ⇐ y≥0, bit 0 ⇐ z≥0.
-template <MathScalar T>
+template <MathValue T>
 [[nodiscard]] inline SupportPoint<T> support(const OBB3<T>& obb, const Vec3<T>& dir) noexcept
 {
     const T dx = crd::math::dot(obb.orientation.c0, dir);
@@ -800,7 +801,7 @@ template <MathScalar T>
 // `OBB3` and `ConvexHullView` are polyhedral — their supports ARE a true
 // bijection from a discrete vertex set, so they keep their real indices and
 // benefit from the bit-exact index-match termination.
-template <MathScalar T>
+template <MathValue T>
 [[nodiscard]] inline SupportPoint<T> support(const Capsule3<T>& cap, const Vec3<T>& dir) noexcept
 {
     const T da = crd::math::dot(cap.a, dir);
@@ -815,7 +816,7 @@ template <MathScalar T>
 // index argmax on ties (the deterministic substrate-wide tiebreak rule).
 // O(n). The hill-climbing path (v2g) adds a warm-start `hint_vertex_idx`
 // overload; the SIMD-batched path (v2h) parallelises the scan with `Vec8f`.
-template <MathScalar T>
+template <MathValue T>
 [[nodiscard]] inline SupportPoint<T> support(const ConvexHullView<T>& hull, const Vec3<T>& dir) noexcept
 {
     CRD_ASSERT(!hull.vertices.empty());
@@ -857,7 +858,7 @@ template <MathScalar T>
 // pick the **lowest index** among them. Costs ~6 extra dot products (one
 // per neighbor) in exchange for the bijection guarantee. Jolt does this;
 // PhysX doesn't, and Jolt's contact stability is noticeably better.
-template <MathScalar T>
+template <MathValue T>
 [[nodiscard]] inline SupportPoint<T> hill_climb_support(const ConvexHullView<T>& hull, const Vec3<T>& dir,
                                                          crd::u32 start_idx) noexcept
 {
@@ -1006,7 +1007,7 @@ inline constexpr crd::usize k_simd_support_threshold = 32;
 // All three paths return the SAME `vertex_idx` for the SAME direction —
 // the determinism contract. v2g tests pin this for hill-climb; v2h tests
 // pin it for SIMD.
-template <MathScalar T>
+template <MathValue T>
 [[nodiscard]] inline SupportPoint<T> support_with_hint(const ConvexHullView<T>& hull, const Vec3<T>& dir,
                                                        crd::u32 hint_vertex_idx) noexcept
 {
@@ -1032,7 +1033,7 @@ template <MathScalar T>
 // outward-facing, so `signed_distance <= epsilon` for all). Exact for a true
 // convex hull; for an arbitrary face set this is the intersection of the
 // half-spaces (still well-defined, just not "the mesh").
-template <MathScalar T>
+template <MathValue T>
 [[nodiscard]] inline bool contains(const ConvexHullView<T>& hull, const Vec3<T>& point,
                                    T epsilon = crd::math::default_epsilon<T>()) noexcept
 {
@@ -1057,7 +1058,7 @@ template <MathScalar T>
 // ===========================================================================
 
 // Infinite line through `point` along `direction` (direction need not be unit).
-template <MathScalar T> struct Line2
+template <MathValue T> struct Line2
 {
     Vec2<T> point{};
     Vec2<T> direction{};
@@ -1070,7 +1071,7 @@ template <MathScalar T> struct Line2
 };
 
 // Finite segment from `a` to `b`.
-template <MathScalar T> struct Segment2
+template <MathValue T> struct Segment2
 {
     Vec2<T> a{};
     Vec2<T> b{};
@@ -1080,7 +1081,7 @@ template <MathScalar T> struct Segment2
 };
 
 // Ray from `origin` along `direction` (parameter t >= 0; direction need not be unit).
-template <MathScalar T> struct Ray2
+template <MathValue T> struct Ray2
 {
     Vec2<T> origin{};
     Vec2<T> direction{};
@@ -1093,7 +1094,7 @@ template <MathScalar T> struct Ray2
 };
 
 // Axis-aligned bounding box (2D).
-template <MathScalar T> struct AABB2
+template <MathValue T> struct AABB2
 {
     Vec2<T> min{};
     Vec2<T> max{};
@@ -1104,7 +1105,7 @@ template <MathScalar T> struct AABB2
 
 // Oriented bounding box (2D): center + half-extents in a local frame whose axes
 // are the columns of `orientation` (orthonormal `Mat2`).
-template <MathScalar T> struct OBB2
+template <MathValue T> struct OBB2
 {
     Vec2<T> center{};
     Vec2<T> half_extents{};
@@ -1119,7 +1120,7 @@ template <MathScalar T> struct OBB2
 
 // Circle — the 2D bounding-volume peer of `Sphere` (distinct natural name, so no
 // `2` suffix per the naming rule).
-template <MathScalar T> struct Circle
+template <MathValue T> struct Circle
 {
     Vec2<T> center{};
     T radius = static_cast<T>(0);
@@ -1129,7 +1130,7 @@ template <MathScalar T> struct Circle
 };
 
 // Capsule (2D) — a "stadium" / discorectangle: segment a→b with a swept radius.
-template <MathScalar T> struct Capsule2
+template <MathValue T> struct Capsule2
 {
     Vec2<T> a{};
     Vec2<T> b{};
@@ -1145,7 +1146,7 @@ template <MathScalar T> struct Capsule2
 // Cylinder (2D) — a "thick segment" with FLAT ends: the rectangle of half-width
 // `radius` swept along a→b (the 2D peer of `Cylinder3`; an oriented rectangle
 // parameterised as axis + half-width, vs `OBB2`'s center + half-extents form).
-template <MathScalar T> struct Cylinder2
+template <MathValue T> struct Cylinder2
 {
     Vec2<T> a{};
     Vec2<T> b{};
@@ -1159,7 +1160,7 @@ template <MathScalar T> struct Cylinder2
 };
 
 // Triangle (2D).
-template <MathScalar T> struct Triangle2
+template <MathValue T> struct Triangle2
 {
     Vec2<T> a{};
     Vec2<T> b{};
@@ -1174,40 +1175,40 @@ template <MathScalar T> struct Triangle2
 
 // ---- Equality (2D) ---------------------------------------------------------
 
-template <MathScalar T> [[nodiscard]] constexpr bool operator==(const Line2<T>& lhs, const Line2<T>& rhs) noexcept
+template <MathValue T> [[nodiscard]] constexpr bool operator==(const Line2<T>& lhs, const Line2<T>& rhs) noexcept
 {
     return lhs.point == rhs.point && lhs.direction == rhs.direction;
 }
-template <MathScalar T> [[nodiscard]] constexpr bool operator==(const Segment2<T>& lhs, const Segment2<T>& rhs) noexcept
+template <MathValue T> [[nodiscard]] constexpr bool operator==(const Segment2<T>& lhs, const Segment2<T>& rhs) noexcept
 {
     return lhs.a == rhs.a && lhs.b == rhs.b;
 }
-template <MathScalar T> [[nodiscard]] constexpr bool operator==(const Ray2<T>& lhs, const Ray2<T>& rhs) noexcept
+template <MathValue T> [[nodiscard]] constexpr bool operator==(const Ray2<T>& lhs, const Ray2<T>& rhs) noexcept
 {
     return lhs.origin == rhs.origin && lhs.direction == rhs.direction;
 }
-template <MathScalar T> [[nodiscard]] constexpr bool operator==(const AABB2<T>& lhs, const AABB2<T>& rhs) noexcept
+template <MathValue T> [[nodiscard]] constexpr bool operator==(const AABB2<T>& lhs, const AABB2<T>& rhs) noexcept
 {
     return lhs.min == rhs.min && lhs.max == rhs.max;
 }
-template <MathScalar T> [[nodiscard]] constexpr bool operator==(const OBB2<T>& lhs, const OBB2<T>& rhs) noexcept
+template <MathValue T> [[nodiscard]] constexpr bool operator==(const OBB2<T>& lhs, const OBB2<T>& rhs) noexcept
 {
     return lhs.center == rhs.center && lhs.half_extents == rhs.half_extents && lhs.orientation == rhs.orientation;
 }
-template <MathScalar T> [[nodiscard]] constexpr bool operator==(const Circle<T>& lhs, const Circle<T>& rhs) noexcept
+template <MathValue T> [[nodiscard]] constexpr bool operator==(const Circle<T>& lhs, const Circle<T>& rhs) noexcept
 {
     return lhs.center == rhs.center && lhs.radius == rhs.radius;
 }
-template <MathScalar T> [[nodiscard]] constexpr bool operator==(const Capsule2<T>& lhs, const Capsule2<T>& rhs) noexcept
+template <MathValue T> [[nodiscard]] constexpr bool operator==(const Capsule2<T>& lhs, const Capsule2<T>& rhs) noexcept
 {
     return lhs.a == rhs.a && lhs.b == rhs.b && lhs.radius == rhs.radius;
 }
-template <MathScalar T>
+template <MathValue T>
 [[nodiscard]] constexpr bool operator==(const Cylinder2<T>& lhs, const Cylinder2<T>& rhs) noexcept
 {
     return lhs.a == rhs.a && lhs.b == rhs.b && lhs.radius == rhs.radius;
 }
-template <MathScalar T>
+template <MathValue T>
 [[nodiscard]] constexpr bool operator==(const Triangle2<T>& lhs, const Triangle2<T>& rhs) noexcept
 {
     return lhs.a == rhs.a && lhs.b == rhs.b && lhs.c == rhs.c;
@@ -1215,44 +1216,44 @@ template <MathScalar T>
 
 // ---- 2D helpers (peers of the 3D Ray/AABB/Sphere/Triangle helpers) ---------
 
-template <MathScalar T> [[nodiscard]] constexpr Vec2<T> point_at(const Ray2<T>& ray, T t) noexcept
+template <MathValue T> [[nodiscard]] constexpr Vec2<T> point_at(const Ray2<T>& ray, T t) noexcept
 {
     return ray.origin + ray.direction * t;
 }
 
-template <MathScalar T> [[nodiscard]] constexpr Vec2<T> center(const AABB2<T>& bounds) noexcept
+template <MathValue T> [[nodiscard]] constexpr Vec2<T> center(const AABB2<T>& bounds) noexcept
 {
     return (bounds.min + bounds.max) * static_cast<T>(0.5);
 }
-template <MathScalar T> [[nodiscard]] constexpr Vec2<T> extents(const AABB2<T>& bounds) noexcept
+template <MathValue T> [[nodiscard]] constexpr Vec2<T> extents(const AABB2<T>& bounds) noexcept
 {
     return (bounds.max - bounds.min) * static_cast<T>(0.5);
 }
-template <MathScalar T> [[nodiscard]] constexpr bool contains(const AABB2<T>& bounds, const Vec2<T>& point) noexcept
+template <MathValue T> [[nodiscard]] constexpr bool contains(const AABB2<T>& bounds, const Vec2<T>& point) noexcept
 {
     return point.x >= bounds.min.x && point.x <= bounds.max.x && point.y >= bounds.min.y && point.y <= bounds.max.y;
 }
-template <MathScalar T> [[nodiscard]] constexpr bool intersects(const AABB2<T>& lhs, const AABB2<T>& rhs) noexcept
+template <MathValue T> [[nodiscard]] constexpr bool intersects(const AABB2<T>& lhs, const AABB2<T>& rhs) noexcept
 {
     return lhs.min.x <= rhs.max.x && lhs.max.x >= rhs.min.x && lhs.min.y <= rhs.max.y && lhs.max.y >= rhs.min.y;
 }
-template <MathScalar T>
+template <MathValue T>
 [[nodiscard]] constexpr Vec2<T> positive_vertex(const AABB2<T>& bounds, const Vec2<T>& normal) noexcept
 {
     return Vec2<T>(normal.x >= static_cast<T>(0) ? bounds.max.x : bounds.min.x,
                    normal.y >= static_cast<T>(0) ? bounds.max.y : bounds.min.y);
 }
 
-template <MathScalar T> [[nodiscard]] constexpr bool contains(const Circle<T>& circle, const Vec2<T>& point) noexcept
+template <MathValue T> [[nodiscard]] constexpr bool contains(const Circle<T>& circle, const Vec2<T>& point) noexcept
 {
     return crd::math::distance_squared(circle.center, point) <= circle.radius * circle.radius;
 }
-template <MathScalar T> [[nodiscard]] constexpr bool intersects(const Circle<T>& lhs, const Circle<T>& rhs) noexcept
+template <MathValue T> [[nodiscard]] constexpr bool intersects(const Circle<T>& lhs, const Circle<T>& rhs) noexcept
 {
     const T r = lhs.radius + rhs.radius;
     return crd::math::distance_squared(lhs.center, rhs.center) <= r * r;
 }
-template <MathScalar T>
+template <MathValue T>
 [[nodiscard]] constexpr bool intersects(const AABB2<T>& bounds, const Circle<T>& circle) noexcept
 {
     const Vec2<T> p(crd::math::clamp(circle.center.x, bounds.min.x, bounds.max.x),
@@ -1260,18 +1261,18 @@ template <MathScalar T>
     return crd::math::distance_squared(p, circle.center) <= circle.radius * circle.radius;
 }
 
-template <MathScalar T> [[nodiscard]] constexpr Vec2<T> centroid(const Triangle2<T>& tri) noexcept
+template <MathValue T> [[nodiscard]] constexpr Vec2<T> centroid(const Triangle2<T>& tri) noexcept
 {
     return (tri.a + tri.b + tri.c) / static_cast<T>(3);
 }
 // Signed area — positive when (a, b, c) wind counter-clockwise.
-template <MathScalar T> [[nodiscard]] constexpr T signed_area(const Triangle2<T>& tri) noexcept
+template <MathValue T> [[nodiscard]] constexpr T signed_area(const Triangle2<T>& tri) noexcept
 {
     return static_cast<T>(0.5) * crd::math::cross(tri.b - tri.a, tri.c - tri.a);
 }
 // Barycentric coordinates (u, v, w) of `point` w.r.t. `tri` — same projection
 // form as the 3D `barycentric`, valid for any non-degenerate triangle.
-template <MathScalar T>
+template <MathValue T>
 [[nodiscard]] constexpr Vec3<T> barycentric(const Triangle2<T>& tri, const Vec2<T>& point) noexcept
 {
     const Vec2<T> v0 = tri.b - tri.a;
@@ -1288,7 +1289,7 @@ template <MathScalar T>
     const T w = (d00 * d21 - d01 * d20) / denom;
     return Vec3<T>(static_cast<T>(1) - v - w, v, w);
 }
-template <MathScalar T>
+template <MathValue T>
 [[nodiscard]] constexpr bool contains(const Triangle2<T>& tri, const Vec2<T>& point,
                                       T epsilon = crd::math::default_epsilon<T>()) noexcept
 {

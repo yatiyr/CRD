@@ -47,6 +47,7 @@ set(CRDI_GUI_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/include/crd/imgui/imgui_layer.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/include/crd/imgui/log_channel.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/include/crd/imgui/settings.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/crd/imgui/unit_preferences_inspector.hpp  # v0d-6
 )
 
 add_library(crd-imgui STATIC
@@ -73,6 +74,7 @@ target_link_libraries(crd-imgui
         crd-rhi-vulkan
         crd-platform
         crd-log
+        crd-units  # v0d-6: unit_preferences_inspector consumes UnitPreferences
     PRIVATE
         Vulkan::Vulkan
         glfw

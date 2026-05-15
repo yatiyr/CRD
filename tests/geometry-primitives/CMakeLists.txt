@@ -12,6 +12,7 @@ add_executable(crd-geometry-primitives-tests
     test_convex_hull_view.cpp
     test_validation.cpp
     test_predicates.cpp
+    test_queries_typed.cpp  # v0d-2
 )
 
 target_include_directories(crd-geometry-primitives-tests PRIVATE
@@ -21,6 +22,7 @@ target_include_directories(crd-geometry-primitives-tests PRIVATE
 target_link_libraries(crd-geometry-primitives-tests PRIVATE
     crd-core
     crd-math                  # Vec3f/Mat3f/Mat4f + approx_equal_abs etc.
+    crd-units                 # v0d-2 typed queries
     crd-geometry-primitives
     Catch2::Catch2WithMain
 )

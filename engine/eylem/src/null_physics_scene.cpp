@@ -27,9 +27,9 @@ public:
 
     [[nodiscard]] const PhysicsConfig& config() const noexcept override { return m_config; }
 
-    void set_gravity(crd::math::Vec3f g) noexcept override { m_config.gravity = g; }
+    void set_gravity(crd::math::Vec3<crd::units::Acceleration32> g) noexcept override { m_config.gravity = g; }
 
-    [[nodiscard]] crd::math::Vec3f gravity() const noexcept override { return m_config.gravity; }
+    [[nodiscard]] crd::math::Vec3<crd::units::Acceleration32> gravity() const noexcept override { return m_config.gravity; }
 
     [[nodiscard]] BodyId add_body(const RigidBody& body) override
     {
@@ -168,11 +168,13 @@ public:
         }
     }
 
-    void apply_force(BodyId /*id*/, crd::math::Vec3f /*force*/) override {}
-    void apply_torque(BodyId /*id*/, crd::math::Vec3f /*torque*/) override {}
-    void apply_impulse(BodyId /*id*/, crd::math::Vec3f /*impulse*/, crd::math::Vec3f /*world_pos*/) override {}
+    void apply_force(BodyId /*id*/, crd::math::Vec3<crd::units::Force32> /*force*/) override {}
+    void apply_torque(BodyId /*id*/, crd::math::Vec3<crd::units::Torque32> /*torque*/) override {}
+    void apply_impulse(BodyId /*id*/,
+                       crd::math::Vec3<crd::units::Momentum32> /*impulse*/,
+                       crd::math::Vec3<crd::units::Length32>   /*world_pos*/) override {}
 
-    void step(crd::f32 /*dt*/) override
+    void step(crd::units::Duration32 /*dt*/) override
     {
         // No integration in the null impl. Real impl in v1b+ runs the SI solver.
     }
@@ -203,9 +205,10 @@ public:
         return {};
     }
 
-    [[nodiscard]] std::optional<RaycastHit> raycast(crd::math::Vec3f /*origin*/,
-                                                    crd::math::Vec3f /*direction*/,
-                                                    crd::f32         /*max_distance*/) const override
+    [[nodiscard]] std::optional<RaycastHit> raycast(
+        crd::math::Vec3<crd::units::Length32> /*origin*/,
+        crd::math::Vec3f                       /*direction*/,
+        crd::units::Length32                   /*max_distance*/) const override
     {
         return std::nullopt;
     }

@@ -20,8 +20,8 @@ EylemSystem::EylemSystem(BodyPool& body_pool, const crd::eylem::PhysicsConfig& c
 
 void EylemSystem::run(crd::scene::World& world)
 {
-    const crd::f32         dt      = m_config.fixed_dt;
-    const crd::math::Vec3f gravity = m_config.gravity;
+    const crd::units::Duration32                    dt      = m_config.fixed_dt;
+    const crd::math::Vec3<crd::units::Acceleration32> gravity = m_config.gravity;
 
     // Render-interpolation snapshot. Captures the integrator's CURRENT
     // pose (the one the renderer most recently interpolated TOWARDS)
@@ -56,39 +56,34 @@ void EylemSystem::run(crd::scene::World& world)
         // Static (inv_mass == 0) bodies do not integrate. Honours the
         // RigidBody convention from rigid_body.hpp:60 — `inv_mass = 0`
         // marks the body as effectively static for the solver.
-        if (body.inv_mass > 0.0F)
+        if (body.inv_mass.value > 0.0F)
         {
-            // Linear: v += g·dt, p += v·dt. Apply linear damping AFTER
-            // velocity integration so it acts as exponential drag on the
-            // post-gravity velocity (matches Bullet / PhysX convention).
-            body.linear_velocity.x += gravity.x * dt;
-            body.linear_velocity.y += gravity.y * dt;
-            body.linear_velocity.z += gravity.z * dt;
-            const crd::f32 lin_damp_factor = 1.0F - body.linear_damping * dt;
-            body.linear_velocity.x *= lin_damp_factor;
-            body.linear_velocity.y *= lin_damp_factor;
-            body.linear_velocity.z *= lin_damp_factor;
+            // Linear: v += g·dt, p += v·dt. End-to-end typed under
+            // ADR-0078 §3 D20 — `Acceleration * Time = Velocity` and
+            // `Velocity * Time = Length` close at compile time. Damping
+            // factor is a dimensionless rate (1/s · s = 1); compute it
+            // raw and apply via Vec<T> * scalar.
+            body.linear_velocity += gravity * dt;
+            const crd::f32 lin_damp_factor = 1.0F - body.linear_damping * dt.value;
+            body.linear_velocity = body.linear_velocity * lin_damp_factor;
 
-            body.position.x += body.linear_velocity.x * dt;
-            body.position.y += body.linear_velocity.y * dt;
-            body.position.z += body.linear_velocity.z * dt;
+            body.position += body.linear_velocity * dt;
 
             // Angular: ω damping, then small-angle quaternion update.
             //   q_new = normalize(q + 0.5 · dt · (ω_quat · q))
             // where ω_quat = (ωx, ωy, ωz, 0). Standard explicit Euler on
-            // the quaternion derivative q̇ = 0.5 · ω_quat · q. Sufficient
-            // for v1b-c's "bodies fall through the world" honest scope;
-            // v1e SI solver replaces this with a substepped integrator.
-            const crd::f32 ang_damp_factor = 1.0F - body.angular_damping * dt;
-            body.angular_velocity.x *= ang_damp_factor;
-            body.angular_velocity.y *= ang_damp_factor;
-            body.angular_velocity.z *= ang_damp_factor;
+            // the quaternion derivative q̇ = 0.5 · ω_quat · q. The Quat
+            // representation is unit-norm and dimensionless; angular
+            // velocity escapes via `.value` at the boundary into the
+            // dimensionless quaternion arithmetic.
+            const crd::f32 ang_damp_factor = 1.0F - body.angular_damping * dt.value;
+            body.angular_velocity = body.angular_velocity * ang_damp_factor;
 
-            const crd::f32 half_dt = 0.5F * dt;
+            const crd::f32 half_dt = 0.5F * dt.value;
             const crd::math::Quatf omega_q{
-                body.angular_velocity.x,
-                body.angular_velocity.y,
-                body.angular_velocity.z,
+                body.angular_velocity.x.value,
+                body.angular_velocity.y.value,
+                body.angular_velocity.z.value,
                 0.0F};
             const crd::math::Quatf q_dot = omega_q * body.rotation;
             crd::math::Quatf       q_new{
@@ -115,7 +110,10 @@ void EylemSystem::run(crd::scene::World& world)
         // PreRender.
         if (rbc.sync_to_transform != 0U)
         {
-            world.set_translation(entity, body.position);
+            // World::set_translation currently takes raw Vec3f — bridge
+            // through to_raw_vec. Once World gains a typed overload (v0d
+            // adoption C), this becomes a direct typed assign.
+            world.set_translation(entity, crd::math::to_raw_vec(body.position));
             world.set_rotation_quat(entity, body.rotation);
         }
         else
@@ -125,11 +123,8 @@ void EylemSystem::run(crd::scene::World& world)
             // system in the same phase sees the integrated pose without
             // routing through World setters. The caller has assumed
             // responsibility for whatever downstream propagation needs.
-            // v0b-3: bridge raw eylem RigidBody.position (Vec3f) to typed
-            // scene::Transform.translation (Vec3<Length<f32>>). When eylem
-            // v0c retypes its own surface, this becomes a direct assign.
-            transform.translation =
-                crd::math::from_raw_vec<crd::units::dim::Length>(body.position);
+            // Both sides are now typed Vec3<Length32> — direct assign.
+            transform.translation = body.position;
             transform.rotation    = body.rotation;
         }
     }

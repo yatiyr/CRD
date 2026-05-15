@@ -65,7 +65,9 @@ void visualize_rigid_body(const void*                       component,
     }
 
     const crd::eylem::RigidBody body = g_body_pool->read(rbc->body_id);
-    const crd::math::Vec3f      v    = body.linear_velocity;
+    // v0c-1 typed: body.linear_velocity is Vec3<Velocity32>; viz speed
+    // reduction is dimensionless raw — escape via .value at the boundary.
+    const crd::math::Vec3f      v    = crd::math::to_raw_vec(body.linear_velocity);
     const crd::f32              speed =
         std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
 

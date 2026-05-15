@@ -39,6 +39,7 @@
 namespace crd::geometry::primitives
 {
 using crd::math::MathScalar;
+using crd::math::MathValue;
 
 // ---- Vectors ---------------------------------------------------------------
 

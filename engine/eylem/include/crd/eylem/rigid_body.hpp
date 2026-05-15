@@ -7,6 +7,7 @@
 #include <crd/core/types.hpp>
 #include <crd/math/quat.hpp>
 #include <crd/math/vec.hpp>
+#include <crd/units/quantity_aliases.hpp>
 
 namespace crd::eylem
 {
@@ -51,24 +52,33 @@ static_assert(sizeof(RigidBodyFlags) == 4, "RigidBodyFlags must pack to 4 bytes"
 // v1c-v1e diagonalise at body construction.
 struct RigidBody
 {
-    crd::math::Vec3f position{0.0F, 0.0F, 0.0F};
-    crd::math::Quatf rotation{0.0F, 0.0F, 0.0F, 1.0F};
+    // Dimensional typing (ADR-0078 §3 D20). Precision-tier orthogonal —
+    // sizeof(Quantity<D, f32>) == sizeof(f32), so the API freeze size
+    // (80 B) is preserved.
+    crd::math::Vec3<crd::units::Length32>           position{};
+    crd::math::Quatf                                 rotation{0.0F, 0.0F, 0.0F, 1.0F};
 
-    crd::math::Vec3f linear_velocity{0.0F, 0.0F, 0.0F};
-    crd::math::Vec3f angular_velocity{0.0F, 0.0F, 0.0F};
+    crd::math::Vec3<crd::units::Velocity32>         linear_velocity{};
+    crd::math::Vec3<crd::units::AngularVelocity32>  angular_velocity{};
 
-    // 1 / mass. 0 == infinite mass (Static / Kinematic).
-    crd::f32         inv_mass = 0.0F;
+    // 1 / mass. 0 == infinite mass (Static / Kinematic). Typing as
+    // InverseMass32 (= Quantity<DimInv<Mass>, f32>) means
+    // `Force * inv_mass -> Acceleration` checks at compile time.
+    crd::units::InverseMass32                       inv_mass{0.0F};
     // diag(1/I_xx, 1/I_yy, 1/I_zz) in body space. 0 == infinite inertia.
-    crd::math::Vec3f inv_inertia{0.0F, 0.0F, 0.0F};
+    crd::math::Vec3<crd::units::InverseMomentOfInertia32> inv_inertia{};
 
+    // Per-frame exponential decay multipliers — dimensionless rates
+    // (consumer: v *= (1 - linear_damping * dt) — pure scalar product
+    // where dt's units cancel the rate's units).
     crd::f32 linear_damping  = 0.05F;
     crd::f32 angular_damping = 0.05F;
 
     RigidBodyFlags flags{}; // type defaults to Static (RigidBodyType::Static == 0)
 };
 
-// API surface freeze pin (ADR-0062 §15).
+// API surface freeze pin (ADR-0062 §15) preserved across the v0c-1 typing
+// pass per ADR-0078 §3 D20.
 //   pos(12) + rot(16) + lin_vel(12) + ang_vel(12) + inv_mass(4)
 // + inv_inertia(12) + lin_damp(4) + ang_damp(4) + flags(4) = 80
 static_assert(sizeof(RigidBody) == 80, "RigidBody must pack to 80 bytes");

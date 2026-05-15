@@ -154,8 +154,8 @@ public:
     // validity via component-storage iteration.
     struct PrevState
     {
-        crd::math::Vec3f position;
-        crd::math::Quatf rotation;
+        crd::math::Vec3<crd::units::Length32> position;
+        crd::math::Quatf                       rotation;
     };
     [[nodiscard]] PrevState read_prev(BodyId id) const noexcept;
 

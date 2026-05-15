@@ -55,9 +55,11 @@ template <typename T = crd::f32> using Acceleration      = Quantity<dim::Acceler
 template <typename T = crd::f32> using Jerk              = Quantity<dim::Jerk, T>;
 
 // Inertia
-template <typename T = crd::f32> using Momentum          = Quantity<dim::Momentum, T>;
-template <typename T = crd::f32> using MomentOfInertia   = Quantity<dim::MomentOfInertia, T>;
-template <typename T = crd::f32> using AngularMomentum   = Quantity<dim::AngularMomentum, T>;
+template <typename T = crd::f32> using Momentum               = Quantity<dim::Momentum, T>;
+template <typename T = crd::f32> using MomentOfInertia        = Quantity<dim::MomentOfInertia, T>;
+template <typename T = crd::f32> using AngularMomentum        = Quantity<dim::AngularMomentum, T>;
+template <typename T = crd::f32> using InverseMass            = Quantity<dim::InverseMass, T>;
+template <typename T = crd::f32> using InverseMomentOfInertia = Quantity<dim::InverseMomentOfInertia, T>;
 
 // Force / pressure / energy / power
 template <typename T = crd::f32> using Force             = Quantity<dim::Force, T>;
@@ -131,5 +133,12 @@ using Current32     = Current<crd::f32>;     using Current64     = Current<crd::
 using Resistance32  = Resistance<crd::f32>;  using Resistance64  = Resistance<crd::f64>;
 
 using AngularVelocity32 = AngularVelocity<crd::f32>; using AngularVelocity64 = AngularVelocity<crd::f64>;
+using AngularAccel32    = AngularAccel<crd::f32>;    using AngularAccel64    = AngularAccel<crd::f64>;
+using Momentum32        = Momentum<crd::f32>;        using Momentum64        = Momentum<crd::f64>;
+using MomentOfInertia32 = MomentOfInertia<crd::f32>; using MomentOfInertia64 = MomentOfInertia<crd::f64>;
+using InverseMass32     = InverseMass<crd::f32>;     using InverseMass64     = InverseMass<crd::f64>;
+using InverseMomentOfInertia32 = InverseMomentOfInertia<crd::f32>;
+using InverseMomentOfInertia64 = InverseMomentOfInertia<crd::f64>;
+using Duration32 = Time<crd::f32>; // matches Time32; explicit name for force/integrator dt
 
 } // namespace crd::units

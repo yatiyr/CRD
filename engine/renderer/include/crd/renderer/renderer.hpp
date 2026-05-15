@@ -25,10 +25,23 @@ struct Camera
 
 // Per-frame data shared between Renderer and IRenderPath.
 // Passed to build_frame() and forwarded to IRenderPath::build() each frame.
+//
+// ── Dimensional-type boundary (ADR-0078 §4 D28 — v0d-3) ──────────────
+// `crd-renderer` consumes RAW `Mat4f` / `Vec3f` exclusively. Dimensional
+// `Quantity<Length, ...>` lives ONE LAYER ABOVE in `crd-scene`
+// (`scene::Transform::translation = Vec3<Length32>`). Bridging happens
+// in `scene::TransformPropagation`, which builds the GPU-bound `Mat4f`
+// `world` matrix via `from_trs(to_raw_vec(translation), rotation, scale)`.
+//
+// Consumers of the renderer pass `Mat4f` directly. Anything that wants
+// to author camera position with typed Length32 must strip via
+// `to_raw_vec()` at the call boundary. The renderer NEVER imports
+// `crd/units/*` and NEVER imports `crd-scene::Transform` — this keeps
+// the SIMD / GPU upload paths bit-identical to pre-units build.
 struct FrameContext
 {
     Camera camera;
-    crd::math::Vec3f camera_position{}; // world-space camera origin; used for depth sorting
+    crd::math::Vec3f camera_position{}; // world-space camera origin (metres by convention); used for depth sorting
     rhi::Extent2D viewport{};
     crd::u32 frame_index = 0;           // monotonically increasing frame counter
 };

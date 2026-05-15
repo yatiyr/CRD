@@ -25,6 +25,7 @@
 namespace crd::geometry::primitives
 {
 using crd::math::MathScalar;
+using crd::math::MathValue;
 
 // Generic distance / position tolerance — "two points are the same place",
 // "this segment has length ~0". The geometry analog of `default_epsilon`.

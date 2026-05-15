@@ -41,6 +41,20 @@ TEST_CASE("eylem v1a strong-type IDs are 4 bytes and trivially copyable", "[eyle
     REQUIRE(ForceFieldComponent{}.composition == FieldComposition::Add);
     REQUIRE(ForceFieldComponent{}.field_id    == 0ULL);
 
+    // ADR-0078 §3 D21 — geometric params are SI Length32. Defaults:
+    //   origin     = (0, 0, 0)   m
+    //   radius_min = 0.01        m
+    //   radius_max = 1.0         m
+    //   noise_scale= 1.0         m  (wavelength)
+    const ForceFieldComponent default_field{};
+    REQUIRE(default_field.origin.x.value     == 0.0F);
+    REQUIRE(default_field.radius_min.value   == 0.01F);
+    REQUIRE(default_field.radius_max.value   == 1.0F);
+    REQUIRE(default_field.noise_scale.value  == 1.0F);
+    // Polymorphic-per-formula raw f32 fields stay raw.
+    REQUIRE(default_field.magnitude == 1.0F);
+    REQUIRE(default_field.polarity  == 1.0F);
+
     STATIC_REQUIRE(std::is_trivially_copyable_v<BodyId>);
     STATIC_REQUIRE(std::is_trivially_copyable_v<ColliderId>);
     STATIC_REQUIRE(std::is_trivially_copyable_v<JointId>);
@@ -225,7 +239,7 @@ TEST_CASE("eylem v1a RigidBody POD layout + flag packing pinned", "[eylem][v1a][
     STATIC_REQUIRE(static_cast<int>(RigidBodyType::Dynamic)   == 2);
 
     constexpr RigidBody b{};
-    REQUIRE(b.inv_mass        == 0.0F);  // default = static
+    REQUIRE(b.inv_mass.value == 0.0F);  // default = static
     REQUIRE(b.linear_damping  == 0.05F);
     REQUIRE(b.angular_damping == 0.05F);
     REQUIRE(b.flags.type      == 0U);    // RigidBodyType::Static
@@ -254,17 +268,17 @@ TEST_CASE("eylem v1a Joint layout + JointType pinned", "[eylem][v1a][freeze]")
 TEST_CASE("eylem v1a PhysicsConfig defaults match documented contract", "[eylem][v1a][freeze]")
 {
     constexpr PhysicsConfig c{};
-    REQUIRE(c.gravity.y                  == -9.81F);
-    REQUIRE(c.fixed_dt                   == 1.0F / 60.0F);
+    REQUIRE(c.gravity.y.value == -9.81F);
+    REQUIRE(c.fixed_dt.value                   == 1.0F / 60.0F);
     REQUIRE(c.velocity_iterations        == 8U);
     REQUIRE(c.position_iterations        == 3U);
     REQUIRE(c.max_bodies                 == 65536U);
     REQUIRE(c.max_contacts_per_pair      == 4U);
-    REQUIRE(c.contact_offset             == 0.02F);
-    REQUIRE(c.contact_breaking_threshold == 0.02F);
-    REQUIRE(c.sleep_linear_threshold     == 0.01F);
-    REQUIRE(c.sleep_angular_threshold    == 0.01F);
-    REQUIRE(c.sleep_time_threshold       == 0.5F);
+    REQUIRE(c.contact_offset.value             == 0.02F);
+    REQUIRE(c.contact_breaking_threshold.value == 0.02F);
+    REQUIRE(c.sleep_linear_threshold.value     == 0.01F);
+    REQUIRE(c.sleep_angular_threshold.value    == 0.01F);
+    REQUIRE(c.sleep_time_threshold.value       == 0.5F);
     REQUIRE(c.determinism                == DeterminismMode::CrossPlatform);
     REQUIRE(c.warm_starting_enabled);
     REQUIRE_FALSE(c.ccd_enabled);
@@ -277,20 +291,20 @@ TEST_CASE("eylem v1a PhysicsConfig defaults match documented contract", "[eylem]
 TEST_CASE("eylem v1a NullPhysicsScene constructs and reports config", "[eylem][v1a][null]")
 {
     PhysicsConfig cfg{};
-    cfg.gravity = {0.0F, -3.71F, 0.0F}; // Mars
+    cfg.gravity = crd::math::from_raw_vec<crd::units::dim::Acceleration>(crd::math::Vec3f{0.0F, -3.71F, 0.0F}); // Mars
     auto scene = make_null_physics_scene(cfg);
     REQUIRE(scene != nullptr);
-    REQUIRE(scene->gravity().y == -3.71F);
+    REQUIRE(scene->gravity().y.value == -3.71F);
     REQUIRE(scene->config().velocity_iterations == 8U);
 }
 
 TEST_CASE("eylem v1a NullPhysicsScene set_gravity round-trips", "[eylem][v1a][null]")
 {
     auto scene = make_null_physics_scene(PhysicsConfig{});
-    scene->set_gravity({1.0F, 2.0F, 3.0F});
-    REQUIRE(scene->gravity().x == 1.0F);
-    REQUIRE(scene->gravity().y == 2.0F);
-    REQUIRE(scene->gravity().z == 3.0F);
+    scene->set_gravity(crd::math::from_raw_vec<crd::units::dim::Acceleration>(crd::math::Vec3f{1.0F, 2.0F, 3.0F}));
+    REQUIRE(scene->gravity().x.value == 1.0F);
+    REQUIRE(scene->gravity().y.value == 2.0F);
+    REQUIRE(scene->gravity().z.value == 3.0F);
 }
 
 TEST_CASE("eylem v1a NullPhysicsScene add_body / has_body / body_state round-trip", "[eylem][v1a][null]")
@@ -299,8 +313,8 @@ TEST_CASE("eylem v1a NullPhysicsScene add_body / has_body / body_state round-tri
     REQUIRE(scene->body_count() == 0);
 
     RigidBody b{};
-    b.position = {7.0F, 8.0F, 9.0F};
-    b.inv_mass = 0.5F; // 2 kg dynamic body
+    b.position = crd::math::from_raw_vec<crd::units::dim::Length>(crd::math::Vec3f{7.0F, 8.0F, 9.0F});
+    b.inv_mass = crd::units::InverseMass32{0.5F}; // 2 kg dynamic body
 
     const BodyId id = scene->add_body(b);
     REQUIRE_FALSE(id.is_null());
@@ -308,10 +322,10 @@ TEST_CASE("eylem v1a NullPhysicsScene add_body / has_body / body_state round-tri
     REQUIRE(scene->body_count() == 1);
 
     const RigidBody read = scene->body_state(id);
-    REQUIRE(read.position.x == 7.0F);
-    REQUIRE(read.position.y == 8.0F);
-    REQUIRE(read.position.z == 9.0F);
-    REQUIRE(read.inv_mass   == 0.5F);
+    REQUIRE(read.position.x.value == 7.0F);
+    REQUIRE(read.position.y.value == 8.0F);
+    REQUIRE(read.position.z.value == 9.0F);
+    REQUIRE(read.inv_mass.value   == 0.5F);
 
     // Null IDs report as not-present.
     REQUIRE_FALSE(scene->has_body(BodyId::null()));
@@ -718,12 +732,15 @@ TEST_CASE("eylem v1a NullPhysicsScene step + raycast + force/torque/impulse no-o
     const BodyId b = scene->add_body(RigidBody{});
 
     // No exceptions, no asserts — these are stub no-ops in v1a.
-    scene->apply_force(b,   {1.0F, 0.0F, 0.0F});
-    scene->apply_torque(b,  {0.0F, 1.0F, 0.0F});
-    scene->apply_impulse(b, {0.0F, 0.0F, 1.0F}, {0.0F, 0.0F, 0.0F});
-    scene->step(1.0F / 60.0F);
+    scene->apply_force(b, crd::math::from_raw_vec<crd::units::dim::Force>(crd::math::Vec3f{1.0F, 0.0F, 0.0F}));
+    scene->apply_torque(b, crd::math::from_raw_vec<crd::units::dim::Torque>(crd::math::Vec3f{0.0F, 1.0F, 0.0F}));
+    scene->apply_impulse(b, crd::math::from_raw_vec<crd::units::dim::Momentum>(crd::math::Vec3f{0.0F, 0.0F, 1.0F}), crd::math::from_raw_vec<crd::units::dim::Length>(crd::math::Vec3f{0.0F, 0.0F, 0.0F}));
+    scene->step(crd::units::Duration32{1.0F / 60.0F});
 
     // Raycast in the null impl always misses.
-    const auto hit = scene->raycast({0.0F, 0.0F, 0.0F}, {0.0F, -1.0F, 0.0F}, /*max_distance=*/100.0F);
+    const auto hit = scene->raycast(
+        crd::math::from_raw_vec<crd::units::dim::Length>(crd::math::Vec3f{0.0F, 0.0F, 0.0F}),
+        crd::math::Vec3f{0.0F, -1.0F, 0.0F},
+        crd::units::Length32{100.0F});
     REQUIRE_FALSE(hit.has_value());
 }

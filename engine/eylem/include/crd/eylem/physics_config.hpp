@@ -7,6 +7,7 @@
 #include <crd/core/types.hpp>
 #include <crd/eylem/types.hpp>
 #include <crd/math/vec.hpp>
+#include <crd/units/quantity_aliases.hpp>
 
 namespace crd::memory
 {
@@ -17,12 +18,16 @@ namespace crd::eylem
 {
 struct PhysicsConfig
 {
-    // World gravity, m/s^2. Default is Earth Y-up.
-    crd::math::Vec3f gravity{0.0F, -9.81F, 0.0F};
+    // World gravity (m/s²). Default = Earth Y-up.
+    crd::math::Vec3<crd::units::Acceleration32> gravity{
+        crd::units::Acceleration32{0.0F},
+        crd::units::Acceleration32{-9.81F},
+        crd::units::Acceleration32{0.0F}};
 
-    // Fixed timestep (seconds). The driver passes integer multiples of this
-    // to step(); a sub-frame accumulator handles the remainder. 1/60 = 60 Hz.
-    crd::f32 fixed_dt = 1.0F / 60.0F;
+    // Fixed timestep. The driver passes integer multiples of this to
+    // step(); a sub-frame accumulator handles the remainder. Default
+    // 1/60 s = 60 Hz.
+    crd::units::Duration32 fixed_dt{1.0F / 60.0F};
 
     // Sequential Impulses iteration counts. Higher = more constraint
     // accuracy, lower throughput. Defaults from Catto GDC 2005.
@@ -34,15 +39,15 @@ struct PhysicsConfig
     crd::u32 max_bodies              = 65536;
     crd::u32 max_contacts_per_pair   = 4;
 
-    // Contact cache parameters.
-    crd::f32 contact_offset             = 0.02F; // separation distance for pre-contact
-    crd::f32 contact_breaking_threshold = 0.02F; // distance at which a cached contact is dropped
+    // Contact cache parameters (metres).
+    crd::units::Length32 contact_offset            {0.02F}; // pre-contact separation
+    crd::units::Length32 contact_breaking_threshold{0.02F}; // drop cached contacts
 
     // Sleep heuristics. A body whose linear and angular speeds stay under
     // the thresholds for sleep_time_threshold seconds is put to sleep.
-    crd::f32 sleep_linear_threshold  = 0.01F;
-    crd::f32 sleep_angular_threshold = 0.01F;
-    crd::f32 sleep_time_threshold    = 0.5F;
+    crd::units::Velocity32        sleep_linear_threshold {0.01F};
+    crd::units::AngularVelocity32 sleep_angular_threshold{0.01F};
+    crd::units::Duration32        sleep_time_threshold   {0.5F};
 
     // Determinism contract (ADR-0063).
     DeterminismMode determinism = DeterminismMode::CrossPlatform;

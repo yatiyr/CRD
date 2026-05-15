@@ -116,8 +116,8 @@ TEST_CASE("eylem v1b-c EylemSystem integrates motion under gravity",
 
     BodyPool      pool{crd::memory::default_allocator(), 64U};
     PhysicsConfig cfg{};
-    cfg.fixed_dt = dt;
-    cfg.gravity  = crd::math::Vec3f{0.0F, g, 0.0F};
+    cfg.fixed_dt = crd::units::Duration32{dt};
+    cfg.gravity = crd::math::from_raw_vec<crd::units::dim::Acceleration>(crd::math::Vec3f{0.0F, g, 0.0F});
     EylemSystem  system{pool, cfg};
 
     crd::scene::World world{crd::memory::default_allocator()};
@@ -128,8 +128,8 @@ TEST_CASE("eylem v1b-c EylemSystem integrates motion under gravity",
     // Body: at origin, dynamic (inv_mass = 1), zero damping (so we can
     // assert the closed form).
     RigidBody body{};
-    body.position        = {0.0F, 0.0F, 0.0F};
-    body.inv_mass        = 1.0F;
+    body.position = crd::math::from_raw_vec<crd::units::dim::Length>(crd::math::Vec3f{0.0F, 0.0F, 0.0F});
+    body.inv_mass = crd::units::InverseMass32{1.0F};
     body.linear_damping  = 0.0F;
     body.angular_damping = 0.0F;
     const crd::eylem::BodyId body_id = pool.insert(body);
@@ -163,8 +163,8 @@ TEST_CASE("eylem v1b-c EylemSystem integrates motion under gravity",
 
     // Pool state should mirror what got synced to Transform.
     const RigidBody read = pool.read(body_id);
-    REQUIRE(std::fabs(read.position.y - expected_y) < 1e-3F);
-    REQUIRE(std::fabs(read.linear_velocity.y - g * dt * static_cast<crd::f32>(nstep)) < 1e-3F);
+    REQUIRE(std::fabs(read.position.y.value - expected_y) < 1e-3F);
+    REQUIRE(std::fabs(read.linear_velocity.y.value - g * dt * static_cast<crd::f32>(nstep)) < 1e-3F);
 }
 
 TEST_CASE("eylem v1b-c EylemSystem under World::step_fixed runs expected substep count",
@@ -183,8 +183,8 @@ TEST_CASE("eylem v1b-c EylemSystem under World::step_fixed runs expected substep
 
     BodyPool      pool{crd::memory::default_allocator(), 64U};
     PhysicsConfig cfg{};
-    cfg.fixed_dt = dt;
-    cfg.gravity  = crd::math::Vec3f{0.0F, g, 0.0F};
+    cfg.fixed_dt = crd::units::Duration32{dt};
+    cfg.gravity = crd::math::from_raw_vec<crd::units::dim::Acceleration>(crd::math::Vec3f{0.0F, g, 0.0F});
 
     crd::scene::World world{crd::memory::default_allocator()};
     world.register_component<crd::scene::Transform>(crd::scene::StorageHint::Archetype);
@@ -193,8 +193,8 @@ TEST_CASE("eylem v1b-c EylemSystem under World::step_fixed runs expected substep
     world.register_system(std::make_unique<EylemSystem>(pool, cfg));
 
     RigidBody body{};
-    body.position        = {0.0F, 0.0F, 0.0F};
-    body.inv_mass        = 1.0F;
+    body.position = crd::math::from_raw_vec<crd::units::dim::Length>(crd::math::Vec3f{0.0F, 0.0F, 0.0F});
+    body.inv_mass = crd::units::InverseMass32{1.0F};
     body.linear_damping  = 0.0F;
     body.angular_damping = 0.0F;
     const crd::eylem::BodyId body_id = pool.insert(body);
@@ -226,8 +226,8 @@ TEST_CASE("eylem v1b-c static body (inv_mass==0) does not integrate",
 {
     BodyPool      pool{crd::memory::default_allocator(), 64U};
     PhysicsConfig cfg{};
-    cfg.fixed_dt = 1.0F / 60.0F;
-    cfg.gravity  = crd::math::Vec3f{0.0F, -9.81F, 0.0F};
+    cfg.fixed_dt = crd::units::Duration32{1.0F / 60.0F};
+    cfg.gravity = crd::math::from_raw_vec<crd::units::dim::Acceleration>(crd::math::Vec3f{0.0F, -9.81F, 0.0F});
     EylemSystem  system{pool, cfg};
 
     crd::scene::World world{crd::memory::default_allocator()};
@@ -237,8 +237,8 @@ TEST_CASE("eylem v1b-c static body (inv_mass==0) does not integrate",
 
     // Static body — inv_mass = 0.
     RigidBody body{};
-    body.position = {1.0F, 2.0F, 3.0F};
-    body.inv_mass = 0.0F;
+    body.position = crd::math::from_raw_vec<crd::units::dim::Length>(crd::math::Vec3f{1.0F, 2.0F, 3.0F});
+    body.inv_mass = crd::units::InverseMass32{0.0F};
     const crd::eylem::BodyId body_id = pool.insert(body);
 
     const auto e = world.spawn();
@@ -253,8 +253,8 @@ TEST_CASE("eylem v1b-c static body (inv_mass==0) does not integrate",
     }
 
     const RigidBody read = pool.read(body_id);
-    REQUIRE(read.position.x == 1.0F);
-    REQUIRE(read.position.y == 2.0F);
-    REQUIRE(read.position.z == 3.0F);
-    REQUIRE(read.linear_velocity.y == 0.0F);
+    REQUIRE(read.position.x.value == 1.0F);
+    REQUIRE(read.position.y.value == 2.0F);
+    REQUIRE(read.position.z.value == 3.0F);
+    REQUIRE(read.linear_velocity.y.value == 0.0F);
 }
