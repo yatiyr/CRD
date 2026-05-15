@@ -22,13 +22,20 @@
 
 ---
 
-**🎯 NEXT — Phase 3.1.7.5 v0b adoption pass A** (~5 days, ~600 LOC):
-- `crd-config` — unit-tagged TOML readers (`length_mm = 25.4` / `mass_kg = 5.0` / etc. parsed into typed `Quantity<>` at the boundary).
-- `crd-scene Transform` — dimensional position / scale / etc. (currently raw f32).
-- glTF cooker — SI normalization on import (glTF specs `KHR_unit`).
-- `Vec<Quantity>` / `Mat<Quantity>` wrappers (deferred from v0a — needs `crd-math` types).
+**Phase 3.1.7.5 v0b adoption pass A ✅ SHIPPED 2026-05-15** (4 sub-slices + close, all 5-config green):
+- **v0b-1 ✅** — `Vec<Quantity>` enablement: `MathValue` concept widens `Vec2`/`Vec3`/`Vec4` to accept `Quantity<D, T>` for element-wise ops; reductions stay on strict `MathScalar`. Precision-suffix aliases (`Length32`/`Length64`/`Mass32`/...). `to_raw_vec` / `from_raw_vec` boundary helpers; `from_trs(Vec3<Quantity>...)` overload. 13 cases / 40 assertions.
+- **v0b-2 ✅** — `crd-config` 13 unit-tagged TOML accessors (`get_length`/`get_mass`/`get_time`/`get_angle`/`get_velocity`/`get_force`/`get_pressure`/`get_energy`/`get_power`/`get_voltage`/`get_current`/`get_frequency`/`get_temperature`). Suffix tables map authoring strings to SI; missing-key returns fallback (not 0). f32 + f64 instantiations. 13 cases / 57 assertions.
+- **v0b-3 ✅** — `scene::Transform::translation` retyped to `Vec3<Length32>`; ~30 call sites across `World::set_local`/`set_translation`, eylem integrator-to-transform sync, glTF scene cooker, eylem-viz visualizers, sandbox ImGui inspector, and tests bridged with `from_raw_vec<dim::Length>` / `.value`.
+- **v0b-4 ✅** — glTF cooker `.meta` `[cook] position_scale` key (cm/mm/in exports converted to SI at cook time); SI sanity-warn at `> 1e6 m`. 12 cases / 15 assertions. Pure-string parser is testable without filesystem.
+- **v0b-close ✅** — ADR-0078 §2 amendment (D15-D19), `docs/systems/units.md` updated with status + boundary stencils, session log `docs/sessions/2026-05-15-units-v0b-adoption-a.md`, full 5-config sweep green (win-debug 1882/1882, win-asan 1882/1882, win-shipping 1795/1795, win-shipping-profile 1877/1877, win-tidy build-clean).
 
-Then **v0c adoption B** (`crd-eylem RigidBody` + integrator + force fields + `crd-geometry-primitives` API-surface re-tag, ~800 LOC), **v0d adoption C** (`crd-renderer` uniform-upload boundary + `crd-resources` cookers + `crd-imgui` user-preferred-unit display + Layer-6 format/parse/UnitPreferences + cross-engine readers + full 17-config sweep close, ~700 LOC). In parallel: D-004 deterministic-replay sandbox; D-005 config/resource hot-reload polish.
+**🎯 NEXT — Phase 3.1.7.5 v0c adoption pass B** (~1 week, ~800 LOC):
+- `crd-eylem` `RigidBody` dimensional — `position`/`linear_velocity`/`linear_acceleration`/`mass`/`inertia`/forces all typed `Quantity<>`.
+- Integrator typed-math (verify `v += a * dt` etc. type-check end-to-end under `Vec<Quantity>` per ADR-0078 D15).
+- Force-field substrate (gravity, drag, custom F = m·a producer interfaces).
+- `crd-geometry-primitives` API-surface re-tag (closest-point / raycast / overlap returning typed distances).
+
+Then **v0d adoption C** (`crd-renderer` uniform-upload boundary + `crd-resources` cookers + `crd-imgui` user-preferred-unit display + Layer-6 full format/parse/UnitPreferences + cross-engine readers + full 17-config sweep close, ~700 LOC). In parallel: D-004 deterministic-replay sandbox; D-005 config/resource hot-reload polish.
 
 Every v0b/c/d slice runs the new **5-config per-slice-check** (win-debug + win-asan + win-shipping + win-shipping-profile + win-tidy) per `feedback_per_slice_run_ctest.md`. The just-shipped profiler is ready to instrument the dimensional-type cost from day 1.
 

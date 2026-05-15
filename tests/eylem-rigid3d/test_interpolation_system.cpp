@@ -128,7 +128,7 @@ TEST_CASE("eylem v1b-e interpolator at alpha=0 emits prev pose", "[eylem][v1b-e]
     const auto* tr = fix.m_world.get_component<crd::scene::Transform>(e);
     REQUIRE(tr != nullptr);
     // Transform should hold the PREV pose (origin), not the curr one.
-    REQUIRE(std::fabs(tr->translation.y - 0.0F) < 1e-6F);
+    REQUIRE(std::fabs(tr->translation.y.value - 0.0F) < 1e-6F);
 }
 
 TEST_CASE("eylem v1b-e interpolator at alpha=0.5 emits midpoint", "[eylem][v1b-e][interp][lerp]")
@@ -181,9 +181,9 @@ TEST_CASE("eylem v1b-e interpolator at alpha=0.5 emits midpoint", "[eylem][v1b-e
 
     const auto* tr = fix.m_world.get_component<crd::scene::Transform>(e);
     REQUIRE(tr != nullptr);
-    REQUIRE(std::fabs(tr->translation.x - 3.0F) < 1e-5F); // (1+5)/2
-    REQUIRE(std::fabs(tr->translation.y - 4.0F) < 1e-5F); // (2+6)/2
-    REQUIRE(std::fabs(tr->translation.z - 5.0F) < 1e-5F); // (3+7)/2
+    REQUIRE(std::fabs(tr->translation.x.value - 3.0F) < 1e-5F); // (1+5)/2
+    REQUIRE(std::fabs(tr->translation.y.value - 4.0F) < 1e-5F); // (2+6)/2
+    REQUIRE(std::fabs(tr->translation.z.value - 5.0F) < 1e-5F); // (3+7)/2
 }
 
 TEST_CASE("eylem v1b-e nlerp takes short arc when dot(prev,curr) < 0", "[eylem][v1b-e][interp][quat]")
@@ -305,7 +305,7 @@ TEST_CASE("eylem v1b-e multi-substep flow: prev = pose_after_substep_1, curr = p
     const auto* tr = fix.m_world.get_component<crd::scene::Transform>(e);
     REQUIRE(tr != nullptr);
     const crd::f32 expected_y = 2.0F * cfg.gravity.y * cfg.fixed_dt * cfg.fixed_dt;
-    REQUIRE(std::fabs(tr->translation.y - expected_y) < 1e-5F);
+    REQUIRE(std::fabs(tr->translation.y.value - expected_y) < 1e-5F);
 }
 
 TEST_CASE("eylem v1b-e interpolator skips entities with sync_to_transform=0", "[eylem][v1b-e][interp][opt-out]")
@@ -326,7 +326,7 @@ TEST_CASE("eylem v1b-e interpolator skips entities with sync_to_transform=0", "[
 
     const auto e = fix.m_world.spawn();
     crd::scene::Transform tr_seed{};
-    tr_seed.translation = {7.0F, 8.0F, 9.0F};
+    tr_seed.translation = crd::math::from_raw_vec<crd::units::dim::Length>(crd::math::Vec3f{7.0F, 8.0F, 9.0F});
     fix.m_world.add_component(e, tr_seed);
     RigidBodyComponent rbc{};
     rbc.body_id = body_id;
@@ -339,9 +339,9 @@ TEST_CASE("eylem v1b-e interpolator skips entities with sync_to_transform=0", "[
 
     const auto* tr = fix.m_world.get_component<crd::scene::Transform>(e);
     REQUIRE(tr != nullptr);
-    REQUIRE(tr->translation.x == 7.0F);
-    REQUIRE(tr->translation.y == 8.0F);
-    REQUIRE(tr->translation.z == 9.0F);
+    REQUIRE(tr->translation.x.value == 7.0F);
+    REQUIRE(tr->translation.y.value == 8.0F);
+    REQUIRE(tr->translation.z.value == 9.0F);
 }
 
 TEST_CASE("eylem v1b-e interpolator no-ops on null/stale body handles", "[eylem][v1b-e][interp][safety]")
@@ -354,7 +354,7 @@ TEST_CASE("eylem v1b-e interpolator no-ops on null/stale body handles", "[eylem]
     // Entity 1: null body_id.
     const auto e1 = fix.m_world.spawn();
     crd::scene::Transform t1{};
-    t1.translation = {10.0F, 20.0F, 30.0F};
+    t1.translation = crd::math::from_raw_vec<crd::units::dim::Length>(crd::math::Vec3f{10.0F, 20.0F, 30.0F});
     fix.m_world.add_component(e1, t1);
     RigidBodyComponent rbc1{};
     rbc1.body_id = crd::eylem::BodyId::null();
@@ -369,7 +369,7 @@ TEST_CASE("eylem v1b-e interpolator no-ops on null/stale body handles", "[eylem]
     fix.m_pool.remove(dead_id);
     const auto e2 = fix.m_world.spawn();
     crd::scene::Transform t2{};
-    t2.translation = {40.0F, 50.0F, 60.0F};
+    t2.translation = crd::math::from_raw_vec<crd::units::dim::Length>(crd::math::Vec3f{40.0F, 50.0F, 60.0F});
     fix.m_world.add_component(e2, t2);
     RigidBodyComponent rbc2{};
     rbc2.body_id = dead_id;
@@ -391,8 +391,8 @@ TEST_CASE("eylem v1b-e interpolator no-ops on null/stale body handles", "[eylem]
     const auto* tr2 = fix.m_world.get_component<crd::scene::Transform>(e2);
     REQUIRE(tr1 != nullptr);
     REQUIRE(tr2 != nullptr);
-    REQUIRE(tr1->translation.x == 10.0F);
-    REQUIRE(tr2->translation.x == 40.0F);
+    REQUIRE(tr1->translation.x.value == 10.0F);
+    REQUIRE(tr2->translation.x.value == 40.0F);
 }
 
 TEST_CASE("eylem v1b-e World::fixed_step_alpha clamps to [0,1] across irregular accumulator",

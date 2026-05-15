@@ -78,7 +78,7 @@ TEST_CASE("eylem v1b-d register_eylem_visualizers fires on RBC + CC entities",
 
     const auto e = world.spawn();
     crd::scene::Transform tr{};
-    tr.translation = {0.0F, 5.0F, 0.0F};
+    tr.translation = crd::math::from_raw_vec<crd::units::dim::Length>(crd::math::Vec3f{0.0F, 5.0F, 0.0F});
     tr.world = crd::math::from_trs(tr.translation, tr.rotation, tr.scale);
     world.add_component(e, tr);
 

@@ -9,10 +9,14 @@
 - v0a-1 ✅ shipped — `Dim` + `Quantity` core + layout pins.
 - v0a-2 ✅ shipped — Layer 1 `LinearUnit` + ~120 named units + Layer 4 `UnitMul`/`UnitDiv` compound auto-derive + `value_in<TargetUnit>` boundary accessor.
 - v0a-3 ✅ shipped — Layer 2 `AffineUnit` + `Temperature`/`TemperatureDelta` + Layer 3 `NonLinearUnit` + dB family + cents/semitones + 80+ UDLs + `crd-no-untagged-physical-numeric` CI guard.
-- v0a-close — this doc + session log + ADR-0078 (mint).
+- v0a-close ✅ — units.md + session log + ADR-0078 (mint).
+- **v0b-1 ✅ 2026-05-15** — `Vec<Quantity>` enablement: `MathValue` concept widens `Vec2`/`Vec3`/`Vec4` to accept `Quantity<D, T>` for element-wise ops; reductions stay on `MathScalar`; precision-suffix aliases (`Length32`/`Length64`/`Mass32`/...); `to_raw_vec`/`from_raw_vec` boundary helpers; `from_trs(Vec3<Quantity>...)` overload. 13 cases / 40 assertions in `tests/units/test_vec_quantity.cpp`.
+- **v0b-2 ✅ 2026-05-15** — `crd-config` unit-tagged TOML accessors (`get_length`, `get_mass`, `get_time`, `get_angle`, `get_velocity`, `get_force`, `get_pressure`, `get_energy`, `get_power`, `get_voltage`, `get_current`, `get_frequency`, `get_temperature`); suffix parsing maps authoring strings to SI at the boundary; missing-key returns fallback; 13 cases / 57 assertions in `tests/config/test_unit_accessor.cpp`.
+- **v0b-3 ✅ 2026-05-15** — `scene::Transform::translation` retyped to `Vec3<Length<f32>>`; ~30 call sites across `World::set_local`/`set_translation`, eylem integrator sync, glTF scene cooker, eylem-viz visualizers, and tests bridged with `from_raw_vec` / `.value`.
+- **v0b-4 ✅ 2026-05-15** — glTF cooker `[cook] position_scale` `.meta` key; multiplies positions at cook time so the runtime always sees SI meters regardless of source authoring units; SI sanity-warn at `> 1e6 m`; 12 cases / 15 assertions in `tests/cooker/test_mesh_cook_options.cpp`.
+- **v0b-close ✅ 2026-05-15** — this doc + session log + ADR-0078 §2 amendment (D15–D19) + 5-config full sweep + roadmap/context/MEMORY sync.
 
-**v0b adoption pass A** is the next slice (per `docs/phases/phase-3.1.7.5-units.md` § Slice list):
-`crd-config` unit-tagged TOML readers + `crd-scene Transform` dimensional + glTF cooker SI normalisation.
+**v0c adoption pass B** is next: `crd-eylem` `RigidBody` dimensional + integrator typed-math + force-field substrate + `crd-geometry-primitives` API surface re-tag.
 
 ## API at a glance
 
@@ -234,16 +238,55 @@ velocity unit with the right factor.
 
 ## Open follow-ups
 
-Tracked as v0b/c/d adoption-pass work + future amendments:
+Tracked as v0c/d adoption-pass work + future amendments:
 
-- **v0b adoption A** — `crd-config` unit-tagged TOML readers; `crd-scene Transform` dimensional; glTF cooker SI normalisation. Lights up the CI guard on `crd-scene`'s struct fields.
-- **v0c adoption B** — `crd-eylem` `RigidBody` dimensional; integrator typed-math; force-field substrate; `crd-geometry-primitives` API surface re-tag.
-- **v0d adoption C** — `crd-renderer` uniform-upload boundary; `crd-resources` cookers; ImGui inspector; Layer-6 full format/parse/`UnitPreferences` with 11 discipline presets; cross-engine format readers (glTF `KHR_unit`, STEP, IGES, FBX, IFC, Gerber).
-- **`Vec<Quantity>` / `Mat<Quantity>` wrappers** — deferred to v0b (lives where `crd-math` types are accessible).
+- **v0c adoption B** (next) — `crd-eylem` `RigidBody` dimensional; integrator typed-math; force-field substrate; `crd-geometry-primitives` API surface re-tag.
+- **v0d adoption C** — `crd-renderer` uniform-upload boundary; `crd-resources` cookers; ImGui inspector; Layer-6 full format/parse/`UnitPreferences` with 11 discipline presets; cross-engine format readers (STEP, IGES, FBX, IFC, Gerber).
+- **`Mat<Quantity>` wrappers** — `Vec<Quantity>` shipped in v0b-1; matrix templates remain raw because rotation/projection matrices mix dimensional rows (e.g. perspective matrix has a Length / Length entry). Defer until a consumer surfaces a homogeneous-dimension matrix use case.
+- **Fractional-exponent dimensions for `sqrt(Area)` -> `Length`** — required to widen `length()`/`distance()` reductions to `Vec<Quantity>`. Needs `DimRoot<>` machinery or a separate fixed-norm type. Tracked for v0c onward; reductions currently stay on strict `MathScalar` (ADR-0078 D15).
 - **"Kind" tag for same-Dim distinct quantities** — Energy vs Torque (both kg·m²/s²); LuminousFlux vs LuminousI (both candelas in strict SI minus the dimensionless steradian). Add when a consumer disambiguates.
 - **`PressureDelta` (gauge pressure)** — same absolute-vs-delta pattern as Temperature. Add when CFD / weather / aerospace consumer needs it.
 - **Bytes / binary prefixes** (`_KiB` / `_MiB` / `_GiB`) — dimensionless `dim::Data` category. Add when `crd-memory` budgets / `crd-resources` file sizes need them.
-- **Tighten `crd-no-untagged-physical-numeric` guard** as adoption proceeds. Current v0a-3 regex is conservative (struct-field-only); v0b/c/d will tighten to include function parameters once those modules are adopted.
+- **Tighten `crd-no-untagged-physical-numeric` guard** as adoption proceeds. Current v0a-3 regex is conservative (struct-field-only); v0c/d will tighten to include function parameters once those modules are adopted.
+
+## v0b authoring contracts (boundary stencils)
+
+### TOML config — `crd-config`
+
+```toml
+# runtime/configs/example.toml
+[player]
+height       = "1.85_m"   # parsed via get_length(cfg, "player.height", fallback);
+weight       = "82_kg"    # parsed via get_mass
+top_speed    = "65_mph"   # parsed via get_velocity (SI = 29.0576 m/s)
+hot_drink    = "85_celsius"  # parsed via get_temperature -> Kelvin internally
+
+[physics]
+gravity      = 9.81       # bare numeric = already-SI (m/s² here)
+```
+
+### glTF cook options — `.meta`
+
+```toml
+# blender_export.glb.meta — file is in Blender cm export, not SI.
+[id]
+uuid = "11111111-2222-3333-4444-555555555555"
+[cook]
+position_scale = 0.01     # cm -> m. Default = 1.0F if omitted.
+```
+
+### `scene::Transform` boundary
+
+```cpp
+crd::scene::Transform tr{};
+// Constructing from raw camera data: bridge at the boundary.
+tr.translation = crd::math::from_raw_vec<crd::units::dim::Length>(
+                     crd::math::Vec3f{1.0F, 2.0F, 3.0F});
+// Reading a typed component back at the SIMD/GPU upload boundary:
+crd::math::Vec3f raw = crd::math::to_raw_vec(tr.translation);
+// Or per-axis:
+crd::f32 height = tr.translation.y.value;   // .value escapes to raw f32
+```
 
 ## References
 

@@ -4,6 +4,7 @@
 #include <crd/math/mat.hpp>
 #include <crd/math/quat.hpp>
 #include <crd/math/vec.hpp>
+#include <crd/units/quantity_aliases.hpp>
 
 namespace crd::scene
 {
@@ -51,8 +52,14 @@ namespace crd::scene
 // flat propagation pattern.
 struct Transform
 {
-    crd::math::Vec3f translation{static_cast<crd::f32>(0), static_cast<crd::f32>(0), static_cast<crd::f32>(0)};
+    // Position in SI meters, dimensional via crd::units::Length<f32> (Phase
+    // 3.1.7.5 v0b-3 / ADR-0078 §2 D4). f32 precision = sub-mm @ 1 km exact;
+    // CAD / aerospace / orbital domains should register a separate
+    // `TransformF64` component as documented in the header comment above.
+    // Bridge to SIMD / GPU / Mat4 paths via `crd::math::to_raw_vec(translation)`.
+    crd::math::Vec3<crd::units::Length32> translation{};
     crd::math::Quatf rotation = crd::math::Quatf::identity();
+    // Scale is a dimensionless ratio (Vec3<f32>) -- not retyped at v0b.
     crd::math::Vec3f scale{static_cast<crd::f32>(1), static_cast<crd::f32>(1), static_cast<crd::f32>(1)};
 
     // World matrix cache — written by TransformPropagation in PreRender.
@@ -63,10 +70,13 @@ struct Transform
     crd::math::Mat4f world = crd::math::Mat4f::identity();
 
     // Compute the entity's local TRS matrix on demand. Used by
-    // TransformPropagation to compose `parent.world * local`.
+    // TransformPropagation to compose `parent.world * local`. The
+    // dimensional `translation` reaches into the raw scalar Vec3<f32> at
+    // the Mat4 boundary (Mat4 itself is dimensionless in conventional
+    // engine math).
     [[nodiscard]] crd::math::Mat4f local() const noexcept
     {
-        return crd::math::from_trs(translation, rotation, scale);
+        return crd::math::from_trs(crd::math::to_raw_vec(translation), rotation, scale);
     }
 
     // Renormalize the rotation quaternion to unit length. Useful as a

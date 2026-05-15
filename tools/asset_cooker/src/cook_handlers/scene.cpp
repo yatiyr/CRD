@@ -203,7 +203,11 @@ bool read_transform_from_toml(const void* node_opaque, void* dst, crd::usize siz
     }
 
     auto* t        = static_cast<crd::scene::Transform*>(dst);
-    t->translation = translation;
+    // Cooker reads raw Vec3f from TOML; tag as Length at the boundary
+    // (Phase 3.1.7.5 v0b-3). TOML files using `_mm`/`_cm`/etc. suffix
+    // keys will plumb through the v0b-2 typed accessors in a later
+    // adoption pass; for v0b-3 we just SI-tag the existing raw values.
+    t->translation = crd::math::from_raw_vec<crd::units::dim::Length>(translation);
     t->rotation    = rotation;
     (void)crd::math::try_normalize(t->rotation);
     t->scale = scale;

@@ -2,6 +2,7 @@
 
 #include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
+#include <crd/units/quantity.hpp>
 
 #include <cmath>
 #include <limits>
@@ -14,6 +15,15 @@ inline constexpr bool k_is_math_scalar_v = std::is_same_v<T, crd::f32> || std::i
 
 template <typename T>
 concept MathScalar = k_is_math_scalar_v<T>;
+
+// MathValue — widened concept (Phase 3.1.7.5 v0b-1 / ADR-0078 §2 D3).
+// Accepts raw scalars AND `crd::units::Quantity<D, T>` so consumers can
+// write `Vec3<Length<f32>>` etc. directly. Reductions that would need
+// fractional-exponent dimensions (dot, cross, length) keep the stricter
+// `MathScalar` concept so they refuse Quantity at the type level
+// (compile error rather than silently producing wrong-dim arithmetic).
+template <typename T>
+concept MathValue = MathScalar<T> || crd::units::IsQuantity<T>;
 
 template <MathScalar T> inline constexpr T k_pi = static_cast<T>(3.14159265358979323846264338327950288L);
 

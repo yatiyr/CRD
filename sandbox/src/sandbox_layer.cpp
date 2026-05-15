@@ -446,8 +446,10 @@ void SandboxLayer::init_scene_world()
         // each fixed step via World setters which mark dirty.
         const auto e = m_world->spawn();
         crd::scene::Transform tr{};
-        tr.translation = d.position;
-        tr.world = crd::math::from_trs(tr.translation, tr.rotation, tr.scale);
+        // v0b-3: tag raw Vec3f as Length at the boundary; pass .raw() into Mat4 builder.
+        tr.translation = crd::math::from_raw_vec<crd::units::dim::Length>(d.position);
+        tr.world = crd::math::from_trs(crd::math::to_raw_vec(tr.translation),
+                                       tr.rotation, tr.scale);
         m_world->add_component(e, tr);
 
         crd::eylem::RigidBodyComponent rbc{};
@@ -1340,10 +1342,10 @@ void SandboxLayer::on_render()
             {
                 if (const auto* t = m_world->get_component<crd::scene::Transform>(e))
                 {
-                    ImGui::Text("Child translation: (%.2f, %.2f, %.2f)",
-                                static_cast<double>(t->translation.x),
-                                static_cast<double>(t->translation.y),
-                                static_cast<double>(t->translation.z));
+                    ImGui::Text("Child translation: (%.2f, %.2f, %.2f) m",
+                                static_cast<double>(t->translation.x.value),
+                                static_cast<double>(t->translation.y.value),
+                                static_cast<double>(t->translation.z.value));
                 }
                 break;
             }

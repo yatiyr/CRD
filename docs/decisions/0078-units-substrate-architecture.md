@@ -225,6 +225,90 @@ basis changes. They live in `crd-math::Transform` + `crd-geometry::transform_aab
   crd-math` dependency. Deferred to v0b adoption layer where `crd-math`
   types are visible.
 
+## §2 Amendment — v0b adoption pass A (Accepted 2026-05-15)
+
+Adoption sub-slices v0b-1 / v0b-2 / v0b-3 / v0b-4 shipped 2026-05-15
+all green across the 5-config DoD (win-debug + win-asan + win-shipping +
+win-shipping-profile + win-tidy). Decisions locked beyond the v0a core:
+
+### D15. `Vec<Quantity>` allowed; reductions remain on `MathScalar`
+
+`Vec2`/`Vec3`/`Vec4` templates widen from `MathScalar` (`f32`/`f64`) to
+a new `MathValue` concept (`MathScalar || IsQuantity`). Element-wise
+ops (`==`, `+`, `-`, scalar `*`, scalar `/`) now type-check for
+`Vec3<Length<f32>>` etc. Member defaults use `T{}` instead of
+`static_cast<T>(0)` so they survive Quantity's explicit-ctor.
+
+Reductions (`dot`, `cross`, `length`, `length_squared`, `distance`,
+`distance_squared`, `hadamard`, `try_normalize`, `normalize`) stay
+gated on strict `MathScalar`. Fractional-exponent dimensions (e.g.
+`sqrt(Area)` -> `Length`) are out of scope for v0b; introducing them
+requires either `DimRoot<>` machinery or a separate fixed-norm type.
+Tracked as a future amendment trigger.
+
+Boundary helpers `to_raw_vec<D, T>(Vec3<Quantity<D, T>>) -> Vec3<T>`
+and `from_raw_vec<D>(Vec3<T>) -> Vec3<Quantity<dim::D, T>>` cross the
+SIMD / GPU / Mat4 boundary. `from_trs` gains an overload accepting a
+`Vec3<Quantity<D, T>>` translation that strips via `to_raw_vec` so
+`scene::Transform` callers compose without rewrite.
+
+### D16. `crd-config` ships unit-tagged TOML accessors
+
+`engine/config/include/crd/config/unit_accessor.hpp` exposes 13 typed
+accessors: `get_length`, `get_mass`, `get_time`, `get_angle`,
+`get_velocity`, `get_force`, `get_pressure`, `get_energy`,
+`get_power`, `get_voltage`, `get_current`, `get_frequency`,
+`get_temperature`. Suffix tables map authoring strings (`_m`, `_mm`,
+`_in`, `_ft`, `_kg`, `_lb_mass`, `_Pa`, `_kPa`, `_psi`, `_kelvin`,
+`_celsius`, `_fahrenheit`, ...) to SI at the boundary; raw numeric
+keys (no suffix) are interpreted as already-SI.
+
+Missing-key returns `fallback` (not 0). The implementation explicitly
+instantiates each accessor for `f32` and `f64` so `Length32` /
+`Length64` consumers get the same API surface.
+
+### D17. `scene::Transform::translation` is `Vec3<Length<f32>>`
+
+The 8-layer ECS storage now carries the dimensional tag on
+translation. `rotation` (`Quatf`) and `scale` (`Vec3f`) stay raw — they
+are dimensionless under D14 (frame-transform geometry, not unit
+conversion). `Transform::local()` calls the new `from_trs` overload;
+`world` stays `Mat4f` for GPU upload compatibility (D10).
+
+Adoption ripple: `World::set_local` / `World::set_translation`,
+`eylem` integrator-to-transform sync, glTF scene cooker, eylem-viz
+visualizers, ~30 test sites all converted to use `from_raw_vec` at
+the boundary and `.value` for component access in assertions. No
+runtime overhead — `sizeof(Length32) == sizeof(f32)` per D2.
+
+### D18. glTF cooker SI normalization — `.meta [cook] position_scale`
+
+glTF 2.0 §3.5.2.1 mandates POSITION accessors carry SI meters; no
+`KHR_unit` extension exists. Real-world exporters violate the spec
+(Blender "Apply Transform" toggle, SolidWorks cm exports, etc.).
+
+The cooker now reads an optional `[cook] position_scale = 0.01` key
+from the asset's `.meta` and multiplies every position attribute at
+cook time. Default `1.0F` preserves bit-exact pass-through for
+conformant assets. The cooker logs an SI-sanity warning when any
+final position magnitude exceeds `1e6 m` (1000 km — well above any
+reasonable engine asset), pointing the user at the `[cook]
+position_scale` knob.
+
+Parser is pure string processing (`parse_mesh_cook_options(StringView)`),
+testable without filesystem access; 12 cases / 15 assertions in
+`tests/cooker/test_mesh_cook_options.cpp`. Non-positive / non-finite
+values fall back to `1.0F` with a warning.
+
+### D19. Per-slice DoD = 5 configs (carried forward from D-003)
+
+v0b inherits the 5-config DoD codified in
+[[feedback_per_slice_run_ctest]] + ADR-0079 D7: every v0b sub-slice
+verified across win-debug + win-asan + win-shipping +
+win-shipping-profile + win-tidy. v0b-1/-2/-3/-4 all closed under
+this protocol; the new typed surfaces ship under LTCG +
+profiling-on as well as debug + ASan.
+
 ## References
 
 - `docs/phases/phase-3.1.7.5-units.md` — full phase plan + 6-layer conversion system spec.

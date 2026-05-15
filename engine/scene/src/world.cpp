@@ -950,7 +950,8 @@ void World::set_translation(EntityId e, crd::math::Vec3f t)
     CRD_ASSERT(is_alive(e));
     Transform* tr = get_component_mut<Transform>(e);
     CRD_ASSERT(tr != nullptr && "set_translation: entity has no Transform component");
-    tr->translation = t;
+    // v0b-3: raw Vec3f from public API tagged as Length at the assignment boundary.
+    tr->translation = crd::math::from_raw_vec<crd::units::dim::Length>(t);
     mark_transform_subtree_dirty(e);
 }
 
@@ -1034,7 +1035,10 @@ void World::set_local(EntityId e, const crd::math::Vec3f& translation, const crd
     CRD_ASSERT(is_alive(e));
     Transform* tr = get_component_mut<Transform>(e);
     CRD_ASSERT(tr != nullptr);
-    tr->translation = translation;
+    // Boundary: raw Vec3f from the public API is tagged as Length at the
+    // assignment site (Phase 3.1.7.5 v0b-3). Callers that pass typed
+    // Vec3<Length32> can use a future `set_local` overload (v0c+).
+    tr->translation = crd::math::from_raw_vec<crd::units::dim::Length>(translation);
     tr->rotation    = rotation;
     (void)crd::math::try_normalize(tr->rotation);
     tr->scale = scale;

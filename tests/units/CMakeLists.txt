@@ -7,11 +7,13 @@ add_executable(crd-units-tests
     test_affine_units.cpp
     test_nonlinear_units.cpp
     test_literals.cpp
+    test_vec_quantity.cpp  # v0b-1
 )
 
 target_link_libraries(crd-units-tests PRIVATE
     crd-core
     crd-units
+    crd-math  # v0b-1: Vec3<Length<>> etc.
     Catch2::Catch2WithMain
 )
 

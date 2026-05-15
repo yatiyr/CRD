@@ -1,11 +1,11 @@
-// Phase 3.0 v1m1 — ObekResource + ObekLoader + instantiate_obek tests (ADR-0058).
+// Phase 3.0 v1m1 â€” ObekResource + ObekLoader + instantiate_obek tests (ADR-0058).
 //
 // Coverage (substrate + minimal round-trip; v1m2-5 extend):
 //   - Empty obek loads with zero entities/components/relations.
 //   - Single-entity obek with Transform round-trips bit-equal values.
 //   - Multi-entity obek with several components round-trips.
 //   - instantiate_obek(parent=null) leaves obek roots top-level.
-//   - instantiate_obek(parent=alive) installs ChildOf(root → parent) on
+//   - instantiate_obek(parent=alive) installs ChildOf(root â†’ parent) on
 //     each entity that lacked a ChildOf relation in the source obek.
 //   - Two instantiations of the same ObekResource produce independent
 //     entity sets that don't share state.
@@ -132,9 +132,9 @@ TEST_CASE("Single-entity obek round-trips Transform values", "[obek][round-trip]
     REQUIRE(inst.entities.size() == 1U);
     const Transform* t = target.get_component<Transform>(inst.entities[0]);
     REQUIRE(t != nullptr);
-    CHECK(approx(t->translation.x, 1.0F));
-    CHECK(approx(t->translation.y, 2.0F));
-    CHECK(approx(t->translation.z, 3.0F));
+    CHECK(approx(t->translation.x.value, 1.0F));
+    CHECK(approx(t->translation.y.value, 2.0F));
+    CHECK(approx(t->translation.z.value, 3.0F));
 
     unload_obek(res);
 }
@@ -203,7 +203,7 @@ TEST_CASE("instantiate_obek(null parent) leaves roots top-level", "[obek][repare
     auto inst = target.instantiate_obek(*res, EntityId::null());
     REQUIRE(inst.entities.size() == 2U);
 
-    // Root has no ChildOf in source → stays top-level (no ChildOf in target either).
+    // Root has no ChildOf in source â†’ stays top-level (no ChildOf in target either).
     CHECK(!target.has_relation<ChildOf>(inst.entities[0]));
     // Child kept its ChildOf to root.
     CHECK(target.get_relation_target<ChildOf>(inst.entities[1]) == inst.entities[0]);
@@ -347,9 +347,9 @@ TEST_CASE("Override patch by file_idx replaces a Transform field", "[obek][overr
     CHECK(inst.overrides_skipped == 0U);
     const Transform* t = target.get_component<Transform>(inst.entities[0]);
     REQUIRE(t != nullptr);
-    CHECK(approx(t->translation.x, 10.0F));
-    CHECK(approx(t->translation.y, 20.0F));
-    CHECK(approx(t->translation.z, 30.0F));
+    CHECK(approx(t->translation.x.value, 10.0F));
+    CHECK(approx(t->translation.y.value, 20.0F));
+    CHECK(approx(t->translation.z.value, 30.0F));
 
     unload_obek(res);
 }
@@ -370,7 +370,7 @@ TEST_CASE("Override skipped when file_idx out of range", "[obek][override][skip]
 
     crd::u32 bogus_value = 999U;
     crd::scene::ObekOverride patch{};
-    patch.file_idx         = 42U;  // out of range — only 1 entity
+    patch.file_idx         = 42U;  // out of range â€” only 1 entity
     patch.component_fourcc = kObekTestComponentFourCC;
     patch.field_offset     = static_cast<crd::u32>(offsetof(TestComponent, a));
     patch.payload          = crd::containers::ConstSpan<crd::u8>{
@@ -491,7 +491,7 @@ constexpr crd::u32 kRuntimeStateFourCC = crd::scene::make_serialize_fourcc('R', 
 constexpr crd::u32 kSharedDataFourCC   = crd::scene::make_serialize_fourcc('S', 'H', 'R', 'D');
 
 // Trivially-copyable test components.
-struct RuntimeState  // for DontInherit: should never persist through öbek instantiation
+struct RuntimeState  // for DontInherit: should never persist through Ã¶bek instantiation
 {
     crd::u32 frame_counter;
     crd::u32 generation;
@@ -543,8 +543,8 @@ TEST_CASE("InheritPolicy::DontInherit skips component during instantiate_obek", 
     auto* res = load_obek(bytes);
     REQUIRE(res != nullptr);
 
-    // Target: register the SAME component as DontInherit — it should be
-    // skipped at instantiate even though the source öbek has it cooked in.
+    // Target: register the SAME component as DontInherit â€” it should be
+    // skipped at instantiate even though the source Ã¶bek has it cooked in.
     World target;
     setup_world(target);
     target.register_component<RuntimeState>(
@@ -554,7 +554,7 @@ TEST_CASE("InheritPolicy::DontInherit skips component during instantiate_obek", 
     auto inst = target.instantiate_obek(*res);
     REQUIRE(inst.entities.size() == 1U);
     CHECK(target.has_component<Transform>(inst.entities[0]));
-    // RuntimeState was DontInherit → entity does NOT have it after instantiate.
+    // RuntimeState was DontInherit â†’ entity does NOT have it after instantiate.
     CHECK(!target.has_component<RuntimeState>(inst.entities[0]));
     CHECK(inst.components_skipped == 1U);
     unload_obek(res);
@@ -647,7 +647,7 @@ TEST_CASE("Mixed InheritPolicy registration: Override + DontInherit on same Worl
 }
 
 // -----------------------------------------------------------------------------
-// InheritPolicy::Inherit — shared-pool plumbing (v1m4b2)
+// InheritPolicy::Inherit â€” shared-pool plumbing (v1m4b2)
 // -----------------------------------------------------------------------------
 
 TEST_CASE("InheritPolicy::Inherit forces SparseSet storage at registration", "[obek][inherit][cow]")
@@ -656,7 +656,7 @@ TEST_CASE("InheritPolicy::Inherit forces SparseSet storage at registration", "[o
     w.register_component<SharedData>(
         crd::scene::default_serialize_trait<SharedData>(kSharedDataFourCC),
         crd::scene::InheritPolicy::Inherit,
-        crd::scene::StorageHint::Archetype);  // explicit Archetype request — should be overridden
+        crd::scene::StorageHint::Archetype);  // explicit Archetype request â€” should be overridden
     const crd::scene::ComponentId id = w.component_id<SharedData>();
     const auto* info = w.component_info(id);
     REQUIRE(info != nullptr);
@@ -719,7 +719,7 @@ TEST_CASE("Multiple instantiate calls of same Inherit data dedupe to ONE pool en
     auto i2 = target.instantiate_obek(*res);
     auto i3 = target.instantiate_obek(*res);
 
-    // Each call spawned 1 entity → 3 total entities.
+    // Each call spawned 1 entity â†’ 3 total entities.
     CHECK(i1.entities.size() == 1U);
     CHECK(i2.entities.size() == 1U);
     CHECK(i3.entities.size() == 1U);
@@ -762,7 +762,7 @@ TEST_CASE("Distinct Inherit values get distinct pool entries", "[obek][inherit][
     auto inst = target.instantiate_obek(*res);
     REQUIRE(inst.entities.size() == 2U);
 
-    // Two distinct values → two pool entries.
+    // Two distinct values â†’ two pool entries.
     const crd::scene::ComponentId cid = target.component_id<SharedData>();
     CHECK(target.sparse_storage().shared_pool_live_count(cid) == 2U);
     unload_obek(res);
@@ -794,11 +794,11 @@ TEST_CASE("Refcount eviction: pool entry freed when last sharer destroyed",
     const crd::scene::ComponentId cid = target.component_id<SharedData>();
     CHECK(target.sparse_storage().shared_pool_live_count(cid) == 1U);
 
-    // Destroy first instance — pool entry should still be live (one sharer left).
+    // Destroy first instance â€” pool entry should still be live (one sharer left).
     target.destroy_immediate(i1.entities[0]);
     CHECK(target.sparse_storage().shared_pool_live_count(cid) == 1U);
 
-    // Destroy second — pool entry refcount drops to 0; entry freed.
+    // Destroy second â€” pool entry refcount drops to 0; entry freed.
     target.destroy_immediate(i2.entities[0]);
     CHECK(target.sparse_storage().shared_pool_live_count(cid) == 0U);
 
@@ -831,7 +831,7 @@ TEST_CASE("get_mut on Inherit slot breaks the share (CoW)", "[obek][inherit][cow
     // Initial read goes through shared pool.
     CHECK(target.get_component<SharedData>(inst.entities[0])->mesh_id == 100U);
 
-    // Mutate via get_mut — CoW breaks the share, copies bytes inline.
+    // Mutate via get_mut â€” CoW breaks the share, copies bytes inline.
     if (auto* mut = target.get_component_mut<SharedData>(inst.entities[0]); mut != nullptr)
     {
         mut->mesh_id = 999U;
@@ -949,11 +949,11 @@ TEST_CASE("revert_component restores Transform after runtime mutation", "[obek][
 
     // Mutate at runtime.
     target.set_translation(inst.entities[0], Vec3f{99.0F, 99.0F, 99.0F});
-    CHECK(approx(target.get_component<Transform>(inst.entities[0])->translation.x, 99.0F));
+    CHECK(approx(target.get_component<Transform>(inst.entities[0])->translation.x.value, 99.0F));
 
-    // Revert the whole Transform — back to source bytes (5, 0, 0).
+    // Revert the whole Transform â€” back to source bytes (5, 0, 0).
     target.revert_component(inst, 0U, crd::scene::kFourCC_Transform);
-    CHECK(approx(target.get_component<Transform>(inst.entities[0])->translation.x, 5.0F));
+    CHECK(approx(target.get_component<Transform>(inst.entities[0])->translation.x.value, 5.0F));
     unload_obek(res);
 }
 
@@ -982,9 +982,9 @@ TEST_CASE("revert_field restores only the targeted byte range", "[obek][revert]"
                         static_cast<crd::u32>(offsetof(Transform, translation)),
                         static_cast<crd::u32>(sizeof(Vec3f)));
     const Transform* t = target.get_component<Transform>(inst.entities[0]);
-    CHECK(approx(t->translation.x, 1.0F));
-    CHECK(approx(t->translation.y, 2.0F));
-    CHECK(approx(t->translation.z, 3.0F));
+    CHECK(approx(t->translation.x.value, 1.0F));
+    CHECK(approx(t->translation.y.value, 2.0F));
+    CHECK(approx(t->translation.z.value, 3.0F));
     unload_obek(res);
 }
 
@@ -1012,8 +1012,8 @@ TEST_CASE("revert_all restores every entity's components", "[obek][revert]")
     target.set_translation(inst.entities[1], Vec3f{99.0F, 0.0F, 0.0F});
 
     target.revert_all(inst);
-    CHECK(approx(target.get_component<Transform>(inst.entities[0])->translation.x, 10.0F));
-    CHECK(approx(target.get_component<Transform>(inst.entities[1])->translation.x, 20.0F));
+    CHECK(approx(target.get_component<Transform>(inst.entities[0])->translation.x.value, 10.0F));
+    CHECK(approx(target.get_component<Transform>(inst.entities[1])->translation.x.value, 20.0F));
     unload_obek(res);
 }
 
@@ -1039,8 +1039,8 @@ TEST_CASE("unpack_obek reverts and severs the source link", "[obek][revert][unpa
 
     // Source link severed.
     CHECK(inst.source == nullptr);
-    // Reverted to source value (99 → 42).
-    CHECK(approx(target.get_component<Transform>(inst.entities[0])->translation.x, 42.0F));
+    // Reverted to source value (99 â†’ 42).
+    CHECK(approx(target.get_component<Transform>(inst.entities[0])->translation.x.value, 42.0F));
     unload_obek(res);
 }
 
@@ -1065,7 +1065,7 @@ TEST_CASE("unpack_obek_keep_overrides preserves current state", "[obek][revert][
 
     CHECK(inst.source == nullptr);
     // Mutated value preserved (kept overrides).
-    CHECK(approx(target.get_component<Transform>(inst.entities[0])->translation.x, 99.0F));
+    CHECK(approx(target.get_component<Transform>(inst.entities[0])->translation.x.value, 99.0F));
     unload_obek(res);
 }
 
@@ -1082,7 +1082,8 @@ TEST_CASE("enumerate_overrides exposes cook-time records", "[obek][revert][enume
         /*obek_root_id=*/0xABCDU};
     Vec3f override_value{42.0F, 0.0F, 0.0F};
     Transform override_transform{};
-    override_transform.translation = override_value;
+    override_transform.translation =
+        crd::math::from_raw_vec<crd::units::dim::Length>(override_value);
     builder.add_override(/*file_idx=*/0U, crd::scene::kFourCC_Transform, /*field_offset=*/0U,
                          crd::containers::ConstSpan<crd::u8>{
                              reinterpret_cast<const crd::u8*>(&override_transform),
@@ -1109,7 +1110,7 @@ TEST_CASE("enumerate_overrides exposes cook-time records", "[obek][revert][enume
 }
 
 // -----------------------------------------------------------------------------
-// OCHN — chain dependency tracking (v1m2 phase B)
+// OCHN â€” chain dependency tracking (v1m2 phase B)
 // -----------------------------------------------------------------------------
 
 TEST_CASE("OCHN chunk round-trips chain dependencies", "[obek][ochn][chain]")

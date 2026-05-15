@@ -1,14 +1,14 @@
-// Phase 3.0 v1k — SceneResource + SceneLoader + instantiate_scene tests (ADR-0055).
+// Phase 3.0 v1k â€” SceneResource + SceneLoader + instantiate_scene tests (ADR-0055).
 //
 // Coverage:
 //   - Build empty SCEN; loader parses headers correctly.
 //   - Build single-entity SCEN with Transform; round-trip preserves values.
 //   - Multi-entity hierarchy with ChildOf relations; round-trip preserves
 //     parent/child structure.
-//   - Forward-compat: SCEN with unknown FourCC component → load + instantiate
+//   - Forward-compat: SCEN with unknown FourCC component â†’ load + instantiate
 //     succeed with components_skipped > 0; known components on those entities
 //     are still applied.
-//   - Schema-version mismatch → loader returns nullptr.
+//   - Schema-version mismatch â†’ loader returns nullptr.
 //   - Multiple instantiations of the same SceneResource produce independent
 //     entity sets.
 //   - Determinism: build the same world twice; bytes are identical.
@@ -71,7 +71,7 @@ struct OtherComponent
 
 struct PlainComponent
 {
-    crd::u32 v; // no serialize trait → must be skipped on build.
+    crd::u32 v; // no serialize trait â†’ must be skipped on build.
 };
 
 void setup_world(World& w)
@@ -158,9 +158,9 @@ TEST_CASE("Single-entity SCEN: Transform round-trip", "[scene][resource][round-t
     REQUIRE(inst.entities.size() == 1U);
     const Transform* t = w2.get_component<Transform>(inst.entities[0]);
     REQUIRE(t != nullptr);
-    CHECK(approx(t->translation.x, 1.5F));
-    CHECK(approx(t->translation.y, 2.5F));
-    CHECK(approx(t->translation.z, 3.5F));
+    CHECK(approx(t->translation.x.value, 1.5F));
+    CHECK(approx(t->translation.y.value, 2.5F));
+    CHECK(approx(t->translation.z.value, 3.5F));
 
     unload_scene(res);
 }
@@ -260,9 +260,9 @@ TEST_CASE("Schema-version mismatch -> loader returns nullptr", "[scene][resource
 
     // Patch the schema version inside the INFO chunk to an invalid value.
     // We know the layout: CRDR header (32 bytes) + chunk headers (24 bytes
-    // each, sorted by FourCC). 'INFO' < 'STRP' < 'CMPS' etc. — wait,
+    // each, sorted by FourCC). 'INFO' < 'STRP' < 'CMPS' etc. â€” wait,
     // C-letters: 'CMPS'(0x53504D43) vs 'INFO'(0x4F464E49); 'I'(0x49) <
-    // 'C'(0x43) is FALSE. ASCII 'C' = 0x43, 'I' = 0x49 → 'CMPS' < 'INFO'.
+    // 'C'(0x43) is FALSE. ASCII 'C' = 0x43, 'I' = 0x49 â†’ 'CMPS' < 'INFO'.
     // The chunk we want is whichever has FourCC kFourCC_SceneINFO.
     // Easier: walk to find it by scanning for the FourCC bytes.
     crd::u32 target = crd::scene::kFourCC_SceneINFO;
@@ -316,8 +316,8 @@ TEST_CASE("Multiple instantiations produce independent entity sets",
     CHECK(inst1.entities[0].raw != inst2.entities[0].raw);
     CHECK(target.entity_count() == 2U);
     // Both have the same Transform values.
-    CHECK(approx(target.get_component<Transform>(inst1.entities[0])->translation.x, 1.0F));
-    CHECK(approx(target.get_component<Transform>(inst2.entities[0])->translation.x, 1.0F));
+    CHECK(approx(target.get_component<Transform>(inst1.entities[0])->translation.x.value, 1.0F));
+    CHECK(approx(target.get_component<Transform>(inst2.entities[0])->translation.x.value, 1.0F));
 
     unload_scene(res);
 }
@@ -364,7 +364,7 @@ TEST_CASE("Components without ComponentSerialize trait are skipped on build",
     auto inst = target.instantiate_scene(*res);
     REQUIRE(inst.entities.size() == 1U);
     CHECK(target.has_component<Transform>(inst.entities[0]));
-    // PlainComponent never made it into the SCEN bytes — it's not present
+    // PlainComponent never made it into the SCEN bytes â€” it's not present
     // in the target either.
     CHECK_FALSE(target.has_component<PlainComponent>(inst.entities[0]));
 
@@ -444,7 +444,7 @@ TEST_CASE("SparseSet-stored component round-trips", "[scene][resource][sparse]")
 {
     World source;
     setup_world(source);
-    // Re-register OtherComponent as SparseSet — actually setup_world
+    // Re-register OtherComponent as SparseSet â€” actually setup_world
     // registered it Archetype-default. Let's verify Archetype path here;
     // SparseSet is exercised via the relations (Targets etc are SparseSet).
     EntityId e = source.spawn();
@@ -491,9 +491,9 @@ TEST_CASE("Large 1000-entity round-trip preserves all values",
     auto inst = target.instantiate_scene(*res);
     REQUIRE(inst.entities.size() == 1000U);
     // Spot-check: file_idx 0, 500, 999.
-    CHECK(approx(target.get_component<Transform>(inst.entities[0])->translation.x, 0.0F));
-    CHECK(approx(target.get_component<Transform>(inst.entities[500])->translation.x, 500.0F));
-    CHECK(approx(target.get_component<Transform>(inst.entities[999])->translation.x, 999.0F));
+    CHECK(approx(target.get_component<Transform>(inst.entities[0])->translation.x.value, 0.0F));
+    CHECK(approx(target.get_component<Transform>(inst.entities[500])->translation.x.value, 500.0F));
+    CHECK(approx(target.get_component<Transform>(inst.entities[999])->translation.x.value, 999.0F));
 
     unload_scene(res);
 }
@@ -564,7 +564,7 @@ TEST_CASE("Relation with null target (post SetNull) round-trips correctly",
     EntityId tracker = source.spawn();
     EntityId tracked = source.spawn();
     source.add_relation<crd::scene::relations::Targets>(tracker, tracked);
-    source.destroy_immediate(tracked); // SetNull policy → tracker's target becomes null
+    source.destroy_immediate(tracked); // SetNull policy â†’ tracker's target becomes null
     auto bytes = build_scene(source);
     auto* res = load_scene(bytes);
     REQUIRE(res != nullptr);

@@ -102,7 +102,7 @@ void setup_test_world(World& w)
 TEST_CASE("Default Transform = identity TRS + identity world", "[scene][transform][default]")
 {
     Transform t;
-    CHECK(approx(t.translation, Vec3f{0, 0, 0}));
+    CHECK(approx(crd::math::to_raw_vec(t.translation), Vec3f{0, 0, 0}));
     CHECK(approx(t.rotation.x, 0.0F));
     CHECK(approx(t.rotation.w, 1.0F));
     CHECK(approx(t.scale, Vec3f{1, 1, 1}));
@@ -348,7 +348,7 @@ TEST_CASE("set_world round-trip: TRS -> mat -> set_world matches inputs",
     w.step(1.0 / 60.0);
 
     const Transform* tr = w.get_component<Transform>(e);
-    CHECK(approx(tr->translation, t));
+    CHECK(approx(crd::math::to_raw_vec(tr->translation), t));
     CHECK(approx(tr->scale, s));
     // rotation may differ in sign (quat double-cover), check via rotation
     // applied to a probe vector.
@@ -368,7 +368,7 @@ TEST_CASE("try_set_world returns false on singular matrix", "[scene][transform][
 
     // Transform unchanged.
     const Transform* tr = w.get_component<Transform>(e);
-    CHECK(approx(tr->translation, Vec3f{5, 5, 5}));
+    CHECK(approx(crd::math::to_raw_vec(tr->translation), Vec3f{5, 5, 5}));
 }
 
 // ---------------------------------------------------------------------------

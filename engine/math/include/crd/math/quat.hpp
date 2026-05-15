@@ -319,6 +319,18 @@ template <MathScalar T>
     return m;
 }
 
+// Convenience overload: accepts a dimensional translation
+// `Vec3<crd::units::Quantity<dim::Length, T>>` and strips the unit at the
+// boundary. Lets scene::Transform-shaped consumers call from_trs without
+// each having to spell `to_raw_vec(translation)` inline (Phase 3.1.7.5 v0b-3).
+template <typename D, typename T>
+[[nodiscard]] inline Mat4<T> from_trs(const Vec3<crd::units::Quantity<D, T>>& translation,
+                                      const Quat<T>& rotation,
+                                      const Vec3<T>& scale) noexcept
+{
+    return from_trs(to_raw_vec(translation), rotation, scale);
+}
+
 // Decompose a TRS Mat4 into translation + rotation quat + per-axis scale.
 //
 // Returns false ONLY when any column has near-zero length (singular). In

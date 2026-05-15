@@ -28,10 +28,10 @@
 
 namespace crd::math
 {
-template <MathScalar T> struct Vec2
+template <MathValue T> struct Vec2
 {
-    T x = static_cast<T>(0);
-    T y = static_cast<T>(0);
+    T x{};
+    T y{};
 
     constexpr Vec2() noexcept = default;
     constexpr Vec2(T x_in, T y_in) noexcept : x(x_in), y(y_in) {}
@@ -81,11 +81,11 @@ template <MathScalar T> struct Vec2
     }
 };
 
-template <MathScalar T> struct Vec3
+template <MathValue T> struct Vec3
 {
-    T x = static_cast<T>(0);
-    T y = static_cast<T>(0);
-    T z = static_cast<T>(0);
+    T x{};
+    T y{};
+    T z{};
 
     constexpr Vec3() noexcept = default;
     constexpr Vec3(T x_in, T y_in, T z_in) noexcept : x(x_in), y(y_in), z(z_in) {}
@@ -156,12 +156,12 @@ template <MathScalar T> struct Vec3
     }
 };
 
-template <MathScalar T> struct Vec4
+template <MathValue T> struct Vec4
 {
-    T x = static_cast<T>(0);
-    T y = static_cast<T>(0);
-    T z = static_cast<T>(0);
-    T w = static_cast<T>(0);
+    T x{};
+    T y{};
+    T z{};
+    T w{};
 
     constexpr Vec4() noexcept = default;
     constexpr Vec4(T x_in, T y_in, T z_in, T w_in) noexcept : x(x_in), y(y_in), z(z_in), w(w_in) {}
@@ -244,109 +244,113 @@ template <MathScalar T> struct Vec4
     }
 };
 
-template <MathScalar T> [[nodiscard]] constexpr bool operator==(const Vec2<T>& lhs, const Vec2<T>& rhs) noexcept
+// Operators that work for both raw scalars AND Quantity types (per ADR-0078
+// §2 D3). Reductions (dot/cross/length/...) below stay on MathScalar and
+// refuse Quantity at the type level.
+
+template <MathValue T> [[nodiscard]] constexpr bool operator==(const Vec2<T>& lhs, const Vec2<T>& rhs) noexcept
 {
     return lhs.x == rhs.x && lhs.y == rhs.y;
 }
 
-template <MathScalar T> [[nodiscard]] constexpr bool operator==(const Vec3<T>& lhs, const Vec3<T>& rhs) noexcept
+template <MathValue T> [[nodiscard]] constexpr bool operator==(const Vec3<T>& lhs, const Vec3<T>& rhs) noexcept
 {
     return lhs.x == rhs.x && lhs.y == rhs.y && lhs.z == rhs.z;
 }
 
-template <MathScalar T> [[nodiscard]] constexpr bool operator==(const Vec4<T>& lhs, const Vec4<T>& rhs) noexcept
+template <MathValue T> [[nodiscard]] constexpr bool operator==(const Vec4<T>& lhs, const Vec4<T>& rhs) noexcept
 {
     return lhs.x == rhs.x && lhs.y == rhs.y && lhs.z == rhs.z && lhs.w == rhs.w;
 }
 
-template <MathScalar T> [[nodiscard]] constexpr Vec2<T> operator+(Vec2<T> lhs, const Vec2<T>& rhs) noexcept
+template <MathValue T> [[nodiscard]] constexpr Vec2<T> operator+(Vec2<T> lhs, const Vec2<T>& rhs) noexcept
 {
     lhs += rhs;
     return lhs;
 }
 
-template <MathScalar T> [[nodiscard]] constexpr Vec2<T> operator-(Vec2<T> lhs, const Vec2<T>& rhs) noexcept
+template <MathValue T> [[nodiscard]] constexpr Vec2<T> operator-(Vec2<T> lhs, const Vec2<T>& rhs) noexcept
 {
     lhs -= rhs;
     return lhs;
 }
 
-template <MathScalar T> [[nodiscard]] constexpr Vec2<T> operator*(Vec2<T> lhs, T scalar) noexcept
+template <MathValue T, typename S> [[nodiscard]] constexpr Vec2<T> operator*(Vec2<T> lhs, S scalar) noexcept
+    requires requires(T t, S s) { { t * s } -> std::same_as<T>; }
 {
-    lhs *= scalar;
-    return lhs;
+    return Vec2<T>{lhs.x * scalar, lhs.y * scalar};
 }
 
-template <MathScalar T> [[nodiscard]] constexpr Vec2<T> operator*(T scalar, Vec2<T> rhs) noexcept
+template <MathValue T, typename S> [[nodiscard]] constexpr Vec2<T> operator*(S scalar, Vec2<T> rhs) noexcept
+    requires requires(S s, T t) { { s * t } -> std::same_as<T>; }
 {
-    rhs *= scalar;
-    return rhs;
+    return Vec2<T>{scalar * rhs.x, scalar * rhs.y};
 }
 
-template <MathScalar T> [[nodiscard]] constexpr Vec2<T> operator/(Vec2<T> lhs, T scalar) noexcept
+template <MathValue T, typename S> [[nodiscard]] constexpr Vec2<T> operator/(Vec2<T> lhs, S scalar) noexcept
+    requires requires(T t, S s) { { t / s } -> std::same_as<T>; }
 {
-    lhs /= scalar;
-    return lhs;
+    return Vec2<T>{lhs.x / scalar, lhs.y / scalar};
 }
 
-template <MathScalar T> [[nodiscard]] constexpr Vec3<T> operator+(Vec3<T> lhs, const Vec3<T>& rhs) noexcept
+template <MathValue T> [[nodiscard]] constexpr Vec3<T> operator+(Vec3<T> lhs, const Vec3<T>& rhs) noexcept
 {
     lhs += rhs;
     return lhs;
 }
 
-template <MathScalar T> [[nodiscard]] constexpr Vec3<T> operator-(Vec3<T> lhs, const Vec3<T>& rhs) noexcept
+template <MathValue T> [[nodiscard]] constexpr Vec3<T> operator-(Vec3<T> lhs, const Vec3<T>& rhs) noexcept
 {
     lhs -= rhs;
     return lhs;
 }
 
-template <MathScalar T> [[nodiscard]] constexpr Vec3<T> operator*(Vec3<T> lhs, T scalar) noexcept
+template <MathValue T, typename S> [[nodiscard]] constexpr Vec3<T> operator*(Vec3<T> lhs, S scalar) noexcept
+    requires requires(T t, S s) { { t * s } -> std::same_as<T>; }
 {
-    lhs *= scalar;
-    return lhs;
+    return Vec3<T>{lhs.x * scalar, lhs.y * scalar, lhs.z * scalar};
 }
 
-template <MathScalar T> [[nodiscard]] constexpr Vec3<T> operator*(T scalar, Vec3<T> rhs) noexcept
+template <MathValue T, typename S> [[nodiscard]] constexpr Vec3<T> operator*(S scalar, Vec3<T> rhs) noexcept
+    requires requires(S s, T t) { { s * t } -> std::same_as<T>; }
 {
-    rhs *= scalar;
-    return rhs;
+    return Vec3<T>{scalar * rhs.x, scalar * rhs.y, scalar * rhs.z};
 }
 
-template <MathScalar T> [[nodiscard]] constexpr Vec3<T> operator/(Vec3<T> lhs, T scalar) noexcept
+template <MathValue T, typename S> [[nodiscard]] constexpr Vec3<T> operator/(Vec3<T> lhs, S scalar) noexcept
+    requires requires(T t, S s) { { t / s } -> std::same_as<T>; }
 {
-    lhs /= scalar;
-    return lhs;
+    return Vec3<T>{lhs.x / scalar, lhs.y / scalar, lhs.z / scalar};
 }
 
-template <MathScalar T> [[nodiscard]] constexpr Vec4<T> operator+(Vec4<T> lhs, const Vec4<T>& rhs) noexcept
+template <MathValue T> [[nodiscard]] constexpr Vec4<T> operator+(Vec4<T> lhs, const Vec4<T>& rhs) noexcept
 {
     lhs += rhs;
     return lhs;
 }
 
-template <MathScalar T> [[nodiscard]] constexpr Vec4<T> operator-(Vec4<T> lhs, const Vec4<T>& rhs) noexcept
+template <MathValue T> [[nodiscard]] constexpr Vec4<T> operator-(Vec4<T> lhs, const Vec4<T>& rhs) noexcept
 {
     lhs -= rhs;
     return lhs;
 }
 
-template <MathScalar T> [[nodiscard]] constexpr Vec4<T> operator*(Vec4<T> lhs, T scalar) noexcept
+template <MathValue T, typename S> [[nodiscard]] constexpr Vec4<T> operator*(Vec4<T> lhs, S scalar) noexcept
+    requires requires(T t, S s) { { t * s } -> std::same_as<T>; }
 {
-    lhs *= scalar;
-    return lhs;
+    return Vec4<T>{lhs.x * scalar, lhs.y * scalar, lhs.z * scalar, lhs.w * scalar};
 }
 
-template <MathScalar T> [[nodiscard]] constexpr Vec4<T> operator*(T scalar, Vec4<T> rhs) noexcept
+template <MathValue T, typename S> [[nodiscard]] constexpr Vec4<T> operator*(S scalar, Vec4<T> rhs) noexcept
+    requires requires(S s, T t) { { s * t } -> std::same_as<T>; }
 {
-    rhs *= scalar;
-    return rhs;
+    return Vec4<T>{scalar * rhs.x, scalar * rhs.y, scalar * rhs.z, scalar * rhs.w};
 }
 
-template <MathScalar T> [[nodiscard]] constexpr Vec4<T> operator/(Vec4<T> lhs, T scalar) noexcept
+template <MathValue T, typename S> [[nodiscard]] constexpr Vec4<T> operator/(Vec4<T> lhs, S scalar) noexcept
+    requires requires(T t, S s) { { t / s } -> std::same_as<T>; }
 {
-    lhs /= scalar;
-    return lhs;
+    return Vec4<T>{lhs.x / scalar, lhs.y / scalar, lhs.z / scalar, lhs.w / scalar};
 }
 
 template <MathScalar T> [[nodiscard]] constexpr T dot(const Vec2<T>& lhs, const Vec2<T>& rhs) noexcept
@@ -559,4 +563,53 @@ using Vec4f = Vec4<crd::f32>;
 using Vec2d = Vec2<crd::f64>;
 using Vec3d = Vec3<crd::f64>;
 using Vec4d = Vec4<crd::f64>;
+
+// to_raw_vec — extract the underlying scalar Vec from a Vec<Quantity<>>
+// (Phase 3.1.7.5 v0b-1 / ADR-0078 §2 D3). SIMD / GPU upload / Mat4 boundaries
+// reach for this when they need the bare-scalar layout.
+template <typename D, typename T>
+[[nodiscard]] constexpr Vec2<T> to_raw_vec(const Vec2<crd::units::Quantity<D, T>>& v) noexcept
+{
+    return Vec2<T>{v.x.value, v.y.value};
+}
+
+template <typename D, typename T>
+[[nodiscard]] constexpr Vec3<T> to_raw_vec(const Vec3<crd::units::Quantity<D, T>>& v) noexcept
+{
+    return Vec3<T>{v.x.value, v.y.value, v.z.value};
+}
+
+template <typename D, typename T>
+[[nodiscard]] constexpr Vec4<T> to_raw_vec(const Vec4<crd::units::Quantity<D, T>>& v) noexcept
+{
+    return Vec4<T>{v.x.value, v.y.value, v.z.value, v.w.value};
+}
+
+// Inverse: tag a raw scalar Vec with a Dim. Useful at the boundary where
+// data arrives untyped (glTF, asset cooker, GPU readback) and is re-tagged
+// at the API surface.
+template <typename D, typename T>
+[[nodiscard]] constexpr Vec2<crd::units::Quantity<D, T>> from_raw_vec(const Vec2<T>& v) noexcept
+{
+    return Vec2<crd::units::Quantity<D, T>>{crd::units::Quantity<D, T>{v.x},
+                                             crd::units::Quantity<D, T>{v.y}};
+}
+
+template <typename D, typename T>
+[[nodiscard]] constexpr Vec3<crd::units::Quantity<D, T>> from_raw_vec(const Vec3<T>& v) noexcept
+{
+    return Vec3<crd::units::Quantity<D, T>>{crd::units::Quantity<D, T>{v.x},
+                                             crd::units::Quantity<D, T>{v.y},
+                                             crd::units::Quantity<D, T>{v.z}};
+}
+
+template <typename D, typename T>
+[[nodiscard]] constexpr Vec4<crd::units::Quantity<D, T>> from_raw_vec(const Vec4<T>& v) noexcept
+{
+    return Vec4<crd::units::Quantity<D, T>>{crd::units::Quantity<D, T>{v.x},
+                                             crd::units::Quantity<D, T>{v.y},
+                                             crd::units::Quantity<D, T>{v.z},
+                                             crd::units::Quantity<D, T>{v.w}};
+}
+
 } // namespace crd::math

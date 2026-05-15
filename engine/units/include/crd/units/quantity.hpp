@@ -174,4 +174,21 @@ static_assert(std::is_standard_layout_v<Quantity<dim::Mass, crd::f64>>);
 static_assert(std::is_trivially_copyable_v<Quantity<dim::Time, crd::f32>>);
 static_assert(std::is_standard_layout_v<Quantity<dim::Angle, crd::f32>>);
 
+// ===========================================================================
+// is_quantity_v — type trait + concept (Phase 3.1.7.5 v0b-1)
+// ===========================================================================
+//
+// Consumed by `crd-math` to widen its `MathValue` concept beyond raw
+// scalar (f32/f64) so `Vec3<Length<f32>>` etc. are first-class types.
+// Reductions that would need fractional-exponent dimensions (dot, cross,
+// length) keep the stricter `MathScalar` concept and refuse Quantity at
+// the type level — see ADR-0078 §2 D2.
+
+template <typename T> struct is_quantity : std::false_type {};
+template <typename D, typename T> struct is_quantity<Quantity<D, T>> : std::true_type {};
+template <typename T> inline constexpr bool is_quantity_v = is_quantity<T>::value;
+
+template <typename T>
+concept IsQuantity = is_quantity_v<T>;
+
 } // namespace crd::units

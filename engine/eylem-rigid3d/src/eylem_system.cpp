@@ -125,7 +125,11 @@ void EylemSystem::run(crd::scene::World& world)
             // system in the same phase sees the integrated pose without
             // routing through World setters. The caller has assumed
             // responsibility for whatever downstream propagation needs.
-            transform.translation = body.position;
+            // v0b-3: bridge raw eylem RigidBody.position (Vec3f) to typed
+            // scene::Transform.translation (Vec3<Length<f32>>). When eylem
+            // v0c retypes its own surface, this becomes a direct assign.
+            transform.translation =
+                crd::math::from_raw_vec<crd::units::dim::Length>(body.position);
             transform.rotation    = body.rotation;
         }
     }

@@ -16,6 +16,7 @@
 #include <crd/units/dim_aliases.hpp>
 #include <crd/units/literals.hpp>
 #include <crd/units/quantity.hpp>
+#include <crd/units/quantity_aliases.hpp>
 #include <crd/units/units_affine.hpp>
 #include <crd/units/units_compound.hpp>
 #include <crd/units/units_nonlinear.hpp>

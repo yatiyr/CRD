@@ -12,6 +12,7 @@ target_link_libraries(crd-math
     PUBLIC
         crd-core
         crd-simd-flags
+        crd-units  # v0b-1: Vec3<Quantity<>> support via widened MathValue concept (ADR-0078 §2 D3)
 )
 
 target_compile_features(crd-math PUBLIC cxx_std_20)

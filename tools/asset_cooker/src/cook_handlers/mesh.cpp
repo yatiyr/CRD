@@ -14,6 +14,7 @@ extern "C"
 }
 
 #include <crd/cooker/cook_handler.hpp>
+#include <crd/cooker/mesh_cook_options.hpp>
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
@@ -25,6 +26,7 @@ extern "C"
 #include <crd/resources/resource_id.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 
@@ -210,7 +212,9 @@ struct PrimResult
     bool                            ok           = false;
 };
 
-PrimResult cook_primitive(const cgltf_primitive& prim, crd::memory::IAllocator* alloc)
+PrimResult cook_primitive(const cgltf_primitive& prim,
+                          crd::memory::IAllocator*  alloc,
+                          const MeshCookOptions&    options)
 {
     PrimResult result;
     result.vertex_bytes = crd::containers::Array<crd::u8>(alloc);
@@ -259,13 +263,34 @@ PrimResult cook_primitive(const cgltf_primitive& prim, crd::memory::IAllocator* 
         return result;
     }
 
-    // Read positions.
+    // Read positions and bake the authoring-unit -> SI-meter scale.
+    // glTF 2.0 §3.5.2.1 requires POSITION in meters, but exporters
+    // frequently violate it. options.position_scale (from .meta
+    // [cook] section) lets users opt in to a per-asset conversion.
     crd::containers::Array<float> positions(alloc);
     positions.resize(static_cast<crd::usize>(vc) * 3U);
+    const crd::f32 pscale = options.position_scale;
+    float          max_abs = 0.0F;
     for (crd::u32 vi = 0U; vi < vc; ++vi)
     {
         (void)cgltf_accessor_read_float(pos_acc, static_cast<cgltf_size>(vi),
                                          &positions[vi * 3U], 3U);
+        positions[vi * 3U + 0U] *= pscale;
+        positions[vi * 3U + 1U] *= pscale;
+        positions[vi * 3U + 2U] *= pscale;
+        for (crd::u32 c = 0U; c < 3U; ++c)
+        {
+            const float a = std::fabs(positions[vi * 3U + c]);
+            if (a > max_abs) { max_abs = a; }
+        }
+    }
+    if (max_abs > kSiPositionSanityMeters)
+    {
+        std::fprintf(stderr,
+                     "mesh_cook: SI sanity warn — max |position| = %.3g m exceeds %g m; "
+                     "source likely in non-SI units (cm/mm). Set [cook] position_scale in .meta.\n",
+                     static_cast<double>(max_abs),
+                     static_cast<double>(kSiPositionSanityMeters));
     }
 
     // Read normals (default to (0,0,1) if absent).
@@ -380,9 +405,10 @@ PrimResult cook_primitive(const cgltf_primitive& prim, crd::memory::IAllocator* 
 // Builds a CRDR MESH artifact from one cgltf_mesh.
 // Returns empty Array on failure (no valid TRIANGLE primitives).
 crd::containers::Array<crd::u8> build_mesh_artifact(
-    const cgltf_mesh&              mesh,
+    const cgltf_mesh&                 mesh,
     const crd::resources::ResourceId& id,
-    crd::memory::IAllocator*       alloc)
+    crd::memory::IAllocator*          alloc,
+    const MeshCookOptions&            options)
 {
     crd::containers::Array<crd::u8> vert_buf(alloc);
     crd::containers::Array<crd::u8> indx_buf(alloc);
@@ -394,7 +420,7 @@ crd::containers::Array<crd::u8> build_mesh_artifact(
 
     for (cgltf_size pi = 0U; pi < mesh.primitives_count; ++pi)
     {
-        PrimResult pr = cook_primitive(mesh.primitives[pi], alloc);
+        PrimResult pr = cook_primitive(mesh.primitives[pi], alloc, options);
         if (!pr.ok)
         {
             return crd::containers::Array<crd::u8>(alloc); // hard fail
@@ -525,9 +551,26 @@ CookResult gltf_handler(const CookContext& ctx)
         return result;
     }
 
+    // Read .meta for optional [cook] options (position_scale, etc.).
+    MeshCookOptions cook_options{};
+    if (!ctx.meta_path.empty())
+    {
+        crd::containers::String meta_path_str(ctx.meta_path.data(),
+                                               ctx.meta_path.size(),
+                                               ctx.allocator);
+        const fs::Path meta_path(crd::containers::StringView(meta_path_str.data(),
+                                                              meta_path_str.size()));
+        crd::containers::String meta_text(ctx.allocator);
+        if (fs::read_file_text(meta_path, meta_text))
+        {
+            cook_options = parse_mesh_cook_options(
+                crd::containers::StringView(meta_text.data(), meta_text.size()));
+        }
+    }
+
     // Mesh 0 → main result (uses ctx.id from the source .meta file).
     {
-        auto bytes = build_mesh_artifact(data->meshes[0], ctx.id, ctx.allocator);
+        auto bytes = build_mesh_artifact(data->meshes[0], ctx.id, ctx.allocator, cook_options);
         if (bytes.empty())
         {
             cgltf_free(data);
@@ -583,7 +626,7 @@ CookResult gltf_handler(const CookContext& ctx)
             }
         }
 
-        auto bytes = build_mesh_artifact(mesh, extra_id, ctx.allocator);
+        auto bytes = build_mesh_artifact(mesh, extra_id, ctx.allocator, cook_options);
         if (bytes.empty())
         {
             cgltf_free(data);

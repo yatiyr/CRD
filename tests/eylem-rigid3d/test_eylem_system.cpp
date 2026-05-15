@@ -157,9 +157,9 @@ TEST_CASE("eylem v1b-c EylemSystem integrates motion under gravity",
 
     const auto* tr = world.get_component<crd::scene::Transform>(e);
     REQUIRE(tr != nullptr);
-    REQUIRE(std::fabs(tr->translation.y - expected_y) < 1e-3F);
-    REQUIRE(tr->translation.x == 0.0F);
-    REQUIRE(tr->translation.z == 0.0F);
+    REQUIRE(std::fabs(tr->translation.y.value - expected_y) < 1e-3F);
+    REQUIRE(tr->translation.x.value == 0.0F);
+    REQUIRE(tr->translation.z.value == 0.0F);
 
     // Pool state should mirror what got synced to Transform.
     const RigidBody read = pool.read(body_id);
@@ -218,7 +218,7 @@ TEST_CASE("eylem v1b-c EylemSystem under World::step_fixed runs expected substep
 
     const auto* tr = world.get_component<crd::scene::Transform>(e);
     REQUIRE(tr != nullptr);
-    REQUIRE(std::fabs(tr->translation.y - expected_y) < 1e-4F);
+    REQUIRE(std::fabs(tr->translation.y.value - expected_y) < 1e-4F);
 }
 
 TEST_CASE("eylem v1b-c static body (inv_mass==0) does not integrate",
