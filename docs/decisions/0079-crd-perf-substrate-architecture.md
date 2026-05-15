@@ -190,7 +190,8 @@ the detour.
 - The UI panel is a one-add layer in any ImGui-using app.
 - The 5-config DoD catches LTCG-class bugs at slice close, not in
   production.
-- `crd-units` v0a adoption (next phase) inherits the same 5-config
+- `crd-units` v0b/c/d adoption (next slices; v0a shipped 2026-05-15
+  ahead of this detour as Sprint 1) inherits the same 5-config
   protocol; every future substrate slice will run under
   `win-shipping-profile`.
 

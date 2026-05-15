@@ -83,18 +83,21 @@ private:
     crd::containers::ConstSpan<crd::u8> m_buf;
     bool                                m_valid              = false;
 
-    // Cached byte offsets (set in ctor; -1 == not present).
-    crd::usize m_off_thread_headers   = 0;
-    crd::usize m_off_counter_meta     = 0;
-    crd::usize m_off_allocator_meta   = 0;
-    crd::usize m_off_name_blob        = 0;
-    crd::usize m_off_frame_records    = 0;
+    // Cached byte offsets (set in ctor; -1 == not present). All marked
+    // [[maybe_unused]] because the reading code is itself gated behind
+    // `#if CRD_PERF_ENABLED`; clang-cl in shipping (PROFILING=OFF) would
+    // otherwise flag them as -Werror=unused-private-field.
+    [[maybe_unused]] crd::usize m_off_thread_headers   = 0;
+    [[maybe_unused]] crd::usize m_off_counter_meta     = 0;
+    [[maybe_unused]] crd::usize m_off_allocator_meta   = 0;
+    [[maybe_unused]] crd::usize m_off_name_blob        = 0;
+    [[maybe_unused]] crd::usize m_off_frame_records    = 0;
     // Sample arrays are indexed via each ThreadHeader's sample_byte_offset.
 
     // Name blob layout: u32 count + u32 byte_size, then u32 offsets[count],
     // then packed strings.
-    crd::u32 m_name_count       = 0U;
-    crd::u64 m_name_blob_bytes  = 0ULL;
+    [[maybe_unused]] crd::u32 m_name_count       = 0U;
+    [[maybe_unused]] crd::u64 m_name_blob_bytes  = 0ULL;
 };
 
 } // namespace crd::perf

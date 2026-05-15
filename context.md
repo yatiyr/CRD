@@ -11,9 +11,30 @@
 
 ## Current focus
 
-**✅ D-003 CLOSED 2026-05-15** (substrate + UX + sandbox + ADR-0079 + system doc + sweep-extension all shipped). Original active-state context retained below for slice-by-slice detail; the closing summary at the bottom captures the final state. Detour `crd-perf` profiler substrate + ImGui frontend (opened 2026-05-15, immediately after D-006 `crd-time` closed same day). ~2-3 weeks across 8 slices (v0a–v0h). The main roadmap (Phase 3.1.7.5 `crd-units` v0a) is **paused** while this detour runs. Why now: the user-stated quality bar is "elite, very understandable, ergonomic, top-quality visualizations, profile everything"; D-006 just shipped the timing substrate; building the profiler now (~2-3 weeks) pays back across every later perf decision (units overhead measurement, BVH4 vs binary tuning, parallel-job sizing, eylem step budget, GPU upload tradeoffs). Detour entry + slice plan: `docs/detours/README.md` § Active detours.
+**Actual sequence shipped 2026-05-15 (in chronological order):**
 
-**Detour state (2026-05-15):**
+1. **Sprint 0 — per-slice protocol fix** (`scripts/per-slice-check.{ps1,sh}` + `docs/protocols/per-slice-verification.md` codify the win-debug + win-asan + win-shipping + win-tidy ctest-not-binary rule).
+2. **Phase 3.1.7.5 v0a `crd-units` substrate ✅ SHIPPED** — new `engine/units/` module (10 headers + 1 cpp, ~1.6 KLOC); full 6-layer conversion system (`LinearUnit` + `AffineUnit` + `NonLinearUnit` + `UnitMul/Div/Pow` + federated registration + value_in boundary accessor); ~120 named units across SI + imperial + audio + electrical + thermal; 80+ UDLs; **`crd-no-untagged-physical-numeric` CI guard live**; 8 test files / **138 cases / 464 assertions**, 4-config green. **ADR-0078 Accepted.** System doc `docs/systems/units.md`. Session log `docs/sessions/2026-05-15-units-v0a-substrate.md`.
+3. **Detour D-006 `crd-time` substrate ✅ SHIPPED** — new `engine/time/` module; `Instant` + `Duration = Quantity<dim::Time, f64>` (**first major consumer of the units substrate**) + `MonotonicClock`/`WallClock`/`CycleCounter` + `Stopwatch` + `FrameClock` + `DeterministicClock` + `Deadline` + `GpuTimestampHandle`. Move-and-deletes `engine/platform/include/crd/platform/timer.hpp` per the ADR-0076 §13 pattern. 53 cases / 102 assertions. Session log `docs/sessions/2026-05-15-d006-crd-time-substrate.md`.
+4. **Detour D-003 `crd-perf` profiler + `crd-perf-ui` ImGui frontend ✅ SHIPPED** — 8 slices (v0a-v0h) same session. New `engine/perf/` + `engine/perf-ui/`; `crd-rhi-vulkan` gains `VulkanProfilerBackend`; `crd-jobs` gains `JobObserver` hook; `crd-memory` `MemoryStats` gate widened. **`win-shipping-profile` preset** added (per-slice DoD 4 → 5 configs). 97 perf-* cases / 336 assertions. **ADR-0079 Accepted.** System doc `docs/systems/perf.md`. 8 session logs `docs/sessions/2026-05-15-d003-v0{a..h}-*.md`. **Renamed `crd-profiler` → `crd-perf`** (collision with `crd-profile` quality-preset module).
+
+**Full project ctest grew 1546 → 1844 across the day (+298 cases).** Both shipped modules consume `crd-units` from day 1 — D-006's `Duration` is `Quantity<dim::Time, f64>`; D-003's GPU timestamps + counter `DURATION` macros plumb through it.
+
+---
+
+**🎯 NEXT — Phase 3.1.7.5 v0b adoption pass A** (~5 days, ~600 LOC):
+- `crd-config` — unit-tagged TOML readers (`length_mm = 25.4` / `mass_kg = 5.0` / etc. parsed into typed `Quantity<>` at the boundary).
+- `crd-scene Transform` — dimensional position / scale / etc. (currently raw f32).
+- glTF cooker — SI normalization on import (glTF specs `KHR_unit`).
+- `Vec<Quantity>` / `Mat<Quantity>` wrappers (deferred from v0a — needs `crd-math` types).
+
+Then **v0c adoption B** (`crd-eylem RigidBody` + integrator + force fields + `crd-geometry-primitives` API-surface re-tag, ~800 LOC), **v0d adoption C** (`crd-renderer` uniform-upload boundary + `crd-resources` cookers + `crd-imgui` user-preferred-unit display + Layer-6 format/parse/UnitPreferences + cross-engine readers + full 17-config sweep close, ~700 LOC). In parallel: D-004 deterministic-replay sandbox; D-005 config/resource hot-reload polish.
+
+Every v0b/c/d slice runs the new **5-config per-slice-check** (win-debug + win-asan + win-shipping + win-shipping-profile + win-tidy) per `feedback_per_slice_run_ctest.md`. The just-shipped profiler is ready to instrument the dimensional-type cost from day 1.
+
+---
+
+**D-003 detour state (closed 2026-05-15):**
 - **v0a ✅ SHIPPED 2026-05-15** — substrate skeleton: new `engine/perf/` module; 32-byte `Sample` POD + per-thread SPSC ring + content-keyed FNV-1a interned names + `ScopedRegion` RAII + `CRD_PERF_SCOPE` macros + thread registration + fiber-migration wire format via `BeginToken` + frame_mark. ADR-0063 determinism-contract substrate-level pin proven. Session log `docs/sessions/2026-05-15-d003-v0a-perf-substrate.md`. **Module renamed `crd-profiler` → `crd-perf`** to avoid collision with existing `crd-profile` (quality presets); macros `CRD_PERF_SCOPE` / `CRD_PERF_FRAME_MARK` / etc.; namespace `crd::perf`.
 - **v0b ✅ SHIPPED 2026-05-15** — typed counters substrate + per-frame snapshot ring. `counters.hpp` + `frame_record.hpp` (~310 LOC engine + ~510 LOC tests); `CounterKind` (Set/Add) × `CounterType` (I64/F64/DurationNs) = 6 macros; `FrameRecord` 2080 B POD pinned by static_assert (on-disk CPROF depends on it); 240-slot rolling history ring; multi-thread atomic with CAS-loop on f64 Add. Session log `docs/sessions/2026-05-15-d003-v0b-perf-counters.md`.
 - **v0c ✅ SHIPPED 2026-05-15** — crd-jobs `JobObserver` hook + crd-perf jobs adapter + new `win-shipping-profile` preset. Every job in the engine becomes a labeled `Category::Job` Sample with zero call-site code once `install_jobs_adapter()` runs after `perf::init()`. Session log `docs/sessions/2026-05-15-d003-v0c-jobs-adapter.md`.
@@ -25,21 +46,19 @@
 
 ---
 
-**🎉 D-003 DETOUR CLOSED 2026-05-15.** 8 slices same session, ~6400 LOC across `crd-perf` + `crd-perf-ui` + `crd-rhi-vulkan` extensions + `crd-jobs` observer hook + `crd-memory` gate widening + sandbox wiring; 97 perf-* test cases / 336 assertions; ADR-0079 + `docs/systems/perf.md` + 8 session logs. Full project ctest grew 1775 → 1844 (+69 cases). Calendar target was 2-3 weeks; actual was 1 session.
+**🎉 D-003 detour fully closed.** Slice-by-slice detail captured in the 8 session logs above; ADR-0079 is the authoritative architecture record; `docs/systems/perf.md` is the system overview.
 
-**Next: main roadmap resumes at Phase 3.1.7.5 v0a `crd-units` substrate** (~7 days; `Quantity<D, T>` zero-overhead wrapper + 8-exponent `Dim<L,M,T,I,Th,N,J,A>` + Layer 1–5 conversion machinery + `crd-no-untagged-physical-numeric` CI guard + ADR-0078 minting). Every units slice will be measured under the new `win-shipping-profile` preset + the 5-config DoD; the profiler is ready to instrument the dimensional-type cost from day 1.
-
-**v0a-locked design pins:**
+**v0a-locked design pins (kept for posterity):**
 1. Sample = exactly 32 bytes; on-disk CPROF (v0f) memcpys arrays verbatim.
 2. Wire format = paired Sample + `(begin_thread, end_thread)`. UI default = per-OS-thread tracks; per-fiber Tracy-style view reconstructed via JobObserver fiber-yield events in v0c.
 3. Gate = existing project-wide `CRD_ENABLE_PROFILING` (no new build switch).
 4. **Per-slice DoD = 5-config per-slice-check** (win-debug + win-asan + win-shipping + **win-shipping-profile** + win-tidy). 5th config added 2026-05-15 (D-003 v0b post-discussion): mirrors win-shipping under LTCG + `/O2` + `/OPT:ICF` but with `CRD_ENABLE_PROFILING=ON`, so the entire substrate + every gated `CRD_PERF_*` site compiles + runs under max optimization. Catches LTCG-class bugs in profiler hot paths (atomic stores, CAS-loops, thread-local indirection). `win-shipping` (profiling OFF) still runs to verify the consumer-ship zero-overhead contract. v0a+v0b retroactively validated 2026-05-15 (1795/1795 full project ctest under win-shipping-profile). Full 17-config sweep at v0h close per `feedback_full_sweep_required.md`.
 
-**Once D-003 closes**, the main roadmap resumes at **Phase 3.1.7.5 v0a `crd-units` substrate + 6-layer conversion system** (~7 days) — `Quantity<D, T>` zero-overhead wrapper + 8-exponent `Dim<L,M,T,I,Th,N,J,A>` tag + Layer 1–5 conversion machinery + `crd-no-untagged-physical-numeric` CI guard + ADR-0078 minting. See `docs/phases/phase-3.1.7.5-units.md`.
+See `docs/phases/phase-3.1.7.5-units.md` for the v0b/c/d adoption plan.
 
 ---
 
-**Strategic Execution Plan LOCKED 2026-05-15** (canonical reference: `docs/ROADMAP.md` § Strategic Execution Plan). User-approved step-back review yielded: **Pathway A (units-first) + Pathway E (engineering-platform leader) confirmed**; geometry phase ships in FULL (no consumer-driven cutting per Pathway B); C++ scripting + DLL hot-reload **stays deferred to Phase 4.0** (not pulled forward); four cross-cut detours (D-006 `crd-time` ✅ / D-003 profiler 🚧 / D-004 replay sandbox / D-005 config/resource hot-reload polish) run in parallel with units adoption; eylem cold-storage mitigated via per-sub-module integration smoke against eylem v1c+ stubs; hesap-dense v0 ships BEFORE eylem v1c resume (engineering-platform pivot's first concrete artifact). Calendar target: ~3.5 months to first integrated physics demo with units + profiler + replay; ~9 months to engineering-platform pivot fully started.
+**Strategic Execution Plan LOCKED 2026-05-15** (canonical reference: `docs/ROADMAP.md` § Strategic Execution Plan). User-approved step-back review yielded: **Pathway A (units-first) + Pathway E (engineering-platform leader) confirmed**; geometry phase ships in FULL (no consumer-driven cutting per Pathway B); C++ scripting + DLL hot-reload **stays deferred to Phase 4.0** (not pulled forward); four cross-cut detours (D-006 `crd-time` ✅ + D-003 `crd-perf` ✅ both shipped 2026-05-15 / D-004 replay sandbox queued / D-005 config/resource hot-reload polish queued) run in parallel with units adoption; eylem cold-storage mitigated via per-sub-module integration smoke against eylem v1c+ stubs; hesap-dense v0 ships BEFORE eylem v1c resume (engineering-platform pivot's first concrete artifact). Calendar target: ~3.5 months to first integrated physics demo with units + profiler + replay; ~9 months to engineering-platform pivot fully started.
 
 **Multi-domain expansion vision captured 2026-05-14 (ADR-0077).** Strategic review of the long-term roadmap against the stated 8-domain mandate (gaming + simulation + manufacturing + CAD + CFD + math + aerospace + mechanics) surfaced 9 missing peer-module substrates + a Phase 3.5 prologue + a Phase 6 platform-expansion phase. All captured as aspirational stubs in `docs/phases/`:
 - **Phase 3.1.8 `crd-brep`** — NURBS / B-rep core (the manufacturing/CAD substrate; STEP / IGES / Parasolid import; exact booleans; fillet / chamfer / sweep / loft).
