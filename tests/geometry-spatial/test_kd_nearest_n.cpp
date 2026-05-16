@@ -50,10 +50,10 @@ crd::containers::Array<KdNeighbor<f32>> brute_knn(crd::containers::ConstSpan<Vec
         const Vec3f d = pts[i] - q;
         all.push_back(KdNeighbor<f32>{i, d.x * d.x + d.y * d.y + d.z * d.z});
     }
-    auto cmp = [](const KdNeighbor<f32>& a, const KdNeighbor<f32>& b) {
-        if (a.distance_squared < b.distance_squared) return true;
-        if (a.distance_squared > b.distance_squared) return false;
-        return a.payload < b.payload;
+    auto cmp = [](const KdNeighbor<f32>& lhs, const KdNeighbor<f32>& rhs) {
+        if (lhs.distance_squared < rhs.distance_squared) return true;
+        if (lhs.distance_squared > rhs.distance_squared) return false;
+        return lhs.payload < rhs.payload;
     };
     std::sort(all.data(), all.data() + all.size(), cmp);
 

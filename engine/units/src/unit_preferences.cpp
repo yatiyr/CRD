@@ -6,6 +6,7 @@
 #include <crd/containers/string_view.hpp>
 #include <crd/memory/allocator.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdio>
@@ -155,7 +156,11 @@ crd::containers::String format_value_with_factor(T si_value, double factor, cons
 {
     const double display = static_cast<double>(si_value) / factor;
     char buf[64] = {};
-    const int prec = static_cast<int>(prefs.precision_digits);
+    // IEEE 754 double carries at most 17 significant decimal digits; capping
+    // here both reflects that and bounds snprintf output below buf size so
+    // gcc's -Wformat-truncation stays quiet.
+    constexpr int kMaxPrec = 17;
+    const int     prec     = std::min(static_cast<int>(prefs.precision_digits), kMaxPrec);
     if (prefs.scientific_notation)
     {
         (void)std::snprintf(buf, sizeof(buf), "%.*e", prec, display);
@@ -468,7 +473,8 @@ crd::containers::String format_temperature(crd::f32 kelvin, const UnitPreference
         case TemperatureUnitChoice::Rankine:   display = static_cast<double>(kelvin) * 9.0 / 5.0; suffix = "_rankine"; break;
     }
     char buf[64] = {};
-    const int prec = static_cast<int>(prefs.precision_digits);
+    constexpr int kMaxPrec = 17;
+    const int     prec     = std::min(static_cast<int>(prefs.precision_digits), kMaxPrec);
     if (prefs.scientific_notation) { (void)std::snprintf(buf, sizeof(buf), "%.*e", prec, display); }
     else                            { (void)std::snprintf(buf, sizeof(buf), "%.*g", prec, display); }
     crd::containers::String out(alloc != nullptr ? alloc : crd::memory::default_allocator());

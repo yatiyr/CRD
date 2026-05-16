@@ -1111,3 +1111,274 @@ closest_point + raycast + winding per ADR-0078 §5 D32-D36.
 **Next sub-module:** `-spatial` v5 (KD-tree + loose octree + R-tree +
 uniform spatial hash + scene `IComponentIndex<Aabb>` reserved-shell
 consumption from ADR-0053).
+
+---
+
+## 20. Amendment 2026-05-16 — `-spatial` v5 cluster CLOSED + locked decisions
+
+All v5 slices shipped 2026-05-16 in a single session — new
+`engine/geometry-spatial/` module (5 backends + facade) + `crd-scene`
+`SpatialBVHIndex` promotion. 6th of 11 geometry sub-modules complete.
+
+### 20.1 Slice ledger
+
+- **v5a `KdTree<T>`** ✅ — Friedman/Bentley/Finkel 1977 + nanoflann/PCL
+  refinements (widest-extent split + leaf bucket 8 + lex-tuple
+  `nth_element` median + pre-allocate-both-children DFS trick). Caller-
+  heap k-NN with explicit-`k` API and strict-`>` pruning for tied-
+  distance lower-payload tiebreak. 24 cases, brute-force cross-validated.
+  Session log `docs/sessions/2026-05-16-geometry-v5a-kd-tree.md`.
+- **v5b `LooseOctree<T>`** ✅ — Ulrich 2000 dynamic AABB index. 64 B
+  cell node + free-list pool with stable `OctreeObjectId`; loose factor
+  2.0; **guaranteed-fast-path target-depth formula** `(loose - 1) × R /
+  extent` (NOT Ulrich's classical centered-fit `loose × R / extent`,
+  which placed off-center objects in cells that didn't fully enclose
+  them — silent loss in pathological queries; caught by advisor self-
+  review and fixed before close). Morton-order overlap + t-near-first
+  raycast. 17 cases / fast-path 100% verified by sized-by-construction.
+  Session log `docs/sessions/2026-05-16-geometry-v5b-loose-octree.md`.
+- **v5c `RTree<T>`** ✅ — **FULL Beckmann 1990 R*-tree** (NOT quadratic-
+  split simplification). M=16, m=5; choose-subtree min-overlap-
+  enlargement at leaf-parent + min-area-enlargement higher; split
+  min-perimeter-axis × min-overlap-distribution; forced reinsertion 4
+  farthest-from-centre per level per insert via `m_treated_levels`
+  bitmask; Guttman §3.4 condense-tree with orphan reinsertion. STR
+  (Leutenegger 1997) bulk-load first-class. Hjaltason-Samet 1999
+  incremental k-NN with `crd::containers::push_heap` / `pop_heap`.
+  Indirection-table stable handles via `m_locations[handle] → {node,
+  entry}`. Two-field `RTreeEntry { aabb, payload, handle }` (32 B).
+  17 cases. Session log `docs/sessions/2026-05-16-geometry-v5c-rtree.md`.
+- **v5d `SpatialHash<T>`** ✅ — Teschner 2003 hash `H(ix,iy,iz) =
+  (ix·73856093) XOR (iy·19349663) XOR (iz·83492791)` mod POW2 (bit-mask).
+  AABB stored to all overlapping cells. Per-query generation-counter
+  dedup (zero allocation). **Amanatides-Woo 1987 voxel raycast** with
+  ALL-tied-axes-advance corner-grazing safety. `find_overlapping_pairs`
+  first-class (eylem v3 XPBD broadphase target). Same-cell-range update
+  fast-path. **v5d-fast caller-scratch overload shipped same session**
+  per user "elite, no deferring" mandate: `SpatialHashScratch` POD,
+  shared traversal-template helpers parameterised over `WasVisited` /
+  `MarkVisited` policy lambdas (provably equivalent convenience +
+  thread-safe paths). 28 cases. Session log
+  `docs/sessions/2026-05-16-geometry-v5d-spatial-hash.md`.
+- **v5e `UniformGrid<T>`** ✅ — dense bounded-domain 3D cell array (no
+  hash, O(cell_count) memory). Flat `Array<Array<u32>>` sized `nx·ny·nz`;
+  out-of-bounds AABBs CLAMP to grid (handle remains valid). 256M cell
+  sanity cap. **Grid-bounds-clipped Amanatides-Woo voxel raycast** —
+  slab-test ray vs grid AABB then entry-clip then walk. Scratch
+  overloads SHIPPED FROM DAY 1 (no v5e-fast follow-on per "elite, no
+  deferring" mandate). 26 cases. Session log
+  `docs/sessions/2026-05-16-geometry-v5e-uniform-grid.md`.
+- **v5 thread-safety validation pass** ✅ — cross-cutting after v5e.
+  Locks the design principle that emerged across v5d/v5e and applies it
+  retroactively: 3 fiber-jobified concurrent-read tests added to
+  KdTree/LooseOctree/R*-tree proving naturally-const-safe claim under
+  win-asan race detection (400 fan-out tasks each via
+  `crd::jobs::parallel_for`). Listener renamed
+  `SpatialHashJobsListener` → `GeometrySpatialJobsListener` (binary-
+  wide). Memory rule saved as
+  `feedback_spatial_substrate_thread_safety.md`. Session log
+  `docs/sessions/2026-05-16-geometry-v5-thread-safety-validation.md`.
+- **v5-index-bringup `scene::SpatialBVHIndex`** ✅ — FIRST non-reserved
+  spatial index in `crd-scene`. Promoted ADR-0053 v1i no-op shell to a
+  real LooseOctree-backed component index. Two-state design preserves
+  day-one promise (unconfigured = identical no-op behaviour to shell;
+  `configure(extractor, opts)` wires real work). Canonical
+  `IAabbExtractor::extract(EntityId, ComponentId, const void* data)`
+  pattern avoids storage-migration-mid-commit `get_component`-null
+  hazard. **UPSERT-only update contract** (`world.add_component`;
+  `get_component_mut` only bumps chunk-version). 8 cases incl.
+  concurrent-via-jobs. Session log
+  `docs/sessions/2026-05-16-geometry-v5-index-bringup.md`.
+- **v5-queries-extension** ✅ — unified `crd::geometry::{raycast,
+  overlap, radius, nearest_n, find_overlapping_pairs}` facade extended
+  to dispatch over all 5 v5 backends. Header-only
+  `crd/geometry/spatial/queries.hpp` (~250 LOC) sits ALONGSIDE
+  `crd-geometry-bvh`'s `crd/geometry/queries.hpp` — both in
+  `crd::geometry` namespace; ADL unifies them when both are included.
+  Compile-time overload polymorphism per §16 pin #1. 16 facade-parity
+  tests + cross-backend uniformity demo. Session log
+  `docs/sessions/2026-05-16-geometry-v5-queries-extension.md`.
+- **v5-close** ✅ — this amendment + `docs/systems/geometry-spatial.md`
+  + 18-config full sweep PASS.
+
+**Cluster totals:** 8 slices · ~4900 LOC engine + ~4330 LOC tests · new
+`engine/geometry-spatial/` module + `crd-scene::SpatialBVHIndex`
+promotion + `crd::geometry::*` facade extension. Full project ctest:
+1952 (v4 close) to **2093** (v5 close) = +141 cases across the v5
+cluster.
+
+### 20.2 Locked substrate decisions
+
+1. **5 backends, ONE substrate.** Five v5 spatial backends ship from
+   one module `engine/geometry-spatial/`, each chosen for a distinct
+   workload (point-cloud k-NN vs dynamic AABB broadphase vs static-
+   cooked-level AABB vs particle / swarm hash vs bounded uniform-density
+   grid). Same module, same `crd::geometry::spatial` namespace, one
+   typed-wrapper layer per backend, one facade.
+
+2. **The two-camp algorithmic split.** All v5 backends fall into one
+   of two camps based on **does each stored object live in exactly one
+   location, or in multiple?**
+   - *One-object-one-location* (KdTree, LooseOctree, RTree): queries
+     are PURELY READ-ONLY by construction — no per-object dedup state,
+     no `mutable` member, no `const_cast` write during query →
+     thread-safe by construction.
+   - *Multi-location-storage* (SpatialHash, UniformGrid): AABB spans
+     multiple cells, same `obj_idx` appears in multiple buckets, dedup
+     state MUST be mutated during queries → const queries are NOT
+     thread-safe → scratch overload mandatory.
+
+3. **Scratch overload exists IFF per-query dedup state requires it.**
+   Pinned in `feedback_spatial_substrate_thread_safety.md`. Adding a
+   scratch overload to a one-object-one-location backend would be
+   misleading-API cargo-culting; the backend has no dedup state to
+   scratch out. Multi-location-storage backends MUST ship a scratch
+   overload — the alternative ("document NOT-thread-safe + tell callers
+   to externally sync") leaks the implementation detail into the
+   contract.
+
+4. **Fiber-jobified concurrent test MANDATORY for ALL backends** —
+   regardless of which camp they're in. The convenience path's
+   naturally-const-safe claim AND the scratch path's race-freedom are
+   both empirical claims that ASan-instrumented `crd::jobs::parallel_for`
+   tests verify. 400 fan-out tasks across 16 jobs / 4 worker fibers,
+   atomic mismatches == 0 under win-asan. Same listener pattern
+   (`GeometrySpatialJobsListener`, binary-wide) across the cluster.
+
+5. **`crd::containers::nth_element` / `push_heap` / `pop_heap` / `sort`
+   over `std::*` equivalents** — bit-exact across MSVC / GCC / clang
+   on x64 / ARM64. KdTree's median pick (`nth_element` + lex-tuple
+   `(coord, original_index)` comparator) and RTree's k-NN priority
+   queue both depend on this. Hidden trap closed.
+
+6. **Lex-tuple comparators eliminate equal-key ordering hazards.**
+   For any partition / sort over numeric keys where equal-key tiebreak
+   matters, the comparator must lex-include the original index (or
+   another unique field). KdTree's `(coord, original_index)` is the
+   canonical pattern; RTree split sort uses
+   `(axis_coord_lo, axis_coord_hi, payload)` for the same reason.
+
+7. **Lowest-payload tiebreak on equal distance / equal `t`** — engine-
+   wide §4 pin #11 consistently applied across all 5 v5 backends. k-NN
+   tied distance → lower payload wins; raycast tied `t` → lower
+   payload wins; closest-point tied distance² → lower payload wins.
+
+8. **NaN/Inf contract**: builders REJECT non-finite input (debug
+   `CRD_ASSERT(is_finite(...))`); queries TOLERATE non-finite
+   (defensive `is_finite` short-circuit at API surface returns empty
+   result, no crash). Symmetric with §15 BVH builder-reject /
+   query-tolerate pin. Zero-direction ray short-circuits in raycast.
+
+9. **Update fast-path pattern** — backends with `update()` ship a
+   same-position-class fast-path:
+   - LooseOctree: AABB-fit-only (Ulrich invariant — NOT center-in-
+     cell; the latter is over-restrictive and was the v5b advisor-
+     caught correctness gap)
+   - SpatialHash + UniformGrid: same-cell-range detection
+   These absorb ~90%+ of small-motion updates at zero rebucketing cost.
+
+10. **Amanatides-Woo voxel traversal with ALL-tied-axes-advance**
+    corner-grazing safety — applies to SpatialHash + UniformGrid
+    raycast. Strict-less-only chains skip cells when ray exactly grazes
+    a corner; advancing every axis whose `tMax` ties for minimum
+    preserves correctness. Pinned at v5d fix.
+
+11. **Grid-bounds-clipped Amanatides-Woo for UniformGrid raycast** —
+    slab-test ray vs grid AABB then entry-clip then walk cells from
+    entry point. Step cap 2^22 cells defends against pathological
+    inputs.
+
+12. **Sized-by-construction tests beat percentage targets.** v5b's
+    fast-path test asserts **100% fast-path hits** by sizing object
+    half-extent vs cell extent so that ANY cell-resident motion is in
+    range. Stronger than "at least 80% fast-path"; provably correct by
+    sizing arithmetic, not empirical sampling.
+
+13. **`SpatialBVHIndex` two-state design preserves ADR-0053 day-one
+    promise.** Unconfigured = identical no-op behaviour to the v1i
+    shell it replaced; `configure(extractor, opts)` wires real
+    LooseOctree-backed work. Existing Phase-3.0 user code that did
+    `register_component<X>(SpatialBVH{})` continues running with zero
+    changes; opting in is one line.
+
+14. **`IAabbExtractor::extract(EntityId, ComponentId, const void*
+    data)` is the canonical pattern.** NOT `extract(EntityId)` — naive
+    `world.get_component<T>(e)` from inside `on_insert` returns
+    nullptr mid-archetype-migration. The `data` pointer IS the
+    freshly-installed bytes per `IStorageEventSink` contract. Reusable
+    pattern for future spatial extensions (`LightInfluenceIndex` Phase
+    3.5, `OcclusionIndex` 3.5+, `AudioOcclusionIndex` 3.4).
+
+15. **UPSERT-only spatial-bounds update.** `world.add_component(e,
+    new_value)` (UPSERT semantics) is the ONLY way to refresh an
+    indexed entity's bounds — `world.get_component_mut<T>(e)` bumps
+    chunk-version only (ChangeDetect's hint-grade signal), does NOT
+    fire per-entity `on_update`. Documented prominently in the index
+    header.
+
+16. **Storage handle = `u32 entity.index()` in octree payload + side
+    `HashMap<u32, EntityId>` for O(1) reverse lookup.** LooseOctree's
+    payload is u32-only (32 bits); EntityId is 64 bits (32 index + 32
+    generation). Side map reconstructs full EntityId from index. Both
+    maps kept in lockstep on insert / remove.
+
+17. **Compile-time overload polymorphism for `crd::geometry::*` facade
+    extension.** Per §16 pin #1 + v1i-a precedent. No virtual, no
+    IAcceleration vtable, zero overhead. Header-only
+    `crd/geometry/spatial/queries.hpp` sits ALONGSIDE
+    `crd-geometry-bvh`'s `crd/geometry/queries.hpp`; both facades in
+    `crd::geometry` namespace; ADL unifies them when both are
+    included.
+
+18. **Facade support matrix — don't fake what doesn't fit.** Each
+    backend exposes only the queries it natively supports. KdTree =
+    k-NN + radius (no AABBs stored). LooseOctree = overlap + raycast
+    (no native radius without scanning all leaves). RTree = overlap +
+    raycast + k-NN. SpatialHash + UniformGrid = overlap + radius +
+    raycast + `find_overlapping_pairs`. Faking via O(N²) at the
+    facade layer would mask the right "use the right backend"
+    decision.
+
+19. **Convenience-only facade.** No scratch overloads on the facade —
+    scratch is a backend-specific knob that doesn't generalise.
+    Consumers needing parallel-query thread-safety call the native
+    scratch-taking overload directly. Per pin #3.
+
+20. **`crd-scene` gains PUBLIC link `crd-geometry-spatial`.** New
+    module-graph edge required by the SpatialBVHIndex promotion. No
+    other reverse-dep — `crd-geometry-bvh` and `crd-geometry-spatial`
+    remain siblings.
+
+### 20.3 Cluster cross-validation
+
+Phase 3.1.7 v5 closes with:
+- **All 5 backends + scene index + facade**: 8 slices shipped in one
+  session.
+- **141 new test cases** across the cluster (full project ctest 1952
+  to 2093 win-debug).
+- **2000 concurrent ASan-validated fan-out tasks** total cross-backend
+  race coverage (5 backends × 400 tasks each).
+- **18-config sweep PASS** at v5-close (11 Win + 7 Linux WSL via
+  `scripts/full-sweep.ps1`).
+
+### 20.4 Cluster sub-module summary
+
+| Slice | LOC engine | LOC tests | Locked decisions |
+|---|---|---|---|
+| v5a KdTree | ~700 | ~750 | widest-extent split + leaf-bucket-8 + lex-tuple `nth_element` + caller-heap k-NN |
+| v5b LooseOctree | ~750 | ~530 | loose factor 2.0 + guaranteed-fast-path target-depth formula + Morton overlap + t-near raycast |
+| v5c RTree | ~1400 | ~570 | FULL Beckmann split + forced reinsertion + STR bulk-load + Hjaltason-Samet k-NN + indirection handles |
+| v5d SpatialHash | ~850 | ~750 | Teschner hash + Amanatides-Woo + dedup gen counter + pair query + scratch overloads (v5d-fast same session) |
+| v5e UniformGrid | ~700 | ~700 | dense flat grid + grid-bounds-clipped Amanatides-Woo + scratch from day 1 |
+| v5 thread-safety pass | — | ~150 | 3 fiber-jobified concurrent-read tests proving naturally-const-safe |
+| v5-index-bringup | ~250 | ~430 | SpatialBVHIndex two-state design + IAabbExtractor pattern + UPSERT-only contract |
+| v5-queries-extension | ~250 | ~450 | unified facade across 5 backends + support matrix |
+| **Total** | **~4900** | **~4330** | **20 locked substrate decisions** |
+
+Phase 3.1.7 progress: **6 of 11 sub-modules complete** (primitives ✅
++ bvh ✅ + convex ✅ + v3 convex-hull extension ✅ + mesh ✅ +
+**spatial ✅**). 44 of the renewed-scope 49 total slices shipped (~90%).
+
+**Next sub-module:** `-polygon` v6 (ear-clipping triangulation + CDT
++ Vatti general-polygon Boolean + Bentley-Ottmann sweep — Sutherland-
+Hodgman migrated to convex v2j 2026-05-13).

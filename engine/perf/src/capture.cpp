@@ -260,7 +260,7 @@ save_capture_to_buffer(crd::memory::IAllocator* alloc) noexcept
         const FrameRecord* rec = frame_record(frame_n - 1U - i); // oldest first
         if (rec == nullptr)
         {
-            std::memset(&frame_dst[i], 0, sizeof(FrameRecord));
+            frame_dst[i] = FrameRecord{};
         }
         else
         {

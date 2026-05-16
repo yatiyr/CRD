@@ -3,6 +3,8 @@
 #include <crd/containers/string_view.hpp>
 #include <crd/cooker/mesh_cook_options.hpp>
 
+#include <cmath>
+
 using crd::containers::StringView;
 using crd::cooker::parse_mesh_cook_options;
 

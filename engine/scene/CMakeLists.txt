@@ -15,6 +15,7 @@ target_link_libraries(crd-scene
         crd-memory
         crd-math
         crd-geometry-primitives  # query.hpp's frozen spatial-DSL operators take crd::geometry::primitives::AABB<f32> (ADR-0076 §13)
+        crd-geometry-spatial     # SpatialBVHIndex backs onto LooseOctree (Phase 3.1.7 v5-index-bringup, ADR-0076 §20)
         crd-resources
 )
 

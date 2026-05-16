@@ -2,6 +2,7 @@
 
 #include <crd/containers/string_view.hpp>
 #include <crd/scene/component_index.hpp>
+#include <crd/scene/spatial_bvh_index.hpp>  // SpatialBVHIndex promoted from no-op shell at v5-index-bringup; this header re-exports it for the auto-register path
 
 namespace crd::scene
 {
@@ -49,7 +50,8 @@ private:
 };
 
 inline constexpr char kHistoryIndexName[]      = "HistoryIndex";
-inline constexpr char kSpatialBvhIndexName[]   = "SpatialBVHIndex";
+// SpatialBVHIndex name pinned in `spatial_bvh_index.hpp` — it ships as a real
+// implementation now (Phase 3.1.7 v5-index-bringup, 2026-05-16).
 inline constexpr char kGpuResidentIndexName[]  = "GpuResidentIndex";
 inline constexpr char kReplicationIndexName[]  = "ReplicationIndex";
 inline constexpr char kReflectionIndexName[]   = "ReflectionIndex";
@@ -62,11 +64,14 @@ class HistoryIndex final : public detail::ReservedNoOpIndexBase<detail::kHistory
 {
 };
 
-// Spatial BVH / grid for in_aabb / within_radius queries (ADR-0053 §6).
-// Shipping shell — actual BVH is Phase 3.5 (light culling at scale).
-class SpatialBVHIndex final : public detail::ReservedNoOpIndexBase<detail::kSpatialBvhIndexName>
-{
-};
+// SpatialBVHIndex — promoted from no-op shell to a REAL LooseOctree-backed
+// component index at Phase 3.1.7 v5-index-bringup (2026-05-16). Class lives
+// in `spatial_bvh_index.hpp` and is re-included above so the auto-register
+// path (`World::auto_register_indexes_for`) finds the same class via
+// `dynamic_cast`. Day-one promise preserved: when unconfigured (the default
+// state from auto-register), all hooks no-op exactly like the shell did.
+// Users opt in by calling
+// `world.find_index<SpatialBVHIndex>()->configure(extractor, opts)`.
 
 // CPU-mirrored GPU SSBO of component data (ADR-0053 §7).
 // Shipping shell — actual GPU residency wiring is Phase 3.8 (GPU-driven

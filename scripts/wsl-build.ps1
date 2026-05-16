@@ -74,6 +74,18 @@ $skipTestsForPreset = $SkipTests.IsPresent
 $nativeBuildDir = "`$HOME/cerid-build/$Preset"
 
 $bashLines = @(
+    # Exit-code propagation fix (2026-05-16): wsl.exe in current WSL2 builds
+    # does NOT reliably propagate the inner bash script's exit code to its
+    # parent (PowerShell $LASTEXITCODE). Verified empirically on 2026-05-16
+    # by the v5-close full-sweep: every Linux preset (gcc-debug/asan/release/
+    # …) failed mid-build with cc1plus -Werror, yet wsl-build.ps1 reported
+    # "OK". To get a trustworthy signal, we write the bash exit code to a
+    # sentinel file inside WSL after the script runs; PowerShell reads it
+    # back via `wsl.exe cat`. The wsl.exe exit code is used only as a
+    # secondary signal (catches "WSL boot failed" / "bash not found").
+    "RC_FILE=`"/tmp/cerid-wsl-rc-$Preset`""
+    'rm -f "$RC_FILE"'
+    '('
     'set -euo pipefail'
     # Ubuntu's default ~/.bashrc returns early for non-interactive shells,
     # so the VULKAN_SDK export from setup-wsl-deps.sh is invisible to
@@ -120,6 +132,14 @@ if (-not $skipTestsForPreset) {
 }
 
 $bashLines += 'echo "[wsl-build] ===== DONE ====="'
+# Close the exit-code-capture subshell (opened above with `(`).
+# Outer shell has NO set -e, so it continues after the subshell exits
+# non-zero; we capture the subshell's exit code from $?, write it to the
+# sentinel file, then propagate it as our own exit code.
+$bashLines += ')'
+$bashLines += 'BASH_RC=$?'
+$bashLines += 'echo "$BASH_RC" > "$RC_FILE"'
+$bashLines += 'exit $BASH_RC'
 
 $bashScript = ($bashLines -join "`n") + "`n"
 
@@ -152,16 +172,39 @@ try {
     # run the call under 'Continue' and trust $LASTEXITCODE.
     $ErrorActionPreference = 'Continue'
     & wsl.exe -d $Distro -- bash "$tmpWsl"
-    $code = $LASTEXITCODE
+    $wslCode = $LASTEXITCODE
+    # See the comment block at $bashLines: wsl.exe in current WSL2 builds
+    # does NOT reliably propagate the inner bash exit code. Sentinel file
+    # is authoritative; fall back to wsl.exe code only if the file is
+    # missing (e.g. WSL itself failed to boot).
+    $rcOut = & wsl.exe -d $Distro -- cat "/tmp/cerid-wsl-rc-$Preset" 2>$null
+    if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($rcOut)) {
+        $code = [int]($rcOut.Trim())
+    } else {
+        Write-Host "[wsl-build.ps1] WARN: sentinel /tmp/cerid-wsl-rc-$Preset missing; falling back to wsl.exe rc=$wslCode" -ForegroundColor Yellow
+        $code = $wslCode
+    }
 }
 finally {
     $ErrorActionPreference = $prevEAP
     Remove-Item -Force $tmpWin -ErrorAction SilentlyContinue
 }
 
+# Windows-side status sentinel — full-sweep.ps1 reads this directly. Belt-
+# and-braces: `exit $code` SHOULD propagate to caller's $LASTEXITCODE for
+# .ps1 invoked via `&`, but the 2026-05-16 v5-close sweep proved it does
+# NOT propagate reliably when the caller's foreach loop runs many child
+# .ps1 calls back-to-back — full-sweep saw $LASTEXITCODE=0 even though
+# wsl-build.ps1 had printed "[wsl-build.ps1] FAILED". The status file is
+# the authoritative signal callers should trust.
+$statusFile = Join-Path $repoRootWin "build/.wsl-build-status-$Preset"
+[System.IO.File]::WriteAllText($statusFile, "$code`n")
+
 if ($code -ne 0) {
     Write-Host "[wsl-build.ps1] FAILED (exit code $code)" -ForegroundColor Red
+    $global:LASTEXITCODE = $code
     exit $code
 }
 
 Write-Host "[wsl-build.ps1] OK" -ForegroundColor Green
+$global:LASTEXITCODE = 0

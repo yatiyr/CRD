@@ -227,7 +227,7 @@ void draw_timeline(IProfilerSource& src, float& ns_per_pixel, float& scroll_ns) 
     ImGui::SameLine();
     if (ImGui::Button("+ 2x")) { ns_per_pixel *= 0.5f; if (ns_per_pixel < 1.0f) ns_per_pixel = 1.0f; }
     ImGui::SameLine();
-    ImGui::Text("(%.1f ns/px)", ns_per_pixel);
+    ImGui::Text("(%.1f ns/px)", static_cast<double>(ns_per_pixel));
 
     // Track viewport.
     const float track_h = 22.0f;
@@ -272,8 +272,9 @@ void draw_timeline(IProfilerSource& src, float& ns_per_pixel, float& scroll_ns) 
                 static_cast<double>(s.begin_ns - win_begin) - static_cast<double>(scroll_ns);
             const double off_end =
                 static_cast<double>(s.end_ns - win_begin) - static_cast<double>(scroll_ns);
-            const float x0 = origin.x + label_w + static_cast<float>(off_begin / ns_per_pixel);
-            const float x1 = origin.x + label_w + static_cast<float>(off_end / ns_per_pixel);
+            const double ns_per_pixel_d = static_cast<double>(ns_per_pixel);
+            const float x0 = origin.x + label_w + static_cast<float>(off_begin / ns_per_pixel_d);
+            const float x1 = origin.x + label_w + static_cast<float>(off_end / ns_per_pixel_d);
             if (x1 < origin.x + label_w || x0 > origin.x + label_w + viewport_w)
             {
                 continue;
@@ -400,7 +401,7 @@ void draw_flame_graph(IProfilerSource& src) noexcept
                             / static_cast<double>(grand_total);
         const float y0 = origin.y + static_cast<float>(i) * row_h;
         const float y1 = y0 + row_h - 2.0f;
-        const float x1 = origin.x + static_cast<float>(width * frac);
+        const float x1 = origin.x + static_cast<float>(static_cast<double>(width) * frac);
         const crd::u32 col = color_for_name(totals[i].name).value;
         dl->AddRectFilled({origin.x, y0}, {x1, y1}, col);
 

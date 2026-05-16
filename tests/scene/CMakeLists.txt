@@ -12,6 +12,7 @@ add_executable(crd-scene-tests
     test_query.cpp
     test_schedule.cpp
     test_index_framework.cpp
+    test_spatial_bvh_index.cpp
     test_transform.cpp
     test_scene_resource.cpp
     test_obek.cpp
@@ -28,6 +29,8 @@ target_link_libraries(crd-scene-tests PRIVATE
     crd-preset
     crd-profile
     crd-scene
+    crd-geometry-spatial   # transitive through crd-scene; explicit for clarity
+    crd-jobs               # SceneJobsListener for the concurrent SpatialBVHIndex test
     Catch2::Catch2WithMain
 )
 

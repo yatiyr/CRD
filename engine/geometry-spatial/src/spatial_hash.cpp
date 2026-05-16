@@ -34,7 +34,7 @@ constexpr u32 k_p1 = 73856093U;
 constexpr u32 k_p2 = 19349663U;
 constexpr u32 k_p3 = 83492791U;
 
-[[nodiscard]] constexpr bool is_pow2(u32 x) noexcept
+[[nodiscard, maybe_unused]] constexpr bool is_pow2(u32 x) noexcept
 {
     return x != 0 && (x & (x - 1U)) == 0U;
 }

@@ -200,14 +200,29 @@ if (-not $SkipLinux) {
         # 2026-05-10 sweep silently reported PASS for Linux configs that
         # never built because $args was being shadowed; never trust
         # $LASTEXITCODE alone here.
+        # Clear any prior status file so a stale PASS doesn't survive a
+        # wsl-build.ps1 launch failure.
+        $statusFile = Join-Path $repoRoot "build/.wsl-build-status-$p"
+        if (Test-Path $statusFile) { Remove-Item -Force $statusFile -ErrorAction SilentlyContinue }
         $LASTEXITCODE = 0
         & $wslScript @wslArgs
         $ec = $LASTEXITCODE
         $ok = $?
-        if (-not $ok -or $ec -ne 0) {
-            $results[$p] = "FAIL exit=$ec"
+        # `exit N` from a child .ps1 does NOT reliably propagate to caller's
+        # $LASTEXITCODE — verified empirically by the 2026-05-16 v5-close
+        # sweep where wsl-build.ps1 printed "FAILED (exit code 1)" yet the
+        # parent saw $LASTEXITCODE=0. The status file is authoritative.
+        if (Test-Path $statusFile) {
+            $statusCode = [int]((Get-Content $statusFile -Raw).Trim())
+            if ($statusCode -ne 0) {
+                $results[$p] = "FAIL exit=$statusCode"
+            } else {
+                $results[$p] = 'PASS'
+            }
+        } elseif (-not $ok -or $ec -ne 0) {
+            $results[$p] = "FAIL exit=$ec (no status file)"
         } else {
-            $results[$p] = 'PASS'
+            $results[$p] = 'PASS (no status file)'
         }
     }
 }

@@ -19,3 +19,4 @@
 #include <crd/geometry/spatial/hash_queries_typed.hpp>
 #include <crd/geometry/spatial/uniform_grid.hpp>
 #include <crd/geometry/spatial/grid_queries_typed.hpp>
+#include <crd/geometry/spatial/queries.hpp>

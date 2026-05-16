@@ -321,7 +321,7 @@ OctreeObjectId LooseOctree<T>::insert(const AABB3<T>& aabb, u32 payload)
     CRD_ASSERT(center.x >= m_root_bounds.min.x && center.x <= m_root_bounds.max.x);
     CRD_ASSERT(center.y >= m_root_bounds.min.y && center.y <= m_root_bounds.max.y);
     CRD_ASSERT(center.z >= m_root_bounds.min.z && center.z <= m_root_bounds.max.z);
-    const Vec3<T> root_ext = aabb_extent(m_root_bounds);
+    [[maybe_unused]] const Vec3<T> root_ext = aabb_extent(m_root_bounds);
     CRD_ASSERT(extent.x <= m_loosening * root_ext.x);
     CRD_ASSERT(extent.y <= m_loosening * root_ext.y);
     CRD_ASSERT(extent.z <= m_loosening * root_ext.z);
@@ -378,7 +378,7 @@ bool LooseOctree<T>::update(OctreeObjectId id, const AABB3<T>& new_aabb)
     CRD_ASSERT(center.x >= m_root_bounds.min.x && center.x <= m_root_bounds.max.x);
     CRD_ASSERT(center.y >= m_root_bounds.min.y && center.y <= m_root_bounds.max.y);
     CRD_ASSERT(center.z >= m_root_bounds.min.z && center.z <= m_root_bounds.max.z);
-    const Vec3<T> root_ext = aabb_extent(m_root_bounds);
+    [[maybe_unused]] const Vec3<T> root_ext = aabb_extent(m_root_bounds);
     CRD_ASSERT(extent.x <= m_loosening * root_ext.x);
     CRD_ASSERT(extent.y <= m_loosening * root_ext.y);
     CRD_ASSERT(extent.z <= m_loosening * root_ext.z);

@@ -12,6 +12,7 @@ add_executable(crd-geometry-spatial-tests
     test_spatial_hash_typed.cpp
     test_uniform_grid.cpp
     test_uniform_grid_typed.cpp
+    test_queries_facade.cpp
 )
 
 target_link_libraries(crd-geometry-spatial-tests PRIVATE
