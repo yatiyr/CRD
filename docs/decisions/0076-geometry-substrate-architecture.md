@@ -970,3 +970,144 @@ scope 49 total). **Next sub-module: `-mesh` v4 cluster** (TriangleMeshView
 + half-edge + mesh closest-point + Möller-Trumbore raycast + Jacobson
 2013 winding number + v4g per-leaf SIMD + v4-validate formal mesh
 validation pass).
+
+## 19. Amendment 2026-05-16 — `-mesh` v4 cluster CLOSED + locked decisions
+
+All v4 slices shipped 2026-05-16 in a single session — `engine/geometry-mesh/`
+module + 5 queries + typed wrapper layer per ADR-0078 §5.
+
+### 19.1 Slice ledger
+
+- **v4a `mesh_closest_point`** ✅ — Ericson §5.1.5 Voronoi-region cascade
+  at BVH leaves + branch-and-bound traversal with `aabb_dist_sq` lower
+  bound + nearer-child-first descent + lowest-triangle-index tiebreak per
+  §4 pin #11. 6 cases / 145 assertions. Session log
+  `docs/sessions/2026-05-16-geometry-v4a-mesh-closest-point.md`.
+- **v4b `mesh_raycast`** ✅ — Woop 2013 watertight ray-tri at BVH leaves
+  + Williams/Ize precomputed slab traversal + ordered nearer-first
+  descent + lowest-triangle-index tiebreak. Switched from originally-
+  planned Möller-Trumbore to Woop after probing the v0f corpus —
+  watertight contract eliminates edge-leak failure mode, exact-zero edge
+  predicates promote to `double`, bit-exact across f32/f64 rays. 8 cases
+  / 16 assertions. Session log
+  `docs/sessions/2026-05-16-geometry-v4b-mesh-raycast.md`.
+- **v4c `mesh_winding_number`** ✅ — Jacobson, Kavan, Sorkine-Hornung 2013
+  generalised winding number for robust inside/outside on non-watertight
+  meshes via Van Oosterom-Strackee 1983 per-triangle solid angle. Direct
+  O(N) sum; hierarchical treecode (Jacobson §4) deferred to v4c-fast
+  follow-on. Returns dimensionless `f32` (rotations / 4π).
+  `mesh_is_inside(view, query, threshold=0.5)` convenience. 8 cases / 281
+  assertions. Session log
+  `docs/sessions/2026-05-16-geometry-v4c-mesh-winding-number.md`.
+- **v4d `mesh_raycast_simd`** ✅ — AVX2 8-wide Möller-Trumbore batched
+  ray-triangle test at BVH leaves; same BVH traversal as v4b, replaces
+  inner loop with gather-then-SoA-batch + SIMD ALU + scalar lane-scan.
+  Mid-implementation lesson: SIMD-mask AND via `min(mask_gt, mask_lt)` is
+  implementation-defined for NaN-encoded `_CMP_*` results — silently lost
+  the cull bit; switched to scalar lane scan after SIMD ALU. Alternative
+  fast path; v4b Woop remains the watertight reference. 7 cases / 15
+  assertions. Session log
+  `docs/sessions/2026-05-16-geometry-v4d-mesh-raycast-simd.md`.
+- **v4-validate `validate_triangle_mesh`** ✅ — formal mesh validation
+  pipeline stage. 6 defect kinds: OutOfBoundsIndex / DegenerateTriangle /
+  ZeroAreaTriangle / NonManifoldEdge / BoundaryEdge /
+  InconsistentOrientation. Three-pass deterministic algorithm: triangle-
+  level checks → build sorted edge table (canonical (min, max) keys, dir
+  preserved) → run-classify by count. `well_formed` excludes critical
+  defects; `watertight = well_formed && 0 boundary && triangle_count > 0`.
+  10 cases / 46 assertions. Session log
+  `docs/sessions/2026-05-16-geometry-v4-validate.md`.
+
+**Cluster totals:** 5 slices · 39 cases / 503 assertions · new
+`engine/geometry-mesh/` module (1 umbrella + 6 logical headers + 5 .cpp
+files) · typed-wrapper layer (`mesh_queries_typed.hpp`) covering
+closest_point + raycast + winding per ADR-0078 §5 D32-D36.
+
+### 19.2 Locked substrate decisions
+
+1. **Watertight reference, SIMD fast path.** v4b (Woop watertight) is the
+   canonical correct path; v4d (SIMD MT) is the fast path with documented
+   edge-case divergence. Consumers that need the watertight contract
+   (CSG, robust booleans, winding-via-rays) use v4b. Real-time pickers,
+   navmesh height queries, broadphase culling use v4d. Same `MeshRayHit`
+   return shape; drop-in swap at call sites. **The two-algorithm choice
+   is permanent** — pretending one algorithm fits both contracts dead-ends
+   at the SIMD-vs-watertight tradeoff.
+
+2. **TriangleMeshView is non-owning; TriangleMeshBvh is separate.**
+   `TriangleMeshView<T> { ConstSpan<Vec3<T>> vertices; ConstSpan<u32> indices; }`
+   stays trivially-copyable. The per-mesh BVH (`TriangleMeshBvh`) is built
+   once via `build_triangle_mesh_bvh(view, alloc)` and reused across
+   thousands of queries. Same separation as `crd-geometry-bvh` v1a's
+   split of `BvhTree` from per-prim AABB spans.
+
+3. **`MeshHitPayload` carries `(tri, bary)` not just `tri`.** Barycentrics
+   are the natural by-product of Möller-Trumbore + Woop; exposing them
+   saves callers from re-running interpolation. World-space hit point =
+   `bary.x * v0 + bary.y * v1 + bary.z * v2` OR `origin + t * direction`
+   — same point, caller picks based on context.
+
+4. **Winding-number direct-sum at v4c-base; hierarchical treecode at
+   v4c-fast (deferred).** O(N) direct sum is the correct reference. The
+   Jacobson §4 hierarchical evaluator (per-BVH-node dipole moments +
+   adaptive descent) trades ~2× algorithm code + a build-time precompute
+   pass for O(log N) average queries. Defer until a real consumer
+   surfaces (eylem volumetric inside-checks at scale; editor "fill" tool
+   over millions of triangles).
+
+5. **Cross-platform determinism caveat for winding.** `atan2`/`sqrt`
+   from libm are not bit-exact across libm implementations. The 0.5
+   inside/outside threshold has comfortable margin from the
+   `{0, 1}` attractors; the boolean answer is robust to 1-2 ULP drift
+   per contribution. Kahan summation reserved for v4c-precision if a real
+   corpus shows drift at the threshold (unlikely).
+
+6. **`MeshValidationOptions::area_epsilon: Area32` typed at the boundary.**
+   ADR-0078 §5 D34 — typed surface at the API, raw inside the algorithm.
+   Same pattern as `queries_typed.hpp`. Cooker / editor consumers author
+   `Area32{1e-12F}` (= 1 µm² SI) at the boundary; the algorithm reads
+   `.value`.
+
+7. **Sorted-edge classification beats hashmap for v4-validate.**
+   `O(E log E)` deterministic sort vs `unordered_map<{lo, hi}, vector<tri>>`
+   non-portable bucket order. The sort form is bit-exact across
+   compilers; the hashmap form would need custom seeded hash + sorted-
+   bucket iteration to match. Determinism > theoretical asymptotic win.
+
+8. **Zero-area triangles do NOT fail `well_formed`.** They're authoring
+   smells (downstream normalization may divide-by-zero), but they don't
+   break topological consistency. CSG / SDF flood-fill / collision
+   queries all handle zero-area triangles correctly. Critical-defect set
+   = `{OutOfBoundsIndex, DegenerateTriangle, NonManifoldEdge,
+   InconsistentOrientation}`. Boundary edges + zero-area are
+   informational; downstream consumer decides.
+
+9. **Watertight requires `triangle_count > 0`.** Empty mesh is vacuously
+   well-formed but NOT a closed surface. Watertight bool explicitly
+   guards against zero-triangle inputs to avoid "empty mesh is watertight"
+   silly-answers.
+
+### 19.3 What is not affected
+
+- §1–§17 architecture: no module-split changes. `engine/geometry-mesh/`
+  added as the 5th sub-module per §15 (mesh sub-module was reserved in
+  the slice catalog; now realised).
+- §6 sequencing: geometry still executes before Phase 3.1 v1c resume.
+- ADR-0078 §5 D32-D36 two-layer typed architecture — strictly applied
+  across all 5 slices.
+- The v3 convex-hull substrate `crd-geometry-convex` — no changes; v4
+  doesn't depend on it.
+
+### 19.4 Phase 3.1.7 progress
+
+- 5th of 11 sub-modules COMPLETE: `-primitives` ✅ + `-bvh` ✅ + `-convex` ✅
+  + v3 convex-hull extension ✅ + `-mesh` ✅.
+- Slices shipped: v0a–v0f (6) + v1a–v1j (10) + v2a–v2-close (11) +
+  v3a–v3-close (5) + **v4a–v4-validate (5)** = 37 of the renewed-scope
+  49 total. ~75% by slice count.
+- Full project ctest: 1913 (Phase 3.1.7.5 close) → **1952** (v4-cluster
+  close) — +39 cases across v4.
+
+**Next sub-module:** `-spatial` v5 (KD-tree + loose octree + R-tree +
+uniform spatial hash + scene `IComponentIndex<Aabb>` reserved-shell
+consumption from ADR-0053).

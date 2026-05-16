@@ -46,24 +46,49 @@ consumers. The architecture serves all of them; no domain is privileged.
 - **Every shipped slice ends green on Debug + Release + ASan.** Three
   flavours. No exceptions.
 - **The engine is allowed to be slow before it is allowed to be wrong.**
-- **Every physical and scientific quantity carries a unit, always.** No
-  module's public API exposes a bare `f32` / `f64` for a length, mass,
-  time, angle, force, pressure, energy, voltage, current, temperature,
-  frequency, or any other dimensional quantity. The internal canonical
-  unit is **SI base** (meters / kg / seconds / radians / kelvin / ampere
-  / candela / mole); zero-overhead compile-time-dimensional wrappers
-  (`Length<T>` / `Mass<T>` / `Force<T>` / `Velocity<T>` / `Torque<T>` /
-  etc.) live in `crd-units`. Precision tier (f32 / f64) is orthogonal
-  to the dimensional type and varies per domain (games + runtime stay
-  f32; aerospace large-world + CAD micrometer + scientific stage to
-  f64). Asset / file / UI boundaries normalise to SI at load; runtime
-  never sees non-SI; `.value_in<TargetUnit>()` is the only
-  egress path. SIMD / GPU hot paths reach the raw scalar via `.value`
-  (zero-overhead bit-equal layout); the safety lives at the API
-  surface, not inside the inner loop. **There is no opt-out** —
-  bare-float-for-physical-quantity is a code-review block and a
-  CI-guard violation. → `crd-units` (Phase 3.1.7.5); ADR-0078
-  candidate (mint at v0a close)
+- **Units live at the API surface, raw scalars live in the inner loop.**
+  Cerid runs a **two-layer typed architecture** (formalised at Phase 3.1.7.5
+  close; ADR-0078 §5):
+
+  - **Upper layer — typed.** Every public API, every ECS component field,
+    every config key, every cross-module function signature, every cooker /
+    loader public surface, every UI display path uses `Quantity<D, T>`
+    (`Length<T>` / `Mass<T>` / `Force<T>` / `Velocity<T>` / `Torque<T>` / …).
+    The dimensional check happens here, at compile time, on the SI value.
+  - **Lower layer — raw.** SIMD kernels, math primitives (Vec / Mat / Quat
+    inner ops), numerical algorithms (BLAS / LAPACK / closest-point /
+    raycast bodies / Möller-Trumbore / Vatti clipper / etc.), GPU command-
+    buffer writes, file and wire byte buffers, on-disk asset payloads
+    operate on raw `f32` / `f64`. No dimensional tag rides through an
+    `_mm256_*` intrinsic or a `vkCmdPushConstants` call.
+
+  The two layers meet at **the API surface**, and only there. Crossings
+  use `.value`, `to_raw_vec` / `from_raw_vec` (constexpr — compile away),
+  or a documented strip-compute-retag wrapper. Each crossing is one line
+  with a one-line comment naming the boundary (e.g. `// GPU push constant
+  — raw f32 by ADR-0078 §3 D22`).
+
+  **The internal canonical unit is SI base** (meters / kg / seconds /
+  radians / kelvin / ampere / candela / mole) at the typed layer. Asset /
+  file / UI boundaries normalise to SI at load (`get_length("65_mph")` →
+  `Velocity32{29.0576F}`); runtime never sees non-SI. The user-facing
+  display layer (`UnitPreferences` + 11 discipline presets) translates SI
+  back to authoring-convention strings for the UI only.
+
+  **Precision tier (f32 / f64) is orthogonal to the dimensional type.**
+  Same `Length<T>`; games + runtime pick `f32`; aerospace large-world +
+  CAD micrometer + scientific pick `f64`. Zero-overhead layout
+  (`sizeof(Quantity<D, T>) == sizeof(T)`) means the precision choice is
+  the only one that affects storage; the dimensional tag is compile-time
+  metadata.
+
+  **There is no opt-out at the upper layer.** Bare-float-for-physical-
+  quantity at any API surface is a code-review block and a CI-guard
+  violation (`crd-no-untagged-physical-numeric`). The lower layer stays
+  raw on purpose — pretending an `_mm256_load_ps` carries a `Length`
+  dead-ends in the first lane shuffle.
+
+  → `crd-units` (Phase 3.1.7.5 ✅ CLOSED 2026-05-15); ADR-0078 §1-§5.
 
 ## Architectural Cornerstones (pinned)
 

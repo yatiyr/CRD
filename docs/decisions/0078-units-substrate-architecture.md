@@ -569,6 +569,134 @@ resources where typed access would defeat SIMD.
 - Layer-6 dB / cents / RPM cross-paths (a sandbox might trip `2π · frequency` and need an `Angle{2π}` bridge — documented in v0c session log).
 - `Mat<Quantity>` wrappers (deferred per ADR-0078 §2 D24; no homogeneous-Dim matrix consumer yet).
 
+## §5 Amendment — Two-layer typed architecture (locked 2026-05-16, post-Phase-close)
+
+**Status:** Accepted 2026-05-16. Codifies the implicit pattern that emerged
+across §3 D22 (SIMD-boundary raw-f32 pin) + §3 D23 (signed_distance stays
+raw) + §4 D27 (geometry-primitives algorithms stay raw, typed wrappers
+above) + §4 D28 (renderer raw-Mat4f) + §4 D29 (resources byte-buffer +
+typed at cooker / ECS boundaries). One-line rule: **units at the API
+surface, raw scalars in the inner loop.**
+
+### D32. Cerid is a two-layer typed system
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  UPPER LAYER — TYPED                                            │
+│                                                                 │
+│  Every public API, ECS field, config key, cooker output, UI     │
+│  display path, cross-module signature uses Quantity<D, T>.      │
+│                                                                 │
+│  - eylem::RigidBody, PhysicsConfig, IPhysicsScene               │
+│  - scene::Transform::translation                                │
+│  - geometry::Sphere<Length32>, queries_typed.hpp wrappers       │
+│  - crd-config get_length / get_mass / get_*                     │
+│  - UnitPreferences format/parse                                 │
+│  - future cookers, future domain modules                        │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+            ╔═════════════════╧═════════════════╗
+            ║  API SURFACE — the boundary       ║
+            ║                                   ║
+            ║  Bridges: .value, to_raw_vec,     ║
+            ║  from_raw_vec, strip-compute-     ║
+            ║  retag wrappers. Each crossing    ║
+            ║  is one line with a one-line      ║
+            ║  comment naming the boundary.     ║
+            ╚═════════════════╤═════════════════╝
+                              │
+┌─────────────────────────────────────────────────────────────────┐
+│  LOWER LAYER — RAW                                              │
+│                                                                 │
+│  - SIMD kernels (Vec4f/Vec8f, _mm256_*, bvh4_simd, watertight)  │
+│  - Math primitives (Vec/Mat/Quat inner ops; dot/cross/length    │
+│    internals; signed_distance.hpp iq SDFs)                      │
+│  - Geometry algorithm bodies (closest_point.hpp / intersect.hpp │
+│    / barycentric.hpp / formulary.hpp / plucker.hpp / ...)       │
+│  - Numerical kernels (future BLAS / LAPACK / SVD / Lanczos /    │
+│    L-BFGS / GMRES / FFT / autodiff tape)                        │
+│  - GPU command-buffer writes (vkCmdPushConstants, SSBO writes)  │
+│  - File / wire byte buffers (CRDR pack, MeshResource.vertices,  │
+│    network protocols)                                           │
+│  - On-disk cooked payloads                                      │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### D33. The boundary is exactly one layer thick
+
+A typed function (`closest_point(Sphere<Length32>, Vec3<Length32>)`) calls a
+raw function (`closest_point(Sphere<f32>, Vec3f)`) with a bridge at the
+boundary. The bridge is ALWAYS exactly one line per stripped argument
+(`to_raw_vec(...)`) and one line per re-tagged return (`from_raw_vec<D>(...)`).
+
+Three idiomatic boundary patterns:
+
+1. **Strip-compute-retag wrapper** (preferred for query APIs):
+   ```cpp
+   template <typename D, typename T>
+   Vec3<Quantity<D, T>> closest_point(const Sphere<Quantity<D, T>>& s, const Vec3<Quantity<D, T>>& p) {
+       return from_raw_vec<D>(closest_point(strip(s), to_raw_vec(p)));
+   }
+   ```
+2. **`.value` egress at GPU upload / SIMD load**:
+   ```cpp
+   cmd.push_constants(layout, &transform.world, sizeof(Mat4f));  // already raw Mat4f
+   put_lane(tile.pos_x, lane, body.position.x.value);            // typed → raw at column store
+   ```
+3. **Tagging at file / cooker load**:
+   ```cpp
+   Vec3f raw = read_vertex_bytes();
+   Vec3<Length32> typed = from_raw_vec<dim::Length>(raw);  // contract: glTF spec SI metres
+   ```
+
+### D34. The lower layer NEVER carries a Dim tag
+
+This is not a temporary compromise. It is the design.
+
+- SIMD intrinsics are dimensionless by physics — `_mm256_load_ps` cannot
+  carry a compile-time tag through a lane shuffle.
+- Numerical algorithms (BLAS / LAPACK / sorting / hashing) are
+  precision-tier-concerned, not dimension-concerned. They want bare `f64`.
+- GPU shaders operate on raw `float` vectors; the typed surface ends at
+  the upload site.
+- On-disk payloads are byte buffers. Re-tagging on every vertex read
+  would defeat the SIMD upload path and add zero semantic safety
+  (the SI interpretation is fixed by the format spec).
+
+Pretending otherwise dead-ends in the first SIMD intrinsic, the first
+LAPACK call, or the first `vkCmdPushConstants`. The two-layer split is
+the honest design.
+
+### D35. Domain modules grow domain-specific typed surfaces
+
+Future modules (`crd-eylem-aero`, `crd-eda`, `crd-cam`, `crd-cfd`,
+`crd-control`, `crd-fea`) add their own dimensional types in their own
+`units` sub-namespaces (Layer-5 federated extension from §1 D11). They
+sit ABOVE the lower layer — same pattern. The numerical / SIMD / GPU
+substrate stays raw and shared; each domain wraps the raw kernels in
+its own typed surface.
+
+Example: `crd-hesap-dense` (next major substrate per Strategic
+Execution Plan) operates on raw `f64` matrices internally — that's a
+numerical-computing layer. An `eylem v7 FEM` consumer wraps hesap calls
+with its own typed in/out shape: solid mechanics tensor (typed Force / Stress
+/ Strain at the API surface), raw `f64` matrix entries inside the LU
+factorisation.
+
+### D36. Documentation contract — every boundary comment is one line, ADR-tagged
+
+When a `.value` or `to_raw_vec` appears outside its idiomatic place
+(strip-compute-retag wrapper, ECS read/write boundary, push-constant
+write), add a one-line comment:
+
+```cpp
+// raw egress — SIMD column store per ADR-0078 §3 D22
+put_lane(tile.pos_x, lane, body.position.x.value);
+```
+
+Future readers see the ADR tag and know they're at a sanctioned boundary,
+not an accidental escape.
+
 ## References
 
 - `docs/phases/phase-3.1.7.5-units.md` — full phase plan + 6-layer conversion system spec.

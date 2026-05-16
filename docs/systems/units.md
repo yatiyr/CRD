@@ -130,7 +130,122 @@ radians as dimensionless (m/m), but tagging it as a distinct base prevents
 silent `Length + Angle` arithmetic bugs at compile time. mp-units (P1935)
 takes the same pragmatic approach.
 
-## Architectural pins
+## Two-layer typed architecture (ADR-0078 §5 — locked 2026-05-16)
+
+Cerid runs a **two-layer typed system**. The dimensional check happens
+at the API surface, then disappears for the inner loop. Same machine
+code as raw `f32`; full Mars-Climate-Orbiter compile-time safety where
+it matters.
+
+```
+UPPER LAYER (TYPED) — Quantity<D, T> everywhere
+  • Public APIs, ECS components, configs, cookers, UI display
+  • eylem::RigidBody, scene::Transform, IPhysicsScene,
+    geometry::Sphere<Length32>, get_length(), UnitPreferences
+
+                    ── API SURFACE — boundary ──
+                    Bridges: .value, to_raw_vec,
+                    from_raw_vec, strip-compute-retag wrappers.
+                    Each crossing one line; one-line comment
+                    naming the ADR clause.
+
+LOWER LAYER (RAW) — raw f32/f64 inside
+  • SIMD kernels (Vec4f/Vec8f, AVX2 intrinsics, bvh4_simd)
+  • Math primitives (Vec/Mat/Quat inner ops, dot/cross/length)
+  • Geometry algorithm bodies (closest_point.hpp / intersect.hpp / ...)
+  • Numerical kernels (future BLAS / LAPACK / SVD / GMRES / FFT)
+  • GPU command-buffer writes, file/wire byte buffers
+```
+
+### Why two layers, not one
+
+1. **Compile-time safety where it pays.** Composing physics formulas,
+   integrating cross-module data, authoring scenes — those are where
+   unit-mix bugs happen. The upper layer catches them.
+2. **Zero overhead where speed pays.** SIMD intrinsics cannot carry a
+   compile-time tag through a lane shuffle. Numerical kernels want raw
+   `f64`. The lower layer stays bit-identical to a no-units build.
+3. **Algorithms stay portable.** A future numerical kernel or a new
+   SIMD path doesn't pay a typing tax to integrate. The raw shape is
+   the lingua franca of the lower layer.
+4. **Domain modules grow independently.** Each domain (eylem, hesap,
+   geometry, future cad/cfd/control) builds its own typed upper layer
+   over the shared raw substrate. No central registry to update.
+
+### Boundary patterns (idiomatic forms)
+
+**1. Strip-compute-retag wrapper** — for query APIs that have a typed
+public surface and a raw algorithm body:
+
+```cpp
+template <typename D, typename T>
+Vec3<Quantity<D, T>> closest_point(const Sphere<Quantity<D, T>>& s,
+                                    const Vec3<Quantity<D, T>>& p) noexcept
+{
+    return from_raw_vec<D>(closest_point(strip(s), to_raw_vec(p)));
+}
+```
+
+**2. `.value` egress at the hot-path boundary** — SIMD column store,
+push-constant write, file write:
+
+```cpp
+// raw egress — SIMD column store per ADR-0078 §3 D22
+put_lane(tile.pos_x, lane, body.position.x.value);
+
+// GPU push constant — raw Mat4f boundary per ADR-0078 §4 D28
+cmd.push_constants(layout, &draw_item.model, sizeof(Mat4f));
+```
+
+**3. Tagging at file / cooker load** — re-introduce the dim tag when
+data crosses upward:
+
+```cpp
+// glTF spec mandates SI metres; tag at the ECS lift boundary
+const Vec3f raw_pos = read_vertex_bytes(buf, offset);
+transform.translation = from_raw_vec<dim::Length>(raw_pos);
+```
+
+### Where the layers are TODAY (post-Phase 3.1.7.5 close)
+
+| Module                      | Layer | Notes |
+|---|---|---|
+| `crd-units`                 | upper | the substrate |
+| `crd-config` get_*           | upper | TOML → typed Quantity at the boundary |
+| `crd-scene::Transform`       | upper | `translation = Vec3<Length32>` |
+| `crd-eylem::RigidBody`       | upper | position / velocity / inv_mass all typed; 80-byte freeze pin preserved |
+| `crd-eylem::IPhysicsScene`   | upper | apply_force / apply_torque / step(Duration32) typed |
+| `crd-geometry-primitives` structs | upper data | Sphere<T> / Box<T> / Capsule3<T> widened to MathValue T |
+| `crd-geometry-primitives` algorithms | **lower** | closest_point.hpp / intersect.hpp / signed_distance.hpp stay `<MathScalar T>` |
+| `queries_typed.hpp`          | upper wrapper | strip-compute-retag boundary for closest_point / distance / distance_squared |
+| `crd-math` Vec/Mat ops       | **lower** | inner ops stay MathScalar; Vec<Quantity> overloads bridge at the API surface |
+| `crd-math` Vec reductions    | upper bridge | length(Vec<Q>) / dot(Vec<Q1>, Vec<Q2>) / cross — return typed result via DimMul re-tag |
+| `crd-math::simd::Soa` columns | **lower** | `Vec8f` AoSoA columns — raw, never typed |
+| `crd-renderer` Renderable / DrawItem | **lower** | raw Mat4f boundary; never imports crd/units/* |
+| `crd-rhi-vulkan` push constants | **lower** | byte writes, raw |
+| `crd-resources::MeshResource` | **lower** | byte buffers; SI interpretation by cooker contract |
+| `tools/asset_cooker` glTF .meta | upper boundary | `[cook] position_scale` converts to SI at cook time |
+| `crd-imgui` UnitPreferences inspector | upper | typed display layer for the UI |
+| **Future `crd-hesap-dense`** | **lower** | numerical kernels operate on raw f64 matrices; callers wrap typed in/out |
+
+### Code-review checklist
+
+When reviewing a new slice, ask:
+
+1. **Is this surface a public API?** (Anything that crosses module
+   boundaries, gets cooked, gets serialised, gets exposed to ECS, or
+   appears in a UI.) → typed.
+2. **Is this code an inner kernel?** (SIMD intrinsic, BLAS routine,
+   raycast/Möller-Trumbore body, signed-distance evaluator, GPU
+   command-buffer write, byte serialiser.) → raw.
+3. **If you see a `.value` or `to_raw_vec` in the middle of business
+   logic** (not at an obvious boundary), it's a smell. Push it down to
+   the boundary or up to the type.
+4. **If you see a bare `f32 my_length;` in a struct field**, it's a
+   build failure waiting to happen — the `crd-no-untagged-physical-numeric`
+   CI guard catches it.
+
+
 
 1. **SI is the only canonical internal unit.** Every `Quantity::value` is in
    the SI base for its dimension. No exceptions.
