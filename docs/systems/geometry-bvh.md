@@ -3,8 +3,10 @@
 The bounding-volume-hierarchy sub-module of `crd-geometry` (ADR-0076 §1, the
 second sub-module after `-primitives`). Builds and queries a BVH over a set of
 axis-aligned boxes — the spatial accelerator that eylem broadphase, the
-renderer's frustum cull, `crd-scene::SpatialBVHIndex` (the ADR-0053 reserved
-shell), `crd-sdf`'s mesh-bake closest-point search, and the audio path-tracer
+renderer's frustum cull, `crd-scene::SpatialBVHIndex` (the ADR-0053 slot
+**realized 2026-05-16** as the FIRST non-reserved spatial index via
+Phase 3.1.7 v5-index-bringup — wraps `crd-geometry-spatial::LooseOctree`),
+`crd-sdf`'s mesh-bake closest-point search, and the audio path-tracer
 all need.
 
 Module: `engine/geometry-bvh/`, target `crd-geometry-bvh`, namespace

@@ -1382,3 +1382,63 @@ Phase 3.1.7 progress: **6 of 11 sub-modules complete** (primitives ✅
 **Next sub-module:** `-polygon` v6 (ear-clipping triangulation + CDT
 + Vatti general-polygon Boolean + Bentley-Ottmann sweep — Sutherland-
 Hodgman migrated to convex v2j 2026-05-13).
+
+---
+
+## §21 Amendment (2026-05-16) — v6 `-polygon` cluster CLOSED
+
+### 21.1 Slice ledger
+
+| Slice | Engine LOC | Tests LOC | What |
+|---|---|---|---|
+| v6a substrate | ~700 | ~600 | `Polygon2<T>` / `PolygonView2<T>` / `Ring2<T>` + signed_area / centroid / aabb / is_ccw / is_simple / ensure_orientation / point_in_ring / point_in_polygon (Hormann-Agathos 2001 + Shewchuk orient2d) + typed `Vec2<Length32>` wrappers per ADR-0078 §5 D34 + `polygon_substrate.cpp` static_assert layout pins |
+| v6b ear-clip w/ holes | ~900 | ~700 | Meisters 1975 classical O(n²) ear-clip + Eberly 1999 cut-and-join hole bridging (rightmost-vertex pick, +X-ray closest-edge visibility, doubled-bridge insertion); lex-tuple deterministic ear pick |
+| v6c CDT | ~1400 | ~700 | Bowyer-Watson incremental Delaunay (Shewchuk incircle adaptive + lex-sorted insertion + jump-walk point location) + Domiter-Zalik 2008 carve-and-retriangulate constraint recovery (handles non-convex-quad chains via chain-trace + sub-polygon ear-clip) + Lawson 1977 post-flip Delaunay restoration + polygon-with-holes variant w/ even-odd centroid in/out filter |
+| v6d Vatti polygon Boolean | ~750 | ~350 | 4 ops (union / intersection / difference / xor) via planar-subdivision + winding-number face classification + DCEL half-edges with CCW-sorted outgoing-edge angle comparator (Shewchuk-driven) + brute-force O(n×m) intersection finder + per-loop face emission (hole rings emitted naturally per CW orientation) + EvenOdd + NonZero fill rules |
+| v6e Bentley-Ottmann | ~600 | ~400 | Full sweep-line: event queue (min-heap, lex-sorted) + status structure (sorted array) + 3 event kinds (Start / Intersection / End) + horizontal-segment brute-force secondary pass + Shewchuk orient2d throughout + dedup on canonical pair-key + short-circuit `_any` variant for is_simple-style usage + 3-state diagnostic enum |
+| v6-close | — | — | this ADR amendment + `docs/systems/geometry-polygon.md` + 18-config sweep |
+| **Total** | **~4350** | **~2750** | **~7100 LOC across the cluster** |
+
+### 21.2 Locked substrate decisions (v6-cluster wide)
+
+1. **Winding convention**: outer ring CCW, hole rings CW. Matches Clipper2 + Vatti 1992 + Eberly 1999. Builders never silently re-orient; `ensure_orientation` is the explicit helper for raw input.
+2. **Implicit closure**: last vertex IS connected to first; do NOT duplicate.
+3. **`ring_offsets` prefix-sum convention**: size `ring_count + 1`; trailing entry = past-the-end. Identical to `ConvexHullView::face_vertex_offsets` (§15 v1h pin).
+4. **`Quantity<D, T>` layout pin**: enforced by `static_assert` in `polygon_substrate.cpp`. Typed wrapper `reinterpret_cast` boundary at the API surface; if layout drifts, build fails immediately.
+5. **Shewchuk orient2d everywhere**: every orientation / intersection-sign / in-segment decision uses Shewchuk adaptive precision. No naive cross-product, no epsilon.
+6. **Lex-tuple deterministic ordering**: ear-clip ear pick (smallest vertex index), CDT insertion (lex sort points), Boolean intersection processing (canonical lo/hi pair key), Bentley-Ottmann event queue (lex y/x/kind/seg-id).
+7. **Builder reject / query tolerate** (§15 pin): non-finite input ⇒ debug `CRD_ASSERT` at builders + soft diagnostic at queries; degenerate (collinear, zero-length) handled via adaptive predicates not asserts.
+8. **Hole support from day 1**: every algorithm handles polygons-with-holes natively, no later add-on.
+9. **CDT constraint recovery via carve-and-retriangulate**: when chain crosses non-convex quad (pure flip would fail), trace chain explicitly, partition into upper/lower sub-polygons split by constraint, ear-clip each, re-link neighbours. Domiter-Zalik 2008 approach. Anglada 1997 single-flip is a fast path.
+10. **Planar-subdivision Boolean over scanbeam-Vatti**: chose planar-subdivision + half-edge DCEL + winding-number face classification for v6d. Trade-off: O((n+k) log k) vs O((n+k) log n) — for typical engine workloads (polygons < 10k vertices) the constant factor in brute-force intersection is sub-millisecond; the planar-subdivision algorithm is dramatically simpler to make robust + deterministic, and the intersection finder is the natural v6e Bentley-Ottmann drop-in upgrade for very-large inputs.
+11. **DCEL CCW-outgoing sort + .next_in_face convention**: at each vertex v with outgoing edges sorted CCW (o_0, ..., o_{n-1}), `twin(o_k).next_in_face = o_{(k+n-1) % n}` (CW-predecessor). Walking .next_in_face traces a face boundary CCW. Per-loop face classification (multiple loops per face → multiple ring emissions).
+12. **Bentley-Ottmann event-kind ordering**: at the same (y, x), Start < Intersection < End. Matches the canonical 1979 algorithm; ensures correct status-structure transitions at coincident vertex/event y-values.
+13. **Bentley-Ottmann horizontal-segment handling**: horizontals are extracted into a secondary brute-force pass against ALL segments. Avoids the X-sorted-status conflict; cost O(n × horiz_count) added to the sweep.
+14. **Dedup on canonical pair-key** (Boolean + BO): every intersection report uses `(min(seg_a, seg_b), max(...))` to deduplicate. BO's swap-then-test loop re-tests adjacent pairs after every flip; without dedup the same pair could be reported multiple times.
+15. **Output sorted before return** (BO + Boolean): all output records sorted by lex tuple at the algorithm's tail. Bit-identical results across compilers / SIMD widths / OSes.
+16. **Two-layer typed boundary** (ADR-0078 §5 D34): every public API ships in raw `MathScalar T`; typed `Vec2<Length32>` callers ride strip-compute-retag wrappers ONE layer above.
+17. **Self-validation via static_asserts** in `polygon_substrate.cpp`: pin the bit-identical-layout invariant between `Vec2<Quantity<D,T>>` and `Vec2<T>` (ADR-0078 §2 D2). If a future refactor breaks the contract, build fails immediately.
+18. **CDT super-triangle scale = 1000× bbox**: matches the empirically-stable scaling. Smaller scales can fail incircle tests due to coordinate precision; larger scales waste algorithm bound.
+19. **Polygon-with-hole CDT in/out filter via even-odd centroid**: each CDT-produced triangle's centroid is tested against the polygon's even-odd ring-fill predicate; in-hole triangles are stripped. No reliance on per-ring CCW/CW.
+20. **Hybrid algorithm separation**: substrate types (v6a) + simple triangulation (v6b) + CDT (v6c) + Boolean (v6d) + BO (v6e) are independent algorithms. Each ships standalone — no v6e depends on v6d, no v6c depends on v6b. The v6 cluster is 5 substrate algorithms that COMPOSE into the polygon authoring/editing surface.
+
+### 21.3 Cluster cross-validation
+
+- **Area conservation**: for every Boolean test, `signed_area(union) + signed_area(intersection) == signed_area(subject) + signed_area(clip)` verified. Holds for disjoint / overlapping / containment / polygon-with-hole / shared-corner / shared-edge cases.
+- **Determinism**: CDT vertex-rotation determinism test (shuffled inputs ⇒ same edge set); v6b polygon-rotation determinism (rotated vertex order ⇒ same triangle count + sum-area); BO output sorted by lex.
+- **Robustness corpus**: degenerate inputs (empty / 2-vertex / collinear / figure-eight / zero-length / non-finite / cocircular / vertex-on-edge / shared-corner / shared-edge / parallel non-intersecting / 5×5 grid of 25 intersections) — every algorithm ships a diagnostic-status enum that surfaces failures cleanly rather than crashing.
+- **f64 precision tier**: every algorithm shipped + tested at f32 AND f64 (large-coord stress at 1e6+).
+
+### 21.4 Cluster sub-module summary
+
+| Algorithm | Best-case complexity | Common-case complexity |
+|---|---|---|
+| `signed_area`, `centroid`, `aabb` | O(n) | O(n) |
+| `is_simple` (v6a brute force) | O(n²) | O(n²) — replaceable by v6e at n ≥ ~64 |
+| `point_in_polygon` | O(n) | O(n) |
+| `triangulate_ear_clip` (v6b) | O(n²) | O(n²) — FIST O(n log n) is a v7 follow-on optimisation |
+| `constrained_delaunay` (v6c) | O(n log n) | O(n²) worst case (Lawson restoration) |
+| `polygon_boolean` (v6d) | O((n+k) log k) | O(n×m) intersection finder + O((n+k) log(n+k)) face walk |
+| `bentley_ottmann` (v6e) | O((n + k) log n) | dominant — replaces v6d brute-force when n large |
+
+**Phase 3.1.7 progress: 7 of 11 sub-modules complete** (primitives ✅ + bvh ✅ + convex ✅ + v3 convex-hull extension ✅ + mesh ✅ + spatial ✅ + **polygon ✅**). 50 of the renewed-scope 49 total slices shipped (102% — v6 expanded 4→6 slices per the v6a substrate separation; nothing cut). **Next sub-module: `-mesh-processing` v7** (QEM + Loop subd + remesh + repair + Taubin).

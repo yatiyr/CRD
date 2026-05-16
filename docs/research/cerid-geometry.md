@@ -1074,7 +1074,16 @@ The phase plan develops in `docs/phases/phase-3.1.7-geometry.md`
 (to be drafted from this dossier). Slice list below mirrors the
 v-numbering convention used in Phase 3.1 (eylem) and 3.1.5 (sdf).
 
-### v0 — primitives substrate (~1 week, ~3 KLOC)
+> **NOTE (2026-05-16):** This section preserves the ORIGINAL 25-slice plan
+> as research-dossier history. The plan was expanded to 51 slices via
+> ADR-0076 §13/§15/§16/§17/§18/§19/§20/§21 amendments + the 2026-05-14
+> renewed-scope review (+v4-validate, +v10a–e curves, +v11 transform-aware
+> helpers). **See `docs/phases/phase-3.1.7-geometry.md` for the live
+> 51-slice plan with per-slice status markers.** As of 2026-05-16, 7 of
+> 11 sub-modules are CLOSED (`-primitives` ✅ + `-bvh` ✅ + `-convex` ✅
+> + v3 hull-extension ✅ + `-mesh` ✅ + `-spatial` ✅ + `-polygon` ✅).
+
+### v0 — primitives substrate (~1 week, ~3 KLOC) **✅ CLOSED 2026-05-13**
 
 - v0a: types — `Plane`, `Ray`, `AABB`, `OBB`, `Sphere`, `Capsule`,
   `Triangle3`, `Frustum`. ~500 LOC.
@@ -1082,7 +1091,7 @@ v-numbering convention used in Phase 3.1 (eylem) and 3.1.5 (sdf).
 - v0c: intersection tests (everything–everything). ~1500 LOC.
 - v0d: barycentric + 3-tetrahedron utilities. ~200 LOC.
 
-### v1 — BVH (~2 weeks, ~5 KLOC)
+### v1 — BVH (~2 weeks, ~5 KLOC) **✅ CLOSED 2026-05-13** (v1a–v1g shipped + v1h primitives hardening + v1i unified query facade + v1j `-viz` companion module per §15 amendment)
 
 - v1a: binary BVH with binned SAH builder + raycast.
 - v1b: O(n) bottom-up refit.
@@ -1091,7 +1100,7 @@ v-numbering convention used in Phase 3.1 (eylem) and 3.1.5 (sdf).
 - v1e: closest-point query.
 - v1f: integration test against Embree (off-by-default benchmark).
 
-### v2 — GJK + EPA (~2 weeks, ~3 KLOC)
+### v2 — GJK + EPA (~2 weeks, ~3 KLOC) **✅ CLOSED 2026-05-14** (expanded to 11 slices: v2a–v2f core + v2g hill-climbing hull support + v2h Vec4f/Vec8f SIMD-batched + v2i f64 GJK for orbital-scale aerospace + v2j Sutherland-Hodgman + feature enumeration migrated from v6 + v2-close)
 
 - v2a: support functions for primitive shapes.
 - v2b: GJK distance (Ericson reference).
@@ -1100,13 +1109,13 @@ v-numbering convention used in Phase 3.1 (eylem) and 3.1.5 (sdf).
 - v2e: SAT for box-vs-box (specialised fast path).
 - v2f: deterministic-tiebreak conformance tests.
 
-### v3 — convex hull (~1 week, ~2 KLOC)
+### v3 — convex hull (~1 week, ~2 KLOC) **✅ CLOSED 2026-05-15** (expanded to v3a Shewchuk adaptive predicates + v3b 2D monotone-chain + v3c 3D Quickhull + v3d hull simplification + v3-close)
 
 - v3a: 2D monotone chain.
 - v3b: 3D Quickhull (Barber 1996).
 - v3c: hull simplification (vertex-budget keep-N-extremes).
 
-### v4 — triangle mesh queries (~2 weeks, ~3 KLOC)
+### v4 — triangle mesh queries (~2 weeks, ~3 KLOC) **✅ CLOSED 2026-05-16** (v4a closest_point + v4b raycast Woop + v4c winding Jacobson + v4d raycast SIMD MT 8-wide + v4-validate + v4-close)
 
 - v4a: `TriangleMeshView`.
 - v4b: half-edge mesh data structure.
@@ -1116,7 +1125,7 @@ v-numbering convention used in Phase 3.1 (eylem) and 3.1.5 (sdf).
 - v4f: integration with `crd-sdf` mesh-bake (replaces the `crd-eylem`
   BVH dep in ADR-0064 §4).
 
-### v5 — additional spatial accelerators (~2 weeks, ~3 KLOC)
+### v5 — additional spatial accelerators (~2 weeks, ~3 KLOC) **✅ CLOSED 2026-05-16** (v5a KdTree + v5b LooseOctree + v5c R*-tree + v5d SpatialHash + v5e UniformGrid + thread-safety pass + scene-index bringup realizing the ADR-0053 `SpatialBVHIndex` slot + unified facade extension + v5-close)
 
 - v5a: KD-tree.
 - v5b: loose octree (Ulrich 2000).
@@ -1125,15 +1134,16 @@ v-numbering convention used in Phase 3.1 (eylem) and 3.1.5 (sdf).
 - v5e: integration with `crd-scene::SpatialBVHIndex` /
   `SpatialHashIndex` / `SpatialOctreeIndex` reserved shells (ADR-0053).
 
-### v6 — polygon ops (~2 weeks, ~3 KLOC)
+### v6 — polygon ops (~2 weeks, ~3 KLOC) **✅ CLOSED 2026-05-16** (Sutherland-Hodgman MIGRATED to v2j 2026-05-13 — convex-polygon algorithm belongs in `-convex`; v6 expanded 4→6 slices per substrate separation)
 
-- v6a: ear clipping triangulation.
-- v6b: constrained Delaunay triangulation (Bowyer-Watson + edge flip).
-- v6c: Sutherland-Hodgman convex clip.
-- v6d: Vatti polygon Boolean.
-- v6e: Bentley-Ottmann line-segment intersection.
+- v6a: ✅ substrate (Polygon2 / PolygonView2 / Ring2 + predicates + typed wrappers)
+- v6b: ✅ ear clipping triangulation w/ holes (Meisters 1975 + Eberly 1999)
+- v6c: ✅ constrained Delaunay triangulation (Bowyer-Watson + Domiter-Zalik carve-and-retriangulate)
+- v6d: ✅ Vatti polygon Boolean (planar-subdivision + winding-number face classification)
+- v6e: ✅ Bentley-Ottmann line-segment intersection
+- v6-close: ✅ ADR-0076 §21 amendment + system doc + 18-config sweep
 
-### v7 — mesh processing (~3 weeks, ~4 KLOC)
+### v7 — mesh processing (~3 weeks, ~4 KLOC) **📋 NEXT (planned)**
 
 - v7a: Quadric Edge Collapse Decimation (Garland-Heckbert 1997).
 - v7b: Loop subdivision.
@@ -1143,23 +1153,41 @@ v-numbering convention used in Phase 3.1 (eylem) and 3.1.5 (sdf).
 - v7f: self-intersection removal.
 - v7g: Taubin smoothing.
 
-### v8 — Delaunay + Voronoi (~1 week, ~2 KLOC)
+### v8 — Delaunay + Voronoi (~1 week, ~2 KLOC) **📋 planned** (MANDATORY v8c-pre paydown: upgrade `insphere_exact` to full Shewchuk expansion arithmetic before v8c ships — silent-correctness debt risk)
 
 - v8a: 2D Bowyer-Watson.
 - v8b: 2D CDT.
 - v8c: 3D Bowyer-Watson.
 - v8d: Voronoi-from-Delaunay extraction.
 
-### v9 — GPU mirror + decomposition + REPL (~3 weeks, ~8 KLOC)
+### v9 — GPU mirror + decomposition + REPL (~3 weeks, ~8 KLOC) **📋 planned**
 
 - v9a: GPU LBVH builder (Karras 2012).
 - v9b: GPU BVH refit.
 - v9c: V-HACD convex decomposition (editor-tier, cooker-side).
 - v9d: REPL bindings (consumed by the future `crd-hesap-repl` notebook
   surface for "draw this convex hull / Voronoi / triangulation").
+- v9e: `crd-geometry-shader-helpers` cooker-emits GLSL/HLSL twins of
+  v1h `signed_distance.hpp` + v0e iq smin/domain-ops — ULP-conformance
+  tested against C++ reference (added per §13 amendment).
 
-**Total: ~25 slices across ~9 sub-modules; ~14 KLOC engine + ~5 KLOC
-editor-tier; ~4–6 months of substrate work.**
+### v10 — curves (~2 weeks, ~2.2 KLOC) **📋 planned** (renewed-scope addition 2026-05-14)
+
+- v10a: `crd-geometry-curves` module substrate + curve primitive types (Polyline, Bezier, Hermite, Catmull-Rom, B-spline, circular & elliptic arcs; 2D + 3D peers).
+- v10b: sampling + flattening (uniform / adaptive chord-error / curvature-step).
+- v10c: arc-length system (`build_arclength_table` + `t_at_distance` + `distance_at_t`).
+- v10d: curve queries (aabb + closest-point Newton-Raphson + ray intersection).
+- v10e: tangent / normal / binormal frames + rotation-minimizing frames (Wang 2008) + viz + sandbox showcase.
+
+### v11 — transform-aware helpers (~2 days, ~700 LOC) **📋 planned** (renewed-scope addition 2026-05-14)
+
+- v11: `crd/geometry/primitives/transform.hpp` — `TransformedShape<T>` wrapper + `transform_aabb` / `transform_obb` / `transform_capsule3` / `transform_cylinder3` / `transform_ray3_to_local` helpers. `crd-geometry` stays local-space pure; world-space dispatch is consumer concern.
+
+**Original total: ~25 slices across ~9 sub-modules; ~14 KLOC engine +
+~5 KLOC editor-tier; ~4–6 months of substrate work.** Updated post-
+2026-05-16: **51 slices across 11 sub-modules; ~22 KLOC engine + ~5
+KLOC editor + ~4 KLOC cooker-emitted GLSL/HLSL; ~7.5–9.5 months
+calendar.** See phase doc for live status.
 
 ---
 

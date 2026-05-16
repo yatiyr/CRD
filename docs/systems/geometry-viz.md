@@ -2,8 +2,10 @@
 
 Debug-draw companion module for `crd-geometry`. Phase 3.1.7 v1j-a.
 
-`crd-geometry-primitives`, `crd-geometry-bvh`, and the future
-`crd-geometry-{convex,mesh,spatial,...}` substrates **never** link `crd-draw`
+`crd-geometry-primitives`, `crd-geometry-bvh`, `crd-geometry-convex`,
+`crd-geometry-mesh`, `crd-geometry-spatial`, `crd-geometry-polygon`, and
+the future `crd-geometry-{mesh-processing, delaunay, gpu, curves, ...}`
+substrates **never** link `crd-draw`
 — a headless / cooker / DAW / scientific-computing build consumes the
 geometry substrate without pulling the GPU debug-draw layer. `crd-geometry-viz`
 is the bridge that knows about BOTH: it takes `crd::geometry::primitives::*`
@@ -21,7 +23,7 @@ Module: `engine/geometry-viz/`, target `crd-geometry-viz`, namespace
 | Slice | Scope | State |
 |---|---|---|
 | v1j-a | Substrate. Headers `primitives.hpp` / `queries.hpp` / `bvh.hpp` + impls. Overloaded `draw(RenderBuffer&, Shape, ...)` for AABB3 / OBB3 / Sphere / Capsule3 / Cylinder3 / Plane (patch) / Triangle3 / Tetrahedron / Frustum / Ray3 / Segment3 / Line3 — forwards to existing `crd::draw::*_to` helpers. `draw_ray_hit` / `draw_closest_point` / `draw_normals` for query results. `draw_bvh(BvhTree | Bvh4Tree | DynamicBvh)` walks every node + emits depth-coloured AABBs (8-entry palette, cycles `depth % 8`). `draw_overlap_pairs_with(DynamicBvh, ud→pos)` template emits one line per overlapping leaf pair. `draw_frustum_cull(Frustum, BvhTree, prims)` two-colour kept-vs-culled per-prim. 26 cases / 44 assertions on `crd-geometry-viz-tests`. | ✅ 2026-05-13 |
-| v1j-b | Sandbox integration. Scene selector (ImGui dropdown) switching between the existing eylem physics demo and a new geometry-showcase scene. Showcase has four sub-modes: primitive viewer / query showcase / BVH viewer / SDF heatmap. | ⏳ next |
+| v1j-b | Sandbox integration. Scene selector (ImGui dropdown) switching between the existing eylem physics demo and a new geometry-showcase scene. Showcase has four sub-modes: primitive viewer / query showcase / BVH viewer / SDF heatmap. `BvhViewerCache` fingerprint-keyed sandbox cache (N≤5000). | ✅ 2026-05-13 |
 
 ## What you get today (v1j-a)
 
