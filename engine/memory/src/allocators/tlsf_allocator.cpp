@@ -279,7 +279,7 @@ void list_remove(BlockHeader* block, BlockHeader*& head) noexcept
 
 namespace detail
 {
-BlockHeader* find_suitable_block(const u32 fl_bitmap, const u32* sl_bitmap, void* const free_lists[24][32], u32& fl,
+BlockHeader* find_suitable_block(u32 fl_bitmap, const u32* sl_bitmap, void* const free_lists[24][32], u32& fl,
                                  u32& sl) noexcept
 {
     // First, look in the same fl class for an SL >= sl.

@@ -88,6 +88,10 @@ struct ReflectedData
     crd::containers::Array<DescriptorBindingDesc> descriptor_bindings{};
     crd::containers::Array<PushConstantRangeDesc> push_constants{};
     crd::containers::Array<VertexAttributeLayoutDesc> vertex_attributes{};
+    // Phase 3.1.7.6 v0e — populated only for compute modules.
+    std::optional<WorkgroupSize> workgroup_size{};
+    // Phase 3.1.7.6 v0e — per-module spec const reflection (any stage).
+    crd::containers::Array<SpecializationConstantReflection> specialization_constants{};
 };
 
 void merge_descriptor_binding(crd::containers::Array<DescriptorBindingDesc>& out,
@@ -159,6 +163,32 @@ void merge_push_constant(crd::containers::Array<PushConstantRangeDesc>& out, con
             out.vertex_attributes.push_back({crd::containers::String(input->name != nullptr ? input->name : ""),
                                              input->location, to_rhi_format(input->format), 0});
         }
+    }
+
+    // Phase 3.1.7.6 v0e — compute workgroup size from the entry point's
+    // local_size. spirv-reflect parses `layout(local_size_x/y/z) in;`
+    // into SpvReflectEntryPoint::local_size. Only meaningful for compute.
+    if (stage == Stage::Compute && module.entry_point_count > 0)
+    {
+        const auto& entry = module.entry_points[0];
+        out.workgroup_size = WorkgroupSize{entry.local_size.x, entry.local_size.y, entry.local_size.z};
+    }
+
+    // Phase 3.1.7.6 v0e — specialization constants (any stage). spirv-reflect
+    // exposes them as `module.spec_constants[i]`. The struct shape varies
+    // across spirv-reflect versions (Linux Vulkan-SDK 1.4.x bundled with
+    // WSL lacks `default_value` + `default_value_size`); v0e ships the
+    // portable subset (`constant_id` + `name` + size). Default-value
+    // extraction filed as `crd-rhi-compute-spec-const-defaults` follow-on.
+    // `size_bytes` pinned at 4 (32-bit scalars: bool/int/float).
+    for (crd::u32 i = 0; i < module.spec_constant_count; ++i)
+    {
+        const auto& spec = module.spec_constants[i];
+        SpecializationConstantReflection reflected{};
+        reflected.constant_id = spec.constant_id;
+        reflected.name        = crd::containers::String(spec.name != nullptr ? spec.name : "");
+        reflected.size_bytes  = 4U;
+        out.specialization_constants.push_back(std::move(reflected));
     }
 
     spvReflectDestroyShaderModule(&module);
@@ -328,6 +358,17 @@ public:
     [[nodiscard]] crd::containers::ConstSpan<VertexAttributeLayoutDesc> vertex_attributes() const noexcept override
     {
         return m_reflected.vertex_attributes;
+    }
+    // Phase 3.1.7.6 v0e — workgroup size accessor (compute only).
+    [[nodiscard]] std::optional<WorkgroupSize> workgroup_size() const noexcept override
+    {
+        return m_reflected.workgroup_size;
+    }
+    // Phase 3.1.7.6 v0e — spec const reflection accessor (any stage).
+    [[nodiscard]] crd::containers::ConstSpan<SpecializationConstantReflection>
+    specialization_constants() const noexcept override
+    {
+        return m_reflected.specialization_constants;
     }
 
 private:

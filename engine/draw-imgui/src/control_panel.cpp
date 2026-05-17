@@ -89,21 +89,21 @@ void draw_control_panel(crd::draw::OverlayPassConfig& cfg)
     // ------ Theme picker ------
     if (ImGui::CollapsingHeader("Theme"))
     {
-        static const NamedTheme themes[] = {
+        static const NamedTheme kThemes[] = {
             make_default_theme(),
             make_high_contrast_theme(),
         };
         static int selected = 0;
-        const char* combo_preview = themes[selected].label;
+        const char* combo_preview = kThemes[selected].label;
         if (ImGui::BeginCombo("preset", combo_preview))
         {
             for (int i = 0; i < 2; ++i)
             {
                 const bool is_selected = (selected == i);
-                if (ImGui::Selectable(themes[i].label, is_selected))
+                if (ImGui::Selectable(kThemes[i].label, is_selected))
                 {
                     selected = i;
-                    crd::draw::set_theme(themes[i].theme);
+                    crd::draw::set_theme(kThemes[i].theme);
                     // Re-pull cell sizes + grid + axis colors into the
                     // live OverlayPassConfig so the change is visible in
                     // the same frame.

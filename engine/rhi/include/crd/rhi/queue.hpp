@@ -2,6 +2,7 @@
 
 #include <crd/rhi/command_buffer.hpp>
 #include <crd/rhi/fence.hpp>
+#include <crd/rhi/semaphore.hpp>
 #include <crd/rhi/swapchain.hpp>
 
 namespace crd::rhi
@@ -24,5 +25,23 @@ public:
     virtual void submit(CommandBuffer& command_buffer, Fence& fence) = 0;
     virtual void present(Swapchain& swapchain) = 0;
     virtual void wait_idle() = 0;
+
+    // -----------------------------------------------------------------
+    // Phase 3.1.7.6 v0d additions — ALL NEW VIRTUALS GO AT THE END.
+    // See Device.hpp § vtable-stability discipline for why.
+    // -----------------------------------------------------------------
+
+    // Phase 3.1.7.6 v0d (ADR-0080 D10) — full submit shape with cross-queue
+    // semaphores. Single source of truth for the async-compute handoff
+    // path. Existing back-compat overloads above stay for v0a/b/c callers
+    // that don't need semaphores. Vulkan impls may delegate them through
+    // this internally.
+    //
+    // The submission waits on every `info.wait_semaphores[i].semaphore`
+    // at its `wait_stage` before executing, then runs the command buffer,
+    // signals every `info.signal_semaphores[i]` on completion, and
+    // signals `info.signal_fence` (if non-null) when the GPU has fully
+    // drained the submission.
+    virtual void submit(const SubmitInfo& info) = 0;
 };
 } // namespace crd::rhi

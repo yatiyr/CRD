@@ -75,6 +75,10 @@ enum class BufferUsage : crd::u32
     Index     = 1U << 3U,
     Uniform   = 1U << 4U,
     Storage   = 1U << 5U,
+    // Phase 3.1.7.6 v0b (ADR-0080) — indirect dispatch / draw arguments
+    // buffer. VkDispatchIndirectCommand (3 × u32 workgroup counts) for
+    // dispatch_indirect; VkDrawIndirectCommand for future draw_indirect.
+    Indirect  = 1U << 6U,
 };
 
 enum class ImageUsage : crd::u32
@@ -139,16 +143,79 @@ enum class StoreOp : crd::u8
     DontCare,
 };
 
+// Phase 3.1.7.6 v0d (ADR-0080 D10) — pipeline stage enum for semaphore
+// wait masks. Distinct from BufferAccess: semaphore wait gates a stage
+// (where the receiving queue blocks until signal) and does NOT carry
+// an access mask (semaphores already imply memory visibility). Kept
+// minimal — extend when a real consumer needs finer granularity.
+enum class PipelineStage : crd::u8
+{
+    Top,             // VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT — over-syncs; use only when stage unknown
+    ComputeShader,   // VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
+    VertexInput,     // VK_PIPELINE_STAGE_VERTEX_INPUT_BIT — vertex pull from buffer
+    VertexShader,    // VK_PIPELINE_STAGE_VERTEX_SHADER_BIT
+    FragmentShader,  // VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+    ColorAttachment, // VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
+    Transfer,        // VK_PIPELINE_STAGE_TRANSFER_BIT
+    BottomOfPipe,    // VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT — signal at end of work
+};
+
+// Phase 3.1.7.6 v0d (ADR-0080 D9) — async compute queue selection policy.
+enum class AsyncComputePolicy : crd::u8
+{
+    // Try to find a dedicated compute queue family
+    // (VK_QUEUE_COMPUTE_BIT && !VK_QUEUE_GRAPHICS_BIT). If absent,
+    // `Device::compute_queue()` returns the same Queue& as
+    // `graphics_queue()` (single VkQueue, serialized work). Default —
+    // matches the broadest hardware envelope.
+    FallbackGracefully,
+    // Fail `Instance::create_device` if no dedicated compute queue
+    // family exists. Use when downstream perf depends on true async
+    // overlap (eylem v8 GPU broadphase, future).
+    RequireDedicated,
+};
+
 enum class ImageAccess : crd::u8
 {
     Undefined,   // initial / don't-care; no layout commitment
     ColorWrite,  // color attachment output write
     DepthWrite,  // depth/stencil attachment read-write
     DepthRead,   // depth attachment read-only (test without write)
-    ShaderRead,  // sampled in a shader stage
+    ShaderRead,  // sampled in fragment shader (legacy graphics-only name; equivalent to FragmentShaderRead)
     TransferSrc, // copy source
     TransferDst, // copy destination
     Present,     // swapchain presentation
+    // Phase 3.1.7.6 v0c (ADR-0080 D8) — compute-stage image access.
+    // ShaderRead above stays graphics-stage-only for back-compat with
+    // existing transition_image consumers (renderer, frame graph).
+    // New compute consumers (storage images, future v9 GPU-side BVH
+    // viz, mesh-baked SDF) use these explicit variants.
+    ComputeShaderRead,      // sampled / read in compute shader
+    ComputeShaderWrite,     // written via storage image in compute
+    ComputeShaderReadWrite, // both — typical SSBO-like image pattern
+};
+
+// Phase 3.1.7.6 v0c (ADR-0080 D8) — typed-enum buffer access state for
+// `CommandBuffer::buffer_barrier`. Granular per Vulkan pipeline stage so
+// the impl picks ONE specific srcStageMask/dstStageMask pair rather than
+// over-barrier with a pessimistic graphics-wide mask. Mirrors ImageAccess
+// shape but for buffers (no image-layout dimension).
+enum class BufferAccess : crd::u8
+{
+    None,                    // initial / don't-care; no access
+    ComputeShaderRead,       // compute shader reads buffer (SSBO read, UBO read)
+    ComputeShaderWrite,      // compute shader writes buffer (SSBO write)
+    ComputeShaderReadWrite,  // compute shader read+write (atomics, in-place transform)
+    VertexShaderRead,        // vertex shader reads buffer (SSBO bound at vertex stage)
+    FragmentShaderRead,      // fragment shader reads buffer (UBO/SSBO at fragment stage)
+    VertexAttributeRead,     // pulled via vertex input (vkCmdBindVertexBuffers consumer)
+    IndexRead,               // index buffer consumed by vkCmdDrawIndexed
+    UniformRead,             // generic uniform-buffer read (any shader stage)
+    IndirectRead,            // dispatch/draw indirect command read
+    TransferSrc,             // vkCmdCopyBuffer source
+    TransferDst,             // vkCmdCopyBuffer destination, vkCmdFillBuffer destination
+    HostRead,                // host (CPU) reads via mapped pointer
+    HostWrite,               // host (CPU) writes via mapped pointer
 };
 
 template <typename EnumType>
@@ -276,6 +343,30 @@ struct DeviceDesc
 {
     crd::u32 frames_in_flight      = 2;
     crd::u32 preferred_adapter_index = 0;
+    // Phase 3.1.7.6 v0d (ADR-0080 D9) — async compute queue selection.
+    AsyncComputePolicy async_compute_policy = AsyncComputePolicy::FallbackGracefully;
+};
+
+// Phase 3.1.7.6 v0d (ADR-0080 D10) — semaphore wait specification for
+// Queue::submit(SubmitInfo). The waiting queue blocks at `wait_stage`
+// until `semaphore` is signaled by another queue's submission.
+struct SemaphoreWait
+{
+    class Semaphore* semaphore = nullptr;
+    PipelineStage    wait_stage = PipelineStage::Top;
+};
+
+// Phase 3.1.7.6 v0d (ADR-0080 D10) — full submit specification. Single
+// source of truth for queue submission shape; existing back-compat
+// overloads (`submit(cmd, fence)`, `submit(cmd, swapchain)`,
+// `submit_and_wait`) stay alongside this for v0a/v0b/v0c callers that
+// don't need cross-queue semaphores.
+struct SubmitInfo
+{
+    class CommandBuffer*                          command_buffer    = nullptr;
+    class Fence*                                  signal_fence      = nullptr;
+    crd::containers::ConstSpan<SemaphoreWait>     wait_semaphores{};
+    crd::containers::ConstSpan<class Semaphore*>  signal_semaphores{};
 };
 
 struct InstanceDesc
@@ -329,6 +420,52 @@ struct VertexAttributeDesc
     crd::u32 binding      = 0;
     Format   format       = Format::Undefined;
     crd::u32 offset_bytes = 0;
+};
+
+// Phase 3.1.7.6 v0b (ADR-0080 D6) — specialization constants baked at
+// pipeline create-time. One entry per `layout(constant_id = N) const`
+// declared in the compute shader. `offset` + `size` index into a
+// caller-provided `specialization_data` byte blob. Matches Vulkan's
+// VkSpecializationMapEntry 1:1.
+//
+// Per-dispatch parameters use push constants instead (graphics
+// `push_constants` API already handles compute via the ShaderStage
+// mask — no compute-specific method).
+struct SpecializationConstantEntry
+{
+    crd::u32 constant_id = 0;
+    crd::u32 offset      = 0; // byte offset into specialization_data
+    crd::u32 size        = 0; // byte size of this constant's value
+};
+
+// ComputePipelineDesc — input to `Device::create_compute_pipeline`.
+//
+// Phase 3.1.7.6 v0a (ADR-0080 D1 additive). Narrow surface: a compute
+// pipeline is just a compute-stage shader module + a pipeline layout
+// (descriptors + push constants). No vertex input / no viewport / no
+// raster / no blend — none of those have meaning for compute.
+//
+// ADR-0080 D2 revision (discovered at v0a, consolidated at v0-close):
+// storage buffers reuse the existing `Buffer` interface with
+// `BufferUsage::Storage`; no separate `IStorageBuffer` type. The
+// existing RHI already abstracted past the per-usage-type split.
+//
+// ADR-0080 D7 revision: descriptor-set conventions (set 0 = storage,
+// set 1 = uniform) are a documented consumer guideline, not a
+// type-level enforcement. `pipeline_layout` accepts any caller-
+// constructed `PipelineLayout` (matching graphics flexibility).
+//
+// Phase 3.1.7.6 v0b (ADR-0080 D6) — added `specialization_entries` +
+// `specialization_data` for compile-time-baked specialization
+// constants. Both spans MUST outlive the create_compute_pipeline call
+// (copied into VkSpecializationInfo during pipeline creation; not
+// retained afterwards).
+struct ComputePipelineDesc
+{
+    class ShaderModule*   compute_shader  = nullptr;
+    class PipelineLayout* pipeline_layout = nullptr;
+    crd::containers::ConstSpan<SpecializationConstantEntry> specialization_entries{};
+    crd::containers::ConstSpan<crd::u8>                     specialization_data{};
 };
 
 struct GraphicsPipelineDesc

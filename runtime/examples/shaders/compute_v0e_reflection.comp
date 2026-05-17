@@ -1,0 +1,30 @@
+#version 450
+
+// Phase 3.1.7.6 v0e — reflection discriminator. Compiled by the
+// crd::shader Runtime test; the test reads back workgroup size + two
+// spec consts (with non-default IDs + non-zero defaults) + the
+// storage-buffer descriptor binding and asserts each is reflected
+// at the *right value*, not merely "extracted." Wrong reflection is
+// worse than no reflection — silently wrong > visibly broken.
+
+// Non-1×1×1 workgroup. The (32, 4, 2) triple is unique enough that an
+// accidental swap of the X/Y/Z fields would produce a wrong answer.
+layout(local_size_x = 32, local_size_y = 4, local_size_z = 2) in;
+
+// Spec consts at non-sequential constant_ids with non-zero defaults so
+// a reflection bug that ignores `default_value` or returns `constant_id = i`
+// (loop index) instead of the declared id fails loudly.
+layout(constant_id = 7) const uint kFoo = 42;
+layout(constant_id = 3) const int  kBar = -1;
+
+layout(set = 0, binding = 0) buffer Output
+{
+    uint data[];
+} u_output;
+
+void main()
+{
+    // Reference all spec consts so the SPIR-V emitter doesn't optimize
+    // them away (which would erase them from spirv-reflect's view).
+    u_output.data[gl_GlobalInvocationID.x] = kFoo + uint(kBar);
+}

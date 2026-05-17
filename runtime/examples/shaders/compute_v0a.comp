@@ -1,0 +1,16 @@
+#version 450
+
+// Phase 3.1.7.6 v0a — minimal compute shader for the rhi-compute-types
+// integration smoke test. Defines a valid compute entry point with a
+// trivial workgroup so create_compute_pipeline has a real shader module
+// to consume. No storage buffer, no push constant — those land at v0b.
+//
+// The shader body intentionally does nothing observable: v0a's contract
+// is "pipeline object lifecycle is clean under ASan", not "compute
+// dispatch produces correct output" (that's v0b).
+
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+void main()
+{
+}

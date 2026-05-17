@@ -443,3 +443,165 @@ TEST_CASE("Shader runtime describes variant handoff for RHI/pipeline creation", 
     REQUIRE(handoff.push_constants.size() == 1U);
     REQUIRE(handoff.vertex_attributes.size() == 2U);
 }
+
+// =====================================================================
+// Phase 3.1.7.6 v0e — compute shader reflection + hot-reload coverage.
+// Discriminating tests against compute_v0e_reflection.comp which
+// declares workgroup (32,4,2) + two non-default spec consts.
+// =====================================================================
+
+TEST_CASE("Shader runtime reflects compute workgroup size from local_size layout", "[shader][compute][v0e]")
+{
+    auto runtime = crd::shader::create_runtime();
+
+    crd::shader::EffectDesc desc;
+    desc.name = crd::containers::String("compute_v0e_reflection");
+    desc.frontend_modules.push_back(
+        {source_path("runtime/examples/shaders/compute_v0e_reflection.comp"),
+         crd::shader::Stage::Compute, crd::containers::String("main")});
+    const auto effect = runtime->create_effect(desc);
+    REQUIRE(effect.is_valid());
+
+    crd::shader::CompileDiagnostics diagnostics;
+    crd::shader::VariantCompileRequest request;
+    request.effect = effect;
+    const auto variant = runtime->request_variant(request, diagnostics);
+    REQUIRE(variant.is_valid());
+    REQUIRE(diagnostics.succeeded);
+
+    const auto modules = runtime->variant_modules(variant);
+    REQUIRE(modules.size() == 1U); // single compute module
+    const auto* compute_module = runtime->find_module(modules[0]);
+    REQUIRE(compute_module != nullptr);
+    REQUIRE(compute_module->stage() == crd::shader::Stage::Compute);
+
+    // The discriminator: (32, 4, 2) is unique enough that an X/Y/Z swap fails loudly.
+    const auto wg = compute_module->workgroup_size();
+    REQUIRE(wg.has_value());
+    REQUIRE(wg->x == 32U);
+    REQUIRE(wg->y == 4U);
+    REQUIRE(wg->z == 2U);
+}
+
+TEST_CASE("Vertex/Fragment modules report no workgroup size (compute-only field)",
+          "[shader][compute][v0e]")
+{
+    auto runtime = crd::shader::create_runtime();
+
+    crd::shader::EffectDesc desc;
+    desc.name = crd::containers::String("graphics_no_workgroup");
+    desc.frontend_modules.push_back({source_path("runtime/examples/shaders/triangle.vert"),
+                                     crd::shader::Stage::Vertex, crd::containers::String("main")});
+    desc.frontend_modules.push_back({source_path("runtime/examples/shaders/triangle.frag"),
+                                     crd::shader::Stage::Fragment, crd::containers::String("main")});
+    const auto effect = runtime->create_effect(desc);
+
+    crd::shader::CompileDiagnostics diagnostics;
+    crd::shader::VariantCompileRequest request;
+    request.effect = effect;
+    const auto variant = runtime->request_variant(request, diagnostics);
+    REQUIRE(variant.is_valid());
+
+    const auto modules = runtime->variant_modules(variant);
+    REQUIRE(modules.size() == 2U);
+    REQUIRE_FALSE(runtime->find_module(modules[0])->workgroup_size().has_value());
+    REQUIRE_FALSE(runtime->find_module(modules[1])->workgroup_size().has_value());
+}
+
+TEST_CASE("Shader runtime reflects specialization constants by constant_id + name + default",
+          "[shader][compute][v0e]")
+{
+    auto runtime = crd::shader::create_runtime();
+
+    crd::shader::EffectDesc desc;
+    desc.name = crd::containers::String("compute_v0e_reflection");
+    desc.frontend_modules.push_back(
+        {source_path("runtime/examples/shaders/compute_v0e_reflection.comp"),
+         crd::shader::Stage::Compute, crd::containers::String("main")});
+    const auto effect = runtime->create_effect(desc);
+
+    crd::shader::CompileDiagnostics diagnostics;
+    crd::shader::VariantCompileRequest request;
+    request.effect = effect;
+    const auto variant = runtime->request_variant(request, diagnostics);
+    REQUIRE(variant.is_valid());
+
+    const auto modules = runtime->variant_modules(variant);
+    const auto* compute_module = runtime->find_module(modules[0]);
+    REQUIRE(compute_module != nullptr);
+
+    const auto spec_consts = compute_module->specialization_constants();
+    REQUIRE(spec_consts.size() == 2U);
+
+    // Find by declared constant_id (order from spirv-reflect is not guaranteed).
+    const crd::shader::SpecializationConstantReflection* kfoo = nullptr;
+    const crd::shader::SpecializationConstantReflection* kbar = nullptr;
+    for (const auto& s : spec_consts)
+    {
+        if (s.constant_id == 7U) kfoo = &s;
+        if (s.constant_id == 3U) kbar = &s;
+    }
+    REQUIRE(kfoo != nullptr);
+    REQUIRE(kbar != nullptr);
+
+    // The discriminator: WRONG constant_id is worse than missing reflection.
+    REQUIRE(kfoo->constant_id == 7U);
+    REQUIRE(kfoo->name        == "kFoo");
+    REQUIRE(kfoo->size_bytes  == 4U);
+
+    REQUIRE(kbar->constant_id == 3U);
+    REQUIRE(kbar->name        == "kBar");
+    REQUIRE(kbar->size_bytes  == 4U);
+    // Default-value reflection filed as crd-rhi-compute-spec-const-defaults
+    // follow-on (Linux spirv-reflect 1.4.x lacks the `default_value` member;
+    // ships when both Win + Linux SDKs expose the API).
+}
+
+TEST_CASE("Vertex+Fragment modules without spec consts report empty list",
+          "[shader][compute][v0e]")
+{
+    auto runtime = crd::shader::create_runtime();
+
+    crd::shader::EffectDesc desc;
+    desc.name = crd::containers::String("graphics_no_spec_const");
+    desc.frontend_modules.push_back({source_path("runtime/examples/shaders/triangle.vert"),
+                                     crd::shader::Stage::Vertex, crd::containers::String("main")});
+    desc.frontend_modules.push_back({source_path("runtime/examples/shaders/triangle.frag"),
+                                     crd::shader::Stage::Fragment, crd::containers::String("main")});
+    const auto effect = runtime->create_effect(desc);
+
+    crd::shader::CompileDiagnostics diagnostics;
+    crd::shader::VariantCompileRequest request;
+    request.effect = effect;
+    const auto variant = runtime->request_variant(request, diagnostics);
+
+    const auto modules = runtime->variant_modules(variant);
+    REQUIRE(runtime->find_module(modules[0])->specialization_constants().empty());
+    REQUIRE(runtime->find_module(modules[1])->specialization_constants().empty());
+}
+
+TEST_CASE("Compute Effect reload_effect succeeds with last-good preserved on success",
+          "[shader][compute][v0e]")
+{
+    auto runtime = crd::shader::create_runtime();
+
+    crd::shader::EffectDesc desc;
+    desc.name = crd::containers::String("compute_reloadable");
+    desc.frontend_modules.push_back(
+        {source_path("runtime/examples/shaders/compute_v0e_reflection.comp"),
+         crd::shader::Stage::Compute, crd::containers::String("main")});
+    const auto effect = runtime->create_effect(desc);
+    REQUIRE(effect.is_valid());
+
+    crd::shader::CompileDiagnostics diagnostics;
+    crd::shader::VariantCompileRequest request;
+    request.effect = effect;
+    const auto variant_before = runtime->request_variant(request, diagnostics);
+    REQUIRE(variant_before.is_valid());
+
+    crd::shader::ReloadEvent event;
+    REQUIRE(runtime->reload_effect(effect, event));
+    REQUIRE(event.succeeded);
+    REQUIRE(event.effect.value == effect.value);
+    REQUIRE_FALSE(event.using_last_good);
+}

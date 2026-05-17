@@ -13,6 +13,7 @@
 
 #include <crd/rhi/buffer.hpp>
 #include <crd/rhi/command_buffer.hpp>
+#include <crd/rhi/compute_pipeline.hpp>
 #include <crd/rhi/descriptor.hpp>
 #include <crd/rhi/device.hpp>
 #include <crd/rhi/fence.hpp>
@@ -20,6 +21,7 @@
 #include <crd/rhi/instance.hpp>
 #include <crd/rhi/pipeline.hpp>
 #include <crd/rhi/queue.hpp>
+#include <crd/rhi/semaphore.hpp>
 #include <crd/rhi/shader_module.hpp>
 #include <crd/rhi/swapchain.hpp>
 #include <crd/rhi/types.hpp>

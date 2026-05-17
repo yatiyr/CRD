@@ -52,7 +52,7 @@ struct EVBlobLoader final : public ILoader
 
 // Write a single-resource BLOB pack to `path`.
 static void ev_write_blob_pack(const crd::platform::fs::Path& path,
-                                const ResourceId               artifact_id,
+                                ResourceId                     artifact_id,
                                 crd::u32                       value)
 {
     const crd::u8 blob[4] = {

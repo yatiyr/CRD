@@ -5,6 +5,8 @@
 #include <crd/containers/string.hpp>
 #include <crd/rhi/types.hpp>
 
+#include <optional>
+
 namespace crd::shader
 {
 enum class Stage : crd::u8
@@ -12,6 +14,37 @@ enum class Stage : crd::u8
     Vertex,
     Fragment,
     Compute,
+};
+
+// Phase 3.1.7.6 v0e (ADR-0080) — compute shader workgroup size from
+// `layout(local_size_x = N, local_size_y = M, local_size_z = K) in;`.
+// Reflected via spirv-reflect's `SpvReflectEntryPoint::local_size`.
+// Only populated for Stage::Compute modules.
+struct WorkgroupSize
+{
+    crd::u32 x = 1;
+    crd::u32 y = 1;
+    crd::u32 z = 1;
+};
+
+// Phase 3.1.7.6 v0e — specialization-constant reflection entry.
+// Mirrors the values needed to wire into VkSpecializationInfo at
+// pipeline create-time (caller still supplies the per-instance bytes).
+//
+// **No `default_value` field** — older spirv-reflect versions (e.g.
+// Linux Vulkan-SDK 1.4.x bundled with WSL) lack the `default_value` +
+// `default_value_size` members on `SpvReflectSpecializationConstant`.
+// Default-value extraction filed as the
+// `crd-rhi-compute-spec-const-defaults` follow-on slice (ships when
+// both Windows + Linux SDKs expose the API). The discriminating field
+// is `constant_id` (wrong id at reflection time is the real bug);
+// default-value reflection is icing that callers can compute by
+// inspecting the SPIR-V bytes directly if needed.
+struct SpecializationConstantReflection
+{
+    crd::u32                constant_id = 0;
+    crd::containers::String name{};
+    crd::u32                size_bytes  = 0;
 };
 
 [[nodiscard]] constexpr crd::u32 stage_bit(Stage stage) noexcept

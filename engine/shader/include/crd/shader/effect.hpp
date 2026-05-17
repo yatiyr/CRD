@@ -42,5 +42,15 @@ public:
     [[nodiscard]] virtual crd::containers::ConstSpan<DescriptorBindingDesc> descriptor_bindings() const noexcept = 0;
     [[nodiscard]] virtual crd::containers::ConstSpan<PushConstantRangeDesc> push_constants() const noexcept = 0;
     [[nodiscard]] virtual crd::containers::ConstSpan<VertexAttributeLayoutDesc> vertex_attributes() const noexcept = 0;
+    // Phase 3.1.7.6 v0e — populated for Stage::Compute modules only;
+    // std::nullopt for Stage::Vertex / Stage::Fragment (those genuinely
+    // have no workgroup size — `optional` is the honest sentinel).
+    [[nodiscard]] virtual std::optional<WorkgroupSize> workgroup_size() const noexcept = 0;
+    // Phase 3.1.7.6 v0e — per-module spec const reflection. Non-empty
+    // for any stage that uses `layout(constant_id = N) const T x = v;`.
+    // Per-module (not auto-merged across an Effect's modules; that's a
+    // consumer-side aggregation if needed).
+    [[nodiscard]] virtual crd::containers::ConstSpan<SpecializationConstantReflection>
+    specialization_constants() const noexcept = 0;
 };
 } // namespace crd::shader

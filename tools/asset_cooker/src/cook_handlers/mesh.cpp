@@ -112,7 +112,7 @@ int mikk_get_num_verts_of_face(const SMikkTSpaceContext*, const int)
 
 void mikk_get_position(const SMikkTSpaceContext* ctx,
                                float* pos_out,
-                               const int face, const int vert)
+                               int face, int vert)
 {
     const auto* d  = static_cast<const MikkPrimData*>(ctx->m_pUserData);
     const crd::u32 vi = d->indices[static_cast<crd::u32>(face) * 3U
@@ -124,7 +124,7 @@ void mikk_get_position(const SMikkTSpaceContext* ctx,
 
 void mikk_get_normal(const SMikkTSpaceContext* ctx,
                              float* norm_out,
-                             const int face, const int vert)
+                             int face, int vert)
 {
     const auto* d  = static_cast<const MikkPrimData*>(ctx->m_pUserData);
     const crd::u32 vi = d->indices[static_cast<crd::u32>(face) * 3U
@@ -136,7 +136,7 @@ void mikk_get_normal(const SMikkTSpaceContext* ctx,
 
 void mikk_get_tex_coord(const SMikkTSpaceContext* ctx,
                                 float* uv_out,
-                                const int face, const int vert)
+                                int face, int vert)
 {
     const auto* d  = static_cast<const MikkPrimData*>(ctx->m_pUserData);
     const crd::u32 vi = d->indices[static_cast<crd::u32>(face) * 3U
@@ -147,8 +147,8 @@ void mikk_get_tex_coord(const SMikkTSpaceContext* ctx,
 
 void mikk_set_tspace_basic(const SMikkTSpaceContext* ctx,
                                    const float* tangent,
-                                   const float  sign,
-                                   const int face, const int vert)
+                                   float        sign,
+                                   int face, int vert)
 {
     const auto* d  = static_cast<const MikkPrimData*>(ctx->m_pUserData);
     const crd::u32 vi = d->indices[static_cast<crd::u32>(face) * 3U

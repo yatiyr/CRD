@@ -53,6 +53,17 @@ private:
     crd::rhi::GraphicsPipelineDesc m_desc{};
 };
 
+// Phase 3.1.7.6 v0a — FakeComputePipeline mirrors FakePipeline.
+class FakeComputePipeline final : public crd::rhi::ComputePipeline
+{
+public:
+    explicit FakeComputePipeline(crd::rhi::ComputePipelineDesc desc) : m_desc(desc) {}
+    [[nodiscard]] const crd::rhi::ComputePipelineDesc& desc() const noexcept override { return m_desc; }
+
+private:
+    crd::rhi::ComputePipelineDesc m_desc{};
+};
+
 class FakeDescriptorSetLayout final : public crd::rhi::DescriptorSetLayout
 {
 public:
@@ -177,6 +188,39 @@ public:
         last_set_count     = static_cast<int>(sets.size());
     }
 
+    // Phase 3.1.7.6 v0b — compute dispatch surface overrides.
+    void bind_compute_pipeline(crd::rhi::ComputePipeline& /*pipeline*/) override
+    {
+        ++bind_compute_pipeline_count;
+    }
+    void bind_compute_descriptor_sets(crd::rhi::PipelineLayout& /*layout*/, crd::u32 first_set,
+                                      crd::containers::ConstSpan<crd::rhi::DescriptorSet*> sets) override
+    {
+        ++bind_compute_descriptor_sets_count;
+        last_compute_first_set = first_set;
+        last_compute_set_count = static_cast<int>(sets.size());
+    }
+    void dispatch(crd::u32 x, crd::u32 y, crd::u32 z) override
+    {
+        ++dispatch_count;
+        last_dispatch_x = x;
+        last_dispatch_y = y;
+        last_dispatch_z = z;
+    }
+    void dispatch_indirect(crd::rhi::Buffer& /*buffer*/, crd::u64 offset_bytes) override
+    {
+        ++dispatch_indirect_count;
+        last_dispatch_indirect_offset = offset_bytes;
+    }
+    // Phase 3.1.7.6 v0c — buffer barrier recording.
+    void buffer_barrier(crd::rhi::Buffer& /*buffer*/, crd::rhi::BufferAccess from,
+                        crd::rhi::BufferAccess to) noexcept override
+    {
+        ++buffer_barrier_count;
+        last_barrier_from = from;
+        last_barrier_to   = to;
+    }
+
     int begin_count = 0;
     int end_count = 0;
     int reset_count = 0;
@@ -191,6 +235,19 @@ public:
     int transition_count = 0;
     int push_constants_count = 0;
     int bind_descriptor_sets_count = 0;
+    int bind_compute_pipeline_count = 0;
+    int bind_compute_descriptor_sets_count = 0;
+    int dispatch_count = 0;
+    int dispatch_indirect_count = 0;
+    int buffer_barrier_count = 0;
+    crd::u32 last_compute_first_set = 0;
+    int last_compute_set_count = 0;
+    crd::u32 last_dispatch_x = 0;
+    crd::u32 last_dispatch_y = 0;
+    crd::u32 last_dispatch_z = 0;
+    crd::u64 last_dispatch_indirect_offset = 0;
+    crd::rhi::BufferAccess last_barrier_from = crd::rhi::BufferAccess::None;
+    crd::rhi::BufferAccess last_barrier_to   = crd::rhi::BufferAccess::None;
     crd::rhi::Extent2D last_extent{};
     crd::u32 last_vertex_count = 0;
     crd::u32 last_first_vertex = 0;
@@ -252,6 +309,11 @@ public:
     int  reset_count = 0;
 };
 
+// Phase 3.1.7.6 v0d — fake binary semaphore. No state to track.
+class FakeSemaphore final : public crd::rhi::Semaphore
+{
+};
+
 class FakeQueue final : public crd::rhi::Queue
 {
 public:
@@ -272,11 +334,28 @@ public:
             f->signaled = true;
         }
     }
+    // Phase 3.1.7.6 v0d — full submit shape with wait/signal semaphores.
+    void submit(const crd::rhi::SubmitInfo& info) override
+    {
+        ++submit_with_info_count;
+        last_wait_sem_count   = static_cast<int>(info.wait_semaphores.size());
+        last_signal_sem_count = static_cast<int>(info.signal_semaphores.size());
+        if (info.signal_fence != nullptr)
+        {
+            if (auto* f = dynamic_cast<FakeFence*>(info.signal_fence); f != nullptr)
+            {
+                f->signaled = true;
+            }
+        }
+    }
     void present(crd::rhi::Swapchain& /*swapchain*/) override { ++present_count; }
     void wait_idle() override { ++wait_idle_count; }
 
     int submit_count = 0;
     int submit_with_fence_count = 0;
+    int submit_with_info_count  = 0;
+    int last_wait_sem_count     = 0;
+    int last_signal_sem_count   = 0;
     int present_count = 0;
     int wait_idle_count = 0;
 };
@@ -318,6 +397,14 @@ public:
         return std::make_unique<FakePipeline>(desc);
     }
 
+    // Phase 3.1.7.6 v0a (ADR-0080) — compute pipeline factory override.
+    [[nodiscard]] std::unique_ptr<crd::rhi::ComputePipeline>
+    create_compute_pipeline(const crd::rhi::ComputePipelineDesc& desc) override
+    {
+        ++create_compute_pipeline_count;
+        return std::make_unique<FakeComputePipeline>(desc);
+    }
+
     [[nodiscard]] std::unique_ptr<crd::rhi::CommandBuffer> create_command_buffer() override
     {
         ++create_command_buffer_count;
@@ -329,6 +416,15 @@ public:
         ++create_fence_count;
         return std::make_unique<FakeFence>();
     }
+
+    // Phase 3.1.7.6 v0d — semaphore + compute queue overrides.
+    [[nodiscard]] std::unique_ptr<crd::rhi::Semaphore> create_semaphore() override
+    {
+        ++create_semaphore_count;
+        return std::make_unique<FakeSemaphore>();
+    }
+    [[nodiscard]] crd::rhi::Queue& compute_queue() noexcept override { return m_queue; }
+    [[nodiscard]] bool has_dedicated_compute_queue() const noexcept override { return false; }
 
     [[nodiscard]] std::unique_ptr<crd::rhi::DescriptorSetLayout>
     create_descriptor_set_layout(const crd::rhi::DescriptorSetLayoutDesc& desc) override
@@ -359,8 +455,10 @@ public:
     int create_image_count = 0;
     int create_shader_module_count = 0;
     int create_pipeline_count = 0;
+    int create_compute_pipeline_count = 0;
     int create_command_buffer_count = 0;
     int create_fence_count = 0;
+    int create_semaphore_count = 0;
     int create_descriptor_set_layout_count = 0;
     int create_pipeline_layout_count = 0;
     int create_descriptor_allocator_count = 0;
@@ -669,4 +767,339 @@ TEST_CASE("Queue::submit(cmd, fence) signals the fence on completion",
     device.graphics_queue().submit(*cmd, *fence);
     CHECK(device.m_queue.submit_with_fence_count == 2);
     CHECK(fence->is_signaled());
+}
+
+// =====================================================================
+// Phase 3.1.7.6 v0a — ComputePipeline type-system contract tests
+// (ADR-0080 D1 additive-only + D2 revision: storage buffers reuse
+// existing Buffer interface, no separate IStorageBuffer.)
+// =====================================================================
+
+TEST_CASE("ComputePipelineDesc has narrow, compute-only surface", "[rhi][compute][v0a]")
+{
+    // The desc carries ONLY a compute shader + a pipeline layout. No
+    // vertex input, no viewport, no raster — none of those have meaning
+    // for compute. This test pins the surface against accidental drift.
+    crd::rhi::ComputePipelineDesc desc{};
+    REQUIRE(desc.compute_shader == nullptr);
+    REQUIRE(desc.pipeline_layout == nullptr);
+    // Spec-const fields (v0b) are empty by default. The struct stays narrow:
+    // no vertex input / no viewport / no raster — those don't apply to compute.
+    REQUIRE(desc.specialization_entries.empty());
+    REQUIRE(desc.specialization_data.empty());
+}
+
+TEST_CASE("Device::create_compute_pipeline factory contract", "[rhi][compute][v0a]")
+{
+    FakeDevice device{};
+    REQUIRE(device.create_compute_pipeline_count == 0);
+
+    auto shader = device.create_shader_module(
+        {crd::rhi::ShaderStage::Compute, "main", {}});
+    REQUIRE(shader != nullptr);
+
+    crd::rhi::ComputePipelineDesc desc{};
+    desc.compute_shader = shader.get();
+    auto pipeline = device.create_compute_pipeline(desc);
+
+    REQUIRE(pipeline != nullptr);
+    REQUIRE(device.create_compute_pipeline_count == 1);
+    CHECK(pipeline->desc().compute_shader == shader.get());
+}
+
+TEST_CASE("ComputePipeline lifecycle: multi-create then destroy clean", "[rhi][compute][v0a]")
+{
+    // ASan-clean teardown across many short-lived compute pipelines.
+    // The real test runs against the Vulkan backend (test_rhi_vulkan.cpp);
+    // this fake-side variant pins the factory ABI contract.
+    FakeDevice device{};
+    constexpr int kCycles = 8;
+    for (int i = 0; i < kCycles; ++i)
+    {
+        auto shader = device.create_shader_module(
+            {crd::rhi::ShaderStage::Compute, "main", {}});
+        crd::rhi::ComputePipelineDesc desc{};
+        desc.compute_shader = shader.get();
+        auto pipeline = device.create_compute_pipeline(desc);
+        REQUIRE(pipeline != nullptr);
+    } // RAII: pipeline + shader destroyed each iteration
+    REQUIRE(device.create_compute_pipeline_count == kCycles);
+}
+
+TEST_CASE("ComputePipeline + PipelineLayout caller-side composition", "[rhi][compute][v0a]")
+{
+    // Validates the ADR-0080 D7 revision: pipeline layouts are caller-
+    // constructed, the RHI does not enforce a set-0/set-1 convention.
+    // Compute consumers compose whatever layout they need.
+    FakeDevice device{};
+
+    crd::rhi::DescriptorBinding bindings[] = {
+        {.binding = 0, .type = crd::rhi::DescriptorType::StorageBuffer,
+         .count = 1, .stages = crd::rhi::ShaderStage::Compute},
+        {.binding = 1, .type = crd::rhi::DescriptorType::UniformBuffer,
+         .count = 1, .stages = crd::rhi::ShaderStage::Compute},
+    };
+    crd::rhi::DescriptorSetLayoutDesc set0_desc{};
+    set0_desc.bindings = crd::containers::ConstSpan<crd::rhi::DescriptorBinding>(bindings, 2);
+    auto set0 = device.create_descriptor_set_layout(set0_desc);
+    REQUIRE(set0 != nullptr);
+
+    const crd::rhi::DescriptorSetLayout* layouts[] = {set0.get()};
+    crd::rhi::PipelineLayoutDesc layout_desc{};
+    layout_desc.set_layouts =
+        crd::containers::ConstSpan<const crd::rhi::DescriptorSetLayout*>(layouts, 1);
+    auto layout = device.create_pipeline_layout(layout_desc);
+    REQUIRE(layout != nullptr);
+
+    auto shader = device.create_shader_module(
+        {crd::rhi::ShaderStage::Compute, "main", {}});
+    crd::rhi::ComputePipelineDesc desc{};
+    desc.compute_shader = shader.get();
+    desc.pipeline_layout = layout.get();
+    auto pipeline = device.create_compute_pipeline(desc);
+
+    REQUIRE(pipeline != nullptr);
+    CHECK(pipeline->desc().pipeline_layout == layout.get());
+}
+
+TEST_CASE("ComputePipelineDesc layout is trivially copyable", "[rhi][compute][v0a]")
+{
+    STATIC_REQUIRE(std::is_trivially_copyable_v<crd::rhi::ComputePipelineDesc>);
+    STATIC_REQUIRE(std::is_standard_layout_v<crd::rhi::ComputePipelineDesc>);
+}
+
+// =====================================================================
+// Phase 3.1.7.6 v0b — CommandBuffer compute dispatch surface contract
+// (ADR-0080 D4 dispatch params = workgroup counts; D5 push-const reuses
+// graphics path; D6 spec const baked at create-time.)
+// =====================================================================
+
+TEST_CASE("bind_compute_pipeline + bind_compute_descriptor_sets dispatch through fake recorder",
+          "[rhi][compute][v0b]")
+{
+    FakeDevice device{};
+    auto cmd_ptr = device.create_command_buffer();
+    auto* cmd_raw = dynamic_cast<FakeCommandBuffer*>(cmd_ptr.get());
+    REQUIRE(cmd_raw != nullptr);
+
+    auto layout = device.create_pipeline_layout({});
+    auto shader = device.create_shader_module(
+        {crd::rhi::ShaderStage::Compute, "main", {}});
+    crd::rhi::ComputePipelineDesc desc{};
+    desc.compute_shader = shader.get();
+    auto pipeline = device.create_compute_pipeline(desc);
+    REQUIRE(pipeline != nullptr);
+
+    cmd_ptr->bind_compute_pipeline(*pipeline);
+    REQUIRE(cmd_raw->bind_compute_pipeline_count == 1);
+    REQUIRE(cmd_raw->bind_pipeline_count == 0); // graphics path NOT touched
+
+    crd::rhi::DescriptorSet* sets[] = {nullptr};
+    cmd_ptr->bind_compute_descriptor_sets(
+        *layout, 0, crd::containers::ConstSpan<crd::rhi::DescriptorSet*>(sets, 1));
+    REQUIRE(cmd_raw->bind_compute_descriptor_sets_count == 1);
+    REQUIRE(cmd_raw->bind_descriptor_sets_count == 0); // graphics path NOT touched
+    REQUIRE(cmd_raw->last_compute_first_set == 0);
+    REQUIRE(cmd_raw->last_compute_set_count == 1);
+}
+
+TEST_CASE("dispatch params are workgroup counts (D4)", "[rhi][compute][v0b]")
+{
+    FakeDevice device{};
+    auto cmd_ptr = device.create_command_buffer();
+    auto* cmd_raw = dynamic_cast<FakeCommandBuffer*>(cmd_ptr.get());
+    REQUIRE(cmd_raw != nullptr);
+
+    cmd_ptr->dispatch(16, 8, 4);
+    REQUIRE(cmd_raw->dispatch_count == 1);
+    REQUIRE(cmd_raw->last_dispatch_x == 16);
+    REQUIRE(cmd_raw->last_dispatch_y == 8);
+    REQUIRE(cmd_raw->last_dispatch_z == 4);
+}
+
+TEST_CASE("dispatch_indirect threads buffer + offset", "[rhi][compute][v0b]")
+{
+    FakeDevice device{};
+    auto cmd_ptr = device.create_command_buffer();
+    auto* cmd_raw = dynamic_cast<FakeCommandBuffer*>(cmd_ptr.get());
+    REQUIRE(cmd_raw != nullptr);
+
+    auto buf = device.create_buffer(
+        {12, crd::rhi::enum_bits(crd::rhi::BufferUsage::Indirect), crd::rhi::MemoryUsage::GpuOnly});
+    REQUIRE(buf != nullptr);
+    cmd_ptr->dispatch_indirect(*buf, 8);
+    REQUIRE(cmd_raw->dispatch_indirect_count == 1);
+    REQUIRE(cmd_raw->last_dispatch_indirect_offset == 8);
+}
+
+TEST_CASE("SpecializationConstantEntry mirrors VkSpecializationMapEntry shape (D6)", "[rhi][compute][v0b]")
+{
+    STATIC_REQUIRE(sizeof(crd::rhi::SpecializationConstantEntry) == 12); // 3 × u32
+    STATIC_REQUIRE(std::is_trivially_copyable_v<crd::rhi::SpecializationConstantEntry>);
+    STATIC_REQUIRE(std::is_standard_layout_v<crd::rhi::SpecializationConstantEntry>);
+}
+
+TEST_CASE("ComputePipelineDesc accepts specialization constants (D6 type plumbing)", "[rhi][compute][v0b]")
+{
+    FakeDevice device{};
+    auto shader = device.create_shader_module(
+        {crd::rhi::ShaderStage::Compute, "main", {}});
+
+    const crd::u32 spec_value = 1000;
+    crd::rhi::SpecializationConstantEntry entry{0, 0, sizeof(crd::u32)};
+    crd::rhi::ComputePipelineDesc desc{};
+    desc.compute_shader = shader.get();
+    desc.specialization_entries =
+        crd::containers::ConstSpan<crd::rhi::SpecializationConstantEntry>(&entry, 1);
+    desc.specialization_data =
+        crd::containers::ConstSpan<crd::u8>(reinterpret_cast<const crd::u8*>(&spec_value), sizeof(spec_value));
+
+    auto pipeline = device.create_compute_pipeline(desc);
+    REQUIRE(pipeline != nullptr);
+    REQUIRE(pipeline->desc().specialization_entries.size() == 1);
+    REQUIRE(pipeline->desc().specialization_data.size() == sizeof(crd::u32));
+}
+
+TEST_CASE("push_constants reuse for compute via ShaderStage::Compute mask (D5)", "[rhi][compute][v0b]")
+{
+    FakeDevice device{};
+    auto cmd_ptr = device.create_command_buffer();
+    auto* cmd_raw = dynamic_cast<FakeCommandBuffer*>(cmd_ptr.get());
+    REQUIRE(cmd_raw != nullptr);
+
+    auto layout = device.create_pipeline_layout({});
+    const crd::u32 pc_value = 42;
+    cmd_ptr->push_constants(*layout, crd::rhi::ShaderStage::Compute, 0, sizeof(pc_value), &pc_value);
+
+    REQUIRE(cmd_raw->push_constants_count == 1);
+    REQUIRE(crd::rhi::has_stage(cmd_raw->last_push_stages, crd::rhi::ShaderStage::Compute));
+    REQUIRE(cmd_raw->last_push_size == sizeof(pc_value));
+}
+
+// =====================================================================
+// Phase 3.1.7.6 v0c — CommandBuffer::buffer_barrier contract
+// (ADR-0080 D8 backend-agnostic typed-enum barrier API; same-queue path;
+// span-batching deferred per consumer-driven scoping.)
+// =====================================================================
+
+TEST_CASE("buffer_barrier threads from->to BufferAccess pair", "[rhi][compute][v0c]")
+{
+    FakeDevice device{};
+    auto cmd_ptr = device.create_command_buffer();
+    auto* cmd_raw = dynamic_cast<FakeCommandBuffer*>(cmd_ptr.get());
+    REQUIRE(cmd_raw != nullptr);
+
+    auto buf = device.create_buffer(
+        {256, crd::rhi::enum_bits(crd::rhi::BufferUsage::Storage), crd::rhi::MemoryUsage::GpuOnly});
+    REQUIRE(buf != nullptr);
+
+    cmd_ptr->buffer_barrier(*buf, crd::rhi::BufferAccess::ComputeShaderWrite,
+                            crd::rhi::BufferAccess::ComputeShaderRead);
+    REQUIRE(cmd_raw->buffer_barrier_count == 1);
+    REQUIRE(cmd_raw->last_barrier_from == crd::rhi::BufferAccess::ComputeShaderWrite);
+    REQUIRE(cmd_raw->last_barrier_to   == crd::rhi::BufferAccess::ComputeShaderRead);
+}
+
+TEST_CASE("BufferAccess enum has granular per-stage variants (advisor guidance)", "[rhi][compute][v0c]")
+{
+    // The enum DELIBERATELY enumerates compute/vertex/fragment shader
+    // reads as separate variants instead of collapsing into a single
+    // "GraphicsRead" — that lets the impl pick exact srcStageMask without
+    // over-barrier. Pin the granularity here so it doesn't drift.
+    STATIC_REQUIRE(static_cast<crd::u32>(crd::rhi::BufferAccess::ComputeShaderRead) !=
+                   static_cast<crd::u32>(crd::rhi::BufferAccess::VertexShaderRead));
+    STATIC_REQUIRE(static_cast<crd::u32>(crd::rhi::BufferAccess::ComputeShaderRead) !=
+                   static_cast<crd::u32>(crd::rhi::BufferAccess::FragmentShaderRead));
+    STATIC_REQUIRE(static_cast<crd::u32>(crd::rhi::BufferAccess::VertexAttributeRead) !=
+                   static_cast<crd::u32>(crd::rhi::BufferAccess::UniformRead));
+    STATIC_REQUIRE(static_cast<crd::u32>(crd::rhi::BufferAccess::IndirectRead) !=
+                   static_cast<crd::u32>(crd::rhi::BufferAccess::TransferSrc));
+}
+
+TEST_CASE("ImageAccess gained compute variants without breaking back-compat", "[rhi][compute][v0c]")
+{
+    // ShaderRead stays valued the same (graphics fragment-shader-read);
+    // new ComputeShader* variants are additions. No existing transition_image
+    // consumer changes behavior.
+    STATIC_REQUIRE(static_cast<crd::u32>(crd::rhi::ImageAccess::ShaderRead) !=
+                   static_cast<crd::u32>(crd::rhi::ImageAccess::ComputeShaderRead));
+    STATIC_REQUIRE(static_cast<crd::u32>(crd::rhi::ImageAccess::ComputeShaderWrite) !=
+                   static_cast<crd::u32>(crd::rhi::ImageAccess::ComputeShaderReadWrite));
+}
+
+// =====================================================================
+// Phase 3.1.7.6 v0d — async compute substrate contract
+// (ADR-0080 D9 FallbackGracefully default + D10 SubmitInfo / Semaphore API)
+// =====================================================================
+
+TEST_CASE("Device::create_semaphore returns a non-null binary semaphore", "[rhi][compute][v0d]")
+{
+    FakeDevice device{};
+    REQUIRE(device.create_semaphore_count == 0);
+    auto sem = device.create_semaphore();
+    REQUIRE(sem != nullptr);
+    REQUIRE(device.create_semaphore_count == 1);
+}
+
+TEST_CASE("Device::compute_queue() falls back to graphics_queue (pointer identity)", "[rhi][compute][v0d]")
+{
+    FakeDevice device{};
+    REQUIRE_FALSE(device.has_dedicated_compute_queue());
+    // ADR-0080 D9 pointer-identity contract: consumers may dispatch on
+    // address equality to skip cross-queue setup when on fallback.
+    REQUIRE(&device.compute_queue() == &device.graphics_queue());
+}
+
+TEST_CASE("Queue::submit(SubmitInfo) threads wait/signal semaphore counts", "[rhi][compute][v0d]")
+{
+    FakeDevice device{};
+    auto cmd  = device.create_command_buffer();
+    auto sem1 = device.create_semaphore();
+    auto sem2 = device.create_semaphore();
+    auto sem3 = device.create_semaphore();
+    auto fence = device.create_fence();
+
+    crd::rhi::SemaphoreWait waits[] = {
+        {.semaphore = sem1.get(), .wait_stage = crd::rhi::PipelineStage::ComputeShader},
+        {.semaphore = sem2.get(), .wait_stage = crd::rhi::PipelineStage::VertexInput},
+    };
+    crd::rhi::Semaphore* signals[] = {sem3.get()};
+
+    crd::rhi::SubmitInfo info{};
+    info.command_buffer = cmd.get();
+    info.signal_fence   = fence.get();
+    info.wait_semaphores =
+        crd::containers::ConstSpan<crd::rhi::SemaphoreWait>(waits, 2);
+    info.signal_semaphores =
+        crd::containers::ConstSpan<crd::rhi::Semaphore*>(signals, 1);
+
+    auto& q = dynamic_cast<FakeQueue&>(device.graphics_queue());
+    q.submit(info);
+
+    REQUIRE(q.submit_with_info_count == 1);
+    REQUIRE(q.last_wait_sem_count    == 2);
+    REQUIRE(q.last_signal_sem_count  == 1);
+    REQUIRE(fence->is_signaled()); // Fake signals fence on dispatch
+}
+
+TEST_CASE("PipelineStage enum: distinct values for each Vulkan stage", "[rhi][compute][v0d]")
+{
+    // Granularity pin — same rationale as BufferAccess. If a refactor
+    // collapses stages into a "GraphicsStage" bucket, the impl loses
+    // ability to wait at exact stages and over-syncs.
+    STATIC_REQUIRE(static_cast<crd::u32>(crd::rhi::PipelineStage::ComputeShader) !=
+                   static_cast<crd::u32>(crd::rhi::PipelineStage::VertexShader));
+    STATIC_REQUIRE(static_cast<crd::u32>(crd::rhi::PipelineStage::VertexInput) !=
+                   static_cast<crd::u32>(crd::rhi::PipelineStage::FragmentShader));
+    STATIC_REQUIRE(static_cast<crd::u32>(crd::rhi::PipelineStage::ColorAttachment) !=
+                   static_cast<crd::u32>(crd::rhi::PipelineStage::Transfer));
+}
+
+TEST_CASE("AsyncComputePolicy defaults to FallbackGracefully", "[rhi][compute][v0d]")
+{
+    // ADR-0080 D9 default. Consumers wanting hard hardware-dedication
+    // requirement opt in via DeviceDesc::async_compute_policy =
+    // RequireDedicated.
+    crd::rhi::DeviceDesc desc{};
+    REQUIRE(desc.async_compute_policy == crd::rhi::AsyncComputePolicy::FallbackGracefully);
 }

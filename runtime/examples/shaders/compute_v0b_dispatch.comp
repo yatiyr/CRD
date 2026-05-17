@@ -1,0 +1,30 @@
+#version 450
+
+// Phase 3.1.7.6 v0b — first-light compute dispatch smoke shader.
+//
+// Reads spec const `kBaseOffset` (baked at pipeline create-time per
+// ADR-0080 D6) and writes `gl_GlobalInvocationID.x + kBaseOffset` to
+// element [gl_GlobalInvocationID.x] of the output storage buffer.
+//
+// Validates:
+//   - bind_compute_pipeline + bind_compute_descriptor_sets wire correctly
+//   - dispatch(N, 1, 1) executes the right number of invocations
+//   - specialization constants reach the shader at pipeline create-time
+//   - storage buffer write→host-read round-trips correctly with
+//     MemoryUsage::GpuToCpu (host-visible, host-coherent)
+//
+// 64-thread workgroups; total threads = group_count_x × 64.
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(constant_id = 0) const uint kBaseOffset = 0;
+
+layout(set = 0, binding = 0) buffer Output
+{
+    uint data[];
+} u_output;
+
+void main()
+{
+    u_output.data[gl_GlobalInvocationID.x] = gl_GlobalInvocationID.x + kBaseOffset;
+}

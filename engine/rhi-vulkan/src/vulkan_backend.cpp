@@ -89,6 +89,17 @@ namespace
         flags |= VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
     if (has_flag(usage_bits, BufferUsage::Uniform))
         flags |= VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+    // Phase 3.1.7.6 v0b — `BufferUsage::Storage` was declared in the
+    // enum at the descriptor system's introduction but never wired
+    // through here; surfaced when v0b's first-light compute dispatch
+    // needed an actual SSBO. v0a's "create_buffer with Storage works"
+    // test passed because Vulkan accepts a buffer with TRANSFER flags
+    // alone — but using it as an SSBO at bind would have failed
+    // validation. Fixed alongside `Indirect`.
+    if (has_flag(usage_bits, BufferUsage::Storage))
+        flags |= VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    if (has_flag(usage_bits, BufferUsage::Indirect))
+        flags |= VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
     return flags;
 }
 
@@ -151,9 +162,73 @@ struct VkAccessInfo
             return {VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL};
         case ImageAccess::Present:
             return {VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR};
+        // Phase 3.1.7.6 v0c — compute-stage image access (sampled / storage).
+        // GENERAL layout for read-write / write paths since storage images
+        // require it; ShaderRead-only stays in SHADER_READ_ONLY_OPTIMAL.
+        case ImageAccess::ComputeShaderRead:
+            return {VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        case ImageAccess::ComputeShaderWrite:
+            return {VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+                    VK_IMAGE_LAYOUT_GENERAL};
+        case ImageAccess::ComputeShaderReadWrite:
+            return {VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+                    VK_IMAGE_LAYOUT_GENERAL};
         case ImageAccess::Undefined:
         default:
             return {VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0, VK_IMAGE_LAYOUT_UNDEFINED};
+    }
+}
+
+// Phase 3.1.7.6 v0c (ADR-0080 D8) — typed BufferAccess → (stage, access)
+// pair. Each variant maps to ONE specific stage + access bit pair so the
+// pipeline barrier picks the tightest valid mask (no over-barrier).
+struct VkBufferAccessInfo
+{
+    VkPipelineStageFlags stage;
+    VkAccessFlags access;
+};
+
+[[nodiscard]] VkBufferAccessInfo to_vk_buffer_access_info(BufferAccess access) noexcept
+{
+    switch (access)
+    {
+        case BufferAccess::ComputeShaderRead:
+            return {VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT};
+        case BufferAccess::ComputeShaderWrite:
+            return {VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT};
+        case BufferAccess::ComputeShaderReadWrite:
+            return {VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT};
+        case BufferAccess::VertexShaderRead:
+            return {VK_PIPELINE_STAGE_VERTEX_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT};
+        case BufferAccess::FragmentShaderRead:
+            return {VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT};
+        case BufferAccess::VertexAttributeRead:
+            return {VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT};
+        case BufferAccess::IndexRead:
+            return {VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, VK_ACCESS_INDEX_READ_BIT};
+        case BufferAccess::UniformRead:
+            // Uniform buffers can be read from any shader stage. Cover both
+            // common stages; consumers needing tighter scope use the
+            // VertexShaderRead / FragmentShaderRead / ComputeShaderRead variants.
+            return {VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_UNIFORM_READ_BIT};
+        case BufferAccess::IndirectRead:
+            return {VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, VK_ACCESS_INDIRECT_COMMAND_READ_BIT};
+        case BufferAccess::TransferSrc:
+            return {VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT};
+        case BufferAccess::TransferDst:
+            return {VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT};
+        case BufferAccess::HostRead:
+            return {VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_HOST_READ_BIT};
+        case BufferAccess::HostWrite:
+            return {VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_HOST_WRITE_BIT};
+        case BufferAccess::None:
+        default:
+            return {VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0};
     }
 }
 
@@ -819,6 +894,48 @@ private:
     VkPipelineLayout m_owned_layout = VK_NULL_HANDLE; // only set when synthesised internally
 };
 
+// Phase 3.1.7.6 v0a (ADR-0080) — compute pipeline.
+//
+// Mirrors `VulkanPipeline` (graphics) but skips all graphics-only state
+// (vertex input, viewport, raster, blend). Single compute-stage shader
+// module + pipeline layout — that's the whole surface.
+//
+// `owned_layout` is non-null only when create_compute_pipeline synthesised
+// an empty layout for a desc.pipeline_layout == nullptr call. User-provided
+// layouts are NOT owned (matches VulkanPipeline pattern).
+class VulkanComputePipeline final : public ComputePipeline
+{
+public:
+    VulkanComputePipeline(VkDevice device, ComputePipelineDesc desc, VkPipeline pipeline,
+                          VkPipelineLayout owned_layout = VK_NULL_HANDLE)
+        : m_device(device), m_desc(desc), m_pipeline(pipeline), m_owned_layout(owned_layout)
+    {
+    }
+
+    ~VulkanComputePipeline() noexcept override
+    {
+        if (m_pipeline != VK_NULL_HANDLE)
+        {
+            vkDestroyPipeline(m_device, m_pipeline, nullptr);
+            m_pipeline = VK_NULL_HANDLE;
+        }
+        if (m_owned_layout != VK_NULL_HANDLE)
+        {
+            vkDestroyPipelineLayout(m_device, m_owned_layout, nullptr);
+            m_owned_layout = VK_NULL_HANDLE;
+        }
+    }
+
+    [[nodiscard]] const ComputePipelineDesc& desc() const noexcept override { return m_desc; }
+    [[nodiscard]] VkPipeline handle() const noexcept { return m_pipeline; }
+
+private:
+    VkDevice m_device = VK_NULL_HANDLE;
+    ComputePipelineDesc m_desc{};
+    VkPipeline m_pipeline = VK_NULL_HANDLE;
+    VkPipelineLayout m_owned_layout = VK_NULL_HANDLE; // only set when synthesised internally
+};
+
 class VulkanSwapchain;
 
 class VulkanCommandBuffer final : public CommandBuffer
@@ -1031,6 +1148,48 @@ public:
                                 static_cast<crd::u32>(raw_sets.size()), raw_sets.data(), 0, nullptr);
     }
 
+    // ---------------------------------------------------------------
+    // Phase 3.1.7.6 v0b (ADR-0080) — compute dispatch surface.
+    // ---------------------------------------------------------------
+
+    void bind_compute_pipeline(ComputePipeline& pipeline) override
+    {
+        auto* vk_pipeline = dynamic_cast<VulkanComputePipeline*>(&pipeline);
+        CRD_ASSERT(vk_pipeline != nullptr);
+        vkCmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, vk_pipeline->handle());
+    }
+
+    void bind_compute_descriptor_sets(PipelineLayout& layout, crd::u32 first_set,
+                                      crd::containers::ConstSpan<DescriptorSet*> sets) override
+    {
+        auto* vk_layout = dynamic_cast<VulkanPipelineLayout*>(&layout);
+        CRD_ASSERT(vk_layout != nullptr);
+
+        crd::containers::Array<VkDescriptorSet> raw_sets;
+        raw_sets.resize(sets.size());
+        for (crd::usize i = 0; i < sets.size(); ++i)
+        {
+            auto* vk_set = dynamic_cast<VulkanDescriptorSet*>(sets[i]);
+            CRD_ASSERT(vk_set != nullptr);
+            raw_sets[i] = vk_set->handle();
+        }
+
+        vkCmdBindDescriptorSets(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, vk_layout->handle(),
+                                first_set, static_cast<crd::u32>(raw_sets.size()), raw_sets.data(), 0, nullptr);
+    }
+
+    void dispatch(crd::u32 group_count_x, crd::u32 group_count_y, crd::u32 group_count_z) override
+    {
+        vkCmdDispatch(m_command_buffer, group_count_x, group_count_y, group_count_z);
+    }
+
+    void dispatch_indirect(Buffer& buffer, crd::u64 offset_bytes) override
+    {
+        auto* vk_buffer = dynamic_cast<VulkanBuffer*>(&buffer);
+        CRD_ASSERT(vk_buffer != nullptr);
+        vkCmdDispatchIndirect(m_command_buffer, vk_buffer->handle(), offset_bytes);
+    }
+
     void set_viewport(Extent2D extent) noexcept override
     {
         VkViewport viewport{};
@@ -1075,6 +1234,33 @@ public:
 
         vkCmdPipelineBarrier(m_command_buffer, src.stage, dst.stage, 0, 0, nullptr, 0, nullptr, 1, &barrier);
         vk_image->set_layout(dst.layout);
+    }
+
+    // Phase 3.1.7.6 v0c (ADR-0080 D8) — single-buffer pipeline barrier.
+    // No-op when from == to (validation layer would also flag a same-state
+    // barrier as redundant; cheap early-out). Same-queue path; queue
+    // ownership transfer ships at v0d.
+    void buffer_barrier(Buffer& buffer, BufferAccess from, BufferAccess to) noexcept override
+    {
+        if (from == to)
+            return;
+        auto* vk_buffer = dynamic_cast<VulkanBuffer*>(&buffer);
+        CRD_ASSERT(vk_buffer != nullptr);
+
+        const auto src = to_vk_buffer_access_info(from);
+        const auto dst = to_vk_buffer_access_info(to);
+
+        VkBufferMemoryBarrier barrier{};
+        barrier.sType               = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        barrier.srcAccessMask       = src.access;
+        barrier.dstAccessMask       = dst.access;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.buffer              = vk_buffer->handle();
+        barrier.offset              = 0;
+        barrier.size                = VK_WHOLE_SIZE;
+
+        vkCmdPipelineBarrier(m_command_buffer, src.stage, dst.stage, 0, 0, nullptr, 1, &barrier, 0, nullptr);
     }
 
     [[nodiscard]] VkCommandBuffer handle() const noexcept { return m_command_buffer; }
@@ -1395,6 +1581,47 @@ private:
     VkFence  m_handle = VK_NULL_HANDLE;
 };
 
+// Phase 3.1.7.6 v0d (ADR-0080 D10) — binary semaphore for cross-queue
+// GPU-GPU sync. Reset implicit on wait per Vulkan binary semantics.
+class VulkanSemaphore final : public Semaphore
+{
+public:
+    VulkanSemaphore(VkDevice device, VkSemaphore handle) noexcept
+        : m_device(device), m_handle(handle)
+    {
+    }
+
+    ~VulkanSemaphore() override
+    {
+        if (m_handle != VK_NULL_HANDLE && m_device != VK_NULL_HANDLE)
+        {
+            vkDestroySemaphore(m_device, m_handle, nullptr);
+        }
+    }
+
+    [[nodiscard]] VkSemaphore handle() const noexcept { return m_handle; }
+
+private:
+    VkDevice    m_device = VK_NULL_HANDLE;
+    VkSemaphore m_handle = VK_NULL_HANDLE;
+};
+
+[[nodiscard]] VkPipelineStageFlags to_vk_pipeline_stage(PipelineStage stage) noexcept
+{
+    switch (stage)
+    {
+        case PipelineStage::ComputeShader:    return VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+        case PipelineStage::VertexInput:      return VK_PIPELINE_STAGE_VERTEX_INPUT_BIT;
+        case PipelineStage::VertexShader:     return VK_PIPELINE_STAGE_VERTEX_SHADER_BIT;
+        case PipelineStage::FragmentShader:   return VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        case PipelineStage::ColorAttachment:  return VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        case PipelineStage::Transfer:         return VK_PIPELINE_STAGE_TRANSFER_BIT;
+        case PipelineStage::BottomOfPipe:     return VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+        case PipelineStage::Top:
+        default:                              return VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+    }
+}
+
 class VulkanQueue final : public Queue
 {
 public:
@@ -1465,6 +1692,60 @@ public:
             "vkQueueSubmit(fence)"));
     }
 
+    // Phase 3.1.7.6 v0d (ADR-0080 D10) — full submit shape: cmd + fence +
+    // wait semaphores (with per-wait pipeline stage) + signal semaphores.
+    // The one path async-compute consumers go through. Existing fence-only
+    // and present-coupled overloads above stay for v0a/b/c callers.
+    void submit(const SubmitInfo& info) override
+    {
+        auto* vk_cmd = dynamic_cast<VulkanCommandBuffer*>(info.command_buffer);
+        CRD_ASSERT_MSG(vk_cmd != nullptr, "Queue::submit(SubmitInfo): non-Vulkan CommandBuffer");
+
+        crd::containers::Array<VkSemaphore>          wait_handles;
+        crd::containers::Array<VkPipelineStageFlags> wait_stages;
+        wait_handles.resize(info.wait_semaphores.size());
+        wait_stages.resize(info.wait_semaphores.size());
+        for (crd::usize i = 0; i < info.wait_semaphores.size(); ++i)
+        {
+            auto* vk_sem = dynamic_cast<VulkanSemaphore*>(info.wait_semaphores[i].semaphore);
+            CRD_ASSERT_MSG(vk_sem != nullptr, "SubmitInfo wait_semaphore: non-Vulkan Semaphore");
+            wait_handles[i] = vk_sem->handle();
+            wait_stages[i]  = to_vk_pipeline_stage(info.wait_semaphores[i].wait_stage);
+        }
+
+        crd::containers::Array<VkSemaphore> signal_handles;
+        signal_handles.resize(info.signal_semaphores.size());
+        for (crd::usize i = 0; i < info.signal_semaphores.size(); ++i)
+        {
+            auto* vk_sem = dynamic_cast<VulkanSemaphore*>(info.signal_semaphores[i]);
+            CRD_ASSERT_MSG(vk_sem != nullptr, "SubmitInfo signal_semaphore: non-Vulkan Semaphore");
+            signal_handles[i] = vk_sem->handle();
+        }
+
+        VkCommandBuffer cmd_handle = vk_cmd->handle();
+        VkSubmitInfo submit_info{};
+        submit_info.sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submit_info.waitSemaphoreCount   = static_cast<crd::u32>(wait_handles.size());
+        submit_info.pWaitSemaphores      = wait_handles.data();
+        submit_info.pWaitDstStageMask    = wait_stages.data();
+        submit_info.commandBufferCount   = 1;
+        submit_info.pCommandBuffers      = &cmd_handle;
+        submit_info.signalSemaphoreCount = static_cast<crd::u32>(signal_handles.size());
+        submit_info.pSignalSemaphores    = signal_handles.data();
+
+        VkFence vk_fence_handle = VK_NULL_HANDLE;
+        if (info.signal_fence != nullptr)
+        {
+            auto* vk_fence = dynamic_cast<VulkanFence*>(info.signal_fence);
+            CRD_ASSERT_MSG(vk_fence != nullptr, "SubmitInfo signal_fence: non-Vulkan Fence");
+            vk_fence_handle = vk_fence->handle();
+        }
+
+        static_cast<void>(vk_ok(
+            vkQueueSubmit(m_queue, 1, &submit_info, vk_fence_handle),
+            "vkQueueSubmit(SubmitInfo)"));
+    }
+
     void present(Swapchain& swapchain) override
     {
         auto* vk_swapchain = dynamic_cast<VulkanSwapchain*>(&swapchain);
@@ -1511,14 +1792,32 @@ class VulkanDevice final : public Device
 {
 public:
     VulkanDevice(VkInstance instance, VkPhysicalDevice physical_device, VkDevice device, crd::u32 graphics_family_index,
-                 DeviceDesc desc, bool sync2_enabled, bool dynamic_rendering_enabled)
+                 crd::u32 compute_family_index, DeviceDesc desc, bool sync2_enabled, bool dynamic_rendering_enabled)
         : m_instance(instance), m_physical_device(physical_device), m_device(device),
-          m_graphics_family_index(graphics_family_index), m_desc(std::move(desc)), m_sync2_enabled(sync2_enabled),
+          m_graphics_family_index(graphics_family_index), m_compute_family_index(compute_family_index),
+          m_desc(std::move(desc)), m_sync2_enabled(sync2_enabled),
           m_dynamic_rendering_enabled(dynamic_rendering_enabled), m_allocator(physical_device, device)
     {
         vkGetDeviceQueue(m_device, m_graphics_family_index, 0, &m_graphics_queue_handle);
         m_graphics_queue = std::make_unique<VulkanQueue>(m_graphics_queue_handle, m_sync2_enabled);
 
+        // Phase 3.1.7.6 v0d (ADR-0080 D9) — dedicated compute queue if
+        // hardware exposed one + the policy allowed it through device
+        // creation. Otherwise compute_queue() returns the SAME Queue&
+        // as graphics_queue() (pointer-identity contract).
+        if (m_compute_family_index != UINT32_MAX)
+        {
+            vkGetDeviceQueue(m_device, m_compute_family_index, 0, &m_compute_queue_handle);
+            m_compute_queue = std::make_unique<VulkanQueue>(m_compute_queue_handle, m_sync2_enabled);
+            CRD_LOG_INFO(detail::g_log_rhi_vulkan,
+                         "Dedicated compute queue acquired: family={}", m_compute_family_index);
+        }
+        else
+        {
+            CRD_LOG_INFO(detail::g_log_rhi_vulkan,
+                         "No dedicated compute queue family; compute_queue() aliases graphics_queue() "
+                         "(FallbackGracefully)");
+        }
         VkCommandPoolCreateInfo pool_info{};
         pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
         pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
@@ -2021,6 +2320,99 @@ public:
         return std::make_unique<VulkanPipeline>(m_device, desc, pipeline, synthesised_empty_layout);
     }
 
+    // Phase 3.1.7.6 v0a (ADR-0080) — compute pipeline factory.
+    // Returns nullptr cleanly on null shader / wrong stage / Vulkan failure.
+    // Synthesises an empty pipeline layout if caller passed nullptr (matches
+    // create_graphics_pipeline pattern).
+    [[nodiscard]] std::unique_ptr<ComputePipeline> create_compute_pipeline(const ComputePipelineDesc& desc) override
+    {
+        auto* compute_shader = dynamic_cast<VulkanShaderModule*>(desc.compute_shader);
+        if (compute_shader == nullptr)
+        {
+            CRD_LOG_ERROR(detail::g_log_rhi_vulkan,
+                          "Compute pipeline requires a VulkanShaderModule-backed compute shader");
+            return nullptr;
+        }
+        if (compute_shader->stage() != ShaderStage::Compute)
+        {
+            CRD_LOG_ERROR(detail::g_log_rhi_vulkan,
+                          "Compute pipeline shader module stage must be Compute");
+            return nullptr;
+        }
+
+        VkPipelineLayout layout = VK_NULL_HANDLE;
+        VkPipelineLayout synthesised_empty_layout = VK_NULL_HANDLE;
+        if (desc.pipeline_layout != nullptr)
+        {
+            auto* user_layout = dynamic_cast<VulkanPipelineLayout*>(desc.pipeline_layout);
+            if (user_layout == nullptr)
+            {
+                CRD_LOG_ERROR(detail::g_log_rhi_vulkan,
+                              "Compute pipeline layout must be a VulkanPipelineLayout");
+                return nullptr;
+            }
+            layout = user_layout->handle();
+        }
+        else
+        {
+            VkPipelineLayoutCreateInfo layout_info{};
+            layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+            if (!vk_ok(vkCreatePipelineLayout(m_device, &layout_info, nullptr, &synthesised_empty_layout),
+                       "vkCreatePipelineLayout (compute synthesised empty)"))
+            {
+                return nullptr;
+            }
+            layout = synthesised_empty_layout;
+        }
+
+        VkPipelineShaderStageCreateInfo stage{};
+        stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+        stage.module = compute_shader->handle();
+        stage.pName  = compute_shader->entry_point().data();
+
+        // Phase 3.1.7.6 v0b (ADR-0080 D6) — bake specialization constants
+        // at create-time. Mapping entries + data are stack-local for the
+        // duration of vkCreateComputePipelines; not retained afterwards.
+        crd::containers::Array<VkSpecializationMapEntry> vk_map_entries;
+        VkSpecializationInfo spec_info{};
+        const bool has_spec = !desc.specialization_entries.empty();
+        if (has_spec)
+        {
+            vk_map_entries.resize(desc.specialization_entries.size());
+            for (crd::usize i = 0; i < desc.specialization_entries.size(); ++i)
+            {
+                const auto& e = desc.specialization_entries[i];
+                vk_map_entries[i].constantID = e.constant_id;
+                vk_map_entries[i].offset     = e.offset;
+                vk_map_entries[i].size       = e.size;
+            }
+            spec_info.mapEntryCount = static_cast<crd::u32>(vk_map_entries.size());
+            spec_info.pMapEntries   = vk_map_entries.data();
+            spec_info.dataSize      = desc.specialization_data.size();
+            spec_info.pData         = desc.specialization_data.data();
+            stage.pSpecializationInfo = &spec_info;
+        }
+
+        VkComputePipelineCreateInfo info{};
+        info.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        info.stage  = stage;
+        info.layout = layout;
+
+        VkPipeline pipeline = VK_NULL_HANDLE;
+        if (!vk_ok(vkCreateComputePipelines(m_device, VK_NULL_HANDLE, 1, &info, nullptr, &pipeline),
+                   "vkCreateComputePipelines"))
+        {
+            if (synthesised_empty_layout != VK_NULL_HANDLE)
+            {
+                vkDestroyPipelineLayout(m_device, synthesised_empty_layout, nullptr);
+            }
+            return nullptr;
+        }
+
+        return std::make_unique<VulkanComputePipeline>(m_device, desc, pipeline, synthesised_empty_layout);
+    }
+
     [[nodiscard]] std::unique_ptr<CommandBuffer> create_command_buffer() override
     {
         if (!m_dynamic_rendering_enabled)
@@ -2058,6 +2450,20 @@ public:
         return std::make_unique<VulkanFence>(m_device, fence);
     }
 
+    // Phase 3.1.7.6 v0d (ADR-0080 D10) — binary semaphore for cross-queue
+    // GPU-GPU sync. Returns nullptr on Vulkan failure (rare; usually OOM).
+    [[nodiscard]] std::unique_ptr<Semaphore> create_semaphore() override
+    {
+        VkSemaphoreCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+        VkSemaphore handle = VK_NULL_HANDLE;
+        if (!vk_ok(vkCreateSemaphore(m_device, &info, nullptr, &handle), "vkCreateSemaphore"))
+        {
+            return nullptr;
+        }
+        return std::make_unique<VulkanSemaphore>(m_device, handle);
+    }
+
     [[nodiscard]] std::unique_ptr<DescriptorSetLayout>
     create_descriptor_set_layout(const DescriptorSetLayoutDesc& desc) override
     {
@@ -2088,7 +2494,8 @@ public:
         return std::make_unique<VulkanDescriptorSetLayout>(m_device, desc, layout);
     }
 
-    [[nodiscard]] std::unique_ptr<PipelineLayout> create_pipeline_layout(const PipelineLayoutDesc& desc) override
+    [[nodiscard]] std::unique_ptr<PipelineLayout>
+    create_pipeline_layout(const PipelineLayoutDesc& desc) override
     {
         crd::containers::Array<VkDescriptorSetLayout> vk_set_layouts;
         for (const auto* set_layout : desc.set_layouts)
@@ -2132,6 +2539,18 @@ public:
 
     [[nodiscard]] Queue& graphics_queue() noexcept override { return *m_graphics_queue; }
 
+    // Phase 3.1.7.6 v0d (ADR-0080 D9) — pointer-identity contract: when no
+    // dedicated compute queue family was selected (FallbackGracefully + no
+    // hardware support), return the SAME Queue& as graphics_queue().
+    [[nodiscard]] Queue& compute_queue() noexcept override
+    {
+        return m_compute_queue ? *m_compute_queue : *m_graphics_queue;
+    }
+    [[nodiscard]] bool has_dedicated_compute_queue() const noexcept override
+    {
+        return m_compute_queue != nullptr;
+    }
+
     void wait_idle() override
     {
         if (m_device != VK_NULL_HANDLE)
@@ -2147,12 +2566,15 @@ private:
     VkSurfaceKHR m_surface = VK_NULL_HANDLE;
     VkCommandPool m_command_pool = VK_NULL_HANDLE;
     crd::u32 m_graphics_family_index = 0;
+    crd::u32 m_compute_family_index = UINT32_MAX;
     DeviceDesc m_desc{};
     bool m_sync2_enabled = false;
     bool m_dynamic_rendering_enabled = false;
     VulkanAllocator m_allocator;
     VkQueue m_graphics_queue_handle = VK_NULL_HANDLE;
+    VkQueue m_compute_queue_handle = VK_NULL_HANDLE;
     std::unique_ptr<VulkanQueue> m_graphics_queue{};
+    std::unique_ptr<VulkanQueue> m_compute_queue{}; // null on fallback (alias graphics_queue)
 };
 
 class VulkanInstance final : public Instance
@@ -2417,12 +2839,44 @@ public:
             return nullptr;
         }
 
+        // Phase 3.1.7.6 v0d (ADR-0080 D9) — probe for dedicated compute
+        // queue family (VK_QUEUE_COMPUTE_BIT && !VK_QUEUE_GRAPHICS_BIT).
+        // RequireDedicated fails device creation if absent;
+        // FallbackGracefully (default) reuses the graphics queue and the
+        // Device::compute_queue() accessor returns the same Queue&.
+        crd::u32 compute_family_index = UINT32_MAX;
+        for (crd::u32 i = 0; i < queue_family_count; ++i)
+        {
+            const auto flags = queue_families[i].queueFlags;
+            if ((flags & VK_QUEUE_COMPUTE_BIT) != 0 && (flags & VK_QUEUE_GRAPHICS_BIT) == 0)
+            {
+                compute_family_index = i;
+                break;
+            }
+        }
+        if (desc.async_compute_policy == AsyncComputePolicy::RequireDedicated &&
+            compute_family_index == UINT32_MAX)
+        {
+            CRD_LOG_ERROR(detail::g_log_rhi_vulkan,
+                          "RequireDedicated: no dedicated compute queue family on selected adapter");
+            return nullptr;
+        }
+
         const float queue_priority = 1.0F;
-        VkDeviceQueueCreateInfo queue_create_info{};
-        queue_create_info.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-        queue_create_info.queueFamilyIndex = graphics_family_index;
-        queue_create_info.queueCount = 1;
-        queue_create_info.pQueuePriorities = &queue_priority;
+        VkDeviceQueueCreateInfo queue_create_infos[2]{};
+        queue_create_infos[0].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+        queue_create_infos[0].queueFamilyIndex = graphics_family_index;
+        queue_create_infos[0].queueCount = 1;
+        queue_create_infos[0].pQueuePriorities = &queue_priority;
+        crd::u32 queue_create_info_count = 1;
+        if (compute_family_index != UINT32_MAX)
+        {
+            queue_create_infos[1].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+            queue_create_infos[1].queueFamilyIndex = compute_family_index;
+            queue_create_infos[1].queueCount = 1;
+            queue_create_infos[1].pQueuePriorities = &queue_priority;
+            queue_create_info_count = 2;
+        }
 
         VkPhysicalDeviceSynchronization2Features enabled_sync2{};
         enabled_sync2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES;
@@ -2442,8 +2896,8 @@ public:
         VkDeviceCreateInfo create_info{};
         create_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
         create_info.pNext = &enabled_features2;
-        create_info.queueCreateInfoCount = 1;
-        create_info.pQueueCreateInfos = &queue_create_info;
+        create_info.queueCreateInfoCount = queue_create_info_count;
+        create_info.pQueueCreateInfos = queue_create_infos;
         create_info.enabledExtensionCount = 1;
         create_info.ppEnabledExtensionNames = device_extensions;
 
@@ -2453,7 +2907,8 @@ public:
             return nullptr;
         }
 
-        return std::make_unique<VulkanDevice>(m_instance, physical_device, device, graphics_family_index, desc,
+        return std::make_unique<VulkanDevice>(m_instance, physical_device, device, graphics_family_index,
+                                              compute_family_index, desc,
                                               sync2_supported, dynamic_rendering_supported);
     }
 

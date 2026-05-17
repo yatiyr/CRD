@@ -3,6 +3,9 @@ crd_collect_sources(TEST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}")
 set(RHI_VULKAN_TEST_SHADERS
     "${CMAKE_SOURCE_DIR}/runtime/examples/shaders/triangle.vert"
     "${CMAKE_SOURCE_DIR}/runtime/examples/shaders/triangle.frag"
+    "${CMAKE_SOURCE_DIR}/runtime/examples/shaders/compute_v0a.comp"
+    "${CMAKE_SOURCE_DIR}/runtime/examples/shaders/compute_v0b_dispatch.comp"
+    "${CMAKE_SOURCE_DIR}/runtime/examples/shaders/compute_v0c_doubler.comp"
 )
 crd_compile_glsl(RHI_VULKAN_TEST_SPV "${CMAKE_CURRENT_BINARY_DIR}/shaders" ${RHI_VULKAN_TEST_SHADERS})
 

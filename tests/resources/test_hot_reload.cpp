@@ -68,7 +68,7 @@ struct HRFailLoader final : public ILoader
 // Reuses the same pack-container id each call so the manifest CRDR size is
 // stable across writes — offsets won't shift when only the blob content changes.
 static void write_blob_pack(const crd::platform::fs::Path& path,
-                             const ResourceId               artifact_id,
+                             ResourceId                     artifact_id,
                              crd::containers::ConstSpan<crd::u8> blob_bytes)
 {
     // Build artifact CRDR.

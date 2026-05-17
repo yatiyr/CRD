@@ -110,6 +110,15 @@ public:
                               crd::containers::ConstSpan<crd::rhi::DescriptorSet*> /*sets*/) override
     {
     }
+    // Phase 3.1.7.6 v0b — smoke doesn't exercise compute dispatch.
+    void bind_compute_pipeline(crd::rhi::ComputePipeline& /*pipeline*/) override {}
+    void bind_compute_descriptor_sets(crd::rhi::PipelineLayout& /*layout*/, crd::u32 /*first_set*/,
+                                      crd::containers::ConstSpan<crd::rhi::DescriptorSet*> /*sets*/) override {}
+    void dispatch(crd::u32 /*x*/, crd::u32 /*y*/, crd::u32 /*z*/) override {}
+    void dispatch_indirect(crd::rhi::Buffer& /*buffer*/, crd::u64 /*offset*/) override {}
+    // Phase 3.1.7.6 v0c — smoke doesn't exercise buffer barriers.
+    void buffer_barrier(crd::rhi::Buffer& /*buffer*/, crd::rhi::BufferAccess /*from*/,
+                        crd::rhi::BufferAccess /*to*/) noexcept override {}
     void set_viewport(crd::rhi::Extent2D /*extent*/) noexcept override {}
     void set_scissor(crd::rhi::Rect2D /*rect*/) noexcept override {}
 };
@@ -153,6 +162,11 @@ public:
     {
         CRD_LOG_INFO(g_log_smoke_rhi, "queue submit(cmd, fence)");
     }
+    // Phase 3.1.7.6 v0d — smoke doesn't exercise compute submission.
+    void submit(const crd::rhi::SubmitInfo& /*info*/) override
+    {
+        CRD_LOG_INFO(g_log_smoke_rhi, "queue submit(SubmitInfo)");
+    }
     void present(crd::rhi::Swapchain& /*swapchain*/) override { CRD_LOG_INFO(g_log_smoke_rhi, "queue present"); }
     void wait_idle() override { CRD_LOG_INFO(g_log_smoke_rhi, "queue wait_idle"); }
 };
@@ -183,6 +197,9 @@ public:
     {
         return std::make_unique<SmokePipeline>(desc);
     }
+    // Phase 3.1.7.6 v0a (ADR-0080) — smoke doesn't exercise compute.
+    [[nodiscard]] std::unique_ptr<crd::rhi::ComputePipeline>
+    create_compute_pipeline(const crd::rhi::ComputePipelineDesc&) override { return nullptr; }
     [[nodiscard]] std::unique_ptr<crd::rhi::CommandBuffer> create_command_buffer() override
     {
         return std::make_unique<SmokeCommandBuffer>();
@@ -191,6 +208,10 @@ public:
     {
         return nullptr; // smoke doesn't exercise fences
     }
+    // Phase 3.1.7.6 v0d — smoke doesn't exercise compute submission.
+    [[nodiscard]] std::unique_ptr<crd::rhi::Semaphore> create_semaphore() override { return nullptr; }
+    [[nodiscard]] crd::rhi::Queue& compute_queue() noexcept override { return m_queue; }
+    [[nodiscard]] bool has_dedicated_compute_queue() const noexcept override { return false; }
     [[nodiscard]] std::unique_ptr<crd::rhi::DescriptorSetLayout>
     create_descriptor_set_layout(const crd::rhi::DescriptorSetLayoutDesc&) override { return nullptr; }
     [[nodiscard]] std::unique_ptr<crd::rhi::PipelineLayout>

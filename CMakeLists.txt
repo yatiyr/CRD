@@ -249,6 +249,21 @@ CPMAddPackage(
 )
 unset(CMAKE_POLICY_VERSION_MINIMUM)
 
+# Phase 3.1.7.6 v0-close (2026-05-17) — disable IPO/LTCG on the
+# vendored zstd_static target. MSVC's LTCG link step recurrently
+# emits a C1001 internal compiler error at `zstd_decompress_block.c`
+# call-sites when LTCG-linked into `crd-sandbox.exe`
+# (`link!DllGetObjHandler()+0xc2654`) in the win-shipping-profile
+# preset. We can't `CRD_NOINLINE` third-party code, and the upstream
+# MSVC bug has no known fix. Disabling IPO on zstd's objects means
+# they're not `/GL`-tagged; the final link still uses `/LTCG` for
+# Cerid's own code but skips the un-tagged zstd objects — no link-
+# time codegen happens for zstd, breaking the ICE chain. Cerid's own
+# LTCG benefits (cross-TU inlining in the engine) are unaffected.
+if(TARGET zstd_static)
+    set_target_properties(zstd_static PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
+endif()
+
 # stb: single-header image/font/audio utilities (DOWNLOAD_ONLY — no cmake build).
 # Phase 2.7: stb_image used by the texture cook handler. GIT_TAG master because
 # stb has no semver tags (see docs/debt.md).
