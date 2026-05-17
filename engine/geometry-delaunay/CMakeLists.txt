@@ -12,6 +12,7 @@
 #   v8d-2d voronoi_2d                2D Voronoi diagram (geometric dual of v8a/v8b).
 #   v8d-3d voronoi_3d                3D Voronoi diagram (geometric dual of v8c) + ConvexHullView helper.
 #   v8e   lloyd_2d / lloyd_3d        Lloyd's CVT relaxation (Lloyd 1982) — 2D w/ Fix + ClipToBbox, 3D w/ Fix.
+#   v8f   nni_2d                     Sibson 1981 Natural Neighbour Interpolation (Bowyer-Watson cavity form).
 #   v8c-pre insphere_exact Stage D   Mandatory paydown before v8c.
 #   v8c  delaunay_3d                 3D Bowyer-Watson tetrahedralisation.
 #   v8d-2d voronoi_2d                2D Voronoi diagram extraction.

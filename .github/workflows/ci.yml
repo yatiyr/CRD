@@ -85,18 +85,24 @@ jobs:
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
 
-      # Pin clang-tidy version (LLVM 20) to match local dev (VS2026 ships
-      # LLVM 20.1.x). LLVM 19 and 20 differ in `readability-identifier-naming`
+      # Pin clang-tidy version (LLVM 20.1.8) to match local dev (VS2026 ships
+      # LLVM 20.1.8). LLVM 19 and 20 differ in `readability-identifier-naming`
       # categorisation of function-local `constexpr` (LLVM 19 lumps them into
       # `LocalConstant`; LLVM 20 has a separate `LocalConstexprVariable`
       # category — `.clang-tidy` sets `LocalConstexprVariableCase = CamelCase + k`
       # for the project convention `kMaxPrec`-style names). Pinning eliminates
       # the skew that produced silent CI-only failures on patterns the local
       # gate accepted.
-      - name: Install LLVM 20 (pinned)
-        uses: KyleMayes/install-llvm-action@v2
+      #
+      # Why @v2.0.9 not @v2: the `@v2` tag was silently resolving to an older
+      # v2.0.x that pre-dated LLVM 20 support (added in v2.0.7, additional 20.x
+      # versions in v2.0.9). With `@v2 + version: '20'` the action fell back
+      # to its newest known version which was LLVM 19.1.7. Explicit `@v2.0.9 +
+      # version: '20.1.8'` resolves to LLVM 20.1.8 deterministically.
+      - name: Install LLVM 20.1.8 (pinned)
+        uses: KyleMayes/install-llvm-action@v2.0.9
         with:
-          version: '20'
+          version: '20.1.8'
 
       - name: Verify clang-tidy version
         shell: pwsh
