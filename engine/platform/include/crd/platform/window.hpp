@@ -1,6 +1,7 @@
 #pragma once
 
 #include <crd/containers/string.hpp>
+#include <crd/core/platform.hpp>
 #include <crd/core/types.hpp>
 #include <crd/platform/input.hpp>
 
@@ -88,7 +89,12 @@ public:
     [[nodiscard]] void* native_handle() const noexcept;
 
 private:
-    Window() noexcept;
+    // CRD_NOINLINE: MSVC LTCG/PGO ICE C1001 in win-shipping-profile when
+    // std::make_unique<Impl>() is inlined into the LTCG call graph of
+    // crd-sandbox.exe (D-003 win-shipping-profile preset; reproduced
+    // 2026-05-17 during Phase 3.1.7 v8-close full sweep). Same precedent
+    // as evict_block_locked / try_evict_to_budget in crd-resources.
+    CRD_NOINLINE Window() noexcept;
 
     struct Impl;
     std::unique_ptr<Impl> m_impl;

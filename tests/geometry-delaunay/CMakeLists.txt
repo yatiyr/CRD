@@ -7,6 +7,8 @@ add_executable(crd-geometry-delaunay-tests
     test_lloyd_2d.cpp
     test_lloyd_3d.cpp
     test_nni_2d.cpp
+    test_ruppert_2d.cpp
+    test_tet_refine_3d.cpp
 )
 
 target_link_libraries(crd-geometry-delaunay-tests PRIVATE

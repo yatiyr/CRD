@@ -1569,3 +1569,161 @@ per-slice logs `docs/sessions/2026-05-16-geometry-v7a-*.md` to
 paydown at v8c-pre) → v9 GPU LBVH + V-HACD + REPL + v9e shader-
 helpers emit → v10 `-curves` → v11 transform-aware query helpers in
 `-primitives`.
+
+## §23 Amendment (2026-05-17) — v8 `-delaunay` cluster CLOSED
+
+Phase 3.1.7 sub-module 9 of 11 — `crd-geometry-delaunay` — shipped +
+closed. 11 algorithm slices + 1 cluster-close slice. ALL 11 algorithm
+slices shipped 2026-05-17 in a single day. Substrate model is
+"primitive + supporting infrastructure": v8a is the Bowyer-Watson 2D
+primitive; subsequent slices reuse + extend it.
+
+### §23.1 Slice ledger
+
+| Slice | Engine LOC | Test LOC | Decisions | What |
+|---|---|---|---|---|
+| v8a 2D Bowyer-Watson (Bowyer 1981 / Watson 1981) | ~600 | ~400 | D73-D80 | Pure 2D Delaunay via lex-sort `(x, y, original_index)` insertion + super-triangle at 1000× bbox + jump-walk via apex-side `orient2d` + cavity BFS via Shewchuk Stage D `incircle` (paid down 2026-05-14) + fan re-triangulation + O(K²) neighbour rewiring + strip-time emission |
+| v8b 2D Hilbert-sort BW (delaunator-style; Skinner-Agafonkin 2017) | ~550 | ~350 | D81-D84 | Shared BW core extracted to `delaunay_2d_internal.hpp` (namespace `crd::geometry::delaunay::detail`) + Hilbert sort via Skilling 2004 iterative `xy2d` on 2^16 grid + sort `(hilbert, original_index)` + spatial locality reduces jump-walk cost to O(1) per insertion |
+| v8c-pre `insphere_exact` Stage D paydown | ~150 | ~150 | D85-D89 | Literal port of Shewchuk's `insphereexact` (predicates.c v4.0.0 lines 3346-3601): 10 pairwise 2D minors → 10 trio cofactor expansions via existing `triangle_cofactor` helper → 5 quad 96-element → 5 lifted 1152-element dets → cascaded 5760-element final sum + `thread_local static` buffers (~170 KB per thread). **Closes the Shewchuk adaptive-predicate debt entry** (`docs/debt.md`) |
+| v8c 3D Bowyer-Watson tetrahedralisation | ~720 | ~340 | D90-D94 | Internal `Tet` slot ≤ 40 bytes static_assert pinned + `TetPool` LIFO free-list + `face_vertices[4][3]` permutation table (transposition-parity-verified `orient3d(face, v[i]) > 0`) + super-tet ordering matching Shewchuk's "below plane" convention + cavity BFS w/ defensive star-shape check `orient3d(face, q) > 0` + O(K²) face-match neighbour wiring + `Coplanar` diagnostic (every-4-tuple `orient3d`-zero detection) |
+| v8d-2d 2D Voronoi extraction | ~450 | ~370 | D95-D97 | Sort-and-scan over 3T half-edges for adjacency (ADR §4 pin #11 lex-tuple determinism, NOT HashMap) + new `circumcenter_2d` primitive in `crd-geometry-primitives` (lifted to f64) + cell walk via Delaunay neighbour info (NOT angular sort — robust under cocircular) + unbounded-cell rays via perpendicular-to-hull-edge w/ opposite-vertex sign check |
+| v8d-3d 3D Voronoi cells extraction | ~600 | ~360 | D98-D101 | Sort-and-scan over 4T half-faces + 6T half-edges + new `circumcenter_3d` primitive (Cramer's 3x3 lifted f64) + edge-fan walk via tet face-adjacency + single-fan dot-product axis-sign check determines CCW-from-vmin vs vmax side (emit forward for one, reverse for other) + `ConvexHullView` helper (`convex_hull_for_cell`) w/ outward `Plane<T>` per face + face-vertex-offsets prefix-sum + non-owning `view()` |
+| v8e Lloyd CVT (2D + 3D) (Lloyd 1982) | ~700 | ~440 | D102-D108 | `HullPolicy{Fix, ClipToBbox}` (2D both; 3D Fix only — ClipToBbox = v8e-3d-clip followon) + bounded 2D centroid via signed-area polygon + bounded 3D centroid via tet decomposition `(ref, face_v[0], face_v[i], face_v[i+1])` w/ ref-invariant `sum(C × V)/sum(V)` + 2D ClipToBbox = Sutherland-Hodgman against axis-aligned bbox + ray-extension + CCW corner walk + Jacobi atomic site swap + tolerance halt on max per-iteration displacement |
+| v8f Sibson NNI 2D (Sibson 1981 / Belikov-Semenov 1997) | ~430 | ~390 | D109-D113 | Bowyer-Watson cavity-based form + cached Delaunay/adjacency/circumcentres class `NniInterpolator2<T>` for repeated queries + functional `sibson_interpolate_2d` one-shot + jump-walk locate w/ OnSite short-circuit + cavity BFS via Stage D `incircle` + boundary CCW cycle via `next_v[u] = v` map + per-neighbour stolen-polygon walk + signed-area weights |
+| v8g Ruppert 2D refinement (Ruppert 1995 / Shewchuk Triangle) | ~410 | ~350 | D114-D118 | Module gains PRIVATE link to `crd-geometry-polygon` (v6c CDT used internally) + encroachment via diametral-disk dot product (`dot(A-V, B-V) < 0`) + bad-triangle scan via law-of-cosines min angle + encroach-first prioritisation + Steiner insertion at circumcentre + full CDT rebuild per iteration (D117 simple v1; incremental BW = v8g-perf followon) + `is_near_existing` eps² guard against `DuplicatePoint` cascade on sliver triangles |
+| v8h 3D dihedral-bounded refinement (3D-Ruppert analog) | ~510 | ~340 | D119-D122 | **Scope honest D119** = dihedral-bounded refinement, NOT true sliver exudation (Cheng-Dey-Edelsbrunner-Facello-Teng 2000 weighted-Delaunay perturbation = v8h-exude followon) + six-dihedral enumeration via edge tuples `{(0,1,2,3), (0,2,1,3), (0,3,1,2), (1,2,0,3), (1,3,0,2), (2,3,0,1)}` + dihedral via face-normal cross-product dot (calibration: regular tet returns `arccos(1/3) ≈ 70.5288°`) + out-of-domain skip (bbox±10% pad) + bbox-scaled near-duplicate `eps² = (bbox_diag × 1e-6)²` (auto-scales to FEA coord magnitudes 10³-10⁵) + 3D termination NOT guaranteed (no analog to Ruppert 2D α ≤ 20.7° bound) — `NotConverged` is a valid outcome on adversarial inputs |
+| v8-close | — | — | — | This §23 amendment + `docs/systems/geometry-delaunay.md` + 18-config full sweep + roadmap/context/MEMORY final sync |
+| **Total** | **~5120** | **~3490** | **D73-D122 (50 decisions)** | **~8610 LOC across 11 slices** |
+
+### §23.2 Locked design decisions D73-D122
+
+The v8 cluster's 50 design decisions are pinned at the source-of-truth
+SLICE level in each session log under "Decisions made". This §23
+amendment indexes them by slice; canonical detail lives in the per-slice
+logs `docs/sessions/2026-05-17-geometry-v8a-*.md` through
+`docs/sessions/2026-05-17-geometry-v8h-*.md` + system overview
+`docs/systems/geometry-delaunay.md`.
+
+- **v8a 2D Bowyer-Watson** D73-D80: internal `Tri` slot 12+12+1 bytes ·
+  super-triangle scale 1000× bbox · lex-sort `(x, y, original_index)` ·
+  jump-walk via apex-side `orient2d` w/ deterministic edge-cross
+  tiebreak · cavity BFS in monotonic tri-id order via `incircle` ·
+  cavity boundary edges w/ outer-nbr id · re-triangulate by fanning +
+  O(K²) neighbour-pair match · strip-time emission filtering super-tri
+  vertices.
+- **v8b 2D Hilbert-sort BW** D81-D84: Hilbert grid resolution 2^16 ·
+  Skilling 2004 iterative `xy2d` mapping · sort key `(hilbert_index,
+  original_index)` for determinism · bbox padding 1.0 (no pad) +
+  degenerate-bbox fallback to unit extent.
+- **v8c-pre `insphere_exact` Stage D** D85-D89: port Shewchuk literally
+  (not re-derive) · `thread_local static` for large 384/768/1152/2304/
+  3456/5760-element buffers (no stack pressure, no allocator dep) ·
+  adversarial corpus FIRST per advisor TDD (r²=5e9 cospherical
+  discriminator) · axis-aligned symmetric tests NOT discriminating
+  (cofactor products cancel pairwise in f64) · API surface unchanged
+  (body-only replacement).
+- **v8c 3D Bowyer-Watson** D90-D94: internal `Tet` slot ≤ 40 bytes
+  static_assert pinned · defensive star-shape check `orient3d(face, q)
+  > 0` on cavity boundary faces · face vertex permutation table
+  verified via transposition parity such that `orient3d(face, v[i]) >
+  0` for positively-oriented tet · `Coplanar` diagnostic (new in 3D)
+  via every-4-tuple `orient3d`-zero detection · super-tet ordering
+  matching Shewchuk's "orient3d > 0 iff d below abc plane" convention.
+- **v8d-2d 2D Voronoi extraction** D95-D97: `circumcenter_2d`
+  primitive lifted to f64 regardless of T · unbounded ray direction =
+  perpendicular to Delaunay hull edge sign-checked vs opposite vertex
+  (NOT `circumcentre - midpoint`) · output structure
+  `voronoi_vertices` indexed by Delaunay tri id + cells in input-site
+  order + CCW orientation pinned for bounded cells.
+- **v8d-3d 3D Voronoi cells extraction** D98-D101: edge-fan walk
+  direction via face-adjacency with 2 fan-faces at `{0,1,2,3} \ {si,
+  ni}` · face vertex CCW determined by axis-dot-product sign-check from
+  single fan walk (emit forward for matched side, reverse for other) ·
+  `circumcenter_3d` lifted to f64 (mirror of D95) · unbounded cell =
+  any null opposite-tet during fan walk.
+- **v8e Lloyd CVT 2D + 3D** D102-D108: `HullPolicy::Fix` default
+  (hull sites stay put; simplest robust) · convergence on max per-
+  iteration displacement < tolerance (absolute, not relative) · 2D
+  polygon centroid via signed-area formula · 2D ClipToBbox via
+  Sutherland-Hodgman against axis-aligned bbox · 2D unbounded-cell
+  closure = ray extension + CCW bbox-corner walk + Sutherland-Hodgman ·
+  3D polyhedron centroid via tet decomposition (ref-invariant `sum(C ×
+  V)/sum(V)`) · 3D ClipToBbox deferred to v8e-3d-clip followon
+  (returns `BboxClipNotSupported3D` if requested).
+- **v8f Sibson NNI 2D** D109-D113: triangle adjacency rebuild via
+  sort-and-scan (mirror of v8d-2d) · cavity BFS via Stage D `incircle`
+  · cavity boundary CCW walk via `next_v[u] = v` map · stolen polygon
+  vertex order `[new_left, old C_0...C_k, new_right]` walked from
+  `(n_{i-1}, n_i)` side to `(n_i, n_{i+1})` side via face adjacency ·
+  OnSite detection short-circuit (exact-coord match w/ any vertex of
+  containing tri → return that vertex's value).
+- **v8g Ruppert 2D refinement** D114-D118: encroachment test via
+  diametral-disk dot product (`dot(A-V, B-V) < 0`) · encroach-first
+  prioritisation (split encroached segment before inserting Steiner
+  that encroaches) · min-angle calc via law-of-cosines · full CDT
+  rebuild per iteration (simple v1; incremental BW = v8g-perf
+  followon) · deterministic ordering (input-segment-index + CDT-output
+  triangle order).
+- **v8h 3D dihedral-bounded refinement** D119-D122: scope honest —
+  dihedral-bounded refinement only (sliver exudation = v8h-exude
+  followon) · six dihedrals per tet via explicit edge-tuple
+  enumeration (regular-tet calibration = arccos(1/3)) · out-of-domain
+  skip (bbox±10% pad) for bad-tet circumcentres · bbox-scaled near-
+  duplicate `eps² = (bbox_diag × 1e-6)²` auto-scales with input coord
+  magnitude.
+
+### §23.3 Cluster cross-validation
+
+- **CALIBRATION-FIRST TDD** worked across the cluster — adversarial
+  discriminating tests written BEFORE implementation:
+  - v8c-pre: r²=5e9 non-symmetric cospherical case where Stage A
+    returns `-16777216` and Stage D returns 0 (proves the corpus
+    actually exercises the new code).
+  - v8c: 9-pt cospherical-pathology mixture (5 cospherical + 4
+    non-cospherical) verifies that v8c-pre's Stage D actually enables
+    v8c without inverted tets.
+  - v8d-2d / v8d-3d: cospherical-pathology validators carried forward
+    from v8c (Stage D insphere still load-bearing).
+  - v8f: linear-function reproduction at error < 1e-8 (Sibson's
+    hallmark mathematical guarantee).
+  - v8h: regular tetrahedron returns 6 dihedrals all = `arccos(1/3)
+    ≈ 70.5288°` within 1e-9 (anchor for the dihedral formula before
+    anything depends on it).
+- **Determinism** verified per-slice (same input → byte-identical
+  output across compilers).
+- **f64 precision tier** every algorithm.
+- **18-config full sweep** at v8-close — PASS.
+- **Shewchuk adaptive-predicate debt FULLY PAID** at v8c-pre (entry in
+  `docs/debt.md` marked CLOSED 2026-05-17).
+- **Two-layer typed architecture** (ADR-0078 §5 D34): raw `<MathScalar
+  T>` algorithm bodies; typed wrappers in `*_typed.hpp` planned at
+  first typed consumer.
+
+### §23.4 Phase 3.1.7 status update
+
+**9 of 11 sub-modules COMPLETE**: primitives ✅ + bvh ✅ + convex ✅
++ v3 convex-hull-extension ✅ + mesh ✅ + spatial ✅ + polygon ✅ +
+mesh-processing ✅ + **delaunay ✅**. **70 of the renewed-scope 49
+slices shipped (143%)** — v6 expanded 4→6, v7 expanded 7→9, v8
+expanded 9→11 (substrate decomposition + v8c-pre paydown + close);
+nothing cut. Next sub-modules: v9 GPU LBVH + V-HACD + REPL + v9e
+shader-helpers emit → v10 `-curves` (Bezier / Hermite / Catmull-Rom /
+B-spline / arcs + sampling + arc-length + closest-point + Frenet +
+RMF) → v11 transform-aware query helpers in `-primitives`.
+
+### §23.5 Filed follow-on slices (not regressions, scope-honest deferrals)
+
+- **v8g-perf** — incremental Bowyer-Watson + segment-protected cavity
+  for Ruppert (replaces the per-iteration full CDT rebuild that ships
+  as v1 simple-but-correct). ~500-800 LOC.
+- **v8e-3d-clip** — 3D polyhedron-vs-bbox halfspace clipper for Lloyd
+  3D `ClipToBbox` (currently returns `BboxClipNotSupported3D`).
+  ~200-300 LOC.
+- **v8h-exude** — true sliver exudation (Cheng-Dey-Edelsbrunner-Facello-
+  Teng 2000 weighted-Delaunay perturbation algorithm). Substantive
+  ~1500+ LOC; orthogonal machinery to dihedral-bounded refinement.
+- **v8c-hilbert** (latent) — 3D Hilbert-sort variant of `delaunay_3d`
+  mirroring v8b's relationship to v8a. ~150 LOC.
+- **v6c-consume-v8a** — refactor `crd-geometry-polygon` v6c's
+  Constrained Delaunay to consume `delaunay_2d` from v8a (currently
+  re-implements BW locally). Cleanup-only; v6c output unchanged.

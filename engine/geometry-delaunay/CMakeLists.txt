@@ -13,6 +13,8 @@
 #   v8d-3d voronoi_3d                3D Voronoi diagram (geometric dual of v8c) + ConvexHullView helper.
 #   v8e   lloyd_2d / lloyd_3d        Lloyd's CVT relaxation (Lloyd 1982) — 2D w/ Fix + ClipToBbox, 3D w/ Fix.
 #   v8f   nni_2d                     Sibson 1981 Natural Neighbour Interpolation (Bowyer-Watson cavity form).
+#   v8g   ruppert_2d                 Ruppert 1995 quality-bounded Delaunay refinement (PRIVATE dep on crd-geometry-polygon's CDT).
+#   v8h   tet_refine_3d              3D dihedral-bounded Delaunay refinement (Ruppert 3D analog; sliver exudation = v8h-exude followon).
 #   v8c-pre insphere_exact Stage D   Mandatory paydown before v8c.
 #   v8c  delaunay_3d                 3D Bowyer-Watson tetrahedralisation.
 #   v8d-2d voronoi_2d                2D Voronoi diagram extraction.
@@ -52,6 +54,11 @@ target_link_libraries(crd-geometry-delaunay
         crd-math
         crd-units
         crd-geometry-primitives
+    PRIVATE
+        # v8g Ruppert refinement uses v6c CDT to rebuild the triangulation
+        # per iteration. PRIVATE: consumers of `delaunay/ruppert_2d.hpp` do
+        # NOT need to include `polygon/cdt.hpp` — the dep is impl-only.
+        crd-geometry-polygon
 )
 
 target_compile_features(crd-geometry-delaunay PUBLIC cxx_std_20)

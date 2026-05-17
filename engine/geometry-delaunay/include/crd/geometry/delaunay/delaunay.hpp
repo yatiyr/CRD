@@ -14,3 +14,5 @@
 #include <crd/geometry/delaunay/lloyd_2d.hpp>
 #include <crd/geometry/delaunay/lloyd_3d.hpp>
 #include <crd/geometry/delaunay/nni_2d.hpp>
+#include <crd/geometry/delaunay/ruppert_2d.hpp>
+#include <crd/geometry/delaunay/tet_refine_3d.hpp>
