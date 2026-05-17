@@ -85,16 +85,18 @@ jobs:
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
 
-      # Pin clang-tidy version (LLVM 19) to match local dev (VS2026 bundles
-      # similar). Default `windows-latest` runner ships LLVM 17 (VS2022),
-      # which categorises function-local `constexpr` identifiers under a
-      # different `readability-identifier-naming` subcategory than LLVM 19
-      # — that mismatch produced silent CI-only failures on patterns the
-      # local gate accepted. Pinning eliminates the skew.
-      - name: Install LLVM 19 (pinned)
+      # Pin clang-tidy version (LLVM 20) to match local dev (VS2026 ships
+      # LLVM 20.1.x). LLVM 19 and 20 differ in `readability-identifier-naming`
+      # categorisation of function-local `constexpr` (LLVM 19 lumps them into
+      # `LocalConstant`; LLVM 20 has a separate `LocalConstexprVariable`
+      # category — `.clang-tidy` sets `LocalConstexprVariableCase = CamelCase + k`
+      # for the project convention `kMaxPrec`-style names). Pinning eliminates
+      # the skew that produced silent CI-only failures on patterns the local
+      # gate accepted.
+      - name: Install LLVM 20 (pinned)
         uses: KyleMayes/install-llvm-action@v2
         with:
-          version: '19'
+          version: '20'
 
       - name: Verify clang-tidy version
         shell: pwsh

@@ -11,3 +11,5 @@
 #include <crd/geometry/delaunay/delaunay_3d.hpp>
 #include <crd/geometry/delaunay/voronoi_2d.hpp>
 #include <crd/geometry/delaunay/voronoi_3d.hpp>
+#include <crd/geometry/delaunay/lloyd_2d.hpp>
+#include <crd/geometry/delaunay/lloyd_3d.hpp>
