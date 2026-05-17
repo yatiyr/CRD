@@ -30,6 +30,7 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 - ADR-0065 — **`crd-hesap` numerical computing substrate (MATLAB-class)**
 - ADR-0066 — **`crd-draw` substrate architecture**
 - ADR-0079 — **`crd-perf` profiler substrate + `crd-perf-ui` ImGui frontend** (region timing + jobs auto-instrument + GPU timestamps + memory tracking + CPROF v1 capture format + 7-panel ImGui UI)
+- ADR-0080 — **`crd-rhi-compute` substrate** (Proposed; Phase 3.1.7.6 prerequisite for v9 GPU geometry; additive RHI extension: IComputePipeline + IStorageBuffer + dispatch + compute↔graphics sync + opt-in async compute queue + shaderc compute pipeline)
 
 ### `[draw]`
 - ADR-0066 — `crd-draw` substrate architecture (peer module; retained `RenderBuffer` + immediate-mode API; vertex-shader quad-expanded AA lines + sort-by-centroid translucent solids; 3 depth modes; per-component visualizer plug-in registry; ImGui projection day-one text + reserved SDF text; consumed by eylem / sdf / audio / nav / editor / renderer / sandbox)
@@ -71,6 +72,7 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 - ADR-0010 — Vulkan bootstrap
 - ADR-0011 — First triangle
 - ADR-0061 — Async GPU upload contract (adds `crd::rhi::Fence` + non-waiting `Queue::submit(cmd, fence)`)
+- ADR-0080 — **`crd-rhi-compute` substrate** (Phase 3.1.7.6 prerequisite for v9; additive RHI extension: IComputePipeline + IStorageBuffer + dispatch + compute↔graphics sync + opt-in async compute + shaderc compute pipeline)
 
 ### `[config]`
 - ADR-0012 — Config substrate
@@ -277,3 +279,4 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 | 0077  | Multi-domain substrate expansion (9 new peer modules + Phase 3.5 prologue + Phase 6 platform expansion)  | arch, strategy, multi-domain, manufacturing, cad, cfd, aerospace, ml, scientific-computing | Accepted  |
 | 0078  | `crd-units` substrate (dimensional types + 6-layer conversion system); §2 v0b adoption A; §3 v0c adoption B; §4 v0d adoption C + Phase 3.1.7.5 CLOSE; §5 amendment 2026-05-16 — **two-layer typed architecture** (D32-D36: units at API surface, raw scalars in inner loop; boundary is the API surface and only there; bridges = `.value` / `to_raw_vec` / `from_raw_vec` / strip-compute-retag wrappers) | arch, substrate, units, dimensional-analysis, type-safety, determinism, physics, eylem, geometry, format-parse, ui, architecture-principle | Accepted  |
 | 0079  | `crd-perf` profiler substrate + `crd-perf-ui` ImGui frontend (D-003 v0a-v0h)       | arch, substrate, perf, profiler, instrumentation, gpu-timing, capture-format, ui            | Accepted  |
+| 0080  | `crd-rhi-compute` substrate (Phase 3.1.7.6 v0a-v0e+close); additive RHI extension for compute pipelines, storage buffers, dispatch, sync, opt-in async compute | arch, substrate, rhi, gpu, compute, async-compute, descriptors, shader-pipeline, prerequisite | Proposed  |

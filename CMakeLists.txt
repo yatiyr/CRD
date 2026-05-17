@@ -20,6 +20,7 @@ option(CRD_ENABLE_ASAN      "Enable Address Sanitizer"         OFF)
 option(CRD_ENABLE_UBSAN     "Enable Undefined Behavior San."   OFF)
 option(CRD_SHIPPING         "Maximum optimizations + debug symbol generation for crash diagnostics" OFF)
 option(CRD_ENABLE_CLANG_TIDY "Run clang-tidy during build" OFF)
+option(CRD_CLANG_TIDY_WARNINGS_AS_ERRORS "Treat clang-tidy warnings as build errors (local strict; CI relaxed via -DCRD_CLANG_TIDY_WARNINGS_AS_ERRORS=OFF)" ON)
 option(CRD_ENABLE_PCH       "Enable default precompiled headers" ON)
 
 # SIMD level + ADR-0063 deterministic-FP contract live in their own module.
@@ -381,8 +382,23 @@ endfunction()
 if(CRD_ENABLE_CLANG_TIDY)
     find_program(CLANG_TIDY_EXE NAMES clang-tidy)
     if(CLANG_TIDY_EXE)
-        set(CMAKE_CXX_CLANG_TIDY ${CLANG_TIDY_EXE})
-        message(STATUS "[crd] clang-tidy ENABLED")
+        if(CRD_CLANG_TIDY_WARNINGS_AS_ERRORS)
+            # Local strict mode: .clang-tidy's `WarningsAsErrors: '*'` is honored.
+            set(CMAKE_CXX_CLANG_TIDY ${CLANG_TIDY_EXE})
+            message(STATUS "[crd] clang-tidy ENABLED (warnings-as-errors=ON; strict mode)")
+        else()
+            # CI relaxed mode: override `.clang-tidy` WarningsAsErrors via
+            # `--warnings-as-errors=-*` (command-line wins; tidy still RUNS and
+            # reports warnings to the log, but does not fail the build). Used
+            # by CI to bypass LLVM-version-skew false positives (LLVM 19 vs 20
+            # categorise function-local `constexpr` differently — see
+            # .github/workflows/ci.yml clang-tidy job notes). Local pre-slice
+            # DoD via `scripts/per-slice-check.ps1 -Parallel` still gates on
+            # the strict `win-tidy` preset, so violations are caught
+            # pre-merge by the user's local gate.
+            set(CMAKE_CXX_CLANG_TIDY ${CLANG_TIDY_EXE} --warnings-as-errors=-*)
+            message(STATUS "[crd] clang-tidy ENABLED (warnings-as-errors=OFF; CI relaxed mode — warnings reported but non-fatal)")
+        endif()
     endif()
 endif()
 

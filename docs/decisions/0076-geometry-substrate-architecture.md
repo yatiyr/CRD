@@ -1727,3 +1727,62 @@ RMF) → v11 transform-aware query helpers in `-primitives`.
 - **v6c-consume-v8a** — refactor `crd-geometry-polygon` v6c's
   Constrained Delaunay to consume `delaunay_2d` from v8a (currently
   re-implements BW locally). Cleanup-only; v6c output unchanged.
+
+## §24 Amendment (planned) — v9c `-decomposition` (V-HACD) decisions
+
+**Status:** 📋 planned — locks at v9c-close. Phase 3.1.7.6 substrate
+NOT required (V-HACD is cooker-only, scalar, no GPU). Numbered ahead so
+v9c slice rows reference a real ADR section.
+
+Decisions to lock at v9c-close (Mamou 2014):
+- Cooker-only vs runtime decomposition (currently locked cooker-only;
+  consumer = eylem v1c convex collider conditioning).
+- Concavity metric: volume-based `Vol(R̄) - Vol(R)` vs Mamou's
+  `α·∂(R) + β·∂(R̄)`.
+- Termination criterion: max_concavity threshold vs max_parts count vs
+  both with OR-precedence.
+- Voxel grid type (sparse hash vs dense bounded vs `crd-geometry-spatial`
+  v5e UniformGrid reuse).
+- Per-part hull validation rule (drop hull if Quickhull fails on
+  cluster; emit telemetry).
+
+## §25 Amendment (planned) — v9a / v9b `-gpu` LBVH decisions
+
+**Status:** 📋 planned — locks at v9a-close. **Consumes Phase 3.1.7.6
+`crd-rhi-compute` substrate (ADR-0080).**
+
+Decisions to lock at v9a-close (Karras 2012):
+- Morton bit depth: 30-bit (3 × 10-bit per axis, fits in `u32`) vs
+  60-bit (3 × 20-bit per axis, fits in `u64`) — pin based on
+  geometric-tail collision rate on Cerid test corpora.
+- Sort policy: CPU deterministic (v9a-b1 — ships first) + GPU
+  throughput-tier (v9a-b2 — follow-on, ULP-conformance against v9a-b1).
+- AABB upsweep: atomic-on-parent (1-pass, faster, harder determinism)
+  vs 2-pass per-level barriers (slower, fully deterministic). Pinned
+  at v9a-d slice start.
+- Conformance contract: GPU LBVH topology bit-identical-vs-CPU
+  `bvh_build` + AABBs within 1 ULP for finite well-formed inputs.
+- Performance budget: 1M primitives in <8 ms on RTX 3060 (research
+  §4.1).
+- v9b GPU BVH refit: topology untouched, AABBs recomputed in single
+  compute dispatch with atomics for parent-join phase.
+
+## §26 Amendment (planned) — v9e `-shader-helpers` decisions
+
+**Status:** 📋 planned — locks at v9e-close. **Consumes Phase 3.1.7.6
+`crd-rhi-compute` substrate (ADR-0080) for the ULP-conformance test
+path (compiles emitted GLSL/HLSL, dispatches against C++ reference).**
+
+Decisions to lock at v9e-close:
+- Formula-IR schema (primitive nodes + operator nodes + parameter
+  binding; future-proof for crd-sdf v5 GPU consumer + crd-font MTSDF).
+- GLSL target version (`#version 450` minimum to match graphics
+  pipeline).
+- HLSL target version (HLSL 6.0 minimum for dxc).
+- ULP-conformance threshold (1 ULP at 64³ sample grid — pin or relax
+  per primitive if HW intrinsic divergence forces it).
+- Cooker integration model (CMake-target vs runtime-cooker — currently
+  pinned CMake-target; emit lands in `build/<preset>/assets/cooked/
+  sdf_helpers/`).
+- First-consumer wire-up (`crd-renderer` Phase 3.5+ DFAO sandbox
+  demo scene; specify the consumption API).

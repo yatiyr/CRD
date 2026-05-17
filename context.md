@@ -12,24 +12,38 @@
 ## Current focus
 
 **As of 2026-05-17:** Phase 3.1.7 `crd-geometry` is the active phase.
-**8 of 11 sub-modules complete + v8 `-delaunay` 🚧 in-flight — ALL 11
-ALGORITHM SLICES SHIPPED, only v8-close cluster wrap remains** (v8a + v8b
-+ v8c-pre + v8c + v8d-2d + v8d-3d + v8e + v8f + v8g + v8h shipped) — `-primitives` ✅ + `-bvh` ✅
-+ `-convex` ✅ + v3 hull-extension ✅ + `-mesh` ✅ + `-spatial` ✅ +
-`-polygon` ✅ + `-mesh-processing` ✅ + `-delaunay` 🚧 (v8a + v8b + v8c-pre
-+ v8c + v8d-2d + v8d-3d shipped; v8e Lloyd CVT next). **Project-wide
-zero-warnings policy enforced 2026-05-17** — `.clang-tidy`
-`WarningsAsErrors: '*'` flipped, all tidy violations are now build
-failures. **Shewchuk adaptive-predicate debt FULLY PAID
-2026-05-17** — `docs/debt.md::Shewchuk adaptive predicates` marked
-CLOSED. ADR-0076 has 10 amendments (§12 through §22) all accepted;
-ADR-0078 (units, §1–§5) + ADR-0079 (perf) accepted. Phase 3.0 ✅ +
-Phase 3.1.7.5 ✅ + Phase 3.1 ⏸ paused at v1b. **🎯 v8 plan = 11 slices**:
-v8a 2D Bowyer-Watson ✅ → v8b Hilbert-sort BW (delaunator-style) ✅ →
-v8c-pre `insphere_exact` Stage D paydown ✅ → v8c 3D Bowyer-Watson
-tetrahedralisation ✅ → v8d-2d 2D Voronoi extraction ✅ → v8d-3d 3D Voronoi
-cells ✅ → v8e Lloyd CVT ✅ → v8f Sibson NNI ✅ → v8g Ruppert refinement ✅
-→ v8h 3D dihedral-bounded refinement ✅ → v8-close.
+**9 of 11 sub-modules COMPLETE — v8 `-delaunay` ✅ CLOSED 2026-05-17**
+(primitives ✅ + bvh ✅ + convex ✅ + v3 hull-ext ✅ + mesh ✅ + spatial
+✅ + polygon ✅ + mesh-processing ✅ + delaunay ✅; 70 of 49 renewed-
+scope slices shipped = 143%). ADR-0076 has 11 amendments (§12-§23) all
+accepted; §24/§25/§26 planned for v9 sub-cluster closes. ADR-0078
+(units §1-§5) + ADR-0079 (perf) accepted. ADR-0080 (`crd-rhi-compute`)
+**Proposed 2026-05-17**.
+
+**🎯 NEXT = Phase 3.1.7.6 `crd-rhi-compute` prerequisite sub-phase.**
+Locked 2026-05-17 per the v9 eliteness audit (user picked Option B —
+"ship `crd-rhi-compute` as Phase 3.1.7 prerequisite cluster first").
+Carves out the compute pipeline + storage buffer + dispatch + sync
+substrate the current graphics-only RHI lacks. 6 slices / ~2800 LOC +
+~1800 tests / ~4 wk. Phase doc `docs/phases/phase-3.1.7.6-rhi-compute.md`.
+ADR-0080 Proposed.
+
+**After 3.1.7.6: Phase 3.1.7 v9 — geometry GPU + decomposition +
+shader-helpers (16 unbundled slices, ~7300 LOC / ~6 wk)**:
+v9c-a/b/close V-HACD (Mamou 2014, cooker-only) → v9a-a/b1/b2/c/d/close
+GPU LBVH (Karras 2012; CPU radix sort first, GPU radix follow-on) → v9b
+GPU BVH refit → v9e-a/b/c/d/close shader-helpers (formula-IR + GLSL +
+HLSL + cooker + ULP conformance) → v9-close. ADR-0076 §24/§25/§26
+amendments lock at sub-cluster closes. **v9d REPL bindings deferred**
+to Phase 3.1.6+ when `crd-hesap-repl` host exists. **GPU GJK + async-
+compute Lloyd CVT also filed as follow-ons.**
+
+**Then v10 `-curves` (5 slices, ~2.2 KLOC, ~2 wk) → v11 transform-aware
+helpers (~700 LOC, 2 days) → Phase 3.1.7 fully closes.** Total
+remaining calendar: ~13 weeks (4 wk 3.1.7.6 + 6 wk v9 + 2 wk v10 + 2
+days v11 + 18-config sweep slop). After Phase 3.1.7 close →
+`crd-hesap-dense` v0 → eylem v1c resumes per the Strategic Execution
+Plan locked 2026-05-15.
 
 **Chronological session detail below** (2026-05-15 units / time / perf
 + 2026-05-16 v4 mesh / v5 spatial / v6 polygon).
