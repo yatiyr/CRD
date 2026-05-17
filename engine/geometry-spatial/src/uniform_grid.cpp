@@ -595,7 +595,7 @@ UniformGrid<T>::raycast_traverse_(const Ray3<T>& ray, T tmax,
     {
         scan_cell();
 
-        const T t_next = std::min({tmax_x, tmax_y, tmax_z});
+        const T t_next = std::min(std::min(tmax_x, tmax_y), tmax_z);
         if (t_next > best_t) { break; }
         if (t_next > tmax)   { break; }
 

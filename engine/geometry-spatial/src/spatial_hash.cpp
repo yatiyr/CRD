@@ -525,7 +525,7 @@ SpatialHash<T>::raycast_traverse_(const Ray3<T>& ray, T tmax,
         scan_cell();
 
         // Stop if we've left the best_t-bounded region.
-        const T t_next = std::min({tmax_x, tmax_y, tmax_z});
+        const T t_next = std::min(std::min(tmax_x, tmax_y), tmax_z);
         if (t_next > best_t) { break; }
         if (t_next > tmax)   { break; }
 
@@ -533,7 +533,7 @@ SpatialHash<T>::raycast_traverse_(const Ray3<T>& ray, T tmax,
         // chains skip cells when the ray exactly grazes a cell corner (two
         // or three tMax values tie); advancing every tied axis preserves
         // Amanatides-Woo correctness on corner-grazing rays.
-        const T t_min = std::min({tmax_x, tmax_y, tmax_z});
+        const T t_min = std::min(std::min(tmax_x, tmax_y), tmax_z);
         if (tmax_x == t_min) { ix += step_x; tmax_x += tdelta_x; }
         if (tmax_y == t_min) { iy += step_y; tmax_y += tdelta_y; }
         if (tmax_z == t_min) { iz += step_z; tmax_z += tdelta_z; }

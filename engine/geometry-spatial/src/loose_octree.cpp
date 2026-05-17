@@ -1,4 +1,4 @@
-// crd-geometry-spatial — `LooseOctree<T>` impl (Phase 3.1.7 v5b).
+﻿// crd-geometry-spatial â€” `LooseOctree<T>` impl (Phase 3.1.7 v5b).
 //
 // Reference: Thatcher Ulrich, "Loose Octrees" in *Game Programming Gems* vol. 1,
 // 2000. Header `loose_octree.hpp` documents the design + locked decisions.
@@ -22,7 +22,7 @@ using crd::math::Vec3;
 namespace
 {
 
-// AABB enclosure: `inner` ⊆ `outer` (componentwise inclusive).
+// AABB enclosure: `inner` âŠ† `outer` (componentwise inclusive).
 template <MathScalar T>
 inline bool aabb_encloses(const AABB3<T>& outer, const AABB3<T>& inner) noexcept
 {
@@ -64,7 +64,7 @@ LooseOctree<T>::LooseOctree(crd::memory::IAllocator* alloc, const OctreeBuildOpt
     , m_max_depth(opts.max_depth == 0U ? k_octree_max_depth : opts.max_depth)
 {
     // Validate root bounds: finite + positive extent on every axis. Builder-
-    // reject contract per ADR-0076 §15.
+    // reject contract per ADR-0076 Â§15.
     CRD_ASSERT(is_finite(m_root_bounds));
     CRD_ASSERT(m_root_bounds.max.x > m_root_bounds.min.x);
     CRD_ASSERT(m_root_bounds.max.y > m_root_bounds.min.y);
@@ -90,7 +90,7 @@ u32 LooseOctree<T>::allocate_node(const AABB3<T>& bounds, u32 parent, u8 depth)
         m_node_free_list = m_nodes[idx].children[0]; // free-list link parked in children[0]
         // Reset the recycled node.
         m_nodes[idx] = OctreeNode<T>{};
-        // Recycle existing CellObjects entry — capacity retained from prior life.
+        // Recycle existing CellObjects entry â€” capacity retained from prior life.
         m_cells[idx].ids.clear();
     }
     else
@@ -160,7 +160,7 @@ void LooseOctree<T>::free_object(u32 idx)
 }
 
 // =============================================================================
-// Cell ↔ object plumbing
+// Cell â†” object plumbing
 // =============================================================================
 
 template <MathScalar T>
@@ -190,15 +190,15 @@ void LooseOctree<T>::cell_remove_object(u32 cell_idx, u32 obj_idx)
 }
 
 // =============================================================================
-// Octree algorithms — child geometry, octant pick, depth pick
+// Octree algorithms â€” child geometry, octant pick, depth pick
 // =============================================================================
 
 template <MathScalar T>
 u8 LooseOctree<T>::octant_of_center(const AABB3<T>& cell, const Vec3<T>& center) noexcept
 {
     const Vec3<T> mid = aabb_center(cell);
-    // bit 0 = X (lower→0, upper→1), bit 1 = Y, bit 2 = Z.
-    // `>=` not `>` — "lower octant wins" lex tiebreak when center exactly on midplane.
+    // bit 0 = X (lowerâ†’0, upperâ†’1), bit 1 = Y, bit 2 = Z.
+    // `>=` not `>` â€” "lower octant wins" lex tiebreak when center exactly on midplane.
     const u8 ox = (center.x >= mid.x) ? 1U : 0U;
     const u8 oy = (center.y >= mid.y) ? 1U : 0U;
     const u8 oz = (center.z >= mid.z) ? 1U : 0U;
@@ -221,23 +221,23 @@ u8 LooseOctree<T>::target_depth_for(const Vec3<T>& extent) const noexcept
 {
     // Pick the deepest cell depth at which the object's tight AABB is GUARANTEED
     // to fit within the cell's loose AABB regardless of WHERE inside the cell
-    // the object's center sits. (Ulrich's classical formula `loose × R / extent`
-    // is the *centered-fit* depth — only correct when the object's center
+    // the object's center sits. (Ulrich's classical formula `loose Ã— R / extent`
+    // is the *centered-fit* depth â€” only correct when the object's center
     // coincides with the cell center; off-center placement at that depth can
     // place the object's tight AABB partially outside the cell's loose AABB,
     // which would silently lose the object from queries that hit the object's
     // tight AABB but not the cell's loose AABB. Real pathological hazard.)
     //
-    // Worst-case off-center: `|offset_from_cell_center| ≤ cell_extent / 2`.
+    // Worst-case off-center: `|offset_from_cell_center| â‰¤ cell_extent / 2`.
     // Object fits in loose AABB iff
-    //   `cell_extent/2 + extent/2 ≤ loosening × cell_extent / 2`
-    // ⇒ `extent ≤ (loosening - 1) × cell_extent`
-    // ⇒ `cell_extent ≥ extent / (loosening - 1)`
-    // ⇒ `2^d ≤ (loosening - 1) × R / extent`
+    //   `cell_extent/2 + extent/2 â‰¤ loosening Ã— cell_extent / 2`
+    // â‡’ `extent â‰¤ (loosening - 1) Ã— cell_extent`
+    // â‡’ `cell_extent â‰¥ extent / (loosening - 1)`
+    // â‡’ `2^d â‰¤ (loosening - 1) Ã— R / extent`
     //
-    // For loosening = 2.0 (the default), `(loose - 1) = 1` ⇒ ratio = R / extent.
+    // For loosening = 2.0 (the default), `(loose - 1) = 1` â‡’ ratio = R / extent.
     // For loosening > 2, deeper placement is allowed (looser cells).
-    // For loosening = 1.0, ratio = 0 ⇒ root-only placement (classical octree).
+    // For loosening = 1.0, ratio = 0 â‡’ root-only placement (classical octree).
     //
     // This is the GUARANTEED-FAST-PATH formula: any update keeping the object's
     // tight AABB inside its cell's loose AABB after motion takes the fast path,
@@ -247,7 +247,7 @@ u8 LooseOctree<T>::target_depth_for(const Vec3<T>& extent) const noexcept
 
     auto axis_depth = [&](T ext, T root_ext_axis) -> i32 {
         if (ext <= T{0}) { return static_cast<i32>(m_max_depth); } // degenerate axis
-        if (fit_factor <= T{0}) { return 0; } // loosening=1 ⇒ classical octree, root only
+        if (fit_factor <= T{0}) { return 0; } // loosening=1 â‡’ classical octree, root only
         const T ratio = fit_factor * root_ext_axis / ext;
         if (!(ratio > T{1})) { return 0; } // root only
         // d = floor(log2(ratio)). std::log2 is a boundary scalar use, OK in
@@ -260,7 +260,7 @@ u8 LooseOctree<T>::target_depth_for(const Vec3<T>& extent) const noexcept
     const i32 dx = axis_depth(extent.x, root_ext.x);
     const i32 dy = axis_depth(extent.y, root_ext.y);
     const i32 dz = axis_depth(extent.z, root_ext.z);
-    i32 d = std::min({dx, dy, dz});
+    i32 d = std::min(std::min(dx, dy), dz);
     if (d < 0) { d = 0; }
     if (d > static_cast<i32>(m_max_depth)) { d = static_cast<i32>(m_max_depth); }
     return static_cast<u8>(d);
@@ -291,7 +291,7 @@ u32 LooseOctree<T>::descend_and_insert(u32 obj_idx, const Vec3<T>& center, u8 ta
         {
             const AABB3<T> cb = child_bounds_of(m_nodes[cell].bounds, oct);
             child = allocate_node(cb, cell, static_cast<u8>(depth + 1U));
-            // m_nodes may have reallocated — re-fetch parent reference is fine
+            // m_nodes may have reallocated â€” re-fetch parent reference is fine
             // through index access.
             m_nodes[cell].children[oct] = child;
         }
@@ -308,13 +308,13 @@ u32 LooseOctree<T>::descend_and_insert(u32 obj_idx, const Vec3<T>& center, u8 ta
 }
 
 // =============================================================================
-// Public mutators — insert / remove / update
+// Public mutators â€” insert / remove / update
 // =============================================================================
 
 template <MathScalar T>
 OctreeObjectId LooseOctree<T>::insert(const AABB3<T>& aabb, u32 payload)
 {
-    // Builder-reject contract — non-finite, out-of-root center, or oversized.
+    // Builder-reject contract â€” non-finite, out-of-root center, or oversized.
     CRD_ASSERT(is_finite(aabb));
     const Vec3<T> center = aabb_center(aabb);
     const Vec3<T> extent = aabb_extent(aabb);
@@ -360,9 +360,9 @@ bool LooseOctree<T>::update(OctreeObjectId id, const AABB3<T>& new_aabb)
     const u32 cur_cell = obj.cell_node;
     CRD_ASSERT(is_node_alive(cur_cell));
 
-    // Fast path — Ulrich's correctness invariant: the object stays correctly
+    // Fast path â€” Ulrich's correctness invariant: the object stays correctly
     // findable as long as its tight AABB fits within its cell's loose AABB.
-    // Center can drift outside the cell — only the AABB-fit matters.
+    // Center can drift outside the cell â€” only the AABB-fit matters.
     const AABB3<T> loose = loose_aabb_of(m_nodes[cur_cell]);
     if (aabb_encloses(loose, new_aabb))
     {
@@ -370,9 +370,9 @@ bool LooseOctree<T>::update(OctreeObjectId id, const AABB3<T>& new_aabb)
         return false;
     }
 
-    // Slow path — also re-validate root containment. (Tests + downstream
+    // Slow path â€” also re-validate root containment. (Tests + downstream
     // safety: an object whose new center leaves root or whose extent exceeds
-    // the root×loosening cap is a precondition violation.)
+    // the rootÃ—loosening cap is a precondition violation.)
     const Vec3<T> center = aabb_center(new_aabb);
     const Vec3<T> extent = aabb_extent(new_aabb);
     CRD_ASSERT(center.x >= m_root_bounds.min.x && center.x <= m_root_bounds.max.x);
@@ -391,7 +391,7 @@ bool LooseOctree<T>::update(OctreeObjectId id, const AABB3<T>& new_aabb)
 }
 
 // =============================================================================
-// overlap (Array sink) — convenience wrapper over the templated callback form
+// overlap (Array sink) â€” convenience wrapper over the templated callback form
 // =============================================================================
 
 template <MathScalar T>
@@ -401,7 +401,7 @@ void LooseOctree<T>::overlap(const AABB3<T>& query, crd::containers::Array<u32>&
 }
 
 // =============================================================================
-// raycast — t-near-first descent + best_t pruning + payload-tiebreak
+// raycast â€” t-near-first descent + best_t pruning + payload-tiebreak
 // =============================================================================
 
 template <MathScalar T>
@@ -410,13 +410,13 @@ LooseOctree<T>::raycast(const Ray3<T>& ray, T tmax) const noexcept
 {
     if (m_root == k_null) { return std::nullopt; }
     if (tmax <= T{0}) { return std::nullopt; }
-    // Defensive NaN guard at the query surface — robust ray-AABB intrinsics
+    // Defensive NaN guard at the query surface â€” robust ray-AABB intrinsics
     // can return TRUE for non-finite inputs depending on order of operations
     // (NaN-vs-NaN comparisons are unspecified in the slab math). Symmetric
     // with v5a kd_radius / kd_range_aabb non-finite tolerance.
     if (!is_finite(ray.origin) || !is_finite(ray.direction)) { return std::nullopt; }
 
-    // Ray-AABB precompute (sign + inv direction) — amortise across many AABB tests.
+    // Ray-AABB precompute (sign + inv direction) â€” amortise across many AABB tests.
     // Note: precompute is f32-only today; cast for f64 path.
     if constexpr (!std::is_same_v<T, crd::f32>)
     {
@@ -436,7 +436,7 @@ LooseOctree<T>::raycast(const Ray3<T>& ray, T tmax) const noexcept
             const OctreeNode<T>& node = m_nodes[ni];
             const AABB3<T> loose = loose_aabb_of(node);
 
-            // Slab test (Williams/Ize style) — scalar f64.
+            // Slab test (Williams/Ize style) â€” scalar f64.
             T tmin_loc = T{0};
             T tmax_loc = static_cast<T>(best.t);
             for (int ax = 0; ax < 3; ++ax)
@@ -526,7 +526,7 @@ LooseOctree<T>::raycast(const Ray3<T>& ray, T tmax) const noexcept
     }
     else
     {
-        // f32 path — use the existing robust ray-AABB precompute.
+        // f32 path â€” use the existing robust ray-AABB precompute.
         const auto pre = crd::geometry::primitives::precompute_ray_aabb(ray);
 
         struct Frame { u32 cell; T t_near; };
@@ -580,7 +580,7 @@ LooseOctree<T>::raycast(const Ray3<T>& ray, T tmax) const noexcept
             }
 
             // Compute t_near for each allocated child, then push in reverse-
-            // order (largest t_near first → smallest popped first).
+            // order (largest t_near first â†’ smallest popped first).
             Frame child_frames[8];
             u32 nchild = 0;
             for (u8 oct = 0; oct < 8U; ++oct)
@@ -596,8 +596,8 @@ LooseOctree<T>::raycast(const Ray3<T>& ray, T tmax) const noexcept
                 }
                 child_frames[nchild++] = Frame{child, t_c};
             }
-            // Sort by t_near DESCENDING — sp-pop yields ascending (nearest first).
-            // 8 elements → insertion sort is the right tool.
+            // Sort by t_near DESCENDING â€” sp-pop yields ascending (nearest first).
+            // 8 elements â†’ insertion sort is the right tool.
             for (u32 i = 1; i < nchild; ++i)
             {
                 Frame v = child_frames[i];

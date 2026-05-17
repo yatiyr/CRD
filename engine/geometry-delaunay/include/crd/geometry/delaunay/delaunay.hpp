@@ -10,3 +10,4 @@
 #include <crd/geometry/delaunay/delaunay_2d_hilbert.hpp>
 #include <crd/geometry/delaunay/delaunay_3d.hpp>
 #include <crd/geometry/delaunay/voronoi_2d.hpp>
+#include <crd/geometry/delaunay/voronoi_3d.hpp>

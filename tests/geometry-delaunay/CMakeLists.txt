@@ -3,6 +3,7 @@ add_executable(crd-geometry-delaunay-tests
     test_delaunay_2d_hilbert.cpp
     test_delaunay_3d.cpp
     test_voronoi_2d.cpp
+    test_voronoi_3d.cpp
 )
 
 target_link_libraries(crd-geometry-delaunay-tests PRIVATE

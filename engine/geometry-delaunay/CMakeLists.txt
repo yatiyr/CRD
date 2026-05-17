@@ -10,6 +10,7 @@
 #   v8b  delaunay_2d_hilbert         2D Bowyer-Watson Hilbert-sort (delaunator-style).
 #   v8c  delaunay_3d                 3D Bowyer-Watson tetrahedralisation (consumes v8c-pre insphere Stage D).
 #   v8d-2d voronoi_2d                2D Voronoi diagram (geometric dual of v8a/v8b).
+#   v8d-3d voronoi_3d                3D Voronoi diagram (geometric dual of v8c) + ConvexHullView helper.
 #   v8c-pre insphere_exact Stage D   Mandatory paydown before v8c.
 #   v8c  delaunay_3d                 3D Bowyer-Watson tetrahedralisation.
 #   v8d-2d voronoi_2d                2D Voronoi diagram extraction.

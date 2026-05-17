@@ -1,8 +1,8 @@
-// ---------------------------------------------------------------------------
-// crd-geometry-mesh-processing — v7g self-intersection removal.
+﻿// ---------------------------------------------------------------------------
+// crd-geometry-mesh-processing â€” v7g self-intersection removal.
 //
 // See header for the algorithm contract. This TU contains:
-//   - Möller 1997 robust triangle-triangle intersection (orient3d gated).
+//   - MÃ¶ller 1997 robust triangle-triangle intersection (orient3d gated).
 //   - Brute-force broadphase pair enumeration (BVH-accelerated form is a
 //     v7g-followon optimization for large meshes; see D60 pin below).
 //   - Per-triangle segment accumulation with global vertex dedup across
@@ -10,26 +10,26 @@
 //   - Per-triangle CDT retriangulation: project to 2D via drop-largest-
 //     normal-axis, epsilon-dedup, run constrained_delaunay, lift back to 3D.
 //   - Falls back to keeping the original triangle when its per-face CDT
-//     fails (ConstraintsCrossing or similar) — graceful degradation.
+//     fails (ConstraintsCrossing or similar) â€” graceful degradation.
 //
-// **Pinned design decisions** (carried for ADR-0076 §22 amendment at
+// **Pinned design decisions** (carried for ADR-0076 Â§22 amendment at
 // v7-close):
 //
-//   D60. **Brute-force O(n²) broadphase for v7g.** The phase doc spec
+//   D60. **Brute-force O(nÂ²) broadphase for v7g.** The phase doc spec
 //        mentions BVH broadphase via `TriangleMeshBvh`, but the static
 //        BvhTree doesn't expose `find_overlapping_pairs` (only the
 //        `DynamicBvh` form does). Building a DynamicBvh per call adds
 //        complexity that doesn't pay off on the test corpus (small
-//        meshes). The brute-force form is O(triangle_count²) test
-//        invocations of `aabb_overlap` (cheap) plus Möller on the
+//        meshes). The brute-force form is O(triangle_countÂ²) test
+//        invocations of `aabb_overlap` (cheap) plus MÃ¶ller on the
 //        overlapping pairs. For meshes < ~1k triangles this is
 //        comfortable; for larger meshes the v7g-followon optimization
 //        will substitute the DynamicBvh form. Pinned explicitly.
 //
-//   D61. **Möller 1997 with orient3d gate.** Each candidate pair's
+//   D61. **MÃ¶ller 1997 with orient3d gate.** Each candidate pair's
 //        early-exit "all on one side of the other's plane" test uses
 //        `crd::geometry::primitives::orient3d` (Shewchuk adaptive
-//        predicate — EXACT sign, FP-roundoff-immune) on both triangles.
+//        predicate â€” EXACT sign, FP-roundoff-immune) on both triangles.
 //        Once both straddle, the segment endpoint computation uses
 //        plain FP (`dot(N, point) + plane_d` for signed distances,
 //        linear interpolation for crossing-edge parameters). The exact
@@ -37,12 +37,12 @@
 //        don't actually intersect.
 //
 //   D62. **Cross-triangle vertex stitching via per-pair shared indices.**
-//        When the Möller test emits a segment for pair (T_i, T_j), the
+//        When the MÃ¶ller test emits a segment for pair (T_i, T_j), the
 //        two endpoint positions are appended to the OUTPUT vertex pool
 //        ONCE and the resulting global indices are added to BOTH T_i's
 //        and T_j's segment list. The two triangles' independent CDT
 //        calls then refer to the same global indices for the shared
-//        endpoints → the output remains 2-manifold along the cut
+//        endpoints â†’ the output remains 2-manifold along the cut
 //        (modulo per-triangle CDT epsilon-dedup, which can merge
 //        nearby endpoints from different pairs into a single vertex).
 //
@@ -56,14 +56,14 @@
 //
 //   D64. **Epsilon-dedup of per-triangle CDT inputs.** Within a single
 //        triangle's CDT call, two segment endpoints from different
-//        pairs may land on (nearly) coincident 2D points — e.g., when
+//        pairs may land on (nearly) coincident 2D points â€” e.g., when
 //        three triangles meet at a common edge. `opts.dedup_epsilon`
-//        merges these to a single CDT input vertex; the local→global
+//        merges these to a single CDT input vertex; the localâ†’global
 //        index remap then aliases them to the same global vertex.
 //
 //   D65. **Graceful degradation on CDT failure.** If the per-triangle
 //        constrained_delaunay returns `ConstraintsCrossing` (segments
-//        cross inside the triangle — the case where Bentley-Ottmann
+//        cross inside the triangle â€” the case where Bentley-Ottmann
 //        pre-insertion would have helped), keep T's original tessellation
 //        in the output (= emit the original 3 indices as a single
 //        triangle) and increment `triangles_skipped_cdt_failure`.
@@ -108,10 +108,10 @@ struct TriTriSegment3D
     crd::math::Vec3<crd::f64> p_b;
 };
 
-// Möller 1997 with orient3d-gated early exits. Returns the intersection
+// MÃ¶ller 1997 with orient3d-gated early exits. Returns the intersection
 // segment (in f64) when the triangles intersect transversally.
 // Vertex/normal/edge identifiers (V0..V2, U0..U2, sU/sV signs, E1/E2/F1/F2,
-// N1/N2, dA/dB/dC, denomAB/denomAC, tAB/tAC, L) preserve Möller 1997 §3
+// N1/N2, dA/dB/dC, denomAB/denomAC, tAB/tAC, L) preserve MÃ¶ller 1997 Â§3
 // notation for direct paper-to-code mapping. modernize-type-traits is
 // silenced because clang-tidy 17 misparses our structured-binding names
 // p1a/p1b/p2a/p2b as type-alias call sites and suggests `_t`.
@@ -139,11 +139,11 @@ std::optional<TriTriSegment3D> moller_tri_tri_intersect(
     }
     if (sU0 == 0 && sU1 == 0 && sU2 == 0)
     {
-        return std::nullopt; // coplanar — deferred to v7f
+        return std::nullopt; // coplanar â€” deferred to v7f
     }
-    // Touch-only cases (≥ 1 sign zero AND remaining signs same): a vertex
+    // Touch-only cases (â‰¥ 1 sign zero AND remaining signs same): a vertex
     // of T2 lies on T1's plane; the other two are on the same side. The
-    // intersection is at most a single point (vertex or edge touching) —
+    // intersection is at most a single point (vertex or edge touching) â€”
     // not a transversal cut. Defer to v7f manifoldness repair if needed.
     if ((sU0 == 0 && sU1 * sU2 > 0) ||
         (sU1 == 0 && sU0 * sU2 > 0) ||
@@ -152,7 +152,7 @@ std::optional<TriTriSegment3D> moller_tri_tri_intersect(
         return std::nullopt;
     }
     // Two zeros + one non-zero: edge of T2 lies in T1's plane. Also a
-    // touch-only / coplanar-edge case — defer.
+    // touch-only / coplanar-edge case â€” defer.
     if ((sU0 == 0 && sU1 == 0) || (sU0 == 0 && sU2 == 0) || (sU1 == 0 && sU2 == 0))
     {
         return std::nullopt;
@@ -233,7 +233,7 @@ std::optional<TriTriSegment3D> moller_tri_tri_intersect(
     auto [p1a, p1b] = compute_interval(V0, V1, V2, dv0, dv1, dv2);
     auto [p2a, p2b] = compute_interval(U0, U1, U2, du0, du1, du2);
 
-    // Project onto the longest axis of the intersection line N1×N2.
+    // Project onto the longest axis of the intersection line N1Ã—N2.
     const V3D L = crd::math::cross(N1, N2);
     int        axis = 0;
     crd::f64   max_abs = scalar_abs(L.x);
@@ -288,12 +288,12 @@ TriAABB<T> compute_tri_aabb(const crd::math::Vec3<T>& a,
                               const crd::math::Vec3<T>& c) noexcept
 {
     TriAABB<T> r;
-    r.lo.x = std::min({a.x, b.x, c.x});
-    r.lo.y = std::min({a.y, b.y, c.y});
-    r.lo.z = std::min({a.z, b.z, c.z});
-    r.hi.x = std::max({a.x, b.x, c.x});
-    r.hi.y = std::max({a.y, b.y, c.y});
-    r.hi.z = std::max({a.z, b.z, c.z});
+    r.lo.x = std::min(std::min(a.x, b.x), c.x);
+    r.lo.y = std::min(std::min(a.y, b.y), c.y);
+    r.lo.z = std::min(std::min(a.z, b.z), c.z);
+    r.hi.x = std::max(std::max(a.x, b.x), c.x);
+    r.hi.y = std::max(std::max(a.y, b.y), c.y);
+    r.hi.z = std::max(std::max(a.z, b.z), c.z);
     return r;
 }
 
@@ -394,7 +394,7 @@ bool retriangulate_with_segments(const crd::containers::Array<crd::math::Vec3<T>
 
     // Project to 2D. Epsilon-dedup by linear scan.
     crd::containers::Array<crd::math::Vec2<T>> points_2d(alloc);
-    crd::containers::Array<crd::u32>           dedup_to_unique(alloc); // index into globals → unique index
+    crd::containers::Array<crd::u32>           dedup_to_unique(alloc); // index into globals â†’ unique index
     dedup_to_unique.resize(globals.size(), crd::u32{0});
     crd::containers::Array<crd::u32>           unique_to_global(alloc);
     for (crd::u32 i = 0; i < globals.size(); ++i)
@@ -462,7 +462,7 @@ bool retriangulate_with_segments(const crd::containers::Array<crd::math::Vec3<T>
         return false; // graceful degradation
     }
 
-    // Emit sub-triangles, mapping unique-index → global vertex index.
+    // Emit sub-triangles, mapping unique-index â†’ global vertex index.
     // For each CDT triangle, if its 3 vertices in CDT space lie INSIDE
     // T (= the area enclosed by the original 3 corners), emit it.
     // Otherwise (= outside the triangle, an artifact of the super-triangle
@@ -472,7 +472,7 @@ bool retriangulate_with_segments(const crd::containers::Array<crd::math::Vec3<T>
     // constraint set INCLUDES T's boundary edges, the CDT may produce
     // triangles outside T if our 2D input has points lying outside the
     // original T's 2D footprint. For v7g, all segment endpoints lie
-    // strictly INSIDE T (Möller emits endpoints clipped to T's interior),
+    // strictly INSIDE T (MÃ¶ller emits endpoints clipped to T's interior),
     // so all CDT output triangles should be inside T. We do a quick
     // sanity check via barycentric centroid test against T's 2D form.
 
@@ -582,8 +582,8 @@ HalfEdgeMesh<T> remove_self_intersections(const HalfEdgeMesh<T>&                
         segments_per_tri.push_back(crd::containers::Array<SegmentInTri>{alloc});
     }
 
-    // O(n²) broadphase (D60). Test each pair (i, j) with i < j; skip
-    // adjacent triangles (sharing 1+ vertices — these "intersect" at
+    // O(nÂ²) broadphase (D60). Test each pair (i, j) with i < j; skip
+    // adjacent triangles (sharing 1+ vertices â€” these "intersect" at
     // their shared edge/vertex but it's not a self-intersection).
     auto share_vertex = [&](crd::u32 ti, crd::u32 tj) {
         const crd::u32 a0 = indices[3U * ti + 0];

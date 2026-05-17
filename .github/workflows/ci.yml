@@ -85,6 +85,22 @@ jobs:
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
 
+      # Pin clang-tidy version (LLVM 19) to match local dev (VS2026 bundles
+      # similar). Default `windows-latest` runner ships LLVM 17 (VS2022),
+      # which categorises function-local `constexpr` identifiers under a
+      # different `readability-identifier-naming` subcategory than LLVM 19
+      # — that mismatch produced silent CI-only failures on patterns the
+      # local gate accepted. Pinning eliminates the skew.
+      - name: Install LLVM 19 (pinned)
+        uses: KyleMayes/install-llvm-action@v2
+        with:
+          version: '19'
+
+      - name: Verify clang-tidy version
+        shell: pwsh
+        run: |
+          clang-tidy --version
+
       - name: Cache CPM downloads
         uses: actions/cache@v4
         with:

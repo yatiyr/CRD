@@ -50,6 +50,7 @@ Checks: >
   -modernize-pass-by-value,
   -modernize-return-braced-init-list,
   -modernize-use-std-numbers,
+  -modernize-min-max-use-initializer-list,
   performance-*,
   -performance-inefficient-vector-operation,
   -performance-unnecessary-copy-initialization,
@@ -76,6 +77,13 @@ Checks: >
 # failure under the `win-tidy` preset. Flipped 2026-05-17 (v8d-2d slice
 # close) — previously '' (advisory). To temporarily disable a single check
 # during a refactor, silence at the call site with `// NOLINT(check-name)`.
+#
+# Note on `-modernize-min-max-use-initializer-list` (disabled above): GCC 13+
+# rejects `std::min({a, b, c})` brace-initializer-list form in
+# template-deduction contexts ("no matching function for call to 'min(<brace-
+# enclosed initializer list>)'"). MSVC + clang accept it. The check would
+# steer us toward the form that breaks GCC, so disable globally. Use nested
+# `std::min(std::min(a, b), c)` form for cross-compiler portability.
 #
 # Note on `-modernize-use-std-numbers` (disabled above): `crd-math::deterministic`
 # REQUIRES bit-identical FP literals across compilers (ADR-0063 deterministic-FP
@@ -124,6 +132,32 @@ CheckOptions:
     value: CamelCase
   - key: readability-identifier-naming.GlobalConstantPrefix
     value: 'k'
+  # Defensive duplicates for CI clang-tidy version skew (added 2026-05-17):
+  # older clang-tidy (LLVM 17 on `windows-latest` VS2022) categorises
+  # function-local `static constexpr` and `constexpr` as the generic
+  # `Constant` / `StaticConstant` categories instead of the more granular
+  # `LocalConstexprVariable`. Newer clang-tidy (LLVM 19+ on local VS2026)
+  # uses the granular category. Setting BOTH the granular and the generic
+  # rules to the same kCamelCase form makes the configuration version-
+  # independent — any clang-tidy categorisation produces the same expected
+  # name. LocalConstant (function-local non-constexpr `const T`) is
+  # explicitly held to lower_case so `const u32 n = ...` style stays valid.
+  - key: readability-identifier-naming.ConstantCase
+    value: CamelCase
+  - key: readability-identifier-naming.ConstantPrefix
+    value: 'k'
+  - key: readability-identifier-naming.StaticConstantCase
+    value: CamelCase
+  - key: readability-identifier-naming.StaticConstantPrefix
+    value: 'k'
+  - key: readability-identifier-naming.StaticConstexprVariableCase
+    value: CamelCase
+  - key: readability-identifier-naming.StaticConstexprVariablePrefix
+    value: 'k'
+  - key: readability-identifier-naming.LocalConstantCase
+    value: lower_case
+  - key: readability-identifier-naming.LocalConstantPrefix
+    value: ''
   - key: readability-identifier-naming.TemplateParameterCase
     value: CamelCase
   - key: readability-identifier-naming.MacroDefinitionCase
