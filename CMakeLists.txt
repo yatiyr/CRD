@@ -403,6 +403,7 @@ add_subdirectory(engine/geometry-convex)
 add_subdirectory(engine/geometry-mesh)
 add_subdirectory(engine/geometry-spatial)
 add_subdirectory(engine/geometry-polygon)
+add_subdirectory(engine/geometry-mesh-processing)
 add_subdirectory(engine/geometry-shader-helpers)
 # crd-geometry-viz must come AFTER crd-draw (its declaration is below) — moved
 # down to engine/eylem-viz neighbourhood. See the second add_subdirectory below.

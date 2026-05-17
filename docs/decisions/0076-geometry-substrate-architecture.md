@@ -1442,3 +1442,130 @@ Hodgman migrated to convex v2j 2026-05-13).
 | `bentley_ottmann` (v6e) | O((n + k) log n) | dominant — replaces v6d brute-force when n large |
 
 **Phase 3.1.7 progress: 7 of 11 sub-modules complete** (primitives ✅ + bvh ✅ + convex ✅ + v3 convex-hull extension ✅ + mesh ✅ + spatial ✅ + **polygon ✅**). 50 of the renewed-scope 49 total slices shipped (102% — v6 expanded 4→6 slices per the v6a substrate separation; nothing cut). **Next sub-module: `-mesh-processing` v7** (QEM + Loop subd + remesh + repair + Taubin).
+
+## §22 Amendment (2026-05-17) — v7 `-mesh-processing` cluster CLOSED
+
+Phase 3.1.7 sub-module 8 of 11 — `crd-geometry-mesh-processing` —
+shipped + closed. 8 algorithm slices + 1 substrate slice (v7a) + 1
+cluster-close slice. Substrate shipped 2026-05-16; algorithms +
+close shipped 2026-05-17.
+
+### §22.1 Slice ledger
+
+| Slice | Engine LOC | Test LOC | Decisions | What |
+|---|---|---|---|---|
+| v7a HalfEdgeMesh substrate | ~520 | ~480 | D1-D8 | 16-byte HalfEdgeSlot pin + materialised boundary HEs + lex-tuple twin pairing + uniform CW fan rotation + 3 atomic edits (collapse w/ Edelsbrunner 2001 link condition + split + flip) + topology queries + `set_vertex_position` (added in v7d) |
+| v7b QEM decimation (Garland-Heckbert 1997) | ~600 | ~400 | D9-D16 | Symmetric 4×4 Quadric stored as 10 floats + closed-form `v_opt` via 3×3 Cramer + midpoint fallback + per-vertex accumulation + Garland 1998 boundary preservation + Hoppe 1993-style inversion prevention + locked vertices + lazy-invalidation min-heap |
+| v7c Loop subdivision (1987) | ~330 | ~250 | D17-D25 | Indexed-form pipeline + interior + boundary masks + `crd::math::deterministic::cos` for bit-identical β(n) + CCW sub-triangle emission |
+| v7d Isotropic remeshing (Botsch-Kobbelt 2004) | ~620 | ~350 | D26-D38 | 4-pass-per-iteration loop (split + collapse + flip + tangential smoothing) + f32 BVH `mesh_closest_point` projection + Hoppe inversion-rejection + per-pass canonical-HE snapshot + flip duplicate-edge gate + true tangential displacement |
+| v7e Liepa hole filling §3+§4+§5 (2003) | ~900 | ~500 | D39-D51 | §3 Liepa O(N³) DP min-weight triangulation w/ dihedral penalty + phantom-edge deferral + §4 Steiner refinement (σ per loop vertex + too-coarse `α·dist > σ` test + centroid Steiner + Delaunay flip pass via deterministic acos) + §5 Jacobi Laplacian fairing on Steiner only |
+| v7f Manifoldness repair | ~440 | ~300 | D52-D59 | Phase A non-manifold edge repair (HashMap edge keying + orientation pairing + duplicate-min-endpoint) + Phase B bowtie vertex repair (temp-HE-mesh fan-walk + union-find fan grouping + per-fan duplication) + cascade behavior verified |
+| v7g Self-intersection removal | ~580 | ~280 | D60-D66 | Brute-force O(n²) broadphase + Möller 1997 with orient3d-gated touch-only rejection + per-triangle CDT retriangulation via `crd::geometry::polygon::constrained_delaunay` + drop-largest-normal-axis 2D projection + epsilon-dedup + centroid-inside-T sanity filter + cross-triangle vertex stitching + graceful CDT-failure degradation |
+| v7h Taubin smoothing (1995) | ~210 | ~270 | D67-D72 | 2-pass volume-preserving Laplacian (Pass 1 shrink λ + Pass 2 un-shrink μ) + uniform-weight umbrella + boundary-clamp default + Jacobi atomic update + InvalidParameters guard |
+| v7-close | — | — | — | This §22 amendment + `docs/systems/geometry-mesh-processing.md` + 18-config full sweep + roadmap/context/MEMORY final sync |
+| **Total** | **~4200** | **~2830** | **D1-D72** | **~7030 LOC across the cluster** |
+
+### §22.2 Locked design decisions D1-D72
+
+The v7 cluster's 72 design decisions are pinned at the source-of-truth
+SLICE level in each session log under "Decisions made". This §22
+amendment indexes them by slice; the canonical detail lives in the
+per-slice logs `docs/sessions/2026-05-16-geometry-v7a-*.md` to
+`docs/sessions/2026-05-17-geometry-v7h-*.md` + system overview
+`docs/systems/geometry-mesh-processing.md`.
+
+- **v7a HalfEdgeMesh substrate** D1-D8: lex-tuple twin pairing
+  (bit-identical) · materialised boundary HEs · prev NOT stored · LIFO
+  free-list · Edelsbrunner 2001 link condition · boundary collapse
+  deferred to v7f · uniform CW fan rotation · 16-byte `HalfEdgeSlot`
+  pin.
+- **v7b QEM decimation** D9-D16: per-vertex `Σ K_f` quadric ·
+  Garland 1998 boundary preservation default weight 1000 ·
+  closed-form `v_opt` w/ midpoint fallback · lex `(cost,
+  canonical_he_id)` heap · lazy invalidation w/ bump-before-push ·
+  Hoppe-style inversion prevention · input untouched · stop conditions
+  optional but at-least-one required.
+- **v7c Loop subdivision** D17-D25: indexed-form per-level pipeline ·
+  output = [n_old slot-order] ++ [n_edges canonical-HE-id-order
+  Steiner] · CCW 4-sub-triangle emission · `3/8 + 1/8` interior
+  midpoint mask · `(A+B)/2` boundary midpoint · Loop interior weight
+  w/ `crd::math::deterministic::cos` · cubic-B-spline boundary update
+  mask · multi-level via `n_levels` · boundary-neighbour detection
+  via CW fan walk.
+- **v7d Isotropic remeshing** D26-D38: module dep adds
+  `crd-geometry-mesh` + `-bvh` · input untouched + clone-via-indexed ·
+  IN-PLACE iteration via atomic ops · per-pass canonical-HE snapshot ·
+  collapse safety pre-check (no post-edge > `(4/3)·L`) · valence
+  targets 6 interior / 4 boundary · Jacobi smoothing · f32 BVH w/
+  f64 boundary-cast · boundary fixed by default · boundary edges
+  skipped in split/collapse/flip · flip duplicate-edge gate
+  (`vertices_connected(c, d)`) · true tangential smoothing (Botsch-
+  Kobbelt §4 actual: displacement projected onto tangent plane) ·
+  inversion-rejection safeguard in smoothing pass.
+- **v7e Liepa hole filling §3+§4+§5** D39-D51: boundary loop detection
+  walks alive boundary HEs in slot order · per-loop outside-mesh face
+  normals precomputed · DP `W[i,k] = min_m { W[i,m] + W[m,k] +
+  ω(T_imk) }`, `ω = area + λ · dihedral_penalty_sum` · top-level
+  closing dihedral against closing-edge outside normal · lex `(comp_w,
+  m)` tiebreak · patch CCW from OUTSIDE · `to_indexed → append →
+  build_from` attachment · ~~§4 + §5 deferred~~ REVERSED (full pipeline
+  via v7e-refine same-session re-open after user scope-check) ·
+  σ scale from input-mesh incident-edge mean, Steiner σ = parent
+  mean · too-coarse `α · dist > σ AND > σ_avg` test (α=√2) · Delaunay
+  flip via `crd::math::deterministic::acos` w/ duplicate-edge guard ·
+  Jacobi fairing on Steiner only, loop CLAMPED · §4 implemented at
+  index level + temp HE mesh rebuild per flip pass.
+- **v7f Manifoldness repair** D52-D59: Phase A index-level via
+  `crd::containers::HashMap<u64, Array<u32>>` packed-edge-key map ·
+  orientation pairing (forwards: origin < dest; backwards: origin >
+  dest) · first pair keeps endpoints, subsequent share duplicated
+  `min(u,v)`, singletons individual · `replace_vertex_in_triangle`
+  scans 3 corners · Phase B temp-HE-mesh + v7a CW fan-walk · fan
+  union-find on triangle-share-edge-through-v adjacency · lowest-
+  min-tri-id fan keeps `v` · Phase A → B sequence (B requires manifold-
+  edge precondition) · `AlreadyManifold` status when both phases
+  detected zero pathologies.
+- **v7g Self-intersection removal** D60-D66: brute-force O(n²)
+  broadphase (BVH deferred to followon — static BvhTree lacks
+  find_overlapping_pairs) · Möller 1997 narrowphase w/ orient3d gate ·
+  touch-only cases (≥1 zero + same-sign rest, or ≥2 zeros) explicitly
+  rejected · cross-triangle vertex stitching via per-pair shared
+  global indices · 2D projection via drop-largest-normal-axis +
+  flip-winding-if-normal-negative · epsilon-dedup (default 1e-6) for
+  3-triangle-common-edge case · graceful CDT-failure degradation ·
+  centroid-inside-T sanity filter on CDT output.
+- **v7h Taubin smoothing** D67-D72: clone-and-mutate pattern ·
+  boundary flag cached ONCE at entry · Jacobi per pass · boundary
+  clamp by default; optional boundary-1-ring-only smoothing · uniform-
+  weight umbrella (cotangent ships as v7h-cotan followon) ·
+  `InvalidParameters` rejects λ ≤ 0 + μ ≥ 0 but allows `|μ| ≤ λ`.
+
+### §22.3 Cluster cross-validation
+
+- **2-manifold output** verified for v7b/c/d/e/f/g/h (every algorithm
+  ships an `out.is_manifold()` test).
+- **Determinism** via per-slice tests (same input → byte-identical
+  output positions on f32).
+- **Phase A → B cascade** explicitly tested in v7f (Phase A's vertex
+  duplication can disconnect a previously-connected fan structure
+  that Phase B then detects + repairs).
+- **Signed-volume orientation** v7e + v7g (positive enclosed volume
+  on filled cube / on no-intersection cube → patch outward normals
+  consistent with surrounding mesh).
+- **Taubin hallmark** verified v7h (Taubin drift STRICTLY < pure-
+  Laplacian drift on Loop-subdivided cube — the algorithm's defining
+  property).
+- **f64 precision tier** every algorithm.
+- **18-config full sweep** (Windows 11 + Linux 7) PASS at v7-close.
+
+### §22.4 Phase 3.1.7 status update
+
+**8 of 11 sub-modules COMPLETE**: primitives ✅ + bvh ✅ + convex ✅
++ v3 convex-hull-extension ✅ + mesh ✅ + spatial ✅ + polygon ✅ +
+**mesh-processing ✅**. **59 of the renewed-scope 49 slices shipped
+(120%)** — v6 expanded 4→6 (substrate separation), v7 expanded 7→9
+(substrate + close), nothing cut. Next sub-modules: v8 `-delaunay`
+(2D+3D Bowyer-Watson + Voronoi-from-Delaunay; `insphere_exact`
+paydown at v8c-pre) → v9 GPU LBVH + V-HACD + REPL + v9e shader-
+helpers emit → v10 `-curves` → v11 transform-aware query helpers in
+`-primitives`.
