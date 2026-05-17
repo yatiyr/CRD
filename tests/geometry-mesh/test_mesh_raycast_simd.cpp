@@ -69,15 +69,15 @@ SphereMesh make_sphere(crd::memory::IAllocator* a, crd::u32 lats, crd::u32 lons,
 {
     SphereMesh m{a};
     // Vertex grid: (lats + 1) × lons unique vertices (poles included as full rings).
-    constexpr crd::f32 pi = 3.14159265358979323846F;
+    constexpr crd::f32 kPi = 3.14159265358979323846F;
     for (crd::u32 la = 0U; la <= lats; ++la)
     {
-        const crd::f32 theta = pi * static_cast<crd::f32>(la) / static_cast<crd::f32>(lats);
+        const crd::f32 theta = kPi * static_cast<crd::f32>(la) / static_cast<crd::f32>(lats);
         const crd::f32 sin_t = std::sin(theta);
         const crd::f32 cos_t = std::cos(theta);
         for (crd::u32 lo = 0U; lo < lons; ++lo)
         {
-            const crd::f32 phi = 2.0F * pi * static_cast<crd::f32>(lo) / static_cast<crd::f32>(lons);
+            const crd::f32 phi = 2.0F * kPi * static_cast<crd::f32>(lo) / static_cast<crd::f32>(lons);
             const crd::f32 sin_p = std::sin(phi);
             const crd::f32 cos_p = std::cos(phi);
             m.vertices.push_back(Vec3f{r * sin_t * cos_p, r * cos_t, r * sin_t * sin_p});
@@ -138,15 +138,15 @@ TEST_CASE("v4d sphere mesh: 36 rays cross-validate against v4b",
 
     // 36 evenly-distributed rays pointing at the origin from a sphere of
     // radius 5. Most should hit, a few graze.
-    constexpr crd::f32 pi = 3.14159265358979323846F;
+    constexpr crd::f32 kPi = 3.14159265358979323846F;
     int matched_hit  = 0;
     int matched_miss = 0;
     int divergent    = 0;
     for (crd::u32 i = 0U; i < 6U; ++i)
     for (crd::u32 j = 0U; j < 6U; ++j)
     {
-        const crd::f32 theta = pi * static_cast<crd::f32>(i) / 6.0F;
-        const crd::f32 phi   = 2.0F * pi * static_cast<crd::f32>(j) / 6.0F;
+        const crd::f32 theta = kPi * static_cast<crd::f32>(i) / 6.0F;
+        const crd::f32 phi   = 2.0F * kPi * static_cast<crd::f32>(j) / 6.0F;
         const Vec3f origin{
             5.0F * std::sin(theta) * std::cos(phi),
             5.0F * std::cos(theta),

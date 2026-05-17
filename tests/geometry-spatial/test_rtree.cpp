@@ -452,13 +452,13 @@ namespace
 {
 struct RTreeConcurrencyCorpus
 {
-    static constexpr u32 k_queries = 16U;
-    static constexpr u32 k_iters_per_query = 25U;
+    static constexpr u32 kQueries = 16U;
+    static constexpr u32 kItersPerQuery = 25U;
 
     crd::memory::TlsfAllocator alloc{1U << 22};
     RTree<f32>                 tree{&alloc};
-    AABB3<f32>                 queries[k_queries]{};
-    crd::containers::Array<u32> ref[k_queries] = {
+    AABB3<f32>                 queries[kQueries]{};
+    crd::containers::Array<u32> ref[kQueries] = {
         crd::containers::Array<u32>{&alloc}, crd::containers::Array<u32>{&alloc},
         crd::containers::Array<u32>{&alloc}, crd::containers::Array<u32>{&alloc},
         crd::containers::Array<u32>{&alloc}, crd::containers::Array<u32>{&alloc},
@@ -484,21 +484,21 @@ TEST_CASE("RTree concurrent overlap queries via crd-jobs (proves naturally-const
         (void)corpus->tree.insert(aabb_around(c, uh(rng)), i);
     }
     std::uniform_real_distribution<f32> uqh(1.0F, 8.0F);
-    for (u32 q = 0; q < RTreeConcurrencyCorpus::k_queries; ++q)
+    for (u32 q = 0; q < RTreeConcurrencyCorpus::kQueries; ++q)
     {
         corpus->queries[q] = aabb_around(Vec3f{uc(rng), uc(rng), uc(rng)}, uqh(rng));
         corpus->tree.overlap(corpus->queries[q], corpus->ref[q]);
         std::sort(corpus->ref[q].data(), corpus->ref[q].data() + corpus->ref[q].size());
     }
 
-    constexpr u32 total_tasks = RTreeConcurrencyCorpus::k_queries * RTreeConcurrencyCorpus::k_iters_per_query;
+    constexpr u32 kTotalTasks = RTreeConcurrencyCorpus::kQueries * RTreeConcurrencyCorpus::kItersPerQuery;
     auto* corpus_ptr = corpus.get();
     crd::jobs::Counter* counter = crd::jobs::parallel_for(
-        total_tasks, /*num_jobs=*/16U,
+        kTotalTasks, /*num_jobs=*/16U,
         [corpus_ptr](crd::u32 begin, crd::u32 end) noexcept {
             for (crd::u32 task_idx = begin; task_idx < end; ++task_idx)
             {
-                const u32 q = task_idx % RTreeConcurrencyCorpus::k_queries;
+                const u32 q = task_idx % RTreeConcurrencyCorpus::kQueries;
                 crd::memory::TlsfAllocator local_alloc{1U << 16};
                 crd::containers::Array<u32> got(&local_alloc);
                 corpus_ptr->tree.overlap(corpus_ptr->queries[q], got);

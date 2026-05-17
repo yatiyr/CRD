@@ -42,13 +42,10 @@ using crd::f32;
 using crd::u32;
 using crd::usize;
 using crd::geometry::cast_convex;
-using crd::geometry::convex::ConvexShapecastResult;
 using crd::geometry::convex::gjk_distance;
 using crd::geometry::convex::shapecast_convex;
-using crd::geometry::primitives::Capsule3;
 using crd::geometry::primitives::OBB3;
 using crd::geometry::primitives::Sphere;
-using crd::math::from_axis_angle;
 using crd::math::Mat3;
 using crd::math::Quat;
 using crd::math::Transform;
@@ -108,12 +105,12 @@ template <typename A, typename B>
     // Linear sample to find the FIRST separated→overlap transition.
     // (Pure binary search of [0, tmax] would miss pass-through cases where
     // at tmax we're separated again.)
-    constexpr int k_samples = 200;
+    constexpr int kSamples = 200;
     f32 prev_t = 0.0F;
     bool prev_overlap = false;
-    for (int i = 1; i <= k_samples; ++i)
+    for (int i = 1; i <= kSamples; ++i)
     {
-        const f32 t = (tmax * static_cast<f32>(i)) / static_cast<f32>(k_samples);
+        const f32 t = (tmax * static_cast<f32>(i)) / static_cast<f32>(kSamples);
         const bool now = eval_overlap_at(t);
         if (now && !prev_overlap)
         {

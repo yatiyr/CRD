@@ -164,7 +164,8 @@ TEST_CASE("bench Mat4f multiply -- public API (SIMD-routed) vs explicit simd::Ma
     // paths — the "public API" call is no longer scalar. Both should clock
     // ~9-10 ns on AVX2 desktop, proving v0f delivered. The pre-v0f baseline
     // of 122.97 ns scalar is documented as "the speedup that v0f shipped".
-    Mat4f a, b;
+    Mat4f a;
+    Mat4f b;
     for (int c = 0; c < 4; ++c)
     {
         for (int r = 0; r < 4; ++r)

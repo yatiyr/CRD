@@ -77,7 +77,9 @@ TEST_CASE("deterministic cos matches std::cos within 4 ulps over [-2pi, 2pi]",
 {
     constexpr int kN = 64;
     u32 max_ulp = 0;
-    f32 worst_t = 0.0F, worst_got = 0.0F, worst_exp = 0.0F;
+    f32 worst_t = 0.0F;
+    f32 worst_got = 0.0F;
+    f32 worst_exp = 0.0F;
     for (int i = 0; i < kN; ++i)
     {
         const f32 t = -2.0F * det::pi + (4.0F * det::pi) * static_cast<f32>(i) / static_cast<f32>(kN - 1);
@@ -96,7 +98,9 @@ TEST_CASE("deterministic tan matches std::tan over [-pi/3, pi/3] within 8 ulps",
 {
     constexpr int kN = 32;
     u32 max_ulp = 0;
-    f32 worst_t = 0.0F, worst_got = 0.0F, worst_exp = 0.0F;
+    f32 worst_t = 0.0F;
+    f32 worst_got = 0.0F;
+    f32 worst_exp = 0.0F;
     for (int i = 0; i < kN; ++i)
     {
         const f32 t = -det::pi / 3.0F + (2.0F * det::pi / 3.0F) * static_cast<f32>(i) / static_cast<f32>(kN - 1);
@@ -199,9 +203,9 @@ TEST_CASE("deterministic pow matches std::pow within 16 ulps for typical inputs"
     u32 max_ulp = 0;
     for (f32 b : bases)
     {
-        for (f32 e_ : exponents)
+        for (f32 e : exponents)
         {
-            const u32 d = ulp_diff(std::pow(b, e_), det::pow(b, e_));
+            const u32 d = ulp_diff(std::pow(b, e), det::pow(b, e));
             if (d > max_ulp) max_ulp = d;
         }
     }
@@ -544,7 +548,8 @@ TEST_CASE("deterministic f64 sin / cos accuracy over [-2pi, 2pi]",
           "[deterministic][f64][accuracy]")
 {
     constexpr int kN = 64;
-    u64 max_ulp_sin = 0, max_ulp_cos = 0;
+    u64 max_ulp_sin = 0;
+    u64 max_ulp_cos = 0;
     for (int i = 0; i < kN; ++i)
     {
         const f64 t = -2.0 * det::pi64 + (4.0 * det::pi64) * static_cast<f64>(i) / static_cast<f64>(kN - 1);
@@ -600,7 +605,8 @@ TEST_CASE("deterministic f64 atan / atan2 / asin / acos accuracy",
     INFO("atan2 max ulp = " << max_atan2);
     REQUIRE(max_atan2 <= 4ULL);
 
-    u64 max_asin = 0, max_acos = 0;
+    u64 max_asin = 0;
+    u64 max_acos = 0;
     for (int i = 0; i < 32; ++i)
     {
         const f64 t = -1.0 + 2.0 * static_cast<f64>(i) / 31.0;
@@ -653,7 +659,8 @@ TEST_CASE("deterministic f64 pow / expm1 / log1p accuracy",
     INFO("pow max ulp = " << max_pow);
     REQUIRE(max_pow <= 16ULL);
 
-    u64 max_em1 = 0, max_lp1 = 0;
+    u64 max_em1 = 0;
+    u64 max_lp1 = 0;
     for (int i = 0; i < 32; ++i)
     {
         const f64 t = -1.5 + 3.0 * static_cast<f64>(i) / 31.0;
@@ -675,7 +682,9 @@ TEST_CASE("deterministic f64 pow / expm1 / log1p accuracy",
 TEST_CASE("deterministic f64 sinh / cosh / tanh accuracy",
           "[deterministic][f64][accuracy]")
 {
-    u64 max_sinh = 0, max_cosh = 0, max_tanh = 0;
+    u64 max_sinh = 0;
+    u64 max_cosh = 0;
+    u64 max_tanh = 0;
     for (int i = 0; i < 32; ++i)
     {
         const f64 t = -3.0 + 6.0 * static_cast<f64>(i) / 31.0;

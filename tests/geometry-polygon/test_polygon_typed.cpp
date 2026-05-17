@@ -29,8 +29,8 @@ struct AllocFixture { crd::memory::TlsfAllocator alloc{1U << 20}; };
 
 // Convenience: explicit Length32 construction. No `_m_f32` UDL exists; the
 // units library ships `_m` for f64 only. f32 callsites construct directly.
-inline Length32 L(f32 v) noexcept { return Length32{v}; }
-inline Vec2<Length32> P(f32 x, f32 y) noexcept { return Vec2<Length32>{L(x), L(y)}; }
+inline Length32 len(f32 v) noexcept { return Length32{v}; }
+inline Vec2<Length32> pt(f32 x, f32 y) noexcept { return Vec2<Length32>{len(x), len(y)}; }
 } // namespace
 
 TEST_CASE("typed signed_area: result is Quantity<DimMul<Length, Length>, f32>",
@@ -40,10 +40,10 @@ TEST_CASE("typed signed_area: result is Quantity<DimMul<Length, Length>, f32>",
 
     // Typed unit square at the API surface.
     crd::containers::Array<Vec2<Length32>> typed(&f.alloc);
-    typed.push_back(P(0.F, 0.F));
-    typed.push_back(P(1.F, 0.F));
-    typed.push_back(P(1.F, 1.F));
-    typed.push_back(P(0.F, 1.F));
+    typed.push_back(pt(0.F, 0.F));
+    typed.push_back(pt(1.F, 0.F));
+    typed.push_back(pt(1.F, 1.F));
+    typed.push_back(pt(0.F, 1.F));
 
     crd::containers::ConstSpan<Vec2<Length32>> span{typed.data(), typed.size()};
     const auto area = signed_area<crd::units::dim::Length, f32>(span);
@@ -57,10 +57,10 @@ TEST_CASE("typed centroid: returns Vec2<Length32>",
     AllocFixture f{};
 
     crd::containers::Array<Vec2<Length32>> typed(&f.alloc);
-    typed.push_back(P(0.F, 0.F));
-    typed.push_back(P(2.F, 0.F));
-    typed.push_back(P(2.F, 2.F));
-    typed.push_back(P(0.F, 2.F));
+    typed.push_back(pt(0.F, 0.F));
+    typed.push_back(pt(2.F, 0.F));
+    typed.push_back(pt(2.F, 2.F));
+    typed.push_back(pt(0.F, 2.F));
 
     crd::containers::ConstSpan<Vec2<Length32>> span{typed.data(), typed.size()};
     const auto c = centroid<crd::units::dim::Length, f32>(span);
@@ -74,10 +74,10 @@ TEST_CASE("typed aabb: returns AABB2<Length32>",
     AllocFixture f{};
 
     crd::containers::Array<Vec2<Length32>> typed(&f.alloc);
-    typed.push_back(P(-3.F, -4.F));
-    typed.push_back(P(5.F, -4.F));
-    typed.push_back(P(5.F, 7.F));
-    typed.push_back(P(-3.F, 7.F));
+    typed.push_back(pt(-3.F, -4.F));
+    typed.push_back(pt(5.F, -4.F));
+    typed.push_back(pt(5.F, 7.F));
+    typed.push_back(pt(-3.F, 7.F));
 
     crd::containers::ConstSpan<Vec2<Length32>> span{typed.data(), typed.size()};
     const auto bb = aabb<crd::units::dim::Length, f32>(span);
@@ -93,18 +93,18 @@ TEST_CASE("typed point_in_ring: typed boundary matches raw path",
     AllocFixture f{};
 
     crd::containers::Array<Vec2<Length32>> typed(&f.alloc);
-    typed.push_back(P(0.F, 0.F));
-    typed.push_back(P(1.F, 0.F));
-    typed.push_back(P(1.F, 1.F));
-    typed.push_back(P(0.F, 1.F));
+    typed.push_back(pt(0.F, 0.F));
+    typed.push_back(pt(1.F, 0.F));
+    typed.push_back(pt(1.F, 1.F));
+    typed.push_back(pt(0.F, 1.F));
 
     crd::containers::ConstSpan<Vec2<Length32>> span{typed.data(), typed.size()};
 
-    CHECK(point_in_ring<crd::units::dim::Length, f32>(span, P(0.5F, 0.5F))
+    CHECK(point_in_ring<crd::units::dim::Length, f32>(span, pt(0.5F, 0.5F))
           == PointInPolygon::Inside);
-    CHECK(point_in_ring<crd::units::dim::Length, f32>(span, P(2.F, 0.5F))
+    CHECK(point_in_ring<crd::units::dim::Length, f32>(span, pt(2.F, 0.5F))
           == PointInPolygon::Outside);
-    CHECK(point_in_ring<crd::units::dim::Length, f32>(span, P(0.F, 0.5F))
+    CHECK(point_in_ring<crd::units::dim::Length, f32>(span, pt(0.F, 0.5F))
           == PointInPolygon::OnBoundary);
 }
 
@@ -114,18 +114,18 @@ TEST_CASE("typed is_ccw: returns bool unchanged",
     AllocFixture f{};
 
     crd::containers::Array<Vec2<Length32>> ccw(&f.alloc);
-    ccw.push_back(P(0.F, 0.F));
-    ccw.push_back(P(1.F, 0.F));
-    ccw.push_back(P(1.F, 1.F));
-    ccw.push_back(P(0.F, 1.F));
+    ccw.push_back(pt(0.F, 0.F));
+    ccw.push_back(pt(1.F, 0.F));
+    ccw.push_back(pt(1.F, 1.F));
+    ccw.push_back(pt(0.F, 1.F));
     crd::containers::ConstSpan<Vec2<Length32>> ccw_span{ccw.data(), ccw.size()};
     CHECK(is_ccw<crd::units::dim::Length, f32>(ccw_span));
 
     crd::containers::Array<Vec2<Length32>> cw(&f.alloc);
-    cw.push_back(P(0.F, 0.F));
-    cw.push_back(P(0.F, 1.F));
-    cw.push_back(P(1.F, 1.F));
-    cw.push_back(P(1.F, 0.F));
+    cw.push_back(pt(0.F, 0.F));
+    cw.push_back(pt(0.F, 1.F));
+    cw.push_back(pt(1.F, 1.F));
+    cw.push_back(pt(1.F, 0.F));
     crd::containers::ConstSpan<Vec2<Length32>> cw_span{cw.data(), cw.size()};
     CHECK_FALSE(is_ccw<crd::units::dim::Length, f32>(cw_span));
 }
@@ -136,10 +136,10 @@ TEST_CASE("typed wrapper: bit-identical result vs raw path",
     AllocFixture f{};
 
     crd::containers::Array<Vec2<Length32>> typed_v(&f.alloc);
-    typed_v.push_back(P(0.F, 0.F));
-    typed_v.push_back(P(3.F, 0.F));
-    typed_v.push_back(P(3.F, 4.F));
-    typed_v.push_back(P(0.F, 4.F));
+    typed_v.push_back(pt(0.F, 0.F));
+    typed_v.push_back(pt(3.F, 0.F));
+    typed_v.push_back(pt(3.F, 4.F));
+    typed_v.push_back(pt(0.F, 4.F));
 
     crd::containers::Array<Vec2<f32>> raw_v(&f.alloc);
     raw_v.push_back(Vec2<f32>{0.F, 0.F});

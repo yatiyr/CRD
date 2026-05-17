@@ -30,12 +30,10 @@ using crd::u32;
 using crd::usize;
 using crd::math::Vec2;
 using crd::geometry::polygon::CdtEdge;
-using crd::geometry::polygon::CdtOptions;
 using crd::geometry::polygon::CdtResult;
 using crd::geometry::polygon::CdtStatus;
 using crd::geometry::polygon::constrained_delaunay;
 using crd::geometry::polygon::Polygon2;
-using crd::geometry::polygon::signed_area;
 
 namespace
 {

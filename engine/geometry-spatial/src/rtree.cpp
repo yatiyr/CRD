@@ -1,4 +1,4 @@
-// crd-geometry-spatial — R*-tree impl (Phase 3.1.7 v5c).
+﻿// crd-geometry-spatial â€” R*-tree impl (Phase 3.1.7 v5c).
 //
 // Reference: Beckmann, Kriegel, Schneider, Seeger, *The R*-tree: An Efficient
 // and Robust Access Method for Points and Rectangles*, SIGMOD 1990.
@@ -31,13 +31,13 @@ namespace
 {
 
 // Maximum traversal stack depth for raycast/k-NN/etc. Worst-case stack
-// growth = M × depth (push every child per descent step). R*-tree depth
-// is O(log_M N): for M=16 + N=1e9, depth ≤ 8 → worst-case 128 frames.
+// growth = M Ã— depth (push every child per descent step). R*-tree depth
+// is O(log_M N): for M=16 + N=1e9, depth â‰¤ 8 â†’ worst-case 128 frames.
 // 256 covers any practical scene with margin even at full-M branching.
 // (A v5c-fast follow-on can introduce caller-supplied scratch via
-// crd::containers::Array — same `DynamicBvhPairScratch` pattern — for
+// crd::containers::Array â€” same `DynamicBvhPairScratch` pattern â€” for
 // hot-path consumers needing zero stack reservation.)
-constexpr usize k_rtree_max_stack = 256;
+constexpr usize kRtreeMaxStack = 256;
 
 // AABB intersects (closed): touching counts as overlap. Matches
 // `primitives::intersects`.
@@ -78,7 +78,7 @@ T RTree<T>::aabb_area(const AABB3<T>& a) noexcept
     const T dx = a.max.x - a.min.x;
     const T dy = a.max.y - a.min.y;
     const T dz = a.max.z - a.min.z;
-    // Negative-extent (empty / degenerate) → 0.
+    // Negative-extent (empty / degenerate) â†’ 0.
     if (dx <= T{0} || dy <= T{0} || dz <= T{0}) { return T{0}; }
     return T{2} * (dx * dy + dy * dz + dz * dx);
 }
@@ -209,7 +209,7 @@ void RTree<T>::update_handle_location(u32 handle, u32 node_idx, u32 entry_idx)
 }
 
 // =============================================================================
-// choose-subtree (Beckmann §4.1)
+// choose-subtree (Beckmann Â§4.1)
 // =============================================================================
 
 template <MathScalar T>
@@ -282,7 +282,7 @@ u32 RTree<T>::choose_subtree(const AABB3<T>& target_aabb, u8 target_level) const
 }
 
 // =============================================================================
-// R*-tree split (Beckmann §4.2)
+// R*-tree split (Beckmann Â§4.2)
 // =============================================================================
 //
 // Stage all M+1 entries (the M in the node + the overflow entry) in a temp
@@ -295,8 +295,9 @@ u32 RTree<T>::choose_subtree(const AABB3<T>& target_aabb, u8 target_level) const
 template <MathScalar T>
 u32 RTree<T>::split_node(u32 node_idx, RTreeEntry<T> overflow_entry)
 {
-    constexpr u32 M = k_rtree_max_entries;
-    constexpr u32 m = k_rtree_min_entries;
+    // M = max-fanout, m = min-fanout per Beckmann 1990 §4.2 split notation.
+    constexpr u32 M = k_rtree_max_entries; // NOLINT(readability-identifier-naming)
+    constexpr u32 m = k_rtree_min_entries; // NOLINT(readability-identifier-naming)
 
     RTreeNode<T>& node = m_nodes[node_idx];
     const u8 node_level = node.level;
@@ -307,7 +308,8 @@ u32 RTree<T>::split_node(u32 node_idx, RTreeEntry<T> overflow_entry)
     RTreeEntry<T> staged[M + 1];
     for (u32 i = 0; i < M; ++i) { staged[i] = node.entries[i]; }
     staged[M] = overflow_entry;
-    constexpr u32 N = M + 1;
+    // N = M + 1 staged-entry count per Beckmann 1990 §4.2.
+    constexpr u32 N = M + 1; // NOLINT(readability-identifier-naming)
 
     // Per-axis loop. Best (axis, sort, k) tuple where k is the split point
     // (entries [0..k) go to first group, [k..N) to second).
@@ -371,7 +373,7 @@ u32 RTree<T>::split_node(u32 node_idx, RTreeEntry<T> overflow_entry)
 
                 axis_perimeter_sum += aabb_perimeter(g1) + aabb_perimeter(g2);
 
-                // Defer overlap+area scoring to the final-axis pass — but
+                // Defer overlap+area scoring to the final-axis pass â€” but
                 // record best within this axis to compare across axes by sum.
             }
         }
@@ -435,7 +437,7 @@ u32 RTree<T>::split_node(u32 node_idx, RTreeEntry<T> overflow_entry)
         }
     }
 
-    // Materialise the chosen split — re-sort on best_axis + best_sort, take
+    // Materialise the chosen split â€” re-sort on best_axis + best_sort, take
     // [0..best_k) into original node, [best_k..N) into new sibling.
     for (u32 i = 0; i < N; ++i) { order[i] = i; }
     {
@@ -512,19 +514,20 @@ u32 RTree<T>::split_node(u32 node_idx, RTreeEntry<T> overflow_entry)
 }
 
 // =============================================================================
-// R*-tree forced reinsertion (Beckmann §4.3)
+// R*-tree forced reinsertion (Beckmann Â§4.3)
 // =============================================================================
 //
 // Compute distance from each entry's center to the node center. Sort entries
-// by distance DESCENDING. Pop p = floor(0.3 × M) = 4 entries. Keep the rest.
+// by distance DESCENDING. Pop p = floor(0.3 Ã— M) = 4 entries. Keep the rest.
 // Reinsert the popped entries from the root in distance ASCENDING order
 // (closest-to-center first).
 
 template <MathScalar T>
 void RTree<T>::reinsert(u32 node_idx, RTreeEntry<T> overflow_entry)
 {
-    constexpr u32 M = k_rtree_max_entries;
-    constexpr u32 P = k_rtree_reinsert_p;
+    // M = max-fanout, P = forced-reinsert count per Beckmann 1990 §4.3 notation.
+    constexpr u32 M = k_rtree_max_entries; // NOLINT(readability-identifier-naming)
+    constexpr u32 P = k_rtree_reinsert_p;  // NOLINT(readability-identifier-naming)
 
     RTreeNode<T>& node = m_nodes[node_idx];
     const u8 node_level = node.level;
@@ -534,7 +537,8 @@ void RTree<T>::reinsert(u32 node_idx, RTreeEntry<T> overflow_entry)
     RTreeEntry<T> staged[M + 1];
     for (u32 i = 0; i < M; ++i) { staged[i] = node.entries[i]; }
     staged[M] = overflow_entry;
-    constexpr u32 N = M + 1;
+    // N = M + 1 staged-entry count per Beckmann 1990 §4.3.
+    constexpr u32 N = M + 1; // NOLINT(readability-identifier-naming)
 
     // Compute node center using union of all M+1 entries' AABBs.
     AABB3<T> node_aabb = aabb_union_of_entries(staged, N);
@@ -570,15 +574,15 @@ void RTree<T>::reinsert(u32 node_idx, RTreeEntry<T> overflow_entry)
         // Interior children's parent pointer is unchanged (they stay in this node).
     }
 
-    // Reinsert the first P entries (closest-to-center first → reverse order).
-    // Beckmann §4.3 close-reinsert: closest first.
+    // Reinsert the first P entries (closest-to-center first â†’ reverse order).
+    // Beckmann Â§4.3 close-reinsert: closest first.
     RTreeEntry<T> to_reinsert[P];
     for (u32 i = 0; i < P; ++i)
     {
         to_reinsert[i] = staged[order[P - 1 - i]];
     }
     // For interior-node reinsertion, we need to update child.parent later
-    // when the entry lands in a new node — handled by insert_entry path.
+    // when the entry lands in a new node â€” handled by insert_entry path.
     for (u32 i = 0; i < P; ++i)
     {
         // For leaf entries: handle exists, we'll update its location in the
@@ -646,7 +650,7 @@ void RTree<T>::adjust_tree_after_insert(u32 node_idx, u32 split_sibling)
             }
             else
             {
-                // Parent overflows. Per Beckmann §4.3, try forced reinsertion
+                // Parent overflows. Per Beckmann Â§4.3, try forced reinsertion
                 // ONCE per level per insert call. Otherwise split.
                 m_nodes[carry].parent = parent_idx; // sibling becomes a child of parent regardless
                 const u8 lvl = parent.level;
@@ -656,7 +660,7 @@ void RTree<T>::adjust_tree_after_insert(u32 node_idx, u32 split_sibling)
                     m_treated_levels |= mask;
                     reinsert(parent_idx, sibling_entry);
                     carry = k_null;
-                    // Continue walking up — parent's bounds may have changed.
+                    // Continue walking up â€” parent's bounds may have changed.
                 }
                 else
                 {
@@ -675,7 +679,7 @@ void RTree<T>::insert_entry(const RTreeEntry<T>& entry, u8 level)
 {
     if (m_root == k_null)
     {
-        // Tree is empty — create a root leaf with this entry.
+        // Tree is empty â€” create a root leaf with this entry.
         // (`level` is expected to be 0 in this path.)
         CRD_ASSERT(level == 0);
         const u32 root = allocate_node(0);
@@ -688,7 +692,7 @@ void RTree<T>::insert_entry(const RTreeEntry<T>& entry, u8 level)
         }
         else
         {
-            // Interior reinsertion (rare — only when a deep tree's interior
+            // Interior reinsertion (rare â€” only when a deep tree's interior
             // node was reinserted): update child's parent.
             m_nodes[entry.payload].parent = root;
         }
@@ -779,7 +783,7 @@ void RTree<T>::remove(RTreeLeafId id)
 }
 
 // =============================================================================
-// condense-tree (Guttman §3.4)
+// condense-tree (Guttman Â§3.4)
 // =============================================================================
 
 template <MathScalar T>
@@ -791,7 +795,7 @@ void RTree<T>::condense_tree(u32 node_idx)
 
     // Collect orphans: per (orphan, level) pair.
     struct Orphan { RTreeEntry<T> entry; u8 level; };
-    Orphan orphans[64]; // bounded by depth × M
+    Orphan orphans[64]; // bounded by depth Ã— M
     usize n_orphans = 0;
 
     u32 cur = node_idx;
@@ -803,7 +807,7 @@ void RTree<T>::condense_tree(u32 node_idx)
 
         if (node.entry_count < k_rtree_min_entries)
         {
-            // Underflow — collect orphans + remove node from parent + free node.
+            // Underflow â€” collect orphans + remove node from parent + free node.
             for (u32 i = 0; i < node.entry_count; ++i)
             {
                 CRD_ASSERT(n_orphans < 64);
@@ -827,7 +831,7 @@ void RTree<T>::condense_tree(u32 node_idx)
         }
         else
         {
-            // No underflow — just refresh parent's AABB for this node.
+            // No underflow â€” just refresh parent's AABB for this node.
             for (u32 i = 0; i < parent.entry_count; ++i)
             {
                 if (parent.entries[i].payload == cur)
@@ -876,18 +880,20 @@ void RTree<T>::condense_tree(u32 node_idx)
 template <MathScalar T>
 u32 RTree<T>::str_pack_level(crd::containers::Array<RTreeEntry<T>>& level_entries, u8 level)
 {
-    constexpr u32 M = k_rtree_max_entries;
-    const usize N = level_entries.size();
+    // M = max-fanout per Beckmann 1990; N/L/S = total/leaves/slabs per
+    // Leutenegger 1997 §3 STR-pack notation.
+    constexpr u32 M = k_rtree_max_entries; // NOLINT(readability-identifier-naming)
+    const usize N = level_entries.size(); // NOLINT(readability-identifier-naming)
     if (N == 1)
     {
-        // Sole "entry" is actually a node — return its child index.
+        // Sole "entry" is actually a node â€” return its child index.
         return level_entries[0].payload;
     }
 
     // Number of leaves at THIS level after packing N entries.
-    const usize L = (N + M - 1) / M;
+    const usize L = (N + M - 1) / M; // NOLINT(readability-identifier-naming)
     // Number of slabs (vertical strips on x).
-    usize S;
+    usize S; // NOLINT(readability-identifier-naming)
     {
         // S = ceil(sqrt(L))
         const f64 sf = std::sqrt(static_cast<f64>(L));
@@ -964,7 +970,7 @@ u32 RTree<T>::str_pack_level(crd::containers::Array<RTreeEntry<T>>& level_entrie
                     m_nodes[leaf.entries[slot].payload].parent = leaf_idx;
                 }
             }
-            // Build a next-level entry pointing at this leaf — interior entry,
+            // Build a next-level entry pointing at this leaf â€” interior entry,
             // handle field unused (k_invalid_handle for clarity).
             next_level.push_back(RTreeEntry<T>{
                 aabb_union_of_entries(leaf.entries, leaf.entry_count),
@@ -973,7 +979,7 @@ u32 RTree<T>::str_pack_level(crd::containers::Array<RTreeEntry<T>>& level_entrie
         }
     }
 
-    // Recurse — pack the next level up.
+    // Recurse â€” pack the next level up.
     return str_pack_level(next_level, static_cast<u8>(level + 1));
 }
 
@@ -1041,10 +1047,10 @@ void RTree<T>::bulk_load(crd::containers::ConstSpan<AABB3<T>> aabbs,
 template <MathScalar T>
 AABB3<T> RTree<T>::bounds() const noexcept
 {
-    constexpr T inf = std::numeric_limits<T>::infinity();
+    constexpr T kInf = std::numeric_limits<T>::infinity();
     if (m_root == k_null)
     {
-        return AABB3<T>{Vec3<T>{inf, inf, inf}, Vec3<T>{-inf, -inf, -inf}};
+        return AABB3<T>{Vec3<T>{kInf, kInf, kInf}, Vec3<T>{-kInf, -kInf, -kInf}};
     }
     return aabb_union_of_entries(m_nodes[m_root].entries, m_nodes[m_root].entry_count);
 }
@@ -1073,7 +1079,7 @@ u32 RTree<T>::depth() const noexcept
 }
 
 // =============================================================================
-// Queries — overlap (Array sink), raycast, k-NN
+// Queries â€” overlap (Array sink), raycast, k-NN
 // =============================================================================
 
 template <MathScalar T>
@@ -1083,15 +1089,15 @@ void RTree<T>::overlap(const AABB3<T>& query, crd::containers::Array<u32>& out) 
 }
 
 // (Templated `overlap(box, on_hit)` uses raw payload from leaf entries,
-// which is the HANDLE — but we want to expose the user payload. Patch:
+// which is the HANDLE â€” but we want to expose the user payload. Patch:
 // the inline template in the header should look up m_user_payloads[handle].
-// But the templated overlap is in the header — needs access to m_user_payloads.
-// Resolved by making it a friend — actually simpler: the inline version emits
-// `m_user_payloads[handle]`. Need to update the inline template … but it's
+// But the templated overlap is in the header â€” needs access to m_user_payloads.
+// Resolved by making it a friend â€” actually simpler: the inline version emits
+// `m_user_payloads[handle]`. Need to update the inline template â€¦ but it's
 // already written. Quick fix: keep inline template as-is (emits raw entry
 // payload), and provide a wrapper that does the indirection. Since leaf
 // entries' payload IS the handle at storage level, callers expect the user
-// payload — make the leaf-entry payload BE the user payload and store handle
+// payload â€” make the leaf-entry payload BE the user payload and store handle
 // elsewhere? That breaks the location table approach.
 //
 // Cleanest: store handle as the leaf entry's payload (so split/move bookkeeping
@@ -1112,12 +1118,12 @@ RTree<T>::raycast(const Ray3<T>& ray, T tmax) const noexcept
 
     if constexpr (!std::is_same_v<T, f32>)
     {
-        // f64 path — scalar slab traversal without precompute.
+        // f64 path â€” scalar slab traversal without precompute.
         T best_t = tmax;
         u32 best_payload = 0xFFFFFFFFU;
         bool any = false;
 
-        u32 stack[k_rtree_max_stack];
+        u32 stack[kRtreeMaxStack];
         usize sp = 0;
         stack[sp++] = m_root;
         while (sp > 0)
@@ -1197,7 +1203,7 @@ RTree<T>::raycast(const Ray3<T>& ray, T tmax) const noexcept
                         }
                     }
                     if (!ok) { continue; }
-                    CRD_ASSERT(sp < k_rtree_max_stack);
+                    CRD_ASSERT(sp < kRtreeMaxStack);
                     stack[sp++] = node.entries[i].payload;
                 }
             }
@@ -1213,7 +1219,7 @@ RTree<T>::raycast(const Ray3<T>& ray, T tmax) const noexcept
         bool any = false;
 
         struct Frame { u32 node; T t_near; };
-        Frame stack[k_rtree_max_stack];
+        Frame stack[kRtreeMaxStack];
         usize sp = 0;
 
         T root_t = T{0};
@@ -1258,7 +1264,7 @@ RTree<T>::raycast(const Ray3<T>& ray, T tmax) const noexcept
             else
             {
                 // Compute t_near for each child + push reverse-sorted (largest
-                // first → smallest pops first).
+                // first â†’ smallest pops first).
                 Frame cf[k_rtree_max_entries];
                 u32 nc = 0;
                 for (u32 i = 0; i < node.entry_count; ++i)
@@ -1271,7 +1277,7 @@ RTree<T>::raycast(const Ray3<T>& ray, T tmax) const noexcept
                     }
                     cf[nc++] = Frame{node.entries[i].payload, tt};
                 }
-                // Insertion-sort descending by t_near (small node count: ≤ M=16).
+                // Insertion-sort descending by t_near (small node count: â‰¤ M=16).
                 for (u32 i = 1; i < nc; ++i)
                 {
                     Frame v = cf[i];
@@ -1284,7 +1290,7 @@ RTree<T>::raycast(const Ray3<T>& ray, T tmax) const noexcept
                 }
                 for (u32 i = 0; i < nc; ++i)
                 {
-                    CRD_ASSERT(sp < k_rtree_max_stack);
+                    CRD_ASSERT(sp < kRtreeMaxStack);
                     stack[sp++] = cf[i];
                 }
             }
@@ -1294,18 +1300,18 @@ RTree<T>::raycast(const Ray3<T>& ray, T tmax) const noexcept
     }
 }
 
-// k-NN — Hjaltason-Samet 1999 incremental NN.
+// k-NN â€” Hjaltason-Samet 1999 incremental NN.
 //
-// PQ entries: (min_dist², kind, node_or_user_payload).
-//   * NODE entries: key = min_dist² from query to node-bounds (computed when
+// PQ entries: (min_distÂ², kind, node_or_user_payload).
+//   * NODE entries: key = min_distÂ² from query to node-bounds (computed when
 //                   we're about to push a child).
-//   * LEAF entries: key = min_dist² from query to leaf entry's AABB.
+//   * LEAF entries: key = min_distÂ² from query to leaf entry's AABB.
 // Pop the min-key entry. If LEAF, emit + add to result set. If NODE, expand
 // (push all children into PQ as either LEAF or NODE entries).
 // Stop when k LEAF entries emitted.
 //
-// Tiebreak: the PQ comparator sorts by (dist², payload) ascending so equal-
-// dist tiebreaks favour lowest payload. Final ascending sort by (dist², payload).
+// Tiebreak: the PQ comparator sorts by (distÂ², payload) ascending so equal-
+// dist tiebreaks favour lowest payload. Final ascending sort by (distÂ², payload).
 
 template <MathScalar T>
 void RTree<T>::nearest_n(const Vec3<T>&                          query,
@@ -1320,13 +1326,13 @@ void RTree<T>::nearest_n(const Vec3<T>&                          query,
     // Heap entry: kind + key + (node_idx OR user payload).
     struct PqItem
     {
-        T        key{};      // min_dist²
+        T        key{};      // min_distÂ²
         u32      kind{0};    // 0 = node, 1 = leaf
         u32      idx{0};     // node_idx OR user payload
         u32      tiebreak{0}; // for leaf items: the user payload, for stable ordering
     };
     // Min-heap: comparator returns true when a should be deeper than b
-    // (i.e., a "less" than b) — for std-style max-heap-on-cmp, we invert.
+    // (i.e., a "less" than b) â€” for std-style max-heap-on-cmp, we invert.
     auto cmp = [](const PqItem& a, const PqItem& b) -> bool {
         // We want top of heap = smallest key. Heap puts max-under-cmp at top
         // (Cerid `push_heap` follows std semantics). So return true when a > b
@@ -1335,7 +1341,7 @@ void RTree<T>::nearest_n(const Vec3<T>&                          query,
         if (a.key < b.key) { return false; }
         if (a.tiebreak > b.tiebreak) { return true; }
         if (a.tiebreak < b.tiebreak) { return false; }
-        // Same key + tiebreak: arbitrary but deterministic — prefer node over
+        // Same key + tiebreak: arbitrary but deterministic â€” prefer node over
         // leaf? Actually doesn't matter once both keys+tiebreaks match. Use
         // (kind, idx) for stability.
         if (a.kind > b.kind) { return true; }
@@ -1357,12 +1363,12 @@ void RTree<T>::nearest_n(const Vec3<T>&                          query,
 
         if (top.kind == 1U)
         {
-            // Leaf entry — emit.
+            // Leaf entry â€” emit.
             out.push_back(Neighbor{top.idx, top.key});
         }
         else
         {
-            // Node — expand children.
+            // Node â€” expand children.
             const RTreeNode<T>& node = m_nodes[top.idx];
             for (u32 i = 0; i < node.entry_count; ++i)
             {
@@ -1384,7 +1390,7 @@ void RTree<T>::nearest_n(const Vec3<T>&                          query,
         }
     }
 
-    // Final ascending sort by (dist², payload).
+    // Final ascending sort by (distÂ², payload).
     auto asc = [](const Neighbor& a, const Neighbor& b) -> bool {
         if (a.distance_squared < b.distance_squared) { return true; }
         if (a.distance_squared > b.distance_squared) { return false; }
@@ -1412,8 +1418,8 @@ void RTree<T>::validate() const noexcept
     //   * size in [m, M] except root
     //   * leaf entries' handle locations match their actual location
     crd::usize visited_leaves = 0;
-    // validate() walks every node — paranoid 1024-frame buffer for cosmic
-    // depths (M=16 ⇒ depth 16 covers ~10^19 entries).
+    // validate() walks every node â€” paranoid 1024-frame buffer for cosmic
+    // depths (M=16 â‡’ depth 16 covers ~10^19 entries).
     u32 stack[1024];
     usize sp = 0;
     stack[sp++] = m_root;

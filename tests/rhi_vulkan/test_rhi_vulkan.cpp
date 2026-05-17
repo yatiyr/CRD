@@ -202,7 +202,7 @@ TEST_CASE("Vulkan Fence: non-blocking submit signals fence on completion",
     CHECK_FALSE(fence->is_signaled());
 
     // Reset on a fresh fence is a no-op (still unsignalled).
-    fence->reset();
+    (*fence).reset();
     CHECK_FALSE(fence->is_signaled());
 
     // Empty-but-valid command buffer.
@@ -219,7 +219,7 @@ TEST_CASE("Vulkan Fence: non-blocking submit signals fence on completion",
     CHECK(fence->is_signaled());
 
     // Reset re-arms the fence; reused for a second submit.
-    fence->reset();
+    (*fence).reset();
     CHECK_FALSE(fence->is_signaled());
 
     auto cmd2 = device->create_command_buffer();

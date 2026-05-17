@@ -150,7 +150,8 @@ void kd_nearest_n_impl(const KdTree<T>&                       tree,
         const u32 left  = n.child_first;
         const u32 right = n.child_first + 1U;
 
-        u32 near_node, far_node;
+        u32 near_node;
+        u32 far_node;
         if (dq < T{0}) { near_node = left;  far_node = right; }
         else            { near_node = right; far_node = left;  }
 

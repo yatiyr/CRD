@@ -71,7 +71,7 @@ struct CompAllReserved
     crd::math::Vec3f velocity{};
 };
 
-inline const int g_reflection_sentinel = 0;
+inline const int kReflectionSentinel = 0;
 
 inline crd::scene::Reflection make_dummy_reflection() noexcept
 {
@@ -79,7 +79,7 @@ inline crd::scene::Reflection make_dummy_reflection() noexcept
     r.display_name = crd::containers::StringView{"DummyForReservedTest"};
     // `fields` non-null is what triggers the auto-register; the pointer
     // value is opaque to v1p (Phase 7 walks it).
-    r.fields = &g_reflection_sentinel;
+    r.fields = &kReflectionSentinel;
     return r;
 }
 

@@ -6,6 +6,8 @@
 #include <crd/jobs/jobs.hpp>
 #include <crd/math/vec.hpp>
 
+#include <algorithm>
+
 namespace crd::geometry::bvh
 {
 namespace
@@ -130,7 +132,7 @@ BvhTree bvh_build_parallel(crd::containers::ConstSpan<AABB3<f32>> prims, crd::me
 
     BvhTree tree(alloc);
     const usize n = prims.size();
-    const u32 bins = opts.sah_bins < 2U ? 2U : (opts.sah_bins > k_max_bins ? k_max_bins : opts.sah_bins);
+    const u32 bins = std::clamp<u32>(opts.sah_bins, 2U, k_max_bins);
     const u32 max_leaf = opts.max_leaf_prims < 1U ? 1U : static_cast<u32>(opts.max_leaf_prims);
 
     crd::containers::Array<Vec3<f32>> centroids(alloc);

@@ -37,12 +37,12 @@ TriangleMeshBvh build_triangle_mesh_bvh(const TriangleMeshViewf& view,
         const Vec3<crd::f32>& v1 = view.vertices[i1];
         const Vec3<crd::f32>& v2 = view.vertices[i2];
 
-        Vec3<crd::f32> bmin{std::min(std::min(v0.x, v1.x), v2.x),
-                            std::min(std::min(v0.y, v1.y), v2.y),
-                            std::min(std::min(v0.z, v1.z), v2.z)};
-        Vec3<crd::f32> bmax{std::max(std::max(v0.x, v1.x), v2.x),
-                            std::max(std::max(v0.y, v1.y), v2.y),
-                            std::max(std::max(v0.z, v1.z), v2.z)};
+        Vec3<crd::f32> bmin{std::min({v0.x, v1.x, v2.x}),
+                            std::min({v0.y, v1.y, v2.y}),
+                            std::min({v0.z, v1.z, v2.z})};
+        Vec3<crd::f32> bmax{std::max({v0.x, v1.x, v2.x}),
+                            std::max({v0.y, v1.y, v2.y}),
+                            std::max({v0.z, v1.z, v2.z})};
         out.triangle_aabbs[ti] = AABB3<crd::f32>{bmin, bmax};
     }
 

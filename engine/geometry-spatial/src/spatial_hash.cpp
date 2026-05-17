@@ -1,6 +1,6 @@
-// crd-geometry-spatial — `SpatialHash<T>` impl (Phase 3.1.7 v5d).
+﻿// crd-geometry-spatial â€” `SpatialHash<T>` impl (Phase 3.1.7 v5d).
 //
-// Reference: Teschner, Heidelberger, Müller, Pomeranets, Gross, *Optimized
+// Reference: Teschner, Heidelberger, MÃ¼ller, Pomeranets, Gross, *Optimized
 // Spatial Hashing for Collision Detection of Deformable Objects*, VMV 2003.
 // Voxel raycast: Amanatides & Woo, *A Fast Voxel Traversal Algorithm for
 // Ray Tracing*, Eurographics 1987.
@@ -28,19 +28,19 @@ using crd::math::Vec3;
 namespace
 {
 
-// Teschner 2003 §3.2 — three large primes. The XOR mix ensures the bucket
+// Teschner 2003 Â§3.2 â€” three large primes. The XOR mix ensures the bucket
 // distribution is ~uniform for spatially-correlated cell coords.
-constexpr u32 k_p1 = 73856093U;
-constexpr u32 k_p2 = 19349663U;
-constexpr u32 k_p3 = 83492791U;
+constexpr u32 kP1 = 73856093U;
+constexpr u32 kP2 = 19349663U;
+constexpr u32 kP3 = 83492791U;
 
 [[nodiscard, maybe_unused]] constexpr bool is_pow2(u32 x) noexcept
 {
     return x != 0 && (x & (x - 1U)) == 0U;
 }
 
-// Signed-safe floor-and-cast: converts world coord → cell coord. Negative
-// coords floor TOWARDS -∞ (canonical mathematical floor) so that adjacent
+// Signed-safe floor-and-cast: converts world coord â†’ cell coord. Negative
+// coords floor TOWARDS -âˆ (canonical mathematical floor) so that adjacent
 // objects on either side of x=0 land in adjacent cells.
 template <MathScalar T>
 inline i32 floor_to_i32(T v) noexcept
@@ -81,9 +81,9 @@ u32 SpatialHash<T>::hash_cell(i32 ix, i32 iy, i32 iz) const noexcept
 {
     // Cast through unsigned to silence signed-overflow UB on the multiply.
     // The operation IS deterministic across compilers (mod 2^32 multiply).
-    const u32 h = (static_cast<u32>(ix) * k_p1)
-                ^ (static_cast<u32>(iy) * k_p2)
-                ^ (static_cast<u32>(iz) * k_p3);
+    const u32 h = (static_cast<u32>(ix) * kP1)
+                ^ (static_cast<u32>(iy) * kP2)
+                ^ (static_cast<u32>(iz) * kP3);
     return h & m_bucket_mask;
 }
 
@@ -140,13 +140,18 @@ void SpatialHash<T>::free_object(u32 idx)
 }
 
 // =============================================================================
-// Cell ↔ object plumbing
+// Cell â†” object plumbing
 // =============================================================================
 
 template <MathScalar T>
 void SpatialHash<T>::insert_into_cells(u32 obj_idx, const AABB3<T>& aabb)
 {
-    i32 min_x, min_y, min_z, max_x, max_y, max_z;
+    i32 min_x;
+    i32 min_y;
+    i32 min_z;
+    i32 max_x;
+    i32 max_y;
+    i32 max_z;
     aabb_cell_range(aabb, min_x, min_y, min_z, max_x, max_y, max_z);
 
     for (i32 iz = min_z; iz <= max_z; ++iz)
@@ -161,7 +166,12 @@ void SpatialHash<T>::insert_into_cells(u32 obj_idx, const AABB3<T>& aabb)
 template <MathScalar T>
 void SpatialHash<T>::remove_from_cells(u32 obj_idx, const AABB3<T>& aabb)
 {
-    i32 min_x, min_y, min_z, max_x, max_y, max_z;
+    i32 min_x;
+    i32 min_y;
+    i32 min_z;
+    i32 max_x;
+    i32 max_y;
+    i32 max_z;
     aabb_cell_range(aabb, min_x, min_y, min_z, max_x, max_y, max_z);
 
     for (i32 iz = min_z; iz <= max_z; ++iz)
@@ -222,9 +232,19 @@ bool SpatialHash<T>::update(SpatialHashObjectId id, const AABB3<T>& new_aabb)
     ObjectEntry& obj = m_objects[id.value];
 
     // Compute old + new cell ranges; if they're equal, fast path.
-    i32 omin_x, omin_y, omin_z, omax_x, omax_y, omax_z;
+    i32 omin_x;
+    i32 omin_y;
+    i32 omin_z;
+    i32 omax_x;
+    i32 omax_y;
+    i32 omax_z;
     aabb_cell_range(obj.aabb, omin_x, omin_y, omin_z, omax_x, omax_y, omax_z);
-    i32 nmin_x, nmin_y, nmin_z, nmax_x, nmax_y, nmax_z;
+    i32 nmin_x;
+    i32 nmin_y;
+    i32 nmin_z;
+    i32 nmax_x;
+    i32 nmax_y;
+    i32 nmax_z;
     aabb_cell_range(new_aabb, nmin_x, nmin_y, nmin_z, nmax_x, nmax_y, nmax_z);
 
     if (omin_x == nmin_x && omin_y == nmin_y && omin_z == nmin_z
@@ -234,7 +254,7 @@ bool SpatialHash<T>::update(SpatialHashObjectId id, const AABB3<T>& new_aabb)
         return false;
     }
 
-    // Slow path — different cell range. Remove + reinsert.
+    // Slow path â€” different cell range. Remove + reinsert.
     remove_from_cells(id.value, obj.aabb);
     obj.aabb = new_aabb;
     insert_into_cells(id.value, new_aabb);
@@ -250,7 +270,7 @@ u64 SpatialHash<T>::next_query_generation() const noexcept
 {
     // Pre-wrap detection: if the next bump would overflow u64 to 0, reset
     // every object's last_query_gen to 0 + restart at 1. Cosmically rare
-    // (one query/ns × 585 years to wrap u64) but correctness-preserving.
+    // (one query/ns Ã— 585 years to wrap u64) but correctness-preserving.
     if (m_query_generation == std::numeric_limits<u64>::max())
     {
         for (usize i = 0; i < m_objects.size(); ++i)
@@ -332,19 +352,19 @@ void SpatialHash<T>::radius(const Vec3<T>& point, T r, SpatialHashScratch& scrat
 }
 
 // =============================================================================
-// raycast — Amanatides-Woo 1987 voxel traversal
+// raycast â€” Amanatides-Woo 1987 voxel traversal
 // =============================================================================
 //
 // Setup per ray (per axis):
-//   * stepX = sign(direction.x) ∈ {-1, 0, +1}; tDeltaX = |cell_size / direction.x|;
+//   * stepX = sign(direction.x) âˆˆ {-1, 0, +1}; tDeltaX = |cell_size / direction.x|;
 //     tMaxX = parametric t at which ray crosses the next x-cell boundary.
 // Loop:
-//   * scan cell (ix, iy, iz) — for each object in its bucket (dedup via gen),
+//   * scan cell (ix, iy, iz) â€” for each object in its bucket (dedup via gen),
 //     raycast vs object AABB, update best_t.
 //   * advance to next cell along axis with smallest tMax.
 //   * stop when tMax > best_t (no closer hit possible).
 //
-// Lowest-payload tiebreak on equal t per ADR-0076 §4 pin #11.
+// Lowest-payload tiebreak on equal t per ADR-0076 Â§4 pin #11.
 
 template <MathScalar T>
 std::optional<crd::geometry::RayHit<u32>>
@@ -411,20 +431,25 @@ SpatialHash<T>::raycast_traverse_(const Ray3<T>& ray, T tmax,
     i32 iz = floor_to_i32(ray.origin.z * inv_cs);
 
     // Step direction per axis. Zero direction component => no traversal on that axis.
-    const i32 step_x = (ray.direction.x > T{0}) ? 1 : (ray.direction.x < T{0} ? -1 : 0);
-    const i32 step_y = (ray.direction.y > T{0}) ? 1 : (ray.direction.y < T{0} ? -1 : 0);
-    const i32 step_z = (ray.direction.z > T{0}) ? 1 : (ray.direction.z < T{0} ? -1 : 0);
+    auto sign_step = [](T d) noexcept -> i32 {
+        if (d > T{0}) { return 1; }
+        if (d < T{0}) { return -1; }
+        return 0;
+    };
+    const i32 step_x = sign_step(ray.direction.x);
+    const i32 step_y = sign_step(ray.direction.y);
+    const i32 step_z = sign_step(ray.direction.z);
 
     // tDelta per axis = parametric distance to traverse one cell along that axis.
-    constexpr T inf = std::numeric_limits<T>::infinity();
-    const T tdelta_x = (step_x != 0) ? std::abs(m_cell_size / ray.direction.x) : inf;
-    const T tdelta_y = (step_y != 0) ? std::abs(m_cell_size / ray.direction.y) : inf;
-    const T tdelta_z = (step_z != 0) ? std::abs(m_cell_size / ray.direction.z) : inf;
+    constexpr T kInf = std::numeric_limits<T>::infinity();
+    const T tdelta_x = (step_x != 0) ? std::abs(m_cell_size / ray.direction.x) : kInf;
+    const T tdelta_y = (step_y != 0) ? std::abs(m_cell_size / ray.direction.y) : kInf;
+    const T tdelta_z = (step_z != 0) ? std::abs(m_cell_size / ray.direction.z) : kInf;
 
     // tMax per axis = parametric t at which ray crosses the NEXT cell boundary.
     // For step_x > 0: next boundary at (ix+1)*cs; for step_x < 0: at ix*cs.
     auto initial_tmax = [&](T origin_a, T dir_a, i32 ia, i32 step_a) -> T {
-        if (step_a == 0) { return inf; }
+        if (step_a == 0) { return kInf; }
         const T boundary = (step_a > 0) ? static_cast<T>(ia + 1) * m_cell_size
                                           : static_cast<T>(ia) * m_cell_size;
         return (boundary - origin_a) / dir_a;
@@ -437,7 +462,7 @@ SpatialHash<T>::raycast_traverse_(const Ray3<T>& ray, T tmax,
     u32 best_payload = 0xFFFFFFFFU;
     bool any = false;
 
-    // Per-object slab raycast (scalar — same as v5b's f64 path).
+    // Per-object slab raycast (scalar â€” same as v5b's f64 path).
     auto ray_aabb = [&](const AABB3<T>& a, T& out_t) noexcept -> bool {
         T tmin = T{0};
         T tcur_max = best_t;
@@ -493,9 +518,9 @@ SpatialHash<T>::raycast_traverse_(const Ray3<T>& ray, T tmax,
     };
 
     // Walk cells. Cap iterations to avoid runaway on degenerate input.
-    constexpr usize k_max_voxel_steps = 1U << 20; // 1M cells worst case
+    constexpr usize kMaxVoxelSteps = 1U << 20; // 1M cells worst case
     usize steps = 0;
-    while (steps++ < k_max_voxel_steps)
+    while (steps++ < kMaxVoxelSteps)
     {
         scan_cell();
 
@@ -519,7 +544,7 @@ SpatialHash<T>::raycast_traverse_(const Ray3<T>& ray, T tmax,
 }
 
 // =============================================================================
-// find_overlapping_pairs — broadphase
+// find_overlapping_pairs â€” broadphase
 // =============================================================================
 //
 // Per cell: for each pair (a, b) of objects in the bucket, if their AABBs
@@ -561,10 +586,10 @@ void SpatialHash<T>::find_overlapping_pairs(crd::containers::Array<SpatialHashPa
     }
 
     // Sort + unique. The same pair (a, b) can appear from multiple cells
-    // when both objects span those cells — dedup at the output stage.
+    // when both objects span those cells â€” dedup at the output stage.
     crd::containers::sort(out.data(), out.data() + out.size(),
                             [](const SpatialHashPair& x, const SpatialHashPair& y) { return x < y; });
-    // Manual unique — std::unique would work but `crd::containers` doesn't
+    // Manual unique â€” std::unique would work but `crd::containers` doesn't
     // ship one yet; keep deterministic in-place.
     if (out.size() > 1)
     {

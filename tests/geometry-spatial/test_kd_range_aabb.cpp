@@ -53,7 +53,9 @@ TEST_CASE("kd_range_aabb matches brute force on random cloud", "[geometry-spatia
     for (u32 trial = 0; trial < 16U; ++trial)
     {
         const Vec3f c{uc(rng), uc(rng), uc(rng)};
-        const f32 hx = uh(rng), hy = uh(rng), hz = uh(rng);
+        const f32 hx = uh(rng);
+        const f32 hy = uh(rng);
+        const f32 hz = uh(rng);
         AABB3<f32> box{Vec3f{c.x - hx, c.y - hy, c.z - hz},
                        Vec3f{c.x + hx, c.y + hy, c.z + hz}};
 

@@ -29,7 +29,6 @@ using crd::math::Vec2;
 using crd::geometry::polygon::bentley_ottmann;
 using crd::geometry::polygon::bentley_ottmann_any;
 using crd::geometry::polygon::BOIntersection;
-using crd::geometry::polygon::BOResult;
 using crd::geometry::polygon::BOSegment;
 using crd::geometry::polygon::BOStatus;
 

@@ -86,12 +86,12 @@ int main()
 
     // ── Assemble PACK ──────────────────────────────────────────────────────
 
-    const char* kMeshName = "smoke.mesh";
+    const char* mesh_name = "smoke.mesh";
     crd::containers::Array<crd::u8>       strp(&alloc);
     crd::containers::Array<ManifestEntry> entries(&alloc);
 
     const crd::u32 name_off = static_cast<crd::u32>(strp.size());
-    for (const char* p = kMeshName; *p != '\0'; ++p)
+    for (const char* p = mesh_name; *p != '\0'; ++p)
     {
         strp.push_back(static_cast<crd::u8>(*p));
     }

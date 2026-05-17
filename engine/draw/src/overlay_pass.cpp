@@ -184,9 +184,9 @@ void add_draw_overlay_pass(crd::renderer::FrameGraph&  fg,
 
             auto dim_color = [](crd::u32 packed) noexcept -> crd::u32 {
                 // Multiply alpha by ~0.3 for the GreaterDimmed variant (XRay).
-                const crd::u32 a = (packed >> 24) & 0xFFu;
-                const crd::u32 dimmed_a = (a * 77u) >> 8; // 77/256 ≈ 0.30
-                return (packed & 0x00FF'FFFFu) | (dimmed_a << 24);
+                const crd::u32 a = (packed >> 24) & 0xFFU;
+                const crd::u32 dimmed_a = (a * 77U) >> 8; // 77/256 ≈ 0.30
+                return (packed & 0x00FF'FFFFU) | (dimmed_a << 24);
             };
 
             for (const crd::u32 v : kVariantOrder)

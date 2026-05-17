@@ -57,7 +57,7 @@ namespace crd::geometry::polygon
 {
 namespace
 {
-constexpr crd::u32 k_null_idx = std::numeric_limits<crd::u32>::max();
+constexpr crd::u32 kNullIdx = std::numeric_limits<crd::u32>::max();
 
 // ---- Internal: ear-clip a flat vertex sequence into triangles ---------
 //
@@ -165,18 +165,18 @@ bool ear_clip_kernel(crd::containers::ConstSpan<crd::math::Vec2<T>> verts,
     {
         // Find the smallest live vertex that's an ear (lex-tuple tiebreak by
         // vertex index — engine-wide determinism pin).
-        crd::u32 ear_i = k_null_idx;
+        crd::u32 ear_i = kNullIdx;
         crd::u32 j     = head;
         do
         {
             if (!reflex[j] && is_ear(verts, nxt, prv, reflex, head, j))
             {
-                if (ear_i == k_null_idx || j < ear_i) { ear_i = j; }
+                if (ear_i == kNullIdx || j < ear_i) { ear_i = j; }
             }
             j = nxt[j];
         } while (j != head);
 
-        if (ear_i == k_null_idx)
+        if (ear_i == kNullIdx)
         {
             // No ear found this pass — input is non-simple or numerical
             // degeneracy. Surface as failure (caller wraps in status).
@@ -241,7 +241,7 @@ crd::u32 rightmost_vertex_index(Ring2<T> r) noexcept
 template <crd::math::MathScalar T>
 struct BridgeFinding
 {
-    crd::u32 target_local_idx = k_null_idx; // index INTO the bridged vertex sequence so far
+    crd::u32 target_local_idx = kNullIdx; // index INTO the bridged vertex sequence so far
     bool     ok               = false;
 };
 
@@ -261,8 +261,8 @@ find_bridge_target(crd::containers::ConstSpan<crd::math::Vec2<T>> bridged,
     if (n < 3U) { return {}; }
 
     T        best_dx          = std::numeric_limits<T>::infinity();
-    crd::u32 hit_edge_lo      = k_null_idx; // edge endpoint with smaller y on hit edge
-    crd::u32 hit_edge_hi      = k_null_idx; // edge endpoint with larger y
+    crd::u32 hit_edge_lo      = kNullIdx; // edge endpoint with smaller y on hit edge
+    crd::u32 hit_edge_hi      = kNullIdx; // edge endpoint with larger y
     crd::math::Vec2<T> hit_pt = {T{0}, T{0}};
 
     for (crd::u32 i = 0; i < n; ++i)
@@ -291,7 +291,7 @@ find_bridge_target(crd::containers::ConstSpan<crd::math::Vec2<T>> bridged,
         }
     }
 
-    if (hit_edge_lo == k_null_idx) { return {}; } // no visible outer edge
+    if (hit_edge_lo == kNullIdx) { return {}; } // no visible outer edge
 
     // Step 2: Eberly's candidate is the edge endpoint with the LARGER x.
     crd::u32 candidate
@@ -305,9 +305,10 @@ find_bridge_target(crd::containers::ConstSpan<crd::math::Vec2<T>> bridged,
     // Build the search triangle in CCW order: M -> hit_pt -> cand_v.
     // (M and hit_pt are both at the same y = hole_m.y; cand_v has y != hole_m.y
     // since horizontal edges were skipped.)
-    crd::math::Vec2<T> tA = hole_m;
-    crd::math::Vec2<T> tB = hit_pt;
-    crd::math::Vec2<T> tC = cand_v;
+    // (tA, tB, tC) preserves Eberly bridging-triangle vertex notation.
+    crd::math::Vec2<T> tA = hole_m;  // NOLINT(readability-identifier-naming)
+    crd::math::Vec2<T> tB = hit_pt;  // NOLINT(readability-identifier-naming)
+    crd::math::Vec2<T> tC = cand_v;  // NOLINT(readability-identifier-naming)
     // Force CCW orientation — if (tA, tB, tC) is CW, swap to (tA, tC, tB).
     if (orient2d_signed(tA, tB, tC) < T{0})
     {
@@ -505,7 +506,8 @@ TriangulationResult<T> triangulate_ear_clip(PolygonView2<T> poly, crd::memory::I
         const crd::u32 ring_idx = hole_order[idx];
         const auto     hring    = poly.ring(ring_idx);
         const crd::u32 m_local  = rightmost_vertex_index(hring);
-        const auto     M        = hring[m_local];
+        // M = rightmost-hole-vertex per Eberly hole-bridging notation.
+        const auto     M        = hring[m_local]; // NOLINT(readability-identifier-naming)
 
         // Map from poly-vertex space to the bridged sequence index for
         // origin tracking. poly's flat vertex offset for `ring_idx`.
@@ -540,7 +542,7 @@ TriangulationResult<T> triangulate_ear_clip(PolygonView2<T> poly, crd::memory::I
         const crd::usize old_size = bridged.size();
         bridged.resize(old_size + insert_count);
         orig.resize(old_size + insert_count);
-        for (crd::usize i = old_size; i > static_cast<crd::usize>(v_idx + 1U); --i)
+        for (crd::usize i = old_size; i > static_cast<crd::usize>(v_idx) + 1U; --i)
         {
             const crd::usize src = i - 1U;
             const crd::usize dst = src + insert_count;
@@ -548,7 +550,7 @@ TriangulationResult<T> triangulate_ear_clip(PolygonView2<T> poly, crd::memory::I
             orig[dst]            = orig[src];
         }
         // Write the inserted block.
-        const crd::usize ins_base = static_cast<crd::usize>(v_idx + 1U);
+        const crd::usize ins_base = static_cast<crd::usize>(v_idx) + 1U;
         bridged[ins_base + 0U]    = M;
         orig[ins_base + 0U]       = hole_global_base + m_local;
         // Hole vertices rotated so M is the first; walk forward from M

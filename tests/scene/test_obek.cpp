@@ -29,8 +29,6 @@ using crd::math::Quatf;
 using crd::math::Vec3f;
 using crd::scene::EntityId;
 using crd::scene::ObekArtifactBuilder;
-using crd::scene::ObekEntityGuid;
-using crd::scene::ObekInstantiation;
 using crd::scene::ObekLoader;
 using crd::scene::ObekResource;
 using crd::scene::Transform;

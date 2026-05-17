@@ -349,11 +349,11 @@ TEST_CASE("GJK: OBB rotated 45 deg about Z, separated along +X - distance matche
     const Quat<f32> q45z = crd::math::from_axis_angle(Vec3<f32>(0, 0, 1), 0.7853981633974F); // pi/4
     const Mat3<f32> r45z = crd::math::to_mat3(q45z);
     const OBB3<f32> b(Vec3<f32>(0), Vec3<f32>(1.0F, 1.0F, 1.0F), r45z);
-    const f32 X = 5.0F;
-    const GjkResult<f32> r = gjk_distance<f32>(a, xform(Vec3<f32>(0)), b, xform(Vec3<f32>(X, 0, 0)));
+    const f32 x_dist = 5.0F;
+    const GjkResult<f32> r = gjk_distance<f32>(a, xform(Vec3<f32>(0)), b, xform(Vec3<f32>(x_dist, 0, 0)));
     REQUIRE(r.converged);
     REQUIRE_FALSE(r.overlapping);
-    const f32 expected = (X - std::sqrt(2.0F)) - 1.0F;
+    const f32 expected = (x_dist - std::sqrt(2.0F)) - 1.0F;
     INFO("expected=" << expected << ", got=" << std::sqrt(r.distance_squared));
     REQUIRE(std::fabs(std::sqrt(r.distance_squared) - expected) <= 1e-3F);
 }

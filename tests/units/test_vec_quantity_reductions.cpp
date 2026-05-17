@@ -26,7 +26,6 @@
 
 using crd::math::cross;
 using crd::math::distance;
-using crd::math::distance_squared;
 using crd::math::dot;
 using crd::math::hadamard;
 using crd::math::length;

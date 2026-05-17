@@ -44,7 +44,6 @@ using crd::geometry::primitives::intersect_ray_aabb;
 using crd::geometry::primitives::Plane;
 using crd::geometry::primitives::Ray3;
 using crd::geometry::primitives::Sphere;
-using crd::math::dot;
 using crd::math::Vec3;
 
 struct Rng

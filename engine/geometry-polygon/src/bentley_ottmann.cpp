@@ -49,7 +49,7 @@ namespace crd::geometry::polygon
 {
 namespace
 {
-constexpr crd::u32 k_null_idx = std::numeric_limits<crd::u32>::max();
+constexpr crd::u32 kNullIdx = std::numeric_limits<crd::u32>::max();
 
 template <crd::math::MathScalar T>
 inline T orient2d_signed(const crd::math::Vec2<T>& a, const crd::math::Vec2<T>& b,
@@ -155,8 +155,8 @@ struct Event
     T        y = T{0};
     T        x = T{0};
     EvKind   kind;
-    crd::u32 seg_a = k_null_idx;
-    crd::u32 seg_b = k_null_idx; // intersection events only
+    crd::u32 seg_a = kNullIdx;
+    crd::u32 seg_b = kNullIdx; // intersection events only
     crd::math::Vec2<T> point{};   // intersection events only
 };
 
@@ -344,7 +344,7 @@ BOResult<T> bentley_ottmann_impl(crd::containers::ConstSpan<BOSegment<T>> segmen
         {
             if (status[i] == seg_id) { return i; }
         }
-        return k_null_idx;
+        return kNullIdx;
     };
 
     auto status_insert_at = [&](crd::u32 pos, crd::u32 seg_id) noexcept {
@@ -383,12 +383,12 @@ BOResult<T> bentley_ottmann_impl(crd::containers::ConstSpan<BOSegment<T>> segmen
         else if (e.kind == EvKind::End)
         {
             const crd::u32 pos = status_find(e.seg_a);
-            if (pos == k_null_idx) { continue; }
+            if (pos == kNullIdx) { continue; }
             // Neighbours that become adjacent after removal.
-            crd::u32 left  = (pos > 0U) ? status[pos - 1U] : k_null_idx;
-            crd::u32 right = (pos + 1U < status.size()) ? status[pos + 1U] : k_null_idx;
+            crd::u32 left  = (pos > 0U) ? status[pos - 1U] : kNullIdx;
+            crd::u32 right = (pos + 1U < status.size()) ? status[pos + 1U] : kNullIdx;
             status_erase_at(pos);
-            if (left != k_null_idx && right != k_null_idx)
+            if (left != kNullIdx && right != kNullIdx)
             {
                 enqueue_intersection(left, right, e.y);
             }
@@ -405,7 +405,7 @@ BOResult<T> bentley_ottmann_impl(crd::containers::ConstSpan<BOSegment<T>> segmen
             // Swap the two segments in status. Find them.
             const crd::u32 pa = status_find(e.seg_a);
             const crd::u32 pb = status_find(e.seg_b);
-            if (pa == k_null_idx || pb == k_null_idx) { continue; }
+            if (pa == kNullIdx || pb == kNullIdx) { continue; }
             // They must be adjacent at this point (BO invariant). If not,
             // skip — the swap doesn't apply (defensive guard against the
             // dedup logic firing twice on the same intersection).

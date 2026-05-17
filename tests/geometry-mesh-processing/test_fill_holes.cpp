@@ -241,7 +241,7 @@ TEST_CASE("fill_holes: cube minus 1 face (refine=on) -> Steiner refinement",
     // The DP yields 2 triangles each with area 0.5; their longest
     // vertex-to-centroid distance is sqrt(2)/3 * edge ≈ 0.47. The
     // too-coarse test (√2 · dist > σ) gives ≈ 0.67 vs 1 → NOT triggered
-    // ⇒ refinement converges without splits. Verify the algorithm
+    // ⇒ refinement converges without splits. verify the algorithm
     // gracefully handles "no refinement needed" too.
     AllocFixture f{};
     crd::containers::Array<Vec3<f32>> pos(&f.alloc);
@@ -291,19 +291,19 @@ TEST_CASE("fill_holes: refine triggers Steiner points when hole > local scale",
         }
     }
     // Triangulate the entire 3x3 quad grid (each quad → 2 triangles).
-    auto V = [](int i, int j) { return static_cast<u32>(j * 4 + i); };
+    auto vi = [](int i, int j) { return static_cast<u32>(j * 4 + i); };
     for (int j = 0; j < 3; ++j)
     {
         for (int i = 0; i < 3; ++i)
         {
             // Skip the center quad to make a hole.
             if (i == 1 && j == 1) { continue; }
-            idx.push_back(V(i, j));
-            idx.push_back(V(i + 1, j));
-            idx.push_back(V(i + 1, j + 1));
-            idx.push_back(V(i, j));
-            idx.push_back(V(i + 1, j + 1));
-            idx.push_back(V(i, j + 1));
+            idx.push_back(vi(i, j));
+            idx.push_back(vi(i + 1, j));
+            idx.push_back(vi(i + 1, j + 1));
+            idx.push_back(vi(i, j));
+            idx.push_back(vi(i + 1, j + 1));
+            idx.push_back(vi(i, j + 1));
         }
     }
     HalfEdgeMesh<f32> m{&f.alloc};
@@ -343,18 +343,18 @@ TEST_CASE("fill_holes: fairing converges on Steiner-refined patch",
                                      0.001F * static_cast<f32>(i * j)});
         }
     }
-    auto V = [](int i, int j) { return static_cast<u32>(j * 4 + i); };
+    auto vi = [](int i, int j) { return static_cast<u32>(j * 4 + i); };
     for (int j = 0; j < 3; ++j)
     {
         for (int i = 0; i < 3; ++i)
         {
             if (i == 1 && j == 1) { continue; }
-            idx.push_back(V(i, j));
-            idx.push_back(V(i + 1, j));
-            idx.push_back(V(i + 1, j + 1));
-            idx.push_back(V(i, j));
-            idx.push_back(V(i + 1, j + 1));
-            idx.push_back(V(i, j + 1));
+            idx.push_back(vi(i, j));
+            idx.push_back(vi(i + 1, j));
+            idx.push_back(vi(i + 1, j + 1));
+            idx.push_back(vi(i, j));
+            idx.push_back(vi(i + 1, j + 1));
+            idx.push_back(vi(i, j + 1));
         }
     }
     HalfEdgeMesh<f32> m{&f.alloc};

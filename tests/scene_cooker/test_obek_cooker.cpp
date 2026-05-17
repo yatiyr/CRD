@@ -99,6 +99,9 @@ TEST_CASE("Empty obek TOML cooks to a valid OBEK with zero entities", "[obek-coo
 {
     constexpr const char* kTomlText = "";
     crd::containers::Array<CookError> errors{crd::memory::default_allocator()};
+    // Empty-string StringView is the intent — the test exercises the
+    // zero-entity TOML path.
+    // NOLINTNEXTLINE(bugprone-string-constructor)
     auto bytes = obek_cooker_inline(crd::containers::StringView{kTomlText, 0}, make_ctx(), &errors);
     REQUIRE(errors.size() == 0);
     REQUIRE(bytes.size() > 0);
@@ -382,7 +385,9 @@ ObekCookContext make_ctx_with_resolver(const crd::containers::Array<InMemoryFile
     ctx.allocator        = crd::memory::default_allocator();
     ctx.obek_root_id     = kTestRootId;
     ctx.file_resolver    = &in_memory_resolver;
-    ctx.file_resolver_ud = const_cast<crd::containers::Array<InMemoryFile>*>(&files);
+    // const_cast: file_resolver_ud is type-erased void*; the in-memory
+    // resolver only reads the array, but the engine API takes non-const ud.
+    ctx.file_resolver_ud = const_cast<crd::containers::Array<InMemoryFile>*>(&files); // NOLINT(cppcoreguidelines-pro-type-const-cast)
     return ctx;
 }
 } // namespace

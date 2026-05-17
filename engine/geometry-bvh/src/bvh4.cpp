@@ -36,8 +36,8 @@ AABB3<f32> Bvh4Tree::bounds() const noexcept
 {
     if (is_empty())
     {
-        constexpr f32 inf = std::numeric_limits<f32>::infinity();
-        return AABB3<f32>(Vec3<f32>(inf, inf, inf), Vec3<f32>(-inf, -inf, -inf));
+        constexpr f32 kInf = std::numeric_limits<f32>::infinity();
+        return AABB3<f32>(Vec3<f32>(kInf, kInf, kInf), Vec3<f32>(-kInf, -kInf, -kInf));
     }
     return m_nodes[m_root].bounds;
 }

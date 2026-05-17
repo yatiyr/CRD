@@ -94,30 +94,30 @@ TEST_CASE("eylem v1a-material Material defaults match ADR-0069 contract",
     STATIC_REQUIRE(alignof(Material) ==  4);
     STATIC_REQUIRE(std::is_trivially_copyable_v<Material>);
 
-    constexpr Material m{};
+    constexpr Material kMat{};
     // Friction defaults
-    REQUIRE(m.friction_model       == FrictionModel::Coulomb);
-    REQUIRE(m.friction_combine     == CombineMode::GeometricMean); // ADR-0069 §2 default
-    REQUIRE(m.friction_static      == 0.5F);
-    REQUIRE(m.friction_dynamic     == 0.5F);
-    REQUIRE(m.friction_anisotropy.x == 1.0F);
-    REQUIRE(m.friction_anisotropy.y == 1.0F);
-    REQUIRE(m.friction_anisotropy.z == 1.0F);
-    REQUIRE(m.stribeck_velocity    == 0.01F);
-    REQUIRE(m.viscous_coefficient  == 0.0F);
+    REQUIRE(kMat.friction_model       == FrictionModel::Coulomb);
+    REQUIRE(kMat.friction_combine     == CombineMode::GeometricMean); // ADR-0069 §2 default
+    REQUIRE(kMat.friction_static      == 0.5F);
+    REQUIRE(kMat.friction_dynamic     == 0.5F);
+    REQUIRE(kMat.friction_anisotropy.x == 1.0F);
+    REQUIRE(kMat.friction_anisotropy.y == 1.0F);
+    REQUIRE(kMat.friction_anisotropy.z == 1.0F);
+    REQUIRE(kMat.stribeck_velocity    == 0.01F);
+    REQUIRE(kMat.viscous_coefficient  == 0.0F);
     // Restitution defaults
-    REQUIRE(m.restitution_model    == RestitutionModel::Constant);
-    REQUIRE(m.restitution_combine  == CombineMode::Max); // ADR-0069 §2 default (PhysX convention)
-    REQUIRE(m.restitution          == 0.0F);
-    REQUIRE(m.restitution_decay    == 0.0F);
+    REQUIRE(kMat.restitution_model    == RestitutionModel::Constant);
+    REQUIRE(kMat.restitution_combine  == CombineMode::Max); // ADR-0069 §2 default (PhysX convention)
+    REQUIRE(kMat.restitution          == 0.0F);
+    REQUIRE(kMat.restitution_decay    == 0.0F);
     // Surface defaults
-    REQUIRE(m.surface_velocity.x == 0.0F);
-    REQUIRE(m.surface_velocity.y == 0.0F);
-    REQUIRE(m.surface_velocity.z == 0.0F);
+    REQUIRE(kMat.surface_velocity.x == 0.0F);
+    REQUIRE(kMat.surface_velocity.y == 0.0F);
+    REQUIRE(kMat.surface_velocity.z == 0.0F);
     // Mass derivation default — water; designer-friendly (1m³ box → 1000 kg)
-    REQUIRE(m.density              == 1000.0F);
+    REQUIRE(kMat.density              == 1000.0F);
     // Damage / fracture reservation (post-v1; v1 reads but ignores)
-    REQUIRE(m.yield_stress         == 0.0F);
+    REQUIRE(kMat.yield_stress         == 0.0F);
 }
 
 TEST_CASE("eylem v1a-material CombineMode enum values are pinned",
@@ -184,14 +184,14 @@ TEST_CASE("eylem v1a-material MaterialId layout matches Body/Collider/Joint patt
 TEST_CASE("eylem v1a-material default_material_value matches Material{}",
           "[eylem][v1a][material]")
 {
-    constexpr Material a = default_material_value();
-    constexpr Material b{};
-    REQUIRE(a.friction_model    == b.friction_model);
-    REQUIRE(a.friction_static   == b.friction_static);
-    REQUIRE(a.friction_dynamic  == b.friction_dynamic);
-    REQUIRE(a.restitution_model == b.restitution_model);
-    REQUIRE(a.restitution       == b.restitution);
-    REQUIRE(a.density           == b.density);
+    constexpr Material kA = default_material_value();
+    constexpr Material kB{};
+    REQUIRE(kA.friction_model    == kB.friction_model);
+    REQUIRE(kA.friction_static   == kB.friction_static);
+    REQUIRE(kA.friction_dynamic  == kB.friction_dynamic);
+    REQUIRE(kA.restitution_model == kB.restitution_model);
+    REQUIRE(kA.restitution       == kB.restitution);
+    REQUIRE(kA.density           == kB.density);
 }
 
 TEST_CASE("eylem v1a DeterminismMode enum values are pinned", "[eylem][v1a][freeze]")
@@ -222,9 +222,9 @@ TEST_CASE("eylem v1a Collider variant layouts are pinned", "[eylem][v1a][freeze]
     STATIC_REQUIRE(sizeof(ColliderConvexHull) ==  8);
     STATIC_REQUIRE(sizeof(ColliderPlane)      == 16);
 
-    constexpr Collider c{};
-    REQUIRE(c.shape == ColliderShape::Sphere);
-    REQUIRE(c.sphere.radius == 1.0F);
+    constexpr Collider kCol{};
+    REQUIRE(kCol.shape == ColliderShape::Sphere);
+    REQUIRE(kCol.sphere.radius == 1.0F);
 }
 
 TEST_CASE("eylem v1a RigidBody POD layout + flag packing pinned", "[eylem][v1a][freeze]")
@@ -238,11 +238,11 @@ TEST_CASE("eylem v1a RigidBody POD layout + flag packing pinned", "[eylem][v1a][
     STATIC_REQUIRE(static_cast<int>(RigidBodyType::Kinematic) == 1);
     STATIC_REQUIRE(static_cast<int>(RigidBodyType::Dynamic)   == 2);
 
-    constexpr RigidBody b{};
-    REQUIRE(b.inv_mass.value == 0.0F);  // default = static
-    REQUIRE(b.linear_damping  == 0.05F);
-    REQUIRE(b.angular_damping == 0.05F);
-    REQUIRE(b.flags.type      == 0U);    // RigidBodyType::Static
+    constexpr RigidBody kBody{};
+    REQUIRE(kBody.inv_mass.value == 0.0F);  // default = static
+    REQUIRE(kBody.linear_damping  == 0.05F);
+    REQUIRE(kBody.angular_damping == 0.05F);
+    REQUIRE(kBody.flags.type      == 0U);    // RigidBodyType::Static
 }
 
 TEST_CASE("eylem v1a Joint layout + JointType pinned", "[eylem][v1a][freeze]")
@@ -256,32 +256,32 @@ TEST_CASE("eylem v1a Joint layout + JointType pinned", "[eylem][v1a][freeze]")
     STATIC_REQUIRE(static_cast<int>(JointType::Prismatic) == 3);
     STATIC_REQUIRE(static_cast<int>(JointType::Distance)  == 4);
 
-    constexpr Joint j{};
-    REQUIRE(j.type == JointType::Fixed);
-    REQUIRE(j.body_a.is_null());
-    REQUIRE(j.body_b.is_null());
-    REQUIRE_FALSE(j.limit.enabled);
-    REQUIRE(j.break_force  == 0.0F);
-    REQUIRE(j.break_torque == 0.0F);
+    constexpr Joint kJoint{};
+    REQUIRE(kJoint.type == JointType::Fixed);
+    REQUIRE(kJoint.body_a.is_null());
+    REQUIRE(kJoint.body_b.is_null());
+    REQUIRE_FALSE(kJoint.limit.enabled);
+    REQUIRE(kJoint.break_force  == 0.0F);
+    REQUIRE(kJoint.break_torque == 0.0F);
 }
 
 TEST_CASE("eylem v1a PhysicsConfig defaults match documented contract", "[eylem][v1a][freeze]")
 {
-    constexpr PhysicsConfig c{};
-    REQUIRE(c.gravity.y.value == -9.81F);
-    REQUIRE(c.fixed_dt.value                   == 1.0F / 60.0F);
-    REQUIRE(c.velocity_iterations        == 8U);
-    REQUIRE(c.position_iterations        == 3U);
-    REQUIRE(c.max_bodies                 == 65536U);
-    REQUIRE(c.max_contacts_per_pair      == 4U);
-    REQUIRE(c.contact_offset.value             == 0.02F);
-    REQUIRE(c.contact_breaking_threshold.value == 0.02F);
-    REQUIRE(c.sleep_linear_threshold.value     == 0.01F);
-    REQUIRE(c.sleep_angular_threshold.value    == 0.01F);
-    REQUIRE(c.sleep_time_threshold.value       == 0.5F);
-    REQUIRE(c.determinism                == DeterminismMode::CrossPlatform);
-    REQUIRE(c.warm_starting_enabled);
-    REQUIRE_FALSE(c.ccd_enabled);
+    constexpr PhysicsConfig kCfg{};
+    REQUIRE(kCfg.gravity.y.value == -9.81F);
+    REQUIRE(kCfg.fixed_dt.value                   == 1.0F / 60.0F);
+    REQUIRE(kCfg.velocity_iterations        == 8U);
+    REQUIRE(kCfg.position_iterations        == 3U);
+    REQUIRE(kCfg.max_bodies                 == 65536U);
+    REQUIRE(kCfg.max_contacts_per_pair      == 4U);
+    REQUIRE(kCfg.contact_offset.value             == 0.02F);
+    REQUIRE(kCfg.contact_breaking_threshold.value == 0.02F);
+    REQUIRE(kCfg.sleep_linear_threshold.value     == 0.01F);
+    REQUIRE(kCfg.sleep_angular_threshold.value    == 0.01F);
+    REQUIRE(kCfg.sleep_time_threshold.value       == 0.5F);
+    REQUIRE(kCfg.determinism                == DeterminismMode::CrossPlatform);
+    REQUIRE(kCfg.warm_starting_enabled);
+    REQUIRE_FALSE(kCfg.ccd_enabled);
 }
 
 // ===========================================================================
@@ -479,10 +479,10 @@ TEST_CASE("eylem v1a-material-b NullPhysicsScene exposes MaterialPool API",
 TEST_CASE("eylem v1a-material-c Collider defaults material to MaterialId::default_material",
           "[eylem][v1a][material]")
 {
-    constexpr Collider c{};
-    REQUIRE(c.material.index()      == MaterialId::default_material().index());
-    REQUIRE(c.material.generation() == MaterialId::default_material().generation());
-    REQUIRE_FALSE(c.material.is_null());
+    constexpr Collider kCol{};
+    REQUIRE(kCol.material.index()      == MaterialId::default_material().index());
+    REQUIRE(kCol.material.generation() == MaterialId::default_material().generation());
+    REQUIRE_FALSE(kCol.material.is_null());
 }
 
 TEST_CASE("eylem v1a-material-c add_collider 2-arg overload reads pre-set Collider::material",

@@ -605,13 +605,13 @@ namespace
 // reach into worker fibers).
 struct ConcurrencyCorpus
 {
-    static constexpr u32 k_queries = 16U;
-    static constexpr u32 k_iters_per_query = 25U; // 16 × 25 = 400 query invocations
+    static constexpr u32 kQueries = 16U;
+    static constexpr u32 kItersPerQuery = 25U; // 16 × 25 = 400 query invocations
 
     crd::memory::TlsfAllocator alloc{1U << 22};
     SpatialHash<f32>           tree{&alloc, SpatialHashConfig<f32>{2.0F, 1024U}};
-    AABB3<f32>                 queries[k_queries]{};
-    crd::containers::Array<u32> ref[k_queries] = {
+    AABB3<f32>                 queries[kQueries]{};
+    crd::containers::Array<u32> ref[kQueries] = {
         crd::containers::Array<u32>{&alloc}, crd::containers::Array<u32>{&alloc},
         crd::containers::Array<u32>{&alloc}, crd::containers::Array<u32>{&alloc},
         crd::containers::Array<u32>{&alloc}, crd::containers::Array<u32>{&alloc},
@@ -638,7 +638,7 @@ TEST_CASE("SpatialHash concurrent queries via crd-jobs fiber pool",
         (void)corpus->tree.insert(a, i);
     }
     std::uniform_real_distribution<f32> uqh(1.0F, 8.0F);
-    for (u32 q = 0; q < ConcurrencyCorpus::k_queries; ++q)
+    for (u32 q = 0; q < ConcurrencyCorpus::kQueries; ++q)
     {
         corpus->queries[q] = aabb_around(Vec3f{uc(rng), uc(rng), uc(rng)}, uqh(rng));
         corpus->tree.overlap(corpus->queries[q], corpus->ref[q]);
@@ -649,15 +649,15 @@ TEST_CASE("SpatialHash concurrent queries via crd-jobs fiber pool",
     // crd-jobs thread pool (4 workers per the JobsListener's config). Each
     // task constructs its own TlsfAllocator + SpatialHashScratch — total
     // isolation. Atomic mismatch counter aggregated across all fibers.
-    constexpr u32 total_tasks = ConcurrencyCorpus::k_queries * ConcurrencyCorpus::k_iters_per_query;
+    constexpr u32 kTotalTasks = ConcurrencyCorpus::kQueries * ConcurrencyCorpus::kItersPerQuery;
     auto* corpus_ptr = corpus.get(); // SBO-trivial pointer for the lambda capture
 
     crd::jobs::Counter* counter = crd::jobs::parallel_for(
-        total_tasks, /*num_jobs=*/16U,
+        kTotalTasks, /*num_jobs=*/16U,
         [corpus_ptr](crd::u32 begin, crd::u32 end) noexcept {
             for (crd::u32 task_idx = begin; task_idx < end; ++task_idx)
             {
-                const u32 q = task_idx % ConcurrencyCorpus::k_queries;
+                const u32 q = task_idx % ConcurrencyCorpus::kQueries;
                 // Per-task fresh allocator + scratch — maximally adversarial.
                 crd::memory::TlsfAllocator local_alloc{1U << 16};
                 SpatialHashScratch         local_scratch(&local_alloc);

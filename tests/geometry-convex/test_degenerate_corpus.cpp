@@ -46,15 +46,12 @@ using crd::usize;
 using crd::geometry::convex::compute_contact;
 using crd::geometry::convex::gjk_distance;
 using crd::geometry::convex::gjk_overlap;
-using crd::geometry::convex::PointShape;
 using crd::geometry::convex::sat_obb_obb;
 
 using crd::geometry::primitives::Capsule3;
 using crd::geometry::primitives::ConvexHullView;
 using crd::geometry::primitives::OBB3;
-using crd::geometry::primitives::Plane;
 using crd::geometry::primitives::Sphere;
-using crd::geometry::primitives::support;
 
 using crd::math::Mat3;
 using crd::math::Quat;
@@ -359,7 +356,8 @@ TEST_CASE("degen: GJK at 1e6 origin still produces a valid result (f32)",
 {
     // 1 Mm — at the edge of f32 sub-mm precision. We don't claim accuracy,
     // only no UB.
-    const f32 R = 1.0e6F;
+    // R = world-origin radius for the far-from-origin sanity test.
+    const f32 R = 1.0e6F; // NOLINT(readability-identifier-naming)
     const Sphere<f32> a(Vec3<f32>(0), 1.0F);
     const Sphere<f32> b(Vec3<f32>(0), 1.0F);
     const Transform<f32> xa(Vec3<f32>(R, 0, 0), Quat<f32>::identity());
@@ -373,7 +371,8 @@ TEST_CASE("degen: GJK at 1e7 origin still produces a valid result (f64)",
           "[v2-close][degen][far][f64]")
 {
     // 10 Mm — well outside f32 sub-meter precision; f64 holds.
-    const f64 R = 1.0e7;
+    // R = world-origin radius for the far-from-origin sanity test.
+    const f64 R = 1.0e7; // NOLINT(readability-identifier-naming)
     const Sphere<f64> a(Vec3<f64>(0), 1.0);
     const Sphere<f64> b(Vec3<f64>(0), 1.0);
     const Transform<f64> xa(Vec3<f64>(R, 0, 0), Quat<f64>::identity());

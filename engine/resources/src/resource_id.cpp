@@ -164,7 +164,7 @@ ResourceId ResourceId::parse(crd::containers::StringView text) noexcept
 
 crd::containers::String ResourceId::to_string(crd::memory::IAllocator* a) const
 {
-    static const char kHex[] = "0123456789abcdef";
+    static const char hex[] = "0123456789abcdef";
 
     crd::u8 raw[16];
     for (int i = 0; i < 16; ++i)
@@ -180,8 +180,8 @@ crd::containers::String ResourceId::to_string(crd::memory::IAllocator* a) const
         {
             buf[pos++] = '-';
         }
-        buf[pos++] = kHex[raw[i] >> 4U];
-        buf[pos++] = kHex[raw[i] & 0x0FU];
+        buf[pos++] = hex[raw[i] >> 4U];
+        buf[pos++] = hex[raw[i] & 0x0FU];
     }
     buf[36] = '\0';
 

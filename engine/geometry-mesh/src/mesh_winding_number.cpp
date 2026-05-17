@@ -18,7 +18,7 @@ using crd::math::Vec3;
 namespace
 {
 
-constexpr crd::f32 k_inv_four_pi_f = 0.0795774715459476F; // 1 / (4π)
+constexpr crd::f32 kInvFourPiF = 0.0795774715459476F; // 1 / (4π)
 
 // Van Oosterom-Strackee 1983 — signed solid angle of triangle (v0, v1, v2)
 // at point p. `a`, `b`, `c` are the offset vectors (vi - p) precomputed
@@ -81,7 +81,7 @@ crd::f32 mesh_winding_number(const TriangleMeshViewf& view,
         w_sum += solid_angle(a, b, c);
     }
 
-    return w_sum * k_inv_four_pi_f;
+    return w_sum * kInvFourPiF;
 }
 
 } // namespace crd::geometry::mesh

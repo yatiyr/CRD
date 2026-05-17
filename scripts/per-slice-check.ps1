@@ -19,7 +19,12 @@
 #   - win-tidy:  catches clang-tidy rule violations
 #
 # Usage:
-#   .\scripts\per-slice-check.ps1                # all four configs
+#   .\scripts\per-slice-check.ps1                # all four configs (sequential)
+#   .\scripts\per-slice-check.ps1 -Parallel      # all four configs in parallel
+#                                                  (each in its own Start-Job;
+#                                                   total ninja threads = NumProc/NumJobs;
+#                                                   logs to scripts\.per-slice-logs\)
+#   .\scripts\per-slice-check.ps1 -Parallel -ParallelJobs 4   # override per-job ninja -j
 #   .\scripts\per-slice-check.ps1 -SkipShipping  # skip win-shipping (slow LTO)
 #   .\scripts\per-slice-check.ps1 -SkipTidy      # skip win-tidy (slow clang-tidy)
 #   .\scripts\per-slice-check.ps1 -SkipAsan      # skip win-asan (rarely needed)
@@ -33,6 +38,8 @@ param(
     [switch]$SkipTidy,
     [switch]$SkipAsan,
     [switch]$Reconfigure,
+    [switch]$Parallel,
+    [int]$ParallelJobs = 0,
     [string]$VcvarsPath = 'C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat',
     [string]$AsanRuntimeDir = 'C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.50.35717\bin\Hostx64\x64',
     [string]$VswhereDir = 'C:\Program Files (x86)\Microsoft Visual Studio\Installer'
@@ -41,6 +48,116 @@ param(
 $ErrorActionPreference = 'Continue'
 $repoRoot = (Resolve-Path "$PSScriptRoot/..").Path
 $startTime = Get-Date
+
+# -Parallel mode: build each requested config in its own background job, then
+# collect outcomes. The 4 presets have independent `build/<preset>/` dirs so
+# they don't fight each other on filesystem state; ASan PATH and ctest are
+# per-job so env mutation is isolated. Wall-time win is biggest when win-
+# shipping (LTO-link-bound, single-threaded) overlaps with the CPU-bound
+# debug/asan/tidy builds.
+if ($Parallel)
+{
+    Write-Host '====================================================================' -ForegroundColor Cyan
+    Write-Host '  PER-SLICE VERIFICATION (parallel mode)                            ' -ForegroundColor Cyan
+    Write-Host '====================================================================' -ForegroundColor Cyan
+
+    $presets = @(@{ name = 'win-debug'; runCTest = $true; asan = $false })
+    if (-not $SkipAsan)     { $presets += @{ name = 'win-asan';     runCTest = $true;  asan = $true  } }
+    if (-not $SkipShipping) { $presets += @{ name = 'win-shipping'; runCTest = $true;  asan = $false } }
+    if (-not $SkipTidy)     { $presets += @{ name = 'win-tidy';     runCTest = $false; asan = $false } }
+
+    # Default ninja parallelism per job = (NumProc / NumJobs), min 1, so total
+    # CPU pressure is bounded. Override via -ParallelJobs.
+    $totalCpu = [Environment]::ProcessorCount
+    $perJobJobs = if ($ParallelJobs -gt 0) { $ParallelJobs } else { [Math]::Max(1, [Math]::Floor($totalCpu / $presets.Count)) }
+
+    $logsDir = Join-Path $repoRoot 'scripts\.per-slice-logs'
+    if (-not (Test-Path $logsDir)) { New-Item -ItemType Directory -Force $logsDir | Out-Null }
+
+    $jobs = @()
+    foreach ($p in $presets)
+    {
+        $cfgName       = $p.name
+        $cfgRunCTest   = [bool]$p.runCTest
+        $cfgIsAsan     = [bool]$p.asan
+        $cfgReconfigure = $Reconfigure.IsPresent
+        $cfgLogPath    = Join-Path $logsDir ("{0}.log" -f $cfgName)
+        # Truncate the log up-front so a re-run doesn't show stale output.
+        Set-Content -Path $cfgLogPath -Value '' -Encoding utf8
+
+        $jobs += Start-Job -Name "perslice-$cfgName" -ScriptBlock {
+            param($name, $runCTest, $isAsan, $doReconfig, $perJob,
+                  $vcvarsPath, $vswhereDir, $asanRuntimeDir, $repoRoot, $logPath)
+
+            # Compose the cmd line that sources vcvars then runs build/ctest
+            # for THIS preset. Each parallel branch must source vcvars itself
+            # — env from the parent process isn't inherited by cmd /c here.
+            $configStep = if ($doReconfig) { "cmake --preset $name && " } else { '' }
+            $asanPathStep = if ($isAsan) { "set ""PATH=$asanRuntimeDir;%PATH%"" && " } else { '' }
+            $ctestStep = if ($runCTest) { "&& ${asanPathStep}ctest --preset $name --output-on-failure --parallel $perJob" } else { '' }
+
+            $cmdLine =
+                "set ""PATH=$vswhereDir;%PATH%"" && " +
+                "call ""$vcvarsPath"" >nul && " +
+                "cd /d ""$repoRoot"" && " +
+                "${configStep}cmake --build --preset $name --parallel $perJob $ctestStep"
+
+            cmd /c $cmdLine *> $logPath
+            $ec = $LASTEXITCODE
+
+            # Distinguish build-fail vs ctest-fail by re-scanning the log tail.
+            $status = 'PASS'
+            if ($ec -ne 0)
+            {
+                $tail = Get-Content -Path $logPath -Tail 200 -ErrorAction SilentlyContinue
+                if ($tail -match 'tests failed|failed during compilation')
+                {
+                    $status = "CTEST-FAIL exit=$ec"
+                } else {
+                    $status = "BUILD-FAIL exit=$ec"
+                }
+            }
+            elseif ($runCTest) { $status = 'PASS (build+ctest)' }
+            else               { $status = 'PASS (build)' }
+
+            [pscustomobject]@{ name = $name; status = $status; exit = $ec; log = $logPath }
+        } -ArgumentList $cfgName, $cfgRunCTest, $cfgIsAsan, $cfgReconfigure, $perJobJobs,
+                        $VcvarsPath, $VswhereDir, $AsanRuntimeDir, $repoRoot, $cfgLogPath
+    }
+
+    Write-Host ("Spawned {0} parallel jobs, {1} ninja threads each (CPUs={2})..." -f $presets.Count, $perJobJobs, $totalCpu)
+    Write-Host '(Logs are streamed to scripts\.per-slice-logs\<preset>.log.)'
+
+    $results = $jobs | Wait-Job | Receive-Job
+    $jobs | Remove-Job -Force
+
+    Write-Host ''
+    Write-Host '----- PER-SLICE SUMMARY (parallel) -----' -ForegroundColor Cyan
+    $failedCount = 0
+    foreach ($r in $results)
+    {
+        if ($r.status -like 'PASS*')
+        {
+            Write-Host ("  {0,-18} {1}" -f $r.name, $r.status) -ForegroundColor Green
+        } else {
+            Write-Host ("  {0,-18} {1}    [log: {2}]" -f $r.name, $r.status, $r.log) -ForegroundColor Red
+            $failedCount++
+        }
+    }
+
+    $elapsed = (Get-Date) - $startTime
+    $elapsedStr = '{0:mm}:{0:ss}' -f $elapsed
+    Write-Host ''
+    Write-Host '====================================================================' -ForegroundColor Cyan
+    if ($failedCount -eq 0)
+    {
+        Write-Host ('  RESULT: PASS  (elapsed ' + $elapsedStr + ', parallel)') -ForegroundColor Green
+    } else {
+        Write-Host ('  RESULT: FAIL (' + $failedCount + ' config(s) failed)  (elapsed ' + $elapsedStr + ', parallel)') -ForegroundColor Red
+    }
+    Write-Host '====================================================================' -ForegroundColor Cyan
+    exit $failedCount
+}
 
 # Build the preset list
 $presetSpec = "@{ name='win-debug'; runCTest=`$true; asan=`$false }"

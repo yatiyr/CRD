@@ -110,14 +110,14 @@ TEST_CASE("eylem v1b-c EylemSystem integrates motion under gravity",
     // dt = 1/60 and 60 steps that's a known +0.0817 m delta from the
     // continuous formula. We assert against the discrete-Euler closed
     // form: Δp = -½ · g · dt · (N · dt + dt) = -g · dt² · N · (N+1) / 2.
-    constexpr crd::f32 dt    = 1.0F / 60.0F;
-    constexpr crd::u32 nstep = 60U;
-    constexpr crd::f32 g     = -9.81F;
+    constexpr crd::f32 kDt    = 1.0F / 60.0F;
+    constexpr crd::u32 kNstep = 60U;
+    constexpr crd::f32 kG     = -9.81F;
 
     BodyPool      pool{crd::memory::default_allocator(), 64U};
     PhysicsConfig cfg{};
-    cfg.fixed_dt = crd::units::Duration32{dt};
-    cfg.gravity = crd::math::from_raw_vec<crd::units::dim::Acceleration>(crd::math::Vec3f{0.0F, g, 0.0F});
+    cfg.fixed_dt = crd::units::Duration32{kDt};
+    cfg.gravity = crd::math::from_raw_vec<crd::units::dim::Acceleration>(crd::math::Vec3f{0.0F, kG, 0.0F});
     EylemSystem  system{pool, cfg};
 
     crd::scene::World world{crd::memory::default_allocator()};
@@ -143,7 +143,7 @@ TEST_CASE("eylem v1b-c EylemSystem integrates motion under gravity",
 
     // Run N substeps directly (bypass the schedule for unit-test
     // isolation; the schedule path is exercised by the Schedule test).
-    for (crd::u32 i = 0U; i < nstep; ++i)
+    for (crd::u32 i = 0U; i < kNstep; ++i)
     {
         system.run(world);
     }
@@ -152,8 +152,8 @@ TEST_CASE("eylem v1b-c EylemSystem integrates motion under gravity",
     //   after step k: v_k = g·k·dt
     //                p_k = sum_{i=1..k} v_i · dt = g·dt² · sum_{i=1..k} i
     //                    = g·dt² · k·(k+1)/2
-    const crd::f32 expected_y = g * dt * dt * static_cast<crd::f32>(nstep)
-                                * static_cast<crd::f32>(nstep + 1U) * 0.5F;
+    const crd::f32 expected_y = kG * kDt * kDt * static_cast<crd::f32>(kNstep)
+                                * static_cast<crd::f32>(kNstep + 1U) * 0.5F;
 
     const auto* tr = world.get_component<crd::scene::Transform>(e);
     REQUIRE(tr != nullptr);
@@ -164,7 +164,7 @@ TEST_CASE("eylem v1b-c EylemSystem integrates motion under gravity",
     // Pool state should mirror what got synced to Transform.
     const RigidBody read = pool.read(body_id);
     REQUIRE(std::fabs(read.position.y.value - expected_y) < 1e-3F);
-    REQUIRE(std::fabs(read.linear_velocity.y.value - g * dt * static_cast<crd::f32>(nstep)) < 1e-3F);
+    REQUIRE(std::fabs(read.linear_velocity.y.value - kG * kDt * static_cast<crd::f32>(kNstep)) < 1e-3F);
 }
 
 TEST_CASE("eylem v1b-c EylemSystem under World::step_fixed runs expected substep count",
@@ -176,15 +176,15 @@ TEST_CASE("eylem v1b-c EylemSystem under World::step_fixed runs expected substep
     // below 10 → floor = 9 → off-by-one substep). v1f scheduler may add
     // a deterministic-mode flag with epsilon-snap; for v1b-c the test
     // simply uses a power-of-two ratio.
-    constexpr crd::f32 dt          = 1.0F / 64.0F;
-    constexpr crd::f32 g           = -9.81F;
-    constexpr crd::u32 nstep_seed  = 10U;
-    constexpr crd::f32 frame_dt    = static_cast<crd::f32>(nstep_seed) * dt; // 10/64 exact
+    constexpr crd::f32 kDt         = 1.0F / 64.0F;
+    constexpr crd::f32 kG          = -9.81F;
+    constexpr crd::u32 kNstepSeed  = 10U;
+    constexpr crd::f32 kFrameDt    = static_cast<crd::f32>(kNstepSeed) * kDt; // 10/64 exact
 
     BodyPool      pool{crd::memory::default_allocator(), 64U};
     PhysicsConfig cfg{};
-    cfg.fixed_dt = crd::units::Duration32{dt};
-    cfg.gravity = crd::math::from_raw_vec<crd::units::dim::Acceleration>(crd::math::Vec3f{0.0F, g, 0.0F});
+    cfg.fixed_dt = crd::units::Duration32{kDt};
+    cfg.gravity = crd::math::from_raw_vec<crd::units::dim::Acceleration>(crd::math::Vec3f{0.0F, kG, 0.0F});
 
     crd::scene::World world{crd::memory::default_allocator()};
     world.register_component<crd::scene::Transform>(crd::scene::StorageHint::Archetype);
@@ -208,13 +208,13 @@ TEST_CASE("eylem v1b-c EylemSystem under World::step_fixed runs expected substep
     // step_fixed accumulates frame_dt against fixed_dt and runs the
     // EylemSystem floor(frame_dt / fixed_dt) times. Here that is 10
     // substeps. max_substeps = 32 ensures we don't get clamped.
-    world.step_fixed(static_cast<crd::f64>(frame_dt),
-                     static_cast<crd::f64>(dt),
+    world.step_fixed(static_cast<crd::f64>(kFrameDt),
+                     static_cast<crd::f64>(kDt),
                      /*max_substeps=*/32U);
 
     // Discrete-Euler closed form for 10 substeps under gravity from rest.
-    const crd::f32 expected_y = g * dt * dt * static_cast<crd::f32>(nstep_seed)
-                                * static_cast<crd::f32>(nstep_seed + 1U) * 0.5F;
+    const crd::f32 expected_y = kG * kDt * kDt * static_cast<crd::f32>(kNstepSeed)
+                                * static_cast<crd::f32>(kNstepSeed + 1U) * 0.5F;
 
     const auto* tr = world.get_component<crd::scene::Transform>(e);
     REQUIRE(tr != nullptr);

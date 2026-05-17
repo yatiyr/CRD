@@ -5,6 +5,7 @@
 #include <crd/geometry/primitives/is_finite.hpp>
 #include <crd/math/vec.hpp>
 
+#include <algorithm>
 #include <limits>
 
 namespace crd::geometry::bvh
@@ -25,7 +26,7 @@ using detail::SplitChoice;
 using detail::stable_partition_by_bin;
 using detail::sweep_for_split;
 
-constexpr f32 k_inf = std::numeric_limits<f32>::infinity();
+constexpr f32 kInf = std::numeric_limits<f32>::infinity();
 
 // A node + the [first, count) slice of the leaf-order index array it owns + the
 // recursion depth. The build is an explicit-stack DFS (no native recursion).
@@ -43,7 +44,7 @@ AABB3<f32> BvhTree::bounds() const noexcept
 {
     if (is_empty())
     {
-        return AABB3<f32>(Vec3<f32>(k_inf, k_inf, k_inf), Vec3<f32>(-k_inf, -k_inf, -k_inf));
+        return AABB3<f32>(Vec3<f32>(kInf, kInf, kInf), Vec3<f32>(-kInf, -kInf, -kInf));
     }
     return m_nodes[m_root].bounds;
 }
@@ -61,7 +62,7 @@ BvhTree bvh_build(crd::containers::ConstSpan<AABB3<f32>> prims, crd::memory::IAl
     {
         return tree;
     }
-    const u32 bins = opts.sah_bins < 2U ? 2U : (opts.sah_bins > k_max_bins ? k_max_bins : opts.sah_bins);
+    const u32 bins = std::clamp<u32>(opts.sah_bins, 2U, k_max_bins);
     const u32 max_leaf = opts.max_leaf_prims < 1U ? 1U : static_cast<u32>(opts.max_leaf_prims);
 
     // Working data, all on the tree's allocator.

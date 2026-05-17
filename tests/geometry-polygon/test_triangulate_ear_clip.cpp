@@ -27,7 +27,6 @@ using crd::u32;
 using crd::usize;
 using crd::math::Vec2;
 using crd::geometry::polygon::Polygon2;
-using crd::geometry::polygon::PolygonView2;
 using crd::geometry::polygon::Ring2;
 using crd::geometry::polygon::signed_area;
 using crd::geometry::polygon::TriangulateStatus;
@@ -171,14 +170,14 @@ TEST_CASE("triangulate_ear_clip: every triangle is CCW for arbitrary concave pol
     // A canonical 5-point star with proper interleaved outer/inner radii.
     // Outer radius 1.0, inner radius 0.382 (golden-ratio inset); start
     // at top, go CCW. 10 vertices, 5 concave + 5 convex.
-    constexpr f32 PI    = 3.14159265358979F;
-    constexpr f32 r_out = 1.0F;
-    constexpr f32 r_in  = 0.382F;
+    constexpr f32 kPi   = 3.14159265358979F;
+    constexpr f32 kROut = 1.0F;
+    constexpr f32 kRIn  = 0.382F;
     crd::containers::Array<Vec2<f32>> star(&f.alloc);
     for (u32 i = 0; i < 10U; ++i)
     {
-        const f32 r     = (i % 2U == 0U) ? r_out : r_in;
-        const f32 theta = PI * 0.5F - 2.F * PI * static_cast<f32>(i) / 10.F; // CW pass
+        const f32 r     = (i % 2U == 0U) ? kROut : kRIn;
+        const f32 theta = kPi * 0.5F - 2.F * kPi * static_cast<f32>(i) / 10.F; // CW pass
         star.push_back(Vec2<f32>{r * std::cos(theta), r * std::sin(theta)});
     }
     // We built it CW (because we wanted to walk the star outline); reverse for CCW.

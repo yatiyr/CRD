@@ -86,6 +86,7 @@
 #include <crd/math/vec.hpp>
 #include <crd/memory/allocator.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 
@@ -123,7 +124,7 @@ T dihedral_penalty(const crd::math::Vec3<T>& n1,
                     const crd::math::Vec3<T>& n2) noexcept
 {
     const T d = crd::math::dot(n1, n2);
-    const T clamped = d > T{1} ? T{1} : (d < T{-1} ? T{-1} : d);
+    const T clamped = std::clamp(d, T{-1}, T{1});
     return T{1} - clamped;
 }
 
@@ -175,7 +176,8 @@ void precompute_outside_normals(const HalfEdgeMesh<T>&                  m,
                                   const crd::containers::Array<crd::u32>& loop,
                                   crd::containers::Array<crd::math::Vec3<T>>& out_normals)
 {
-    const crd::u32 N = static_cast<crd::u32>(loop.size());
+    // N = loop vertex count per Liepa 1997 §3 DP-table notation.
+    const crd::u32 N = static_cast<crd::u32>(loop.size()); // NOLINT(readability-identifier-naming)
     out_normals.resize(N, crd::math::Vec3<T>{T{0}, T{0}, T{0}});
     for (crd::u32 i = 0; i < N; ++i)
     {
@@ -210,7 +212,8 @@ void dp_compute(const crd::containers::Array<crd::math::Vec3<T>>& loop_positions
                  crd::containers::Array<T>&                         W_dihedral,
                  crd::containers::Array<crd::u32>&                  O)
 {
-    const crd::u32 N = static_cast<crd::u32>(loop_positions.size());
+    // N = loop vertex count per Liepa 1997 §3 DP-table notation.
+    const crd::u32 N = static_cast<crd::u32>(loop_positions.size()); // NOLINT(readability-identifier-naming)
     W_area.resize(static_cast<crd::usize>(N) * N, T{0});
     W_dihedral.resize(static_cast<crd::usize>(N) * N, T{0});
     O.resize(static_cast<crd::usize>(N) * N, crd::u32{0});
@@ -229,8 +232,9 @@ void dp_compute(const crd::containers::Array<crd::math::Vec3<T>>& loop_positions
                 const auto& pi = loop_positions[i];
                 const auto& pm = loop_positions[m];
                 const auto& pk = loop_positions[k];
-                const T     area_T = triangle_area(pi, pm, pk);
-                const auto  n_T    = triangle_normal(pi, pm, pk);
+                // area_T / n_T = triangle area + normal per Liepa 1997 §3 notation.
+                const T     area_T = triangle_area(pi, pm, pk);     // NOLINT(readability-identifier-naming)
+                const auto  n_T    = triangle_normal(pi, pm, pk);   // NOLINT(readability-identifier-naming)
 
                 T dih_im = T{0};
                 if (m == i + 1U)
@@ -302,7 +306,8 @@ void compute_loop_sigma(const HalfEdgeMesh<T>&                  input,
                          const crd::containers::Array<crd::u32>& loop_global_indices,
                          crd::containers::Array<T>&              out_sigma)
 {
-    const crd::u32 N = static_cast<crd::u32>(loop_global_indices.size());
+    // N = loop vertex count per Liepa 1997 §3 notation.
+    const crd::u32 N = static_cast<crd::u32>(loop_global_indices.size()); // NOLINT(readability-identifier-naming)
     out_sigma.resize(N, T{0});
     for (crd::u32 i = 0; i < N; ++i)
     {
@@ -635,7 +640,8 @@ HalfEdgeMesh<T> fill_holes(const HalfEdgeMesh<T>&        input,
     for (crd::u32 li = 0; li < loops.size(); ++li)
     {
         const auto&    loop_globals = loops[li];
-        const crd::u32 N            = static_cast<crd::u32>(loop_globals.size());
+        // N = loop vertex count per Liepa 1997 §3 notation.
+        const crd::u32 N            = static_cast<crd::u32>(loop_globals.size()); // NOLINT(readability-identifier-naming)
         if (N < 3U) { continue; }
         if (N > opts.max_hole_size)
         {
@@ -654,10 +660,10 @@ HalfEdgeMesh<T> fill_holes(const HalfEdgeMesh<T>&        input,
             patch_positions.push_back(global_positions[loop_globals[vi]]);
         }
 
-        // §3 DP.
-        crd::containers::Array<T>        W_area(alloc);
-        crd::containers::Array<T>        W_dihedral(alloc);
-        crd::containers::Array<crd::u32> O(alloc);
+        // §3 DP. W_area / W_dihedral / O are the Liepa 1997 §3 DP tables.
+        crd::containers::Array<T>        W_area(alloc);     // NOLINT(readability-identifier-naming)
+        crd::containers::Array<T>        W_dihedral(alloc); // NOLINT(readability-identifier-naming)
+        crd::containers::Array<crd::u32> O(alloc);          // NOLINT(readability-identifier-naming)
         dp_compute(patch_positions, outside_normals, opts.dihedral_lambda, W_area, W_dihedral, O);
 
         // §3 reconstruct: produces LOCAL indices (0..N-1) into patch_positions.

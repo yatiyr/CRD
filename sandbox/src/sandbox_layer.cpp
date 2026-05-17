@@ -1076,7 +1076,8 @@ void SandboxLayer::try_finalize_pending_load()
         return;
     }
 
-    crd::u32 total_verts = 0, total_idx = 0;
+    crd::u32 total_verts = 0;
+    crd::u32 total_idx = 0;
     for (const auto& p : cpu->primitives) { total_verts += p.vertex_count; total_idx += p.index_count; }
     entry.cached_verts   = total_verts;
     entry.cached_indices = total_idx;
@@ -1365,7 +1366,8 @@ void SandboxLayer::on_render()
     ImGui::Checkbox("Wireframe", &m_show_wireframe);
     ImGui::Separator();
 
-    crd::u32 procedural_count = 0, imported_count = 0;
+    crd::u32 procedural_count = 0;
+    crd::u32 imported_count = 0;
     for (const auto& a : m_assets)
     {
         if (a.kind == AssetKind::Procedural) ++procedural_count;
@@ -1410,7 +1412,9 @@ void SandboxLayer::on_render()
         ImGui::Text("Name:    %s", a.display_name.c_str());
         ImGui::Text("Source:  %s", a.kind == AssetKind::Procedural ? "Procedural" : "glTF");
         if (is_loading)
+        {
             ImGui::TextColored({0.9F, 0.7F, 0.2F, 1.0F}, "Status:  loading...");
+        }
         else
         {
             ImGui::Text("Verts:   %u", a.cached_verts);
@@ -1454,7 +1458,9 @@ void SandboxLayer::on_render()
         }
     }
     else
+    {
         ImGui::TextDisabled("(select an asset)");
+    }
     ImGui::End();
 
     // d4: crd-draw control panel. Mutates m_draw_cfg + the crd-draw
@@ -1577,7 +1583,9 @@ void SandboxLayer::render_scene(crd::rhi::CommandBuffer& cmd, crd::rhi::Image& s
                 cmd.draw_indexed(r.index_count, 0, 0);
             }
             else
+            {
                 cmd.draw(r.vertex_count, 0);
+            }
         }
         cmd.end_rendering();
     }

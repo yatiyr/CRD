@@ -822,164 +822,200 @@ crd::f64 incircle_exact(const Vec2<crd::f64>& a, const Vec2<crd::f64>& b, const 
 // insphere — Stage D (full exact, Shewchuk §4.4 / `insphereexact`)
 //
 // Sign of the 5x5 lifted determinant
-//   | a.x a.y a.z a.x²+a.y²+a.z² 1 |
-//   | b.x b.y b.z b.x²+b.y²+b.z² 1 |
-//   | c.x c.y c.z c.x²+c.y²+c.z² 1 |
-//   | d.x d.y d.z d.x²+d.y²+d.z² 1 |
-//   | e.x e.y e.z e.x²+e.y²+e.z² 1 |
-// exactly. Structure: 5x5 cofactor expansion along the last column gives 5
-// terms, each is a 4x4 determinant of the form "incircle with the lift
-// column" plus a sign. The 4x4 determinants use the same structure as
-// `incircle_exact` (lift × minor expansion products).
+//   | a.x a.y a.z a.x^2+a.y^2+a.z^2 1 |
+//   | b.x b.y b.z b.x^2+b.y^2+b.z^2 1 |
+//   | c.x c.y c.z c.x^2+c.y^2+c.z^2 1 |
+//   | d.x d.y d.z d.x^2+d.y^2+d.z^2 1 |
+//   | e.x e.y e.z e.x^2+e.y^2+e.z^2 1 |
+// exactly.
 //
-// The five 4x4 cofactors:
-//   M15 = +det(b,c,d,e) — 4 points b,c,d,e with the (xyz, lift) columns
-//   M25 = -det(a,c,d,e)
-//   M35 = +det(a,b,d,e)
-//   M45 = -det(a,b,c,e)
-//   M55 = +det(a,b,c,d)
+// **v8c-pre paydown 2026-05-17**: previous Stage-A-equivalent re-expression
+// replaced with full Shewchuk `insphereexact` (predicates.c v4.0.0 lines
+// 3346-3601). Verified against the cospherical adversarial corpus
+// (`[stage-d][adversarial]` tag). Debt entry:
+// `docs/debt.md::Shewchuk adaptive predicates` — closed by v8c-pre.
 //
-// det5 = -M15 + M25 - M35 + M45 - M55
-//      = -det(b,c,d,e) + det(a,c,d,e) - det(a,b,d,e) + det(a,b,c,e) - det(a,b,c,d)
+// Algorithm (literal port of Shewchuk's structure):
 //
-// Each det4 is computed via the same 4x4 cofactor pattern as incircle_exact,
-// except the lift is the 3D form `x²+y²+z²` (6-element expansion: 3 squares
-// each 2-element, summed). The minors are 3D 2x2 cross-products in (x,y,z).
+//   (1) 10 pairwise 2D (x, y) minors, each a 4-element expansion.
+//       ab, bc, cd, de, ea, ac, bd, ce, da, eb
 //
-// Worst-case expansion size grows accordingly — each det4 cofactor is ~384
-// elements; sum of 5 is ~2000 elements. We allocate stack arrays sized for
-// the worst case.
+//   (2) 10 trio cofactor expansions (each 24 elements) using the z column
+//       as the scalar. These are 3x3 (x, y, z) determinants of triples.
+//       Built via `triangle_cofactor(m1, s1, m2, s2, m3, s3)`:
+//         abc = bc * a.z - ac * b.z + ab * c.z
+//         bcd = cd * b.z - bd * c.z + bc * d.z
+//         cde = de * c.z - ce * d.z + cd * e.z
+//         dea = ea * d.z - da * e.z + de * a.z
+//         eab = ab * e.z - eb * a.z + ea * b.z
+//         abd = bd * a.z + da * b.z + ab * d.z
+//         bce = ce * b.z + eb * c.z + bc * e.z
+//         cda = da * c.z + ac * d.z + cd * a.z
+//         deb = eb * d.z + bd * e.z + de * b.z
+//         eac = ac * e.z + ce * a.z + ea * c.z
+//
+//   (3) 5 quad 96-element expansions (each a 4-row 3x3 det sum):
+//         bcde = cde + bce - deb - bcd       (a's cofactor pattern)
+//         cdea = dea + cda - eac - cde
+//         deab = eab + deb - abd - dea
+//         eabc = abc + eac - bce - eab
+//         abcd = bcd + abd - cda - abc
+//
+//   (4) 5 lifted dets (each 1152 elements), computed by double-scaling
+//       each quad by the corresponding point's coordinate squared, then
+//       summing the x/y/z parts:
+//         adet = bcde * (a.x^2 + a.y^2 + a.z^2)
+//       Done as 6 sequential `scale_expansion` calls: scale by a.x twice
+//       to get x^2; same for y, z; then sum.
+//
+//   (5) Cascaded final sum: deter = adet + bdet + cdet + ddet + edet
+//       (5760 elements worst case).
+//
+// Return sign = highest-magnitude term = `deter[deterlen - 1]`.
+//
+// **Stack vs thread_local**: the small intermediates (8/16/48/96/192-element
+// arrays) stay on stack (~15 KB). The big buffers (384/768/1152/2304/3456/
+// 5760-element arrays) live in `thread_local static` storage (~170 KB per
+// thread that ever calls this — one-time TLS cost, no stack pressure, no
+// allocator dependency).
 // ===========================================================================
 
 crd::f64 insphere_exact(const Vec3<crd::f64>& a, const Vec3<crd::f64>& b, const Vec3<crd::f64>& c,
                          const Vec3<crd::f64>& d, const Vec3<crd::f64>& e) noexcept
 {
-    // Strategy: compute each of the 5 det4 sub-determinants by calling a
-    // helper that does the 4x4 lifted determinant exactly. Each helper output
-    // is up to a 384-element expansion. Sum the 5 with appropriate signs.
-    //
-    // For implementation simplicity we use the 3D lift form: the 4x4 det of
-    // [(p.x, p.y, p.z, p.x²+p.y²+p.z², 1) rows for 4 points p ∈ {q, r, s, t}]
-    // exactly. The cofactor expansion of this 4x4 along the last column gives
-    // 4 terms, each a 3x3 det. Each 3x3 is a 3D triangle determinant using
-    // the 3D lift, computable via the orient3d Stage D pattern with the lift
-    // replacing the z-coordinate.
+    // Step 1: ten pairwise 2D minors of (x, y), each a 4-element expansion.
+    // Each pair (e.g., ab) holds the 2x2 minor `p[0]*q[1] - q[0]*p[1]` for
+    // a pair of points; 10 pairs total = all unordered pairs of {a,b,c,d,e}.
+    crd::f64 ab_minor[4];
+    crd::f64 bc_minor[4];
+    crd::f64 cd_minor[4];
+    crd::f64 de_minor[4];
+    crd::f64 ea_minor[4];
+    crd::f64 ac_minor[4];
+    crd::f64 bd_minor[4];
+    crd::f64 ce_minor[4];
+    crd::f64 da_minor[4];
+    crd::f64 eb_minor[4];
+    two_minor(a.x, a.y, b.x, b.y, ab_minor);
+    two_minor(b.x, b.y, c.x, c.y, bc_minor);
+    two_minor(c.x, c.y, d.x, d.y, cd_minor);
+    two_minor(d.x, d.y, e.x, e.y, de_minor);
+    two_minor(e.x, e.y, a.x, a.y, ea_minor);
+    two_minor(a.x, a.y, c.x, c.y, ac_minor);
+    two_minor(b.x, b.y, d.x, d.y, bd_minor);
+    two_minor(c.x, c.y, e.x, e.y, ce_minor);
+    two_minor(d.x, d.y, a.x, a.y, da_minor);
+    two_minor(e.x, e.y, b.x, b.y, eb_minor);
 
-    // For Cerid v3a-debt: implement the 5x5 via 5 explicit 4x4 sub-cases.
-    // Each 4x4 uses the same `lift × triangle_minor` pattern as incircle,
-    // but the triangle minors are 3D (orient3d-style) instead of 2D (incircle-
-    // style). This is the most direct port of Shewchuk's `insphereexact`.
+    // Step 2: ten trio cofactor expansions, each 24 elements.
+    crd::f64 abc_e[24];
+    crd::f64 bcd_e[24];
+    crd::f64 cde_e[24];
+    crd::f64 dea_e[24];
+    crd::f64 eab_e[24];
+    crd::f64 abd_e[24];
+    crd::f64 bce_e[24];
+    crd::f64 cda_e[24];
+    crd::f64 deb_e[24];
+    crd::f64 eac_e[24];
+    const crd::usize abclen = triangle_cofactor(bc_minor, a.z, ac_minor, -b.z, ab_minor, c.z, abc_e);
+    const crd::usize bcdlen = triangle_cofactor(cd_minor, b.z, bd_minor, -c.z, bc_minor, d.z, bcd_e);
+    const crd::usize cdelen = triangle_cofactor(de_minor, c.z, ce_minor, -d.z, cd_minor, e.z, cde_e);
+    const crd::usize dealen = triangle_cofactor(ea_minor, d.z, da_minor, -e.z, de_minor, a.z, dea_e);
+    const crd::usize eablen = triangle_cofactor(ab_minor, e.z, eb_minor, -a.z, ea_minor, b.z, eab_e);
+    const crd::usize abdlen = triangle_cofactor(bd_minor, a.z, da_minor,  b.z, ab_minor, d.z, abd_e);
+    const crd::usize bcelen = triangle_cofactor(ce_minor, b.z, eb_minor,  c.z, bc_minor, e.z, bce_e);
+    const crd::usize cdalen = triangle_cofactor(da_minor, c.z, ac_minor,  d.z, cd_minor, a.z, cda_e);
+    const crd::usize deblen = triangle_cofactor(eb_minor, d.z, bd_minor,  e.z, de_minor, b.z, deb_e);
+    const crd::usize eaclen = triangle_cofactor(ac_minor, e.z, ce_minor,  a.z, ea_minor, c.z, eac_e);
 
-    auto det4_3d = [](const Vec3<crd::f64>& p, const Vec3<crd::f64>& q,
-                       const Vec3<crd::f64>& r, const Vec3<crd::f64>& s) -> crd::f64 {
-        // 4x4 determinant of:
-        //   | p.x p.y p.z p.x²+p.y²+p.z² 1 |
-        //   | q.x q.y q.z q.x²+q.y²+q.z² 1 |
-        //   | r.x r.y r.z r.x²+r.y²+r.z² 1 |
-        //   | s.x s.y s.z s.x²+s.y²+s.z² 1 |
-        // Expanding along the last column gives:
-        //   det4 = -det3(q,r,s) + det3(p,r,s) - det3(p,q,s) + det3(p,q,r)
-        // where each det3 is the 3x3 lifted det with rows (xyz, lift).
-        //
-        // Each det3(α, β, γ) expanded along the lift column:
-        //   = αlift × det(β.xyz, γ.xyz) - βlift × det(α.xyz, γ.xyz)
-        //     + γlift × det(α.xyz, β.xyz)
-        // where each `det(p.xyz, q.xyz)` is a 3D 2x2 minor of (x,y,z) — i.e.
-        // the orient3d-style cross of vectors p and q (3 components, sign).
-        //
-        // We implement this as f64 for now since `insphere_exact` is the
-        // fallthrough from `insphere_adapt`'s already-filtered case; the
-        // f64 computation here is exact-sign-equivalent for the vast majority
-        // of real inputs Stage D could be called on.
-        //
-        // For the truly cospherical pathological case (where f64 still misses
-        // the sign), this fallback returns the f64 value; full exact insphere
-        // Stage D using 6-element 3D lifts and ~3000-element final expansions
-        // is the v8 Bowyer-Watson 3D Delaunay validation drop-in.
-        const crd::f64 plift = p.x * p.x + p.y * p.y + p.z * p.z;
-        const crd::f64 qlift = q.x * q.x + q.y * q.y + q.z * q.z;
-        const crd::f64 rlift = r.x * r.x + r.y * r.y + r.z * r.z;
-        const crd::f64 slift = s.x * s.x + s.y * s.y + s.z * s.z;
+    // Step 3: five quad 96-element expansions. Each quad = sum of two trios
+    // minus sum of two trios. Pattern per Shewchuk: a's quad = cde + bce -
+    // deb - bcd; cycle for b/c/d/e.
+    crd::f64 temp48a[48];
+    crd::f64 temp48b[48];
 
-        auto det3_lift = [](const Vec3<crd::f64>& alpha, crd::f64 alift,
-                             const Vec3<crd::f64>& beta, crd::f64 blift,
-                             const Vec3<crd::f64>& gamma, crd::f64 glift) -> crd::f64 {
-            // 3x3 det of:
-            //   | alpha.x alpha.y alpha.z alift |
-            //   | beta.x  beta.y  beta.z  blift |
-            //   | gamma.x gamma.y gamma.z glift |
-            // Wait this is 3x4 — actually it's the (xyz, lift) of just 3 rows.
-            // For the 4x4 sub-det in det4_3d, we removed one row + one column,
-            // leaving a 3x3.
-            //
-            // The 3x3 (xyz, lift) det expanded along the lift column:
-            //   det = alift * det2(beta_xyz × gamma_xyz)
-            //       - blift * det2(alpha_xyz × gamma_xyz)
-            //       + glift * det2(alpha_xyz × beta_xyz)
-            // where det2(u × v) = uy*vz - uz*vy is the (x-component of the)
-            // 3D cross product... but we want the SCALAR 3x3 det of just
-            // (xyz) rows, not a 2x2.
-            //
-            // Hmm — actually the "3x3 lifted det" of 3 rows expanded along
-            // the lift column reduces to alift × (something) where the
-            // something is the determinant of the 2 remaining rows... but
-            // those 2 rows are 3D, so it's a 2x3 system — not a square det.
-            //
-            // I was confused. Let me restart the algebra cleanly.
-            //
-            // The 4x4 det in det4_3d after expanding along the last column
-            // gives 4 terms, each a 3x3 minor. Each 3x3 minor has rows like
-            //   (p.x, p.y, p.z, plift) — with the LAST column (the 1s) removed.
-            //   Wait the last column (1s) is where we EXPANDED, so it's gone.
-            //   We have a 3x3 matrix of (xyz, lift) columns and 3 rows.
-            //   Det = standard 3x3 det of the 3 rows × 4 cols... that's 3x4.
-            // I keep getting confused. Let me think again.
-            //
-            // 4x4 matrix has rows = 4 points, columns = (x, y, z, lift, 1).
-            // Wait that's 5 columns. So the matrix is 4x5? No, det is for
-            // square matrices.
-            //
-            // The proper lifted-incircle 4x4 (for 4 points in 3D):
-            //   | p.x p.y p.z plift |    (this is wrong — needs to be square)
-            //
-            // Hmm. The lifted in-sphere construction is a 5x5 det of:
-            //   (x, y, z, x²+y²+z², 1) per point, 5 points → 5x5. Correct.
-            //
-            // The 4x4 sub-det (cofactor of last column) drops one row, keeps
-            // columns (x, y, z, lift). 4 rows × 4 cols → square 4x4 det.
-            // Yes! That's what det4_3d is computing.
-            //
-            // The 3x3 in det3_lift would be a sub-det of det4_3d after
-            // expanding along the lift column of det4_3d... so 3 rows × 3
-            // cols of (x, y, z). Standard 3D Laplacian.
-            //
-            // Each 3x3 (xyz) det = standard orient3d-form value.
-            (void)alift;
-            (void)blift;
-            (void)glift;
-            // Computing the (x,y,z) 3x3 det directly:
-            const crd::f64 det_xyz =
-                alpha.x * (beta.y * gamma.z - beta.z * gamma.y) -
-                alpha.y * (beta.x * gamma.z - beta.z * gamma.x) +
-                alpha.z * (beta.x * gamma.y - beta.y * gamma.x);
-            return det_xyz;
-        };
-
-        // det4 expanded along lift column gives 4 terms:
-        //   det4 = +plift × det3(q,r,s) - qlift × det3(p,r,s)
-        //        + rlift × det3(p,q,s) - slift × det3(p,q,r)
-        const crd::f64 det4 =
-            plift * det3_lift(q, qlift, r, rlift, s, slift) -
-            qlift * det3_lift(p, plift, r, rlift, s, slift) +
-            rlift * det3_lift(p, plift, q, qlift, s, slift) -
-            slift * det3_lift(p, plift, q, qlift, r, rlift);
-        return det4;
+    auto build_quad = [&](crd::usize plen, const crd::f64* p,
+                          crd::usize qlen, const crd::f64* q,
+                          crd::usize rlen, const crd::f64* r,
+                          crd::usize slen, const crd::f64* s,
+                          crd::f64* out_96, crd::usize* out_len) noexcept {
+        const crd::usize t48a = linear_expansion_sum(plen, p, qlen, q, temp48a);
+        crd::usize t48b = linear_expansion_sum(rlen, r, slen, s, temp48b);
+        for (crd::usize i = 0; i < t48b; ++i) { temp48b[i] = -temp48b[i]; }
+        *out_len = linear_expansion_sum(t48a, temp48a, t48b, temp48b, out_96);
     };
 
-    // det5 = -det4(b,c,d,e) + det4(a,c,d,e) - det4(a,b,d,e) + det4(a,b,c,e) - det4(a,b,c,d)
-    const crd::f64 det5 = -det4_3d(b, c, d, e) + det4_3d(a, c, d, e) - det4_3d(a, b, d, e) +
-                          det4_3d(a, b, c, e) - det4_3d(a, b, c, d);
-    return det5;
+    crd::f64 bcde[96];
+    crd::f64 cdea[96];
+    crd::f64 deab[96];
+    crd::f64 eabc[96];
+    crd::f64 abcd[96];
+    crd::usize bcdelen = 0;
+    crd::usize cdealen = 0;
+    crd::usize deablen = 0;
+    crd::usize eabclen = 0;
+    crd::usize abcdlen = 0;
+    build_quad(cdelen, cde_e, bcelen, bce_e, deblen, deb_e, bcdlen, bcd_e, bcde, &bcdelen);
+    build_quad(dealen, dea_e, cdalen, cda_e, eaclen, eac_e, cdelen, cde_e, cdea, &cdealen);
+    build_quad(eablen, eab_e, deblen, deb_e, abdlen, abd_e, dealen, dea_e, deab, &deablen);
+    build_quad(abclen, abc_e, eaclen, eac_e, bcelen, bce_e, eablen, eab_e, eabc, &eabclen);
+    build_quad(bcdlen, bcd_e, abdlen, abd_e, cdalen, cda_e, abclen, abc_e, abcd, &abcdlen);
+
+    // Step 4: five lifted dets, each up to 1152 elements. Computed by double-
+    // scaling each quad by the point's x, y, z and summing.
+    static thread_local crd::f64 tls_det384x[384];
+    static thread_local crd::f64 tls_det384y[384];
+    static thread_local crd::f64 tls_det384z[384];
+    static thread_local crd::f64 tls_detxy[768];
+    static thread_local crd::f64 tls_adet[1152];
+    static thread_local crd::f64 tls_bdet[1152];
+    static thread_local crd::f64 tls_cdet[1152];
+    static thread_local crd::f64 tls_ddet[1152];
+    static thread_local crd::f64 tls_edet[1152];
+    crd::f64 temp192[192];
+
+    auto build_lifted_det = [&](crd::usize quadlen, const crd::f64* quad,
+                                 const Vec3<crd::f64>& point,
+                                 crd::f64* out_det, crd::usize* out_len) noexcept {
+        const crd::usize xlen1 = scale_expansion(quadlen, quad, point.x, temp192);
+        const crd::usize xlen2 = scale_expansion(xlen1, temp192, point.x, tls_det384x);
+        const crd::usize ylen1 = scale_expansion(quadlen, quad, point.y, temp192);
+        const crd::usize ylen2 = scale_expansion(ylen1, temp192, point.y, tls_det384y);
+        const crd::usize zlen1 = scale_expansion(quadlen, quad, point.z, temp192);
+        const crd::usize zlen2 = scale_expansion(zlen1, temp192, point.z, tls_det384z);
+        const crd::usize xylen = linear_expansion_sum(xlen2, tls_det384x, ylen2, tls_det384y, tls_detxy);
+        *out_len = linear_expansion_sum(xylen, tls_detxy, zlen2, tls_det384z, out_det);
+    };
+
+    crd::usize alen = 0;
+    crd::usize blen = 0;
+    crd::usize clen = 0;
+    crd::usize dlen = 0;
+    crd::usize elen = 0;
+    build_lifted_det(bcdelen, bcde, a, tls_adet, &alen);
+    build_lifted_det(cdealen, cdea, b, tls_bdet, &blen);
+    build_lifted_det(deablen, deab, c, tls_cdet, &clen);
+    build_lifted_det(eabclen, eabc, d, tls_ddet, &dlen);
+    build_lifted_det(abcdlen, abcd, e, tls_edet, &elen);
+
+    // Step 5: cascaded final sum. deter = adet + bdet + cdet + ddet + edet.
+    static thread_local crd::f64 tls_abdet[2304];
+    static thread_local crd::f64 tls_cddet[2304];
+    static thread_local crd::f64 tls_cdedet[3456];
+    static thread_local crd::f64 tls_deter[5760];
+
+    // The next two lines deliberately pass `cdlen`/`elen` as the first arg
+    // to `linear_expansion_sum`'s `elen` parameter; tidy's name-similarity
+    // heuristic flags them as "might be swapped" but the args ARE in the
+    // right order (verified by the surrounding Shewchuk cascade —
+    // `tls_cddet` has length `cdlen`, `tls_edet` has length `elen`).
+    const crd::usize ablen2 = linear_expansion_sum(alen, tls_adet, blen, tls_bdet, tls_abdet);
+    const crd::usize cdlen  = linear_expansion_sum(clen, tls_cdet, dlen, tls_ddet, tls_cddet);
+    const crd::usize cdelen2 = linear_expansion_sum(cdlen, tls_cddet, elen, tls_edet, tls_cdedet); // NOLINT(readability-suspicious-call-argument)
+    const crd::usize deterlen = linear_expansion_sum(ablen2, tls_abdet, cdelen2, tls_cdedet, tls_deter); // NOLINT(readability-suspicious-call-argument)
+
+    return tls_deter[deterlen - 1];
 }
 
 // ===========================================================================

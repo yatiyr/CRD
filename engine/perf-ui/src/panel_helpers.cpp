@@ -21,7 +21,9 @@ namespace
     const double p      = v * (1.0 - s);
     const double q      = v * (1.0 - s * f);
     const double t      = v * (1.0 - s * (1.0 - f));
-    double r = v, g = v, b = v;
+    double r = v;
+    double g = v;
+    double b = v;
     switch (sector)
     {
         case 0: r = v; g = t; b = p; break;

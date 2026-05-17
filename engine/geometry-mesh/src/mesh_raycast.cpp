@@ -13,7 +13,6 @@ namespace crd::geometry::mesh
 
 using crd::geometry::bvh::BvhNode;
 using crd::geometry::bvh::k_max_bvh_depth;
-using crd::geometry::primitives::AABB3;
 using crd::geometry::primitives::intersect_ray_aabb_robust;
 using crd::geometry::primitives::intersect_ray_triangle_watertight;
 using crd::geometry::primitives::precompute_ray_aabb;

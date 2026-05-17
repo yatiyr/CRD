@@ -79,8 +79,8 @@ static void write_blob_pack(const crd::platform::fs::Path& path,
     const ResourceId pack_id = ResourceId::mint_random();
 
     crd::containers::Array<crd::u8> pool(&s_hr_alloc);
-    const char kName[] = "hr_blob";
-    for (char c : kName) { pool.push_back(static_cast<crd::u8>(c)); }
+    const char name[] = "hr_blob";
+    for (char c : name) { pool.push_back(static_cast<crd::u8>(c)); }
     pool.push_back(0U);
 
     crd::containers::Array<ManifestEntry> entries(&s_hr_alloc);
@@ -123,8 +123,8 @@ TEST_CASE("Hot-reload: payload swap and generation bump", "[resources][hot_reloa
     tmp_name.append(".crdr");
     const crd::platform::fs::Path path(tmp_name);
 
-    const crd::u8 kV1[] = {0x10, 0x20, 0x30};
-    write_blob_pack(path, artifact_id, crd::containers::ConstSpan<crd::u8>(kV1, 3));
+    const crd::u8 v1_content[] = {0x10, 0x20, 0x30};
+    write_blob_pack(path, artifact_id, crd::containers::ConstSpan<crd::u8>(v1_content, 3));
 
     ResourceManager rm(&s_hr_alloc);
     rm.register_loader(std::make_unique<HRBlobLoader>());
@@ -145,8 +145,8 @@ TEST_CASE("Hot-reload: payload swap and generation bump", "[resources][hot_reloa
     CHECK(handle.generation() == 0U);
 
     // Overwrite the pack with V2 content.
-    const crd::u8 kV2[] = {0xAA, 0xBB, 0xCC};
-    write_blob_pack(path, artifact_id, crd::containers::ConstSpan<crd::u8>(kV2, 3));
+    const crd::u8 v2_content[] = {0xAA, 0xBB, 0xCC};
+    write_blob_pack(path, artifact_id, crd::containers::ConstSpan<crd::u8>(v2_content, 3));
 
     const crd::usize n = rm.reload_mount_now(mid);
     CHECK(n == 1U);
@@ -176,8 +176,8 @@ TEST_CASE("Hot-reload: failed reload preserves last-good payload", "[resources][
     tmp_name.append(".crdr");
     const crd::platform::fs::Path path(tmp_name);
 
-    const crd::u8 kV1[] = {0x01, 0x02, 0x03};
-    write_blob_pack(path, artifact_id, crd::containers::ConstSpan<crd::u8>(kV1, 3));
+    const crd::u8 v1_content[] = {0x01, 0x02, 0x03};
+    write_blob_pack(path, artifact_id, crd::containers::ConstSpan<crd::u8>(v1_content, 3));
 
     ResourceManager rm(&s_hr_alloc);
     rm.register_loader(std::make_unique<HRBlobLoader>());
@@ -218,8 +218,8 @@ TEST_CASE("Hot-reload: subscribe_reload callback fires", "[resources][hot_reload
     tmp_name.append(".crdr");
     const crd::platform::fs::Path path(tmp_name);
 
-    const crd::u8 kV1[] = {0xAA};
-    write_blob_pack(path, artifact_id, crd::containers::ConstSpan<crd::u8>(kV1, 1));
+    const crd::u8 v1_content[] = {0xAA};
+    write_blob_pack(path, artifact_id, crd::containers::ConstSpan<crd::u8>(v1_content, 1));
 
     ResourceManager rm(&s_hr_alloc);
     rm.register_loader(std::make_unique<HRBlobLoader>());
@@ -248,8 +248,8 @@ TEST_CASE("Hot-reload: subscribe_reload callback fires", "[resources][hot_reload
         &cb_state);
     (void)token;
 
-    const crd::u8 kV2[] = {0xBB};
-    write_blob_pack(path, artifact_id, crd::containers::ConstSpan<crd::u8>(kV2, 1));
+    const crd::u8 v2_content[] = {0xBB};
+    write_blob_pack(path, artifact_id, crd::containers::ConstSpan<crd::u8>(v2_content, 1));
 
     (void)rm.reload_mount_now(mid);
 
@@ -270,8 +270,8 @@ TEST_CASE("Hot-reload: unsubscribe prevents callback", "[resources][hot_reload]"
     tmp_name.append(".crdr");
     const crd::platform::fs::Path path(tmp_name);
 
-    const crd::u8 kV1[] = {0x11};
-    write_blob_pack(path, artifact_id, crd::containers::ConstSpan<crd::u8>(kV1, 1));
+    const crd::u8 v1_content[] = {0x11};
+    write_blob_pack(path, artifact_id, crd::containers::ConstSpan<crd::u8>(v1_content, 1));
 
     ResourceManager rm(&s_hr_alloc);
     rm.register_loader(std::make_unique<HRBlobLoader>());
@@ -292,8 +292,8 @@ TEST_CASE("Hot-reload: unsubscribe prevents callback", "[resources][hot_reload]"
 
     rm.unsubscribe_reload(artifact_id, token);
 
-    const crd::u8 kV2[] = {0x22};
-    write_blob_pack(path, artifact_id, crd::containers::ConstSpan<crd::u8>(kV2, 1));
+    const crd::u8 v2_content[] = {0x22};
+    write_blob_pack(path, artifact_id, crd::containers::ConstSpan<crd::u8>(v2_content, 1));
 
     (void)rm.reload_mount_now(mid);
 

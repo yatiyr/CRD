@@ -132,13 +132,13 @@ TEST_CASE("crdr chunk payload 16-byte padding is transparent to reader", "[resou
 
 TEST_CASE("manifest write + read round-trip: 100 entries", "[resources][crdr][manifest]")
 {
-    const crd::usize kCount = 100U;
+    const crd::usize count = 100U;
 
     // Build a string pool and entry array.
     crd::containers::Array<crd::u8> string_pool(&s_alloc);
     crd::containers::Array<ManifestEntry> entries_in(&s_alloc);
 
-    for (crd::usize i = 0U; i < kCount; ++i)
+    for (crd::usize i = 0U; i < count; ++i)
     {
         // Record string pool offset.
         const crd::u32 name_offset = static_cast<crd::u32>(string_pool.size());
@@ -181,9 +181,9 @@ TEST_CASE("manifest write + read round-trip: 100 entries", "[resources][crdr][ma
 
     crd::containers::Array<ManifestEntry> entries_out(&s_alloc);
     REQUIRE(manifest_read_entries(mfst->payload, entries_out, &s_alloc));
-    REQUIRE(entries_out.size() == kCount);
+    REQUIRE(entries_out.size() == count);
 
-    for (crd::usize i = 0U; i < kCount; ++i)
+    for (crd::usize i = 0U; i < count; ++i)
     {
         CHECK(entries_out[i].id          == entries_in[i].id);
         CHECK(entries_out[i].type_fourcc == entries_in[i].type_fourcc);

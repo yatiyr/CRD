@@ -20,22 +20,22 @@ TEST_CASE("ConcurrentQueue single-thread FIFO + full/empty", "[containers][concu
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 16, nullptr, "cq-test");
 
     // Vyukov capacity-pow2 has N usable slots (no sentinel slot is sacrificed).
-    constexpr usize cap = 8U;
-    ConcurrentQueue<u64> q(cap, &alloc);
+    constexpr usize kCap = 8U;
+    ConcurrentQueue<u64> q(kCap, &alloc);
 
-    CHECK(q.capacity() == cap);
+    CHECK(q.capacity() == kCap);
     CHECK(q.empty());
 
-    for (u64 i = 0; i < cap; ++i)
+    for (u64 i = 0; i < kCap; ++i)
     {
         REQUIRE(q.try_push(i));
     }
     // Full now.
     CHECK_FALSE(q.try_push(999ULL));
-    CHECK(q.size() == cap);
+    CHECK(q.size() == kCap);
 
     // FIFO drain.
-    for (u64 i = 0; i < cap; ++i)
+    for (u64 i = 0; i < kCap; ++i)
     {
         u64 v = ~0ULL;
         REQUIRE(q.try_pop(v));
@@ -49,14 +49,14 @@ TEST_CASE("ConcurrentQueue single-thread FIFO + full/empty", "[containers][concu
 TEST_CASE("ConcurrentQueue wrap-around across many laps", "[containers][concurrent_queue]")
 {
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 16, nullptr, "cq-test");
-    constexpr usize cap = 4U;
-    ConcurrentQueue<u64> q(cap, &alloc);
+    constexpr usize kCap = 4U;
+    ConcurrentQueue<u64> q(kCap, &alloc);
 
     u64 next_push = 0;
     u64 next_pop = 0;
     for (int lap = 0; lap < 100; ++lap)
     {
-        const usize burst = (lap % cap) + 1U; // 1..cap items per lap
+        const usize burst = (lap % kCap) + 1U; // 1..kCap items per lap
         for (usize k = 0; k < burst; ++k)
         {
             REQUIRE(q.try_push(next_push++));

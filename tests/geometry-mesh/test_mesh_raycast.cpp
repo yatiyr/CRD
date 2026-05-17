@@ -17,7 +17,6 @@
 
 using crd::geometry::mesh::build_triangle_mesh_bvh;
 using crd::geometry::mesh::mesh_raycast;
-using crd::geometry::mesh::MeshHitPayload;
 using crd::geometry::mesh::MeshRayHit;
 using crd::geometry::mesh::TriangleMeshBvh;
 using crd::geometry::mesh::TriangleMeshViewf;

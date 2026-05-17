@@ -75,8 +75,8 @@ std::vector<Ray3<f32>> make_rays(usize n, crd::u64 seed)
     v.reserve(n);
     for (usize i = 0; i < n; ++i)
     {
-        v.push_back(Ray3<f32>{Vec3<f32>(rng.range(-260, 260), rng.range(-260, 260), rng.range(-260, 260)),
-                              normalized(Vec3<f32>(rng.range(-1, 1), rng.range(-1, 1), rng.range(-1, 1)))});
+        v.emplace_back(Vec3<f32>(rng.range(-260, 260), rng.range(-260, 260), rng.range(-260, 260)),
+                       normalized(Vec3<f32>(rng.range(-1, 1), rng.range(-1, 1), rng.range(-1, 1))));
     }
     return v;
 }
@@ -163,7 +163,7 @@ TEST_CASE("bench BVH closest-point -- 100k queries vs a 100k-AABB tree", "[bench
     queries.reserve(100000);
     for (usize i = 0; i < 100000; ++i)
     {
-        queries.push_back(Vec3<f32>(rng.range(-260, 260), rng.range(-260, 260), rng.range(-260, 260)));
+        queries.emplace_back(rng.range(-260, 260), rng.range(-260, 260), rng.range(-260, 260));
     }
 
     BENCHMARK("bvh_closest_point  x100k")

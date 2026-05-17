@@ -20,7 +20,6 @@ using crd::geometry::primitives::closest_point;
 using crd::geometry::primitives::distance;
 using crd::geometry::primitives::distance_squared;
 using crd::geometry::primitives::Plane;
-using crd::geometry::primitives::Segment3;
 using crd::geometry::primitives::Sphere;
 using crd::geometry::primitives::Triangle3;
 using crd::math::Vec3;

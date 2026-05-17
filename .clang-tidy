@@ -49,6 +49,7 @@ Checks: >
   -modernize-use-integer-sign-comparison,
   -modernize-pass-by-value,
   -modernize-return-braced-init-list,
+  -modernize-use-std-numbers,
   performance-*,
   -performance-inefficient-vector-operation,
   -performance-unnecessary-copy-initialization,
@@ -71,7 +72,20 @@ Checks: >
   -readability-use-std-min-max,
   -readability-redundant-typename,
 
-WarningsAsErrors: ''
+# Per CLAUDE.md zero-warnings policy: every clang-tidy warning is a build
+# failure under the `win-tidy` preset. Flipped 2026-05-17 (v8d-2d slice
+# close) — previously '' (advisory). To temporarily disable a single check
+# during a refactor, silence at the call site with `// NOLINT(check-name)`.
+#
+# Note on `-modernize-use-std-numbers` (disabled above): `crd-math::deterministic`
+# REQUIRES bit-identical FP literals across compilers (ADR-0063 deterministic-FP
+# contract). `std::numbers::*` values are implementation-defined within 1 ULP
+# and load through compiler-specific code paths that defeat the bit-identical
+# guarantee. The hand-tuned Cephes literals in
+# `engine/math/src/deterministic.cpp` and the explicit `kPiD` in
+# `engine/units/src/unit_preferences.cpp` are intentional, not accidental
+# "magic numbers."
+WarningsAsErrors: '*'
 
 HeaderFilterRegex: '.*\/crd\/.*'
 

@@ -1,4 +1,4 @@
-// crd-geometry-spatial — kd_build impl (Phase 3.1.7 v5a).
+﻿// crd-geometry-spatial â€” kd_build impl (Phase 3.1.7 v5a).
 //
 // Iterative DFS builder. The "child slots are adjacent in the node array"
 // invariant is maintained by pre-allocating BOTH child nodes before pushing
@@ -7,17 +7,17 @@
 //   1. allocate two empty child node slots (left at L, right at L+1),
 //   2. point parent.child_first = L,
 //   3. push two build frames carrying those node indices.
-// The DFS order is then: pop left frame → fully build left subtree (which
-// may grow `nodes`) → pop right frame → build right subtree. The right
+// The DFS order is then: pop left frame â†’ fully build left subtree (which
+// may grow `nodes`) â†’ pop right frame â†’ build right subtree. The right
 // subtree's root sits at L+1 regardless of left subtree depth.
 //
 // Per node:
 //   1. Compute current AABB over the slice's points.
 //   2. If `count <= leaf_threshold`, finalize as a leaf.
 //   3. Otherwise, pick split_axis = widest extent (X<Y<Z tiebreak on equal
-//      extent — keeps tree topology canonical across builds).
+//      extent â€” keeps tree topology canonical across builds).
 //   4. Median-pick via crd::containers::nth_element on a lex-tuple comparator
-//      `(coord_value, original_input_index)` — no two elements compare equal,
+//      `(coord_value, original_input_index)` â€” no two elements compare equal,
 //      so the partition is byte-identical across MSVC / GCC / clang.
 //   5. Record the splitting coord on the interior node + emit two child
 //      build frames into pre-allocated child slots.
@@ -56,8 +56,8 @@ template <MathScalar T>
 AABB3<T> compute_slice_bounds(crd::containers::ConstSpan<Vec3<T>> points,
                                const u32* idx, u32 first, u32 count) noexcept
 {
-    constexpr T k_inf = std::numeric_limits<T>::infinity();
-    AABB3<T> b{Vec3<T>{k_inf, k_inf, k_inf}, Vec3<T>{-k_inf, -k_inf, -k_inf}};
+    constexpr T kInf = std::numeric_limits<T>::infinity();
+    AABB3<T> b{Vec3<T>{kInf, kInf, kInf}, Vec3<T>{-kInf, -kInf, -kInf}};
     for (u32 i = 0; i < count; ++i)
     {
         const Vec3<T>& p = points[idx[first + i]];
@@ -84,7 +84,7 @@ u8 pick_split_axis(const AABB3<T>& bounds) noexcept
 }
 
 // Lex-tuple comparator: (coord, original_index). No two elements compare
-// equal — `idx` carries unique original-input indices by construction.
+// equal â€” `idx` carries unique original-input indices by construction.
 template <MathScalar T>
 struct LexCompare
 {
@@ -107,9 +107,9 @@ KdTree<T> build_impl(crd::containers::ConstSpan<Vec3<T>> points,
 {
     KdTree<T> tree(alloc);
 
-    constexpr T k_inf_t = std::numeric_limits<T>::infinity();
-    const AABB3<T> empty_bounds{Vec3<T>{k_inf_t, k_inf_t, k_inf_t},
-                                  Vec3<T>{-k_inf_t, -k_inf_t, -k_inf_t}};
+    constexpr T kInfT = std::numeric_limits<T>::infinity();
+    const AABB3<T> empty_bounds{Vec3<T>{kInfT, kInfT, kInfT},
+                                  Vec3<T>{-kInfT, -kInfT, -kInfT}};
 
     if (points.size() == 0U)
     {
@@ -117,7 +117,7 @@ KdTree<T> build_impl(crd::containers::ConstSpan<Vec3<T>> points,
         return tree;
     }
 
-    // Builder-reject contract (ADR-0076 §15) — caller-supplied data must be
+    // Builder-reject contract (ADR-0076 Â§15) â€” caller-supplied data must be
     // finite. Queries tolerate non-finite query points (return no hits).
     for (usize i = 0; i < points.size(); ++i)
     {
@@ -133,8 +133,8 @@ KdTree<T> build_impl(crd::containers::ConstSpan<Vec3<T>> points,
 
     // Pessimistic node-count reserve: at leaf=L the tree has at most
     // 2*ceil(N/L)-1 nodes. Reserve generously so the inner loop never
-    // reallocates (would not break correctness — child indices are by node
-    // number not pointer — but kills perf).
+    // reallocates (would not break correctness â€” child indices are by node
+    // number not pointer â€” but kills perf).
     auto& nodes = tree.nodes_mut();
     const u32 reserve_count = (2U * n / leaf_threshold) + 8U;
     nodes.reserve(reserve_count);
@@ -148,7 +148,7 @@ KdTree<T> build_impl(crd::containers::ConstSpan<Vec3<T>> points,
         points, point_idx.data(), 0U, n);
     tree.set_root_bounds(root_bounds);
 
-    // DFS stack of pending node-build frames. Bounded by ~2 × max depth.
+    // DFS stack of pending node-build frames. Bounded by ~2 Ã— max depth.
     BuildFrame stack[k_max_kd_depth * 2U];
     usize sp = 0;
     stack[sp++] = BuildFrame{root_index, 0U, n, 0U};
@@ -185,7 +185,7 @@ KdTree<T> build_impl(crd::containers::ConstSpan<Vec3<T>> points,
         const T pivot_coord = points[*slice_mid][axis];
 
         // Pre-allocate BOTH children adjacent in the node array, then push
-        // their frames. Right pushed first → left popped first → left subtree
+        // their frames. Right pushed first â†’ left popped first â†’ left subtree
         // is fully built before we touch right. Right's root index = left+1
         // regardless of left subtree depth (`bvh_build` uses the same trick).
         const u32 left_node  = static_cast<u32>(nodes.size());

@@ -32,21 +32,21 @@ static_assert(!std::is_trivially_destructible_v<Tracked>);
 TEST_CASE("AtomicArray push/size/full + read back", "[containers][atomic_array]")
 {
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 16, nullptr, "aa-test");
-    constexpr usize cap = 16U;
-    AtomicArray<u64> a(cap, &alloc);
+    constexpr usize kCap = 16U;
+    AtomicArray<u64> a(kCap, &alloc);
 
-    CHECK(a.capacity() == cap);
+    CHECK(a.capacity() == kCap);
     CHECK(a.empty());
 
-    for (u64 i = 0; i < cap; ++i)
+    for (u64 i = 0; i < kCap; ++i)
     {
         const usize idx = a.push(i * 10ULL);
         CHECK(idx == static_cast<usize>(i)); // single-threaded → indices are sequential
     }
-    CHECK(a.size() == cap);
+    CHECK(a.size() == kCap);
     CHECK(a.full());
 
-    for (usize i = 0; i < cap; ++i)
+    for (usize i = 0; i < kCap; ++i)
     {
         CHECK(a[i] == static_cast<u64>(i) * 10ULL);
     }

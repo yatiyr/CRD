@@ -221,21 +221,21 @@ void draw_timeline(IProfilerSource& src, float& ns_per_pixel, float& scroll_ns) 
     // Zoom controls.
     ImGui::Text("Zoom:");
     ImGui::SameLine();
-    if (ImGui::Button("Fit")) { ns_per_pixel = static_cast<float>(span_ns / 1024.0); scroll_ns = 0.0f; }
+    if (ImGui::Button("Fit")) { ns_per_pixel = static_cast<float>(span_ns / 1024.0); scroll_ns = 0.0F; }
     ImGui::SameLine();
-    if (ImGui::Button("- 2x")) { ns_per_pixel *= 2.0f; }
+    if (ImGui::Button("- 2x")) { ns_per_pixel *= 2.0F; }
     ImGui::SameLine();
-    if (ImGui::Button("+ 2x")) { ns_per_pixel *= 0.5f; if (ns_per_pixel < 1.0f) ns_per_pixel = 1.0f; }
+    if (ImGui::Button("+ 2x")) { ns_per_pixel *= 0.5F; if (ns_per_pixel < 1.0F) ns_per_pixel = 1.0F; }
     ImGui::SameLine();
     ImGui::Text("(%.1f ns/px)", static_cast<double>(ns_per_pixel));
 
     // Track viewport.
-    const float track_h = 22.0f;
-    const float label_w = 140.0f;
+    const float track_h = 22.0F;
+    const float label_w = 140.0F;
     const ImVec2 origin = ImGui::GetCursorScreenPos();
     const float viewport_w =
         ImGui::GetContentRegionAvail().x - label_w;
-    if (viewport_w <= 0.0f)
+    if (viewport_w <= 0.0F)
     {
         ImGui::End();
         return;
@@ -252,10 +252,10 @@ void draw_timeline(IProfilerSource& src, float& ns_per_pixel, float& scroll_ns) 
     for (crd::u32 t = 0U; t < nt; ++t)
     {
         const float y0 = origin.y + static_cast<float>(t) * track_h;
-        const float y1 = y0 + track_h - 2.0f;
+        const float y1 = y0 + track_h - 2.0F;
 
         // Label.
-        ImGui::SetCursorScreenPos({origin.x, y0 + 2.0f});
+        ImGui::SetCursorScreenPos({origin.x, y0 + 2.0F});
         const char* name = src.thread_name(t);
         ImGui::TextUnformatted(name != nullptr && name[0] != '\0' ? name : "(unnamed)");
 
@@ -288,13 +288,13 @@ void draw_timeline(IProfilerSource& src, float& ns_per_pixel, float& scroll_ns) 
             }
             // Depth-based vertical offset to show nesting (cap at track height).
             const float depth_off =
-                static_cast<float>(s.depth) * 2.0f;
-            dl->AddRectFilled({x0, y0 + 1.0f + depth_off}, {x1, y1 - depth_off}, col);
+                static_cast<float>(s.depth) * 2.0F;
+            dl->AddRectFilled({x0, y0 + 1.0F + depth_off}, {x1, y1 - depth_off}, col);
             // Migrate-split visual: red border if begin_thread != end_thread.
             if (s.begin_thread != s.end_thread)
             {
-                dl->AddRect({x0, y0 + 1.0f + depth_off}, {x1, y1 - depth_off},
-                            IM_COL32(255, 80, 80, 255), 0.0f, 0, 1.5f);
+                dl->AddRect({x0, y0 + 1.0F + depth_off}, {x1, y1 - depth_off},
+                            IM_COL32(255, 80, 80, 255), 0.0F, 0, 1.5F);
             }
             // Hover detection.
             if (mouse.x >= x0 && mouse.x <= x1 && mouse.y >= y0 && mouse.y <= y1)
@@ -305,7 +305,7 @@ void draw_timeline(IProfilerSource& src, float& ns_per_pixel, float& scroll_ns) 
         }
     }
     // Reserve canvas space.
-    ImGui::Dummy({label_w + viewport_w, static_cast<float>(nt) * track_h + 4.0f});
+    ImGui::Dummy({label_w + viewport_w, static_cast<float>(nt) * track_h + 4.0F});
 
     if (hover_sample != nullptr)
     {
@@ -322,7 +322,7 @@ void draw_timeline(IProfilerSource& src, float& ns_per_pixel, float& scroll_ns) 
     }
 
     // Mouse pan (middle-button drag on window).
-    if (ImGui::IsWindowHovered() && ImGui::IsMouseDragging(ImGuiMouseButton_Middle, 0.0f))
+    if (ImGui::IsWindowHovered() && ImGui::IsMouseDragging(ImGuiMouseButton_Middle, 0.0F))
     {
         const ImVec2 d = ImGui::GetMouseDragDelta(ImGuiMouseButton_Middle);
         scroll_ns -= d.x * ns_per_pixel;
@@ -390,7 +390,7 @@ void draw_flame_graph(IProfilerSource& src) noexcept
         return;
     }
 
-    const float row_h = 22.0f;
+    const float row_h = 22.0F;
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 origin = ImGui::GetCursorScreenPos();
     const float width = ImGui::GetContentRegionAvail().x;
@@ -400,7 +400,7 @@ void draw_flame_graph(IProfilerSource& src) noexcept
         const double frac = static_cast<double>(totals[i].total_ns)
                             / static_cast<double>(grand_total);
         const float y0 = origin.y + static_cast<float>(i) * row_h;
-        const float y1 = y0 + row_h - 2.0f;
+        const float y1 = y0 + row_h - 2.0F;
         const float x1 = origin.x + static_cast<float>(static_cast<double>(width) * frac);
         const crd::u32 col = color_for_name(totals[i].name).value;
         dl->AddRectFilled({origin.x, y0}, {x1, y1}, col);
@@ -412,9 +412,9 @@ void draw_flame_graph(IProfilerSource& src) noexcept
         char line[160];
         std::snprintf(line, sizeof(line), "%s   %s   %s",
                       src.resolve_name(totals[i].name), tbuf, pbuf);
-        dl->AddText({origin.x + 4.0f, y0 + 3.0f}, IM_COL32(255, 255, 255, 230), line);
+        dl->AddText({origin.x + 4.0F, y0 + 3.0F}, IM_COL32(255, 255, 255, 230), line);
     }
-    ImGui::Dummy({width, static_cast<float>(count) * row_h + 4.0f});
+    ImGui::Dummy({width, static_cast<float>(count) * row_h + 4.0F});
     ImGui::End();
 }
 
@@ -486,8 +486,9 @@ void draw_counters(IProfilerSource& src) noexcept
             ImGui::TableSetColumnIndex(2);
             ImGui::TextUnformatted(info.kind == CounterKind::Set ? "Set" : "Add");
             ImGui::TableSetColumnIndex(3);
-            const char* tn = info.type == CounterType::I64 ? "i64"
-                             : info.type == CounterType::F64 ? "f64" : "dur";
+            const char* tn = "dur";
+            if (info.type == CounterType::I64)      { tn = "i64"; }
+            else if (info.type == CounterType::F64) { tn = "f64"; }
             ImGui::TextUnformatted(tn);
         }
         ImGui::EndTable();
@@ -499,14 +500,16 @@ void draw_counters(IProfilerSource& src) noexcept
     {
         const auto info = src.counter_info(i);
         float       values[240]{};
-        const crd::u32 N = nf > 240U ? 240U : nf;
-        float       vmin = 1e30f, vmax = -1e30f;
+        // N = clamped frame-history sample count for this plot.
+        const crd::u32 N = nf > 240U ? 240U : nf; // NOLINT(readability-identifier-naming)
+        float       vmin = 1e30F;
+        float       vmax = -1e30F;
         for (crd::u32 k = 0U; k < N; ++k)
         {
             const auto* rec = src.frame_record(N - 1U - k); // oldest first for plot
             if (rec == nullptr || i >= rec->counter_count)
             {
-                values[k] = 0.0f;
+                values[k] = 0.0F;
             }
             else if (info.type == CounterType::I64)
             {
@@ -523,7 +526,7 @@ void draw_counters(IProfilerSource& src) noexcept
             else
             {
                 values[k] =
-                    static_cast<float>(static_cast<crd::i64>(rec->values[i].bits)) * 1e-6f;
+                    static_cast<float>(static_cast<crd::i64>(rec->values[i].bits)) * 1e-6F;
             }
             if (values[k] < vmin) vmin = values[k];
             if (values[k] > vmax) vmax = values[k];
@@ -532,7 +535,7 @@ void draw_counters(IProfilerSource& src) noexcept
         std::snprintf(label, sizeof(label), "%s##plot_%u",
                       info.name != nullptr ? info.name : "", i);
         ImGui::PlotLines(label, values, static_cast<int>(N), 0, nullptr, vmin, vmax,
-                         ImVec2{0.0f, 50.0f});
+                         ImVec2{0.0F, 50.0F});
     }
     ImGui::End();
 }
@@ -568,7 +571,8 @@ void draw_gpu_passes(IProfilerSource& src) noexcept
         ImGui::TableSetupColumn("Pass", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("Duration", ImGuiTableColumnFlags_WidthFixed);
         ImGui::TableHeadersRow();
-        const auto N = samples.size();
+        // N = sample count (Profile DSL convention).
+        const auto N = samples.size(); // NOLINT(readability-identifier-naming)
         const auto first = N > 64U ? N - 64U : 0U;
         for (auto i = first; i < N; ++i)
         {
@@ -648,19 +652,21 @@ void draw_memory(IProfilerSource& src) noexcept
     {
         const auto info = src.allocator_info(i);
         float values[240]{};
-        const crd::u32 N = nf > 240U ? 240U : nf;
-        float vmin = 1e30f, vmax = -1e30f;
+        // N = clamped frame-history sample count for this plot.
+        const crd::u32 N = nf > 240U ? 240U : nf; // NOLINT(readability-identifier-naming)
+        float vmin = 1e30F;
+        float vmax = -1e30F;
         for (crd::u32 k = 0U; k < N; ++k)
         {
             const auto* rec = src.frame_record(N - 1U - k);
             if (rec == nullptr || i >= rec->allocator_count)
             {
-                values[k] = 0.0f;
+                values[k] = 0.0F;
             }
             else
             {
                 values[k] = static_cast<float>(rec->allocators[i].bytes_in_use)
-                            * (1.0f / 1024.0f);
+                            * (1.0F / 1024.0F);
             }
             if (values[k] < vmin) vmin = values[k];
             if (values[k] > vmax) vmax = values[k];
@@ -669,7 +675,7 @@ void draw_memory(IProfilerSource& src) noexcept
         std::snprintf(label, sizeof(label), "%s (KB)##alloc_plot_%u",
                       info.name != nullptr ? info.name : "", i);
         ImGui::PlotLines(label, values, static_cast<int>(N), 0, nullptr, vmin, vmax,
-                         ImVec2{0.0f, 50.0f});
+                         ImVec2{0.0F, 50.0F});
     }
     ImGui::End();
 }

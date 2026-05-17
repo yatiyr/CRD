@@ -67,7 +67,6 @@ using crd::geometry::convex::enumerate_faces;
 using crd::geometry::convex::enumerate_spine;
 using crd::geometry::convex::HullFaceFeature;
 using crd::geometry::convex::is_smooth;
-using crd::geometry::convex::ObbFaceFeature;
 
 using crd::geometry::primitives::Capsule3;
 using crd::geometry::primitives::ConvexHullView;

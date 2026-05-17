@@ -77,8 +77,8 @@ static crd::platform::fs::Path assemble_pack(
     const ResourceId pack_id = ResourceId::mint_random();
 
     crd::containers::Array<crd::u8> pool(&g_alloc);
-    const char kName[] = "smoke_async_blob";
-    for (char c : kName) { pool.push_back(static_cast<crd::u8>(c)); }
+    const char name[] = "smoke_async_blob";
+    for (char c : name) { pool.push_back(static_cast<crd::u8>(c)); }
 
     crd::containers::Array<ManifestEntry> entries(&g_alloc);
     ManifestEntry e;
@@ -131,8 +131,8 @@ int main()
 {
     crd::jobs::init(crd::jobs::Config{.num_threads = 2});
 
-    const crd::u8 kExpected[] = {0x10, 0x20, 0x30, 0x40, 0x50};
-    const auto expected_span = crd::containers::ConstSpan<crd::u8>(kExpected, 5);
+    const crd::u8 expected[] = {0x10, 0x20, 0x30, 0x40, 0x50};
+    const auto expected_span = crd::containers::ConstSpan<crd::u8>(expected, 5);
 
     const ResourceId blob_id = ResourceId::mint_random();
     const auto pack_path = assemble_pack(blob_id, expected_span);
@@ -174,7 +174,7 @@ int main()
 
     for (crd::usize i = 0; i < 5U; ++i)
     {
-        if (res->bytes[i] != kExpected[i])
+        if (res->bytes[i] != expected[i])
         {
             std::fprintf(stderr, "smoke_resources_async: payload mismatch at byte %zu\n", i);
             (void)crd::platform::fs::remove_file(pack_path);

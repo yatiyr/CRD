@@ -81,7 +81,7 @@ std::optional<BvhRayHit> brute_raycast(const std::vector<AABB3<f32>>& prims, con
     return BvhRayHit{best_t, best_p};
 }
 
-constexpr f32 k_inf = std::numeric_limits<f32>::infinity();
+constexpr f32 kInf = std::numeric_limits<f32>::infinity();
 
 } // namespace
 
@@ -115,7 +115,7 @@ TEST_CASE("BVH raycast: matches brute force on a random corpus", "[geometry][bvh
         {
             const Ray3<f32> ray{Vec3<f32>(rng.range(-120, 120), rng.range(-120, 120), rng.range(-120, 120)),
                                 normalized(Vec3<f32>(rng.range(-1, 1), rng.range(-1, 1), rng.range(-1, 1)))};
-            const f32 tmax = (r % 5U == 0U) ? rng.range(10.0F, 60.0F) : k_inf;
+            const f32 tmax = (r % 5U == 0U) ? rng.range(10.0F, 60.0F) : kInf;
             const std::optional<BvhRayHit> got = bvh_raycast(tree, pspan, ray, tmax);
             const std::optional<BvhRayHit> ref = brute_raycast(prims, ray, tmax);
             REQUIRE(got.has_value() == ref.has_value());
@@ -126,7 +126,7 @@ TEST_CASE("BVH raycast: matches brute force on a random corpus", "[geometry][bvh
                 // brute force may name different prims, but each named prim is genuinely hit at t.
                 REQUIRE(got->t == ref->t);
                 f32 check = 0.0F;
-                REQUIRE(intersect_ray_aabb_robust(ray, prims[got->payload], 0.0F, k_inf, check));
+                REQUIRE(intersect_ray_aabb_robust(ray, prims[got->payload], 0.0F, kInf, check));
                 REQUIRE(check == got->t);
             }
         }

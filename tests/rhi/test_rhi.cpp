@@ -631,14 +631,14 @@ TEST_CASE("Fence: reset() re-arms the fence", "[rhi][fence]")
     fence->wait();
     REQUIRE(fence->is_signaled());
 
-    fence->reset();
+    (*fence).reset();
     CHECK(fake->reset_count == 1);
     CHECK_FALSE(fence->is_signaled());
 
     // Multiple reset cycles must be safe.
     fence->wait();
-    fence->reset();
-    fence->reset();
+    (*fence).reset();
+    (*fence).reset();
     CHECK(fake->reset_count == 3);
     CHECK_FALSE(fence->is_signaled());
 }
@@ -664,7 +664,7 @@ TEST_CASE("Queue::submit(cmd, fence) signals the fence on completion",
     CHECK(fence->is_signaled());
 
     // Reset + re-submit → fence flips back to unsignalled, then signalled again.
-    fence->reset();
+    (*fence).reset();
     CHECK_FALSE(fence->is_signaled());
     device.graphics_queue().submit(*cmd, *fence);
     CHECK(device.m_queue.submit_with_fence_count == 2);

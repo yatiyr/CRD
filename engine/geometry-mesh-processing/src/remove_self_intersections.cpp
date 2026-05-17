@@ -82,6 +82,7 @@
 #include <crd/math/vec.hpp>
 #include <crd/memory/allocator.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <optional>
 
@@ -109,6 +110,12 @@ struct TriTriSegment3D
 
 // Möller 1997 with orient3d-gated early exits. Returns the intersection
 // segment (in f64) when the triangles intersect transversally.
+// Vertex/normal/edge identifiers (V0..V2, U0..U2, sU/sV signs, E1/E2/F1/F2,
+// N1/N2, dA/dB/dC, denomAB/denomAC, tAB/tAC, L) preserve Möller 1997 §3
+// notation for direct paper-to-code mapping. modernize-type-traits is
+// silenced because clang-tidy 17 misparses our structured-binding names
+// p1a/p1b/p2a/p2b as type-alias call sites and suggests `_t`.
+// NOLINTBEGIN(readability-identifier-naming, modernize-type-traits)
 template <crd::math::MathScalar T>
 std::optional<TriTriSegment3D> moller_tri_tri_intersect(
     const crd::math::Vec3<T>& v0, const crd::math::Vec3<T>& v1, const crd::math::Vec3<T>& v2,
@@ -214,17 +221,17 @@ std::optional<TriTriSegment3D> moller_tri_tri_intersect(
         const crd::f64 denomAC = dA - dC;
         const crd::f64 tAB = denomAB == 0.0 ? 0.0 : dA / denomAB;
         const crd::f64 tAC = denomAC == 0.0 ? 0.0 : dA / denomAC;
-        const V3D P_AB{A.x + (B.x - A.x) * tAB,
+        const V3D p_ab{A.x + (B.x - A.x) * tAB,
                         A.y + (B.y - A.y) * tAB,
                         A.z + (B.z - A.z) * tAB};
-        const V3D P_AC{A.x + (C.x - A.x) * tAC,
+        const V3D p_ac{A.x + (C.x - A.x) * tAC,
                         A.y + (C.y - A.y) * tAC,
                         A.z + (C.z - A.z) * tAC};
-        return {P_AB, P_AC};
+        return {p_ab, p_ac};
     };
 
-    auto [P1a, P1b] = compute_interval(V0, V1, V2, dv0, dv1, dv2);
-    auto [P2a, P2b] = compute_interval(U0, U1, U2, du0, du1, du2);
+    auto [p1a, p1b] = compute_interval(V0, V1, V2, dv0, dv1, dv2);
+    auto [p2a, p2b] = compute_interval(U0, U1, U2, du0, du1, du2);
 
     // Project onto the longest axis of the intersection line N1×N2.
     const V3D L = crd::math::cross(N1, N2);
@@ -233,12 +240,14 @@ std::optional<TriTriSegment3D> moller_tri_tri_intersect(
     if (scalar_abs(L.y) > max_abs) { axis = 1; max_abs = scalar_abs(L.y); }
     if (scalar_abs(L.z) > max_abs) { axis = 2; max_abs = scalar_abs(L.z); }
     auto       get_axis = [axis](const V3D& v) {
-        return axis == 0 ? v.x : (axis == 1 ? v.y : v.z);
+        if (axis == 0) { return v.x; }
+        if (axis == 1) { return v.y; }
+        return v.z;
     };
-    const crd::f64 q1a = get_axis(P1a);
-    const crd::f64 q1b = get_axis(P1b);
-    const crd::f64 q2a = get_axis(P2a);
-    const crd::f64 q2b = get_axis(P2b);
+    const crd::f64 q1a = get_axis(p1a);
+    const crd::f64 q1b = get_axis(p1b);
+    const crd::f64 q2a = get_axis(p2a);
+    const crd::f64 q2b = get_axis(p2b);
     const crd::f64 t1_min = q1a < q1b ? q1a : q1b;
     const crd::f64 t1_max = q1a < q1b ? q1b : q1a;
     const crd::f64 t2_min = q2a < q2b ? q2a : q2b;
@@ -250,19 +259,20 @@ std::optional<TriTriSegment3D> moller_tri_tri_intersect(
     // Look up 3D points whose axis values match overlap_min / overlap_max.
     auto closest = [&](crd::f64 target) -> V3D {
         crd::f64 best_diff = scalar_abs(q1a - target);
-        V3D      best      = P1a;
+        V3D      best      = p1a;
         crd::f64 diff;
         diff = scalar_abs(q1b - target);
-        if (diff < best_diff) { best_diff = diff; best = P1b; }
+        if (diff < best_diff) { best_diff = diff; best = p1b; }
         diff = scalar_abs(q2a - target);
-        if (diff < best_diff) { best_diff = diff; best = P2a; }
+        if (diff < best_diff) { best_diff = diff; best = p2a; }
         diff = scalar_abs(q2b - target);
-        if (diff < best_diff) { best = P2b; }
+        if (diff < best_diff) { best = p2b; }
         return best;
     };
 
     return TriTriSegment3D{closest(overlap_min), closest(overlap_max)};
 }
+// NOLINTEND(readability-identifier-naming, modernize-type-traits)
 
 // Per-triangle AABB.
 template <crd::math::MathScalar T>
@@ -278,12 +288,12 @@ TriAABB<T> compute_tri_aabb(const crd::math::Vec3<T>& a,
                               const crd::math::Vec3<T>& c) noexcept
 {
     TriAABB<T> r;
-    r.lo.x = a.x < b.x ? (a.x < c.x ? a.x : c.x) : (b.x < c.x ? b.x : c.x);
-    r.lo.y = a.y < b.y ? (a.y < c.y ? a.y : c.y) : (b.y < c.y ? b.y : c.y);
-    r.lo.z = a.z < b.z ? (a.z < c.z ? a.z : c.z) : (b.z < c.z ? b.z : c.z);
-    r.hi.x = a.x > b.x ? (a.x > c.x ? a.x : c.x) : (b.x > c.x ? b.x : c.x);
-    r.hi.y = a.y > b.y ? (a.y > c.y ? a.y : c.y) : (b.y > c.y ? b.y : c.y);
-    r.hi.z = a.z > b.z ? (a.z > c.z ? a.z : c.z) : (b.z > c.z ? b.z : c.z);
+    r.lo.x = std::min({a.x, b.x, c.x});
+    r.lo.y = std::min({a.y, b.y, c.y});
+    r.lo.z = std::min({a.z, b.z, c.z});
+    r.hi.x = std::max({a.x, b.x, c.x});
+    r.hi.y = std::max({a.y, b.y, c.y});
+    r.hi.z = std::max({a.z, b.z, c.z});
     return r;
 }
 
@@ -308,7 +318,8 @@ template <crd::math::MathScalar T>
 crd::math::Vec2<T> project_to_2d(const crd::math::Vec3<T>& p, int drop_axis,
                                    bool flip_winding) noexcept
 {
-    T a, b;
+    T a;
+    T b;
     switch (drop_axis)
     {
         case 0: a = p.y; b = p.z; break;

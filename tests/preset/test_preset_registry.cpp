@@ -31,8 +31,11 @@ namespace
 // (QualityPreset, CameraPreset) ship in v1n2 / v1n3.
 struct AlphaSchema
 {
-    static constexpr crd::u32 fourcc  = crd::resources::make_fourcc('P', 'R', 'A', 'L');
-    static constexpr crd::u32 version = 1U;
+    // `fourcc` and `version` names are part of the PresetRegistry contract
+    // (see engine/preset/include/crd/preset/preset_registry.hpp): the
+    // template requires `T::fourcc` / `T::version` static constexpr members.
+    static constexpr crd::u32 fourcc  = crd::resources::make_fourcc('P', 'R', 'A', 'L'); // NOLINT(readability-identifier-naming)
+    static constexpr crd::u32 version = 1U;                                                // NOLINT(readability-identifier-naming)
 
     crd::u32 a = 11U;
     crd::u32 b = 22U;
@@ -41,8 +44,9 @@ struct AlphaSchema
 
 struct BetaSchema
 {
-    static constexpr crd::u32 fourcc  = crd::resources::make_fourcc('P', 'R', 'B', 'T');
-    static constexpr crd::u32 version = 2U;
+    // Contract-mandated identifier names — see AlphaSchema comment.
+    static constexpr crd::u32 fourcc  = crd::resources::make_fourcc('P', 'R', 'B', 'T'); // NOLINT(readability-identifier-naming)
+    static constexpr crd::u32 version = 2U;                                                // NOLINT(readability-identifier-naming)
 
     crd::u32 x = 7U;
     crd::u32 y = 9U;

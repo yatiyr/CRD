@@ -121,7 +121,7 @@ TEST_CASE("BodyPool: remove invalidates handle, re-insert reuses slot",
     REQUIRE(pool.read(b).position.x.value == 2.0F);
 }
 
-TEST_CASE("BodyPool: write mutates lane in place", "[eylem-rigid3d][bodypool]")
+TEST_CASE("BodyPool: write mutates kLane in place", "[eylem-rigid3d][bodypool]")
 {
     crd::memory::MallocAllocator alloc;
     BodyPool pool(&alloc, 16);
@@ -139,7 +139,7 @@ TEST_CASE("BodyPool: write mutates lane in place", "[eylem-rigid3d][bodypool]")
     REQUIRE(got.linear_velocity.x.value == 0.0F);
 }
 
-TEST_CASE("BodyPool: AoSoA storage grows in lane-sized chunks",
+TEST_CASE("BodyPool: AoSoA storage grows in kLane-sized chunks",
           "[eylem-rigid3d][bodypool]")
 {
     crd::memory::MallocAllocator alloc;
@@ -148,25 +148,25 @@ TEST_CASE("BodyPool: AoSoA storage grows in lane-sized chunks",
     REQUIRE(pool.storage().chunk_count() == 1U); // slot-0 sentinel chunk
 
     // Lane width is 4 or 8 depending on SIMD backend. Either way, growing
-    // to lane bodies should still fit in the first chunk (with the sentinel
-    // taking lane 0). lane_count + 1 should require a second chunk.
-    constexpr crd::usize lane = BodyPool::kLane;
+    // to kLane bodies should still fit in the first chunk (with the sentinel
+    // taking kLane 0). kLane_count + 1 should require a second chunk.
+    constexpr crd::usize kLane = BodyPool::kLane;
 
     std::vector<BodyId> ids;
-    ids.reserve(lane * 3);
-    for (crd::usize i = 0; i < lane * 3; ++i)
+    ids.reserve(kLane * 3);
+    for (crd::usize i = 0; i < kLane * 3; ++i)
     {
         BodyId id = pool.insert(make_body(static_cast<crd::f32>(i)));
         REQUIRE_FALSE(id.is_null());
         ids.push_back(id);
     }
 
-    // After lane*3 inserts (slot 0 reserved + 24 user slots @ 8-lane), we need
-    // ceil((1+24)/8) = ceil(25/8) = 4 chunks at lane=8, or ceil(13/4) = 4 at lane=4.
+    // After kLane*3 inserts (slot 0 reserved + 24 user slots @ 8-kLane), we need
+    // ceil((1+24)/8) = ceil(25/8) = 4 chunks at kLane=8, or ceil(13/4) = 4 at kLane=4.
     REQUIRE(pool.storage().chunk_count() >= 3U);
-    REQUIRE(pool.size() == lane * 3);
+    REQUIRE(pool.size() == kLane * 3);
 
-    // All ids resolve to distinct (chunk, lane) pairs.
+    // All ids resolve to distinct (chunk, kLane) pairs.
     for (crd::usize i = 0; i < ids.size(); ++i)
     {
         REQUIRE(pool.contains(ids[i]));

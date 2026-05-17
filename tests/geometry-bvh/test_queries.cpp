@@ -201,7 +201,8 @@ TEST_CASE("queries.overlap(BvhTree) and overlap(Bvh4Tree) match brute force", "[
         crd::containers::Array<u32> quad_facade(&alloc);
         crd::geometry::overlap(quad, pspan, q, quad_facade);
 
-        std::vector<u32> bin_vec, quad_vec;
+        std::vector<u32> bin_vec;
+        std::vector<u32> quad_vec;
         for (usize i = 0; i < bin_facade.size(); ++i)
         {
             bin_vec.push_back(bin_facade[i]);

@@ -78,18 +78,18 @@ template <typename T>
 // depending on the StringView overload.
 [[nodiscard]] constexpr crd::u64 mix_fnv1a_64(crd::u64 a, crd::u32 b) noexcept
 {
-    constexpr crd::u64 prime  = 1099511628211ULL;
-    constexpr crd::u64 offset = 14695981039346656037ULL;
-    crd::u64 h = offset;
+    constexpr crd::u64 kPrime  = 1099511628211ULL;
+    constexpr crd::u64 kOffset = 14695981039346656037ULL;
+    crd::u64 h = kOffset;
     for (crd::u32 i = 0; i < 8; ++i)
     {
         h ^= static_cast<crd::u8>((a >> (i * 8U)) & 0xFFU);
-        h *= prime;
+        h *= kPrime;
     }
     for (crd::u32 i = 0; i < 4; ++i)
     {
         h ^= static_cast<crd::u8>((b >> (i * 8U)) & 0xFFU);
-        h *= prime;
+        h *= kPrime;
     }
     return h;
 }

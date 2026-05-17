@@ -1,0 +1,26 @@
+# Inherit the repo-wide policy from D:/Dev/cerid/.clang-tidy and disable two
+# checks that produce systemic false positives in the test suite.
+#
+# 1. `bugprone-unchecked-optional-access` is flow-sensitive and stops at the
+#    Catch2 REQUIRE/CHECK macro boundary, producing false positives across
+#    the entire test suite where the idiomatic pattern is:
+#      REQUIRE(opt.has_value());
+#      REQUIRE(opt->field == ...);
+#    Per-line NOLINT would scale linearly with test count, not with risk.
+#
+# 2. `bugprone-suspicious-memory-comparison` fires on `std::memcmp` over
+#    types that may carry padding (e.g. `Vec3<float>` is 12 bytes, no
+#    padding, but the check doesn't model that). The tests use memcmp
+#    deliberately for bit-exact replay assertions (Shewchuk-predicate
+#    determinism, FP determinism contracts, etc). Production code keeps
+#    this check active — a memcmp on float vectors is almost always wrong
+#    *outside* a determinism-replay test.
+#
+# 3. `bugprone-random-generator-seed` flags `Rng rng(0xDEADBEEF)` patterns.
+#    Test code DELIBERATELY uses constant seeds for reproducibility — a
+#    non-deterministic test seed would defeat the purpose of CI replay.
+#    Production code keeps this check active.
+#
+# Engine + tool code keep ALL THREE checks ACTIVE; only test code is exempt.
+InheritParentConfig: true
+Checks: '-bugprone-unchecked-optional-access,-bugprone-suspicious-memory-comparison,-bugprone-random-generator-seed'

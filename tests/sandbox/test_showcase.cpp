@@ -20,7 +20,6 @@
 namespace
 {
 using crd::sandbox::BvhViewerCache;
-using crd::sandbox::draw_geometry_showcase_imgui;
 using crd::sandbox::GeometryShowcaseMode;
 using crd::sandbox::GeometryShowcaseState;
 using crd::sandbox::render_draw_showcase;

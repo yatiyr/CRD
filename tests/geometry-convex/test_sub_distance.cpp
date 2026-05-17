@@ -86,7 +86,9 @@ TEST_CASE("sub_distance_3: seven Voronoi regions on a triangle", "[sub-distance]
     SECTION("interior face: origin projects inside the triangle")
     {
         // Equilateral-ish around (0,1,0) — large enough to contain the projection.
-        const Vec3<f32> a(-1.0F, 1.0F, -1.0F), b(1.0F, 1.0F, -1.0F), c(0.0F, 1.0F, 1.0F);
+        const Vec3<f32> a(-1.0F, 1.0F, -1.0F);
+        const Vec3<f32> b(1.0F, 1.0F, -1.0F);
+        const Vec3<f32> c(0.0F, 1.0F, 1.0F);
         const SubDistanceResult<f32> r = sub_distance_3(a, b, c);
         REQUIRE(approx(r.closest, Vec3<f32>(0, 1, 0)));
         REQUIRE(r.mask == 0b0111);
@@ -95,7 +97,9 @@ TEST_CASE("sub_distance_3: seven Voronoi regions on a triangle", "[sub-distance]
     }
     SECTION("vertex region a: triangle far from origin in +X")
     {
-        const Vec3<f32> a(1.0F, 0, 0), b(2.0F, 0, 0), c(2.0F, 0, 1.0F);
+        const Vec3<f32> a(1.0F, 0, 0);
+        const Vec3<f32> b(2.0F, 0, 0);
+        const Vec3<f32> c(2.0F, 0, 1.0F);
         const SubDistanceResult<f32> r = sub_distance_3(a, b, c);
         REQUIRE(approx(r.closest, a));
         REQUIRE(r.mask == 0b0001);
@@ -103,7 +107,9 @@ TEST_CASE("sub_distance_3: seven Voronoi regions on a triangle", "[sub-distance]
     SECTION("edge region ab: origin projects onto edge ab")
     {
         // a=(-1,1,0), b=(1,1,0), c=(0,1,5). Projection (0,1,0) is on edge ab.
-        const Vec3<f32> a(-1.0F, 1.0F, 0), b(1.0F, 1.0F, 0), c(0.0F, 1.0F, 5.0F);
+        const Vec3<f32> a(-1.0F, 1.0F, 0);
+        const Vec3<f32> b(1.0F, 1.0F, 0);
+        const Vec3<f32> c(0.0F, 1.0F, 5.0F);
         const SubDistanceResult<f32> r = sub_distance_3(a, b, c);
         REQUIRE(approx(r.closest, Vec3<f32>(0, 1, 0)));
         REQUIRE(r.mask == 0b0011);

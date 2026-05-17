@@ -14,7 +14,7 @@
 //   `CdtTriangle` — 3 vertex indices (CCW) + 3 neighbour-triangle indices
 //   + 8-bit flags (alive + per-edge constraint bits). Edge `i` of triangle T
 //   is the directed edge `(T.v[i], T.v[(i+1)%3])`. The neighbour across
-//   that edge is `T.nbr[i]` (or `k_null_idx` if the edge is on the convex
+//   that edge is `T.nbr[i]` (or `kNullIdx` if the edge is on the convex
 //   hull's outer boundary).
 //
 //   Neighbour symmetry invariant: if `T.nbr[i] == U`, then there is exactly
@@ -89,20 +89,20 @@ namespace crd::geometry::polygon
 {
 namespace
 {
-constexpr crd::u32 k_null_idx = std::numeric_limits<crd::u32>::max();
+constexpr crd::u32 kNullIdx = std::numeric_limits<crd::u32>::max();
 
 // Per-edge flag bits (within CdtTriangle::flags).
-constexpr crd::u8 k_alive_bit       = 1U << 0;
-constexpr crd::u8 k_constraint_e0   = 1U << 1;
-constexpr crd::u8 k_constraint_e1   = 1U << 2;
-constexpr crd::u8 k_constraint_e2   = 1U << 3;
+constexpr crd::u8 kAliveBit       = 1U << 0;
+constexpr crd::u8 kConstraintE0   = 1U << 1;
+constexpr crd::u8 kConstraintE1   = 1U << 2;
+constexpr crd::u8 kConstraintE2   = 1U << 3;
 
-constexpr crd::u8 k_constraint_bits[3] = {k_constraint_e0, k_constraint_e1, k_constraint_e2};
+constexpr crd::u8 kConstraintBits[3] = {kConstraintE0, kConstraintE1, kConstraintE2};
 
 struct CdtTriangle
 {
-    crd::u32 v[3]   = {k_null_idx, k_null_idx, k_null_idx};
-    crd::u32 nbr[3] = {k_null_idx, k_null_idx, k_null_idx};
+    crd::u32 v[3]   = {kNullIdx, kNullIdx, kNullIdx};
+    crd::u32 nbr[3] = {kNullIdx, kNullIdx, kNullIdx};
     crd::u8  flags  = 0U;
 };
 
@@ -132,12 +132,12 @@ crd::u32 alloc_triangle(CdtState<T>& s) noexcept
         const crd::u32 idx = s.free_list.back();
         s.free_list.pop_back();
         s.tris[idx]       = CdtTriangle{};
-        s.tris[idx].flags = k_alive_bit;
+        s.tris[idx].flags = kAliveBit;
         return idx;
     }
     const crd::u32 idx = static_cast<crd::u32>(s.tris.size());
     CdtTriangle    t{};
-    t.flags = k_alive_bit;
+    t.flags = kAliveBit;
     s.tris.push_back(t);
     return idx;
 }
@@ -152,22 +152,22 @@ inline void free_triangle(CdtState<T>& s, crd::u32 idx) noexcept
 template <crd::math::MathScalar T>
 inline bool tri_alive(const CdtState<T>& s, crd::u32 idx) noexcept
 {
-    return idx != k_null_idx && (s.tris[idx].flags & k_alive_bit) != 0U;
+    return idx != kNullIdx && (s.tris[idx].flags & kAliveBit) != 0U;
 }
 
 // Find the local edge index `i` such that T.nbr[i] == other_idx. Returns
-// k_null_idx if not found (programming error — should always succeed when
+// kNullIdx if not found (programming error — should always succeed when
 // the symmetric link invariant holds).
 inline crd::u32 nbr_edge(const CdtTriangle& t, crd::u32 other_idx) noexcept
 {
     if (t.nbr[0] == other_idx) { return 0U; }
     if (t.nbr[1] == other_idx) { return 1U; }
     if (t.nbr[2] == other_idx) { return 2U; }
-    return k_null_idx;
+    return kNullIdx;
 }
 
 // Find local edge index `i` of triangle T such that the edge endpoints
-// are exactly (va, vb) in either order. Returns k_null_idx if no match.
+// are exactly (va, vb) in either order. Returns kNullIdx if no match.
 inline crd::u32 find_edge_with_endpoints(const CdtTriangle& t, crd::u32 va, crd::u32 vb) noexcept
 {
     for (crd::u32 i = 0; i < 3U; ++i)
@@ -176,17 +176,17 @@ inline crd::u32 find_edge_with_endpoints(const CdtTriangle& t, crd::u32 va, crd:
         const crd::u32 b = t.v[(i + 1U) % 3U];
         if ((a == va && b == vb) || (a == vb && b == va)) { return i; }
     }
-    return k_null_idx;
+    return kNullIdx;
 }
 
 inline bool edge_constrained(const CdtTriangle& t, crd::u32 edge_idx) noexcept
 {
-    return (t.flags & k_constraint_bits[edge_idx]) != 0U;
+    return (t.flags & kConstraintBits[edge_idx]) != 0U;
 }
 
 inline void set_edge_constrained(CdtTriangle& t, crd::u32 edge_idx) noexcept
 {
-    t.flags = static_cast<crd::u8>(t.flags | k_constraint_bits[edge_idx]);
+    t.flags = static_cast<crd::u8>(t.flags | kConstraintBits[edge_idx]);
 }
 
 // Mirror constraint flag across the shared edge.
@@ -195,9 +195,9 @@ void mark_constraint_both_sides(CdtState<T>& s, crd::u32 t_idx, crd::u32 edge_id
 {
     set_edge_constrained(s.tris[t_idx], edge_idx);
     const crd::u32 u_idx = s.tris[t_idx].nbr[edge_idx];
-    if (u_idx == k_null_idx) { return; }
+    if (u_idx == kNullIdx) { return; }
     const crd::u32 j = nbr_edge(s.tris[u_idx], t_idx);
-    if (j != k_null_idx) { set_edge_constrained(s.tris[u_idx], j); }
+    if (j != kNullIdx) { set_edge_constrained(s.tris[u_idx], j); }
 }
 
 // ---- Geometric predicates (Shewchuk-adaptive throughout) ----------------
@@ -275,10 +275,10 @@ void install_super_triangle(CdtState<T>& s,
     root.v[0]    = s.n_input + 0U;
     root.v[1]    = s.n_input + 1U;
     root.v[2]    = s.n_input + 2U;
-    root.nbr[0]  = k_null_idx;
-    root.nbr[1]  = k_null_idx;
-    root.nbr[2]  = k_null_idx;
-    root.flags   = k_alive_bit;
+    root.nbr[0]  = kNullIdx;
+    root.nbr[1]  = kNullIdx;
+    root.nbr[2]  = kNullIdx;
+    root.flags   = kAliveBit;
     s.tris.push_back(root);
     s.hint_tri = 0U;
 }
@@ -315,14 +315,14 @@ crd::u32 locate(CdtState<T>& s, const crd::math::Vec2<T>& p) noexcept
         const T        o2  = orient2d_signed(p2, p0, p);
         // Cross the first edge where p is on the outside (orient < 0). Pick
         // edge order deterministically (smallest edge index first).
-        if (o0 < T{0} && t.nbr[0] != k_null_idx) { cur = t.nbr[0]; continue; }
-        if (o1 < T{0} && t.nbr[1] != k_null_idx) { cur = t.nbr[1]; continue; }
-        if (o2 < T{0} && t.nbr[2] != k_null_idx) { cur = t.nbr[2]; continue; }
+        if (o0 < T{0} && t.nbr[0] != kNullIdx) { cur = t.nbr[0]; continue; }
+        if (o1 < T{0} && t.nbr[1] != kNullIdx) { cur = t.nbr[1]; continue; }
+        if (o2 < T{0} && t.nbr[2] != kNullIdx) { cur = t.nbr[2]; continue; }
         // All non-negative ⇒ inside (or on boundary, treated as inside).
         return cur;
     }
     // Walk diverged — should not happen with super-triangle enclosure.
-    return k_null_idx;
+    return kNullIdx;
 }
 
 // ---- Bowyer-Watson insertion -------------------------------------------
@@ -332,7 +332,7 @@ bool insert_point(CdtState<T>& s, crd::u32 p_idx)
 {
     const auto&    p     = s.verts[p_idx];
     const crd::u32 t_seed = locate(s, p);
-    if (t_seed == k_null_idx) { return false; }
+    if (t_seed == kNullIdx) { return false; }
 
     // BFS-collect bad triangles (circumcircle contains p). Track them in a
     // sorted-by-ID list for deterministic order.
@@ -353,7 +353,7 @@ bool insert_point(CdtState<T>& s, crd::u32 p_idx)
         for (crd::u32 e = 0; e < 3U; ++e)
         {
             const crd::u32 u_idx = t.nbr[e];
-            if (u_idx == k_null_idx) { continue; }
+            if (u_idx == kNullIdx) { continue; }
             if (u_idx < in_bad.size() && in_bad[u_idx] != 0U) { continue; }
             const auto& u    = s.tris[u_idx];
             const auto& a    = s.verts[u.v[0]];
@@ -376,10 +376,10 @@ bool insert_point(CdtState<T>& s, crd::u32 p_idx)
     //              constraint_inherit)
     struct CavityEdge
     {
-        crd::u32 va           = k_null_idx;
-        crd::u32 vb           = k_null_idx;
-        crd::u32 ext_nbr      = k_null_idx;
-        crd::u32 ext_nbr_edge = k_null_idx; // local edge index on ext_nbr facing into the cavity
+        crd::u32 va           = kNullIdx;
+        crd::u32 vb           = kNullIdx;
+        crd::u32 ext_nbr      = kNullIdx;
+        crd::u32 ext_nbr_edge = kNullIdx; // local edge index on ext_nbr facing into the cavity
         bool     constrained  = false;
     };
     crd::containers::Array<CavityEdge> cav(s.alloc);
@@ -391,14 +391,14 @@ bool insert_point(CdtState<T>& s, crd::u32 p_idx)
         {
             const crd::u32 u_idx = t.nbr[e];
             const bool u_is_bad
-                = (u_idx != k_null_idx && u_idx < in_bad.size() && in_bad[u_idx] != 0U);
+                = (u_idx != kNullIdx && u_idx < in_bad.size() && in_bad[u_idx] != 0U);
             if (u_is_bad) { continue; }
             CavityEdge ce;
             ce.va          = t.v[e];
             ce.vb          = t.v[(e + 1U) % 3U];
             ce.ext_nbr     = u_idx;
             ce.constrained = edge_constrained(t, e);
-            if (u_idx != k_null_idx)
+            if (u_idx != kNullIdx)
             {
                 ce.ext_nbr_edge = nbr_edge(s.tris[u_idx], ti);
             }
@@ -422,11 +422,11 @@ bool insert_point(CdtState<T>& s, crd::u32 p_idx)
         // Edge 0 = (va, vb) faces the OUTSIDE (ext_nbr).
         t.nbr[0]          = cav[i].ext_nbr;
         // Edges 1, 2 face other new triangles (linked below).
-        t.nbr[1]          = k_null_idx;
-        t.nbr[2]          = k_null_idx;
+        t.nbr[1]          = kNullIdx;
+        t.nbr[2]          = kNullIdx;
         if (cav[i].constrained) { set_edge_constrained(t, 0); }
         // Update the external neighbour to point back.
-        if (cav[i].ext_nbr != k_null_idx && cav[i].ext_nbr_edge != k_null_idx)
+        if (cav[i].ext_nbr != kNullIdx && cav[i].ext_nbr_edge != kNullIdx)
         {
             s.tris[cav[i].ext_nbr].nbr[cav[i].ext_nbr_edge] = ni;
         }
@@ -482,7 +482,7 @@ bool insert_point(CdtState<T>& s, crd::u32 p_idx)
 //      is correct because each flip strictly reduces the topological
 //      distance to the constraint (Anglada 1997 §3.2).
 
-// Find any alive triangle incident on vertex `v`. Returns k_null_idx if
+// Find any alive triangle incident on vertex `v`. Returns kNullIdx if
 // none. O(n_tris) linear scan — adequate for typical N (Anglada's paper
 // notes that vertex-to-triangle adjacency cache is the optimization).
 template <crd::math::MathScalar T>
@@ -494,17 +494,17 @@ crd::u32 any_triangle_at_vertex(const CdtState<T>& s, crd::u32 v) noexcept
         const auto& t = s.tris[i];
         if (t.v[0] == v || t.v[1] == v || t.v[2] == v) { return i; }
     }
-    return k_null_idx;
+    return kNullIdx;
 }
 
 // Is there a triangle T containing vertex va such that edge (va, vb) is
-// one of T's edges? Returns (t_idx, edge_idx) packed; t_idx = k_null_idx
+// one of T's edges? Returns (t_idx, edge_idx) packed; t_idx = kNullIdx
 // on miss.
 template <crd::math::MathScalar T>
 struct EdgeLocator
 {
-    crd::u32 t_idx    = k_null_idx;
-    crd::u32 edge_idx = k_null_idx;
+    crd::u32 t_idx    = kNullIdx;
+    crd::u32 edge_idx = kNullIdx;
 };
 
 template <crd::math::MathScalar T>
@@ -514,7 +514,7 @@ EdgeLocator<T> find_edge(const CdtState<T>& s, crd::u32 va, crd::u32 vb) noexcep
     {
         if (!tri_alive(s, i)) { continue; }
         const crd::u32 e = find_edge_with_endpoints(s.tris[i], va, vb);
-        if (e != k_null_idx) { return {i, e}; }
+        if (e != kNullIdx) { return {i, e}; }
     }
     return {};
 }
@@ -532,14 +532,14 @@ template <crd::math::MathScalar T>
 bool flip_edge(CdtState<T>& s, crd::u32 t_idx, crd::u32 edge_idx) noexcept
 {
     const crd::u32 u_idx = s.tris[t_idx].nbr[edge_idx];
-    if (u_idx == k_null_idx) { return false; }
+    if (u_idx == kNullIdx) { return false; }
     if (edge_constrained(s.tris[t_idx], edge_idx)) { return false; }
 
     CdtTriangle&   t   = s.tris[t_idx];
     CdtTriangle&   u   = s.tris[u_idx];
     const crd::u32 i_t = edge_idx;
     const crd::u32 i_u = nbr_edge(u, t_idx);
-    if (i_u == k_null_idx) { return false; }
+    if (i_u == kNullIdx) { return false; }
 
     // Naming: t = (va, vb, vc) with va = t.v[i_t]; vc = t.v[(i_t+2)%3]
     //         u = (vb, va, vd) with vd = u.v[(i_u+2)%3]
@@ -599,7 +599,7 @@ bool flip_edge(CdtState<T>& s, crd::u32 t_idx, crd::u32 edge_idx) noexcept
     t.nbr[0]  = u_nbr_ad;        // edge (va, vd) was U's external
     t.nbr[1]  = u_idx;           // edge (vd, vc) is shared with U'
     t.nbr[2]  = t_nbr_ca;        // edge (vc, va) was T's external
-    t.flags   = k_alive_bit;
+    t.flags   = kAliveBit;
     if (u_con_ad) { set_edge_constrained(t, 0); }
     if (t_con_ca) { set_edge_constrained(t, 2); }
 
@@ -609,28 +609,28 @@ bool flip_edge(CdtState<T>& s, crd::u32 t_idx, crd::u32 edge_idx) noexcept
     u.nbr[0]  = u_nbr_db;        // edge (vd, vb) was U's external
     u.nbr[1]  = t_nbr_bc;        // edge (vb, vc) was T's external
     u.nbr[2]  = t_idx;           // edge (vc, vd) shared with T'
-    u.flags   = k_alive_bit;
+    u.flags   = kAliveBit;
     if (u_con_db) { set_edge_constrained(u, 0); }
     if (t_con_bc) { set_edge_constrained(u, 1); }
 
     // Update the back-pointers from the external neighbours.
-    if (u_nbr_ad != k_null_idx)
+    if (u_nbr_ad != kNullIdx)
     {
         const crd::u32 k = nbr_edge(s.tris[u_nbr_ad], u_idx);
-        if (k != k_null_idx) { s.tris[u_nbr_ad].nbr[k] = t_idx; }
+        if (k != kNullIdx) { s.tris[u_nbr_ad].nbr[k] = t_idx; }
     }
-    if (t_nbr_ca != k_null_idx)
+    if (t_nbr_ca != kNullIdx)
     {
         // Already pointed at t_idx — no change needed.
     }
-    if (u_nbr_db != k_null_idx)
+    if (u_nbr_db != kNullIdx)
     {
         // Already pointed at u_idx — no change needed.
     }
-    if (t_nbr_bc != k_null_idx)
+    if (t_nbr_bc != kNullIdx)
     {
         const crd::u32 k = nbr_edge(s.tris[t_nbr_bc], t_idx);
-        if (k != k_null_idx) { s.tris[t_nbr_bc].nbr[k] = u_idx; }
+        if (k != kNullIdx) { s.tris[t_nbr_bc].nbr[k] = u_idx; }
     }
     return true;
 }
@@ -640,8 +640,8 @@ bool flip_edge(CdtState<T>& s, crd::u32 t_idx, crd::u32 edge_idx) noexcept
 template <crd::math::MathScalar T>
 struct ConeFind
 {
-    crd::u32 t_idx    = k_null_idx;
-    crd::u32 va_local = k_null_idx; // va's slot index in t (0/1/2)
+    crd::u32 t_idx    = kNullIdx;
+    crd::u32 va_local = kNullIdx; // va's slot index in t (0/1/2)
 };
 
 template <crd::math::MathScalar T>
@@ -653,12 +653,12 @@ ConeFind<T> find_cone_at_vertex(const CdtState<T>& s, crd::u32 va, crd::u32 vb) 
     {
         if (!tri_alive(s, ti)) { continue; }
         const auto& t = s.tris[ti];
-        crd::u32    vla = k_null_idx;
+        crd::u32    vla = kNullIdx;
         for (crd::u32 e = 0; e < 3U; ++e)
         {
             if (t.v[e] == va) { vla = e; break; }
         }
-        if (vla == k_null_idx) { continue; }
+        if (vla == kNullIdx) { continue; }
         const crd::u32 v_next = t.v[(vla + 1U) % 3U];
         const crd::u32 v_prev = t.v[(vla + 2U) % 3U];
         const auto&    pnext  = s.verts[v_next];
@@ -687,8 +687,8 @@ ConeFind<T> find_cone_at_vertex(const CdtState<T>& s, crd::u32 va, crd::u32 vb) 
 template <crd::math::MathScalar T>
 struct ChainStep
 {
-    crd::u32 t_idx     = k_null_idx;
-    crd::u32 exit_edge = k_null_idx;
+    crd::u32 t_idx     = kNullIdx;
+    crd::u32 exit_edge = kNullIdx;
 };
 
 template <crd::math::MathScalar T>
@@ -699,7 +699,7 @@ bool trace_chain(CdtState<T>& s, crd::u32 va, crd::u32 vb,
     const auto& pb = s.verts[vb];
 
     const ConeFind<T> seed = find_cone_at_vertex(s, va, vb);
-    if (seed.t_idx == k_null_idx) { return false; }
+    if (seed.t_idx == kNullIdx) { return false; }
 
     crd::u32 t_idx     = seed.t_idx;
     crd::u32 va_local  = seed.va_local;
@@ -714,10 +714,10 @@ bool trace_chain(CdtState<T>& s, crd::u32 va, crd::u32 vb,
     for (crd::u32 step = 0; step < safety; ++step)
     {
         const crd::u32 next_t = s.tris[t_idx].nbr[exit_edge];
-        if (next_t == k_null_idx) { return false; }
+        if (next_t == kNullIdx) { return false; }
         // Find the entry edge of `next_t` (same edge as t_idx's exit_edge).
         const crd::u32 entry_edge = nbr_edge(s.tris[next_t], t_idx);
-        if (entry_edge == k_null_idx) { return false; }
+        if (entry_edge == kNullIdx) { return false; }
 
         // Is vb a vertex of next_t? If so, chain ends here.
         const auto& nt = s.tris[next_t];
@@ -890,8 +890,8 @@ bool carve_and_retriangulate(CdtState<T>& s, crd::u32 va, crd::u32 vb,
     // Walk chain forward. At each step, the exit edge's two endpoints are
     // (e_top, e_bot) — top is the upper-side vertex, bot is the lower-side
     // vertex.
-    crd::u32 last_top = k_null_idx;
-    crd::u32 last_bot = k_null_idx;
+    crd::u32 last_top = kNullIdx;
+    crd::u32 last_bot = kNullIdx;
     for (crd::u32 i = 0; i < chain.size(); ++i)
     {
         const crd::u32     ti = chain[i].t_idx;
@@ -901,8 +901,8 @@ bool carve_and_retriangulate(CdtState<T>& s, crd::u32 va, crd::u32 vb,
         const crd::u32     e_vb = t.v[(ee + 1U) % 3U];
         int                c0 = classify(e_va);
         int                c1 = classify(e_vb);
-        crd::u32           top = k_null_idx;
-        crd::u32           bot = k_null_idx;
+        crd::u32           top = kNullIdx;
+        crd::u32           bot = kNullIdx;
         if (c0 > 0) { top = e_va; bot = e_vb; }
         else if (c1 > 0) { top = e_vb; bot = e_va; }
         else
@@ -964,15 +964,15 @@ bool carve_and_retriangulate(CdtState<T>& s, crd::u32 va, crd::u32 vb,
         const crd::u32     vv1  = tt.v[(e + 1U) % 3U];
         const crd::u32     nbr  = tt.nbr[e];
         const bool         cons = edge_constrained(tt, e);
-        crd::u32 nbe = k_null_idx;
-        if (nbr != k_null_idx) { nbe = nbr_edge(s.tris[nbr], ti); }
-        OuterLink L;
-        L.v0          = vv0;
-        L.v1          = vv1;
-        L.nbr_t       = nbr;
-        L.nbr_e       = nbe;
-        L.constrained = cons;
-        outers.push_back(L);
+        crd::u32 nbe = kNullIdx;
+        if (nbr != kNullIdx) { nbe = nbr_edge(s.tris[nbr], ti); }
+        OuterLink lk;
+        lk.v0          = vv0;
+        lk.v1          = vv1;
+        lk.nbr_t       = nbr;
+        lk.nbr_e       = nbe;
+        lk.constrained = cons;
+        outers.push_back(lk);
     };
 
     for (crd::u32 i = 0; i < chain.size(); ++i)
@@ -988,7 +988,7 @@ bool carve_and_retriangulate(CdtState<T>& s, crd::u32 va, crd::u32 vb,
         // Find which edge of final_t was the entry from the last chain step.
         const crd::u32 last_chain_t = chain[chain.size() - 1U].t_idx;
         const crd::u32 entry_in_final = nbr_edge(ft, last_chain_t);
-        if (entry_in_final == k_null_idx) { return false; }
+        if (entry_in_final == kNullIdx) { return false; }
         record_outer(final_t, (entry_in_final + 1U) % 3U);
         record_outer(final_t, (entry_in_final + 2U) % 3U);
     }
@@ -1059,17 +1059,17 @@ bool carve_and_retriangulate(CdtState<T>& s, crd::u32 va, crd::u32 vb,
         const crd::u32 cap = n;
         for (crd::u32 iter = 0; iter < cap && live > 3U; ++iter)
         {
-            crd::u32 ear = k_null_idx;
+            crd::u32 ear = kNullIdx;
             crd::u32 j   = head;
             do
             {
                 if (alive[j] && is_ear_local(j))
                 {
-                    if (ear == k_null_idx || j < ear) { ear = j; }
+                    if (ear == kNullIdx || j < ear) { ear = j; }
                 }
                 j = nxt[j];
             } while (j != head);
-            if (ear == k_null_idx) { break; }
+            if (ear == kNullIdx) { break; }
             tris.push_back(boundary[prv[ear]]);
             tris.push_back(boundary[ear]);
             tris.push_back(boundary[nxt[ear]]);
@@ -1095,7 +1095,7 @@ bool carve_and_retriangulate(CdtState<T>& s, crd::u32 va, crd::u32 vb,
     if (upper_tris.empty() || lower_tris.empty()) { return false; }
 
     // Allocate new CDT triangles for each output triangle. Initialise
-    // neighbours to k_null_idx; we link them below by scanning shared edges.
+    // neighbours to kNullIdx; we link them below by scanning shared edges.
     crd::containers::Array<crd::u32> new_t_ids(s.alloc);
     auto add_triangle = [&](crd::u32 a, crd::u32 b, crd::u32 c) {
         const crd::u32 idx = alloc_triangle(s);
@@ -1103,9 +1103,9 @@ bool carve_and_retriangulate(CdtState<T>& s, crd::u32 va, crd::u32 vb,
         tri.v[0]           = a;
         tri.v[1]           = b;
         tri.v[2]           = c;
-        tri.nbr[0]         = k_null_idx;
-        tri.nbr[1]         = k_null_idx;
-        tri.nbr[2]         = k_null_idx;
+        tri.nbr[0]         = kNullIdx;
+        tri.nbr[1]         = kNullIdx;
+        tri.nbr[2]         = kNullIdx;
         new_t_ids.push_back(idx);
     };
 
@@ -1133,31 +1133,31 @@ bool carve_and_retriangulate(CdtState<T>& s, crd::u32 va, crd::u32 vb,
         const crd::u32 ti = new_t_ids[ni];
         for (crd::u32 e = 0; e < 3U; ++e)
         {
-            if (s.tris[ti].nbr[e] != k_null_idx) { continue; }
+            if (s.tris[ti].nbr[e] != kNullIdx) { continue; }
             const auto ep = edge_endpoints(ti, e);
             // Check against OuterLinks first.
-            crd::u32 matched_outer = k_null_idx;
+            crd::u32 matched_outer = kNullIdx;
             for (crd::u32 ol = 0; ol < outers.size(); ++ol)
             {
-                const auto& L = outers[ol];
-                // OuterLink endpoints are (L.v0, L.v1) in some order — we match
+                const auto& lk = outers[ol];
+                // OuterLink endpoints are (lk.v0, lk.v1) in some order — we match
                 // either direction.
-                if ((L.v0 == ep.first && L.v1 == ep.second) ||
-                    (L.v0 == ep.second && L.v1 == ep.first))
+                if ((lk.v0 == ep.first && lk.v1 == ep.second) ||
+                    (lk.v0 == ep.second && lk.v1 == ep.first))
                 {
                     matched_outer = ol;
                     break;
                 }
             }
-            if (matched_outer != k_null_idx)
+            if (matched_outer != kNullIdx)
             {
-                const auto& L = outers[matched_outer];
-                s.tris[ti].nbr[e] = L.nbr_t;
-                if (L.nbr_t != k_null_idx && L.nbr_e != k_null_idx)
+                const auto& lk = outers[matched_outer];
+                s.tris[ti].nbr[e] = lk.nbr_t;
+                if (lk.nbr_t != kNullIdx && lk.nbr_e != kNullIdx)
                 {
-                    s.tris[L.nbr_t].nbr[L.nbr_e] = ti;
+                    s.tris[lk.nbr_t].nbr[lk.nbr_e] = ti;
                 }
-                if (L.constrained) { set_edge_constrained(s.tris[ti], e); }
+                if (lk.constrained) { set_edge_constrained(s.tris[ti], e); }
                 continue;
             }
             // Not an outer edge — must be a shared edge with another new
@@ -1183,7 +1183,7 @@ bool carve_and_retriangulate(CdtState<T>& s, crd::u32 va, crd::u32 vb,
                         break;
                     }
                 }
-                if (s.tris[ti].nbr[e] != k_null_idx) { break; }
+                if (s.tris[ti].nbr[e] != kNullIdx) { break; }
             }
         }
     }
@@ -1198,7 +1198,7 @@ bool insert_constraint(CdtState<T>& s, crd::u32 va, crd::u32 vb) noexcept
     // Fast path: already an edge.
     {
         auto loc = find_edge<T>(s, va, vb);
-        if (loc.t_idx != k_null_idx)
+        if (loc.t_idx != kNullIdx)
         {
             mark_constraint_both_sides(s, loc.t_idx, loc.edge_idx);
             return true;
@@ -1210,12 +1210,12 @@ bool insert_constraint(CdtState<T>& s, crd::u32 va, crd::u32 vb) noexcept
     // crossings including non-convex-quad cases where pure flip-recovery
     // would fail (Domiter-Zalik 2008-style fallback over Anglada 1997).
     crd::containers::Array<ChainStep<T>> chain(s.alloc);
-    crd::u32                              final_t = k_null_idx;
+    crd::u32                              final_t = kNullIdx;
     if (!trace_chain<T>(s, va, vb, chain, final_t))
     {
         return false;
     }
-    if (chain.empty() || final_t == k_null_idx) { return false; }
+    if (chain.empty() || final_t == kNullIdx) { return false; }
 
     if (!carve_and_retriangulate<T>(s, va, vb, chain, final_t)) { return false; }
     return true;
@@ -1251,12 +1251,12 @@ void restore_delaunay(CdtState<T>& s)
         if (!tri_alive(s, ti)) { continue; }
         if (edge_constrained(s.tris[ti], e)) { continue; }
         const crd::u32 u_idx = s.tris[ti].nbr[e];
-        if (u_idx == k_null_idx) { continue; }
+        if (u_idx == kNullIdx) { continue; }
         // Incircle test: does the apex of U lie inside the circumcircle of T?
         const CdtTriangle& t   = s.tris[ti];
         const CdtTriangle& u   = s.tris[u_idx];
         const crd::u32     i_u = nbr_edge(u, ti);
-        if (i_u == k_null_idx) { continue; }
+        if (i_u == kNullIdx) { continue; }
         const crd::u32     vd  = u.v[(i_u + 2U) % 3U];
         const auto&        pa  = s.verts[t.v[0]];
         const auto&        pb  = s.verts[t.v[1]];

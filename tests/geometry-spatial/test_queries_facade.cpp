@@ -136,11 +136,11 @@ TEST_CASE("queries facade: RTree nearest_n matches native", "[geometry-spatial][
         (void)tree.insert(aabb_around(Vec3f{uc(rng), uc(rng), uc(rng)}, 0.4F), i);
     }
     const Vec3f q{0, 0, 0};
-    constexpr usize k = 5;
+    constexpr usize kK = 5;
     crd::containers::Array<typename crd::geometry::spatial::RTree<f32>::Neighbor> via_native(&f.alloc);
-    tree.nearest_n(q, k, via_native);
+    tree.nearest_n(q, kK, via_native);
     crd::containers::Array<typename crd::geometry::spatial::RTree<f32>::Neighbor> via_facade(&f.alloc);
-    crd::geometry::nearest_n(tree, q, k, via_facade);
+    crd::geometry::nearest_n(tree, q, kK, via_facade);
     REQUIRE(via_facade.size() == via_native.size());
     for (usize i = 0; i < via_facade.size(); ++i)
     {
@@ -357,13 +357,13 @@ TEST_CASE("queries facade: KdTree nearest_n matches native", "[geometry-spatial]
     auto tree = crd::geometry::spatial::kd_build<f32>(
         crd::containers::ConstSpan<Vec3f>{pts.data(), pts.size()}, &f.alloc);
     const Vec3f q{0, 0, 0};
-    constexpr usize k = 10;
+    constexpr usize kK = 10;
     crd::containers::Array<crd::geometry::spatial::KdNeighbor<f32>> via_native(&f.alloc);
     crd::geometry::spatial::kd_nearest_n<f32>(tree,
-        crd::containers::ConstSpan<Vec3f>{pts.data(), pts.size()}, q, k, via_native);
+        crd::containers::ConstSpan<Vec3f>{pts.data(), pts.size()}, q, kK, via_native);
     crd::containers::Array<crd::geometry::spatial::KdNeighbor<f32>> via_facade(&f.alloc);
     crd::geometry::nearest_n(tree,
-        crd::containers::ConstSpan<Vec3f>{pts.data(), pts.size()}, q, k, via_facade);
+        crd::containers::ConstSpan<Vec3f>{pts.data(), pts.size()}, q, kK, via_facade);
     REQUIRE(via_facade.size() == via_native.size());
     for (usize i = 0; i < via_facade.size(); ++i)
     {
@@ -404,7 +404,10 @@ TEST_CASE("queries facade: same overload name across 4 AABB backends returns sam
     const AABB3<f32> q = aabb_around(Vec3f{0, 0, 0}, 8.0F);
 
     // Same function name (`crd::geometry::overlap`), 4 different trees.
-    crd::containers::Array<u32> a(&f.alloc), b(&f.alloc), c(&f.alloc), d(&f.alloc);
+    crd::containers::Array<u32> a(&f.alloc);
+    crd::containers::Array<u32> b(&f.alloc);
+    crd::containers::Array<u32> c(&f.alloc);
+    crd::containers::Array<u32> d(&f.alloc);
     crd::geometry::overlap(octree, q, a);
     crd::geometry::overlap(rtree, q, b);
     crd::geometry::overlap(shash, q, c);

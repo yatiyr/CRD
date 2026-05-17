@@ -1,4 +1,4 @@
-// crd-units Layer-6 — UnitPreferences + format/parse impl (Phase 3.1.7.5 v0d-5).
+﻿// crd-units Layer-6 â€” UnitPreferences + format/parse impl (Phase 3.1.7.5 v0d-5).
 
 #include <crd/units/unit_preferences.hpp>
 
@@ -23,8 +23,8 @@ namespace
 // E.g. length to display mm: 1.0 m / 0.001 = 1000.0 (display).
 // Affine units (temperature) handled separately.
 
-// ── Length: SI = meter ────────────────────────────────────────────────────
-constexpr double k_length_factor[] = {
+// â”€â”€ Length: SI = meter â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+constexpr double kLengthFactor[] = {
     1.0,         // Meter
     1.0e-3,      // Millimeter
     1.0e-2,      // Centimeter
@@ -36,10 +36,10 @@ constexpr double k_length_factor[] = {
     1609.344,    // Mile
     0.0254e-3,   // Mil (1/1000 inch)
 };
-constexpr const char* k_length_suffix[] = {"_m", "_mm", "_cm", "_km", "_um", "_in", "_ft", "_yd", "_mi", "_mil"};
+constexpr const char* kLengthSuffix[] = {"_m", "_mm", "_cm", "_km", "_um", "_in", "_ft", "_yd", "_mi", "_mil"};
 
-// ── Mass: SI = kilogram ───────────────────────────────────────────────────
-constexpr double k_mass_factor[] = {
+// â”€â”€ Mass: SI = kilogram â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+constexpr double kMassFactor[] = {
     1.0,         // Kilogram
     1.0e-3,      // Gram
     1.0e-6,      // Milligram
@@ -47,10 +47,10 @@ constexpr double k_mass_factor[] = {
     0.45359237,  // PoundMass
     0.028349523125, // OunceMass
 };
-constexpr const char* k_mass_suffix[] = {"_kg", "_g", "_mg", "_t", "_lb_mass", "_oz_mass"};
+constexpr const char* kMassSuffix[] = {"_kg", "_g", "_mg", "_t", "_lb_mass", "_oz_mass"};
 
-// ── Time: SI = second ─────────────────────────────────────────────────────
-constexpr double k_time_factor[] = {
+// â”€â”€ Time: SI = second â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+constexpr double kTimeFactor[] = {
     1.0,         // Second
     1.0e-3,      // Millisecond
     1.0e-6,      // Microsecond
@@ -58,36 +58,36 @@ constexpr double k_time_factor[] = {
     3600.0,      // Hour
     86400.0,     // Day
 };
-constexpr const char* k_time_suffix[] = {"_s", "_ms", "_us", "_min", "_h", "_day"};
+constexpr const char* kTimeSuffix[] = {"_s", "_ms", "_us", "_min", "_h", "_day"};
 
-// ── Angle: SI = radian ────────────────────────────────────────────────────
-constexpr double k_pi_d = 3.14159265358979323846;
-constexpr double k_angle_factor[] = {
+// â”€â”€ Angle: SI = radian â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+constexpr double kPiD = 3.14159265358979323846;
+constexpr double kAngleFactor[] = {
     1.0,            // Radian
-    k_pi_d / 180.0, // Degree
-    2.0 * k_pi_d,   // Turn
+    kPiD / 180.0, // Degree
+    2.0 * kPiD,   // Turn
 };
-constexpr const char* k_angle_suffix[] = {"_rad", "_deg", "_turn"};
+constexpr const char* kAngleSuffix[] = {"_rad", "_deg", "_turn"};
 
-// ── Velocity: SI = m/s ────────────────────────────────────────────────────
-constexpr double k_velocity_factor[] = {
+// â”€â”€ Velocity: SI = m/s â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+constexpr double kVelocityFactor[] = {
     1.0,            // MeterPerSecond
     1.0 / 3.6,      // KilometerPerHour
     0.44704,        // MilePerHour
     0.514444,       // Knots
 };
-constexpr const char* k_velocity_suffix[] = {"_mps", "_kmph", "_mph", "_knots"};
+constexpr const char* kVelocitySuffix[] = {"_mps", "_kmph", "_mph", "_knots"};
 
-// ── Force: SI = newton ────────────────────────────────────────────────────
-constexpr double k_force_factor[] = {
+// â”€â”€ Force: SI = newton â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+constexpr double kForceFactor[] = {
     1.0,            // Newton
     1.0e3,          // Kilonewton
     4.4482216152605, // PoundForce
 };
-constexpr const char* k_force_suffix[] = {"_N", "_kN", "_lbf"};
+constexpr const char* kForceSuffix[] = {"_N", "_kN", "_lbf"};
 
-// ── Pressure: SI = pascal ─────────────────────────────────────────────────
-constexpr double k_pressure_factor[] = {
+// â”€â”€ Pressure: SI = pascal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+constexpr double kPressureFactor[] = {
     1.0,            // Pascal
     1.0e3,          // Kilopascal
     1.0e6,          // Megapascal
@@ -95,10 +95,10 @@ constexpr double k_pressure_factor[] = {
     6894.757293168, // Psi
     101325.0,       // Atm
 };
-constexpr const char* k_pressure_suffix[] = {"_Pa", "_kPa", "_MPa", "_bar", "_psi", "_atm"};
+constexpr const char* kPressureSuffix[] = {"_Pa", "_kPa", "_MPa", "_bar", "_psi", "_atm"};
 
-// ── Energy: SI = joule ────────────────────────────────────────────────────
-constexpr double k_energy_factor[] = {
+// â”€â”€ Energy: SI = joule â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+constexpr double kEnergyFactor[] = {
     1.0,            // Joule
     1.0e3,          // Kilojoule
     4.184,          // Calorie
@@ -106,44 +106,44 @@ constexpr double k_energy_factor[] = {
     3.6e6,          // KilowattHour
     1.602176634e-19, // ElectronVolt
 };
-constexpr const char* k_energy_suffix[] = {"_J", "_kJ", "_cal", "_kcal", "_kWh", "_eV"};
+constexpr const char* kEnergySuffix[] = {"_J", "_kJ", "_cal", "_kcal", "_kWh", "_eV"};
 
-// ── Power: SI = watt — `format_power` not yet shipped; tables reserved. ──
-[[maybe_unused]] constexpr double k_power_factor[] = {
+// â”€â”€ Power: SI = watt â€” `format_power` not yet shipped; tables reserved. â”€â”€
+[[maybe_unused]] constexpr double kPowerFactor[] = {
     1.0,            // Watt
     1.0e3,          // Kilowatt
     745.69987158227022, // Horsepower (mechanical, US)
 };
-constexpr const char* k_power_suffix[] = {"_W", "_kW", "_hp"};
+constexpr const char* kPowerSuffix[] = {"_W", "_kW", "_hp"};
 
-// ── Voltage: SI = volt — `format_voltage` not yet shipped; tables reserved. ──
-[[maybe_unused]] constexpr double k_voltage_factor[] = {
+// â”€â”€ Voltage: SI = volt â€” `format_voltage` not yet shipped; tables reserved. â”€â”€
+[[maybe_unused]] constexpr double kVoltageFactor[] = {
     1.0,            // Volt
     1.0e-3,         // Millivolt
     1.0e3,          // Kilovolt
 };
-constexpr const char* k_voltage_suffix[] = {"_V", "_mV", "_kV"};
+constexpr const char* kVoltageSuffix[] = {"_V", "_mV", "_kV"};
 
-// ── Current: SI = ampere — `format_current` not yet shipped; tables reserved. ──
-[[maybe_unused]] constexpr double k_current_factor[] = {
+// â”€â”€ Current: SI = ampere â€” `format_current` not yet shipped; tables reserved. â”€â”€
+[[maybe_unused]] constexpr double kCurrentFactor[] = {
     1.0,            // Ampere
     1.0e-3,         // Milliampere
     1.0e-6,         // Microampere
 };
-constexpr const char* k_current_suffix[] = {"_A", "_mA", "_uA"};
+constexpr const char* kCurrentSuffix[] = {"_A", "_mA", "_uA"};
 
-// ── Frequency: SI = hertz (= 1/s) ─────────────────────────────────────────
-constexpr double k_frequency_factor[] = {
+// â”€â”€ Frequency: SI = hertz (= 1/s) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+constexpr double kFrequencyFactor[] = {
     1.0,            // Hertz
     1.0e3,          // Kilohertz
     1.0e6,          // Megahertz
     1.0e9,          // Gigahertz
     1.0 / 60.0,     // RPM (= 1/60 Hz)
 };
-constexpr const char* k_frequency_suffix[] = {"_Hz", "_kHz", "_MHz", "_GHz", "_rpm"};
+constexpr const char* kFrequencySuffix[] = {"_Hz", "_kHz", "_MHz", "_GHz", "_rpm"};
 
-// ── Temperature: affine — Kelvin is the SI base ───────────────────────────
-constexpr const char* k_temperature_suffix[] = {"_kelvin", "_celsius", "_fahrenheit", "_rankine"};
+// â”€â”€ Temperature: affine â€” Kelvin is the SI base â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+constexpr const char* kTemperatureSuffix[] = {"_kelvin", "_celsius", "_fahrenheit", "_rankine"};
 
 // ---------------------------------------------------------------------------
 // Format helper: convert SI value to display unit + format with prefs.
@@ -213,7 +213,7 @@ bool parse_value_with_suffix(crd::containers::StringView text,
             }
         }
     }
-    // No suffix — interpret as bare SI value.
+    // No suffix â€” interpret as bare SI value.
     char buf[64] = {};
     if (text.size() >= sizeof(buf)) { return false; }
     for (crd::usize j = 0; j < text.size(); ++j) { buf[j] = text[j]; }
@@ -232,31 +232,31 @@ bool parse_value_with_suffix(crd::containers::StringView text,
 // ---------------------------------------------------------------------------
 
 crd::containers::StringView suffix_for(LengthUnitChoice u) noexcept
-{ return crd::containers::StringView{k_length_suffix[static_cast<crd::usize>(u)]}; }
+{ return crd::containers::StringView{kLengthSuffix[static_cast<crd::usize>(u)]}; }
 crd::containers::StringView suffix_for(MassUnitChoice u) noexcept
-{ return crd::containers::StringView{k_mass_suffix[static_cast<crd::usize>(u)]}; }
+{ return crd::containers::StringView{kMassSuffix[static_cast<crd::usize>(u)]}; }
 crd::containers::StringView suffix_for(TimeUnitChoice u) noexcept
-{ return crd::containers::StringView{k_time_suffix[static_cast<crd::usize>(u)]}; }
+{ return crd::containers::StringView{kTimeSuffix[static_cast<crd::usize>(u)]}; }
 crd::containers::StringView suffix_for(AngleUnitChoice u) noexcept
-{ return crd::containers::StringView{k_angle_suffix[static_cast<crd::usize>(u)]}; }
+{ return crd::containers::StringView{kAngleSuffix[static_cast<crd::usize>(u)]}; }
 crd::containers::StringView suffix_for(VelocityUnitChoice u) noexcept
-{ return crd::containers::StringView{k_velocity_suffix[static_cast<crd::usize>(u)]}; }
+{ return crd::containers::StringView{kVelocitySuffix[static_cast<crd::usize>(u)]}; }
 crd::containers::StringView suffix_for(ForceUnitChoice u) noexcept
-{ return crd::containers::StringView{k_force_suffix[static_cast<crd::usize>(u)]}; }
+{ return crd::containers::StringView{kForceSuffix[static_cast<crd::usize>(u)]}; }
 crd::containers::StringView suffix_for(PressureUnitChoice u) noexcept
-{ return crd::containers::StringView{k_pressure_suffix[static_cast<crd::usize>(u)]}; }
+{ return crd::containers::StringView{kPressureSuffix[static_cast<crd::usize>(u)]}; }
 crd::containers::StringView suffix_for(EnergyUnitChoice u) noexcept
-{ return crd::containers::StringView{k_energy_suffix[static_cast<crd::usize>(u)]}; }
+{ return crd::containers::StringView{kEnergySuffix[static_cast<crd::usize>(u)]}; }
 crd::containers::StringView suffix_for(PowerUnitChoice u) noexcept
-{ return crd::containers::StringView{k_power_suffix[static_cast<crd::usize>(u)]}; }
+{ return crd::containers::StringView{kPowerSuffix[static_cast<crd::usize>(u)]}; }
 crd::containers::StringView suffix_for(VoltageUnitChoice u) noexcept
-{ return crd::containers::StringView{k_voltage_suffix[static_cast<crd::usize>(u)]}; }
+{ return crd::containers::StringView{kVoltageSuffix[static_cast<crd::usize>(u)]}; }
 crd::containers::StringView suffix_for(CurrentUnitChoice u) noexcept
-{ return crd::containers::StringView{k_current_suffix[static_cast<crd::usize>(u)]}; }
+{ return crd::containers::StringView{kCurrentSuffix[static_cast<crd::usize>(u)]}; }
 crd::containers::StringView suffix_for(FrequencyUnitChoice u) noexcept
-{ return crd::containers::StringView{k_frequency_suffix[static_cast<crd::usize>(u)]}; }
+{ return crd::containers::StringView{kFrequencySuffix[static_cast<crd::usize>(u)]}; }
 crd::containers::StringView suffix_for(TemperatureUnitChoice u) noexcept
-{ return crd::containers::StringView{k_temperature_suffix[static_cast<crd::usize>(u)]}; }
+{ return crd::containers::StringView{kTemperatureSuffix[static_cast<crd::usize>(u)]}; }
 
 // ---------------------------------------------------------------------------
 // 11 Discipline presets
@@ -392,70 +392,70 @@ crd::containers::String format_length(Length<crd::f32> q, const UnitPreferences&
                                        crd::memory::IAllocator* alloc)
 {
     const auto i = static_cast<crd::usize>(prefs.length);
-    return format_value_with_factor(q.value, k_length_factor[i], k_length_suffix[i], prefs, alloc);
+    return format_value_with_factor(q.value, kLengthFactor[i], kLengthSuffix[i], prefs, alloc);
 }
 
 crd::containers::String format_length(Length<crd::f64> q, const UnitPreferences& prefs,
                                        crd::memory::IAllocator* alloc)
 {
     const auto i = static_cast<crd::usize>(prefs.length);
-    return format_value_with_factor(q.value, k_length_factor[i], k_length_suffix[i], prefs, alloc);
+    return format_value_with_factor(q.value, kLengthFactor[i], kLengthSuffix[i], prefs, alloc);
 }
 
 crd::containers::String format_mass(Mass<crd::f32> q, const UnitPreferences& prefs,
                                      crd::memory::IAllocator* alloc)
 {
     const auto i = static_cast<crd::usize>(prefs.mass);
-    return format_value_with_factor(q.value, k_mass_factor[i], k_mass_suffix[i], prefs, alloc);
+    return format_value_with_factor(q.value, kMassFactor[i], kMassSuffix[i], prefs, alloc);
 }
 
 crd::containers::String format_time(Time<crd::f64> q, const UnitPreferences& prefs,
                                      crd::memory::IAllocator* alloc)
 {
     const auto i = static_cast<crd::usize>(prefs.time);
-    return format_value_with_factor(q.value, k_time_factor[i], k_time_suffix[i], prefs, alloc);
+    return format_value_with_factor(q.value, kTimeFactor[i], kTimeSuffix[i], prefs, alloc);
 }
 
 crd::containers::String format_angle(Angle<crd::f32> q, const UnitPreferences& prefs,
                                       crd::memory::IAllocator* alloc)
 {
     const auto i = static_cast<crd::usize>(prefs.angle);
-    return format_value_with_factor(q.value, k_angle_factor[i], k_angle_suffix[i], prefs, alloc);
+    return format_value_with_factor(q.value, kAngleFactor[i], kAngleSuffix[i], prefs, alloc);
 }
 
 crd::containers::String format_velocity(Velocity<crd::f32> q, const UnitPreferences& prefs,
                                          crd::memory::IAllocator* alloc)
 {
     const auto i = static_cast<crd::usize>(prefs.velocity);
-    return format_value_with_factor(q.value, k_velocity_factor[i], k_velocity_suffix[i], prefs, alloc);
+    return format_value_with_factor(q.value, kVelocityFactor[i], kVelocitySuffix[i], prefs, alloc);
 }
 
 crd::containers::String format_force(Force<crd::f32> q, const UnitPreferences& prefs,
                                       crd::memory::IAllocator* alloc)
 {
     const auto i = static_cast<crd::usize>(prefs.force);
-    return format_value_with_factor(q.value, k_force_factor[i], k_force_suffix[i], prefs, alloc);
+    return format_value_with_factor(q.value, kForceFactor[i], kForceSuffix[i], prefs, alloc);
 }
 
 crd::containers::String format_pressure(Pressure<crd::f32> q, const UnitPreferences& prefs,
                                          crd::memory::IAllocator* alloc)
 {
     const auto i = static_cast<crd::usize>(prefs.pressure);
-    return format_value_with_factor(q.value, k_pressure_factor[i], k_pressure_suffix[i], prefs, alloc);
+    return format_value_with_factor(q.value, kPressureFactor[i], kPressureSuffix[i], prefs, alloc);
 }
 
 crd::containers::String format_energy(Energy<crd::f32> q, const UnitPreferences& prefs,
                                        crd::memory::IAllocator* alloc)
 {
     const auto i = static_cast<crd::usize>(prefs.energy);
-    return format_value_with_factor(q.value, k_energy_factor[i], k_energy_suffix[i], prefs, alloc);
+    return format_value_with_factor(q.value, kEnergyFactor[i], kEnergySuffix[i], prefs, alloc);
 }
 
 crd::containers::String format_frequency(Frequency<crd::f32> q, const UnitPreferences& prefs,
                                           crd::memory::IAllocator* alloc)
 {
     const auto i = static_cast<crd::usize>(prefs.frequency);
-    return format_value_with_factor(q.value, k_frequency_factor[i], k_frequency_suffix[i], prefs, alloc);
+    return format_value_with_factor(q.value, kFrequencyFactor[i], kFrequencySuffix[i], prefs, alloc);
 }
 
 crd::containers::String format_temperature(crd::f32 kelvin, const UnitPreferences& prefs,
@@ -492,12 +492,12 @@ std::optional<Length<T>> parse_length(crd::containers::StringView text, const Un
 {
     double val = 0.0;
     crd::usize unit_idx = 0;
-    if (!parse_value_with_suffix(text, k_length_suffix, std::size(k_length_factor), val, unit_idx))
+    if (!parse_value_with_suffix(text, kLengthSuffix, std::size(kLengthFactor), val, unit_idx))
     {
         return std::nullopt;
     }
     if (unit_idx == static_cast<crd::usize>(-1)) { return Length<T>{static_cast<T>(val)}; }
-    return Length<T>{static_cast<T>(val * k_length_factor[unit_idx])};
+    return Length<T>{static_cast<T>(val * kLengthFactor[unit_idx])};
 }
 
 template <typename T>
@@ -505,12 +505,12 @@ std::optional<Mass<T>> parse_mass(crd::containers::StringView text, const UnitPr
 {
     double val = 0.0;
     crd::usize unit_idx = 0;
-    if (!parse_value_with_suffix(text, k_mass_suffix, std::size(k_mass_factor), val, unit_idx))
+    if (!parse_value_with_suffix(text, kMassSuffix, std::size(kMassFactor), val, unit_idx))
     {
         return std::nullopt;
     }
     if (unit_idx == static_cast<crd::usize>(-1)) { return Mass<T>{static_cast<T>(val)}; }
-    return Mass<T>{static_cast<T>(val * k_mass_factor[unit_idx])};
+    return Mass<T>{static_cast<T>(val * kMassFactor[unit_idx])};
 }
 
 template <typename T>
@@ -518,12 +518,12 @@ std::optional<Angle<T>> parse_angle(crd::containers::StringView text, const Unit
 {
     double val = 0.0;
     crd::usize unit_idx = 0;
-    if (!parse_value_with_suffix(text, k_angle_suffix, std::size(k_angle_factor), val, unit_idx))
+    if (!parse_value_with_suffix(text, kAngleSuffix, std::size(kAngleFactor), val, unit_idx))
     {
         return std::nullopt;
     }
     if (unit_idx == static_cast<crd::usize>(-1)) { return Angle<T>{static_cast<T>(val)}; }
-    return Angle<T>{static_cast<T>(val * k_angle_factor[unit_idx])};
+    return Angle<T>{static_cast<T>(val * kAngleFactor[unit_idx])};
 }
 
 template <typename T>
@@ -531,12 +531,12 @@ std::optional<Velocity<T>> parse_velocity(crd::containers::StringView text, cons
 {
     double val = 0.0;
     crd::usize unit_idx = 0;
-    if (!parse_value_with_suffix(text, k_velocity_suffix, std::size(k_velocity_factor), val, unit_idx))
+    if (!parse_value_with_suffix(text, kVelocitySuffix, std::size(kVelocityFactor), val, unit_idx))
     {
         return std::nullopt;
     }
     if (unit_idx == static_cast<crd::usize>(-1)) { return Velocity<T>{static_cast<T>(val)}; }
-    return Velocity<T>{static_cast<T>(val * k_velocity_factor[unit_idx])};
+    return Velocity<T>{static_cast<T>(val * kVelocityFactor[unit_idx])};
 }
 
 template <typename T>
@@ -544,12 +544,12 @@ std::optional<Force<T>> parse_force(crd::containers::StringView text, const Unit
 {
     double val = 0.0;
     crd::usize unit_idx = 0;
-    if (!parse_value_with_suffix(text, k_force_suffix, std::size(k_force_factor), val, unit_idx))
+    if (!parse_value_with_suffix(text, kForceSuffix, std::size(kForceFactor), val, unit_idx))
     {
         return std::nullopt;
     }
     if (unit_idx == static_cast<crd::usize>(-1)) { return Force<T>{static_cast<T>(val)}; }
-    return Force<T>{static_cast<T>(val * k_force_factor[unit_idx])};
+    return Force<T>{static_cast<T>(val * kForceFactor[unit_idx])};
 }
 
 template <typename T>
@@ -557,12 +557,12 @@ std::optional<Pressure<T>> parse_pressure(crd::containers::StringView text, cons
 {
     double val = 0.0;
     crd::usize unit_idx = 0;
-    if (!parse_value_with_suffix(text, k_pressure_suffix, std::size(k_pressure_factor), val, unit_idx))
+    if (!parse_value_with_suffix(text, kPressureSuffix, std::size(kPressureFactor), val, unit_idx))
     {
         return std::nullopt;
     }
     if (unit_idx == static_cast<crd::usize>(-1)) { return Pressure<T>{static_cast<T>(val)}; }
-    return Pressure<T>{static_cast<T>(val * k_pressure_factor[unit_idx])};
+    return Pressure<T>{static_cast<T>(val * kPressureFactor[unit_idx])};
 }
 
 std::optional<crd::f32> parse_temperature_to_kelvin(crd::containers::StringView text,
@@ -570,12 +570,12 @@ std::optional<crd::f32> parse_temperature_to_kelvin(crd::containers::StringView 
 {
     if (text.empty()) { return std::nullopt; }
     // Find suffix manually.
-    static constexpr const char* k_suffixes[] = {"_kelvin", "_celsius", "_fahrenheit", "_rankine"};
+    static constexpr const char* kSuffixes[] = {"_kelvin", "_celsius", "_fahrenheit", "_rankine"};
     crd::usize matched = static_cast<crd::usize>(-1);
     crd::usize num_len = text.size();
     for (crd::usize i = 0; i < 4; ++i)
     {
-        const std::string_view suf{k_suffixes[i]};
+        const std::string_view suf{kSuffixes[i]};
         if (text.size() >= suf.size() &&
             std::string_view{text.data(), text.size()}.substr(text.size() - suf.size()) == suf)
         {
@@ -603,11 +603,15 @@ std::optional<crd::f32> parse_temperature_to_kelvin(crd::containers::StringView 
 }
 
 // Explicit instantiations for f32 / f64.
+// NOLINTBEGIN(bugprone-macro-parentheses) — RESULT is used as a template-type
+// name (`RESULT<crd::f32>`); wrapping it in parens would make the expansion a
+// parse error (`(RESULT)<crd::f32>` is ill-formed).
 #define CRD_UNITS_INSTANTIATE_PARSE(NAME, RESULT)                                                                      \
     template std::optional<RESULT<crd::f32>> parse_##NAME<crd::f32>(crd::containers::StringView,                       \
                                                                     const UnitPreferences&) noexcept;                  \
     template std::optional<RESULT<crd::f64>> parse_##NAME<crd::f64>(crd::containers::StringView,                       \
                                                                     const UnitPreferences&) noexcept;
+// NOLINTEND(bugprone-macro-parentheses)
 
 CRD_UNITS_INSTANTIATE_PARSE(length, Length)
 CRD_UNITS_INSTANTIATE_PARSE(mass, Mass)

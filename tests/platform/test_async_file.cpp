@@ -60,32 +60,32 @@ TEST_CASE("AsyncFile: open nonexistent path returns invalid handle", "[platform]
 
 TEST_CASE("AsyncFile: open existing file reports correct size", "[platform][async_file]")
 {
-    const crd::u8 kData[] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE};
-    const fs::Path p = write_temp_file(kData, sizeof(kData));
+    const crd::u8 data[] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE};
+    const fs::Path p = write_temp_file(data, sizeof(data));
 
     const AsyncFile f = AsyncFile::open(p.generic());
     CHECK(f.is_open());
-    CHECK(f.size() == sizeof(kData));
+    CHECK(f.size() == sizeof(data));
 
     (void)fs::remove_file(p);
 }
 
 TEST_CASE("AsyncFile: read_async round-trip matches written bytes", "[platform][async_file]")
 {
-    const crd::u8 kData[] = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08};
-    const fs::Path p = write_temp_file(kData, sizeof(kData));
+    const crd::u8 data[] = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08};
+    const fs::Path p = write_temp_file(data, sizeof(data));
 
     AsyncFile f = AsyncFile::open(p.generic());
     REQUIRE(f.is_open());
 
-    crd::u8 dst[sizeof(kData)] = {};
+    crd::u8 dst[sizeof(data)] = {};
     crd::jobs::Counter* c = f.read_async(0U, crd::containers::Span<crd::u8>(dst, sizeof(dst)));
     REQUIRE(c != nullptr);
     crd::jobs::wait(c);
 
-    for (crd::usize i = 0; i < sizeof(kData); ++i)
+    for (crd::usize i = 0; i < sizeof(data); ++i)
     {
-        CHECK(dst[i] == kData[i]);
+        CHECK(dst[i] == data[i]);
     }
 
     (void)fs::remove_file(p);
@@ -93,8 +93,8 @@ TEST_CASE("AsyncFile: read_async round-trip matches written bytes", "[platform][
 
 TEST_CASE("AsyncFile: out-of-range read returns nullptr", "[platform][async_file]")
 {
-    const crd::u8 kData[] = {0x11, 0x22, 0x33};
-    const fs::Path p = write_temp_file(kData, sizeof(kData));
+    const crd::u8 data[] = {0x11, 0x22, 0x33};
+    const fs::Path p = write_temp_file(data, sizeof(data));
 
     AsyncFile f = AsyncFile::open(p.generic());
     REQUIRE(f.is_open());

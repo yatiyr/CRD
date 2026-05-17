@@ -80,7 +80,7 @@ namespace crd::geometry::polygon
 {
 namespace
 {
-constexpr crd::u32 k_null_idx = std::numeric_limits<crd::u32>::max();
+constexpr crd::u32 kNullIdx = std::numeric_limits<crd::u32>::max();
 
 template <crd::math::MathScalar T>
 inline T orient2d_signed(const crd::math::Vec2<T>& a, const crd::math::Vec2<T>& b,
@@ -287,11 +287,11 @@ struct VertexKey
 template <crd::math::MathScalar T>
 struct PBHalfEdge
 {
-    crd::u32 origin_v        = k_null_idx;
-    crd::u32 dest_v          = k_null_idx;
-    crd::u32 twin            = k_null_idx;
-    crd::u32 next_in_face    = k_null_idx;
-    crd::u32 face_idx        = k_null_idx;
+    crd::u32 origin_v        = kNullIdx;
+    crd::u32 dest_v          = kNullIdx;
+    crd::u32 twin            = kNullIdx;
+    crd::u32 next_in_face    = kNullIdx;
+    crd::u32 face_idx        = kNullIdx;
     int      wind_subject    = 0; // contribution sign when this half-edge bounds a face on its LEFT
     int      wind_clip       = 0;
     crd::u8  visited_in_walk = 0;
@@ -525,12 +525,12 @@ BooleanResult<T> polygon_boolean(PolygonView2<T> subject, PolygonView2<T> clip, 
     crd::containers::Array<crd::u32>                vid_of_original(alloc);
     crd::containers::Array<crd::math::Vec2<T>>      vertex_pos(alloc);
     vid_of_original.resize(total_pts);
-    crd::u32 last_vid = k_null_idx;
+    crd::u32 last_vid = kNullIdx;
     T        last_x   = T{0};
     T        last_y   = T{0};
     for (crd::u32 k = 0; k < keys.size(); ++k)
     {
-        if (last_vid == k_null_idx || keys[k].x != last_x || keys[k].y != last_y)
+        if (last_vid == kNullIdx || keys[k].x != last_x || keys[k].y != last_y)
         {
             last_vid = static_cast<crd::u32>(vertex_pos.size());
             last_x   = keys[k].x;
@@ -686,7 +686,7 @@ BooleanResult<T> polygon_boolean(PolygonView2<T> subject, PolygonView2<T> clip, 
     crd::u32 face_count = 0;
     for (crd::u32 h = 0; h < halfedges.size(); ++h)
     {
-        if (halfedges[h].face_idx != k_null_idx) { continue; }
+        if (halfedges[h].face_idx != kNullIdx) { continue; }
         // Walk the loop starting at h, assigning face_count to all visited.
         crd::u32 cur = h;
         const crd::u32 walk_cap = static_cast<crd::u32>(halfedges.size()) + 4U;
@@ -694,7 +694,7 @@ BooleanResult<T> polygon_boolean(PolygonView2<T> subject, PolygonView2<T> clip, 
         {
             halfedges[cur].face_idx = face_count;
             cur = halfedges[cur].next_in_face;
-            if (cur == k_null_idx) { return BooleanResult<T>(alloc); }
+            if (cur == kNullIdx) { return BooleanResult<T>(alloc); }
             if (cur == h) { break; }
         }
         ++face_count;
@@ -735,7 +735,7 @@ BooleanResult<T> polygon_boolean(PolygonView2<T> subject, PolygonView2<T> clip, 
     {
         if (halfedges[h].visited_in_walk != 0U) { continue; }
         const crd::u32 fi = halfedges[h].face_idx;
-        if (fi == k_null_idx) { continue; }
+        if (fi == kNullIdx) { continue; }
         faces[fi].loop_starts.push_back(h);
         crd::u32 cur = h;
         const crd::u32 walk_cap = static_cast<crd::u32>(halfedges.size()) + 4U;

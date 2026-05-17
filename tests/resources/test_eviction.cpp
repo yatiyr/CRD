@@ -69,8 +69,8 @@ static void ev_write_blob_pack(const crd::platform::fs::Path& path,
     const ResourceId pack_id = ResourceId::mint_random();
 
     crd::containers::Array<crd::u8> pool(&s_ev_alloc);
-    const char kName[] = "ev_blob";
-    for (const char c : kName) { pool.push_back(static_cast<crd::u8>(c)); }
+    const char name[] = "ev_blob";
+    for (const char c : name) { pool.push_back(static_cast<crd::u8>(c)); }
     pool.push_back(0U);
 
     crd::containers::Array<ManifestEntry> entries(&s_ev_alloc);
@@ -133,9 +133,9 @@ TEST_CASE("Eviction: budget enforced - excess resources evicted from A1in",
     ResourceManager rm(&s_ev_alloc);
     rm.register_loader(std::make_unique<EVBlobLoader>());
 
-    const crd::usize kN = 4;
-    EvPack packs[kN];
-    for (crd::usize i = 0; i < kN; ++i)
+    const crd::usize n_packs = 4;
+    EvPack packs[n_packs];
+    for (crd::usize i = 0; i < n_packs; ++i)
     {
         packs[i].id   = ResourceId::mint_random();
         packs[i].path = crd::platform::fs::Path(ev_tmp_path("ev_budget_", packs[i].id));
@@ -147,7 +147,7 @@ TEST_CASE("Eviction: budget enforced - excess resources evicted from A1in",
     const crd::u64 blob_sz = rm.find_entry(packs[0].id)->blob_size;
     rm.set_memory_budget(blob_sz * 2U);
 
-    for (crd::usize i = 0; i < kN; ++i)
+    for (crd::usize i = 0; i < n_packs; ++i)
     {
         auto h = rm.load_sync<EVBlobResource>(packs[i].id);
         CHECK(h.state() == LoadState::Ready);
@@ -155,7 +155,7 @@ TEST_CASE("Eviction: budget enforced - excess resources evicted from A1in",
 
     CHECK(rm.current_memory_use() <= blob_sz * 2U);
 
-    for (crd::usize i = 0; i < kN; ++i)
+    for (crd::usize i = 0; i < n_packs; ++i)
     {
         (void)crd::platform::fs::remove_file(packs[i].path);
     }
@@ -167,9 +167,9 @@ TEST_CASE("Eviction: pinned entries survive eviction pressure",
     ResourceManager rm(&s_ev_alloc);
     rm.register_loader(std::make_unique<EVBlobLoader>());
 
-    const crd::usize kN = 4;
-    EvPack packs[kN];
-    for (crd::usize i = 0; i < kN; ++i)
+    const crd::usize n_packs = 4;
+    EvPack packs[n_packs];
+    for (crd::usize i = 0; i < n_packs; ++i)
     {
         packs[i].id   = ResourceId::mint_random();
         packs[i].path = crd::platform::fs::Path(ev_tmp_path("ev_pin_", packs[i].id));
@@ -185,7 +185,7 @@ TEST_CASE("Eviction: pinned entries survive eviction pressure",
     rm.set_memory_budget(blob_sz * 2U);
 
     // Load all 4, dropping each handle immediately.
-    for (crd::usize i = 0; i < kN; ++i)
+    for (crd::usize i = 0; i < n_packs; ++i)
     {
         auto h = rm.load_sync<EVBlobResource>(packs[i].id);
         CHECK(h.state() == LoadState::Ready);
@@ -202,7 +202,7 @@ TEST_CASE("Eviction: pinned entries survive eviction pressure",
 
     rm.unpin(packs[0].id);
 
-    for (crd::usize i = 0; i < kN; ++i)
+    for (crd::usize i = 0; i < n_packs; ++i)
     {
         (void)crd::platform::fs::remove_file(packs[i].path);
     }
@@ -254,9 +254,9 @@ TEST_CASE("Eviction: 2Q - A1out ghost hit promotes resource to Am over A1in entr
     ResourceManager rm(&s_ev_alloc);
     rm.register_loader(std::make_unique<EVBlobLoader>());
 
-    const crd::usize kN = 4;
-    EvPack packs[kN];
-    for (crd::usize i = 0; i < kN; ++i)
+    const crd::usize n_packs = 4;
+    EvPack packs[n_packs];
+    for (crd::usize i = 0; i < n_packs; ++i)
     {
         packs[i].id   = ResourceId::mint_random();
         packs[i].path = crd::platform::fs::Path(ev_tmp_path("ev_2q_", packs[i].id));
@@ -278,28 +278,28 @@ TEST_CASE("Eviction: 2Q - A1out ghost hit promotes resource to Am over A1in entr
     // Re-load A: A1out ghost hit → A promoted to Am. B evicted from A1in to make room.
     // After this: A1in=[C], Am=[A].
     {
-        auto hA = rm.load_sync<EVBlobResource>(packs[0].id);
-        REQUIRE(hA.state() == LoadState::Ready);
-        CHECK(hA.generation() == 1U); // re-issued block bumps generation
+        auto h_a = rm.load_sync<EVBlobResource>(packs[0].id);
+        REQUIRE(h_a.state() == LoadState::Ready);
+        CHECK(h_a.generation() == 1U); // re-issued block bumps generation
     }
 
     // Load D (→ A1in, should evict C from A1in rather than A from Am).
     {
-        auto hD = rm.load_sync<EVBlobResource>(packs[3].id);
-        REQUIRE(hD.state() == LoadState::Ready);
+        auto h_d = rm.load_sync<EVBlobResource>(packs[3].id);
+        REQUIRE(h_d.state() == LoadState::Ready);
     }
 
     // A must still be accessible (not evicted — it's in Am).
     {
-        auto hA2 = rm.load_sync<EVBlobResource>(packs[0].id);
-        REQUIRE(hA2.state() == LoadState::Ready);
-        CHECK(hA2.generation() == 1U); // same generation, not re-evicted
-        const EVBlobResource* res = hA2.get();
+        auto h_a2 = rm.load_sync<EVBlobResource>(packs[0].id);
+        REQUIRE(h_a2.state() == LoadState::Ready);
+        CHECK(h_a2.generation() == 1U); // same generation, not re-evicted
+        const EVBlobResource* res = h_a2.get();
         REQUIRE(res != nullptr);
         CHECK(res->value == 20U);
     }
 
-    for (crd::usize i = 0; i < kN; ++i)
+    for (crd::usize i = 0; i < n_packs; ++i)
     {
         (void)crd::platform::fs::remove_file(packs[i].path);
     }

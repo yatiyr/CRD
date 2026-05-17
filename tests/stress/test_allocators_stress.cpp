@@ -62,8 +62,8 @@ void drive_tlsf(crd::stress::Config cfg)
         crd::memory::MallocAllocator parent("stress-alloc-parent");
         crd::memory::TlsfAllocator heap(usize{4} << 20, &parent, "stress-alloc-heap");
 
-        constexpr u32 max_live = 96U;
-        Block live[max_live] = {};
+        constexpr u32 kMaxLive = 96U;
+        Block live[kMaxLive] = {};
         u32 live_count = 0;
         u8 fill_seq = static_cast<u8>(w * 7U + 1U);
 
@@ -78,13 +78,13 @@ void drive_tlsf(crd::stress::Config cfg)
         {
             const u32 roll = rng.next_u32(10U);
 
-            if ((roll < 6U && live_count < max_live)) // 60%: allocate (skewed toward small)
+            if ((roll < 6U && live_count < kMaxLive)) // 60%: allocate (skewed toward small)
             {
                 const u32 bucket = rng.next_u32(4U);
-                const usize size = bucket == 0U   ? (1U + rng.next_u32(64U))
-                                   : bucket == 1U ? (1U + rng.next_u32(512U))
-                                   : bucket == 2U ? (1U + rng.next_u32(8U * 1024U))
-                                                  : (1U + rng.next_u32(64U * 1024U));
+                usize size = 1U + rng.next_u32(64U * 1024U);
+                if (bucket == 0U)      { size = 1U + rng.next_u32(64U); }
+                else if (bucket == 1U) { size = 1U + rng.next_u32(512U); }
+                else if (bucket == 2U) { size = 1U + rng.next_u32(8U * 1024U); }
                 const usize align = usize{8} << rng.next_u32(6U); // 8..256
                 void* p = heap.try_allocate(size, align);
                 if (p == nullptr) // pool pressure — free something and move on

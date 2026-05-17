@@ -280,9 +280,10 @@ bool share_edge_through_vertex(const crd::containers::Array<crd::u32>& indices,
     crd::u32 tb_v1 = indices[3U * tb + 1];
     crd::u32 tb_v2 = indices[3U * tb + 2];
     // For each vertex of tb other than v: does ta contain it?
+    const crd::u32 tb_verts[3] = {tb_v0, tb_v1, tb_v2};
     for (crd::u32 c = 0; c < 3U; ++c)
     {
-        const crd::u32 tb_v = (c == 0 ? tb_v0 : (c == 1 ? tb_v1 : tb_v2));
+        const crd::u32 tb_v = tb_verts[c];
         if (tb_v == v) { continue; }
         if (tb_v == ta_v0 || tb_v == ta_v1 || tb_v == ta_v2) { return true; }
     }

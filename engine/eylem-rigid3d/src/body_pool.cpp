@@ -85,7 +85,7 @@ BodyId BodyPool::insert(const RigidBody& body)
     // live==1 sees the new generation + new payload (single-threaded
     // World contract per ADR-0050; no atomics needed).
     crd::u32 next_gen = static_cast<crd::u32>(tile.generation[lane]) + 1U;
-    if (next_gen > 0xFFu) next_gen = 1U; // wrap to 1; 0 stays reserved as "never allocated"
+    if (next_gen > 0xFFU) next_gen = 1U; // wrap to 1; 0 stays reserved as "never allocated"
     tile.generation[lane] = static_cast<crd::u8>(next_gen);
 
     store_lane(idx, body);

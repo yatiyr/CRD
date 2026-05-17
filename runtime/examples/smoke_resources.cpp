@@ -77,8 +77,8 @@ static crd::platform::fs::Path assemble_pack(
 
     // Build string pool + entry with dummy offset.
     crd::containers::Array<crd::u8>        pool(&g_alloc);
-    const char kName[] = "smoke_blob";
-    for (char c : kName) { pool.push_back(static_cast<crd::u8>(c)); }
+    const char name[] = "smoke_blob";
+    for (char c : name) { pool.push_back(static_cast<crd::u8>(c)); }
 
     crd::containers::Array<ManifestEntry> entries(&g_alloc);
     ManifestEntry e;
@@ -132,8 +132,8 @@ static crd::platform::fs::Path assemble_pack(
 
 int main()
 {
-    const crd::u8 kExpected[] = {0x01, 0x02, 0x03, 0x04, 0x05};
-    const auto expected_span = crd::containers::ConstSpan<crd::u8>(kExpected, 5);
+    const crd::u8 expected[] = {0x01, 0x02, 0x03, 0x04, 0x05};
+    const auto expected_span = crd::containers::ConstSpan<crd::u8>(expected, 5);
 
     const ResourceId blob_id = ResourceId::mint_random();
     const auto pack_path = assemble_pack(blob_id, expected_span);
@@ -168,7 +168,7 @@ int main()
 
     for (crd::usize i = 0; i < 5; ++i)
     {
-        if (res->bytes[i] != kExpected[i])
+        if (res->bytes[i] != expected[i])
         {
             std::fprintf(stderr, "smoke_resources: payload mismatch at byte %zu\n", i);
             (void)crd::platform::fs::remove_file(pack_path);

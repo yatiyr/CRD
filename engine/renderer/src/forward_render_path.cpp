@@ -86,8 +86,8 @@ void ForwardRenderPath::resize(rhi::Extent2D new_extent)
 }
 
 // Standard 48-byte interleaved vertex layout for all surface geometry.
-static const rhi::VertexBindingDesc   k_surface_binding{0, 48, rhi::VertexInputRate::Vertex};
-static const rhi::VertexAttributeDesc k_surface_attrs[4] = {
+static const rhi::VertexBindingDesc   kSurfaceBinding{0, 48, rhi::VertexInputRate::Vertex};
+static const rhi::VertexAttributeDesc kSurfaceAttrs[4] = {
     {0, 0, rhi::Format::R32G32B32Sfloat,    0},   // position
     {1, 0, rhi::Format::R32G32B32Sfloat,    12},  // normal
     {2, 0, rhi::Format::R32G32Sfloat,       24},  // uv0
@@ -132,8 +132,8 @@ ForwardRenderPath::get_or_compile_mat_pipelines(const MaterialInstance& mat)
             desc.viewport_extent      = m_extent;
             desc.color_format         = rhi::Format::Undefined;
             desc.depth_format         = rhi::Format::D32Sfloat;
-            desc.vertex_bindings      = crd::containers::make_span(&k_surface_binding, 1U);
-            desc.vertex_attributes    = crd::containers::make_span(k_surface_attrs, 4U);
+            desc.vertex_bindings      = crd::containers::make_span(&kSurfaceBinding, 1U);
+            desc.vertex_attributes    = crd::containers::make_span(kSurfaceAttrs, 4U);
             desc.enable_depth_test    = true;
             desc.enable_blend         = false;
             desc.use_dynamic_viewport = true;
@@ -170,8 +170,8 @@ ForwardRenderPath::get_or_compile_mat_pipelines(const MaterialInstance& mat)
             desc.viewport_extent      = m_extent;
             desc.color_format         = rhi::Format::B8G8R8A8Unorm;
             desc.depth_format         = rhi::Format::D32Sfloat;
-            desc.vertex_bindings      = crd::containers::make_span(&k_surface_binding, 1U);
-            desc.vertex_attributes    = crd::containers::make_span(k_surface_attrs, 4U);
+            desc.vertex_bindings      = crd::containers::make_span(&kSurfaceBinding, 1U);
+            desc.vertex_attributes    = crd::containers::make_span(kSurfaceAttrs, 4U);
             desc.enable_depth_test    = true;
             desc.enable_blend         = false;
             desc.use_dynamic_viewport = true;

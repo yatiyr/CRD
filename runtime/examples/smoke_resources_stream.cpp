@@ -80,8 +80,8 @@ static void write_blob_pack(const crd::platform::fs::Path& path,
     const ResourceId pack_id = ResourceId::mint_random();
 
     crd::containers::Array<crd::u8> pool(&g_alloc);
-    const char kName[] = "stream_blob";
-    for (const char c : kName) { pool.push_back(static_cast<crd::u8>(c)); }
+    const char name[] = "stream_blob";
+    for (const char c : name) { pool.push_back(static_cast<crd::u8>(c)); }
     pool.push_back(0U);
 
     crd::containers::Array<ManifestEntry> entries(&g_alloc);

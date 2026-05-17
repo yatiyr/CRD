@@ -15,21 +15,18 @@ namespace crd::geometry::mesh
 
 using crd::geometry::bvh::BvhNode;
 using crd::geometry::bvh::k_max_bvh_depth;
-using crd::geometry::primitives::AABB3;
 using crd::geometry::primitives::intersect_ray_aabb_robust;
 using crd::geometry::primitives::precompute_ray_aabb;
 using crd::geometry::primitives::Ray3;
 using crd::geometry::primitives::RayAABBPrecompute;
 using crd::math::Vec3;
-using crd::math::simd::cmp_gt;
-using crd::math::simd::cmp_lt;
 using crd::math::simd::Vec8f;
 
 namespace
 {
 
 // Per-axis epsilon for the det test — same value v0f's MT uses.
-constexpr crd::f32 k_mt_det_eps = 1.0e-7F;
+constexpr crd::f32 kMtDetEps = 1.0e-7F;
 
 // 8-way Möller-Trumbore — SIMD over the heavy ALU (edges/det/inv_det/u/v/t),
 // then scalar lane scan applies the masking decisions (cull_back / |det|>eps /
@@ -53,8 +50,12 @@ struct MtResult
                                    Vec8f v1x, Vec8f v1y, Vec8f v1z,
                                    Vec8f v2x, Vec8f v2y, Vec8f v2z) noexcept
 {
-    const Vec8f rox(ro.x), roy(ro.y), roz(ro.z);
-    const Vec8f rdx(rd.x), rdy(rd.y), rdz(rd.z);
+    const Vec8f rox(ro.x);
+    const Vec8f roy(ro.y);
+    const Vec8f roz(ro.z);
+    const Vec8f rdx(rd.x);
+    const Vec8f rdy(rd.y);
+    const Vec8f rdz(rd.z);
 
     // edge1 = v1 - v0
     const Vec8f e1x = v1x - v0x;
@@ -102,9 +103,15 @@ struct TriColumns
                                              const crd::u32*           leaf_prim_idx,
                                              crd::u32                  valid_count) noexcept
 {
-    crd::f32 v0x[8]{}, v0y[8]{}, v0z[8]{};
-    crd::f32 v1x[8]{}, v1y[8]{}, v1z[8]{};
-    crd::f32 v2x[8]{}, v2y[8]{}, v2z[8]{};
+    crd::f32 v0x[8]{};
+    crd::f32 v0y[8]{};
+    crd::f32 v0z[8]{};
+    crd::f32 v1x[8]{};
+    crd::f32 v1y[8]{};
+    crd::f32 v1z[8]{};
+    crd::f32 v2x[8]{};
+    crd::f32 v2y[8]{};
+    crd::f32 v2z[8]{};
     for (crd::u32 i = 0U; i < 8U; ++i)
     {
         const crd::u32 src_lane = i < valid_count ? i : 0U;
@@ -191,11 +198,11 @@ mesh_raycast_simd(const TriangleMeshViewf& view,
                     const crd::f32 d   = r.det.lane(lane);
                     if (cull_back)
                     {
-                        if (d <= k_mt_det_eps) { continue; }
+                        if (d <= kMtDetEps) { continue; }
                     }
                     else
                     {
-                        if (d > -k_mt_det_eps && d < k_mt_det_eps) { continue; }
+                        if (d > -kMtDetEps && d < kMtDetEps) { continue; }
                     }
                     const crd::f32 u_l = r.u.lane(lane);
                     if (u_l < 0.0F || u_l > 1.0F) { continue; }
@@ -224,7 +231,8 @@ mesh_raycast_simd(const TriangleMeshViewf& view,
         // Interior — slab-test both children, descend nearer-first.
         const crd::u32 left  = node.left_first;
         const crd::u32 right = node.left_first + 1U;
-        crd::f32 ltl = 0.0F, ltr = 0.0F;
+        crd::f32 ltl = 0.0F;
+        crd::f32 ltr = 0.0F;
         const bool lhit = intersect_ray_aabb_robust(ray, aabb_pc, nodes[left].bounds,
                                                      0.0F, best_t, ltl);
         const bool rhit = intersect_ray_aabb_robust(ray, aabb_pc, nodes[right].bounds,

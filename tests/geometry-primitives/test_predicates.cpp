@@ -511,3 +511,153 @@ TEST_CASE("orient3d: exactly-coplanar input on y = ax + bz + c plane",
     CHECK(orient3d(b, c, d, a) == 0.0);
     CHECK(orient3d(d, a, b, c) == 0.0);
 }
+
+// ---------------------------------------------------------------------------
+// (11) v8c-pre Stage D paydown: insphere cospherical adversarial corpus.
+//
+// These cases exercise the FULL Shewchuk insphereexact body. The previous
+// Stage-A-equivalent re-expression returned f64 noise on truly cospherical
+// large-integer-coordinate input because the cofactor products exceed f64's
+// 53-bit precision. The Stage D port (10 pairwise 2D minors → 10 trio
+// 24-element expansions → 5 quad 96-element → 5 lifted 1152-element →
+// cascaded 5760-element final sum) returns EXACT zero for these cases.
+//
+// Reference: Shewchuk 1997 `insphereexact` (predicates.c v4.0.0 lines
+// ~3346-3601). Debt entry: `docs/debt.md::Shewchuk adaptive predicates`.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("insphere Stage D: 5 cospherical points on r2=14 integer sphere",
+          "[v3a][predicates][insphere][stage-d]")
+{
+    // x^2 + y^2 + z^2 = 14 for all 5 points; lift column = (14,14,14,14,14)
+    // = 14 * the all-ones column. Rank-deficient. 5x5 det is EXACTLY zero.
+    const Vec3<f64> a(3, 2, 1);
+    const Vec3<f64> b(3, -2, 1);
+    const Vec3<f64> c(3, 2, -1);
+    const Vec3<f64> d(1, 2, 3);
+    const Vec3<f64> e(-3, 2, 1);
+    CHECK(insphere(a, b, c, d, e) == 0.0);
+}
+
+TEST_CASE("insphere Stage D: 5 cospherical points on r2=10000 integer sphere",
+          "[v3a][predicates][insphere][stage-d]")
+{
+    // x^2 + y^2 + z^2 = 10000 for all. Lift values up to 10000 each.
+    // Cofactor products of order ~10^12 — intermediate sums accumulate
+    // roundoff that Stage A misses.
+    const Vec3<f64> a(100, 0, 0);
+    const Vec3<f64> b(0, 100, 0);
+    const Vec3<f64> c(0, 0, 100);
+    const Vec3<f64> d(-100, 0, 0);
+    const Vec3<f64> e(60, 80, 0); // 3600 + 6400 = 10000 ok
+    CHECK(insphere(a, b, c, d, e) == 0.0);
+}
+
+TEST_CASE("insphere Stage D: 5 cospherical points on r2=1e6 integer sphere",
+          "[v3a][predicates][insphere][stage-d]")
+{
+    // x^2 + y^2 + z^2 = 1,000,000. Lift values 1e6 each.
+    // Cofactor products of order 1e6 * 1000^3 = 1e15 — at f64's precision
+    // limit. Stage A definitively misses; Stage D returns exact zero.
+    const Vec3<f64> a(1000, 0, 0);
+    const Vec3<f64> b(0, 1000, 0);
+    const Vec3<f64> c(0, 0, 1000);
+    const Vec3<f64> d(-1000, 0, 0);
+    const Vec3<f64> e(0, -1000, 0);
+    CHECK(insphere(a, b, c, d, e) == 0.0);
+}
+
+TEST_CASE("insphere Stage D: 5 cospherical points on r2=1e10 integer sphere",
+          "[v3a][predicates][insphere][stage-d]")
+{
+    // x^2 + y^2 + z^2 = 1e10. Lift values 1e10 each. Cofactor products of
+    // order 1e10 * 1e5^3 = 1e25 — utterly beyond f64 53-bit precision.
+    // Pure Stage A noise; Stage D returns exact zero.
+    const Vec3<f64> a(1e5, 0, 0);
+    const Vec3<f64> b(0, 1e5, 0);
+    const Vec3<f64> c(0, 0, 1e5);
+    const Vec3<f64> d(-1e5, 0, 0);
+    const Vec3<f64> e(0, -1e5, 0);
+    CHECK(insphere(a, b, c, d, e) == 0.0);
+}
+
+TEST_CASE("insphere Stage D: cospherical r2=1e6 sphere with non-axis-aligned 5th point",
+          "[v3a][predicates][insphere][stage-d]")
+{
+    // Non-trivial cospherical configuration — not just axis-aligned points.
+    const Vec3<f64> a(1000, 0, 0);
+    const Vec3<f64> b(0, 1000, 0);
+    const Vec3<f64> c(0, 0, 1000);
+    const Vec3<f64> d(-600, 800, 0); // 360000 + 640000 = 1e6 ok
+    const Vec3<f64> e(600, 0, 800);  // 360000 + 640000 = 1e6 ok
+    CHECK(insphere(a, b, c, d, e) == 0.0);
+}
+
+TEST_CASE("insphere Stage D: r2=1e6 sphere with 5th point near sphere returns correct sign",
+          "[v3a][predicates][insphere][stage-d]")
+{
+    // 4 of 5 points exactly on r^2=1e6 sphere; 5th point slightly INSIDE
+    // then slightly OUTSIDE. Sign convention: positive = inside circumsphere.
+    const Vec3<f64> a(1000, 0, 0);
+    const Vec3<f64> b(0, 1000, 0);
+    const Vec3<f64> c(0, 0, 1000);
+    const Vec3<f64> d(-1000, 0, 0);
+    const Vec3<f64> e_inside(0, -999, 0); // r^2 = 998001 < 1e6
+    const f64 sign_inside = insphere(a, b, c, d, e_inside);
+    CHECK(sign_inside > 0.0);
+
+    const Vec3<f64> e_outside(0, -1001, 0); // r^2 = 1002001 > 1e6
+    const f64 sign_outside = insphere(a, b, c, d, e_outside);
+    CHECK(sign_outside < 0.0);
+}
+
+TEST_CASE("insphere Stage D: non-symmetric cospherical configuration r2=5e7",
+          "[v3a][predicates][insphere][stage-d][adversarial]")
+{
+    // 5 NON-symmetric cospherical points on x^2+y^2+z^2 = 5*10^7. Each
+    // is a unique permutation of (5000, 5000, 0) and (5000, 4000, 3000)
+    // family (permutations of {3000,4000,5000} or {5000,5000,0}).
+    //
+    // **Critical**: unlike the symmetric tests above, these inputs do NOT
+    // produce pairwise-cancelling cofactor products in Stage A's f64
+    // computation. The intermediate `lift * cofactor` products are of order
+    // 5*10^7 * 10^13 = 5*10^20 — well beyond f64 53-bit precision
+    // (2^53 ≈ 9*10^15). Stage A's left-to-right summation accumulates
+    // roundoff and miscomputes the (truly zero) determinant. Stage D
+    // returns EXACT zero.
+    const Vec3<f64> a(5000, 5000, 0);    // 25e6 + 25e6 + 0 = 5e7 ok
+    const Vec3<f64> b(5000, 4000, 3000); // 25e6 + 16e6 + 9e6 = 5e7 ok
+    const Vec3<f64> c(4000, 5000, 3000); // 16e6 + 25e6 + 9e6 = 5e7 ok
+    const Vec3<f64> d(3000, 4000, 5000); // 9e6 + 16e6 + 25e6 = 5e7 ok
+    const Vec3<f64> e(5000, 3000, 4000); // 25e6 + 9e6 + 16e6 = 5e7 ok
+    CHECK(insphere(a, b, c, d, e) == 0.0);
+}
+
+TEST_CASE("insphere Stage D: non-symmetric cospherical configuration r2=5e9",
+          "[v3a][predicates][insphere][stage-d][adversarial]")
+{
+    // Same configuration as above scaled by 10x; r^2 = 5e9. Intermediate
+    // products of order 5e9 * 1e16 = 5e25 — 10 orders of magnitude beyond
+    // f64 precision. Stage A produces pure noise; Stage D exact zero.
+    const Vec3<f64> a(50000, 50000, 0);
+    const Vec3<f64> b(50000, 40000, 30000);
+    const Vec3<f64> c(40000, 50000, 30000);
+    const Vec3<f64> d(30000, 40000, 50000);
+    const Vec3<f64> e(50000, 30000, 40000);
+    CHECK(insphere(a, b, c, d, e) == 0.0);
+}
+
+TEST_CASE("insphere Stage D: orientation symmetry preserved under exact arithmetic",
+          "[v3a][predicates][insphere][stage-d]")
+{
+    // Stage D must preserve the orientation symmetry: swapping two of the
+    // first 4 points negates the sign.
+    const Vec3<f64> a(1000, 0, 0);
+    const Vec3<f64> b(0, 1000, 0);
+    const Vec3<f64> c(0, 0, 1000);
+    const Vec3<f64> d(-1000, 0, 0);
+    const Vec3<f64> e_inside(0, -999, 0);
+    const f64 forward = insphere(a, b, c, d, e_inside);
+    const f64 swapped = insphere(b, a, c, d, e_inside);
+    CHECK(forward == -swapped);
+}

@@ -73,7 +73,9 @@ validate_triangle_mesh(const TriangleMeshViewf&        view,
         const crd::u32 i2 = view.indices[ti * 3U + 2U];
         if (i0 >= vcount || i1 >= vcount || i2 >= vcount)
         {
-            const crd::u32 bad = (i0 >= vcount) ? i0 : (i1 >= vcount ? i1 : i2);
+            crd::u32 bad = i2;
+            if (i0 >= vcount)      { bad = i0; }
+            else if (i1 >= vcount) { bad = i1; }
             report.defects.push_back(MeshDefect{MeshDefectKind::OutOfBoundsIndex, ti, bad});
             critical_defect = true;
             continue; // skip the rest of this tri's checks — its vertex reads are unsafe

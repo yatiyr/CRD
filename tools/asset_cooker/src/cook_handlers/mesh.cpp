@@ -99,18 +99,18 @@ struct MikkPrimData
 // Callbacks are static functions assigned to the C struct.
 // Calling convention is compatible on all supported platforms (x86-64 MSVC/clang-cl).
 
-static int mikk_get_num_faces(const SMikkTSpaceContext* ctx)
+int mikk_get_num_faces(const SMikkTSpaceContext* ctx)
 {
     const auto* d = static_cast<const MikkPrimData*>(ctx->m_pUserData);
     return static_cast<int>(d->face_count);
 }
 
-static int mikk_get_num_verts_of_face(const SMikkTSpaceContext*, const int)
+int mikk_get_num_verts_of_face(const SMikkTSpaceContext*, const int)
 {
     return 3;
 }
 
-static void mikk_get_position(const SMikkTSpaceContext* ctx,
+void mikk_get_position(const SMikkTSpaceContext* ctx,
                                float* pos_out,
                                const int face, const int vert)
 {
@@ -122,7 +122,7 @@ static void mikk_get_position(const SMikkTSpaceContext* ctx,
     pos_out[2] = d->positions[vi * 3U + 2U];
 }
 
-static void mikk_get_normal(const SMikkTSpaceContext* ctx,
+void mikk_get_normal(const SMikkTSpaceContext* ctx,
                              float* norm_out,
                              const int face, const int vert)
 {
@@ -134,7 +134,7 @@ static void mikk_get_normal(const SMikkTSpaceContext* ctx,
     norm_out[2] = d->normals[vi * 3U + 2U];
 }
 
-static void mikk_get_tex_coord(const SMikkTSpaceContext* ctx,
+void mikk_get_tex_coord(const SMikkTSpaceContext* ctx,
                                 float* uv_out,
                                 const int face, const int vert)
 {
@@ -145,7 +145,7 @@ static void mikk_get_tex_coord(const SMikkTSpaceContext* ctx,
     uv_out[1] = d->uvs[vi * 2U + 1U];
 }
 
-static void mikk_set_tspace_basic(const SMikkTSpaceContext* ctx,
+void mikk_set_tspace_basic(const SMikkTSpaceContext* ctx,
                                    const float* tangent,
                                    const float  sign,
                                    const int face, const int vert)
@@ -159,7 +159,7 @@ static void mikk_set_tspace_basic(const SMikkTSpaceContext* ctx,
     d->tangents[vi * 4U + 3U] = sign;
 }
 
-static bool generate_tangents(const float*     positions,
+bool generate_tangents(const float*     positions,
                                const float*     normals,
                                const float*     uvs,
                                const crd::u32*  indices,

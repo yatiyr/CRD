@@ -9,6 +9,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
+
 using crd::geometry::mesh::MeshDefect;
 using crd::geometry::mesh::MeshDefectKind;
 using crd::geometry::mesh::MeshValidationOptions;
@@ -53,11 +55,7 @@ CubeMesh make_cube(crd::memory::IAllocator* a, crd::f32 half = 0.5F)
 
 bool contains_defect(const MeshValidationReport& r, MeshDefectKind k) noexcept
 {
-    for (const MeshDefect& d : r.defects)
-    {
-        if (d.kind == k) { return true; }
-    }
-    return false;
+    return std::ranges::any_of(r.defects, [k](const MeshDefect& d) noexcept { return d.kind == k; });
 }
 
 crd::u32 count_defect(const MeshValidationReport& r, MeshDefectKind k) noexcept

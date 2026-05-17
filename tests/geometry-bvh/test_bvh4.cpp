@@ -38,7 +38,6 @@ using crd::geometry::bvh::ray_vs_4_aabb;
 using crd::geometry::bvh::ray_vs_4_aabb_inflated;
 using crd::geometry::primitives::AABB3;
 using crd::geometry::primitives::intersect_ray_aabb_robust;
-using crd::geometry::primitives::intersects;
 using crd::geometry::primitives::precompute_ray_aabb;
 using crd::geometry::primitives::Ray3;
 using crd::math::Vec3;

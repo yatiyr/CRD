@@ -11,7 +11,6 @@ using crd::f32;
 using crd::u32;
 using crd::usize;
 using crd::geometry::primitives::AABB3;
-using crd::geometry::primitives::Ray3;
 using crd::geometry::spatial::SpatialHash;
 using crd::geometry::spatial::SpatialHashConfig;
 using crd::geometry::spatial::SpatialHashRay3T;

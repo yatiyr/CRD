@@ -263,7 +263,8 @@ TEST_CASE("Quantity: comparison operators",
 TEST_CASE("Quantity: Pressure = Force / Area",
           "[v0a-1][quantity][arith]")
 {
-    Quantity<dim::Force, f64> F{1000.0};      // 1000 N
+    // F = Force per SI base notation.
+    Quantity<dim::Force, f64> F{1000.0};      // 1000 N  // NOLINT(readability-identifier-naming)
     Quantity<dim::Length, f64> side{2.0};      // 2 m
     Quantity<dim::Area, f64> area = side * side;
 
@@ -293,14 +294,14 @@ TEST_CASE("Quantity: Density = Mass / Volume",
 TEST_CASE("Quantity: arithmetic is constexpr-evaluable",
           "[v0a-1][quantity][constexpr]")
 {
-    constexpr Quantity<dim::Length, f32> a{2.0F};
-    constexpr Quantity<dim::Length, f32> b{3.0F};
-    constexpr auto sum = a + b;
-    STATIC_REQUIRE(sum.value == 5.0F);
+    constexpr Quantity<dim::Length, f32> kA{2.0F};
+    constexpr Quantity<dim::Length, f32> kB{3.0F};
+    constexpr auto kSum = kA + kB;
+    STATIC_REQUIRE(kSum.value == 5.0F);
 
-    constexpr Quantity<dim::Velocity, f64> v{10.0};
-    constexpr Quantity<dim::Time, f64> t{2.0};
-    constexpr auto distance = v * t;
-    STATIC_REQUIRE(dim_equal_v<typename decltype(distance)::dimension, dim::Length>);
-    STATIC_REQUIRE(distance.value == 20.0);
+    constexpr Quantity<dim::Velocity, f64> kV{10.0};
+    constexpr Quantity<dim::Time, f64> kT{2.0};
+    constexpr auto kDistance = kV * kT;
+    STATIC_REQUIRE(dim_equal_v<typename decltype(kDistance)::dimension, dim::Length>);
+    STATIC_REQUIRE(kDistance.value == 20.0);
 }

@@ -158,7 +158,8 @@ TEST_CASE("SpatialBVHIndex overlap query returns matching entities",
     idx->overlap(AABB3<f32>{Vec3f{0, -1, -1}, Vec3f{3, 1, 1}}, hits);
     REQUIRE(hits.size() == 2U);
     // Order isn't guaranteed by the API; check membership.
-    bool saw_near = false, saw_other = false;
+    bool saw_near = false;
+    bool saw_other = false;
     for (auto id : hits) { if (id == e_near) saw_near = true; if (id == e_other) saw_other = true; }
     REQUIRE(saw_near);
     REQUIRE(saw_other);
@@ -279,15 +280,15 @@ namespace
 {
 struct SceneConcurrencyCorpus
 {
-    static constexpr u32 k_queries = 16U;
-    static constexpr u32 k_iters_per_query = 25U;
+    static constexpr u32 kQueries = 16U;
+    static constexpr u32 kItersPerQuery = 25U;
 
     crd::memory::TlsfAllocator alloc{32U << 20};
     World                      world{&alloc};
     std::unique_ptr<BoundsExtractor> extractor{};
     SpatialBVHIndex*           idx{nullptr};
-    AABB3<f32>                 queries[k_queries]{};
-    crd::containers::Array<EntityId> ref[k_queries] = {
+    AABB3<f32>                 queries[kQueries]{};
+    crd::containers::Array<EntityId> ref[kQueries] = {
         crd::containers::Array<EntityId>{&alloc}, crd::containers::Array<EntityId>{&alloc},
         crd::containers::Array<EntityId>{&alloc}, crd::containers::Array<EntityId>{&alloc},
         crd::containers::Array<EntityId>{&alloc}, crd::containers::Array<EntityId>{&alloc},
@@ -320,7 +321,7 @@ TEST_CASE("SpatialBVHIndex concurrent overlap queries via crd-jobs (proves natur
     }
 
     std::uniform_real_distribution<f32> uqh(2.0F, 8.0F);
-    for (u32 q = 0; q < SceneConcurrencyCorpus::k_queries; ++q)
+    for (u32 q = 0; q < SceneConcurrencyCorpus::kQueries; ++q)
     {
         corpus->queries[q] = aabb_around(Vec3f{uc(rng), uc(rng), uc(rng)}, uqh(rng));
         corpus->idx->overlap(corpus->queries[q], corpus->ref[q]);
@@ -329,14 +330,14 @@ TEST_CASE("SpatialBVHIndex concurrent overlap queries via crd-jobs (proves natur
                     [](EntityId a, EntityId b) { return a.raw < b.raw; });
     }
 
-    constexpr u32 total_tasks = SceneConcurrencyCorpus::k_queries * SceneConcurrencyCorpus::k_iters_per_query;
+    constexpr u32 kTotalTasks = SceneConcurrencyCorpus::kQueries * SceneConcurrencyCorpus::kItersPerQuery;
     auto* corpus_ptr = corpus.get();
     crd::jobs::Counter* counter = crd::jobs::parallel_for(
-        total_tasks, /*num_jobs=*/16U,
+        kTotalTasks, /*num_jobs=*/16U,
         [corpus_ptr](crd::u32 begin, crd::u32 end) noexcept {
             for (crd::u32 task_idx = begin; task_idx < end; ++task_idx)
             {
-                const u32 q = task_idx % SceneConcurrencyCorpus::k_queries;
+                const u32 q = task_idx % SceneConcurrencyCorpus::kQueries;
                 crd::memory::TlsfAllocator local_alloc{1U << 17};
                 crd::containers::Array<EntityId> got(&local_alloc);
                 corpus_ptr->idx->overlap(corpus_ptr->queries[q], got);

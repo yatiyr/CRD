@@ -5,6 +5,18 @@ move to a session log entry and remove from here.
 
 ## Active debt
 
+### Shewchuk adaptive predicates — FULLY PAID 2026-05-17 (orient3d + incircle Stage D 2026-05-14; insphere Stage D 2026-05-17 v8c-pre)
+
+> **STATUS — CLOSED 2026-05-17 by Phase 3.1.7 v8c-pre.** All three adaptive
+> predicates (`orient3d_exact`, `incircle_exact`, `insphere_exact`) ship full
+> Shewchuk Stage D. Adversarial cospherical corpus (`[stage-d][adversarial]`
+> tag in `tests/geometry-primitives/test_predicates.cpp`) verified — the
+> previous Stage-A-equivalent `insphere_exact` returned `-16777216` on the
+> r²=5×10⁹ non-symmetric cospherical configuration; the Stage D port returns
+> exact zero. No outstanding adaptive-predicate debt.
+
+**Historical entry follows for context:**
+
 ### Shewchuk adaptive predicates — partial paydown 2026-05-14 (orient3d + incircle full Stage D shipped; insphere remains Stage A-equivalent)
 
 > **TL;DR — WHEN TO PAY THIS DEBT:**

@@ -143,8 +143,8 @@ TEST_CASE("kd_build widest-extent split axis pick", "[geometry-spatial][kd][buil
 TEST_CASE("kd_build permutation determinism", "[geometry-spatial][kd][build][determinism]")
 {
     AllocFixture f{};
-    constexpr u32 n = 200U;
-    auto base = make_random_cloud(n, 42U, &f.alloc);
+    constexpr u32 kN = 200U;
+    auto base = make_random_cloud(kN, 42U, &f.alloc);
 
     auto tree_base = kd_build<f32>(crd::containers::ConstSpan<Vec3f>{base.data(), base.size()},
                                      &f.alloc);
@@ -156,14 +156,14 @@ TEST_CASE("kd_build permutation determinism", "[geometry-spatial][kd][build][det
     for (u32 seed = 1; seed <= 5U; ++seed)
     {
         crd::containers::Array<Vec3f> shuffled(&f.alloc);
-        shuffled.reserve(n);
-        for (u32 i = 0; i < n; ++i) { shuffled.push_back(base[i]); }
+        shuffled.reserve(kN);
+        for (u32 i = 0; i < kN; ++i) { shuffled.push_back(base[i]); }
         std::mt19937 r(seed * 1000U);
         std::shuffle(shuffled.data(), shuffled.data() + shuffled.size(), r);
 
         auto tree_s = kd_build<f32>(crd::containers::ConstSpan<Vec3f>{shuffled.data(), shuffled.size()},
                                       &f.alloc);
-        REQUIRE(tree_s.point_count() == n);
+        REQUIRE(tree_s.point_count() == kN);
 
         // The point INDICES are tied to the input order — shuffled inputs
         // produce shuffled payloads. The set of input points (positions) is
@@ -184,7 +184,7 @@ TEST_CASE("kd_build permutation determinism", "[geometry-spatial][kd][build][det
         };
         std::sort(base_pos.data(), base_pos.data() + base_pos.size(), lex);
         std::sort(shuf_pos.data(), shuf_pos.data() + shuf_pos.size(), lex);
-        for (usize i = 0; i < n; ++i) { REQUIRE(base_pos[i] == shuf_pos[i]); }
+        for (usize i = 0; i < kN; ++i) { REQUIRE(base_pos[i] == shuf_pos[i]); }
     }
 }
 

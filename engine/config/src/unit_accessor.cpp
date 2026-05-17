@@ -324,11 +324,16 @@ crd::units::Temperature<T> get_temperature(const Config& cfg,
 
 // ---- Explicit instantiations: f32 + f64 per dimension ------------------
 
+// Macro needed because explicit template instantiation has no template-
+// function equivalent; arguments cannot be parenthesised because they are
+// used as template-id heads (`Quantity<f32>`, `Func<f32>`).
+// NOLINTBEGIN(cppcoreguidelines-macro-usage, bugprone-macro-parentheses)
 #define CRD_CONFIG_INSTANTIATE_UNIT_ACCESSOR(Quantity, Func)                              \
     template Quantity<crd::f32> Func<crd::f32>(const Config&, crd::containers::StringView, \
                                                 Quantity<crd::f32>) noexcept;             \
     template Quantity<crd::f64> Func<crd::f64>(const Config&, crd::containers::StringView, \
                                                 Quantity<crd::f64>) noexcept
+// NOLINTEND(cppcoreguidelines-macro-usage, bugprone-macro-parentheses)
 
 CRD_CONFIG_INSTANTIATE_UNIT_ACCESSOR(crd::units::Length, get_length);
 CRD_CONFIG_INSTANTIATE_UNIT_ACCESSOR(crd::units::Mass, get_mass);

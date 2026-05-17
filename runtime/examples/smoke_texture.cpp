@@ -77,9 +77,9 @@ static fs::Path write_pack(ResourceId txtr_id,
 {
     const ResourceId pack_id = ResourceId::mint_random();
 
-    const char* kArtName = "smoke.txtr";
+    const char* art_name = "smoke.txtr";
     crd::containers::Array<crd::u8> pool(&g_alloc);
-    for (const char* p = kArtName; *p != '\0'; ++p)
+    for (const char* p = art_name; *p != '\0'; ++p)
     {
         pool.push_back(static_cast<crd::u8>(*p));
     }

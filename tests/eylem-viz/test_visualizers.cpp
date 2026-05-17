@@ -25,7 +25,6 @@
 #include <crd/scene/transform.hpp>
 #include <crd/scene/world.hpp>
 
-using crd::draw::Category;
 using crd::draw::DebugVizComponent;
 using crd::draw::RenderBuffer;
 using crd::draw::VisualizerRegistry;
@@ -55,7 +54,7 @@ TEST_CASE("eylem v1b-d register_eylem_visualizers fires on RBC + CC entities",
 {
     crd::memory::TlsfAllocator alloc{16U << 20}; // 16 MB per-test heap
     BodyPool     body_pool{&alloc, 64U};
-    ColliderPool collider_pool{&alloc, /*capacity_per_kind=*/64U};
+    ColliderPool collider_pool{&alloc, /*max_per_kind=*/64U};
 
     VisualizerRegistry registry{&alloc};
     register_eylem_visualizers(registry, body_pool, collider_pool);

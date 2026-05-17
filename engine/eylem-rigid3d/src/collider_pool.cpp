@@ -32,7 +32,7 @@ CRD_FORCEINLINE void put_lane(ColT& col, crd::usize lane_idx, crd::f32 value) no
 [[nodiscard]] CRD_FORCEINLINE crd::u32 next_generation(crd::u8 prev) noexcept
 {
     crd::u32 next = static_cast<crd::u32>(prev) + 1U;
-    if (next > 0xFFu) next = 1U;
+    if (next > 0xFFU) next = 1U;
     return next;
 }
 

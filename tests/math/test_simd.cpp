@@ -119,16 +119,16 @@ TEST_CASE("simd Vec4f mul_add uses two roundings (no hardware FMA)", "[simd][vec
 {
     // mul_add(a,b,c) MUST equal (a*b)+c with two roundings — not std::fma.
     // Pick values where (a*b)+c diverges from std::fma(a,b,c).
-    constexpr f32 a_lane = 1.0F + (1.0F / 8388608.0F);  // 1 + 2^-23
-    constexpr f32 b_lane = 1.0F + (1.0F / 8388608.0F);
-    constexpr f32 c_lane = -1.0F;
+    constexpr f32 kALane = 1.0F + (1.0F / 8388608.0F);  // 1 + 2^-23
+    constexpr f32 kBLane = 1.0F + (1.0F / 8388608.0F);
+    constexpr f32 kCLane = -1.0F;
 
-    const Vec4f a(a_lane);
-    const Vec4f b(b_lane);
-    const Vec4f c(c_lane);
+    const Vec4f a(kALane);
+    const Vec4f b(kBLane);
+    const Vec4f c(kCLane);
 
     const Vec4f      sim_result = mul_add(a, b, c);
-    const f32        ref_result = (a_lane * b_lane) + c_lane;
+    const f32        ref_result = (kALane * kBLane) + kCLane;
 
     f32 lanes[4]; sim_result.store(lanes);
     REQUIRE(bit_eq(lanes[0], ref_result));
@@ -221,10 +221,14 @@ TEST_CASE("simd Vec8f arithmetic parity vs scalar", "[simd][vec8f][parity]")
     const Vec8f a(1.0F, -2.0F, 3.0F, -4.0F, 5.0F, -6.0F, 7.0F, -8.0F);
     const Vec8f b(0.5F,  1.5F, 2.5F,  3.5F, 4.5F,  5.5F, 6.5F,  7.5F);
 
-    f32 ea[8], eb[8];
+    f32 ea[8];
+    f32 eb[8];
     a.store(ea); b.store(eb);
 
-    f32 expected_add[8], expected_sub[8], expected_mul[8], expected_div[8];
+    f32 expected_add[8];
+    f32 expected_sub[8];
+    f32 expected_mul[8];
+    f32 expected_div[8];
     for (int i = 0; i < 8; ++i)
     {
         expected_add[i] = ea[i] + eb[i];
@@ -268,6 +272,8 @@ TEST_CASE("simd Vec8f alignment is 32 bytes", "[simd][vec8f]")
 
 TEST_CASE("simd Mat4f identity behaves as identity under multiply", "[simd][mat4f]")
 {
+    // I / M / IM = identity / matrix / product per linear-algebra notation.
+    // NOLINTBEGIN(readability-identifier-naming)
     const Mat4f I  = Mat4f::identity();
     const Mat4f M(Vec4f(1.0F, 2.0F, 3.0F, 4.0F),
                   Vec4f(5.0F, 6.0F, 7.0F, 8.0F),
@@ -282,10 +288,13 @@ TEST_CASE("simd Mat4f identity behaves as identity under multiply", "[simd][mat4
         f32 mlanes[4]; M.cols[c].store(mlanes);
         for (int r = 0; r < 4; ++r) REQUIRE(bit_eq(lanes[r], mlanes[r]));
     }
+    // NOLINTEND(readability-identifier-naming)
 }
 
 TEST_CASE("simd Mat4f matrix-vector multiply matches naive scalar", "[simd][mat4f][parity]")
 {
+    // M / v = matrix / vector per linear-algebra notation.
+    // NOLINTBEGIN(readability-identifier-naming)
     const Mat4f M(Vec4f(1.0F, 2.0F, 3.0F, 4.0F),
                   Vec4f(5.0F, 6.0F, 7.0F, 8.0F),
                   Vec4f(9.0F, 10.F, 11.F, 12.F),
@@ -296,7 +305,10 @@ TEST_CASE("simd Mat4f matrix-vector multiply matches naive scalar", "[simd][mat4
     // In our chain we do col0 + ((col1*v1) + ((col2*v2) + (col3*v3))) but
     // mul_add is left-associative; use the same call sequence as Mat4f:
     f32 v_lanes[4]; v.store(v_lanes);
-    f32 c0[4], c1[4], c2[4], c3[4];
+    f32 c0[4];
+    f32 c1[4];
+    f32 c2[4];
+    f32 c3[4];
     M.cols[0].store(c0); M.cols[1].store(c1);
     M.cols[2].store(c2); M.cols[3].store(c3);
 
@@ -313,10 +325,13 @@ TEST_CASE("simd Mat4f matrix-vector multiply matches naive scalar", "[simd][mat4
 
     const Vec4f result = M * v;
     REQUIRE(vec4_bit_eq(result, ref[0], ref[1], ref[2], ref[3]));
+    // NOLINTEND(readability-identifier-naming)
 }
 
 TEST_CASE("simd Mat4f transpose is involutive", "[simd][mat4f]")
 {
+    // M / Mt / Mtt = matrix, transpose, transpose-transpose per LA notation.
+    // NOLINTBEGIN(readability-identifier-naming)
     const Mat4f M(Vec4f(1.0F, 2.0F, 3.0F, 4.0F),
                   Vec4f(5.0F, 6.0F, 7.0F, 8.0F),
                   Vec4f(9.0F, 10.F, 11.F, 12.F),
@@ -333,6 +348,7 @@ TEST_CASE("simd Mat4f transpose is involutive", "[simd][mat4f]")
             REQUIRE(bit_eq(Mt.element(r, c),  M.element(c, r)));
         }
     }
+    // NOLINTEND(readability-identifier-naming)
 }
 
 TEST_CASE("simd Mat4f load/store column-major roundtrip", "[simd][mat4f]")
@@ -340,7 +356,8 @@ TEST_CASE("simd Mat4f load/store column-major roundtrip", "[simd][mat4f]")
     f32 src[16];
     for (int i = 0; i < 16; ++i) src[i] = static_cast<f32>(i + 1);
 
-    const Mat4f M = Mat4f::load_column_major(src);
+    // M = matrix per LA notation.
+    const Mat4f M = Mat4f::load_column_major(src); // NOLINT(readability-identifier-naming)
 
     f32 dst[16] = {};
     M.store_column_major(dst);
@@ -367,7 +384,8 @@ TEST_CASE("simd Quatf identity is (0,0,0,1)", "[simd][quatf]")
 
 TEST_CASE("simd Quatf identity is multiplicative identity", "[simd][quatf]")
 {
-    const Quatf I = Quatf::identity();
+    // I = identity quaternion per LA notation.
+    const Quatf I = Quatf::identity(); // NOLINT(readability-identifier-naming)
     const Quatf q(0.1F, 0.2F, 0.3F, 0.927F);  // ~unit quaternion
 
     const Quatf left  = I * q;
@@ -432,11 +450,11 @@ TEST_CASE("simd Quatf alignment is 16 bytes", "[simd][quatf]")
 
 TEST_CASE("simd backend macros define exactly one path", "[simd][backend]")
 {
-    constexpr int picked = (CRD_SIMD_BACKEND == CRD_SIMD_BACKEND_SCALAR ? 1 : 0)
+    constexpr int kPicked = (CRD_SIMD_BACKEND == CRD_SIMD_BACKEND_SCALAR ? 1 : 0)
                          + (CRD_SIMD_BACKEND == CRD_SIMD_BACKEND_SSE2   ? 1 : 0)
                          + (CRD_SIMD_BACKEND == CRD_SIMD_BACKEND_AVX2   ? 1 : 0)
                          + (CRD_SIMD_BACKEND == CRD_SIMD_BACKEND_NEON   ? 1 : 0);
-    STATIC_REQUIRE(picked == 1);
+    STATIC_REQUIRE(kPicked == 1);
 }
 
 TEST_CASE("simd backend reports its compile-time identity", "[simd][backend][!mayfail]")

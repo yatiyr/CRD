@@ -401,7 +401,9 @@ crd::renderer::MeshResource make_icosphere(
         const float nz = positions[vi * 3U + 2U];
 
         // Compute a tangent perpendicular to normal.
-        float tx, ty, tz;
+        float tx;
+        float ty;
+        float tz;
         if (std::abs(ny) < 0.999F)
         {
             // Cross(N, world_up) = (-nz, 0, nx)

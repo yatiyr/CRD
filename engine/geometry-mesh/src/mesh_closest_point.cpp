@@ -11,7 +11,6 @@ namespace crd::geometry::mesh
 {
 
 using crd::geometry::bvh::BvhNode;
-using crd::geometry::bvh::BvhTree;
 using crd::geometry::bvh::k_max_bvh_depth;
 using crd::geometry::primitives::AABB3;
 using crd::geometry::primitives::closest_point;

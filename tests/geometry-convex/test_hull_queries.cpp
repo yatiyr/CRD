@@ -37,6 +37,7 @@
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <optional>
@@ -46,7 +47,6 @@ namespace
 using crd::f32;
 using crd::u32;
 using crd::usize;
-using crd::geometry::RayHit;
 using crd::geometry::convex::closest_point;
 using crd::geometry::convex::distance;
 using crd::geometry::convex::distance_squared;
@@ -263,8 +263,9 @@ TEST_CASE("closest_point on cube hull from outside: matches AABB clamp",
     // standard AABB clamp: per-axis clamp into [-1, 1]. This is the
     // brute-force reference for from-outside queries.
     auto aabb_clamp = [](const Vec3<f32>& p) {
-        return Vec3<f32>(p.x < -1 ? -1.0F : (p.x > 1 ? 1.0F : p.x), p.y < -1 ? -1.0F : (p.y > 1 ? 1.0F : p.y),
-                         p.z < -1 ? -1.0F : (p.z > 1 ? 1.0F : p.z));
+        return Vec3<f32>(std::clamp(p.x, -1.0F, 1.0F),
+                         std::clamp(p.y, -1.0F, 1.0F),
+                         std::clamp(p.z, -1.0F, 1.0F));
     };
 
     Rng rng(0xC0FFEE42U);

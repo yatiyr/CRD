@@ -69,9 +69,6 @@ using crd::usize;
 
 using crd::geometry::convex::closest_face_index;
 using crd::geometry::convex::enumerate_faces;
-using crd::geometry::convex::gjk_distance;
-using crd::geometry::convex::GjkResult;
-using crd::geometry::convex::ObbFaceFeature;
 using crd::geometry::convex::sat_obb_obb;
 using crd::geometry::convex::SatResult;
 using crd::geometry::convex::compute_contact;
@@ -81,12 +78,10 @@ using crd::geometry::primitives::hill_climb_support;
 using crd::geometry::primitives::OBB3;
 using crd::geometry::primitives::Plane;
 using crd::geometry::primitives::Ray3;
-using crd::geometry::primitives::Sphere;
 using crd::geometry::primitives::support;
 using crd::geometry::primitives::support_with_hint;
 using crd::geometry::primitives::SupportPoint;
 
-using crd::math::from_axis_angle;
 using crd::math::Mat3;
 using crd::math::Quat;
 using crd::math::Transform;

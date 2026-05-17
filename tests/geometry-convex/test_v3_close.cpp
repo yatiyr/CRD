@@ -257,12 +257,12 @@ TEST_CASE("v3-close: Quickhull large-coord 1e6 origin shift preserves topology",
     auto ref = quickhull<f64>(crd::containers::ConstSpan<Vec3<f64>>(origin.data(), origin.size()),
                                 &alloc);
 
-    constexpr f64 k_shift = 1.0e6;
+    constexpr f64 kShift = 1.0e6;
     crd::containers::Array<Vec3<f64>> shifted(&alloc);
     for (usize i = 0; i < origin.size(); ++i)
     {
         shifted.push_back(
-            Vec3<f64>(origin[i].x + k_shift, origin[i].y + k_shift, origin[i].z + k_shift));
+            Vec3<f64>(origin[i].x + kShift, origin[i].y + kShift, origin[i].z + kShift));
     }
     auto out = quickhull<f64>(crd::containers::ConstSpan<Vec3<f64>>(shifted.data(), shifted.size()),
                                 &alloc);
@@ -285,12 +285,12 @@ TEST_CASE("v3-close: Quickhull large-coord 1e7 origin shift preserves topology",
     auto ref = quickhull<f64>(crd::containers::ConstSpan<Vec3<f64>>(origin.data(), origin.size()),
                                 &alloc);
 
-    constexpr f64 k_shift = 1.0e7;
+    constexpr f64 kShift = 1.0e7;
     crd::containers::Array<Vec3<f64>> shifted(&alloc);
     for (usize i = 0; i < origin.size(); ++i)
     {
         shifted.push_back(
-            Vec3<f64>(origin[i].x + k_shift, origin[i].y + k_shift, origin[i].z + k_shift));
+            Vec3<f64>(origin[i].x + kShift, origin[i].y + kShift, origin[i].z + kShift));
     }
     auto out = quickhull<f64>(crd::containers::ConstSpan<Vec3<f64>>(shifted.data(), shifted.size()),
                                 &alloc);
@@ -449,16 +449,16 @@ TEST_CASE("v3d: large-coord 1e6 simplification stays convex + locked preserved",
 {
     crd::memory::TlsfAllocator alloc(2U * 1024U * 1024U);
 
-    constexpr f64 k_shift = 1.0e6;
+    constexpr f64 kShift = 1.0e6;
     crd::containers::Array<Vec3<f64>> cube_pts(&alloc);
-    cube_pts.push_back(Vec3<f64>(k_shift + 0, k_shift + 0, k_shift + 0));
-    cube_pts.push_back(Vec3<f64>(k_shift + 1, k_shift + 0, k_shift + 0));
-    cube_pts.push_back(Vec3<f64>(k_shift + 0, k_shift + 1, k_shift + 0));
-    cube_pts.push_back(Vec3<f64>(k_shift + 1, k_shift + 1, k_shift + 0));
-    cube_pts.push_back(Vec3<f64>(k_shift + 0, k_shift + 0, k_shift + 1));
-    cube_pts.push_back(Vec3<f64>(k_shift + 1, k_shift + 0, k_shift + 1));
-    cube_pts.push_back(Vec3<f64>(k_shift + 0, k_shift + 1, k_shift + 1));
-    cube_pts.push_back(Vec3<f64>(k_shift + 1, k_shift + 1, k_shift + 1));
+    cube_pts.push_back(Vec3<f64>(kShift + 0, kShift + 0, kShift + 0));
+    cube_pts.push_back(Vec3<f64>(kShift + 1, kShift + 0, kShift + 0));
+    cube_pts.push_back(Vec3<f64>(kShift + 0, kShift + 1, kShift + 0));
+    cube_pts.push_back(Vec3<f64>(kShift + 1, kShift + 1, kShift + 0));
+    cube_pts.push_back(Vec3<f64>(kShift + 0, kShift + 0, kShift + 1));
+    cube_pts.push_back(Vec3<f64>(kShift + 1, kShift + 0, kShift + 1));
+    cube_pts.push_back(Vec3<f64>(kShift + 0, kShift + 1, kShift + 1));
+    cube_pts.push_back(Vec3<f64>(kShift + 1, kShift + 1, kShift + 1));
     auto cube = quickhull<f64>(
         crd::containers::ConstSpan<Vec3<f64>>(cube_pts.data(), cube_pts.size()), &alloc);
     REQUIRE(cube.vertices.size() == 8);

@@ -49,7 +49,6 @@ using crd::geometry::primitives::support_simd_f32;
 using crd::geometry::primitives::support_with_hint;
 using crd::geometry::primitives::SupportPoint;
 using crd::math::from_axis_angle;
-using crd::math::Mat3;
 using crd::math::Quat;
 using crd::math::Transform;
 using crd::math::Vec3;

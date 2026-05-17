@@ -79,8 +79,8 @@ static void write_blob_pack(const crd::platform::fs::Path& path,
     const ResourceId pack_id = ResourceId::mint_random();
 
     crd::containers::Array<crd::u8> pool(&g_alloc);
-    const char kName[] = "smoke_blob";
-    for (char c : kName) { pool.push_back(static_cast<crd::u8>(c)); }
+    const char name[] = "smoke_blob";
+    for (char c : name) { pool.push_back(static_cast<crd::u8>(c)); }
     pool.push_back(0U);
 
     crd::containers::Array<ManifestEntry> entries(&g_alloc);
@@ -124,8 +124,8 @@ int main()
     pack_name.append(".crdr");
     const crd::platform::fs::Path pack_path(pack_name);
 
-    const crd::u8 kV1[] = {0x10, 0x20, 0x30};
-    write_blob_pack(pack_path, blob_id, crd::containers::ConstSpan<crd::u8>(kV1, 3));
+    const crd::u8 v1_content[] = {0x10, 0x20, 0x30};
+    write_blob_pack(pack_path, blob_id, crd::containers::ConstSpan<crd::u8>(v1_content, 3));
 
     ResourceManager rm(&g_alloc);
     rm.register_loader(std::make_unique<BlobResourceLoader>());
@@ -175,8 +175,8 @@ int main()
     std::this_thread::sleep_for(std::chrono::milliseconds(1100));
 
     // Overwrite with V2.
-    const crd::u8 kV2[] = {0xAA, 0xBB, 0xCC};
-    write_blob_pack(pack_path, blob_id, crd::containers::ConstSpan<crd::u8>(kV2, 3));
+    const crd::u8 v2_content[] = {0xAA, 0xBB, 0xCC};
+    write_blob_pack(pack_path, blob_id, crd::containers::ConstSpan<crd::u8>(v2_content, 3));
 
     // poll_hot_reload with debounce=0 — must detect the mtime change and reload.
     const crd::usize n = rm.poll_hot_reload(0U);

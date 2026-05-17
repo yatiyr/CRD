@@ -893,7 +893,7 @@ void render_draw_showcase(const GeometryShowcaseState& state, crd::draw::RenderB
     crd::draw::box_solid(box_world, {0.5F, 0.5F, 0.5F}, crd::draw::Color{200, 200, 100, 80});
 
     // Sphere: wire + translucent solid at (-2, 0, 0).
-    crd::draw::sphere_wire({-2.0F, 0.0F, 0.0F}, 0.6F, crd::draw::kCyan, /*lat=*/8U, /*lon=*/12U, w);
+    crd::draw::sphere_wire({-2.0F, 0.0F, 0.0F}, 0.6F, crd::draw::kCyan, /*segments_long=*/8U, /*segments_lat=*/12U, w);
     crd::draw::sphere_solid({-2.0F, 0.0F, 0.0F}, 0.6F, crd::draw::Color{0, 255, 255, 60});
 
     // Capsule: wire + translucent solid at (0, 0, 2).

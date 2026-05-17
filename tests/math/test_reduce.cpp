@@ -20,7 +20,7 @@ Vec8f v8(f32 a, f32 b, f32 c, f32 d, f32 e, f32 f, f32 g, f32 h)
 {
     return Vec8f(Vec4f(a, b, c, d), Vec4f(e, f, g, h));
 }
-const f32 k_nan = std::numeric_limits<f32>::quiet_NaN();
+const f32 kNan = std::numeric_limits<f32>::quiet_NaN();
 
 // Reference scalar argmax-with-lex over a flat array (the ground truth).
 struct Ref
@@ -69,8 +69,8 @@ TEST_CASE("argmax_lex_beats -- score / lex / index / NaN / invalid", "[math][sim
     REQUIRE(argmax_lex_beats(ArgmaxLex{2, 1.0F, 1, 2, 3}, ArgmaxLex{7, 1.0F, 1, 2, 3}));
 
     // NaN score never wins; a NaN running-best is replaced by a valid candidate
-    REQUIRE_FALSE(argmax_lex_beats(ArgmaxLex{0, k_nan, 0, 0, 0}, ArgmaxLex{1, 1.0F, 0, 0, 0}));
-    REQUIRE(argmax_lex_beats(ArgmaxLex{1, 1.0F, 0, 0, 0}, ArgmaxLex{0, k_nan, 0, 0, 0}));
+    REQUIRE_FALSE(argmax_lex_beats(ArgmaxLex{0, kNan, 0, 0, 0}, ArgmaxLex{1, 1.0F, 0, 0, 0}));
+    REQUIRE(argmax_lex_beats(ArgmaxLex{1, 1.0F, 0, 0, 0}, ArgmaxLex{0, kNan, 0, 0, 0}));
 }
 
 TEST_CASE("reduce_argmax_with_lex_tiebreak -- Vec8f single chunk", "[math][simd][reduce]")
@@ -119,7 +119,7 @@ TEST_CASE("reduce_argmax_with_lex_tiebreak -- Vec8f single chunk", "[math][simd]
 TEST_CASE("reduce_argmax_with_lex_tiebreak -- partition-independent (the determinism property)", "[math][simd][reduce]")
 {
     // 16 elements: some score ties, some full ties, NaN sprinkled in.
-    const f32 s[16] = {1, 5, 5, 9, 3, 9, 0, 9, 9, 9, 9, 2, 4, k_nan, 9, 9};
+    const f32 s[16] = {1, 5, 5, 9, 3, 9, 0, 9, 9, 9, 9, 2, 4, kNan, 9, 9};
     const f32 px[16] = {0, 2, 1, 7, 0, 7, 0, 7, 7, 7, 3, 0, 0, 0, 7, 7};
     const f32 py[16] = {0, 0, 0, 1, 0, 1, 0, 0, 1, 0, 5, 0, 0, 0, 0, 0};
     const f32 pz[16] = {0, 0, 0, 9, 0, 9, 0, 8, 9, 9, 5, 0, 0, 0, 9, 9};

@@ -130,7 +130,8 @@ crd::u32 apply_taubin_pass(HalfEdgeMesh<T>&                            m,
         }
         const T               inv_n     = T{1} / static_cast<T>(n);
         const crd::math::Vec3<T> centroid{sum.x * inv_n, sum.y * inv_n, sum.z * inv_n};
-        const crd::math::Vec3<T> L{centroid.x - p.x, centroid.y - p.y, centroid.z - p.z};
+        // L = Laplacian (centroid − p) per Taubin 1995 §2 notation.
+        const crd::math::Vec3<T> L{centroid.x - p.x, centroid.y - p.y, centroid.z - p.z}; // NOLINT(readability-identifier-naming)
         scratch[v] = crd::math::Vec3<T>{p.x + factor * L.x,
                                           p.y + factor * L.y,
                                           p.z + factor * L.z};

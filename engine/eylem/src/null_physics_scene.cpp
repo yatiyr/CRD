@@ -107,7 +107,7 @@ public:
         return derive_mass_properties(
             crd::containers::ConstSpan<Collider>(body_colliders.data(), body_colliders.size()),
             accessor,
-            const_cast<MaterialPool*>(&m_materials));
+            const_cast<MaterialPool*>(&m_materials)); // NOLINT(cppcoreguidelines-pro-type-const-cast)
     }
 
     using IPhysicsScene::add_collider; // bring the 3-arg convenience overload into scope

@@ -426,8 +426,8 @@ TEST_CASE("load_sync: BlobResource round-trip", "[resources][manager][v1c]")
 {
     // Build a 5-byte blob artifact.
     const ResourceId blob_id = ResourceId::mint_random();
-    const crd::u8 kPayload[] = {0xDE, 0xAD, 0xBE, 0xEF, 0x42};
-    const auto payload_span = crd::containers::ConstSpan<crd::u8>(kPayload, 5);
+    const crd::u8 payload[] = {0xDE, 0xAD, 0xBE, 0xEF, 0x42};
+    const auto payload_span = crd::containers::ConstSpan<crd::u8>(payload, 5);
 
     crd::containers::Array<TestArtifact> arts(&s_alloc);
     arts.push_back(TestArtifact(&s_alloc));
@@ -462,8 +462,8 @@ TEST_CASE("load_sync: BlobResource round-trip", "[resources][manager][v1c]")
 TEST_CASE("load_sync: 1000 copies refcount stays stable", "[resources][manager][v1c]")
 {
     const ResourceId blob_id = ResourceId::mint_random();
-    const crd::u8 kByte = 0xAB;
-    const auto span = crd::containers::ConstSpan<crd::u8>(&kByte, 1);
+    const crd::u8 byte_val = 0xAB;
+    const auto span = crd::containers::ConstSpan<crd::u8>(&byte_val, 1);
 
     crd::containers::Array<TestArtifact> arts(&s_alloc);
     arts.push_back(TestArtifact(&s_alloc));
@@ -506,8 +506,8 @@ TEST_CASE("load_sync: 1000 copies refcount stays stable", "[resources][manager][
 TEST_CASE("load_sync: second call returns cached block", "[resources][manager][v1c]")
 {
     const ResourceId blob_id = ResourceId::mint_random();
-    const crd::u8 kByte = 0x11;
-    const auto span = crd::containers::ConstSpan<crd::u8>(&kByte, 1);
+    const crd::u8 byte_val = 0x11;
+    const auto span = crd::containers::ConstSpan<crd::u8>(&byte_val, 1);
 
     crd::containers::Array<TestArtifact> arts(&s_alloc);
     arts.push_back(TestArtifact(&s_alloc));
@@ -547,8 +547,8 @@ TEST_CASE("load_sync: hard failure loader returns Failed state", "[resources][ma
     constexpr crd::u32 kTestFourCC = make_fourcc('T', 'S', 'T', 'F');
 
     const ResourceId test_id = ResourceId::mint_random();
-    const crd::u8 kDummy = 0;
-    const auto span = crd::containers::ConstSpan<crd::u8>(&kDummy, 1);
+    const crd::u8 dummy = 0;
+    const auto span = crd::containers::ConstSpan<crd::u8>(&dummy, 1);
 
     crd::containers::Array<TestArtifact> arts(&s_alloc);
     arts.push_back(TestArtifact(&s_alloc));
@@ -580,8 +580,8 @@ TEST_CASE("load_sync: placeholder loader returns Placeholder state", "[resources
     constexpr crd::u32 kTestFourCC = make_fourcc('T', 'S', 'T', 'P');
 
     const ResourceId test_id = ResourceId::mint_random();
-    const crd::u8 kDummy = 0;
-    const auto span = crd::containers::ConstSpan<crd::u8>(&kDummy, 1);
+    const crd::u8 dummy = 0;
+    const auto span = crd::containers::ConstSpan<crd::u8>(&dummy, 1);
 
     crd::containers::Array<TestArtifact> arts(&s_alloc);
     arts.push_back(TestArtifact(&s_alloc));
@@ -615,8 +615,8 @@ TEST_CASE("load_sync: transitive dependency loads both resources", "[resources][
     const ResourceId owner_id = ResourceId::mint_random();
 
     // Dep artifact: a simple blob.
-    const crd::u8 kDepByte = 0xDD;
-    const auto dep_span = crd::containers::ConstSpan<crd::u8>(&kDepByte, 1);
+    const crd::u8 dep_byte = 0xDD;
+    const auto dep_span = crd::containers::ConstSpan<crd::u8>(&dep_byte, 1);
 
     // Owner artifact: CRDR with type=CHNK; BLOB chunk contains dep_id (16 bytes).
     crd::containers::Array<crd::u8> owner_blob_payload(&s_alloc);
@@ -717,8 +717,8 @@ TEST_CASE("load_sync: cycle detection makes both resources Failed", "[resources]
 TEST_CASE("load_async: BlobResource round-trip", "[resources][manager][v1d]")
 {
     const ResourceId blob_id = ResourceId::mint_random();
-    const crd::u8 kPayload[] = {0x0A, 0x0B, 0x0C, 0x0D};
-    const auto payload_span  = crd::containers::ConstSpan<crd::u8>(kPayload, 4);
+    const crd::u8 payload[] = {0x0A, 0x0B, 0x0C, 0x0D};
+    const auto payload_span  = crd::containers::ConstSpan<crd::u8>(payload, 4);
 
     crd::containers::Array<TestArtifact> arts(&s_alloc);
     arts.push_back(TestArtifact(&s_alloc));
@@ -750,8 +750,8 @@ TEST_CASE("load_async: BlobResource round-trip", "[resources][manager][v1d]")
 TEST_CASE("load_async: coalesced requests share one block", "[resources][manager][v1d]")
 {
     const ResourceId blob_id = ResourceId::mint_random();
-    const crd::u8 kPayload[] = {0xFF, 0xEE};
-    const auto payload_span  = crd::containers::ConstSpan<crd::u8>(kPayload, 2);
+    const crd::u8 payload[] = {0xFF, 0xEE};
+    const auto payload_span  = crd::containers::ConstSpan<crd::u8>(payload, 2);
 
     crd::containers::Array<TestArtifact> arts(&s_alloc);
     arts.push_back(TestArtifact(&s_alloc));
@@ -794,8 +794,8 @@ TEST_CASE("load_async: unknown id returns Failed block immediately", "[resources
 TEST_CASE("load_async: four concurrent loads all reach Ready", "[resources][manager][v1d]")
 {
     constexpr crd::usize kCount = 4U;
-    const crd::u8 kPayload[] = {0xCA, 0xFE};
-    const auto payload_span  = crd::containers::ConstSpan<crd::u8>(kPayload, 2);
+    const crd::u8 payload[] = {0xCA, 0xFE};
+    const auto payload_span  = crd::containers::ConstSpan<crd::u8>(payload, 2);
 
     ResourceId ids[kCount];
     crd::containers::Array<TestArtifact> arts(&s_alloc);
@@ -836,8 +836,8 @@ TEST_CASE("load_async: four concurrent loads all reach Ready", "[resources][mana
 TEST_CASE("load_async: wait_ready on sync-loaded handle returns Ready immediately", "[resources][manager][v1d]")
 {
     const ResourceId blob_id = ResourceId::mint_random();
-    const crd::u8 kPayload[] = {0x42};
-    const auto payload_span  = crd::containers::ConstSpan<crd::u8>(kPayload, 1);
+    const crd::u8 payload[] = {0x42};
+    const auto payload_span  = crd::containers::ConstSpan<crd::u8>(payload, 1);
 
     crd::containers::Array<TestArtifact> arts(&s_alloc);
     arts.push_back(TestArtifact(&s_alloc));

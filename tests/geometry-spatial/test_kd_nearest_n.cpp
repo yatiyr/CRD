@@ -180,15 +180,15 @@ namespace
 {
 struct KdConcurrencyCorpus
 {
-    static constexpr u32 k_queries = 16U;
-    static constexpr u32 k_iters_per_query = 25U;
-    static constexpr usize k_neighbors = 10U;
+    static constexpr u32 kQueries = 16U;
+    static constexpr u32 kItersPerQuery = 25U;
+    static constexpr usize kNeighbors = 10U;
 
     crd::memory::TlsfAllocator alloc{1U << 22};
     crd::containers::Array<crd::math::Vec3f> pts{&alloc};
     crd::geometry::spatial::KdTree<f32> tree{&alloc};
-    crd::math::Vec3f queries[k_queries]{};
-    crd::containers::Array<KdNeighbor<f32>> ref[k_queries] = {
+    crd::math::Vec3f queries[kQueries]{};
+    crd::containers::Array<KdNeighbor<f32>> ref[kQueries] = {
         crd::containers::Array<KdNeighbor<f32>>{&alloc}, crd::containers::Array<KdNeighbor<f32>>{&alloc},
         crd::containers::Array<KdNeighbor<f32>>{&alloc}, crd::containers::Array<KdNeighbor<f32>>{&alloc},
         crd::containers::Array<KdNeighbor<f32>>{&alloc}, crd::containers::Array<KdNeighbor<f32>>{&alloc},
@@ -212,27 +212,27 @@ TEST_CASE("KdTree concurrent k-NN queries via crd-jobs (proves naturally-const-s
 
     std::mt19937 rng(101U);
     std::uniform_real_distribution<f32> uc(-1.0F, 1.0F);
-    for (u32 q = 0; q < KdConcurrencyCorpus::k_queries; ++q)
+    for (u32 q = 0; q < KdConcurrencyCorpus::kQueries; ++q)
     {
         corpus->queries[q] = crd::math::Vec3f{uc(rng), uc(rng), uc(rng)};
         kd_nearest_n<f32>(corpus->tree,
                             crd::containers::ConstSpan<crd::math::Vec3f>{corpus->pts.data(), corpus->pts.size()},
-                            corpus->queries[q], KdConcurrencyCorpus::k_neighbors, corpus->ref[q]);
+                            corpus->queries[q], KdConcurrencyCorpus::kNeighbors, corpus->ref[q]);
     }
 
-    constexpr u32 total_tasks = KdConcurrencyCorpus::k_queries * KdConcurrencyCorpus::k_iters_per_query;
+    constexpr u32 kTotalTasks = KdConcurrencyCorpus::kQueries * KdConcurrencyCorpus::kItersPerQuery;
     auto* corpus_ptr = corpus.get();
     crd::jobs::Counter* counter = crd::jobs::parallel_for(
-        total_tasks, /*num_jobs=*/16U,
+        kTotalTasks, /*num_jobs=*/16U,
         [corpus_ptr](crd::u32 begin, crd::u32 end) noexcept {
             for (crd::u32 task_idx = begin; task_idx < end; ++task_idx)
             {
-                const u32 q = task_idx % KdConcurrencyCorpus::k_queries;
+                const u32 q = task_idx % KdConcurrencyCorpus::kQueries;
                 crd::memory::TlsfAllocator local_alloc{1U << 16};
                 crd::containers::Array<KdNeighbor<f32>> got(&local_alloc);
                 kd_nearest_n<f32>(corpus_ptr->tree,
                                     crd::containers::ConstSpan<crd::math::Vec3f>{corpus_ptr->pts.data(), corpus_ptr->pts.size()},
-                                    corpus_ptr->queries[q], KdConcurrencyCorpus::k_neighbors, got);
+                                    corpus_ptr->queries[q], KdConcurrencyCorpus::kNeighbors, got);
                 bool ok = (got.size() == corpus_ptr->ref[q].size());
                 if (ok)
                 {

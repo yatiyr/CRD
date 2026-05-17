@@ -75,16 +75,16 @@ void draw(crd::draw::RenderBuffer& buf, const primitives::Plane<crd::f32>& plane
     {
         const crd::f32 t = -half + static_cast<crd::f32>(i) * step;
         // U-direction line at v=t.
-        const Vec3f a1(a_proj.x + (-half) * u.x + t * v.x, a_proj.y + (-half) * u.y + t * v.y,
-                       a_proj.z + (-half) * u.z + t * v.z);
-        const Vec3f b1(a_proj.x + (half) * u.x + t * v.x, a_proj.y + (half) * u.y + t * v.y,
-                       a_proj.z + (half) * u.z + t * v.z);
+        const Vec3f a1(a_proj.x + -half * u.x + t * v.x, a_proj.y + -half * u.y + t * v.y,
+                       a_proj.z + -half * u.z + t * v.z);
+        const Vec3f b1(a_proj.x + half * u.x + t * v.x, a_proj.y + half * u.y + t * v.y,
+                       a_proj.z + half * u.z + t * v.z);
         crd::draw::add_line_to(buf, a1, b1, color, width_px, flags, lifetime_s);
         // V-direction line at u=t.
-        const Vec3f a2(a_proj.x + t * u.x + (-half) * v.x, a_proj.y + t * u.y + (-half) * v.y,
-                       a_proj.z + t * u.z + (-half) * v.z);
-        const Vec3f b2(a_proj.x + t * u.x + (half) * v.x, a_proj.y + t * u.y + (half) * v.y,
-                       a_proj.z + t * u.z + (half) * v.z);
+        const Vec3f a2(a_proj.x + t * u.x + -half * v.x, a_proj.y + t * u.y + -half * v.y,
+                       a_proj.z + t * u.z + -half * v.z);
+        const Vec3f b2(a_proj.x + t * u.x + half * v.x, a_proj.y + t * u.y + half * v.y,
+                       a_proj.z + t * u.z + half * v.z);
         crd::draw::add_line_to(buf, a2, b2, color, width_px, flags, lifetime_s);
     }
 }

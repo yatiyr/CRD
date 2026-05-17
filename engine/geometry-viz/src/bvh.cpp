@@ -14,7 +14,7 @@ using crd::math::Vec3f;
 
 // 8-entry depth palette: hue-distinct, avoiding near-greys so contrast
 // survives on the engine's neutral debug clear. Indexed by `depth % 8`.
-constexpr crd::draw::Color k_depth_palette[8] = {
+constexpr crd::draw::Color kDepthPalette[8] = {
     crd::draw::Color{255, 80, 80, 220},    // red    — depth 0 (root)
     crd::draw::Color{255, 180, 60, 220},   // orange
     crd::draw::Color{255, 240, 80, 220},   // yellow
@@ -29,7 +29,7 @@ constexpr crd::draw::Color k_depth_palette[8] = {
 
 crd::draw::Color depth_color(u32 depth) noexcept
 {
-    return k_depth_palette[depth % 8U];
+    return kDepthPalette[depth % 8U];
 }
 
 namespace
