@@ -1728,23 +1728,172 @@ RMF) → v11 transform-aware query helpers in `-primitives`.
   Constrained Delaunay to consume `delaunay_2d` from v8a (currently
   re-implements BW locally). Cleanup-only; v6c output unchanged.
 
-## §24 Amendment (planned) — v9c `-decomposition` (V-HACD) decisions
+## §24 Amendment (2026-05-18) — v9c `-decomposition` (V-HACD) cluster CLOSED
 
-**Status:** 📋 planned — locks at v9c-close. Phase 3.1.7.6 substrate
-NOT required (V-HACD is cooker-only, scalar, no GPU). Numbered ahead so
-v9c slice rows reference a real ADR section.
+Phase 3.1.7 sub-module 10 of 11 — `crd-geometry-decomposition` — shipped +
+closed. 2 algorithm slices + 1 cluster-close slice. All 3 slices shipped
+2026-05-18 in a single day. Substrate is the **first volumetric
+pre-process module** in Cerid; V-HACD is the first inhabitant, future
+inhabitants include OBB-tree decomposition + voxel-based booleans + CAM
+swept-volume pre-process.
 
-Decisions to lock at v9c-close (Mamou 2014):
-- Cooker-only vs runtime decomposition (currently locked cooker-only;
-  consumer = eylem v1c convex collider conditioning).
-- Concavity metric: volume-based `Vol(R̄) - Vol(R)` vs Mamou's
-  `α·∂(R) + β·∂(R̄)`.
-- Termination criterion: max_concavity threshold vs max_parts count vs
-  both with OR-precedence.
-- Voxel grid type (sparse hash vs dense bounded vs `crd-geometry-spatial`
-  v5e UniformGrid reuse).
-- Per-part hull validation rule (drop hull if Quickhull fails on
-  cluster; emit telemetry).
+Phase 3.1.7.6 (`crd-rhi-compute`) is **NOT required** — V-HACD is cooker-
+only and pure CPU. (`-gpu` GPU LBVH is the actual 3.1.7.6 consumer; lands
+at v9a.)
+
+### §24.1 Slice ledger
+
+| Slice | Engine LOC | Test LOC | Decisions | What |
+|---|---|---|---|---|
+| v9c-a `voxelize_mesh` | ~580 | ~470 | D123-D128 | New module `engine/geometry-decomposition/`. Two strictly non-overlapping passes (D126): (1) parallel SAT surface marking via Akenine-Möller 2001 13-axis exact triangle/AABB test + `std::atomic_ref<u8>::fetch_or(Surface)` race-free union via `crd::jobs::parallel_for`; (2) classification of still-Unknown voxels via WindingNumber (default, robust on non-watertight via Jacobson 2013) OR FloodFill (fast, requires watertight; leaks documented). `VoxelGrid` opaque dense `Array<u8>` + `atomic_ref` accessors (future bricked/sparse non-breaking). Sizing precedence (D125'): `fixed_resolution` wins, else `target_voxel_count`. Divergence from Mamou (D124): exact SAT not centroid-classification (substrate must serve CAD/SDF too). f32 only (matches `mesh_winding_number`); f64 follow-on. |
+| v9c-b `vhacd_decompose` | ~750 | ~280 | D129-D131 | Mamou §3.2-3.4 recursive plane-search. Pick worst-concavity cluster → `find_best_split` (3 axes × `splits_per_axis` evenly-spaced positions; cost = `concavity(L)+concavity(R) + α·imbalance + β·symmetry`; β=0 default — principal-axis detection deferred to v9c-b-symmetry follow-on) → `apply_split` partitions cluster.voxel_indices into LEFT (kept) + RIGHT (new id) + updates per-voxel sidecar + recomputes AABBs → terminate at min_concavity / max_parts / no usable split → Quickhull on each leaf cluster's surface voxel centres. **Concavity D129 = voxel-fraction NOT Hausdorff**: `1 - \|C_voxels\| / \|hull_voxels(C)\|` clamped to [0,1]; divergence from Mamou's original Hausdorff explicitly documented (modern V-HACD implementations universal). Output `VhacdResult { Array<QuickhullResult<f32>> parts; ... }` per advisor (each part owns its arrays + builds `ConvexHullView` via existing `convex_hull_view_of(parts[i])`). Module gains PUBLIC dep on `crd-geometry-convex`. |
+| v9c-close | — | ~70 | — | This §24 amendment + `docs/systems/geometry-decomposition.md` updated + 18-config full sweep + eylem v1c convex-collider-conditioning **stub integration smoke** (validates the full pipeline end-to-end as eylem v1c will call it: triangle mesh → voxelize → vhacd_decompose → per-part `ConvexHullView<f32>` → centroid-contains sanity) + roadmap/context/MEMORY final sync. |
+| **Total** | **~1330** | **~820** | **D123-D131 (9 decisions)** | **~2150 LOC across 3 slices** |
+
+### §24.2 Locked design decisions D123-D131
+
+Canonical detail lives in the per-slice session logs
+(`docs/sessions/2026-05-18-geometry-v9c-{a,b,close}-*.md`) and system
+overview (`docs/systems/geometry-decomposition.md`). This §24 indexes them.
+
+- **D123 (v9c-a)** — `VoxelGrid` dense storage = `Array<u8>` with
+  `std::atomic_ref<u8>` accessors for parallel surface-marking writes.
+  Plain `Array<std::atomic<u8>>` doesn't compile (atomic is non-movable);
+  atomic_ref is the C++20-idiomatic pattern. Storage API is **opaque** (no
+  raw buffer accessor); future bricked / sparse / VDB backend can replace
+  the dense array without breaking consumers. Per-voxel `VoxelState` is
+  `u8` with 2 bits used + 6 reserved for future per-voxel payload
+  (material id, surface normal, distance estimate, …).
+- **D124 (v9c-a)** — Surface marking uses **exact** SAT (Akenine-Möller
+  2001 13-axis), NOT Mamou's conservative centroid-classification.
+  Divergence reason: the substrate must serve CAD and SDF generation
+  where conservative overlap matters, not just V-HACD. v9c-b decompose
+  receives strictly-better voxelization than Mamou's paper assumes; cost-
+  function tuning may need a one-pass calibration (we measured it on the
+  v9c-b dumbbell + L-shape and the defaults work — no calibration shipped
+  this cluster, but the door is open).
+- **D125 (v9c-a)** — Dual classification: `WindingNumber` default +
+  `FloodFill` opt-in. WindingNumber is the SAFE choice (Jacobson 2013
+  generalised winding number — robust on non-watertight, non-manifold,
+  open meshes). FloodFill is the FAST opt-in for known-watertight input
+  (open meshes LEAK through any hole; documented + regression-tested via
+  the "open cylinder" corpus).
+- **D125' (v9c-a)** — Sizing **precedence** rule: `fixed_resolution > 0`
+  wins, else `target_voxel_count > 0`, both-zero ⇒ InvalidOptions. NOT
+  "exactly one non-zero" (which would force callers to zero out the
+  default). Future `voxel_size: Length<T>` sits at the top of the
+  precedence ladder when shipped.
+- **D126 (v9c-a)** — Two **strictly non-overlapping** passes: surface
+  marking fully completes (jobs join) before classification starts.
+  Classification (pass 2) only writes into voxels still `Unknown`;
+  Surface cells are never overwritten. This eliminates the entire
+  category of "concurrent writers racing different state values" bugs.
+- **D127 (v9c-a)** — 1-voxel `padding_voxels` default. Ensures the
+  corner voxel is Outside (required for FloodFill seeding) and provides
+  a safe boundary for downstream BVH-of-voxels traversals.
+- **D128 (v9c-a)** — Parallel surface marking dispatched via
+  `crd::jobs::parallel_for` over triangle batches with idempotent +
+  commutative `fetch_or(Surface)` per-voxel union. Sequential fallback
+  for `tri_count < 256` (fan-out overhead exceeds work). Determinism is
+  preserved despite parallelism: order doesn't matter for a
+  commutative-idempotent reduction.
+- **D129 (v9c-b)** — Concavity = **voxel-fraction**, NOT Hausdorff:
+  `concavity(C) = 1 - |C_voxels| / |hull_voxels(C)|` clamped to [0, 1]
+  where `hull_voxels(C)` counts voxels in the cluster's AABB whose
+  centre is inside `quickhull(cluster_surface_centres(C))` (via existing
+  `contains(ConvexHullView<T>, Vec3<T>)`). Documented divergence from
+  Mamou's original Hausdorff distance — modern V-HACD implementations
+  universally use voxel-fraction for cooker-budget speed; the V-HACD
+  authors themselves moved off Hausdorff. Empty/degenerate hull ⇒
+  concavity = 0 ("as convex as it can be" — safer termination than ∞).
+- **D130 (v9c-b)** — Mamou §3.3 cost-function form:
+  `cost(plane) = concavity(L) + concavity(R) + α · imbalance + β · symmetry`.
+  `α_imbalance = 0.05` default (encourages balanced splits as
+  tie-breaker). `β_symmetry = 0` default — true symmetry-axis detection
+  requires principal-axis machinery (inertia tensor / PCA of cluster
+  voxels), deferred to v9c-b-symmetry follow-on. The `β` knob stays in
+  the API as a stable contract.
+- **D131 (v9c-b)** — Cluster representation = per-cluster
+  `Array<u32> voxel_indices` (linear grid indices) + cached voxel-index-
+  space AABB + global per-voxel `Array<u32>` cluster_id sidecar. Sidecar
+  enables O(1) "is voxel V in cluster C?" lookups (essential for the
+  surface-voxel neighbour test); voxel_indices enables cheap linear-
+  partition splits via `apply_split`. Both mutate together. Voxel
+  **centres** (not 8-corner samples) feed Quickhull — tight-enough hulls
+  + 8× fewer input points (advisor's call: "skip the 8-corners
+  approach").
+
+### §24.3 Cluster cross-validation
+
+- **CALIBRATION-FIRST TDD** worked across both algorithm slices:
+  - v9c-a: unit cube at `fixed_resolution=4, padding_voxels=0` →
+    arithmetic-exact 56 Surface + 8 Inside + 0 Outside (outer shell of
+    4³ = 56 cells touch a face; inner 2³ = 8 Inside). If SAT-or-sizing
+    is broken, this fires before any downstream test.
+  - v9c-b: cube voxelized at res=16 → exactly 1 part (a cube IS convex
+    ⇒ concavity = 0 ⇒ termination fires immediately). If the concavity
+    floor is broken, this fires before dumbbell / L-shape can produce
+    misleading results.
+- **Discriminating tests:**
+  - v9c-a: open cylinder regression-pins the FloodFill leak (interior
+    = 0 voxels under FloodFill mode; > 100 under WindingNumber mode) +
+    octahedron-volume vs analytic 4/3·r³ within 10% via
+    inside+half·surface mid-point estimate.
+  - v9c-b: dumbbell (two cubes + thin bar) → ≥ 2 parts (plane-search
+    correctness); L-shape (two perpendicular boxes) → ≥ 2 parts.
+- **Determinism** verified per-slice (same input → byte-identical
+  VoxelGrid in v9c-a; same input → identical part count + max_concavity
+  in v9c-b).
+- **eylem v1c stub integration smoke** at v9c-close: full pipeline
+  triangle mesh → voxelize → vhacd_decompose → per-part
+  `ConvexHullView<f32>` → centroid-contains sanity, mimicking eylem
+  v1c's `Collider::ConvexHull` consumer flow. Lives in
+  `tests/geometry-decomposition/test_vhacd.cpp` under tag
+  `[eylem-stub]`. Per [[per-slice-run-ctest]] per-sub-module eylem-stub
+  practice.
+- **18-config full sweep** at v9c-close — PASS.
+- **f64 deferred** for v9c-a (matches `mesh_winding_number` f32-only
+  support); v9c-a-f64 follow-on filed.
+- **Two-layer typed architecture** (ADR-0078 §5 D34): raw `<MathScalar T>`
+  algorithm bodies; typed wrappers in `*_typed.hpp` planned at first
+  typed consumer (v9c-{a,b}-typed follow-ons).
+
+### §24.4 Phase 3.1.7 status update
+
+**10 of 11 sub-modules COMPLETE**: primitives ✅ + bvh ✅ + convex ✅
++ v3 convex-hull-extension ✅ + mesh ✅ + spatial ✅ + polygon ✅ +
+mesh-processing ✅ + delaunay ✅ + **decomposition ✅**. Next:
+v9a + v9b + v9e (`-gpu` GPU LBVH + GPU BVH refit + `-shader-helpers`
+GLSL/HLSL cooker emit) — these CONSUME Phase 3.1.7.6 substrate
+(ADR-0080) + v9-prereq-test-harness sanity discipline (ValidationCapture
++ ulp_compare + gpu_determinism_check + CRD_PERF_BUDGET_LE). Then v10
+`-curves` + v11 transform-aware helpers close Phase 3.1.7.
+
+### §24.5 Filed follow-on slices (not regressions, scope-honest deferrals)
+
+**v9c-a follow-ons:**
+- **v9c-a-bvh-winding** — wire BVH-accelerated `mesh_winding_number_fast`
+  for classification at 256³+ resolutions (current O(triangles) brute
+  force is the bottleneck above 64³).
+- **v9c-a-f64** — f64 voxelize entry once a CAD/CAM consumer asks.
+- **v9c-a-voxel-size-units** — `Length<T> voxel_size` sizing knob (top
+  of the precedence ladder).
+- **v9c-a-sparse-backend** — bricked / sparse VoxelGrid storage for
+  CAM 1024³+ workloads.
+- **v9c-a-typed-wrapper** — `voxelize_mesh_typed` strip-compute-retag
+  boundary wrapper for `Vec3<Length32>` consumers.
+
+**v9c-b follow-ons:**
+- **v9c-b-symmetry** — principal-axis detection (inertia tensor of
+  voxels) feeding the `β_symmetry` term.
+- **v9c-b-perf** — concavity caching (only recompute split children,
+  not all clusters every iter).
+- **v9c-b-typed** — `vhacd_decompose_typed` for `Length<T>` consumers.
+- **v9c-b-bvh-contains** — BVH-accelerated point-in-hull for the hull-
+  voxel count loop (current O(faces) per point can dominate at 256³
+  workloads).
+- **v9c-b-parallel** — parallel candidate plane evaluation via
+  `crd::jobs::parallel_for` (currently sequential per cluster).
 
 ## §25 Amendment (planned) — v9a / v9b `-gpu` LBVH decisions
 

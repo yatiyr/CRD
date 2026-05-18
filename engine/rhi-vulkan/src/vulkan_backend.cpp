@@ -1792,11 +1792,14 @@ class VulkanDevice final : public Device
 {
 public:
     VulkanDevice(VkInstance instance, VkPhysicalDevice physical_device, VkDevice device, crd::u32 graphics_family_index,
-                 crd::u32 compute_family_index, DeviceDesc desc, bool sync2_enabled, bool dynamic_rendering_enabled)
+                 crd::u32 compute_family_index, DeviceDesc desc, bool sync2_enabled,
+                 bool dynamic_rendering_enabled, bool shader_int64_enabled)
         : m_instance(instance), m_physical_device(physical_device), m_device(device),
           m_graphics_family_index(graphics_family_index), m_compute_family_index(compute_family_index),
           m_desc(std::move(desc)), m_sync2_enabled(sync2_enabled),
-          m_dynamic_rendering_enabled(dynamic_rendering_enabled), m_allocator(physical_device, device)
+          m_dynamic_rendering_enabled(dynamic_rendering_enabled),
+          m_shader_int64_enabled(shader_int64_enabled),
+          m_allocator(physical_device, device)
     {
         vkGetDeviceQueue(m_device, m_graphics_family_index, 0, &m_graphics_queue_handle);
         m_graphics_queue = std::make_unique<VulkanQueue>(m_graphics_queue_handle, m_sync2_enabled);
@@ -1826,10 +1829,37 @@ public:
         {
             CRD_LOG_ERROR(detail::g_log_rhi_vulkan, "Fatal: command pool creation failed — device unusable");
         }
+
+        // Phase 3.1.7 v9a-a-async-compute (2026-05-18) — separate
+        // compute-family command pool when a dedicated compute family
+        // exists. Required for `create_command_buffer_for_queue` to
+        // route compute-queue submissions through a same-family pool
+        // (otherwise VUID-vkQueueSubmit-pCommandBuffers-00074 fires).
+        if (m_compute_family_index != UINT32_MAX
+            && m_compute_family_index != m_graphics_family_index)
+        {
+            VkCommandPoolCreateInfo compute_pool_info{};
+            compute_pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+            compute_pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+            compute_pool_info.queueFamilyIndex = m_compute_family_index;
+            if (!vk_ok(vkCreateCommandPool(m_device, &compute_pool_info, nullptr,
+                                              &m_compute_command_pool),
+                       "vkCreateCommandPool(compute)"))
+            {
+                CRD_LOG_ERROR(detail::g_log_rhi_vulkan,
+                              "Compute command pool creation failed — async-compute path disabled");
+                m_compute_command_pool = VK_NULL_HANDLE;
+            }
+        }
     }
 
     ~VulkanDevice() noexcept override
     {
+        if (m_compute_command_pool != VK_NULL_HANDLE)
+        {
+            vkDestroyCommandPool(m_device, m_compute_command_pool, nullptr);
+            m_compute_command_pool = VK_NULL_HANDLE;
+        }
         if (m_command_pool != VK_NULL_HANDLE)
         {
             vkDestroyCommandPool(m_device, m_command_pool, nullptr);
@@ -2551,6 +2581,57 @@ public:
         return m_compute_queue != nullptr;
     }
 
+    [[nodiscard]] bool supports_shader_int64() const noexcept override
+    {
+        return m_shader_int64_enabled;
+    }
+
+    // Phase 3.1.7 v9a-a-async-compute (2026-05-18). Routes by pointer-
+    // identity per D9 contract: `&queue == &graphics_queue()` -> graphics
+    // pool; `&queue == &compute_queue()` AND a dedicated compute pool
+    // exists -> compute pool. Anything else (or compute alias to graphics)
+    // routes to graphics. Unknown queue (not from this device) -> nullptr.
+    [[nodiscard]] std::unique_ptr<CommandBuffer>
+    create_command_buffer_for_queue(Queue& queue) override
+    {
+        if (!m_dynamic_rendering_enabled)
+        {
+            CRD_LOG_ERROR(detail::g_log_rhi_vulkan,
+                          "Dynamic rendering is unavailable; command buffer path is disabled");
+            return nullptr;
+        }
+        VkCommandPool pool = VK_NULL_HANDLE;
+        if (m_graphics_queue != nullptr && &queue == m_graphics_queue.get())
+        {
+            pool = m_command_pool;
+        }
+        else if (m_compute_queue != nullptr && &queue == m_compute_queue.get())
+        {
+            pool = (m_compute_command_pool != VK_NULL_HANDLE) ? m_compute_command_pool
+                                                              : m_command_pool;
+        }
+        else
+        {
+            CRD_LOG_ERROR(detail::g_log_rhi_vulkan,
+                          "create_command_buffer_for_queue: queue not owned by this device");
+            return nullptr;
+        }
+
+        VkCommandBufferAllocateInfo alloc_info{};
+        alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        alloc_info.commandPool = pool;
+        alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        alloc_info.commandBufferCount = 1;
+
+        VkCommandBuffer command_buffer = VK_NULL_HANDLE;
+        if (!vk_ok(vkAllocateCommandBuffers(m_device, &alloc_info, &command_buffer),
+                   "vkAllocateCommandBuffers(for_queue)"))
+        {
+            return nullptr;
+        }
+        return std::make_unique<VulkanCommandBuffer>(m_device, pool, command_buffer, m_sync2_enabled);
+    }
+
     void wait_idle() override
     {
         if (m_device != VK_NULL_HANDLE)
@@ -2565,11 +2646,13 @@ private:
     VkDevice m_device = VK_NULL_HANDLE;
     VkSurfaceKHR m_surface = VK_NULL_HANDLE;
     VkCommandPool m_command_pool = VK_NULL_HANDLE;
+    VkCommandPool m_compute_command_pool = VK_NULL_HANDLE;
     crd::u32 m_graphics_family_index = 0;
     crd::u32 m_compute_family_index = UINT32_MAX;
     DeviceDesc m_desc{};
     bool m_sync2_enabled = false;
     bool m_dynamic_rendering_enabled = false;
+    bool m_shader_int64_enabled      = false; // Phase 3.1.7 v9a-60bit-gpu
     VulkanAllocator m_allocator;
     VkQueue m_graphics_queue_handle = VK_NULL_HANDLE;
     VkQueue m_compute_queue_handle = VK_NULL_HANDLE;
@@ -2619,6 +2702,34 @@ public:
         {
             enabled_extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
             m_validation_enabled = true;
+        }
+
+        // Surfaced 2026-05-18 by Phase 3.1.7 v9a-a `ValidationCapture` test
+        // (first consumer to attach a debug-utils messenger from outside the
+        // engine): the device unconditionally enables `VK_KHR_swapchain`,
+        // which per the Vulkan spec REQUIRES the instance to enable
+        // `VK_KHR_surface` first
+        // (VUID-vkCreateDevice-ppEnabledExtensionNames-01387). When GLFW
+        // is initialised, `glfwGetRequiredInstanceExtensions` already adds
+        // `VK_KHR_surface` (plus the platform variant). When GLFW is NOT
+        // initialised (typical for compute-only tests), nothing did — the
+        // validation layer reported a hard error on every device create
+        // even though Cerid silently worked. Add it defensively here so
+        // both paths comply.
+        bool surface_already_enabled = false;
+        for (const char* name : enabled_extensions)
+        {
+            if (std::strcmp(name, VK_KHR_SURFACE_EXTENSION_NAME) == 0)
+            {
+                surface_already_enabled = true;
+                break;
+            }
+        }
+        if (!surface_already_enabled
+            && has_extension(crd::containers::as_const_span(instance_extensions),
+                              VK_KHR_SURFACE_EXTENSION_NAME))
+        {
+            enabled_extensions.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
         }
 
         crd::u32 layer_count = 0;
@@ -2809,6 +2920,10 @@ public:
         features2.pNext = &dynamic_rendering_features;
         vkGetPhysicalDeviceFeatures2(physical_device, &features2);
         const bool fill_mode_non_solid_supported = features2.features.fillModeNonSolid == VK_TRUE;
+        // Phase 3.1.7 v9a-60bit-gpu (2026-05-18) — `shaderInt64` is a
+        // core 1.0 feature toggle (not an extension); we just read +
+        // optionally enable it. Surfaced via Device::supports_shader_int64().
+        const bool shader_int64_supported = features2.features.shaderInt64 == VK_TRUE;
 
         const bool dynamic_rendering_supported = dynamic_rendering_features.dynamicRendering == VK_TRUE;
         const bool sync2_supported = synchronization2_features.synchronization2 == VK_TRUE;
@@ -2890,6 +3005,7 @@ public:
         VkPhysicalDeviceFeatures2 enabled_features2{};
         enabled_features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
         enabled_features2.features.fillModeNonSolid = fill_mode_non_solid_supported ? VK_TRUE : VK_FALSE;
+        enabled_features2.features.shaderInt64      = shader_int64_supported ? VK_TRUE : VK_FALSE;
         enabled_features2.pNext = &enabled_dynamic_rendering;
 
         const char* device_extensions[] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
@@ -2909,7 +3025,8 @@ public:
 
         return std::make_unique<VulkanDevice>(m_instance, physical_device, device, graphics_family_index,
                                               compute_family_index, desc,
-                                              sync2_supported, dynamic_rendering_supported);
+                                              sync2_supported, dynamic_rendering_supported,
+                                              shader_int64_supported);
     }
 
 private:

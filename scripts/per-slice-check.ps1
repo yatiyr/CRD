@@ -29,6 +29,12 @@
 #   .\scripts\per-slice-check.ps1 -SkipTidy      # skip win-tidy (slow clang-tidy)
 #   .\scripts\per-slice-check.ps1 -SkipAsan      # skip win-asan (rarely needed)
 #   .\scripts\per-slice-check.ps1 -Reconfigure   # cmake --preset <X> first
+#   .\scripts\per-slice-check.ps1 -IncludeRelease # add win-release (catches LTCG
+#                                                  miscompiles like the v0-close
+#                                                  vtable-middle-insertion bug)
+#                                                  — recommended for any slice
+#                                                  touching virtual interfaces
+#                                                  or heavily-templated code.
 #
 # Exit code: 0 if every requested config passed, count of failures otherwise.
 
@@ -39,6 +45,7 @@ param(
     [switch]$SkipAsan,
     [switch]$Reconfigure,
     [switch]$Parallel,
+    [switch]$IncludeRelease,
     [int]$ParallelJobs = 0,
     [string]$VcvarsPath = 'C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat',
     [string]$AsanRuntimeDir = 'C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.50.35717\bin\Hostx64\x64',
@@ -64,6 +71,7 @@ if ($Parallel)
     $presets = @(@{ name = 'win-debug'; runCTest = $true; asan = $false })
     if (-not $SkipAsan)     { $presets += @{ name = 'win-asan';     runCTest = $true;  asan = $true  } }
     if (-not $SkipShipping) { $presets += @{ name = 'win-shipping'; runCTest = $true;  asan = $false } }
+    if ($IncludeRelease)    { $presets += @{ name = 'win-release';  runCTest = $true;  asan = $false } }
     if (-not $SkipTidy)     { $presets += @{ name = 'win-tidy';     runCTest = $false; asan = $false } }
 
     # Default ninja parallelism per job = (NumProc / NumJobs), min 1, so total
@@ -163,6 +171,7 @@ if ($Parallel)
 $presetSpec = "@{ name='win-debug'; runCTest=`$true; asan=`$false }"
 if (-not $SkipAsan)     { $presetSpec += ",`r`n@{ name='win-asan'; runCTest=`$true; asan=`$true }" }
 if (-not $SkipShipping) { $presetSpec += ",`r`n@{ name='win-shipping'; runCTest=`$true; asan=`$false }" }
+if ($IncludeRelease)    { $presetSpec += ",`r`n@{ name='win-release'; runCTest=`$true; asan=`$false }" }
 if (-not $SkipTidy)     { $presetSpec += ",`r`n@{ name='win-tidy'; runCTest=`$false; asan=`$false }" }
 
 $reconfigStr = if ($Reconfigure.IsPresent) { '$true' } else { '$false' }

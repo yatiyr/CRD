@@ -1,0 +1,102 @@
+#version 450
+
+// ---------------------------------------------------------------------------
+// 30-bit Morton-code generation for AABB centroids. Phase 3.1.7 v9a-a.
+//
+// **MECHANICAL TRANSLATION** of `crd::geometry::bvh_gpu` CPU reference
+// in `engine/geometry-bvh-gpu/include/crd/geometry/bvh_gpu/morton.hpp`.
+// Per the v9a discipline pinned at slice start: the CPU sequential
+// IS the algorithm definition; this shader is a verbatim copy of the
+// per-element kernel body translated to GLSL. Any divergence is a bug.
+//
+// Inputs:
+//   - in_aabbs  (binding 0, readonly storage)  N × (vec3 min + vec3 max)
+//                                              packed as 6 floats per AABB
+//   - out_morton (binding 1, writeonly storage) N × uint
+// Push constants:
+//   - scene_min     vec3   = scene AABB min
+//   - inv_extent    vec3   = 1 / (scene_max - scene_min), with axes of
+//                            zero extent set to 0 (matches CPU
+//                            `inv_extent_of` semantics — degenerate axis
+//                            ⇒ all centroids map to bin 0).
+//   - count         uint   = number of input AABBs (out-of-range threads no-op)
+//
+// Workgroup: 64 threads × 1 group / 64 AABBs. dispatch_x = ceil(count / 64).
+// ---------------------------------------------------------------------------
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+// AABB storage uses 6 packed f32 per element (3 min + 3 max). std430
+// rules: a `float[]` aliases naturally onto a tightly-packed array of
+// floats, no vec3-stride pitfall.
+layout(set = 0, binding = 0) readonly buffer InAabbs
+{
+    float data[]; // 6 floats per AABB
+} in_aabbs;
+
+layout(set = 0, binding = 1) writeonly buffer OutMorton
+{
+    uint codes[];
+} out_morton;
+
+// Push-constant block matches C++ MortonPushConstants 1:1 (16-byte
+// aligned vec3 pads to the next 16-byte boundary so we use explicit
+// pad floats here instead of vec3 to guarantee scalar-layout match).
+layout(push_constant) uniform Push
+{
+    float scene_min_x;
+    float scene_min_y;
+    float scene_min_z;
+    float _pad_a;
+    float inv_extent_x;
+    float inv_extent_y;
+    float inv_extent_z;
+    float _pad_b;
+    uint  count;
+} pc;
+
+// --- Mirror of CPU `spread_bits_30`. Verbatim bit pattern.
+uint spread_bits_30(uint x)
+{
+    x &= 0x000003FFu;
+    x = (x | (x << 16u)) & 0x030000FFu;
+    x = (x | (x << 8u))  & 0x0300F00Fu;
+    x = (x | (x << 4u))  & 0x030C30C3u;
+    x = (x | (x << 2u))  & 0x09249249u;
+    return x;
+}
+
+// --- Mirror of CPU `morton3_30bit_from_ints`.
+uint morton3_30bit_from_ints(uint ix, uint iy, uint iz)
+{
+    return spread_bits_30(ix) | (spread_bits_30(iy) << 1u) | (spread_bits_30(iz) << 2u);
+}
+
+// --- Mirror of CPU `quantize_to_morton_grid`. Truncate-toward-zero
+// then clamp into [0, 1023]. The `int(scaled)` cast is the GLSL
+// truncate-toward-zero equivalent of `static_cast<i32>` in C++.
+uint quantize_to_morton_grid(float v, float lo, float inv_extent)
+{
+    float normalized = (v - lo) * inv_extent;
+    float scaled     = normalized * 1024.0;
+    int   truncated  = int(scaled);
+    int   clamped    = clamp(truncated, 0, 1023);
+    return uint(clamped);
+}
+
+void main()
+{
+    uint gid = gl_GlobalInvocationID.x;
+    if (gid >= pc.count) { return; }
+
+    uint base = gid * 6u;
+    vec3 mn = vec3(in_aabbs.data[base + 0u], in_aabbs.data[base + 1u], in_aabbs.data[base + 2u]);
+    vec3 mx = vec3(in_aabbs.data[base + 3u], in_aabbs.data[base + 4u], in_aabbs.data[base + 5u]);
+    vec3 mid = 0.5 * (mn + mx);
+
+    uint ix = quantize_to_morton_grid(mid.x, pc.scene_min_x, pc.inv_extent_x);
+    uint iy = quantize_to_morton_grid(mid.y, pc.scene_min_y, pc.inv_extent_y);
+    uint iz = quantize_to_morton_grid(mid.z, pc.scene_min_z, pc.inv_extent_z);
+
+    out_morton.codes[gid] = morton3_30bit_from_ints(ix, iy, iz);
+}

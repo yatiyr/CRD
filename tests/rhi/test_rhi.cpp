@@ -425,6 +425,9 @@ public:
     }
     [[nodiscard]] crd::rhi::Queue& compute_queue() noexcept override { return m_queue; }
     [[nodiscard]] bool has_dedicated_compute_queue() const noexcept override { return false; }
+    [[nodiscard]] std::unique_ptr<crd::rhi::CommandBuffer>
+    create_command_buffer_for_queue(crd::rhi::Queue&) override { return nullptr; }
+    [[nodiscard]] bool supports_shader_int64() const noexcept override { return false; }
 
     [[nodiscard]] std::unique_ptr<crd::rhi::DescriptorSetLayout>
     create_descriptor_set_layout(const crd::rhi::DescriptorSetLayoutDesc& desc) override

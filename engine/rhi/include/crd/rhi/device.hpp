@@ -85,5 +85,39 @@ public:
     // (true) or a fallback alias of the graphics queue (false). Useful
     // for perf-UI annotation and consumer-side optimization hints.
     [[nodiscard]] virtual bool has_dedicated_compute_queue() const noexcept = 0;
+
+    // Phase 3.1.7 v9a-a-async-compute (2026-05-18) — allocate a command
+    // buffer from the command pool whose family matches `queue`.
+    // **APPENDED AT END per D135 vtable-stability discipline.**
+    //
+    // Motivation: `create_command_buffer()` allocates from a graphics-
+    // family pool, so submitting that command buffer to a different-
+    // family queue (e.g. `compute_queue()` on a GPU with a dedicated
+    // compute family like RTX 4070) trips
+    // VUID-vkQueueSubmit-pCommandBuffers-00074. v9a-a surfaced this
+    // when the first ValidationCapture-instrumented consumer dispatched
+    // via the compute queue.
+    //
+    // **Pointer-identity contract** (mirrors D9): when no dedicated
+    // compute family exists, `&queue == &graphics_queue()` and this
+    // routes through the graphics-family pool; functionally identical
+    // to `create_command_buffer()` in that path. When a dedicated
+    // compute family DOES exist, passing `compute_queue()` routes
+    // through a separately-managed compute-family pool.
+    //
+    // Returns nullptr on invalid queue (not one of this device's
+    // queues) or backend OOM. No exception path.
+    [[nodiscard]] virtual std::unique_ptr<CommandBuffer>
+    create_command_buffer_for_queue(Queue& queue) = 0;
+
+    // Phase 3.1.7 v9a-60bit-gpu (2026-05-18) — reports whether the
+    // selected adapter supports + has enabled the `shaderInt64` feature
+    // (Vulkan core 1.0 feature flag; required for u64 SSBOs and
+    // 64-bit-int arithmetic inside compute shaders). v9a-60bit-gpu's
+    // `MortonGpu60BitPipeline` returns `is_valid() == false` when this
+    // is `false`, so callers gracefully degrade to the 30-bit path.
+    //
+    // **APPENDED AT END per D135 vtable-stability discipline.**
+    [[nodiscard]] virtual bool supports_shader_int64() const noexcept = 0;
 };
 } // namespace crd::rhi

@@ -5,6 +5,28 @@ move to a session log entry and remove from here.
 
 ## Active debt
 
+### ✅ Phase 3.1.7 v9a-a — four follow-ons PAID 2026-05-18 (same day as filing + reversal)
+
+> **STATUS — CLOSED 2026-05-18.** All 4 follow-on slices shipped same day:
+> `v9a-a-typed` ✅ + `v9a-60bit-cpu` ✅ + `v9a-a-async-compute` ✅ +
+> `v9a-60bit-gpu` ✅. **5-config DoD PASS** (`scripts/per-slice-check.ps1
+> -IncludeRelease -Parallel`, 39 s). Consolidated record in
+> `docs/sessions/2026-05-18-geometry-v9a-a-followons.md`. Pinned design
+> decisions D137-D140 carried for ADR-0076 §25 amendment at v9a-close.
+>
+> Cluster-level effects of the paydown:
+> - RHI surface: two new virtuals on `crd::rhi::Device` (`create_command_buffer_for_queue` + `supports_shader_int64`), both appended at END per D135 vtable-stability. Vulkan backend implements both; smoke + test mocks updated.
+> - rhi-vulkan now lazy-creates a compute-family `VkCommandPool` when the device has a dedicated compute family + enables `shaderInt64` feature when supported.
+> - `crd-geometry-bvh-gpu` ships CPU+GPU 30-bit (raw + typed) AND CPU+GPU 60-bit Morton paths, plus a sync+async dispatch surface.
+> - v9a-b1 sort API can now template + INSTANTIATE over both `KeyT=u32` (30-bit) and `KeyT=u64` (60-bit) from day 1 — both backends are real shipping code, not a hypothetical hook.
+>
+> Per the refined [[ship-at-consumer-template-from-day-one]] rule: this
+> was the correct call for SUBSTRATE work where the engine IS the
+> product. The original "defer until consumer" rule was applied wrongly
+> at the first v9a-a close; user pushback got us to the elite answer.
+
+---
+
 ### Shewchuk adaptive predicates — FULLY PAID 2026-05-17 (orient3d + incircle Stage D 2026-05-14; insphere Stage D 2026-05-17 v8c-pre)
 
 > **STATUS — CLOSED 2026-05-17 by Phase 3.1.7 v8c-pre.** All three adaptive

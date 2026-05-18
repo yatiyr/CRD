@@ -1,0 +1,84 @@
+#version 450
+#extension GL_ARB_gpu_shader_int64 : require
+
+// ---------------------------------------------------------------------------
+// 60-bit Morton-code generation for AABB centroids. Phase 3.1.7 v9a-60bit-gpu.
+//
+// **MECHANICAL TRANSLATION** of the CPU 60-bit kernel in
+// `engine/geometry-bvh-gpu/include/crd/geometry/bvh_gpu/morton_60bit.hpp`.
+// Per the v9a discipline (D134): CPU sequential IS the algorithm
+// definition; this shader is a verbatim copy of the per-element kernel
+// body translated to GLSL with `uint64_t` arithmetic.
+//
+// Requires the `shaderInt64` feature — caller gates via
+// `Device::supports_shader_int64()`.
+// ---------------------------------------------------------------------------
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) readonly buffer InAabbs
+{
+    float data[]; // 6 floats per AABB (same packing as 30-bit shader)
+} in_aabbs;
+
+layout(set = 0, binding = 1) writeonly buffer OutMorton
+{
+    uint64_t codes[];
+} out_morton;
+
+layout(push_constant) uniform Push
+{
+    float scene_min_x;
+    float scene_min_y;
+    float scene_min_z;
+    float _pad_a;
+    float inv_extent_x;
+    float inv_extent_y;
+    float inv_extent_z;
+    float _pad_b;
+    uint  count;
+} pc;
+
+// Mirror of CPU `spread_bits_60`.
+uint64_t spread_bits_60(uint64_t x)
+{
+    x &= 0x00000000000FFFFFul;
+    x = (x | (x << 32ul)) & 0x001F00000000FFFFul;
+    x = (x | (x << 16ul)) & 0x001F0000FF0000FFul;
+    x = (x | (x << 8ul))  & 0x100F00F00F00F00Ful;
+    x = (x | (x << 4ul))  & 0x10C30C30C30C30C3ul;
+    x = (x | (x << 2ul))  & 0x1249249249249249ul;
+    return x;
+}
+
+uint64_t morton3_60bit_from_ints(uint64_t ix, uint64_t iy, uint64_t iz)
+{
+    return spread_bits_60(ix) | (spread_bits_60(iy) << 1ul) | (spread_bits_60(iz) << 2ul);
+}
+
+// Mirror of CPU `quantize_to_morton_grid_20bit`.
+uint64_t quantize_to_morton_grid_20bit(float v, float lo, float inv_extent)
+{
+    float normalized = (v - lo) * inv_extent;
+    float scaled     = normalized * 1048576.0;
+    int   truncated  = int(scaled);
+    int   clamped    = clamp(truncated, 0, 1048575);
+    return uint64_t(clamped);
+}
+
+void main()
+{
+    uint gid = gl_GlobalInvocationID.x;
+    if (gid >= pc.count) { return; }
+
+    uint base = gid * 6u;
+    vec3 mn = vec3(in_aabbs.data[base + 0u], in_aabbs.data[base + 1u], in_aabbs.data[base + 2u]);
+    vec3 mx = vec3(in_aabbs.data[base + 3u], in_aabbs.data[base + 4u], in_aabbs.data[base + 5u]);
+    vec3 mid = 0.5 * (mn + mx);
+
+    uint64_t ix = quantize_to_morton_grid_20bit(mid.x, pc.scene_min_x, pc.inv_extent_x);
+    uint64_t iy = quantize_to_morton_grid_20bit(mid.y, pc.scene_min_y, pc.inv_extent_y);
+    uint64_t iz = quantize_to_morton_grid_20bit(mid.z, pc.scene_min_z, pc.inv_extent_z);
+
+    out_morton.codes[gid] = morton3_60bit_from_ints(ix, iy, iz);
+}

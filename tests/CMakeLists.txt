@@ -1,6 +1,10 @@
 include(CTest)
 include(Catch)
 
+# Header-only test utilities (ULP compare, GPU determinism check) — must
+# come BEFORE any test target that links it.
+add_subdirectory(test_helpers)
+
 add_subdirectory(core)
 add_subdirectory(units)
 add_subdirectory(time)
@@ -17,6 +21,8 @@ add_subdirectory(geometry-spatial)
 add_subdirectory(geometry-polygon)
 add_subdirectory(geometry-mesh-processing)
 add_subdirectory(geometry-delaunay)
+add_subdirectory(geometry-decomposition)
+add_subdirectory(geometry-bvh-gpu)
 add_subdirectory(containers)
 add_subdirectory(platform)
 add_subdirectory(app)
