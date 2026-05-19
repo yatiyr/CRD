@@ -7,6 +7,7 @@
 #include <crd/hesap/dense/matrix.hpp>
 #include <crd/hesap/dense/matrix_types.hpp>
 #include <crd/hesap/dense/real_type.hpp>
+#include <crd/memory/allocator.hpp>
 
 namespace crd::hesap::dense
 {
@@ -35,15 +36,23 @@ namespace crd::hesap::dense
 
 // ---- gemm: C = alpha * op(A) * op(B) + beta * C ----------------------
 // op(A) ∈ {A, A^T, A^H}; same for op(B).
+//
+// Scratch allocator: `scratch` is used for the internal pack buffers
+// (~4-8 MB per call at large N). If nullptr, falls back to
+// `crd::memory::default_allocator()` (MallocAllocator) — that fallback
+// exists for view-form callers that cannot carry an allocator, but the
+// Matrix-form overload below auto-propagates `a.allocator()` and is
+// preferred. See memory/feedback_hesap_propagate_allocator.
 template <typename T, Layout L>
 void gemm(T alpha, MatrixView<const T, L> a, MatrixView<const T, L> b, T beta,
-          MatrixView<T, L> c, Trans trans_a = Trans::None, Trans trans_b = Trans::None);
+          MatrixView<T, L> c, Trans trans_a = Trans::None, Trans trans_b = Trans::None,
+          crd::memory::IAllocator* scratch = nullptr);
 
 template <typename T, Layout L>
 inline void gemm(T alpha, const Matrix<T, L>& a, const Matrix<T, L>& b, T beta, Matrix<T, L>& c,
                  Trans trans_a = Trans::None, Trans trans_b = Trans::None)
 {
-    gemm<T, L>(alpha, a.cview(), b.cview(), beta, c.view(), trans_a, trans_b);
+    gemm<T, L>(alpha, a.cview(), b.cview(), beta, c.view(), trans_a, trans_b, a.allocator());
 }
 
 // ---- gemm_parallel: BLIS-style outer-loop parallelism ----------------
@@ -62,14 +71,15 @@ inline void gemm(T alpha, const Matrix<T, L>& a, const Matrix<T, L>& b, T beta, 
 template <typename T, Layout L>
 void gemm_parallel(crd::u32 num_workers, T alpha, MatrixView<const T, L> a, MatrixView<const T, L> b,
                    T beta, MatrixView<T, L> c, Trans trans_a = Trans::None,
-                   Trans trans_b = Trans::None);
+                   Trans trans_b = Trans::None, crd::memory::IAllocator* scratch = nullptr);
 
 template <typename T, Layout L>
 inline void gemm_parallel(crd::u32 num_workers, T alpha, const Matrix<T, L>& a, const Matrix<T, L>& b,
                           T beta, Matrix<T, L>& c, Trans trans_a = Trans::None,
                           Trans trans_b = Trans::None)
 {
-    gemm_parallel<T, L>(num_workers, alpha, a.cview(), b.cview(), beta, c.view(), trans_a, trans_b);
+    gemm_parallel<T, L>(num_workers, alpha, a.cview(), b.cview(), beta, c.view(), trans_a, trans_b,
+                        a.allocator());
 }
 
 // ---- gemm_parallel_auto: pick num_workers automatically (v0d-parallelism-
@@ -83,14 +93,16 @@ inline void gemm_parallel(crd::u32 num_workers, T alpha, const Matrix<T, L>& a, 
 template <typename T, Layout L>
 void gemm_parallel_auto(T alpha, MatrixView<const T, L> a, MatrixView<const T, L> b, T beta,
                         MatrixView<T, L> c, Trans trans_a = Trans::None,
-                        Trans trans_b = Trans::None);
+                        Trans trans_b = Trans::None,
+                        crd::memory::IAllocator* scratch = nullptr);
 
 template <typename T, Layout L>
 inline void gemm_parallel_auto(T alpha, const Matrix<T, L>& a, const Matrix<T, L>& b, T beta,
                                Matrix<T, L>& c, Trans trans_a = Trans::None,
                                Trans trans_b = Trans::None)
 {
-    gemm_parallel_auto<T, L>(alpha, a.cview(), b.cview(), beta, c.view(), trans_a, trans_b);
+    gemm_parallel_auto<T, L>(alpha, a.cview(), b.cview(), beta, c.view(), trans_a, trans_b,
+                             a.allocator());
 }
 
 // ---- syrk: C = alpha * A * A^T + beta * C (symmetric, real) ----------

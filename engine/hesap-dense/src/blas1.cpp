@@ -1,9 +1,11 @@
 #include <crd/hesap/dense/blas1.hpp>
 
 #include <crd/core/assert.hpp>
+#include <crd/hesap/dense/detail/dot_simd.hpp>
 #include <crd/hesap/dense/detail/pairwise_sum.hpp>
 
 #include <cmath>
+#include <type_traits>
 #include <utility>
 
 namespace crd::hesap::dense
@@ -30,7 +32,22 @@ T dot(crd::containers::ConstSpan<T> x, crd::containers::ConstSpan<T> y)
 {
     static_assert(!is_complex_v<T>, "dot<T> is real-only; use dotu / dotc for complex");
     CRD_ASSERT_MSG(x.size() == y.size(), "dot: x.size() != y.size()");
-    return detail::pairwise_sum_produced<T>(x.size(), [&](crd::usize i) { return x[i] * y[i]; });
+    // v0b-simd-followon: dispatch to SIMD path for f32/f64. Other real types
+    // (none in the v0b instantiation set today) would fall back to scalar
+    // pairwise.
+    if constexpr (std::is_same_v<T, crd::f32>)
+    {
+        return detail::simd_dot_f32(x.data(), y.data(), x.size());
+    }
+    else if constexpr (std::is_same_v<T, crd::f64>)
+    {
+        return detail::simd_dot_f64(x.data(), y.data(), x.size());
+    }
+    else
+    {
+        return detail::pairwise_sum_produced<T>(x.size(),
+                                                [&](crd::usize i) { return x[i] * y[i]; });
+    }
 }
 
 // =======================================================================
@@ -77,6 +94,14 @@ RealType<T> nrm2(crd::containers::ConstSpan<T> x)
             x.size(),
             [&](crd::usize i) -> R { return norm_sq(x[i]); });
         return std::sqrt(sum_sq);
+    }
+    else if constexpr (std::is_same_v<T, crd::f32>)
+    {
+        return std::sqrt(detail::simd_sumsq_f32(x.data(), x.size()));
+    }
+    else if constexpr (std::is_same_v<T, crd::f64>)
+    {
+        return std::sqrt(detail::simd_sumsq_f64(x.data(), x.size()));
     }
     else
     {

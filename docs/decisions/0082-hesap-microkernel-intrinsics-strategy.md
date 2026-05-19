@@ -204,6 +204,36 @@ engineering economics**.
 - ADR re-evaluation criteria documented above; no time-bounded review
   (Cerid does measured re-evaluation, not calendar-based).
 
+## 2026-05-20 update — FMA acceptance + reference-class shootout outcome
+
+The original 2026-05-19 ADR called for two-rounded `mul_add` (a*b + c
+with two roundings) per ADR-0063's determinism contract. After the
+reference-class shootout vs Eigen-MT (see
+`docs/sessions/2026-05-19-hesap-vs-reference-shootout.md`), we ratified:
+
+- **Hesap microkernels use `crd::math::simd::fma(a, b, c)` — single-
+  rounded IEEE 754 FMA** via `_mm256_fmadd_ps` / `_mm256_fmadd_pd`
+  (AVX2 path) with `std::fma` scalar fallback. This is ~2× the throughput
+  of the two-rounded `mul_add` path on AVX2-FMA hardware.
+- **Determinism contract for hesap**: bit-exact across SIMD widths AND
+  scalar paths because `std::fma` and hardware FMA are IEEE 754-2008
+  mandated to produce identical results.
+- **ADR-0063 (eylem determinism contract) continues to use `mul_add`**
+  with two roundings — that's a physics-replay requirement and a
+  different contract. The two coexist: hesap is numerical computing
+  (perf-critical, single-rounded FMA OK), eylem is physics replay
+  (bit-exact-across-recompile required, two-rounded mul_add).
+- **The asm-microkernel revisit gate continues to NOT be triggered** —
+  intrinsics + FMA achieves 70-100% of single-core peak on the dev box
+  (i9-14900K AVX2) per the L3 shootout. We BEAT Eigen-MT at all 10 GEMM
+  sizes (f32 + f64) with the intrinsics path alone.
+
+The reference-class GEMM shootout result (10/10 WINS over Eigen-MT)
+validates the intrinsics-first decision empirically. The remaining
+5-25% gap on L2 ops (gemv small-N, symv mid-N, trsv large-N) is
+filed but does NOT trigger the asm gate either (gap is < 30%, and
+no consumer slice yet bottlenecks on those L2 ops).
+
 ## References
 
 - ADR-0065 §13 — hesap elite-tier amendments (D4 task-DAG, D6 modern hardware)

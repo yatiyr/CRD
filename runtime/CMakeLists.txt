@@ -513,4 +513,56 @@ if(CRD_BUILD_HESAP_VS_REFERENCE)
             PROPERTIES COMPILE_FLAGS "-Wno-error")
     endif()
     # PCH conflicts with eigen + cblas system headers; skip PCH for this target.
+
+    # ---- BLAS L1 shootout ----
+    add_executable(bench_hesap_blas1_vs_reference
+        examples/bench_hesap_blas1_vs_reference.cpp
+    )
+    target_link_libraries(bench_hesap_blas1_vs_reference PRIVATE
+        crd-core
+        crd-memory
+        crd-containers
+        crd-math
+        crd-hesap
+        crd-hesap-dense
+        eigen_headers
+        openblas
+    )
+    target_include_directories(bench_hesap_blas1_vs_reference SYSTEM PRIVATE
+        "${OpenBLAS_SOURCE_DIR}"
+        "${CMAKE_BINARY_DIR}"
+        "${CMAKE_BINARY_DIR}/generated"
+        "${CMAKE_BINARY_DIR}/_deps/openblas-build"
+    )
+    if(OpenMP_CXX_FOUND)
+        target_link_libraries(bench_hesap_blas1_vs_reference PRIVATE OpenMP::OpenMP_CXX)
+    endif()
+    set_source_files_properties(examples/bench_hesap_blas1_vs_reference.cpp PROPERTIES
+        COMPILE_FLAGS "/WX- /wd4242 /wd4244 /wd4267 /wd4127 /wd4146")
+
+    # ---- BLAS L2 shootout ----
+    add_executable(bench_hesap_blas2_vs_reference
+        examples/bench_hesap_blas2_vs_reference.cpp
+    )
+    target_link_libraries(bench_hesap_blas2_vs_reference PRIVATE
+        crd-core
+        crd-memory
+        crd-containers
+        crd-math
+        crd-hesap
+        crd-hesap-dense
+        eigen_headers
+        openblas
+    )
+    target_include_directories(bench_hesap_blas2_vs_reference SYSTEM PRIVATE
+        "${OpenBLAS_SOURCE_DIR}"
+        "${CMAKE_BINARY_DIR}"
+        "${CMAKE_BINARY_DIR}/generated"
+        "${CMAKE_BINARY_DIR}/_deps/openblas-build"
+    )
+    if(OpenMP_CXX_FOUND)
+        target_link_libraries(bench_hesap_blas2_vs_reference PRIVATE OpenMP::OpenMP_CXX)
+    endif()
+    set_source_files_properties(examples/bench_hesap_blas2_vs_reference.cpp PROPERTIES
+        COMPILE_FLAGS "/WX- /wd4242 /wd4244 /wd4267 /wd4127 /wd4146")
 endif()

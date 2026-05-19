@@ -90,15 +90,18 @@ template <typename T, Layout L>
 //     gemm_packed_inner: mr × nr loops calling gemm_microkernel<T> on
 //                       (Ac panel, Bc panel) → produces mr × nr C tile
 //
-// Pack buffers come from `crd::memory::default_allocator()`. The maximum
-// Ac size is `ceil(Mc/MR) * MR * Kc` = ceil(120/8)*8*256 = 30720 entries
-// = 120 KB (f32) / 240 KB (f64). The maximum Bc size is
-// `ceil(Nc/NR) * Kc * NR = ceil(4080/8)*256*8 = 1044480` ≈ 4 MB (f32) /
-// 8 MB (f64). Total scratch: ~4-8 MB per gemm call.
+// Pack buffers come from the `scratch` IAllocator (Matrix overload passes
+// `a.allocator()`; raw view-form callers may pass nullptr to fall back to
+// `default_allocator()` = MallocAllocator, but that's discouraged — see
+// memory/feedback_hesap_propagate_allocator). The maximum Ac size is
+// `ceil(Mc/MR) * MR * Kc` = ceil(120/8)*8*256 = 30720 entries = 120 KB
+// (f32) / 240 KB (f64). Max Bc is `ceil(Nc/NR) * Kc * NR =
+// ceil(4080/8)*256*8 = 1044480` ≈ 4 MB (f32) / 8 MB (f64). Total scratch:
+// ~4-8 MB per gemm call.
 // =======================================================================
 template <typename T, Layout L>
 void gemm(T alpha, MatrixView<const T, L> a, MatrixView<const T, L> b, T beta,
-          MatrixView<T, L> c, Trans trans_a, Trans trans_b)
+          MatrixView<T, L> c, Trans trans_a, Trans trans_b, crd::memory::IAllocator* scratch)
 {
     const crd::usize m = (trans_a == Trans::None) ? a.rows() : a.cols();
     const crd::usize k = (trans_a == Trans::None) ? a.cols() : a.rows();
@@ -116,13 +119,18 @@ void gemm(T alpha, MatrixView<const T, L> a, MatrixView<const T, L> b, T beta,
         }
     }
 
-    // Allocate pack buffers once per gemm call. Sized for the worst-case
-    // panel (Mc / Kc / Nc); inner loops reuse the same allocation.
-    auto* alloc = crd::memory::default_allocator();
+    // Allocate pack buffers once per gemm call from the caller-supplied
+    // scratch allocator (or MallocAllocator if nullptr — discouraged).
+    // Size to MIN(actual_dim, macro_block) to avoid wasting tens of MB on
+    // small inputs (e.g. an 8x8 GEMM doesn't need 8 MB of Bc scratch).
+    auto* alloc = scratch != nullptr ? scratch : crd::memory::default_allocator();
+    const crd::usize a_pack_dim_m = std::min<crd::usize>(m, kMc);
+    const crd::usize a_pack_dim_k = std::min<crd::usize>(k, kKc);
+    const crd::usize b_pack_dim_n = std::min<crd::usize>(n, kNc);
     const crd::usize a_pack_capacity =
-        ((kMc + detail::kGemmMr - 1) / detail::kGemmMr) * detail::kGemmMr * kKc;
+        ((a_pack_dim_m + detail::kGemmMr - 1) / detail::kGemmMr) * detail::kGemmMr * a_pack_dim_k;
     const crd::usize b_pack_capacity =
-        ((kNc + detail::kGemmNr - 1) / detail::kGemmNr) * kKc * detail::kGemmNr;
+        ((b_pack_dim_n + detail::kGemmNr - 1) / detail::kGemmNr) * a_pack_dim_k * detail::kGemmNr;
     const crd::usize align = alignof(T) > 32 ? alignof(T) : 32;
     auto* a_pack = static_cast<T*>(alloc->allocate(a_pack_capacity * sizeof(T), align));
     auto* b_pack = static_cast<T*>(alloc->allocate(b_pack_capacity * sizeof(T), align));
@@ -203,7 +211,8 @@ inline bool small_gemm_eligible(MatrixView<const T, L> a, MatrixView<const T, L>
 
 template <typename T, Layout L>
 void small_gemm_parallel(crd::u32 num_workers, T alpha, MatrixView<const T, L> a,
-                        MatrixView<const T, L> b, T beta, MatrixView<T, L> c)
+                        MatrixView<const T, L> b, T beta, MatrixView<T, L> c,
+                        crd::memory::IAllocator* scratch)
 {
     const crd::usize m = a.rows();
     const crd::usize n = b.cols();
@@ -220,7 +229,7 @@ void small_gemm_parallel(crd::u32 num_workers, T alpha, MatrixView<const T, L> a
 
     // Pack B once. Smaller than the worst-case b_pack_capacity since we use
     // the actual n×k bounds (not full Nc×Kc). At N=256 f64: 256×256×8 = 524KB.
-    auto* alloc = crd::memory::default_allocator();
+    auto* alloc = scratch != nullptr ? scratch : crd::memory::default_allocator();
     const crd::usize b_pack_capacity =
         ((n + detail::kGemmNr - 1) / detail::kGemmNr) * k * detail::kGemmNr;
     const crd::usize align = alignof(T) > 32 ? alignof(T) : 32;
@@ -265,11 +274,12 @@ void small_gemm_parallel(crd::u32 num_workers, T alpha, MatrixView<const T, L> a
 // =======================================================================
 template <typename T, Layout L>
 void gemm_parallel(crd::u32 num_workers, T alpha, MatrixView<const T, L> a, MatrixView<const T, L> b,
-                   T beta, MatrixView<T, L> c, Trans trans_a, Trans trans_b)
+                   T beta, MatrixView<T, L> c, Trans trans_a, Trans trans_b,
+                   crd::memory::IAllocator* scratch)
 {
     if (num_workers <= 1)
     {
-        gemm<T, L>(alpha, a, b, beta, c, trans_a, trans_b);
+        gemm<T, L>(alpha, a, b, beta, c, trans_a, trans_b, scratch);
         return;
     }
 
@@ -292,7 +302,7 @@ void gemm_parallel(crd::u32 num_workers, T alpha, MatrixView<const T, L> a, Matr
         if (a.rows() * b.cols() * a.cols() < kSmallGemmThreshold &&
             small_gemm_eligible(a, b, c, trans_a, trans_b))
         {
-            small_gemm_parallel<T, L>(num_workers, alpha, a, b, beta, c);
+            small_gemm_parallel<T, L>(num_workers, alpha, a, b, beta, c, scratch);
             return;
         }
     }
@@ -341,11 +351,14 @@ void gemm_parallel(crd::u32 num_workers, T alpha, MatrixView<const T, L> a, Matr
     // Allocate one buffer per ACTUAL worker thread and index by
     // `worker_index()` directly.
     const crd::u32 total_workers = crd::jobs::num_workers();
-    auto* alloc = crd::memory::default_allocator();
+    auto* alloc = scratch != nullptr ? scratch : crd::memory::default_allocator();
+    // Size to MIN(actual_dim, macro_block) — same reasoning as gemm().
+    const crd::usize ap_kc = std::min<crd::usize>(k, kKc);
+    const crd::usize bp_nc = std::min<crd::usize>(n, kNc);
     const crd::usize a_pack_per_worker =
-        ((eff_mc + detail::kGemmMr - 1) / detail::kGemmMr) * detail::kGemmMr * kKc;
+        ((eff_mc + detail::kGemmMr - 1) / detail::kGemmMr) * detail::kGemmMr * ap_kc;
     const crd::usize b_pack_capacity =
-        ((kNc + detail::kGemmNr - 1) / detail::kGemmNr) * kKc * detail::kGemmNr;
+        ((bp_nc + detail::kGemmNr - 1) / detail::kGemmNr) * ap_kc * detail::kGemmNr;
     const crd::usize align = alignof(T) > 32 ? alignof(T) : 32;
     auto* a_pack_pool =
         static_cast<T*>(alloc->allocate(a_pack_per_worker * total_workers * sizeof(T), align));
@@ -448,12 +461,13 @@ void gemm_parallel(crd::u32 num_workers, T alpha, MatrixView<const T, L> a, Matr
 // =======================================================================
 template <typename T, Layout L>
 void gemm_parallel_auto(T alpha, MatrixView<const T, L> a, MatrixView<const T, L> b, T beta,
-                        MatrixView<T, L> c, Trans trans_a, Trans trans_b)
+                        MatrixView<T, L> c, Trans trans_a, Trans trans_b,
+                        crd::memory::IAllocator* scratch)
 {
     constexpr crd::usize kSerialThreshold = 256ULL * 1024ULL;
     const crd::usize mnk = a.rows() * b.cols() * a.cols();
     const crd::u32 num_workers = (mnk < kSerialThreshold) ? 1U : crd::jobs::num_workers();
-    gemm_parallel<T, L>(num_workers, alpha, a, b, beta, c, trans_a, trans_b);
+    gemm_parallel<T, L>(num_workers, alpha, a, b, beta, c, trans_a, trans_b, scratch);
 }
 
 // =======================================================================
@@ -829,73 +843,73 @@ void gemm_mixed(TAcc alpha, MatrixView<const TIn, L> a, MatrixView<const TIn, L>
 
 // gemm — 4 types × 2 layouts
 template void gemm<crd::f32, Layout::RowMajor>(crd::f32, MatrixView<const crd::f32, Layout::RowMajor>,
-    MatrixView<const crd::f32, Layout::RowMajor>, crd::f32, MatrixView<crd::f32, Layout::RowMajor>, Trans, Trans);
+    MatrixView<const crd::f32, Layout::RowMajor>, crd::f32, MatrixView<crd::f32, Layout::RowMajor>, Trans, Trans, crd::memory::IAllocator*);
 template void gemm<crd::f64, Layout::RowMajor>(crd::f64, MatrixView<const crd::f64, Layout::RowMajor>,
-    MatrixView<const crd::f64, Layout::RowMajor>, crd::f64, MatrixView<crd::f64, Layout::RowMajor>, Trans, Trans);
+    MatrixView<const crd::f64, Layout::RowMajor>, crd::f64, MatrixView<crd::f64, Layout::RowMajor>, Trans, Trans, crd::memory::IAllocator*);
 template void gemm<Complex32, Layout::RowMajor>(Complex32, MatrixView<const Complex32, Layout::RowMajor>,
-    MatrixView<const Complex32, Layout::RowMajor>, Complex32, MatrixView<Complex32, Layout::RowMajor>, Trans, Trans);
+    MatrixView<const Complex32, Layout::RowMajor>, Complex32, MatrixView<Complex32, Layout::RowMajor>, Trans, Trans, crd::memory::IAllocator*);
 template void gemm<Complex64, Layout::RowMajor>(Complex64, MatrixView<const Complex64, Layout::RowMajor>,
-    MatrixView<const Complex64, Layout::RowMajor>, Complex64, MatrixView<Complex64, Layout::RowMajor>, Trans, Trans);
+    MatrixView<const Complex64, Layout::RowMajor>, Complex64, MatrixView<Complex64, Layout::RowMajor>, Trans, Trans, crd::memory::IAllocator*);
 template void gemm<crd::f32, Layout::ColMajor>(crd::f32, MatrixView<const crd::f32, Layout::ColMajor>,
-    MatrixView<const crd::f32, Layout::ColMajor>, crd::f32, MatrixView<crd::f32, Layout::ColMajor>, Trans, Trans);
+    MatrixView<const crd::f32, Layout::ColMajor>, crd::f32, MatrixView<crd::f32, Layout::ColMajor>, Trans, Trans, crd::memory::IAllocator*);
 template void gemm<crd::f64, Layout::ColMajor>(crd::f64, MatrixView<const crd::f64, Layout::ColMajor>,
-    MatrixView<const crd::f64, Layout::ColMajor>, crd::f64, MatrixView<crd::f64, Layout::ColMajor>, Trans, Trans);
+    MatrixView<const crd::f64, Layout::ColMajor>, crd::f64, MatrixView<crd::f64, Layout::ColMajor>, Trans, Trans, crd::memory::IAllocator*);
 template void gemm<Complex32, Layout::ColMajor>(Complex32, MatrixView<const Complex32, Layout::ColMajor>,
-    MatrixView<const Complex32, Layout::ColMajor>, Complex32, MatrixView<Complex32, Layout::ColMajor>, Trans, Trans);
+    MatrixView<const Complex32, Layout::ColMajor>, Complex32, MatrixView<Complex32, Layout::ColMajor>, Trans, Trans, crd::memory::IAllocator*);
 template void gemm<Complex64, Layout::ColMajor>(Complex64, MatrixView<const Complex64, Layout::ColMajor>,
-    MatrixView<const Complex64, Layout::ColMajor>, Complex64, MatrixView<Complex64, Layout::ColMajor>, Trans, Trans);
+    MatrixView<const Complex64, Layout::ColMajor>, Complex64, MatrixView<Complex64, Layout::ColMajor>, Trans, Trans, crd::memory::IAllocator*);
 
 // gemm_parallel — 4 types × 2 layouts (mirror of gemm instantiations)
 template void gemm_parallel<crd::f32, Layout::RowMajor>(crd::u32, crd::f32,
     MatrixView<const crd::f32, Layout::RowMajor>, MatrixView<const crd::f32, Layout::RowMajor>,
-    crd::f32, MatrixView<crd::f32, Layout::RowMajor>, Trans, Trans);
+    crd::f32, MatrixView<crd::f32, Layout::RowMajor>, Trans, Trans, crd::memory::IAllocator*);
 template void gemm_parallel<crd::f64, Layout::RowMajor>(crd::u32, crd::f64,
     MatrixView<const crd::f64, Layout::RowMajor>, MatrixView<const crd::f64, Layout::RowMajor>,
-    crd::f64, MatrixView<crd::f64, Layout::RowMajor>, Trans, Trans);
+    crd::f64, MatrixView<crd::f64, Layout::RowMajor>, Trans, Trans, crd::memory::IAllocator*);
 template void gemm_parallel<Complex32, Layout::RowMajor>(crd::u32, Complex32,
     MatrixView<const Complex32, Layout::RowMajor>, MatrixView<const Complex32, Layout::RowMajor>,
-    Complex32, MatrixView<Complex32, Layout::RowMajor>, Trans, Trans);
+    Complex32, MatrixView<Complex32, Layout::RowMajor>, Trans, Trans, crd::memory::IAllocator*);
 template void gemm_parallel<Complex64, Layout::RowMajor>(crd::u32, Complex64,
     MatrixView<const Complex64, Layout::RowMajor>, MatrixView<const Complex64, Layout::RowMajor>,
-    Complex64, MatrixView<Complex64, Layout::RowMajor>, Trans, Trans);
+    Complex64, MatrixView<Complex64, Layout::RowMajor>, Trans, Trans, crd::memory::IAllocator*);
 template void gemm_parallel<crd::f32, Layout::ColMajor>(crd::u32, crd::f32,
     MatrixView<const crd::f32, Layout::ColMajor>, MatrixView<const crd::f32, Layout::ColMajor>,
-    crd::f32, MatrixView<crd::f32, Layout::ColMajor>, Trans, Trans);
+    crd::f32, MatrixView<crd::f32, Layout::ColMajor>, Trans, Trans, crd::memory::IAllocator*);
 template void gemm_parallel<crd::f64, Layout::ColMajor>(crd::u32, crd::f64,
     MatrixView<const crd::f64, Layout::ColMajor>, MatrixView<const crd::f64, Layout::ColMajor>,
-    crd::f64, MatrixView<crd::f64, Layout::ColMajor>, Trans, Trans);
+    crd::f64, MatrixView<crd::f64, Layout::ColMajor>, Trans, Trans, crd::memory::IAllocator*);
 template void gemm_parallel<Complex32, Layout::ColMajor>(crd::u32, Complex32,
     MatrixView<const Complex32, Layout::ColMajor>, MatrixView<const Complex32, Layout::ColMajor>,
-    Complex32, MatrixView<Complex32, Layout::ColMajor>, Trans, Trans);
+    Complex32, MatrixView<Complex32, Layout::ColMajor>, Trans, Trans, crd::memory::IAllocator*);
 template void gemm_parallel<Complex64, Layout::ColMajor>(crd::u32, Complex64,
     MatrixView<const Complex64, Layout::ColMajor>, MatrixView<const Complex64, Layout::ColMajor>,
-    Complex64, MatrixView<Complex64, Layout::ColMajor>, Trans, Trans);
+    Complex64, MatrixView<Complex64, Layout::ColMajor>, Trans, Trans, crd::memory::IAllocator*);
 
 // gemm_parallel_auto — same 4 types × 2 layouts.
 template void gemm_parallel_auto<crd::f32, Layout::RowMajor>(crd::f32,
     MatrixView<const crd::f32, Layout::RowMajor>, MatrixView<const crd::f32, Layout::RowMajor>,
-    crd::f32, MatrixView<crd::f32, Layout::RowMajor>, Trans, Trans);
+    crd::f32, MatrixView<crd::f32, Layout::RowMajor>, Trans, Trans, crd::memory::IAllocator*);
 template void gemm_parallel_auto<crd::f64, Layout::RowMajor>(crd::f64,
     MatrixView<const crd::f64, Layout::RowMajor>, MatrixView<const crd::f64, Layout::RowMajor>,
-    crd::f64, MatrixView<crd::f64, Layout::RowMajor>, Trans, Trans);
+    crd::f64, MatrixView<crd::f64, Layout::RowMajor>, Trans, Trans, crd::memory::IAllocator*);
 template void gemm_parallel_auto<Complex32, Layout::RowMajor>(Complex32,
     MatrixView<const Complex32, Layout::RowMajor>, MatrixView<const Complex32, Layout::RowMajor>,
-    Complex32, MatrixView<Complex32, Layout::RowMajor>, Trans, Trans);
+    Complex32, MatrixView<Complex32, Layout::RowMajor>, Trans, Trans, crd::memory::IAllocator*);
 template void gemm_parallel_auto<Complex64, Layout::RowMajor>(Complex64,
     MatrixView<const Complex64, Layout::RowMajor>, MatrixView<const Complex64, Layout::RowMajor>,
-    Complex64, MatrixView<Complex64, Layout::RowMajor>, Trans, Trans);
+    Complex64, MatrixView<Complex64, Layout::RowMajor>, Trans, Trans, crd::memory::IAllocator*);
 template void gemm_parallel_auto<crd::f32, Layout::ColMajor>(crd::f32,
     MatrixView<const crd::f32, Layout::ColMajor>, MatrixView<const crd::f32, Layout::ColMajor>,
-    crd::f32, MatrixView<crd::f32, Layout::ColMajor>, Trans, Trans);
+    crd::f32, MatrixView<crd::f32, Layout::ColMajor>, Trans, Trans, crd::memory::IAllocator*);
 template void gemm_parallel_auto<crd::f64, Layout::ColMajor>(crd::f64,
     MatrixView<const crd::f64, Layout::ColMajor>, MatrixView<const crd::f64, Layout::ColMajor>,
-    crd::f64, MatrixView<crd::f64, Layout::ColMajor>, Trans, Trans);
+    crd::f64, MatrixView<crd::f64, Layout::ColMajor>, Trans, Trans, crd::memory::IAllocator*);
 template void gemm_parallel_auto<Complex32, Layout::ColMajor>(Complex32,
     MatrixView<const Complex32, Layout::ColMajor>, MatrixView<const Complex32, Layout::ColMajor>,
-    Complex32, MatrixView<Complex32, Layout::ColMajor>, Trans, Trans);
+    Complex32, MatrixView<Complex32, Layout::ColMajor>, Trans, Trans, crd::memory::IAllocator*);
 template void gemm_parallel_auto<Complex64, Layout::ColMajor>(Complex64,
     MatrixView<const Complex64, Layout::ColMajor>, MatrixView<const Complex64, Layout::ColMajor>,
-    Complex64, MatrixView<Complex64, Layout::ColMajor>, Trans, Trans);
+    Complex64, MatrixView<Complex64, Layout::ColMajor>, Trans, Trans, crd::memory::IAllocator*);
 
 // syrk / syr2k (real)
 template void syrk<crd::f32>(crd::f32, MatrixView<const crd::f32, Layout::RowMajor>, crd::f32,

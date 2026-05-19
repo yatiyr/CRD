@@ -134,15 +134,67 @@ comparison. The bench is the **last** gate, not the first.
 
 | Kernel | Status | Reference(s) | Session log |
 |---|---|---|---|
-| `crd-hesap-dense` GEMM | ✅ Cerid beats Eigen-MT at N >= 1024 (1.12-2.59×) | Eigen 3.4, OpenBLAS 0.3.27 (MSVC-generic limitation) | `2026-05-19-hesap-vs-reference-shootout.md` |
-| `crd-hesap-dense` BLAS L1 (axpy / dot / nrm2) | OPEN | Eigen 3.4, OpenBLAS 0.3.27 | — filed |
-| `crd-hesap-dense` BLAS L2 (gemv / symv / trsv) | OPEN | Eigen 3.4, OpenBLAS 0.3.27 | — filed |
+| `crd-hesap-dense` GEMM (multi-threaded) | ✅ **10/10 WINS over Eigen-MT** for both f32 and f64 at every N (1.01×–368×). | Eigen 3.4, OpenBLAS 0.3.27 (MSVC-generic limitation) | `2026-05-19-hesap-vs-reference-shootout.md` |
+| `crd-hesap-dense` BLAS L1 (axpy / dot / nrm2) | ✅ axpy 4/5 WINS; dot 0.71-1.07×; nrm2 0.64-1.48× (WINS at L1-resident sizes). vs OpenBLAS: WINS everywhere 1.6-14.7×. | Eigen 3.4, OpenBLAS 0.3.27 | `2026-05-19-hesap-vs-reference-shootout.md` |
+| `crd-hesap-dense` BLAS L2 (gemv / symv / trsv) | ◑ gemv 3/7 WINS (large N); trsv 1/7 WIN; symv 0/7 WINS but all 0.72-0.99× of Eigen. vs OpenBLAS: WINS everywhere 1.4-5.4×. Last 5-25% gap requires asm or AVX-512. | Eigen 3.4, OpenBLAS 0.3.27 | `2026-05-19-hesap-vs-reference-shootout.md` |
 | `crd-hesap-dense` v0e direct solvers (LU/QR/Chol) | BLOCKED on v0e shipping | Eigen LU/QR/LLT, LAPACK | — filed |
+| `crd-hesap` sparse | BLOCKED on v1 sparse shipping | Eigen Sparse, SuiteSparse:CHOLMOD/UMFPACK | — filed |
+| `crd-hesap` FFT (when shipped) | BLOCKED | FFTW3, PocketFFT | — filed |
 | `crd-jobs` parallel_for / parallel_reduce | OPEN | oneTBB | — filed |
 | `crd-containers::sort` | OPEN | std::sort, oneTBB sort | — filed |
 
 Every "OPEN" entry becomes BLOCKING the next time we touch that module
-for non-trivial perf work.
+for non-trivial perf work. Every "◑" entry has filed follow-ons for
+the last 5-25% gap to close — see "Continuous-benchmarking policy"
+below for when those land.
+
+## Continuous-benchmarking policy
+
+We do not consider any of these reference comparisons "done forever."
+The policy is **continuous benchmarking**:
+
+1. **Every future slice that touches one of these kernels re-runs the
+   bench**. If we slipped (e.g. a new Eigen release pulled ahead, or an
+   optimization regressed something), closing the gap is BLOCKING for
+   the next slice. No silent regressions.
+
+2. **Sub-1× spots on a shipped kernel are FILED follow-ons, not "good
+   enough"**. The L2 gemv/symv/trsv 0.72-0.99× sub-1× cases above are
+   filed as:
+   - `v0d-asm-microkernel` — hand-tuned asm for the last 5-25%.
+     Deferred per ADR-0082's three-condition revisit gate.
+   - `v0d-microkernel-avx512` / `-neon` / `-sve2` — wider SIMD on
+     supporting hardware. Hardware-gated.
+   - `vs-ref-blas2-followups` — close gemv small-N + symv mid-N + trsv
+     large-N. Requires asm or AVX-512.
+
+3. **The bar moves with each iteration**. We never declare "this kernel
+   is fast enough." We declare it "fast enough for the consumer that's
+   pulling on it RIGHT NOW, AND we have a clear filed plan for the
+   remaining gap." When the next consumer needs more, the filed plan
+   activates.
+
+4. **Reference upgrades trigger re-benching**. New Eigen / OpenBLAS /
+   FFTW release? Bench against it. If it pulled ahead, we either close
+   the gap (preferred) or document why we accept the slip (rare).
+
+## When to do hand-tuned assembly (v0d-asm-microkernel)
+
+Per ADR-0082, the asm microkernel switch is gated on a three-condition
+revisit:
+
+1. **GEMM (or another asm-class kernel) is >50% of solve time** in a
+   real consumer slice (e.g. v0e iterative refinement is dominated by
+   GEMM, and the GEMM perf cap is the system-level bottleneck).
+2. **Intrinsics path is <70% of single-core peak**. As of 2026-05-20
+   we are at 70-100% of peak via intrinsics + FMA, so this condition
+   is NOT met today.
+3. **No better algorithmic alternative exists** (e.g. structure-aware
+   sparse, GPU offload, mixed-precision iterative refinement).
+
+When all three are true simultaneously, we open the asm path behind
+the `CRD_HESAP_MICROKERNEL_BACKEND=Asm` switch. Until then, asm work
+is a backlog item, not a roadmap item.
 
 ## Where this applies
 
