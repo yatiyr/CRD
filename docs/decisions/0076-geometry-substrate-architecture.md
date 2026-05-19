@@ -2553,3 +2553,242 @@ Cluster closes here. ADR-0076 §27 ✅ Accepted. **Phase 3.1.7 v10
 cluster locked.** Remaining in Phase 3.1.7: v11 transform-aware
 (~2 days) → Phase 3.1.7 fully closes → `crd-hesap-dense` v0 → Phase 3.1
 eylem v1c resume.
+
+## §28 Amendment (2026-05-19) — v11 transform-aware CLOSED + Phase 3.1.7 CLOSE
+
+**Status:** ✅ Accepted — locks 17 design decisions (D217-D233) from
+the v11 transform-aware slice. **PHASE 3.1.7 IS NOW FULLY CLOSED.**
+
+### What shipped
+
+v11 added the transform-aware shape helpers to the existing
+`crd-geometry-primitives` module (NO new module per the 2026-05-14
+decision). Per the user's elite-completeness mandate (2026-05-19), the
+surface widened from the phase-doc's 7 entry points to the FULL
+primitive catalog: 14 3D + 7 2D + `TransformedShape<Shape>` composition
+wrapper + typed boundary.
+
+Files:
+- `engine/geometry-primitives/include/crd/geometry/primitives/transform.hpp`
+  (~600 LOC engine; 14 3D transforms + 7 2D transforms + helpers).
+- `engine/geometry-primitives/include/crd/geometry/primitives/transform_typed.hpp`
+  (~430 LOC; Quantity-aware wrappers for every transform helper).
+- `tests/geometry-primitives/test_transform.cpp` (26 cases / 95
+  assertions; includes the 5 advisor-pinned discriminators).
+
+### Locked design decisions
+
+#### Module location + composition wrapper
+
+- **D217** — Lives in `crd-geometry-primitives/transform.hpp` (the
+  shapes' home), NOT in a new `crd-geometry-runtime` module. The
+  reserved-slot stays reserved per the 2026-05-14 scope decision: a
+  world-space facade duplicating queries / shapes would create
+  import-time consumer ambiguity for zero gain.
+- **D218** — `TransformedShape<Shape>` composition wrapper uses
+  **trait-based scalar deduction** via `shape_scalar<Shape>::type`
+  per-shape specialisations (21 shapes covered). `TransformedShape
+  <AABB3<f64>>` automatically carries a `Mat4<f64>` to_world. Catches
+  wrong-scalar composition at compile time. The two-template-param
+  form (`<Shape, T>`) was rejected — silent precision-loss trap if
+  consumers instantiate `TransformedShape<AABB3<f32>, f64>`.
+
+#### Per-shape transform decisions
+
+- **D219** — `transform_aabb` 8-corner method. Universal,
+  conservative AABB-of-transformed-corners. Standard answer; no better
+  axis-aligned bound exists for general affine.
+- **D220** — `transform_obb` three-tier cascade: rigid-exact →
+  uniform-scale-exact → conservative-via-axis-aligned-OBB for general
+  affine. The fall-back path returns an OBB with identity orientation
+  + half_extents from AABB-of-8-corners (API uniformity).
+- **D221** — `transform_sphere`: uniform-scale gives exact new sphere;
+  non-uniform gives conservative bound = `radius * max_axial_scale`.
+  Non-uniform scale of a sphere is an ellipsoid (which Cerid doesn't
+  type); loose bound is the standard answer.
+- **D222** — `transform_plane` via inverse-transpose 3x3. Preserves
+  perpendicularity under general affine — mathematically forced.
+- **D223** — `transform_ray3` (forward) preserves direction magnitude.
+  Direction is NOT renormalized. Lets callers compose ray transforms
+  without losing t-parameter scaling.
+- **D224** — `transform_ray3_to_local` inverse-direction pattern.
+  Takes consumer-provided `world_to_local` matrix (caller responsible
+  for inversion / caching). **Precondition: rigid + uniform-scale**;
+  `CRD_ASSERT` at entry. Under non-uniform-scale or shear, `t_local`
+  and `t_world` diverge by axis. The `LocalRayWithScale` variant
+  (returns `{ray, t_scale}` for the general-affine case) is filed as
+  `v11-ray-to-local-non-uniform` follow-on.
+- **D225** — Singular-matrix policy: `CRD_ASSERT` on
+  `|det(M_3x3)| > epsilon` in `transform_plane` and
+  `transform_frustum`. No silent fallback per `feedback_quality_bar` —
+  a degenerate transform is the caller's bug, not the library's. The
+  assert flags it loudly.
+
+#### Surface scope + 2D peers
+
+- **D226** — Surface widened from phase-doc's 7 enumerated entries to
+  **FULL primitive catalog** (~21 entries) per the user's
+  2026-05-19 elite-completeness mandate. Documented scope expansion vs
+  phase doc. Justification: substrate completeness avoids one-off
+  transform helpers proliferating in consumers; each entry is ~one-
+  liner; primitives are tiny so the whole catalog is ~600 LOC engine.
+- **D227** — 2D peers use `Mat3<T>` homogeneous 3x3 matrices. Column-
+  major; translation in c2. 7 2D entries: AABB2 / OBB2 / Circle /
+  Capsule2 / Segment2 / Ray2 / Triangle2.
+
+#### Internals + performance
+
+- **D228** — `MatrixAttributes3<T>` / `MatrixAttributes2<T>` struct
+  cached ONCE at function entry. Stores
+  `{is_identity, is_rigid, is_uniform_scale, uniform_scale_factor,
+  max_axial_scale, determinant}`. Reused across decisions for each
+  shape kind (e.g. `transform_obb` decides cascade tier from cached
+  attrs).
+- **D229** — Identity-matrix bit-exact fast path: `M ==
+  Mat4::identity()` (component-wise equality) short-circuits to a
+  bit-exact pass-through. Useful for batched static-geometry
+  transforms where most matrices are identity.
+- **D231** — Negative-determinant (reflection) handled automatically:
+  - 8-corner method works regardless of orientation.
+  - OBB rigid path preserves volume via `rot * orientation`
+    composition (the negative determinant is preserved on the new
+    orientation, not on the half_extents).
+  - Radius bounds use `max_axial_scale` which is a column-length
+    (positive by construction); reflections preserve column lengths.
+- **D232** — `transform_frustum` batched inverse-transpose: computes
+  `inverse_transpose(upper3(M))` ONCE and reuses across all 6 plane
+  transforms internally. Saves 5 inverse-transpose computations per
+  frustum vs. calling `transform_plane` six times. **Internal
+  optimisation, not a public API expansion** — `transform_plane_with_
+  inv_transpose` is filed as `v11-precomputed-inv-transpose` follow-
+  on if a consumer surfaces the batched-plane-transform need.
+
+#### Cross-domain principle
+
+- **D230** — **Local-space-pure principle** (originally pinned in
+  §11.3). `crd-geometry` stays local-space. World-space dispatch
+  (`world_raycast(scene, ray)` / `world_overlap(scene, box)`) is a
+  CONSUMER concern — `crd-scene-spatial` and `crd-eylem` already
+  adapt. v11 ships shape transform helpers only; the dispatch layer
+  lives at consumer time.
+
+#### Typed boundary
+
+- **D233** — Typed boundary `transform_*_typed` wrappers in
+  `transform_typed.hpp`. Strip-compute-retag pattern mirrors
+  `queries_typed.hpp` (D27 / D34 of ADR-0078 §4-§5). Mat4 / Mat3 stay
+  raw (dimensionless world transform); shape input + output are
+  typed. Adds missing strips/retags for shapes not previously covered
+  in `queries_typed.hpp` (Line3, Tetrahedron, Frustum, 2D peers).
+
+### Test corpus
+
+26 cases / 95 assertions in `tests/geometry-primitives/test_transform.cpp`:
+
+**Discriminators (advisor-pinned, must-have):**
+
+1. **Identity bit-exact pass-through** on every shape (6 SECTIONs:
+   AABB3, Sphere, Capsule3, Plane, Ray3, AABB2). Catches accidental
+   FP rounding in the identity path.
+2. **45° rotation AABB diagonal grows by sqrt(2)** exactly. Catches
+   axis-projection bugs (wrong answer would give sqrt(3) or other).
+3. **Plane normal stays perpendicular to a transformed in-plane
+   vector** within `1e-4`. The single test that pins inverse-
+   transpose correctness reliably.
+4. **`transform_ray3_to_local` round-trip** — local hit transforms
+   back to bit-equal world hit (verified via uniform-scale-eq
+   translation).
+5. **Negative-determinant (reflection) preserves OBB volume**.
+   Catches sign bugs in reflection handling.
+
+**Per-shape correctness:**
+
+- AABB uniform-scale-2, translation-only.
+- OBB rigid-rotation preserves half_extents, uniform-scale doubles,
+  general-affine collapses to axis-aligned.
+- Sphere uniform-scale, non-uniform max-axial loose bound.
+- Capsule3 / Cylinder3 endpoint + radius scale.
+- Triangle3 / Tetrahedron vertex transform.
+- Ray3 direction magnitude preserved (NOT renormalized).
+- Segment3 / Line3 endpoints + direction.
+- Frustum 90° rotation (rotates all 6 plane normals).
+
+**2D peers:**
+
+- AABB2 45° rotation grows diagonal.
+- OBB2 uniform-scale.
+- Circle scale.
+- Capsule2 / Segment2 / Ray2 / Triangle2 translation.
+
+**TransformedShape composition:**
+
+- Trait-based scalar deduction works for f32 + f64.
+- Identity transform bit-exact pass-through on f64.
+
+**Typed boundary:**
+
+- `transform_aabb_typed` round-trip with `AABB3<Length32>`.
+- `transform_sphere_typed` matches raw transform.
+
+**f64 instantiations** — end-to-end.
+
+### Cluster cross-validation
+
+- All v11 tests run on every per-slice DoD config (`win-debug + win-
+  asan + win-shipping + win-tidy`). 4-config DoD PASS in 34 s.
+- 18-config full sweep: PASS (11 Windows + 7 Linux).
+
+### Filed follow-on slices (not part of v11-close)
+
+- **`v11-ray-to-local-non-uniform`** — `LocalRayWithScale{ray, t_scale}`
+  return-type variant of `transform_ray3_to_local` for the general-
+  affine case (rigid+uniform precondition lifted). Ships when a
+  non-uniform-scale consumer surfaces.
+- **`v11-precomputed-inv-transpose`** — public
+  `transform_plane_with_inv_transpose` overload for batched plane
+  transforms outside `transform_frustum`. Ships when a renderer hits
+  the batched-plane-transform hot path.
+- **`v11-batched-aabb-simd`** — `transform_aabb_batch(M, ConstSpan<AABB3>)`
+  with AVX2 4-corner-pair multiplies. Ships when a culling consumer
+  benchmarks `transform_aabb` as the hot path.
+- **`v11-future-runtime-module`** — if a consumer-side facade
+  duplication problem ever surfaces, the reserved-slot
+  `crd-geometry-runtime` module can open. Tracked, not created.
+
+### Phase 3.1.7 CLOSE
+
+**🎉 Phase 3.1.7 `crd-geometry` substrate FULLY CLOSED 2026-05-19.**
+
+Sub-modules at phase close: **12 of 11 ✅** (12 = original 11 base +
+v10 curves extension):
+
+| # | Module | Closed by |
+|--|--|--|
+| 1 | `crd-geometry-primitives` | v0 family + v11 (this slice; transform-aware) |
+| 2 | `crd-geometry-bvh`       | v1 cluster (binned-SAH + Catto refit + Bvh4 SIMD) |
+| 3 | `crd-geometry-convex`    | v2 + v3 (GJK + EPA + Quickhull + hull-extension) |
+| 4 | `crd-geometry-mesh`      | v4 (TriangleMeshView + closest-point + Woop raycast + validate) |
+| 5 | `crd-geometry-spatial`   | v5 (KdTree + LooseOctree + R*-tree + SpatialHash + UniformGrid) |
+| 6 | `crd-geometry-polygon`   | v6 (CDT + Vatti Boolean + Bentley-Ottmann) |
+| 7 | `crd-geometry-mesh-processing` | v7 (HalfEdge + QEM + Loop subd + Liepa + Taubin) |
+| 8 | `crd-geometry-delaunay`  | v8 (2D + 3D Bowyer-Watson + Voronoi + Lloyd + Sibson NNI + Ruppert) |
+| 9 | `crd-geometry-decomposition` | v9c (V-HACD voxelize + decompose, cooker-only) |
+| 10 | `crd-geometry-bvh-gpu`  | v9a + v9b (GPU LBVH + sub-1ms refit) |
+| 11 | `crd-geometry-shader-helpers` | v9e (formula-IR + GLSL/HLSL backends + cooker) |
+| 12 | `crd-geometry-curves`   | v10 (Polyline + Bezier + Hermite + CatmullRom + BSpline + arcs + samplers + arc-length + queries + frames + viz + typed) |
+
+Total ADR-0076 amendments §1-§28 all Accepted.
+
+**Remaining post-Phase 3.1.7 (per the Strategic Execution Plan locked
+2026-05-15):**
+
+1. `crd-hesap-dense` v0 — dense numerical substrate (Phase 3.1.6
+   prologue; ships before eylem v1c-resume so eylem can lean on its
+   dense linear algebra primitives).
+2. **Phase 3.1 eylem v1c+ resume** — broadphase / narrowphase / SI
+   solver / joints / islands / scene queries / character controller /
+   snapshot+replay / sandbox / close. Consumes `crd-geometry` from day
+   one (D183 sequencing pivot 2026-05-11 — geometry-before-physics).
+
+Cluster closes here. ADR-0076 §28 ✅ Accepted. **Phase 3.1.7 fully
+closed.**

@@ -120,3 +120,47 @@ If circumstances genuinely change, open a new ADR or escalate to `@heavy`.
 - **Reference counting split:** Generic intrusive ref-counting in
   `crd-memory`. Resource-facing shared references in `crd-resources`. →
   ADR-0014
+- **Agent-native engine: CLI / RPC is the source of truth.** Every
+  engine operation a human user, artist, engineer, or scientist
+  performs is reachable from CLI + JSON-RPC + **Anthropic MCP (exact
+  compatibility, not adjacent)**. The GUI is a visualization layer
+  that emits CLI commands when the human clicks. AI agents (Claude
+  Code, Claude desktop, OpenAI / Gemini Function Calling agents)
+  drive the engine end-to-end via the same surface. Capability-based
+  security + transactional sessions + sandbox isolation +
+  deterministic replay (ADR-0063 + ADR-0078) make agent sessions
+  safe + reproducible. **Per-slice Definition of Done** includes
+  shipping the CLI command schemas alongside the C++ API from
+  2026-05-19 forward; the `crd-cli` parser substrate itself lands in
+  Phase 4.0 (after `crd-hesap` and eylem v1c+ resume — sequencing
+  locked 2026-05-19 user direction). → ADR-0081 (Proposed); research
+  `docs/research/cerid-agent-native-engine.md` +
+  `docs/research/cerid-hesap-2026-update.md`. Strategic bet: the
+  next decade of creative + engineering + scientific work happens
+  with AI agents as peer collaborators; the engine substrate built
+  for that wins.
+
+- **C++ hot-reload is the ONLY scripting language.** Cerid scripts
+  ARE C++ files (`.crds.cpp`) compiled into hot-reloadable DLLs.
+  **No Lua / Python / JavaScript / GDScript / WrenScript embedded
+  interpreter.** Reasons: one language for engine + scripts + tools
+  = no marshaling, full type system, full debugger, deterministic FP
+  (ADR-0063), no FFI overhead for AI agents. Reference architectures:
+  Live++ (Molecular Matters), Anvil engine (RAD Game Tools),
+  RemedyBG, JetBrains C++ hot reload. Locked 2026-05-19 per user
+  direction. Other scripting paths are explicitly rejected; revisiting
+  requires a new ADR. → ADR-0081, ADR-0034 (subsumed). The same C++
+  scripts AI agents emit run in the engine's hot path with zero
+  marshaling overhead.
+
+- **Schema versioning + backwards-compat for the agent surface.**
+  Every CLI / MCP command schema is versioned (major/minor). Major
+  bump = breaking change to params or output; old schema stays
+  registered for ≥ 2 minor versions with `Deprecated` status before
+  removal. Minor bump = additive (new optional param, additional
+  output field). Backwards-compat CI test: any schema removed before
+  its deprecation window expires triggers a build failure. Schema
+  export (`meta.export-mcp-tools`) produces a versioned MCP tool
+  catalog suitable for committing alongside agent prompts. This
+  discipline is what lets AI agents author scripts they can trust
+  across Cerid versions. → ADR-0081 §2.

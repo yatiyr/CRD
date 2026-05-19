@@ -13,6 +13,7 @@ add_executable(crd-geometry-primitives-tests
     test_validation.cpp
     test_predicates.cpp
     test_queries_typed.cpp  # v0d-2
+    test_transform.cpp      # v11
 )
 
 target_include_directories(crd-geometry-primitives-tests PRIVATE

@@ -57,14 +57,74 @@
 
 Legend: ✅ shipped · 🚧 active · ⏳ planned · ❌ blocked
 
-## Strategic Execution Plan (locked 2026-05-15)
+## Strategic Execution Plan (locked 2026-05-15; **revised 2026-05-19 — agent-native pivot + hesap-elite + C++-only-scripting**)
 
 After a step-back strategic review (Pathways A–E + cross-cuts) on
-2026-05-15, the user locked the following execution sequence. **This
-is the canonical near-to-medium-term plan. Future sessions read this
-first when they don't know what to work on.**
+2026-05-15, the user locked the original execution sequence. On
+2026-05-19, the user locked three additional load-bearing decisions
+(see below). **This is the canonical near-to-medium-term plan.
+Future sessions read this first when they don't know what to work on.**
 
-### Pinned strategic decisions
+### Revision 2026-05-19 (load-bearing user direction)
+
+- **Agent-native engine** is now a load-bearing cornerstone (ADR-0081
+  Proposed; PRINCIPLES.md updated). CLI / JSON-RPC / **Anthropic MCP
+  (exact compatibility)** is the source of truth; GUI is a
+  visualization layer that emits CLI commands. AI agents (Claude
+  Code, Anthropic SDK, OpenAI / Gemini Function Calling) drive the
+  engine end-to-end via the same surface. Research dossiers:
+  `docs/research/cerid-agent-native-engine.md` +
+  `docs/research/cerid-hesap-2026-update.md`.
+
+- **C++ hot-reload is the ONLY scripting language.** Cerid scripts
+  ARE C++ files (`.crds.cpp`) compiled into hot-reloadable DLLs.
+  **No Lua / Python / GDScript / JavaScript embedded interpreter.**
+  ADR-0034 (C++ DLL hot-reload) is now subsumed by ADR-0081 as the
+  scripting-substrate sub-aspect of the broader agent-native vision.
+  Locked 2026-05-19; revisiting requires a new ADR.
+
+- **`crd-hesap` goes elite-and-big** (same precedent as Phase 3.1.7
+  `crd-geometry`). Full SOTA scope from v0: matrix-type catalog
+  (~30 types: dense / banded / triangular / Hermitian / Toeplitz /
+  Hankel / circulant / Vandermonde / sparse {CSR/CSC/BSR/COO/ELL/HYB
+  /DIA/CSR5/Merge-CSR} / hierarchical {HSS/H-matrix/BLR}),
+  **complex-number support from v0**, `LinearOp<T>` abstraction,
+  **task-DAG scheduling via crd-jobs** (vs fork-join BLAS),
+  **mixed-precision iterative refinement** (HPL-AI pattern), modern
+  preconditioners (SPAI / ILUPACK / SA-AMG / AGMG), **Krylov subspace
+  recycling** for eylem-class consumers, **JAX-style operator-level
+  autodiff** (vs tape-only), **modern hardware support** (AVX-512 /
+  SVE2 / Apple AMX / Intel AMX). Hesap v0 expands from 1.5 weeks →
+  ~5 weeks of v0a-f sub-slices. Full phase ~10-12 months elite-tier
+  (~52 KLOC; comparable to geometry's 22 KLOC scaled by surface
+  breadth).
+
+- **Per-slice DoD adds CLI command schema registration** from
+  2026-05-19 forward. Every new slice ships typed `CommandSchema`
+  declarations alongside the C++ API. The CLI parser substrate
+  itself ships in Phase 4.0 (sequenced after hesap) — protocol
+  plumbing now, parser later (same pattern as ADR-0076 §12 used for
+  geometry-before-eylem).
+
+- **Phase 4.0 redefined** = `crd-cli` + `crd-rpc` + `crd-script`
+  substrate (~12 weeks). MCP exact-compatibility + JSON-RPC server +
+  capability-based security + transactional sessions + sandbox
+  isolation + C++ hot-reload supervisor. Subsumes the original
+  Phase 4.0 = "C++ scripting / DLL hot-reload" (now a sub-aspect).
+
+- **Sequencing (locked 2026-05-19, supersedes 2026-05-15 calendar):**
+  1. Phase 3.1.7 close (v11 in flight; targeted fixes verified; CI
+     catches any residual drift per `feedback_targeted_fix_skip_resweep`).
+  2. **Phase 3.1.6 `crd-hesap` v0-v17** elite-and-big (8-12 months).
+     CLI protocol plumbing per slice; parser substrate deferred.
+  3. **Phase 3.1 eylem v1c-v9 resume** — consumes geometry from
+     day 1; consumes hesap-dense from v1f-articulation onward.
+  4. **Phase 4.0 `crd-cli` + `crd-rpc` + `crd-script`** — the
+     formalized agent-native substrate.
+  5. Per-module CLI back-fill (cross-cutting); notebook + Claude
+     Code agent reference integration; engine-wide MCP surface.
+
+### Pinned strategic decisions (2026-05-15 original; superseded items annotated)
 
 1. **Pathway A — Units-first.** Phase 3.1.7.5 `crd-units` is the *immediate next phase*. Project-wide dimensional safety lands before any further geometry slices ship so the v4–v11 + v4-validate API surfaces are typed from day 1 (no retroactive-typing cost).
 
@@ -72,9 +132,9 @@ first when they don't know what to work on.**
 
 3. **Geometry phase ships in FULL (no consumer-driven cutting).** Per user 2026-05-15: *"I need curves, I need all the other things it is the base, we will plug in where we need them in the future and our needs are not secret."* The renewed-scope 49-slice plan stays intact. Pathway B (cut to consumer-driven) is rejected — the user has product clarity on every substrate's eventual consumer (curves → cinematic + robotics + path tools; polygon → PCB + navmesh + CAD sketches; mesh-processing → cooker LOD + FEA prep; delaunay → navmesh + FEA tetmesh; transform-aware → every consumer; v4-validate → cooker + editor mesh-import gate).
 
-4. **`crd-hesap-dense` v0 ships BEFORE eylem v1c resume** (after 3.1.7 close). Aligns with the engineering-platform pivot. Eylem v7 FEM and v9 differentiable later consume hesap natively (no ship-narrow-then-refactor pattern — same precedent that ADR-0076 §12 set for geometry / eylem v1c-d).
+4. **`crd-hesap-dense` v0 ships BEFORE eylem v1c resume** (after 3.1.7 close). **REVISED 2026-05-19**: hesap-elite-and-big — full v0-v17 substrate (~10-12 months) ships before eylem v1c resume; v0 expands to v0a-f over ~5 weeks (matrix types + complex + LinearOp + task-DAG + mixed-precision IR + CLI plumbing + bench substrate). Aligns with the engineering-platform pivot. Eylem v7 FEM and v9 differentiable later consume hesap natively. Per the user "elite, no shortcuts" mandate.
 
-5. **C++ scripting + DLL hot-reload DEFERRED to Phase 4.0 as planned.** Not pulled forward. Reasoning (locked 2026-05-15 after user-prompted argument): (a) no consumer-tier code exists yet to reload; (b) the DLL supervisor's state-migration design depends on the first domain consumer (robotics control-loop vs. CAD parametric expression vs. CFD boundary condition have very different shapes); (c) ECS-attached script-as-component may be the wrong shape for engineering use cases — script-as-system over a domain may be the right shape, but can't know without consumer pull; (d) the iteration-speed productivity gain the user wants from "hot-reload today" is available cheaper via config/resource hot-reload polish (detour D-005).
+5. **C++ scripting + DLL hot-reload DEFERRED to Phase 4.0 as planned.** Not pulled forward. **REVISED 2026-05-19**: locked as the **ONLY** scripting language (no Lua / Python / GDScript). Phase 4.0 absorbs `crd-cli` + `crd-rpc` + `crd-script` into one agent-native substrate phase. ADR-0034 is subsumed by ADR-0081 (Proposed). Original 2026-05-15 reasoning still valid: (a) no consumer-tier code exists yet to reload — hesap-v0 protocol plumbing serves as the first consumer; (b) DLL supervisor's state-migration design crystallizes when crd-hesap-repl + crd-cli land; (c) script-as-DLL-loaded-into-engine over a domain is the right shape (agent emits C++ → cooker compiles → hot-reload → call); (d) iteration-speed productivity gain available cheaper via per-slice protocol plumbing until Phase 4.0 ships the parser.
 
 6. **Cross-cuts run in flight with units adoption + through geometry phase.** Four detours: **D-006 `crd-time` substrate ✅ shipped 2026-05-15** (absorbs `platform::Timer`/`FrameClock`, ships `Instant`/`Duration = Quantity<dim::Time, f64>`/`Stopwatch`/`FrameClock` fixed-step + alpha/`DeterministicClock`/`Deadline`/GPU timestamp delegation; **first major consumer of the units substrate**; foundation for D-003 + D-004 + eylem v1c+ fixed-step); **D-003 `crd-perf` profiler + ImGui frontend ✅ shipped 2026-05-15** (renamed from `crd-profiler` at v0a — collision with existing `crd-profile` quality-preset module; **all 8 slices v0a-v0h shipped same session** = substrate + UX + sandbox wiring + ADR-0079 + system doc + `win-shipping-profile` preset extending per-slice DoD 4 → 5 configs; 97 perf-* test cases / 336 assertions); D-004 deterministic-replay sandbox queued (uses D-006 `DeterministicClock`); D-005 config/resource hot-reload polish queued. Per-slice protocol fix shipped 2026-05-15 as Sprint 0 ahead of units v0a (codified in `feedback_per_slice_run_ctest.md` + `scripts/per-slice-check.{ps1,sh}` + `docs/protocols/per-slice-verification.md`).
 

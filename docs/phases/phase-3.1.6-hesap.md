@@ -17,36 +17,137 @@ ADR-0065 locks the decisions; this file is the slice plan.
 
 ## Phase posture
 
-**AMENDED 2026-05-15 per Strategic Execution Plan** (`docs/ROADMAP.md` §
-Strategic Execution Plan): `crd-hesap-dense` **v0 ships BEFORE Phase
-3.1 eylem v1c resume**, not after the entire eylem phase completes.
-This is the first concrete artifact of the engineering-platform pivot
-(Pathway E).
+**RE-AMENDED 2026-05-19 per user direction "make hesap truly elite
+like we did geometry"** (ROADMAP.md § Strategic Execution Plan
+Revision 2026-05-19). The 2026-05-15 amendment "ship v0 narrow, defer
+the rest to after eylem" is **reversed**: per the elite-completeness
+mandate (`feedback_elite_only_no_shortcuts`,
+`feedback_reference_implementations_are_the_floor`), `crd-hesap`
+ships **full v0-v17 elite scope** before eylem v1c resumes. Same
+precedent that ADR-0076 §27 set for `crd-geometry`'s full 49-slice
+ship before consumer pull.
 
-**v0 minimum scope:** BLAS L1/L2/L3 (axpy / dot / nrm2 / scal /
-copy / swap / asum / iamax / gemv / trmv / trsv / ger / gemm / trmm /
-trsm) + LAPACK-class direct (Cholesky `potrf/potrs`, LU `getrf/getrs`,
-QR `geqrf/orgqr`) — minimum to unblock eylem v7 FEM (Cholesky on the
-mass matrix) + future CFD / FEA / estimation+control (Cholesky / LU /
-QR everywhere).
+### Elite-tier amendments (locked 2026-05-19, see ADR-0065 §13)
 
-**Sized:** ~3–4 weeks calendar for v0 (1 slice). The full
-`crd-hesap` phase (18 slices over 6–8 months) continues to ship after
-eylem CLOSE per the unchanged-sub-slice plan below — but eylem v7
-FEM **ships hesap-consuming from day 1** rather than the original
-narrow-PCG-then-refactor pattern. This obsoletes the
-"narrow-version-then-refactor" precedent for eylem v7 the same way
-ADR-0076 §12 obsoleted it for eylem v1c/v1d.
+1. **Matrix-type catalog: ~30 types from v0** (not 7). Dense
+   (Matrix / View / Diagonal / Identity / Permutation / Triangular /
+   Symmetric / Hermitian / Banded / BlockDiagonal / BlockTridiagonal
+   / Toeplitz / Hankel / Circulant / Vandermonde) + sparse (CSR /
+   CSC / BSR / COO / ELL / HYB / DIA / CSR5 / Merge-CSR / Sliced
+   ELL / JDS / SkyLine) + hierarchical (HSS / H-matrix / BLR).
 
-**Sequencing after the 2026-05-15 amendment:**
+2. **Complex-number support from v0.** `crd::hesap::Complex<T>`
+   value type; every BLAS / LAPACK op has 4 type instantiations
+   (f32 / f64 / Complex32 / Complex64). `dotu` + `dotc`; Hermitian
+   Cholesky; complex eigenvalue. Original "real-valued first" pin
+   **reversed**.
 
-1. Phase 3.1.7 geometry CLOSE (full 49 slices)
-2. **Phase 3.1.6 v0 hesap-dense (NEW EARLY SLOT — ~3–4 weeks)**
-3. Phase 3.1 eylem v1c+ resume (consuming geometry + units + hesap-dense)
-4. Eylem v1c → v9 ships in full
-5. Phase 3.1.5 sdf (interleaved between eylem v2 and v3 — unchanged)
-6. **Phase 3.1.6 v1–v17 (rest of hesap)** ships after eylem v9 close — sparse / iterative / direct / eig / opt / ode / fft / dsp / stats / tensor / autodiff / gpu / repl
-7. Phase 3.1.8+ domain substrates (brep / cad-feature / cfd / etc.) — unchanged
+3. **`LinearOp<T>` abstraction from v0.** Matrix-free / function-
+   based / closure-based linear operators consumable by every
+   Krylov solver. PETSc `Mat` / Trilinos `Tpetra::Operator` pattern.
+   Foundational for FEM, PDE, Hessian-vector for opt.
+
+4. **Task-DAG scheduling via `crd-hesap-sched` (NEW sub-module)**
+   over `crd::jobs`. Tile-based GEMM dispatch (PLASMA / PaRSEC
+   pattern), not fork-join BLAS. Composes with the rest of the
+   engine without oversubscription.
+
+5. **Mixed-precision iterative refinement** (HPL-AI pattern) in
+   v0e dense direct solvers. Factorize in f32, refine in f64.
+   3-4× perf at full f64 accuracy.
+
+6. **Modern hardware support.** AVX2 (existing) + AVX-512 + NEON +
+   SVE/SVE2 + scalar microkernels. Apple AMX + Intel AMX reserved
+   for stable ABI landing.
+
+7. **Modern preconditioners.** Original Jacobi / IC(0) / ILU(0)
+   stay. Add: SPAI (Grote-Huckle 1997), ILUPACK multilevel ILU
+   (Bollhöfer-Saad 2006), SA-AMG (Vaněk 1996), AGMG (Notay 2010),
+   bootstrap AMG (Brannick 2010), polynomial preconditioners
+   (Chebyshev). Original AMG was Ruge-Stüben only; refined plan
+   ships SA-AMG + AGMG as default for vector-unknown systems.
+
+8. **Krylov subspace recycling** (GCRO-DR / M-CG; Parks et al.
+   2006). For sequences of related linear systems — eylem
+   time-stepping + opt inner solves. 2-5× speedup measured.
+
+9. **Modern eigenvalue solvers.** Add LOBPCG, FEAST, Jacobi-Davidson,
+   IRLBA to the original MRRR + QR-double-shift.
+
+10. **Randomized linear algebra** (Halko-Martinsson-Tropp 2011 +
+    Tropp 2019). Randomized SVD / QR / range-finder. 10-100× for
+    rank-k approximations.
+
+11. **Operator-level autodiff** (JAX pattern; Bradbury 2018). Custom
+    VJP / JVP rules per op (`solve(A,b)`'s VJP is `solve(A^T,dy)` —
+    never AD through LU). Augments the original tape-based
+    reverse-mode (Stan pattern).
+
+12. **Modern ODE methods.** Add SDIRK, Verner, Tsitouras 2011,
+    symplectic integrators (Verlet / Yoshida 4/6/8), IMEX,
+    sensitivity analysis (forward + adjoint, CVODES / IDAS pattern).
+
+13. **NUFFT + sparse FFT.** Add NUFFT (Greengard-Lee 2004) for
+    irregular grids and sparse FFT (Hassanieh 2012) for k-sparse
+    signals.
+
+14. **Modern optimization.** Add SCS (O'Donoghue 2016), trust-region
+    Steihaug, Adam / AdamW / Lion (essential for ML / agent training
+    workflows). Augments L-BFGS + OSQP + IPOPT.
+
+15. **`crd-hesap-bench` sub-module (NEW).** Benchmark + reference-
+    fixture replay substrate. Per-slice CI gate against MKL /
+    OpenBLAS / LAPACK / SuiteSparse / FFTW.
+
+16. **CLI protocol plumbing from v0** (per ADR-0081 Proposed): every
+    entry point registers a typed `CommandSchema` via static-init
+    hook + structured output is the C++ return shape from day 1 +
+    MCP tool descriptors auto-generated. **No actual CLI parser /
+    REPL / RPC server in hesap** — those ship with `crd-cli`
+    substrate in Phase 4.0. Protocol-first, parser-later.
+
+17. **C++ hot-reload as the ONLY scripting language** (per ADR-0081
+    + ADR-0034 subsumed). The original `crd-hesap-repl` "MATLAB-class
+    facade with `randn`/`\` syntax" plan in v18 is **replaced** by a
+    C++-cell notebook on top of `crd-cli` (Phase 4.0+2). MATLAB
+    syntax → C++ source transformer reserved as a stretch goal,
+    not Phase 3.1.6 scope.
+
+### Calendar revised 2026-05-19
+
+- **v0 scope:** ~5 weeks (up from 1.5wk) — full v0a-f sub-slice
+  cluster (substrate + BLAS L1+L2+L3 + dense direct + bench
+  substrate). See §"v0 sub-slice plan" below.
+- **Full Phase 3.1.6:** ~10-12 months elite-tier (up from 6-8 mo)
+  for ~52 KLOC engine + ~600 tests across 18 slices. Schedule is
+  comparable to Phase 3.1.7 geometry (22 KLOC over 6 mo elite).
+
+### Sequencing (locked 2026-05-19, supersedes 2026-05-15)
+
+1. Phase 3.1.7 geometry CLOSE (v11 in flight 2026-05-19).
+2. **Phase 3.1.6 v0-v17 hesap elite-and-big** — full substrate
+   ships in one phase (~10-12 months). CLI protocol plumbing per
+   slice; parser substrate deferred.
+3. **Phase 3.1 eylem v1c-v9 resume** — consumes geometry from
+   day 1; consumes hesap-dense from v1f-articulation onward.
+   Eylem v7 FEM no longer ships narrow internal PCG (the original
+   2026-05-10 plan); ships hesap-consuming from day 1.
+4. **Phase 4.0 `crd-cli` + `crd-rpc` + `crd-script`** — the
+   formalized agent-native substrate (~12 weeks). Subsumes the
+   original Phase 4.0 = C++ DLL hot-reload.
+5. Per-module CLI back-fill across the engine (cross-cutting).
+6. Notebook + Claude Code agent reference integration; engine-wide
+   MCP surface.
+7. Phase 3.1.5 sdf (interleaved per original plan).
+8. Phase 3.1.8+ domain substrates.
+
+### Original phase posture (2026-05-10) — historical
+
+Original posture was "ship after eylem closes; eylem v7 FEM uses its
+own narrow internal PCG"; 2026-05-15 amendment was "v0 ships before
+eylem v1c-resume"; 2026-05-19 amendment is "**full v0-v17 elite-and-
+big ships before eylem v1c-resume**" — the engineering-platform pivot
+in its full form.
 
 ---
 
@@ -65,28 +166,55 @@ ADR-0076 §12 obsoleted it for eylem v1c/v1d.
   N-dim tensors + autodiff. v16 mirrors to GPU. v17 ships the REPL +
   plug-in C ABI.
 
-## Slice structure
+## Slice structure (revised 2026-05-19 — elite-and-big)
 
-| Slice | Topic | LOC | Tests | Duration |
+Per ADR-0065 §13 (2026-05-19), every slice ships: matrix-type
+catalog coverage; complex variants (f32 / f64 / Complex32 /
+Complex64); CLI protocol plumbing (typed `CommandSchema`
+registration); test scope 100-200 cases (was ~30); reference-fixture
+baselines vs MKL / OpenBLAS / LAPACK / SuiteSparse / FFTW;
+determinism + replay tests.
+
+| Slice | Topic (refined elite scope) | LOC | Tests | Duration |
 | :---: | --- | :---: | :---: | :---: |
-| v0 | Substrate + dense BLAS L1 (axpy/dot/nrm2/scal/copy/swap/asum/iamax) | ~1500 | ~30 | ~1.5 wk |
-| v1 | Dense matrix + BLAS L2 (gemv/gbmv/ger/syr/hemv/trmv/trsv) | ~2000 | ~28 | ~2 wk |
-| v2 | Dense BLAS L3 (gemm cache-blocked, syrk, trmm, trsm) + dense direct (LU, Cholesky, QR, LDLT) | ~3000 | ~40 | ~3 wk |
-| v3 | SVD + dense eigenvalue (symmetric + non-sym) + least squares | ~2500 | ~30 | ~2 wk |
-| v4 | Sparse storage (COO/CSR/CSC/BSR/ELL/HYB) + spmv + spmm + spgemm | ~2500 | ~36 | ~2 wk |
-| v5 | Fill-reducing reorderings (AMD, RCM, METIS-class nested dissection) + symbolic factorisation | ~2000 | ~24 | ~1.5 wk |
-| v6 | Iterative solvers (CG, PCG, BiCGSTAB, GMRES, MINRES, LSQR, IDR(s)) + Jacobi/IC(0)/ILU(0) preconditioners | ~3000 | ~40 | ~2.5 wk |
-| v7 | Sparse direct (supernodal Cholesky, left-looking LU, multifrontal QR) + AMG preconditioner + block-Jacobi + additive Schwarz | ~4000 | ~36 | ~3 wk |
-| v8 | Sparse eigenvalue (Lanczos, Arnoldi, IRA, LOBPCG) | ~2000 | ~24 | ~2 wk |
-| v9 | Optimisation: unconstrained (gradient, Newton, L-BFGS, trust-region) + line search + QP (OSQP-style ADMM) + LP (revised simplex + interior point) + NLP (Mehrotra interior point) | ~4500 | ~40 | ~3 wk |
-| v10 | ODE/DAE: explicit (DOPRI5/8 + Cash-Karp + adaptive step) + implicit (BDF 1–6 + Newton-Krylov) + Rosenbrock + DAE Pantelides | ~3000 | ~32 | ~2.5 wk |
-| v11 | FFT (Cooley-Tukey mixed-radix + Bluestein) + RFFT + 2D/3D + DCT/DST/Hartley + convolution | ~2500 | ~28 | ~2 wk |
-| v12 | DSP: FIR (windowed sinc + Parks-McClellan) + IIR (bilinear-transform Butterworth/Cheb/Elliptic/Bessel) + biquad + resampling (polyphase) + spectral analysis (Welch, Bartlett) | ~2500 | ~28 | ~2 wk |
-| v13 | Statistics: distributions (CDF/PDF/quantile/sample for 20+ types) + statistical tests (t, chi², KS, Mann-Whitney, ANOVA) + special functions (gamma, beta, erf, Bessel J/Y/I/K, Legendre, Hermite, Chebyshev) + splittable PCG + Xoshiro256** | ~3000 | ~36 | ~2 wk |
-| v14 | Polynomial / interpolation (linear, cubic spline, Akima, Hermite, monotone, Chebyshev, barycentric, RBF) + quadrature (Gauss-Legendre, Gauss-Hermite, Gauss-Laguerre, Clenshaw-Curtis, adaptive Simpson, Romberg) + numerical differentiation | ~2000 | ~24 | ~1.5 wk |
-| v15 | N-dim tensors + broadcasting + einsum + reductions + reshape/transpose/slice/gather/scatter | ~2500 | ~32 | ~2 wk |
-| v16 | Autodiff: forward (dual/Jet) + reverse (tape-based) + higher-order + sparse Jacobian + Hessian via forward-over-reverse + every BLAS op differentiable | ~3500 | ~40 | ~3 wk |
-| v17 | GPU mirror: dense BLAS L1/L2/L3 + sparse spmv/spmm + GPU FFT + GPU iterative (CG/PCG/GMRES) + GPU autodiff via existing `UploadHandle`/`Fence` | ~4000 | ~32 | ~3 wk |
+| **v0a** | Substrate: module skeleton + `Complex<T>` + matrix-type catalog headers + `LinearOp<T>` + `MatrixId`/`VectorId` handles + `'HDV0'` CRDR format pin + CLI protocol scaffolding (`CommandRegistry` + `CommandSchema` + structured-output types) | ~700 | ~25 | ~3 d |
+| **v0b** | BLAS L1 × 4 type variants (axpy / dotu / dotc / nrm2 / scal / copy / swap / asum / iamax) + Kahan-pairwise reduction + SIMD/scalar bit-exact parity + CLI registration | ~700 | ~80 | ~3 d |
+| **v0c** | BLAS L2 × 4 type variants (gemv / gbmv / hemv / hbmv / symv / sbmv / ger / geru / gerc / syr / her / syr2 / her2 / trmv / trsv / tbmv / tbsv) + strided views + banded + triangular + CLI registration | ~1000 | ~80 | ~5 d |
+| **v0d** | **BLAS L3 via task-DAG (`crd-hesap-sched`)** — tile-based gemm + microkernel AVX2/AVX-512/NEON/SVE2/scalar + syrk / herk / syr2k / her2k / trmm / trsm + mixed-precision dispatch helper + CLI registration. Benchmark target ≥70% AVX-512 peak | ~1200 | ~100 | ~7 d |
+| **v0e** | Dense direct: LU + Cholesky (real SPD + complex HPD) + QR (Householder + column-pivoting) + LDLT + iterative refinement + mixed-precision variants + `LinearOp<T>` factor view + condition estimation + CLI registration | ~1200 | ~120 | ~7 d |
+| **v0f** | **`crd-hesap-bench` sub-module (NEW)** + reference-fixture replay infrastructure (LAPACK / SuiteSparse / FFTW binaries committed) + property-based test framework (`RandomMatrix<T>` factory) + `docs/systems/hesap-dense.md` system doc | ~500 | ~40 | ~5 d |
+| **v0-close** | ADR-0065 §14 (v0a-f decisions lock) + 18-config full sweep | ~100 + docs | — | ~2 d |
+| | **v0 TOTAL** (~5 weeks, was 1.5wk in 2026-05-15 plan) | **~5400** | **~445** | **~5 wk** |
+| **v1** | Sparse storage (CSR / CSC / BSR / COO / ELL / HYB / DIA / CSR5 / Merge-CSR / Sliced ELL / JDS / SkyLine) + spmv + spmm + spgemm + format-conversion graph + sparse `LinearOp` + complex variants + CLI registration | ~3000 | ~120 | ~3 wk |
+| **v2** | Fill-reducing reorderings: AMD (Amestoy 1996) + RCM (Cuthill-McKee) + METIS-class nested dissection + symbolic factorisation phase + CLI registration | ~2200 | ~80 | ~2 wk |
+| **v3** | SVD (Golub-Reinsch + **randomized**, Halko 2011) + dense eigenvalue (MRRR symmetric + QR-double-shift non-symmetric + **randomized variants**) + least squares (LS / NNLS / TLS) + complex variants + CLI registration | ~2800 | ~130 | ~2.5 wk |
+| **v4** | Iterative solvers (CG / PCG / BiCGSTAB / GMRES / MINRES / LSQR / IDR(s) / **GCRO-DR + M-CG Krylov subspace recycling**) + modern preconditioners (Jacobi / IC(0) / ILU(0) / **SPAI** / **ILUPACK multilevel ILU** / polynomial / block-Jacobi / additive Schwarz) + `LinearOp` consumer surface + complex variants + CLI registration | ~3500 | ~150 | ~3 wk |
+| **v5** | Sparse direct (supernodal Cholesky — CHOLMOD-class + left-looking LU — Gilbert-Peierls + multifrontal QR + LDLT) + **AMG variants** (classical Ruge-Stüben + **SA-AMG Vaněk 1996** + **AGMG Notay 2010** + bootstrap AMG) + **HSS-augmented (STRUMPACK pattern) reserve** + complex variants + CLI registration | ~4500 | ~140 | ~3.5 wk |
+| **v6** | Sparse eigenvalue (Lanczos with restart + IRA Arnoldi + **LOBPCG Knyazev 2001** + **FEAST Polizzi 2009** + **Jacobi-Davidson** + **IRLBA Baglama-Reichel 2005**) + complex variants + CLI registration | ~2500 | ~110 | ~2.5 wk |
+| **v7** | Optimisation v1 unconstrained: gradient / Newton / L-BFGS / **trust-region Steihaug** / BFGS + line search (Wolfe / Armijo / strong-Wolfe) + **stochastic optimization** (Adam / AdamW / Lion) + sensitivity (FD / forward-AD) + CLI registration | ~3200 | ~120 | ~2.5 wk |
+| **v8** | Optimisation v2 constrained: QP (**OSQP** + **SCS O'Donoghue 2016**) + LP (revised simplex + Mehrotra IPM) + NLP (IPOPT-class + SQP) + algebraic modelling layer (JuMP / CasADi pattern) + CLI registration | ~3800 | ~110 | ~3 wk |
+| **v9** | ODE / DAE: non-stiff (DOPRI5/8 + Cash-Karp + Verner + **Tsitouras 2011**) + stiff (BDF 1-6 + Rosenbrock-Wanner + **SDIRK** + RADAU5) + **symplectic** (Verlet + Yoshida 4/6/8) + **IMEX** + **sensitivity analysis** (forward + adjoint, CVODES/IDAS pattern) + DAE Pantelides index reduction + CLI registration | ~3500 | ~120 | ~3 wk |
+| **v10** | FFT (Cooley-Tukey mixed-radix + Stockham + Bluestein + Rader for primes) + **RFFT** + 2D/3D + multidim + DCT/DST/Hartley + **NUFFT Greengard-Lee 2004** + **sparse FFT Hassanieh 2012** + convolution + complex inherently + CLI registration | ~2800 | ~110 | ~2.5 wk |
+| **v11** | DSP: FIR (windowed sinc + Parks-McClellan Remez) + IIR (bilinear-transform Butterworth/Cheb-I/Cheb-II/Elliptic/Bessel) + biquad + resampling (polyphase) + spectral analysis (Welch / Bartlett) + Z-transform + complex variants + CLI registration | ~2800 | ~110 | ~2 wk |
+| **v12** | Statistics: 50+ distributions (Stan-math reference) + statistical tests (t / chi² / KS / Mann-Whitney / Wilcoxon / Friedman / Kruskal-Wallis / ANOVA) + special functions (gamma / beta / erf / Bessel J/Y/I/K / Legendre / Hermite / Chebyshev) + RNGs (splittable PCG + Xoshiro256** + **Philox** + **Threefry** for parallel-deterministic) + bootstrap / jackknife + CLI registration | ~3500 | ~130 | ~2.5 wk |
+| **v13** | Polynomial / interpolation (linear / cubic spline / Akima / Hermite / monotone / Chebyshev / barycentric / RBF) + quadrature (Gauss-Legendre / Hermite / Laguerre / Lobatto / Radau / Clenshaw-Curtis / adaptive Simpson / Romberg) + numerical differentiation (FD / Richardson extrapolation / Hermite extrapolation) + CLI registration | ~2300 | ~90 | ~1.5 wk |
+| **v14** | N-dim tensors + broadcasting + einsum + reductions + reshape/transpose/slice/gather/scatter + tensor LinearOp + complex variants + CLI registration | ~2800 | ~110 | ~2 wk |
+| **v15** | Autodiff v1 forward mode: dual numbers (Jet types) + hyper-dual (2nd order) + sparse Jacobian (Curtis-Powell-Reid coloring) + **per-op manual VJP / JVP rules for entire BLAS surface** (JAX pattern — custom `solve` VJP avoids AD-through-LU) + CLI registration | ~3000 | ~120 | ~2.5 wk |
+| **v16** | Autodiff v2 reverse mode: tape-based + **operator-level structural AD** (JAX expression-graph pattern) + higher-order (forward-over-reverse / reverse-over-reverse for Hessian-vector) + **checkpointing** (Griewank 1992) + CLI registration | ~3500 | ~120 | ~3 wk |
+| **v17** | GPU mirror via `crd-rhi-compute` (Phase 3.1.7.6): dense BLAS L1/L2/L3 + sparse spmv/spmm (CSR5 + Merge-CSR GPU kernels) + GPU FFT (Stockham radix-mix) + GPU iterative (CG/PCG/GMRES with GPU spmv) + GPU autodiff + complex variants + CLI registration | ~4500 | ~120 | ~3 wk |
+| **v18** | **Phase 4.0 dependency: requires `crd-cli` substrate**. Notebook + interactive plotting + plug-in surface. **C++ hot-reload cell engine** (cells are `.crds.cpp` files compiled to hot-reload DLLs per ADR-0081). `'CNBK'` notebook FourCC. **MATLAB-class syntax facade is a stretch goal**, not Phase 3.1.6 scope (a C++-source-transformer would emit C++ from MATLAB syntax; reserved). | ~2500 | ~50 | ~2 wk |
+
+**v0 NEW TOTAL**: ~5400 LOC engine + ~445 tests across v0a-f sub-slices.
+
+**Full Phase 3.1.6 elite-tier**:
+- ~57 KLOC engine + ~2 200 tests across 18 slices (was 52 KLOC / 580 tests in 2026-05-10 plan; the ~10% LOC bump comes from full matrix-type catalog + complex variants + CLI plumbing baked into every slice; the test-count growth from ~30/slice → ~100-150/slice is the elite-tier verification discipline same as Phase 3.1.7 geometry).
+- **~10-12 months calendar** (was 6-8 mo) elite-tier, comparable to the Phase 3.1.7 `crd-geometry` schedule (22 KLOC over 6 mo elite).
+
+> v17 (GPU) is independently shippable. If schedule pressure
+> surfaces, v17 can defer to a "Phase 3.1.6 follow-up" without
+> blocking the CPU substrate's usefulness. v18 explicitly depends on
+> Phase 4.0 `crd-cli` substrate landing — v18 cannot ship before
+> Phase 4.0.
 | v18 | REPL + notebook (`.cnb` `'CNBK'` format) + plot integration + plug-in C ABI (per ADR-0034 pattern) + ImGui frontend panel | ~2500 | ~24 | ~2 wk |
 
 **Total: ~52 KLOC, ~580 tests, ~38 weeks (~8 months) for the full

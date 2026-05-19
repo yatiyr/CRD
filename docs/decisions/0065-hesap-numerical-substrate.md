@@ -441,4 +441,245 @@ Research: `docs/research/cerid-hesap.md`.
 - ADR-0063 — Eylem determinism contract (inherited wholesale).
 - ADR-0064 — `crd-sdf` substrate (sibling substrate; same architectural posture).
 - `docs/research/cerid-hesap.md` — full industry survey + algorithm rationale.
+
+---
+
+## §13 Amendment (2026-05-19) — Elite-tier refinement + agent-native plumbing
+
+**Status:** Accepted alongside ADR-0081 (Proposed).
+
+Per user direction 2026-05-19, `crd-hesap` goes elite-and-big (same
+precedent as Phase 3.1.7 `crd-geometry`). Locks the following design
+decisions on top of the original 2026-05-10 architecture.
+
+Research dossier: `docs/research/cerid-hesap-2026-update.md`.
+Companion vision: `docs/research/cerid-agent-native-engine.md`.
+
+### Locked decisions D1-D17 (this amendment)
+
+- **D1 (matrix-type catalog).** Hesap ships ~30 matrix types from v0,
+  not the original 7. Dense: `Matrix<T,Layout>`, `MatrixView<T,L>`,
+  `DiagonalMatrix`, `IdentityMatrix`, `PermutationMatrix`,
+  `TriangularMatrix<T,Uplo,Diag>`, `SymmetricMatrix<T,Uplo>`,
+  `HermitianMatrix<Complex<T>,Uplo>`, `BandedMatrix<T>`,
+  `BlockDiagonalMatrix<T>`, `BlockTridiagonalMatrix<T>`,
+  `ToeplitzMatrix<T>`, `HankelMatrix<T>`, `CirculantMatrix<T>`,
+  `VandermondeMatrix<T>`. Sparse: CSR, CSC, BSR, COO, ELL, HYB, DIA,
+  CSR5 (Liu-Vinter 2015), Merge-CSR (Merrill-Garland 2016), Sliced
+  ELL, JDS, SkyLine. Hierarchical: HSS (Chandrasekaran 2006),
+  H-matrix (Hackbusch 1999), BLR (Amestoy 2017).
+
+- **D2 (complex from v0).** `crd::hesap::Complex<T>` value type
+  (own — not `std::complex<T>` — for determinism + GPU layout
+  control). Every BLAS / LAPACK op has 4 instantiations: f32, f64,
+  Complex32, Complex64. `dot` becomes `dotu` (un-conjugated) +
+  `dotc` (conjugated). Cholesky becomes Hermitian-positive-definite.
+  Eigenvalue spectra are inherently complex for non-symmetric
+  matrices. The original "real-valued first" pin is **explicitly
+  reversed**.
+
+- **D3 (LinearOp abstraction from v0).** `LinearOp<T>` abstract base
+  + 6 concrete materialisations (Dense, Sparse, Function, Composition,
+  Sum, Scaled). Every Krylov solver / iterative method accepts
+  `LinearOp<T>`, enabling matrix-free FEM / PDE / Hessian-vector
+  for opt. Reference: PETSc `Mat`, Trilinos `Tpetra::Operator`.
+
+- **D4 (task-DAG scheduling via crd-jobs).** `gemm` and other L3 ops
+  use **tile-based task-DAG dispatch** over `crd::jobs::parallel_for`,
+  NOT fork-join BLAS. New sub-module `crd-hesap-sched` owns the
+  task-graph builder. Each tile op is a `crd::jobs` task; deps form
+  a DAG; scheduler load-balances across cores. Reference: PLASMA
+  (Buttari 2009), PaRSEC (Bosilca 2013), StarPU (Augonnet 2011).
+
+- **D5 (mixed-precision iterative refinement).** Direct dense solvers
+  (`lu`, `cholesky`, `qr`) ship an IR variant: factorize in f32,
+  refine in f64. Reference: LAPACK `dsgesv` / `dsposv`, HPL-AI.
+  **3-4× perf at full f64 accuracy.**
+
+- **D6 (modern hardware support).** Microkernel specialization for
+  AVX2 (existing) + **AVX-512** + **NEON** + **SVE/SVE2** (ARM HPC,
+  Apple M-series) + **scalar fallback**. Runtime CPU dispatch.
+  Reserve: Apple AMX + Intel AMX (matrix coprocessors) when stable
+  reverse-engineered ABIs land. Microkernel pattern from BLIS
+  (van Zee-van de Geijn 2015).
+
+- **D7 (modern preconditioners).** Original Jacobi / IC(0) / ILU(0)
+  remain. **Add**: SPAI (sparse approximate inverse, Grote-Huckle
+  1997), ILUPACK multilevel ILU (Bollhöfer-Saad 2006),
+  smoothed-aggregation AMG (Vaněk 1996), AGMG (Notay 2010), bootstrap
+  AMG (Brannick 2010), polynomial preconditioners (Chebyshev).
+
+- **D8 (Krylov subspace recycling).** GCRO-DR, M-CG (Parks-de
+  Sturler-Mackey-Miller 2006) ship in v6 iterative substrate. **For
+  eylem time-stepping** (sequence of related linear systems) and
+  optimization inner solves. 2-5× speedup measured on real workloads.
+
+- **D9 (modern eigenvalue solvers).** Original `dsyevr` (MRRR) +
+  `dgeev` (QR + double-shift) remain. **Add**: LOBPCG (Knyazev 2001),
+  FEAST (Polizzi 2009), Jacobi-Davidson (non-symmetric), IRLBA
+  (Baglama-Reichel 2005). Reserve: ELPA distributed.
+
+- **D10 (randomized linear algebra).** Halko-Martinsson-Tropp 2011 +
+  Tropp 2019. Randomized SVD, randomized QR, randomized range-finder.
+  10-100× speedup for rank-k approximations of large matrices.
+  Ships in v3 SVD/eig as `_randomized` variants alongside classical.
+
+- **D11 (operator-level AD).** Original tape-based reverse-mode AD
+  (Stan pattern) augmented with **per-op custom VJP / JVP rules**
+  (JAX pattern). `solve(A, b)`'s VJP is `solve(A^T, dy)` — never AD
+  through LU. Reference: JAX (Bradbury 2018), Enzyme (Moses-Churavy
+  2020). Sparse Jacobian via Curtis-Powell-Reid coloring.
+
+- **D12 (modern ODE methods).** Original DOPRI5/8 + BDF + Rosenbrock
+  + Pantelides remain. **Add**: SDIRK (singly-diagonally-implicit
+  RK), Verner methods (higher-order embedded), Tsitouras 2011,
+  **symplectic integrators** (Verlet, Yoshida 4/6/8) for conservative
+  Hamiltonian systems (orbital mechanics, molecular dynamics),
+  Implicit-Explicit (IMEX) methods, **sensitivity analysis**
+  (forward + adjoint, CVODES / IDAS pattern; bridges to autodiff).
+
+- **D13 (NUFFT + sparse FFT).** Original Cooley-Tukey + Bluestein
+  + DCT/DST/Hartley remain. **Add**: NUFFT (Greengard-Lee 2004) for
+  irregular sample grids (MRI / interferometry / particle methods),
+  sparse FFT (Hassanieh 2012) for k-sparse signals (niche but elite).
+
+- **D14 (modern optimization).** Original L-BFGS + OSQP + IPOPT-class
+  + simplex remain. **Add**: SCS (O'Donoghue 2016 — splitting conic),
+  trust-region Steihaug (1983), Adam (Kingma-Ba 2014), AdaGrad,
+  AdamW (Loshchilov-Hutter 2019), Lion (Chen 2023). Stochastic
+  optimization is essential for ML / agent training workflows.
+
+- **D15 (benchmark substrate `crd-hesap-bench`).** New sibling
+  sub-module tracks regression vs MKL / OpenBLAS / LAPACK /
+  SuiteSparse / FFTW reference baselines. Per-slice CI gate.
+  Property-based + reference-fixture replay + convergence-rate +
+  numerical-accuracy + determinism + replay tiers (~100-200 tests
+  per slice, not the original ~30).
+
+- **D16 (CLI protocol plumbing from v0).** Per ADR-0081 (Proposed) +
+  user direction 2026-05-19. Every hesap entry point registers a
+  typed `CommandSchema` via static-init `cli::register_module_commands`
+  hook. Structured output (typed result + diagnostics + provenance)
+  is the C++ return shape from day 1. MCP tool descriptors
+  auto-generated. **No actual CLI parser / REPL / RPC in hesap** —
+  those ship with `crd-cli` substrate in Phase 4.0. Protocol-first,
+  parser-later (same pattern as ADR-0076 §12 for geometry-before-eylem).
+
+- **D17 (C++ scripting via hot-reload — the ONLY scripting path).**
+  Per ADR-0081 + user direction 2026-05-19. The original ADR-0034
+  C ABI plug-in plan is **subsumed by ADR-0081**'s broader
+  agent-native substrate. Cerid scripts (including notebook cells)
+  ARE C++ files (`.crds.cpp`) compiled into hot-reloadable DLLs.
+  **No Lua / Python / GDScript embedded interpreter.** AI agents
+  emit C++ → `script.compile` → hot-reload DLL → call → inspect
+  typed output → next iteration. The original `crd-hesap-repl` MATLAB-
+  class facade is **replaced** by a C++-cell notebook surface on
+  top of `crd-cli` (later, Phase 4.0+2). The MATLAB-class facade
+  remains a stretch goal as a C++-source-transformer (parse MATLAB
+  syntax → emit C++ snippet → compile + hot-reload) but is NOT in
+  scope for Phase 3.1.6.
+
+### Updated slice plan
+
+The full 18-slice plan structure remains, but every slice gains:
+
+1. Matrix-type catalog coverage where applicable.
+2. Complex variants throughout (real + complex bake into the same
+   slice, not deferred).
+3. CLI protocol plumbing (typed `CommandSchema` registration).
+4. Test scope expanded to 100-200 cases per slice (was ~30).
+5. Benchmark fixtures committed (LAPACK / SuiteSparse / FFTW
+   reference outputs).
+6. Determinism + replay tests inherit ADR-0063 contract.
+
+**v0 sub-slice plan** (was 1.5 wk; refined to ~5 wk):
+
+- **v0a substrate** (~3 days): module skeleton + `Complex<T>` +
+  matrix-type catalog headers + `LinearOp<T>` abstraction + `MatrixId`
+  / `VectorId` typed handles + format-pin (`'HDV0'` CRDR FourCC).
+- **v0b BLAS L1** (~3 days): 8 L1 ops × 4 type variants;
+  Kahan-pairwise reduction; bit-exact SIMD/scalar parity; CLI
+  registration.
+- **v0c BLAS L2** (~5 days): L2 ops (gemv / ger / trmv / trsv / sym
+  / herm / banded / triangular); CLI registration.
+- **v0d BLAS L3 + task-DAG gemm** (~7 days): tile-based gemm via
+  `crd-hesap-sched`; AVX2 / AVX-512 / NEON / SVE2 / scalar
+  microkernels; syrk / herk / trmm / trsm; mixed-precision dispatch
+  helper.
+- **v0e dense direct** (~7 days): LU / Cholesky / QR / LDLT with
+  iterative refinement + mixed-precision variants; `LinearOp<T>` view
+  output from each factor; condition estimation; CLI registration.
+- **v0f bench substrate + system doc** (~5 days): `crd-hesap-bench`
+  sub-module; LAPACK reference fixtures committed; property-based
+  test framework; `docs/systems/hesap-dense.md`.
+- **v0-close**: ADR-0065 §14 amendment (locking v0a-f decisions) +
+  18-config full sweep.
+
+v1-v17 inherit the per-slice patterns. Schedule shifts from "6-8
+months" → "~10-12 months elite-tier" honest scope.
+
+### Sub-module additions
+
+In addition to the original 14 sub-modules:
+
+- **`crd-hesap-sched`** — task-DAG builder over `crd::jobs`.
+- **`crd-hesap-bench`** — benchmark + reference-fixture replay
+  substrate.
+
+Total sub-module count: 16.
+
+### Determinism notes
+
+ADR-0063 contract continues unchanged. Complex variants follow the
+same bit-exact-across-SIMD-widths discipline. Mixed-precision IR
+preserves determinism (f32 factor is deterministic; f64 refinement
+is deterministic; the iteration count is deterministic given input
+matrix + initial-guess).
+
+### Scope adjustments
+
+**Reserved** (post-Phase-3.1.6) — unchanged:
+- Symbolic computation (CAS).
+- Distributed memory parallelism (MPI).
+- Full MIP optimization.
+- Stochastic / robust optimization.
+- Geometric algebra primitives.
+
+**Added to reserved** (post-Phase-3.1.6):
+- HSS-augmented sparse direct (STRUMPACK pattern) ships in v5
+  refinement but the full STRUMPACK feature set defers.
+- Tensor Train / Tucker decomposition (Oseledets 2011) reserves.
+- BLR-augmented sparse direct (MUMPS-BLR pattern) reserves.
+
+### Cluster cross-validation
+
+When Phase 3.1.6 closes:
+
+- 18-config full sweep PASS.
+- Eylem v1f-articulation (Featherstone) integration smoke
+  cross-validates `crd-hesap-dense` factorizations.
+- Reference baselines pinned: gemm ≥ 70% AVX2 / AVX-512 peak; dpotrf
+  ≤ 1.5× LAPACK accuracy on Hilbert(N); pcg convergence within 10%
+  of theory.
+
+### Filed follow-on slices (consumer-pull)
+
+Not blocking; tracked in `docs/debt.md`:
+
+- HSS sparse-direct full integration (STRUMPACK).
+- BLR sparse-direct full integration (MUMPS-BLR).
+- Tensor Train + Tucker tensor decompositions.
+- Apple AMX + Intel AMX matrix-coprocessor specialization.
+- Distributed parallelism (MPI) when scientific-computing tool needs
+  cluster scaling.
+
+### References (2024-2026 SOTA additions)
+
+See `docs/research/cerid-hesap-2026-update.md` for the full
+bibliography (~50 citations covering mixed-precision IR, randomized
+LA, task-DAG scheduling, Krylov recycling, modern AMG, ILUPACK,
+SPAI, JAX-style AD, modern hardware, NUFFT, sparse FFT, modern
+optimization, modern ODE, AD-at-operator-level).
+
+ADR-0065 §13 ✅ Accepted alongside ADR-0081 Proposed.
 - `docs/research/sparsematrices.md` — pre-existing Cerid sparse-matrix research.
