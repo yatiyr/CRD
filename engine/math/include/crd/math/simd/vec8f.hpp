@@ -157,6 +157,24 @@ CRD_FORCEINLINE Vec8f operator/(Vec8f a, f32 s) noexcept { return a / Vec8f(s); 
 CRD_FORCEINLINE Vec8f mul_add(Vec8f a, Vec8f b, Vec8f c) noexcept { return (a * b) + c; }
 CRD_FORCEINLINE Vec8f mul_sub(Vec8f a, Vec8f b, Vec8f c) noexcept { return (a * b) - c; }
 
+// Single-rounded IEEE 754 FMA (a*b + c with one rounding step).
+// Distinct from mul_add (two roundings, ADR-0063 default). Use when the
+// numerical-computing consumer (crd-hesap microkernels per ADR-0082)
+// wants ~2x throughput on AVX2-FMA hardware AND accepts the single-rounded
+// arithmetic. Bit-exact across SIMD widths only when ALL lanes/widths use
+// fma() (NOT mixed with mul_add). Scalar fallback uses std::fma which is
+// IEEE 754-2008 mandated to match the hardware FMA bit-for-bit.
+CRD_FORCEINLINE Vec8f fma(Vec8f a, Vec8f b, Vec8f c) noexcept
+{
+#if CRD_SIMD_HAS_AVX2
+    Vec8f r;
+    r.v = _mm256_fmadd_ps(a.v, b.v, c.v);
+    return r;
+#else
+    return Vec8f(fma(a.lo, b.lo, c.lo), fma(a.hi, b.hi, c.hi));
+#endif
+}
+
 // ---- min / max / abs / sqrt -----------------------------------------------
 
 CRD_FORCEINLINE Vec8f min(Vec8f a, Vec8f b) noexcept

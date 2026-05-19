@@ -377,3 +377,140 @@ target_link_libraries(smoke_depth_prepass PRIVATE
     crd-renderer
 )
 crd_enable_default_pch(smoke_depth_prepass)
+
+add_executable(smoke_hesap_substrate
+    examples/smoke_hesap_substrate.cpp
+)
+
+target_link_libraries(smoke_hesap_substrate PRIVATE
+    crd-core
+    crd-log
+    crd-memory
+    crd-containers
+    crd-hesap
+    crd-hesap-dense
+)
+crd_enable_default_pch(smoke_hesap_substrate)
+
+add_executable(smoke_hesap_blas1
+    examples/smoke_hesap_blas1.cpp
+)
+
+target_link_libraries(smoke_hesap_blas1 PRIVATE
+    crd-core
+    crd-log
+    crd-memory
+    crd-containers
+    crd-hesap
+    crd-hesap-dense
+)
+crd_enable_default_pch(smoke_hesap_blas1)
+
+add_executable(smoke_hesap_blas2
+    examples/smoke_hesap_blas2.cpp
+)
+
+target_link_libraries(smoke_hesap_blas2 PRIVATE
+    crd-core
+    crd-log
+    crd-memory
+    crd-containers
+    crd-hesap
+    crd-hesap-dense
+)
+crd_enable_default_pch(smoke_hesap_blas2)
+
+add_executable(smoke_hesap_blas3
+    examples/smoke_hesap_blas3.cpp
+)
+
+target_link_libraries(smoke_hesap_blas3 PRIVATE
+    crd-core
+    crd-log
+    crd-memory
+    crd-containers
+    crd-hesap
+    crd-hesap-dense
+)
+crd_enable_default_pch(smoke_hesap_blas3)
+
+add_executable(bench_hesap_gemm
+    examples/bench_hesap_gemm.cpp
+)
+
+target_link_libraries(bench_hesap_gemm PRIVATE
+    crd-core
+    crd-memory
+    crd-containers
+    crd-math
+    crd-hesap
+    crd-hesap-dense
+)
+crd_enable_default_pch(bench_hesap_gemm)
+
+add_executable(bench_hesap_gemm_parallel
+    examples/bench_hesap_gemm_parallel.cpp
+)
+
+target_link_libraries(bench_hesap_gemm_parallel PRIVATE
+    crd-core
+    crd-memory
+    crd-containers
+    crd-math
+    crd-hesap
+    crd-hesap-dense
+    crd-jobs
+)
+crd_enable_default_pch(bench_hesap_gemm_parallel)
+
+# Reference-class shootout — built only when CRD_BUILD_HESAP_VS_REFERENCE=ON.
+# Eigen 3.4 + OpenBLAS are fetched via CPM at configure time.
+if(CRD_BUILD_HESAP_VS_REFERENCE)
+    add_executable(bench_hesap_gemm_vs_reference
+        examples/bench_hesap_gemm_vs_reference.cpp
+    )
+    target_link_libraries(bench_hesap_gemm_vs_reference PRIVATE
+        crd-core
+        crd-memory
+        crd-containers
+        crd-math
+        crd-hesap
+        crd-hesap-dense
+        crd-jobs
+        eigen_headers
+        openblas
+    )
+    # OpenBLAS does NOT export BUILD_INTERFACE include dirs (only INSTALL),
+    # and its CMakeLists writes the generated cblas.h + openblas_config.h to
+    # the TOP-LEVEL ${CMAKE_BINARY_DIR}, not the CPM sub-build dir. Hard-code
+    # those locations explicitly.
+    target_include_directories(bench_hesap_gemm_vs_reference SYSTEM PRIVATE
+        "${OpenBLAS_SOURCE_DIR}"
+        "${CMAKE_BINARY_DIR}"
+        "${CMAKE_BINARY_DIR}/generated"
+        "${CMAKE_BINARY_DIR}/_deps/openblas-build"
+    )
+    # Eigen's MatrixXd*MatrixXd parallelism in 3.4 requires OpenMP in the
+    # CALLER's TU — `#pragma omp parallel` is expanded inline. Without this
+    # Eigen silently runs serial regardless of setNbThreads(). Verified
+    # at bench-start via Eigen::nbThreads() readback.
+    find_package(OpenMP COMPONENTS CXX)
+    if(OpenMP_CXX_FOUND)
+        target_link_libraries(bench_hesap_gemm_vs_reference PRIVATE OpenMP::OpenMP_CXX)
+        message(STATUS "[bench_hesap_gemm_vs_reference] OpenMP enabled for Eigen-MT")
+    else()
+        message(WARNING "[bench_hesap_gemm_vs_reference] OpenMP NOT found — Eigen will run SERIAL")
+    endif()
+    # Disable warnings-as-errors for this target (Eigen + OpenBLAS headers fire
+    # many warnings we have no control over). target_compile_options PRIVATE
+    # appears BEFORE linked-library INTERFACE flags, so /WX from crd-warnings
+    # would override our /WX-. Source-file property comes LAST → wins.
+    if(MSVC)
+        set_source_files_properties(examples/bench_hesap_gemm_vs_reference.cpp
+            PROPERTIES COMPILE_FLAGS "/WX- /wd4242 /wd4244 /wd4267 /wd4127 /wd4146")
+    else()
+        set_source_files_properties(examples/bench_hesap_gemm_vs_reference.cpp
+            PROPERTIES COMPILE_FLAGS "-Wno-error")
+    endif()
+    # PCH conflicts with eigen + cblas system headers; skip PCH for this target.
+endif()

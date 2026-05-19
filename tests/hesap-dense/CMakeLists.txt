@@ -1,0 +1,28 @@
+add_executable(crd-hesap-dense-tests
+    test_matrix_catalog.cpp
+    test_vector.cpp
+    test_blas1_real.cpp
+    test_blas1_complex.cpp
+    test_blas1_cli.cpp
+    test_matrix.cpp
+    test_blas2_real.cpp
+    test_blas2_complex.cpp
+    test_blas2_banded.cpp
+    test_blas3_real.cpp
+    test_blas3_complex.cpp
+    test_blas3_parallel.cpp
+)
+
+target_link_libraries(crd-hesap-dense-tests PRIVATE
+    crd-core
+    crd-containers
+    crd-memory
+    crd-hesap
+    crd-hesap-dense
+    crd-jobs
+    Catch2::Catch2WithMain
+)
+
+crd_enable_default_pch(crd-hesap-dense-tests)
+
+catch_discover_tests(crd-hesap-dense-tests)

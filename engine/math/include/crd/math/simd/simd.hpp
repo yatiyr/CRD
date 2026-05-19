@@ -11,6 +11,7 @@
 #include <crd/math/simd/backend.hpp>
 #include <crd/math/simd/vec4f.hpp>
 #include <crd/math/simd/vec8f.hpp>
+#include <crd/math/simd/vec4d.hpp>
 #include <crd/math/simd/vec4i.hpp>
 #include <crd/math/simd/vec8i.hpp>
 #include <crd/math/simd/convert.hpp>

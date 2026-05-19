@@ -14,6 +14,12 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(CRD_BUILD_TESTS      "Build test executables"           ON)
 option(CRD_BUILD_BENCHMARKS "Build benchmark executable"       ON)
 option(CRD_BUILD_SANDBOX    "Build crd-sandbox interactive app" ON)
+# Reference-class shootout for crd-hesap (Phase 3.1.6 v0d-parallelism-scaling).
+# When ON, fetches Eigen 3.4 + OpenBLAS via CPM and builds bench_hesap_gemm_vs_reference
+# which times Cerid vs Eigen-MT vs OpenBLAS on identical workloads. Sources go to
+# build/_deps/ (gitignored), never vendored into the repo. OFF by default — opt in
+# via -DCRD_BUILD_HESAP_VS_REFERENCE=ON at configure time.
+option(CRD_BUILD_HESAP_VS_REFERENCE "Build hesap-vs-Eigen/OpenBLAS comparison bench" OFF)
 option(CRD_ENABLE_ASSERTS   "Enable CRD_ASSERT macros"        ON)
 option(CRD_ENABLE_PROFILING "Enable profiling instrumentation" OFF)
 option(CRD_ENABLE_ASAN      "Enable Address Sanitizer"         OFF)
@@ -303,6 +309,63 @@ target_include_directories(mikktspace SYSTEM INTERFACE "${MikkTSpace_SOURCE_DIR}
 
 CPMAddPackage("gh:ocornut/imgui#v1.92.0-docking")
 
+# ----- Reference-class shootout deps (Phase 3.1.6 v0d-parallelism-scaling) -----
+# Gated behind CRD_BUILD_HESAP_VS_REFERENCE — fetched on demand into build/_deps,
+# never vendored into git. Both deps are bench-only.
+if(CRD_BUILD_HESAP_VS_REFERENCE)
+    message(STATUS "[hesap-vs-ref] Fetching Eigen 3.4 + OpenBLAS for shootout bench")
+
+    # Eigen 3.4 — header-only template library. DOWNLOAD_ONLY since we only need
+    # headers; we wrap them in a SYSTEM-include interface target.
+    CPMAddPackage(
+        NAME eigen
+        GITLAB_REPOSITORY libeigen/eigen
+        GIT_TAG 3.4.0
+        DOWNLOAD_ONLY YES
+    )
+    add_library(eigen_headers INTERFACE)
+    target_include_directories(eigen_headers SYSTEM INTERFACE "${eigen_SOURCE_DIR}")
+    # Eigen's parallel path: -DEIGEN_DONT_PARALLELIZE turns it OFF. We want it ON,
+    # via OpenMP (Eigen has no native thread pool). On MSVC we pass /openmp.
+    target_compile_definitions(eigen_headers INTERFACE EIGEN_USE_THREADS)
+    find_package(OpenMP COMPONENTS CXX)
+    if(OpenMP_CXX_FOUND)
+        target_link_libraries(eigen_headers INTERFACE OpenMP::OpenMP_CXX)
+    endif()
+
+    # OpenBLAS — built from source via FetchContent. Pin to a recent stable tag.
+    # CRITICAL: OpenBLAS auto-detection on MSVC fails (no /proc/cpuinfo, no
+    # assembler) and falls back to CORE_generic = a 2x2 scalar-C kernel that
+    # runs at ~10 GFLOPS — not the asm-tuned reference we need. Force
+    # TARGET=SKYLAKEX which has C-intrinsic AVX-512/AVX2 kernels that build
+    # under MSVC without an external assembler. SKYLAKEX downgrades to AVX2
+    # at runtime if AVX-512 is absent. DYNAMIC_ARCH=ON would build multiple
+    # kernels and runtime-dispatch but takes 30+ min to build; we pin a
+    # single target for bench parity instead.
+    set(CMAKE_POLICY_VERSION_MINIMUM "3.5")
+    # OpenBLAS-on-MSVC is constrained to its CORE_generic 2x2 scalar kernel:
+    # upstream prebuild.cmake hardcodes -DFORCE_GENERIC under MSVC, and even
+    # patching that out leaves us with HASWELL .S kernels (GAS syntax) that
+    # ml64 can't parse. Real-asm OpenBLAS requires Linux/MinGW or vcpkg
+    # prebuilt. We accept the generic build as a baseline and document the
+    # limitation — see docs/sessions/2026-05-19-hesap-vs-reference.md.
+    set(BUILD_WITHOUT_LAPACK   ON  CACHE BOOL   "" FORCE)
+    set(NOFORTRAN              ON  CACHE BOOL   "" FORCE)
+    set(BUILD_TESTING          OFF CACHE BOOL   "" FORCE)
+    set(USE_THREAD             1   CACHE STRING "" FORCE)
+    set(NUM_THREADS            32  CACHE STRING "" FORCE)
+    set(C_LAPACK               ON  CACHE BOOL   "" FORCE)
+    set(_crd_saved_BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS})
+    set(BUILD_SHARED_LIBS      OFF CACHE BOOL   "" FORCE)
+    CPMAddPackage(
+        NAME OpenBLAS
+        GITHUB_REPOSITORY OpenMathLib/OpenBLAS
+        GIT_TAG v0.3.27
+    )
+    set(BUILD_SHARED_LIBS ${_crd_saved_BUILD_SHARED_LIBS} CACHE BOOL "" FORCE)
+    unset(CMAKE_POLICY_VERSION_MINIMUM)
+endif()
+
 # Phase 3.1.7 v1-close debt payment: patch ImGui's Vulkan backend so
 # `vkFlushMappedMemoryRanges` in the texture-upload path doesn't trip the
 # Vulkan validation layer's VUID-VkMappedMemoryRange-size-01390 (size must
@@ -440,6 +503,9 @@ add_subdirectory(engine/geometry-decomposition)
 add_subdirectory(engine/geometry-bvh-gpu)
 add_subdirectory(engine/geometry-shader-helpers)
 add_subdirectory(engine/geometry-curves)
+add_subdirectory(engine/hesap)
+add_subdirectory(engine/hesap-dense)
+# crd-hesap-sched depends on crd-jobs (declared below); declared after jobs.
 # crd-geometry-viz must come AFTER crd-draw (its declaration is below) — moved
 # down to engine/eylem-viz neighbourhood. See the second add_subdirectory below.
 add_subdirectory(engine/containers)
@@ -455,6 +521,7 @@ add_subdirectory(engine/shader)
 add_subdirectory(engine/rhi)
 add_subdirectory(engine/rhi-vulkan)
 add_subdirectory(engine/jobs)
+add_subdirectory(engine/hesap-sched)  # depends on crd-jobs above + crd-hesap (declared earlier)
 add_subdirectory(engine/resources)
 add_subdirectory(engine/scene)
 add_subdirectory(engine/preset)

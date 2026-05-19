@@ -479,3 +479,133 @@ TEST_CASE("simd build is under ADR-0063 deterministic FP contract",
     // assertions. Catch the regression here instead.
     REQUIRE(crd::math::simd::deterministic_fp());
 }
+
+// ===========================================================================
+// Vec4d (4-lane f64 SIMD wrapper) — Phase 3.1.6 v0d-perf-f64-avx2.
+// ===========================================================================
+
+namespace
+{
+using crd::f64;
+using crd::math::simd::Vec4d;
+
+[[nodiscard]] bool bit_eq_f64(f64 a, f64 b) noexcept
+{
+    return std::bit_cast<crd::u64>(a) == std::bit_cast<crd::u64>(b);
+}
+
+[[nodiscard]] bool vec4d_bit_eq(Vec4d v, f64 e0, f64 e1, f64 e2, f64 e3)
+{
+    f64 lanes[4];
+    v.store(lanes);
+    return bit_eq_f64(lanes[0], e0) && bit_eq_f64(lanes[1], e1) && bit_eq_f64(lanes[2], e2) &&
+           bit_eq_f64(lanes[3], e3);
+}
+} // namespace
+
+TEST_CASE("Vec4d ctors + lane access", "[simd][vec4d]")
+{
+    Vec4d a(1.5, 2.5, 3.5, 4.5);
+    REQUIRE(bit_eq_f64(a.lane(0), 1.5));
+    REQUIRE(bit_eq_f64(a.lane(3), 4.5));
+
+    Vec4d b(7.0);
+    REQUIRE(vec4d_bit_eq(b, 7.0, 7.0, 7.0, 7.0));
+
+    REQUIRE(vec4d_bit_eq(Vec4d::zero(), 0.0, 0.0, 0.0, 0.0));
+    REQUIRE(vec4d_bit_eq(Vec4d::one(), 1.0, 1.0, 1.0, 1.0));
+}
+
+TEST_CASE("Vec4d load + store round-trips", "[simd][vec4d]")
+{
+    alignas(32) const f64 src[4] = {1.0, -2.0, 3.5, -4.25};
+    const Vec4d v = Vec4d::load(src);
+    REQUIRE(vec4d_bit_eq(v, 1.0, -2.0, 3.5, -4.25));
+    alignas(32) f64 dst[4]{};
+    v.store_aligned(dst);
+    REQUIRE(bit_eq_f64(dst[2], 3.5));
+}
+
+TEST_CASE("Vec4d arithmetic", "[simd][vec4d]")
+{
+    const Vec4d a(1.0, 2.0, 3.0, 4.0);
+    const Vec4d b(10.0, 20.0, 30.0, 40.0);
+    REQUIRE(vec4d_bit_eq(a + b, 11.0, 22.0, 33.0, 44.0));
+    REQUIRE(vec4d_bit_eq(b - a, 9.0, 18.0, 27.0, 36.0));
+    REQUIRE(vec4d_bit_eq(a * b, 10.0, 40.0, 90.0, 160.0));
+    REQUIRE(vec4d_bit_eq(b / Vec4d(2.0), 5.0, 10.0, 15.0, 20.0));
+    REQUIRE(vec4d_bit_eq(-a, -1.0, -2.0, -3.0, -4.0));
+    REQUIRE(vec4d_bit_eq(a * 3.0, 3.0, 6.0, 9.0, 12.0));
+}
+
+TEST_CASE("Vec4d mul_add is (a*b)+c not fused FMA (ADR-0063)", "[simd][vec4d][determinism]")
+{
+    // For a typical test there's no observable difference between (a*b)+c
+    // and fmadd; what we lock is that mul_add equals the SCALAR reference
+    // computed with two roundings (mul, then add). This is the contract,
+    // not a performance promise.
+    const Vec4d a(1.1, 2.2, 3.3, 4.4);
+    const Vec4d b(0.7, 1.3, 1.9, 2.5);
+    const Vec4d c(0.01, 0.02, 0.03, 0.04);
+    f64 expected[4];
+    f64 al[4];
+    f64 bl[4];
+    f64 cl[4];
+    a.store(al);
+    b.store(bl);
+    c.store(cl);
+    for (int i = 0; i < 4; ++i)
+    {
+        // Two-rounding reference: compute mul first, then add. The compiler
+        // is forbidden from fusing under /fp:precise (which CrdSimd.cmake
+        // sets in deterministic mode).
+        const f64 prod = al[i] * bl[i];
+        expected[i] = prod + cl[i];
+    }
+    const Vec4d r = crd::math::simd::mul_add(a, b, c);
+    REQUIRE(vec4d_bit_eq(r, expected[0], expected[1], expected[2], expected[3]));
+}
+
+TEST_CASE("Vec4d min / max / abs / sqrt", "[simd][vec4d]")
+{
+    const Vec4d a(1.0, -2.0, 3.5, -4.0);
+    const Vec4d b(2.0, -1.0, 3.0, -5.0);
+    REQUIRE(vec4d_bit_eq(crd::math::simd::min(a, b), 1.0, -2.0, 3.0, -5.0));
+    REQUIRE(vec4d_bit_eq(crd::math::simd::max(a, b), 2.0, -1.0, 3.5, -4.0));
+    REQUIRE(vec4d_bit_eq(crd::math::simd::abs(a), 1.0, 2.0, 3.5, 4.0));
+    REQUIRE(vec4d_bit_eq(crd::math::simd::sqrt(Vec4d(1.0, 4.0, 9.0, 16.0)), 1.0, 2.0, 3.0, 4.0));
+}
+
+TEST_CASE("Vec4d horizontal_sum + dot are deterministic pairwise", "[simd][vec4d][determinism]")
+{
+    const Vec4d a(1.0, 2.0, 3.0, 4.0);
+    const f64 sum = crd::math::simd::horizontal_sum(a);
+    // pairwise: (1+2) + (3+4) = 3 + 7 = 10
+    REQUIRE(bit_eq_f64(sum, 10.0));
+
+    const Vec4d b(5.0, 6.0, 7.0, 8.0);
+    const f64 d = crd::math::simd::dot(a, b);
+    // a*b lanes: 5, 12, 21, 32 → pairwise: (5+12) + (21+32) = 17 + 53 = 70
+    REQUIRE(bit_eq_f64(d, 70.0));
+}
+
+TEST_CASE("Vec4d cmp + select round-trip", "[simd][vec4d]")
+{
+    const Vec4d a(1.0, 2.0, 3.0, 4.0);
+    const Vec4d b(2.0, 2.0, 2.0, 2.0);
+    const Vec4d lt_mask = crd::math::simd::cmp_lt(a, b);
+    const Vec4d ge_mask = crd::math::simd::cmp_ge(a, b);
+    const Vec4d picked = crd::math::simd::select(lt_mask, Vec4d(99.0), Vec4d(11.0));
+    // Lane 0: 1 < 2 → 99; lanes 1/2/3: !< → 11.
+    REQUIRE(vec4d_bit_eq(picked, 99.0, 11.0, 11.0, 11.0));
+
+    const Vec4d picked_ge = crd::math::simd::select(ge_mask, Vec4d(77.0), Vec4d(22.0));
+    // Lane 0: 1 >= 2 false → 22; lanes 1/2/3: >= → 77.
+    REQUIRE(vec4d_bit_eq(picked_ge, 22.0, 77.0, 77.0, 77.0));
+}
+
+TEST_CASE("Vec4d sizeof + alignment", "[simd][vec4d]")
+{
+    STATIC_REQUIRE(sizeof(Vec4d) == 32);
+    STATIC_REQUIRE(alignof(Vec4d) == 32);
+}
