@@ -439,6 +439,7 @@ add_subdirectory(engine/geometry-delaunay)
 add_subdirectory(engine/geometry-decomposition)
 add_subdirectory(engine/geometry-bvh-gpu)
 add_subdirectory(engine/geometry-shader-helpers)
+add_subdirectory(engine/geometry-curves)
 # crd-geometry-viz must come AFTER crd-draw (its declaration is below) — moved
 # down to engine/eylem-viz neighbourhood. See the second add_subdirectory below.
 add_subdirectory(engine/containers)
