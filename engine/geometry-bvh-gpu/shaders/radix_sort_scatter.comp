@@ -1,0 +1,115 @@
+#version 450
+
+// ---------------------------------------------------------------------------
+// LSD radix sort — SCATTER kernel. Phase 3.1.7 v9a-b2.
+//
+// Each workgroup re-reads its slab of kRadixItemsPerBlock = 1024 pairs
+// from pair_in, computes per-item destination = scatter_off[wg, bin] +
+// local-rank-within-bin, and writes to pair_out.
+//
+// Stability discipline (D146):
+//   - threads within a workgroup process their kRadixItemsPerThread = 4
+//     items in monotonic index order;
+//   - workgroups process slabs in monotonic block-id order;
+//   - per-bin LOCAL rank is computed via a serial prefix scan over the
+//     1024 items of THIS workgroup, NOT an atomic counter;
+//   ⇒ equal-key items preserve their input pair index, matching the CPU
+//     LSD-radix v9a-b1 contract byte-for-byte.
+//
+// Workgroup: 256 threads × 4 items/thread = 1024 items per block.
+// dispatch_x = num_blocks.
+// ---------------------------------------------------------------------------
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) readonly buffer InPairs    { uint pairs[]; } in_pairs;
+layout(set = 0, binding = 1) writeonly buffer OutPairs   { uint pairs[]; } out_pairs;
+layout(set = 0, binding = 2) readonly buffer InScatter  { uint off[];   } in_scatter;
+
+layout(push_constant) uniform Push
+{
+    uint count;
+    uint shift;        // current pass's bit-shift
+} pc;
+
+// kRadixItemsPerBlock = 1024 — full slab. We store one slot per (bin,
+// item-slot) so each thread can compute its local rank deterministically.
+// Layout: s_local_offset[bin * 1024 + i] = 1 if item-slot `i` in this
+// workgroup matches `bin`, else 0. Then prefix-scan each bin row.
+//
+// 16 bins × 1024 slots × 4 B = 64 KiB shared memory. Most GPUs offer 32 KB
+// or 48 KB per workgroup; 64 KiB would NOT fit. So we use a smaller
+// alternative: pack the per-item bin into a single per-slot byte (or u32)
+// and serial-scan per bin.
+//
+// Practical design: store `bin_of_slot[1024]` (4 KiB) AND `count_per_bin[16]`
+// then compute local rank by scanning bin_of_slot serially per output
+// slot's thread. With 256 threads doing 4 outputs each, this is fast
+// enough at v9a-b2 (kernel-launch-overhead-bound, not work-bound).
+
+shared uint s_bin_of_slot[1024];    // (bin_of_slot[i]: which 4-bit digit slot i has)
+shared uint s_rank_in_bin [1024];   // local rank within bin for slot i
+
+void main()
+{
+    uint tid      = gl_LocalInvocationID.x;
+    uint block_id = gl_WorkGroupID.x;
+    uint slab_base = block_id * 1024u;
+
+    // Phase 1 — load each slot's bin into shared memory. Out-of-range
+    // slots (i >= count) get bin == 16 (a sentinel; never matches any
+    // real bin during the rank-count phase).
+    for (uint k = 0u; k < 4u; ++k)
+    {
+        uint slot   = tid * 4u + k;
+        uint global = slab_base + slot;
+        uint bin    = 16u;       // sentinel for "skip"
+        if (global < pc.count)
+        {
+            uint code = in_pairs.pairs[2u * global + 0u];
+            bin       = (code >> pc.shift) & 0xFu;
+        }
+        s_bin_of_slot[slot] = bin;
+    }
+    barrier();
+
+    // Phase 2 — for each slot, compute its local rank within its bin by
+    // counting how many prior slots in [0, slot) shared the same bin.
+    // Serial within-thread per bin, but parallel across threads. Cost:
+    // 1024 reads per slot × 1024 slots / 256 threads / 4 outputs = ~256
+    // shared-mem reads per output slot. Acceptable at v9a-b2.
+    for (uint k = 0u; k < 4u; ++k)
+    {
+        uint slot = tid * 4u + k;
+        uint my_bin = s_bin_of_slot[slot];
+        uint rank = 0u;
+        if (my_bin < 16u)
+        {
+            for (uint j = 0u; j < slot; ++j)
+            {
+                if (s_bin_of_slot[j] == my_bin) { rank += 1u; }
+            }
+        }
+        s_rank_in_bin[slot] = rank;
+    }
+    barrier();
+
+    // Phase 3 — scatter. For each slot, destination = scatter_off[block,
+    // bin] + local_rank. Sentinel-bin slots (out-of-range) skip the write.
+    for (uint k = 0u; k < 4u; ++k)
+    {
+        uint slot   = tid * 4u + k;
+        uint global = slab_base + slot;
+        uint bin    = s_bin_of_slot[slot];
+        if (bin < 16u && global < pc.count)
+        {
+            uint base = in_scatter.off[block_id * 16u + bin];
+            uint dst  = base + s_rank_in_bin[slot];
+
+            uint code = in_pairs.pairs[2u * global + 0u];
+            uint idx  = in_pairs.pairs[2u * global + 1u];
+            out_pairs.pairs[2u * dst + 0u] = code;
+            out_pairs.pairs[2u * dst + 1u] = idx;
+        }
+    }
+}

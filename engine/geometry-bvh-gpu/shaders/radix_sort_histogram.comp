@@ -1,0 +1,66 @@
+#version 450
+
+// ---------------------------------------------------------------------------
+// LSD radix sort — HISTOGRAM kernel. Phase 3.1.7 v9a-b2.
+//
+// Each workgroup reads its slab of kRadixItemsPerBlock = 1024 pairs from
+// the pair_in buffer and writes a 16-bin histogram of the current 4-bit
+// digit to global memory.
+//
+//   block_hist[wg_id * 16 + bin] = count of items in this workgroup with
+//                                  (pair.code >> shift) & 0xF == bin
+//
+// Items beyond `count` contribute zero (they correspond to dummy slots
+// in the last partial workgroup; the scatter kernel skips them too).
+//
+// Workgroup: 256 threads × 4 items/thread = 1024 items per block.
+// dispatch_x = ceil(count / 1024) = num_blocks.
+// ---------------------------------------------------------------------------
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) readonly buffer InPairs   { uint pairs[]; } in_pairs;
+layout(set = 0, binding = 1) writeonly buffer OutBlockHist { uint hist[]; } out_block_hist;
+
+layout(push_constant) uniform Push
+{
+    uint count;
+    uint shift;       // current pass's bit-shift (pass * 4)
+} pc;
+
+shared uint s_hist[16];
+
+void main()
+{
+    // Initialise this block's shared histogram. Only the first 16 threads
+    // need to touch it; rest stay idle for this micro-step.
+    if (gl_LocalInvocationID.x < 16u)
+    {
+        s_hist[gl_LocalInvocationID.x] = 0u;
+    }
+    barrier();
+
+    // Tally this thread's 4 items into the shared histogram via atomics
+    // on shared memory (cheap on modern GPUs; 16 contention slots).
+    uint block_base = gl_WorkGroupID.x * 1024u;       // 256 * 4 = 1024 items per block
+    uint thread_base = block_base + gl_LocalInvocationID.x * 4u;
+
+    for (uint k = 0u; k < 4u; ++k)
+    {
+        uint i = thread_base + k;
+        if (i < pc.count)
+        {
+            uint code = in_pairs.pairs[2u * i + 0u];
+            uint bin  = (code >> pc.shift) & 0xFu;
+            atomicAdd(s_hist[bin], 1u);
+        }
+    }
+    barrier();
+
+    // First 16 threads write the block's histogram to global memory.
+    if (gl_LocalInvocationID.x < 16u)
+    {
+        uint dst = gl_WorkGroupID.x * 16u + gl_LocalInvocationID.x;
+        out_block_hist.hist[dst] = s_hist[gl_LocalInvocationID.x];
+    }
+}

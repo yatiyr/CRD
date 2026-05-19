@@ -19,7 +19,12 @@ target_include_directories(crd-geometry-shader-helpers
 target_link_libraries(crd-geometry-shader-helpers
     PUBLIC
         crd-core
-        crd-geometry-primitives   # the C++ side of the primitive / formulary library it will mirror to GPU
+        crd-containers           # Array / Span (formula-IR's flat storage)
+        crd-memory               # IAllocator
+        crd-math                 # Vec3<T> for the evaluator
+        crd-geometry-primitives  # the C++ side of the primitive / formulary library it will mirror to GPU
+    PRIVATE
+        crd-platform             # filesystem (cooker writes .glsl/.hlsl to disk)
 )
 
 target_compile_features(crd-geometry-shader-helpers PUBLIC cxx_std_20)

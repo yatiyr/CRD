@@ -30,9 +30,9 @@
 //
 // Tiebreak: callers that need a deterministic sort over Morton codes
 // (every LBVH consumer does) should sort `(morton_code, original_index)`
-// pairs — see v9a-b1 `radix_sort_cpu`. Equal Morton codes ⇒ lower input
-// index wins ⇒ deterministic LBVH topology even on cocircular Morton
-// codes.
+// pairs — see v9a-b1 `sort_morton_pairs<KeyT>` (`morton_sort.hpp`).
+// Equal Morton codes ⇒ lower input index wins ⇒ deterministic LBVH
+// topology even on cocircular Morton codes.
 // ---------------------------------------------------------------------------
 
 #include <crd/containers/array.hpp>

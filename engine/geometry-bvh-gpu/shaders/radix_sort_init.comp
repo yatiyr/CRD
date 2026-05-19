@@ -1,0 +1,50 @@
+#version 450
+
+// ---------------------------------------------------------------------------
+// LSD radix sort — INIT kernel. Phase 3.1.7 v9a-b2.
+//
+// Packs raw u32 Morton codes + monotonic-ascending input indices into
+// the pair_a buffer before pass 0.
+//
+// index MUST be `gl_GlobalInvocationID.x` (the same monotonic-i sequence
+// CPU v9a-b1 uses for its `{codes[i], u32(i)}` build). Equivalent in
+// observable behaviour to the CPU loop:
+//
+//   for (i = 0..N-1) out[i] = { codes[i], u32(i) };
+//
+// Workgroup: kRadixWorkgroupSize (256) × kRadixItemsPerThread (4) = 1024
+// items per block. dispatch_x = ceil(N / 1024).
+//
+// MECHANICAL TRANSLATION of the CPU pair-init loop. Any divergence is a
+// bug, caught by `bit_compare<MortonPair<u32>>(cpu, gpu)`.
+// ---------------------------------------------------------------------------
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) readonly buffer InCodes  { uint codes[];  } in_codes;
+layout(set = 0, binding = 1) writeonly buffer OutPairs {
+    // MortonPair<u32> = { u32 code; u32 index; } — sizeof 8 B, alignof 4 B
+    // — locked by static_assert in morton_sort.hpp. AoS in flat u32 array:
+    //   pair[i] := (pairs[2*i + 0] = code, pairs[2*i + 1] = index)
+    uint pairs[];
+} out_pairs;
+
+layout(push_constant) uniform Push
+{
+    uint count;
+} pc;
+
+void main()
+{
+    // kRadixItemsPerThread = 4 items per thread; this thread handles the
+    // 4 items at `base + 0..3`. Items beyond `count` no-op.
+    uint base = gl_GlobalInvocationID.x * 4u;
+
+    for (uint k = 0u; k < 4u; ++k)
+    {
+        uint i = base + k;
+        if (i >= pc.count) { return; }
+        out_pairs.pairs[2u * i + 0u] = in_codes.codes[i];
+        out_pairs.pairs[2u * i + 1u] = i; // index = i, matches CPU u32(i)
+    }
+}

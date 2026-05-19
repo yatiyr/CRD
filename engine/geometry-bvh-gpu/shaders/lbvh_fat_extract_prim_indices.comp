@@ -1,0 +1,38 @@
+#version 450
+
+// ---------------------------------------------------------------------------
+// Extract prim_indices from sorted_pairs (Karras MortonPair layout).
+// Phase 3.1.7 v9a-c-gpu-inputs (2026-05-18).
+//
+// Trivial kernel: N threads, each reads `pairs[2k+1]` (the original prim
+// index in sorted-Morton order) and writes it to `prim_indices[k]`.
+//
+// Used by the `dispatch_build_lbvh_from_gpu` path where the caller supplies
+// sorted_pairs as a GPU buffer (no CPU memcpy) but we still need the
+// per-leaf prim index in a contiguous GPU buffer for the consumer's
+// downstream queries.
+// ---------------------------------------------------------------------------
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) readonly buffer InSortedPairs
+{
+    uint pairs[];           // [2k] = code, [2k+1] = original prim index
+} in_pairs;
+
+layout(set = 0, binding = 1) writeonly buffer OutPrimIndices
+{
+    uint indices[];
+} out_prim_indices;
+
+layout(push_constant) uniform Push
+{
+    uint n;
+} pc;
+
+void main()
+{
+    uint k = gl_GlobalInvocationID.x;
+    if (k >= pc.n) { return; }
+    out_prim_indices.indices[k] = in_pairs.pairs[2u * k + 1u];
+}

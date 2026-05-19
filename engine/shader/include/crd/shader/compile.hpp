@@ -30,4 +30,16 @@ struct CompileResult
     crd::containers::StringView      name,
     crd::memory::IAllocator*         a = crd::memory::default_allocator());
 
+// Compile HLSL source text to SPIR-V bytes via dxc with `-spirv` target.
+// Loads dxcompiler dynamically (VULKAN_SDK/Bin/dxcompiler.dll on Windows,
+// libdxcompiler.so on Linux). Defaults: shader model 6.0, entry name `main`
+// (Vertex/Fragment) or `cs_main` (Compute), Vulkan 1.3 target environment.
+// Returns CompileResult::ok == false and an error_message on failure
+// (including library-not-found).
+[[nodiscard]] CompileResult compile_hlsl(
+    Stage                            stage,
+    crd::containers::StringView      source,
+    crd::containers::StringView      name,
+    crd::memory::IAllocator*         a = crd::memory::default_allocator());
+
 } // namespace crd::shader

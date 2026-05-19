@@ -1,0 +1,102 @@
+#version 450
+
+// ---------------------------------------------------------------------------
+// LBVH fat-node upsweep PASS 2..K — level-by-level bottom-up merge.
+// Phase 3.1.7 v9a-c-perf-tune (2026-05-18 elite kernel rewrite).
+//
+// **N-1 threads, one per internal node.** Each thread:
+//   1. Reads `children_done[i]`.
+//      - != 2: not ready (still waiting on children) OR already processed
+//             (== 3). Early-exit.
+//      - == 2: ready. atomicCompSwap to claim (2 -> 3); if claim fails,
+//        somebody else got here first (shouldn't happen at one-thread-per-i
+//        but guards the memory-model correctness corner).
+//   2. Read `nodes[i].bounds[0]` and `bounds[1]` (both children's AABBs,
+//      already deposited by the previous dispatch's children threads).
+//   3. Compute merged bounds = union of bounds[0] and bounds[1].
+//   4. Write merged bounds to `nodes[parent_of_i].bounds[is_right_of_i]`.
+//   5. atomicAdd `children_done[parent_of_i]` by 1, signalling parent.
+//
+// **Why this beats the carry-register walk (theory):**
+//   - No deep dependency chains. Each thread does O(1) work, not O(depth).
+//   - Coalesced reads: 32-thread warp reads N-1 = 999 999 internals
+//     sequentially in nodes_buf (within 16 dwords each = 64 B). Adjacent
+//     internals share cache lines.
+//   - No early-exit divergence within a warp (all threads in a warp see
+//     same done state — early exits are warp-coordinated).
+//   - log₂(N) dispatches advance one level each. For N = 1 M, ~30
+//     dispatches needed. Dispatch overhead (~30 μs each on Vulkan) =
+//     ~1 ms of overhead per call; offset by drop in per-thread work from
+//     ~25-deep walks to O(1).
+//
+// **`coherent` discipline.** Both nodes_buf and done_buf must be coherent
+// for cross-invocation/cross-workgroup visibility. The atomicCompSwap on
+// done_buf orders done_buf accesses; coherent on nodes_buf orders our
+// bounds reads/writes globally.
+// ---------------------------------------------------------------------------
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) coherent buffer Nodes { uint nodes[]; }                  nodes_buf;
+layout(set = 0, binding = 1) coherent buffer ChildrenDone { uint children_done[]; }   done_buf;
+
+layout(push_constant) uniform Push { uint n_int; } pc;
+
+const uint kRightBit  = 0x80000000u;
+const uint kIndexMask = 0x7FFFFFFFu;
+
+void main()
+{
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.n_int) { return; }
+
+    // Fast non-atomic check — skip if not exactly 2. If 2, we still need
+    // the atomicCompSwap below to acquire-publish prior bounds writes.
+    if (done_buf.children_done[i] != 2u) { return; }
+
+    // Atomically claim this node: only one thread (this one — i is unique
+    // per dispatch invocation) sets done[i] = 3. CompSwap also acts as an
+    // acquire on done_buf, which combined with `coherent` on nodes_buf
+    // makes prior children's bounds-writes visible.
+    if (atomicCompSwap(done_buf.children_done[i], 2u, 3u) != 2u) { return; }
+
+    // Read both children's bounds (inlined in our own struct at offsets
+    // 4..9 and 10..15).
+    uint base = i * 16u;
+    vec3 lo0 = vec3(uintBitsToFloat(nodes_buf.nodes[base + 4u]),
+                    uintBitsToFloat(nodes_buf.nodes[base + 5u]),
+                    uintBitsToFloat(nodes_buf.nodes[base + 6u]));
+    vec3 hi0 = vec3(uintBitsToFloat(nodes_buf.nodes[base + 7u]),
+                    uintBitsToFloat(nodes_buf.nodes[base + 8u]),
+                    uintBitsToFloat(nodes_buf.nodes[base + 9u]));
+    vec3 lo1 = vec3(uintBitsToFloat(nodes_buf.nodes[base + 10u]),
+                    uintBitsToFloat(nodes_buf.nodes[base + 11u]),
+                    uintBitsToFloat(nodes_buf.nodes[base + 12u]));
+    vec3 hi1 = vec3(uintBitsToFloat(nodes_buf.nodes[base + 13u]),
+                    uintBitsToFloat(nodes_buf.nodes[base + 14u]),
+                    uintBitsToFloat(nodes_buf.nodes[base + 15u]));
+
+    vec3 lo = min(lo0, lo1);
+    vec3 hi = max(hi0, hi1);
+
+    // Get parent + my-side bit. Root has parent_idx == 0xFFFFFFFFu sentinel.
+    uint p_pkt = nodes_buf.nodes[base + 0u];
+    if (p_pkt == 0xFFFFFFFFu) { return; }       // root reached — done.
+
+    uint parent = p_pkt & kIndexMask;
+    uint slot   = (p_pkt & kRightBit) >> 31u;
+
+    // Scatter merged bounds into parent.bounds[slot].
+    uint pbase = parent * 16u + 4u + slot * 6u;
+    nodes_buf.nodes[pbase + 0u] = floatBitsToUint(lo.x);
+    nodes_buf.nodes[pbase + 1u] = floatBitsToUint(lo.y);
+    nodes_buf.nodes[pbase + 2u] = floatBitsToUint(lo.z);
+    nodes_buf.nodes[pbase + 3u] = floatBitsToUint(hi.x);
+    nodes_buf.nodes[pbase + 4u] = floatBitsToUint(hi.y);
+    nodes_buf.nodes[pbase + 5u] = floatBitsToUint(hi.z);
+
+    // Signal parent. atomicAdd on `coherent` done_buf + `coherent` nodes_buf
+    // makes our bounds write globally visible to the next dispatch's reader
+    // for this node's parent.
+    atomicAdd(done_buf.children_done[parent], 1u);
+}

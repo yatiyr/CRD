@@ -1,0 +1,165 @@
+#version 450
+
+// ---------------------------------------------------------------------------
+// LBVH fat-node tree-build kernel. Phase 3.1.7 v9a-c-followon elite-rewrite.
+//
+// MECHANICAL TRANSLATION of `build_lbvh_cpu` Phase A in lbvh.cpp (fat-node
+// version). Each of N-1 threads writes ONE internal node:
+//   - left_idx + right_idx (MSB = isLeaf flag)
+//   - fence (range endpoint trick for queries)
+//   - sentinel AABBs in bounds[0/1] (filled by upsweep)
+//   - For child internal nodes: fix up THEIR parent_idx (MSB = isRight)
+//   - For child leaves: write into leaf_parents[leaf_sorted_idx]
+//
+// Layout per LbvhFatNode (64 bytes, written as 16 u32 dwords):
+//   dword 0 : parent_idx          (MSB = right-child flag)
+//   dword 1 : left_idx            (MSB = leaf flag)
+//   dword 2 : right_idx           (MSB = leaf flag)
+//   dword 3 : fence
+//   dwords 4..9   : bounds[0]     (6 floats — min.xyz + max.xyz)
+//   dwords 10..15 : bounds[1]
+// Total = 16 u32 = 64 bytes. Matches C++ LbvhFatNode.
+//
+// Each invocation only writes:
+//   - SELF's left_idx, right_idx, fence (dwords 1, 2, 3 of own node)
+//   - SELF's bounds[0], bounds[1] (sentinel-init)
+//   - CHILDREN's parent_idx (dword 0 of each internal-child)
+//   - leaf_parents[leaf_sorted_idx] for each leaf-child
+//
+// (SELF's parent_idx is written by SELF's parent; root's parent_idx is
+// initialised externally to 0xFFFFFFFF by a fill-buffer pass before the
+// kernel runs.)
+// ---------------------------------------------------------------------------
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+// Sorted pairs (Morton, original_index) — input. Used for δ tiebreaking on
+// equal codes (D164).
+layout(set = 0, binding = 0) readonly buffer InPairs
+{
+    uint pairs[];       // [2*k] = code, [2*k+1] = index
+} in_pairs;
+
+// Output: fat-node array. Written as flat u32 dwords; we map to the
+// 16-dword-per-node layout described above.
+layout(set = 0, binding = 1) buffer OutNodes
+{
+    uint nodes[];
+} out_nodes;
+
+// Output: leaf-parents lookup. leaf_parents[k] = packed (parent_internal_idx,
+// is_right_bit_in_MSB) for leaf k (sorted position).
+layout(set = 0, binding = 2) writeonly buffer OutLeafParents
+{
+    uint leaf_parents[];
+} out_leaf_parents;
+
+layout(push_constant) uniform Push
+{
+    uint n;             // primitive count
+} pc;
+
+const uint kLeafBit  = 0x80000000u;
+const uint kRightBit = 0x80000000u;
+
+// δ — common high-bit count of augmented (code, index) keys.
+int delta_fn(int i, int j)
+{
+    if (j < 0 || j >= int(pc.n)) { return -1; }
+    uint ki = in_pairs.pairs[2u * uint(i) + 0u];
+    uint kj = in_pairs.pairs[2u * uint(j) + 0u];
+    if (ki != kj)
+    {
+        return 31 - findMSB(ki ^ kj);
+    }
+    uint idx_xor = uint(i) ^ uint(j);
+    return 32 + (idx_xor == 0u ? 32 : (31 - findMSB(idx_xor)));
+}
+
+void main()
+{
+    uint i_u = gl_GlobalInvocationID.x;
+    if (i_u >= pc.n - 1u) { return; }
+    int  i = int(i_u);
+
+    // -- determineRange --
+    int d_pos = delta_fn(i, i + 1);
+    int d_neg = delta_fn(i, i - 1);
+    int d     = (d_pos > d_neg) ? 1 : -1;
+    int delta_min = (d == 1) ? d_neg : d_pos;
+    int l_max = 2;
+    while (delta_fn(i, i + l_max * d) > delta_min) { l_max *= 2; }
+    int l = 0;
+    for (int t = l_max / 2; t >= 1; t /= 2)
+    {
+        if (delta_fn(i, i + (l + t) * d) > delta_min) { l += t; }
+    }
+    int j_idx = i + l * d;
+    int first = (d == 1) ? i : j_idx;
+    int last  = (d == 1) ? j_idx : i;
+
+    // -- findSplit --
+    int delta_node = delta_fn(first, last);
+    int s = 0;
+    int tt = last - first;
+    while (true)
+    {
+        tt = (tt + 1) / 2;
+        if (delta_fn(first, first + (s + tt)) > delta_node) { s += tt; }
+        if (tt <= 1) { break; }
+    }
+    int split = first + s;
+
+    bool left_is_leaf  = (split == first);
+    bool right_is_leaf = (split + 1 == last);
+
+    uint left_field  = uint(split);
+    uint right_field = uint(split + 1);
+    if (left_is_leaf)  { left_field  |= kLeafBit; }
+    if (right_is_leaf) { right_field |= kLeafBit; }
+
+    uint fence_val = (i == first) ? uint(last) : uint(first);
+
+    // -- Write SELF's left/right/fence (and sentinel-init bounds) --
+    uint base = i_u * 16u;
+    out_nodes.nodes[base + 1u] = left_field;
+    out_nodes.nodes[base + 2u] = right_field;
+    out_nodes.nodes[base + 3u] = fence_val;
+    // Sentinel AABBs: min = +inf, max = -inf so a union with us is no-op.
+    float pinf = uintBitsToFloat(0x7F800000u);
+    float ninf = uintBitsToFloat(0xFF800000u);
+    out_nodes.nodes[base +  4u] = floatBitsToUint(pinf);
+    out_nodes.nodes[base +  5u] = floatBitsToUint(pinf);
+    out_nodes.nodes[base +  6u] = floatBitsToUint(pinf);
+    out_nodes.nodes[base +  7u] = floatBitsToUint(ninf);
+    out_nodes.nodes[base +  8u] = floatBitsToUint(ninf);
+    out_nodes.nodes[base +  9u] = floatBitsToUint(ninf);
+    out_nodes.nodes[base + 10u] = floatBitsToUint(pinf);
+    out_nodes.nodes[base + 11u] = floatBitsToUint(pinf);
+    out_nodes.nodes[base + 12u] = floatBitsToUint(pinf);
+    out_nodes.nodes[base + 13u] = floatBitsToUint(ninf);
+    out_nodes.nodes[base + 14u] = floatBitsToUint(ninf);
+    out_nodes.nodes[base + 15u] = floatBitsToUint(ninf);
+
+    // -- Fix up CHILDREN's parent_idx (or leaf_parents[]) --
+    // Left child:
+    if (left_is_leaf)
+    {
+        // leaf at sorted position `split` — its parent is me (i), as left.
+        out_leaf_parents.leaf_parents[uint(split)] = uint(i);  // MSB=0 → left
+    }
+    else
+    {
+        // internal child at index split: write its parent_idx field (dword 0).
+        out_nodes.nodes[uint(split) * 16u + 0u] = uint(i);     // MSB=0 → left
+    }
+    // Right child:
+    if (right_is_leaf)
+    {
+        out_leaf_parents.leaf_parents[uint(split + 1)] = kRightBit | uint(i);
+    }
+    else
+    {
+        out_nodes.nodes[uint(split + 1) * 16u + 0u] = kRightBit | uint(i);
+    }
+}

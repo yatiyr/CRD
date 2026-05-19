@@ -1,6 +1,6 @@
 // ---------------------------------------------------------------------------
 // CPU Morton-code reference implementation. THE ALGORITHM DEFINITION.
-// The GPU kernel (runtime/examples/shaders/compute_morton_codes.comp) is
+// The GPU kernel (engine/geometry-bvh-gpu/shaders/compute_morton_codes.comp) is
 // a mechanical translation of the per-element loop body below.
 // ---------------------------------------------------------------------------
 

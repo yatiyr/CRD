@@ -8,8 +8,11 @@
 # Slice ledger:
 #   v9a-a  compute_morton_codes_{cpu,gpu}    30-bit Morton bit-interleave
 #                                            of AABB centroids (this slice).
-#   v9a-b1 radix_sort_cpu                    Deterministic CPU sort of
-#                                            (morton, original_index) pairs.
+#   v9a-b1 sort_morton_pairs<KeyT>           Deterministic CPU stable LSD
+#                                            radix sort of (morton, original
+#                                            index) pairs. Templated over
+#                                            KeyT in {u32, u64} (D136 REVISED
+#                                            2026-05-18).
 #   v9a-b2 radix_sort_gpu                    Blelloch parallel-scan; 8 passes
 #                                            on 4-bit digits over 30-bit keys.
 #   v9a-c  build_lbvh_{cpu,gpu}              Karras 2012 prefix-length-
@@ -48,6 +51,7 @@ target_link_libraries(crd-geometry-bvh-gpu
         crd-units           # for `Length<T>` / `Quantity<D, T>` typed wrappers (v9a-a-typed)
         crd-geometry-primitives
         crd-geometry-bvh    # for `BvhTree` / `BvhNode` output types at v9a-c
+        crd-jobs            # for `sort_morton_pairs_parallel` (v9a-b1-parallel)
         crd-rhi             # for the backend-agnostic Device / Buffer / dispatch surface
     PRIVATE
         crd-rhi-vulkan      # impl-only — module is intended to be Vulkan-only initially

@@ -457,7 +457,7 @@ TEST_CASE("Shader runtime reflects compute workgroup size from local_size layout
     crd::shader::EffectDesc desc;
     desc.name = crd::containers::String("compute_v0e_reflection");
     desc.frontend_modules.push_back(
-        {source_path("runtime/examples/shaders/compute_v0e_reflection.comp"),
+        {source_path("tests/rhi_vulkan/shaders/compute_v0e_reflection.comp"),
          crd::shader::Stage::Compute, crd::containers::String("main")});
     const auto effect = runtime->create_effect(desc);
     REQUIRE(effect.is_valid());
@@ -516,7 +516,7 @@ TEST_CASE("Shader runtime reflects specialization constants by constant_id + nam
     crd::shader::EffectDesc desc;
     desc.name = crd::containers::String("compute_v0e_reflection");
     desc.frontend_modules.push_back(
-        {source_path("runtime/examples/shaders/compute_v0e_reflection.comp"),
+        {source_path("tests/rhi_vulkan/shaders/compute_v0e_reflection.comp"),
          crd::shader::Stage::Compute, crd::containers::String("main")});
     const auto effect = runtime->create_effect(desc);
 
@@ -588,7 +588,7 @@ TEST_CASE("Compute Effect reload_effect succeeds with last-good preserved on suc
     crd::shader::EffectDesc desc;
     desc.name = crd::containers::String("compute_reloadable");
     desc.frontend_modules.push_back(
-        {source_path("runtime/examples/shaders/compute_v0e_reflection.comp"),
+        {source_path("tests/rhi_vulkan/shaders/compute_v0e_reflection.comp"),
          crd::shader::Stage::Compute, crd::containers::String("main")});
     const auto effect = runtime->create_effect(desc);
     REQUIRE(effect.is_valid());

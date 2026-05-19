@@ -1,0 +1,148 @@
+#version 450
+
+// ---------------------------------------------------------------------------
+// LBVH fat-node upsweep — carry-register pattern (KittenGpuLBVH §mergeUpKernel).
+// Phase 3.1.7 v9a-c-followon elite-rewrite.
+//
+// **KEY INSIGHT (Lesson: bounds-co-located-with-parent is the elite layout):**
+// Each leaf-thread starts at its leaf, carries the leaf's bounds in REGISTER
+// memory (the `carried_*` locals), and walks UP via parent_idx. At each level
+// it writes the carried bounds into the parent's `bounds[isRight]` slot, then
+// atomically signals. The second arriver at a parent reads the SIBLING's slot
+// (in the SAME 64-byte cache line as the parent's struct) and unions with the
+// register-carried bounds.
+//
+// **Why this beats compact-node atomic-counter walks:**
+//   - No random tree-walk reads. The sibling's bounds are at parent.bounds[1-is_right]
+//     — same cache line as the parent's struct. Single line load.
+//   - Running accumulator stays in registers. Zero global-memory reads for it.
+//   - No separate bounds[] buffer.
+//
+// **`coherent` is load-bearing here (Lesson 09).** GLSL atomicAdd provides
+// acquire-release on the atomic location only; for our cross-invocation
+// non-atomic bounds writes to be visible to subsequent reads we must use
+// the `coherent` qualifier on the nodes buffer.
+// ---------------------------------------------------------------------------
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+// Fat-node array — `coherent` for cross-invocation visibility of bounds[]
+// writes. v9a-c-perf-tune 2026-05-18 measured `coherent` vs `volatile +
+// memoryBarrierBuffer()`: both ~7.4 ms at 1 M, within noise. `coherent` is
+// the cleaner idiom; kept.
+layout(set = 0, binding = 0) coherent buffer Nodes
+{
+    uint nodes[];
+} nodes_buf;
+
+// Leaf-parent lookup: leaf_parents[k] = (parent_internal_idx | (isRight ? MSB : 0)).
+layout(set = 0, binding = 1) readonly buffer InLeafParents
+{
+    uint leaf_parents[];
+} in_leaf_parents;
+
+// Atomic "did sibling finish?" counter per internal node.
+layout(set = 0, binding = 2) coherent buffer ChildrenDone
+{
+    uint children_done[];
+} done_buf;
+
+// Input sorted pairs — used to derive each leaf's prim index → leaf bounds.
+layout(set = 0, binding = 3) readonly buffer InSortedPairs
+{
+    uint pairs[];       // [2*k] = code, [2*k+1] = original prim index
+} in_sorted_pairs;
+
+// Input leaf AABBs (indexed by ORIGINAL primitive index, NOT sorted order).
+layout(set = 0, binding = 4) readonly buffer InLeafAabbs
+{
+    float aabbs[];      // 6 floats per AABB (min.xyz, max.xyz)
+} in_leaf_aabbs;
+
+layout(push_constant) uniform Push
+{
+    uint n;     // primitive count
+} pc;
+
+const uint kRightBit  = 0x80000000u;
+const uint kIndexMask = 0x7FFFFFFFu;
+
+// Read parent_idx (with isRight bit) of an internal node.
+uint load_parent_idx(uint internal_idx)
+{
+    return nodes_buf.nodes[internal_idx * 16u + 0u];
+}
+
+// Write carried bounds into parent.bounds[slot] (slot = 0 for left, 1 for right).
+// Bounds are 6 floats at offsets:
+//   base + 4..9   = bounds[0]
+//   base + 10..15 = bounds[1]
+void store_slot(uint parent_internal, uint slot, vec3 lo, vec3 hi)
+{
+    uint base = parent_internal * 16u + 4u + slot * 6u;
+    nodes_buf.nodes[base + 0u] = floatBitsToUint(lo.x);
+    nodes_buf.nodes[base + 1u] = floatBitsToUint(lo.y);
+    nodes_buf.nodes[base + 2u] = floatBitsToUint(lo.z);
+    nodes_buf.nodes[base + 3u] = floatBitsToUint(hi.x);
+    nodes_buf.nodes[base + 4u] = floatBitsToUint(hi.y);
+    nodes_buf.nodes[base + 5u] = floatBitsToUint(hi.z);
+}
+
+// Read parent.bounds[slot] for the union with our register-carried bounds.
+void load_slot(uint parent_internal, uint slot, out vec3 lo, out vec3 hi)
+{
+    uint base = parent_internal * 16u + 4u + slot * 6u;
+    lo = vec3(uintBitsToFloat(nodes_buf.nodes[base + 0u]),
+              uintBitsToFloat(nodes_buf.nodes[base + 1u]),
+              uintBitsToFloat(nodes_buf.nodes[base + 2u]));
+    hi = vec3(uintBitsToFloat(nodes_buf.nodes[base + 3u]),
+              uintBitsToFloat(nodes_buf.nodes[base + 4u]),
+              uintBitsToFloat(nodes_buf.nodes[base + 5u]));
+}
+
+void main()
+{
+    uint thread_id = gl_GlobalInvocationID.x;
+    if (thread_id >= pc.n) { return; }
+
+    // Initial carried bounds = this leaf's AABB.
+    uint prim_idx = in_sorted_pairs.pairs[2u * thread_id + 1u];
+    uint a_base   = prim_idx * 6u;
+    vec3 carried_lo = vec3(in_leaf_aabbs.aabbs[a_base + 0u],
+                            in_leaf_aabbs.aabbs[a_base + 1u],
+                            in_leaf_aabbs.aabbs[a_base + 2u]);
+    vec3 carried_hi = vec3(in_leaf_aabbs.aabbs[a_base + 3u],
+                            in_leaf_aabbs.aabbs[a_base + 4u],
+                            in_leaf_aabbs.aabbs[a_base + 5u]);
+
+    // Initial parent + which-side I am.
+    uint pkt        = in_leaf_parents.leaf_parents[thread_id];
+    uint parent     = pkt & kIndexMask;
+    uint is_right   = (pkt & kRightBit) >> 31u;
+
+    // Walk up.
+    while (true)
+    {
+        // Publish my carried bounds into parent's slot.
+        store_slot(parent, is_right, carried_lo, carried_hi);
+
+        // Atomic: signal "I arrived." atomicAdd returns the count BEFORE
+        // increment; if 0, I'm the first arriver — stop.
+        uint prior = atomicAdd(done_buf.children_done[parent], 1u);
+        if (prior == 0u) { return; }
+
+        // Second arriver: read sibling's slot (same cache line as the
+        // store above) and union with carried bounds. `coherent` on
+        // nodes_buf guarantees the first arriver's write is visible.
+        vec3 sib_lo, sib_hi;
+        load_slot(parent, 1u - is_right, sib_lo, sib_hi);
+        carried_lo = min(carried_lo, sib_lo);
+        carried_hi = max(carried_hi, sib_hi);
+
+        // Walk up — read parent's parent_idx (and is_right bit).
+        uint p_pkt = load_parent_idx(parent);
+        if (p_pkt == 0xFFFFFFFFu) { return; }  // root reached
+        parent   = p_pkt & kIndexMask;
+        is_right = (p_pkt & kRightBit) >> 31u;
+    }
+}

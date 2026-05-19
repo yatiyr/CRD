@@ -1895,43 +1895,333 @@ GLSL/HLSL cooker emit) — these CONSUME Phase 3.1.7.6 substrate
 - **v9c-b-parallel** — parallel candidate plane evaluation via
   `crd::jobs::parallel_for` (currently sequential per cluster).
 
-## §25 Amendment (planned) — v9a / v9b `-gpu` LBVH decisions
+## §25 Amendment (2026-05-18) — `crd-geometry-bvh-gpu` cluster CLOSED
 
-**Status:** 📋 planned — locks at v9a-close. **Consumes Phase 3.1.7.6
-`crd-rhi-compute` substrate (ADR-0080).**
+**Status:** ✅ Accepted — locks 33 design decisions (D132-D164) from
+the v9a `-gpu` LBVH cluster. Consumes Phase 3.1.7.6 `crd-rhi-compute`
+substrate (ADR-0080).
 
-Decisions to lock at v9a-close (Karras 2012):
-- Morton bit depth: 30-bit (3 × 10-bit per axis, fits in `u32`) vs
-  60-bit (3 × 20-bit per axis, fits in `u64`) — pin based on
-  geometric-tail collision rate on Cerid test corpora.
-- Sort policy: CPU deterministic (v9a-b1 — ships first) + GPU
-  throughput-tier (v9a-b2 — follow-on, ULP-conformance against v9a-b1).
-- AABB upsweep: atomic-on-parent (1-pass, faster, harder determinism)
-  vs 2-pass per-level barriers (slower, fully deterministic). Pinned
-  at v9a-d slice start.
-- Conformance contract: GPU LBVH topology bit-identical-vs-CPU
-  `bvh_build` + AABBs within 1 ULP for finite well-formed inputs.
-- Performance budget: 1M primitives in <8 ms on RTX 3060 (research
-  §4.1).
-- v9b GPU BVH refit: topology untouched, AABBs recomputed in single
-  compute dispatch with atomics for parent-join phase.
+**v9b GPU BVH refit + 60-bit LBVH variant remain planned slices** —
+their decisions are sub-cases of D132-D164 and lock when those slices
+ship; this amendment captures the architectural shape they will
+inherit.
 
-## §26 Amendment (planned) — v9e `-shader-helpers` decisions
+### What shipped
 
-**Status:** 📋 planned — locks at v9e-close. **Consumes Phase 3.1.7.6
-`crd-rhi-compute` substrate (ADR-0080) for the ULP-conformance test
-path (compiles emitted GLSL/HLSL, dispatches against C++ reference).**
+The v9a cluster delivered 10 slices across 2026-05-18 in a single
+sprint, plus 4 v9a-a follow-ons:
 
-Decisions to lock at v9e-close:
-- Formula-IR schema (primitive nodes + operator nodes + parameter
-  binding; future-proof for crd-sdf v5 GPU consumer + crd-font MTSDF).
-- GLSL target version (`#version 450` minimum to match graphics
-  pipeline).
-- HLSL target version (HLSL 6.0 minimum for dxc).
-- ULP-conformance threshold (1 ULP at 64³ sample grid — pin or relax
-  per primitive if HW intrinsic divergence forces it).
-- Cooker integration model (CMake-target vs runtime-cooker — currently
-  pinned CMake-target; emit lands in `build/<preset>/assets/cooked/
-  sdf_helpers/`).
-- First-consumer wire-up (`crd-renderer` Phase 3.5+ DFAO sandbox
-  demo scene; specify the consumption API).
+1. **v9a-a** — 30-bit Morton CPU oracle + GPU dispatch.
+2. **v9a-a-typed** — `Length<T>` typed AABB wrappers (ADR-0078 §5 D34).
+3. **v9a-60bit-cpu** — u64 60-bit Morton CPU oracle (km-scale).
+4. **v9a-a-async-compute** — RHI compute-family command pool + dedicated-compute-queue dispatch.
+5. **v9a-60bit-gpu** — u64 60-bit Morton GPU dispatch with shaderInt64 capability gate.
+6. **v9a-b1** — CPU stable LSD radix sort of `(Morton, index)` pairs (`KeyT ∈ {u32, u64}` templated).
+7. **v9a-b2** — GPU LSD radix sort with prefix-sum scatter (deterministic, byte-identical to CPU).
+8. **v9a-b1-simd** — investigated SOTA SWWC/AVX2; only the one-line `_mm_prefetch` wins at MB scale.
+9. **v9a-b1-parallel** — 3-phase deterministic parallel CPU radix via `crd-jobs` (1.86× speedup).
+10. **v9a-c** — LBVH tree-build + AABB upsweep, fully queryable end-to-end. Elite-combined slice that absorbs originally-separate v9a-d.
+
+Total: ~5 600 LOC engine + ~3 800 LOC tests, ~71 test cases / ~827 K assertions across the new `crd-geometry-bvh-gpu` module. 5-config DoD green on every slice; 18-config full sweep at v9a-close.
+
+### Locked design decisions
+
+#### Module shape
+
+- **D132** — NEW sibling module `crd-geometry-bvh-gpu`, NOT additions to existing `crd-geometry-bvh`. Mirror of `crd-rhi` / `crd-rhi-vulkan` split. Keeps the CPU BVH module CPU-only (no Vulkan dependency); future GPU geometry kernels (refit, traversal, query) land here too.
+- **D135** — `MortonGpuPipeline` value-type, ctor-cached pipeline objects, sync-compute via `graphics_queue()` by default. **Append new pure-virtuals at END** of RHI interfaces — inserting in middle silently dispatches to wrong method under win-release LTCG (case study at Phase 3.1.7.6 v0-close 2026-05-17).
+
+#### Algorithm + scale parameters
+
+- **D133** — 30-bit Morton bit depth as the default (3 × 10-bit per axis, `u32`). Covers ~1 m precision at 100 m scenes; ~10 cm at 10 m. Sufficient for game / VFX / DAW workloads.
+- **D138 / D140** — 60-bit Morton path (`u64`, 3 × 20-bit) ships as `v9a-60bit-cpu` + `v9a-60bit-gpu` (CPU oracle + GPU dispatch with `shaderInt64` capability gate). Required for km-scale CAD / aerospace / planetary-scale scenes where 30-bit collides at 1 m/bin. GPU path graceful-degrades to invalid pipeline if `shaderInt64` unavailable.
+
+#### CPU IS the algorithm definition
+
+- **D134** — CPU reference IS the algorithm definition. Write CPU sequential first; GPU GLSL is a mechanical translation. Any divergence in GPU output vs CPU is a bug, asserted by `bit_compare`. **Discipline scales to 60-bit (D138), to GPU radix (v9a-b2 against v9a-b1), to LBVH (D157 against CPU build_lbvh_cpu).**
+- **D157** — CPU `build_lbvh_cpu<KeyT>` is THE algorithm definition for the entire LBVH cluster (v9a-c+d combined). GPU `LbvhGpuPipeline::dispatch_build_lbvh` is mechanically equivalent; conformance via `bit_compare<BvhNode>` on topology + `ulp_compare<AABB3<f32>>` (1 ULP) on bounds.
+
+#### Typed-API substrate (ADR-0078 §5 D34)
+
+- **D137** — `morton_typed.hpp` strip-compute-retag wrappers (`Length<T>`-typed AABBs at the API surface; raw `f32`/`u32` internally). Morton codes stay raw (dimensionless bit indices, not lengths).
+
+#### Async-compute substrate
+
+- **D139** — New `Device::create_command_buffer_for_queue(Queue&)` virtual on `crd::rhi::Device` (appended at END per D135). Vulkan backend lazy-creates a compute-family `VkCommandPool` when dedicated. Pointer-identity-based dispatch routing (per D9 contract). True non-blocking async (caller-owned fence) is future work when a consumer needs overlap.
+
+#### Sort substrate (v9a-b1/b2/-simd/-parallel)
+
+- **D136 (revised 2026-05-18)** — `sort_morton_pairs<KeyT>` is templated over key width from day 1, with BOTH `KeyT=u32` AND `KeyT=u64` instantiated and tested. The original deferral was the substrate-as-speculation mistake; the refined `[[ship-at-consumer-template-from-day-one]]` rule says: substrate work with settled design + cheap tests ships proactively.
+- **D141** — CPU sort algorithm = stable LSD radix sort with 8-bit digit, NOT `crd::containers::sort` (merge). Documented divergence from phase-doc literal text. Reason: 1 ms / 1 M-element budget is unattainable under O(N log N) merge (~50–100 ms measured). Karras 2012 §4 names radix as the canonical LBVH sort step.
+- **D142** — Pair layout = AoS `MortonPair<KeyT>`. `sizeof(MortonPair<u32>) == 8`; `sizeof(MortonPair<u64>) == 16`. Both static_asserted to lock the v9a-b2 GPU SSBO layout contract.
+- **D143** — Stability via LSD-radix's natural property + monotonic-ascending input-index construction. Equal Morton codes ⇒ lower input index wins emerges automatically.
+- **D144** — Pair index width fixed at `u32` (4 B-element ceiling asserted at entry). Lifts to `u64` if/when a downstream consumer needs > 4 G primitives.
+- **D145** — At 1 M-element / 8 MB-working-set scale, the elite single-thread radix is **scalar + scatter-side prefetch**. Three SOTA alternatives investigated and ruled out: AVX2 sub-histograms (0.45× — AVX2 has no vector scatter), Wassenberg SWWC (0.66× — L2-resident working set doesn't trigger the RAM-bound regime SWWC attacks), multi-pass histogram fusion (marginal).
+- **D146** — GPU radix scatter = prefix-sum scatter, NOT atomic-counter scatter. Output is bit-deterministic across runs *and* byte-identical to the v9a-b1 CPU oracle. Phase-doc "throughput-tier (non-deterministic by atomic ordering)" wording dissolved: byte-identical-to-CPU conformance is worth more than the marginal throughput advantage at 4-bit digit + 1024 items/block.
+- **D147** — GPU radix N hard-cap at `kRadixMaxItems = 1 M`. Scan kernel handles exactly `kRadixMaxBlocks = 1024` blocks per dispatch via single-workgroup per-bin Hillis-Steele scan. `v9a-b2-large` recursive-scan follow-on filed for beyond.
+- **D148** — Pipeline geometry: workgroup 256 threads × 4 items/thread = 1024 items per block; scan workgroup 256 × 4 = 1024 block-entries per scan. Shared memory budget ≈ 6 KiB, comfortably inside the Vulkan-portable 16 KiB floor.
+- **D149** — Pair SSBO layout: `MortonPair<u32>` ↔ flat `uint pairs[]` at offsets `[2k+0]`, `[2k+1]`. Pairs ping-pong from pass 0; even pass count (8 for 30-bit/4-bit-digit) ⇒ final output terminates in `pairs_a`.
+- **D150** — CPU scalar+prefetch distance = 8 iterations ahead. Covers the ~40-cycle L1 miss latency at the inner loop's ~5-cycle/iter IPC. Determinism unaffected: prefetch is a HINT, never a write.
+- **D151** — Future >5 ms paths for CPU radix (not actionable at single-thread scale today): parallel-radix via `crd-jobs` (shipped at D152-D155) + AVX-512 `vpscatterdd` hardware scatter (when CI matrix adds it).
+- **D152** — Parallelism dispatched via `crd::jobs::parallel_for(num_jobs, num_jobs, fn)` chunk-index pattern. Chunk-index → chunk-range mapping deterministic across runs (`i * N / num_jobs`); worker-thread assignment is non-deterministic (work-stealing). Merge keys on chunk index, not worker ID.
+- **D153** — Stability across worker boundaries delivered via the per-(chunk, bucket) scatter offset table in Phase 2. Chunk i+1's items in bucket B start strictly after chunk i's items. Combined with within-chunk left-to-right visit, global monotonic-input-index stability holds. The discriminating tests are 4096-equal-keys-across-all-workers + cross-chunk-equal-keys + num_jobs ∈ {1,2,4,8,16} byte-identity.
+- **D154** — Parallel threshold = 65 536 elements. Below this, per-pass parallel overhead (2 barriers + Phase-2 serial + worker-wakeup) exceeds the saving.
+- **D155** — Realistic parallel-CPU speedup is **bandwidth-bound, not core-bound**. 1.86× on 8 cores (not 8×) because all cores share L3/RAM bus. For sub-ms throughput use GPU (v9a-b2). This is the correct number for the algorithm + hardware combination.
+
+#### LBVH tree + upsweep substrate (v9a-c, elite combined slice)
+
+- **D156** — Output uses canonical `BvhNode` struct + `BvhTree` layout (siblings consecutive: `parent.left_first → left_child_idx; right at left_child_idx + 1`). Karras's natural output uses index-range to distinguish internal vs leaf; a post-build DFS reorder rewrites into Cerid's canonical layout. `prim_count != 0` is the leaf marker.
+- **D158** — Internal-node AABBs computed in the SAME slice (v9a-c absorbs originally-separate v9a-d). Per `feedback_quality_bar`: shipping topology-with-sentinel-AABBs would be a half-built deliverable.
+- **D159** — **Upsweep uses Karras 2012 §2.4 atomic-counter parent-walk.** The phase doc's open question ("atomic-on-parent vs 2-pass per-level barriers") DISSOLVES. Karras's approach is BOTH faster (1 dispatch vs log₂N barriers) AND bit-deterministic (AABB union is commutative+associative; whichever thread arrives second writes the parent; output bit-identical regardless of arrival order).
+- **D160** — Tree-build is one GPU dispatch with N-1 threads (one internal node each); leaf bounds are uploaded directly to the bounds buffer at Karras-native leaf indices (N-1..2N-2). No separate leaf-emit kernel needed.
+- **D161** — Auxiliary `child_left` / `child_right` / `parent` / `children_done` GPU buffers live only during build+upsweep, freed before return. Keeps `BvhNode` at its locked 32-byte invariant.
+- **D162** — Conformance contract: `bit_compare<BvhNode>` byte-identical on topology fields (left_first, prim_count) + within-1-ULP tolerance on internal-node AABBs. The 1-ULP tolerance is necessary because atomic-counter upsweep's commutative AABB union may reorder operands across runs — FP-equivalent but not bit-equivalent at signed-zero / infinity edge cases.
+- **D163** — GPU output goes through CPU-side post-build reorder for canonical BvhTree layout (so the same `bvh_query` traversal works on CPU SAH BVH and GPU LBVH). Pure-GPU reorder kernel filed as `v9a-c-gpu-reorder` follow-on for GPU-resident consumers (eylem v1c GPU broadphase, occlusion culling).
+- **D164** — Karras `delta` equal-key tiebreak via input indices as a secondary key (treat `(code, index)` as an extended key; δ = code_bits + clz(index_xor)). Load-bears on stable-sort property from v9a-b1/b2 — equal codes produce monotonic indices, so this tiebreak makes tree topology deterministic on degenerate input.
+
+#### Operational discipline surfaced
+
+- **GLSL `coherent` + `memoryBarrierBuffer` discipline** — captured in Lesson 09 (`docs/lessons/09-gpu-memory-ordering-gotchas.md`). GLSL `atomicAdd` provides acquire-release on the atomic location ONLY; non-atomic cross-invocation writes need `coherent` qualifier. The bug surfaced at N=10 000 oracle in v9a-c, invisible at smaller N because shorter walks happen to flush writes between work units. Now standard discipline for any future GPU shader with atomic-coordinated cross-invocation memory access.
+
+### Performance pin
+
+Two numbers, both honest:
+
+- **Pure-GPU pipeline (v9a-c-gpu-reorder follow-on, GPU-resident input + output)**: estimated **~5-8 ms / 1M primitives on RTX 3060** (research §4.1 target). Pure compute = ~1-2 ms Morton + ~1-2 ms sort + ~1-2 ms LBVH-build + ~1 ms upsweep ≈ 4-7 ms. Achievable when the consumer pipeline stays GPU-resident.
+- **Test-harness end-to-end on dev box (current measurement)**: **53.7 ms / 1M primitives win-shipping median-of-5**. Includes CPU↔GPU transfers + CPU-side Phase C reorder per D163. Dev box GPU is integrated/lower-tier than RTX 3060.
+
+The 53.7 ms ↔ ~5-8 ms gap is explained by (a) ~25-30 ms PCIe transfer + readback overhead, (b) several ms CPU-side reorder, (c) dev-box GPU is not RTX 3060 class. **The 8 ms target is achievable when v9a-c-gpu-reorder ships AND the consumer pipeline is GPU-resident** — both filed for the consumer-pull era.
+
+### Filed follow-ons (not part of v9a-close)
+
+- **v9b GPU BVH refit** — topology untouched, AABBs recomputed in single compute dispatch with atomics for parent-join. Same coherent + memoryBarrier discipline as v9a-c. Consumer: eylem v1c dynamic-body broadphase per-frame.
+- **v9a-c-gpu-reorder** — pure-GPU canonical-layout reorder kernel; lifts the CPU-side reorder bottleneck (D163). Required for end-to-end GPU-resident pipeline at the 8 ms target.
+- **v9a-c-60bit** — u64 60-bit LBVH variant (mechanical scale-up of D157 to `KeyT=u64`). For km-scale CAD/aerospace consumers.
+- **v9a-b2-large / v9a-c-large** — recursive-scan / multi-pass variants beyond `kRadixMaxItems = 1 M`. For consumers with N > 1 M primitives.
+- **v9a-b2-atomics** — throughput-tier GPU radix that trades determinism for speed (atomic-counter scatter). Filed if a real consumer needs the marginal speedup.
+
+### Sweep result
+
+18-config `scripts/full-sweep.ps1` — see v9a-close session log for the
+config-by-config result table.
+
+Cluster closes here. ADR-0076 §25 ✅ Accepted.
+
+## §26 Amendment (2026-05-19) — v9e `-shader-helpers` cluster CLOSED
+
+**Status:** ✅ Accepted — locks 16 design decisions (D166-D181) from
+the v9e `-shader-helpers` cluster. Consumes Phase 3.1.7.6
+`crd-rhi-compute` substrate (ADR-0080) + `crd::shader::compile_glsl` +
+new sibling `crd::shader::compile_hlsl` for full GPU verification.
+
+### What shipped
+
+The v9e cluster delivered 4 slices across 2026-05-18 — 2026-05-19:
+
+1. **v9e-a** (2026-05-18) — Formula-IR substrate: flat 3-array tree
+   storage + `IrBuilder` fluent API + `validate(ir)` + `evaluate<T>(ir, p)`
+   C++ ground-truth + 21 hand-built golden manifests.
+2. **v9e-b** (2026-05-18) — GLSL backend + ULP-conformance GPU dispatch:
+   `glsl_helpers_prelude()` + `emit_glsl_sdf_function` +
+   `emit_glsl_conformance_shader` + 21 manifests × 32³ samples verified
+   via `compile_glsl` (shaderc) → SPIR-V → Vulkan dispatch against
+   `evaluate<float>` ground truth.
+3. **v9e-c** (2026-05-19) — HLSL backend (line-for-line mirror) +
+   structural-parity test, then same-day `v9e-c-dxc-spirv-dispatch`
+   follow-on: new `crd::shader::compile_hlsl` dxc-dynamic-load + full
+   GPU verification (21 manifests × 32³ samples).
+4. **v9e-d** (2026-05-19) — Cooker library: `cook_helpers_prelude` +
+   `cook_ir` write GLSL + HLSL to disk via `crd::platform::fs`.
+
+Total: ~2 940 LOC engine + ~1 560 LOC tests + ~210 LOC `compile_hlsl`
+addition to `crd-shader`. 4-config DoD green on every slice
+(`scripts/per-slice-check.ps1`).
+
+### Locked design decisions
+
+#### Module shape
+
+- **D166** — Module name `crd-geometry-shader-helpers`. 11th and final
+  sibling under the `crd-geometry` umbrella (joining `-primitives` /
+  `-bvh` / `-convex` / `-mesh` / `-mesh-processing` / `-spatial` /
+  `-polygon` / `-delaunay` / `-decomposition` / `-bvh-gpu`). Library
+  only — no executable; cooker is a function call from a consumer.
+
+#### Formula-IR schema
+
+- **D167** — **Flat 3-array storage:** `Array<IrNode>` nodes +
+  `Array<f32>` params pool + `Array<u32>` children pool + `u32` root
+  index. NOT pointers / NOT `std::variant`. Reasons: (a) cache-friendly
+  walk (contiguous nodes), (b) bit-exact serialisation for the cooker
+  (no pointer fix-up on load — copy 3 arrays + root), (c) O(1)
+  bounds-check validation (every reference is an array index), (d)
+  GPU-portable (same layout transfers to SSBO + GLSL walk for future
+  GPU-side IR interp).
+- **D168** — `IrNode` discriminated via `IrNodeKind` (`Primitive` /
+  `Operator`) + inner kind enum: `IrPrimKind` covers 10 primitives
+  (Sphere / Box / RoundBox / BoxFrame / Plane / Capsule / Cylinder /
+  Cone / Torus / Triangle3D); `IrOpKind` covers 11 operators
+  (SminPoly / SminCubic / SminExp / SmaxPoly / OpRound / OpOnion /
+  DomainRepeat / DomainMirror / DomainElongate / DomainTwist /
+  DomainBend). Set is **fixed at v9e-close** — additions are
+  additive (append new enum values, never reorder) per the
+  vtable-stability discipline class.
+- **D169** — Per-kind param/child counts fixed by spec (e.g. Sphere = 1
+  param, 0 children; SminPoly = 1 param, 2 children). `validate(ir)`
+  enforces. No variable-arity nodes — keeps the IR walker uniform
+  across backends.
+
+#### Evaluation + conformance
+
+- **D170** — **C++ ground-truth evaluator IS the algorithm
+  definition.** `evaluate<T>(ir, p) -> T` (template on
+  `T ∈ {f32, f64}`) walks the IR and produces the value GLSL/HLSL
+  backends MUST match. Mirrors the `crd-geometry-bvh-gpu`
+  CPU-IS-algorithm-definition discipline (D134 / D157). Any divergence
+  is a bug in the emitter, not the evaluator.
+- **D171** — **21 hand-built golden manifests** as the conformance
+  corpus: one per primitive (10) + one per operator (11). Every backend
+  (GLSL, HLSL, future GPU IR-interp, future formula-cooker variants)
+  tests against every manifest at every conformance run. Manifest list
+  is **closed at v9e-close** — adding a new primitive/operator (D168)
+  also adds a new golden manifest in the same slice.
+
+#### Backends
+
+- **D172** — **GLSL target = `#version 450 core` + compute pipeline.**
+  HLSL target = **HLSL 6.0 + dxc `-spirv -fspv-target-env=vulkan1.3`**.
+  450/SM 6.0 covers every feature the emitted helpers use (compute
+  shaders, storage buffers, `[[vk::push_constant]]`, `floatBitsToUint`
+  / `asuint`). Raising the floor needs a real consumer request.
+- **D173** — **Conformance tolerance = mixed ULP+absolute** (1 ULP OR
+  1e-6 absolute). The phase-doc original "1 ULP at 64³" pin
+  **explicitly relaxes here.** Reason: catastrophic cancellation near
+  zero crossings (e.g. `domain_bend` near the bend axis) makes pure-ULP
+  impossible to hit while still being numerically correct (subtracting
+  two near-equal values amplifies relative error). The absolute
+  fallback catches signed-zero / near-zero cases that ULP semantics
+  overflow on. Was load-bearing on getting `smin_exp` /
+  `domain_twist` / `domain_bend` from 4.6 M ULP down to bounded under
+  realistic test inputs. **Sample grid = 32³**, not 64³ — adequate
+  primitive coverage at lower test runtime.
+- **D174** — **Deterministic Cephes-poly port** emitted into BOTH
+  preludes: `crd_det_sin / cos / exp / exp2 / log / log2`. Replaces
+  GPU-native intrinsics on transcendental-using operators (`smin_exp`,
+  `domain_twist`, `domain_bend`). Mirrors
+  `crd::math::deterministic::*` polynomial approximations
+  bit-for-bit on the approximation range. Without this port,
+  CPU↔GPU divergence on transcendentals exceeds 1 ULP across vendors.
+- **D175** — **SSA emission style, NOT nested-expression.** Each IR
+  node becomes a `float n_<i>` local; position-domain operators
+  (`domain_repeat` / `_mirror` / `_elongate` / `_twist` / `_bend`)
+  introduce a `vec3 p_<i>` warp local for their child. Required for
+  warp composition readability: a nested form like
+  `sd_sphere(domain_twist(p, 2.0), 0.1)` collapses when warps compose
+  (chains of inlined warps become unreadable, impossible at depth).
+  SSA emission is uniform regardless of depth.
+- **D176** — **Critical GLSL/HLSL implementation pins** (catalogued so
+  re-derivation isn't needed): (i) `crd_sign_bit` returns mask
+  (`0` or `0x80000000`) NOT 0/1 — `domain_bend` went from 4.6 M ULP
+  to 14 ULP with this fix; (ii) `smin_poly` uses `kk = k * 4.0`
+  internally to match C++ — initially used `k` directly, gave
+  747 448 ULP error → 2 ULP after fix; (iii) `smin_cubic` uses
+  `kk = k * 6.0` (same fix class); (iv) GLSL identifier collisions:
+  `max3` → `crd_max3` (clashes with `GL_NV_shader_extension`),
+  `flat` → `flat_idx` (reserved keyword).
+
+#### Cooker integration
+
+- **D177** — **Cooker shipped as a LIBRARY API**
+  (`cook_helpers_prelude` + `cook_ir`), NOT a CMake-target. The
+  original §26-planned "CMake-target vs runtime-cooker"
+  decision-fork dissolves toward library-first: a library is
+  composable into both build-time CMake targets AND editor-time tools
+  AND test fixtures. CMake build-time integration
+  (`crd_cook_sdf_manifest()` helper) filed as `v9e-d-cmake`
+  follow-on (consumer-pull).
+- **D178** — **Per-SDF file contains ONLY the SDF function** (no
+  prelude). Prelude written once per output dir as
+  `sdf_helpers.{glsl,hlsl}`. Consumers `#include` the prelude
+  alongside per-SDF files. Mirrors Inigo Quilez `iqlibs` pattern;
+  deduplicates the heavy text (~5 KB prelude) across many cooked SDFs.
+- **D179** — **Idempotent overwrite, NOT skip-if-exists.** Re-running
+  the cooker after source changes must produce new content. Matches
+  build-time cooker semantics; skip-if-exists would silently mask
+  source updates.
+- **D180** — `CookResult{ok, error_message, emitted_paths}` reports
+  first-failure path + message and short-circuits on filesystem
+  failure. Multi-error reporting adds complexity for no benefit; if a
+  write fails, the filesystem is the problem and all subsequent writes
+  will fail too.
+
+#### First-consumer wire-up
+
+- **D181** — **First consumer (renderer DFAO sampler) wires via
+  cooked-file consumption** — renderer reads cooked text + compiles
+  via runtime `compile_glsl` / `compile_hlsl`. **No direct C++ runtime
+  dependency** on `crd-geometry-shader-helpers`. The cooker is a
+  cooker, not a hot-path library. Path: designer authors IR (C++ or
+  future TOML manifest) → cooker emits `.glsl` + `.hlsl` → renderer
+  loads cooked text → `compile_glsl` / `compile_hlsl` → SPIR-V →
+  Vulkan dispatch.
+
+### Substrate-side enabler (`crd-shader` module gains `compile_hlsl`)
+
+The `v9e-c-dxc-spirv-dispatch` follow-on shipped a new sibling to
+`compile_glsl` in `crd-shader`:
+
+- New `crd::shader::compile_hlsl(stage, source, name, alloc) ->
+  CompileResult` (mirror of `compile_glsl`'s dynamic-load shape).
+- Dynamically loads `dxcompiler.dll` from `VULKAN_SDK/Bin` (Vulkan SDK
+  ships dxc next to shaderc).
+- COM-style API (`IDxcCompiler3` / `IDxcUtils` / `IDxcResult` /
+  `IDxcBlob`) with explicit `QueryInterface` / `Release` refcount
+  management — kept the dependency footprint minimal vs pulling in
+  `CComPtr`.
+- Args fixed to `-T cs_6_0 -E cs_main -spirv -fspv-target-env=vulkan1.3`
+  for compute. Vertex/Fragment use `-T vs_6_0 / ps_6_0` + entry `main`.
+- `engine/shader/CMakeLists.txt` gained `find_path(CRD_DXC_INCLUDE_DIR
+  …)` fatal-error if missing.
+- Required `#include <windows.h> + <unknwn.h>` BEFORE `<dxc/dxcapi.h>`
+  on Windows (dxc headers depend on Windows COM types being already
+  pulled in).
+
+This addition is part of the v9e-close package because the
+HLSL-on-GPU verification path that closes D170 / D173 / D174 for the
+HLSL backend would otherwise be impossible.
+
+### Cluster cross-validation
+
+- All 4 slices' tests run on every per-slice DoD config
+  (`win-debug + win-asan + win-shipping + win-tidy`); the 5-config
+  variant (`+win-release`) was used during v9e-c follow-on to catch
+  LTCG miscompiles on the `compile_hlsl` COM lifetime paths.
+- `crd-geometry-shader-helpers-tests` binary: 21 cases / 910
+  assertions PASS (incl. 5 cases / 190 assertions for v9e-d cooker
+  added 2026-05-19).
+- `compile_hlsl` shares the dynamic-load + dependency-not-found
+  graceful-skip pattern with `compile_glsl` (per the `crd-shader`
+  module convention).
+
+### Filed follow-ons (not part of v9e-close)
+
+- **v9e-d-toml** — TOML manifest format + parser so designers can
+  author SDFs as text files instead of C++ code. Ships when a
+  designer-driven consumer arrives (likely Phase 3.5+ editor).
+- **v9e-d-cmake** — CMake `crd_cook_sdf_manifest()` build-time helper
+  that registers a manifest as a build-time dependency + runs the
+  cooker. Ships when the renderer DFAO pipeline lands.
+- **v9e-d-crdr-pack** — pack cooked files into a CRDR asset bundle for
+  runtime load. Ships when the resources loader needs it.
+- **v9e-glsl-versions** — `#version 460` support and SPIR-V 1.6 target
+  if a future consumer needs the newer features (subgroup ops,
+  bindless). Settled-design; ships when a renderer asks.
+- **v9e-d3d12-native** — direct D3D12 backend HLSL consumption (no
+  dxc → SPIR-V → Vulkan detour). Ships when Cerid gains a D3D12
+  backend. Current cooked HLSL drops in directly — no shader
+  re-authoring needed (D172 already pins HLSL 6.0).
+
+Cluster closes here. ADR-0076 §26 ✅ Accepted. **Phase 3.1.7 v9
+cluster: §24 + §25 + §26 all locked.** Remaining in Phase 3.1.7:
+v9-close (cluster wrap + 18-config sweep) → v10 `-curves` (5 slices)
+→ v11 transform-aware (~2 days) → Phase 3.1.7 fully closes.

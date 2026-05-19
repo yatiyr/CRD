@@ -1,0 +1,181 @@
+#version 450
+
+// ---------------------------------------------------------------------------
+// LSD radix sort — SCAN kernel. Phase 3.1.7 v9a-b2.
+//
+// Single-workgroup scan over the block histograms. Computes, for every
+// (block, bin) cell, the GLOBAL output start position when this block's
+// items in that bin are scattered.
+//
+// Input:
+//   block_hist[wg_id * 16 + bin] = count of items in workgroup `wg_id`
+//                                   whose current-pass digit equals `bin`.
+// Output:
+//   scatter_off[wg_id * 16 + bin] = global start position in pair_out for
+//                                    this (wg_id, bin) tuple.
+//
+// Algorithm — per-bin parallel prefix scan inside a single workgroup:
+//
+//   For each bin in 0..15 (sequential within workgroup):
+//     1. Each of 256 threads loads `kRadixMaxBlocks / 256 = 4` adjacent
+//        block-counts into s_scan (4 KiB).
+//     2. Per-thread serial exclusive scan over its 4 elements; thread
+//        running-sum lands in s_thread_sum[tid].
+//     3. Hillis-Steele inclusive scan of the 256 thread-sums (8 steps).
+//     4. Convert s_thread_sum to exclusive prefix (thread_prefix = sum
+//        of all thread chunks before this thread).
+//     5. Each thread writes its 4 exclusive prefixes to scatter_off
+//        (no bin_offset yet).
+//     6. s_bin_total[bin] = inclusive sum at thread 255 (the grand total
+//        of this bin across all blocks).
+//
+//   Then sequentially:
+//     7. Thread 0 scans s_bin_total → s_bin_offset (16-element scan).
+//     8. All 256 threads patch scatter_off in place: add s_bin_offset[bin]
+//        to each cell.
+//
+// Determinism: pure-integer arithmetic, no atomics across threads, fixed
+// reduction order ⇒ byte-deterministic across runs (the v9a-b2 D146
+// contract).
+//
+// Shared memory budget:
+//   s_scan       [1024] = 4 KiB
+//   s_thread_sum [256]  = 1 KiB
+//   s_bin_total  [16]   = 64 B
+//   s_bin_offset [16]   = 64 B
+//   Total ≈ 5 KiB — well inside the Vulkan 16 KiB portability floor.
+//
+// kRadixMaxBlocks = 1024 (host-shared via radix_sort.hpp). For larger
+// scenes, the v9a-b2-large recursive-scan follow-on kicks in.
+// ---------------------------------------------------------------------------
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) readonly buffer InBlockHist {
+    uint hist[];        // hist[block * 16 + bin]
+} in_block_hist;
+
+layout(set = 0, binding = 1) writeonly buffer OutScatter {
+    uint off[];         // off[block * 16 + bin] = global scatter start
+} out_scatter;
+
+layout(push_constant) uniform Push
+{
+    uint num_blocks;    // actual block count this dispatch (<= 1024)
+} pc;
+
+const uint kMaxBlocks = 1024u;          // mirrors host kRadixMaxBlocks
+const uint kPerThread = 4u;             // 1024 / 256
+
+shared uint s_scan       [kMaxBlocks];
+shared uint s_thread_sum [256];
+shared uint s_bin_total  [16];
+shared uint s_bin_offset [16];
+// Per-thread chunk-sum captured BEFORE the s_thread_sum gets transformed
+// by Hillis-Steele scan. Needed because step 4 wants original chunk-sum
+// (not the prefix) to convert inclusive prefix back to exclusive.
+shared uint s_chunk_sum  [256];
+
+void main()
+{
+    uint tid = gl_LocalInvocationID.x;
+    uint thread_base = tid * kPerThread;
+
+    // -----------------------------------------------------------------
+    // Pass 1: per-bin parallel scan over `num_blocks` block-counts.
+    // -----------------------------------------------------------------
+    for (uint bin = 0u; bin < 16u; ++bin)
+    {
+        // Step 1 — load this thread's 4 block-counts. Out-of-range (block
+        // index >= num_blocks) loads zero so the scan still produces a
+        // well-defined output for unused cells.
+        for (uint k = 0u; k < kPerThread; ++k)
+        {
+            uint blk = thread_base + k;
+            uint v   = (blk < pc.num_blocks)
+                        ? in_block_hist.hist[blk * 16u + bin]
+                        : 0u;
+            s_scan[blk] = v;
+        }
+        barrier();
+
+        // Step 2 — per-thread serial exclusive scan over its 4 elements.
+        // After this, s_scan[base..base+3] hold the within-chunk
+        // exclusive prefix; chunk_sum is the total count in this chunk.
+        uint chunk_sum = 0u;
+        for (uint k = 0u; k < kPerThread; ++k)
+        {
+            uint v = s_scan[thread_base + k];
+            s_scan[thread_base + k] = chunk_sum;
+            chunk_sum += v;
+        }
+        s_thread_sum[tid] = chunk_sum;
+        s_chunk_sum [tid] = chunk_sum;     // immutable copy for inclusive→exclusive
+        barrier();
+
+        // Step 3 — Hillis-Steele inclusive scan over the 256 chunk-sums.
+        // 8 sequential steps with one barrier per step.
+        for (uint stride = 1u; stride < 256u; stride <<= 1u)
+        {
+            uint v = (tid >= stride) ? s_thread_sum[tid - stride] : 0u;
+            barrier();
+            s_thread_sum[tid] += v;
+            barrier();
+        }
+        // s_thread_sum[tid] is now INCLUSIVE chunk-prefix.
+
+        // Step 4 — derive per-thread exclusive prefix.
+        uint thread_prefix = s_thread_sum[tid] - s_chunk_sum[tid];
+
+        // Step 5 — write exclusive prefix (block-level) back to scatter_off.
+        // Each thread writes its 4 cells. Out-of-range cells skipped.
+        for (uint k = 0u; k < kPerThread; ++k)
+        {
+            uint blk = thread_base + k;
+            if (blk < pc.num_blocks)
+            {
+                out_scatter.off[blk * 16u + bin] = thread_prefix + s_scan[blk];
+            }
+        }
+
+        // Step 6 — capture bin total. Last thread holds the inclusive
+        // sum of the entire workgroup's chunk sums = total count of this
+        // bin across all blocks.
+        if (tid == 255u)
+        {
+            s_bin_total[bin] = s_thread_sum[255u];
+        }
+        barrier();
+    }
+
+    // -----------------------------------------------------------------
+    // Pass 2: exclusive scan of 16 bin totals → bin offsets.
+    // Trivial 16-element scan, one thread.
+    // -----------------------------------------------------------------
+    if (tid == 0u)
+    {
+        uint running = 0u;
+        for (uint b = 0u; b < 16u; ++b)
+        {
+            s_bin_offset[b] = running;
+            running += s_bin_total[b];
+        }
+    }
+    barrier();
+
+    // -----------------------------------------------------------------
+    // Pass 3: patch scatter_off cells in-place. Each thread bumps
+    // kPerThread × 16 = 64 cells. We re-derive (block, bin) from idx.
+    // Total cells = num_blocks * 16 (<= 16384).
+    // -----------------------------------------------------------------
+    uint n_cells = pc.num_blocks * 16u;
+    for (uint k = 0u; k < 64u; ++k)
+    {
+        uint idx = tid * 64u + k;
+        if (idx < n_cells)
+        {
+            uint bin = idx & 0xFu;          // idx % 16
+            out_scatter.off[idx] += s_bin_offset[bin];
+        }
+    }
+}

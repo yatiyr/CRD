@@ -1,0 +1,66 @@
+#version 450
+
+// ---------------------------------------------------------------------------
+// LBVH fat-node upsweep PASS 1 — leaf-AABB scatter.
+// Phase 3.1.7 v9a-c-perf-tune (2026-05-18 elite kernel rewrite).
+//
+// **N threads, one per leaf.** Each leaf-thread:
+//   1. Reads its leaf AABB (via prim_idx indirection).
+//   2. Writes the AABB to its parent's `bounds[is_right]` slot.
+//   3. atomicAdd `children_done[parent]` by 1.
+//
+// **No walking.** This is a one-shot scatter. The atomicAdd signals the
+// parent that one child has deposited its bounds. After this dispatch:
+//   - For parents of two leaves: done[parent] = 2 (ready for merge).
+//   - For parents of one leaf + one internal: done[parent] = 1 (waiting).
+//   - For parents of two internals: done[parent] = 0.
+//
+// The subsequent `lbvh_fat_merge_level.comp` dispatches iterate up the tree:
+// each dispatch advances exactly one level (nodes with done == 2 process,
+// merge, and signal their parent).
+// ---------------------------------------------------------------------------
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) coherent buffer Nodes { uint nodes[]; }            nodes_buf;
+layout(set = 0, binding = 1) readonly buffer InLeafParents { uint leaf_parents[]; } in_leaf_parents;
+layout(set = 0, binding = 2) coherent buffer ChildrenDone { uint children_done[]; } done_buf;
+layout(set = 0, binding = 3) readonly buffer InSortedPairs { uint pairs[]; }    in_sorted_pairs;
+layout(set = 0, binding = 4) readonly buffer InLeafAabbs { float aabbs[]; }     in_leaf_aabbs;
+
+layout(push_constant) uniform Push { uint n; } pc;
+
+const uint kRightBit  = 0x80000000u;
+const uint kIndexMask = 0x7FFFFFFFu;
+
+void main()
+{
+    uint k = gl_GlobalInvocationID.x;
+    if (k >= pc.n) { return; }
+
+    // Leaf AABB lookup (prim_idx → leaf_aabbs[prim_idx * 6]).
+    uint prim_idx = in_sorted_pairs.pairs[2u * k + 1u];
+    uint a_base   = prim_idx * 6u;
+    vec3 lo = vec3(in_leaf_aabbs.aabbs[a_base + 0u],
+                    in_leaf_aabbs.aabbs[a_base + 1u],
+                    in_leaf_aabbs.aabbs[a_base + 2u]);
+    vec3 hi = vec3(in_leaf_aabbs.aabbs[a_base + 3u],
+                    in_leaf_aabbs.aabbs[a_base + 4u],
+                    in_leaf_aabbs.aabbs[a_base + 5u]);
+
+    // Parent + which side.
+    uint pkt    = in_leaf_parents.leaf_parents[k];
+    uint parent = pkt & kIndexMask;
+    uint slot   = (pkt & kRightBit) >> 31u;
+
+    // Scatter into parent.bounds[slot]. base + 4..9 = bounds[0]; 10..15 = bounds[1].
+    uint base = parent * 16u + 4u + slot * 6u;
+    nodes_buf.nodes[base + 0u] = floatBitsToUint(lo.x);
+    nodes_buf.nodes[base + 1u] = floatBitsToUint(lo.y);
+    nodes_buf.nodes[base + 2u] = floatBitsToUint(lo.z);
+    nodes_buf.nodes[base + 3u] = floatBitsToUint(hi.x);
+    nodes_buf.nodes[base + 4u] = floatBitsToUint(hi.y);
+    nodes_buf.nodes[base + 5u] = floatBitsToUint(hi.z);
+
+    atomicAdd(done_buf.children_done[parent], 1u);
+}

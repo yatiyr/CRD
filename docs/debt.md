@@ -5,6 +5,41 @@ move to a session log entry and remove from here.
 
 ## Active debt
 
+### ✅ Phase 3.1.7 v9a-b1 follow-on — AVX2 vectorised CPU radix sort — CLOSED 2026-05-18 (same day as filing)
+
+> **STATUS — CLOSED 2026-05-18.** Investigated three SOTA radix techniques
+> via web research (Wassenberg 2010, Satish 2010 Intel paper, RADULS Kokot
+> 2017) + measured median-of-5 on win-shipping with `/O2 /LTCG /OPT:ICF
+> /arch:AVX2`. All three were SLOWER than scalar at the 1 M u32 / 8 MB
+> working set:
+>
+> - AVX2 8-wide SoA sub-histograms: 0.45x (slower; AVX2 has no vector scatter)
+> - Wassenberg SWWC + AVX2 burst flush: 0.63x (slower; L2-resident working
+>   set doesn't trigger the RAM-bound regime SWWC attacks)
+> - Multi-pass histogram fusion: marginal benefit offset by extra allocation
+>
+> **Winning technique = scatter-side prefetch.** Single `_mm_prefetch` hint
+> 8 iterations ahead of the actual store: **5.32 ms → 4.99 ms = 1.07x on
+> 1 M u32 win-shipping median-of-5**. Determinism intact (prefetch is a
+> hint, never writes state); output byte-identical to v9a-b1 reference
+> (40 134 assertions across 20-case adversarial corpus preserved).
+>
+> Final perf headroom on 1 M u32: 4.99 ms measured vs **20 ms asserted
+> NDEBUG budget = 4.0x**.
+>
+> Pinned design decisions D145 (scalar+prefetch is elite at this scale),
+> D150 (prefetch distance = 8 iters covers ~40-cycle L1 miss), D151
+> (parallel-radix + AVX-512 vpscatterdd filed for a future consumer that
+> hits the wall) for ADR-0076 §25 amendment at v9a-close.
+>
+> Session log + sources + full negative-finding write-up:
+> `docs/sessions/2026-05-18-geometry-v9a-b1-simd-close.md`.
+>
+> **Future >5 ms paths if a consumer ever surfaces the need:**
+> - Parallel radix via `crd-jobs::parallel_for` (bandwidth-bound ⇒ 2-3x
+>   from cores, with deterministic per-worker stable-merge).
+> - AVX-512 `vpscatterdd` true vector scatter (not in current CI matrix).
+
 ### ✅ Phase 3.1.7 v9a-a — four follow-ons PAID 2026-05-18 (same day as filing + reversal)
 
 > **STATUS — CLOSED 2026-05-18.** All 4 follow-on slices shipped same day:
