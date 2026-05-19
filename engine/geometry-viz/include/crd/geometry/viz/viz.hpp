@@ -24,5 +24,6 @@
 // ---------------------------------------------------------------------------
 
 #include <crd/geometry/viz/bvh.hpp>
+#include <crd/geometry/viz/curves.hpp>
 #include <crd/geometry/viz/primitives.hpp>
 #include <crd/geometry/viz/queries.hpp>

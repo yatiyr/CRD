@@ -949,6 +949,10 @@ void SandboxLayer::on_update(crd::f64 delta_seconds)
         {
             render_draw_showcase(m_showcase, m_draw_buffer);
         }
+        else if (m_scene == SandboxScene::CurvesShowcase)
+        {
+            render_curves_showcase(m_curves_showcase, m_draw_buffer, *m_eylem_alloc);
+        }
     }
 }
 
@@ -1209,7 +1213,8 @@ void SandboxLayer::on_render()
     ImGui::SetNextWindowSize({420.0F, 480.0F}, ImGuiCond_FirstUseEver);
     ImGui::Begin("Scene", nullptr);
     {
-        static const char* k_scene_names[] = {"Physics demo", "Geometry showcase", "Draw API showcase"};
+        static const char* k_scene_names[] = {"Physics demo", "Geometry showcase", "Draw API showcase",
+                                               "Curves showcase"};
         int sc = static_cast<int>(m_scene);
         if (ImGui::Combo("Scene", &sc, k_scene_names, IM_ARRAYSIZE(k_scene_names)))
         {
@@ -1245,7 +1250,7 @@ void SandboxLayer::on_render()
             ImGui::Separator();
             draw_geometry_showcase_imgui(m_showcase);
         }
-        else // DrawShowcase
+        else if (m_scene == SandboxScene::DrawShowcase)
         {
             ImGui::TextWrapped(
                 "Draw API showcase: exercises crd-draw's high-level shape API (axis_triad, "
@@ -1254,6 +1259,17 @@ void SandboxLayer::on_render()
             ImGui::Separator();
             ImGui::DragFloat("line width (px)", &m_showcase.line_width, 0.1F, 0.5F, 8.0F);
             ImGui::Checkbox("show origin triad", &m_showcase.show_origin_triad);
+        }
+        else // CurvesShowcase
+        {
+            ImGui::TextWrapped(
+                "Curves showcase: every crd-geometry-curves kind (Polyline / Bezier / Hermite / "
+                "Catmull-Rom / B-Spline / arcs / helix). Adjust control points + sample count + "
+                "frame mode (Off / Frenet / RMF Wang 2008). Physics paused.");
+            ImGui::Separator();
+            ImGui::DragFloat("line width (px)", &m_curves_showcase.line_width, 0.1F, 0.5F, 8.0F);
+            ImGui::Separator();
+            draw_curves_showcase_imgui(m_curves_showcase);
         }
     }
     ImGui::End();

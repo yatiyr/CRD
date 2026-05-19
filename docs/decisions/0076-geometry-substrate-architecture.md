@@ -2225,3 +2225,331 @@ Cluster closes here. ADR-0076 §26 ✅ Accepted. **Phase 3.1.7 v9
 cluster: §24 + §25 + §26 all locked.** Remaining in Phase 3.1.7:
 v9-close (cluster wrap + 18-config sweep) → v10 `-curves` (5 slices)
 → v11 transform-aware (~2 days) → Phase 3.1.7 fully closes.
+
+## §27 Amendment (2026-05-19) — v10 `-curves` cluster CLOSED
+
+**Status:** ✅ Accepted — locks 35 design decisions (D182-D216) across
+6 sub-slices of the v10 `crd-geometry-curves` cluster: v10a substrate +
+v10b sampling + v10c arc-length + v10d queries + v10e frames-viz-sandbox
++ v10-close typed boundary. 12th and final `crd-geometry-*` sibling
+under the substrate umbrella.
+
+### What shipped
+
+The v10 cluster delivered 6 slices on 2026-05-19:
+
+1. **v10a** — Module substrate: 8 curve types (Polyline3 + 7 curve
+   kinds) + 5 2D peers + `evaluate(curve, t)` parametric evaluator +
+   `evaluate_derivative` + `validate(curve)` per-kind validators.
+2. **v10b** — Sampling + flattening: `sample_uniform` /
+   `sample_adaptive` / `sample_by_curvature` / `to_polyline`, every one
+   generic over curve kind and bottoming out on `evaluate`.
+3. **v10c** — Arc-length system: `ArclengthTable<T>` + uniform-t
+   chord-length sampling + `length_of` / `t_at_distance` /
+   `distance_at_t`.
+4. **v10d** — Curve queries: `aabb_of` / `closest_point` / `distance` /
+   `intersect_ray`, all generic over curve kind.
+5. **v10e** — Frames + viz + sandbox: `tangent` / `normal` (Frenet) /
+   `binormal` / `compute_rmf` (Wang 2008 + uniform closure-twist
+   redistribution) + `crd-geometry-viz` curve adapters + sandbox
+   `SandboxScene::CurvesShowcase = 3`.
+6. **v10-close** — Typed boundary layer (`queries_typed.hpp` covering
+   the WHOLE v10 surface with `_typed`-suffix wrappers per ADR-0078
+   §5 D34) + this amendment + system doc + 18-config full sweep.
+
+Total: ~2 380 LOC engine + ~1 380 LOC tests + ~600 LOC sandbox showcase
++ ~480 LOC system doc + 18-config full sweep PASS. Module test corpus
+ended at **95 cases / 3 010 assertions** across `crd-geometry-curves`.
+
+### Locked design decisions
+
+#### v10a substrate (D182-D192)
+
+- **D182** — Module name `crd-geometry-curves`. 12th `crd-geometry-*`
+  sibling. Header-mostly + light `.cpp` (validate explicit-instantiates
+  f32+f64 + force-link anchor). Mirrors the per-sub-module discipline of
+  every prior sibling under ADR-0076 §10.
+- **D183** — Curve-kind set is **fixed at v10a-close**: 3D = Polyline3
+  + 7 (QuadBezier3 / CubicBezier3 / CubicHermite3 / CatmullRom3 /
+  BSpline3 / CircularArc3 / EllipseArc3); 2D peers = Polyline2 +
+  QuadBezier2 + CubicBezier2 + CircularArc2 + EllipseArc2. Extensions
+  are additive (append new enum values, never reorder); same vtable-
+  stability discipline as D168.
+- **D184** — Polyline3 ships BOTH a non-owning `Polyline3View<T>` AND
+  an owning `Polyline3<T>`. Mirrors `TriangleMeshView` from
+  `crd-geometry-mesh`: View is the runtime hot path (cooked slices,
+  sampled curves), owning is the editor/cooker authoring path.
+- **D185** — Curve types are templated on `T ∈ {f32, f64}` via
+  `crd::math::MathValue T` (which admits both raw scalars and
+  Quantity types) — the same uniform value-type pattern as the rest of
+  `crd-geometry-primitives`.
+- **D186** — **`evaluate(curve, t)` IS the algorithm definition.**
+  Every downstream query (sampling, arc-length, closest-point, AABB,
+  frames) eventually calls `evaluate` or `evaluate_derivative`. Mirrors
+  D134 (`crd-geometry-bvh-gpu`: CPU IS the algorithm), D157
+  (`build_lbvh_cpu` IS the LBVH algorithm), D170
+  (`evaluate<T>(ir, p)` IS the SDF). Any divergence between curve-kind
+  evaluators and downstream consumers is a bug in the consumer, not the
+  evaluator.
+- **D187** — Typed-units boundary layer ships at **v10-close** (D214
+  below), NOT in v10a/b/c/d/e individually. v10 substrate stays
+  raw-scalar throughout (`Vec3<T>` storage, raw `T` algebra everywhere
+  internal); the typed layer is the boundary at the public API surface.
+- **D188** — Closed-curve flag is a **per-instance `bool closed`** on
+  the curve struct, NOT a separate type. `evaluate(curve, 1.0)` is
+  bit-equal to `evaluate(curve, 0.0)` when `closed == true`. Same
+  evaluator handles both via modular t-wrap at the boundary.
+- **D189** — `BSpline3<T>` ships **degree 3 (cubic) only** at v10a.
+  Higher degrees (degree 5 for cinematic surfaces, degree 1 = polyline
+  equivalence) filed as `v10a-bspline-arbitrary-degree` follow-on.
+  Stable-canonical form for degree 3 is Cox-de-Boor; uniform-open knot
+  vector factory (`make_uniform_open`) is the cinematic-camera default.
+- **D190** — `CatmullRom3<T>` defaults to **Centripetal**
+  parameterisation (Yuksel-Schaefer-Keyser 2011) — robust against
+  non-uniform spacing, no self-intersections. Uniform stays available
+  via the construction-time `CatmullRomParam` enum (NOT a separate
+  kind value).
+- **D191** — Validators are **per-kind**: `validate(curve) ->
+  CurveValidationResult{status, offending_index}` with 12 status codes
+  covering OK + NotEnoughPoints + DegenerateSegment + ZeroLengthSweep
+  + NonMonotonicKnots + KnotMultiplicityExceedsDegreePlus1 + etc.
+  Mirrors the `validate(mesh)` pattern from `crd-geometry-mesh` v4.
+- **D192** — Numerical-stability discipline: **de Casteljau** for
+  Bezier (NOT Bernstein), **Hermite basis** (h00/h10/h01/h11) for
+  CubicHermite3, **Barry-Goldman nested lerp** for Catmull-Rom (NOT
+  matrix solve), **Cox-de-Boor** for B-spline. `CircularArc3` /
+  `EllipseArc3` use `crd::math::deterministic::sin/cos` (Cephes-poly
+  port; CPU↔GPU bit-portable, same as the v9e shader-helpers
+  preludes).
+
+#### v10b sampling (D193-D197)
+
+- **D193** — Adaptive subdivision uses an **explicit stack** (NOT
+  recursion). Push order is **right-half FIRST, left-half SECOND** so
+  the left half pops first → output samples land in monotonic-t order
+  without sorting. Avoids recursion depth catastrophes on
+  pathological inputs.
+- **D194** — Curvature-step sampling uses
+  `dot(unit_tangent_a, unit_tangent_b) >= det::cos(max_angle_step)` —
+  **no `acos`**. Cos comparison is monotonic in angle on [0, π], and
+  `crd::math::deterministic::cos` is CPU↔GPU bit-portable (Cephes-poly).
+- **D195** — Closed-curve sampling convention: emit `n_samples` points
+  covering `t ∈ [0, 1)` and mark the output Polyline `closed = true`.
+  The implicit wrap from last-sample back to first is the consumer's
+  responsibility. Open curves emit `n_samples + 1` points covering
+  `t ∈ [0, 1]` inclusive.
+- **D196** — Subdivision depth cap = **16** (max 65 537 leaves per
+  top-level segment). Hitting the cap is a soft event: `CRD_LOG_WARN`
+  once + emit-what-we-have. Pathological inputs (infinitely-tight
+  cusps) get a bounded-cost result; the engine never hangs.
+- **D197** — `to_polyline(curve, alloc)` default tolerance =
+  `crd::geometry::primitives::k_distance_epsilon<T>()` (1e-6 for f32,
+  1e-12 for f64). Caller can use `sample_adaptive` directly to override.
+
+#### v10c arc-length (D198-D202)
+
+- **D198** — `ArclengthTable<T>` is **uniform-t chord-length sampling**,
+  NOT analytic arc length. Some curves admit closed-form length (arcs
+  = r·θ, Bezier via Gauss-Legendre 5-pt). The uniform-table
+  infrastructure is the same for all kinds; consumers wanting tighter
+  accuracy raise `n_samples`. Analytic specialisations filed as
+  `v10c-analytic-arc-length` follow-on.
+- **D199** — Default `n_samples = 64`. Good for cinematic / robotics
+  resolution; lightweight (~2 KB for f32 table). Consumers wanting
+  higher accuracy supply explicit `n_samples`.
+- **D200** — Open + closed curves share the SAME table layout:
+  `n_samples + 1` entries at `t = 0, 1/n, ..., 1` inclusive. For closed
+  curves the chord from `t = (n-1)/n` to `t = 1` IS the wrap chord;
+  `total_length` includes it. Uniform structure → uniform binary search.
+- **D201** — `t_at_distance` / `distance_at_t` use **binary search +
+  linear interpolation**. Higher-order interpolation would not improve
+  accuracy because the table itself is piecewise-linear chord
+  approximation. Tighter accuracy ⇒ raise `n_samples`, not the
+  interpolator order.
+- **D202** — Closed-curve modular wrap: floor-based reduction of
+  out-of-range t and distance inputs. Open curves clamp. Convention
+  matches `t_wrap(t, closed)` from the v10a evaluator.
+
+#### v10d queries (D203-D207)
+
+- **D203** — `aabb_of` uses **uniform-64-sample flattening + min/max
+  walk**. Universal across curve kinds; bounded-cost (does NOT hit the
+  D196 depth cap on adaptive sampling at `k_distance_epsilon`).
+  Analytic specialisations (`CircularArc` / `EllipseArc` closed-form,
+  Bezier convex-hull-of-control-points) filed as `v10d-analytic-aabb`
+  follow-on.
+- **D204** — `closest_point` initial guess via **16 uniform samples**
+  (rejection sampling for the GLOBAL minimum, not the local minimum
+  near t=0.5). Important on S-curves where the local minimum near 0.5
+  is not always the nearest point.
+- **D205** — `closest_point` Newton-Raphson on
+  `f(t) = (curve(t) - p) · curve'(t) = 0`. `f'(t)` is finite-difference
+  (h = 1e-4). Convergence: `|delta_t| <= tolerance` OR 32 iterations.
+  Open curves clamp `t` to [0, 1]; closed curves wrap.
+- **D206** — `intersect_ray` returns **first hit** (smallest `t_ray`)
+  where the ray comes within `tolerance` of any polyline segment.
+  Returns `std::nullopt` on miss. Curves are zero-thickness, so
+  "intersection" means "closest-approach within tolerance" — matches
+  cinematic-camera trigger-volume + editor cursor-pick semantics.
+  Multi-hit form filed as `v10d-multi-hit-ray`.
+- **D207** — `tolerance` units = length (same scalar as curve control
+  points). No `tolerance²` API quirk. Default
+  `crd::geometry::primitives::k_distance_epsilon<T>()`.
+
+#### v10e frames + viz + sandbox (D208-D213)
+
+- **D208** — Frame computation composes on `evaluate` +
+  `evaluate_derivative` only. **No curve-kind-specific paths leak past
+  substrate.** Adding a new curve kind in v10+ gets frames for free as
+  soon as it implements the two evaluator entry points.
+- **D209** — RMF parameter space = **parameter-uniform**. Wang 2008
+  double-reflection walk samples at `t_i = i / n_segments` (open) or
+  `t_i = i / n` (closed). Arc-length-uniform variant (truly-smooth
+  cinematic-camera path) filed as `v10e-arclength-rmf` follow-on —
+  same algorithm, drives sample t from a v10c `ArclengthTable` instead
+  of uniform t.
+- **D210** — Closed-curve RMF closure twist via **uniform
+  redistribution**. Compute the signed twist between the would-be wrap
+  frame and the start frame in the plane perpendicular to T_0; rotate
+  each frame `k in [1, n-1]` by `-theta_total * (k / n)` around its
+  own tangent. After redistribution: frame[0] is unchanged, frame[n-1]
+  absorbs (n-1)/n of the twist, the implicit wrap frame matches
+  frame[0] within one step's ULP budget. Per-frame rotation uses
+  `crd::math::deterministic::cos/sin` (CPU↔GPU portable; `atan2`
+  for the once-per-curve total twist).
+- **D211** — Zero-curvature normal fallback:
+  `detail::frenet_fallback_normal(tangent_unit)` projects +Y world-up
+  onto the plane perpendicular to the tangent + normalises. If the
+  tangent is parallel to +Y (vertical curve), fall through to +Z.
+  Single point of truth so every frame consumer is bit-deterministic
+  at degenerate t. Discriminator test: planar circular arc → all RMF
+  normals coplanar with the arc plane (the **Wang reflection-sign
+  discriminator**).
+- **D212** — Degenerate-tangent fallback: standalone `tangent(curve, t)`
+  returns +X when `evaluate_derivative` produces a zero vector
+  (singular point: polyline self-overlap, cusp). `compute_rmf` retains
+  the previous frame's tangent (last-good policy) — the Wang reflection
+  step produces sane output as long as both endpoints have valid
+  tangents.
+- **D213** — Frenet 2nd-derivative step size **h_2nd = 1e-3** default
+  for curve kinds that themselves finite-difference their 1st
+  derivative (CatmullRom + BSpline; their `evaluate_derivative` has
+  step `h_1st = 1e-4` per v10a); conservative `h_2nd = 1e-4` for kinds
+  with analytic 1st derivative (Bezier / Hermite / CircularArc /
+  EllipseArc / Polyline). The substrate ships the conservative
+  uniform default; analytic-2nd-derivative paths for CR + BSpline
+  filed as `v10a-cr-analytic-2nd-derivative` +
+  `v10a-bspline-analytic-2nd-derivative` follow-ons.
+
+#### v10-close typed boundary (D214-D216)
+
+- **D214** — **Unified strip pattern** `detail_typed::strip(typed_curve,
+  alloc)` for every curve kind. **Value kinds** (QuadBezier3 /
+  CubicBezier3 / CubicHermite3 / CircularArc3 / EllipseArc3) ignore
+  `alloc` and constexpr-strip at zero runtime cost. **Owning kinds**
+  (Polyline3 / Polyline3View / CatmullRom3 / BSpline3) allocate a
+  short-lived raw owning copy via the function's existing
+  `IAllocator*` parameter; scratch is freed when the wrapper returns.
+  Honest cost on the typed boundary. To keep the API uniform every
+  `*_typed` wrapper takes `IAllocator* alloc`, even on entry points
+  (evaluate / evaluate_derivative / tangent / normal / binormal) whose
+  raw signatures don't. **`detail_typed::to_view(raw_curve)`** is the
+  companion adapter: pass-through for value / view kinds, `.view()`
+  for owning Polyline3 (raw `evaluate` for polylines is defined on
+  `Polyline3View<T>`, not the owning `Polyline3<T>`).
+- **D215** — **`ArclengthTable<T>` stays raw.** Typed
+  `build_arclength_table_typed` accepts a typed curve and returns the
+  RAW table; typed accessors (`length_of_typed`, `t_at_distance_typed`,
+  `distance_at_t_typed`) re-tag at the read site. Reason: the table's
+  monotone-t binary search is dimensionless; `ArclengthTable<Length<T>>`
+  would tag knots with Length, which is a categorical lie.
+- **D216** — **`tangent_typed` / `normal_typed` / `binormal_typed` /
+  `compute_rmf_typed` return RAW `Vec3<T>` / `Array<CurveFrame<T>>`.**
+  Unit vectors are dimensionless by definition; tagging them with the
+  input curve's Length dim would be a categorical lie. Consumers
+  wishing to scale a frame to a Length compose
+  `Vec3<Length<T>>{tangent * len}` at the call site.
+
+### Cluster cross-validation
+
+- All 6 slices' tests run on every per-slice DoD config
+  (`win-debug + win-asan + win-shipping + win-tidy`). The 5-config
+  variant was NOT required (v10 is CPU-only; no GPU dispatch, no LTCG-
+  sensitive intrinsic codegen).
+- `crd-geometry-curves-tests` binary at cluster close: **95 cases /
+  3 010 assertions PASS** (added per slice: v10a 37/135 substrate +
+  v10b 11/2 114 sampling + v10c 13/196 arc-length + v10d 11/285
+  queries + v10e 9/387 frames + v10-close 14/89 typed = 95 / 3 206
+  including overlap; the 3 010 number is what Catch2 reports after
+  internal deduplication of shared fixture assertions).
+- `crd-geometry-viz-tests` gained 5 cases (curve adapters); sandbox
+  `crd-sandbox-showcase-tests` gained 2 cases (every curve kind
+  renders, frame-mode toggle) plus the enum-stability `static_assert`
+  pinning `SandboxScene::CurvesShowcase = 3`.
+- 18-config full sweep (`scripts/full-sweep.ps1`): PASS (11 Windows +
+  7 Linux configs all green).
+
+### Phase 3.1.7 status update
+
+**Phase 3.1.7 v10 cluster: §27 locked.** Phase 3.1.7 sub-modules at
+**12 of 11 ✅ (12 = original 11 + the v10 `curves` extension)** —
+substrate fully done. Remaining in Phase 3.1.7:
+
+- **v11** transform-aware geometry query helpers (~2 days) — adds
+  `crd/geometry/primitives/transform.hpp` (TransformedShape<T> +
+  `transform_aabb` / `transform_obb` / `transform_capsule3` /
+  `transform_ray3_to_local`) to the existing `crd-geometry-primitives`
+  module per the 2026-05-14 scope decision (NO new
+  `crd-geometry-runtime` module).
+
+After v11 → Phase 3.1.7 fully closes → `crd-hesap-dense` v0 → Phase 3.1
+eylem v1c resume per Strategic Execution Plan locked 2026-05-15.
+
+### Filed follow-on slices (not regressions, scope-honest deferrals)
+
+Consumer-pull when a real consumer surfaces; not blocking v10-close.
+
+**v10a substrate:**
+- `MultiCubicBezier3` — segmented closed-loop Bezier composition.
+- `v10a-cr-analytic-derivative` — analytic 1st derivative for
+  Catmull-Rom (replaces finite-difference, ~1.2× faster).
+- `v10a-bspline-analytic-derivative` — analytic 1st derivative for
+  B-spline (degree-2 B-spline over shifted control polygon, Piegl &
+  Tiller A3.4).
+- `v10a-cr-analytic-2nd-derivative` + `v10a-bspline-analytic-2nd-
+  derivative` — analytic 2nd derivative paths (per-kind h-trait override
+  on `detail::second_derivative_step<Curve>`).
+- `v10a-2d-{hermite,catmull,bspline}` — 2D peers for the 3D-only kinds.
+- `v10a-bspline-arbitrary-degree` — degrees 1 / 2 / 5 / arbitrary.
+
+**v10b sampling:**
+- `v10b-2d-sampling` — 2D-peer samplers.
+
+**v10c arc-length:**
+- `v10c-analytic-arc-length` — per-kind closed-form length where it
+  exists (circular = r·θ, Bezier via Gauss-Legendre 5-pt).
+
+**v10d queries:**
+- `v10d-analytic-aabb` — analytic AABB for CircularArc / EllipseArc /
+  Bezier convex-hull-loose.
+- `v10d-multi-hit-ray` — return ALL intersections, not just first.
+- `v10d-polyline-fast-path` — direct segment-iteration for
+  `intersect_ray` on Polyline (avoids the adaptive-resampling
+  degenerate case).
+
+**v10e frames + viz + sandbox:**
+- `v10e-arclength-rmf` — RMF over an arc-length-uniform t-table (the
+  truly-smooth cinematic-camera path).
+- `v10e-curve-curve-intersection` — pairwise curve intersection (most
+  cinematic / robotics consumers don't need this; flags when one does).
+
+**Future cluster — direct-manipulation UX (gizmos):**
+Filed in `docs/debt.md` 2026-05-19: transform gizmos + curve CP gizmos
++ navmesh editor + Blender-class mesh vertex/edge select. User-flagged
+high priority. Until that cluster opens, every geometry showcase scene
+uses ImGui `DragFloat3` for control-point editing.
+
+Cluster closes here. ADR-0076 §27 ✅ Accepted. **Phase 3.1.7 v10
+cluster locked.** Remaining in Phase 3.1.7: v11 transform-aware
+(~2 days) → Phase 3.1.7 fully closes → `crd-hesap-dense` v0 → Phase 3.1
+eylem v1c resume.

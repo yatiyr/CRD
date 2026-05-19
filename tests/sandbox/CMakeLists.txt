@@ -17,6 +17,7 @@
 add_executable(crd-sandbox-showcase-tests
     test_showcase.cpp
     "${CMAKE_SOURCE_DIR}/sandbox/src/geometry_showcase.cpp"
+    "${CMAKE_SOURCE_DIR}/sandbox/src/curves_showcase.cpp" # v10e: curves showcase
 )
 
 target_include_directories(crd-sandbox-showcase-tests PRIVATE
@@ -31,6 +32,7 @@ target_link_libraries(crd-sandbox-showcase-tests PRIVATE
     crd-containers
     crd-geometry-primitives
     crd-geometry-bvh
+    crd-geometry-curves           # v10e: curves substrate for CurvesShowcase
     crd-geometry-viz
     crd-draw
     crd-imgui      # transitively links imgui-vendor for the ImGui symbols

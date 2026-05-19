@@ -35,6 +35,7 @@ target_link_libraries(crd-geometry-viz
         crd-containers
         crd-geometry-primitives
         crd-geometry-bvh
+        crd-geometry-curves
         crd-draw
 )
 

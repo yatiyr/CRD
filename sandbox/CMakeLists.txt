@@ -2,6 +2,7 @@ add_executable(crd-sandbox
     src/main.cpp
     src/sandbox_layer.cpp
     src/geometry_showcase.cpp  # v1j-b: geometry-viz showcase scene
+    src/curves_showcase.cpp    # v10e: curves showcase scene
 )
 
 target_include_directories(crd-sandbox PRIVATE
@@ -35,6 +36,7 @@ target_link_libraries(crd-sandbox PRIVATE
     # v1j-b: geometry-viz substrate + its transitive geometry-* deps.
     crd-geometry-primitives
     crd-geometry-bvh
+    crd-geometry-curves        # v10e: curves substrate for CurvesShowcase
     crd-geometry-viz
 )
 target_compile_definitions(crd-sandbox PRIVATE CRD_SOURCE_DIR="${CMAKE_SOURCE_DIR}")

@@ -50,9 +50,10 @@ namespace crd::sandbox
 // bleed-through. User picks via the ImGui Scene dropdown.
 enum class SandboxScene : crd::u8
 {
-    Physics      = 0, // existing v1b-e demo — 3 falling rigid bodies
-    GeometryViz  = 1, // v1j-b showcase — interactive crd-geometry validation
-    DrawShowcase = 2, // crd-draw API showcase — axis triad / wire+solid shapes / arrow / arc / cross
+    Physics        = 0, // existing v1b-e demo — 3 falling rigid bodies
+    GeometryViz    = 1, // v1j-b showcase — interactive crd-geometry validation
+    DrawShowcase   = 2, // crd-draw API showcase — axis triad / wire+solid shapes / arrow / arc / cross
+    CurvesShowcase = 3, // v10e showcase — interactive crd-geometry-curves visualisation
 };
 
 // Sub-mode of the geometry-viz showcase. Each renders a distinct exercise

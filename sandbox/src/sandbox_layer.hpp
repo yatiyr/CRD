@@ -40,6 +40,7 @@
 #include <crd/scene/world.hpp>
 #include <crd/shader/runtime.hpp>
 
+#include "curves_showcase.hpp"   // v10e: curves showcase state
 #include "geometry_showcase.hpp" // v1j-b: scene-selector enum + showcase state
 
 #include <memory>
@@ -306,6 +307,7 @@ private:
     // ImGui "Scene" dropdown.
     SandboxScene             m_scene = SandboxScene::Physics;
     GeometryShowcaseState    m_showcase{};
+    CurvesShowcaseState      m_curves_showcase{};
     // v1-close debt-payment: BVH viewer rebuild cache. Owned by the layer
     // (lifetime = layer), allocator = the eylem TLSF. Constructed lazily
     // once m_eylem_alloc is alive; until then nullptr and the BVH viewer

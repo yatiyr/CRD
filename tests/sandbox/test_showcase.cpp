@@ -10,6 +10,7 @@
 // showcase render paths advisor flagged. Tests also pin the
 // BvhViewerCache's fingerprint-based rebuild invariant.
 
+#include "curves_showcase.hpp"
 #include "geometry_showcase.hpp"
 
 #include <crd/draw/render_buffer.hpp>
@@ -185,9 +186,66 @@ TEST_CASE("showcase: line_width is threaded into emissions", "[sandbox][showcase
 
 TEST_CASE("showcase: SandboxScene enum values are stable", "[sandbox][showcase]")
 {
-    // ABI pin — the dropdown indices in the sandbox UI rely on these.
+    // ABI pin -- the dropdown indices in the sandbox UI rely on these.
     static_assert(static_cast<int>(SandboxScene::Physics) == 0);
     static_assert(static_cast<int>(SandboxScene::GeometryViz) == 1);
     static_assert(static_cast<int>(SandboxScene::DrawShowcase) == 2);
+    static_assert(static_cast<int>(SandboxScene::CurvesShowcase) == 3);
     REQUIRE(true);
+}
+
+// v10e curves showcase coverage.
+TEST_CASE("showcase: every curve kind renders into a non-empty buffer", "[sandbox][showcase][curves]")
+{
+    crd::memory::TlsfAllocator alloc(crd::usize{1} << 22, nullptr, "showcase-test");
+    crd::draw::RenderBuffer    buf(&alloc);
+    using crd::sandbox::CurvesShowcaseState;
+    using crd::sandbox::render_curves_showcase;
+    using crd::sandbox::ShowcaseCurveKind;
+    const ShowcaseCurveKind kinds[] = {
+        ShowcaseCurveKind::Polyline,    ShowcaseCurveKind::QuadBezier, ShowcaseCurveKind::CubicBezier,
+        ShowcaseCurveKind::CubicHermite, ShowcaseCurveKind::CatmullRom, ShowcaseCurveKind::BSpline,
+        ShowcaseCurveKind::CircularArc, ShowcaseCurveKind::EllipseArc, ShowcaseCurveKind::Helix,
+    };
+    for (const auto k : kinds)
+    {
+        CurvesShowcaseState s;
+        s.kind = k;
+        buf.clear();
+        render_curves_showcase(s, buf, alloc);
+        INFO("curve kind=" << static_cast<int>(k));
+        REQUIRE(buf.line_count() > 0U);
+    }
+}
+
+TEST_CASE("showcase: frame mode toggle adds 3*N lines worth of hairs",
+          "[sandbox][showcase][curves]")
+{
+    crd::memory::TlsfAllocator alloc(crd::usize{1} << 22, nullptr, "showcase-test");
+    crd::draw::RenderBuffer    buf(&alloc);
+    using crd::sandbox::CurvesShowcaseState;
+    using crd::sandbox::render_curves_showcase;
+    using crd::sandbox::ShowcaseFrameMode;
+
+    CurvesShowcaseState s;
+    s.frame_mode = ShowcaseFrameMode::Off;
+    s.show_control_points = false;
+    s.n_samples           = 16U;
+    buf.clear();
+    render_curves_showcase(s, buf, alloc);
+    const crd::usize n_off = buf.line_count();
+
+    s.frame_mode = ShowcaseFrameMode::Frenet;
+    buf.clear();
+    render_curves_showcase(s, buf, alloc);
+    const crd::usize n_frenet = buf.line_count();
+
+    s.frame_mode = ShowcaseFrameMode::Rmf;
+    buf.clear();
+    render_curves_showcase(s, buf, alloc);
+    const crd::usize n_rmf = buf.line_count();
+
+    // Open CubicBezier with n_samples=16 -> 17 frames -> 51 hair lines.
+    REQUIRE(n_frenet >= n_off + 3U * 17U);
+    REQUIRE(n_rmf    >= n_off + 3U * 17U);
 }

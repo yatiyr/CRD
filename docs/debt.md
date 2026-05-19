@@ -5,6 +5,41 @@ move to a session log entry and remove from here.
 
 ## Active debt
 
+### Future cluster — direct-manipulation UX (gizmos / mesh + curve + navmesh editors) — filed 2026-05-19
+
+> **Not a follow-on; a future workstream cluster.** User flagged (during
+> Phase 3.1.7 v10e control-point editing question) that direct-
+> manipulation UX is a high-priority future area requiring its own
+> session cluster. Slated for the UI phase, possibly preceded by a low-
+> level plumbing detour. Until then, sandbox showcase scenes use ImGui
+> DragFloat3 / sliders for control-point + parameter editing.
+>
+> **Scope (user's framing):**
+>
+> - **Transform gizmos** — translate / rotate / scale handles on selected
+>   entities, screen-space picker + camera-relative axis lock.
+> - **Curve control-point gizmos** — drag curve control points in the 3D
+>   viewport. v10e's ImGui DragFloat3 panel is the temporary surface
+>   the gizmo cluster eventually replaces.
+> - **NavMesh editing** — vertex / edge / face manipulation.
+> - **Mesh editing — Blender-class** — vertex / edge / face select +
+>   deselect + drag (equal-class consumer alongside game + cinematic).
+> - **Selection state primitives** — multi-select, select / deselect,
+>   marquee, hover-highlight.
+>
+> **Likely module surface (placeholder, not committed):** `crd-ui-gizmo`
+> (ray-vs-handle hit-testing + drag-state machine + axis-locked
+> translation) consumed by sandbox + future editor.
+>
+> **Sequencing:** undecided. Slots in EITHER after `crd-hesap-dense` v0
+> + Phase 3.1 eylem v1c-resume (consumer-pull from eylem's
+> collider/joint editors) OR before, depending on when editor UX
+> becomes the critical path. Discussed at the close of Phase 3.1.7.
+>
+> **Until then:** all geometry + curve + future mesh-viz sandbox scenes
+> use ImGui DragFloat3 / sliders — do NOT bake a half-built ad-hoc
+> picker into individual scenes.
+
 ### ✅ Phase 3.1.7 v9a-b1 follow-on — AVX2 vectorised CPU radix sort — CLOSED 2026-05-18 (same day as filing)
 
 > **STATUS — CLOSED 2026-05-18.** Investigated three SOTA radix techniques

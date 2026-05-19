@@ -5,6 +5,8 @@ add_executable(crd-geometry-curves-tests
     test_curves_sample.cpp
     test_curves_arclength.cpp
     test_curves_queries.cpp
+    test_curves_frames.cpp
+    test_curves_typed.cpp
 )
 
 target_link_libraries(crd-geometry-curves-tests PRIVATE

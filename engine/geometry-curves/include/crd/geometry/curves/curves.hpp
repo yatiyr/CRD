@@ -14,9 +14,11 @@
 #include <crd/geometry/curves/bspline.hpp>
 #include <crd/geometry/curves/catmull_rom.hpp>
 #include <crd/geometry/curves/evaluator.hpp>
+#include <crd/geometry/curves/frames.hpp>
 #include <crd/geometry/curves/hermite.hpp>
 #include <crd/geometry/curves/polyline.hpp>
 #include <crd/geometry/curves/queries.hpp>
+#include <crd/geometry/curves/queries_typed.hpp>
 #include <crd/geometry/curves/sample.hpp>
 #include <crd/geometry/curves/types.hpp>
 #include <crd/geometry/curves/validate.hpp>

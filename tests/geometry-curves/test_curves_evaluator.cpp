@@ -66,9 +66,6 @@ template <typename T>
     return std::memcmp(&a, &b, sizeof(crd::math::Vec3<float>)) == 0;
 }
 
-constexpr float kBoundaryUlp = 1U; // 1 ULP for bit-equal-class boundary checks
-constexpr float kCrossKindEps = 1.0e-6F;
-
 [[nodiscard]] bool ulp_close(float a, float b, crd::u32 max_ulp) noexcept
 {
     return crd::test::detail::ulp_distance_f32(a, b) <= max_ulp;

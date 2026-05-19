@@ -2,6 +2,7 @@ add_executable(crd-geometry-viz-tests
     test_primitives.cpp
     test_queries.cpp
     test_bvh.cpp
+    test_curves_viz.cpp
 )
 
 target_link_libraries(crd-geometry-viz-tests PRIVATE
@@ -10,6 +11,7 @@ target_link_libraries(crd-geometry-viz-tests PRIVATE
     crd-memory                # TlsfAllocator for the test fixtures (no default_allocator())
     crd-geometry-primitives
     crd-geometry-bvh
+    crd-geometry-curves
     crd-geometry-viz
     crd-draw
     Catch2::Catch2WithMain
