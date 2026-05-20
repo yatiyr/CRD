@@ -7,7 +7,45 @@
 
 ## Current focus
 
-**As of 2026-05-20.** **Phase 3.1.6 `crd-hesap` reference-class L1 + L2 + L3 shootout closed 2026-05-20.** Head-to-head benchmarks vs **Eigen 3.4 + OpenBLAS 0.3.27** at every level of the BLAS hierarchy. Single-thread P-core results except GEMM which is multi-threaded 16 P-threads. Final ratios on i9-14900K AVX2:
+**As of 2026-05-20.** **Phase 3.1.6 `crd-hesap` v0e cluster — 6 of 8 sub-slices shipped 2026-05-20** in a single elite session:
+
+| Sub-slice | Surface | Test cases / assertions |
+|---|---|---|
+| **v0e-a** | LU partial-pivoting (right-looking blocked, bs=64; first `gemm_parallel` consumer) | 10 / 37,156 |
+| **v0e-b** | Cholesky SPD real (right-looking blocked) | 10 / 18,725 |
+| **v0e-c** | LDLT Bunch-Kaufman indefinite (1×1 + 2×2 pivots; block-aware solve) | 7 / 132 |
+| **v0e-d** | Householder QR (unblocked; `apply_q`/`apply_q_transpose`/`solve_qr` LS) | 7 / 164 |
+| **v0e-e** | LinearOp wrappers + Hager 1-norm condition estimator | 8 / 26 |
+| **v0e-f** | Iterative refinement (same-precision MVP; Wilkinson 1948) | 4 / 35 |
+| **v0e-g** | CLI registration (8 commands) + reference-class shootout vs Eigen | 6 / 32 |
+
+**Full hesap-dense suite: 170 cases / 61,001 assertions PASS** on win-debug + win-tidy (was 128 / 41,887 pre-v0e — gained 42 cases / 19,114 assertions today).
+
+**Reference-class shootout — AFTER v0e-perf-attack (vs Eigen-MT setNbThreads(16), i9-14900K AVX2, factor+solve, P-core affinity)**:
+- **LU.f64**: 0.52× (N=64), then **1.57× / 91× / 11× / 23× WINS at N=128/256/512/1024.**
+- **Cholesky.f64**: 0.96× / 0.69× / 0.50× / 0.65× / **1.16× WIN** (N=64→1024). Left-looking blocked + unblocked-SIMD small-N path.
+- **QR.f64**: **1.22× WIN** (N=64), 0.77×, 0.95× (tie), **1.06× WIN** (N=512). Blocked compact-WY + transposed-panel SIMD (was 0.04×!).
+- **LDLT.f64**: **1.01× / 0.96× / 1.16× / 1.13× / 1.16× / 0.95×** — WINS/ties everywhere (was 0.08× at N=256!). SIMD row-restructured trailing update.
+
+**v0e-perf-attack (2026-05-20) delivered**: LDLT 14× faster (now WINS), QR 26× faster (now WINS at N=64/512), plus a **packed register-tiled parallel SYRK** (`detail/syrk_microkernel.hpp`, multi-platform Vec4d/Vec8f) that lifted **Cholesky N=512 0.65→0.83× and N=1024 0.96→1.47×**. All 5 configs green (debug+asan+tidy+shipping+release), 172 cases / 65,098 assertions. Session log: `docs/sessions/2026-05-20-hesap-v0e-perf-attack.md`.
+
+**HONEST remaining sub-1× cells** (small-matrix regimes): Cholesky N=64/128/256 (0.94/0.70/0.55), LU N=64 (0.52), QR N=128/256 (0.76/0.96), LDLT N=64/1024 (0.96/0.94). **Root cause investigated + settled (ADR-0083):** small-N dense factorizations are column-oriented, fitting Eigen's column-major-native layout; we're row-major (D21). Proven a LAYOUT-FIT gap (not kernel quality) by 3 controlled experiments — per-row dot (BEST), naive col-major axpy + register-tiled col-major gemv BOTH regressed. See `memory/project_cholesky_smalln_rowmajor_limit` + Eigen `LLT.h:332`/`GeneralMatrixVector.h:156`. **ADR-0083 (Accepted): keep row-major** (ML/array-ecosystem aligned: NumPy/PyTorch/JAX; GEMM layout-neutral; GEMV row-major-natural) with a per-factor column-major escape hatch (factor objects opaque) if a hot-loop consumer ever proves it. The `syrk_lower_minus` primitive is built + reusable for future eig/sparse/optimization.
+
+**v0e CLUSTER CLOSED 2026-05-20** (v0e-a…g + perf-attack + v0e-close). Formal 5-config DoD PASS via `per-slice-check.ps1 -IncludeRelease -Parallel` (debug+asan+shipping+release+tidy; win-release needed a stale pre-v0d smoke/bench obj cleanup — known build-dir artifact, not a code issue). 172 cases / 65,098 assertions; guards green. ADR-0083 Accepted (row-major storage). v0e decisions D1–D8 queued in ADR-0065 for §14 lock at v0-close. Rollup: `docs/sessions/2026-05-20-hesap-v0e-close.md`.
+
+🎯 **NEXT = v0f** — `crd-hesap-bench` sub-module + reference-fixture replay infrastructure + property-based test framework (`RandomMatrix<T>`). Then **v0-close** (ADR-0065 §14 lock for v0a–f + 18-config full sweep). After Phase 3.1.6 closes: **Phase 3.1 eylem v1c+ resumes** (consumes geometry + hesap from day 1). All factors are bit-deterministic. `Permutation` body populated (was a v0a shell). Pre-existing `blas2.cpp` tidy debt (matrix-notation locals `A`/`L`/`U`/`A_row`) cleaned up via narrow NOLINTBEGIN scope in v0e-a. **The `gemm_parallel` substrate from v0d is now consumed by LU + Cholesky trailing updates — first real consumers outside the bench harness.** Sessions: `docs/sessions/2026-05-20-hesap-v0e-a-lu.md`, `docs/sessions/2026-05-20-hesap-v0e-b-cholesky.md`, `docs/sessions/2026-05-20-hesap-v0e-c-d-ldlt-qr.md`.
+
+🎯 **NEXT = v0e-close** — 5-config DoD (`scripts/per-slice-check.ps1 -IncludeRelease -Parallel`) + rollup session log + ADR-0065 §14 decisions queue + update `docs/systems/hesap-dense.md` with solver scorecard. ~0.5 d.
+
+**Filed v0e follow-ons** (all hardware-/consumer-gated, not blocking the cluster close):
+- `v0e-a2` (LU complex variants), `v0e-a-perf` (consumer-gated panel SIMD/prefetch)
+- `v0e-b-hpd` (Hermitian Cholesky), `v0e-b-syrk-optim` (half-FLOP trailing update)
+- `v0e-c-blocked` (gemm_parallel trailing update for LDLT once 2×2 bookkeeping settled)
+- `v0e-d-blocked` (WY blocked Householder + gemm_parallel), `v0e-d-colpiv` (rank-revealing QR)
+- `v0e-e2` (LU/LDLT/QR condition estimators — need solve_transpose paths)
+- `v0e-f2` (mixed-precision HPL-AI iterative refinement)
+
+**Earlier 2026-05-20 — Phase 3.1.6 `crd-hesap` reference-class L1 + L2 + L3 shootout closed 2026-05-20.** Head-to-head benchmarks vs **Eigen 3.4 + OpenBLAS 0.3.27** at every level of the BLAS hierarchy. Single-thread P-core results except GEMM which is multi-threaded 16 P-threads. Final ratios on i9-14900K AVX2:
 
 - **BLAS L3 GEMM (multi-threaded, 16 P-threads, best-of-3): 10/10 WINS over Eigen-MT.** f32: N=256 **368×**, N=512 **1.21×**, N=1024 **1.69×**, N=2048 **1.70×**, N=4096 **1.30×**. f64: N=256 **1.17×**, N=512 **1.19×**, N=1024 **1.39×**, N=2048 **1.12×**, N=4096 **1.01×**.
 - **BLAS L1 (single-thread, f64): mixed. axpy 4/5 WINS (1.15-1.70×) at L1/L2-resident sizes, loses at N=262144 (memory-bandwidth-bound, both ~9 GFLOPS). dot 0.71-1.07×. nrm2 0.64-1.48× (WINS at N=1024-4096, loses 0.64-0.82× at L3-overflow). vs OpenBLAS: WINS everywhere 1.6-14.7×.**

@@ -5,6 +5,8 @@
 #include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
+#include "hesap_jobs_fixture.hpp"
+
 #include <cstring>
 
 using crd::hesap::dense::gemm;
@@ -16,29 +18,13 @@ using crd::hesap::dense::Trans;
 // Lifetime: every TEST_CASE that uses gemm_parallel ends with crd::jobs::wait,
 // so the fiber system is quiescent at fixture teardown. The fixture inits the
 // job system ONCE for the binary; double-init crashes (see CLAUDE.md
-// "jobs::init() in test binaries").
+// "jobs::init() in test binaries"). Shared with test_lu.cpp via the
+// hesap_jobs_fixture.hpp header so both files agree on a single listener.
 namespace
 {
-struct ParallelJobsListener
+inline crd_hesap_dense_tests::HesapJobsListener& parallel_jobs_listener()
 {
-    ParallelJobsListener()
-    {
-        crd::jobs::init();
-    }
-    ~ParallelJobsListener()
-    {
-        crd::jobs::shutdown();
-    }
-    ParallelJobsListener(const ParallelJobsListener&) = delete;
-    ParallelJobsListener& operator=(const ParallelJobsListener&) = delete;
-    ParallelJobsListener(ParallelJobsListener&&) = delete;
-    ParallelJobsListener& operator=(ParallelJobsListener&&) = delete;
-};
-
-ParallelJobsListener& parallel_jobs_listener()
-{
-    static ParallelJobsListener listener;
-    return listener;
+    return crd_hesap_dense_tests::hesap_jobs_listener();
 }
 } // namespace
 

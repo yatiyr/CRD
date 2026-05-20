@@ -17,4 +17,5 @@ namespace crd::hesap::dense
 void register_blas1_cli_anchor() noexcept;
 void register_blas2_cli_anchor() noexcept;
 void register_blas3_cli_anchor() noexcept;
+void register_solvers_cli_anchor() noexcept;
 } // namespace crd::hesap::dense

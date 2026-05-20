@@ -683,3 +683,40 @@ optimization, modern ODE, AD-at-operator-level).
 
 ADR-0065 §13 ✅ Accepted alongside ADR-0081 Proposed.
 - `docs/research/sparsematrices.md` — pre-existing Cerid sparse-matrix research.
+
+## v0e decisions (queued for §14 lock at v0-close)
+
+Locked in code + measured during v0e (dense direct solvers, 2026-05-20).
+To be formally numbered (D5x) in the §14 amendment at v0-close (after v0f):
+
+- **v0e-D1 — LU**: right-looking blocked LU, partial pivoting (LAPACK
+  xGETRF), bs=64; trailing update via `gemm_parallel` (first real
+  consumer). f32/f64 RowMajor.
+- **v0e-D2 — Cholesky**: SPD; unblocked SIMD per-row-dot for n≤256,
+  right-looking blocked + packed parallel `syrk_lower_minus` (+ parallel
+  trsm) for n>256.
+- **v0e-D3 — LDLT**: Bunch-Kaufman (ALPHA=(1+√17)/8), 1×1 + 2×2 pivots,
+  D as block storage; SIMD row-restructured trailing update.
+- **v0e-D4 — QR**: blocked compact-WY Householder (LAPACK xGEQRT, nb=32),
+  transposed-panel SIMD factor + block-reflector trailing update via two
+  `gemm_parallel` calls.
+- **v0e-D5 — LinearOp + condition**: `MatrixLinearOp`/`SymmetricLinearOp`
+  over the v0a `crd::hesap::LinearOp<T>`; Hager 1-norm κ₁ estimator
+  (xLACON pattern).
+- **v0e-D6 — iterative refinement**: Wilkinson same-precision IR
+  (`refine_lu`/`refine_cholesky`); mixed-precision HPL-AI filed `v0e-f2`.
+- **v0e-D7 — packed register-tiled `syrk_lower_minus`**: reuses the GEMM
+  microkernel + BLIS packing, lower-triangle-only, parallel over
+  block-rows. Reusable primitive for future eig/sparse/optimization.
+- **v0e-D8 — row-major storage** (promoted to standalone **ADR-0083
+  Accepted**): keep row-major; small-N factor gap vs Eigen is a
+  layout-fit issue (column-major would fit factorization's column
+  access); per-factor column-major escape hatch reserved.
+
+Filed v0e follow-ons (consumer-/hardware-gated, not blocking):
+`v0e-a2` (LU complex), `v0e-b-hpd` (Hermitian Cholesky), `v0e-c-blocked`
+(LDLT gemm trailing), `v0e-d-colpiv` (rank-revealing QR), `v0e-e2`
+(LU/LDLT/QR condition estimators), `v0e-f2` (mixed-precision IR).
+
+v0e shipped 7 sub-slices (a–g) in 1 day + a perf-attack session; 172
+hesap-dense cases / 65,098 assertions; 5-config DoD green.

@@ -78,6 +78,7 @@ void gemv(T alpha, MatrixView<const T, L> a, crd::containers::ConstSpan<T> x, T 
             if (a.ld() == n)
             {
                 namespace simd = crd::math::simd;
+                // NOLINTBEGIN(readability-identifier-naming) — matrix-notation locals
                 const T* A = a.data();
                 const T* x_data = x.data();
                 T* y_data = y.data();
@@ -205,6 +206,7 @@ void gemv(T alpha, MatrixView<const T, L> a, crd::containers::ConstSpan<T> x, T 
                     const crd::f64 sum = detail::simd_dot_f64(A + i * n, x_data, n);
                     y_data[i] = alpha * sum + beta * y_data[i];
                 }
+                // NOLINTEND(readability-identifier-naming)
                 return;
             }
         }
@@ -213,6 +215,7 @@ void gemv(T alpha, MatrixView<const T, L> a, crd::containers::ConstSpan<T> x, T 
             if (a.ld() == n)
             {
                 namespace simd = crd::math::simd;
+                // NOLINTBEGIN(readability-identifier-naming) — matrix-notation locals
                 const T* A = a.data();
                 const T* x_data = x.data();
                 T* y_data = y.data();
@@ -258,6 +261,7 @@ void gemv(T alpha, MatrixView<const T, L> a, crd::containers::ConstSpan<T> x, T 
                     const crd::f32 sum = detail::simd_dot_f32(A + i * n, x_data, n);
                     y_data[i] = alpha * sum + beta * y_data[i];
                 }
+                // NOLINTEND(readability-identifier-naming)
                 return;
             }
         }
@@ -411,6 +415,7 @@ void symv(T alpha, const Symmetric<T>& a, crd::containers::ConstSpan<T> x, T bet
             y[i] = beta * y[i];
         }
 
+        // NOLINTBEGIN(readability-identifier-naming) — matrix-notation locals
         const T* A = a.data();
         const T* x_data = x.data();
         T* y_data = y.data();
@@ -566,6 +571,7 @@ void symv(T alpha, const Symmetric<T>& a, crd::containers::ConstSpan<T> x, T bet
                 y_data[i] += alpha * dot_total;
             }
         }
+        // NOLINTEND(readability-identifier-naming)
     }
     else
     {
@@ -810,18 +816,18 @@ void trsv(const Triangular<T, Side, Diag>& a, crd::containers::Span<T> x, Trans 
             // SIMD fast path for f32/f64: each inner sum is a row · prefix-x dot.
             if constexpr (std::is_same_v<T, crd::f32> || std::is_same_v<T, crd::f64>)
             {
-                const T* L = a.data();
+                const T* lower = a.data();
                 T* x_data = x.data();
                 for (crd::usize i = 0; i < n; ++i)
                 {
                     T sum_off_diag;
                     if constexpr (std::is_same_v<T, crd::f32>)
                     {
-                        sum_off_diag = detail::simd_dot_f32(L + i * n, x_data, i);
+                        sum_off_diag = detail::simd_dot_f32(lower + i * n, x_data, i);
                     }
                     else
                     {
-                        sum_off_diag = detail::simd_dot_f64(L + i * n, x_data, i);
+                        sum_off_diag = detail::simd_dot_f64(lower + i * n, x_data, i);
                     }
                     const T s = x_data[i] - sum_off_diag;
                     if constexpr (Diag == TriangularDiag::UnitDiag)
@@ -830,7 +836,7 @@ void trsv(const Triangular<T, Side, Diag>& a, crd::containers::Span<T> x, Trans 
                     }
                     else
                     {
-                        x_data[i] = s / L[i * n + i];
+                        x_data[i] = s / lower[i * n + i];
                     }
                 }
             }
@@ -860,7 +866,7 @@ void trsv(const Triangular<T, Side, Diag>& a, crd::containers::Span<T> x, Trans 
             // SIMD fast path: each inner sum is a row · suffix-x dot.
             if constexpr (std::is_same_v<T, crd::f32> || std::is_same_v<T, crd::f64>)
             {
-                const T* U = a.data();
+                const T* upper = a.data();
                 T* x_data = x.data();
                 for (crd::usize ii = n; ii-- > 0;)
                 {
@@ -870,13 +876,13 @@ void trsv(const Triangular<T, Side, Diag>& a, crd::containers::Span<T> x, Trans 
                     {
                         if constexpr (std::is_same_v<T, crd::f32>)
                         {
-                            sum_off_diag =
-                                detail::simd_dot_f32(U + ii * n + ii + 1, x_data + ii + 1, tail);
+                            sum_off_diag = detail::simd_dot_f32(upper + ii * n + ii + 1,
+                                                                x_data + ii + 1, tail);
                         }
                         else
                         {
-                            sum_off_diag =
-                                detail::simd_dot_f64(U + ii * n + ii + 1, x_data + ii + 1, tail);
+                            sum_off_diag = detail::simd_dot_f64(upper + ii * n + ii + 1,
+                                                                x_data + ii + 1, tail);
                         }
                     }
                     else
@@ -890,7 +896,7 @@ void trsv(const Triangular<T, Side, Diag>& a, crd::containers::Span<T> x, Trans 
                     }
                     else
                     {
-                        x_data[ii] = s / U[ii * n + ii];
+                        x_data[ii] = s / upper[ii * n + ii];
                     }
                 }
             }

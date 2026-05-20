@@ -565,4 +565,24 @@ if(CRD_BUILD_HESAP_VS_REFERENCE)
     endif()
     set_source_files_properties(examples/bench_hesap_blas2_vs_reference.cpp PROPERTIES
         COMPILE_FLAGS "/WX- /wd4242 /wd4244 /wd4267 /wd4127 /wd4146")
+
+    # ---- v0e-g: solvers shootout (LU / Cholesky / LDLT / QR vs Eigen) ----
+    add_executable(bench_hesap_solvers_vs_reference
+        examples/bench_hesap_solvers_vs_reference.cpp
+    )
+    target_link_libraries(bench_hesap_solvers_vs_reference PRIVATE
+        crd-core
+        crd-memory
+        crd-containers
+        crd-math
+        crd-hesap
+        crd-hesap-dense
+        crd-jobs
+        eigen_headers
+    )
+    if(OpenMP_CXX_FOUND)
+        target_link_libraries(bench_hesap_solvers_vs_reference PRIVATE OpenMP::OpenMP_CXX)
+    endif()
+    set_source_files_properties(examples/bench_hesap_solvers_vs_reference.cpp PROPERTIES
+        COMPILE_FLAGS "/WX- /wd4242 /wd4244 /wd4267 /wd4127 /wd4146")
 endif()

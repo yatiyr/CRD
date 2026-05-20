@@ -1,6 +1,7 @@
 #pragma once
 
 #include <crd/containers/span.hpp>
+#include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
 #include <crd/hesap/dense/layout.hpp>
 #include <crd/memory/allocator.hpp>
@@ -71,20 +72,103 @@ private:
 };
 
 // -----------------------------------------------------------------------
-// 5. Permutation — int permutation (no scalar T; just indices).
+// 5. Permutation — row-permutation expressed in LAPACK xGETRF pivot form.
+//
+// Storage: m_pivots[k] = row index r (>= k) that was swapped with row k
+// during factorization step k. Applying the permutation means replaying
+// the swap sequence in order; inverse means replaying in reverse. This
+// matches LAPACK ipiv conventions and is the storage Eigen uses too.
+//
+// v0e populates the body to support LU factor row-pivoting + solve.
+// Vector / Matrix-form apply / apply_inverse helpers in `permutation.hpp`
+// (forward-declared here; consumers include that header for the bodies).
 // -----------------------------------------------------------------------
 class Permutation
 {
 public:
     explicit Permutation(crd::memory::IAllocator* alloc) noexcept : m_alloc(alloc) {}
 
+    Permutation(crd::memory::IAllocator* alloc, crd::usize n) : m_alloc(alloc), m_n(n)
+    {
+        if (n > 0)
+        {
+            m_pivots = static_cast<crd::usize*>(m_alloc->allocate(n * sizeof(crd::usize), alignof(crd::usize)));
+            for (crd::usize i = 0; i < n; ++i)
+            {
+                m_pivots[i] = i;
+            }
+        }
+    }
+
+    ~Permutation() { release(); }
+
+    Permutation(const Permutation&) = delete;
+    Permutation& operator=(const Permutation&) = delete;
+
+    Permutation(Permutation&& other) noexcept
+        : m_alloc(other.m_alloc), m_pivots(other.m_pivots), m_n(other.m_n)
+    {
+        other.m_pivots = nullptr;
+        other.m_n = 0;
+    }
+
+    Permutation& operator=(Permutation&& other) noexcept
+    {
+        if (this != &other)
+        {
+            release();
+            m_alloc = other.m_alloc;
+            m_pivots = other.m_pivots;
+            m_n = other.m_n;
+            other.m_pivots = nullptr;
+            other.m_n = 0;
+        }
+        return *this;
+    }
+
     [[nodiscard]] crd::usize rows() const noexcept { return m_n; }
     [[nodiscard]] crd::usize cols() const noexcept { return m_n; }
     [[nodiscard]] crd::usize n() const noexcept { return m_n; }
     [[nodiscard]] bool is_square() const noexcept { return true; }
+    [[nodiscard]] crd::memory::IAllocator* allocator() const noexcept { return m_alloc; }
+
+    // Raw pivot array; entry k is the row index that step k swapped with.
+    [[nodiscard]] crd::usize* pivots() noexcept { return m_pivots; }
+    [[nodiscard]] const crd::usize* pivots() const noexcept { return m_pivots; }
+
+    [[nodiscard]] crd::usize& pivot_at(crd::usize k) noexcept
+    {
+        CRD_ASSERT_MSG(k < m_n, "Permutation::pivot_at out of range");
+        return m_pivots[k];
+    }
+
+    [[nodiscard]] crd::usize pivot_at(crd::usize k) const noexcept
+    {
+        CRD_ASSERT_MSG(k < m_n, "Permutation::pivot_at out of range");
+        return m_pivots[k];
+    }
+
+    // Resets to identity (pivot_at(k) = k for all k).
+    void set_identity() noexcept
+    {
+        for (crd::usize i = 0; i < m_n; ++i)
+        {
+            m_pivots[i] = i;
+        }
+    }
 
 protected:
+    void release() noexcept
+    {
+        if (m_pivots != nullptr)
+        {
+            m_alloc->deallocate(m_pivots);
+            m_pivots = nullptr;
+        }
+    }
+
     crd::memory::IAllocator* m_alloc = nullptr;
+    crd::usize* m_pivots = nullptr;
     crd::usize m_n = 0;
 };
 

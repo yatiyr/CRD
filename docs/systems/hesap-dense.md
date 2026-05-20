@@ -30,10 +30,44 @@
   AVX2 microkernels (Vec8f for f32, Vec4d for f64 in 2× halves), Mc
   auto-tune, direct unpacked fast-path for small matrices, allocator
   propagation, FMA-based microkernel.
-- **CLI** (`cli_register*.cpp`): 14 BLAS L3 commands + L1 + L2 surface
-  registered via `CRD_HESAP_CLI_REGISTER_MODULE` per ADR-0081.
+- **Dense direct solvers** (v0e): `LU<T,L>` (`lu.hpp`, partial pivoting,
+  right-looking blocked, gemm_parallel trailing update),
+  `Cholesky<T,L>` (`cholesky.hpp`, SPD; unblocked SIMD per-row-dot for
+  n≤256, right-looking blocked + packed parallel `syrk_lower_minus`
+  trailing update for n>256), `LDLT<T,L>` (`ldlt.hpp`, Bunch-Kaufman
+  indefinite, 1×1 + 2×2 pivots, SIMD row-restructured trailing update),
+  `QR<T,L>` (`qr.hpp`, blocked compact-WY Householder, transposed-panel
+  SIMD factor, gemm_parallel block-reflector trailing update). All f32 +
+  f64, RowMajor, bit-deterministic, allocator-propagating.
+- **Solver support**: `LinearOp<T>` wrappers (`linear_op_dense.hpp`:
+  `MatrixLinearOp`/`SymmetricLinearOp`), Hager 1-norm condition estimator
+  (`condition.hpp`), iterative refinement (`refinement.hpp`:
+  `refine_lu`/`refine_cholesky`). Packed register-tiled `syrk_lower_minus`
+  (`detail/syrk_microkernel.hpp`) — reusable for future eig/sparse/opt.
+- **CLI** (`cli_register*.cpp`): 14 BLAS L3 + L1 + L2 + 8 solver commands
+  (`hesap.dense.solver.{lu,cholesky,ldlt,qr}.{f32,f64}`) registered via
+  `CRD_HESAP_CLI_REGISTER_MODULE` per ADR-0081.
 - **Mixed-precision** `gemm_mixed<TIn, TAcc>`: HPL-AI iterative-
   refinement pattern (f32 in / f64 accumulator).
+
+## Dense direct solver scorecard (2026-05-20, i9-14900K AVX2, vs Eigen-MT)
+
+Factor+solve, f64, P-core affinity, best-of-3. See ADR-0083 for the
+row-major-vs-Eigen's-column-major small-N analysis.
+
+```
+Solver  N=64    N=128   N=256   N=512   N=1024
+LU      0.52x   1.46x   ~70x    11x     21x       (WINS N>=128; Eigen LU serial at large N)
+Chol    0.94x   0.70x   0.55x   0.84x   1.41x     (WINS N=1024; small-N row-major-bound, ADR-0083)
+QR      1.19x   0.76x   0.96x   1.04x   --        (WINS N=64/512; blocked compact-WY)
+LDLT    1.00x   0.96x   1.18x   1.13x   0.94x     (WINS/ties everywhere; SIMD row-restructured)
+```
+
+Small-N (≤256) dense factorizations trail Eigen ~1.4× — a row-major-vs-
+column-major *layout-fit* gap (NOT kernel quality), proven by 3
+controlled experiments + Eigen source reading. Settled in **ADR-0083**:
+keep row-major (ML/array-ecosystem aligned) with a per-factor
+column-major escape hatch. See `memory/project_cholesky_smalln_rowmajor_limit`.
 
 ## Allocator propagation
 
