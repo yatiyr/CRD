@@ -193,7 +193,7 @@ determinism + replay tests.
 | **v0f** ✅ 2026-05-20 (SLIMMED) | **Property-based test framework + bench-harness dedup.** Shipped: (1) `tests/hesap-dense/random_matrix.hpp` — seeded `RandomMatrix` factory (`random_general` / `random_diag_dominant` / `random_spd` / `random_symmetric_indefinite` / `random_spd_ill_conditioned`) consolidating the `build_spd` / `build_symmetric_indefinite` / `fill_matrix` generators previously duplicated across test_cholesky / test_ldlt / test_blas3_parallel (value formulas preserved → tolerances unchanged). (2) `test_random_property.cpp` — 4 property tests (Cholesky reconstruct, LU/LDLT/QR solve-recovers-x) across seeds × sizes. (3) `crd_add_hesap_vs_ref_bench()` CMake helper collapsing ~120 lines of duplicated vs-reference bench boilerplate into one function. 176 cases / 66,703 assertions PASS. **De-scoped** (recorded, not built): `crd-hesap-bench` sub-module + LAPACK/SuiteSparse/FFTW committed reference binaries → **deferred to the FFT/sparse slices that actually need them** (no binaries committed today; nothing to drop). `bench_common.hpp` C++ harness dedup **deferred to the third vs-reference bench** (premature with 2 jobs-linked + 2 not; the `time_loop`↔`jobs::frame_reset` coupling wants a real third data point — sparse/FFT will provide it). Session: `docs/sessions/2026-05-20-hesap-v0f.md`. | ~350 actual | 176 cases / 66,703 assertions | 0.5 d |
 | **v0-close** ✅ 2026-05-20 (CI-confirmed sweep) | **ADR-0065 §14 decision lock ✅ Accepted** (v0a–f: L50–L55 + v0e-D1…D8 + ADR-0083 + deviation table). **18-config full sweep caught 6 latent v0d cross-config bugs** (gcc `-mfma`; `Vec4f::fma`; clang unused capture/fn; scalar/SSE2 prefetch unused; `complex.hpp std::atan2`→deterministic + new `crd-hesap→crd-math` edge) — all fixed. Validated locally: clang-cl + scalar + sse2 build clean, gcc compiles clean, no-std-math guard PASS, **win-release 2821 tests 100%** + linux-gcc-release. Authoritative 18-config sweep delegated to CI. Session: `docs/sessions/2026-05-20-hesap-v0-close.md`. | ~100 + docs | — | ~0.5 d |
 | | **v0 TOTAL** (~5 weeks, was 1.5wk in 2026-05-15 plan) | **~5400** | **~445** | **~5 wk** |
-| **v1** | Sparse storage (CSR / CSC / BSR / COO / ELL / HYB / DIA / CSR5 / Merge-CSR / Sliced ELL / JDS / SkyLine) + spmv + spmm + spgemm + format-conversion graph + sparse `LinearOp` + complex variants + CLI registration | ~3000 | ~120 | ~3 wk |
+| **v1** (detailed plan below ↓) | Sparse storage **core tier** (COO builder + CSR/CSC + BSR/ELL/SELL-C-σ/DIA) + spmv (SELL primary) + spmv-T + spmm + spgemm (hash) + element-wise + format-conversion graph + sparse `LinearOp` + Matrix-Market I/O + complex variants + CLI. **Tier-3 (CSR5/Merge-CSR → v17 GPU; JDS/SkyLine → follow-on) dropped per 2026-05-20 scope review.** | ~3000 | ~140 | ~3 wk |
 | **v2** | Fill-reducing reorderings: AMD (Amestoy 1996) + RCM (Cuthill-McKee) + METIS-class nested dissection + symbolic factorisation phase + CLI registration | ~2200 | ~80 | ~2 wk |
 | **v3** | SVD (Golub-Reinsch + **randomized**, Halko 2011) + dense eigenvalue (MRRR symmetric + QR-double-shift non-symmetric + **randomized variants**) + least squares (LS / NNLS / TLS) + complex variants + CLI registration | ~2800 | ~130 | ~2.5 wk |
 | **v4** | Iterative solvers (CG / PCG / BiCGSTAB / GMRES / MINRES / LSQR / IDR(s) / **GCRO-DR + M-CG Krylov subspace recycling**) + modern preconditioners (Jacobi / IC(0) / ILU(0) / **SPAI** / **ILUPACK multilevel ILU** / polynomial / block-Jacobi / additive Schwarz) + `LinearOp` consumer surface + complex variants + CLI registration | ~3500 | ~150 | ~3 wk |
@@ -231,6 +231,87 @@ substrate.** Comparable in scope to eylem itself.
 > v17 (GPU) and v18 (REPL) are independently shippable. If schedule
 > pressure surfaces, they can defer to a later "Phase 3.1.6 follow-up"
 > without blocking the CPU substrate's usefulness.
+
+---
+
+## v1 — Sparse storage + kernels — DETAILED PLAN (planned 2026-05-20)
+
+**Goal:** an elite, multi-threaded, deterministic sparse-matrix substrate that
+**beats Eigen's sparse module** on the kernels that matter (spmv, spgemm), with
+the pattern/values/analysis-cache architecture as its spine. v1 is **storage +
+kernels only** — iterative solvers (v4), reorderings (v2), sparse direct (v5),
+sparse eig (v6) consume it later. Keeping that boundary is the first
+anti-rabbit-hole rule.
+
+### Why we can beat Eigen (the cross-check)
+
+Eigen's `SparseCore` (studied: `SparseMatrix.h` 4-array storage, `AmbiVector.h`
+SPA accumulator, `ConservativeSparseSparseProduct.h` Gustavson spgemm,
+`SparseDenseProduct.h`) is **single-threaded, scalar spmv, SPA-based spgemm**.
+Three structural openings, confirmed by 2023–2025 SOTA research:
+- **spmv:** SELL-C-σ (SPC5 2023) + AVX (Vec8f/Vec4d) + row-balanced parallel
+  (ALBUS) over `crd-jobs`. Eigen has no SELL and no parallelism here.
+- **spgemm:** parallel hash-accumulator + symbolic/numeric two-phase beats
+  SPA/`AmbiVector`; BRMerge (2022) / MAGNUS (2025) / SaSpGEMM as elite
+  refinements. Eigen is single-threaded SPA.
+- **everything else Eigen lacks:** deterministic parallel reductions
+  (ADR-0063), two-layer typed API, allocator discipline, CLI/agent-native
+  protocol.
+Reference corpus: **SuiteSparse Matrix Collection** `.mtx` fixtures (the v0f
+deferred reference fixtures land here, with a real consumer) + our own
+generated patterns — never overfit to one corpus.
+
+### Slice template — applied to EVERY v1 sub-slice (the v0-close lessons, made structural)
+
+1. **Cross-config from day 1** ([[feedback_full_sweep_catches_cross_config_simd]]).
+   Each slice's iterate-loop builds **win-debug + win-debug-scalar +
+   win-debug-sse2 + win-clang-cl + one `linux-gcc-*`** — NOT just MSVC-AVX2. The
+   `simd::fma` / scalar-fallback / `-Werror` / Linux-guard breakage class is
+   caught per-slice, not at v1-close.
+2. **Numeric perf stop-criterion written in the DoD BEFORE coding** (the v0e
+   small-N lesson). Each perf slice names a threshold (e.g. "median ≥ 1.3× Eigen
+   on the SuiteSparse corpus"); when hit, **ship** — do not chase edge-case
+   parity.
+3. **4 type variants** (f32/f64/c32/c64) where applicable; complex from day 1
+   (ADR-0065 §13 D2), never deferred.
+4. **Determinism** (ADR-0063): see the v1a determinism spec — it is pinned up
+   front, not discovered in v1d.
+5. **CLI commands for EVERY op, registered in the SAME slice that ships the op**
+   (ADR-0065 §13 D16 — agent-native, non-negotiable). Not batched at v1-close:
+   each sub-slice adds its own `cli::register_module_commands` entries + anchor
+   symbol ([[feedback_static_lib_anchor_symbol]]) for every public op × type
+   variant it introduces, with typed `CommandSchema` + structured
+   `CommandResult` output + MCP descriptor — exactly as v0b/v0c/v0d/v0e-g did
+   (28 + 17 + 14 + 8 commands respectively). A sparse op without a CLI command
+   is an incomplete slice. v1g only runs the final completeness **audit**, not
+   the bulk registration.
+6. Allocator propagation (never `default_allocator()` —
+   [[feedback_hesap_propagate_allocator]]).
+
+### Sub-slices
+
+| Slice | Topic | Perf stop-criterion (where applicable) | Tests |
+| :---: | --- | --- | :---: |
+| **v1a** | **Substrate + COO builder + CSR/CSC core + determinism spec.** The pattern/values/analysis-cache trinity: `SparsePattern` (rows/cols/outer_ptr/inner_idx/format/`topology_hash`), `SparseValues` (values + `frame_stamp`), `AnalysisHandle` (cached `topology_hash` + recommended exec format — "the heart" per `sparsematrices.md`). `SparseMatrix<T,Format,Layout>` core; CSR + CSC compressed + uncompressed modes (Eigen 4-array). `TripletBuilder` (COO) → `compress()` with sort + dedup-merge + row-nnz preallocation (PETSc's >50× assembly lever). `'HSPM'` CRDR pin. `SparseId` handles. Structural queries. **Determinism spec pinned here:** row-parallel spmv = disjoint-row ownership; spgemm numeric = canonical column-sorted output before write; no fixed-order-free cross-thread float reductions. **CLI:** `hesap.sparse.build`/`from_triplets`/`to_csr`/`to_csc`/`nnz`/`density`/`structural_query` × {f32,f64,c32,c64}. | — (storage) | ~25 |
+| **v1b** | **spmv — SELL-C-σ primary + CSR fallback + `SparseLinearOp` + transpose-spmv.** SELL-C-σ (slice height = SIMD width, σ sort window) as primary; CSR-spmv irregular fallback. AVX2 `Vec8f`/`Vec4d` + scalar + row-balanced parallel (disjoint slices → deterministic). `y=αAx+βy`, `y=αAᵀx+βy` (complex: conj/non-conj). `SparseLinearOp<T>` (first sparse consumer of v0a `LinearOp<T>`). CSR→SELL convert. **CLI:** `hesap.sparse.spmv`/`spmv_transpose` × {f32,f64,c32,c64}. | **≥ Eigen-ST single-thread AND ≥ 2.5× parallel; ≥ 60% STREAM-triad bandwidth bound.** Ship when hit. | ~25 |
+| **v1c** | **Element-wise + structural + format-conversion graph.** A±B (matched + symbolic-union patterns), αA, A.*B (Hadamard), sparse transpose (CSR↔CSC), diagonal extract/set/scale, triangular extract. Conversion hub = CSR: COO↔CSR↔CSC↔BSR↔ELL↔SELL↔DIA. Submatrix/row/col slice views. **CLI:** `hesap.sparse.add`/`sub`/`scale`/`hadamard`/`transpose`/`convert`/`diag`/`triu`/`tril` × {f32,f64,c32,c64}. | — | ~20 |
+| **v1d** | **spgemm core — hash accumulator, parallel, f32/f64.** Two-phase: symbolic (row-nnz bound via hash-set) + numeric (per-row private hash accumulator → column-sorted write = deterministic). Gustavson baseline → parallel hash. C=A·B + C=A·Aᵀ (normal equations). **f32/f64 only — complex deferred to v1g** (advisor split: spgemm is the v1 rabbit-hole risk). **CLI:** `hesap.sparse.spgemm`/`spgemm_ata` × {f32,f64} (c32/c64 land in v1g with the complex impl). | **median ≥ 1.3× Eigen (AmbiVector) on SuiteSparse corpus — ship at threshold, do NOT chase extreme-sparsity edge cases.** | ~20 |
+| **v1e** | **spmm (sparse×dense) + SDDMM.** C(dense)=A(sparse)·B(dense) — multiple RHS for block-Krylov / batched solve; row-wise, dense-RHS blocked, parallel. SDDMM (sampled dense·dense→sparse mask, GNN/ML). 4 variants. **CLI:** `hesap.sparse.spmm`/`sddmm` × {f32,f64,c32,c64}. | **≥ 2× Eigen on multi-RHS (Eigen loops spmv).** | ~15 |
+| **v1f** | **Block + structured formats: BSR + ELL + DIA.** BSR (b×b dense blocks — reuses the v0d dense gemm microkernel for block-spmv; FEM/physics high-value). ELL (regular sparsity). DIA (banded/structured-grid). Each: storage + spmv + CSR convert. (SELL already shipped in v1b.) **CLI:** `hesap.sparse.bsr_*`/`ell_*`/`dia_*` build + spmv + convert × {f32,f64,c32,c64}. | **BSR block-spmv ≥ Eigen block-sparse; ≥ scalar-CSR on its native block patterns.** | ~20 |
+| **v1g** | **spgemm complex + elite refinement + Matrix-Market I/O + v1-close.** spgemm c32/c64; BRMerge / MAGNUS-locality refinement + edge-case perf-attack — NOW, with v1f real-consumer data (advisor: sequence after v1f). `.mtx` reader/writer + SuiteSparse fixture corpus. **CLI:** `hesap.sparse.spgemm`/`spgemm_ata` c32/c64 + `mtx_read`/`mtx_write` + **CLI completeness audit** (every v1 op × variant has a registered command — the bulk was registered per-slice in v1a–f; this is the final verification, not the registration). **v1-close:** ADR-0065 §15 amendment (lock v1 decisions) + 18-config full sweep. | spgemm complex parity with f64 ratio | ~15 |
+
+**Dropped from v1 (2026-05-20 scope review, user-confirmed):** CSR5 + Merge-CSR
+(GPU-shaped formats → **v17 GPU slice**, built with their real GPU consumer);
+JDS + SkyLine (legacy, "rare modern use" → **filed follow-on**, built only on
+consumer pull). HYB (ELL+COO hybrid) folds into v1f if ELL's padding proves
+wasteful on a real corpus, else also a follow-on. Rationale: shipping CPU
+storage of GPU/legacy formats with no consumer is the speculative pattern v0f
+learned to defer ([[feedback_ship_at_consumer_template_from_day_one]]).
+
+**Ordering note:** v1d (spgemm core) lands mid-cluster, but its complex variants
++ perf-attack (v1g) are deliberately sequenced LAST, after v1f gives real
+block-format consumer data — so the spgemm perf-attack optimizes against
+representative workloads, not a guess.
 
 ---
 

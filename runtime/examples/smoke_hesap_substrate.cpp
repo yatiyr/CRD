@@ -111,11 +111,11 @@ int main()
         return fail("Handle null sentinel mismatch");
     }
 
-    // 4. CRDR FourCC.
-    if (kHesapDenseFourCC != 0x30564448U)
-    {
-        return fail("kHesapDenseFourCC pin drift");
-    }
+    // 4. CRDR FourCC pin. static_assert, not a runtime `if`: the condition is a
+    //    constexpr comparison, which trips C4127 "conditional expression is
+    //    constant" under /WX on some MSVC versions (e.g. CI's 14.44 vs local
+    //    14.50). Compile-time is also the correct place to catch pin drift.
+    static_assert(kHesapDenseFourCC == 0x30564448U, "kHesapDenseFourCC pin drift ('HDV0')");
 
     // 5. Registry — the static-init block above registered hesap.smoke.echo;
     //    confirm it shows up.
