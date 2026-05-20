@@ -66,7 +66,31 @@ crd::jobs::JobObserver g_observer{};
 bool g_installed = false;
 std::mutex g_install_mutex;
 
-JobsAdapterStats g_stats{};
+// Internal atomic mirror of JobsAdapterStats. The observer callbacks fire
+// concurrently on every worker thread (a parallel_for's jobs end in
+// parallel), so the counters must be atomic -- a plain `++` is a data race
+// (lost updates surfaced as `jobs_ended == 7` for an 8-job batch under
+// linux-gcc -O2). Relaxed ordering is correct: these are pure tallies with
+// no happens-before relationship to any other read.
+struct AtomicStats
+{
+    std::atomic<crd::u64> jobs_begun{0};
+    std::atomic<crd::u64> jobs_ended{0};
+    std::atomic<crd::u64> fibers_yielded{0};
+    std::atomic<crd::u64> fibers_resumed{0};
+    std::atomic<crd::u64> missing_tokens{0};
+
+    void reset() noexcept
+    {
+        jobs_begun.store(0, std::memory_order_relaxed);
+        jobs_ended.store(0, std::memory_order_relaxed);
+        fibers_yielded.store(0, std::memory_order_relaxed);
+        fibers_resumed.store(0, std::memory_order_relaxed);
+        missing_tokens.store(0, std::memory_order_relaxed);
+    }
+};
+
+AtomicStats g_stats{};
 
 // FNV-1a-style mix of a 64-bit pointer to a u32 hash. Adequate distribution
 // for ~200 live fibers in a 512-slot table.
@@ -129,7 +153,7 @@ void cb_on_job_begin(crd::jobs::FiberHandle fiber, crd::u8 /*thread_index*/,
 
     BeginToken tok = push_region(g_job_name, Category::Job);
     park_token(fiber, tok);
-    ++g_stats.jobs_begun;
+    g_stats.jobs_begun.fetch_add(1, std::memory_order_relaxed);
 }
 
 void cb_on_job_end(crd::jobs::FiberHandle fiber, crd::u8 /*thread_index*/) noexcept
@@ -138,18 +162,18 @@ void cb_on_job_end(crd::jobs::FiberHandle fiber, crd::u8 /*thread_index*/) noexc
     if (take_token(fiber, tok))
     {
         pop_region(g_job_name, tok, Category::Job);
-        ++g_stats.jobs_ended;
+        g_stats.jobs_ended.fetch_add(1, std::memory_order_relaxed);
     }
     else
     {
-        ++g_stats.missing_tokens;
+        g_stats.missing_tokens.fetch_add(1, std::memory_order_relaxed);
     }
     set_current_fiber_id(0U); // clear fiber tag on the thread; next non-job scope is OS-thread context
 }
 
 void cb_on_fiber_yield(crd::jobs::FiberHandle /*fiber*/, crd::u8 /*thread_index*/) noexcept
 {
-    ++g_stats.fibers_yielded;
+    g_stats.fibers_yielded.fetch_add(1, std::memory_order_relaxed);
     // v0c keeps a single paired Sample per job (begin -> end across the
     // yield is captured by Sample.begin_thread vs end_thread). A future
     // v0g UI enhancement could emit a split marker here.
@@ -159,7 +183,7 @@ void cb_on_fiber_resume(crd::jobs::FiberHandle fiber, crd::u8 /*thread_index*/) 
 {
     register_thread("job-worker"); // lazy register on resume thread too
     set_current_fiber_id(static_cast<crd::u32>(reinterpret_cast<std::uintptr_t>(fiber)));
-    ++g_stats.fibers_resumed;
+    g_stats.fibers_resumed.fetch_add(1, std::memory_order_relaxed);
 }
 
 } // namespace
@@ -183,7 +207,7 @@ void install_jobs_adapter() noexcept
 
     // Reset stats so each off->on transition starts from zero. Idempotent
     // re-install (the early-return above) keeps the running totals.
-    g_stats = JobsAdapterStats{};
+    g_stats.reset();
 
     crd::jobs::set_observer(&g_observer);
     g_installed = true;
@@ -211,13 +235,22 @@ void uninstall_jobs_adapter() noexcept
     }
     // Reset stats so a subsequent test or workload reads a clean baseline
     // even when it never re-installs the adapter.
-    g_stats = JobsAdapterStats{};
+    g_stats.reset();
     g_installed = false;
 }
 
 [[nodiscard]] bool jobs_adapter_installed() noexcept { return g_installed; }
 
-[[nodiscard]] JobsAdapterStats jobs_adapter_stats() noexcept { return g_stats; }
+[[nodiscard]] JobsAdapterStats jobs_adapter_stats() noexcept
+{
+    JobsAdapterStats out{};
+    out.jobs_begun     = g_stats.jobs_begun.load(std::memory_order_relaxed);
+    out.jobs_ended     = g_stats.jobs_ended.load(std::memory_order_relaxed);
+    out.fibers_yielded = g_stats.fibers_yielded.load(std::memory_order_relaxed);
+    out.fibers_resumed = g_stats.fibers_resumed.load(std::memory_order_relaxed);
+    out.missing_tokens = g_stats.missing_tokens.load(std::memory_order_relaxed);
+    return out;
+}
 
 #else // CRD_PERF_ENABLED == 0
 
