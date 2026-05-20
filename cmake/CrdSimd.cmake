@@ -157,7 +157,22 @@ target_compile_definitions(crd-simd-flags INTERFACE
 # always has it ON.
 
 if(CRD_DETERMINISTIC_FP)
-    if(MSVC)
+    if(MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+        # clang-cl. DO NOT use /fp:precise here: clang-cl maps it to
+        # -ffp-model=precise, which forces within-statement FMA contraction ON
+        # *and* then errors when overridden (-Werror,-Woverriding-option).
+        # clang-cl's default FP model is already IEEE-precise (no fast-math); the
+        # ONLY thing it gets wrong for ADR-0063 is that contraction defaults to
+        # on. So pass just -ffp-contract=off (via the /clang: forwarding escape
+        # hatch — the bare flag is rejected with -Wunknown-argument). Without
+        # this, clang-cl contracted `a -= b*c` into a single-rounded FMA and
+        # produced different bits than cl/gcc — e.g. `4 - (2/3)*6` is exactly 0
+        # with separate mul+sub but ~2.2e-16 under FMA, which made the LU
+        # exact-singular `== 0` detector miss on win-clang-cl-shipping.
+        # (Explicit simd::fma() still emits a hardware FMA — that is intended.)
+        target_compile_options(crd-simd-flags INTERFACE
+            $<$<COMPILE_LANGUAGE:CXX,C>:/clang:-ffp-contract=off>)
+    elseif(MSVC)
         target_compile_options(crd-simd-flags INTERFACE
             $<$<COMPILE_LANGUAGE:CXX,C>:/fp:precise>)
     else()

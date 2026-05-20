@@ -190,11 +190,14 @@ TEST_CASE("CLI: solver dispatch rejects singular matrix",
           "[hesap][solver][cli][error]")
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(64U * 1024U));
-    // Rank-deficient: row 2 = row 0 + row 1.
+    // Structurally singular: column 1 is all zeros (exact-0 pivot on every
+    // compiler / FP path — no reliance on lucky rounding). Verifies the CLI
+    // dispatch rejects a singular system; the FP-sensitive rank-deficient case
+    // is the determinism canary in test_lu.cpp.
     const crd::f64 a_flat[] = {
-        1.0, 2.0, 3.0,
-        2.0, 4.0, 8.0,
-        3.0, 6.0, 11.0};
+        1.0, 0.0, 3.0,
+        2.0, 0.0, 8.0,
+        3.0, 0.0, 11.0};
     const crd::f64 b_data[] = {1.0, 2.0, 3.0};
 
     CommandArgs args{&alloc};

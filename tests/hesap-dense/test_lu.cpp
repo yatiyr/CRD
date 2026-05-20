@@ -208,8 +208,25 @@ TEST_CASE("LU: detects exactly singular matrix", "[hesap][lu][real]")
          3.0, 6.0, 11.0});
     LU<double, Layout::RowMajor> lu(&alloc, 3);
     factor_lu(lu, a);
+    // Determinism canary: this matrix's exact-0 pivot relies on no FMA
+    // contraction (ADR-0063). It regressed on clang-cl-shipping until the
+    // build forced -ffp-contract=off (clang-cl's /fp:precise left contraction
+    // on, so `4 - (2/3)*6` came out ~2.2e-16 instead of exactly 0).
     REQUIRE(lu.info() != 0U);
     REQUIRE(lu.is_singular());
+
+    // Structurally singular: column 1 is all zeros, so the column-1 pivot is
+    // exactly 0 on every compiler / FP path (the rank-1 update only ever does
+    // `x -= lij * 0`). This guards the detection LOGIC independently of FP
+    // rounding, so a future optimizer change cannot silently mask it.
+    Matrix<double, Layout::RowMajor> z(&alloc, 3, 3,
+        {1.0, 0.0, 3.0,
+         2.0, 0.0, 8.0,
+         3.0, 0.0, 11.0});
+    LU<double, Layout::RowMajor> luz(&alloc, 3);
+    factor_lu(luz, z);
+    REQUIRE(luz.info() != 0U);
+    REQUIRE(luz.is_singular());
 }
 
 TEST_CASE("LU: solve_lu f32 at N=32", "[hesap][lu][real][f32]")
