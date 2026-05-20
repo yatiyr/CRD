@@ -88,10 +88,42 @@ delegated to CI** (this push) — CI is the canonical record of `RESULT: PASS`.
 - **Determinism**: factors bit-identical across worker counts.
 - **ADR-0065 §14 Accepted**; ADR-0083 Accepted.
 
+## Post-close CI hardening (second push, same day)
+
+The first CI run on the pushed fixes surfaced two more cross-config issues —
+neither a regression from the v0-close fixes; both pre-existing, exposed once the
+build got far enough to reach them. CI's MSVC is **14.44**; local is **14.50**.
+
+- **C4127 "conditional expression is constant"** (`/W4 /WX`). Local 14.50 relaxed
+  it; CI 14.44 still emits it. Hit `smoke_hesap_substrate` (a constexpr FourCC
+  check → fixed properly as a `static_assert`) and `geometry-curves/frames.hpp`
+  (`if (!closed || i < n)` where `curve.closed` is `static constexpr` for one
+  curve type and runtime for another — no clean per-site fix). **Resolution:**
+  globally suppress via `/wd4127` on `crd-warnings`, matching the existing
+  `/wd4714` precedent. → memory `feedback_msvc_c4127_ci_local_version_skew`.
+- **clang-cl FMA-contraction determinism hole.** clang-cl reports as MSVC and
+  honors `/fp:precise`, but — unlike MSVC `cl` — maps it to `-ffp-model=precise`
+  which leaves within-statement FMA contraction **on**. So clang-cl contracted
+  `a -= b*c` into a single-rounded FMA, producing different bits than cl/gcc and
+  **breaking the ADR-0063 no-contraction contract**. Surfaced as two failing
+  tests on win-clang-cl-shipping (`LU: detects exactly singular`, `CLI: solver
+  dispatch rejects singular`): `4 - (2/3)*6` is exactly 0 with separate mul+sub
+  but ~2.2e-16 under FMA, so the `== 0` singular detector missed. **Resolution:**
+  for clang-cl skip `/fp:precise` (its default model is already IEEE-precise) and
+  pass `/clang:-ffp-contract=off`. Validated on win-clang-cl-shipping: both tests
+  pass; full suite otherwise green (a lone `crd-simd-emission-check` + two
+  `_NOT_BUILT` "failures" in local runs were partial/stale-build artifacts, not
+  present in CI's clean build). Both singular tests **hardened** with a
+  structurally-singular (zero-column) matrix; the rank-deficient matrix is kept
+  as a determinism canary.
+
 ## Next
 
-**v1 — sparse storage substrate** (CSR/CSC/BSR/COO/ELL/HYB/DIA/CSR5/Merge-CSR/
-Sliced-ELL/JDS/SkyLine + spmv/spmm/spgemm + format-conversion graph + sparse
-`LinearOp` + complex + CLI). Then the strategic sequencing
-(`feedback_strategic_execution_plan_2026_05_15`) resumes **Phase 3.1 eylem
-v1c+**, which consumes geometry + hesap-dense from day 1.
+**v1 — sparse storage + kernels.** Detailed 7-sub-slice plan in
+`docs/phases/phase-3.1.6-hesap.md` (§ "v1 — Sparse storage + kernels — DETAILED
+PLAN"). Core-tier scope (Tier-3 CSR5/Merge-CSR/JDS/SkyLine dropped 2026-05-20):
+COO + CSR/CSC + BSR/ELL/SELL-C-σ/DIA + spmv (SELL primary) + spmv-T + spmm +
+spgemm (parallel hash) + element-wise + conversion graph + `SparseLinearOp` +
+Matrix-Market I/O + complex + CLI-per-op. First slice **v1a**. Then the strategic
+sequencing (`feedback_strategic_execution_plan_2026_05_15`) resumes **Phase 3.1
+eylem v1c+**, which consumes geometry + hesap-dense from day 1.
