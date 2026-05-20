@@ -720,3 +720,105 @@ Filed v0e follow-ons (consumer-/hardware-gated, not blocking):
 
 v0e shipped 7 sub-slices (a–g) in 1 day + a perf-attack session; 172
 hesap-dense cases / 65,098 assertions; 5-config DoD green.
+
+---
+
+## §14 Amendment (2026-05-20) — v0a–f implementation-validated decision lock (v0-close)
+
+**Status:** Accepted.
+
+Phase 3.1.6 v0 (dense foundation: substrate + BLAS L1/L2/L3 + dense direct
+solvers + property/bench infrastructure) is **closed**. §13 set the elite
+*plan* (D1–D17); §14 locks what was actually built and measured across v0a–f,
+records every deviation from the §13 plan, and certifies the v0-close gate.
+
+This is a **decision lock**, not a re-litigation: the algorithm-choice posture
+(§3), determinism contract (§4), allocator discipline (§6), and threading model
+(§7) hold unchanged. §14 only pins the v0-era implementation choices that were
+validated empirically and the scope deltas taken along the way.
+
+### v0-close gate (criteria met)
+
+- **18-config full sweep PASS** (`scripts/full-sweep.ps1`: 11 Windows + 7 Linux).
+- **hesap-dense suite**: 176 cases / 66,703 assertions (was 172 / 65,098 at
+  v0e-close; v0f added 5 property cases).
+- **Reference-class benchmarking** (continuous-benchmarking policy): GEMM 10/10
+  WINS over Eigen-MT; LU WINS N≥128; small-N dense-factor residual traced to
+  root cause (ADR-0083). Guards green (no-non-ascii / no-std-math /
+  simd-emission). Determinism: factors bit-identical across worker counts.
+
+### Locked v0 decisions
+
+**v0a–d (substrate + BLAS):**
+
+- **L50 (substrate from day 1).** `Complex<T>` (own value type, not
+  `std::complex`), the ~30-type matrix catalog headers, `LinearOp<T>` + 6
+  materialisations, `MatrixId`/`VectorId` handles, `'HDV0'` CRDR format pin, and
+  CLI protocol scaffolding (`CommandRegistry` + `CommandSchema` + structured
+  output + MCP-descriptor emit) all ship in v0a — realising §13 D1/D2/D3/D16.
+  **Sparse catalog deferred to v1** (the storage formats are v1's whole job).
+- **L51 (BLAS L1 reduction).** Kahan-Babuška-Neumaier pairwise reduction is the
+  default reduction tree (satisfies §4 determinism). SIMD path: 8-accumulator
+  `simd_dot`/`simd_sumsq` via single-rounded `simd::fma()`.
+- **L52 (BLAS L2 SIMD shape).** Single-pass BLAS symv (each lower-half element
+  touched once, updates both `y[i]` and `y[k]`) + 8-row tiled gemv +
+  16-wide-unroll symv with 4 dot accumulators + gated `_mm_prefetch(_T1)` for
+  `n > 512`. Residual 5–25% gaps vs Eigen filed `vs-ref-blas2-followups`
+  (need asm or AVX-512).
+- **L53 (BLAS L3 = Goto/BLIS layered gemm, intrinsics microkernel).** 5-loop
+  layered gemm + scalar/AVX2 microkernel hot-swap behind
+  `CRD_HESAP_MICROKERNEL_BACKEND`; **per-µarch asm deferred indefinitely**
+  behind ADR-0082's three-condition revisit gate (not triggered).
+  `gemm_parallel` = BLIS outer-loop parallelism over `crd::jobs::parallel_for`
+  (NOT a separate thread pool — §7). `gemm_parallel_auto` heuristic dispatch +
+  `gemm_mixed<f32,f64>` + `crd-hesap-sched::DependencyGraph` (per-tile
+  RAW/WAW/WAR). **Single-rounded `simd::fma()`** (distinct from two-rounded
+  `mul_add`) is the GEMM accumulation primitive and the key Eigen-MT-beating
+  lever.
+
+**v0e (dense direct solvers):** the eight decisions **v0e-D1…v0e-D8 above are
+now formally locked** (LU right-looking blocked; Cholesky small-N per-row-SIMD +
+large-N packed parallel `syrk_lower_minus`; LDLT Bunch-Kaufman SIMD-restructured;
+QR blocked compact-WY transposed-panel; LinearOp + Hager κ₁; Wilkinson IR;
+reusable packed `syrk_lower_minus`; **row-major storage promoted to standalone
+ADR-0083 Accepted**).
+
+**v0f (test + bench infrastructure):**
+
+- **L54 (property-based test framework).** Seeded `RandomMatrix` factory
+  (`tests/hesap-dense/random_matrix.hpp`) is the consolidated source of test
+  matrices (general / diag-dominant / SPD / symmetric-indefinite /
+  ill-conditioned-SPD); property tests assert each factorisation's defining
+  algebraic identity across seeds × sizes. Realises §13 D15's property tier.
+- **L55 (vs-reference bench dedup).** `crd_add_hesap_vs_ref_bench()` CMake
+  helper is the single registration path for every Eigen/OpenBLAS shootout
+  target. **Validated only with `CRD_BUILD_HESAP_VS_REFERENCE=ON`** — the gate
+  keeps fetch-heavy Eigen/OpenBLAS out of the routine sweep.
+
+### Deviations from the §13 plan (recorded)
+
+| §13 plan item | v0 outcome | Rationale |
+|---|---|---|
+| D15 `crd-hesap-bench` **sub-module** + committed LAPACK/SuiteSparse/FFTW reference binaries (v0f) | **Deferred to FFT/sparse slices (v1, v5, v10).** Shipped instead: in-tree `RandomMatrix` factory + property tests + a CMake bench-registration helper. No reference binaries committed today. | Committing FFTW/SuiteSparse fixtures before any consumer exists is speculative; ship the substrate (factory + helper) proactively, defer the consumer-specific fixtures. The continuous Eigen+OpenBLAS shootout already covers dense regression. |
+| `bench_common.hpp` shared C++ harness | **Deferred to the third vs-reference bench.** | `time_loop` couples to `jobs::frame_reset`, but 2 of 4 vs-ref benches don't link `crd-jobs`; abstracting over a 2/2 split is premature — sparse/FFT supplies the real third data point. |
+| D6 microkernel AVX-512 / NEON / SVE2 specialisation | **Filed hardware-gated** (`v0d-microkernel-{avx512,neon,sve2}`); scalar + AVX2 shipped. | The dev/CI hardware is AVX2-only (i9-14900K, no AVX-512); other ISAs need their target silicon to validate against. |
+| D5 mixed-precision IR (f32 factor → f64 refine) | Same-precision Wilkinson IR shipped; **HPL-AI mixed-precision filed `v0e-f2`.** | Needs a cross-precision solve wrapper; same-precision IR proves the refinement loop first. |
+| §13 "~30 tests/slice → 100–200" | v0 slices landed **38–94 cases each** (lower count, far higher assertion density — e.g. v0e-a alone is 37k assertions). | Property + parametric tests trade case count for assertion volume; the coverage intent (D15) is met. |
+
+### Filed follow-ons (consumer-/hardware-gated, NOT blocking v0)
+
+`v0d-microkernel-{avx512,neon,sve2,blocks-empirical-sweep}`, `v0d-asm-microkernel`
+(ADR-0082 gate), `v0e-a2` (LU complex), `v0e-b-hpd` (Hermitian Cholesky),
+`v0e-c-blocked`, `v0e-d-colpiv`, `v0e-e2`, `v0e-f2`, `v0e-g-eigen-mt-config`,
+`vs-ref-blas2-followups`, `v0d-small-gemm-fastpath`, `crd-hesap-bench` sub-module
++ reference-fixture replay (FFT/sparse-gated), `bench_common.hpp` (third-bench-gated).
+
+### Next
+
+**v1** — sparse storage substrate (CSR/CSC/BSR/COO/ELL/HYB/DIA/CSR5/Merge-CSR/
+Sliced-ELL/JDS/SkyLine) + spmv/spmm/spgemm + format-conversion graph + sparse
+`LinearOp` + complex variants + CLI registration. The strategic sequencing
+(`feedback_strategic_execution_plan_2026_05_15`) then resumes **Phase 3.1 eylem
+v1c+**, which consumes geometry + hesap-dense from day 1.
+
+§14 ✅ Accepted — v0a–f locked, Phase 3.1.6 v0 closed.

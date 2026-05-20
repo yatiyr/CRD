@@ -139,7 +139,7 @@ inline void syrk_lower_minus(MatrixView<const T, L> a, MatrixView<T, L> c,
     {
         auto* counter = crd::jobs::parallel_for(
             static_cast<crd::u32>(num_m_panels), nw,
-            [sp, block_row](crd::u32 begin, crd::u32 end)
+            [block_row](crd::u32 begin, crd::u32 end)
             {
                 for (crd::u32 pa = begin; pa < end; ++pa)
                 {

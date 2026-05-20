@@ -164,6 +164,23 @@ CRD_FORCEINLINE Vec4f operator/(Vec4f a, f32 s) noexcept { return a / Vec4f(s); 
 CRD_FORCEINLINE Vec4f mul_add(Vec4f a, Vec4f b, Vec4f c) noexcept { return (a * b) + c; }
 CRD_FORCEINLINE Vec4f mul_sub(Vec4f a, Vec4f b, Vec4f c) noexcept { return (a * b) - c; }
 
+// Single-rounded IEEE 754 FMA (a*b + c with one rounding). Distinct from mul_add
+// (two roundings, ADR-0063 default). Vec4f has no 256-bit hardware FMA path of
+// its own — it is the half-decomposition of Vec8f::fma on the scalar / SSE2 /
+// NEON backends (none of which expose a 256-bit float FMA). Per-lane std::fma is
+// IEEE 754-2008 mandated to match the hardware FMA bit-for-bit, so Vec8f stays
+// width-parity-exact. Do NOT rewrite as (a*b)+c — that is two-rounded and would
+// break parity with Vec8f's AVX2 _mm256_fmadd_ps path.
+CRD_FORCEINLINE Vec4f fma(Vec4f a, Vec4f b, Vec4f c) noexcept
+{
+    f32 af[4], bf[4], cf[4];
+    a.store(af);
+    b.store(bf);
+    c.store(cf);
+    return Vec4f(std::fma(af[0], bf[0], cf[0]), std::fma(af[1], bf[1], cf[1]),
+                 std::fma(af[2], bf[2], cf[2]), std::fma(af[3], bf[3], cf[3]));
+}
+
 // ---- min / max / abs / sqrt -----------------------------------------------
 
 CRD_FORCEINLINE Vec4f min(Vec4f a, Vec4f b) noexcept

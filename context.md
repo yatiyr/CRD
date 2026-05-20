@@ -7,43 +7,20 @@
 
 ## Current focus
 
-**As of 2026-05-20.** **Phase 3.1.6 `crd-hesap` v0e cluster — 6 of 8 sub-slices shipped 2026-05-20** in a single elite session:
+**As of 2026-05-20.** **Phase 3.1.6 `crd-hesap` v0 (dense foundation) — CLOSED** (18-config full sweep delegated to CI for the canonical `RESULT: PASS`). All sub-slices v0a–f shipped; **ADR-0065 §14 decision lock Accepted**. v0f shipped slimmed: a seeded `RandomMatrix` test factory + 5 property tests + a `crd_add_hesap_vs_ref_bench()` CMake helper; the speculative `crd-hesap-bench` sub-module + committed LAPACK/SuiteSparse/FFTW fixtures were deferred to the FFT/sparse slices that need them. **hesap-dense suite: 176 cases / 66,703 assertions PASS.**
 
-| Sub-slice | Surface | Test cases / assertions |
-|---|---|---|
-| **v0e-a** | LU partial-pivoting (right-looking blocked, bs=64; first `gemm_parallel` consumer) | 10 / 37,156 |
-| **v0e-b** | Cholesky SPD real (right-looking blocked) | 10 / 18,725 |
-| **v0e-c** | LDLT Bunch-Kaufman indefinite (1×1 + 2×2 pivots; block-aware solve) | 7 / 132 |
-| **v0e-d** | Householder QR (unblocked; `apply_q`/`apply_q_transpose`/`solve_qr` LS) | 7 / 164 |
-| **v0e-e** | LinearOp wrappers + Hager 1-norm condition estimator | 8 / 26 |
-| **v0e-f** | Iterative refinement (same-precision MVP; Wilkinson 1948) | 4 / 35 |
-| **v0e-g** | CLI registration (8 commands) + reference-class shootout vs Eigen | 6 / 32 |
+**v0-close caught + fixed 6 latent v0d cross-config bugs** (the first full sweep since `simd::fma()` landed; the 5-config per-slice DoD only builds MSVC-AVX2): gcc/clang need `-mfma` (`_mm256_fmadd`); `Vec4f` needed an `fma()` for the scalar/SSE2 `Vec8f` fallback; clang `-Werror` on an unused lambda capture (`syrk_microkernel.hpp`) + unused fn (`cli_register.cpp`); scalar/SSE2 unused prefetch locals in `blas2.cpp`; and `complex.hpp::arg()` used `std::atan2` (ADR-0063 violation) → now `crd::math::deterministic::atan2` via a new `crd-hesap → crd-math` PUBLIC edge. `-mfma` is determinism-safe: `mul_add` stays two-rounded under `-ffp-contract=off`; only explicit `simd::fma()` emits hardware FMA. Lesson saved in memory ([[feedback_full_sweep_catches_cross_config_simd]]).
 
-**Full hesap-dense suite: 170 cases / 61,001 assertions PASS** on win-debug + win-tidy (was 128 / 41,887 pre-v0e — gained 42 cases / 19,114 assertions today).
+**What v0 delivered (v0a–f):** substrate (`Complex<T>` + ~30-type matrix catalog + `LinearOp<T>` + typed handles + `'HDV0'` pin + CLI protocol scaffolding) → BLAS L1 (KBN pairwise + 8-acc SIMD) → BLAS L2 (single-pass symv + tiled gemv) → BLAS L3 (Goto/BLIS task-DAG gemm, **10/10 WINS over Eigen-MT**) → dense direct solvers (LU/Cholesky/LDLT/QR + LinearOp + Hager κ₁ + Wilkinson IR) → property/bench infrastructure. Reference-class solver shootout (i9-14900K AVX2, factor+solve): **LU WINS N≥128; Cholesky/QR/LDLT WIN or tie across most N**; small-N dense-factor residual root-caused to row-major-vs-Eigen-column-major layout fit (**ADR-0083 Accepted**, not a kernel-quality gap).
 
-**Reference-class shootout — AFTER v0e-perf-attack (vs Eigen-MT setNbThreads(16), i9-14900K AVX2, factor+solve, P-core affinity)**:
-- **LU.f64**: 0.52× (N=64), then **1.57× / 91× / 11× / 23× WINS at N=128/256/512/1024.**
-- **Cholesky.f64**: 0.96× / 0.69× / 0.50× / 0.65× / **1.16× WIN** (N=64→1024). Left-looking blocked + unblocked-SIMD small-N path.
-- **QR.f64**: **1.22× WIN** (N=64), 0.77×, 0.95× (tie), **1.06× WIN** (N=512). Blocked compact-WY + transposed-panel SIMD (was 0.04×!).
-- **LDLT.f64**: **1.01× / 0.96× / 1.16× / 1.13× / 1.16× / 0.95×** — WINS/ties everywhere (was 0.08× at N=256!). SIMD row-restructured trailing update.
+**§14 lock (ADR-0065):** formalises the v0 implementation decisions L50–L55 + the v0e set (v0e-D1…D8) + records every deviation from the §13 elite plan (bench sub-module deferred, `bench_common.hpp` deferred to third bench, microkernel AVX-512/NEON/SVE2 hardware-gated, mixed-precision IR filed `v0e-f2`). See ADR-0065 §14.
 
-**v0e-perf-attack (2026-05-20) delivered**: LDLT 14× faster (now WINS), QR 26× faster (now WINS at N=64/512), plus a **packed register-tiled parallel SYRK** (`detail/syrk_microkernel.hpp`, multi-platform Vec4d/Vec8f) that lifted **Cholesky N=512 0.65→0.83× and N=1024 0.96→1.47×**. All 5 configs green (debug+asan+tidy+shipping+release), 172 cases / 65,098 assertions. Session log: `docs/sessions/2026-05-20-hesap-v0e-perf-attack.md`.
+🎯 **NEXT after v0 closes = v1 sparse storage** (CSR/CSC/BSR/COO/ELL/HYB/DIA/CSR5/Merge-CSR/Sliced-ELL/JDS/SkyLine + spmv/spmm/spgemm + format-conversion graph + sparse `LinearOp` + complex + CLI). Then the strategic plan resumes **Phase 3.1 eylem v1c+** (consumes geometry + hesap-dense from day 1).
 
-**HONEST remaining sub-1× cells** (small-matrix regimes): Cholesky N=64/128/256 (0.94/0.70/0.55), LU N=64 (0.52), QR N=128/256 (0.76/0.96), LDLT N=64/1024 (0.96/0.94). **Root cause investigated + settled (ADR-0083):** small-N dense factorizations are column-oriented, fitting Eigen's column-major-native layout; we're row-major (D21). Proven a LAYOUT-FIT gap (not kernel quality) by 3 controlled experiments — per-row dot (BEST), naive col-major axpy + register-tiled col-major gemv BOTH regressed. See `memory/project_cholesky_smalln_rowmajor_limit` + Eigen `LLT.h:332`/`GeneralMatrixVector.h:156`. **ADR-0083 (Accepted): keep row-major** (ML/array-ecosystem aligned: NumPy/PyTorch/JAX; GEMM layout-neutral; GEMV row-major-natural) with a per-factor column-major escape hatch (factor objects opaque) if a hot-loop consumer ever proves it. The `syrk_lower_minus` primitive is built + reusable for future eig/sparse/optimization.
-
-**v0e CLUSTER CLOSED 2026-05-20** (v0e-a…g + perf-attack + v0e-close). Formal 5-config DoD PASS via `per-slice-check.ps1 -IncludeRelease -Parallel` (debug+asan+shipping+release+tidy; win-release needed a stale pre-v0d smoke/bench obj cleanup — known build-dir artifact, not a code issue). 172 cases / 65,098 assertions; guards green. ADR-0083 Accepted (row-major storage). v0e decisions D1–D8 queued in ADR-0065 for §14 lock at v0-close. Rollup: `docs/sessions/2026-05-20-hesap-v0e-close.md`.
-
-🎯 **NEXT = v0f** — `crd-hesap-bench` sub-module + reference-fixture replay infrastructure + property-based test framework (`RandomMatrix<T>`). Then **v0-close** (ADR-0065 §14 lock for v0a–f + 18-config full sweep). After Phase 3.1.6 closes: **Phase 3.1 eylem v1c+ resumes** (consumes geometry + hesap from day 1). All factors are bit-deterministic. `Permutation` body populated (was a v0a shell). Pre-existing `blas2.cpp` tidy debt (matrix-notation locals `A`/`L`/`U`/`A_row`) cleaned up via narrow NOLINTBEGIN scope in v0e-a. **The `gemm_parallel` substrate from v0d is now consumed by LU + Cholesky trailing updates — first real consumers outside the bench harness.** Sessions: `docs/sessions/2026-05-20-hesap-v0e-a-lu.md`, `docs/sessions/2026-05-20-hesap-v0e-b-cholesky.md`, `docs/sessions/2026-05-20-hesap-v0e-c-d-ldlt-qr.md`.
-
-🎯 **NEXT = v0e-close** — 5-config DoD (`scripts/per-slice-check.ps1 -IncludeRelease -Parallel`) + rollup session log + ADR-0065 §14 decisions queue + update `docs/systems/hesap-dense.md` with solver scorecard. ~0.5 d.
-
-**Filed v0e follow-ons** (all hardware-/consumer-gated, not blocking the cluster close):
-- `v0e-a2` (LU complex variants), `v0e-a-perf` (consumer-gated panel SIMD/prefetch)
-- `v0e-b-hpd` (Hermitian Cholesky), `v0e-b-syrk-optim` (half-FLOP trailing update)
-- `v0e-c-blocked` (gemm_parallel trailing update for LDLT once 2×2 bookkeeping settled)
-- `v0e-d-blocked` (WY blocked Householder + gemm_parallel), `v0e-d-colpiv` (rank-revealing QR)
-- `v0e-e2` (LU/LDLT/QR condition estimators — need solve_transpose paths)
-- `v0e-f2` (mixed-precision HPL-AI iterative refinement)
+**Filed v0 follow-ons** (all hardware-/consumer-gated, NOT blocking v0):
+- `v0d-microkernel-{avx512,neon,sve2,blocks-empirical-sweep}`, `v0d-asm-microkernel` (ADR-0082 gate), `v0d-small-gemm-fastpath`
+- `v0e-a2` (LU complex), `v0e-b-hpd` (Hermitian Cholesky), `v0e-c-blocked`, `v0e-d-blocked`, `v0e-d-colpiv`, `v0e-e2`, `v0e-f2` (mixed-precision HPL-AI IR), `v0e-g-eigen-mt-config`
+- `vs-ref-blas2-followups`, `crd-hesap-bench` sub-module + reference-fixture replay (FFT/sparse-gated), `bench_common.hpp` (third-bench-gated)
 
 **Earlier 2026-05-20 — Phase 3.1.6 `crd-hesap` reference-class L1 + L2 + L3 shootout closed 2026-05-20.** Head-to-head benchmarks vs **Eigen 3.4 + OpenBLAS 0.3.27** at every level of the BLAS hierarchy. Single-thread P-core results except GEMM which is multi-threaded 16 P-threads. Final ratios on i9-14900K AVX2:
 

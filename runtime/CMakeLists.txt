@@ -465,124 +465,59 @@ crd_enable_default_pch(bench_hesap_gemm_parallel)
 
 # Reference-class shootout — built only when CRD_BUILD_HESAP_VS_REFERENCE=ON.
 # Eigen 3.4 + OpenBLAS are fetched via CPM at configure time.
+#
+# crd_add_hesap_vs_ref_bench(<name> [USE_JOBS] [USE_OPENBLAS]) — collapses the
+# add_executable + link + include-dir + OpenMP + /WX-suppression boilerplate
+# shared by every vs-reference bench. Source is examples/<name>.cpp.
+#   USE_JOBS     — also link crd-jobs (benches that call jobs::frame_reset).
+#   USE_OPENBLAS — also link openblas + its hard-coded generated-header dirs
+#                  (see note below). Omit for Eigen-only shootouts.
+# Eigen's MatrixXd*MatrixXd parallelism in 3.4 needs OpenMP in the CALLER's TU
+# (`#pragma omp parallel` is expanded inline); without it Eigen silently runs
+# serial regardless of setNbThreads(). /WX- is set via source-file property so
+# it comes AFTER crd-warnings' INTERFACE /WX and wins. PCH is skipped (conflicts
+# with eigen + cblas system headers).
+function(crd_add_hesap_vs_ref_bench name)
+    cmake_parse_arguments(ARG "USE_JOBS;USE_OPENBLAS" "" "" ${ARGN})
+    add_executable(${name} examples/${name}.cpp)
+    target_link_libraries(${name} PRIVATE
+        crd-core crd-memory crd-containers crd-math crd-hesap crd-hesap-dense eigen_headers)
+    if(ARG_USE_JOBS)
+        target_link_libraries(${name} PRIVATE crd-jobs)
+    endif()
+    if(ARG_USE_OPENBLAS)
+        target_link_libraries(${name} PRIVATE openblas)
+        # OpenBLAS does NOT export BUILD_INTERFACE include dirs (only INSTALL),
+        # and its CMakeLists writes the generated cblas.h + openblas_config.h to
+        # the TOP-LEVEL ${CMAKE_BINARY_DIR}, not the CPM sub-build dir.
+        target_include_directories(${name} SYSTEM PRIVATE
+            "${OpenBLAS_SOURCE_DIR}"
+            "${CMAKE_BINARY_DIR}"
+            "${CMAKE_BINARY_DIR}/generated"
+            "${CMAKE_BINARY_DIR}/_deps/openblas-build")
+    endif()
+    if(OpenMP_CXX_FOUND)
+        target_link_libraries(${name} PRIVATE OpenMP::OpenMP_CXX)
+    endif()
+    if(MSVC)
+        set_source_files_properties(examples/${name}.cpp PROPERTIES
+            COMPILE_FLAGS "/WX- /wd4242 /wd4244 /wd4267 /wd4127 /wd4146")
+    else()
+        set_source_files_properties(examples/${name}.cpp PROPERTIES COMPILE_FLAGS "-Wno-error")
+    endif()
+endfunction()
+
 if(CRD_BUILD_HESAP_VS_REFERENCE)
-    add_executable(bench_hesap_gemm_vs_reference
-        examples/bench_hesap_gemm_vs_reference.cpp
-    )
-    target_link_libraries(bench_hesap_gemm_vs_reference PRIVATE
-        crd-core
-        crd-memory
-        crd-containers
-        crd-math
-        crd-hesap
-        crd-hesap-dense
-        crd-jobs
-        eigen_headers
-        openblas
-    )
-    # OpenBLAS does NOT export BUILD_INTERFACE include dirs (only INSTALL),
-    # and its CMakeLists writes the generated cblas.h + openblas_config.h to
-    # the TOP-LEVEL ${CMAKE_BINARY_DIR}, not the CPM sub-build dir. Hard-code
-    # those locations explicitly.
-    target_include_directories(bench_hesap_gemm_vs_reference SYSTEM PRIVATE
-        "${OpenBLAS_SOURCE_DIR}"
-        "${CMAKE_BINARY_DIR}"
-        "${CMAKE_BINARY_DIR}/generated"
-        "${CMAKE_BINARY_DIR}/_deps/openblas-build"
-    )
-    # Eigen's MatrixXd*MatrixXd parallelism in 3.4 requires OpenMP in the
-    # CALLER's TU — `#pragma omp parallel` is expanded inline. Without this
-    # Eigen silently runs serial regardless of setNbThreads(). Verified
-    # at bench-start via Eigen::nbThreads() readback.
     find_package(OpenMP COMPONENTS CXX)
     if(OpenMP_CXX_FOUND)
-        target_link_libraries(bench_hesap_gemm_vs_reference PRIVATE OpenMP::OpenMP_CXX)
-        message(STATUS "[bench_hesap_gemm_vs_reference] OpenMP enabled for Eigen-MT")
+        message(STATUS "[hesap-vs-reference] OpenMP enabled for Eigen-MT")
     else()
-        message(WARNING "[bench_hesap_gemm_vs_reference] OpenMP NOT found — Eigen will run SERIAL")
+        message(WARNING "[hesap-vs-reference] OpenMP NOT found — Eigen will run SERIAL")
     endif()
-    # Disable warnings-as-errors for this target (Eigen + OpenBLAS headers fire
-    # many warnings we have no control over). target_compile_options PRIVATE
-    # appears BEFORE linked-library INTERFACE flags, so /WX from crd-warnings
-    # would override our /WX-. Source-file property comes LAST → wins.
-    if(MSVC)
-        set_source_files_properties(examples/bench_hesap_gemm_vs_reference.cpp
-            PROPERTIES COMPILE_FLAGS "/WX- /wd4242 /wd4244 /wd4267 /wd4127 /wd4146")
-    else()
-        set_source_files_properties(examples/bench_hesap_gemm_vs_reference.cpp
-            PROPERTIES COMPILE_FLAGS "-Wno-error")
-    endif()
-    # PCH conflicts with eigen + cblas system headers; skip PCH for this target.
 
-    # ---- BLAS L1 shootout ----
-    add_executable(bench_hesap_blas1_vs_reference
-        examples/bench_hesap_blas1_vs_reference.cpp
-    )
-    target_link_libraries(bench_hesap_blas1_vs_reference PRIVATE
-        crd-core
-        crd-memory
-        crd-containers
-        crd-math
-        crd-hesap
-        crd-hesap-dense
-        eigen_headers
-        openblas
-    )
-    target_include_directories(bench_hesap_blas1_vs_reference SYSTEM PRIVATE
-        "${OpenBLAS_SOURCE_DIR}"
-        "${CMAKE_BINARY_DIR}"
-        "${CMAKE_BINARY_DIR}/generated"
-        "${CMAKE_BINARY_DIR}/_deps/openblas-build"
-    )
-    if(OpenMP_CXX_FOUND)
-        target_link_libraries(bench_hesap_blas1_vs_reference PRIVATE OpenMP::OpenMP_CXX)
-    endif()
-    set_source_files_properties(examples/bench_hesap_blas1_vs_reference.cpp PROPERTIES
-        COMPILE_FLAGS "/WX- /wd4242 /wd4244 /wd4267 /wd4127 /wd4146")
-
-    # ---- BLAS L2 shootout ----
-    add_executable(bench_hesap_blas2_vs_reference
-        examples/bench_hesap_blas2_vs_reference.cpp
-    )
-    target_link_libraries(bench_hesap_blas2_vs_reference PRIVATE
-        crd-core
-        crd-memory
-        crd-containers
-        crd-math
-        crd-hesap
-        crd-hesap-dense
-        eigen_headers
-        openblas
-    )
-    target_include_directories(bench_hesap_blas2_vs_reference SYSTEM PRIVATE
-        "${OpenBLAS_SOURCE_DIR}"
-        "${CMAKE_BINARY_DIR}"
-        "${CMAKE_BINARY_DIR}/generated"
-        "${CMAKE_BINARY_DIR}/_deps/openblas-build"
-    )
-    if(OpenMP_CXX_FOUND)
-        target_link_libraries(bench_hesap_blas2_vs_reference PRIVATE OpenMP::OpenMP_CXX)
-    endif()
-    set_source_files_properties(examples/bench_hesap_blas2_vs_reference.cpp PROPERTIES
-        COMPILE_FLAGS "/WX- /wd4242 /wd4244 /wd4267 /wd4127 /wd4146")
-
-    # ---- v0e-g: solvers shootout (LU / Cholesky / LDLT / QR vs Eigen) ----
-    add_executable(bench_hesap_solvers_vs_reference
-        examples/bench_hesap_solvers_vs_reference.cpp
-    )
-    target_link_libraries(bench_hesap_solvers_vs_reference PRIVATE
-        crd-core
-        crd-memory
-        crd-containers
-        crd-math
-        crd-hesap
-        crd-hesap-dense
-        crd-jobs
-        eigen_headers
-    )
-    if(OpenMP_CXX_FOUND)
-        target_link_libraries(bench_hesap_solvers_vs_reference PRIVATE OpenMP::OpenMP_CXX)
-    endif()
-    set_source_files_properties(examples/bench_hesap_solvers_vs_reference.cpp PROPERTIES
-        COMPILE_FLAGS "/WX- /wd4242 /wd4244 /wd4267 /wd4127 /wd4146")
+    crd_add_hesap_vs_ref_bench(bench_hesap_gemm_vs_reference    USE_JOBS USE_OPENBLAS)
+    crd_add_hesap_vs_ref_bench(bench_hesap_blas1_vs_reference   USE_OPENBLAS)
+    crd_add_hesap_vs_ref_bench(bench_hesap_blas2_vs_reference   USE_OPENBLAS)
+    # v0e-g: solvers shootout (LU / Cholesky / LDLT / QR) — Eigen-only.
+    crd_add_hesap_vs_ref_bench(bench_hesap_solvers_vs_reference USE_JOBS)
 endif()

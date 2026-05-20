@@ -7,6 +7,8 @@
 #include <crd/hesap/dense/matrix_types.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
+#include "random_matrix.hpp"
+
 #include <cmath>
 
 using crd::hesap::dense::factor_ldlt;
@@ -14,43 +16,11 @@ using crd::hesap::dense::Layout;
 using crd::hesap::dense::LDLT;
 using crd::hesap::dense::solve_ldlt;
 using crd::hesap::dense::Symmetric;
+using crd_hesap_dense_tests::random_symmetric_indefinite;
 using Catch::Matchers::WithinAbs;
 
 namespace
 {
-// Build a symmetric (NOT necessarily positive-definite) matrix from a seed.
-template <typename T>
-void build_symmetric_indefinite(Symmetric<T>& a, crd::u32 seed)
-{
-    const crd::usize n = a.n();
-    crd::u32 s = seed;
-    for (crd::usize i = 0; i < n; ++i)
-    {
-        for (crd::usize j = 0; j <= i; ++j)
-        {
-            s = s * 1664525U + 1013904223U;
-            // Range [-1, 1) for indefinite; small diagonal boost so the
-            // matrix is well-conditioned and Bunch-Kaufman finds clean pivots.
-            const T raw = static_cast<T>(static_cast<crd::i32>(s >> 8) % 2000 - 1000) *
-                          static_cast<T>(0.001);
-            T entry = raw;
-            if (i == j)
-            {
-                // Keep some diagonals negative so the matrix is indefinite.
-                if ((s & 1U) == 0U)
-                {
-                    entry -= static_cast<T>(2);
-                }
-                else
-                {
-                    entry += static_cast<T>(2);
-                }
-            }
-            a.at(i, j) = entry;
-        }
-    }
-}
-
 // Compute A·x manually using Symmetric's full-access at().
 template <typename T>
 void mat_vec(const Symmetric<T>& a, const T* x, T* y)
@@ -131,7 +101,7 @@ TEST_CASE("LDLT: solve correctness at N=16 random indefinite",
     crd::memory::TlsfAllocator alloc(512U * 1024U);
     constexpr crd::usize kN = 16;
     Symmetric<double> a(&alloc, kN);
-    build_symmetric_indefinite<double>(a, 271U);
+    random_symmetric_indefinite<double>(a, 271U);
 
     crd::containers::Array<double> x_true(&alloc);
     x_true.resize(kN);
@@ -162,7 +132,7 @@ TEST_CASE("LDLT: solve correctness at N=64 random indefinite",
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(4U * 1024U * 1024U));
     constexpr crd::usize kN = 64;
     Symmetric<double> a(&alloc, kN);
-    build_symmetric_indefinite<double>(a, 3141U);
+    random_symmetric_indefinite<double>(a, 3141U);
 
     crd::containers::Array<double> x_true(&alloc);
     x_true.resize(kN);
@@ -193,7 +163,7 @@ TEST_CASE("LDLT: f32 solve at N=32",
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(2U * 1024U * 1024U));
     constexpr crd::usize kN = 32;
     Symmetric<float> a(&alloc, kN);
-    build_symmetric_indefinite<float>(a, 2718U);
+    random_symmetric_indefinite<float>(a, 2718U);
 
     crd::containers::Array<float> x_true(&alloc);
     x_true.resize(kN);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <crd/core/types.hpp>
+#include <crd/math/deterministic.hpp>
 
 #include <cmath>
 #include <limits>
@@ -19,7 +20,7 @@ namespace crd::hesap
 //   - Division uses Smith 1962 robust algorithm (avoids spurious overflow
 //     and underflow when |re| or |im| is near the type's range bounds).
 //   - abs uses std::hypot (no spurious overflow on x*x + y*y).
-//   - arg uses std::atan2 (handles quadrant correctly).
+//   - arg uses the deterministic atan2 (handles quadrant correctly).
 //   - Every op is scalar in v0a; SIMD bit-exact parity arrives v0b
 //     (the algorithms here vectorise without changing summation order).
 //
@@ -183,11 +184,12 @@ template <typename T>
     return std::hypot(z.re, z.im);
 }
 
-// Argument (angle). Uses std::atan2 for correct quadrant handling.
+// Argument (angle). Uses the deterministic atan2 (ADR-0063: bit-exact across
+// platforms/compilers/SIMD widths) for correct quadrant handling.
 template <typename T>
 [[nodiscard]] inline T arg(const Complex<T>& z) noexcept
 {
-    return std::atan2(z.im, z.re);
+    return crd::math::deterministic::atan2(z.im, z.re);
 }
 
 // ---- Type aliases ---------------------------------------------------

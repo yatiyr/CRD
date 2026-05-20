@@ -114,14 +114,6 @@ CommandResult error_result(crd::memory::IAllocator* alloc, const char* msg)
     return r;
 }
 
-CommandResult void_result(crd::memory::IAllocator* alloc)
-{
-    CommandResult r{alloc};
-    r.ok = true;
-    r.value = ResultVoid{};
-    return r;
-}
-
 CommandResult scalar_result(crd::memory::IAllocator* alloc, crd::f64 value)
 {
     CommandResult r{alloc};

@@ -51,6 +51,7 @@ target_link_libraries(crd-hesap
         crd-core
         crd-containers
         crd-memory
+        crd-math   # complex.hpp arg() uses crd::math::deterministic::atan2 (ADR-0063)
     PRIVATE
         crd-warnings
 )

@@ -87,7 +87,9 @@ void gemv(T alpha, MatrixView<const T, L> a, crd::containers::ConstSpan<T> x, T 
                 // 2 FMA ports × 4-cyc latency = 8 in-flight needed for peak;
                 // 8-way ILP saturates the FMA pipeline. Register usage:
                 // 8 accumulators + 1 x_reg + 1 A_temp = 10 of 16 YMM.
-                const bool use_prefetch = (n > 512);
+                // [[maybe_unused]]: only read inside the CRD_SIMD_HAS_AVX2
+                // prefetch block below (scalar / SSE2 compile it out).
+                [[maybe_unused]] const bool use_prefetch = (n > 512);
                 crd::usize i = 0;
                 for (; i + 8 <= m; i += 8)
                 {
@@ -426,11 +428,13 @@ void symv(T alpha, const Symmetric<T>& a, crd::containers::ConstSpan<T> x, T bet
             // memory hasn't been touched by the HW streaming prefetcher.
             // At small N the whole matrix lower-half fits in L1/L2 and the
             // prefetch instructions are pure overhead (measured 6% loss at N=64).
-            const bool use_prefetch = (n > 512);
+            // [[maybe_unused]]: only read inside the CRD_SIMD_HAS_AVX2 prefetch
+            // blocks below; the scalar / SSE2 backends compile those out.
+            [[maybe_unused]] const bool use_prefetch = (n > 512);
             for (crd::usize i = 0; i < n; ++i)
             {
                 const T* A_row = A + i * n;
-                const T* A_next_row = (i + 1 < n) ? (A + (i + 1) * n) : nullptr;
+                [[maybe_unused]] const T* A_next_row = (i + 1 < n) ? (A + (i + 1) * n) : nullptr;
                 const crd::f64 x_i = x_data[i];
                 const simd::Vec4d vec_alpha_x_i(alpha * x_i);  // fused alpha*x[i] once
 

@@ -6,6 +6,7 @@
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
 #include "hesap_jobs_fixture.hpp"
+#include "random_matrix.hpp"
 
 #include <cstring>
 
@@ -14,6 +15,7 @@ using crd::hesap::dense::gemm_parallel;
 using crd::hesap::dense::Layout;
 using crd::hesap::dense::Matrix;
 using crd::hesap::dense::Trans;
+using crd_hesap_dense_tests::random_general;
 
 // Lifetime: every TEST_CASE that uses gemm_parallel ends with crd::jobs::wait,
 // so the fiber system is quiescent at fixture teardown. The fixture inits the
@@ -30,21 +32,6 @@ inline crd_hesap_dense_tests::HesapJobsListener& parallel_jobs_listener()
 
 namespace
 {
-template <typename T, Layout L>
-void fill_matrix(Matrix<T, L>& m, crd::u32 seed)
-{
-    crd::u32 s = seed;
-    for (crd::usize i = 0; i < m.rows(); ++i)
-    {
-        for (crd::usize j = 0; j < m.cols(); ++j)
-        {
-            s = s * 1664525U + 1013904223U;
-            const T raw = static_cast<T>(static_cast<crd::i32>(s >> 8) % 1000) * static_cast<T>(0.001);
-            m(i, j) = raw;
-        }
-    }
-}
-
 template <typename T, Layout L>
 [[nodiscard]] bool matrices_bit_identical(const Matrix<T, L>& a, const Matrix<T, L>& b) noexcept
 {
@@ -66,10 +53,10 @@ TEST_CASE("gemm_parallel: num_workers=1 falls back to serial gemm",
     Matrix<crd::f32> b(&alloc, kN, kN);
     Matrix<crd::f32> c_serial(&alloc, kN, kN);
     Matrix<crd::f32> c_par(&alloc, kN, kN);
-    fill_matrix(a, 1U);
-    fill_matrix(b, 2U);
-    fill_matrix(c_serial, 3U);
-    fill_matrix(c_par, 3U);
+    random_general(a, 1U);
+    random_general(b, 2U);
+    random_general(c_serial, 3U);
+    random_general(c_par, 3U);
 
     gemm<crd::f32, Layout::RowMajor>(1.5F, a, b, 0.5F, c_serial);
     gemm_parallel<crd::f32, Layout::RowMajor>(1U, 1.5F, a, b, 0.5F, c_par);
@@ -84,17 +71,17 @@ TEST_CASE("gemm_parallel: f32 bit-exact across worker counts at N=64",
     constexpr crd::usize kN = 64;
     Matrix<crd::f32> a(&alloc, kN, kN);
     Matrix<crd::f32> b(&alloc, kN, kN);
-    fill_matrix(a, 11U);
-    fill_matrix(b, 22U);
+    random_general(a, 11U);
+    random_general(b, 22U);
 
     Matrix<crd::f32> c_serial(&alloc, kN, kN);
-    fill_matrix(c_serial, 33U);
+    random_general(c_serial, 33U);
     gemm<crd::f32, Layout::RowMajor>(1.0F, a, b, 0.0F, c_serial);
 
     for (crd::u32 nw : {2U, 4U, 8U, 16U})
     {
         Matrix<crd::f32> c_par(&alloc, kN, kN);
-        fill_matrix(c_par, 33U);
+        random_general(c_par, 33U);
         gemm_parallel<crd::f32, Layout::RowMajor>(nw, 1.0F, a, b, 0.0F, c_par);
         CAPTURE(nw);
         REQUIRE(matrices_bit_identical(c_serial, c_par));
@@ -109,17 +96,17 @@ TEST_CASE("gemm_parallel: f32 bit-exact across worker counts at N=256",
     constexpr crd::usize kN = 256;
     Matrix<crd::f32> a(&alloc, kN, kN);
     Matrix<crd::f32> b(&alloc, kN, kN);
-    fill_matrix(a, 101U);
-    fill_matrix(b, 202U);
+    random_general(a, 101U);
+    random_general(b, 202U);
 
     Matrix<crd::f32> c_serial(&alloc, kN, kN);
-    fill_matrix(c_serial, 303U);
+    random_general(c_serial, 303U);
     gemm<crd::f32, Layout::RowMajor>(0.75F, a, b, 0.25F, c_serial);
 
     for (crd::u32 nw : {2U, 4U, 8U, 16U})
     {
         Matrix<crd::f32> c_par(&alloc, kN, kN);
-        fill_matrix(c_par, 303U);
+        random_general(c_par, 303U);
         gemm_parallel<crd::f32, Layout::RowMajor>(nw, 0.75F, a, b, 0.25F, c_par);
         CAPTURE(nw);
         REQUIRE(matrices_bit_identical(c_serial, c_par));
@@ -134,17 +121,17 @@ TEST_CASE("gemm_parallel: f64 bit-exact across worker counts at N=256",
     constexpr crd::usize kN = 256;
     Matrix<crd::f64> a(&alloc, kN, kN);
     Matrix<crd::f64> b(&alloc, kN, kN);
-    fill_matrix(a, 7U);
-    fill_matrix(b, 13U);
+    random_general(a, 7U);
+    random_general(b, 13U);
 
     Matrix<crd::f64> c_serial(&alloc, kN, kN);
-    fill_matrix(c_serial, 19U);
+    random_general(c_serial, 19U);
     gemm<crd::f64, Layout::RowMajor>(1.0, a, b, 0.0, c_serial);
 
     for (crd::u32 nw : {2U, 4U, 8U, 16U})
     {
         Matrix<crd::f64> c_par(&alloc, kN, kN);
-        fill_matrix(c_par, 19U);
+        random_general(c_par, 19U);
         gemm_parallel<crd::f64, Layout::RowMajor>(nw, 1.0, a, b, 0.0, c_par);
         CAPTURE(nw);
         REQUIRE(matrices_bit_identical(c_serial, c_par));
@@ -159,17 +146,17 @@ TEST_CASE("gemm_parallel: f64 bit-exact across worker counts at N=1024",
     constexpr crd::usize kN = 1024;
     Matrix<crd::f64> a(&alloc, kN, kN);
     Matrix<crd::f64> b(&alloc, kN, kN);
-    fill_matrix(a, 555U);
-    fill_matrix(b, 666U);
+    random_general(a, 555U);
+    random_general(b, 666U);
 
     Matrix<crd::f64> c_serial(&alloc, kN, kN);
-    fill_matrix(c_serial, 777U);
+    random_general(c_serial, 777U);
     gemm<crd::f64, Layout::RowMajor>(1.0, a, b, 0.0, c_serial);
 
     for (crd::u32 nw : {4U, 16U})
     {
         Matrix<crd::f64> c_par(&alloc, kN, kN);
-        fill_matrix(c_par, 777U);
+        random_general(c_par, 777U);
         gemm_parallel<crd::f64, Layout::RowMajor>(nw, 1.0, a, b, 0.0, c_par);
         CAPTURE(nw);
         REQUIRE(matrices_bit_identical(c_serial, c_par));
@@ -187,17 +174,17 @@ TEST_CASE("gemm_parallel: transposed operands bit-exact",
     // For trans_a = Transpose: A is kK x kM (read as kM x kK after transpose).
     Matrix<crd::f32> a(&alloc, kK, kM);
     Matrix<crd::f32> b(&alloc, kK, kN);
-    fill_matrix(a, 41U);
-    fill_matrix(b, 43U);
+    random_general(a, 41U);
+    random_general(b, 43U);
 
     Matrix<crd::f32> c_serial(&alloc, kM, kN);
-    fill_matrix(c_serial, 47U);
+    random_general(c_serial, 47U);
     gemm<crd::f32, Layout::RowMajor>(0.5F, a, b, 0.5F, c_serial, Trans::Transpose, Trans::None);
 
     for (crd::u32 nw : {2U, 4U, 8U})
     {
         Matrix<crd::f32> c_par(&alloc, kM, kN);
-        fill_matrix(c_par, 47U);
+        random_general(c_par, 47U);
         gemm_parallel<crd::f32, Layout::RowMajor>(nw, 0.5F, a, b, 0.5F, c_par, Trans::Transpose,
                                                   Trans::None);
         CAPTURE(nw);
@@ -215,17 +202,17 @@ TEST_CASE("gemm_parallel: rectangular non-multiple shape bit-exact",
     constexpr crd::usize kK = 89;
     Matrix<crd::f32> a(&alloc, kM, kK);
     Matrix<crd::f32> b(&alloc, kK, kN);
-    fill_matrix(a, 91U);
-    fill_matrix(b, 93U);
+    random_general(a, 91U);
+    random_general(b, 93U);
 
     Matrix<crd::f32> c_serial(&alloc, kM, kN);
-    fill_matrix(c_serial, 95U);
+    random_general(c_serial, 95U);
     gemm<crd::f32, Layout::RowMajor>(1.25F, a, b, -0.5F, c_serial);
 
     for (crd::u32 nw : {2U, 4U, 8U})
     {
         Matrix<crd::f32> c_par(&alloc, kM, kN);
-        fill_matrix(c_par, 95U);
+        random_general(c_par, 95U);
         gemm_parallel<crd::f32, Layout::RowMajor>(nw, 1.25F, a, b, -0.5F, c_par);
         CAPTURE(nw);
         REQUIRE(matrices_bit_identical(c_serial, c_par));
@@ -243,10 +230,10 @@ TEST_CASE("gemm_parallel_auto: tiny matrix routed serial",
     Matrix<crd::f64> b(&alloc, kN, kN);
     Matrix<crd::f64> c_serial(&alloc, kN, kN);
     Matrix<crd::f64> c_auto(&alloc, kN, kN);
-    fill_matrix(a, 7U);
-    fill_matrix(b, 13U);
-    fill_matrix(c_serial, 19U);
-    fill_matrix(c_auto, 19U);
+    random_general(a, 7U);
+    random_general(b, 13U);
+    random_general(c_serial, 19U);
+    random_general(c_auto, 19U);
 
     crd::hesap::dense::gemm<crd::f64, Layout::RowMajor>(1.5, a, b, -0.25, c_serial);
     crd::hesap::dense::gemm_parallel_auto<crd::f64, Layout::RowMajor>(1.5, a, b, -0.25, c_auto);
@@ -263,10 +250,10 @@ TEST_CASE("gemm_parallel_auto: large matrix routed parallel + matches serial",
     Matrix<crd::f64> b(&alloc, kN, kN);
     Matrix<crd::f64> c_serial(&alloc, kN, kN);
     Matrix<crd::f64> c_auto(&alloc, kN, kN);
-    fill_matrix(a, 41U);
-    fill_matrix(b, 43U);
-    fill_matrix(c_serial, 47U);
-    fill_matrix(c_auto, 47U);
+    random_general(a, 41U);
+    random_general(b, 43U);
+    random_general(c_serial, 47U);
+    random_general(c_auto, 47U);
 
     crd::hesap::dense::gemm<crd::f64, Layout::RowMajor>(1.0, a, b, 0.0, c_serial);
     crd::hesap::dense::gemm_parallel_auto<crd::f64, Layout::RowMajor>(1.0, a, b, 0.0, c_auto);
@@ -281,17 +268,17 @@ TEST_CASE("gemm_parallel: repeated runs at same worker count are deterministic",
     constexpr crd::usize kN = 256;
     Matrix<crd::f64> a(&alloc, kN, kN);
     Matrix<crd::f64> b(&alloc, kN, kN);
-    fill_matrix(a, 1111U);
-    fill_matrix(b, 2222U);
+    random_general(a, 1111U);
+    random_general(b, 2222U);
 
     Matrix<crd::f64> c_first(&alloc, kN, kN);
-    fill_matrix(c_first, 3333U);
+    random_general(c_first, 3333U);
     gemm_parallel<crd::f64, Layout::RowMajor>(8U, 1.0, a, b, 0.0, c_first);
 
     for (int run = 0; run < 4; ++run)
     {
         Matrix<crd::f64> c_again(&alloc, kN, kN);
-        fill_matrix(c_again, 3333U);
+        random_general(c_again, 3333U);
         gemm_parallel<crd::f64, Layout::RowMajor>(8U, 1.0, a, b, 0.0, c_again);
         CAPTURE(run);
         REQUIRE(matrices_bit_identical(c_first, c_again));

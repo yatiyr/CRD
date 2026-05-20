@@ -87,13 +87,23 @@ if(_crd_simd_resolved STREQUAL "avx2")
         target_compile_options(crd-simd-flags INTERFACE
             $<$<COMPILE_LANGUAGE:CXX,C>:/arch:AVX2>)
     else()
-        # NOTE: NOT -mfma. Cerid's mul_add explicitly does (a*b)+c with two
-        # roundings (ADR-0063); enabling FMA hardware would let -ffp-contract
-        # contract back into a single rounding and break replay-hash parity.
-        # The /fp:precise + -ffp-contract=off below also block contraction,
-        # but skipping -mfma adds belt and suspenders.
+        # -mfma is REQUIRED: crd-math's single-rounded simd::fma() (Vec8f/Vec4d,
+        # used by the crd-hesap microkernels per ADR-0082) lowers to the
+        # _mm256_fmadd_{ps,pd} intrinsic, which gcc/clang gate behind -mfma
+        # (unlike MSVC /arch:AVX2, which bundles FMA). Without it the always_inline
+        # intrinsic fails with "target specific option mismatch" on every gcc/clang
+        # AVX2 build — the v0-close full sweep was the first to catch this.
+        #
+        # This does NOT weaken the ADR-0063 determinism contract: mul_add stays
+        # two-rounded. mul_add is `(a*b)+c` built from separate _mm256_mul_pd +
+        # _mm256_add_pd intrinsics, and -ffp-contract=off (set below, propagated
+        # to every TU via crd-math's PUBLIC link of this target) blocks the
+        # compiler from contracting them into an FMA. Only the EXPLICIT simd::fma()
+        # call emits the hardware FMA. The SIMD/scalar bit-exact parity tests on
+        # the Linux configs are the standing guard that mul_add was not contracted.
         target_compile_options(crd-simd-flags INTERFACE
             $<$<COMPILE_LANGUAGE:CXX,C>:-mavx2>
+            $<$<COMPILE_LANGUAGE:CXX,C>:-mfma>
             $<$<COMPILE_LANGUAGE:CXX,C>:-msse4.2>)
     endif()
 elseif(_crd_simd_resolved STREQUAL "sse2")
