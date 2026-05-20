@@ -190,6 +190,18 @@ if(MSVC)
         # symptom to other release-class targets (smoke_imgui_overlay,
         # smoke_renderer, crd-config-tests, crd-imgui-tests, ...).
         $<$<COMPILE_LANGUAGE:CXX,C>:/wd4714>
+        # /wd4127 — silence "conditional expression is constant". Fires on
+        # legitimate template code where a condition is compile-time-constant in
+        # SOME instantiations but runtime in others — e.g. `if (!closed || i < n)`
+        # in geometry-curves where `curve.closed` is `static constexpr` for an
+        # open Bezier but a runtime member for a general spline, so `if constexpr`
+        # is not robust across the template. Version-dependent: local MSVC 14.50
+        # relaxed this warning, but CI's MSVC 14.44 still emits it under /WX
+        # ([[feedback_msvc_c4127_ci_local_version_skew]]). Same low-value /
+        # no-clean-source-fix class as /wd4714 above; suppress globally rather
+        # than scatter per-site pragmas. Genuine compile-time branches still use
+        # `if constexpr`; genuine pin checks still use `static_assert`.
+        $<$<COMPILE_LANGUAGE:CXX,C>:/wd4127>
     )
     if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
         target_compile_options(crd-warnings INTERFACE
