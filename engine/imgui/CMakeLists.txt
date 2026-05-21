@@ -21,6 +21,17 @@ target_include_directories(crd-imgui-vendor SYSTEM PRIVATE
     "${imgui_SOURCE_DIR}/backends"
 )
 
+# Phase 3.1.6 v1g-3 (2026-05-21) — disable IPO/LTCG on the vendored imgui
+# objects. MSVC's LTCG link recurrently emits a C1001 internal compiler error
+# in `link!DllGetObjHandler()` at `imgui.cpp` call-sites when imgui's /GL
+# objects are whole-program-optimised into a consumer exe (seen on
+# win-shipping linking crd-sandbox-showcase-tests). imgui is third-party debug
+# UI — there is no engine cross-TU inlining value in LTCG-ing it. Disabling IPO
+# un-`/GL`-tags imgui's objects so they leave every consumer's LTCG working
+# set, breaking the ICE chain; engine LTCG benefits are unaffected. Same
+# precedent as zstd_static + crd-jobs (root CMakeLists.txt §270).
+set_target_properties(crd-imgui-vendor PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
+
 target_link_libraries(crd-imgui-vendor PRIVATE
     Vulkan::Vulkan
     glfw

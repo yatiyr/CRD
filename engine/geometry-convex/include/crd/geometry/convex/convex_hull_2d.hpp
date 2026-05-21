@@ -179,8 +179,8 @@ inline void convex_hull_2d_indices(crd::containers::ConstSpan<Vec2<T>> points,
     {
         sorted.push_back({points[i], static_cast<crd::u32>(i)});
     }
-    crd::containers::stable_sort(sorted.begin(), sorted.end(),
-                                  hull_2d_detail::IndexedLexCompare<T>{});
+    crd::containers::stable_sort(sorted.begin(), sorted.end(), hull_2d_detail::IndexedLexCompare<T>{},
+                                 sorted.allocator());
 
     // Collapse coincident points: the hull never has two consecutive
     // identical vertices.

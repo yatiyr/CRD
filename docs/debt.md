@@ -5,6 +5,10 @@ move to a session log entry and remove from here.
 
 ## Active debt
 
+### ✅ `v1a-3-assembly-smalln` — RESOLVED 2026-05-20 (same day as filing)
+
+> Sparse COO→CSR/CSC assembly now **beats Eigen `setFromTriplets` at every size** (win-release, i9-class, best-of-3, f64): N=50k **1.03×**, N=200k **1.44×**, N=1M **1.76×** (was 0.74× / 1.16× / 1.19×). The candidate fix landed: `assemble<ByRow>` scatters **directly** into the final `inner_idx`/`values` (no `Entry` AoS), uses in-place parallel-array insertion sort for small inner vectors and a single reused merge-sort scratch for large ones (dense-row robustness preserved), and dedup-compacts in place. The last increment was a new `crd::containers::Array::resize_uninitialized` (trivially-constructible T only; value-inits otherwise) used for the two fully-scattered arrays — eliminating the zero-init pass that dominated the small-N residual. Verified by `bench_hesap_sparse_assembly_vs_reference`.
+
 ### Future cluster — direct-manipulation UX (gizmos / mesh + curve + navmesh editors) — filed 2026-05-19
 
 > **Not a follow-on; a future workstream cluster.** User flagged (during
@@ -166,6 +170,10 @@ ninja: build stopped: subcommand failed.
 2. `#pragma optimize("", off)` around `Config::load_from_file` (or the actual culprit if found).
 3. Split a TU to reduce the LTCG working set.
 4. Update MSVC toolchain (the canonical fix path but user-action).
+
+**Recurrences (trigger met — now in "watch, workaround if it gets frequent" territory, still non-blocking per policy):**
+- **2026-05-21 (hesap-sparse v1e-2 close):** same C1001 / Access violation in `link!DllGetObjHandler()`, this time on the `tests\sandbox\crd-sandbox-showcase-tests.exe` LTCG **link** (not config.cpp codegen) under `win-release`. 4/5 per-slice configs PASS; standalone `cmake --build --preset win-release` retry linked the same exe clean with no source change, then `ctest --preset win-release` = 2900/2900. So it remains the same non-deterministic LTCG-internals AV in the link phase, not our code. Pattern holds: it lands on whichever sandbox/showcase exe has the largest LTCG link working set. If it recurs again on the *next* sweep, apply workaround candidate 3 (split the showcase test TU) or 4 (toolchain update).
+- **2026-05-21 (hesap-sparse v1f close), SAME exe again:** identical C1001 / `DllGetObjHandler` AV linking `crd-sandbox-showcase-tests.exe` under `win-release`; retry linked clean, `ctest --preset win-release` = 2909/2909. **Two consecutive win-release DoDs now ICE on the same exe → no longer "random noise"; it is reproducibly the largest-LTCG-link target.** ESCALATION: at the v1-close 18-config full sweep, if `crd-sandbox-showcase-tests` (or `crd-sandbox`) ICEs again, **apply workaround 3 (split `tests/sandbox/test_showcase.cpp` into 2–3 TUs to shrink the LTCG link set)** rather than just retrying — the retry tax is now predictable and will recur every sweep. Still non-blocking for the per-slice DoD (retry-PASS), but the workaround is now warranted, not deferred-by-default.
 
 **Where referenced:**
 - `docs/sessions/2026-05-13-v1-debts-paid.md` — the sweep transcript, decision to close on retry-success.

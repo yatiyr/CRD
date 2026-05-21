@@ -221,6 +221,28 @@ TEST_CASE("Array: resize with fill value", "[containers][array]")
     REQUIRE(a[3] == 7);
 }
 
+TEST_CASE("Array: resize_uninitialized sizes without zero-init then is fully writable", "[containers][array]")
+{
+    // Trivial T: new slots are indeterminate but the size is set; writing every
+    // slot then reading back must be exact (the scatter-fill contract).
+    Array<crd::u32> a;
+    a.resize_uninitialized(8);
+    REQUIRE(a.size() == 8);
+    for (crd::u32 i = 0; i < 8; ++i)
+    {
+        a[i] = i * 3;
+    }
+    for (crd::u32 i = 0; i < 8; ++i)
+    {
+        REQUIRE(a[i] == i * 3);
+    }
+    // Shrinking is well-defined.
+    a.resize_uninitialized(3);
+    REQUIRE(a.size() == 3);
+    REQUIRE(a[0] == 0);
+    REQUIRE(a[2] == 6);
+}
+
 TEST_CASE("Array: copy ctor preserves contents and uses RHS allocator by default", "[containers][array]")
 {
     Array<int> a = {1, 2, 3};

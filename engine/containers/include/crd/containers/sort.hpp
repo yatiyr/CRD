@@ -9,9 +9,12 @@
 // orders differ across implementations.
 //
 // Algorithm choices:
-//   sort         → merge sort (naturally stable; no pivot-dependent ordering;
-//                  same algorithm as stable_sort — bit-exact equivalence)
-//   stable_sort  → merge sort
+//   sort         → in-place introsort (median-of-three quicksort + heapsort
+//                  fallback + insertion base). ZERO allocation; non-stable but
+//                  deterministic + bit-exact across platforms. NOT equivalent to
+//                  stable_sort for EQUAL keys (use stable_sort if order matters).
+//   stable_sort  → merge sort; O(N) scratch from the CALLER's allocator (or a
+//                  reusable scratch buffer) — never a hidden malloc.
 //   nth_element  → quickselect with median-of-three pivot (deterministic
 //                  pivot selection; fall-through to insertion sort for tiny
 //                  partitions)
@@ -23,9 +26,10 @@
 // All algorithms take a comparator (defaults to std::less<>). The comparator
 // MUST itself be deterministic — that's a contract the caller upholds.
 //
-// Memory: stable_sort allocates an auxiliary buffer of size N*sizeof(T)
-// (default-constructed). Requires T to be default-constructible. Other ops
-// are in-place.
+// Memory: stable_sort needs an auxiliary buffer of size N*sizeof(T) from the
+// caller's allocator (or a reusable scratch Array) — never a hidden malloc;
+// requires T default-constructible. `sort`, `nth_element`, and the heap ops are
+// fully in-place (zero allocation).
 
 #pragma once
 
@@ -194,35 +198,123 @@ void heap_sift_down(It first, Diff idx, Diff size, Cmp cmp)
     }
     first[idx] = std::move(val);
 }
+
+// In-place heapsort (introsort's O(N log N) worst-case fallback). Deterministic.
+template <typename It, typename Cmp>
+void heap_sort(It first, It last, Cmp cmp)
+{
+    using Diff   = decltype(last - first);
+    const Diff n = last - first;
+    if (n < 2)
+    {
+        return;
+    }
+    for (Diff i = n / 2 - 1; i >= 0; --i)  // Floyd build (Diff is signed)
+    {
+        heap_sift_down(first, i, n, cmp);
+    }
+    for (Diff end = n - 1; end > 0; --end)
+    {
+        std::swap(first[0], first[end]);
+        heap_sift_down(first, static_cast<Diff>(0), end, cmp);
+    }
+}
+
+template <typename Diff>
+int floor_log2(Diff n) noexcept
+{
+    int lg = 0;
+    while (n > 1)
+    {
+        n >>= 1;
+        ++lg;
+    }
+    return lg;
+}
+
+// Introsort recursion: quicksort (median-of-three Lomuto) until a partition is
+// small (left for the final insertion pass) or the depth limit is hit (switch
+// to heapsort -> O(N log N) worst case). Recurse on the smaller side, iterate on
+// the larger -> O(log N) stack. Deterministic: fixed pivot rule + no RNG.
+template <typename It, typename Cmp>
+void introsort_loop(It first, It last, int depth_limit, Cmp cmp)
+{
+    constexpr decltype(last - first) kThreshold = 16;
+    while (last - first > kThreshold)
+    {
+        if (depth_limit == 0)
+        {
+            heap_sort(first, last, cmp);
+            return;
+        }
+        --depth_limit;
+        It p = partition_lomuto(first, last, cmp);
+        if (p - first < last - (p + 1))  // recurse smaller, loop larger
+        {
+            introsort_loop(first, p, depth_limit, cmp);
+            first = p + 1;
+        }
+        else
+        {
+            introsort_loop(p + 1, last, depth_limit, cmp);
+            last = p;
+        }
+    }
+}
 }  // namespace detail
 
 // ===========================================================================
 // Public API
 // ===========================================================================
 
-// Stable, deterministic sort. Merge-sort-based; allocates O(N) auxiliary
-// memory. Requires T (the value type) to be default-constructible.
+// Stable, deterministic sort. Merge-sort-based; needs O(N) scratch from the
+// CALLER's allocator -- never a hidden malloc (ADR-0001 / custom-allocator
+// contract). Requires T (the value type) to be default-constructible. Output is
+// bit-exact across MSVC/GCC/clang x x64/ARM64.
 template <typename It, typename Cmp = std::less<>>
-void stable_sort(It first, It last, Cmp cmp = Cmp{})
+void stable_sort(It first, It last, Cmp cmp, memory::IAllocator* alloc)
 {
-    using Diff  = decltype(last - first);
-    using T     = typename std::iterator_traits<It>::value_type;
+    using Diff   = decltype(last - first);
+    using T      = typename std::iterator_traits<It>::value_type;
     const Diff n = last - first;
     if (n < 2) return;
 
-    Array<T> temp;
+    Array<T> temp(alloc);
     temp.resize(static_cast<usize>(n));
     detail::merge_sort_recursive(first, last, temp.data(), cmp);
 }
 
-// Same algorithm as stable_sort — guarantees the same result. Kept as a
-// separate overload so callers using `crd::containers::sort` get a
-// recognisable name + future ABI flexibility (a faster non-stable variant
-// could replace this without touching `stable_sort`).
+// No-comparator convenience (defaults to std::less).
+template <typename It>
+void stable_sort(It first, It last, memory::IAllocator* alloc)
+{
+    crd::containers::stable_sort(first, last, std::less<>{}, alloc);
+}
+
+// Reusable-scratch overload for hot paths that sort repeatedly: the caller owns
+// + reuses `scratch` (grows monotonically) -> zero per-call allocation after
+// the first grow.
+template <typename It, typename Cmp = std::less<>>
+void stable_sort(It first, It last, Cmp cmp, Array<typename std::iterator_traits<It>::value_type>& scratch)
+{
+    using Diff   = decltype(last - first);
+    const Diff n = last - first;
+    if (n < 2) return;
+    scratch.resize(static_cast<usize>(n));
+    detail::merge_sort_recursive(first, last, scratch.data(), cmp);
+}
+
+// In-place, deterministic, NON-stable sort (introsort: median-of-three quicksort
+// + heapsort fallback + insertion base). ZERO allocation. Cross-platform
+// bit-exact (fixed pivot rule, no RNG). For EQUAL keys the tie-break is
+// algorithm-determined -- use stable_sort when the order of equal keys matters.
 template <typename It, typename Cmp = std::less<>>
 void sort(It first, It last, Cmp cmp = Cmp{})
 {
-    crd::containers::stable_sort(first, last, cmp);
+    const auto n = last - first;
+    if (n < 2) return;
+    detail::introsort_loop(first, last, 2 * detail::floor_log2(n), cmp);
+    detail::insertion_sort(first, last, cmp);
 }
 
 // Partial sort: places the element that would be at position `nth` after

@@ -517,6 +517,7 @@ add_subdirectory(engine/geometry-shader-helpers)
 add_subdirectory(engine/geometry-curves)
 add_subdirectory(engine/hesap)
 add_subdirectory(engine/hesap-dense)
+add_subdirectory(engine/hesap-sparse)  # v1a; links crd-jobs (declared below — CMake resolves target names at generation)
 # crd-hesap-sched depends on crd-jobs (declared below); declared after jobs.
 # crd-geometry-viz must come AFTER crd-draw (its declaration is below) — moved
 # down to engine/eylem-viz neighbourhood. See the second add_subdirectory below.

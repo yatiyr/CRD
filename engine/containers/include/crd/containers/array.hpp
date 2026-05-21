@@ -258,6 +258,35 @@ public:
         m_size = n;
     }
 
+    // Resize WITHOUT initialising newly exposed elements when T is trivially
+    // constructible (the new slots hold indeterminate values). For non-trivial
+    // T this falls back to value-initialising resize() so it is always safe.
+    // Use only when every new slot will be written before it is read -- e.g. a
+    // scatter that fills all positions. Skips the zero-init pass that dominates
+    // bulk-build hot paths (sparse assembly).
+    void resize_uninitialized(usize n)
+    {
+        if constexpr (!std::is_trivially_constructible_v<T>)
+        {
+            resize(n);
+            return;
+        }
+        else
+        {
+            check_mutable();
+            if (n < m_size)
+            {
+                destroy_range(m_data + n, m_data + m_size);
+            }
+            else if (n > m_size)
+            {
+                reserve(n);
+                // No construction: trivially-constructible slots are left as-is.
+            }
+            m_size = n;
+        }
+    }
+
     // Destroy all elements; capacity is unchanged.
     void clear() noexcept
     {

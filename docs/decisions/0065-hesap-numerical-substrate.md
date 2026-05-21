@@ -822,3 +822,97 @@ Sliced-ELL/JDS/SkyLine) + spmv/spmm/spgemm + format-conversion graph + sparse
 v1c+**, which consumes geometry + hesap-dense from day 1.
 
 §14 ✅ Accepted — v0a–f locked, Phase 3.1.6 v0 closed.
+
+## §15 Amendment (2026-05-21) — v1 sparse substrate decision lock (v1-close)
+
+**Status:** Accepted.
+
+Phase 3.1.6 **v1 (sparse storage substrate + kernels)** is **closed** (v1a–v1g).
+§15 locks the sparse-era decisions validated empirically across the cluster,
+records the deviations from the §13/§14 scope, and certifies the v1-close gate.
+The algorithm posture (§3), determinism contract (§4 / ADR-0063), allocator
+discipline (§6), and threading model (§7) hold unchanged.
+
+### v1-close gate (criteria)
+
+- **18-config full sweep PASS** (`scripts/full-sweep.ps1`: 11 Windows + 7 Linux).
+- **hesap-sparse suite**: 93 cases / 719,188 assertions (substrate trinity +
+  builders + spmv/SELL + conversions + element-wise + structural + spgemm
+  (dense-SPA + hash) + spmm + SDDMM + BSR/ELL/DIA + Matrix-Market I/O).
+- **Reference-class benchmarking vs Eigen** (gated `CRD_BUILD_HESAP_VS_REFERENCE`):
+  assembly 1.03–1.76× `setFromTriplets`; SELL-C-σ spmv 1.21–1.27× DRAM-bound +
+  Eigen-MT parity; spgemm **2.32× median on real SuiteSparse** (5/6 win) + wins
+  the adversarial stress corpus 2.5–5.5×; spmm 1.3–1.9× heavy-RHS; BSR 3.4–6.7×,
+  ELL 4.9–5.2×, DIA 4.8–5.9× vs Eigen scalar-CSR on native patterns; SDDMM wins
+  the same-flops kernel race where compute-bound (1.3–1.5×), at the gather wall
+  on high-nnz FEM (user-accepted, proven by two signals).
+
+### Locked v1 decisions — D(sparse)-1…9
+
+The eight determinism/design decisions pinned in `docs/systems/hesap-sparse.md`
+are now **formally locked**, plus one added at v1g:
+
+- **D(sparse)-1** `topology_hash` = FNV-1a-64, little-endian explicit-byte feed
+  over `rows,cols,format,block_size` + canonical per-outer (count + sorted
+  indices); slack-invariant (compressed == uncompressed of the same matrix).
+- **D(sparse)-2** Structural-query CLI commands (`nnz`/`density`/
+  `structural_query`/`inner_indices`) are **type-agnostic** (registered once;
+  read structure only). Typed ops keep the ×4 {f32,f64,c32,c64} surface.
+- **D(sparse)-3** spmv per-row reduction is **two-rounded** (`mul_add`, NOT
+  single-rounded `simd::fma`) and bit-exact across the CSR scalar baseline and
+  the SELL SIMD primary; width-independent; compressed-CSR only.
+- **D(sparse)-4** SELL-C-σ: slice height `C` per-T (f32→8 / f64→4 / complex→4
+  scalar); σ row-length sort (global default; identity fast-path for
+  uniform/banded); within-row columns stay ascending → bit-exact with CSR.
+- **D(sparse)-5** Element-wise (`add`/`subtract`/`hadamard`): `a OP b`
+  left-first single-rounded; topology-hash fast-path + symbolic-union merge.
+- **D(sparse)-6** BSR block-spmv uses a **dedicated fully-unrolled small-block
+  GEMV** (compile-time b∈{1,2,3,4,6} + runtime fallback), NOT the v0d dense GEMM
+  microkernel (sized for large-N tiling; prologue dominates a 3×3 block). No
+  hesap-dense dependency. Diverges from the phase-note "reuse v0d microkernel".
+- **D(sparse)-7** CSR→BSR zero-pads partial/edge blocks (a block is dense);
+  BSR→CSR emits all stored block entries; DIA→CSR / ELL→CSR drop stored zeros
+  (round-trips exactly for zero-free matrices).
+- **D(sparse)-8** ELL is the **interop/base** regular format (global padding);
+  SELL-C-σ is the irregular-matrix performance path. Both ship; ELL is the
+  canonical unsorted-unchunked ELLPACK for interchange + uniform patterns.
+- **D(sparse)-9 (new at v1g)** spgemm dispatches on `B.cols`: dense per-row SPA
+  for cols ≤ `kMaxSpaCols` (4M, the fast path), **open-addressing hash
+  accumulator** above it (bounded O(row distinct nnz) memory → arbitrary cols).
+  The hash accumulates in the SAME encounter order as the dense SPA + emits
+  column-sorted → **bit-exact with the dense path**; per-job hashes are
+  pre-sized single-threaded (allocating inside `parallel_for` from the
+  non-thread-safe TlsfAllocator is forbidden — it corrupts the heap).
+
+### Cross-cutting fix locked at v1g (containers)
+
+- **`crd::containers::sort` is in-place introsort** (median-of-three quicksort +
+  heapsort fallback + insertion base) — **zero allocation**, deterministic +
+  cross-platform bit-exact, non-stable. **`stable_sort` takes the caller's
+  `IAllocator*` (or a reusable `Array<T>& scratch`)** — never a hidden
+  default-malloc. This closed a real defect (merge-sort scratch was malloc-backed
+  for N≥32). Validated: 5-config DoD green across all modules (no caller relied
+  on stable-sort tie-breaking). See `feedback_no_hidden_default_allocator_malloc`.
+
+### Deviations from the §13/§14 scope (recorded)
+
+| Plan item | v1 outcome | Rationale |
+|---|---|---|
+| Storage formats incl. CSR5 / Merge-CSR / Sliced-ELL / JDS / SkyLine | **CSR/CSC/COO/SELL-C-σ/BSR/ELL/DIA shipped; CSR5+Merge-CSR → v17 GPU; JDS+SkyLine → consumer-pull follow-on; HYB folded into ELL.** | Shipping CPU storage of GPU/legacy formats with no consumer is the speculative pattern v0f learned to defer; SELL-C-σ already covers the SIMD-spmv niche CSR5/JDS target. |
+| spgemm "elite refinement (BRMerge / MAGNUS-locality)" | **Not built — dense-SPA Gustavson wins the adversarial stress corpus 2.5–5.5× vs Eigen-ST; trigger (Eigen ≥ 1.0× on any in-cap case) not met.** Instead the hash-accumulator (D(sparse)-9) lifts the 4M-col capability ceiling (user-directed). | Refinement would gold-plate an already-winning kernel; the real gap was the cols>4M ceiling, which the hash path closes. |
+| Matrix-Market I/O + SuiteSparse fixture corpus | **Engine-side `.mtx` reader/writer shipped (in-memory, no platform dep); SuiteSparse fetched at configure via gated `file(DOWNLOAD)` for benches (not committed).** | Caller does file I/O (module stays platform-free); committing fixtures stays deferred per §14's posture. |
+
+### v1 CLI surface
+
+~146 commands registered per-slice (every op × {f32,f64,c32,c64} + 4
+type-agnostic structural queries). v1g CLI-completeness audit (grep-diff op-list
+vs registered-command-list) closed the residual gaps (`from_csc`, `scale_rows`,
+`submatrix`, `to_sell`, `spmv_adjoint`, `inner_indices`).
+
+### Next
+
+**Phase 3.1 eylem v1c+** resumes per `feedback_strategic_execution_plan_2026_05_15`
+— consuming geometry + hesap-dense + hesap-sparse from day 1. (FFT / iterative /
+direct sparse solvers / eig are later hesap phases.)
+
+§15 ✅ Accepted — v1a–g locked, Phase 3.1.6 v1 (sparse) closed.

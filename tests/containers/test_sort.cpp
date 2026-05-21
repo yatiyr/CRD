@@ -83,7 +83,7 @@ TEST_CASE("stable_sort preserves relative order for equal keys", "[sort][stable]
         {3, 0}, {1, 1}, {3, 2}, {2, 3}, {1, 4}, {3, 5}, {2, 6}
     };
     crd::containers::stable_sort(a.data(), a.data() + a.size(),
-        [](const Item& x, const Item& y) { return x.key < y.key; });
+        [](const Item& x, const Item& y) { return x.key < y.key; }, a.allocator());
 
     // After sort: keys are 1,1,2,2,3,3,3
     // Within each key, original_index must be ascending (stability).
@@ -96,12 +96,33 @@ TEST_CASE("stable_sort preserves relative order for equal keys", "[sort][stable]
     REQUIRE(a[6].key == 3); REQUIRE(a[6].original_index == 5);
 }
 
+TEST_CASE("stable_sort reusable-scratch overload matches + reuses buffer", "[sort][stable]")
+{
+    struct Item { i32 key; i32 original_index; };
+    crd::containers::Array<Item> a = {
+        {3, 0}, {1, 1}, {3, 2}, {2, 3}, {1, 4}, {3, 5}, {2, 6}
+    };
+    crd::containers::Array<Item> scratch(a.allocator());
+    auto cmp = [](const Item& x, const Item& y) { return x.key < y.key; };
+    crd::containers::stable_sort(a.data(), a.data() + a.size(), cmp, scratch);  // scratch overload
+    REQUIRE(a[0].key == 1); REQUIRE(a[0].original_index == 1);
+    REQUIRE(a[1].original_index == 4);
+    REQUIRE(a[4].key == 3); REQUIRE(a[4].original_index == 0);
+    // Reuse the same scratch on a second sort (no per-call alloc; must still be correct).
+    crd::containers::Array<Item> b = { {2, 0}, {1, 1}, {2, 2}, {1, 3} };
+    crd::containers::stable_sort(b.data(), b.data() + b.size(), cmp, scratch);
+    REQUIRE(b[0].original_index == 1);
+    REQUIRE(b[1].original_index == 3);
+    REQUIRE(b[2].original_index == 0);
+    REQUIRE(b[3].original_index == 2);
+}
+
 TEST_CASE("sort and stable_sort agree on all-equal keys", "[sort][stable]")
 {
     crd::containers::Array<i32> all_same_a = { 7, 7, 7, 7, 7, 7, 7, 7 };
     crd::containers::Array<i32> all_same_b = { 7, 7, 7, 7, 7, 7, 7, 7 };
     crd::containers::sort(all_same_a.data(), all_same_a.data() + all_same_a.size());
-    crd::containers::stable_sort(all_same_b.data(), all_same_b.data() + all_same_b.size());
+    crd::containers::stable_sort(all_same_b.data(), all_same_b.data() + all_same_b.size(), all_same_b.allocator());
     REQUIRE(all_same_a == all_same_b);
 }
 

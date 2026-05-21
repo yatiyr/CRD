@@ -434,6 +434,21 @@ target_link_libraries(smoke_hesap_blas3 PRIVATE
 )
 crd_enable_default_pch(smoke_hesap_blas3)
 
+add_executable(smoke_hesap_sparse
+    examples/smoke_hesap_sparse.cpp
+)
+
+target_link_libraries(smoke_hesap_sparse PRIVATE
+    crd-core
+    crd-log
+    crd-memory
+    crd-containers
+    crd-math
+    crd-hesap
+    crd-hesap-sparse
+)
+crd_enable_default_pch(smoke_hesap_sparse)
+
 add_executable(bench_hesap_gemm
     examples/bench_hesap_gemm.cpp
 )
@@ -520,4 +535,52 @@ if(CRD_BUILD_HESAP_VS_REFERENCE)
     crd_add_hesap_vs_ref_bench(bench_hesap_blas2_vs_reference   USE_OPENBLAS)
     # v0e-g: solvers shootout (LU / Cholesky / LDLT / QR) — Eigen-only.
     crd_add_hesap_vs_ref_bench(bench_hesap_solvers_vs_reference USE_JOBS)
+    # v1a-3: sparse assembly shootout (TripletBuilder::compress vs setFromTriplets).
+    crd_add_hesap_vs_ref_bench(bench_hesap_sparse_assembly_vs_reference)
+    target_link_libraries(bench_hesap_sparse_assembly_vs_reference PRIVATE crd-hesap-sparse)
+    # v1b-1/v1b-2: spmv CSR baseline + SELL primary (ST + MT) vs Eigen (ST + MT).
+    crd_add_hesap_vs_ref_bench(bench_hesap_spmv_vs_reference USE_JOBS)
+    target_link_libraries(bench_hesap_spmv_vs_reference PRIVATE crd-hesap-sparse)
+
+    # v1d-2: spgemm C=A*A vs Eigen on REAL SuiteSparse matrices. Fetch a few
+    # representative square matrices at configure time (gated; fetched, never
+    # committed — same posture as Eigen/OpenBLAS). The bench reads the .mtx via
+    # a minimal Matrix-Market reader and dispatches to CRD_SUITESPARSE_DIR.
+    set(CRD_SS_DIR "${CMAKE_BINARY_DIR}/_deps/suitesparse-mm")
+    file(MAKE_DIRECTORY "${CRD_SS_DIR}")
+    set(CRD_SS_BASE "https://suitesparse-collection-website.herokuapp.com/MM")
+    foreach(ss_pair "HB/bcsstk13" "HB/bcsstk24" "HB/west2021" "HB/bcsstk25" "HB/sherman3" "HB/gemat11")
+        string(REGEX REPLACE ".*/" "" ss_name "${ss_pair}")
+        if(NOT EXISTS "${CRD_SS_DIR}/${ss_name}/${ss_name}.mtx")
+            set(ss_tgz "${CRD_SS_DIR}/${ss_name}.tar.gz")
+            message(STATUS "[hesap-vs-reference] fetching SuiteSparse ${ss_pair}")
+            file(DOWNLOAD "${CRD_SS_BASE}/${ss_pair}.tar.gz" "${ss_tgz}" STATUS ss_status TIMEOUT 60)
+            list(GET ss_status 0 ss_code)
+            if(ss_code EQUAL 0)
+                file(ARCHIVE_EXTRACT INPUT "${ss_tgz}" DESTINATION "${CRD_SS_DIR}")
+            else()
+                message(WARNING "[hesap-vs-reference] SuiteSparse ${ss_pair} download failed (${ss_status}); bench will SKIP it")
+            endif()
+        endif()
+    endforeach()
+    crd_add_hesap_vs_ref_bench(bench_hesap_spgemm_vs_reference USE_JOBS)
+    target_link_libraries(bench_hesap_spgemm_vs_reference PRIVATE crd-hesap-sparse)
+    target_compile_definitions(bench_hesap_spgemm_vs_reference PRIVATE "CRD_SUITESPARSE_DIR=\"${CRD_SS_DIR}\"")
+    # v1e-1: spmm (sparse x dense, multi-RHS) vs Eigen sparse*dense (ST + MT).
+    crd_add_hesap_vs_ref_bench(bench_hesap_spmm_vs_reference USE_JOBS)
+    target_link_libraries(bench_hesap_spmm_vs_reference PRIVATE crd-hesap-sparse)
+    target_compile_definitions(bench_hesap_spmm_vs_reference PRIVATE "CRD_SUITESPARSE_DIR=\"${CRD_SS_DIR}\"")
+    # v1e-2: SDDMM vs Eigen per-entry dot (same flops) + dense-then-mask illustration.
+    crd_add_hesap_vs_ref_bench(bench_hesap_sddmm_vs_reference USE_JOBS)
+    target_link_libraries(bench_hesap_sddmm_vs_reference PRIVATE crd-hesap-sparse)
+    target_compile_definitions(bench_hesap_sddmm_vs_reference PRIVATE "CRD_SUITESPARSE_DIR=\"${CRD_SS_DIR}\"")
+    # v1f-1: BSR block-spmv vs Eigen scalar-CSR (synthetic native block patterns).
+    crd_add_hesap_vs_ref_bench(bench_hesap_bsr_vs_reference USE_JOBS)
+    target_link_libraries(bench_hesap_bsr_vs_reference PRIVATE crd-hesap-sparse)
+    # v1f-2: ELL (regular) + DIA (banded) spmv vs Cerid + Eigen scalar CSR.
+    crd_add_hesap_vs_ref_bench(bench_hesap_ell_dia_vs_reference USE_JOBS)
+    target_link_libraries(bench_hesap_ell_dia_vs_reference PRIVATE crd-hesap-sparse)
+    # v1g-2: adversarial spgemm stress corpus vs Eigen-ST (find any losing/infeasible regime).
+    crd_add_hesap_vs_ref_bench(bench_hesap_spgemm_stress_vs_reference USE_JOBS)
+    target_link_libraries(bench_hesap_spgemm_stress_vs_reference PRIVATE crd-hesap-sparse)
 endif()

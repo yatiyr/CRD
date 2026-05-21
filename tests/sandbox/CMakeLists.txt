@@ -39,6 +39,24 @@ target_link_libraries(crd-sandbox-showcase-tests PRIVATE
     Catch2::Catch2WithMain
 )
 
-crd_enable_default_pch(crd-sandbox-showcase-tests)
+# Phase 3.1.6 v1g-3 (2026-05-21) — NO PCH on this test exe. gcc-13 segfaults
+# (internal compiler error in libc free, reported at a meaningless <cmath>
+# system-header line) when compiling curves_showcase.cpp through the precompiled
+# header under `-fsanitize=address,undefined` (linux-gcc-asan) — a known gcc-13
+# PCH+sanitizer flake. PCH gives a test exe of this size almost nothing (the
+# wins are in engine libs), so dropping it removes the ICE trigger surgically.
+# (Intentionally NOT calling crd_enable_default_pch here.)
+
+# Phase 3.1.6 v1g-3 (2026-05-21) — disable IPO/LTCG on this TEST exe. MSVC's
+# LTCG link step recurrently emits a C1001 internal compiler error in
+# `link!DllGetObjHandler()` when whole-program-optimising this exe (the
+# geometry_showcase.cpp template-instantiation graph is the largest LTCG
+# contributor). It cleared on retry every time (non-deterministic linker bug,
+# not a real codegen error) — but a test exe needs NO LTO (it verifies
+# correctness, not perf). Disabling IPO un-`/GL`-tags this exe's objects so they
+# leave the LTCG working set, breaking the ICE chain; engine-lib LTCG coverage
+# (the part that matters) is unaffected. Same precedent as zstd_static +
+# crd-jobs (root CMakeLists.txt §270).
+set_target_properties(crd-sandbox-showcase-tests PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
 
 catch_discover_tests(crd-sandbox-showcase-tests)
