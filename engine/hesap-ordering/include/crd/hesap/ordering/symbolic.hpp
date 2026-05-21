@@ -39,4 +39,50 @@ inline constexpr crd::u32 kNoParent = 0xFFFFFFFFU;
 // Matrix profile (envelope size): sum over rows i of (i - min column in row i).
 [[nodiscard]] crd::u64 profile(const sparse::SparsePattern& pattern) noexcept;
 
+// -----------------------------------------------------------------------
+// Full symbolic factorisation (v2c) -- the v5 sparse-direct hand-off.
+// -----------------------------------------------------------------------
+
+// Postorder of the elimination forest (CSparse cs_post). post[k] is the column
+// that is k-th in a postordering: children precede their parent, sibling
+// subtrees emitted in ascending root index (deterministic). A postordered
+// elimination drives the supernodal/multifrontal numeric factorisation in v5.
+[[nodiscard]] crd::containers::Array<crd::u32> postorder(crd::containers::ConstSpan<crd::u32> etree,
+                                                         crd::memory::IAllocator* alloc);
+
+// Result of a full symbolic Cholesky factorisation. The factor L is stored
+// lower-triangular in COMPRESSED CSC (column-major): `lp` (length n+1) are the
+// column pointers, `li` (length lp[n] == nnz(L)) the row indices, ascending and
+// duplicate-free within each column, the diagonal entry first. `super`
+// (length nsuper+1) is the FUNDAMENTAL supernode partition: supernode s owns the
+// contiguous column range [super[s], super[s+1]) and forms a path in the etree
+// with a shared lower-triangular row pattern (the unit v5 factors block-by-block).
+struct SymbolicFactor
+{
+    crd::u32                         n = 0;
+    crd::containers::Array<crd::u32> parent;    // etree parent[j]; kNoParent for a root
+    crd::containers::Array<crd::u32> post;      // postorder of the etree
+    crd::containers::Array<crd::u32> colcount;  // nnz of column j of L (incl. diagonal)
+    crd::containers::Array<crd::u32> lp;        // CSC column pointers, length n+1
+    crd::containers::Array<crd::u32> li;        // CSC row indices, length lp[n]
+    crd::containers::Array<crd::u32> super;     // supernode boundaries, length nsuper+1
+    crd::u32                         nsuper = 0;
+
+    explicit SymbolicFactor(crd::memory::IAllocator* alloc)
+        : parent(alloc), post(alloc), colcount(alloc), lp(alloc), li(alloc), super(alloc)
+    {
+    }
+
+    // Total nonzeros in L (== lp[n]); equals the cs_counts nnz_l() metric.
+    [[nodiscard]] crd::u64 nnz() const noexcept { return lp.empty() ? 0U : static_cast<crd::u64>(lp[n]); }
+};
+
+// Compute the full symbolic Cholesky factorisation of the symmetric pattern of a
+// square matrix: elimination tree (Liu, path-compressed) + postorder + column
+// counts (Gilbert-Ng-Peyton) + full L row pattern (cs_ereach row subtrees) +
+// fundamental supernode partition (Liu-Ng-Peyton). One adjacency build, shared
+// scratch. The emitted L pattern is bit-for-bit the structure of a numeric
+// Cholesky factor of chol(PAPᵀ) under the given (already-applied) ordering.
+[[nodiscard]] SymbolicFactor symbolic_factorize(const sparse::SparsePattern& pattern, crd::memory::IAllocator* alloc);
+
 } // namespace crd::hesap::ordering

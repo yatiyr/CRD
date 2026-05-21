@@ -68,6 +68,61 @@ move to a session log entry and remove from here.
 > one matrix. **Real trigger:** an end-to-end v5 sparse-solve benchmark showing
 > ordering fill (not the numerical kernels) is the bottleneck on a real workload.
 
+### `v2e-weighted-compression` — ND fill loses Eigen-AMD on bcsstk25 (multi-DOF) — filed 2026-05-21
+
+> **Tracked optimization follow-on, NOT a defect.** v2e nested dissection + CAMD
+> **beats Eigen-AMD fill on bcsstk13 (0.983×) and bcsstk24 (0.999×)** but loses on
+> **bcsstk25** (1.158× vs Eigen-AMD; n=15439, a tall 3D skyscraper stiffness matrix
+> with multiple DOFs per node) — the *opposite* of the textbook ND-asymptotic
+> pattern (win small, lose large). Fill is a **downstream-perf knob (factor memory +
+> flops), never correctness** — `nd_order` always yields a valid permutation, so
+> every solve is identical; and the v5 consumer can pick the better of AMD/ND
+> per-matrix anyway (both are available).
+>
+> **Root cause:** bcsstk* are structural matrices with groups of identical-pattern
+> rows (the multiple DOFs of one mesh node). AMD merges these via supervariables;
+> our CAMD gates supervariable merge by `cmember`, so when a separator splits a
+> node's DOFs across classes they can't merge → fill penalty, worst on the
+> largest/densest case (bcsstk25). Verified via the path test: 1D is ND's worst
+> case (AMD provably optimal) and CAMD-uniform reproduces AMD exactly, so the port
+> is correct — the gap is purely separator/multi-DOF quality.
+>
+> **The fix (CHOLMOD/METIS technique):** supervariable **graph compression** —
+> merge indistinguishable (identical-closed-neighbourhood) vertices into one
+> super-vertex *before* ND, run bisection + cmember + CAMD on the compressed graph,
+> expand after. A first cut was implemented; **unweighted** compression *regressed*
+> all three matrices (it imbalances the bisection — supers counted as weight-1) and
+> was reverted. The real fix needs **vertex-weight propagation**: thread member
+> counts as `vwgt` through `assign_cmember` → `bipartition_refined` → `to_weighted`
+> and into CAMD's initial `nv`, so the compressed bisection balances by original
+> count and CAMD's degree accounting is correct. ~150 LOC, uncertain but likely
+> flips bcsstk25. **Real trigger:** a v5 sparse-direct benchmark showing ND-fill
+> (not the numeric kernels) is the bottleneck on a multi-DOF FEM workload.
+
+### `v2c-small-n-analyze-constant-factor` — symbolic analysis 0.80× Eigen at n=2003 — filed 2026-05-21
+
+> **Tracked perf follow-on, NOT a defect or defer.** v2c `symbolic_factorize` and
+> its `nnz_l` analysis path beat Eigen `analyzePattern` at n=3562 (1.77×) and
+> n=15439 (1.49×), but trail at the smallest test matrix bcsstk13 (n=2003) at
+> **0.80×** (ours 1.65 ms vs Eigen 1.32 ms, Δ≈330 µs). The **pattern gate (the
+> contract) passed bit-exact on all three** — this is purely the symbolic-analysis
+> *timing* on one small matrix.
+>
+> **Why it's a constant-factor, not algorithmic (advisor-confirmed 2026-05-21):**
+> our symbolic scales *better* than Eigen's — across the 7.7× n-range (2003→15439)
+> our time grows 2.4× while Eigen's grows 4.4×. The crossover is between n=2003 and
+> n=3562. That signature is fixed overhead, almost certainly `build_adjacency`
+> (allocate + symmetrise `A∪Aᵀ` + per-row ascending sort) which is amortised away
+> by n=3562. cs_counts itself is O(nnz(A)·α) — the asymptotically right choice
+> (cheaper than a counting `cs_ereach` pass for high-fill matrices).
+>
+> **If revisited:** profile `build_adjacency` at small n; candidate wins —
+> skip the re-sort when the input CSR is already sorted + symmetric (the SPD
+> common case), or fuse the symmetrise into the etree pass. Low priority: 330 µs
+> at the smallest problem size, on a step that is already faster than Eigen at
+> every n that matters for sparse direct. **Real trigger:** a workload dominated
+> by repeated small-matrix symbolic analysis (e.g. many-small-system batching).
+
 ### ✅ Phase 3.1.7 v9a-b1 follow-on — AVX2 vectorised CPU radix sort — CLOSED 2026-05-18 (same day as filing)
 
 > **STATUS — CLOSED 2026-05-18.** Investigated three SOTA radix techniques

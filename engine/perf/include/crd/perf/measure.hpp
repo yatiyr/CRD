@@ -25,13 +25,27 @@
 //   });
 //
 // The macro asserts via CRD_ASSERT_MSG so it fires regardless of build
-// type — it's a hard contract, not a soft hint.
+// type — it's a hard contract on local dev hardware.
+//
+// SOFT MODE (CI): an absolute-millisecond budget calibrated on dev hardware is
+// not a reliable correctness gate on a heterogeneous, shared CI runner matrix
+// (lower clocks, contended memory bandwidth, first-touch page faults inside the
+// timed region). When `CRD_PERF_BUDGET_SOFT` or the standard `CI` env var is
+// set, an over-budget result logs a warning to stderr instead of asserting, so
+// CI hardware variance never SIGILLs the suite. The lambda — including any
+// Catch2 REQUIRE/CHECK inside it — still runs in both modes, so correctness is
+// always enforced; only the timing gate softens. Local dev (neither var set)
+// keeps the hard assert. → docs/lessons/03-measuring-performance-correctly.md.
 // ---------------------------------------------------------------------------
 
 #include <crd/core/assert.hpp>
+#include <crd/core/platform.hpp>  // CRD_OS_WINDOWS for the env-read split
 #include <crd/core/types.hpp>
 #include <crd/time/clocks.hpp>
 
+#include <cstddef>  // std::size_t for _dupenv_s
+#include <cstdio>   // std::fprintf for the soft-mode warning
+#include <cstdlib>  // std::getenv / _dupenv_s + std::free for the soft-mode env check
 #include <utility>
 
 namespace crd::perf
@@ -50,27 +64,78 @@ template <typename F>
     return dur.value * 1000.0;
 }
 
+namespace detail
+{
+// Presence check for an env var. MSVC deprecates std::getenv under /WX (and
+// clang-cl under -Werror=deprecated-declarations) → use _dupenv_s, same pattern
+// as engine/platform/src/context.cpp.
+[[nodiscard]] inline bool env_present(const char* name) noexcept
+{
+#if CRD_OS_WINDOWS
+    char*         value   = nullptr;
+    std::size_t   len     = 0;
+    const errno_t rc      = _dupenv_s(&value, &len, name);
+    const bool    present = (rc == 0) && (value != nullptr);
+    std::free(value);
+    return present;
+#else
+    return std::getenv(name) != nullptr;
+#endif
+}
+} // namespace detail
+
+// True when perf budgets should be SOFT — log a warning instead of hard-
+// asserting. Enabled by `CRD_PERF_BUDGET_SOFT` (explicit Cerid control, set by
+// the CI workflow) or the standard `CI` env var (so it works out-of-the-box on
+// any CI provider). Read live (not cached) so a test can toggle it via setenv;
+// the env-read cost is irrelevant for the handful of perf-budget call sites.
+[[nodiscard]] inline bool perf_budgets_are_soft() noexcept
+{
+    return detail::env_present("CRD_PERF_BUDGET_SOFT") || detail::env_present("CI");
+}
+
+// Emit the soft-mode over-budget warning to stderr (visible under ctest
+// --output-on-failure). Dependency-free on purpose — measure.hpp stays a
+// lightweight header with no crd-log edge.
+inline void report_budget_exceeded_soft(const char* name, double dur_ms, double max_ms) noexcept
+{
+    std::fprintf(stderr,
+                 "[perf-budget][SOFT] %s took %.3f ms > %.3f ms budget — NOT failing "
+                 "(CRD_PERF_BUDGET_SOFT / CI set; hardware-variance tolerated)\n",
+                 name, dur_ms, max_ms);
+}
+
 } // namespace crd::perf
 
-// CRD_PERF_BUDGET_LE: run `lambda`, assert its wall-clock duration is
-// <= max_ms. `name_literal` appears in the assert message for triage.
+// CRD_PERF_BUDGET_LE: run `lambda`, then enforce its wall-clock duration is
+// <= max_ms. `name_literal` appears in the message for triage.
 //
-// Fires CRD_ASSERT_MSG, which is active in assert-enabled builds
-// (Debug, RelWithDebInfo, ASan, Shipping with asserts on). In pure
-// Release (asserts off via NDEBUG) the macro compiles to a lambda call
-// + a void-cast so the lambda's side effects still run and there is no
-// unused-variable warning. For Release-mode budget enforcement, wrap
-// `measure_ms(...)` in a Catch2 `CHECK` instead.
+// HARD on local dev: fires CRD_ASSERT_MSG (active in Debug / RelWithDebInfo /
+// ASan / Shipping-with-asserts). SOFT in CI: when `perf_budgets_are_soft()`
+// (CRD_PERF_BUDGET_SOFT or CI env set), an over-budget result logs a stderr
+// warning instead of asserting — dev-box-calibrated ms budgets are not a
+// correctness gate on heterogeneous CI hardware. The `lambda` (and any Catch2
+// REQUIRE/CHECK inside it) ALWAYS runs in both modes, so correctness is always
+// enforced; only the timing gate softens. In pure Release (asserts off via
+// NDEBUG, hard path) the assert compiles out but the lambda still runs.
 //
 // NOLINTNEXTLINE(cppcoreguidelines-macro-usage): macro is the right tool
 // here because it captures the `name_literal` as compile-time text for
-// the assert message AND the `lambda` for direct evaluation; a template
+// the message AND the `lambda` for direct evaluation; a template
 // function couldn't fold the name in cleanly.
 #define CRD_PERF_BUDGET_LE(name_literal, max_ms, lambda)                                                \
     do                                                                                                   \
     {                                                                                                    \
         const double _crd_dur_ms = ::crd::perf::measure_ms(lambda);                                     \
-        (void)_crd_dur_ms;                                                                               \
-        CRD_ASSERT_MSG(_crd_dur_ms <= (max_ms),                                                          \
-                       "perf budget exceeded: " name_literal);                                           \
+        if (::crd::perf::perf_budgets_are_soft())                                                        \
+        {                                                                                                \
+            if (_crd_dur_ms > (max_ms))                                                                  \
+            {                                                                                            \
+                ::crd::perf::report_budget_exceeded_soft(name_literal, _crd_dur_ms, (max_ms));           \
+            }                                                                                            \
+        }                                                                                                \
+        else                                                                                             \
+        {                                                                                                \
+            CRD_ASSERT_MSG(_crd_dur_ms <= (max_ms), "perf budget exceeded: " name_literal);              \
+        }                                                                                                \
     } while (false)

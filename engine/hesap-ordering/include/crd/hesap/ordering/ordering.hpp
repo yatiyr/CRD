@@ -11,6 +11,7 @@
 
 #include <crd/hesap/ordering/adjacency_graph.hpp>
 #include <crd/hesap/ordering/amd.hpp>
+#include <crd/hesap/ordering/nested_dissection.hpp>
 #include <crd/hesap/ordering/permutation.hpp>
 #include <crd/hesap/ordering/rcm.hpp>
 #include <crd/hesap/ordering/symbolic.hpp>

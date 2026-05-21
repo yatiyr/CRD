@@ -17,6 +17,7 @@ add_executable(crd-perf-tests
     test_gpu_scope.cpp
     test_memory_tracking.cpp
     test_capture_roundtrip.cpp
+    test_perf_budget_soft.cpp
 )
 
 target_link_libraries(crd-perf-tests PRIVATE

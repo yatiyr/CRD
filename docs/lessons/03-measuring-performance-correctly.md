@@ -137,6 +137,10 @@ Easy mistake: you fix a function in win-debug, then run a perf test against the 
 
 Cerid's CI runs on cloud Linux boxes; the dev box is a desktop Ryzen. A 5 ms number on the dev box might be 8 ms on CI or 3 ms on a workstation with DDR5-7200. Publish the **hardware** alongside the number, or it's meaningless. The session logs always include "win-shipping median-of-5 on dev box" — those parameters are part of the measurement.
 
+### CI soft mode — a hard ms budget is not a portable correctness gate
+
+Because of exactly this hardware spread, `CRD_PERF_BUDGET_LE` is **soft in CI**. A dev-box-calibrated absolute-millisecond budget hard-asserted on a shared cloud runner *will* trip on clock/bandwidth variance and first-touch page faults inside the timed region — and on Linux a failed `CRD_ASSERT` traps as **SIGILL**, killing the whole suite (case study: `sort_morton_pairs` 1M, 20 ms budget, linux-gcc-relwithdebinfo, 2026-05-21). When `CRD_PERF_BUDGET_SOFT` or the standard `CI` env var is set, an over-budget result logs a stderr warning instead of asserting. The measured lambda — including any inner `REQUIRE`/`CHECK` — still runs, so **correctness is always enforced; only the timing gate softens.** Local dev (neither var set) keeps the hard assert, which is where you actually catch regressions. Conclusion: treat `CRD_PERF_BUDGET_LE` as a *local* gate + a CI *observability* signal, not a CI correctness gate. If you need CI to catch a perf regression, assert a **ratio against a same-machine baseline**, not absolute ms.
+
 ## Part 5 — The discipline, summarized
 
 When you measure performance in Cerid, your default protocol is:

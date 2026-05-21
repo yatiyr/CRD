@@ -6,6 +6,15 @@ on:
   pull_request:
     branches: [main]
 
+# Perf budgets (CRD_PERF_BUDGET_LE) are calibrated on dev hardware and are NOT a
+# reliable correctness gate on shared/heterogeneous CI runners. Soft mode logs an
+# over-budget warning instead of hard-asserting (SIGILL) so hardware variance
+# can't fail the suite; the measured work + inner asserts still run. Local dev
+# (this var unset) keeps hard enforcement. GitHub also sets CI=true, which the
+# macro honors, but we set this explicitly for clarity + non-GitHub runners.
+env:
+  CRD_PERF_BUDGET_SOFT: '1'
+
 jobs:
   windows:
     runs-on: windows-latest

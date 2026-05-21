@@ -136,6 +136,83 @@ crd::i32 leaf_i32(crd::i32 i, crd::i32 j, const crd::i32* first, crd::i32* maxfi
     return q;
 }
 
+// cs_ereach (ata = 0): nonzero pattern of ROW k of L. Returns `top`; on exit
+// s[top..n-1] holds the column indices i < k with L(k,i) != 0, in topological
+// (etree) order. `mark` is reusable scratch (CS_FLIP sign trick: a node is marked
+// when its entry is negative); it is left fully restored to its entry values on
+// return, so the SAME zero-initialised array is reused across all k.
+crd::i32 ereach_i32(const AdjacencyGraph& g, crd::i32 k, const crd::i32* parent, crd::i32* s, crd::i32* mark)
+{
+    const crd::i32  n    = static_cast<crd::i32>(g.n);
+    const crd::u32* xadj = g.xadj.data();
+    const crd::u32* adj  = g.adjncy.data();
+    const auto      flip = [](crd::i32 v) { return -v - 2; };  // CS_FLIP: involution, maps >=0 -> <0
+    crd::i32        top  = n;
+
+    mark[k] = flip(mark[k]);  // mark node k (its path terminates the upward walks)
+    for (crd::u32 p = xadj[k]; p < xadj[k + 1]; ++p)
+    {
+        crd::i32 i = static_cast<crd::i32>(adj[p]);
+        if (i > k)
+        {
+            break;  // adjacency ascending + diagonal-free -> only i < k below here
+        }
+        crd::i32 len = 0;
+        for (; mark[i] >= 0; i = parent[i])  // walk i up the etree until a marked node
+        {
+            s[len++] = i;          // L(k,i) is nonzero
+            mark[i]  = flip(mark[i]);
+        }
+        while (len > 0)
+        {
+            s[--top] = s[--len];  // splice this root-path onto the output stack
+        }
+    }
+    for (crd::i32 p = top; p < n; ++p)
+    {
+        mark[s[p]] = flip(mark[s[p]]);  // unmark every path node
+    }
+    mark[k] = flip(mark[k]);  // unmark node k -> `mark` fully restored
+    return top;
+}
+
+// Fundamental supernode partition (Liu-Ng-Peyton; CHOLMOD super_symbolic test).
+// Column j (>=1) STARTS a new supernode iff it is not the etree-parent of j-1, or
+// its column count is not exactly one less than j-1's (structures don't nest), or
+// it has more than one child in the etree (a merge point). Pure integer, no
+// tie-breaks. Fills `super` with nsuper+1 boundaries; returns nsuper.
+crd::u32 fundamental_supernodes_i32(const crd::i32* parent, const crd::i32* colcount, crd::i32 n,
+                                    crd::containers::Array<crd::u32>& super, crd::i32* nchild)
+{
+    for (crd::i32 j = 0; j < n; ++j)
+    {
+        nchild[j] = 0;
+    }
+    for (crd::i32 j = 0; j < n; ++j)
+    {
+        if (parent[j] != -1)
+        {
+            ++nchild[parent[j]];
+        }
+    }
+    super.clear();
+    if (n == 0)
+    {
+        return 0;
+    }
+    super.push_back(0U);
+    for (crd::i32 j = 1; j < n; ++j)
+    {
+        if (parent[j - 1] != j || colcount[j - 1] != colcount[j] + 1 || nchild[j] > 1)
+        {
+            super.push_back(static_cast<crd::u32>(j));
+        }
+    }
+    const crd::u32 nsuper = static_cast<crd::u32>(super.size());
+    super.push_back(static_cast<crd::u32>(n));
+    return nsuper;
+}
+
 // cs_counts (ata = 0): column counts of L. colcount[j] = nnz of column j of L
 // (incl. diagonal). Sum == nnz(L).
 void counts_i32(const AdjacencyGraph& g, const crd::i32* parent, const crd::i32* post, crd::i32* colcount,
@@ -345,6 +422,128 @@ crd::u64 profile(const sparse::SparsePattern& pattern) noexcept
         prof += (i - minj);
     }
     return prof;
+}
+
+crd::containers::Array<crd::u32> postorder(crd::containers::ConstSpan<crd::u32> etree, crd::memory::IAllocator* alloc)
+{
+    const crd::i32 n = static_cast<crd::i32>(etree.size());
+    crd::containers::Array<crd::i32> parent(alloc);
+    parent.resize(static_cast<crd::u32>(n));
+    for (crd::i32 i = 0; i < n; ++i)
+    {
+        const crd::u32 p = etree[static_cast<crd::usize>(i)];
+        parent[i]        = (p == kNoParent) ? -1 : static_cast<crd::i32>(p);
+    }
+
+    crd::containers::Array<crd::i32> post(alloc);
+    crd::containers::Array<crd::i32> head(alloc);
+    crd::containers::Array<crd::i32> next(alloc);
+    crd::containers::Array<crd::i32> stack(alloc);
+    post.resize(static_cast<crd::u32>(n));
+    head.resize(static_cast<crd::u32>(n));
+    next.resize(static_cast<crd::u32>(n));
+    stack.resize(static_cast<crd::u32>(n));
+    post_order_i32(parent.data(), n, post.data(), head.data(), next.data(), stack.data());
+
+    crd::containers::Array<crd::u32> out(alloc);
+    out.resize(static_cast<crd::u32>(n));
+    for (crd::i32 i = 0; i < n; ++i)
+    {
+        out[static_cast<crd::usize>(i)] = static_cast<crd::u32>(post[i]);
+    }
+    return out;
+}
+
+SymbolicFactor symbolic_factorize(const sparse::SparsePattern& pattern, crd::memory::IAllocator* alloc)
+{
+    const AdjacencyGraph g = build_adjacency(pattern, alloc);
+    const crd::i32       n = static_cast<crd::i32>(g.n);
+    SymbolicFactor       out(alloc);
+    out.n = g.n;
+    if (n == 0)
+    {
+        out.lp.push_back(0U);  // empty factor: lp = {0}, nnz() == 0
+        return out;
+    }
+
+    // --- etree (cs_etree) + postorder (cs_post) ---------------------------
+    crd::containers::Array<crd::i32> parent(alloc);
+    crd::containers::Array<crd::i32> ancestor(alloc);
+    parent.resize(g.n);
+    ancestor.resize(g.n);
+    etree_i32(g, parent.data(), ancestor.data());
+
+    crd::containers::Array<crd::i32> post(alloc);
+    crd::containers::Array<crd::i32> head(alloc);
+    crd::containers::Array<crd::i32> next(alloc);
+    crd::containers::Array<crd::i32> stack(alloc);
+    post.resize(g.n);
+    head.resize(g.n);
+    next.resize(g.n);
+    stack.resize(g.n);
+    post_order_i32(parent.data(), n, post.data(), head.data(), next.data(), stack.data());
+
+    // --- column counts (cs_counts) ---------------------------------------
+    crd::containers::Array<crd::i32> colcount(alloc);
+    crd::containers::Array<crd::i32> maxfirst(alloc);
+    crd::containers::Array<crd::i32> prevleaf(alloc);
+    crd::containers::Array<crd::i32> first(alloc);
+    colcount.resize(g.n);
+    maxfirst.resize(g.n);
+    prevleaf.resize(g.n);
+    first.resize(g.n);
+    // counts_i32 reuses `ancestor` as scratch (the etree walk is done with it).
+    counts_i32(g, parent.data(), post.data(), colcount.data(), ancestor.data(), maxfirst.data(), prevleaf.data(),
+               first.data());
+
+    // --- L column pointers from the prefix sum of the column counts -------
+    out.lp.resize(g.n + 1U);
+    out.lp[0] = 0U;
+    for (crd::i32 j = 0; j < n; ++j)
+    {
+        out.lp[static_cast<crd::usize>(j) + 1] =
+            out.lp[static_cast<crd::usize>(j)] + static_cast<crd::u32>(colcount[j]);
+    }
+    out.li.resize(out.lp[static_cast<crd::usize>(n)]);
+
+    // --- full L row pattern (cs_ereach per column) ------------------------
+    // Reuse `first` as the per-column write cursor c[] (= a copy of lp), `stack`
+    // as the cs_ereach output stack, `head` as the zero-initialised marker.
+    for (crd::i32 j = 0; j < n; ++j)
+    {
+        first[j] = static_cast<crd::i32>(out.lp[static_cast<crd::usize>(j)]);  // cursor c[j]
+        head[j]  = 0;                                                          // marker (CS_FLIP scratch)
+    }
+    for (crd::i32 k = 0; k < n; ++k)
+    {
+        const crd::i32 top = ereach_i32(g, k, parent.data(), stack.data(), head.data());
+        for (crd::i32 p = top; p < n; ++p)
+        {
+            const crd::i32 i                          = stack[p];  // L(k,i) != 0 -> column i, row k
+            out.li[static_cast<crd::usize>(first[i]++)] = static_cast<crd::u32>(k);
+        }
+        out.li[static_cast<crd::usize>(first[k]++)] = static_cast<crd::u32>(k);  // diagonal L(k,k)
+    }
+    for (crd::i32 j = 0; j < n; ++j)  // every column filled exactly colcount[j] entries
+    {
+        CRD_ASSERT_MSG(first[j] == static_cast<crd::i32>(out.lp[static_cast<crd::usize>(j) + 1]),
+                       "symbolic_factorize: L column cursor mismatch (pattern/count disagree)");
+    }
+
+    // --- fundamental supernodes (reuse `maxfirst` as the nchild scratch) --
+    out.nsuper = fundamental_supernodes_i32(parent.data(), colcount.data(), n, out.super, maxfirst.data());
+
+    // --- export parent / post / colcount as u32 --------------------------
+    out.parent.resize(g.n);
+    out.post.resize(g.n);
+    out.colcount.resize(g.n);
+    for (crd::i32 j = 0; j < n; ++j)
+    {
+        out.parent[static_cast<crd::usize>(j)]   = (parent[j] == -1) ? kNoParent : static_cast<crd::u32>(parent[j]);
+        out.post[static_cast<crd::usize>(j)]     = static_cast<crd::u32>(post[j]);
+        out.colcount[static_cast<crd::usize>(j)] = static_cast<crd::u32>(colcount[j]);
+    }
+    return out;
 }
 
 } // namespace crd::hesap::ordering

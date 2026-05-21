@@ -916,3 +916,41 @@ vs registered-command-list) closed the residual gaps (`from_csc`, `scale_rows`,
 direct sparse solvers / eig are later hesap phases.)
 
 §15 ✅ Accepted — v1a–g locked, Phase 3.1.6 v1 (sparse) closed.
+
+## §16 Amendment (2026-05-21) — v2 reorderings decision lock (v2-close)
+
+§16 locks the `crd-hesap-ordering` (v2a–v2e) decisions and the **D(ord)-1..7**
+determinism pins, all validated against Eigen/CSparse across the cluster.
+
+**Modules + algorithms.** New sibling module `crd-hesap-ordering` (graph/integer
+work on `SparsePattern`, no SIMD floats): `AdjacencyGraph` (symmetrised `A∪Aᵀ`,
+diagonal-free, ascending) + `Permutation`/`apply_symmetric`; **RCM** (George-Liu
+pseudo-peripheral); **AMD** (faithful `cs_amd` quotient-graph port — approximate
+external degree + supervariables + mass elimination + aggressive absorption +
+dense-node-last); **full symbolic factorisation** (`cs_etree`/`cs_post`/`cs_counts`
++ `cs_ereach` L-pattern + Liu-Ng-Peyton fundamental supernodes); **nested
+dissection** (multilevel: heavy-edge matching coarsening + re-seeding BFS bisect +
+Fiduccia-Mattheyses + König min-vertex-separator + node-FM) driven by **CAMD**
+(constraint-aware `cs_amd` copy — per-`cmember`-class min-degree on the full graph,
+the subdomain↔separator interface fix).
+
+**Validation locked.** AMD fill ≤ 1.05× Eigen-AMD on bcsstk13/24/25 (gate met).
+Symbolic L-pattern bit-exact vs `Eigen::SimplicialLLT` factor; symbolic analysis
+beats Eigen `analyzePattern` at scale. **ND+CAMD beats Eigen-AMD fill on the FEM
+subset** (bcsstk13 0.983×, bcsstk24 0.999×); bcsstk25 (large 3D multi-DOF) deferred
+to `v2e-weighted-compression`. **Fill is a downstream-perf knob, never correctness**
+(any valid permutation → identical solve; the v5 consumer picks AMD/ND per matrix).
+
+**D(ord)-1..7 pinned** (`docs/systems/hesap-ordering.md`): (1) all tie-breaks →
+ascending original-graph index; (2) iterate hash-like structures by sorted key; (3)
+structure-derived seed, never RNG; (4) re-sort adjacency ascending before use; (5)
+supervariable principal = lowest-index member; (6) aggressive absorption iterates
+elements ascending; (7) ND coarse vertices numbered by ascending lowest fine
+member + bisection re-seeds from the lowest-index unassigned vertex.
+
+### Next
+
+**v3** — SVD + dense eigenvalue + least squares. (Then v4 iterative, v5 sparse
+direct which consumes these orderings + the v2c symbolic factorisation, … v18.)
+
+§16 ✅ Accepted — v2a–e locked, Phase 3.1.6 v2 (reorderings) closed.
