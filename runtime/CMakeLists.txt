@@ -583,4 +583,8 @@ if(CRD_BUILD_HESAP_VS_REFERENCE)
     # v1g-2: adversarial spgemm stress corpus vs Eigen-ST (find any losing/infeasible regime).
     crd_add_hesap_vs_ref_bench(bench_hesap_spgemm_stress_vs_reference USE_JOBS)
     target_link_libraries(bench_hesap_spgemm_stress_vs_reference PRIVATE crd-hesap-sparse)
+    # v2a: ordering — symbolic-Cholesky port validation + RCM fill/bandwidth + v2b AMD target.
+    crd_add_hesap_vs_ref_bench(bench_hesap_ordering_vs_reference)
+    target_link_libraries(bench_hesap_ordering_vs_reference PRIVATE crd-hesap-sparse crd-hesap-ordering)
+    target_compile_definitions(bench_hesap_ordering_vs_reference PRIVATE "CRD_SUITESPARSE_DIR=\"${CRD_SS_DIR}\"")
 endif()

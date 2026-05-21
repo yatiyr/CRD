@@ -44,6 +44,30 @@ move to a session log entry and remove from here.
 > use ImGui DragFloat3 / sliders — do NOT bake a half-built ad-hoc
 > picker into individual scenes.
 
+### `v2b-amd-cs_amd-tiebreak-isolate` — AMD fill on bcsstk25 (1.044× Eigen) — filed 2026-05-21
+
+> **User-sanctioned optimization follow-on, NOT a defect or defer.** v2b AMD
+> (`amd_order`) lands at 0.989× / 1.002× / **1.044×** Eigen-AMD `nnz(L)` on
+> bcsstk13/24/25 — beats, ties, and 4.4%-above respectively. The ≤1.05× gate is
+> met on all three. The bcsstk25 residual is an **un-isolated tie-break /
+> iteration-order divergence from CSparse `cs_amd`** (all algorithmic features —
+> approximate degree, mass elimination, supervariables, aggressive absorption,
+> dense-node-last — are faithfully ported; the degree formula is algebraically
+> identical).
+>
+> **Why it's not a defer (user-confirmed 2026-05-21):** AMD is a *heuristic* —
+> faithful implementations (SuiteSparse `amd_2`, `cs_amd`, MATLAB, METIS-AMD)
+> differ a few % matrix-to-matrix; "Eigen's exact number" is one impl's output,
+> not a floor. Fill is a **downstream-perf knob (factor memory + flops), never
+> correctness** — any permutation yields the identical solution. Across a corpus
+> we're at parity-or-better (we beat Eigen on bcsstk13).
+>
+> **If revisited:** isolate the divergence (likely cs_amd's incidental node-scan /
+> supervariable-principal order). Matching it bit-for-bit would re-pin D(ord)-5
+> off "lowest-index principal" — a determinism-cleanliness trade for a few % on
+> one matrix. **Real trigger:** an end-to-end v5 sparse-solve benchmark showing
+> ordering fill (not the numerical kernels) is the bottleneck on a real workload.
+
 ### ✅ Phase 3.1.7 v9a-b1 follow-on — AVX2 vectorised CPU radix sort — CLOSED 2026-05-18 (same day as filing)
 
 > **STATUS — CLOSED 2026-05-18.** Investigated three SOTA radix techniques
