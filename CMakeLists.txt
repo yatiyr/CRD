@@ -361,12 +361,25 @@ if(CRD_BUILD_HESAP_VS_REFERENCE)
     # ml64 can't parse. Real-asm OpenBLAS requires Linux/MinGW or vcpkg
     # prebuilt. We accept the generic build as a baseline and document the
     # limitation — see docs/sessions/2026-05-19-hesap-vs-reference.md.
-    set(BUILD_WITHOUT_LAPACK   ON  CACHE BOOL   "" FORCE)
-    set(NOFORTRAN              ON  CACHE BOOL   "" FORCE)
+    # LAPACK is ENABLED as of v3 (SVD + dense-eigenvalue reference). OpenBLAS
+    # bundles the f2c-translated C LAPACK (lapack-netlib): with C_LAPACK=ON +
+    # NOFORTRAN=ON it builds under MSVC with NO Fortran toolchain. This gives us
+    # the gold-standard accuracy oracle + the "floor" reference for v3
+    # (dsyev/dsyevd/dsyevr, dgesvd/dgesdd, dgeev/dgehrd/dhseqr/dtrevc,
+    # dgels/dgelsd) AND the reference source in build/_deps/ for the per-sub-slice
+    # study pass (lapack-netlib/SRC/*.c + the netlib *.f). Caveat: same as the
+    # BLAS kernels — LAPACK speed on MSVC rides the generic BLAS path, so it is an
+    # accuracy oracle on Windows and a fair *speed* bench only on Linux CI.
+    # Building LAPACK adds several minutes to this (gated, opt-in) OpenBLAS build;
+    # the default DoD builds are unaffected (CRD_BUILD_HESAP_VS_REFERENCE is OFF
+    # by default).
+    set(BUILD_WITHOUT_LAPACK   OFF CACHE BOOL   "" FORCE)  # was ON pre-v3; flipped for eig/SVD reference
+    set(NOFORTRAN              ON  CACHE BOOL   "" FORCE)   # use the f2c'd C LAPACK; no Fortran toolchain
+    set(C_LAPACK               ON  CACHE BOOL   "" FORCE)   # compile lapack-netlib f2c C sources
+    set(NO_LAPACKE             OFF CACHE BOOL   "" FORCE)   # build the LAPACKE C interface too
     set(BUILD_TESTING          OFF CACHE BOOL   "" FORCE)
     set(USE_THREAD             1   CACHE STRING "" FORCE)
     set(NUM_THREADS            32  CACHE STRING "" FORCE)
-    set(C_LAPACK               ON  CACHE BOOL   "" FORCE)
     set(_crd_saved_BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS})
     set(BUILD_SHARED_LIBS      OFF CACHE BOOL   "" FORCE)
     CPMAddPackage(

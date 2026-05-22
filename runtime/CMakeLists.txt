@@ -535,6 +535,8 @@ if(CRD_BUILD_HESAP_VS_REFERENCE)
     crd_add_hesap_vs_ref_bench(bench_hesap_blas2_vs_reference   USE_OPENBLAS)
     # v0e-g: solvers shootout (LU / Cholesky / LDLT / QR) — Eigen-only.
     crd_add_hesap_vs_ref_bench(bench_hesap_solvers_vs_reference USE_JOBS)
+    # v3a-1: symmetric eig (eig_sym) vs Eigen SelfAdjointEigenSolver + LAPACK dsyev.
+    crd_add_hesap_vs_ref_bench(bench_hesap_eig_vs_reference USE_JOBS USE_OPENBLAS)
     # v1a-3: sparse assembly shootout (TripletBuilder::compress vs setFromTriplets).
     crd_add_hesap_vs_ref_bench(bench_hesap_sparse_assembly_vs_reference)
     target_link_libraries(bench_hesap_sparse_assembly_vs_reference PRIVATE crd-hesap-sparse)

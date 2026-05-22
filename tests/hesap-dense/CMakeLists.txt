@@ -19,6 +19,8 @@ add_executable(crd-hesap-dense-tests
     test_refinement.cpp
     test_solvers_cli.cpp
     test_random_property.cpp
+    test_eig_sym.cpp
+    test_eig_dc.cpp
 )
 
 target_link_libraries(crd-hesap-dense-tests PRIVATE

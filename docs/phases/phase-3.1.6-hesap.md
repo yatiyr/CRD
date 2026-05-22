@@ -228,7 +228,21 @@ determinism + replay tests.
 | ↳ **v2d** ✅ 2026-05-21 | **Multilevel ND — scaffold.** `WeightedGraph` (CSR + adjwgt + vwgt) + heavy-edge-matching coarsening (`coarsen_match` D(ord)-1 ties, `contract` merges parallel edges/vwgt, sorted) + `coarsen` level stack (stop n≤100 OR n_coarse≥0.9n OR ≤30 levels) + `bisect_coarsest` (**re-seeding** BFS region-grow → disconnected-graph contract, +D(ord)-7) + `project_down` + `edge_cut` + public `nd_bipartition`. **+1 CLI (`nd_bipartition` → 14 ordering commands)** — shipped now, NOT deferred (user directive). **Scaffold quality is excellent: PERFECT/near-perfect balance** (50/50, 72/72, 112/113, 90/90), **disconnected 54-vtx graph splits 27/27** (re-seeding works across components), multilevel engages (225→coarsest 57 over 3 levels), tridiagonal cut=1 (optimal). NO FM refinement (v2e). Determinism bit-identical; conservation (Σvwgt==n every level) + well-formedness + matching-validity verified. **+10 cases → 25 cases / 5664 assertions; 4-config DoD PASS.** | ~400 actual | 10 / 5664 |
 | ↳ **v2e** ✅ 2026-05-21 | **Multilevel ND — refinement + ND driver + CAMD + v2-close.** **FM** (`fm_refine`, gain buckets, best-prefix rollback, equal-gain D(ord)-1, balance kBalanceTol=1.03, keeps both sides non-empty) reaches **optimal cuts** on grids (40×40→20; recovers 90→10) + 51–65% cut reduction on the FEM matrices. **`vertex_separator`** = König min-vertex-cover of the cut (bipartite max-matching) + **`node_fm_refine`** (uphill-rollback node-separator FM). Recursive **`nd_order`** = assign separator-tree postorder `cmember` → **`camd_order`** (constraint-aware copy of the cs_amd port — CHOLMOD-style: per-class min-degree on the FULL graph, dense-node off, supervar/mass-elim cmember-gated; the **interface-fill fix**). +AMD-hybrid leaf threshold (100). **Gate MET on the FEM subset: nd beats Eigen-AMD on bcsstk13 (0.983×) + bcsstk24 (0.999×)**; bcsstk25 (large 3D multi-DOF) loses 1.158× → tracked follow-on `v2e-weighted-compression` (graph compression needs vertex-weight propagation; unweighted regressed). Valid-perm + determinism + disconnected + CAMD-uniform==AMD (port validation) all green. **+5 CLI (`nd_bipartition`/`nd_order`/`nd_nnz_l` … → 16 ordering commands); +21 cases → 36 cases / 7275 assertions; 4-config DoD PASS.** ADR-0065 §16 locks D(ord)-1..7; 18-config sweep on CI. | ~1100 actual | 21 / 7275 |
 | **— v2 determinism pins (D(ord), fix BEFORE v2a)** | **D(ord)-1** all tie-breaks resolve by ascending original-graph vertex index (AMD min-degree, RCM equal-level sort, FM equal-gain move, heavy-edge matching ties, separator-vertex selection). **D(ord)-2** iterate hash-like structures (quotient-graph element lists, supervariable members, FM gain buckets) by **sorted key, never slot/insertion order**. **D(ord)-3** pseudo-peripheral node from a structure-derived fixed seed (hash of `n`+`nnz`), never RNG state. **D(ord)-4** re-sort each vertex's adjacency ascending before matching → coarsening is input-adjacency-order-independent. | — | — |
-| **v3** | SVD (Golub-Reinsch + **randomized**, Halko 2011) + dense eigenvalue (MRRR symmetric + QR-double-shift non-symmetric + **randomized variants**) + least squares (LS / NNLS / TLS) + complex variants + CLI registration | ~2800 | ~130 | ~2.5 wk |
+| **v3** (detailed plan below ↓) | **SVD + dense eigenvalue — MAX-AMBITION (MRRR + AED HARD-GATE close).** Symmetric eig (tridiag + QL/QR + **D&C Cuppen** + **MRRR**) + SVD (Golub-Reinsch/Demmel-Kahan + **D&C bidiagonal** + **randomized Halko 2011**) + non-sym eig (balance + Hessenberg + Francis double-shift Schur + **AED Braman-Byers-Mathias** + eigenvectors) + least squares (LS / **NNLS** Lawson-Hanson / **TLS**) + pinv + complex variants + CLI. **Beat Eigen everywhere; beat LAPACK on MRRR/D&C/AED.** Reference: Eigen (primary head-to-head) + **LAPACK via OpenBLAS `C_LAPACK`** (accuracy oracle on Windows; Linux-CI fair-speed). Per-sub-slice rule: **study Eigen + LAPACK reference source BEFORE implementing**, attack each routine granularly. **9 leaf sub-subslices ↓.** | ~6–8k | ~200 | 8–12+ wk |
+| ↳ **v3a** 🔄 (v3a-1/2/2.5 ✅) | **Symmetric eigensolver.** Shared reflector substrate + tridiag + QL/QR + **D&C** + **MRRR** + complex Hermitian. **4 sub-subslices ↓ — real symmetric + D&C + complex Hermitian SHIPPED; v3a-3 MRRR is the remaining hard-gate.** | ~2200 | ~70 | — |
+| ↳ **v3a-1** ✅ 2026-05-22 | **Real f32/f64, blocked from the start.** Shared `detail/householder.hpp` (`make_householder` = `dlarfg`-faithful incl. safmin guard; shared by tridiag/bidiag/Hessenberg) + **blocked** symmetric tridiagonalization (`dsytrd` = `dlatrd` panel + `syr2k` trailing update; last block via `dsytd2` oracle) + implicit QL/QR Wilkinson shift (`dsteqr`: faithful `√(\|d·d\|)·eps`+SAFMIN split) + eigenvector accumulation + back-transform (`dormtr`) + perm-array ascending sort + pinned sign. **Column-major SIMD eigenvector rotation (ADR-0083 escape) + single-pass SIMD panel symv.** CLI `eig_sym.{f32,f64}`. Interfaces complex-aware (`tau:T`, `D`/`E`:`RealType<T>`). D(dense-eig)-1..5. **Gate MET: beats Eigen `SelfAdjointEigenSolver` 1.21–1.94× + LAPACK `dsyev` 1.90–4.02× at N=64–1024, accuracy ~1e-12; 5-config DoD PASS.** | ~750 | ~25 | — |
+| ↳ **v3a-1b → v3a-2.5** ✅ 2026-05-22 | **Complex Hermitian eig** (folded into v3a-2.5 per user directive 2026-05-22; reuses the v3a-2 D&C solver). `zhetd2` reduce Hermitian → REAL tridiagonal (complex reflectors + accumulated phase-diagonal) + reuse real D&C/`steqr` on `(D,E)` + complex back-transform `V=Q·D_phase·Z`. **SIMD complex reduction: working matrix carried as two REAL arrays `ar`/`ai` → contiguous-row real-SIMD zhetd2 matvec + rank-2; back-transform reads reflectors directly (no complex materialization).** c32/c64. CLI `hesap.dense.eig.herm.{c32,c64}`. **Gate MET: beats Eigen complex `SelfAdjointEigenSolver` N≥128 (1.11× → 2.22× at N=1024), ties N=64 (1.00× — floor); beats LAPACK `zheev` everywhere (2.5–4.4×); accuracy ~1e-14.** `[herm]` 5 cases/20,117 assertions; 5-config DoD PASS. | ~450 | ~15 | — |
+| ↳ **v3a-2** ✅ 2026-05-22 | Divide-and-conquer (Cuppen 1981 / `dstedc`): rank-1 tearing + deflation (`dlaed2` negligible-weight + equal-pole Givens) + secular-equation root-finder (`detail/secular.hpp` bracket-confined Newton+bisection, **D(dense-eig)-8**) + Löwner/Gu-Eisenstat eigenvectors (interleaved product — N=512 overflow fix [[feedback_lowner_product_overflow_interleave]]) back-transformed via `gemm_parallel`; fused Q·V merge. **Serial recursion + deterministic parallel merge-gemm = bit-identical across worker counts (D(dense-eig)-6/-7).** `eig_sym` dispatches QL/QR ≤256, D&C >256. **Gate MET: beats Eigen + LAPACK at every N (see v3a-1 row).** Subslices v3a-2.1..2.4 (secular / rank1 / dc_tridiag / dispatch) + 2.5 (complex Hermitian) all closed. | ~800 | ~22 | — |
+| ↳ **v3a-3** | **MRRR** (`dstemr`: dqds eigenvalues `dlasq`, relatively-robust representations + twisted factorizations `dlarrv`, Gram-Schmidt re-orthogonalization for clustered eigenvalues). **HARD-GATE: O(n²) + accuracy beats LAPACK `stegr`.** | ~700 | ~23 | — |
+| ↳ **v3b** | **SVD.** Bidiagonalization + Demmel-Kahan QR + **D&C bidiagonal** + **randomized**. **3 sub-subslices ↓.** | ~1600 | ~50 | — |
+| ↳ **v3b-1** | Householder bidiagonalization (`dgebrd`, reuses v3a-1 substrate) + Demmel-Kahan implicit-zero-shift QR on bidiagonal (`dbdsqr`) + singular-vector accumulation + descending sort + complex SVD (`zgesvd`). **Gate: reconstruction `A=UΣVᵀ` + vs Eigen `JacobiSVD`.** | ~600 | ~18 | — |
+| ↳ **v3b-2** | Divide-and-conquer bidiagonal SVD (Gu-Eisenstat / `dbdsdc`, BDCSVD-class), jobified bit-identical. **Gate: beat/tie Eigen `BDCSVD` at scale.** | ~700 | ~18 | — |
+| ↳ **v3b-3** | **Randomized SVD** (Halko-Martinsson-Tropp 2011: Gaussian sketch + range-finder + power/subspace iteration → small dense SVD) + randomized Nyström symmetric-PSD eig. **Gate: Eigen has no randomized path — low-rank accuracy + speed win.** | ~300 | ~14 | — |
+| ↳ **v3c** | **Least-squares family.** `lstsq` (QR full-rank / SVD min-norm rank-deficient) + `pinv` (Moore-Penrose + rcond) + **NNLS** (Lawson-Hanson active-set) + **TLS** (via SVD). **Gate: vs Eigen LS solvers + textbook minimiser.** | ~700 | ~25 | — |
+| ↳ **v3d** | **Non-symmetric eigensolver (full).** Balance + Hessenberg + Francis double-shift Schur + **AED** + eigenvectors + complex Schur. **2 sub-subslices ↓.** | ~1500 | ~40 | — |
+| ↳ **v3d-1** | Balancing (`dgebal`) + Hessenberg reduction (`dgehrd`, blocked, reuses substrate) + Francis double-shift implicit QR → real Schur (`dhseqr`) with **Aggressive Early Deflation** (Braman-Byers-Mathias) — **HARD-GATE**; eigenvalues incl. complex-conjugate 2×2 blocks. | ~900 | ~22 | — |
+| ↳ **v3d-2** | Eigenvectors via Schur back-substitution (`dtrevc`) + **3-stage back-transform** (balancing-diag⁻¹ · Householder Q · Schur vectors) + complex eigenvector assembly + complex non-sym Schur. **Gate: vs Eigen `EigenSolver`/`RealSchur`.** | ~600 | ~18 | — |
+| ↳ **v3e** | **CLI audit + close.** CLI-completeness audit (every op a command) + vs-reference rollup (Eigen + LAPACK) + **ADR-0065 §17** lock (D(dense-eig) determinism pins) + 18-config sweep. | ~200 | — | — |
 | **v4** | Iterative solvers (CG / PCG / BiCGSTAB / GMRES / MINRES / LSQR / IDR(s) / **GCRO-DR + M-CG Krylov subspace recycling**) + modern preconditioners (Jacobi / IC(0) / ILU(0) / **SPAI** / **ILUPACK multilevel ILU** / polynomial / block-Jacobi / additive Schwarz) + `LinearOp` consumer surface + complex variants + CLI registration | ~3500 | ~150 | ~3 wk |
 | **v5** | Sparse direct (supernodal Cholesky — CHOLMOD-class + left-looking LU — Gilbert-Peierls + multifrontal QR + LDLT) + **AMG variants** (classical Ruge-Stüben + **SA-AMG Vaněk 1996** + **AGMG Notay 2010** + bootstrap AMG) + **HSS-augmented (STRUMPACK pattern) reserve** + complex variants + CLI registration | ~4500 | ~140 | ~3.5 wk |
 | **v6** | Sparse eigenvalue (Lanczos with restart + IRA Arnoldi + **LOBPCG Knyazev 2001** + **FEAST Polizzi 2009** + **Jacobi-Davidson** + **IRLBA Baglama-Reichel 2005**) + complex variants + CLI registration | ~2500 | ~110 | ~2.5 wk |
@@ -546,43 +560,242 @@ smokes still green.
 
 ---
 
-## v3 — SVD + dense eigenvalue (~2 weeks)
+## v3 — SVD + dense eigenvalue — MAX-AMBITION DETAILED PLAN (planned 2026-05-21)
 
-**Goal:** SVD (Golub-Reinsch), symmetric eigenvalue (Householder
-tridiag + QR with shifts), non-sym eigenvalue (Schur via QR with
-double-shift), pseudo-inverse, least squares.
+**Ambition (user directive 2026-05-21, memory `project_hesap_v3_max_ambition_gate`):**
+the **full LAPACK-elite tier**. We beat Eigen everywhere and **beat LAPACK on
+MRRR / D&C / AED** — "if LAPACK and Eigen can do it, we can do at least how they
+did." **MRRR and Aggressive Early Deflation HARD-GATE the v3 cluster close**
+(not filed-in-cluster aspirational — they block close). Realistic envelope:
+~6–8 KLOC, ~200 tests, **8–12+ weeks** (the hardest numerical code in the whole
+module — clustered-eigenvalue orthogonality, dqds bit-stability, AED).
 
-**Public surface:**
+**Method (per sub-slice, non-negotiable):** *deep-research pass FIRST* — read
+the Eigen internals AND the LAPACK reference source for the routine, attack each
+sub-problem granularly and in small pieces, design carefully, THEN implement.
+Reference source lives in `build/_deps/` once `CRD_BUILD_HESAP_VS_REFERENCE=ON`
+(Eigen headers + OpenBLAS's f2c'd LAPACK `SRC/*.c` + the netlib `*.f`).
+
+### Goal
+
+- **Symmetric eigensolver** — Householder tridiagonalization + implicit QL/QR
+  (Wilkinson shift) + **divide-and-conquer (Cuppen)** + **MRRR** (`stemr`).
+- **SVD** — Householder bidiagonalization + Demmel-Kahan implicit-zero-shift QR
+  + **divide-and-conquer bidiagonal SVD** + **randomized SVD (Halko 2011)**.
+- **Non-symmetric eigensolver** — balancing + Hessenberg reduction + Francis
+  double-shift QR → real Schur with **Aggressive Early Deflation** + eigenvectors.
+- **Least squares** — `lstsq` (QR / SVD) + `pinv` (Moore-Penrose) + **NNLS**
+  (Lawson-Hanson) + **TLS** (via SVD).
+- **Complex variants** folded into each real slice (Hermitian → v3a, complex
+  Schur → v3d), not batched at close.
+
+### Shared substrate (built FIRST, in v3a-1)
+
+`detail::householder_block_reduction` — the blocked-WY Householder reduction
+that `dsytrd` (→ symmetric tridiagonal), `dgebrd` (→ bidiagonal), and `dgehrd`
+(→ upper Hessenberg) all share, with the trailing update routed through v0d
+`gemm_parallel`. Lifting it once keeps the three reductions bit-identical by
+construction and saves ~30% LOC (the role v0a played for the dense catalog).
+
+### Public surface
 
 ```cpp
 namespace crd::hesap::dense
 {
+    // --- SVD ---
     template <typename T> struct SVD { Matrix<T> U; Vector<T> S; Matrix<T> V; };
-    template <typename T> [[nodiscard]] SVD<T> svd(IAllocator*, const Matrix<T>& A);
+    template <typename T> [[nodiscard]] SVD<T> svd       (IAllocator*, const Matrix<T>& A);  // Golub-Reinsch / D&C dispatch
+    template <typename T> [[nodiscard]] SVD<T> rsvd      (IAllocator*, const Matrix<T>& A, usize rank, usize oversample = 10, usize power_iters = 2);  // randomized (Halko 2011)
 
-    template <typename T> struct EigSym  { Vector<T> values; Matrix<T> vectors; };
-    template <typename T> [[nodiscard]] EigSym<T>  eig_sym (const Matrix<T>& A);
+    // --- symmetric eigenvalue ---
+    template <typename T> struct EigSym { Vector<T> values; Matrix<T> vectors; };  // ascending values
+    template <typename T> [[nodiscard]] EigSym<T> eig_sym (IAllocator*, const Symmetric<T>& A);  // QL / D&C / MRRR dispatch
 
-    template <typename T> struct EigNon  { Vector<std::complex<T>> values;
-                                           Matrix<std::complex<T>> vectors; };
-    template <typename T> [[nodiscard]] EigNon<T>  eig     (const Matrix<T>& A);
+    // --- non-symmetric eigenvalue ---
+    template <typename T> struct EigNon { Vector<Complex<T>> values; Matrix<Complex<T>> vectors; };
+    template <typename T> [[nodiscard]] EigNon<T> eig     (IAllocator*, const Matrix<T>& A);  // balance + Hessenberg + Schur(AED) + vectors
 
-    template <typename T> Matrix<T>  pinv       (const Matrix<T>& A, T rcond = T(0));  // Moore-Penrose
-    template <typename T> Vector<T>  lstsq      (const Matrix<T>& A, const Vector<T>& b);  // least squares via SVD or QR
+    // --- least squares family ---
+    template <typename T> [[nodiscard]] Matrix<T> pinv    (IAllocator*, const Matrix<T>& A, T rcond = T(0));  // Moore-Penrose via SVD
+    template <typename T> [[nodiscard]] Vector<T> lstsq   (IAllocator*, const Matrix<T>& A, const Vector<T>& b);  // QR full-rank / SVD min-norm
+    template <typename T> [[nodiscard]] Vector<T> nnls    (IAllocator*, const Matrix<T>& A, const Vector<T>& b);  // Lawson-Hanson active-set
+    template <typename T> [[nodiscard]] Vector<T> tls     (IAllocator*, const Matrix<T>& A, const Vector<T>& b);  // total least squares via SVD
 }
 ```
 
-**Tests (~30):**
-- SVD reconstruction: `A == U*diag(S)*V^T` within `n * eps * |A|`.
-- Singular values are non-negative + sorted descending.
-- Eigenvalues of diagonal matrix = the diagonal entries (in some order).
-- Eigenvectors are orthogonal for symmetric input.
-- Pseudo-inverse: `A * pinv(A) * A == A` within tolerance.
-- Least squares: solution minimises `|Ax - b|` (verify with random
-  perturbation).
+All factories `[[nodiscard]]`, take `IAllocator*` from the input matrix (no
+`default_allocator()` in library code — memory `feedback_hesap_propagate_allocator`),
+f32 + f64 + complex variants, CLI per op.
 
-**Definition of done:** all six configs green + numerical-accuracy
-benchmark fixtures green.
+### Determinism pins to draft up front (D(dense-eig)-N → ADR-0065 §17)
+
+- **D&C parallel recursion bit-identical across worker counts** — deterministic
+  merge order on the recursion tree; secular root-finder (`dlaed4`) uses
+  safeguarded **fixed-iteration** bisection+Newton with deterministic bracket
+  selection (no RNG-dependent / convergence-dependent early-exit).
+- **QR iteration** uses the fixed Wilkinson-shift formula + a capped max-iter.
+- **MRRR RRR shift selection deterministic** (pin the tie-break rule); commit to
+  the **Gram-Schmidt re-orthogonalization fallback** for clustered eigenvalues
+  (LAPACK `dlarrv` does this — don't hope clusters never occur).
+- **Two-rounded reductions** per ADR-0063 throughout (no order-free cross-thread
+  float reductions).
+
+### Sub-slice ledger (see the summary table for LOC/test/gate per leaf)
+
+- **v3a** symmetric eig — v3a-1 (substrate + **blocked** tridiag + QL/QR, **real
+  f32/f64**) → **v3a-1b (complex Hermitian `zhetrd`)** → v3a-2 (D&C) →
+  **v3a-3 (MRRR — hard-gate vs LAPACK `stegr`)**.
+- **v3b** SVD — v3b-1 (bidiag + Demmel-Kahan + complex) → v3b-2 (D&C bidiagonal
+  SVD) → v3b-3 (randomized Halko).
+- **v3c** least-squares family — lstsq + pinv + NNLS + TLS.
+- **v3d** non-sym eig — **v3d-1 (balance + Hessenberg + Schur + AED — hard-gate)**
+  → v3d-2 (eigenvectors + 3-stage back-transform + complex Schur).
+- **v3e** CLI audit + vs-reference rollup + ADR-0065 §17 lock + 18-config close.
+
+### v3a-1 locked design (advisor-vetted + user-approved 2026-05-21)
+
+**Scope:** real f32/f64 symmetric eigensolver, **blocked from the start**.
+Complex Hermitian is **v3a-1b** (different algorithm-class — `zhetrd` real-tridiagonal
++ phase back-transform); v3a-1 interfaces are designed complex-aware (`tau` carries
+`T`; `D`/`E` are `RealType<T>`) so v3a-1b drops in. Files: `detail/householder.hpp`
+(shared reflector substrate) + `eig_sym.hpp`/`.cpp` + `cli_register_eig.cpp` +
+`tests/hesap-dense/test_eig_sym.cpp` + `bench_hesap_eig_vs_reference.cpp`.
+
+**Algorithm:** blocked `dsytrd` (`dlatrd` panel: per-column `dlarfg` + `symv` + the
+4-`gemv` deferred-update forming `W`, then ONE `syr2k` trailing update
+`A₂₂ -= V·Wᵀ + W·Vᵀ` — the BLAS3 beat-LAPACK lever; last ≤NB block via unblocked
+`dsytd2`, also kept as the test oracle) → `steqr` QL/QR implicit-shift (block-split,
+Wilkinson shift, Givens bulge-chase, 2×2 via `dlae2`/`dlaev2`, max-iter `30n`,
+Givens accumulated into `Z`) → back-transform `V = Q·Z` (`dormtr`) → ascending sort +
+sign convention.
+
+**Four faithful-port fixes (advisor):**
+1. `make_householder` is **`dlarfg`-faithful incl. the `safmin = min()/eps` rescaling
+   loop** (QR's reflector omits it; tridiag's symmetric rank-2 update needs it or
+   badly-scaled inputs lose precision / hit `beta=0, tau≠0` → NaN). QR's reflector
+   stays a separate internal shortcut. → **D(dense-eig)-5**.
+2. Eigenvalue sort = **permutation array applied once** (bit-identical, faster than
+   in-place selection-swap). → **D(dense-eig)-3**.
+3. Eigenvector sign = **lowest-index largest-magnitude component positive** (matches
+   D(ord)-1); LAPACK doesn't pin sign, so the vs-LAPACK gate compares `|V|` /
+   `‖A·v−λv‖` / `‖VᵀV−I‖`, never raw `V`. → **D(dense-eig)-4**.
+4. Block-split threshold = LAPACK's **`|E(m)| ≤ √(|d_m·d_{m+1}|)·eps`** + the
+   bottom-loop `EPS²·|d_m·d_{m+1}| + SAFMIN` (NOT Eigen's additive form; the
+   `+SAFMIN` survives zero-eigenvalue tridiagonals). → **D(dense-eig)-2**.
+
+**D(dense-eig)-1** (overarching): production tridiag = the blocked path, pinned;
+all reductions deterministic (two-rounded, RNG-free). Allocator from the input
+`Symmetric<T>` everywhere; no `default_allocator()` in library code.
+
+**Approved implementation steps — ALL DONE 2026-05-21 (DoD confirming):**
+1. ✅ `detail/householder.hpp` — `make_householder` (`dlarfg`-faithful, safmin guard, `hypot2`).
+2. ✅ `eig_sym.hpp` — `EigSym<T>` (`Vector<RealType<T>>` values ascending + `Matrix<T>` vectors) +
+   `eig_sym` + complex-aware `tridiagonalize`/`steqr` declarations.
+3. ✅ `eig_sym.cpp` — blocked `dsytrd` (`dlatrd` panel + **single-pass SIMD symmetric matvec** +
+   ONE `gemm_parallel` `P=V·Wᵀ` trailing then `A_lo -= P+Pᵀ`; `dsytd2` last block) → faithful
+   `steqr` QL/QR (**column-major SIMD Givens** — ADR-0083 layout escape hatch) → SIMD `form_q`
+   back-transform → perm-array sort → pinned sign.
+4. ✅ `test_eig_sym.cpp` (9 cases: `make_householder` `H·x=βe₀`, diagonal/2×2/tridiagonal,
+   SPD N=16..200 incl. blocked, indefinite, determinism, f32, CLI) — full suite **186 / 68,263**.
+5. ✅ `bench_hesap_eig_vs_reference.cpp` — vs Eigen `SelfAdjointEigenSolver` + LAPACK `dsyev`
+   (QL/QR, same algorithm class). **GATE MET — beats both at every N=64..1024:** C/Eigen
+   1.20/1.44/1.48/1.24/1.26×, C/LAPACK 2.03/3.49/2.96/2.13/1.46×; accuracy ~1e-12, residual ~1e-14.
+   (9.8× speedup at N=1024 from the layout fix + SIMD `form_q` + SIMD panel `symv`.)
+6. ✅ `cli_register_eig.cpp` — `hesap.dense.eig.sym.{f32,f64}` + anchor.
+7. ⏳ 5-config DoD (`-IncludeRelease`) running. (Fixed: shipping/release C4189 `steqr_info` unused
+   when asserts-off → `[[maybe_unused]]`; tidy `misc-unused-alias-decls` on `rot_cols` two-param
+   template → fully-qualify; local `nb` `constexpr`→`const`.)
+
+**`v3a-1-perf` — RE-SCOPED 2026-05-22 after a flop recount.** The originally-filed "half-flop
+triangular `syr2k`" is a **non-issue**: our trailing `P = V·Wᵀ` (full `m×m`, `m²·kb` mults) +
+`A_lo -= P+Pᵀ` is **flop-equivalent** to a triangular `syr2k` (`m²/2` entries × `2kb`), and runs
+on the fast parallel `gemm_parallel` rather than our scalar `syr2k`/`syrk` shells — a triangular
+kernel would be *slower*. The genuine dominant cost at large N is the **`steqr` QL/QR eigenvector
+rotation accumulation (~6n³, serial, fine-grained)** — which is precisely what **v3a-2 (D&C)** and
+**v3a-3 (MRRR, O(n²) vectors)** eliminate architecturally. So QL/QR vector-perf is **low-leverage
+and largely obsoleted by v3a-2**; do not invest there. `v3a-1-perf` is therefore deferred to a
+data trigger: revisit only if the Linux-CI fair-BLAS-LAPACK shootout shows a scale gap that v3a-2
+does not already close. (A clean-but-marginal option if ever wanted: blocked-WY parallel `form_q`
+via the QR compact-WY machinery — but `form_q` is the smaller `~2/3 n³` term, not the bottleneck.)
+
+### v3a-2 locked design (Cuppen divide-and-conquer; advisor-vetted 2026-05-22)
+
+**Sequencing:** v3a-1b (complex Hermitian) deferred to AFTER v3a-2 (interfaces already
+complex-aware). **Reuses** `tridiagonalize` + `steqr` (base case, blocks ≤ SMLSIZ≈25) +
+`form_q` (back-transform) + `simd_dot`/`simd_axpy`. Bottom-up, each piece standalone-testable:
+
+- **v3a-2.1 — secular root-finder** (`dlaed4`+`dlaed5`/`dlaed6`): solve `1 + ρ·Σ wⱼ²/(δⱼ−λ)=0`
+  for each root in bracket `(δᵢ,δᵢ₊₁)`. **Port the post-1995 Gu-Eisenstat `dlaed4` FAITHFULLY —
+  do NOT simplify the bracket-safeguard branches** (the older Bunch-Nielsen-Sorensen interpolation
+  can converge outside the bracket; the safeguards prevent it). Any deviation = a numbered Dxxx
+  note. Test: roots satisfy secular eqn + interlace δ.
+- **v3a-2.2 — deflation + merge** (`dlaed2`+`dlaed3`): deflate negligible/near-equal components
+  (Givens). **LÖWNER FORMULA IS LOAD-BEARING** — after `dlaed4` returns roots `λ̂`, DISCARD the
+  original `w` and reconstruct `ŵᵢ = sign(wᵢ)·√(∏ⱼ(λ̂ⱼ−δᵢ)/∏_{j≠i}(δⱼ−δᵢ))`, build eigenvectors
+  from `ŵ` (else orthogonality dies exactly on clustered inputs — same risk class as v3a-3 MRRR
+  GS-fallback). **Eigenvector formation expressed as a `gemm` → `gemm_parallel` from the START**
+  (Gu-Eisenstat is BLAS-like; this is what unlocks the parallel beat-LAPACK story — do NOT ship
+  scalar Löwner then add gemm; that is the QL/QR perf trap already paid once). **Gate test:
+  `‖VᵀV−I‖ ≤ n·eps`** (not a side-check).
+- **v3a-2.3 — D&C recursion** (`dlaed0`): cut at `n/2` (rank-1 correction ρ·vvᵀ), recurse,
+  merge via 2.2. **Parallelism = FLAT TASK-LIST PER LEVEL** (collect both subproblems at each
+  recursion level, `parallel_for` over the list; tree levels sequential — sidesteps the
+  frame-arena risk [[feedback_jobs_parallel_for_frame_arena_exhaustion]] and nested-spawn
+  complexity). **Join order fixed: parent consumes left subproblem then right, regardless of
+  which worker finished first** → bit-identical across worker counts.
+- **v3a-2.4 — `eig_sym` D&C dispatch + gate**: D&C for N>threshold (QL/QR small-N).
+  Bench vs Eigen QL + LAPACK `dsyevd` (D&C, apples-to-apples). Gate: beat Eigen QL at scale +
+  ≥ LAPACK `dsyevd`.
+- **v3a-2.5 — complex Hermitian** (folds in former v3a-1b per user directive 2026-05-22):
+  `zhetrd`/`zhetd2` reduce a complex Hermitian matrix to a **REAL** symmetric tridiagonal `(D,E)`
+  via complex Householder reflectors, accumulating a **phase diagonal** so the off-diagonals come
+  out real. The eigenvalues + tridiagonal eigenvectors come from the **SAME real solver** (`steqr`
+  now, D&C after 2.3 — the `dlaed*` core is real, unchanged). Complex back-transform
+  `V = D_phase · Q · Z` (`zunmtr`-class), where `Q` is the complex reduction matrix and `Z` the
+  real tridiagonal eigenvectors. New `eig_herm(IAllocator*, const Hermitian<T>&)` + CLI
+  `hesap.dense.eig.herm.{c32,c64}`. **Gate: vs Eigen complex `SelfAdjointEigenSolver`.** Reuses
+  the v3a-1 complex-aware interfaces (`tau:T`, `D`/`E`:`RealType<T>`) — no re-plumbing.
+
+  **✅ SHIPPED 2026-05-22.** `eig_herm` in `eig_sym.cpp`: **SIMD complex reduction**
+  (`tridiagonalize_hermitian_simd`) — the working Hermitian is carried as two REAL arrays
+  `ar`/`ai` (lower triangle) so the zhetd2 Hermitian matvec + rank-2 update are contiguous-row
+  real SIMD (`simd_dot`/`simd_axpy`), no scalar complex arithmetic. Reflectors land in `ar`/`ai`;
+  the back-transform (`apply_q_zsplit`) reads them directly (no complex materialization of the
+  working matrix). Real `dc_base_steqr` (n≤256) / `dc_tridiag_eig` (n>256) on `(D,E)`; complex
+  back-transform `V = Q·D_phase·Z` via real-split gemms; phase-normalized eigenvectors (squared-
+  magnitude pivot, one sqrt/column). **The SIMD reduction was the decisive perf fix** — it moved
+  N=128 from 0.94× → **1.11×** and lifted every larger size. **Bench (c64) vs Eigen
+  `SelfAdjointEigenSolver`: N=64 1.00× (tie — floor; Eigen's hand-inlined small-matrix `zhetrd`),
+  N=128 1.11×, N=256 1.56×, N=512 1.89×, N=1024 2.22×; beats LAPACK `zheev` everywhere
+  (2.5–4.4×); accuracy ~1e-14.** Tests `[herm]` 5 cases/20,117 assertions (incl. `eig.herm` CLI round-
+  trip `[[2,1+i],[1-i,3]]`→{1,4}); full hesap-dense suite 206 cases/98,716 assertions green. Dead
+  scalar paths removed (`tridiagonalize_hermitian`, `form_q_hermitian`, `cgemm_split`,
+  `apply_q_to_z_complex`). CLI `hesap.dense.eig.herm.{c32,c64}` registered (A as interleaved
+  `[re,im]`, lower triangle).
+
+**New pins:** **D(dense-eig)-6** — D&C bit-identical across worker counts (fixed left-then-right
+merge order; `dlaed4` fixed-iteration safeguarded bisection+Newton, deterministic bracket;
+deflation tie-break ascending original index). **D(dense-eig)-7** — cut always at `n/2`; rank-1
+vector sign fixed. **+ `dlaed4-port-faithful`** (no safeguard simplification).
+
+### Tests (~200 across leaves)
+
+- SVD reconstruction `A == U·diag(S)·Vᵀ` within `n·eps·|A|`; singular values
+  non-negative + descending; randomized-SVD low-rank error bound.
+- Symmetric: eigenvalues of a diagonal/known matrix recovered; eigenvectors
+  orthonormal (`VᵀV == I`); **D&C and MRRR bit-identical across worker counts**;
+  **clustered-eigenvalue orthogonality** (the MRRR stress case).
+- Non-symmetric: real Schur `A == Q·T·Qᵀ`; complex-conjugate pairs recovered;
+  eigenvector residual `‖A·v − λ·v‖` small; AED reduces iteration count vs naive.
+- Pseudo-inverse `A·pinv(A)·A == A`; lstsq minimises `‖Ax − b‖`; NNLS solution
+  non-negative + KKT; TLS vs ordinary LS on errors-in-variables data.
+- Per-op CLI round-trip bit-equal to the engine call.
+- vs-reference accuracy oracle: our values/vectors match LAPACK + Eigen within
+  tolerance on every gate matrix.
+
+**Definition of done:** every leaf passes 4/5-config DoD; **MRRR beats LAPACK
+`stegr` AND AED is in the non-sym path** (the two hard-gates); the cluster
+closes on the 18-config sweep + numerical-accuracy fixtures green.
 
 ---
 

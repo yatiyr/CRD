@@ -1,0 +1,191 @@
+// v3a-1 — CLI registration for the symmetric eigensolver eig_sym. Each
+// command takes (A symmetric lower-half, n) and returns the n ascending
+// eigenvalues as a binary blob. (Eigenvectors are available via the engine
+// API; the CLI returns the spectrum, the primary agent-facing query.)
+//
+// Anchor symbol: `register_eig_cli_anchor()` in `cli_anchor.hpp`.
+
+#include <crd/hesap/cli/arg_value.hpp>
+#include <crd/hesap/cli/command_registry.hpp>
+#include <crd/hesap/complex.hpp>
+#include <crd/hesap/dense/cli_anchor.hpp>
+#include <crd/hesap/dense/eig_sym.hpp>
+#include <crd/hesap/dense/matrix_types.hpp>
+
+#include <utility>
+
+namespace
+{
+using crd::hesap::cli::Capability;
+using crd::hesap::cli::CommandArgs;
+using crd::hesap::cli::CommandRegistry;
+using crd::hesap::cli::CommandResult;
+using crd::hesap::cli::CommandSchema;
+using crd::hesap::cli::OutputKind;
+using crd::hesap::cli::ParamKind;
+using crd::hesap::cli::ParamSchema;
+using crd::hesap::cli::ResultBinaryBlob;
+using crd::hesap::cli::ResultError;
+using crd::hesap::Complex;
+using crd::hesap::dense::eig_herm;
+using crd::hesap::dense::eig_sym;
+using crd::hesap::dense::Hermitian;
+using crd::hesap::dense::Symmetric;
+
+CommandResult error_result(crd::memory::IAllocator* alloc, const char* msg)
+{
+    CommandResult r{alloc};
+    r.ok = false;
+    ResultError e{alloc};
+    e.error_kind = crd::containers::String{"InvalidArgument", alloc};
+    e.error_message = crd::containers::String{msg, alloc};
+    r.value = std::move(e);
+    return r;
+}
+
+CommandResult binary_result(crd::memory::IAllocator* alloc,
+                            crd::containers::ConstSpan<crd::f64> values)
+{
+    CommandResult r{alloc};
+    r.ok = true;
+    ResultBinaryBlob blob{alloc};
+    const crd::u8* raw = reinterpret_cast<const crd::u8*>(values.data());
+    blob.bytes.reserve(values.size() * sizeof(crd::f64));
+    for (crd::usize i = 0; i < values.size() * sizeof(crd::f64); ++i)
+    {
+        blob.bytes.push_back(raw[i]);
+    }
+    r.value = std::move(blob);
+    return r;
+}
+
+template <typename T>
+CommandResult impl_eig_sym(const CommandArgs& args)
+{
+    const auto a_flat = args.get_f64_array("A");
+    const auto n = args.get_u64("n").value_or(crd::u64{0});
+    if (n == 0 || a_flat.size() != n * n)
+    {
+        return error_result(args.alloc, "eig.sym: A=n*n (symmetric, lower-half), n required");
+    }
+    const crd::usize nn = static_cast<crd::usize>(n);
+    Symmetric<T> a_sym(args.alloc, nn);
+    for (crd::usize i = 0; i < nn; ++i)
+    {
+        for (crd::usize j = 0; j <= i; ++j)
+        {
+            a_sym.at(i, j) = static_cast<T>(a_flat[i * nn + j]);
+        }
+    }
+    const auto eig = eig_sym<T>(args.alloc, a_sym);
+    crd::containers::Array<crd::f64> out(args.alloc);
+    out.reserve(nn);
+    for (crd::usize i = 0; i < nn; ++i)
+    {
+        out.push_back(static_cast<crd::f64>(eig.values.data()[i]));
+    }
+    return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
+}
+
+// Hermitian eigenvalues. A travels as an interleaved complex array
+// [re0,im0, re1,im1, ...] of n*n entries (lower triangle used); the n real
+// ascending eigenvalues are returned as an f64 binary blob.
+template <typename U>
+CommandResult impl_eig_herm(const CommandArgs& args)
+{
+    using C = Complex<U>;
+    const auto a_flat = args.get_f64_array("A");
+    const auto n = args.get_u64("n").value_or(crd::u64{0});
+    if (n == 0 || a_flat.size() != n * n * 2)
+    {
+        return error_result(args.alloc,
+                            "eig.herm: A=2*n*n interleaved [re,im] (lower-half), n required");
+    }
+    const crd::usize nn = static_cast<crd::usize>(n);
+    Hermitian<C> a_herm(args.alloc, nn);
+    for (crd::usize i = 0; i < nn; ++i)
+    {
+        for (crd::usize j = 0; j <= i; ++j)
+        {
+            const crd::usize k = (i * nn + j) * 2;
+            a_herm.at_lower(i, j) = C{static_cast<U>(a_flat[k]), static_cast<U>(a_flat[k + 1])};
+        }
+    }
+    const auto eig = eig_herm<C>(args.alloc, a_herm);
+    crd::containers::Array<crd::f64> out(args.alloc);
+    out.reserve(nn);
+    for (crd::usize i = 0; i < nn; ++i)
+    {
+        out.push_back(static_cast<crd::f64>(eig.values.data()[i]));
+    }
+    return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
+}
+
+CommandSchema make_schema(crd::memory::IAllocator* alloc, const char* name, const char* desc)
+{
+    CommandSchema s{alloc};
+    s.name = crd::containers::String{name, alloc};
+    s.description = crd::containers::String{desc, alloc};
+    s.output.kind = OutputKind::BinaryBlob;
+    s.required_caps.bits = Capability::kHesapCompute;
+    s.idempotent = true;
+    return s;
+}
+
+void add_param(CommandSchema& s, crd::memory::IAllocator* alloc, const char* name, const char* desc,
+               ParamKind kind, bool required)
+{
+    ParamSchema p{alloc};
+    p.name = crd::containers::String{name, alloc};
+    p.description = crd::containers::String{desc, alloc};
+    p.kind = kind;
+    p.required = required;
+    s.params.push_back(std::move(p));
+}
+
+} // namespace
+
+namespace crd::hesap::dense
+{
+void register_eig_cli_anchor() noexcept
+{
+}
+} // namespace crd::hesap::dense
+
+CRD_HESAP_CLI_REGISTER_MODULE([](CommandRegistry& reg) {
+    auto* alloc = crd::memory::default_allocator();
+    {
+        auto s = make_schema(alloc, "hesap.dense.eig.sym.f32",
+                             "Symmetric eigenvalues (ascending) of A (f32; lower triangle used).");
+        add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
+        add_param(s, alloc, "A", "Symmetric A flattened (n*n); lower triangle used", ParamKind::F64,
+                  true);
+        reg.register_command(std::move(s), &impl_eig_sym<crd::f32>);
+    }
+    {
+        auto s = make_schema(alloc, "hesap.dense.eig.sym.f64",
+                             "Symmetric eigenvalues (ascending) of A (f64; lower triangle used).");
+        add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
+        add_param(s, alloc, "A", "Symmetric A flattened (n*n); lower triangle used", ParamKind::F64,
+                  true);
+        reg.register_command(std::move(s), &impl_eig_sym<crd::f64>);
+    }
+    {
+        auto s = make_schema(
+            alloc, "hesap.dense.eig.herm.c32",
+            "Hermitian eigenvalues (ascending) of A (Complex<f32>; lower triangle used).");
+        add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
+        add_param(s, alloc, "A", "Hermitian A as interleaved [re,im] (2*n*n); lower triangle used",
+                  ParamKind::F64, true);
+        reg.register_command(std::move(s), &impl_eig_herm<crd::f32>);
+    }
+    {
+        auto s = make_schema(
+            alloc, "hesap.dense.eig.herm.c64",
+            "Hermitian eigenvalues (ascending) of A (Complex<f64>; lower triangle used).");
+        add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
+        add_param(s, alloc, "A", "Hermitian A as interleaved [re,im] (2*n*n); lower triangle used",
+                  ParamKind::F64, true);
+        reg.register_command(std::move(s), &impl_eig_herm<crd::f64>);
+    }
+});
