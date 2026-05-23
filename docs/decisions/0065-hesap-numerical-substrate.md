@@ -1263,3 +1263,70 @@ blocked dgebrd/dorgbr + dbdsqr) + v3b-2 (Gu-Eisenstat D&C, beats Eigen BDCSVD + 
 scale; complex correct + reuses the crush. Filed perf follow-ons: v3b-1c-blocked-complex-bidiag,
 v3b-1c-svdvals-dqds-direct, v3b-2-parallel-merges, v3b-3-nystrom-cholesky.** NEXT = v3c
 (least-squares — consumes the SVD).
+
+## §24 Amendment (2026-05-23) — v3c least-squares family (lstsq + pinv + NNLS + TLS) + v3c CLOSE
+
+v3c builds the least-squares family on the shipped factorizations (which already beat Eigen +
+LAPACK), adding one genuinely new factorization (column-pivoting QR + COD) and the BLAS-3
+reflector-application lever that makes the dense-inverse path crush.
+
+**v3c-1 — `lstsq` + `pinv`.**
+- **Column-pivoting Householder QR** (`QRColPiv`/`factor_qr_colpiv`, `dgeqp3`/`dlaqp2` faithful):
+  Businger-Golub largest-remaining-column-norm pivot on a TRANSPOSED scratch (each column
+  contiguous → SIMD norm/dot/axpy) + the LAPACK partial-column-norm **downdate-with-recompute**
+  (recompute when the downdated norm degrades past √eps). Reveals numerical rank from the
+  non-increasing |R[k,k]| diagonal.
+- **Complete orthogonal decomposition** (`COD`/`factor_cod`/`solve_cod`, LAPACK dgelsy): after
+  col-piv QR reveals rank `r`, reduce the r×n upper-trapezoid `[R11 R12]` to a r×r triangular
+  `T11` by RZ Householder reflectors from the right (`dtzrzf`/`dlatrz`). `solve_cod` = min-norm
+  least-squares: Qᵀb → tri-solve T11 → zero-pad → Zᵀ apply → undo column permutation.
+- **`lstsq`** dispatch (D(lstsq)-2): `Auto` → COD for real (rank-revealing + fast, the robust
+  default), SVD for complex (the COD fast path is real). `QR` = full-rank fast path (dgels).
+  `SVD` = max-accuracy / every shape. Multi-RHS matrix B; lazy residual (`with_residual`);
+  rcond default `max(m,n)·eps`; returns {X, rank, residual}.
+- **`pinv`** (D(lstsq)-3): `Auto` → COD for real (matches Eigen `pseudoInverse()`), SVD for
+  complex / max accuracy. COD path: `A⁺ = P·Zᵀ·[T⁻¹ 0; 0 0]·Qᵀ`.
+- **Blocked-reflector-apply attack** (user-directed): BLAS-3 `dlarfb` (`detail/apply_q_block.hpp`,
+  all 4 side×transpose modes, compact-WY + gemm, bit-matches the scalar applies) + blocked
+  recursive `trtri`. **pinv 0.11× → 1.60× Eigen** (the scalar O(r³) T⁻¹ back-sub with strided
+  column access was the large-r bottleneck; the col-piv QR factor was NOT — the COD-solve path
+  ties Eigen with the same factor).
+- **Bench (i9-14900K AVX2, f64):** CRUSHES LAPACK everywhere (lstsq QR 1.70–8.69× / COD
+  1.88–12.19× / SVD 1.07–4.01× vs dgels/dgelsy/dgelsd). vs Eigen: pinv 1.12–1.60× (↑ with n),
+  SVD-path 1.08–2.40× (n≥128 beats BDCSVD), COD-default 0.84–1.07× (parity, beats at n=512),
+  QR-tall 0.69–0.93× (the ADR-0083 row-major small-n layout-fit accepted in v0e; filed
+  `v3c-1-qr-tall-blocked`). Filed `v3c-1-blocked-rz-apply` (rank-deficient Z-apply blocking).
+
+**v3c-2 — NNLS + TLS.**
+- **NNLS** (`nnls`, real f32/f64 — x ≥ 0 is meaningless for complex): Lawson-Hanson 1974
+  active-set with an INCREMENTAL thin QR of the passive columns (Björck §5.8) — add =
+  re-orthogonalised (2-pass) modified Gram-Schmidt; remove = Givens re-triangularisation sweep
+  (the "up/downdate", no full refactor per active-set change). **D(lstsq)-1**: the entering
+  variable is the largest gradient with ASCENDING-index tie-break (strict `>`); the rank /
+  singular cutoff is strict `σ_i > rcond·σ_max`. Gated by KKT optimality (x≥0; x_j>0 ⇒ w_j≈0;
+  x_j=0 ⇒ w_j≤0) + exact recovery of a full-rank non-negative ground truth + the 2×2 textbook
+  case. (Head-to-head vs Eigen's `unsupported/Eigen/NNLS` filed `v3c-2-nnls-vs-eigen-bench`; the
+  solution is unique for full-rank A, so the correctness gates pin it.)
+- **TLS** (`tls`, 4 type variants via the shipped complex SVD): augmented `C=[A|B]`, SVD,
+  partition the last d right singular vectors `[V12; V22]` ⟹ `X = −V12·V22⁻¹`. `exists=false`
+  flags V22 singular (b ⟂ range(A) / σ_n(A) ≤ σ_{n+d}(C)). The d×d V22 inverse uses a
+  type-generic Gauss-Jordan (real + complex). Gated by exact recovery on consistent systems
+  (smallest σ = 0 ⇒ null vector `[x; −1]`), multivariate (d=2), and complex.
+- **CLI:** +14 commands across v3c (`lstsq`/`pinv` × {f32,f64,c32,c64}, `nnls` × {f32,f64},
+  `tls` × {f32,f64,c32,c64}) — every op has a command.
+
+**D(lstsq) determinism pins:**
+- **D(lstsq)-1** — all least-squares tie-breaks resolve by ascending original column index
+  (NNLS entering variable, col-piv QR equal-norm pivot). Rank / singular-value cutoffs are
+  strict `value > tol` (closed boundary excluded).
+- **D(lstsq)-2** — `lstsq` Auto = COD (real) / SVD (complex); the fast/accurate paths are opt-in
+  via `LstSqMethod`. Multi-RHS solves each column independently (bit-identical to single-RHS).
+- **D(lstsq)-3** — `pinv` Auto = COD (real) / SVD (complex); the dense inverse is formed via
+  blocked `dlarfb` + blocked `trtri`, never per-reflector scalar application.
+
+§24 ✅ Accepted — v3c shipped + gated; 4-config DoD (debug/shipping/tidy/asan) green; full
+hesap-dense suite **279 cases / 105 764 assertions**. **🎉 v3c (least-squares family) CLOSED —
+lstsq + pinv (col-piv QR + COD + SVD, blocked-apply crush) + NNLS (Lawson-Hanson + Givens
+up/downdate) + TLS (SVD). Crushes LAPACK across the board; beats Eigen on pinv + SVD-path, ties
+the COD default; NNLS/TLS correctness-gated.** NEXT = v3d (non-symmetric eigensolver: balance +
+Hessenberg + Francis double-shift Schur + AED + eigenvectors). 18-config sweep delegated to CI.

@@ -539,6 +539,12 @@ if(CRD_BUILD_HESAP_VS_REFERENCE)
     crd_add_hesap_vs_ref_bench(bench_hesap_eig_vs_reference USE_JOBS USE_OPENBLAS)
     # v3b-1b: SVD (svd) vs Eigen JacobiSVD + BDCSVD AND LAPACK dgesvd + dgesdd.
     crd_add_hesap_vs_ref_bench(bench_hesap_svd_vs_reference USE_JOBS USE_OPENBLAS)
+    # v3c-1b: least-squares (lstsq QR/COD/SVD + pinv) vs Eigen HouseholderQR /
+    # CompleteOrthogonalDecomposition / BDCSVD AND LAPACK dgels / dgelsy / dgelsd.
+    crd_add_hesap_vs_ref_bench(bench_hesap_lstsq_vs_reference USE_JOBS USE_OPENBLAS)
+    # v3d-1a: Hessenberg reduction (blocked dgehrd) vs Eigen HessenbergDecomposition
+    # AND LAPACK dgehrd.
+    crd_add_hesap_vs_ref_bench(bench_hesap_eig_nonsym_vs_reference USE_JOBS USE_OPENBLAS)
     # v1a-3: sparse assembly shootout (TripletBuilder::compress vs setFromTriplets).
     crd_add_hesap_vs_ref_bench(bench_hesap_sparse_assembly_vs_reference)
     target_link_libraries(bench_hesap_sparse_assembly_vs_reference PRIVATE crd-hesap-sparse)

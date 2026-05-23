@@ -94,6 +94,18 @@ private:
 template <typename T, Layout L>
 void factor_qr(QR<T, L>& qr);
 
+// =======================================================================
+// factor_qr_unblocked — the unblocked QR fast-path for SMALL/MID tall (m ≥ n)
+// matrices, where the blocked path's per-panel overhead (panel transpose +
+// compact-WY T build + gemm setup) does not amortize. Factors the WHOLE matrix
+// as a single Householder panel on a TRANSPOSED scratch (n × m), so every
+// per-column op is a contiguous SIMD row sweep — which is ALSO the ADR-0083
+// row-major→column-fit escape for the factor itself (no separate trailing
+// gemm). Requires m ≥ n; `factor_qr` dispatches here below a measured crossover.
+// =======================================================================
+template <typename T, Layout L>
+void factor_qr_unblocked(QR<T, L>& qr);
+
 template <typename T, Layout L>
 inline void factor_qr(QR<T, L>& qr, const Matrix<T, L>& a)
 {

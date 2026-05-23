@@ -15,6 +15,10 @@ add_executable(crd-hesap-dense-tests
     test_cholesky.cpp
     test_ldlt.cpp
     test_qr.cpp
+    test_cod.cpp
+    test_lstsq.cpp
+    test_nnls_tls.cpp
+    test_eig_nonsym.cpp
     test_linear_op_condition.cpp
     test_refinement.cpp
     test_solvers_cli.cpp

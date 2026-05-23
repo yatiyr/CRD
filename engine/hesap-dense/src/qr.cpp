@@ -20,6 +20,14 @@ namespace
 // parallelism on the i9-14900K.
 constexpr crd::usize kQrBlockSize = 32;
 
+// Crossover (tall/square m≥n): for n at or below this, the unblocked single-panel
+// QR beats the blocked compact-WY path (whose panel-transpose + T-build + gemm
+// setup don't amortize at small/mid n). Calibrated for tall m≈2n via
+// bench_hesap_lstsq_vs_reference (v3c-1c): unblocked wins vs blocked through
+// n≈128 (and beats Eigen at n=64, parity at n=96). Square / very-tall shapes may
+// prefer a different threshold and will be revisited when a consumer hits it.
+constexpr crd::usize kQrUnblockedMax = 128;
+
 // SIMD axpy-negate-scaled: row[p] += s * col[p] over [0,len). f64/f32.
 template <typename T>
 inline void qr_axpy(T* row, const T* col, T s, crd::usize len) noexcept
@@ -255,6 +263,14 @@ void factor_qr(QR<T, L>& qr)
         return;
     }
 
+    // Below the crossover (tall/square only), the unblocked single-panel QR
+    // wins — dispatch there. Wide (m<n) always uses the blocked path.
+    if (m >= n && n <= kQrUnblockedMax)
+    {
+        factor_qr_unblocked<T, L>(qr);
+        return;
+    }
+
     crd::memory::IAllocator* alloc = packed.allocator();
 
     // Scratch buffers reused across panels.
@@ -344,6 +360,50 @@ void factor_qr(QR<T, L>& qr)
         MatrixView<T, L> a_trail_mut{data + k * ld + (k + nb), rows, trail_cols, ld};
         gemm_parallel_auto<T, L>(T{-1}, v_view, w_const, T{1}, a_trail_mut, Trans::None,
                                   Trans::None, alloc);
+    }
+}
+
+template <typename T, Layout L>
+void factor_qr_unblocked(QR<T, L>& qr)
+{
+    static_assert(L == Layout::RowMajor, "factor_qr_unblocked currently supports RowMajor only");
+    Matrix<T, L>& packed = qr.packed();
+    const crd::usize m = packed.rows();
+    const crd::usize n = packed.cols();
+    const crd::usize k_count = m < n ? m : n;
+    auto& taus = qr.taus();
+    CRD_ASSERT_MSG(taus.size() == k_count, "factor_qr_unblocked: taus size mismatch");
+    CRD_ASSERT_MSG(m >= n, "factor_qr_unblocked: requires m >= n (tall/square)");
+    if (k_count == 0)
+    {
+        return;
+    }
+    T* data = packed.data();
+    const crd::usize ld = packed.ld();
+    crd::memory::IAllocator* alloc = packed.allocator();
+
+    // Factor the WHOLE matrix as a single panel (nb = k_count = n) on a
+    // transposed scratch pt (n × m): pt[c][r] = A[r][c]. Each column op then
+    // sweeps a contiguous row of pt (SIMD + the ADR-0083 layout escape). For
+    // m≥n this is a complete unblocked QR — the inner reflector-apply loop in
+    // panel_factor_qr_transposed already updates every trailing column.
+    crd::containers::Array<T> pt_buf(alloc);
+    pt_buf.resize(k_count * m);
+    const crd::usize pt_ld = m;
+    for (crd::usize c = 0; c < k_count; ++c)
+    {
+        for (crd::usize r = 0; r < m; ++r)
+        {
+            pt_buf[c * pt_ld + r] = data[r * ld + c];
+        }
+    }
+    panel_factor_qr_transposed<T>(pt_buf.data(), pt_ld, m, 0, k_count, taus.data());
+    for (crd::usize c = 0; c < k_count; ++c)
+    {
+        for (crd::usize r = 0; r < m; ++r)
+        {
+            data[r * ld + c] = pt_buf[c * pt_ld + r];
+        }
     }
 }
 
@@ -444,6 +504,8 @@ void solve_qr(const QR<T, L>& qr, crd::containers::Span<T> b)
 
 template void factor_qr<float, Layout::RowMajor>(QR<float, Layout::RowMajor>&);
 template void factor_qr<double, Layout::RowMajor>(QR<double, Layout::RowMajor>&);
+template void factor_qr_unblocked<float, Layout::RowMajor>(QR<float, Layout::RowMajor>&);
+template void factor_qr_unblocked<double, Layout::RowMajor>(QR<double, Layout::RowMajor>&);
 template void apply_q_transpose<float, Layout::RowMajor>(const QR<float, Layout::RowMajor>&,
                                                           crd::containers::Span<float>);
 template void apply_q_transpose<double, Layout::RowMajor>(const QR<double, Layout::RowMajor>&,
