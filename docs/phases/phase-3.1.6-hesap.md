@@ -1,6 +1,6 @@
 # Phase 3.1.6 — `crd-hesap` numerical computing substrate
 
-**Status:** ⏳ Planned (post-Phase-3.1; ships after eylem v9 closes).
+**Status:** 🔄 IN PROGRESS (ships BEFORE eylem v1c resumes — re-amended 2026-05-19, see Phase posture). v0 (dense BLAS+solvers) ✅, v1 (sparse) ✅, v2 (reorderings) ✅, v3a (symmetric/Hermitian eig: QL/QR + D&C + MRRR) ✅, **v3b (SVD) ✅ CLOSED** — v3b-1 (bidiag + dbdsqr + blocked dgebrd/dorgbr) + **v3b-2 (Gu-Eisenstat D&C — beats Eigen BDCSVD + LAPACK dgesdd at all N)** + v3b-3 (randomized rsvd/rsyev) + v3b-1c (complex). **NEXT = v3c (least-squares, consumes the SVD)** → v3d (non-sym eig) → v3e (close) → v4–v18.
 **Estimated duration:** ~6–8 months across 18 slices.
 **Locked architecture:** ADR-0065.
 **Research:** `docs/research/cerid-hesap.md` + pre-existing
@@ -239,10 +239,10 @@ determinism + replay tests.
 | **— v3a-3.3 leaf contract (CLUSTER handling — ALL ✅ 2026-05-23)** | **A1** ✅ `dlaneg` (twisted Sturm count on LDLᵀ; faithful BLKLEN=128 NaN-rechunk; gate MET vs tridiagonal Sturm). **A2** ✅ `dlarrb_refine` (refine cluster eigenvalues *within* an RRR by `dlaneg` bisection; gate MET — perturbed eigenvalues refined to <1e-10). **A3** ✅ `dlarrf` (form child RRR: shift to cluster L/R end, element-growth ≤ MAXGROWTH1·spdiam, KTRYMAX=1 back-off, refined-RRR fallback). **A4** ✅ recursive `dlarrv` cluster loop (segment by relative gap MINRGP=1e-3; singleton→`dlar1v`+RQ; cluster→child RRR `dlarrf` + refine `dlarrb` + recurse depth≤8; **Gram-Schmidt fallback** for residual clusters) + **glued-Wilkinson W₂₁⁺** gate. | ~600 | 5 |
 | ↳ **v3a-3.3** ⭐ ✅ 2026-05-23 (A1–A4) | **`dlarrv` full — cluster handling + the hard-gate. SHIPPED.** `detail/mrrr_vectors.hpp::mrrr_compute_vectors` (root RRR + recursive cluster processor) — orthonormal BY CONSTRUCTION via child-RRR shifts (no Gram-Schmidt in the common case = O(n²)), GS-fallback only for genuine near-multiplicity. **HARD-GATE MET: glued-Wilkinson W₂₁⁺ (n=21, tightest eigenvalue clusters) → `‖VᵀV−I‖ < 1e-8` + `‖Tv−λv‖ < 1e-9`.** This is the part that historically destroys eigensolver attempts; passing W₂₁⁺ is the proof. **NEXT (v3a-3.4): wire MRRR into `eig_sym` (dense → dsytrd → mrrr_compute_vectors → back-transform V=Q·Z) + benchmark the O(n²) vector path vs LAPACK `dstemr`/`dstegr` + Eigen at scale = the architectural crush.** Original 🔄 detail: Child-RRR representation tree (re-shift inside clusters until eigenvalues separate by the relative-gap criterion) + **Gram-Schmidt re-orthogonalization fallback** for residual clusters (LAPACK `dlarrv` does this — don't hope clusters never occur). **The part that has destroyed prior attempts: orthogonality on clustered/glued spectra.** **Gate: `‖VᵀV−I‖ ≤ O(n)·eps` on glued-Wilkinson + Demmel-Kahan adversarial fixtures.** | ~500–700 | ~8 | — |
 | ↳ **v3a-3.4** ✅ 2026-05-23 | **`eig_sym_mrrr` full path + parallel vectors + CLI + the gate.** `eig_sym_mrrr` (dense → dsytrd → dqds eigenvalues → `mrrr_compute_vectors` → back-transform V=Q·Z; matches `eig_sym` <1e-10, orthonormal/residual <1e-9). **Parallel MRRR vectors** over independent eigenvalue segments (`crd::jobs` work-stealing + per-worker external-buffer Tlsf arena + adaptive granularity). CLI `hesap.dense.eig.sym.mrrr.{f32,f64}`. **Bench vs BOTH Eigen `computeFromTridiagonal` AND LAPACK `dstedc`/`dstemr`: crush Eigen 5–64×, crush `dstemr` 1.7–2.7×, match/beat `dstedc` (BLAS-3 D&C) 0.84–1.52×; orth ~1e-13.** Honest: serial MRRR lost (memory/BLAS3 wall); parallelism (cores LAPACK lacks) is the lever. SIMD-across-eigenvectors tried+reverted (memory-bound). **GATE MET: beats Eigen + LAPACK.** ADR-0065 §17 + 5-config DoD PASS. | ~400 | ~3 | — |
-| ↳ **v3b** | **SVD.** Bidiagonalization + Demmel-Kahan QR + **D&C bidiagonal** + **randomized**. **3 sub-subslices ↓.** | ~1600 | ~50 | — |
-| ↳ **v3b-1** 🔄 (1a ✅) | Householder bidiagonalization (`dgebrd`, reuses v3a-1 substrate) + Demmel-Kahan implicit-zero-shift QR on bidiagonal (`dbdsqr`) + singular-vector accumulation + descending sort + complex SVD (`zgesvd`). **Gate: reconstruction `A=UΣVᵀ` + vs Eigen `JacobiSVD`.** **v3b-1a ✅ 2026-05-23** — `svd.{hpp,cpp}::bidiagonalize` (Golub-Kahan unblocked `dgebd2`, m≥n upper bidiagonal; reuses `make_householder` + apply-reflector left/right). **Gate MET: `A=Q B Pᵀ` reconstruction <1e-12 (m=n + m≠n), Q/P orthonormal <1e-12.** **1a/1a-perf/1b/1b-perf ✅ 2026-05-23** (1a-perf blocked `dlabrd` §19; 1b `dbdsqr`+driver+CLI+4-col bench §18; **1b-perf blocked `dorgbr` §20 — full SVD beats LAPACK `dgesvd`, C/`dgesvd` 1.45 @512; parallel-dbdsqr skipped**). **Remaining: complex SVD (1c).** | ~600 (≈350 so far) | 18 (~12 ✅) | — |
-| ↳ **v3b-2** | Divide-and-conquer bidiagonal SVD (Gu-Eisenstat / `dbdsdc`, BDCSVD-class), jobified bit-identical. **Gate: beat/tie Eigen `BDCSVD` at scale.** | ~700 | ~18 | — |
-| ↳ **v3b-3** | **Randomized SVD** (Halko-Martinsson-Tropp 2011: Gaussian sketch + range-finder + power/subspace iteration → small dense SVD) + randomized Nyström symmetric-PSD eig. **Gate: Eigen has no randomized path — low-rank accuracy + speed win.** | ~300 | ~14 | — |
+| ↳ **v3b** ✅ 2026-05-23 (v3b-1/2/3/1c ✅) | **SVD — CLOSED.** v3b-1 (bidiag + blocked dgebrd/dorgbr + Demmel-Kahan dbdsqr) + **v3b-2 (Gu-Eisenstat D&C — beats Eigen BDCSVD 1.6–3.2× + LAPACK dgesdd 1.4–4.6× at all N)** + v3b-3 (randomized rsvd/rsyev) + **v3b-1c (complex SVD: complex bidiag → REAL (d,e) → reuse the real D&C/dbdsqr crush → complex back-transform; svd/svdvals c32/c64 + CLI; gated A=U S V^H <1e-9)**. ADR-0065 §18-§23. Perf follow-ons filed (v3b-1c-blocked-complex-bidiag, v3b-2-parallel-merges, v3b-3-nystrom-cholesky, v3b-1c-svdvals-dqds-direct). | ~1900 | ~70 | — |
+| ↳ **v3b-1** 🔄 (1a ✅) | Householder bidiagonalization (`dgebrd`, reuses v3a-1 substrate) + Demmel-Kahan implicit-zero-shift QR on bidiagonal (`dbdsqr`) + singular-vector accumulation + descending sort + complex SVD (`zgesvd`). **Gate: reconstruction `A=UΣVᵀ` + vs Eigen `JacobiSVD`.** **v3b-1a ✅ 2026-05-23** — `svd.{hpp,cpp}::bidiagonalize` (Golub-Kahan unblocked `dgebd2`, m≥n upper bidiagonal; reuses `make_householder` + apply-reflector left/right). **Gate MET: `A=Q B Pᵀ` reconstruction <1e-12 (m=n + m≠n), Q/P orthonormal <1e-12.** **1a/1a-perf/1b/1b-perf ✅ 2026-05-23** (1a-perf blocked `dlabrd` §19; 1b `dbdsqr`+driver+CLI+4-col bench §18; **1b-perf blocked `dorgbr` §20 — full SVD beats LAPACK `dgesvd`, C/`dgesvd` 1.45 @512; parallel-dbdsqr skipped**). **v3b-1c (complex SVD) ✅ 2026-05-23 — complex bidiag (zgebd2, real (d,e)) + form Q/P + driver reusing the real D&C/dbdsqr + complex back-transform; svd/svdvals c32/c64 + CLI; gated A=U S V^H <1e-9. ADR-0065 §23 (D(svd)-16/17/18).** | ~600 | 18 ✅ | — |
+| ↳ **v3b-2** 🔄 (algo ✅, DoD pending) | Divide-and-conquer bidiagonal SVD (Gu-Eisenstat / `dbdsdc`, BDCSVD-class) on parallel BLAS-3. **Gate MET + CRUSHED 2026-05-23:** full SVD beats Eigen `BDCSVD` **1.59–3.21×**, LAPACK `dgesdd` **1.37–4.55×**, `dgesvd` 4.8–10.5× at N=128–1024; recon ~1e-14. Full chain `dlasd4/5`+`dlaed6` → `dlasd2/3/1` → `dlasdq/dlasdt/dlasd0` (`svd_secular.hpp`+`svd_dc.hpp`), wired into `svd()` at n≥64. Reconstruction-gated (`‖B−UΣVᵀ‖<1e-9`, multi-level). ADR-0065 §21 (D(svd)-10..14). MRRR-SVD fork rejected (deferred `v3b-2-svd-via-mrrr`). Remaining: 5-config DoD + commit; `v3b-2-parallel-merges` filed. | ~700 | ~18 | — |
+| ↳ **v3b-3** ✅ 2026-05-23 | **Randomized SVD + symmetric eig — CLOSED.** `rsvd` (Halko 2011: Gaussian sketch + QR range-finder + power iterations → small dense `svd`) + `rsyev` (randomized symmetric eig, Rayleigh-Ritz `QᵀAQ` + `eig_sym` — D(svd)-15: chosen over Nyström-`C⁻ᵀ`, more general + reuses eig_sym). **Pure reuse of shipped gemm/QR/svd/eig_sym — NO new kernels.** Gated: exact rank-r SVD recon `<1e-8` + orthonormal U/V; rank-r PSD eig residual `<1e-7`. **No head-to-head bench (intentional — Eigen/LAPACK have no randomized path; gate is accuracy + structural O(mn·ℓ) speed).** CLI `rsvd`/`rsyev`.{f32,f64}. ADR-0065 §22. DoD debug/asan/shipping/tidy green. Nyström-Cholesky variant filed `v3b-3-nystrom-cholesky`. | ~300 | ~14 | — |
 | ↳ **v3c** | **Least-squares family.** `lstsq` (QR full-rank / SVD min-norm rank-deficient) + `pinv` (Moore-Penrose + rcond) + **NNLS** (Lawson-Hanson active-set) + **TLS** (via SVD). **Gate: vs Eigen LS solvers + textbook minimiser.** | ~700 | ~25 | — |
 | ↳ **v3d** | **Non-symmetric eigensolver (full).** Balance + Hessenberg + Francis double-shift Schur + **AED** + eigenvectors + complex Schur. **2 sub-subslices ↓.** | ~1500 | ~40 | — |
 | ↳ **v3d-1** | Balancing (`dgebal`) + Hessenberg reduction (`dgehrd`, blocked, reuses substrate) + Francis double-shift implicit QR → real Schur (`dhseqr`) with **Aggressive Early Deflation** (Braman-Byers-Mathias) — **HARD-GATE**; eigenvalues incl. complex-conjugate 2×2 blocks. | ~900 | ~22 | — |
@@ -647,11 +647,12 @@ f32 + f64 + complex variants, CLI per op.
 
 ### Sub-slice ledger (see the summary table for LOC/test/gate per leaf)
 
-- **v3a** symmetric eig — v3a-1 (substrate + **blocked** tridiag + QL/QR, **real
-  f32/f64**) → **v3a-1b (complex Hermitian `zhetrd`)** → v3a-2 (D&C) →
-  **v3a-3 (MRRR — hard-gate vs LAPACK `stegr`)**.
-- **v3b** SVD — v3b-1 (bidiag + Demmel-Kahan + complex) → v3b-2 (D&C bidiagonal
-  SVD) → v3b-3 (randomized Halko).
+- **v3a** symmetric eig — **✅ CLOSED 2026-05-23.** v3a-1 (substrate + **blocked** tridiag +
+  QL/QR, **real f32/f64**) → **v3a-1b/2.5 (complex Hermitian `zhetrd`)** → v3a-2 (D&C) →
+  **v3a-3 (MRRR)**. Beats Eigen + LAPACK (full eig 1.4–1.95× Eigen / 2.1–3.7× LAPACK).
+- **v3b** SVD — **✅ CLOSED 2026-05-23.** v3b-1 (bidiag + blocked dgebrd/dorgbr + Demmel-Kahan
+  dbdsqr) + **v3b-2 (Gu-Eisenstat D&C — beats Eigen BDCSVD 1.6–3.2× + LAPACK dgesdd 1.4–4.6×)**
+  + v3b-3 (randomized rsvd/rsyev, Halko) + v3b-1c (complex SVD, reuses the real D&C crush).
 - **v3c** least-squares family — lstsq + pinv + NNLS + TLS.
 - **v3d** non-sym eig — **v3d-1 (balance + Hessenberg + Schur + AED — hard-gate)**
   → v3d-2 (eigenvectors + 3-stage back-transform + complex Schur).
@@ -901,7 +902,7 @@ reduction pattern from v3a-1's `dsytrd` → reused by `dgebrd`. (3) `gemm_parall
 trailing updates + back-transforms.
 
 **v3b-1 leaf split (port the foundation first, crush at v3b-2):**
-- **v3b-1a — `dgebrd` blocked bidiagonalization** (this leaf). Reduce A (m×n) to upper
+- **v3b-1a — `dgebrd` blocked bidiagonalization. ✅ SHIPPED 2026-05-23.** Reduce A (m×n) to upper
   bidiagonal `B=(d,e)` via left/right Householder, **blocked** (`dlabrd` panel accumulating
   the X/Y update matrices + ONE trailing `gemm` per block — the BLAS-3 lever, same as v3a-1's
   blocked `dsytrd`; the unblocked `dgebd2` per-column logic is the panel's inner kernel + the
@@ -919,11 +920,11 @@ trailing updates + back-transforms.
   `dgebd2` bidiagonalization** (svdvals @512 = 156 ms vs `dgesvd`-N 46 ms; `dlasq2` is
   O(n²) ~free), NOT dbdsqr — so **v3b-1a-perf (blocked `dlabrd`) is likely the larger lever
   than v3b-1b-perf** for full SVD at scale. ([[project_serial_iterative_qr_loses_to_dc_reduction_is_bottleneck]].)
-- **v3b-1a-perf — blocked `dlabrd` bidiagonalization (BLAS-3).** Promoted from a v3b-1a
+- **v3b-1a-perf — blocked `dlabrd` bidiagonalization (BLAS-3). ✅ SHIPPED 2026-05-23 (ADR-0065 §19; svdvals beats LAPACK + Eigen at all N).** Promoted from a v3b-1a
   follow-on to a first-class leaf by the v3b-1b bench evidence above: the unblocked `dgebd2`
   reduction is the dominant full-SVD cost at scale (same shape as blocked `dsytrd` carrying
   v3a-1). `dlabrd` panel accumulates the X/Y update matrices + ONE trailing `gemm` per block;
-  helps BOTH `svd` and `svdvals`. Sequencing vs v3b-1b-perf / v3b-2 is the user's call.
+  helps BOTH `svd` and `svdvals`. (Sequencing resolved: 1a-perf → 1b-perf → v3b-2, all ✅ 2026-05-23.)
 - **v3b-1b-perf — vector-path crush via blocked `dorgbr`. ✅ CLOSED 2026-05-23 (ADR-0065 §20).**
   Profiling the full-SVD vector path at N=512 split it into form_q+form_pt **49% (335 ms, serial
   scalar ~1.5 GFLOPS)** and `dbdsqr` **49%**. The elite fix for the forming-half is blocked
@@ -939,14 +940,23 @@ trailing updates + back-transforms.
 - **v3b-1c — complex SVD** (`zgesvd`-class): complex bidiagonalization (real bidiagonal +
   phase) reusing v3b-1a; reuse the real bidiagonal solver on `(d,e)`.
 
-**v3b-2 fork (flagged, pick by measured perf):** Gu-Eisenstat D&C bidiagonal SVD (`dbdsdc`,
-BLAS-3) **OR** the NOVEL **SVD-via-MRRR** route — form the Golub-Kahan tridiagonal
-`J = [[0 Bᵀ][B 0]]` (2n×2n symmetric tridiagonal, ±σ eigenvalues in tightly-clustered pairs =
-exactly the cluster-orthogonality case the v3a-3 machinery now handles) and run the **parallel
-MRRR** on it → singular values + left/right vectors from the eigenvector structure, O(n²) +
-parallel = the lever that **crushes LAPACK `dgesdd`/`dgesvd` at scale** (same win as the
-eigenvector path). `dbdsdc` does NOT do this internally (it's Gu-Eisenstat on the bidiagonal
-directly), so MRRR-on-GK is a genuine novel fork. Build both at v3b-2, ship the faster.
+**v3b-2 — Gu-Eisenstat D&C bidiagonal SVD. ✅ SHIPPED + CRUSHES 2026-05-23 (ADR-0065 §21).**
+The fork was decided (advisor + user): **Gu-Eisenstat D&C (`dbdsdc`-class) chosen; the novel
+SVD-via-MRRR route DEFERRED** (`v3b-2-svd-via-mrrr`) — forming `J=[[0 Bᵀ][B 0]]` gives EXACT
+±σ multiplicity (every σ twice), which defeats MRRR's cluster loop → GS-fallback for every
+value → loses the O(n²) win without a bespoke perfect-shuffle extraction = real rabbit-hole
+risk. D&C is the references' own algorithm (we beat them on the lever they lack: cores).
+Full chain `detail/svd_secular.hpp` (`dlasd5`/`dlasd4`/`dlaed6`) + `detail/svd_dc.hpp`
+(`dlasd2` deflation + `dlasd3` secular-solve/vectors + `dlasd1` merge + `dlasdq` base +
+`dlasdt` tree + `dlasd0` recursion), wired into `svd()` at n≥64 (smlsiz=25); back-transform
++ dlasd3 assembly on `gemm_parallel_auto`. **Beats EVERY reference at ALL N=128–1024: Eigen
+`BDCSVD` 1.59–3.21× (fair gate), LAPACK `dgesdd` 1.37–4.55×, `dgesvd` 4.8–10.5×, `JacobiSVD`
+11–28×; recon ~1e-14. @512 full SVD 690→52.9ms (13×), C/BDCSVD 0.17→1.76.** Reconstruction-
+gated (`‖B−UΣVᵀ‖<1e-9` multi-level) + debug/asan/shipping/tidy green. Layout bridge
+(column-major D&C ↔ tested row-major dbdsqr via `dlasdq` adapter) pinned D(svd)-11; D(svd)-10
+(dlasd4 ψ/φ split) / -12 (deflate both U+VT) / -13 (interleaved-Löwner Z) / -14 (col-major
+GEMM swap). Filed `v3b-2-parallel-merges` (parallelize independent same-level merges — pure
+margin; already winning). **Remaining to formally close: 5-config DoD + commit.**
 
 **Benchmark protocol (FOUR columns — `feedback_always_bench_both_eigen_and_lapack`):** every
 SVD bench section reports **Eigen `JacobiSVD`** (O(n³) Jacobi — the easy crush) **AND Eigen

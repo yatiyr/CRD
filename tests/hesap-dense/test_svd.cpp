@@ -5,6 +5,7 @@
 #include <crd/hesap/dense/cli_anchor.hpp>
 #include <crd/hesap/dense/detail/bdsqr.hpp>
 #include <crd/hesap/dense/detail/orgbr.hpp>
+#include <crd/hesap/dense/detail/svd_complex.hpp>
 #include <crd/hesap/dense/detail/svd_dc.hpp>
 #include <crd/hesap/dense/detail/svd_secular.hpp>
 #include <crd/hesap/dense/eig_sym.hpp>
@@ -14,6 +15,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <tuple>
 
 namespace
 {
@@ -706,6 +708,533 @@ TEST_CASE("dlasd5: 2x2 secular roots satisfy f(sigma)=0 + interlacing", "[hesap]
         }
     }
     CHECK(worst_resid < 1e-9);
+}
+
+// v3b-2.3: dlasdq_upper base-case SVD — reconstruct an n x (n+sqre) upper
+// bidiagonal (validates the row-major-dbdsqr -> column-major layout bridge).
+TEST_CASE("dlasdq_upper: base-case bidiagonal SVD reconstruction", "[hesap][svd][dc]")
+{
+    using crd::hesap::dense::detail::dlasdq_upper;
+    crd::memory::TlsfAllocator alloc(16U * 1024U * 1024U);
+    double worst_rec = 0.0;
+    double worst_orth = 0.0;
+    for (int sqre = 0; sqre <= 1; ++sqre)
+    {
+        for (int n : {2, 3, 5, 8, 12})
+        {
+            const int m = n + sqre;
+            const int ne = (sqre == 1) ? n : (n - 1);
+            crd::containers::Array<double> d(n, &alloc);
+            crd::containers::Array<double> e(n, &alloc);
+            crd::containers::Array<double> d0(n, &alloc);
+            crd::containers::Array<double> e0(n, &alloc);
+            crd::containers::Array<double> u(n * n, &alloc);
+            crd::containers::Array<double> vt(m * m, &alloc);
+            Rng rng{0xDA5D9ULL + static_cast<crd::u64>(sqre * 97 + n)};
+            for (int i = 0; i < n; ++i)
+            {
+                d.data()[i] = d0.data()[i] = 1.0 + rng.next() * 2.0;
+                e.data()[i] = e0.data()[i] = 0.0;
+            }
+            for (int i = 0; i < ne; ++i)
+            {
+                e.data()[i] = e0.data()[i] = 2.0 * rng.next() - 1.0;
+            }
+            const int info = dlasdq_upper<double>(n, sqre, d.data(), e.data(), u.data(), n, vt.data(), m, &alloc);
+            CHECK(info == 0);
+            // Reconstruct B[i][j] = sum_k U(i,k) * S(k) * VT(k,j) (column-major).
+            for (int i = 0; i < n; ++i)
+            {
+                for (int j = 0; j < m; ++j)
+                {
+                    double acc = 0.0;
+                    for (int kk = 0; kk < n; ++kk)
+                    {
+                        acc += u.data()[kk * n + i] * d.data()[kk] * vt.data()[j * m + kk];
+                    }
+                    double bij = 0.0;
+                    if (j == i)
+                    {
+                        bij = d0.data()[i];
+                    }
+                    else if (j == i + 1 && i < ne)
+                    {
+                        bij = e0.data()[i];
+                    }
+                    worst_rec = std::max(worst_rec, std::abs(acc - bij));
+                }
+            }
+            // U columns orthonormal; VT rows 1..n orthonormal.
+            for (int p = 0; p < n; ++p)
+            {
+                for (int q = 0; q < n; ++q)
+                {
+                    double du = 0.0;
+                    double dv = 0.0;
+                    for (int i = 0; i < n; ++i)
+                    {
+                        du += u.data()[p * n + i] * u.data()[q * n + i];
+                    }
+                    for (int jj = 0; jj < m; ++jj)
+                    {
+                        dv += vt.data()[jj * m + p] * vt.data()[jj * m + q];
+                    }
+                    const double ex = (p == q) ? 1.0 : 0.0;
+                    worst_orth = std::max(worst_orth, std::abs(du - ex));
+                    worst_orth = std::max(worst_orth, std::abs(dv - ex));
+                }
+            }
+        }
+    }
+    CHECK(worst_rec < 1e-11);
+    CHECK(worst_orth < 1e-11);
+}
+
+// v3b-1c: complex Householder (zlarfg) — H^H x = beta*e0 (beta real), H unitary.
+TEST_CASE("make_complex_householder: reflector zeroes the tail + unitary", "[hesap][svd][cplx]")
+{
+    using C = crd::hesap::Complex<double>;
+    using crd::hesap::dense::detail::make_complex_householder;
+    crd::memory::TlsfAllocator alloc(2U * 1024U * 1024U);
+    Rng rng{0xC9114ULL};
+    double worst = 0.0;
+    for (int trial = 0; trial < 200; ++trial)
+    {
+        const int n = 2 + (trial % 7);
+        crd::containers::Array<C> x(static_cast<crd::usize>(n), &alloc);
+        crd::containers::Array<C> xo(static_cast<crd::usize>(n), &alloc);
+        for (int i = 0; i < n; ++i)
+        {
+            x.data()[i] = xo.data()[i] = C{2.0 * rng.next() - 1.0, 2.0 * rng.next() - 1.0};
+        }
+        const auto h = make_complex_householder<C>(x.data(), static_cast<crd::usize>(n));
+        // v[0] = 1, v[i>=1] = x[i] (modified tail). Apply H^H = I - conj(tau) v v^H to xo.
+        C s = xo.data()[0];  // v^H xo = conj(1)*xo[0] + sum conj(v[i]) xo[i]
+        for (int i = 1; i < n; ++i)
+        {
+            s += crd::hesap::conj(x.data()[i]) * xo.data()[i];
+        }
+        const C ctau = crd::hesap::conj(h.tau);
+        const C r0 = xo.data()[0] - ctau * s;  // result[0], should = beta (real)
+        worst = std::max(worst, crd::hesap::abs(r0 - C{h.beta, 0.0}));
+        for (int i = 1; i < n; ++i)
+        {
+            const C ri = xo.data()[i] - ctau * s * x.data()[i];  // should be 0
+            worst = std::max(worst, crd::hesap::abs(ri));
+        }
+    }
+    CHECK(worst < 1e-12);
+}
+
+// v3b-1c: complex bidiagonalization — A = Q B P^H with B REAL bidiagonal,
+// Q (m x n) / P (n x n) unitary. Validates bidiagonalize_complex + form_q/p.
+TEST_CASE("bidiagonalize_complex: A = Q B P^H reconstruction + unitary", "[hesap][svd][cplx]")
+{
+    using C = crd::hesap::Complex<double>;
+    using crd::hesap::dense::detail::bidiagonalize_complex;
+    using crd::hesap::dense::detail::form_p_complex;
+    using crd::hesap::dense::detail::form_q_complex;
+    crd::memory::TlsfAllocator alloc(16U * 1024U * 1024U);
+    double worst_rec = 0.0;
+    double worst_orth = 0.0;
+    for (auto mn : {std::pair<int, int>{8, 8}, {12, 8}, {16, 16}, {10, 7}, {20, 20}})
+    {
+        const int m = mn.first;
+        const int n = mn.second;
+        crd::containers::Array<C> a(static_cast<crd::usize>(m * n), &alloc);
+        crd::containers::Array<C> a0(static_cast<crd::usize>(m * n), &alloc);
+        Rng rng{0xC0119ULL + static_cast<crd::u64>(m * 53 + n)};
+        for (int i = 0; i < m * n; ++i)
+        {
+            a.data()[i] = a0.data()[i] = C{2.0 * rng.next() - 1.0, 2.0 * rng.next() - 1.0};
+        }
+        crd::containers::Array<double> d(static_cast<crd::usize>(n), &alloc);
+        crd::containers::Array<double> e(static_cast<crd::usize>(n), &alloc);
+        crd::containers::Array<C> tauq(static_cast<crd::usize>(n), &alloc);
+        crd::containers::Array<C> taup(static_cast<crd::usize>(n), &alloc);
+        bidiagonalize_complex<C>(a.data(), static_cast<crd::usize>(m), static_cast<crd::usize>(n),
+                                 static_cast<crd::usize>(n), d.data(), e.data(), tauq.data(), taup.data(),
+                                 &alloc);
+        crd::containers::Array<C> q(static_cast<crd::usize>(m * n), &alloc);
+        crd::containers::Array<C> p(static_cast<crd::usize>(n * n), &alloc);
+        form_q_complex<C>(a.data(), static_cast<crd::usize>(m), static_cast<crd::usize>(n),
+                          static_cast<crd::usize>(n), tauq.data(), q.data());
+        form_p_complex<C>(a.data(), static_cast<crd::usize>(n), static_cast<crd::usize>(n), taup.data(),
+                          p.data());
+        // R = Q B P^H. (QB)[i][j] = Q[i][j] d[j] + (j>=1 ? Q[i][j-1] e[j-1] : 0).
+        for (int i = 0; i < m; ++i)
+        {
+            for (int l = 0; l < n; ++l)
+            {
+                C r{0.0, 0.0};
+                for (int j = 0; j < n; ++j)
+                {
+                    C qb = q.data()[i * n + j] * d.data()[j];
+                    if (j >= 1)
+                    {
+                        qb += q.data()[i * n + (j - 1)] * e.data()[j - 1];
+                    }
+                    r += qb * crd::hesap::conj(p.data()[l * n + j]);  // (P^H)[j][l] = conj(P[l][j])
+                }
+                worst_rec = std::max(worst_rec, crd::hesap::abs(r - a0.data()[i * n + l]));
+            }
+        }
+        // Q^H Q = I_n ; P^H P = I_n.
+        for (int pp = 0; pp < n; ++pp)
+        {
+            for (int qq = 0; qq < n; ++qq)
+            {
+                C dq{0.0, 0.0};
+                C dp{0.0, 0.0};
+                for (int i = 0; i < m; ++i)
+                {
+                    dq += crd::hesap::conj(q.data()[i * n + pp]) * q.data()[i * n + qq];
+                }
+                for (int i = 0; i < n; ++i)
+                {
+                    dp += crd::hesap::conj(p.data()[i * n + pp]) * p.data()[i * n + qq];
+                }
+                const C ex{(pp == qq) ? 1.0 : 0.0, 0.0};
+                worst_orth = std::max(worst_orth, crd::hesap::abs(dq - ex));
+                worst_orth = std::max(worst_orth, crd::hesap::abs(dp - ex));
+            }
+        }
+    }
+    CHECK(worst_rec < 1e-11);
+    CHECK(worst_orth < 1e-11);
+}
+
+// v3b-1c: full complex SVD A = U S V^H. Reconstruction + U/V unitary + S
+// descending >= 0, across m>=n / m<n / large (D&C bidiagonal path, n>=64).
+TEST_CASE("svd complex: A = U S V^H reconstruction + unitary", "[hesap][svd][cplx]")
+{
+    using C = crd::hesap::Complex<double>;
+    using crd::hesap::dense::svd;
+    crd::memory::TlsfAllocator alloc(256U * 1024U * 1024U);
+    double worst_rec = 0.0;
+    double worst_orth = 0.0;
+    bool desc_ok = true;
+    for (auto mn : {std::pair<int, int>{8, 8}, {12, 7}, {7, 12}, {20, 20}, {80, 80}, {70, 100}})
+    {
+        const int m = mn.first;
+        const int n = mn.second;
+        const int k = m < n ? m : n;
+        crd::hesap::dense::Matrix<C> a(&alloc, static_cast<crd::usize>(m), static_cast<crd::usize>(n));
+        Rng rng{0x5CC119ULL + static_cast<crd::u64>(m * 131 + n)};
+        for (int i = 0; i < m; ++i)
+        {
+            for (int j = 0; j < n; ++j)
+            {
+                a.at(static_cast<crd::usize>(i), static_cast<crd::usize>(j)) =
+                    C{2.0 * rng.next() - 1.0, 2.0 * rng.next() - 1.0};
+            }
+        }
+        const auto s = svd<C>(&alloc, a);
+        REQUIRE(static_cast<int>(s.s.size()) == k);
+        // A[i][j] = sum_t U(i,t) S(t) conj(V(j,t)).
+        for (int i = 0; i < m; ++i)
+        {
+            for (int j = 0; j < n; ++j)
+            {
+                C acc{0.0, 0.0};
+                for (int t = 0; t < k; ++t)
+                {
+                    acc += s.u.at(static_cast<crd::usize>(i), static_cast<crd::usize>(t)) * s.s.data()[t] *
+                           crd::hesap::conj(s.v.at(static_cast<crd::usize>(j), static_cast<crd::usize>(t)));
+                }
+                worst_rec = std::max(worst_rec,
+                                     crd::hesap::abs(acc - a.at(static_cast<crd::usize>(i),
+                                                               static_cast<crd::usize>(j))));
+            }
+        }
+        for (int p = 0; p < k; ++p)
+        {
+            for (int q = 0; q < k; ++q)
+            {
+                C du{0.0, 0.0};
+                C dv{0.0, 0.0};
+                for (int i = 0; i < m; ++i)
+                {
+                    du += crd::hesap::conj(s.u.at(static_cast<crd::usize>(i), static_cast<crd::usize>(p))) *
+                          s.u.at(static_cast<crd::usize>(i), static_cast<crd::usize>(q));
+                }
+                for (int i = 0; i < n; ++i)
+                {
+                    dv += crd::hesap::conj(s.v.at(static_cast<crd::usize>(i), static_cast<crd::usize>(p))) *
+                          s.v.at(static_cast<crd::usize>(i), static_cast<crd::usize>(q));
+                }
+                const C ex{(p == q) ? 1.0 : 0.0, 0.0};
+                worst_orth = std::max(worst_orth, crd::hesap::abs(du - ex));
+                worst_orth = std::max(worst_orth, crd::hesap::abs(dv - ex));
+            }
+        }
+        for (int t = 0; t < k; ++t)
+        {
+            if (s.s.data()[t] < -1e-12)
+            {
+                desc_ok = false;
+            }
+            if (t > 0 && s.s.data()[t] > s.s.data()[t - 1] + 1e-9)
+            {
+                desc_ok = false;
+            }
+        }
+    }
+    CHECK(worst_rec < 1e-9);
+    CHECK(worst_orth < 1e-9);
+    CHECK(desc_ok);
+}
+
+// v3b-3: randomized SVD — recover an EXACT rank-r matrix A = X Y^T. With
+// oversampling, the range finder captures range(A) exactly, so reconstruction
+// ‖A − U S Vᵀ‖ should hit ~machine precision; U/V columns orthonormal; s
+// non-negative descending.
+TEST_CASE("rsvd: exact low-rank reconstruction + orthonormality", "[hesap][svd][rsvd]")
+{
+    using crd::hesap::dense::rsvd;
+    crd::memory::TlsfAllocator alloc(128U * 1024U * 1024U);
+    double worst_rec = 0.0;
+    double worst_orth = 0.0;
+    for (auto mnr : {std::tuple<int, int, int>{40, 30, 5}, {60, 60, 8}, {100, 50, 10}, {50, 80, 6}})
+    {
+        const int m = std::get<0>(mnr);
+        const int n = std::get<1>(mnr);
+        const int r = std::get<2>(mnr);
+        crd::containers::Array<double> x(m * r, &alloc);
+        crd::containers::Array<double> yv(n * r, &alloc);
+        Rng rng{0x12500ULL + static_cast<crd::u64>(m * 31 + n)};
+        for (int i = 0; i < m * r; ++i)
+        {
+            x.data()[i] = 2.0 * rng.next() - 1.0;
+        }
+        for (int i = 0; i < n * r; ++i)
+        {
+            yv.data()[i] = 2.0 * rng.next() - 1.0;
+        }
+        crd::hesap::dense::Matrix<double> a(&alloc, static_cast<crd::usize>(m), static_cast<crd::usize>(n));
+        for (int i = 0; i < m; ++i)
+        {
+            for (int j = 0; j < n; ++j)
+            {
+                double acc = 0.0;
+                for (int kk = 0; kk < r; ++kk)
+                {
+                    acc += x.data()[i * r + kk] * yv.data()[j * r + kk];
+                }
+                a.at(static_cast<crd::usize>(i), static_cast<crd::usize>(j)) = acc;
+            }
+        }
+        const auto s = rsvd<double>(&alloc, a, static_cast<crd::usize>(r), 8, 2);
+        REQUIRE(static_cast<int>(s.s.size()) == r);
+        for (int i = 0; i < m; ++i)
+        {
+            for (int j = 0; j < n; ++j)
+            {
+                double acc = 0.0;
+                for (int kk = 0; kk < r; ++kk)
+                {
+                    acc += s.u.at(static_cast<crd::usize>(i), static_cast<crd::usize>(kk)) * s.s.data()[kk] *
+                           s.v.at(static_cast<crd::usize>(j), static_cast<crd::usize>(kk));
+                }
+                worst_rec = std::max(worst_rec, std::abs(acc - a.at(static_cast<crd::usize>(i),
+                                                                     static_cast<crd::usize>(j))));
+            }
+        }
+        bool desc = true;
+        for (int kk = 0; kk < r; ++kk)
+        {
+            if (s.s.data()[kk] < -1e-12)
+            {
+                desc = false;
+            }
+            if (kk > 0 && s.s.data()[kk] > s.s.data()[kk - 1] + 1e-9)
+            {
+                desc = false;
+            }
+        }
+        CHECK(desc);
+        for (int p = 0; p < r; ++p)
+        {
+            for (int q = 0; q < r; ++q)
+            {
+                double du = 0.0;
+                double dv = 0.0;
+                for (int i = 0; i < m; ++i)
+                {
+                    du += s.u.at(static_cast<crd::usize>(i), static_cast<crd::usize>(p)) *
+                          s.u.at(static_cast<crd::usize>(i), static_cast<crd::usize>(q));
+                }
+                for (int i = 0; i < n; ++i)
+                {
+                    dv += s.v.at(static_cast<crd::usize>(i), static_cast<crd::usize>(p)) *
+                          s.v.at(static_cast<crd::usize>(i), static_cast<crd::usize>(q));
+                }
+                const double ex = (p == q) ? 1.0 : 0.0;
+                worst_orth = std::max(worst_orth, std::abs(du - ex));
+                worst_orth = std::max(worst_orth, std::abs(dv - ex));
+            }
+        }
+    }
+    CHECK(worst_rec < 1e-8);
+    CHECK(worst_orth < 1e-9);
+}
+
+// v3b-3: randomized symmetric eig (rsyev) — recover an EXACT rank-r PSD
+// A = X Xᵀ. Top-r eigenpairs: residual ‖A v − λ v‖ ~ machine, λ ≥ 0 descending.
+TEST_CASE("rsyev: low-rank symmetric eig recovery", "[hesap][svd][rsvd]")
+{
+    using crd::hesap::dense::rsyev;
+    crd::memory::TlsfAllocator alloc(64U * 1024U * 1024U);
+    double worst_resid = 0.0;
+    for (auto nr : {std::pair<int, int>{40, 5}, {60, 8}, {80, 6}})
+    {
+        const int n = nr.first;
+        const int r = nr.second;
+        crd::containers::Array<double> xb(n * r, &alloc);
+        Rng rng{0x59E50ULL + static_cast<crd::u64>(n)};
+        for (int i = 0; i < n * r; ++i)
+        {
+            xb.data()[i] = 2.0 * rng.next() - 1.0;
+        }
+        crd::hesap::dense::Symmetric<double> a(&alloc, static_cast<crd::usize>(n));
+        for (int i = 0; i < n; ++i)
+        {
+            for (int j = 0; j <= i; ++j)
+            {
+                double acc = 0.0;
+                for (int kk = 0; kk < r; ++kk)
+                {
+                    acc += xb.data()[i * r + kk] * xb.data()[j * r + kk];
+                }
+                a.at(static_cast<crd::usize>(i), static_cast<crd::usize>(j)) = acc;
+            }
+        }
+        const auto e = rsyev<double>(&alloc, a, static_cast<crd::usize>(r), 8, 2);
+        REQUIRE(static_cast<int>(e.values.size()) == r);
+        bool desc = true;
+        for (int kk = 0; kk < r; ++kk)
+        {
+            if (e.values.data()[kk] < -1e-9)
+            {
+                desc = false;  // PSD => non-negative
+            }
+            if (kk > 0 && e.values.data()[kk] > e.values.data()[kk - 1] + 1e-7)
+            {
+                desc = false;  // descending
+            }
+        }
+        CHECK(desc);
+        // Residual ‖A v_k − λ_k v_k‖_inf.
+        auto aij = [&](int i, int j) {
+            return (i >= j) ? a.at(static_cast<crd::usize>(i), static_cast<crd::usize>(j))
+                            : a.at(static_cast<crd::usize>(j), static_cast<crd::usize>(i));
+        };
+        for (int kk = 0; kk < r; ++kk)
+        {
+            const double lam = e.values.data()[kk];
+            for (int i = 0; i < n; ++i)
+            {
+                double av = 0.0;
+                for (int j = 0; j < n; ++j)
+                {
+                    av += aij(i, j) * e.vectors.at(static_cast<crd::usize>(j), static_cast<crd::usize>(kk));
+                }
+                const double vv = e.vectors.at(static_cast<crd::usize>(i), static_cast<crd::usize>(kk));
+                worst_resid = std::max(worst_resid, std::abs(av - lam * vv));
+            }
+        }
+    }
+    CHECK(worst_resid < 1e-7);
+}
+
+// v3b-2.3 + GATE for v3b-2.2: full divide-and-conquer SVD of a random n x n
+// upper bidiagonal via dlasd0 (smlsiz=4 forces multi-level recursion + merges),
+// reconstruct B = U S VT. This validates dlasd0 + dlasd1/dlasd2/dlasd3 + dlasdq
+// end-to-end (the merge's first rigorous gate).
+TEST_CASE("dlasd0: full D&C bidiagonal SVD reconstruction", "[hesap][svd][dc]")
+{
+    using crd::hesap::dense::detail::dlasd0;
+    crd::memory::TlsfAllocator alloc(128U * 1024U * 1024U);
+    const int smlsiz = 4;
+    double worst_rec = 0.0;
+    double worst_orth = 0.0;
+    for (int n : {6, 9, 13, 20, 33, 50})
+    {
+        const int m = n;  // sqre = 0 (square bidiagonal)
+        crd::containers::Array<double> d(n, &alloc);
+        crd::containers::Array<double> e(n, &alloc);
+        crd::containers::Array<double> d0(n, &alloc);
+        crd::containers::Array<double> e0(n, &alloc);
+        crd::containers::Array<double> u(n * n, &alloc);
+        crd::containers::Array<double> vt(m * m, &alloc);
+        Rng rng{0xD45D0ULL + static_cast<crd::u64>(n)};
+        for (int i = 0; i < n; ++i)
+        {
+            d.data()[i] = d0.data()[i] = 1.0 + rng.next() * 2.0;
+            e.data()[i] = e0.data()[i] = 0.0;
+        }
+        for (int i = 0; i < n - 1; ++i)
+        {
+            e.data()[i] = e0.data()[i] = 2.0 * rng.next() - 1.0;
+        }
+        for (int i = 0; i < n * n; ++i)
+        {
+            u.data()[i] = 0.0;
+        }
+        for (int i = 0; i < m * m; ++i)
+        {
+            vt.data()[i] = 0.0;
+        }
+        for (int i = 0; i < n; ++i)
+        {
+            u.data()[i * n + i] = 1.0;  // U = I (column-major)
+        }
+        for (int i = 0; i < m; ++i)
+        {
+            vt.data()[i * m + i] = 1.0;  // VT = I
+        }
+        const int info = dlasd0<double>(n, 0, d.data(), e.data(), u.data(), n, vt.data(), m, smlsiz, &alloc);
+        CHECK(info == 0);
+        for (int i = 0; i < n; ++i)
+        {
+            for (int j = 0; j < m; ++j)
+            {
+                double acc = 0.0;
+                for (int kk = 0; kk < n; ++kk)
+                {
+                    acc += u.data()[kk * n + i] * d.data()[kk] * vt.data()[j * m + kk];
+                }
+                double bij = 0.0;
+                if (j == i)
+                {
+                    bij = d0.data()[i];
+                }
+                else if (j == i + 1)
+                {
+                    bij = e0.data()[i];
+                }
+                worst_rec = std::max(worst_rec, std::abs(acc - bij));
+            }
+        }
+        for (int p = 0; p < n; ++p)
+        {
+            for (int q = 0; q < n; ++q)
+            {
+                double du = 0.0;
+                double dv = 0.0;
+                for (int i = 0; i < n; ++i)
+                {
+                    du += u.data()[p * n + i] * u.data()[q * n + i];
+                    dv += vt.data()[p * m + i] * vt.data()[q * m + i];
+                }
+                const double ex = (p == q) ? 1.0 : 0.0;
+                worst_orth = std::max(worst_orth, std::abs(du - ex));
+                worst_orth = std::max(worst_orth, std::abs(dv - ex));
+            }
+        }
+    }
+    CHECK(worst_rec < 1e-9);
+    CHECK(worst_orth < 1e-9);
 }
 
 // v3b-2.2: dlasd1/dlasd2/dlasd3 merge SMOKE (compile + run + basic sanity). The

@@ -1158,3 +1158,108 @@ extraction; pursue only if Gu-Eisenstat D&C does not reach the crush).
 
 §20 ✅ Accepted — v3b-1b-perf closed via blocked dorgbr; full SVD beats LAPACK `dgesvd`.
 Parallel dbdsqr skipped (arena hazard + at-best-tie); the BDC/`dgesdd` crush is v3b-2.
+
+## §21 Amendment (2026-05-23) — v3b-2 Gu-Eisenstat D&C SVD: the full-SVD crush
+
+The full-SVD-at-scale gap §20 left (vs Eigen `BDCSVD` / LAPACK `dgesdd`) is closed by a
+faithful Gu-Eisenstat divide-and-conquer bidiagonal SVD, replacing the O(n³) serial `dbdsqr`
+rotation sweep with O(n²)-merge D&C on parallel BLAS-3. New `detail/svd_secular.hpp` (dlasd5
+2×2 + dlasd4 ψ/φ secular root + dlaed6 3-pole cubic) and `detail/svd_dc.hpp` (dlasd2
+deflation + dlasd3 secular-solve/vector-assembly + dlasd1 merge + dlasdq base + dlasdt tree +
+dlasd0 recursion). Wired into `svd()` at a crossover (n≥64 → D&C, else dbdsqr); internal
+recursion stop smlsiz=25. The back-transform `U=Q·U_b`, `VT=VT_b·Pᵀ` and the dlasd3 merge
+assembly run on `gemm_parallel_auto` (the cores LAPACK's/Eigen's serial D&C lacks).
+
+**Faithful-port pins (D(svd)-10..14):**
+- **D(svd)-10 — dlasd4 ψ/φ split, NOT a d→d² rewrite of dlaed4.** The SVD secular equation
+  `f(σ)=1+ρ·Σ z²/(d²−σ²)` uses a monotone-decreasing-left / increasing-right ψ/φ split with
+  per-side rational interpolation + a 3-pole (`SWTCH3`) branch via dlaed6; load-bearing for
+  accuracy near tight gaps. Ported line-for-line from dlasd4.f (MAXIT=400).
+- **D(svd)-11 — column-major D&C, row-major dbdsqr bridged at dlasdq.** The LAPACK dlasd*
+  chain is column-major (makes `U(:,j)` contiguous for dlasd4); the proven v3b-1b
+  dbdsqr/dlasr are row-major. `dlasdq_upper` is a column-major adapter that runs the SQRE
+  rotations + dbdsqr on row-major temps (init identity) and transposes into the column-major
+  sub-blocks — reuses the *tested* dbdsqr rather than an untested column-major one.
+- **D(svd)-12 — dlasd2 deflation rotates BOTH U and VT.** Equal-pole Givens applied to U
+  columns AND VT rows (vs the symmetric-eig dlaed2 which rotates only Q).
+- **D(svd)-13 — interleaved-Löwner Z recompute (dlasd3).** The updated weights are formed as
+  a single running product (`U(i,j)*VT(i,j)` from dlasd4's delta/work) to avoid the K-factor
+  overflow — the same fix as the eig D&C ([[feedback_lowner_product_overflow_interleave]]).
+- **D(svd)-14 — column-major GEMM via the swap identity.** `gemm_cm_nn` routes large blocks
+  to row-major `gemm_parallel_auto` via `C_cm=A·B ⟺ Cᵀ=Bᵀ·Aᵀ` (col-major buffer viewed
+  row-major IS its transpose); tiny leaf merges stay scalar (job-dispatch + arena floor).
+
+**Performance (i9-14900K AVX2, f64; full SVD values+vectors):** beats **every** reference at
+**all** N=128–1024 — vs Eigen `BDCSVD` (fair same-compiler gate) **1.59–3.21×**, vs LAPACK
+`dgesdd` **1.37–4.55×**, vs `dgesvd` **4.78–10.48×**, vs `JacobiSVD` 11–28×. **@512: full SVD
+690 ms → 52.9 ms this session (13×); C/BDCSVD flipped 0.17 (losing 6×) → 1.76 (winning).**
+Reconstruction ~1e-14. (LAPACK on MSVC = generic OpenBLAS = accuracy oracle; Eigen `BDCSVD`
+is the fair speed gate, beaten at every N.) Validated by reconstruction gates: dlasd0 full
+D&C `‖B−UΣVᵀ‖<1e-9` (n=6–50, multi-level) + dlasdq base + dlasd4/dlasd5 secular residual.
+
+§21 ✅ Accepted — v3b-2 D&C SVD beats Eigen + LAPACK on the full SVD at scale. Filed
+follow-on `v3b-2-parallel-merges` (parallelize dlasd0's independent same-level merges to
+widen the lead). Complex SVD remains v3b-1c.
+
+## §22 Amendment (2026-05-23) — v3b-3 randomized SVD + symmetric eig
+
+`rsvd` (randomized truncated SVD, Halko-Martinsson-Tropp 2011) and `rsyev` (randomized
+symmetric eigendecomposition) in `svd.{hpp,cpp}` — both built ENTIRELY on the shipped
+deterministic `gemm_parallel_auto` / Householder-QR (`factor_qr`+`apply_q`) / dense `svd` /
+`eig_sym`, with NO new numerical kernels. `rsvd`: Gaussian sketch (sum-of-12-uniforms CLT,
+avoids std::log/cos + the no-std-math guard) → QR range finder → `power_iters` subspace
+iterations (re-orthonormalized) → small dense `svd` of `B=QᵀA` → lift `U=Q·Ũ`, truncate to
+rank. `rsyev`: range finder → Rayleigh-Ritz `B=QᵀAQ` → `eig_sym(B)` → lift `V=Q·V_b`, top-k
+descending.
+
+- **D(svd)-15 — `rsyev` uses Rayleigh-Ritz, NOT the Nyström `C⁻ᵀ` variant.** Deliberate
+  divergence: Rayleigh-Ritz (`QᵀAQ` + dense eig) is more general (any symmetric A, not just
+  PSD) and reuses the `eig_sym` we already beat Eigen+LAPACK with, vs the PSD-streaming
+  Nyström-Cholesky form. (`feedback_document_paper_divergence_explicitly`.)
+- **No head-to-head bench (intentional):** Eigen/LAPACK have no randomized path, so the
+  v3b-3 gate is ACCURACY + structural speed (O(mn·ℓ) vs full O(mn·min)), not beat-the-
+  reference. Gated: exact rank-r SVD reconstruction `<1e-8` + orthonormal U/V; rank-r PSD eig
+  residual `‖Av−λv‖ < 1e-7`. Deterministic given `seed`.
+
+CLI: `hesap.dense.rsvd.{f32,f64}` + `hesap.dense.rsyev.{f32,f64}` (the per-op-CLI rule).
+DoD: debug / asan (memory-clean) / shipping (LTO) / tidy green on hesap-dense. Randomized
+Nyström-`C⁻ᵀ` PSD-streaming variant filed as the optional follow-on `v3b-3-nystrom-cholesky`.
+
+§22 ✅ Accepted — v3b-3 randomized SVD + symmetric eig shipped. **v3b (SVD) is now
+substantively complete: v3b-1 (bidiag+dbdsqr+blocked) + v3b-2 (D&C crush) + v3b-3
+(randomized) ✅; remaining v3b-1c (complex SVD).**
+
+## §23 Amendment (2026-05-23) — v3b-1c complex SVD + v3b CLOSE
+
+Complex SVD (`zgesvd`-class) in `detail/svd_complex.hpp` + the complex driver in `svd.cpp`.
+A complex Golub-Kahan reduction takes A (complex m×n) to a REAL bidiagonal (d,e) with
+complex unitary Q, P, then the **real (d,e) feed the already-shipped real dlasd0/dbdsqr (the
+D&C crush, reused verbatim)** and a complex back-transform `U=Q·U_b`, `V=P·V_b` lifts the
+vectors. `svd`/`svdvals` dispatch real-vs-complex by `if constexpr (is_complex_v<T>)`; m<n
+via A^H (swap U/V). c32/c64 + CLI (`hesap.dense.{svd,svdvals}.c{32,64}`, interleaved [re,im]).
+
+- **D(svd)-16 — bidiagonalize_complex skips the SECOND ZLACGV (un-conjugate).** zgebd2
+  conjugates the row before ZLARFG (forces e[i] REAL) then un-conjugates after; we skip the
+  un-conjugate so the stored right-reflector tail is the actual w-tail that `form_p_complex`
+  reads directly — internally consistent (not LAPACK-storage-compatible, which we don't need),
+  removes a conjugation-convention bug surface.
+- **D(svd)-17 — complex svdvals routes through the complex driver** (computes vectors then
+  returns the spectrum); the values-only dqds-direct path is the perf follow-on
+  `v3b-1c-svdvals-dqds-direct`.
+- **D(svd)-18 — complex phase pin.** Per singular vector, the largest-|.| entry of each V
+  column is made real-positive (rotate U,V columns by conj(phase); A=U S V^H preserved).
+
+Gated: complex Householder unitary (200 trials <1e-12); `A=Q B P^H` reconstruction + Q/P
+unitary <1e-11; full `A=U S V^H` reconstruction + U/V unitary + S descending <1e-9 (m≥n,
+m<n, and the D&C bidiagonal path n≥64). DoD debug/tidy/asan(memory-clean)/shipping green.
+**HONEST perf note:** the complex *bidiagonalization* is UNBLOCKED (the real bidiagonal SVD it
+reduces to IS the D&C crush, so moderate-N is competitive); the at-scale complex speed-crush
+needs a blocked complex `zgebrd` — filed `v3b-1c-blocked-complex-bidiag` (mirrors the real
+v3b-1a-perf path). Correctness + the algorithmic reuse of the crushing real engine are done.
+
+§23 ✅ Accepted — v3b-1c complex SVD shipped + gated. **🎉 v3b (SVD) CLOSED — v3b-1 (bidiag +
+blocked dgebrd/dorgbr + dbdsqr) + v3b-2 (Gu-Eisenstat D&C, beats Eigen BDCSVD + LAPACK dgesdd)
++ v3b-3 (randomized rsvd/rsyev) + v3b-1c (complex). Real full SVD crushes Eigen + LAPACK at
+scale; complex correct + reuses the crush. Filed perf follow-ons: v3b-1c-blocked-complex-bidiag,
+v3b-1c-svdvals-dqds-direct, v3b-2-parallel-merges, v3b-3-nystrom-cholesky.** NEXT = v3c
+(least-squares — consumes the SVD).

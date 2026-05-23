@@ -79,7 +79,7 @@ int main()
                  "----------------------------------------------------------------------------------------"
                  "--------------------------------");
 
-    for (crd::usize n : {crd::usize{64}, crd::usize{128}, crd::usize{256}, crd::usize{512}})
+    for (crd::usize n : {crd::usize{128}, crd::usize{256}, crd::usize{512}, crd::usize{1024}})
     {
         const int ni = static_cast<int>(n);
         Matrix<crd::f64> a(&alloc, n, n);
@@ -123,11 +123,16 @@ int main()
             }
         }
 
-        // --- Eigen JacobiSVD ---
-        const crd::f64 jt = time_loop([&]() {
-            Eigen::JacobiSVD<Eigen::MatrixXd> sv(ea, Eigen::ComputeThinU | Eigen::ComputeThinV);
-            (void)sv.singularValues();
-        });
+        // --- Eigen JacobiSVD (the easy O(n^3) crush; skip at large n where it
+        //     dominates wall time as a reference — 0.0 prints as not-measured) ---
+        crd::f64 jt = 0.0;
+        if (n <= 256)
+        {
+            jt = time_loop([&]() {
+                Eigen::JacobiSVD<Eigen::MatrixXd> sv(ea, Eigen::ComputeThinU | Eigen::ComputeThinV);
+                (void)sv.singularValues();
+            });
+        }
         // --- Eigen BDCSVD ---
         Eigen::VectorXd bvals;
         const crd::f64 bt = time_loop([&]() {
@@ -238,10 +243,14 @@ int main()
             }
         });
 
-        const crd::f64 jt = time_loop([&]() {
-            Eigen::JacobiSVD<Eigen::MatrixXd> sv(ea);
-            (void)sv.singularValues();
-        });
+        crd::f64 jt = 0.0;
+        if (n <= 256)
+        {
+            jt = time_loop([&]() {
+                Eigen::JacobiSVD<Eigen::MatrixXd> sv(ea);
+                (void)sv.singularValues();
+            });
+        }
         const crd::f64 bt = time_loop([&]() {
             Eigen::BDCSVD<Eigen::MatrixXd> sv(ea);
             (void)sv.singularValues();

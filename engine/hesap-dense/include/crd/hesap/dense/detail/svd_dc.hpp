@@ -1,9 +1,11 @@
 #pragma once
 
 #include <crd/containers/array.hpp>
+#include <crd/hesap/dense/blas3.hpp>              // gemm_parallel_auto
 #include <crd/hesap/dense/detail/bdsqr.hpp>       // drot
 #include <crd/hesap/dense/detail/householder.hpp> // hypot2 (dlapy2), fsign
 #include <crd/hesap/dense/detail/svd_secular.hpp> // dlasd4
+#include <crd/hesap/dense/matrix.hpp>             // MatrixView
 #include <crd/memory/allocator.hpp>
 
 #include <algorithm>
@@ -419,25 +421,41 @@ inline void dlasd2(int nl, int nr, int sqre, int& k, R* d, R* z, R alpha, R beta
     }
 }
 
-// gemm_cm — column-major C(M x N) = alpha*A(M x K)*B(K x N) + beta*C, explicit
-// loops (correctness-first; the gemm_parallel crush is v3b-2.3). A(i,l) =
-// a[l*lda+i], B(l,j) = b[j*ldb+l], C(i,j) = c[j*ldc+i].
+// gemm_cm_nn — column-major C(M x N) = alpha*A(M x K)*B(K x N) + beta*C. Large
+// blocks route through the parallel BLAS-3 gemm (the v3b-2.3 crush): a
+// column-major product A*B equals the row-major product B^T*A^T, and a
+// column-major buffer viewed RowMajor IS its transpose — so gemm_parallel_auto
+// on (B, A) with the swapped (N,M,K) shape writes C^T into the column-major C
+// (= C). Tiny blocks (the many small leaf merges) stay scalar to avoid job
+// dispatch overhead + frame-arena pressure.
 template <typename R>
 inline void gemm_cm_nn(int mm, int nn, int kk, R alpha, const R* a, int lda, const R* b, int ldb, R beta, R* c,
-                       int ldc) noexcept
+                       int ldc, crd::memory::IAllocator* alloc) noexcept
 {
-    for (int j = 0; j < nn; ++j)
+    if (static_cast<long long>(mm) * nn * kk < 100000)  // ~46^3: scalar floor
     {
-        for (int i = 0; i < mm; ++i)
+        for (int j = 0; j < nn; ++j)
         {
-            R acc = R{0};
-            for (int l = 0; l < kk; ++l)
+            for (int i = 0; i < mm; ++i)
             {
-                acc += a[l * lda + i] * b[j * ldb + l];
+                R acc = R{0};
+                for (int l = 0; l < kk; ++l)
+                {
+                    acc += a[l * lda + i] * b[j * ldb + l];
+                }
+                c[j * ldc + i] = alpha * acc + beta * c[j * ldc + i];
             }
-            c[j * ldc + i] = alpha * acc + beta * c[j * ldc + i];
         }
+        return;
     }
+    using L = Layout;
+    MatrixView<const R, L::RowMajor> b_view{b, static_cast<crd::usize>(nn), static_cast<crd::usize>(kk),
+                                            static_cast<crd::usize>(ldb)};  // = B^T
+    MatrixView<const R, L::RowMajor> a_view{a, static_cast<crd::usize>(kk), static_cast<crd::usize>(mm),
+                                            static_cast<crd::usize>(lda)};  // = A^T
+    MatrixView<R, L::RowMajor> c_view{c, static_cast<crd::usize>(nn), static_cast<crd::usize>(mm),
+                                      static_cast<crd::usize>(ldc)};  // = C^T
+    gemm_parallel_auto<R, L::RowMajor>(alpha, b_view, a_view, beta, c_view, Trans::None, Trans::None, alloc);
 }
 
 // =======================================================================
@@ -452,7 +470,7 @@ inline void gemm_cm_nn(int mm, int nn, int kk, R alpha, const R* a, int lda, con
 template <typename R>
 inline int dlasd3(int nl, int nr, int sqre, int k, R* d, R* q, int ldq, const R* dsigma, R* u, int ldu,
                   const R* u2, int ldu2, R* vt, int ldvt, R* vt2, int ldvt2, const int* idxc,
-                  const int* ctot, R* z) noexcept
+                  const int* ctot, R* z, crd::memory::IAllocator* alloc) noexcept
 {
     const R one = R{1};
     const R zero = R{0};
@@ -559,24 +577,24 @@ inline int dlasd3(int nl, int nr, int sqre, int k, R* d, R* q, int ldq, const R*
     // Update the left singular vector matrix.
     if (k == 2)
     {
-        gemm_cm_nn<R>(n, k, k, one, u2, ldu2, q, ldq, zero, u, ldu);
+        gemm_cm_nn<R>(n, k, k, one, u2, ldu2, q, ldq, zero, u, ldu, alloc);
     }
     else
     {
         if (ctot[0] > 0)
         {
-            gemm_cm_nn<R>(nl, k, ctot[0], one, u2p(1, 2), ldu2, &qm(2, 1), ldq, zero, &um(1, 1), ldu);
+            gemm_cm_nn<R>(nl, k, ctot[0], one, u2p(1, 2), ldu2, &qm(2, 1), ldq, zero, &um(1, 1), ldu, alloc);
             if (ctot[2] > 0)
             {
                 const int ktemp = 2 + ctot[0] + ctot[1];
                 gemm_cm_nn<R>(nl, k, ctot[2], one, u2p(1, ktemp), ldu2, &qm(ktemp, 1), ldq, one, &um(1, 1),
-                              ldu);
+                              ldu, alloc);
             }
         }
         else if (ctot[2] > 0)
         {
             const int ktemp = 2 + ctot[0] + ctot[1];
-            gemm_cm_nn<R>(nl, k, ctot[2], one, u2p(1, ktemp), ldu2, &qm(ktemp, 1), ldq, zero, &um(1, 1), ldu);
+            gemm_cm_nn<R>(nl, k, ctot[2], one, u2p(1, ktemp), ldu2, &qm(ktemp, 1), ldq, zero, &um(1, 1), ldu, alloc);
         }
         else
         {
@@ -594,7 +612,7 @@ inline int dlasd3(int nl, int nr, int sqre, int k, R* d, R* q, int ldq, const R*
         }
         const int ktemp = 2 + ctot[0];
         const int ctemp = ctot[1] + ctot[2];
-        gemm_cm_nn<R>(nr, k, ctemp, one, u2p(nlp2, ktemp), ldu2, &qm(ktemp, 1), ldq, zero, &um(nlp2, 1), ldu);
+        gemm_cm_nn<R>(nr, k, ctemp, one, u2p(nlp2, ktemp), ldu2, &qm(ktemp, 1), ldq, zero, &um(nlp2, 1), ldu, alloc);
     }
 
     // Generate the right singular vectors.
@@ -612,15 +630,15 @@ inline int dlasd3(int nl, int nr, int sqre, int k, R* d, R* q, int ldq, const R*
     // Update the right singular vector matrix.
     if (k == 2)
     {
-        gemm_cm_nn<R>(k, m, k, one, q, ldq, vt2, ldvt2, zero, vt, ldvt);
+        gemm_cm_nn<R>(k, m, k, one, q, ldq, vt2, ldvt2, zero, vt, ldvt, alloc);
         return 0;
     }
     int ktemp = 1 + ctot[0];
-    gemm_cm_nn<R>(k, nlp1, ktemp, one, &qm(1, 1), ldq, vt2p(1, 1), ldvt2, zero, &vtm(1, 1), ldvt);
+    gemm_cm_nn<R>(k, nlp1, ktemp, one, &qm(1, 1), ldq, vt2p(1, 1), ldvt2, zero, &vtm(1, 1), ldvt, alloc);
     ktemp = 2 + ctot[0] + ctot[1];
     if (ktemp <= ldvt2)
     {
-        gemm_cm_nn<R>(k, nlp1, ctot[2], one, &qm(1, ktemp), ldq, vt2p(ktemp, 1), ldvt2, one, &vtm(1, 1), ldvt);
+        gemm_cm_nn<R>(k, nlp1, ctot[2], one, &qm(1, ktemp), ldq, vt2p(ktemp, 1), ldvt2, one, &vtm(1, 1), ldvt, alloc);
     }
 
     ktemp = ctot[0] + 1;
@@ -637,7 +655,148 @@ inline int dlasd3(int nl, int nr, int sqre, int k, R* d, R* q, int ldq, const R*
         }
     }
     const int ctemp = 1 + ctot[1] + ctot[2];
-    gemm_cm_nn<R>(k, nrp1, ctemp, one, &qm(1, ktemp), ldq, vt2p(ktemp, nlp2), ldvt2, zero, &vtm(1, nlp2), ldvt);
+    gemm_cm_nn<R>(k, nrp1, ctemp, one, &qm(1, ktemp), ldq, vt2p(ktemp, nlp2), ldvt2, zero, &vtm(1, nlp2), ldvt, alloc);
+    return 0;
+}
+
+// =======================================================================
+// dlasdq_upper — base-case SVD of an n x (n+sqre) UPPER bidiagonal (d,e),
+// producing U (n x n) and VT ((n+sqre) x (n+sqre)) into COLUMN-MAJOR output
+// sub-blocks (the layout dlasd0 expects). Singular values ascending in d.
+//
+// LAYOUT BRIDGE (v3b-2.3): the LAPACK dlasd* chain is column-major, but the
+// proven v3b-1b dbdsqr/dlasr are row-major. Rather than write an untested
+// column-major dbdsqr, this adapter runs the SQRE rotations + dbdsqr on
+// row-major temps (init identity) and transposes the result into the caller's
+// column-major sub-blocks. Faithful to dlasdq.f (UPLO='U', NCC=0): upper ->
+// lower via right Givens (into VT), lower -> upper via left Givens (into U),
+// dbdsqr, then ascending insertion sort. Reuses the tested dbdsqr.
+// =======================================================================
+template <typename R>
+inline int dlasdq_upper(int n, int sqre, R* d, R* e, R* u_cm, int ldu, R* vt_cm, int ldvt,
+                        crd::memory::IAllocator* alloc) noexcept
+{
+    const R zero = R{0};
+    if (n == 0)
+    {
+        return 0;
+    }
+    const int ncvt = n + sqre;
+    const int np1 = n + 1;
+    const int vt_rows = (sqre == 1) ? np1 : n;  // rotation span for SQRE=1
+
+    crd::containers::Array<R> u_rm(alloc);
+    crd::containers::Array<R> vt_rm(alloc);
+    crd::containers::Array<R> cs(alloc);
+    crd::containers::Array<R> sn(alloc);
+    crd::containers::Array<R> work(alloc);
+    u_rm.resize(static_cast<crd::usize>(n * n));
+    vt_rm.resize(static_cast<crd::usize>(vt_rows * ncvt));
+    cs.resize(static_cast<crd::usize>(np1));
+    sn.resize(static_cast<crd::usize>(np1));
+    work.resize(static_cast<crd::usize>(4 * n + 4));
+    for (int i = 0; i < n * n; ++i)
+    {
+        u_rm[i] = zero;
+    }
+    for (int i = 0; i < n; ++i)
+    {
+        u_rm[i * n + i] = R{1};
+    }
+    for (int i = 0; i < vt_rows * ncvt; ++i)
+    {
+        vt_rm[i] = zero;
+    }
+    for (int i = 0; i < vt_rows; ++i)
+    {
+        vt_rm[i * ncvt + i] = R{1};
+    }
+
+    if (sqre == 1)
+    {
+        // Upper non-square -> lower bidiagonal via right Givens (into VT rows).
+        R c;
+        R s;
+        R r;
+        for (int i = 0; i < n - 1; ++i)
+        {
+            dlartg(d[i], e[i], c, s, r);
+            d[i] = r;
+            e[i] = s * d[i + 1];
+            d[i + 1] = c * d[i + 1];
+            cs[i] = c;
+            sn[i] = s;
+        }
+        dlartg(d[n - 1], e[n - 1], c, s, r);
+        d[n - 1] = r;
+        e[n - 1] = zero;
+        cs[n - 1] = c;
+        sn[n - 1] = s;
+        dlasr_lv<R>(true, vt_rows, ncvt, cs.data(), sn.data(), vt_rm.data(), ncvt);
+
+        // Lower -> upper via left Givens (into U columns). SQRE now 0.
+        for (int i = 0; i < n - 1; ++i)
+        {
+            dlartg(d[i], e[i], c, s, r);
+            d[i] = r;
+            e[i] = s * d[i + 1];
+            d[i + 1] = c * d[i + 1];
+            cs[i] = c;
+            sn[i] = s;
+        }
+        dlasr_rv<R>(true, n, n, cs.data(), sn.data(), u_rm.data(), n);
+    }
+
+    const int info = dbdsqr<R>(true, n, ncvt, n, 0, d, e, vt_rm.data(), ncvt, u_rm.data(), n, nullptr, 1,
+                               work.data());
+    if (info != 0)
+    {
+        return info;
+    }
+
+    // dbdsqr returns singular values DESCENDING; dlasdq wants ASCENDING.
+    for (int i = 0; i < n; ++i)
+    {
+        int isub = i;
+        R smin = d[i];
+        for (int j = i + 1; j < n; ++j)
+        {
+            if (d[j] < smin)
+            {
+                isub = j;
+                smin = d[j];
+            }
+        }
+        if (isub != i)
+        {
+            d[isub] = d[i];
+            d[i] = smin;
+            for (int cc = 0; cc < ncvt; ++cc)  // swap VT rows i, isub
+            {
+                std::swap(vt_rm[i * ncvt + cc], vt_rm[isub * ncvt + cc]);
+            }
+            for (int rr = 0; rr < n; ++rr)  // swap U columns i, isub
+            {
+                std::swap(u_rm[rr * n + i], u_rm[rr * n + isub]);
+            }
+        }
+    }
+
+    // Transpose row-major temps into the column-major output sub-blocks.
+    for (int rr = 0; rr < n; ++rr)
+    {
+        for (int cc = 0; cc < n; ++cc)
+        {
+            u_cm[cc * ldu + rr] = u_rm[rr * n + cc];
+        }
+    }
+    for (int rr = 0; rr < vt_rows; ++rr)
+    {
+        for (int cc = 0; cc < ncvt; ++cc)
+        {
+            vt_cm[cc * ldvt + rr] = vt_rm[rr * ncvt + cc];
+        }
+    }
     return 0;
 }
 
@@ -700,7 +859,7 @@ inline int dlasd1(int nl, int nr, int sqre, R* d, R& alpha, R& beta, R* u, int l
 
     const int ldq = k;
     const int info = dlasd3<R>(nl, nr, sqre, k, d, qb.data(), ldq, dsigma.data(), u, ldu, u2.data(), ldu2, vt,
-                               ldvt, vt2.data(), ldvt2, idxc.data(), coltyp.data(), z.data());
+                               ldvt, vt2.data(), ldvt2, idxc.data(), coltyp.data(), z.data(), alloc);
     if (info != 0)
     {
         return info;
@@ -714,6 +873,154 @@ inline int dlasd1(int nl, int nr, int sqre, R* d, R& alpha, R& beta, R* u, int l
 
     // Final sort permutation.
     dlamrg<R>(k, n - k, d, 1, -1, idxq);
+    return 0;
+}
+
+// =======================================================================
+// dlasdt — build the divide-and-conquer computation tree by recursive
+// bisection of [1..n], leaves of size <= msub. Outputs the per-node center
+// (inode), left size (ndiml), right size (ndimr); lvl = #levels, nd = #nodes.
+// Faithful port of dlasdt.f (1-based node indices). lvl computed without
+// std::log: floor(log2(n/(msub+1)))+1 via doubling.
+// =======================================================================
+inline void dlasdt(int n, int& lvl, int& nd, int* inode, int* ndiml, int* ndimr, int msub) noexcept
+{
+    const int maxn = std::max(1, n);
+    const double ratio = static_cast<double>(maxn) / static_cast<double>(msub + 1);
+    int l = 1;
+    double thr = 2.0;
+    while (ratio >= thr)
+    {
+        ++l;
+        thr *= 2.0;
+    }
+    lvl = l;
+
+    int i = n / 2;
+    inode[0] = i + 1;
+    ndiml[0] = i;
+    ndimr[0] = n - i - 1;
+    int il = 0;  // 1-based node cursors (Fortran)
+    int ir = 1;
+    int llst = 1;
+    for (int nlvl = 1; nlvl <= lvl - 1; ++nlvl)
+    {
+        for (int ii = 0; ii < llst; ++ii)
+        {
+            il += 2;
+            ir += 2;
+            const int ncrnt = llst + ii;  // 1-based current node
+            ndiml[il - 1] = ndiml[ncrnt - 1] / 2;
+            ndimr[il - 1] = ndiml[ncrnt - 1] - ndiml[il - 1] - 1;
+            inode[il - 1] = inode[ncrnt - 1] - ndimr[il - 1] - 1;
+            ndiml[ir - 1] = ndimr[ncrnt - 1] / 2;
+            ndimr[ir - 1] = ndimr[ncrnt - 1] - ndiml[ir - 1] - 1;
+            inode[ir - 1] = inode[ncrnt - 1] + ndiml[ir - 1] + 1;
+        }
+        llst = llst * 2;
+    }
+    nd = llst * 2 - 1;
+}
+
+// =======================================================================
+// dlasd0 — SVD of an n x (n+sqre) UPPER bidiagonal (d,e) by divide-and-conquer.
+// COLUMN-MAJOR; on entry U (n x n) and VT (m x m, m=n+sqre) must be identity
+// (the caller sets them). Builds the tree (dlasdt), solves leaves with
+// dlasdq_upper, conquers bottom-up with dlasd1. On exit d holds the singular
+// values (D&C order, not sorted), U/VT the singular vectors. Faithful port of
+// dlasd0.f. Scratch from `alloc`. Returns the first nonzero info.
+// =======================================================================
+template <typename R>
+inline int dlasd0(int n, int sqre, R* d, R* e, R* u, int ldu, R* vt, int ldvt, int smlsiz,
+                  crd::memory::IAllocator* alloc) noexcept
+{
+    if (n <= smlsiz)
+    {
+        return dlasdq_upper<R>(n, sqre, d, e, u, ldu, vt, ldvt, alloc);
+    }
+
+    crd::containers::Array<int> inode(alloc);
+    crd::containers::Array<int> ndiml(alloc);
+    crd::containers::Array<int> ndimr(alloc);
+    crd::containers::Array<int> idxq(alloc);
+    inode.resize(static_cast<crd::usize>(n));
+    ndiml.resize(static_cast<crd::usize>(n));
+    ndimr.resize(static_cast<crd::usize>(n));
+    idxq.resize(static_cast<crd::usize>(n));
+
+    int nlvl = 0;
+    int nd = 0;
+    dlasdt(n, nlvl, nd, inode.data(), ndiml.data(), ndimr.data(), smlsiz);
+
+    // Bottom level: solve leaf subproblems with dlasdq.
+    const int ndb1 = (nd + 1) / 2;
+    for (int i = ndb1; i <= nd; ++i)
+    {
+        const int ic = inode[i - 1];
+        const int nl = ndiml[i - 1];
+        const int nr = ndimr[i - 1];
+        const int nlf = ic - nl;
+        const int nrf = ic + 1;
+        int info = dlasdq_upper<R>(nl, 1, d + (nlf - 1), e + (nlf - 1), u + (nlf - 1) * ldu + (nlf - 1), ldu,
+                                   vt + (nlf - 1) * ldvt + (nlf - 1), ldvt, alloc);
+        if (info != 0)
+        {
+            return info;
+        }
+        for (int j = 1; j <= nl; ++j)
+        {
+            idxq[(nlf - 2 + j)] = j;
+        }
+        const int sqrei = (i == nd) ? sqre : 1;
+        info = dlasdq_upper<R>(nr, sqrei, d + (nrf - 1), e + (nrf - 1), u + (nrf - 1) * ldu + (nrf - 1), ldu,
+                               vt + (nrf - 1) * ldvt + (nrf - 1), ldvt, alloc);
+        if (info != 0)
+        {
+            return info;
+        }
+        for (int j = 1; j <= nr; ++j)
+        {
+            idxq[(ic + j - 1)] = j;
+        }
+    }
+
+    // Conquer bottom-up.
+    for (int lvl = nlvl; lvl >= 1; --lvl)
+    {
+        int lf;
+        int ll;
+        if (lvl == 1)
+        {
+            lf = 1;
+            ll = 1;
+        }
+        else
+        {
+            lf = 1;
+            for (int t = 0; t < lvl - 1; ++t)
+            {
+                lf *= 2;  // lf = 2^(lvl-1)
+            }
+            ll = 2 * lf - 1;
+        }
+        for (int i = lf; i <= ll; ++i)
+        {
+            const int ic = inode[i - 1];
+            const int nl = ndiml[i - 1];
+            const int nr = ndimr[i - 1];
+            const int nlf = ic - nl;
+            const int sqrei = (sqre == 0 && i == ll) ? sqre : 1;
+            R alpha = d[ic - 1];
+            R beta = e[ic - 1];
+            const int info = dlasd1<R>(nl, nr, sqrei, d + (nlf - 1), alpha, beta, u + (nlf - 1) * ldu + (nlf - 1),
+                                       ldu, vt + (nlf - 1) * ldvt + (nlf - 1), ldvt, idxq.data() + (nlf - 1),
+                                       alloc);
+            if (info != 0)
+            {
+                return info;
+            }
+        }
+    }
     return 0;
 }
 

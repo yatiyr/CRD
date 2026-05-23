@@ -1,6 +1,7 @@
 #pragma once
 
 #include <crd/core/types.hpp>
+#include <crd/hesap/dense/eig_sym.hpp>  // EigSym (rsyev return)
 #include <crd/hesap/dense/matrix.hpp>
 #include <crd/hesap/dense/matrix_types.hpp>
 #include <crd/hesap/dense/real_type.hpp>
@@ -73,5 +74,36 @@ template <typename T>
 // =======================================================================
 template <typename T>
 [[nodiscard]] Vector<RealType<T>> svdvals(crd::memory::IAllocator* alloc, const Matrix<T>& a_in);
+
+// =======================================================================
+// rsvd (v3b-3) — randomized truncated SVD (Halko-Martinsson-Tropp 2011) of a
+// general real matrix A (m x n): a rank-`rank` approximation A ≈ U diag(S) V^T
+// via a Gaussian sketch + range finder + `power_iters` subspace iterations
+// (re-orthonormalized between). Returns thin U (m x k), S (k, descending,
+// >= 0), V (n x k), where k = min(rank, min(m,n)). Built entirely on the
+// deterministic gemm / Householder-QR / dense svd already shipped — Eigen has
+// no randomized path; the gate is low-rank accuracy + speed on rank-deficient
+// inputs. Deterministic given `seed`. Real f32/f64.
+// =======================================================================
+template <typename T>
+[[nodiscard]] SVD<T> rsvd(crd::memory::IAllocator* alloc, const Matrix<T>& a_in, crd::usize rank,
+                          crd::usize oversampling = 8, crd::usize power_iters = 2,
+                          crd::u64 seed = 0x5EED5D11ULL);
+
+// =======================================================================
+// rsyev (v3b-3) — randomized symmetric eigendecomposition: the top-`rank`
+// eigenpairs of a symmetric A (n x n) via a Gaussian range finder + a small
+// dense eig of B = Q^T A Q (Rayleigh-Ritz). Returns EigSym<T> with values in
+// DESCENDING magnitude order (top-k) and eigenvectors as columns. For low-rank
+// / spectrally-decaying symmetric A. D-pin: Rayleigh-Ritz chosen over the
+// Nyström C^{-T} variant — more general (any symmetric A, not just PSD) and
+// reuses the eig_sym already shipped (which beats Eigen + LAPACK). Built on the
+// deterministic gemm / Householder-QR / eig_sym. Deterministic given `seed`.
+// Real f32/f64.
+// =======================================================================
+template <typename T>
+[[nodiscard]] EigSym<T> rsyev(crd::memory::IAllocator* alloc, const Symmetric<T>& a, crd::usize rank,
+                              crd::usize oversampling = 8, crd::usize power_iters = 2,
+                              crd::u64 seed = 0x5EE59EULL);
 
 } // namespace crd::hesap::dense

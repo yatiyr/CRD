@@ -127,6 +127,49 @@ move to a session log entry and remove from here.
 > identical code; qr ctests gate it); deferred to keep the v3b-1b-perf slice's
 > blast radius tight while the v3a-3/v3b tree is uncommitted.
 
+### `v3b-1c-blocked-complex-bidiag` — blocked complex zgebrd for the at-scale complex SVD crush — filed 2026-05-23
+
+> **Perf follow-on (correctness done), NOT a defect.** v3b-1c complex SVD is correct
+> + gated (A=U S V^H <1e-9) and reuses the crushing real D&C/dbdsqr for the
+> bidiagonal-SVD part, so it's competitive at moderate N. But the complex
+> *bidiagonalization* (`bidiagonalize_complex`, zgebd2-class) is UNBLOCKED — at
+> scale that's the bottleneck (exactly like the real path before v3b-1a-perf's
+> blocked dlabrd). The at-scale complex speed-crush vs Eigen complex SVD + LAPACK
+> zgesvd/zgesdd needs a **blocked complex `zgebrd`** (complex `zlabrd` panels +
+> BLAS-3 trailing update via complex `gemm_parallel_auto`) + a complex `dorgbr`
+> (zungbr) for the form-Q/P. Mirrors the real v3b-1a-perf/dorgbr work. Add a
+> 4-column complex bench (Eigen BDCSVD-complex + LAPACK zgesvd/zgesdd) when this lands.
+
+### `v3b-1c-svdvals-dqds-direct` — values-only complex svdvals via dqds — filed 2026-05-23
+
+> **Perf follow-on, NOT a defect.** Complex `svdvals` currently routes through the
+> full complex `svd` driver (computes singular vectors then returns the spectrum) —
+> ~2× wasteful. The values-only path: complex bidiag → real (d,e) → dqds (`dlasq2`)
+> directly, no vectors (mirrors the real `svdvals`). Factor the real svdvals'
+> dqds-on-(d,e) extraction into a shared helper + call from the complex path.
+
+### `v3b-3-nystrom-cholesky` — PSD-streaming Nyström variant of rsyev — filed 2026-05-23
+
+> **Optional alternative, NOT a defect.** v3b-3 `rsyev` uses Rayleigh-Ritz
+> (`QᵀAQ` + `eig_sym`) — general (any symmetric A) + reuses the eig_sym we beat
+> Eigen+LAPACK with (D(svd)-15). The Tropp-2017 Nyström `C⁻ᵀ` form (`Y=AΩ`,
+> shift ν, `B=ΩᵀY_ν` SPD, Cholesky `B=CCᵀ`, `F=Y_ν C⁻ᵀ`, svd(F)) is more
+> accurate for PSD streaming/fixed-rank approximation. Add it as a `rsyev_psd`
+> specialization if a PSD-streaming consumer arrives. Reuses Cholesky + trsm
+> (both shipped v0e). Low priority — Rayleigh-Ritz covers the gate.
+
+### `v3b-2-parallel-merges` — parallelize dlasd0's same-level merges — filed 2026-05-23
+
+> **Optimization follow-on (we already win), NOT a defect.** v3b-2 D&C SVD already
+> beats Eigen `BDCSVD` 1.59–3.21× / LAPACK `dgesdd` 1.37–4.55× at N=128–1024 via
+> the parallel BLAS-3 back-transform + dlasd3 merge assembly (`gemm_parallel_auto`),
+> with `dlasd0`'s recursion itself SERIAL. The independent same-level merge nodes
+> (`dlasd1` calls within one `DO I=LF,LL` level) can run concurrently across
+> `crd::jobs` — the lever that would widen the lead further (cores LAPACK/Eigen
+> serial D&C lack at the merge level too). Per-merge Tlsf arena + bit-exact across
+> worker counts. Deferred: the gate ("beat Eigen+LAPACK at scale") is already met;
+> this is pure margin. Watch the frame-arena hazard ([[feedback_jobs_parallel_for_frame_arena_exhaustion]]).
+
 ### `v3b-2-svd-via-mrrr` — novel D&C-alternative SVD fork — filed 2026-05-23
 
 > **Deferred research fork, NOT scope reduction.** The v3b-2 locked design flagged
