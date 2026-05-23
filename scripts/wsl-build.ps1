@@ -13,6 +13,7 @@
 #   ./scripts/wsl-build.ps1 linux-gcc-debug              # configure + build + test
 #   ./scripts/wsl-build.ps1 linux-gcc-asan -SkipTests    # configure + build only
 #   ./scripts/wsl-build.ps1 linux-gcc-release -Reconfigure
+#   ./scripts/wsl-build.ps1 linux-gcc-debug -BuildJobs 8   # cap Ninja to 8 threads
 #
 # The Windows path D:\Dev\cerid is accessed via /mnt/d/Dev/cerid from WSL.
 # That mount is the 9P bridge, ~2-3× slower than native Linux FS for the
@@ -49,6 +50,11 @@ param(
     # recompile). Enable explicitly for first-run after a CMakePresets
     # change, or when you want a known-clean state.
     [switch]$Reconfigure,
+    # Cap Ninja threads (exports CMAKE_BUILD_PARALLEL_LEVEL inside WSL). WSL builds
+    # run on the same physical CPU as Windows, so the i9-14900K Raptor Lake
+    # stability cap applies here too. 0 = uncapped. full-sweep.ps1 plumbs this in;
+    # see CLAUDE.md Troubleshooting "Host instability".
+    [int]$BuildJobs = 0,
     [string]$Distro = 'Ubuntu'
 )
 
@@ -107,6 +113,13 @@ $bashLines = @(
     'echo "[wsl-build] BUILD_DIR=$BUILD_DIR (native ext4)"'
     'echo "[wsl-build] ===== configure ====="'
 )
+
+# Cap Ninja threads on the WSL side (same physical CPU as the Windows host).
+# `cmake --build` honours CMAKE_BUILD_PARALLEL_LEVEL when no --parallel is passed.
+if ($BuildJobs -gt 0) {
+    $bashLines += "export CMAKE_BUILD_PARALLEL_LEVEL=$BuildJobs"
+    $bashLines += "echo `"[wsl-build] CMAKE_BUILD_PARALLEL_LEVEL=$BuildJobs (Raptor Lake stability cap)`""
+}
 
 if ($Reconfigure) {
     $bashLines += 'rm -rf "$BUILD_DIR"'

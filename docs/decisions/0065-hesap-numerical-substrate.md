@@ -954,3 +954,207 @@ member + bisection re-seeds from the lowest-index unassigned vertex.
 direct which consumes these orderings + the v2c symbolic factorisation, … v18.)
 
 §16 ✅ Accepted — v2a–e locked, Phase 3.1.6 v2 (reorderings) closed.
+
+## §17 Amendment (2026-05-23) — v3a-3 MRRR decision lock (symmetric eigensolver)
+
+§17 locks the **MRRR** (`dstemr`-class) decisions shipped in `crd-hesap-dense` for
+the symmetric eigensolver — eigenvalues (dqds + Sturm bisection + parallel
+multisection) and eigenvectors (twisted factorizations + RRR cluster tree + GS
+fallback) — and the determinism pins **D(dense-eig)-9..12** plus the faithful-port
+divergences. Companion to v3a-1/v3a-2 (which locked D(dense-eig)-1..8 for the QL/QR
++ D&C paths). Phase doc: `docs/phases/phase-3.1.6-hesap.md` § "v3a-3 locked design".
+
+**Determinism pins (D(dense-eig)-9..12):**
+- **D(dense-eig)-9 — pivmin Sturm guard is exact + fixed.** `|t| < pivmin ⇒ t = −pivmin`
+  in the tridiagonal Sturm recurrence (`detail/sturm_count.hpp`) makes the eigenvalue
+  count a deterministic step function of the shift; `pivmin = safmin·max(1, max|eᵢ|²)`
+  (block-derived, not host-tuned). This is what makes bisection/multisection
+  bit-reproducible.
+- **D(dense-eig)-10 — RRR shift selection deterministic** (`dlarrf`): try the cluster
+  L/R ends, accept the first whose element growth ≤ MAXGROWTH1·spdiam (then the refined-
+  RRR test, then KTRYMAX back-off, then forced-best) — fixed tie-break, no convergence-
+  dependent branch.
+- **D(dense-eig)-11 — cluster tie-break + GS-fallback trigger fixed** (`dlarrv` loop):
+  segment by relative gap `MINRGP = 1e-3`; clusters processed in fixed ascending order;
+  the Gram-Schmidt re-orthogonalization fires at the fixed recursion-depth cap (≤8) for
+  residual near-multiplicity — committed, not "if it looks bad".
+- **D(dense-eig)-12 — dqds (`dlasq2`) fixed-iteration termination**: `dlasq2`'s `N+1`
+  outer-while cap + `dlasq3`'s `NBIG = 100·(n0−i0+1)` per-block cap + deterministic
+  `dlasq4` shift + IEEE NaN/Inf handling (`DISNAN` branch, deterministic given IEEE-754).
+- **Parallel determinism:** the parallel multisection (eigenvalues) and the parallel
+  eigenvector dispatch write **disjoint** outputs per worker over a **fixed** index
+  partition → bit-identical regardless of worker count / scheduling. The work-stealing
+  affects only *which* core runs a task, never the result.
+
+**Faithful-port divergences (numbered, advisor-vetted):**
+- **D(dense-eig)-MRRR-Z1base** — the dqds qd-array (`dlasq2/3/4/5/6`) and `dlar1v`/`dlaneg`
+  use **1-based** access via a thin `Z1` pointer-minus-one wrapper, so the `4*N0+PP−3`
+  ping-pong index arithmetic ports **line-for-line** from the Fortran (the standard
+  correct-C-port practice; hand-translating to 0-based is the classic dqds failure mode).
+- **D(dense-eig)-MRRR-dqds-ieee-only** — only the `IEEE=.TRUE.` branches of `dlasq5`/`dlasq6`
+  are ported (ADR-0063 mandates IEEE-754 — a contract simplification, not a corner-cut).
+- **D(dense-eig)-MRRR-dlarrb-per-eigenvalue** — `dlarrb_refine` uses per-eigenvalue
+  bisection (via the `dlaneg` LDLᵀ twisted Sturm count) instead of dlarrb.f's linked-list
+  multisection — same converged result, simpler control flow (the sharing is a speed-only
+  opt; cluster sizes are small so it is invisible).
+
+**Performance (the reference-class gate, measured on i9-14900K AVX2, f64; both Eigen AND
+LAPACK per `feedback_always_bench_both_eigen_and_lapack`):**
+- Full symmetric eig (`eig_sym`, values+vectors): **1.4–1.95× Eigen, 2.1–3.7× LAPACK
+  `dsyev`**; Hermitian **2.2× Eigen / 2.7× LAPACK `zheev`**.
+- Eigenvalues-only (parallel multisection): **beats `dsterf` at N≥2048, crushes `dstemr`
+  1.6×**.
+- Tridiagonal vectors (parallel MRRR): **crushes Eigen `computeFromTridiagonal` 5–64×,
+  crushes LAPACK `dstemr` 1.7–2.7×, matches/beats LAPACK `dstedc` (BLAS-3 D&C) 0.84–1.52×**;
+  orthogonality `‖VᵀV−I‖ ≤ O(n)·eps` (glued-Wilkinson W₂₁⁺ passes).
+- **Honest negative result:** SIMD-across-eigenvectors (`dlar1v_x4`) tried + reverted — the
+  O(n) per-eigenvector scratch makes a 4-batch memory-bound (16n footprint blows L2), so it
+  nets ~0; the vector path is at the CPU hardware (memory-bandwidth) limit. Next lever = GPU
+  (future v17). ([[project_mrrr_perf_win_is_vectors_not_values]].)
+
+§17 ✅ Accepted — v3a-3 (MRRR) locked; beats Eigen + LAPACK on the symmetric eigensolver.
+
+## §18 Amendment (2026-05-23) — v3b-1b SVD decision lock (bidiagonal QR, serial baseline)
+
+Locks the SVD serial foundation: `bidiagonalize` (Golub-Kahan, v3b-1a) →
+`detail/bdsqr.hpp::dbdsqr` (Demmel-Kahan implicit-zero-shift QR, faithful LAPACK port)
+→ `svd` / `svdvals` drivers + the 4-column benchmark protocol. The crush is **not** in
+this leaf by design — v3b-1b is the proven serial baseline that MEASURES the gap so the
+next leaves are sequenced on data, not a guess (the v3a-3 lesson: serial predictions were
+wrong both ways).
+
+**Determinism + faithful-port pins (D(svd)-1..5):**
+- **D(svd)-1 — `dlartg` f90 convention.** The plane rotation uses the Anderson-2017
+  `dlartg.f90` contract (`c ≥ 0`, `r = sign(d,f)`, `s = g/r`). dbdsqr's zero-shift sweep
+  **chains `r`** across consecutive `dlartg` calls, so the convention is load-bearing —
+  `eig_sym.cpp::lartg` (whose `c` carries the sign of `f`) is a *different* rotation and
+  is deliberately NOT reused for the SVD path.
+- **D(svd)-2 — sign pin.** The largest-magnitude entry of each V column is made positive;
+  the matching U column is flipped to preserve `A = U Σ Vᵀ`. RNG-free + reproducible.
+- **D(svd)-3 — wide matrices via transpose.** `m < n` is handled by SVD of `Aᵀ`
+  (`A = V'ΣU'ᵀ ⇒ U_A = V', V_A = U'`); bidiagonalize always sees `m ≥ n`.
+- **D(svd)-4 — `dlasr` RowMajor.** The plane-rotation applier is rewritten for RowMajor
+  (`A(r,c)=a[r·lda+c]`) — the transpose of the column-major Fortran inner loops; only
+  PIVOT='V' (plane `(k,k+1)`, the only pivot dbdsqr uses) is ported. The 4 WORK rotation
+  segments (NM1/NM12/NM13) are kept separate exactly as the Fortran.
+- **D(svd)-5 — values-only via `dlasq2`.** `svdvals` feeds B's squared+scaled qd array
+  to the dqds engine (`dlasq2`, its native purpose) with dlasq1-style smax scaling, rather
+  than dbdsqr's no-rotate branch. (`TOLMUL = max(10,min(100,eps^(−1/8)))` is computed as
+  `sqrt(sqrt(sqrt(1/eps)))` to stay clear of `std::pow` + the no-std-math guard.)
+
+**Performance (i9-14900K AVX2, f64; FOUR columns — Eigen JacobiSVD + BDCSVD, LAPACK
+`dgesvd` + `dgesdd`):**
+- Full SVD (values + thin vectors): beats Eigen **JacobiSVD 3.0–3.4×** everywhere;
+  ties/beats LAPACK `dgesvd` at small N (1.30× @128) but **loses to the D&C references at
+  scale** — C/BDC 0.14, C/`dgesdd` 0.13 at N=512. Accuracy: val err ~1e-13, recon ~1e-14.
+- Values-only (`svdvals`): crushes JacobiSVD **9–15×**; loses to D&C / `dgesdd` at N≥256.
+- **Honest finding (the lever for the next leaves):** at N≥256 the dominant cost is the
+  **unblocked `dgebd2` bidiagonalization (BLAS-2)**, not dbdsqr. Smoking gun: `svdvals`
+  @ N=512 is **156 ms vs `dgesvd`-N 46 ms**, yet `dlasq2` is O(n²) (proven ~free in
+  v3a-3.1). So the visible gap to `dgesvd` at scale is the reduction, not the QR sweep.
+  This makes **v3b-1a-perf (blocked `dlabrd`, BLAS-3)** likely the *larger* lever than
+  v3b-1b-perf (parallel split-block dbdsqr) for full SVD at scale — same shape as blocked
+  `dsytrd` carrying v3a-1. Both feed v3b-2 (Gu-Eisenstat D&C vs SVD-via-MRRR). Sequencing
+  of the next leaf left to the user. ([[project_serial_iterative_qr_loses_to_dc_reduction_is_bottleneck]].)
+
+§18 ✅ Accepted — v3b-1b (bidiagonal SVD serial baseline) locked; faithful dbdsqr +
+driver + CLI + 4-column bench. The crush is deferred to v3b-1a-perf / v3b-1b-perf / v3b-2.
+
+## §19 Amendment (2026-05-23) — v3b-1a-perf blocked bidiagonalization (the reduction crush)
+
+Closes the reduction gap §18 measured. `bidiagonalize` is now blocked `dgebrd`:
+`dlabrd_upper` panels (faithful LAPACK `dlabrd`, m≥n upper branch, RowMajor) build the
+X/Y panel-update matrices; the driver crushes the trailing block with ONE BLAS-3 rank-2k
+update per panel (two `gemm_parallel_auto` GEMMs accumulated into a temp, then one
+subtract — the proven blocked-`dsytrd` pattern); the unblocked `dgebd2`
+(`bidiag_unblocked`) handles small n (≤ 2·nb) and the final tail. Block width nb=32.
+
+**D(svd)-6 — blocked dgebrd panel form (faithful + two divergences pinned):**
+- The reflector storage layout is **identical** to the unblocked path (v-tail in the
+  sub-diagonal column, u-tail in the super-diagonal row), so `form_q_bidiag` /
+  `form_pt_bidiag` / `dbdsqr` / `dlasq2` are unchanged. CONVENTION divergence: `dlabrd`
+  writes the reflector unit heads EXPLICITLY into `A(i,i)=1` / `A(i,i+1)=1` (they are read
+  by the same iteration's X/Y matvecs) and the driver restores `A(i,i)=d` / `A(i,i+1)=e`
+  after the trailing GEMM — vs the unblocked v[0]=1-implicit convention. Numerically
+  equivalent; the heads at the panel/tail boundary are intentionally part of V and the
+  U-block during the GEMM.
+- **Panel matvec layout (perf-load-bearing):** the Y matvec is computed row-outer into a
+  CONTIGUOUS accumulator `yacc` (the column-strided textbook form cache-thrashes at scale
+  — measured super-linear blow-up at N=1024); the X matvec is a contiguous row·row dot.
+  Both route through `detail/dot_simd.hpp::simd_dot` / `simd_axpy` (single-rounded FMA,
+  same as `eig_sym`; ADR-0082 §determinism-relaxation already accepts FMA for
+  hesap-numerical, distinct from the two-rounded `mul_add` physics path). `simd_dot` /
+  `simd_axpy` promoted to `dot_simd.hpp` as the canonical home (templated f32/f64).
+
+**Performance (i9-14900K AVX2, f64; vs LAPACK `dgesvd`/`dgesdd` + Eigen `BDCSVD`):**
+- **`svdvals` (reduction-dominated) now BEATS both LAPACK references at every N≥128:**
+  vs `dgesvd` **3.6× @128 · 2.1× @256 · 1.8× @512 · 1.3–1.5× @1024**; vs `dgesdd`
+  comparable; vs Eigen `BDCSVD` **2.0–6.5×**. The headline **@512 went 156 ms → ~26 ms
+  (≈6×)**, and **@1024 flipped from 0.94× (losing) to 1.3–1.5× (winning)**. The reduction
+  is the O(n³) cost (97% at N=1024; `dlasq2` ~3%); the win = SIMD panel + parallel trailing
+  GEMM beating LAPACK's serial-SIMD panel. Accuracy: val err ~1e-13.
+- **Full SVD (values + vectors): beats `dgesvd` at N=128/256 (1.1–1.5×), still loses to the
+  D&C references (`BDCSVD`/`dgesdd`) at scale** (C/`dgesdd` 0.41 @256, 0.15 @512). This is
+  NOT the reduction (svdvals proves it wins) — it is the **serial `dbdsqr` O(n³) vector
+  sweep**, the exact D&C-class gap MRRR hit vs `dstedc`. Closing it is **v3b-1b-perf**
+  (parallel split-block dbdsqr) and **v3b-2** (Gu-Eisenstat D&C `dbdsdc` vs SVD-via-MRRR),
+  the next leaves — not this one. Filed `v3b-1a-perf-followon-parallel-panel` (parallelize
+  the two big panel matvecs across cores — the LAPACK-serial Amdahl part — for an even
+  bigger values crush; deferred, ~40% panel is BLAS-2 serial at N=1024) and
+  `v3b-1a-perf-followon-dot_simd-consolidate-eig_sym` (eig_sym's local simd_dot/simd_axpy
+  duplicate the now-canonical header; mechanical dedup).
+
+§19 ✅ Accepted — v3b-1a-perf (blocked `dlabrd`/`dgebrd`) closed; the SVD reduction beats
+LAPACK + Eigen at all N. Full-SVD-at-scale crush deferred to v3b-1b-perf / v3b-2.
+
+## §20 Amendment (2026-05-23) — v3b-1b-perf vector-path crush via blocked dorgbr
+
+Profiling the full-SVD vector path at N=512 (the gap §19 left open) split the 690 ms total
+into: bidiag 22 ms (3%, already blocked), **form_q + form_pt 335 ms (49%)** at ~1.5 GFLOPS
+(serial scalar reflector-apply), **`dbdsqr` 337 ms (49%)**. The elite fix for the
+forming-half is NOT "parallelize the scalar loop" (P× of a slow memory-bound floor) but
+**blocked `dorgbr` (BLAS-3 compact-WY)** — what LAPACK does — mirroring the v3b-1a-perf
+reduction. New `detail/orgbr.hpp` (`orgbr_q` builds U=Q from the left reflectors; `orgbr_p`
+builds VT=Pᵀ from the right reflectors) + shared `detail/block_reflector.hpp`
+(`build_block_t_from_vtv`, the `dlarft` factor). Scalar paths kept for n ≤ 2·nb (nb=32) and
+as the test oracle. Parallelism rides the existing MT `gemm_parallel_auto` in the apply.
+
+**D(svd)-7 — forming Q applies (I − V T Vᵀ) with T, not Tᵀ.** `qr.cpp`'s compact-WY apply
+uses **Tᵀ** because QR factorization applies `Q_panelᵀ` to reduce A→R; forming the
+orthogonal factor itself is the OPPOSITE direction and uses **T**. (Empirically: Tᵀ produced
+exactly Qᵀ — the transpose of the intended factor.)
+
+**D(svd)-8 — `build_block_t_from_vtv` zeros the strict-lower triangle.** `dlarft`'s T is
+upper-triangular and the routine only writes the upper + diagonal. `qr.cpp` relied on the
+strict-lower staying at its zero-init value via a CONSTANT block stride; `orgbr` reuses one
+T buffer across blocks of VARYING width (partial last block), so a stale strict-lower would
+feed garbage to the `T·W` GEMM (which reads the full nb×nb T). The builder now zeros the
+strict-lower explicitly — clean T regardless of caller buffer reuse (harmless for qr).
+
+**D(svd)-9 — `orgbr_p` transpose-trick (reuse the columnwise Q machinery for the rowwise
+P).** The right reflector G(g) (unit at column g+1, tail in row g), read as a COLUMN vector,
+is identical to a columnwise reflector C(g) with unit at row g+1. So `P = C(0)…C(n−2)` is a
+columnwise product: build `M = P` with the exact `orgbr_q` block-WY apply (a +1 row offset,
+reading the tail along a matrix row), then `VT = Mᵀ`. No separate rowwise `dorglq` path.
+
+**Parallel `dbdsqr` SKIPPED (scope decision, advisor + user 2026-05-23).** dorgbr alone is
+the v3b-1b-perf win: it flips **C/`dgesvd` 0.81 → 1.45** — we now beat LAPACK's dbdsqr-CLASS
+routine (the direct algorithmic peer). A per-`dlasr` parallel `dbdsqr` would (a) exhaust the
+1 MB per-thread frame arena (~1000–2000 sweeps × 2 `dlasr` × JobDecl allocs, reclaimed only
+on `frame_reset`) and (b) at best TIE BDC/`dgesdd` (parallelizing an O(n³) memory-bound
+sweep cannot beat an O(n²) D&C). The crush vs the D&C references is **v3b-2** (Gu-Eisenstat
+`dbdsdc`); `dbdsqr` stays the small-N fallback inside D&C where its cost is negligible.
+
+**Performance (i9-14900K AVX2, f64, N=512):** form_q+form_pt **335 → 12 ms (28×)**; full SVD
+**690 → 378 ms**; **C/`dgesvd` 0.81 → 1.45 (beats LAPACK dbdsqr-class)**, C/BDCSVD 0.17 →
+0.24, C/`dgesdd` 0.15 → 0.27. Recon ~2.7e-14, 303 SVD assertions green; blocked dorgbr
+validated against the scalar reflector-apply oracle at multi-panel sizes (m=n and m>n).
+
+Filed follow-ons: `v3b-1b-perf-followon-qr-block_reflector-consolidate` (migrate `qr.cpp`'s
+local `build_block_t_from_vtv` / `materialize_panel_v` to the shared `block_reflector.hpp` —
+the dot_simd-consolidate precedent); `v3b-2-svd-via-mrrr` (the deferred novel fork — form
+`J=[[0 Bᵀ][B 0]]` + parallel MRRR, gated on the exact-±σ-multiplicity perfect-shuffle
+extraction; pursue only if Gu-Eisenstat D&C does not reach the crush).
+
+§20 ✅ Accepted — v3b-1b-perf closed via blocked dorgbr; full SVD beats LAPACK `dgesvd`.
+Parallel dbdsqr skipped (arena hazard + at-best-tie); the BDC/`dgesdd` crush is v3b-2.

@@ -35,6 +35,22 @@ move to a session log entry and remove from here.
 > (ray-vs-handle hit-testing + drag-state machine + axis-locked
 > translation) consumed by sandbox + future editor.
 >
+> **Architecture written up 2026-05-22 → `docs/phases/phase-ui-tooling.md`**
+> ("Cerid UI & Tooling Architecture — `crd-ui` · gizmos · editor overlays").
+> Elite design captured: **two worlds** (document vs transient tooling world —
+> gizmos/editor-UI are `EditorOnly`-tagged entities, hidden from the scene-tree
+> panel, not saved, not in the user's undo stack); the **Logic / Visual /
+> Command triple** (gizmo = a System + a swappable Visual [entities OR
+> `crd-geometry-viz` immediate-draw] + a committed command-verb); gizmos and UI
+> are the same pattern (entities + systems + command-verbs); lifecycle
+> (selection→spawn→drag→commit-one-command-on-release); hit-test reuses
+> `crd-geometry-spatial`; elite traps (constant screen-size, overlay-pass depth,
+> pointer-capture, selection-as-shared-state, gizmo-never-the-only-path). UI
+> rendering = screen-space 2D frame-graph pass vs worldspace renderable;
+> shader/resource changes ADDITIVE not structural; `crd-font` (MSDF) is the real
+> new substrate. Sequences after renderer + `crd-font` + `crd-scene` + the
+> command layer (`docs/phases/phase-4.0-platform.md`).
+>
 > **Sequencing:** undecided. Slots in EITHER after `crd-hesap-dense` v0
 > + Phase 3.1 eylem v1c-resume (consumer-pull from eylem's
 > collider/joint editors) OR before, depending on when editor UX
@@ -98,6 +114,32 @@ move to a session log entry and remove from here.
 > count and CAMD's degree accounting is correct. ~150 LOC, uncertain but likely
 > flips bcsstk25. **Real trigger:** a v5 sparse-direct benchmark showing ND-fill
 > (not the numeric kernels) is the bottleneck on a multi-DOF FEM workload.
+
+### `v3b-1b-perf-followon-qr-block_reflector-consolidate` — unify qr.cpp + orgbr WY helpers — filed 2026-05-23
+
+> **Mechanical dedup, NOT a defect.** v3b-1b-perf added shared
+> `detail/block_reflector.hpp::build_block_t_from_vtv` (the `dlarft` factor) and
+> uses it from `detail/orgbr.hpp`. `qr.cpp` still carries its own local copies of
+> `build_block_t_from_vtv` + `materialize_panel_v` (anonymous-namespace, identical
+> logic). Migrate qr.cpp to the shared header to remove the duplication — the same
+> promote-then-consolidate pattern already filed for `dot_simd`
+> (`v3b-1a-perf-followon-dot_simd-consolidate-eig_sym`). Low risk (relocate
+> identical code; qr ctests gate it); deferred to keep the v3b-1b-perf slice's
+> blast radius tight while the v3a-3/v3b tree is uncommitted.
+
+### `v3b-2-svd-via-mrrr` — novel D&C-alternative SVD fork — filed 2026-05-23
+
+> **Deferred research fork, NOT scope reduction.** The v3b-2 locked design flagged
+> two routes to the full-SVD-at-scale crush: (1) Gu-Eisenstat D&C `dbdsdc`
+> (chosen — the references' own algorithm, mirrors the winning Cuppen eigensolver),
+> and (2) **SVD-via-MRRR** — form `J=[[0 Bᵀ][B 0]]` (2n×2n symmetric tridiagonal,
+> ±σ eigenvalue pairs) and run the parallel MRRR (which already crushes LAPACK on
+> the eigenvector path). The blocker: J's eigenvalues are EXACT ±σ multiples (every
+> σ appears twice) → MRRR's cluster loop can't separate exact multiples → Gram-
+> Schmidt fallback for every value defeats the O(n²) win. It needs a bespoke
+> perfect-shuffle extraction (`[u;±v]/√2`) — a new driver, genuinely novel, real
+> rabbit-hole risk. **Pursue only if Gu-Eisenstat D&C (v3b-2) does not reach the
+> crush** (unlikely — Cuppen D&C already beats both Eigen + LAPACK).
 
 ### `v2c-small-n-analyze-constant-factor` — symbolic analysis 0.80× Eigen at n=2003 — filed 2026-05-21
 

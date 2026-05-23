@@ -1,14 +1,15 @@
 ﻿# Phase 4 — Extensibility + Networking
 
-**Status:** ⏳ planned
+**Status:** ⏳ planned — **partially superseded; see notes below.**
 
-Cerid stops being "the engine" and becomes "the substrate other people
-build on." Phase 4 also adds the networking layer that unlocks multi-user,
-multi-node, and connected-simulation use cases.
+> **Restructured 2026-05-22.** This file's original §4.0 (scripting) and §4.1 (advanced math) are superseded:
+> - **§4.0 C++ hot-reload scripting** → folded into the consolidated **`docs/phases/phase-4.0-platform.md`** (Cerid Platform Layer: reflection + command interface + scripting + agents), which unifies it with ADR-0081 (agent-native CLI/RPC/MCP) and the reflection-codegen + ECS-scripting + packaging additions. The §4.0 table below is retained for history only.
+> - **§4.1 Advanced math** → **obsolete**: entirely absorbed by **Phase 3.1.6 `crd-hesap`** (the elite numerical substrate; far beyond this stub's scope).
+> - **§4.2 Networking** → still live; remains here (re-home as its own phase when it nears).
 
 ## Slices
 
-### 4.0 — C++ hot-reload scripting
+### 4.0 — C++ hot-reload scripting  *(superseded — see `phase-4.0-platform.md`; retained for history)*
 
 | Slice | Module / Topic                       | Notes                                                                          |
 | :---: | ------------------------------------ | ------------------------------------------------------------------------------ |
@@ -16,7 +17,7 @@ multi-node, and connected-simulation use cases.
 | 4.0b  | C ABI plugin boundary                | stable versioned C facade; all persistent state lives in engine-owned memory   |
 | 4.0c  | scripting cookbook                   | published patterns: gameplay tick, custom layers, asset hooks                  |
 
-### 4.1 — Advanced math
+### 4.1 — Advanced math  *(OBSOLETE — absorbed by Phase 3.1.6 `crd-hesap`)*
 
 | Slice | Module / Topic                       | Notes                                                                          |
 | :---: | ------------------------------------ | ------------------------------------------------------------------------------ |
@@ -25,7 +26,7 @@ multi-node, and connected-simulation use cases.
 | 4.1c  | `crd-math` parallel solvers          | task-graph driven via `crd-jobs`; SIMD specialization                          |
 | 4.1d  | `crd-math` robust geometry           | exact predicates, clipping, hulls, intersection robustness                     |
 
-### 4.2 — Networking
+### 4.2 — Networking  *(live)*
 
 | Slice | Module / Topic                       | Notes                                                                          |
 | :---: | ------------------------------------ | ------------------------------------------------------------------------------ |

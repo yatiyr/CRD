@@ -21,6 +21,8 @@ add_executable(crd-hesap-dense-tests
     test_random_property.cpp
     test_eig_sym.cpp
     test_eig_dc.cpp
+    test_mrrr_eigenvalues.cpp
+    test_svd.cpp
 )
 
 target_link_libraries(crd-hesap-dense-tests PRIVATE

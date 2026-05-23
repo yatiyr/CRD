@@ -55,6 +55,26 @@ template <typename T>
 [[nodiscard]] EigSym<T> eig_sym(crd::memory::IAllocator* alloc, const Symmetric<T>& a);
 
 // =======================================================================
+// eigvals_sym — eigenvalues ONLY (ascending) of a real symmetric matrix, via
+// blocked Householder tridiagonalization + the MRRR **dqds** whole-block
+// engine (v3a-3.1: `detail/dqds.hpp`). High *relative* accuracy, O(n²) on the
+// tridiagonal (vs eig_sym's QL/D&C vector path). Real f32/f64. Ill-conditioned
+// blocks fall through to Sturm-count bisection internally.
+// =======================================================================
+template <typename T>
+[[nodiscard]] Vector<RealType<T>> eigvals_sym(crd::memory::IAllocator* alloc, const Symmetric<T>& a);
+
+// =======================================================================
+// eig_sym_mrrr — full symmetric eigendecomposition via MRRR (v3a-3): blocked
+// dsytrd → dqds eigenvalues → MRRR tridiagonal eigenvectors (twisted
+// factorizations, O(n²), cluster-robust — `detail/mrrr_vectors.hpp`) →
+// back-transform V = Q·Z. The O(n²) vector path replaces D&C's O(n³) merges.
+// Real f32/f64. Same EigSym<T> result as eig_sym; ascending values.
+// =======================================================================
+template <typename T>
+[[nodiscard]] EigSym<T> eig_sym_mrrr(crd::memory::IAllocator* alloc, const Symmetric<T>& a);
+
+// =======================================================================
 // Lower-level pieces (exposed for testing + reuse by v3a-2/v3a-1b).
 // =======================================================================
 

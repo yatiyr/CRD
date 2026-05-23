@@ -28,6 +28,14 @@
 #   .\scripts\full-sweep.ps1 -SkipLinux      # Win only (faster local check)
 #   .\scripts\full-sweep.ps1 -SkipWin        # Linux only (CI-mirror lane)
 #   .\scripts\full-sweep.ps1 -Reconfigure    # blow away build dirs first
+#   .\scripts\full-sweep.ps1 -BuildJobs 8    # cap Ninja to 8 threads/build (Win+WSL)
+#
+# -BuildJobs caps the per-build Ninja thread count via CMAKE_BUILD_PARALLEL_LEVEL.
+# Default = half the logical cores. This is a HARDWARE-STABILITY guard, not a speed
+# knob: the i9-14900K host bugchecks (0xA) under sustained all-core builds (Raptor
+# Lake Vmin-shift instability). The 18-config sweep is the single heaviest, longest
+# all-core load we run, so the cap matters most here. 0 = uncapped (old behaviour).
+# See CLAUDE.md Troubleshooting "Host instability".
 #
 # Exit code: 0 if every step PASSed, non-zero (count of failures) otherwise.
 
@@ -38,6 +46,10 @@ param(
     [switch]$Reconfigure,
     [switch]$SkipSandboxSmoke,
     [double]$SandboxSmokeDurationSeconds = 3.0,
+    # Cap Ninja threads per build (CMAKE_BUILD_PARALLEL_LEVEL) on both Win and WSL.
+    # Default = half the logical cores. Hardware-stability guard for the i9-14900K
+    # host (Raptor Lake instability). 0 = uncapped. See CLAUDE.md "Host instability".
+    [int]$BuildJobs = [Math]::Max(1, [int]([Environment]::ProcessorCount / 2)),
     [string]$VcvarsPath = 'C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat',
     [string]$AsanRuntimeDir = 'C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.50.35717\bin\Hostx64\x64'
 )
@@ -141,11 +153,15 @@ foreach ($k in $results.Keys) { Write-Host ("CRD_RESULT {0} {1}" -f $k, $results
     $repoRootEsc   = $repoRoot.Replace('\', '/')
 
     # Bat shim sources vcvars + ASan PATH then runs the PS script.
+    # CMAKE_BUILD_PARALLEL_LEVEL caps Ninja for every `cmake --build` in the inner
+    # win script (none pass explicit --parallel). Integer-only — no quoting hazard.
+    $buildJobsEnvLine = if ($BuildJobs -gt 0) { "set ""CMAKE_BUILD_PARALLEL_LEVEL=$BuildJobs""" } else { "rem CMAKE_BUILD_PARALLEL_LEVEL uncapped (-BuildJobs 0)" }
     $batShim = Join-Path $repoRoot 'scripts\.full-sweep-win-tmp.bat'
     @"
 @echo off
 call "$VcvarsPath" >NUL
 set "PATH=$AsanRuntimeDir;%PATH%"
+$buildJobsEnvLine
 powershell -NoProfile -ExecutionPolicy Bypass -Command "`$USE_RECONFIGURE = $reconfFlag; `$SKIP_SANDBOX = $skipSandFlag; `$SMOKE_DURATION = $smokeSecs; `$REPO_ROOT = '$repoRootEsc'; & '$winSweepScript'"
 exit /b %ERRORLEVEL%
 "@ | Out-File -FilePath $batShim -Encoding ascii
@@ -193,6 +209,9 @@ if (-not $SkipLinux) {
         # parameter (which is `Preset`), tripping its ValidateSet.
         $wslArgs = @{Preset = $p}
         if ($Reconfigure) { $wslArgs['Reconfigure'] = $true }
+        # Same Raptor Lake stability cap applies to WSL builds — they run on the
+        # same physical CPU. wsl-build.ps1 exports CMAKE_BUILD_PARALLEL_LEVEL.
+        if ($BuildJobs -gt 0) { $wslArgs['BuildJobs'] = $BuildJobs }
         # Defensive: clear $LASTEXITCODE before the call so a PowerShell-
         # side error (e.g. parameter binding failure that prevents the
         # target script from ever running) is caught via $? rather than

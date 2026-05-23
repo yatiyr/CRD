@@ -35,6 +35,14 @@
 #                                                  — recommended for any slice
 #                                                  touching virtual interfaces
 #                                                  or heavily-templated code.
+#   .\scripts\per-slice-check.ps1 -BuildJobs 8   # cap Ninja to 8 threads per build.
+#                                                  Default = half the logical cores.
+#                                                  Lowers peak all-core CPU load —
+#                                                  REQUIRED on the i9-14900K host
+#                                                  (Raptor Lake instability; see
+#                                                  CLAUDE.md Troubleshooting "Host
+#                                                  instability"). 0 = uncapped (the
+#                                                  old all-core behaviour).
 #
 # Exit code: 0 if every requested config passed, count of failures otherwise.
 
@@ -47,6 +55,12 @@ param(
     [switch]$Parallel,
     [switch]$IncludeRelease,
     [int]$ParallelJobs = 0,
+    # Cap Ninja's thread count per `cmake --build` (sets CMAKE_BUILD_PARALLEL_LEVEL).
+    # Default = half the logical processors, to leave the host headroom. This is a
+    # HARDWARE-STABILITY guard, not a speed knob: the i9-14900K host suffers Raptor
+    # Lake Vmin-shift instability and bugchecks (0xA) under sustained all-core builds.
+    # See CLAUDE.md Troubleshooting "Host instability". 0 = uncapped (old behaviour).
+    [int]$BuildJobs = [Math]::Max(1, [int]([Environment]::ProcessorCount / 2)),
     [string]$VcvarsPath = 'C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat',
     [string]$AsanRuntimeDir = 'C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.50.35717\bin\Hostx64\x64',
     [string]$VswhereDir = 'C:\Program Files (x86)\Microsoft Visual Studio\Installer'
@@ -67,6 +81,14 @@ if ($Parallel)
     Write-Host '====================================================================' -ForegroundColor Cyan
     Write-Host '  PER-SLICE VERIFICATION (parallel mode)                            ' -ForegroundColor Cyan
     Write-Host '====================================================================' -ForegroundColor Cyan
+    Write-Host ''
+    Write-Host '  WARNING: -Parallel stacks config-level build jobs on top of each' -ForegroundColor Yellow
+    Write-Host '  config''s Ninja threads - the heaviest all-core load this script can' -ForegroundColor Yellow
+    Write-Host '  produce. On the i9-14900K host this is the workload most likely to' -ForegroundColor Yellow
+    Write-Host '  trip a Raptor Lake bugcheck (0xA). Prefer the sequential default.' -ForegroundColor Yellow
+    Write-Host '  See CLAUDE.md Troubleshooting "Host instability". Per-job threads' -ForegroundColor Yellow
+    Write-Host '  are clamped to -BuildJobs below.' -ForegroundColor Yellow
+    Write-Host ''
 
     $presets = @(@{ name = 'win-debug'; runCTest = $true; asan = $false })
     if (-not $SkipAsan)     { $presets += @{ name = 'win-asan';     runCTest = $true;  asan = $true  } }
@@ -78,6 +100,9 @@ if ($Parallel)
     # CPU pressure is bounded. Override via -ParallelJobs.
     $totalCpu = [Environment]::ProcessorCount
     $perJobJobs = if ($ParallelJobs -gt 0) { $ParallelJobs } else { [Math]::Max(1, [Math]::Floor($totalCpu / $presets.Count)) }
+    # Hardware-stability clamp: never let a per-job thread count exceed -BuildJobs,
+    # so the warning above is not load-bearing. -BuildJobs 0 disables the clamp.
+    if ($BuildJobs -gt 0) { $perJobJobs = [Math]::Min($perJobJobs, $BuildJobs) }
 
     $logsDir = Join-Path $repoRoot 'scripts\.per-slice-logs'
     if (-not (Test-Path $logsDir)) { New-Item -ItemType Directory -Force $logsDir | Out-Null }
@@ -179,6 +204,11 @@ $reconfigStr = if ($Reconfigure.IsPresent) { '$true' } else { '$false' }
 Write-Host '====================================================================' -ForegroundColor Cyan
 Write-Host '  PER-SLICE VERIFICATION                                            ' -ForegroundColor Cyan
 Write-Host '====================================================================' -ForegroundColor Cyan
+if ($BuildJobs -gt 0) {
+    Write-Host ("  Ninja capped to {0} threads/build (CPUs={1}) - Raptor Lake stability guard." -f $BuildJobs, [Environment]::ProcessorCount) -ForegroundColor DarkCyan
+} else {
+    Write-Host '  Ninja UNCAPPED (-BuildJobs 0) - all cores. Host-instability risk on i9-14900K.' -ForegroundColor Yellow
+}
 
 # Inline script run under vcvars-sourced cmd so Ninja + cl.exe + clang-cl are on PATH.
 # Done as a temp file to avoid nested-quoting nightmares (same pattern as full-sweep.ps1).
@@ -243,9 +273,14 @@ foreach (`$k in `$results.Keys) {
 exit `$failedCount
 "@ | Out-File -FilePath $tmpScript -Encoding utf8
 
+# CMAKE_BUILD_PARALLEL_LEVEL caps Ninja for every `cmake --build` in the inner
+# script (which passes no explicit --parallel). Integer-only — no quoting hazard.
+$buildJobsEnvLine = if ($BuildJobs -gt 0) { "set ""CMAKE_BUILD_PARALLEL_LEVEL=$BuildJobs""" } else { "rem CMAKE_BUILD_PARALLEL_LEVEL uncapped (-BuildJobs 0)" }
+
 @"
 @echo off
 set "PATH=$VswhereDir;%PATH%"
+$buildJobsEnvLine
 call "$VcvarsPath" >nul
 if errorlevel 1 exit /b 1
 powershell -NoProfile -ExecutionPolicy Bypass -File "$tmpScript"

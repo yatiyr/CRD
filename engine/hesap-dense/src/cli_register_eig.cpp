@@ -29,6 +29,8 @@ using crd::hesap::cli::ResultError;
 using crd::hesap::Complex;
 using crd::hesap::dense::eig_herm;
 using crd::hesap::dense::eig_sym;
+using crd::hesap::dense::eig_sym_mrrr;
+using crd::hesap::dense::eigvals_sym;
 using crd::hesap::dense::Hermitian;
 using crd::hesap::dense::Symmetric;
 
@@ -83,6 +85,66 @@ CommandResult impl_eig_sym(const CommandArgs& args)
     for (crd::usize i = 0; i < nn; ++i)
     {
         out.push_back(static_cast<crd::f64>(eig.values.data()[i]));
+    }
+    return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
+}
+
+// Full eigendecomposition via MRRR (v3a-3): same input shape as eig.sym; returns
+// the n ascending eigenvalues as an f64 blob (vectors available via the engine).
+template <typename T>
+CommandResult impl_eig_sym_mrrr(const CommandArgs& args)
+{
+    const auto a_flat = args.get_f64_array("A");
+    const auto n = args.get_u64("n").value_or(crd::u64{0});
+    if (n == 0 || a_flat.size() != n * n)
+    {
+        return error_result(args.alloc, "eig.sym.mrrr: A=n*n (symmetric, lower-half), n required");
+    }
+    const crd::usize nn = static_cast<crd::usize>(n);
+    Symmetric<T> a_sym(args.alloc, nn);
+    for (crd::usize i = 0; i < nn; ++i)
+    {
+        for (crd::usize j = 0; j <= i; ++j)
+        {
+            a_sym.at(i, j) = static_cast<T>(a_flat[i * nn + j]);
+        }
+    }
+    const auto eig = eig_sym_mrrr<T>(args.alloc, a_sym);
+    crd::containers::Array<crd::f64> out(args.alloc);
+    out.reserve(nn);
+    for (crd::usize i = 0; i < nn; ++i)
+    {
+        out.push_back(static_cast<crd::f64>(eig.values.data()[i]));
+    }
+    return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
+}
+
+// Eigenvalues-only via the fast MRRR dqds path (v3a-3.1). Same input shape as
+// eig.sym; returns the n ascending eigenvalues as an f64 binary blob.
+template <typename T>
+CommandResult impl_eigvals_sym(const CommandArgs& args)
+{
+    const auto a_flat = args.get_f64_array("A");
+    const auto n = args.get_u64("n").value_or(crd::u64{0});
+    if (n == 0 || a_flat.size() != n * n)
+    {
+        return error_result(args.alloc, "eigvals.sym: A=n*n (symmetric, lower-half), n required");
+    }
+    const crd::usize nn = static_cast<crd::usize>(n);
+    Symmetric<T> a_sym(args.alloc, nn);
+    for (crd::usize i = 0; i < nn; ++i)
+    {
+        for (crd::usize j = 0; j <= i; ++j)
+        {
+            a_sym.at(i, j) = static_cast<T>(a_flat[i * nn + j]);
+        }
+    }
+    const auto vals = eigvals_sym<T>(args.alloc, a_sym);
+    crd::containers::Array<crd::f64> out(args.alloc);
+    out.reserve(nn);
+    for (crd::usize i = 0; i < nn; ++i)
+    {
+        out.push_back(static_cast<crd::f64>(vals.data()[i]));
     }
     return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
 }
@@ -169,6 +231,34 @@ CRD_HESAP_CLI_REGISTER_MODULE([](CommandRegistry& reg) {
         add_param(s, alloc, "A", "Symmetric A flattened (n*n); lower triangle used", ParamKind::F64,
                   true);
         reg.register_command(std::move(s), &impl_eig_sym<crd::f64>);
+    }
+    {
+        auto s = make_schema(alloc, "hesap.dense.eigvals.sym.f32",
+                             "Symmetric eigenvalues only (ascending) via fast MRRR dqds (f32; lower triangle).");
+        add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
+        add_param(s, alloc, "A", "Symmetric A flattened (n*n); lower triangle used", ParamKind::F64, true);
+        reg.register_command(std::move(s), &impl_eigvals_sym<crd::f32>);
+    }
+    {
+        auto s = make_schema(alloc, "hesap.dense.eigvals.sym.f64",
+                             "Symmetric eigenvalues only (ascending) via fast MRRR dqds (f64; lower triangle).");
+        add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
+        add_param(s, alloc, "A", "Symmetric A flattened (n*n); lower triangle used", ParamKind::F64, true);
+        reg.register_command(std::move(s), &impl_eigvals_sym<crd::f64>);
+    }
+    {
+        auto s = make_schema(alloc, "hesap.dense.eig.sym.mrrr.f32",
+                             "Symmetric eigenvalues (ascending) via MRRR (f32; lower triangle).");
+        add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
+        add_param(s, alloc, "A", "Symmetric A flattened (n*n); lower triangle used", ParamKind::F64, true);
+        reg.register_command(std::move(s), &impl_eig_sym_mrrr<crd::f32>);
+    }
+    {
+        auto s = make_schema(alloc, "hesap.dense.eig.sym.mrrr.f64",
+                             "Symmetric eigenvalues (ascending) via MRRR (f64; lower triangle).");
+        add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
+        add_param(s, alloc, "A", "Symmetric A flattened (n*n); lower triangle used", ParamKind::F64, true);
+        reg.register_command(std::move(s), &impl_eig_sym_mrrr<crd::f64>);
     }
     {
         auto s = make_schema(
