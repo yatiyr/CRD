@@ -258,10 +258,12 @@ determinism + replay tests.
 | ↳ **v3d-1c-2** ✅ 2026-05-23 | **AED deflation window** (`dlaqr2`). `aed_deflate`: window [kwtop,kbot] Schur via the shipped `real_schur`, spike `S·V(1,:)` (S = H(kwtop,kwtop−1)), deflation loop from the bottom — deflatable iff `|S·V(1,j)| ≤ max(smlnum, ulp·|T(j,j)|)` (2×2: both components) else `reorder_schur` moves it up; then reflect the spike (Householder) + re-Hessenbergize the leading block (`hessenberg`+form-Q) + copy the window back + **global similarity updates** of H/Z via gemm slabs; returns {ns shifts, nd deflated}. Faithful `dlaqr2` (bubble-sort accuracy step skipped — optional, not correctness). **Gate MET: a decoupled trailing window deflates fully (nd==nw, ns==0); on a general window similarity `H0=Z·H·Zᵀ` <1e-8 AND the spectrum is invariant (eig(h)==eig(h0) <1e-7); nd+ns==nw; 2 cases / 252 assertions; 4-config DoD.** | ~430 | 2 / 252 | — |
 | ↳ **v3d-1c-3** ⭐ ✅ 2026-05-23 — **HARD-GATE MET** | **AED driver + the hard-gate close.** `schur_aed` (LAPACK `dlaqr0`-class driver): loop = split active block → AED via `aed_deflate` (deflate a whole trailing window) → nibble (re-AED if productive) → double-shift QR `dshift_sweep` using the undeflated AED eigenvalues as shifts → dispatch to `real_schur` (dlahqr) below the NMIN=200 crossover (+ stall fallback). Reuses `dlanv2`/reflectors + `real_schur` + `reorder_schur`. Reports the QR-sweep count. **HARD-GATE MET (bench `bench_hesap_eig_nonsym_vs_reference`, i9-14900K AVX2, f64, Schur-from-Hessenberg): schur_aed beats Eigen `RealSchur` 1.17–1.74× AND LAPACK `dhseqr` 1.26–1.97× at EVERY N (100/200/400); at n=400 AED engages (184 sweeps) and beats pure-dlahqr 1.53× / Eigen 1.74× / dhseqr 1.34×; recon ~1e-13.** Gate (correctness): AED-driven Schur == pure-dlahqr spectrum + recon `H=Z·T·Zᵀ` <1e-7 (n=40/140/260); 1 case / 43 766 assertions; 4-config DoD. **D(non-sym)-2** (window nw=min(nh, max(2, nh/3))), **D(non-sym)-3** (shifts = undeflated AED eigenvalues, consecutive pairs). Inter-AED sweep is the Francis double-shift `dshift_sweep` (NMIN=200 crossover); AED already beats Eigen + LAPACK at every measured N. | ~520 | 1 / 43 766 | — |
 | ↳ **v3d-1c-4** ✅ 2026-05-23 — **CLOSED (M1+M2+M3)** | **`dlaqr5` small-bulge multishift QR sweep — replaces the Francis double-shift inter-AED sweep.** Pack `ns` shifts (conjugate pairs) into `nbmps=ns/2` bulges chased as a TRAIN down the diagonal; **accumulate the per-window 3×3 reflectors into a small `kdu×kdu` orthogonal `U`, then update the far off-diagonal slabs by a single `gemm` each via `slab_right`/`slab_left_t`** — the BLAS-3 arithmetic-intensity lever (same accumulate-then-gemm pattern AED already uses for its window Schur). Reuses `make_householder`/`dlaqr1`. **M1 ✅ 2026-05-23** — full faithful `dlaqr5` port landed (general `ns`, KACC22=1 accumulate-into-`U` + gemm slab updates, 1-based internal like the `dtrexc` port, incl. the BMP22 2×2 endgame + bulge-collapse/reinflate). Exposed as `detail::multishift_sweep` (the anon `dlaqr5_sweep`), NOT yet on the driver path. **Gate MET (rigorous implicit-Q characterization — algorithm-independent, since `dshift_sweep` early-starts the bulge so bit-equivalence only holds when paths align): for ns=2, the swept matrix is an orthogonal SIMILARITY `h0=Z·Hb·Zᵀ` (<1e-9), `Z` orthonormal, `Hb` upper-Hessenberg, AND `Z·e1 ∝` the shift-polynomial first column `(H−s1)(H−s2)e1` (<1e-9) = THE double-shift sweep; n=12/60/200 whole-matrix + a decoupled sub-block (ktop=3,kbot=35) case; n=12 bit-matches `dshift_sweep` to 2e-13 when paths align.** Latent KACC22 bug found+fixed on encounter (in-slab left update must stop at MIN(NDCOL,KBOT), not nn — the sub-block double-apply). `[multishift]` 15 assertions / 2 cases; full `[nonsym]` 242 779 assertions regression-free; win-debug + win-tidy clean. **M2 ✅ 2026-05-23** — the general port already handled `nbmps≥2` (M2 was test-only, no library change): `ns=4` (nbmps=2) + `ns=6` (nbmps=3), n=12/60, exercising the multi-bulge chain + U-accumulation + inter-bulge delayed updates + BMP22-with-chain. Gate MET via implicit-Q with the **degree-`ns` shift polynomial** `Q·e1 ∝ ∏_pairs(H²−sum·H+prod·I)·e1` (<1e-9) + similarity + orthonormal + Hessenberg. `[multishift]` 31 assertions / 3 cases; full `[nonsym]` 242 795 assertions regression-free; win-tidy clean. **M3 ✅ 2026-05-23** — wired into the live `schur_aed`: the `ns/2` separate single-bulge `dshift_sweep` calls are replaced by ONE `dlaqr5_sweep` train over all undeflated AED shifts; `total_sweeps` now counts train passes. Full `[nonsym]` suite (driver recon/spectrum gates n=40/140/260) regression-free; **4-config DoD green** (debug/shipping/asan `[nonsym]` 242 795 assertions each + tidy clean; CI owns the 18-config sweep). **Bench (`bench_hesap_eig_nonsym_vs_reference`, win-vs-ref Release, i9-14900K AVX2, f64): the train's advantage over Eigen `RealSchur` WIDENS monotonically with N — 1.85× (n=400) → 3.20× (n=800) → 3.99× (n=1200), in just 3/4/5 TRAIN PASSES (the train batches all shifts per pass, so pass count barely grows while Eigen's un-batched QR scales worse). vs LAPACK `dhseqr` 1.45–1.93× (capped at n≤400 — OpenBLAS-generic crashes >512); vs pure-dlahqr 1.61× at n=400; recon 9e-14→2.6e-13. (The n=400 cap in v3d-1c-3 hid this widening; the train is the BLAS-3 large-N lever.)** **NMIN decision = measurement-driven, kept at 200:** a controlled NMIN=60 run showed AED+train LOSES below 200 (n=100: 0.64× dlahqr / 0.83× Eigen = a hard-gate regression; n=400 itself regressed 80→89 ms) — the AED per-iteration overhead doesn't amortize for small blocks even with the BLAS-3 train, so the train's payoff is strictly the large-N regime. n≤200 stays on pure-dlahqr (beats Eigen 1.21×). **v3d-1c-4 CLOSED — the multishift train is the live AED sweep, hard-gate maintained + improved at scale.** | ~700 actual | 31 / (suite) | — |
-| ↳ **v3d-2** 🔄 **(v3d-2a ✅ 2026-05-24; v3d-2b next) — non-sym eigenvectors (3 sub-subslices ↓).** | Eigenvectors via Schur back-substitution (`dtrevc`) + **3-stage back-transform** + complex eigenvector assembly + complex non-sym Schur. Result API: `EigNonsym<T>` = `Vector<Complex<RealType<T>>> values` + `Matrix<Complex<RealType<T>>> vectors` (column k = eigenvector for values[k]; real matrices yield conjugate-pair complex eigenpairs). Built on the shipped real-Schur pipeline (balance/hessenberg/`schur_aed`). **Gate: vs Eigen `EigenSolver` (A·v=λ·v residual + eigenvalue match) + LAPACK `dgeev`/`zgeev`.** | ~1200 | ~35 | — |
+| ↳ **v3d-2** 🔄 **(v3d-2a ✅ 2026-05-24; v3d-2b ✅ 2026-05-24; v3d-2c next) — non-sym eigenvectors (3 sub-subslices ↓).** | Eigenvectors via Schur back-substitution (`dtrevc`) + **3-stage back-transform** + complex eigenvector assembly + complex non-sym Schur. Result API: `EigNonsym<T>` = `Vector<Complex<RealType<T>>> values` + `Matrix<Complex<RealType<T>>> vectors` (column k = eigenvector for values[k]; real matrices yield conjugate-pair complex eigenpairs). Built on the shipped real-Schur pipeline (balance/hessenberg/`schur_aed`). **Gate: vs Eigen `EigenSolver` (A·v=λ·v residual + eigenvalue match) + LAPACK `dgeev`/`zgeev`.** | ~1200 | ~35 | — |
 | ↳ **v3d-2a** ✅ 2026-05-24 — **eigenvectors of T (the core)** | **`dlaln2` + `dtrevc` SHIPPED.** `dlaln2` (faithful LAPACK port: 1×1/2×2 `(ca·A−w·D)·X=scale·B` real+complex, Gaussian elimination w/ complete pivoting via IPIVOT/RSWAP/ZSWAP on the column-major flat crv/civ, overflow scaling + smin floor, local Smith-robust `cdiv` for the complex divides). `dtrevc_right` (SIDE='R', HOWMNY='A', not back-transformed: column back-substitution over the quasi-triangular T, 1×1/2×2-block dispatch via `dlaln2`, real eigenvalue→real column, complex 2×2→packed re/im columns, ‖·‖∞ normalization). Exposed via `detail::lin_solve_2x2` + `detail::schur_right_eigvecs`. **Gates MET: `dlaln2` `(ca·op(A)−w·D)·X=scale·B` residual <1e-11 over 200 trials × na∈{1,2}×nw∈{1,2}×ltrans (4800 assertions); `dtrevc` `T·vₖ=λₖ·vₖ` rel-residual <1e-9 for EVERY eigenpair (real + complex, complex path asserted exercised) of random real Schur forms n=8/20/50.** 4-config DoD green (debug full 353 368 assertions / shipping / asan / tidy). | ~600 actual | 2 / 4809 | — |
-| ↳ **v3d-2b** 📋 PLANNED — **back-transform + public real `eig`** | **3-stage back-transform + the consumer API.** Back-transform the Schur-basis eigenvectors to the original A: `V = D⁻¹·P · Q · Z · V_schur` — (i) undo Schur (`Z·V_schur`, gemm), (ii) undo Hessenberg (apply the stored `form_hessenberg_q` reflectors / `Q·`), (iii) undo `balance` (diagonal scale `scale[i]` + the isolating permutation over [ilo,ihi] and the corners). Normalize each eigenvector (max-abs = 1, LAPACK convention) + pin sign/phase. Assemble the LAPACK-packed real columns into `Matrix<Complex<T>>`. Public **`eig(Matrix<T>)` → `EigNonsym<T>`** (full pipeline: balance → hessenberg → `schur_aed` → `dtrevc` → back-transform). CLI `eig.nonsym.{f32,f64}`. **Gate: vs Eigen `EigenSolver` — `‖A·vₖ − λₖ·vₖ‖ < 1e-9`, eigenvalues match sorted; vs LAPACK `dgeev`. Bench (the values-only Schur already crushes; vectors add the back-transform).** 4-config DoD. | ~400 | ~12 | — |
-| ↳ **v3d-2c** 📋 PLANNED — **complex non-sym Schur + complex `eig`** | **Complex `Matrix<Complex<T>>` input path (its own sub-slice — a full complex Schur, NOT a trivial fold).** Complex Hessenberg (`zgehrd`-class, reuse the complex-reduction substrate from v3a-2.5's `zhetd2` pattern) + complex Francis/AED Schur (`zhseqr`/`zlahqr` — single-shift, no 2×2 blocks since complex eigenvalues are on the diagonal) + complex `ztrevc` eigenvectors + complex back-transform. c32/c64. **Gate: vs Eigen complex `EigenSolver` + LAPACK `zgeev`; A=Q·T·Qᴴ recon.** **Honest scope flag:** this is comparable to the whole real v3d-1 Schur chain in complex arithmetic — likely its own multi-session effort; sequence after v3d-2a/b ship the real path. | ~800 | ~15 | — |
+| ↳ **v3d-2b** ✅ 2026-05-24 — **back-transform + public real `eig` — BEATS Eigen + LAPACK at every N** | **3-stage back-transform + the consumer API SHIPPED.** `EigNonsym<T>` (`Vector<Complex<RealType<T>>> values` + `Matrix<Complex<RealType<T>>> vectors`, Schur order). Public **`eig(Matrix<T>)`**: clone → `balance` → `hessenberg` + `form_hessenberg_q` → `schur_aed` (multishift-train AED: A_bal=(Q·Z)·T·(Q·Z)ᵀ) → `dtrevc` (`schur_right_eigvecs`) → back-transform `V = D⁻¹·P · Q · Z · V_schur`: (i) `Z·V_schur` + (ii) `Q·` via two gemms, (iii) **`gebak_right`** (faithful `dgebak` SIDE=R/JOB=B: row scale over [ilo,ihi] + isolating row permutation at the corners). All 3 stages real-linear ⇒ the `dtrevc` re/im column packing survives; complex pairs assembled + normalized only at the end. **D(non-sym)-4** (eigenvector norm = ‖·‖₂=1 + lowest-index largest-magnitude component phase-rotated real-positive — the LAPACK `dgeev`/Eigen convention; **supersedes the plan-row "max-abs=1" wording**, kept the gate clean). **D(non-sym)-5** (eigenpair order = Schur order from `schur_aed`, deterministic; complex spectra have no natural total order). CLI `hesap.dense.eig.nonsym.{f32,f64}` (interleaved [re,im] eigenvalues). **Gate MET decisively — residual `‖A·vₖ−λₖ·vₖ‖∞/‖vₖ‖∞` ~1e-13 (≪1e-9) for every eigenpair, eigenvalues match Eigen ~1e-13; the `dgebak` permutation + scaling branches exercised by corner-isolated + `A=D·B·D⁻¹` fixtures.** **Bench (`bench_hesap_eig_nonsym_vs_reference`, win-vs-ref, i9-14900K AVX2, f64, full eig values+vectors): BEATS Eigen `EigenSolver` at EVERY N — 1.09× (n=100), 1.08× (n=200), 1.65× (n=400) — AND crushes LAPACK `dgeev` 2.03×/3.04×/1.57×.** **Perf lever found by stage-timing: `form_hessenberg_q` (dorghr) was a scalar column-strided reflector apply = 3.35ms @ n=200 (the entire non-Schur cost, and the only thing losing to Eigen); rewrote the apply ROW-WISE (contiguous `simd_axpy`, same per-element accumulation order over r) → 0.58ms (5.8×), flipping n=100/200 from loss→win (the v3d-1a SIMD-row-wise lever, [[feedback_simd_rowwise_unblocked_beats_blocked_smallk]]). dtrevc (0.47ms) + the two gemms (0.57ms) were already cheap.** Full `[nonsym]` 247 624 assertions / 26 cases + 4 new `eig:` cases; 4-config DoD green (debug/shipping-LTCG/asan each 247 624 / tidy clean). (No open follow-on: we beat Eigen + LAPACK at every measured N. Eigen's fused dhseqr-Z-accumulation — one combined Q·Z back-transform vs our two gemms — would only widen the win further, but is NOT pursued: no loss to fix, and the two gemms are 0.57ms = negligible vs the schur cost.) | ~450 actual | 4 / (suite) | — |
+| ↳ **v3d-2c** 🔄 (2c-1 ✅ + 2c-2 ✅ 2026-05-24; **2c-2b next — see § "v3d-2c-2b — complex AED — DETAILED PLAN" below**; then 2c-3) — **complex non-sym Schur + complex `eig`** | **Complex `Matrix<Complex<T>>` input path (its own sub-slice — a full complex Schur, NOT a trivial fold).** Subdivision (advisor-vetted): **2c-1** complex Hessenberg (`zgehd2`) + unitary Q (`zunghr`); **2c-2** complex `zgebal` + single-shift `zlahqr` Schur (`ar`/`ai`→`Matrix<Complex>` converted once at entry, Schur onward uses `Complex<T>` arithmetic); **2c-2b** complex AED (`zlaqr`-class — EXPECTED, LAPACK `zhseqr` uses AED at n≥75, single-shift loses at scale); **2c-3** complex `ztrevc` + back-transform + public complex `eig` + CLI `eig.nonsym.{c32,c64}`. **Gate: vs Eigen complex `EigenSolver` + LAPACK `zgeev`; A=Q·T·Qᴴ recon.** Comparable to the whole real v3d-1 chain in complex arithmetic — multi-session. | ~800 | ~15 | — |
+| ↳ **v3d-2c-1** ✅ 2026-05-24 — **complex Hessenberg + unitary Q — BEATS Eigen + LAPACK (n≤128 measured regime)** | **`zgehd2` + `zunghr` on the two-real-array (`ar`/`ai`) SIMD path SHIPPED.** Unified `hessenberg<T>` / `form_hessenberg_q<T>` now dispatch real-vs-complex via `if constexpr`; the complex branch splits `Matrix<Complex<R>>` to `(ar, ai)` once (O(n²), ADR-0078 §5 lower layer), runs the SIMD reduction, recombines. Faithful **`make_householder_complex`** (`zlarfg`, real beta) promoted to the shared `detail/householder.hpp` (**deduped** `eig_herm`'s inline copy). Two-sided update faithful to zgehd2 order (RIGHT `A·H` then LEFT `Hᴴ·A`). **New fused complex SIMD substrate `detail/dot_simd_complex.hpp`** (`simd_cdot_nc`/`simd_caxpy`/`simd_caxpy_conjx`) — bit-identical to the 4-separate-pass form but reads each operand row ONCE; **8-wide (2× Vec4d, 8 FMA accumulators) for FMA-port ILP** — the 4-wide first cut REGRESSED (latency-bound), 8-wide flipped it to a win (measure-don't-guess). Reused by 2c-2's `zlahqr`. **Gate MET: `A=Q·H·Qᴴ` recon <1e-12 (c64 n=6/32/64/160/256), Q unitary, H upper-Hessenberg w/ real subdiagonal; c32 n=24 <5e-4.** **Bench (`bench_hesap_eig_nonsym_vs_reference`, c64): BEATS Eigen `HessenbergDecomposition<MatrixXcd>` 1.05× (n=64) / 1.21× (n=128) AND crushes LAPACK `zgehrd` 2.21×/11.91×.** **Bench-harness crash solved + root-caused (marker isolation): Eigen's complex `HessenbergDecomposition::compute` ACCESS-VIOLATES at n≥256 — the COMPLEX path only (real-double path fine); root cause not pinpointed, treated as reference fragility like OpenBLAS-generic `zgehrd` (fragile at n>128). A REFERENCE fault, NOT Cerid (recon-clean to n=512, ASan-clean to n=256); refs capped at 128, Cerid timed alone at n=256.** **Honest large-n characterization (advisor-pushed, measured not assumed): the unblocked complex reduction has a real cache cliff at n=512 — 5.5ms@256 → 106ms@512 (~19× for 2× n) because the complex working set ar+ai=4MB exceeds the 2MB L2 → memory-bound. This is the SAME unblocked-vs-blocked tradeoff the REAL v3d-1a path accepted (it dropped blocked dlahr2+gemm as 0.2× Eigen at tested sizes + ships unblocked). A blocked zlahr2+gemm reduction is the large-n lever — NOT pursued now (no complex-512 consumer yet, no reference there since Eigen AVs; a unified blocked real+complex reduction would be its own slice). Not debt: a measured memory-hierarchy characteristic, not a kernel defect (recon-clean to 512).** 4-config DoD green (debug/shipping-LTCG/asan each 353 406 assertions / 308 cases incl. the eig_herm dedup regression / tidy clean). | ~450 actual | (suite) | — |
+| ↳ **v3d-2c-2** ✅ 2026-05-24 — **complex balance (zgebal) + single-shift Schur (zlahqr) — BEATS Eigen + LAPACK (single-shift, n≤128 measured regime; AED is 2c-2b)** | **`zgebal` + `zlahqr` SHIPPED.** **`balance<T>` unified real+complex** via `if constexpr` + `RealType<T>` scalars + `bal_abs`/`bal_nsq` helpers; **`scale` is `Array<RealType<T>>`** (real — advisor call, avoids a Complex-multiply in the 2c-3 `gebak` hot loop). **`complex_schur` (`zlahqr`)**: single Wilkinson-shift implicit QR on a complex upper-Hessenberg → UPPER-TRIANGULAR `T` (eigenvalues on the diagonal, **NO 2×2 blocks / no `dlanv2`** — the structural simplification over real) + unitary `Z` + eigenvalues; complex-Givens bulge-chase, Ahues-Tisseur deflation, **faithful zlahqr Wilkinson shift** (`U=√h(i-1,i)·√h(i,i-1)`, scaled `Y=S·√((X/S)²+(U/S)²)`, `T=h(i,i)−U²/(X+Y)`) + exceptional shifts at its 10/20 (**D(non-sym)-6** — `dat1=0.75`, `s=dat1·|Re(subdiag)|`; the algorithmic shape is faithful to LAPACK `zlahqr` but the constants were reasoned-from-memory + pinned by the recon gate, NOT yet checked character-for-character against `zlahqr.f` — confirm at v3d close / §17 lock). New primitives: **complex `sqrt`** (`complex.hpp`, stable closed form) + **`complex_givens`** (`zlartg`, `detail/householder.hpp`, overflow-safe via `hypot2`; reused by 2c-3 `ztrevc`). `Complex<T>` arithmetic (not split — the bulge chase is small per step; the `ar`/`ai`→`Matrix<Complex>` boundary ends at 2c-2 entry). **Gate MET: `H=Z·T·Zᴴ` recon <1e-8 (c64 n=8/20/50/128, ~1e-13), Z unitary, T upper-triangular, eigenvalues=diag(T); c32 n=24 <1e-3; balance isolation+trace-invariance.** **Bench (c64): BEATS Eigen `ComplexSchur` 1.16× (n=64) / 1.10× (n=128) AND crushes LAPACK `zhseqr` 6.58×/1.45×; recon ~1e-13.** (Eigen `ComplexSchur` ALSO access-violates at n≥256 — confirmed the [[reference_eigen_complex_hessenberg_av_at_large_n]] prediction; refs capped at 128, Cerid timed alone at n=256 = 117ms, ~9.2× of n=128 = mildly super-8×. Attribution: the single-shift QR **sweep count grows super-linearly with n WITHOUT AED** — that is exactly what 2c-2b AED fixes and why LAPACK has it; algorithmic, not a cache cliff.) 4-config DoD green (debug/shipping-LTCG/asan each **353 435 assertions / 311 cases** / tidy clean). | ~550 actual | (suite) | — |
 | ↳ **v3e** | **CLI audit + close.** CLI-completeness audit (every op a command) + vs-reference rollup (Eigen + LAPACK) + **ADR-0065 §17** lock (D(dense-eig) determinism pins) + 18-config sweep. | ~200 | — | — |
 | **v4** | Iterative solvers (CG / PCG / BiCGSTAB / GMRES / MINRES / LSQR / IDR(s) / **GCRO-DR + M-CG Krylov subspace recycling**) + modern preconditioners (Jacobi / IC(0) / ILU(0) / **SPAI** / **ILUPACK multilevel ILU** / polynomial / block-Jacobi / additive Schwarz) + `LinearOp` consumer surface + complex variants + CLI registration | ~3500 | ~150 | ~3 wk |
 | **v5** | Sparse direct (supernodal Cholesky — CHOLMOD-class + left-looking LU — Gilbert-Peierls + multifrontal QR + LDLT) + **AMG variants** (classical Ruge-Stüben + **SA-AMG Vaněk 1996** + **AGMG Notay 2010** + bootstrap AMG) + **HSS-augmented (STRUMPACK pattern) reserve** + complex variants + CLI registration | ~4500 | ~140 | ~3.5 wk |
@@ -677,6 +679,186 @@ f32 + f64 + complex variants, CLI per op.
   crossover ≈ N75) — then **v3d-2** eigenvectors (`dtrevc`) + 3-stage back-transform
   + complex Schur.
 - **v3e** CLI audit + vs-reference rollup + ADR-0065 §17 lock + 18-config close.
+
+### v3d-2c-2b — complex AED — DETAILED PLAN (cold-context handoff, written 2026-05-24)
+
+> **This is the next slice.** Written as a self-contained plan so a fresh session
+> can execute without re-deriving context. Read this section + the v3d-2c rows in
+> the table above + the 2026-05-24 session log. **Call `advisor` on the per-piece
+> plan before implementing each sub-subslice** (project rule).
+
+**Where we are.** v3d-2c-1 (complex Hessenberg `zgehd2` + unitary Q) and v3d-2c-2
+(complex `balance` + single-shift Schur `complex_schur`/`zlahqr`) are shipped and
+4-config-DoD green. `complex_schur` produces an upper-triangular Schur form
+`h_in = Z·T·Zᴴ` (eigenvalues on the diagonal, no 2×2 blocks) and **beats Eigen
+`ComplexSchur` 1.16×/1.10× + crushes `zhseqr` 6.58×/1.45× at n≤128**. The known
+gap: single-shift `complex_schur`'s QR **sweep count grows super-linearly with n**
+(n=256 ≈ 117 ms, ~9.2× of n=128) — that is the regime AED fixes.
+
+**Goal.** Complex Aggressive Early Deflation (LAPACK `zlaqr0`-class) — the
+production complex Schur. Converges a whole trailing window per inner Schur
+instead of one eigenvalue per O(n) sweep, collapsing the sweep count at scale.
+This is the complex analog of the real **v3d-1c** HARD-GATE (read its table rows
++ the `schur_aed`/`aed_deflate`/`reorder_schur`/`dlaqr5_sweep` code in
+`eig_nonsym.cpp` as the structural template — the complex version mirrors it).
+
+**GATE FRAMING — important, differs from the real path.** The real AED beat
+LAPACK `dhseqr` at scale (real refs run fine). **For complex, BOTH references AV
+at n≥256** — Eigen `ComplexSchur` AND LAPACK `zhseqr` (confirmed; see memory
+`reference_eigen_complex_hessenberg_av_at_large_n`). So there is **no external
+reference to "crush" at the scale AED matters.** Gate complex AED against **our
+own single-shift `complex_schur` baseline**: (a) AED-Schur == single-shift
+spectrum + recon `‖h_in−Z·T·Zᴴ‖ < 1e-7`, and (b) **AED beats single-shift
+`complex_schur` at n≥256** (measure the sweep-count reduction, like the real
+`schur_aed` measured AED vs pure-`dlahqr`). Cap any external-ref bench at n≤128.
+This is still the right *elite/complete* choice (single-shift-only would be a
+known-incomplete production Schur) — just measured against our own baseline.
+
+**The big simplification vs real v3d-1c: NO 2×2 blocks.** Complex eigenvalues sit
+directly on the triangular diagonal, so there is **no `dlanv2`, no `dlasy2`
+(2×2/4×4 Sylvester), no `dlaexc` 2×2-block swap.** Every reorder/deflation step is
+a 1×1 operation = a single complex Givens. This collapses the real 1c-1 (~870
+LOC) to ~100 LOC.
+
+**Shipped substrate to REUSE (do not re-derive):**
+- `complex_schur` (`zlahqr`) — the window Schur inside AED + the NMIN-crossover
+  fallback for small blocks.
+- `complex_givens` (`zlartg`, `detail/householder.hpp`) — every reorder/sweep
+  rotation.
+- `crd::hesap::sqrt(Complex)` + `make_householder_complex` (`zlarfg`) — spike
+  reflection + re-Hessenbergization.
+- `hessenberg<Complex<T>>` (`zgehd2`) — re-Hessenbergize the leading window block.
+- `gemm` (complex) — global H/Z slab updates (the BLAS-3 arithmetic-intensity
+  lever, same accumulate-into-U → gemm pattern the real `aed_deflate`/`dlaqr5`
+  use via `slab_left_t`/`slab_right`).
+- The fused complex SIMD (`detail/dot_simd_complex.hpp`) for any new inner
+  kernels — and heed memory `feedback_complex_split_simd_must_be_wide_unrolled`
+  (8-wide, FMA-port ILP) if you write one.
+
+**Subdivision (3 sub-subslices, each its own focused session, each advisor-vetted
++ gateable):**
+
+- **v3d-2c-2b-1 — complex Schur reorder (`ztrexc`). ✅ CLOSED 2026-05-24.**
+  `reorder_complex_schur(T, Z, ifst, ilst)`: move the diagonal eigenvalue at
+  `ifst` to `ilst` by a sequence of **adjacent 1×1 swaps**. Each swap of adjacent
+  diagonal entries `t(p,p)`, `t(p+1,p+1)` of an upper-triangular T is a single
+  complex Givens — faithful `zlartg(t(p,p+1), t(p+1,p+1)−t(p,p))` (overflow-safe;
+  reuses `detail::complex_givens`) applied as a unitary similarity `G·T·Gᴴ` over
+  the full block region (left rows over `[p,n-1]`, right cols over `[0,p+1]`) then
+  the `(p+1,p)` subdiagonal forced to 0. Z updated by `Z·Gᴴ`. (No `dlasy2`/
+  `dlaexc` — the no-2×2 simplification.) **Backward move uses a `here` cursor, not
+  `for p≥ilst` — the `usize` underflow at `ilst==0` is a real bug class (advisor
+  flag).** **Gate MET:** reorder a complex Schur (T,Z) of a random complex
+  Hessenberg → `Z'·T'·Z'ᴴ` = SAME H `<1e-9` (c64; `<1e-3` c32), Z' unitary, T'
+  upper-triangular, chosen eigenvalue moved `ifst→ilst` (incl. forward, backward,
+  and `ilst==0`). **~95 LOC, 2 cases.** 4-config DoD green (debug/shipping-LTCG/
+  asan/tidy; full `[nonsym]` 247 706 assertions / 34 cases; win-tidy fixed 5
+  pre-existing violations in the file — 3× local `constexpr n`→`const` per
+  `LocalConstexprVariableCase: CamelCase`, 2× usize→double narrowings).
+
+- **v3d-2c-2b-2 — complex AED deflation window (`zlaqr2`/`zlaqr3`). ✅ CLOSED
+  2026-05-24.** `complex_aed_deflate(...)`: trailing window `[kwtop, kbot]` of
+  size `nw` → Schur via `complex_schur`; deflate from the bottom — 1×1 test
+  `|s|·|V(1,j)| ≤ max(smlnum, ulp·cabs1(T(j,j)))` (no 2×2 component pair), else
+  `reorder_complex_schur` moves it up; eigenvalue restore = the diagonal of T (no
+  `dlanv2`). Spike reflected (`make_householder_complex`) + leading block
+  re-Hessenbergized (`hessenberg<Complex>` + `form_hessenberg_q<Complex>`) +
+  **global H/Z updates via complex `gemm` slabs** (`H := Vᴴ·H·V`). Returns
+  `{ns, nd}`. **Three complex divergences from the real `aed_deflate` that the
+  faithful port required** (all `zlaqr2`-faithful): (i) LEFT spike apply uses
+  `conj(tau)`, RIGHT uses `tau` (new `apply_hc_left`/`apply_hc_right` conjugating
+  helpers — the real `apply_h_*` don't conjugate); (ii) the left slab is `Vᴴ·H`
+  not `Vᵀ·H` (new `slab_left_h` with `Trans::ConjTranspose`; `slab_right` `C·V`
+  reused as-is); (iii) the coupling restore is `H(kwtop,kwtop−1) = s·conj(V(1,1))`
+  (the real path's `V(1,1)` is real so the conj is invisible there). **Gate MET:**
+  decoupled trailing window (coupling zeroed ⇒ `s=0`) deflates fully (`nd==nw`,
+  `ns==0`); general window (`nw=8`, `kwtop=12>ktop=0` ⇒ coupling exercised) keeps
+  `z·H·zᴴ == H0` over the WHOLE matrix `<1e-8` (catches a coupling-conj error)
+  AND spectrum invariant `eig(H)==eig(H0) <1e-7` (catches a similarity sign error
+  the in-window recon misses); `nd+ns==nw`; c32 `<1e-3`. **~330 LOC, 3 cases.**
+  4-config DoD green (full `[nonsym]` 247 715 assertions / 37 cases; `[aed]`
+  43 806 assertions ASan-clean).
+
+- **v3d-2c-2b-3 — complex AED driver (`zlaqr0`) + multishift sweep (`zlaqr5`).
+  ✅ CLOSED 2026-05-24.** `complex_schur_aed(...)`: driver loop = split active
+  block → `complex_aed_deflate` → nibble → complex small-bulge multishift QR sweep
+  (`complex_dlaqr5_sweep` = `zlaqr5`: NBMPS=ns/2 bulges via `complex_dlaqr1` +
+  `make_householder_complex` 3-vectors, KACC22=1 accumulate-into-U + BLAS-3 `gemm`
+  slab far-updates with `slab_left_h` = Uᴴ horizontal / `slab_right` = U vertical +
+  Z) using undeflated AED eigenvalues as shifts → **NMIN=150 crossover** to
+  single-shift `complex_schur`. Wired as the production complex Schur (2c-3's
+  `eig` calls this). **The `zlaqr5` conj rule (ported VERBATIM from `zlaqr5.f`,
+  not reconstructed): RIGHT/U-accum `T={tau, tau·conj(v2), tau·conj(v3)}` +
+  plain-v gather; LEFT `T={conj(tau), conj(tau)·v2, conj(tau)·v3}` + conj-v
+  gather; similarity is Hᴴ·A·H.** **Gate MET:** AED-Schur == single-shift spectrum
+  + recon `<1e-9` (~1e-13) at n=40/160/260; **beats single-shift `complex_schur`
+  (our own baseline — refs AV at n≥256): 1.10× (n=256) / 1.12× (400) / 2.14×
+  (512), the win WIDENS with N; sweeps collapse to 3/4/4** (vs single-shift's
+  per-eigenvalue O(n) sweeps). **D(non-sym)-7** (window `nw=min(nh,max(2,nh/3))`),
+  **D(non-sym)-8** (undeflated AED eigenvalues as consecutive shifts). NMIN
+  **measured** (crossover ~200: n=128 loses 0.90×, n≥256 wins) — NOT the real
+  path's 200. **~700 LOC, 6 cases** (incl. implicit-Q sweep isolation + random-
+  matrix repros). 4-config DoD green.
+  - **THE BUG (found via systematic isolation — a model debugging trail):** first
+    cut passed all unit tests (smooth sin/cos matrices, recon ~1e-13) but the
+    bench's **random** matrices gave recon ~1 (single-shift was clean on them, so
+    not the bench). Isolation: implicit-Q proved the multishift sweep is an exact
+    similarity for ALL block positions + shift counts (~1e-15); `complex_schur`
+    crossover-only (NMIN=∞) was clean; per-step running-recon pinned the jump to
+    **`complex_aed_deflate` deflates with `nd>0`** (the spike-reflection path,
+    which only runs on *partial* deflation — never hit by the small-window unit
+    tests). Root cause: `zlaqr2.f` **conjugates the spike row** (`WORK(I) =
+    DCONJG(V(1,I))`) before `zlarfg`; my port copied it plain. The advisor flagged
+    this exact conjugation in the 2b-2 review and I'd wrongly concluded "plain
+    copy". One-line fix (`work[k] = conj(v.at(0,k))`). Lesson: **test eigensolvers
+    on generic/random matrices, not just smooth analytic ones — smooth spectra
+    deflate without hitting the spike path.**
+
+**Determinism pins (continue the numbering — real/2b/2c-2 used D(non-sym)-1..6):**
+- **D(non-sym)-7** — complex AED window-size formula (`nw = min(nh, max(2, nh/3))`
+  or whatever measurement settles, mirror real D(non-sym)-2).
+- **D(non-sym)-8** — complex AED shift order (undeflated AED eigenvalues as shifts,
+  consecutive; mirror real D(non-sym)-3).
+- Pin these + verify the v3d-2c-2 **D(non-sym)-6** `zlahqr` exceptional constants
+  character-for-character against `zlahqr.f` at the v3e §17 lock (currently
+  reasoned-from-memory + recon-gated).
+
+**Files:** `eig_nonsym.{hpp,cpp}` (declarations + impl), `test_eig_nonsym.cpp`
+(gates), `bench_hesap_eig_nonsym_vs_reference.cpp` (AED vs single-shift `complex_schur`
+at n≥256; external refs capped at n≤128). **Total ~1000 LOC + ~7 cases across the
+3 sub-subslices.** After 2c-2b: **2c-3** (`ztrevc` + back-transform + public complex
+`eig(Matrix<Complex<T>>)` + CLI `eig.nonsym.{c32,c64}`), then v3d close + v3e.
+
+### v3d-2c-3 — complex `ztrevc` + back-transform + public complex `eig` + CLI ✅ CLOSED 2026-05-24
+
+- **`ztrevc_right<T>`** (complex right eigenvectors of upper-triangular Schur T):
+  per-column triangular back-solve with the `smin` near-defective floor + inline
+  overflow scaling (the `cnorm`/`bignum` guard the real `dtrevc_right` uses — no
+  `zlatrs`). All-scalar (no 2×2/`dlaln2`). Back-solve verbatim-faithful to
+  `ztrevc.f` (fetched). NO normalization (deferred to `eig`).
+- **`eig<T>` complex branch** (`if constexpr (is_complex_v<T>)` → `eig_complex_impl`;
+  real stays `eig_real_impl`, dispatched by a thin `eig`): balance → hessenberg +
+  form unitary Q → `complex_schur_aed` → `ztrevc_right` → `V = D⁻¹P·Q·Z·V_schur`
+  (two `gemm`s + complex `gebak_right`) → normalize once per **D(non-sym)-4**
+  (‖·‖₂=1, largest-**modulus** component phase-real-positive). `gebak_right`
+  generalized to `<V, S>` (complex vectors, real scale) — real callsite deduces.
+- **CLI** `hesap.dense.eig.nonsym.{c32,c64}` — interleaved `[re,im]` n×n in,
+  interleaved `[re,im]` eigenvalues out.
+- **Gate MET:** per-eigenpair residual `‖A·vₖ−λₖ·vₖ‖₁/‖vₖ‖₁` ~**1e-13** on random
+  c64 (n=20/60) + a **non-triangular near-defective** matrix (duplicated 2.0
+  eigenvalue via a Givens similarity → exercises the `smin` floor) + c32; ‖v‖₂=1;
+  largest-modulus component real-positive (asserted). **Bench (c64): BEATS Eigen
+  `ComplexEigenSolver` 1.13× (n=64) / 1.32× (n=128), crushes `zgeev` 4.79×/2.80×;
+  refs AV at n≥256 (confirmed empirically — capped n≤128), Cerid alone resid
+  3.2e-13 @ 256.** 4-config DoD green. **Test-bug caught:** the phase assertion
+  first used `cabs1` to pick the pivot component while `eig` uses **modulus**
+  (`re²+im²`, the LAPACK convention) — different component; fixed the test, not
+  `eig`. **Follow-on filed `v3d-eig-fully-reducible-input`:** a fully-reducible
+  (e.g. triangular) input makes `balance` isolate everything → empty active block
+  → `ihi = l−1` underflows (usize) → `hessenberg` asserts; affects real `eig` too;
+  narrow edge case, deferred per `feedback_crush_mandate_bounded_by_importance`.
+  **🎉 v3d-2c (complex non-sym eig) CLOSED.** NEXT = v3d close + v3e §17 lock
+  (D(non-sym)-1..8; verify zlahqr/zlaqr5 exceptional constants vs the .f sources).
 
 ### v3a-1 locked design (advisor-vetted + user-approved 2026-05-21)
 

@@ -328,11 +328,11 @@ template <typename R>
 inline void dlasq4(int i0, int n0, Z1<R> z, int pp, int n0in, R dmin, R dmin1, R dmin2, R dn, R dn1, R dn2, R& tau,
                    int& ttype, R& g) noexcept
 {
-    const R cnst1 = R{0.5630};
-    const R cnst2 = R{1.010};
-    const R cnst3 = R{1.050};
+    const R cnst1 = static_cast<R>(0.5630);
+    const R cnst2 = static_cast<R>(1.010);
+    const R cnst3 = static_cast<R>(1.050);
     const R qurtr = R{0.250};
-    const R third = R{0.3330};
+    const R third = static_cast<R>(0.3330);
     const R half = R{0.50};
     const R hundrd = R{100};
 
@@ -659,7 +659,9 @@ inline void dlasq3(int i0, int& n0, Z1<R> z, int& pp, R& dmin, R& sigma, R& desi
         }
 
         bool deflate1 = false;
-        bool deflate2 = false;
+        // deflate2 mirrors LAPACK dlasq3's flag; our 2x2 path runs by fall-through
+        // when !deflate1, so the value is never read (faithful-port artifact).
+        [[maybe_unused]] bool deflate2 = false;
         if (n0 == i0)
         {
             deflate1 = true;

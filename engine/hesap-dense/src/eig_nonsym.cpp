@@ -3,6 +3,8 @@
 #include <crd/containers/array.hpp>
 #include <crd/core/assert.hpp>
 #include <crd/hesap/dense/blas3.hpp>
+#include <crd/hesap/dense/detail/dot_simd.hpp>
+#include <crd/hesap/dense/detail/dot_simd_complex.hpp>
 #include <crd/hesap/dense/detail/householder.hpp>
 #include <crd/math/simd/vec4d.hpp>
 #include <crd/math/simd/vec8f.hpp>
@@ -13,11 +15,40 @@
 
 namespace crd::hesap::dense
 {
+namespace
+{
+// Magnitude (abs) and squared-magnitude helpers that work for real or complex T,
+// returning the real type — so `balance` (zgebal/dgebal) is one body for both.
+template <typename T>
+[[nodiscard]] inline RealType<T> bal_abs(const T& x) noexcept
+{
+    if constexpr (is_complex_v<T>)
+    {
+        return crd::hesap::abs(x);
+    }
+    else
+    {
+        return std::abs(x);
+    }
+}
+template <typename T>
+[[nodiscard]] inline RealType<T> bal_nsq(const T& x) noexcept
+{
+    if constexpr (is_complex_v<T>)
+    {
+        return crd::hesap::norm_sq(x);
+    }
+    else
+    {
+        return x * x;
+    }
+}
+} // namespace
 
 template <typename T>
-void balance(Matrix<T>& a, crd::containers::Array<T>& scale, crd::usize& ilo, crd::usize& ihi)
+void balance(Matrix<T>& a, crd::containers::Array<RealType<T>>& scale, crd::usize& ilo, crd::usize& ihi)
 {
-    static_assert(!is_complex_v<T>, "balance (v3d-1a) is real-only");
+    using R = RealType<T>;
     const crd::usize n = a.rows();
     CRD_ASSERT_MSG(a.is_square(), "balance: A must be square");
     if (scale.size() != n)
@@ -42,7 +73,7 @@ void balance(Matrix<T>& a, crd::containers::Array<T>& scale, crd::usize& ilo, cr
 
     // ---- permutation: isolate eigenvalues to the corners ----
     auto swap_perm = [&](crd::isize m, crd::isize j) {
-        scale[static_cast<crd::usize>(m - 1)] = static_cast<T>(j);
+        scale[static_cast<crd::usize>(m - 1)] = static_cast<R>(j);
         if (j == m)
         {
             return;
@@ -117,14 +148,17 @@ void balance(Matrix<T>& a, crd::containers::Array<T>& scale, crd::usize& ilo, cr
 
     for (crd::isize i = k; i <= l; ++i)
     {
-        scale[static_cast<crd::usize>(i - 1)] = T{1};
+        scale[static_cast<crd::usize>(i - 1)] = R{1};
     }
 
     // ---- iterative radix-2 scaling of the block rows/cols k..l ----
-    const T sfmin1 = std::numeric_limits<T>::min() / std::numeric_limits<T>::epsilon();
-    const T sfmax1 = T{1} / sfmin1;
-    const T sfmin2 = sfmin1 * T{2};
-    const T sfmax2 = T{1} / sfmin2;
+    // All norm/factor scalars are REAL (R); only the matrix entries are T. For
+    // complex T the 2-norm uses |·|² (bal_nsq) and ca/ra use |·| (bal_abs); the
+    // radix-2 factors f,g multiply the complex columns/rows (Complex *= R).
+    const R sfmin1 = std::numeric_limits<R>::min() / std::numeric_limits<R>::epsilon();
+    const R sfmax1 = R{1} / sfmin1;
+    const R sfmin2 = sfmin1 * R{2};
+    const R sfmax2 = R{1} / sfmin2;
 
     bool noconv = true;
     while (noconv)
@@ -133,74 +167,74 @@ void balance(Matrix<T>& a, crd::containers::Array<T>& scale, crd::usize& ilo, cr
         for (crd::isize i = k; i <= l; ++i)
         {
             // c = ||A(k:l, i)||_2 ; r = ||A(i, k:l)||_2 (include diagonal — LAPACK).
-            T c = T{0};
-            T r = T{0};
+            R c = R{0};
+            R r = R{0};
             for (crd::isize p = k; p <= l; ++p)
             {
-                c += at(p, i) * at(p, i);
-                r += at(i, p) * at(i, p);
+                c += bal_nsq<T>(at(p, i));
+                r += bal_nsq<T>(at(i, p));
             }
             c = std::sqrt(c);
             r = std::sqrt(r);
             // ca = max|A(1:l, i)| ; ra = max|A(i, k:n)|.
-            T ca = T{0};
+            R ca = R{0};
             for (crd::isize p = 1; p <= l; ++p)
             {
-                ca = std::max(ca, std::abs(at(p, i)));
+                ca = std::max(ca, bal_abs<T>(at(p, i)));
             }
-            T ra = T{0};
+            R ra = R{0};
             for (crd::isize p = k; p <= nn; ++p)
             {
-                ra = std::max(ra, std::abs(at(i, p)));
+                ra = std::max(ra, bal_abs<T>(at(i, p)));
             }
-            if (c == T{0} || r == T{0})
+            if (c == R{0} || r == R{0})
             {
                 continue;
             }
-            T g = r / T{2};
-            T f = T{1};
-            const T s_init = c + r;
+            R g = r / R{2};
+            R f = R{1};
+            const R s_init = c + r;
             // Scale up f until balanced (guarded against overflow).
             while (!(c >= g || std::max(f, c) >= sfmax2 || std::min(r, g) <= sfmin2 ||
                      std::max(ca, c) >= sfmax2 || std::min(ra, r) <= sfmin2))
             {
-                f *= T{2};
-                c *= T{2};
-                ca *= T{2};
-                r /= T{2};
-                g /= T{2};
-                ra /= T{2};
+                f *= R{2};
+                c *= R{2};
+                ca *= R{2};
+                r /= R{2};
+                g /= R{2};
+                ra /= R{2};
             }
-            g = c / T{2};
+            g = c / R{2};
             while (!(g < r || std::max(r, ra) >= sfmax2 || std::min(std::min(f, c), g) <= sfmin2 ||
                      std::max(ca, c) >= sfmax2 || ca <= sfmin2))
             {
-                f /= T{2};
-                c /= T{2};
-                g /= T{2};
-                ca /= T{2};
-                r *= T{2};
-                ra *= T{2};
+                f /= R{2};
+                c /= R{2};
+                g /= R{2};
+                ca /= R{2};
+                r *= R{2};
+                ra *= R{2};
             }
-            if (c + r >= s_init * static_cast<T>(0.95))
+            if (c + r >= s_init * static_cast<R>(0.95))
             {
                 continue;
             }
-            if (f < T{1} && scale[static_cast<crd::usize>(i - 1)] < T{1})
+            if (f < R{1} && scale[static_cast<crd::usize>(i - 1)] < R{1})
             {
                 if (f * scale[static_cast<crd::usize>(i - 1)] <= sfmin1)
                 {
                     continue;
                 }
             }
-            if (f > T{1} && scale[static_cast<crd::usize>(i - 1)] > T{1})
+            if (f > R{1} && scale[static_cast<crd::usize>(i - 1)] > R{1})
             {
                 if (scale[static_cast<crd::usize>(i - 1)] >= sfmax1 / f)
                 {
                     continue;
                 }
             }
-            g = T{1} / f;
+            g = R{1} / f;
             scale[static_cast<crd::usize>(i - 1)] *= f;
             noconv = true;
             for (crd::isize p = k; p <= nn; ++p)  // row i, cols k..n  *= g
@@ -282,12 +316,186 @@ inline void saxpy(T* y, const T* x, T s, crd::usize len) noexcept
         y[p] += s * x[p];
     }
 }
+
+// =======================================================================
+// v3d-2c-1 — complex Hessenberg reduction (zgehd2) on the two-real-array
+// (ar, ai) SIMD representation (the eig_herm v3a-2.5 idiom). Reduces the
+// active block to upper Hessenberg by a UNITARY similarity Q^H A Q = H. Every
+// inner loop is a contiguous real-SIMD sweep (`sdot`/`saxpy`) over ar/ai — no
+// scalar complex arithmetic in the O(n³) updates. Reflector i (complex, v[0]=1
+// implicit) annihilates A(i+2:ihi, i); its tail is stored in ar/ai below the
+// subdiagonal, the real beta on the subdiagonal, the complex `tau[i]` returned.
+//
+// Two-sided update per reflector, faithful to LAPACK zgehd2 order (RIGHT then
+// LEFT): A := H^H · A · H with H = I − tau·v·v^H.
+//   RIGHT  A(0:ihi, i+1:ihi)  := A·H   = A − tau·(A·v)·v^H   (A·v: no conj)
+//   LEFT   A(i+1:ihi, i+1:n)  := H^H·A = A − conj(tau)·v·(v^H·A)
+// =======================================================================
+template <typename R>
+void hessenberg_complex_split(R* ar, R* ai, crd::usize n, crd::usize lda, crd::usize ilo,
+                              crd::usize ihi, crd::hesap::Complex<R>* tau, crd::memory::IAllocator* sc)
+{
+    using C = crd::hesap::Complex<R>;
+    for (crd::usize k = 0; k < n; ++k)
+    {
+        tau[k] = C{R{0}, R{0}};
+    }
+    if (ihi < ilo + 2)
+    {
+        return;
+    }
+    crd::containers::Array<C> vc(sc);
+    crd::containers::Array<R> vr(sc);
+    crd::containers::Array<R> vi(sc);
+    crd::containers::Array<R> wr(sc);
+    crd::containers::Array<R> wi(sc);
+    vc.resize(n);
+    vr.resize(n);
+    vi.resize(n);
+    wr.resize(n);
+    wi.resize(n);
+
+    for (crd::usize i = ilo; i + 1 < ihi; ++i)
+    {
+        const crd::usize len = ihi - i;  // reflector support rows [i+1, ihi]
+        for (crd::usize k = 0; k < len; ++k)
+        {
+            vc[k] = C{ar[(i + 1 + k) * lda + i], ai[(i + 1 + k) * lda + i]};
+        }
+        const detail::HouseholderComplex<R> h = detail::make_householder_complex<R>(vc.data(), len);
+        tau[i] = h.tau;
+        ar[(i + 1) * lda + i] = h.beta;  // H subdiagonal (real)
+        ai[(i + 1) * lda + i] = R{0};
+        vc[0] = C{R{1}, R{0}};
+        for (crd::usize k = 0; k < len; ++k)
+        {
+            vr[k] = vc[k].re;
+            vi[k] = vc[k].im;
+        }
+        for (crd::usize k = 1; k < len; ++k)  // store reflector tail
+        {
+            ar[(i + 1 + k) * lda + i] = vr[k];
+            ai[(i + 1 + k) * lda + i] = vi[k];
+        }
+        if (h.tau.re == R{0} && h.tau.im == R{0})
+        {
+            continue;
+        }
+
+        // RIGHT: A(0:ihi, i+1:ihi) := A − tau·(A·v)·v^H. Per row rr:
+        //   u = Σ_k A[rr, i+1+k]·v[k]   (complex dot, NO conj)
+        //   s = tau·u;  A[rr, i+1+j] −= s·conj(v[j]).  Fused single-pass kernels.
+        for (crd::usize rr = 0; rr <= ihi; ++rr)
+        {
+            R* arow = &ar[rr * lda + (i + 1)];
+            R* airow = &ai[rr * lda + (i + 1)];
+            R ur = R{0};
+            R ui = R{0};
+            detail::simd_cdot_nc<R>(arow, airow, vr.data(), vi.data(), len, ur, ui);
+            const R sr = h.tau.re * ur - h.tau.im * ui;
+            const R si = h.tau.re * ui + h.tau.im * ur;
+            // A += (−s)·conj(v).
+            detail::simd_caxpy_conjx<R>(arow, airow, -sr, -si, vr.data(), vi.data(), len);
+        }
+
+        // LEFT: A(i+1:ihi, i+1:n) := A − conj(tau)·v·(v^H·A). v^H·A = Σ_k conj(v[k])·A[i+1+k,:].
+        const crd::usize col0 = i + 1;
+        const crd::usize ncol = n - col0;
+        for (crd::usize jj = 0; jj < ncol; ++jj)
+        {
+            wr[jj] = R{0};
+            wi[jj] = R{0};
+        }
+        for (crd::usize k = 0; k < len; ++k)  // w += conj(v[k])·A_row
+        {
+            const R* arow = &ar[(i + 1 + k) * lda + col0];
+            const R* airow = &ai[(i + 1 + k) * lda + col0];
+            detail::simd_caxpy<R>(wr.data(), wi.data(), vr[k], -vi[k], arow, airow, ncol);
+        }
+        const R ctr = h.tau.re;   // conj(tau).re
+        const R cti = -h.tau.im;  // conj(tau).im
+        for (crd::usize k = 0; k < len; ++k)  // A_row += (−conj(tau)·v[k])·w
+        {
+            const R sr = ctr * vr[k] - cti * vi[k];
+            const R si = ctr * vi[k] + cti * vr[k];
+            R* arow = &ar[(i + 1 + k) * lda + col0];
+            R* airow = &ai[(i + 1 + k) * lda + col0];
+            detail::simd_caxpy<R>(arow, airow, -sr, -si, wr.data(), wi.data(), ncol);
+        }
+    }
+}
+
+// v3d-2c-1 — form the unitary Q (zunghr) of the complex Hessenberg reduction
+// into split arrays (qr, qi). Q = H(ilo)·…·H(ihi-2), built by left-applying
+// H_i to I from i = ihi-2 down to ilo: Q := (I − tau·v·v^H)·Q. Row-wise SIMD.
+template <typename R>
+void form_q_complex_split(const R* ar, const R* ai, crd::usize n, crd::usize lda, crd::usize ilo,
+                          crd::usize ihi, const crd::hesap::Complex<R>* tau, R* qr, R* qi,
+                          crd::usize ldq, crd::memory::IAllocator* sc)
+{
+    for (crd::usize i = 0; i < n; ++i)
+    {
+        for (crd::usize j = 0; j < n; ++j)
+        {
+            qr[i * ldq + j] = (i == j) ? R{1} : R{0};
+            qi[i * ldq + j] = R{0};
+        }
+    }
+    if (ihi < ilo + 2)
+    {
+        return;
+    }
+    crd::containers::Array<R> vr(sc);
+    crd::containers::Array<R> vi(sc);
+    crd::containers::Array<R> wr(sc);
+    crd::containers::Array<R> wi(sc);
+    vr.resize(n);
+    vi.resize(n);
+    wr.resize(n);
+    wi.resize(n);
+
+    for (crd::usize ii = ihi - 1; ii-- > ilo;)  // i = ihi-2 .. ilo
+    {
+        const crd::usize i = ii;
+        const crd::usize len = ihi - i;
+        if (tau[i].re == R{0} && tau[i].im == R{0})
+        {
+            continue;
+        }
+        vr[0] = R{1};
+        vi[0] = R{0};
+        for (crd::usize k = 1; k < len; ++k)
+        {
+            vr[k] = ar[(i + 1 + k) * lda + i];
+            vi[k] = ai[(i + 1 + k) * lda + i];
+        }
+        // Q[i+1..ihi, :] := (I − tau·v·v^H)·Q = Q − tau·v·(v^H·Q).
+        for (crd::usize jj = 0; jj < n; ++jj)
+        {
+            wr[jj] = R{0};
+            wi[jj] = R{0};
+        }
+        for (crd::usize k = 0; k < len; ++k)  // w += conj(v[k])·Q_row
+        {
+            const R* qrow = &qr[(i + 1 + k) * ldq];
+            const R* qirow = &qi[(i + 1 + k) * ldq];
+            detail::simd_caxpy<R>(wr.data(), wi.data(), vr[k], -vi[k], qrow, qirow, n);
+        }
+        for (crd::usize k = 0; k < len; ++k)  // Q_row += (−tau·v[k])·w
+        {
+            const R sr = tau[i].re * vr[k] - tau[i].im * vi[k];
+            const R si = tau[i].re * vi[k] + tau[i].im * vr[k];
+            R* qrow = &qr[(i + 1 + k) * ldq];
+            R* qirow = &qi[(i + 1 + k) * ldq];
+            detail::simd_caxpy<R>(qrow, qirow, -sr, -si, wr.data(), wi.data(), n);
+        }
+    }
+}
 } // namespace
 
 template <typename T>
 void hessenberg(Matrix<T>& a, crd::usize ilo, crd::usize ihi, crd::containers::Array<T>& tau)
 {
-    static_assert(!is_complex_v<T>, "hessenberg (v3d-1a) is real-only; complex Schur is v3d-2");
     const crd::usize n = a.rows();
     CRD_ASSERT_MSG(a.is_square(), "hessenberg: A must be square");
     CRD_ASSERT_MSG(ihi < n && ilo <= ihi, "hessenberg: bad ilo/ihi");
@@ -295,75 +503,109 @@ void hessenberg(Matrix<T>& a, crd::usize ilo, crd::usize ihi, crd::containers::A
     {
         tau.resize(n);
     }
-    for (crd::usize i = 0; i < n; ++i)
-    {
-        tau[i] = T{0};
-    }
-    if (ihi < ilo + 2)
-    {
-        return;
-    }
 
-    // Unblocked reduction (LAPACK dgehd2) with the two-sided updates done
-    // ROW-WISE so every inner loop is a contiguous SIMD sweep in our row-major
-    // layout (vᵀ·A and the rank-1 updates stream along contiguous rows). This
-    // sidesteps the row-major column-reduction penalty AND the small-K gemm
-    // overhead of a blocked dlahr2 — and beats Eigen's column-major unblocked.
-    crd::memory::IAllocator* alloc = a.allocator();
-    T* data = a.data();
-    const crd::usize ld = a.ld();
-    crd::containers::Array<T> vbuf(alloc);  // contiguous reflector (v[0] = 1)
-    crd::containers::Array<T> wbuf(alloc);  // left-update accumulation row
-    vbuf.resize(n);
-    wbuf.resize(n);
-
-    for (crd::usize i = ilo; i + 1 < ihi; ++i)
+    if constexpr (is_complex_v<T>)
     {
-        const crd::usize len = ihi - i;  // reflector support rows [i+1, ihi]
-        for (crd::usize r = 0; r < len; ++r)
+        // Complex Hessenberg (zgehd2) on the split-array SIMD kernel. The matrix
+        // is split to two real arrays (ar, ai) once (O(n²), negligible vs the
+        // O(n³) kernel — the eig_herm boundary, ADR-0078 §5 lower layer), reduced
+        // in place, then recombined. tau is Array<Complex<R>> — written directly.
+        using R = RealType<T>;
+        crd::memory::IAllocator* alloc = a.allocator();
+        const crd::usize ld = a.ld();
+        crd::containers::Array<R> ar(alloc);
+        crd::containers::Array<R> ai(alloc);
+        ar.resize(n * n);
+        ai.resize(n * n);
+        for (crd::usize i = 0; i < n; ++i)
         {
-            vbuf[r] = data[(i + 1 + r) * ld + i];
-        }
-        const auto h = detail::make_householder<T>(vbuf.data(), len);
-        tau[i] = h.tau;
-        data[(i + 1) * ld + i] = h.beta;  // H subdiagonal
-        for (crd::usize r = 1; r < len; ++r)
-        {
-            data[(i + 1 + r) * ld + i] = vbuf[r];  // store reflector tail
-        }
-        vbuf[0] = T{1};  // explicit unit for the contiguous applies
-        if (h.tau == T{0})
-        {
-            continue;
-        }
-
-        // Left:  A(i+1:ihi, i+1:n-1) := (I - tau v vᵀ)·A.  Row-wise:
-        //   w := vᵀ·A_trail (accumulate row by row), then A_trail -= tau·v·wᵀ.
-        const crd::usize col_l = i + 1;
-        const crd::usize ncol_l = n - col_l;
-        if (ncol_l > 0)
-        {
-            for (crd::usize jj = 0; jj < ncol_l; ++jj)
+            for (crd::usize j = 0; j < n; ++j)
             {
-                wbuf[jj] = T{0};
+                ar[i * n + j] = a.data()[i * ld + j].re;
+                ai[i * n + j] = a.data()[i * ld + j].im;
             }
+        }
+        hessenberg_complex_split<R>(ar.data(), ai.data(), n, n, ilo, ihi, tau.data(), alloc);
+        for (crd::usize i = 0; i < n; ++i)
+        {
+            for (crd::usize j = 0; j < n; ++j)
+            {
+                a.data()[i * ld + j] = T{ar[i * n + j], ai[i * n + j]};
+            }
+        }
+    }
+    else
+    {
+        for (crd::usize i = 0; i < n; ++i)
+        {
+            tau[i] = T{0};
+        }
+        if (ihi < ilo + 2)
+        {
+            return;
+        }
+
+        // Unblocked reduction (LAPACK dgehd2) with the two-sided updates done
+        // ROW-WISE so every inner loop is a contiguous SIMD sweep in our row-major
+        // layout (vᵀ·A and the rank-1 updates stream along contiguous rows). This
+        // sidesteps the row-major column-reduction penalty AND the small-K gemm
+        // overhead of a blocked dlahr2 — and beats Eigen's column-major unblocked.
+        crd::memory::IAllocator* alloc = a.allocator();
+        T* data = a.data();
+        const crd::usize ld = a.ld();
+        crd::containers::Array<T> vbuf(alloc);  // contiguous reflector (v[0] = 1)
+        crd::containers::Array<T> wbuf(alloc);  // left-update accumulation row
+        vbuf.resize(n);
+        wbuf.resize(n);
+
+        for (crd::usize i = ilo; i + 1 < ihi; ++i)
+        {
+            const crd::usize len = ihi - i;  // reflector support rows [i+1, ihi]
             for (crd::usize r = 0; r < len; ++r)
             {
-                saxpy<T>(wbuf.data(), data + (i + 1 + r) * ld + col_l, vbuf[r], ncol_l);
+                vbuf[r] = data[(i + 1 + r) * ld + i];
             }
-            for (crd::usize r = 0; r < len; ++r)
+            const auto h = detail::make_householder<T>(vbuf.data(), len);
+            tau[i] = h.tau;
+            data[(i + 1) * ld + i] = h.beta;  // H subdiagonal
+            for (crd::usize r = 1; r < len; ++r)
             {
-                saxpy<T>(data + (i + 1 + r) * ld + col_l, wbuf.data(), -h.tau * vbuf[r], ncol_l);
+                data[(i + 1 + r) * ld + i] = vbuf[r];  // store reflector tail
             }
-        }
+            vbuf[0] = T{1};  // explicit unit for the contiguous applies
+            if (h.tau == T{0})
+            {
+                continue;
+            }
 
-        // Right: A(0:ihi, i+1:ihi) := A·(I - tau v vᵀ).  Row-wise per row rr:
-        //   wr := A[rr, i+1:ihi]·v;  A[rr, i+1:ihi] -= tau·wr·v.
-        for (crd::usize rr = 0; rr <= ihi; ++rr)
-        {
-            T* arow = data + rr * ld + (i + 1);
-            const T wr = sdot<T>(arow, vbuf.data(), len);
-            saxpy<T>(arow, vbuf.data(), -h.tau * wr, len);
+            // Left:  A(i+1:ihi, i+1:n-1) := (I - tau v vᵀ)·A.  Row-wise:
+            //   w := vᵀ·A_trail (accumulate row by row), then A_trail -= tau·v·wᵀ.
+            const crd::usize col_l = i + 1;
+            const crd::usize ncol_l = n - col_l;
+            if (ncol_l > 0)
+            {
+                for (crd::usize jj = 0; jj < ncol_l; ++jj)
+                {
+                    wbuf[jj] = T{0};
+                }
+                for (crd::usize r = 0; r < len; ++r)
+                {
+                    saxpy<T>(wbuf.data(), data + (i + 1 + r) * ld + col_l, vbuf[r], ncol_l);
+                }
+                for (crd::usize r = 0; r < len; ++r)
+                {
+                    saxpy<T>(data + (i + 1 + r) * ld + col_l, wbuf.data(), -h.tau * vbuf[r], ncol_l);
+                }
+            }
+
+            // Right: A(0:ihi, i+1:ihi) := A·(I - tau v vᵀ).  Row-wise per row rr:
+            //   wr := A[rr, i+1:ihi]·v;  A[rr, i+1:ihi] -= tau·wr·v.
+            for (crd::usize rr = 0; rr <= ihi; ++rr)
+            {
+                T* arow = data + rr * ld + (i + 1);
+                const T wr = sdot<T>(arow, vbuf.data(), len);
+                saxpy<T>(arow, vbuf.data(), -h.tau * wr, len);
+            }
         }
     }
 }
@@ -376,50 +618,100 @@ Matrix<T> form_hessenberg_q(crd::memory::IAllocator* alloc, const Matrix<T>& a_p
     const crd::usize n = a_packed.rows();
     Matrix<T> q(alloc, n, n);
     q.set_identity();
-    if (ihi < ilo + 2)
+
+    if constexpr (is_complex_v<T>)
     {
+        // Complex unitary Q (zunghr) via the split-array SIMD kernel: split the
+        // packed reflectors to (ar, ai), build Q into (qr, qi), recombine.
+        using R = RealType<T>;
+        const T* pdata = a_packed.data();
+        const crd::usize pld = a_packed.ld();
+        crd::containers::Array<R> ar(alloc);
+        crd::containers::Array<R> ai(alloc);
+        crd::containers::Array<R> qr(alloc);
+        crd::containers::Array<R> qi(alloc);
+        ar.resize(n * n);
+        ai.resize(n * n);
+        qr.resize(n * n);
+        qi.resize(n * n);
+        for (crd::usize i = 0; i < n; ++i)
+        {
+            for (crd::usize j = 0; j < n; ++j)
+            {
+                ar[i * n + j] = pdata[i * pld + j].re;
+                ai[i * n + j] = pdata[i * pld + j].im;
+            }
+        }
+        form_q_complex_split<R>(ar.data(), ai.data(), n, n, ilo, ihi, tau.data(), qr.data(),
+                                qi.data(), n, alloc);
+        const crd::usize qld = q.ld();
+        for (crd::usize i = 0; i < n; ++i)
+        {
+            for (crd::usize j = 0; j < n; ++j)
+            {
+                q.data()[i * qld + j] = T{qr[i * n + j], qi[i * n + j]};
+            }
+        }
         return q;
     }
-    const T* pdata = a_packed.data();
-    const crd::usize pld = a_packed.ld();
-    T* qdata = q.data();
-    const crd::usize qld = q.ld();
-
-    crd::containers::Array<T> vfull(alloc);
-    vfull.resize(n);
-
-    // Q = H_ilo · … · H_{ihi-2}: build by left-applying H_i to I for i from
-    // ihi-2 down to ilo (innermost reflector applied first).
-    for (crd::usize ii = ihi - 1; ii-- > ilo;)  // ii = ihi-2 .. ilo
+    else
     {
-        const crd::usize i = ii;
-        const crd::usize len = ihi - i;  // rows [i+1, ihi]
-        const T taui = tau[i];
-        if (taui == T{0})
+        if (ihi < ilo + 2)
         {
-            continue;
+            return q;
         }
-        vfull[0] = T{1};
-        for (crd::usize r = 1; r < len; ++r)
+        const T* pdata = a_packed.data();
+        const crd::usize pld = a_packed.ld();
+        T* qdata = q.data();
+        const crd::usize qld = q.ld();
+
+        crd::containers::Array<T> vfull(alloc);
+        crd::containers::Array<T> wrow(alloc);  // per-column reflector weights w[0..n-1]
+        vfull.resize(n);
+        wrow.resize(n);
+
+        // Q = H_ilo · … · H_{ihi-2}: build by left-applying H_i to I for i from
+        // ihi-2 down to ilo (innermost reflector applied first).
+        //
+        // The reflector apply Q[i+1..ihi, :] := (I − τ v vᵀ)·Q[i+1..ihi, :] is done
+        // ROW-WISE (contiguous, SIMD via simd_axpy) rather than the naive column-
+        // strided scalar form: accumulate w[:] = Σ_r v[r]·Q[row_r][:], scale by τ,
+        // then Q[row_r][:] −= v[r]·w[:]. Same per-element accumulation order over r;
+        // the dorghr cost drops to gemm-class (the v3d-1a SIMD-row-wise lever —
+        // [[feedback_simd_rowwise_unblocked_beats_blocked_smallk]]).
+        for (crd::usize ii = ihi - 1; ii-- > ilo;)  // ii = ihi-2 .. ilo
         {
-            vfull[r] = pdata[(i + 1 + r) * pld + i];
-        }
-        // Q[i+1..ihi, :] := (I - taui v vᵀ) · Q[i+1..ihi, :].
-        for (crd::usize j = 0; j < n; ++j)
-        {
-            T w = T{0};
-            for (crd::usize r = 0; r < len; ++r)
+            const crd::usize i = ii;
+            const crd::usize len = ihi - i;  // rows [i+1, ihi]
+            const T taui = tau[i];
+            if (taui == T{0})
             {
-                w += vfull[r] * qdata[(i + 1 + r) * qld + j];
+                continue;
             }
-            w *= taui;
-            for (crd::usize r = 0; r < len; ++r)
+            vfull[0] = T{1};
+            for (crd::usize r = 1; r < len; ++r)
             {
-                qdata[(i + 1 + r) * qld + j] -= w * vfull[r];
+                vfull[r] = pdata[(i + 1 + r) * pld + i];
+            }
+            for (crd::usize j = 0; j < n; ++j)
+            {
+                wrow[j] = T{0};
+            }
+            for (crd::usize r = 0; r < len; ++r)  // w += v[r]·Q[row_r][:]
+            {
+                detail::simd_axpy<T>(wrow.data(), qdata + (i + 1 + r) * qld, vfull[r], n);
+            }
+            for (crd::usize j = 0; j < n; ++j)
+            {
+                wrow[j] *= taui;
+            }
+            for (crd::usize r = 0; r < len; ++r)  // Q[row_r][:] −= v[r]·w[:]
+            {
+                detail::simd_axpy<T>(qdata + (i + 1 + r) * qld, wrow.data(), -vfull[r], n);
             }
         }
+        return q;
     }
-    return q;
 }
 
 namespace
@@ -2711,6 +3003,116 @@ void dtrevc_right(crd::memory::IAllocator* alloc, const Matrix<T>& t_in, Matrix<
     }
 }
 
+// v3d-2c-3 — ztrevc (SIDE='R', HOWMNY='A'): right eigenvectors of an UPPER-
+// TRIANGULAR complex Schur form `t_in` (n×n), NOT back-transformed. Eigenvalue
+// λ=t(ki,ki) → eigenvector in column ki, living in the leading [0..ki] subspace.
+// Per-column triangular back-solve with the `smin` near-defective floor + inline
+// overflow scaling (the same cnorm/bignum guard the real `dtrevc_right` uses —
+// no `zlatrs`). NO normalization here (the public complex `eig` applies the
+// D(non-sym)-4 ‖·‖₂=1 + phase convention once). The complex analog of
+// `dtrevc_right` with NO 2×2 blocks ⇒ all scalar (no `dlaln2`). c32/c64.
+template <typename T>
+void ztrevc_right(crd::memory::IAllocator* alloc, const Matrix<T>& t_in, Matrix<T>& vr)
+{
+    static_assert(is_complex_v<T>, "ztrevc_right is complex-only (real is dtrevc_right)");
+    using R = RealType<T>;
+    const crd::usize n = t_in.rows();
+    const T* td = t_in.data();
+    const crd::usize ld = t_in.ld();
+    auto t = [&](crd::usize i, crd::usize j) -> T { return td[i * ld + j]; };
+    auto cabs1 = [](const T& x) -> R { return std::abs(x.re) + std::abs(x.im); };
+    const T czero{R{0}, R{0}};
+
+    vr = Matrix<T>(alloc, n, n);
+    for (crd::usize i = 0; i < n; ++i)
+        for (crd::usize j = 0; j < n; ++j)
+            vr.at(i, j) = czero;
+    if (n == 0)
+    {
+        return;
+    }
+
+    const R unfl = std::numeric_limits<R>::min();
+    const R ulp = std::numeric_limits<R>::epsilon();
+    const R smlnum = unfl * (static_cast<R>(n) / ulp);
+    const R bignum = (R{1} - ulp) / smlnum;
+
+    // cnorm[j] = Σ_{i<j} cabs1(t(i,j)) — the strict-upper column 1-norms.
+    crd::containers::Array<R> cnorm(alloc);
+    cnorm.resize(n);
+    cnorm[0] = R{0};
+    for (crd::usize j = 1; j < n; ++j)
+    {
+        R s = R{0};
+        for (crd::usize i = 0; i < j; ++i)
+        {
+            s += cabs1(t(i, j));
+        }
+        cnorm[j] = s;
+    }
+
+    crd::containers::Array<T> work(alloc);
+    work.resize(n);
+
+    for (crd::isize ki = static_cast<crd::isize>(n) - 1; ki >= 0; --ki)
+    {
+        const crd::usize kiu = static_cast<crd::usize>(ki);
+        const T lambda = t(kiu, kiu);
+        const R smin = std::max(ulp * cabs1(lambda), smlnum);
+
+        work[kiu] = T{R{1}, R{0}};
+        for (crd::usize k = 0; k < kiu; ++k)
+        {
+            work[k] = czero - t(k, kiu);
+        }
+
+        // Back-solve (T[0:ki,0:ki] − λ·I)·x = work over the leading triangle.
+        for (crd::isize j = static_cast<crd::isize>(kiu) - 1; j >= 0; --j)
+        {
+            const crd::usize ju = static_cast<crd::usize>(j);
+            T diag = t(ju, ju) - lambda;
+            if (cabs1(diag) < smin)
+            {
+                diag = T{smin, R{0}};
+            }
+            // Scaled complex divide diag·x = work[ju], guarding overflow when the
+            // perturbed diagonal is < 1 (mirrors dlaln2 + the dtrevc_right guard).
+            R scale = R{1};
+            const R d1 = cabs1(diag);
+            const R b1 = cabs1(work[ju]);
+            if (d1 < R{1} && b1 > R{1} && b1 > bignum * d1)
+            {
+                scale = R{1} / b1;
+            }
+            T x = (work[ju] * scale) / diag;
+            const R xnorm = cabs1(x);
+            if (xnorm > R{1} && cnorm[ju] > bignum / xnorm)
+            {
+                const R sc2 = R{1} / xnorm;
+                x = x * sc2;
+                scale = scale * sc2;
+            }
+            if (scale != R{1})
+            {
+                for (crd::usize k = 0; k <= kiu; ++k)
+                {
+                    work[k] = work[k] * scale;
+                }
+            }
+            work[ju] = x;
+            for (crd::usize i = 0; i < ju; ++i)
+            {
+                work[i] = work[i] - x * t(i, ju);
+            }
+        }
+
+        for (crd::usize i = 0; i <= kiu; ++i)
+        {
+            vr.at(i, kiu) = work[i];
+        }
+    }
+}
+
 // v3d-1c-4 (multishift train) — dlaqr1: the (unnormalized) first column of the
 // real shift polynomial (H-s1·I)(H-s2·I)·e1, used to seed a double-shift bulge.
 // `hsub` points at the 0-based top-left of the n×n (n∈{2,3}) leading submatrix
@@ -2776,7 +3178,7 @@ void dlaqr5_sweep(crd::memory::IAllocator* alloc, bool wantt, bool wantz, crd::u
     }
     // 1-based accessors (i,j >= 1).
     auto h = [&](crd::isize i, crd::isize j) -> T& { return hd[(i - 1) * ld + (j - 1)]; };
-    auto z = [&](crd::isize i, crd::isize j) -> T& { return zd[(i - 1) * zld + (j - 1)]; };
+    // Z far-update uses slab_right(zd, ...) directly (raw pointer); no z() accessor.
     const crd::isize ktop = static_cast<crd::isize>(ktop0) + 1;
     const crd::isize kbot = static_cast<crd::isize>(kbot0) + 1;
     const crd::isize iloz = static_cast<crd::isize>(iloz0) + 1;
@@ -3297,6 +3699,63 @@ void schur_small_block(crd::memory::IAllocator* alloc, T* hd, crd::usize ld, crd
                       alloc);
     }
 }
+
+// gebak_right — undo the `balance` similarity on the columns of the right
+// eigenvector matrix `v` (n×m, RowMajor, leading dim `ldv`). Faithful LAPACK
+// dgebak (SIDE='R', JOB='B'): first the radix-2 row scaling over [ilo,ihi]
+// (right eigenvectors scale by `scale[i]`), then the isolating row permutation
+// at the corners (1-based logic mirroring dgebak.f). `ilo`/`ihi` are 0-based
+// inclusive; `scale` is the array `balance` filled (perm index outside the
+// block, scale factor inside). The v3d-2b back-transform's 3rd stage.
+template <typename V, typename S>
+void gebak_right(V* v, crd::usize ldv, crd::usize n, crd::usize m, crd::usize ilo, crd::usize ihi,
+                 const S* scale)
+{
+    // Two scalar types: `v` real (f32/f64) or complex (Complex<R>); `scale` always
+    // REAL (R) — `balance` stores real scale factors + perm indices for both paths.
+    if (n == 0)
+    {
+        return;
+    }
+    // ---- backward balance: scale rows [ilo, ihi] ----
+    for (crd::usize i = ilo; i <= ihi; ++i)
+    {
+        const S s = scale[i];
+        for (crd::usize j = 0; j < m; ++j)
+        {
+            v[i * ldv + j] = v[i * ldv + j] * s;
+        }
+    }
+    // ---- backward permutation (faithful dgebak.f, 1-based) ----
+    const crd::isize ilo1 = static_cast<crd::isize>(ilo) + 1;
+    const crd::isize ihi1 = static_cast<crd::isize>(ihi) + 1;
+    const crd::isize nn = static_cast<crd::isize>(n);
+    for (crd::isize ii = 1; ii <= nn; ++ii)
+    {
+        crd::isize i = ii;
+        if (i >= ilo1 && i <= ihi1)
+        {
+            continue;  // inside the active block — no isolating permutation
+        }
+        if (i < ilo1)
+        {
+            i = ilo1 - ii;  // remap: counts down from ilo-1 as ii grows
+        }
+        const crd::isize k = static_cast<crd::isize>(scale[static_cast<crd::usize>(i - 1)]);
+        if (k == i)
+        {
+            continue;
+        }
+        V* ri = v + static_cast<crd::usize>(i - 1) * ldv;
+        V* rk = v + static_cast<crd::usize>(k - 1) * ldv;
+        for (crd::usize j = 0; j < m; ++j)
+        {
+            const V t = ri[j];
+            ri[j] = rk[j];
+            rk[j] = t;
+        }
+    }
+}
 } // namespace
 
 template <typename T>
@@ -3495,6 +3954,10 @@ RealSchur<T> schur_aed(crd::memory::IAllocator* alloc, const Matrix<T>& h_in, cr
 template void balance<float>(Matrix<float>&, crd::containers::Array<float>&, crd::usize&, crd::usize&);
 template void balance<double>(Matrix<double>&, crd::containers::Array<double>&, crd::usize&,
                               crd::usize&);
+template void balance<Complex<float>>(Matrix<Complex<float>>&, crd::containers::Array<float>&,
+                                      crd::usize&, crd::usize&);
+template void balance<Complex<double>>(Matrix<Complex<double>>&, crd::containers::Array<double>&,
+                                       crd::usize&, crd::usize&);
 template void hessenberg<float>(Matrix<float>&, crd::usize, crd::usize, crd::containers::Array<float>&);
 template void hessenberg<double>(Matrix<double>&, crd::usize, crd::usize,
                                  crd::containers::Array<double>&);
@@ -3504,6 +3967,17 @@ template Matrix<float> form_hessenberg_q<float>(crd::memory::IAllocator*, const 
 template Matrix<double> form_hessenberg_q<double>(crd::memory::IAllocator*, const Matrix<double>&,
                                                   crd::usize, crd::usize,
                                                   const crd::containers::Array<double>&);
+// v3d-2c-1 — complex Hessenberg (zgehd2) + unitary Q (zunghr) instantiations.
+template void hessenberg<Complex<float>>(Matrix<Complex<float>>&, crd::usize, crd::usize,
+                                         crd::containers::Array<Complex<float>>&);
+template void hessenberg<Complex<double>>(Matrix<Complex<double>>&, crd::usize, crd::usize,
+                                          crd::containers::Array<Complex<double>>&);
+template Matrix<Complex<float>> form_hessenberg_q<Complex<float>>(
+    crd::memory::IAllocator*, const Matrix<Complex<float>>&, crd::usize, crd::usize,
+    const crd::containers::Array<Complex<float>>&);
+template Matrix<Complex<double>> form_hessenberg_q<Complex<double>>(
+    crd::memory::IAllocator*, const Matrix<Complex<double>>&, crd::usize, crd::usize,
+    const crd::containers::Array<Complex<double>>&);
 template RealSchur<float> real_schur<float>(crd::memory::IAllocator*, const Matrix<float>&, crd::usize,
                                             crd::usize, bool);
 template RealSchur<double> real_schur<double>(crd::memory::IAllocator*, const Matrix<double>&,
@@ -3522,6 +3996,1472 @@ template RealSchur<float> schur_aed<float>(crd::memory::IAllocator*, const Matri
                                            crd::usize, bool, crd::usize*);
 template RealSchur<double> schur_aed<double>(crd::memory::IAllocator*, const Matrix<double>&, crd::usize,
                                              crd::usize, bool, crd::usize*);
+
+// =======================================================================
+// v3d-2c-2 — complex single-shift Schur (LAPACK zlahqr). Reduces a complex
+// upper-Hessenberg matrix to UPPER-TRIANGULAR Schur form by a unitary
+// similarity h_in = Z·T·Zᴴ. No 2×2 blocks (complex eigenvalues on the diagonal)
+// ⇒ no dlanv2. Single Wilkinson-shift implicit QR + complex-Givens bulge chase +
+// Ahues-Tisseur deflation + exceptional shifts at its 10/20 (D(non-sym)-6).
+// =======================================================================
+template <typename T>
+ComplexSchur<T> complex_schur(crd::memory::IAllocator* alloc, const Matrix<T>& h_in, crd::usize ilo,
+                              crd::usize ihi, bool vectors)
+{
+    static_assert(is_complex_v<T>, "complex_schur is complex-only (real is real_schur)");
+    using R = RealType<T>;
+    const crd::usize n = h_in.rows();
+    ComplexSchur<T> out(alloc);
+    out.t = h_in.clone();
+    out.w.resize(n);
+    for (crd::usize k = 0; k < n; ++k)
+    {
+        out.w[k] = T{R{0}, R{0}};
+    }
+    if (vectors)
+    {
+        out.z = Matrix<T>(alloc, n, n);
+        out.z.set_identity();
+    }
+    if (n == 0)
+    {
+        out.converged = true;
+        return out;
+    }
+
+    T* hd = out.t.data();
+    const crd::usize ld = out.t.ld();
+    T* zd = vectors ? out.z.data() : nullptr;
+    const crd::usize zld = vectors ? out.z.ld() : 0;
+    auto h = [&](crd::usize i, crd::usize j) -> T& { return hd[i * ld + j]; };
+    auto z = [&](crd::usize i, crd::usize j) -> T& { return zd[i * zld + j]; };
+    auto cabs1 = [](const T& v) -> R { return std::abs(v.re) + std::abs(v.im); };
+
+    for (crd::usize k = 0; k < ilo; ++k)
+    {
+        out.w[k] = h(k, k);
+    }
+    for (crd::usize k = ihi + 1; k < n; ++k)
+    {
+        out.w[k] = h(k, k);
+    }
+
+    const R ulp = std::numeric_limits<R>::epsilon();
+    const R safmin = std::numeric_limits<R>::min();
+    const crd::usize nh = ihi - ilo + 1;
+    const R smlnum = safmin * (static_cast<R>(nh) / ulp);
+    const R dat1 = static_cast<R>(0.75);  // D(non-sym)-6 exceptional-shift constant
+    const crd::usize itmax = 30 * std::max<crd::usize>(10, nh);
+    const crd::usize iloz = ilo;
+    const crd::usize ihiz = ihi;
+    const crd::usize i2 = n - 1;  // WANTT ⇒ full T
+
+    crd::isize i_s = static_cast<crd::isize>(ihi);
+    while (i_s >= static_cast<crd::isize>(ilo))
+    {
+        const crd::usize i = static_cast<crd::usize>(i_s);
+        crd::usize l = ilo;
+        bool conv = false;
+        for (crd::usize its = 0; its <= itmax; ++its)
+        {
+            // Find the largest l so that h(l,l-1) is negligible (Ahues-Tisseur).
+            crd::usize k = l;
+            for (crd::usize kk = i; kk > l; --kk)
+            {
+                if (cabs1(h(kk, kk - 1)) <= smlnum)
+                {
+                    k = kk;
+                    break;
+                }
+                R tst = cabs1(h(kk - 1, kk - 1)) + cabs1(h(kk, kk));
+                if (tst == R{0})
+                {
+                    if (kk >= ilo + 2)
+                    {
+                        tst += std::abs(h(kk - 1, kk - 2).re);
+                    }
+                    if (kk + 1 <= ihi)
+                    {
+                        tst += std::abs(h(kk + 1, kk).re);
+                    }
+                }
+                if (cabs1(h(kk, kk - 1)) <= ulp * tst)
+                {
+                    const R ab = std::max(cabs1(h(kk, kk - 1)), cabs1(h(kk - 1, kk)));
+                    const R ba = std::min(cabs1(h(kk, kk - 1)), cabs1(h(kk - 1, kk)));
+                    const R aa = std::max(cabs1(h(kk, kk)), cabs1(h(kk - 1, kk - 1) - h(kk, kk)));
+                    const R bb = std::min(cabs1(h(kk, kk)), cabs1(h(kk - 1, kk - 1) - h(kk, kk)));
+                    const R s = aa + ab;
+                    if (ba * (ab / s) <= std::max(smlnum, ulp * (bb * (aa / s))))
+                    {
+                        k = kk;
+                        break;
+                    }
+                }
+            }
+            l = k;
+            if (l > ilo)
+            {
+                h(l, l - 1) = T{R{0}, R{0}};
+            }
+            if (l == i)
+            {
+                conv = true;
+                break;
+            }
+
+            // ---- shift ----
+            T t_shift;
+            if (its == 10)
+            {
+                const R s = dat1 * std::abs(h(l + 1, l).re);
+                t_shift = h(l, l) + T{s, R{0}};
+            }
+            else if (its == 20)
+            {
+                const R s = dat1 * std::abs(h(i, i - 1).re);
+                t_shift = h(i, i) + T{s, R{0}};
+            }
+            else
+            {
+                // Wilkinson shift (faithful zlahqr): U = sqrt(h(i-1,i))·sqrt(h(i,i-1)),
+                // Y = S·sqrt((X/S)²+(U/S)²), T = h(i,i) − (U/(X+Y))·U. Scaled by S.
+                t_shift = h(i, i);
+                const T u = crd::hesap::sqrt(h(i - 1, i)) * crd::hesap::sqrt(h(i, i - 1));
+                R s = cabs1(u);
+                if (s != R{0})
+                {
+                    const T x = (h(i - 1, i - 1) - h(i, i)) * static_cast<R>(0.5);
+                    const R sx = cabs1(x);
+                    s = std::max(s, sx);
+                    const T xs = x * (R{1} / s);
+                    const T us = u * (R{1} / s);
+                    T y = crd::hesap::sqrt(xs * xs + us * us) * s;
+                    if (sx > R{0})
+                    {
+                        const T xsx = x * (R{1} / sx);
+                        if (xsx.re * y.re + xsx.im * y.im < R{0})
+                        {
+                            y = -y;
+                        }
+                    }
+                    t_shift = h(i, i) - (u / (x + y)) * u;
+                }
+            }
+
+            // ---- single-shift QR sweep: chase one bulge from l to i ----
+            for (crd::usize m = l; m < i; ++m)
+            {
+                T v0;
+                T v1;
+                if (m == l)
+                {
+                    v0 = h(l, l) - t_shift;
+                    v1 = h(l + 1, l);
+                }
+                else
+                {
+                    v0 = h(m, m - 1);
+                    v1 = h(m + 1, m - 1);
+                }
+                const auto g = detail::complex_givens<R>(v0, v1);
+                const R c = g.c;
+                const T s = g.s;
+                if (m > l)
+                {
+                    h(m, m - 1) = g.r;
+                    h(m + 1, m - 1) = T{R{0}, R{0}};
+                }
+                // Left: rows (m, m+1) over columns [m, i2].
+                for (crd::usize j = m; j <= i2; ++j)
+                {
+                    const T tmp = h(m, j) * c + h(m + 1, j) * s;
+                    h(m + 1, j) = h(m + 1, j) * c - h(m, j) * crd::hesap::conj(s);
+                    h(m, j) = tmp;
+                }
+                // Right: columns (m, m+1) over rows [0, min(m+2, i)] (incl. the bulge).
+                const crd::usize jhi = std::min(m + 2, i);
+                for (crd::usize j = 0; j <= jhi; ++j)
+                {
+                    const T tmp = h(j, m) * c + h(j, m + 1) * crd::hesap::conj(s);
+                    h(j, m + 1) = h(j, m + 1) * c - h(j, m) * s;
+                    h(j, m) = tmp;
+                }
+                // Z := Z·Gᴴ over rows [iloz, ihiz].
+                if (vectors)
+                {
+                    for (crd::usize j = iloz; j <= ihiz; ++j)
+                    {
+                        const T tmp = z(j, m) * c + z(j, m + 1) * crd::hesap::conj(s);
+                        z(j, m + 1) = z(j, m + 1) * c - z(j, m) * s;
+                        z(j, m) = tmp;
+                    }
+                }
+            }
+        }
+        if (!conv)
+        {
+            out.converged = false;
+            return out;
+        }
+        out.w[i] = h(i, i);
+        i_s = static_cast<crd::isize>(l) - 1;
+    }
+    out.converged = true;
+    return out;
+}
+
+template ComplexSchur<Complex<float>> complex_schur<Complex<float>>(crd::memory::IAllocator*,
+                                                                    const Matrix<Complex<float>>&,
+                                                                    crd::usize, crd::usize, bool);
+template ComplexSchur<Complex<double>> complex_schur<Complex<double>>(crd::memory::IAllocator*,
+                                                                      const Matrix<Complex<double>>&,
+                                                                      crd::usize, crd::usize, bool);
+
+// =======================================================================
+// v3d-2c-2b-1 — reorder_complex_schur (LAPACK ztrexc). Move the diagonal
+// eigenvalue at `ifst` to `ilst` by adjacent 1×1 swaps. Each swap of positions
+// (p, p+1) of the upper-triangular T is a unitary similarity G·T·Gᴴ where G is
+// the complex Givens (zlartg) from (t(p,p+1), t(p+1,p+1)−t(p,p)). Applying the
+// rotation over the full block region ([p,n-1] left, [0,p+1] right) then forcing
+// the (p+1,p) entry to 0 is a provably-unitary swap with the diagonal exchanged
+// — the same Givens application form as `complex_schur`'s bulge chase.
+// =======================================================================
+template <typename T>
+bool reorder_complex_schur(Matrix<T>& t, Matrix<T>& z, crd::usize ifst, crd::usize ilst)
+{
+    static_assert(is_complex_v<T>, "reorder_complex_schur is complex-only (real is reorder_schur)");
+    using R = RealType<T>;
+    const crd::usize n = t.rows();
+    CRD_ASSERT_MSG(z.rows() == n && z.cols() == n, "reorder_complex_schur: Z must be n×n");
+    if (n <= 1 || ifst == ilst)
+    {
+        return true;
+    }
+
+    T* td = t.data();
+    const crd::usize ld = t.ld();
+    T* zd = z.data();
+    const crd::usize zld = z.ld();
+    auto tat = [&](crd::usize i, crd::usize j) -> T& { return td[i * ld + j]; };
+    auto zat = [&](crd::usize i, crd::usize j) -> T& { return zd[i * zld + j]; };
+
+    // Swap the adjacent diagonal eigenvalues at positions (p, p+1).
+    auto swap_adjacent = [&](crd::usize p)
+    {
+        const T t11 = tat(p, p);
+        const T t22 = tat(p + 1, p + 1);
+        const auto g = detail::complex_givens<R>(tat(p, p + 1), t22 - t11);
+        const R c = g.c;
+        const T s = g.s;
+        // Left: G·T over rows (p, p+1), columns [p, n-1] (cols < p are zero in
+        // both rows for upper-triangular T).
+        for (crd::usize j = p; j < n; ++j)
+        {
+            const T tmp = tat(p, j) * c + tat(p + 1, j) * s;
+            tat(p + 1, j) = tat(p + 1, j) * c - tat(p, j) * crd::hesap::conj(s);
+            tat(p, j) = tmp;
+        }
+        // Right: T·Gᴴ over columns (p, p+1), rows [0, p+1] (rows > p+1 are zero
+        // in both columns). Reads the just-left-updated block — correct G·B·Gᴴ.
+        for (crd::usize i = 0; i <= p + 1; ++i)
+        {
+            const T tmp = tat(i, p) * c + tat(i, p + 1) * crd::hesap::conj(s);
+            tat(i, p + 1) = tat(i, p + 1) * c - tat(i, p) * s;
+            tat(i, p) = tmp;
+        }
+        tat(p + 1, p) = T{R{0}, R{0}};  // kill the rotated subdiagonal roundoff
+        // Z := Z·Gᴴ over columns (p, p+1), all rows.
+        for (crd::usize i = 0; i < n; ++i)
+        {
+            const T tmp = zat(i, p) * c + zat(i, p + 1) * crd::hesap::conj(s);
+            zat(i, p + 1) = zat(i, p + 1) * c - zat(i, p) * s;
+            zat(i, p) = tmp;
+        }
+    };
+
+    if (ifst < ilst)
+    {
+        for (crd::usize here = ifst; here < ilst; ++here)
+        {
+            swap_adjacent(here);  // moves the eigenvalue down to here+1
+        }
+    }
+    else  // ifst > ilst — move up; cursor avoids the usize underflow at ilst==0.
+    {
+        crd::usize here = ifst;
+        while (here > ilst)
+        {
+            swap_adjacent(here - 1);  // moves the eigenvalue up to here-1
+            --here;
+        }
+    }
+    return true;
+}
+
+template bool reorder_complex_schur<Complex<float>>(Matrix<Complex<float>>&, Matrix<Complex<float>>&,
+                                                    crd::usize, crd::usize);
+template bool reorder_complex_schur<Complex<double>>(Matrix<Complex<double>>&,
+                                                     Matrix<Complex<double>>&, crd::usize, crd::usize);
+
+namespace
+{
+// Complex reflector applies for the v3d-2c-2b-2 spike reduction. H = I − tau·v·vᴴ
+// (v[0]=1 implicit, supplied explicitly here), faithful to zlarf with the zlaqr2
+// scalar convention: LEFT uses conj(tau) (Hᴴ·C), RIGHT uses tau (C·H).
+
+// C[r0:r0+ku, c0:c0+ncol] := (I − tauL·v·vᴴ)·C   (vᴴ·C uses conj(v)).
+template <typename T>
+void apply_hc_left(T* d, crd::usize ld, crd::usize r0, crd::usize c0, crd::usize ku, crd::usize ncol,
+                   const T* v, T tauL)
+{
+    using R = RealType<T>;
+    if (tauL.re == R{0} && tauL.im == R{0})
+    {
+        return;
+    }
+    for (crd::usize j = 0; j < ncol; ++j)
+    {
+        T s{R{0}, R{0}};
+        for (crd::usize i = 0; i < ku; ++i)
+        {
+            s = s + crd::hesap::conj(v[i]) * d[(r0 + i) * ld + (c0 + j)];
+        }
+        s = tauL * s;
+        for (crd::usize i = 0; i < ku; ++i)
+        {
+            d[(r0 + i) * ld + (c0 + j)] = d[(r0 + i) * ld + (c0 + j)] - v[i] * s;
+        }
+    }
+}
+
+// C[r0:r0+nrow, c0:c0+ku] := C·(I − tauR·v·vᴴ)   (C·v: no conj; outer uses conj(v)).
+template <typename T>
+void apply_hc_right(T* d, crd::usize ld, crd::usize r0, crd::usize c0, crd::usize nrow, crd::usize ku,
+                    const T* v, T tauR)
+{
+    using R = RealType<T>;
+    if (tauR.re == R{0} && tauR.im == R{0})
+    {
+        return;
+    }
+    for (crd::usize i = 0; i < nrow; ++i)
+    {
+        T s{R{0}, R{0}};
+        for (crd::usize j = 0; j < ku; ++j)
+        {
+            s = s + d[(r0 + i) * ld + (c0 + j)] * v[j];
+        }
+        s = tauR * s;
+        for (crd::usize j = 0; j < ku; ++j)
+        {
+            d[(r0 + i) * ld + (c0 + j)] = d[(r0 + i) * ld + (c0 + j)] - s * crd::hesap::conj(v[j]);
+        }
+    }
+}
+
+// C(jw×cols) := Vᴴ·C  (complex sibling of slab_left_t; gemm ConjTranspose).
+template <typename T>
+void slab_left_h(T* dat, crd::usize ld, crd::usize r0, crd::usize c0, crd::usize jw, crd::usize cols,
+                 const T* v, crd::usize ldv, Matrix<T>& scratch, crd::memory::IAllocator* alloc)
+{
+    if (cols == 0)
+    {
+        return;
+    }
+    constexpr Layout kL = Layout::RowMajor;
+    MatrixView<const T, kL> vv{v, jw, jw, ldv};
+    MatrixView<const T, kL> cv{dat + r0 * ld + c0, jw, cols, ld};
+    MatrixView<T, kL> ov{scratch.data(), jw, cols, scratch.ld()};
+    gemm<T, kL>(T{RealType<T>{1}, RealType<T>{0}}, vv, cv, T{RealType<T>{0}, RealType<T>{0}}, ov,
+                Trans::ConjTranspose, Trans::None, alloc);
+    for (crd::usize i = 0; i < jw; ++i)
+    {
+        for (crd::usize j = 0; j < cols; ++j)
+        {
+            dat[(r0 + i) * ld + (c0 + j)] = scratch.at(i, j);
+        }
+    }
+}
+} // namespace
+
+template <typename T>
+AedResult<T> complex_aed_deflate(crd::memory::IAllocator* alloc, Matrix<T>& h, crd::usize ktop,
+                                 crd::usize kbot, crd::usize nw, Matrix<T>& z, bool wantz,
+                                 crd::usize iloz, crd::usize ihiz, bool wantt,
+                                 crd::containers::Array<T>& w)
+{
+    static_assert(is_complex_v<T>, "complex_aed_deflate is complex-only (real is aed_deflate)");
+    using R = RealType<T>;
+    const crd::usize n = h.rows();
+    AedResult<T> res{};
+    if (w.size() != n)
+    {
+        w.resize(n);
+    }
+    if (ktop > kbot)
+    {
+        return res;
+    }
+
+    T* hd = h.data();
+    const crd::usize ld = h.ld();
+    auto hh = [&](crd::usize i, crd::usize j) -> T& { return hd[i * ld + j]; };
+    auto cabs1 = [](const T& x) -> R { return std::abs(x.re) + std::abs(x.im); };
+    const T czero{R{0}, R{0}};
+
+    const R eps = std::numeric_limits<R>::epsilon();
+    const R safmin = std::numeric_limits<R>::min();
+    const R ulp = eps;
+    const R smlnum = safmin * (static_cast<R>(n) / ulp);
+
+    const crd::usize jw = std::min(nw, kbot - ktop + 1);
+    const crd::usize kwtop = kbot - jw + 1;
+    T s = (kwtop == ktop) ? czero : hh(kwtop, kwtop - 1);
+
+    if (kbot == kwtop)  // 1×1 window
+    {
+        w[kwtop] = hh(kwtop, kwtop);
+        res.ns = 1;
+        res.nd = 0;
+        if (cabs1(s) <= std::max(smlnum, ulp * cabs1(hh(kwtop, kwtop))))
+        {
+            res.ns = 0;
+            res.nd = 1;
+            if (kwtop > ktop)
+            {
+                hh(kwtop, kwtop - 1) = czero;
+            }
+        }
+        return res;
+    }
+
+    // Window Hessenberg → complex (upper-triangular) Schur: T = twin, V = v.
+    Matrix<T> win(alloc, jw, jw);
+    for (crd::usize i = 0; i < jw; ++i)
+    {
+        for (crd::usize j = 0; j < jw; ++j)
+        {
+            win.at(i, j) = (j + 1 >= i) ? hh(kwtop + i, kwtop + j) : czero;
+        }
+    }
+    ComplexSchur<T> sch = complex_schur<T>(alloc, win, 0, jw - 1, true);
+    Matrix<T>& twin = sch.t;
+    Matrix<T>& v = sch.z;
+    const crd::usize infqr = 0;  // window is small; complex_schur converges
+    auto t1 = [&](crd::usize i, crd::usize j) -> T& { return twin.at(i - 1, j - 1); };
+    auto v1 = [&](crd::usize i, crd::usize j) -> T& { return v.at(i - 1, j - 1); };
+
+    // Deflation detection loop (1-based ns/ilst). No bulge branch: every diagonal
+    // entry is a 1×1 eigenvalue (complex Schur form has no 2×2 blocks).
+    crd::usize ns = jw;
+    crd::usize ilst = infqr + 1;
+    while (ilst <= ns)
+    {
+        R foo = cabs1(t1(ns, ns));
+        if (foo == R{0})
+        {
+            foo = cabs1(s);
+        }
+        if (cabs1(s) * cabs1(v1(1, ns)) <= std::max(smlnum, ulp * foo))
+        {
+            --ns;  // deflatable
+        }
+        else
+        {
+            reorder_complex_schur<T>(twin, v, ns - 1, ilst - 1);  // move up out of the way
+            ++ilst;
+        }
+    }
+    if (ns == 0)
+    {
+        s = czero;
+    }
+
+    // Restore eigenvalues from the window Schur diagonal into w[kwtop..kbot].
+    for (crd::usize i = 0; i < jw; ++i)
+    {
+        w[kwtop + i] = twin.at(i, i);
+    }
+
+    if (ns < jw || (s.re == R{0} && s.im == R{0}))
+    {
+        const crd::usize ldt = twin.ld();
+        const crd::usize ldv = v.ld();
+        if (ns > 1 && !(s.re == R{0} && s.im == R{0}))
+        {
+            // Reflect the spike (first row of V over the NS undeflated columns).
+            crd::containers::Array<T> work(alloc);
+            work.resize(jw);
+            for (crd::usize k = 0; k < ns; ++k)
+            {
+                work[k] = crd::hesap::conj(v.at(0, k));  // zlaqr2 conjugates the spike row
+            }
+            const auto refl = detail::make_householder_complex<R>(work.data(), ns);
+            work[0] = T{R{1}, R{0}};
+            // Zero the strict lower-by-2 of T (cleared by the spike reflection).
+            for (crd::usize i = 2; i < jw; ++i)
+            {
+                for (crd::usize j = 0; j + 2 <= i && j < jw; ++j)
+                {
+                    twin.at(i, j) = czero;
+                }
+            }
+            apply_hc_left<T>(twin.data(), ldt, 0, 0, ns, jw, work.data(), crd::hesap::conj(refl.tau));
+            apply_hc_right<T>(twin.data(), ldt, 0, 0, ns, ns, work.data(), refl.tau);
+            apply_hc_right<T>(v.data(), ldv, 0, 0, jw, ns, work.data(), refl.tau);
+            // Re-Hessenbergize the leading NS block, accumulate Q into V.
+            crd::containers::Array<T> tauh(alloc);
+            hessenberg<T>(twin, 0, ns - 1, tauh);
+            Matrix<T> qh = form_hessenberg_q<T>(alloc, twin, 0, ns - 1, tauh);
+            Matrix<T> vq(alloc, jw, jw);
+            {
+                constexpr Layout kL = Layout::RowMajor;
+                MatrixView<const T, kL> vv{v.data(), jw, jw, ldv};
+                MatrixView<const T, kL> qq{qh.data(), jw, jw, qh.ld()};
+                MatrixView<T, kL> ovq{vq.data(), jw, jw, vq.ld()};
+                gemm<T, kL>(T{R{1}, R{0}}, vv, qq, T{R{0}, R{0}}, ovq, Trans::None, Trans::None, alloc);
+            }
+            for (crd::usize i = 0; i < jw; ++i)
+            {
+                for (crd::usize j = 0; j < jw; ++j)
+                {
+                    v.at(i, j) = vq.at(i, j);
+                }
+            }
+        }
+
+        // Copy the updated reduced window back into H (Hessenberg part only).
+        // zlaqr2 conjugates here (the real path's V(1,1) is real): the coupling
+        // above the window must survive the unitary similarity.
+        if (kwtop > 0)
+        {
+            hh(kwtop, kwtop - 1) = s * crd::hesap::conj(v.at(0, 0));
+        }
+        for (crd::usize i = 0; i < jw; ++i)
+        {
+            for (crd::usize j = (i == 0 ? 0 : i - 1); j < jw; ++j)
+            {
+                hh(kwtop + i, kwtop + j) = twin.at(i, j);
+            }
+        }
+
+        // Global similarity updates with V (scratch n×n covers both slab shapes).
+        // H := Vᴴ·H·V over the window region: right multiply C·V (slab_right), left
+        // multiply Vᴴ·C (slab_left_h — ConjTranspose, the complex divergence).
+        Matrix<T> scratch(alloc, n, n);
+        const crd::usize ltop = wantt ? 0 : ktop;
+        slab_right<T>(hd, ld, ltop, kwtop, kwtop - ltop, jw, v.data(), v.ld(), scratch, alloc);
+        if (wantt && kbot + 1 < n)
+        {
+            slab_left_h<T>(hd, ld, kwtop, kbot + 1, jw, n - (kbot + 1), v.data(), v.ld(), scratch,
+                           alloc);
+        }
+        if (wantz)
+        {
+            slab_right<T>(z.data(), z.ld(), iloz, kwtop, ihiz - iloz + 1, jw, v.data(), v.ld(),
+                          scratch, alloc);
+        }
+    }
+
+    res.nd = jw - ns;
+    res.ns = ns - infqr;
+    return res;
+}
+
+template AedResult<Complex<float>> complex_aed_deflate<Complex<float>>(
+    crd::memory::IAllocator*, Matrix<Complex<float>>&, crd::usize, crd::usize, crd::usize,
+    Matrix<Complex<float>>&, bool, crd::usize, crd::usize, bool, crd::containers::Array<Complex<float>>&);
+template AedResult<Complex<double>> complex_aed_deflate<Complex<double>>(
+    crd::memory::IAllocator*, Matrix<Complex<double>>&, crd::usize, crd::usize, crd::usize,
+    Matrix<Complex<double>>&, bool, crd::usize, crd::usize, bool,
+    crd::containers::Array<Complex<double>>&);
+
+namespace
+{
+// v3d-2c-2b-3 — complex zlaqr1: first column of (H − s1·I)(H − s2·I) for a
+// 2×2 or 3×3 leading block, the shift-polynomial seed for a multishift bulge.
+// Full complex shifts s1/s2 (no real-arithmetic si1·si2 term). `hsub` 0-based.
+template <typename T>
+void complex_dlaqr1(crd::usize na, const T* hsub, crd::usize ld, T s1, T s2, T* v)
+{
+    using R = RealType<T>;
+    auto hh = [&](crd::usize i, crd::usize j) -> T { return hsub[i * ld + j]; };
+    auto cabs1 = [](const T& x) -> R { return std::abs(x.re) + std::abs(x.im); };
+    if (na == 2)
+    {
+        const R s = cabs1(hh(0, 0) - s2) + cabs1(hh(1, 0));
+        if (s == R{0})
+        {
+            v[0] = T{R{0}, R{0}};
+            v[1] = T{R{0}, R{0}};
+        }
+        else
+        {
+            const T h21s = hh(1, 0) * (R{1} / s);
+            v[0] = h21s * hh(0, 1) + (hh(0, 0) - s1) * ((hh(0, 0) - s2) * (R{1} / s));
+            v[1] = h21s * (hh(0, 0) + hh(1, 1) - s1 - s2);
+        }
+    }
+    else
+    {
+        const R s = cabs1(hh(0, 0) - s2) + cabs1(hh(1, 0)) + cabs1(hh(2, 0));
+        if (s == R{0})
+        {
+            v[0] = T{R{0}, R{0}};
+            v[1] = T{R{0}, R{0}};
+            v[2] = T{R{0}, R{0}};
+        }
+        else
+        {
+            const T h21s = hh(1, 0) * (R{1} / s);
+            const T h31s = hh(2, 0) * (R{1} / s);
+            v[0] = (hh(0, 0) - s1) * ((hh(0, 0) - s2) * (R{1} / s)) + hh(0, 1) * h21s + hh(0, 2) * h31s;
+            v[1] = h21s * (hh(0, 0) + hh(1, 1) - s1 - s2) + hh(1, 2) * h31s;
+            v[2] = h31s * (hh(0, 0) + hh(2, 2) - s1 - s2) + h21s * hh(2, 1);
+        }
+    }
+}
+
+// v3d-2c-2b-3 — complex zlaqr5: one small-bulge multishift QR sweep on [ktop,
+// kbot] of the global complex Hessenberg `hd` (n×n, row-major). Faithful port of
+// the real `dlaqr5_sweep`; the divergences are the complex reflector applies
+// (zlaqr5 convention: RIGHT uses T={tau, tau·conj(v2), tau·conj(v3)} + plain-v
+// gather; LEFT uses T={conj(tau), conj(tau)·v2, conj(tau)·v3} + conj(v) gather;
+// the similarity is Hᴴ·A·H), `complex_dlaqr1`/`make_householder_complex` for the
+// reflectors, `cabs1` deflation tests, NO conjugate-pair shift shuffle, and the
+// far-update horizontal slab is Vᴴ (`slab_left_h`). KACC22=1.
+template <typename T>
+void complex_dlaqr5_sweep(crd::memory::IAllocator* alloc, bool wantt, bool wantz, crd::usize n,
+                          crd::usize ktop0, crd::usize kbot0, const T* shifts_in, crd::usize nshifts,
+                          T* hd, crd::usize ld, crd::usize iloz0, crd::usize ihiz0, T* zd, crd::usize zld)
+{
+    using R = RealType<T>;
+    if (nshifts < 2 || ktop0 >= kbot0)
+    {
+        return;
+    }
+    auto h = [&](crd::isize i, crd::isize j) -> T& { return hd[(i - 1) * ld + (j - 1)]; };
+    // Z far-update uses slab_right(zd, ...) directly (raw pointer); no z() accessor.
+    auto cabs1 = [](const T& x) -> R { return std::abs(x.re) + std::abs(x.im); };
+    const T czero{R{0}, R{0}};
+    auto iszero = [&](const T& x) -> bool { return x.re == R{0} && x.im == R{0}; };
+    const crd::isize ktop = static_cast<crd::isize>(ktop0) + 1;
+    const crd::isize kbot = static_cast<crd::isize>(kbot0) + 1;
+    const crd::isize iloz = static_cast<crd::isize>(iloz0) + 1;
+    const crd::isize ihiz = static_cast<crd::isize>(ihiz0) + 1;
+    const crd::isize nn = static_cast<crd::isize>(n);
+
+    // No conjugate-pair shuffle (complex shifts used in pairs as-is).
+    crd::containers::Array<T> shf(alloc);
+    shf.resize(nshifts);
+    for (crd::usize k = 0; k < nshifts; ++k)
+    {
+        shf[k] = shifts_in[k];
+    }
+    const crd::isize ns = static_cast<crd::isize>(nshifts - (nshifts % 2));
+    auto shift = [&](crd::isize m) -> T { return shf[static_cast<crd::usize>(m - 1)]; };  // 1-based
+
+    const R eps = std::numeric_limits<R>::epsilon();
+    const R safmin = std::numeric_limits<R>::min();
+    const R ulp = eps;
+    const R smlnum = safmin * (static_cast<R>(nn) / ulp);
+
+    if (ktop + 2 <= kbot)
+    {
+        h(ktop + 2, ktop) = czero;
+    }
+
+    const crd::isize nbmps = ns / 2;
+    const crd::isize kdu = 4 * nbmps;
+
+    crd::containers::Array<T> vws(alloc);
+    vws.resize(static_cast<crd::usize>(3 * nbmps));
+    auto vref = [&](crd::isize row, crd::isize m) -> T& {
+        return vws[static_cast<crd::usize>(3 * (m - 1) + (row - 1))];
+    };
+    T vt[3] = {czero, czero, czero};
+
+    Matrix<T> umat(alloc, static_cast<crd::usize>(kdu), static_cast<crd::usize>(kdu));
+    Matrix<T> scratch(alloc, n, n);
+    auto u = [&](crd::isize i, crd::isize j) -> T& {
+        return umat.data()[static_cast<crd::usize>(i - 1) * umat.ld() + static_cast<crd::usize>(j - 1)];
+    };
+
+    for (crd::isize incol = ktop - 2 * nbmps + 1; incol <= kbot - 2; incol += 2 * nbmps)
+    {
+        const crd::isize jtop = std::max(ktop, incol);
+        const crd::isize ndcol = incol + kdu;
+        for (crd::isize a = 1; a <= kdu; ++a)
+        {
+            for (crd::isize b = 1; b <= kdu; ++b)
+            {
+                u(a, b) = (a == b) ? T{R{1}, R{0}} : czero;
+            }
+        }
+
+        const crd::isize krcol_hi = std::min(incol + 2 * nbmps - 1, kbot - 2);
+        for (crd::isize krcol = incol; krcol <= krcol_hi; ++krcol)
+        {
+            const crd::isize mtop = std::max<crd::isize>(1, (ktop - krcol) / 2 + 1);
+            const crd::isize mbot = std::min<crd::isize>(nbmps, (kbot - krcol - 1) / 2);
+            const crd::isize m22 = mbot + 1;
+            const bool bmp22 = (mbot < nbmps) && (krcol + 2 * (m22 - 1) == kbot - 2);
+
+            // ---- Special 2×2 bulge at the bottom ----
+            if (bmp22)
+            {
+                const crd::isize k = krcol + 2 * (m22 - 1);
+                if (k == ktop - 1)
+                {
+                    complex_dlaqr1<T>(2, &h(k + 1, k + 1), ld, shift(2 * m22 - 1), shift(2 * m22),
+                                      &vref(1, m22));
+                    T vv[2] = {vref(1, m22), vref(2, m22)};
+                    const auto hh = detail::make_householder_complex<R>(vv, 2);
+                    vref(1, m22) = hh.tau;
+                    vref(2, m22) = vv[1];
+                }
+                else
+                {
+                    T vv[2] = {h(k + 1, k), h(k + 2, k)};
+                    const auto hh = detail::make_householder_complex<R>(vv, 2);
+                    vref(1, m22) = hh.tau;
+                    vref(2, m22) = vv[1];
+                    h(k + 1, k) = T{hh.beta, R{0}};
+                    h(k + 2, k) = czero;
+                }
+                const T tau = vref(1, m22);
+                const T v2 = vref(2, m22);
+                const T t1r = tau;
+                const T t2r = tau * crd::hesap::conj(v2);
+                const T t1l = crd::hesap::conj(tau);
+                const T t2l = crd::hesap::conj(tau) * v2;
+                for (crd::isize j = jtop; j <= std::min(kbot, k + 3); ++j)  // RIGHT
+                {
+                    const T refsum = h(j, k + 1) + v2 * h(j, k + 2);
+                    h(j, k + 1) = h(j, k + 1) - refsum * t1r;
+                    h(j, k + 2) = h(j, k + 2) - refsum * t2r;
+                }
+                const crd::isize jbot_c = std::min(ndcol, kbot);
+                for (crd::isize j = k + 1; j <= jbot_c; ++j)  // LEFT
+                {
+                    const T refsum = h(k + 1, j) + crd::hesap::conj(v2) * h(k + 2, j);
+                    h(k + 1, j) = h(k + 1, j) - refsum * t1l;
+                    h(k + 2, j) = h(k + 2, j) - refsum * t2l;
+                }
+                if (k >= ktop && !iszero(h(k + 1, k)))
+                {
+                    R tst1 = cabs1(h(k, k)) + cabs1(h(k + 1, k + 1));
+                    if (tst1 == R{0})
+                    {
+                        if (k >= ktop + 1) tst1 += cabs1(h(k, k - 1));
+                        if (k >= ktop + 2) tst1 += cabs1(h(k, k - 2));
+                        if (k >= ktop + 3) tst1 += cabs1(h(k, k - 3));
+                        if (k <= kbot - 2) tst1 += cabs1(h(k + 2, k + 1));
+                        if (k <= kbot - 3) tst1 += cabs1(h(k + 3, k + 1));
+                        if (k <= kbot - 4) tst1 += cabs1(h(k + 4, k + 1));
+                    }
+                    if (cabs1(h(k + 1, k)) <= std::max(smlnum, ulp * tst1))
+                    {
+                        const R h12 = std::max(cabs1(h(k + 1, k)), cabs1(h(k, k + 1)));
+                        const R h21 = std::min(cabs1(h(k + 1, k)), cabs1(h(k, k + 1)));
+                        const R h11 = std::max(cabs1(h(k + 1, k + 1)), cabs1(h(k, k) - h(k + 1, k + 1)));
+                        const R h22 = std::min(cabs1(h(k + 1, k + 1)), cabs1(h(k, k) - h(k + 1, k + 1)));
+                        const R scl = h11 + h12;
+                        const R tst2 = h22 * (h11 / scl);
+                        if (tst2 == R{0} || h21 * (h12 / scl) <= std::max(smlnum, ulp * tst2))
+                        {
+                            h(k + 1, k) = czero;
+                        }
+                    }
+                }
+                const crd::isize kms = k - incol;  // U accumulate (RIGHT form)
+                for (crd::isize j = std::max<crd::isize>(1, ktop - incol); j <= kdu; ++j)
+                {
+                    const T refsum = u(j, kms + 1) + v2 * u(j, kms + 2);
+                    u(j, kms + 1) = u(j, kms + 1) - refsum * t1r;
+                    u(j, kms + 2) = u(j, kms + 2) - refsum * t2r;
+                }
+            }
+
+            // ---- Normal case: chain of 3×3 reflections (m = mbot..mtop) ----
+            for (crd::isize m = mbot; m >= mtop; --m)
+            {
+                const crd::isize k = krcol + 2 * (m - 1);
+                if (k == ktop - 1)
+                {
+                    complex_dlaqr1<T>(3, &h(ktop, ktop), ld, shift(2 * m - 1), shift(2 * m), &vref(1, m));
+                    T vv[3] = {vref(1, m), vref(2, m), vref(3, m)};
+                    const auto hh = detail::make_householder_complex<R>(vv, 3);
+                    vref(1, m) = hh.tau;
+                    vref(2, m) = vv[1];
+                    vref(3, m) = vv[2];
+                }
+                else
+                {
+                    // Delayed transformation of the row below the m-th bulge (RIGHT form,
+                    // OLD reflector m from the previous krcol step).
+                    const T t1d = vref(1, m);
+                    const T t2d = t1d * crd::hesap::conj(vref(2, m));
+                    const T t3d = t1d * crd::hesap::conj(vref(3, m));
+                    const T refsum0 = vref(3, m) * h(k + 3, k + 2);
+                    h(k + 3, k) = czero - refsum0 * t1d;
+                    h(k + 3, k + 1) = czero - refsum0 * t2d;
+                    h(k + 3, k + 2) = h(k + 3, k + 2) - refsum0 * t3d;
+                    // Reflection to move the m-th bulge one step.
+                    T vv[3] = {h(k + 1, k), h(k + 2, k), h(k + 3, k)};
+                    const auto hh = detail::make_householder_complex<R>(vv, 3);
+                    if (!iszero(h(k + 3, k)) || !iszero(h(k + 3, k + 1)) || iszero(h(k + 3, k + 2)))
+                    {
+                        vref(1, m) = hh.tau;
+                        vref(2, m) = vv[1];
+                        vref(3, m) = vv[2];
+                        h(k + 1, k) = T{hh.beta, R{0}};
+                        h(k + 2, k) = czero;
+                        h(k + 3, k) = czero;
+                    }
+                    else
+                    {
+                        // Bulge collapsed: try to reintroduce ignoring H(k+1,k),H(k+2,k).
+                        complex_dlaqr1<T>(3, &h(k + 1, k + 1), ld, shift(2 * m - 1), shift(2 * m), vt);
+                        T vvt[3] = {vt[0], vt[1], vt[2]};
+                        const auto hh2 = detail::make_householder_complex<R>(vvt, 3);
+                        const T refsum = crd::hesap::conj(hh2.tau) *
+                                         (h(k + 1, k) + crd::hesap::conj(vvt[1]) * h(k + 2, k));
+                        if (cabs1(h(k + 2, k) - refsum * vvt[1]) + cabs1(refsum * vvt[2]) >
+                            ulp * (cabs1(h(k, k)) + cabs1(h(k + 1, k + 1)) + cabs1(h(k + 2, k + 2))))
+                        {
+                            vref(1, m) = hh.tau;
+                            vref(2, m) = vv[1];
+                            vref(3, m) = vv[2];
+                            h(k + 1, k) = T{hh.beta, R{0}};
+                            h(k + 2, k) = czero;
+                            h(k + 3, k) = czero;
+                        }
+                        else
+                        {
+                            h(k + 1, k) = h(k + 1, k) - refsum;
+                            h(k + 2, k) = czero;
+                            h(k + 3, k) = czero;
+                            vref(1, m) = hh2.tau;
+                            vref(2, m) = vvt[1];
+                            vref(3, m) = vvt[2];
+                        }
+                    }
+                }
+                // Apply from right + first column from left.
+                const T tau = vref(1, m);
+                const T v2 = vref(2, m);
+                const T v3 = vref(3, m);
+                const T t1r = tau;
+                const T t2r = tau * crd::hesap::conj(v2);
+                const T t3r = tau * crd::hesap::conj(v3);
+                for (crd::isize j = jtop; j <= std::min(kbot, k + 3); ++j)  // RIGHT
+                {
+                    const T refsum = h(j, k + 1) + v2 * h(j, k + 2) + v3 * h(j, k + 3);
+                    h(j, k + 1) = h(j, k + 1) - refsum * t1r;
+                    h(j, k + 2) = h(j, k + 2) - refsum * t2r;
+                    h(j, k + 3) = h(j, k + 3) - refsum * t3r;
+                }
+                {
+                    // First column from left.
+                    const T t1l = crd::hesap::conj(tau);
+                    const T t2l = t1l * v2;
+                    const T t3l = t1l * v3;
+                    const T refsum = h(k + 1, k + 1) + crd::hesap::conj(v2) * h(k + 2, k + 1) +
+                                     crd::hesap::conj(v3) * h(k + 3, k + 1);
+                    h(k + 1, k + 1) = h(k + 1, k + 1) - refsum * t1l;
+                    h(k + 2, k + 1) = h(k + 2, k + 1) - refsum * t2l;
+                    h(k + 3, k + 1) = h(k + 3, k + 1) - refsum * t3l;
+                }
+                if (k < ktop)
+                {
+                    continue;
+                }
+                if (!iszero(h(k + 1, k)))
+                {
+                    R tst1 = cabs1(h(k, k)) + cabs1(h(k + 1, k + 1));
+                    if (tst1 == R{0})
+                    {
+                        if (k >= ktop + 1) tst1 += cabs1(h(k, k - 1));
+                        if (k >= ktop + 2) tst1 += cabs1(h(k, k - 2));
+                        if (k >= ktop + 3) tst1 += cabs1(h(k, k - 3));
+                        if (k <= kbot - 2) tst1 += cabs1(h(k + 2, k + 1));
+                        if (k <= kbot - 3) tst1 += cabs1(h(k + 3, k + 1));
+                        if (k <= kbot - 4) tst1 += cabs1(h(k + 4, k + 1));
+                    }
+                    if (cabs1(h(k + 1, k)) <= std::max(smlnum, ulp * tst1))
+                    {
+                        const R h12 = std::max(cabs1(h(k + 1, k)), cabs1(h(k, k + 1)));
+                        const R h21 = std::min(cabs1(h(k + 1, k)), cabs1(h(k, k + 1)));
+                        const R h11 = std::max(cabs1(h(k + 1, k + 1)), cabs1(h(k, k) - h(k + 1, k + 1)));
+                        const R h22 = std::min(cabs1(h(k + 1, k + 1)), cabs1(h(k, k) - h(k + 1, k + 1)));
+                        const R scl = h11 + h12;
+                        const R tst2 = h22 * (h11 / scl);
+                        if (tst2 == R{0} || h21 * (h12 / scl) <= std::max(smlnum, ulp * tst2))
+                        {
+                            h(k + 1, k) = czero;
+                        }
+                    }
+                }
+            }
+
+            // ---- Delayed left updates (within the slab) for the chain ----
+            const crd::isize jbot_acc = std::min(ndcol, kbot);
+            for (crd::isize m = mbot; m >= mtop; --m)
+            {
+                const crd::isize k = krcol + 2 * (m - 1);
+                const T tau = vref(1, m);
+                const T v2 = vref(2, m);
+                const T v3 = vref(3, m);
+                const T t1l = crd::hesap::conj(tau);
+                const T t2l = t1l * v2;
+                const T t3l = t1l * v3;
+                for (crd::isize j = std::max(ktop, krcol + 2 * m); j <= jbot_acc; ++j)
+                {
+                    const T refsum = h(k + 1, j) + crd::hesap::conj(v2) * h(k + 2, j) +
+                                     crd::hesap::conj(v3) * h(k + 3, j);
+                    h(k + 1, j) = h(k + 1, j) - refsum * t1l;
+                    h(k + 2, j) = h(k + 2, j) - refsum * t2l;
+                    h(k + 3, j) = h(k + 3, j) - refsum * t3l;
+                }
+            }
+
+            // ---- Accumulate the chain reflections into U (RIGHT form) ----
+            for (crd::isize m = mbot; m >= mtop; --m)
+            {
+                const crd::isize k = krcol + 2 * (m - 1);
+                const crd::isize kms = k - incol;
+                crd::isize i2 = std::max<crd::isize>(1, ktop - incol);
+                i2 = std::max(i2, kms - (krcol - incol) + 1);
+                const crd::isize i4 = std::min(kdu, krcol + 2 * (mbot - 1) - incol + 5);
+                const T tau = vref(1, m);
+                const T v2 = vref(2, m);
+                const T v3 = vref(3, m);
+                const T t1r = tau;
+                const T t2r = tau * crd::hesap::conj(v2);
+                const T t3r = tau * crd::hesap::conj(v3);
+                for (crd::isize j = i2; j <= i4; ++j)
+                {
+                    const T refsum = u(j, kms + 1) + v2 * u(j, kms + 2) + v3 * u(j, kms + 3);
+                    u(j, kms + 1) = u(j, kms + 1) - refsum * t1r;
+                    u(j, kms + 2) = u(j, kms + 2) - refsum * t2r;
+                    u(j, kms + 3) = u(j, kms + 3) - refsum * t3r;
+                }
+            }
+        }
+
+        // ---- Far-from-diagonal updates via gemm using the accumulated U ----
+        const crd::isize jtop_g = wantt ? 1 : ktop;
+        const crd::isize jbot_g = wantt ? nn : kbot;
+        const crd::isize k1 = std::max<crd::isize>(1, ktop - incol);
+        const crd::isize nu = (kdu - std::max<crd::isize>(0, ndcol - kbot)) - k1 + 1;
+        if (nu > 0)
+        {
+            const crd::usize nus = static_cast<crd::usize>(nu);
+            const T* ublk = &u(k1, k1);
+            const crd::usize uld = umat.ld();
+            const crd::isize jcol0 = std::min(ndcol, kbot) + 1;
+            if (jcol0 <= jbot_g)  // Horizontal: H := Uᴴ·H
+            {
+                slab_left_h<T>(hd, ld, static_cast<crd::usize>(incol + k1 - 1),
+                               static_cast<crd::usize>(jcol0 - 1), nus,
+                               static_cast<crd::usize>(jbot_g - jcol0 + 1), ublk, uld, scratch, alloc);
+            }
+            const crd::isize maxki = std::max(ktop, incol);
+            if (jtop_g <= maxki - 1)  // Vertical: H := H·U
+            {
+                slab_right<T>(hd, ld, static_cast<crd::usize>(jtop_g - 1),
+                              static_cast<crd::usize>(incol + k1 - 1),
+                              static_cast<crd::usize>(maxki - jtop_g), nus, ublk, uld, scratch, alloc);
+            }
+            if (wantz)  // Z := Z·U
+            {
+                slab_right<T>(zd, zld, static_cast<crd::usize>(iloz - 1),
+                              static_cast<crd::usize>(incol + k1 - 1),
+                              static_cast<crd::usize>(ihiz - iloz + 1), nus, ublk, uld, scratch, alloc);
+            }
+        }
+    }
+}
+
+// v3d-2c-2b-3 — crossover: finish a small active block [ktop, kbot] with
+// single-shift `complex_schur` (the NMIN tail of the AED driver), writing the
+// upper-triangular block back into H + the global slab updates (complex sibling
+// of `schur_small_block`).
+template <typename T>
+void complex_schur_small_block(crd::memory::IAllocator* alloc, T* hd, crd::usize ld, crd::usize n,
+                               crd::usize ktop, crd::usize kbot, T* zd, crd::usize zld, bool wantz,
+                               crd::usize iloz, crd::usize ihiz, crd::containers::Array<T>& w)
+{
+    using R = RealType<T>;
+    const crd::usize nh = kbot - ktop + 1;
+    auto h = [&](crd::usize a, crd::usize b) -> T& { return hd[a * ld + b]; };
+    Matrix<T> win(alloc, nh, nh);
+    for (crd::usize a = 0; a < nh; ++a)
+    {
+        for (crd::usize b = 0; b < nh; ++b)
+        {
+            win.at(a, b) = (b + 1 >= a) ? h(ktop + a, ktop + b) : T{R{0}, R{0}};
+        }
+    }
+    ComplexSchur<T> sch = complex_schur<T>(alloc, win, 0, nh - 1, true);
+    for (crd::usize a = 0; a < nh; ++a)
+    {
+        for (crd::usize b = (a == 0 ? 0 : a - 1); b < nh; ++b)
+        {
+            h(ktop + a, ktop + b) = sch.t.at(a, b);
+        }
+        w[ktop + a] = sch.w.data()[a];
+    }
+    Matrix<T> scratch(alloc, n, n);
+    slab_right<T>(hd, ld, 0, ktop, ktop, nh, sch.z.data(), sch.z.ld(), scratch, alloc);
+    if (kbot + 1 < n)
+    {
+        slab_left_h<T>(hd, ld, ktop, kbot + 1, nh, n - (kbot + 1), sch.z.data(), sch.z.ld(), scratch,
+                       alloc);
+    }
+    if (wantz)
+    {
+        slab_right<T>(zd, zld, iloz, ktop, ihiz - iloz + 1, nh, sch.z.data(), sch.z.ld(), scratch,
+                      alloc);
+    }
+}
+} // namespace
+
+namespace detail
+{
+template <typename T>
+void complex_multishift_sweep(crd::memory::IAllocator* alloc, crd::usize n, crd::usize ktop,
+                              crd::usize kbot, const T* shifts, crd::usize nshifts, T* hd,
+                              crd::usize ld, crd::usize iloz, crd::usize ihiz, T* zd, crd::usize zld,
+                              bool wantz)
+{
+    complex_dlaqr5_sweep<T>(alloc, true, wantz, n, ktop, kbot, shifts, nshifts, hd, ld, iloz, ihiz, zd,
+                            zld);
+}
+template void complex_multishift_sweep<Complex<float>>(crd::memory::IAllocator*, crd::usize, crd::usize,
+                                                       crd::usize, const Complex<float>*, crd::usize,
+                                                       Complex<float>*, crd::usize, crd::usize,
+                                                       crd::usize, Complex<float>*, crd::usize, bool);
+template void complex_multishift_sweep<Complex<double>>(
+    crd::memory::IAllocator*, crd::usize, crd::usize, crd::usize, const Complex<double>*, crd::usize,
+    Complex<double>*, crd::usize, crd::usize, crd::usize, Complex<double>*, crd::usize, bool);
+} // namespace detail
+
+template <typename T>
+ComplexSchur<T> complex_schur_aed(crd::memory::IAllocator* alloc, const Matrix<T>& h_in, crd::usize ilo,
+                                  crd::usize ihi, bool vectors, crd::usize* sweeps)
+{
+    static_assert(is_complex_v<T>, "complex_schur_aed is complex-only");
+    using R = RealType<T>;
+    const crd::usize n = h_in.rows();
+    ComplexSchur<T> out(alloc);
+    out.t = h_in.clone();
+    out.w.resize(n);
+    const T czero{R{0}, R{0}};
+    for (crd::usize k = 0; k < n; ++k)
+    {
+        out.w[k] = czero;
+    }
+    if (vectors)
+    {
+        out.z = Matrix<T>(alloc, n, n);
+        out.z.set_identity();
+    }
+    if (sweeps != nullptr)
+    {
+        *sweeps = 0;
+    }
+    if (n == 0)
+    {
+        out.converged = true;
+        return out;
+    }
+
+    // Crossover below which single-shift complex_schur is faster than AED.
+    // NMIN measured (NOT borrowed from the real path's 200): complex single-shift
+    // is cheaper per sweep but runs more sweeps; tuned in the perf pass.
+    // NMIN measured (NOT borrowed from the real path's 200): the AED+train win
+    // over single-shift complex_schur crosses over at n≈200 (n=128 loses 0.73×,
+    // n=256 wins 1.16×, n=512 wins 2.01×), so blocks ≤150 are finished by
+    // single-shift; AED engages above and the win widens with N.
+    constexpr crd::usize kNmin = 150;
+    constexpr crd::usize kNibble = 14;
+    T* hd = out.t.data();
+    const crd::usize ld = out.t.ld();
+    T* zd = vectors ? out.z.data() : nullptr;
+    const crd::usize zld = vectors ? out.z.ld() : 0;
+    auto h = [&](crd::usize a, crd::usize b) -> T& { return hd[a * ld + b]; };
+    auto cabs1 = [](const T& x) -> R { return std::abs(x.re) + std::abs(x.im); };
+
+    for (crd::usize k = 0; k < ilo; ++k)
+    {
+        out.w[k] = h(k, k);
+    }
+    for (crd::usize k = ihi + 1; k < n; ++k)
+    {
+        out.w[k] = h(k, k);
+    }
+
+    const R eps = std::numeric_limits<R>::epsilon();
+    const R safmin = std::numeric_limits<R>::min();
+    const R ulp = eps;
+    const R smlnum = safmin * (static_cast<R>(ihi - ilo + 1) / ulp);
+    crd::usize total_sweeps = 0;
+
+    crd::isize kbot = static_cast<crd::isize>(ihi);
+    crd::usize stall = 0;
+    crd::usize last_kbot = ihi + 1;
+    const crd::usize itmax = 30 * std::max<crd::usize>(10, ihi - ilo + 1);
+    crd::usize iters = 0;
+
+    while (kbot >= static_cast<crd::isize>(ilo))
+    {
+        const crd::usize kb = static_cast<crd::usize>(kbot);
+        if (++iters > itmax)
+        {
+            out.converged = false;
+            return out;
+        }
+        // Find the active block top: split at a negligible subdiagonal (cabs1).
+        crd::usize ktop = ilo;
+        for (crd::usize kk = kb; kk > ilo; --kk)
+        {
+            const R tst = cabs1(h(kk - 1, kk - 1)) + cabs1(h(kk, kk));
+            const R thr = (tst == R{0}) ? smlnum : ulp * tst;
+            if (cabs1(h(kk, kk - 1)) <= std::max(smlnum, thr))
+            {
+                h(kk, kk - 1) = czero;
+                ktop = kk;
+                break;
+            }
+        }
+        const crd::usize nh = kb - ktop + 1;
+
+        if (nh == 1)
+        {
+            out.w[kb] = h(kb, kb);
+            kbot = static_cast<crd::isize>(ktop) - 1;
+            stall = 0;
+            continue;
+        }
+
+        if (kb != last_kbot)
+        {
+            stall = 0;
+            last_kbot = kb;
+        }
+
+        if (nh <= kNmin || stall >= 3)
+        {
+            // Crossover / stalled: finish the whole block with single-shift zlahqr.
+            complex_schur_small_block<T>(alloc, hd, ld, n, ktop, kb, zd, zld, vectors, ilo, ihi, out.w);
+            kbot = static_cast<crd::isize>(ktop) - 1;
+            stall = 0;
+            continue;
+        }
+
+        // Aggressive Early Deflation on the trailing window.
+        crd::usize nw = std::min(nh, std::max<crd::usize>(2, nh / 3));
+        if (nw > nh - 1)
+        {
+            nw = nh - 1;
+        }
+        const crd::usize kwtop = kb - nw + 1;
+        const AedResult<T> aed = complex_aed_deflate<T>(alloc, out.t, ktop, kb, nw, out.z, vectors, ilo,
+                                                        ihi, true, out.w);
+        kbot = static_cast<crd::isize>(kb) - static_cast<crd::isize>(aed.nd);
+
+        // Nibble: if deflation was productive, skip the sweep and AED again.
+        if (aed.nd > 0 && 100 * aed.nd > kNibble * nw)
+        {
+            stall = 0;
+            continue;
+        }
+
+        // One small-bulge multishift QR sweep using the undeflated AED eigenvalues
+        // as shifts (they occupy [kwtop, kwtop+ns-1] after complex_aed_deflate).
+        const crd::usize ns = aed.ns;
+        const crd::isize kbnew = kbot;
+        if (ns >= 2 && kbnew >= static_cast<crd::isize>(ktop) + 2)
+        {
+            const crd::usize sweep_bot = static_cast<crd::usize>(kbnew);
+            crd::containers::Array<T> shf(alloc);
+            shf.resize(ns);
+            for (crd::usize i = 0; i < ns; ++i)
+            {
+                shf[i] = out.w[kwtop + i];
+            }
+            complex_dlaqr5_sweep<T>(alloc, true, vectors, n, ktop, sweep_bot, shf.data(), ns, hd, ld,
+                                    ilo, ihi, zd, zld);
+            ++total_sweeps;
+        }
+        ++stall;
+    }
+
+    out.converged = true;
+    if (sweeps != nullptr)
+    {
+        *sweeps = total_sweeps;
+    }
+    return out;
+}
+
+template ComplexSchur<Complex<float>> complex_schur_aed<Complex<float>>(
+    crd::memory::IAllocator*, const Matrix<Complex<float>>&, crd::usize, crd::usize, bool, crd::usize*);
+template ComplexSchur<Complex<double>> complex_schur_aed<Complex<double>>(
+    crd::memory::IAllocator*, const Matrix<Complex<double>>&, crd::usize, crd::usize, bool, crd::usize*);
+
+// =======================================================================
+// v3d-2b — public non-symmetric eigensolver (real input). Assembles the
+// shipped pipeline: balance → hessenberg + form Q → schur_aed → dtrevc →
+// 3-stage back-transform → complex assembly + normalization.
+// =======================================================================
+template <typename T>
+EigNonsym<T> eig_real_impl(crd::memory::IAllocator* alloc, const Matrix<T>& a)
+{
+    static_assert(!is_complex_v<T>, "eig_real_impl is real-only (complex is eig_complex_impl)");
+    const crd::usize n = a.rows();
+    CRD_ASSERT_MSG(a.is_square(), "eig: A must be square");
+    EigNonsym<T> out(alloc, n);
+    if (n == 0)
+    {
+        return out;
+    }
+
+    // 1. balance — isolating permutation + radix-2 diagonal scaling.
+    Matrix<T> work = a.clone();
+    crd::containers::Array<T> scale(alloc);
+    crd::usize ilo = 0;
+    crd::usize ihi = 0;
+    balance<T>(work, scale, ilo, ihi);
+
+    // 2. Hessenberg reduction of the active block + explicit Q (dorghr).
+    crd::containers::Array<T> tau(alloc);
+    hessenberg<T>(work, ilo, ihi, tau);
+    Matrix<T> q = form_hessenberg_q<T>(alloc, work, ilo, ihi, tau);
+
+    // 3. Extract the full Hessenberg H: upper triangle + first subdiagonal
+    //    (j+1 >= i). The corners are already block-upper-triangular after
+    //    balance; the masked strict-lower of the active block holds reflectors.
+    Matrix<T> hmat(alloc, n, n);
+    for (crd::usize i = 0; i < n; ++i)
+    {
+        for (crd::usize j = 0; j < n; ++j)
+        {
+            hmat.at(i, j) = (j + 1 >= i) ? work.at(i, j) : T{0};
+        }
+    }
+
+    // 4. Real Schur via AED multishift train: A_bal = (Q·Z)·T·(Q·Z)ᵀ.
+    RealSchur<T> sch = schur_aed<T>(alloc, hmat, ilo, ihi, true);
+
+    // 5. Right eigenvectors of the quasi-triangular T (real-packed columns).
+    Matrix<T> vschur = detail::schur_right_eigvecs<T>(alloc, sch.t);
+
+    // 6. Back-transform stages (i)+(ii): QZ = Q·Z, then V = QZ·V_schur. Real
+    //    linear maps preserve the dtrevc re/im column packing.
+    Matrix<T> qz(alloc, n, n);
+    gemm<T, Layout::RowMajor>(T{1}, q, sch.z, T{0}, qz);
+    Matrix<T> vfull(alloc, n, n);
+    gemm<T, Layout::RowMajor>(T{1}, qz, vschur, T{0}, vfull);
+
+    // 7. Stage (iii): undo balance (dgebak) on the rows of V.
+    gebak_right(vfull.data(), vfull.ld(), n, n, ilo, ihi, scale.data());
+
+    // 8. Assemble complex eigenpairs (Schur order, D(non-sym)-5) + normalize
+    //    each column to ‖·‖₂=1 with the lowest-index largest-magnitude
+    //    component rotated real-positive (D(non-sym)-4).
+    auto vat = [&](crd::usize i, crd::usize j) -> T { return vfull.data()[i * vfull.ld() + j]; };
+    crd::usize k = 0;
+    while (k < n)
+    {
+        const T li = sch.wi[k];
+        if (li == T{0})
+        {
+            // Real eigenvalue → real eigenvector in column k.
+            T norm2 = T{0};
+            crd::usize istar = 0;
+            T best = T{-1};
+            for (crd::usize i = 0; i < n; ++i)
+            {
+                const T c = vat(i, k);
+                norm2 += c * c;
+                const T mag = std::abs(c);
+                if (mag > best)
+                {
+                    best = mag;
+                    istar = i;
+                }
+            }
+            norm2 = std::sqrt(norm2);
+            const T sgn = (vat(istar, k) < T{0}) ? T{-1} : T{1};
+            const T s = (norm2 > T{0}) ? sgn / norm2 : T{1};
+            for (crd::usize i = 0; i < n; ++i)
+            {
+                out.vectors.at(i, k) = Complex<T>{vat(i, k) * s, T{0}};
+            }
+            out.values.data()[k] = Complex<T>{sch.wr[k], T{0}};
+            k += 1;
+        }
+        else
+        {
+            // Complex-conjugate pair: columns k (re), k+1 (im); wi[k] > 0.
+            CRD_ASSERT_MSG(li > T{0}, "eig: complex pair must lead with +imag (Schur convention)");
+            T norm2 = T{0};
+            crd::usize istar = 0;
+            T best = T{-1};
+            for (crd::usize i = 0; i < n; ++i)
+            {
+                const T re = vat(i, k);
+                const T im = vat(i, k + 1);
+                const T mag2 = re * re + im * im;
+                norm2 += mag2;
+                if (mag2 > best)
+                {
+                    best = mag2;
+                    istar = i;
+                }
+            }
+            norm2 = std::sqrt(norm2);
+            const T rr = vat(istar, k);
+            const T ri = vat(istar, k + 1);
+            const T m = std::sqrt(rr * rr + ri * ri);
+            const T inv = (m > T{0} && norm2 > T{0}) ? T{1} / (m * norm2) : T{1};
+            for (crd::usize i = 0; i < n; ++i)
+            {
+                const T re = vat(i, k);
+                const T im = vat(i, k + 1);
+                // Phase-rotate by conj(rr+i·ri)/|·| then scale to unit 2-norm.
+                const T nre = (rr * re + ri * im) * inv;
+                const T nim = (rr * im - ri * re) * inv;
+                out.vectors.at(i, k) = Complex<T>{nre, nim};
+                out.vectors.at(i, k + 1) = Complex<T>{nre, -nim};  // conjugate column
+            }
+            out.values.data()[k] = Complex<T>{sch.wr[k], li};
+            out.values.data()[k + 1] = Complex<T>{sch.wr[k + 1], sch.wi[k + 1]};
+            k += 2;
+        }
+    }
+    return out;
+}
+
+// v3d-2c-3 — complex non-symmetric eigensolver. Pipeline mirrors the real
+// eig_real_impl but UNITARY (Q, Z) and all-complex eigenpairs (no real-packed
+// columns, no conjugate-pair assembly): balance → hessenberg + form Q →
+// complex_schur_aed → ztrevc → V = D⁻¹P · Q · Z · V_schur (two gemms + complex
+// gebak) → normalize each column to ‖·‖₂=1 with the largest-magnitude component
+// phase-rotated real-positive (D(non-sym)-4). Eigenpairs in Schur order
+// (D(non-sym)-5). T = Complex<f32|f64>.
+template <typename T>
+EigNonsym<T> eig_complex_impl(crd::memory::IAllocator* alloc, const Matrix<T>& a)
+{
+    static_assert(is_complex_v<T>, "eig_complex_impl is complex-only");
+    using R = RealType<T>;
+    const crd::usize n = a.rows();
+    CRD_ASSERT_MSG(a.is_square(), "eig: A must be square");
+    EigNonsym<T> out(alloc, n);
+    if (n == 0)
+    {
+        return out;
+    }
+    const T czero{R{0}, R{0}};
+
+    // 1. balance (zgebal) — real scale array (perm indices + radix-2 factors).
+    Matrix<T> work = a.clone();
+    crd::containers::Array<R> scale(alloc);
+    crd::usize ilo = 0;
+    crd::usize ihi = 0;
+    balance<T>(work, scale, ilo, ihi);
+
+    // 2. complex Hessenberg (zgehd2) + explicit unitary Q (zunghr).
+    crd::containers::Array<T> tau(alloc);
+    hessenberg<T>(work, ilo, ihi, tau);
+    Matrix<T> q = form_hessenberg_q<T>(alloc, work, ilo, ihi, tau);
+
+    // 3. Extract the full upper-Hessenberg H (j+1 >= i).
+    Matrix<T> hmat(alloc, n, n);
+    for (crd::usize i = 0; i < n; ++i)
+    {
+        for (crd::usize j = 0; j < n; ++j)
+        {
+            hmat.at(i, j) = (j + 1 >= i) ? work.at(i, j) : czero;
+        }
+    }
+
+    // 4. Complex Schur via AED multishift: A_bal = (Q·Z)·T·(Q·Z)ᴴ.
+    ComplexSchur<T> sch = complex_schur_aed<T>(alloc, hmat, ilo, ihi, true);
+
+    // 5. Right eigenvectors of the upper-triangular T (un-normalized).
+    Matrix<T> vschur(alloc);
+    ztrevc_right<T>(alloc, sch.t, vschur);
+
+    // 6. Back-transform (i)+(ii): QZ = Q·Z, then V = QZ·V_schur.
+    Matrix<T> qz(alloc, n, n);
+    gemm<T, Layout::RowMajor>(T{R{1}, R{0}}, q, sch.z, czero, qz);
+    Matrix<T> vfull(alloc, n, n);
+    gemm<T, Layout::RowMajor>(T{R{1}, R{0}}, qz, vschur, czero, vfull);
+
+    // 7. Stage (iii): undo balance (zgebak) on the rows of V (real scale).
+    gebak_right(vfull.data(), vfull.ld(), n, n, ilo, ihi, scale.data());
+
+    // 8. Normalize each column once (D(non-sym)-4): ‖·‖₂=1, then phase-rotate so
+    //    the lowest-index largest-magnitude component is real-positive.
+    auto vat = [&](crd::usize i, crd::usize j) -> T { return vfull.data()[i * vfull.ld() + j]; };
+    for (crd::usize k = 0; k < n; ++k)
+    {
+        R norm2 = R{0};
+        crd::usize istar = 0;
+        R best = R{-1};
+        for (crd::usize i = 0; i < n; ++i)
+        {
+            const T c = vat(i, k);
+            const R mag2 = c.re * c.re + c.im * c.im;
+            norm2 += mag2;
+            if (mag2 > best)
+            {
+                best = mag2;
+                istar = i;
+            }
+        }
+        norm2 = std::sqrt(norm2);
+        const T piv = vat(istar, k);
+        const R pm = std::sqrt(piv.re * piv.re + piv.im * piv.im);
+        const R inv = (pm > R{0} && norm2 > R{0}) ? R{1} / (pm * norm2) : R{1};
+        for (crd::usize i = 0; i < n; ++i)
+        {
+            const T c = vat(i, k);
+            // Rotate by conj(piv)/pm (makes piv real-positive) then scale to ‖·‖₂=1.
+            const R nre = (c.re * piv.re + c.im * piv.im) * inv;
+            const R nim = (c.im * piv.re - c.re * piv.im) * inv;
+            out.vectors.at(i, k) = T{nre, nim};
+        }
+        out.values.data()[k] = sch.w.data()[k];
+    }
+    return out;
+}
+
+// Public dispatcher (v3d-2b real + v3d-2c-3 complex).
+template <typename T>
+EigNonsym<T> eig(crd::memory::IAllocator* alloc, const Matrix<T>& a)
+{
+    if constexpr (is_complex_v<T>)
+    {
+        return eig_complex_impl<T>(alloc, a);
+    }
+    else
+    {
+        return eig_real_impl<T>(alloc, a);
+    }
+}
+
+template EigNonsym<float> eig<float>(crd::memory::IAllocator*, const Matrix<float>&);
+template EigNonsym<double> eig<double>(crd::memory::IAllocator*, const Matrix<double>&);
+template EigNonsym<Complex<float>> eig<Complex<float>>(crd::memory::IAllocator*,
+                                                       const Matrix<Complex<float>>&);
+template EigNonsym<Complex<double>> eig<Complex<double>>(crd::memory::IAllocator*,
+                                                         const Matrix<Complex<double>>&);
 
 // v3d-1c-4 (multishift train) — thin wrapper exposing the anonymous-namespace
 // `dlaqr5_sweep` (the train) for the M1/M2 correctness gate. Not yet on the

@@ -2,8 +2,10 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/core/types.hpp>
+#include <crd/hesap/complex.hpp>
 #include <crd/hesap/dense/matrix.hpp>
 #include <crd/hesap/dense/real_type.hpp>
+#include <crd/hesap/dense/vector.hpp>
 #include <crd/memory/allocator.hpp>
 
 namespace crd::hesap::dense
@@ -30,12 +32,16 @@ namespace crd::hesap::dense
 // SCALING similarity. In place. On exit:
 //   - `ilo`/`ihi` (0-based, inclusive) bound the block still needing the QR
 //     iteration; indices outside carry isolated eigenvalues on the diagonal,
-//   - `scale[i]` holds the permutation/scale info (LAPACK convention: for
-//     i<ilo or i>ihi the permutation index, for ilo<=i<=ihi the scale factor).
-// Reduces rounding error in the downstream Schur step. Real f32/f64.
+//   - `scale[i]` (REAL — `RealType<T>`) holds the permutation/scale info (LAPACK
+//     convention: for i<ilo or i>ihi the permutation index, for ilo<=i<=ihi the
+//     scale factor).
+// Reduces rounding error in the downstream Schur step. Real f32/f64 AND complex
+// c32/c64 (v3d-2c-2, zgebal): for complex `T` the same permutation + radix-2
+// scaling on |·| magnitudes; the scale array is real either way. `if constexpr`.
 // =======================================================================
 template <typename T>
-void balance(Matrix<T>& a, crd::containers::Array<T>& scale, crd::usize& ilo, crd::usize& ihi);
+void balance(Matrix<T>& a, crd::containers::Array<RealType<T>>& scale, crd::usize& ilo,
+             crd::usize& ihi);
 
 // =======================================================================
 // hessenberg — reduce the active block A[ilo..ihi, ilo..ihi] (n×n A, RowMajor)
@@ -48,7 +54,11 @@ void balance(Matrix<T>& a, crd::containers::Array<T>& scale, crd::usize& ilo, cr
 //     (entries outside [ilo, ihi-1) are 0).
 // Rows/cols outside [ilo, ihi] are left untouched (they carry isolated
 // eigenvalues after balancing). For an un-balanced matrix pass ilo=0, ihi=n-1.
-// Real f32/f64.
+//
+// Real f32/f64 AND complex c32/c64 (v3d-2c-1, zgehd2): for complex `T`, the
+// reduction is a UNITARY similarity Qᴴ·A·Q = H carried on the two-real-array
+// SIMD path internally (`make_householder_complex`); the subdiagonal of H is
+// real, `tau` is complex. Dispatch is compile-time (`if constexpr`).
 // =======================================================================
 template <typename T>
 void hessenberg(Matrix<T>& a, crd::usize ilo, crd::usize ihi, crd::containers::Array<T>& tau);
@@ -57,7 +67,8 @@ void hessenberg(Matrix<T>& a, crd::usize ilo, crd::usize ihi, crd::containers::A
 // form_hessenberg_q — materialize the orthogonal Q (n×n) of the Hessenberg
 // reduction (LAPACK dorghr), from the reflectors stored in `a_packed` (the
 // post-`hessenberg` matrix) + `tau`. Q = H_ilo · H_{ilo+1} · … · H_{ihi-2},
-// identity outside the [ilo, ihi] block. So A = Q · H · Qᵀ.
+// identity outside the [ilo, ihi] block. So A = Q · H · Qᵀ. Complex c32/c64
+// (v3d-2c-1, zunghr): Q is UNITARY and A = Q · H · Qᴴ.
 // =======================================================================
 template <typename T>
 [[nodiscard]] Matrix<T> form_hessenberg_q(crd::memory::IAllocator* alloc, const Matrix<T>& a_packed,
@@ -154,6 +165,153 @@ template <typename T>
                                      crd::usize ilo, crd::usize ihi, bool vectors,
                                      crd::usize* sweeps = nullptr);
 
+// -----------------------------------------------------------------------
+// Phase 3.1.6 v3d-2c-2 — complex Schur form via single-shift QR (zlahqr).
+//
+// A complex (Hermitian-NOT-assumed) upper-Hessenberg `h_in` (n×n) over the
+// active block [ilo, ihi] is reduced to UPPER-TRIANGULAR Schur form T by a
+// unitary similarity: `h_in = Z·T·Zᴴ`. Complex eigenvalues sit directly on the
+// diagonal of T (no 2×2 blocks, no `dlanv2` — that is the structural
+// simplification over the real `real_schur`). Single Wilkinson-shift implicit
+// QR with complex Givens bulge-chase + Ahues-Tisseur deflation + an exceptional
+// shift schedule (D(non-sym)-6). With `vectors`, accumulates Z. c32/c64.
+// -----------------------------------------------------------------------
+template <typename T>  // T = Complex<f32|f64>
+struct ComplexSchur
+{
+    Matrix<T> t;                  // upper-triangular Schur form
+    Matrix<T> z;                  // unitary Schur vectors: h_in = Z·T·Zᴴ (empty if !vectors)
+    crd::containers::Array<T> w;  // eigenvalues (the diagonal of T), length n
+    bool converged = false;
+
+    explicit ComplexSchur(crd::memory::IAllocator* alloc) noexcept : t(alloc), z(alloc), w(alloc) {}
+    ComplexSchur(ComplexSchur&&) noexcept = default;
+    ComplexSchur& operator=(ComplexSchur&&) noexcept = default;
+    ComplexSchur(const ComplexSchur&) = delete;
+    ComplexSchur& operator=(const ComplexSchur&) = delete;
+};
+
+template <typename T>
+[[nodiscard]] ComplexSchur<T> complex_schur(crd::memory::IAllocator* alloc, const Matrix<T>& h_in,
+                                            crd::usize ilo, crd::usize ihi, bool vectors);
+
+// =======================================================================
+// v3d-2c-2b-1 — reorder_complex_schur (LAPACK ztrexc): move the diagonal
+// eigenvalue at position `ifst` of an UPPER-TRIANGULAR complex Schur form `t`
+// (n×n) to position `ilst`, by a sequence of adjacent 1×1 swaps. Each swap of
+// adjacent diagonal entries t(k,k), t(k+1,k+1) is a single complex Givens
+// (`zlartg(t(k,k+1), t(k+1,k+1)−t(k,k))`) applied as a unitary similarity
+// G·T·Gᴴ to rows/cols (k,k+1) of T + columns (k,k+1) of the unitary `z`, so the
+// decomposition `A = z·t·zᴴ` is preserved with eigenvalues permuted. Positions
+// are 0-based. The complex analog of `reorder_schur` — with NO 2×2 blocks
+// (complex eigenvalues sit directly on the diagonal) there is no `dlaexc`/
+// `dlasy2`, so every swap is an exact 1×1 rotation with no rejection path; the
+// `bool` return is `true` (API symmetry with the real reorder for the AED
+// deflation caller, v3d-2c-2b-2). c32/c64.
+// =======================================================================
+template <typename T>  // T = Complex<f32|f64>
+bool reorder_complex_schur(Matrix<T>& t, Matrix<T>& z, crd::usize ifst, crd::usize ilst);
+
+// =======================================================================
+// v3d-2c-2b-2 — complex_aed_deflate (LAPACK zlaqr2/zlaqr3): one Aggressive
+// Early Deflation pass on the active upper-Hessenberg block [ktop, kbot] of `h`
+// (n×n complex, 0-based inclusive). Takes a trailing deflation window of size
+// `nw`, computes its complex Schur form (via `complex_schur`), and tests each
+// eigenvalue's spike tip `|s|·|V(1,j)|` (s = the subdiagonal coupling above the
+// window): negligible ⇒ deflate, else `reorder_complex_schur` moves it up. The
+// spike is reflected (`make_householder_complex`) + the leading block
+// re-Hessenbergized (`hessenberg<Complex>`), and `h` (+ `z` over [iloz,ihiz] if
+// `wantz`; full T slabs if `wantt`) is updated globally via complex `gemm` slabs
+// so `h` stays unitarily similar. `w` receives the window eigenvalues (the
+// diagonal of the window Schur form). Returns {ns = #undeflatable shifts, nd =
+// #deflated}. The complex analog of `aed_deflate` — with NO 2×2 blocks the
+// deflation test, the eigenvalue restore (diagonal of T) and the reorder are all
+// 1×1 (no `dlanv2`, no bulge branch). The complex multishift driver (v3d-2c-2b-3)
+// consumes this. c32/c64.
+// =======================================================================
+template <typename T>  // T = Complex<f32|f64>
+[[nodiscard]] AedResult<T> complex_aed_deflate(crd::memory::IAllocator* alloc, Matrix<T>& h,
+                                               crd::usize ktop, crd::usize kbot, crd::usize nw,
+                                               Matrix<T>& z, bool wantz, crd::usize iloz,
+                                               crd::usize ihiz, bool wantt,
+                                               crd::containers::Array<T>& w);
+
+// =======================================================================
+// v3d-2c-2b-3 — complex_schur_aed (LAPACK zlaqr0-class): upper-triangular
+// complex Schur form of an upper-Hessenberg `h_in` over [ilo, ihi] driven by
+// **Aggressive Early Deflation**. The driver loops: deflate converged trailing
+// eigenvalues via `complex_aed_deflate`, then run a small-bulge multishift QR
+// sweep (`zlaqr5`-class, complex: accumulate per-window reflectors into U then
+// BLAS-3 `gemm` slab far-updates) using the undeflated AED eigenvalues as
+// shifts; blocks below a crossover (NMIN) are finished by `complex_schur`
+// (zlahqr). AED converges a whole window per inner Schur instead of one
+// eigenvalue per O(n) sweep, so the total QR-sweep count drops vs single-shift
+// `complex_schur` — the lever that crushes it at scale (the complex external
+// refs Eigen `ComplexSchur` + LAPACK `zhseqr` access-violate at n≥256, so the
+// scale gate is against our own single-shift baseline). `sweeps` (out) reports
+// the multishift-sweep count. c32/c64. h_in = Z·T·Zᴴ.
+// =======================================================================
+template <typename T>  // T = Complex<f32|f64>
+[[nodiscard]] ComplexSchur<T> complex_schur_aed(crd::memory::IAllocator* alloc, const Matrix<T>& h_in,
+                                                crd::usize ilo, crd::usize ihi, bool vectors,
+                                                crd::usize* sweeps = nullptr);
+
+// -----------------------------------------------------------------------
+// Phase 3.1.6 v3d-2b — public non-symmetric eigensolver (real input).
+//
+//   A·vₖ = λₖ·vₖ ,  A real n×n general.
+//
+// Pipeline: balance (dgebal) → Hessenberg (dgehd2) + form Q (dorghr) →
+// real Schur via AED multishift (schur_aed: A_bal = (Q·Z)·T·(Q·Z)ᵀ) →
+// right eigenvectors of T (dtrevc) → 3-stage back-transform
+//   V = D⁻¹·P · Q · Z · V_schur
+// undoing Schur (Z·), Hessenberg (Q·) and balance (dgebak: row scale over
+// [ilo,ihi] + isolating permutation at the corners). All three stages are
+// real-linear, so the dtrevc real-packed re/im columns survive them and the
+// complex eigenvectors are assembled only at the end.
+//
+// Real A has real eigenvalues (real eigenvectors) and complex-conjugate
+// eigenvalue PAIRS (conjugate eigenvector pairs) — `values`/`vectors` are
+// therefore complex even for a real `T`. Eigenpairs are returned in Schur
+// order (the diagonal order of T from `schur_aed` — deterministic;
+// D(non-sym)-5), NOT sorted (complex spectra have no natural total order).
+//
+// Eigenvector normalization (D(non-sym)-4, matches LAPACK dgeev + Eigen
+// EigenSolver): each column scaled to Euclidean norm 1, then phase-rotated so
+// the lowest-index largest-magnitude component is real and positive (the
+// conjugate column carries the conjugated phase). NOTE: this supersedes the
+// v3d-2 plan-row wording "max-abs = 1" — 2-norm=1 is the LAPACK convention and
+// keeps the head-to-head gate vs Eigen/LAPACK clean.
+// -----------------------------------------------------------------------
+template <typename T>
+struct EigNonsym
+{
+    Vector<Complex<RealType<T>>> values;   // eigenvalues (Schur order)
+    Matrix<Complex<RealType<T>>> vectors;  // column k = eigenvector for values[k]
+
+    explicit EigNonsym(crd::memory::IAllocator* alloc) noexcept : values(alloc), vectors(alloc) {}
+    EigNonsym(crd::memory::IAllocator* alloc, crd::usize n) : values(alloc, n), vectors(alloc, n, n) {}
+
+    EigNonsym(EigNonsym&&) noexcept = default;
+    EigNonsym& operator=(EigNonsym&&) noexcept = default;
+    EigNonsym(const EigNonsym&) = delete;
+    EigNonsym& operator=(const EigNonsym&) = delete;
+};
+
+// =======================================================================
+// eig — full non-symmetric eigendecomposition of a general matrix `a` (not
+// modified; cloned into a working buffer internally). Scratch + outputs use
+// `alloc`. Real f32/f64 (v3d-2b) AND complex c32/c64 (v3d-2c-3, zgeev path):
+// dispatched compile-time via `if constexpr`. Complex input → upper-triangular
+// complex Schur (`complex_schur_aed`) + `ztrevc` + unitary back-transform;
+// every eigenpair is a single complex column (no real-packed/conjugate-pair
+// layout). Both paths: eigenpairs in Schur order (D(non-sym)-5), each
+// eigenvector ‖·‖₂=1 with the largest-magnitude component real-positive
+// (D(non-sym)-4).
+// =======================================================================
+template <typename T>
+[[nodiscard]] EigNonsym<T> eig(crd::memory::IAllocator* alloc, const Matrix<T>& a);
+
 namespace detail
 {
 // =======================================================================
@@ -171,6 +329,19 @@ template <typename T>
 void multishift_sweep(crd::memory::IAllocator* alloc, crd::usize n, crd::usize ktop, crd::usize kbot,
                       const T* sr, const T* si, crd::usize nshifts, T* hd, crd::usize ld,
                       crd::usize iloz, crd::usize ihiz, T* zd, crd::usize zld, bool wantz);
+
+// =======================================================================
+// v3d-2c-2b-3 — exposed for the complex implicit-Q isolation gate. One complex
+// small-bulge multishift QR sweep (`zlaqr5`) on the active block [ktop, kbot] of
+// `hd` (n×n complex, row-major) with `nshifts` complex shifts (paired into
+// nshifts/2 bulges). One sweep is a unitary similarity, so on Z=I the result
+// satisfies Z·H'·Zᴴ == H_orig regardless of shifts. T = Complex<f32|f64>.
+// =======================================================================
+template <typename T>
+void complex_multishift_sweep(crd::memory::IAllocator* alloc, crd::usize n, crd::usize ktop,
+                              crd::usize kbot, const T* shifts, crd::usize nshifts, T* hd,
+                              crd::usize ld, crd::usize iloz, crd::usize ihiz, T* zd, crd::usize zld,
+                              bool wantz);
 
 // =======================================================================
 // v3d-2a — exposed for the dlaln2 isolation gate. Solve (ca·A − w·D)·X = scale·B

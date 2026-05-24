@@ -192,6 +192,30 @@ template <typename T>
     return crd::math::deterministic::atan2(z.im, z.re);
 }
 
+// Principal square root. Numerically-stable closed form (avoids cancellation
+// when re < 0 by computing the dominant component from |z|+|re| and the other
+// by division). Branch cut on the negative real axis; sqrt of a non-negative
+// real is the real sqrt. Uses std::sqrt (correctly-rounded) + abs (hypot) →
+// deterministic. Needed by the complex Wilkinson shift (zlahqr, v3d-2c-2).
+template <typename T>
+[[nodiscard]] inline Complex<T> sqrt(const Complex<T>& z) noexcept
+{
+    if (z.re == T(0) && z.im == T(0))
+    {
+        return Complex<T>{T(0), T(0)};
+    }
+    const T t = abs(z);  // hypot(re, im)
+    if (z.re >= T(0))
+    {
+        const T w = std::sqrt((t + z.re) * T(0.5));
+        return Complex<T>{w, z.im / (w + w)};
+    }
+    const T w = std::sqrt((t - z.re) * T(0.5));
+    const T imag = (z.im >= T(0)) ? w : -w;
+    const T re = z.im / (imag + imag);  // = |im| / (2w), sign-correct
+    return Complex<T>{re, imag};
+}
+
 // ---- Type aliases ---------------------------------------------------
 
 using Complex32 = Complex<f32>;

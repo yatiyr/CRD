@@ -1,6 +1,7 @@
 #pragma once
 
 #include <crd/core/types.hpp>
+#include <crd/hesap/complex.hpp>
 
 #include <cmath>
 #include <limits>
@@ -130,6 +131,130 @@ template <typename T>
     }
 
     return Householder<T>{tau, beta};
+}
+
+// -----------------------------------------------------------------------
+// make_householder_complex — faithful LAPACK `zlarfg`. Generates a complex
+// elementary reflector
+//
+//     H = I - tau * v * v^H,   v[0] = 1 (implicit),
+//
+// such that  H^H * x = beta * e_0,  with **beta REAL** (the documented zlarfg
+// property — the reflector is chosen so the leading element is real). `tau` is
+// complex. `x` is contiguous length `n` with x[0] = alpha, x[1..n-1] the tail
+// to annihilate; on exit x[1..n-1] holds the v-tail (v[0]=1 NOT written), x[0]
+// unchanged. Includes the `safmin` rescaling guard (matters for the two-sided
+// similarity updates, same reasoning as the real `make_householder`).
+//
+// Shared by the complex Hermitian reduction (`zhetd2`, v3a-2.5) and the complex
+// Hessenberg reduction (`zgehd2`, v3d-2c-1).
+// -----------------------------------------------------------------------
+template <typename R>
+struct HouseholderComplex
+{
+    crd::hesap::Complex<R> tau;  // complex scalar factor; tau == 0 means H == I
+    R beta;                      // real value H^H*x places in position 0
+};
+
+template <typename R>
+[[nodiscard]] inline HouseholderComplex<R> make_householder_complex(crd::hesap::Complex<R>* x,
+                                                                    crd::usize n) noexcept
+{
+    using C = crd::hesap::Complex<R>;
+    if (n <= 1)
+    {
+        return HouseholderComplex<R>{C{R{0}, R{0}}, n == 1 ? x[0].re : R{0}};
+    }
+    R alphr = x[0].re;
+    R alphi = x[0].im;
+    R xnorm2 = R{0};
+    for (crd::usize k = 1; k < n; ++k)
+    {
+        xnorm2 += x[k].re * x[k].re + x[k].im * x[k].im;
+    }
+    if (xnorm2 == R{0} && alphi == R{0})
+    {
+        // H == I (the tail is already zero and alpha is real).
+        return HouseholderComplex<R>{C{R{0}, R{0}}, alphr};
+    }
+    R beta = -(alphr >= R{0} ? R{1} : R{-1}) * std::sqrt(alphr * alphr + alphi * alphi + xnorm2);
+    const R safmin = std::numeric_limits<R>::min() / std::numeric_limits<R>::epsilon();
+    int knt = 0;
+    if (std::abs(beta) < safmin)
+    {
+        const R rsafmn = R{1} / safmin;
+        do
+        {
+            ++knt;
+            for (crd::usize k = 1; k < n; ++k)
+            {
+                x[k].re *= rsafmn;
+                x[k].im *= rsafmn;
+            }
+            beta *= rsafmn;
+            alphi *= rsafmn;
+            alphr *= rsafmn;
+        } while (std::abs(beta) < safmin && knt < 20);
+        xnorm2 = R{0};
+        for (crd::usize k = 1; k < n; ++k)
+        {
+            xnorm2 += x[k].re * x[k].re + x[k].im * x[k].im;
+        }
+        beta = -(alphr >= R{0} ? R{1} : R{-1}) * std::sqrt(alphr * alphr + alphi * alphi + xnorm2);
+    }
+    const C tau{(beta - alphr) / beta, -alphi / beta};
+    const C denom{alphr - beta, alphi};  // alpha - beta (beta real)
+    for (crd::usize k = 1; k < n; ++k)
+    {
+        x[k] = x[k] / denom;
+    }
+    for (int j = 0; j < knt; ++j)
+    {
+        beta *= safmin;
+    }
+    return HouseholderComplex<R>{tau, beta};
+}
+
+// -----------------------------------------------------------------------
+// complex_givens — faithful LAPACK `zlartg`. Generates a plane rotation
+//
+//     G = [  c        s ]    with  c real ≥ 0,  c² + |s|² = 1,
+//         [ -conj(s)  c ]
+//
+// such that  G · [f; g] = [r; 0]  (r complex). Used by the complex single-shift
+// QR bulge chase (`zlahqr`, v3d-2c-2) and later `ztrevc`. Overflow-safe (the
+// denominator is `hypot2`). Deterministic (sqrt + basic ops only).
+// -----------------------------------------------------------------------
+template <typename R>
+struct ComplexGivens
+{
+    R c;                     // real cosine ≥ 0
+    crd::hesap::Complex<R> s;  // complex sine
+    crd::hesap::Complex<R> r;  // G·[f;g] places this in row 0
+};
+
+template <typename R>
+[[nodiscard]] inline ComplexGivens<R> complex_givens(const crd::hesap::Complex<R>& f,
+                                                     const crd::hesap::Complex<R>& g) noexcept
+{
+    using C = crd::hesap::Complex<R>;
+    if (g.re == R{0} && g.im == R{0})
+    {
+        return ComplexGivens<R>{R{1}, C{R{0}, R{0}}, f};
+    }
+    const R g1 = crd::hesap::abs(g);
+    if (f.re == R{0} && f.im == R{0})
+    {
+        // c = 0, s = conj(g)/|g|, r = |g|.
+        return ComplexGivens<R>{R{0}, crd::hesap::conj(g) * (R{1} / g1), C{g1, R{0}}};
+    }
+    const R f1 = crd::hesap::abs(f);
+    const R d = hypot2(f1, g1);
+    const C fs = f * (R{1} / f1);  // unit phase of f
+    const R c = f1 / d;
+    const C s = (fs * crd::hesap::conj(g)) * (R{1} / d);
+    const C r = fs * C{d, R{0}};
+    return ComplexGivens<R>{c, s, r};
 }
 
 } // namespace crd::hesap::dense::detail

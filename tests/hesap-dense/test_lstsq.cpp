@@ -86,7 +86,7 @@ TEST_CASE("lstsq: full-rank over-determined recovers x (QR/COD/SVD all agree)",
     }
 }
 
-TEST_CASE("lstsq: rank-deficient min-norm (COD/SVD) — minimizer + min-norm",
+TEST_CASE("lstsq: rank-deficient min-norm (COD/SVD) - minimizer + min-norm",
           "[hesap][lstsq][real][rank]")
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(8U * 1024U * 1024U));
@@ -213,7 +213,7 @@ TEST_CASE("lstsq: multi-RHS solves each column independently", "[hesap][lstsq][r
     }
 }
 
-TEST_CASE("pinv: square invertible A⁺ == A⁻¹", "[hesap][pinv][real]")
+TEST_CASE("pinv: square invertible A+ == A^-1", "[hesap][pinv][real]")
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(8U * 1024U * 1024U));
     constexpr crd::usize kN = 4;
@@ -238,7 +238,7 @@ TEST_CASE("pinv: square invertible A⁺ == A⁻¹", "[hesap][pinv][real]")
     }
 }
 
-TEST_CASE("pinv: Moore-Penrose A A⁺ A == A on rank-deficient rectangular",
+TEST_CASE("pinv: Moore-Penrose A A+ A == A on rank-deficient rectangular",
           "[hesap][pinv][real][rank]")
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(8U * 1024U * 1024U));
@@ -330,7 +330,7 @@ TEST_CASE("lstsq: complex full-rank over-determined recovers x", "[hesap][lstsq]
     CHECK_THAT(r.residual(0), WithinAbs(0.0, 1e-9));
 }
 
-TEST_CASE("pinv: complex Moore-Penrose A A⁺ A == A", "[hesap][pinv][complex]")
+TEST_CASE("pinv: complex Moore-Penrose A A+ A == A", "[hesap][pinv][complex]")
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(8U * 1024U * 1024U));
     using Cx = Complex<double>;

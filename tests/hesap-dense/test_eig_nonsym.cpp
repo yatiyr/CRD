@@ -9,7 +9,12 @@
 #include <algorithm>
 #include <cmath>
 
+using crd::hesap::Complex;
 using crd::hesap::dense::balance;
+using crd::hesap::dense::complex_schur;
+using crd::hesap::dense::ComplexSchur;
+using crd::hesap::dense::eig;
+using crd::hesap::dense::EigNonsym;
 using crd::hesap::dense::form_hessenberg_q;
 using crd::hesap::dense::hessenberg;
 using crd::hesap::dense::Layout;
@@ -20,6 +25,9 @@ using crd::hesap::dense::real_schur;
 using crd::hesap::dense::schur_aed;
 using crd::hesap::dense::RealSchur;
 using crd::hesap::dense::reorder_schur;
+using crd::hesap::dense::reorder_complex_schur;
+using crd::hesap::dense::complex_aed_deflate;
+using crd::hesap::dense::complex_schur_aed;
 using Catch::Matchers::WithinAbs;
 
 namespace
@@ -125,25 +133,25 @@ void check_hessenberg(crd::memory::IAllocator* alloc, crd::usize n, double tol)
 }
 } // namespace
 
-TEST_CASE("hessenberg: A = Q·H·Qᵀ reconstruction (f64, n=6)", "[hesap][eig][nonsym][real]")
+TEST_CASE("hessenberg: A = Q*H*Q^T reconstruction (f64, n=6)", "[hesap][eig][nonsym][real]")
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(4U * 1024U * 1024U));
     check_hessenberg<double>(&alloc, 6, 1e-11);
 }
 
-TEST_CASE("hessenberg: A = Q·H·Qᵀ reconstruction (f64, n=32)", "[hesap][eig][nonsym][real]")
+TEST_CASE("hessenberg: A = Q*H*Q^T reconstruction (f64, n=32)", "[hesap][eig][nonsym][real]")
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(16U * 1024U * 1024U));
     check_hessenberg<double>(&alloc, 32, 1e-10);
 }
 
-TEST_CASE("hessenberg: A = Q·H·Qᵀ reconstruction (f64, n=64)", "[hesap][eig][nonsym][real]")
+TEST_CASE("hessenberg: A = Q*H*Q^T reconstruction (f64, n=64)", "[hesap][eig][nonsym][real]")
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(64U * 1024U * 1024U));
     check_hessenberg<double>(&alloc, 64, 1e-9);
 }
 
-TEST_CASE("hessenberg: A = Q·H·Qᵀ reconstruction (f64, n=160 — multi-panel blocked)",
+TEST_CASE("hessenberg: A = Q*H*Q^T reconstruction (f64, n=160 - multi-panel blocked)",
           "[hesap][eig][nonsym][real][blocked]")
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(256U * 1024U * 1024U));
@@ -152,7 +160,7 @@ TEST_CASE("hessenberg: A = Q·H·Qᵀ reconstruction (f64, n=160 — multi-panel
     check_hessenberg<double>(&alloc, 512, 1e-7);  // 15 panels — large-n robustness
 }
 
-TEST_CASE("hessenberg: A = Q·H·Qᵀ reconstruction (f32, n=24)", "[hesap][eig][nonsym][real][f32]")
+TEST_CASE("hessenberg: A = Q*H*Q^T reconstruction (f32, n=24)", "[hesap][eig][nonsym][real][f32]")
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(8U * 1024U * 1024U));
     check_hessenberg<float>(&alloc, 24, 1e-3);
@@ -234,7 +242,7 @@ void check_schur(crd::memory::IAllocator* alloc, crd::usize n, double tol)
 }
 } // namespace
 
-TEST_CASE("real_schur: H = Z·T·Zᵀ recon + Z orthogonal + quasi-triangular",
+TEST_CASE("real_schur: H = Z*T*Z^T recon + Z orthogonal + quasi-triangular",
           "[hesap][eig][nonsym][real][schur]")
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(64U * 1024U * 1024U));
@@ -276,7 +284,7 @@ TEST_CASE("real_schur: known real eigenvalues of a companion-like matrix",
     CHECK_THAT(sum, WithinAbs(9.0, 1e-9));
 }
 
-TEST_CASE("eig pipeline: A = (Q·Zs)·T·(Q·Zs)ᵀ via hessenberg + real_schur",
+TEST_CASE("eig pipeline: A = (Q*Zs)*T*(Q*Zs)^T via hessenberg + real_schur",
           "[hesap][eig][nonsym][real][schur]")
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(64U * 1024U * 1024U));
@@ -313,10 +321,6 @@ TEST_CASE("eig pipeline: A = (Q·Zs)·T·(Q·Zs)ᵀ via hessenberg + real_schur"
     for (crd::usize i = 0; i < n; ++i)
         for (crd::usize j = 0; j < n; ++j)
         {
-            double zt = 0.0;
-            for (crd::usize p = 0; p < n; ++p)
-                zt += z.at(i, p) * s.t.at(p, j);
-            // (zt row i) · Zᵀ col j
             double acc = 0.0;
             for (crd::usize p = 0; p < n; ++p)
             {
@@ -1223,4 +1227,1162 @@ TEST_CASE("hessenberg: trivial blocks (n<=2) are no-ops", "[hesap][eig][nonsym][
     CHECK_THAT(q.at(0, 0), WithinAbs(1.0, 1e-15));
     CHECK_THAT(q.at(1, 1), WithinAbs(1.0, 1e-15));
     CHECK_THAT(q.at(0, 1), WithinAbs(0.0, 1e-15));
+}
+
+// =======================================================================
+// v3d-2b — full non-symmetric eig() pipeline: balance → hessenberg →
+// schur_aed → dtrevc → 3-stage back-transform. Gate = per-eigenpair
+// residual ‖A·vₖ − λₖ·vₖ‖∞ / ‖vₖ‖∞ in complex arithmetic.
+// =======================================================================
+namespace
+{
+// Returns the worst per-eigenpair relative residual; sets `saw_complex` if any
+// eigenvalue had a nonzero imaginary part. `a` is the ORIGINAL matrix.
+template <typename T>
+double eig_worst_residual(const Matrix<T, Layout::RowMajor>& a, const EigNonsym<T>& e,
+                          bool& saw_complex)
+{
+    const crd::usize n = a.rows();
+    double worst = 0.0;
+    saw_complex = false;
+    for (crd::usize k = 0; k < n; ++k)
+    {
+        const double lr = static_cast<double>(e.values.data()[k].re);
+        const double li = static_cast<double>(e.values.data()[k].im);
+        if (li != 0.0)
+        {
+            saw_complex = true;
+        }
+        double vnorm = 0.0;
+        for (crd::usize i = 0; i < n; ++i)
+        {
+            const double vre = static_cast<double>(e.vectors.at(i, k).re);
+            const double vim = static_cast<double>(e.vectors.at(i, k).im);
+            vnorm = std::max(vnorm, std::abs(vre) + std::abs(vim));
+        }
+        for (crd::usize i = 0; i < n; ++i)
+        {
+            double avre = 0.0;
+            double avim = 0.0;
+            for (crd::usize j = 0; j < n; ++j)
+            {
+                const double aij = static_cast<double>(a.at(i, j));
+                avre += aij * static_cast<double>(e.vectors.at(j, k).re);
+                avim += aij * static_cast<double>(e.vectors.at(j, k).im);
+            }
+            const double vre = static_cast<double>(e.vectors.at(i, k).re);
+            const double vim = static_cast<double>(e.vectors.at(i, k).im);
+            const double rr = avre - (lr * vre - li * vim);
+            const double ri = avim - (lr * vim + li * vre);
+            worst = std::max(worst, (std::abs(rr) + std::abs(ri)) / vnorm);
+        }
+    }
+    return worst;
+}
+
+// Each eigenvector column should be Euclidean-norm 1 (D(non-sym)-4).
+template <typename T>
+double eig_worst_norm_dev(const EigNonsym<T>& e, crd::usize n)
+{
+    double worst = 0.0;
+    for (crd::usize k = 0; k < n; ++k)
+    {
+        double s = 0.0;
+        for (crd::usize i = 0; i < n; ++i)
+        {
+            const double vre = static_cast<double>(e.vectors.at(i, k).re);
+            const double vim = static_cast<double>(e.vectors.at(i, k).im);
+            s += vre * vre + vim * vim;
+        }
+        worst = std::max(worst, std::abs(std::sqrt(s) - 1.0));
+    }
+    return worst;
+}
+} // namespace
+
+TEST_CASE("eig: A*v = lambda*v forevery eigenpair of a general matrix (f64)",
+          "[hesap][eig][nonsym][real][eig]")
+{
+    crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(256U * 1024U * 1024U));
+    for (crd::usize n : {crd::usize{8}, crd::usize{20}, crd::usize{50}})
+    {
+        Matrix<double, Layout::RowMajor> a(&alloc, n, n);
+        fill_general<double>(a, 0.5);  // modest diag → real + complex eigenpairs
+        Matrix<double, Layout::RowMajor> a_orig(&alloc, n, n);
+        for (crd::usize i = 0; i < n; ++i)
+            for (crd::usize j = 0; j < n; ++j)
+                a_orig.at(i, j) = a.at(i, j);
+
+        EigNonsym<double> e = eig<double>(&alloc, a);
+        bool saw_complex = false;
+        const double worst = eig_worst_residual<double>(a_orig, e, saw_complex);
+        INFO("n=" << n << " worst rel residual=" << worst);
+        CHECK(worst < 1e-9);
+        CHECK(saw_complex);  // these fixtures generate complex pairs
+        CHECK(eig_worst_norm_dev<double>(e, n) < 1e-12);
+
+        // trace invariant: Σ Re(λ) == trace(A), Σ Im(λ) == 0.
+        double trace = 0.0;
+        double sumre = 0.0;
+        double sumim = 0.0;
+        for (crd::usize i = 0; i < n; ++i)
+        {
+            trace += a_orig.at(i, i);
+            sumre += e.values.data()[i].re;
+            sumim += e.values.data()[i].im;
+        }
+        CHECK_THAT(sumre, WithinAbs(trace, 1e-9 * (1.0 + std::abs(trace))));
+        CHECK_THAT(sumim, WithinAbs(0.0, 1e-10));
+    }
+}
+
+TEST_CASE("eig: exercises dgebak permutation (corner-isolated eigenvalues)",
+          "[hesap][eig][nonsym][real][eig][balance]")
+{
+    crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(64U * 1024U * 1024U));
+    const crd::usize n = 12;
+    Matrix<double, Layout::RowMajor> a(&alloc, n, n);
+    fill_general<double>(a, 0.5);
+    // Column 0 zero below diagonal → isolates an eigenvalue at the TOP.
+    // Row n-1 zero left of diagonal → isolates an eigenvalue at the BOTTOM.
+    for (crd::usize i = 1; i < n; ++i)
+    {
+        a.at(i, 0) = 0.0;
+        a.at(n - 1, i - 1) = 0.0;
+    }
+    Matrix<double, Layout::RowMajor> a_orig(&alloc, n, n);
+    for (crd::usize i = 0; i < n; ++i)
+        for (crd::usize j = 0; j < n; ++j)
+            a_orig.at(i, j) = a.at(i, j);
+
+    EigNonsym<double> e = eig<double>(&alloc, a);
+    bool saw_complex = false;
+    const double worst = eig_worst_residual<double>(a_orig, e, saw_complex);
+    INFO("corner-isolated worst rel residual=" << worst);
+    CHECK(worst < 1e-9);
+    CHECK(eig_worst_norm_dev<double>(e, n) < 1e-12);
+}
+
+TEST_CASE("eig: exercises dgebak scaling (badly-scaled A = D*B*D^-1)",
+          "[hesap][eig][nonsym][real][eig][balance]")
+{
+    crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(64U * 1024U * 1024U));
+    const crd::usize n = 10;
+    // Well-conditioned B, then similarity-scale by a wildly varying diagonal D so
+    // `balance` must scale it back. Eigenvalues are invariant under D·B·D^-1, but
+    // the dgebak scaling branch is exercised + the residual must stay tight.
+    Matrix<double, Layout::RowMajor> b(&alloc, n, n);
+    fill_general<double>(b, 0.5);
+    crd::containers::Array<double> d(&alloc);
+    d.resize(n);
+    for (crd::usize i = 0; i < n; ++i)
+    {
+        d[i] = std::pow(2.0, static_cast<double>(static_cast<crd::isize>(i) - 5) * 3.0);  // 2^-15 .. 2^12
+    }
+    Matrix<double, Layout::RowMajor> a(&alloc, n, n);
+    for (crd::usize i = 0; i < n; ++i)
+        for (crd::usize j = 0; j < n; ++j)
+            a.at(i, j) = d[i] * b.at(i, j) / d[j];
+    Matrix<double, Layout::RowMajor> a_orig(&alloc, n, n);
+    for (crd::usize i = 0; i < n; ++i)
+        for (crd::usize j = 0; j < n; ++j)
+            a_orig.at(i, j) = a.at(i, j);
+
+    EigNonsym<double> e = eig<double>(&alloc, a);
+    bool saw_complex = false;
+    const double worst = eig_worst_residual<double>(a_orig, e, saw_complex);
+    INFO("badly-scaled worst rel residual=" << worst);
+    CHECK(worst < 1e-9);
+}
+
+TEST_CASE("eig: A*v = lambda*v fora general matrix (f32)", "[hesap][eig][nonsym][real][eig][f32]")
+{
+    crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(32U * 1024U * 1024U));
+    const crd::usize n = 16;
+    Matrix<float, Layout::RowMajor> a(&alloc, n, n);
+    fill_general<float>(a, 0.5F);
+    Matrix<float, Layout::RowMajor> a_orig(&alloc, n, n);
+    for (crd::usize i = 0; i < n; ++i)
+        for (crd::usize j = 0; j < n; ++j)
+            a_orig.at(i, j) = a.at(i, j);
+
+    EigNonsym<float> e = eig<float>(&alloc, a);
+    bool saw_complex = false;
+    const double worst = eig_worst_residual<float>(a_orig, e, saw_complex);
+    INFO("f32 worst rel residual=" << worst);
+    CHECK(worst < 1e-3);
+    CHECK(eig_worst_norm_dev<float>(e, n) < 1e-5);
+}
+
+// =======================================================================
+// v3d-2c-1 — complex Hessenberg reduction (zgehd2) + unitary Q (zunghr).
+// Gate: A = Q·H·Qᴴ recon, Q unitary, H upper-Hessenberg w/ real subdiagonal.
+// =======================================================================
+namespace
+{
+template <typename R>
+void check_hessenberg_complex(crd::memory::IAllocator* alloc, crd::usize n, double tol)
+{
+    using C = crd::hesap::Complex<R>;
+    Matrix<C, Layout::RowMajor> a(alloc, n, n);
+    for (crd::usize i = 0; i < n; ++i)
+    {
+        for (crd::usize j = 0; j < n; ++j)
+        {
+            const auto re = static_cast<R>(std::sin(static_cast<double>(i * 7 + j * 3) * 0.17));
+            const auto im = static_cast<R>(std::cos(static_cast<double>(i * 5 + j * 11) * 0.13));
+            a.at(i, j) = C{re, im};
+        }
+    }
+    Matrix<C, Layout::RowMajor> a_orig(alloc, n, n);
+    for (crd::usize i = 0; i < n; ++i)
+        for (crd::usize j = 0; j < n; ++j)
+            a_orig.at(i, j) = a.at(i, j);
+
+    crd::containers::Array<C> tau(alloc);
+    hessenberg<C>(a, 0, n - 1, tau);
+
+    // H = upper triangle + first subdiagonal (the strict-lower of `a` holds the
+    // stored reflector tails, NOT H — so H is the masked matrix; the recon below
+    // is what proves the reduction produced Hessenberg structure). The zgehd2
+    // subdiagonal must be real.
+    Matrix<C, Layout::RowMajor> h(alloc, n, n);
+    double subimag = 0.0;
+    for (crd::usize i = 0; i < n; ++i)
+    {
+        for (crd::usize j = 0; j < n; ++j)
+        {
+            if (j + 1 >= i)
+            {
+                h.at(i, j) = a.at(i, j);
+                if (i >= 1 && j == i - 1)
+                    subimag = std::max(subimag, std::abs(static_cast<double>(a.at(i, j).im)));
+            }
+            else
+            {
+                h.at(i, j) = C{R{0}, R{0}};
+            }
+        }
+    }
+
+    Matrix<C, Layout::RowMajor> q = form_hessenberg_q<C>(alloc, a, 0, n - 1, tau);
+
+    // Q unitary: ‖Qᴴ·Q − I‖_max.
+    double uni = 0.0;
+    for (crd::usize i = 0; i < n; ++i)
+    {
+        for (crd::usize j = 0; j < n; ++j)
+        {
+            double sr = 0.0;
+            double si = 0.0;
+            for (crd::usize k = 0; k < n; ++k)
+            {
+                const auto qk_i = q.at(k, i);  // conj(Q[k,i])·Q[k,j]
+                const auto qk_j = q.at(k, j);
+                sr += static_cast<double>(qk_i.re) * static_cast<double>(qk_j.re) +
+                      static_cast<double>(qk_i.im) * static_cast<double>(qk_j.im);
+                si += static_cast<double>(qk_i.re) * static_cast<double>(qk_j.im) -
+                      static_cast<double>(qk_i.im) * static_cast<double>(qk_j.re);
+            }
+            const double want = (i == j) ? 1.0 : 0.0;
+            uni = std::max(uni, std::abs(sr - want) + std::abs(si));
+        }
+    }
+
+    // recon: M = Q·H, then R = M·Qᴴ; compare to a_orig.
+    Matrix<C, Layout::RowMajor> m(alloc, n, n);
+    for (crd::usize i = 0; i < n; ++i)
+        for (crd::usize j = 0; j < n; ++j)
+        {
+            C acc{R{0}, R{0}};
+            for (crd::usize k = 0; k < n; ++k)
+                acc = acc + q.at(i, k) * h.at(k, j);
+            m.at(i, j) = acc;
+        }
+    double recon = 0.0;
+    for (crd::usize i = 0; i < n; ++i)
+        for (crd::usize j = 0; j < n; ++j)
+        {
+            // R[i,j] = Σ_k M[i,k]·conj(Q[j,k])
+            double rr = 0.0;
+            double ri = 0.0;
+            for (crd::usize k = 0; k < n; ++k)
+            {
+                const auto mk = m.at(i, k);
+                const auto qk = q.at(j, k);  // conj
+                rr += static_cast<double>(mk.re) * static_cast<double>(qk.re) +
+                      static_cast<double>(mk.im) * static_cast<double>(qk.im);
+                ri += static_cast<double>(mk.im) * static_cast<double>(qk.re) -
+                      static_cast<double>(mk.re) * static_cast<double>(qk.im);
+            }
+            recon = std::max(recon, std::abs(rr - static_cast<double>(a_orig.at(i, j).re)) +
+                                        std::abs(ri - static_cast<double>(a_orig.at(i, j).im)));
+        }
+
+    INFO("n=" << n << " recon=" << recon << " unitary=" << uni << " subimag=" << subimag);
+    CHECK(recon < tol);
+    CHECK(uni < tol);
+    CHECK(subimag < tol);
+}
+} // namespace
+
+TEST_CASE("hessenberg(complex): A = Q*H*Q^H recon (c64, n=6/32/64)",
+          "[hesap][eig][nonsym][complex][hessenberg]")
+{
+    crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(128U * 1024U * 1024U));
+    check_hessenberg_complex<double>(&alloc, 6, 1e-12);
+    check_hessenberg_complex<double>(&alloc, 32, 1e-12);
+    check_hessenberg_complex<double>(&alloc, 64, 1e-12);
+}
+
+TEST_CASE("hessenberg(complex): A = Q*H*Q^H recon (c64, n=160 multi-panel)",
+          "[hesap][eig][nonsym][complex][hessenberg]")
+{
+    crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(256U * 1024U * 1024U));
+    check_hessenberg_complex<double>(&alloc, 160, 1e-11);
+    check_hessenberg_complex<double>(&alloc, 256, 1e-11);
+}
+
+TEST_CASE("hessenberg(complex): A = Q*H*Q^H recon (c32, n=24)",
+          "[hesap][eig][nonsym][complex][hessenberg][f32]")
+{
+    crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(32U * 1024U * 1024U));
+    check_hessenberg_complex<float>(&alloc, 24, 5e-4);
+}
+
+// =======================================================================
+// v3d-2c-2 — complex single-shift Schur (zlahqr) + complex balance (zgebal).
+// Gate: H = Z·T·Zᴴ recon, Z unitary, T upper-triangular, eigenvalues on diag.
+// =======================================================================
+namespace
+{
+template <typename R>
+void check_complex_schur(crd::memory::IAllocator* alloc, crd::usize n, double tol)
+{
+    using C = crd::hesap::Complex<R>;
+    // Random complex matrix → complex Hessenberg H (the zlahqr input).
+    Matrix<C, Layout::RowMajor> a(alloc, n, n);
+    for (crd::usize i = 0; i < n; ++i)
+        for (crd::usize j = 0; j < n; ++j)
+            a.at(i, j) = C{static_cast<R>(std::sin(static_cast<double>(i * 7 + j * 3) * 0.17)),
+                           static_cast<R>(std::cos(static_cast<double>(i * 5 + j * 11) * 0.13))};
+    crd::containers::Array<C> tau(alloc);
+    hessenberg<C>(a, 0, n - 1, tau);
+    Matrix<C, Layout::RowMajor> hmat(alloc, n, n);
+    for (crd::usize i = 0; i < n; ++i)
+        for (crd::usize j = 0; j < n; ++j)
+            hmat.at(i, j) = (j + 1 >= i) ? a.at(i, j) : C{R{0}, R{0}};
+
+    ComplexSchur<C> sch = complex_schur<C>(alloc, hmat, 0, n - 1, true);
+    REQUIRE(sch.converged);
+    const Matrix<C>& t = sch.t;
+    const Matrix<C>& zz = sch.z;
+
+    // T upper-triangular: strict-lower (incl. subdiagonal) ~0.
+    double below = 0.0;
+    for (crd::usize i = 0; i < n; ++i)
+        for (crd::usize j = 0; j + 1 <= i; ++j)  // j < i
+            below = std::max(below, std::abs(static_cast<double>(t.at(i, j).re)) +
+                                        std::abs(static_cast<double>(t.at(i, j).im)));
+
+    // Z unitary: ‖Zᴴ·Z − I‖_max.
+    double uni = 0.0;
+    for (crd::usize i = 0; i < n; ++i)
+        for (crd::usize j = 0; j < n; ++j)
+        {
+            double sr = 0.0;
+            double si = 0.0;
+            for (crd::usize p = 0; p < n; ++p)
+            {
+                const auto zi = zz.at(p, i);  // conj(Z[p,i])·Z[p,j]
+                const auto zj = zz.at(p, j);
+                sr += static_cast<double>(zi.re) * static_cast<double>(zj.re) +
+                      static_cast<double>(zi.im) * static_cast<double>(zj.im);
+                si += static_cast<double>(zi.re) * static_cast<double>(zj.im) -
+                      static_cast<double>(zi.im) * static_cast<double>(zj.re);
+            }
+            uni = std::max(uni, std::abs(sr - (i == j ? 1.0 : 0.0)) + std::abs(si));
+        }
+
+    // recon: M = Z·T, R = M·Zᴴ; compare to H.
+    Matrix<C, Layout::RowMajor> m(alloc, n, n);
+    for (crd::usize i = 0; i < n; ++i)
+        for (crd::usize j = 0; j < n; ++j)
+        {
+            C acc{R{0}, R{0}};
+            for (crd::usize p = 0; p < n; ++p)
+                acc = acc + zz.at(i, p) * t.at(p, j);
+            m.at(i, j) = acc;
+        }
+    double recon = 0.0;
+    for (crd::usize i = 0; i < n; ++i)
+        for (crd::usize j = 0; j < n; ++j)
+        {
+            double rr = 0.0;
+            double ri = 0.0;
+            for (crd::usize p = 0; p < n; ++p)
+            {
+                const auto mp = m.at(i, p);
+                const auto zp = zz.at(j, p);  // conj
+                rr += static_cast<double>(mp.re) * static_cast<double>(zp.re) +
+                      static_cast<double>(mp.im) * static_cast<double>(zp.im);
+                ri += static_cast<double>(mp.im) * static_cast<double>(zp.re) -
+                      static_cast<double>(mp.re) * static_cast<double>(zp.im);
+            }
+            recon = std::max(recon, std::abs(rr - static_cast<double>(hmat.at(i, j).re)) +
+                                        std::abs(ri - static_cast<double>(hmat.at(i, j).im)));
+        }
+
+    // Eigenvalues are the diagonal of T.
+    double wdiag = 0.0;
+    for (crd::usize k = 0; k < n; ++k)
+        wdiag = std::max(wdiag, std::abs(static_cast<double>(sch.w.data()[k].re - t.at(k, k).re)) +
+                                    std::abs(static_cast<double>(sch.w.data()[k].im - t.at(k, k).im)));
+
+    INFO("n=" << n << " recon=" << recon << " unitary=" << uni << " below=" << below
+              << " wdiag=" << wdiag);
+    CHECK(recon < tol);
+    CHECK(uni < tol);
+    CHECK(below < tol);
+    CHECK(wdiag < 1e-14);
+}
+} // namespace
+
+TEST_CASE("complex_schur: H = Z*T*Z^H recon, T upper-triangular (c64, n=8/20/50)",
+          "[hesap][eig][nonsym][complex][schur]")
+{
+    crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(64U * 1024U * 1024U));
+    check_complex_schur<double>(&alloc, 8, 1e-9);
+    check_complex_schur<double>(&alloc, 20, 1e-9);
+    check_complex_schur<double>(&alloc, 50, 1e-8);
+}
+
+TEST_CASE("complex_schur: larger + f32 (c64 n=128, c32 n=24)",
+          "[hesap][eig][nonsym][complex][schur]")
+{
+    crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(128U * 1024U * 1024U));
+    check_complex_schur<double>(&alloc, 128, 1e-8);
+    check_complex_schur<float>(&alloc, 24, 1e-3);
+}
+
+// =======================================================================
+// v3d-2c-2b-1 — reorder_complex_schur (ztrexc). Gate: the reordered form is a
+// valid Schur of the SAME matrix (Z unitary, T upper-triangular, recon), and
+// the chosen eigenvalue lands at the target position.
+// =======================================================================
+namespace
+{
+// Build an upper-triangular complex Schur form (t, z) of a random complex
+// Hessenberg H, so reorder_complex_schur can be exercised on it. Returns H in
+// `h_out` for the recon check.
+template <typename R>
+void make_complex_schur(crd::memory::IAllocator* alloc, crd::usize n,
+                        Matrix<crd::hesap::Complex<R>, Layout::RowMajor>& h_out,
+                        ComplexSchur<crd::hesap::Complex<R>>& sch_out)
+{
+    using C = crd::hesap::Complex<R>;
+    Matrix<C, Layout::RowMajor> a(alloc, n, n);
+    for (crd::usize i = 0; i < n; ++i)
+        for (crd::usize j = 0; j < n; ++j)
+            a.at(i, j) = C{static_cast<R>(std::sin(static_cast<double>(i * 7 + j * 3) * 0.17)),
+                           static_cast<R>(std::cos(static_cast<double>(i * 5 + j * 11) * 0.13))};
+    crd::containers::Array<C> tau(alloc);
+    hessenberg<C>(a, 0, n - 1, tau);
+    for (crd::usize i = 0; i < n; ++i)
+        for (crd::usize j = 0; j < n; ++j)
+            h_out.at(i, j) = (j + 1 >= i) ? a.at(i, j) : C{R{0}, R{0}};
+    sch_out = complex_schur<C>(alloc, h_out, 0, n - 1, true);
+    REQUIRE(sch_out.converged);
+}
+
+// Z·T·Zᴴ vs H (max |·|₁ entrywise error) + Z-unitarity + strict-lower-of-T.
+template <typename R>
+void check_reorder_invariants(crd::usize n, const Matrix<crd::hesap::Complex<R>>& t,
+                              const Matrix<crd::hesap::Complex<R>>& zz,
+                              const Matrix<crd::hesap::Complex<R>, Layout::RowMajor>& h, double tol)
+{
+    double below = 0.0;
+    for (crd::usize i = 0; i < n; ++i)
+        for (crd::usize j = 0; j < i; ++j)
+            below = std::max(below, std::abs(static_cast<double>(t.at(i, j).re)) +
+                                        std::abs(static_cast<double>(t.at(i, j).im)));
+    double uni = 0.0;
+    for (crd::usize i = 0; i < n; ++i)
+        for (crd::usize j = 0; j < n; ++j)
+        {
+            double sr = 0.0;
+            double si = 0.0;
+            for (crd::usize p = 0; p < n; ++p)
+            {
+                const auto zi = zz.at(p, i);
+                const auto zj = zz.at(p, j);
+                sr += static_cast<double>(zi.re) * static_cast<double>(zj.re) +
+                      static_cast<double>(zi.im) * static_cast<double>(zj.im);
+                si += static_cast<double>(zi.re) * static_cast<double>(zj.im) -
+                      static_cast<double>(zi.im) * static_cast<double>(zj.re);
+            }
+            uni = std::max(uni, std::abs(sr - (i == j ? 1.0 : 0.0)) + std::abs(si));
+        }
+    // recon: (Z·T)·Zᴴ vs H.
+    double recon = 0.0;
+    for (crd::usize i = 0; i < n; ++i)
+        for (crd::usize j = 0; j < n; ++j)
+        {
+            double rr = 0.0;
+            double ri = 0.0;
+            for (crd::usize p = 0; p < n; ++p)  // (Z·T)[i,p]
+            {
+                double mr = 0.0;
+                double mi = 0.0;
+                for (crd::usize q = 0; q < n; ++q)
+                {
+                    const auto zq = zz.at(i, q);
+                    const auto tq = t.at(q, p);
+                    mr += static_cast<double>(zq.re) * static_cast<double>(tq.re) -
+                          static_cast<double>(zq.im) * static_cast<double>(tq.im);
+                    mi += static_cast<double>(zq.re) * static_cast<double>(tq.im) +
+                          static_cast<double>(zq.im) * static_cast<double>(tq.re);
+                }
+                const auto zp = zz.at(j, p);  // conj(Z[j,p])
+                rr += mr * static_cast<double>(zp.re) + mi * static_cast<double>(zp.im);
+                ri += mi * static_cast<double>(zp.re) - mr * static_cast<double>(zp.im);
+            }
+            recon = std::max(recon, std::abs(rr - static_cast<double>(h.at(i, j).re)) +
+                                        std::abs(ri - static_cast<double>(h.at(i, j).im)));
+        }
+    INFO("recon=" << recon << " unitary=" << uni << " below=" << below);
+    CHECK(below < tol);
+    CHECK(uni < tol);
+    CHECK(recon < tol);
+}
+} // namespace
+
+TEST_CASE("reorder_complex_schur: reordered form is a valid Schur of the SAME matrix (c64)",
+          "[hesap][eig][nonsym][complex][reorder]")
+{
+    crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(64U * 1024U * 1024U));
+    const crd::usize n = 12;
+    Matrix<Complex<double>, Layout::RowMajor> h(&alloc, n, n);
+    ComplexSchur<Complex<double>> sch(&alloc);
+    make_complex_schur<double>(&alloc, n, h, sch);
+
+    // Exercise forward + backward moves, including ilst==0 (the usize-underflow
+    // edge the cursor loop guards).
+    const crd::usize pairs[][2] = {{5, 1}, {2, 9}, {7, 0}, {10, 3}, {0, 11}};
+    for (const auto& pr : pairs)
+    {
+        Matrix<Complex<double>> t = sch.t.clone();
+        Matrix<Complex<double>> z = sch.z.clone();
+        REQUIRE(reorder_complex_schur<Complex<double>>(t, z, pr[0], pr[1]));
+        check_reorder_invariants<double>(n, t, z, h, 1e-9);
+    }
+}
+
+TEST_CASE("reorder_complex_schur: moves the chosen eigenvalue ifst -> ilst (c64, c32)",
+          "[hesap][eig][nonsym][complex][reorder]")
+{
+    crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(64U * 1024U * 1024U));
+    {
+        const crd::usize n = 10;
+        Matrix<Complex<double>, Layout::RowMajor> h(&alloc, n, n);
+        ComplexSchur<Complex<double>> sch(&alloc);
+        make_complex_schur<double>(&alloc, n, h, sch);
+        // Move up (3->7 is down the diagonal; 7->2 is up).
+        const Complex<double> moved_down = sch.t.at(3, 3);
+        Matrix<Complex<double>> t1 = sch.t.clone();
+        Matrix<Complex<double>> z1 = sch.z.clone();
+        REQUIRE(reorder_complex_schur<Complex<double>>(t1, z1, 3, 7));
+        CHECK_THAT(t1.at(7, 7).re, WithinAbs(moved_down.re, 1e-9));
+        CHECK_THAT(t1.at(7, 7).im, WithinAbs(moved_down.im, 1e-9));
+
+        const Complex<double> moved_up = sch.t.at(7, 7);
+        Matrix<Complex<double>> t2 = sch.t.clone();
+        Matrix<Complex<double>> z2 = sch.z.clone();
+        REQUIRE(reorder_complex_schur<Complex<double>>(t2, z2, 7, 2));
+        CHECK_THAT(t2.at(2, 2).re, WithinAbs(moved_up.re, 1e-9));
+        CHECK_THAT(t2.at(2, 2).im, WithinAbs(moved_up.im, 1e-9));
+    }
+    {
+        const crd::usize n = 8;
+        Matrix<Complex<float>, Layout::RowMajor> h(&alloc, n, n);
+        ComplexSchur<Complex<float>> sch(&alloc);
+        make_complex_schur<float>(&alloc, n, h, sch);
+        const Complex<float> moved = sch.t.at(1, 1);
+        Matrix<Complex<float>> t = sch.t.clone();
+        Matrix<Complex<float>> z = sch.z.clone();
+        REQUIRE(reorder_complex_schur<Complex<float>>(t, z, 1, 6));
+        CHECK_THAT(t.at(6, 6).re, WithinAbs(moved.re, 1e-3F));
+        CHECK_THAT(t.at(6, 6).im, WithinAbs(moved.im, 1e-3F));
+        check_reorder_invariants<float>(n, t, z, h, 1e-3);
+    }
+}
+
+// =======================================================================
+// v3d-2c-2b-2 — complex_aed_deflate (zlaqr2). Gates: nd+ns==nw; a decoupled
+// trailing window deflates fully; a general window keeps H unitarily similar
+// (z·H·zᴴ == H0 over the WHOLE matrix — catches a coupling-conj error) AND
+// the spectrum invariant (catches a similarity sign error the in-window recon
+// would miss).
+// =======================================================================
+namespace
+{
+// Build a complex upper-Hessenberg H (n×n) from a deterministic random matrix.
+template <typename R>
+void make_complex_hessenberg(crd::memory::IAllocator* alloc, crd::usize n,
+                             Matrix<crd::hesap::Complex<R>, Layout::RowMajor>& h_out)
+{
+    using C = crd::hesap::Complex<R>;
+    Matrix<C, Layout::RowMajor> a(alloc, n, n);
+    for (crd::usize i = 0; i < n; ++i)
+        for (crd::usize j = 0; j < n; ++j)
+            a.at(i, j) = C{static_cast<R>(std::sin(static_cast<double>(i * 9 + j * 2) * 0.21)),
+                           static_cast<R>(std::cos(static_cast<double>(i * 3 + j * 7) * 0.19))};
+    crd::containers::Array<C> tau(alloc);
+    hessenberg<C>(a, 0, n - 1, tau);
+    for (crd::usize i = 0; i < n; ++i)
+        for (crd::usize j = 0; j < n; ++j)
+            h_out.at(i, j) = (j + 1 >= i) ? a.at(i, j) : C{R{0}, R{0}};
+}
+
+// Sorted eigenvalues of a complex upper-Hessenberg H (full complex Schur).
+template <typename R>
+crd::containers::Array<crd::hesap::Complex<R>> sorted_spectrum(
+    crd::memory::IAllocator* alloc, const Matrix<crd::hesap::Complex<R>, Layout::RowMajor>& h)
+{
+    using C = crd::hesap::Complex<R>;
+    const crd::usize n = h.rows();
+    ComplexSchur<C> sch = complex_schur<C>(alloc, h, 0, n - 1, true);
+    crd::containers::Array<C> w(alloc);
+    w.resize(n);
+    for (crd::usize k = 0; k < n; ++k)
+        w[k] = sch.w.data()[k];
+    std::sort(w.data(), w.data() + n, [](const C& a, const C& b) {
+        if (a.re != b.re)
+            return a.re < b.re;
+        return a.im < b.im;
+    });
+    return w;
+}
+
+// z·H·zᴴ vs H0 (max |·|₁ entrywise) over the WHOLE n×n.
+template <typename R>
+double similarity_recon(crd::usize n, const Matrix<crd::hesap::Complex<R>>& z,
+                        const Matrix<crd::hesap::Complex<R>, Layout::RowMajor>& h,
+                        const Matrix<crd::hesap::Complex<R>, Layout::RowMajor>& h0)
+{
+    using C = crd::hesap::Complex<R>;
+    double worst = 0.0;
+    for (crd::usize i = 0; i < n; ++i)
+        for (crd::usize j = 0; j < n; ++j)
+        {
+            double rr = 0.0;
+            double ri = 0.0;
+            for (crd::usize p = 0; p < n; ++p)  // (z·H)[i,p]
+            {
+                double mr = 0.0;
+                double mi = 0.0;
+                for (crd::usize q = 0; q < n; ++q)
+                {
+                    const C zq = z.at(i, q);
+                    const C hq = h.at(q, p);
+                    mr += static_cast<double>(zq.re) * static_cast<double>(hq.re) -
+                          static_cast<double>(zq.im) * static_cast<double>(hq.im);
+                    mi += static_cast<double>(zq.re) * static_cast<double>(hq.im) +
+                          static_cast<double>(zq.im) * static_cast<double>(hq.re);
+                }
+                const C zp = z.at(j, p);  // conj(z[j,p])
+                rr += mr * static_cast<double>(zp.re) + mi * static_cast<double>(zp.im);
+                ri += mi * static_cast<double>(zp.re) - mr * static_cast<double>(zp.im);
+            }
+            worst = std::max(worst, std::abs(rr - static_cast<double>(h0.at(i, j).re)) +
+                                        std::abs(ri - static_cast<double>(h0.at(i, j).im)));
+        }
+    return worst;
+}
+} // namespace
+
+TEST_CASE("complex_aed_deflate: general window stays unitarily similar + spectrum invariant (c64)",
+          "[hesap][eig][nonsym][complex][aed]")
+{
+    crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(128U * 1024U * 1024U));
+    const crd::usize n = 20;
+    Matrix<Complex<double>, Layout::RowMajor> h0(&alloc, n, n);
+    make_complex_hessenberg<double>(&alloc, n, h0);
+    auto spec0 = sorted_spectrum<double>(&alloc, h0);
+
+    const crd::usize nw = 8;  // jw=8, kwtop=12 > ktop=0 ⇒ the coupling column is exercised
+    Matrix<Complex<double>, Layout::RowMajor> h = h0.clone();
+    Matrix<Complex<double>> z(&alloc, n, n);
+    z.set_identity();
+    crd::containers::Array<Complex<double>> w(&alloc);
+    AedResult<Complex<double>> res =
+        complex_aed_deflate<Complex<double>>(&alloc, h, 0, n - 1, nw, z, true, 0, n - 1, true, w);
+
+    CHECK(res.nd + res.ns == nw);
+    const double recon = similarity_recon<double>(n, z, h, h0);
+    auto spec1 = sorted_spectrum<double>(&alloc, h);
+    double spec_err = 0.0;
+    for (crd::usize k = 0; k < n; ++k)
+        spec_err = std::max(spec_err, std::abs(static_cast<double>(spec1[k].re - spec0[k].re)) +
+                                          std::abs(static_cast<double>(spec1[k].im - spec0[k].im)));
+    INFO("recon=" << recon << " spec_err=" << spec_err << " nd=" << res.nd << " ns=" << res.ns);
+    CHECK(recon < 1e-8);
+    CHECK(spec_err < 1e-7);
+}
+
+TEST_CASE("complex_aed_deflate: a decoupled trailing window deflates fully (c64)",
+          "[hesap][eig][nonsym][complex][aed]")
+{
+    crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(128U * 1024U * 1024U));
+    const crd::usize n = 18;
+    const crd::usize nw = 6;  // jw=6, kwtop=12
+    Matrix<Complex<double>, Layout::RowMajor> h0(&alloc, n, n);
+    make_complex_hessenberg<double>(&alloc, n, h0);
+    // Decouple the window: zero the coupling subdiagonal so s == 0 ⇒ every
+    // eigenvalue in the window is deflatable.
+    const crd::usize kwtop = n - nw;
+    h0.at(kwtop, kwtop - 1) = Complex<double>{0.0, 0.0};
+
+    Matrix<Complex<double>, Layout::RowMajor> h = h0.clone();
+    Matrix<Complex<double>> z(&alloc, n, n);
+    z.set_identity();
+    crd::containers::Array<Complex<double>> w(&alloc);
+    AedResult<Complex<double>> res =
+        complex_aed_deflate<Complex<double>>(&alloc, h, 0, n - 1, nw, z, true, 0, n - 1, true, w);
+
+    INFO("nd=" << res.nd << " ns=" << res.ns);
+    CHECK(res.nd == nw);
+    CHECK(res.ns == 0);
+    CHECK(res.nd + res.ns == nw);
+    // Still a valid similarity of the decoupled H0.
+    CHECK(similarity_recon<double>(n, z, h, h0) < 1e-8);
+}
+
+TEST_CASE("complex_aed_deflate: c32 general window", "[hesap][eig][nonsym][complex][aed][f32]")
+{
+    crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(64U * 1024U * 1024U));
+    const crd::usize n = 14;
+    const crd::usize nw = 5;
+    Matrix<Complex<float>, Layout::RowMajor> h0(&alloc, n, n);
+    make_complex_hessenberg<float>(&alloc, n, h0);
+    Matrix<Complex<float>, Layout::RowMajor> h = h0.clone();
+    Matrix<Complex<float>> z(&alloc, n, n);
+    z.set_identity();
+    crd::containers::Array<Complex<float>> w(&alloc);
+    AedResult<Complex<float>> res =
+        complex_aed_deflate<Complex<float>>(&alloc, h, 0, n - 1, nw, z, true, 0, n - 1, true, w);
+    CHECK(res.nd + res.ns == nw);
+    INFO("recon=" << similarity_recon<float>(n, z, h, h0));
+    CHECK(similarity_recon<float>(n, z, h, h0) < 1e-3);
+}
+
+// =======================================================================
+// v3d-2c-2b-3 — complex_schur_aed (zlaqr0 driver + zlaqr5 multishift sweep).
+// Gate: T upper-triangular, Z unitary, H = Z·T·Zᴴ recon, AND the spectrum
+// matches single-shift complex_schur (our own baseline — refs AV at n≥256).
+// =======================================================================
+namespace
+{
+template <typename R>
+void check_complex_schur_aed(crd::memory::IAllocator* alloc, crd::usize n, double recon_tol,
+                             double spec_tol)
+{
+    using C = crd::hesap::Complex<R>;
+    Matrix<C, Layout::RowMajor> h(alloc, n, n);
+    make_complex_hessenberg<R>(alloc, n, h);
+
+    crd::usize sweeps = 0;
+    ComplexSchur<C> sch = complex_schur_aed<C>(alloc, h, 0, n - 1, true, &sweeps);
+    REQUIRE(sch.converged);
+    const Matrix<C>& t = sch.t;
+    const Matrix<C>& zz = sch.z;
+
+    // T upper-triangular.
+    double below = 0.0;
+    for (crd::usize i = 0; i < n; ++i)
+        for (crd::usize j = 0; j < i; ++j)
+            below = std::max(below, std::abs(static_cast<double>(t.at(i, j).re)) +
+                                        std::abs(static_cast<double>(t.at(i, j).im)));
+    // Z unitary.
+    double uni = 0.0;
+    for (crd::usize i = 0; i < n; ++i)
+        for (crd::usize j = 0; j < n; ++j)
+        {
+            double sr = 0.0;
+            double si = 0.0;
+            for (crd::usize p = 0; p < n; ++p)
+            {
+                const auto zi = zz.at(p, i);
+                const auto zj = zz.at(p, j);
+                sr += static_cast<double>(zi.re) * static_cast<double>(zj.re) +
+                      static_cast<double>(zi.im) * static_cast<double>(zj.im);
+                si += static_cast<double>(zi.re) * static_cast<double>(zj.im) -
+                      static_cast<double>(zi.im) * static_cast<double>(zj.re);
+            }
+            uni = std::max(uni, std::abs(sr - (i == j ? 1.0 : 0.0)) + std::abs(si));
+        }
+    // recon Z·T·Zᴴ == H over the whole matrix.
+    const double recon = similarity_recon<R>(n, zz, t, h);
+
+    // Spectrum matches single-shift complex_schur (our own baseline).
+    auto spec_ss = sorted_spectrum<R>(alloc, h);
+    crd::containers::Array<C> spec_aed(alloc);
+    spec_aed.resize(n);
+    for (crd::usize k = 0; k < n; ++k)
+        spec_aed[k] = sch.w.data()[k];
+    std::sort(spec_aed.data(), spec_aed.data() + n, [](const C& a, const C& b) {
+        if (a.re != b.re)
+            return a.re < b.re;
+        return a.im < b.im;
+    });
+    double spec_err = 0.0;
+    for (crd::usize k = 0; k < n; ++k)
+        spec_err = std::max(spec_err, std::abs(static_cast<double>(spec_aed[k].re - spec_ss[k].re)) +
+                                          std::abs(static_cast<double>(spec_aed[k].im - spec_ss[k].im)));
+
+    INFO("n=" << n << " sweeps=" << sweeps << " below=" << below << " uni=" << uni
+              << " recon=" << recon << " spec_err=" << spec_err);
+    CHECK(below < recon_tol);
+    CHECK(uni < recon_tol);
+    CHECK(recon < recon_tol);
+    CHECK(spec_err < spec_tol);
+}
+} // namespace
+
+TEST_CASE("complex_schur_aed: recon + spectrum vs single-shift (c64 n=40 crossover)",
+          "[hesap][eig][nonsym][complex][aed][schur]")
+{
+    crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(64U * 1024U * 1024U));
+    check_complex_schur_aed<double>(&alloc, 40, 1e-9, 1e-7);
+}
+
+TEST_CASE("complex_schur_aed: AED engages (c64 n=160/260)",
+          "[hesap][eig][nonsym][complex][aed][schur]")
+{
+    crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(512U * 1024U * 1024U));
+    check_complex_schur_aed<double>(&alloc, 160, 1e-9, 1e-8);  // > NMIN=150 ⇒ AED engages
+    check_complex_schur_aed<double>(&alloc, 260, 1e-9, 1e-8);
+}
+
+TEST_CASE("complex_schur_aed: c32", "[hesap][eig][nonsym][complex][aed][schur][f32]")
+{
+    crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(64U * 1024U * 1024U));
+    check_complex_schur_aed<float>(&alloc, 100, 1e-3, 1e-2);
+}
+
+namespace
+{
+// PRNG random complex Hessenberg (the generic case — NOT smooth sin/cos; matches
+// the bench matrix that exposed the recon bug).
+template <typename R>
+void make_complex_hessenberg_prng(crd::memory::IAllocator* alloc, crd::usize n, crd::u32 seed,
+                                  Matrix<crd::hesap::Complex<R>, Layout::RowMajor>& h_out)
+{
+    using C = crd::hesap::Complex<R>;
+    Matrix<C, Layout::RowMajor> a(alloc, n, n);
+    crd::u32 s = seed + static_cast<crd::u32>(n);
+    for (crd::usize i = 0; i < n; ++i)
+        for (crd::usize j = 0; j < n; ++j)
+        {
+            s = s * 1664525U + 1013904223U;
+            const R re = static_cast<R>(static_cast<crd::i32>(s >> 8) % 2000 - 1000) * static_cast<R>(0.001);
+            s = s * 1664525U + 1013904223U;
+            const R im = static_cast<R>(static_cast<crd::i32>(s >> 8) % 2000 - 1000) * static_cast<R>(0.001);
+            a.at(i, j) = C{re, im};
+        }
+    crd::containers::Array<C> tau(alloc);
+    hessenberg<C>(a, 0, n - 1, tau);
+    for (crd::usize i = 0; i < n; ++i)
+        for (crd::usize j = 0; j < n; ++j)
+            h_out.at(i, j) = (j + 1 >= i) ? a.at(i, j) : C{R{0}, R{0}};
+}
+} // namespace
+
+TEST_CASE("complex_aed_deflate: REPRO random + kbot<n-1 exercises slab_left_h (c64)",
+          "[hesap][eig][nonsym][complex][aed][regression]")
+{
+    crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(128U * 1024U * 1024U));
+    const crd::usize n = 24;
+    Matrix<Complex<double>, Layout::RowMajor> h0(&alloc, n, n);
+    make_complex_hessenberg_prng<double>(&alloc, n, 4242U, h0);
+    const crd::usize nw = 6;
+    Matrix<Complex<double>, Layout::RowMajor> h = h0.clone();
+    Matrix<Complex<double>> z(&alloc, n, n);
+    z.set_identity();
+    crd::containers::Array<Complex<double>> w(&alloc);
+    // kbot = n-3 (< n-1) ⇒ kbot+1 < n ⇒ the slab_left_h branch runs (never hit by
+    // the original 2b-2 fixture which used kbot=n-1).
+    AedResult<Complex<double>> res =
+        complex_aed_deflate<Complex<double>>(&alloc, h, 0, n - 3, nw, z, true, 0, n - 1, true, w);
+    CHECK(res.nd + res.ns == nw);
+    CHECK(similarity_recon<double>(n, z, h, h0) < 1e-8);
+}
+
+TEST_CASE("complex_aed_deflate: REPRO large window forces partial deflation + spike (c64)",
+          "[hesap][eig][nonsym][complex][aed][regression]")
+{
+    crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(256U * 1024U * 1024U));
+    const crd::usize n = 128;
+    Matrix<Complex<double>, Layout::RowMajor> h0(&alloc, n, n);
+    make_complex_hessenberg_prng<double>(&alloc, n, 88017U, h0);
+    const crd::usize nw = 42;  // large window ⇒ partial deflation (ns>1, s!=0) ⇒ spike path
+    Matrix<Complex<double>, Layout::RowMajor> h = h0.clone();
+    Matrix<Complex<double>> z(&alloc, n, n);
+    z.set_identity();
+    crd::containers::Array<Complex<double>> w(&alloc);
+    AedResult<Complex<double>> res =
+        complex_aed_deflate<Complex<double>>(&alloc, h, 0, n - 1, nw, z, true, 0, n - 1, true, w);
+    const double recon = similarity_recon<double>(n, z, h, h0);
+    INFO("nd=" << res.nd << " ns=" << res.ns << " recon=" << recon);
+    CHECK(res.nd + res.ns == nw);
+    CHECK(recon < 1e-8);
+}
+
+TEST_CASE("complex_schur_aed: REPRO random matrix single call (c64 n=128)",
+          "[hesap][eig][nonsym][complex][aed][regression]")
+{
+    crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(128U * 1024U * 1024U));
+    const crd::usize n = 128;
+    Matrix<Complex<double>, Layout::RowMajor> h(&alloc, n, n);
+    make_complex_hessenberg_prng<double>(&alloc, n, 88017U, h);
+    crd::usize sweeps = 0;
+    ComplexSchur<Complex<double>> sch = complex_schur_aed<Complex<double>>(&alloc, h, 0, n - 1, true, &sweeps);
+    REQUIRE(sch.converged);
+    const double recon = similarity_recon<double>(n, sch.z, sch.t, h);
+    INFO("n=" << n << " sweeps=" << sweeps << " recon=" << recon);
+    CHECK(recon < 1e-8);
+}
+
+// ISOLATION: one complex multishift sweep is a unitary similarity for ANY shifts,
+// so Z·H'·Zᴴ == H_orig with Z=I. Bisects the sweep from the AED driver.
+TEST_CASE("complex_multishift_sweep: implicit-Q similarity (c64)",
+          "[hesap][eig][nonsym][complex][aed][regression]")
+{
+    using C = Complex<double>;
+    crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(128U * 1024U * 1024U));
+    const crd::usize n = 80;
+    // (ktop, kbot) sweep blocks: full, then partial (interior) blocks as the AED
+    // driver produces them (ktop>0 after the first block; kbot<n-1 after a bottom
+    // deflation). The far-update's rows-above / cols-right slabs differ per case.
+    const crd::usize blocks[][2] = {{0, n - 1}, {0, n - 6}, {6, n - 1}, {6, n - 6}};
+    for (const auto& blk : blocks)
+    {
+        // Large nshifts (nbmps = nshifts/2 bulges) exercises the multi-bulge chain
+        // machinery — inter-bulge delayed transforms, bmp22, U-accumulation — that
+        // the AED driver hits (ns≈40) but small nshifts does not.
+        for (crd::usize nshifts : {crd::usize{2}, crd::usize{4}, crd::usize{20}, crd::usize{40}})
+        {
+            Matrix<C, Layout::RowMajor> h0(&alloc, n, n);
+            make_complex_hessenberg_prng<double>(&alloc, n, 7000U + static_cast<crd::u32>(blk[0] + nshifts), h0);
+            // Decouple the block (the sweep's precondition — the AED driver
+            // guarantees this post-deflation): zero the couplings at the block
+            // boundaries in the reference too, so z·H'·zᴴ == H0 must hold.
+            if (blk[0] > 0)
+                h0.at(blk[0], blk[0] - 1) = C{0.0, 0.0};
+            if (blk[1] + 1 < n)
+                h0.at(blk[1] + 1, blk[1]) = C{0.0, 0.0};
+            Matrix<C, Layout::RowMajor> h = h0.clone();
+            Matrix<C> z(&alloc, n, n);
+            z.set_identity();
+            crd::containers::Array<C> shifts(&alloc);
+            shifts.resize(nshifts);
+            for (crd::usize i = 0; i < nshifts; ++i)
+                shifts[i] = h0.at(blk[1] - i, blk[1] - i);
+            crd::hesap::dense::detail::complex_multishift_sweep<C>(
+                &alloc, n, blk[0], blk[1], shifts.data(), nshifts, h.data(), h.ld(), 0, n - 1,
+                z.data(), z.ld(), true);
+            const double recon = similarity_recon<double>(n, z, h, h0);
+            INFO("ktop=" << blk[0] << " kbot=" << blk[1] << " nshifts=" << nshifts
+                         << " recon=" << recon);
+            CHECK(recon < 1e-9);
+        }
+    }
+}
+
+// =======================================================================
+// v3d-2c-3 — public complex eig: ztrevc + back-transform + normalization.
+// Gate: per-eigenpair residual ‖A·vₖ − λₖ·vₖ‖∞/‖vₖ‖∞, ‖vₖ‖₂=1, and the
+// largest-magnitude component is real-positive (D(non-sym)-4). Random + near-
+// defective (duplicated eigenvalue → exercises the ztrevc smin floor).
+// =======================================================================
+namespace
+{
+template <typename R>
+void check_eig_complex(crd::memory::IAllocator* alloc,
+                       const Matrix<crd::hesap::Complex<R>, Layout::RowMajor>& a, double tol)
+{
+    using C = crd::hesap::Complex<R>;
+    const crd::usize n = a.rows();
+    EigNonsym<C> e = eig<C>(alloc, a);
+    for (crd::usize k = 0; k < n; ++k)
+    {
+        const C lam = e.values.data()[k];
+        // residual ‖A·v − λ·v‖∞ / ‖v‖∞
+        double res = 0.0;
+        double vinf = 0.0;
+        double norm2 = 0.0;
+        crd::usize istar = 0;
+        double best = -1.0;
+        for (crd::usize i = 0; i < n; ++i)
+        {
+            const C v = e.vectors.at(i, k);
+            vinf = std::max(vinf, std::abs(static_cast<double>(v.re)) + std::abs(static_cast<double>(v.im)));
+            // Pivot by MODULUS (re²+im²) — the LAPACK/Eigen convention eig uses for
+            // D(non-sym)-4, NOT cabs1; the two pick different components.
+            const double mag2 = static_cast<double>(v.re) * static_cast<double>(v.re) +
+                                static_cast<double>(v.im) * static_cast<double>(v.im);
+            norm2 += mag2;
+            if (mag2 > best)
+            {
+                best = mag2;
+                istar = i;
+            }
+        }
+        for (crd::usize i = 0; i < n; ++i)
+        {
+            C av{R{0}, R{0}};
+            for (crd::usize j = 0; j < n; ++j)
+                av = av + a.at(i, j) * e.vectors.at(j, k);
+            const C r = av - lam * e.vectors.at(i, k);
+            res = std::max(res, std::abs(static_cast<double>(r.re)) + std::abs(static_cast<double>(r.im)));
+        }
+        INFO("k=" << k << " res=" << (res / std::max(vinf, 1e-300)) << " norm2=" << std::sqrt(norm2));
+        CHECK(res / std::max(vinf, 1e-300) < tol);
+        CHECK(std::abs(std::sqrt(norm2) - 1.0) < tol);  // ‖v‖₂ = 1
+        // D(non-sym)-4: largest-magnitude component real-positive.
+        const C piv = e.vectors.at(istar, k);
+        CHECK(static_cast<double>(piv.re) > 0.0);
+        CHECK(std::abs(static_cast<double>(piv.im)) < tol);
+    }
+}
+} // namespace
+
+TEST_CASE("eig(complex): residual + norm + phase on random matrices (c64 n=20/60)",
+          "[hesap][eig][nonsym][complex][eig]")
+{
+    crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(128U * 1024U * 1024U));
+    for (crd::usize n : {crd::usize{20}, crd::usize{60}})
+    {
+        Matrix<Complex<double>, Layout::RowMajor> a(&alloc, n, n);
+        crd::u32 s = 51001U + static_cast<crd::u32>(n);
+        for (crd::usize i = 0; i < n; ++i)
+            for (crd::usize j = 0; j < n; ++j)
+            {
+                s = s * 1664525U + 1013904223U;
+                const double re = static_cast<double>(static_cast<crd::i32>(s >> 8) % 2000 - 1000) * 0.001;
+                s = s * 1664525U + 1013904223U;
+                const double im = static_cast<double>(static_cast<crd::i32>(s >> 8) % 2000 - 1000) * 0.001;
+                a.at(i, j) = Complex<double>{re, im};
+            }
+        check_eig_complex<double>(&alloc, a, 1e-9);
+    }
+}
+
+TEST_CASE("eig(complex): near-defective duplicated eigenvalue (smin floor) (c64)",
+          "[hesap][eig][nonsym][complex][eig]")
+{
+    crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(64U * 1024U * 1024U));
+    const crd::usize n = 10;
+    // Upper-triangular A with a duplicated diagonal eigenvalue 2.0 at (0,0),(1,1)
+    // plus random strict-upper coupling → ztrevc hits the smin near-defective floor.
+    Matrix<Complex<double>, Layout::RowMajor> a(&alloc, n, n);
+    crd::u32 s = 909091U;
+    for (crd::usize i = 0; i < n; ++i)
+        for (crd::usize j = 0; j < n; ++j)
+        {
+            if (j < i)
+            {
+                a.at(i, j) = Complex<double>{0.0, 0.0};
+            }
+            else if (i == j)
+            {
+                a.at(i, j) = Complex<double>{(i <= 1) ? 2.0 : 2.0 + static_cast<double>(i), 0.3};
+            }
+            else
+            {
+                s = s * 1664525U + 1013904223U;
+                const double re = static_cast<double>(static_cast<crd::i32>(s >> 8) % 1000 - 500) * 0.002;
+                s = s * 1664525U + 1013904223U;
+                const double im = static_cast<double>(static_cast<crd::i32>(s >> 8) % 1000 - 500) * 0.002;
+                a.at(i, j) = Complex<double>{re, im};
+            }
+        }
+    // Make A non-triangular via a real Givens SIMILARITY on (n-2, n-1) — preserves
+    // the spectrum (incl. the duplicated 2.0 eigenvalue at indices 0,1) but leaves
+    // a non-isolatable active block, so `balance` does not fully reduce. The
+    // duplicate still drives ztrevc into the smin floor. (Fully-reducible/triangular
+    // input itself trips a pre-existing balance ihi-underflow — tracked follow-on
+    // `v3d-eig-fully-reducible-input`, affects real eig too.)
+    {
+        const double cg = 0.6;
+        const double sg = 0.8;
+        const crd::usize p = n - 2;
+        for (crd::usize j = 0; j < n; ++j)  // G·A over rows (p, p+1)
+        {
+            const Complex<double> r0 = a.at(p, j);
+            const Complex<double> r1 = a.at(p + 1, j);
+            a.at(p, j) = Complex<double>{cg * r0.re + sg * r1.re, cg * r0.im + sg * r1.im};
+            a.at(p + 1, j) = Complex<double>{cg * r1.re - sg * r0.re, cg * r1.im - sg * r0.im};
+        }
+        for (crd::usize i = 0; i < n; ++i)  // ·Gᴴ over cols (p, p+1)
+        {
+            const Complex<double> c0 = a.at(i, p);
+            const Complex<double> c1 = a.at(i, p + 1);
+            a.at(i, p) = Complex<double>{cg * c0.re + sg * c1.re, cg * c0.im + sg * c1.im};
+            a.at(i, p + 1) = Complex<double>{cg * c1.re - sg * c0.re, cg * c1.im - sg * c0.im};
+        }
+    }
+    check_eig_complex<double>(&alloc, a, 1e-7);
+}
+
+TEST_CASE("eig(complex): c32 random", "[hesap][eig][nonsym][complex][eig][f32]")
+{
+    crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(32U * 1024U * 1024U));
+    const crd::usize n = 16;
+    Matrix<Complex<float>, Layout::RowMajor> a(&alloc, n, n);
+    crd::u32 s = 31337U;
+    for (crd::usize i = 0; i < n; ++i)
+        for (crd::usize j = 0; j < n; ++j)
+        {
+            s = s * 1664525U + 1013904223U;
+            const float re = static_cast<float>(static_cast<crd::i32>(s >> 8) % 2000 - 1000) * 0.001F;
+            s = s * 1664525U + 1013904223U;
+            const float im = static_cast<float>(static_cast<crd::i32>(s >> 8) % 2000 - 1000) * 0.001F;
+            a.at(i, j) = Complex<float>{re, im};
+        }
+    check_eig_complex<float>(&alloc, a, 1e-3);
+}
+
+TEST_CASE("balance(complex): isolates corner eigenvalues + preserves trace",
+          "[hesap][eig][nonsym][complex][balance]")
+{
+    crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(8U * 1024U * 1024U));
+    constexpr crd::usize kN = 6;
+    Matrix<Complex<double>, Layout::RowMajor> a(&alloc, kN, kN);
+    for (crd::usize i = 0; i < kN; ++i)
+        for (crd::usize j = 0; j < kN; ++j)
+            a.at(i, j) = Complex<double>{std::sin(0.3 * static_cast<double>(i * 4 + j)) + 4.0,
+                                         std::cos(0.2 * static_cast<double>(i + j * 3))};
+    // Column 0 zero below diag → top isolation; row n-1 zero left of diag → bottom.
+    for (crd::usize i = 1; i < kN; ++i)
+    {
+        a.at(i, 0) = Complex<double>{0.0, 0.0};
+        a.at(kN - 1, i - 1) = Complex<double>{0.0, 0.0};
+    }
+    Complex<double> trace_before{0.0, 0.0};
+    for (crd::usize i = 0; i < kN; ++i)
+        trace_before = trace_before + a.at(i, i);
+
+    crd::containers::Array<double> scale(&alloc);
+    crd::usize ilo = 0;
+    crd::usize ihi = 0;
+    balance<Complex<double>>(a, scale, ilo, ihi);
+
+    CHECK(ilo == 1);
+    CHECK(ihi == kN - 2);
+    Complex<double> trace_after{0.0, 0.0};
+    for (crd::usize i = 0; i < kN; ++i)
+        trace_after = trace_after + a.at(i, i);
+    CHECK_THAT(trace_after.re, WithinAbs(trace_before.re, 1e-9));
+    CHECK_THAT(trace_after.im, WithinAbs(trace_before.im, 1e-9));
 }

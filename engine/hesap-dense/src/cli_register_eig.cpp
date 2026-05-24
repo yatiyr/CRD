@@ -9,7 +9,9 @@
 #include <crd/hesap/cli/command_registry.hpp>
 #include <crd/hesap/complex.hpp>
 #include <crd/hesap/dense/cli_anchor.hpp>
+#include <crd/hesap/dense/eig_nonsym.hpp>
 #include <crd/hesap/dense/eig_sym.hpp>
+#include <crd/hesap/dense/matrix.hpp>
 #include <crd/hesap/dense/matrix_types.hpp>
 
 #include <utility>
@@ -27,11 +29,13 @@ using crd::hesap::cli::ParamSchema;
 using crd::hesap::cli::ResultBinaryBlob;
 using crd::hesap::cli::ResultError;
 using crd::hesap::Complex;
+using crd::hesap::dense::eig;
 using crd::hesap::dense::eig_herm;
 using crd::hesap::dense::eig_sym;
 using crd::hesap::dense::eig_sym_mrrr;
 using crd::hesap::dense::eigvals_sym;
 using crd::hesap::dense::Hermitian;
+using crd::hesap::dense::Matrix;
 using crd::hesap::dense::Symmetric;
 
 CommandResult error_result(crd::memory::IAllocator* alloc, const char* msg)
@@ -183,6 +187,75 @@ CommandResult impl_eig_herm(const CommandArgs& args)
     return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
 }
 
+// Non-symmetric eigenvalues. A travels as a FULL n*n flattened real matrix
+// (row-major); the n complex eigenvalues are returned interleaved
+// [re0,im0, re1,im1, ...] (2*n f64) in Schur order. (Eigenvectors are
+// available via the engine API; the CLI returns the spectrum.)
+template <typename T>
+CommandResult impl_eig_nonsym(const CommandArgs& args)
+{
+    const auto a_flat = args.get_f64_array("A");
+    const auto n = args.get_u64("n").value_or(crd::u64{0});
+    if (n == 0 || a_flat.size() != n * n)
+    {
+        return error_result(args.alloc, "eig.nonsym: A=n*n (full, row-major), n required");
+    }
+    const crd::usize nn = static_cast<crd::usize>(n);
+    Matrix<T> a(args.alloc, nn, nn);
+    for (crd::usize i = 0; i < nn; ++i)
+    {
+        for (crd::usize j = 0; j < nn; ++j)
+        {
+            a.at(i, j) = static_cast<T>(a_flat[i * nn + j]);
+        }
+    }
+    const auto e = eig<T>(args.alloc, a);
+    crd::containers::Array<crd::f64> out(args.alloc);
+    out.reserve(nn * 2);
+    for (crd::usize i = 0; i < nn; ++i)
+    {
+        out.push_back(static_cast<crd::f64>(e.values.data()[i].re));
+        out.push_back(static_cast<crd::f64>(e.values.data()[i].im));
+    }
+    return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
+}
+
+// Complex non-symmetric eig. A travels as an interleaved complex array
+// [re,im, ...] of n*n entries (FULL matrix, row-major); the n complex
+// eigenvalues (Schur order) are returned as interleaved [re,im] f64 (values-only,
+// matching the real eig.nonsym CLI; vectors via the engine API).
+template <typename U>
+CommandResult impl_eig_nonsym_complex(const CommandArgs& args)
+{
+    using C = Complex<U>;
+    const auto a_flat = args.get_f64_array("A");
+    const auto n = args.get_u64("n").value_or(crd::u64{0});
+    if (n == 0 || a_flat.size() != n * n * 2)
+    {
+        return error_result(args.alloc,
+                            "eig.nonsym(complex): A=2*n*n interleaved [re,im] (full), n required");
+    }
+    const crd::usize nn = static_cast<crd::usize>(n);
+    Matrix<C> a(args.alloc, nn, nn);
+    for (crd::usize i = 0; i < nn; ++i)
+    {
+        for (crd::usize j = 0; j < nn; ++j)
+        {
+            const crd::usize k = (i * nn + j) * 2;
+            a.at(i, j) = C{static_cast<U>(a_flat[k]), static_cast<U>(a_flat[k + 1])};
+        }
+    }
+    const auto e = eig<C>(args.alloc, a);
+    crd::containers::Array<crd::f64> out(args.alloc);
+    out.reserve(nn * 2);
+    for (crd::usize i = 0; i < nn; ++i)
+    {
+        out.push_back(static_cast<crd::f64>(e.values.data()[i].re));
+        out.push_back(static_cast<crd::f64>(e.values.data()[i].im));
+    }
+    return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
+}
+
 CommandSchema make_schema(crd::memory::IAllocator* alloc, const char* name, const char* desc)
 {
     CommandSchema s{alloc};
@@ -277,5 +350,37 @@ CRD_HESAP_CLI_REGISTER_MODULE([](CommandRegistry& reg) {
         add_param(s, alloc, "A", "Hermitian A as interleaved [re,im] (2*n*n); lower triangle used",
                   ParamKind::F64, true);
         reg.register_command(std::move(s), &impl_eig_herm<crd::f64>);
+    }
+    {
+        auto s = make_schema(
+            alloc, "hesap.dense.eig.nonsym.f32",
+            "Non-symmetric eigenvalues (interleaved [re,im], Schur order) of full A (f32).");
+        add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
+        add_param(s, alloc, "A", "Full A flattened row-major (n*n)", ParamKind::F64, true);
+        reg.register_command(std::move(s), &impl_eig_nonsym<crd::f32>);
+    }
+    {
+        auto s = make_schema(
+            alloc, "hesap.dense.eig.nonsym.f64",
+            "Non-symmetric eigenvalues (interleaved [re,im], Schur order) of full A (f64).");
+        add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
+        add_param(s, alloc, "A", "Full A flattened row-major (n*n)", ParamKind::F64, true);
+        reg.register_command(std::move(s), &impl_eig_nonsym<crd::f64>);
+    }
+    {
+        auto s = make_schema(
+            alloc, "hesap.dense.eig.nonsym.c32",
+            "Non-symmetric eigenvalues (interleaved [re,im], Schur order) of complex full A (c32).");
+        add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
+        add_param(s, alloc, "A", "Full A interleaved [re,im] row-major (2*n*n)", ParamKind::F64, true);
+        reg.register_command(std::move(s), &impl_eig_nonsym_complex<crd::f32>);
+    }
+    {
+        auto s = make_schema(
+            alloc, "hesap.dense.eig.nonsym.c64",
+            "Non-symmetric eigenvalues (interleaved [re,im], Schur order) of complex full A (c64).");
+        add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
+        add_param(s, alloc, "A", "Full A interleaved [re,im] row-major (2*n*n)", ParamKind::F64, true);
+        reg.register_command(std::move(s), &impl_eig_nonsym_complex<crd::f64>);
     }
 });

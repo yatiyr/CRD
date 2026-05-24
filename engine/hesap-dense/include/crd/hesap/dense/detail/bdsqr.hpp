@@ -397,7 +397,7 @@ inline int dbdsqr(bool upper, int n, int ncvt, int nru, int ncc, R* d, R* e, R* 
     const R zero = R{0};
     const R one = R{1};
     const R negone = R{-1};
-    const R hndrth = R{0.01};
+    const R hndrth = static_cast<R>(0.01);
     const R ten = R{10};
     const R hndrd = R{100};
     const int maxitr = 6;

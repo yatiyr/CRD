@@ -1773,73 +1773,11 @@ EigSym<T> eig_sym(crd::memory::IAllocator* alloc, const Symmetric<T>& a)
 // =======================================================================
 namespace
 {
+// The complex Householder (zlarfg) primitive moved to the shared
+// `detail/householder.hpp` as `make_householder_complex` (v3d-2c-1 dedup —
+// reused by the complex Hessenberg reduction). beta is real, tau complex.
 template <typename R>
-struct HouseholderC
-{
-    crd::hesap::Complex<R> tau;
-    R beta;  // real (zlarfg makes beta real for the Hermitian reduction)
-};
-
-// Complex Householder (faithful zlarfg): H = I - tau*v*v^H, H*x = beta*e_0,
-// beta real. On exit x[1..n-1] holds the v-tail (v[0]=1 implicit); x[0]
-// unchanged. Includes the safmin rescaling guard.
-template <typename R>
-[[nodiscard]] HouseholderC<R> make_householder_herm(crd::hesap::Complex<R>* x,
-                                                    crd::usize n) noexcept
-{
-    using C = crd::hesap::Complex<R>;
-    if (n <= 1)
-    {
-        return HouseholderC<R>{C{R{0}, R{0}}, n == 1 ? x[0].re : R{0}};
-    }
-    R alphr = x[0].re;
-    R alphi = x[0].im;
-    R xnorm2 = R{0};
-    for (crd::usize k = 1; k < n; ++k)
-    {
-        xnorm2 += x[k].re * x[k].re + x[k].im * x[k].im;
-    }
-    if (xnorm2 == R{0} && alphi == R{0})
-    {
-        return HouseholderC<R>{C{R{0}, R{0}}, alphr};
-    }
-    R beta = -(alphr >= R{0} ? R{1} : R{-1}) * std::sqrt(alphr * alphr + alphi * alphi + xnorm2);
-    const R safmin = std::numeric_limits<R>::min() / std::numeric_limits<R>::epsilon();
-    int knt = 0;
-    if (std::abs(beta) < safmin)
-    {
-        const R rsafmn = R{1} / safmin;
-        do
-        {
-            ++knt;
-            for (crd::usize k = 1; k < n; ++k)
-            {
-                x[k].re *= rsafmn;
-                x[k].im *= rsafmn;
-            }
-            beta *= rsafmn;
-            alphi *= rsafmn;
-            alphr *= rsafmn;
-        } while (std::abs(beta) < safmin && knt < 20);
-        xnorm2 = R{0};
-        for (crd::usize k = 1; k < n; ++k)
-        {
-            xnorm2 += x[k].re * x[k].re + x[k].im * x[k].im;
-        }
-        beta = -(alphr >= R{0} ? R{1} : R{-1}) * std::sqrt(alphr * alphr + alphi * alphi + xnorm2);
-    }
-    const C tau{(beta - alphr) / beta, -alphi / beta};
-    const C denom{alphr - beta, alphi};  // alpha - beta (beta real)
-    for (crd::usize k = 1; k < n; ++k)
-    {
-        x[k] = x[k] / denom;
-    }
-    for (int j = 0; j < knt; ++j)
-    {
-        beta *= safmin;
-    }
-    return HouseholderC<R>{tau, beta};
-}
+using HouseholderC = crd::hesap::dense::detail::HouseholderComplex<R>;
 
 // SIMD complex Hermitian tridiagonalization (zhetd2): reduce the Hermitian
 // matrix in the lower triangle to a REAL symmetric tridiagonal (d, e) by
@@ -1902,7 +1840,7 @@ void tridiagonalize_hermitian_simd(R* ar, R* ai, crd::usize n, crd::usize lda, R
         {
             vc[k] = C{ar[(i + 1 + k) * lda + i], ai[(i + 1 + k) * lda + i]};
         }
-        const HouseholderC<R> h = make_householder_herm<R>(vc.data(), m);
+        const HouseholderC<R> h = crd::hesap::dense::detail::make_householder_complex<R>(vc.data(), m);
         e[i] = h.beta;
         tau[i] = h.tau;
         vc[0] = C{R{1}, R{0}};

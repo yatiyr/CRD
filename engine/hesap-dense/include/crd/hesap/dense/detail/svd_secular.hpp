@@ -428,7 +428,6 @@ inline void dlasd4(int n, int i_in, const R* d, const R* z, R* delta, R rho, R& 
     auto zee = [&](int j) -> R { return z[j - 1]; };
     auto del = [&](int j) -> R& { return delta[j - 1]; };
     auto wrk = [&](int j) -> R& { return work[j - 1]; };
-    auto max3 = [](R a, R b, R c) { return std::max(std::max(a, b), c); };
 
     info = 0;
     const int iv = i_in + 1;  // 1-based singular-value index (Fortran's I)
