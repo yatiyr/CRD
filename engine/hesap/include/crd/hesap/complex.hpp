@@ -75,6 +75,15 @@ struct Complex
     // near the range bounds. Branches on which component dominates and
     // factors that out so intermediate products stay in range. Returns
     // {NaN,NaN} on division by zero (no exceptions per ADR-0001 contract).
+    // Smith's-algorithm complex division. The `abs_re < abs_im` branch reaches
+    // line `b.re / b.im` only when abs_im > abs_re >= 0 (so b.im != 0); MSVC /O2
+    // can't prove that and emits a C4723 false positive (surfaced first by the
+    // complex FGMRES back-substitution in Release). Suppress it for THIS function
+    // only — not a global suppression.
+#if defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable : 4723)
+#endif
     [[nodiscard]] Complex operator/(const Complex& b) const noexcept
     {
         const T abs_re = b.re < T(0) ? -b.re : b.re;
@@ -95,6 +104,9 @@ struct Complex
         const T den = b.im + r * b.re;
         return Complex{(re * r + im) / den, (im * r - re) / den};
     }
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
 
     [[nodiscard]] constexpr Complex operator/(T s) const noexcept { return Complex{re / s, im / s}; }
 

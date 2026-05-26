@@ -328,6 +328,39 @@ CommandResult impl_nd_nnz_l(const CommandArgs& args) // nnz(L) after nested-diss
     return scalar_result(args.alloc, static_cast<crd::f64>(nnz_l(rp, args.alloc)));
 }
 
+// MC64 max-weight matching + scaling. Unlike the structure-only orderings this is VALUE-aware
+// (matches by |a_ij|), so it reads a real `values` F64Array. Returns [colperm(n), D_r(n), D_c(n)]
+// concatenated as a BinaryBlob f64 (the C++ API covers all 4 type variants).
+CommandResult impl_mc64(const CommandArgs& args)
+{
+    const auto rows = args.get_u64("rows");
+    const auto cols = args.get_u64("cols");
+    if (!rows || !cols || *rows != *cols) { return error_result(args.alloc, "mc64 requires a square matrix"); }
+    const auto tr = args.get_i64_array("triplet_rows");
+    const auto tc = args.get_i64_array("triplet_cols");
+    const auto vv = args.get_f64_array("values");
+    if (tr.size() != tc.size() || tr.size() != vv.size())
+    {
+        return error_result(args.alloc, "mc64: triplet_rows/cols/values length mismatch");
+    }
+    crd::hesap::sparse::TripletBuilder<crd::f64> tb(args.alloc, static_cast<crd::u32>(*rows),
+                                                    static_cast<crd::u32>(*cols));
+    tb.reserve(tr.size());
+    for (crd::usize k = 0; k < tr.size(); ++k)
+    {
+        tb.add(static_cast<crd::u32>(tr[k]), static_cast<crd::u32>(tc[k]), vv[k]);
+    }
+    auto a = tb.compress();
+    auto s = mc64_match_and_scale<crd::f64>(a, args.alloc);
+    const crd::u32 n = a.rows();
+    crd::containers::Array<crd::f64> out(args.alloc);
+    out.reserve(static_cast<crd::usize>(n) * 3);
+    for (crd::u32 i = 0; i < n; ++i) { out.push_back(static_cast<crd::f64>(s.colperm[i])); }
+    for (crd::u32 i = 0; i < n; ++i) { out.push_back(s.dr[i]); }
+    for (crd::u32 j = 0; j < n; ++j) { out.push_back(s.dc[j]); }
+    return blob_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
+}
+
 void add_param(CommandSchema& s, crd::memory::IAllocator* alloc, const char* name, const char* desc, ParamKind kind,
                bool required)
 {
@@ -352,6 +385,13 @@ CommandSchema make_ordering_schema(crd::memory::IAllocator* alloc, const char* n
     add_param(s, alloc, "cols", "Number of matrix columns (== rows; square)", ParamKind::U64, true);
     add_param(s, alloc, "triplet_rows", "COO row indices (I64Array; structure only)", ParamKind::I64, true);
     add_param(s, alloc, "triplet_cols", "COO column indices (I64Array; structure only)", ParamKind::I64, true);
+    return s;
+}
+
+CommandSchema make_mc64_schema(crd::memory::IAllocator* alloc, const char* name, const char* desc)
+{
+    CommandSchema s = make_ordering_schema(alloc, name, desc, OutputKind::BinaryBlob);
+    add_param(s, alloc, "values", "COO values (F64Array; matched by |value|)", ParamKind::F64, true);
     return s;
 }
 } // namespace
@@ -416,4 +456,7 @@ CRD_HESAP_CLI_REGISTER_MODULE(
         reg.register_command(make_ordering_schema(alloc, "hesap.ordering.nd_nnz_l",
                                                   "nnz(L) after nested-dissection reordering.", OutputKind::Scalar),
                              &impl_nd_nnz_l);
+        reg.register_command(make_mc64_schema(alloc, "hesap.ordering.mc64",
+                                              "MC64 max-weight matching + scaling: [colperm(n), D_r(n), D_c(n)] (BinaryBlob f64)."),
+                             &impl_mc64);
     })

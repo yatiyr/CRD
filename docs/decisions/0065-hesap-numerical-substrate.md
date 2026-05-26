@@ -1330,3 +1330,86 @@ lstsq + pinv (col-piv QR + COD + SVD, blocked-apply crush) + NNLS (Lawson-Hanson
 up/downdate) + TLS (SVD). Crushes LAPACK across the board; beats Eigen on pinv + SVD-path, ties
 the COD default; NNLS/TLS correctness-gated.** NEXT = v3d (non-symmetric eigensolver: balance +
 Hessenberg + Francis double-shift Schur + AED + eigenvectors). 18-config sweep delegated to CI.
+
+## §25 Amendment (2026-05-25) — v3d non-symmetric eigensolver + v3 CLOSE (v3e lock)
+
+v3d ships the full general (non-symmetric) eigensolver — real f32/f64 AND complex c32/c64 —
+on the shipped substrate (balance, blocked Hessenberg, gemm, Householder). Pipeline:
+**balance (dgebal) → Hessenberg (dgehd2/zgehd2) + unitary/orthogonal Q (dorghr/zunghr) →
+Schur via Aggressive Early Deflation (dlaqr0/zlaqr0-class: dlaqr2/zlaqr2 window deflation +
+dlaqr5/zlaqr5 small-bulge multishift train, NMIN crossover to single-shift dlahqr/zlahqr) →
+right eigenvectors (dtrevc/ztrevc) → 3-stage back-transform `V = D⁻¹P · Q · Z · V_schur`
+(two gemms + dgebak/zgebak).** Real has 1×1 + 2×2 (dlanv2) Schur blocks; complex is strictly
+upper-triangular (no 2×2 ⇒ no dlanv2/dlasy2/dlaexc — the structural simplification). The
+complex inner kernels run on the two-real-array (`ar`/`ai`) SIMD path (the eig_herm v3a-2.5
+idiom) where contiguous; `Complex<T>` arithmetic at the Schur/eigenvector layer.
+
+**Determinism pins (D(non-sym)-1..8):**
+- **D(non-sym)-1 — real Schur (dlahqr) is deterministic.** Fixed Wilkinson shift + the modern
+  `dlahqr` exceptional-shift schedule (`KEXSH=10`, `dat1=0.75`, `dat2=-0.4375`; a `kdefl`
+  deflation counter kicks `kdefl%(2·KEXSH)`=bottom / `kdefl%KEXSH`=top, reset on deflation) +
+  capped `itmax = 30·max(10, nh)`. No convergence-dependent / RNG branch.
+- **D(non-sym)-2 — real AED window size** `nw = min(nh, max(2, nh/3))` (mirrors dlaqr2).
+- **D(non-sym)-3 — real AED shift order:** the undeflated AED eigenvalues `[kwtop, kwtop+ns-1]`
+  are used as the dlaqr5 train shifts in that contiguous order (no reordering).
+- **D(non-sym)-4 — eigenvector normalization** (dgeev / Eigen convention): each column scaled
+  to Euclidean norm 1, then phase-rotated so the lowest-index **largest-MODULUS** component
+  (`re²+im²`, NOT cabs1) is real-positive. (Supersedes the v3d-2 plan wording "max-abs = 1".)
+- **D(non-sym)-5 — eigenpair order = Schur order** from the AED driver (deterministic; complex
+  spectra have no natural total order, so NO sort).
+- **D(non-sym)-6 — complex Schur (zlahqr) exceptional-shift schedule.** `dat1=0.75` (exact in
+  both f32 and f64), scalar shift `T = dat1·|Re(subdiag)| + diag` (no `dat2` — complex has no
+  2×2 block). **Upgraded at v3e from the classic 2-kick (`its==10/20`) to the modern `KEXSH=10`
+  continuous-kick schedule (`its%(2·KEXSH)`=bottom / `its%KEXSH`=top), for consistency with
+  D(non-sym)-1 and robustness on pathological spectra** — behaviour-neutral for all converging
+  spectra (they never reach `its≥10`). **Counter note:** the complex path keys on `its`
+  (per-eigenvalue iteration; resets per-deflation in its nested inner loop) where the real path
+  (D(non-sym)-1) keys on `kdefl` (single-loop deflation counter) — an intentional structural
+  difference (nested vs single loop), semantically equivalent for the continuous-kick goal, NOT
+  a typo. Verified `dat1`/`itmax` character-for-character vs `zlahqr.f`; the classic→modern
+  schedule was the one divergence the v3e constant-verification surfaced.
+- **D(non-sym)-7 — complex AED window size** `nw = min(nh, max(2, nh/3))` (mirrors zlaqr2).
+- **D(non-sym)-8 — complex AED shift order:** undeflated AED eigenvalues as contiguous zlaqr5
+  shifts (mirrors D(non-sym)-3).
+
+**NMIN crossover (measured, NOT borrowed):** real `schur_aed` NMIN=200; complex
+`complex_schur_aed` NMIN=150 (the AED+multishift-train vs single-shift crossover differs because
+complex single-shift is cheaper per sweep but runs more sweeps — both found empirically, not
+copied from LAPACK ILAENV).
+
+**Faithful-port divergences + notes** (`feedback_document_paper_divergence_explicitly`):
+- **zlaqr5/zlaqr1/zlaqr2 conj placement ported VERBATIM** from the `.f` sources (RIGHT/U-accum
+  `T={tau, tau·conj(v2), tau·conj(v3)}` + plain-v gather; LEFT `T={conj(tau), …}` + conj-v
+  gather; similarity Hᴴ·A·H). The `zlaqr2` spike row is **conjugated** before the reflector
+  (`work[k]=conj(V(1,k))`) — the one-line bug that recon-broke complex AED on generic matrices
+  until fixed (`feedback_test_eigensolvers_on_random_not_smooth`).
+- **ztrevc back-solve** uses an inline `smin` near-defective floor + `cnorm`/`bignum` overflow
+  scaling (the same form as `dtrevc_right`), NOT a full `zlatrs` port.
+- **`gebak_right<V, S>`** — complex eigenvectors (`V`), real scale (`S`); one templated routine.
+- **Reference fragility:** Eigen `ComplexSchur`/`ComplexEigenSolver` + LAPACK `zhseqr`/`zgeev`
+  access-violate at n≥256 (MSVC/AVX `Packet2cd` + OpenBLAS-generic); benches cap complex refs
+  at n≤128 and gate complex AED vs OUR OWN single-shift `complex_schur` baseline at n≥256.
+- **Open follow-on `v3d-eig-fully-reducible-input`:** a fully-reducible (e.g. triangular) input
+  makes `balance` isolate every eigenvalue → empty active block → `ihi=l−1` underflows (usize)
+  → `hessenberg` asserts. Pre-existing (affects real `eig` too); narrow edge case, deferred.
+
+**vs-reference rollup (i9-14900K AVX2):** real `eig` beats Eigen `EigenSolver`
+1.09×/1.08×/1.65× (n=100/200/400) + crushes LAPACK `dgeev` 2.03×/3.04×/1.57×; real Schur AED
+beats Eigen `RealSchur` + `dhseqr`, widening with N (1.85×→3.99× at n=1200 vs RealSchur);
+complex `eig` beats Eigen `ComplexEigenSolver` 1.13×/1.32× (n=64/128) + crushes `zgeev`
+4.79×/2.80×; complex Schur AED beats our single-shift baseline 1.10×/1.12×/2.14× (n=256/400/512,
+widening). Residuals ~1e-13 throughout.
+
+**CLI:** `hesap.dense.eig.nonsym.{f32,f64,c32,c64}` (interleaved [re,im] eigenvalues, Schur
+order; vectors via the engine API) — every v3d op has a command.
+
+§25 ✅ Accepted — v3d shipped + gated; **18-config full sweep PASS (11 Windows incl
+clang-cl/scalar/sse2/LTCG + 7 gcc-linux, 0 failed)** after the v3e cross-config cleanup (18
+non-ASCII test names → ASCII; clang/gcc `-Werror` unused-vars + `double→float` narrowings;
+all latent in the MSVC-only per-slice path — `feedback_per_slice_binary_direct_misses_ctest_and_crossconfig`).
+**🎉 v3d (non-symmetric eigensolver) CLOSED — balance + Hessenberg + AED Schur (real Francis
+double-shift + complex single-shift, both `zlaqr0`-class multishift) + eigenvectors + complex,
+all beating Eigen + LAPACK (or crushing our own baseline where the complex refs AV).** **🎉🎉
+Phase 3.1.6 v3 (dense SVD + eigensolvers + least-squares) CLOSED — v3a (sym/herm eig) + v3b
+(SVD) + v3c (least-squares) + v3d (non-sym eig), §17–§25, beats Eigen + LAPACK across the
+dense-decomposition surface.** NEXT = v4 (the next hesap cluster per `docs/ROADMAP.md`).

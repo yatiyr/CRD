@@ -532,6 +532,9 @@ add_subdirectory(engine/hesap)
 add_subdirectory(engine/hesap-dense)
 add_subdirectory(engine/hesap-sparse)  # v1a; links crd-jobs (declared below — CMake resolves target names at generation)
 add_subdirectory(engine/hesap-ordering)  # v2; fill-reducing reorderings + symbolic factorisation (depends on hesap-sparse)
+add_subdirectory(engine/hesap-resources)  # v4-corpus; matrices as cooked resources (depends on hesap-sparse + resources)
+add_subdirectory(engine/hesap-iterative)  # v4a; Krylov solvers (CG/PCG) over LinearOp
+add_subdirectory(engine/hesap-preconditioners)  # v4a; Jacobi/SSOR preconditioners (one-way dep on hesap-iterative)
 # crd-hesap-sched depends on crd-jobs (declared below); declared after jobs.
 # crd-geometry-viz must come AFTER crd-draw (its declaration is below) — moved
 # down to engine/eylem-viz neighbourhood. See the second add_subdirectory below.

@@ -4002,7 +4002,8 @@ template RealSchur<double> schur_aed<double>(crd::memory::IAllocator*, const Mat
 // upper-Hessenberg matrix to UPPER-TRIANGULAR Schur form by a unitary
 // similarity h_in = Z·T·Zᴴ. No 2×2 blocks (complex eigenvalues on the diagonal)
 // ⇒ no dlanv2. Single Wilkinson-shift implicit QR + complex-Givens bulge chase +
-// Ahues-Tisseur deflation + exceptional shifts at its 10/20 (D(non-sym)-6).
+// Ahues-Tisseur deflation + modern zlahqr exceptional shifts (KEXSH=10 continuous
+// kicks, dat1=0.75; D(non-sym)-6) — consistent with real_schur's dlahqr kdefl path.
 // =======================================================================
 template <typename T>
 ComplexSchur<T> complex_schur(crd::memory::IAllocator* alloc, const Matrix<T>& h_in, crd::usize ilo,
@@ -4051,6 +4052,7 @@ ComplexSchur<T> complex_schur(crd::memory::IAllocator* alloc, const Matrix<T>& h
     const crd::usize nh = ihi - ilo + 1;
     const R smlnum = safmin * (static_cast<R>(nh) / ulp);
     const R dat1 = static_cast<R>(0.75);  // D(non-sym)-6 exceptional-shift constant
+    const crd::usize kexsh = 10;          // modern zlahqr KEXSH: kick every 10 iters
     const crd::usize itmax = 30 * std::max<crd::usize>(10, nh);
     const crd::usize iloz = ilo;
     const crd::usize ihiz = ihi;
@@ -4111,16 +4113,21 @@ ComplexSchur<T> complex_schur(crd::memory::IAllocator* alloc, const Matrix<T>& h
             }
 
             // ---- shift ----
+            // Exceptional shift schedule = modern zlahqr (KEXSH=10): kick every 10
+            // iterations, alternating bottom (kdefl%2*KEXSH) / top (kdefl%KEXSH),
+            // scalar T = s + diag, s = dat1·|Re(subdiag)|. `its` (per-eigenvalue,
+            // reset on deflation) plays kdefl here; convergent blocks never reach
+            // its=10 so the Wilkinson path is unchanged for all converging spectra.
             T t_shift;
-            if (its == 10)
-            {
-                const R s = dat1 * std::abs(h(l + 1, l).re);
-                t_shift = h(l, l) + T{s, R{0}};
-            }
-            else if (its == 20)
+            if (its > 0 && its % (2 * kexsh) == 0)
             {
                 const R s = dat1 * std::abs(h(i, i - 1).re);
                 t_shift = h(i, i) + T{s, R{0}};
+            }
+            else if (its > 0 && its % kexsh == 0)
+            {
+                const R s = dat1 * std::abs(h(l + 1, l).re);
+                t_shift = h(l, l) + T{s, R{0}};
             }
             else
             {

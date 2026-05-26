@@ -98,6 +98,34 @@ locally without the multi-hour sweep detour.
 
 ## State / next
 
+## v3e — close (CLI audit + constant verification + ADR-0065 §25 lock) ✅ 2026-05-25
+
+The v3 cluster close. Three legs (the 18-config sweep was already PASS):
+
+- **Constant verification (the bug-finding leg).** Diffed the exceptional-shift constants vs
+  `zlahqr.f`/`dlahqr.f`/`zlaqr5.f`/`zlaqr1.f`: `dat1=0.75`, `itmax=30·max(10,nh)`, the
+  zlaqr5/zlaqr1 conj forms — all exact. **One divergence found + fixed:** `complex_schur` used
+  the **classic `zlahqr` 2-kick** schedule (`its==10/20`) while `real_schur` already uses the
+  **modern `dlahqr` `KEXSH=10` `kdefl`-continuous** kicks. Upgraded `complex_schur` to the
+  modern continuous-kick schedule (`its%(2·KEXSH)`=bottom / `its%KEXSH`=top) for consistency +
+  robustness on pathological spectra. **Behaviour-neutral:** converging spectra never reach
+  `its≥10`, so `[nonsym]` stays at 248 181 assertions, 0 changed. (D(non-sym)-6 updated.)
+- **CLI audit — CLEAN.** Every dense-eig op has a command, including `rsvd`/`rsyev` (my first
+  audit grep used an incomplete pattern and false-flagged them; they ARE registered as
+  `hesap.dense.rsvd/rsyev.{f32,f64}`, matching §22's claim).
+- **ADR-0065 §25** (NOT §18 — §13–§24 were already used; §17 MRRR, §18–23 SVD, §24
+  least-squares; only v3d was unlocked). Locks **D(non-sym)-1..8** + the NMIN-measured
+  crossover (real 200 / complex 150) + the faithful-port divergences (zlaqr5 conj-verbatim,
+  zlaqr2 spike-conjugation, ztrevc inline-scaling, `gebak_right<V,S>`, the complex-ref AV cap,
+  the `v3d-eig-fully-reducible-input` follow-on) + the vs-reference rollup. **§25 closes v3d
+  AND the whole v3 family.**
+
+**🎉🎉 Phase 3.1.6 v3 (dense SVD + eigensolvers + least-squares) CLOSED** — v3a (sym/herm) +
+v3b (SVD) + v3c (least-squares) + v3d (non-sym), §17–§25, beats Eigen + LAPACK across the
+dense-decomposition surface; 18-config sweep PASS.
+
+## v3d-2c state
+
 **🎉 v3d-2c (complex non-symmetric eigensolver) CLOSED** — complex Hessenberg
 (2c-1) + balance & single-shift Schur (2c-2) + AED `zlaqr0`/`zlaqr5` (2c-2b) +
 ztrevc + public complex `eig` + CLI (2c-3), all beating Eigen + LAPACK (or

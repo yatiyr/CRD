@@ -449,6 +449,42 @@ target_link_libraries(smoke_hesap_sparse PRIVATE
 )
 crd_enable_default_pch(smoke_hesap_sparse)
 
+add_executable(smoke_hesap_matrix_resource
+    examples/smoke_hesap_matrix_resource.cpp
+)
+target_link_libraries(smoke_hesap_matrix_resource PRIVATE
+    crd-core
+    crd-log
+    crd-memory
+    crd-containers
+    crd-math
+    crd-platform
+    crd-hesap
+    crd-hesap-sparse
+    crd-hesap-resources
+    crd-resources
+)
+crd_enable_default_pch(smoke_hesap_matrix_resource)
+
+add_executable(smoke_hesap_solve_cli
+    examples/smoke_hesap_solve_cli.cpp
+)
+target_link_libraries(smoke_hesap_solve_cli PRIVATE
+    crd-core
+    crd-log
+    crd-memory
+    crd-containers
+    crd-math
+    crd-platform
+    crd-hesap
+    crd-hesap-dense
+    crd-hesap-sparse
+    crd-hesap-resources
+    crd-hesap-iterative
+    crd-resources
+)
+crd_enable_default_pch(smoke_hesap_solve_cli)
+
 add_executable(bench_hesap_gemm
     examples/bench_hesap_gemm.cpp
 )
@@ -597,4 +633,57 @@ if(CRD_BUILD_HESAP_VS_REFERENCE)
     crd_add_hesap_vs_ref_bench(bench_hesap_ordering_vs_reference)
     target_link_libraries(bench_hesap_ordering_vs_reference PRIVATE crd-hesap-sparse crd-hesap-ordering)
     target_compile_definitions(bench_hesap_ordering_vs_reference PRIVATE "CRD_SUITESPARSE_DIR=\"${CRD_SS_DIR}\"")
+    # v4-corpus: real SuiteSparse matrices through the cooked 'HMTX' resource path
+    # (cook + read_matrix_resource + build_csr timed vs direct read; each matrix also
+    # verified through ResourceManager mount + load_sync). No Eigen in the body.
+    crd_add_hesap_vs_ref_bench(bench_hesap_matrix_resource_vs_reference)
+    target_link_libraries(bench_hesap_matrix_resource_vs_reference PRIVATE
+        crd-hesap-sparse crd-hesap-resources crd-resources crd-platform)
+    target_compile_definitions(bench_hesap_matrix_resource_vs_reference PRIVATE "CRD_SUITESPARSE_DIR=\"${CRD_SS_DIR}\"")
+    # v4a-2: CG / Jacobi-PCG vs Eigen ConjugateGradient + DiagonalPreconditioner
+    # on real SuiteSparse SPD matrices (parallel SELL spmv = the DRAM-bound win).
+    crd_add_hesap_vs_ref_bench(bench_hesap_cg_vs_reference USE_JOBS)
+    target_link_libraries(bench_hesap_cg_vs_reference PRIVATE
+        crd-hesap-sparse crd-hesap-iterative crd-hesap-preconditioners)
+    target_compile_definitions(bench_hesap_cg_vs_reference PRIVATE "CRD_SUITESPARSE_DIR=\"${CRD_SS_DIR}\"")
+    # v4b: FGMRES vs Eigen BiCGSTAB (main) + Eigen GMRES (unsupported) on nonsym SuiteSparse.
+    crd_add_hesap_vs_ref_bench(bench_hesap_gmres_vs_reference USE_JOBS)
+    target_link_libraries(bench_hesap_gmres_vs_reference PRIVATE
+        crd-hesap-sparse crd-hesap-iterative crd-hesap-preconditioners)
+    target_compile_definitions(bench_hesap_gmres_vs_reference PRIVATE "CRD_SUITESPARSE_DIR=\"${CRD_SS_DIR}\"")
+    # v4d-2b: IDR(s=4) vs Eigen IDRS (unsupported), apples-to-apples on nonsym SuiteSparse.
+    crd_add_hesap_vs_ref_bench(bench_hesap_idrs_vs_reference USE_JOBS)
+    target_link_libraries(bench_hesap_idrs_vs_reference PRIVATE
+        crd-hesap-sparse crd-hesap-iterative crd-hesap-preconditioners)
+    target_compile_definitions(bench_hesap_idrs_vs_reference PRIVATE "CRD_SUITESPARSE_DIR=\"${CRD_SS_DIR}\"")
+    # v4e-2: GCROT(m,k) vs Cerid GMRES(m) [recycling baseline] + Eigen GMRES(m) [frontier ref].
+    crd_add_hesap_vs_ref_bench(bench_hesap_gcrot_vs_reference USE_JOBS)
+    target_link_libraries(bench_hesap_gcrot_vs_reference PRIVATE
+        crd-hesap-sparse crd-hesap-iterative crd-hesap-preconditioners)
+    target_compile_definitions(bench_hesap_gcrot_vs_reference PRIVATE "CRD_SUITESPARSE_DIR=\"${CRD_SS_DIR}\"")
+    # v4f-1: nested inner-Krylov-as-preconditioner (FGMRES + inner GMRES) vs flat GMRES + Eigen GMRES.
+    crd_add_hesap_vs_ref_bench(bench_hesap_nested_vs_reference USE_JOBS)
+    target_link_libraries(bench_hesap_nested_vs_reference PRIVATE
+        crd-hesap-sparse crd-hesap-iterative crd-hesap-preconditioners)
+    target_compile_definitions(bench_hesap_nested_vs_reference PRIVATE "CRD_SUITESPARSE_DIR=\"${CRD_SS_DIR}\"")
+    # v4f-2: block-CG (multi-RHS) vs Eigen ConjugateGradient per-column on SPD.
+    crd_add_hesap_vs_ref_bench(bench_hesap_block_cg_vs_reference USE_JOBS)
+    target_link_libraries(bench_hesap_block_cg_vs_reference PRIVATE
+        crd-hesap-sparse crd-hesap-iterative crd-hesap-preconditioners)
+    target_compile_definitions(bench_hesap_block_cg_vs_reference PRIVATE "CRD_SUITESPARSE_DIR=\"${CRD_SS_DIR}\"")
+    # v4f-3: block-GMRES + block-BiCGSTAB (multi-RHS) vs Eigen GMRES/BiCGSTAB per-column on nonsym.
+    crd_add_hesap_vs_ref_bench(bench_hesap_block_gmres_vs_reference USE_JOBS)
+    target_link_libraries(bench_hesap_block_gmres_vs_reference PRIVATE
+        crd-hesap-sparse crd-hesap-iterative crd-hesap-preconditioners)
+    target_compile_definitions(bench_hesap_block_gmres_vs_reference PRIVATE "CRD_SUITESPARSE_DIR=\"${CRD_SS_DIR}\"")
+    # v4g: IC(0)-PCG vs Eigen IncompleteCholesky-CG; ILU(0)-BiCGSTAB vs Eigen IncompleteLUT-BiCGSTAB.
+    crd_add_hesap_vs_ref_bench(bench_hesap_ilu_vs_reference USE_JOBS)
+    target_link_libraries(bench_hesap_ilu_vs_reference PRIVATE
+        crd-hesap-sparse crd-hesap-iterative crd-hesap-preconditioners crd-hesap-ordering)
+    target_compile_definitions(bench_hesap_ilu_vs_reference PRIVATE "CRD_SUITESPARSE_DIR=\"${CRD_SS_DIR}\"")
+    # v4i-1: SPAI (classical, M ≈ A⁻¹) + FSPAI (factored, M = L·Lᴴ, SPD) vs Eigen IncompleteCholesky / ILUT.
+    crd_add_hesap_vs_ref_bench(bench_hesap_spai_vs_reference USE_JOBS)
+    target_link_libraries(bench_hesap_spai_vs_reference PRIVATE
+        crd-hesap-sparse crd-hesap-iterative crd-hesap-preconditioners)
+    target_compile_definitions(bench_hesap_spai_vs_reference PRIVATE "CRD_SUITESPARSE_DIR=\"${CRD_SS_DIR}\"")
 endif()

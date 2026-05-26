@@ -1,5 +1,6 @@
 add_executable(crd-hesap-ordering-tests
     test_ordering.cpp
+    test_mc64.cpp
 )
 
 target_link_libraries(crd-hesap-ordering-tests PRIVATE
