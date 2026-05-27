@@ -464,14 +464,12 @@ Permutation amd_order(const AdjacencyGraph& g, crd::memory::IAllocator* alloc)
         {
             ++min_deg;
         }
-        crd::i32 p = -1;  // lowest-index principal in the min-degree bucket (D(ord)-1)
-        for (crd::i32 v = head[min_deg]; v != -1; v = nxt[v])
-        {
-            if (p == -1 || v < p)
-            {
-                p = v;
-            }
-        }
+        // D(ord)-1: take the bucket HEAD (O(1)) — deterministic (serial, fixed insertion order). The
+        // old "lowest-index in bucket" tie-break scanned the whole min-degree bucket, which is O(n) per
+        // step on structured grids (many equal-degree nodes) ⇒ O(n²) overall. Bucket-head is the
+        // standard AMD selection; any min-degree pivot is valid (the tie-break is determinism, not
+        // quality — and a different valid ordering gives an identical solve).
+        const crd::i32 p = head[min_deg];
         bucket_remove(p, degree[p]);
 
         // ---- form Lme (principals only; nv==0 entries are merged-away) ----

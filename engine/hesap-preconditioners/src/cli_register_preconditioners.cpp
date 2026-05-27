@@ -30,6 +30,7 @@
 #include <crd/hesap/preconditioners/fspai.hpp>
 #include <crd/hesap/preconditioners/ic0.hpp>
 #include <crd/hesap/preconditioners/ilu0.hpp>
+#include <crd/hesap/preconditioners/inverse_based_ilu.hpp>
 #include <crd/hesap/preconditioners/ilup.hpp>
 #include <crd/hesap/preconditioners/ilut.hpp>
 #include <crd/hesap/preconditioners/column_jacobi.hpp>
@@ -462,6 +463,30 @@ CommandResult impl_mlilu(const CommandArgs& args)
     return blob_f64_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
 }
 
+// hesap.precond.mlilu_ib.<T> : inverse-based multilevel ILU (Bollhöfer-Saad; ILUPACK core). z = M⁻¹ r.
+template <typename T>
+CommandResult impl_mlilu_ib(const CommandArgs& args)
+{
+    using R         = RealType<T>;
+    const auto rows = args.get_u64("rows");
+    if (!rows) { return error_result(args.alloc, "mlilu_ib: rows (== cols) is required"); }
+    const crd::u32   n      = static_cast<crd::u32>(*rows);
+    const auto       rin    = args.get_f64_array("r");
+    const crd::usize expect = is_complex_v<T> ? static_cast<crd::usize>(n) * 2 : static_cast<crd::usize>(n);
+    if (rin.size() != expect) { return error_result(args.alloc, "mlilu_ib: r has wrong length"); }
+    const R condest = static_cast<R>(args.get_f64("condest").value_or(-1.0)); // κ inverse-factor bound
+    const R droptol = static_cast<R>(args.get_f64("droptol").value_or(-1.0));
+    auto                         a = build_csr<T>(args, n);
+    InverseBasedIlu<T>           m(a, args.alloc, condest, droptol);
+    crd::hesap::dense::Vector<T> r(args.alloc, n);
+    crd::hesap::dense::Vector<T> z(args.alloc, n);
+    read_vec<T>(args, "r", r, n);
+    (void)m.apply(r.span(), z.span());
+    crd::containers::Array<crd::f64> out(args.alloc);
+    push_vec<T>(out, z, n);
+    return blob_f64_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
+}
+
 // hesap.precond.schwarz.<T> : z = Σ R̃ᵀ Aᵢᵢ⁻¹ R r (overlapping domain decomposition).
 template <typename T>
 CommandResult impl_schwarz(const CommandArgs& args)
@@ -743,6 +768,13 @@ CommandResult impl_fgmres(const CommandArgs& args)
         MultilevelIlu<T> m(a, args.alloc, lfil, droptol);
         res = run(&m);
     }
+    else if (precond == crd::containers::StringView{"mlilu_ib"}) // inverse-based multilevel ILU (ILUPACK core)
+    {
+        const R condest = static_cast<R>(args.get_f64("condest").value_or(-1.0));
+        const R droptol = static_cast<R>(args.get_f64("droptol").value_or(-1.0));
+        InverseBasedIlu<T> m(a, args.alloc, condest, droptol);
+        res = run(&m);
+    }
     else
     {
         res = run(nullptr); // plain GMRES
@@ -832,6 +864,13 @@ CommandResult impl_bicgstab(const CommandArgs& args)
         const crd::u32 lfil    = static_cast<crd::u32>(args.get_u64("lfil").value_or(0U));
         const R        droptol = static_cast<R>(args.get_f64("droptol").value_or(-1.0));
         MultilevelIlu<T> m(a, args.alloc, lfil, droptol);
+        res = run(&m);
+    }
+    else if (precond == crd::containers::StringView{"mlilu_ib"}) // inverse-based multilevel ILU (ILUPACK core)
+    {
+        const R condest = static_cast<R>(args.get_f64("condest").value_or(-1.0));
+        const R droptol = static_cast<R>(args.get_f64("droptol").value_or(-1.0));
+        InverseBasedIlu<T> m(a, args.alloc, condest, droptol);
         res = run(&m);
     }
     else
@@ -1110,6 +1149,13 @@ CommandResult impl_qmr(const CommandArgs& args)
         MultilevelIlu<T> m(a, args.alloc, lfil, droptol);
         res = run(&m);
     }
+    else if (precond == crd::containers::StringView{"mlilu_ib"}) // inverse-based multilevel ILU (ILUPACK core)
+    {
+        const R condest = static_cast<R>(args.get_f64("condest").value_or(-1.0));
+        const R droptol = static_cast<R>(args.get_f64("droptol").value_or(-1.0));
+        InverseBasedIlu<T> m(a, args.alloc, condest, droptol);
+        res = run(&m);
+    }
     else
     {
         res = run(nullptr);
@@ -1201,6 +1247,13 @@ CommandResult impl_gcr(const CommandArgs& args)
         const crd::u32 lfil    = static_cast<crd::u32>(args.get_u64("lfil").value_or(0U));
         const R        droptol = static_cast<R>(args.get_f64("droptol").value_or(-1.0));
         MultilevelIlu<T> m(a, args.alloc, lfil, droptol);
+        res = run(&m);
+    }
+    else if (precond == crd::containers::StringView{"mlilu_ib"}) // inverse-based multilevel ILU (ILUPACK core)
+    {
+        const R condest = static_cast<R>(args.get_f64("condest").value_or(-1.0));
+        const R droptol = static_cast<R>(args.get_f64("droptol").value_or(-1.0));
+        InverseBasedIlu<T> m(a, args.alloc, condest, droptol);
         res = run(&m);
     }
     else
@@ -1346,6 +1399,13 @@ CommandResult impl_gcrot(const CommandArgs& args)
         MultilevelIlu<T> m(a, args.alloc, lfil, droptol);
         res = run(&m);
     }
+    else if (precond == crd::containers::StringView{"mlilu_ib"}) // inverse-based multilevel ILU (ILUPACK core)
+    {
+        const R condest = static_cast<R>(args.get_f64("condest").value_or(-1.0));
+        const R droptol = static_cast<R>(args.get_f64("droptol").value_or(-1.0));
+        InverseBasedIlu<T> m(a, args.alloc, condest, droptol);
+        res = run(&m);
+    }
     else
     {
         res = run(nullptr);
@@ -1437,6 +1497,13 @@ CommandResult impl_idrs(const CommandArgs& args)
         const crd::u32 lfil    = static_cast<crd::u32>(args.get_u64("lfil").value_or(0U));
         const R        droptol = static_cast<R>(args.get_f64("droptol").value_or(-1.0));
         MultilevelIlu<T> m(a, args.alloc, lfil, droptol);
+        res = run(&m);
+    }
+    else if (precond == crd::containers::StringView{"mlilu_ib"}) // inverse-based multilevel ILU (ILUPACK core)
+    {
+        const R condest = static_cast<R>(args.get_f64("condest").value_or(-1.0));
+        const R droptol = static_cast<R>(args.get_f64("droptol").value_or(-1.0));
+        InverseBasedIlu<T> m(a, args.alloc, condest, droptol);
         res = run(&m);
     }
     else
@@ -1571,6 +1638,14 @@ CommandSchema make_ilup_schema(crd::memory::IAllocator* alloc, const char* name,
 {
     CommandSchema s = make_jacobi_schema(alloc, name, desc);
     add_param(s, alloc, "level", "ILU(p) level of fill (default 0 = ILU(0))", ParamKind::U64, false);
+    return s;
+}
+
+CommandSchema make_mlilu_ib_schema(crd::memory::IAllocator* alloc, const char* name, const char* desc)
+{
+    CommandSchema s = make_jacobi_schema(alloc, name, desc);
+    add_param(s, alloc, "condest", "Inverse-factor bound κ (default 5; tighter ⇒ more deferral)", ParamKind::F64, false);
+    add_param(s, alloc, "droptol", "Inverse-based drop tolerance (default 1e-2)", ParamKind::F64, false);
     return s;
 }
 
@@ -1829,6 +1904,15 @@ CRD_HESAP_CLI_REGISTER_MODULE([](CommandRegistry& reg) {
                          &impl_mlilu<crd::hesap::Complex<crd::f32>>);
     reg.register_command(make_ilut_schema(alloc, "hesap.precond.mlilu.c64", "Apply multilevel ILU (MC64+ILUT) M⁻¹r (Complex<f64>)."),
                          &impl_mlilu<crd::hesap::Complex<crd::f64>>);
+
+    reg.register_command(make_mlilu_ib_schema(alloc, "hesap.precond.mlilu_ib.f32", "Apply inverse-based multilevel ILU M⁻¹r (f32; κ/droptol)."),
+                         &impl_mlilu_ib<crd::f32>);
+    reg.register_command(make_mlilu_ib_schema(alloc, "hesap.precond.mlilu_ib.f64", "Apply inverse-based multilevel ILU M⁻¹r (f64; κ/droptol)."),
+                         &impl_mlilu_ib<crd::f64>);
+    reg.register_command(make_mlilu_ib_schema(alloc, "hesap.precond.mlilu_ib.c32", "Apply inverse-based multilevel ILU M⁻¹r (Complex<f32>)."),
+                         &impl_mlilu_ib<crd::hesap::Complex<crd::f32>>);
+    reg.register_command(make_mlilu_ib_schema(alloc, "hesap.precond.mlilu_ib.c64", "Apply inverse-based multilevel ILU M⁻¹r (Complex<f64>)."),
+                         &impl_mlilu_ib<crd::hesap::Complex<crd::f64>>);
 
     reg.register_command(
         make_pcg_schema(alloc, "hesap.iterative.pcg.f32", "Jacobi-preconditioned CG (f32). [iters,resid,converged,x]."),

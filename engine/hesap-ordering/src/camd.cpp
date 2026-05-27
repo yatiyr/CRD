@@ -188,15 +188,16 @@ Permutation camd_order(const AdjacencyGraph& g, crd::containers::ConstSpan<crd::
         {
             ++cur_class;
         }
+        // First cur-class principal in the lowest non-empty degree bucket, in bucket HEAD order
+        // (break on first found) — O(1) within-bucket instead of the old O(bucket) lowest-index
+        // scan that made camd O(n²). For a single class this is exactly amd_order's head[min_deg]
+        // (so nd_order's AMD base case matches amd_order); deterministic (serial, fixed insertion).
         crd::i32 p = -1;
         for (crd::i32 d = 0; d < static_cast<crd::i32>(n) && p == -1; ++d)
         {
             for (crd::i32 v = head[d]; v != -1; v = nxt[v])
             {
-                if (cmember[static_cast<crd::u32>(v)] == cur_class && (p == -1 || v < p))
-                {
-                    p = v; // lowest-index cur-class principal in the lowest non-empty degree bucket
-                }
+                if (cmember[static_cast<crd::u32>(v)] == cur_class) { p = v; break; } // first in head order
             }
         }
         CRD_ASSERT_MSG(p != -1, "camd_order: no principal found in the current class");

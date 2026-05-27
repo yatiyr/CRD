@@ -23,6 +23,7 @@ add_executable(crd-hesap-iterative-tests
     test_chebyshev.cpp
     test_schwarz.cpp
     test_multilevel_ilu.cpp
+    test_inverse_based_ilu.cpp
 )
 
 target_link_libraries(crd-hesap-iterative-tests PRIVATE

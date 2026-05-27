@@ -1,7 +1,9 @@
 #include <crd/hesap/dense/lu.hpp>
 
 #include <crd/core/assert.hpp>
+#include <crd/hesap/complex.hpp>
 #include <crd/hesap/dense/blas3.hpp>
+#include <crd/hesap/dense/real_type.hpp>
 #include <crd/jobs/jobs.hpp>
 
 #include <cmath>
@@ -15,10 +17,13 @@ namespace
 // Mc heuristic for trailing updates of typical matrix sizes.
 constexpr crd::usize kBlockSize = 64;
 
+// Pivot magnitude: |x| as the real type. Complex modulus for complex T (partial
+// pivoting selects the largest-modulus entry); real path bit-identical (if constexpr).
 template <typename T>
-inline T abs_value(T x) noexcept
+inline RealType<T> abs_value(T x) noexcept
 {
-    return x < T{0} ? -x : x;
+    if constexpr (is_complex_v<T>) { return std::sqrt(x.re * x.re + x.im * x.im); }
+    else { return x < T{0} ? -x : x; }
 }
 
 // Swap row a and row b across columns [c0, c1).
@@ -66,11 +71,11 @@ crd::usize panel_factor(T* lu_data, crd::usize n, crd::usize ld, crd::usize k, c
     for (crd::usize j = k; j < k + nb; ++j)
     {
         // Find pivot row (max |A[i, j]| for i in [j, n)).
-        T max_abs = abs_value<T>(lu_data[j * ld + j]);
+        RealType<T> max_abs = abs_value<T>(lu_data[j * ld + j]);
         crd::usize pivot_row = j;
         for (crd::usize i = j + 1; i < n; ++i)
         {
-            const T v = abs_value<T>(lu_data[i * ld + j]);
+            const RealType<T> v = abs_value<T>(lu_data[i * ld + j]);
             if (v > max_abs)
             {
                 max_abs = v;
@@ -309,19 +314,28 @@ void solve_lu(const LU<T, L>& lu, MatrixView<T, L> b)
     }
 }
 
-// Explicit instantiations: real f32 / f64, RowMajor only for v0e-a.
-// Complex variants land in v0e-a2 (filed follow-on) once a consumer needs them.
+// Explicit instantiations: real f32 / f64 + complex c32 / c64, RowMajor.
+// Complex added v4k-c: first consumer = complex SA-AMG coarse solve (the LU body is
+// complex-generic; only pivot magnitude uses the real modulus, see abs_value).
+using C32 = crd::hesap::Complex<float>;
+using C64 = crd::hesap::Complex<double>;
 template void factor_lu<float, Layout::RowMajor>(LU<float, Layout::RowMajor>&,
                                                   crd::memory::IAllocator*);
 template void factor_lu<double, Layout::RowMajor>(LU<double, Layout::RowMajor>&,
                                                    crd::memory::IAllocator*);
+template void factor_lu<C32, Layout::RowMajor>(LU<C32, Layout::RowMajor>&, crd::memory::IAllocator*);
+template void factor_lu<C64, Layout::RowMajor>(LU<C64, Layout::RowMajor>&, crd::memory::IAllocator*);
 template void solve_lu<float, Layout::RowMajor>(const LU<float, Layout::RowMajor>&,
                                                  crd::containers::Span<float>);
 template void solve_lu<double, Layout::RowMajor>(const LU<double, Layout::RowMajor>&,
                                                   crd::containers::Span<double>);
+template void solve_lu<C32, Layout::RowMajor>(const LU<C32, Layout::RowMajor>&, crd::containers::Span<C32>);
+template void solve_lu<C64, Layout::RowMajor>(const LU<C64, Layout::RowMajor>&, crd::containers::Span<C64>);
 template void solve_lu<float, Layout::RowMajor>(const LU<float, Layout::RowMajor>&,
                                                  MatrixView<float, Layout::RowMajor>);
 template void solve_lu<double, Layout::RowMajor>(const LU<double, Layout::RowMajor>&,
                                                   MatrixView<double, Layout::RowMajor>);
+template void solve_lu<C32, Layout::RowMajor>(const LU<C32, Layout::RowMajor>&, MatrixView<C32, Layout::RowMajor>);
+template void solve_lu<C64, Layout::RowMajor>(const LU<C64, Layout::RowMajor>&, MatrixView<C64, Layout::RowMajor>);
 
 } // namespace crd::hesap::dense

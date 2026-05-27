@@ -30,6 +30,12 @@ CMakeFiles/
 compile_commands.json
 _deps/
 
+# Local-only, non-distributed reference oracles (non-commercial license — never
+# vendored, never CI, dev-machine benchmarking only). ILUPACK V2.4 precompiled lib
+# (non-commercial/academic use only per ilupack.tu-bs.de/copyright.shtml) lives here
+# behind the CRD_BUILD_HESAP_VS_ILUPACK dev flag. See docs/phases/phase-3.1.6-hesap.md.
+external/
+
 # OS junk
 .DS_Store
 Thumbs.db

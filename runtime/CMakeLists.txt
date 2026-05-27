@@ -687,3 +687,33 @@ if(CRD_BUILD_HESAP_VS_REFERENCE)
         crd-hesap-sparse crd-hesap-iterative crd-hesap-preconditioners)
     target_compile_definitions(bench_hesap_spai_vs_reference PRIVATE "CRD_SUITESPARSE_DIR=\"${CRD_SS_DIR}\"")
 endif()
+
+# --- v4j-2a: Cerid InverseBasedIlu vs ILUPACK V2.4 (local-only, non-commercial) ---
+# ILUPACK is non-commercial/binary-only ⇒ a precompiled lib under the gitignored
+# external/ilupack (run scripts/setup-ilupack-ref.sh first). WSL/Linux only
+# (gfortran-built .a). NEVER in CI, NEVER shipped. Static-lib link order follows
+# the dist's simple_examples/makefile; gfortran+m supply the Fortran runtime.
+if(CRD_BUILD_HESAP_VS_ILUPACK)
+    if(NOT UNIX)
+        message(WARNING "[hesap-vs-ilupack] ILUPACK libs are Linux/WSL-only; skipping on this platform")
+    else()
+        set(CRD_ILUPACK_DIR "${CMAKE_SOURCE_DIR}/external/ilupack/dist/ilupackV2.4_GNU64_MUMPS"
+            CACHE PATH "ILUPACK V2.4 precompiled distribution root")
+        set(_ilu_lib "${CRD_ILUPACK_DIR}/lib/GNU64")
+        if(NOT EXISTS "${_ilu_lib}/libilupack.a")
+            message(FATAL_ERROR "[hesap-vs-ilupack] ${_ilu_lib}/libilupack.a not found — run scripts/setup-ilupack-ref.sh")
+        endif()
+        add_executable(bench_hesap_mlilu_vs_ilupack examples/bench_hesap_mlilu_vs_ilupack.cpp)
+        target_link_libraries(bench_hesap_mlilu_vs_ilupack PRIVATE
+            crd-core crd-memory crd-containers crd-math crd-jobs
+            crd-hesap crd-hesap-dense crd-hesap-sparse crd-hesap-iterative crd-hesap-preconditioners crd-hesap-amg
+            "${_ilu_lib}/libilupack.a" "${_ilu_lib}/libmumps.a" "${_ilu_lib}/libamd.a"
+            "${_ilu_lib}/libmetis.a" "${_ilu_lib}/libsparspak.a" "${_ilu_lib}/liblapack.a"
+            "${_ilu_lib}/libblaslike.a" "${_ilu_lib}/libblas.a"
+            gfortran m)
+        target_include_directories(bench_hesap_mlilu_vs_ilupack SYSTEM PRIVATE "${CRD_ILUPACK_DIR}/include")
+        target_compile_definitions(bench_hesap_mlilu_vs_ilupack PRIVATE __UNDERSCORE__)
+        set_source_files_properties(examples/bench_hesap_mlilu_vs_ilupack.cpp PROPERTIES COMPILE_FLAGS "-Wno-error")
+        message(STATUS "[hesap-vs-ilupack] bench_hesap_mlilu_vs_ilupack enabled (ILUPACK at ${CRD_ILUPACK_DIR})")
+    endif()
+endif()

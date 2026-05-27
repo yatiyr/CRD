@@ -20,6 +20,11 @@ option(CRD_BUILD_SANDBOX    "Build crd-sandbox interactive app" ON)
 # build/_deps/ (gitignored), never vendored into the repo. OFF by default — opt in
 # via -DCRD_BUILD_HESAP_VS_REFERENCE=ON at configure time.
 option(CRD_BUILD_HESAP_VS_REFERENCE "Build hesap-vs-Eigen/OpenBLAS comparison bench" OFF)
+# v4j-2a: Cerid InverseBasedIlu vs ILUPACK V2.4 head-to-head. ILUPACK is non-
+# commercial/binary-only ⇒ NOT a CPM dep; a precompiled lib under the gitignored
+# external/ilupack (run scripts/setup-ilupack-ref.sh). WSL/Linux only (gfortran
+# .a). NEVER built in CI, NEVER shipped — a local dev-machine benchmarking oracle.
+option(CRD_BUILD_HESAP_VS_ILUPACK "Build hesap-vs-ILUPACK bench (local-only, non-commercial, Linux)" OFF)
 option(CRD_ENABLE_ASSERTS   "Enable CRD_ASSERT macros"        ON)
 option(CRD_ENABLE_PROFILING "Enable profiling instrumentation" OFF)
 option(CRD_ENABLE_ASAN      "Enable Address Sanitizer"         OFF)
@@ -535,6 +540,7 @@ add_subdirectory(engine/hesap-ordering)  # v2; fill-reducing reorderings + symbo
 add_subdirectory(engine/hesap-resources)  # v4-corpus; matrices as cooked resources (depends on hesap-sparse + resources)
 add_subdirectory(engine/hesap-iterative)  # v4a; Krylov solvers (CG/PCG) over LinearOp
 add_subdirectory(engine/hesap-preconditioners)  # v4a; Jacobi/SSOR preconditioners (one-way dep on hesap-iterative)
+add_subdirectory(engine/hesap-amg)  # v4k; smoothed-aggregation AMG (LinearOp; one-way, Krylov consumes it)
 # crd-hesap-sched depends on crd-jobs (declared below); declared after jobs.
 # crd-geometry-viz must come AFTER crd-draw (its declaration is below) — moved
 # down to engine/eylem-viz neighbourhood. See the second add_subdirectory below.

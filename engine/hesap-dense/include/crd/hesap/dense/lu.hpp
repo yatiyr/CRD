@@ -108,28 +108,17 @@ private:
 // (These are the LAPACK ipiv conventions; replaying in reverse undoes.)
 // =======================================================================
 
-inline void apply_permutation(const Permutation& p, crd::containers::Span<float> x) noexcept
+// Row-swap permutation replay. Templated over the element type (float/double/complex)
+// — the body is type-agnostic swaps, so one template covers the real and complex paths.
+template <typename T>
+inline void apply_permutation(const Permutation& p, crd::containers::Span<T> x) noexcept
 {
     for (crd::usize k = 0; k < p.n(); ++k)
     {
         const crd::usize r = p.pivot_at(k);
         if (r != k)
         {
-            const float tmp = x[k];
-            x[k] = x[r];
-            x[r] = tmp;
-        }
-    }
-}
-
-inline void apply_permutation(const Permutation& p, crd::containers::Span<double> x) noexcept
-{
-    for (crd::usize k = 0; k < p.n(); ++k)
-    {
-        const crd::usize r = p.pivot_at(k);
-        if (r != k)
-        {
-            const double tmp = x[k];
+            const T tmp = x[k];
             x[k] = x[r];
             x[r] = tmp;
         }
