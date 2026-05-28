@@ -56,8 +56,8 @@ template <MathScalar T>
 AABB3<T> compute_slice_bounds(crd::containers::ConstSpan<Vec3<T>> points,
                                const u32* idx, u32 first, u32 count) noexcept
 {
-    constexpr T kInf = std::numeric_limits<T>::infinity();
-    AABB3<T> b{Vec3<T>{kInf, kInf, kInf}, Vec3<T>{-kInf, -kInf, -kInf}};
+    constexpr T inf = std::numeric_limits<T>::infinity();
+    AABB3<T> b{Vec3<T>{inf, inf, inf}, Vec3<T>{-inf, -inf, -inf}};
     for (u32 i = 0; i < count; ++i)
     {
         const Vec3<T>& p = points[idx[first + i]];
@@ -107,9 +107,9 @@ KdTree<T> build_impl(crd::containers::ConstSpan<Vec3<T>> points,
 {
     KdTree<T> tree(alloc);
 
-    constexpr T kInfT = std::numeric_limits<T>::infinity();
-    const AABB3<T> empty_bounds{Vec3<T>{kInfT, kInfT, kInfT},
-                                  Vec3<T>{-kInfT, -kInfT, -kInfT}};
+    constexpr T inf_t = std::numeric_limits<T>::infinity();
+    const AABB3<T> empty_bounds{Vec3<T>{inf_t, inf_t, inf_t},
+                                  Vec3<T>{-inf_t, -inf_t, -inf_t}};
 
     if (points.size() == 0U)
     {

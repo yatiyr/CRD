@@ -348,8 +348,8 @@ AABB3<f32> DynamicBvh::bounds() const noexcept
 {
     if (m_root == k_null)
     {
-        constexpr f32 kInf = std::numeric_limits<f32>::infinity();
-        return AABB3<f32>(Vec3<f32>(kInf, kInf, kInf), Vec3<f32>(-kInf, -kInf, -kInf));
+        constexpr f32 inf = std::numeric_limits<f32>::infinity();
+        return AABB3<f32>(Vec3<f32>(inf, inf, inf), Vec3<f32>(-inf, -inf, -inf));
     }
     return m_nodes[m_root].aabb;
 }

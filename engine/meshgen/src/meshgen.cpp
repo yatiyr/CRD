@@ -240,17 +240,17 @@ crd::renderer::MeshResource make_sphere(
 {
     auto m = make_mesh(a);
     using F = float;
-    constexpr F kPi = std::numbers::pi_v<F>;
+    constexpr F k_pi = std::numbers::pi_v<F>;
 
     for (crd::u32 lat = 0; lat <= lat_bands; ++lat)
     {
-        const F theta     = kPi * static_cast<F>(lat) / static_cast<F>(lat_bands);
+        const F theta     = k_pi * static_cast<F>(lat) / static_cast<F>(lat_bands);
         const F sin_theta = std::sin(theta);
         const F cos_theta = std::cos(theta);
 
         for (crd::u32 lon = 0; lon <= lon_bands; ++lon)
         {
-            const F phi     = 2.0F * kPi * static_cast<F>(lon) / static_cast<F>(lon_bands);
+            const F phi     = 2.0F * k_pi * static_cast<F>(lon) / static_cast<F>(lon_bands);
             const F sin_phi = std::sin(phi);
             const F cos_phi = std::cos(phi);
 
@@ -303,7 +303,7 @@ crd::renderer::MeshResource make_icosphere(
     crd::memory::IAllocator* a, float radius, crd::u32 subdivisions)
 {
     // Build icosahedron vertices (unit sphere, 12 verts, 20 faces).
-    constexpr float kGR = 1.6180339887F; // golden ratio
+    constexpr float gr = 1.6180339887F; // golden ratio
     crd::containers::Array<float> positions(a); // xyz triples
     crd::containers::Array<crd::u32> faces(a);  // triangle indices (3 per face)
 
@@ -319,18 +319,18 @@ crd::renderer::MeshResource make_icosphere(
     };
 
     // 12 icosahedron vertices
-    add_pos(-1.0F,  kGR,  0.0F);
-    add_pos( 1.0F,  kGR,  0.0F);
-    add_pos(-1.0F, -kGR,  0.0F);
-    add_pos( 1.0F, -kGR,  0.0F);
-    add_pos( 0.0F, -1.0F,  kGR);
-    add_pos( 0.0F,  1.0F,  kGR);
-    add_pos( 0.0F, -1.0F, -kGR);
-    add_pos( 0.0F,  1.0F, -kGR);
-    add_pos( kGR,  0.0F, -1.0F);
-    add_pos( kGR,  0.0F,  1.0F);
-    add_pos(-kGR,  0.0F, -1.0F);
-    add_pos(-kGR,  0.0F,  1.0F);
+    add_pos(-1.0F,  gr,  0.0F);
+    add_pos( 1.0F,  gr,  0.0F);
+    add_pos(-1.0F, -gr,  0.0F);
+    add_pos( 1.0F, -gr,  0.0F);
+    add_pos( 0.0F, -1.0F,  gr);
+    add_pos( 0.0F,  1.0F,  gr);
+    add_pos( 0.0F, -1.0F, -gr);
+    add_pos( 0.0F,  1.0F, -gr);
+    add_pos( gr,  0.0F, -1.0F);
+    add_pos( gr,  0.0F,  1.0F);
+    add_pos(-gr,  0.0F, -1.0F);
+    add_pos(-gr,  0.0F,  1.0F);
 
     // 20 faces (CCW winding)
     const crd::u32 ico_faces[20][3] = {
@@ -446,13 +446,13 @@ crd::renderer::MeshResource make_cylinder(
     crd::memory::IAllocator* a, float radius, float height, crd::u32 segs)
 {
     auto m = make_mesh(a);
-    constexpr float kPi = std::numbers::pi_v<float>;
+    constexpr float k_pi = std::numbers::pi_v<float>;
     const float half_h = height * 0.5F;
 
     // Side vertices: segs+1 columns, 2 rows (bottom/top)
     for (crd::u32 j = 0; j <= segs; ++j)
     {
-        const float phi     = 2.0F * kPi * static_cast<float>(j) / static_cast<float>(segs);
+        const float phi     = 2.0F * k_pi * static_cast<float>(j) / static_cast<float>(segs);
         const float cos_phi = std::cos(phi);
         const float sin_phi = std::sin(phi);
         const float u       = static_cast<float>(j) / static_cast<float>(segs);
@@ -504,7 +504,7 @@ crd::renderer::MeshResource make_cylinder(
     const crd::u32 bot_rim_start = vcount(m.vertices);
     for (crd::u32 j = 0; j <= segs; ++j)
     {
-        const float phi = 2.0F * kPi * static_cast<float>(j) / static_cast<float>(segs);
+        const float phi = 2.0F * k_pi * static_cast<float>(j) / static_cast<float>(segs);
         const float cp  = std::cos(phi);
         const float sp  = std::sin(phi);
         V v{};
@@ -535,7 +535,7 @@ crd::renderer::MeshResource make_cylinder(
     const crd::u32 top_rim_start = vcount(m.vertices);
     for (crd::u32 j = 0; j <= segs; ++j)
     {
-        const float phi = 2.0F * kPi * static_cast<float>(j) / static_cast<float>(segs);
+        const float phi = 2.0F * k_pi * static_cast<float>(j) / static_cast<float>(segs);
         const float cp  = std::cos(phi);
         const float sp  = std::sin(phi);
         V v{};
@@ -564,7 +564,7 @@ crd::renderer::MeshResource make_cone(
     crd::memory::IAllocator* a, float radius, float height, crd::u32 segs)
 {
     auto m = make_mesh(a);
-    constexpr float kPi = std::numbers::pi_v<float>;
+    constexpr float k_pi = std::numbers::pi_v<float>;
     const float half_h = height * 0.5F;
 
     // Slant normal: (height, radius, 0) normalized (in XY plane at phi=0).
@@ -576,7 +576,7 @@ crd::renderer::MeshResource make_cone(
     // Each side segment uses: apex vertex + 2 base ring vertices
     for (crd::u32 j = 0; j <= segs; ++j)
     {
-        const float phi = 2.0F * kPi * static_cast<float>(j) / static_cast<float>(segs);
+        const float phi = 2.0F * k_pi * static_cast<float>(j) / static_cast<float>(segs);
         const float cp  = std::cos(phi);
         const float sp  = std::sin(phi);
         const float u   = static_cast<float>(j) / static_cast<float>(segs);
@@ -626,7 +626,7 @@ crd::renderer::MeshResource make_cone(
     const crd::u32 bot_rim_start = vcount(m.vertices);
     for (crd::u32 j = 0; j <= segs; ++j)
     {
-        const float phi = 2.0F * kPi * static_cast<float>(j) / static_cast<float>(segs);
+        const float phi = 2.0F * k_pi * static_cast<float>(j) / static_cast<float>(segs);
         V v{};
         v.pos[0] = radius * std::cos(phi); v.pos[1] = -half_h; v.pos[2] = radius * std::sin(phi);
         v.nrm[0] = 0.0F; v.nrm[1] = -1.0F; v.nrm[2] = 0.0F;
@@ -652,7 +652,7 @@ crd::renderer::MeshResource make_capsule(
     crd::memory::IAllocator* a, float radius, float height, crd::u32 segs, crd::u32 rings)
 {
     auto m = make_mesh(a);
-    constexpr float kPi = std::numbers::pi_v<float>;
+    constexpr float k_pi = std::numbers::pi_v<float>;
     const float half_h = height * 0.5F; // half of the *cylinder* body
 
     auto emit_ring = [&](float y_offset, float theta_start, float theta_end, crd::u32 ring_count)
@@ -666,7 +666,7 @@ crd::renderer::MeshResource make_capsule(
 
             for (crd::u32 j = 0; j <= segs; ++j)
             {
-                const float phi = 2.0F * kPi * static_cast<float>(j) / static_cast<float>(segs);
+                const float phi = 2.0F * k_pi * static_cast<float>(j) / static_cast<float>(segs);
                 const float cp  = std::cos(phi);
                 const float sp  = std::sin(phi);
 
@@ -685,11 +685,11 @@ crd::renderer::MeshResource make_capsule(
 
     // Top hemisphere: theta [0, pi/2] with center at +half_h
     const crd::u32 top_start = vcount(m.vertices);
-    emit_ring(half_h, 0.0F, kPi * 0.5F, rings);
+    emit_ring(half_h, 0.0F, k_pi * 0.5F, rings);
 
     // Bottom hemisphere: theta [pi/2, pi] with center at -half_h
     const crd::u32 bot_start = vcount(m.vertices);
-    emit_ring(-half_h, kPi * 0.5F, kPi, rings);
+    emit_ring(-half_h, k_pi * 0.5F, k_pi, rings);
 
     const crd::u32 stride = segs + 1U;
 
@@ -738,17 +738,17 @@ crd::renderer::MeshResource make_torus(
     crd::memory::IAllocator* a, float major_r, float minor_r, crd::u32 maj_segs, crd::u32 min_segs)
 {
     auto m = make_mesh(a);
-    constexpr float kPi = std::numbers::pi_v<float>;
+    constexpr float k_pi = std::numbers::pi_v<float>;
 
     for (crd::u32 i = 0; i <= maj_segs; ++i)
     {
-        const float phi = 2.0F * kPi * static_cast<float>(i) / static_cast<float>(maj_segs);
+        const float phi = 2.0F * k_pi * static_cast<float>(i) / static_cast<float>(maj_segs);
         const float cp  = std::cos(phi);
         const float sp  = std::sin(phi);
 
         for (crd::u32 j = 0; j <= min_segs; ++j)
         {
-            const float theta = 2.0F * kPi * static_cast<float>(j) / static_cast<float>(min_segs);
+            const float theta = 2.0F * k_pi * static_cast<float>(j) / static_cast<float>(min_segs);
             const float ct    = std::cos(theta);
             const float st    = std::sin(theta);
 

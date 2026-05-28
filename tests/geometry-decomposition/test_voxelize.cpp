@@ -450,9 +450,9 @@ TEST_CASE("voxelize_mesh determinism -- repeated runs yield identical voxel stat
 TEST_CASE("voxelize_mesh stable at f32 coordinate magnitude 1e4", "[voxelize][large-coord]")
 {
     crd::memory::TlsfAllocator alloc(16U * 1024U * 1024U);
-    constexpr crd::f32 kScale = 1.0e4F;
+    constexpr crd::f32 scale = 1.0e4F;
     const OwnedMesh cube_at_origin = build_unit_cube(&alloc);
-    const OwnedMesh cube_at_offset = build_unit_cube(&alloc, {kScale, kScale, kScale});
+    const OwnedMesh cube_at_offset = build_unit_cube(&alloc, {scale, scale, scale});
 
     VoxelizationOptions opts{};
     opts.fixed_resolution = 4U;

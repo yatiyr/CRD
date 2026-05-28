@@ -6,17 +6,17 @@ namespace
 {
 [[nodiscard]] constexpr crd::u64 fnv1a_mix(crd::u64 hash, crd::u64 value) noexcept
 {
-    constexpr crd::u64 kPrime = 1099511628211ULL;
+    constexpr crd::u64 prime = 1099511628211ULL;
     hash ^= value;
-    hash *= kPrime;
+    hash *= prime;
     return hash;
 }
 } // namespace
 
 VariantKey make_variant_key(const VariantRequest& request) noexcept
 {
-    constexpr crd::u64 kOffsetBasis = 14695981039346656037ULL;
-    crd::u64 hash = kOffsetBasis;
+    constexpr crd::u64 offset_basis = 14695981039346656037ULL;
+    crd::u64 hash = offset_basis;
     hash = fnv1a_mix(hash, static_cast<crd::u64>(request.pass_type));
     hash = fnv1a_mix(hash, request.skinned ? 1ULL : 0ULL);
     hash = fnv1a_mix(hash, static_cast<crd::u64>(request.alpha_mode));

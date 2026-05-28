@@ -649,11 +649,11 @@ TEST_CASE("SpatialHash concurrent queries via crd-jobs fiber pool",
     // crd-jobs thread pool (4 workers per the JobsListener's config). Each
     // task constructs its own TlsfAllocator + SpatialHashScratch — total
     // isolation. Atomic mismatch counter aggregated across all fibers.
-    constexpr u32 kTotalTasks = ConcurrencyCorpus::kQueries * ConcurrencyCorpus::kItersPerQuery;
+    constexpr u32 total_tasks = ConcurrencyCorpus::kQueries * ConcurrencyCorpus::kItersPerQuery;
     auto* corpus_ptr = corpus.get(); // SBO-trivial pointer for the lambda capture
 
     crd::jobs::Counter* counter = crd::jobs::parallel_for(
-        kTotalTasks, /*num_jobs=*/16U,
+        total_tasks, /*num_jobs=*/16U,
         [corpus_ptr](crd::u32 begin, crd::u32 end) noexcept {
             for (crd::u32 task_idx = begin; task_idx < end; ++task_idx)
             {

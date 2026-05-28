@@ -315,11 +315,11 @@ TEST_CASE("orient2d: large-coordinate near-collinear (Shewchuk torture, scale 1e
 {
     // At larger scale, ULP grows linearly. The adaptive path is the only way
     // to get the correct sign on a deliberately-tiny perpendicular offset.
-    constexpr f64 kOrigin = 1.0e6;
-    const Vec2<f64> a(kOrigin, kOrigin);
-    const Vec2<f64> b(kOrigin + 1.0, kOrigin);
-    const Vec2<f64> c_above(kOrigin + 0.5, kOrigin + 1e-9); // 1e-9 is well below 1e-6 ULP at scale
-    const Vec2<f64> c_below(kOrigin + 0.5, kOrigin - 1e-9);
+    constexpr f64 k_origin = 1.0e6;
+    const Vec2<f64> a(k_origin, k_origin);
+    const Vec2<f64> b(k_origin + 1.0, k_origin);
+    const Vec2<f64> c_above(k_origin + 0.5, k_origin + 1e-9); // 1e-9 is well below 1e-6 ULP at scale
+    const Vec2<f64> c_below(k_origin + 0.5, k_origin - 1e-9);
     CHECK(orient2d(a, b, c_above) > 0.0);
     CHECK(orient2d(a, b, c_below) < 0.0);
 }
@@ -455,12 +455,12 @@ TEST_CASE("orient3d Stage D: tiny perpendicular perturbation at scale 100 resolv
     // ULP at scale 100 which is ~1e-14, but below the computation ULP for the
     // determinant of products which is ~1e-10 at this scale). Stage A's
     // noise floor masks the signal; Stage D's exact arithmetic resolves it.
-    constexpr f64 kOrigin = 100.0;
-    const Vec3<f64> a(kOrigin, kOrigin, kOrigin);
-    const Vec3<f64> b(kOrigin + 1.0, kOrigin, kOrigin);
-    const Vec3<f64> c(kOrigin, kOrigin + 1.0, kOrigin);
-    const Vec3<f64> d_above(kOrigin + 0.5, kOrigin + 0.5, kOrigin + 1e-12);
-    const Vec3<f64> d_below(kOrigin + 0.5, kOrigin + 0.5, kOrigin - 1e-12);
+    constexpr f64 k_origin = 100.0;
+    const Vec3<f64> a(k_origin, k_origin, k_origin);
+    const Vec3<f64> b(k_origin + 1.0, k_origin, k_origin);
+    const Vec3<f64> c(k_origin, k_origin + 1.0, k_origin);
+    const Vec3<f64> d_above(k_origin + 0.5, k_origin + 0.5, k_origin + 1e-12);
+    const Vec3<f64> d_below(k_origin + 0.5, k_origin + 0.5, k_origin - 1e-12);
     CHECK(orient3d(a, b, c, d_below) > 0.0); // below = positive (Shewchuk)
     CHECK(orient3d(a, b, c, d_above) < 0.0);
 }
@@ -471,12 +471,12 @@ TEST_CASE("incircle Stage D: 4 cocircular points on radius-1e3 circle return exa
     // Generate 4 points at deterministic positions on a circle of radius 1e3.
     // Stage B may give a non-zero estimate due to roundoff in the lift terms
     // (x² + y² with large magnitudes); Stage D's exact expansion must return 0.
-    constexpr f64 kRadius = 1.0e3;
-    const Vec2<f64> a(kRadius, 0);
-    const Vec2<f64> b(0, kRadius);
-    const Vec2<f64> c(-kRadius, 0);
-    const Vec2<f64> d(0, -kRadius);
-    // All 4 satisfy x² + y² = kRadius² exactly (kRadius is exactly representable
+    constexpr f64 k_radius = 1.0e3;
+    const Vec2<f64> a(k_radius, 0);
+    const Vec2<f64> b(0, k_radius);
+    const Vec2<f64> c(-k_radius, 0);
+    const Vec2<f64> d(0, -k_radius);
+    // All 4 satisfy x² + y² = kRadius² exactly (k_radius is exactly representable
     // in f64). Stage D must return exact zero.
     CHECK(incircle(a, b, c, d) == 0.0);
 }

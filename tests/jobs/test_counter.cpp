@@ -384,9 +384,9 @@ TEST_CASE("counter_wait: full suspension and resumption", "[jobs][counter]")
     g_s10.job_fiber.state = FiberState::Active;
 #endif
 
-    constexpr crd::usize kStackSize = 64U * 1024U;
-    auto stack = std::make_unique<crd::u8[]>(kStackSize);
-    fiber_init_stack(g_s10.job_fiber.context, stack.get(), kStackSize, wait_job_entry_10);
+    constexpr crd::usize stack_size = 64U * 1024U;
+    auto stack = std::make_unique<crd::u8[]>(stack_size);
+    fiber_init_stack(g_s10.job_fiber.context, stack.get(), stack_size, wait_job_entry_10);
 
     // Switch into the job fiber — it will call counter_wait and suspend.
     fiber_switch(&g_s10.sched_ctx, &g_s10.job_fiber.context);
@@ -495,9 +495,9 @@ TEST_CASE("counter_wait: two sequential waits on renewed counter", "[jobs][count
     g_s12.job_fiber.state = FiberState::Active;
 #endif
 
-    constexpr crd::usize kStackSize = 64U * 1024U;
-    auto stack = std::make_unique<crd::u8[]>(kStackSize);
-    fiber_init_stack(g_s12.job_fiber.context, stack.get(), kStackSize, wait_job_entry_12);
+    constexpr crd::usize stack_size = 64U * 1024U;
+    auto stack = std::make_unique<crd::u8[]>(stack_size);
+    fiber_init_stack(g_s12.job_fiber.context, stack.get(), stack_size, wait_job_entry_12);
 
     // --- First round ---
     fiber_switch(&g_s12.sched_ctx, &g_s12.job_fiber.context);

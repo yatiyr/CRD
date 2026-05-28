@@ -120,23 +120,23 @@ void draw(crd::draw::RenderBuffer& buf, const primitives::Frustum<crd::f32>& fru
 {
     // Canonical plane ordering: { Left, Right, Bottom, Top, Near, Far }.
     // 8 corners = intersection of (L|R) ∩ (B|T) ∩ (N|F).
-    constexpr int kL = 0;
-    constexpr int kR = 1;
-    constexpr int kB = 2;
-    constexpr int kT = 3;
-    constexpr int kN = 4;
-    constexpr int kF = 5;
+    constexpr int k_l = 0;
+    constexpr int r = 1;
+    constexpr int k_b = 2;
+    constexpr int k_t = 3;
+    constexpr int k_n = 4;
+    constexpr int f = 5;
     Vec3f corners[8];
     bool ok[8];
     const auto& p = frustum.planes;
-    ok[0] = intersect_three_planes(p[kL], p[kB], p[kN], corners[0]); // near-bottom-left
-    ok[1] = intersect_three_planes(p[kR], p[kB], p[kN], corners[1]); // near-bottom-right
-    ok[2] = intersect_three_planes(p[kR], p[kT], p[kN], corners[2]); // near-top-right
-    ok[3] = intersect_three_planes(p[kL], p[kT], p[kN], corners[3]); // near-top-left
-    ok[4] = intersect_three_planes(p[kL], p[kB], p[kF], corners[4]); // far-bottom-left
-    ok[5] = intersect_three_planes(p[kR], p[kB], p[kF], corners[5]); // far-bottom-right
-    ok[6] = intersect_three_planes(p[kR], p[kT], p[kF], corners[6]); // far-top-right
-    ok[7] = intersect_three_planes(p[kL], p[kT], p[kF], corners[7]); // far-top-left
+    ok[0] = intersect_three_planes(p[k_l], p[k_b], p[k_n], corners[0]); // near-bottom-left
+    ok[1] = intersect_three_planes(p[r], p[k_b], p[k_n], corners[1]); // near-bottom-right
+    ok[2] = intersect_three_planes(p[r], p[k_t], p[k_n], corners[2]); // near-top-right
+    ok[3] = intersect_three_planes(p[k_l], p[k_t], p[k_n], corners[3]); // near-top-left
+    ok[4] = intersect_three_planes(p[k_l], p[k_b], p[f], corners[4]); // far-bottom-left
+    ok[5] = intersect_three_planes(p[r], p[k_b], p[f], corners[5]); // far-bottom-right
+    ok[6] = intersect_three_planes(p[r], p[k_t], p[f], corners[6]); // far-top-right
+    ok[7] = intersect_three_planes(p[k_l], p[k_t], p[f], corners[7]); // far-top-left
 
     auto edge = [&](int i, int j) noexcept {
         if (ok[i] && ok[j])

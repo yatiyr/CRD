@@ -124,15 +124,15 @@ TEST_CASE("Async logging delivers all records", "[log][async]")
     add_sink(std::move(ring_owner));
 
     g_log_test.runtime_level = LogLevel::Trace;
-    constexpr int kThreads = 4;
-    constexpr int kMessagesPerThread = 100;
+    constexpr int threads = 4;
+    constexpr int messages_per_thread = 100;
     std::vector<std::thread> ts;
-    for (int t = 0; t < kThreads; ++t)
+    for (int t = 0; t < threads; ++t)
     {
         ts.emplace_back(
             [t]
             {
-                for (int i = 0; i < kMessagesPerThread; ++i)
+                for (int i = 0; i < messages_per_thread; ++i)
                 {
                     CRD_LOG_INFO(g_log_test, "t={} i={}", t, i);
                 }
@@ -145,7 +145,7 @@ TEST_CASE("Async logging delivers all records", "[log][async]")
 
     flush();
     auto records = ring->snapshot();
-    REQUIRE(records.size() == kThreads * kMessagesPerThread);
+    REQUIRE(records.size() == threads * messages_per_thread);
 }
 
 TEST_CASE("RingBufferSink overwrites oldest", "[log][ring]")

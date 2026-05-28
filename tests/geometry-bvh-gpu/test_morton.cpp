@@ -212,8 +212,8 @@ TEST_CASE("v9a-a GPU Morton matches CPU oracle byte-for-byte",
 
     // 1024 random-ish AABBs inside a unit cube.
     crd::containers::Array<AABB3<crd::f32>> aabbs(&alloc);
-    constexpr crd::u32 kCount = 1024U;
-    for (crd::u32 i = 0; i < kCount; ++i)
+    constexpr crd::u32 count = 1024U;
+    for (crd::u32 i = 0; i < count; ++i)
     {
         const float fx = static_cast<float>((i * 2654435761U) & 0xFFFFU) / 65536.0F;
         const float fy = static_cast<float>((i * 40503U)       & 0xFFFFU) / 65536.0F;
@@ -228,8 +228,8 @@ TEST_CASE("v9a-a GPU Morton matches CPU oracle byte-for-byte",
 
     const auto cpu_codes = compute_morton_codes_cpu(aabb_span, scene, &alloc);
     const auto gpu_codes = pipeline.dispatch_morton_codes(aabb_span, scene, &alloc);
-    REQUIRE(cpu_codes.size() == kCount);
-    REQUIRE(gpu_codes.size() == kCount);
+    REQUIRE(cpu_codes.size() == count);
+    REQUIRE(gpu_codes.size() == count);
 
     const auto cmp = crd::test::bit_compare<crd::u32>(
         crd::containers::ConstSpan<crd::u32>(cpu_codes.data(), cpu_codes.size()),
@@ -241,7 +241,7 @@ TEST_CASE("v9a-a GPU Morton matches CPU oracle byte-for-byte",
              << " gpu=" << cmp.gpu_value);
     }
     CHECK(cmp.ok);
-    CHECK(cmp.compared_count == kCount);
+    CHECK(cmp.compared_count == count);
 
     // Dump captured validation messages straight to stderr so they
     // print regardless of Catch scoping (UNSCOPED_INFO is unreliable
@@ -285,10 +285,10 @@ TEST_CASE("v9a-a GPU Morton is deterministic across 3 dispatches",
     REQUIRE(pipeline.is_valid());
 
     crd::containers::Array<AABB3<crd::f32>> aabbs(&alloc);
-    constexpr crd::u32 kCount = 256U;
-    for (crd::u32 i = 0; i < kCount; ++i)
+    constexpr crd::u32 count = 256U;
+    for (crd::u32 i = 0; i < count; ++i)
     {
-        const float t = static_cast<float>(i) / static_cast<float>(kCount);
+        const float t = static_cast<float>(i) / static_cast<float>(count);
         aabbs.push_back({{t, t, t}, {t + 0.01F, t + 0.01F, t + 0.01F}});
     }
     const AABB3<crd::f32> scene{{0.0F, 0.0F, 0.0F}, {1.1F, 1.1F, 1.1F}};
@@ -339,8 +339,8 @@ TEST_CASE("v9a-a-async-compute: async dispatch matches sync dispatch byte-for-by
     REQUIRE(pipeline.is_valid());
 
     crd::containers::Array<AABB3<crd::f32>> aabbs(&alloc);
-    constexpr crd::u32 kCount = 512U;
-    for (crd::u32 i = 0; i < kCount; ++i)
+    constexpr crd::u32 count = 512U;
+    for (crd::u32 i = 0; i < count; ++i)
     {
         const crd::f32 fx = static_cast<crd::f32>((i * 2654435761U) & 0xFFFFU) / 65536.0F;
         const crd::f32 fy = static_cast<crd::f32>((i * 40503U)       & 0xFFFFU) / 65536.0F;
@@ -354,8 +354,8 @@ TEST_CASE("v9a-a-async-compute: async dispatch matches sync dispatch byte-for-by
     const auto sync_codes  = pipeline.dispatch_morton_codes(aabb_span, scene, &alloc);
     const auto async_codes = pipeline.dispatch_morton_codes_async(aabb_span, scene, &alloc);
 
-    REQUIRE(sync_codes.size()  == kCount);
-    REQUIRE(async_codes.size() == kCount);
+    REQUIRE(sync_codes.size()  == count);
+    REQUIRE(async_codes.size() == count);
     const auto cmp = crd::test::bit_compare<crd::u32>(
         crd::containers::ConstSpan<crd::u32>(sync_codes.data(),  sync_codes.size()),
         crd::containers::ConstSpan<crd::u32>(async_codes.data(), async_codes.size()));
@@ -371,7 +371,7 @@ TEST_CASE("v9a-a-async-compute: async dispatch matches sync dispatch byte-for-by
         }
     }
     CHECK(cmp.ok);
-    CHECK(cmp.compared_count == kCount);
+    CHECK(cmp.compared_count == count);
 
     // The discriminating contract: cross-queue-family submit must
     // stay validation-silent on GPUs with a dedicated compute family
@@ -425,10 +425,10 @@ TEST_CASE("v9a-a GPU Morton perf budget: 256k AABBs end-to-end",
     REQUIRE(pipeline.is_valid());
 
     crd::containers::Array<AABB3<crd::f32>> aabbs(&alloc);
-    constexpr crd::u32 kCount = 256U * 1024U; // 256k -- scaled-down from 1M
+    constexpr crd::u32 count = 256U * 1024U; // 256k -- scaled-down from 1M
                                               // budget to keep CI green
                                               // on slower test hardware.
-    for (crd::u32 i = 0; i < kCount; ++i)
+    for (crd::u32 i = 0; i < count; ++i)
     {
         const float t = static_cast<float>(i & 0xFFFFU) / 65536.0F;
         aabbs.push_back({{t, t, t}, {t + 0.001F, t + 0.001F, t + 0.001F}});
@@ -448,15 +448,15 @@ TEST_CASE("v9a-a GPU Morton perf budget: 256k AABBs end-to-end",
     // <0.5ms/1M GPU-only at v9a-close once timestamp queries isolate
     // kernel cost from host overhead.
     #if defined(NDEBUG)
-        constexpr double kBudgetMs = 200.0;
+        constexpr double budget_ms = 200.0;
     #else
-        constexpr double kBudgetMs = 30000.0;
+        constexpr double budget_ms = 30000.0;
     #endif
-    CRD_PERF_BUDGET_LE("morton_256k_aabbs_e2e", kBudgetMs, [&]{
+    CRD_PERF_BUDGET_LE("morton_256k_aabbs_e2e", budget_ms, [&]{
         const auto codes = pipeline.dispatch_morton_codes(aabb_span, scene, &alloc);
-        REQUIRE(codes.size() == kCount);
+        REQUIRE(codes.size() == count);
     });
-    (void)kBudgetMs; // CRD_ASSERT_MSG compiles out under NDEBUG; silence C4189.
+    (void)budget_ms; // CRD_ASSERT_MSG compiles out under NDEBUG; silence C4189.
 
     device->wait_idle();
 }

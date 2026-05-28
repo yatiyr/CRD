@@ -858,11 +858,11 @@ TEST_CASE("instantiate_obek_batch spawns count entities per slot", "[obek][batch
     World target;
     setup_world(target);
 
-    constexpr crd::u32 kSlotCount = 5U;
-    auto batch = target.instantiate_obek_batch(*res, kSlotCount);
+    constexpr crd::u32 slot_count = 5U;
+    auto batch = target.instantiate_obek_batch(*res, slot_count);
     CHECK(batch.value != 0U);
     // Each slot spawned 1 entity (source has 1 entity); batch total = 5.
-    CHECK(target.entity_count() == kSlotCount);
+    CHECK(target.entity_count() == slot_count);
     unload_obek(res);
 }
 
@@ -883,8 +883,8 @@ TEST_CASE("BatchInstanceTag is added when registered on the target World", "[obe
         crd::scene::default_serialize_trait<crd::scene::BatchInstanceTag>(
             crd::scene::kFourCC_BatchInstanceTag));
 
-    constexpr crd::u32 kSlotCount = 3U;
-    auto batch = target.instantiate_obek_batch(*res, kSlotCount);
+    constexpr crd::u32 slot_count = 3U;
+    auto batch = target.instantiate_obek_batch(*res, slot_count);
 
     // Each spawned entity should have BatchInstanceTag with matching batch handle.
     crd::u32 tagged_count = 0;
@@ -896,7 +896,7 @@ TEST_CASE("BatchInstanceTag is added when registered on the target World", "[obe
             ++tagged_count;
         }
     }
-    CHECK(tagged_count == kSlotCount);
+    CHECK(tagged_count == slot_count);
     unload_obek(res);
 }
 

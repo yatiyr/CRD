@@ -441,13 +441,13 @@ namespace
 template <typename R>
 void bidiag_svd_real(R* d, R* e, crd::usize n, R* ub, R* vtb, crd::memory::IAllocator* alloc)
 {
-    constexpr crd::usize kCross = 64;
-    constexpr int kSmlsiz = 25;
+    constexpr crd::usize cross = 64;
+    constexpr int smlsiz = 25;
     if (n == 0)
     {
         return;
     }
-    if (n >= kCross)
+    if (n >= cross)
     {
         crd::containers::Array<R> ubc(alloc);  // column-major from dlasd0
         crd::containers::Array<R> vtbc(alloc);
@@ -465,7 +465,7 @@ void bidiag_svd_real(R* d, R* e, crd::usize n, R* ub, R* vtb, crd::memory::IAllo
         }
         [[maybe_unused]] const int info =
             detail::dlasd0<R>(static_cast<int>(n), 0, d, e, ubc.data(), static_cast<int>(n), vtbc.data(),
-                              static_cast<int>(n), kSmlsiz, alloc);
+                              static_cast<int>(n), smlsiz, alloc);
         CRD_ASSERT_MSG(info == 0, "bidiag_svd_real: dlasd0 did not converge");
         crd::containers::Array<crd::usize> perm(alloc);
         perm.resize(n);
@@ -735,9 +735,9 @@ SVD<T> svd(crd::memory::IAllocator* alloc, const Matrix<T>& a_in)
     // transform). Large n: Gu-Eisenstat divide-and-conquer (v3b-2.3) on B,
     // then back-transform U=Q*U_b, VT=VT_b*P^T via BLAS-3 gemm — the path that
     // beats the serial-rotation references at scale.
-    constexpr crd::usize kSvdDcCrossover = 64;
-    constexpr int kSvdDcSmlsiz = 25;
-    if (n >= kSvdDcCrossover)
+    constexpr crd::usize svd_dc_crossover = 64;
+    constexpr int svd_dc_smlsiz = 25;
+    if (n >= svd_dc_crossover)
     {
         crd::containers::Array<T> ub(alloc);   // U_b, column-major n x n
         crd::containers::Array<T> vtb(alloc);  // VT_b (= V_b^T), column-major n x n
@@ -755,7 +755,7 @@ SVD<T> svd(crd::memory::IAllocator* alloc, const Matrix<T>& a_in)
         }
         [[maybe_unused]] const int dcinfo =
             detail::dlasd0<R>(static_cast<int>(n), 0, d.data(), e.data(), ub.data(), static_cast<int>(n),
-                              vtb.data(), static_cast<int>(n), kSvdDcSmlsiz, alloc);
+                              vtb.data(), static_cast<int>(n), svd_dc_smlsiz, alloc);
         CRD_ASSERT_MSG(dcinfo == 0, "svd: dlasd0 (D&C) did not converge");
 
         // Sort singular values descending; permute U_b columns + VT_b rows.

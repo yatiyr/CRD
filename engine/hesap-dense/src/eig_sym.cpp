@@ -371,8 +371,8 @@ int steqr(R* d, R* e, crd::usize n_, Z* z, crd::usize ldz, bool want_vectors)
     const R safmax = R{1} / safmin;
     const R ssfmax = std::sqrt(safmax) / R{3};
     const R ssfmin = std::sqrt(safmin) / eps2;
-    constexpr int kMaxit = 30;
-    const int nmaxit = n * kMaxit;
+    constexpr int maxit = 30;
+    const int nmaxit = n * maxit;
     int jtot = 0;
 
     // 1-based logical indices (matching the Fortran); array access subtracts 1.

@@ -176,8 +176,8 @@ TEST_CASE("BVH build: long-thin row stays well-balanced", "[geometry][bvh][build
 {
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 20, nullptr, "bvh-test");
     std::vector<AABB3<f32>> prims;
-    constexpr usize kN = 256;
-    for (usize i = 0; i < kN; ++i)
+    constexpr usize k_n = 256;
+    for (usize i = 0; i < k_n; ++i)
     {
         const f32 x = static_cast<f32>(i);
         prims.emplace_back(Vec3<f32>(x - 0.4F, -0.4F, -0.4F), Vec3<f32>(x + 0.4F, 0.4F, 0.4F));
@@ -189,7 +189,7 @@ TEST_CASE("BVH build: long-thin row stays well-balanced", "[geometry][bvh][build
     // A reasonable BVH over a row keeps total expected leaf work far below a single leaf.
     const f32 cost = bvh_sah_cost(tree);
     REQUIRE(cost > 0.0F);
-    REQUIRE(cost < static_cast<f32>(kN) * 0.25F);
+    REQUIRE(cost < static_cast<f32>(k_n) * 0.25F);
 }
 
 TEST_CASE("BVH build: deterministic replay (same input -> bit-identical tree)", "[geometry][bvh][build]")
@@ -216,8 +216,8 @@ TEST_CASE("BVH build: SAH builder beats a single-leaf tree", "[geometry][bvh][bu
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 22, nullptr, "bvh-test");
     Rng rng(0x5A4C05);
     std::vector<AABB3<f32>> prims;
-    constexpr usize kN = 500;
-    for (usize i = 0; i < kN; ++i)
+    constexpr usize k_n = 500;
+    for (usize i = 0; i < k_n; ++i)
     {
         prims.push_back(random_box(rng, 100.0F, 1.5F));
     }

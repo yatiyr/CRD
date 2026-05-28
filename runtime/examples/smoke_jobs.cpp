@@ -48,10 +48,10 @@ int main()
     // 3. parallel_for — sum of range indices
     // ------------------------------------------------------------------
     {
-        constexpr crd::u32 kCount = 1000U;
+        constexpr crd::u32 count = 1000U;
         std::atomic<crd::u64> total{0};
         crd::jobs::Counter* c = crd::jobs::parallel_for(
-            kCount, 4U,
+            count, 4U,
             [&total](crd::u32 begin, crd::u32 end)
             {
                 crd::u64 local = 0U;
@@ -60,46 +60,46 @@ int main()
                 total.fetch_add(local, std::memory_order_relaxed);
             });
         crd::jobs::wait(c);
-        constexpr crd::u64 kExpected = static_cast<crd::u64>(kCount) * (kCount - 1U) / 2U;
-        CRD_ASSERT(total.load() == kExpected);
+        constexpr crd::u64 k_expected = static_cast<crd::u64>(count) * (count - 1U) / 2U;
+        CRD_ASSERT(total.load() == k_expected);
         std::printf("[smoke_jobs] 3. parallel_for       OK  (sum=%llu, expected=%llu)\n",
                     static_cast<unsigned long long>(total.load()),
-                    static_cast<unsigned long long>(kExpected));
+                    static_cast<unsigned long long>(k_expected));
     }
 
     // ------------------------------------------------------------------
     // 4. H / N / L priority — all jobs ran
     // ------------------------------------------------------------------
     {
-        constexpr int kHigh   = 10;
-        constexpr int kNormal = 20;
-        constexpr int kLow    = 40;
+        constexpr int high   = 10;
+        constexpr int normal = 20;
+        constexpr int low    = 40;
 
         std::atomic<int> high_ran{0};
         std::atomic<int> normal_ran{0};
         std::atomic<int> low_ran{0};
 
-        crd::jobs::JobDecl jobs[kHigh + kNormal + kLow];
-        for (int i = 0; i < kHigh; ++i)
+        crd::jobs::JobDecl jobs[high + normal + low];
+        for (int i = 0; i < high; ++i)
             jobs[i] = crd::jobs::make_job(
                 [&high_ran]() { high_ran.fetch_add(1, std::memory_order_relaxed); },
                 crd::jobs::StackSize::Small, crd::jobs::Priority::High);
-        for (int i = 0; i < kNormal; ++i)
-            jobs[kHigh + i] = crd::jobs::make_job(
+        for (int i = 0; i < normal; ++i)
+            jobs[high + i] = crd::jobs::make_job(
                 [&normal_ran]() { normal_ran.fetch_add(1, std::memory_order_relaxed); },
                 crd::jobs::StackSize::Small, crd::jobs::Priority::Normal);
-        for (int i = 0; i < kLow; ++i)
-            jobs[kHigh + kNormal + i] = crd::jobs::make_job(
+        for (int i = 0; i < low; ++i)
+            jobs[high + normal + i] = crd::jobs::make_job(
                 [&low_ran]() { low_ran.fetch_add(1, std::memory_order_relaxed); },
                 crd::jobs::StackSize::Small, crd::jobs::Priority::Low);
 
         crd::jobs::Counter* c = crd::jobs::run(
-            std::span(jobs, static_cast<crd::usize>(kHigh + kNormal + kLow)));
+            std::span(jobs, static_cast<crd::usize>(high + normal + low)));
         crd::jobs::wait(c);
 
-        CRD_ASSERT(high_ran.load()   == kHigh);
-        CRD_ASSERT(normal_ran.load() == kNormal);
-        CRD_ASSERT(low_ran.load()    == kLow);
+        CRD_ASSERT(high_ran.load()   == high);
+        CRD_ASSERT(normal_ran.load() == normal);
+        CRD_ASSERT(low_ran.load()    == low);
         std::printf("[smoke_jobs] 4. H/N/L priorities   OK  (High=%d, Normal=%d, Low=%d)\n",
                     high_ran.load(), normal_ran.load(), low_ran.load());
     }

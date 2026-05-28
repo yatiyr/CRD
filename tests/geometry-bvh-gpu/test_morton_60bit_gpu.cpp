@@ -98,8 +98,8 @@ TEST_CASE("v9a-60bit-gpu: GPU 60-bit Morton matches CPU oracle byte-for-byte",
     REQUIRE(pipeline.is_valid());
 
     crd::containers::Array<AABB3<crd::f32>> aabbs(&alloc);
-    constexpr crd::u32 kCount = 1024U;
-    for (crd::u32 i = 0; i < kCount; ++i)
+    constexpr crd::u32 count = 1024U;
+    for (crd::u32 i = 0; i < count; ++i)
     {
         const crd::f32 fx = static_cast<crd::f32>((i * 2654435761U) & 0xFFFFU) / 65536.0F;
         const crd::f32 fy = static_cast<crd::f32>((i * 40503U)       & 0xFFFFU) / 65536.0F;
@@ -113,8 +113,8 @@ TEST_CASE("v9a-60bit-gpu: GPU 60-bit Morton matches CPU oracle byte-for-byte",
 
     const auto cpu_codes = compute_morton_codes_cpu_60bit(span, scene, &alloc);
     const auto gpu_codes = pipeline.dispatch_morton_codes_60bit(span, scene, &alloc);
-    REQUIRE(cpu_codes.size() == kCount);
-    REQUIRE(gpu_codes.size() == kCount);
+    REQUIRE(cpu_codes.size() == count);
+    REQUIRE(gpu_codes.size() == count);
 
     // bit_compare requires an unsigned integral type — std::uint64_t fits.
     const auto cmp = crd::test::bit_compare<std::uint64_t>(
@@ -129,7 +129,7 @@ TEST_CASE("v9a-60bit-gpu: GPU 60-bit Morton matches CPU oracle byte-for-byte",
                       static_cast<unsigned long long>(cmp.gpu_value));
     }
     CHECK(cmp.ok);
-    CHECK(cmp.compared_count == kCount);
+    CHECK(cmp.compared_count == count);
 
     if (capture.error_or_warning_count() != 0U)
     {

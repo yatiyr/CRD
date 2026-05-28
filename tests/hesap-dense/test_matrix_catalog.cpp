@@ -49,10 +49,10 @@ TEST_CASE("Diagonal and Identity are square by construction", "[hesap][dense][ca
     REQUIRE(d.is_square());
     REQUIRE(d.n() == 0);
 
-    constexpr Identity<float> kIdentitySeven(7);
-    STATIC_REQUIRE(kIdentitySeven.is_square());
-    STATIC_REQUIRE(kIdentitySeven.n() == 7);
-    STATIC_REQUIRE(kIdentitySeven.rows() == 7);
+    constexpr Identity<float> identity_seven(7);
+    STATIC_REQUIRE(identity_seven.is_square());
+    STATIC_REQUIRE(identity_seven.n() == 7);
+    STATIC_REQUIRE(identity_seven.rows() == 7);
 }
 
 TEST_CASE("Permutation and Triangular carry the allocator", "[hesap][dense][catalog]")

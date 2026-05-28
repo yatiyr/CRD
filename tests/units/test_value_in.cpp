@@ -139,8 +139,8 @@ TEST_CASE("value_in: 360 degrees ~ 2pi rad (within 1 ULP)",
           "[v0a-2][value-in][angle]")
 {
     auto theta = quantity_from<Degree>(360.0);
-    constexpr f64 kExpected = 2.0 * std::numbers::pi;
-    CHECK(std::abs(theta.value - kExpected) < 1e-12);
+    constexpr f64 expected = 2.0 * std::numbers::pi;
+    CHECK(std::abs(theta.value - expected) < 1e-12);
 
     f64 back_to_deg = value_in<Degree>(theta);
     CHECK(std::abs(back_to_deg - 360.0) < 1e-10);
@@ -150,8 +150,8 @@ TEST_CASE("value_in: 90 degrees ~ pi/2 rad (within tolerance)",
           "[v0a-2][value-in][angle]")
 {
     auto theta = quantity_from<Degree>(90.0);
-    constexpr f64 kHalfPi = std::numbers::pi / 2.0;
-    CHECK(std::abs(theta.value - kHalfPi) < 1e-14);
+    constexpr f64 half_pi = std::numbers::pi / 2.0;
+    CHECK(std::abs(theta.value - half_pi) < 1e-14);
 }
 
 // ---------------------------------------------------------------------------
@@ -200,14 +200,14 @@ TEST_CASE("value_in: Newton's law F = m*a, readback in PoundForce",
     auto a = quantity_from<FootPerSecondSq>(5.0);
     auto f_si = m * a;  // Force in Newtons (SI)
 
-    // kExpected SI value: 4.5359237 kg * 1.524 m/s^2 = 6.9127477388 N
-    constexpr f64 kExpectedSi = 10.0 * 0.45359237 * 5.0 * 0.3048;
-    CHECK(std::abs(f_si.value - kExpectedSi) < 1e-10);
+    // expected SI value: 4.5359237 kg * 1.524 m/s^2 = 6.9127477388 N
+    constexpr f64 expected_si = 10.0 * 0.45359237 * 5.0 * 0.3048;
+    CHECK(std::abs(f_si.value - expected_si) < 1e-10);
 
     // In lbf: divide by 4.4482216152605 ? ? 1.5540199...
     f64 f_in_lbf = value_in<PoundForce>(f_si);
-    constexpr f64 kExpectedLbf = kExpectedSi / 4.4482216152605;
-    CHECK(std::abs(f_in_lbf - kExpectedLbf) < 1e-10);
+    constexpr f64 expected_lbf = expected_si / 4.4482216152605;
+    CHECK(std::abs(f_in_lbf - expected_lbf) < 1e-10);
 }
 
 // ---------------------------------------------------------------------------
@@ -243,9 +243,9 @@ TEST_CASE("value_in: same-dimension conversion compiles + executes",
 TEST_CASE("quantity_from / value_in are constexpr-evaluable",
           "[v0a-2][value-in][constexpr]")
 {
-    constexpr auto kLen = quantity_from<Inch>(2.0);
-    STATIC_REQUIRE(kLen.value == 0.0508);  // 2 in = 0.0508 m EXACT
+    constexpr auto k_len = quantity_from<Inch>(2.0);
+    STATIC_REQUIRE(k_len.value == 0.0508);  // 2 in = 0.0508 m EXACT
 
-    constexpr f64 kInMm = value_in<Millimeter>(kLen);
-    STATIC_REQUIRE(kInMm == 50.8);
+    constexpr f64 k_in_mm = value_in<Millimeter>(k_len);
+    STATIC_REQUIRE(k_in_mm == 50.8);
 }

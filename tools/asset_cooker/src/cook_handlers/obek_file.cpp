@@ -31,14 +31,14 @@ constexpr crd::u32 kObekHandlerVersion = 1U;
 // pulling cook_command.hpp into the handler surface.
 crd::u64 fnv1a64(const crd::u8* data, crd::usize size) noexcept
 {
-    constexpr crd::u64 kFnvOffset64 = 14695981039346656037ULL;
-    constexpr crd::u64 kFnvPrime64  = 1099511628211ULL;
+    constexpr crd::u64 fnv_offset64 = 14695981039346656037ULL;
+    constexpr crd::u64 fnv_prime64  = 1099511628211ULL;
 
-    crd::u64 hash = kFnvOffset64;
+    crd::u64 hash = fnv_offset64;
     for (crd::usize i = 0U; i < size; ++i)
     {
         hash ^= static_cast<crd::u64>(data[i]);
-        hash *= kFnvPrime64;
+        hash *= fnv_prime64;
     }
     return hash;
 }
@@ -120,13 +120,13 @@ CookResult obek_handler(const CookContext& ctx)
 
     // OBEK FourCC is 'OBEK' (declared in crd/scene/obek.hpp); use the
     // make_fourcc helper rather than including the header here.
-    constexpr crd::u32 kObekFourCC =
+    constexpr crd::u32 obek_four_cc =
         (static_cast<crd::u32>('O')      ) |
         (static_cast<crd::u32>('B') <<  8) |
         (static_cast<crd::u32>('E') << 16) |
         (static_cast<crd::u32>('K') << 24);
 
-    result.type_fourcc     = kObekFourCC;
+    result.type_fourcc     = obek_four_cc;
     result.cooked_bytes    = std::move(bytes);
     result.handler_version = kObekHandlerVersion;
     result.ok              = true;

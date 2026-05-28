@@ -232,15 +232,15 @@ TEST_CASE("sort_morton_pairs u32 random 10000: byte-identical to oracle",
 {
     crd::memory::TlsfAllocator alloc(16U * 1024U * 1024U);
 
-    constexpr crd::usize kN = 10000U;
+    constexpr crd::usize n = 10000U;
     crd::containers::Array<crd::u32> in(&alloc);
-    in.resize(kN);
+    in.resize(n);
 
     std::mt19937 rng(0xCEEDCEEDU);
     // Mix of unique-ish codes and forced ties (mod a small number) to
     // exercise both pure-LSD-radix correctness and stability under ties.
     std::uniform_int_distribution<crd::u32> dist(0U, 4095U);
-    for (crd::usize i = 0; i < kN; ++i) { in[i] = dist(rng); }
+    for (crd::usize i = 0; i < n; ++i) { in[i] = dist(rng); }
 
     const auto codes_span = view_of(in);
     const auto got      = sort_morton_pairs<crd::u32>(codes_span, &alloc);
@@ -250,7 +250,7 @@ TEST_CASE("sort_morton_pairs u32 random 10000: byte-identical to oracle",
     // Byte-identical (memcmp over the AoS pair array). If any code or index
     // differs, the radix is broken or unstable.
     CHECK(std::memcmp(got.data(), expected.data(),
-                      kN * sizeof(MortonPair<crd::u32>)) == 0);
+                      n * sizeof(MortonPair<crd::u32>)) == 0);
 }
 
 // =========================================================================
@@ -261,17 +261,17 @@ TEST_CASE("sort_morton_pairs u32 determinism: byte-identical across runs",
           "[sort][cpu][determinism]")
 {
     crd::memory::TlsfAllocator alloc(8U * 1024U * 1024U);
-    constexpr crd::usize kN = 8192U;
+    constexpr crd::usize n = 8192U;
     crd::containers::Array<crd::u32> in(&alloc);
-    in.resize(kN);
+    in.resize(n);
     std::mt19937 rng(0xD37E12CEU);
-    for (crd::usize i = 0; i < kN; ++i) { in[i] = static_cast<crd::u32>(rng()); }
+    for (crd::usize i = 0; i < n; ++i) { in[i] = static_cast<crd::u32>(rng()); }
 
     const auto a = sort_morton_pairs<crd::u32>(view_of(in), &alloc);
     const auto b = sort_morton_pairs<crd::u32>(view_of(in), &alloc);
     REQUIRE(a.size() == b.size());
     CHECK(std::memcmp(a.data(), b.data(),
-                      kN * sizeof(MortonPair<crd::u32>)) == 0);
+                      n * sizeof(MortonPair<crd::u32>)) == 0);
 }
 
 // =========================================================================
@@ -282,25 +282,25 @@ TEST_CASE("sort_morton_pairs u32 pair integrity: indices form a permutation",
           "[sort][cpu][integrity]")
 {
     crd::memory::TlsfAllocator alloc(8U * 1024U * 1024U);
-    constexpr crd::usize kN = 5000U;
+    constexpr crd::usize n = 5000U;
     crd::containers::Array<crd::u32> in(&alloc);
-    in.resize(kN);
+    in.resize(n);
     std::mt19937 rng(0xA5A5A5A5U);
-    for (crd::usize i = 0; i < kN; ++i) { in[i] = static_cast<crd::u32>(rng()); }
+    for (crd::usize i = 0; i < n; ++i) { in[i] = static_cast<crd::u32>(rng()); }
 
     const auto out = sort_morton_pairs<crd::u32>(view_of(in), &alloc);
-    REQUIRE(out.size() == kN);
+    REQUIRE(out.size() == n);
 
     // Sieve: every index in [0, N) must appear exactly once.
     crd::containers::Array<crd::u8> seen(&alloc);
-    seen.resize(kN, crd::u8{0});
+    seen.resize(n, crd::u8{0});
     for (const auto& p : out)
     {
-        REQUIRE(p.index < kN);
+        REQUIRE(p.index < n);
         REQUIRE(seen[p.index] == 0U);   // no duplicate
         seen[p.index] = 1U;
     }
-    for (crd::usize i = 0; i < kN; ++i)
+    for (crd::usize i = 0; i < n; ++i)
     {
         CHECK(seen[i] == 1U);            // no drop
     }
@@ -394,14 +394,14 @@ TEST_CASE("sort_morton_pairs u64 random 10000: byte-identical to oracle",
 {
     crd::memory::TlsfAllocator alloc(16U * 1024U * 1024U);
 
-    constexpr crd::usize kN = 10000U;
+    constexpr crd::usize n = 10000U;
     crd::containers::Array<std::uint64_t> in(&alloc);
-    in.resize(kN);
+    in.resize(n);
 
     std::mt19937_64 rng(0xC0DEC0DEC0DEC0DEULL);
     // Mix full-range u64 with forced-low-32-bit ties to exercise both
     // upper-byte passes + stability.
-    for (crd::usize i = 0; i < kN; ++i)
+    for (crd::usize i = 0; i < n; ++i)
     {
         if ((i & 0x7U) == 0U)
         {
@@ -419,46 +419,46 @@ TEST_CASE("sort_morton_pairs u64 random 10000: byte-identical to oracle",
 
     REQUIRE(got.size() == expected.size());
     CHECK(std::memcmp(got.data(), expected.data(),
-                      kN * sizeof(MortonPair<std::uint64_t>)) == 0);
+                      n * sizeof(MortonPair<std::uint64_t>)) == 0);
 }
 
 TEST_CASE("sort_morton_pairs u64 determinism", "[sort][cpu][determinism][u64]")
 {
     crd::memory::TlsfAllocator alloc(8U * 1024U * 1024U);
-    constexpr crd::usize kN = 8192U;
+    constexpr crd::usize n = 8192U;
     crd::containers::Array<std::uint64_t> in(&alloc);
-    in.resize(kN);
+    in.resize(n);
     std::mt19937_64 rng(0xBEEFBEEFBEEFBEEFULL);
-    for (crd::usize i = 0; i < kN; ++i) { in[i] = rng(); }
+    for (crd::usize i = 0; i < n; ++i) { in[i] = rng(); }
 
     const auto a = sort_morton_pairs<std::uint64_t>(view_of(in), &alloc);
     const auto b = sort_morton_pairs<std::uint64_t>(view_of(in), &alloc);
     REQUIRE(a.size() == b.size());
     CHECK(std::memcmp(a.data(), b.data(),
-                      kN * sizeof(MortonPair<std::uint64_t>)) == 0);
+                      n * sizeof(MortonPair<std::uint64_t>)) == 0);
 }
 
 TEST_CASE("sort_morton_pairs u64 pair integrity", "[sort][cpu][integrity][u64]")
 {
     crd::memory::TlsfAllocator alloc(8U * 1024U * 1024U);
-    constexpr crd::usize kN = 5000U;
+    constexpr crd::usize n = 5000U;
     crd::containers::Array<std::uint64_t> in(&alloc);
-    in.resize(kN);
+    in.resize(n);
     std::mt19937_64 rng(0xAA55AA55AA55AA55ULL);
-    for (crd::usize i = 0; i < kN; ++i) { in[i] = rng(); }
+    for (crd::usize i = 0; i < n; ++i) { in[i] = rng(); }
 
     const auto out = sort_morton_pairs<std::uint64_t>(view_of(in), &alloc);
-    REQUIRE(out.size() == kN);
+    REQUIRE(out.size() == n);
 
     crd::containers::Array<crd::u8> seen(&alloc);
-    seen.resize(kN, crd::u8{0});
+    seen.resize(n, crd::u8{0});
     for (const auto& p : out)
     {
-        REQUIRE(p.index < kN);
+        REQUIRE(p.index < n);
         REQUIRE(seen[p.index] == 0U);
         seen[p.index] = 1U;
     }
-    for (crd::usize i = 0; i < kN; ++i)
+    for (crd::usize i = 0; i < n; ++i)
     {
         CHECK(seen[i] == 1U);
     }
@@ -480,46 +480,46 @@ TEST_CASE("sort_morton_pairs u32 perf budget: 1M elements within tiered budget",
           "[sort][cpu][perf]")
 {
     crd::memory::TlsfAllocator alloc(256U * 1024U * 1024U);
-    constexpr crd::usize kN = 1U * 1000U * 1000U;
+    constexpr crd::usize n = 1U * 1000U * 1000U;
     crd::containers::Array<crd::u32> in(&alloc);
-    in.resize(kN);
+    in.resize(n);
     std::mt19937 rng(0x12345678U);
-    for (crd::usize i = 0; i < kN; ++i) { in[i] = static_cast<crd::u32>(rng()); }
+    for (crd::usize i = 0; i < n; ++i) { in[i] = static_cast<crd::u32>(rng()); }
     const auto codes_span = view_of(in);
 
     #ifdef NDEBUG
-        constexpr double kBudgetMs = 20.0;
+        constexpr double budget_ms = 20.0;
     #else
-        constexpr double kBudgetMs = 2000.0;
+        constexpr double budget_ms = 2000.0;
     #endif
-    CRD_PERF_BUDGET_LE("sort_morton_pairs_u32_1m", kBudgetMs, [&]{
+    CRD_PERF_BUDGET_LE("sort_morton_pairs_u32_1m", budget_ms, [&]{
         const auto out = sort_morton_pairs<crd::u32>(codes_span, &alloc);
-        REQUIRE(out.size() == kN);
+        REQUIRE(out.size() == n);
     });
-    (void)kBudgetMs; // CRD_ASSERT_MSG compiles out under NDEBUG; silence C4189.
+    (void)budget_ms; // CRD_ASSERT_MSG compiles out under NDEBUG; silence C4189.
 }
 
 TEST_CASE("sort_morton_pairs u64 perf budget: 1M elements within tiered budget",
           "[sort][cpu][perf][u64]")
 {
     crd::memory::TlsfAllocator alloc(256U * 1024U * 1024U);
-    constexpr crd::usize kN = 1U * 1000U * 1000U;
+    constexpr crd::usize n = 1U * 1000U * 1000U;
     crd::containers::Array<std::uint64_t> in(&alloc);
-    in.resize(kN);
+    in.resize(n);
     std::mt19937_64 rng(0x87654321DEADBEEFULL);
-    for (crd::usize i = 0; i < kN; ++i) { in[i] = rng(); }
+    for (crd::usize i = 0; i < n; ++i) { in[i] = rng(); }
     const auto codes_span = view_of(in);
 
     #ifdef NDEBUG
-        constexpr double kBudgetMs = 40.0;
+        constexpr double budget_ms = 40.0;
     #else
-        constexpr double kBudgetMs = 4000.0;
+        constexpr double budget_ms = 4000.0;
     #endif
-    CRD_PERF_BUDGET_LE("sort_morton_pairs_u64_1m", kBudgetMs, [&]{
+    CRD_PERF_BUDGET_LE("sort_morton_pairs_u64_1m", budget_ms, [&]{
         const auto out = sort_morton_pairs<std::uint64_t>(codes_span, &alloc);
-        REQUIRE(out.size() == kN);
+        REQUIRE(out.size() == n);
     });
-    (void)kBudgetMs;
+    (void)budget_ms;
 }
 
 // =========================================================================

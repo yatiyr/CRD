@@ -441,15 +441,15 @@ SpatialHash<T>::raycast_traverse_(const Ray3<T>& ray, T tmax,
     const i32 step_z = sign_step(ray.direction.z);
 
     // tDelta per axis = parametric distance to traverse one cell along that axis.
-    constexpr T kInf = std::numeric_limits<T>::infinity();
-    const T tdelta_x = (step_x != 0) ? std::abs(m_cell_size / ray.direction.x) : kInf;
-    const T tdelta_y = (step_y != 0) ? std::abs(m_cell_size / ray.direction.y) : kInf;
-    const T tdelta_z = (step_z != 0) ? std::abs(m_cell_size / ray.direction.z) : kInf;
+    constexpr T inf = std::numeric_limits<T>::infinity();
+    const T tdelta_x = (step_x != 0) ? std::abs(m_cell_size / ray.direction.x) : inf;
+    const T tdelta_y = (step_y != 0) ? std::abs(m_cell_size / ray.direction.y) : inf;
+    const T tdelta_z = (step_z != 0) ? std::abs(m_cell_size / ray.direction.z) : inf;
 
     // tMax per axis = parametric t at which ray crosses the NEXT cell boundary.
     // For step_x > 0: next boundary at (ix+1)*cs; for step_x < 0: at ix*cs.
     auto initial_tmax = [&](T origin_a, T dir_a, i32 ia, i32 step_a) -> T {
-        if (step_a == 0) { return kInf; }
+        if (step_a == 0) { return inf; }
         const T boundary = (step_a > 0) ? static_cast<T>(ia + 1) * m_cell_size
                                           : static_cast<T>(ia) * m_cell_size;
         return (boundary - origin_a) / dir_a;
@@ -518,9 +518,9 @@ SpatialHash<T>::raycast_traverse_(const Ray3<T>& ray, T tmax,
     };
 
     // Walk cells. Cap iterations to avoid runaway on degenerate input.
-    constexpr usize kMaxVoxelSteps = 1U << 20; // 1M cells worst case
+    constexpr usize max_voxel_steps = 1U << 20; // 1M cells worst case
     usize steps = 0;
-    while (steps++ < kMaxVoxelSteps)
+    while (steps++ < max_voxel_steps)
     {
         scan_cell();
 

@@ -242,14 +242,14 @@ TEST_CASE("v9a-b2 GPU radix all-equal keys: stable (input index order preserved)
     // 4096 identical codes -- spans 4 workgroups (1024 items each), so
     // tests stability both within and ACROSS workgroups. Output indices
     // must be 0, 1, 2, ..., 4095 (monotonic-ascending).
-    constexpr crd::u32 kN = 4096U;
+    constexpr crd::u32 k_n = 4096U;
     crd::containers::Array<crd::u32> in(&alloc);
-    in.resize(kN, 0xCAFEBABEU);
+    in.resize(k_n, 0xCAFEBABEU);
 
     const auto out = pipeline.dispatch_radix_sort(
         crd::containers::ConstSpan<crd::u32>(in.data(), in.size()), &alloc);
-    REQUIRE(out.size() == kN);
-    for (crd::u32 i = 0; i < kN; ++i)
+    REQUIRE(out.size() == k_n);
+    for (crd::u32 i = 0; i < k_n; ++i)
     {
         CHECK(out[i].code  == 0xCAFEBABEU);
         CHECK(out[i].index == i);
@@ -417,8 +417,8 @@ TEST_CASE("v9a-b2 GPU radix integrates with compute_morton_codes_cpu",
 
     // 2048 random AABBs inside a unit cube; CPU Morton + GPU radix.
     crd::containers::Array<AABB3<crd::f32>> aabbs(&alloc);
-    constexpr crd::u32 kCount = 2048U;
-    for (crd::u32 i = 0; i < kCount; ++i)
+    constexpr crd::u32 count = 2048U;
+    for (crd::u32 i = 0; i < count; ++i)
     {
         const float fx = static_cast<float>((i * 2654435761U) & 0xFFFFU) / 65536.0F;
         const float fy = static_cast<float>((i * 40503U)       & 0xFFFFU) / 65536.0F;
@@ -432,14 +432,14 @@ TEST_CASE("v9a-b2 GPU radix integrates with compute_morton_codes_cpu",
     const auto codes = crd::geometry::bvh_gpu::compute_morton_codes_cpu(
         crd::containers::ConstSpan<AABB3<crd::f32>>(aabbs.data(), aabbs.size()),
         scene, &alloc);
-    REQUIRE(codes.size() == kCount);
+    REQUIRE(codes.size() == count);
 
     const auto codes_span = crd::containers::ConstSpan<crd::u32>(codes.data(), codes.size());
     const auto cpu = sort_morton_pairs<crd::u32>(codes_span, &alloc);
     const auto gpu = pipeline.dispatch_radix_sort(codes_span, &alloc);
 
-    REQUIRE(cpu.size() == kCount);
-    REQUIRE(gpu.size() == kCount);
+    REQUIRE(cpu.size() == count);
+    REQUIRE(gpu.size() == count);
 
     // Byte-identical end-to-end.
     const auto cpu_bytes = crd::containers::ConstSpan<crd::u8>(
@@ -482,15 +482,15 @@ TEST_CASE("v9a-b2 GPU radix perf budget: 1M items end-to-end",
     const auto in_span = crd::containers::ConstSpan<crd::u32>(in.data(), in.size());
 
     #ifdef NDEBUG
-        constexpr double kBudgetMs = 30.0;
+        constexpr double budget_ms = 30.0;
     #else
-        constexpr double kBudgetMs = 30000.0;
+        constexpr double budget_ms = 30000.0;
     #endif
-    CRD_PERF_BUDGET_LE("radix_sort_gpu_1m_e2e", kBudgetMs, [&]{
+    CRD_PERF_BUDGET_LE("radix_sort_gpu_1m_e2e", budget_ms, [&]{
         const auto out = pipeline.dispatch_radix_sort(in_span, &alloc);
         REQUIRE(out.size() == crd::geometry::bvh_gpu::kRadixMaxItems);
     });
-    (void)kBudgetMs;
+    (void)budget_ms;
 
     CHECK(capture.error_count()   == 0U);
     CHECK(capture.warning_count() == 0U);

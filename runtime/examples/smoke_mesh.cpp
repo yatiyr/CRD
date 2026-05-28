@@ -27,22 +27,22 @@ int main()
     //   bytes 24–31: float2 uv0      (0,0)
     //   bytes 32–47: float4 tangent  (1,0,0,1)
 
-    constexpr crd::u32 kVc     = 3U;
-    constexpr crd::u32 kIc     = 3U;
-    constexpr crd::u32 kStride = 48U;
-    constexpr crd::u32 kNumPrims = 2U;
+    constexpr crd::u32 vc     = 3U;
+    constexpr crd::u32 ic     = 3U;
+    constexpr crd::u32 stride = 48U;
+    constexpr crd::u32 num_prims = 2U;
 
     crd::containers::Array<crd::u8> vert_buf(&alloc);
     crd::containers::Array<crd::u8> indx_buf(&alloc);
-    vert_buf.resize(kNumPrims * kVc * kStride);
-    indx_buf.resize(kNumPrims * kIc * sizeof(crd::u32));
+    vert_buf.resize(num_prims * vc * stride);
+    indx_buf.resize(num_prims * ic * sizeof(crd::u32));
 
-    for (crd::u32 pi = 0U; pi < kNumPrims; ++pi)
+    for (crd::u32 pi = 0U; pi < num_prims; ++pi)
     {
-        for (crd::u32 vi = 0U; vi < kVc; ++vi)
+        for (crd::u32 vi = 0U; vi < vc; ++vi)
         {
             crd::u8* dst = vert_buf.data()
-                         + (pi * kVc + vi) * kStride;
+                         + (pi * vc + vi) * stride;
             const float pos[3]  = { static_cast<float>(vi), 0.0F, 0.0F };
             const float norm[3] = { 0.0F, 0.0F, 1.0F };
             const float tan[4]  = { 1.0F, 0.0F, 0.0F, 1.0F };
@@ -50,9 +50,9 @@ int main()
             std::memcpy(dst + 12, norm, 12U);
             std::memcpy(dst + 32, tan,  16U);
         }
-        const crd::u32 base = pi * kVc;
-        crd::u8* idst = indx_buf.data() + pi * kIc * sizeof(crd::u32);
-        for (crd::u32 ii = 0U; ii < kIc; ++ii)
+        const crd::u32 base = pi * vc;
+        crd::u8* idst = indx_buf.data() + pi * ic * sizeof(crd::u32);
+        for (crd::u32 ii = 0U; ii < ic; ++ii)
         {
             const crd::u32 idx = base + ii;
             std::memcpy(idst + ii * sizeof(crd::u32), &idx, sizeof(crd::u32));
@@ -61,15 +61,15 @@ int main()
 
     // PRIM chunk.
     crd::containers::Array<crd::u8> prim_buf(&alloc);
-    prim_buf.resize(4U + kNumPrims * 32U);
-    std::memcpy(prim_buf.data(), &kNumPrims, 4U);
-    for (crd::u32 pi = 0U; pi < kNumPrims; ++pi)
+    prim_buf.resize(4U + num_prims * 32U);
+    std::memcpy(prim_buf.data(), &num_prims, 4U);
+    for (crd::u32 pi = 0U; pi < num_prims; ++pi)
     {
         crd::u8* e  = prim_buf.data() + 4U + pi * 32U;
-        const crd::u32 vbo = pi * kVc * kStride;
-        const crd::u32 ibo = pi * kIc * static_cast<crd::u32>(sizeof(crd::u32));
-        std::memcpy(e +  0, &kVc, 4U);
-        std::memcpy(e +  4, &kIc, 4U);
+        const crd::u32 vbo = pi * vc * stride;
+        const crd::u32 ibo = pi * ic * static_cast<crd::u32>(sizeof(crd::u32));
+        std::memcpy(e +  0, &vc, 4U);
+        std::memcpy(e +  4, &ic, 4U);
         std::memcpy(e +  8, &vbo, 4U);
         std::memcpy(e + 12, &ibo, 4U);
         // material_id: all-zero (null UUID)
@@ -138,13 +138,13 @@ int main()
 
     const crd::renderer::MeshResource* mesh = handle.get();
     CRD_VERIFY(mesh != nullptr);
-    CRD_VERIFY(mesh->primitives.size() == kNumPrims);
-    CRD_VERIFY(mesh->primitives[0].vertex_count == kVc);
-    CRD_VERIFY(mesh->primitives[0].index_count  == kIc);
-    CRD_VERIFY(mesh->primitives[1].vertex_count == kVc);
-    CRD_VERIFY(mesh->primitives[1].index_count  == kIc);
-    CRD_VERIFY(mesh->vertices.size() == kNumPrims * kVc * kStride);
-    CRD_VERIFY(mesh->indices.size()  == kNumPrims * kIc * sizeof(crd::u32));
+    CRD_VERIFY(mesh->primitives.size() == num_prims);
+    CRD_VERIFY(mesh->primitives[0].vertex_count == vc);
+    CRD_VERIFY(mesh->primitives[0].index_count  == ic);
+    CRD_VERIFY(mesh->primitives[1].vertex_count == vc);
+    CRD_VERIFY(mesh->primitives[1].index_count  == ic);
+    CRD_VERIFY(mesh->vertices.size() == num_prims * vc * stride);
+    CRD_VERIFY(mesh->indices.size()  == num_prims * ic * sizeof(crd::u32));
 
     // Verify null material UUIDs.
     CRD_VERIFY(mesh->primitives[0].material_id.is_null());

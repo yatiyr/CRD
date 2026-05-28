@@ -42,10 +42,10 @@ TEST_CASE("TaskGraph: every task runs exactly once", "[hesap][sched][task_graph]
 {
     JobsScope js;
     crd::memory::TlsfAllocator alloc(64 * 1024);
-    constexpr crd::usize kN = 32;
-    std::atomic<int> counters[kN]{};
+    constexpr crd::usize n = 32;
+    std::atomic<int> counters[n]{};
     TaskGraph g(&alloc);
-    for (crd::usize i = 0; i < kN; ++i)
+    for (crd::usize i = 0; i < n; ++i)
     {
         g.add_task(
             [](void* user_data, crd::u32 task_index)
@@ -56,7 +56,7 @@ TEST_CASE("TaskGraph: every task runs exactly once", "[hesap][sched][task_graph]
             counters);
     }
     g.execute(/*num_jobs=*/4);
-    for (crd::usize i = 0; i < kN; ++i)
+    for (crd::usize i = 0; i < n; ++i)
     {
         REQUIRE(counters[i].load() == 1);
     }
@@ -65,19 +65,19 @@ TEST_CASE("TaskGraph: every task runs exactly once", "[hesap][sched][task_graph]
 TEST_CASE("parallel_tiles_for visits each (i,j) tile once", "[hesap][sched][parallel_tiles]")
 {
     JobsScope js;
-    constexpr crd::u32 kRows = 4;
-    constexpr crd::u32 kCols = 6;
-    std::atomic<int> grid[kRows * kCols]{};
-    parallel_tiles_for(kRows, kCols, /*num_jobs=*/4,
+    constexpr crd::u32 rows = 4;
+    constexpr crd::u32 cols = 6;
+    std::atomic<int> grid[rows * cols]{};
+    parallel_tiles_for(rows, cols, /*num_jobs=*/4,
         [&grid](crd::u32 i, crd::u32 j)
         {
-            grid[i * kCols + j].fetch_add(1, std::memory_order_relaxed);
+            grid[i * cols + j].fetch_add(1, std::memory_order_relaxed);
         });
-    for (crd::u32 i = 0; i < kRows; ++i)
+    for (crd::u32 i = 0; i < rows; ++i)
     {
-        for (crd::u32 j = 0; j < kCols; ++j)
+        for (crd::u32 j = 0; j < cols; ++j)
         {
-            REQUIRE(grid[i * kCols + j].load() == 1);
+            REQUIRE(grid[i * cols + j].load() == 1);
         }
     }
 }
@@ -90,9 +90,9 @@ TEST_CASE("DependencyGraph: linear chain executes in order", "[hesap][sched][dep
 
     // 4-task linear chain: each writes & subsequent reads tile T_k. Record
     // execution order via an atomic counter; verify task i runs at time i.
-    constexpr crd::u32 kN = 4;
+    constexpr crd::u32 n = 4;
     std::atomic<crd::u32> stamp_counter{0};
-    std::atomic<crd::u32> task_stamps[kN]{};
+    std::atomic<crd::u32> task_stamps[n]{};
     struct Ctx
     {
         std::atomic<crd::u32>* stamp_counter;
@@ -105,7 +105,7 @@ TEST_CASE("DependencyGraph: linear chain executes in order", "[hesap][sched][dep
         c->task_stamps[task_idx].store(c->stamp_counter->fetch_add(1) + 1U,
                                        std::memory_order_relaxed);
     };
-    for (crd::u32 i = 0; i < kN; ++i)
+    for (crd::u32 i = 0; i < n; ++i)
     {
         TileDep deps[2];
         crd::usize ndeps = 0;
@@ -119,7 +119,7 @@ TEST_CASE("DependencyGraph: linear chain executes in order", "[hesap][sched][dep
         g.add_task(fn, &ctx, crd::containers::ConstSpan<TileDep>{deps, ndeps});
     }
     g.execute(4U);
-    for (crd::u32 i = 0; i < kN; ++i)
+    for (crd::u32 i = 0; i < n; ++i)
     {
         REQUIRE(task_stamps[i].load() == i + 1U);
     }
@@ -169,18 +169,18 @@ TEST_CASE("DependencyGraph: independent tasks run in parallel",
     DependencyGraph g(&alloc);
     // 16 independent tasks (each writes a distinct tile). All should be
     // ready in level 0. Verify each runs exactly once.
-    constexpr crd::u32 kN = 16;
-    std::atomic<int> counters[kN]{};
+    constexpr crd::u32 n = 16;
+    std::atomic<int> counters[n]{};
     auto fn = [](void* ud, crd::u32 idx) {
         static_cast<std::atomic<int>*>(ud)[idx].fetch_add(1);
     };
-    for (crd::u32 i = 0; i < kN; ++i)
+    for (crd::u32 i = 0; i < n; ++i)
     {
         TileDep deps[] = {{TileId{i}, TileAccess::Write}};
         g.add_task(fn, counters, crd::containers::ConstSpan<TileDep>{deps, 1});
     }
     g.execute(4U);
-    for (crd::u32 i = 0; i < kN; ++i)
+    for (crd::u32 i = 0; i < n; ++i)
     {
         REQUIRE(counters[i].load() == 1);
     }

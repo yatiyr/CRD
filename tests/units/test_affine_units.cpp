@@ -28,8 +28,8 @@ TEST_CASE("AffineUnit: Fahrenheit scale=5/9 offset~=255.372", "[v0a-3][affine]")
 {
     // K = (5/9) * F + (5/9 * 459.67) = (5/9)*F + 45967/180
     STATIC_REQUIRE(Fahrenheit::scale == 5.0 / 9.0);
-    constexpr f64 kExpectedOffset = 45967.0 / 180.0;
-    STATIC_REQUIRE(Fahrenheit::offset == kExpectedOffset);
+    constexpr f64 expected_offset = 45967.0 / 180.0;
+    STATIC_REQUIRE(Fahrenheit::offset == expected_offset);
     STATIC_REQUIRE(Fahrenheit::is_affine);
 }
 

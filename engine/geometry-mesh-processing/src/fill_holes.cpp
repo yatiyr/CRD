@@ -380,8 +380,8 @@ bool delaunay_flip_recommended(const crd::math::Vec3<T>& pa,
     };
     const T angle_c = angle_at(pc, pa, pb);
     const T angle_d = angle_at(pd, pa, pb);
-    constexpr T kPi = static_cast<T>(3.14159265358979323846);
-    return angle_c + angle_d > kPi;
+    constexpr T k_pi = static_cast<T>(3.14159265358979323846);
+    return angle_c + angle_d > k_pi;
 }
 
 // Build temp HE mesh from local patch arrays; flip every interior edge

@@ -1193,9 +1193,9 @@ void VulkanAllocator::record_image_relocation(VkCommandBuffer cmd, VulkanImage& 
                          VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
 
     // Copy every mip level (all array layers per level).
-    constexpr crd::u32 kMaxMips = 16;
-    VkImageCopy        copies[kMaxMips];
-    const crd::u32     mips = desc.mip_levels < kMaxMips ? desc.mip_levels : kMaxMips;
+    constexpr crd::u32 max_mips = 16;
+    VkImageCopy        copies[max_mips];
+    const crd::u32     mips = desc.mip_levels < max_mips ? desc.mip_levels : max_mips;
     for (crd::u32 m = 0; m < mips; ++m)
     {
         VkImageCopy c{};

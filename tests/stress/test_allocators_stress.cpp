@@ -62,8 +62,8 @@ void drive_tlsf(crd::stress::Config cfg)
         crd::memory::MallocAllocator parent("stress-alloc-parent");
         crd::memory::TlsfAllocator heap(usize{4} << 20, &parent, "stress-alloc-heap");
 
-        constexpr u32 kMaxLive = 96U;
-        Block live[kMaxLive] = {};
+        constexpr u32 max_live = 96U;
+        Block live[max_live] = {};
         u32 live_count = 0;
         u8 fill_seq = static_cast<u8>(w * 7U + 1U);
 
@@ -78,7 +78,7 @@ void drive_tlsf(crd::stress::Config cfg)
         {
             const u32 roll = rng.next_u32(10U);
 
-            if ((roll < 6U && live_count < kMaxLive)) // 60%: allocate (skewed toward small)
+            if ((roll < 6U && live_count < max_live)) // 60%: allocate (skewed toward small)
             {
                 const u32 bucket = rng.next_u32(4U);
                 usize size = 1U + rng.next_u32(64U * 1024U);

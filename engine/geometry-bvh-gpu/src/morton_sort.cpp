@@ -6,7 +6,7 @@
 // is conformance-tested against this path via `bit_compare<MortonPair<KeyT>>`.
 // Bit-identical output across compilers, platforms, runs.
 //
-// Body identical for u32 and u64 -- only `kNumPasses = sizeof(KeyT) * 8 /
+// Body identical for u32 and u64 -- only `num_passes = sizeof(KeyT) * 8 /
 // kRadixBits` changes. Even pass count guarantees the ping-pong ends in
 // the output buffer (static_assert).
 //
@@ -34,7 +34,7 @@
 // the bucket-write at the bottleneck.
 //
 // The winning optimization is the smallest: a single `_mm_prefetch` hint
-// `kPrefetchDistance = 8` iterations ahead of the actual scatter, telling
+// `prefetch_distance = 8` iterations ahead of the actual scatter, telling
 // the cache hierarchy to stage the destination cache line into L1d before
 // the store. Net 6.2% throughput improvement at zero code complexity cost.
 // Output remains byte-identical to the un-prefetched reference (prefetch
@@ -81,7 +81,7 @@ constexpr crd::usize kRadixBins = crd::usize{1} << kRadixBits;          // 256
 // src left-to-right.
 //
 // The scatter loop issues an `_mm_prefetch` hint to stage the destination
-// cache line into L1d `kPrefetchDistance` iterations before the actual
+// cache line into L1d `prefetch_distance` iterations before the actual
 // store -- converts the random-bucket store from a demand miss into a hit.
 // Determinism is unaffected: prefetch is a HINT, never a write.
 template <typename KeyT>
@@ -114,8 +114,8 @@ void radix_pass(const MortonPair<KeyT>* src,
 #if CRD_SIMD_HAS_SSE2
     // Prefetch distance: 8 iterations ahead. Tuned to cover the ~40-cycle
     // L1 miss latency on modern x64 at the dispatch IPC of this inner loop.
-    constexpr crd::usize kPrefetchDistance = 8U;
-    const crd::usize n_prefetch = (n > kPrefetchDistance) ? (n - kPrefetchDistance) : 0U;
+    constexpr crd::usize prefetch_distance = 8U;
+    const crd::usize n_prefetch = (n > prefetch_distance) ? (n - prefetch_distance) : 0U;
     for (crd::usize i = 0U; i < n_prefetch; ++i)
     {
         // Stage the destination cache line for the future scatter at i + 8.
@@ -123,7 +123,7 @@ void radix_pass(const MortonPair<KeyT>* src,
         // i..i+7 scatters that bump it), but approximate is fine for a hint
         // -- the actual store lands within ~64 bytes of the prefetched line.
         const crd::usize fut_bucket =
-            static_cast<crd::usize>((src[i + kPrefetchDistance].code >> shift) & KeyT{0xFFU});
+            static_cast<crd::usize>((src[i + prefetch_distance].code >> shift) & KeyT{0xFFU});
         _mm_prefetch(reinterpret_cast<const char*>(dst + histogram[fut_bucket]),
                      _MM_HINT_T0);
 
@@ -187,8 +187,8 @@ sort_morton_pairs(crd::containers::ConstSpan<KeyT> codes,
     // Pass count is even for both u32 (4) and u64 (8) -- so after the
     // ping-pong, the final result lands back in `out` without an extra
     // copy. The static_assert below is the load-bearing invariant.
-    constexpr crd::usize kNumPasses = (sizeof(KeyT) * CHAR_BIT) / kRadixBits;
-    static_assert(kNumPasses % 2U == 0U,
+    constexpr crd::usize num_passes = (sizeof(KeyT) * CHAR_BIT) / kRadixBits;
+    static_assert(num_passes % 2U == 0U,
                   "Radix pass count must be even so the ping-pong terminates in `out`.");
 
     crd::containers::Array<MortonPair<KeyT>> aux(alloc);
@@ -197,7 +197,7 @@ sort_morton_pairs(crd::containers::ConstSpan<KeyT> codes,
     MortonPair<KeyT>* a = out.data();
     MortonPair<KeyT>* b = aux.data();
 
-    for (crd::usize pass = 0U; pass < kNumPasses; ++pass)
+    for (crd::usize pass = 0U; pass < num_passes; ++pass)
     {
         const crd::usize shift = pass * kRadixBits;
         radix_pass<KeyT>(a, b, n, shift);
@@ -393,8 +393,8 @@ sort_morton_pairs_parallel(crd::containers::ConstSpan<KeyT> codes,
     }
     if (n < 2U) { return out; }
 
-    constexpr crd::usize kNumPasses = (sizeof(KeyT) * CHAR_BIT) / kRadixBits;
-    static_assert(kNumPasses % 2U == 0U,
+    constexpr crd::usize num_passes = (sizeof(KeyT) * CHAR_BIT) / kRadixBits;
+    static_assert(num_passes % 2U == 0U,
                   "Radix pass count must be even so the ping-pong terminates in `out`.");
 
     crd::containers::Array<MortonPair<KeyT>> aux(alloc);
@@ -411,7 +411,7 @@ sort_morton_pairs_parallel(crd::containers::ConstSpan<KeyT> codes,
     MortonPair<KeyT>* a = out.data();
     MortonPair<KeyT>* b = aux.data();
 
-    for (crd::usize pass = 0U; pass < kNumPasses; ++pass)
+    for (crd::usize pass = 0U; pass < num_passes; ++pass)
     {
         parallel_radix_pass<KeyT>(a, b, n, pass * kRadixBits, num_jobs,
                                    hist_tiles.data(), scatter_off.data());

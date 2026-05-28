@@ -42,17 +42,17 @@ TEST_CASE("sort small in-place", "[sort]")
 
 TEST_CASE("sort large random ascending+descending+already-sorted", "[sort]")
 {
-    constexpr usize kN = 200;
-    crd::containers::Array<i32> ascending;      ascending.resize(kN);
-    crd::containers::Array<i32> descending;     descending.resize(kN);
-    crd::containers::Array<i32> already_sorted; already_sorted.resize(kN);
-    crd::containers::Array<i32> shuffled;       shuffled.resize(kN);
-    for (usize i = 0; i < kN; ++i)
+    constexpr usize k_n = 200;
+    crd::containers::Array<i32> ascending;      ascending.resize(k_n);
+    crd::containers::Array<i32> descending;     descending.resize(k_n);
+    crd::containers::Array<i32> already_sorted; already_sorted.resize(k_n);
+    crd::containers::Array<i32> shuffled;       shuffled.resize(k_n);
+    for (usize i = 0; i < k_n; ++i)
     {
         ascending[i]      = static_cast<i32>(i);
-        descending[i]     = static_cast<i32>(kN - i);
+        descending[i]     = static_cast<i32>(k_n - i);
         already_sorted[i] = static_cast<i32>(i);
-        shuffled[i]       = static_cast<i32>((i * 31 + 7) % kN);
+        shuffled[i]       = static_cast<i32>((i * 31 + 7) % k_n);
     }
 
     crd::containers::sort(ascending.data(),      ascending.data() + ascending.size());
@@ -60,7 +60,7 @@ TEST_CASE("sort large random ascending+descending+already-sorted", "[sort]")
     crd::containers::sort(already_sorted.data(), already_sorted.data() + already_sorted.size());
     crd::containers::sort(shuffled.data(),       shuffled.data() + shuffled.size());
 
-    for (usize i = 0; i + 1 < kN; ++i)
+    for (usize i = 0; i + 1 < k_n; ++i)
     {
         REQUIRE(ascending[i]      <= ascending[i + 1]);
         REQUIRE(descending[i]     <= descending[i + 1]);
@@ -146,14 +146,14 @@ TEST_CASE("nth_element places nth correctly", "[sort][nth]")
 
 TEST_CASE("nth_element on large random input", "[sort][nth]")
 {
-    constexpr usize kN = 200;
-    crd::containers::Array<i32> a; a.resize(kN);
-    for (usize i = 0; i < kN; ++i) a[i] = static_cast<i32>((i * 31 + 11) % kN);
+    constexpr usize k_n = 200;
+    crd::containers::Array<i32> a; a.resize(k_n);
+    for (usize i = 0; i < k_n; ++i) a[i] = static_cast<i32>((i * 31 + 11) % k_n);
 
-    const usize nth = kN / 3;
-    crd::containers::nth_element(a.data(), a.data() + nth, a.data() + kN);
+    const usize nth = k_n / 3;
+    crd::containers::nth_element(a.data(), a.data() + nth, a.data() + k_n);
     for (usize i = 0; i < nth; ++i)        REQUIRE(a[i] <= a[nth]);
-    for (usize i = nth + 1; i < kN; ++i)   REQUIRE(a[i] >= a[nth]);
+    for (usize i = nth + 1; i < k_n; ++i)   REQUIRE(a[i] >= a[nth]);
 }
 
 // ===========================================================================
@@ -245,10 +245,10 @@ TEST_CASE("sort is deterministic across input permutations of same multiset",
 TEST_CASE("Sort vs std::sort: same elements, in-order check",
           "[sort][determinism]")
 {
-    constexpr usize kN = 200;
-    crd::containers::Array<i32> a; a.resize(kN);
-    crd::containers::Array<i32> b; b.resize(kN);
-    for (usize i = 0; i < kN; ++i) { a[i] = static_cast<i32>((i * 17 + 5) % 100); b[i] = a[i]; }
+    constexpr usize k_n = 200;
+    crd::containers::Array<i32> a; a.resize(k_n);
+    crd::containers::Array<i32> b; b.resize(k_n);
+    for (usize i = 0; i < k_n; ++i) { a[i] = static_cast<i32>((i * 17 + 5) % 100); b[i] = a[i]; }
 
     crd::containers::sort(a.data(), a.data() + a.size());
     std::sort(b.data(), b.data() + b.size());  // crd-lint-allow-std-math

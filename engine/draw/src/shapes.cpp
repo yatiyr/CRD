@@ -223,8 +223,8 @@ void sphere_solid_to(RenderBuffer& buf, crd::math::Vec3f center, crd::f32 radius
                      Color color, PrimFlags flags, crd::f32 lifetime_s)
 {
     if (radius <= 0.0F) return;
-    constexpr crd::u32 kNlong = 16; // matches sphere_wire's `segments_long` default
-    constexpr crd::u32 kNlat  = 8;  // matches sphere_wire's `segments_lat`  default
+    constexpr crd::u32 k_nlong = 16; // matches sphere_wire's `segments_long` default
+    constexpr crd::u32 k_nlat  = 8;  // matches sphere_wire's `segments_lat`  default
     const crd::f32 two_pi = 6.28318530717958647692F;
     const crd::f32 pi     = 3.14159265358979323846F;
     const crd::u32 packed = color.packed_rgba();
@@ -232,14 +232,14 @@ void sphere_solid_to(RenderBuffer& buf, crd::math::Vec3f center, crd::f32 radius
     const crd::math::Vec3f south_pole = sphere_uv_vertex(center, radius, 0.0F, 0.0F);
     const crd::math::Vec3f north_pole = sphere_uv_vertex(center, radius, 0.0F, pi);
 
-    for (crd::u32 r = 0; r < kNlat; ++r)
+    for (crd::u32 r = 0; r < k_nlat; ++r)
     {
-        const crd::f32 theta_lo = (static_cast<crd::f32>(r)     / static_cast<crd::f32>(kNlat)) * pi;
-        const crd::f32 theta_hi = (static_cast<crd::f32>(r + 1) / static_cast<crd::f32>(kNlat)) * pi;
-        for (crd::u32 m = 0; m < kNlong; ++m)
+        const crd::f32 theta_lo = (static_cast<crd::f32>(r)     / static_cast<crd::f32>(k_nlat)) * pi;
+        const crd::f32 theta_hi = (static_cast<crd::f32>(r + 1) / static_cast<crd::f32>(k_nlat)) * pi;
+        for (crd::u32 m = 0; m < k_nlong; ++m)
         {
-            const crd::f32 phi_lo = (static_cast<crd::f32>(m)     / static_cast<crd::f32>(kNlong)) * two_pi;
-            const crd::f32 phi_hi = (static_cast<crd::f32>(m + 1) / static_cast<crd::f32>(kNlong)) * two_pi;
+            const crd::f32 phi_lo = (static_cast<crd::f32>(m)     / static_cast<crd::f32>(k_nlong)) * two_pi;
+            const crd::f32 phi_hi = (static_cast<crd::f32>(m + 1) / static_cast<crd::f32>(k_nlong)) * two_pi;
             const crd::math::Vec3f p_ll = sphere_uv_vertex(center, radius, phi_lo, theta_lo);
             const crd::math::Vec3f p_rl = sphere_uv_vertex(center, radius, phi_hi, theta_lo);
             const crd::math::Vec3f p_lh = sphere_uv_vertex(center, radius, phi_lo, theta_hi);
@@ -250,7 +250,7 @@ void sphere_solid_to(RenderBuffer& buf, crd::math::Vec3f center, crd::f32 radius
                 // South-cap fan (theta=0 collapses to south pole).
                 buf.add_triangle(DebugTriangle{south_pole, p_lh, p_rh, packed, flags, lifetime_s});
             }
-            else if (r == kNlat - 1)
+            else if (r == k_nlat - 1)
             {
                 // North-cap fan (theta=pi collapses to north pole).
                 buf.add_triangle(DebugTriangle{p_ll, north_pole, p_rl, packed, flags, lifetime_s});
@@ -678,12 +678,12 @@ void frustum_to(RenderBuffer& buf, const crd::math::Mat4f& view_proj,
         world[i] = {h.x * inv_w, h.y * inv_w, h.z * inv_w};
     }
     // 12 edges: 4 near, 4 far, 4 connectors.
-    constexpr int kEdges[12][2] = {
+    constexpr int k_edges[12][2] = {
         {0, 1}, {1, 2}, {2, 3}, {3, 0}, // near rectangle
         {4, 5}, {5, 6}, {6, 7}, {7, 4}, // far  rectangle
         {0, 4}, {1, 5}, {2, 6}, {3, 7}, // connectors
     };
-    for (const auto& e : kEdges)
+    for (const auto& e : k_edges)
     {
         add_line_to(buf, world[e[0]], world[e[1]], color, width_px, flags, lifetime_s);
     }

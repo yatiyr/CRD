@@ -177,8 +177,8 @@ TEST_CASE("60-bit Morton determinism: identical input yields identical output",
 {
     crd::memory::TlsfAllocator alloc(4U * 1024U * 1024U);
     crd::containers::Array<AABB3<crd::f32>> aabbs(&alloc);
-    constexpr crd::u32 kCount = 256U;
-    for (crd::u32 i = 0; i < kCount; ++i)
+    constexpr crd::u32 count = 256U;
+    for (crd::u32 i = 0; i < count; ++i)
     {
         const crd::f32 fx = static_cast<crd::f32>((i * 2654435761U) & 0xFFFFU) / 65536.0F;
         const crd::f32 fy = static_cast<crd::f32>((i * 40503U)       & 0xFFFFU) / 65536.0F;
@@ -190,10 +190,10 @@ TEST_CASE("60-bit Morton determinism: identical input yields identical output",
 
     const auto a = compute_morton_codes_cpu_60bit(span, scene, &alloc);
     const auto b = compute_morton_codes_cpu_60bit(span, scene, &alloc);
-    REQUIRE(a.size() == kCount);
-    REQUIRE(b.size() == kCount);
+    REQUIRE(a.size() == count);
+    REQUIRE(b.size() == count);
     bool all_match = true;
-    for (crd::usize i = 0; i < kCount; ++i)
+    for (crd::usize i = 0; i < count; ++i)
     {
         if (a[i] != b[i]) { all_match = false; break; }
     }

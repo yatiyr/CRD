@@ -345,12 +345,12 @@ TEST_CASE("convex_hull_2d: square at scale 1e6 produces correct hull",
 {
     crd::memory::TlsfAllocator alloc(64U * 1024U);
     crd::containers::Array<Vec2<f64>> points(&alloc);
-    constexpr f64 kOrigin = 1.0e6;
-    points.push_back(Vec2<f64>(kOrigin, kOrigin));
-    points.push_back(Vec2<f64>(kOrigin + 1, kOrigin));
-    points.push_back(Vec2<f64>(kOrigin + 1, kOrigin + 1));
-    points.push_back(Vec2<f64>(kOrigin, kOrigin + 1));
-    points.push_back(Vec2<f64>(kOrigin + 0.5, kOrigin + 0.5)); // interior
+    constexpr f64 origin = 1.0e6;
+    points.push_back(Vec2<f64>(origin, origin));
+    points.push_back(Vec2<f64>(origin + 1, origin));
+    points.push_back(Vec2<f64>(origin + 1, origin + 1));
+    points.push_back(Vec2<f64>(origin, origin + 1));
+    points.push_back(Vec2<f64>(origin + 0.5, origin + 0.5)); // interior
 
     crd::containers::Array<u32> hull(&alloc);
     convex_hull_2d_indices<f64>(crd::containers::ConstSpan<Vec2<f64>>(points.data(), points.size()), hull);

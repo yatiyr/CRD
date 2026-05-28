@@ -237,13 +237,13 @@ struct EntityNamePair
 
 [[nodiscard]] crd::u64 fnv1a_64_bytes(const char* data, crd::usize size) noexcept
 {
-    constexpr crd::u64 kPrime  = 1099511628211ULL;
-    constexpr crd::u64 kOffset = 14695981039346656037ULL;
-    crd::u64 h = kOffset;
+    constexpr crd::u64 prime  = 1099511628211ULL;
+    constexpr crd::u64 offset = 14695981039346656037ULL;
+    crd::u64 h = offset;
     for (crd::usize i = 0; i < size; ++i)
     {
         h ^= static_cast<crd::u8>(data[i]);
-        h *= kPrime;
+        h *= prime;
     }
     return h;
 }

@@ -127,8 +127,8 @@ TEST_CASE("scene stress -- parallel chunk read (archetype)", "[stress][scene]")
     crd::memory::GrowableTlsfAllocator alloc{256ULL << 20, nullptr, "scene-stress-read"};
     World w(&alloc);
     crd::containers::Array<EntityId> entities(&alloc);
-    constexpr u32 kN = 6007U; // odd; spans many archetype chunks
-    build_world(w, entities, kN, /*with_sparse=*/false);
+    constexpr u32 k_n = 6007U; // odd; spans many archetype chunks
+    build_world(w, entities, k_n, /*with_sparse=*/false);
 
     crd::containers::Array<crd::containers::Array<EntityId>> chunks(&alloc);
     collect_chunks<ArchComp>(w, &alloc, chunks);
@@ -182,8 +182,8 @@ TEST_CASE("scene stress -- parallel disjoint chunk write (archetype + sparse)", 
     crd::memory::GrowableTlsfAllocator alloc{256ULL << 20, nullptr, "scene-stress-write"};
     World w(&alloc);
     crd::containers::Array<EntityId> entities(&alloc);
-    constexpr u32 kN = 6007U;
-    build_world(w, entities, kN, /*with_sparse=*/true);
+    constexpr u32 k_n = 6007U;
+    build_world(w, entities, k_n, /*with_sparse=*/true);
 
     crd::containers::Array<crd::containers::Array<EntityId>> arch_chunks(&alloc);
     crd::containers::Array<crd::containers::Array<EntityId>> sparse_chunks(&alloc);
@@ -243,8 +243,8 @@ TEST_CASE("scene stress -- concurrent reads of frozen scene state", "[stress][sc
     crd::memory::GrowableTlsfAllocator alloc{256ULL << 20, nullptr, "scene-stress-frozen"};
     World w(&alloc);
     crd::containers::Array<EntityId> entities(&alloc);
-    constexpr u32 kN = 4096U;
-    build_world(w, entities, kN, /*with_sparse=*/true);
+    constexpr u32 k_n = 4096U;
+    build_world(w, entities, k_n, /*with_sparse=*/true);
     const crd::u16 reg_count = w.registered_component_count();
 
     crd::stress::FailSink sink;

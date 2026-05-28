@@ -308,7 +308,7 @@ TEST_CASE("TLSF stress: 1000 random alloc/free with mixed alignments", "[memory]
     std::uniform_int_distribution<int> op_pick(0, 2);
     std::uniform_int_distribution<crd::usize> size_pick(16U, 4096U);
     std::uniform_int_distribution<int> align_pick(0, 4); // 16/32/64/128/256
-    constexpr crd::usize kAlignChoices[] = {16U, 32U, 64U, 128U, 256U};
+    constexpr crd::usize align_choices[] = {16U, 32U, 64U, 128U, 256U};
 
     for (int iter = 0; iter < 1000; ++iter)
     {
@@ -323,7 +323,7 @@ TEST_CASE("TLSF stress: 1000 random alloc/free with mixed alignments", "[memory]
         else
         {
             const crd::usize sz = size_pick(rng);
-            const crd::usize al = kAlignChoices[align_pick(rng)];
+            const crd::usize al = align_choices[align_pick(rng)];
             void* p = a.allocate(sz, al);
             REQUIRE(p != nullptr);
             REQUIRE(is_aligned(p, al));

@@ -49,34 +49,34 @@ int main()
     crd::memory::TlsfAllocator alloc(8 * 1024 * 1024);
 
     // ---- 1. gemv vs naive ------------------------------------------
-    constexpr crd::usize kM = 50;
-    constexpr crd::usize kN = 30;
-    Matrix<crd::f64> a_mat(&alloc, kM, kN);
-    Vector<crd::f64> x(&alloc, kN);
-    Vector<crd::f64> y_engine(&alloc, kM);
-    Vector<crd::f64> y_naive(&alloc, kM);
-    for (crd::usize i = 0; i < kM; ++i)
+    constexpr crd::usize m = 50;
+    constexpr crd::usize k_n = 30;
+    Matrix<crd::f64> a_mat(&alloc, m, k_n);
+    Vector<crd::f64> x(&alloc, k_n);
+    Vector<crd::f64> y_engine(&alloc, m);
+    Vector<crd::f64> y_naive(&alloc, m);
+    for (crd::usize i = 0; i < m; ++i)
     {
-        for (crd::usize j = 0; j < kN; ++j)
+        for (crd::usize j = 0; j < k_n; ++j)
         {
             a_mat(i, j) = static_cast<crd::f64>(i + 1) / static_cast<crd::f64>(j + 2) - 0.5;
         }
     }
-    for (crd::usize j = 0; j < kN; ++j)
+    for (crd::usize j = 0; j < k_n; ++j)
     {
         x(j) = std::sin(static_cast<crd::f64>(j));
     }
     gemv<crd::f64, Layout::RowMajor>(1.5, a_mat.cview(), x.span(), 0.0, y_engine.span(), Trans::None);
-    for (crd::usize i = 0; i < kM; ++i)
+    for (crd::usize i = 0; i < m; ++i)
     {
         crd::f64 s = 0.0;
-        for (crd::usize j = 0; j < kN; ++j)
+        for (crd::usize j = 0; j < k_n; ++j)
         {
             s += a_mat(i, j) * x(j);
         }
         y_naive(i) = 1.5 * s;
     }
-    for (crd::usize i = 0; i < kM; ++i)
+    for (crd::usize i = 0; i < m; ++i)
     {
         if (!approx_equal(y_engine(i), y_naive(i), 1e-9))
         {
@@ -87,24 +87,24 @@ int main()
     }
 
     // ---- 2. trsv round-trip ----------------------------------------
-    constexpr crd::usize kS = 8;
-    Triangular<crd::f64, TriangularSide::Lower, TriangularDiag::Explicit> tri_l(&alloc, kS);
-    for (crd::usize i = 0; i < kS; ++i)
+    constexpr crd::usize k_s = 8;
+    Triangular<crd::f64, TriangularSide::Lower, TriangularDiag::Explicit> tri_l(&alloc, k_s);
+    for (crd::usize i = 0; i < k_s; ++i)
     {
         for (crd::usize j = 0; j <= i; ++j)
         {
             tri_l.at(i, j) = (i == j) ? 4.0 : 0.3;
         }
     }
-    Vector<crd::f64> x0(&alloc, kS);
-    for (crd::usize i = 0; i < kS; ++i)
+    Vector<crd::f64> x0(&alloc, k_s);
+    for (crd::usize i = 0; i < k_s; ++i)
     {
         x0(i) = std::cos(static_cast<crd::f64>(i));
     }
     auto x_back = x0.clone();
     trmv<crd::f64, TriangularSide::Lower, TriangularDiag::Explicit>(tri_l, x_back.span(), Trans::None);
     trsv<crd::f64, TriangularSide::Lower, TriangularDiag::Explicit>(tri_l, x_back.span(), Trans::None);
-    for (crd::usize i = 0; i < kS; ++i)
+    for (crd::usize i = 0; i < k_s; ++i)
     {
         if (!approx_equal(x_back(i), x0(i), 1e-12))
         {
@@ -124,20 +124,20 @@ int main()
     crd::hesap::cli::CommandArgs args{&cli_alloc};
     args.set_f64("alpha", 1.5);
     args.set_f64("beta", 0.0);
-    args.set_u64("rows", kM);
-    args.set_u64("cols", kN);
+    args.set_u64("rows", m);
+    args.set_u64("cols", k_n);
     crd::containers::Array<crd::f64> a_flat(&cli_alloc);
-    a_flat.reserve(kM * kN);
-    for (crd::usize i = 0; i < kM; ++i)
+    a_flat.reserve(m * k_n);
+    for (crd::usize i = 0; i < m; ++i)
     {
-        for (crd::usize j = 0; j < kN; ++j)
+        for (crd::usize j = 0; j < k_n; ++j)
         {
             a_flat.push_back(a_mat(i, j));
         }
     }
     args.set_f64_array("A", crd::containers::ConstSpan<crd::f64>{a_flat.data(), a_flat.size()});
     args.set_f64_array("x", x.span());
-    args.set_f64_array("y", crd::containers::ConstSpan<crd::f64>{a_flat.data(), kM});  // dummy y (zeroed by gemv with beta=0)
+    args.set_f64_array("y", crd::containers::ConstSpan<crd::f64>{a_flat.data(), m});  // dummy y (zeroed by gemv with beta=0)
 
     const auto r = rec->impl(args);
     if (!r.ok)
@@ -145,12 +145,12 @@ int main()
         return fail("gemv CLI returned ok=false");
     }
     const auto* blob = std::get_if<crd::hesap::cli::ResultBinaryBlob>(&r.value);
-    if (blob == nullptr || blob->bytes.size() != kM * sizeof(crd::f64))
+    if (blob == nullptr || blob->bytes.size() != m * sizeof(crd::f64))
     {
-        return fail("gemv CLI didn't return a kM*f64 binary blob");
+        return fail("gemv CLI didn't return a m*f64 binary blob");
     }
     const crd::f64* y_cli = reinterpret_cast<const crd::f64*>(blob->bytes.data());
-    for (crd::usize i = 0; i < kM; ++i)
+    for (crd::usize i = 0; i < m; ++i)
     {
         if (!approx_equal(y_cli[i], y_engine(i), 1e-12))
         {
@@ -176,7 +176,7 @@ int main()
                  "[smoke_hesap_blas2] %zu BLAS L2 commands registered\n"
                  "[smoke_hesap_blas2] CLI dispatch hesap.dense.blas2.gemv.f64 bit-equal to engine\n"
                  "[smoke_hesap_blas2] OK\n",
-                 static_cast<std::size_t>(kM), static_cast<std::size_t>(kN),
-                 static_cast<std::size_t>(kS), static_cast<std::size_t>(blas2_count));
+                 static_cast<std::size_t>(m), static_cast<std::size_t>(k_n),
+                 static_cast<std::size_t>(k_s), static_cast<std::size_t>(blas2_count));
     return 0;
 }

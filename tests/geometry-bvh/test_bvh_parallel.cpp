@@ -123,8 +123,8 @@ TEST_CASE("bvh_build_parallel: large corpus above the default threshold matches 
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 24, nullptr, "bvh-test");
     Rng rng(0xB16C04);
     std::vector<AABB3<f32>> prims;
-    constexpr usize kN = 20000; // > the 8192 default parallel_threshold
-    for (usize i = 0; i < kN; ++i)
+    constexpr usize k_n = 20000; // > the 8192 default parallel_threshold
+    for (usize i = 0; i < k_n; ++i)
     {
         prims.push_back(random_box(rng, 200.0F, 2.0F));
     }

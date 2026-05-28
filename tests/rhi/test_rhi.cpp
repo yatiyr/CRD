@@ -816,8 +816,8 @@ TEST_CASE("ComputePipeline lifecycle: multi-create then destroy clean", "[rhi][c
     // The real test runs against the Vulkan backend (test_rhi_vulkan.cpp);
     // this fake-side variant pins the factory ABI contract.
     FakeDevice device{};
-    constexpr int kCycles = 8;
-    for (int i = 0; i < kCycles; ++i)
+    constexpr int k_cycles = 8;
+    for (int i = 0; i < k_cycles; ++i)
     {
         auto shader = device.create_shader_module(
             {crd::rhi::ShaderStage::Compute, "main", {}});
@@ -826,7 +826,7 @@ TEST_CASE("ComputePipeline lifecycle: multi-create then destroy clean", "[rhi][c
         auto pipeline = device.create_compute_pipeline(desc);
         REQUIRE(pipeline != nullptr);
     } // RAII: pipeline + shader destroyed each iteration
-    REQUIRE(device.create_compute_pipeline_count == kCycles);
+    REQUIRE(device.create_compute_pipeline_count == k_cycles);
 }
 
 TEST_CASE("ComputePipeline + PipelineLayout caller-side composition", "[rhi][compute][v0a]")

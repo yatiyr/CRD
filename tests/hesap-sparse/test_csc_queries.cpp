@@ -55,8 +55,8 @@ TEST_CASE("compress_csc builds a canonical CSC", "[hesap][sparse][csc]")
     // Cross-platform golden for the canonical CSC structure (CI linux-gcc
     // re-run proves the LE byte feed is reproducible for the CSC orientation
     // too, not just CSR).
-    constexpr crd::u64 kGoldenCsc = 0x7B9FDC4345878357ULL;
-    CHECK(pat.topology_hash == kGoldenCsc);
+    constexpr crd::u64 golden_csc = 0x7B9FDC4345878357ULL;
+    CHECK(pat.topology_hash == golden_csc);
 
     // coeff(r,c) works through the CSC orientation.
     CHECK(m.coeff(0, 0) == 1.0);

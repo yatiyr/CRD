@@ -87,11 +87,11 @@ TEST_CASE("parallel_for captures one sample per job",
 {
     PerfJobsFixture fx;
 
-    constexpr crd::u32 kCount    = 64U;
-    constexpr crd::u32 kNumJobs  = 8U;
+    constexpr crd::u32 count    = 64U;
+    constexpr crd::u32 num_jobs  = 8U;
     std::atomic<crd::u32> sum{0U};
 
-    auto* c = crd::jobs::parallel_for(kCount, kNumJobs,
+    auto* c = crd::jobs::parallel_for(count, num_jobs,
                                       [&](crd::u32 b, crd::u32 e) {
                                           for (crd::u32 i = b; i < e; ++i)
                                               sum.fetch_add(i, std::memory_order_relaxed);
@@ -100,17 +100,17 @@ TEST_CASE("parallel_for captures one sample per job",
 
     // Verify the computation actually ran.
     crd::u32 expected = 0U;
-    for (crd::u32 i = 0U; i < kCount; ++i)
+    for (crd::u32 i = 0U; i < count; ++i)
     {
         expected += i;
     }
     CHECK(sum.load() == expected);
 
     const auto stats = crd::perf::jobs_adapter_stats();
-    CHECK(stats.jobs_begun == kNumJobs);
-    CHECK(stats.jobs_ended == kNumJobs);
+    CHECK(stats.jobs_begun == num_jobs);
+    CHECK(stats.jobs_ended == num_jobs);
     CHECK(stats.missing_tokens == 0U);
-    CHECK(count_job_samples() == kNumJobs);
+    CHECK(count_job_samples() == num_jobs);
 }
 
 TEST_CASE("job samples carry the fiber_id for cross-thread reconstruction",
@@ -118,14 +118,14 @@ TEST_CASE("job samples carry the fiber_id for cross-thread reconstruction",
 {
     PerfJobsFixture fx;
 
-    constexpr crd::u32 kJobs = 16U;
+    constexpr crd::u32 k_jobs = 16U;
     std::atomic<crd::u32> done{0U};
-    auto* c = crd::jobs::parallel_for(kJobs, kJobs,
+    auto* c = crd::jobs::parallel_for(k_jobs, k_jobs,
                                       [&](crd::u32 /*b*/, crd::u32 /*e*/) {
                                           done.fetch_add(1U, std::memory_order_relaxed);
                                       });
     crd::jobs::wait(c);
-    CHECK(done.load() == kJobs);
+    CHECK(done.load() == k_jobs);
 
     crd::u32 with_fiber = 0U;
     for (crd::u32 t = 0U; t < crd::perf::thread_count(); ++t)
@@ -140,7 +140,7 @@ TEST_CASE("job samples carry the fiber_id for cross-thread reconstruction",
             }
         }
     }
-    CHECK(with_fiber == kJobs); // every job sample tagged with a fiber id
+    CHECK(with_fiber == k_jobs); // every job sample tagged with a fiber id
 }
 
 TEST_CASE("nested CRD_PERF_SCOPE inside a job becomes a child region",

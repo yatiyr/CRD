@@ -144,17 +144,17 @@ TEST_CASE("v9a-b1-parallel 4096 all-equal keys span ALL workers: stable global o
     crd::memory::TlsfAllocator alloc(8U * 1024U * 1024U);
 
     // Above the parallel threshold so the function actually fans out.
-    constexpr crd::u32 kN = 200000U;
+    constexpr crd::u32 k_n = 200000U;
     crd::containers::Array<crd::u32> in(&alloc);
-    in.resize(kN, 0xCAFEBABEU);
+    in.resize(k_n, 0xCAFEBABEU);
     const auto in_span = crd::containers::ConstSpan<crd::u32>(in.data(), in.size());
 
     const auto out = sort_morton_pairs_parallel<crd::u32>(in_span, &alloc, /*num_jobs*/ 8U);
-    REQUIRE(out.size() == kN);
+    REQUIRE(out.size() == k_n);
     // All codes equal => bucket distribution is "everything in one bucket".
-    // Output indices must be 0, 1, ..., kN-1 strictly monotonic across all
+    // Output indices must be 0, 1, ..., k_n-1 strictly monotonic across all
     // worker chunks.
-    for (crd::u32 i = 0; i < kN; ++i)
+    for (crd::u32 i = 0; i < k_n; ++i)
     {
         CHECK(out[i].code  == 0xCAFEBABEU);
         CHECK(out[i].index == i);
@@ -170,28 +170,28 @@ TEST_CASE("v9a-b1-parallel cross-chunk equal keys preserve monotonic input-index
 {
     crd::memory::TlsfAllocator alloc(8U * 1024U * 1024U);
 
-    constexpr crd::u32 kN = 200000U;
+    constexpr crd::u32 k_n = 200000U;
     // Most codes are random; specific equal pairs placed in chunk 0 and chunk 7.
     crd::containers::Array<crd::u32> in(&alloc);
-    fill_random_codes<crd::u32>(in, kN, 0xABCD1234ULL);
+    fill_random_codes<crd::u32>(in, k_n, 0xABCD1234ULL);
     // Force exactly two equal keys at known input positions in different chunks.
-    // num_jobs=8 -> chunk i covers [i*kN/8, (i+1)*kN/8). Use first index of
-    // chunk 0 (=0) and first index of chunk 7 (=7*kN/8 = 175000) for the
+    // num_jobs=8 -> chunk i covers [i*k_n/8, (i+1)*k_n/8). Use first index of
+    // chunk 0 (=0) and first index of chunk 7 (=7*k_n/8 = 175000) for the
     // equal-key pair.
     const crd::u32 idx_chunk0 = 0U;
-    const crd::u32 idx_chunk7 = 7U * kN / 8U;
+    const crd::u32 idx_chunk7 = 7U * k_n / 8U;
     const crd::u32 equal_key  = 0x12345678U;
     in[idx_chunk0] = equal_key;
     in[idx_chunk7] = equal_key;
     const auto in_span = crd::containers::ConstSpan<crd::u32>(in.data(), in.size());
 
     const auto out = sort_morton_pairs_parallel<crd::u32>(in_span, &alloc, /*num_jobs*/ 8U);
-    REQUIRE(out.size() == kN);
+    REQUIRE(out.size() == k_n);
 
     // Find both equal-key entries in the output; verify chunk-7 lands AFTER chunk-0.
     crd::u32 pos_chunk0 = UINT32_MAX;
     crd::u32 pos_chunk7 = UINT32_MAX;
-    for (crd::u32 i = 0; i < kN; ++i)
+    for (crd::u32 i = 0; i < k_n; ++i)
     {
         if (out[i].code == equal_key)
         {
@@ -213,9 +213,9 @@ TEST_CASE("v9a-b1-parallel byte-identical across num_jobs = {1, 2, 4, 8, 16}",
 {
     crd::memory::TlsfAllocator alloc(64U * 1024U * 1024U);
 
-    constexpr crd::u32 kN = 200000U;
+    constexpr crd::u32 k_n = 200000U;
     crd::containers::Array<crd::u32> in(&alloc);
-    fill_random_codes<crd::u32>(in, kN, 0xDEADBEEFULL);
+    fill_random_codes<crd::u32>(in, k_n, 0xDEADBEEFULL);
     const auto in_span = crd::containers::ConstSpan<crd::u32>(in.data(), in.size());
 
     const auto baseline = sort_morton_pairs<crd::u32>(in_span, &alloc);
@@ -236,9 +236,9 @@ TEST_CASE("v9a-b1-parallel N=10000 u32: byte-identical to serial reference",
 {
     crd::memory::TlsfAllocator alloc(8U * 1024U * 1024U);
 
-    constexpr crd::u32 kN = 10000U;
+    constexpr crd::u32 k_n = 10000U;
     crd::containers::Array<crd::u32> in(&alloc);
-    fill_random_codes<crd::u32>(in, kN, 0xC0FFEEABULL);
+    fill_random_codes<crd::u32>(in, k_n, 0xC0FFEEABULL);
     const auto in_span = crd::containers::ConstSpan<crd::u32>(in.data(), in.size());
 
     const auto serial   = sort_morton_pairs<crd::u32>(in_span, &alloc);
@@ -255,9 +255,9 @@ TEST_CASE("v9a-b1-parallel N=10000 u64: byte-identical to serial reference",
 {
     crd::memory::TlsfAllocator alloc(16U * 1024U * 1024U);
 
-    constexpr crd::u32 kN = 100000U;
+    constexpr crd::u32 k_n = 100000U;
     crd::containers::Array<std::uint64_t> in(&alloc);
-    fill_random_codes<std::uint64_t>(in, kN, 0xBADC0FFEEULL);
+    fill_random_codes<std::uint64_t>(in, k_n, 0xBADC0FFEEULL);
     const auto in_span = crd::containers::ConstSpan<std::uint64_t>(in.data(), in.size());
 
     const auto serial   = sort_morton_pairs<std::uint64_t>(in_span, &alloc);
@@ -274,9 +274,9 @@ TEST_CASE("v9a-b1-parallel N=1M u32: byte-identical to serial reference",
 {
     crd::memory::TlsfAllocator alloc(64U * 1024U * 1024U);
 
-    constexpr crd::u32 kN = 1U << 20;
+    constexpr crd::u32 k_n = 1U << 20;
     crd::containers::Array<crd::u32> in(&alloc);
-    fill_random_codes<crd::u32>(in, kN, 0x87654321ULL);
+    fill_random_codes<crd::u32>(in, k_n, 0x87654321ULL);
     const auto in_span = crd::containers::ConstSpan<crd::u32>(in.data(), in.size());
 
     const auto serial   = sort_morton_pairs<crd::u32>(in_span, &alloc);
@@ -294,9 +294,9 @@ TEST_CASE("v9a-b1-parallel below threshold falls back to serial path",
     crd::memory::TlsfAllocator alloc(2U * 1024U * 1024U);
 
     // 1000 < kDefaultParallelSortThreshold (= 65536). Exercises fallback.
-    constexpr crd::u32 kN = 1000U;
+    constexpr crd::u32 k_n = 1000U;
     crd::containers::Array<crd::u32> in(&alloc);
-    fill_random_codes<crd::u32>(in, kN, 0x11223344ULL);
+    fill_random_codes<crd::u32>(in, k_n, 0x11223344ULL);
     const auto in_span = crd::containers::ConstSpan<crd::u32>(in.data(), in.size());
 
     const auto serial   = sort_morton_pairs<crd::u32>(in_span, &alloc);

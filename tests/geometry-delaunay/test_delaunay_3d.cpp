@@ -307,12 +307,12 @@ TEST_CASE("delaunay_3d: large-coord f32 stability (1e6 scale)",
 {
     AllocFixture f{};
     crd::containers::Array<Vec3<f32>> pts(&f.alloc);
-    constexpr f32 kS = 1.0e6F;
+    constexpr f32 k_s = 1.0e6F;
     pts.push_back(Vec3<f32>{0, 0, 0});
-    pts.push_back(Vec3<f32>{kS, 0, 0});
-    pts.push_back(Vec3<f32>{0, kS, 0});
-    pts.push_back(Vec3<f32>{0, 0, kS});
-    pts.push_back(Vec3<f32>{0.5F * kS, 0.5F * kS, 0.5F * kS});
+    pts.push_back(Vec3<f32>{k_s, 0, 0});
+    pts.push_back(Vec3<f32>{0, k_s, 0});
+    pts.push_back(Vec3<f32>{0, 0, k_s});
+    pts.push_back(Vec3<f32>{0.5F * k_s, 0.5F * k_s, 0.5F * k_s});
     auto r = delaunay_3d<f32>(
         crd::containers::ConstSpan<Vec3<f32>>{pts.data(), pts.size()}, &f.alloc);
     CHECK(r.ok());

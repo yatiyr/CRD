@@ -582,10 +582,10 @@ TEST_CASE("UniformGrid concurrent queries via crd-jobs fiber pool",
         std::sort(corpus->ref[q].data(), corpus->ref[q].data() + corpus->ref[q].size());
     }
 
-    constexpr u32 kTotalTasks = GridConcurrencyCorpus::kQueries * GridConcurrencyCorpus::kItersPerQuery;
+    constexpr u32 total_tasks = GridConcurrencyCorpus::kQueries * GridConcurrencyCorpus::kItersPerQuery;
     auto* corpus_ptr = corpus.get();
     crd::jobs::Counter* counter = crd::jobs::parallel_for(
-        kTotalTasks, /*num_jobs=*/16U,
+        total_tasks, /*num_jobs=*/16U,
         [corpus_ptr](crd::u32 begin, crd::u32 end) noexcept {
             for (crd::u32 task_idx = begin; task_idx < end; ++task_idx)
             {

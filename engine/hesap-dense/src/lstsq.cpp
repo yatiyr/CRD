@@ -241,12 +241,12 @@ void solve_via_cod(crd::memory::IAllocator* alloc, const Matrix<T>& a, const Mat
 template <typename T>
 void invert_upper_tri_inplace(T* t, crd::usize r, crd::usize ld, crd::memory::IAllocator* alloc)
 {
-    constexpr crd::usize kTriBase = 48;
+    constexpr crd::usize tri_base = 48;
     if (r == 0)
     {
         return;
     }
-    if (r <= kTriBase)
+    if (r <= tri_base)
     {
         // Scalar upper-triangular inverse (LAPACK dtrti2 'U'): process columns
         // left to right; when at column j the leading j×j block is already
@@ -276,7 +276,7 @@ void invert_upper_tri_inplace(T* t, crd::usize r, crd::usize ld, crd::memory::IA
     }
     const crd::usize n1 = r / 2;
     const crd::usize n2 = r - n1;
-    constexpr Layout kL = Layout::RowMajor;
+    constexpr Layout l = Layout::RowMajor;
     T* a = t;                  // n1×n1 at (0,0)
     T* b = t + n1;             // n1×n2 at (0,n1)
     T* c = t + n1 * ld + n1;   // n2×n2 at (n1,n1)
@@ -285,14 +285,14 @@ void invert_upper_tri_inplace(T* t, crd::usize r, crd::usize ld, crd::memory::IA
     // B := -(A · B) · C.
     crd::containers::Array<T> tmp(alloc);
     tmp.resize(n1 * n2);
-    MatrixView<const T, kL> av{a, n1, n1, ld};
-    MatrixView<const T, kL> bv{b, n1, n2, ld};
-    MatrixView<const T, kL> cv{c, n2, n2, ld};
-    MatrixView<T, kL> tv{tmp.data(), n1, n2, n2};
-    gemm<T, kL>(T{1}, av, bv, T{0}, tv, Trans::None, Trans::None, alloc);  // tmp = A·B
-    MatrixView<const T, kL> tv_c{tmp.data(), n1, n2, n2};
-    MatrixView<T, kL> bout{b, n1, n2, ld};
-    gemm<T, kL>(T{-1}, tv_c, cv, T{0}, bout, Trans::None, Trans::None, alloc);  // B = -tmp·C
+    MatrixView<const T, l> av{a, n1, n1, ld};
+    MatrixView<const T, l> bv{b, n1, n2, ld};
+    MatrixView<const T, l> cv{c, n2, n2, ld};
+    MatrixView<T, l> tv{tmp.data(), n1, n2, n2};
+    gemm<T, l>(T{1}, av, bv, T{0}, tv, Trans::None, Trans::None, alloc);  // tmp = A·B
+    MatrixView<const T, l> tv_c{tmp.data(), n1, n2, n2};
+    MatrixView<T, l> bout{b, n1, n2, ld};
+    gemm<T, l>(T{-1}, tv_c, cv, T{0}, bout, Trans::None, Trans::None, alloc);  // B = -tmp·C
 }
 
 // Pseudoinverse via complete orthogonal decomposition (real, fast — the path

@@ -102,18 +102,18 @@ static crd::containers::Array<crd::u8> make_txtr_artifact(
     CrdrWriter writer(&s_alloc, id, kFourCC_TXTR);
 
     // HEAD chunk (16 bytes)
-    constexpr crd::u32 kBaseW = 4U;
-    constexpr crd::u32 kBaseH = 4U;
+    constexpr crd::u32 base_w = 4U;
+    constexpr crd::u32 base_h = 4U;
     crd::u8 head[16]          = {};
-    std::memcpy(head + 0, &kBaseW,     sizeof(crd::u32));
-    std::memcpy(head + 4, &kBaseH,     sizeof(crd::u32));
+    std::memcpy(head + 0, &base_w,     sizeof(crd::u32));
+    std::memcpy(head + 4, &base_h,     sizeof(crd::u32));
     std::memcpy(head + 8, &mip_count,  sizeof(crd::u32));
     head[12] = 0U; // RGBA8Unorm
     writer.add_chunk(kFourCC_HEAD, crd::containers::ConstSpan<crd::u8>(head, 16U));
 
     // MIP chunks
-    crd::u32 mip_w = kBaseW;
-    crd::u32 mip_h = kBaseH;
+    crd::u32 mip_w = base_w;
+    crd::u32 mip_h = base_h;
     for (crd::u32 lvl = 0U; lvl < mip_count; ++lvl)
     {
         const crd::usize mip_bytes = static_cast<crd::usize>(mip_w) *
@@ -141,14 +141,14 @@ static crd::containers::Array<crd::u8> make_txtr_artifact(
 
 TEST_CASE("TextureResource loads from CRDR artifact", "[resources][texture][loader]")
 {
-    constexpr crd::u8 kRed[4] = { 255U, 0U, 0U, 255U };
+    constexpr crd::u8 k_red[4] = { 255U, 0U, 0U, 255U };
 
     const ResourceId txtr_id = ResourceId::mint_random();
 
     crd::containers::Array<TxtrArt> arts(&s_alloc);
     arts.push_back(TxtrArt{
         txtr_id, kFourCC_TXTR,
-        make_txtr_artifact(txtr_id, 3U, kRed),
+        make_txtr_artifact(txtr_id, 3U, k_red),
         "test.txtr"
     });
 
@@ -177,14 +177,14 @@ TEST_CASE("TextureResource loads from CRDR artifact", "[resources][texture][load
 
 TEST_CASE("TextureResource mip chain has correct dimensions", "[resources][texture][mip_dims]")
 {
-    constexpr crd::u8 kGreen[4] = { 0U, 255U, 0U, 255U };
+    constexpr crd::u8 green[4] = { 0U, 255U, 0U, 255U };
 
     const ResourceId txtr_id = ResourceId::mint_random();
 
     crd::containers::Array<TxtrArt> arts(&s_alloc);
     arts.push_back(TxtrArt{
         txtr_id, kFourCC_TXTR,
-        make_txtr_artifact(txtr_id, 3U, kGreen),
+        make_txtr_artifact(txtr_id, 3U, green),
         "dims.txtr"
     });
 
@@ -246,25 +246,25 @@ TEST_CASE("TextureResource cooked from TGA round-trip", "[resources][texture][co
 {
     // Build a minimal 4×4 32-bit TGA (BGRA on disk → RGBA in output).
     // Pixels: BGRA = {0,0,255,255} → stb_image output RGBA = {255,0,0,255} (red).
-    constexpr crd::usize kTgaHeaderBytes  = 18U;
-    constexpr crd::u32   kImgDim          = 4U;
-    constexpr crd::usize kPixelBytes      = kImgDim * kImgDim * 4U;
-    constexpr crd::usize kTgaTotalBytes   = kTgaHeaderBytes + kPixelBytes;
+    constexpr crd::usize tga_header_bytes  = 18U;
+    constexpr crd::u32   img_dim          = 4U;
+    constexpr crd::usize pixel_bytes      = img_dim * img_dim * 4U;
+    constexpr crd::usize tga_total_bytes   = tga_header_bytes + pixel_bytes;
 
-    crd::u8 tga_buf[kTgaTotalBytes] = {};
+    crd::u8 tga_buf[tga_total_bytes] = {};
     // Header
     tga_buf[2]  = 2U;   // image type: uncompressed true-color
-    tga_buf[12] = static_cast<crd::u8>(kImgDim); // width lo
-    tga_buf[14] = static_cast<crd::u8>(kImgDim); // height lo
+    tga_buf[12] = static_cast<crd::u8>(img_dim); // width lo
+    tga_buf[14] = static_cast<crd::u8>(img_dim); // height lo
     tga_buf[16] = 32U;  // bits per pixel
     tga_buf[17] = 0x08U; // image descriptor: 8 alpha bits, bottom-up origin
     // Pixel data: BGRA = {0,0,255,255} for each pixel
-    for (crd::usize i = 0U; i < kPixelBytes; i += 4U)
+    for (crd::usize i = 0U; i < pixel_bytes; i += 4U)
     {
-        tga_buf[kTgaHeaderBytes + i + 0U] = 0U;   // B
-        tga_buf[kTgaHeaderBytes + i + 1U] = 0U;   // G
-        tga_buf[kTgaHeaderBytes + i + 2U] = 255U; // R
-        tga_buf[kTgaHeaderBytes + i + 3U] = 255U; // A
+        tga_buf[tga_header_bytes + i + 0U] = 0U;   // B
+        tga_buf[tga_header_bytes + i + 1U] = 0U;   // G
+        tga_buf[tga_header_bytes + i + 2U] = 255U; // R
+        tga_buf[tga_header_bytes + i + 3U] = 255U; // A
     }
 
     // Write TGA to a temp file.
@@ -276,7 +276,7 @@ TEST_CASE("TextureResource cooked from TGA round-trip", "[resources][texture][co
     const fs::Path tga_path(crd::containers::StringView(tga_name.data(), tga_name.size()));
     REQUIRE(fs::write_file_binary(
         tga_path,
-        crd::containers::ConstSpan<crd::u8>(tga_buf, kTgaTotalBytes)));
+        crd::containers::ConstSpan<crd::u8>(tga_buf, tga_total_bytes)));
 
     // Register builtin cook handlers (idempotent — safe to call multiple times).
     crd::cooker::register_builtin_handlers();
@@ -321,8 +321,8 @@ TEST_CASE("TextureResource cooked from TGA round-trip", "[resources][texture][co
 
     // First pixel R channel should be 255 (red).
     CHECK(tex->mips[0].pixels[0] == 255U);
-    CHECK(tex->mips[0].width     == kImgDim);
-    CHECK(tex->mips[0].height    == kImgDim);
+    CHECK(tex->mips[0].width     == img_dim);
+    CHECK(tex->mips[0].height    == img_dim);
 
     (void)fs::remove_file(pack_path);
 }

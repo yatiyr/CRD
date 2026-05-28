@@ -86,17 +86,17 @@ TEST_CASE("herk: A * A^H is positive-definite Hermitian", "[hesap][blas3][comple
 TEST_CASE("trmm + trsm complex Lower round-trip", "[hesap][blas3][complex][trmm][trsm]")
 {
     crd::memory::TlsfAllocator alloc(64 * 1024);
-    constexpr crd::usize kN = 4;
-    Triangular<Complex64, TriangularSide::Lower, TriangularDiag::Explicit> l(&alloc, kN);
-    for (crd::usize i = 0; i < kN; ++i)
+    constexpr crd::usize n = 4;
+    Triangular<Complex64, TriangularSide::Lower, TriangularDiag::Explicit> l(&alloc, n);
+    for (crd::usize i = 0; i < n; ++i)
     {
         for (crd::usize j = 0; j <= i; ++j)
         {
             l.at(i, j) = (i == j) ? Complex64{3.0, 0.0} : Complex64{0.5, 0.1};
         }
     }
-    Matrix<Complex64> b_initial(&alloc, kN, 2);
-    for (crd::usize i = 0; i < kN; ++i)
+    Matrix<Complex64> b_initial(&alloc, n, 2);
+    for (crd::usize i = 0; i < n; ++i)
     {
         b_initial(i, 0) = Complex64{static_cast<crd::f64>(i + 1), -static_cast<crd::f64>(i)};
         b_initial(i, 1) = Complex64{static_cast<crd::f64>(i), static_cast<crd::f64>(i + 1)};
@@ -104,7 +104,7 @@ TEST_CASE("trmm + trsm complex Lower round-trip", "[hesap][blas3][complex][trmm]
     auto b = b_initial.clone();
     trmm<Complex64, TriangularSide::Lower, TriangularDiag::Explicit>(Complex64{1.0, 0.0}, l, b.view(), Trans::None);
     trsm<Complex64, TriangularSide::Lower, TriangularDiag::Explicit>(Complex64{1.0, 0.0}, l, b.view(), Trans::None);
-    for (crd::usize i = 0; i < kN; ++i)
+    for (crd::usize i = 0; i < n; ++i)
     {
         for (crd::usize j = 0; j < 2; ++j)
         {

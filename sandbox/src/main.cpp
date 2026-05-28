@@ -97,9 +97,9 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    constexpr crd::u32 kFramesInFlight = 2;
+    constexpr crd::u32 frames_in_flight = 2;
     crd::containers::Array<std::unique_ptr<crd::rhi::CommandBuffer>> cmds;
-    for (crd::u32 i = 0; i < kFramesInFlight; ++i)
+    for (crd::u32 i = 0; i < frames_in_flight; ++i)
     {
         cmds.push_back(device->create_command_buffer());
     }
@@ -175,7 +175,7 @@ int main(int argc, char** argv)
             continue; // swapchain out-of-date or minimized — on_event will resize before next acquire
         }
 
-        auto& cmd = *cmds[frame % kFramesInFlight];
+        auto& cmd = *cmds[frame % frames_in_flight];
         cmd.begin();
 
         // 3D scene: ForwardRenderPath → blit to swapchain (leaves it in ColorWrite).

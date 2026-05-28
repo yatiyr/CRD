@@ -104,16 +104,16 @@ static fs::Path write_mesh_pack(crd::containers::Array<MeshArt>& arts)
 static crd::containers::Array<crd::u8> make_mesh_artifact(
     ResourceId id, crd::u32 prim_count)
 {
-    constexpr crd::u32 kVc = 3U; // vertices per prim
-    constexpr crd::u32 kIc = 3U; // indices per prim
-    constexpr crd::u32 kStride = 48U;
+    constexpr crd::u32 k_vc = 3U; // vertices per prim
+    constexpr crd::u32 k_ic = 3U; // indices per prim
+    constexpr crd::u32 stride = 48U;
 
     // Interleaved vertex buffer for ONE primitive (3 × 48 = 144 bytes).
     // All three vertices share the same values for simplicity.
-    crd::u8 vert_one[kVc * kStride] = {};
-    for (crd::u32 vi = 0U; vi < kVc; ++vi)
+    crd::u8 vert_one[k_vc * stride] = {};
+    for (crd::u32 vi = 0U; vi < k_vc; ++vi)
     {
-        crd::u8* dst = vert_one + vi * kStride;
+        crd::u8* dst = vert_one + vi * stride;
         // position
         const float pos[3] = { static_cast<float>(vi + 1U), 0.0F, 0.0F };
         std::memcpy(dst +  0, pos, 12U);
@@ -127,7 +127,7 @@ static crd::containers::Array<crd::u8> make_mesh_artifact(
     }
 
     // Index buffer for ONE primitive (3 × u32 = 12 bytes).
-    const crd::u32 idx_one[kIc] = { 0U, 1U, 2U };
+    const crd::u32 idx_one[k_ic] = { 0U, 1U, 2U };
 
     // Build combined VERT and INDX buffers across all primitives.
     crd::containers::Array<crd::u8> vert_buf(&s_mesh_alloc);
@@ -161,10 +161,10 @@ static crd::containers::Array<crd::u8> make_mesh_artifact(
     for (crd::u32 pi = 0U; pi < prim_count; ++pi)
     {
         crd::u8* entry = prim_buf.data() + 4U + pi * 32U;
-        const crd::u32 vc = kVc;
-        const crd::u32 ic = kIc;
-        const crd::u32 vbo = pi * kVc * kStride;
-        const crd::u32 ibo = pi * kIc * sizeof(crd::u32);
+        const crd::u32 vc = k_vc;
+        const crd::u32 ic = k_ic;
+        const crd::u32 vbo = pi * k_vc * stride;
+        const crd::u32 ibo = pi * k_ic * sizeof(crd::u32);
         std::memcpy(entry +  0, &vc,  4U);
         std::memcpy(entry +  4, &ic,  4U);
         std::memcpy(entry +  8, &vbo, 4U);
@@ -253,11 +253,11 @@ TEST_CASE("MeshResource fails when VERT chunk is absent", "[resources][mesh][mis
     const ResourceId mesh_id = ResourceId::mint_random();
 
     // Build a MESH artifact with only INDX + PRIM (no VERT).
-    constexpr crd::u32 kIc = 3U;
-    crd::u32 idx_data[kIc] = { 0U, 1U, 2U };
+    constexpr crd::u32 k_ic = 3U;
+    crd::u32 idx_data[k_ic] = { 0U, 1U, 2U };
 
     crd::containers::Array<crd::u8> indx_buf(&s_mesh_alloc);
-    indx_buf.resize(kIc * sizeof(crd::u32));
+    indx_buf.resize(k_ic * sizeof(crd::u32));
     std::memcpy(indx_buf.data(), idx_data, sizeof(idx_data));
 
     crd::containers::Array<crd::u8> prim_buf(&s_mesh_alloc);
@@ -355,18 +355,18 @@ static crd::containers::Array<crd::u8> make_triangle_glb()
     crd::containers::Array<crd::u8> glb(&s_mesh_alloc);
 
     // GLB header (12 bytes).
-    constexpr crd::u32 kGlbMagic   = 0x46546C67U; // 'glTF' LE
-    constexpr crd::u32 kGlbVersion = 2U;
+    constexpr crd::u32 glb_magic   = 0x46546C67U; // 'glTF' LE
+    constexpr crd::u32 glb_version = 2U;
     glb.resize(12U);
-    std::memcpy(glb.data() + 0, &kGlbMagic,   4U);
-    std::memcpy(glb.data() + 4, &kGlbVersion, 4U);
+    std::memcpy(glb.data() + 0, &glb_magic,   4U);
+    std::memcpy(glb.data() + 4, &glb_version, 4U);
     std::memcpy(glb.data() + 8, &total_len,   4U);
 
     // JSON chunk header.
-    constexpr crd::u32 kChunkJson = 0x4E4F534AU;
+    constexpr crd::u32 chunk_json = 0x4E4F534AU;
     glb.resize(glb.size() + 8U);
     std::memcpy(glb.data() + 12, &json_len_pad, 4U);
-    std::memcpy(glb.data() + 16, &kChunkJson,   4U);
+    std::memcpy(glb.data() + 16, &chunk_json,   4U);
 
     // JSON payload (space-padded to json_len_pad).
     for (crd::u32 i = 0U; i < json_len_raw; ++i)
@@ -379,11 +379,11 @@ static crd::containers::Array<crd::u8> make_triangle_glb()
     }
 
     // BIN chunk header.
-    constexpr crd::u32 kChunkBin = 0x004E4942U;
+    constexpr crd::u32 chunk_bin = 0x004E4942U;
     const crd::usize bin_hdr_off = glb.size();
     glb.resize(glb.size() + 8U);
     std::memcpy(glb.data() + bin_hdr_off,     &bin_len,   4U);
-    std::memcpy(glb.data() + bin_hdr_off + 4, &kChunkBin, 4U);
+    std::memcpy(glb.data() + bin_hdr_off + 4, &chunk_bin, 4U);
 
     // BIN payload.
     for (crd::u8 b : bin_buf)

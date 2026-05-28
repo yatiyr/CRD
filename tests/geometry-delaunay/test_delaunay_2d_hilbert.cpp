@@ -261,12 +261,12 @@ TEST_CASE("delaunay_2d_hilbert: large-coord f32 stability (1e6 scale)",
 {
     AllocFixture f{};
     crd::containers::Array<Vec2<f32>> pts(&f.alloc);
-    constexpr f32 kS = 1.0e6F;
+    constexpr f32 k_s = 1.0e6F;
     pts.push_back(Vec2<f32>{0, 0});
-    pts.push_back(Vec2<f32>{kS, 0});
-    pts.push_back(Vec2<f32>{kS, kS});
-    pts.push_back(Vec2<f32>{0, kS});
-    pts.push_back(Vec2<f32>{0.5F * kS, 0.5F * kS});
+    pts.push_back(Vec2<f32>{k_s, 0});
+    pts.push_back(Vec2<f32>{k_s, k_s});
+    pts.push_back(Vec2<f32>{0, k_s});
+    pts.push_back(Vec2<f32>{0.5F * k_s, 0.5F * k_s});
     auto r = delaunay_2d_hilbert<f32>(
         crd::containers::ConstSpan<Vec2<f32>>{pts.data(), pts.size()}, &f.alloc);
     CHECK(r.ok());

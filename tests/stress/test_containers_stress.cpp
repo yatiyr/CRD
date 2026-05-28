@@ -68,28 +68,28 @@ TEST_CASE("containers stress -- disjoint parallel writes to a shared Array", "[s
     {
         crd::memory::GrowableTlsfAllocator alloc{256ULL << 20, nullptr, "stress-disjoint"};
 
-        constexpr u32 kPerWorker = 257U; // odd — surfaces false-sharing perf bugs (not correctness)
+        constexpr u32 per_worker = 257U; // odd — surfaces false-sharing perf bugs (not correctness)
 
         crd::stress::Config cfg = crd::stress::bounded(mode);
         const u32 workers = bounded_workers(mode);
         cfg.num_workers = workers;
 
-        crd::containers::Array<u64> shared(static_cast<usize>(workers) * kPerWorker, &alloc);
-        shared.resize(static_cast<usize>(workers) * kPerWorker, 0ULL);
+        crd::containers::Array<u64> shared(static_cast<usize>(workers) * per_worker, &alloc);
+        shared.resize(static_cast<usize>(workers) * per_worker, 0ULL);
 
         crd::stress::FailSink sink;
 
         const auto work = [&shared](u32 w, u64 iters, crd::stress::Rng& rng)
         {
-            const usize base = static_cast<usize>(w) * kPerWorker;
+            const usize base = static_cast<usize>(w) * per_worker;
             for (u64 it = 0; it < iters; ++it)
             {
                 // Touch the slice in a scrambled order so an out-of-range worker
                 // would collide on varied iterations, not always slot 0.
-                const u32 j = rng.next_u32(kPerWorker);
+                const u32 j = rng.next_u32(per_worker);
                 shared[base + j] = slice_value(w, j);
             }
-            for (u32 j = 0; j < kPerWorker; ++j) // leave the slice in its canonical state
+            for (u32 j = 0; j < per_worker; ++j) // leave the slice in its canonical state
             {
                 shared[base + j] = slice_value(w, j);
             }
@@ -99,9 +99,9 @@ TEST_CASE("containers stress -- disjoint parallel writes to a shared Array", "[s
         {
             for (u32 w = 0; w < workers; ++w)
             {
-                for (u32 j = 0; j < kPerWorker; ++j)
+                for (u32 j = 0; j < per_worker; ++j)
                 {
-                    if (shared[static_cast<usize>(w) * kPerWorker + j] != slice_value(w, j))
+                    if (shared[static_cast<usize>(w) * per_worker + j] != slice_value(w, j))
                     {
                         sink.fail("disjoint slot corrupted", j, w);
                         return;
@@ -130,9 +130,9 @@ TEST_CASE("containers stress -- many concurrent readers of an immutable Array", 
     {
         crd::memory::GrowableTlsfAllocator alloc{256ULL << 20, nullptr, "stress-readers"};
 
-        constexpr usize kN = 4096U;
-        crd::containers::Array<u64> source(kN, &alloc);
-        for (usize i = 0; i < kN; ++i)
+        constexpr usize k_n = 4096U;
+        crd::containers::Array<u64> source(k_n, &alloc);
+        for (usize i = 0; i < k_n; ++i)
         {
             source.push_back(mix64(i ^ 0x5EEDULL));
         }
@@ -151,14 +151,14 @@ TEST_CASE("containers stress -- many concurrent readers of an immutable Array", 
             u64 acc = 0;
             for (u64 it = 0; it < iters; ++it)
             {
-                acc ^= source[rng.next_u32(static_cast<u32>(kN))];
+                acc ^= source[rng.next_u32(static_cast<u32>(k_n))];
             }
             results[w] = acc; // disjoint write into the worker's own result slot
         };
 
         const auto oracle = [&source, &sink](u32 /*round*/)
         {
-            for (usize i = 0; i < kN; ++i) // reads must not have mutated the source
+            for (usize i = 0; i < k_n; ++i) // reads must not have mutated the source
             {
                 if (source[i] != mix64(i ^ 0x5EEDULL))
                 {
@@ -197,15 +197,15 @@ TEST_CASE("containers stress -- per-worker isolated TlsfAllocator + HashMap chur
             crd::memory::TlsfAllocator heap(usize{1} << 20, &parent, "stress-worker-heap");
             crd::containers::HashMap<u64, u64> map(64U, &heap);
 
-            constexpr u32 kShadowN = 64U;
-            u64 keys[kShadowN] = {};
-            u64 vals[kShadowN] = {};
-            bool live[kShadowN] = {};
+            constexpr u32 shadow_n = 64U;
+            u64 keys[shadow_n] = {};
+            u64 vals[shadow_n] = {};
+            bool live[shadow_n] = {};
             u32 count = 0;
 
             for (u64 it = 0; it < iters; ++it)
             {
-                const u32 slot = rng.next_u32(kShadowN);
+                const u32 slot = rng.next_u32(shadow_n);
                 const u32 op = rng.next_u32(4U);
 
                 if (op < 2U || !live[slot]) // insert/overwrite
@@ -246,7 +246,7 @@ TEST_CASE("containers stress -- per-worker isolated TlsfAllocator + HashMap chur
                         sink.fail("map size diverged from shadow count", it, w);
                         return;
                     }
-                    for (u32 s = 0; s < kShadowN; ++s)
+                    for (u32 s = 0; s < shadow_n; ++s)
                     {
                         if (live[s])
                         {
@@ -260,7 +260,7 @@ TEST_CASE("containers stress -- per-worker isolated TlsfAllocator + HashMap chur
                     }
                 }
             }
-            for (u32 s = 0; s < kShadowN; ++s) // drain — exercises erase-to-empty + free path
+            for (u32 s = 0; s < shadow_n; ++s) // drain — exercises erase-to-empty + free path
             {
                 if (live[s])
                 {

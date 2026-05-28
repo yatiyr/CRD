@@ -106,9 +106,9 @@ TEST_CASE("DynamicBvh: query overlap matches brute force over fat AABBs", "[geom
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 22, nullptr, "bvh-test");
     Rng rng(0xD7A1C);
     DynamicBvh tree(&alloc, DynamicBvhConfig{0.25F});
-    constexpr usize kN = 600;
+    constexpr usize n = 600;
     std::vector<DynamicBvhNodeId> ids;
-    for (usize i = 0; i < kN; ++i)
+    for (usize i = 0; i < n; ++i)
     {
         ids.push_back(tree.insert(random_box(rng, 80.0F, 3.0F), static_cast<u32>(i)));
     }
@@ -118,7 +118,7 @@ TEST_CASE("DynamicBvh: query overlap matches brute force over fat AABBs", "[geom
     {
         const AABB3<f32> box = random_box(rng, 100.0F, 10.0F);
         std::vector<u32> refset;
-        for (usize i = 0; i < kN; ++i)
+        for (usize i = 0; i < n; ++i)
         {
             if (intersects(tree.fat_aabb(ids[i]), box))
             {
@@ -141,9 +141,9 @@ TEST_CASE("DynamicBvh: raycast visits exactly the leaves whose fat AABB the ray 
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 22, nullptr, "bvh-test");
     Rng rng(0x7A4CE);
     DynamicBvh tree(&alloc);
-    constexpr usize kN = 400;
+    constexpr usize n = 400;
     std::vector<DynamicBvhNodeId> ids;
-    for (usize i = 0; i < kN; ++i)
+    for (usize i = 0; i < n; ++i)
     {
         ids.push_back(tree.insert(random_box(rng, 60.0F, 3.0F), static_cast<u32>(i)));
     }
@@ -152,7 +152,7 @@ TEST_CASE("DynamicBvh: raycast visits exactly the leaves whose fat AABB the ray 
         const Ray3<f32> ray{Vec3<f32>(rng.range(-120, 120), rng.range(-120, 120), rng.range(-120, 120)),
                             normalized(Vec3<f32>(rng.range(-1, 1), rng.range(-1, 1), rng.range(-1, 1)))};
         std::vector<u32> refset;
-        for (usize i = 0; i < kN; ++i)
+        for (usize i = 0; i < n; ++i)
         {
             f32 t = 0.0F;
             if (intersect_ray_aabb_robust(ray, tree.fat_aabb(ids[i]), 0.0F, std::numeric_limits<f32>::infinity(), t))
@@ -279,15 +279,15 @@ TEST_CASE("DynamicBvh: stays balanced -- depth and SAH cost bounded", "[geometry
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 22, nullptr, "bvh-test");
     Rng rng(0xBA1A4CE);
     DynamicBvh tree(&alloc);
-    constexpr usize kN = 2000;
-    for (usize i = 0; i < kN; ++i)
+    constexpr usize n = 2000;
+    for (usize i = 0; i < n; ++i)
     {
         (void)tree.insert(random_box(rng, 100.0F, 2.0F), static_cast<u32>(i));
     }
     tree.validate();
     // Height-balanced tree rotations keep the depth near log2(N); allow generous slack.
     usize log2n = 0;
-    while ((usize{1} << (log2n + 1)) <= kN)
+    while ((usize{1} << (log2n + 1)) <= n)
     {
         ++log2n;
     }

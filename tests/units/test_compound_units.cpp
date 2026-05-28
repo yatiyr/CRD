@@ -5,7 +5,7 @@
 //   (2) UnitDiv produces the correct factor (std::ratio_divide on operands).
 //   (3) UnitMul produces the correct dimension and factor.
 //   (4) UnitPow scales correctly.
-//   (5) Named compound units match the kExpected algebraic forms (MilePerHour
+//   (5) Named compound units match the expected algebraic forms (MilePerHour
 //       == UnitDiv<Mile, Hour>, etc.).
 //   (6) Auto-derive equivalence: compound matches what a hand-written
 //       LinearUnit<Velocity, std::ratio<...>> would produce.
@@ -49,8 +49,8 @@ TEST_CASE("UnitDiv: KilometerPerHour has correct factor",
 {
     // 1 km/h = 1000 / 3600 = 5/18 m/s
     STATIC_REQUIRE(dim_equal_v<KilometerPerHour::dimension, dim::Velocity>);
-    constexpr f64 kExpected = 1000.0 / 3600.0;
-    STATIC_REQUIRE(KilometerPerHour::factor == kExpected);
+    constexpr f64 expected = 1000.0 / 3600.0;
+    STATIC_REQUIRE(KilometerPerHour::factor == expected);
 }
 
 TEST_CASE("UnitDiv: MilePerHour has correct factor",
@@ -77,8 +77,8 @@ TEST_CASE("UnitDiv: Knot has correct factor (= 1852/3600 m/s EXACT)",
           "[v0a-2][compound]")
 {
     STATIC_REQUIRE(dim_equal_v<Knot::dimension, dim::Velocity>);
-    constexpr f64 kExpected = 1852.0 / 3600.0;
-    STATIC_REQUIRE(Knot::factor == kExpected);
+    constexpr f64 expected = 1852.0 / 3600.0;
+    STATIC_REQUIRE(Knot::factor == expected);
 }
 
 // ---------------------------------------------------------------------------
@@ -139,8 +139,8 @@ TEST_CASE("UnitPow: UnitPow<Foot, 3> = ft^3",
     STATIC_REQUIRE(dim_equal_v<V::dimension, dim::Volume>);
     // 1 ft^3 = 0.3048^3 m^3 = 0.028316846592 m^3 EXACT at the rational layer.
     // Chained f64 multiplications may drift 1-2 ULP from the std::ratio result.
-    constexpr f64 kExpected = 0.3048 * 0.3048 * 0.3048;
-    STATIC_REQUIRE(near_eq(V::factor, kExpected, 1e-15));
+    constexpr f64 expected = 0.3048 * 0.3048 * 0.3048;
+    STATIC_REQUIRE(near_eq(V::factor, expected, 1e-15));
 }
 
 TEST_CASE("UnitPow: UnitPow<U, 0> = Dimensionless with factor 1",
@@ -190,9 +190,9 @@ TEST_CASE("UnitDiv: RPM = Revolution / Minute",
     STATIC_REQUIRE(dim_equal_v<RPM::dimension, dim::AngularVelocity>);
     // RPM factor = (2? rad) / (60 s) = 2?/60 rad/s ? 0.10472 rad/s.
     // Revolution uses an irrational factor (big-int rational approximation
-    // to 2?), so 1 ULP drift is kExpected on the f64 quotient.
-    constexpr f64 kExpected = Revolution::factor / 60.0;
-    STATIC_REQUIRE(near_eq(RPM::factor, kExpected, 1e-15));
+    // to 2?), so 1 ULP drift is expected on the f64 quotient.
+    constexpr f64 expected = Revolution::factor / 60.0;
+    STATIC_REQUIRE(near_eq(RPM::factor, expected, 1e-15));
 }
 
 // ---------------------------------------------------------------------------
@@ -221,8 +221,8 @@ TEST_CASE("Compound: MilePerHour to KilometerPerHour conversion factor (= 1.6093
     STATIC_REQUIRE(std::ratio_equal_v<R, std::ratio<25146, 15625>>);
 
     // f64 evaluation within 1 ULP.
-    constexpr f64 kRatioF64 = MilePerHour::factor / KilometerPerHour::factor;
-    STATIC_REQUIRE(near_eq(kRatioF64, 1.609344, 1e-14));
+    constexpr f64 ratio_f64 = MilePerHour::factor / KilometerPerHour::factor;
+    STATIC_REQUIRE(near_eq(ratio_f64, 1.609344, 1e-14));
 }
 
 TEST_CASE("Compound: FootPerSecond to MeterPerSecond conversion factor (= 0.3048 EXACT)",
@@ -242,8 +242,8 @@ TEST_CASE("Compound: Knot to KilometerPerHour conversion factor (= 1.852 EXACT)"
     using R = std::ratio_divide<Knot::factor_ratio, KilometerPerHour::factor_ratio>;
     STATIC_REQUIRE(std::ratio_equal_v<R, std::ratio<1852, 1000>>);
 
-    constexpr f64 kRatioF64 = Knot::factor / KilometerPerHour::factor;
-    STATIC_REQUIRE(near_eq(kRatioF64, 1.852, 1e-15));
+    constexpr f64 ratio_f64 = Knot::factor / KilometerPerHour::factor;
+    STATIC_REQUIRE(near_eq(ratio_f64, 1.852, 1e-15));
 }
 
 // ---------------------------------------------------------------------------
@@ -264,8 +264,8 @@ TEST_CASE("Compound: ad-hoc UnitDiv at the call site composes correctly",
     using R = MpMin::factor_ratio;
     STATIC_REQUIRE(std::ratio_equal_v<R, std::ratio<1609344, 60000>>);
 
-    constexpr f64 kExpected = 1609.344 / 60.0;
-    STATIC_REQUIRE(near_eq(MpMin::factor, kExpected, 1e-13));
+    constexpr f64 expected = 1609.344 / 60.0;
+    STATIC_REQUIRE(near_eq(MpMin::factor, expected, 1e-13));
 }
 
 TEST_CASE("Compound: deeply-nested compound (PoundForceFoot / Time = Watt-ish)",
@@ -277,6 +277,6 @@ TEST_CASE("Compound: deeply-nested compound (PoundForceFoot / Time = Watt-ish)",
 
     // 1 ft?lbf = 1.3558179483314... J
     // 1 ft?lbf/s = same number in W
-    constexpr f64 kExpected = PoundForce::factor * Foot::factor;
-    STATIC_REQUIRE(FootPoundForcePerSec::factor == kExpected);
+    constexpr f64 expected = PoundForce::factor * Foot::factor;
+    STATIC_REQUIRE(FootPoundForcePerSec::factor == expected);
 }

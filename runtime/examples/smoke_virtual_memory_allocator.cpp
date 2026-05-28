@@ -52,26 +52,26 @@ int main()
 
     // --- Perf: hot allocate (pre-warmed, no commit crossing) ---
     a.reset();
-    constexpr int kN = 200000;
+    constexpr int k_n = 200000;
     const auto     t0 = clock::now();
     crd::u8*       last = nullptr;
-    for (int i = 0; i < kN; ++i)
+    for (int i = 0; i < k_n; ++i)
     {
         last = static_cast<crd::u8*>(a.allocate(64, 16));
     }
     const auto t1 = clock::now();
     check(g_ok, last != nullptr, "allocate returned a pointer");
-    const double ns_alloc = std::chrono::duration<double, std::nano>(t1 - t0).count() / kN;
+    const double ns_alloc = std::chrono::duration<double, std::nano>(t1 - t0).count() / k_n;
 
     // --- Perf: mark / reset_to round-trip ---
     const auto t2 = clock::now();
-    for (int i = 0; i < kN; ++i)
+    for (int i = 0; i < k_n; ++i)
     {
         const auto mk = a.mark();
         a.reset_to(mk);
     }
     const auto t3 = clock::now();
-    const double ns_mark = std::chrono::duration<double, std::nano>(t3 - t2).count() / kN;
+    const double ns_mark = std::chrono::duration<double, std::nano>(t3 - t2).count() / k_n;
 
     std::printf("smoke_vma: allocate ~%.1f ns/op  mark+reset ~%.1f ns/op  (contract: <=20 / <=5 ns)\n", ns_alloc,
                 ns_mark);

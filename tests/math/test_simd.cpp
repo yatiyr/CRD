@@ -119,16 +119,16 @@ TEST_CASE("simd Vec4f mul_add uses two roundings (no hardware FMA)", "[simd][vec
 {
     // mul_add(a,b,c) MUST equal (a*b)+c with two roundings — not std::fma.
     // Pick values where (a*b)+c diverges from std::fma(a,b,c).
-    constexpr f32 kALane = 1.0F + (1.0F / 8388608.0F);  // 1 + 2^-23
-    constexpr f32 kBLane = 1.0F + (1.0F / 8388608.0F);
-    constexpr f32 kCLane = -1.0F;
+    constexpr f32 a_lane = 1.0F + (1.0F / 8388608.0F);  // 1 + 2^-23
+    constexpr f32 b_lane = 1.0F + (1.0F / 8388608.0F);
+    constexpr f32 c_lane = -1.0F;
 
-    const Vec4f a(kALane);
-    const Vec4f b(kBLane);
-    const Vec4f c(kCLane);
+    const Vec4f a(a_lane);
+    const Vec4f b(b_lane);
+    const Vec4f c(c_lane);
 
     const Vec4f      sim_result = mul_add(a, b, c);
-    const f32        ref_result = (kALane * kBLane) + kCLane;
+    const f32        ref_result = (a_lane * b_lane) + c_lane;
 
     f32 lanes[4]; sim_result.store(lanes);
     REQUIRE(bit_eq(lanes[0], ref_result));
@@ -450,11 +450,17 @@ TEST_CASE("simd Quatf alignment is 16 bytes", "[simd][quatf]")
 
 TEST_CASE("simd backend macros define exactly one path", "[simd][backend]")
 {
-    constexpr int kPicked = (CRD_SIMD_BACKEND == CRD_SIMD_BACKEND_SCALAR ? 1 : 0)
+    // The ACTIVE backend's comparison is X==X by design -- this counts how many backend
+    // macros match (must be exactly 1). clang-tidy flags the active one as "redundant";
+    // that equivalence is precisely what the test verifies. (Wrapped because which line is
+    // flagged depends on the active backend.)
+    // NOLINTBEGIN(misc-redundant-expression)
+    constexpr int k_picked = (CRD_SIMD_BACKEND == CRD_SIMD_BACKEND_SCALAR ? 1 : 0)
                          + (CRD_SIMD_BACKEND == CRD_SIMD_BACKEND_SSE2   ? 1 : 0)
                          + (CRD_SIMD_BACKEND == CRD_SIMD_BACKEND_AVX2   ? 1 : 0)
                          + (CRD_SIMD_BACKEND == CRD_SIMD_BACKEND_NEON   ? 1 : 0);
-    STATIC_REQUIRE(kPicked == 1);
+    // NOLINTEND(misc-redundant-expression)
+    STATIC_REQUIRE(k_picked == 1);
 }
 
 TEST_CASE("simd backend reports its compile-time identity", "[simd][backend][!mayfail]")

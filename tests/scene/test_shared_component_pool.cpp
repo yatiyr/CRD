@@ -117,17 +117,17 @@ TEST_CASE("Released slots are reused via freelist", "[shared-pool][freelist]")
 TEST_CASE("Pool grows past initial capacity", "[shared-pool][grow]")
 {
     SharedComponentPool pool{crd::memory::default_allocator(), sizeof(Payload), alignof(Payload)};
-    constexpr crd::u32 kCount = 50U;  // > initial 8 slots; should grow ≥ 64.
+    constexpr crd::u32 count = 50U;  // > initial 8 slots; should grow ≥ 64.
     crd::containers::Array<crd::u32> idxs{crd::memory::default_allocator()};
-    for (crd::u32 i = 0; i < kCount; ++i)
+    for (crd::u32 i = 0; i < count; ++i)
     {
         Payload p{i, i + 1U, i + 2U};
         idxs.push_back(pool.acquire(&p));
     }
-    CHECK(pool.live_count() == kCount);
-    CHECK(pool.capacity() >= kCount);
+    CHECK(pool.live_count() == count);
+    CHECK(pool.capacity() >= count);
     // All bytes intact through grow.
-    for (crd::u32 i = 0; i < kCount; ++i)
+    for (crd::u32 i = 0; i < count; ++i)
     {
         const Payload* p = reinterpret_cast<const Payload*>(pool.entry_bytes(idxs[i]));
         CHECK(p->a == i);

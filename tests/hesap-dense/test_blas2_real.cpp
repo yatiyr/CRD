@@ -206,34 +206,34 @@ TEST_CASE("trmv + trsv round-trip on random Lower", "[hesap][blas2][real][trmv][
 TEST_CASE("gemv larger N matches naive triple-loop", "[hesap][blas2][real][gemv]")
 {
     crd::memory::TlsfAllocator alloc(2 * 1024 * 1024);
-    constexpr crd::usize kM = 50;
-    constexpr crd::usize kN = 30;
-    Matrix<crd::f64> a(&alloc, kM, kN);
-    Vector<crd::f64> x(&alloc, kN);
-    Vector<crd::f64> y_engine(&alloc, kM);
-    Vector<crd::f64> y_naive(&alloc, kM);
-    for (crd::usize i = 0; i < kM; ++i)
+    constexpr crd::usize m = 50;
+    constexpr crd::usize n = 30;
+    Matrix<crd::f64> a(&alloc, m, n);
+    Vector<crd::f64> x(&alloc, n);
+    Vector<crd::f64> y_engine(&alloc, m);
+    Vector<crd::f64> y_naive(&alloc, m);
+    for (crd::usize i = 0; i < m; ++i)
     {
-        for (crd::usize j = 0; j < kN; ++j)
+        for (crd::usize j = 0; j < n; ++j)
         {
             a(i, j) = static_cast<crd::f64>(i + 1) / static_cast<crd::f64>(j + 2);
         }
     }
-    for (crd::usize j = 0; j < kN; ++j)
+    for (crd::usize j = 0; j < n; ++j)
     {
         x(j) = static_cast<crd::f64>(j) - 5.0;
     }
     gemv<crd::f64>(2.0, a.cview(), x.span(), 0.0, y_engine.span(), Trans::None);
-    for (crd::usize i = 0; i < kM; ++i)
+    for (crd::usize i = 0; i < m; ++i)
     {
         crd::f64 s = 0.0;
-        for (crd::usize j = 0; j < kN; ++j)
+        for (crd::usize j = 0; j < n; ++j)
         {
             s += a(i, j) * x(j);
         }
         y_naive(i) = 2.0 * s;
     }
-    for (crd::usize i = 0; i < kM; ++i)
+    for (crd::usize i = 0; i < m; ++i)
     {
         REQUIRE_THAT(y_engine(i), WithinAbs(y_naive(i), 1e-9));
     }

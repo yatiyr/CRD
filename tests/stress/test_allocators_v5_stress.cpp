@@ -63,20 +63,20 @@ void drive_linear(crd::stress::RunMode mode)
         crd::memory::MallocAllocator parent("v5-linear-parent");
         crd::memory::LinearAllocator arena(usize{256} << 10, &parent, "v5-linear");
 
-        constexpr u32 kMaxLive = 256U;
+        constexpr u32 max_live = 256U;
         struct Rec
         {
             u8* ptr = nullptr;
             usize size = 0;
             u8 fill = 0;
         };
-        Rec live[kMaxLive];
+        Rec live[max_live];
 
         for (u64 it = 0; it < iters; ++it)
         {
             arena.reset();
             u32 n = 0;
-            while (n < kMaxLive)
+            while (n < max_live)
             {
                 const usize size = 1U + rng.next_u32(2048U);
                 const usize align = usize{8} << rng.next_u32(5U); // 8..256
@@ -180,24 +180,24 @@ void drive_pool(crd::stress::RunMode mode)
     crd::stress::FailSink sink;
     const auto work = [&sink](u32 w, u64 iters, crd::stress::Rng& rng)
     {
-        constexpr usize kSlotSize = 64U;
-        constexpr usize kSlotAlign = 16U;
-        constexpr usize kSlotCount = 128U;
+        constexpr usize slot_size = 64U;
+        constexpr usize slot_align = 16U;
+        constexpr usize slot_count = 128U;
         crd::memory::MallocAllocator parent("v5-pool-parent");
-        crd::memory::PoolAllocator pool(kSlotSize, kSlotCount, kSlotAlign, &parent, "v5-pool");
+        crd::memory::PoolAllocator pool(slot_size, slot_count, slot_align, &parent, "v5-pool");
 
         struct Rec
         {
             u8* ptr = nullptr;
             u8 fill = 0;
         };
-        Rec live[kSlotCount];
+        Rec live[slot_count];
         u32 live_count = 0;
         u32 tag = 1U;
 
         const auto free_at = [&](u32 idx)
         {
-            CRD_STRESS_FAIL_IF(sink, w, 0, region_ok(live[idx].ptr, kSlotSize, live[idx].fill),
+            CRD_STRESS_FAIL_IF(sink, w, 0, region_ok(live[idx].ptr, slot_size, live[idx].fill),
                                "PoolAllocator slot corrupted before free");
             pool.deallocate(live[idx].ptr);
             live[idx] = live[--live_count];
@@ -208,21 +208,21 @@ void drive_pool(crd::stress::RunMode mode)
             const u32 roll = rng.next_u32(10U);
             if (roll < 6U) // allocate
             {
-                auto* p = static_cast<u8*>(pool.allocate(1U + rng.next_u32(kSlotSize), usize{1} << rng.next_u32(5U)));
+                auto* p = static_cast<u8*>(pool.allocate(1U + rng.next_u32(slot_size), usize{1} << rng.next_u32(5U)));
                 if (p == nullptr)
                 {
-                    CRD_STRESS_FAIL_IF(sink, w, it, live_count == kSlotCount, "PoolAllocator null but not full");
+                    CRD_STRESS_FAIL_IF(sink, w, it, live_count == slot_count, "PoolAllocator null but not full");
                     if (live_count > 0U)
                     {
                         free_at(rng.next_u32(live_count));
                     }
                     continue;
                 }
-                CRD_STRESS_FAIL_IF(sink, w, it, (reinterpret_cast<usize>(p) & (kSlotAlign - 1U)) == 0U,
+                CRD_STRESS_FAIL_IF(sink, w, it, (reinterpret_cast<usize>(p) & (slot_align - 1U)) == 0U,
                                    "PoolAllocator slot mis-aligned");
                 CRD_STRESS_FAIL_IF(sink, w, it, pool.owns(p), "PoolAllocator does not own a slot it returned");
                 const u8 fill = byte_fill(w, tag++);
-                stamp(p, kSlotSize, fill);
+                stamp(p, slot_size, fill);
                 live[live_count++] = Rec{p, fill};
             }
             else if (live_count > 0U) // free
@@ -251,26 +251,26 @@ void drive_growable_pool(crd::stress::RunMode mode)
     crd::stress::FailSink sink;
     const auto work = [&sink](u32 w, u64 iters, crd::stress::Rng& rng)
     {
-        constexpr usize kSlotSize = 64U;
-        constexpr usize kSlotAlign = 16U;
-        constexpr usize kSlotsPerPage = 8U;
-        constexpr u32 kMaxLive = 200U; // >> kSlotsPerPage → forces growth
+        constexpr usize slot_size = 64U;
+        constexpr usize slot_align = 16U;
+        constexpr usize k_slots_per_page = 8U;
+        constexpr u32 max_live = 200U; // >> k_slots_per_page → forces growth
         crd::memory::MallocAllocator parent("v5-gpool-parent");
-        crd::memory::GrowablePoolAllocator gp(kSlotSize, kSlotAlign, kSlotsPerPage, &parent, "v5-gpool");
+        crd::memory::GrowablePoolAllocator gp(slot_size, slot_align, k_slots_per_page, &parent, "v5-gpool");
 
         struct Rec
         {
             u8* ptr = nullptr;
             u8 fill = 0;
         };
-        Rec live[kMaxLive];
+        Rec live[max_live];
         u32 live_count = 0;
         u32 tag = 1U;
         usize max_pages_seen = 0;
 
         const auto free_at = [&](u32 idx)
         {
-            CRD_STRESS_FAIL_IF(sink, w, 0, region_ok(live[idx].ptr, kSlotSize, live[idx].fill),
+            CRD_STRESS_FAIL_IF(sink, w, 0, region_ok(live[idx].ptr, slot_size, live[idx].fill),
                                "GrowablePool slot corrupted before free");
             gp.deallocate(live[idx].ptr);
             live[idx] = live[--live_count];
@@ -279,9 +279,9 @@ void drive_growable_pool(crd::stress::RunMode mode)
         for (u64 it = 0; it < iters; ++it)
         {
             const u32 roll = rng.next_u32(10U);
-            if (roll < 7U && live_count < kMaxLive) // bias toward growth
+            if (roll < 7U && live_count < max_live) // bias toward growth
             {
-                auto* p = static_cast<u8*>(gp.allocate(1U + rng.next_u32(kSlotSize), usize{1} << rng.next_u32(5U)));
+                auto* p = static_cast<u8*>(gp.allocate(1U + rng.next_u32(slot_size), usize{1} << rng.next_u32(5U)));
                 CRD_STRESS_FAIL_IF(sink, w, it, p != nullptr, "GrowablePool returned null (should grow, not fail)");
                 if (p == nullptr)
                 {
@@ -289,7 +289,7 @@ void drive_growable_pool(crd::stress::RunMode mode)
                 }
                 CRD_STRESS_FAIL_IF(sink, w, it, gp.owns(p), "GrowablePool does not own a slot it returned");
                 const u8 fill = byte_fill(w, tag++);
-                stamp(p, kSlotSize, fill);
+                stamp(p, slot_size, fill);
                 live[live_count++] = Rec{p, fill};
             }
             else if (live_count > 0U)
@@ -378,50 +378,50 @@ TEST_CASE("allocators stress -- TlsfAllocator adversarial sequential", "[stress]
 
     SECTION("coalescing — free-every-other then alloc-larger fits")
     {
-        constexpr usize kN = 200U;
-        constexpr usize kS = 256U;
-        u8* blocks[kN];
-        for (usize i = 0; i < kN; ++i)
+        constexpr usize k_n = 200U;
+        constexpr usize k_s = 256U;
+        u8* blocks[k_n];
+        for (usize i = 0; i < k_n; ++i)
         {
-            blocks[i] = static_cast<u8*>(tlsf.try_allocate(kS, 16U));
+            blocks[i] = static_cast<u8*>(tlsf.try_allocate(k_s, 16U));
             REQUIRE(blocks[i] != nullptr);
-            std::memset(blocks[i], static_cast<int>(i & 0xFFU), kS);
+            std::memset(blocks[i], static_cast<int>(i & 0xFFU), k_s);
         }
-        for (usize i = 0; i < kN; i += 2U) // free every other → adjacent holes
+        for (usize i = 0; i < k_n; i += 2U) // free every other → adjacent holes
         {
             tlsf.deallocate(blocks[i]);
             blocks[i] = nullptr;
         }
         // Larger blocks should fit by coalescing the freed adjacent runs.
         usize got = 0;
-        for (usize i = 0; i < kN / 2U; ++i)
+        for (usize i = 0; i < k_n / 2U; ++i)
         {
-            u8* p = static_cast<u8*>(tlsf.try_allocate(kS + kS / 2U, 16U));
+            u8* p = static_cast<u8*>(tlsf.try_allocate(k_s + k_s / 2U, 16U));
             if (p == nullptr)
             {
                 break;
             }
-            std::memset(p, 0xAB, kS + kS / 2U);
+            std::memset(p, 0xAB, k_s + k_s / 2U);
             ++got;
         }
         CHECK(got > 0U); // at least some coalescing happened
         // The odd-index blocks we kept are still intact.
-        for (usize i = 1; i < kN; i += 2U)
+        for (usize i = 1; i < k_n; i += 2U)
         {
             CHECK(blocks[i][0] == static_cast<u8>(i & 0xFFU));
-            CHECK(blocks[i][kS - 1] == static_cast<u8>(i & 0xFFU));
+            CHECK(blocks[i][k_s - 1] == static_cast<u8>(i & 0xFFU));
         }
     }
 
     SECTION("near-OOM — try_allocate returns null, recovers after free")
     {
-        constexpr usize kChunk = 64U * 1024U;
-        constexpr usize kMaxChunks = 256U;
-        u8* held[kMaxChunks];
+        constexpr usize chunk = 64U * 1024U;
+        constexpr usize max_chunks = 256U;
+        u8* held[max_chunks];
         usize held_count = 0;
-        for (; held_count < kMaxChunks; ++held_count)
+        for (; held_count < max_chunks; ++held_count)
         {
-            u8* p = static_cast<u8*>(tlsf.try_allocate(kChunk, 16U));
+            u8* p = static_cast<u8*>(tlsf.try_allocate(chunk, 16U));
             if (p == nullptr)
             {
                 break; // expected — pool exhausted, no crash
@@ -429,15 +429,15 @@ TEST_CASE("allocators stress -- TlsfAllocator adversarial sequential", "[stress]
             held[held_count] = p;
         }
         CHECK(held_count > 0U);
-        CHECK(held_count < kMaxChunks); // i.e. we actually hit exhaustion
+        CHECK(held_count < max_chunks); // i.e. we actually hit exhaustion
         // One more must still be null while everything is held.
-        CHECK(tlsf.try_allocate(kChunk, 16U) == nullptr);
+        CHECK(tlsf.try_allocate(chunk, 16U) == nullptr);
         for (usize i = 0; i < held_count; ++i)
         {
             tlsf.deallocate(held[i]);
         }
         // Recovered: a big allocation succeeds again.
-        u8* big = static_cast<u8*>(tlsf.try_allocate(kChunk, 16U));
+        u8* big = static_cast<u8*>(tlsf.try_allocate(chunk, 16U));
         CHECK(big != nullptr);
         if (big != nullptr)
         {
@@ -447,9 +447,9 @@ TEST_CASE("allocators stress -- TlsfAllocator adversarial sequential", "[stress]
 
     SECTION("alignment churn + allocation_size")
     {
-        constexpr usize kN = 300U;
-        u8* ptrs[kN];
-        for (usize i = 0; i < kN; ++i)
+        constexpr usize k_n = 300U;
+        u8* ptrs[k_n];
+        for (usize i = 0; i < k_n; ++i)
         {
             const usize a = usize{8} << (i % 7U); // 8..512, cycling
             const usize sz = 1U + (i * 37U) % 4096U;
@@ -458,7 +458,7 @@ TEST_CASE("allocators stress -- TlsfAllocator adversarial sequential", "[stress]
             CHECK((reinterpret_cast<usize>(ptrs[i]) & (a - 1U)) == 0U);
             CHECK(tlsf.allocation_size(ptrs[i]) >= sz);
         }
-        for (usize i = 0; i < kN; ++i)
+        for (usize i = 0; i < k_n; ++i)
         {
             tlsf.deallocate(ptrs[i]);
         }
@@ -473,14 +473,14 @@ TEST_CASE("allocators stress -- TlsfAllocator adversarial sequential", "[stress]
             usize size = 0;
             u8 fill = 0;
         };
-        constexpr u32 kCap = 512U;
-        Rec live[kCap];
+        constexpr u32 cap = 512U;
+        Rec live[cap];
         u32 live_count = 0;
         u8 next_fill = 1U;
         for (u32 it = 0; it < 40000U; ++it)
         {
             const u32 roll = rng.next_u32(10U);
-            if (roll < 6U && live_count < kCap)
+            if (roll < 6U && live_count < cap)
             {
                 const usize sz = 1U + rng.next_u32(8U * 1024U);
                 const usize a = usize{8} << rng.next_u32(6U);

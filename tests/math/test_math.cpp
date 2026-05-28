@@ -560,13 +560,13 @@ TEST_CASE("damp converges, frame-rate-stable, identity at dt=0", "[math][interp]
     // 60 fixed-step ticks at dt=1/60 must equal one tick at dt=1 for the same lambda
     // â€” this is the property that makes damp frame-rate independent. Tolerance is
     // generous because float rounding accumulates over 60 iterations.
-    constexpr float kLambda = 4.0F;
+    constexpr float k_lambda = 4.0F;
     float multi = 0.0F;
     for (int i = 0; i < 60; ++i)
     {
-        multi = damp(multi, 1.0F, kLambda, 1.0F / 60.0F);
+        multi = damp(multi, 1.0F, k_lambda, 1.0F / 60.0F);
     }
-    const float single = damp(0.0F, 1.0F, kLambda, 1.0F);
+    const float single = damp(0.0F, 1.0F, k_lambda, 1.0F);
     REQUIRE(multi == Catch::Approx(single).margin(1e-3F));
 }
 
@@ -597,82 +597,82 @@ TEST_CASE("Vec lerp / damp componentwise", "[math][interp][vec]")
 
 TEST_CASE("All easings: f(0) == 0 and f(1) == 1", "[math][easing]")
 {
-    constexpr float kEps = 1e-5F;
+    constexpr float eps = 1e-5F;
 
     // All curves anchor at endpoints. Bounce/Elastic use exact early-outs at the
     // domain edges, so the equality is exact for those.
-    REQUIRE(ease_linear(0.0F) == Catch::Approx(0.0F).margin(kEps));
-    REQUIRE(ease_linear(1.0F) == Catch::Approx(1.0F).margin(kEps));
+    REQUIRE(ease_linear(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_linear(1.0F) == Catch::Approx(1.0F).margin(eps));
 
-    REQUIRE(ease_in_sine(0.0F) == Catch::Approx(0.0F).margin(kEps));
-    REQUIRE(ease_in_sine(1.0F) == Catch::Approx(1.0F).margin(kEps));
-    REQUIRE(ease_out_sine(0.0F) == Catch::Approx(0.0F).margin(kEps));
-    REQUIRE(ease_out_sine(1.0F) == Catch::Approx(1.0F).margin(kEps));
-    REQUIRE(ease_in_out_sine(0.0F) == Catch::Approx(0.0F).margin(kEps));
-    REQUIRE(ease_in_out_sine(1.0F) == Catch::Approx(1.0F).margin(kEps));
+    REQUIRE(ease_in_sine(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_in_sine(1.0F) == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_out_sine(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_out_sine(1.0F) == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_in_out_sine(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_in_out_sine(1.0F) == Catch::Approx(1.0F).margin(eps));
 
-    REQUIRE(ease_in_quad(0.0F) == Catch::Approx(0.0F).margin(kEps));
-    REQUIRE(ease_in_quad(1.0F) == Catch::Approx(1.0F).margin(kEps));
-    REQUIRE(ease_out_quad(0.0F) == Catch::Approx(0.0F).margin(kEps));
-    REQUIRE(ease_out_quad(1.0F) == Catch::Approx(1.0F).margin(kEps));
-    REQUIRE(ease_in_out_quad(0.0F) == Catch::Approx(0.0F).margin(kEps));
-    REQUIRE(ease_in_out_quad(1.0F) == Catch::Approx(1.0F).margin(kEps));
+    REQUIRE(ease_in_quad(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_in_quad(1.0F) == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_out_quad(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_out_quad(1.0F) == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_in_out_quad(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_in_out_quad(1.0F) == Catch::Approx(1.0F).margin(eps));
 
-    REQUIRE(ease_in_cubic(0.0F) == Catch::Approx(0.0F).margin(kEps));
-    REQUIRE(ease_in_cubic(1.0F) == Catch::Approx(1.0F).margin(kEps));
-    REQUIRE(ease_out_cubic(0.0F) == Catch::Approx(0.0F).margin(kEps));
-    REQUIRE(ease_out_cubic(1.0F) == Catch::Approx(1.0F).margin(kEps));
-    REQUIRE(ease_in_out_cubic(0.0F) == Catch::Approx(0.0F).margin(kEps));
-    REQUIRE(ease_in_out_cubic(1.0F) == Catch::Approx(1.0F).margin(kEps));
+    REQUIRE(ease_in_cubic(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_in_cubic(1.0F) == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_out_cubic(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_out_cubic(1.0F) == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_in_out_cubic(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_in_out_cubic(1.0F) == Catch::Approx(1.0F).margin(eps));
 
-    REQUIRE(ease_in_quart(0.0F) == Catch::Approx(0.0F).margin(kEps));
-    REQUIRE(ease_in_quart(1.0F) == Catch::Approx(1.0F).margin(kEps));
-    REQUIRE(ease_out_quart(0.0F) == Catch::Approx(0.0F).margin(kEps));
-    REQUIRE(ease_out_quart(1.0F) == Catch::Approx(1.0F).margin(kEps));
-    REQUIRE(ease_in_out_quart(0.0F) == Catch::Approx(0.0F).margin(kEps));
-    REQUIRE(ease_in_out_quart(1.0F) == Catch::Approx(1.0F).margin(kEps));
+    REQUIRE(ease_in_quart(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_in_quart(1.0F) == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_out_quart(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_out_quart(1.0F) == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_in_out_quart(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_in_out_quart(1.0F) == Catch::Approx(1.0F).margin(eps));
 
-    REQUIRE(ease_in_quint(0.0F) == Catch::Approx(0.0F).margin(kEps));
-    REQUIRE(ease_in_quint(1.0F) == Catch::Approx(1.0F).margin(kEps));
-    REQUIRE(ease_out_quint(0.0F) == Catch::Approx(0.0F).margin(kEps));
-    REQUIRE(ease_out_quint(1.0F) == Catch::Approx(1.0F).margin(kEps));
-    REQUIRE(ease_in_out_quint(0.0F) == Catch::Approx(0.0F).margin(kEps));
-    REQUIRE(ease_in_out_quint(1.0F) == Catch::Approx(1.0F).margin(kEps));
+    REQUIRE(ease_in_quint(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_in_quint(1.0F) == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_out_quint(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_out_quint(1.0F) == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_in_out_quint(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_in_out_quint(1.0F) == Catch::Approx(1.0F).margin(eps));
 
-    REQUIRE(ease_in_expo(0.0F) == Catch::Approx(0.0F).margin(kEps));
-    REQUIRE(ease_in_expo(1.0F) == Catch::Approx(1.0F).margin(kEps));
-    REQUIRE(ease_out_expo(0.0F) == Catch::Approx(0.0F).margin(kEps));
-    REQUIRE(ease_out_expo(1.0F) == Catch::Approx(1.0F).margin(kEps));
-    REQUIRE(ease_in_out_expo(0.0F) == Catch::Approx(0.0F).margin(kEps));
-    REQUIRE(ease_in_out_expo(1.0F) == Catch::Approx(1.0F).margin(kEps));
+    REQUIRE(ease_in_expo(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_in_expo(1.0F) == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_out_expo(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_out_expo(1.0F) == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_in_out_expo(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_in_out_expo(1.0F) == Catch::Approx(1.0F).margin(eps));
 
-    REQUIRE(ease_in_circ(0.0F) == Catch::Approx(0.0F).margin(kEps));
-    REQUIRE(ease_in_circ(1.0F) == Catch::Approx(1.0F).margin(kEps));
-    REQUIRE(ease_out_circ(0.0F) == Catch::Approx(0.0F).margin(kEps));
-    REQUIRE(ease_out_circ(1.0F) == Catch::Approx(1.0F).margin(kEps));
-    REQUIRE(ease_in_out_circ(0.0F) == Catch::Approx(0.0F).margin(kEps));
-    REQUIRE(ease_in_out_circ(1.0F) == Catch::Approx(1.0F).margin(kEps));
+    REQUIRE(ease_in_circ(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_in_circ(1.0F) == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_out_circ(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_out_circ(1.0F) == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_in_out_circ(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_in_out_circ(1.0F) == Catch::Approx(1.0F).margin(eps));
 
-    REQUIRE(ease_in_back(0.0F) == Catch::Approx(0.0F).margin(kEps));
-    REQUIRE(ease_in_back(1.0F) == Catch::Approx(1.0F).margin(kEps));
-    REQUIRE(ease_out_back(0.0F) == Catch::Approx(0.0F).margin(kEps));
-    REQUIRE(ease_out_back(1.0F) == Catch::Approx(1.0F).margin(kEps));
-    REQUIRE(ease_in_out_back(0.0F) == Catch::Approx(0.0F).margin(kEps));
-    REQUIRE(ease_in_out_back(1.0F) == Catch::Approx(1.0F).margin(kEps));
+    REQUIRE(ease_in_back(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_in_back(1.0F) == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_out_back(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_out_back(1.0F) == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_in_out_back(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_in_out_back(1.0F) == Catch::Approx(1.0F).margin(eps));
 
-    REQUIRE(ease_in_elastic(0.0F) == Catch::Approx(0.0F).margin(kEps));
-    REQUIRE(ease_in_elastic(1.0F) == Catch::Approx(1.0F).margin(kEps));
-    REQUIRE(ease_out_elastic(0.0F) == Catch::Approx(0.0F).margin(kEps));
-    REQUIRE(ease_out_elastic(1.0F) == Catch::Approx(1.0F).margin(kEps));
-    REQUIRE(ease_in_out_elastic(0.0F) == Catch::Approx(0.0F).margin(kEps));
-    REQUIRE(ease_in_out_elastic(1.0F) == Catch::Approx(1.0F).margin(kEps));
+    REQUIRE(ease_in_elastic(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_in_elastic(1.0F) == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_out_elastic(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_out_elastic(1.0F) == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_in_out_elastic(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_in_out_elastic(1.0F) == Catch::Approx(1.0F).margin(eps));
 
-    REQUIRE(ease_in_bounce(0.0F) == Catch::Approx(0.0F).margin(kEps));
-    REQUIRE(ease_in_bounce(1.0F) == Catch::Approx(1.0F).margin(kEps));
-    REQUIRE(ease_out_bounce(0.0F) == Catch::Approx(0.0F).margin(kEps));
-    REQUIRE(ease_out_bounce(1.0F) == Catch::Approx(1.0F).margin(kEps));
-    REQUIRE(ease_in_out_bounce(0.0F) == Catch::Approx(0.0F).margin(kEps));
-    REQUIRE(ease_in_out_bounce(1.0F) == Catch::Approx(1.0F).margin(kEps));
+    REQUIRE(ease_in_bounce(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_in_bounce(1.0F) == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_out_bounce(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_out_bounce(1.0F) == Catch::Approx(1.0F).margin(eps));
+    REQUIRE(ease_in_out_bounce(0.0F) == Catch::Approx(0.0F).margin(eps));
+    REQUIRE(ease_in_out_bounce(1.0F) == Catch::Approx(1.0F).margin(eps));
 }
 
 TEST_CASE("Easings: In/Out reflection identity ease_in_X(t) == 1 - ease_out_X(1 - t)", "[math][easing]")
@@ -682,18 +682,18 @@ TEST_CASE("Easings: In/Out reflection identity ease_in_X(t) == 1 - ease_out_X(1 
     // different In vs Out formulations and don't satisfy this exactly, so we
     // skip them here â€” their reflection is checked separately in the
     // monotonicity / overshoot tests.
-    constexpr float kEps = 1e-5F;
+    constexpr float eps = 1e-5F;
     for (int i = 1; i <= 31; ++i)
     {
         const float t = static_cast<float>(i) / 32.0F;
         const float u = 1.0F - t;
 
-        REQUIRE(ease_in_sine(t) == Catch::Approx(1.0F - ease_out_sine(u)).margin(kEps));
-        REQUIRE(ease_in_quad(t) == Catch::Approx(1.0F - ease_out_quad(u)).margin(kEps));
-        REQUIRE(ease_in_cubic(t) == Catch::Approx(1.0F - ease_out_cubic(u)).margin(kEps));
-        REQUIRE(ease_in_quart(t) == Catch::Approx(1.0F - ease_out_quart(u)).margin(kEps));
-        REQUIRE(ease_in_quint(t) == Catch::Approx(1.0F - ease_out_quint(u)).margin(kEps));
-        REQUIRE(ease_in_circ(t) == Catch::Approx(1.0F - ease_out_circ(u)).margin(kEps));
+        REQUIRE(ease_in_sine(t) == Catch::Approx(1.0F - ease_out_sine(u)).margin(eps));
+        REQUIRE(ease_in_quad(t) == Catch::Approx(1.0F - ease_out_quad(u)).margin(eps));
+        REQUIRE(ease_in_cubic(t) == Catch::Approx(1.0F - ease_out_cubic(u)).margin(eps));
+        REQUIRE(ease_in_quart(t) == Catch::Approx(1.0F - ease_out_quart(u)).margin(eps));
+        REQUIRE(ease_in_quint(t) == Catch::Approx(1.0F - ease_out_quint(u)).margin(eps));
+        REQUIRE(ease_in_circ(t) == Catch::Approx(1.0F - ease_out_circ(u)).margin(eps));
     }
 }
 

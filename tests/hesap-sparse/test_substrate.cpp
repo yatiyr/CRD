@@ -63,10 +63,10 @@ TEST_CASE("topology_hash is a stable golden for the canonical 3x3 CSR identity",
     // Golden computed once on win-debug; CI's linux-gcc re-run proves the
     // little-endian explicit-byte feed is cross-platform reproducible (D1).
     // Value reflects the v1a-2 canonical (slack-invariant) hash refinement.
-    constexpr crd::u64 kGolden3x3CsrIdentity = 0x9978E97C37B7D174ULL;
+    constexpr crd::u64 golden3x3_csr_identity = 0x9978E97C37B7D174ULL;
 
-    CHECK(p.topology_hash == kGolden3x3CsrIdentity);
-    CHECK(sp::topology_hash(p) == kGolden3x3CsrIdentity);  // free fn == cached
+    CHECK(p.topology_hash == golden3x3_csr_identity);
+    CHECK(sp::topology_hash(p) == golden3x3_csr_identity);  // free fn == cached
 }
 
 TEST_CASE("topology_hash differs when format flips CSR<->CSC at identical indices",

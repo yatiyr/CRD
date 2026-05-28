@@ -56,9 +56,9 @@ TEST_CASE("DeterministicClock: reset()", "[d-006][det-clock]")
 
 TEST_CASE("DeterministicClock: constexpr-evaluable", "[d-006][det-clock][constexpr]")
 {
-    constexpr DeterministicClock kClock{Duration{1.0 / 120.0}};
-    STATIC_REQUIRE(kClock.tick_count() == 0);
-    STATIC_REQUIRE(kClock.tick_period().value == 1.0 / 120.0);
+    constexpr DeterministicClock k_clock{Duration{1.0 / 120.0}};
+    STATIC_REQUIRE(k_clock.tick_count() == 0);
+    STATIC_REQUIRE(k_clock.tick_period().value == 1.0 / 120.0);
 }
 
 TEST_CASE("DeterministicClock: bit-exact reproducibility for same tick count",

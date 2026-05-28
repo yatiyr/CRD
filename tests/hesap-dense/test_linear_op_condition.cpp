@@ -147,14 +147,14 @@ TEST_CASE("condition_estimate: identity matrix yields kappa = 1",
           "[hesap][condition][real]")
 {
     crd::memory::TlsfAllocator alloc(64U * 1024U);
-    constexpr crd::usize kN = 5;
-    Symmetric<double> a(&alloc, kN);
-    for (crd::usize i = 0; i < kN; ++i)
+    constexpr crd::usize n = 5;
+    Symmetric<double> a(&alloc, n);
+    for (crd::usize i = 0; i < n; ++i)
     {
         a.at(i, i) = 1.0;
     }
 
-    Cholesky<double, Layout::RowMajor> chol(&alloc, kN);
+    Cholesky<double, Layout::RowMajor> chol(&alloc, n);
     factor_cholesky(chol, a);
     REQUIRE(chol.info() == 0U);
 
@@ -166,14 +166,14 @@ TEST_CASE("condition_estimate: scaled identity yields kappa = 1",
           "[hesap][condition][real]")
 {
     crd::memory::TlsfAllocator alloc(64U * 1024U);
-    constexpr crd::usize kN = 4;
-    Symmetric<double> a(&alloc, kN);
-    for (crd::usize i = 0; i < kN; ++i)
+    constexpr crd::usize n = 4;
+    Symmetric<double> a(&alloc, n);
+    for (crd::usize i = 0; i < n; ++i)
     {
         a.at(i, i) = 7.5;
     }
 
-    Cholesky<double, Layout::RowMajor> chol(&alloc, kN);
+    Cholesky<double, Layout::RowMajor> chol(&alloc, n);
     factor_cholesky(chol, a);
     const double kappa = condition_estimate_1norm_symmetric(a, chol, &alloc);
     CHECK_THAT(kappa, WithinAbs(1.0, 1e-10));

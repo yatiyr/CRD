@@ -28,12 +28,12 @@ TEST_CASE("Add-kind i64 counter is atomic under concurrent writers",
     PerfFixture fx;
     const auto id = crd::perf::register_counter_i64("threaded.add", crd::perf::CounterKind::Add);
 
-    constexpr crd::u32 kThreads     = 4U;
-    constexpr crd::u32 kPerThread   = 25000U;
+    constexpr crd::u32 threads     = 4U;
+    constexpr crd::u32 per_thread   = 25000U;
     std::atomic<bool> go{false};
     std::vector<std::thread> ts;
-    ts.reserve(kThreads);
-    for (crd::u32 t = 0U; t < kThreads; ++t)
+    ts.reserve(threads);
+    for (crd::u32 t = 0U; t < threads; ++t)
     {
         ts.emplace_back([&]() {
             crd::perf::register_thread("adder");
@@ -41,7 +41,7 @@ TEST_CASE("Add-kind i64 counter is atomic under concurrent writers",
             {
                 std::this_thread::yield();
             }
-            for (crd::u32 i = 0U; i < kPerThread; ++i)
+            for (crd::u32 i = 0U; i < per_thread; ++i)
             {
                 crd::perf::counter_add_i64(id, 1);
             }
@@ -52,7 +52,7 @@ TEST_CASE("Add-kind i64 counter is atomic under concurrent writers",
     {
         t.join();
     }
-    CHECK(crd::perf::counter_current_i64(id) == static_cast<crd::i64>(kThreads * kPerThread));
+    CHECK(crd::perf::counter_current_i64(id) == static_cast<crd::i64>(threads * per_thread));
 }
 
 TEST_CASE("Add-kind f64 counter is consistent under concurrent CAS-loop writers",
@@ -61,15 +61,15 @@ TEST_CASE("Add-kind f64 counter is consistent under concurrent CAS-loop writers"
     PerfFixture fx;
     const auto id = crd::perf::register_counter_f64("threaded.add.f64", crd::perf::CounterKind::Add);
 
-    constexpr crd::u32 kThreads   = 4U;
-    constexpr crd::u32 kPerThread = 5000U;
+    constexpr crd::u32 threads   = 4U;
+    constexpr crd::u32 per_thread = 5000U;
     std::vector<std::thread> ts;
-    ts.reserve(kThreads);
-    for (crd::u32 t = 0U; t < kThreads; ++t)
+    ts.reserve(threads);
+    for (crd::u32 t = 0U; t < threads; ++t)
     {
         ts.emplace_back([&]() {
             crd::perf::register_thread("f64adder");
-            for (crd::u32 i = 0U; i < kPerThread; ++i)
+            for (crd::u32 i = 0U; i < per_thread; ++i)
             {
                 crd::perf::counter_add_f64(id, 0.001);
             }
@@ -81,7 +81,7 @@ TEST_CASE("Add-kind f64 counter is consistent under concurrent CAS-loop writers"
     }
     // 4 * 5000 * 0.001 = 20.0; allow f64 rounding margin.
     CHECK(crd::perf::counter_current_f64(id) ==
-          Catch::Approx(static_cast<crd::f64>(kThreads * kPerThread) * 0.001).margin(1e-6));
+          Catch::Approx(static_cast<crd::f64>(threads * per_thread) * 0.001).margin(1e-6));
 }
 
 #endif // CRD_PERF_ENABLED

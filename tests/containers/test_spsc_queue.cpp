@@ -127,12 +127,12 @@ TEST_CASE("SpscQueue destructor runs non-trivial elements", "[containers][spsc_q
 
 TEST_CASE("SpscQueue concurrent producer/consumer 1M items", "[containers][spsc_queue][concurrent]")
 {
-    constexpr u32 kTotal = 1'000'000U;
+    constexpr u32 total = 1'000'000U;
     SpscQueue<u32> q(1024U);
 
     std::thread producer([&]
     {
-        for (u32 i = 0; i < kTotal; ++i)
+        for (u32 i = 0; i < total; ++i)
         {
             while (!q.try_push(i))
             {
@@ -143,12 +143,12 @@ TEST_CASE("SpscQueue concurrent producer/consumer 1M items", "[containers][spsc_
 
     u64 sum_actual   = 0;
     u64 sum_expected = 0;
-    for (u32 i = 0; i < kTotal; ++i)
+    for (u32 i = 0; i < total; ++i)
     {
         sum_expected += i;
     }
 
-    for (u32 consumed = 0; consumed < kTotal; )
+    for (u32 consumed = 0; consumed < total; )
     {
         u32 v = 0;
         if (q.try_pop(v))

@@ -172,12 +172,12 @@ TEST_CASE("worker_pool: multiple jobs all execute", "[jobs][worker_pool]")
     cfg.small_fiber_count = 64U;
     REQUIRE(pool.init(cfg));
 
-    constexpr int kJobs = 100;
+    constexpr int k_jobs = 100;
     std::atomic<int> done{0};
-    for (int i = 0; i < kJobs; ++i)
+    for (int i = 0; i < k_jobs; ++i)
         pool.push(make_inc_job(&done));
 
-    REQUIRE(spin_until(done, kJobs, 5000));
+    REQUIRE(spin_until(done, k_jobs, 5000));
     pool.shutdown();
 }
 
@@ -243,12 +243,12 @@ TEST_CASE("worker_pool: concurrent multi-thread stress", "[jobs][worker_pool]")
     cfg.small_fiber_count = 128U;
     REQUIRE(pool.init(cfg));
 
-    constexpr int kJobs = 1000;
+    constexpr int k_jobs = 1000;
     std::atomic<int> done{0};
-    for (int i = 0; i < kJobs; ++i)
+    for (int i = 0; i < k_jobs; ++i)
         pool.push(make_inc_job(&done));
 
-    REQUIRE(spin_until(done, kJobs, 10000));
+    REQUIRE(spin_until(done, k_jobs, 10000));
     pool.shutdown();
 }
 
@@ -283,10 +283,10 @@ TEST_CASE("jobs: run and wait from main thread", "[jobs][public-api]")
     cfg.num_threads = 2U; // background worker required for the spin-wait path
     crd::jobs::init(cfg);
 
-    constexpr int kN = 20;
+    constexpr int n = 20;
     std::atomic<int> count{0};
 
-    crd::jobs::JobDecl jobs[kN];
+    crd::jobs::JobDecl jobs[n];
     for (auto& j : jobs)
     {
         j.fn   = [](void* d)
@@ -296,10 +296,10 @@ TEST_CASE("jobs: run and wait from main thread", "[jobs][public-api]")
         j.data = &count;
     }
 
-    crd::jobs::Counter* c = crd::jobs::run(std::span(jobs, kN));
+    crd::jobs::Counter* c = crd::jobs::run(std::span(jobs, n));
     crd::jobs::wait(c); // spin-waits on main thread until all 20 jobs complete
 
-    CHECK(count.load() == kN);
+    CHECK(count.load() == n);
 
     crd::jobs::shutdown();
 }
@@ -330,8 +330,8 @@ TEST_CASE("jobs: run_and_wait from inside a worker fiber", "[jobs][public-api]")
     {
         auto* data = static_cast<RootData*>(d);
 
-        constexpr int kChildren = 8;
-        crd::jobs::JobDecl children[kChildren];
+        constexpr int k_children = 8;
+        crd::jobs::JobDecl children[k_children];
         for (auto& child : children)
         {
             child.fn   = [](void* dc)
@@ -342,7 +342,7 @@ TEST_CASE("jobs: run_and_wait from inside a worker fiber", "[jobs][public-api]")
         }
 
         // wait() here runs the fiber-suspend path (we are inside a fiber).
-        crd::jobs::run_and_wait(std::span(children, kChildren));
+        crd::jobs::run_and_wait(std::span(children, k_children));
 
         data->root_done->store(true, std::memory_order_release);
     };
@@ -395,10 +395,10 @@ TEST_CASE("jobs: stress many parallel jobs via public API", "[jobs][public-api]"
     cfg.small_fiber_count = 128U;
     crd::jobs::init(cfg);
 
-    constexpr int kN = 500;
+    constexpr int n = 500;
     std::atomic<int> count{0};
 
-    crd::jobs::JobDecl jobs[kN];
+    crd::jobs::JobDecl jobs[n];
     for (auto& j : jobs)
     {
         j.fn   = [](void* d)
@@ -408,8 +408,8 @@ TEST_CASE("jobs: stress many parallel jobs via public API", "[jobs][public-api]"
         j.data = &count;
     }
 
-    crd::jobs::wait(crd::jobs::run(std::span(jobs, kN)));
-    CHECK(count.load() == kN);
+    crd::jobs::wait(crd::jobs::run(std::span(jobs, n)));
+    CHECK(count.load() == n);
 
     crd::jobs::shutdown();
 }
@@ -522,20 +522,20 @@ TEST_CASE("jobs: parallel_for splits range and executes all items", "[jobs][sbo]
     cfg.num_threads = 4U;
     crd::jobs::init(cfg);
 
-    constexpr crd::u32 kCount   = 100U;
-    constexpr crd::u32 kNumJobs = 4U;
+    constexpr crd::u32 k_count   = 100U;
+    constexpr crd::u32 k_num_jobs = 4U;
     std::atomic<int> sum{0};
 
-    // Each job accumulates (end - begin) into sum. Total must equal kCount.
+    // Each job accumulates (end - begin) into sum. Total must equal k_count.
     crd::jobs::Counter* c = crd::jobs::parallel_for(
-        kCount, kNumJobs,
+        k_count, k_num_jobs,
         [&sum](crd::u32 begin, crd::u32 end)
         {
             sum.fetch_add(static_cast<int>(end - begin), std::memory_order_release);
         });
 
     crd::jobs::wait(c);
-    CHECK(sum.load() == static_cast<int>(kCount));
+    CHECK(sum.load() == static_cast<int>(k_count));
 
     crd::jobs::shutdown();
 }
@@ -551,11 +551,11 @@ TEST_CASE("jobs: parallel_for clamps num_jobs to count", "[jobs][sbo]")
     crd::jobs::init(cfg);
 
     // count=3, num_jobs=10 → clamped to 3. Each of the 3 items is processed once.
-    constexpr crd::u32 kCount = 3U;
+    constexpr crd::u32 k_count = 3U;
     std::atomic<int> processed{0};
 
     crd::jobs::Counter* c = crd::jobs::parallel_for(
-        kCount, 10U,
+        k_count, 10U,
         [&processed](crd::u32 /*begin*/, crd::u32 /*end*/)
         {
             processed.fetch_add(1, std::memory_order_release);
@@ -563,7 +563,7 @@ TEST_CASE("jobs: parallel_for clamps num_jobs to count", "[jobs][sbo]")
 
     crd::jobs::wait(c);
     // 3 jobs ran (one per item after clamping), covering all 3 items.
-    CHECK(processed.load() == static_cast<int>(kCount));
+    CHECK(processed.load() == static_cast<int>(k_count));
 
     crd::jobs::shutdown();
 }
@@ -842,19 +842,19 @@ TEST_CASE("jobs: cross-thread fiber resume stress", "[jobs][stress]")
     std::atomic<long> total{0};
     static RootData rd; rd.total = &total;
 
-    constexpr int kRounds   = 30;
-    constexpr int kRoots    = 6;
-    constexpr int kChildren = 5;
+    constexpr int rounds   = 30;
+    constexpr int k_roots    = 6;
+    constexpr int k_children = 5;
 
-    for (int r = 0; r < kRounds; ++r)
+    for (int r = 0; r < rounds; ++r)
     {
-        crd::jobs::JobDecl roots[kRoots];
+        crd::jobs::JobDecl roots[k_roots];
         for (auto& root : roots)
         {
             root.fn = [](void* d)
             {
                 auto* data = static_cast<RootData*>(d);
-                crd::jobs::JobDecl children[kChildren];
+                crd::jobs::JobDecl children[k_children];
                 for (auto& child : children)
                 {
                     child.fn   = [](void* dc)
@@ -864,13 +864,13 @@ TEST_CASE("jobs: cross-thread fiber resume stress", "[jobs][stress]")
                     child.data = data->total;
                 }
                 // Suspends this fiber; resume may land on any worker thread.
-                crd::jobs::run_and_wait(std::span(children, kChildren));
+                crd::jobs::run_and_wait(std::span(children, k_children));
             };
             root.data = &rd;
         }
-        crd::jobs::wait(crd::jobs::run(std::span(roots, kRoots)));
+        crd::jobs::wait(crd::jobs::run(std::span(roots, k_roots)));
     }
 
     crd::jobs::shutdown();
-    CHECK(total.load() == static_cast<long>(kRounds) * kRoots * kChildren);
+    CHECK(total.load() == static_cast<long>(rounds) * k_roots * k_children);
 }

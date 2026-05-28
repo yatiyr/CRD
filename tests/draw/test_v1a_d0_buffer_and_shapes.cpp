@@ -25,15 +25,15 @@ TEST_CASE("v1a-draw d0 Color packs to 4 bytes RGBA layout", "[draw][v1a-draw][fr
     STATIC_REQUIRE(sizeof(Color) == 4);
     STATIC_REQUIRE(std::is_trivially_copyable_v<Color>);
 
-    constexpr Color kCol{0xDE, 0xAD, 0xBE, 0xEF};
-    REQUIRE(kCol.r == 0xDE);
-    REQUIRE(kCol.g == 0xAD);
-    REQUIRE(kCol.b == 0xBE);
-    REQUIRE(kCol.a == 0xEF);
+    constexpr Color col{0xDE, 0xAD, 0xBE, 0xEF};
+    REQUIRE(col.r == 0xDE);
+    REQUIRE(col.g == 0xAD);
+    REQUIRE(col.b == 0xBE);
+    REQUIRE(col.a == 0xEF);
 
     // Packed layout: alpha in high byte, then b, g, r (matches LittleEndian
     // RGBA8 GPU upload semantics).
-    REQUIRE(kCol.packed_rgba() == 0xEFBEADDEU);
+    REQUIRE(col.packed_rgba() == 0xEFBEADDEU);
 
     // Named constants are sane.
     REQUIRE(kRed.packed_rgba()   == 0xFF0000FFU);  // a=ff, b=00, g=00, r=ff

@@ -16,13 +16,13 @@ crd::geometry::primitives::AABB3<crd::f32>
 union_aabb_of(crd::containers::ConstSpan<crd::geometry::primitives::AABB3<crd::f32>> aabbs) noexcept
 {
     using Vec3 = crd::math::Vec3<crd::f32>;
-    constexpr crd::f32 kInf = std::numeric_limits<crd::f32>::infinity();
+    constexpr crd::f32 k_inf = std::numeric_limits<crd::f32>::infinity();
     if (aabbs.empty())
     {
-        return {Vec3{ kInf,  kInf,  kInf}, Vec3{-kInf, -kInf, -kInf}};
+        return {Vec3{ k_inf,  k_inf,  k_inf}, Vec3{-k_inf, -k_inf, -k_inf}};
     }
-    Vec3 lo{ kInf,  kInf,  kInf};
-    Vec3 hi{-kInf, -kInf, -kInf};
+    Vec3 lo{ k_inf,  k_inf,  k_inf};
+    Vec3 hi{-k_inf, -k_inf, -k_inf};
     for (const auto& b : aabbs)
     {
         lo.x = std::min(lo.x, b.min.x); hi.x = std::max(hi.x, b.max.x);

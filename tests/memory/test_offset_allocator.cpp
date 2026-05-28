@@ -109,8 +109,8 @@ TEST_CASE("OffsetAllocator reuses a freed region", "[memory][offset-alloc]")
 
 TEST_CASE("OffsetAllocator randomized stress keeps all live allocations disjoint", "[memory][offset-alloc]")
 {
-    constexpr crd::u32 kCapacity = 1U << 20; // 1 MiB span
-    OffsetAllocator    a(kCapacity, 8192);
+    constexpr crd::u32 k_capacity = 1U << 20; // 1 MiB span
+    OffsetAllocator    a(k_capacity, 8192);
 
     struct Live
     {
@@ -135,7 +135,7 @@ TEST_CASE("OffsetAllocator randomized stress keeps all live allocations disjoint
                 {
                     const bool disjoint = (x.offset + size <= l.offset) || (l.offset + l.size <= x.offset);
                     REQUIRE(disjoint);
-                    REQUIRE(x.offset + size <= kCapacity); // in-bounds
+                    REQUIRE(x.offset + size <= k_capacity); // in-bounds
                 }
                 live.push_back(Live{x, x.offset, size});
             }
@@ -155,6 +155,6 @@ TEST_CASE("OffsetAllocator randomized stress keeps all live allocations disjoint
         a.free(l.alloc);
     }
     const OffsetAllocator::StorageReport r = a.storage_report();
-    REQUIRE(r.total_free_space == kCapacity);
-    REQUIRE(r.largest_free_region == kCapacity);
+    REQUIRE(r.total_free_space == k_capacity);
+    REQUIRE(r.largest_free_region == k_capacity);
 }

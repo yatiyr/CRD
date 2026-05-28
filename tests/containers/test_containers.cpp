@@ -857,15 +857,15 @@ TEST_CASE("HashMap: operator[] inserts default and returns reference", "[contain
 TEST_CASE("HashMap: many inserts trigger rehash, all entries findable", "[containers][hash_map]")
 {
     HashMap<u32, u32> m;
-    constexpr u32 kN = 1000;
-    for (u32 i = 0; i < kN; ++i)
+    constexpr u32 k_n = 1000;
+    for (u32 i = 0; i < k_n; ++i)
     {
         REQUIRE(m.insert(i, i * 10));
     }
-    REQUIRE(m.size() == kN);
-    REQUIRE(m.capacity() >= kN);
+    REQUIRE(m.size() == k_n);
+    REQUIRE(m.capacity() >= k_n);
 
-    for (u32 i = 0; i < kN; ++i)
+    for (u32 i = 0; i < k_n; ++i)
     {
         auto* p = m.find(i);
         REQUIRE(p != nullptr);
@@ -876,20 +876,20 @@ TEST_CASE("HashMap: many inserts trigger rehash, all entries findable", "[contai
 TEST_CASE("HashMap: backshift preserves lookups after random erases", "[containers][hash_map]")
 {
     HashMap<u32, u32> m;
-    constexpr u32 kN = 500;
-    for (u32 i = 0; i < kN; ++i)
+    constexpr u32 k_n = 500;
+    for (u32 i = 0; i < k_n; ++i)
     {
         m.insert(i, i + 1);
     }
 
     // Erase every third key
-    for (u32 i = 0; i < kN; i += 3)
+    for (u32 i = 0; i < k_n; i += 3)
     {
         REQUIRE(m.erase(i));
     }
 
     // Verify remaining keys are still findable, erased keys are gone
-    for (u32 i = 0; i < kN; ++i)
+    for (u32 i = 0; i < k_n; ++i)
     {
         if (i % 3 == 0)
         {
@@ -1024,28 +1024,28 @@ TEST_CASE("HashMap<String, V>: erase by StringView (heterogeneous)", "[container
 TEST_CASE("HashMap: stress test insert+erase keeps invariants", "[containers][hash_map][stress]")
 {
     HashMap<u32, u32> m;
-    constexpr u32 kN = 2000;
-    for (u32 i = 0; i < kN; ++i)
+    constexpr u32 k_n = 2000;
+    for (u32 i = 0; i < k_n; ++i)
     {
         m.insert(i, i);
     }
-    REQUIRE(m.size() == kN);
+    REQUIRE(m.size() == k_n);
 
     // Erase even keys
-    for (u32 i = 0; i < kN; i += 2)
+    for (u32 i = 0; i < k_n; i += 2)
     {
         REQUIRE(m.erase(i));
     }
-    REQUIRE(m.size() == kN / 2);
+    REQUIRE(m.size() == k_n / 2);
 
     // Re-insert with different values
-    for (u32 i = 0; i < kN; i += 2)
+    for (u32 i = 0; i < k_n; i += 2)
     {
         REQUIRE(m.insert(i, i + 10000));
     }
-    REQUIRE(m.size() == kN);
+    REQUIRE(m.size() == k_n);
 
-    for (u32 i = 0; i < kN; ++i)
+    for (u32 i = 0; i < k_n; ++i)
     {
         auto* p = m.find(i);
         REQUIRE(p != nullptr);

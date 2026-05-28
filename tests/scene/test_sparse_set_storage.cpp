@@ -378,30 +378,30 @@ TEST_CASE("SparseSetStorage: 10K-entity stress with random removes preserves dat
 
     SparseSetStorage storage{alloc, registry};
 
-    constexpr crd::u32 kN = 10000;
+    constexpr crd::u32 n = 10000;
 
     // Phase 1: insert N entities, value = entity index. Hash in the bits
     // for variety so we can probe later.
-    for (crd::u32 i = 0; i < kN; ++i)
+    for (crd::u32 i = 0; i < n; ++i)
     {
         EntityId e = EntityId::make(i + 1U, 1);
         DialogTrigger v{i, i ^ 0xA5A5U};
         storage.insert(e, id, &v);
     }
-    CHECK(storage.entity_count(id) == kN);
+    CHECK(storage.entity_count(id) == n);
 
     // Phase 2: remove every 3rd entity in a deterministic pattern.
     crd::u32 removed = 0;
-    for (crd::u32 i = 0; i < kN; i += 3)
+    for (crd::u32 i = 0; i < n; i += 3)
     {
         EntityId e = EntityId::make(i + 1U, 1);
         storage.remove(e, id);
         ++removed;
     }
-    CHECK(storage.entity_count(id) == kN - removed);
+    CHECK(storage.entity_count(id) == n - removed);
 
     // Phase 3: every remaining entity must still resolve to its original value.
-    for (crd::u32 i = 0; i < kN; ++i)
+    for (crd::u32 i = 0; i < n; ++i)
     {
         EntityId e = EntityId::make(i + 1U, 1);
         if ((i % 3) == 0)

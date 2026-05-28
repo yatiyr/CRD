@@ -382,12 +382,12 @@ TEST_CASE("v10a CircularArc3 derivative at t=0 is along axis_v (tangent)",
 
 TEST_CASE("v10a CircularArc3 closed wraps t=1 to t=0", "[curves][evaluator][arc][closed]")
 {
-    constexpr float kTwoPi = 6.28318530717958647692F;
+    constexpr float two_pi = 6.28318530717958647692F;
     const CircularArc3<float> arc(v3(0.0F, 0.0F, 0.0F),
                                     v3(1.0F, 0.0F, 0.0F),
                                     v3(0.0F, 1.0F, 0.0F),
                                     /*radius_in=*/1.0F,
-                                    /*sweep_radians_in=*/kTwoPi,
+                                    /*sweep_radians_in=*/two_pi,
                                     /*closed_in=*/true);
     REQUIRE(vec_bit_equal(evaluate(arc, 1.0F), evaluate(arc, 0.0F)));
 }

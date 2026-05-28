@@ -66,10 +66,10 @@ static crd::containers::Array<crd::u8> make_matr_v2(
     crd::u8 info[4] = {2U, 0U, 0U, 0U};
 
     // PASS chunk
-    constexpr crd::usize kEntrySize = 36U;
+    constexpr crd::usize entry_size = 36U;
     const crd::u32 count = (!dep_vert.is_null() && !dep_frag.is_null()) ? 2U : 1U;
     crd::containers::Array<crd::u8> pass_bytes(&g_alloc);
-    pass_bytes.resize(sizeof(crd::u32) + count * kEntrySize);
+    pass_bytes.resize(sizeof(crd::u32) + count * entry_size);
     std::memcpy(pass_bytes.data(), &count, sizeof(crd::u32));
 
     auto write_entry = [](crd::u8* dst, crd::u8 pt, ResourceId vert, ResourceId frag)
@@ -86,7 +86,7 @@ static crd::containers::Array<crd::u8> make_matr_v2(
 
     if (count == 2U)
     {
-        write_entry(pass_bytes.data() + sizeof(crd::u32) + kEntrySize,
+        write_entry(pass_bytes.data() + sizeof(crd::u32) + entry_size,
                     static_cast<crd::u8>(crd::renderer::PassType::DepthPrepass), dep_vert, dep_frag);
     }
 
@@ -204,10 +204,10 @@ int main()
     const ResourceId dep_frag_id  = ResourceId::mint_random();
     const ResourceId matr_id      = ResourceId::mint_random();
 
-    constexpr crd::u64 kParamHash = 0xABCDEF0123456789ULL;
+    constexpr crd::u64 param_hash = 0xABCDEF0123456789ULL;
 
     crd::renderer::CookedParameter param{};
-    param.name_hash  = kParamHash;
+    param.name_hash  = param_hash;
     param.type       = crd::renderer::ParameterType::Float4;
     param.ubo_offset = 0U;
 
@@ -270,7 +270,7 @@ int main()
         }
 
         if (mat->parameters.size() != 1U ||
-            mat->parameters[0].name_hash != kParamHash ||
+            mat->parameters[0].name_hash != param_hash ||
             mat->parameters[0].type != crd::renderer::ParameterType::Float4)
         {
             std::fprintf(stderr, "smoke_material: parameter schema mismatch\n");
@@ -280,7 +280,7 @@ int main()
 
         // Create MaterialInstance, set_vec4, verify values_blob.
         crd::renderer::MaterialInstance inst(handle, &g_alloc);
-        inst.set_vec4(kParamHash, 1.0F, 2.0F, 3.0F, 4.0F);
+        inst.set_vec4(param_hash, 1.0F, 2.0F, 3.0F, 4.0F);
 
         const auto& blob = inst.values_blob();
         if (blob.size() < 16U)

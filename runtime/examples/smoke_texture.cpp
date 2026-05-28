@@ -30,29 +30,29 @@ static crd::memory::TlsfAllocator g_alloc{256ULL << 20};
 static crd::containers::Array<crd::u8> build_txtr_artifact(ResourceId id)
 {
     // HEAD chunk (16 bytes)
-    constexpr crd::u32 kW         = 4U;
-    constexpr crd::u32 kH         = 4U;
-    constexpr crd::u32 kMipCount  = 3U;
-    constexpr crd::u8  kFmtRgba8  = 0U;
+    constexpr crd::u32 w         = 4U;
+    constexpr crd::u32 h         = 4U;
+    constexpr crd::u32 k_mip_count  = 3U;
+    constexpr crd::u8  fmt_rgba8  = 0U;
 
     crd::u8 head[16] = {};
-    std::memcpy(head + 0, &kW,        sizeof(crd::u32));
-    std::memcpy(head + 4, &kH,        sizeof(crd::u32));
-    std::memcpy(head + 8, &kMipCount, sizeof(crd::u32));
-    head[12] = kFmtRgba8;
+    std::memcpy(head + 0, &w,        sizeof(crd::u32));
+    std::memcpy(head + 4, &h,        sizeof(crd::u32));
+    std::memcpy(head + 8, &k_mip_count, sizeof(crd::u32));
+    head[12] = fmt_rgba8;
 
     CrdrWriter writer(&g_alloc, id, kFourCC_TXTR);
     writer.add_chunk(kFourCC_HEAD, crd::containers::ConstSpan<crd::u8>(head, 16U));
 
     // Three mip levels: 4×4, 2×2, 1×1 — red pixels (RGBA = 255,0,0,255).
-    constexpr crd::u32 kMipWidths[3]  = { 4U, 2U, 1U };
-    constexpr crd::u32 kMipHeights[3] = { 4U, 2U, 1U };
+    constexpr crd::u32 mip_widths[3]  = { 4U, 2U, 1U };
+    constexpr crd::u32 mip_heights[3] = { 4U, 2U, 1U };
 
-    for (crd::u32 lvl = 0U; lvl < kMipCount; ++lvl)
+    for (crd::u32 lvl = 0U; lvl < k_mip_count; ++lvl)
     {
         const crd::usize bytes =
-            static_cast<crd::usize>(kMipWidths[lvl]) *
-            static_cast<crd::usize>(kMipHeights[lvl]) * 4U;
+            static_cast<crd::usize>(mip_widths[lvl]) *
+            static_cast<crd::usize>(mip_heights[lvl]) * 4U;
 
         crd::containers::Array<crd::u8> pixels(&g_alloc);
         pixels.resize(bytes);

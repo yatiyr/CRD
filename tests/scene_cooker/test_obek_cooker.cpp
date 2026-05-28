@@ -97,12 +97,12 @@ ObekCookContext make_ctx()
 
 TEST_CASE("Empty obek TOML cooks to a valid OBEK with zero entities", "[obek-cooker][empty]")
 {
-    constexpr const char* kTomlText = "";
+    constexpr const char* toml_text = "";
     crd::containers::Array<CookError> errors{crd::memory::default_allocator()};
     // Empty-string StringView is the intent — the test exercises the
     // zero-entity TOML path.
     // NOLINTNEXTLINE(bugprone-string-constructor)
-    auto bytes = obek_cooker_inline(crd::containers::StringView{kTomlText, 0}, make_ctx(), &errors);
+    auto bytes = obek_cooker_inline(crd::containers::StringView{toml_text, 0}, make_ctx(), &errors);
     REQUIRE(errors.size() == 0);
     REQUIRE(bytes.size() > 0);
 
@@ -119,13 +119,13 @@ TEST_CASE("Empty obek TOML cooks to a valid OBEK with zero entities", "[obek-coo
 
 TEST_CASE("Single-entity obek TOML round-trips Transform", "[obek-cooker][round-trip][single]")
 {
-    constexpr const char* kTomlText = R"TOML(
+    constexpr const char* toml_text = R"TOML(
 [entity.player]
 Transform = { translation = [10.0, 20.0, 30.0] }
 )TOML";
 
     crd::containers::Array<CookError> errors{crd::memory::default_allocator()};
-    const auto text_view = crd::containers::StringView{kTomlText, std::strlen(kTomlText)};
+    const auto text_view = crd::containers::StringView{toml_text, std::strlen(toml_text)};
     auto bytes = obek_cooker_inline(text_view, make_ctx(), &errors);
     REQUIRE(errors.size() == 0);
     REQUIRE(bytes.size() > 0);
@@ -154,7 +154,7 @@ Transform = { translation = [10.0, 20.0, 30.0] }
 TEST_CASE("ChildOf hierarchy round-trips and reparents under instantiate parent",
           "[obek-cooker][round-trip][hierarchy]")
 {
-    constexpr const char* kTomlText = R"TOML(
+    constexpr const char* toml_text = R"TOML(
 [entity.root]
 Transform = { translation = [0.0, 0.0, 0.0] }
 
@@ -164,7 +164,7 @@ ChildOf   = "root"
 )TOML";
 
     crd::containers::Array<CookError> errors{crd::memory::default_allocator()};
-    const auto text_view = crd::containers::StringView{kTomlText, std::strlen(kTomlText)};
+    const auto text_view = crd::containers::StringView{toml_text, std::strlen(toml_text)};
     auto bytes = obek_cooker_inline(text_view, make_ctx(), &errors);
     REQUIRE(errors.size() == 0);
     REQUIRE(bytes.size() > 0);
@@ -211,7 +211,7 @@ ChildOf   = "root"
 
 TEST_CASE("Cook-time overrides bake into OOVR and apply at instantiate", "[obek-cooker][overrides][bake]")
 {
-    constexpr const char* kTomlText = R"TOML(
+    constexpr const char* toml_text = R"TOML(
 overrides = [
     { entity = "player", component = "Transform", value = { translation = [42.0, 0.0, 0.0] } },
 ]
@@ -221,7 +221,7 @@ Transform = { translation = [0.0, 0.0, 0.0] }
 )TOML";
 
     crd::containers::Array<CookError> errors{crd::memory::default_allocator()};
-    const auto text_view = crd::containers::StringView{kTomlText, std::strlen(kTomlText)};
+    const auto text_view = crd::containers::StringView{toml_text, std::strlen(toml_text)};
     auto bytes = obek_cooker_inline(text_view, make_ctx(), &errors);
     REQUIRE(errors.size() == 0);
     REQUIRE(bytes.size() > 0);
@@ -248,7 +248,7 @@ Transform = { translation = [0.0, 0.0, 0.0] }
 
 TEST_CASE("Caller override at instantiate wins over cook-time override", "[obek-cooker][overrides][precedence]")
 {
-    constexpr const char* kTomlText = R"TOML(
+    constexpr const char* toml_text = R"TOML(
 overrides = [
     { entity = "player", component = "Transform", value = { translation = [42.0, 0.0, 0.0] } },
 ]
@@ -258,7 +258,7 @@ Transform = { translation = [0.0, 0.0, 0.0] }
 )TOML";
 
     crd::containers::Array<CookError> errors{crd::memory::default_allocator()};
-    const auto text_view = crd::containers::StringView{kTomlText, std::strlen(kTomlText)};
+    const auto text_view = crd::containers::StringView{toml_text, std::strlen(toml_text)};
     auto bytes = obek_cooker_inline(text_view, make_ctx(), &errors);
     REQUIRE(errors.size() == 0);
 
@@ -291,7 +291,7 @@ Transform = { translation = [0.0, 0.0, 0.0] }
 
 TEST_CASE("Override pointing at unknown entity name emits error", "[obek-cooker][overrides][not-found]")
 {
-    constexpr const char* kTomlText = R"TOML(
+    constexpr const char* toml_text = R"TOML(
 overrides = [
     { entity = "ghost", component = "Transform", value = { translation = [0, 0, 0] } },
 ]
@@ -301,7 +301,7 @@ Transform = { translation = [0.0, 0.0, 0.0] }
 )TOML";
 
     crd::containers::Array<CookError> errors{crd::memory::default_allocator()};
-    const auto text_view = crd::containers::StringView{kTomlText, std::strlen(kTomlText)};
+    const auto text_view = crd::containers::StringView{toml_text, std::strlen(toml_text)};
     auto bytes = obek_cooker_inline(text_view, make_ctx(), &errors);
     CHECK(bytes.size() == 0);
     REQUIRE(errors.size() >= 1);
@@ -324,13 +324,13 @@ Transform = { translation = [0.0, 0.0, 0.0] }
 
 TEST_CASE("Per-entity overrides key rejected with v1m3d reservation message", "[obek-cooker][reserved]")
 {
-    constexpr const char* kTomlText = R"TOML(
+    constexpr const char* toml_text = R"TOML(
 [entity.player]
 overrides = []
 )TOML";
 
     crd::containers::Array<CookError> errors{crd::memory::default_allocator()};
-    const auto text_view = crd::containers::StringView{kTomlText, std::strlen(kTomlText)};
+    const auto text_view = crd::containers::StringView{toml_text, std::strlen(toml_text)};
     auto bytes = obek_cooker_inline(text_view, make_ctx(), &errors);
     CHECK(bytes.size() == 0);
     REQUIRE(errors.size() >= 1);
@@ -394,12 +394,12 @@ ObekCookContext make_ctx_with_resolver(const crd::containers::Array<InMemoryFile
 
 TEST_CASE("Single extends merges parent components into child", "[obek-cooker][extends]")
 {
-    constexpr const char* kBaseTomlText = R"TOML(
+    constexpr const char* base_toml_text = R"TOML(
 [entity.player]
 Transform = { translation = [1.0, 2.0, 3.0] }
 )TOML";
 
-    constexpr const char* kChildTomlText = R"TOML(
+    constexpr const char* child_toml_text = R"TOML(
 extends = "obek/base.obek.toml"
 
 [entity.player]
@@ -408,10 +408,10 @@ Transform = { translation = [10.0, 20.0, 30.0] }
 
     crd::containers::Array<InMemoryFile> files{crd::memory::default_allocator()};
     files.push_back({crd::containers::StringView{"obek/base.obek.toml"},
-                     crd::containers::StringView{kBaseTomlText, std::strlen(kBaseTomlText)}});
+                     crd::containers::StringView{base_toml_text, std::strlen(base_toml_text)}});
 
     crd::containers::Array<CookError> errors{crd::memory::default_allocator()};
-    const auto text_view = crd::containers::StringView{kChildTomlText, std::strlen(kChildTomlText)};
+    const auto text_view = crd::containers::StringView{child_toml_text, std::strlen(child_toml_text)};
     auto bytes = obek_cooker_inline(text_view, make_ctx_with_resolver(files), &errors);
     REQUIRE(errors.size() == 0);
     REQUIRE(bytes.size() > 0);
@@ -441,17 +441,17 @@ TEST_CASE("Chain of 3 extends resolves deepest-first", "[obek-cooker][extends][c
     // Parent extends grandparent, overrides translation = [2,2,2]
     // Child extends parent, overrides translation = [3,3,3]
     // Expected: child wins â†’ translation = [3,3,3]
-    constexpr const char* kGrandparent = R"TOML(
+    constexpr const char* k_grandparent = R"TOML(
 [entity.thing]
 Transform = { translation = [1.0, 1.0, 1.0] }
 )TOML";
-    constexpr const char* kParent = R"TOML(
+    constexpr const char* k_parent = R"TOML(
 extends = "obek/grandparent.obek.toml"
 
 [entity.thing]
 Transform = { translation = [2.0, 2.0, 2.0] }
 )TOML";
-    constexpr const char* kChild = R"TOML(
+    constexpr const char* k_child = R"TOML(
 extends = "obek/parent.obek.toml"
 
 [entity.thing]
@@ -460,12 +460,12 @@ Transform = { translation = [3.0, 3.0, 3.0] }
 
     crd::containers::Array<InMemoryFile> files{crd::memory::default_allocator()};
     files.push_back({crd::containers::StringView{"obek/grandparent.obek.toml"},
-                     crd::containers::StringView{kGrandparent, std::strlen(kGrandparent)}});
+                     crd::containers::StringView{k_grandparent, std::strlen(k_grandparent)}});
     files.push_back({crd::containers::StringView{"obek/parent.obek.toml"},
-                     crd::containers::StringView{kParent, std::strlen(kParent)}});
+                     crd::containers::StringView{k_parent, std::strlen(k_parent)}});
 
     crd::containers::Array<CookError> errors{crd::memory::default_allocator()};
-    const auto text_view = crd::containers::StringView{kChild, std::strlen(kChild)};
+    const auto text_view = crd::containers::StringView{k_child, std::strlen(k_child)};
     auto bytes = obek_cooker_inline(text_view, make_ctx_with_resolver(files), &errors);
     REQUIRE(errors.size() == 0);
     REQUIRE(bytes.size() > 0);
@@ -492,13 +492,13 @@ TEST_CASE("extends cycle detection emits error", "[obek-cooker][extends][cycle]"
 {
     // a.extends = b
     // b.extends = a   â† cycle
-    constexpr const char* kA = R"TOML(
+    constexpr const char* k_a = R"TOML(
 extends = "obek/b.obek.toml"
 
 [entity.thing]
 Transform = { translation = [1, 1, 1] }
 )TOML";
-    constexpr const char* kB = R"TOML(
+    constexpr const char* k_b = R"TOML(
 extends = "obek/a.obek.toml"
 
 [entity.thing]
@@ -507,14 +507,14 @@ Transform = { translation = [2, 2, 2] }
 
     crd::containers::Array<InMemoryFile> files{crd::memory::default_allocator()};
     files.push_back({crd::containers::StringView{"obek/a.obek.toml"},
-                     crd::containers::StringView{kA, std::strlen(kA)}});
+                     crd::containers::StringView{k_a, std::strlen(k_a)}});
     files.push_back({crd::containers::StringView{"obek/b.obek.toml"},
-                     crd::containers::StringView{kB, std::strlen(kB)}});
+                     crd::containers::StringView{k_b, std::strlen(k_b)}});
 
     crd::containers::Array<CookError> errors{crd::memory::default_allocator()};
     // Cook starting from `a` (text supplied directly; b reached via resolver,
     // then b's extends back to a triggers cycle detection).
-    const auto text_view = crd::containers::StringView{kA, std::strlen(kA)};
+    const auto text_view = crd::containers::StringView{k_a, std::strlen(k_a)};
     auto bytes = obek_cooker_inline(text_view, make_ctx_with_resolver(files), &errors);
     CHECK(bytes.size() == 0);
     REQUIRE(errors.size() >= 1);
@@ -533,7 +533,7 @@ Transform = { translation = [2, 2, 2] }
 
 TEST_CASE("extends without resolver emits error", "[obek-cooker][extends][no-resolver]")
 {
-    constexpr const char* kTomlText = R"TOML(
+    constexpr const char* toml_text = R"TOML(
 extends = "obek/base.obek.toml"
 
 [entity.player]
@@ -541,7 +541,7 @@ Transform = { translation = [0, 0, 0] }
 )TOML";
 
     crd::containers::Array<CookError> errors{crd::memory::default_allocator()};
-    const auto text_view = crd::containers::StringView{kTomlText, std::strlen(kTomlText)};
+    const auto text_view = crd::containers::StringView{toml_text, std::strlen(toml_text)};
     // make_ctx() returns context with file_resolver = nullptr.
     auto bytes = obek_cooker_inline(text_view, make_ctx(), &errors);
     CHECK(bytes.size() == 0);
@@ -566,7 +566,7 @@ Transform = { translation = [0, 0, 0] }
 TEST_CASE("Nested obek reference splices entities and parents under placeholder",
           "[obek-cooker][nested]")
 {
-    constexpr const char* kWheelToml = R"TOML(
+    constexpr const char* wheel_toml = R"TOML(
 [entity.hub]
 Transform = { translation = [0.0, 0.0, 0.0] }
 
@@ -575,7 +575,7 @@ Transform = { translation = [0.5, 0.0, 0.0] }
 ChildOf = "hub"
 )TOML";
 
-    constexpr const char* kVehicleToml = R"TOML(
+    constexpr const char* vehicle_toml = R"TOML(
 [entity.body]
 Transform = { translation = [0.0, 0.5, 0.0] }
 
@@ -586,10 +586,10 @@ Transform = { translation = [1.0, 0.0, 1.5] }
 
     crd::containers::Array<InMemoryFile> files{crd::memory::default_allocator()};
     files.push_back({crd::containers::StringView{"obek/wheel.obek.toml"},
-                     crd::containers::StringView{kWheelToml, std::strlen(kWheelToml)}});
+                     crd::containers::StringView{wheel_toml, std::strlen(wheel_toml)}});
 
     crd::containers::Array<CookError> errors{crd::memory::default_allocator()};
-    const auto text_view = crd::containers::StringView{kVehicleToml, std::strlen(kVehicleToml)};
+    const auto text_view = crd::containers::StringView{vehicle_toml, std::strlen(vehicle_toml)};
     auto bytes = obek_cooker_inline(text_view, make_ctx_with_resolver(files), &errors);
     REQUIRE(errors.size() == 0);
     REQUIRE(bytes.size() > 0);
@@ -625,18 +625,18 @@ Transform = { translation = [1.0, 0.0, 1.5] }
 
 TEST_CASE("Two-level nested obek vehicle wheel tire-pattern", "[obek-cooker][nested][deep]")
 {
-    constexpr const char* kInner = R"TOML(
+    constexpr const char* k_inner = R"TOML(
 [entity.tread]
 Transform = { translation = [0.1, 0.0, 0.0] }
 )TOML";
 
-    constexpr const char* kMiddle = R"TOML(
+    constexpr const char* k_middle = R"TOML(
 [entity.tire]
 obek = "obek/inner.obek.toml"
 Transform = { translation = [0.5, 0.0, 0.0] }
 )TOML";
 
-    constexpr const char* kOuter = R"TOML(
+    constexpr const char* outer = R"TOML(
 [entity.body]
 Transform = { translation = [0.0, 0.0, 0.0] }
 
@@ -647,12 +647,12 @@ Transform = { translation = [1.0, 0.0, 0.0] }
 
     crd::containers::Array<InMemoryFile> files{crd::memory::default_allocator()};
     files.push_back({crd::containers::StringView{"obek/inner.obek.toml"},
-                     crd::containers::StringView{kInner, std::strlen(kInner)}});
+                     crd::containers::StringView{k_inner, std::strlen(k_inner)}});
     files.push_back({crd::containers::StringView{"obek/middle.obek.toml"},
-                     crd::containers::StringView{kMiddle, std::strlen(kMiddle)}});
+                     crd::containers::StringView{k_middle, std::strlen(k_middle)}});
 
     crd::containers::Array<CookError> errors{crd::memory::default_allocator()};
-    const auto text_view = crd::containers::StringView{kOuter, std::strlen(kOuter)};
+    const auto text_view = crd::containers::StringView{outer, std::strlen(outer)};
     auto bytes = obek_cooker_inline(text_view, make_ctx_with_resolver(files), &errors);
     REQUIRE(errors.size() == 0);
     REQUIRE(bytes.size() > 0);
@@ -678,24 +678,24 @@ Transform = { translation = [1.0, 0.0, 0.0] }
 TEST_CASE("Nested obek cycle detection emits error", "[obek-cooker][nested][cycle]")
 {
     // a includes b, b includes a â†’ cycle.
-    constexpr const char* kA = R"TOML(
+    constexpr const char* k_a = R"TOML(
 [entity.thing_a]
 obek = "obek/b.obek.toml"
 )TOML";
 
-    constexpr const char* kB = R"TOML(
+    constexpr const char* k_b = R"TOML(
 [entity.thing_b]
 obek = "obek/a.obek.toml"
 )TOML";
 
     crd::containers::Array<InMemoryFile> files{crd::memory::default_allocator()};
     files.push_back({crd::containers::StringView{"obek/a.obek.toml"},
-                     crd::containers::StringView{kA, std::strlen(kA)}});
+                     crd::containers::StringView{k_a, std::strlen(k_a)}});
     files.push_back({crd::containers::StringView{"obek/b.obek.toml"},
-                     crd::containers::StringView{kB, std::strlen(kB)}});
+                     crd::containers::StringView{k_b, std::strlen(k_b)}});
 
     crd::containers::Array<CookError> errors{crd::memory::default_allocator()};
-    const auto text_view = crd::containers::StringView{kA, std::strlen(kA)};
+    const auto text_view = crd::containers::StringView{k_a, std::strlen(k_a)};
     auto bytes = obek_cooker_inline(text_view, make_ctx_with_resolver(files), &errors);
     CHECK(bytes.size() == 0);
     REQUIRE(errors.size() >= 1);
@@ -718,7 +718,7 @@ obek = "obek/a.obek.toml"
 
 TEST_CASE("Determinism: identical obek TOML produces bit-equal bytes", "[obek-cooker][determinism]")
 {
-    constexpr const char* kTomlText = R"TOML(
+    constexpr const char* toml_text = R"TOML(
 [entity.alpha]
 Transform = { translation = [1.0, 0.0, 0.0] }
 
@@ -729,7 +729,7 @@ ChildOf = "alpha"
 
     auto cook = [&]() {
         crd::containers::Array<CookError> errors{crd::memory::default_allocator()};
-        const auto text_view = crd::containers::StringView{kTomlText, std::strlen(kTomlText)};
+        const auto text_view = crd::containers::StringView{toml_text, std::strlen(toml_text)};
         return obek_cooker_inline(text_view, make_ctx(), &errors);
     };
     auto a = cook();

@@ -73,8 +73,8 @@ void visualize_rigid_body(const void*                       component,
 
     // Below threshold: skip the arrow (would render as a tiny dot,
     // visually noisy).
-    constexpr crd::f32 kMinSpeed = 0.001F;
-    if (speed < kMinSpeed)
+    constexpr crd::f32 min_speed = 0.001F;
+    if (speed < min_speed)
     {
         return;
     }
@@ -88,8 +88,8 @@ void visualize_rigid_body(const void*                       component,
     // Length scaled by speed and DebugVizComponent::scale, capped to
     // a sensible maximum so a body launched at 100 m/s doesn't draw a
     // 100 m arrow.
-    constexpr crd::f32 kMaxArrowLength = 5.0F;
-    const crd::f32     length = std::min(speed * ctx.viz->scale, kMaxArrowLength);
+    constexpr crd::f32 max_arrow_length = 5.0F;
+    const crd::f32     length = std::min(speed * ctx.viz->scale, max_arrow_length);
 
     const crd::draw::PrimFlags flags =
         crd::draw::PrimFlags::make(crd::draw::DepthMode::Always, ctx.category);

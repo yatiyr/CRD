@@ -53,35 +53,35 @@ TEST_CASE("gemm: beta scales existing C", "[hesap][blas3][real][gemm]")
 TEST_CASE("gemm vs naive triple-loop at N=64 (AVX2 boundary)", "[hesap][blas3][real][gemm]")
 {
     crd::memory::TlsfAllocator alloc(4 * 1024 * 1024);
-    constexpr crd::usize kN = 64;
-    Matrix<crd::f32> a(&alloc, kN, kN);
-    Matrix<crd::f32> b(&alloc, kN, kN);
-    Matrix<crd::f32> c(&alloc, kN, kN);
-    Matrix<crd::f32> c_naive(&alloc, kN, kN);
-    for (crd::usize i = 0; i < kN; ++i)
+    constexpr crd::usize n = 64;
+    Matrix<crd::f32> a(&alloc, n, n);
+    Matrix<crd::f32> b(&alloc, n, n);
+    Matrix<crd::f32> c(&alloc, n, n);
+    Matrix<crd::f32> c_naive(&alloc, n, n);
+    for (crd::usize i = 0; i < n; ++i)
     {
-        for (crd::usize j = 0; j < kN; ++j)
+        for (crd::usize j = 0; j < n; ++j)
         {
             a(i, j) = static_cast<crd::f32>(i + 1) * 0.01F + static_cast<crd::f32>(j) * 0.002F;
             b(i, j) = static_cast<crd::f32>(j + 1) * 0.03F - static_cast<crd::f32>(i) * 0.005F;
         }
     }
     gemm<crd::f32, Layout::RowMajor>(1.0F, a, b, 0.0F, c);
-    for (crd::usize i = 0; i < kN; ++i)
+    for (crd::usize i = 0; i < n; ++i)
     {
-        for (crd::usize j = 0; j < kN; ++j)
+        for (crd::usize j = 0; j < n; ++j)
         {
             crd::f32 s = 0.0F;
-            for (crd::usize p = 0; p < kN; ++p)
+            for (crd::usize p = 0; p < n; ++p)
             {
                 s += a(i, p) * b(p, j);
             }
             c_naive(i, j) = s;
         }
     }
-    for (crd::usize i = 0; i < kN; ++i)
+    for (crd::usize i = 0; i < n; ++i)
     {
-        for (crd::usize j = 0; j < kN; ++j)
+        for (crd::usize j = 0; j < n; ++j)
         {
             REQUIRE_THAT(c(i, j), WithinAbs(c_naive(i, j), 1e-3));
         }
@@ -198,17 +198,17 @@ TEST_CASE("trsm Lower: B = L^-1 * B in-place", "[hesap][blas3][real][trsm]")
 TEST_CASE("trsm + trmm round-trip preserves B", "[hesap][blas3][real][trmm][trsm]")
 {
     crd::memory::TlsfAllocator alloc(64 * 1024);
-    constexpr crd::usize kN = 6;
-    Triangular<crd::f64, TriangularSide::Lower, TriangularDiag::Explicit> l(&alloc, kN);
-    for (crd::usize i = 0; i < kN; ++i)
+    constexpr crd::usize n = 6;
+    Triangular<crd::f64, TriangularSide::Lower, TriangularDiag::Explicit> l(&alloc, n);
+    for (crd::usize i = 0; i < n; ++i)
     {
         for (crd::usize j = 0; j <= i; ++j)
         {
             l.at(i, j) = (i == j) ? 4.0 : 0.3;
         }
     }
-    Matrix<crd::f64> b_initial(&alloc, kN, 3);
-    for (crd::usize i = 0; i < kN; ++i)
+    Matrix<crd::f64> b_initial(&alloc, n, 3);
+    for (crd::usize i = 0; i < n; ++i)
     {
         for (crd::usize j = 0; j < 3; ++j)
         {
@@ -218,7 +218,7 @@ TEST_CASE("trsm + trmm round-trip preserves B", "[hesap][blas3][real][trmm][trsm
     auto b = b_initial.clone();
     trmm<crd::f64, TriangularSide::Lower, TriangularDiag::Explicit>(1.0, l, b.view(), Trans::None);
     trsm<crd::f64, TriangularSide::Lower, TriangularDiag::Explicit>(1.0, l, b.view(), Trans::None);
-    for (crd::usize i = 0; i < kN; ++i)
+    for (crd::usize i = 0; i < n; ++i)
     {
         for (crd::usize j = 0; j < 3; ++j)
         {

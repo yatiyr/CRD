@@ -48,11 +48,11 @@ TEST_CASE("gemm_parallel: num_workers=1 falls back to serial gemm",
 {
     parallel_jobs_listener();
     crd::memory::TlsfAllocator alloc(8 * 1024 * 1024);
-    constexpr crd::usize kN = 64;
-    Matrix<crd::f32> a(&alloc, kN, kN);
-    Matrix<crd::f32> b(&alloc, kN, kN);
-    Matrix<crd::f32> c_serial(&alloc, kN, kN);
-    Matrix<crd::f32> c_par(&alloc, kN, kN);
+    constexpr crd::usize n = 64;
+    Matrix<crd::f32> a(&alloc, n, n);
+    Matrix<crd::f32> b(&alloc, n, n);
+    Matrix<crd::f32> c_serial(&alloc, n, n);
+    Matrix<crd::f32> c_par(&alloc, n, n);
     random_general(a, 1U);
     random_general(b, 2U);
     random_general(c_serial, 3U);
@@ -68,19 +68,19 @@ TEST_CASE("gemm_parallel: f32 bit-exact across worker counts at N=64",
 {
     parallel_jobs_listener();
     crd::memory::TlsfAllocator alloc(8 * 1024 * 1024);
-    constexpr crd::usize kN = 64;
-    Matrix<crd::f32> a(&alloc, kN, kN);
-    Matrix<crd::f32> b(&alloc, kN, kN);
+    constexpr crd::usize n = 64;
+    Matrix<crd::f32> a(&alloc, n, n);
+    Matrix<crd::f32> b(&alloc, n, n);
     random_general(a, 11U);
     random_general(b, 22U);
 
-    Matrix<crd::f32> c_serial(&alloc, kN, kN);
+    Matrix<crd::f32> c_serial(&alloc, n, n);
     random_general(c_serial, 33U);
     gemm<crd::f32, Layout::RowMajor>(1.0F, a, b, 0.0F, c_serial);
 
     for (crd::u32 nw : {2U, 4U, 8U, 16U})
     {
-        Matrix<crd::f32> c_par(&alloc, kN, kN);
+        Matrix<crd::f32> c_par(&alloc, n, n);
         random_general(c_par, 33U);
         gemm_parallel<crd::f32, Layout::RowMajor>(nw, 1.0F, a, b, 0.0F, c_par);
         CAPTURE(nw);
@@ -93,19 +93,19 @@ TEST_CASE("gemm_parallel: f32 bit-exact across worker counts at N=256",
 {
     parallel_jobs_listener();
     crd::memory::TlsfAllocator alloc(8 * 1024 * 1024);
-    constexpr crd::usize kN = 256;
-    Matrix<crd::f32> a(&alloc, kN, kN);
-    Matrix<crd::f32> b(&alloc, kN, kN);
+    constexpr crd::usize n = 256;
+    Matrix<crd::f32> a(&alloc, n, n);
+    Matrix<crd::f32> b(&alloc, n, n);
     random_general(a, 101U);
     random_general(b, 202U);
 
-    Matrix<crd::f32> c_serial(&alloc, kN, kN);
+    Matrix<crd::f32> c_serial(&alloc, n, n);
     random_general(c_serial, 303U);
     gemm<crd::f32, Layout::RowMajor>(0.75F, a, b, 0.25F, c_serial);
 
     for (crd::u32 nw : {2U, 4U, 8U, 16U})
     {
-        Matrix<crd::f32> c_par(&alloc, kN, kN);
+        Matrix<crd::f32> c_par(&alloc, n, n);
         random_general(c_par, 303U);
         gemm_parallel<crd::f32, Layout::RowMajor>(nw, 0.75F, a, b, 0.25F, c_par);
         CAPTURE(nw);
@@ -118,19 +118,19 @@ TEST_CASE("gemm_parallel: f64 bit-exact across worker counts at N=256",
 {
     parallel_jobs_listener();
     crd::memory::TlsfAllocator alloc(16 * 1024 * 1024);
-    constexpr crd::usize kN = 256;
-    Matrix<crd::f64> a(&alloc, kN, kN);
-    Matrix<crd::f64> b(&alloc, kN, kN);
+    constexpr crd::usize n = 256;
+    Matrix<crd::f64> a(&alloc, n, n);
+    Matrix<crd::f64> b(&alloc, n, n);
     random_general(a, 7U);
     random_general(b, 13U);
 
-    Matrix<crd::f64> c_serial(&alloc, kN, kN);
+    Matrix<crd::f64> c_serial(&alloc, n, n);
     random_general(c_serial, 19U);
     gemm<crd::f64, Layout::RowMajor>(1.0, a, b, 0.0, c_serial);
 
     for (crd::u32 nw : {2U, 4U, 8U, 16U})
     {
-        Matrix<crd::f64> c_par(&alloc, kN, kN);
+        Matrix<crd::f64> c_par(&alloc, n, n);
         random_general(c_par, 19U);
         gemm_parallel<crd::f64, Layout::RowMajor>(nw, 1.0, a, b, 0.0, c_par);
         CAPTURE(nw);
@@ -143,19 +143,19 @@ TEST_CASE("gemm_parallel: f64 bit-exact across worker counts at N=1024",
 {
     parallel_jobs_listener();
     crd::memory::TlsfAllocator alloc(64 * 1024 * 1024);
-    constexpr crd::usize kN = 1024;
-    Matrix<crd::f64> a(&alloc, kN, kN);
-    Matrix<crd::f64> b(&alloc, kN, kN);
+    constexpr crd::usize n = 1024;
+    Matrix<crd::f64> a(&alloc, n, n);
+    Matrix<crd::f64> b(&alloc, n, n);
     random_general(a, 555U);
     random_general(b, 666U);
 
-    Matrix<crd::f64> c_serial(&alloc, kN, kN);
+    Matrix<crd::f64> c_serial(&alloc, n, n);
     random_general(c_serial, 777U);
     gemm<crd::f64, Layout::RowMajor>(1.0, a, b, 0.0, c_serial);
 
     for (crd::u32 nw : {4U, 16U})
     {
-        Matrix<crd::f64> c_par(&alloc, kN, kN);
+        Matrix<crd::f64> c_par(&alloc, n, n);
         random_general(c_par, 777U);
         gemm_parallel<crd::f64, Layout::RowMajor>(nw, 1.0, a, b, 0.0, c_par);
         CAPTURE(nw);
@@ -168,22 +168,22 @@ TEST_CASE("gemm_parallel: transposed operands bit-exact",
 {
     parallel_jobs_listener();
     crd::memory::TlsfAllocator alloc(8 * 1024 * 1024);
-    constexpr crd::usize kM = 128;
-    constexpr crd::usize kN = 192;
-    constexpr crd::usize kK = 96;
-    // For trans_a = Transpose: A is kK x kM (read as kM x kK after transpose).
-    Matrix<crd::f32> a(&alloc, kK, kM);
-    Matrix<crd::f32> b(&alloc, kK, kN);
+    constexpr crd::usize m = 128;
+    constexpr crd::usize n = 192;
+    constexpr crd::usize k = 96;
+    // For trans_a = Transpose: A is k x m (read as m x k after transpose).
+    Matrix<crd::f32> a(&alloc, k, m);
+    Matrix<crd::f32> b(&alloc, k, n);
     random_general(a, 41U);
     random_general(b, 43U);
 
-    Matrix<crd::f32> c_serial(&alloc, kM, kN);
+    Matrix<crd::f32> c_serial(&alloc, m, n);
     random_general(c_serial, 47U);
     gemm<crd::f32, Layout::RowMajor>(0.5F, a, b, 0.5F, c_serial, Trans::Transpose, Trans::None);
 
     for (crd::u32 nw : {2U, 4U, 8U})
     {
-        Matrix<crd::f32> c_par(&alloc, kM, kN);
+        Matrix<crd::f32> c_par(&alloc, m, n);
         random_general(c_par, 47U);
         gemm_parallel<crd::f32, Layout::RowMajor>(nw, 0.5F, a, b, 0.5F, c_par, Trans::Transpose,
                                                   Trans::None);
@@ -197,21 +197,21 @@ TEST_CASE("gemm_parallel: rectangular non-multiple shape bit-exact",
 {
     parallel_jobs_listener();
     crd::memory::TlsfAllocator alloc(8 * 1024 * 1024);
-    constexpr crd::usize kM = 137;
-    constexpr crd::usize kN = 211;
-    constexpr crd::usize kK = 89;
-    Matrix<crd::f32> a(&alloc, kM, kK);
-    Matrix<crd::f32> b(&alloc, kK, kN);
+    constexpr crd::usize m = 137;
+    constexpr crd::usize n = 211;
+    constexpr crd::usize k = 89;
+    Matrix<crd::f32> a(&alloc, m, k);
+    Matrix<crd::f32> b(&alloc, k, n);
     random_general(a, 91U);
     random_general(b, 93U);
 
-    Matrix<crd::f32> c_serial(&alloc, kM, kN);
+    Matrix<crd::f32> c_serial(&alloc, m, n);
     random_general(c_serial, 95U);
     gemm<crd::f32, Layout::RowMajor>(1.25F, a, b, -0.5F, c_serial);
 
     for (crd::u32 nw : {2U, 4U, 8U})
     {
-        Matrix<crd::f32> c_par(&alloc, kM, kN);
+        Matrix<crd::f32> c_par(&alloc, m, n);
         random_general(c_par, 95U);
         gemm_parallel<crd::f32, Layout::RowMajor>(nw, 1.25F, a, b, -0.5F, c_par);
         CAPTURE(nw);
@@ -225,11 +225,11 @@ TEST_CASE("gemm_parallel_auto: tiny matrix routed serial",
     parallel_jobs_listener();
     crd::memory::TlsfAllocator alloc(64 * 1024);
     // mnk = 8*8*8 = 512 — well below kSerialThreshold = 256K → serial path.
-    constexpr crd::usize kN = 8;
-    Matrix<crd::f64> a(&alloc, kN, kN);
-    Matrix<crd::f64> b(&alloc, kN, kN);
-    Matrix<crd::f64> c_serial(&alloc, kN, kN);
-    Matrix<crd::f64> c_auto(&alloc, kN, kN);
+    constexpr crd::usize n = 8;
+    Matrix<crd::f64> a(&alloc, n, n);
+    Matrix<crd::f64> b(&alloc, n, n);
+    Matrix<crd::f64> c_serial(&alloc, n, n);
+    Matrix<crd::f64> c_auto(&alloc, n, n);
     random_general(a, 7U);
     random_general(b, 13U);
     random_general(c_serial, 19U);
@@ -245,11 +245,11 @@ TEST_CASE("gemm_parallel_auto: large matrix routed parallel + matches serial",
 {
     parallel_jobs_listener();
     crd::memory::TlsfAllocator alloc(16 * 1024 * 1024);
-    constexpr crd::usize kN = 256;
-    Matrix<crd::f64> a(&alloc, kN, kN);
-    Matrix<crd::f64> b(&alloc, kN, kN);
-    Matrix<crd::f64> c_serial(&alloc, kN, kN);
-    Matrix<crd::f64> c_auto(&alloc, kN, kN);
+    constexpr crd::usize n = 256;
+    Matrix<crd::f64> a(&alloc, n, n);
+    Matrix<crd::f64> b(&alloc, n, n);
+    Matrix<crd::f64> c_serial(&alloc, n, n);
+    Matrix<crd::f64> c_auto(&alloc, n, n);
     random_general(a, 41U);
     random_general(b, 43U);
     random_general(c_serial, 47U);
@@ -265,19 +265,19 @@ TEST_CASE("gemm_parallel: repeated runs at same worker count are deterministic",
 {
     parallel_jobs_listener();
     crd::memory::TlsfAllocator alloc(16 * 1024 * 1024);
-    constexpr crd::usize kN = 256;
-    Matrix<crd::f64> a(&alloc, kN, kN);
-    Matrix<crd::f64> b(&alloc, kN, kN);
+    constexpr crd::usize n = 256;
+    Matrix<crd::f64> a(&alloc, n, n);
+    Matrix<crd::f64> b(&alloc, n, n);
     random_general(a, 1111U);
     random_general(b, 2222U);
 
-    Matrix<crd::f64> c_first(&alloc, kN, kN);
+    Matrix<crd::f64> c_first(&alloc, n, n);
     random_general(c_first, 3333U);
     gemm_parallel<crd::f64, Layout::RowMajor>(8U, 1.0, a, b, 0.0, c_first);
 
     for (int run = 0; run < 4; ++run)
     {
-        Matrix<crd::f64> c_again(&alloc, kN, kN);
+        Matrix<crd::f64> c_again(&alloc, n, n);
         random_general(c_again, 3333U);
         gemm_parallel<crd::f64, Layout::RowMajor>(8U, 1.0, a, b, 0.0, c_again);
         CAPTURE(run);

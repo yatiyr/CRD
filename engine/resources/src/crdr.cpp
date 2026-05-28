@@ -112,10 +112,10 @@ CrdrError crdr_read(
     CrdrFile&                           out,
     crd::memory::IAllocator*            a)
 {
-    constexpr crd::usize kHeaderSize = 32U;
-    constexpr crd::usize kChunkHeaderSize = 24U;
+    constexpr crd::usize header_size = 32U;
+    constexpr crd::usize chunk_header_size = 24U;
 
-    if (bytes.size() < kHeaderSize)
+    if (bytes.size() < header_size)
     {
         return CrdrError::Truncated;
     }
@@ -151,18 +151,18 @@ CrdrError crdr_read(
     // so we can pre-allocate decompressed_backing in one shot (no reallocations
     // that would invalidate any ConstSpan views into it).
     {
-        crd::usize scan_offset = kHeaderSize;
+        crd::usize scan_offset = header_size;
         crd::usize total_decompressed = 0U;
         for (crd::u32 i = 0U; i < chunk_count; ++i)
         {
-            if (scan_offset + kChunkHeaderSize > bytes.size())
+            if (scan_offset + chunk_header_size > bytes.size())
             {
                 return CrdrError::Truncated;
             }
             const crd::u32 chunk_flags     = read_u32_le(bytes.data() + scan_offset + 4U);
             const crd::u64 uncomp_size     = read_u64_le(bytes.data() + scan_offset + 8U);
             const crd::u64 compressed_size = read_u64_le(bytes.data() + scan_offset + 16U);
-            scan_offset += kChunkHeaderSize;
+            scan_offset += chunk_header_size;
 
             if (compressed_size > bytes.size() - scan_offset)
             {
@@ -181,11 +181,11 @@ CrdrError crdr_read(
     }
 
     // Pass 2: parse chunk headers and payloads; decompress into backing buffer.
-    crd::usize offset = kHeaderSize;
+    crd::usize offset = header_size;
     crd::usize backing_write = 0U;
     for (crd::u32 i = 0U; i < chunk_count; ++i)
     {
-        if (offset + kChunkHeaderSize > bytes.size())
+        if (offset + chunk_header_size > bytes.size())
         {
             return CrdrError::Truncated;
         }
@@ -195,7 +195,7 @@ CrdrError crdr_read(
         const crd::u64 uncompressed_size = read_u64_le(bytes.data() + offset + 8U);
         const crd::u64 compressed_size   = read_u64_le(bytes.data() + offset + 16U);
 
-        offset += kChunkHeaderSize;
+        offset += chunk_header_size;
 
         if (compressed_size > bytes.size() - offset)
         {
@@ -323,14 +323,14 @@ crd::containers::Array<crd::u8> CrdrWriter::finish()
                   return a.fourcc < b.fourcc;
               });
 
-    constexpr crd::usize kHeaderSize      = 32U;
-    constexpr crd::usize kChunkHeaderSize = 24U;
+    constexpr crd::usize header_size      = 32U;
+    constexpr crd::usize chunk_header_size = 24U;
 
     // Compute total size.
-    crd::usize total = kHeaderSize;
+    crd::usize total = header_size;
     for (const PendingChunk& chunk : m_chunks)
     {
-        total += kChunkHeaderSize + payload_padded_size(chunk.payload.size());
+        total += chunk_header_size + payload_padded_size(chunk.payload.size());
     }
 
     crd::containers::Array<crd::u8> out(m_alloc);
@@ -348,7 +348,7 @@ crd::containers::Array<crd::u8> CrdrWriter::finish()
     write_u32_le(buf + 28U, static_cast<crd::u32>(m_chunks.size()));
 
     // Write chunks.
-    crd::usize offset = kHeaderSize;
+    crd::usize offset = header_size;
     for (const PendingChunk& chunk : m_chunks)
     {
         const crd::usize compressed_size = chunk.payload.size();
@@ -356,7 +356,7 @@ crd::containers::Array<crd::u8> CrdrWriter::finish()
         write_u32_le(buf + offset + 4U, chunk.flags);
         write_u64_le(buf + offset + 8U,  chunk.uncompressed_size);
         write_u64_le(buf + offset + 16U, static_cast<crd::u64>(compressed_size));
-        offset += kChunkHeaderSize;
+        offset += chunk_header_size;
 
         if (compressed_size > 0U)
         {

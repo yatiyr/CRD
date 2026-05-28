@@ -140,20 +140,20 @@ TEST_CASE("v10d closest_point for centre of a circular arc gives distance ~radiu
 {
     crd::memory::TlsfAllocator alloc(1U * 1024U * 1024U);
 
-    constexpr float kPi    = 3.14159265358979323846F;
-    constexpr float kRadius = 2.0F;
+    constexpr float pi    = 3.14159265358979323846F;
+    constexpr float k_radius = 2.0F;
     const CircularArc3<float> arc(v3(0.0F, 0.0F, 0.0F),
                                     v3(1.0F, 0.0F, 0.0F),
                                     v3(0.0F, 1.0F, 0.0F),
-                                    /*radius_in=*/kRadius,
-                                    /*sweep_radians_in=*/kPi);
+                                    /*radius_in=*/k_radius,
+                                    /*sweep_radians_in=*/pi);
 
     // The centre is equidistant (= radius) from every point on the arc.
     const auto cp = closest_point(arc, v3(0.0F, 0.0F, 0.0F), 1.0e-4F, &alloc);
     const float dist = std::sqrt(cp.distance_squared);
     // Subdivision-rejection + Newton should find SOME point on the arc;
     // the distance must equal the radius.
-    REQUIRE(std::abs(dist - kRadius) < 1.0e-3F);
+    REQUIRE(std::abs(dist - k_radius) < 1.0e-3F);
 }
 
 TEST_CASE("v10d closest_point finds the global minimum on an S-shaped curve",
@@ -240,12 +240,12 @@ TEST_CASE("v10d intersect_ray returns the FIRST hit when multiple candidates exi
     // and at x=+1 (t_ray=3). The first hit must be at t_ray ~ 1.
     // (Circular arcs avoid the symmetric-midpoint degeneracy the adaptive
     //  chord-error sampler has on antisymmetric polynomials.)
-    constexpr float kTwoPi = 6.28318530717958647692F;
+    constexpr float two_pi = 6.28318530717958647692F;
     const CircularArc3<float> arc(v3(0.0F, 0.0F, 0.0F),
                                     v3(1.0F, 0.0F, 0.0F),
                                     v3(0.0F, 1.0F, 0.0F),
                                     /*radius_in=*/1.0F,
-                                    /*sweep_radians_in=*/kTwoPi,
+                                    /*sweep_radians_in=*/two_pi,
                                     /*closed_in=*/true);
 
     const crd::geometry::primitives::Ray3<float> ray{v3(-2.0F, 0.0F, 0.0F), v3(1.0F, 0.0F, 0.0F)};

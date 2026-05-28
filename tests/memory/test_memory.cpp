@@ -409,22 +409,22 @@ TEST_CASE("RefCounted: concurrent add_ref/release preserves count", "[memory][re
 {
     Widget w;
     // Start at 1; four threads each add 25 refs then remove 25.
-    constexpr int kThreads = 4;
-    constexpr int kOps     = 25;
+    constexpr int k_threads = 4;
+    constexpr int k_ops     = 25;
 
     w.add_ref(); // bump to 2 so we never hit 0 during the parallel ops
     {
         std::vector<std::thread> threads;
-        threads.reserve(kThreads);
-        for (int i = 0; i < kThreads; ++i)
+        threads.reserve(k_threads);
+        for (int i = 0; i < k_threads; ++i)
         {
             threads.emplace_back([&]
             {
-                for (int j = 0; j < kOps; ++j)
+                for (int j = 0; j < k_ops; ++j)
                 {
                     w.add_ref();
                 }
-                for (int j = 0; j < kOps; ++j)
+                for (int j = 0; j < k_ops; ++j)
                 {
                     static_cast<void>(w.release());
                 }

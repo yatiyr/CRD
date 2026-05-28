@@ -105,12 +105,12 @@ template <typename A, typename B>
     // Linear sample to find the FIRST separated→overlap transition.
     // (Pure binary search of [0, tmax] would miss pass-through cases where
     // at tmax we're separated again.)
-    constexpr int kSamples = 200;
+    constexpr int samples = 200;
     f32 prev_t = 0.0F;
     bool prev_overlap = false;
-    for (int i = 1; i <= kSamples; ++i)
+    for (int i = 1; i <= samples; ++i)
     {
-        const f32 t = (tmax * static_cast<f32>(i)) / static_cast<f32>(kSamples);
+        const f32 t = (tmax * static_cast<f32>(i)) / static_cast<f32>(samples);
         const bool now = eval_overlap_at(t);
         if (now && !prev_overlap)
         {

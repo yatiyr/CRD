@@ -379,8 +379,8 @@ TEST_CASE("soa SIMD-style integration: pos += vel * dt across all chunks",
     });
 
     const Vec8f dt_v(0.25F);
-    constexpr int kSteps = 4;
-    for (int step = 0; step < kSteps; ++step)
+    constexpr int k_steps = 4;
+    for (int step = 0; step < k_steps; ++step)
     {
         soa_for_each_chunk(s, [&](Body8& c, usize /*active*/)
         {

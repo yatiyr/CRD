@@ -452,7 +452,7 @@ UniformGrid<T>::raycast_traverse_(const Ray3<T>& ray, T tmax,
                                      WasVisited& was_visited,
                                      MarkVisited& mark_visited) const noexcept
 {
-    constexpr T kInf = std::numeric_limits<T>::infinity();
+    constexpr T inf = std::numeric_limits<T>::infinity();
 
     // Slab test ray vs grid bounds. Compute (t_entry, t_exit_grid).
     T t_entry_grid = T{0};
@@ -512,16 +512,16 @@ UniformGrid<T>::raycast_traverse_(const Ray3<T>& ray, T tmax,
     const i32 step_z = sign_step(ray.direction.z);
 
     // tDelta per axis = parametric distance to traverse one cell along that axis.
-    const T tdelta_x = (step_x != 0) ? std::abs(m_cell_size / ray.direction.x) : kInf;
-    const T tdelta_y = (step_y != 0) ? std::abs(m_cell_size / ray.direction.y) : kInf;
-    const T tdelta_z = (step_z != 0) ? std::abs(m_cell_size / ray.direction.z) : kInf;
+    const T tdelta_x = (step_x != 0) ? std::abs(m_cell_size / ray.direction.x) : inf;
+    const T tdelta_y = (step_y != 0) ? std::abs(m_cell_size / ray.direction.y) : inf;
+    const T tdelta_z = (step_z != 0) ? std::abs(m_cell_size / ray.direction.z) : inf;
 
     // tMax per axis = parametric t at which ray crosses NEXT cell boundary
     // (relative to the world origin, NOT t_entry). For step_x > 0: next x
     // boundary at bounds.min.x + (ix+1) * cell_size; for step_x < 0:
     // bounds.min.x + ix * cell_size.
     auto initial_tmax = [&](T origin_a, T dir_a, T bmin_a, i32 ia, i32 step_a) -> T {
-        if (step_a == 0) { return kInf; }
+        if (step_a == 0) { return inf; }
         const T boundary = (step_a > 0) ? bmin_a + static_cast<T>(ia + 1) * m_cell_size
                                           : bmin_a + static_cast<T>(ia) * m_cell_size;
         return (boundary - origin_a) / dir_a;
@@ -589,9 +589,9 @@ UniformGrid<T>::raycast_traverse_(const Ray3<T>& ray, T tmax,
     };
 
     // Walk cells, bounded by grid + step cap.
-    constexpr usize kMaxVoxelSteps = 1U << 22; // 4M cells worst case
+    constexpr usize max_voxel_steps = 1U << 22; // 4M cells worst case
     usize steps = 0;
-    while (steps++ < kMaxVoxelSteps)
+    while (steps++ < max_voxel_steps)
     {
         scan_cell();
 

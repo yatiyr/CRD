@@ -32,54 +32,54 @@ TEST_CASE("refine_lu: residual decreases for well-conditioned A",
 {
     (void)crd_hesap_dense_tests::hesap_jobs_listener();
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(2U * 1024U * 1024U));
-    constexpr crd::usize kN = 16;
-    Matrix<double, Layout::RowMajor> a(&alloc, kN, kN);
-    for (crd::usize i = 0; i < kN; ++i)
+    constexpr crd::usize k_n = 16;
+    Matrix<double, Layout::RowMajor> a(&alloc, k_n, k_n);
+    for (crd::usize i = 0; i < k_n; ++i)
     {
-        for (crd::usize j = 0; j < kN; ++j)
+        for (crd::usize j = 0; j < k_n; ++j)
         {
             a.at(i, j) = std::sin(static_cast<double>(i * 5 + j) * 0.1) +
                          (i == j ? 10.0 : 0.0);
         }
     }
     crd::containers::Array<double> x_true(&alloc);
-    x_true.resize(kN);
-    for (crd::usize i = 0; i < kN; ++i)
+    x_true.resize(k_n);
+    for (crd::usize i = 0; i < k_n; ++i)
     {
         x_true[i] = static_cast<double>(i + 1);
     }
     crd::containers::Array<double> b(&alloc);
-    b.resize(kN);
-    for (crd::usize i = 0; i < kN; ++i)
+    b.resize(k_n);
+    for (crd::usize i = 0; i < k_n; ++i)
     {
         double s = 0.0;
-        for (crd::usize j = 0; j < kN; ++j)
+        for (crd::usize j = 0; j < k_n; ++j)
         {
             s += a.at(i, j) * x_true[j];
         }
         b[i] = s;
     }
 
-    LU<double, Layout::RowMajor> lu(&alloc, kN);
+    LU<double, Layout::RowMajor> lu(&alloc, k_n);
     factor_lu(lu, a);
 
     crd::containers::Array<double> x(&alloc);
-    x.resize(kN);
-    for (crd::usize i = 0; i < kN; ++i)
+    x.resize(k_n);
+    for (crd::usize i = 0; i < k_n; ++i)
     {
         x[i] = b[i];
     }
-    crd::containers::Span<double> xs(x.data(), kN);
+    crd::containers::Span<double> xs(x.data(), k_n);
     solve_lu(lu, xs);  // Initial solve.
 
     RefinementResult<double> result = refine_lu<double, Layout::RowMajor>(
-        a, lu, crd::containers::ConstSpan<double>(b.data(), kN), xs, 5, 1e-14);
+        a, lu, crd::containers::ConstSpan<double>(b.data(), k_n), xs, 5, 1e-14);
 
     // Initial residual already small for well-conditioned, but refinement
     // shouldn't make it worse. Final residual must be ≤ initial.
     REQUIRE(result.final_rel_residual <= result.initial_rel_residual + 1e-15);
     // Solution still recovers x_true (within tight tolerance).
-    for (crd::usize i = 0; i < kN; ++i)
+    for (crd::usize i = 0; i < k_n; ++i)
     {
         CHECK_THAT(x[i], WithinAbs(x_true[i], 1e-10));
     }
@@ -90,22 +90,22 @@ TEST_CASE("refine_lu: trivial b=0 returns immediately",
 {
     (void)crd_hesap_dense_tests::hesap_jobs_listener();
     crd::memory::TlsfAllocator alloc(64U * 1024U);
-    constexpr crd::usize kN = 3;
-    Matrix<double, Layout::RowMajor> a(&alloc, kN, kN,
+    constexpr crd::usize k_n = 3;
+    Matrix<double, Layout::RowMajor> a(&alloc, k_n, k_n,
         {2.0, 1.0, 0.0, 1.0, 3.0, 1.0, 0.0, 1.0, 4.0});
-    LU<double, Layout::RowMajor> lu(&alloc, kN);
+    LU<double, Layout::RowMajor> lu(&alloc, k_n);
     factor_lu(lu, a);
 
     crd::containers::Array<double> b(&alloc);
-    b.resize(kN);
+    b.resize(k_n);
     b[0] = 0.0; b[1] = 0.0; b[2] = 0.0;
     crd::containers::Array<double> x(&alloc);
-    x.resize(kN);
+    x.resize(k_n);
     x[0] = 0.0; x[1] = 0.0; x[2] = 0.0;
 
     RefinementResult<double> result = refine_lu<double, Layout::RowMajor>(
-        a, lu, crd::containers::ConstSpan<double>(b.data(), kN),
-        crd::containers::Span<double>(x.data(), kN));
+        a, lu, crd::containers::ConstSpan<double>(b.data(), k_n),
+        crd::containers::Span<double>(x.data(), k_n));
     REQUIRE(result.converged);
     REQUIRE(result.iterations == 0U);
 }
@@ -114,61 +114,61 @@ TEST_CASE("refine_cholesky: residual decreases for SPD",
           "[hesap][refinement][cholesky]")
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(1U * 1024U * 1024U));
-    constexpr crd::usize kN = 12;
-    Symmetric<double> a(&alloc, kN);
+    constexpr crd::usize k_n = 12;
+    Symmetric<double> a(&alloc, k_n);
     // Build SPD via A = B^T B + n·I.
-    for (crd::usize i = 0; i < kN; ++i)
+    for (crd::usize i = 0; i < k_n; ++i)
     {
         for (crd::usize j = 0; j <= i; ++j)
         {
             double s = 0.0;
-            for (crd::usize p = 0; p < kN; ++p)
+            for (crd::usize p = 0; p < k_n; ++p)
             {
-                s += std::sin(static_cast<double>(p * kN + i) * 0.07) *
-                     std::sin(static_cast<double>(p * kN + j) * 0.07);
+                s += std::sin(static_cast<double>(p * k_n + i) * 0.07) *
+                     std::sin(static_cast<double>(p * k_n + j) * 0.07);
             }
             if (i == j)
             {
-                s += static_cast<double>(kN);
+                s += static_cast<double>(k_n);
             }
             a.at(i, j) = s;
         }
     }
 
     crd::containers::Array<double> x_true(&alloc);
-    x_true.resize(kN);
-    for (crd::usize i = 0; i < kN; ++i)
+    x_true.resize(k_n);
+    for (crd::usize i = 0; i < k_n; ++i)
     {
         x_true[i] = static_cast<double>(i + 1) * 0.5;
     }
     crd::containers::Array<double> b(&alloc);
-    b.resize(kN);
-    for (crd::usize i = 0; i < kN; ++i)
+    b.resize(k_n);
+    for (crd::usize i = 0; i < k_n; ++i)
     {
         double s = 0.0;
-        for (crd::usize j = 0; j < kN; ++j)
+        for (crd::usize j = 0; j < k_n; ++j)
         {
             s += a.at(i, j) * x_true[j];
         }
         b[i] = s;
     }
 
-    Cholesky<double, Layout::RowMajor> chol(&alloc, kN);
+    Cholesky<double, Layout::RowMajor> chol(&alloc, k_n);
     factor_cholesky(chol, a);
 
     crd::containers::Array<double> x(&alloc);
-    x.resize(kN);
-    for (crd::usize i = 0; i < kN; ++i)
+    x.resize(k_n);
+    for (crd::usize i = 0; i < k_n; ++i)
     {
         x[i] = b[i];
     }
-    crd::containers::Span<double> xs(x.data(), kN);
+    crd::containers::Span<double> xs(x.data(), k_n);
     solve_cholesky(chol, xs);
 
     RefinementResult<double> result = refine_cholesky<double, Layout::RowMajor>(
-        a, chol, crd::containers::ConstSpan<double>(b.data(), kN), xs, 5, 1e-14);
+        a, chol, crd::containers::ConstSpan<double>(b.data(), k_n), xs, 5, 1e-14);
     REQUIRE(result.final_rel_residual <= result.initial_rel_residual + 1e-15);
-    for (crd::usize i = 0; i < kN; ++i)
+    for (crd::usize i = 0; i < k_n; ++i)
     {
         CHECK_THAT(x[i], WithinAbs(x_true[i], 1e-10));
     }

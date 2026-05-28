@@ -25,10 +25,10 @@ struct PerfFixture
 TEST_CASE("ring saturates at slot count, drops record bump", "[perf][overflow]")
 {
     PerfFixture fx;
-    constexpr crd::u32 kAttempts = 100U;
+    constexpr crd::u32 attempts = 100U;
     const auto id = crd::perf::intern_name("overflow_test");
 
-    for (crd::u32 i = 0U; i < kAttempts; ++i)
+    for (crd::u32 i = 0U; i < attempts; ++i)
     {
         const auto tok = crd::perf::push_region(id);
         crd::perf::pop_region(id, tok);
@@ -36,7 +36,7 @@ TEST_CASE("ring saturates at slot count, drops record bump", "[perf][overflow]")
 
     const auto view = crd::perf::thread_samples(crd::perf::current_thread_index());
     CHECK(view.size == 16U);            // exactly the slot count
-    CHECK(view.dropped == kAttempts - 16U);
+    CHECK(view.dropped == attempts - 16U);
 }
 
 TEST_CASE("clear_samples lets the ring re-fill from zero", "[perf][overflow][clear]")

@@ -318,12 +318,12 @@ TEST_CASE("voronoi_2d: large-coord f32 stability (1e5 scale)",
 {
     AllocFixture f{};
     crd::containers::Array<Vec2<f32>> pts(&f.alloc);
-    constexpr f32 kScale = 1.0e5F;
+    constexpr f32 k_scale = 1.0e5F;
     pts.push_back(Vec2<f32>{0, 0});
-    pts.push_back(Vec2<f32>{kScale, 0});
-    pts.push_back(Vec2<f32>{kScale, kScale});
-    pts.push_back(Vec2<f32>{0, kScale});
-    pts.push_back(Vec2<f32>{0.5F * kScale, 0.5F * kScale});
+    pts.push_back(Vec2<f32>{k_scale, 0});
+    pts.push_back(Vec2<f32>{k_scale, k_scale});
+    pts.push_back(Vec2<f32>{0, k_scale});
+    pts.push_back(Vec2<f32>{0.5F * k_scale, 0.5F * k_scale});
     auto r = voronoi_2d<f32>(
         crd::containers::ConstSpan<Vec2<f32>>{pts.data(), pts.size()}, &f.alloc);
     REQUIRE(r.ok());

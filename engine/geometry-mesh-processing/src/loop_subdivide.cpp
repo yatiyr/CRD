@@ -153,9 +153,9 @@ crd::math::Vec3<T> compute_updated_vertex_position(const HalfEdgeMesh<T>& m, crd
     if (valence == 0U) { return p; }
 
     // Loop interior weight.
-    constexpr T kTwoPi = static_cast<T>(6.28318530717958647692);
+    constexpr T two_pi = static_cast<T>(6.28318530717958647692);
     const T     n        = static_cast<T>(valence);
-    const T     two_pi_n = kTwoPi / n;
+    const T     two_pi_n = two_pi / n;
     const T     cos_val     = crd::math::deterministic::cos(two_pi_n);
     const T     inner       = T{0.375} + T{0.25} * cos_val;     // 3/8 + 1/4·cos(2π/n)
     const T     beta        = (T{0.625} - inner * inner) / n;   // (5/8 - inner²)/n

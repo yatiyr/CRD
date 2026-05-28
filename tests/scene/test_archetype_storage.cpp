@@ -212,8 +212,8 @@ TEST_CASE("Chunk fill+spill: more entities than chunk capacity allocate a second
     // With 12-byte Position (~20 B per entity including the EntityId array),
     // one chunk fits ~800 entities; 1500 forces a second chunk.
     crd::containers::Array<EntityId> entities;
-    constexpr int kN = 1500;
-    for (int i = 0; i < kN; ++i)
+    constexpr int n = 1500;
+    for (int i = 0; i < n; ++i)
     {
         EntityId e = w.spawn();
         w.add_component<Position>(e, Position{static_cast<float>(i), 0, 0});
@@ -221,7 +221,7 @@ TEST_CASE("Chunk fill+spill: more entities than chunk capacity allocate a second
     }
 
     // All entities resolve correctly.
-    for (int i = 0; i < kN; ++i)
+    for (int i = 0; i < n; ++i)
     {
         const Position* p = w.get_component<Position>(entities[i]);
         REQUIRE(p != nullptr);

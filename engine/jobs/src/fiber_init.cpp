@@ -52,14 +52,14 @@ void fiber_init_stack(FiberContext& ctx, void* stack_base, crd::usize stack_size
     //   saved_RSP % 16 = 8  (ensures entry_fn sees RSP % 16 = 8 per Windows x64 ABI)
     //   (saved_RSP + 240) % 16 = 8 âœ“   â† RSP when entry_fn begins
 
-    constexpr crd::usize kFrameSize = 248U;
-    CRD_ASSERT(stack_size >= kFrameSize + 64U);
+    constexpr crd::usize frame_size = 248U;
+    CRD_ASSERT(stack_size >= frame_size + 64U);
 
     auto p = reinterpret_cast<std::uintptr_t>(top);
     p &= ~std::uintptr_t{15U};  // align down to 16 â€” p % 16 = 0
 
-    auto* frame = reinterpret_cast<crd::u8*>(p - kFrameSize); // NOLINT(performance-no-int-to-ptr)
-    std::memset(frame, 0, kFrameSize);
+    auto* frame = reinterpret_cast<crd::u8*>(p - frame_size); // NOLINT(performance-no-int-to-ptr)
+    std::memset(frame, 0, frame_size);
 
     // Default FP environment
     *reinterpret_cast<crd::u32*>(frame + 160U) = 0x1F80U;  // MXCSR
@@ -92,14 +92,14 @@ void fiber_init_stack(FiberContext& ctx, void* stack_base, crd::usize stack_size
     //   saved_RSP % 16 = 0  (ensures entry_fn sees RSP % 16 = 8 per SysV ABI)
     //   (saved_RSP + 56) % 16 = 8 âœ“   â† RSP when entry_fn begins
 
-    constexpr crd::usize kFrameSize = 64U;
-    CRD_ASSERT(stack_size >= kFrameSize + 64U);
+    constexpr crd::usize frame_size = 64U;
+    CRD_ASSERT(stack_size >= frame_size + 64U);
 
     auto p = reinterpret_cast<std::uintptr_t>(top);
     p &= ~std::uintptr_t{15U};  // align down to 16 â€” p % 16 = 0
 
-    auto* frame = reinterpret_cast<crd::u8*>(p - kFrameSize); // NOLINT(performance-no-int-to-ptr)
-    std::memset(frame, 0, kFrameSize);
+    auto* frame = reinterpret_cast<crd::u8*>(p - frame_size); // NOLINT(performance-no-int-to-ptr)
+    std::memset(frame, 0, frame_size);
 
     *reinterpret_cast<void**>(frame + 48U) = reinterpret_cast<void*>(entry_fn);
     *reinterpret_cast<void**>(frame + 56U) = reinterpret_cast<void*>(fiber_abort);

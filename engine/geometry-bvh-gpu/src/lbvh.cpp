@@ -85,8 +85,8 @@ delta(const MortonPair<KeyT>* pairs, int n, int i, int j) noexcept
             return std::countl_zero(static_cast<std::uint64_t>(ki ^ kj));
         }
     }
-    constexpr int kCodeBits = static_cast<int>(sizeof(KeyT)) * CHAR_BIT;
-    return kCodeBits + std::countl_zero(static_cast<crd::u32>(i) ^ static_cast<crd::u32>(j));
+    constexpr int code_bits = static_cast<int>(sizeof(KeyT)) * CHAR_BIT;
+    return code_bits + std::countl_zero(static_cast<crd::u32>(i) ^ static_cast<crd::u32>(j));
 }
 
 template <typename KeyT>
@@ -143,8 +143,8 @@ aabb_union(const AABB3<crd::f32>& a, const AABB3<crd::f32>& b) noexcept
 [[nodiscard]] constexpr AABB3<crd::f32>
 sentinel_aabb() noexcept
 {
-    constexpr crd::f32 kInf = std::numeric_limits<crd::f32>::infinity();
-    return {{kInf, kInf, kInf}, {-kInf, -kInf, -kInf}};
+    constexpr crd::f32 inf = std::numeric_limits<crd::f32>::infinity();
+    return {{inf, inf, inf}, {-inf, -inf, -inf}};
 }
 
 // MSB encoding helpers.

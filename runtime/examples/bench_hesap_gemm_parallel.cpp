@@ -43,25 +43,25 @@ crd::f64 measure_clock_ghz()
 crd::f64 peak_gflops_single_core_f32(crd::f64 clock_ghz)
 {
 #if CRD_SIMD_HAS_AVX2
-    constexpr crd::f64 kFlopsPerCyc = 32.0;
+    constexpr crd::f64 flops_per_cyc = 32.0;
 #elif CRD_SIMD_HAS_SSE2
-    constexpr crd::f64 kFlopsPerCyc = 8.0;
+    constexpr crd::f64 flops_per_cyc = 8.0;
 #else
-    constexpr crd::f64 kFlopsPerCyc = 2.0;
+    constexpr crd::f64 flops_per_cyc = 2.0;
 #endif
-    return kFlopsPerCyc * clock_ghz;
+    return flops_per_cyc * clock_ghz;
 }
 
 crd::f64 peak_gflops_single_core_f64(crd::f64 clock_ghz)
 {
 #if CRD_SIMD_HAS_AVX2
-    constexpr crd::f64 kFlopsPerCyc = 16.0;
+    constexpr crd::f64 flops_per_cyc = 16.0;
 #elif CRD_SIMD_HAS_SSE2
-    constexpr crd::f64 kFlopsPerCyc = 4.0;
+    constexpr crd::f64 flops_per_cyc = 4.0;
 #else
-    constexpr crd::f64 kFlopsPerCyc = 2.0;
+    constexpr crd::f64 flops_per_cyc = 2.0;
 #endif
-    return kFlopsPerCyc * clock_ghz;
+    return flops_per_cyc * clock_ghz;
 }
 
 template <typename T> struct RunResult

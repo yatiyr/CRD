@@ -305,9 +305,9 @@ TEST_CASE("ruppert_refine_2d: input boundary segments preserved",
     // Simplified check: every refined_segment endpoint corresponds to a
     // vertex on one of the 4 boundary lines of the square.
     auto on_boundary = [&](const Vec2<f64>& v) -> bool {
-        constexpr f64 kEps = 1.0e-9;
-        return std::abs(v.x - 0.0) < kEps || std::abs(v.x - 2.0) < kEps
-            || std::abs(v.y - 0.0) < kEps || std::abs(v.y - 2.0) < kEps;
+        constexpr f64 eps = 1.0e-9;
+        return std::abs(v.x - 0.0) < eps || std::abs(v.x - 2.0) < eps
+            || std::abs(v.y - 0.0) < eps || std::abs(v.y - 2.0) < eps;
     };
     for (const auto& s : r.refined_segments)
     {

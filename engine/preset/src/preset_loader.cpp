@@ -78,8 +78,8 @@ void* PresetLoader::load(const crd::resources::LoadContext& ctx)
     if (const auto* pchn = crd::resources::crdr_find_chunk(file, kFourCC_PCHN); pchn != nullptr)
     {
         // PCHN layout: u32 entry_count + u32 reserved + PresetChainEntry[entry_count].
-        constexpr crd::usize kHeader = 8U;
-        if (pchn->payload.size() < kHeader)
+        constexpr crd::usize k_header = 8U;
+        if (pchn->payload.size() < k_header)
         {
             res->~PresetResource();
             m_alloc->deallocate(res);
@@ -89,7 +89,7 @@ void* PresetLoader::load(const crd::resources::LoadContext& ctx)
         crd::u32 entry_count = 0U;
         std::memcpy(&entry_count, pchn->payload.data(), sizeof(entry_count));
 
-        const crd::usize expected = kHeader + static_cast<crd::usize>(entry_count) * sizeof(PresetChainEntry);
+        const crd::usize expected = k_header + static_cast<crd::usize>(entry_count) * sizeof(PresetChainEntry);
         if (pchn->payload.size() != expected)
         {
             res->~PresetResource();
@@ -101,7 +101,7 @@ void* PresetLoader::load(const crd::resources::LoadContext& ctx)
         if (entry_count > 0U)
         {
             std::memcpy(res->mutable_chain().data(),
-                        pchn->payload.data() + kHeader,
+                        pchn->payload.data() + k_header,
                         static_cast<crd::usize>(entry_count) * sizeof(PresetChainEntry));
         }
     }

@@ -110,13 +110,13 @@ TEST_CASE("Empty TOML cooks to valid empty SCEN", "[scene-cooker][empty]")
 TEST_CASE("Single-entity Transform round-trip via cooker + loader",
           "[scene-cooker][round-trip]")
 {
-    constexpr const char* kTomlText = R"(
+    constexpr const char* k_toml_text = R"(
 [entity.player]
 Transform = { translation = [1.5, 2.5, 3.5] }
 )";
 
     crd::containers::Array<CookError> errors{crd::memory::default_allocator()};
-    auto bytes = scene_cooker_inline(kTomlText, make_ctx(), &errors);
+    auto bytes = scene_cooker_inline(k_toml_text, make_ctx(), &errors);
     REQUIRE(errors.size() == 0);
     REQUIRE(bytes.size() > 0);
 
@@ -140,7 +140,7 @@ Transform = { translation = [1.5, 2.5, 3.5] }
 TEST_CASE("Hierarchy with ChildOf relation round-trips",
           "[scene-cooker][round-trip][relations]")
 {
-    constexpr const char* kTomlText = R"(
+    constexpr const char* k_toml_text = R"(
 [entity.parent]
 Transform = { translation = [10.0, 0.0, 0.0] }
 
@@ -150,7 +150,7 @@ ChildOf = "parent"
 )";
 
     crd::containers::Array<CookError> errors{crd::memory::default_allocator()};
-    auto bytes = scene_cooker_inline(kTomlText, make_ctx(), &errors);
+    auto bytes = scene_cooker_inline(k_toml_text, make_ctx(), &errors);
     REQUIRE(errors.size() == 0);
 
     auto* res = load_scene_bytes(bytes);
@@ -179,7 +179,7 @@ ChildOf = "parent"
 TEST_CASE("All six built-in relations round-trip via cooker",
           "[scene-cooker][round-trip][relations]")
 {
-    constexpr const char* kTomlText = R"(
+    constexpr const char* k_toml_text = R"(
 [entity.a] # parent / socket / owner / target / dependency / controller
 Transform = {}
 
@@ -194,7 +194,7 @@ PossessedBy = "a"
 )";
 
     crd::containers::Array<CookError> errors{crd::memory::default_allocator()};
-    auto bytes = scene_cooker_inline(kTomlText, make_ctx(), &errors);
+    auto bytes = scene_cooker_inline(k_toml_text, make_ctx(), &errors);
     REQUIRE(errors.size() == 0);
     REQUIRE(bytes.size() > 0);
 
@@ -209,7 +209,7 @@ PossessedBy = "a"
 TEST_CASE("Non-acyclic relation accepts array of targets (Targets)",
           "[scene-cooker][round-trip][relations][array]")
 {
-    constexpr const char* kTomlText = R"(
+    constexpr const char* k_toml_text = R"(
 [entity.tracked_a]
 Transform = {}
 
@@ -222,7 +222,7 @@ Targets = ["tracked_a", "tracked_b"]
 )";
 
     crd::containers::Array<CookError> errors{crd::memory::default_allocator()};
-    auto bytes = scene_cooker_inline(kTomlText, make_ctx(), &errors);
+    auto bytes = scene_cooker_inline(k_toml_text, make_ctx(), &errors);
     REQUIRE(errors.size() == 0);
 
     auto* res = load_scene_bytes(bytes);
@@ -240,13 +240,13 @@ Targets = ["tracked_a", "tracked_b"]
 TEST_CASE("Empty Transform table = default-constructed",
           "[scene-cooker][defaults]")
 {
-    constexpr const char* kTomlText = R"(
+    constexpr const char* k_toml_text = R"(
 [entity.thing]
 Transform = {}
 )";
 
     crd::containers::Array<CookError> errors{crd::memory::default_allocator()};
-    auto bytes = scene_cooker_inline(kTomlText, make_ctx(), &errors);
+    auto bytes = scene_cooker_inline(k_toml_text, make_ctx(), &errors);
     REQUIRE(errors.size() == 0);
 
     auto* res = load_scene_bytes(bytes);
@@ -270,7 +270,7 @@ Transform = {}
 TEST_CASE("Determinism: same TOML cooks to bit-exact bytes",
           "[scene-cooker][determinism]")
 {
-    constexpr const char* kTomlText = R"(
+    constexpr const char* k_toml_text = R"(
 [entity.p]
 Transform = { translation = [1.0, 2.0, 3.0] }
 
@@ -279,8 +279,8 @@ Transform = { translation = [4.0, 5.0, 6.0] }
 ChildOf = "p"
 )";
 
-    auto a = scene_cooker_inline(kTomlText, make_ctx());
-    auto b = scene_cooker_inline(kTomlText, make_ctx());
+    auto a = scene_cooker_inline(k_toml_text, make_ctx());
+    auto b = scene_cooker_inline(k_toml_text, make_ctx());
     REQUIRE(a.size() > 0);
     REQUIRE(a.size() == b.size());
     CHECK(std::memcmp(a.data(), b.data(), a.size()) == 0);
@@ -293,28 +293,28 @@ ChildOf = "p"
 TEST_CASE("Unknown component name -> cooker fails with diagnostic",
           "[scene-cooker][error]")
 {
-    constexpr const char* kTomlText = R"(
+    constexpr const char* k_toml_text = R"(
 [entity.x]
 Transform = {}
 WeirdUnknownComponent = {}
 )";
 
     crd::containers::Array<CookError> errors{crd::memory::default_allocator()};
-    auto bytes = scene_cooker_inline(kTomlText, make_ctx(), &errors);
+    auto bytes = scene_cooker_inline(k_toml_text, make_ctx(), &errors);
     CHECK(bytes.size() == 0);
     CHECK(errors.size() > 0);
 }
 
 TEST_CASE("Missing relation target -> cooker fails", "[scene-cooker][error]")
 {
-    constexpr const char* kTomlText = R"(
+    constexpr const char* k_toml_text = R"(
 [entity.child]
 Transform = {}
 ChildOf = "no_such_parent"
 )";
 
     crd::containers::Array<CookError> errors{crd::memory::default_allocator()};
-    auto bytes = scene_cooker_inline(kTomlText, make_ctx(), &errors);
+    auto bytes = scene_cooker_inline(k_toml_text, make_ctx(), &errors);
     CHECK(bytes.size() == 0);
     CHECK(errors.size() > 0);
 }
@@ -322,13 +322,13 @@ ChildOf = "no_such_parent"
 TEST_CASE("Type mismatch (Transform.translation as string) -> cooker fails",
           "[scene-cooker][error]")
 {
-    constexpr const char* kTomlText = R"(
+    constexpr const char* k_toml_text = R"(
 [entity.x]
 Transform = { translation = "not_an_array" }
 )";
 
     crd::containers::Array<CookError> errors{crd::memory::default_allocator()};
-    auto bytes = scene_cooker_inline(kTomlText, make_ctx(), &errors);
+    auto bytes = scene_cooker_inline(k_toml_text, make_ctx(), &errors);
     CHECK(bytes.size() == 0);
     CHECK(errors.size() > 0);
 }
@@ -336,13 +336,13 @@ Transform = { translation = "not_an_array" }
 TEST_CASE("Hierarchical entity name (with dot) -> cooker fails",
           "[scene-cooker][error]")
 {
-    constexpr const char* kTomlText = R"(
+    constexpr const char* k_toml_text = R"(
 [entity."player.right_hand"]
 Transform = {}
 )";
 
     crd::containers::Array<CookError> errors{crd::memory::default_allocator()};
-    auto bytes = scene_cooker_inline(kTomlText, make_ctx(), &errors);
+    auto bytes = scene_cooker_inline(k_toml_text, make_ctx(), &errors);
     CHECK(bytes.size() == 0);
     CHECK(errors.size() > 0);
 }
@@ -350,7 +350,7 @@ Transform = {}
 TEST_CASE("Acyclic relation (ChildOf) with array of targets -> cooker fails",
           "[scene-cooker][error][relations]")
 {
-    constexpr const char* kTomlText = R"(
+    constexpr const char* k_toml_text = R"(
 [entity.a]
 Transform = {}
 
@@ -363,7 +363,7 @@ ChildOf = ["a", "b"]
 )";
 
     crd::containers::Array<CookError> errors{crd::memory::default_allocator()};
-    auto bytes = scene_cooker_inline(kTomlText, make_ctx(), &errors);
+    auto bytes = scene_cooker_inline(k_toml_text, make_ctx(), &errors);
     CHECK(bytes.size() == 0);
     CHECK(errors.size() > 0);
 }
@@ -372,7 +372,7 @@ TEST_CASE("Multiple errors accumulate in one pass",
           "[scene-cooker][error][accumulate]")
 {
     // Three errors: unknown component, missing target, hierarchical name.
-    constexpr const char* kTomlText = R"(
+    constexpr const char* k_toml_text = R"(
 [entity.a]
 WeirdComponent = {}
 
@@ -384,7 +384,7 @@ Transform = {}
 )";
 
     crd::containers::Array<CookError> errors{crd::memory::default_allocator()};
-    auto bytes = scene_cooker_inline(kTomlText, make_ctx(), &errors);
+    auto bytes = scene_cooker_inline(k_toml_text, make_ctx(), &errors);
     CHECK(bytes.size() == 0);
     CHECK(errors.size() >= 3U);
 }
@@ -470,7 +470,7 @@ TEST_CASE("Direct-built hierarchy + step propagation works (control test)",
 TEST_CASE("Cooked hierarchy + step propagation: world matrices correct",
           "[scene-cooker][round-trip][propagation]")
 {
-    constexpr const char* kTomlText = R"(
+    constexpr const char* k_toml_text = R"(
 [entity.parent]
 Transform = { translation = [10.0, 0.0, 0.0] }
 
@@ -480,7 +480,7 @@ ChildOf = "parent"
 )";
 
     crd::containers::Array<CookError> errors{crd::memory::default_allocator()};
-    auto bytes = scene_cooker_inline(kTomlText, make_ctx(), &errors);
+    auto bytes = scene_cooker_inline(k_toml_text, make_ctx(), &errors);
     REQUIRE(errors.size() == 0);
 
     auto* res = load_scene_bytes(bytes);

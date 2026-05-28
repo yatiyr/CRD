@@ -84,7 +84,7 @@ TEST_CASE("CycleCounter::cycles_to_duration: basic conversion",
           "[d-006][clocks][cycle]")
 {
     // 3e9 cycles at 3e9 Hz = 1 second.
-    constexpr f64 kCyclesPerSec = 3.0e9;
-    Duration d = CycleCounter::cycles_to_duration(3'000'000'000U, kCyclesPerSec);
+    constexpr f64 k_cycles_per_sec = 3.0e9;
+    Duration d = CycleCounter::cycles_to_duration(3'000'000'000U, k_cycles_per_sec);
     CHECK(d.value == 1.0);
 }

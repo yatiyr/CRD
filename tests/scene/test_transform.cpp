@@ -434,10 +434,10 @@ TEST_CASE("Deep chain (30-deep): precision within documented f32 tolerance",
 {
     World w;
     setup_test_world(w);
-    constexpr int kDepth = 30;
+    constexpr int depth = 30;
     crd::containers::Array<EntityId> chain;
     chain.push_back(spawn_with_transform(w, Vec3f{1, 0, 0}));
-    for (int i = 1; i < kDepth; ++i)
+    for (int i = 1; i < depth; ++i)
     {
         EntityId next = spawn_with_transform(w, Vec3f{1, 0, 0});
         w.add_relation<ChildOf>(next, chain[i - 1]);
@@ -445,12 +445,12 @@ TEST_CASE("Deep chain (30-deep): precision within documented f32 tolerance",
     }
     w.step(1.0 / 60.0);
 
-    // Tip entity should be at world translation (kDepth, 0, 0).
-    const Transform* tip = w.get_component<Transform>(chain[kDepth - 1]);
+    // Tip entity should be at world translation (depth, 0, 0).
+    const Transform* tip = w.get_component<Transform>(chain[depth - 1]);
     REQUIRE(tip != nullptr);
     // Documented tolerance: ~1 ULP per multiplication Ã— 30 â‰ˆ 1e-5 radians /
     // worst-case 30 Ã— 1e-6 â‰ˆ 3e-5 absolute for translation. Pin generous.
-    CHECK(approx(tip->world.c3.x, static_cast<crd::f32>(kDepth), 1e-4F));
+    CHECK(approx(tip->world.c3.x, static_cast<crd::f32>(depth), 1e-4F));
     CHECK(approx(tip->world.c3.y, 0.0F, 1e-5F));
     CHECK(approx(tip->world.c3.z, 0.0F, 1e-5F));
 }

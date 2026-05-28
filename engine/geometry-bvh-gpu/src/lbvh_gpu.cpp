@@ -277,63 +277,63 @@ LbvhGpuPipeline::LbvhGpuPipeline(crd::rhi::Device&            device,
     if (impl.desc_alloc == nullptr) { return; }
 
     // ---- Pre-allocate all working-set buffers at kRadixMaxItems capacity --
-    constexpr crd::u64 kMaxN           = static_cast<crd::u64>(kRadixMaxItems);
-    constexpr crd::u64 kMaxNInt        = kMaxN - 1U;
-    constexpr crd::u64 kMaxPairsBytes  = kMaxN    * sizeof(MortonPair<crd::u32>);
-    constexpr crd::u64 kMaxAabbBytes   = kMaxN    * (6U * sizeof(crd::f32));
-    constexpr crd::u64 kMaxNodesBytes  = kMaxNInt * 64U;          // 64 B per LbvhFatNode
-    constexpr crd::u64 kMaxParentBytes = kMaxN    * sizeof(crd::u32);
-    constexpr crd::u64 kMaxDoneBytes   = kMaxNInt * sizeof(crd::u32);
+    constexpr crd::u64 max_n           = static_cast<crd::u64>(kRadixMaxItems);
+    constexpr crd::u64 max_n_int        = max_n - 1U;
+    constexpr crd::u64 max_pairs_bytes  = max_n    * sizeof(MortonPair<crd::u32>);
+    constexpr crd::u64 max_aabb_bytes   = max_n    * (6U * sizeof(crd::f32));
+    constexpr crd::u64 max_nodes_bytes  = max_n_int * 64U;          // 64 B per LbvhFatNode
+    constexpr crd::u64 max_parent_bytes = max_n    * sizeof(crd::u32);
+    constexpr crd::u64 max_done_bytes   = max_n_int * sizeof(crd::u32);
 
     impl.pairs_staging = device.create_buffer(
-        {kMaxPairsBytes, crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferSrc),
+        {max_pairs_bytes, crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferSrc),
          crd::rhi::MemoryUsage::CpuToGpu});
     impl.pairs_gpu = device.create_buffer(
-        {kMaxPairsBytes,
+        {max_pairs_bytes,
          crd::rhi::enum_bits(crd::rhi::BufferUsage::Storage) |
              crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferDst),
          crd::rhi::MemoryUsage::GpuOnly});
 
     impl.leaf_aabbs_staging = device.create_buffer(
-        {kMaxAabbBytes, crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferSrc),
+        {max_aabb_bytes, crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferSrc),
          crd::rhi::MemoryUsage::CpuToGpu});
     impl.leaf_aabbs_gpu = device.create_buffer(
-        {kMaxAabbBytes,
+        {max_aabb_bytes,
          crd::rhi::enum_bits(crd::rhi::BufferUsage::Storage) |
              crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferDst),
          crd::rhi::MemoryUsage::GpuOnly});
 
     impl.nodes_gpu = device.create_buffer(
-        {kMaxNodesBytes,
+        {max_nodes_bytes,
          crd::rhi::enum_bits(crd::rhi::BufferUsage::Storage) |
              crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferSrc) |
              crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferDst),
          crd::rhi::MemoryUsage::GpuOnly});
     impl.prim_indices_staging = device.create_buffer(
-        {kMaxN * sizeof(crd::u32), crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferSrc),
+        {max_n * sizeof(crd::u32), crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferSrc),
          crd::rhi::MemoryUsage::CpuToGpu});
     impl.prim_indices_gpu = device.create_buffer(
-        {kMaxN * sizeof(crd::u32),
+        {max_n * sizeof(crd::u32),
          crd::rhi::enum_bits(crd::rhi::BufferUsage::Storage) |
              crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferDst) |
              crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferSrc),
          crd::rhi::MemoryUsage::GpuOnly});
     impl.leaf_parents_gpu = device.create_buffer(
-        {kMaxParentBytes,
+        {max_parent_bytes,
          crd::rhi::enum_bits(crd::rhi::BufferUsage::Storage),
          crd::rhi::MemoryUsage::GpuOnly});
 
     impl.done_staging = device.create_buffer(
-        {kMaxDoneBytes, crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferSrc),
+        {max_done_bytes, crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferSrc),
          crd::rhi::MemoryUsage::CpuToGpu});
     impl.done_gpu = device.create_buffer(
-        {kMaxDoneBytes,
+        {max_done_bytes,
          crd::rhi::enum_bits(crd::rhi::BufferUsage::Storage) |
              crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferDst),
          crd::rhi::MemoryUsage::GpuOnly});
 
     impl.nodes_readback = device.create_buffer(
-        {kMaxNodesBytes, crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferDst),
+        {max_nodes_bytes, crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferDst),
          crd::rhi::MemoryUsage::GpuToCpu});
 
     impl.root_parent_init_staging = device.create_buffer(
@@ -356,8 +356,8 @@ LbvhGpuPipeline::LbvhGpuPipeline(crd::rhi::Device&            device,
     {
         if (auto* dst = static_cast<crd::u32*>(impl.done_staging->map()))
         {
-            constexpr crd::u64 kMaxDoneBytesCtor = kMaxDoneBytes;
-            std::memset(dst, 0, kMaxDoneBytesCtor);
+            constexpr crd::u64 max_done_bytes_ctor = max_done_bytes;
+            std::memset(dst, 0, max_done_bytes_ctor);
             impl.done_staging->unmap();
         }
     }
@@ -512,8 +512,8 @@ run_build_upsweep(LbvhGpuPipeline::Impl& impl,
     // condition always selects carry-register. Future: re-enable when (a)
     // RHI grows a batched buffer_barrier API, or (b) consumer hardware has
     // cheaper pipeline barriers.
-    constexpr crd::u32 kLevelWiseThreshold = ~0U;
-    const bool use_level_wise = (n >= kLevelWiseThreshold);
+    constexpr crd::u32 level_wise_threshold = ~0U;
+    const bool use_level_wise = (n >= level_wise_threshold);
 
     std::unique_ptr<crd::rhi::DescriptorSet> ds_upsweep;
     std::unique_ptr<crd::rhi::DescriptorSet> ds_init_leaves;

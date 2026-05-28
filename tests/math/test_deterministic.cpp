@@ -58,11 +58,11 @@ namespace
 TEST_CASE("deterministic sin matches std::sin within 4 ulps over [-2pi, 2pi]",
           "[deterministic][accuracy]")
 {
-    constexpr int kN = 64;
+    constexpr int k_n = 64;
     u32 max_ulp = 0;
-    for (int i = 0; i < kN; ++i)
+    for (int i = 0; i < k_n; ++i)
     {
-        const f32 t = -2.0F * det::pi + (4.0F * det::pi) * static_cast<f32>(i) / static_cast<f32>(kN - 1);
+        const f32 t = -2.0F * det::pi + (4.0F * det::pi) * static_cast<f32>(i) / static_cast<f32>(k_n - 1);
         const f32 expected = std::sin(t);
         const f32 got      = det::sin(t);
         const u32 d        = ulp_diff(expected, got);
@@ -75,14 +75,14 @@ TEST_CASE("deterministic sin matches std::sin within 4 ulps over [-2pi, 2pi]",
 TEST_CASE("deterministic cos matches std::cos within 4 ulps over [-2pi, 2pi]",
           "[deterministic][accuracy]")
 {
-    constexpr int kN = 64;
+    constexpr int k_n = 64;
     u32 max_ulp = 0;
     f32 worst_t = 0.0F;
     f32 worst_got = 0.0F;
     f32 worst_exp = 0.0F;
-    for (int i = 0; i < kN; ++i)
+    for (int i = 0; i < k_n; ++i)
     {
-        const f32 t = -2.0F * det::pi + (4.0F * det::pi) * static_cast<f32>(i) / static_cast<f32>(kN - 1);
+        const f32 t = -2.0F * det::pi + (4.0F * det::pi) * static_cast<f32>(i) / static_cast<f32>(k_n - 1);
         const f32 e = std::cos(t);
         const f32 g = det::cos(t);
         const u32 d = ulp_diff(e, g);
@@ -96,14 +96,14 @@ TEST_CASE("deterministic cos matches std::cos within 4 ulps over [-2pi, 2pi]",
 TEST_CASE("deterministic tan matches std::tan over [-pi/3, pi/3] within 8 ulps",
           "[deterministic][accuracy]")
 {
-    constexpr int kN = 32;
+    constexpr int k_n = 32;
     u32 max_ulp = 0;
     f32 worst_t = 0.0F;
     f32 worst_got = 0.0F;
     f32 worst_exp = 0.0F;
-    for (int i = 0; i < kN; ++i)
+    for (int i = 0; i < k_n; ++i)
     {
-        const f32 t = -det::pi / 3.0F + (2.0F * det::pi / 3.0F) * static_cast<f32>(i) / static_cast<f32>(kN - 1);
+        const f32 t = -det::pi / 3.0F + (2.0F * det::pi / 3.0F) * static_cast<f32>(i) / static_cast<f32>(k_n - 1);
         const f32 e = std::tan(t);
         const f32 g = det::tan(t);
         const u32 d = ulp_diff(e, g);
@@ -117,11 +117,11 @@ TEST_CASE("deterministic tan matches std::tan over [-pi/3, pi/3] within 8 ulps",
 TEST_CASE("deterministic atan matches std::atan within 4 ulps over [-10, 10]",
           "[deterministic][accuracy]")
 {
-    constexpr int kN = 64;
+    constexpr int k_n = 64;
     u32 max_ulp = 0;
-    for (int i = 0; i < kN; ++i)
+    for (int i = 0; i < k_n; ++i)
     {
-        const f32 t = -10.0F + 20.0F * static_cast<f32>(i) / static_cast<f32>(kN - 1);
+        const f32 t = -10.0F + 20.0F * static_cast<f32>(i) / static_cast<f32>(k_n - 1);
         const u32 d = ulp_diff(std::atan(t), det::atan(t));
         if (d > max_ulp) max_ulp = d;
     }
@@ -150,11 +150,11 @@ TEST_CASE("deterministic atan2 quadrants match std::atan2 within 4 ulps",
 TEST_CASE("deterministic asin / acos match std::asin / std::acos within 4 ulps",
           "[deterministic][accuracy]")
 {
-    constexpr int kN = 32;
+    constexpr int k_n = 32;
     u32 max_ulp = 0;
-    for (int i = 0; i < kN; ++i)
+    for (int i = 0; i < k_n; ++i)
     {
-        const f32 t = -1.0F + 2.0F * static_cast<f32>(i) / static_cast<f32>(kN - 1);
+        const f32 t = -1.0F + 2.0F * static_cast<f32>(i) / static_cast<f32>(k_n - 1);
         const u32 da = ulp_diff(std::asin(t), det::asin(t));
         const u32 dc = ulp_diff(std::acos(t), det::acos(t));
         if (da > max_ulp) max_ulp = da;
@@ -167,11 +167,11 @@ TEST_CASE("deterministic asin / acos match std::asin / std::acos within 4 ulps",
 TEST_CASE("deterministic exp matches std::exp within 8 ulps over [-10, 10]",
           "[deterministic][accuracy]")
 {
-    constexpr int kN = 64;
+    constexpr int k_n = 64;
     u32 max_ulp = 0;
-    for (int i = 0; i < kN; ++i)
+    for (int i = 0; i < k_n; ++i)
     {
-        const f32 t = -10.0F + 20.0F * static_cast<f32>(i) / static_cast<f32>(kN - 1);
+        const f32 t = -10.0F + 20.0F * static_cast<f32>(i) / static_cast<f32>(k_n - 1);
         const u32 d = ulp_diff(std::exp(t), det::exp(t));
         if (d > max_ulp) max_ulp = d;
     }
@@ -182,11 +182,11 @@ TEST_CASE("deterministic exp matches std::exp within 8 ulps over [-10, 10]",
 TEST_CASE("deterministic log matches std::log within 4 ulps over [0.01, 100]",
           "[deterministic][accuracy]")
 {
-    constexpr int kN = 64;
+    constexpr int k_n = 64;
     u32 max_ulp = 0;
-    for (int i = 0; i < kN; ++i)
+    for (int i = 0; i < k_n; ++i)
     {
-        const f32 frac = static_cast<f32>(i) / static_cast<f32>(kN - 1);
+        const f32 frac = static_cast<f32>(i) / static_cast<f32>(k_n - 1);
         const f32 t = 0.01F * std::pow(10000.0F, frac);  // log-spaced
         const u32 d = ulp_diff(std::log(t), det::log(t));
         if (d > max_ulp) max_ulp = d;
@@ -373,11 +373,11 @@ TEST_CASE("deterministic fmod basic cases", "[deterministic]")
 TEST_CASE("deterministic expm1 matches std::expm1 within 4 ulps over [-2, 2]",
           "[deterministic][accuracy]")
 {
-    constexpr int kN = 64;
+    constexpr int k_n = 64;
     u32 max_ulp = 0;
-    for (int i = 0; i < kN; ++i)
+    for (int i = 0; i < k_n; ++i)
     {
-        const f32 t = -2.0F + 4.0F * static_cast<f32>(i) / static_cast<f32>(kN - 1);
+        const f32 t = -2.0F + 4.0F * static_cast<f32>(i) / static_cast<f32>(k_n - 1);
         const u32 d = ulp_diff(std::expm1(t), det::expm1(t));
         if (d > max_ulp) max_ulp = d;
     }
@@ -397,11 +397,11 @@ TEST_CASE("deterministic expm1 preserves precision near zero",
 TEST_CASE("deterministic log1p matches std::log1p within 4 ulps over [-0.9, 9]",
           "[deterministic][accuracy]")
 {
-    constexpr int kN = 64;
+    constexpr int k_n = 64;
     u32 max_ulp = 0;
-    for (int i = 0; i < kN; ++i)
+    for (int i = 0; i < k_n; ++i)
     {
-        const f32 t = -0.9F + 9.9F * static_cast<f32>(i) / static_cast<f32>(kN - 1);
+        const f32 t = -0.9F + 9.9F * static_cast<f32>(i) / static_cast<f32>(k_n - 1);
         const u32 d = ulp_diff(std::log1p(t), det::log1p(t));
         if (d > max_ulp) max_ulp = d;
     }
@@ -435,11 +435,11 @@ TEST_CASE("deterministic GOLDEN expm1/log1p", "[deterministic][golden]")
 TEST_CASE("deterministic sinh matches std::sinh within 8 ulps over [-3, 3]",
           "[deterministic][accuracy]")
 {
-    constexpr int kN = 32;
+    constexpr int k_n = 32;
     u32 max_ulp = 0;
-    for (int i = 0; i < kN; ++i)
+    for (int i = 0; i < k_n; ++i)
     {
-        const f32 t = -3.0F + 6.0F * static_cast<f32>(i) / static_cast<f32>(kN - 1);
+        const f32 t = -3.0F + 6.0F * static_cast<f32>(i) / static_cast<f32>(k_n - 1);
         const u32 d = ulp_diff(std::sinh(t), det::sinh(t));
         if (d > max_ulp) max_ulp = d;
     }
@@ -450,11 +450,11 @@ TEST_CASE("deterministic sinh matches std::sinh within 8 ulps over [-3, 3]",
 TEST_CASE("deterministic cosh matches std::cosh within 8 ulps over [-3, 3]",
           "[deterministic][accuracy]")
 {
-    constexpr int kN = 32;
+    constexpr int k_n = 32;
     u32 max_ulp = 0;
-    for (int i = 0; i < kN; ++i)
+    for (int i = 0; i < k_n; ++i)
     {
-        const f32 t = -3.0F + 6.0F * static_cast<f32>(i) / static_cast<f32>(kN - 1);
+        const f32 t = -3.0F + 6.0F * static_cast<f32>(i) / static_cast<f32>(k_n - 1);
         const u32 d = ulp_diff(std::cosh(t), det::cosh(t));
         if (d > max_ulp) max_ulp = d;
     }
@@ -471,11 +471,11 @@ TEST_CASE("deterministic tanh matches std::tanh within 128 ulps over [-5, 5]",
     // as ~80 ulps. This is f32's fundamental precision limit at saturation,
     // not an algorithm flaw — std::tanh hits the same wall on any libm that
     // uses the same 1-2/(e^2x+1) form.
-    constexpr int kN = 32;
+    constexpr int k_n = 32;
     u32 max_ulp = 0;
-    for (int i = 0; i < kN; ++i)
+    for (int i = 0; i < k_n; ++i)
     {
-        const f32 t = -5.0F + 10.0F * static_cast<f32>(i) / static_cast<f32>(kN - 1);
+        const f32 t = -5.0F + 10.0F * static_cast<f32>(i) / static_cast<f32>(k_n - 1);
         const u32 d = ulp_diff(std::tanh(t), det::tanh(t));
         if (d > max_ulp) max_ulp = d;
     }
@@ -547,12 +547,12 @@ using crd::u64;
 TEST_CASE("deterministic f64 sin / cos accuracy over [-2pi, 2pi]",
           "[deterministic][f64][accuracy]")
 {
-    constexpr int kN = 64;
+    constexpr int k_n = 64;
     u64 max_ulp_sin = 0;
     u64 max_ulp_cos = 0;
-    for (int i = 0; i < kN; ++i)
+    for (int i = 0; i < k_n; ++i)
     {
-        const f64 t = -2.0 * det::pi64 + (4.0 * det::pi64) * static_cast<f64>(i) / static_cast<f64>(kN - 1);
+        const f64 t = -2.0 * det::pi64 + (4.0 * det::pi64) * static_cast<f64>(i) / static_cast<f64>(k_n - 1);
         const u64 ds = ulp_diff64(std::sin(t), det::sin(t));
         const u64 dc = ulp_diff64(std::cos(t), det::cos(t));
         if (ds > max_ulp_sin) max_ulp_sin = ds;
@@ -569,11 +569,11 @@ TEST_CASE("deterministic f64 sin / cos accuracy over [-2pi, 2pi]",
 TEST_CASE("deterministic f64 tan accuracy over [-pi/3, pi/3]",
           "[deterministic][f64][accuracy]")
 {
-    constexpr int kN = 32;
+    constexpr int k_n = 32;
     u64 max_ulp = 0;
-    for (int i = 0; i < kN; ++i)
+    for (int i = 0; i < k_n; ++i)
     {
-        const f64 t = -det::pi64 / 3.0 + (2.0 * det::pi64 / 3.0) * static_cast<f64>(i) / static_cast<f64>(kN - 1);
+        const f64 t = -det::pi64 / 3.0 + (2.0 * det::pi64 / 3.0) * static_cast<f64>(i) / static_cast<f64>(k_n - 1);
         const u64 d = ulp_diff64(std::tan(t), det::tan(t));
         if (d > max_ulp) max_ulp = d;
     }
@@ -584,11 +584,11 @@ TEST_CASE("deterministic f64 tan accuracy over [-pi/3, pi/3]",
 TEST_CASE("deterministic f64 atan / atan2 / asin / acos accuracy",
           "[deterministic][f64][accuracy]")
 {
-    constexpr int kN = 64;
+    constexpr int k_n = 64;
     u64 max_atan = 0;
-    for (int i = 0; i < kN; ++i)
+    for (int i = 0; i < k_n; ++i)
     {
-        const f64 t = -10.0 + 20.0 * static_cast<f64>(i) / static_cast<f64>(kN - 1);
+        const f64 t = -10.0 + 20.0 * static_cast<f64>(i) / static_cast<f64>(k_n - 1);
         const u64 d = ulp_diff64(std::atan(t), det::atan(t));
         if (d > max_atan) max_atan = d;
     }
@@ -623,11 +623,11 @@ TEST_CASE("deterministic f64 atan / atan2 / asin / acos accuracy",
 TEST_CASE("deterministic f64 exp / log accuracy",
           "[deterministic][f64][accuracy]")
 {
-    constexpr int kN = 64;
+    constexpr int k_n = 64;
     u64 max_exp = 0;
-    for (int i = 0; i < kN; ++i)
+    for (int i = 0; i < k_n; ++i)
     {
-        const f64 t = -10.0 + 20.0 * static_cast<f64>(i) / static_cast<f64>(kN - 1);
+        const f64 t = -10.0 + 20.0 * static_cast<f64>(i) / static_cast<f64>(k_n - 1);
         const u64 d = ulp_diff64(std::exp(t), det::exp(t));
         if (d > max_exp) max_exp = d;
     }
@@ -635,9 +635,9 @@ TEST_CASE("deterministic f64 exp / log accuracy",
     REQUIRE(max_exp <= 8ULL);
 
     u64 max_log = 0;
-    for (int i = 0; i < kN; ++i)
+    for (int i = 0; i < k_n; ++i)
     {
-        const f64 frac = static_cast<f64>(i) / static_cast<f64>(kN - 1);
+        const f64 frac = static_cast<f64>(i) / static_cast<f64>(k_n - 1);
         const f64 t = 0.01 * std::pow(10000.0, frac);
         const u64 d = ulp_diff64(std::log(t), det::log(t));
         if (d > max_log) max_log = d;
@@ -763,11 +763,11 @@ TEST_CASE("deterministic erf f32 known values + std parity",
     REQUIRE(std::abs(det::erf(-1.0F) + 0.8427F) < 1.0e-3F);  // odd
 
     // std parity over moderate range
-    constexpr int kN = 32;
+    constexpr int k_n = 32;
     f32 max_err = 0.0F;
-    for (int i = 0; i < kN; ++i)
+    for (int i = 0; i < k_n; ++i)
     {
-        const f32 t = -3.0F + 6.0F * static_cast<f32>(i) / static_cast<f32>(kN - 1);
+        const f32 t = -3.0F + 6.0F * static_cast<f32>(i) / static_cast<f32>(k_n - 1);
         const f32 d = std::abs(std::erf(t) - det::erf(t));
         if (d > max_err) max_err = d;
     }
@@ -803,11 +803,11 @@ TEST_CASE("deterministic gamma f32 known values + std parity",
     REQUIRE(std::abs(det::gamma(0.5F) - 1.77245F) < 1.0e-3F);
 
     // std parity for x in [0.5, 10]
-    constexpr int kN = 24;
+    constexpr int k_n = 24;
     f32 max_rel = 0.0F;
-    for (int i = 0; i < kN; ++i)
+    for (int i = 0; i < k_n; ++i)
     {
-        const f32 t = 0.5F + 9.5F * static_cast<f32>(i) / static_cast<f32>(kN - 1);
+        const f32 t = 0.5F + 9.5F * static_cast<f32>(i) / static_cast<f32>(k_n - 1);
         const f32 e = std::tgamma(t);
         const f32 g = det::gamma(t);
         const f32 r = std::abs(e - g) / std::abs(e);
@@ -844,11 +844,11 @@ TEST_CASE("deterministic erf / erfc f64 known values + std parity",
     REQUIRE(std::abs(det::erf(-1.0) + 0.8427007929) < 1.0e-9);
 
     // std parity, tighter for f64
-    constexpr int kN = 32;
+    constexpr int k_n = 32;
     f64 max_err = 0.0;
-    for (int i = 0; i < kN; ++i)
+    for (int i = 0; i < k_n; ++i)
     {
-        const f64 t = -3.0 + 6.0 * static_cast<f64>(i) / static_cast<f64>(kN - 1);
+        const f64 t = -3.0 + 6.0 * static_cast<f64>(i) / static_cast<f64>(k_n - 1);
         const f64 d = std::abs(std::erf(t) - det::erf(t));
         if (d > max_err) max_err = d;
     }
@@ -876,11 +876,11 @@ TEST_CASE("deterministic gamma f64 known values + std parity",
     REQUIRE(std::abs(det::gamma(0.5) - 1.7724538509055159) < 1.0e-12);
 
     // std parity for x in [0.5, 20]
-    constexpr int kN = 24;
+    constexpr int k_n = 24;
     f64 max_rel = 0.0;
-    for (int i = 0; i < kN; ++i)
+    for (int i = 0; i < k_n; ++i)
     {
-        const f64 t = 0.5 + 19.5 * static_cast<f64>(i) / static_cast<f64>(kN - 1);
+        const f64 t = 0.5 + 19.5 * static_cast<f64>(i) / static_cast<f64>(k_n - 1);
         const f64 e = std::tgamma(t);
         const f64 g = det::gamma(t);
         const f64 r = std::abs(e - g) / std::abs(e);

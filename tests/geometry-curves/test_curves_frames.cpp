@@ -174,9 +174,9 @@ TEST_CASE("frames: helix RMF orthonormal at every sample, adjacent tangents agre
 
     // Approximate a helix via Catmull-Rom interpolation through points on
     // a vertical helix x=cos(theta), z=sin(theta), y=theta/(2pi).
-    constexpr crd::u32 kPts = 16U;
-    crd::math::Vec3<T> pts_buf[kPts];
-    for (crd::u32 i = 0U; i < kPts; ++i)
+    constexpr crd::u32 k_pts = 16U;
+    crd::math::Vec3<T> pts_buf[k_pts];
+    for (crd::u32 i = 0U; i < k_pts; ++i)
     {
         const T theta = static_cast<T>(i) * static_cast<T>(0.5);
         pts_buf[i]     = v3<T>(static_cast<T>(std::cos(static_cast<double>(theta))),
@@ -184,7 +184,7 @@ TEST_CASE("frames: helix RMF orthonormal at every sample, adjacent tangents agre
                                 static_cast<T>(std::sin(static_cast<double>(theta))));
     }
     CatmullRom3<T> c(&alloc,
-                     crd::containers::ConstSpan<crd::math::Vec3<T>>{pts_buf, kPts},
+                     crd::containers::ConstSpan<crd::math::Vec3<T>>{pts_buf, k_pts},
                      CatmullRomParam::Centripetal,
                      false);
 

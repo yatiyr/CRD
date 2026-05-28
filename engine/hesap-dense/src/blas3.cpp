@@ -253,8 +253,8 @@ crd::memory::IAllocator* alloc = scratch;
 
     // Parallel over Mr=8 row-panels of A. At m=256 → 32 panels; with 16
     // P-threads each worker handles 2 panels → perfect load balance.
-    constexpr crd::usize kMr = detail::kGemmMr;
-    const crd::u32 num_panels = static_cast<crd::u32>(m / kMr);
+    constexpr crd::usize k_mr = detail::kGemmMr;
+    const crd::u32 num_panels = static_cast<crd::u32>(m / k_mr);
 
     struct State
     {
@@ -313,8 +313,8 @@ void gemm_parallel(crd::u32 num_workers, T alpha, MatrixView<const T, L> a, Matr
         // - 200M elements catches N=512 cube (134M) — closes 0.95x→1.0x+ gap.
         // - At N=1024 (1G elements) and above, the packed BLIS path wins
         //   (better cache reuse via packed Ac dominates the savings).
-        constexpr crd::usize kSmallGemmThreshold = 200ULL * 1024ULL * 1024ULL;
-        if (a.rows() * b.cols() * a.cols() < kSmallGemmThreshold &&
+        constexpr crd::usize small_gemm_threshold = 200ULL * 1024ULL * 1024ULL;
+        if (a.rows() * b.cols() * a.cols() < small_gemm_threshold &&
             small_gemm_eligible(a, b, c, trans_a, trans_b))
         {
             small_gemm_parallel<T, L>(num_workers, alpha, a, b, beta, c, scratch);
@@ -486,9 +486,9 @@ void gemm_parallel_auto(T alpha, MatrixView<const T, L> a, MatrixView<const T, L
                         MatrixView<T, L> c, Trans trans_a, Trans trans_b,
                         crd::memory::IAllocator* scratch)
 {
-    constexpr crd::usize kSerialThreshold = 256ULL * 1024ULL;
+    constexpr crd::usize serial_threshold = 256ULL * 1024ULL;
     const crd::usize mnk = a.rows() * b.cols() * a.cols();
-    const crd::u32 num_workers = (mnk < kSerialThreshold) ? 1U : crd::jobs::num_workers();
+    const crd::u32 num_workers = (mnk < serial_threshold) ? 1U : crd::jobs::num_workers();
     gemm_parallel<T, L>(num_workers, alpha, a, b, beta, c, trans_a, trans_b, scratch);
 }
 

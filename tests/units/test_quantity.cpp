@@ -294,14 +294,14 @@ TEST_CASE("Quantity: Density = Mass / Volume",
 TEST_CASE("Quantity: arithmetic is constexpr-evaluable",
           "[v0a-1][quantity][constexpr]")
 {
-    constexpr Quantity<dim::Length, f32> kA{2.0F};
-    constexpr Quantity<dim::Length, f32> kB{3.0F};
-    constexpr auto kSum = kA + kB;
-    STATIC_REQUIRE(kSum.value == 5.0F);
+    constexpr Quantity<dim::Length, f32> k_a{2.0F};
+    constexpr Quantity<dim::Length, f32> k_b{3.0F};
+    constexpr auto k_sum = k_a + k_b;
+    STATIC_REQUIRE(k_sum.value == 5.0F);
 
-    constexpr Quantity<dim::Velocity, f64> kV{10.0};
-    constexpr Quantity<dim::Time, f64> kT{2.0};
-    constexpr auto kDistance = kV * kT;
-    STATIC_REQUIRE(dim_equal_v<typename decltype(kDistance)::dimension, dim::Length>);
-    STATIC_REQUIRE(kDistance.value == 20.0);
+    constexpr Quantity<dim::Velocity, f64> k_v{10.0};
+    constexpr Quantity<dim::Time, f64> k_t{2.0};
+    constexpr auto distance = k_v * k_t;
+    STATIC_REQUIRE(dim_equal_v<typename decltype(distance)::dimension, dim::Length>);
+    STATIC_REQUIRE(distance.value == 20.0);
 }

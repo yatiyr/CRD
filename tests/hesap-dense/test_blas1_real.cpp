@@ -84,13 +84,13 @@ TEST_CASE("dot real: standard textbook example", "[hesap][blas1][real][dot]")
 TEST_CASE("dot real: large N with KBN compensation", "[hesap][blas1][real][dot]")
 {
     crd::memory::TlsfAllocator alloc(2 * 1024 * 1024);
-    constexpr crd::usize kN = 100000;
-    Vector<crd::f64> x(&alloc, kN);
-    Vector<crd::f64> y(&alloc, kN);
+    constexpr crd::usize k_n = 100000;
+    Vector<crd::f64> x(&alloc, k_n);
+    Vector<crd::f64> y(&alloc, k_n);
     x.fill(1.0);
     y.fill(1.0);
     const auto d = dot<crd::f64>(x, y);
-    REQUIRE(d == static_cast<crd::f64>(kN));
+    REQUIRE(d == static_cast<crd::f64>(k_n));
 }
 
 // ---- nrm2 --------------------------------------------------------------
@@ -105,10 +105,10 @@ TEST_CASE("nrm2 real: zero vector has zero norm", "[hesap][blas1][real][nrm2]")
 TEST_CASE("nrm2 real: all-ones gives sqrt(N)", "[hesap][blas1][real][nrm2]")
 {
     crd::memory::TlsfAllocator alloc(64 * 1024);
-    constexpr crd::usize kN = 64;
-    Vector<crd::f64> x(&alloc, kN);
+    constexpr crd::usize k_n = 64;
+    Vector<crd::f64> x(&alloc, k_n);
     x.fill(1.0);
-    REQUIRE_THAT(nrm2<crd::f64>(x), WithinRel(std::sqrt(static_cast<crd::f64>(kN)), 1e-15));
+    REQUIRE_THAT(nrm2<crd::f64>(x), WithinRel(std::sqrt(static_cast<crd::f64>(k_n)), 1e-15));
 }
 
 TEST_CASE("nrm2 real: 3-4-5 right triangle", "[hesap][blas1][real][nrm2]")
@@ -251,10 +251,10 @@ TEST_CASE("pairwise tree handles sizes around leaf boundary", "[hesap][blas1][re
 TEST_CASE("determinism: dot of fixed input is bit-stable across calls", "[hesap][blas1][real][det]")
 {
     crd::memory::TlsfAllocator alloc(256 * 1024);
-    constexpr crd::usize kN = 5000;
-    Vector<crd::f64> x(&alloc, kN);
-    Vector<crd::f64> y(&alloc, kN);
-    for (crd::usize i = 0; i < kN; ++i)
+    constexpr crd::usize k_n = 5000;
+    Vector<crd::f64> x(&alloc, k_n);
+    Vector<crd::f64> y(&alloc, k_n);
+    for (crd::usize i = 0; i < k_n; ++i)
     {
         x(i) = std::sin(static_cast<crd::f64>(i));
         y(i) = std::cos(static_cast<crd::f64>(i));

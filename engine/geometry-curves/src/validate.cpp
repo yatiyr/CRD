@@ -56,8 +56,8 @@ template <crd::math::MathScalar T>
 [[nodiscard]] bool valid_sweep(T sweep_radians) noexcept
 {
     if (!std::isfinite(sweep_radians)) { return false; }
-    constexpr T kTwoPi = static_cast<T>(6.28318530717958647692);
-    return std::abs(sweep_radians) <= kTwoPi + static_cast<T>(1e-5);
+    constexpr T two_pi = static_cast<T>(6.28318530717958647692);
+    return std::abs(sweep_radians) <= two_pi + static_cast<T>(1e-5);
 }
 
 } // namespace
@@ -167,8 +167,8 @@ CurveValidationResult validate(const CatmullRom3<T>& curve) noexcept
 template <crd::math::MathScalar T>
 CurveValidationResult validate(const BSpline3<T>& curve) noexcept
 {
-    constexpr crd::u32 kDegree = BSpline3<T>::k_degree;
-    if (curve.points.size() < kDegree + 1U) { return {CurveValidationStatus::NotEnoughPoints, 0U}; }
+    constexpr crd::u32 degree = BSpline3<T>::k_degree;
+    if (curve.points.size() < degree + 1U) { return {CurveValidationStatus::NotEnoughPoints, 0U}; }
     for (crd::usize i = 0U; i < curve.points.size(); ++i)
     {
         if (!is_finite_vec3(curve.points[i]))
@@ -176,7 +176,7 @@ CurveValidationResult validate(const BSpline3<T>& curve) noexcept
             return {CurveValidationStatus::NonFinitePoint, static_cast<crd::u32>(i)};
         }
     }
-    const crd::u32 expected_n_knots = static_cast<crd::u32>(curve.points.size()) + kDegree + 1U;
+    const crd::u32 expected_n_knots = static_cast<crd::u32>(curve.points.size()) + degree + 1U;
     if (static_cast<crd::u32>(curve.knots.size()) != expected_n_knots)
     {
         return {CurveValidationStatus::KnotCountMismatch, 0U};
@@ -196,7 +196,7 @@ CurveValidationResult validate(const BSpline3<T>& curve) noexcept
         if (curve.knots[i] == curve.knots[i - 1U])
         {
             ++run;
-            if (run > kDegree + 1U)
+            if (run > degree + 1U)
             {
                 return {CurveValidationStatus::KnotMultiplicityExceeded, static_cast<crd::u32>(i)};
             }

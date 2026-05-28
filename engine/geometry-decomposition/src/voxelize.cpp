@@ -260,8 +260,8 @@ void mark_surface_pass(VoxelGrid& grid, const GridGeom& geom,
     //
     // Threshold: skip the jobs system for tiny meshes (~<256 tris) where
     // fan-out overhead exceeds the work. Pinned soft heuristic.
-    constexpr crd::u32 kParallelThreshold = 256U;
-    if (tri_count < kParallelThreshold)
+    constexpr crd::u32 parallel_threshold = 256U;
+    if (tri_count < parallel_threshold)
     {
         for (crd::u32 ti = 0U; ti < tri_count; ++ti)
         {
@@ -274,9 +274,9 @@ void mark_surface_pass(VoxelGrid& grid, const GridGeom& geom,
         return;
     }
 
-    constexpr crd::u32 kJobsPerCall = 8U;
+    constexpr crd::u32 jobs_per_call = 8U;
     auto* counter = crd::jobs::parallel_for(
-        tri_count, kJobsPerCall,
+        tri_count, jobs_per_call,
         [&grid, &geom, &view](crd::u32 begin, crd::u32 end) noexcept {
             for (crd::u32 ti = begin; ti < end; ++ti)
             {

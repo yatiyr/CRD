@@ -129,8 +129,8 @@ int main()
     pack_name.append(".crdr");
     const crd::platform::fs::Path pack_path(pack_name);
 
-    constexpr crd::u32 kExpectedValue = 0xCAFEBABEU;
-    write_blob_pack(pack_path, blob_id, kExpectedValue);
+    constexpr crd::u32 expected_value = 0xCAFEBABEU;
+    write_blob_pack(pack_path, blob_id, expected_value);
 
     ResourceManager rm(&g_alloc);
     rm.register_loader(std::make_unique<StreamBlobLoader>());
@@ -157,10 +157,10 @@ int main()
     }
 
     const StreamBlobResource* res = handle.get();
-    if (res == nullptr || res->value != kExpectedValue)
+    if (res == nullptr || res->value != expected_value)
     {
         std::fprintf(stderr, "smoke_resources_stream: payload mismatch (expected 0x%08X, got 0x%08X)\n",
-                     kExpectedValue, res ? res->value : 0U);
+                     expected_value, res ? res->value : 0U);
         crd::jobs::shutdown();
         (void)crd::platform::fs::remove_file(pack_path);
         return 1;

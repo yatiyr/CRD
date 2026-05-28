@@ -43,12 +43,12 @@ int main()
     using namespace crd::hesap::dense;
     crd::memory::TlsfAllocator alloc(4 * 1024 * 1024);
 
-    constexpr crd::usize kN = 1000;
-    Vector<crd::f64> x(&alloc, kN);
-    Vector<crd::f64> y(&alloc, kN);
-    for (crd::usize i = 0; i < kN; ++i)
+    constexpr crd::usize k_n = 1000;
+    Vector<crd::f64> x(&alloc, k_n);
+    Vector<crd::f64> y(&alloc, k_n);
+    for (crd::usize i = 0; i < k_n; ++i)
     {
-        const auto t = static_cast<crd::f64>(i) / static_cast<crd::f64>(kN);
+        const auto t = static_cast<crd::f64>(i) / static_cast<crd::f64>(k_n);
         x(i) = std::sin(6.28318530717958647692 * t);
         y(i) = std::cos(6.28318530717958647692 * t);
     }
@@ -58,7 +58,7 @@ int main()
     // dot of orthogonal-ish sin/cos: small but not exactly zero.
     const crd::f64 d_engine = dot<crd::f64>(x, y);
     crd::f64 d_ref = 0.0;
-    for (crd::usize i = 0; i < kN; ++i)
+    for (crd::usize i = 0; i < k_n; ++i)
     {
         d_ref += x(i) * y(i);
     }
@@ -70,7 +70,7 @@ int main()
 
     // nrm2 of sin: ~ sqrt(N/2)
     const crd::f64 n_engine = nrm2<crd::f64>(x);
-    const crd::f64 expected_norm = std::sqrt(static_cast<crd::f64>(kN) / 2.0);
+    const crd::f64 expected_norm = std::sqrt(static_cast<crd::f64>(k_n) / 2.0);
     if (!approx_equal(n_engine, expected_norm, expected_norm * 1e-3))
     {
         std::fprintf(stderr, "[smoke_hesap_blas1] nrm2 = %.6f, expected ~%.6f\n", n_engine, expected_norm);

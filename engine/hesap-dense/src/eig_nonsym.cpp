@@ -2437,11 +2437,11 @@ void slab_right(T* dat, crd::usize ld, crd::usize r0, crd::usize c0, crd::usize 
     {
         return;
     }
-    constexpr Layout kL = Layout::RowMajor;
-    MatrixView<const T, kL> cv{dat + r0 * ld + c0, rows, jw, ld};
-    MatrixView<const T, kL> vv{v, jw, jw, ldv};
-    MatrixView<T, kL> ov{scratch.data(), rows, jw, scratch.ld()};
-    gemm<T, kL>(T{1}, cv, vv, T{0}, ov, Trans::None, Trans::None, alloc);
+    constexpr Layout k_l = Layout::RowMajor;
+    MatrixView<const T, k_l> cv{dat + r0 * ld + c0, rows, jw, ld};
+    MatrixView<const T, k_l> vv{v, jw, jw, ldv};
+    MatrixView<T, k_l> ov{scratch.data(), rows, jw, scratch.ld()};
+    gemm<T, k_l>(T{1}, cv, vv, T{0}, ov, Trans::None, Trans::None, alloc);
     for (crd::usize i = 0; i < rows; ++i)
     {
         for (crd::usize j = 0; j < jw; ++j)
@@ -2460,11 +2460,11 @@ void slab_left_t(T* dat, crd::usize ld, crd::usize r0, crd::usize c0, crd::usize
     {
         return;
     }
-    constexpr Layout kL = Layout::RowMajor;
-    MatrixView<const T, kL> vv{v, jw, jw, ldv};
-    MatrixView<const T, kL> cv{dat + r0 * ld + c0, jw, cols, ld};
-    MatrixView<T, kL> ov{scratch.data(), jw, cols, scratch.ld()};
-    gemm<T, kL>(T{1}, vv, cv, T{0}, ov, Trans::Transpose, Trans::None, alloc);
+    constexpr Layout k_l = Layout::RowMajor;
+    MatrixView<const T, k_l> vv{v, jw, jw, ldv};
+    MatrixView<const T, k_l> cv{dat + r0 * ld + c0, jw, cols, ld};
+    MatrixView<T, k_l> ov{scratch.data(), jw, cols, scratch.ld()};
+    gemm<T, k_l>(T{1}, vv, cv, T{0}, ov, Trans::Transpose, Trans::None, alloc);
     for (crd::usize i = 0; i < jw; ++i)
     {
         for (crd::usize j = 0; j < cols; ++j)
@@ -2663,11 +2663,11 @@ AedResult<T> aed_deflate(crd::memory::IAllocator* alloc, Matrix<T>& h, crd::usiz
             Matrix<T> qh = form_hessenberg_q<T>(alloc, twin, 0, ns - 1, tauh);
             Matrix<T> vq(alloc, jw, jw);
             {
-                constexpr Layout kL = Layout::RowMajor;
-                MatrixView<const T, kL> vv{v.data(), jw, jw, ldv};
-                MatrixView<const T, kL> qq{qh.data(), jw, jw, qh.ld()};
-                MatrixView<T, kL> ovq{vq.data(), jw, jw, vq.ld()};
-                gemm<T, kL>(T{1}, vv, qq, T{0}, ovq, Trans::None, Trans::None, alloc);
+                constexpr Layout k_l = Layout::RowMajor;
+                MatrixView<const T, k_l> vv{v.data(), jw, jw, ldv};
+                MatrixView<const T, k_l> qq{qh.data(), jw, jw, qh.ld()};
+                MatrixView<T, k_l> ovq{vq.data(), jw, jw, vq.ld()};
+                gemm<T, k_l>(T{1}, vv, qq, T{0}, ovq, Trans::None, Trans::None, alloc);
             }
             for (crd::usize i = 0; i < jw; ++i)
             {
@@ -3795,8 +3795,8 @@ RealSchur<T> schur_aed(crd::memory::IAllocator* alloc, const Matrix<T>& h_in, cr
     // at NMIN=60, n=100/200 AED+train ran 0.64×/0.92× of pure dlahqr and 0.83×
     // Eigen — a hard-gate regression). The train's payoff is the large-N regime
     // (n=400: 2.10× Eigen / 1.70× LAPACK, 3 train passes vs 184 double-shifts).
-    constexpr crd::usize kNmin = 200;
-    constexpr crd::usize kNibble = 14;
+    constexpr crd::usize nmin = 200;
+    constexpr crd::usize nibble = 14;
     T* hd = out.t.data();
     const crd::usize ld = out.t.ld();
     T* zd = vectors ? out.z.data() : nullptr;
@@ -3890,7 +3890,7 @@ RealSchur<T> schur_aed(crd::memory::IAllocator* alloc, const Matrix<T>& h_in, cr
             last_kbot = kb;
         }
 
-        if (nh <= kNmin || stall >= 3)
+        if (nh <= nmin || stall >= 3)
         {
             // Crossover / stalled: finish the whole block with dlahqr.
             schur_small_block<T>(alloc, hd, ld, n, ktop, kb, zd, zld, vectors, ilo, ihi, out.wr,
@@ -3912,7 +3912,7 @@ RealSchur<T> schur_aed(crd::memory::IAllocator* alloc, const Matrix<T>& h_in, cr
         kbot = static_cast<crd::isize>(kb) - static_cast<crd::isize>(aed.nd);
 
         // Nibble: if deflation was productive, skip the sweep and AED again.
-        if (aed.nd > 0 && 100 * aed.nd > kNibble * nw)
+        if (aed.nd > 0 && 100 * aed.nd > nibble * nw)
         {
             stall = 0;
             continue;
@@ -4376,11 +4376,11 @@ void slab_left_h(T* dat, crd::usize ld, crd::usize r0, crd::usize c0, crd::usize
     {
         return;
     }
-    constexpr Layout kL = Layout::RowMajor;
-    MatrixView<const T, kL> vv{v, jw, jw, ldv};
-    MatrixView<const T, kL> cv{dat + r0 * ld + c0, jw, cols, ld};
-    MatrixView<T, kL> ov{scratch.data(), jw, cols, scratch.ld()};
-    gemm<T, kL>(T{RealType<T>{1}, RealType<T>{0}}, vv, cv, T{RealType<T>{0}, RealType<T>{0}}, ov,
+    constexpr Layout k_l = Layout::RowMajor;
+    MatrixView<const T, k_l> vv{v, jw, jw, ldv};
+    MatrixView<const T, k_l> cv{dat + r0 * ld + c0, jw, cols, ld};
+    MatrixView<T, k_l> ov{scratch.data(), jw, cols, scratch.ld()};
+    gemm<T, k_l>(T{RealType<T>{1}, RealType<T>{0}}, vv, cv, T{RealType<T>{0}, RealType<T>{0}}, ov,
                 Trans::ConjTranspose, Trans::None, alloc);
     for (crd::usize i = 0; i < jw; ++i)
     {
@@ -4523,11 +4523,11 @@ AedResult<T> complex_aed_deflate(crd::memory::IAllocator* alloc, Matrix<T>& h, c
             Matrix<T> qh = form_hessenberg_q<T>(alloc, twin, 0, ns - 1, tauh);
             Matrix<T> vq(alloc, jw, jw);
             {
-                constexpr Layout kL = Layout::RowMajor;
-                MatrixView<const T, kL> vv{v.data(), jw, jw, ldv};
-                MatrixView<const T, kL> qq{qh.data(), jw, jw, qh.ld()};
-                MatrixView<T, kL> ovq{vq.data(), jw, jw, vq.ld()};
-                gemm<T, kL>(T{R{1}, R{0}}, vv, qq, T{R{0}, R{0}}, ovq, Trans::None, Trans::None, alloc);
+                constexpr Layout k_l = Layout::RowMajor;
+                MatrixView<const T, k_l> vv{v.data(), jw, jw, ldv};
+                MatrixView<const T, k_l> qq{qh.data(), jw, jw, qh.ld()};
+                MatrixView<T, k_l> ovq{vq.data(), jw, jw, vq.ld()};
+                gemm<T, k_l>(T{R{1}, R{0}}, vv, qq, T{R{0}, R{0}}, ovq, Trans::None, Trans::None, alloc);
             }
             for (crd::usize i = 0; i < jw; ++i)
             {
@@ -5093,8 +5093,8 @@ ComplexSchur<T> complex_schur_aed(crd::memory::IAllocator* alloc, const Matrix<T
     // over single-shift complex_schur crosses over at n≈200 (n=128 loses 0.73×,
     // n=256 wins 1.16×, n=512 wins 2.01×), so blocks ≤150 are finished by
     // single-shift; AED engages above and the win widens with N.
-    constexpr crd::usize kNmin = 150;
-    constexpr crd::usize kNibble = 14;
+    constexpr crd::usize nmin = 150;
+    constexpr crd::usize nibble = 14;
     T* hd = out.t.data();
     const crd::usize ld = out.t.ld();
     T* zd = vectors ? out.z.data() : nullptr;
@@ -5160,7 +5160,7 @@ ComplexSchur<T> complex_schur_aed(crd::memory::IAllocator* alloc, const Matrix<T
             last_kbot = kb;
         }
 
-        if (nh <= kNmin || stall >= 3)
+        if (nh <= nmin || stall >= 3)
         {
             // Crossover / stalled: finish the whole block with single-shift zlahqr.
             complex_schur_small_block<T>(alloc, hd, ld, n, ktop, kb, zd, zld, vectors, ilo, ihi, out.w);
@@ -5181,7 +5181,7 @@ ComplexSchur<T> complex_schur_aed(crd::memory::IAllocator* alloc, const Matrix<T
         kbot = static_cast<crd::isize>(kb) - static_cast<crd::isize>(aed.nd);
 
         // Nibble: if deflation was productive, skip the sweep and AED again.
-        if (aed.nd > 0 && 100 * aed.nd > kNibble * nw)
+        if (aed.nd > 0 && 100 * aed.nd > nibble * nw)
         {
             stall = 0;
             continue;

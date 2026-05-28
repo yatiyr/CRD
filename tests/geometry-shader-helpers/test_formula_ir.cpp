@@ -224,10 +224,10 @@ TEST_CASE("v9e-a 20 golden manifests validate Ok",
         &gold::make_domain_twist_cylinder,
         &gold::make_domain_bend_capsule,
     };
-    constexpr crd::usize kManifestCount = sizeof(makes) / sizeof(makes[0]);
-    REQUIRE(kManifestCount == 21U);  // 10 primitives + 6 value-domain + 5 position-domain
+    constexpr crd::usize manifest_count = sizeof(makes) / sizeof(makes[0]);
+    REQUIRE(manifest_count == 21U);  // 10 primitives + 6 value-domain + 5 position-domain
 
-    for (crd::usize i = 0U; i < kManifestCount; ++i)
+    for (crd::usize i = 0U; i < manifest_count; ++i)
     {
         const auto ir = makes[i](&alloc);
         const auto r  = validate(ir);

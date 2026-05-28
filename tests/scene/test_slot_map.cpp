@@ -91,10 +91,10 @@ TEST_CASE("Mixed allocate/free preserves invariants", "[scene][slot_map]")
     // NOLINTNEXTLINE(cert-msc32-c,cert-msc51-cpp,bugprone-random-generator-seed) — deterministic seed for test repro
     std::mt19937 rng{42};
 
-    constexpr int kSteps = 1000;
+    constexpr int steps = 1000;
     int expected_alive = 0;
 
-    for (int i = 0; i < kSteps; ++i)
+    for (int i = 0; i < steps; ++i)
     {
         const bool do_free = (live.size() > 0) && (rng() % 3 == 0);
         if (do_free)

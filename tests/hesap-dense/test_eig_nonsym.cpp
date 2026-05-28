@@ -1150,18 +1150,18 @@ TEST_CASE("dtrevc: T*v = lambda*v for every eigenpair of a real Schur form [v3d-
 TEST_CASE("balance: isolates corner eigenvalues + preserves trace", "[hesap][eig][nonsym][real][balance]")
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(1U * 1024U * 1024U));
-    constexpr crd::usize kN = 5;
+    constexpr crd::usize k_n = 5;
     // Column 0 zero below the diagonal → isolates an eigenvalue at the TOP.
     // Row n-1 zero left of the diagonal → isolates an eigenvalue at the BOTTOM.
-    Matrix<double, Layout::RowMajor> a(&alloc, kN, kN);
+    Matrix<double, Layout::RowMajor> a(&alloc, k_n, k_n);
     fill_general<double>(a, 4.0);
-    for (crd::usize i = 1; i < kN; ++i)
+    for (crd::usize i = 1; i < k_n; ++i)
     {
         a.at(i, 0) = 0.0;          // column 0 isolates at top
-        a.at(kN - 1, i - 1) = 0.0; // row n-1 isolates at bottom (cols 0..n-2)
+        a.at(k_n - 1, i - 1) = 0.0; // row n-1 isolates at bottom (cols 0..n-2)
     }
     double trace_before = 0.0;
-    for (crd::usize i = 0; i < kN; ++i)
+    for (crd::usize i = 0; i < k_n; ++i)
     {
         trace_before += a.at(i, i);
     }
@@ -1172,10 +1172,10 @@ TEST_CASE("balance: isolates corner eigenvalues + preserves trace", "[hesap][eig
     balance<double>(a, scale, ilo, ihi);
 
     CHECK(ilo == 1);        // top eigenvalue isolated
-    CHECK(ihi == kN - 2);   // bottom eigenvalue isolated
+    CHECK(ihi == k_n - 2);   // bottom eigenvalue isolated
 
     double trace_after = 0.0;
-    for (crd::usize i = 0; i < kN; ++i)
+    for (crd::usize i = 0; i < k_n; ++i)
     {
         trace_after += a.at(i, i);
     }
@@ -1186,13 +1186,13 @@ TEST_CASE("balance: reduces the block 1-norm of an unbalanced matrix",
           "[hesap][eig][nonsym][real][balance]")
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(1U * 1024U * 1024U));
-    constexpr crd::usize kN = 4;
+    constexpr crd::usize k_n = 4;
     // Strongly unbalanced: huge row 0 / tiny column 0 (off-diagonal), balanced
     // away by a diagonal similarity.
-    Matrix<double, Layout::RowMajor> a(&alloc, kN, kN);
-    for (crd::usize i = 0; i < kN; ++i)
+    Matrix<double, Layout::RowMajor> a(&alloc, k_n, k_n);
+    for (crd::usize i = 0; i < k_n; ++i)
     {
-        for (crd::usize j = 0; j < kN; ++j)
+        for (crd::usize j = 0; j < k_n; ++j)
         {
             a.at(i, j) = (i == j) ? 2.0 : 1.0;
         }
@@ -1201,8 +1201,8 @@ TEST_CASE("balance: reduces the block 1-norm of an unbalanced matrix",
     a.at(1, 0) = 1e-6;  // tiny — product 1, diagonal scaling balances it
     auto fro = [&]() {
         double s = 0.0;
-        for (crd::usize i = 0; i < kN; ++i)
-            for (crd::usize j = 0; j < kN; ++j)
+        for (crd::usize i = 0; i < k_n; ++i)
+            for (crd::usize j = 0; j < k_n; ++j)
                 if (i != j) s += a.at(i, j) * a.at(i, j);
         return std::sqrt(s);
     };
@@ -2357,20 +2357,20 @@ TEST_CASE("balance(complex): isolates corner eigenvalues + preserves trace",
           "[hesap][eig][nonsym][complex][balance]")
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(8U * 1024U * 1024U));
-    constexpr crd::usize kN = 6;
-    Matrix<Complex<double>, Layout::RowMajor> a(&alloc, kN, kN);
-    for (crd::usize i = 0; i < kN; ++i)
-        for (crd::usize j = 0; j < kN; ++j)
+    constexpr crd::usize k_n = 6;
+    Matrix<Complex<double>, Layout::RowMajor> a(&alloc, k_n, k_n);
+    for (crd::usize i = 0; i < k_n; ++i)
+        for (crd::usize j = 0; j < k_n; ++j)
             a.at(i, j) = Complex<double>{std::sin(0.3 * static_cast<double>(i * 4 + j)) + 4.0,
                                          std::cos(0.2 * static_cast<double>(i + j * 3))};
     // Column 0 zero below diag → top isolation; row n-1 zero left of diag → bottom.
-    for (crd::usize i = 1; i < kN; ++i)
+    for (crd::usize i = 1; i < k_n; ++i)
     {
         a.at(i, 0) = Complex<double>{0.0, 0.0};
-        a.at(kN - 1, i - 1) = Complex<double>{0.0, 0.0};
+        a.at(k_n - 1, i - 1) = Complex<double>{0.0, 0.0};
     }
     Complex<double> trace_before{0.0, 0.0};
-    for (crd::usize i = 0; i < kN; ++i)
+    for (crd::usize i = 0; i < k_n; ++i)
         trace_before = trace_before + a.at(i, i);
 
     crd::containers::Array<double> scale(&alloc);
@@ -2379,9 +2379,9 @@ TEST_CASE("balance(complex): isolates corner eigenvalues + preserves trace",
     balance<Complex<double>>(a, scale, ilo, ihi);
 
     CHECK(ilo == 1);
-    CHECK(ihi == kN - 2);
+    CHECK(ihi == k_n - 2);
     Complex<double> trace_after{0.0, 0.0};
-    for (crd::usize i = 0; i < kN; ++i)
+    for (crd::usize i = 0; i < k_n; ++i)
         trace_after = trace_after + a.at(i, i);
     CHECK_THAT(trace_after.re, WithinAbs(trace_before.re, 1e-9));
     CHECK_THAT(trace_after.im, WithinAbs(trace_before.im, 1e-9));

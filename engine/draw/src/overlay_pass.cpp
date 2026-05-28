@@ -135,25 +135,25 @@ void add_draw_overlay_pass(crd::renderer::FrameGraph&  fg,
             // in TWO buckets simultaneously: full-color into Test (visible
             // portion shows) and dimmed-color into GreaterDimmed (occluded
             // portion shows). Per ADR-0066 sec 19.1.
-            constexpr crd::u32 kVariantTest          = 0;
-            constexpr crd::u32 kVariantAlways        = 1;
-            constexpr crd::u32 kVariantGreaterDimmed = 2;
-            constexpr crd::u32 kVariantCount         = 3;
+            constexpr crd::u32 variant_test          = 0;
+            constexpr crd::u32 variant_always        = 1;
+            constexpr crd::u32 variant_greater_dimmed = 2;
+            constexpr crd::u32 variant_count         = 3;
 
             // Pre-bin per (primitive_kind, variant). Use indices into the
             // source spans + a paired "is_dimmed" flag so XRay's two emissions
             // stay distinguishable when packing GPU instance data.
-            crd::containers::Array<crd::u32> tri_bins[kVariantCount];
-            crd::containers::Array<crd::u32> line_bins[kVariantCount];
+            crd::containers::Array<crd::u32> tri_bins[variant_count];
+            crd::containers::Array<crd::u32> line_bins[variant_count];
 
             auto variant_of = [](DepthMode m) noexcept -> crd::u32 {
                 switch (m)
                 {
-                    case DepthMode::Test:   return kVariantTest;
-                    case DepthMode::Always: return kVariantAlways;
-                    case DepthMode::XRay:   return kVariantTest; // primary; second emission added explicitly
+                    case DepthMode::Test:   return variant_test;
+                    case DepthMode::Always: return variant_always;
+                    case DepthMode::XRay:   return variant_test; // primary; second emission added explicitly
                 }
-                return kVariantAlways;
+                return variant_always;
             };
 
             for (crd::usize i = 0; i < tri_count; ++i)
@@ -162,7 +162,7 @@ void add_draw_overlay_pass(crd::renderer::FrameGraph&  fg,
                 tri_bins[variant_of(m)].push_back(static_cast<crd::u32>(i));
                 if (m == DepthMode::XRay)
                 {
-                    tri_bins[kVariantGreaterDimmed].push_back(static_cast<crd::u32>(i));
+                    tri_bins[variant_greater_dimmed].push_back(static_cast<crd::u32>(i));
                 }
             }
             for (crd::usize i = 0; i < line_count; ++i)
@@ -171,7 +171,7 @@ void add_draw_overlay_pass(crd::renderer::FrameGraph&  fg,
                 line_bins[variant_of(m)].push_back(static_cast<crd::u32>(i));
                 if (m == DepthMode::XRay)
                 {
-                    line_bins[kVariantGreaterDimmed].push_back(static_cast<crd::u32>(i));
+                    line_bins[variant_greater_dimmed].push_back(static_cast<crd::u32>(i));
                 }
             }
 
@@ -179,8 +179,8 @@ void add_draw_overlay_pass(crd::renderer::FrameGraph&  fg,
             //    Test (depth-tested visible) -> Always (everywhere) ->
             //    GreaterDimmed (XRay occluded). Within each variant, the
             //    multi-batch loop from d2-overflow handles unbounded counts.
-            constexpr crd::u32 kVariantOrder[kVariantCount] = {
-                kVariantTest, kVariantAlways, kVariantGreaterDimmed};
+            constexpr crd::u32 variant_order[variant_count] = {
+                variant_test, variant_always, variant_greater_dimmed};
 
             auto dim_color = [](crd::u32 packed) noexcept -> crd::u32 {
                 // Multiply alpha by ~0.3 for the GreaterDimmed variant (XRay).
@@ -189,7 +189,7 @@ void add_draw_overlay_pass(crd::renderer::FrameGraph&  fg,
                 return (packed & 0x00FF'FFFFU) | (dimmed_a << 24);
             };
 
-            for (const crd::u32 v : kVariantOrder)
+            for (const crd::u32 v : variant_order)
             {
                 const auto& bin = tri_bins[v];
                 if (bin.empty()) continue;
@@ -202,7 +202,7 @@ void add_draw_overlay_pass(crd::renderer::FrameGraph&  fg,
                 cmd.bind_vertex_buffer(*tri_buf, 0);
 
                 const crd::usize n = bin.size();
-                const bool dim_alpha = (v == kVariantGreaterDimmed);
+                const bool dim_alpha = (v == variant_greater_dimmed);
                 for (crd::usize off = 0; off < n; off += batch_cap)
                 {
                     const crd::usize batch_n = (n - off > batch_cap) ? batch_cap : (n - off);
@@ -225,7 +225,7 @@ void add_draw_overlay_pass(crd::renderer::FrameGraph&  fg,
             }
 
             // -- Lines per variant (same compose-on-top order) --
-            for (const crd::u32 v : kVariantOrder)
+            for (const crd::u32 v : variant_order)
             {
                 const auto& bin = line_bins[v];
                 if (bin.empty()) continue;
@@ -238,7 +238,7 @@ void add_draw_overlay_pass(crd::renderer::FrameGraph&  fg,
                 cmd.bind_vertex_buffer(*line_buf, 0);
 
                 const crd::usize n = bin.size();
-                const bool dim_alpha = (v == kVariantGreaterDimmed);
+                const bool dim_alpha = (v == variant_greater_dimmed);
                 for (crd::usize off = 0; off < n; off += batch_cap)
                 {
                     const crd::usize batch_n = (n - off > batch_cap) ? batch_cap : (n - off);

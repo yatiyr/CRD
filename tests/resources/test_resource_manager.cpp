@@ -551,7 +551,7 @@ TEST_CASE("load_sync: unknown id returns Failed state", "[resources][manager][v1
 
 TEST_CASE("load_sync: hard failure loader returns Failed state", "[resources][manager][v1c]")
 {
-    constexpr crd::u32 kTestFourCC = make_fourcc('T', 'S', 'T', 'F');
+    constexpr crd::u32 test_four_cc = make_fourcc('T', 'S', 'T', 'F');
 
     const ResourceId test_id = ResourceId::mint_random();
     const crd::u8 dummy = 0;
@@ -560,9 +560,9 @@ TEST_CASE("load_sync: hard failure loader returns Failed state", "[resources][ma
     crd::containers::Array<TestArtifact> arts(&s_alloc);
     arts.push_back(TestArtifact(&s_alloc));
     arts[0].id          = test_id;
-    arts[0].type_fourcc = kTestFourCC;
+    arts[0].type_fourcc = test_four_cc;
     {
-        CrdrWriter w(&s_alloc, test_id, kTestFourCC);
+        CrdrWriter w(&s_alloc, test_id, test_four_cc);
         w.add_chunk(kFourCC_BLOB, span);
         arts[0].crdr_bytes = w.finish();
     }
@@ -571,7 +571,7 @@ TEST_CASE("load_sync: hard failure loader returns Failed state", "[resources][ma
     const auto path = write_pack_with_artifacts(arts);
 
     ResourceManager rm(&s_alloc);
-    rm.register_loader(std::make_unique<HardFailLoader>(kTestFourCC));
+    rm.register_loader(std::make_unique<HardFailLoader>(test_four_cc));
     REQUIRE(rm.mount_manifest(path.generic()).is_valid());
 
     auto handle = rm.load_sync<BlobResource>(test_id);
@@ -584,7 +584,7 @@ TEST_CASE("load_sync: hard failure loader returns Failed state", "[resources][ma
 
 TEST_CASE("load_sync: placeholder loader returns Placeholder state", "[resources][manager][v1c]")
 {
-    constexpr crd::u32 kTestFourCC = make_fourcc('T', 'S', 'T', 'P');
+    constexpr crd::u32 test_four_cc = make_fourcc('T', 'S', 'T', 'P');
 
     const ResourceId test_id = ResourceId::mint_random();
     const crd::u8 dummy = 0;
@@ -593,9 +593,9 @@ TEST_CASE("load_sync: placeholder loader returns Placeholder state", "[resources
     crd::containers::Array<TestArtifact> arts(&s_alloc);
     arts.push_back(TestArtifact(&s_alloc));
     arts[0].id          = test_id;
-    arts[0].type_fourcc = kTestFourCC;
+    arts[0].type_fourcc = test_four_cc;
     {
-        CrdrWriter w(&s_alloc, test_id, kTestFourCC);
+        CrdrWriter w(&s_alloc, test_id, test_four_cc);
         w.add_chunk(kFourCC_BLOB, span);
         arts[0].crdr_bytes = w.finish();
     }
@@ -604,7 +604,7 @@ TEST_CASE("load_sync: placeholder loader returns Placeholder state", "[resources
     const auto path = write_pack_with_artifacts(arts);
 
     ResourceManager rm(&s_alloc);
-    rm.register_loader(std::make_unique<PlaceholderLoader>(kTestFourCC));
+    rm.register_loader(std::make_unique<PlaceholderLoader>(test_four_cc));
     REQUIRE(rm.mount_manifest(path.generic()).is_valid());
 
     auto handle = rm.load_sync<BlobResource>(test_id);
@@ -616,7 +616,7 @@ TEST_CASE("load_sync: placeholder loader returns Placeholder state", "[resources
 
 TEST_CASE("load_sync: transitive dependency loads both resources", "[resources][manager][v1c]")
 {
-    constexpr crd::u32 kChainCC = make_fourcc('C', 'H', 'N', 'K');
+    constexpr crd::u32 chain_cc = make_fourcc('C', 'H', 'N', 'K');
 
     const ResourceId dep_id   = ResourceId::mint_random();
     const ResourceId owner_id = ResourceId::mint_random();
@@ -641,9 +641,9 @@ TEST_CASE("load_sync: transitive dependency loads both resources", "[resources][
 
     arts.push_back(TestArtifact(&s_alloc));
     arts[1].id          = owner_id;
-    arts[1].type_fourcc = kChainCC;
+    arts[1].type_fourcc = chain_cc;
     {
-        CrdrWriter w(&s_alloc, owner_id, kChainCC);
+        CrdrWriter w(&s_alloc, owner_id, chain_cc);
         w.add_chunk(kFourCC_BLOB, crd::containers::as_const_span(owner_blob_payload));
         arts[1].crdr_bytes = w.finish();
     }
@@ -653,7 +653,7 @@ TEST_CASE("load_sync: transitive dependency loads both resources", "[resources][
 
     ResourceManager rm(&s_alloc);
     rm.register_loader(std::make_unique<BlobResourceLoader>());
-    rm.register_loader(std::make_unique<ChainedLoader>(kChainCC));
+    rm.register_loader(std::make_unique<ChainedLoader>(chain_cc));
     REQUIRE(rm.mount_manifest(path.generic()).is_valid());
 
     auto owner_handle = rm.load_sync<ChainedPayload>(owner_id);
@@ -669,7 +669,7 @@ TEST_CASE("load_sync: transitive dependency loads both resources", "[resources][
 
 TEST_CASE("load_sync: cycle detection makes both resources Failed", "[resources][manager][v1c]")
 {
-    constexpr crd::u32 kChainCC = make_fourcc('C', 'Y', 'C', 'L');
+    constexpr crd::u32 chain_cc = make_fourcc('C', 'Y', 'C', 'L');
 
     const ResourceId id_a = ResourceId::mint_random();
     const ResourceId id_b = ResourceId::mint_random();
@@ -681,7 +681,7 @@ TEST_CASE("load_sync: cycle detection makes both resources Failed", "[resources]
         std::memcpy(blob.data(),     &dep_id.hi, 8);
         std::memcpy(blob.data() + 8, &dep_id.lo, 8);
 
-        CrdrWriter w(&s_alloc, self_id, kChainCC);
+        CrdrWriter w(&s_alloc, self_id, chain_cc);
         w.add_chunk(kFourCC_BLOB, crd::containers::as_const_span(blob));
         return w.finish();
     };
@@ -690,20 +690,20 @@ TEST_CASE("load_sync: cycle detection makes both resources Failed", "[resources]
 
     arts.push_back(TestArtifact(&s_alloc));
     arts[0].id          = id_a;
-    arts[0].type_fourcc = kChainCC;
+    arts[0].type_fourcc = chain_cc;
     arts[0].crdr_bytes  = make_chain_artifact(id_a, id_b); // A → B
     arts[0].name        = crd::containers::String("cycle_a", &s_alloc);
 
     arts.push_back(TestArtifact(&s_alloc));
     arts[1].id          = id_b;
-    arts[1].type_fourcc = kChainCC;
+    arts[1].type_fourcc = chain_cc;
     arts[1].crdr_bytes  = make_chain_artifact(id_b, id_a); // B → A (cycle!)
     arts[1].name        = crd::containers::String("cycle_b", &s_alloc);
 
     const auto path = write_pack_with_artifacts(arts);
 
     ResourceManager rm(&s_alloc);
-    rm.register_loader(std::make_unique<ChainedLoader>(kChainCC));
+    rm.register_loader(std::make_unique<ChainedLoader>(chain_cc));
     REQUIRE(rm.mount_manifest(path.generic()).is_valid());
 
     // Loading A triggers B which tries to load A → cycle.
@@ -800,13 +800,13 @@ TEST_CASE("load_async: unknown id returns Failed block immediately", "[resources
 
 TEST_CASE("load_async: four concurrent loads all reach Ready", "[resources][manager][v1d]")
 {
-    constexpr crd::usize kCount = 4U;
+    constexpr crd::usize count = 4U;
     const crd::u8 payload[] = {0xCA, 0xFE};
     const auto payload_span  = crd::containers::ConstSpan<crd::u8>(payload, 2);
 
-    ResourceId ids[kCount];
+    ResourceId ids[count];
     crd::containers::Array<TestArtifact> arts(&s_alloc);
-    for (crd::usize i = 0; i < kCount; ++i)
+    for (crd::usize i = 0; i < count; ++i)
     {
         ids[i] = ResourceId::mint_random();
         arts.push_back(TestArtifact(&s_alloc));
@@ -822,19 +822,19 @@ TEST_CASE("load_async: four concurrent loads all reach Ready", "[resources][mana
     REQUIRE(rm.mount_manifest(path.generic()).is_valid());
 
     // Submit all 4 async loads before waiting on any.
-    ResourceHandle<BlobResource> handles[kCount];
-    for (crd::usize i = 0; i < kCount; ++i)
+    ResourceHandle<BlobResource> handles[count];
+    for (crd::usize i = 0; i < count; ++i)
     {
         handles[i] = rm.load_async<BlobResource>(ids[i]);
     }
 
-    for (crd::usize i = 0; i < kCount; ++i)
+    for (crd::usize i = 0; i < count; ++i)
     {
         CHECK(handles[i].wait_ready() == LoadState::Ready);
         CHECK(handles[i].get() != nullptr);
     }
 
-    CHECK(rm.handle_count() == kCount);
+    CHECK(rm.handle_count() == count);
     CHECK(rm.in_flight_count() == 0U);
 
     (void)crd::platform::fs::remove_file(path);

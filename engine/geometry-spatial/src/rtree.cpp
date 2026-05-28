@@ -1047,10 +1047,10 @@ void RTree<T>::bulk_load(crd::containers::ConstSpan<AABB3<T>> aabbs,
 template <MathScalar T>
 AABB3<T> RTree<T>::bounds() const noexcept
 {
-    constexpr T kInf = std::numeric_limits<T>::infinity();
+    constexpr T inf = std::numeric_limits<T>::infinity();
     if (m_root == k_null)
     {
-        return AABB3<T>{Vec3<T>{kInf, kInf, kInf}, Vec3<T>{-kInf, -kInf, -kInf}};
+        return AABB3<T>{Vec3<T>{inf, inf, inf}, Vec3<T>{-inf, -inf, -inf}};
     }
     return aabb_union_of_entries(m_nodes[m_root].entries, m_nodes[m_root].entry_count);
 }

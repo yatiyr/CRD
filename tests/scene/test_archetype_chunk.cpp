@@ -151,12 +151,12 @@ TEST_CASE("Layout returns invalid when component count exceeds the per-archetype
 {
     ComponentRegistry r;
 
-    constexpr crd::u32 kOverflow = kMaxComponentsPerArchetype + 1;
-    register_test_slots(r, std::make_integer_sequence<crd::u32, kOverflow>{});
-    REQUIRE(r.size() == kOverflow);
+    constexpr crd::u32 overflow = kMaxComponentsPerArchetype + 1;
+    register_test_slots(r, std::make_integer_sequence<crd::u32, overflow>{});
+    REQUIRE(r.size() == overflow);
 
     ComponentMask mask{};
-    for (crd::u16 i = 0; i < static_cast<crd::u16>(kOverflow); ++i)
+    for (crd::u16 i = 0; i < static_cast<crd::u16>(overflow); ++i)
     {
         mask.set(ComponentId{i});
     }

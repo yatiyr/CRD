@@ -26,8 +26,8 @@ namespace
 template <typename ColT>
 CRD_FORCEINLINE void put_lane(ColT& col, crd::usize lane_idx, crd::f32 value) noexcept
 {
-    constexpr crd::usize kLanes = sizeof(ColT) / sizeof(crd::f32);
-    crd::f32 buf[kLanes];
+    constexpr crd::usize k_lanes = sizeof(ColT) / sizeof(crd::f32);
+    crd::f32 buf[k_lanes];
     col.store(buf);
     buf[lane_idx] = value;
     col = ColT::load(buf);

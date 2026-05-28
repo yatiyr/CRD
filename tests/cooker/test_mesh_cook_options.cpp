@@ -120,8 +120,8 @@ TEST_CASE("mesh_cook_options: SI invariant -- default scale yields 1.0 (no norma
     // no FP drift introduced by the cooker on conformant assets).
     const auto opts = parse_mesh_cook_options(StringView{});
     REQUIRE(opts.position_scale == 1.0F);
-    constexpr float kSamplePositions[3] = {1.25F, -3.5F, 0.125F};
-    for (float v : kSamplePositions)
+    constexpr float sample_positions[3] = {1.25F, -3.5F, 0.125F};
+    for (float v : sample_positions)
     {
         REQUIRE(v * opts.position_scale == v); // bit-exact pass-through
     }

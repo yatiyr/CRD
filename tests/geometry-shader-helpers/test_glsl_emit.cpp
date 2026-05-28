@@ -259,15 +259,15 @@ TEST_CASE("v9e-b ULP conformance: GPU output matches evaluate() within tolerance
 
     // Sample-grid origin + step: cover the [-0.6, +0.6]³ box where all 21
     // manifests are interesting (sphere radius 0.5, box 0.4, etc.).
-    constexpr float kOrigin = -0.6F;
-    constexpr float kSpan   = 1.2F;
+    constexpr float k_origin = -0.6F;
+    constexpr float span   = 1.2F;
     GlslConformancePushConstants pc{};
-    pc.grid_origin[0] = kOrigin;
-    pc.grid_origin[1] = kOrigin;
-    pc.grid_origin[2] = kOrigin;
-    pc.grid_step[0]   = kSpan / static_cast<float>(kGridResolution - 1U);
-    pc.grid_step[1]   = kSpan / static_cast<float>(kGridResolution - 1U);
-    pc.grid_step[2]   = kSpan / static_cast<float>(kGridResolution - 1U);
+    pc.grid_origin[0] = k_origin;
+    pc.grid_origin[1] = k_origin;
+    pc.grid_origin[2] = k_origin;
+    pc.grid_step[0]   = span / static_cast<float>(kGridResolution - 1U);
+    pc.grid_step[1]   = span / static_cast<float>(kGridResolution - 1U);
+    pc.grid_step[2]   = span / static_cast<float>(kGridResolution - 1U);
     pc.grid_resolution = kGridResolution;
 
     const crd::u64 out_bytes = static_cast<crd::u64>(kSampleCount) * sizeof(float);

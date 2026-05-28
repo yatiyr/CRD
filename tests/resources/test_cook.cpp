@@ -157,8 +157,8 @@ TEST_CASE("cmd_cook: 10 .bin files, byte-identical second run, skipped log entri
     const auto pack_path = tmp / "output.crdr";
 
     // Create 10 .bin source files.
-    constexpr int kFileCount = 10;
-    for (int i = 0; i < kFileCount; ++i)
+    constexpr int file_count = 10;
+    for (int i = 0; i < file_count; ++i)
     {
         crd::containers::String name("file");
         name.append(std::to_string(i));
@@ -190,7 +190,7 @@ TEST_CASE("cmd_cook: 10 .bin files, byte-identical second run, skipped log entri
 
     crd::containers::Array<ManifestEntry> entries_1(&g_alloc);
     REQUIRE(manifest_read_entries(mfst->payload, entries_1, &g_alloc));
-    REQUIRE(entries_1.size() == static_cast<crd::usize>(kFileCount));
+    REQUIRE(entries_1.size() == static_cast<crd::usize>(file_count));
 
     // Second cook run.
     REQUIRE(cmd_cook(tmp.generic().data(), pack_path.generic().data()) == 0);
@@ -218,7 +218,7 @@ TEST_CASE("cmd_cook: 10 .bin files, byte-identical second run, skipped log entri
         ++skipped_count;
         pos = log_sv.find(skipped_marker, pos + skipped_marker.size());
     }
-    REQUIRE(skipped_count == kFileCount);
+    REQUIRE(skipped_count == file_count);
 
     REQUIRE(fs::remove_all(tmp));
 }

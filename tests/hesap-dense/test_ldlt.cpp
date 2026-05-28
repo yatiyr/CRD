@@ -99,28 +99,28 @@ TEST_CASE("LDLT: solve correctness at N=16 random indefinite",
           "[hesap][ldlt][real]")
 {
     crd::memory::TlsfAllocator alloc(512U * 1024U);
-    constexpr crd::usize kN = 16;
-    Symmetric<double> a(&alloc, kN);
+    constexpr crd::usize k_n = 16;
+    Symmetric<double> a(&alloc, k_n);
     random_symmetric_indefinite<double>(a, 271U);
 
     crd::containers::Array<double> x_true(&alloc);
-    x_true.resize(kN);
-    for (crd::usize i = 0; i < kN; ++i)
+    x_true.resize(k_n);
+    for (crd::usize i = 0; i < k_n; ++i)
     {
         x_true[i] = static_cast<double>(i + 1) * 0.5 - 4.0;
     }
     crd::containers::Array<double> b(&alloc);
-    b.resize(kN);
+    b.resize(k_n);
     mat_vec<double>(a, x_true.data(), b.data());
 
-    LDLT<double, Layout::RowMajor> ldlt(&alloc, kN);
+    LDLT<double, Layout::RowMajor> ldlt(&alloc, k_n);
     factor_ldlt(ldlt, a);
     REQUIRE(ldlt.info() == 0U);
 
-    crd::containers::Span<double> xs(b.data(), kN);
+    crd::containers::Span<double> xs(b.data(), k_n);
     solve_ldlt(ldlt, xs);
 
-    for (crd::usize i = 0; i < kN; ++i)
+    for (crd::usize i = 0; i < k_n; ++i)
     {
         CHECK_THAT(xs[i], WithinAbs(x_true[i], 1e-8));
     }
@@ -130,28 +130,28 @@ TEST_CASE("LDLT: solve correctness at N=64 random indefinite",
           "[hesap][ldlt][real]")
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(4U * 1024U * 1024U));
-    constexpr crd::usize kN = 64;
-    Symmetric<double> a(&alloc, kN);
+    constexpr crd::usize k_n = 64;
+    Symmetric<double> a(&alloc, k_n);
     random_symmetric_indefinite<double>(a, 3141U);
 
     crd::containers::Array<double> x_true(&alloc);
-    x_true.resize(kN);
-    for (crd::usize i = 0; i < kN; ++i)
+    x_true.resize(k_n);
+    for (crd::usize i = 0; i < k_n; ++i)
     {
         x_true[i] = std::sin(static_cast<double>(i) * 0.3);
     }
     crd::containers::Array<double> b(&alloc);
-    b.resize(kN);
+    b.resize(k_n);
     mat_vec<double>(a, x_true.data(), b.data());
 
-    LDLT<double, Layout::RowMajor> ldlt(&alloc, kN);
+    LDLT<double, Layout::RowMajor> ldlt(&alloc, k_n);
     factor_ldlt(ldlt, a);
     REQUIRE(ldlt.info() == 0U);
 
-    crd::containers::Span<double> xs(b.data(), kN);
+    crd::containers::Span<double> xs(b.data(), k_n);
     solve_ldlt(ldlt, xs);
 
-    for (crd::usize i = 0; i < kN; ++i)
+    for (crd::usize i = 0; i < k_n; ++i)
     {
         CHECK_THAT(xs[i], WithinAbs(x_true[i], 1e-6));
     }
@@ -161,27 +161,27 @@ TEST_CASE("LDLT: f32 solve at N=32",
           "[hesap][ldlt][real][f32]")
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(2U * 1024U * 1024U));
-    constexpr crd::usize kN = 32;
-    Symmetric<float> a(&alloc, kN);
+    constexpr crd::usize k_n = 32;
+    Symmetric<float> a(&alloc, k_n);
     random_symmetric_indefinite<float>(a, 2718U);
 
     crd::containers::Array<float> x_true(&alloc);
-    x_true.resize(kN);
-    for (crd::usize i = 0; i < kN; ++i)
+    x_true.resize(k_n);
+    for (crd::usize i = 0; i < k_n; ++i)
     {
         x_true[i] = static_cast<float>(i + 1) * 0.25F;
     }
     crd::containers::Array<float> b(&alloc);
-    b.resize(kN);
+    b.resize(k_n);
     mat_vec<float>(a, x_true.data(), b.data());
 
-    LDLT<float, Layout::RowMajor> ldlt(&alloc, kN);
+    LDLT<float, Layout::RowMajor> ldlt(&alloc, k_n);
     factor_ldlt(ldlt, a);
     REQUIRE(ldlt.info() == 0U);
 
-    crd::containers::Span<float> xs(b.data(), kN);
+    crd::containers::Span<float> xs(b.data(), k_n);
     solve_ldlt(ldlt, xs);
-    for (crd::usize i = 0; i < kN; ++i)
+    for (crd::usize i = 0; i < k_n; ++i)
     {
         CHECK_THAT(static_cast<double>(xs[i]),
                    WithinAbs(static_cast<double>(x_true[i]), 1e-2));

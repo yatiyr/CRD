@@ -158,10 +158,10 @@ TEST_CASE("Complex32 axpy + dotu round-trip", "[hesap][blas1][complex][c32]")
 TEST_CASE("complex determinism: same input -> same output", "[hesap][blas1][complex][det]")
 {
     crd::memory::TlsfAllocator alloc(256 * 1024);
-    constexpr crd::usize kN = 2000;
-    Vector<Complex64> x(&alloc, kN);
-    Vector<Complex64> y(&alloc, kN);
-    for (crd::usize i = 0; i < kN; ++i)
+    constexpr crd::usize k_n = 2000;
+    Vector<Complex64> x(&alloc, k_n);
+    Vector<Complex64> y(&alloc, k_n);
+    for (crd::usize i = 0; i < k_n; ++i)
     {
         x(i) = Complex64{std::sin(static_cast<crd::f64>(i)), std::cos(static_cast<crd::f64>(i))};
         y(i) = Complex64{std::cos(static_cast<crd::f64>(i)), std::sin(static_cast<crd::f64>(i))};

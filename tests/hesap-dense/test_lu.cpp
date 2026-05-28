@@ -141,18 +141,18 @@ TEST_CASE("LU: solve recovers x for A*x = b at N=4", "[hesap][lu][real][solve]")
 TEST_CASE("LU: reconstruction P*A == L*U at N=8", "[hesap][lu][real]")
 {
     crd::memory::TlsfAllocator alloc(256U * 1024U);
-    constexpr crd::usize kN = 8;
-    Matrix<double, Layout::RowMajor> a(&alloc, kN, kN);
+    constexpr crd::usize k_n = 8;
+    Matrix<double, Layout::RowMajor> a(&alloc, k_n, k_n);
     // Deterministic pseudo-random A with some off-diagonal magnitude.
-    for (crd::usize i = 0; i < kN; ++i)
+    for (crd::usize i = 0; i < k_n; ++i)
     {
-        for (crd::usize j = 0; j < kN; ++j)
+        for (crd::usize j = 0; j < k_n; ++j)
         {
-            const double v = std::sin(static_cast<double>(i * kN + j) + 1.0);
+            const double v = std::sin(static_cast<double>(i * k_n + j) + 1.0);
             a.at(i, j) = v + (i == j ? 5.0 : 0.0);
         }
     }
-    LU<double, Layout::RowMajor> lu(&alloc, kN);
+    LU<double, Layout::RowMajor> lu(&alloc, k_n);
     factor_lu(lu, a);
     REQUIRE(lu.info() == 0U);
     reconstruct_and_check<double>(lu, a, 1e-10);
@@ -162,17 +162,17 @@ TEST_CASE("LU: reconstruction P*A == L*U at N=64 (block boundary)", "[hesap][lu]
 {
     (void)crd_hesap_dense_tests::hesap_jobs_listener();
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(16U * 1024U * 1024U));
-    constexpr crd::usize kN = 64;
-    Matrix<double, Layout::RowMajor> a(&alloc, kN, kN);
-    for (crd::usize i = 0; i < kN; ++i)
+    constexpr crd::usize k_n = 64;
+    Matrix<double, Layout::RowMajor> a(&alloc, k_n, k_n);
+    for (crd::usize i = 0; i < k_n; ++i)
     {
-        for (crd::usize j = 0; j < kN; ++j)
+        for (crd::usize j = 0; j < k_n; ++j)
         {
             const double v = std::cos(static_cast<double>(i * 7 + j * 3) * 0.1);
             a.at(i, j) = v + (i == j ? 20.0 : 0.0);
         }
     }
-    LU<double, Layout::RowMajor> lu(&alloc, kN);
+    LU<double, Layout::RowMajor> lu(&alloc, k_n);
     factor_lu(lu, a);
     REQUIRE(lu.info() == 0U);
     reconstruct_and_check<double>(lu, a, 1e-9);
@@ -182,17 +182,17 @@ TEST_CASE("LU: reconstruction at N=128 (multiple blocks + trailing update)", "[h
 {
     (void)crd_hesap_dense_tests::hesap_jobs_listener();
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(32U * 1024U * 1024U));
-    constexpr crd::usize kN = 128;
-    Matrix<double, Layout::RowMajor> a(&alloc, kN, kN);
-    for (crd::usize i = 0; i < kN; ++i)
+    constexpr crd::usize k_n = 128;
+    Matrix<double, Layout::RowMajor> a(&alloc, k_n, k_n);
+    for (crd::usize i = 0; i < k_n; ++i)
     {
-        for (crd::usize j = 0; j < kN; ++j)
+        for (crd::usize j = 0; j < k_n; ++j)
         {
             const double v = std::sin(static_cast<double>(i * 5 + j * 11) * 0.03);
             a.at(i, j) = v + (i == j ? 50.0 : 0.0);
         }
     }
-    LU<double, Layout::RowMajor> lu(&alloc, kN);
+    LU<double, Layout::RowMajor> lu(&alloc, k_n);
     factor_lu(lu, a);
     REQUIRE(lu.info() == 0U);
     reconstruct_and_check<double>(lu, a, 1e-9);
@@ -232,41 +232,41 @@ TEST_CASE("LU: detects exactly singular matrix", "[hesap][lu][real]")
 TEST_CASE("LU: solve_lu f32 at N=32", "[hesap][lu][real][f32]")
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(4U * 1024U * 1024U));
-    constexpr crd::usize kN = 32;
-    Matrix<float, Layout::RowMajor> a(&alloc, kN, kN);
-    for (crd::usize i = 0; i < kN; ++i)
+    constexpr crd::usize k_n = 32;
+    Matrix<float, Layout::RowMajor> a(&alloc, k_n, k_n);
+    for (crd::usize i = 0; i < k_n; ++i)
     {
-        for (crd::usize j = 0; j < kN; ++j)
+        for (crd::usize j = 0; j < k_n; ++j)
         {
             const float v = std::sin(static_cast<float>(i * 7 + j) * 0.1F);
             a.at(i, j) = v + (i == j ? 10.0F : 0.0F);
         }
     }
     crd::containers::Array<float> x_true(&alloc);
-    x_true.resize(kN);
-    for (crd::usize i = 0; i < kN; ++i)
+    x_true.resize(k_n);
+    for (crd::usize i = 0; i < k_n; ++i)
     {
         x_true[i] = static_cast<float>(i + 1);
     }
     crd::containers::Array<float> b(&alloc);
-    b.resize(kN);
-    for (crd::usize i = 0; i < kN; ++i)
+    b.resize(k_n);
+    for (crd::usize i = 0; i < k_n; ++i)
     {
         float s = 0.0F;
-        for (crd::usize j = 0; j < kN; ++j)
+        for (crd::usize j = 0; j < k_n; ++j)
         {
             s += a.at(i, j) * x_true[j];
         }
         b[i] = s;
     }
 
-    LU<float, Layout::RowMajor> lu(&alloc, kN);
+    LU<float, Layout::RowMajor> lu(&alloc, k_n);
     factor_lu(lu, a);
     REQUIRE(lu.info() == 0U);
 
-    crd::containers::Span<float> x(b.data(), kN);
+    crd::containers::Span<float> x(b.data(), k_n);
     solve_lu(lu, x);
-    for (crd::usize i = 0; i < kN; ++i)
+    for (crd::usize i = 0; i < k_n; ++i)
     {
         CHECK_THAT(static_cast<double>(x[i]),
                    WithinAbs(static_cast<double>(x_true[i]), 1e-4));
@@ -276,33 +276,33 @@ TEST_CASE("LU: solve_lu f32 at N=32", "[hesap][lu][real][f32]")
 TEST_CASE("LU: multi-RHS solve at N=16, nrhs=3", "[hesap][lu][real][solve][multi-rhs]")
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(1U * 1024U * 1024U));
-    constexpr crd::usize kN = 16;
-    constexpr crd::usize kRhs = 3;
-    Matrix<double, Layout::RowMajor> a(&alloc, kN, kN);
-    for (crd::usize i = 0; i < kN; ++i)
+    constexpr crd::usize k_n = 16;
+    constexpr crd::usize k_rhs = 3;
+    Matrix<double, Layout::RowMajor> a(&alloc, k_n, k_n);
+    for (crd::usize i = 0; i < k_n; ++i)
     {
-        for (crd::usize j = 0; j < kN; ++j)
+        for (crd::usize j = 0; j < k_n; ++j)
         {
             a.at(i, j) = std::sin(static_cast<double>(i * 3 + j) * 0.05) +
                          (i == j ? 15.0 : 0.0);
         }
     }
-    // Build B such that A * X_true = B. X_true(i, r) = i + r * kN.
-    Matrix<double, Layout::RowMajor> x_true(&alloc, kN, kRhs);
-    for (crd::usize i = 0; i < kN; ++i)
+    // Build B such that A * X_true = B. X_true(i, r) = i + r * k_n.
+    Matrix<double, Layout::RowMajor> x_true(&alloc, k_n, k_rhs);
+    for (crd::usize i = 0; i < k_n; ++i)
     {
-        for (crd::usize r = 0; r < kRhs; ++r)
+        for (crd::usize r = 0; r < k_rhs; ++r)
         {
-            x_true.at(i, r) = static_cast<double>(i + r * kN);
+            x_true.at(i, r) = static_cast<double>(i + r * k_n);
         }
     }
-    Matrix<double, Layout::RowMajor> b(&alloc, kN, kRhs);
-    for (crd::usize i = 0; i < kN; ++i)
+    Matrix<double, Layout::RowMajor> b(&alloc, k_n, k_rhs);
+    for (crd::usize i = 0; i < k_n; ++i)
     {
-        for (crd::usize r = 0; r < kRhs; ++r)
+        for (crd::usize r = 0; r < k_rhs; ++r)
         {
             double s = 0.0;
-            for (crd::usize j = 0; j < kN; ++j)
+            for (crd::usize j = 0; j < k_n; ++j)
             {
                 s += a.at(i, j) * x_true.at(j, r);
             }
@@ -310,14 +310,14 @@ TEST_CASE("LU: multi-RHS solve at N=16, nrhs=3", "[hesap][lu][real][solve][multi
         }
     }
 
-    LU<double, Layout::RowMajor> lu(&alloc, kN);
+    LU<double, Layout::RowMajor> lu(&alloc, k_n);
     factor_lu(lu, a);
     REQUIRE(lu.info() == 0U);
 
     solve_lu(lu, b.view());
-    for (crd::usize i = 0; i < kN; ++i)
+    for (crd::usize i = 0; i < k_n; ++i)
     {
-        for (crd::usize r = 0; r < kRhs; ++r)
+        for (crd::usize r = 0; r < k_rhs; ++r)
         {
             CHECK_THAT(b.at(i, r), WithinAbs(x_true.at(i, r), 1e-10));
         }
@@ -329,13 +329,13 @@ TEST_CASE("LU: determinism: factor is bit-identical across runs at N=128",
 {
     (void)crd_hesap_dense_tests::hesap_jobs_listener();
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(64U * 1024U * 1024U));
-    constexpr crd::usize kN = 128;
+    constexpr crd::usize k_n = 128;
 
     auto build_a = [&](Matrix<double, Layout::RowMajor>& m)
     {
-        for (crd::usize i = 0; i < kN; ++i)
+        for (crd::usize i = 0; i < k_n; ++i)
         {
-            for (crd::usize j = 0; j < kN; ++j)
+            for (crd::usize j = 0; j < k_n; ++j)
             {
                 m.at(i, j) = std::cos(static_cast<double>(i * 11 + j * 5) * 0.02) +
                              (i == j ? 50.0 : 0.0);
@@ -343,13 +343,13 @@ TEST_CASE("LU: determinism: factor is bit-identical across runs at N=128",
         }
     };
 
-    Matrix<double, Layout::RowMajor> a1(&alloc, kN, kN);
-    Matrix<double, Layout::RowMajor> a2(&alloc, kN, kN);
+    Matrix<double, Layout::RowMajor> a1(&alloc, k_n, k_n);
+    Matrix<double, Layout::RowMajor> a2(&alloc, k_n, k_n);
     build_a(a1);
     build_a(a2);
 
-    LU<double, Layout::RowMajor> lu1(&alloc, kN);
-    LU<double, Layout::RowMajor> lu2(&alloc, kN);
+    LU<double, Layout::RowMajor> lu1(&alloc, k_n);
+    LU<double, Layout::RowMajor> lu2(&alloc, k_n);
     factor_lu(lu1, a1);
     factor_lu(lu2, a2);
 
@@ -358,11 +358,11 @@ TEST_CASE("LU: determinism: factor is bit-identical across runs at N=128",
     // hesap determinism contract (ADR-0082 §2026-05-20 — IEEE 754 FMA
     // deterministic; gemm_parallel disjoint row-slab tile sums also
     // bit-deterministic across thread counts).
-    for (crd::usize i = 0; i < kN * kN; ++i)
+    for (crd::usize i = 0; i < k_n * k_n; ++i)
     {
         REQUIRE(lu1.packed().data()[i] == lu2.packed().data()[i]);
     }
-    for (crd::usize i = 0; i < kN; ++i)
+    for (crd::usize i = 0; i < k_n; ++i)
     {
         REQUIRE(lu1.permutation().pivot_at(i) == lu2.permutation().pivot_at(i));
     }
@@ -373,16 +373,16 @@ TEST_CASE("LU: allocator propagation: TLSF only, no malloc",
 {
     // 16 MB TLSF, large enough for N=128 LU + gemm pack buffers.
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(16U * 1024U * 1024U));
-    constexpr crd::usize kN = 128;
-    Matrix<double, Layout::RowMajor> a(&alloc, kN, kN);
-    for (crd::usize i = 0; i < kN; ++i)
+    constexpr crd::usize k_n = 128;
+    Matrix<double, Layout::RowMajor> a(&alloc, k_n, k_n);
+    for (crd::usize i = 0; i < k_n; ++i)
     {
-        for (crd::usize j = 0; j < kN; ++j)
+        for (crd::usize j = 0; j < k_n; ++j)
         {
             a.at(i, j) = std::sin(static_cast<double>(i + j)) + (i == j ? 30.0 : 0.0);
         }
     }
-    LU<double, Layout::RowMajor> lu(&alloc, kN);
+    LU<double, Layout::RowMajor> lu(&alloc, k_n);
 
     (void)crd_hesap_dense_tests::hesap_jobs_listener();
     // factor_lu must take all scratch from `alloc` (lu.allocator()) — verified

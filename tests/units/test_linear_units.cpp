@@ -139,16 +139,16 @@ TEST_CASE("LinearUnit: SI-prefix round-trip m <-> mm <-> km is bit-exact f64",
           "[v0a-2][linear-units][round-trip]")
 {
     // Pick any "nice" value. m ? mm ? m should be bit-exact.
-    constexpr f64 kVm = 25.4;
-    constexpr f64 kVmm = kVm / Millimeter::factor;  // value in mm
-    constexpr f64 kVback = kVmm * Millimeter::factor;  // back to m
+    constexpr f64 vm = 25.4;
+    constexpr f64 vmm = vm / Millimeter::factor;  // value in mm
+    constexpr f64 vback = vmm * Millimeter::factor;  // back to m
 
-    STATIC_REQUIRE(kVback == kVm);
+    STATIC_REQUIRE(vback == vm);
 
     // m ? km ? m
-    constexpr f64 kVkm = kVm / Kilometer::factor;
-    constexpr f64 kVback2 = kVkm * Kilometer::factor;
-    STATIC_REQUIRE(kVback2 == kVm);
+    constexpr f64 vkm = vm / Kilometer::factor;
+    constexpr f64 vback2 = vkm * Kilometer::factor;
+    STATIC_REQUIRE(vback2 == vm);
 }
 
 TEST_CASE("LinearUnit: inch <-> mm round-trip is exact (both rationals over the same base)",
@@ -238,14 +238,14 @@ TEST_CASE("LinearUnit: angular units carry dim::Angle",
 
     // Degree ? ?/180 ? 0.0174532925... (1 ULP tolerance documented).
     // Approximation check: Degree::factor is within 1e-15 of ?/180.
-    constexpr f64 kPiOver180 = std::numbers::pi / 180.0;
-    constexpr f64 kDiff = Degree::factor - kPiOver180;
-    STATIC_REQUIRE(kDiff > -1e-15 && kDiff < 1e-15);
+    constexpr f64 pi_over180 = std::numbers::pi / 180.0;
+    constexpr f64 diff = Degree::factor - pi_over180;
+    STATIC_REQUIRE(diff > -1e-15 && diff < 1e-15);
 
     // Revolution ? 2? ? 6.283... (1 ULP tolerance).
-    constexpr f64 kTwoPi = 2.0 * std::numbers::pi;
-    constexpr f64 kDiff2 = Revolution::factor - kTwoPi;
-    STATIC_REQUIRE(kDiff2 > -1e-12 && kDiff2 < 1e-12);
+    constexpr f64 two_pi = 2.0 * std::numbers::pi;
+    constexpr f64 diff2 = Revolution::factor - two_pi;
+    STATIC_REQUIRE(diff2 > -1e-12 && diff2 < 1e-12);
 }
 
 TEST_CASE("LinearUnit: electrical units",

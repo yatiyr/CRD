@@ -110,10 +110,10 @@ TEST_CASE("Cholesky: reconstruction L*L^T == A at N=8",
           "[hesap][cholesky][real]")
 {
     crd::memory::TlsfAllocator alloc(512U * 1024U);
-    constexpr crd::usize kN = 8;
-    Symmetric<double> a(&alloc, kN);
+    constexpr crd::usize k_n = 8;
+    Symmetric<double> a(&alloc, k_n);
     random_spd<double>(a, 42U);
-    Cholesky<double, Layout::RowMajor> chol(&alloc, kN);
+    Cholesky<double, Layout::RowMajor> chol(&alloc, k_n);
     factor_cholesky(chol, a);
     REQUIRE(chol.info() == 0U);
     reconstruct_and_check<double>(chol, a, 1e-9);
@@ -124,10 +124,10 @@ TEST_CASE("Cholesky: reconstruction at N=64 (single trailing update)",
 {
     (void)crd_hesap_dense_tests::hesap_jobs_listener();
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(16U * 1024U * 1024U));
-    constexpr crd::usize kN = 64;
-    Symmetric<double> a(&alloc, kN);
+    constexpr crd::usize k_n = 64;
+    Symmetric<double> a(&alloc, k_n);
     random_spd<double>(a, 1729U);
-    Cholesky<double, Layout::RowMajor> chol(&alloc, kN);
+    Cholesky<double, Layout::RowMajor> chol(&alloc, k_n);
     factor_cholesky(chol, a);
     REQUIRE(chol.info() == 0U);
     reconstruct_and_check<double>(chol, a, 1e-7);
@@ -138,10 +138,10 @@ TEST_CASE("Cholesky: reconstruction at N=128 (multi-block)",
 {
     (void)crd_hesap_dense_tests::hesap_jobs_listener();
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(32U * 1024U * 1024U));
-    constexpr crd::usize kN = 128;
-    Symmetric<double> a(&alloc, kN);
+    constexpr crd::usize k_n = 128;
+    Symmetric<double> a(&alloc, k_n);
     random_spd<double>(a, 314159U);
-    Cholesky<double, Layout::RowMajor> chol(&alloc, kN);
+    Cholesky<double, Layout::RowMajor> chol(&alloc, k_n);
     factor_cholesky(chol, a);
     REQUIRE(chol.info() == 0U);
     reconstruct_and_check<double>(chol, a, 1e-7);
@@ -165,33 +165,33 @@ TEST_CASE("Cholesky: detects non-positive-definite", "[hesap][cholesky][real]")
 TEST_CASE("Cholesky: f32 solve at N=32", "[hesap][cholesky][real][f32]")
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(4U * 1024U * 1024U));
-    constexpr crd::usize kN = 32;
-    Symmetric<float> a(&alloc, kN);
+    constexpr crd::usize k_n = 32;
+    Symmetric<float> a(&alloc, k_n);
     random_spd<float>(a, 7U);
     crd::containers::Array<float> x_true(&alloc);
-    x_true.resize(kN);
-    for (crd::usize i = 0; i < kN; ++i)
+    x_true.resize(k_n);
+    for (crd::usize i = 0; i < k_n; ++i)
     {
         x_true[i] = static_cast<float>(i + 1);
     }
     crd::containers::Array<float> b(&alloc);
-    b.resize(kN);
-    for (crd::usize i = 0; i < kN; ++i)
+    b.resize(k_n);
+    for (crd::usize i = 0; i < k_n; ++i)
     {
         float s = 0.0F;
-        for (crd::usize j = 0; j < kN; ++j)
+        for (crd::usize j = 0; j < k_n; ++j)
         {
             s += a.at(i, j) * x_true[j];
         }
         b[i] = s;
     }
 
-    Cholesky<float, Layout::RowMajor> chol(&alloc, kN);
+    Cholesky<float, Layout::RowMajor> chol(&alloc, k_n);
     factor_cholesky(chol, a);
     REQUIRE(chol.info() == 0U);
-    crd::containers::Span<float> x(b.data(), kN);
+    crd::containers::Span<float> x(b.data(), k_n);
     solve_cholesky(chol, x);
-    for (crd::usize i = 0; i < kN; ++i)
+    for (crd::usize i = 0; i < k_n; ++i)
     {
         CHECK_THAT(static_cast<double>(x[i]),
                    WithinAbs(static_cast<double>(x_true[i]), 1e-3));
@@ -202,25 +202,25 @@ TEST_CASE("Cholesky: multi-RHS solve at N=16, nrhs=3",
           "[hesap][cholesky][real][solve][multi-rhs]")
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(1U * 1024U * 1024U));
-    constexpr crd::usize kN = 16;
-    constexpr crd::usize kRhs = 3;
-    Symmetric<double> a(&alloc, kN);
+    constexpr crd::usize k_n = 16;
+    constexpr crd::usize k_rhs = 3;
+    Symmetric<double> a(&alloc, k_n);
     random_spd<double>(a, 999U);
-    Matrix<double, Layout::RowMajor> x_true(&alloc, kN, kRhs);
-    for (crd::usize i = 0; i < kN; ++i)
+    Matrix<double, Layout::RowMajor> x_true(&alloc, k_n, k_rhs);
+    for (crd::usize i = 0; i < k_n; ++i)
     {
-        for (crd::usize r = 0; r < kRhs; ++r)
+        for (crd::usize r = 0; r < k_rhs; ++r)
         {
-            x_true.at(i, r) = static_cast<double>(i + r * kN);
+            x_true.at(i, r) = static_cast<double>(i + r * k_n);
         }
     }
-    Matrix<double, Layout::RowMajor> b(&alloc, kN, kRhs);
-    for (crd::usize i = 0; i < kN; ++i)
+    Matrix<double, Layout::RowMajor> b(&alloc, k_n, k_rhs);
+    for (crd::usize i = 0; i < k_n; ++i)
     {
-        for (crd::usize r = 0; r < kRhs; ++r)
+        for (crd::usize r = 0; r < k_rhs; ++r)
         {
             double s = 0.0;
-            for (crd::usize j = 0; j < kN; ++j)
+            for (crd::usize j = 0; j < k_n; ++j)
             {
                 s += a.at(i, j) * x_true.at(j, r);
             }
@@ -228,13 +228,13 @@ TEST_CASE("Cholesky: multi-RHS solve at N=16, nrhs=3",
         }
     }
 
-    Cholesky<double, Layout::RowMajor> chol(&alloc, kN);
+    Cholesky<double, Layout::RowMajor> chol(&alloc, k_n);
     factor_cholesky(chol, a);
     REQUIRE(chol.info() == 0U);
     solve_cholesky(chol, b.view());
-    for (crd::usize i = 0; i < kN; ++i)
+    for (crd::usize i = 0; i < k_n; ++i)
     {
-        for (crd::usize r = 0; r < kRhs; ++r)
+        for (crd::usize r = 0; r < k_rhs; ++r)
         {
             CHECK_THAT(b.at(i, r), WithinAbs(x_true.at(i, r), 1e-9));
         }
@@ -246,20 +246,20 @@ TEST_CASE("Cholesky: determinism: factor is bit-identical across runs at N=128",
 {
     (void)crd_hesap_dense_tests::hesap_jobs_listener();
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(64U * 1024U * 1024U));
-    constexpr crd::usize kN = 128;
-    Symmetric<double> a1(&alloc, kN);
-    Symmetric<double> a2(&alloc, kN);
+    constexpr crd::usize k_n = 128;
+    Symmetric<double> a1(&alloc, k_n);
+    Symmetric<double> a2(&alloc, k_n);
     random_spd<double>(a1, 271828U);
     random_spd<double>(a2, 271828U);
 
-    Cholesky<double, Layout::RowMajor> chol1(&alloc, kN);
-    Cholesky<double, Layout::RowMajor> chol2(&alloc, kN);
+    Cholesky<double, Layout::RowMajor> chol1(&alloc, k_n);
+    Cholesky<double, Layout::RowMajor> chol2(&alloc, k_n);
     factor_cholesky(chol1, a1);
     factor_cholesky(chol2, a2);
 
     // Only check the LOWER triangle for bit-equality; the upper triangle
     // is GEMM-trailing-update garbage that we don't read on solve.
-    for (crd::usize i = 0; i < kN; ++i)
+    for (crd::usize i = 0; i < k_n; ++i)
     {
         for (crd::usize j = 0; j <= i; ++j)
         {
@@ -272,10 +272,10 @@ TEST_CASE("Cholesky: allocator propagation: TLSF only, no malloc",
           "[hesap][cholesky][real][allocator]")
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(16U * 1024U * 1024U));
-    constexpr crd::usize kN = 128;
-    Symmetric<double> a(&alloc, kN);
+    constexpr crd::usize k_n = 128;
+    Symmetric<double> a(&alloc, k_n);
     random_spd<double>(a, 1U);
-    Cholesky<double, Layout::RowMajor> chol(&alloc, kN);
+    Cholesky<double, Layout::RowMajor> chol(&alloc, k_n);
     (void)crd_hesap_dense_tests::hesap_jobs_listener();
     factor_cholesky(chol, a);
     REQUIRE(chol.info() == 0U);

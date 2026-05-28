@@ -76,9 +76,9 @@ TEST_CASE("freeze stress -- FrozenView + parallel_for disjoint writes", "[stress
     const u32 jobs_choices[] = {1U, 3U, 8U, 64U, 257U};
     for (u32 num_jobs : jobs_choices)
     {
-        constexpr usize kN = 9001U; // odd, not a multiple of any job count
-        crd::containers::Array<u64> data(kN, &alloc);
-        data.resize(kN, 0ULL);
+        constexpr usize n = 9001U; // odd, not a multiple of any job count
+        crd::containers::Array<u64> data(n, &alloc);
+        data.resize(n, 0ULL);
         for (u32 round = 0; round < 6U; ++round)
         {
             write_and_verify_round(data, num_jobs, round);
@@ -149,9 +149,9 @@ TEST_CASE("freeze stress -- parallel_reduce matches a serial reference", "[stres
 TEST_CASE("freeze stress -- FrozenView + parallel_for long soak", "[stress][containers][jobs][.soak]")
 {
     crd::memory::GrowableTlsfAllocator alloc{256ULL << 20, nullptr, "freeze-soak"};
-    constexpr usize kN = 200'003U;
-    crd::containers::Array<u64> data(kN, &alloc);
-    data.resize(kN, 0ULL);
+    constexpr usize n = 200'003U;
+    crd::containers::Array<u64> data(n, &alloc);
+    data.resize(n, 0ULL);
 
     for (u32 round = 0; round < 200U; ++round)
     {

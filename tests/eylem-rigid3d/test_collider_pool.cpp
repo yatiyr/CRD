@@ -94,9 +94,9 @@ TEST_CASE("ColliderPool: ColliderId encoding round-trips kind + per-kind idx",
 
     // Largest valid per-kind index packs cleanly. Kind field = 4 bits,
     // per-kind index = 20 bits → 1,048,575 colliders/kind ceiling.
-    constexpr crd::u32 kMax = (1U << 20) - 1U;
-    REQUIRE(decode_collider_per_kind_idx(encode_collider_index(ColliderShape::Box, kMax)) == kMax);
-    REQUIRE(decode_collider_kind        (encode_collider_index(ColliderShape::Box, kMax)) == ColliderShape::Box);
+    constexpr crd::u32 max = (1U << 20) - 1U;
+    REQUIRE(decode_collider_per_kind_idx(encode_collider_index(ColliderShape::Box, max)) == max);
+    REQUIRE(decode_collider_kind        (encode_collider_index(ColliderShape::Box, max)) == ColliderShape::Box);
 
     // Highest-numbered shape kind (Sdf = 7) round-trips. Even though Sdf
     // storage doesn't ship until Phase 3.1.5, the encoding must already

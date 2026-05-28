@@ -95,12 +95,12 @@ TEST_CASE("Array push_back amortised 1k", "[bench][containers]")
 
 TEST_CASE("HashMap integer workloads", "[bench][containers]")
 {
-    constexpr u32 kCount = 1U << 20;
+    constexpr u32 count = 1U << 20;
 
     BENCHMARK("HashMap<u32,u32> insert 1M")
     {
         HashMap<u32, u32> map;
-        for (u32 i = 0; i < kCount; ++i)
+        for (u32 i = 0; i < count; ++i)
         {
             (void)map.insert(i, i + 1);
         }
@@ -108,8 +108,8 @@ TEST_CASE("HashMap integer workloads", "[bench][containers]")
     };
 
     HashMap<u32, u32> seeded;
-    seeded.reserve(kCount);
-    for (u32 i = 0; i < kCount; ++i)
+    seeded.reserve(count);
+    for (u32 i = 0; i < count; ++i)
     {
         (void)seeded.insert(i, i + 1);
     }
@@ -117,7 +117,7 @@ TEST_CASE("HashMap integer workloads", "[bench][containers]")
     BENCHMARK("HashMap<u32,u32> find 1M")
     {
         u64 sum = 0;
-        for (u32 i = 0; i < kCount; ++i)
+        for (u32 i = 0; i < count; ++i)
         {
             const u32* value = seeded.find(i);
             sum += value ? *value : 0U;
@@ -128,7 +128,7 @@ TEST_CASE("HashMap integer workloads", "[bench][containers]")
     BENCHMARK("HashMap<u32,u32> erase 1M")
     {
         HashMap<u32, u32> map = seeded;
-        for (u32 i = 0; i < kCount; ++i)
+        for (u32 i = 0; i < count; ++i)
         {
             (void)map.erase(i);
         }

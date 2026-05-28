@@ -76,12 +76,12 @@ TEST_CASE("v10b sample_uniform closed curve emits n points + closed=true",
 {
     crd::memory::TlsfAllocator alloc(1U * 1024U * 1024U);
 
-    constexpr float kTwoPi = 6.28318530717958647692F;
+    constexpr float two_pi = 6.28318530717958647692F;
     const CircularArc3<float> arc(v3(0.0F, 0.0F, 0.0F),
                                     v3(1.0F, 0.0F, 0.0F),
                                     v3(0.0F, 1.0F, 0.0F),
                                     /*radius_in=*/1.0F,
-                                    /*sweep_radians_in=*/kTwoPi,
+                                    /*sweep_radians_in=*/two_pi,
                                     /*closed_in=*/true);
     const auto p = sample_uniform(arc, 16U, &alloc);
 

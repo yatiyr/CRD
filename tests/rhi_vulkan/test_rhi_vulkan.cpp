@@ -393,8 +393,8 @@ TEST_CASE("Vulkan compute pipeline multi-create/destroy cycle (ASan-clean)", "[r
     REQUIRE(fs::read_file_binary(shader_dir / "compute_v0a.comp.spv", cs_spv));
 
     // 8 cycles: create + drop. Validation layer + ASan must stay quiet.
-    constexpr int kCycles = 8;
-    for (int i = 0; i < kCycles; ++i)
+    constexpr int k_cycles = 8;
+    for (int i = 0; i < k_cycles; ++i)
     {
         auto cs = device->create_shader_module(
             {crd::rhi::ShaderStage::Compute, "main", crd::containers::make_span(cs_spv.data(), cs_spv.size())});
@@ -426,12 +426,12 @@ TEST_CASE("Vulkan create_buffer with BufferUsage::Storage works (D2 revision)", 
     auto device = instance->create_device({});
     REQUIRE(device != nullptr);
 
-    constexpr crd::u64 kStorageBytes = 4 * 1024; // 4 KB
+    constexpr crd::u64 storage_bytes = 4 * 1024; // 4 KB
     auto buffer = device->create_buffer(
-        {kStorageBytes, crd::rhi::enum_bits(crd::rhi::BufferUsage::Storage),
+        {storage_bytes, crd::rhi::enum_bits(crd::rhi::BufferUsage::Storage),
          crd::rhi::MemoryUsage::GpuOnly});
     REQUIRE(buffer != nullptr);
-    CHECK(buffer->desc().size_bytes == kStorageBytes);
+    CHECK(buffer->desc().size_bytes == storage_bytes);
     CHECK(crd::rhi::has_flag(buffer->desc().usage, crd::rhi::BufferUsage::Storage));
 
     device->wait_idle();
@@ -472,7 +472,7 @@ TEST_CASE("Vulkan compute dispatch end-to-end (first-light)", "[rhi][vulkan][com
          crd::containers::make_span(cs_spv.data(), cs_spv.size())});
     REQUIRE(cs != nullptr);
 
-    constexpr crd::u32 kBaseOffset = 1000;
+    constexpr crd::u32 base_offset = 1000;
     crd::rhi::SpecializationConstantEntry spec_entry{0, 0, sizeof(crd::u32)};
     crd::rhi::ComputePipelineDesc pipe_desc{};
     pipe_desc.compute_shader = cs.get();
@@ -499,23 +499,23 @@ TEST_CASE("Vulkan compute dispatch end-to-end (first-light)", "[rhi][vulkan][com
     pipe_desc.specialization_entries =
         crd::containers::ConstSpan<crd::rhi::SpecializationConstantEntry>(&spec_entry, 1);
     pipe_desc.specialization_data =
-        crd::containers::ConstSpan<crd::u8>(reinterpret_cast<const crd::u8*>(&kBaseOffset),
-                                            sizeof(kBaseOffset));
+        crd::containers::ConstSpan<crd::u8>(reinterpret_cast<const crd::u8*>(&base_offset),
+                                            sizeof(base_offset));
     auto pipeline = device->create_compute_pipeline(pipe_desc);
     REQUIRE(pipeline != nullptr);
 
     // --- Storage buffer (host-visible coherent for readback) ---
-    constexpr crd::u32 kElementCount = 64; // == local_size_x; 1 workgroup
-    constexpr crd::u64 kBufferBytes  = kElementCount * sizeof(crd::u32);
+    constexpr crd::u32 element_count = 64; // == local_size_x; 1 workgroup
+    constexpr crd::u64 buffer_bytes  = element_count * sizeof(crd::u32);
     auto storage = device->create_buffer(
-        {kBufferBytes, crd::rhi::enum_bits(crd::rhi::BufferUsage::Storage),
+        {buffer_bytes, crd::rhi::enum_bits(crd::rhi::BufferUsage::Storage),
          crd::rhi::MemoryUsage::GpuToCpu});
     REQUIRE(storage != nullptr);
 
     // Pre-zero buffer so the post-dispatch readback proves writes happened.
     auto* mapped_init = static_cast<crd::u32*>(storage->map());
     REQUIRE(mapped_init != nullptr);
-    for (crd::u32 i = 0; i < kElementCount; ++i) { mapped_init[i] = 0; }
+    for (crd::u32 i = 0; i < element_count; ++i) { mapped_init[i] = 0; }
     storage->unmap();
 
     // --- Descriptor allocator + descriptor set bind ---
@@ -528,7 +528,7 @@ TEST_CASE("Vulkan compute dispatch end-to-end (first-light)", "[rhi][vulkan][com
     desc_alloc->begin_frame(0);
     auto desc_set = desc_alloc->allocate(*set0);
     REQUIRE(desc_set != nullptr);
-    desc_set->update_buffer(0, *storage, 0, kBufferBytes);
+    desc_set->update_buffer(0, *storage, 0, buffer_bytes);
 
     // --- Record + submit + wait ---
     auto cmd   = device->create_command_buffer();
@@ -547,12 +547,12 @@ TEST_CASE("Vulkan compute dispatch end-to-end (first-light)", "[rhi][vulkan][com
     device->graphics_queue().submit(*cmd, *fence);
     fence->wait();
 
-    // --- Host readback: each element == index + kBaseOffset ---
+    // --- Host readback: each element == index + base_offset ---
     auto* mapped = static_cast<crd::u32*>(storage->map());
     REQUIRE(mapped != nullptr);
-    for (crd::u32 i = 0; i < kElementCount; ++i)
+    for (crd::u32 i = 0; i < element_count; ++i)
     {
-        CHECK(mapped[i] == i + kBaseOffset);
+        CHECK(mapped[i] == i + base_offset);
     }
     storage->unmap();
 
@@ -563,10 +563,10 @@ TEST_CASE("Vulkan compute dispatch end-to-end (first-light)", "[rhi][vulkan][com
 // Phase 3.1.7.6 v0c — Vulkan buffer_barrier end-to-end (two compute
 // passes with the barrier between them).
 //
-// pass 1 (compute_v0b_dispatch.comp): buf_a[i] = i + kBaseOffset
+// pass 1 (compute_v0b_dispatch.comp): buf_a[i] = i + base_offset
 // buffer_barrier(buf_a, ComputeShaderWrite → ComputeShaderRead)
 // pass 2 (compute_v0c_doubler.comp):  buf_b[i] = 2 * buf_a[i]
-// host readback validates buf_b[i] == 2 * (i + kBaseOffset)
+// host readback validates buf_b[i] == 2 * (i + base_offset)
 //
 // Validation-layer discriminator (manually confirmed during development;
 // not asserted programmatically because installing a custom debug
@@ -623,7 +623,7 @@ TEST_CASE("Vulkan buffer_barrier between two compute passes (first-light)",
         crd::containers::ConstSpan<const crd::rhi::DescriptorSetLayout*>(p1_layouts, 1);
     auto p1_layout = device->create_pipeline_layout(p1_layout_desc);
 
-    constexpr crd::u32 kBaseOffset = 1000;
+    constexpr crd::u32 base_offset = 1000;
     crd::rhi::SpecializationConstantEntry p1_spec_entry{0, 0, sizeof(crd::u32)};
     crd::rhi::ComputePipelineDesc p1_pipe_desc{};
     p1_pipe_desc.compute_shader  = cs1.get();
@@ -631,8 +631,8 @@ TEST_CASE("Vulkan buffer_barrier between two compute passes (first-light)",
     p1_pipe_desc.specialization_entries =
         crd::containers::ConstSpan<crd::rhi::SpecializationConstantEntry>(&p1_spec_entry, 1);
     p1_pipe_desc.specialization_data =
-        crd::containers::ConstSpan<crd::u8>(reinterpret_cast<const crd::u8*>(&kBaseOffset),
-                                            sizeof(kBaseOffset));
+        crd::containers::ConstSpan<crd::u8>(reinterpret_cast<const crd::u8*>(&base_offset),
+                                            sizeof(base_offset));
     auto p1_pipeline = device->create_compute_pipeline(p1_pipe_desc);
     REQUIRE(p1_pipeline != nullptr);
 
@@ -659,18 +659,18 @@ TEST_CASE("Vulkan buffer_barrier between two compute passes (first-light)",
     REQUIRE(p2_pipeline != nullptr);
 
     // --- Buffers (buf_a: GPU-only intermediate; buf_b: host-visible output) ---
-    constexpr crd::u32 kElementCount = 64;
-    constexpr crd::u64 kBufferBytes  = kElementCount * sizeof(crd::u32);
+    constexpr crd::u32 element_count = 64;
+    constexpr crd::u64 buffer_bytes  = element_count * sizeof(crd::u32);
     auto buf_a = device->create_buffer(
-        {kBufferBytes, crd::rhi::enum_bits(crd::rhi::BufferUsage::Storage),
+        {buffer_bytes, crd::rhi::enum_bits(crd::rhi::BufferUsage::Storage),
          crd::rhi::MemoryUsage::GpuOnly});
     auto buf_b = device->create_buffer(
-        {kBufferBytes, crd::rhi::enum_bits(crd::rhi::BufferUsage::Storage),
+        {buffer_bytes, crd::rhi::enum_bits(crd::rhi::BufferUsage::Storage),
          crd::rhi::MemoryUsage::GpuToCpu});
     REQUIRE(buf_a != nullptr);
     REQUIRE(buf_b != nullptr);
     auto* bzinit = static_cast<crd::u32*>(buf_b->map());
-    for (crd::u32 i = 0; i < kElementCount; ++i) { bzinit[i] = 0; }
+    for (crd::u32 i = 0; i < element_count; ++i) { bzinit[i] = 0; }
     buf_b->unmap();
 
     // --- Descriptor allocator + sets ---
@@ -682,11 +682,11 @@ TEST_CASE("Vulkan buffer_barrier between two compute passes (first-light)",
     desc_alloc->begin_frame(0);
 
     auto p1_set = desc_alloc->allocate(*p1_set0);
-    p1_set->update_buffer(0, *buf_a, 0, kBufferBytes);
+    p1_set->update_buffer(0, *buf_a, 0, buffer_bytes);
 
     auto p2_set = desc_alloc->allocate(*p2_set0);
-    p2_set->update_buffer(0, *buf_a, 0, kBufferBytes);
-    p2_set->update_buffer(1, *buf_b, 0, kBufferBytes);
+    p2_set->update_buffer(0, *buf_a, 0, buffer_bytes);
+    p2_set->update_buffer(1, *buf_b, 0, buffer_bytes);
 
     // --- Record + submit ---
     auto cmd   = device->create_command_buffer();
@@ -697,7 +697,7 @@ TEST_CASE("Vulkan buffer_barrier between two compute passes (first-light)",
     crd::rhi::DescriptorSet* p1_sets[] = {p1_set.get()};
     cmd->bind_compute_descriptor_sets(
         *p1_layout, 0, crd::containers::ConstSpan<crd::rhi::DescriptorSet*>(p1_sets, 1));
-    cmd->dispatch(1, 1, 1); // pass 1: buf_a[i] = i + kBaseOffset
+    cmd->dispatch(1, 1, 1); // pass 1: buf_a[i] = i + base_offset
 
     // The barrier under test. Comment this out + re-run to see the
     // validation-layer VUID confirming the discriminator (manual check).
@@ -714,12 +714,12 @@ TEST_CASE("Vulkan buffer_barrier between two compute passes (first-light)",
     device->graphics_queue().submit(*cmd, *fence);
     fence->wait();
 
-    // --- Host readback: buf_b[i] == 2 * (i + kBaseOffset) ---
+    // --- Host readback: buf_b[i] == 2 * (i + base_offset) ---
     auto* mapped = static_cast<crd::u32*>(buf_b->map());
     REQUIRE(mapped != nullptr);
-    for (crd::u32 i = 0; i < kElementCount; ++i)
+    for (crd::u32 i = 0; i < element_count; ++i)
     {
-        CHECK(mapped[i] == 2U * (i + kBaseOffset));
+        CHECK(mapped[i] == 2U * (i + base_offset));
     }
     buf_b->unmap();
     device->wait_idle();
@@ -793,7 +793,7 @@ TEST_CASE("Vulkan async-compute cross-queue semaphore first-light", "[rhi][vulka
         crd::containers::ConstSpan<const crd::rhi::DescriptorSetLayout*>(p1_layouts, 1);
     auto p1_layout = device->create_pipeline_layout(p1_layout_desc);
 
-    constexpr crd::u32 kBaseOffset = 1000;
+    constexpr crd::u32 base_offset = 1000;
     crd::rhi::SpecializationConstantEntry p1_spec_entry{0, 0, sizeof(crd::u32)};
     crd::rhi::ComputePipelineDesc p1_pipe_desc{};
     p1_pipe_desc.compute_shader  = cs1.get();
@@ -801,8 +801,8 @@ TEST_CASE("Vulkan async-compute cross-queue semaphore first-light", "[rhi][vulka
     p1_pipe_desc.specialization_entries =
         crd::containers::ConstSpan<crd::rhi::SpecializationConstantEntry>(&p1_spec_entry, 1);
     p1_pipe_desc.specialization_data =
-        crd::containers::ConstSpan<crd::u8>(reinterpret_cast<const crd::u8*>(&kBaseOffset),
-                                            sizeof(kBaseOffset));
+        crd::containers::ConstSpan<crd::u8>(reinterpret_cast<const crd::u8*>(&base_offset),
+                                            sizeof(base_offset));
     auto p1_pipeline = device->create_compute_pipeline(p1_pipe_desc);
 
     // Pass-2 layout (read set0/binding0, write set0/binding1).
@@ -826,16 +826,16 @@ TEST_CASE("Vulkan async-compute cross-queue semaphore first-light", "[rhi][vulka
     p2_pipe_desc.pipeline_layout = p2_layout.get();
     auto p2_pipeline = device->create_compute_pipeline(p2_pipe_desc);
 
-    constexpr crd::u32 kElementCount = 64;
-    constexpr crd::u64 kBufferBytes  = kElementCount * sizeof(crd::u32);
+    constexpr crd::u32 element_count = 64;
+    constexpr crd::u64 buffer_bytes  = element_count * sizeof(crd::u32);
     auto buf_a = device->create_buffer(
-        {kBufferBytes, crd::rhi::enum_bits(crd::rhi::BufferUsage::Storage),
+        {buffer_bytes, crd::rhi::enum_bits(crd::rhi::BufferUsage::Storage),
          crd::rhi::MemoryUsage::GpuOnly});
     auto buf_b = device->create_buffer(
-        {kBufferBytes, crd::rhi::enum_bits(crd::rhi::BufferUsage::Storage),
+        {buffer_bytes, crd::rhi::enum_bits(crd::rhi::BufferUsage::Storage),
          crd::rhi::MemoryUsage::GpuToCpu});
     auto* bzinit = static_cast<crd::u32*>(buf_b->map());
-    for (crd::u32 i = 0; i < kElementCount; ++i) { bzinit[i] = 0; }
+    for (crd::u32 i = 0; i < element_count; ++i) { bzinit[i] = 0; }
     buf_b->unmap();
 
     crd::rhi::DescriptorAllocatorDesc alloc_desc{};
@@ -845,10 +845,10 @@ TEST_CASE("Vulkan async-compute cross-queue semaphore first-light", "[rhi][vulka
     auto desc_alloc = device->create_descriptor_allocator(alloc_desc);
     desc_alloc->begin_frame(0);
     auto p1_set = desc_alloc->allocate(*p1_set0);
-    p1_set->update_buffer(0, *buf_a, 0, kBufferBytes);
+    p1_set->update_buffer(0, *buf_a, 0, buffer_bytes);
     auto p2_set = desc_alloc->allocate(*p2_set0);
-    p2_set->update_buffer(0, *buf_a, 0, kBufferBytes);
-    p2_set->update_buffer(1, *buf_b, 0, kBufferBytes);
+    p2_set->update_buffer(0, *buf_a, 0, buffer_bytes);
+    p2_set->update_buffer(1, *buf_b, 0, buffer_bytes);
 
     auto cmd1 = device->create_command_buffer();
     auto cmd2 = device->create_command_buffer();
@@ -898,9 +898,9 @@ TEST_CASE("Vulkan async-compute cross-queue semaphore first-light", "[rhi][vulka
 
     auto* mapped = static_cast<crd::u32*>(buf_b->map());
     REQUIRE(mapped != nullptr);
-    for (crd::u32 i = 0; i < kElementCount; ++i)
+    for (crd::u32 i = 0; i < element_count; ++i)
     {
-        CHECK(mapped[i] == 2U * (i + kBaseOffset));
+        CHECK(mapped[i] == 2U * (i + base_offset));
     }
     buf_b->unmap();
     device->wait_idle();
@@ -996,7 +996,7 @@ TEST_CASE("Vulkan compute dispatch_indirect (D4 indirect path)", "[rhi][vulkan][
         crd::containers::ConstSpan<const crd::rhi::DescriptorSetLayout*>(layouts, 1);
     auto layout = device->create_pipeline_layout(layout_desc);
 
-    constexpr crd::u32 kBaseOffset = 7;
+    constexpr crd::u32 base_offset = 7;
     crd::rhi::SpecializationConstantEntry spec_entry{0, 0, sizeof(crd::u32)};
     crd::rhi::ComputePipelineDesc pipe_desc{};
     pipe_desc.compute_shader  = cs.get();
@@ -1004,19 +1004,19 @@ TEST_CASE("Vulkan compute dispatch_indirect (D4 indirect path)", "[rhi][vulkan][
     pipe_desc.specialization_entries =
         crd::containers::ConstSpan<crd::rhi::SpecializationConstantEntry>(&spec_entry, 1);
     pipe_desc.specialization_data =
-        crd::containers::ConstSpan<crd::u8>(reinterpret_cast<const crd::u8*>(&kBaseOffset),
-                                            sizeof(kBaseOffset));
+        crd::containers::ConstSpan<crd::u8>(reinterpret_cast<const crd::u8*>(&base_offset),
+                                            sizeof(base_offset));
     auto pipeline = device->create_compute_pipeline(pipe_desc);
     REQUIRE(pipeline != nullptr);
 
     // Storage buffer (output)
-    constexpr crd::u32 kElementCount = 64;
-    constexpr crd::u64 kBufferBytes  = kElementCount * sizeof(crd::u32);
+    constexpr crd::u32 element_count = 64;
+    constexpr crd::u64 buffer_bytes  = element_count * sizeof(crd::u32);
     auto storage = device->create_buffer(
-        {kBufferBytes, crd::rhi::enum_bits(crd::rhi::BufferUsage::Storage),
+        {buffer_bytes, crd::rhi::enum_bits(crd::rhi::BufferUsage::Storage),
          crd::rhi::MemoryUsage::GpuToCpu});
     auto* zinit = static_cast<crd::u32*>(storage->map());
-    for (crd::u32 i = 0; i < kElementCount; ++i) { zinit[i] = 0; }
+    for (crd::u32 i = 0; i < element_count; ++i) { zinit[i] = 0; }
     storage->unmap();
 
     // Indirect buffer holds VkDispatchIndirectCommand = {x, y, z}.
@@ -1039,7 +1039,7 @@ TEST_CASE("Vulkan compute dispatch_indirect (D4 indirect path)", "[rhi][vulkan][
     auto desc_alloc = device->create_descriptor_allocator(alloc_desc);
     desc_alloc->begin_frame(0);
     auto desc_set = desc_alloc->allocate(*set0);
-    desc_set->update_buffer(0, *storage, 0, kBufferBytes);
+    desc_set->update_buffer(0, *storage, 0, buffer_bytes);
 
     auto cmd   = device->create_command_buffer();
     auto fence = device->create_fence();
@@ -1055,9 +1055,9 @@ TEST_CASE("Vulkan compute dispatch_indirect (D4 indirect path)", "[rhi][vulkan][
     fence->wait();
 
     auto* mapped = static_cast<crd::u32*>(storage->map());
-    for (crd::u32 i = 0; i < kElementCount; ++i)
+    for (crd::u32 i = 0; i < element_count; ++i)
     {
-        CHECK(mapped[i] == i + kBaseOffset);
+        CHECK(mapped[i] == i + base_offset);
     }
     storage->unmap();
     device->wait_idle();
@@ -1121,9 +1121,9 @@ TEST_CASE("S6 GPU suballocator shares one block across many small allocations", 
     auto device = instance->create_device({});
     REQUIRE(device != nullptr);
 
-    constexpr crd::u32                          kN = 64;
-    std::unique_ptr<crd::rhi::Buffer>           bufs[kN];
-    for (crd::u32 i = 0; i < kN; ++i)
+    constexpr crd::u32                          n = 64;
+    std::unique_ptr<crd::rhi::Buffer>           bufs[n];
+    for (crd::u32 i = 0; i < n; ++i)
     {
         bufs[i] = device->create_buffer(
             {256, crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex), crd::rhi::MemoryUsage::CpuToGpu});
@@ -1132,7 +1132,7 @@ TEST_CASE("S6 GPU suballocator shares one block across many small allocations", 
     // 64 x 256 B buffers must NOT need 64 VkDeviceMemory blocks — proves suballocation.
     const crd::u32 blocks = crd::rhi::vulkan_resident_block_count(*device);
     CHECK(blocks >= 1U);
-    CHECK(blocks < kN);
+    CHECK(blocks < n);
     CHECK(capture.error_count() == 0U);
     CHECK(capture.warning_count() == 0U);
     device->wait_idle();
@@ -1147,27 +1147,27 @@ TEST_CASE("S6 GPU suballocations are distinct non-overlapping regions (host roun
     auto device = instance->create_device({});
     REQUIRE(device != nullptr);
 
-    constexpr crd::u32                kN    = 32;
-    constexpr crd::u32                kSize = 1024;
-    std::unique_ptr<crd::rhi::Buffer> bufs[kN];
+    constexpr crd::u32                n    = 32;
+    constexpr crd::u32                k_size = 1024;
+    std::unique_ptr<crd::rhi::Buffer> bufs[n];
     // Write a per-buffer pattern into ALL buffers first; if any two suballocations
     // overlapped, a later write would corrupt an earlier one.
-    for (crd::u32 i = 0; i < kN; ++i)
+    for (crd::u32 i = 0; i < n; ++i)
     {
         bufs[i] = device->create_buffer(
-            {kSize, crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex), crd::rhi::MemoryUsage::CpuToGpu});
+            {k_size, crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex), crd::rhi::MemoryUsage::CpuToGpu});
         REQUIRE(bufs[i] != nullptr);
         auto* p = static_cast<crd::u8*>(bufs[i]->map());
         REQUIRE(p != nullptr);
-        std::memset(p, static_cast<int>(i & 0xFF), kSize);
+        std::memset(p, static_cast<int>(i & 0xFF), k_size);
     }
     // Read back: every buffer still holds its own pattern -> regions are disjoint.
-    for (crd::u32 i = 0; i < kN; ++i)
+    for (crd::u32 i = 0; i < n; ++i)
     {
         const auto* p = static_cast<const crd::u8*>(bufs[i]->map());
         REQUIRE(p != nullptr);
         CHECK(p[0] == static_cast<crd::u8>(i & 0xFF));
-        CHECK(p[kSize - 1] == static_cast<crd::u8>(i & 0xFF));
+        CHECK(p[k_size - 1] == static_cast<crd::u8>(i & 0xFF));
     }
     CHECK(capture.error_count() == 0U);
     device->wait_idle();
@@ -1237,22 +1237,22 @@ TEST_CASE("S7 buffer defrag relocates and preserves contents", "[rhi][vulkan][gp
     auto device = instance->create_device({});
     REQUIRE(device != nullptr);
 
-    constexpr crd::u32                kN    = 16;
-    constexpr crd::u32                kSize = 4096;
-    std::unique_ptr<crd::rhi::Buffer> bufs[kN];
-    for (crd::u32 i = 0; i < kN; ++i)
+    constexpr crd::u32                n    = 16;
+    constexpr crd::u32                k_size = 4096;
+    std::unique_ptr<crd::rhi::Buffer> bufs[n];
+    for (crd::u32 i = 0; i < n; ++i)
     {
         bufs[i] = device->create_buffer(
-            {kSize, crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex) | crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferSrc) |
+            {k_size, crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex) | crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferSrc) |
                         crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferDst),
              crd::rhi::MemoryUsage::CpuToGpu});
         REQUIRE(bufs[i] != nullptr);
         auto* p = static_cast<crd::u8*>(bufs[i]->map());
         REQUIRE(p != nullptr);
-        std::memset(p, static_cast<int>(i & 0xFF), kSize);
+        std::memset(p, static_cast<int>(i & 0xFF), k_size);
     }
     // Free the even-indexed buffers to punch holes, then defragment.
-    for (crd::u32 i = 0; i < kN; i += 2)
+    for (crd::u32 i = 0; i < n; i += 2)
     {
         bufs[i].reset();
     }
@@ -1261,12 +1261,12 @@ TEST_CASE("S7 buffer defrag relocates and preserves contents", "[rhi][vulkan][gp
     crd::rhi::vulkan_defragment(*device, policy);
 
     // Survivors (odd indices) keep their contents at the (now relocated) address.
-    for (crd::u32 i = 1; i < kN; i += 2)
+    for (crd::u32 i = 1; i < n; i += 2)
     {
         const auto* p = static_cast<const crd::u8*>(bufs[i]->map());
         REQUIRE(p != nullptr);
         CHECK(p[0] == static_cast<crd::u8>(i & 0xFF));
-        CHECK(p[kSize - 1] == static_cast<crd::u8>(i & 0xFF));
+        CHECK(p[k_size - 1] == static_cast<crd::u8>(i & 0xFF));
     }
     CHECK(policy.buffer_relocations >= 1U); // something actually moved
     CHECK(capture.error_count() == 0U);
@@ -1316,9 +1316,9 @@ TEST_CASE("S7 residency relocation preserves buffer data across device<->host", 
     auto device = instance->create_device({});
     REQUIRE(device != nullptr);
 
-    constexpr crd::u32 kSize = 4096;
+    constexpr crd::u32 k_size = 4096;
     auto               buf   = device->create_buffer(
-        {kSize,
+        {k_size,
                        crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex) | crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferSrc) |
              crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferDst),
                        crd::rhi::MemoryUsage::GpuOnly});
@@ -1329,7 +1329,7 @@ TEST_CASE("S7 residency relocation preserves buffer data across device<->host", 
     REQUIRE(crd::rhi::vulkan_evict_to_host(*device, *buf) > 0U);
     auto* p = static_cast<crd::u8*>(buf->map());
     REQUIRE(p != nullptr);
-    for (crd::u32 i = 0; i < kSize; ++i) { p[i] = static_cast<crd::u8>(i & 0xFF); }
+    for (crd::u32 i = 0; i < k_size; ++i) { p[i] = static_cast<crd::u8>(i & 0xFF); }
 
     // Re-promote to device (host->device copy), then evict again (device->host copy):
     // the pattern must survive BOTH relocation copies.
@@ -1338,7 +1338,7 @@ TEST_CASE("S7 residency relocation preserves buffer data across device<->host", 
     REQUIRE(crd::rhi::vulkan_evict_to_host(*device, *buf) > 0U);
     const auto* q = static_cast<const crd::u8*>(buf->map());
     REQUIRE(q != nullptr);
-    for (crd::u32 i = 0; i < kSize; ++i) { CHECK(q[i] == static_cast<crd::u8>(i & 0xFF)); }
+    for (crd::u32 i = 0; i < k_size; ++i) { CHECK(q[i] == static_cast<crd::u8>(i & 0xFF)); }
     CHECK(capture.error_count() == 0U);
     device->wait_idle();
 }
@@ -1353,14 +1353,14 @@ TEST_CASE("S7 residency auto-evicts device-local memory over the budget", "[rhi]
     REQUIRE(device != nullptr);
 
     EvictFirstPolicy   policy;
-    constexpr crd::u32 kSize = 256U * 1024U;
-    crd::rhi::vulkan_configure_residency(*device, &policy, crd::u64{4} * kSize); // budget = 4 buffers
+    constexpr crd::u32 k_size = 256U * 1024U;
+    crd::rhi::vulkan_configure_residency(*device, &policy, crd::u64{4} * k_size); // budget = 4 buffers
 
     std::unique_ptr<crd::rhi::Buffer> bufs[8];
     for (crd::u32 i = 0; i < 8; ++i)
     {
         bufs[i] = device->create_buffer(
-            {kSize,
+            {k_size,
              crd::rhi::enum_bits(crd::rhi::BufferUsage::Storage) | crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferSrc) |
                  crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferDst),
              crd::rhi::MemoryUsage::GpuOnly});
@@ -1369,7 +1369,7 @@ TEST_CASE("S7 residency auto-evicts device-local memory over the budget", "[rhi]
     // 8 device-local buffers against a 4-buffer budget must have engaged the policy,
     // and the resident device-local total must stay near the budget.
     CHECK(policy.evict_count >= 1U);
-    CHECK(crd::rhi::vulkan_device_local_used(*device) <= crd::u64{5} * kSize);
+    CHECK(crd::rhi::vulkan_device_local_used(*device) <= crd::u64{5} * k_size);
     CHECK(capture.error_count() == 0U);
     device->wait_idle();
 }

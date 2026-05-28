@@ -101,36 +101,36 @@ TEST_CASE("QR: solve square A*x = b at N=4", "[hesap][qr][real][solve]")
 TEST_CASE("QR: Q*R reconstruction at N=8", "[hesap][qr][real]")
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(1U * 1024U * 1024U));
-    constexpr crd::usize kN = 8;
-    Matrix<double, Layout::RowMajor> a(&alloc, kN, kN);
-    for (crd::usize i = 0; i < kN; ++i)
+    constexpr crd::usize k_n = 8;
+    Matrix<double, Layout::RowMajor> a(&alloc, k_n, k_n);
+    for (crd::usize i = 0; i < k_n; ++i)
     {
-        for (crd::usize j = 0; j < kN; ++j)
+        for (crd::usize j = 0; j < k_n; ++j)
         {
             a.at(i, j) = std::sin(static_cast<double>(i * 3 + j) * 0.1) +
                          (i == j ? 5.0 : 0.0);
         }
     }
-    Matrix<double, Layout::RowMajor> a_orig(&alloc, kN, kN);
-    for (crd::usize i = 0; i < kN; ++i)
+    Matrix<double, Layout::RowMajor> a_orig(&alloc, k_n, k_n);
+    for (crd::usize i = 0; i < k_n; ++i)
     {
-        for (crd::usize j = 0; j < kN; ++j)
+        for (crd::usize j = 0; j < k_n; ++j)
         {
             a_orig.at(i, j) = a.at(i, j);
         }
     }
 
-    QR<double, Layout::RowMajor> qr(&alloc, kN, kN);
+    QR<double, Layout::RowMajor> qr(&alloc, k_n, k_n);
     factor_qr(qr, a);
 
     // Materialize Q.
-    Matrix<double, Layout::RowMajor> q(&alloc, kN, kN);
+    Matrix<double, Layout::RowMajor> q(&alloc, k_n, k_n);
     materialize_q<double>(qr, q);
 
     // Form Q * R from packed (R is upper triangle of qr.packed()).
-    for (crd::usize i = 0; i < kN; ++i)
+    for (crd::usize i = 0; i < k_n; ++i)
     {
-        for (crd::usize j = 0; j < kN; ++j)
+        for (crd::usize j = 0; j < k_n; ++j)
         {
             double s = 0.0;
             // Q[i, :] * R[:, j]; R[p, j] = qr.at(p, j) for p <= j else 0.
@@ -146,26 +146,26 @@ TEST_CASE("QR: Q*R reconstruction at N=8", "[hesap][qr][real]")
 TEST_CASE("QR: orthogonality Q^T * Q == I at N=8", "[hesap][qr][real]")
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(1U * 1024U * 1024U));
-    constexpr crd::usize kN = 8;
-    Matrix<double, Layout::RowMajor> a(&alloc, kN, kN);
-    for (crd::usize i = 0; i < kN; ++i)
+    constexpr crd::usize k_n = 8;
+    Matrix<double, Layout::RowMajor> a(&alloc, k_n, k_n);
+    for (crd::usize i = 0; i < k_n; ++i)
     {
-        for (crd::usize j = 0; j < kN; ++j)
+        for (crd::usize j = 0; j < k_n; ++j)
         {
             a.at(i, j) = std::cos(static_cast<double>(i + j * 2) * 0.2) + 1.0;
         }
     }
-    QR<double, Layout::RowMajor> qr(&alloc, kN, kN);
+    QR<double, Layout::RowMajor> qr(&alloc, k_n, k_n);
     factor_qr(qr, a);
-    Matrix<double, Layout::RowMajor> q(&alloc, kN, kN);
+    Matrix<double, Layout::RowMajor> q(&alloc, k_n, k_n);
     materialize_q<double>(qr, q);
 
-    for (crd::usize i = 0; i < kN; ++i)
+    for (crd::usize i = 0; i < k_n; ++i)
     {
-        for (crd::usize j = 0; j < kN; ++j)
+        for (crd::usize j = 0; j < k_n; ++j)
         {
             double s = 0.0;
-            for (crd::usize p = 0; p < kN; ++p)
+            for (crd::usize p = 0; p < k_n; ++p)
             {
                 s += q.at(p, i) * q.at(p, j);
             }
@@ -177,36 +177,36 @@ TEST_CASE("QR: orthogonality Q^T * Q == I at N=8", "[hesap][qr][real]")
 TEST_CASE("QR: least-squares solve for over-determined 6x3", "[hesap][qr][real][lstsq]")
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(1U * 1024U * 1024U));
-    constexpr crd::usize kM = 6;
-    constexpr crd::usize kN = 3;
+    constexpr crd::usize k_m = 6;
+    constexpr crd::usize k_n = 3;
     // A has rank 3, no noise → LS solution exactly recovers x_true.
-    Matrix<double, Layout::RowMajor> a(&alloc, kM, kN);
-    for (crd::usize i = 0; i < kM; ++i)
+    Matrix<double, Layout::RowMajor> a(&alloc, k_m, k_n);
+    for (crd::usize i = 0; i < k_m; ++i)
     {
         a.at(i, 0) = 1.0;
         a.at(i, 1) = static_cast<double>(i);
         a.at(i, 2) = static_cast<double>(i) * static_cast<double>(i);
     }
     crd::containers::Array<double> x_true(&alloc);
-    x_true.resize(kN);
+    x_true.resize(k_n);
     x_true[0] = 2.5; x_true[1] = -1.5; x_true[2] = 0.5;
     crd::containers::Array<double> b(&alloc);
-    b.resize(kM);
-    for (crd::usize i = 0; i < kM; ++i)
+    b.resize(k_m);
+    for (crd::usize i = 0; i < k_m; ++i)
     {
         double s = 0.0;
-        for (crd::usize j = 0; j < kN; ++j)
+        for (crd::usize j = 0; j < k_n; ++j)
         {
             s += a.at(i, j) * x_true[j];
         }
         b[i] = s;
     }
 
-    QR<double, Layout::RowMajor> qr(&alloc, kM, kN);
+    QR<double, Layout::RowMajor> qr(&alloc, k_m, k_n);
     factor_qr(qr, a);
-    crd::containers::Span<double> bs(b.data(), kM);
+    crd::containers::Span<double> bs(b.data(), k_m);
     solve_qr(qr, bs);
-    for (crd::usize i = 0; i < kN; ++i)
+    for (crd::usize i = 0; i < k_n; ++i)
     {
         CHECK_THAT(bs[i], WithinAbs(x_true[i], 1e-10));
     }
@@ -215,39 +215,39 @@ TEST_CASE("QR: least-squares solve for over-determined 6x3", "[hesap][qr][real][
 TEST_CASE("QR: f32 square solve at N=16", "[hesap][qr][real][f32]")
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(1U * 1024U * 1024U));
-    constexpr crd::usize kN = 16;
-    Matrix<float, Layout::RowMajor> a(&alloc, kN, kN);
-    for (crd::usize i = 0; i < kN; ++i)
+    constexpr crd::usize k_n = 16;
+    Matrix<float, Layout::RowMajor> a(&alloc, k_n, k_n);
+    for (crd::usize i = 0; i < k_n; ++i)
     {
-        for (crd::usize j = 0; j < kN; ++j)
+        for (crd::usize j = 0; j < k_n; ++j)
         {
             a.at(i, j) = std::sin(static_cast<float>(i * 5 + j) * 0.1F) +
                          (i == j ? 5.0F : 0.0F);
         }
     }
     crd::containers::Array<float> x_true(&alloc);
-    x_true.resize(kN);
-    for (crd::usize i = 0; i < kN; ++i)
+    x_true.resize(k_n);
+    for (crd::usize i = 0; i < k_n; ++i)
     {
         x_true[i] = static_cast<float>(i + 1);
     }
     crd::containers::Array<float> b(&alloc);
-    b.resize(kN);
-    for (crd::usize i = 0; i < kN; ++i)
+    b.resize(k_n);
+    for (crd::usize i = 0; i < k_n; ++i)
     {
         float s = 0.0F;
-        for (crd::usize j = 0; j < kN; ++j)
+        for (crd::usize j = 0; j < k_n; ++j)
         {
             s += a.at(i, j) * x_true[j];
         }
         b[i] = s;
     }
 
-    QR<float, Layout::RowMajor> qr(&alloc, kN, kN);
+    QR<float, Layout::RowMajor> qr(&alloc, k_n, k_n);
     factor_qr(qr, a);
-    crd::containers::Span<float> bs(b.data(), kN);
+    crd::containers::Span<float> bs(b.data(), k_n);
     solve_qr(qr, bs);
-    for (crd::usize i = 0; i < kN; ++i)
+    for (crd::usize i = 0; i < k_n; ++i)
     {
         CHECK_THAT(static_cast<double>(bs[i]),
                    WithinAbs(static_cast<double>(x_true[i]), 1e-3));
@@ -258,32 +258,32 @@ TEST_CASE("QR: Q*R reconstruction at N=64 (block boundary)",
           "[hesap][qr][real][blocked]")
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(16U * 1024U * 1024U));
-    constexpr crd::usize kN = 64;
-    Matrix<double, Layout::RowMajor> a(&alloc, kN, kN);
-    for (crd::usize i = 0; i < kN; ++i)
+    constexpr crd::usize k_n = 64;
+    Matrix<double, Layout::RowMajor> a(&alloc, k_n, k_n);
+    for (crd::usize i = 0; i < k_n; ++i)
     {
-        for (crd::usize j = 0; j < kN; ++j)
+        for (crd::usize j = 0; j < k_n; ++j)
         {
             a.at(i, j) = std::sin(static_cast<double>(i * 7 + j) * 0.1) +
                          (i == j ? 10.0 : 0.0);
         }
     }
-    Matrix<double, Layout::RowMajor> a_orig(&alloc, kN, kN);
-    for (crd::usize i = 0; i < kN; ++i)
+    Matrix<double, Layout::RowMajor> a_orig(&alloc, k_n, k_n);
+    for (crd::usize i = 0; i < k_n; ++i)
     {
-        for (crd::usize j = 0; j < kN; ++j)
+        for (crd::usize j = 0; j < k_n; ++j)
         {
             a_orig.at(i, j) = a.at(i, j);
         }
     }
-    QR<double, Layout::RowMajor> qr(&alloc, kN, kN);
+    QR<double, Layout::RowMajor> qr(&alloc, k_n, k_n);
     factor_qr(qr, a);
-    Matrix<double, Layout::RowMajor> q(&alloc, kN, kN);
+    Matrix<double, Layout::RowMajor> q(&alloc, k_n, k_n);
     materialize_q<double>(qr, q);
     // Q*R should equal A_orig.
-    for (crd::usize i = 0; i < kN; ++i)
+    for (crd::usize i = 0; i < k_n; ++i)
     {
-        for (crd::usize j = 0; j < kN; ++j)
+        for (crd::usize j = 0; j < k_n; ++j)
         {
             double s = 0.0;
             for (crd::usize p = 0; p <= j; ++p)
@@ -299,32 +299,32 @@ TEST_CASE("QR: Q*R reconstruction at N=128 (multi-block trailing update)",
           "[hesap][qr][real][blocked]")
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(64U * 1024U * 1024U));
-    constexpr crd::usize kN = 128;
-    Matrix<double, Layout::RowMajor> a(&alloc, kN, kN);
-    for (crd::usize i = 0; i < kN; ++i)
+    constexpr crd::usize k_n = 128;
+    Matrix<double, Layout::RowMajor> a(&alloc, k_n, k_n);
+    for (crd::usize i = 0; i < k_n; ++i)
     {
-        for (crd::usize j = 0; j < kN; ++j)
+        for (crd::usize j = 0; j < k_n; ++j)
         {
             a.at(i, j) = std::cos(static_cast<double>(i * 5 + j * 3) * 0.07) +
                          (i == j ? 20.0 : 0.0);
         }
     }
-    Matrix<double, Layout::RowMajor> a_orig(&alloc, kN, kN);
-    for (crd::usize i = 0; i < kN; ++i)
+    Matrix<double, Layout::RowMajor> a_orig(&alloc, k_n, k_n);
+    for (crd::usize i = 0; i < k_n; ++i)
     {
-        for (crd::usize j = 0; j < kN; ++j)
+        for (crd::usize j = 0; j < k_n; ++j)
         {
             a_orig.at(i, j) = a.at(i, j);
         }
     }
-    QR<double, Layout::RowMajor> qr(&alloc, kN, kN);
+    QR<double, Layout::RowMajor> qr(&alloc, k_n, k_n);
     factor_qr(qr, a);
-    Matrix<double, Layout::RowMajor> q(&alloc, kN, kN);
+    Matrix<double, Layout::RowMajor> q(&alloc, k_n, k_n);
     materialize_q<double>(qr, q);
     double max_err = 0.0;
-    for (crd::usize i = 0; i < kN; ++i)
+    for (crd::usize i = 0; i < k_n; ++i)
     {
-        for (crd::usize j = 0; j < kN; ++j)
+        for (crd::usize j = 0; j < k_n; ++j)
         {
             double s = 0.0;
             for (crd::usize p = 0; p <= j; ++p)
@@ -342,34 +342,34 @@ TEST_CASE("QR: apply_q * apply_q_transpose is identity",
           "[hesap][qr][real]")
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(1U * 1024U * 1024U));
-    constexpr crd::usize kN = 12;
-    Matrix<double, Layout::RowMajor> a(&alloc, kN, kN);
-    for (crd::usize i = 0; i < kN; ++i)
+    constexpr crd::usize k_n = 12;
+    Matrix<double, Layout::RowMajor> a(&alloc, k_n, k_n);
+    for (crd::usize i = 0; i < k_n; ++i)
     {
-        for (crd::usize j = 0; j < kN; ++j)
+        for (crd::usize j = 0; j < k_n; ++j)
         {
             a.at(i, j) = std::sin(static_cast<double>(i + j)) + (i == j ? 3.0 : 0.0);
         }
     }
-    QR<double, Layout::RowMajor> qr(&alloc, kN, kN);
+    QR<double, Layout::RowMajor> qr(&alloc, k_n, k_n);
     factor_qr(qr, a);
 
     crd::containers::Array<double> x(&alloc);
-    x.resize(kN);
-    for (crd::usize i = 0; i < kN; ++i)
+    x.resize(k_n);
+    for (crd::usize i = 0; i < k_n; ++i)
     {
         x[i] = static_cast<double>(i + 1) * 0.5;
     }
     crd::containers::Array<double> x_orig(&alloc);
-    x_orig.resize(kN);
-    for (crd::usize i = 0; i < kN; ++i)
+    x_orig.resize(k_n);
+    for (crd::usize i = 0; i < k_n; ++i)
     {
         x_orig[i] = x[i];
     }
-    crd::containers::Span<double> xs(x.data(), kN);
+    crd::containers::Span<double> xs(x.data(), k_n);
     apply_q(qr, xs);
     apply_q_transpose(qr, xs);
-    for (crd::usize i = 0; i < kN; ++i)
+    for (crd::usize i = 0; i < k_n; ++i)
     {
         CHECK_THAT(x[i], WithinAbs(x_orig[i], 1e-12));
     }

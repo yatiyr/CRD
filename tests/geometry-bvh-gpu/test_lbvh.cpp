@@ -278,17 +278,17 @@ TEST_CASE("v9a-c CPU degenerate all-equal codes: deterministic spine via index t
 {
     crd::memory::TlsfAllocator alloc(2U * 1024U * 1024U);
 
-    constexpr crd::u32 kN = 64U;
+    constexpr crd::u32 k_n = 64U;
     crd::containers::Array<AABB3<crd::f32>> aabbs(&alloc);
-    aabbs.resize(kN);
-    for (crd::u32 i = 0U; i < kN; ++i)
+    aabbs.resize(k_n);
+    for (crd::u32 i = 0U; i < k_n; ++i)
     {
         aabbs[i] = box_at({static_cast<crd::f32>(i), 0.0F, 0.0F}, 0.1F);
     }
 
     crd::containers::Array<MortonPair<crd::u32>> pairs(&alloc);
-    pairs.resize(kN);
-    for (crd::u32 i = 0U; i < kN; ++i)
+    pairs.resize(k_n);
+    for (crd::u32 i = 0U; i < k_n; ++i)
     {
         pairs[i].code  = 0xCAFEBABEU;
         pairs[i].index = i;
@@ -299,9 +299,9 @@ TEST_CASE("v9a-c CPU degenerate all-equal codes: deterministic spine via index t
         crd::containers::ConstSpan<AABB3<crd::f32>>(aabbs.data(), aabbs.size()),
         &alloc);
 
-    check_tree_invariants(tree, kN, &alloc);
+    check_tree_invariants(tree, k_n, &alloc);
     const AABB3<crd::f32> expected_root{{-0.1F, -0.1F, -0.1F},
-                                        {static_cast<crd::f32>(kN - 1U) + 0.1F, 0.1F, 0.1F}};
+                                        {static_cast<crd::f32>(k_n - 1U) + 0.1F, 0.1F, 0.1F}};
     CHECK(aabb_equal(root_aabb_of(tree, crd::containers::ConstSpan<AABB3<crd::f32>>(
                                             aabbs.data(), aabbs.size())),
                      expected_root));
@@ -396,12 +396,12 @@ TEST_CASE("v9a-c CPU N=10000 random: structural invariants hold + root encloses 
 {
     crd::memory::TlsfAllocator alloc(32U * 1024U * 1024U);
 
-    constexpr crd::u32 kN = 10000U;
+    constexpr crd::u32 k_n = 10000U;
     crd::containers::Array<AABB3<crd::f32>> aabbs(&alloc);
-    aabbs.resize(kN);
+    aabbs.resize(k_n);
     std::mt19937 rng(0xC0FFEE0CU);
     AABB3<crd::f32> scene_bounds{{0.0F, 0.0F, 0.0F}, {1.0F, 1.0F, 1.0F}};
-    for (crd::u32 i = 0U; i < kN; ++i)
+    for (crd::u32 i = 0U; i < k_n; ++i)
     {
         const crd::f32 cx = static_cast<crd::f32>(rng()) * (1.0F / 4294967296.0F);
         const crd::f32 cy = static_cast<crd::f32>(rng()) * (1.0F / 4294967296.0F);
@@ -420,11 +420,11 @@ TEST_CASE("v9a-c CPU N=10000 random: structural invariants hold + root encloses 
         crd::containers::ConstSpan<AABB3<crd::f32>>(aabbs.data(), aabbs.size()),
         &alloc);
 
-    check_tree_invariants(tree, kN, &alloc);
+    check_tree_invariants(tree, k_n, &alloc);
     // Root must enclose every primitive.
     const auto root_bounds = root_aabb_of(
         tree, crd::containers::ConstSpan<AABB3<crd::f32>>(aabbs.data(), aabbs.size()));
-    for (crd::u32 i = 0U; i < kN; ++i)
+    for (crd::u32 i = 0U; i < k_n; ++i)
     {
         CHECK(root_bounds.min.x <= aabbs[i].min.x);
         CHECK(root_bounds.min.y <= aabbs[i].min.y);
@@ -545,12 +545,12 @@ TEST_CASE("v9a-c GPU N=10000 random: CPU vs GPU topology byte-identical + bounds
     crd::geometry::bvh_gpu::LbvhGpuPipeline pipeline(*device, shader_dir.generic());
     REQUIRE(pipeline.is_valid());
 
-    constexpr crd::u32 kN = 10000U;
+    constexpr crd::u32 k_n = 10000U;
     crd::containers::Array<AABB3<crd::f32>> aabbs(&alloc);
-    aabbs.resize(kN);
+    aabbs.resize(k_n);
     std::mt19937 rng(0xABCD1234U);
     const AABB3<crd::f32> scene_bounds{{0.0F, 0.0F, 0.0F}, {1.0F, 1.0F, 1.0F}};
-    for (crd::u32 i = 0U; i < kN; ++i)
+    for (crd::u32 i = 0U; i < k_n; ++i)
     {
         const crd::f32 cx = static_cast<crd::f32>(rng()) * (1.0F / 4294967296.0F);
         const crd::f32 cy = static_cast<crd::f32>(rng()) * (1.0F / 4294967296.0F);
@@ -591,12 +591,12 @@ TEST_CASE("v9a-c GPU end-to-end: pipeline produces topology byte-identical to CP
     crd::geometry::bvh_gpu::LbvhGpuPipeline pipeline(*device, shader_dir.generic());
     REQUIRE(pipeline.is_valid());
 
-    constexpr crd::u32 kN = 4096U;
+    constexpr crd::u32 k_n = 4096U;
     crd::containers::Array<AABB3<crd::f32>> aabbs(&alloc);
-    aabbs.resize(kN);
+    aabbs.resize(k_n);
     std::mt19937 rng(0xDEADBEEFU);
     const AABB3<crd::f32> scene_bounds{{0.0F, 0.0F, 0.0F}, {1.0F, 1.0F, 1.0F}};
-    for (crd::u32 i = 0U; i < kN; ++i)
+    for (crd::u32 i = 0U; i < k_n; ++i)
     {
         const crd::f32 cx = static_cast<crd::f32>(rng()) * (1.0F / 4294967296.0F);
         const crd::f32 cy = static_cast<crd::f32>(rng()) * (1.0F / 4294967296.0F);
@@ -617,7 +617,7 @@ TEST_CASE("v9a-c GPU end-to-end: pipeline produces topology byte-identical to CP
     const auto gpu_tree = pipeline.dispatch_build_lbvh(pairs_span, aabbs_span, &alloc);
 
     require_trees_match(cpu_tree, gpu_tree);
-    check_tree_invariants(gpu_tree, kN, &alloc);
+    check_tree_invariants(gpu_tree, k_n, &alloc);
 
     CHECK(capture.error_count()   == 0U);
     CHECK(capture.warning_count() == 0U);
@@ -639,12 +639,12 @@ TEST_CASE("v9a-c GPU is deterministic across 3 dispatches",
     crd::geometry::bvh_gpu::LbvhGpuPipeline pipeline(*device, shader_dir.generic());
     REQUIRE(pipeline.is_valid());
 
-    constexpr crd::u32 kN = 1000U;
+    constexpr crd::u32 k_n = 1000U;
     crd::containers::Array<AABB3<crd::f32>> aabbs(&alloc);
-    aabbs.resize(kN);
+    aabbs.resize(k_n);
     std::mt19937 rng(0xCAFE1111U);
     const AABB3<crd::f32> scene_bounds{{0.0F, 0.0F, 0.0F}, {1.0F, 1.0F, 1.0F}};
-    for (crd::u32 i = 0U; i < kN; ++i)
+    for (crd::u32 i = 0U; i < k_n; ++i)
     {
         const crd::f32 cx = static_cast<crd::f32>(rng()) * (1.0F / 4294967296.0F);
         const crd::f32 cy = static_cast<crd::f32>(rng()) * (1.0F / 4294967296.0F);
@@ -704,12 +704,12 @@ TEST_CASE("v9a-c GPU-resident: handle is correct + byte-identical to CPU build",
     crd::geometry::bvh_gpu::LbvhGpuPipeline pipeline(*device, shader_dir.generic());
     REQUIRE(pipeline.is_valid());
 
-    constexpr crd::u32 kN = 4096U;
+    constexpr crd::u32 k_n = 4096U;
     crd::containers::Array<AABB3<crd::f32>> aabbs(&alloc);
-    aabbs.resize(kN);
+    aabbs.resize(k_n);
     std::mt19937 rng(0xFEED0001U);
     const AABB3<crd::f32> scene_bounds{{0.0F, 0.0F, 0.0F}, {1.0F, 1.0F, 1.0F}};
-    for (crd::u32 i = 0U; i < kN; ++i)
+    for (crd::u32 i = 0U; i < k_n; ++i)
     {
         const crd::f32 cx = static_cast<crd::f32>(rng()) * (1.0F / 4294967296.0F);
         const crd::f32 cy = static_cast<crd::f32>(rng()) * (1.0F / 4294967296.0F);
@@ -877,12 +877,12 @@ TEST_CASE("v9a-c-gpu-inputs: GPU-input dispatch produces byte-identical fat-node
     crd::geometry::bvh_gpu::LbvhGpuPipeline pipeline(*device, shader_dir.generic());
     REQUIRE(pipeline.is_valid());
 
-    constexpr crd::u32 kN = 4096U;
+    constexpr crd::u32 k_n = 4096U;
     crd::containers::Array<AABB3<crd::f32>> aabbs(&alloc);
-    aabbs.resize(kN);
+    aabbs.resize(k_n);
     std::mt19937 rng(0xFAFA0001U);
     const AABB3<crd::f32> scene_bounds{{0.0F, 0.0F, 0.0F}, {1.0F, 1.0F, 1.0F}};
-    for (crd::u32 i = 0U; i < kN; ++i)
+    for (crd::u32 i = 0U; i < k_n; ++i)
     {
         const crd::f32 cx = static_cast<crd::f32>(rng()) * (1.0F / 4294967296.0F);
         const crd::f32 cy = static_cast<crd::f32>(rng()) * (1.0F / 4294967296.0F);
@@ -907,7 +907,7 @@ TEST_CASE("v9a-c-gpu-inputs: GPU-input dispatch produces byte-identical fat-node
     crd::geometry::bvh_gpu::LbvhGpuPipeline::GpuInputView view{};
     view.sorted_pairs = gpu_inputs.pairs.get();
     view.leaf_aabbs   = gpu_inputs.aabbs.get();
-    view.n            = kN;
+    view.n            = k_n;
 
     const auto handle = pipeline.dispatch_build_lbvh_from_gpu(view);
 
@@ -974,12 +974,12 @@ TEST_CASE("v9b GPU refit: same topology, new bounds match fresh build",
     crd::geometry::bvh_gpu::LbvhGpuPipeline pipeline(*device, shader_dir.generic());
     REQUIRE(pipeline.is_valid());
 
-    constexpr crd::u32 kN = 4096U;
+    constexpr crd::u32 k_n = 4096U;
     crd::containers::Array<AABB3<crd::f32>> aabbs_initial(&alloc);
-    aabbs_initial.resize(kN);
+    aabbs_initial.resize(k_n);
     std::mt19937 rng(0xB00B0001U);
     const AABB3<crd::f32> scene_bounds{{0.0F, 0.0F, 0.0F}, {1.0F, 1.0F, 1.0F}};
-    for (crd::u32 i = 0U; i < kN; ++i)
+    for (crd::u32 i = 0U; i < k_n; ++i)
     {
         const crd::f32 cx = static_cast<crd::f32>(rng()) * (1.0F / 4294967296.0F);
         const crd::f32 cy = static_cast<crd::f32>(rng()) * (1.0F / 4294967296.0F);
@@ -1002,17 +1002,17 @@ TEST_CASE("v9b GPU refit: same topology, new bounds match fresh build",
     crd::geometry::bvh_gpu::LbvhGpuPipeline::GpuInputView build_view{};
     build_view.sorted_pairs = gpu_inputs.pairs.get();
     build_view.leaf_aabbs   = gpu_inputs.aabbs.get();
-    build_view.n            = kN;
+    build_view.n            = k_n;
     const auto build_handle = pipeline.dispatch_build_lbvh_from_gpu(build_view);
     REQUIRE(build_handle.nodes != nullptr);
-    REQUIRE(build_handle.internal_count == kN - 1U);
+    REQUIRE(build_handle.internal_count == k_n - 1U);
 
     // Step 2: produce NEW positions (perturb each leaf's AABB; this is what
     // an eylem broadphase per-frame tick does after physics integration).
     crd::containers::Array<AABB3<crd::f32>> aabbs_refit(&alloc);
-    aabbs_refit.resize(kN);
+    aabbs_refit.resize(k_n);
     std::mt19937 rng2(0xB00B0002U);
-    for (crd::u32 i = 0U; i < kN; ++i)
+    for (crd::u32 i = 0U; i < k_n; ++i)
     {
         // Move each AABB by a small random delta. AABB sizes can also change.
         const crd::f32 dx = (static_cast<crd::f32>(rng2()) * (2.0F / 4294967296.0F) - 1.0F) * 0.05F;
@@ -1036,7 +1036,7 @@ TEST_CASE("v9b GPU refit: same topology, new bounds match fresh build",
     crd::geometry::bvh_gpu::LbvhGpuPipeline::RefitInputs refit_view{};
     refit_view.sorted_pairs = gpu_inputs.pairs.get();   // SAME buffer, SAME contents
     refit_view.leaf_aabbs   = refit_inputs_gpu.aabbs.get();  // NEW AABBs
-    refit_view.n            = kN;
+    refit_view.n            = k_n;
     const auto refit_handle = pipeline.dispatch_refit_lbvh(refit_view);
     REQUIRE(refit_handle.nodes == build_handle.nodes);              // same buffer
     REQUIRE(refit_handle.internal_count == build_handle.internal_count);
@@ -1088,12 +1088,12 @@ TEST_CASE("v9b GPU refit perf: 1M items, target sub-1 ms",
     crd::geometry::bvh_gpu::LbvhGpuPipeline pipeline(*device, shader_dir.generic());
     REQUIRE(pipeline.is_valid());
 
-    constexpr crd::u32 kN = 1U << 20;
+    constexpr crd::u32 k_n = 1U << 20;
     crd::containers::Array<AABB3<crd::f32>> aabbs(&alloc);
-    aabbs.resize(kN);
+    aabbs.resize(k_n);
     std::mt19937 rng(0xB00B0003U);
     const AABB3<crd::f32> scene_bounds{{0.0F, 0.0F, 0.0F}, {1.0F, 1.0F, 1.0F}};
-    for (crd::u32 i = 0U; i < kN; ++i)
+    for (crd::u32 i = 0U; i < k_n; ++i)
     {
         const crd::f32 cx = static_cast<crd::f32>(rng()) * (1.0F / 4294967296.0F);
         const crd::f32 cy = static_cast<crd::f32>(rng()) * (1.0F / 4294967296.0F);
@@ -1115,21 +1115,21 @@ TEST_CASE("v9b GPU refit perf: 1M items, target sub-1 ms",
     crd::geometry::bvh_gpu::LbvhGpuPipeline::GpuInputView build_view{};
     build_view.sorted_pairs = gpu_inputs.pairs.get();
     build_view.leaf_aabbs   = gpu_inputs.aabbs.get();
-    build_view.n            = kN;
+    build_view.n            = k_n;
     (void)pipeline.dispatch_build_lbvh_from_gpu(build_view);
 
     // Now time REFIT (~per-frame eylem broadphase cost).
     crd::geometry::bvh_gpu::LbvhGpuPipeline::RefitInputs refit_view{};
     refit_view.sorted_pairs = gpu_inputs.pairs.get();
     refit_view.leaf_aabbs   = gpu_inputs.aabbs.get();
-    refit_view.n            = kN;
+    refit_view.n            = k_n;
 
     double refit_samples[5];
     for (int s = 0; s < 5; ++s)
     {
         refit_samples[s] = crd::perf::measure_ms([&]{
             const auto h = pipeline.dispatch_refit_lbvh(refit_view);
-            REQUIRE(h.internal_count == kN - 1U);
+            REQUIRE(h.internal_count == k_n - 1U);
         });
     }
     std::sort(std::begin(refit_samples), std::end(refit_samples));
@@ -1139,12 +1139,12 @@ TEST_CASE("v9b GPU refit perf: 1M items, target sub-1 ms",
     // kernel, no extract kernel, just upsweep + done-reset). 60 ms allows
     // 3× parallel-DoD inflation over the ~1 ms target.
     #ifdef NDEBUG
-        constexpr double kRefitBudgetMs = 60.0;
+        constexpr double refit_budget_ms = 60.0;
     #else
-        constexpr double kRefitBudgetMs = 60000.0;
+        constexpr double refit_budget_ms = 60000.0;
     #endif
-    CHECK(refit_samples[2] <= kRefitBudgetMs);
-    (void)kRefitBudgetMs;
+    CHECK(refit_samples[2] <= refit_budget_ms);
+    (void)refit_budget_ms;
 
     CHECK(capture.error_count()   == 0U);
     CHECK(capture.warning_count() == 0U);
@@ -1166,12 +1166,12 @@ TEST_CASE("v9a-c GPU perf budget: 1M items end-to-end",
     crd::geometry::bvh_gpu::LbvhGpuPipeline pipeline(*device, shader_dir.generic());
     REQUIRE(pipeline.is_valid());
 
-    constexpr crd::u32 kN = 1U << 20;
+    constexpr crd::u32 k_n = 1U << 20;
     crd::containers::Array<AABB3<crd::f32>> aabbs(&alloc);
-    aabbs.resize(kN);
+    aabbs.resize(k_n);
     std::mt19937 rng(0x55556666U);
     const AABB3<crd::f32> scene_bounds{{0.0F, 0.0F, 0.0F}, {1.0F, 1.0F, 1.0F}};
-    for (crd::u32 i = 0U; i < kN; ++i)
+    for (crd::u32 i = 0U; i < k_n; ++i)
     {
         const crd::f32 cx = static_cast<crd::f32>(rng()) * (1.0F / 4294967296.0F);
         const crd::f32 cy = static_cast<crd::f32>(rng()) * (1.0F / 4294967296.0F);
@@ -1197,11 +1197,11 @@ TEST_CASE("v9a-c GPU perf budget: 1M items end-to-end",
     // is ~3× the solo measurement. The printed median is the true number;
     // the budget is a regression bound that survives the parallel run.
     #ifdef NDEBUG
-        constexpr double kBudgetCpuMs    = 120.0;
-        constexpr double kBudgetGpuResMs = 60.0;
+        constexpr double budget_cpu_ms    = 120.0;
+        constexpr double budget_gpu_res_ms = 60.0;
     #else
-        constexpr double kBudgetCpuMs    = 60000.0;
-        constexpr double kBudgetGpuResMs = 60000.0;
+        constexpr double budget_cpu_ms    = 60000.0;
+        constexpr double budget_gpu_res_ms = 60000.0;
     #endif
     // Median-of-5 + print across all three dispatch paths.
     double cpu_samples[5];
@@ -1211,14 +1211,14 @@ TEST_CASE("v9a-c GPU perf budget: 1M items end-to-end",
     {
         cpu_samples[s] = crd::perf::measure_ms([&]{
             const auto tree = pipeline.dispatch_build_lbvh(pairs_span, aabbs_span, &alloc);
-            REQUIRE(tree.internal_count() == static_cast<crd::usize>(kN - 1U));
+            REQUIRE(tree.internal_count() == static_cast<crd::usize>(k_n - 1U));
         });
     }
     for (int s = 0; s < 5; ++s)
     {
         gpu_samples[s] = crd::perf::measure_ms([&]{
             const auto handle = pipeline.dispatch_build_lbvh_gpu_resident(pairs_span, aabbs_span);
-            REQUIRE(handle.internal_count == kN - 1U);
+            REQUIRE(handle.internal_count == k_n - 1U);
         });
     }
     // v9a-c-gpu-inputs: upload inputs to GPU ONCE outside the timed loop
@@ -1228,12 +1228,12 @@ TEST_CASE("v9a-c GPU perf budget: 1M items end-to-end",
     crd::geometry::bvh_gpu::LbvhGpuPipeline::GpuInputView view{};
     view.sorted_pairs = gpu_inputs.pairs.get();
     view.leaf_aabbs   = gpu_inputs.aabbs.get();
-    view.n            = kN;
+    view.n            = k_n;
     for (int s = 0; s < 5; ++s)
     {
         gpu_in_samples[s] = crd::perf::measure_ms([&]{
             const auto handle = pipeline.dispatch_build_lbvh_from_gpu(view);
-            REQUIRE(handle.internal_count == kN - 1U);
+            REQUIRE(handle.internal_count == k_n - 1U);
         });
     }
     std::sort(std::begin(cpu_samples),    std::end(cpu_samples));
@@ -1242,11 +1242,11 @@ TEST_CASE("v9a-c GPU perf budget: 1M items end-to-end",
     std::printf("[lbvh_gpu_1m] CPU-output    median = %.3f ms\n", cpu_samples[2]);
     std::printf("[lbvh_gpu_1m] GPU-resident  median = %.3f ms\n", gpu_samples[2]);
     std::printf("[lbvh_gpu_1m] GPU-inputs    median = %.3f ms  (v9a-c-gpu-inputs)\n", gpu_in_samples[2]);
-    CHECK(cpu_samples[2]    <= kBudgetCpuMs);
-    CHECK(gpu_samples[2]    <= kBudgetGpuResMs);
-    CHECK(gpu_in_samples[2] <= kBudgetGpuResMs);
-    (void)kBudgetCpuMs;
-    (void)kBudgetGpuResMs;
+    CHECK(cpu_samples[2]    <= budget_cpu_ms);
+    CHECK(gpu_samples[2]    <= budget_gpu_res_ms);
+    CHECK(gpu_in_samples[2] <= budget_gpu_res_ms);
+    (void)budget_cpu_ms;
+    (void)budget_gpu_res_ms;
 
     CHECK(capture.error_count()   == 0U);
     CHECK(capture.warning_count() == 0U);

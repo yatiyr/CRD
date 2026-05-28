@@ -107,16 +107,16 @@ TEST_CASE("v10c length_of CircularArc with high n_samples approaches r * theta",
 {
     crd::memory::TlsfAllocator alloc(1U * 1024U * 1024U);
 
-    constexpr float kPi    = 3.14159265358979323846F;
-    constexpr float kRadius = 2.0F;
+    constexpr float k_pi    = 3.14159265358979323846F;
+    constexpr float k_radius = 2.0F;
     const CircularArc3<float> arc(v3(0.0F, 0.0F, 0.0F),
                                     v3(1.0F, 0.0F, 0.0F),
                                     v3(0.0F, 1.0F, 0.0F),
-                                    /*radius_in=*/kRadius,
-                                    /*sweep_radians_in=*/kPi);
+                                    /*radius_in=*/k_radius,
+                                    /*sweep_radians_in=*/k_pi);
     // Reference: a half-circle of radius 2 has length pi * 2 ~= 6.28319.
     const auto table = build_arclength_table(arc, 256U, &alloc);
-    const float expected = kRadius * kPi;
+    const float expected = k_radius * k_pi;
     // 256-segment chord approximation should be within ~1e-4 of analytic.
     REQUIRE(std::abs(length_of(table) - expected) < 1.0e-3F);
 }
@@ -261,12 +261,12 @@ TEST_CASE("v10c closed curve: t and distance wrap modulo their domains",
 {
     crd::memory::TlsfAllocator alloc(1U * 1024U * 1024U);
 
-    constexpr float kTwoPi = 6.28318530717958647692F;
+    constexpr float two_pi = 6.28318530717958647692F;
     const CircularArc3<float> arc(v3(0.0F, 0.0F, 0.0F),
                                     v3(1.0F, 0.0F, 0.0F),
                                     v3(0.0F, 1.0F, 0.0F),
                                     /*radius_in=*/1.0F,
-                                    /*sweep_radians_in=*/kTwoPi,
+                                    /*sweep_radians_in=*/two_pi,
                                     /*closed_in=*/true);
     const auto table = build_arclength_table(arc, 128U, &alloc);
     REQUIRE(table.closed);

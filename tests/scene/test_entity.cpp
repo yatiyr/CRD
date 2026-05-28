@@ -34,18 +34,18 @@ TEST_CASE("EntityId::make round-trips through index() and generation()", "[scene
 
     SECTION("max u32 boundaries")
     {
-        constexpr crd::u32 kMax32 = std::numeric_limits<crd::u32>::max();
-        EntityId e1 = EntityId::make(kMax32, 0U);
-        CHECK(e1.index() == kMax32);
+        constexpr crd::u32 max32 = std::numeric_limits<crd::u32>::max();
+        EntityId e1 = EntityId::make(max32, 0U);
+        CHECK(e1.index() == max32);
         CHECK(e1.generation() == 0U);
 
-        EntityId e2 = EntityId::make(0U, kMax32);
+        EntityId e2 = EntityId::make(0U, max32);
         CHECK(e2.index() == 0U);
-        CHECK(e2.generation() == kMax32);
+        CHECK(e2.generation() == max32);
 
-        EntityId e3 = EntityId::make(kMax32, kMax32);
-        CHECK(e3.index() == kMax32);
-        CHECK(e3.generation() == kMax32);
+        EntityId e3 = EntityId::make(max32, max32);
+        CHECK(e3.index() == max32);
+        CHECK(e3.generation() == max32);
     }
 }
 

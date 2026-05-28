@@ -141,13 +141,13 @@ static crd::containers::Array<crd::u8> make_matr_v2_artifact(
 
     // PASS chunk
     const crd::u32 count = static_cast<crd::u32>(entries.size());
-    constexpr crd::usize kEntrySize = 36U;
+    constexpr crd::usize entry_size = 36U;
     crd::containers::Array<crd::u8> pass_bytes(&s_alloc);
-    pass_bytes.resize(sizeof(crd::u32) + count * kEntrySize);
+    pass_bytes.resize(sizeof(crd::u32) + count * entry_size);
     std::memcpy(pass_bytes.data(), &count, sizeof(crd::u32));
     for (crd::u32 i = 0; i < count; ++i)
     {
-        crd::u8* e = pass_bytes.data() + sizeof(crd::u32) + i * kEntrySize;
+        crd::u8* e = pass_bytes.data() + sizeof(crd::u32) + i * entry_size;
         e[0] = entries[i].pass_type;
         e[1] = 0U; e[2] = 0U; e[3] = 0U;
         std::memcpy(e + 4,  &entries[i].vert_id.hi, 8);

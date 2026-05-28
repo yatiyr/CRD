@@ -152,14 +152,14 @@ TEST_CASE("sibson_interpolate_2d: linear field reproduction (Sibson's hallmark)"
     pts.push_back(Vec2<f64>{1.0, 2.0});
     pts.push_back(Vec2<f64>{2.0, 2.0});
 
-    constexpr f64 kA = 2.5;
-    constexpr f64 kB = -1.7;
-    constexpr f64 kC = 5.0;
+    constexpr f64 k_a = 2.5;
+    constexpr f64 k_b = -1.7;
+    constexpr f64 k_c = 5.0;
 
     crd::containers::Array<f64> vals(&f.alloc);
     for (const auto& p : pts)
     {
-        vals.push_back(kA * p.x + kB * p.y + kC);
+        vals.push_back(k_a * p.x + k_b * p.y + k_c);
     }
 
     NniInterpolator2<f64> interp{
@@ -176,7 +176,7 @@ TEST_CASE("sibson_interpolate_2d: linear field reproduction (Sibson's hallmark)"
     {
         auto r = interp.interpolate(q);
         REQUIRE(r.ok());
-        const f64 expected = kA * q.x + kB * q.y + kC;
+        const f64 expected = k_a * q.x + k_b * q.y + k_c;
         CHECK(std::abs(r.value - expected) < 1.0e-8);
     }
 }

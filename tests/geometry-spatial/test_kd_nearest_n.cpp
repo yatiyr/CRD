@@ -220,10 +220,10 @@ TEST_CASE("KdTree concurrent k-NN queries via crd-jobs (proves naturally-const-s
                             corpus->queries[q], KdConcurrencyCorpus::kNeighbors, corpus->ref[q]);
     }
 
-    constexpr u32 kTotalTasks = KdConcurrencyCorpus::kQueries * KdConcurrencyCorpus::kItersPerQuery;
+    constexpr u32 total_tasks = KdConcurrencyCorpus::kQueries * KdConcurrencyCorpus::kItersPerQuery;
     auto* corpus_ptr = corpus.get();
     crd::jobs::Counter* counter = crd::jobs::parallel_for(
-        kTotalTasks, /*num_jobs=*/16U,
+        total_tasks, /*num_jobs=*/16U,
         [corpus_ptr](crd::u32 begin, crd::u32 end) noexcept {
             for (crd::u32 task_idx = begin; task_idx < end; ++task_idx)
             {

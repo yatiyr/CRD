@@ -110,9 +110,9 @@ void drive_counters(crd::stress::RunMode mode)
     cfg.num_workers = kWorkers;
     const u64 per_worker = cfg.iterations_per_round; // fetch_adds per worker per round
 
-    constexpr usize kBuckets = 257U; // odd; each CacheLinePadded slot is its own cache line
-    crd::containers::Array<crd::containers::CacheLinePadded<u32>> buckets(kBuckets, &alloc);
-    buckets.resize(kBuckets); // zero-initialised
+    constexpr usize k_buckets = 257U; // odd; each CacheLinePadded slot is its own cache line
+    crd::containers::Array<crd::containers::CacheLinePadded<u32>> buckets(k_buckets, &alloc);
+    buckets.resize(k_buckets); // zero-initialised
 
     const u64 per_round = per_worker * kWorkers;
     crd::stress::FailSink sink;
@@ -121,7 +121,7 @@ void drive_counters(crd::stress::RunMode mode)
     {
         for (u64 k = 0; k < per_worker; ++k)
         {
-            const u32 b = rng.next_u32(static_cast<u32>(kBuckets));
+            const u32 b = rng.next_u32(static_cast<u32>(k_buckets));
             std::atomic_ref<u32>(buckets[b].value).fetch_add(1U, std::memory_order_relaxed);
         }
     };

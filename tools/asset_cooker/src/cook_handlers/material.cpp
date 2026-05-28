@@ -210,15 +210,15 @@ CookResult material_handler(const CookContext& ctx)
     // Header: count u32 (4 bytes)
     // Per entry: 36 bytes (pass_type u8, pad u8[3], vert_id u8[16], frag_id u8[16])
     const crd::u32 pass_count = static_cast<crd::u32>(passes.size());
-    constexpr crd::usize kPassEntrySize = 36U;
-    const crd::usize pass_chunk_size = sizeof(crd::u32) + pass_count * kPassEntrySize;
+    constexpr crd::usize pass_entry_size = 36U;
+    const crd::usize pass_chunk_size = sizeof(crd::u32) + pass_count * pass_entry_size;
 
     crd::containers::Array<crd::u8> pass_bytes(ctx.allocator);
     pass_bytes.resize(pass_chunk_size);
     std::memcpy(pass_bytes.data(), &pass_count, sizeof(crd::u32));
     for (crd::u32 i = 0; i < pass_count; ++i)
     {
-        write_pass_entry(pass_bytes.data() + sizeof(crd::u32) + i * kPassEntrySize, passes[i]);
+        write_pass_entry(pass_bytes.data() + sizeof(crd::u32) + i * pass_entry_size, passes[i]);
     }
 
     crd::resources::CrdrWriter writer(ctx.allocator, ctx.id, crd::resources::kFourCC_MATR);

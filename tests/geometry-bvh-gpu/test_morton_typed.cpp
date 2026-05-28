@@ -63,8 +63,8 @@ TEST_CASE("v9a-a-typed CPU: typed entry matches raw entry byte-for-byte",
     // Build identical input as both raw and typed.
     crd::containers::Array<AABB3<crd::f32>> raw_aabbs(&alloc);
     crd::containers::Array<AABB3T<Length, crd::f32>> typed_aabbs(&alloc);
-    constexpr crd::u32 kCount = 256U;
-    for (crd::u32 i = 0; i < kCount; ++i)
+    constexpr crd::u32 count = 256U;
+    for (crd::u32 i = 0; i < count; ++i)
     {
         const crd::f32 fx = static_cast<crd::f32>((i * 2654435761U) & 0xFFFFU) / 65536.0F;
         const crd::f32 fy = static_cast<crd::f32>((i * 40503U)       & 0xFFFFU) / 65536.0F;
@@ -89,8 +89,8 @@ TEST_CASE("v9a-a-typed CPU: typed entry matches raw entry byte-for-byte",
         crd::containers::ConstSpan<AABB3T<Length, crd::f32>>(typed_aabbs.data(), typed_aabbs.size()),
         typed_scene, &alloc);
 
-    REQUIRE(raw_codes.size()   == kCount);
-    REQUIRE(typed_codes.size() == kCount);
+    REQUIRE(raw_codes.size()   == count);
+    REQUIRE(typed_codes.size() == count);
     const auto cmp = crd::test::bit_compare<crd::u32>(
         crd::containers::ConstSpan<crd::u32>(raw_codes.data(),   raw_codes.size()),
         crd::containers::ConstSpan<crd::u32>(typed_codes.data(), typed_codes.size()));
@@ -101,7 +101,7 @@ TEST_CASE("v9a-a-typed CPU: typed entry matches raw entry byte-for-byte",
               << " typed=" << cmp.gpu_value);
     }
     CHECK(cmp.ok);
-    CHECK(cmp.compared_count == kCount);
+    CHECK(cmp.compared_count == count);
 }
 
 TEST_CASE("v9a-a-typed CPU: union-scene overload matches raw union-scene overload",
@@ -111,10 +111,10 @@ TEST_CASE("v9a-a-typed CPU: union-scene overload matches raw union-scene overloa
 
     crd::containers::Array<AABB3<crd::f32>> raw_aabbs(&alloc);
     crd::containers::Array<AABB3T<Length, crd::f32>> typed_aabbs(&alloc);
-    constexpr crd::u32 kCount = 64U;
-    for (crd::u32 i = 0; i < kCount; ++i)
+    constexpr crd::u32 count = 64U;
+    for (crd::u32 i = 0; i < count; ++i)
     {
-        const crd::f32 t = static_cast<crd::f32>(i) / static_cast<crd::f32>(kCount);
+        const crd::f32 t = static_cast<crd::f32>(i) / static_cast<crd::f32>(count);
         raw_aabbs.push_back({{t, t, t}, {t + 0.05F, t + 0.05F, t + 0.05F}});
 
         AABB3T<Length, crd::f32> tt{};
@@ -130,8 +130,8 @@ TEST_CASE("v9a-a-typed CPU: union-scene overload matches raw union-scene overloa
         crd::containers::ConstSpan<AABB3T<Length, crd::f32>>(typed_aabbs.data(), typed_aabbs.size()),
         &alloc);
 
-    REQUIRE(raw_codes.size()   == kCount);
-    REQUIRE(typed_codes.size() == kCount);
+    REQUIRE(raw_codes.size()   == count);
+    REQUIRE(typed_codes.size() == count);
     const auto cmp = crd::test::bit_compare<crd::u32>(
         crd::containers::ConstSpan<crd::u32>(raw_codes.data(),   raw_codes.size()),
         crd::containers::ConstSpan<crd::u32>(typed_codes.data(), typed_codes.size()));
@@ -165,8 +165,8 @@ TEST_CASE("v9a-a-typed GPU: typed dispatch matches raw dispatch byte-for-byte",
 
     crd::containers::Array<AABB3<crd::f32>> raw_aabbs(&alloc);
     crd::containers::Array<AABB3T<Length, crd::f32>> typed_aabbs(&alloc);
-    constexpr crd::u32 kCount = 512U;
-    for (crd::u32 i = 0; i < kCount; ++i)
+    constexpr crd::u32 count = 512U;
+    for (crd::u32 i = 0; i < count; ++i)
     {
         const crd::f32 fx = static_cast<crd::f32>((i * 2654435761U) & 0xFFFFU) / 65536.0F;
         const crd::f32 fy = static_cast<crd::f32>((i * 40503U)       & 0xFFFFU) / 65536.0F;
@@ -192,13 +192,13 @@ TEST_CASE("v9a-a-typed GPU: typed dispatch matches raw dispatch byte-for-byte",
         crd::containers::ConstSpan<AABB3T<Length, crd::f32>>(typed_aabbs.data(), typed_aabbs.size()),
         typed_scene, &alloc);
 
-    REQUIRE(raw_codes.size()   == kCount);
-    REQUIRE(typed_codes.size() == kCount);
+    REQUIRE(raw_codes.size()   == count);
+    REQUIRE(typed_codes.size() == count);
     const auto cmp = crd::test::bit_compare<crd::u32>(
         crd::containers::ConstSpan<crd::u32>(raw_codes.data(),   raw_codes.size()),
         crd::containers::ConstSpan<crd::u32>(typed_codes.data(), typed_codes.size()));
     CHECK(cmp.ok);
-    CHECK(cmp.compared_count == kCount);
+    CHECK(cmp.compared_count == count);
 
     CHECK(capture.error_count()   == 0U);
     CHECK(capture.warning_count() == 0U);

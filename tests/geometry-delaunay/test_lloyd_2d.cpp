@@ -351,22 +351,22 @@ TEST_CASE("lloyd_relax_2d: large-coord f32 stability (1e3 scale)",
 {
     AllocFixture f{};
     crd::containers::Array<Vec2<f32>> pts(&f.alloc);
-    constexpr f32 kScale = 1.0e3F;
+    constexpr f32 k_scale = 1.0e3F;
     pts.push_back(Vec2<f32>{0, 0});
-    pts.push_back(Vec2<f32>{kScale, 0});
-    pts.push_back(Vec2<f32>{kScale, kScale});
-    pts.push_back(Vec2<f32>{0, kScale});
-    pts.push_back(Vec2<f32>{0.7F * kScale, 0.7F * kScale});
+    pts.push_back(Vec2<f32>{k_scale, 0});
+    pts.push_back(Vec2<f32>{k_scale, k_scale});
+    pts.push_back(Vec2<f32>{0, k_scale});
+    pts.push_back(Vec2<f32>{0.7F * k_scale, 0.7F * k_scale});
     LloydOptions2<f32> opts{};
     opts.max_iterations = 60;
-    opts.tolerance      = 1.0e-4F * kScale;
+    opts.tolerance      = 1.0e-4F * k_scale;
     auto r = lloyd_relax_2d<f32>(
         crd::containers::ConstSpan<Vec2<f32>>{pts.data(), pts.size()}, opts, &f.alloc);
     REQUIRE(r.ok());
-    // Interior site converges near (kScale/2, kScale/2). Tolerance scales
-    // with kScale: ~0.1F is ~1e-4 relative.
-    CHECK(std::abs(r.relaxed_sites[4].x - 0.5F * kScale) < 0.5F);
-    CHECK(std::abs(r.relaxed_sites[4].y - 0.5F * kScale) < 0.5F);
+    // Interior site converges near (k_scale/2, k_scale/2). Tolerance scales
+    // with k_scale: ~0.1F is ~1e-4 relative.
+    CHECK(std::abs(r.relaxed_sites[4].x - 0.5F * k_scale) < 0.5F);
+    CHECK(std::abs(r.relaxed_sites[4].y - 0.5F * k_scale) < 0.5F);
 }
 
 TEST_CASE("lloyd_relax_2d: f64 precision tier",

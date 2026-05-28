@@ -155,17 +155,17 @@ TEST_CASE("GJK determinism: distance-equivariance across world placements",
         // `(world_t + b_rel_to_a) - world_t` introduces a few ULP of drift
         // as `world_t` grows (cancellation in the local-frame `T_BA`
         // composition). Tight tolerance: a few ULP × |world_t|-scale.
-        constexpr f32 kUlpTol = 1e-4F;
-        REQUIRE(std::fabs(r.distance_squared - ref.distance_squared) <= kUlpTol);
-        REQUIRE(std::fabs((r.witness_a_world.x - world_t.x) - ref.witness_a_world.x) <= kUlpTol);
-        REQUIRE(std::fabs((r.witness_a_world.y - world_t.y) - ref.witness_a_world.y) <= kUlpTol);
-        REQUIRE(std::fabs((r.witness_a_world.z - world_t.z) - ref.witness_a_world.z) <= kUlpTol);
+        constexpr f32 ulp_tol = 1e-4F;
+        REQUIRE(std::fabs(r.distance_squared - ref.distance_squared) <= ulp_tol);
+        REQUIRE(std::fabs((r.witness_a_world.x - world_t.x) - ref.witness_a_world.x) <= ulp_tol);
+        REQUIRE(std::fabs((r.witness_a_world.y - world_t.y) - ref.witness_a_world.y) <= ulp_tol);
+        REQUIRE(std::fabs((r.witness_a_world.z - world_t.z) - ref.witness_a_world.z) <= ulp_tol);
         REQUIRE(std::fabs((r.witness_b_world.x - world_t.x - b_rel_to_a.x) - (ref.witness_b_world.x - b_rel_to_a.x)) <=
-                kUlpTol);
+                ulp_tol);
         REQUIRE(std::fabs((r.witness_b_world.y - world_t.y - b_rel_to_a.y) - (ref.witness_b_world.y - b_rel_to_a.y)) <=
-                kUlpTol);
+                ulp_tol);
         REQUIRE(std::fabs((r.witness_b_world.z - world_t.z - b_rel_to_a.z) - (ref.witness_b_world.z - b_rel_to_a.z)) <=
-                kUlpTol);
+                ulp_tol);
     }
 }
 
