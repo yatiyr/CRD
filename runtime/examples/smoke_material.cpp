@@ -11,7 +11,7 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/log/log.hpp>
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/renderer/material_resource_loader.hpp>
 #include <crd/renderer/material_template.hpp>
@@ -30,7 +30,7 @@
 namespace fs = crd::platform::fs;
 using namespace crd::resources;
 
-static crd::memory::MallocAllocator g_alloc;
+static crd::memory::TlsfAllocator g_alloc{256ULL << 20};
 
 // ── Minimal SPIRV (5 words) ───────────────────────────────────────────────
 

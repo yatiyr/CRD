@@ -66,7 +66,7 @@ public:
     // Owning ctor. Allocates `capacity` bytes from `parent` and manages it
     // as one TLSF heap. `capacity` must be ≥ kMinPoolSize (a few KB header +
     // a usable free block); CRD_FATAL otherwise.
-    explicit TlsfAllocator(usize capacity, IAllocator* parent = nullptr, const char* name = "TlsfAllocator");
+    explicit TlsfAllocator(usize capacity, IAllocator* parent = nullptr, const char* name = "TlsfAllocator") noexcept;
 
     // Non-owning ctor. `buffer` must be ≥ kMinPoolSize bytes and satisfy
     // alignof(void*). The buffer's contents are clobbered (overwritten with
@@ -91,7 +91,7 @@ public:
     // Returns nullptr on out-of-memory or size==0. Use this when the caller
     // wants to handle pool exhaustion gracefully (sub-budget allocators,
     // try-fallback patterns).
-    [[nodiscard]] void* try_allocate(usize size, usize alignment = kDefaultAlignment);
+    [[nodiscard]] void* try_allocate(usize size, usize alignment = kDefaultAlignment) override;
 
     // ---- TlsfAllocator extras -------------------------------------------
     [[nodiscard]] usize pool_capacity() const noexcept { return m_pool_capacity; }

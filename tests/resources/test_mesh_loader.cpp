@@ -1,7 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <crd/cooker/cook_handler.hpp>
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
+#include <new>
 #include <crd/platform/filesystem.hpp>
 #include <crd/renderer/mesh_resource.hpp>
 #include <crd/renderer/mesh_resource_loader.hpp>
@@ -16,7 +17,8 @@
 namespace fs = crd::platform::fs;
 using namespace crd::resources;
 
-static crd::memory::MallocAllocator s_mesh_alloc; // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
+alignas(crd::memory::GrowableTlsfAllocator) static unsigned char s_mesh_alloc_buf[sizeof(crd::memory::GrowableTlsfAllocator)];
+static crd::memory::GrowableTlsfAllocator& s_mesh_alloc = *::new (s_mesh_alloc_buf) crd::memory::GrowableTlsfAllocator(); // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
 
 // ── Pack assembly helper ──────────────────────────────────────────────────
 

@@ -56,6 +56,21 @@ public:
         return 0;
     }
 
+    // Non-throwing allocation: return a valid pointer or nullptr on failure
+    // (out-of-memory / size==0), WITHOUT triggering CRD_FATAL. This is the path
+    // composite allocators take to fall back gracefully (e.g.
+    // GrowableTlsfAllocator::grow asks its parent for a chunk via try_allocate so
+    // a VirtualMemoryAllocator parent's exhaustion yields nullptr, not a fatal).
+    //
+    // Default delegates to allocate(): correct for allocators whose allocate is
+    // already non-fatal on exhaustion (bump / stack / pool). Allocators whose
+    // allocate is fatal-on-OOM (MallocAllocator, TlsfAllocator,
+    // VirtualMemoryAllocator, GrowableTlsfAllocator) OVERRIDE this with a real
+    // nullptr-returning path. NOTE: appended at the END of the interface — never
+    // insert a new virtual mid-interface (vtable-slot shift → wrong dispatch under
+    // LTCG).
+    [[nodiscard]] virtual void* try_allocate(usize size, usize alignment = kDefaultAlignment);
+
     // ---- Diagnostics (non-virtual, free for callers) --------------
     const char* name() const noexcept { return m_name; }
     const MemoryStats& stats() const noexcept { return m_stats; }

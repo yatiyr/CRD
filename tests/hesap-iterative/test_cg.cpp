@@ -1,5 +1,3 @@
-#include <catch2/catch_test_macros.hpp>
-
 #include <crd/containers/span.hpp>
 #include <crd/hesap/cli/command_registry.hpp>
 #include <crd/hesap/complex.hpp>
@@ -13,10 +11,11 @@
 #include <crd/hesap/preconditioners/ssor.hpp>
 #include <crd/hesap/sparse/parallel_sparse_linear_op.hpp>
 #include <crd/hesap/sparse/sparse_linear_op.hpp>
-#include <crd/jobs/jobs.hpp>
 #include <crd/hesap/sparse/triplet_builder.hpp>
+#include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
+#include <catch2/catch_test_macros.hpp>
 #include <cmath>
 #include <cstring>
 
@@ -29,8 +28,7 @@ namespace dense = crd::hesap::dense;
 namespace
 {
 // 1D Laplacian (tridiagonal [-1, 2, -1]) -- SPD, the canonical CG test.
-template <typename T>
-SparseMatrix<T, SparseFormat::Csr> laplacian_1d(crd::memory::IAllocator* a, crd::u32 n)
+template <typename T> SparseMatrix<T, SparseFormat::Csr> laplacian_1d(crd::memory::IAllocator* a, crd::u32 n)
 {
     TripletBuilder<T> b(a, n, n);
     for (crd::u32 i = 0; i < n; ++i)
@@ -67,16 +65,16 @@ crd::hesap::dense::RealType<T> rel_residual(const SparseLinearOp<T>& op, crd::co
 TEST_CASE("CG solves a 1D Laplacian SPD system (f64)", "[hesap-iterative][cg]")
 {
     crd::memory::TlsfAllocator alloc{4U << 20};
-    const crd::u32             n = 64;
-    auto                       a = laplacian_1d<crd::f64>(&alloc, n);
-    SparseLinearOp<crd::f64>   op(a);
+    const crd::u32 n = 64;
+    auto a = laplacian_1d<crd::f64>(&alloc, n);
+    SparseLinearOp<crd::f64> op(a);
 
     dense::Vector<crd::f64> b(&alloc, n);
     b.fill(1.0);
     dense::Vector<crd::f64> x(&alloc, n); // x0 = 0
 
     IterativeOptions<crd::f64> opts;
-    opts.rel_tol          = 1e-12;
+    opts.rel_tol = 1e-12;
     opts.record_residuals = true;
     KrylovWorkspace<crd::f64> ws(&alloc, n);
 
@@ -93,9 +91,9 @@ TEST_CASE("CG solves a 1D Laplacian SPD system (f64)", "[hesap-iterative][cg]")
 TEST_CASE("PCG with Jacobi matches CG solution (f64)", "[hesap-iterative][pcg]")
 {
     crd::memory::TlsfAllocator alloc{4U << 20};
-    const crd::u32             n = 64;
-    auto                       a = laplacian_1d<crd::f64>(&alloc, n);
-    SparseLinearOp<crd::f64>   op(a);
+    const crd::u32 n = 64;
+    auto a = laplacian_1d<crd::f64>(&alloc, n);
+    SparseLinearOp<crd::f64> op(a);
     JacobiPreconditioner<crd::f64> m(a, &alloc);
 
     dense::Vector<crd::f64> b(&alloc, n);
@@ -117,13 +115,14 @@ TEST_CASE("PCG with Jacobi matches CG solution (f64)", "[hesap-iterative][pcg]")
 TEST_CASE("CG is bit-deterministic across repeated runs (f64)", "[hesap-iterative][cg][determinism]")
 {
     crd::memory::TlsfAllocator alloc{4U << 20};
-    const crd::u32             n = 50;
-    auto                       a = laplacian_1d<crd::f64>(&alloc, n);
-    SparseLinearOp<crd::f64>   op(a);
-    dense::Vector<crd::f64>    b(&alloc, n);
+    const crd::u32 n = 50;
+    auto a = laplacian_1d<crd::f64>(&alloc, n);
+    SparseLinearOp<crd::f64> op(a);
+    dense::Vector<crd::f64> b(&alloc, n);
     b.fill(1.0);
 
-    auto run = [&](dense::Vector<crd::f64>& x) {
+    auto run = [&](dense::Vector<crd::f64>& x)
+    {
         IterativeOptions<crd::f64> opts;
         opts.rel_tol = 1e-12;
         KrylovWorkspace<crd::f64> ws(&alloc, n);
@@ -132,8 +131,8 @@ TEST_CASE("CG is bit-deterministic across repeated runs (f64)", "[hesap-iterativ
 
     dense::Vector<crd::f64> x1(&alloc, n);
     dense::Vector<crd::f64> x2(&alloc, n);
-    auto                    r1 = run(x1);
-    auto                    r2 = run(x2);
+    auto r1 = run(x1);
+    auto r2 = run(x2);
     REQUIRE(r1.iterations == r2.iterations);
     REQUIRE(r1.final_residual_norm == r2.final_residual_norm); // bit-exact
     for (crd::u32 i = 0; i < n; ++i)
@@ -145,7 +144,7 @@ TEST_CASE("CG is bit-deterministic across repeated runs (f64)", "[hesap-iterativ
 TEST_CASE("CG solves a Hermitian positive-definite system (c64)", "[hesap-iterative][cg][complex]")
 {
     crd::memory::TlsfAllocator alloc{4U << 20};
-    using C        = Complex<crd::f64>;
+    using C = Complex<crd::f64>;
     const crd::u32 n = 16;
 
     // Diagonally dominant Hermitian: diag 4, off-diag (i,i+1)=(1,0.5),
@@ -160,7 +159,7 @@ TEST_CASE("CG solves a Hermitian positive-definite system (c64)", "[hesap-iterat
             bld.add(i + 1, i, C{1.0, -0.5});
         }
     }
-    auto             a = bld.compress();
+    auto a = bld.compress();
     SparseLinearOp<C> op(a);
 
     dense::Vector<C> b(&alloc, n);
@@ -199,9 +198,9 @@ SparseMatrix<Complex<crd::f64>, SparseFormat::Csr> hermitian_pd(crd::memory::IAl
 TEST_CASE("PCG with complex block-Jacobi solves an HPD system (c64)", "[hesap-iterative][pcg][block-jacobi][complex]")
 {
     crd::memory::TlsfAllocator alloc{4U << 20};
-    using C        = Complex<crd::f64>;
+    using C = Complex<crd::f64>;
     const crd::u32 n = 24;
-    auto             a = hermitian_pd(&alloc, n);
+    auto a = hermitian_pd(&alloc, n);
     SparseLinearOp<C> op(a);
     BlockJacobiPreconditioner<C> m(a, /*block_size=*/4, &alloc);
 
@@ -220,11 +219,33 @@ TEST_CASE("PCG with complex block-Jacobi solves an HPD system (c64)", "[hesap-it
 TEST_CASE("PCG with complex SSOR solves an HPD system (c64)", "[hesap-iterative][pcg][ssor][complex]")
 {
     crd::memory::TlsfAllocator alloc{4U << 20};
-    using C        = Complex<crd::f64>;
+    using C = Complex<crd::f64>;
     const crd::u32 n = 24;
-    auto             a = hermitian_pd(&alloc, n);
+    auto a = hermitian_pd(&alloc, n);
     SparseLinearOp<C> op(a);
     SsorPreconditioner<C> m(a, /*omega=*/1.0, &alloc);
+
+    dense::Vector<C> b(&alloc, n);
+    b.fill(C{1.0, 0.0});
+    dense::Vector<C> x(&alloc, n);
+    IterativeOptions<crd::f64> opts;
+    opts.rel_tol = 1e-12;
+    KrylovWorkspace<C> ws(&alloc, n);
+
+    auto res = pcg<C>(op, m, b.span(), x.span(), opts, ws, &alloc);
+    REQUIRE(res.converged);
+    REQUIRE(rel_residual<C>(op, x.span(), b.span(), &alloc) < 1e-10);
+}
+
+TEST_CASE("PCG with complex point-Jacobi solves an HPD system (c64; complex completeness)",
+          "[hesap-iterative][pcg][jacobi][complex]")
+{
+    crd::memory::TlsfAllocator alloc{4U << 20};
+    using C = Complex<crd::f64>;
+    const crd::u32 n = 24;
+    auto a = hermitian_pd(&alloc, n);
+    SparseLinearOp<C> op(a);
+    JacobiPreconditioner<C> m(a, &alloc); // point-Jacobi: the complex inverse-diagonal apply path
 
     dense::Vector<C> b(&alloc, n);
     b.fill(C{1.0, 0.0});
@@ -241,14 +262,14 @@ TEST_CASE("PCG with complex SSOR solves an HPD system (c64)", "[hesap-iterative]
 TEST_CASE("Jacobi preconditioner applies the inverse diagonal", "[hesap-iterative][jacobi]")
 {
     crd::memory::TlsfAllocator alloc{1U << 20};
-    const crd::u32             n = 4;
-    TripletBuilder<crd::f64>   bld(&alloc, n, n);
+    const crd::u32 n = 4;
+    TripletBuilder<crd::f64> bld(&alloc, n, n);
     bld.add(0, 0, 2.0);
     bld.add(1, 1, 4.0);
     bld.add(2, 2, 8.0);
     bld.add(3, 3, 0.5);
     bld.add(0, 1, 9.0); // off-diagonal ignored by Jacobi
-    auto                           a = bld.compress();
+    auto a = bld.compress();
     JacobiPreconditioner<crd::f64> m(a, &alloc);
 
     dense::Vector<crd::f64> r(&alloc, n);
@@ -264,9 +285,9 @@ TEST_CASE("Jacobi preconditioner applies the inverse diagonal", "[hesap-iterativ
 TEST_CASE("PCG with block-Jacobi solves the Laplacian (f64)", "[hesap-iterative][pcg][block-jacobi]")
 {
     crd::memory::TlsfAllocator alloc{4U << 20};
-    const crd::u32             n = 64;
-    auto                       a = laplacian_1d<crd::f64>(&alloc, n);
-    SparseLinearOp<crd::f64>   op(a);
+    const crd::u32 n = 64;
+    auto a = laplacian_1d<crd::f64>(&alloc, n);
+    SparseLinearOp<crd::f64> op(a);
     BlockJacobiPreconditioner<crd::f64> m(a, /*block_size=*/8, &alloc);
 
     dense::Vector<crd::f64> b(&alloc, n);
@@ -285,9 +306,9 @@ TEST_CASE("PCG with block-Jacobi solves the Laplacian (f64)", "[hesap-iterative]
 TEST_CASE("PCG with SSOR solves the Laplacian (f64)", "[hesap-iterative][pcg][ssor]")
 {
     crd::memory::TlsfAllocator alloc{4U << 20};
-    const crd::u32             n = 64;
-    auto                       a = laplacian_1d<crd::f64>(&alloc, n);
-    SparseLinearOp<crd::f64>   op(a);
+    const crd::u32 n = 64;
+    auto a = laplacian_1d<crd::f64>(&alloc, n);
+    SparseLinearOp<crd::f64> op(a);
     SsorPreconditioner<crd::f64> m(a, /*omega=*/1.0, &alloc);
 
     dense::Vector<crd::f64> b(&alloc, n);
@@ -313,10 +334,10 @@ TEST_CASE("CG is bit-exact over serial vs parallel spmv (determinism moat)", "[h
     crd::jobs::init();
     {
         crd::memory::TlsfAllocator alloc{16U << 20};
-        const crd::u32             n = 200;
-        auto                       a = laplacian_1d<crd::f64>(&alloc, n);
+        const crd::u32 n = 200;
+        auto a = laplacian_1d<crd::f64>(&alloc, n);
 
-        SparseLinearOp<crd::f64>         serial_op(a);
+        SparseLinearOp<crd::f64> serial_op(a);
         // Force the parallel path (threshold 0) so the gate truly compares
         // parallel-vs-serial spmv, not serial-vs-serial.
         ParallelSparseLinearOp<crd::f64> parallel_op(a, &alloc, /*parallel_min_stored_bytes=*/0);
@@ -325,9 +346,10 @@ TEST_CASE("CG is bit-exact over serial vs parallel spmv (determinism moat)", "[h
         dense::Vector<crd::f64> b(&alloc, n);
         b.fill(1.0);
 
-        auto solve = [&](const crd::hesap::LinearOp<crd::f64>& op, dense::Vector<crd::f64>& x) {
+        auto solve = [&](const crd::hesap::LinearOp<crd::f64>& op, dense::Vector<crd::f64>& x)
+        {
             IterativeOptions<crd::f64> opts;
-            opts.rel_tol          = 1e-12;
+            opts.rel_tol = 1e-12;
             opts.record_residuals = true;
             KrylovWorkspace<crd::f64> ws(&alloc, n);
             return cg<crd::f64>(op, b.span(), x.span(), opts, ws, &alloc);
@@ -335,8 +357,8 @@ TEST_CASE("CG is bit-exact over serial vs parallel spmv (determinism moat)", "[h
 
         dense::Vector<crd::f64> xs(&alloc, n);
         dense::Vector<crd::f64> xp(&alloc, n);
-        auto                    rs = solve(serial_op, xs);
-        auto                    rp = solve(parallel_op, xp);
+        auto rs = solve(serial_op, xs);
+        auto rp = solve(parallel_op, xp);
 
         REQUIRE(rs.iterations == rp.iterations);
         REQUIRE(rs.residual_history.size() == rp.residual_history.size());
@@ -356,7 +378,7 @@ TEST_CASE("CG is bit-exact over serial vs parallel spmv (determinism moat)", "[h
 
 namespace
 {
-const bool kPullIter   = (crd::hesap::iterative::register_iterative_cli_anchor(), true);
+const bool kPullIter = (crd::hesap::iterative::register_iterative_cli_anchor(), true);
 const bool kPullPrecon = (crd::hesap::preconditioners::register_preconditioners_cli_anchor(), true);
 } // namespace
 
@@ -370,10 +392,10 @@ TEST_CASE("CLI hesap.iterative.cg solves and returns [iters,resid,converged,x]",
     REQUIRE(rec != nullptr);
 
     // n=3 1D Laplacian, b = ones.
-    crd::i64    tr[] = {0, 0, 1, 1, 1, 2, 2};
-    crd::i64    tc[] = {0, 1, 0, 1, 2, 1, 2};
-    crd::f64    vv[] = {2, -1, -1, 2, -1, -1, 2};
-    crd::f64    bb[] = {1, 1, 1};
+    crd::i64 tr[] = {0, 0, 1, 1, 1, 2, 2};
+    crd::i64 tc[] = {0, 1, 0, 1, 2, 1, 2};
+    crd::f64 vv[] = {2, -1, -1, 2, -1, -1, 2};
+    crd::f64 bb[] = {1, 1, 1};
     CommandArgs args{&alloc};
     args.set_u64("rows", 3);
     args.set_u64("cols", 3);
@@ -405,10 +427,10 @@ TEST_CASE("CLI hesap.iterative.pcg (Jacobi) solves", "[hesap-iterative][cli][pcg
     const auto* rec = CommandRegistry::global().find("hesap.iterative.pcg.f64");
     REQUIRE(rec != nullptr);
 
-    crd::i64    tr[] = {0, 0, 1, 1, 1, 2, 2};
-    crd::i64    tc[] = {0, 1, 0, 1, 2, 1, 2};
-    crd::f64    vv[] = {2, -1, -1, 2, -1, -1, 2};
-    crd::f64    bb[] = {1, 1, 1};
+    crd::i64 tr[] = {0, 0, 1, 1, 1, 2, 2};
+    crd::i64 tc[] = {0, 1, 0, 1, 2, 1, 2};
+    crd::f64 vv[] = {2, -1, -1, 2, -1, -1, 2};
+    crd::f64 bb[] = {1, 1, 1};
     CommandArgs args{&alloc};
     args.set_u64("rows", 3);
     args.set_u64("cols", 3);

@@ -3,7 +3,7 @@
 // Per ADR-0078 §4 D30: 11 discipline-preset factories + format/parse for
 // the 13 common Dims.
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/units/quantity_aliases.hpp>
 #include <crd/units/unit_preferences.hpp>
 #include <crd/units/units.hpp>
@@ -68,7 +68,7 @@ TEST_CASE("v0d-5 11 discipline presets exist + return distinct configurations",
 TEST_CASE("v0d-5 format_length renders the SI value in the preferred unit",
           "[units][v0d-5][format][length]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     const Length32 height{1.85F};
 
     const auto cad = make_cad_prefs();
@@ -88,7 +88,7 @@ TEST_CASE("v0d-5 format_length renders the SI value in the preferred unit",
 
 TEST_CASE("v0d-5 format honours include_suffix toggle", "[units][v0d-5][format]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     Length32 h{1.0F};
     UnitPreferences prefs = make_si_strict_prefs();
     prefs.include_suffix = false;
@@ -102,7 +102,7 @@ TEST_CASE("v0d-5 format honours include_suffix toggle", "[units][v0d-5][format]"
 TEST_CASE("v0d-5 format_temperature affine conversion (K -> Celsius / Fahrenheit)",
           "[units][v0d-5][format][temperature]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     // Use 100 K offset above freezing so conversion has measurable magnitude
     // (avoids f32(273.15) - 273.15 ULP residue printing as scientific notation).
     const crd::f32 hundred_above_freezing_k = 373.15F;
@@ -185,7 +185,7 @@ TEST_CASE("v0d-5 parse_temperature_to_kelvin: 32_fahrenheit -> 273.15 K",
 TEST_CASE("v0d-5 format/parse round-trip: Length32 1.85 m via CAD prefs",
           "[units][v0d-5][roundtrip]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     const auto prefs = make_cad_prefs();
     const Length32 original{1.85F};
     const auto text = crd::units::format_length(original, prefs, &alloc);
@@ -198,7 +198,7 @@ TEST_CASE("v0d-5 format/parse round-trip: Length32 1.85 m via CAD prefs",
 TEST_CASE("v0d-5 format_mass + format_pressure work across units",
           "[units][v0d-5][format][misc]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     const auto cad = make_cad_prefs();
     const Mass32 m{1.0F};
     const auto s = crd::units::format_mass(m, cad, &alloc);

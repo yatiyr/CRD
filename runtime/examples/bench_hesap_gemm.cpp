@@ -116,8 +116,8 @@ void run_size(const char* label, crd::usize n, crd::f64 peak_gflops, crd::memory
     const crd::f64 flops_per_iter = 2.0 * n_d * n_d * n_d;
     const crd::f64 gflops = (flops_per_iter * iters) / (elapsed_s * 1e9);
     const crd::f64 pct = (gflops / peak_gflops) * 100.0;
-    std::fprintf(stdout, "  %-4s  N=%5zu  iters=%4d  %.2f s  =>  %7.2f GFLOPS  (%.1f%% of %.1f GFLOPS peak)\n",
-                 label, static_cast<std::size_t>(n), iters, elapsed_s, gflops, pct, peak_gflops);
+    std::fprintf(stdout, "  %-4s  N=%5zu  iters=%4d  %.2f s  =>  %7.2f GFLOPS  (%.1f%% of %.1f GFLOPS peak)\n", label,
+                 static_cast<std::size_t>(n), iters, elapsed_s, gflops, pct, peak_gflops);
 }
 
 } // namespace

@@ -127,6 +127,29 @@ target_link_libraries(smoke_filesystem PRIVATE
 )
 crd_enable_default_pch(smoke_filesystem)
 
+# ADR-0085 S1: virtual-memory reserve/commit/decommit (open-world streaming substrate).
+add_executable(smoke_virtual_memory
+    examples/smoke_virtual_memory.cpp
+)
+target_link_libraries(smoke_virtual_memory PRIVATE
+    crd-core
+    crd-log
+    crd-vm
+)
+crd_enable_default_pch(smoke_virtual_memory)
+
+# ADR-0085 S2: VirtualMemoryAllocator (stable-address bump arena over crd::vm).
+add_executable(smoke_virtual_memory_allocator
+    examples/smoke_virtual_memory_allocator.cpp
+)
+target_link_libraries(smoke_virtual_memory_allocator PRIVATE
+    crd-core
+    crd-log
+    crd-vm
+    crd-memory
+)
+crd_enable_default_pch(smoke_virtual_memory_allocator)
+
 add_executable(smoke_app
     examples/smoke_app.cpp
 )
@@ -532,7 +555,7 @@ function(crd_add_hesap_vs_ref_bench name)
     cmake_parse_arguments(ARG "USE_JOBS;USE_OPENBLAS" "" "" ${ARGN})
     add_executable(${name} examples/${name}.cpp)
     target_link_libraries(${name} PRIVATE
-        crd-core crd-memory crd-containers crd-math crd-hesap crd-hesap-dense eigen_headers)
+        crd-core crd-memory crd-containers crd-math crd-platform crd-hesap crd-hesap-dense eigen_headers)
     if(ARG_USE_JOBS)
         target_link_libraries(${name} PRIVATE crd-jobs)
     endif()

@@ -14,35 +14,32 @@
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
 #include <Eigen/Dense>
-
 #include <algorithm>
 #include <chrono>
 #include <complex>
 #include <cstdio>
 
-extern "C" void dgehrd_(const int* n, const int* ilo, const int* ihi, double* a, const int* lda,
-                        double* tau, double* work, const int* lwork, int* info);
-extern "C" void zgehrd_(const int* n, const int* ilo, const int* ihi, std::complex<double>* a,
-                        const int* lda, std::complex<double>* tau, std::complex<double>* work,
-                        const int* lwork, int* info);
-extern "C" void zhseqr_(const char* job, const char* compz, const int* n, const int* ilo,
-                        const int* ihi, std::complex<double>* h, const int* ldh,
-                        std::complex<double>* w, std::complex<double>* z, const int* ldz,
-                        std::complex<double>* work, const int* lwork, int* info);
-extern "C" void dhseqr_(const char* job, const char* compz, const int* n, const int* ilo, const int* ihi,
-                        double* h, const int* ldh, double* wr, double* wi, double* z, const int* ldz,
+extern "C" void dgehrd_(const int* n, const int* ilo, const int* ihi, double* a, const int* lda, double* tau,
                         double* work, const int* lwork, int* info);
-extern "C" void dgeev_(const char* jobvl, const char* jobvr, const int* n, double* a, const int* lda,
-                       double* wr, double* wi, double* vl, const int* ldvl, double* vr, const int* ldvr,
-                       double* work, const int* lwork, int* info);
-extern "C" void zgeev_(const char* jobvl, const char* jobvr, const int* n, std::complex<double>* a,
-                       const int* lda, std::complex<double>* w, std::complex<double>* vl,
-                       const int* ldvl, std::complex<double>* vr, const int* ldvr,
-                       std::complex<double>* work, const int* lwork, double* rwork, int* info);
+extern "C" void zgehrd_(const int* n, const int* ilo, const int* ihi, std::complex<double>* a, const int* lda,
+                        std::complex<double>* tau, std::complex<double>* work, const int* lwork, int* info);
+extern "C" void zhseqr_(const char* job, const char* compz, const int* n, const int* ilo, const int* ihi,
+                        std::complex<double>* h, const int* ldh, std::complex<double>* w, std::complex<double>* z,
+                        const int* ldz, std::complex<double>* work, const int* lwork, int* info);
+extern "C" void dhseqr_(const char* job, const char* compz, const int* n, const int* ilo, const int* ihi, double* h,
+                        const int* ldh, double* wr, double* wi, double* z, const int* ldz, double* work,
+                        const int* lwork, int* info);
+extern "C" void dgeev_(const char* jobvl, const char* jobvr, const int* n, double* a, const int* lda, double* wr,
+                       double* wi, double* vl, const int* ldvl, double* vr, const int* ldvr, double* work,
+                       const int* lwork, int* info);
+extern "C" void zgeev_(const char* jobvl, const char* jobvr, const int* n, std::complex<double>* a, const int* lda,
+                       std::complex<double>* w, std::complex<double>* vl, const int* ldvl, std::complex<double>* vr,
+                       const int* ldvr, std::complex<double>* work, const int* lwork, double* rwork, int* info);
 
 namespace
 {
 using crd::hesap::dense::complex_schur;
+using crd::hesap::dense::complex_schur_aed;
 using crd::hesap::dense::ComplexSchur;
 using crd::hesap::dense::eig;
 using crd::hesap::dense::EigNonsym;
@@ -52,10 +49,8 @@ using crd::hesap::dense::Matrix;
 using crd::hesap::dense::real_schur;
 using crd::hesap::dense::RealSchur;
 using crd::hesap::dense::schur_aed;
-using crd::hesap::dense::complex_schur_aed;
 
-template <typename Op>
-crd::f64 time_loop(Op&& op, crd::f64 budget_s = 0.4, int min_iters = 3)
+template <typename Op> crd::f64 time_loop(Op&& op, crd::f64 budget_s = 0.4, int min_iters = 3)
 {
     op();
     crd::jobs::frame_reset();
@@ -69,8 +64,7 @@ crd::f64 time_loop(Op&& op, crd::f64 budget_s = 0.4, int min_iters = 3)
             op();
             crd::jobs::frame_reset();
             ++iters;
-            const crd::f64 el =
-                std::chrono::duration<crd::f64>(std::chrono::steady_clock::now() - t0).count();
+            const crd::f64 el = std::chrono::duration<crd::f64>(std::chrono::steady_clock::now() - t0).count();
             if (el > budget_s && iters >= min_iters)
             {
                 best = std::min(best, el / iters);
@@ -84,8 +78,7 @@ crd::f64 time_loop(Op&& op, crd::f64 budget_s = 0.4, int min_iters = 3)
 // Single warmup + one timed call — for large N where each call is seconds and
 // the 9x time_loop would run for minutes (the un-accelerated references in
 // particular). Low relative noise since per-call time dominates.
-template <typename Op>
-crd::f64 time_once(Op&& op)
+template <typename Op> crd::f64 time_once(Op&& op)
 {
     op();
     crd::jobs::frame_reset();
@@ -95,8 +88,7 @@ crd::f64 time_once(Op&& op)
     return std::chrono::duration<crd::f64>(std::chrono::steady_clock::now() - t0).count();
 }
 
-template <typename Op>
-crd::f64 timed(bool once, Op&& op)
+template <typename Op> crd::f64 timed(bool once, Op&& op)
 {
     return once ? time_once(std::forward<Op>(op)) : time_loop(std::forward<Op>(op));
 }
@@ -109,8 +101,7 @@ int main()
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(1024U * 1024U * 1024U));
 
     std::fprintf(stdout, "\n==== Hessenberg reduction (general A, f64) ====\n");
-    std::fprintf(stdout, "%-6s | %-9s %-9s %-7s | %-9s %-7s\n", "n", "Cerid", "EigHess", "C/Eig",
-                 "dgehrd", "C/lp");
+    std::fprintf(stdout, "%-6s | %-9s %-9s %-7s | %-9s %-7s\n", "n", "Cerid", "EigHess", "C/Eig", "dgehrd", "C/lp");
     std::fprintf(stdout, "%s\n", "------------------------------------------------------------");
 
     // Capped at 256: OpenBLAS-generic `dgehrd` on MSVC crashes at n=512 (a
@@ -121,7 +112,7 @@ int main()
         const int ni = static_cast<int>(n);
         Matrix<crd::f64> a0(&alloc, n, n);
         Eigen::MatrixXd ea(static_cast<Eigen::Index>(n), static_cast<Eigen::Index>(n));
-        crd::containers::Array<crd::f64> acm0(&alloc);  // column-major copy for LAPACK
+        crd::containers::Array<crd::f64> acm0(&alloc); // column-major copy for LAPACK
         acm0.resize(n * n);
         crd::u32 s = 71017U + static_cast<crd::u32>(n);
         for (crd::usize i = 0; i < n; ++i)
@@ -139,43 +130,53 @@ int main()
         // --- Cerid (fresh copy each iter; hessenberg overwrites) ---
         Matrix<crd::f64> a(&alloc, n, n);
         crd::containers::Array<crd::f64> tau(&alloc);
-        const crd::f64 ct = time_loop([&]() {
-            for (crd::usize k = 0; k < n * n; ++k) a.data()[k] = a0.data()[k];
-            hessenberg<crd::f64>(a, 0, n - 1, tau);
-        });
+        const crd::f64 ct = time_loop(
+            [&]()
+            {
+                for (crd::usize k = 0; k < n * n; ++k)
+                    a.data()[k] = a0.data()[k];
+                hessenberg<crd::f64>(a, 0, n - 1, tau);
+            });
 
         // --- Eigen HessenbergDecomposition ---
-        const crd::f64 et = time_loop([&]() {
-            Eigen::HessenbergDecomposition<Eigen::MatrixXd> h(ea);
-            volatile double sink = h.matrixH()(0, 0);
-            (void)sink;
-        });
+        const crd::f64 et = time_loop(
+            [&]()
+            {
+                Eigen::HessenbergDecomposition<Eigen::MatrixXd> h(ea);
+                volatile double sink = h.matrixH()(0, 0);
+                (void)sink;
+            });
 
         // --- LAPACK dgehrd (column-major; fresh copy each iter) ---
-        crd::containers::Array<crd::f64> acm(&alloc), wk(&alloc), tlp(&alloc);
+        crd::containers::Array<crd::f64> acm(&alloc);
+        crd::containers::Array<crd::f64> wk(&alloc);
+        crd::containers::Array<crd::f64> tlp(&alloc);
         acm.resize(n * n);
         tlp.resize(n);
-        int info = 0, lwork = -1;
+        int info = 0;
+        int lwork = -1;
         const int ilo = 1;
         crd::f64 wq = 0.0;
         dgehrd_(&ni, &ilo, &ni, acm0.data(), &ni, tlp.data(), &wq, &lwork, &info);
         lwork = static_cast<int>(wq);
         wk.resize(static_cast<crd::usize>(lwork));
-        const crd::f64 lt = time_loop([&]() {
-            for (crd::usize k = 0; k < n * n; ++k) acm.data()[k] = acm0.data()[k];
-            int inf = 0;
-            dgehrd_(&ni, &ilo, &ni, acm.data(), &ni, tlp.data(), wk.data(), &lwork, &inf);
-        });
+        const crd::f64 lt = time_loop(
+            [&]()
+            {
+                for (crd::usize k = 0; k < n * n; ++k)
+                    acm.data()[k] = acm0.data()[k];
+                int inf = 0;
+                dgehrd_(&ni, &ilo, &ni, acm.data(), &ni, tlp.data(), wk.data(), &lwork, &inf);
+            });
 
-        std::fprintf(stdout, "%-6zu | %8.4f %8.4f %6.2fx | %8.4f %6.2fx\n", static_cast<size_t>(n),
-                     ct * 1e3, et * 1e3, et / ct, lt * 1e3, lt / ct);
+        std::fprintf(stdout, "%-6zu | %8.4f %8.4f %6.2fx | %8.4f %6.2fx\n", static_cast<size_t>(n), ct * 1e3, et * 1e3,
+                     et / ct, lt * 1e3, lt / ct);
     }
 
     // ==== complex Hessenberg reduction (zgehd2, c64) vs Eigen + LAPACK zgehrd ====
     using C = crd::hesap::Complex<crd::f64>;
     std::fprintf(stdout, "\n==== complex Hessenberg reduction (general A, c64) ====\n");
-    std::fprintf(stdout, "%-6s | %-9s %-9s %-7s | %-9s %-7s\n", "n", "Cerid", "EigHess", "C/Eig",
-                 "zgehrd", "C/lp");
+    std::fprintf(stdout, "%-6s | %-9s %-9s %-7s | %-9s %-7s\n", "n", "Cerid", "EigHess", "C/Eig", "zgehrd", "C/lp");
     std::fprintf(stdout, "%s\n", "------------------------------------------------------------");
     // Reference cap at n=128. BOTH complex references are fragile at n≥256 on
     // this MSVC/AVX build — an access violation that is NOT in Cerid (the marker-
@@ -199,7 +200,7 @@ int main()
         const bool run_refs = (n <= 128);
         Matrix<C> a0(&alloc, n, n);
         Eigen::MatrixXcd ea(static_cast<Eigen::Index>(n), static_cast<Eigen::Index>(n));
-        crd::containers::Array<std::complex<double>> acm0(&alloc);  // column-major for LAPACK
+        crd::containers::Array<std::complex<double>> acm0(&alloc); // column-major for LAPACK
         acm0.resize(n * n);
         crd::u32 s = 81017U + static_cast<crd::u32>(n);
         for (crd::usize i = 0; i < n; ++i)
@@ -218,43 +219,54 @@ int main()
 
         Matrix<C> a(&alloc, n, n);
         crd::containers::Array<C> tau(&alloc);
-        const crd::f64 ct = time_loop([&]() {
-            for (crd::usize k = 0; k < n * n; ++k) a.data()[k] = a0.data()[k];
-            hessenberg<C>(a, 0, n - 1, tau);
-        });
+        const crd::f64 ct = time_loop(
+            [&]()
+            {
+                for (crd::usize k = 0; k < n * n; ++k)
+                    a.data()[k] = a0.data()[k];
+                hessenberg<C>(a, 0, n - 1, tau);
+            });
 
         crd::f64 et = 0.0;
         crd::f64 lt = 0.0;
         if (run_refs)
         {
-            et = time_loop([&]() {
-                Eigen::HessenbergDecomposition<Eigen::MatrixXcd> h(ea);
-                volatile double sink = h.matrixH()(0, 0).real();
-                (void)sink;
-            });
+            et = time_loop(
+                [&]()
+                {
+                    Eigen::HessenbergDecomposition<Eigen::MatrixXcd> h(ea);
+                    volatile double sink = h.matrixH()(0, 0).real();
+                    (void)sink;
+                });
 
-            crd::containers::Array<std::complex<double>> acm(&alloc), wk(&alloc), tlp(&alloc);
+            crd::containers::Array<std::complex<double>> acm(&alloc);
+            crd::containers::Array<std::complex<double>> wk(&alloc);
+            crd::containers::Array<std::complex<double>> tlp(&alloc);
             acm.resize(n * n);
             tlp.resize(n);
-            int info = 0, lwork = -1;
+            int info = 0;
+            int lwork = -1;
             const int ilo = 1;
             std::complex<double> wq = 0.0;
             zgehrd_(&ni, &ilo, &ni, acm0.data(), &ni, tlp.data(), &wq, &lwork, &info);
             lwork = static_cast<int>(wq.real());
             wk.resize(static_cast<crd::usize>(lwork > 0 ? lwork : 1));
-            lt = time_loop([&]() {
-                for (crd::usize k = 0; k < n * n; ++k) acm[k] = acm0[k];
-                int inf = 0;
-                zgehrd_(&ni, &ilo, &ni, acm.data(), &ni, tlp.data(), wk.data(), &lwork, &inf);
-            });
+            lt = time_loop(
+                [&]()
+                {
+                    for (crd::usize k = 0; k < n * n; ++k)
+                        acm[k] = acm0[k];
+                    int inf = 0;
+                    zgehrd_(&ni, &ilo, &ni, acm.data(), &ni, tlp.data(), wk.data(), &lwork, &inf);
+                });
         }
 
         if (run_refs)
-            std::fprintf(stdout, "%-6zu | %8.4f %8.4f %6.2fx | %8.4f %6.2fx\n", static_cast<size_t>(n),
-                         ct * 1e3, et * 1e3, et / ct, lt * 1e3, lt / ct);
+            std::fprintf(stdout, "%-6zu | %8.4f %8.4f %6.2fx | %8.4f %6.2fx\n", static_cast<size_t>(n), ct * 1e3,
+                         et * 1e3, et / ct, lt * 1e3, lt / ct);
         else
-            std::fprintf(stdout, "%-6zu | %8.4f %8s %7s | %8s %7s\n", static_cast<size_t>(n), ct * 1e3,
-                         "ref-AV", "n/a", "n/a", "n/a");
+            std::fprintf(stdout, "%-6zu | %8.4f %8s %7s | %8s %7s\n", static_cast<size_t>(n), ct * 1e3, "ref-AV", "n/a",
+                         "n/a", "n/a");
     }
 
     // ==== complex Schur (from Hessenberg, c64): zlahqr vs Eigen ComplexSchur vs zhseqr ====
@@ -262,10 +274,9 @@ int main()
     // complex Hessenberg above; zhseqr/OpenBLAS-generic likewise). Cerid alone
     // at n=256 (cache-resident scaling point).
     std::fprintf(stdout, "\n==== complex Schur (from Hessenberg, c64): zlahqr vs Eigen vs zhseqr ====\n");
-    std::fprintf(stdout, "%-6s | %-9s | %-9s %-7s | %-9s %-7s | %-7s\n", "n", "Cerid", "EigCS", "C/Eig",
-                 "zhseqr", "C/lp", "recon");
-    std::fprintf(stdout, "%s\n",
-                 "----------------------------------------------------------------------------");
+    std::fprintf(stdout, "%-6s | %-9s | %-9s %-7s | %-9s %-7s | %-7s\n", "n", "Cerid", "EigCS", "C/Eig", "zhseqr",
+                 "C/lp", "recon");
+    std::fprintf(stdout, "%s\n", "----------------------------------------------------------------------------");
     for (crd::usize n : {crd::usize{64}, crd::usize{128}, crd::usize{256}})
     {
         const int ni = static_cast<int>(n);
@@ -298,11 +309,13 @@ int main()
             }
 
         crd::f64 recon = 0.0;
-        const crd::f64 ct = time_loop([&]() {
-            auto sc = complex_schur<C>(&alloc, hmat, 0, n - 1, true);
-            volatile crd::f64 sink = sc.t.at(0, 0).re;
-            (void)sink;
-        });
+        const crd::f64 ct = time_loop(
+            [&]()
+            {
+                auto sc = complex_schur<C>(&alloc, hmat, 0, n - 1, true);
+                volatile crd::f64 sink = sc.t.at(0, 0).re;
+                (void)sink;
+            });
         {
             auto sc = complex_schur<C>(&alloc, hmat, 0, n - 1, true);
             // O(n^3) recon max|Z·T·Zᴴ − H|.
@@ -311,14 +324,16 @@ int main()
                 for (crd::usize p = 0; p < n; ++p)
                 {
                     C acc{0.0, 0.0};
-                    for (crd::usize q = 0; q < n; ++q) acc = acc + sc.z.at(i, q) * sc.t.at(q, p);
+                    for (crd::usize q = 0; q < n; ++q)
+                        acc = acc + sc.z.at(i, q) * sc.t.at(q, p);
                     zt.at(i, p) = acc;
                 }
             for (crd::usize i = 0; i < n; ++i)
                 for (crd::usize j = 0; j < n; ++j)
                 {
                     C acc{0.0, 0.0};
-                    for (crd::usize p = 0; p < n; ++p) acc = acc + zt.at(i, p) * crd::hesap::conj(sc.z.at(j, p));
+                    for (crd::usize p = 0; p < n; ++p)
+                        acc = acc + zt.at(i, p) * crd::hesap::conj(sc.z.at(j, p));
                     recon = std::max(recon, std::abs(acc.re - hmat.at(i, j).re) + std::abs(acc.im - hmat.at(i, j).im));
                 }
         }
@@ -327,37 +342,47 @@ int main()
         crd::f64 lt = 0.0;
         if (run_refs)
         {
-            et = time_loop([&]() {
-                Eigen::ComplexSchur<Eigen::MatrixXcd> cs;
-                cs.computeFromHessenberg(eh, Eigen::MatrixXcd::Identity(static_cast<Eigen::Index>(n),
-                                                                        static_cast<Eigen::Index>(n)),
-                                         true);
-                volatile crd::f64 sink = cs.matrixT()(0, 0).real();
-                (void)sink;
-            });
-            crd::containers::Array<std::complex<double>> hcm(&alloc), w(&alloc), zlp(&alloc), wk(&alloc);
+            et = time_loop(
+                [&]()
+                {
+                    Eigen::ComplexSchur<Eigen::MatrixXcd> cs;
+                    cs.computeFromHessenberg(
+                        eh, Eigen::MatrixXcd::Identity(static_cast<Eigen::Index>(n), static_cast<Eigen::Index>(n)),
+                        true);
+                    volatile crd::f64 sink = cs.matrixT()(0, 0).real();
+                    (void)sink;
+                });
+            crd::containers::Array<std::complex<double>> hcm(&alloc);
+            crd::containers::Array<std::complex<double>> w(&alloc);
+            crd::containers::Array<std::complex<double>> zlp(&alloc);
+            crd::containers::Array<std::complex<double>> wk(&alloc);
             hcm.resize(n * n);
             w.resize(n);
             zlp.resize(n * n);
-            int info = 0, lwork = -1;
+            int info = 0;
+            int lwork = -1;
             const int one_i = 1;
             std::complex<double> wq = 0.0;
             zhseqr_("S", "I", &ni, &one_i, &ni, hcm0.data(), &ni, w.data(), zlp.data(), &ni, &wq, &lwork, &info);
             lwork = static_cast<int>(wq.real());
             wk.resize(static_cast<crd::usize>(lwork > 0 ? lwork : 1));
-            lt = time_loop([&]() {
-                for (crd::usize k = 0; k < n * n; ++k) hcm[k] = hcm0[k];
-                int inf = 0;
-                zhseqr_("S", "I", &ni, &one_i, &ni, hcm.data(), &ni, w.data(), zlp.data(), &ni, wk.data(), &lwork, &inf);
-            });
+            lt = time_loop(
+                [&]()
+                {
+                    for (crd::usize k = 0; k < n * n; ++k)
+                        hcm[k] = hcm0[k];
+                    int inf = 0;
+                    zhseqr_("S", "I", &ni, &one_i, &ni, hcm.data(), &ni, w.data(), zlp.data(), &ni, wk.data(), &lwork,
+                            &inf);
+                });
         }
 
         if (run_refs)
-            std::fprintf(stdout, "%-6zu | %8.4f | %8.4f %6.2fx | %8.4f %6.2fx | %.1e\n",
-                         static_cast<size_t>(n), ct * 1e3, et * 1e3, et / ct, lt * 1e3, lt / ct, recon);
+            std::fprintf(stdout, "%-6zu | %8.4f | %8.4f %6.2fx | %8.4f %6.2fx | %.1e\n", static_cast<size_t>(n),
+                         ct * 1e3, et * 1e3, et / ct, lt * 1e3, lt / ct, recon);
         else
-            std::fprintf(stdout, "%-6zu | %8.4f | %8s %7s | %8s %7s | %.1e\n", static_cast<size_t>(n),
-                         ct * 1e3, "ref-AV", "n/a", "n/a", "n/a", recon);
+            std::fprintf(stdout, "%-6zu | %8.4f | %8s %7s | %8s %7s | %.1e\n", static_cast<size_t>(n), ct * 1e3,
+                         "ref-AV", "n/a", "n/a", "n/a", recon);
     }
 
     // ==== complex Schur AED vs single-shift complex_schur (c64): the scale crush ====
@@ -367,8 +392,7 @@ int main()
     // converges a whole window per inner Schur (the swp column collapses). Single-
     // shot timing at large n (each call is expensive).
     std::fprintf(stdout, "\n==== complex Schur AED vs single-shift (c64): the scale crush ====\n");
-    std::fprintf(stdout, "%-6s | %-9s %-5s | %-9s | %-7s | %-7s\n", "n", "AED", "swp", "1shift",
-                 "1s/AED", "recon");
+    std::fprintf(stdout, "%-6s | %-9s %-5s | %-9s | %-7s | %-7s\n", "n", "AED", "swp", "1shift", "1s/AED", "recon");
     std::fprintf(stdout, "%s\n", "-----------------------------------------------------------------");
     for (crd::usize n : {crd::usize{128}, crd::usize{256}, crd::usize{400}, crd::usize{512}})
     {
@@ -393,11 +417,13 @@ int main()
         const bool large = (n > 256);
         crd::usize sweeps = 0;
         crd::f64 recon = 0.0;
-        const crd::f64 t_aed = timed(large, [&]() {
-            auto sc = complex_schur_aed<C>(&alloc, hmat, 0, n - 1, true, &sweeps);
-            volatile crd::f64 sink = sc.t.at(0, 0).re;
-            (void)sink;
-        });
+        const crd::f64 t_aed = timed(large,
+                                     [&]()
+                                     {
+                                         auto sc = complex_schur_aed<C>(&alloc, hmat, 0, n - 1, true, &sweeps);
+                                         volatile crd::f64 sink = sc.t.at(0, 0).re;
+                                         (void)sink;
+                                     });
         {
             auto sc = complex_schur_aed<C>(&alloc, hmat, 0, n - 1, true, &sweeps);
             Matrix<C> zt(&alloc, n, n);
@@ -405,30 +431,34 @@ int main()
                 for (crd::usize p = 0; p < n; ++p)
                 {
                     C acc{0.0, 0.0};
-                    for (crd::usize q = 0; q < n; ++q) acc = acc + sc.z.at(i, q) * sc.t.at(q, p);
+                    for (crd::usize q = 0; q < n; ++q)
+                        acc = acc + sc.z.at(i, q) * sc.t.at(q, p);
                     zt.at(i, p) = acc;
                 }
             for (crd::usize i = 0; i < n; ++i)
                 for (crd::usize j = 0; j < n; ++j)
                 {
                     C acc{0.0, 0.0};
-                    for (crd::usize p = 0; p < n; ++p) acc = acc + zt.at(i, p) * crd::hesap::conj(sc.z.at(j, p));
+                    for (crd::usize p = 0; p < n; ++p)
+                        acc = acc + zt.at(i, p) * crd::hesap::conj(sc.z.at(j, p));
                     recon = std::max(recon, std::abs(acc.re - hmat.at(i, j).re) + std::abs(acc.im - hmat.at(i, j).im));
                 }
         }
-        const crd::f64 t_1s = timed(large, [&]() {
-            auto sc = complex_schur<C>(&alloc, hmat, 0, n - 1, true);
-            volatile crd::f64 sink = sc.t.at(0, 0).re;
-            (void)sink;
-        });
-        std::fprintf(stdout, "%-6zu | %8.4f %5zu | %8.4f | %6.2fx | %.1e\n", static_cast<size_t>(n),
-                     t_aed * 1e3, static_cast<size_t>(sweeps), t_1s * 1e3, t_1s / t_aed, recon);
+        const crd::f64 t_1s = timed(large,
+                                    [&]()
+                                    {
+                                        auto sc = complex_schur<C>(&alloc, hmat, 0, n - 1, true);
+                                        volatile crd::f64 sink = sc.t.at(0, 0).re;
+                                        (void)sink;
+                                    });
+        std::fprintf(stdout, "%-6zu | %8.4f %5zu | %8.4f | %6.2fx | %.1e\n", static_cast<size_t>(n), t_aed * 1e3,
+                     static_cast<size_t>(sweeps), t_1s * 1e3, t_1s / t_aed, recon);
     }
 
     // ==== real Schur form: AED driver vs pure dlahqr vs Eigen vs LAPACK ====
     std::fprintf(stdout, "\n==== real Schur (from Hessenberg, f64): AED vs pure-dlahqr vs Eigen vs LAPACK ====\n");
-    std::fprintf(stdout, "%-6s | %-9s %-7s | %-9s %-7s | %-9s %-7s | %-9s %-7s | %-7s\n", "n",
-                 "AED", "swp", "dlahqr", "A/dlq", "EigRS", "A/Eig", "dhseqr", "A/lp", "recon");
+    std::fprintf(stdout, "%-6s | %-9s %-7s | %-9s %-7s | %-9s %-7s | %-9s %-7s | %-7s\n", "n", "AED", "swp", "dlahqr",
+                 "A/dlq", "EigRS", "A/Eig", "dhseqr", "A/lp", "recon");
     std::fprintf(stdout, "%s\n",
                  "------------------------------------------------------------------------------------");
     // n>400: LAPACK dhseqr (OpenBLAS-generic on MSVC) crashes >512, so the LAPACK
@@ -475,11 +505,13 @@ int main()
         const bool large = (n > 400);
         crd::usize sweeps = 0;
         crd::f64 recon = 0.0;
-        const crd::f64 t_aed = timed(large, [&]() {
-            auto sc = schur_aed<crd::f64>(&alloc, hmat, 0, n - 1, true, &sweeps);
-            volatile crd::f64 sink = sc.t.at(0, 0);
-            (void)sink;
-        });
+        const crd::f64 t_aed = timed(large,
+                                     [&]()
+                                     {
+                                         auto sc = schur_aed<crd::f64>(&alloc, hmat, 0, n - 1, true, &sweeps);
+                                         volatile crd::f64 sink = sc.t.at(0, 0);
+                                         (void)sink;
+                                     });
         {
             auto sc = schur_aed<crd::f64>(&alloc, hmat, 0, n - 1, true, &sweeps);
             // O(n^3) recon: ZT = Z*T, then max|ZT*Zᵀ - H| (NOT the O(n^4) naive form).
@@ -504,46 +536,57 @@ int main()
         crd::f64 t_dlq = 0.0;
         if (!large)
         {
-            t_dlq = time_loop([&]() {
-                auto sc = real_schur<crd::f64>(&alloc, hmat, 0, n - 1, true);
-                volatile crd::f64 sink = sc.t.at(0, 0);
+            t_dlq = time_loop(
+                [&]()
+                {
+                    auto sc = real_schur<crd::f64>(&alloc, hmat, 0, n - 1, true);
+                    volatile crd::f64 sink = sc.t.at(0, 0);
+                    (void)sink;
+                });
+        }
+        const crd::f64 t_eig = timed(
+            large,
+            [&]()
+            {
+                Eigen::RealSchur<Eigen::MatrixXd> rs;
+                rs.computeFromHessenberg(
+                    eh, Eigen::MatrixXd::Identity(static_cast<Eigen::Index>(n), static_cast<Eigen::Index>(n)), true);
+                volatile crd::f64 sink = rs.matrixT()(0, 0);
                 (void)sink;
             });
-        }
-        const crd::f64 t_eig = timed(large, [&]() {
-            Eigen::RealSchur<Eigen::MatrixXd> rs;
-            rs.computeFromHessenberg(eh, Eigen::MatrixXd::Identity(static_cast<Eigen::Index>(n),
-                                                                   static_cast<Eigen::Index>(n)),
-                                     true);
-            volatile crd::f64 sink = rs.matrixT()(0, 0);
-            (void)sink;
-        });
         const bool run_lapack = (n <= 400);
         crd::f64 t_lp = 0.0;
         if (run_lapack)
         {
-            crd::containers::Array<crd::f64> hcm(&alloc), wr(&alloc), wi(&alloc), zlp(&alloc), wk(&alloc);
+            crd::containers::Array<crd::f64> hcm(&alloc);
+            crd::containers::Array<crd::f64> wr(&alloc);
+            crd::containers::Array<crd::f64> wi(&alloc);
+            crd::containers::Array<crd::f64> zlp(&alloc);
+            crd::containers::Array<crd::f64> wk(&alloc);
             hcm.resize(n * n);
             wr.resize(n);
             wi.resize(n);
             zlp.resize(n * n);
-            int info = 0, lwork = -1;
+            int info = 0;
+            int lwork = -1;
             const int one_i = 1;
             crd::f64 wq = 0.0;
-            dhseqr_("S", "I", &ni, &one_i, &ni, hcm0.data(), &ni, wr.data(), wi.data(), zlp.data(), &ni,
-                    &wq, &lwork, &info);
+            dhseqr_("S", "I", &ni, &one_i, &ni, hcm0.data(), &ni, wr.data(), wi.data(), zlp.data(), &ni, &wq, &lwork,
+                    &info);
             lwork = static_cast<int>(wq);
             wk.resize(static_cast<crd::usize>(lwork > 0 ? lwork : 1));
-            t_lp = time_loop([&]() {
-                for (crd::usize k = 0; k < n * n; ++k) hcm[k] = hcm0[k];
-                int inf = 0;
-                dhseqr_("S", "I", &ni, &one_i, &ni, hcm.data(), &ni, wr.data(), wi.data(), zlp.data(),
-                        &ni, wk.data(), &lwork, &inf);
-            });
+            t_lp = time_loop(
+                [&]()
+                {
+                    for (crd::usize k = 0; k < n * n; ++k)
+                        hcm[k] = hcm0[k];
+                    int inf = 0;
+                    dhseqr_("S", "I", &ni, &one_i, &ni, hcm.data(), &ni, wr.data(), wi.data(), zlp.data(), &ni,
+                            wk.data(), &lwork, &inf);
+                });
         }
 
-        std::fprintf(stdout, "%-6zu | %8.4f %6zu | ", static_cast<size_t>(n), t_aed * 1e3,
-                     static_cast<size_t>(sweeps));
+        std::fprintf(stdout, "%-6zu | %8.4f %6zu | ", static_cast<size_t>(n), t_aed * 1e3, static_cast<size_t>(sweeps));
         if (!large)
             std::fprintf(stdout, "%8.4f %6.2fx | ", t_dlq * 1e3, t_dlq / t_aed);
         else
@@ -560,16 +603,15 @@ int main()
     // of the already-crushing values-only Schur. `recon` = worst per-eigenpair
     // ‖A·vₖ − λₖ·vₖ‖∞/‖vₖ‖∞; `dλ` = max sorted-eigenvalue diff vs Eigen.
     std::fprintf(stdout, "\n==== full eig (general A, f64): Cerid vs Eigen EigenSolver vs LAPACK dgeev ====\n");
-    std::fprintf(stdout, "%-6s | %-9s | %-9s %-7s | %-9s %-7s | %-8s %-8s\n", "n", "Cerid", "EigES",
-                 "C/Eig", "dgeev", "C/lp", "resid", "dlam");
-    std::fprintf(stdout, "%s\n",
-                 "--------------------------------------------------------------------------------");
+    std::fprintf(stdout, "%-6s | %-9s | %-9s %-7s | %-9s %-7s | %-8s %-8s\n", "n", "Cerid", "EigES", "C/Eig", "dgeev",
+                 "C/lp", "resid", "dlam");
+    std::fprintf(stdout, "%s\n", "--------------------------------------------------------------------------------");
     for (crd::usize n : {crd::usize{100}, crd::usize{200}, crd::usize{400}})
     {
         const int ni = static_cast<int>(n);
         Matrix<crd::f64> a0(&alloc, n, n);
         Eigen::MatrixXd ea(static_cast<Eigen::Index>(n), static_cast<Eigen::Index>(n));
-        crd::containers::Array<crd::f64> acm0(&alloc);  // column-major for LAPACK
+        crd::containers::Array<crd::f64> acm0(&alloc); // column-major for LAPACK
         acm0.resize(n * n);
         crd::u32 s = 90211U + static_cast<crd::u32>(n);
         for (crd::usize i = 0; i < n; ++i)
@@ -584,15 +626,18 @@ int main()
             }
         }
 
-        const crd::f64 t_cerid = time_loop([&]() {
-            EigNonsym<crd::f64> e = eig<crd::f64>(&alloc, a0);
-            volatile crd::f64 sink = e.values.data()[0].re;
-            (void)sink;
-        });
+        const crd::f64 t_cerid = time_loop(
+            [&]()
+            {
+                EigNonsym<crd::f64> e = eig<crd::f64>(&alloc, a0);
+                volatile crd::f64 sink = e.values.data()[0].re;
+                (void)sink;
+            });
 
         // Worst residual + collect Cerid eigenvalues for the match check.
         crd::f64 resid = 0.0;
-        crd::containers::Array<crd::f64> cwr(&alloc), cwi(&alloc);
+        crd::containers::Array<crd::f64> cwr(&alloc);
+        crd::containers::Array<crd::f64> cwi(&alloc);
         cwr.resize(n);
         cwi.resize(n);
         {
@@ -608,7 +653,8 @@ int main()
                     vnorm = std::max(vnorm, std::abs(e.vectors.at(i, k).re) + std::abs(e.vectors.at(i, k).im));
                 for (crd::usize i = 0; i < n; ++i)
                 {
-                    crd::f64 avre = 0.0, avim = 0.0;
+                    crd::f64 avre = 0.0;
+                    crd::f64 avim = 0.0;
                     for (crd::usize j = 0; j < n; ++j)
                     {
                         avre += a0.at(i, j) * e.vectors.at(j, k).re;
@@ -621,44 +667,64 @@ int main()
             }
         }
 
-        const crd::f64 t_eig = time_loop([&]() {
-            Eigen::EigenSolver<Eigen::MatrixXd> es(ea, true);
-            volatile crd::f64 sink = es.eigenvalues()(0).real();
-            (void)sink;
-        });
+        const crd::f64 t_eig = time_loop(
+            [&]()
+            {
+                Eigen::EigenSolver<Eigen::MatrixXd> es(ea, true);
+                volatile crd::f64 sink = es.eigenvalues()(0).real();
+                (void)sink;
+            });
 
         // LAPACK dgeev (column-major; right vectors only).
-        crd::containers::Array<crd::f64> acm(&alloc), lwr(&alloc), lwi(&alloc), vr(&alloc), wk(&alloc);
+        crd::containers::Array<crd::f64> acm(&alloc);
+        crd::containers::Array<crd::f64> lwr(&alloc);
+        crd::containers::Array<crd::f64> lwi(&alloc);
+        crd::containers::Array<crd::f64> vr(&alloc);
+        crd::containers::Array<crd::f64> wk(&alloc);
         acm.resize(n * n);
         lwr.resize(n);
         lwi.resize(n);
         vr.resize(n * n);
-        int info = 0, lwork = -1;
+        int info = 0;
+        int lwork = -1;
         crd::f64 wq = 0.0;
-        dgeev_("N", "V", &ni, acm0.data(), &ni, lwr.data(), lwi.data(), nullptr, &ni, vr.data(), &ni,
-               &wq, &lwork, &info);
+        dgeev_("N", "V", &ni, acm0.data(), &ni, lwr.data(), lwi.data(), nullptr, &ni, vr.data(), &ni, &wq, &lwork,
+               &info);
         lwork = static_cast<int>(wq);
         wk.resize(static_cast<crd::usize>(lwork > 0 ? lwork : 1));
-        const crd::f64 t_lp = time_loop([&]() {
-            for (crd::usize k = 0; k < n * n; ++k) acm[k] = acm0[k];
-            int inf = 0;
-            dgeev_("N", "V", &ni, acm.data(), &ni, lwr.data(), lwi.data(), nullptr, &ni, vr.data(), &ni,
-                   wk.data(), &lwork, &inf);
-        });
+        const crd::f64 t_lp = time_loop(
+            [&]()
+            {
+                for (crd::usize k = 0; k < n * n; ++k)
+                    acm[k] = acm0[k];
+                int inf = 0;
+                dgeev_("N", "V", &ni, acm.data(), &ni, lwr.data(), lwi.data(), nullptr, &ni, vr.data(), &ni, wk.data(),
+                       &lwork, &inf);
+            });
 
         // Eigenvalue match: sort both by (re, im), max abs diff.
-        auto sort_eigs = [&](crd::containers::Array<crd::f64>& wr, crd::containers::Array<crd::f64>& wi) {
+        auto sort_eigs = [&](crd::containers::Array<crd::f64>& wr, crd::containers::Array<crd::f64>& wi)
+        {
             crd::containers::Array<crd::usize> idx(&alloc);
             idx.resize(n);
-            for (crd::usize i = 0; i < n; ++i) idx[i] = i;
-            std::sort(idx.data(), idx.data() + n, [&](crd::usize p, crd::usize q) {
-                return wr[p] < wr[q] || (wr[p] == wr[q] && wi[p] < wi[q]);
-            });
-            crd::containers::Array<crd::f64> r(&alloc), m(&alloc);
+            for (crd::usize i = 0; i < n; ++i)
+                idx[i] = i;
+            std::sort(idx.data(), idx.data() + n,
+                      [&](crd::usize p, crd::usize q) { return wr[p] < wr[q] || (wr[p] == wr[q] && wi[p] < wi[q]); });
+            crd::containers::Array<crd::f64> r(&alloc);
+            crd::containers::Array<crd::f64> m(&alloc);
             r.resize(n);
             m.resize(n);
-            for (crd::usize i = 0; i < n; ++i) { r[i] = wr[idx[i]]; m[i] = wi[idx[i]]; }
-            for (crd::usize i = 0; i < n; ++i) { wr[i] = r[i]; wi[i] = m[i]; }
+            for (crd::usize i = 0; i < n; ++i)
+            {
+                r[i] = wr[idx[i]];
+                m[i] = wi[idx[i]];
+            }
+            for (crd::usize i = 0; i < n; ++i)
+            {
+                wr[i] = r[i];
+                wi[i] = m[i];
+            }
         };
         sort_eigs(cwr, cwi);
         sort_eigs(lwr, lwi);
@@ -666,9 +732,8 @@ int main()
         for (crd::usize i = 0; i < n; ++i)
             dlam = std::max(dlam, std::abs(cwr[i] - lwr[i]) + std::abs(std::abs(cwi[i]) - std::abs(lwi[i])));
 
-        std::fprintf(stdout, "%-6zu | %8.4f | %8.4f %6.2fx | %8.4f %6.2fx | %.1e %.1e\n",
-                     static_cast<size_t>(n), t_cerid * 1e3, t_eig * 1e3, t_eig / t_cerid, t_lp * 1e3,
-                     t_lp / t_cerid, resid, dlam);
+        std::fprintf(stdout, "%-6zu | %8.4f | %8.4f %6.2fx | %8.4f %6.2fx | %.1e %.1e\n", static_cast<size_t>(n),
+                     t_cerid * 1e3, t_eig * 1e3, t_eig / t_cerid, t_lp * 1e3, t_lp / t_cerid, resid, dlam);
     }
 
     // ==== complex full eig: Cerid eig vs Eigen ComplexEigenSolver vs zgeev ====
@@ -676,17 +741,16 @@ int main()
     // generic AV at n≥256, same fragility as the complex Schur above); Cerid alone
     // at 256. `resid` = worst ‖A·vₖ − λₖ·vₖ‖₁/‖vₖ‖₁.
     std::fprintf(stdout, "\n==== complex full eig (general A, c64): Cerid vs Eigen vs zgeev ====\n");
-    std::fprintf(stdout, "%-6s | %-9s | %-9s %-7s | %-9s %-7s | %-8s\n", "n", "Cerid", "EigCES",
-                 "C/Eig", "zgeev", "C/lp", "resid");
-    std::fprintf(stdout, "%s\n",
-                 "------------------------------------------------------------------------");
+    std::fprintf(stdout, "%-6s | %-9s | %-9s %-7s | %-9s %-7s | %-8s\n", "n", "Cerid", "EigCES", "C/Eig", "zgeev",
+                 "C/lp", "resid");
+    std::fprintf(stdout, "%s\n", "------------------------------------------------------------------------");
     for (crd::usize n : {crd::usize{64}, crd::usize{128}, crd::usize{256}})
     {
         const int ni = static_cast<int>(n);
         const bool run_refs = (n <= 128);
         Matrix<C> a0(&alloc, n, n);
         Eigen::MatrixXcd ea(static_cast<Eigen::Index>(n), static_cast<Eigen::Index>(n));
-        crd::containers::Array<std::complex<double>> acm0(&alloc);  // column-major for zgeev
+        crd::containers::Array<std::complex<double>> acm0(&alloc); // column-major for zgeev
         acm0.resize(n * n);
         crd::u32 s = 60611U + static_cast<crd::u32>(n);
         for (crd::usize i = 0; i < n; ++i)
@@ -701,11 +765,13 @@ int main()
                 acm0[j * n + i] = std::complex<double>(re, im);
             }
 
-        const crd::f64 t_cerid = timed(n > 128, [&]() {
-            EigNonsym<C> e = eig<C>(&alloc, a0);
-            volatile crd::f64 sink = e.values.data()[0].re;
-            (void)sink;
-        });
+        const crd::f64 t_cerid = timed(n > 128,
+                                       [&]()
+                                       {
+                                           EigNonsym<C> e = eig<C>(&alloc, a0);
+                                           volatile crd::f64 sink = e.values.data()[0].re;
+                                           (void)sink;
+                                       });
         crd::f64 resid = 0.0;
         {
             EigNonsym<C> e = eig<C>(&alloc, a0);
@@ -718,7 +784,8 @@ int main()
                 for (crd::usize i = 0; i < n; ++i)
                 {
                     C av{0.0, 0.0};
-                    for (crd::usize j = 0; j < n; ++j) av = av + a0.at(i, j) * e.vectors.at(j, k);
+                    for (crd::usize j = 0; j < n; ++j)
+                        av = av + a0.at(i, j) * e.vectors.at(j, k);
                     const C r = av - lam * e.vectors.at(i, k);
                     resid = std::max(resid, (std::abs(r.re) + std::abs(r.im)) / vnorm);
                 }
@@ -729,38 +796,46 @@ int main()
         crd::f64 t_lp = 0.0;
         if (run_refs)
         {
-            t_eig = time_loop([&]() {
-                Eigen::ComplexEigenSolver<Eigen::MatrixXcd> es(ea, true);
-                volatile crd::f64 sink = es.eigenvalues()(0).real();
-                (void)sink;
-            });
-            crd::containers::Array<std::complex<double>> acm(&alloc), w(&alloc), vr(&alloc), wk(&alloc);
+            t_eig = time_loop(
+                [&]()
+                {
+                    Eigen::ComplexEigenSolver<Eigen::MatrixXcd> es(ea, true);
+                    volatile crd::f64 sink = es.eigenvalues()(0).real();
+                    (void)sink;
+                });
+            crd::containers::Array<std::complex<double>> acm(&alloc);
+            crd::containers::Array<std::complex<double>> w(&alloc);
+            crd::containers::Array<std::complex<double>> vr(&alloc);
+            crd::containers::Array<std::complex<double>> wk(&alloc);
             crd::containers::Array<double> rwk(&alloc);
             acm.resize(n * n);
             w.resize(n);
             vr.resize(n * n);
             rwk.resize(2 * n);
-            int info = 0, lwork = -1;
+            int info = 0;
+            int lwork = -1;
             std::complex<double> wq = 0.0;
-            zgeev_("N", "V", &ni, acm0.data(), &ni, w.data(), nullptr, &ni, vr.data(), &ni, &wq, &lwork,
-                   rwk.data(), &info);
+            zgeev_("N", "V", &ni, acm0.data(), &ni, w.data(), nullptr, &ni, vr.data(), &ni, &wq, &lwork, rwk.data(),
+                   &info);
             lwork = static_cast<int>(wq.real());
             wk.resize(static_cast<crd::usize>(lwork > 0 ? lwork : 1));
-            t_lp = time_loop([&]() {
-                for (crd::usize k = 0; k < n * n; ++k) acm[k] = acm0[k];
-                int inf = 0;
-                zgeev_("N", "V", &ni, acm.data(), &ni, w.data(), nullptr, &ni, vr.data(), &ni, wk.data(),
-                       &lwork, rwk.data(), &inf);
-            });
+            t_lp = time_loop(
+                [&]()
+                {
+                    for (crd::usize k = 0; k < n * n; ++k)
+                        acm[k] = acm0[k];
+                    int inf = 0;
+                    zgeev_("N", "V", &ni, acm.data(), &ni, w.data(), nullptr, &ni, vr.data(), &ni, wk.data(), &lwork,
+                           rwk.data(), &inf);
+                });
         }
 
         if (run_refs)
-            std::fprintf(stdout, "%-6zu | %8.4f | %8.4f %6.2fx | %8.4f %6.2fx | %.1e\n",
-                         static_cast<size_t>(n), t_cerid * 1e3, t_eig * 1e3, t_eig / t_cerid, t_lp * 1e3,
-                         t_lp / t_cerid, resid);
+            std::fprintf(stdout, "%-6zu | %8.4f | %8.4f %6.2fx | %8.4f %6.2fx | %.1e\n", static_cast<size_t>(n),
+                         t_cerid * 1e3, t_eig * 1e3, t_eig / t_cerid, t_lp * 1e3, t_lp / t_cerid, resid);
         else
-            std::fprintf(stdout, "%-6zu | %8.4f | %8s %7s | %8s %7s | %.1e\n", static_cast<size_t>(n),
-                         t_cerid * 1e3, "ref-AV", "n/a", "n/a", "n/a", resid);
+            std::fprintf(stdout, "%-6zu | %8.4f | %8s %7s | %8s %7s | %.1e\n", static_cast<size_t>(n), t_cerid * 1e3,
+                         "ref-AV", "n/a", "n/a", "n/a", resid);
     }
 
     crd::jobs::shutdown();

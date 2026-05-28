@@ -154,7 +154,7 @@ usize TlsfAllocator::min_pool_size() noexcept
     return 3U * kBlockHeaderOverhead + kBlockMinSize;
 }
 
-TlsfAllocator::TlsfAllocator(usize capacity, IAllocator* parent, const char* name)
+TlsfAllocator::TlsfAllocator(usize capacity, IAllocator* parent, const char* name) noexcept
     : m_parent(parent != nullptr ? parent : default_allocator()), m_pool(nullptr), m_pool_capacity(0), m_fl_bitmap(0),
       m_sl_bitmap{}, m_free_lists{}
 {

@@ -1,4 +1,4 @@
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/renderer/forward_render_path.hpp>
 #include <crd/renderer/frame_graph.hpp>
@@ -1179,7 +1179,7 @@ TEST_CASE("add_swapchain_blit_pass appended after ForwardRenderPath passes build
 
 TEST_CASE("Renderer build_frame accepts material-path renderable with invalid variant", "[renderer][material_path]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     crd::resources::ResourceHandle<crd::renderer::MaterialTemplate> null_tmpl{};
     crd::renderer::MaterialInstance mat_inst(std::move(null_tmpl), &alloc);
 
@@ -1206,7 +1206,7 @@ TEST_CASE("Renderer build_frame accepts material-path renderable with invalid va
 
 TEST_CASE("Renderer build_frame copies material pointer into DrawItem", "[renderer][material_path]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     crd::resources::ResourceHandle<crd::renderer::MaterialTemplate> null_tmpl{};
     crd::renderer::MaterialInstance mat_inst(std::move(null_tmpl), &alloc);
 
@@ -1251,7 +1251,7 @@ TEST_CASE("ForwardRenderPath skips resolver for material-path items (null templa
     legacy_item.vertex_count  = 3;
 
     // One material-path item (null template → null pipelines → skipped).
-    crd::memory::MallocAllocator mat_alloc;
+    crd::memory::GrowableTlsfAllocator mat_alloc;
     crd::resources::ResourceHandle<crd::renderer::MaterialTemplate> null_tmpl{};
     crd::renderer::MaterialInstance mat_inst(std::move(null_tmpl), &mat_alloc);
 

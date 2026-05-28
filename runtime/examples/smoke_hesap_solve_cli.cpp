@@ -15,7 +15,7 @@
 #include <crd/hesap/resources/matrix_resource_loader.hpp>
 #include <crd/hesap/sparse/sparse_linear_op.hpp>
 #include <crd/hesap/sparse/triplet_builder.hpp>
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/resources/crdr.hpp>
 #include <crd/resources/resource_handle.hpp>
@@ -31,7 +31,7 @@ namespace hs   = crd::hesap::sparse;
 namespace hi   = crd::hesap::iterative;
 namespace hd   = crd::hesap::dense;
 
-static crd::memory::MallocAllocator g_alloc;
+static crd::memory::TlsfAllocator g_alloc{256ULL << 20};
 
 static hs::SparseMatrix<crd::f64, hs::SparseFormat::Csr> laplacian(crd::u32 n)
 {

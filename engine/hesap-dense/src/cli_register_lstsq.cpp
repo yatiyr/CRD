@@ -22,6 +22,7 @@
 
 namespace
 {
+using crd::hesap::Complex;
 using crd::hesap::cli::Capability;
 using crd::hesap::cli::CommandArgs;
 using crd::hesap::cli::CommandRegistry;
@@ -32,7 +33,6 @@ using crd::hesap::cli::ParamKind;
 using crd::hesap::cli::ParamSchema;
 using crd::hesap::cli::ResultBinaryBlob;
 using crd::hesap::cli::ResultError;
-using crd::hesap::Complex;
 using crd::hesap::dense::lstsq;
 using crd::hesap::dense::LstSqMethod;
 using crd::hesap::dense::Matrix;
@@ -69,8 +69,7 @@ CommandResult binary_result(crd::memory::IAllocator* alloc, crd::containers::Con
 
 // ---- real lstsq / pinv ------------------------------------------------
 
-template <typename T>
-CommandResult impl_lstsq(const CommandArgs& args)
+template <typename T> CommandResult impl_lstsq(const CommandArgs& args)
 {
     const auto a_flat = args.get_f64_array("A");
     const auto b_flat = args.get_f64_array("b");
@@ -105,8 +104,7 @@ CommandResult impl_lstsq(const CommandArgs& args)
     return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
 }
 
-template <typename T>
-CommandResult impl_pinv(const CommandArgs& args)
+template <typename T> CommandResult impl_pinv(const CommandArgs& args)
 {
     const auto a_flat = args.get_f64_array("A");
     const auto m = args.get_u64("m").value_or(crd::u64{0});
@@ -125,7 +123,7 @@ CommandResult impl_pinv(const CommandArgs& args)
             a.at(i, j) = static_cast<T>(a_flat[i * nn + j]);
         }
     }
-    const auto p = pinv<T>(args.alloc, a);  // n x m
+    const auto p = pinv<T>(args.alloc, a); // n x m
     crd::containers::Array<crd::f64> out(args.alloc);
     out.reserve(nn * mm);
     for (crd::usize j = 0; j < nn; ++j)
@@ -140,8 +138,7 @@ CommandResult impl_pinv(const CommandArgs& args)
 
 // ---- complex lstsq / pinv (interleaved [re,im]) -----------------------
 
-template <typename U>
-CommandResult impl_lstsq_complex(const CommandArgs& args)
+template <typename U> CommandResult impl_lstsq_complex(const CommandArgs& args)
 {
     using Cx = Complex<U>;
     const auto a_flat = args.get_f64_array("A");
@@ -179,8 +176,7 @@ CommandResult impl_lstsq_complex(const CommandArgs& args)
     return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
 }
 
-template <typename U>
-CommandResult impl_pinv_complex(const CommandArgs& args)
+template <typename U> CommandResult impl_pinv_complex(const CommandArgs& args)
 {
     using Cx = Complex<U>;
     const auto a_flat = args.get_f64_array("A");
@@ -201,7 +197,7 @@ CommandResult impl_pinv_complex(const CommandArgs& args)
             a.at(i, j) = Cx{static_cast<U>(a_flat[k]), static_cast<U>(a_flat[k + 1])};
         }
     }
-    const auto p = pinv<Cx>(args.alloc, a);  // n x m
+    const auto p = pinv<Cx>(args.alloc, a); // n x m
     crd::containers::Array<crd::f64> out(args.alloc);
     out.reserve(2 * nn * mm);
     for (crd::usize j = 0; j < nn; ++j)
@@ -217,8 +213,7 @@ CommandResult impl_pinv_complex(const CommandArgs& args)
 
 // ---- NNLS (real) ------------------------------------------------------
 
-template <typename T>
-CommandResult impl_nnls(const CommandArgs& args)
+template <typename T> CommandResult impl_nnls(const CommandArgs& args)
 {
     const auto a_flat = args.get_f64_array("A");
     const auto b_flat = args.get_f64_array("b");
@@ -259,8 +254,7 @@ CommandResult impl_nnls(const CommandArgs& args)
 
 // ---- TLS (real + complex; single RHS) ---------------------------------
 
-template <typename T>
-CommandResult impl_tls(const CommandArgs& args)
+template <typename T> CommandResult impl_tls(const CommandArgs& args)
 {
     const auto a_flat = args.get_f64_array("A");
     const auto b_flat = args.get_f64_array("b");
@@ -299,8 +293,7 @@ CommandResult impl_tls(const CommandArgs& args)
     return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
 }
 
-template <typename U>
-CommandResult impl_tls_complex(const CommandArgs& args)
+template <typename U> CommandResult impl_tls_complex(const CommandArgs& args)
 {
     using Cx = Complex<U>;
     const auto a_flat = args.get_f64_array("A");
@@ -353,8 +346,8 @@ CommandSchema make_schema(crd::memory::IAllocator* alloc, const char* name, cons
     return s;
 }
 
-void add_param(CommandSchema& s, crd::memory::IAllocator* alloc, const char* name, const char* desc,
-               ParamKind kind, bool required)
+void add_param(CommandSchema& s, crd::memory::IAllocator* alloc, const char* name, const char* desc, ParamKind kind,
+               bool required)
 {
     ParamSchema p{alloc};
     p.name = crd::containers::String{name, alloc};
@@ -368,133 +361,134 @@ void add_param(CommandSchema& s, crd::memory::IAllocator* alloc, const char* nam
 
 namespace crd::hesap::dense
 {
-void register_lstsq_cli_anchor() noexcept
-{
-}
+void register_lstsq_cli_anchor() noexcept {}
 } // namespace crd::hesap::dense
 
-CRD_HESAP_CLI_REGISTER_MODULE([](CommandRegistry& reg) {
-    auto* alloc = crd::memory::default_allocator();
+// Registration uses crd allocators (abort on OOM, never throw); the std bad_alloc path the check
+// traces is unreachable, and the registrar ctor is noexcept (would terminate, not escape) regardless.
+// NOLINTNEXTLINE(bugprone-throwing-static-initialization)
+CRD_HESAP_CLI_REGISTER_MODULE(
+    [](CommandRegistry& reg)
     {
-        auto s = make_schema(alloc, "hesap.dense.lstsq.f32",
-                             "Least-squares min-norm solve of min||A*x - b|| (f32).");
-        add_param(s, alloc, "m", "Rows of A", ParamKind::U64, true);
-        add_param(s, alloc, "n", "Columns of A", ParamKind::U64, true);
-        add_param(s, alloc, "A", "A flattened RowMajor (m*n)", ParamKind::F64, true);
-        add_param(s, alloc, "b", "RHS vector (m)", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_lstsq<crd::f32>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.lstsq.f64",
-                             "Least-squares min-norm solve of min||A*x - b|| (f64).");
-        add_param(s, alloc, "m", "Rows of A", ParamKind::U64, true);
-        add_param(s, alloc, "n", "Columns of A", ParamKind::U64, true);
-        add_param(s, alloc, "A", "A flattened RowMajor (m*n)", ParamKind::F64, true);
-        add_param(s, alloc, "b", "RHS vector (m)", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_lstsq<crd::f64>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.pinv.f32",
-                             "Moore-Penrose pseudoinverse A+ (n x m) via SVD (f32).");
-        add_param(s, alloc, "m", "Rows of A", ParamKind::U64, true);
-        add_param(s, alloc, "n", "Columns of A", ParamKind::U64, true);
-        add_param(s, alloc, "A", "A flattened RowMajor (m*n)", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_pinv<crd::f32>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.pinv.f64",
-                             "Moore-Penrose pseudoinverse A+ (n x m) via SVD (f64).");
-        add_param(s, alloc, "m", "Rows of A", ParamKind::U64, true);
-        add_param(s, alloc, "n", "Columns of A", ParamKind::U64, true);
-        add_param(s, alloc, "A", "A flattened RowMajor (m*n)", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_pinv<crd::f64>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.lstsq.c32",
-                             "Least-squares min-norm solve (Complex<f32>, interleaved).");
-        add_param(s, alloc, "m", "Rows of A", ParamKind::U64, true);
-        add_param(s, alloc, "n", "Columns of A", ParamKind::U64, true);
-        add_param(s, alloc, "A", "Complex A interleaved [re,im] (2*m*n) RowMajor", ParamKind::F64, true);
-        add_param(s, alloc, "b", "Complex RHS interleaved [re,im] (2*m)", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_lstsq_complex<crd::f32>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.lstsq.c64",
-                             "Least-squares min-norm solve (Complex<f64>, interleaved).");
-        add_param(s, alloc, "m", "Rows of A", ParamKind::U64, true);
-        add_param(s, alloc, "n", "Columns of A", ParamKind::U64, true);
-        add_param(s, alloc, "A", "Complex A interleaved [re,im] (2*m*n) RowMajor", ParamKind::F64, true);
-        add_param(s, alloc, "b", "Complex RHS interleaved [re,im] (2*m)", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_lstsq_complex<crd::f64>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.pinv.c32",
-                             "Moore-Penrose pseudoinverse A+ (Complex<f32>, interleaved).");
-        add_param(s, alloc, "m", "Rows of A", ParamKind::U64, true);
-        add_param(s, alloc, "n", "Columns of A", ParamKind::U64, true);
-        add_param(s, alloc, "A", "Complex A interleaved [re,im] (2*m*n) RowMajor", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_pinv_complex<crd::f32>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.pinv.c64",
-                             "Moore-Penrose pseudoinverse A+ (Complex<f64>, interleaved).");
-        add_param(s, alloc, "m", "Rows of A", ParamKind::U64, true);
-        add_param(s, alloc, "n", "Columns of A", ParamKind::U64, true);
-        add_param(s, alloc, "A", "Complex A interleaved [re,im] (2*m*n) RowMajor", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_pinv_complex<crd::f64>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.nnls.f32",
-                             "Non-negative least squares min||A*x-b|| s.t. x>=0 (Lawson-Hanson, f32).");
-        add_param(s, alloc, "m", "Rows of A", ParamKind::U64, true);
-        add_param(s, alloc, "n", "Columns of A", ParamKind::U64, true);
-        add_param(s, alloc, "A", "A flattened RowMajor (m*n)", ParamKind::F64, true);
-        add_param(s, alloc, "b", "RHS vector (m)", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_nnls<crd::f32>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.nnls.f64",
-                             "Non-negative least squares min||A*x-b|| s.t. x>=0 (Lawson-Hanson, f64).");
-        add_param(s, alloc, "m", "Rows of A", ParamKind::U64, true);
-        add_param(s, alloc, "n", "Columns of A", ParamKind::U64, true);
-        add_param(s, alloc, "A", "A flattened RowMajor (m*n)", ParamKind::F64, true);
-        add_param(s, alloc, "b", "RHS vector (m)", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_nnls<crd::f64>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.tls.f32",
-                             "Total least squares via SVD of [A|b] (errors in A and b, f32).");
-        add_param(s, alloc, "m", "Rows of A", ParamKind::U64, true);
-        add_param(s, alloc, "n", "Columns of A", ParamKind::U64, true);
-        add_param(s, alloc, "A", "A flattened RowMajor (m*n)", ParamKind::F64, true);
-        add_param(s, alloc, "b", "RHS vector (m)", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_tls<crd::f32>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.tls.f64",
-                             "Total least squares via SVD of [A|b] (errors in A and b, f64).");
-        add_param(s, alloc, "m", "Rows of A", ParamKind::U64, true);
-        add_param(s, alloc, "n", "Columns of A", ParamKind::U64, true);
-        add_param(s, alloc, "A", "A flattened RowMajor (m*n)", ParamKind::F64, true);
-        add_param(s, alloc, "b", "RHS vector (m)", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_tls<crd::f64>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.tls.c32",
-                             "Total least squares (Complex<f32>, interleaved).");
-        add_param(s, alloc, "m", "Rows of A", ParamKind::U64, true);
-        add_param(s, alloc, "n", "Columns of A", ParamKind::U64, true);
-        add_param(s, alloc, "A", "Complex A interleaved [re,im] (2*m*n) RowMajor", ParamKind::F64, true);
-        add_param(s, alloc, "b", "Complex RHS interleaved [re,im] (2*m)", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_tls_complex<crd::f32>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.tls.c64",
-                             "Total least squares (Complex<f64>, interleaved).");
-        add_param(s, alloc, "m", "Rows of A", ParamKind::U64, true);
-        add_param(s, alloc, "n", "Columns of A", ParamKind::U64, true);
-        add_param(s, alloc, "A", "Complex A interleaved [re,im] (2*m*n) RowMajor", ParamKind::F64, true);
-        add_param(s, alloc, "b", "Complex RHS interleaved [re,im] (2*m)", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_tls_complex<crd::f64>);
-    }
-});
+        auto* alloc = crd::memory::default_allocator();
+        {
+            auto s =
+                make_schema(alloc, "hesap.dense.lstsq.f32", "Least-squares min-norm solve of min||A*x - b|| (f32).");
+            add_param(s, alloc, "m", "Rows of A", ParamKind::U64, true);
+            add_param(s, alloc, "n", "Columns of A", ParamKind::U64, true);
+            add_param(s, alloc, "A", "A flattened RowMajor (m*n)", ParamKind::F64, true);
+            add_param(s, alloc, "b", "RHS vector (m)", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_lstsq<crd::f32>);
+        }
+        {
+            auto s =
+                make_schema(alloc, "hesap.dense.lstsq.f64", "Least-squares min-norm solve of min||A*x - b|| (f64).");
+            add_param(s, alloc, "m", "Rows of A", ParamKind::U64, true);
+            add_param(s, alloc, "n", "Columns of A", ParamKind::U64, true);
+            add_param(s, alloc, "A", "A flattened RowMajor (m*n)", ParamKind::F64, true);
+            add_param(s, alloc, "b", "RHS vector (m)", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_lstsq<crd::f64>);
+        }
+        {
+            auto s =
+                make_schema(alloc, "hesap.dense.pinv.f32", "Moore-Penrose pseudoinverse A+ (n x m) via SVD (f32).");
+            add_param(s, alloc, "m", "Rows of A", ParamKind::U64, true);
+            add_param(s, alloc, "n", "Columns of A", ParamKind::U64, true);
+            add_param(s, alloc, "A", "A flattened RowMajor (m*n)", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_pinv<crd::f32>);
+        }
+        {
+            auto s =
+                make_schema(alloc, "hesap.dense.pinv.f64", "Moore-Penrose pseudoinverse A+ (n x m) via SVD (f64).");
+            add_param(s, alloc, "m", "Rows of A", ParamKind::U64, true);
+            add_param(s, alloc, "n", "Columns of A", ParamKind::U64, true);
+            add_param(s, alloc, "A", "A flattened RowMajor (m*n)", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_pinv<crd::f64>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.lstsq.c32",
+                                 "Least-squares min-norm solve (Complex<f32>, interleaved).");
+            add_param(s, alloc, "m", "Rows of A", ParamKind::U64, true);
+            add_param(s, alloc, "n", "Columns of A", ParamKind::U64, true);
+            add_param(s, alloc, "A", "Complex A interleaved [re,im] (2*m*n) RowMajor", ParamKind::F64, true);
+            add_param(s, alloc, "b", "Complex RHS interleaved [re,im] (2*m)", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_lstsq_complex<crd::f32>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.lstsq.c64",
+                                 "Least-squares min-norm solve (Complex<f64>, interleaved).");
+            add_param(s, alloc, "m", "Rows of A", ParamKind::U64, true);
+            add_param(s, alloc, "n", "Columns of A", ParamKind::U64, true);
+            add_param(s, alloc, "A", "Complex A interleaved [re,im] (2*m*n) RowMajor", ParamKind::F64, true);
+            add_param(s, alloc, "b", "Complex RHS interleaved [re,im] (2*m)", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_lstsq_complex<crd::f64>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.pinv.c32",
+                                 "Moore-Penrose pseudoinverse A+ (Complex<f32>, interleaved).");
+            add_param(s, alloc, "m", "Rows of A", ParamKind::U64, true);
+            add_param(s, alloc, "n", "Columns of A", ParamKind::U64, true);
+            add_param(s, alloc, "A", "Complex A interleaved [re,im] (2*m*n) RowMajor", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_pinv_complex<crd::f32>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.pinv.c64",
+                                 "Moore-Penrose pseudoinverse A+ (Complex<f64>, interleaved).");
+            add_param(s, alloc, "m", "Rows of A", ParamKind::U64, true);
+            add_param(s, alloc, "n", "Columns of A", ParamKind::U64, true);
+            add_param(s, alloc, "A", "Complex A interleaved [re,im] (2*m*n) RowMajor", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_pinv_complex<crd::f64>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.nnls.f32",
+                                 "Non-negative least squares min||A*x-b|| s.t. x>=0 (Lawson-Hanson, f32).");
+            add_param(s, alloc, "m", "Rows of A", ParamKind::U64, true);
+            add_param(s, alloc, "n", "Columns of A", ParamKind::U64, true);
+            add_param(s, alloc, "A", "A flattened RowMajor (m*n)", ParamKind::F64, true);
+            add_param(s, alloc, "b", "RHS vector (m)", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_nnls<crd::f32>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.nnls.f64",
+                                 "Non-negative least squares min||A*x-b|| s.t. x>=0 (Lawson-Hanson, f64).");
+            add_param(s, alloc, "m", "Rows of A", ParamKind::U64, true);
+            add_param(s, alloc, "n", "Columns of A", ParamKind::U64, true);
+            add_param(s, alloc, "A", "A flattened RowMajor (m*n)", ParamKind::F64, true);
+            add_param(s, alloc, "b", "RHS vector (m)", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_nnls<crd::f64>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.tls.f32",
+                                 "Total least squares via SVD of [A|b] (errors in A and b, f32).");
+            add_param(s, alloc, "m", "Rows of A", ParamKind::U64, true);
+            add_param(s, alloc, "n", "Columns of A", ParamKind::U64, true);
+            add_param(s, alloc, "A", "A flattened RowMajor (m*n)", ParamKind::F64, true);
+            add_param(s, alloc, "b", "RHS vector (m)", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_tls<crd::f32>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.tls.f64",
+                                 "Total least squares via SVD of [A|b] (errors in A and b, f64).");
+            add_param(s, alloc, "m", "Rows of A", ParamKind::U64, true);
+            add_param(s, alloc, "n", "Columns of A", ParamKind::U64, true);
+            add_param(s, alloc, "A", "A flattened RowMajor (m*n)", ParamKind::F64, true);
+            add_param(s, alloc, "b", "RHS vector (m)", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_tls<crd::f64>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.tls.c32", "Total least squares (Complex<f32>, interleaved).");
+            add_param(s, alloc, "m", "Rows of A", ParamKind::U64, true);
+            add_param(s, alloc, "n", "Columns of A", ParamKind::U64, true);
+            add_param(s, alloc, "A", "Complex A interleaved [re,im] (2*m*n) RowMajor", ParamKind::F64, true);
+            add_param(s, alloc, "b", "Complex RHS interleaved [re,im] (2*m)", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_tls_complex<crd::f32>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.tls.c64", "Total least squares (Complex<f64>, interleaved).");
+            add_param(s, alloc, "m", "Rows of A", ParamKind::U64, true);
+            add_param(s, alloc, "n", "Columns of A", ParamKind::U64, true);
+            add_param(s, alloc, "A", "Complex A interleaved [re,im] (2*m*n) RowMajor", ParamKind::F64, true);
+            add_param(s, alloc, "b", "Complex RHS interleaved [re,im] (2*m)", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_tls_complex<crd::f64>);
+        }
+    });

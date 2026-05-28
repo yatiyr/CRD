@@ -1,6 +1,6 @@
 // crd-perf v0f -- CPROF capture format save + CaptureView round-trip.
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/perf/perf.hpp>
 
@@ -15,7 +15,7 @@ namespace
 
 struct PerfCaptureFixture
 {
-    crd::memory::MallocAllocator alloc{"perf-capture-test"};
+    crd::memory::GrowableTlsfAllocator alloc{256ULL << 20, nullptr, "perf-capture-test"};
     PerfCaptureFixture() { crd::perf::init({}); }
     ~PerfCaptureFixture() { crd::perf::shutdown(); }
 };
@@ -173,7 +173,7 @@ TEST_CASE("interned names round-trip via name blob", "[perf][capture][names]")
 TEST_CASE("save_capture on inactive profiler returns empty buffer",
           "[perf][capture][save][robustness]")
 {
-    crd::memory::MallocAllocator alloc{"inactive-test"};
+    crd::memory::GrowableTlsfAllocator alloc{256ULL << 20, nullptr, "inactive-test"};
     CHECK_FALSE(crd::perf::is_active());
     auto buf = crd::perf::save_capture_to_buffer(&alloc);
     CHECK(buf.size() == 0U);

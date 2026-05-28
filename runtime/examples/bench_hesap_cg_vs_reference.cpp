@@ -9,7 +9,15 @@
 // iterations, wall time, and Eigen/Cerid speedup.
 //
 // Gated behind CRD_BUILD_HESAP_VS_REFERENCE (CRD_SUITESPARSE_DIR).
+//
+// crd conventions throughout: crd::containers::Array (never std::vector),
+// crd::platform::fs::read_file_text + manual parse (never std::ifstream/string),
+// a named TlsfAllocator (never malloc), crd::f64/usize/i32/i64 (never raw types).
+// Raw double survives ONLY at the Eigen C++ API boundary; crd::f64 IS double.
 
+#include <crd/containers/array.hpp>
+#include <crd/containers/string.hpp>
+#include <crd/core/types.hpp>
 #include <crd/hesap/dense/vector.hpp>
 #include <crd/hesap/iterative/cg.hpp>
 #include <crd/hesap/iterative/minres.hpp>
@@ -18,19 +26,17 @@
 #include <crd/hesap/sparse/sparse_linear_op.hpp>
 #include <crd/hesap/sparse/triplet_builder.hpp>
 #include <crd/jobs/jobs.hpp>
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/tlsf_allocator.hpp>
+#include <crd/platform/filesystem.hpp>
 
-#include <Eigen/Sparse>
 #include <Eigen/IterativeLinearSolvers>
-#include <unsupported/Eigen/IterativeSolvers>
-
+#include <Eigen/Sparse>
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
-#include <fstream>
-#include <sstream>
-#include <string>
-#include <vector>
+#include <cstdlib> // strtol / strtod
+#include <cstring> // strncmp
+#include <unsupported/Eigen/IterativeSolvers>
 
 #ifndef CRD_SUITESPARSE_DIR
 #define CRD_SUITESPARSE_DIR "."
@@ -40,62 +46,92 @@ namespace hs = crd::hesap::sparse;
 namespace hi = crd::hesap::iterative;
 namespace hd = crd::hesap::dense;
 namespace hp = crd::hesap::preconditioners;
-using Clock  = std::chrono::steady_clock;
+namespace fs = crd::platform::fs;
+using Clock = std::chrono::steady_clock;
 
-static crd::memory::MallocAllocator g_alloc;
+static crd::memory::TlsfAllocator g_alloc{crd::usize{1} << 30}; // 1 GiB pool — named allocator, never malloc
 
 struct Trip
 {
-    int    r, c;
-    double v;
+    crd::i32 r, c;
+    crd::f64 v;
 };
 struct Mtx
 {
-    int               n = 0;
-    std::vector<Trip> trips;
-    bool              ok = false;
+    crd::i32 n = 0;
+    crd::containers::Array<Trip> trips{&g_alloc};
+    bool ok = false;
 };
 
-static Mtx read_mtx(const std::string& path)
+// Matrix-Market reader, crd-native: read the whole file into a crd::String via the
+// platform filesystem, then hand-parse with strtol/strtod (no std::ifstream / std::string
+// line buffers / std::stringstream). DATA lands in crd::containers::Array<Trip>.
+static Mtx read_mtx(const char* path)
 {
-    Mtx           m;
-    std::ifstream f(path);
-    if (!f)
+    Mtx m;
+    crd::containers::String text(&g_alloc);
+    if (!fs::read_file_text(fs::Path{path}, text))
     {
         return m;
     }
-    std::string line;
-    bool        header = false;
-    bool        sym    = false;
-    int         rows = 0, cols = 0, nnz = 0, seen = 0;
-    while (std::getline(f, line))
+    const char* p = text.c_str();
+    const char* end = p + text.size();
+    bool sym = false;
+    bool dims_read = false;
+    crd::i32 rows = 0;
+    crd::i32 nnz = 0;
+    crd::i32 seen = 0;
+    while (p < end)
     {
-        if (line.empty())
+        while (p < end && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n'))
         {
-            continue;
+            ++p;
         }
-        if (line[0] == '%')
+        if (p >= end)
         {
-            if (!header && line.find("symmetric") != std::string::npos)
+            break;
+        }
+        if (*p == '%')
+        {
+            const char* eol = p;
+            while (eol < end && *eol != '\n')
             {
-                sym = true;
+                ++eol;
             }
-            header = true;
+            if (!dims_read)
+            {
+                for (const char* q = p; q + 9 <= eol; ++q)
+                {
+                    if (std::strncmp(q, "symmetric", 9) == 0)
+                    {
+                        sym = true;
+                        break;
+                    }
+                }
+            }
+            p = eol;
             continue;
         }
-        std::istringstream ss(line);
-        if (rows == 0)
+        char* np = nullptr;
+        if (!dims_read)
         {
-            ss >> rows >> cols >> nnz;
+            rows = static_cast<crd::i32>(std::strtol(p, &np, 10));
+            p = np;
+            [[maybe_unused]] const crd::i32 cols = static_cast<crd::i32>(std::strtol(p, &np, 10));
+            p = np;
+            nnz = static_cast<crd::i32>(std::strtol(p, &np, 10));
+            p = np;
             m.n = rows;
-            m.trips.reserve(static_cast<std::size_t>(nnz) * (sym ? 2 : 1));
+            m.trips.reserve(static_cast<crd::usize>(nnz) * (sym ? 2 : 1));
+            dims_read = true;
             continue;
         }
-        int    i, j;
-        double v;
-        ss >> i >> j >> v;
-        --i;
-        --j;
+        const crd::i32 i = static_cast<crd::i32>(std::strtol(p, &np, 10)) - 1;
+        p = np;
+        const crd::i32 j = static_cast<crd::i32>(std::strtol(p, &np, 10)) - 1;
+        p = np;
+        const crd::f64 v = std::strtod(p, &np);
+        p = np;
         m.trips.push_back({i, j, v});
         if (sym && i != j)
         {
@@ -110,113 +146,141 @@ static Mtx read_mtx(const std::string& path)
     return m;
 }
 
-template <typename Fn>
-static double best_ms(Fn&& fn, int reps = 3)
+// Build "<dir>/<name>/<name>.mtx" with a crd::String (no std::string) and read it.
+static Mtx load_ss(const char* name)
+{
+    crd::containers::String p(&g_alloc);
+    p.append(CRD_SUITESPARSE_DIR);
+    p.append("/");
+    p.append(name);
+    p.append("/");
+    p.append(name);
+    p.append(".mtx");
+    return read_mtx(p.c_str());
+}
+
+template <typename Fn> static crd::f64 best_ms(Fn&& fn, crd::i32 reps = 3)
 {
     fn();
-    double best = 1e30;
-    for (int r = 0; r < reps; ++r)
+    crd::f64 best = 1e30;
+    for (crd::i32 r = 0; r < reps; ++r)
     {
         const auto t0 = Clock::now();
         fn();
         crd::jobs::frame_reset();
         const auto t1 = Clock::now();
-        best = std::min(best, std::chrono::duration<double, std::milli>(t1 - t0).count());
+        best = std::min(best, std::chrono::duration<crd::f64, std::milli>(t1 - t0).count());
     }
     return best;
 }
 
 static void run(const char* name)
 {
-    const std::string path = std::string(CRD_SUITESPARSE_DIR) + "/" + name + "/" + name + ".mtx";
-    Mtx               mtx  = read_mtx(path);
+    Mtx mtx = load_ss(name);
     if (!mtx.ok)
     {
         std::printf("  %-12s SKIP (not found)\n", name);
         return;
     }
-    const int    n   = mtx.n;
-    const double tol = 1e-6;
-    const int    cap = 3000;
+    const crd::i32 n = mtx.n;
+    const crd::f64 tol = 1e-6;
+    const crd::i32 cap = 3000;
 
     // Cerid CSR.
-    hs::TripletBuilder<double> tb(&g_alloc, static_cast<crd::u32>(n), static_cast<crd::u32>(n));
+    hs::TripletBuilder<crd::f64> tb(&g_alloc, static_cast<crd::u32>(n), static_cast<crd::u32>(n));
     for (const Trip& t : mtx.trips)
     {
         tb.add(static_cast<crd::u32>(t.r), static_cast<crd::u32>(t.c), t.v);
     }
     auto a = tb.compress();
-    hs::ParallelSparseLinearOp<double> op(a, &g_alloc);
-    hp::JacobiPreconditioner<double>   m(a, &g_alloc);
+    hs::ParallelSparseLinearOp<crd::f64> op(a, &g_alloc);
+    hp::JacobiPreconditioner<crd::f64> m(a, &g_alloc);
 
-    hd::Vector<double> b(&g_alloc, static_cast<crd::usize>(n));
+    hd::Vector<crd::f64> b(&g_alloc, static_cast<crd::usize>(n));
     b.fill(1.0);
 
-    hi::IterativeOptions<double> opts;
-    opts.rel_tol  = tol;
+    hi::IterativeOptions<crd::f64> opts;
+    opts.rel_tol = tol;
     opts.max_iter = static_cast<crd::usize>(cap);
 
     crd::usize cerid_iters = 0;
-    bool       cerid_conv  = false;
-    const double t_cerid = best_ms([&]() {
-        hd::Vector<double>        x(&g_alloc, static_cast<crd::usize>(n));
-        hi::KrylovWorkspace<double> ws(&g_alloc, static_cast<crd::usize>(n));
-        auto res    = hi::pcg<double>(op, m, b.span(), x.span(), opts, ws, &g_alloc);
-        cerid_iters = res.iterations;
-        cerid_conv  = res.converged;
-    });
+    bool cerid_conv = false;
+    const crd::f64 t_cerid = best_ms(
+        [&]()
+        {
+            hd::Vector<crd::f64> x(&g_alloc, static_cast<crd::usize>(n));
+            hi::KrylovWorkspace<crd::f64> ws(&g_alloc, static_cast<crd::usize>(n));
+            auto res = hi::pcg<crd::f64>(op, m, b.span(), x.span(), opts, ws, &g_alloc);
+            cerid_iters = res.iterations;
+            cerid_conv = res.converged;
+        });
 
     // Eigen CG + DiagonalPreconditioner (Jacobi), single-threaded.
-    std::vector<Eigen::Triplet<double>> et;
+    crd::containers::Array<Eigen::Triplet<double>> et(&g_alloc);
     et.reserve(mtx.trips.size());
     for (const Trip& t : mtx.trips)
     {
-        et.emplace_back(t.r, t.c, t.v);
+        et.push_back(Eigen::Triplet<double>(t.r, t.c, t.v));
     }
     Eigen::SparseMatrix<double> ea(n, n);
-    ea.setFromTriplets(et.begin(), et.end());
+    ea.setFromTriplets(et.data(), et.data() + et.size());
     Eigen::VectorXd eb = Eigen::VectorXd::Ones(n);
-    int             eig_iters = 0;
-    bool            eig_conv  = false;
-    const double    t_eig = best_ms([&]() {
-        Eigen::ConjugateGradient<Eigen::SparseMatrix<double>, Eigen::Lower | Eigen::Upper,
-                                 Eigen::DiagonalPreconditioner<double>>
-            cg;
-        cg.setMaxIterations(cap);
-        cg.setTolerance(tol);
-        cg.compute(ea); // bind + factor the preconditioner before solve
-        Eigen::VectorXd ex = cg.solve(eb);
-        eig_iters          = static_cast<int>(cg.iterations());
-        eig_conv           = (cg.info() == Eigen::Success);
-    });
+    crd::i64 eig_iters = 0;
+    bool eig_conv = false;
+    const crd::f64 t_eig = best_ms(
+        [&]()
+        {
+            Eigen::ConjugateGradient<Eigen::SparseMatrix<double>, Eigen::Lower | Eigen::Upper,
+                                     Eigen::DiagonalPreconditioner<double>>
+                cg;
+            cg.setMaxIterations(cap);
+            cg.setTolerance(tol);
+            cg.compute(ea); // bind + factor the preconditioner before solve
+            Eigen::VectorXd ex = cg.solve(eb);
+            eig_iters = static_cast<crd::i64>(cg.iterations());
+            eig_conv = (cg.info() == Eigen::Success);
+        });
 
-    const double ratio = t_eig / t_cerid;
-    std::printf("  %-12s n=%-7d nnz=%-9zu [%s] | Cerid PCG %5zu it %8.2f ms (%s) | Eigen CG %5d it %8.2f ms (%s) | "
+    const crd::f64 ratio = t_eig / t_cerid;
+    std::printf("  %-12s n=%-7d nnz=%-9zu [%s] | Cerid PCG %5zu it %8.2f ms (%s) | Eigen CG %5lld it %8.2f ms (%s) | "
                 "Eigen/Cerid=%.2fx %s\n",
                 name, n, a.nnz(), op.is_parallel() ? "parallel" : "serial", cerid_iters, t_cerid,
-                cerid_conv ? "conv" : "cap", eig_iters, t_eig, eig_conv ? "conv" : "cap", ratio,
+                cerid_conv ? "conv" : "cap", static_cast<long long>(eig_iters), t_eig, eig_conv ? "conv" : "cap", ratio,
                 (ratio >= 1.0 ? "WIN" : "loss"));
 
     // APPLES-TO-APPLES: Cerid Jacobi-MINRES vs Eigen Jacobi-MINRES (same algorithm
     // + same SPD preconditioner). v4c-2a-precond: preconditioned MINRES now solves
     // ill-conditioned SPD (bcsstk13) where unpreconditioned MINRES capped.
-    crd::usize cm_it = 0; bool cm_conv = false;
-    const double t_cm = best_ms([&]() {
-        hd::Vector<double>       x(&g_alloc, static_cast<crd::usize>(n));
-        hi::MinresWorkspace<double> ws(&g_alloc, static_cast<crd::usize>(n));
-        auto res = hi::minres<double>(op, &m, b.span(), x.span(), opts, ws, &g_alloc);
-        cm_it = res.iterations; cm_conv = res.converged;
-    });
-    int em_it = 0; bool em_conv = false;
-    const double t_em = best_ms([&]() {
-        Eigen::MINRES<Eigen::SparseMatrix<double>, Eigen::Lower | Eigen::Upper, Eigen::DiagonalPreconditioner<double>> s;
-        s.setMaxIterations(cap); s.setTolerance(tol); s.compute(ea);
-        Eigen::VectorXd ex = s.solve(eb);
-        em_it = static_cast<int>(s.iterations()); em_conv = (s.info() == Eigen::Success);
-    });
-    std::printf("    MINRES (same algo): Cerid %5zu it %8.2f ms (%s)  vs  Eigen %5d it %8.2f ms (%s)  Eigen/Cerid=%.2fx %s\n",
-                cm_it, t_cm, cm_conv ? "conv" : "cap", em_it, t_em, em_conv ? "conv" : "cap", t_em / t_cm,
-                (t_em / t_cm >= 1.0 ? "WIN" : "loss"));
+    crd::usize cm_it = 0;
+    bool cm_conv = false;
+    const crd::f64 t_cm = best_ms(
+        [&]()
+        {
+            hd::Vector<crd::f64> x(&g_alloc, static_cast<crd::usize>(n));
+            hi::MinresWorkspace<crd::f64> ws(&g_alloc, static_cast<crd::usize>(n));
+            auto res = hi::minres<crd::f64>(op, &m, b.span(), x.span(), opts, ws, &g_alloc);
+            cm_it = res.iterations;
+            cm_conv = res.converged;
+        });
+    crd::i64 em_it = 0;
+    bool em_conv = false;
+    const crd::f64 t_em = best_ms(
+        [&]()
+        {
+            Eigen::MINRES<Eigen::SparseMatrix<double>, Eigen::Lower | Eigen::Upper,
+                          Eigen::DiagonalPreconditioner<double>>
+                s;
+            s.setMaxIterations(cap);
+            s.setTolerance(tol);
+            s.compute(ea);
+            Eigen::VectorXd ex = s.solve(eb);
+            em_it = static_cast<crd::i64>(s.iterations());
+            em_conv = (s.info() == Eigen::Success);
+        });
+    std::printf(
+        "    MINRES (same algo): Cerid %5zu it %8.2f ms (%s)  vs  Eigen %5lld it %8.2f ms (%s)  Eigen/Cerid=%.2fx %s\n",
+        cm_it, t_cm, cm_conv ? "conv" : "cap", static_cast<long long>(em_it), t_em, em_conv ? "conv" : "cap",
+        t_em / t_cm, (t_em / t_cm >= 1.0 ? "WIN" : "loss"));
 }
 
 int main()

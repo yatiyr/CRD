@@ -7,7 +7,7 @@
 #include <crd/containers/array.hpp>
 #include <crd/jobs/jobs.hpp>
 #include <crd/log/log.hpp>
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/resources/crdr.hpp>
 #include <crd/resources/loader.hpp>
@@ -21,7 +21,7 @@
 
 using namespace crd::resources;
 
-static crd::memory::MallocAllocator g_alloc;
+static crd::memory::TlsfAllocator g_alloc{256ULL << 20};
 
 // ── Minimal BlobResource ──────────────────────────────────────────────────
 
@@ -33,7 +33,7 @@ struct BlobResource
 
 struct BlobResourceLoader final : public ILoader
 {
-    crd::memory::MallocAllocator m_alloc;
+    crd::memory::TlsfAllocator m_alloc{256ULL << 20};
 
     [[nodiscard]] crd::u32 type_fourcc()    const noexcept override { return kFourCC_BLOB; }
     [[nodiscard]] crd::u32 loader_version() const noexcept override { return 1U; }

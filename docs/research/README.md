@@ -11,7 +11,7 @@ Filename convention: `YYYY-MM-DD-<kebab-case-topic>.md` (2-4 word slug).
 
 | Date | Topic | Used by |
 | ---- | ----- | ------- |
-| _none yet_ | | |
+| 2026-05-27 | [Streaming allocators (virtual-memory substrate)](cerid-streaming-allocators.md) | Phase 2.2 S2+ (ADR-0085) |
 
 ## How to add an entry
 

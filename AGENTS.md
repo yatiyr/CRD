@@ -7,7 +7,7 @@
 
 Cerid is a **general-purpose C++20 real-time engine substrate**. Games are one consumer; **simulation (incl. robotics), medical visualization, DAW-class creative tools, CAD/CAM, and offline cinematic pipelines** are equal-class consumers. The architecture serves all of them; no domain is privileged.
 
-Shipped modules (~30): `core / log / memory / containers / math / platform / app / config / rhi / rhi-vulkan / rhi-compute / shader / renderer / imgui / jobs / resources / units / time / perf / perf-ui / scene / geometry-{primitives,bvh,convex,mesh,mesh-processing,spatial,polygon,delaunay,decomposition,bvh-gpu,viz} / meshgen / profile`. Planned: `eylem (physics; paused at v1b) / sdf / hesap (numerical) / curves / font / audio / animation / scripting (hot-reload C++) / ui / editor`.
+Shipped modules (~30): `core / log / vm / memory / containers / math / platform / app / config / rhi / rhi-vulkan / rhi-compute / shader / renderer / imgui / jobs / resources / units / time / perf / perf-ui / scene / geometry-{primitives,bvh,convex,mesh,mesh-processing,spatial,polygon,delaunay,decomposition,bvh-gpu,viz} / meshgen / profile`. Planned: `eylem (physics; paused at v1b) / sdf / hesap (numerical) / curves / font / audio / animation / scripting (hot-reload C++) / ui / editor`.
 
 ## Engineering Principles (non-negotiable)
 

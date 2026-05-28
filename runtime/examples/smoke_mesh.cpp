@@ -1,6 +1,6 @@
 #include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/renderer/mesh_resource.hpp>
 #include <crd/renderer/mesh_resource_loader.hpp>
@@ -16,7 +16,7 @@ using namespace crd::resources;
 
 int main()
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::TlsfAllocator alloc{256ULL << 20};
 
     // ── Build a MESH CRDR artifact with two primitives ─────────────────────
     //

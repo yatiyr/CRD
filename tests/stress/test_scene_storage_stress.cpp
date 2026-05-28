@@ -25,7 +25,7 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/jobs/jobs.hpp>
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/scene/query.hpp>
 #include <crd/scene/world.hpp>
 
@@ -124,7 +124,7 @@ void collect_chunks(World& w, crd::memory::IAllocator* alloc,
 
 TEST_CASE("scene stress -- parallel chunk read (archetype)", "[stress][scene]")
 {
-    crd::memory::MallocAllocator alloc("scene-stress-read");
+    crd::memory::GrowableTlsfAllocator alloc{256ULL << 20, nullptr, "scene-stress-read"};
     World w(&alloc);
     crd::containers::Array<EntityId> entities(&alloc);
     constexpr u32 kN = 6007U; // odd; spans many archetype chunks
@@ -179,7 +179,7 @@ TEST_CASE("scene stress -- parallel chunk read (archetype)", "[stress][scene]")
 
 TEST_CASE("scene stress -- parallel disjoint chunk write (archetype + sparse)", "[stress][scene]")
 {
-    crd::memory::MallocAllocator alloc("scene-stress-write");
+    crd::memory::GrowableTlsfAllocator alloc{256ULL << 20, nullptr, "scene-stress-write"};
     World w(&alloc);
     crd::containers::Array<EntityId> entities(&alloc);
     constexpr u32 kN = 6007U;
@@ -240,7 +240,7 @@ TEST_CASE("scene stress -- parallel disjoint chunk write (archetype + sparse)", 
 
 TEST_CASE("scene stress -- concurrent reads of frozen scene state", "[stress][scene]")
 {
-    crd::memory::MallocAllocator alloc("scene-stress-frozen");
+    crd::memory::GrowableTlsfAllocator alloc{256ULL << 20, nullptr, "scene-stress-frozen"};
     World w(&alloc);
     crd::containers::Array<EntityId> entities(&alloc);
     constexpr u32 kN = 4096U;

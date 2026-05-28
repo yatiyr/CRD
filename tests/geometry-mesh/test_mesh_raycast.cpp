@@ -7,7 +7,7 @@
 #include <crd/containers/array.hpp>
 #include <crd/geometry/mesh/mesh.hpp>
 #include <crd/geometry/mesh/mesh_queries_typed.hpp>
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/units/quantity_aliases.hpp>
 
 #include <catch2/catch_approx.hpp>
@@ -61,7 +61,7 @@ CubeMesh make_cube(crd::memory::IAllocator* a, crd::f32 half = 0.5F)
 
 TEST_CASE("v4b empty mesh returns nullopt", "[geometry-mesh][v4b][raycast]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     const TriangleMeshViewf empty_view{};
     const TriangleMeshBvh empty_bvh{&alloc};
     const Ray3<crd::f32> ray{Vec3f{0.0F, 0.0F, -5.0F}, Vec3f{0.0F, 0.0F, 1.0F}};
@@ -72,7 +72,7 @@ TEST_CASE("v4b empty mesh returns nullopt", "[geometry-mesh][v4b][raycast]")
 TEST_CASE("v4b single triangle: ray hits at parametric t=1",
           "[geometry-mesh][v4b][raycast]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     const Vec3f verts[3] = {{0.0F, 0.0F, 0.0F}, {1.0F, 0.0F, 0.0F}, {0.0F, 1.0F, 0.0F}};
     const crd::u32 inds[3] = {0U, 1U, 2U};
     const TriangleMeshViewf view{
@@ -91,7 +91,7 @@ TEST_CASE("v4b single triangle: ray hits at parametric t=1",
 TEST_CASE("v4b unit cube: ray from +X direction hits +X face at t=4.5",
           "[geometry-mesh][v4b][raycast]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     auto cube = make_cube(&alloc);
     const TriangleMeshViewf view{
         crd::containers::ConstSpan<Vec3f>{cube.vertices.data(), cube.vertices.size()},
@@ -109,7 +109,7 @@ TEST_CASE("v4b unit cube: ray from +X direction hits +X face at t=4.5",
 TEST_CASE("v4b ray missing the mesh returns nullopt",
           "[geometry-mesh][v4b][raycast]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     auto cube = make_cube(&alloc);
     const TriangleMeshViewf view{
         crd::containers::ConstSpan<Vec3f>{cube.vertices.data(), cube.vertices.size()},
@@ -125,7 +125,7 @@ TEST_CASE("v4b ray missing the mesh returns nullopt",
 TEST_CASE("v4b tmax culls hits beyond the parametric window",
           "[geometry-mesh][v4b][raycast][tmax]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     auto cube = make_cube(&alloc);
     const TriangleMeshViewf view{
         crd::containers::ConstSpan<Vec3f>{cube.vertices.data(), cube.vertices.size()},
@@ -140,7 +140,7 @@ TEST_CASE("v4b tmax culls hits beyond the parametric window",
 TEST_CASE("v4b cull_back excludes back-face hits",
           "[geometry-mesh][v4b][raycast][cull]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     auto cube = make_cube(&alloc);
     const TriangleMeshViewf view{
         crd::containers::ConstSpan<Vec3f>{cube.vertices.data(), cube.vertices.size()},
@@ -162,7 +162,7 @@ TEST_CASE("v4b cull_back excludes back-face hits",
 TEST_CASE("v4b barycentrics sum to ~1 on a hit",
           "[geometry-mesh][v4b][raycast][barycentric]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     auto cube = make_cube(&alloc);
     const TriangleMeshViewf view{
         crd::containers::ConstSpan<Vec3f>{cube.vertices.data(), cube.vertices.size()},
@@ -180,7 +180,7 @@ TEST_CASE("v4b typed Quantity wrapper bridges through raw algorithm",
           "[geometry-mesh][v4b][typed][units]")
 {
     // ADR-0078 §5 D32 — typed surface lives one layer above the raw algorithm.
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     auto cube = make_cube(&alloc);
     const TriangleMeshViewf raw_view{
         crd::containers::ConstSpan<Vec3f>{cube.vertices.data(), cube.vertices.size()},

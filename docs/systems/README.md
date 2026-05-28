@@ -8,6 +8,7 @@ engine *is*; read `docs/sessions/` to remember how it got that way.
 | ------ | ------ | -------- |
 | `crd-core`       | ✅        | [core.md](core.md) |
 | `crd-log`        | ✅        | [log.md](log.md) — deep-dive: [`docs/log/LOG_FILE.md`](../log/LOG_FILE.md) |
+| `crd-vm`         | ✅        | [vm.md](vm.md) |
 | `crd-memory`     | ✅        | [memory.md](memory.md) — deep-dive: [`docs/memory/MEMORY_FILE.md`](../memory/MEMORY_FILE.md) |
 | `crd-containers` | ✅        | [containers.md](containers.md) — deep-dive: [`docs/containers/CONTAINERS_FILE.md`](../containers/CONTAINERS_FILE.md) |
 | `crd-math`       | ✅        | [math.md](math.md) |

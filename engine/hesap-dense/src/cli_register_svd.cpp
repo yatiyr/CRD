@@ -17,6 +17,7 @@
 
 namespace
 {
+using crd::hesap::Complex;
 using crd::hesap::cli::Capability;
 using crd::hesap::cli::CommandArgs;
 using crd::hesap::cli::CommandRegistry;
@@ -32,7 +33,6 @@ using crd::hesap::dense::rsvd;
 using crd::hesap::dense::rsyev;
 using crd::hesap::dense::svd;
 using crd::hesap::dense::svdvals;
-using crd::hesap::Complex;
 using crd::hesap::dense::Symmetric;
 
 CommandResult error_result(crd::memory::IAllocator* alloc, const char* msg)
@@ -63,8 +63,7 @@ CommandResult binary_result(crd::memory::IAllocator* alloc, crd::containers::Con
 
 // Read the (m, n, A) arguments into a RowMajor Matrix<T>. Returns false (with
 // an error CommandResult in `err`) on a shape mismatch.
-template <typename T>
-bool read_matrix(const CommandArgs& args, Matrix<T>& a, const char* who, CommandResult& err)
+template <typename T> bool read_matrix(const CommandArgs& args, Matrix<T>& a, const char* who, CommandResult& err)
 {
     const auto a_flat = args.get_f64_array("A");
     const auto m = args.get_u64("m").value_or(crd::u64{0});
@@ -87,8 +86,7 @@ bool read_matrix(const CommandArgs& args, Matrix<T>& a, const char* who, Command
     return true;
 }
 
-template <typename T>
-CommandResult impl_svd(const CommandArgs& args)
+template <typename T> CommandResult impl_svd(const CommandArgs& args)
 {
     Matrix<T> a(args.alloc);
     CommandResult err{args.alloc};
@@ -106,8 +104,7 @@ CommandResult impl_svd(const CommandArgs& args)
     return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
 }
 
-template <typename T>
-CommandResult impl_svdvals(const CommandArgs& args)
+template <typename T> CommandResult impl_svdvals(const CommandArgs& args)
 {
     Matrix<T> a(args.alloc);
     CommandResult err{args.alloc};
@@ -125,8 +122,7 @@ CommandResult impl_svdvals(const CommandArgs& args)
     return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
 }
 
-template <typename T>
-CommandResult impl_rsvd(const CommandArgs& args)
+template <typename T> CommandResult impl_rsvd(const CommandArgs& args)
 {
     Matrix<T> a(args.alloc);
     CommandResult err{args.alloc};
@@ -149,8 +145,7 @@ CommandResult impl_rsvd(const CommandArgs& args)
     return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
 }
 
-template <typename T>
-CommandResult impl_rsyev(const CommandArgs& args)
+template <typename T> CommandResult impl_rsyev(const CommandArgs& args)
 {
     const auto a_flat = args.get_f64_array("A");
     const auto nn = args.get_u64("n").value_or(crd::u64{0});
@@ -180,8 +175,7 @@ CommandResult impl_rsyev(const CommandArgs& args)
 
 // Complex svd/svdvals CLI: A travels as an interleaved [re0,im0,re1,im1,...]
 // array of 2*m*n entries; returns the min(m,n) singular values (real, descending).
-template <typename U>
-CommandResult impl_svd_complex(const CommandArgs& args)
+template <typename U> CommandResult impl_svd_complex(const CommandArgs& args)
 {
     using Cx = Complex<U>;
     const auto a_flat = args.get_f64_array("A");
@@ -223,8 +217,8 @@ CommandSchema make_schema(crd::memory::IAllocator* alloc, const char* name, cons
     return s;
 }
 
-void add_param(CommandSchema& s, crd::memory::IAllocator* alloc, const char* name, const char* desc,
-               ParamKind kind, bool required)
+void add_param(CommandSchema& s, crd::memory::IAllocator* alloc, const char* name, const char* desc, ParamKind kind,
+               bool required)
 {
     ParamSchema p{alloc};
     p.name = crd::containers::String{name, alloc};
@@ -245,81 +239,84 @@ void add_matrix_params(CommandSchema& s, crd::memory::IAllocator* alloc)
 
 namespace crd::hesap::dense
 {
-void register_svd_cli_anchor() noexcept
-{
-}
+void register_svd_cli_anchor() noexcept {}
 } // namespace crd::hesap::dense
 
-CRD_HESAP_CLI_REGISTER_MODULE([](CommandRegistry& reg) {
-    auto* alloc = crd::memory::default_allocator();
+// Registration uses crd allocators (abort on OOM, never throw); the std bad_alloc path the check
+// traces is unreachable, and the registrar ctor is noexcept (would terminate, not escape) regardless.
+// NOLINTNEXTLINE(bugprone-throwing-static-initialization)
+CRD_HESAP_CLI_REGISTER_MODULE(
+    [](CommandRegistry& reg)
     {
-        auto s = make_schema(alloc, "hesap.dense.svd.f32",
-                             "Singular values (descending) of general A via Golub-Kahan + dbdsqr (f32).");
-        add_matrix_params(s, alloc);
-        reg.register_command(std::move(s), &impl_svd<crd::f32>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.svd.f64",
-                             "Singular values (descending) of general A via Golub-Kahan + dbdsqr (f64).");
-        add_matrix_params(s, alloc);
-        reg.register_command(std::move(s), &impl_svd<crd::f64>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.svdvals.f32",
-                             "Singular values only (descending) of general A via dqds (f32).");
-        add_matrix_params(s, alloc);
-        reg.register_command(std::move(s), &impl_svdvals<crd::f32>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.svdvals.f64",
-                             "Singular values only (descending) of general A via dqds (f64).");
-        add_matrix_params(s, alloc);
-        reg.register_command(std::move(s), &impl_svdvals<crd::f64>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.rsvd.f32",
-                             "Randomized truncated SVD: top-rank singular values of A (Halko 2011, f32).");
-        add_matrix_params(s, alloc);
-        add_param(s, alloc, "rank", "Target rank (number of singular values)", ParamKind::U64, true);
-        reg.register_command(std::move(s), &impl_rsvd<crd::f32>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.rsvd.f64",
-                             "Randomized truncated SVD: top-rank singular values of A (Halko 2011, f64).");
-        add_matrix_params(s, alloc);
-        add_param(s, alloc, "rank", "Target rank (number of singular values)", ParamKind::U64, true);
-        reg.register_command(std::move(s), &impl_rsvd<crd::f64>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.rsyev.f32",
-                             "Randomized symmetric eig: top-rank eigenvalues (descending) of symmetric A (f32).");
-        add_param(s, alloc, "n", "Dimension of A", ParamKind::U64, true);
-        add_param(s, alloc, "A", "Symmetric A flattened RowMajor (n*n)", ParamKind::F64, true);
-        add_param(s, alloc, "rank", "Target rank (number of eigenvalues)", ParamKind::U64, true);
-        reg.register_command(std::move(s), &impl_rsyev<crd::f32>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.rsyev.f64",
-                             "Randomized symmetric eig: top-rank eigenvalues (descending) of symmetric A (f64).");
-        add_param(s, alloc, "n", "Dimension of A", ParamKind::U64, true);
-        add_param(s, alloc, "A", "Symmetric A flattened RowMajor (n*n)", ParamKind::F64, true);
-        add_param(s, alloc, "rank", "Target rank (number of eigenvalues)", ParamKind::U64, true);
-        reg.register_command(std::move(s), &impl_rsyev<crd::f64>);
-    }
-    for (const char* nm : {"hesap.dense.svd.c32", "hesap.dense.svdvals.c32"})
-    {
-        auto s = make_schema(alloc, nm, "Singular values (descending) of complex A (Complex<f32>, interleaved).");
-        add_param(s, alloc, "m", "Rows of A", ParamKind::U64, true);
-        add_param(s, alloc, "n", "Columns of A", ParamKind::U64, true);
-        add_param(s, alloc, "A", "Complex A as interleaved [re,im] (2*m*n), RowMajor", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_svd_complex<crd::f32>);
-    }
-    for (const char* nm : {"hesap.dense.svd.c64", "hesap.dense.svdvals.c64"})
-    {
-        auto s = make_schema(alloc, nm, "Singular values (descending) of complex A (Complex<f64>, interleaved).");
-        add_param(s, alloc, "m", "Rows of A", ParamKind::U64, true);
-        add_param(s, alloc, "n", "Columns of A", ParamKind::U64, true);
-        add_param(s, alloc, "A", "Complex A as interleaved [re,im] (2*m*n), RowMajor", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_svd_complex<crd::f64>);
-    }
-});
+        auto* alloc = crd::memory::default_allocator();
+        {
+            auto s = make_schema(alloc, "hesap.dense.svd.f32",
+                                 "Singular values (descending) of general A via Golub-Kahan + dbdsqr (f32).");
+            add_matrix_params(s, alloc);
+            reg.register_command(std::move(s), &impl_svd<crd::f32>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.svd.f64",
+                                 "Singular values (descending) of general A via Golub-Kahan + dbdsqr (f64).");
+            add_matrix_params(s, alloc);
+            reg.register_command(std::move(s), &impl_svd<crd::f64>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.svdvals.f32",
+                                 "Singular values only (descending) of general A via dqds (f32).");
+            add_matrix_params(s, alloc);
+            reg.register_command(std::move(s), &impl_svdvals<crd::f32>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.svdvals.f64",
+                                 "Singular values only (descending) of general A via dqds (f64).");
+            add_matrix_params(s, alloc);
+            reg.register_command(std::move(s), &impl_svdvals<crd::f64>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.rsvd.f32",
+                                 "Randomized truncated SVD: top-rank singular values of A (Halko 2011, f32).");
+            add_matrix_params(s, alloc);
+            add_param(s, alloc, "rank", "Target rank (number of singular values)", ParamKind::U64, true);
+            reg.register_command(std::move(s), &impl_rsvd<crd::f32>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.rsvd.f64",
+                                 "Randomized truncated SVD: top-rank singular values of A (Halko 2011, f64).");
+            add_matrix_params(s, alloc);
+            add_param(s, alloc, "rank", "Target rank (number of singular values)", ParamKind::U64, true);
+            reg.register_command(std::move(s), &impl_rsvd<crd::f64>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.rsyev.f32",
+                                 "Randomized symmetric eig: top-rank eigenvalues (descending) of symmetric A (f32).");
+            add_param(s, alloc, "n", "Dimension of A", ParamKind::U64, true);
+            add_param(s, alloc, "A", "Symmetric A flattened RowMajor (n*n)", ParamKind::F64, true);
+            add_param(s, alloc, "rank", "Target rank (number of eigenvalues)", ParamKind::U64, true);
+            reg.register_command(std::move(s), &impl_rsyev<crd::f32>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.rsyev.f64",
+                                 "Randomized symmetric eig: top-rank eigenvalues (descending) of symmetric A (f64).");
+            add_param(s, alloc, "n", "Dimension of A", ParamKind::U64, true);
+            add_param(s, alloc, "A", "Symmetric A flattened RowMajor (n*n)", ParamKind::F64, true);
+            add_param(s, alloc, "rank", "Target rank (number of eigenvalues)", ParamKind::U64, true);
+            reg.register_command(std::move(s), &impl_rsyev<crd::f64>);
+        }
+        for (const char* nm : {"hesap.dense.svd.c32", "hesap.dense.svdvals.c32"})
+        {
+            auto s = make_schema(alloc, nm, "Singular values (descending) of complex A (Complex<f32>, interleaved).");
+            add_param(s, alloc, "m", "Rows of A", ParamKind::U64, true);
+            add_param(s, alloc, "n", "Columns of A", ParamKind::U64, true);
+            add_param(s, alloc, "A", "Complex A as interleaved [re,im] (2*m*n), RowMajor", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_svd_complex<crd::f32>);
+        }
+        for (const char* nm : {"hesap.dense.svd.c64", "hesap.dense.svdvals.c64"})
+        {
+            auto s = make_schema(alloc, nm, "Singular values (descending) of complex A (Complex<f64>, interleaved).");
+            add_param(s, alloc, "m", "Rows of A", ParamKind::U64, true);
+            add_param(s, alloc, "n", "Columns of A", ParamKind::U64, true);
+            add_param(s, alloc, "A", "Complex A as interleaved [re,im] (2*m*n), RowMajor", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_svd_complex<crd::f64>);
+        }
+    });

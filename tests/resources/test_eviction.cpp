@@ -1,5 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
+#include <crd/memory/allocators/thread_safe_allocator.hpp>
+#include <new>
 #include <crd/platform/filesystem.hpp>
 #include <crd/resources/crdr.hpp>
 #include <crd/resources/loader.hpp>
@@ -10,7 +12,8 @@
 
 using namespace crd::resources;
 
-static crd::memory::MallocAllocator s_ev_alloc;
+alignas(crd::memory::GrowableTlsfAllocator) static unsigned char s_ev_alloc_buf[sizeof(crd::memory::GrowableTlsfAllocator)];
+static crd::memory::GrowableTlsfAllocator& s_ev_alloc = *::new (s_ev_alloc_buf) crd::memory::GrowableTlsfAllocator(); // never destroyed: static-destruction-order safe
 
 // ── EVBlobResource + loaders ───────────────────────────────────────────────
 
@@ -21,7 +24,9 @@ struct EVBlobResource
 
 struct EVBlobLoader final : public ILoader
 {
-    crd::memory::MallocAllocator m_alloc;
+    // Concurrent async loads share one loader instance; wrapper serializes the heap.
+    crd::memory::GrowableTlsfAllocator m_inner;
+    crd::memory::ThreadSafeAllocator   m_alloc{&m_inner};
 
     [[nodiscard]] crd::u32 type_fourcc()    const noexcept override { return kFourCC_BLOB; }
     [[nodiscard]] crd::u32 loader_version() const noexcept override { return 1U; }

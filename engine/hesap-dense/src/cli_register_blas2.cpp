@@ -67,8 +67,7 @@ CommandResult impl_gemv_f32(const CommandArgs& args)
     const auto cols = args.get_u64("cols").value_or(crd::u64{0});
     const T alpha = static_cast<T>(args.get_f64("alpha").value_or(crd::f64{1.0}));
     const T beta = static_cast<T>(args.get_f64("beta").value_or(crd::f64{0.0}));
-    if (rows == 0 || cols == 0 || a_flat.size() != rows * cols ||
-        x_arr.size() != cols || y_in.size() != rows)
+    if (rows == 0 || cols == 0 || a_flat.size() != rows * cols || x_arr.size() != cols || y_in.size() != rows)
     {
         return error_result(args.alloc, "gemv: size mismatch");
     }
@@ -84,12 +83,15 @@ CommandResult impl_gemv_f32(const CommandArgs& args)
     }
     Vec x(args.alloc, cn);
     Vec y(args.alloc, rn);
-    for (crd::usize i = 0; i < cn; ++i) x(i) = static_cast<T>(x_arr[i]);
-    for (crd::usize i = 0; i < rn; ++i) y(i) = static_cast<T>(y_in[i]);
+    for (crd::usize i = 0; i < cn; ++i)
+        x(i) = static_cast<T>(x_arr[i]);
+    for (crd::usize i = 0; i < rn; ++i)
+        y(i) = static_cast<T>(y_in[i]);
     crd::hesap::dense::gemv<T, Layout::RowMajor>(alpha, a_mat.cview(), x.span(), beta, y.span(), Trans::None);
     crd::containers::Array<crd::f64> out(args.alloc);
     out.reserve(rn);
-    for (crd::usize i = 0; i < rn; ++i) out.push_back(static_cast<crd::f64>(y(i)));
+    for (crd::usize i = 0; i < rn; ++i)
+        out.push_back(static_cast<crd::f64>(y(i)));
     return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
 }
 
@@ -105,8 +107,7 @@ CommandResult impl_gemv_f64(const CommandArgs& args)
     const auto cols = args.get_u64("cols").value_or(crd::u64{0});
     const T alpha = static_cast<T>(args.get_f64("alpha").value_or(crd::f64{1.0}));
     const T beta = static_cast<T>(args.get_f64("beta").value_or(crd::f64{0.0}));
-    if (rows == 0 || cols == 0 || a_flat.size() != rows * cols ||
-        x_arr.size() != cols || y_in.size() != rows)
+    if (rows == 0 || cols == 0 || a_flat.size() != rows * cols || x_arr.size() != cols || y_in.size() != rows)
     {
         return error_result(args.alloc, "gemv: size mismatch");
     }
@@ -122,12 +123,15 @@ CommandResult impl_gemv_f64(const CommandArgs& args)
     }
     Vec x(args.alloc, cn);
     Vec y(args.alloc, rn);
-    for (crd::usize i = 0; i < cn; ++i) x(i) = static_cast<T>(x_arr[i]);
-    for (crd::usize i = 0; i < rn; ++i) y(i) = static_cast<T>(y_in[i]);
+    for (crd::usize i = 0; i < cn; ++i)
+        x(i) = static_cast<T>(x_arr[i]);
+    for (crd::usize i = 0; i < rn; ++i)
+        y(i) = static_cast<T>(y_in[i]);
     crd::hesap::dense::gemv<T, Layout::RowMajor>(alpha, a_mat.cview(), x.span(), beta, y.span(), Trans::None);
     crd::containers::Array<crd::f64> out(args.alloc);
     out.reserve(rn);
-    for (crd::usize i = 0; i < rn; ++i) out.push_back(static_cast<crd::f64>(y(i)));
+    for (crd::usize i = 0; i < rn; ++i)
+        out.push_back(static_cast<crd::f64>(y(i)));
     return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
 }
 
@@ -155,12 +159,15 @@ CommandResult impl_symv_f32(const CommandArgs& args)
             a_sym.at(i, j) = static_cast<T>(a_flat[i * nn + j]);
     Vec x(args.alloc, nn);
     Vec y(args.alloc, nn);
-    for (crd::usize i = 0; i < nn; ++i) x(i) = static_cast<T>(x_arr[i]);
-    for (crd::usize i = 0; i < nn; ++i) y(i) = static_cast<T>(y_in[i]);
+    for (crd::usize i = 0; i < nn; ++i)
+        x(i) = static_cast<T>(x_arr[i]);
+    for (crd::usize i = 0; i < nn; ++i)
+        y(i) = static_cast<T>(y_in[i]);
     crd::hesap::dense::symv<T>(alpha, a_sym, x.span(), beta, y.span());
     crd::containers::Array<crd::f64> out(args.alloc);
     out.reserve(nn);
-    for (crd::usize i = 0; i < nn; ++i) out.push_back(static_cast<crd::f64>(y(i)));
+    for (crd::usize i = 0; i < nn; ++i)
+        out.push_back(static_cast<crd::f64>(y(i)));
     return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
 }
 
@@ -186,12 +193,15 @@ CommandResult impl_symv_f64(const CommandArgs& args)
             a_sym.at(i, j) = static_cast<T>(a_flat[i * nn + j]);
     Vec x(args.alloc, nn);
     Vec y(args.alloc, nn);
-    for (crd::usize i = 0; i < nn; ++i) x(i) = static_cast<T>(x_arr[i]);
-    for (crd::usize i = 0; i < nn; ++i) y(i) = static_cast<T>(y_in[i]);
+    for (crd::usize i = 0; i < nn; ++i)
+        x(i) = static_cast<T>(x_arr[i]);
+    for (crd::usize i = 0; i < nn; ++i)
+        y(i) = static_cast<T>(y_in[i]);
     crd::hesap::dense::symv<T>(alpha, a_sym, x.span(), beta, y.span());
     crd::containers::Array<crd::f64> out(args.alloc);
     out.reserve(nn);
-    for (crd::usize i = 0; i < nn; ++i) out.push_back(static_cast<crd::f64>(y(i)));
+    for (crd::usize i = 0; i < nn; ++i)
+        out.push_back(static_cast<crd::f64>(y(i)));
     return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
 }
 
@@ -215,11 +225,13 @@ CommandResult impl_trsv_lower_f32(const CommandArgs& args)
         for (crd::usize j = 0; j <= i; ++j)
             tri_l.at(i, j) = static_cast<T>(a_flat[i * nn + j]);
     Vec x(args.alloc, nn);
-    for (crd::usize i = 0; i < nn; ++i) x(i) = static_cast<T>(b_arr[i]);
+    for (crd::usize i = 0; i < nn; ++i)
+        x(i) = static_cast<T>(b_arr[i]);
     crd::hesap::dense::trsv<T, TriangularSide::Lower, TriangularDiag::Explicit>(tri_l, x.span(), Trans::None);
     crd::containers::Array<crd::f64> out(args.alloc);
     out.reserve(nn);
-    for (crd::usize i = 0; i < nn; ++i) out.push_back(static_cast<crd::f64>(x(i)));
+    for (crd::usize i = 0; i < nn; ++i)
+        out.push_back(static_cast<crd::f64>(x(i)));
     return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
 }
 
@@ -241,11 +253,13 @@ CommandResult impl_trsv_lower_f64(const CommandArgs& args)
         for (crd::usize j = 0; j <= i; ++j)
             tri_l.at(i, j) = static_cast<T>(a_flat[i * nn + j]);
     Vec x(args.alloc, nn);
-    for (crd::usize i = 0; i < nn; ++i) x(i) = static_cast<T>(b_arr[i]);
+    for (crd::usize i = 0; i < nn; ++i)
+        x(i) = static_cast<T>(b_arr[i]);
     crd::hesap::dense::trsv<T, TriangularSide::Lower, TriangularDiag::Explicit>(tri_l, x.span(), Trans::None);
     crd::containers::Array<crd::f64> out(args.alloc);
     out.reserve(nn);
-    for (crd::usize i = 0; i < nn; ++i) out.push_back(static_cast<crd::f64>(x(i)));
+    for (crd::usize i = 0; i < nn; ++i)
+        out.push_back(static_cast<crd::f64>(x(i)));
     return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
 }
 
@@ -267,11 +281,13 @@ CommandResult impl_trsv_upper_f32(const CommandArgs& args)
         for (crd::usize j = i; j < nn; ++j)
             tri_u.at(i, j) = static_cast<T>(a_flat[i * nn + j]);
     Vec x(args.alloc, nn);
-    for (crd::usize i = 0; i < nn; ++i) x(i) = static_cast<T>(b_arr[i]);
+    for (crd::usize i = 0; i < nn; ++i)
+        x(i) = static_cast<T>(b_arr[i]);
     crd::hesap::dense::trsv<T, TriangularSide::Upper, TriangularDiag::Explicit>(tri_u, x.span(), Trans::None);
     crd::containers::Array<crd::f64> out(args.alloc);
     out.reserve(nn);
-    for (crd::usize i = 0; i < nn; ++i) out.push_back(static_cast<crd::f64>(x(i)));
+    for (crd::usize i = 0; i < nn; ++i)
+        out.push_back(static_cast<crd::f64>(x(i)));
     return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
 }
 
@@ -293,18 +309,19 @@ CommandResult impl_trsv_upper_f64(const CommandArgs& args)
         for (crd::usize j = i; j < nn; ++j)
             tri_u.at(i, j) = static_cast<T>(a_flat[i * nn + j]);
     Vec x(args.alloc, nn);
-    for (crd::usize i = 0; i < nn; ++i) x(i) = static_cast<T>(b_arr[i]);
+    for (crd::usize i = 0; i < nn; ++i)
+        x(i) = static_cast<T>(b_arr[i]);
     crd::hesap::dense::trsv<T, TriangularSide::Upper, TriangularDiag::Explicit>(tri_u, x.span(), Trans::None);
     crd::containers::Array<crd::f64> out(args.alloc);
     out.reserve(nn);
-    for (crd::usize i = 0; i < nn; ++i) out.push_back(static_cast<crd::f64>(x(i)));
+    for (crd::usize i = 0; i < nn; ++i)
+        out.push_back(static_cast<crd::f64>(x(i)));
     return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
 }
 
 // ---- Schema builders --------------------------------------------------
 
-CommandSchema make_schema(crd::memory::IAllocator* alloc, const char* name, const char* desc,
-                          OutputKind output_kind)
+CommandSchema make_schema(crd::memory::IAllocator* alloc, const char* name, const char* desc, OutputKind output_kind)
 {
     CommandSchema s{alloc};
     s.name = crd::containers::String{name, alloc};
@@ -315,8 +332,8 @@ CommandSchema make_schema(crd::memory::IAllocator* alloc, const char* name, cons
     return s;
 }
 
-void add_param(CommandSchema& s, crd::memory::IAllocator* alloc, const char* name, const char* desc,
-               ParamKind kind, bool required)
+void add_param(CommandSchema& s, crd::memory::IAllocator* alloc, const char* name, const char* desc, ParamKind kind,
+               bool required)
 {
     ParamSchema p{alloc};
     p.name = crd::containers::String{name, alloc};
@@ -358,60 +375,63 @@ void add_trsv_params(CommandSchema& s, crd::memory::IAllocator* alloc, const cha
 
 namespace crd::hesap::dense
 {
-void register_blas2_cli_anchor() noexcept
-{
-}
+void register_blas2_cli_anchor() noexcept {}
 } // namespace crd::hesap::dense
 
-CRD_HESAP_CLI_REGISTER_MODULE([](CommandRegistry& reg) {
-    auto* alloc = crd::memory::default_allocator();
+// Registration uses crd allocators (abort on OOM, never throw); the std bad_alloc path the check
+// traces is unreachable, and the registrar ctor is noexcept (would terminate, not escape) regardless.
+// NOLINTNEXTLINE(bugprone-throwing-static-initialization)
+CRD_HESAP_CLI_REGISTER_MODULE(
+    [](CommandRegistry& reg)
+    {
+        auto* alloc = crd::memory::default_allocator();
 
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas2.gemv.f32",
-            "y = alpha * A * x + beta * y (f32 general).", OutputKind::BinaryBlob);
-        add_gemv_params(s, alloc);
-        reg.register_command(std::move(s), &impl_gemv_f32);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas2.gemv.f64",
-            "y = alpha * A * x + beta * y (f64 general).", OutputKind::BinaryBlob);
-        add_gemv_params(s, alloc);
-        reg.register_command(std::move(s), &impl_gemv_f64);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas2.symv.f32",
-            "y = alpha * A * x + beta * y (f32 symmetric).", OutputKind::BinaryBlob);
-        add_symv_params(s, alloc);
-        reg.register_command(std::move(s), &impl_symv_f32);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas2.symv.f64",
-            "y = alpha * A * x + beta * y (f64 symmetric).", OutputKind::BinaryBlob);
-        add_symv_params(s, alloc);
-        reg.register_command(std::move(s), &impl_symv_f64);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas2.trsv.lower.f32",
-            "Solve L * x = b in-place (f32).", OutputKind::BinaryBlob);
-        add_trsv_params(s, alloc, "Lower triangular L flattened (only lower half used)");
-        reg.register_command(std::move(s), &impl_trsv_lower_f32);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas2.trsv.lower.f64",
-            "Solve L * x = b in-place (f64).", OutputKind::BinaryBlob);
-        add_trsv_params(s, alloc, "Lower triangular L flattened (only lower half used)");
-        reg.register_command(std::move(s), &impl_trsv_lower_f64);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas2.trsv.upper.f32",
-            "Solve U * x = b in-place (f32).", OutputKind::BinaryBlob);
-        add_trsv_params(s, alloc, "Upper triangular U flattened (only upper half used)");
-        reg.register_command(std::move(s), &impl_trsv_upper_f32);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas2.trsv.upper.f64",
-            "Solve U * x = b in-place (f64).", OutputKind::BinaryBlob);
-        add_trsv_params(s, alloc, "Upper triangular U flattened (only upper half used)");
-        reg.register_command(std::move(s), &impl_trsv_upper_f64);
-    }
-})
+        {
+            auto s = make_schema(alloc, "hesap.dense.blas2.gemv.f32", "y = alpha * A * x + beta * y (f32 general).",
+                                 OutputKind::BinaryBlob);
+            add_gemv_params(s, alloc);
+            reg.register_command(std::move(s), &impl_gemv_f32);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.blas2.gemv.f64", "y = alpha * A * x + beta * y (f64 general).",
+                                 OutputKind::BinaryBlob);
+            add_gemv_params(s, alloc);
+            reg.register_command(std::move(s), &impl_gemv_f64);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.blas2.symv.f32", "y = alpha * A * x + beta * y (f32 symmetric).",
+                                 OutputKind::BinaryBlob);
+            add_symv_params(s, alloc);
+            reg.register_command(std::move(s), &impl_symv_f32);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.blas2.symv.f64", "y = alpha * A * x + beta * y (f64 symmetric).",
+                                 OutputKind::BinaryBlob);
+            add_symv_params(s, alloc);
+            reg.register_command(std::move(s), &impl_symv_f64);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.blas2.trsv.lower.f32", "Solve L * x = b in-place (f32).",
+                                 OutputKind::BinaryBlob);
+            add_trsv_params(s, alloc, "Lower triangular L flattened (only lower half used)");
+            reg.register_command(std::move(s), &impl_trsv_lower_f32);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.blas2.trsv.lower.f64", "Solve L * x = b in-place (f64).",
+                                 OutputKind::BinaryBlob);
+            add_trsv_params(s, alloc, "Lower triangular L flattened (only lower half used)");
+            reg.register_command(std::move(s), &impl_trsv_lower_f64);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.blas2.trsv.upper.f32", "Solve U * x = b in-place (f32).",
+                                 OutputKind::BinaryBlob);
+            add_trsv_params(s, alloc, "Upper triangular U flattened (only upper half used)");
+            reg.register_command(std::move(s), &impl_trsv_upper_f32);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.blas2.trsv.upper.f64", "Solve U * x = b in-place (f64).",
+                                 OutputKind::BinaryBlob);
+            add_trsv_params(s, alloc, "Upper triangular U flattened (only upper half used)");
+            reg.register_command(std::move(s), &impl_trsv_upper_f64);
+        }
+    })

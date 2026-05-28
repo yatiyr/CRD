@@ -39,7 +39,7 @@ namespace crd::hesap::dense
 //
 // Scratch allocator: `scratch` is used for the internal pack buffers
 // (~4-8 MB per call at large N). If nullptr, falls back to
-// `crd::memory::default_allocator()` (MallocAllocator) — that fallback
+// a PER-THREAD GrowableTlsfAllocator (pooled, non-malloc) -- that fallback
 // exists for view-form callers that cannot carry an allocator, but the
 // Matrix-form overload below auto-propagates `a.allocator()` and is
 // preferred. See memory/feedback_hesap_propagate_allocator.

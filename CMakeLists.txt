@@ -514,6 +514,7 @@ endif()
 # ----- Engine Modules ------------------------------------------------------
 
 add_subdirectory(engine/core)
+add_subdirectory(engine/vm)  # ADR-0085: OS virtual-memory leaf (page source for crd-memory's VirtualMemoryAllocator)
 add_subdirectory(engine/units)
 add_subdirectory(engine/time)
 add_subdirectory(engine/perf)

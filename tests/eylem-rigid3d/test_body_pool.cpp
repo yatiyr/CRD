@@ -15,7 +15,7 @@
 
 #include <crd/eylem/rigid_body.hpp>
 #include <crd/eylem_rigid3d/body_pool.hpp>
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -46,7 +46,7 @@ RigidBody make_body(crd::f32 x, crd::f32 mass = 1.0F)
 
 TEST_CASE("BodyPool: empty state", "[eylem-rigid3d][bodypool]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     BodyPool pool(&alloc, 64);
 
     REQUIRE(pool.size()     == 0U);
@@ -57,7 +57,7 @@ TEST_CASE("BodyPool: empty state", "[eylem-rigid3d][bodypool]")
 
 TEST_CASE("BodyPool: insert + read round-trips state", "[eylem-rigid3d][bodypool]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     BodyPool pool(&alloc, 64);
 
     RigidBody src = make_body(7.0F, 2.5F);
@@ -91,7 +91,7 @@ TEST_CASE("BodyPool: insert + read round-trips state", "[eylem-rigid3d][bodypool
 TEST_CASE("BodyPool: remove invalidates handle, re-insert reuses slot",
           "[eylem-rigid3d][bodypool]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     BodyPool pool(&alloc, 64);
 
     BodyId a = pool.insert(make_body(1.0F));
@@ -123,7 +123,7 @@ TEST_CASE("BodyPool: remove invalidates handle, re-insert reuses slot",
 
 TEST_CASE("BodyPool: write mutates kLane in place", "[eylem-rigid3d][bodypool]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     BodyPool pool(&alloc, 16);
 
     BodyId id = pool.insert(make_body(1.0F));
@@ -142,7 +142,7 @@ TEST_CASE("BodyPool: write mutates kLane in place", "[eylem-rigid3d][bodypool]")
 TEST_CASE("BodyPool: AoSoA storage grows in kLane-sized chunks",
           "[eylem-rigid3d][bodypool]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     BodyPool pool(&alloc, 1024);
 
     REQUIRE(pool.storage().chunk_count() == 1U); // slot-0 sentinel chunk
@@ -178,7 +178,7 @@ TEST_CASE("BodyPool: AoSoA storage grows in kLane-sized chunks",
 TEST_CASE("BodyPool: deterministic handle sequence + readback",
           "[eylem-rigid3d][bodypool]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
 
     auto run_sequence = [&alloc]() {
         BodyPool pool(&alloc, 32);
@@ -212,7 +212,7 @@ TEST_CASE("BodyPool: deterministic handle sequence + readback",
 TEST_CASE("BodyPool: capacity exhaustion returns null",
           "[eylem-rigid3d][bodypool]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     BodyPool pool(&alloc, 4); // 4 slots; slot 0 reserved → 3 user slots
 
     BodyId a = pool.insert(make_body(1.0F));

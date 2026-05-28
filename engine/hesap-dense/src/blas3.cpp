@@ -6,6 +6,7 @@
 #include <crd/hesap/dense/detail/gemm_pack.hpp>
 #include <crd/hesap/dense/detail/pairwise_sum.hpp>
 #include <crd/jobs/jobs.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/memory/memory.hpp>
 
 namespace crd::hesap::dense
@@ -92,7 +93,7 @@ template <typename T, Layout L>
 //
 // Pack buffers come from the `scratch` IAllocator (Matrix overload passes
 // `a.allocator()`; raw view-form callers may pass nullptr to fall back to
-// `default_allocator()` = MallocAllocator, but that's discouraged — see
+// a per-thread growable pool if nullptr, but that is discouraged — see
 // memory/feedback_hesap_propagate_allocator). The maximum Ac size is
 // `ceil(Mc/MR) * MR * Kc` = ceil(120/8)*8*256 = 30720 entries = 120 KB
 // (f32) / 240 KB (f64). Max Bc is `ceil(Nc/NR) * Kc * NR =
@@ -120,10 +121,17 @@ void gemm(T alpha, MatrixView<const T, L> a, MatrixView<const T, L> b, T beta,
     }
 
     // Allocate pack buffers once per gemm call from the caller-supplied
-    // scratch allocator (or MallocAllocator if nullptr — discouraged).
+    // scratch allocator (or a per-thread growable pool if nullptr — discouraged).
     // Size to MIN(actual_dim, macro_block) to avoid wasting tens of MB on
     // small inputs (e.g. an 8x8 GEMM doesn't need 8 MB of Bc scratch).
-    auto* alloc = scratch != nullptr ? scratch : crd::memory::default_allocator();
+crd::memory::IAllocator* alloc = scratch;
+    if (alloc == nullptr)
+    {
+        // No caller allocator (discouraged -- feedback_hesap_propagate_allocator). Fall back to a
+        // PER-THREAD growable pool, never MallocAllocator (no malloc allocators in the engine).
+        thread_local crd::memory::GrowableTlsfAllocator s_fallback;
+        alloc = &s_fallback;
+    }
     const crd::usize a_pack_dim_m = std::min<crd::usize>(m, kMc);
     const crd::usize a_pack_dim_k = std::min<crd::usize>(k, kKc);
     const crd::usize b_pack_dim_n = std::min<crd::usize>(n, kNc);
@@ -229,7 +237,14 @@ void small_gemm_parallel(crd::u32 num_workers, T alpha, MatrixView<const T, L> a
 
     // Pack B once. Smaller than the worst-case b_pack_capacity since we use
     // the actual n×k bounds (not full Nc×Kc). At N=256 f64: 256×256×8 = 524KB.
-    auto* alloc = scratch != nullptr ? scratch : crd::memory::default_allocator();
+crd::memory::IAllocator* alloc = scratch;
+    if (alloc == nullptr)
+    {
+        // No caller allocator (discouraged -- feedback_hesap_propagate_allocator). Fall back to a
+        // PER-THREAD growable pool, never MallocAllocator (no malloc allocators in the engine).
+        thread_local crd::memory::GrowableTlsfAllocator s_fallback;
+        alloc = &s_fallback;
+    }
     const crd::usize b_pack_capacity =
         ((n + detail::kGemmNr - 1) / detail::kGemmNr) * k * detail::kGemmNr;
     const crd::usize align = alignof(T) > 32 ? alignof(T) : 32;
@@ -351,7 +366,14 @@ void gemm_parallel(crd::u32 num_workers, T alpha, MatrixView<const T, L> a, Matr
     // Allocate one buffer per ACTUAL worker thread and index by
     // `worker_index()` directly.
     const crd::u32 total_workers = crd::jobs::num_workers();
-    auto* alloc = scratch != nullptr ? scratch : crd::memory::default_allocator();
+crd::memory::IAllocator* alloc = scratch;
+    if (alloc == nullptr)
+    {
+        // No caller allocator (discouraged -- feedback_hesap_propagate_allocator). Fall back to a
+        // PER-THREAD growable pool, never MallocAllocator (no malloc allocators in the engine).
+        thread_local crd::memory::GrowableTlsfAllocator s_fallback;
+        alloc = &s_fallback;
+    }
     // Size to MIN(actual_dim, macro_block) — same reasoning as gemm().
     const crd::usize ap_kc = std::min<crd::usize>(k, kKc);
     const crd::usize bp_nc = std::min<crd::usize>(n, kNc);

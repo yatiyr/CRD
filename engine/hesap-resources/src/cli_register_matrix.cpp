@@ -239,6 +239,9 @@ CommandSchema make_mtx_schema(crd::memory::IAllocator* alloc, const char* name, 
 
 } // namespace
 
+// Registration uses crd allocators (abort on OOM, never throw); the std bad_alloc path the check
+// traces is unreachable, and the registrar ctor is noexcept (would terminate, not escape) regardless.
+// NOLINTNEXTLINE(bugprone-throwing-static-initialization)
 CRD_HESAP_CLI_REGISTER_MODULE(
     [](CommandRegistry& reg)
     {

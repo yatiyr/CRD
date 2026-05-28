@@ -12,7 +12,7 @@
 #include <crd/perf/ui/profiler_panel.hpp>
 
 #include <crd/core/assert.hpp>
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/perf/capture.hpp>
 #include <crd/perf/capture_view.hpp>
 #include <crd/perf/profiler.hpp>
@@ -31,9 +31,9 @@ namespace
 {
 
 // Process-default capture allocator if the user doesn't inject one.
-crd::memory::MallocAllocator& default_capture_alloc() noexcept
+crd::memory::IAllocator& default_capture_alloc() noexcept
 {
-    static crd::memory::MallocAllocator s_alloc{"crd-perf-ui:capture"};
+    static crd::memory::GrowableTlsfAllocator s_alloc{256ULL << 20, nullptr, "crd-perf-ui:capture"};
     return s_alloc;
 }
 

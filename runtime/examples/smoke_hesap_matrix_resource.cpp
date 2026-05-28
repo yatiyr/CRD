@@ -13,7 +13,7 @@
 #include <crd/hesap/resources/matrix_resource_loader.hpp>
 #include <crd/hesap/sparse/sparse_matrix.hpp>
 #include <crd/hesap/sparse/triplet_builder.hpp>
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/resources/crdr.hpp>
 #include <crd/resources/resource_handle.hpp>
@@ -26,7 +26,7 @@ using namespace crd::resources;
 namespace hr = crd::hesap::resources;
 namespace hs = crd::hesap::sparse;
 
-static crd::memory::MallocAllocator g_alloc;
+static crd::memory::TlsfAllocator g_alloc{256ULL << 20};
 
 // Embed an already-cooked artifact CRDR into a single-entry PACK (two-pass to
 // fix the blob offset), mirroring smoke_resources::assemble_pack.

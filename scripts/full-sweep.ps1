@@ -95,7 +95,11 @@ foreach ($p in $presets) {
         continue
     }
     Write-Host "----- ctest $p -----"
-    & ctest --preset $p --output-on-failure
+    # Per-config ctest log + a generous per-test timeout (300s — long enough for the
+    # ASan-instrumented N=512 eigensolvers, short enough to catch a genuine hang).
+    # The log captures any CRD assertion text ("...exceeded", "min_pool", etc.) so a
+    # failing config can be pinpointed after the sweep without re-running.
+    & ctest --preset $p --output-on-failure --timeout 300 -O "$REPO_ROOT/build/ctest-$p.log"
     $ec = $LASTEXITCODE
     if ($ec -ne 0) { $results[$p] = "CTEST-FAIL exit=$ec"; continue }
 
@@ -161,6 +165,11 @@ foreach ($k in $results.Keys) { Write-Host ("CRD_RESULT {0} {1}" -f $k, $results
 @echo off
 call "$VcvarsPath" >NUL
 set "PATH=$AsanRuntimeDir;%PATH%"
+rem Perf budgets are SOFT during the sweep (like CI): the sweep is a build+correctness
+rem gate, and absolute timings vary with host load/thermal/Raptor-Lake state. An
+rem over-budget result logs a warning + the measured number rather than hard-aborting
+rem a whole config. Review the printed CRD_PERF warnings for real regressions.
+set "CRD_PERF_BUDGET_SOFT=1"
 $buildJobsEnvLine
 powershell -NoProfile -ExecutionPolicy Bypass -Command "`$USE_RECONFIGURE = $reconfFlag; `$SKIP_SANDBOX = $skipSandFlag; `$SMOKE_DURATION = $smokeSecs; `$REPO_ROOT = '$repoRootEsc'; & '$winSweepScript'"
 exit /b %ERRORLEVEL%

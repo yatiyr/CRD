@@ -6,6 +6,7 @@
 #include <crd/core/platform.hpp>
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
+#include <crd/memory/allocators/thread_safe_allocator.hpp>
 #include <crd/resources/crdr.hpp>
 #include <crd/resources/loader.hpp>
 #include <crd/resources/resource_handle.hpp>
@@ -161,8 +162,14 @@ public:
     [[nodiscard]] crd::usize in_flight_count() const noexcept;
 
 private:
-    crd::memory::IAllocator* m_alloc;
-    crd::u32                 m_next_mount_id = 1U;
+    // Loader jobs allocate payloads from m_alloc concurrently WITHOUT the manager
+    // mutex (so transitive load_sync doesn't deadlock). m_thread_safe wraps the
+    // caller's allocator so those concurrent allocations are serialized — the
+    // caller may pass a non-thread-safe allocator (TLSF/GrowableTLSF). Declared
+    // first so it constructs before m_alloc points at it. (ADR-0085 follow-up.)
+    crd::memory::ThreadSafeAllocator m_thread_safe;
+    crd::memory::IAllocator*         m_alloc; // == &m_thread_safe; all manager + loader allocs route here
+    crd::u32                         m_next_mount_id = 1U;
 
     // Guards m_handles, m_in_flight, m_live, m_loaders, and m_mounts
     // for concurrent load_sync / load_async calls. The mutex is NOT held

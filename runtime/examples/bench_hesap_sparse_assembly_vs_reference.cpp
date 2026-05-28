@@ -8,54 +8,64 @@
 //
 // Built only when CRD_BUILD_HESAP_VS_REFERENCE=ON. Characterize-now (not a gate):
 // reports the Eigen/Cerid speedup ratio; the hard perf gates begin at v1b (spmv).
+//
+// crd conventions throughout: crd::containers::Array (never std::vector), named
+// allocators (never malloc) — a GrowableTlsfAllocator for the shared corpus, and
+// the existing per-rep TlsfAllocator for the timed Cerid build; crd::f64/u32/usize
+// (never raw). Raw double only at the Eigen C++ API boundary.
 
+#include <crd/containers/array.hpp>
+#include <crd/core/types.hpp>
 #include <crd/hesap/sparse/sparse.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
 #include <Eigen/Sparse>
-
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
-#include <vector>
 
 namespace
 {
 using Clock = std::chrono::high_resolution_clock;
 
+// Shared corpus arena (coords + Eigen triplets); unbounded so 1M×16 fits.
+crd::memory::GrowableTlsfAllocator g_alloc;
+
 struct Coord
 {
-    std::uint32_t r;
-    std::uint32_t c;
-    double        v;
+    crd::u32 r;
+    crd::u32 c;
+    crd::f64 v;
 };
 
 // Deterministic LCG so both libraries see identical coordinates.
-std::vector<Coord> generate(std::uint32_t n, std::uint32_t nnz_per_row, std::uint64_t seed)
+crd::containers::Array<Coord> generate(crd::u32 n, crd::u32 nnz_per_row, crd::u64 seed)
 {
-    std::vector<Coord> out;
-    out.reserve(static_cast<std::size_t>(n) * nnz_per_row);
-    std::uint64_t s = seed;
-    auto next = [&]() {
-        s = s * 6364136223846793005ULL + 1442695040888963407ULL;
-        return static_cast<std::uint32_t>(s >> 33);
-    };
-    for (std::uint32_t r = 0; r < n; ++r)
+    crd::containers::Array<Coord> out(&g_alloc);
+    out.reserve(static_cast<crd::usize>(n) * nnz_per_row);
+    crd::u64 s = seed;
+    auto next = [&]()
     {
-        for (std::uint32_t k = 0; k < nnz_per_row; ++k)
+        s = s * 6364136223846793005ULL + 1442695040888963407ULL;
+        return static_cast<crd::u32>(s >> 33);
+    };
+    for (crd::u32 r = 0; r < n; ++r)
+    {
+        for (crd::u32 k = 0; k < nnz_per_row; ++k)
         {
-            const std::uint32_t c = next() % n;
-            out.push_back(Coord{r, c, 1.0 + static_cast<double>(next() % 7)});
+            const crd::u32 c = next() % n;
+            out.push_back(Coord{r, c, 1.0 + static_cast<crd::f64>(next() % 7)});
         }
     }
     return out;
 }
 
-double cerid_assemble_ms(const std::vector<Coord>& coords, std::uint32_t n)
+crd::f64 cerid_assemble_ms(const crd::containers::Array<Coord>& coords, crd::u32 n)
 {
-    double best = 1e30;
-    for (int rep = 0; rep < 3; ++rep)
+    crd::f64 best = 1e30;
+    for (crd::i32 rep = 0; rep < 3; ++rep)
     {
         crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(coords.size()) * 64 + (4u << 20));
         const auto t0 = Clock::now();
@@ -69,38 +79,38 @@ double cerid_assemble_ms(const std::vector<Coord>& coords, std::uint32_t n)
         const auto t1 = Clock::now();
         volatile crd::usize sink = m.nnz();
         (void)sink;
-        best = std::min(best, std::chrono::duration<double, std::milli>(t1 - t0).count());
+        best = std::min(best, std::chrono::duration<crd::f64, std::milli>(t1 - t0).count());
     }
     return best;
 }
 
-double eigen_assemble_ms(const std::vector<Coord>& coords, std::uint32_t n)
+crd::f64 eigen_assemble_ms(const crd::containers::Array<Coord>& coords, crd::u32 n)
 {
-    double best = 1e30;
-    for (int rep = 0; rep < 3; ++rep)
+    crd::f64 best = 1e30;
+    for (crd::i32 rep = 0; rep < 3; ++rep)
     {
         const auto t0 = Clock::now();
-        std::vector<Eigen::Triplet<double>> trips;
+        crd::containers::Array<Eigen::Triplet<double>> trips(&g_alloc);
         trips.reserve(coords.size());
         for (const Coord& e : coords)
         {
-            trips.emplace_back(static_cast<int>(e.r), static_cast<int>(e.c), e.v);
+            trips.push_back(Eigen::Triplet<double>(static_cast<int>(e.r), static_cast<int>(e.c), e.v));
         }
         Eigen::SparseMatrix<double> a(static_cast<int>(n), static_cast<int>(n));
-        a.setFromTriplets(trips.begin(), trips.end());
+        a.setFromTriplets(trips.data(), trips.data() + trips.size());
         const auto t1 = Clock::now();
         volatile int sink = static_cast<int>(a.nonZeros());
         (void)sink;
-        best = std::min(best, std::chrono::duration<double, std::milli>(t1 - t0).count());
+        best = std::min(best, std::chrono::duration<crd::f64, std::milli>(t1 - t0).count());
     }
     return best;
 }
 
-void run(std::uint32_t n, std::uint32_t nnz_per_row)
+void run(crd::u32 n, crd::u32 nnz_per_row)
 {
     const auto coords = generate(n, nnz_per_row, 0x1234567ULL ^ n);
-    const double cerid = cerid_assemble_ms(coords, n);
-    const double eigen = eigen_assemble_ms(coords, n);
+    const crd::f64 cerid = cerid_assemble_ms(coords, n);
+    const crd::f64 eigen = eigen_assemble_ms(coords, n);
     std::printf("  N=%-8u nnz/row=%-3u triplets=%-10zu  Cerid=%8.2f ms  Eigen=%8.2f ms  speedup=%.2fx %s\n", n,
                 nnz_per_row, coords.size(), cerid, eigen, eigen / cerid, (eigen >= cerid ? "WIN" : "loss"));
 }

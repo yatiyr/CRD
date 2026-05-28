@@ -16,7 +16,7 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/atomic_array.hpp>
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
@@ -38,7 +38,7 @@ constexpr u64 make_token(u32 worker, u64 seq) noexcept
 
 void drive_append(crd::stress::RunMode mode)
 {
-    crd::memory::MallocAllocator alloc("aa-stress");
+    crd::memory::GrowableTlsfAllocator alloc{256ULL << 20, nullptr, "aa-stress"};
 
     crd::stress::Config cfg = crd::stress::bounded(mode);
     cfg.num_workers = kWorkers;
@@ -104,7 +104,7 @@ void drive_append(crd::stress::RunMode mode)
 
 void drive_counters(crd::stress::RunMode mode)
 {
-    crd::memory::MallocAllocator alloc("aa-counters-stress");
+    crd::memory::GrowableTlsfAllocator alloc{256ULL << 20, nullptr, "aa-counters-stress"};
 
     crd::stress::Config cfg = crd::stress::bounded(mode);
     cfg.num_workers = kWorkers;

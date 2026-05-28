@@ -6,7 +6,7 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/geometry/mesh/mesh.hpp>
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -101,7 +101,7 @@ SphereMesh make_sphere(crd::memory::IAllocator* a, crd::u32 lats, crd::u32 lons,
 
 TEST_CASE("v4d empty mesh returns nullopt", "[geometry-mesh][v4d][raycast-simd]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     const TriangleMeshViewf empty_view{};
     const TriangleMeshBvh empty_bvh{&alloc};
     const Ray3<crd::f32> ray{Vec3f{0.0F, 0.0F, -5.0F}, Vec3f{0.0F, 0.0F, 1.0F}};
@@ -111,7 +111,7 @@ TEST_CASE("v4d empty mesh returns nullopt", "[geometry-mesh][v4d][raycast-simd]"
 TEST_CASE("v4d unit cube +X face hit matches v4b reference",
           "[geometry-mesh][v4d][raycast-simd]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     auto cube = make_cube(&alloc);
     const TriangleMeshViewf view{
         crd::containers::ConstSpan<Vec3f>{cube.vertices.data(), cube.vertices.size()},
@@ -129,7 +129,7 @@ TEST_CASE("v4d unit cube +X face hit matches v4b reference",
 TEST_CASE("v4d sphere mesh: 36 rays cross-validate against v4b",
           "[geometry-mesh][v4d][raycast-simd][corpus]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     auto sphere = make_sphere(&alloc, /*lats=*/6U, /*lons=*/6U, /*r=*/1.0F);
     const TriangleMeshViewf view{
         crd::containers::ConstSpan<Vec3f>{sphere.vertices.data(), sphere.vertices.size()},
@@ -182,7 +182,7 @@ TEST_CASE("v4d sphere mesh: 36 rays cross-validate against v4b",
 TEST_CASE("v4d cull_back excludes back-face hits (matches v4b semantics)",
           "[geometry-mesh][v4d][raycast-simd][cull]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     auto cube = make_cube(&alloc);
     const TriangleMeshViewf view{
         crd::containers::ConstSpan<Vec3f>{cube.vertices.data(), cube.vertices.size()},
@@ -199,7 +199,7 @@ TEST_CASE("v4d cull_back excludes back-face hits (matches v4b semantics)",
 TEST_CASE("v4d tmax culling matches v4b semantics",
           "[geometry-mesh][v4d][raycast-simd][tmax]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     auto cube = make_cube(&alloc);
     const TriangleMeshViewf view{
         crd::containers::ConstSpan<Vec3f>{cube.vertices.data(), cube.vertices.size()},
@@ -213,7 +213,7 @@ TEST_CASE("v4d tmax culling matches v4b semantics",
 
 TEST_CASE("v4d ray miss returns nullopt", "[geometry-mesh][v4d][raycast-simd]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     auto cube = make_cube(&alloc);
     const TriangleMeshViewf view{
         crd::containers::ConstSpan<Vec3f>{cube.vertices.data(), cube.vertices.size()},
@@ -227,7 +227,7 @@ TEST_CASE("v4d ray miss returns nullopt", "[geometry-mesh][v4d][raycast-simd]")
 TEST_CASE("v4d single triangle: hit at t=1 matches v4b",
           "[geometry-mesh][v4d][raycast-simd][single-tri]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     const Vec3f verts[3] = {{0.0F, 0.0F, 0.0F}, {1.0F, 0.0F, 0.0F}, {0.0F, 1.0F, 0.0F}};
     const crd::u32 inds[3] = {0U, 1U, 2U};
     const TriangleMeshViewf view{

@@ -14,7 +14,7 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/jobs/jobs.hpp>
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -71,7 +71,7 @@ void write_and_verify_round(crd::containers::Array<u64>& data, u32 num_jobs, u32
 
 TEST_CASE("freeze stress -- FrozenView + parallel_for disjoint writes", "[stress][containers][jobs]")
 {
-    crd::memory::MallocAllocator alloc("freeze-stress");
+    crd::memory::GrowableTlsfAllocator alloc{256ULL << 20, nullptr, "freeze-stress"};
 
     const u32 jobs_choices[] = {1U, 3U, 8U, 64U, 257U};
     for (u32 num_jobs : jobs_choices)
@@ -148,7 +148,7 @@ TEST_CASE("freeze stress -- parallel_reduce matches a serial reference", "[stres
 
 TEST_CASE("freeze stress -- FrozenView + parallel_for long soak", "[stress][containers][jobs][.soak]")
 {
-    crd::memory::MallocAllocator alloc("freeze-soak");
+    crd::memory::GrowableTlsfAllocator alloc{256ULL << 20, nullptr, "freeze-soak"};
     constexpr usize kN = 200'003U;
     crd::containers::Array<u64> data(kN, &alloc);
     data.resize(kN, 0ULL);

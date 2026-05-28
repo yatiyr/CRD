@@ -36,6 +36,15 @@ void* IAllocator::reallocate(void* p, usize old_size, usize new_size, usize alig
     return new_ptr;
 }
 
+// ---- Default try_allocate -----------------------------------------------
+// Delegates to allocate(), which is the correct non-throwing path for
+// allocators whose allocate already returns nullptr on exhaustion (bump /
+// stack / pool). Allocators whose allocate is fatal-on-OOM override this.
+void* IAllocator::try_allocate(usize size, usize alignment)
+{
+    return allocate(size, alignment);
+}
+
 // ---- Default global allocator ------------------------------------------
 //
 // We use a function-local static to dodge static-init-order issues: the

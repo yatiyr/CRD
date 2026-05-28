@@ -100,6 +100,13 @@
             "CRD_ENABLE_CLANG_TIDY": "ON"
           }
         },
+        { "name": "win-tidy-local",
+          "displayName": "Windows + clang-tidy (relaxed: warnings reported, not fatal -- mirrors the CI win-tidy job)",
+          "inherits": "win-tidy",
+          "cacheVariables": {
+            "CRD_CLANG_TIDY_WARNINGS_AS_ERRORS": "OFF"
+          }
+        },
         { "name": "win-clang-cl",
           "displayName": "Windows Debug + clang-cl",
           "inherits": "win-base",
@@ -234,6 +241,7 @@
         { "name": "win-relwithdebinfo",  "configurePreset": "win-relwithdebinfo" },
         { "name": "win-asan",            "configurePreset": "win-asan" },
         { "name": "win-tidy",            "configurePreset": "win-tidy" },
+        { "name": "win-tidy-local",      "configurePreset": "win-tidy-local" },
         { "name": "win-clang-cl",        "configurePreset": "win-clang-cl" },
         { "name": "win-shipping",        "configurePreset": "win-shipping" },
         { "name": "win-shipping-profile", "configurePreset": "win-shipping-profile" },

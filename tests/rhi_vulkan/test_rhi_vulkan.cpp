@@ -1,10 +1,13 @@
+#include <crd/memory/allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/platform/platform.hpp>
 #include <crd/rhi/vulkan_backend.hpp>
+#include <crd/rhi/vulkan_validation_capture.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 
 namespace fs = crd::platform::fs;
 
@@ -1057,5 +1060,335 @@ TEST_CASE("Vulkan compute dispatch_indirect (D4 indirect path)", "[rhi][vulkan][
         CHECK(mapped[i] == i + kBaseOffset);
     }
     storage->unmap();
+    device->wait_idle();
+}
+
+// ADR-0085 S7 test policy: relocate everything; count what moved.
+namespace
+{
+class DefragAllPolicy final : public crd::rhi::IDefragPolicy
+{
+public:
+    [[nodiscard]] bool should_defrag(const crd::rhi::Buffer& /*b*/) override { return true; }
+    [[nodiscard]] bool should_defrag(const crd::rhi::Image& /*i*/) override { return true; }
+    void on_relocated(const crd::rhi::Buffer& /*b*/, crd::u32 /*gen*/) override { ++buffer_relocations; }
+    void on_relocated(const crd::rhi::Image& /*i*/, crd::u32 /*gen*/) override { ++image_relocations; }
+
+    crd::u32 buffer_relocations = 0;
+    crd::u32 image_relocations  = 0;
+};
+
+// ADR-0085 S7 test residency policy: evict the oldest device-local buffers to host
+// until enough is freed.
+class EvictFirstPolicy final : public crd::rhi::IResidencyPolicy
+{
+public:
+    [[nodiscard]] crd::u64 evict(crd::rhi::IGpuResidencyContext& ctx, crd::u64 needed) override
+    {
+        crd::u64 freed = 0;
+        while (freed < needed && ctx.resident_buffer_count() > 0)
+        {
+            crd::rhi::Buffer* b = ctx.resident_buffer_at(0);
+            if (b == nullptr)
+            {
+                break;
+            }
+            const crd::u64 f = ctx.evict_to_host(*b);
+            if (f == 0)
+            {
+                break; // nothing more can be shed (e.g. integrated GPU, all DEVICE_LOCAL)
+            }
+            freed += f;
+            ++evict_count;
+        }
+        return freed;
+    }
+
+    crd::u32 evict_count = 0;
+};
+} // namespace
+
+// ---------------------------------------------------------------------------
+// ADR-0085 S6 — GpuAllocator (VkDeviceMemory suballocation) ValidationCapture tests
+// ---------------------------------------------------------------------------
+
+TEST_CASE("S6 GPU suballocator shares one block across many small allocations", "[rhi][vulkan][gpualloc]")
+{
+    if (headless_requested()) { SUCCEED("headless"); return; }
+    auto instance = crd::rhi::create_vulkan_instance({});
+    REQUIRE(instance != nullptr);
+    crd::rhi::ValidationCapture capture(*instance);
+    auto device = instance->create_device({});
+    REQUIRE(device != nullptr);
+
+    constexpr crd::u32                          kN = 64;
+    std::unique_ptr<crd::rhi::Buffer>           bufs[kN];
+    for (crd::u32 i = 0; i < kN; ++i)
+    {
+        bufs[i] = device->create_buffer(
+            {256, crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex), crd::rhi::MemoryUsage::CpuToGpu});
+        REQUIRE(bufs[i] != nullptr);
+    }
+    // 64 x 256 B buffers must NOT need 64 VkDeviceMemory blocks — proves suballocation.
+    const crd::u32 blocks = crd::rhi::vulkan_resident_block_count(*device);
+    CHECK(blocks >= 1U);
+    CHECK(blocks < kN);
+    CHECK(capture.error_count() == 0U);
+    CHECK(capture.warning_count() == 0U);
+    device->wait_idle();
+}
+
+TEST_CASE("S6 GPU suballocations are distinct non-overlapping regions (host round-trip)", "[rhi][vulkan][gpualloc]")
+{
+    if (headless_requested()) { SUCCEED("headless"); return; }
+    auto instance = crd::rhi::create_vulkan_instance({});
+    REQUIRE(instance != nullptr);
+    crd::rhi::ValidationCapture capture(*instance);
+    auto device = instance->create_device({});
+    REQUIRE(device != nullptr);
+
+    constexpr crd::u32                kN    = 32;
+    constexpr crd::u32                kSize = 1024;
+    std::unique_ptr<crd::rhi::Buffer> bufs[kN];
+    // Write a per-buffer pattern into ALL buffers first; if any two suballocations
+    // overlapped, a later write would corrupt an earlier one.
+    for (crd::u32 i = 0; i < kN; ++i)
+    {
+        bufs[i] = device->create_buffer(
+            {kSize, crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex), crd::rhi::MemoryUsage::CpuToGpu});
+        REQUIRE(bufs[i] != nullptr);
+        auto* p = static_cast<crd::u8*>(bufs[i]->map());
+        REQUIRE(p != nullptr);
+        std::memset(p, static_cast<int>(i & 0xFF), kSize);
+    }
+    // Read back: every buffer still holds its own pattern -> regions are disjoint.
+    for (crd::u32 i = 0; i < kN; ++i)
+    {
+        const auto* p = static_cast<const crd::u8*>(bufs[i]->map());
+        REQUIRE(p != nullptr);
+        CHECK(p[0] == static_cast<crd::u8>(i & 0xFF));
+        CHECK(p[kSize - 1] == static_cast<crd::u8>(i & 0xFF));
+    }
+    CHECK(capture.error_count() == 0U);
+    device->wait_idle();
+}
+
+TEST_CASE("S6 GPU dedicated allocation path for large resources", "[rhi][vulkan][gpualloc]")
+{
+    if (headless_requested()) { SUCCEED("headless"); return; }
+    auto instance = crd::rhi::create_vulkan_instance({});
+    REQUIRE(instance != nullptr);
+    crd::rhi::ValidationCapture capture(*instance);
+    auto device = instance->create_device({});
+    REQUIRE(device != nullptr);
+
+    // 20 MiB > the 16 MiB dedicated threshold -> own VkDeviceMemory, not pooled.
+    auto big = device->create_buffer({crd::u64{20} << 20,
+                                      crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex),
+                                      crd::rhi::MemoryUsage::CpuToGpu});
+    REQUIRE(big != nullptr);
+    auto* p = static_cast<crd::u8*>(big->map());
+    REQUIRE(p != nullptr);
+    p[0]                       = 0xAB;
+    p[(crd::u64{20} << 20) - 1] = 0xCD;
+    CHECK(p[0] == 0xAB);
+    CHECK(p[(crd::u64{20} << 20) - 1] == 0xCD);
+    CHECK(capture.error_count() == 0U);
+    device->wait_idle();
+}
+
+TEST_CASE("S6 GPU buffer + image coexist without bufferImageGranularity errors", "[rhi][vulkan][gpualloc]")
+{
+    if (headless_requested()) { SUCCEED("headless"); return; }
+    auto instance = crd::rhi::create_vulkan_instance({});
+    REQUIRE(instance != nullptr);
+    crd::rhi::ValidationCapture capture(*instance);
+    auto device = instance->create_device({});
+    REQUIRE(device != nullptr);
+
+    // A small buffer (linear) immediately followed by a small optimal-tiling image
+    // (non-linear). Separate linear/non-linear pools keep them off a shared
+    // bufferImageGranularity page -> zero validation errors on any GPU.
+    auto buf = device->create_buffer(
+        {4096, crd::rhi::enum_bits(crd::rhi::BufferUsage::Storage), crd::rhi::MemoryUsage::GpuOnly});
+    REQUIRE(buf != nullptr);
+    auto img = device->create_image({{64, 64},
+                                     crd::rhi::Format::R8G8B8A8Unorm,
+                                     crd::rhi::enum_bits(crd::rhi::ImageUsage::Sampled) |
+                                         crd::rhi::enum_bits(crd::rhi::ImageUsage::TransferDst),
+                                     1,
+                                     1});
+    REQUIRE(img != nullptr);
+    CHECK(capture.error_count() == 0U);
+    CHECK(capture.warning_count() == 0U);
+    device->wait_idle();
+}
+
+// ---------------------------------------------------------------------------
+// ADR-0085 S7 — GPU defragmentation ValidationCapture tests
+// ---------------------------------------------------------------------------
+
+TEST_CASE("S7 buffer defrag relocates and preserves contents", "[rhi][vulkan][gpudefrag]")
+{
+    if (headless_requested()) { SUCCEED("headless"); return; }
+    auto instance = crd::rhi::create_vulkan_instance({});
+    REQUIRE(instance != nullptr);
+    crd::rhi::ValidationCapture capture(*instance);
+    auto device = instance->create_device({});
+    REQUIRE(device != nullptr);
+
+    constexpr crd::u32                kN    = 16;
+    constexpr crd::u32                kSize = 4096;
+    std::unique_ptr<crd::rhi::Buffer> bufs[kN];
+    for (crd::u32 i = 0; i < kN; ++i)
+    {
+        bufs[i] = device->create_buffer(
+            {kSize, crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex) | crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferSrc) |
+                        crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferDst),
+             crd::rhi::MemoryUsage::CpuToGpu});
+        REQUIRE(bufs[i] != nullptr);
+        auto* p = static_cast<crd::u8*>(bufs[i]->map());
+        REQUIRE(p != nullptr);
+        std::memset(p, static_cast<int>(i & 0xFF), kSize);
+    }
+    // Free the even-indexed buffers to punch holes, then defragment.
+    for (crd::u32 i = 0; i < kN; i += 2)
+    {
+        bufs[i].reset();
+    }
+
+    DefragAllPolicy policy;
+    crd::rhi::vulkan_defragment(*device, policy);
+
+    // Survivors (odd indices) keep their contents at the (now relocated) address.
+    for (crd::u32 i = 1; i < kN; i += 2)
+    {
+        const auto* p = static_cast<const crd::u8*>(bufs[i]->map());
+        REQUIRE(p != nullptr);
+        CHECK(p[0] == static_cast<crd::u8>(i & 0xFF));
+        CHECK(p[kSize - 1] == static_cast<crd::u8>(i & 0xFF));
+    }
+    CHECK(policy.buffer_relocations >= 1U); // something actually moved
+    CHECK(capture.error_count() == 0U);
+    device->wait_idle();
+}
+
+TEST_CASE("S7 image defrag relocates a populated image with zero validation errors", "[rhi][vulkan][gpudefrag]")
+{
+    if (headless_requested()) { SUCCEED("headless"); return; }
+    auto instance = crd::rhi::create_vulkan_instance({});
+    REQUIRE(instance != nullptr);
+    crd::rhi::ValidationCapture capture(*instance);
+    auto device = instance->create_device({});
+    REQUIRE(device != nullptr);
+
+    // TransferSrc|Dst required for vkCmdCopyImage; ColorAttachment for a defined layout.
+    auto img = device->create_image({{128, 128},
+                                     crd::rhi::Format::R8G8B8A8Unorm,
+                                     crd::rhi::enum_bits(crd::rhi::ImageUsage::ColorAttachment) |
+                                         crd::rhi::enum_bits(crd::rhi::ImageUsage::TransferSrc) |
+                                         crd::rhi::enum_bits(crd::rhi::ImageUsage::TransferDst),
+                                     1,
+                                     1});
+    REQUIRE(img != nullptr);
+
+    // Move it out of UNDEFINED (defrag skips UNDEFINED images — no content to preserve).
+    auto cmd = device->create_command_buffer();
+    cmd->begin();
+    cmd->transition_image(*img, crd::rhi::ImageAccess::Undefined, crd::rhi::ImageAccess::ColorWrite);
+    cmd->end();
+    device->graphics_queue().submit_and_wait(*cmd);
+
+    DefragAllPolicy policy;
+    crd::rhi::vulkan_defragment(*device, policy);
+    CHECK(policy.image_relocations >= 1U); // the image moved
+    CHECK(capture.error_count() == 0U);    // barriers + subresource copy were correct
+    CHECK(capture.warning_count() == 0U);
+    device->wait_idle();
+}
+
+TEST_CASE("S7 residency relocation preserves buffer data across device<->host", "[rhi][vulkan][gpuresidency]")
+{
+    if (headless_requested()) { SUCCEED("headless"); return; }
+    auto instance = crd::rhi::create_vulkan_instance({});
+    REQUIRE(instance != nullptr);
+    crd::rhi::ValidationCapture capture(*instance);
+    auto device = instance->create_device({});
+    REQUIRE(device != nullptr);
+
+    constexpr crd::u32 kSize = 4096;
+    auto               buf   = device->create_buffer(
+        {kSize,
+                       crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex) | crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferSrc) |
+             crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferDst),
+                       crd::rhi::MemoryUsage::GpuOnly});
+    REQUIRE(buf != nullptr);
+    CHECK(buf->map() == nullptr); // device-local is not host-mappable
+
+    // Evict to host -> now mappable; write a known pattern.
+    REQUIRE(crd::rhi::vulkan_evict_to_host(*device, *buf) > 0U);
+    auto* p = static_cast<crd::u8*>(buf->map());
+    REQUIRE(p != nullptr);
+    for (crd::u32 i = 0; i < kSize; ++i) { p[i] = static_cast<crd::u8>(i & 0xFF); }
+
+    // Re-promote to device (host->device copy), then evict again (device->host copy):
+    // the pattern must survive BOTH relocation copies.
+    crd::rhi::vulkan_make_resident(*device, *buf);
+    CHECK(buf->map() == nullptr); // device-local again
+    REQUIRE(crd::rhi::vulkan_evict_to_host(*device, *buf) > 0U);
+    const auto* q = static_cast<const crd::u8*>(buf->map());
+    REQUIRE(q != nullptr);
+    for (crd::u32 i = 0; i < kSize; ++i) { CHECK(q[i] == static_cast<crd::u8>(i & 0xFF)); }
+    CHECK(capture.error_count() == 0U);
+    device->wait_idle();
+}
+
+TEST_CASE("S7 residency auto-evicts device-local memory over the budget", "[rhi][vulkan][gpuresidency]")
+{
+    if (headless_requested()) { SUCCEED("headless"); return; }
+    auto instance = crd::rhi::create_vulkan_instance({});
+    REQUIRE(instance != nullptr);
+    crd::rhi::ValidationCapture capture(*instance);
+    auto device = instance->create_device({});
+    REQUIRE(device != nullptr);
+
+    EvictFirstPolicy   policy;
+    constexpr crd::u32 kSize = 256U * 1024U;
+    crd::rhi::vulkan_configure_residency(*device, &policy, crd::u64{4} * kSize); // budget = 4 buffers
+
+    std::unique_ptr<crd::rhi::Buffer> bufs[8];
+    for (crd::u32 i = 0; i < 8; ++i)
+    {
+        bufs[i] = device->create_buffer(
+            {kSize,
+             crd::rhi::enum_bits(crd::rhi::BufferUsage::Storage) | crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferSrc) |
+                 crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferDst),
+             crd::rhi::MemoryUsage::GpuOnly});
+        REQUIRE(bufs[i] != nullptr);
+    }
+    // 8 device-local buffers against a 4-buffer budget must have engaged the policy,
+    // and the resident device-local total must stay near the budget.
+    CHECK(policy.evict_count >= 1U);
+    CHECK(crd::rhi::vulkan_device_local_used(*device) <= crd::u64{5} * kSize);
+    CHECK(capture.error_count() == 0U);
+    device->wait_idle();
+}
+
+TEST_CASE("S7 NullDefragPolicy relocates nothing", "[rhi][vulkan][gpudefrag]")
+{
+    if (headless_requested()) { SUCCEED("headless"); return; }
+    auto instance = crd::rhi::create_vulkan_instance({});
+    REQUIRE(instance != nullptr);
+    crd::rhi::ValidationCapture capture(*instance);
+    auto device = instance->create_device({});
+    REQUIRE(device != nullptr);
+
+    auto buf = device->create_buffer(
+        {4096, crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex), crd::rhi::MemoryUsage::CpuToGpu});
+    REQUIRE(buf != nullptr);
+
+    crd::rhi::NullDefragPolicy policy; // default: relocates nothing
+    crd::rhi::vulkan_defragment(*device, policy);
+    CHECK(capture.error_count() == 0U);
     device->wait_idle();
 }

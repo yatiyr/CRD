@@ -1,5 +1,5 @@
 #include <crd/log/log.hpp>
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/renderer/forward_render_path.hpp>
 #include <crd/renderer/frame_graph.hpp>
 #include <crd/renderer/gpu_uploader.hpp>
@@ -112,7 +112,7 @@ int main()
     CRD_LOG_INFO(g_log_smoke_depth, "ForwardRenderPath created — color + depth render targets allocated");
 
     // Upload a triangle mesh.
-    crd::memory::MallocAllocator cpu_alloc;
+    crd::memory::TlsfAllocator cpu_alloc{256ULL << 20};
     auto cpu_mesh = make_triangle_mesh(&cpu_alloc);
     auto gpu_mesh = crd::renderer::GpuUploader::upload_mesh(cpu_mesh, *device);
     CRD_ASSERT(gpu_mesh.vertex_buffer != nullptr);

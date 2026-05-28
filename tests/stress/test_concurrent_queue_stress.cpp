@@ -26,7 +26,7 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/concurrent_queue.hpp>
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
@@ -50,7 +50,7 @@ constexpr u64 make_token(u32 producer_idx, u64 seq) noexcept
 
 void drive(crd::stress::RunMode mode)
 {
-    crd::memory::MallocAllocator alloc("cq-stress");
+    crd::memory::GrowableTlsfAllocator alloc{256ULL << 20, nullptr, "cq-stress"};
 
     crd::stress::Config cfg = crd::stress::bounded(mode);
     cfg.num_workers = kWorkers;

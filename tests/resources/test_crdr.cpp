@@ -2,11 +2,13 @@
 #include <crd/resources/crdr.hpp>
 #include <crd/resources/resource_id.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
+#include <new>
 
 using namespace crd::resources;
 
-static crd::memory::MallocAllocator s_alloc;
+alignas(crd::memory::GrowableTlsfAllocator) static unsigned char s_alloc_buf[sizeof(crd::memory::GrowableTlsfAllocator)];
+static crd::memory::GrowableTlsfAllocator& s_alloc = *::new (s_alloc_buf) crd::memory::GrowableTlsfAllocator(); // never destroyed: static-destruction-order safe
 
 // ── Reader validation ─────────────────────────────────────────────────────
 

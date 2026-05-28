@@ -60,8 +60,7 @@ CommandResult error_result(crd::memory::IAllocator* alloc, const char* msg)
     return r;
 }
 
-CommandResult binary_result(crd::memory::IAllocator* alloc,
-                             crd::containers::ConstSpan<crd::f64> values)
+CommandResult binary_result(crd::memory::IAllocator* alloc, crd::containers::ConstSpan<crd::f64> values)
 {
     CommandResult r{alloc};
     r.ok = true;
@@ -78,8 +77,7 @@ CommandResult binary_result(crd::memory::IAllocator* alloc,
 
 // ---- LU solver ------------------------------------------------------
 
-template <typename T>
-CommandResult impl_lu_solve(const CommandArgs& args)
+template <typename T> CommandResult impl_lu_solve(const CommandArgs& args)
 {
     const auto a_flat = args.get_f64_array("A");
     const auto b_flat = args.get_f64_array("b");
@@ -121,8 +119,7 @@ CommandResult impl_lu_solve(const CommandArgs& args)
 
 // ---- Cholesky solver ------------------------------------------------
 
-template <typename T>
-CommandResult impl_cholesky_solve(const CommandArgs& args)
+template <typename T> CommandResult impl_cholesky_solve(const CommandArgs& args)
 {
     const auto a_flat = args.get_f64_array("A");
     const auto b_flat = args.get_f64_array("b");
@@ -164,8 +161,7 @@ CommandResult impl_cholesky_solve(const CommandArgs& args)
 
 // ---- LDLT solver ----------------------------------------------------
 
-template <typename T>
-CommandResult impl_ldlt_solve(const CommandArgs& args)
+template <typename T> CommandResult impl_ldlt_solve(const CommandArgs& args)
 {
     const auto a_flat = args.get_f64_array("A");
     const auto b_flat = args.get_f64_array("b");
@@ -207,8 +203,7 @@ CommandResult impl_ldlt_solve(const CommandArgs& args)
 
 // ---- QR solver (square or least-squares; m >= n) ---------------------
 
-template <typename T>
-CommandResult impl_qr_solve(const CommandArgs& args)
+template <typename T> CommandResult impl_qr_solve(const CommandArgs& args)
 {
     const auto a_flat = args.get_f64_array("A");
     const auto b_flat = args.get_f64_array("b");
@@ -246,8 +241,7 @@ CommandResult impl_qr_solve(const CommandArgs& args)
     return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
 }
 
-CommandSchema make_schema(crd::memory::IAllocator* alloc, const char* name, const char* desc,
-                          OutputKind output_kind)
+CommandSchema make_schema(crd::memory::IAllocator* alloc, const char* name, const char* desc, OutputKind output_kind)
 {
     CommandSchema s{alloc};
     s.name = crd::containers::String{name, alloc};
@@ -258,8 +252,8 @@ CommandSchema make_schema(crd::memory::IAllocator* alloc, const char* name, cons
     return s;
 }
 
-void add_param(CommandSchema& s, crd::memory::IAllocator* alloc, const char* name, const char* desc,
-               ParamKind kind, bool required)
+void add_param(CommandSchema& s, crd::memory::IAllocator* alloc, const char* name, const char* desc, ParamKind kind,
+               bool required)
 {
     ParamSchema p{alloc};
     p.name = crd::containers::String{name, alloc};
@@ -273,95 +267,94 @@ void add_param(CommandSchema& s, crd::memory::IAllocator* alloc, const char* nam
 
 namespace crd::hesap::dense
 {
-void register_solvers_cli_anchor() noexcept
-{
-}
+void register_solvers_cli_anchor() noexcept {}
 } // namespace crd::hesap::dense
 
-CRD_HESAP_CLI_REGISTER_MODULE([](CommandRegistry& reg) {
-    auto* alloc = crd::memory::default_allocator();
+// Registration uses crd allocators (abort on OOM, never throw); the std bad_alloc path the check
+// traces is unreachable, and the registrar ctor is noexcept (would terminate, not escape) regardless.
+// NOLINTNEXTLINE(bugprone-throwing-static-initialization)
+CRD_HESAP_CLI_REGISTER_MODULE(
+    [](CommandRegistry& reg)
+    {
+        auto* alloc = crd::memory::default_allocator();
 
-    // ---- LU --------------------------------------------------------
-    {
-        auto s = make_schema(alloc, "hesap.dense.solver.lu.f32",
-            "Solve A * x = b via LU partial-pivoting (f32 square).", OutputKind::BinaryBlob);
-        add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
-        add_param(s, alloc, "A", "Matrix A flattened row-major (n*n)", ParamKind::F64, true);
-        add_param(s, alloc, "b", "RHS b (n)", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_lu_solve<crd::f32>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.solver.lu.f64",
-            "Solve A * x = b via LU partial-pivoting (f64 square).", OutputKind::BinaryBlob);
-        add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
-        add_param(s, alloc, "A", "Matrix A flattened row-major (n*n)", ParamKind::F64, true);
-        add_param(s, alloc, "b", "RHS b (n)", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_lu_solve<crd::f64>);
-    }
+        // ---- LU --------------------------------------------------------
+        {
+            auto s = make_schema(alloc, "hesap.dense.solver.lu.f32",
+                                 "Solve A * x = b via LU partial-pivoting (f32 square).", OutputKind::BinaryBlob);
+            add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
+            add_param(s, alloc, "A", "Matrix A flattened row-major (n*n)", ParamKind::F64, true);
+            add_param(s, alloc, "b", "RHS b (n)", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_lu_solve<crd::f32>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.solver.lu.f64",
+                                 "Solve A * x = b via LU partial-pivoting (f64 square).", OutputKind::BinaryBlob);
+            add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
+            add_param(s, alloc, "A", "Matrix A flattened row-major (n*n)", ParamKind::F64, true);
+            add_param(s, alloc, "b", "RHS b (n)", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_lu_solve<crd::f64>);
+        }
 
-    // ---- Cholesky --------------------------------------------------
-    {
-        auto s = make_schema(alloc, "hesap.dense.solver.cholesky.f32",
-            "Solve A * x = b via Cholesky (f32 SPD; A lower triangle authoritative).",
-            OutputKind::BinaryBlob);
-        add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
-        add_param(s, alloc, "A", "Symmetric A flattened (n*n); lower triangle used",
-                  ParamKind::F64, true);
-        add_param(s, alloc, "b", "RHS b (n)", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_cholesky_solve<crd::f32>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.solver.cholesky.f64",
-            "Solve A * x = b via Cholesky (f64 SPD; A lower triangle authoritative).",
-            OutputKind::BinaryBlob);
-        add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
-        add_param(s, alloc, "A", "Symmetric A flattened (n*n); lower triangle used",
-                  ParamKind::F64, true);
-        add_param(s, alloc, "b", "RHS b (n)", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_cholesky_solve<crd::f64>);
-    }
+        // ---- Cholesky --------------------------------------------------
+        {
+            auto s = make_schema(alloc, "hesap.dense.solver.cholesky.f32",
+                                 "Solve A * x = b via Cholesky (f32 SPD; A lower triangle authoritative).",
+                                 OutputKind::BinaryBlob);
+            add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
+            add_param(s, alloc, "A", "Symmetric A flattened (n*n); lower triangle used", ParamKind::F64, true);
+            add_param(s, alloc, "b", "RHS b (n)", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_cholesky_solve<crd::f32>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.solver.cholesky.f64",
+                                 "Solve A * x = b via Cholesky (f64 SPD; A lower triangle authoritative).",
+                                 OutputKind::BinaryBlob);
+            add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
+            add_param(s, alloc, "A", "Symmetric A flattened (n*n); lower triangle used", ParamKind::F64, true);
+            add_param(s, alloc, "b", "RHS b (n)", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_cholesky_solve<crd::f64>);
+        }
 
-    // ---- LDLT ------------------------------------------------------
-    {
-        auto s = make_schema(alloc, "hesap.dense.solver.ldlt.f32",
-            "Solve A * x = b via Bunch-Kaufman LDLT (f32 symmetric indefinite).",
-            OutputKind::BinaryBlob);
-        add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
-        add_param(s, alloc, "A", "Symmetric A flattened (n*n); lower triangle used",
-                  ParamKind::F64, true);
-        add_param(s, alloc, "b", "RHS b (n)", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_ldlt_solve<crd::f32>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.solver.ldlt.f64",
-            "Solve A * x = b via Bunch-Kaufman LDLT (f64 symmetric indefinite).",
-            OutputKind::BinaryBlob);
-        add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
-        add_param(s, alloc, "A", "Symmetric A flattened (n*n); lower triangle used",
-                  ParamKind::F64, true);
-        add_param(s, alloc, "b", "RHS b (n)", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_ldlt_solve<crd::f64>);
-    }
+        // ---- LDLT ------------------------------------------------------
+        {
+            auto s = make_schema(alloc, "hesap.dense.solver.ldlt.f32",
+                                 "Solve A * x = b via Bunch-Kaufman LDLT (f32 symmetric indefinite).",
+                                 OutputKind::BinaryBlob);
+            add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
+            add_param(s, alloc, "A", "Symmetric A flattened (n*n); lower triangle used", ParamKind::F64, true);
+            add_param(s, alloc, "b", "RHS b (n)", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_ldlt_solve<crd::f32>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.solver.ldlt.f64",
+                                 "Solve A * x = b via Bunch-Kaufman LDLT (f64 symmetric indefinite).",
+                                 OutputKind::BinaryBlob);
+            add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
+            add_param(s, alloc, "A", "Symmetric A flattened (n*n); lower triangle used", ParamKind::F64, true);
+            add_param(s, alloc, "b", "RHS b (n)", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_ldlt_solve<crd::f64>);
+        }
 
-    // ---- QR (square + least-squares) -------------------------------
-    {
-        auto s = make_schema(alloc, "hesap.dense.solver.qr.f32",
-            "Solve A * x = b via Householder QR (f32; m >= n; LS for m > n).",
-            OutputKind::BinaryBlob);
-        add_param(s, alloc, "m", "Rows of A", ParamKind::U64, true);
-        add_param(s, alloc, "n", "Cols of A", ParamKind::U64, true);
-        add_param(s, alloc, "A", "Matrix A flattened row-major (m*n)", ParamKind::F64, true);
-        add_param(s, alloc, "b", "RHS b (m)", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_qr_solve<crd::f32>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.solver.qr.f64",
-            "Solve A * x = b via Householder QR (f64; m >= n; LS for m > n).",
-            OutputKind::BinaryBlob);
-        add_param(s, alloc, "m", "Rows of A", ParamKind::U64, true);
-        add_param(s, alloc, "n", "Cols of A", ParamKind::U64, true);
-        add_param(s, alloc, "A", "Matrix A flattened row-major (m*n)", ParamKind::F64, true);
-        add_param(s, alloc, "b", "RHS b (m)", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_qr_solve<crd::f64>);
-    }
-});
+        // ---- QR (square + least-squares) -------------------------------
+        {
+            auto s =
+                make_schema(alloc, "hesap.dense.solver.qr.f32",
+                            "Solve A * x = b via Householder QR (f32; m >= n; LS for m > n).", OutputKind::BinaryBlob);
+            add_param(s, alloc, "m", "Rows of A", ParamKind::U64, true);
+            add_param(s, alloc, "n", "Cols of A", ParamKind::U64, true);
+            add_param(s, alloc, "A", "Matrix A flattened row-major (m*n)", ParamKind::F64, true);
+            add_param(s, alloc, "b", "RHS b (m)", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_qr_solve<crd::f32>);
+        }
+        {
+            auto s =
+                make_schema(alloc, "hesap.dense.solver.qr.f64",
+                            "Solve A * x = b via Householder QR (f64; m >= n; LS for m > n).", OutputKind::BinaryBlob);
+            add_param(s, alloc, "m", "Rows of A", ParamKind::U64, true);
+            add_param(s, alloc, "n", "Cols of A", ParamKind::U64, true);
+            add_param(s, alloc, "A", "Matrix A flattened row-major (m*n)", ParamKind::F64, true);
+            add_param(s, alloc, "b", "RHS b (m)", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_qr_solve<crd::f64>);
+        }
+    });

@@ -4,7 +4,9 @@
 #include <crd/resources/resource_manager.hpp>
 
 #include <crd/jobs/jobs.hpp>
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
+#include <crd/memory/allocators/thread_safe_allocator.hpp>
+#include <new>
 #include <crd/platform/filesystem.hpp>
 #include <crd/resources/crdr.hpp>
 #include <crd/resources/loader.hpp>
@@ -14,7 +16,8 @@
 
 using namespace crd::resources;
 
-static crd::memory::MallocAllocator s_alloc;
+alignas(crd::memory::GrowableTlsfAllocator) static unsigned char s_alloc_buf[sizeof(crd::memory::GrowableTlsfAllocator)];
+static crd::memory::GrowableTlsfAllocator& s_alloc = *::new (s_alloc_buf) crd::memory::GrowableTlsfAllocator(); // never destroyed: static-destruction-order safe
 
 // Initialise / shut down the job system around the full test run.
 // Using a listener avoids calling jobs::init() during catch_discover_tests' listing phase.
@@ -211,7 +214,9 @@ struct BlobResource
 // Fully-functional loader: parses the CRDR artifact and copies the BLOB chunk.
 struct BlobResourceLoader final : public ILoader
 {
-    crd::memory::MallocAllocator m_alloc;
+    // Concurrent async loads share one loader instance; wrapper serializes the heap.
+    crd::memory::GrowableTlsfAllocator m_inner;
+    crd::memory::ThreadSafeAllocator   m_alloc{&m_inner};
 
     [[nodiscard]] crd::u32 type_fourcc()    const noexcept override { return kFourCC_BLOB; }
     [[nodiscard]] crd::u32 loader_version() const noexcept override { return 1U; }
@@ -280,7 +285,9 @@ struct ChainedPayload { bool ok = true; };
 struct ChainedLoader final : public ILoader
 {
     crd::u32 m_fourcc;
-    crd::memory::MallocAllocator m_alloc;
+    // Concurrent async loads share one loader instance; wrapper serializes the heap.
+    crd::memory::GrowableTlsfAllocator m_inner;
+    crd::memory::ThreadSafeAllocator   m_alloc{&m_inner};
 
     explicit ChainedLoader(crd::u32 fc) : m_fourcc(fc) {}
 

@@ -27,9 +27,7 @@ namespace crd::hesap::dense
 {
 // Anchor definition — exported so downstream consumers can reference it
 // and force the linker to pull this TU in (along with the static-init below).
-void register_blas1_cli_anchor() noexcept
-{
-}
+void register_blas1_cli_anchor() noexcept {}
 } // namespace crd::hesap::dense
 
 namespace
@@ -44,9 +42,7 @@ using namespace crd::hesap::dense;
 // -----------------------------------------------------------------------
 
 template <typename T>
-Vector<Complex<T>> unpack_complex_array(
-    crd::containers::ConstSpan<crd::f64> flat,
-    crd::memory::IAllocator* alloc)
+Vector<Complex<T>> unpack_complex_array(crd::containers::ConstSpan<crd::f64> flat, crd::memory::IAllocator* alloc)
 {
     const crd::usize n = flat.size() / 2;
     Vector<Complex<T>> v(alloc, n);
@@ -58,9 +54,8 @@ Vector<Complex<T>> unpack_complex_array(
 }
 
 template <typename T>
-crd::containers::Array<crd::f64> pack_complex_array(
-    crd::containers::ConstSpan<Complex<T>> v,
-    crd::memory::IAllocator* alloc)
+crd::containers::Array<crd::f64> pack_complex_array(crd::containers::ConstSpan<Complex<T>> v,
+                                                    crd::memory::IAllocator* alloc)
 {
     crd::containers::Array<crd::f64> out(alloc);
     out.reserve(v.size() * 2);
@@ -73,9 +68,7 @@ crd::containers::Array<crd::f64> pack_complex_array(
 }
 
 template <typename T>
-Vector<T> unpack_real_array(
-    crd::containers::ConstSpan<crd::f64> flat,
-    crd::memory::IAllocator* alloc)
+Vector<T> unpack_real_array(crd::containers::ConstSpan<crd::f64> flat, crd::memory::IAllocator* alloc)
 {
     Vector<T> v(alloc, flat.size());
     for (crd::usize i = 0; i < flat.size(); ++i)
@@ -86,9 +79,7 @@ Vector<T> unpack_real_array(
 }
 
 template <typename T>
-crd::containers::Array<crd::f64> pack_real_array(
-    crd::containers::ConstSpan<T> v,
-    crd::memory::IAllocator* alloc)
+crd::containers::Array<crd::f64> pack_real_array(crd::containers::ConstSpan<T> v, crd::memory::IAllocator* alloc)
 {
     crd::containers::Array<crd::f64> out(alloc);
     out.reserve(v.size());
@@ -149,8 +140,7 @@ CommandResult binary_result(crd::memory::IAllocator* alloc, crd::containers::Con
 //   iamax: ScalarF64 (returned as f64 since u64 not in v0a output types)
 // -----------------------------------------------------------------------
 
-template <typename T>
-CommandResult impl_axpy_real(const CommandArgs& args)
+template <typename T> CommandResult impl_axpy_real(const CommandArgs& args)
 {
     const auto alpha = args.get_f64("alpha").value_or(crd::f64{1.0});
     const auto x = args.get_f64_array("x");
@@ -166,8 +156,7 @@ CommandResult impl_axpy_real(const CommandArgs& args)
     return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
 }
 
-template <typename T>
-CommandResult impl_dot_real(const CommandArgs& args)
+template <typename T> CommandResult impl_dot_real(const CommandArgs& args)
 {
     const auto x = args.get_f64_array("x");
     const auto y = args.get_f64_array("y");
@@ -181,8 +170,7 @@ CommandResult impl_dot_real(const CommandArgs& args)
     return scalar_result(args.alloc, static_cast<crd::f64>(v));
 }
 
-template <typename T>
-CommandResult impl_nrm2_real(const CommandArgs& args)
+template <typename T> CommandResult impl_nrm2_real(const CommandArgs& args)
 {
     const auto x = args.get_f64_array("x");
     if (x.empty())
@@ -194,8 +182,7 @@ CommandResult impl_nrm2_real(const CommandArgs& args)
     return scalar_result(args.alloc, static_cast<crd::f64>(v));
 }
 
-template <typename T>
-CommandResult impl_scal_real(const CommandArgs& args)
+template <typename T> CommandResult impl_scal_real(const CommandArgs& args)
 {
     const auto alpha = args.get_f64("alpha").value_or(crd::f64{1.0});
     const auto x = args.get_f64_array("x");
@@ -209,8 +196,7 @@ CommandResult impl_scal_real(const CommandArgs& args)
     return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
 }
 
-template <typename T>
-CommandResult impl_copy_real(const CommandArgs& args)
+template <typename T> CommandResult impl_copy_real(const CommandArgs& args)
 {
     const auto src = args.get_f64_array("src");
     if (src.empty())
@@ -222,8 +208,7 @@ CommandResult impl_copy_real(const CommandArgs& args)
     return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
 }
 
-template <typename T>
-CommandResult impl_asum_real(const CommandArgs& args)
+template <typename T> CommandResult impl_asum_real(const CommandArgs& args)
 {
     const auto x = args.get_f64_array("x");
     if (x.empty())
@@ -235,8 +220,7 @@ CommandResult impl_asum_real(const CommandArgs& args)
     return scalar_result(args.alloc, static_cast<crd::f64>(v));
 }
 
-template <typename T>
-CommandResult impl_iamax_real(const CommandArgs& args)
+template <typename T> CommandResult impl_iamax_real(const CommandArgs& args)
 {
     const auto x = args.get_f64_array("x");
     if (x.empty())
@@ -256,8 +240,7 @@ CommandResult impl_iamax_real(const CommandArgs& args)
 //   y     (F64Array of size 2N for ops that need it)
 // -----------------------------------------------------------------------
 
-template <typename U>
-CommandResult impl_axpy_complex(const CommandArgs& args)
+template <typename U> CommandResult impl_axpy_complex(const CommandArgs& args)
 {
     const auto alpha_flat = args.get_f64_array("alpha");
     Complex<U> alpha{U(1), U(0)};
@@ -278,8 +261,7 @@ CommandResult impl_axpy_complex(const CommandArgs& args)
     return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
 }
 
-template <typename U>
-CommandResult impl_dotu_complex(const CommandArgs& args)
+template <typename U> CommandResult impl_dotu_complex(const CommandArgs& args)
 {
     const auto x = args.get_f64_array("x");
     const auto y = args.get_f64_array("y");
@@ -294,8 +276,7 @@ CommandResult impl_dotu_complex(const CommandArgs& args)
     return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{pair, 2});
 }
 
-template <typename U>
-CommandResult impl_dotc_complex(const CommandArgs& args)
+template <typename U> CommandResult impl_dotc_complex(const CommandArgs& args)
 {
     const auto x = args.get_f64_array("x");
     const auto y = args.get_f64_array("y");
@@ -310,8 +291,7 @@ CommandResult impl_dotc_complex(const CommandArgs& args)
     return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{pair, 2});
 }
 
-template <typename U>
-CommandResult impl_nrm2_complex(const CommandArgs& args)
+template <typename U> CommandResult impl_nrm2_complex(const CommandArgs& args)
 {
     const auto x = args.get_f64_array("x");
     if (x.empty() || (x.size() % 2) != 0)
@@ -323,8 +303,7 @@ CommandResult impl_nrm2_complex(const CommandArgs& args)
     return scalar_result(args.alloc, static_cast<crd::f64>(v));
 }
 
-template <typename U>
-CommandResult impl_scal_complex(const CommandArgs& args)
+template <typename U> CommandResult impl_scal_complex(const CommandArgs& args)
 {
     const auto alpha_flat = args.get_f64_array("alpha");
     Complex<U> alpha{U(1), U(0)};
@@ -343,8 +322,7 @@ CommandResult impl_scal_complex(const CommandArgs& args)
     return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
 }
 
-template <typename U>
-CommandResult impl_asum_complex(const CommandArgs& args)
+template <typename U> CommandResult impl_asum_complex(const CommandArgs& args)
 {
     const auto x = args.get_f64_array("x");
     if (x.empty() || (x.size() % 2) != 0)
@@ -356,8 +334,7 @@ CommandResult impl_asum_complex(const CommandArgs& args)
     return scalar_result(args.alloc, static_cast<crd::f64>(v));
 }
 
-template <typename U>
-CommandResult impl_iamax_complex(const CommandArgs& args)
+template <typename U> CommandResult impl_iamax_complex(const CommandArgs& args)
 {
     const auto x = args.get_f64_array("x");
     if (x.empty() || (x.size() % 2) != 0)
@@ -373,28 +350,19 @@ CommandResult impl_iamax_complex(const CommandArgs& args)
 // Helper to build a CommandSchema with the common BLAS L1 param shape.
 // -----------------------------------------------------------------------
 
-CommandSchema make_schema(
-    crd::memory::IAllocator* alloc,
-    const char* name,
-    const char* desc,
-    OutputKind output_kind)
+CommandSchema make_schema(crd::memory::IAllocator* alloc, const char* name, const char* desc, OutputKind output_kind)
 {
     CommandSchema s{alloc};
     s.name = crd::containers::String{name, alloc};
     s.description = crd::containers::String{desc, alloc};
     s.output.kind = output_kind;
     s.required_caps.bits = Capability::kHesapCompute;
-    s.idempotent = true;  // BLAS L1 ops are stateless wrt registry; running twice on same args gives same result.
+    s.idempotent = true; // BLAS L1 ops are stateless wrt registry; running twice on same args gives same result.
     return s;
 }
 
-void add_param(
-    CommandSchema& s,
-    crd::memory::IAllocator* alloc,
-    const char* name,
-    const char* desc,
-    ParamKind kind,
-    bool required)
+void add_param(CommandSchema& s, crd::memory::IAllocator* alloc, const char* name, const char* desc, ParamKind kind,
+               bool required)
 {
     ParamSchema p{alloc};
     p.name = crd::containers::String{name, alloc};
@@ -408,7 +376,7 @@ void add_param(
 void add_real_axpy_like_params(CommandSchema& s, crd::memory::IAllocator* alloc)
 {
     add_param(s, alloc, "alpha", "Scalar multiplier (default 1.0)", ParamKind::F64, /*required=*/false);
-    add_param(s, alloc, "x", "Input vector x", ParamKind::F64, /*required=*/true);  // F64Array used at runtime
+    add_param(s, alloc, "x", "Input vector x", ParamKind::F64, /*required=*/true); // F64Array used at runtime
     add_param(s, alloc, "y", "Input vector y", ParamKind::F64, /*required=*/true);
 }
 
@@ -443,186 +411,188 @@ void add_complex_unary_params(CommandSchema& s, crd::memory::IAllocator* alloc)
 
 } // namespace
 
-CRD_HESAP_CLI_REGISTER_MODULE([](CommandRegistry& reg) {
-    auto* alloc = crd::memory::default_allocator();
+// Registration uses crd allocators (abort on OOM, never throw); the std bad_alloc path the check
+// traces is unreachable, and the registrar ctor is noexcept (would terminate, not escape) regardless.
+// NOLINTNEXTLINE(bugprone-throwing-static-initialization)
+CRD_HESAP_CLI_REGISTER_MODULE(
+    [](CommandRegistry& reg)
+    {
+        auto* alloc = crd::memory::default_allocator();
 
-    // ----- Real BLAS L1: f32 ------------------------------------------
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas1.axpy.f32",
-            "y += alpha * x (f32). alpha scalar, x/y arrays.", OutputKind::BinaryBlob);
-        add_real_axpy_like_params(s, alloc);
-        reg.register_command(std::move(s), &impl_axpy_real<crd::f32>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas1.dot.f32",
-            "Real dot product sum x_i * y_i (f32).", OutputKind::Scalar);
-        add_real_dot_like_params(s, alloc);
-        reg.register_command(std::move(s), &impl_dot_real<crd::f32>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas1.nrm2.f32",
-            "Euclidean norm sqrt(sum x_i^2) (f32).", OutputKind::Scalar);
-        add_real_unary_params(s, alloc);
-        reg.register_command(std::move(s), &impl_nrm2_real<crd::f32>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas1.scal.f32",
-            "x *= alpha (f32).", OutputKind::BinaryBlob);
-        add_param(s, alloc, "alpha", "Scalar multiplier", ParamKind::F64, true);
-        add_param(s, alloc, "x", "Input vector x", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_scal_real<crd::f32>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas1.copy.f32",
-            "Return a copy of x (f32).", OutputKind::BinaryBlob);
-        add_param(s, alloc, "src", "Source vector", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_copy_real<crd::f32>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas1.asum.f32",
-            "Sum of absolute values (f32).", OutputKind::Scalar);
-        add_real_unary_params(s, alloc);
-        reg.register_command(std::move(s), &impl_asum_real<crd::f32>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas1.iamax.f32",
-            "Argmax |x_i|; ties broken by first index (f32).", OutputKind::Scalar);
-        add_real_unary_params(s, alloc);
-        reg.register_command(std::move(s), &impl_iamax_real<crd::f32>);
-    }
+        // ----- Real BLAS L1: f32 ------------------------------------------
+        {
+            auto s = make_schema(alloc, "hesap.dense.blas1.axpy.f32", "y += alpha * x (f32). alpha scalar, x/y arrays.",
+                                 OutputKind::BinaryBlob);
+            add_real_axpy_like_params(s, alloc);
+            reg.register_command(std::move(s), &impl_axpy_real<crd::f32>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.blas1.dot.f32", "Real dot product sum x_i * y_i (f32).",
+                                 OutputKind::Scalar);
+            add_real_dot_like_params(s, alloc);
+            reg.register_command(std::move(s), &impl_dot_real<crd::f32>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.blas1.nrm2.f32", "Euclidean norm sqrt(sum x_i^2) (f32).",
+                                 OutputKind::Scalar);
+            add_real_unary_params(s, alloc);
+            reg.register_command(std::move(s), &impl_nrm2_real<crd::f32>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.blas1.scal.f32", "x *= alpha (f32).", OutputKind::BinaryBlob);
+            add_param(s, alloc, "alpha", "Scalar multiplier", ParamKind::F64, true);
+            add_param(s, alloc, "x", "Input vector x", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_scal_real<crd::f32>);
+        }
+        {
+            auto s =
+                make_schema(alloc, "hesap.dense.blas1.copy.f32", "Return a copy of x (f32).", OutputKind::BinaryBlob);
+            add_param(s, alloc, "src", "Source vector", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_copy_real<crd::f32>);
+        }
+        {
+            auto s =
+                make_schema(alloc, "hesap.dense.blas1.asum.f32", "Sum of absolute values (f32).", OutputKind::Scalar);
+            add_real_unary_params(s, alloc);
+            reg.register_command(std::move(s), &impl_asum_real<crd::f32>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.blas1.iamax.f32",
+                                 "Argmax |x_i|; ties broken by first index (f32).", OutputKind::Scalar);
+            add_real_unary_params(s, alloc);
+            reg.register_command(std::move(s), &impl_iamax_real<crd::f32>);
+        }
 
-    // ----- Real BLAS L1: f64 ------------------------------------------
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas1.axpy.f64",
-            "y += alpha * x (f64).", OutputKind::BinaryBlob);
-        add_real_axpy_like_params(s, alloc);
-        reg.register_command(std::move(s), &impl_axpy_real<crd::f64>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas1.dot.f64",
-            "Real dot product sum x_i * y_i (f64).", OutputKind::Scalar);
-        add_real_dot_like_params(s, alloc);
-        reg.register_command(std::move(s), &impl_dot_real<crd::f64>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas1.nrm2.f64",
-            "Euclidean norm sqrt(sum x_i^2) (f64).", OutputKind::Scalar);
-        add_real_unary_params(s, alloc);
-        reg.register_command(std::move(s), &impl_nrm2_real<crd::f64>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas1.scal.f64",
-            "x *= alpha (f64).", OutputKind::BinaryBlob);
-        add_param(s, alloc, "alpha", "Scalar multiplier", ParamKind::F64, true);
-        add_param(s, alloc, "x", "Input vector x", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_scal_real<crd::f64>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas1.copy.f64",
-            "Return a copy of x (f64).", OutputKind::BinaryBlob);
-        add_param(s, alloc, "src", "Source vector", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_copy_real<crd::f64>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas1.asum.f64",
-            "Sum of absolute values (f64).", OutputKind::Scalar);
-        add_real_unary_params(s, alloc);
-        reg.register_command(std::move(s), &impl_asum_real<crd::f64>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas1.iamax.f64",
-            "Argmax |x_i|; ties broken by first index (f64).", OutputKind::Scalar);
-        add_real_unary_params(s, alloc);
-        reg.register_command(std::move(s), &impl_iamax_real<crd::f64>);
-    }
+        // ----- Real BLAS L1: f64 ------------------------------------------
+        {
+            auto s = make_schema(alloc, "hesap.dense.blas1.axpy.f64", "y += alpha * x (f64).", OutputKind::BinaryBlob);
+            add_real_axpy_like_params(s, alloc);
+            reg.register_command(std::move(s), &impl_axpy_real<crd::f64>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.blas1.dot.f64", "Real dot product sum x_i * y_i (f64).",
+                                 OutputKind::Scalar);
+            add_real_dot_like_params(s, alloc);
+            reg.register_command(std::move(s), &impl_dot_real<crd::f64>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.blas1.nrm2.f64", "Euclidean norm sqrt(sum x_i^2) (f64).",
+                                 OutputKind::Scalar);
+            add_real_unary_params(s, alloc);
+            reg.register_command(std::move(s), &impl_nrm2_real<crd::f64>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.blas1.scal.f64", "x *= alpha (f64).", OutputKind::BinaryBlob);
+            add_param(s, alloc, "alpha", "Scalar multiplier", ParamKind::F64, true);
+            add_param(s, alloc, "x", "Input vector x", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_scal_real<crd::f64>);
+        }
+        {
+            auto s =
+                make_schema(alloc, "hesap.dense.blas1.copy.f64", "Return a copy of x (f64).", OutputKind::BinaryBlob);
+            add_param(s, alloc, "src", "Source vector", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_copy_real<crd::f64>);
+        }
+        {
+            auto s =
+                make_schema(alloc, "hesap.dense.blas1.asum.f64", "Sum of absolute values (f64).", OutputKind::Scalar);
+            add_real_unary_params(s, alloc);
+            reg.register_command(std::move(s), &impl_asum_real<crd::f64>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.blas1.iamax.f64",
+                                 "Argmax |x_i|; ties broken by first index (f64).", OutputKind::Scalar);
+            add_real_unary_params(s, alloc);
+            reg.register_command(std::move(s), &impl_iamax_real<crd::f64>);
+        }
 
-    // ----- Complex BLAS L1: c32 (Complex<f32>) ------------------------
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas1.axpy.c32",
-            "y += alpha * x (Complex<f32>).", OutputKind::BinaryBlob);
-        add_complex_axpy_like_params(s, alloc);
-        reg.register_command(std::move(s), &impl_axpy_complex<crd::f32>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas1.dotu.c32",
-            "Unconjugated dot sum x_i * y_i (Complex<f32>).", OutputKind::BinaryBlob);
-        add_complex_dot_like_params(s, alloc);
-        reg.register_command(std::move(s), &impl_dotu_complex<crd::f32>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas1.dotc.c32",
-            "Hermitian dot sum conj(x_i) * y_i (Complex<f32>).", OutputKind::BinaryBlob);
-        add_complex_dot_like_params(s, alloc);
-        reg.register_command(std::move(s), &impl_dotc_complex<crd::f32>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas1.nrm2.c32",
-            "Euclidean norm sqrt(sum |x_i|^2) (Complex<f32>).", OutputKind::Scalar);
-        add_complex_unary_params(s, alloc);
-        reg.register_command(std::move(s), &impl_nrm2_complex<crd::f32>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas1.scal.c32",
-            "x *= alpha (Complex<f32>).", OutputKind::BinaryBlob);
-        add_param(s, alloc, "alpha", "Complex scalar [re, im]", ParamKind::F64, true);
-        add_param(s, alloc, "x", "Complex vector x flattened", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_scal_complex<crd::f32>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas1.asum.c32",
-            "Sum of |re_i| + |im_i| (Complex<f32>).", OutputKind::Scalar);
-        add_complex_unary_params(s, alloc);
-        reg.register_command(std::move(s), &impl_asum_complex<crd::f32>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas1.iamax.c32",
-            "Argmax (|re_i|+|im_i|); ties = first index (Complex<f32>).", OutputKind::Scalar);
-        add_complex_unary_params(s, alloc);
-        reg.register_command(std::move(s), &impl_iamax_complex<crd::f32>);
-    }
+        // ----- Complex BLAS L1: c32 (Complex<f32>) ------------------------
+        {
+            auto s = make_schema(alloc, "hesap.dense.blas1.axpy.c32", "y += alpha * x (Complex<f32>).",
+                                 OutputKind::BinaryBlob);
+            add_complex_axpy_like_params(s, alloc);
+            reg.register_command(std::move(s), &impl_axpy_complex<crd::f32>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.blas1.dotu.c32", "Unconjugated dot sum x_i * y_i (Complex<f32>).",
+                                 OutputKind::BinaryBlob);
+            add_complex_dot_like_params(s, alloc);
+            reg.register_command(std::move(s), &impl_dotu_complex<crd::f32>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.blas1.dotc.c32",
+                                 "Hermitian dot sum conj(x_i) * y_i (Complex<f32>).", OutputKind::BinaryBlob);
+            add_complex_dot_like_params(s, alloc);
+            reg.register_command(std::move(s), &impl_dotc_complex<crd::f32>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.blas1.nrm2.c32",
+                                 "Euclidean norm sqrt(sum |x_i|^2) (Complex<f32>).", OutputKind::Scalar);
+            add_complex_unary_params(s, alloc);
+            reg.register_command(std::move(s), &impl_nrm2_complex<crd::f32>);
+        }
+        {
+            auto s =
+                make_schema(alloc, "hesap.dense.blas1.scal.c32", "x *= alpha (Complex<f32>).", OutputKind::BinaryBlob);
+            add_param(s, alloc, "alpha", "Complex scalar [re, im]", ParamKind::F64, true);
+            add_param(s, alloc, "x", "Complex vector x flattened", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_scal_complex<crd::f32>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.blas1.asum.c32", "Sum of |re_i| + |im_i| (Complex<f32>).",
+                                 OutputKind::Scalar);
+            add_complex_unary_params(s, alloc);
+            reg.register_command(std::move(s), &impl_asum_complex<crd::f32>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.blas1.iamax.c32",
+                                 "Argmax (|re_i|+|im_i|); ties = first index (Complex<f32>).", OutputKind::Scalar);
+            add_complex_unary_params(s, alloc);
+            reg.register_command(std::move(s), &impl_iamax_complex<crd::f32>);
+        }
 
-    // ----- Complex BLAS L1: c64 (Complex<f64>) ------------------------
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas1.axpy.c64",
-            "y += alpha * x (Complex<f64>).", OutputKind::BinaryBlob);
-        add_complex_axpy_like_params(s, alloc);
-        reg.register_command(std::move(s), &impl_axpy_complex<crd::f64>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas1.dotu.c64",
-            "Unconjugated dot sum x_i * y_i (Complex<f64>).", OutputKind::BinaryBlob);
-        add_complex_dot_like_params(s, alloc);
-        reg.register_command(std::move(s), &impl_dotu_complex<crd::f64>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas1.dotc.c64",
-            "Hermitian dot sum conj(x_i) * y_i (Complex<f64>).", OutputKind::BinaryBlob);
-        add_complex_dot_like_params(s, alloc);
-        reg.register_command(std::move(s), &impl_dotc_complex<crd::f64>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas1.nrm2.c64",
-            "Euclidean norm sqrt(sum |x_i|^2) (Complex<f64>).", OutputKind::Scalar);
-        add_complex_unary_params(s, alloc);
-        reg.register_command(std::move(s), &impl_nrm2_complex<crd::f64>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas1.scal.c64",
-            "x *= alpha (Complex<f64>).", OutputKind::BinaryBlob);
-        add_param(s, alloc, "alpha", "Complex scalar [re, im]", ParamKind::F64, true);
-        add_param(s, alloc, "x", "Complex vector x flattened", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_scal_complex<crd::f64>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas1.asum.c64",
-            "Sum of |re_i| + |im_i| (Complex<f64>).", OutputKind::Scalar);
-        add_complex_unary_params(s, alloc);
-        reg.register_command(std::move(s), &impl_asum_complex<crd::f64>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas1.iamax.c64",
-            "Argmax (|re_i|+|im_i|); ties = first index (Complex<f64>).", OutputKind::Scalar);
-        add_complex_unary_params(s, alloc);
-        reg.register_command(std::move(s), &impl_iamax_complex<crd::f64>);
-    }
-})
+        // ----- Complex BLAS L1: c64 (Complex<f64>) ------------------------
+        {
+            auto s = make_schema(alloc, "hesap.dense.blas1.axpy.c64", "y += alpha * x (Complex<f64>).",
+                                 OutputKind::BinaryBlob);
+            add_complex_axpy_like_params(s, alloc);
+            reg.register_command(std::move(s), &impl_axpy_complex<crd::f64>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.blas1.dotu.c64", "Unconjugated dot sum x_i * y_i (Complex<f64>).",
+                                 OutputKind::BinaryBlob);
+            add_complex_dot_like_params(s, alloc);
+            reg.register_command(std::move(s), &impl_dotu_complex<crd::f64>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.blas1.dotc.c64",
+                                 "Hermitian dot sum conj(x_i) * y_i (Complex<f64>).", OutputKind::BinaryBlob);
+            add_complex_dot_like_params(s, alloc);
+            reg.register_command(std::move(s), &impl_dotc_complex<crd::f64>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.blas1.nrm2.c64",
+                                 "Euclidean norm sqrt(sum |x_i|^2) (Complex<f64>).", OutputKind::Scalar);
+            add_complex_unary_params(s, alloc);
+            reg.register_command(std::move(s), &impl_nrm2_complex<crd::f64>);
+        }
+        {
+            auto s =
+                make_schema(alloc, "hesap.dense.blas1.scal.c64", "x *= alpha (Complex<f64>).", OutputKind::BinaryBlob);
+            add_param(s, alloc, "alpha", "Complex scalar [re, im]", ParamKind::F64, true);
+            add_param(s, alloc, "x", "Complex vector x flattened", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_scal_complex<crd::f64>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.blas1.asum.c64", "Sum of |re_i| + |im_i| (Complex<f64>).",
+                                 OutputKind::Scalar);
+            add_complex_unary_params(s, alloc);
+            reg.register_command(std::move(s), &impl_asum_complex<crd::f64>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.blas1.iamax.c64",
+                                 "Argmax (|re_i|+|im_i|); ties = first index (Complex<f64>).", OutputKind::Scalar);
+            add_complex_unary_params(s, alloc);
+            reg.register_command(std::move(s), &impl_iamax_complex<crd::f64>);
+        }
+    })

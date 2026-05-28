@@ -2,7 +2,8 @@
 #include <crd/cooker/cook_handler.hpp>
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
+#include <new>
 #include <crd/platform/filesystem.hpp>
 #include <crd/platform/threading.hpp>
 #include <crd/resources/crdr.hpp>
@@ -20,7 +21,8 @@ using namespace crd::cooker;
 namespace
 {
 
-crd::memory::MallocAllocator g_alloc; // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
+alignas(crd::memory::GrowableTlsfAllocator) unsigned char g_alloc_buf[sizeof(crd::memory::GrowableTlsfAllocator)];
+crd::memory::GrowableTlsfAllocator& g_alloc = *::new (g_alloc_buf) crd::memory::GrowableTlsfAllocator(); // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
 
 [[nodiscard]] fs::Path make_temp_dir()
 {

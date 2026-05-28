@@ -7,6 +7,7 @@ target_link_libraries(crd-memory-tests PRIVATE
     crd-log
     crd-memory
     crd-containers
+    crd-jobs   # RingAllocator concurrency test drives producers through the fiber job system (ADR-0085 S4)
     Catch2::Catch2WithMain
 )
 

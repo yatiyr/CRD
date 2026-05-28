@@ -1,5 +1,3 @@
-#include <catch2/catch_test_macros.hpp>
-
 #include <crd/containers/span.hpp>
 #include <crd/hesap/complex.hpp>
 #include <crd/hesap/dense/blas1.hpp>
@@ -11,6 +9,8 @@
 #include <crd/hesap/sparse/triplet_builder.hpp>
 #include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
+
+#include <catch2/catch_test_macros.hpp>
 
 using namespace crd::hesap::iterative;
 using namespace crd::hesap::sparse;
@@ -27,8 +27,14 @@ SparseMatrix<T, SparseFormat::Csr> shifted_laplacian(crd::memory::IAllocator* a,
     for (crd::u32 i = 0; i < n; ++i)
     {
         b.add(i, i, static_cast<T>(2.0 - shift));
-        if (i + 1 < n) { b.add(i, i + 1, T(-1)); }
-        if (i > 0) { b.add(i, i - 1, T(-1)); }
+        if (i + 1 < n)
+        {
+            b.add(i, i + 1, T(-1));
+        }
+        if (i > 0)
+        {
+            b.add(i, i - 1, T(-1));
+        }
     }
     return b.compress();
 }
@@ -40,7 +46,10 @@ crd::hesap::dense::RealType<T> rel_residual(const crd::hesap::LinearOp<T>& op, c
     dense::Vector<T> ax(a, x.size());
     (void)op.apply(x, ax.span());
     dense::Vector<T> diff(a, x.size());
-    for (crd::usize i = 0; i < x.size(); ++i) { diff(i) = ax(i) - b[i]; }
+    for (crd::usize i = 0; i < x.size(); ++i)
+    {
+        diff(i) = ax(i) - b[i];
+    }
     return dense::nrm2<T>(diff.span()) / dense::nrm2<T>(b);
 }
 } // namespace
@@ -48,14 +57,14 @@ crd::hesap::dense::RealType<T> rel_residual(const crd::hesap::LinearOp<T>& op, c
 TEST_CASE("SYMMLQ solves an SPD system (f64)", "[hesap-iterative][symmlq]")
 {
     crd::memory::TlsfAllocator alloc{8U << 20};
-    const crd::u32             n = 80;
-    auto                       a = shifted_laplacian<crd::f64>(&alloc, n, 0.0);
-    SparseLinearOp<crd::f64>   op(a);
-    dense::Vector<crd::f64>    b(&alloc, n);
+    const crd::u32 n = 80;
+    auto a = shifted_laplacian<crd::f64>(&alloc, n, 0.0);
+    SparseLinearOp<crd::f64> op(a);
+    dense::Vector<crd::f64> b(&alloc, n);
     b.fill(1.0);
     dense::Vector<crd::f64> x(&alloc, n);
     IterativeOptions<crd::f64> opts;
-    opts.rel_tol  = 1e-10;
+    opts.rel_tol = 1e-10;
     opts.max_iter = 500;
     SymmlqWorkspace<crd::f64> ws(&alloc, n);
 
@@ -67,15 +76,18 @@ TEST_CASE("SYMMLQ solves an SPD system (f64)", "[hesap-iterative][symmlq]")
 TEST_CASE("Jacobi-preconditioned SYMMLQ solves an SPD system (f64)", "[hesap-iterative][symmlq][precond]")
 {
     crd::memory::TlsfAllocator alloc{8U << 20};
-    const crd::u32             n = 80;
-    auto                       a = shifted_laplacian<crd::f64>(&alloc, n, 0.0); // SPD -> Jacobi SPD
-    SparseLinearOp<crd::f64>   op(a);
+    const crd::u32 n = 80;
+    auto a = shifted_laplacian<crd::f64>(&alloc, n, 0.0); // SPD -> Jacobi SPD
+    SparseLinearOp<crd::f64> op(a);
     JacobiPreconditioner<crd::f64> m(a, &alloc);
-    dense::Vector<crd::f64>    b(&alloc, n);
-    for (crd::u32 i = 0; i < n; ++i) { b(i) = static_cast<crd::f64>(i + 1); }
+    dense::Vector<crd::f64> b(&alloc, n);
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        b(i) = static_cast<crd::f64>(i + 1);
+    }
     dense::Vector<crd::f64> x(&alloc, n);
     IterativeOptions<crd::f64> opts;
-    opts.rel_tol  = 1e-10;
+    opts.rel_tol = 1e-10;
     opts.max_iter = 500;
     SymmlqWorkspace<crd::f64> ws(&alloc, n);
 
@@ -87,14 +99,14 @@ TEST_CASE("Jacobi-preconditioned SYMMLQ solves an SPD system (f64)", "[hesap-ite
 TEST_CASE("SYMMLQ solves a symmetric INDEFINITE system (f64)", "[hesap-iterative][symmlq][indefinite]")
 {
     crd::memory::TlsfAllocator alloc{8U << 20};
-    const crd::u32             n = 80;
-    auto                       a = shifted_laplacian<crd::f64>(&alloc, n, 2.0); // indefinite
-    SparseLinearOp<crd::f64>   op(a);
-    dense::Vector<crd::f64>    b(&alloc, n);
+    const crd::u32 n = 80;
+    auto a = shifted_laplacian<crd::f64>(&alloc, n, 2.0); // indefinite
+    SparseLinearOp<crd::f64> op(a);
+    dense::Vector<crd::f64> b(&alloc, n);
     b.fill(1.0);
     dense::Vector<crd::f64> x(&alloc, n);
     IterativeOptions<crd::f64> opts;
-    opts.rel_tol  = 1e-9;
+    opts.rel_tol = 1e-9;
     opts.max_iter = 800;
     SymmlqWorkspace<crd::f64> ws(&alloc, n);
 
@@ -106,7 +118,7 @@ TEST_CASE("SYMMLQ solves a symmetric INDEFINITE system (f64)", "[hesap-iterative
 TEST_CASE("SYMMLQ solves a Hermitian indefinite system (c64)", "[hesap-iterative][symmlq][complex]")
 {
     crd::memory::TlsfAllocator alloc{8U << 20};
-    using C        = Complex<crd::f64>;
+    using C = Complex<crd::f64>;
     const crd::u32 n = 40;
     TripletBuilder<C> bld(&alloc, n, n);
     for (crd::u32 i = 0; i < n; ++i)
@@ -118,13 +130,13 @@ TEST_CASE("SYMMLQ solves a Hermitian indefinite system (c64)", "[hesap-iterative
             bld.add(i + 1, i, C{1.0, -0.5});
         }
     }
-    auto             a = bld.compress();
+    auto a = bld.compress();
     SparseLinearOp<C> op(a);
     dense::Vector<C> b(&alloc, n);
     b.fill(C{1.0, 0.0});
     dense::Vector<C> x(&alloc, n);
     IterativeOptions<crd::f64> opts;
-    opts.rel_tol  = 1e-9;
+    opts.rel_tol = 1e-9;
     opts.max_iter = 800;
     SymmlqWorkspace<C> ws(&alloc, n);
 
@@ -139,33 +151,37 @@ TEST_CASE("SYMMLQ is bit-exact over serial vs parallel spmv (determinism moat)",
     crd::jobs::init();
     {
         crd::memory::TlsfAllocator alloc{32U << 20};
-        const crd::u32             n = 220;
-        auto                       a = shifted_laplacian<crd::f64>(&alloc, n, 2.0);
-        SparseLinearOp<crd::f64>         serial_op(a);
+        const crd::u32 n = 220;
+        auto a = shifted_laplacian<crd::f64>(&alloc, n, 2.0);
+        SparseLinearOp<crd::f64> serial_op(a);
         ParallelSparseLinearOp<crd::f64> parallel_op(a, &alloc, /*parallel_min_stored_bytes=*/0);
         REQUIRE(parallel_op.is_parallel());
         dense::Vector<crd::f64> b(&alloc, n);
         b.fill(1.0);
 
-        auto solve = [&](const crd::hesap::LinearOp<crd::f64>& op, dense::Vector<crd::f64>& x) {
+        auto solve = [&](const crd::hesap::LinearOp<crd::f64>& op, dense::Vector<crd::f64>& x)
+        {
             IterativeOptions<crd::f64> opts;
-            opts.rel_tol          = 1e-9;
-            opts.max_iter         = 800;
+            opts.rel_tol = 1e-9;
+            opts.max_iter = 800;
             opts.record_residuals = true;
             SymmlqWorkspace<crd::f64> ws(&alloc, n);
             return symmlq<crd::f64>(op, b.span(), x.span(), opts, ws, &alloc);
         };
         dense::Vector<crd::f64> xs(&alloc, n);
         dense::Vector<crd::f64> xp(&alloc, n);
-        auto                    rs = solve(serial_op, xs);
-        auto                    rp = solve(parallel_op, xp);
+        auto rs = solve(serial_op, xs);
+        auto rp = solve(parallel_op, xp);
         REQUIRE(rs.iterations == rp.iterations);
         REQUIRE(rs.residual_history.size() == rp.residual_history.size());
         for (crd::usize i = 0; i < rs.residual_history.size(); ++i)
         {
             REQUIRE(rs.residual_history[i] == rp.residual_history[i]);
         }
-        for (crd::u32 i = 0; i < n; ++i) { REQUIRE(xs(i) == xp(i)); }
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            REQUIRE(xs(i) == xp(i));
+        }
     }
     crd::jobs::shutdown();
 }

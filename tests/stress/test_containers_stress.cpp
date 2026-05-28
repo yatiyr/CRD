@@ -22,7 +22,7 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/hash_map.hpp>
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -66,7 +66,7 @@ TEST_CASE("containers stress -- disjoint parallel writes to a shared Array", "[s
 {
     const auto body = [](crd::stress::RunMode mode)
     {
-        crd::memory::MallocAllocator alloc("stress-disjoint");
+        crd::memory::GrowableTlsfAllocator alloc{256ULL << 20, nullptr, "stress-disjoint"};
 
         constexpr u32 kPerWorker = 257U; // odd — surfaces false-sharing perf bugs (not correctness)
 
@@ -128,7 +128,7 @@ TEST_CASE("containers stress -- many concurrent readers of an immutable Array", 
 {
     const auto body = [](crd::stress::RunMode mode)
     {
-        crd::memory::MallocAllocator alloc("stress-readers");
+        crd::memory::GrowableTlsfAllocator alloc{256ULL << 20, nullptr, "stress-readers"};
 
         constexpr usize kN = 4096U;
         crd::containers::Array<u64> source(kN, &alloc);
@@ -193,7 +193,7 @@ TEST_CASE("containers stress -- per-worker isolated TlsfAllocator + HashMap chur
         {
             // Each worker gets its own parent, heap and map — allocators are
             // single-threaded-by-contract, so isolation is the requirement.
-            crd::memory::MallocAllocator parent("stress-worker-parent");
+            crd::memory::GrowableTlsfAllocator parent{256ULL << 20, nullptr, "stress-worker-parent"};
             crd::memory::TlsfAllocator heap(usize{1} << 20, &parent, "stress-worker-heap");
             crd::containers::HashMap<u64, u64> map(64U, &heap);
 

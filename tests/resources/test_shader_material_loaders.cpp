@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
+#include <new>
 #include <crd/platform/filesystem.hpp>
 #include <crd/renderer/material_resource_loader.hpp>
 #include <crd/renderer/material_template.hpp>
@@ -18,7 +19,8 @@
 
 using namespace crd::resources;
 
-static crd::memory::MallocAllocator s_alloc;
+alignas(crd::memory::GrowableTlsfAllocator) static unsigned char s_alloc_buf[sizeof(crd::memory::GrowableTlsfAllocator)];
+static crd::memory::GrowableTlsfAllocator& s_alloc = *::new (s_alloc_buf) crd::memory::GrowableTlsfAllocator(); // never destroyed: static-destruction-order safe
 
 // ── Pack assembly helpers (mirror test_resource_manager.cpp) ──────────────
 

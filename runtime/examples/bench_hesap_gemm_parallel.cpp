@@ -64,16 +64,14 @@ crd::f64 peak_gflops_single_core_f64(crd::f64 clock_ghz)
     return kFlopsPerCyc * clock_ghz;
 }
 
-template <typename T>
-struct RunResult
+template <typename T> struct RunResult
 {
     crd::f64 elapsed_s;
     int iters;
     crd::f64 gflops;
 };
 
-template <typename T>
-RunResult<T> run_workers(crd::usize n, crd::u32 num_workers, crd::memory::IAllocator* alloc)
+template <typename T> RunResult<T> run_workers(crd::usize n, crd::u32 num_workers, crd::memory::IAllocator* alloc)
 {
     using namespace crd::hesap::dense;
     Matrix<T> a(alloc, n, n);
@@ -83,10 +81,8 @@ RunResult<T> run_workers(crd::usize n, crd::u32 num_workers, crd::memory::IAlloc
     {
         for (crd::usize j = 0; j < n; ++j)
         {
-            a(i, j) =
-                static_cast<T>(i + 1) * static_cast<T>(0.001) + static_cast<T>(j) * static_cast<T>(0.0002);
-            b(i, j) =
-                static_cast<T>(j + 1) * static_cast<T>(0.0007) - static_cast<T>(i) * static_cast<T>(0.0003);
+            a(i, j) = static_cast<T>(i + 1) * static_cast<T>(0.001) + static_cast<T>(j) * static_cast<T>(0.0002);
+            b(i, j) = static_cast<T>(j + 1) * static_cast<T>(0.0007) - static_cast<T>(i) * static_cast<T>(0.0003);
             c(i, j) = T{};
         }
     }
@@ -120,8 +116,7 @@ RunResult<T> run_workers(crd::usize n, crd::u32 num_workers, crd::memory::IAlloc
         }
         ++iters;
         crd::jobs::frame_reset();
-        const auto elapsed =
-            std::chrono::duration<crd::f64>(std::chrono::steady_clock::now() - t0).count();
+        const auto elapsed = std::chrono::duration<crd::f64>(std::chrono::steady_clock::now() - t0).count();
         if (elapsed > 0.5 && iters >= 3)
         {
             break;
@@ -136,14 +131,13 @@ RunResult<T> run_workers(crd::usize n, crd::u32 num_workers, crd::memory::IAlloc
 }
 
 template <typename T>
-void run_size(const char* label, crd::usize n, crd::f64 single_core_peak,
-              crd::memory::IAllocator* alloc)
+void run_size(const char* label, crd::usize n, crd::f64 single_core_peak, crd::memory::IAllocator* alloc)
 {
-    std::fprintf(stdout, "==== %s gemm scaling at N=%zu (single-core peak %.1f GFLOPS) ====\n",
-                 label, static_cast<std::size_t>(n), single_core_peak);
+    std::fprintf(stdout, "==== %s gemm scaling at N=%zu (single-core peak %.1f GFLOPS) ====\n", label,
+                 static_cast<std::size_t>(n), single_core_peak);
     const auto baseline = run_workers<T>(n, 1U, alloc);
-    std::fprintf(stdout, "  %-4s  workers=%2u  iters=%4d  %.3f s  =>  %7.2f GFLOPS  speedup=1.00x\n",
-                 label, 1U, baseline.iters, baseline.elapsed_s, baseline.gflops);
+    std::fprintf(stdout, "  %-4s  workers=%2u  iters=%4d  %.3f s  =>  %7.2f GFLOPS  speedup=1.00x\n", label, 1U,
+                 baseline.iters, baseline.elapsed_s, baseline.gflops);
     for (crd::u32 nw : {2U, 4U, 8U, 16U, 32U})
     {
         const auto r = run_workers<T>(n, nw, alloc);
@@ -153,8 +147,7 @@ void run_size(const char* label, crd::usize n, crd::f64 single_core_peak,
         std::fprintf(stdout,
                      "  %-4s  workers=%2u  iters=%4d  %.3f s  =>  %7.2f GFLOPS  speedup=%.2fx  "
                      "(%.1f%% of %.1f-core peak)\n",
-                     label, nw, r.iters, r.elapsed_s, r.gflops, speedup, pct,
-                     static_cast<crd::f64>(nw));
+                     label, nw, r.iters, r.elapsed_s, r.gflops, speedup, pct, static_cast<crd::f64>(nw));
     }
     std::fprintf(stdout, "\n");
 }
@@ -174,8 +167,7 @@ int main()
                  "  Single-core peak : f32 = %.1f GFLOPS, f64 = %.1f GFLOPS\n"
                  "  Job workers      : %u (incl. main)\n"
                  "  Reference class  : intrinsics-tier (Eigen / Faer / Highway peers)\n\n",
-                 crd::math::simd::backend_name(), clock_ghz, peak_f32, peak_f64,
-                 crd::jobs::num_workers());
+                 crd::math::simd::backend_name(), clock_ghz, peak_f32, peak_f64, crd::jobs::num_workers());
 
     {
         crd::memory::TlsfAllocator alloc_f32(128 * 1024 * 1024);

@@ -16,7 +16,6 @@
 
 #include <Eigen/Dense>
 #include <cblas.h>
-
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -62,8 +61,7 @@ crd::f64 peak_gflops_per_core_f64(crd::f64 ghz)
 #endif
 }
 
-template <typename T>
-struct Bench
+template <typename T> struct Bench
 {
     crd::f64 cerid_gflops;
     crd::f64 eigen_gflops;
@@ -76,8 +74,7 @@ struct Bench
     crd::f64 max_rel_err_openblas; // max|c_cerid - c_openblas| / max|c_openblas|
 };
 
-template <typename T>
-crd::f64 max_rel_err(const T* a, const T* b, crd::usize n)
+template <typename T> crd::f64 max_rel_err(const T* a, const T* b, crd::usize n)
 {
     crd::f64 max_abs = 0.0;
     crd::f64 max_diff = 0.0;
@@ -99,8 +96,7 @@ crd::f64 max_rel_err(const T* a, const T* b, crd::usize n)
     return max_abs > 0.0 ? (max_diff / max_abs) : 0.0;
 }
 
-template <typename T>
-void fill(T* p, crd::usize n, crd::u32 seed)
+template <typename T> void fill(T* p, crd::usize n, crd::u32 seed)
 {
     crd::u32 s = seed;
     for (crd::usize i = 0; i < n; ++i)
@@ -110,8 +106,7 @@ void fill(T* p, crd::usize n, crd::u32 seed)
     }
 }
 
-template <typename Op>
-crd::f64 time_loop(Op&& op, int& iters_out)
+template <typename Op> crd::f64 time_loop(Op&& op, int& iters_out)
 {
     op(); // warm-up 1
     op(); // warm-up 2 — large-N GEMM benefits from a second warm-up.
@@ -133,8 +128,7 @@ crd::f64 time_loop(Op&& op, int& iters_out)
             op();
             ++iters;
             crd::jobs::frame_reset();
-            const auto el =
-                std::chrono::duration<crd::f64>(std::chrono::steady_clock::now() - t0).count();
+            const auto el = std::chrono::duration<crd::f64>(std::chrono::steady_clock::now() - t0).count();
             if (el > 0.6 && iters >= 5)
             {
                 break;
@@ -158,8 +152,7 @@ crd::f64 time_loop(Op&& op, int& iters_out)
 // Cerid: try multiple worker counts and pick the best — i9-14900K has 8 P-cores
 // + 16 E-cores, so 32-fiber static partition often loses to ~16 workers.
 template <typename T>
-crd::f64 run_cerid_best(crd::usize n, crd::memory::IAllocator* alloc, int& best_iters_out,
-                       crd::u32& best_nw_out)
+crd::f64 run_cerid_best(crd::usize n, crd::memory::IAllocator* alloc, int& best_iters_out, crd::u32& best_nw_out)
 {
     using namespace crd::hesap::dense;
     Matrix<T> a(alloc, n, n);
@@ -196,8 +189,7 @@ crd::f64 run_cerid_best(crd::usize n, crd::memory::IAllocator* alloc, int& best_
     return best_gflops;
 }
 
-template <typename T>
-Bench<T> run_at_n(crd::usize n, crd::u32 num_workers, crd::memory::IAllocator* alloc)
+template <typename T> Bench<T> run_at_n(crd::usize n, crd::u32 num_workers, crd::memory::IAllocator* alloc)
 {
     using namespace crd::hesap::dense;
     using EigenMat = Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
@@ -238,8 +230,7 @@ Bench<T> run_at_n(crd::usize n, crd::u32 num_workers, crd::memory::IAllocator* a
     std::memset(c_cerid.data(), 0, n * n * sizeof(T));
     gemm_parallel<T, Layout::RowMajor>(best_nw, T{1}, a, b, T{}, c_cerid);
     const crd::f64 nd_for_calc = static_cast<crd::f64>(n);
-    const crd::f64 cerid_elapsed = (2.0 * nd_for_calc * nd_for_calc * nd_for_calc * cerid_iters) /
-                                   (best_gflops * 1e9);
+    const crd::f64 cerid_elapsed = (2.0 * nd_for_calc * nd_for_calc * nd_for_calc * cerid_iters) / (best_gflops * 1e9);
 
     // ---- Eigen-MT ----------------------------------------------------------
     EigenMat ea(n, n);
@@ -249,8 +240,7 @@ Bench<T> run_at_n(crd::usize n, crd::u32 num_workers, crd::memory::IAllocator* a
     std::memcpy(eb.data(), b.data(), n * n * sizeof(T));
     Eigen::setNbThreads(static_cast<int>(num_workers));
     int eigen_iters = 0;
-    const crd::f64 eigen_elapsed = time_loop(
-        [&]() { ec.noalias() = ea * eb; }, eigen_iters);
+    const crd::f64 eigen_elapsed = time_loop([&]() { ec.noalias() = ea * eb; }, eigen_iters);
 
     // ---- OpenBLAS ----------------------------------------------------------
     openblas_set_num_threads(static_cast<int>(num_workers));
@@ -262,17 +252,15 @@ Bench<T> run_at_n(crd::usize n, crd::u32 num_workers, crd::memory::IAllocator* a
             std::memset(c_ob.data(), 0, n * n * sizeof(T));
             if constexpr (std::is_same_v<T, crd::f32>)
             {
-                cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, static_cast<int>(n),
-                            static_cast<int>(n), static_cast<int>(n), 1.0F, a.data(),
-                            static_cast<int>(n), b.data(), static_cast<int>(n), 0.0F, c_ob.data(),
-                            static_cast<int>(n));
+                cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, static_cast<int>(n), static_cast<int>(n),
+                            static_cast<int>(n), 1.0F, a.data(), static_cast<int>(n), b.data(), static_cast<int>(n),
+                            0.0F, c_ob.data(), static_cast<int>(n));
             }
             else
             {
-                cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, static_cast<int>(n),
-                            static_cast<int>(n), static_cast<int>(n), 1.0, a.data(),
-                            static_cast<int>(n), b.data(), static_cast<int>(n), 0.0, c_ob.data(),
-                            static_cast<int>(n));
+                cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, static_cast<int>(n), static_cast<int>(n),
+                            static_cast<int>(n), 1.0, a.data(), static_cast<int>(n), b.data(), static_cast<int>(n), 0.0,
+                            c_ob.data(), static_cast<int>(n));
             }
         },
         ob_iters);
@@ -281,10 +269,8 @@ Bench<T> run_at_n(crd::usize n, crd::u32 num_workers, crd::memory::IAllocator* a
     // Tolerance accounts for different summation orders across the three
     // implementations. ADR-0063 only guarantees bit-exact within Cerid;
     // Eigen / OpenBLAS use FMA + different reduction trees.
-    const crd::f64 err_eigen =
-        max_rel_err(c_cerid.data(), ec.data(), n * n);
-    const crd::f64 err_ob =
-        max_rel_err(c_cerid.data(), c_ob.data(), n * n);
+    const crd::f64 err_eigen = max_rel_err(c_cerid.data(), ec.data(), n * n);
+    const crd::f64 err_ob = max_rel_err(c_cerid.data(), c_ob.data(), n * n);
 
     const crd::f64 nd = static_cast<crd::f64>(n);
     const crd::f64 flop_per_iter = 2.0 * nd * nd * nd;
@@ -302,26 +288,23 @@ Bench<T> run_at_n(crd::usize n, crd::u32 num_workers, crd::memory::IAllocator* a
 template <typename T>
 void shootout(const char* label, crd::f64 peak_per_core, crd::u32 nw, crd::memory::IAllocator* alloc)
 {
-    std::fprintf(stdout, "\n==== %s shootout, %u workers (single-core peak %.1f GFLOPS) ====\n",
-                 label, nw, peak_per_core);
-    std::fprintf(stdout, "%-6s | %-26s | %-22s | %-22s | %-10s | %-10s | %-10s | %-10s\n",
-                 "N", "Cerid (GFLOPS,iters,nw)", "Eigen (GFLOPS,iters)", "OBLAS (GFLOPS,iters)",
-                 "C/Eigen", "C/OBLAS", "err Eigen", "err OBLAS");
+    std::fprintf(stdout, "\n==== %s shootout, %u workers (single-core peak %.1f GFLOPS) ====\n", label, nw,
+                 peak_per_core);
+    std::fprintf(stdout, "%-6s | %-26s | %-22s | %-22s | %-10s | %-10s | %-10s | %-10s\n", "N",
+                 "Cerid (GFLOPS,iters,nw)", "Eigen (GFLOPS,iters)", "OBLAS (GFLOPS,iters)", "C/Eigen", "C/OBLAS",
+                 "err Eigen", "err OBLAS");
     std::fprintf(stdout, "%s\n",
                  "----------------------------------------------------------------------------"
                  "------------------------------------------------------------");
-    for (crd::usize n : {crd::usize{256}, crd::usize{512}, crd::usize{1024}, crd::usize{2048},
-                         crd::usize{4096}})
+    for (crd::usize n : {crd::usize{256}, crd::usize{512}, crd::usize{1024}, crd::usize{2048}, crd::usize{4096}})
     {
         const auto r = run_at_n<T>(n, nw, alloc);
         const char* eigen_pass = (r.max_rel_err_eigen < 1e-3) ? "" : " !MISMATCH!";
         const char* ob_pass = (r.max_rel_err_openblas < 1e-3) ? "" : " !MISMATCH!";
         std::fprintf(
-            stdout,
-            "%-6zu | %8.2f (%4d,nw=%2u) | %8.2f (%4d) | %8.2f (%4d) | %8.2fx | %8.2fx | %9.2e%s | %9.2e%s\n",
-            static_cast<std::size_t>(n), r.cerid_gflops, r.cerid_iters, r.cerid_best_nw,
-            r.eigen_gflops, r.eigen_iters, r.openblas_gflops, r.openblas_iters,
-            r.cerid_gflops / r.eigen_gflops, r.cerid_gflops / r.openblas_gflops,
+            stdout, "%-6zu | %8.2f (%4d,nw=%2u) | %8.2f (%4d) | %8.2f (%4d) | %8.2fx | %8.2fx | %9.2e%s | %9.2e%s\n",
+            static_cast<std::size_t>(n), r.cerid_gflops, r.cerid_iters, r.cerid_best_nw, r.eigen_gflops, r.eigen_iters,
+            r.openblas_gflops, r.openblas_iters, r.cerid_gflops / r.eigen_gflops, r.cerid_gflops / r.openblas_gflops,
             r.max_rel_err_eigen, eigen_pass, r.max_rel_err_openblas, ob_pass);
         std::fflush(stdout);
     }

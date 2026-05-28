@@ -14,12 +14,14 @@
 // OpenBLAS needed -- the reference here is our own direct reader.
 
 #include <crd/containers/array.hpp>
+#include <crd/containers/string.hpp>
+#include <crd/core/types.hpp>
 #include <crd/hesap/resources/matrix_artifact_builder.hpp>
 #include <crd/hesap/resources/matrix_resource.hpp>
 #include <crd/hesap/resources/matrix_resource_loader.hpp>
 #include <crd/hesap/sparse/matrix_market.hpp>
 #include <crd/hesap/sparse/sparse_matrix.hpp>
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/resources/crdr.hpp>
 #include <crd/resources/resource_handle.hpp>
@@ -29,9 +31,6 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
-#include <fstream>
-#include <sstream>
-#include <string>
 
 #ifndef CRD_SUITESPARSE_DIR
 #define CRD_SUITESPARSE_DIR "."
@@ -42,25 +41,22 @@ namespace hr = crd::hesap::resources;
 namespace hs = crd::hesap::sparse;
 using Clock = std::chrono::steady_clock;
 
-static crd::memory::MallocAllocator g_alloc;
+static crd::memory::GrowableTlsfAllocator g_alloc;
 
-static std::string slurp(const std::string& path)
+// crd-native file slurp: read_file_text into a crd::String (no std::ifstream/string/sstream).
+// .mtx is text; an empty return means "not found", handled by the caller.
+static crd::containers::String slurp(const char* path)
 {
-    std::ifstream f(path, std::ios::binary);
-    if (!f)
-    {
-        return std::string{};
-    }
-    std::ostringstream ss;
-    ss << f.rdbuf();
-    return ss.str();
+    crd::containers::String out(&g_alloc);
+    (void)crd::platform::fs::read_file_text(crd::platform::fs::Path{path}, out);
+    return out;
 }
 
-template <typename Fn> static double best_ms(Fn&& fn)
+template <typename Fn> static crd::f64 best_ms(Fn&& fn)
 {
     fn(); // warmup
-    double best = 1e30;
-    for (int rep = 0; rep < 5; ++rep)
+    crd::f64 best = 1e30;
+    for (crd::i32 rep = 0; rep < 5; ++rep)
     {
         const auto t0 = Clock::now();
         fn();
@@ -132,8 +128,14 @@ static bool verify_resource_manager_path(const hs::SparseMatrix<crd::f64, hs::Sp
 
 static void run(const char* name)
 {
-    const std::string path = std::string(CRD_SUITESPARSE_DIR) + "/" + name + "/" + name + ".mtx";
-    const std::string text = slurp(path);
+    crd::containers::String path(&g_alloc);
+    path.append(CRD_SUITESPARSE_DIR);
+    path.append("/");
+    path.append(name);
+    path.append("/");
+    path.append(name);
+    path.append(".mtx");
+    const crd::containers::String text = slurp(path.c_str());
     if (text.empty())
     {
         std::printf("  %-12s SKIP (not found: %s)\n", name, path.c_str());
@@ -143,7 +145,7 @@ static void run(const char* name)
 
     // Reference: direct text -> CSR.
     crd::usize ref_nnz = 0;
-    const double t_read = best_ms(
+    const crd::f64 t_read = best_ms(
         [&]()
         {
             hs::MatrixMarketError err{&g_alloc};
@@ -157,7 +159,7 @@ static void run(const char* name)
     auto cooked = hr::cook_sparse_matrix<crd::f64>(&g_alloc, ResourceId::mint_random(), ref);
 
     crd::usize res_nnz = 0;
-    const double t_load = best_ms(
+    const crd::f64 t_load = best_ms(
         [&]()
         {
             hr::SparseMatrixResource res{&g_alloc};

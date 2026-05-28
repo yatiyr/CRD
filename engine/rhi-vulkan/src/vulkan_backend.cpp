@@ -1,7 +1,14 @@
 #include "log_channel.hpp"
 
+#include <crd/containers/array.hpp>
 #include <crd/log/log.hpp>
+#include <crd/memory/allocators/offset_allocator.hpp> // ADR-0085 S6: GPU suballocation kernel
+#include <crd/memory/construct.hpp>
+#include <crd/rhi/gpu_residency.hpp> // ADR-0085 S7: defrag + residency policy seams
 #include <crd/rhi/vulkan_backend.hpp>
+
+#include <mutex>
+#include <utility>
 
 // In GLFW 3.4, GLFW_INCLUDE_VULKAN does NOT suppress GL/gl.h; only GLFW_INCLUDE_NONE does.
 // Include Vulkan first so GLFW sees VK_VERSION_1_0 and declares glfwCreateWindowSurface.
@@ -343,28 +350,106 @@ struct ImageSync
     VkSemaphore render_finished = VK_NULL_HANDLE;
 };
 
+// ADR-0085 S6: a sub-block descriptor. `memory`/`offset` is what the resource binds
+// to; the rest is free bookkeeping. A zeroed allocation (memory == VK_NULL_HANDLE,
+// e.g. a swapchain image) is a no-op to free.
 struct VulkanAllocation
 {
-    VkDeviceMemory memory = VK_NULL_HANDLE;
-    VkDeviceSize size_bytes = 0;
-    crd::u32 memory_type_index = 0;
+    VkDeviceMemory memory            = VK_NULL_HANDLE; // owning block (or dedicated) memory
+    VkDeviceSize   offset            = 0;              // suballocation offset within `memory`
+    VkDeviceSize   size_bytes        = 0;              // requested size
+    crd::u32       memory_type_index = 0;
+    void*          mapped            = nullptr; // host-visible: persistent block map + offset; else null
+    crd::u32       block_index       = 0xFFFFFFFFU; // index into VulkanAllocator::m_blocks; UINT32_MAX => dedicated/none
+    crd::memory::OffsetAllocator::Allocation suballoc{}; // for returning the offset to the block's allocator
+    bool                                     dedicated = false;
 };
 
-class VulkanAllocator
+class VulkanBuffer; // registered with the allocator for defrag relocation (ADR-0085 S7)
+class VulkanImage;
+
+// Pending image relocation captured during the defrag command-recording pass; the
+// swap is committed after the single submit+wait.
+struct ImageRelocation
+{
+    VulkanImage*     img            = nullptr;
+    VkImage          new_vk         = VK_NULL_HANDLE;
+    VkImageView      new_view       = VK_NULL_HANDLE;
+    VulkanAllocation new_alloc{};
+    VkImage          old_vk         = VK_NULL_HANDLE;
+    VkImageView      old_view       = VK_NULL_HANDLE;
+    VulkanAllocation old_alloc{};
+};
+
+// O(n) swap-remove of a non-owning pointer from a registry array.
+template <typename T> void swap_remove(crd::containers::Array<T>& arr, T value) noexcept
+{
+    for (crd::u32 i = 0; i < static_cast<crd::u32>(arr.size()); ++i)
+    {
+        if (arr[i] == value)
+        {
+            arr[i] = arr[arr.size() - 1];
+            arr.pop_back();
+            return;
+        }
+    }
+}
+
+// VulkanAllocator — VkDeviceMemory SUBALLOCATOR (ADR-0085 S6, supersedes the v1e
+// one-allocation-per-resource helper).
+//
+// Carves large VkDeviceMemory blocks (per memory-type, sized min(256 MiB, heap/8))
+// into sub-blocks via crd::memory::OffsetAllocator (O(1), external metadata — the
+// reason it can manage device-local VRAM). Allocations >= 16 MiB get a dedicated
+// VkDeviceMemory. Pools are keyed by (memoryTypeIndex, linear) so buffers and
+// optimal-tiling images never share a block — sidestepping bufferImageGranularity.
+// Host-visible blocks are persistently mapped; map() returns (block map + offset).
+// Non-coherent host memory rounds suballocation alignment up to nonCoherentAtomSize
+// so flush/invalidate ranges stay legal.
+//
+// Thread-safe: a mutex guards the block pools + per-block OffsetAllocator (the
+// resource-create/destroy path, not a per-frame hot path).
+//
+// LIFETIME: all Buffer/Image instances MUST be destroyed before the owning Device
+// (standard Vulkan). Pooled blocks are freed by destroy_all() just before
+// vkDestroyDevice; dedicated allocations are freed in the resource's own dtor — so a
+// resource outliving the device would vkFreeMemory on a dead device.
+class VulkanAllocator final : public IGpuResidencyContext
 {
 public:
     VulkanAllocator(VkPhysicalDevice physical_device, VkDevice device)
-        : m_physical_device(physical_device), m_device(device)
+        : m_physical_device(physical_device), m_device(device), m_blocks(crd::memory::default_allocator())
     {
+        vkGetPhysicalDeviceMemoryProperties(physical_device, &m_mem_props);
+        VkPhysicalDeviceProperties props{};
+        vkGetPhysicalDeviceProperties(physical_device, &props);
+        m_non_coherent_atom = props.limits.nonCoherentAtomSize == 0 ? 1 : props.limits.nonCoherentAtomSize;
+    }
+
+    ~VulkanAllocator() override { destroy_all(); }
+
+    VulkanAllocator(const VulkanAllocator&)            = delete;
+    VulkanAllocator& operator=(const VulkanAllocator&) = delete;
+
+    // Free every block's VkDeviceMemory. MUST be called while the VkDevice is still
+    // alive (the owning VulkanDevice calls this before vkDestroyDevice). Idempotent.
+    void destroy_all() noexcept
+    {
+        const std::lock_guard<std::mutex> lock(m_mutex);
+        for (Block* b : m_blocks)
+        {
+            destroy_block(b);
+        }
+        m_blocks.clear();
     }
 
     [[nodiscard]] bool allocate_buffer(const BufferDesc& desc, VkBuffer& out_buffer, VulkanAllocation& out_allocation)
     {
         VkBufferCreateInfo create_info{};
-        create_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        create_info.pNext = nullptr;
-        create_info.size = desc.size_bytes;
-        create_info.usage = to_vk_buffer_usage(desc.usage);
+        create_info.sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        create_info.pNext       = nullptr;
+        create_info.size        = desc.size_bytes;
+        create_info.usage       = to_vk_buffer_usage(desc.usage);
         create_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
         if (!vk_ok(vkCreateBuffer(m_device, &create_info, nullptr, &out_buffer), "vkCreateBuffer"))
@@ -374,17 +459,20 @@ public:
 
         VkMemoryRequirements requirements{};
         vkGetBufferMemoryRequirements(m_device, out_buffer, &requirements);
-        if (!allocate_memory(requirements, to_vk_memory_properties(desc.memory_usage), out_allocation,
-                             "vkAllocateMemory(buffer)"))
+        // Buffers are always linear.
+        if (!sub_allocate(requirements, to_vk_memory_properties(desc.memory_usage), true, out_allocation,
+                          "buffer"))
         {
             vkDestroyBuffer(m_device, out_buffer, nullptr);
             out_buffer = VK_NULL_HANDLE;
             return false;
         }
 
-        if (!vk_ok(vkBindBufferMemory(m_device, out_buffer, out_allocation.memory, 0), "vkBindBufferMemory"))
+        if (!vk_ok(vkBindBufferMemory(m_device, out_buffer, out_allocation.memory, out_allocation.offset),
+                   "vkBindBufferMemory"))
         {
-            destroy_allocation(out_allocation);
+            free(out_allocation);
+            out_allocation = {};
             vkDestroyBuffer(m_device, out_buffer, nullptr);
             out_buffer = VK_NULL_HANDLE;
             return false;
@@ -408,16 +496,16 @@ public:
             usage |= VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
 
         VkImageCreateInfo create_info{};
-        create_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-        create_info.imageType = VK_IMAGE_TYPE_2D;
-        create_info.format = to_vk_format(desc.format);
-        create_info.extent = {desc.extent.width, desc.extent.height, 1};
-        create_info.mipLevels = desc.mip_levels;
-        create_info.arrayLayers = desc.array_layers;
-        create_info.samples = VK_SAMPLE_COUNT_1_BIT;
-        create_info.tiling = VK_IMAGE_TILING_OPTIMAL;
-        create_info.usage = usage;
-        create_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        create_info.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        create_info.imageType     = VK_IMAGE_TYPE_2D;
+        create_info.format        = to_vk_format(desc.format);
+        create_info.extent        = {desc.extent.width, desc.extent.height, 1};
+        create_info.mipLevels     = desc.mip_levels;
+        create_info.arrayLayers   = desc.array_layers;
+        create_info.samples       = VK_SAMPLE_COUNT_1_BIT;
+        create_info.tiling        = VK_IMAGE_TILING_OPTIMAL;
+        create_info.usage         = usage;
+        create_info.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
         create_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
         if (!vk_ok(vkCreateImage(m_device, &create_info, nullptr, &out_image), "vkCreateImage"))
@@ -427,17 +515,19 @@ public:
 
         VkMemoryRequirements requirements{};
         vkGetImageMemoryRequirements(m_device, out_image, &requirements);
-        if (!allocate_memory(requirements, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, out_allocation,
-                             "vkAllocateMemory(image)"))
+        // Optimal-tiling images are non-linear -> their own pools (granularity-safe).
+        if (!sub_allocate(requirements, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, false, out_allocation, "image"))
         {
             vkDestroyImage(m_device, out_image, nullptr);
             out_image = VK_NULL_HANDLE;
             return false;
         }
 
-        if (!vk_ok(vkBindImageMemory(m_device, out_image, out_allocation.memory, 0), "vkBindImageMemory"))
+        if (!vk_ok(vkBindImageMemory(m_device, out_image, out_allocation.memory, out_allocation.offset),
+                   "vkBindImageMemory"))
         {
-            destroy_allocation(out_allocation);
+            free(out_allocation);
+            out_allocation = {};
             vkDestroyImage(m_device, out_image, nullptr);
             out_image = VK_NULL_HANDLE;
             return false;
@@ -446,62 +536,374 @@ public:
         return true;
     }
 
-    void destroy_allocation(VulkanAllocation& allocation) noexcept
+    // Return a suballocation to its block (or free a dedicated allocation). Idempotent
+    // on a zeroed allocation (swapchain images carry no allocation).
+    void free(const VulkanAllocation& allocation) noexcept
     {
-        if (allocation.memory != VK_NULL_HANDLE)
+        if (allocation.memory == VK_NULL_HANDLE)
         {
-            vkFreeMemory(m_device, allocation.memory, nullptr);
-            allocation.memory = VK_NULL_HANDLE;
-            allocation.size_bytes = 0;
+            return;
         }
+        const std::lock_guard<std::mutex> lock(m_mutex);
+        if (is_device_local(allocation.memory_type_index))
+        {
+            m_device_local_used.fetch_sub(allocation.size_bytes, std::memory_order_relaxed);
+        }
+        if (allocation.dedicated)
+        {
+            vkFreeMemory(m_device, allocation.memory, nullptr); // implicitly unmaps
+            return;
+        }
+        Block* b = m_blocks[allocation.block_index];
+        b->oa.free(allocation.suballoc);
+        --b->live_count;
     }
 
-private:
-    [[nodiscard]] bool allocate_memory(const VkMemoryRequirements& requirements,
-                                       VkMemoryPropertyFlags required_properties, VulkanAllocation& out_allocation,
-                                       const char* what)
+    // Back-compat shim for create_image's error path.
+    void destroy_allocation(VulkanAllocation& allocation) noexcept
     {
-        const crd::u32 memory_type_index =
-            find_memory_type(m_physical_device, requirements.memoryTypeBits, required_properties);
-        if (memory_type_index == UINT32_MAX)
+        free(allocation);
+        allocation = {};
+    }
+
+    // Diagnostic: number of VkDeviceMemory blocks (incl. dedicated are not counted —
+    // they aren't pooled). A small count across many small allocations proves
+    // suballocation is happening.
+    [[nodiscard]] crd::u32 block_count() const noexcept { return static_cast<crd::u32>(m_blocks.size()); }
+
+    // ---- Live-resource registry (ADR-0085 S7: enables defrag relocation) -------
+    void register_buffer(VulkanBuffer* b)
+    {
+        const std::lock_guard<std::mutex> lock(m_mutex);
+        m_live_buffers.push_back(b);
+    }
+    void unregister_buffer(VulkanBuffer* b) noexcept
+    {
+        const std::lock_guard<std::mutex> lock(m_mutex);
+        swap_remove(m_live_buffers, b);
+    }
+    void register_image(VulkanImage* i)
+    {
+        const std::lock_guard<std::mutex> lock(m_mutex);
+        m_live_images.push_back(i);
+    }
+    void unregister_image(VulkanImage* i) noexcept
+    {
+        const std::lock_guard<std::mutex> lock(m_mutex);
+        swap_remove(m_live_images, i);
+    }
+
+    // ADR-0085 S7 defrag pass — idle-gated, one submit. Relocates the buffers/images
+    // the policy selects to compacted locations (recreate + transfer-copy + swap the
+    // resource's internal handle), then fires on_relocated callbacks OUTSIDE the lock.
+    // Defined out-of-line (needs complete VulkanBuffer/VulkanImage). MUST be called
+    // single-threaded with no other allocation/use in flight (idle-gated contract).
+    void defragment(IDefragPolicy& policy, VkQueue queue, VkCommandPool pool);
+
+    // ---- ADR-0085 S7 residency ------------------------------------------------
+    // The transfer queue + pool used by relocation copies (set by the owning device
+    // once its command pool exists). The residency policy + soft device-local budget
+    // drive the auto-pressure loop in sub_allocate (mirrors the S5 StreamingAllocator).
+    void set_transfer_context(VkQueue queue, VkCommandPool pool) noexcept
+    {
+        m_queue = queue;
+        m_pool  = pool;
+    }
+    void set_residency(IResidencyPolicy* policy, crd::u64 device_local_budget) noexcept
+    {
+        m_residency_policy    = policy != nullptr ? policy : &m_null_residency;
+        m_device_local_budget = device_local_budget;
+    }
+
+    // IGpuResidencyContext (the policy acts on the allocator through this).
+    [[nodiscard]] crd::u64 device_local_used() const noexcept override
+    {
+        return m_device_local_used.load(std::memory_order_relaxed);
+    }
+    [[nodiscard]] crd::u64 device_local_budget() const noexcept override { return m_device_local_budget; }
+    [[nodiscard]] crd::u32 resident_buffer_count() const noexcept override;
+    [[nodiscard]] Buffer*  resident_buffer_at(crd::u32 index) noexcept override;
+    [[nodiscard]] crd::u64 evict_to_host(Buffer& buffer) override;
+
+    // Re-promote an evicted buffer host-visible -> device-local (consumer "on access").
+    crd::u64 make_resident(Buffer& buffer);
+
+private:
+    struct Block
+    {
+        VkDeviceMemory               memory = VK_NULL_HANDLE;
+        VkDeviceSize                 size   = 0;
+        crd::u32                     memory_type_index = 0;
+        bool                         linear            = false;
+        void*                        mapped            = nullptr;
+        crd::u32                     live_count        = 0;
+        crd::memory::OffsetAllocator oa; // by value: Block is heap-allocated and never moved
+
+        Block(VkDeviceMemory mem, VkDeviceSize sz, crd::u32 mti, bool lin, void* map_ptr, crd::u32 cap)
+            : memory(mem), size(sz), memory_type_index(mti), linear(lin), mapped(map_ptr),
+              oa(cap, 4096U, crd::memory::default_allocator(), "GpuBlock")
+        {
+        }
+    };
+
+    [[nodiscard]] bool host_visible(crd::u32 mti) const noexcept
+    {
+        return (m_mem_props.memoryTypes[mti].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0;
+    }
+    [[nodiscard]] bool host_coherent(crd::u32 mti) const noexcept
+    {
+        return (m_mem_props.memoryTypes[mti].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0;
+    }
+    [[nodiscard]] bool is_device_local(crd::u32 mti) const noexcept
+    {
+        return (m_mem_props.memoryTypes[mti].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0;
+    }
+
+    // Recreate `b` in a pool backed by `target_usage` memory, copy its contents over,
+    // swap the internal handle (idle-gated single-shot copy). Returns the relocated
+    // size in bytes (0 on failure). Shared by evict_to_host + make_resident.
+    crd::u64 relocate_buffer_pool(VulkanBuffer& b, MemoryUsage target_usage);
+
+    [[nodiscard]] VkDeviceSize block_size_for(crd::u32 mti) const noexcept
+    {
+        const crd::u32     heap_index = m_mem_props.memoryTypes[mti].heapIndex;
+        const VkDeviceSize heap_size  = m_mem_props.memoryHeaps[heap_index].size;
+        VkDeviceSize       block      = std::min<VkDeviceSize>(kMaxBlockSize, heap_size / 8);
+        if (block < kMinBlockSize)
+        {
+            block = kMinBlockSize;
+        }
+        return block;
+    }
+
+    [[nodiscard]] bool sub_allocate(const VkMemoryRequirements& reqs, VkMemoryPropertyFlags required, bool linear,
+                                    VulkanAllocation& out, const char* what)
+    {
+        const crd::u32 mti = find_memory_type(m_physical_device, reqs.memoryTypeBits, required);
+        if (mti == UINT32_MAX)
         {
             CRD_LOG_ERROR(detail::g_log_rhi_vulkan, "No compatible Vulkan memory type for {}", what);
             return false;
         }
 
+        VkDeviceSize alignment = reqs.alignment == 0 ? 1 : reqs.alignment;
+        // Non-coherent host memory: flush/invalidate ranges must be nonCoherentAtomSize
+        // aligned, so the sub-block must start (and the next must too) on that boundary.
+        if (host_visible(mti) && !host_coherent(mti))
+        {
+            alignment = std::max<VkDeviceSize>(alignment, m_non_coherent_atom);
+        }
+
+        // S7 residency pressure (mirrors the S5 StreamingAllocator): a device-local
+        // allocation over the soft budget asks the policy to evict device-local
+        // resources to host, OUTSIDE the lock, until it fits or the policy can shed no
+        // more (then we proceed — the budget is soft; physical VRAM is the hard limit).
+        // Note: the policy's evict path re-enters sub_allocate via allocate_buffer(host)
+        // to create the host-visible destination. That recursion TERMINATES because the
+        // host allocation is not device-local — this gate is skipped on the inner call.
+        const bool dev_local = is_device_local(mti);
+        if (dev_local && m_device_local_budget != 0)
+        {
+            for (int attempt = 0; attempt <= 16; ++attempt)
+            {
+                if (m_device_local_used.load(std::memory_order_relaxed) + reqs.size <= m_device_local_budget)
+                {
+                    break;
+                }
+                if (m_residency_policy->evict(*this, reqs.size) == 0)
+                {
+                    break;
+                }
+            }
+        }
+
+        const std::lock_guard<std::mutex> lock(m_mutex);
+
+        // Large allocations get their own VkDeviceMemory (no suballocation).
+        if (reqs.size >= kDedicatedThreshold)
+        {
+            VkDeviceMemory mem = allocate_device_memory(reqs.size, mti, what);
+            if (mem == VK_NULL_HANDLE)
+            {
+                return false;
+            }
+            void* mapped = nullptr;
+            if (host_visible(mti))
+            {
+                (void)vkMapMemory(m_device, mem, 0, VK_WHOLE_SIZE, 0, &mapped);
+            }
+            out                   = {};
+            out.memory            = mem;
+            out.offset            = 0;
+            out.size_bytes        = reqs.size;
+            out.memory_type_index = mti;
+            out.mapped            = mapped;
+            out.dedicated         = true;
+            if (dev_local)
+            {
+                m_device_local_used.fetch_add(reqs.size, std::memory_order_relaxed);
+            }
+            return true;
+        }
+
+        // Suballocate within an existing (or new) block of the right pool.
+        const auto size32 = static_cast<crd::u32>(reqs.size);
+        const auto algn32 = static_cast<crd::u32>(alignment);
+        for (crd::u32 i = 0; i < static_cast<crd::u32>(m_blocks.size()); ++i)
+        {
+            Block* b = m_blocks[i];
+            if (b->memory_type_index != mti || b->linear != linear)
+            {
+                continue;
+            }
+            const crd::memory::OffsetAllocator::Allocation a = b->oa.allocate(size32, algn32);
+            if (a.valid())
+            {
+                fill_suballocation(out, *b, i, a, reqs.size, mti);
+                return true;
+            }
+        }
+
+        // No block fit -> grow one big enough for at least this request.
+        Block* nb = create_block(mti, linear, reqs.size);
+        if (nb == nullptr)
+        {
+            return false;
+        }
+        const crd::memory::OffsetAllocator::Allocation a = nb->oa.allocate(size32, algn32);
+        if (!a.valid())
+        {
+            return false; // a fresh block should always fit a sub-dedicated-threshold request
+        }
+        fill_suballocation(out, *nb, static_cast<crd::u32>(m_blocks.size()) - 1U, a, reqs.size, mti);
+        return true;
+    }
+
+    void fill_suballocation(VulkanAllocation& out, Block& b, crd::u32 block_index,
+                            crd::memory::OffsetAllocator::Allocation a, VkDeviceSize size, crd::u32 mti) noexcept
+    {
+        out                   = {};
+        out.memory            = b.memory;
+        out.offset            = a.offset;
+        out.size_bytes        = size;
+        out.memory_type_index = mti;
+        out.block_index       = block_index;
+        out.suballoc          = a;
+        out.dedicated         = false;
+        out.mapped            = b.mapped != nullptr ? static_cast<crd::u8*>(b.mapped) + a.offset : nullptr;
+        ++b.live_count;
+        if (is_device_local(mti))
+        {
+            m_device_local_used.fetch_add(size, std::memory_order_relaxed);
+        }
+    }
+
+    [[nodiscard]] Block* create_block(crd::u32 mti, bool linear, VkDeviceSize min_size) noexcept
+    {
+        VkDeviceSize block_size = block_size_for(mti);
+        if (block_size < min_size)
+        {
+            block_size = min_size;
+        }
+        VkDeviceMemory mem = allocate_device_memory(block_size, mti, "block");
+        if (mem == VK_NULL_HANDLE)
+        {
+            return nullptr;
+        }
+        void* mapped = nullptr;
+        if (host_visible(mti))
+        {
+            (void)vkMapMemory(m_device, mem, 0, VK_WHOLE_SIZE, 0, &mapped);
+        }
+        crd::memory::IAllocator* alloc = crd::memory::default_allocator();
+        void*                    raw   = alloc->allocate(sizeof(Block), alignof(Block));
+        Block*                   b     = new (raw) Block(mem, block_size, mti, linear, mapped,
+                                                         static_cast<crd::u32>(block_size));
+        m_blocks.push_back(b);
+        return b;
+    }
+
+    void destroy_block(Block* b) noexcept
+    {
+        if (b == nullptr)
+        {
+            return;
+        }
+        if (b->memory != VK_NULL_HANDLE)
+        {
+            vkFreeMemory(m_device, b->memory, nullptr); // implicitly unmaps a persistent map
+        }
+        crd::memory::IAllocator* alloc = crd::memory::default_allocator();
+        b->~Block();
+        alloc->deallocate(b);
+    }
+
+    [[nodiscard]] VkDeviceMemory allocate_device_memory(VkDeviceSize size, crd::u32 memory_type_index,
+                                                        const char* what) noexcept
+    {
         VkMemoryAllocateInfo alloc_info{};
-        alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        alloc_info.allocationSize = requirements.size;
+        alloc_info.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        alloc_info.allocationSize  = size;
         alloc_info.memoryTypeIndex = memory_type_index;
 
         VkDeviceMemory memory = VK_NULL_HANDLE;
         if (!vk_ok(vkAllocateMemory(m_device, &alloc_info, nullptr, &memory), what))
         {
-            return false;
+            return VK_NULL_HANDLE;
         }
-
-        out_allocation.memory = memory;
-        out_allocation.size_bytes = requirements.size;
-        out_allocation.memory_type_index = memory_type_index;
-        return true;
+        return memory;
     }
 
-    VkPhysicalDevice m_physical_device = VK_NULL_HANDLE;
-    VkDevice m_device = VK_NULL_HANDLE;
+    // Allocations >= this get their own VkDeviceMemory. A future render/compute
+    // profile Config will expose this as a tunable knob (consumer-pulled).
+    // ADR-0085 S7 image defrag (defined out-of-line; need complete VulkanImage):
+    // record_* recreates image+view at a compacted location and records the
+    // subresource copy + layout transitions; commit_* swaps the handles + frees old.
+    void record_image_relocation(VkCommandBuffer cmd, VulkanImage& img, crd::containers::Array<ImageRelocation>& out);
+    void commit_image_relocation(ImageRelocation& r) noexcept;
+
+    static constexpr VkDeviceSize kDedicatedThreshold = VkDeviceSize{16} << 20; // 16 MiB
+    static constexpr VkDeviceSize kMaxBlockSize       = VkDeviceSize{256} << 20; // 256 MiB
+    static constexpr VkDeviceSize kMinBlockSize       = VkDeviceSize{16} << 20;  // 16 MiB floor
+
+    VkPhysicalDevice                 m_physical_device = VK_NULL_HANDLE;
+    VkDevice                         m_device          = VK_NULL_HANDLE;
+    VkPhysicalDeviceMemoryProperties m_mem_props{};
+    VkDeviceSize                     m_non_coherent_atom = 1;
+    mutable std::mutex               m_mutex;
+    crd::containers::Array<Block*>   m_blocks;
+    crd::containers::Array<VulkanBuffer*> m_live_buffers{crd::memory::default_allocator()};
+    crd::containers::Array<VulkanImage*>  m_live_images{crd::memory::default_allocator()};
+
+    // ---- S7 residency state ---------------------------------------------------
+    VkQueue               m_queue = VK_NULL_HANDLE; // transfer/graphics queue for relocation copies
+    VkCommandPool         m_pool  = VK_NULL_HANDLE;
+    NullResidencyPolicy   m_null_residency;
+    IResidencyPolicy*     m_residency_policy = &m_null_residency;
+    std::atomic<crd::u64> m_device_local_used{0};      // bytes in DEVICE_LOCAL memory types
+    crd::u64              m_device_local_budget = 0;   // soft ceiling; 0 == unlimited
 };
 
 class VulkanImage final : public Image
 {
 public:
     VulkanImage(VkDevice device, ImageDesc desc, VkImage image, VkImageView image_view,
-                VulkanAllocation allocation = {}, bool owns_image = false)
+                VulkanAllocation allocation = {}, bool owns_image = false, VulkanAllocator* allocator = nullptr)
         : m_device(device), m_desc(std::move(desc)), m_image(image), m_image_view(image_view), m_allocation(allocation),
-          m_owns_image(owns_image)
+          m_owns_image(owns_image), m_allocator(allocator)
     {
+        if (m_allocator != nullptr)
+        {
+            m_allocator->register_image(this);
+        }
     }
 
     ~VulkanImage() noexcept override
     {
+        if (m_allocator != nullptr)
+        {
+            m_allocator->unregister_image(this);
+        }
         if (m_image_view != VK_NULL_HANDLE)
         {
             vkDestroyImageView(m_device, m_image_view, nullptr);
@@ -512,10 +914,12 @@ public:
             vkDestroyImage(m_device, m_image, nullptr);
             m_image = VK_NULL_HANDLE;
         }
-        if (m_allocation.memory != VK_NULL_HANDLE)
+        // Suballocated images return their sub-block to the allocator; swapchain
+        // images (m_allocator == nullptr) own no memory.
+        if (m_allocator != nullptr)
         {
-            vkFreeMemory(m_device, m_allocation.memory, nullptr);
-            m_allocation.memory = VK_NULL_HANDLE;
+            m_allocator->free(m_allocation);
+            m_allocation = {};
         }
     }
 
@@ -524,6 +928,7 @@ public:
     [[nodiscard]] VkImageView image_view() const noexcept { return m_image_view; }
     [[nodiscard]] VkImageLayout layout() const noexcept { return m_layout; }
     void set_layout(VkImageLayout layout) noexcept { m_layout = layout; }
+    [[nodiscard]] crd::u32 generation() const noexcept { return m_generation; }
 
 private:
     VkDevice m_device = VK_NULL_HANDLE;
@@ -533,53 +938,53 @@ private:
     VkImageLayout m_layout = VK_IMAGE_LAYOUT_UNDEFINED;
     VulkanAllocation m_allocation{};
     bool m_owns_image = false;
+    VulkanAllocator* m_allocator = nullptr; // non-null => suballocated; free via it on destroy
+    crd::u32 m_generation = 0;              // bumped on defrag relocation (ADR-0085 S7)
+
+    friend class VulkanAllocator; // defrag swaps m_image/m_image_view/m_allocation + bumps m_generation
 };
 
 class VulkanBuffer final : public Buffer
 {
 public:
-    VulkanBuffer(VkDevice device, BufferDesc desc, VkBuffer buffer, VulkanAllocation allocation)
-        : m_device(device), m_desc(desc), m_buffer(buffer), m_allocation(allocation)
+    VulkanBuffer(VkDevice device, BufferDesc desc, VkBuffer buffer, VulkanAllocation allocation,
+                 VulkanAllocator* allocator)
+        : m_device(device), m_desc(desc), m_buffer(buffer), m_allocation(allocation), m_allocator(allocator)
     {
+        if (m_allocator != nullptr)
+        {
+            m_allocator->register_buffer(this);
+        }
     }
 
     ~VulkanBuffer() noexcept override
     {
+        if (m_allocator != nullptr)
+        {
+            m_allocator->unregister_buffer(this);
+        }
         if (m_buffer != VK_NULL_HANDLE)
         {
             vkDestroyBuffer(m_device, m_buffer, nullptr);
             m_buffer = VK_NULL_HANDLE;
         }
-        if (m_allocation.memory != VK_NULL_HANDLE)
+        if (m_allocator != nullptr)
         {
-            vkFreeMemory(m_device, m_allocation.memory, nullptr);
-            m_allocation.memory = VK_NULL_HANDLE;
+            m_allocator->free(m_allocation);
+            m_allocation = {};
         }
     }
+
+    [[nodiscard]] crd::u32 generation() const noexcept { return m_generation; }
 
     [[nodiscard]] const BufferDesc& desc() const noexcept override { return m_desc; }
 
-    [[nodiscard]] void* map() noexcept override
-    {
-        if (m_desc.memory_usage == MemoryUsage::GpuOnly)
-        {
-            return nullptr;
-        }
-        void* mapped = nullptr;
-        if (vkMapMemory(m_device, m_allocation.memory, 0, m_desc.size_bytes, 0, &mapped) != VK_SUCCESS)
-        {
-            return nullptr;
-        }
-        return mapped;
-    }
+    // Host-visible blocks are persistently mapped; the allocation's `mapped` is the
+    // block map + this buffer's offset. GpuOnly allocations carry mapped == nullptr.
+    [[nodiscard]] void* map() noexcept override { return m_allocation.mapped; }
 
-    void unmap() noexcept override
-    {
-        if (m_desc.memory_usage != MemoryUsage::GpuOnly)
-        {
-            vkUnmapMemory(m_device, m_allocation.memory);
-        }
-    }
+    // No-op: the underlying block stays mapped for its lifetime (persistent mapping).
+    void unmap() noexcept override {}
 
     [[nodiscard]] VkBuffer handle() const noexcept { return m_buffer; }
 
@@ -588,7 +993,331 @@ private:
     BufferDesc m_desc{};
     VkBuffer m_buffer = VK_NULL_HANDLE;
     VulkanAllocation m_allocation{};
+    VulkanAllocator* m_allocator = nullptr;
+    crd::u32 m_generation = 0; // bumped on defrag relocation (ADR-0085 S7)
+
+    friend class VulkanAllocator; // defrag swaps m_buffer/m_allocation + bumps m_generation
 };
+
+// One-shot transfer: record into a primary command buffer, submit, wait idle, free.
+// Idle-gated relocation uses this (one submit per defrag pass — not per resource).
+template <typename RecordFn>
+void submit_one_shot(VkDevice device, VkQueue queue, VkCommandPool pool, RecordFn&& record) noexcept
+{
+    VkCommandBufferAllocateInfo ai{};
+    ai.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    ai.commandPool        = pool;
+    ai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    ai.commandBufferCount = 1;
+    VkCommandBuffer cmd   = VK_NULL_HANDLE;
+    if (!vk_ok(vkAllocateCommandBuffers(device, &ai, &cmd), "vkAllocateCommandBuffers(relocate)"))
+    {
+        return;
+    }
+    VkCommandBufferBeginInfo bi{};
+    bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &bi);
+    std::forward<RecordFn>(record)(cmd);
+    vkEndCommandBuffer(cmd);
+
+    VkSubmitInfo si{};
+    si.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    si.commandBufferCount = 1;
+    si.pCommandBuffers    = &cmd;
+    static_cast<void>(vk_ok(vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE), "vkQueueSubmit(relocate)"));
+    vkQueueWaitIdle(queue);
+    vkFreeCommandBuffers(device, pool, 1, &cmd);
+}
+
+[[nodiscard]] VkImageAspectFlags image_aspect_for(Format format) noexcept
+{
+    if (format == Format::D24UnormS8Uint)
+    {
+        return VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+    }
+    if (format == Format::D32Sfloat)
+    {
+        return VK_IMAGE_ASPECT_DEPTH_BIT;
+    }
+    return VK_IMAGE_ASPECT_COLOR_BIT;
+}
+
+// Recreate an image view matching create_image's logic (aspect + view type).
+[[nodiscard]] VkImageView make_image_view(VkDevice device, VkImage image, const ImageDesc& desc) noexcept
+{
+    VkImageViewCreateInfo vi{};
+    vi.sType            = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    vi.image            = image;
+    vi.viewType         = desc.array_layers > 1 ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
+    vi.format           = to_vk_format(desc.format);
+    vi.subresourceRange = {image_aspect_for(desc.format), 0, desc.mip_levels, 0, desc.array_layers};
+    VkImageView view    = VK_NULL_HANDLE;
+    static_cast<void>(vk_ok(vkCreateImageView(device, &vi, nullptr, &view), "vkCreateImageView(relocate)"));
+    return view;
+}
+
+void image_layout_barrier(VkCommandBuffer cmd, VkImage image, VkImageLayout from, VkImageLayout to,
+                          VkImageAspectFlags aspect, crd::u32 mips, crd::u32 layers, VkAccessFlags src_access,
+                          VkAccessFlags dst_access, VkPipelineStageFlags src_stage,
+                          VkPipelineStageFlags dst_stage) noexcept
+{
+    VkImageMemoryBarrier b{};
+    b.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    b.oldLayout           = from;
+    b.newLayout           = to;
+    b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    b.image               = image;
+    b.subresourceRange    = {aspect, 0, mips, 0, layers};
+    b.srcAccessMask       = src_access;
+    b.dstAccessMask       = dst_access;
+    vkCmdPipelineBarrier(cmd, src_stage, dst_stage, 0, 0, nullptr, 0, nullptr, 1, &b);
+}
+
+void VulkanAllocator::defragment(IDefragPolicy& policy, VkQueue queue, VkCommandPool pool)
+{
+    vkDeviceWaitIdle(m_device);
+
+    // Snapshot the registries under the lock; operate on the snapshot afterward
+    // (allocate_*/free re-lock internally — defrag is single-threaded by contract).
+    crd::containers::Array<VulkanBuffer*> buffers(crd::memory::default_allocator());
+    crd::containers::Array<VulkanImage*>  images(crd::memory::default_allocator());
+    {
+        const std::lock_guard<std::mutex> lock(m_mutex);
+        for (VulkanBuffer* b : m_live_buffers)
+        {
+            buffers.push_back(b);
+        }
+        for (VulkanImage* i : m_live_images)
+        {
+            images.push_back(i);
+        }
+    }
+
+    struct BufReloc
+    {
+        VulkanBuffer*    b;
+        VkBuffer         new_vk;
+        VulkanAllocation new_alloc;
+        VkBuffer         old_vk;
+        VulkanAllocation old_alloc;
+    };
+    crd::containers::Array<BufReloc> buf_relocs(crd::memory::default_allocator());
+    crd::containers::Array<ImageRelocation> img_relocs(crd::memory::default_allocator());
+
+    submit_one_shot(m_device, queue, pool, [&](VkCommandBuffer cmd) {
+        for (VulkanBuffer* b : buffers)
+        {
+            if (!policy.should_defrag(static_cast<const Buffer&>(*b)))
+            {
+                continue;
+            }
+            VkBuffer         new_vk = VK_NULL_HANDLE;
+            VulkanAllocation new_alloc;
+            if (!allocate_buffer(b->m_desc, new_vk, new_alloc))
+            {
+                continue; // no room to relocate — leave it where it is
+            }
+            VkBufferCopy region{};
+            region.size = b->m_desc.size_bytes;
+            vkCmdCopyBuffer(cmd, b->m_buffer, new_vk, 1, &region);
+            buf_relocs.push_back(BufReloc{b, new_vk, new_alloc, b->m_buffer, b->m_allocation});
+        }
+        for (VulkanImage* im : images)
+        {
+            if (!policy.should_defrag(static_cast<const Image&>(*im)))
+            {
+                continue;
+            }
+            record_image_relocation(cmd, *im, img_relocs);
+        }
+    });
+
+    // submit_one_shot already waited idle -> safe to swap handles + free old.
+    for (BufReloc& r : buf_relocs)
+    {
+        r.b->m_buffer     = r.new_vk;
+        r.b->m_allocation = r.new_alloc;
+        ++r.b->m_generation;
+        vkDestroyBuffer(m_device, r.old_vk, nullptr);
+        free(r.old_alloc);
+    }
+    for (ImageRelocation& r : img_relocs)
+    {
+        commit_image_relocation(r);
+    }
+
+    // Fire callbacks OUTSIDE the lock (consumers re-bind descriptors here).
+    for (BufReloc& r : buf_relocs)
+    {
+        policy.on_relocated(static_cast<const Buffer&>(*r.b), r.b->m_generation);
+    }
+    for (ImageRelocation& r : img_relocs)
+    {
+        policy.on_relocated(static_cast<const Image&>(*r.img), r.img->m_generation);
+    }
+}
+
+void VulkanAllocator::record_image_relocation(VkCommandBuffer cmd, VulkanImage& img,
+                                              crd::containers::Array<ImageRelocation>& out)
+{
+    // UNDEFINED == no content worth preserving (and copying from UNDEFINED is invalid).
+    if (img.m_layout == VK_IMAGE_LAYOUT_UNDEFINED)
+    {
+        return;
+    }
+    const ImageDesc& desc    = img.m_desc;
+    VkImage          new_img = VK_NULL_HANDLE;
+    VulkanAllocation new_alloc;
+    if (!allocate_image(desc, new_img, new_alloc))
+    {
+        return; // no room to relocate
+    }
+    const VkImageView new_view = make_image_view(m_device, new_img, desc);
+    if (new_view == VK_NULL_HANDLE)
+    {
+        vkDestroyImage(m_device, new_img, nullptr);
+        free(new_alloc);
+        return;
+    }
+
+    const VkImageAspectFlags aspect     = image_aspect_for(desc.format);
+    const VkImageLayout      src_layout = img.m_layout;
+
+    image_layout_barrier(cmd, img.m_image, src_layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, aspect, desc.mip_levels,
+                         desc.array_layers, VK_ACCESS_MEMORY_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                         VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+    image_layout_barrier(cmd, new_img, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, aspect,
+                         desc.mip_levels, desc.array_layers, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
+                         VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+
+    // Copy every mip level (all array layers per level).
+    constexpr crd::u32 kMaxMips = 16;
+    VkImageCopy        copies[kMaxMips];
+    const crd::u32     mips = desc.mip_levels < kMaxMips ? desc.mip_levels : kMaxMips;
+    for (crd::u32 m = 0; m < mips; ++m)
+    {
+        VkImageCopy c{};
+        c.srcSubresource    = {aspect, m, 0, desc.array_layers};
+        c.dstSubresource    = {aspect, m, 0, desc.array_layers};
+        const crd::u32 w    = desc.extent.width >> m;
+        const crd::u32 h    = desc.extent.height >> m;
+        c.extent            = {w == 0 ? 1U : w, h == 0 ? 1U : h, 1U};
+        copies[m]           = c;
+    }
+    vkCmdCopyImage(cmd, img.m_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, new_img,
+                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, mips, copies);
+
+    // Restore the new image to the layout the consumer expects (preserves the
+    // m_layout invariant — consumers see no layout change).
+    image_layout_barrier(cmd, new_img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, src_layout, aspect, desc.mip_levels,
+                         desc.array_layers, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_MEMORY_READ_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+
+    out.push_back(ImageRelocation{&img, new_img, new_view, new_alloc, img.m_image, img.m_image_view, img.m_allocation});
+}
+
+void VulkanAllocator::commit_image_relocation(ImageRelocation& r) noexcept
+{
+    r.img->m_image      = r.new_vk;
+    r.img->m_image_view = r.new_view;
+    r.img->m_allocation = r.new_alloc;
+    // m_layout is unchanged (the new image was restored to it during recording).
+    ++r.img->m_generation;
+    vkDestroyImageView(m_device, r.old_view, nullptr);
+    vkDestroyImage(m_device, r.old_vk, nullptr);
+    free(r.old_alloc);
+}
+
+// ---- ADR-0085 S7 residency (out-of-line; need complete VulkanBuffer) -----------
+
+crd::u32 VulkanAllocator::resident_buffer_count() const noexcept
+{
+    const std::lock_guard<std::mutex> lock(m_mutex);
+    crd::u32                          count = 0;
+    for (const VulkanBuffer* b : m_live_buffers)
+    {
+        if (is_device_local(b->m_allocation.memory_type_index))
+        {
+            ++count;
+        }
+    }
+    return count;
+}
+
+Buffer* VulkanAllocator::resident_buffer_at(crd::u32 index) noexcept
+{
+    const std::lock_guard<std::mutex> lock(m_mutex);
+    crd::u32                          seen = 0;
+    for (VulkanBuffer* b : m_live_buffers)
+    {
+        if (is_device_local(b->m_allocation.memory_type_index))
+        {
+            if (seen == index)
+            {
+                return static_cast<Buffer*>(b);
+            }
+            ++seen;
+        }
+    }
+    return nullptr;
+}
+
+crd::u64 VulkanAllocator::relocate_buffer_pool(VulkanBuffer& b, MemoryUsage target_usage)
+{
+    if (m_queue == VK_NULL_HANDLE || m_pool == VK_NULL_HANDLE)
+    {
+        return 0; // transfer context not configured
+    }
+    BufferDesc new_desc   = b.m_desc;
+    new_desc.memory_usage = target_usage;
+
+    VkBuffer         new_vk = VK_NULL_HANDLE;
+    VulkanAllocation new_alloc;
+    if (!allocate_buffer(new_desc, new_vk, new_alloc))
+    {
+        return 0; // no room in the target pool
+    }
+
+    vkDeviceWaitIdle(m_device);
+    submit_one_shot(m_device, m_queue, m_pool, [&](VkCommandBuffer cmd) {
+        VkBufferCopy region{};
+        region.size = b.m_desc.size_bytes;
+        vkCmdCopyBuffer(cmd, b.m_buffer, new_vk, 1, &region);
+    });
+
+    const crd::u64   moved     = b.m_allocation.size_bytes;
+    VkBuffer         old_vk    = b.m_buffer;
+    VulkanAllocation old_alloc = b.m_allocation;
+    b.m_buffer                 = new_vk;
+    b.m_allocation             = new_alloc;
+    b.m_desc                   = new_desc; // residency state lives in the desc's memory_usage
+    ++b.m_generation;
+    vkDestroyBuffer(m_device, old_vk, nullptr);
+    free(old_alloc); // device_local_used bookkeeping rides on allocate_buffer + free
+    return moved;
+}
+
+crd::u64 VulkanAllocator::evict_to_host(Buffer& buffer)
+{
+    auto& vb = static_cast<VulkanBuffer&>(buffer);
+    if (!is_device_local(vb.m_allocation.memory_type_index))
+    {
+        return 0; // already host-resident
+    }
+    return relocate_buffer_pool(vb, MemoryUsage::CpuToGpu); // host-visible|coherent
+}
+
+crd::u64 VulkanAllocator::make_resident(Buffer& buffer)
+{
+    auto& vb = static_cast<VulkanBuffer&>(buffer);
+    if (is_device_local(vb.m_allocation.memory_type_index))
+    {
+        return 0; // already device-resident
+    }
+    return relocate_buffer_pool(vb, MemoryUsage::GpuOnly);
+}
 
 class VulkanShaderModule final : public ShaderModule
 {
@@ -1829,6 +2558,8 @@ public:
         {
             CRD_LOG_ERROR(detail::g_log_rhi_vulkan, "Fatal: command pool creation failed — device unusable");
         }
+        // ADR-0085 S7: give the allocator a queue + pool for relocation copies.
+        m_allocator.set_transfer_context(m_graphics_queue_handle, m_command_pool);
 
         // Phase 3.1.7 v9a-a-async-compute (2026-05-18) — separate
         // compute-family command pool when a dedicated compute family
@@ -1868,6 +2599,10 @@ public:
         if (m_device != VK_NULL_HANDLE)
         {
             vkDeviceWaitIdle(m_device);
+            // Free all suballocator blocks (VkDeviceMemory) BEFORE the device dies —
+            // ~VulkanAllocator would otherwise run after vkDestroyDevice (member dtors
+            // follow the dtor body) and free memory on a dead device.
+            m_allocator.destroy_all();
             vkDestroyDevice(m_device, nullptr);
             m_device = VK_NULL_HANDLE;
         }
@@ -2091,8 +2826,24 @@ public:
             return nullptr;
         }
 
-        return std::make_unique<VulkanBuffer>(m_device, desc, buffer, allocation);
+        return std::make_unique<VulkanBuffer>(m_device, desc, buffer, allocation, &m_allocator);
     }
+
+    // ADR-0085 S6 diagnostic (test-facing via crd::rhi::vulkan_resident_block_count).
+    [[nodiscard]] crd::u32 resident_block_count() const noexcept { return m_allocator.block_count(); }
+
+    // ADR-0085 S7: drive a defrag pass over the allocator's live resources using this
+    // device's graphics queue + command pool (test-facing via crd::rhi::vulkan_defragment).
+    void defragment(IDefragPolicy& policy) { m_allocator.defragment(policy, m_graphics_queue_handle, m_command_pool); }
+
+    // ADR-0085 S7 residency (test-facing via the crd::rhi::vulkan_* free functions).
+    void configure_residency(IResidencyPolicy* policy, crd::u64 device_local_budget)
+    {
+        m_allocator.set_residency(policy, device_local_budget);
+    }
+    [[nodiscard]] crd::u64 device_local_used() const noexcept { return m_allocator.device_local_used(); }
+    crd::u64               make_resident(Buffer& buffer) { return m_allocator.make_resident(buffer); }
+    crd::u64               evict_to_host(Buffer& buffer) { return m_allocator.evict_to_host(buffer); }
 
     [[nodiscard]] std::unique_ptr<Image> create_image(const ImageDesc& desc) override
     {
@@ -2128,7 +2879,7 @@ public:
             return nullptr;
         }
 
-        return std::make_unique<VulkanImage>(m_device, desc, image, view, allocation, true);
+        return std::make_unique<VulkanImage>(m_device, desc, image, view, allocation, true, &m_allocator);
     }
 
     [[nodiscard]] std::unique_ptr<ShaderModule> create_shader_module(const ShaderModuleDesc& desc) override
@@ -3040,6 +3791,48 @@ private:
 std::unique_ptr<Instance> create_vulkan_instance(const InstanceDesc& desc)
 {
     return std::make_unique<VulkanInstance>(desc);
+}
+
+crd::u32 vulkan_resident_block_count(const Device& device) noexcept
+{
+    const auto* vk = dynamic_cast<const VulkanDevice*>(&device);
+    return vk != nullptr ? vk->resident_block_count() : 0U;
+}
+
+void vulkan_defragment(Device& device, IDefragPolicy& policy)
+{
+    auto* vk = dynamic_cast<VulkanDevice*>(&device);
+    if (vk != nullptr)
+    {
+        vk->defragment(policy);
+    }
+}
+
+void vulkan_configure_residency(Device& device, IResidencyPolicy* policy, crd::u64 device_local_budget)
+{
+    auto* vk = dynamic_cast<VulkanDevice*>(&device);
+    if (vk != nullptr)
+    {
+        vk->configure_residency(policy, device_local_budget);
+    }
+}
+
+crd::u64 vulkan_device_local_used(const Device& device) noexcept
+{
+    const auto* vk = dynamic_cast<const VulkanDevice*>(&device);
+    return vk != nullptr ? vk->device_local_used() : 0U;
+}
+
+crd::u64 vulkan_make_resident(Device& device, Buffer& buffer)
+{
+    auto* vk = dynamic_cast<VulkanDevice*>(&device);
+    return vk != nullptr ? vk->make_resident(buffer) : 0U;
+}
+
+crd::u64 vulkan_evict_to_host(Device& device, Buffer& buffer)
+{
+    auto* vk = dynamic_cast<VulkanDevice*>(&device);
+    return vk != nullptr ? vk->evict_to_host(buffer) : 0U;
 }
 
 namespace detail

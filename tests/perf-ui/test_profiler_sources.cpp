@@ -1,6 +1,6 @@
 // crd-perf-ui v0g -- LiveProfilerSource + CaptureViewSource round-trip.
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/perf/perf.hpp>
 #include <crd/perf/ui/ui.hpp>
@@ -16,7 +16,7 @@ namespace
 
 struct PerfFixture
 {
-    crd::memory::MallocAllocator alloc{"perf-ui-test"};
+    crd::memory::GrowableTlsfAllocator alloc{256ULL << 20, nullptr, "perf-ui-test"};
     PerfFixture() { crd::perf::init({}); }
     ~PerfFixture() { crd::perf::shutdown(); }
 };
@@ -94,7 +94,7 @@ TEST_CASE("CaptureViewSource gpu_thread_index returns 0xFF when no 'gpu' thread 
           "[perf-ui][source][capture-view][gpu]")
 {
     PerfFixture fx;
-    crd::memory::MallocAllocator alloc{"capture-no-gpu"};
+    crd::memory::GrowableTlsfAllocator alloc{256ULL << 20, nullptr, "capture-no-gpu"};
     auto buf = crd::perf::save_capture_to_buffer(&alloc);
     crd::perf::CaptureView view{
         crd::containers::ConstSpan<crd::u8>{buf.data(), buf.size()}};

@@ -21,40 +21,36 @@
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
 #include <Eigen/Dense>
-
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <limits>
 
-extern "C" void dsyev_(const char* jobz, const char* uplo, const int* n, double* a, const int* lda,
-                       double* w, double* work, const int* lwork, int* info);
-extern "C" void zheev_(const char* jobz, const char* uplo, const int* n, double* a, const int* lda,
-                       double* w, double* work, const int* lwork, double* rwork, int* info);
+extern "C" void dsyev_(const char* jobz, const char* uplo, const int* n, double* a, const int* lda, double* w,
+                       double* work, const int* lwork, int* info);
+extern "C" void zheev_(const char* jobz, const char* uplo, const int* n, double* a, const int* lda, double* w,
+                       double* work, const int* lwork, double* rwork, int* info);
 // Eigenvalues-only references: dsyevd (dense, D&C), dsterf (tridiagonal root-
 // free QL/QR — the LAPACK values-only speed king), dstemr (tridiagonal MRRR,
 // JOBZ='N' — LAPACK's own MRRR eigenvalue path, the head-to-head for ours).
-extern "C" void dsyevd_(const char* jobz, const char* uplo, const int* n, double* a, const int* lda,
-                        double* w, double* work, const int* lwork, int* iwork, const int* liwork,
-                        int* info);
+extern "C" void dsyevd_(const char* jobz, const char* uplo, const int* n, double* a, const int* lda, double* w,
+                        double* work, const int* lwork, int* iwork, const int* liwork, int* info);
 extern "C" void dsterf_(const int* n, double* d, double* e, int* info);
 // dstedc — divide-and-conquer tridiagonal eigensolver (values+vectors, O(n^3)).
-extern "C" void dstedc_(const char* compz, const int* n, double* d, double* e, double* z, const int* ldz,
-                        double* work, const int* lwork, int* iwork, const int* liwork, int* info);
-extern "C" void dstemr_(const char* jobz, const char* range, const int* n, double* d, double* e,
-                        const double* vl, const double* vu, const int* il, const int* iu, int* m,
-                        double* w, double* z, const int* ldz, const int* nzc, int* isuppz,
-                        int* tryrac, double* work, const int* lwork, int* iwork, const int* liwork,
-                        int* info);
+extern "C" void dstedc_(const char* compz, const int* n, double* d, double* e, double* z, const int* ldz, double* work,
+                        const int* lwork, int* iwork, const int* liwork, int* info);
+extern "C" void dstemr_(const char* jobz, const char* range, const int* n, double* d, double* e, const double* vl,
+                        const double* vu, const int* il, const int* iu, int* m, double* w, double* z, const int* ldz,
+                        const int* nzc, int* isuppz, int* tryrac, double* work, const int* lwork, int* iwork,
+                        const int* liwork, int* info);
 
 namespace
 {
 using crd::hesap::dense::eig_sym;
 using crd::hesap::dense::Symmetric;
 
-template <typename Op>
-crd::f64 time_loop(Op&& op, crd::f64 budget_s = 0.4, int min_iters = 3)
+template <typename Op> crd::f64 time_loop(Op&& op, crd::f64 budget_s = 0.4, int min_iters = 3)
 {
     op();
     crd::jobs::frame_reset();
@@ -70,8 +66,7 @@ crd::f64 time_loop(Op&& op, crd::f64 budget_s = 0.4, int min_iters = 3)
             op();
             crd::jobs::frame_reset();
             ++iters;
-            const crd::f64 el =
-                std::chrono::duration<crd::f64>(std::chrono::steady_clock::now() - t0).count();
+            const crd::f64 el = std::chrono::duration<crd::f64>(std::chrono::steady_clock::now() - t0).count();
             if (el > budget_s && iters >= min_iters)
             {
                 const crd::f64 per = el / iters;
@@ -113,17 +108,20 @@ struct MultiState
 void tridiag_eig_multisection_parallel(MultiState* sp)
 {
     const crd::u32 p = static_cast<crd::u32>(sp->p);
-    auto* counter = crd::jobs::parallel_for(p, p, [sp](crd::u32 begin, crd::u32 end) {
-        for (crd::u32 c = begin; c < end; ++c)
-        {
-            const int klo = static_cast<int>(static_cast<crd::u64>(c) * sp->n / sp->p);
-            const int khi = static_cast<int>(static_cast<crd::u64>(c + 1) * sp->n / sp->p);
-            const crd::usize off = static_cast<crd::usize>(c) * sp->stride;
-            crd::hesap::dense::detail::multisection_chunk(sp->d, sp->e2, sp->n, klo, khi, sp->gl, sp->gu,
-                                                          sp->pivmin, sp->reltol, sp->w, sp->sl + off,
-                                                          sp->sr + off, sp->sclo + off, sp->schi + off);
-        }
-    });
+    auto* counter =
+        crd::jobs::parallel_for(p, p,
+                                [sp](crd::u32 begin, crd::u32 end)
+                                {
+                                    for (crd::u32 c = begin; c < end; ++c)
+                                    {
+                                        const int klo = static_cast<int>(static_cast<crd::u64>(c) * sp->n / sp->p);
+                                        const int khi = static_cast<int>(static_cast<crd::u64>(c + 1) * sp->n / sp->p);
+                                        const crd::usize off = static_cast<crd::usize>(c) * sp->stride;
+                                        crd::hesap::dense::detail::multisection_chunk(
+                                            sp->d, sp->e2, sp->n, klo, khi, sp->gl, sp->gu, sp->pivmin, sp->reltol,
+                                            sp->w, sp->sl + off, sp->sr + off, sp->sclo + off, sp->schi + off);
+                                    }
+                                });
     crd::jobs::wait(counter);
 }
 } // namespace
@@ -134,15 +132,12 @@ int main()
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(512U * 1024U * 1024U));
 
     std::fprintf(stdout, "\n==== symmetric eig (values+vectors, f64) ====\n");
-    std::fprintf(stdout, "%-6s | %-11s | %-11s | %-11s | %-9s | %-9s | %-10s | %-10s\n", "N",
-                 "Cerid(ms)", "Eigen(ms)", "LAPACK(ms)", "C/Eigen", "C/LAPACK", "val|err|",
-                 "resid");
-    std::fprintf(stdout,
-                 "-------------------------------------------------------------------------------"
-                 "------------------\n");
+    std::fprintf(stdout, "%-6s | %-11s | %-11s | %-11s | %-9s | %-9s | %-10s | %-10s\n", "N", "Cerid(ms)", "Eigen(ms)",
+                 "LAPACK(ms)", "C/Eigen", "C/LAPACK", "val|err|", "resid");
+    std::fprintf(stdout, "-------------------------------------------------------------------------------"
+                         "------------------\n");
 
-    for (crd::usize n : {crd::usize{64}, crd::usize{128}, crd::usize{256}, crd::usize{512},
-                         crd::usize{1024}})
+    for (crd::usize n : {crd::usize{64}, crd::usize{128}, crd::usize{256}, crd::usize{512}, crd::usize{1024}})
     {
         // Deterministic random symmetric matrix (shared by all three solvers).
         Symmetric<crd::f64> a(&alloc, n);
@@ -153,8 +148,7 @@ int main()
             for (crd::usize j = 0; j <= i; ++j)
             {
                 s = s * 1664525U + 1013904223U;
-                const crd::f64 val =
-                    static_cast<crd::f64>(static_cast<crd::i32>(s >> 8) % 2000 - 1000) * 0.001;
+                const crd::f64 val = static_cast<crd::f64>(static_cast<crd::i32>(s >> 8) % 2000 - 1000) * 0.001;
                 a.at(i, j) = val;
                 ea(static_cast<Eigen::Index>(i), static_cast<Eigen::Index>(j)) = val;
                 ea(static_cast<Eigen::Index>(j), static_cast<Eigen::Index>(i)) = val;
@@ -165,13 +159,15 @@ int main()
         crd::containers::Array<crd::f64> cvals(&alloc);
         cvals.resize(n);
         crd::f64 resid = 0.0;
-        const crd::f64 ct = time_loop([&]() {
-            const auto eig = eig_sym<crd::f64>(&alloc, a);
-            for (crd::usize i = 0; i < n; ++i)
+        const crd::f64 ct = time_loop(
+            [&]()
             {
-                cvals[i] = eig.values.data()[i];
-            }
-        });
+                const auto eig = eig_sym<crd::f64>(&alloc, a);
+                for (crd::usize i = 0; i < n; ++i)
+                {
+                    cvals[i] = eig.values.data()[i];
+                }
+            });
         {
             const auto eig = eig_sym<crd::f64>(&alloc, a);
             const crd::f64* v = eig.vectors.data();
@@ -193,10 +189,12 @@ int main()
 
         // --- Eigen ---
         Eigen::VectorXd evals;
-        const crd::f64 et = time_loop([&]() {
-            Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(ea);
-            evals = es.eigenvalues();
-        });
+        const crd::f64 et = time_loop(
+            [&]()
+            {
+                Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(ea);
+                evals = es.eigenvalues();
+            });
 
         // --- LAPACK dsyev (column-major; symmetric so layout-agnostic) ---
         const int ni = static_cast<int>(n);
@@ -214,15 +212,17 @@ int main()
             lwork = static_cast<int>(wq);
             crd::containers::Array<crd::f64> work(&alloc);
             work.resize(static_cast<crd::usize>(lwork));
-            lt = time_loop([&]() {
-                for (crd::usize i = 0; i < n * n; ++i)
+            lt = time_loop(
+                [&]()
                 {
-                    la[i] = ea.data()[i];  // Eigen is column-major; refill each iter
-                }
-                int inf = 0;
-                int lwk = static_cast<int>(work.size());
-                dsyev_("V", "L", &ni, la.data(), &ni, lw.data(), work.data(), &lwk, &inf);
-            });
+                    for (crd::usize i = 0; i < n * n; ++i)
+                    {
+                        la[i] = ea.data()[i]; // Eigen is column-major; refill each iter
+                    }
+                    int inf = 0;
+                    int lwk = static_cast<int>(work.size());
+                    dsyev_("V", "L", &ni, la.data(), &ni, lw.data(), work.data(), &lwk, &inf);
+                });
         }
 
         // Accuracy: max |cerid - eigen| and max |cerid - lapack| (all ascending).
@@ -233,21 +233,19 @@ int main()
             verr = std::max(verr, std::abs(cvals[i] - lw[i]));
         }
 
-        std::fprintf(stdout,
-                     "%-6zu | %-11.3f | %-11.3f | %-11.3f | %-9.2f | %-9.2f | %-10.2e | %-10.2e\n",
-                     static_cast<size_t>(n), ct * 1e3, et * 1e3, lt * 1e3, et / ct, lt / ct, verr,
-                     resid);
+        std::fprintf(stdout, "%-6zu | %-11.3f | %-11.3f | %-11.3f | %-9.2f | %-9.2f | %-10.2e | %-10.2e\n",
+                     static_cast<size_t>(n), ct * 1e3, et * 1e3, lt * 1e3, et / ct, lt / ct, verr, resid);
     }
 
     // ==== dense symmetric eig (VALUES ONLY, f64) — eigvals_sym vs Eigen + LAPACK ====
     // Cerid eigvals_sym (blocked dsytrd + dqds) vs Eigen SelfAdjointEigenSolver
     // (EigenvaluesOnly) vs LAPACK dsyevd(jobz='N', D&C values-only).
     std::fprintf(stdout, "\n==== symmetric eig (VALUES ONLY, f64) ====\n");
-    std::fprintf(stdout, "%-6s | %-11s | %-11s | %-11s | %-9s | %-9s | %-10s\n", "N", "Cerid(ms)",
-                 "Eigen(ms)", "LAPACK(ms)", "C/Eigen", "C/LAPACK", "val|err|");
+    std::fprintf(stdout, "%-6s | %-11s | %-11s | %-11s | %-9s | %-9s | %-10s\n", "N", "Cerid(ms)", "Eigen(ms)",
+                 "LAPACK(ms)", "C/Eigen", "C/LAPACK", "val|err|");
     std::fprintf(stdout, "------------------------------------------------------------------------------\n");
-    for (crd::usize n : {crd::usize{64}, crd::usize{128}, crd::usize{256}, crd::usize{512},
-                         crd::usize{1024}, crd::usize{2048}})
+    for (crd::usize n :
+         {crd::usize{64}, crd::usize{128}, crd::usize{256}, crd::usize{512}, crd::usize{1024}, crd::usize{2048}})
     {
         Symmetric<crd::f64> a(&alloc, n);
         Eigen::MatrixXd ea(static_cast<Eigen::Index>(n), static_cast<Eigen::Index>(n));
@@ -266,19 +264,23 @@ int main()
 
         crd::containers::Array<crd::f64> cvals(&alloc);
         cvals.resize(n);
-        const crd::f64 ct = time_loop([&]() {
-            const auto vals = crd::hesap::dense::eigvals_sym<crd::f64>(&alloc, a);
-            for (crd::usize i = 0; i < n; ++i)
+        const crd::f64 ct = time_loop(
+            [&]()
             {
-                cvals[i] = vals.data()[i];
-            }
-        });
+                const auto vals = crd::hesap::dense::eigvals_sym<crd::f64>(&alloc, a);
+                for (crd::usize i = 0; i < n; ++i)
+                {
+                    cvals[i] = vals.data()[i];
+                }
+            });
 
         Eigen::VectorXd evals;
-        const crd::f64 et = time_loop([&]() {
-            Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(ea, Eigen::EigenvaluesOnly);
-            evals = es.eigenvalues();
-        });
+        const crd::f64 et = time_loop(
+            [&]()
+            {
+                Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(ea, Eigen::EigenvaluesOnly);
+                evals = es.eigenvalues();
+            });
 
         const int ni = static_cast<int>(n);
         crd::containers::Array<crd::f64> la(&alloc);
@@ -299,16 +301,18 @@ int main()
             crd::containers::Array<int> iwork(&alloc);
             work.resize(static_cast<crd::usize>(lwork));
             iwork.resize(static_cast<crd::usize>(liwork));
-            lt = time_loop([&]() {
-                for (crd::usize i = 0; i < n * n; ++i)
+            lt = time_loop(
+                [&]()
                 {
-                    la[i] = ea.data()[i];
-                }
-                int inf = 0;
-                int lwk = static_cast<int>(work.size());
-                int liwk = static_cast<int>(iwork.size());
-                dsyevd_("N", "L", &ni, la.data(), &ni, lw.data(), work.data(), &lwk, iwork.data(), &liwk, &inf);
-            });
+                    for (crd::usize i = 0; i < n * n; ++i)
+                    {
+                        la[i] = ea.data()[i];
+                    }
+                    int inf = 0;
+                    int lwk = static_cast<int>(work.size());
+                    int liwk = static_cast<int>(iwork.size());
+                    dsyevd_("N", "L", &ni, la.data(), &ni, lw.data(), work.data(), &lwk, iwork.data(), &liwk, &inf);
+                });
         }
         crd::f64 verr = 0.0;
         for (crd::usize i = 0; i < n; ++i)
@@ -325,11 +329,11 @@ int main()
     // LAPACK dsterf (root-free QL/QR, values-only speed king) and LAPACK
     // dstemr(JOBZ='N') (LAPACK's own MRRR eigenvalue path). Same (d,e) input.
     std::fprintf(stdout, "\n==== symmetric tridiagonal eig (VALUES ONLY, f64) — parallel bisection vs LAPACK ====\n");
-    std::fprintf(stdout, "%-6s | %-10s | %-10s | %-10s | %-10s | %-9s | %-9s | %-9s\n", "N",
-                 "Cpar(ms)", "dqds(ms)", "dsterf(ms)", "dstemr(ms)", "par/strf", "par/stmr", "|err|");
+    std::fprintf(stdout, "%-6s | %-10s | %-10s | %-10s | %-10s | %-9s | %-9s | %-9s\n", "N", "Cpar(ms)", "dqds(ms)",
+                 "dsterf(ms)", "dstemr(ms)", "par/strf", "par/stmr", "|err|");
     std::fprintf(stdout, "-----------------------------------------------------------------------------------------\n");
-    for (crd::usize n : {crd::usize{256}, crd::usize{512}, crd::usize{1024}, crd::usize{2048},
-                         crd::usize{4096}, crd::usize{8192}})
+    for (crd::usize n :
+         {crd::usize{256}, crd::usize{512}, crd::usize{1024}, crd::usize{2048}, crd::usize{4096}, crd::usize{8192}})
     {
         const int ni = static_cast<int>(n);
         crd::containers::Array<crd::f64> d0(&alloc);
@@ -337,7 +341,8 @@ int main()
         d0.resize(n);
         e0.resize(n);
         crd::u32 s = 909090U + static_cast<crd::u32>(n);
-        auto nd = [&]() {
+        auto nd = [&]()
+        {
             s = s * 1664525U + 1013904223U;
             return static_cast<crd::f64>(static_cast<crd::i32>(s >> 8) % 2000 - 1000) * 0.001;
         };
@@ -347,7 +352,7 @@ int main()
         }
         for (crd::usize i = 0; i + 1 < n; ++i)
         {
-            e0[i] = 0.5 + 0.5 * std::abs(nd());  // bounded away from 0 (single block)
+            e0[i] = 0.5 + 0.5 * std::abs(nd()); // bounded away from 0 (single block)
         }
 
         // --- Cerid dqds (scratch reused; inputs not destroyed) ---
@@ -366,11 +371,13 @@ int main()
         qe.resize(n + 1);
         cw.resize(n);
         const crd::f64 reltol = 4.0 * std::numeric_limits<crd::f64>::epsilon();
-        const crd::f64 ct = time_loop([&]() {
-            crd::hesap::dense::detail::tridiag_eigenvalues_dqds<crd::f64>(
-                d0.data(), e0.data(), ni, ework.data(), e2work.data(), isplit.data(), zw.data(),
-                q.data(), qe.data(), cw.data(), reltol);
-        });
+        const crd::f64 ct = time_loop(
+            [&]()
+            {
+                crd::hesap::dense::detail::tridiag_eigenvalues_dqds<crd::f64>(d0.data(), e0.data(), ni, ework.data(),
+                                                                              e2work.data(), isplit.data(), zw.data(),
+                                                                              q.data(), qe.data(), cw.data(), reltol);
+            });
 
         // --- Cerid PARALLEL multisection (all cores) ---
         crd::containers::Array<crd::f64> e2b(&alloc);
@@ -386,7 +393,8 @@ int main()
         crd::hesap::dense::detail::gershgorin_bounds(d0.data(), e0.data(), ni, gl, gu);
         const crd::f64 pivmin = crd::hesap::dense::detail::compute_pivmin(e0.data(), ni);
         // Widen the bracket so it strictly contains the spectrum.
-        const crd::f64 wid = 2.0 * pivmin + std::numeric_limits<crd::f64>::epsilon() * std::max(std::abs(gl), std::abs(gu));
+        const crd::f64 wid =
+            2.0 * pivmin + std::numeric_limits<crd::f64>::epsilon() * std::max(std::abs(gl), std::abs(gu));
         gl -= wid;
         gu += wid;
         const int pp = static_cast<int>(crd::jobs::num_workers());
@@ -396,9 +404,10 @@ int main()
         crd::containers::Array<crd::f64> sr(static_cast<crd::usize>(pp) * stride, &alloc);
         crd::containers::Array<int> sclo(static_cast<crd::usize>(pp) * stride, &alloc);
         crd::containers::Array<int> schi(static_cast<crd::usize>(pp) * stride, &alloc);
-        MultiState ms{d0.data(),       e2b.data(),  ni,          pp,          gl,         gu,
-                      pivmin,          4.0 * std::numeric_limits<crd::f64>::epsilon(),
-                      bw.data(),       sl.data(),   sr.data(),   sclo.data(), schi.data(), stride};
+        MultiState ms{d0.data(),   e2b.data(), ni,        pp,
+                      gl,          gu,         pivmin,    4.0 * std::numeric_limits<crd::f64>::epsilon(),
+                      bw.data(),   sl.data(),  sr.data(), sclo.data(),
+                      schi.data(), stride};
         const crd::f64 bt = time_loop([&]() { tridiag_eig_multisection_parallel(&ms); });
 
         // --- LAPACK dsterf (destroys d,e — refill each iter) ---
@@ -406,18 +415,20 @@ int main()
         crd::containers::Array<crd::f64> se(&alloc);
         sd.resize(n);
         se.resize(n);
-        const crd::f64 st = time_loop([&]() {
-            for (crd::usize i = 0; i < n; ++i)
+        const crd::f64 st = time_loop(
+            [&]()
             {
-                sd[i] = d0[i];
-            }
-            for (crd::usize i = 0; i + 1 < n; ++i)
-            {
-                se[i] = e0[i];
-            }
-            int info = 0;
-            dsterf_(&ni, sd.data(), se.data(), &info);
-        });
+                for (crd::usize i = 0; i < n; ++i)
+                {
+                    sd[i] = d0[i];
+                }
+                for (crd::usize i = 0; i + 1 < n; ++i)
+                {
+                    se[i] = e0[i];
+                }
+                int info = 0;
+                dsterf_(&ni, sd.data(), se.data(), &info);
+            });
         // Keep a clean dsterf run as the accuracy oracle (ascending).
         {
             for (crd::usize i = 0; i < n; ++i)
@@ -457,38 +468,39 @@ int main()
             crd::f64 wq = 0.0;
             int iwq = 0;
             crd::f64 zdummy = 0.0;
-            dstemr_("N", "A", &ni, md.data(), me.data(), &vl, &vu, &il, &iu, &m, mw.data(), &zdummy,
-                    &ldz, &nzc, isuppz.data(), &tryrac, &wq, &lwork, &iwq, &liwork, &info);
+            dstemr_("N", "A", &ni, md.data(), me.data(), &vl, &vu, &il, &iu, &m, mw.data(), &zdummy, &ldz, &nzc,
+                    isuppz.data(), &tryrac, &wq, &lwork, &iwq, &liwork, &info);
             lwork = static_cast<int>(wq);
             liwork = iwq;
             crd::containers::Array<crd::f64> work(&alloc);
             crd::containers::Array<int> iwork(&alloc);
             work.resize(static_cast<crd::usize>(lwork));
             iwork.resize(static_cast<crd::usize>(liwork));
-            mt = time_loop([&]() {
-                for (crd::usize i = 0; i < n; ++i)
+            mt = time_loop(
+                [&]()
                 {
-                    md[i] = d0[i];
-                }
-                for (crd::usize i = 0; i + 1 < n; ++i)
-                {
-                    me[i] = e0[i];
-                }
-                int mm = 0;
-                int tr = 1;
-                int inf = 0;
-                int lwk = static_cast<int>(work.size());
-                int liwk = static_cast<int>(iwork.size());
-                dstemr_("N", "A", &ni, md.data(), me.data(), &vl, &vu, &il, &iu, &mm, mw.data(),
-                        &zdummy, &ldz, &nzc, isuppz.data(), &tr, work.data(), &lwk, iwork.data(),
-                        &liwk, &inf);
-            });
+                    for (crd::usize i = 0; i < n; ++i)
+                    {
+                        md[i] = d0[i];
+                    }
+                    for (crd::usize i = 0; i + 1 < n; ++i)
+                    {
+                        me[i] = e0[i];
+                    }
+                    int mm = 0;
+                    int tr = 1;
+                    int inf = 0;
+                    int lwk = static_cast<int>(work.size());
+                    int liwk = static_cast<int>(iwork.size());
+                    dstemr_("N", "A", &ni, md.data(), me.data(), &vl, &vu, &il, &iu, &mm, mw.data(), &zdummy, &ldz,
+                            &nzc, isuppz.data(), &tr, work.data(), &lwk, iwork.data(), &liwk, &inf);
+                });
         }
 
         crd::f64 verr = 0.0;
         for (crd::usize i = 0; i < n; ++i)
         {
-            verr = std::max(verr, std::abs(bw[i] - sd[i]));  // parallel bisection vs dsterf oracle
+            verr = std::max(verr, std::abs(bw[i] - sd[i])); // parallel bisection vs dsterf oracle
         }
         std::fprintf(stdout, "%-6zu | %-10.3f | %-10.3f | %-10.3f | %-10.3f | %-9.2f | %-9.2f | %-9.2e\n",
                      static_cast<size_t>(n), bt * 1e3, ct * 1e3, st * 1e3, mt * 1e3, st / bt, mt / bt, verr);
@@ -498,10 +510,12 @@ int main()
     // THE O(n^2) MRRR VECTOR PAYOFF: Cerid (dqds eigenvalues + mrrr_compute_vectors,
     // O(n^2) twisted-factorization vectors) vs LAPACK dstedc (divide-and-conquer,
     // O(n^3) vectors) and dstemr (MRRR). Same (d,e). orth = ||Z^T Z - I||.
-    std::fprintf(stdout, "\n==== symmetric tridiagonal eig (VALUES+VECTORS, f64) — MRRR vs Eigen + dstedc/dstemr ====\n");
+    std::fprintf(stdout,
+                 "\n==== symmetric tridiagonal eig (VALUES+VECTORS, f64) — MRRR vs Eigen + dstedc/dstemr ====\n");
     std::fprintf(stdout, "%-6s | %-9s | %-9s | %-9s | %-9s | %-8s | %-8s | %-8s | %-9s\n", "N", "Cmrrr", "Eigen",
                  "dstedc", "dstemr", "C/Eign", "C/stdc", "C/stmr", "orth");
-    std::fprintf(stdout, "------------------------------------------------------------------------------------------\n");
+    std::fprintf(stdout,
+                 "------------------------------------------------------------------------------------------\n");
     for (crd::usize n : {crd::usize{256}, crd::usize{512}, crd::usize{1024}, crd::usize{2048}})
     {
         const int ni = static_cast<int>(n);
@@ -510,7 +524,8 @@ int main()
         d0.resize(n);
         e0.resize(n);
         crd::u32 s = 313131U + static_cast<crd::u32>(n);
-        auto nd = [&]() {
+        auto nd = [&]()
+        {
             s = s * 1664525U + 1013904223U;
             return static_cast<crd::f64>(static_cast<crd::i32>(s >> 8) % 2000 - 1000) * 0.001;
         };
@@ -541,13 +556,15 @@ int main()
         cw.resize(n);
         cz.resize(n * n);
         const crd::f64 reltol = 4.0 * std::numeric_limits<crd::f64>::epsilon();
-        const crd::f64 ct = time_loop([&]() {
-            crd::hesap::dense::detail::tridiag_eigenvalues_dqds<crd::f64>(d0.data(), e0.data(), ni, ew.data(),
-                                                                         e2w.data(), isp.data(), zb.data(),
-                                                                         qq.data(), qe.data(), cw.data(), reltol);
-            crd::hesap::dense::detail::mrrr_compute_vectors<crd::f64>(&alloc, ni, d0.data(), e0.data(), cw.data(),
-                                                                     cz.data(), ni);
-        });
+        const crd::f64 ct = time_loop(
+            [&]()
+            {
+                crd::hesap::dense::detail::tridiag_eigenvalues_dqds<crd::f64>(d0.data(), e0.data(), ni, ew.data(),
+                                                                              e2w.data(), isp.data(), zb.data(),
+                                                                              qq.data(), qe.data(), cw.data(), reltol);
+                crd::hesap::dense::detail::mrrr_compute_vectors<crd::f64>(&alloc, ni, d0.data(), e0.data(), cw.data(),
+                                                                          cz.data(), ni);
+            });
         // Orthonormality of Cerid's vectors (RowMajor, col k).
         crd::f64 orth = 0.0;
         for (crd::usize a2 = 0; a2 < n; ++a2)
@@ -567,17 +584,19 @@ int main()
         Eigen::VectorXd ediag(static_cast<Eigen::Index>(n));
         Eigen::VectorXd esub(static_cast<Eigen::Index>(n - 1));
         Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> ees;
-        const crd::f64 egt = time_loop([&]() {
-            for (crd::usize i = 0; i < n; ++i)
+        const crd::f64 egt = time_loop(
+            [&]()
             {
-                ediag(static_cast<Eigen::Index>(i)) = d0[i];
-            }
-            for (crd::usize i = 0; i + 1 < n; ++i)
-            {
-                esub(static_cast<Eigen::Index>(i)) = e0[i];
-            }
-            ees.computeFromTridiagonal(ediag, esub, Eigen::ComputeEigenvectors);
-        });
+                for (crd::usize i = 0; i < n; ++i)
+                {
+                    ediag(static_cast<Eigen::Index>(i)) = d0[i];
+                }
+                for (crd::usize i = 0; i + 1 < n; ++i)
+                {
+                    esub(static_cast<Eigen::Index>(i)) = e0[i];
+                }
+                ees.computeFromTridiagonal(ediag, esub, Eigen::ComputeEigenvectors);
+            });
 
         // --- LAPACK dstedc (D&C, compz='I') ---
         crd::containers::Array<crd::f64> dd(&alloc);
@@ -600,18 +619,20 @@ int main()
             crd::containers::Array<int> iwork(&alloc);
             work.resize(static_cast<crd::usize>(lwork));
             iwork.resize(static_cast<crd::usize>(liwork));
-            et = time_loop([&]() {
-                for (crd::usize i = 0; i < n; ++i)
+            et = time_loop(
+                [&]()
                 {
-                    dd[i] = d0[i];
-                    ee[i] = (i + 1 < n) ? e0[i] : 0.0;
-                }
-                int inf = 0;
-                int lwk = static_cast<int>(work.size());
-                int liwk = static_cast<int>(iwork.size());
-                dstedc_("I", &ni, dd.data(), ee.data(), zc.data(), &ni, work.data(), &lwk, iwork.data(), &liwk,
-                        &inf);
-            });
+                    for (crd::usize i = 0; i < n; ++i)
+                    {
+                        dd[i] = d0[i];
+                        ee[i] = (i + 1 < n) ? e0[i] : 0.0;
+                    }
+                    int inf = 0;
+                    int lwk = static_cast<int>(work.size());
+                    int liwk = static_cast<int>(iwork.size());
+                    dstedc_("I", &ni, dd.data(), ee.data(), zc.data(), &ni, work.data(), &lwk, iwork.data(), &liwk,
+                            &inf);
+                });
         }
 
         // --- LAPACK dstemr (MRRR, JOBZ='V') ---
@@ -647,43 +668,42 @@ int main()
             crd::containers::Array<int> iwork(&alloc);
             work.resize(static_cast<crd::usize>(lwork));
             iwork.resize(static_cast<crd::usize>(liwork));
-            mt = time_loop([&]() {
-                for (crd::usize i = 0; i < n; ++i)
+            mt = time_loop(
+                [&]()
                 {
-                    md[i] = d0[i];
-                    me[i] = (i + 1 < n) ? e0[i] : 0.0;
-                }
-                int mm = 0;
-                int tr = 1;
-                int inf = 0;
-                int lwk = static_cast<int>(work.size());
-                int liwk = static_cast<int>(iwork.size());
-                dstemr_("V", "A", &ni, md.data(), me.data(), &vl, &vu, &il, &iu, &mm, mw.data(), mz.data(), &ni,
-                        &nzc, isuppz.data(), &tr, work.data(), &lwk, iwork.data(), &liwk, &inf);
-            });
+                    for (crd::usize i = 0; i < n; ++i)
+                    {
+                        md[i] = d0[i];
+                        me[i] = (i + 1 < n) ? e0[i] : 0.0;
+                    }
+                    int mm = 0;
+                    int tr = 1;
+                    int inf = 0;
+                    int lwk = static_cast<int>(work.size());
+                    int liwk = static_cast<int>(iwork.size());
+                    dstemr_("V", "A", &ni, md.data(), me.data(), &vl, &vu, &il, &iu, &mm, mw.data(), mz.data(), &ni,
+                            &nzc, isuppz.data(), &tr, work.data(), &lwk, iwork.data(), &liwk, &inf);
+                });
         }
 
         std::fprintf(stdout, "%-6zu | %-9.3f | %-9.3f | %-9.3f | %-9.3f | %-8.2f | %-8.2f | %-8.2f | %-9.2e\n",
-                     static_cast<size_t>(n), ct * 1e3, egt * 1e3, et * 1e3, mt * 1e3, egt / ct, et / ct, mt / ct,
-                     orth);
+                     static_cast<size_t>(n), ct * 1e3, egt * 1e3, et * 1e3, mt * 1e3, egt / ct, et / ct, mt / ct, orth);
     }
 
     // ==== complex Hermitian eig vs Eigen + LAPACK zheev ====
     std::fprintf(stdout, "\n==== Hermitian eig (values+vectors, c64) ====\n");
-    std::fprintf(stdout, "%-6s | %-11s | %-11s | %-11s | %-9s | %-9s | %-10s | %-10s\n", "N",
-                 "Cerid(ms)", "Eigen(ms)", "LAPACK(ms)", "C/Eigen", "C/LAPACK", "val|err|",
-                 "resid");
-    std::fprintf(stdout,
-                 "-------------------------------------------------------------------------------"
-                 "------------------\n");
+    std::fprintf(stdout, "%-6s | %-11s | %-11s | %-11s | %-9s | %-9s | %-10s | %-10s\n", "N", "Cerid(ms)", "Eigen(ms)",
+                 "LAPACK(ms)", "C/Eigen", "C/LAPACK", "val|err|", "resid");
+    std::fprintf(stdout, "-------------------------------------------------------------------------------"
+                         "------------------\n");
     using Cd = crd::hesap::Complex<crd::f64>;
-    for (crd::usize n : {crd::usize{64}, crd::usize{128}, crd::usize{256}, crd::usize{512},
-                         crd::usize{1024}})
+    for (crd::usize n : {crd::usize{64}, crd::usize{128}, crd::usize{256}, crd::usize{512}, crd::usize{1024}})
     {
         crd::hesap::dense::Hermitian<Cd> h(&alloc, n);
         Eigen::MatrixXcd eh(static_cast<Eigen::Index>(n), static_cast<Eigen::Index>(n));
         crd::u32 s = 778899U + static_cast<crd::u32>(n);
-        auto nd = [&]() {
+        auto nd = [&]()
+        {
             s = s * 1664525U + 1013904223U;
             return static_cast<crd::f64>(static_cast<crd::i32>(s >> 8) % 2000 - 1000) * 0.001;
         };
@@ -705,13 +725,15 @@ int main()
         crd::containers::Array<crd::f64> cvals(&alloc);
         cvals.resize(n);
         crd::f64 resid = 0.0;
-        const crd::f64 ct = time_loop([&]() {
-            const auto eig = crd::hesap::dense::eig_herm<Cd>(&alloc, h);
-            for (crd::usize i = 0; i < n; ++i)
+        const crd::f64 ct = time_loop(
+            [&]()
             {
-                cvals[i] = eig.values.data()[i];
-            }
-        });
+                const auto eig = crd::hesap::dense::eig_herm<Cd>(&alloc, h);
+                for (crd::usize i = 0; i < n; ++i)
+                {
+                    cvals[i] = eig.values.data()[i];
+                }
+            });
         {
             const auto eig = crd::hesap::dense::eig_herm<Cd>(&alloc, h);
             const Cd* v = eig.vectors.data();
@@ -726,17 +748,18 @@ int main()
                     {
                         hv += h.at_value(i, j) * v[j * ld + k];
                     }
-                    resid = std::max(resid, static_cast<double>(
-                                                crd::hesap::abs(hv - v[i * ld + k] * lam)));
+                    resid = std::max(resid, static_cast<double>(crd::hesap::abs(hv - v[i * ld + k] * lam)));
                 }
             }
         }
 
         Eigen::VectorXd evals;
-        const crd::f64 et = time_loop([&]() {
-            Eigen::SelfAdjointEigenSolver<Eigen::MatrixXcd> es(eh);
-            evals = es.eigenvalues();
-        });
+        const crd::f64 et = time_loop(
+            [&]()
+            {
+                Eigen::SelfAdjointEigenSolver<Eigen::MatrixXcd> es(eh);
+                evals = es.eigenvalues();
+            });
 
         const int ni = static_cast<int>(n);
         crd::containers::Array<crd::f64> lw(&alloc);
@@ -750,24 +773,26 @@ int main()
             crd::f64 wq[2] = {0.0, 0.0};
             crd::containers::Array<crd::f64> rwork(&alloc);
             rwork.resize(n > 1 ? 3 * n - 2 : 1);
-            zheev_("V", "L", &ni, reinterpret_cast<double*>(la.data()), &ni, lw.data(), wq, &lwork,
-                   rwork.data(), &info);
+            zheev_("V", "L", &ni, reinterpret_cast<double*>(la.data()), &ni, lw.data(), wq, &lwork, rwork.data(),
+                   &info);
             lwork = static_cast<int>(wq[0]);
             crd::containers::Array<Cd> work(&alloc);
             work.resize(static_cast<crd::usize>(lwork));
-            lt = time_loop([&]() {
-                for (crd::usize i = 0; i < n; ++i)
+            lt = time_loop(
+                [&]()
                 {
-                    for (crd::usize j = 0; j < n; ++j)
+                    for (crd::usize i = 0; i < n; ++i)
                     {
-                        la[j * n + i] = h.at_value(i, j);  // column-major fill for LAPACK
+                        for (crd::usize j = 0; j < n; ++j)
+                        {
+                            la[j * n + i] = h.at_value(i, j); // column-major fill for LAPACK
+                        }
                     }
-                }
-                int inf = 0;
-                int lwk = static_cast<int>(work.size());
-                zheev_("V", "L", &ni, reinterpret_cast<double*>(la.data()), &ni, lw.data(),
-                       reinterpret_cast<double*>(work.data()), &lwk, rwork.data(), &inf);
-            });
+                    int inf = 0;
+                    int lwk = static_cast<int>(work.size());
+                    zheev_("V", "L", &ni, reinterpret_cast<double*>(la.data()), &ni, lw.data(),
+                           reinterpret_cast<double*>(work.data()), &lwk, rwork.data(), &inf);
+                });
         }
 
         // Accuracy vs Eigen (the reliable well-optimized reference; our values
@@ -777,10 +802,8 @@ int main()
         {
             verr = std::max(verr, std::abs(cvals[i] - evals[static_cast<Eigen::Index>(i)]));
         }
-        std::fprintf(stdout,
-                     "%-6zu | %-11.3f | %-11.3f | %-11.3f | %-9.2f | %-9.2f | %-10.2e | %-10.2e\n",
-                     static_cast<size_t>(n), ct * 1e3, et * 1e3, lt * 1e3, et / ct, lt / ct, verr,
-                     resid);
+        std::fprintf(stdout, "%-6zu | %-11.3f | %-11.3f | %-11.3f | %-9.2f | %-9.2f | %-10.2e | %-10.2e\n",
+                     static_cast<size_t>(n), ct * 1e3, et * 1e3, lt * 1e3, et / ct, lt / ct, verr, resid);
     }
 
     crd::jobs::shutdown();

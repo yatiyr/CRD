@@ -12,6 +12,7 @@ target_link_libraries(crd-memory
     PUBLIC
         crd-core
         crd-log
+        crd-vm   # ADR-0085 S2: VirtualMemoryAllocator's page source (crd::vm reserve/commit)
 )
 
 target_compile_features(crd-memory PUBLIC cxx_std_20)

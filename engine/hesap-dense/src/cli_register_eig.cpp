@@ -18,6 +18,7 @@
 
 namespace
 {
+using crd::hesap::Complex;
 using crd::hesap::cli::Capability;
 using crd::hesap::cli::CommandArgs;
 using crd::hesap::cli::CommandRegistry;
@@ -28,7 +29,6 @@ using crd::hesap::cli::ParamKind;
 using crd::hesap::cli::ParamSchema;
 using crd::hesap::cli::ResultBinaryBlob;
 using crd::hesap::cli::ResultError;
-using crd::hesap::Complex;
 using crd::hesap::dense::eig;
 using crd::hesap::dense::eig_herm;
 using crd::hesap::dense::eig_sym;
@@ -49,8 +49,7 @@ CommandResult error_result(crd::memory::IAllocator* alloc, const char* msg)
     return r;
 }
 
-CommandResult binary_result(crd::memory::IAllocator* alloc,
-                            crd::containers::ConstSpan<crd::f64> values)
+CommandResult binary_result(crd::memory::IAllocator* alloc, crd::containers::ConstSpan<crd::f64> values)
 {
     CommandResult r{alloc};
     r.ok = true;
@@ -65,8 +64,7 @@ CommandResult binary_result(crd::memory::IAllocator* alloc,
     return r;
 }
 
-template <typename T>
-CommandResult impl_eig_sym(const CommandArgs& args)
+template <typename T> CommandResult impl_eig_sym(const CommandArgs& args)
 {
     const auto a_flat = args.get_f64_array("A");
     const auto n = args.get_u64("n").value_or(crd::u64{0});
@@ -95,8 +93,7 @@ CommandResult impl_eig_sym(const CommandArgs& args)
 
 // Full eigendecomposition via MRRR (v3a-3): same input shape as eig.sym; returns
 // the n ascending eigenvalues as an f64 blob (vectors available via the engine).
-template <typename T>
-CommandResult impl_eig_sym_mrrr(const CommandArgs& args)
+template <typename T> CommandResult impl_eig_sym_mrrr(const CommandArgs& args)
 {
     const auto a_flat = args.get_f64_array("A");
     const auto n = args.get_u64("n").value_or(crd::u64{0});
@@ -125,8 +122,7 @@ CommandResult impl_eig_sym_mrrr(const CommandArgs& args)
 
 // Eigenvalues-only via the fast MRRR dqds path (v3a-3.1). Same input shape as
 // eig.sym; returns the n ascending eigenvalues as an f64 binary blob.
-template <typename T>
-CommandResult impl_eigvals_sym(const CommandArgs& args)
+template <typename T> CommandResult impl_eigvals_sym(const CommandArgs& args)
 {
     const auto a_flat = args.get_f64_array("A");
     const auto n = args.get_u64("n").value_or(crd::u64{0});
@@ -156,16 +152,14 @@ CommandResult impl_eigvals_sym(const CommandArgs& args)
 // Hermitian eigenvalues. A travels as an interleaved complex array
 // [re0,im0, re1,im1, ...] of n*n entries (lower triangle used); the n real
 // ascending eigenvalues are returned as an f64 binary blob.
-template <typename U>
-CommandResult impl_eig_herm(const CommandArgs& args)
+template <typename U> CommandResult impl_eig_herm(const CommandArgs& args)
 {
     using C = Complex<U>;
     const auto a_flat = args.get_f64_array("A");
     const auto n = args.get_u64("n").value_or(crd::u64{0});
     if (n == 0 || a_flat.size() != n * n * 2)
     {
-        return error_result(args.alloc,
-                            "eig.herm: A=2*n*n interleaved [re,im] (lower-half), n required");
+        return error_result(args.alloc, "eig.herm: A=2*n*n interleaved [re,im] (lower-half), n required");
     }
     const crd::usize nn = static_cast<crd::usize>(n);
     Hermitian<C> a_herm(args.alloc, nn);
@@ -191,8 +185,7 @@ CommandResult impl_eig_herm(const CommandArgs& args)
 // (row-major); the n complex eigenvalues are returned interleaved
 // [re0,im0, re1,im1, ...] (2*n f64) in Schur order. (Eigenvectors are
 // available via the engine API; the CLI returns the spectrum.)
-template <typename T>
-CommandResult impl_eig_nonsym(const CommandArgs& args)
+template <typename T> CommandResult impl_eig_nonsym(const CommandArgs& args)
 {
     const auto a_flat = args.get_f64_array("A");
     const auto n = args.get_u64("n").value_or(crd::u64{0});
@@ -224,16 +217,14 @@ CommandResult impl_eig_nonsym(const CommandArgs& args)
 // [re,im, ...] of n*n entries (FULL matrix, row-major); the n complex
 // eigenvalues (Schur order) are returned as interleaved [re,im] f64 (values-only,
 // matching the real eig.nonsym CLI; vectors via the engine API).
-template <typename U>
-CommandResult impl_eig_nonsym_complex(const CommandArgs& args)
+template <typename U> CommandResult impl_eig_nonsym_complex(const CommandArgs& args)
 {
     using C = Complex<U>;
     const auto a_flat = args.get_f64_array("A");
     const auto n = args.get_u64("n").value_or(crd::u64{0});
     if (n == 0 || a_flat.size() != n * n * 2)
     {
-        return error_result(args.alloc,
-                            "eig.nonsym(complex): A=2*n*n interleaved [re,im] (full), n required");
+        return error_result(args.alloc, "eig.nonsym(complex): A=2*n*n interleaved [re,im] (full), n required");
     }
     const crd::usize nn = static_cast<crd::usize>(n);
     Matrix<C> a(args.alloc, nn, nn);
@@ -267,8 +258,8 @@ CommandSchema make_schema(crd::memory::IAllocator* alloc, const char* name, cons
     return s;
 }
 
-void add_param(CommandSchema& s, crd::memory::IAllocator* alloc, const char* name, const char* desc,
-               ParamKind kind, bool required)
+void add_param(CommandSchema& s, crd::memory::IAllocator* alloc, const char* name, const char* desc, ParamKind kind,
+               bool required)
 {
     ParamSchema p{alloc};
     p.name = crd::containers::String{name, alloc};
@@ -282,105 +273,102 @@ void add_param(CommandSchema& s, crd::memory::IAllocator* alloc, const char* nam
 
 namespace crd::hesap::dense
 {
-void register_eig_cli_anchor() noexcept
-{
-}
+void register_eig_cli_anchor() noexcept {}
 } // namespace crd::hesap::dense
 
-CRD_HESAP_CLI_REGISTER_MODULE([](CommandRegistry& reg) {
-    auto* alloc = crd::memory::default_allocator();
+// Registration uses crd allocators (abort on OOM, never throw); the std bad_alloc path the check
+// traces is unreachable, and the registrar ctor is noexcept (would terminate, not escape) regardless.
+// NOLINTNEXTLINE(bugprone-throwing-static-initialization)
+CRD_HESAP_CLI_REGISTER_MODULE(
+    [](CommandRegistry& reg)
     {
-        auto s = make_schema(alloc, "hesap.dense.eig.sym.f32",
-                             "Symmetric eigenvalues (ascending) of A (f32; lower triangle used).");
-        add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
-        add_param(s, alloc, "A", "Symmetric A flattened (n*n); lower triangle used", ParamKind::F64,
-                  true);
-        reg.register_command(std::move(s), &impl_eig_sym<crd::f32>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.eig.sym.f64",
-                             "Symmetric eigenvalues (ascending) of A (f64; lower triangle used).");
-        add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
-        add_param(s, alloc, "A", "Symmetric A flattened (n*n); lower triangle used", ParamKind::F64,
-                  true);
-        reg.register_command(std::move(s), &impl_eig_sym<crd::f64>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.eigvals.sym.f32",
-                             "Symmetric eigenvalues only (ascending) via fast MRRR dqds (f32; lower triangle).");
-        add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
-        add_param(s, alloc, "A", "Symmetric A flattened (n*n); lower triangle used", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_eigvals_sym<crd::f32>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.eigvals.sym.f64",
-                             "Symmetric eigenvalues only (ascending) via fast MRRR dqds (f64; lower triangle).");
-        add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
-        add_param(s, alloc, "A", "Symmetric A flattened (n*n); lower triangle used", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_eigvals_sym<crd::f64>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.eig.sym.mrrr.f32",
-                             "Symmetric eigenvalues (ascending) via MRRR (f32; lower triangle).");
-        add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
-        add_param(s, alloc, "A", "Symmetric A flattened (n*n); lower triangle used", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_eig_sym_mrrr<crd::f32>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.eig.sym.mrrr.f64",
-                             "Symmetric eigenvalues (ascending) via MRRR (f64; lower triangle).");
-        add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
-        add_param(s, alloc, "A", "Symmetric A flattened (n*n); lower triangle used", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_eig_sym_mrrr<crd::f64>);
-    }
-    {
-        auto s = make_schema(
-            alloc, "hesap.dense.eig.herm.c32",
-            "Hermitian eigenvalues (ascending) of A (Complex<f32>; lower triangle used).");
-        add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
-        add_param(s, alloc, "A", "Hermitian A as interleaved [re,im] (2*n*n); lower triangle used",
-                  ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_eig_herm<crd::f32>);
-    }
-    {
-        auto s = make_schema(
-            alloc, "hesap.dense.eig.herm.c64",
-            "Hermitian eigenvalues (ascending) of A (Complex<f64>; lower triangle used).");
-        add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
-        add_param(s, alloc, "A", "Hermitian A as interleaved [re,im] (2*n*n); lower triangle used",
-                  ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_eig_herm<crd::f64>);
-    }
-    {
-        auto s = make_schema(
-            alloc, "hesap.dense.eig.nonsym.f32",
-            "Non-symmetric eigenvalues (interleaved [re,im], Schur order) of full A (f32).");
-        add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
-        add_param(s, alloc, "A", "Full A flattened row-major (n*n)", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_eig_nonsym<crd::f32>);
-    }
-    {
-        auto s = make_schema(
-            alloc, "hesap.dense.eig.nonsym.f64",
-            "Non-symmetric eigenvalues (interleaved [re,im], Schur order) of full A (f64).");
-        add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
-        add_param(s, alloc, "A", "Full A flattened row-major (n*n)", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_eig_nonsym<crd::f64>);
-    }
-    {
-        auto s = make_schema(
-            alloc, "hesap.dense.eig.nonsym.c32",
-            "Non-symmetric eigenvalues (interleaved [re,im], Schur order) of complex full A (c32).");
-        add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
-        add_param(s, alloc, "A", "Full A interleaved [re,im] row-major (2*n*n)", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_eig_nonsym_complex<crd::f32>);
-    }
-    {
-        auto s = make_schema(
-            alloc, "hesap.dense.eig.nonsym.c64",
-            "Non-symmetric eigenvalues (interleaved [re,im], Schur order) of complex full A (c64).");
-        add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
-        add_param(s, alloc, "A", "Full A interleaved [re,im] row-major (2*n*n)", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_eig_nonsym_complex<crd::f64>);
-    }
-});
+        auto* alloc = crd::memory::default_allocator();
+        {
+            auto s = make_schema(alloc, "hesap.dense.eig.sym.f32",
+                                 "Symmetric eigenvalues (ascending) of A (f32; lower triangle used).");
+            add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
+            add_param(s, alloc, "A", "Symmetric A flattened (n*n); lower triangle used", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_eig_sym<crd::f32>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.eig.sym.f64",
+                                 "Symmetric eigenvalues (ascending) of A (f64; lower triangle used).");
+            add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
+            add_param(s, alloc, "A", "Symmetric A flattened (n*n); lower triangle used", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_eig_sym<crd::f64>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.eigvals.sym.f32",
+                                 "Symmetric eigenvalues only (ascending) via fast MRRR dqds (f32; lower triangle).");
+            add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
+            add_param(s, alloc, "A", "Symmetric A flattened (n*n); lower triangle used", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_eigvals_sym<crd::f32>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.eigvals.sym.f64",
+                                 "Symmetric eigenvalues only (ascending) via fast MRRR dqds (f64; lower triangle).");
+            add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
+            add_param(s, alloc, "A", "Symmetric A flattened (n*n); lower triangle used", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_eigvals_sym<crd::f64>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.eig.sym.mrrr.f32",
+                                 "Symmetric eigenvalues (ascending) via MRRR (f32; lower triangle).");
+            add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
+            add_param(s, alloc, "A", "Symmetric A flattened (n*n); lower triangle used", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_eig_sym_mrrr<crd::f32>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.eig.sym.mrrr.f64",
+                                 "Symmetric eigenvalues (ascending) via MRRR (f64; lower triangle).");
+            add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
+            add_param(s, alloc, "A", "Symmetric A flattened (n*n); lower triangle used", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_eig_sym_mrrr<crd::f64>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.eig.herm.c32",
+                                 "Hermitian eigenvalues (ascending) of A (Complex<f32>; lower triangle used).");
+            add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
+            add_param(s, alloc, "A", "Hermitian A as interleaved [re,im] (2*n*n); lower triangle used", ParamKind::F64,
+                      true);
+            reg.register_command(std::move(s), &impl_eig_herm<crd::f32>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.eig.herm.c64",
+                                 "Hermitian eigenvalues (ascending) of A (Complex<f64>; lower triangle used).");
+            add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
+            add_param(s, alloc, "A", "Hermitian A as interleaved [re,im] (2*n*n); lower triangle used", ParamKind::F64,
+                      true);
+            reg.register_command(std::move(s), &impl_eig_herm<crd::f64>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.eig.nonsym.f32",
+                                 "Non-symmetric eigenvalues (interleaved [re,im], Schur order) of full A (f32).");
+            add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
+            add_param(s, alloc, "A", "Full A flattened row-major (n*n)", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_eig_nonsym<crd::f32>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.eig.nonsym.f64",
+                                 "Non-symmetric eigenvalues (interleaved [re,im], Schur order) of full A (f64).");
+            add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
+            add_param(s, alloc, "A", "Full A flattened row-major (n*n)", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_eig_nonsym<crd::f64>);
+        }
+        {
+            auto s =
+                make_schema(alloc, "hesap.dense.eig.nonsym.c32",
+                            "Non-symmetric eigenvalues (interleaved [re,im], Schur order) of complex full A (c32).");
+            add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
+            add_param(s, alloc, "A", "Full A interleaved [re,im] row-major (2*n*n)", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_eig_nonsym_complex<crd::f32>);
+        }
+        {
+            auto s =
+                make_schema(alloc, "hesap.dense.eig.nonsym.c64",
+                            "Non-symmetric eigenvalues (interleaved [re,im], Schur order) of complex full A (c64).");
+            add_param(s, alloc, "n", "Order of A", ParamKind::U64, true);
+            add_param(s, alloc, "A", "Full A interleaved [re,im] row-major (2*n*n)", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_eig_nonsym_complex<crd::f64>);
+        }
+    });

@@ -131,6 +131,16 @@ This is still intentionally not the final allocator architecture:
 - no broad deferred-destruction system yet
 - no cross-resource suballocation yet
 
+> **Superseded by ADR-0085 S6 (2026-05-27):** the v1e one-`vkAllocateMemory`-per-
+> resource helper is replaced by a real **`VkDeviceMemory` suballocator** — big
+> blocks (`min(256 MiB, heap/8)`) per `(memoryTypeIndex, linear)` pool, carved by
+> `crd::memory::OffsetAllocator`, dedicated allocations ≥16 MiB, persistent-mapped
+> host-visible, granularity-safe. Cross-resource suballocation is now in.
+> **GPU defrag + residency shipped (ADR-0085 S7):** idle-gated relocation of buffers
+> + images (recreate + transfer-copy + handle swap + `on_relocated` callback) and
+> device↔host residency with an auto-pressure eviction loop, both behind pluggable
+> `IDefragPolicy`/`IResidencyPolicy` (`crd/rhi/gpu_residency.hpp`).
+
 ## What ships today (v1f — descriptor system)
 
 - `DescriptorBinding` — one slot (binding index, type, array count, stage mask)

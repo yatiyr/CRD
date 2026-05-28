@@ -5,7 +5,7 @@
 #include <crd/containers/array.hpp>
 #include <crd/geometry/mesh/mesh.hpp>
 #include <crd/geometry/mesh/mesh_queries_typed.hpp>
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/units/quantity_aliases.hpp>
 
 #include <catch2/catch_approx.hpp>
@@ -90,7 +90,7 @@ TEST_CASE("v4c empty mesh -> winding 0", "[geometry-mesh][v4c][winding]")
 TEST_CASE("v4c watertight cube: origin returns w=1, far point returns w=0",
           "[geometry-mesh][v4c][winding][watertight]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     auto cube = make_cube(&alloc);
     const TriangleMeshViewf view{
         crd::containers::ConstSpan<Vec3f>{cube.vertices.data(), cube.vertices.size()},
@@ -108,7 +108,7 @@ TEST_CASE("v4c watertight cube: origin returns w=1, far point returns w=0",
 TEST_CASE("v4c cube: multiple interior queries all return w=1",
           "[geometry-mesh][v4c][winding][watertight]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     auto cube = make_cube(&alloc);
     const TriangleMeshViewf view{
         crd::containers::ConstSpan<Vec3f>{cube.vertices.data(), cube.vertices.size()},
@@ -132,7 +132,7 @@ TEST_CASE("v4c cube: multiple interior queries all return w=1",
 TEST_CASE("v4c cube: many exterior queries all return w=0",
           "[geometry-mesh][v4c][winding][watertight]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     auto cube = make_cube(&alloc);
     const TriangleMeshViewf view{
         crd::containers::ConstSpan<Vec3f>{cube.vertices.data(), cube.vertices.size()},
@@ -164,7 +164,7 @@ TEST_CASE("v4c Jacobson robustness: open cube (+X face removed) still classifies
     // non-watertight meshes. Open cube has the +X face removed; an
     // interior point (origin) should still register near w=1, robust to
     // the missing face.
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     auto open_cube = make_open_cube(&alloc);
     const TriangleMeshViewf view{
         crd::containers::ConstSpan<Vec3f>{open_cube.vertices.data(), open_cube.vertices.size()},
@@ -181,7 +181,7 @@ TEST_CASE("v4c Jacobson robustness: open cube (+X face removed) still classifies
 TEST_CASE("v4c Jacobson robustness: open cube classifies points far outside "
           "as outside", "[geometry-mesh][v4c][winding][robust]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     auto open_cube = make_open_cube(&alloc);
     const TriangleMeshViewf view{
         crd::containers::ConstSpan<Vec3f>{open_cube.vertices.data(), open_cube.vertices.size()},
@@ -197,7 +197,7 @@ TEST_CASE("v4c winding is invariant under uniform translation",
 {
     // Translating mesh + query by the same vector preserves winding (it
     // depends only on relative geometry).
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     auto cube = make_cube(&alloc);
     const TriangleMeshViewf view{
         crd::containers::ConstSpan<Vec3f>{cube.vertices.data(), cube.vertices.size()},
@@ -223,7 +223,7 @@ TEST_CASE("v4c winding is invariant under uniform translation",
 TEST_CASE("v4c typed Quantity wrapper bridges through raw algorithm",
           "[geometry-mesh][v4c][typed][units]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     auto cube = make_cube(&alloc);
     const TriangleMeshViewf raw_view{
         crd::containers::ConstSpan<Vec3f>{cube.vertices.data(), cube.vertices.size()},

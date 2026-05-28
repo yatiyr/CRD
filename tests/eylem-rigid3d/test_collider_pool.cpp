@@ -15,7 +15,7 @@
 #include <crd/eylem/collider.hpp>
 #include <crd/eylem/types.hpp>
 #include <crd/eylem_rigid3d/collider_pool.hpp>
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -70,7 +70,7 @@ Collider make_capsule(crd::f32 r, crd::f32 hh, crd::math::Vec3f lpos = {0.0F, 0.
 
 TEST_CASE("ColliderPool: empty state", "[eylem-rigid3d][colliderpool]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     ColliderPool pool(&alloc, 64);
 
     REQUIRE(pool.size() == 0U);
@@ -106,7 +106,7 @@ TEST_CASE("ColliderPool: ColliderId encoding round-trips kind + per-kind idx",
 
 TEST_CASE("ColliderPool: insert + read sphere", "[eylem-rigid3d][colliderpool]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     ColliderPool pool(&alloc, 64);
 
     BodyId body  = BodyId::make(7U, 3U);
@@ -134,7 +134,7 @@ TEST_CASE("ColliderPool: insert + read sphere", "[eylem-rigid3d][colliderpool]")
 
 TEST_CASE("ColliderPool: insert + read box", "[eylem-rigid3d][colliderpool]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     ColliderPool pool(&alloc, 64);
 
     BodyId body  = BodyId::make(11U, 2U);
@@ -155,7 +155,7 @@ TEST_CASE("ColliderPool: insert + read box", "[eylem-rigid3d][colliderpool]")
 
 TEST_CASE("ColliderPool: insert + read capsule", "[eylem-rigid3d][colliderpool]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     ColliderPool pool(&alloc, 64);
 
     BodyId body  = BodyId::make(13U, 5U);
@@ -174,7 +174,7 @@ TEST_CASE("ColliderPool: insert + read capsule", "[eylem-rigid3d][colliderpool]"
 TEST_CASE("ColliderPool: per-kind pools are independent",
           "[eylem-rigid3d][colliderpool]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     ColliderPool pool(&alloc, 64);
 
     BodyId b = BodyId::make(1U, 1U);
@@ -200,7 +200,7 @@ TEST_CASE("ColliderPool: per-kind pools are independent",
 TEST_CASE("ColliderPool: remove invalidates handle, re-insert reuses slot",
           "[eylem-rigid3d][colliderpool]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     ColliderPool pool(&alloc, 64);
 
     BodyId body = BodyId::make(2U, 1U);
@@ -225,7 +225,7 @@ TEST_CASE("ColliderPool: remove invalidates handle, re-insert reuses slot",
 TEST_CASE("ColliderPool: capacity exhaustion per kind is independent",
           "[eylem-rigid3d][colliderpool]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     ColliderPool pool(&alloc, 4); // 3 user slots per kind (slot 0 reserved)
 
     BodyId body = BodyId::make(1U, 1U);
@@ -248,7 +248,7 @@ TEST_CASE("ColliderPool: capacity exhaustion per kind is independent",
 TEST_CASE("ColliderPool: every non-v1b-b shape kind explicitly unsupported",
           "[eylem-rigid3d][colliderpool]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     ColliderPool pool(&alloc, 64);
     BodyId body = BodyId::make(1U, 1U);
 
@@ -283,7 +283,7 @@ TEST_CASE("ColliderPool: every non-v1b-b shape kind explicitly unsupported",
 TEST_CASE("ColliderPool: null body returns null collider",
           "[eylem-rigid3d][colliderpool]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     ColliderPool pool(&alloc, 64);
     REQUIRE(pool.insert(BodyId::null(), make_sphere(1.0F)).is_null());
 }
@@ -292,7 +292,7 @@ TEST_CASE("ColliderPool: deterministic handle sequence",
           "[eylem-rigid3d][colliderpool]")
 {
     auto run = []() {
-        crd::memory::MallocAllocator alloc;
+        crd::memory::GrowableTlsfAllocator alloc;
         ColliderPool pool(&alloc, 32);
         BodyId body = BodyId::make(1U, 1U);
 

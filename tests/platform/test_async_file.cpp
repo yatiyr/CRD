@@ -6,7 +6,7 @@
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
 #include <crd/jobs/jobs.hpp>
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 
 #include <atomic>
@@ -15,7 +15,7 @@
 
 using namespace crd::platform;
 
-static crd::memory::MallocAllocator s_alloc;
+static crd::memory::GrowableTlsfAllocator s_alloc;
 static std::atomic<crd::u32>        s_file_counter{0};
 
 // Initialise / shut down the job system around the full test run.

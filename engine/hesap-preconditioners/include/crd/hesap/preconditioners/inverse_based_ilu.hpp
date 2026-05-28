@@ -79,6 +79,7 @@ class DenseLuLeaf final : public crd::hesap::LinearOp<T>
 {
 public:
     using Csr = crd::hesap::sparse::SparseMatrix<T, crd::hesap::sparse::SparseFormat::Csr>;
+    using R   = crd::hesap::dense::RealType<T>;
 
     DenseLuLeaf(const Csr& s, crd::memory::IAllocator* alloc)
         : crd::hesap::LinearOp<T>(/*has_transpose=*/false, /*has_adjoint=*/true)
@@ -102,8 +103,8 @@ public:
                 else { dense_adj.at(ci[q], i) = vv[q]; }
             }
         }
-        crd::hesap::dense::factor_lu<T, crd::hesap::dense::Layout::RowMajor>(m_lu, dense);
-        crd::hesap::dense::factor_lu<T, crd::hesap::dense::Layout::RowMajor>(m_lu_adj, dense_adj);
+        factor_robust(m_lu, dense, m_n);
+        factor_robust(m_lu_adj, dense_adj, m_n);
     }
 
     [[nodiscard]] bool apply(crd::containers::ConstSpan<T> r, crd::containers::Span<T> z) const override
@@ -126,6 +127,39 @@ public:
     [[nodiscard]] crd::usize factor_nnz() const noexcept { return static_cast<crd::usize>(m_n) * m_n; }
 
 private:
+    // Graceful degradation (feedback_incomplete_factorization_robustness). A deferred
+    // Schur leaf can be numerically singular on hard non-PDE inputs (e.g. a
+    // structurally-singular power-network matrix like gemat11), where every pivot
+    // defers down to a singular coarsest block. Rather than asserting in solve_lu,
+    // shift the diagonal by a relative floor and refactor so the leaf stays an
+    // applicable (perturbed) preconditioner — the outer Krylov iteration tolerates
+    // the perturbation. A preconditioner must degrade, never abort.
+    static void factor_robust(crd::hesap::dense::LU<T, crd::hesap::dense::Layout::RowMajor>& lu,
+                              crd::hesap::dense::Matrix<T>& dense, crd::u32 n)
+    {
+        namespace hd = crd::hesap::dense;
+        hd::factor_lu<T, hd::Layout::RowMajor>(lu, dense);
+        if (!lu.is_singular()) { return; }
+        auto mag = [](const T& v) -> R {
+            if constexpr (hd::is_complex_v<T>) { return crd::hesap::abs(v); }
+            else { return v < R(0) ? -v : v; }
+        };
+        R maxdiag = R(0);
+        for (crd::u32 i = 0; i < n; ++i) { const R a = mag(dense.at(i, i)); if (a > maxdiag) { maxdiag = a; } }
+        if (maxdiag <= R(0)) { maxdiag = R(1); }
+        R shift = std::sqrt(std::numeric_limits<R>::epsilon()) * maxdiag; // relative pivot floor
+        for (int tries = 0; tries < 40 && lu.is_singular(); ++tries)
+        {
+            for (crd::u32 i = 0; i < n; ++i)
+            {
+                if constexpr (hd::is_complex_v<T>) { dense.at(i, i).re += shift; }
+                else { dense.at(i, i) += shift; }
+            }
+            hd::factor_lu<T, hd::Layout::RowMajor>(lu, dense);
+            shift *= R(2); // geometric growth until non-singular (bounded retries)
+        }
+    }
+
     crd::u32                                            m_n;
     crd::hesap::dense::LU<T, crd::hesap::dense::Layout::RowMajor> m_lu;     // LU(S̃) for apply
     crd::hesap::dense::LU<T, crd::hesap::dense::Layout::RowMajor> m_lu_adj; // LU(S̃ᴴ) for apply_adjoint
@@ -143,9 +177,13 @@ public:
     // level / max_levels / dense_threshold: recursion control (defaults give the
     // public single call; the recursion passes level+1). Schur ≤ dense_threshold
     // or level ≥ max_levels ⇒ dense-LU base (D(mlilu)-6).
+    // reorder: per-level AMD fill-reducing reorder. DEFAULT ON (v4z): matches ILUPACK's
+    //   always-reorder posture; on in-regime matrices it cuts iterations ~2× (sherman3)
+    //   to ~4× (cd2d β=0.3) at negligible fill cost with no measured regression (v4z
+    //   Step 2 bench). Pass false explicitly for the natural-order path.
     InverseBasedIlu(const Csr& a, crd::memory::IAllocator* alloc, R kappa = R(-1), R droptol = R(-1),
                     crd::u32 level = 0, crd::u32 max_levels = 50, crd::u32 dense_threshold = 64,
-                    Mc64Mode mc64_mode = Mc64Mode::None, R milu = R(0), bool reorder = false)
+                    Mc64Mode mc64_mode = Mc64Mode::None, R milu = R(0), bool reorder = true)
         : crd::hesap::LinearOp<T>(/*has_transpose=*/false, /*has_adjoint=*/true)
         , m_alloc(alloc)
         , m_n(a.rows())

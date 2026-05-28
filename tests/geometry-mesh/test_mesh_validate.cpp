@@ -5,7 +5,7 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/geometry/mesh/mesh.hpp>
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -72,7 +72,7 @@ crd::u32 count_defect(const MeshValidationReport& r, MeshDefectKind k) noexcept
 TEST_CASE("v4-validate empty mesh: well_formed + non-watertight",
           "[geometry-mesh][v4-validate]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     const TriangleMeshViewf empty{};
     const auto r = validate_triangle_mesh(empty, &alloc);
     REQUIRE(r.triangle_count == 0U);
@@ -85,7 +85,7 @@ TEST_CASE("v4-validate empty mesh: well_formed + non-watertight",
 TEST_CASE("v4-validate canonical cube is watertight + well_formed (no defects beyond boundary toggle)",
           "[geometry-mesh][v4-validate][watertight]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     auto cube = make_cube(&alloc);
     const TriangleMeshViewf view{
         crd::containers::ConstSpan<Vec3f>{cube.vertices.data(), cube.vertices.size()},
@@ -106,7 +106,7 @@ TEST_CASE("v4-validate canonical cube is watertight + well_formed (no defects be
 TEST_CASE("v4-validate detects out-of-bounds index",
           "[geometry-mesh][v4-validate][out-of-bounds]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     const Vec3f verts[3] = {{0.0F, 0.0F, 0.0F}, {1.0F, 0.0F, 0.0F}, {0.0F, 1.0F, 0.0F}};
     const crd::u32 inds[3] = {0U, 1U, 99U}; // 99 is out of bounds
     const TriangleMeshViewf view{
@@ -120,7 +120,7 @@ TEST_CASE("v4-validate detects out-of-bounds index",
 TEST_CASE("v4-validate detects degenerate (repeated-vertex) triangle",
           "[geometry-mesh][v4-validate][degenerate]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     const Vec3f verts[3] = {{0.0F, 0.0F, 0.0F}, {1.0F, 0.0F, 0.0F}, {0.0F, 1.0F, 0.0F}};
     const crd::u32 inds[3] = {0U, 1U, 1U}; // i1 == i2
     const TriangleMeshViewf view{
@@ -134,7 +134,7 @@ TEST_CASE("v4-validate detects degenerate (repeated-vertex) triangle",
 TEST_CASE("v4-validate detects zero-area (collinear) triangle",
           "[geometry-mesh][v4-validate][zero-area]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     // 3 collinear vertices on the x-axis.
     const Vec3f verts[3] = {{0.0F, 0.0F, 0.0F}, {1.0F, 0.0F, 0.0F}, {2.0F, 0.0F, 0.0F}};
     const crd::u32 inds[3] = {0U, 1U, 2U};
@@ -151,7 +151,7 @@ TEST_CASE("v4-validate detects zero-area (collinear) triangle",
 TEST_CASE("v4-validate detects non-manifold edge (3 tris share one edge)",
           "[geometry-mesh][v4-validate][non-manifold]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     // 4 verts: 3 triangles all share edge (0, 1).
     const Vec3f verts[4] = {
         {0.0F, 0.0F, 0.0F},
@@ -178,7 +178,7 @@ TEST_CASE("v4-validate detects non-manifold edge (3 tris share one edge)",
 TEST_CASE("v4-validate detects boundary edges on open mesh",
           "[geometry-mesh][v4-validate][boundary]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     // Single triangle → all 3 edges are boundary.
     const Vec3f verts[3] = {{0.0F, 0.0F, 0.0F}, {1.0F, 0.0F, 0.0F}, {0.0F, 1.0F, 0.0F}};
     const crd::u32 inds[3] = {0U, 1U, 2U};
@@ -195,7 +195,7 @@ TEST_CASE("v4-validate detects boundary edges on open mesh",
 TEST_CASE("v4-validate detects inconsistent orientation",
           "[geometry-mesh][v4-validate][orientation]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     // Two triangles sharing edge (0, 1) — both using it in SAME direction
     // (broken CCW consistency). Manifold but inconsistently oriented.
     const Vec3f verts[4] = {
@@ -220,7 +220,7 @@ TEST_CASE("v4-validate detects inconsistent orientation",
 TEST_CASE("v4-validate disabling edge checks short-circuits the edge pass",
           "[geometry-mesh][v4-validate][toggles]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     auto cube = make_cube(&alloc);
     const TriangleMeshViewf view{
         crd::containers::ConstSpan<Vec3f>{cube.vertices.data(), cube.vertices.size()},
@@ -238,7 +238,7 @@ TEST_CASE("v4-validate disabling edge checks short-circuits the edge pass",
 TEST_CASE("v4-validate reports are deterministic across repeated runs",
           "[geometry-mesh][v4-validate][determinism]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     auto cube = make_cube(&alloc);
     // Inject a deliberate defect: triangle 5 with i2 out of bounds.
     cube.indices[5 * 3U + 2U] = 99U;

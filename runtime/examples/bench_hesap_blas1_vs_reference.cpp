@@ -4,6 +4,7 @@
 //
 // Build only when -DCRD_BUILD_HESAP_VS_REFERENCE=ON.
 
+#include <crd/containers/array.hpp>
 #include <crd/hesap/dense/blas1.hpp>
 #include <crd/hesap/dense/vector.hpp>
 #include <crd/math/simd/backend.hpp>
@@ -11,7 +12,6 @@
 
 #include <Eigen/Dense>
 #include <cblas.h>
-
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -38,8 +38,7 @@ crd::f64 measure_clock_ghz()
     return 100.0 / ms;
 }
 
-template <typename T>
-void fill(T* p, crd::usize n, crd::u32 seed)
+template <typename T> void fill(T* p, crd::usize n, crd::u32 seed)
 {
     crd::u32 s = seed;
     for (crd::usize i = 0; i < n; ++i)
@@ -49,11 +48,13 @@ void fill(T* p, crd::usize n, crd::u32 seed)
     }
 }
 
-template <typename Op>
-crd::f64 time_loop_best_of_3(Op&& op, int& iters_out)
+template <typename Op> crd::f64 time_loop_best_of_3(Op&& op, int& iters_out)
 {
     // Warm-up x4.
-    op(); op(); op(); op();
+    op();
+    op();
+    op();
+    op();
     crd::f64 best_per_iter = 1e300;
     int best_iters = 0;
     crd::f64 best_elapsed = 0.0;
@@ -65,8 +66,7 @@ crd::f64 time_loop_best_of_3(Op&& op, int& iters_out)
         {
             op();
             ++iters;
-            const auto el =
-                std::chrono::duration<crd::f64>(std::chrono::steady_clock::now() - t0).count();
+            const auto el = std::chrono::duration<crd::f64>(std::chrono::steady_clock::now() - t0).count();
             if (el > 0.4 && iters >= 10)
             {
                 break;
@@ -91,15 +91,12 @@ crd::f64 time_loop_best_of_3(Op&& op, int& iters_out)
 void bench_axpy(crd::memory::IAllocator* alloc)
 {
     std::fprintf(stdout, "\n==== axpy.f64: y = alpha*x + y ====\n");
-    std::fprintf(stdout, "%-8s | %-22s | %-22s | %-22s | %-10s | %-10s\n", "N",
-                 "Cerid (GFLOPS,iters)", "Eigen (GFLOPS,iters)", "OBLAS (GFLOPS,iters)", "C/Eigen",
-                 "C/OBLAS");
+    std::fprintf(stdout, "%-8s | %-22s | %-22s | %-22s | %-10s | %-10s\n", "N", "Cerid (GFLOPS,iters)",
+                 "Eigen (GFLOPS,iters)", "OBLAS (GFLOPS,iters)", "C/Eigen", "C/OBLAS");
     std::fprintf(stdout, "%s\n",
                  "----------------------------------------------------------------"
                  "----------------------------------------------------");
-    for (crd::usize n :
-         {crd::usize{1024}, crd::usize{4096}, crd::usize{16384}, crd::usize{65536},
-          crd::usize{262144}})
+    for (crd::usize n : {crd::usize{1024}, crd::usize{4096}, crd::usize{16384}, crd::usize{65536}, crd::usize{262144}})
     {
         using crd::hesap::dense::Vector;
         Vector<crd::f64> cx(alloc, n);
@@ -110,31 +107,34 @@ void bench_axpy(crd::memory::IAllocator* alloc)
         const crd::f64 alpha = 1.25;
         // Cerid axpy
         int citers = 0;
-        const crd::f64 ce = time_loop_best_of_3(
-            [&]() { crd::hesap::dense::axpy<crd::f64>(alpha, cx.span(), cy.span()); }, citers);
+        const crd::f64 ce =
+            time_loop_best_of_3([&]() { crd::hesap::dense::axpy<crd::f64>(alpha, cx.span(), cy.span()); }, citers);
 
         // Eigen: y.noalias() += alpha * x
-        Eigen::VectorXd ex(n), ey(n);
+        Eigen::VectorXd ex(n);
+        Eigen::VectorXd ey(n);
         std::memcpy(ex.data(), cx.data(), n * sizeof(crd::f64));
         std::memcpy(ey.data(), cy.data(), n * sizeof(crd::f64));
         int eiters = 0;
         const crd::f64 ee = time_loop_best_of_3([&]() { ey.noalias() += alpha * ex; }, eiters);
 
         // OpenBLAS daxpy
-        std::vector<crd::f64> ox(n), oy(n);
+        crd::containers::Array<crd::f64> ox(alloc);
+        crd::containers::Array<crd::f64> oy(alloc);
+        ox.resize(n);
+        oy.resize(n);
         std::memcpy(ox.data(), cx.data(), n * sizeof(crd::f64));
         std::memcpy(oy.data(), cy.data(), n * sizeof(crd::f64));
         int oiters = 0;
-        const crd::f64 oe = time_loop_best_of_3(
-            [&]() { cblas_daxpy(static_cast<int>(n), alpha, ox.data(), 1, oy.data(), 1); }, oiters);
+        const crd::f64 oe =
+            time_loop_best_of_3([&]() { cblas_daxpy(static_cast<int>(n), alpha, ox.data(), 1, oy.data(), 1); }, oiters);
 
         const crd::f64 flop_per_iter = 2.0 * static_cast<crd::f64>(n);
         const crd::f64 cg = (flop_per_iter * citers) / (ce * 1e9);
         const crd::f64 eg = (flop_per_iter * eiters) / (ee * 1e9);
         const crd::f64 og = (flop_per_iter * oiters) / (oe * 1e9);
         std::fprintf(stdout, "%-8zu | %8.2f (%6d) | %8.2f (%6d) | %8.2f (%6d) | %8.2fx | %8.2fx\n",
-                     static_cast<std::size_t>(n), cg, citers, eg, eiters, og, oiters, cg / eg,
-                     cg / og);
+                     static_cast<std::size_t>(n), cg, citers, eg, eiters, og, oiters, cg / eg, cg / og);
         std::fflush(stdout);
     }
 }
@@ -144,15 +144,12 @@ void bench_axpy(crd::memory::IAllocator* alloc)
 void bench_dot(crd::memory::IAllocator* alloc)
 {
     std::fprintf(stdout, "\n==== dot.f64: sum_i x[i]*y[i] ====\n");
-    std::fprintf(stdout, "%-8s | %-22s | %-22s | %-22s | %-10s | %-10s\n", "N",
-                 "Cerid (GFLOPS,iters)", "Eigen (GFLOPS,iters)", "OBLAS (GFLOPS,iters)", "C/Eigen",
-                 "C/OBLAS");
+    std::fprintf(stdout, "%-8s | %-22s | %-22s | %-22s | %-10s | %-10s\n", "N", "Cerid (GFLOPS,iters)",
+                 "Eigen (GFLOPS,iters)", "OBLAS (GFLOPS,iters)", "C/Eigen", "C/OBLAS");
     std::fprintf(stdout, "%s\n",
                  "----------------------------------------------------------------"
                  "----------------------------------------------------");
-    for (crd::usize n :
-         {crd::usize{1024}, crd::usize{4096}, crd::usize{16384}, crd::usize{65536},
-          crd::usize{262144}})
+    for (crd::usize n : {crd::usize{1024}, crd::usize{4096}, crd::usize{16384}, crd::usize{65536}, crd::usize{262144}})
     {
         using crd::hesap::dense::Vector;
         Vector<crd::f64> cx(alloc, n);
@@ -162,21 +159,25 @@ void bench_dot(crd::memory::IAllocator* alloc)
         volatile crd::f64 sink = 0;
 
         int citers = 0;
-        const crd::f64 ce = time_loop_best_of_3(
-            [&]() { sink = crd::hesap::dense::dot<crd::f64>(cx.span(), cy.span()); }, citers);
+        const crd::f64 ce =
+            time_loop_best_of_3([&]() { sink = crd::hesap::dense::dot<crd::f64>(cx.span(), cy.span()); }, citers);
 
-        Eigen::VectorXd ex(n), ey(n);
+        Eigen::VectorXd ex(n);
+        Eigen::VectorXd ey(n);
         std::memcpy(ex.data(), cx.data(), n * sizeof(crd::f64));
         std::memcpy(ey.data(), cy.data(), n * sizeof(crd::f64));
         int eiters = 0;
         const crd::f64 ee = time_loop_best_of_3([&]() { sink = ex.dot(ey); }, eiters);
 
-        std::vector<crd::f64> ox(n), oy(n);
+        crd::containers::Array<crd::f64> ox(alloc);
+        crd::containers::Array<crd::f64> oy(alloc);
+        ox.resize(n);
+        oy.resize(n);
         std::memcpy(ox.data(), cx.data(), n * sizeof(crd::f64));
         std::memcpy(oy.data(), cy.data(), n * sizeof(crd::f64));
         int oiters = 0;
-        const crd::f64 oe = time_loop_best_of_3(
-            [&]() { sink = cblas_ddot(static_cast<int>(n), ox.data(), 1, oy.data(), 1); }, oiters);
+        const crd::f64 oe =
+            time_loop_best_of_3([&]() { sink = cblas_ddot(static_cast<int>(n), ox.data(), 1, oy.data(), 1); }, oiters);
         (void)sink;
 
         const crd::f64 flop_per_iter = 2.0 * static_cast<crd::f64>(n);
@@ -184,8 +185,7 @@ void bench_dot(crd::memory::IAllocator* alloc)
         const crd::f64 eg = (flop_per_iter * eiters) / (ee * 1e9);
         const crd::f64 og = (flop_per_iter * oiters) / (oe * 1e9);
         std::fprintf(stdout, "%-8zu | %8.2f (%6d) | %8.2f (%6d) | %8.2f (%6d) | %8.2fx | %8.2fx\n",
-                     static_cast<std::size_t>(n), cg, citers, eg, eiters, og, oiters, cg / eg,
-                     cg / og);
+                     static_cast<std::size_t>(n), cg, citers, eg, eiters, og, oiters, cg / eg, cg / og);
         std::fflush(stdout);
     }
 }
@@ -195,15 +195,12 @@ void bench_dot(crd::memory::IAllocator* alloc)
 void bench_nrm2(crd::memory::IAllocator* alloc)
 {
     std::fprintf(stdout, "\n==== nrm2.f64: sqrt(sum_i x[i]^2) ====\n");
-    std::fprintf(stdout, "%-8s | %-22s | %-22s | %-22s | %-10s | %-10s\n", "N",
-                 "Cerid (GFLOPS,iters)", "Eigen (GFLOPS,iters)", "OBLAS (GFLOPS,iters)", "C/Eigen",
-                 "C/OBLAS");
+    std::fprintf(stdout, "%-8s | %-22s | %-22s | %-22s | %-10s | %-10s\n", "N", "Cerid (GFLOPS,iters)",
+                 "Eigen (GFLOPS,iters)", "OBLAS (GFLOPS,iters)", "C/Eigen", "C/OBLAS");
     std::fprintf(stdout, "%s\n",
                  "----------------------------------------------------------------"
                  "----------------------------------------------------");
-    for (crd::usize n :
-         {crd::usize{1024}, crd::usize{4096}, crd::usize{16384}, crd::usize{65536},
-          crd::usize{262144}})
+    for (crd::usize n : {crd::usize{1024}, crd::usize{4096}, crd::usize{16384}, crd::usize{65536}, crd::usize{262144}})
     {
         using crd::hesap::dense::Vector;
         Vector<crd::f64> cx(alloc, n);
@@ -211,19 +208,19 @@ void bench_nrm2(crd::memory::IAllocator* alloc)
         volatile crd::f64 sink = 0;
 
         int citers = 0;
-        const crd::f64 ce = time_loop_best_of_3(
-            [&]() { sink = crd::hesap::dense::nrm2<crd::f64>(cx.span()); }, citers);
+        const crd::f64 ce = time_loop_best_of_3([&]() { sink = crd::hesap::dense::nrm2<crd::f64>(cx.span()); }, citers);
 
         Eigen::VectorXd ex(n);
         std::memcpy(ex.data(), cx.data(), n * sizeof(crd::f64));
         int eiters = 0;
         const crd::f64 ee = time_loop_best_of_3([&]() { sink = ex.norm(); }, eiters);
 
-        std::vector<crd::f64> ox(n);
+        crd::containers::Array<crd::f64> ox(alloc);
+        ox.resize(n);
         std::memcpy(ox.data(), cx.data(), n * sizeof(crd::f64));
         int oiters = 0;
-        const crd::f64 oe = time_loop_best_of_3(
-            [&]() { sink = cblas_dnrm2(static_cast<int>(n), ox.data(), 1); }, oiters);
+        const crd::f64 oe =
+            time_loop_best_of_3([&]() { sink = cblas_dnrm2(static_cast<int>(n), ox.data(), 1); }, oiters);
         (void)sink;
 
         // nrm2 does ~2 flops per element (mul + add); sqrt is a single op.
@@ -232,8 +229,7 @@ void bench_nrm2(crd::memory::IAllocator* alloc)
         const crd::f64 eg = (flop_per_iter * eiters) / (ee * 1e9);
         const crd::f64 og = (flop_per_iter * oiters) / (oe * 1e9);
         std::fprintf(stdout, "%-8zu | %8.2f (%6d) | %8.2f (%6d) | %8.2f (%6d) | %8.2fx | %8.2fx\n",
-                     static_cast<std::size_t>(n), cg, citers, eg, eiters, og, oiters, cg / eg,
-                     cg / og);
+                     static_cast<std::size_t>(n), cg, citers, eg, eiters, og, oiters, cg / eg, cg / og);
         std::fflush(stdout);
     }
 }

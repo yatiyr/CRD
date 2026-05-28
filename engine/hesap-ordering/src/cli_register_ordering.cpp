@@ -335,7 +335,10 @@ CommandResult impl_mc64(const CommandArgs& args)
 {
     const auto rows = args.get_u64("rows");
     const auto cols = args.get_u64("cols");
-    if (!rows || !cols || *rows != *cols) { return error_result(args.alloc, "mc64 requires a square matrix"); }
+    if (!rows || !cols || *rows != *cols)
+    {
+        return error_result(args.alloc, "mc64 requires a square matrix");
+    }
     const auto tr = args.get_i64_array("triplet_rows");
     const auto tc = args.get_i64_array("triplet_cols");
     const auto vv = args.get_f64_array("values");
@@ -355,9 +358,18 @@ CommandResult impl_mc64(const CommandArgs& args)
     const crd::u32 n = a.rows();
     crd::containers::Array<crd::f64> out(args.alloc);
     out.reserve(static_cast<crd::usize>(n) * 3);
-    for (crd::u32 i = 0; i < n; ++i) { out.push_back(static_cast<crd::f64>(s.colperm[i])); }
-    for (crd::u32 i = 0; i < n; ++i) { out.push_back(s.dr[i]); }
-    for (crd::u32 j = 0; j < n; ++j) { out.push_back(s.dc[j]); }
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        out.push_back(static_cast<crd::f64>(s.colperm[i]));
+    }
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        out.push_back(s.dr[i]);
+    }
+    for (crd::u32 j = 0; j < n; ++j)
+    {
+        out.push_back(s.dc[j]);
+    }
     return blob_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
 }
 
@@ -396,6 +408,9 @@ CommandSchema make_mc64_schema(crd::memory::IAllocator* alloc, const char* name,
 }
 } // namespace
 
+// Registration uses crd allocators (abort on OOM, never throw); the std bad_alloc path the check
+// traces is unreachable, and the registrar ctor is noexcept (would terminate, not escape) regardless.
+// NOLINTNEXTLINE(bugprone-throwing-static-initialization)
 CRD_HESAP_CLI_REGISTER_MODULE(
     [](CommandRegistry& reg)
     {
@@ -456,7 +471,8 @@ CRD_HESAP_CLI_REGISTER_MODULE(
         reg.register_command(make_ordering_schema(alloc, "hesap.ordering.nd_nnz_l",
                                                   "nnz(L) after nested-dissection reordering.", OutputKind::Scalar),
                              &impl_nd_nnz_l);
-        reg.register_command(make_mc64_schema(alloc, "hesap.ordering.mc64",
-                                              "MC64 max-weight matching + scaling: [colperm(n), D_r(n), D_c(n)] (BinaryBlob f64)."),
-                             &impl_mc64);
+        reg.register_command(
+            make_mc64_schema(alloc, "hesap.ordering.mc64",
+                             "MC64 max-weight matching + scaling: [colperm(n), D_r(n), D_c(n)] (BinaryBlob f64)."),
+            &impl_mc64);
     })

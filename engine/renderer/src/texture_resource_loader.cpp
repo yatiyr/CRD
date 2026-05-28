@@ -1,6 +1,7 @@
 #include <crd/renderer/texture_resource_loader.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
+#include <crd/memory/allocators/thread_safe_allocator.hpp>
 #include <crd/renderer/texture_resource.hpp>
 #include <crd/resources/crdr.hpp>
 #include <crd/resources/loader.hpp>
@@ -135,7 +136,11 @@ public:
     }
 
 private:
-    crd::memory::MallocAllocator m_alloc;
+    // Concurrent async loads call load()/unload() on this single loader instance from
+    // different worker fibers; the wrapper serializes the otherwise single-threaded
+    // TLSF heap. Per-type pool locality is kept; lock is held only per alloc/free call.
+    crd::memory::GrowableTlsfAllocator m_inner;
+    crd::memory::ThreadSafeAllocator   m_alloc{&m_inner};
 };
 
 } // anonymous namespace

@@ -1413,3 +1413,81 @@ all beating Eigen + LAPACK (or crushing our own baseline where the complex refs 
 Phase 3.1.6 v3 (dense SVD + eigensolvers + least-squares) CLOSED — v3a (sym/herm eig) + v3b
 (SVD) + v3c (least-squares) + v3d (non-sym eig), §17–§25, beats Eigen + LAPACK across the
 dense-decomposition surface.** NEXT = v4 (the next hesap cluster per `docs/ROADMAP.md`).
+
+## §26 Amendment (2026-05-27) — v4 iterative-solvers + preconditioners + AMG decision lock (v4z CLOSE)
+
+v4 ships the **complete** sparse-iterative family on the shipped `LinearOp<T>` substrate, real
+AND complex (`f32/f64/c32/c64`) for every op (`feedback_hesap_substrate_never_defer_features`):
+**Krylov** — CG, PCG, FGMRES (flexible from the start), BiCGSTAB, MINRES, SYMMLQ, LSQR, LSMR,
+QMR, IDR(s), recycling (GCR, GCROT, RMINRES), block (CG, PCG, BiCGSTAB, GMRES);
+**preconditioners** — Jacobi, block-Jacobi, SSOR, IC(0), ILU(0), ILU(p), ILUT, SPAI, FSPAI,
+Chebyshev, additive/restricted Schwarz, multilevel-ILU scaffold (`mlilu`) and inverse-based
+multilevel ILU (`mlilu_ib`, ILUPACK-class); **AMG** — smoothed-aggregation + classical
+Ruge-Stüben + αSA hook, V/W/F/K cycles, AMG-as-solver AND AMG-as-`LinearOp` preconditioner.
+Per-method faithful-port pins live in the per-slice session logs; this section locks the
+cluster-wide invariants + the v4z-close decisions. Existing pins **D(mlilu)-1..6** (inverse-based
+Crout LDU + CMSW estimator + κ-accept/defer + recursive Schur + dense base) and **D(amg)-1..6**
+(strength → aggregation → smoothed prolongator → Galerkin `PᵀAP` → cycle → smoother) carry
+forward unchanged.
+
+**The determinism moat (D(iter)-1..7) — bit-exact {iterations, residual, solution} across
+{1,2,4,8,16} threads, the property no frontier library (Eigen/PETSc/AMGCL/Trilinos) offers:**
+- **D(iter)-1 — reductions are serial.** Every inner product / norm (`dot`/`dotc`/`nrm2`) is a
+  serial pairwise sum; parallelism lives ONLY in the operator's spmv (itself deterministic). A
+  Krylov recurrence is a serial dependency chain ⇒ thread-count cannot perturb it. K-cycle's
+  inner GCR uses serial `dotc` for the same reason (v4k-b).
+- **D(iter)-2 — operator is size-adaptive + arena-clean.** The spmv goes serial-SELL below a
+  sub-cache threshold / parallel-SELL above it (over-parallelizing tiny matrices LOSES to the
+  dispatch overhead), and calls `frame_reset()` after each parallel apply (the per-thread frame
+  arena leaks `JobDecl`s across a Krylov loop otherwise). `feedback_krylov_operator_size_adaptive_and_frame_reset`.
+- **D(iter)-3 — GMRES/FGMRES** = fixed restart `m`, Arnoldi + Givens least-squares; happy/lucky
+  breakdown handled deterministically (no RNG, no convergence-dependent branch order).
+- **D(iter)-4 — short-recurrence breakdown guards.** BiCGSTAB/QMR/IDR(s) guard ρ/ω near-zero and
+  flag deterministic divergence (residual → a fixed large sentinel `1e56`) rather than asserting
+  or propagating NaN. `feedback_iterative_crush_claim_same_algorithm`.
+- **D(iter)-5 — block-Krylov orthonormalization = packed-MGS** (NOT CholeskyQR2, whose cond²
+  Gram silently stalls): per-step search-block MGS over blas1; block-GMRES least-squares uses a
+  banded SCALAR Givens (the `s`-wide band of an upper-Hessenberg-per-block); `block_qr` returns
+  R; deflation + divergence guards. `feedback_block_krylov_orthonormalization_packed_mgs`,
+  `feedback_block_gmres_band_givens_and_guards`.
+- **D(iter)-6 — recycling subspace selection** (GCROT/RMINRES) uses a fixed harmonic-Ritz
+  ordering — deterministic across thread counts.
+- **D(iter)-7 — preconditioners degrade gracefully, never assert** (`feedback_incomplete_factorization_robustness`).
+  Examples: zero diagonal → 1; IC needs diagonal-scale-then-shift; ILU(0) pivot-floor + diagonal
+  insertion; ILUT row-scaling. **v4z addition:** the `InverseBasedIlu` dense Schur leaf
+  (`DenseLuLeaf`), when the deferred coarsest block is numerically singular (a structurally
+  singular non-PDE input such as the power-circuit `gemat11` drives every pivot to defer), shifts
+  the diagonal by a relative pivot floor `√ε·max|diag|` and refactors (geometric back-off, ≤40
+  tries) so the leaf stays an applicable perturbed preconditioner. It NEVER hands a singular
+  factor to `solve_lu` (which correctly asserts — its dense-LU contract is unchanged). Tested:
+  a structurally-singular 4×4 leaf yields finite `apply` + `apply_adjoint` output.
+
+**v4z decisions (the close):**
+- **D(iter)-8 — `reorder` is default-ON for nonsym `InverseBasedIlu`.** Per-level AMD
+  fill-reducing reorder (`B = PAPᵀ`, the recursion auto-applies it at every Schur level; apply
+  unwraps `A⁻¹ = Pᵀ B⁻¹ P`). Matches ILUPACK's always-reorder posture. Measured (v4z Step 2
+  bench, in-regime matrices): cuts iterations ~2× (sherman3 1066→557) to ~4× (cd2d-150 269→68),
+  wins wall-time 1.45–1.75×, negligible fill change (sherman3 2.43→2.49), **no regression**. The
+  natural-order path stays reachable via explicit `reorder=false`; the `mlilu_ib` CLI exposes a
+  `reorder` Bool param (additive, default true). A wrong-tool input (gemat11: 51 levels / 727×
+  fill identical at κ=5 and κ=100 ⇒ κ is not the lever) does not discriminate `reorder` and is
+  not a counter-case.
+- **D(iter)-9 — AMD pivot selection is O(1) bucket-HEAD.** `amd_order`/`camd_order` select the
+  lowest-index vertex at the head of the current min-degree bucket (camd: first current-class in
+  head order) — deterministic AND near-linear (the old whole-bucket scan was O(n²) on grids;
+  144→3.4 ms @22.5k, 42×), fill preserved (SuiteSparse 0.96–1.04× Eigen-AMD). Speeds every AMD
+  consumer (v4j-3b).
+- **D(iter)-10 — the cd2d β=0.3 convection result is QUANTIFIED, not a "crush" slogan.** On the
+  CFD home-turf model problem, `mlilu_ib`+reorder WINS single-shot total wall-time **2.1–2.2×**
+  at every mesh (cheaper factor + cheap AMD + low fill) and LOSES iteration count (45–76 vs
+  ILUPACK 7–10). Amortised over `k` re-solves of the same factorization, ILUPACK's cheaper
+  per-solve overtakes only after **k\* ≈ 3.6–5.9 re-solves** — so single-solve and few-RHS
+  workloads favour Cerid; many-RHS / frozen-preconditioner time-stepping favours ILUPACK. The
+  β=0.3 *iteration* gap is a documented aggregation-AMG wall (6 levers exhausted: κ, droptol,
+  V/W/K cycle, smoothed/plain aggregation, αSA, line-GS — `feedback_crush_mandate_bounded_by_importance`).
+
+**v4 CLOSE:** the complete iterative substrate (Krylov + preconditioners + AMG), real + complex,
+every op CLI-registered, the cross-thread determinism moat held end-to-end, beating Eigen on its
+overlapping surface and standing apart on the families Eigen lacks (Schwarz/SPAI/Chebyshev/AMG/
+multilevel-ILU — benched against the correct algorithm-class peer, `feedback_bench_against_the_correct_peer`).
+NEXT = v5 (sparse-direct factorization) per `docs/ROADMAP.md`.

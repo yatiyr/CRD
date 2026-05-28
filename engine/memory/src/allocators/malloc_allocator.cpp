@@ -69,19 +69,32 @@ MallocAllocator::MallocAllocator(const char* name) noexcept
 void* MallocAllocator::allocate(usize size, usize alignment)
 {
     CRD_ASSERT(size > 0);
+    void* p = try_allocate(size, alignment);
+    if (!p)
+    {
+        CRD_LOG_CRITICAL(g_log_memory, "MallocAllocator OOM (requested {} bytes, alignment {})", size, alignment);
+        CRD_FATAL("Out of memory");
+    }
+    return p;
+}
+
+void* MallocAllocator::try_allocate(usize size, usize alignment)
+{
     CRD_ASSERT(is_pow2(alignment));
+    if (size == 0)
+    {
+        return nullptr;
+    }
     if (alignment < kMinAlignment)
     {
         alignment = kMinAlignment;
     }
 
     void* p = platform_aligned_alloc(size, alignment);
-    if (!p)
+    if (p != nullptr)
     {
-        CRD_LOG_CRITICAL(g_log_memory, "MallocAllocator OOM (requested {} bytes, alignment {})", size, alignment);
-        CRD_FATAL("Out of memory");
+        m_stats.on_allocate(size);
     }
-    m_stats.on_allocate(size);
     return p;
 }
 

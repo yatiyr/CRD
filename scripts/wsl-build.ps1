@@ -103,6 +103,9 @@ $bashLines = @(
     # platform path in tests that would otherwise need a real Wayland / X11
     # session. Lets PlatformContext tests pass without a display.
     'export CRD_PLATFORM_HEADLESS=1'
+    # Perf budgets SOFT under the sweep (like CI) — over-budget logs a warning + the
+    # measured number instead of hard-aborting a config on host/VM timing variance.
+    'export CRD_PERF_BUDGET_SOFT=1'
     "cd '$repoRootWsl'"
     "BUILD_DIR=$nativeBuildDir"
     'mkdir -p "$BUILD_DIR"'

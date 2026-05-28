@@ -150,20 +150,25 @@ constexpr crd::usize kMaxA1out = 256U;
 // ── Construction / destruction ─────────────────────────────────────────────
 
 ResourceManager::ResourceManager(crd::memory::IAllocator* a)
-    : m_alloc(a)
-    , m_loaders(a)
-    , m_mounts(a)
-    , m_live(a)
-    , m_handles(a)
-    , m_in_flight(a)
-    , m_reload_subs(a)
-    , m_pack_watches(a)
-    , m_deferred_frees(a)
-    , m_a1in(a)
-    , m_am(a)
-    , m_a1out(a)
-    , m_a1out_set(a)
-    , m_pin_counts(a)
+    // m_thread_safe wraps the caller's allocator; EVERYTHING (bookkeeping containers
+    // + the loader-facing m_alloc) routes through it so all access to `a` is
+    // serialized by one mutex — concurrent loader jobs (which run without the manager
+    // mutex) can't race the manager's container allocations on a non-thread-safe `a`.
+    : m_thread_safe(a)
+    , m_alloc(&m_thread_safe)
+    , m_loaders(&m_thread_safe)
+    , m_mounts(&m_thread_safe)
+    , m_live(&m_thread_safe)
+    , m_handles(&m_thread_safe)
+    , m_in_flight(&m_thread_safe)
+    , m_reload_subs(&m_thread_safe)
+    , m_pack_watches(&m_thread_safe)
+    , m_deferred_frees(&m_thread_safe)
+    , m_a1in(&m_thread_safe)
+    , m_am(&m_thread_safe)
+    , m_a1out(&m_thread_safe)
+    , m_a1out_set(&m_thread_safe)
+    , m_pin_counts(&m_thread_safe)
 {
 }
 

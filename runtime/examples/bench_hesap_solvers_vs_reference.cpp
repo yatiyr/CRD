@@ -18,7 +18,6 @@
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
 #include <Eigen/Dense>
-
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -31,8 +30,7 @@
 
 namespace
 {
-template <typename T>
-void fill(T* p, crd::usize n, crd::u32 seed)
+template <typename T> void fill(T* p, crd::usize n, crd::u32 seed)
 {
     crd::u32 s = seed;
     for (crd::usize i = 0; i < n; ++i)
@@ -42,15 +40,17 @@ void fill(T* p, crd::usize n, crd::u32 seed)
     }
 }
 
-template <typename Op>
-crd::f64 time_loop(Op&& op, int& iters_out, crd::f64 budget_s = 0.4, int min_iters = 3)
+template <typename Op> crd::f64 time_loop(Op&& op, int& iters_out, crd::f64 budget_s = 0.4, int min_iters = 3)
 {
     // Per memory/feedback_jobs_parallel_for_frame_arena_exhaustion: reset
     // the per-thread jobs frame arena between iters; otherwise tight loops
     // exhaust the 1 MB arena.
-    op(); crd::jobs::frame_reset();
-    op(); crd::jobs::frame_reset();
-    op(); crd::jobs::frame_reset();
+    op();
+    crd::jobs::frame_reset();
+    op();
+    crd::jobs::frame_reset();
+    op();
+    crd::jobs::frame_reset();
     crd::f64 best_per_iter = 1e300;
     int best_iters = 0;
     crd::f64 best_elapsed = 0.0;
@@ -63,9 +63,7 @@ crd::f64 time_loop(Op&& op, int& iters_out, crd::f64 budget_s = 0.4, int min_ite
             op();
             crd::jobs::frame_reset();
             ++iters;
-            const auto el = std::chrono::duration<crd::f64>(
-                                std::chrono::steady_clock::now() - t0)
-                                .count();
+            const auto el = std::chrono::duration<crd::f64>(std::chrono::steady_clock::now() - t0).count();
             if (el > budget_s && iters >= min_iters)
             {
                 break;
@@ -87,9 +85,8 @@ crd::f64 time_loop(Op&& op, int& iters_out, crd::f64 budget_s = 0.4, int min_ite
 
 void print_header()
 {
-    std::fprintf(stdout, "%-12s | %-6s | %-22s | %-22s | %-10s | %-10s\n",
-                 "Solver", "N", "Cerid (GFLOPS,iters)", "Eigen (GFLOPS,iters)", "C/Eigen",
-                 "max|err|");
+    std::fprintf(stdout, "%-12s | %-6s | %-22s | %-22s | %-10s | %-10s\n", "Solver", "N", "Cerid (GFLOPS,iters)",
+                 "Eigen (GFLOPS,iters)", "C/Eigen", "max|err|");
     std::fprintf(stdout, "%s\n",
                  "----------------------------------------------------------"
                  "----------------------------------------------------------");
@@ -104,8 +101,7 @@ void bench_lu(crd::memory::IAllocator* alloc)
     using crd::hesap::dense::LU;
     using crd::hesap::dense::Matrix;
     using crd::hesap::dense::solve_lu;
-    for (crd::usize n : {crd::usize{64}, crd::usize{128}, crd::usize{256}, crd::usize{512},
-                         crd::usize{1024}})
+    for (crd::usize n : {crd::usize{64}, crd::usize{128}, crd::usize{256}, crd::usize{512}, crd::usize{1024}})
     {
         Matrix<crd::f64, Layout::RowMajor> a(alloc, n, n);
         // Diagonally-dominant for stable factor.
@@ -129,7 +125,8 @@ void bench_lu(crd::memory::IAllocator* alloc)
         int citers = 0;
         crd::f64 max_err = 0.0;
         const crd::f64 ce = time_loop(
-            [&]() {
+            [&]()
+            {
                 LU<crd::f64, Layout::RowMajor> lu(alloc, n);
                 factor_lu(lu, a);
                 crd::containers::Array<crd::f64> x(alloc);
@@ -154,7 +151,8 @@ void bench_lu(crd::memory::IAllocator* alloc)
         int eiters = 0;
         Eigen::VectorXd ex;
         const crd::f64 ee = time_loop(
-            [&]() {
+            [&]()
+            {
                 Eigen::PartialPivLU<Eigen::MatrixXd> lu(ea);
                 ex = lu.solve(eb);
             },
@@ -183,9 +181,9 @@ void bench_lu(crd::memory::IAllocator* alloc)
         }
 
         // FLOPs for LU factor: ~ (2/3) n^3; solve: ~ 2 n^2. Per-iter total:
-        const crd::f64 flops = (2.0 / 3.0) * static_cast<crd::f64>(n) *
-                                   static_cast<crd::f64>(n) * static_cast<crd::f64>(n) +
-                               2.0 * static_cast<crd::f64>(n) * static_cast<crd::f64>(n);
+        const crd::f64 flops =
+            (2.0 / 3.0) * static_cast<crd::f64>(n) * static_cast<crd::f64>(n) * static_cast<crd::f64>(n) +
+            2.0 * static_cast<crd::f64>(n) * static_cast<crd::f64>(n);
         const crd::f64 cgflops = flops * citers / ce / 1e9;
         const crd::f64 egflops = flops * eiters / ee / 1e9;
         const crd::f64 ratio = cgflops / egflops;
@@ -203,8 +201,7 @@ void bench_cholesky(crd::memory::IAllocator* alloc)
     using crd::hesap::dense::Layout;
     using crd::hesap::dense::solve_cholesky;
     using crd::hesap::dense::Symmetric;
-    for (crd::usize n : {crd::usize{64}, crd::usize{128}, crd::usize{256}, crd::usize{512},
-                         crd::usize{1024}})
+    for (crd::usize n : {crd::usize{64}, crd::usize{128}, crd::usize{256}, crd::usize{512}, crd::usize{1024}})
     {
         Symmetric<crd::f64> a_sym(alloc, n);
         crd::u32 s = 99U;
@@ -226,7 +223,8 @@ void bench_cholesky(crd::memory::IAllocator* alloc)
 
         int citers = 0;
         const crd::f64 ce = time_loop(
-            [&]() {
+            [&]()
+            {
                 Cholesky<crd::f64, Layout::RowMajor> chol(alloc, n);
                 factor_cholesky(chol, a_sym);
                 crd::containers::Array<crd::f64> x(alloc);
@@ -255,16 +253,17 @@ void bench_cholesky(crd::memory::IAllocator* alloc)
         int eiters = 0;
         Eigen::VectorXd ex;
         const crd::f64 ee = time_loop(
-            [&]() {
+            [&]()
+            {
                 Eigen::LLT<Eigen::MatrixXd> llt(ea);
                 ex = llt.solve(eb);
             },
             eiters);
 
         // Cholesky FLOPs: (1/3) n^3 factor + 2 n^2 solve.
-        const crd::f64 flops = (1.0 / 3.0) * static_cast<crd::f64>(n) *
-                                   static_cast<crd::f64>(n) * static_cast<crd::f64>(n) +
-                               2.0 * static_cast<crd::f64>(n) * static_cast<crd::f64>(n);
+        const crd::f64 flops =
+            (1.0 / 3.0) * static_cast<crd::f64>(n) * static_cast<crd::f64>(n) * static_cast<crd::f64>(n) +
+            2.0 * static_cast<crd::f64>(n) * static_cast<crd::f64>(n);
         const crd::f64 cgflops = flops * citers / ce / 1e9;
         const crd::f64 egflops = flops * eiters / ee / 1e9;
 
@@ -284,7 +283,8 @@ void bench_cholesky(crd::memory::IAllocator* alloc)
             {
                 const crd::f64 d = x[i] - ex(i);
                 const crd::f64 ad = d < 0 ? -d : d;
-                if (ad > max_err) max_err = ad;
+                if (ad > max_err)
+                    max_err = ad;
             }
         }
         std::fprintf(stdout, "%-12s | %-6zu | %8.2f (iters=%-4d)      | %8.2f (iters=%-4d)      | %.2fx     | %.2e\n",
@@ -323,7 +323,8 @@ void bench_qr(crd::memory::IAllocator* alloc)
 
         int citers = 0;
         const crd::f64 ce = time_loop(
-            [&]() {
+            [&]()
+            {
                 QR<crd::f64, Layout::RowMajor> qr(alloc, n, n);
                 factor_qr(qr, a);
                 crd::containers::Array<crd::f64> bx(alloc);
@@ -352,16 +353,17 @@ void bench_qr(crd::memory::IAllocator* alloc)
         int eiters = 0;
         Eigen::VectorXd ex;
         const crd::f64 ee = time_loop(
-            [&]() {
+            [&]()
+            {
                 Eigen::HouseholderQR<Eigen::MatrixXd> qr(ea);
                 ex = qr.solve(eb);
             },
             eiters);
 
         // QR FLOPs: ~2 n^3 factor + 2 n^2 solve. (Heuristic; Householder is ~(4/3) n^3.)
-        const crd::f64 flops = (4.0 / 3.0) * static_cast<crd::f64>(n) *
-                                   static_cast<crd::f64>(n) * static_cast<crd::f64>(n) +
-                               2.0 * static_cast<crd::f64>(n) * static_cast<crd::f64>(n);
+        const crd::f64 flops =
+            (4.0 / 3.0) * static_cast<crd::f64>(n) * static_cast<crd::f64>(n) * static_cast<crd::f64>(n) +
+            2.0 * static_cast<crd::f64>(n) * static_cast<crd::f64>(n);
         const crd::f64 cgflops = flops * citers / ce / 1e9;
         const crd::f64 egflops = flops * eiters / ee / 1e9;
 
@@ -380,7 +382,8 @@ void bench_qr(crd::memory::IAllocator* alloc)
             {
                 const crd::f64 d = bx[i] - ex(i);
                 const crd::f64 ad = d < 0 ? -d : d;
-                if (ad > max_err) max_err = ad;
+                if (ad > max_err)
+                    max_err = ad;
             }
         }
         std::fprintf(stdout, "%-12s | %-6zu | %8.2f (iters=%-4d)      | %8.2f (iters=%-4d)      | %.2fx     | %.2e\n",
@@ -397,8 +400,8 @@ void bench_ldlt(crd::memory::IAllocator* alloc)
     using crd::hesap::dense::LDLT;
     using crd::hesap::dense::solve_ldlt;
     using crd::hesap::dense::Symmetric;
-    for (crd::usize n : {crd::usize{32}, crd::usize{64}, crd::usize{128}, crd::usize{256},
-                         crd::usize{512}, crd::usize{1024}})
+    for (crd::usize n :
+         {crd::usize{32}, crd::usize{64}, crd::usize{128}, crd::usize{256}, crd::usize{512}, crd::usize{1024}})
     {
         Symmetric<crd::f64> a_sym(alloc, n);
         crd::u32 s = 333U;
@@ -420,7 +423,8 @@ void bench_ldlt(crd::memory::IAllocator* alloc)
 
         int citers = 0;
         const crd::f64 ce = time_loop(
-            [&]() {
+            [&]()
+            {
                 LDLT<crd::f64, Layout::RowMajor> ldlt(alloc, n);
                 factor_ldlt(ldlt, a_sym);
                 crd::containers::Array<crd::f64> x(alloc);
@@ -449,15 +453,16 @@ void bench_ldlt(crd::memory::IAllocator* alloc)
         int eiters = 0;
         Eigen::VectorXd ex;
         const crd::f64 ee = time_loop(
-            [&]() {
+            [&]()
+            {
                 Eigen::LDLT<Eigen::MatrixXd> ldlt(ea);
                 ex = ldlt.solve(eb);
             },
             eiters);
 
-        const crd::f64 flops = (1.0 / 3.0) * static_cast<crd::f64>(n) *
-                                   static_cast<crd::f64>(n) * static_cast<crd::f64>(n) +
-                               2.0 * static_cast<crd::f64>(n) * static_cast<crd::f64>(n);
+        const crd::f64 flops =
+            (1.0 / 3.0) * static_cast<crd::f64>(n) * static_cast<crd::f64>(n) * static_cast<crd::f64>(n) +
+            2.0 * static_cast<crd::f64>(n) * static_cast<crd::f64>(n);
         const crd::f64 cgflops = flops * citers / ce / 1e9;
         const crd::f64 egflops = flops * eiters / ee / 1e9;
 
@@ -476,7 +481,8 @@ void bench_ldlt(crd::memory::IAllocator* alloc)
             {
                 const crd::f64 d = x[i] - ex(i);
                 const crd::f64 ad = d < 0 ? -d : d;
-                if (ad > max_err) max_err = ad;
+                if (ad > max_err)
+                    max_err = ad;
             }
         }
         std::fprintf(stdout, "%-12s | %-6zu | %8.2f (iters=%-4d)      | %8.2f (iters=%-4d)      | %.2fx     | %.2e\n",

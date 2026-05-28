@@ -6,6 +6,7 @@ include(Catch)
 add_subdirectory(test_helpers)
 
 add_subdirectory(core)
+add_subdirectory(vm)
 add_subdirectory(units)
 add_subdirectory(time)
 add_subdirectory(perf)

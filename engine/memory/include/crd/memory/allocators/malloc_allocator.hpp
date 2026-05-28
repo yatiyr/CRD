@@ -33,5 +33,8 @@ public:
     bool owns(const void* p) const noexcept override;
 
     usize allocation_size(const void* p) const noexcept override;
+
+    // Non-throwing: returns nullptr on size==0 or malloc failure (no CRD_FATAL).
+    [[nodiscard]] void* try_allocate(usize size, usize alignment = kDefaultAlignment) override;
 };
 } // namespace crd::memory

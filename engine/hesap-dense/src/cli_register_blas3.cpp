@@ -74,8 +74,7 @@ CommandResult impl_gemm_f32(const CommandArgs& args)
     const auto n = args.get_u64("n").value_or(crd::u64{0});
     const T alpha = static_cast<T>(args.get_f64("alpha").value_or(crd::f64{1.0}));
     const T beta = static_cast<T>(args.get_f64("beta").value_or(crd::f64{0.0}));
-    if (m == 0 || k == 0 || n == 0 || a_flat.size() != m * k || b_flat.size() != k * n ||
-        c_in.size() != m * n)
+    if (m == 0 || k == 0 || n == 0 || a_flat.size() != m * k || b_flat.size() != k * n || c_in.size() != m * n)
     {
         return error_result(args.alloc, "gemm: A=m*k, B=k*n, C=m*n required");
     }
@@ -115,8 +114,7 @@ CommandResult impl_gemm_f64(const CommandArgs& args)
     const auto n = args.get_u64("n").value_or(crd::u64{0});
     const T alpha = args.get_f64("alpha").value_or(crd::f64{1.0});
     const T beta = args.get_f64("beta").value_or(crd::f64{0.0});
-    if (m == 0 || k == 0 || n == 0 || a_flat.size() != m * k || b_flat.size() != k * n ||
-        c_in.size() != m * n)
+    if (m == 0 || k == 0 || n == 0 || a_flat.size() != m * k || b_flat.size() != k * n || c_in.size() != m * n)
     {
         return error_result(args.alloc, "gemm: A=m*k, B=k*n, C=m*n required");
     }
@@ -170,8 +168,8 @@ CommandResult impl_trsm_lower_f32(const CommandArgs& args)
     for (crd::usize i = 0; i < nn; ++i)
         for (crd::usize j = 0; j < cc; ++j)
             b_mat(i, j) = static_cast<T>(b_flat[i * cc + j]);
-    crd::hesap::dense::trsm<T, TriangularSide::Lower, TriangularDiag::Explicit>(
-        alpha, tri_l, b_mat.view(), Trans::None);
+    crd::hesap::dense::trsm<T, TriangularSide::Lower, TriangularDiag::Explicit>(alpha, tri_l, b_mat.view(),
+                                                                                Trans::None);
     crd::containers::Array<crd::f64> out(args.alloc);
     out.reserve(nn * cc);
     for (crd::usize i = 0; i < nn; ++i)
@@ -204,8 +202,8 @@ CommandResult impl_trsm_lower_f64(const CommandArgs& args)
     for (crd::usize i = 0; i < nn; ++i)
         for (crd::usize j = 0; j < cc; ++j)
             b_mat(i, j) = b_flat[i * cc + j];
-    crd::hesap::dense::trsm<T, TriangularSide::Lower, TriangularDiag::Explicit>(
-        alpha, tri_l, b_mat.view(), Trans::None);
+    crd::hesap::dense::trsm<T, TriangularSide::Lower, TriangularDiag::Explicit>(alpha, tri_l, b_mat.view(),
+                                                                                Trans::None);
     crd::containers::Array<crd::f64> out(args.alloc);
     out.reserve(nn * cc);
     for (crd::usize i = 0; i < nn; ++i)
@@ -216,8 +214,7 @@ CommandResult impl_trsm_lower_f64(const CommandArgs& args)
 
 // ---- syrk impls (v0d-cli-extend) -------------------------------------
 
-template <typename T>
-CommandResult impl_syrk(const CommandArgs& args)
+template <typename T> CommandResult impl_syrk(const CommandArgs& args)
 {
     using Mat = crd::hesap::dense::Matrix<T>;
     using Sym = crd::hesap::dense::Symmetric<T>;
@@ -252,8 +249,7 @@ CommandResult impl_syrk(const CommandArgs& args)
 
 // ---- trmm impls (lower / upper, f32 / f64) ----------------------------
 
-template <typename T, TriangularSide Side>
-CommandResult impl_trmm(const CommandArgs& args)
+template <typename T, TriangularSide Side> CommandResult impl_trmm(const CommandArgs& args)
 {
     using Tri = crd::hesap::dense::Triangular<T, Side, TriangularDiag::Explicit>;
     using Mat = crd::hesap::dense::Matrix<T>;
@@ -297,8 +293,7 @@ CommandResult impl_trmm(const CommandArgs& args)
 
 // ---- trsm Upper impls (f32, f64) — Lower already shipped --------------
 
-template <typename T>
-CommandResult impl_trsm_upper(const CommandArgs& args)
+template <typename T> CommandResult impl_trsm_upper(const CommandArgs& args)
 {
     using Tri = crd::hesap::dense::Triangular<T, TriangularSide::Upper, TriangularDiag::Explicit>;
     using Mat = crd::hesap::dense::Matrix<T>;
@@ -321,8 +316,8 @@ CommandResult impl_trsm_upper(const CommandArgs& args)
     for (crd::usize i = 0; i < nn; ++i)
         for (crd::usize j = 0; j < cc; ++j)
             b_mat(i, j) = static_cast<T>(b_flat[i * cc + j]);
-    crd::hesap::dense::trsm<T, TriangularSide::Upper, TriangularDiag::Explicit>(
-        alpha, tri_u, b_mat.view(), Trans::None);
+    crd::hesap::dense::trsm<T, TriangularSide::Upper, TriangularDiag::Explicit>(alpha, tri_u, b_mat.view(),
+                                                                                Trans::None);
     crd::containers::Array<crd::f64> out(args.alloc);
     out.reserve(nn * cc);
     for (crd::usize i = 0; i < nn; ++i)
@@ -334,8 +329,7 @@ CommandResult impl_trsm_upper(const CommandArgs& args)
 // ---- gemm_parallel_auto impls (heuristic worker picker, v0d-parallelism-
 //      auto-dispatch) ---------------------------------------------------
 
-template <typename T>
-CommandResult impl_gemm_parallel_auto(const CommandArgs& args)
+template <typename T> CommandResult impl_gemm_parallel_auto(const CommandArgs& args)
 {
     using Mat = crd::hesap::dense::Matrix<T>;
     const auto a_flat = args.get_f64_array("A");
@@ -346,8 +340,7 @@ CommandResult impl_gemm_parallel_auto(const CommandArgs& args)
     const auto n = args.get_u64("n").value_or(crd::u64{0});
     const T alpha = static_cast<T>(args.get_f64("alpha").value_or(crd::f64{1.0}));
     const T beta = static_cast<T>(args.get_f64("beta").value_or(crd::f64{0.0}));
-    if (m == 0 || k == 0 || n == 0 || a_flat.size() != m * k || b_flat.size() != k * n ||
-        c_in.size() != m * n)
+    if (m == 0 || k == 0 || n == 0 || a_flat.size() != m * k || b_flat.size() != k * n || c_in.size() != m * n)
     {
         return error_result(args.alloc, "gemm_parallel_auto: A=m*k, B=k*n, C=m*n required");
     }
@@ -366,8 +359,7 @@ CommandResult impl_gemm_parallel_auto(const CommandArgs& args)
     for (crd::usize i = 0; i < mm; ++i)
         for (crd::usize j = 0; j < nn; ++j)
             c_mat(i, j) = static_cast<T>(c_in[i * nn + j]);
-    crd::hesap::dense::gemm_parallel_auto<T, Layout::RowMajor>(alpha, a_mat.cview(), b_mat.cview(),
-                                                               beta, c_mat.view());
+    crd::hesap::dense::gemm_parallel_auto<T, Layout::RowMajor>(alpha, a_mat.cview(), b_mat.cview(), beta, c_mat.view());
     crd::containers::Array<crd::f64> out(args.alloc);
     out.reserve(mm * nn);
     for (crd::usize i = 0; i < mm; ++i)
@@ -376,8 +368,7 @@ CommandResult impl_gemm_parallel_auto(const CommandArgs& args)
     return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
 }
 
-CommandSchema make_schema(crd::memory::IAllocator* alloc, const char* name, const char* desc,
-                          OutputKind output_kind)
+CommandSchema make_schema(crd::memory::IAllocator* alloc, const char* name, const char* desc, OutputKind output_kind)
 {
     CommandSchema s{alloc};
     s.name = crd::containers::String{name, alloc};
@@ -388,8 +379,8 @@ CommandSchema make_schema(crd::memory::IAllocator* alloc, const char* name, cons
     return s;
 }
 
-void add_param(CommandSchema& s, crd::memory::IAllocator* alloc, const char* name, const char* desc,
-               ParamKind kind, bool required)
+void add_param(CommandSchema& s, crd::memory::IAllocator* alloc, const char* name, const char* desc, ParamKind kind,
+               bool required)
 {
     ParamSchema p{alloc};
     p.name = crd::containers::String{name, alloc};
@@ -403,169 +394,172 @@ void add_param(CommandSchema& s, crd::memory::IAllocator* alloc, const char* nam
 
 namespace crd::hesap::dense
 {
-void register_blas3_cli_anchor() noexcept
-{
-}
+void register_blas3_cli_anchor() noexcept {}
 } // namespace crd::hesap::dense
 
-CRD_HESAP_CLI_REGISTER_MODULE([](CommandRegistry& reg) {
-    auto* alloc = crd::memory::default_allocator();
+// Registration uses crd allocators (abort on OOM, never throw); the std bad_alloc path the check
+// traces is unreachable, and the registrar ctor is noexcept (would terminate, not escape) regardless.
+// NOLINTNEXTLINE(bugprone-throwing-static-initialization)
+CRD_HESAP_CLI_REGISTER_MODULE(
+    [](CommandRegistry& reg)
+    {
+        auto* alloc = crd::memory::default_allocator();
 
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas3.gemm.f32",
-            "C = alpha * A * B + beta * C (f32 general).", OutputKind::BinaryBlob);
-        add_param(s, alloc, "alpha", "Scalar multiplier", ParamKind::F64, false);
-        add_param(s, alloc, "beta", "Scalar multiplier on C", ParamKind::F64, false);
-        add_param(s, alloc, "m", "Rows of A and C", ParamKind::U64, true);
-        add_param(s, alloc, "k", "Cols of A / rows of B", ParamKind::U64, true);
-        add_param(s, alloc, "n", "Cols of B and C", ParamKind::U64, true);
-        add_param(s, alloc, "A", "Matrix A flattened row-major (m*k)", ParamKind::F64, true);
-        add_param(s, alloc, "B", "Matrix B flattened row-major (k*n)", ParamKind::F64, true);
-        add_param(s, alloc, "C", "Input/output C flattened row-major (m*n)", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_gemm_f32);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas3.gemm.f64",
-            "C = alpha * A * B + beta * C (f64 general).", OutputKind::BinaryBlob);
-        add_param(s, alloc, "alpha", "Scalar multiplier", ParamKind::F64, false);
-        add_param(s, alloc, "beta", "Scalar multiplier on C", ParamKind::F64, false);
-        add_param(s, alloc, "m", "Rows of A and C", ParamKind::U64, true);
-        add_param(s, alloc, "k", "Cols of A / rows of B", ParamKind::U64, true);
-        add_param(s, alloc, "n", "Cols of B and C", ParamKind::U64, true);
-        add_param(s, alloc, "A", "Matrix A flattened row-major (m*k)", ParamKind::F64, true);
-        add_param(s, alloc, "B", "Matrix B flattened row-major (k*n)", ParamKind::F64, true);
-        add_param(s, alloc, "C", "Input/output C flattened row-major (m*n)", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_gemm_f64);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas3.trsm.lower.f32",
-            "Solve alpha * L * X = B for X in-place (f32 lower).", OutputKind::BinaryBlob);
-        add_param(s, alloc, "alpha", "Scalar multiplier", ParamKind::F64, false);
-        add_param(s, alloc, "n", "Order of L", ParamKind::U64, true);
-        add_param(s, alloc, "cols", "Number of columns in B", ParamKind::U64, true);
-        add_param(s, alloc, "A", "Lower triangular L flattened (only lower half used)", ParamKind::F64, true);
-        add_param(s, alloc, "B", "RHS B flattened row-major (n*cols)", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_trsm_lower_f32);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas3.trsm.lower.f64",
-            "Solve alpha * L * X = B for X in-place (f64 lower).", OutputKind::BinaryBlob);
-        add_param(s, alloc, "alpha", "Scalar multiplier", ParamKind::F64, false);
-        add_param(s, alloc, "n", "Order of L", ParamKind::U64, true);
-        add_param(s, alloc, "cols", "Number of columns in B", ParamKind::U64, true);
-        add_param(s, alloc, "A", "Lower triangular L flattened (only lower half used)", ParamKind::F64, true);
-        add_param(s, alloc, "B", "RHS B flattened row-major (n*cols)", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_trsm_lower_f64);
-    }
-    // ---- v0d-cli-extend: syrk / trmm / trsm.upper / gemm_parallel_auto ----
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas3.syrk.f32",
-            "C = alpha * A * A^T + beta * C (f32 symmetric rank-k).", OutputKind::BinaryBlob);
-        add_param(s, alloc, "alpha", "Scalar multiplier", ParamKind::F64, false);
-        add_param(s, alloc, "beta", "Scalar multiplier on C", ParamKind::F64, false);
-        add_param(s, alloc, "m", "Rows of A; order of C", ParamKind::U64, true);
-        add_param(s, alloc, "k", "Cols of A", ParamKind::U64, true);
-        add_param(s, alloc, "A", "Matrix A flattened (m*k)", ParamKind::F64, true);
-        add_param(s, alloc, "C", "Symmetric C flattened (m*m); lower triangle authoritative", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_syrk<crd::f32>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas3.syrk.f64",
-            "C = alpha * A * A^T + beta * C (f64 symmetric rank-k).", OutputKind::BinaryBlob);
-        add_param(s, alloc, "alpha", "Scalar multiplier", ParamKind::F64, false);
-        add_param(s, alloc, "beta", "Scalar multiplier on C", ParamKind::F64, false);
-        add_param(s, alloc, "m", "Rows of A; order of C", ParamKind::U64, true);
-        add_param(s, alloc, "k", "Cols of A", ParamKind::U64, true);
-        add_param(s, alloc, "A", "Matrix A flattened (m*k)", ParamKind::F64, true);
-        add_param(s, alloc, "C", "Symmetric C flattened (m*m); lower triangle authoritative", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_syrk<crd::f64>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas3.trmm.lower.f32",
-            "B = alpha * L * B in-place (f32 lower triangular multiply).", OutputKind::BinaryBlob);
-        add_param(s, alloc, "alpha", "Scalar multiplier", ParamKind::F64, false);
-        add_param(s, alloc, "n", "Order of L", ParamKind::U64, true);
-        add_param(s, alloc, "cols", "Cols of B", ParamKind::U64, true);
-        add_param(s, alloc, "A", "Lower triangular L flattened (n*n)", ParamKind::F64, true);
-        add_param(s, alloc, "B", "Input/output B flattened row-major (n*cols)", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_trmm<crd::f32, TriangularSide::Lower>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas3.trmm.lower.f64",
-            "B = alpha * L * B in-place (f64 lower triangular multiply).", OutputKind::BinaryBlob);
-        add_param(s, alloc, "alpha", "Scalar multiplier", ParamKind::F64, false);
-        add_param(s, alloc, "n", "Order of L", ParamKind::U64, true);
-        add_param(s, alloc, "cols", "Cols of B", ParamKind::U64, true);
-        add_param(s, alloc, "A", "Lower triangular L flattened (n*n)", ParamKind::F64, true);
-        add_param(s, alloc, "B", "Input/output B flattened row-major (n*cols)", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_trmm<crd::f64, TriangularSide::Lower>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas3.trmm.upper.f32",
-            "B = alpha * U * B in-place (f32 upper triangular multiply).", OutputKind::BinaryBlob);
-        add_param(s, alloc, "alpha", "Scalar multiplier", ParamKind::F64, false);
-        add_param(s, alloc, "n", "Order of U", ParamKind::U64, true);
-        add_param(s, alloc, "cols", "Cols of B", ParamKind::U64, true);
-        add_param(s, alloc, "A", "Upper triangular U flattened (n*n)", ParamKind::F64, true);
-        add_param(s, alloc, "B", "Input/output B flattened row-major (n*cols)", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_trmm<crd::f32, TriangularSide::Upper>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas3.trmm.upper.f64",
-            "B = alpha * U * B in-place (f64 upper triangular multiply).", OutputKind::BinaryBlob);
-        add_param(s, alloc, "alpha", "Scalar multiplier", ParamKind::F64, false);
-        add_param(s, alloc, "n", "Order of U", ParamKind::U64, true);
-        add_param(s, alloc, "cols", "Cols of B", ParamKind::U64, true);
-        add_param(s, alloc, "A", "Upper triangular U flattened (n*n)", ParamKind::F64, true);
-        add_param(s, alloc, "B", "Input/output B flattened row-major (n*cols)", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_trmm<crd::f64, TriangularSide::Upper>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas3.trsm.upper.f32",
-            "Solve alpha * U * X = B for X in-place (f32 upper).", OutputKind::BinaryBlob);
-        add_param(s, alloc, "alpha", "Scalar multiplier", ParamKind::F64, false);
-        add_param(s, alloc, "n", "Order of U", ParamKind::U64, true);
-        add_param(s, alloc, "cols", "Cols of B", ParamKind::U64, true);
-        add_param(s, alloc, "A", "Upper triangular U flattened (n*n)", ParamKind::F64, true);
-        add_param(s, alloc, "B", "RHS B flattened row-major (n*cols)", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_trsm_upper<crd::f32>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas3.trsm.upper.f64",
-            "Solve alpha * U * X = B for X in-place (f64 upper).", OutputKind::BinaryBlob);
-        add_param(s, alloc, "alpha", "Scalar multiplier", ParamKind::F64, false);
-        add_param(s, alloc, "n", "Order of U", ParamKind::U64, true);
-        add_param(s, alloc, "cols", "Cols of B", ParamKind::U64, true);
-        add_param(s, alloc, "A", "Upper triangular U flattened (n*n)", ParamKind::F64, true);
-        add_param(s, alloc, "B", "RHS B flattened row-major (n*cols)", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_trsm_upper<crd::f64>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas3.gemm_parallel_auto.f32",
-            "C = alpha * A * B + beta * C with heuristic worker-count picker (f32).",
-            OutputKind::BinaryBlob);
-        add_param(s, alloc, "alpha", "Scalar multiplier", ParamKind::F64, false);
-        add_param(s, alloc, "beta", "Scalar multiplier on C", ParamKind::F64, false);
-        add_param(s, alloc, "m", "Rows of A and C", ParamKind::U64, true);
-        add_param(s, alloc, "k", "Cols of A / rows of B", ParamKind::U64, true);
-        add_param(s, alloc, "n", "Cols of B and C", ParamKind::U64, true);
-        add_param(s, alloc, "A", "Matrix A flattened row-major (m*k)", ParamKind::F64, true);
-        add_param(s, alloc, "B", "Matrix B flattened row-major (k*n)", ParamKind::F64, true);
-        add_param(s, alloc, "C", "Input/output C flattened row-major (m*n)", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_gemm_parallel_auto<crd::f32>);
-    }
-    {
-        auto s = make_schema(alloc, "hesap.dense.blas3.gemm_parallel_auto.f64",
-            "C = alpha * A * B + beta * C with heuristic worker-count picker (f64).",
-            OutputKind::BinaryBlob);
-        add_param(s, alloc, "alpha", "Scalar multiplier", ParamKind::F64, false);
-        add_param(s, alloc, "beta", "Scalar multiplier on C", ParamKind::F64, false);
-        add_param(s, alloc, "m", "Rows of A and C", ParamKind::U64, true);
-        add_param(s, alloc, "k", "Cols of A / rows of B", ParamKind::U64, true);
-        add_param(s, alloc, "n", "Cols of B and C", ParamKind::U64, true);
-        add_param(s, alloc, "A", "Matrix A flattened row-major (m*k)", ParamKind::F64, true);
-        add_param(s, alloc, "B", "Matrix B flattened row-major (k*n)", ParamKind::F64, true);
-        add_param(s, alloc, "C", "Input/output C flattened row-major (m*n)", ParamKind::F64, true);
-        reg.register_command(std::move(s), &impl_gemm_parallel_auto<crd::f64>);
-    }
-})
+        {
+            auto s = make_schema(alloc, "hesap.dense.blas3.gemm.f32", "C = alpha * A * B + beta * C (f32 general).",
+                                 OutputKind::BinaryBlob);
+            add_param(s, alloc, "alpha", "Scalar multiplier", ParamKind::F64, false);
+            add_param(s, alloc, "beta", "Scalar multiplier on C", ParamKind::F64, false);
+            add_param(s, alloc, "m", "Rows of A and C", ParamKind::U64, true);
+            add_param(s, alloc, "k", "Cols of A / rows of B", ParamKind::U64, true);
+            add_param(s, alloc, "n", "Cols of B and C", ParamKind::U64, true);
+            add_param(s, alloc, "A", "Matrix A flattened row-major (m*k)", ParamKind::F64, true);
+            add_param(s, alloc, "B", "Matrix B flattened row-major (k*n)", ParamKind::F64, true);
+            add_param(s, alloc, "C", "Input/output C flattened row-major (m*n)", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_gemm_f32);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.blas3.gemm.f64", "C = alpha * A * B + beta * C (f64 general).",
+                                 OutputKind::BinaryBlob);
+            add_param(s, alloc, "alpha", "Scalar multiplier", ParamKind::F64, false);
+            add_param(s, alloc, "beta", "Scalar multiplier on C", ParamKind::F64, false);
+            add_param(s, alloc, "m", "Rows of A and C", ParamKind::U64, true);
+            add_param(s, alloc, "k", "Cols of A / rows of B", ParamKind::U64, true);
+            add_param(s, alloc, "n", "Cols of B and C", ParamKind::U64, true);
+            add_param(s, alloc, "A", "Matrix A flattened row-major (m*k)", ParamKind::F64, true);
+            add_param(s, alloc, "B", "Matrix B flattened row-major (k*n)", ParamKind::F64, true);
+            add_param(s, alloc, "C", "Input/output C flattened row-major (m*n)", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_gemm_f64);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.blas3.trsm.lower.f32",
+                                 "Solve alpha * L * X = B for X in-place (f32 lower).", OutputKind::BinaryBlob);
+            add_param(s, alloc, "alpha", "Scalar multiplier", ParamKind::F64, false);
+            add_param(s, alloc, "n", "Order of L", ParamKind::U64, true);
+            add_param(s, alloc, "cols", "Number of columns in B", ParamKind::U64, true);
+            add_param(s, alloc, "A", "Lower triangular L flattened (only lower half used)", ParamKind::F64, true);
+            add_param(s, alloc, "B", "RHS B flattened row-major (n*cols)", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_trsm_lower_f32);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.blas3.trsm.lower.f64",
+                                 "Solve alpha * L * X = B for X in-place (f64 lower).", OutputKind::BinaryBlob);
+            add_param(s, alloc, "alpha", "Scalar multiplier", ParamKind::F64, false);
+            add_param(s, alloc, "n", "Order of L", ParamKind::U64, true);
+            add_param(s, alloc, "cols", "Number of columns in B", ParamKind::U64, true);
+            add_param(s, alloc, "A", "Lower triangular L flattened (only lower half used)", ParamKind::F64, true);
+            add_param(s, alloc, "B", "RHS B flattened row-major (n*cols)", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_trsm_lower_f64);
+        }
+        // ---- v0d-cli-extend: syrk / trmm / trsm.upper / gemm_parallel_auto ----
+        {
+            auto s = make_schema(alloc, "hesap.dense.blas3.syrk.f32",
+                                 "C = alpha * A * A^T + beta * C (f32 symmetric rank-k).", OutputKind::BinaryBlob);
+            add_param(s, alloc, "alpha", "Scalar multiplier", ParamKind::F64, false);
+            add_param(s, alloc, "beta", "Scalar multiplier on C", ParamKind::F64, false);
+            add_param(s, alloc, "m", "Rows of A; order of C", ParamKind::U64, true);
+            add_param(s, alloc, "k", "Cols of A", ParamKind::U64, true);
+            add_param(s, alloc, "A", "Matrix A flattened (m*k)", ParamKind::F64, true);
+            add_param(s, alloc, "C", "Symmetric C flattened (m*m); lower triangle authoritative", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_syrk<crd::f32>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.blas3.syrk.f64",
+                                 "C = alpha * A * A^T + beta * C (f64 symmetric rank-k).", OutputKind::BinaryBlob);
+            add_param(s, alloc, "alpha", "Scalar multiplier", ParamKind::F64, false);
+            add_param(s, alloc, "beta", "Scalar multiplier on C", ParamKind::F64, false);
+            add_param(s, alloc, "m", "Rows of A; order of C", ParamKind::U64, true);
+            add_param(s, alloc, "k", "Cols of A", ParamKind::U64, true);
+            add_param(s, alloc, "A", "Matrix A flattened (m*k)", ParamKind::F64, true);
+            add_param(s, alloc, "C", "Symmetric C flattened (m*m); lower triangle authoritative", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_syrk<crd::f64>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.blas3.trmm.lower.f32",
+                                 "B = alpha * L * B in-place (f32 lower triangular multiply).", OutputKind::BinaryBlob);
+            add_param(s, alloc, "alpha", "Scalar multiplier", ParamKind::F64, false);
+            add_param(s, alloc, "n", "Order of L", ParamKind::U64, true);
+            add_param(s, alloc, "cols", "Cols of B", ParamKind::U64, true);
+            add_param(s, alloc, "A", "Lower triangular L flattened (n*n)", ParamKind::F64, true);
+            add_param(s, alloc, "B", "Input/output B flattened row-major (n*cols)", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_trmm<crd::f32, TriangularSide::Lower>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.blas3.trmm.lower.f64",
+                                 "B = alpha * L * B in-place (f64 lower triangular multiply).", OutputKind::BinaryBlob);
+            add_param(s, alloc, "alpha", "Scalar multiplier", ParamKind::F64, false);
+            add_param(s, alloc, "n", "Order of L", ParamKind::U64, true);
+            add_param(s, alloc, "cols", "Cols of B", ParamKind::U64, true);
+            add_param(s, alloc, "A", "Lower triangular L flattened (n*n)", ParamKind::F64, true);
+            add_param(s, alloc, "B", "Input/output B flattened row-major (n*cols)", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_trmm<crd::f64, TriangularSide::Lower>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.blas3.trmm.upper.f32",
+                                 "B = alpha * U * B in-place (f32 upper triangular multiply).", OutputKind::BinaryBlob);
+            add_param(s, alloc, "alpha", "Scalar multiplier", ParamKind::F64, false);
+            add_param(s, alloc, "n", "Order of U", ParamKind::U64, true);
+            add_param(s, alloc, "cols", "Cols of B", ParamKind::U64, true);
+            add_param(s, alloc, "A", "Upper triangular U flattened (n*n)", ParamKind::F64, true);
+            add_param(s, alloc, "B", "Input/output B flattened row-major (n*cols)", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_trmm<crd::f32, TriangularSide::Upper>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.blas3.trmm.upper.f64",
+                                 "B = alpha * U * B in-place (f64 upper triangular multiply).", OutputKind::BinaryBlob);
+            add_param(s, alloc, "alpha", "Scalar multiplier", ParamKind::F64, false);
+            add_param(s, alloc, "n", "Order of U", ParamKind::U64, true);
+            add_param(s, alloc, "cols", "Cols of B", ParamKind::U64, true);
+            add_param(s, alloc, "A", "Upper triangular U flattened (n*n)", ParamKind::F64, true);
+            add_param(s, alloc, "B", "Input/output B flattened row-major (n*cols)", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_trmm<crd::f64, TriangularSide::Upper>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.blas3.trsm.upper.f32",
+                                 "Solve alpha * U * X = B for X in-place (f32 upper).", OutputKind::BinaryBlob);
+            add_param(s, alloc, "alpha", "Scalar multiplier", ParamKind::F64, false);
+            add_param(s, alloc, "n", "Order of U", ParamKind::U64, true);
+            add_param(s, alloc, "cols", "Cols of B", ParamKind::U64, true);
+            add_param(s, alloc, "A", "Upper triangular U flattened (n*n)", ParamKind::F64, true);
+            add_param(s, alloc, "B", "RHS B flattened row-major (n*cols)", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_trsm_upper<crd::f32>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.blas3.trsm.upper.f64",
+                                 "Solve alpha * U * X = B for X in-place (f64 upper).", OutputKind::BinaryBlob);
+            add_param(s, alloc, "alpha", "Scalar multiplier", ParamKind::F64, false);
+            add_param(s, alloc, "n", "Order of U", ParamKind::U64, true);
+            add_param(s, alloc, "cols", "Cols of B", ParamKind::U64, true);
+            add_param(s, alloc, "A", "Upper triangular U flattened (n*n)", ParamKind::F64, true);
+            add_param(s, alloc, "B", "RHS B flattened row-major (n*cols)", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_trsm_upper<crd::f64>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.blas3.gemm_parallel_auto.f32",
+                                 "C = alpha * A * B + beta * C with heuristic worker-count picker (f32).",
+                                 OutputKind::BinaryBlob);
+            add_param(s, alloc, "alpha", "Scalar multiplier", ParamKind::F64, false);
+            add_param(s, alloc, "beta", "Scalar multiplier on C", ParamKind::F64, false);
+            add_param(s, alloc, "m", "Rows of A and C", ParamKind::U64, true);
+            add_param(s, alloc, "k", "Cols of A / rows of B", ParamKind::U64, true);
+            add_param(s, alloc, "n", "Cols of B and C", ParamKind::U64, true);
+            add_param(s, alloc, "A", "Matrix A flattened row-major (m*k)", ParamKind::F64, true);
+            add_param(s, alloc, "B", "Matrix B flattened row-major (k*n)", ParamKind::F64, true);
+            add_param(s, alloc, "C", "Input/output C flattened row-major (m*n)", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_gemm_parallel_auto<crd::f32>);
+        }
+        {
+            auto s = make_schema(alloc, "hesap.dense.blas3.gemm_parallel_auto.f64",
+                                 "C = alpha * A * B + beta * C with heuristic worker-count picker (f64).",
+                                 OutputKind::BinaryBlob);
+            add_param(s, alloc, "alpha", "Scalar multiplier", ParamKind::F64, false);
+            add_param(s, alloc, "beta", "Scalar multiplier on C", ParamKind::F64, false);
+            add_param(s, alloc, "m", "Rows of A and C", ParamKind::U64, true);
+            add_param(s, alloc, "k", "Cols of A / rows of B", ParamKind::U64, true);
+            add_param(s, alloc, "n", "Cols of B and C", ParamKind::U64, true);
+            add_param(s, alloc, "A", "Matrix A flattened row-major (m*k)", ParamKind::F64, true);
+            add_param(s, alloc, "B", "Matrix B flattened row-major (k*n)", ParamKind::F64, true);
+            add_param(s, alloc, "C", "Input/output C flattened row-major (m*n)", ParamKind::F64, true);
+            reg.register_command(std::move(s), &impl_gemm_parallel_auto<crd::f64>);
+        }
+    })

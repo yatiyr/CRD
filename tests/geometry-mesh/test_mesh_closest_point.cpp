@@ -10,7 +10,7 @@
 #include <crd/geometry/mesh/mesh_queries_typed.hpp>
 #include <crd/geometry/primitives/closest_point.hpp>
 #include <crd/geometry/primitives/primitives.hpp>
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/units/quantity_aliases.hpp>
 
 #include <catch2/catch_approx.hpp>
@@ -88,7 +88,7 @@ CubeMesh make_cube(crd::memory::IAllocator* a, crd::f32 half = 0.5F)
 
 TEST_CASE("v4a empty mesh returns nullopt", "[geometry-mesh][v4a][closest_point]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     const TriangleMeshViewf empty_view{};
     const TriangleMeshBvh empty_bvh{&alloc};
     const auto r = mesh_closest_point(empty_view, empty_bvh, Vec3f{0.0F, 0.0F, 0.0F});
@@ -98,7 +98,7 @@ TEST_CASE("v4a empty mesh returns nullopt", "[geometry-mesh][v4a][closest_point]
 TEST_CASE("v4a single triangle: query above centroid -> centroid",
           "[geometry-mesh][v4a][closest_point]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     const crd::math::Vec3f verts[3] = {
         {0.0F, 0.0F, 0.0F}, {1.0F, 0.0F, 0.0F}, {0.0F, 1.0F, 0.0F}};
     const crd::u32 inds[3] = {0U, 1U, 2U};
@@ -120,7 +120,7 @@ TEST_CASE("v4a single triangle: query above centroid -> centroid",
 TEST_CASE("v4a unit cube: query outside +X face returns face point",
           "[geometry-mesh][v4a][closest_point]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     auto cube = make_cube(&alloc);
     const TriangleMeshViewf view{
         crd::containers::ConstSpan<Vec3f>{cube.vertices.data(), cube.vertices.size()},
@@ -141,7 +141,7 @@ TEST_CASE("v4a unit cube: query outside +X face returns face point",
 TEST_CASE("v4a BVH result matches brute-force across a corpus of query points",
           "[geometry-mesh][v4a][closest_point][correctness]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     auto cube = make_cube(&alloc);
     const TriangleMeshViewf view{
         crd::containers::ConstSpan<Vec3f>{cube.vertices.data(), cube.vertices.size()},
@@ -171,7 +171,7 @@ TEST_CASE("v4a BVH result matches brute-force across a corpus of query points",
 TEST_CASE("v4a max_dist culls hits beyond the radius",
           "[geometry-mesh][v4a][closest_point][max_dist]")
 {
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     auto cube = make_cube(&alloc);
     const TriangleMeshViewf view{
         crd::containers::ConstSpan<Vec3f>{cube.vertices.data(), cube.vertices.size()},
@@ -188,7 +188,7 @@ TEST_CASE("v4a typed Quantity wrapper bridges through raw algorithm",
           "[geometry-mesh][v4a][typed][units]")
 {
     // ADR-0078 §5 D32 — typed surface lives one layer above the raw algorithm.
-    crd::memory::MallocAllocator alloc;
+    crd::memory::GrowableTlsfAllocator alloc;
     auto cube = make_cube(&alloc);
     const TriangleMeshViewf raw_view{
         crd::containers::ConstSpan<Vec3f>{cube.vertices.data(), cube.vertices.size()},
