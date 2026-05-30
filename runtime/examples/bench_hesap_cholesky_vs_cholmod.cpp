@@ -155,6 +155,14 @@ template <typename Fn> crd::f64 best_ms(Fn&& fn, crd::i32 reps = 3)
 
 void run(const char* name)
 {
+    // Tuning filter: CRD_BENCH_ONLY=<name> runs just that matrix (fast, low-load threshold sweeps).
+    if (const char* only = std::getenv("CRD_BENCH_ONLY"))
+    {
+        if (std::strcmp(only, name) != 0)
+        {
+            return;
+        }
+    }
     crd::containers::String path(&g_alloc);
     path.append(CRD_SUITESPARSE_DIR);
     path.append("/");

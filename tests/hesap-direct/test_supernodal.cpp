@@ -511,6 +511,68 @@ TEST_CASE("supernodal Cholesky: multi-RHS solve (column-major B)", "[hesap][dire
     }
 }
 
+TEST_CASE("supernodal Cholesky: single-RHS solve bit-identical across worker counts",
+          "[hesap][direct][v5a-5][determinism]")
+{
+    // v5a-5: single-RHS (nrhs==1) solve must be bit-identical across worker counts. nw=1 takes the
+    // dedicated SERIAL hand-axpy path; nw>1 takes the level-parallel hand-axpy path in fwd_one/back_one
+    // (same kernel, same k-ascending reduction order). The v5a-4 forced-worker test below covers nrhs>1;
+    // this is the moat for the new single-RHS parallel path.
+    crd::memory::TlsfAllocator alloc(256 << 20);
+    auto m = grid3d(&alloc, 22); // n=10648, 3D => deep etree => many levels => exercises level-parallel
+    const crd::u32 n = m.rows();
+    const auto& pat = m.pattern();
+    const auto& vals = m.values().values;
+    const crd::containers::ConstSpan<crd::f64> vspan{vals.data(), vals.size()};
+
+    crd::containers::Array<crd::f64> xtrue(&alloc);
+    crd::containers::Array<crd::f64> b(&alloc);
+    xtrue.resize(n);
+    b.resize(n);
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        xtrue[i] = 1.0 + 0.011 * static_cast<crd::f64>(i % 97);
+    }
+    spmv_sym(pat, vals, xtrue, b);
+
+    crd::jobs::init();
+    const crd::u32 w = crd::jobs::num_workers();
+    auto f = dir::factor_supernodal_cholesky<crd::f64>(pat, vspan, &alloc, dir::kSupernodeRelax, w);
+    REQUIRE(f.info() == 0);
+
+    // Serial reference (nw=1: the dedicated hand path).
+    crd::containers::Array<crd::f64> xref(&alloc);
+    xref.resize(n);
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        xref[i] = b[i];
+    }
+    REQUIRE(f.solve_with_workers({xref.data(), n}, 1, 1));
+
+    // Parallel single-RHS at several worker counts (incl. intermediate 1<nw<pool) must be BIT-IDENTICAL.
+    for (crd::u32 nw : {2U, 3U, w > 3U ? w : 4U})
+    {
+        crd::containers::Array<crd::f64> x(&alloc);
+        x.resize(n);
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            x[i] = b[i];
+        }
+        REQUIRE(f.solve_with_workers({x.data(), n}, 1, nw));
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            REQUIRE(x[i] == xref[i]); // bit-exact across worker counts — the single-RHS solve moat
+        }
+    }
+    crd::jobs::shutdown();
+
+    // Correctness: the serial reference recovers xtrue.
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        CHECK(std::abs(xref[i] - xtrue[i]) < 1e-9);
+    }
+}
+
 TEST_CASE("supernodal Cholesky: solve_with_workers bit-identical across forced worker counts",
           "[hesap][direct][v5a-4][numeric]")
 {

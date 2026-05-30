@@ -184,6 +184,13 @@ inline constexpr crd::u64 kGemmParallelMinFlop = 1U << 20; // ~1M flop
 // matrices — bcsstk25 measured 1.25×→0.57× at 8 threads under blanket node-parallel).
 inline constexpr crd::u32 kNodeParallelMinCols = 512;
 
+// v5a-5: single-RHS parallel-solve fill gate. The level-parallel single-RHS solve only pays on LARGE
+// factors; on small ones the per-level dispatch overhead (parallel_for + wait + frame_reset over many
+// tiny levels) dwarfs the single-vector work and REGRESSES hard (measured 8-thread vs 1-thread:
+// bcsstk25 ~12x, bcsstk13 ~39x slower). Corpus: regression at <=1.5M factor nnz, benefit at >=26.6M;
+// conservative cut at 24M (a per-level work gate is the future refinement to capture the mid-range).
+inline constexpr crd::u64 kSolveParallelMinLnz = 24'000'000;
+
 // Invert a bw×bw lower-triangular Cholesky diagonal block L (ColMajor, leading dim
 // ldl, real-positive diagonal) into linv (bw×bw ColMajor ld=bw, lower-tri; upper
 // zeroed): linv = L⁻¹. Lets the cdiv below-block solve L21 = A21·L⁻ᴴ run as a single
@@ -1373,7 +1380,11 @@ void SupernodalCholesky<T>::factorize(const sparse::SparsePattern& pattern, crd:
 
 template <typename T> bool SupernodalCholesky<T>::solve(crd::containers::Span<T> rhs, crd::usize nrhs) const
 {
-    return solve_with_workers(rhs, nrhs, crd::jobs::num_workers());
+    // v5a-5: small single-RHS => serial (the fast dedicated hand path); large => level-parallel. Multi-RHS
+    // always parallelizes (block-gemm wins at every size). solve_with_workers still honors nw, so the
+    // determinism moat test can force the parallel path on any matrix regardless of this gate.
+    const crd::u32 nw = (nrhs == 1 && m_lnz < kSolveParallelMinLnz) ? 1U : crd::jobs::num_workers();
+    return solve_with_workers(rhs, nrhs, nw);
 }
 
 template <typename T>
@@ -1401,11 +1412,13 @@ bool SupernodalCholesky<T>::solve_with_workers(crd::containers::Span<T> rhs, crd
     // Multi-RHS diagonal-block solve goes BATCHED (c-contiguous scratch, L_diag read once) above this
     // width; below it the per-RHS path avoids the copy overhead (bmwcra's ~12k tiny nc=2-4 fronts).
     constexpr crd::u32 solve_batch_min_nc = 48;
-    if (nrhs == 1)
+    if (nrhs == 1 && nw <= 1)
     {
-        // Single-RHS: ColMajor hand-axpy. At the latency-bound frontier; a block gemm's
-        // small-K overhead would regress this (the failed-gemv lesson), so nrhs==1 keeps
-        // the hand path.
+        // Single-RHS, SERIAL (nw<=1): ColMajor hand-axpy. At the latency-bound frontier; a block
+        // gemm's small-K overhead would regress this (the failed-gemv lesson), so serial single-RHS
+        // keeps the hand path. v5a-5: at nw>1 single-RHS instead takes the level-parallel hand path
+        // in fwd_one/back_one below (same hand-axpy kernel + k-ascending reduction order => bit-
+        // identical to this), so the determinism moat holds across worker counts.
         crd::containers::Array<T> tmp(m_alloc);
         tmp.resize(max_below);
         T* x = rhs.data();
@@ -1517,6 +1530,74 @@ bool SupernodalCholesky<T>::solve_with_workers(crd::containers::Span<T> rhs, crd
         const crd::u32 firstcol = sym.scol[s];
         const crd::u32 nc = sym.scol[s + 1] - firstcol;
         const T* panel = &m_lx[m_lxp[s]];
+        // v5a-5: single-RHS takes the hand-axpy LEFT-looking gather + right-looking diagonal solve below
+        // (no N=1 gemm — the failed-gemv lesson). BIT-IDENTICAL to the dedicated nw<=1 forward: each
+        // descendant's contribution is grouped and summed over that descendant's columns ascending, and
+        // descendants are visited in k-ascending upd_list order == the dedicated right-looking order.
+        if (nrhs == 1)
+        {
+            for (crd::u32 ui = m_upd_ptr[s]; ui < m_upd_ptr[s + 1]; ++ui)
+            {
+                const crd::u32 k = m_upd_list[ui];
+                const crd::u32 krb = sym.srowp[k];
+                const crd::u32 knr = sym.srowp[k + 1] - krb;
+                const crd::u32 knc = sym.scol[k + 1] - sym.scol[k];
+                const crd::u32 kfirstcol = sym.scol[k];
+                const T* kpanel = &m_lx[m_lxp[k]];
+                crd::u32 lo = knc;
+                crd::u32 hi = knr;
+                while (lo < hi)
+                {
+                    const crd::u32 mid = lo + (hi - lo) / 2;
+                    if (sym.srow[krb + mid] < firstcol)
+                    {
+                        lo = mid + 1;
+                    }
+                    else
+                    {
+                        hi = mid;
+                    }
+                }
+                const crd::u32 p0 = lo;
+                crd::u32 m1 = 0;
+                while (p0 + m1 < knr && sym.srow[krb + p0 + m1] < firstcol + nc)
+                {
+                    ++m1;
+                }
+                if (m1 == 0)
+                {
+                    continue;
+                }
+                for (crd::u32 i = 0; i < m1; ++i)
+                {
+                    wdscr[i] = T{0};
+                }
+                for (crd::u32 j = 0; j < knc; ++j) // sum descendant k's columns ascending (== dedicated)
+                {
+                    const T yj = xb[kfirstcol + j];
+                    const T* col = kpanel + static_cast<crd::usize>(j) * knr + p0;
+                    for (crd::u32 i = 0; i < m1; ++i)
+                    {
+                        wdscr[i] += col[i] * yj;
+                    }
+                }
+                for (crd::u32 i = 0; i < m1; ++i)
+                {
+                    xb[sym.srow[krb + p0 + i]] -= wdscr[i];
+                }
+            }
+            for (crd::u32 j = 0; j < nc; ++j) // diagonal forward solve: right-looking contiguous column axpy
+            {
+                const T yj = xb[firstcol + j] / panel[static_cast<crd::usize>(j) * nr + j];
+                xb[firstcol + j] = yj;
+                const T* colj = panel + static_cast<crd::usize>(j) * nr;
+                for (crd::u32 i = j + 1; i < nc; ++i)
+                {
+                    xb[firstcol + i] -= colj[i] * yj;
+                }
+            }
+            return;
+        }
         for (crd::u32 ui = m_upd_ptr[s]; ui < m_upd_ptr[s + 1]; ++ui) // gather from descendants (k-ascending)
         {
             const crd::u32 k = m_upd_list[ui];
@@ -1761,6 +1842,35 @@ bool SupernodalCholesky<T>::solve_with_workers(crd::containers::Span<T> rhs, crd
         const crd::u32 nc = sym.scol[si + 1] - firstcol;
         const T* panel = &m_lx[m_lxp[si]];
         const crd::u32 below = nr - nc;
+        // v5a-5: single-RHS hand path (no N=1 gemm). BIT-IDENTICAL to the dedicated nw<=1 backward:
+        // the below-block gather sums over below-rows ascending, then the descending-jj diagonal back-solve.
+        if (nrhs == 1)
+        {
+            if (below > 0)
+            {
+                for (crd::u32 k = 0; k < nc; ++k)
+                {
+                    const T* colk = panel + static_cast<crd::usize>(k) * nr + nc;
+                    T acc = T{0};
+                    for (crd::u32 r = 0; r < below; ++r)
+                    {
+                        acc += chol_conj<T>(colk[r]) * xb[sym.srow[rb + nc + r]]; // L^H entry = conj(L)
+                    }
+                    xb[firstcol + k] -= acc;
+                }
+            }
+            for (crd::u32 jj = nc; jj-- > 0;)
+            {
+                const T* coljj = panel + static_cast<crd::usize>(jj) * nr;
+                T v = xb[firstcol + jj];
+                for (crd::u32 k = jj + 1; k < nc; ++k)
+                {
+                    v -= chol_conj<T>(coljj[k]) * xb[firstcol + k]; // L^H entry = conj(L)
+                }
+                xb[firstcol + jj] = v / coljj[jj]; // coljj[jj] = L[jj][jj] is real
+            }
+            return;
+        }
         if (below > 0)
         {
             for (crd::usize c = 0; c < nrhs; ++c) // gather below rows
