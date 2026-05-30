@@ -309,6 +309,115 @@ void shootout(const char* label, crd::f64 peak_per_core, crd::u32 nw, crd::memor
         std::fflush(stdout);
     }
 }
+
+// v5a-4 OpenBLAS-on-shapes probe (the RIGHT denominator). Times OpenBLAS on Cerid's ACTUAL
+// cmod (NT-ColMajor dgemm) and cdiv (dtrsm below-solve + dgemm/dsyrk trailing) shapes, SINGLE
+// THREADED, so we compare per-phase against the real opponent — not against peak. dtrsm/dsyrk
+// are inherently far below dgemm even in OpenBLAS, so "% of peak" misleads; this shows whether
+// cdiv's 32 GF/s is near OpenBLAS's achievable ceiling (don't grind) or has real headroom.
+void probe_openblas_kernel_shapes(crd::memory::IAllocator* alloc)
+{
+    using crd::hesap::dense::Layout;
+    using crd::hesap::dense::Matrix;
+    const int saved = openblas_get_num_threads();
+    openblas_set_num_threads(1); // per-thread comparison vs Cerid's 1-thread phase numbers
+    auto fill = [](Matrix<double, Layout::ColMajor>& m, double base)
+    {
+        for (crd::usize j = 0; j < m.cols(); ++j)
+        {
+            for (crd::usize i = 0; i < m.rows(); ++i)
+            {
+                m(i, j) = base + 0.001 * static_cast<double>((i + 7 * j) % 13);
+            }
+        }
+    };
+    auto best5 = [](auto&& fn) -> double
+    {
+        double best = 1e30;
+        for (int r = 0; r < 5; ++r)
+        {
+            const auto t0 = std::chrono::steady_clock::now();
+            fn();
+            const double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+            best = s < best ? s : best;
+        }
+        return best;
+    };
+    std::fprintf(stdout, "\n==== OpenBLAS-on-shapes probe (1 thread; Cerid's ACTUAL cmod/cdiv shapes) ====\n");
+    std::fprintf(stdout, "  compare vs Cerid in-situ 1T: cmod ~51.7 GF/s | cdiv-A/below ~26 | cdiv-B/trailing ~38\n");
+    const int cmod_m[2] = {512, 2048};
+    for (int si = 0; si < 2; ++si) // cmod: C(M×N) = A(M×K)·B(N×K)^T, ColMajor NT
+    {
+        const int mm = cmod_m[si];
+        const int nn = 512;
+        const int kk = 200;
+        Matrix<double, Layout::ColMajor> a(alloc, static_cast<crd::usize>(mm), static_cast<crd::usize>(kk));
+        Matrix<double, Layout::ColMajor> b(alloc, static_cast<crd::usize>(nn), static_cast<crd::usize>(kk));
+        Matrix<double, Layout::ColMajor> c(alloc, static_cast<crd::usize>(mm), static_cast<crd::usize>(nn));
+        fill(a, 0.5);
+        fill(b, 0.3);
+        fill(c, 0.0);
+        const double s = best5(
+            [&]
+            {
+                cblas_dgemm(CblasColMajor, CblasNoTrans, CblasTrans, mm, nn, kk, 1.0, a.data(), mm, b.data(), nn, 0.0,
+                            c.data(), mm);
+            });
+        std::fprintf(stdout, "  OBLAS dgemm  cmod-NT   M=%-4d N=%-3d K=%-3d : %6.1f GF/s\n", mm, nn, kk,
+                     2.0 * mm * nn * kk / s / 1e9);
+    }
+    { // cdiv below-solve: X·L11^T = A21, X=(below×nc), L11=(nc×nc) lower-tri  → cblas_dtrsm Right/Lower/Trans
+        const int below = 1500;
+        const int nc = 256;
+        Matrix<double, Layout::ColMajor> l11(alloc, static_cast<crd::usize>(nc), static_cast<crd::usize>(nc));
+        Matrix<double, Layout::ColMajor> x(alloc, static_cast<crd::usize>(below), static_cast<crd::usize>(nc));
+        for (crd::usize j = 0; j < l11.cols(); ++j) // diag-dominant lower
+        {
+            for (crd::usize i = 0; i < l11.rows(); ++i)
+            {
+                l11(i, j) = (i == j) ? static_cast<double>(2 * nc) : (i > j ? 0.01 : 0.0);
+            }
+        }
+        fill(x, 0.4);
+        const double s = best5(
+            [&] {
+                cblas_dtrsm(CblasColMajor, CblasRight, CblasLower, CblasTrans, CblasNonUnit, below, nc, 1.0, l11.data(),
+                            nc, x.data(), below);
+            });
+        std::fprintf(stdout, "  OBLAS dtrsm  cdiv-blw  below=%-4d nc=%-3d : %6.1f GF/s\n", below, nc,
+                     static_cast<double>(below) * nc * nc / s / 1e9);
+    }
+    { // cdiv trailing: Cerid's B is a full dgemm; dsyrk is the symmetric-block (the syrk lever) ceiling
+        const int mm = 1500;
+        const int nn = 512;
+        const int kk = 256;
+        Matrix<double, Layout::ColMajor> a(alloc, static_cast<crd::usize>(mm), static_cast<crd::usize>(kk));
+        Matrix<double, Layout::ColMajor> b(alloc, static_cast<crd::usize>(nn), static_cast<crd::usize>(kk));
+        Matrix<double, Layout::ColMajor> c(alloc, static_cast<crd::usize>(mm), static_cast<crd::usize>(nn));
+        fill(a, 0.5);
+        fill(b, 0.3);
+        fill(c, 0.1);
+        const double s = best5(
+            [&]
+            {
+                cblas_dgemm(CblasColMajor, CblasNoTrans, CblasTrans, mm, nn, kk, -1.0, a.data(), mm, b.data(), nn, 1.0,
+                            c.data(), mm);
+            });
+        std::fprintf(stdout, "  OBLAS dgemm  cdiv-trl  M=%-4d N=%-3d K=%-3d : %6.1f GF/s\n", mm, nn, kk,
+                     2.0 * mm * nn * kk / s / 1e9);
+        const int n = 512;
+        const int k = 256;
+        Matrix<double, Layout::ColMajor> as(alloc, static_cast<crd::usize>(n), static_cast<crd::usize>(k));
+        Matrix<double, Layout::ColMajor> cs(alloc, static_cast<crd::usize>(n), static_cast<crd::usize>(n));
+        fill(as, 0.5);
+        fill(cs, 0.1);
+        const double ss =
+            best5([&] { cblas_dsyrk(CblasColMajor, CblasLower, CblasNoTrans, n, k, -1.0, as.data(), n, 1.0, cs.data(), n); });
+        std::fprintf(stdout, "  OBLAS dsyrk  cdiv-sym  n=%-4d k=%-3d     : %6.1f GF/s (syrk ceiling for the sym block)\n",
+                     n, k, static_cast<double>(n) * n * k / ss / 1e9);
+    }
+    openblas_set_num_threads(saved);
+}
 } // namespace
 
 int main(int argc, char** argv)
@@ -379,6 +488,14 @@ int main(int argc, char** argv)
     {
         crd::memory::TlsfAllocator alloc(1024ULL * 1024ULL * 1024ULL);
         shootout<crd::f64>("f64 GEMM", peak_f64, nw, &alloc);
+    }
+    {
+        // Cerid-vs-OpenBLAS at the ACTUAL cmod/cdiv shapes (v5a-4). NOTE: meaningful only with a
+        // NATIVE OpenBLAS (Linux CI / system libopenblas); the Windows CPM `_deps` OpenBLAS is the
+        // slow f2c accuracy-oracle build (BLAS ~27 GF/s) — for the real per-phase headroom number,
+        // run via the cholmod bench (WSL system libopenblas) instead.
+        crd::memory::TlsfAllocator alloc(1024ULL * 1024ULL * 1024ULL);
+        probe_openblas_kernel_shapes(&alloc);
     }
 
     std::fprintf(stdout, "\nDone.\n");

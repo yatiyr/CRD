@@ -84,8 +84,35 @@ move to a session log entry and remove from here.
 > one matrix. **Real trigger:** an end-to-end v5 sparse-solve benchmark showing
 > ordering fill (not the numerical kernels) is the bottleneck on a real workload.
 
-### `v2e-weighted-compression` — ND fill loses Eigen-AMD on bcsstk25 (multi-DOF) — filed 2026-05-21
+### `v2e-weighted-compression` — ND fill loses Eigen-AMD on bcsstk25 (multi-DOF) — filed 2026-05-21 — ✅ RESOLVED 2026-05-28 (premise FALSIFIED by benchmark)
 
+> **✅ RESOLVED 2026-05-28 — premise falsified by measurement; no code shipped (v5a-0).**
+> Implemented supervariable graph compression (identical-closed-neighbourhood merge)
+> with vertex-weight propagation through the ND bisection + CAMD `nv`, exactly as this
+> entry prescribed, then benchmarked `bench_hesap_ordering_vs_reference` (Eigen-AMD peer).
+> **Result: compression REGRESSED ND fill on all three matrices** (uniform ~5–12% worse):
+> | matrix | compress engaged | un-compressed ND | compressed ND |
+> |---|---|---|---|
+> | bcsstk13 | 20.5% reduced, maxw=6 | **254079 (0.984× WIN)** | 273162 (1.058× lose) |
+> | bcsstk24 | 75.0% reduced, maxw=6 | 285920 (1.001× tie) | 320113 (1.121× lose) |
+> | bcsstk25 | 14.6% reduced, maxw=3 | 1670446 (1.157× lose) | 1714528 (1.187× lose) |
+> The un-compressed numbers reproduce this entry's original baseline exactly.
+> **Structural reason:** CAMD already detects supervariables DURING elimination (the
+> `nv`-weighted approximate-degree update + the in-loop indistinguishable merge), at the
+> granularity that helps. Pre-compression delivers that information earlier but COARSER —
+> it strictly reduces the bisector/CAMD's choices, so it cannot beat un-compressed on a
+> graph where un-compressed already wins (bcsstk13). The "DOFs split across separator
+> classes" hypothesis is wrong: the un-compressed ND already handles them. **Reverted in
+> full** (compression kernel + weighted plumbing); the kernel + this measurement are the
+> durable artifact. **Status: closed.** ND legitimately loses to AMD at bcsstk13/24/25
+> sizes (the win-small-lose-large inversion this entry flagged); **our AMD already beats
+> Eigen-AMD** (1.039 / 0.960 / 1.007 — GATE-OK), so the v5 sparse-direct consumer picks
+> AMD on these matrices. Large-3D-elliptic where ND wins asymptotically is HSS-front
+> territory (v5e), not a fill-ordering question. Vindicates the benchmarks-at-slice-close
+> mandate: unit tests (correctness) passed; the benchmark caught the net regression.
+>
+> --- original entry (premise, now falsified) ---
+>
 > **Tracked optimization follow-on, NOT a defect.** v2e nested dissection + CAMD
 > **beats Eigen-AMD fill on bcsstk13 (0.983×) and bcsstk24 (0.999×)** but loses on
 > **bcsstk25** (1.158× vs Eigen-AMD; n=15439, a tall 3D skyscraper stiffness matrix

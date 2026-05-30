@@ -136,9 +136,9 @@ crd::memory::IAllocator* alloc = scratch;
     const crd::usize a_pack_dim_k = std::min<crd::usize>(k, kKc);
     const crd::usize b_pack_dim_n = std::min<crd::usize>(n, kNc);
     const crd::usize a_pack_capacity =
-        ((a_pack_dim_m + detail::kGemmMr - 1) / detail::kGemmMr) * detail::kGemmMr * a_pack_dim_k;
+        ((a_pack_dim_m + detail::GemmTraits<T>::MR - 1) / detail::GemmTraits<T>::MR) * detail::GemmTraits<T>::MR * a_pack_dim_k;
     const crd::usize b_pack_capacity =
-        ((b_pack_dim_n + detail::kGemmNr - 1) / detail::kGemmNr) * a_pack_dim_k * detail::kGemmNr;
+        ((b_pack_dim_n + detail::GemmTraits<T>::NR - 1) / detail::GemmTraits<T>::NR) * a_pack_dim_k * detail::GemmTraits<T>::NR;
     const crd::usize align = alignof(T) > 32 ? alignof(T) : 32;
     auto* a_pack = static_cast<T*>(alloc->allocate(a_pack_capacity * sizeof(T), align));
     auto* b_pack = static_cast<T*>(alloc->allocate(b_pack_capacity * sizeof(T), align));
@@ -210,7 +210,7 @@ inline bool small_gemm_eligible(MatrixView<const T, L> a, MatrixView<const T, L>
         return false;
     }
     // Mr-aligned m: edge-row scalar fallback adds complexity for small win.
-    if (a.rows() % detail::kGemmMr != 0)
+    if (a.rows() % detail::GemmTraits<T>::MR != 0)
     {
         return false;
     }
@@ -246,14 +246,14 @@ crd::memory::IAllocator* alloc = scratch;
         alloc = &s_fallback;
     }
     const crd::usize b_pack_capacity =
-        ((n + detail::kGemmNr - 1) / detail::kGemmNr) * k * detail::kGemmNr;
+        ((n + detail::GemmTraits<T>::NR - 1) / detail::GemmTraits<T>::NR) * k * detail::GemmTraits<T>::NR;
     const crd::usize align = alignof(T) > 32 ? alignof(T) : 32;
     auto* b_pack = static_cast<T*>(alloc->allocate(b_pack_capacity * sizeof(T), align));
     detail::pack_b(b, 0, 0, k, n, Trans::None, b_pack);
 
     // Parallel over Mr=8 row-panels of A. At m=256 → 32 panels; with 16
     // P-threads each worker handles 2 panels → perfect load balance.
-    constexpr crd::usize k_mr = detail::kGemmMr;
+    constexpr crd::usize k_mr = detail::GemmTraits<T>::MR;
     const crd::u32 num_panels = static_cast<crd::u32>(m / k_mr);
 
     struct State
@@ -271,11 +271,11 @@ crd::memory::IAllocator* alloc = scratch;
         num_panels, num_workers, [sp](crd::u32 begin, crd::u32 end) {
             for (crd::u32 panel = begin; panel < end; ++panel)
             {
-                const crd::usize i_start = static_cast<crd::usize>(panel) * detail::kGemmMr;
+                const crd::usize i_start = static_cast<crd::usize>(panel) * detail::GemmTraits<T>::MR;
                 // a_panel: source A row-panel, treated as if packed (works
                 // because a.ld() == k, asserted via small_gemm_eligible).
                 const T* a_panel = sp->a.data() + i_start * sp->a.ld();
-                detail::gemm_packed_inner(sp->alpha, i_start, 0, detail::kGemmMr, sp->n, sp->k,
+                detail::gemm_packed_inner(sp->alpha, i_start, 0, detail::GemmTraits<T>::MR, sp->n, sp->k,
                                           a_panel, sp->b_pack, sp->c);
             }
         });
@@ -352,8 +352,8 @@ void gemm_parallel(crd::u32 num_workers, T alpha, MatrixView<const T, L> a, Matr
     const crd::usize eff_mc = [&]() {
         const crd::usize ideal = (m + num_workers - 1U) / num_workers;
         const crd::usize rounded =
-            ((ideal + detail::kGemmMr - 1U) / detail::kGemmMr) * detail::kGemmMr;
-        const crd::usize floored = std::max<crd::usize>(detail::kGemmMr, rounded);
+            ((ideal + detail::GemmTraits<T>::MR - 1U) / detail::GemmTraits<T>::MR) * detail::GemmTraits<T>::MR;
+        const crd::usize floored = std::max<crd::usize>(detail::GemmTraits<T>::MR, rounded);
         return std::min<crd::usize>(floored, kMc);
     }();
 
@@ -378,9 +378,9 @@ crd::memory::IAllocator* alloc = scratch;
     const crd::usize ap_kc = std::min<crd::usize>(k, kKc);
     const crd::usize bp_nc = std::min<crd::usize>(n, kNc);
     const crd::usize a_pack_per_worker =
-        ((eff_mc + detail::kGemmMr - 1) / detail::kGemmMr) * detail::kGemmMr * ap_kc;
+        ((eff_mc + detail::GemmTraits<T>::MR - 1) / detail::GemmTraits<T>::MR) * detail::GemmTraits<T>::MR * ap_kc;
     const crd::usize b_pack_capacity =
-        ((bp_nc + detail::kGemmNr - 1) / detail::kGemmNr) * ap_kc * detail::kGemmNr;
+        ((bp_nc + detail::GemmTraits<T>::NR - 1) / detail::GemmTraits<T>::NR) * ap_kc * detail::GemmTraits<T>::NR;
     const crd::usize align = alignof(T) > 32 ? alignof(T) : 32;
     auto* a_pack_pool =
         static_cast<T*>(alloc->allocate(a_pack_per_worker * total_workers * sizeof(T), align));

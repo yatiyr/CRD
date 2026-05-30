@@ -59,17 +59,25 @@ inline constexpr crd::u32 kNoParent = 0xFFFFFFFFU;
 // with a shared lower-triangular row pattern (the unit v5 factors block-by-block).
 struct SymbolicFactor
 {
-    crd::u32                         n = 0;
-    crd::containers::Array<crd::u32> parent;    // etree parent[j]; kNoParent for a root
-    crd::containers::Array<crd::u32> post;      // postorder of the etree
-    crd::containers::Array<crd::u32> colcount;  // nnz of column j of L (incl. diagonal)
-    crd::containers::Array<crd::u32> lp;        // CSC column pointers, length n+1
-    crd::containers::Array<crd::u32> li;        // CSC row indices, length lp[n]
-    crd::containers::Array<crd::u32> super;     // supernode boundaries, length nsuper+1
-    crd::u32                         nsuper = 0;
+    crd::u32 n = 0;
+    crd::containers::Array<crd::u32> parent;   // etree parent[j]; kNoParent for a root
+    crd::containers::Array<crd::u32> post;     // postorder of the etree
+    crd::containers::Array<crd::u32> colcount; // nnz of column j of L (incl. diagonal)
+    crd::containers::Array<crd::u32> lp;       // CSC column pointers, length n+1
+    crd::containers::Array<crd::u32> li;       // CSC row indices, length lp[n] (EMPTY in supernodal mode)
+    crd::containers::Array<crd::u32> super;    // supernode boundaries, length nsuper+1
+    crd::u32 nsuper = 0;
+    // Supernodal-mode compact pattern: per FUNDAMENTAL supernode g, the LEADING column's L row
+    // pattern (== li[lp[super[g]] .. lp[super[g]+1]], ascending, diagonal first). This is the only
+    // li slice the supernodal numeric path consumes, so supernodal mode builds it DIRECTLY via the
+    // assembly-tree union and skips the O(nnz(L)) full `li`. `slead_ptr` has length nsuper+1; empty
+    // when the full `li` was built instead (the default general-API path used by tests/benches).
+    crd::containers::Array<crd::u32> slead_ptr;
+    crd::containers::Array<crd::u32> slead_idx;
 
     explicit SymbolicFactor(crd::memory::IAllocator* alloc)
-        : parent(alloc), post(alloc), colcount(alloc), lp(alloc), li(alloc), super(alloc)
+        : parent(alloc), post(alloc), colcount(alloc), lp(alloc), li(alloc), super(alloc), slead_ptr(alloc),
+          slead_idx(alloc)
     {
     }
 
@@ -83,6 +91,13 @@ struct SymbolicFactor
 // fundamental supernode partition (Liu-Ng-Peyton). One adjacency build, shared
 // scratch. The emitted L pattern is bit-for-bit the structure of a numeric
 // Cholesky factor of chol(PAPᵀ) under the given (already-applied) ordering.
-[[nodiscard]] SymbolicFactor symbolic_factorize(const sparse::SparsePattern& pattern, crd::memory::IAllocator* alloc);
+//
+// `supernodal_patterns`: when true, SKIP the O(nnz(L)) full `li` and instead build the compact
+// per-fundamental-supernode leading-column patterns (`slead_ptr`/`slead_idx`) directly via the
+// assembly-tree union — the only pattern slice the supernodal numeric factorisation needs. `li`
+// is left empty. Bit-identical leading patterns ⇒ identical supernodal symbolic ⇒ identical factor.
+// Default false preserves the general full-`li` contract (tests/benches read `li`).
+[[nodiscard]] SymbolicFactor symbolic_factorize(const sparse::SparsePattern& pattern, crd::memory::IAllocator* alloc,
+                                                bool supernodal_patterns = false);
 
 } // namespace crd::hesap::ordering

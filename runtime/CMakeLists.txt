@@ -618,12 +618,12 @@ if(CRD_BUILD_HESAP_VS_REFERENCE)
     set(CRD_SS_DIR "${CMAKE_BINARY_DIR}/_deps/suitesparse-mm")
     file(MAKE_DIRECTORY "${CRD_SS_DIR}")
     set(CRD_SS_BASE "https://suitesparse-collection-website.herokuapp.com/MM")
-    foreach(ss_pair "HB/bcsstk13" "HB/bcsstk24" "HB/west2021" "HB/bcsstk25" "HB/sherman3" "HB/gemat11")
+    foreach(ss_pair "HB/bcsstk13" "HB/bcsstk24" "HB/west2021" "HB/bcsstk25" "HB/sherman3" "HB/gemat11" "HB/bcsstk30" "HB/bcsstk32" "GHS_psdef/bmwcra_1" "GHS_psdef/hood" "GHS_psdef/ldoor")
         string(REGEX REPLACE ".*/" "" ss_name "${ss_pair}")
         if(NOT EXISTS "${CRD_SS_DIR}/${ss_name}/${ss_name}.mtx")
             set(ss_tgz "${CRD_SS_DIR}/${ss_name}.tar.gz")
             message(STATUS "[hesap-vs-reference] fetching SuiteSparse ${ss_pair}")
-            file(DOWNLOAD "${CRD_SS_BASE}/${ss_pair}.tar.gz" "${ss_tgz}" STATUS ss_status TIMEOUT 60)
+            file(DOWNLOAD "${CRD_SS_BASE}/${ss_pair}.tar.gz" "${ss_tgz}" STATUS ss_status TIMEOUT 600)
             list(GET ss_status 0 ss_code)
             if(ss_code EQUAL 0)
                 file(ARCHIVE_EXTRACT INPUT "${ss_tgz}" DESTINATION "${CRD_SS_DIR}")
@@ -656,6 +656,10 @@ if(CRD_BUILD_HESAP_VS_REFERENCE)
     crd_add_hesap_vs_ref_bench(bench_hesap_ordering_vs_reference)
     target_link_libraries(bench_hesap_ordering_vs_reference PRIVATE crd-hesap-sparse crd-hesap-ordering)
     target_compile_definitions(bench_hesap_ordering_vs_reference PRIVATE "CRD_SUITESPARSE_DIR=\"${CRD_SS_DIR}\"")
+    # v5a-1b step 6 / v5a-3: TREE-PARALLEL supernodal Cholesky factor+solve vs Eigen SimplicialLLT.
+    crd_add_hesap_vs_ref_bench(bench_hesap_cholesky_vs_reference USE_JOBS)
+    target_link_libraries(bench_hesap_cholesky_vs_reference PRIVATE crd-hesap-sparse crd-hesap-ordering crd-hesap-direct)
+    target_compile_definitions(bench_hesap_cholesky_vs_reference PRIVATE "CRD_SUITESPARSE_DIR=\"${CRD_SS_DIR}\"")
     # v4-corpus: real SuiteSparse matrices through the cooked 'HMTX' resource path
     # (cook + read_matrix_resource + build_csr timed vs direct read; each matrix also
     # verified through ResourceManager mount + load_sync). No Eigen in the body.
@@ -738,5 +742,40 @@ if(CRD_BUILD_HESAP_VS_ILUPACK)
         target_compile_definitions(bench_hesap_mlilu_vs_ilupack PRIVATE __UNDERSCORE__)
         set_source_files_properties(examples/bench_hesap_mlilu_vs_ilupack.cpp PROPERTIES COMPILE_FLAGS "-Wno-error")
         message(STATUS "[hesap-vs-ilupack] bench_hesap_mlilu_vs_ilupack enabled (ILUPACK at ${CRD_ILUPACK_DIR})")
+    endif()
+endif()
+
+# --- v5a-2: Cerid supernodal Cholesky vs SuiteSparse CHOLMOD (the gold-standard
+# supernodal peer). System libcholmod is apt-installed (run scripts/setup-cholmod-ref.sh
+# first). WSL/Linux only; CHOLMOD's Supernodal module is GPL ⇒ dev-only, NEVER shipped,
+# NEVER in CI release. Needs CRD_BUILD_HESAP_VS_REFERENCE=ON for the matrix corpus (CRD_SS_DIR).
+if(CRD_BUILD_HESAP_VS_CHOLMOD)
+    if(NOT UNIX)
+        message(WARNING "[hesap-vs-cholmod] CHOLMOD oracle is Linux/WSL-only; skipping on this platform")
+    else()
+        find_library(CRD_CHOLMOD_LIB cholmod)
+        if(NOT CRD_CHOLMOD_LIB)
+            message(FATAL_ERROR "[hesap-vs-cholmod] libcholmod not found — run scripts/setup-cholmod-ref.sh")
+        endif()
+        # Matrix corpus: reuse VS_REFERENCE's CRD_SS_DIR when that path is enabled,
+        # else accept an explicit -DCRD_HESAP_MATRIX_DIR=<dir-with-<name>/<name>.mtx>
+        # (e.g. an already-downloaded build/win-*/_deps/suitesparse-mm). This lets the
+        # CHOLMOD oracle build WITHOUT fetching Eigen/OpenBLAS — those are unrelated to
+        # this bench (it uses SYSTEM cholmod + SYSTEM OpenBLAS).
+        if(DEFINED CRD_SS_DIR)
+            set(_cholmod_ss "${CRD_SS_DIR}")
+        elseif(CRD_HESAP_MATRIX_DIR)
+            set(_cholmod_ss "${CRD_HESAP_MATRIX_DIR}")
+        else()
+            message(FATAL_ERROR "[hesap-vs-cholmod] set -DCRD_HESAP_MATRIX_DIR=<suitesparse-mm dir> (or enable VS_REFERENCE)")
+        endif()
+        add_executable(bench_hesap_cholesky_vs_cholmod examples/bench_hesap_cholesky_vs_cholmod.cpp)
+        target_link_libraries(bench_hesap_cholesky_vs_cholmod PRIVATE
+            crd-core crd-memory crd-containers crd-math crd-jobs crd-platform
+            crd-hesap crd-hesap-sparse crd-hesap-ordering crd-hesap-dense crd-hesap-sched crd-hesap-direct
+            cholmod amd colamd suitesparseconfig)
+        target_compile_definitions(bench_hesap_cholesky_vs_cholmod PRIVATE "CRD_SUITESPARSE_DIR=\"${_cholmod_ss}\"")
+        set_source_files_properties(examples/bench_hesap_cholesky_vs_cholmod.cpp PROPERTIES COMPILE_FLAGS "-Wno-error")
+        message(STATUS "[hesap-vs-cholmod] bench enabled (${CRD_CHOLMOD_LIB}); matrices=${_cholmod_ss}")
     endif()
 endif()

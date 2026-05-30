@@ -48,20 +48,20 @@ inline void syrk_lower_minus(MatrixView<const T, L> a, MatrixView<T, L> c,
 
     // Pack the full A panel once (m rows, k cols) into MR-row panels.
     // a_pack layout: ceil(m/MR) panels, each MR × k row-major.
-    const crd::usize num_m_panels = (m + kGemmMr - 1) / kGemmMr;
-    const crd::usize num_n_panels = (m + kGemmNr - 1) / kGemmNr;
+    const crd::usize num_m_panels = (m + GemmTraits<T>::MR - 1) / GemmTraits<T>::MR;
+    const crd::usize num_n_panels = (m + GemmTraits<T>::NR - 1) / GemmTraits<T>::NR;
     crd::containers::Array<T> a_pack(alloc);
-    a_pack.resize(num_m_panels * kGemmMr * k);
+    a_pack.resize(num_m_panels * GemmTraits<T>::MR * k);
     crd::containers::Array<T> b_pack(alloc);
-    b_pack.resize(num_n_panels * k * kGemmNr);
+    b_pack.resize(num_n_panels * k * GemmTraits<T>::NR);
 
     // a_pack[panel][i_local * k + p] = A[panel*MR + i_local, p]
     for (crd::usize panel = 0; panel < num_m_panels; ++panel)
     {
-        T* panel_out = a_pack.data() + panel * kGemmMr * k;
-        for (crd::usize il = 0; il < kGemmMr; ++il)
+        T* panel_out = a_pack.data() + panel * GemmTraits<T>::MR * k;
+        for (crd::usize il = 0; il < GemmTraits<T>::MR; ++il)
         {
-            const crd::usize ig = panel * kGemmMr + il;
+            const crd::usize ig = panel * GemmTraits<T>::MR + il;
             const bool inside = ig < m;
             for (crd::usize p = 0; p < k; ++p)
             {
@@ -72,14 +72,14 @@ inline void syrk_lower_minus(MatrixView<const T, L> a, MatrixView<T, L> c,
     // b_pack[panel][p * NR + jl] = Aᵀ[p, panel*NR + jl] = A[panel*NR + jl, p]
     for (crd::usize panel = 0; panel < num_n_panels; ++panel)
     {
-        T* panel_out = b_pack.data() + panel * k * kGemmNr;
+        T* panel_out = b_pack.data() + panel * k * GemmTraits<T>::NR;
         for (crd::usize p = 0; p < k; ++p)
         {
-            for (crd::usize jl = 0; jl < kGemmNr; ++jl)
+            for (crd::usize jl = 0; jl < GemmTraits<T>::NR; ++jl)
             {
-                const crd::usize jg = panel * kGemmNr + jl;
+                const crd::usize jg = panel * GemmTraits<T>::NR + jl;
                 const bool inside = jg < m;
-                panel_out[p * kGemmNr + jl] = inside ? a.at(jg, p) : T{0};
+                panel_out[p * GemmTraits<T>::NR + jl] = inside ? a.at(jg, p) : T{0};
             }
         }
     }
@@ -102,20 +102,20 @@ inline void syrk_lower_minus(MatrixView<const T, L> a, MatrixView<T, L> c,
 
     auto block_row = [sp](crd::usize pa) noexcept
     {
-        const T* a_panel = sp->a_pack + pa * kGemmMr * sp->k;
-        const crd::usize i_base = pa * kGemmMr;
-        const crd::usize rows_in = std::min(kGemmMr, sp->m - i_base);
+        const T* a_panel = sp->a_pack + pa * GemmTraits<T>::MR * sp->k;
+        const crd::usize i_base = pa * GemmTraits<T>::MR;
+        const crd::usize rows_in = std::min(GemmTraits<T>::MR, sp->m - i_base);
         for (crd::usize pb = 0; pb < sp->num_n_panels; ++pb)
         {
-            const crd::usize j_base = pb * kGemmNr;
+            const crd::usize j_base = pb * GemmTraits<T>::NR;
             if (i_base + rows_in <= j_base)
             {
                 break;  // remaining tiles are strict-upper
             }
-            const T* b_panel = sp->b_pack + pb * sp->k * kGemmNr;
-            const crd::usize cols_in = std::min(kGemmNr, sp->m - j_base);
-            T micro[kGemmMr * kGemmNr]{};
-            gemm_microkernel<T>(sp->k, a_panel, b_panel, micro, kGemmNr);
+            const T* b_panel = sp->b_pack + pb * sp->k * GemmTraits<T>::NR;
+            const crd::usize cols_in = std::min(GemmTraits<T>::NR, sp->m - j_base);
+            T micro[GemmTraits<T>::MR * GemmTraits<T>::NR]{};
+            gemm_microkernel<T>(sp->k, a_panel, b_panel, micro, GemmTraits<T>::NR);
             for (crd::usize i = 0; i < rows_in; ++i)
             {
                 const crd::usize ig = i_base + i;
@@ -124,7 +124,7 @@ inline void syrk_lower_minus(MatrixView<const T, L> a, MatrixView<T, L> c,
                     const crd::usize jg = j_base + j;
                     if (ig >= jg)
                     {
-                        sp->c_data[ig * sp->ldc + jg] -= micro[i * kGemmNr + j];
+                        sp->c_data[ig * sp->ldc + jg] -= micro[i * GemmTraits<T>::NR + j];
                     }
                 }
             }

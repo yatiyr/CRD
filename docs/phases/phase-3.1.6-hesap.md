@@ -1,6 +1,6 @@
 # Phase 3.1.6 — `crd-hesap` numerical computing substrate
 
-**Status:** 🔄 IN PROGRESS (ships BEFORE eylem v1c resumes — re-amended 2026-05-19, see Phase posture). v0 (dense BLAS+solvers) ✅, v1 (sparse) ✅, v2 (reorderings) ✅, v3a (symmetric/Hermitian eig: QL/QR + D&C + MRRR) ✅, **v3b (SVD) ✅ CLOSED** — v3b-1 (bidiag + dbdsqr + blocked dgebrd/dorgbr) + **v3b-2 (Gu-Eisenstat D&C — beats Eigen BDCSVD + LAPACK dgesdd at all N)** + v3b-3 (randomized rsvd/rsyev) + v3b-1c (complex). **NEXT = v3c (least-squares, consumes the SVD)** → v3d (non-sym eig) → v3e (close) → v4–v18.
+**Status:** 🔄 IN PROGRESS (ships BEFORE eylem v1c resumes — re-amended 2026-05-19, see Phase posture). v0 (dense BLAS+solvers) ✅, v1 (sparse) ✅, v2 (reorderings) ✅, v3a (symmetric/Hermitian eig: QL/QR + D&C + MRRR) ✅, **v3b (SVD) ✅ CLOSED** — v3b-1 (bidiag + dbdsqr + blocked dgebrd/dorgbr) + **v3b-2 (Gu-Eisenstat D&C — beats Eigen BDCSVD + LAPACK dgesdd at all N)** + v3b-3 (randomized rsvd/rsyev) + v3b-1c (complex). **v3c (least-squares) + v3d (non-sym eig) + v3e (close) ✅. v4 (iterative: Krylov + block-Krylov + preconditioners + AMG) ✅ CLOSED.** **v5a (sparse-direct: supernodal Cholesky, CHOLMOD-class): FACTOR + multi-RHS SOLVE beat CHOLMOD on hood/ldoor — v5a-4 ✅ (the gap was the SERIAL SYMBOLIC, not per-thread BLAS-3).** **NEXT = v5a-5 (finish the solve: single-RHS x1 + bmwcra x16 scaling) → v5b (LU) → v5c (QR) → v5d (LDLᵀ) → v5e (HSS+BLR) → v5f (mixed-prec IR) → v5z; then eylem v1c.**
 **Estimated duration:** ~6–8 months across 18 slices.
 **Locked architecture:** ADR-0065.
 **Research:** `docs/research/cerid-hesap.md` + pre-existing
@@ -316,7 +316,25 @@ determinism + replay tests.
 | ↳ **v4k-e-1** ✅ 2026-05-27 — **αSA adaptive-candidate hook shipped + the β=0.3 wall locked by 5-lever exhaustion** | `Options.adaptive_candidate` (default off): seed the tentative T from a near-nullspace CANDIDATE relaxed via ν weighted-Jacobi sweeps on A·x=0 (deterministic seed) instead of the constant; `tentative_prolongator_adaptive` normalizes per-aggregate (Brezina αSA). **Measured the cheap increment of the user-chosen bootstrap path: αSA does NOT move β=0.3** (70→112→115 ≈ SA's 70→108→112; Poisson 7 flat held — no diffusion regression). **VERIFIED not a no-op** (candidate range 1.8 at finest level — genuinely varying), so the conclusion is real: **the coarse space is NOT the β=0.3 lever** ⇒ full multi-candidate bootstrap won't help either (it scales the thing just proven not to matter). **β=0.3 anisotropic strong-convection is now a measured WALL for aggregation AMG — 5 levers exhausted: κ, droptol, cycle (V/W/K), aggregation (smoothed/plain), αSA-candidate.** Root cause (theory-backed): conv-diff near-nullspace ≈ constant; the regime needs DIRECTIONAL smoothing (downwind/line-GS) or the multilevel-ILU path, not a better coarse basis. **Honest β=0.3 status: Cerid AMG WINS total wall-time 1.3–1.9× (12× cheaper factor, 4× lower fill) but LOSES iterations 112 vs 10 (ILUPACK's home turf).** αSA kept as correct infra for genuinely-non-constant near-nullspace (elasticity); +1 test (αSA converges on Poisson, no regression). 10 AMG tests; MSVC+gcc+clang-cl+guards. | ~120 | 1 | — |
 | ↳ **v4k-e-2** ⏸ 2026-05-27 — **line-GS attempted (user-directed) → reverted; β=0.3 iteration crush is the WALL (6 levers)** | Took run (a) **algebraic line Gauss-Seidel** (block-GS, strong-coupling chains solved tridiagonally via Thomas). Line criterion: strong = |a_ij|≥0.5·max-offdiag, chain only when strong-count≤2 (isotropic node = 4 strong ⇒ singleton ⇒ point-GS; anisotropic = 2 strong ⇒ y-line). **Poisson clean (7 = point-GS, singletons)** but **β=0.1 AND β=0.3 DIVERGE** (1e18/nan). That's a definite bug — block-GS with exact line solves is strictly ≥ point-GS, which handles β=0.1 at 9 iters — so the algebraic chains aren't grid-aligned enough for line-solve stability (snake/boundary lines lose diagonal dominance). **Reverted** (don't ship a diverging smoother; low-odds lever per advisor). Lesson kept: algebraic line-GS needs grid-line detection or geometric info; the durable artifact is the finding, code returns when there's a reason. **β=0.3 iteration crush now CLOSED as the documented wall — 6 levers exhausted** (κ, droptol, V/W/K, smoothed/plain agg, αSA, line-GS). Cerid AMG WINS β=0.3 total wall-time 1.3–1.9×, LOSES iters 112 vs 10 — genuinely ILUPACK's home turf. Only theoretically-distinct path left = v4j-3 multilevel-ILU rework (κ sweep showed deep, not quick). 10 AMG tests intact; MSVC+gcc+clang-cl. | ~0 (reverted) | 0 | — |
 | ↳ **v4z** ✅ 2026-05-27 — **v4 CLOSE: audits + reorder default-ON + robustness fix + ADR §26 lock.** | **(1) Factor-vs-solve break-even quantified** — bench now reports the split + reuse break-even; on cd2d β=0.3 `mlilu_ib`+reorder WINS single-shot wall 2.1–2.2× at every mesh, ILUPACK overtakes only after **k\*≈3.6–5.9 re-solves** (single/few-RHS → Cerid; many-RHS → ILUPACK). **(2) `reorder` default flipped ON for nonsym `InverseBasedIlu`** — measured no-regression on in-regime matrices (sherman3 iters 1066→557 1.47×, cd2d-150 269→68 1.75×, fill ~flat), matches ILUPACK; natural order via explicit `reorder=false`; `mlilu_ib` CLI gains a `reorder` Bool param; 4 natural-order tests pinned. **(3) Robustness fix** — `DenseLuLeaf` shifts the diagonal (√ε·max\|diag\|, geometric back-off) + refactors on a singular deferred Schur leaf instead of asserting in `solve_lu` (gemat11 wrong-tool case now degrades to EXIT 0; +1 test). **(4) Complex-completeness audit** — every solver/preconditioner/AMG variant has a complex residual test (+2 closing block_pcg<C> + point-Jacobi<C> gaps). **(5) CLI-completeness audit** — every op (.f32/.f64/.c32/.c64) registered. **(6) ADR-0065 §26** locks D(iter)-1..10 (serial-reduction moat, size-adaptive operator + frame_reset, breakdown guards, packed-MGS block-orthonormalization, graceful-degrade, reorder default-ON, O(1) AMD bucket-head, the β=0.3 quantified-not-slogan result). 18-config sweep → CI. | ~250 | 4 | — |
-| **v5** | Sparse **direct** (supernodal Cholesky — CHOLMOD-class + left-looking LU — Gilbert-Peierls + multifrontal QR + LDLT) + **HSS-augmented (STRUMPACK pattern) reserve** + complex variants + CLI registration. *(AMG moved to v4 — it is iterative-family.)* | ~4500 | ~140 | multi-week |
+| **v5** | **Sparse DIRECT — the COMPLETE elite family** (detailed plan ↓, planned 2026-05-28). Supernodal Cholesky (CHOLMOD-class) + sparse LU (Gilbert-Peierls reference + supernodal MC64+threshold) + multifrontal QR (SPQR-class) + multifrontal LDLᵀ (Duff-Reid indefinite) + **rank-structured fronts (FULL HSS STRUMPACK + BLR MUMPS — both ship in v5, user-directed 2026-05-28)** + **mixed-precision iterative refinement** + complex variants + CLI per op. New module `crd-hesap-direct`; consumes v2c `SymbolicFactor` + v0 dense panels + `crd-hesap-sched::DependencyGraph`. **Cross-thread bit-determinism moat held per family** (Cholesky/LDLᵀ/LU-via-MC64+threshold/QR). *(AMG moved to v4 — iterative-family.)* | ~7200 | ~170 | multi-month |
+| ↳ **v5a-0** ✅ 2026-05-28 — **RESOLVED by measurement (premise falsified; no code shipped)** | Implemented supervariable ND compression (weighted bisection + CAMD `nv`) per the `v2e-weighted-compression` debt, then benchmarked vs Eigen-AMD: **compression REGRESSED ND fill on bcsstk13/24/25** (un-compressed 0.984/1.001/1.157 → compressed 1.058/1.121/1.187). Root cause: CAMD already detects supervariables in-loop; pre-compression only coarsens. **Reverted in full.** Our AMD already beats Eigen-AMD on all three (1.039/0.960/1.007 GATE-OK) — the v5 consumer picks AMD on these. Debt closed-as-falsified; benchmarks-at-slice-close mandate vindicated (unit tests passed; bench caught the regression). | 0 (reverted) | 0 | — |
+| ↳ **v5a-1a** ✅ 2026-05-28 — **substrate SHIPPED** | `crd-hesap-direct` module scaffold + **`IFactorization<T>`** (factor-once/solve-many, multi-RHS day-1) + **`Frontal<T>` + `extend_add`** (the multifrontal assembly kernel — standalone-tested, 4 type instantiations incl. complex). 5 tests/19 asserts, MSVC win-debug clean `/W4 /WX`. Advisor-confirmed left-looking supernodal stays the v5a algorithm; `extend_add` built standalone, consumed by v5c/d/e. (No benchmark applicable — pure substrate.) | ~250 | 5 | — |
+| ↳ **v5a-3** ✅ 2026-05-28 — **TREE-PARALLEL supernodal factor 🎉 FACTOR CRUSH + determinism moat** | Static per-supernode update lists (replaced serial Head/Next) → supernode-etree level scheduling over `crd::jobs::parallel_for` + per-worker scratch (relrow/ubuf, `worker_index`-keyed); `gemm` scratch=nullptr (per-thread pooled). **Race-free dataflow** (each supernode writes only its own panel, reads already-factored descendants). **DETERMINISM MOAT VERIFIED: factor bit-identical across {1,2,4,N} workers** (12 tests/1393 asserts incl. the moat test). **Bench (relwithdebinfo, 32 workers, vs Eigen SimplicialLLT, same AMD matrix) — FACTOR CRUSH SCALES WITH SIZE: bcsstk25 (15k) 1.47× · hood (220k) 2.46× · bmwcra_1 (148k) 4.32× (8.5s vs 36.6s).** GHS_psdef verified-PD corpus; fill matches Eigen, residuals BEAT it (bmwcra_1 5.5e-11 vs 3.2e-10). Small matrices (2k–3.5k) parallel-neutral (overhead). **COLMAJOR REFACTOR (fixed the solve on the spot, NO debt) — double win.** Panels switched RowMajor→**ColMajor** (right-looking `cdiv` with contiguous column writes + long-axpy solve subdiagonal); `cmod` uses `gemm<ColMajor>` (instantiated). **FACTOR got FASTER: bmwcra_1 4.32×→5.48× · hood 2.46×→2.68× · bcsstk25 1.47×→1.50×** (right-looking contiguous `cdiv` beat the old RowMajor left-looking). **SOLVE loss ELIMINATED: bmwcra_1 235ms (1.75× slower) → 135ms (0.95×, parity within noise); hood 0.80×→1.03× WIN; bcsstk25 0.84×→1.19× WIN.** (Earlier gemv-on-subdiagonal attempt failed — pairwise-sum overhead on tiny blocks — and was reverted; ColMajor long-axpy is the right fix.) Correctness + determinism moat intact (12 tests/1393 asserts). **MULTI-RHS SOLVE CRUSH (block-`gemm`, dispatched for nrhs>1; nrhs=1 keeps hand-axpy): SOLVE x16 WINS EVERY matrix 1.55–3.68× — bcsstk13 1.55× · bcsstk24 1.96× · bcsstk25 2.34× · bmwcra_1 3.04× · hood 3.68×** (reads L once, amortizes the scatter across all 16 RHS; real N ⇒ genuine BLAS-3, did NOT backfire like the gemv). Single-RHS at scale now wins/parity (bmwcra_1 1.22×, bcsstk25 1.34×, hood 0.96×); single-RHS on tiny 2–3.5k matrices loses 0.84× (per-supernode overhead, negligible μs regime). **FACTOR + MULTI-RHS SOLVE both CRUSH Eigen; everything fixed on the spot — NO debt.** Correctness beats Eigen residual; determinism moat held. No frontier supernodal lib (CHOLMOD/MUMPS/PARDISO) offers the cross-thread bit-determinism. **🎯 ~1M HEADLINE (ldoor, n=952203, fill ~152M, GHS_psdef): FACTOR 8.30s vs Eigen 42.07s = 5.07× WIN · SOLVE x16 1.73s vs 4.86s = 2.82× WIN · SOLVE x1 253ms vs 315ms = 1.24× WIN; resid c=3.7e-13 vs e=1.1e-12.** Frame-arena fix (NO debt): the deep etree at ~1M issues thousands of `parallel_for` levels → the 1 MB per-thread frame arena exhausted; `jobs::frame_reset()` after each level's `wait` bounds it to one level's `JobDecl`s (`feedback_jobs_parallel_for_frame_arena_exhaustion`). **FULL-HONEST corpus: FACTOR crushes ≥15k (1.6–5.6×), ties tiny ≤3.5k (~10ms, negligible); SOLVE x16 crushes EVERY size (1.51–3.94×).** **SINGLE-RHS GAP CLOSED on the spot (NO debt) — right-looking diagonal-block solve.** Root cause (NOT small supernodes — the histogram refuted that: bmwcra_1/hood/ldoor are all avg_nc≈9.5, ~0% small-supernode axpy mass): the **forward diagonal-block solve was LEFT-looking** (`panel[k·nr+j]`, stride-`nr` dot-product) — cache-hostile + non-vectorizable on the ColMajor panel, worst on dense supernodes (bmwcra_1 maxnc=2406). Converted to **right-looking contiguous column axpy** (`panel[j·nr+i]` unit-stride in `i` — vectorizes), the SAME ColMajor-contiguity win as the factor's right-looking `cdiv`. **SOLVE x1 now WINS every real scale (≥15k): bcsstk25 1.06–1.15× · bmwcra_1 0.92×→1.01–1.14× · hood 1.00×→1.05–1.22× · ldoor (1M) 1.07×→1.04–1.32×** (3 clean runs; bmwcra_1 was the consistent straggler, now wins). x16 also improved (bmwcra_1 3.04→3.94×). Determinism moat held + residuals unchanged (12 tests/1393 asserts green). **Only sub-ms tiny ≤3.5k solves stay ~0.86× — per-supernode dispatch floor (40µs absolute), bounded-by-importance, multi-RHS crushes even there (1.57–2.01×).** | ~430 | 1 (12 suite) | — |
+| ↳ **v5a-1b** ✅ CLOSED 2026-05-30 (crush landed → v5a-4) — **serial supernodal Cholesky (steps 1–5 ✅; bench-close DONE: beat CHOLMOD hood/ldoor at v5a-4)** | Left-looking supernodal Cholesky (CHOLMOD-class): v2c `SymbolicFactor` + relaxed amalgamation + dense panels (RowMajor) + `Lpos`/`Head`/`Next` lists; `solve` fwd/back multi-RHS. **Steps 1–5 ✅ 2026-05-28** (11 tests/809 asserts): step 1 `build_supernodal_symbolic` (relaxed amalgamation, D(direct)-2, union row-pattern) · step 2 scatter · step 3 `cdiv` (`factor_cholesky` diag + hand-rolled subdiagonal solve) · step 4 `cmod` (dense `gemm` Schur update via `Lpos`/`Head`/`Next`) · step 5 supernodal `solve` (fwd/back, multi-RHS). **Verified: factor+solve residual <1e-9 on 2D-grid SPD + dense SPD + 3-RHS; builds on `gemm`/`factor_cholesky`.** **Step 6 bench RUN (relwithdebinfo, vs Eigen SimplicialLLT on the same AMD-permuted matrix):** correct (Cerid residual BEATS Eigen; **correctly detects non-PD bcsstk30/32 matching Eigen** — not a bug), fill matches (~0.2%). **FACTOR: Cerid wins 1.14×/0.96×/1.30× on bcsstk13/24/25** (up to 1.30× on the largest, not yet the ≥1.5× crush); **SOLVE ~0.85× (loses slightly).** nrelax sweep flat (8 best); per-supernode/cmod allocs removed (not the bottleneck). **Crush path (pending — the decisive levers): (a) v5a-3 TREE-PARALLEL factor (Eigen SimplicialLLT is SERIAL → multi-core is the structural win), (b) larger verified-SPD corpus (GHS_psdef: bmwcra_1/ldoor/Flan_1565 — supernodal BLAS-3 dominates at scale), (c) CHOLMOD floor, (d) kernel tuning (small-gemm fastpath + SIMD/BLAS-3 solve).** **v5a-1b CLOSED — the crush LANDED at v5a-4** (hood 1.33×/ldoor 1.28× factor WIN; the gap turned out to be the SERIAL SYMBOLIC, not per-thread BLAS-3 — see v5a-4). | ~700 | ~16 | — |
+| ↳ **v5a-2** ✅ 2026-05-29 — **complex Hermitian LLᴴ + CLI** | **SHIPPED.** `SupernodalCholesky<T>` extended to **Complex32/Complex64** as a single `if constexpr` path (real LLᵀ ↔ complex LLᴴ): `chol_real`/`chol_from_real`/`chol_conj` bridges (identity for real) + `kCholAdjoint<T>` (cmod gemm + backward-solve = ConjTranspose for complex, Transpose for real). Conjugation points: **scatter** reads CSR row `c`'s upper entry `A[c][i]` ⇒ L-column source `A[i][c]=conj(A[c][i])` (the bug that the single-supernode test isolated); **cdiv** diagonal takes `real(pivot)`+real sqrt (HPD pivot is real) + stores `T{d,0}`, rank-1 multiplier `conj(L[jj][j])`; **cmod** gemm `am·am1ᴴ`; **backward solve** Lᴴ=`conj(L)` (both nrhs=1 and the block-gemm). **CLI `hesap.direct.chol.{f32,f64,c32,c64}`** (module's first CLI: `cli_anchor.hpp` + `cli_register_direct.cpp`, complex values/RHS flattened `{re,im}` per the iterative-CLI convention, returns `[info, x]`). **+6 tests (3 complex factor/solve/multi-RHS/determinism + 3 CLI registration/real-solve/complex-solve): 18 tests / 1964 asserts, win-debug green.** Complex determinism moat VERIFIED (factor bit-identical {1,2,4,N} workers on a genuinely Hermitian A=conj-symmetric HPD). | ~330 actual | 6 (18 suite) | — |
+| ↳ **v5a-CHOLMOD-oracle** ✅ infra+bench 2026-05-29 / 🛑 **initial bench LOST 2–4× → CRUSHED at v5a-4** (the gap was the SERIAL SYMBOLIC, not per-thread BLAS-3 as this row's diagnosis guessed; hood/ldoor now WIN factor + multi-RHS solve) | (Tree-parallel + determinism moat already shipped at the v5a-3 row above.) Built the **SuiteSparse CHOLMOD** oracle — THE gold-standard supernodal Cholesky (the real peer; Eigen SimplicialLLT was a WEAK scalar peer). `scripts/setup-cholmod-ref.sh` (apt `libsuitesparse-dev` + switches BLAS→OpenBLAS for a fair fight) + `CRD_BUILD_HESAP_VS_CHOLMOD` gating (WSL/Linux only; GPL supernodal module ⇒ dev-only, never shipped; decoupled from VS_REFERENCE — accepts `-DCRD_HESAP_MATRIX_DIR`) + `bench_hesap_cholesky_vs_cholmod.cpp` (forces `CHOLMOD_SUPERNODAL` + `CHOLMOD_NATURAL` on the same AMD-permuted matrix). CHOLMOD 5.2.0 + OpenBLAS in WSL; ran on `linux-gcc-release` (also = the **gcc `-Werror` cross-config check** on the v5a-2 complex changes — clean). **FAIR result (both timed full symbolic+numeric — advisor caught a CHOLMOD-analyze-hoisted-out bug, fixed; matched threads, both OpenBLAS): FACTOR cerid/cholmod @8thr→@1thr — bcsstk25 1.25×→1.04× WIN · hood 0.66×→0.55× · ldoor 0.45×→0.45× · bmwcra_1 0.24×→0.38×. SOLVE x1 0.48–1.53×. SOLVE x16 LOSES everywhere 0.36–0.72×.** **DIAGNOSIS: primarily PER-THREAD efficiency** — at 1 thread we're 0.38–0.61× (2–2.6× slower/thread) on structural matrices EVEN THOUGH CHOLMOD carries MORE fill (115M vs 96M bmwcra) ⇒ its flop-rate ~2.5–3× ours. Parallel scaling is a SECONDARY, matrix-specific lever (only bmwcra scales worse 0.38→0.24 — few huge supernodes; CHOLMOD BLAS-threads INSIDE a supernode, we only tree-parallelize). **Reference is the floor (`feedback_reference_implementations_are_the_floor`): v5a is NOT a crush — vs the gold standard we are ~2–4× behind on factor at scale (win bcsstk25 only).** | — | — | — |
+| ↳ **v5a-4** ✅ 2026-05-29/30 — **CRUSHED the CHOLMOD FACTOR gap (hood/ldoor WIN) + parallelized the SOLVE (multi-RHS hood/ldoor WIN)** | The planned per-thread BLAS-3 levers (syrk/microkernel) were the **WRONG target** — advisor-steered profiling (race-free per-level + symbolic sub-phase profilers) showed Cerid's NUMERIC factor already BEAT CHOLMOD's (hood 224 vs 305ms); the **entire gap was the SERIAL SYMBOLIC** running 4.4× CHOLMOD's analyze. **FACTOR fixes (byte-identical, moat held): (1) `build_adjacency` rewritten O(nnz) counting-sort transpose + per-vertex merge-dedup (was O(nnz·log deg) introsort); (2) `symbolic_factorize(…, supernodal_patterns=true)` builds per-fundamental-supernode LEADING-column patterns (`SymbolicFactor::slead_ptr/idx`) via the assembly-tree union, skipping the O(nnz(L)) simplicial `li` the supernodal factor never needs** (full-`li` path kept for the general API). 8T vs CHOLMOD (matched OpenBLAS, WSL): **FACTOR hood 0.85→1.33× · ldoor 0.82→1.28× WIN; bmwcra 0.68× (ADR-0082 intrinsics gemm ceiling — 2 wins not 3).** **SOLVE parallelized (measure-first each step, level-parallel, bit-identical): batched multi-RHS diagonal block (nc≥48, c-contiguous, DIVIDE-not-reciprocal) + level-parallel BACKWARD (left-looking, descending) + level-parallel FORWARD (right-looking scatter races → reformulated LEFT-looking gather Σ_{k∈upd_list[s]} L_{s,k}·Y_k, race-free, ascending). FORWARD is TWO-PATH: nw≤1 RIGHT-looking serial (few big gemms) / nw>1 LEFT-looking parallel (the left-looking SERIAL regressed 1T x16 ~15-20%, advisor-predicted + bench-confirmed).** 8T SOLVE x16 vs CHOLMOD: **hood 0.87→1.69-1.81× · ldoor 1.06→1.84-1.98× WIN (~doubled the lead); bmwcra 0.73→0.85× (gemm ceiling).** Determinism: bit-identical L AND x across {1,2,4,8} + serial↔parallel solve at nw∈{1,2,3,pool} (new `solve_with_workers(nw)` hook + test; scratch POOL-sized per `jobs-worker-index-aliasing`). VERIFIED MSVC **548751 asserts / 21 cases** + gcc -Werror + clang-cl /WX + ctest guards + clang-format + **win-asan (gather OOB-clean)** + clang-tidy (lib+tests); the proper close gate FIXED 3 latent cluster failures binary-direct verify missed (non-ASCII `ᴴ` test name, clang-cl unused-lambda-capture, 7 pre-existing factor tidy issues). See `project_symbolic_is_the_cholmod_gap`. **HONEST: NOT "solve crushed" — multi-RHS solve WINS hood/ldoor; v5a-5 below names what still loses.** | ~750 | (21 suite) | — |
+| ↳ **v5a-5** ⬜ NEXT — **the remaining solve levers (finish the full solve crush)** | The parallel fwd/back are MULTI-RHS-only; two honestly-open gaps remain. **(1) SINGLE-RHS (x1) parallelization** — still SERIAL, loses 8T (hood 0.74 · ldoor 0.76 · bmwcra 0.53); the level-parallel fwd/back apply to the nrhs==1 path too (same left-looking gather, per-RHS scratch), the lever that crushed multi-RHS. **(2) bmwcra x16 (0.85×) — the ADR-0082 intrinsics gemm ceiling** (CHOLMOD's big-dense-front home turf): needs the block-DAG / 2D-within-front scaling lever (`crd-hesap-sched::DependencyGraph`), NOT a per-thread kernel tweak — name it as a scaling lever, do not let it trap the cluster. Moat-bound (bit-identical {1..8}); re-measure vs the CHOLMOD oracle. | ~? | ~? | — |
+| ↳ **v5b-1** | **Gilbert-Peierls** left-looking LU + DFS-reachability symbolic + dynamic partial pivot — the serial **correctness oracle / dynamic-pivot reference**. | ~450 | ~14 | — |
+| ↳ **v5b-2** | **Supernodal LU (SuperLU-class)** + **MC64+threshold static pivoting (deterministic, parallel)** + solve + complex + CLI `hesap.direct.lu.*` + bench vs Eigen `SparseLU` / UMFPACK. | ~600 | ~18 | — |
+| ↳ **v5c-1** | **Multifrontal QR** — column etree + frontal Householder QR + `extend_add` + R + least-squares solve. | ~550 | ~16 | — |
+| ↳ **v5c-2** | Rank-revealing (deterministic in-front column pivot + R-diag detection) + implicit Qᵀ-apply + complex + CLI `hesap.direct.qr.*` + bench vs Eigen `SparseQR` / SPQR. | ~450 | ~14 | — |
+| ↳ **v5d** | **Multifrontal LDLᵀ** (symmetric indefinite, static Duff-Reid 1×1/2×2 + deterministic delayed pivots) + complex-symmetric / Hermitian-indefinite + CLI `hesap.direct.ldlt.*` + bench (Eigen `SimplicialLDLT` = fixed-pivot breadth gap; MA57-class floor). | ~550 | ~16 | — |
+| ↳ **v5e-1** | **Low-rank substrate + HSS kernel** — ID + randomized range-finder generalized to `LinearOp` sampling (extends v3b-3 `rsvd`/`rsyev`) + HSS representation + ULV factorization/solve. | ~600 | ~12 | — |
+| ↳ **v5e-2** | **HSS-embedded multifrontal — FULL STRUMPACK feature set** — compress large fronts above a size threshold via randomized sampling (never form the dense front) + **adaptive rank** + **dense-fallback** + ND-aware clustering; validate 3D-Poisson asymptotic + indefinite/ill-conditioned robustness. | ~700 | ~14 | — |
+| ↳ **v5e-3** | **BLR-embedded multifrontal (MUMPS-BLR)** — flat block-low-rank fronts (robust production default; complements HSS). **Ships in v5, expanding ADR-0065 BLR-reserve (locked 2026-05-28; pinned at §27).** | ~450 | ~10 | — |
+| ↳ **v5f** | **Mixed-precision iterative refinement** (HPL-AI / Carson-Higham) — opt-in factor-in-f32 + refine-in-f64 `solve` policy across all four factorizations (~2× factor speed + memory at f64 accuracy). | ~350 | ~8 | — |
+| ↳ **v5z** | **CLOSE** — complex-completeness audit + CLI-completeness audit + **end-to-end determinism moat {1..16}× all families** + ADR-0065 §27 lock D(direct)-1..N + `docs/systems/hesap-direct.md` + **18-config full sweep**. | ~250 | ~8 | — |
 | **v6** | Sparse eigenvalue (Lanczos with restart + IRA Arnoldi + **LOBPCG Knyazev 2001** + **FEAST Polizzi 2009** + **Jacobi-Davidson** + **IRLBA Baglama-Reichel 2005**) + complex variants + CLI registration | ~2500 | ~110 | ~2.5 wk |
 | **v7** | Optimisation v1 unconstrained: gradient / Newton / L-BFGS / **trust-region Steihaug** / BFGS + line search (Wolfe / Armijo / strong-Wolfe) + **stochastic optimization** (Adam / AdamW / Lion) + sensitivity (FD / forward-AD) + CLI registration | ~3200 | ~120 | ~2.5 wk |
 | **v8** | Optimisation v2 constrained: QP (**OSQP** + **SCS O'Donoghue 2016**) + LP (revised simplex + Mehrotra IPM) + NLP (IPOPT-class + SQP) + algebraic modelling layer (JuMP / CasADi pattern) + CLI registration | ~3800 | ~110 | ~3 wk |
@@ -350,6 +368,145 @@ substrate.** Comparable in scope to eylem itself.
 > v17 (GPU) and v18 (REPL) are independently shippable. If schedule
 > pressure surfaces, they can defer to a later "Phase 3.1.6 follow-up"
 > without blocking the CPU substrate's usefulness.
+
+---
+
+## v5 — Sparse DIRECT factorization — DETAILED PLAN (planned 2026-05-28)
+
+> **The COMPLETE elite direct-solver family** — the direct twin of the v4
+> iterative spine. Mandate (user-directed 2026-05-28): "fully elite path …
+> outstanding, unusually world-class and complete." Never-defer
+> (`feedback_hesap_substrate_never_defer_features`): four exact
+> factorizations + the rank-structured family (HSS *and* BLR) +
+> mixed-precision refinement, all four type instantiations, CLI per op.
+> Three pillars, all mandatory: **full cross-thread bit-determinism +
+> correctness + performance (beat Eigen; match the SuiteSparse floor).**
+> Deep-research dossier: `docs/research/cerid-hesap-v5-sparse-direct.md`.
+
+### v5 close gates — LOCKED 2026-05-28 (apply to EVERY v5 sub-slice)
+
+> User directive 2026-05-28. These are HARD close gates, additional to the
+> standard per-slice DoD (build clean / unit tests / cross-config / tidy):
+>
+> 1. **Benchmarks are mandatory at slice close.** No sub-slice closes without
+>    running its `bench_hesap_*_vs_reference` when a benchmark is applicable.
+>    Unit-tests-green ≠ closed. If no bench exists for an op with a frontier
+>    peer, writing one IS part of the slice.
+> 2. **Crush / push to the limits.** The result must beat the frontier peer
+>    (Eigen / SuiteSparse CHOLMOD-UMFPACK-SPQR / LAPACK), or match the true
+>    hardware floor. "Passes but slower" is not done.
+> 3. **NEVER regress existing performance.** A change must not make any
+>    previously-measured benchmark slower/worse (time, fill, iterations,
+>    throughput). Compare against the PRIOR baseline, not only the reference.
+>    A change that regresses a previously-winning benchmark **does not ship —
+>    revert or fix.** (Case: v5a-0 ND-compression — passed all unit tests, but
+>    regressed ND fill on bcsstk13/24/25; reverted in full.)
+> 4. **Benchmark the PREMISE before building an optimization.** If the existing
+>    path already wins, there may be nothing to fix — a quick bench of the
+>    current state beats writing speculative machinery. (See `feedback_benchmarks_mandatory_at_slice_close`.)
+
+### Framing — the substrate thesis made concrete
+
+A sparse direct factorization = **symbolic analysis (already shipped in
+v2c) + a tree of *dense* panel operations.** `crd::hesap::ordering::SymbolicFactor`
+hands v5 the elimination tree, postorder, column counts, full L-pattern
+(CSC), and the fundamental supernode partition. So v5 is not "write a
+sparse factorizer from scratch" — it is **"orchestrate v0's dense BLAS-3
+kernels over v2c's assembly tree, deterministically."** Every node's work
+is a dense TRSM/SYRK/GEQRF/GETRF on a supernode or frontal matrix — kernels
+we already beat LAPACK with. Primary consumers: structural mechanics,
+implicit FEM (eylem v7), CFD pressure-Poisson, circuit/aerospace stiffness,
+and the inner solves of optimization (v7/v8) + implicit ODE (v9).
+
+### Architecture — new module `crd-hesap-direct`
+
+One-way deps (no cycles): `crd-hesap` (LinearOp, CLI) · `crd-hesap-sparse`
+(CSC/CSR, spmv for refinement residual) · `crd-hesap-ordering`
+(`SymbolicFactor`, AMD/CAMD/ND, MC64, postorder) · `crd-hesap-dense`
+(dense panel kernels + `rsvd`/range-finder for HSS) · `crd-hesap-sched`
+(`DependencyGraph` — the PLASMA/PaRSEC task DAG, already shipped) ·
+`crd-jobs`, `crd-memory`.
+
+**Two foundational data structures, specced once in v5a-1, reused by every
+family:**
+
+1. **`Factorization<T>`** — factored representation + a cheap, re-callable,
+   **multi-RHS-from-day-1** `solve(F, B)`. Factor-once/solve-N is the
+   FEM/eylem/opt access pattern; never bolt multi-RHS on later. Carries the
+   v4z factor-vs-solve break-even reporting hooks for benches.
+2. **Frontal matrix + `extend_add`** — dense `Matrix<T,RowMajor>` + relative
+   row/col index map into the parent's pattern + the scatter-add of a child's
+   Schur-complement block into its parent. The central reusable kernel for
+   multifrontal QR (v5c), LDLᵀ (v5d), and rank-structured fronts (v5e);
+   defined in v5a-1 so v5c+ consume a settled surface.
+
+### The determinism moat — claimed per family (the differentiator)
+
+No frontier sparse-direct library (CHOLMOD / UMFPACK / SPQR / MUMPS /
+PARDISO / SuperLU) offers bit-exact factors across thread counts — they
+reduce frontal updates in completion order. The v5 universal discipline
+(v4 §26 D(iter)-1): **serial reductions within a front; disjoint-slab
+parallelism over independent subtrees only; never a fork-join sum across
+threads.** Sibling subtrees touch disjoint data until their parent
+assembles them, and `extend_add` iterates children in a **fixed (postorder)
+order** → the assembled front is identical regardless of which worker
+finished first. This exactly satisfies the `DependencyGraph` contract
+(ready tasks run in any order; the order that matters is encoded in the
+deterministic parent-assembly step, not in dispatch).
+
+| Family | Bit-exact across {1,2,4,8,16} | Mechanism |
+| --- | --- | --- |
+| **Cholesky** | L | No pivoting; static supernodal etree schedule. |
+| **LDLᵀ** | L, D, pivot + delayed-pivot sequence | Static 1×1/2×2 threshold on deterministic front data + deterministic tie-break; delayed count is a function of the front. |
+| **LU** | pivot sequence, L, U | **MC64 + threshold partial pivot** (dynamic partial pivot is order-dependent → serial reference only, v5b-1). |
+| **QR** | R, Q (Householder vectors) | Per-front Householder local + deterministic; assembly-tree order is global determinism; rank-reveal uses deterministic column-norm reduction + tie-break. |
+
+### Per-family algorithm decisions (canonical + reference)
+
+- **v5a Supernodal Cholesky (SPD/HPD)** — left-looking supernodal
+  (Davis 2006; Ng-Peyton 1993; CHOLMOD-class), relaxed supernode
+  amalgamation (CHOLMOD `nrelax`/`zrelax`, deterministic merge rule),
+  complex Hermitian LLᴴ, tree-parallel on `DependencyGraph`.
+- **v5b Sparse LU** — Gilbert-Peierls `cs_lu` (Davis 2006, DFS-reachability,
+  serial reference) → supernodal LU (Demmel-Eisenstat-Gilbert-Li 1999,
+  SuperLU) with MC64 (v4j-1a) + threshold partial pivot for deterministic
+  parallel pivoting.
+- **v5c Multifrontal QR** — column etree + frontal Householder + `extend_add`
+  (Davis 2011, SuiteSparseQR), implicit Qᵀ for least-squares, rank-revealing
+  in-front column pivot.
+- **v5d Multifrontal LDLᵀ** — Duff-Reid 1983 (MA57-class), 1×1/2×2 +
+  deterministic delayed pivots, complex-symmetric + Hermitian-indefinite.
+- **v5e Rank-structured fronts** — HSS (Xia 2010) + STRUMPACK randomized-
+  sampling front construction (Ghysels-Li 2016) + BLR (Amestoy 2015,
+  MUMPS-BLR). Counter-based RNG keyed by block index so the sampled basis
+  is thread-independent (moat-safe). v5e-3 BLR expands the ADR-0065 reserve.
+- **v5f Mixed-precision iterative refinement** — HPL-AI / Carson-Higham
+  2018, opt-in factor-f32 + refine-f64 `solve` policy across all families.
+
+### Bench / reference strategy
+
+`CRD_BUILD_HESAP_VS_SUITESPARSE` set up in v5a-1 (WSL, gitignored
+`external/`, never CI — same pattern as `CRD_BUILD_HESAP_VS_ILUPACK`),
+reused by v5b/c/d. Apples-to-apples header peer = Eigen
+`SimplicialLLT`/`SparseLU`/`SparseQR`/`SimplicialLDLT`; reference floor =
+SuiteSparse CHOLMOD/UMFPACK/SPQR (+ MA57-class for LDLᵀ). Report
+`‖b−Ax‖/‖b‖` after refinement (matched-true-residual + correct-peer
+discipline). Corpus: SuiteSparse Matrix Collection (SPD `bcsstk*`/`ldoor`/
+`af_shell`/`nd24k` 3D for HSS; unsymmetric circuit/CFD; least-squares) +
+the v4 corpus for continuity.
+
+### Open scope (pinned at the §27 lock)
+
+- **BLR (v5e-3) ships in v5** (LOCKED 2026-05-28), expanding ADR-0065's
+  BLR-reserve; **HSS (v5e-2) is the full STRUMPACK feature set** (adaptive
+  rank + dense-fallback + ND-aware clustering). Both pinned at the §27 lock.
+- Calendar honesty: ~14 elite sub-slices ≈ **multi-month**, ~7000+ LOC /
+  ~165 tests (revised up from the table's ~4500/~140 — fuller HSS+BLR +
+  mixed-precision IR + weighted-ND). Accepted per
+  `feedback_hesap_clean_structure_over_calendar`.
+- **Start gate:** Phase 2.2 **S8** (streaming-allocators cluster close +
+  ADR-0085 lock + 18-config sweep) per `context.md`. v5a-0 execution
+  begins after S8; this plan can be reviewed now.
 
 ---
 

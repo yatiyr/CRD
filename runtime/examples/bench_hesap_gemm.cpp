@@ -120,6 +120,59 @@ void run_size(const char* label, crd::usize n, crd::f64 peak_gflops, crd::memory
                  static_cast<std::size_t>(n), iters, elapsed_s, gflops, pct, peak_gflops);
 }
 
+// v5a-4 cmod ceiling-spike: time the ACTUAL supernodal-cmod gemm shape — ColMajor,
+// C(m×nn) = A(m×k) · B(nn×k)^T (NT, the `am · am1^T` Schur update), full gemm streaming
+// from L2/L3 (NOT an L1 single tile). Discriminates the cmod 52%-of-peak wall: if the
+// CLEAN shape hits ~90% the in-situ loss is cold/strided descendant-panel reads (lever =
+// cache-blocking those reads); if it caps ~55% the NT-ColMajor kernel itself is the wall.
+template <typename T, crd::hesap::dense::Layout L>
+void run_gemm_shape(const char* tag, crd::usize m, crd::usize nn, crd::usize k, crd::hesap::dense::Trans ta,
+                    crd::hesap::dense::Trans tb, crd::f64 peak_gflops, crd::memory::IAllocator* alloc)
+{
+    using namespace crd::hesap::dense;
+    // C(m×nn) = op(A) · op(B). A dims = (m×k) if ta==None else (k×m); B = (k×nn) if tb==None else (nn×k).
+    Matrix<T, L> a(alloc, ta == Trans::None ? m : k, ta == Trans::None ? k : m);
+    Matrix<T, L> b(alloc, tb == Trans::None ? k : nn, tb == Trans::None ? nn : k);
+    Matrix<T, L> c(alloc, m, nn);
+    for (crd::usize i = 0; i < a.rows(); ++i)
+    {
+        for (crd::usize j = 0; j < a.cols(); ++j)
+        {
+            a(i, j) = static_cast<T>(i + 1) * static_cast<T>(0.001) + static_cast<T>(j) * static_cast<T>(0.0002);
+        }
+    }
+    for (crd::usize i = 0; i < b.rows(); ++i)
+    {
+        for (crd::usize j = 0; j < b.cols(); ++j)
+        {
+            b(i, j) = static_cast<T>(j + 1) * static_cast<T>(0.0007) - static_cast<T>(i) * static_cast<T>(0.0003);
+        }
+    }
+    for (crd::usize i = 0; i < m * nn; ++i)
+    {
+        c.data()[i] = T{};
+    }
+    gemm<T, L>(T{1}, a, b, T{}, c, ta, tb); // warm
+    const auto t0 = std::chrono::steady_clock::now();
+    int iters = 0;
+    while (true)
+    {
+        gemm<T, L>(T{1}, a, b, T{}, c, ta, tb);
+        ++iters;
+        const auto el = std::chrono::duration<crd::f64>(std::chrono::steady_clock::now() - t0).count();
+        if (el > 0.5 && iters >= 3)
+        {
+            break;
+        }
+    }
+    const crd::f64 elapsed_s = std::chrono::duration<crd::f64>(std::chrono::steady_clock::now() - t0).count();
+    const crd::f64 flops_per_iter = 2.0 * static_cast<crd::f64>(m) * static_cast<crd::f64>(nn) * static_cast<crd::f64>(k);
+    const crd::f64 gflops = (flops_per_iter * iters) / (elapsed_s * 1e9);
+    std::fprintf(stdout, "  %-10s M=%-5zu N=%-5zu K=%-4zu  %6.2f GFLOPS  (%.1f%% of %.1f peak)\n", tag,
+                 static_cast<std::size_t>(m), static_cast<std::size_t>(nn), static_cast<std::size_t>(k), gflops,
+                 gflops / peak_gflops * 100.0, peak_gflops);
+}
+
 } // namespace
 
 int main()
@@ -149,6 +202,26 @@ int main()
     {
         run_size<crd::f64>("f64", n, peak_f64, &alloc);
     }
+    std::fprintf(stdout, "==== f64 cmod-shape (supernodal Schur-update gemm) ====\n");
+    using crd::hesap::dense::Trans;
+    using crd::hesap::dense::Layout;
+    constexpr auto N = Trans::None;
+    constexpr auto Tr = Trans::Transpose;
+    // LAYOUT/TRANS GRID at K=512 (square RowMajor-NN = 80% is the ceiling): isolate which axis costs.
+    // cmod is ColMajor-NT; reinterpreting the ColMajor K-panel as RowMajor makes it RowMajor-TN (zero-copy).
+    // If RowMajor-TN hits ~80%, the cmod can reroute (view-flip + transposed scatter), no kernel rewrite.
+    run_gemm_shape<crd::f64, Layout::RowMajor>("rm-NN", 512, 512, 512, N, N, peak_f64, &alloc);
+    run_gemm_shape<crd::f64, Layout::RowMajor>("rm-TN", 512, 512, 512, Tr, N, peak_f64, &alloc); // cmod reroute target
+    run_gemm_shape<crd::f64, Layout::RowMajor>("rm-NT", 512, 512, 512, N, Tr, peak_f64, &alloc);
+    run_gemm_shape<crd::f64, Layout::RowMajor>("rm-TT", 512, 512, 512, Tr, Tr, peak_f64, &alloc);
+    run_gemm_shape<crd::f64, Layout::ColMajor>("cm-NN", 512, 512, 512, N, N, peak_f64, &alloc);
+    run_gemm_shape<crd::f64, Layout::ColMajor>("cm-NT", 512, 512, 512, N, Tr, peak_f64, &alloc); // = cmod, K512
+    // In-situ cmod shapes (ColMajor-NT). Tall-M is the DOMINANT real shape — the target metric.
+    run_gemm_shape<crd::f64, Layout::ColMajor>("cm-NT", 512, 512, 200, N, Tr, peak_f64, &alloc);  // advisor canonical
+    run_gemm_shape<crd::f64, Layout::ColMajor>("cm-NT", 1024, 512, 256, N, Tr, peak_f64, &alloc);
+    run_gemm_shape<crd::f64, Layout::ColMajor>("cm-NT", 2048, 512, 200, N, Tr, peak_f64, &alloc); // tall front (dominant)
+    // The reroute target at the dominant tall shape (RowMajor-TN, transposed dims k×m / k×n):
+    run_gemm_shape<crd::f64, Layout::RowMajor>("rm-TN", 2048, 512, 200, Tr, N, peak_f64, &alloc);
     std::fprintf(stdout, "\nDone.\n");
     return 0;
 }
