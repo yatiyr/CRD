@@ -606,7 +606,8 @@ void SupernodalCholesky<T>::factorize(const sparse::SparsePattern& pattern, crd:
         crd::u32* rr = relrow.data() + static_cast<crd::usize>(worker) * m_n;
         T* ub = ubuf.data() + static_cast<crd::usize>(worker) * ustride;
         T* linv = linvbuf.data() + static_cast<crd::usize>(worker) * linv_stride; // cdiv L11⁻¹ scratch
-        crd::u32* lrm = relmap.data() + static_cast<crd::usize>(worker) * max_nr; // cmod scatter row-map
+        // (cmod's scatter row-map now lives in cmod_slab as per-LANE lrm_w; the old front-worker
+        // lrm was unused once cmod went row-slab-parallel.)
         const crd::u32 rb = sym.srowp[s];
         const crd::u32 nr = sym.srowp[s + 1] - rb;
         const crd::u32 firstcol = sym.scol[s];
@@ -643,108 +644,145 @@ void SupernodalCholesky<T>::factorize(const sparse::SparsePattern& pattern, crd:
         const auto prof_t1 = ProfClock::now();
         g_cholprof.scatter_ns += prof_ns(prof_t0, prof_t1);
 #endif
-        for (crd::u32 ui = upd_ptr[s]; ui < upd_ptr[s + 1]; ++ui) // cmod (dense gemm)
+        // cmod — Schur updates from descendants. NODE-PARALLEL fronts (par_workers>1) partition the
+        // front's ROWS across the worker pool with ONE fork per front — NOT gemm_parallel per
+        // descendant, which paid fork/join per call and capped the huge-front cmod scaling at ~1.86×
+        // (measured). The cmod gemm SHAPE parallelizes 4.5–6.8× under OpenBLAS (ob_probe), so the cap
+        // was Cerid's per-descendant fork/join, not the shape. Each lane owns a front-local row-slab
+        // [r0,r1); for every descendant it does the sub-gemm over the descendant rows mapping into the
+        // slab — a CONTIGUOUS pr-range because lrm[pr]=rr[srow[..]] is strictly increasing (rr is the
+        // position-in-sorted-front-rows; the descendant's rows are a sorted subset) — and scatters
+        // ONLY into its own rows. BIT-IDENTICAL to serial: each front row is owned by exactly one lane
+        // and its subtracts are applied in ascending-descendant order = the serial order; each gemm
+        // output element's K-reduction is independent of the row-slab (the property gemm_parallel
+        // already relies on). rr is filled once (this front's worker slot, 615–618) and read-only
+        // across lanes; ub/lrm are per-LANE scratch (lane worker_index, never the front's worker).
+        auto cmod_slab = [&](crd::u32 r0, crd::u32 r1, crd::u32 w)
         {
-            const crd::u32 k = upd_list[ui];
-            const crd::u32 krb = sym.srowp[k];
-            const crd::u32 knr = sym.srowp[k + 1] - krb;
-            const crd::u32 knc = sym.scol[k + 1] - sym.scol[k];
-            const T* kpanel = &m_lx[m_lxp[k]];
-            crd::u32 lo = knc;
-            crd::u32 hi = knr;
-            while (lo < hi) // p0 = first K-row ≥ firstcol
+            T* ub_w = ubuf.data() + static_cast<crd::usize>(w) * ustride;
+            crd::u32* lrm_w = relmap.data() + static_cast<crd::usize>(w) * max_nr;
+            const crd::u32 g_lo = sym.srow[rb + r0]; // slab global-row lower bound (inclusive)
+            const crd::u32 g_hi = (r1 < nr) ? sym.srow[rb + r1] : (sym.srow[rb + nr - 1] + 1); // exclusive
+            for (crd::u32 ui = upd_ptr[s]; ui < upd_ptr[s + 1]; ++ui)
             {
-                const crd::u32 mid = lo + (hi - lo) / 2;
-                if (sym.srow[krb + mid] < firstcol)
+                const crd::u32 k = upd_list[ui];
+                const crd::u32 krb = sym.srowp[k];
+                const crd::u32 knr = sym.srowp[k + 1] - krb;
+                const crd::u32 knc = sym.scol[k + 1] - sym.scol[k];
+                const T* kpanel = &m_lx[m_lxp[k]];
+                crd::u32 lo = knc;
+                crd::u32 hi = knr;
+                while (lo < hi) // p0 = first K-row ≥ firstcol
                 {
-                    lo = mid + 1;
+                    const crd::u32 mid = lo + (hi - lo) / 2;
+                    if (sym.srow[krb + mid] < firstcol)
+                    {
+                        lo = mid + 1;
+                    }
+                    else
+                    {
+                        hi = mid;
+                    }
                 }
-                else
+                const crd::u32 p0 = lo;
+                crd::u32 m1 = 0;
+                while (p0 + m1 < knr && sym.srow[krb + p0 + m1] < firstcol + nc)
                 {
-                    hi = mid;
+                    ++m1;
                 }
-            }
-            const crd::u32 p0 = lo;
-            crd::u32 m1 = 0;
-            while (p0 + m1 < knr && sym.srow[krb + p0 + m1] < firstcol + nc)
-            {
-                ++m1;
-            }
-            const crd::u32 msz = knr - p0;
-#ifdef CRD_HESAP_CHOL_PROFILE
-            const crd::u64 prof_gflop = static_cast<crd::u64>(2) * msz * m1 * knc; // gemm U=am·am1ᴴ
-            const int prof_bin = CholProf::knc_bin(knc);
-            g_cholprof.cmod_flops += prof_gflop;
-            g_cholprof.cmod_flop_bin[prof_bin] += prof_gflop;
-            if (prof_bin == CholProf::kBins - 1) // K≥128 — discriminate skinny-C vs kernel by m1
-            {
-                const int mb = CholProf::m1_bin(m1);
-                g_cholprof.cmod_hk_m1_flop[mb] += prof_gflop;
-                ++g_cholprof.cmod_hk_m1_count[mb];
-            }
-            ++g_cholprof.cmod_calls;
-            const auto prof_g0 = ProfClock::now();
-#endif
-            // Schur update U(msz×m1, ColMajor in ub) = am · am1ᴴ.
-            // f64 REROUTE (v5a-4 cmod crush): compute Uᵀ = am1·amᵀ as a RowMajor-C gemm. A RowMajor
-            // Uᵀ(m1×msz, ld=msz) occupies the SAME memory as the ColMajor U(msz×m1, ld=msz), so the
-            // cache-friendly ColMajor scatter below is UNCHANGED — but the gemm now runs on the fast
-            // RowMajor-C path (measured ~77% vs ColMajor-C ~65% of peak; the dominant tall fronts ~2×).
-            // am1r/amr reinterpret the ColMajor K-panel sub-blocks as RowMajor (zero-copy transpose:
-            // ColMajor (r×c, ld) ≡ RowMajor (c×r, ld)); op = (Transpose, None) ⇒ am1·amᵀ. gemm_parallel
-            // ≡ serial gemm bit-for-bit (disjoint row-slabs) ⇒ the determinism moat holds (re-verified
-            // by the [v5a-4][determinism] fat-front test). Complex Hermitian (am1ᴴ ≠ am1ᵀ) keeps the
-            // generic ColMajor-NT path (chol_gemm with ConjTranspose).
-            if constexpr (std::is_same_v<T, crd::f64>)
-            {
-                const dense::MatrixView<const T, dense::Layout::RowMajor> am1r(kpanel + static_cast<crd::usize>(p0),
-                                                                               knc, m1, knr); // = am1ᵀ
-                const dense::MatrixView<const T, dense::Layout::RowMajor> amr(kpanel + static_cast<crd::usize>(p0), knc,
-                                                                              msz, knr);   // = amᵀ
-                const dense::MatrixView<T, dense::Layout::RowMajor> utr(ub, m1, msz, msz); // Uᵀ RowMajor == U ColMajor
-                const crd::u64 flop = static_cast<crd::u64>(2) * m1 * msz * knc;
-                if (par_workers > 1 && flop >= kGemmParallelMinFlop) // node-parallel big fronts
+                const crd::u32 msz = knr - p0;
+                // Contiguous pr sub-range of this descendant's U-rows (srow[krb+p0 .. krb+knr), sorted)
+                // mapping into the slab's global-row window [g_lo, g_hi). Binary-search both ends.
+                crd::u32 a = 0;
+                crd::u32 b = msz;
+                while (a < b)
                 {
-                    dense::gemm_parallel<T, dense::Layout::RowMajor>(
-                        par_workers, T{1}, am1r, amr, T{0}, utr, dense::Trans::Transpose, dense::Trans::None, nullptr);
-                    crd::jobs::frame_reset(); // reclaim JobDecls (many node-parallel gemms run serially on main)
+                    const crd::u32 m = a + (b - a) / 2;
+                    if (sym.srow[krb + p0 + m] < g_lo)
+                    {
+                        a = m + 1;
+                    }
+                    else
+                    {
+                        b = m;
+                    }
                 }
-                else
+                const crd::u32 pr_lo = a;
+                b = msz;
+                a = pr_lo;
+                while (a < b)
                 {
+                    const crd::u32 m = a + (b - a) / 2;
+                    if (sym.srow[krb + p0 + m] < g_hi)
+                    {
+                        a = m + 1;
+                    }
+                    else
+                    {
+                        b = m;
+                    }
+                }
+                const crd::u32 pr_hi = a;
+                if (pr_lo >= pr_hi)
+                {
+                    continue; // descendant touches no row in this slab
+                }
+                const crd::u32 sub = pr_hi - pr_lo;
+                // Sub-gemm over rows [pr_lo,pr_hi): SERIAL (the front-level fork is already paid).
+                // f64 REROUTE: Uᵀ(m1×sub, ld=sub) = am1·am[slab]ᵀ on the fast RowMajor-C path. Uᵀ
+                // RowMajor == U ColMajor (sub×m1) in the SAME memory ⇒ the ColMajor scatter is unchanged.
+                if constexpr (std::is_same_v<T, crd::f64>)
+                {
+                    const dense::MatrixView<const T, dense::Layout::RowMajor> am1r(kpanel + static_cast<crd::usize>(p0),
+                                                                                   knc, m1, knr); // = am1ᵀ (full m1)
+                    const dense::MatrixView<const T, dense::Layout::RowMajor> amr(
+                        kpanel + static_cast<crd::usize>(p0 + pr_lo), knc, sub, knr);            // = am[slab]ᵀ
+                    const dense::MatrixView<T, dense::Layout::RowMajor> utr(ub_w, m1, sub, sub); // Uᵀ sub RowMajor
                     dense::gemm<T, dense::Layout::RowMajor>(T{1}, am1r, amr, T{0}, utr, dense::Trans::Transpose,
                                                             dense::Trans::None, nullptr);
                 }
-            }
-            else
-            {
-                const dense::MatrixView<const T, dense::Layout::ColMajor> am(kpanel + static_cast<crd::usize>(p0), msz,
-                                                                             knc, knr);
-                const dense::MatrixView<const T, dense::Layout::ColMajor> am1(kpanel + static_cast<crd::usize>(p0), m1,
-                                                                              knc, knr);
-                const dense::MatrixView<T, dense::Layout::ColMajor> uvw(ub, msz, m1, msz); // U ColMajor, ld=msz
-                chol_gemm(T{1}, am, am1, T{0}, uvw, dense::Trans::None, kCholAdjoint<T>, par_workers);
-            }
-#ifdef CRD_HESAP_CHOL_PROFILE
-            const auto prof_gend = ProfClock::now();
-            g_cholprof.cmod_ns_bin[prof_bin] += prof_ns(prof_g0, prof_gend);
-#endif
-            for (crd::u32 pr = 0; pr < msz; ++pr) // hoist: descendant-row → target-local-row (depends only on pr)
-            {
-                lrm[pr] = rr[sym.srow[krb + p0 + pr]];
-            }
-            for (crd::u32 pc = 0; pc < m1; ++pc)
-            {
-                const crd::u32 gcol = sym.srow[krb + p0 + pc];
-                T* pcoldst = panel + static_cast<crd::usize>(gcol - firstcol) * nr; // target column (hoisted per pc)
-                const T* ubc = ub + static_cast<crd::usize>(pc) * msz;
-                for (crd::u32 pr = 0; pr < msz; ++pr)
+                else
                 {
-                    pcoldst[lrm[pr]] -= ubc[pr]; // pure indexed scatter — no per-element rr/srow lookup
+                    const dense::MatrixView<const T, dense::Layout::ColMajor> am(
+                        kpanel + static_cast<crd::usize>(p0 + pr_lo), sub, knc, knr);
+                    const dense::MatrixView<const T, dense::Layout::ColMajor> am1(kpanel + static_cast<crd::usize>(p0),
+                                                                                  m1, knc, knr);
+                    const dense::MatrixView<T, dense::Layout::ColMajor> uvw(ub_w, sub, m1, sub); // U sub ColMajor ld=sub
+                    dense::gemm<T, dense::Layout::ColMajor>(T{1}, am, am1, T{0}, uvw, dense::Trans::None,
+                                                            kCholAdjoint<T>, nullptr);
+                }
+                for (crd::u32 pr = pr_lo; pr < pr_hi; ++pr) // descendant-row → target-local-row
+                {
+                    lrm_w[pr] = rr[sym.srow[krb + p0 + pr]];
+                }
+                for (crd::u32 pc = 0; pc < m1; ++pc)
+                {
+                    const crd::u32 gcol = sym.srow[krb + p0 + pc];
+                    T* pcoldst = panel + static_cast<crd::usize>(gcol - firstcol) * nr; // target column
+                    const T* ubc = ub_w + static_cast<crd::usize>(pc) * sub; // U[pr,pc] = ubc[pr-pr_lo] (both layouts)
+                    for (crd::u32 pr = pr_lo; pr < pr_hi; ++pr)
+                    {
+                        pcoldst[lrm_w[pr]] -= ubc[pr - pr_lo]; // only this lane's rows ⇒ disjoint
+                    }
                 }
             }
-#ifdef CRD_HESAP_CHOL_PROFILE
-            g_cholprof.cmod_scatter_ns += prof_ns(prof_gend, ProfClock::now());
-#endif
+        };
+        if (par_workers <= 1)
+        {
+            cmod_slab(0, nr, worker); // serial / tree-parallel: one slab = the whole front
+        }
+        else
+        {
+            // Node-parallel huge front: ONE fork over the front's row-slabs (amortizes the per-front
+            // fork/join the per-descendant gemm_parallel paid). rr (615–618) is filled and read-only.
+            // (Over-decomposing num_jobs=par_workers*K was measured NULL on the real all-matrix workload —
+            // the residual is load imbalance the cheap knob didn't capture; guided/work-stealing chunking
+            // is a characterized future lever, not kept here.)
+            auto* counter = crd::jobs::parallel_for(nr, par_workers,
+                                                    [&](crd::u32 bb, crd::u32 ee)
+                                                    { cmod_slab(bb, ee, crd::jobs::worker_index()); });
+            crd::jobs::wait(counter);
+            crd::jobs::frame_reset(); // reclaim this front's parallel_for JobDecls
         }
 #ifdef CRD_HESAP_CHOL_PROFILE
         const auto prof_t2 = ProfClock::now();
@@ -879,7 +917,9 @@ void SupernodalCholesky<T>::factorize(const sparse::SparsePattern& pattern, crd:
                         const dense::MatrixView<const T, dense::Layout::ColMajor> a21v(ub, below, ibw, below);
                         const dense::MatrixView<const T, dense::Layout::ColMajor> linvv(linv, ibw, ibw, ibw);
                         const dense::MatrixView<T, dense::Layout::ColMajor> l21v(a21, below, ibw, nr);
-                        chol_gemm(T{1}, a21v, linvv, T{0}, l21v, dense::Trans::None, kCholAdjoint<T>, par_workers);
+                        // FORCE SERIAL (par_workers→1): A2 is bounded small (below≤obw−ibw≤192, K=ibw=64), so
+                        // node-parallel gemm_parallel here only paid fork/join — a chief 8T cdiv-chain inflator.
+                        chol_gemm(T{1}, a21v, linvv, T{0}, l21v, dense::Trans::None, kCholAdjoint<T>, 1U);
                     }
                     // (A3) trailing update WITHIN the obw block: cols [iend:koend], rows [iend:koend] (K=ibw).
                     if (iend < koend)
@@ -890,7 +930,9 @@ void SupernodalCholesky<T>::factorize(const sparse::SparsePattern& pattern, crd:
                         const dense::MatrixView<const T, dense::Layout::ColMajor> av(a_base, tr, ibw, nr);
                         const dense::MatrixView<const T, dense::Layout::ColMajor> bv(a_base, tr, ibw, nr);
                         const dense::MatrixView<T, dense::Layout::ColMajor> cv(c_base, tr, tr, nr);
-                        chol_gemm(T{-1}, av, bv, T{1}, cv, dense::Trans::None, kCholAdjoint<T>, par_workers);
+                        // FORCE SERIAL (par_workers→1): A3 within-obw trailing is bounded small (tr≤obw−ibw≤192,
+                        // K=ibw=64) ⇒ gemm_parallel only paid fork/join (8T cdiv-chain inflator).
+                        chol_gemm(T{-1}, av, bv, T{1}, cv, dense::Trans::None, kCholAdjoint<T>, 1U);
                     }
                 }
                 if (cdiv_failed)
@@ -903,104 +945,88 @@ void SupernodalCholesky<T>::factorize(const sparse::SparsePattern& pattern, crd:
                 // intensity (v5a-4 cdiv-A lever: OpenBLAS dtrsm = 65 GF/s on this shape, Cerid was 26).
                 // L11 = the just-factored obw diagonal block. Each gemm is bit-identical serial/parallel.
                 const crd::u32 below_o = nr - koend;
-                if (below_o > 0)
+                // (B) ROW-SLAB PARALLEL (v5a-7 sub-slice 3): ONE fork per outer block over the below_o
+                // rows — replaces the per-jb-block `gemm_parallel` forks + the wrong-axis (jbw≤64-col)
+                // serial apply, which left the dominant below-outer work NOT scaling (the cdiv-chain wall;
+                // the genuinely-serial POTF2 floor is ~0). Each lane owns a below_o row-slab [r0,r1) and
+                // walks the jb-blocks SEQUENTIALLY: B1 (K=kacc-growing update) then B2 (jbw×jbw diagonal
+                // solve), ascending jb — that IS the serial accumulation order ⇒ BIT-IDENTICAL; rows are
+                // disjoint ⇒ race-free. Per-lane ub_w/linv_w (slab-relative offsets); L11 (bv + the
+                // jbw×jbw diagonal) is SHARED read-only — the diagonal invert is redundant per lane
+                // (64×64, noise vs the below_o×jbw gemms; sidesteps all sharing/ordering hazards).
+                auto b_slab = [&](crd::u32 r0, crd::u32 r1, crd::u32 w)
                 {
+                    T* ub_w = ubuf.data() + static_cast<crd::usize>(w) * ustride;
+                    T* linv_w = linvbuf.data() + static_cast<crd::usize>(w) * linv_stride;
+                    const crd::u32 slab = r1 - r0;
                     for (crd::u32 jb = ko; jb < koend; jb += inner_bw)
                     {
                         const crd::u32 jbw = (jb + inner_bw < koend) ? inner_bw : (koend - jb);
-                        const crd::u32 kacc = jb - ko; // already-solved columns [ko:jb)
-                        T* xjb =
-                            panel + static_cast<crd::usize>(jb) * nr + koend; // X[:, jb-block] = [koend:nr, jb:jend]
-                        if (kacc > 0) // (B1) X[:, jb] -= X[:, ko:jb] · L11[jb-block, ko:jb]ᴴ  (K=kacc, GROWS)
+                        const crd::u32 kacc = jb - ko;                                       // already-solved cols [ko:jb)
+                        T* xjb = panel + static_cast<crd::usize>(jb) * nr + koend + r0;       // X[r0:r1, jb-block]
+                        if (kacc > 0) // (B1) X[r0:r1, jb] -= X[r0:r1, ko:jb] · L11[jb, ko:jb]ᴴ  (K=kacc, GROWS)
                         {
-                            const T* a_base = panel + static_cast<crd::usize>(ko) * nr + koend; // X[koend:nr, ko:jb]
-                            const T* b_base = panel + static_cast<crd::usize>(ko) * nr + jb;    // L11[jb:jend, ko:jb]
+                            const T* a_base = panel + static_cast<crd::usize>(ko) * nr + koend + r0; // X[r0:r1, ko:jb]
+                            const T* b_base = panel + static_cast<crd::usize>(ko) * nr + jb;         // L11[jb, ko:jb] (shared)
                             if constexpr (std::is_same_v<T, crd::f64>)
                             {
-                                // f64 REROUTE (v5a-4 cdiv-A): this DOMINANT below-block update ran in-place at
-                                // Cerid's weak ColMajor-NT rate (~38 GF/s). Compute Tᵀ = bv·avᵀ as a RowMajor-C
-                                // gemm into ub — RowMajor Tᵀ(jbw×below_o, ld=below_o) IS T ColMajor(below_o×jbw)
-                                // in the SAME ub memory (onto Cerid's fast RowMajor path), then subtract T from X
-                                // (ColMajor, contiguous per column). av_r/bv_r reinterpret the ColMajor sub-blocks as
-                                // RowMajor (zero-copy transpose: ColMajor(r×c,ld) ≡ RowMajor(c×r,ld); bv_rᵀ·av_r =
-                                // bv·avᵀ = av·bvᴴ transposed, real f64). below_o×jbw ≤ max_nr·max_nc = ustride ⇒
-                                // fits ub. gemm bit-identical serial/parallel + element-independent subtract ⇒ the
-                                // cross-thread determinism moat holds. ub freed before (B2) reuses it (sequential).
-                                const dense::MatrixView<const T, dense::Layout::RowMajor> av_r(a_base, kacc, below_o,
-                                                                                               nr);
+                                // f64 REROUTE: Tᵀ(jbw×slab, ld=slab) = bv·avᵀ on the fast RowMajor path; RowMajor Tᵀ
+                                // IS T ColMajor(slab×jbw, ld=slab) in ub_w ⇒ the ColMajor subtract is unchanged.
+                                const dense::MatrixView<const T, dense::Layout::RowMajor> av_r(a_base, kacc, slab, nr);
                                 const dense::MatrixView<const T, dense::Layout::RowMajor> bv_r(b_base, kacc, jbw, nr);
-                                const dense::MatrixView<T, dense::Layout::RowMajor> tt_r(ub, jbw, below_o, below_o);
-                                const crd::u64 flop = static_cast<crd::u64>(2) * below_o * jbw * kacc;
-                                if (par_workers > 1 && flop >= kGemmParallelMinFlop)
-                                {
-                                    dense::gemm_parallel<T, dense::Layout::RowMajor>(
-                                        par_workers, T{1}, bv_r, av_r, T{0}, tt_r, dense::Trans::Transpose,
-                                        dense::Trans::None, nullptr);
-                                    crd::jobs::frame_reset();
-                                }
-                                else
-                                {
-                                    dense::gemm<T, dense::Layout::RowMajor>(T{1}, bv_r, av_r, T{0}, tt_r,
-                                                                            dense::Trans::Transpose, dense::Trans::None,
-                                                                            nullptr);
-                                }
-                                // X -= T (T ColMajor in ub, ld=below_o), columns disjoint. PARALLEL over the jbw
-                                // columns iff node-parallel (par_workers>1 ⇒ factor_one on the dispatcher ⇒ NOT
-                                // nested) — a serial apply taxes the node-parallel critical path (the lesson that
-                                // regressed (C) hood 0.86→0.75). Tree-parallel (par_workers≤1) stays serial.
-                                auto sub_col_b1 = [&](crd::u32 c)
+                                const dense::MatrixView<T, dense::Layout::RowMajor> tt_r(ub_w, jbw, slab, slab);
+                                dense::gemm<T, dense::Layout::RowMajor>(T{1}, bv_r, av_r, T{0}, tt_r,
+                                                                        dense::Trans::Transpose, dense::Trans::None,
+                                                                        nullptr);
+                                for (crd::u32 c = 0; c < jbw; ++c) // X[r0:r1, jb] -= T (ColMajor in ub_w, ld=slab)
                                 {
                                     T* cc = xjb + static_cast<crd::usize>(c) * nr;
-                                    const T* tt = ub + static_cast<crd::usize>(c) * below_o;
-                                    for (crd::u32 r = 0; r < below_o; ++r)
+                                    const T* tt = ub_w + static_cast<crd::usize>(c) * slab;
+                                    for (crd::u32 r = 0; r < slab; ++r)
                                     {
                                         cc[r] -= tt[r];
-                                    }
-                                };
-                                if (par_workers > 1)
-                                {
-                                    auto* sc = crd::jobs::parallel_for(jbw, par_workers,
-                                                                       [&](crd::u32 b, crd::u32 e)
-                                                                       {
-                                                                           for (crd::u32 c = b; c < e; ++c)
-                                                                           {
-                                                                               sub_col_b1(c);
-                                                                           }
-                                                                       });
-                                    crd::jobs::wait(sc);
-                                    crd::jobs::frame_reset();
-                                }
-                                else
-                                {
-                                    for (crd::u32 c = 0; c < jbw; ++c)
-                                    {
-                                        sub_col_b1(c);
                                     }
                                 }
                             }
                             else
                             {
-                                const dense::MatrixView<const T, dense::Layout::ColMajor> av(a_base, below_o, kacc, nr);
+                                const dense::MatrixView<const T, dense::Layout::ColMajor> av(a_base, slab, kacc, nr);
                                 const dense::MatrixView<const T, dense::Layout::ColMajor> bv(b_base, jbw, kacc, nr);
-                                const dense::MatrixView<T, dense::Layout::ColMajor> cv(xjb, below_o, jbw, nr);
-                                chol_gemm(T{-1}, av, bv, T{1}, cv, dense::Trans::None, kCholAdjoint<T>, par_workers);
+                                const dense::MatrixView<T, dense::Layout::ColMajor> cv(xjb, slab, jbw, nr);
+                                chol_gemm(T{-1}, av, bv, T{1}, cv, dense::Trans::None, kCholAdjoint<T>, 1U); // serial
                             }
                         }
-                        // (B2) solve against the jbw×jbw diagonal: X[:, jb] = X · L11[jb-block,jb-block]⁻ᴴ
-                        invert_lower_tri<T>(panel + static_cast<crd::usize>(jb) * nr + jb, nr, jbw, linv);
-                        for (crd::u32 c = 0; c < jbw; ++c) // copy X[:, jb-block] (below_o×jbw) → ub; avoids alias
+                        // (B2) X[r0:r1, jb] = X · L11[jb,jb]⁻ᴴ. Redundant per-lane jbw×jbw invert (64×64, noise).
+                        invert_lower_tri<T>(panel + static_cast<crd::usize>(jb) * nr + jb, nr, jbw, linv_w);
+                        for (crd::u32 c = 0; c < jbw; ++c) // copy X[r0:r1, jb] (slab×jbw) → ub_w; avoids alias
                         {
                             const T* src = xjb + static_cast<crd::usize>(c) * nr;
-                            T* dst = ub + static_cast<crd::usize>(c) * below_o;
-                            for (crd::u32 r = 0; r < below_o; ++r)
+                            T* dst = ub_w + static_cast<crd::usize>(c) * slab;
+                            for (crd::u32 r = 0; r < slab; ++r)
                             {
                                 dst[r] = src[r];
                             }
                         }
-                        const dense::MatrixView<const T, dense::Layout::ColMajor> xv(ub, below_o, jbw, below_o);
-                        const dense::MatrixView<const T, dense::Layout::ColMajor> linvv(linv, jbw, jbw, jbw);
-                        const dense::MatrixView<T, dense::Layout::ColMajor> xout(xjb, below_o, jbw, nr);
-                        chol_gemm(T{1}, xv, linvv, T{0}, xout, dense::Trans::None, kCholAdjoint<T>, par_workers);
+                        const dense::MatrixView<const T, dense::Layout::ColMajor> xv(ub_w, slab, jbw, slab);
+                        const dense::MatrixView<const T, dense::Layout::ColMajor> linvv(linv_w, jbw, jbw, jbw);
+                        const dense::MatrixView<T, dense::Layout::ColMajor> xout(xjb, slab, jbw, nr);
+                        chol_gemm(T{1}, xv, linvv, T{0}, xout, dense::Trans::None, kCholAdjoint<T>, 1U); // serial
+                    }
+                };
+                if (below_o > 0)
+                {
+                    if (par_workers <= 1)
+                    {
+                        b_slab(0, below_o, worker); // serial / tree-parallel: one slab = all below-outer rows
+                    }
+                    else
+                    {
+                        // Node-parallel huge front: ONE fork over the below_o rows (not per-jb-block).
+                        auto* counter = crd::jobs::parallel_for(below_o, par_workers,
+                                                                [&](crd::u32 bb, crd::u32 ee)
+                                                                { b_slab(bb, ee, crd::jobs::worker_index()); });
+                        crd::jobs::wait(counter);
+                        crd::jobs::frame_reset();
                     }
                 }
                 // (C) OUTER trailing Schur update: cols [koend:nc], rows [koend:nr] (K=obw, high AI).
