@@ -618,7 +618,7 @@ if(CRD_BUILD_HESAP_VS_REFERENCE)
     set(CRD_SS_DIR "${CMAKE_BINARY_DIR}/_deps/suitesparse-mm")
     file(MAKE_DIRECTORY "${CRD_SS_DIR}")
     set(CRD_SS_BASE "https://suitesparse-collection-website.herokuapp.com/MM")
-    foreach(ss_pair "HB/bcsstk13" "HB/bcsstk24" "HB/west2021" "HB/bcsstk25" "HB/sherman3" "HB/gemat11" "HB/bcsstk30" "HB/bcsstk32" "GHS_psdef/bmwcra_1" "GHS_psdef/hood" "GHS_psdef/ldoor")
+    foreach(ss_pair "HB/bcsstk13" "HB/bcsstk24" "HB/west2021" "HB/bcsstk25" "HB/sherman3" "HB/gemat11" "HB/bcsstk30" "HB/bcsstk32" "GHS_psdef/bmwcra_1" "GHS_psdef/hood" "GHS_psdef/ldoor" "Hamm/add32" "Hamm/memplus" "Bai/af23560" "Wang/wang3" "Simon/bbmat" "Garon/garon2" "FEMLAB/ns3Da" "Simon/raefsky3")
         string(REGEX REPLACE ".*/" "" ss_name "${ss_pair}")
         if(NOT EXISTS "${CRD_SS_DIR}/${ss_name}/${ss_name}.mtx")
             set(ss_tgz "${CRD_SS_DIR}/${ss_name}.tar.gz")
@@ -660,6 +660,48 @@ if(CRD_BUILD_HESAP_VS_REFERENCE)
     crd_add_hesap_vs_ref_bench(bench_hesap_cholesky_vs_reference USE_JOBS)
     target_link_libraries(bench_hesap_cholesky_vs_reference PRIVATE crd-hesap-sparse crd-hesap-ordering crd-hesap-direct)
     target_compile_definitions(bench_hesap_cholesky_vs_reference PRIVATE "CRD_SUITESPARSE_DIR=\"${CRD_SS_DIR}\"")
+    # v5b-1: Gilbert-Peierls sparse LU (SERIAL correctness oracle) factor+solve vs Eigen SparseLU.
+    crd_add_hesap_vs_ref_bench(bench_hesap_lu_vs_reference)
+    target_link_libraries(bench_hesap_lu_vs_reference PRIVATE crd-hesap-sparse crd-hesap-ordering crd-hesap-direct)
+    target_compile_definitions(bench_hesap_lu_vs_reference PRIVATE "CRD_SUITESPARSE_DIR=\"${CRD_SS_DIR}\"")
+
+    # v5b-2c: SUPERNODAL LU crush — Cerid SupernodalLU vs Eigen SparseLU on the same AMD-permuted
+    # UNSYMMETRIC matrices. UMFPACK (the multifrontal gold standard) folds in when
+    # CRD_BUILD_HESAP_VS_UMFPACK=ON (WSL/Linux; GPL → dev-only, never shipped) — it links the
+    # SuiteSparse umfpack apt-installed by scripts/setup-cholmod-ref.sh.
+    crd_add_hesap_vs_ref_bench(bench_hesap_lu_supernodal_vs_reference USE_JOBS)
+    target_link_libraries(bench_hesap_lu_supernodal_vs_reference PRIVATE crd-hesap-sparse crd-hesap-ordering crd-hesap-direct)
+    target_compile_definitions(bench_hesap_lu_supernodal_vs_reference PRIVATE "CRD_SUITESPARSE_DIR=\"${CRD_SS_DIR}\"")
+    if(CRD_BUILD_HESAP_VS_UMFPACK)
+        find_library(CRD_UMFPACK_LIB umfpack)
+        if(NOT CRD_UMFPACK_LIB)
+            message(FATAL_ERROR "[hesap-vs-umfpack] libumfpack not found — run scripts/setup-cholmod-ref.sh")
+        endif()
+        # Ubuntu's libsuitesparse-dev installs umfpack.h under /usr/include/suitesparse, which is not
+        # on the default include path; locate it explicitly so `#include <umfpack.h>` resolves.
+        find_path(CRD_UMFPACK_INCLUDE umfpack.h PATH_SUFFIXES suitesparse)
+        if(NOT CRD_UMFPACK_INCLUDE)
+            message(FATAL_ERROR "[hesap-vs-umfpack] umfpack.h not found — install libsuitesparse-dev")
+        endif()
+        target_include_directories(bench_hesap_lu_supernodal_vs_reference PRIVATE ${CRD_UMFPACK_INCLUDE})
+        target_link_libraries(bench_hesap_lu_supernodal_vs_reference PRIVATE umfpack)
+        target_compile_definitions(bench_hesap_lu_supernodal_vs_reference PRIVATE CRD_HESAP_VS_UMFPACK)
+        message(STATUS "[hesap-vs-umfpack] UMFPACK bench enabled (${CRD_UMFPACK_LIB}, hdr ${CRD_UMFPACK_INCLUDE})")
+    endif()
+    # MUMPS (the PARALLEL multifrontal gold standard, OpenMP seq build) folds in when
+    # CRD_BUILD_HESAP_VS_MUMPS=ON — the only HONEST parallel-peer comparison (UMFPACK is serial). GPL → dev-only.
+    if(CRD_BUILD_HESAP_VS_MUMPS)
+        find_library(CRD_DMUMPS_LIB dmumps_seq)
+        find_path(CRD_MUMPS_INCLUDE dmumps_c.h)
+        if(NOT CRD_DMUMPS_LIB OR NOT CRD_MUMPS_INCLUDE)
+            message(FATAL_ERROR "[hesap-vs-mumps] libdmumps_seq / dmumps_c.h not found — apt install libmumps-seq-dev")
+        endif()
+        target_include_directories(bench_hesap_lu_supernodal_vs_reference PRIVATE ${CRD_MUMPS_INCLUDE})
+        target_link_libraries(bench_hesap_lu_supernodal_vs_reference PRIVATE
+            dmumps_seq mumps_common_seq pord_seq mpiseq_seq)
+        target_compile_definitions(bench_hesap_lu_supernodal_vs_reference PRIVATE CRD_HESAP_VS_MUMPS)
+        message(STATUS "[hesap-vs-mumps] MUMPS bench enabled (${CRD_DMUMPS_LIB})")
+    endif()
     # v4-corpus: real SuiteSparse matrices through the cooked 'HMTX' resource path
     # (cook + read_matrix_resource + build_csr timed vs direct read; each matrix also
     # verified through ResourceManager mount + load_sync). No Eigen in the body.

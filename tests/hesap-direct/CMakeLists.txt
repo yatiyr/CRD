@@ -1,7 +1,9 @@
 add_executable(crd-hesap-direct-tests
     test_cli.cpp
     test_frontal.cpp
+    test_sparse_lu.cpp
     test_supernodal.cpp
+    test_supernodal_lu.cpp
 )
 
 target_link_libraries(crd-hesap-direct-tests PRIVATE

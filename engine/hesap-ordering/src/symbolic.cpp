@@ -51,6 +51,41 @@ void etree_i32(const AdjacencyGraph& g, crd::i32* parent, crd::i32* ancestor)
     }
 }
 
+// cs_etree (ata = 1): column elimination tree = elimination tree of chol(AᵀA),
+// computed WITHOUT forming AᵀA. A is the COMPRESSED CSC pattern (m rows × n cols):
+// `ap`/`ai` are column pointers / row indices. `prev` (length m) tracks, per row, the
+// last column that held a nonzero in that row; the matched entries pretend to be the
+// AᵀA off-diagonals so the same path-compressed ancestor walk as the symmetric etree
+// applies. parent[k] = -1 for roots. Faithful to Tim Davis's cs_etree.c ata branch.
+void etree_ata_i32(const crd::u32* ap, const crd::u32* ai, crd::i32 m, crd::i32 n, crd::i32* parent, crd::i32* ancestor,
+                   crd::i32* prev)
+{
+    for (crd::i32 i = 0; i < m; ++i)
+    {
+        prev[i] = -1;
+    }
+    for (crd::i32 k = 0; k < n; ++k)
+    {
+        parent[k] = -1;
+        ancestor[k] = -1;
+        for (crd::u32 p = ap[static_cast<crd::u32>(k)]; p < ap[static_cast<crd::u32>(k) + 1]; ++p)
+        {
+            crd::i32 i = prev[ai[p]]; // ata: previous column with a nonzero in row ai[p]
+            for (; i != -1 && i < k;) // walk i up the partial column-etree (path-compress)
+            {
+                const crd::i32 inext = ancestor[i];
+                ancestor[i] = k;
+                if (inext == -1)
+                {
+                    parent[i] = k;
+                }
+                i = inext;
+            }
+            prev[ai[p]] = k;
+        }
+    }
+}
+
 // cs_tdfs: iterative depth-first postorder of node j; head/next are the child
 // linked lists (built so children come out ascending → deterministic).
 crd::i32 tdfs_i32(crd::i32 j, crd::i32 k, crd::i32* head, const crd::i32* next, crd::i32* post, crd::i32* stack)
@@ -271,6 +306,99 @@ void counts_i32(const AdjacencyGraph& g, const crd::i32* parent, const crd::i32*
         }
     }
 }
+
+// cs_counts (ata = 1) + init_ata: column counts of chol(AᵀA) WITHOUT forming AᵀA.
+// `AT` is A transposed (CSR over A's rows: `atp` row pointers, `ati` the columns in each
+// row, ascending), `parent`/`post` the column etree + its postorder. Faithful to Davis
+// cs_counts.c ata branch: a row J of A contributes its column set as a clique into the
+// count via the head/next row-merge (rows bucketed by their least-postorder column).
+// `first` is the first-descendant marker in the first pass, then REPURPOSED as the
+// inverse postorder (invpost) by init_ata, exactly as the reference. Scratch lengths:
+// colcount/ancestor/maxfirst/prevleaf/first = n, head = n+1, next = m.
+void counts_ata_i32(const crd::u32* atp, const crd::u32* ati, crd::i32 m, crd::i32 n, const crd::i32* parent,
+                    const crd::i32* post, crd::i32* colcount, crd::i32* ancestor, crd::i32* maxfirst,
+                    crd::i32* prevleaf, crd::i32* first, crd::i32* head, crd::i32* next)
+{
+    for (crd::i32 k = 0; k < n; ++k)
+    {
+        maxfirst[k] = -1;
+        prevleaf[k] = -1;
+        first[k] = -1;
+    }
+    for (crd::i32 k = 0; k < n; ++k) // delta[j] (leaf flag → colcount) + first-descendant first[]
+    {
+        const crd::i32 j = post[k];
+        colcount[j] = (first[j] == -1) ? 1 : 0;
+        for (crd::i32 jj = j; jj != -1 && first[jj] == -1; jj = parent[jj])
+        {
+            first[jj] = k;
+        }
+    }
+    // init_ata: head[k] = linked list of A-rows whose least-postorder column is k. `first` is
+    // REPURPOSED as invpost (post position of each column), the cs_leaf marker in the ata case.
+    for (crd::i32 k = 0; k <= n; ++k)
+    {
+        head[k] = -1;
+    }
+    for (crd::i32 k = 0; k < n; ++k)
+    {
+        first[post[k]] = k; // invert post (overwrites first → invpost; matches the reference)
+    }
+    for (crd::i32 i = 0; i < m; ++i)
+    {
+        crd::i32 kmin = n; // empty row → bucket n (never processed by the k<n loop)
+        for (crd::u32 p = atp[static_cast<crd::u32>(i)]; p < atp[static_cast<crd::u32>(i) + 1]; ++p)
+        {
+            const crd::i32 kk = first[ati[p]];
+            if (kk < kmin)
+            {
+                kmin = kk;
+            }
+        }
+        next[i] = head[kmin];
+        head[kmin] = i;
+    }
+    for (crd::i32 i = 0; i < n; ++i)
+    {
+        ancestor[i] = i;
+    }
+    for (crd::i32 k = 0; k < n; ++k)
+    {
+        const crd::i32 j = post[k];
+        if (parent[j] != -1)
+        {
+            --colcount[parent[j]];
+        }
+        for (crd::i32 jrow = head[k]; jrow != -1; jrow = next[jrow]) // ata: rows in bucket k
+        {
+            for (crd::u32 p = atp[static_cast<crd::u32>(jrow)]; p < atp[static_cast<crd::u32>(jrow) + 1]; ++p)
+            {
+                const crd::i32 i = static_cast<crd::i32>(ati[p]);
+                crd::i32 jleaf = 0;
+                const crd::i32 q = leaf_i32(i, j, first, maxfirst, prevleaf, ancestor, &jleaf);
+                if (jleaf >= 1)
+                {
+                    ++colcount[j];
+                }
+                if (jleaf == 2)
+                {
+                    --colcount[q];
+                }
+            }
+        }
+        if (parent[j] != -1)
+        {
+            ancestor[j] = parent[j];
+        }
+    }
+    for (crd::i32 j = 0; j < n; ++j)
+    {
+        if (parent[j] != -1)
+        {
+            colcount[parent[j]] += colcount[j];
+        }
+    }
+}
 } // namespace
 
 crd::containers::Array<crd::u32> elimination_tree(const sparse::SparsePattern& pattern, crd::memory::IAllocator* alloc)
@@ -288,6 +416,126 @@ crd::containers::Array<crd::u32> elimination_tree(const sparse::SparsePattern& p
     for (crd::u32 i = 0; i < n; ++i)
     {
         out[i] = (parent[i] == -1) ? kNoParent : static_cast<crd::u32>(parent[i]);
+    }
+    return out;
+}
+
+crd::containers::Array<crd::u32> column_elimination_tree(const sparse::SparsePattern& csc_pattern,
+                                                         crd::memory::IAllocator* alloc)
+{
+    CRD_ASSERT_MSG(csc_pattern.is_compressed(), "column_elimination_tree requires a compressed CSC pattern");
+    CRD_ASSERT_MSG(csc_pattern.format == sparse::SparseFormat::Csc, "column_elimination_tree requires CSC");
+    const crd::i32 m = static_cast<crd::i32>(csc_pattern.rows);
+    const crd::i32 n = static_cast<crd::i32>(csc_pattern.cols);
+    crd::containers::Array<crd::u32> out(alloc);
+    out.resize(static_cast<crd::u32>(n));
+    if (n == 0)
+    {
+        return out;
+    }
+    const crd::u32* ap = csc_pattern.outer_ptr.data();
+    const crd::u32* ai = csc_pattern.inner_idx.data();
+    crd::containers::Array<crd::i32> parent(alloc);
+    crd::containers::Array<crd::i32> ancestor(alloc);
+    crd::containers::Array<crd::i32> prev(alloc);
+    parent.resize(static_cast<crd::u32>(n));
+    ancestor.resize(static_cast<crd::u32>(n));
+    prev.resize(static_cast<crd::u32>(m));
+    etree_ata_i32(ap, ai, m, n, parent.data(), ancestor.data(), prev.data());
+    for (crd::i32 j = 0; j < n; ++j)
+    {
+        out[static_cast<crd::usize>(j)] = (parent[j] == -1) ? kNoParent : static_cast<crd::u32>(parent[j]);
+    }
+    return out;
+}
+
+crd::containers::Array<crd::u32> column_counts_ata(const sparse::SparsePattern& csc_pattern,
+                                                   crd::containers::ConstSpan<crd::u32> etree,
+                                                   crd::memory::IAllocator* alloc)
+{
+    CRD_ASSERT_MSG(csc_pattern.is_compressed(), "column_counts_ata requires a compressed CSC pattern");
+    CRD_ASSERT_MSG(csc_pattern.format == sparse::SparseFormat::Csc, "column_counts_ata requires CSC");
+    const crd::i32 m = static_cast<crd::i32>(csc_pattern.rows);
+    const crd::i32 n = static_cast<crd::i32>(csc_pattern.cols);
+    CRD_ASSERT_MSG(static_cast<crd::u32>(etree.size()) == csc_pattern.cols, "column_counts_ata: etree size mismatch");
+    crd::containers::Array<crd::u32> out(alloc);
+    out.resize(static_cast<crd::u32>(n));
+    if (n == 0)
+    {
+        return out;
+    }
+
+    crd::containers::Array<crd::i32> parent(alloc);
+    parent.resize(static_cast<crd::u32>(n));
+    for (crd::i32 j = 0; j < n; ++j)
+    {
+        const crd::u32 p = etree[static_cast<crd::usize>(j)];
+        parent[j] = (p == kNoParent) ? -1 : static_cast<crd::i32>(p);
+    }
+
+    // Postorder of the column etree (separate child-list scratch — head/next below are
+    // repurposed by the ata count, so don't alias them).
+    crd::containers::Array<crd::i32> post(alloc);
+    crd::containers::Array<crd::i32> phead(alloc);
+    crd::containers::Array<crd::i32> pnext(alloc);
+    crd::containers::Array<crd::i32> stack(alloc);
+    post.resize(static_cast<crd::u32>(n));
+    phead.resize(static_cast<crd::u32>(n));
+    pnext.resize(static_cast<crd::u32>(n));
+    stack.resize(static_cast<crd::u32>(n));
+    post_order_i32(parent.data(), n, post.data(), phead.data(), pnext.data(), stack.data());
+
+    // Transpose B's CSC pattern → CSR (atp row pointers over A's rows, ati the columns,
+    // ascending per row via counting sort). AᵀA is never formed; this is the only extra storage.
+    const crd::u32* ap = csc_pattern.outer_ptr.data();
+    const crd::u32* ai = csc_pattern.inner_idx.data();
+    const crd::u32 nnz = ap[static_cast<crd::u32>(n)];
+    crd::containers::Array<crd::u32> atp(alloc);
+    crd::containers::Array<crd::u32> ati(alloc);
+    crd::containers::Array<crd::u32> wp(alloc);
+    atp.resize(static_cast<crd::u32>(m) + 1); // value-init 0
+    for (crd::u32 p = 0; p < nnz; ++p)
+    {
+        ++atp[ai[p] + 1];
+    }
+    for (crd::i32 i = 0; i < m; ++i)
+    {
+        atp[static_cast<crd::u32>(i) + 1] += atp[static_cast<crd::u32>(i)];
+    }
+    ati.resize_uninitialized(nnz);
+    wp.resize(static_cast<crd::u32>(m));
+    for (crd::i32 i = 0; i < m; ++i)
+    {
+        wp[static_cast<crd::u32>(i)] = atp[static_cast<crd::u32>(i)];
+    }
+    for (crd::u32 col = 0; col < static_cast<crd::u32>(n); ++col) // ascending col ⇒ each row's list sorted
+    {
+        for (crd::u32 p = ap[col]; p < ap[col + 1]; ++p)
+        {
+            ati[wp[ai[p]]++] = col;
+        }
+    }
+
+    crd::containers::Array<crd::i32> colcount(alloc);
+    crd::containers::Array<crd::i32> ancestor(alloc);
+    crd::containers::Array<crd::i32> maxfirst(alloc);
+    crd::containers::Array<crd::i32> prevleaf(alloc);
+    crd::containers::Array<crd::i32> first(alloc);
+    crd::containers::Array<crd::i32> head(alloc);
+    crd::containers::Array<crd::i32> next(alloc);
+    colcount.resize(static_cast<crd::u32>(n));
+    ancestor.resize(static_cast<crd::u32>(n));
+    maxfirst.resize(static_cast<crd::u32>(n));
+    prevleaf.resize(static_cast<crd::u32>(n));
+    first.resize(static_cast<crd::u32>(n));
+    head.resize(static_cast<crd::u32>(n) + 1);
+    next.resize(static_cast<crd::u32>(m));
+    counts_ata_i32(atp.data(), ati.data(), m, n, parent.data(), post.data(), colcount.data(), ancestor.data(),
+                   maxfirst.data(), prevleaf.data(), first.data(), head.data(), next.data());
+
+    for (crd::i32 j = 0; j < n; ++j)
+    {
+        out[static_cast<crd::usize>(j)] = static_cast<crd::u32>(colcount[j]);
     }
     return out;
 }

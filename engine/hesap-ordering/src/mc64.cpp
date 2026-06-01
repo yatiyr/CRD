@@ -83,6 +83,12 @@ Mc64Scaling mc64_match_and_scale(const sparse::SparsePattern& pat, crd::containe
         for (crd::u32 k = outer[i]; k < outer[i + 1]; ++k) { if (mag[k] > mx) { mx = mag[k]; } }
         logrm[i] = mx > 0.0 ? std::log(mx) : -inf;
     }
+    // Precompute log|a_ij| per stored entry ONCE. The shortest-augmenting-path Dijkstra below revisits the
+    // same edges across many augmentations and previously recomputed std::log per visit (the dominant MC64
+    // cost on dense matrices). This is bit-identical (same log values) ⇒ matching/scaling unchanged.
+    crd::containers::Array<crd::f64> logmag(alloc);
+    logmag.resize(mag.size());
+    for (crd::usize k = 0; k < mag.size(); ++k) { logmag[k] = mag[k] > 0.0 ? std::log(mag[k]) : -inf; }
 
     crd::containers::Array<crd::f64> u(alloc); // row dual potentials
     crd::containers::Array<crd::f64> v(alloc); // col dual potentials
@@ -93,10 +99,28 @@ Mc64Scaling mc64_match_and_scale(const sparse::SparsePattern& pat, crd::containe
 
     // edge cost c(i, k-th nonzero) = logrm[i] − log(mag[k]) ≥ 0; +inf for a stored zero.
     auto edge_cost = [&](crd::u32 i, crd::u32 k) -> crd::f64 {
-        return mag[k] > 0.0 ? (logrm[i] - std::log(mag[k])) : inf;
+        return mag[k] > 0.0 ? (logrm[i] - logmag[k]) : inf;
     };
 
-    // ---- greedy initial matching (ascending row; each row to its smallest-cost free col) ----
+    // ---- dual initialization (sparse column reduction, Duff & Koster 2001) ----
+    // u[i] = 0 ( = min_j c(i,j): the row-max entry has cost 0 ), v[j] = min_i c(i,j). These column-minima
+    // potentials are what makes the shortest-augmenting-path searches below settle FEW columns instead of
+    // scanning a huge part of the graph. With v ≡ 0 (no potential) each Dijkstra on a dense/strongly-coupled
+    // matrix (3D Navier-Stokes: ns3Da) explores ~half the columns ⇒ 6.3 ms/augmentation, 2.3 s total. The
+    // assignment converges to the SAME optimum (the duals are unique up to a per-component shift that cancels
+    // in D_r·A·D_c), so the matching/scaling/accuracy are preserved; only the search cost drops. Deterministic.
+    for (crd::u32 j = 0; j < n; ++j) { v[j] = inf; }
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        for (crd::u32 k = outer[i]; k < outer[i + 1]; ++k)
+        {
+            const crd::f64 c = edge_cost(i, k); // u[i] == 0 ⇒ reduced cost is c
+            if (c < v[inner[k]]) { v[inner[k]] = c; }
+        }
+    }
+    for (crd::u32 j = 0; j < n; ++j) { if (!std::isfinite(v[j])) { v[j] = 0.0; } } // empty/all-zero column
+
+    // ---- greedy initial matching (ascending row; each row to its smallest-reduced-cost free col) ----
     for (crd::u32 i = 0; i < n; ++i)
     {
         crd::f64 best = inf;

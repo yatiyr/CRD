@@ -33,6 +33,34 @@ inline constexpr crd::u32 kNoParent = 0xFFFFFFFFU;
 // metric. Convenience: builds the etree + column counts and sums them.
 [[nodiscard]] crd::u64 nnz_l(const sparse::SparsePattern& pattern, crd::memory::IAllocator* alloc);
 
+// -----------------------------------------------------------------------
+// Column (AᵀA) symbolic — the LU / QR fill structure (v5b-2). CSparse cs_etree /
+// cs_counts with ata = 1: the elimination tree and Cholesky column counts of AᵀA,
+// computed WITHOUT ever forming AᵀA (the whole point — AᵀA is far denser than A).
+// These operate on the matrix's COMPRESSED CSC pattern DIRECTLY (outer_ptr = column
+// pointers, inner_idx = row indices, canonical-sorted ascending per column) — they
+// must NOT be routed through build_adjacency, which symmetrises (that is the SYMMETRIC
+// Cholesky path above). Square A assumed (rows == cols) for the sparse-LU consumer;
+// the algorithm itself allows rectangular for the v5c QR consumer.
+// -----------------------------------------------------------------------
+
+// Column elimination tree = elimination tree of chol(AᵀA). parent[j] = parent column
+// of j (kNoParent for a root). The tree that bounds sparse-LU fill (Gilbert-Ng) and
+// drives the v5b supernodal LU schedule + the v5c multifrontal QR frontal order.
+// `csc_pattern` is the compressed CSC pattern of A. CSparse cs_etree(ata=1): a single
+// pass over A's columns with a `prev[row]` array, AᵀA never materialised.
+[[nodiscard]] crd::containers::Array<crd::u32> column_elimination_tree(const sparse::SparsePattern& csc_pattern,
+                                                                       crd::memory::IAllocator* alloc);
+
+// Column counts of chol(AᵀA): colcount[j] = nnz of column j of the Cholesky factor of
+// AᵀA — the all-row-permutations UPPER BOUND on sparse-LU fill (Gilbert-Ng). Sum ==
+// nnz(chol(AᵀA)) ≥ nnz(L)+nnz(U) for any static/partial pivot choice. `etree` =
+// column_elimination_tree(csc_pattern). CSparse cs_counts(ata=1): transposes A once and
+// uses the init_ata head/next row-merge so AᵀA is never formed.
+[[nodiscard]] crd::containers::Array<crd::u32> column_counts_ata(const sparse::SparsePattern& csc_pattern,
+                                                                 crd::containers::ConstSpan<crd::u32> etree,
+                                                                 crd::memory::IAllocator* alloc);
+
 // Matrix bandwidth: max over stored (i,j) of |i - j| (the RCM target metric).
 [[nodiscard]] crd::u32 bandwidth(const sparse::SparsePattern& pattern) noexcept;
 
