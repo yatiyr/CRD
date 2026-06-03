@@ -1,3 +1,4 @@
+#include <crd/containers/sort.hpp>
 #include <crd/core/assert.hpp>
 #include <crd/hesap/ordering/adjacency_graph.hpp>
 #include <crd/hesap/ordering/symbolic.hpp>
@@ -700,6 +701,242 @@ crd::containers::Array<crd::u32> postorder(crd::containers::ConstSpan<crd::u32> 
     for (crd::i32 i = 0; i < n; ++i)
     {
         out[static_cast<crd::usize>(i)] = static_cast<crd::u32>(post[i]);
+    }
+    return out;
+}
+
+SymbolicFactor symbolic_factorize_ata(const sparse::SparsePattern& a, crd::memory::IAllocator* alloc)
+{
+    CRD_ASSERT_MSG(a.is_compressed(), "symbolic_factorize_ata requires a compressed CSC pattern");
+    CRD_ASSERT_MSG(a.format == sparse::SparseFormat::Csc, "symbolic_factorize_ata requires CSC");
+    const crd::i32 m = static_cast<crd::i32>(a.rows);
+    const crd::i32 n = static_cast<crd::i32>(a.cols);
+    SymbolicFactor out(alloc);
+    out.n = static_cast<crd::u32>(n);
+    if (n == 0)
+    {
+        out.lp.push_back(0U); // empty factor: lp = {0}, nnz() == 0
+        return out;
+    }
+
+    // --- etree + column counts of chol(AᵀA) WITHOUT forming AᵀA (reuse the proven implicit
+    // CSparse-port functions: column_elimination_tree == symbolic_factorize(AᵀA).parent and
+    // column_counts_ata == its colcount, both validated bit-identical at v5c-1a). ---------------
+    crd::containers::Array<crd::u32> etree_u = column_elimination_tree(a, alloc);
+    crd::containers::Array<crd::u32> colcount_u = column_counts_ata(a, {etree_u.data(), etree_u.size()}, alloc);
+
+    crd::containers::Array<crd::i32> parent(alloc);
+    crd::containers::Array<crd::i32> colcount(alloc);
+    parent.resize(static_cast<crd::u32>(n));
+    colcount.resize(static_cast<crd::u32>(n));
+    for (crd::i32 j = 0; j < n; ++j)
+    {
+        const crd::u32 p = etree_u[static_cast<crd::usize>(j)];
+        parent[j] = (p == kNoParent) ? -1 : static_cast<crd::i32>(p);
+        colcount[j] = static_cast<crd::i32>(colcount_u[static_cast<crd::usize>(j)]);
+    }
+
+    // postorder (post_order_i32 — the SAME helper symbolic_factorize uses ⇒ bit-identical `post`).
+    crd::containers::Array<crd::i32> post(alloc);
+    crd::containers::Array<crd::i32> head(alloc);
+    crd::containers::Array<crd::i32> next(alloc);
+    crd::containers::Array<crd::i32> stack(alloc);
+    post.resize(static_cast<crd::u32>(n));
+    head.resize(static_cast<crd::u32>(n));
+    next.resize(static_cast<crd::u32>(n));
+    stack.resize(static_cast<crd::u32>(n));
+    post_order_i32(parent.data(), n, post.data(), head.data(), next.data(), stack.data());
+
+    // L column pointers from the prefix sum of the column counts.
+    out.lp.resize(static_cast<crd::u32>(n) + 1U);
+    out.lp[0] = 0U;
+    for (crd::i32 j = 0; j < n; ++j)
+    {
+        out.lp[static_cast<crd::usize>(j) + 1] =
+            out.lp[static_cast<crd::usize>(j)] + static_cast<crd::u32>(colcount[j]);
+    }
+
+    // fundamental supernodes (graph-agnostic — a pure function of parent + colcount).
+    crd::containers::Array<crd::i32> nchild(alloc);
+    nchild.resize(static_cast<crd::u32>(n));
+    out.nsuper = fundamental_supernodes_i32(parent.data(), colcount.data(), n, out.super, nchild.data());
+    const crd::u32 nf = out.nsuper;
+
+    // === Supernodal leading-column patterns (slead) — the QR-front column structure. Same recurrence
+    // symbolic_factorize uses: R(g) = {fc} ∪ adj_AᵀA(fc)[>fc] ∪ (∪ child fund-supernode h: R(h)[>fc]).
+    // adj_AᵀA(fc) — the columns sharing a row of A with fc — is gathered IMPLICITLY from A (CSC column
+    // fc gives the rows i; CSR row i gives the sharing columns), never forming AᵀA. The gathered set
+    // (sorted ascending) is bit-identical to build_adjacency(ata_pattern(A))'s adjacency of fc, so the
+    // emitted slead is bit-for-bit the supernodal_patterns=true output of the explicit path (oracle). ===
+
+    // CSR of A (row -> columns ascending) via counting sort (rows accessed by the adj gather).
+    const crd::u32* ap = a.outer_ptr.data();
+    const crd::u32* ai = a.inner_idx.data();
+    const crd::u32 nnz = ap[static_cast<crd::u32>(n)];
+    crd::containers::Array<crd::u32> arp(alloc);
+    arp.resize(static_cast<crd::u32>(m) + 1); // value-init 0
+    for (crd::u32 p = 0; p < nnz; ++p)
+    {
+        ++arp[ai[p] + 1];
+    }
+    for (crd::i32 i = 0; i < m; ++i)
+    {
+        arp[static_cast<crd::u32>(i) + 1] += arp[static_cast<crd::u32>(i)];
+    }
+    crd::containers::Array<crd::u32> aci(alloc);
+    aci.resize(nnz);
+    {
+        crd::containers::Array<crd::u32> rcur(alloc);
+        rcur.resize(static_cast<crd::u32>(m));
+        for (crd::i32 i = 0; i < m; ++i)
+        {
+            rcur[static_cast<crd::u32>(i)] = arp[static_cast<crd::u32>(i)];
+        }
+        for (crd::u32 col = 0; col < static_cast<crd::u32>(n); ++col) // ascending col ⇒ each row sorted
+        {
+            for (crd::u32 p = ap[col]; p < ap[col + 1]; ++p)
+            {
+                aci[rcur[ai[p]]++] = col;
+            }
+        }
+    }
+
+    // col -> fundamental supernode + per-supernode child list (parent[last_col(h)] is h's merge point).
+    crd::containers::Array<crd::i32> col_fs(alloc);
+    crd::containers::Array<crd::i32> chead(alloc);
+    crd::containers::Array<crd::i32> cnext(alloc);
+    col_fs.resize(static_cast<crd::u32>(n));
+    chead.resize(nf);
+    cnext.resize(nf);
+    for (crd::u32 ff = 0; ff < nf; ++ff)
+    {
+        for (crd::u32 c = out.super[ff]; c < out.super[ff + 1]; ++c)
+        {
+            col_fs[c] = static_cast<crd::i32>(ff);
+        }
+        chead[ff] = -1;
+    }
+    for (crd::u32 h = 0; h < nf; ++h)
+    {
+        const crd::u32 last_h = out.super[h + 1] - 1;
+        const crd::i32 p = parent[last_h];
+        if (p != -1)
+        {
+            const crd::i32 pf = col_fs[p];
+            cnext[h] = chead[pf];
+            chead[pf] = static_cast<crd::i32>(h);
+        }
+    }
+
+    crd::u64 lead_total = 0;
+    for (crd::u32 ff = 0; ff < nf; ++ff)
+    {
+        const crd::u32 fc = out.super[ff];
+        lead_total += static_cast<crd::u64>(out.lp[fc + 1] - out.lp[fc]);
+    }
+    out.slead_ptr.resize(static_cast<crd::usize>(nf) + 1);
+    out.slead_ptr[0] = 0;
+    out.slead_idx.reserve(lead_total);
+
+    crd::containers::Array<crd::u32> mark(alloc); // adj-gather marker; stamp = fc (distinct per supernode)
+    mark.resize(static_cast<crd::u32>(n));
+    for (crd::i32 j = 0; j < n; ++j)
+    {
+        mark[static_cast<crd::u32>(j)] = static_cast<crd::u32>(n); // n: impossible column id
+    }
+    crd::containers::Array<crd::u32> acc(alloc);
+    crd::containers::Array<crd::u32> tmp(alloc);
+    crd::containers::Array<crd::u32> adjbuf(alloc);
+    for (crd::u32 gg = 0; gg < nf; ++gg)
+    {
+        const crd::u32 fc = out.super[gg];
+        // implicit adj_AᵀA(fc)[>fc]: columns > fc sharing a row of A with fc.
+        adjbuf.clear();
+        for (crd::u32 p = ap[fc]; p < ap[fc + 1]; ++p)
+        {
+            const crd::u32 i = ai[p]; // a row of A in which column fc is nonzero
+            for (crd::u32 q = arp[i]; q < arp[i + 1]; ++q)
+            {
+                const crd::u32 k = aci[q]; // a column sharing row i with fc
+                if (k > fc && mark[k] != fc)
+                {
+                    mark[k] = fc;
+                    adjbuf.push_back(k);
+                }
+            }
+        }
+        crd::containers::sort(adjbuf.data(), adjbuf.data() + adjbuf.size());
+
+        acc.clear();
+        acc.push_back(fc); // diagonal first
+        for (crd::u32 t = 0; t < adjbuf.size(); ++t)
+        {
+            acc.push_back(adjbuf[t]);
+        }
+        for (crd::i32 h = chead[gg]; h != -1; h = cnext[h]) // merge each child's R(h)[>fc]
+        {
+            const crd::u32 re = out.slead_ptr[static_cast<crd::usize>(h) + 1];
+            crd::u32 s = out.slead_ptr[static_cast<crd::usize>(h)];
+            while (s < re && out.slead_idx[s] <= fc) // skip to the suffix > fc
+            {
+                ++s;
+            }
+            tmp.clear(); // 2-way sorted merge with dedup: acc ∪ slead_idx[s..re)
+            crd::u32 i = 0;
+            const crd::u32 na = static_cast<crd::u32>(acc.size());
+            while (i < na && s < re)
+            {
+                const crd::u32 va = acc[i];
+                const crd::u32 vb = out.slead_idx[s];
+                if (va < vb)
+                {
+                    tmp.push_back(va);
+                    ++i;
+                }
+                else if (va > vb)
+                {
+                    tmp.push_back(vb);
+                    ++s;
+                }
+                else
+                {
+                    tmp.push_back(va);
+                    ++i;
+                    ++s;
+                }
+            }
+            while (i < na)
+            {
+                tmp.push_back(acc[i++]);
+            }
+            while (s < re)
+            {
+                tmp.push_back(out.slead_idx[s++]);
+            }
+            acc.clear(); // copy-back (Array has no swap; child counts are small)
+            for (crd::u32 t = 0; t < tmp.size(); ++t)
+            {
+                acc.push_back(tmp[t]);
+            }
+        }
+        CRD_ASSERT_MSG(static_cast<crd::u32>(acc.size()) == out.lp[fc + 1] - out.lp[fc],
+                       "symbolic_factorize_ata: supernodal leading pattern size != colcount");
+        for (crd::u32 t = 0; t < acc.size(); ++t)
+        {
+            out.slead_idx.push_back(acc[t]);
+        }
+        out.slead_ptr[static_cast<crd::usize>(gg) + 1] = static_cast<crd::u32>(out.slead_idx.size());
+    }
+
+    // --- export parent / post / colcount as u32 (li stays empty: supernodal-only) --------------
+    out.parent.resize(static_cast<crd::u32>(n));
+    out.post.resize(static_cast<crd::u32>(n));
+    out.colcount.resize(static_cast<crd::u32>(n));
+    for (crd::i32 j = 0; j < n; ++j)
+    {
+        out.parent[static_cast<crd::usize>(j)] = (parent[j] == -1) ? kNoParent : static_cast<crd::u32>(parent[j]);
+        out.post[static_cast<crd::usize>(j)] = static_cast<crd::u32>(post[j]);
+        out.colcount[static_cast<crd::usize>(j)] = static_cast<crd::u32>(colcount[j]);
     }
     return out;
 }

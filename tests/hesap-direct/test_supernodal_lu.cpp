@@ -1006,9 +1006,15 @@ void check_factor_front(crd::memory::IAllocator* alloc, crd::u32 m, crd::u32 n, 
             T acc{}; // zero (real or complex)
             for (crd::u32 p = 0; p < npiv; ++p)
             {
-                const T lip = (i == p)  ? dir::lu2_from_real<T>(dl::RealType<T>(1))
-                              : (i > p) ? f[static_cast<crd::usize>(p) * m + i]
-                                        : T{};
+                T lip = T{};
+                if (i == p)
+                {
+                    lip = dir::lu2_from_real<T>(dl::RealType<T>(1));
+                }
+                else if (i > p)
+                {
+                    lip = f[static_cast<crd::usize>(p) * m + i];
+                }
                 const T upj = (j >= p) ? f[static_cast<crd::usize>(j) * m + p] : T{};
                 acc = acc + lip * upj;
             }

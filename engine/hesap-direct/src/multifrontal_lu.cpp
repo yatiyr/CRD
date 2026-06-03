@@ -470,6 +470,12 @@ double MultifrontalLU<T>::factor_attempt(const sparse::SparseMatrix<T, sparse::S
     //    by the parent (always a higher f). `loc` maps global id → front-local index (rows == cols symmetric).
     // cb[f] = front f's FULL factored buffer, kept alive until its parent consumes it; the contribution
     // block (Schur) is the trailing [cb_npiv[f]:, cb_npiv[f]:] block, read IN PLACE (no copy) by the parent.
+    // Front buffers (cb[], working fronts, recycle pools) migrate across workers — a child factored by one
+    // worker is consumed + recycled by its parent's worker ⇒ a ThreadSafeAllocator over m_alloc guards them.
+    // DECLARED FIRST so it OUTLIVES every container of ts-allocated MfFronts (cb / cb_free): ~MfFront's element
+    // Arrays call ts.deallocate, which must run BEFORE ~ts — else gcc traps "pure virtual method called" on the
+    // destroyed allocator's vtable at scope exit (MSVC silently tolerated the dangling-vtable UB).
+    crd::memory::ThreadSafeAllocator ts(m_alloc);
     crd::containers::Array<MfFront<T>> cb(m_alloc);   // cb[f] = front f's full factored buffer (Schur trailing)
     crd::containers::Array<crd::u32> cb_npiv(m_alloc); // cb_npiv[f] locates f's Schur block within cb[f]
     crd::containers::Array<crd::u32> loc(m_alloc);     // per-worker global id -> front-local index maps
@@ -485,9 +491,6 @@ double MultifrontalLU<T>::factor_attempt(const sparse::SparseMatrix<T, sparse::S
         max_nr = nrf > max_nr ? nrf : max_nr;
     }
     constexpr crd::u32 no_loc = 0xFFFFFFFFU;
-    // Front buffers (cb[], working fronts, recycle pools) migrate across workers — a child factored by one
-    // worker is consumed + recycled by its parent's worker ⇒ a ThreadSafeAllocator over m_alloc guards them.
-    crd::memory::ThreadSafeAllocator ts(m_alloc);
 
     // cb[f]/cb_npiv[f]: written by f's worker (own index), read by f's parent (higher level, after the
     // jobs::wait barrier). Pre-sized so the parallel walk never resizes the shared arrays.

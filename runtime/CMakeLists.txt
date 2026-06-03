@@ -618,7 +618,7 @@ if(CRD_BUILD_HESAP_VS_REFERENCE)
     set(CRD_SS_DIR "${CMAKE_BINARY_DIR}/_deps/suitesparse-mm")
     file(MAKE_DIRECTORY "${CRD_SS_DIR}")
     set(CRD_SS_BASE "https://suitesparse-collection-website.herokuapp.com/MM")
-    foreach(ss_pair "HB/bcsstk13" "HB/bcsstk24" "HB/west2021" "HB/bcsstk25" "HB/sherman3" "HB/gemat11" "HB/bcsstk30" "HB/bcsstk32" "GHS_psdef/bmwcra_1" "GHS_psdef/hood" "GHS_psdef/ldoor" "Hamm/add32" "Hamm/memplus" "Bai/af23560" "Wang/wang3" "Simon/bbmat" "Garon/garon2" "FEMLAB/ns3Da" "Simon/raefsky3")
+    foreach(ss_pair "HB/bcsstk13" "HB/bcsstk24" "HB/west2021" "HB/bcsstk25" "HB/sherman3" "HB/gemat11" "HB/bcsstk30" "HB/bcsstk32" "GHS_psdef/bmwcra_1" "GHS_psdef/hood" "GHS_psdef/ldoor" "Hamm/add32" "Hamm/memplus" "Bai/af23560" "Wang/wang3" "Simon/bbmat" "Garon/garon2" "FEMLAB/ns3Da" "Simon/raefsky3" "HB/well1850" "HB/illc1850" "HB/well1033" "HB/illc1033")
         string(REGEX REPLACE ".*/" "" ss_name "${ss_pair}")
         if(NOT EXISTS "${CRD_SS_DIR}/${ss_name}/${ss_name}.mtx")
             set(ss_tgz "${CRD_SS_DIR}/${ss_name}.tar.gz")
@@ -665,6 +665,17 @@ if(CRD_BUILD_HESAP_VS_REFERENCE)
     target_link_libraries(bench_hesap_lu_vs_reference PRIVATE crd-hesap-sparse crd-hesap-ordering crd-hesap-direct)
     target_compile_definitions(bench_hesap_lu_vs_reference PRIVATE "CRD_SUITESPARSE_DIR=\"${CRD_SS_DIR}\"")
 
+    # v5c-1d: Multifrontal QR factor+solve vs Eigen SparseQR (NaturalOrdering on the same
+    # AMD(AᵀA)-column-ordered matrix). v5c-1 correctness-first baseline; the crush lands with
+    # the perf levers (blocked-WY + staircase + implicit AᵀA-free symbolic + tree-parallel).
+    crd_add_hesap_vs_ref_bench(bench_hesap_qr_vs_reference)
+    target_link_libraries(bench_hesap_qr_vs_reference PRIVATE crd-hesap-sparse crd-hesap-ordering crd-hesap-direct)
+    target_compile_definitions(bench_hesap_qr_vs_reference PRIVATE "CRD_SUITESPARSE_DIR=\"${CRD_SS_DIR}\"")
+
+    # v5d-g: multifrontal LDLᵀ (Bunch-Kaufman) vs Eigen SimplicialLDLT (pivot-free; honest peer note in-file).
+    crd_add_hesap_vs_ref_bench(bench_hesap_ldlt_vs_reference USE_JOBS)
+    target_link_libraries(bench_hesap_ldlt_vs_reference PRIVATE crd-hesap-sparse crd-hesap-direct)
+
     # v5b-2c: SUPERNODAL LU crush — Cerid SupernodalLU vs Eigen SparseLU on the same AMD-permuted
     # UNSYMMETRIC matrices. UMFPACK (the multifrontal gold standard) folds in when
     # CRD_BUILD_HESAP_VS_UMFPACK=ON (WSL/Linux; GPL → dev-only, never shipped) — it links the
@@ -700,6 +711,14 @@ if(CRD_BUILD_HESAP_VS_REFERENCE)
         target_link_libraries(bench_hesap_lu_supernodal_vs_reference PRIVATE
             dmumps_seq mumps_common_seq pord_seq mpiseq_seq)
         target_compile_definitions(bench_hesap_lu_supernodal_vs_reference PRIVATE CRD_HESAP_VS_MUMPS)
+        # v5d-g: LDLᵀ vs MUMPS SYM=2 (the real same-class indefinite gold standard — 2×2 Bunch-Kaufman).
+        # Also link LAPACK explicitly (dpotrf/dsytrf front-kernel ceiling probe; MUMPS pulls it but only as a
+        # private DSO dep so our own calls need it on the command line).
+        find_library(CRD_LAPACK_LIB lapack)
+        target_include_directories(bench_hesap_ldlt_vs_reference PRIVATE ${CRD_MUMPS_INCLUDE})
+        target_link_libraries(bench_hesap_ldlt_vs_reference PRIVATE
+            dmumps_seq mumps_common_seq pord_seq mpiseq_seq ${CRD_LAPACK_LIB})
+        target_compile_definitions(bench_hesap_ldlt_vs_reference PRIVATE CRD_HESAP_VS_MUMPS)
         message(STATUS "[hesap-vs-mumps] MUMPS bench enabled (${CRD_DMUMPS_LIB})")
     endif()
     # v4-corpus: real SuiteSparse matrices through the cooked 'HMTX' resource path
@@ -819,5 +838,35 @@ if(CRD_BUILD_HESAP_VS_CHOLMOD)
         target_compile_definitions(bench_hesap_cholesky_vs_cholmod PRIVATE "CRD_SUITESPARSE_DIR=\"${_cholmod_ss}\"")
         set_source_files_properties(examples/bench_hesap_cholesky_vs_cholmod.cpp PROPERTIES COMPILE_FLAGS "-Wno-error")
         message(STATUS "[hesap-vs-cholmod] bench enabled (${CRD_CHOLMOD_LIB}); matrices=${_cholmod_ss}")
+    endif()
+endif()
+
+# --- v5c-1d: Cerid MultifrontalQR vs SuiteSparse SPQR (SuiteSparseQR — the gold-standard
+# multifrontal sparse QR). System libspqr is apt-installed (libsuitesparse-dev). WSL/Linux
+# only; SPQR is GPL ⇒ dev-only, NEVER shipped, NEVER in CI release. Reuses VS_REFERENCE's
+# CRD_SS_DIR matrix corpus, else accepts -DCRD_HESAP_MATRIX_DIR.
+if(CRD_BUILD_HESAP_VS_SPQR)
+    if(NOT UNIX)
+        message(WARNING "[hesap-vs-spqr] SPQR oracle is Linux/WSL-only; skipping on this platform")
+    else()
+        find_library(CRD_SPQR_LIB spqr)
+        if(NOT CRD_SPQR_LIB)
+            message(FATAL_ERROR "[hesap-vs-spqr] libspqr not found — apt install libsuitesparse-dev")
+        endif()
+        if(DEFINED CRD_SS_DIR)
+            set(_spqr_ss "${CRD_SS_DIR}")
+        elseif(CRD_HESAP_MATRIX_DIR)
+            set(_spqr_ss "${CRD_HESAP_MATRIX_DIR}")
+        else()
+            message(FATAL_ERROR "[hesap-vs-spqr] set -DCRD_HESAP_MATRIX_DIR=<suitesparse-mm dir> (or enable VS_REFERENCE)")
+        endif()
+        add_executable(bench_hesap_qr_vs_spqr examples/bench_hesap_qr_vs_spqr.cpp)
+        target_link_libraries(bench_hesap_qr_vs_spqr PRIVATE
+            crd-core crd-memory crd-containers crd-math crd-jobs crd-platform
+            crd-hesap crd-hesap-sparse crd-hesap-ordering crd-hesap-dense crd-hesap-sched crd-hesap-direct
+            spqr cholmod amd colamd suitesparseconfig)
+        target_compile_definitions(bench_hesap_qr_vs_spqr PRIVATE "CRD_SUITESPARSE_DIR=\"${_spqr_ss}\"")
+        set_source_files_properties(examples/bench_hesap_qr_vs_spqr.cpp PROPERTIES COMPILE_FLAGS "-Wno-error")
+        message(STATUS "[hesap-vs-spqr] bench enabled (${CRD_SPQR_LIB}); matrices=${_spqr_ss}")
     endif()
 endif()

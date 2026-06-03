@@ -1,6 +1,8 @@
 add_executable(crd-hesap-direct-tests
     test_cli.cpp
     test_frontal.cpp
+    test_multifrontal_ldlt.cpp
+    test_multifrontal_qr.cpp
     test_sparse_lu.cpp
     test_supernodal.cpp
     test_supernodal_lu.cpp

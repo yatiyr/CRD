@@ -128,4 +128,16 @@ struct SymbolicFactor
 [[nodiscard]] SymbolicFactor symbolic_factorize(const sparse::SparsePattern& pattern, crd::memory::IAllocator* alloc,
                                                 bool supernodal_patterns = false);
 
+// Supernodal symbolic factorisation of chol(AᵀA) for an m×n matrix A (CSC), computed WITHOUT ever
+// forming AᵀA — the v5c multifrontal-QR front structure. Reuses the implicit column_elimination_tree
+// + column_counts_ata (etree + counts of chol(AᵀA)) + fundamental supernodes, and emits the compact
+// per-supernode leading-column patterns (`slead_ptr`/`slead_idx`, the only slice the multifrontal-QR
+// numeric consumes) via the same assembly-tree recurrence as `symbolic_factorize(…, true)` — with the
+// AᵀA adjacency of each leading column gathered implicitly from A's rows. The result is bit-for-bit
+// identical to `symbolic_factorize(ata_pattern(A), alloc, /*supernodal_patterns=*/true)` (the explicit
+// path is kept as the verifying oracle) but skips the O(Σ nnz_row²) explicit AᵀA clique-union — the
+// dominant symbolic cost (measured: bcsstk13 ~12 ms → sub-ms). Supernodal-only: `li` is left empty.
+// Rectangular A allowed (m ≥ n for the QR consumer). Deterministic pure function of A's pattern.
+[[nodiscard]] SymbolicFactor symbolic_factorize_ata(const sparse::SparsePattern& a, crd::memory::IAllocator* alloc);
+
 } // namespace crd::hesap::ordering
