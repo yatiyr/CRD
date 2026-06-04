@@ -25,6 +25,10 @@ option(CRD_BUILD_HESAP_VS_REFERENCE "Build hesap-vs-Eigen/OpenBLAS comparison be
 # external/ilupack (run scripts/setup-ilupack-ref.sh). WSL/Linux only (gfortran
 # .a). NEVER built in CI, NEVER shipped — a local dev-machine benchmarking oracle.
 option(CRD_BUILD_HESAP_VS_ILUPACK "Build hesap-vs-ILUPACK bench (local-only, non-commercial, Linux)" OFF)
+# v5e-1d: Cerid HSS ULV vs STRUMPACK dense HSS+ULV (gold-standard rank-structured solver).
+# STRUMPACK built from source to $HOME/strumpack/install (scripts/setup-strumpack-ref.sh).
+# WSL/Linux only; NEVER built in CI, NEVER shipped — a local dev benchmarking oracle.
+option(CRD_BUILD_HESAP_VS_STRUMPACK "Build hesap-vs-STRUMPACK HSS bench (local-only, Linux)" OFF)
 option(CRD_ENABLE_ASSERTS   "Enable CRD_ASSERT macros"        ON)
 option(CRD_ENABLE_PROFILING "Enable profiling instrumentation" OFF)
 option(CRD_ENABLE_ASAN      "Enable Address Sanitizer"         OFF)

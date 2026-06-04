@@ -5,6 +5,29 @@ move to a session log entry and remove from here.
 
 ## Active debt
 
+### `gemm-parallel-frame-arena-leak` — filed 2026-06-04 (v5e-3 Leg B)
+
+> **`crd::hesap::dense::gemm_parallel` (`blas3.cpp`) `frame_alloc`s its per-call JobDecl arrays
+> from the per-thread jobs FrameArena but NEVER reclaims them** — the in-code comment
+> ("No frame_reset here — it would invalidate frame_alloc state the CALLER may hold") documents
+> the deliberate non-reset. Each call leaks ~24 KB; a caller that fires many gemms without an
+> external `frame_reset()` monotonically fills the 1 MB arena and **exhausts** it. Surfaced in the
+> v5e-3 node-parallel multifrontal Cholesky: a single big front's factor fires hundreds of
+> `gemm_parallel_auto` calls ⇒ exhaust mid-front (win-asan: `frame_arena.hpp:60` assert; linux-release:
+> assert compiled out ⇒ pointer past the arena ⇒ glibc `corrupted size vs prev_size`).
+>
+> **Localized workaround SHIPPED in v5e-3 (blr.cpp `reclaim_frame_arena()`):** the driver calls
+> `jobs::frame_reset()` after each parallel gemm in the factor hot loops (safe: serial dispatch from
+> the main thread, each gemm `wait()`s before returning ⇒ valid frame boundary, no caller holds state).
+>
+> **Proper central fix (this debt):** add a per-thread **scoped frame marker** to the jobs API
+> (`frame_get_mark()`/`frame_set_mark()` — save offset on entry, restore on exit) and use it inside
+> `gemm_parallel` so each call reclaims ONLY its own allocations, correct even when nested under a
+> caller that holds frame state (which the current all-threads `frame_reset()` cannot be). Removes the
+> need for callers to know about the leak. Blast radius = every gemm caller ⇒ needs its own verified
+> change (5-config + the parallel benches), not a mid-crush edit. Until then the localized reclamation
+> is the safe path for new parallel direct-solver code.
+
 ### ✅ `v1a-3-assembly-smalln` — RESOLVED 2026-05-20 (same day as filing)
 
 > Sparse COO→CSR/CSC assembly now **beats Eigen `setFromTriplets` at every size** (win-release, i9-class, best-of-3, f64): N=50k **1.03×**, N=200k **1.44×**, N=1M **1.76×** (was 0.74× / 1.16× / 1.19×). The candidate fix landed: `assemble<ByRow>` scatters **directly** into the final `inner_idx`/`values` (no `Entry` AoS), uses in-place parallel-array insertion sort for small inner vectors and a single reused merge-sort scratch for large ones (dense-row robustness preserved), and dedup-compacts in place. The last increment was a new `crd::containers::Array::resize_uninitialized` (trivially-constructible T only; value-inits otherwise) used for the two fully-scattered arrays — eliminating the zero-init pass that dominated the small-N residual. Verified by `bench_hesap_sparse_assembly_vs_reference`.

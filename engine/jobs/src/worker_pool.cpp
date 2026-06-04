@@ -442,6 +442,13 @@ void WorkerPool::shutdown() noexcept
     m_frame_arenas.reset();
     m_frame_arena_count = 0U;
 
+    // Reset the worker count so num_workers() reflects reality after shutdown.
+    // A stale positive count here is a landmine: gemm_parallel_auto (and any
+    // num_workers()-driven dispatch) would take the parallel path and dispatch
+    // parallel_for onto the now-dead scheduler -> SIGSEGV. Threads are already
+    // joined above, so no worker can read this concurrently.
+    m_num_threads = 0U;
+
     m_stopping.store(false, std::memory_order_relaxed);
     m_initialized = false;
 }

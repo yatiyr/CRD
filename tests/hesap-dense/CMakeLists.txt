@@ -16,6 +16,8 @@ add_executable(crd-hesap-dense-tests
     test_ldlt.cpp
     test_qr.cpp
     test_cod.cpp
+    test_interp_decomp.cpp
+    test_randomized_range.cpp
     test_lstsq.cpp
     test_nnls_tls.cpp
     test_eig_nonsym.cpp

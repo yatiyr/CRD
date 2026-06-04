@@ -52,6 +52,7 @@ extern "C"
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 
 namespace
 {
@@ -580,6 +581,16 @@ void run_case(const char* name, crd::u32 n, const crd::containers::Array<Trip>& 
         id.icntl[2] = -1;
         id.icntl[3] = 0;          // silence
         id.icntl[6] = 1;          // ICNTL(7)=1 ⇒ user pivot order in PERM_IN (the AMD order, no re-reorder)
+        // v5e-3 PREMISE CHECK: CRD_MUMPS_BLR=<k> activates MUMPS-BLR ICNTL(35)=k
+        // (1/2/3 = the FSCU/UFSC variants) with CNTL(7)=CRD_MUMPS_BLR_EPS (the BLR
+        // dropping threshold). Unset ⇒ full (ICNTL(35)=0). Lets one bench binary
+        // measure MUMPS-BLR vs MUMPS-full on the SAME corpus.
+        if (const char* blr = std::getenv("CRD_MUMPS_BLR"))
+        {
+            id.icntl[34] = std::atoi(blr);  // ICNTL(35), 0-based index 34
+            const char* eps = std::getenv("CRD_MUMPS_BLR_EPS");
+            id.cntl[6] = eps ? std::atof(eps) : 1e-8;  // CNTL(7), 0-based index 6
+        }
         id.perm_in = mperm.data();
         id.n = static_cast<MUMPS_INT>(n);
         id.nnz = static_cast<MUMPS_INT8>(mirn.size());
@@ -645,7 +656,7 @@ int main()
     }
 
     std::printf("\n-- DEFINITE (SPD 3D Laplacian) — BIG dense fronts (separator ~n^2/3): multifrontal's home turf --\n");
-    for (crd::u32 k : {16U, 24U, 32U, 40U})
+    for (crd::u32 k : {16U, 24U, 32U, 40U, 48U, 56U, 64U})  // k=64 ⇒ n=262144, root front ~4096 (BLR premise)
     {
         crd::containers::Array<Trip> t(&g_alloc);
         crd::u32 n = 0;

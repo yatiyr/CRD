@@ -271,6 +271,11 @@ TEST_CASE("jobs: init and shutdown", "[jobs][public-api]")
     CHECK_FALSE(crd::jobs::is_worker_fiber()); // main thread is not inside a fiber
 
     crd::jobs::shutdown();
+
+    // After shutdown the worker count must read 0, not a stale positive value:
+    // num_workers()-driven dispatch (e.g. gemm_parallel_auto) would otherwise take
+    // the parallel path and enqueue onto the now-dead scheduler -> crash.
+    CHECK(crd::jobs::num_workers() == 0U);
 }
 
 // ---------------------------------------------------------------------------

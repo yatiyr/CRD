@@ -10,6 +10,7 @@
 #include <crd/hesap/cli/command_registry.hpp>
 #include <crd/hesap/complex.hpp>
 #include <crd/hesap/dense/cli_anchor.hpp>
+#include <crd/hesap/dense/interp_decomp.hpp>
 #include <crd/hesap/dense/matrix.hpp>
 #include <crd/hesap/dense/svd.hpp>
 
@@ -28,6 +29,7 @@ using crd::hesap::cli::ParamKind;
 using crd::hesap::cli::ParamSchema;
 using crd::hesap::cli::ResultBinaryBlob;
 using crd::hesap::cli::ResultError;
+using crd::hesap::dense::interp_decomp;
 using crd::hesap::dense::Matrix;
 using crd::hesap::dense::rsvd;
 using crd::hesap::dense::rsyev;
@@ -173,6 +175,37 @@ template <typename T> CommandResult impl_rsyev(const CommandArgs& args)
     return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
 }
 
+// Interpolative decomposition CLI: (m, n, A, optional rank cap) -> a flat f64
+// blob [rank, skeleton[0..rank), proj[rank*n] RowMajor] s.t. A ~= A[:,skeleton]*proj.
+// `rank` caps the kept rank (0 = tolerance-only, default rcond = max(m,n)*eps).
+template <typename T> CommandResult impl_id(const CommandArgs& args)
+{
+    Matrix<T> a(args.alloc);
+    CommandResult err{args.alloc};
+    if (!read_matrix<T>(args, a, "id: A=m*n (RowMajor), m+n required", err))
+    {
+        return err;
+    }
+    const auto cap = args.get_u64("rank").value_or(crd::u64{0});
+    const auto id =
+        interp_decomp<T>(args.alloc, a, static_cast<T>(-1), static_cast<crd::usize>(cap));  // default rcond
+    crd::containers::Array<crd::f64> out(args.alloc);
+    out.reserve(1 + id.rank + id.rank * id.n);
+    out.push_back(static_cast<crd::f64>(id.rank));
+    for (crd::usize s = 0; s < id.rank; ++s)
+    {
+        out.push_back(static_cast<crd::f64>(id.skeleton[s]));
+    }
+    for (crd::usize i = 0; i < id.rank; ++i)
+    {
+        for (crd::usize j = 0; j < id.n; ++j)
+        {
+            out.push_back(static_cast<crd::f64>(id.proj.at(i, j)));
+        }
+    }
+    return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
+}
+
 // Complex svd/svdvals CLI: A travels as an interleaved [re0,im0,re1,im1,...]
 // array of 2*m*n entries; returns the min(m,n) singular values (real, descending).
 template <typename U> CommandResult impl_svd_complex(const CommandArgs& args)
@@ -286,6 +319,24 @@ CRD_HESAP_CLI_REGISTER_MODULE(
             add_matrix_params(s, alloc);
             add_param(s, alloc, "rank", "Target rank (number of singular values)", ParamKind::U64, true);
             reg.register_command(std::move(s), &impl_rsvd<crd::f64>);
+        }
+        {
+            auto s = make_schema(
+                alloc, "hesap.dense.id.f32",
+                "Interpolative decomposition: returns [rank, skeleton[rank], proj[rank*n] RowMajor] "
+                "s.t. A ~= A[:,skeleton]*proj (f32).");
+            add_matrix_params(s, alloc);
+            add_param(s, alloc, "rank", "Optional rank cap (0 = tolerance-only)", ParamKind::U64, false);
+            reg.register_command(std::move(s), &impl_id<crd::f32>);
+        }
+        {
+            auto s = make_schema(
+                alloc, "hesap.dense.id.f64",
+                "Interpolative decomposition: returns [rank, skeleton[rank], proj[rank*n] RowMajor] "
+                "s.t. A ~= A[:,skeleton]*proj (f64).");
+            add_matrix_params(s, alloc);
+            add_param(s, alloc, "rank", "Optional rank cap (0 = tolerance-only)", ParamKind::U64, false);
+            reg.register_command(std::move(s), &impl_id<crd::f64>);
         }
         {
             auto s = make_schema(alloc, "hesap.dense.rsyev.f32",

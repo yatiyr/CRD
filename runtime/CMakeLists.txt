@@ -664,6 +664,10 @@ if(CRD_BUILD_HESAP_VS_REFERENCE)
     crd_add_hesap_vs_ref_bench(bench_hesap_lu_vs_reference)
     target_link_libraries(bench_hesap_lu_vs_reference PRIVATE crd-hesap-sparse crd-hesap-ordering crd-hesap-direct)
     target_compile_definitions(bench_hesap_lu_vs_reference PRIVATE "CRD_SUITESPARSE_DIR=\"${CRD_SS_DIR}\"")
+    # v5e-1d: HSS ULV (build_hss_from_dense + factor_hss_ulv + solve) vs Eigen dense LLT — the
+    # O(r^2 N) factor + O(rN) per-solve PREMISE (matrix generated internally; no SuiteSparse dep).
+    crd_add_hesap_vs_ref_bench(bench_hesap_hss_vs_reference)
+    target_link_libraries(bench_hesap_hss_vs_reference PRIVATE crd-hesap-direct)
 
     # v5c-1d: Multifrontal QR factor+solve vs Eigen SparseQR (NaturalOrdering on the same
     # AMD(AᵀA)-column-ordered matrix). v5c-1 correctness-first baseline; the crush lands with
@@ -868,5 +872,37 @@ if(CRD_BUILD_HESAP_VS_SPQR)
         target_compile_definitions(bench_hesap_qr_vs_spqr PRIVATE "CRD_SUITESPARSE_DIR=\"${_spqr_ss}\"")
         set_source_files_properties(examples/bench_hesap_qr_vs_spqr.cpp PROPERTIES COMPILE_FLAGS "-Wno-error")
         message(STATUS "[hesap-vs-spqr] bench enabled (${CRD_SPQR_LIB}); matrices=${_spqr_ss}")
+    endif()
+endif()
+
+# --- v5e-1d: Cerid HSS ULV vs STRUMPACK dense HSS+ULV (Ghysels-Li — the gold-standard
+# rank-structured solver). STRUMPACK built from source to $HOME/strumpack/install (see
+# scripts/setup-strumpack-ref.sh). WSL/Linux only; dev-only, NEVER shipped/CI. The matrix is
+# generated internally (no SuiteSparse dep).
+if(CRD_BUILD_HESAP_VS_STRUMPACK)
+    if(NOT UNIX)
+        message(WARNING "[hesap-vs-strumpack] STRUMPACK oracle is Linux/WSL-only; skipping")
+    else()
+        if(NOT CRD_STRUMPACK_DIR)
+            set(CRD_STRUMPACK_DIR "$ENV{HOME}/strumpack/install")
+        endif()
+        find_library(CRD_STRUMPACK_LIB strumpack HINTS "${CRD_STRUMPACK_DIR}/lib")
+        find_package(MPI REQUIRED COMPONENTS CXX)
+        find_package(OpenMP COMPONENTS CXX)
+        find_library(CRD_SCALAPACK_LIB NAMES scalapack-openmpi scalapack)
+        find_library(CRD_METIS_LIB metis)
+        if(NOT CRD_STRUMPACK_LIB)
+            message(FATAL_ERROR "[hesap-vs-strumpack] libstrumpack not found in ${CRD_STRUMPACK_DIR}/lib — run scripts/setup-strumpack-ref.sh")
+        endif()
+        add_executable(bench_hesap_hss_vs_strumpack examples/bench_hesap_hss_vs_strumpack.cpp)
+        target_include_directories(bench_hesap_hss_vs_strumpack SYSTEM PRIVATE "${CRD_STRUMPACK_DIR}/include")
+        target_link_libraries(bench_hesap_hss_vs_strumpack PRIVATE
+            crd-core crd-memory crd-containers crd-math crd-platform crd-hesap crd-hesap-dense crd-hesap-direct
+            "${CRD_STRUMPACK_LIB}" "${CRD_SCALAPACK_LIB}" openblas "${CRD_METIS_LIB}" MPI::MPI_CXX)
+        if(OpenMP_CXX_FOUND)
+            target_link_libraries(bench_hesap_hss_vs_strumpack PRIVATE OpenMP::OpenMP_CXX)
+        endif()
+        set_source_files_properties(examples/bench_hesap_hss_vs_strumpack.cpp PROPERTIES COMPILE_FLAGS "-Wno-error")
+        message(STATUS "[hesap-vs-strumpack] bench enabled (${CRD_STRUMPACK_LIB})")
     endif()
 endif()
