@@ -93,7 +93,7 @@ void check_lu_pp(crd::memory::IAllocator* alloc, crd::u32 n, const double* a_row
 }
 } // namespace
 
-TEST_CASE("v5f-a partial pivoting: P·A = L·U when the static diagonal fails (zero leading pivot)", "[hesap][lu-pp][v5f]")
+TEST_CASE("v5f-a partial pivoting: PA = LU when the static diagonal fails (zero leading pivot)", "[hesap][lu-pp][v5f]")
 {
     crd::memory::TlsfAllocator alloc(1U << 20);
     const double a[9] = {0.0, 2.0, 1.0, 1.0, 1.0, 0.0, 2.0, 1.0, 3.0}; // A[0][0]=0 ⇒ static fails
@@ -107,7 +107,7 @@ TEST_CASE("v5f-a partial pivoting: larger system with a zero leading pivot", "[h
     check_lu_pp(&alloc, 4, a, 1.0);
 }
 
-TEST_CASE("v5f-a static path unchanged (threshold 0 ⇒ ipiv identity ⇒ L·U = A)", "[hesap][lu-pp][v5f]")
+TEST_CASE("v5f-a static path unchanged (threshold 0 => ipiv identity => LU = A)", "[hesap][lu-pp][v5f]")
 {
     crd::memory::TlsfAllocator alloc(1U << 20);
     const double a[9] = {4.0, 1.0, 0.0, 1.0, 4.0, 1.0, 0.0, 1.0, 4.0}; // strong diagonal — static is fine
