@@ -16,6 +16,7 @@
 #include <crd/hesap/cli/command_registry.hpp>
 #include <crd/hesap/complex.hpp>
 #include <crd/hesap/dense/real_type.hpp>
+#include <crd/hesap/direct/mixed_refine.hpp>
 #include <crd/hesap/direct/multifrontal_ldlt.hpp>
 #include <crd/hesap/direct/multifrontal_lu.hpp>
 #include <crd/hesap/direct/multifrontal_qr.hpp>
@@ -582,6 +583,92 @@ template <typename T, bool Hermitian> CommandResult impl_ldlt(const CommandArgs&
     }
     return blob_f64_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
 }
+
+// v5f — MIXED-PRECISION iterative refinement (factor in f32, refine to f64). f64 working precision only
+// (the factor is f32 internally). Shared core: parse COO triplets + RHS b (all f64), build CSR, hand it to
+// the family-specific `factor` (which downcasts to f32, factors, and wraps in the IR solver), IR-solve, and
+// return [info, x]. info=0 on success; a non-zero info or a non-converged solve (system too ill-conditioned
+// for the f32 factor to precondition) is reported as an error rather than a silent wrong answer.
+template <typename FactorFn> CommandResult impl_mixed_common(const CommandArgs& args, FactorFn factor)
+{
+    const auto rows = args.get_u64("rows");
+    const auto cols = args.get_u64("cols");
+    if (!rows || !cols || *rows != *cols)
+    {
+        return error_result(args.alloc, "mixed: rows and cols are required and must be equal (square)");
+    }
+    const crd::u32 n = static_cast<crd::u32>(*rows);
+    const auto tr = args.get_i64_array("triplet_rows");
+    const auto tc = args.get_i64_array("triplet_cols");
+    const auto vals = args.get_f64_array("values");
+    if (tr.size() != tc.size() || vals.size() != tr.size())
+    {
+        return error_result(args.alloc, "mixed: triplet_rows/cols length mismatch, or values != nnz (f64 only)");
+    }
+    const auto bin = args.get_f64_array("b");
+    if (bin.size() != static_cast<crd::usize>(n))
+    {
+        return error_result(args.alloc, "mixed: b has wrong length (n)");
+    }
+
+    crd::hesap::sparse::TripletBuilder<crd::f64> tb(args.alloc, n, n);
+    tb.reserve(tr.size());
+    for (crd::usize k = 0; k < tr.size(); ++k)
+    {
+        tb.add(static_cast<crd::u32>(tr[k]), static_cast<crd::u32>(tc[k]), vals[k]);
+    }
+    auto a = tb.compress(); // CSR
+    auto f = factor(a);     // the family-specific f32-factor + f64-IR wrapper
+    if (f.info() != 0)
+    {
+        return error_result(args.alloc, "mixed: the f32 factor failed (singular / not definite)");
+    }
+
+    crd::containers::Array<crd::f64> x(args.alloc);
+    x.resize(n);
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        x[i] = bin[i];
+    }
+    if (!f.solve({x.data(), n}))
+    {
+        return error_result(args.alloc,
+                            "mixed: iterative refinement did not converge (system too ill-conditioned for the "
+                            "f32 factor to precondition)");
+    }
+
+    crd::containers::Array<crd::f64> out(args.alloc);
+    out.reserve(static_cast<crd::usize>(n) + 1);
+    out.push_back(static_cast<crd::f64>(f.info()));
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        out.push_back(x[i]);
+    }
+    return blob_f64_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
+}
+
+CommandResult impl_mixed_lu(const CommandArgs& args)
+{
+    return impl_mixed_common(args, [&](auto& a) { return direct::factor_mixed_lu(a, args.alloc); });
+}
+CommandResult impl_mixed_chol(const CommandArgs& args)
+{
+    return impl_mixed_common(args,
+                             [&](auto& a)
+                             {
+                                 auto acsc = crd::hesap::sparse::to_csc<crd::f64>(a, args.alloc);
+                                 return direct::factor_mixed_cholesky(acsc, args.alloc);
+                             });
+}
+CommandResult impl_mixed_ldlt(const CommandArgs& args)
+{
+    return impl_mixed_common(args,
+                             [&](auto& a)
+                             {
+                                 auto acsc = crd::hesap::sparse::to_csc<crd::f64>(a, args.alloc);
+                                 return direct::factor_mixed_ldlt(acsc, args.alloc);
+                             });
+}
 } // namespace
 
 namespace crd::hesap::direct
@@ -698,4 +785,21 @@ CRD_HESAP_CLI_REGISTER_MODULE(
                            "Multifrontal LDLᴴ factor+solve A x = b (Complex<f64> HERMITIAN indefinite, conj, real D). "
                            "Returns [info, x]."),
             &impl_ldlt<crd::hesap::Complex<crd::f64>, true>);
+
+        // v5f — mixed-precision (factor-in-f32, refine-to-f64). f64 working precision only.
+        reg.register_command(
+            make_lu_schema(alloc, "hesap.direct.mixed.lu.f64",
+                           "Mixed-precision LU: factor in f32, iteratively refine to f64 accuracy. A x = b "
+                           "(f64 general). Returns [info, x]."),
+            &impl_mixed_lu);
+        reg.register_command(
+            make_lu_schema(alloc, "hesap.direct.mixed.chol.f64",
+                           "Mixed-precision Cholesky: factor in f32, refine to f64. A x = b (f64 SPD; full "
+                           "symmetric triplets, lower used). Returns [info, x]."),
+            &impl_mixed_chol);
+        reg.register_command(
+            make_lu_schema(alloc, "hesap.direct.mixed.ldlt.f64",
+                           "Mixed-precision LDLt: factor in f32, refine to f64. A x = b (f64 symmetric "
+                           "indefinite; full symmetric triplets, lower used). Returns [info, x]."),
+            &impl_mixed_ldlt);
     });

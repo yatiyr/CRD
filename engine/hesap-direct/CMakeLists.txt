@@ -32,6 +32,8 @@ target_link_libraries(crd-hesap-direct
         crd-hesap-dense
         crd-jobs
         crd-hesap-sched
+        crd-hesap-iterative # v5f gmres_refine.hpp: FGMRES-IR (Carson-Higham) over a direct factor. ACYCLIC
+                            # (iterative is a sibling that does not depend on direct).
     PRIVATE
         crd-warnings
 )

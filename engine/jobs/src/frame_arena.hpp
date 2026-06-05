@@ -65,6 +65,16 @@ public:
 
     void reset() noexcept { m_cursor = 0U; }
 
+    // Restore the bump cursor to a previously-saved mark (from cursor()). Reclaims only the allocations made
+    // since the mark, leaving earlier ones intact — the scoped reclaim backing frame_set_mark(). Same
+    // not-thread-safe contract as alloc(): only the owning thread may call it, and only at a point where no
+    // concurrent alloc on this arena is in flight.
+    void set_cursor(crd::usize mark) noexcept
+    {
+        CRD_ASSERT_MSG(mark <= m_cursor, "FrameArena::set_cursor: mark must not exceed the current cursor");
+        m_cursor = mark;
+    }
+
     [[nodiscard]] crd::usize cursor()   const noexcept { return m_cursor;   }
     [[nodiscard]] crd::usize capacity() const noexcept { return m_capacity; }
     [[nodiscard]] bool is_initialized() const noexcept { return m_data != nullptr; }

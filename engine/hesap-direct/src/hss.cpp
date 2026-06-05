@@ -640,7 +640,7 @@ HssMatrix<T> build_hss_from_dense(crd::memory::IAllocator* alloc, const Matrix<T
             const RealType<T> aji = a.at(j, i);
             const RealType<T> diff = aij > aji ? aij - aji : aji - aij;
             const RealType<T> scale = (aij < RealType<T>{0} ? -aij : aij) + (aji < RealType<T>{0} ? -aji : aji);
-            CRD_ASSERT_MSG(diff <= RealType<T>{1e-3} * (scale + RealType<T>{1}),
+            CRD_ASSERT_MSG(diff <= static_cast<RealType<T>>(1e-3) * (scale + RealType<T>{1}),
                            "build_hss_from_dense: A must be symmetric");
         }
     }

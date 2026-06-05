@@ -135,6 +135,15 @@ private:
 [[nodiscard]] void* frame_alloc(crd::usize size, crd::usize alignment = alignof(std::max_align_t));
 void frame_reset();
 
+// Scoped frame-arena reclaim. frame_get_mark() returns the CURRENT thread's frame-arena offset;
+// frame_set_mark() restores it, reclaiming only the allocations THIS thread made since the mark. Unlike
+// frame_reset() (all threads, wiped to zero), this is nest-safe — it preserves a caller's earlier
+// frame_alloc state below the mark. Used by parallel kernels (gemm_parallel) to reclaim their per-call
+// JobDecl arrays in place. Same not-thread-safe contract as frame_alloc(): mark/restore on the owning
+// thread, with no concurrent frame_alloc on that arena in flight (i.e. after the pass's wait()).
+[[nodiscard]] crd::usize frame_get_mark();
+void frame_set_mark(crd::usize mark);
+
 // ---------------------------------------------------------------------------
 // SBO helper — internal; referenced by make_job<F> below.
 // ---------------------------------------------------------------------------

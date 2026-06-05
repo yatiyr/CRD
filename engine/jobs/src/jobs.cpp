@@ -159,6 +159,18 @@ void frame_reset()
     g_pool.reset_all_frame_arenas();
 }
 
+crd::usize frame_get_mark()
+{
+    CRD_ASSERT_MSG(g_pool.is_initialized(), "crd::jobs::frame_get_mark: call init() first");
+    return detail::tl_frame_arena_ref().cursor();
+}
+
+void frame_set_mark(crd::usize mark)
+{
+    CRD_ASSERT_MSG(g_pool.is_initialized(), "crd::jobs::frame_set_mark: call init() first");
+    detail::tl_frame_arena_ref().set_cursor(mark);
+}
+
 // ---------------------------------------------------------------------------
 // Introspection
 // ---------------------------------------------------------------------------

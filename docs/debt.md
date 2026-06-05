@@ -5,6 +5,20 @@ move to a session log entry and remove from here.
 
 ## Active debt
 
+### ✅ `gemm-parallel-frame-arena-leak` — RESOLVED 2026-06-05 (v5f-c, central mark fix)
+
+> **RESOLVED.** Added the scoped frame marker to the jobs API (`frame_get_mark()`/`frame_set_mark()` +
+> `FrameArena::set_cursor()`) and used it inside `gemm_parallel` + `small_gemm_parallel`: each call saves
+> the dispatching thread's frame-arena mark and restores it after every `parallel_for` `wait()`,
+> reclaiming only its own JobDecl arrays in place (nest-safe — preserves a caller's frame state below the
+> mark, which `frame_reset()` cannot). Verified: a 4000-call leak-regression test (`[frame-arena]`,
+> ColMajor main path) that previously exhausted the 1 MB arena at ~1000 calls now completes; jobs
+> (29244/90) + hesap-dense (354905/346) green; clang-cl + win-asan + win-tidy clean. The driver-level
+> `frame_reset()` workarounds (supernodal_cholesky/lu, multifrontal_lu/qr/ldlt, blr `reclaim_frame_arena`)
+> are KEPT — they reclaim the drivers' own *direct* `parallel_for` JobDecls (e.g. `factor_cholesky`,
+> cholesky.cpp:156), which the gemm-scoped fix does not cover (advisor-scoped: a `parallel_for`-level
+> self-clean is a core-primitive contract change for a separate slice). Original entry below for history.
+
 ### `gemm-parallel-frame-arena-leak` — filed 2026-06-04 (v5e-3 Leg B)
 
 > **`crd::hesap::dense::gemm_parallel` (`blas3.cpp`) `frame_alloc`s its per-call JobDecl arrays

@@ -131,6 +131,11 @@ public:
 
     [[nodiscard]] bool solve(crd::containers::Span<T> rhs, crd::usize nrhs) const override; // v5d-d
     using IFactorization<T>::solve;                                                         // single-RHS overload
+    // v5f: RAW factor apply (no internal IR) — one P·L·D·Lᵀ·Pᵀ triangular solve, the mixed-precision IR
+    // driver's building block. solve() runs its OWN IR (against the stored A lower triangle, the relaxed-
+    // pivot safety net), which would nest under an outer working-precision IR and spuriously fail on the
+    // ill-conditioned target case; override to expose the un-refined core.
+    void apply_inverse(crd::containers::Span<T> rhs, crd::usize nrhs) const override;
     [[nodiscard]] crd::usize n() const noexcept override { return m_n; }
     [[nodiscard]] crd::u64 factor_nnz() const noexcept override { return m_lnz + m_n; } // + the unit diagonal
     [[nodiscard]] crd::usize info() const noexcept override { return m_info; }
@@ -159,6 +164,11 @@ public:
     }
 
 private:
+    // One P·L·D·Lᵀ·Pᵀ triangular solve: A·out = bin, both in ORIGINAL order; `tmp` (length n) is factor-order
+    // scratch. The un-refined raw building block shared by solve() (its x0 + each IR correction) and
+    // apply_inverse (v5f). `bin` may alias `out` (bin is fully gathered into tmp before out is written).
+    void ldlt_apply_once(const T* bin, T* out, T* tmp) const;
+
     crd::memory::IAllocator* m_alloc = nullptr;
     crd::u32 m_n = 0;
     crd::u32 m_nfront = 0;

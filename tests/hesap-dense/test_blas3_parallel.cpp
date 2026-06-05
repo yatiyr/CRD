@@ -8,6 +8,7 @@
 #include "hesap_jobs_fixture.hpp"
 #include "random_matrix.hpp"
 
+#include <cmath>
 #include <cstring>
 
 using crd::hesap::dense::gemm;
@@ -61,6 +62,54 @@ TEST_CASE("gemm_parallel: num_workers=1 falls back to serial gemm",
     gemm<crd::f32, Layout::RowMajor>(1.5F, a, b, 0.5F, c_serial);
     gemm_parallel<crd::f32, Layout::RowMajor>(1U, 1.5F, a, b, 0.5F, c_par);
     REQUIRE(matrices_bit_identical(c_serial, c_par));
+}
+
+TEST_CASE("gemm_parallel: many calls in one jobs session don't exhaust the frame arena (leak fix)",
+          "[hesap][blas3][parallel][gemm_parallel][frame-arena]")
+{
+    parallel_jobs_listener();
+    const crd::u32 nw = crd::jobs::num_workers();
+    if (nw <= 1U)
+    {
+        SUCCEED("single worker: gemm_parallel takes the serial path, no parallel_for frame allocations");
+        return;
+    }
+    crd::memory::TlsfAllocator alloc(16 * 1024 * 1024);
+    constexpr crd::usize n = 64;
+    // ColMajor skips the RowMajor small-gemm fastpath, so this exercises the MAIN gemm_parallel path whose
+    // per-(jc,pc) parallel_for JobDecl arrays are the documented gemm-parallel-frame-arena-leak. Pre-fix,
+    // each call leaks its JobDecls into the dispatching thread's 1 MB frame arena, and ~1000 calls exhaust
+    // it (win-debug FrameArena assert / release corruption). The fix reclaims each call's JobDecls in place,
+    // so this 4000-call loop must COMPLETE — that completion is the regression guard.
+    Matrix<crd::f64, Layout::ColMajor> a(&alloc, n, n);
+    Matrix<crd::f64, Layout::ColMajor> b(&alloc, n, n);
+    Matrix<crd::f64, Layout::ColMajor> c(&alloc, n, n);
+    random_general(a, 7U);
+    random_general(b, 9U);
+    random_general(c, 5U);
+
+    Matrix<crd::f64, Layout::ColMajor> c_ref(&alloc, n, n);
+    gemm<crd::f64, Layout::ColMajor>(1.25, a, b, 0.0, c_ref); // serial reference (beta=0 -> C = 1.25*A*B)
+
+    constexpr crd::u32 num_calls = 4000U; // >> the ~1000-call pre-fix exhaustion threshold
+    for (crd::u32 it = 0; it < num_calls; ++it)
+    {
+        gemm_parallel<crd::f64, Layout::ColMajor>(nw, 1.25, a, b, 0.0, c);
+    }
+
+    // Reaching here means the arena did not exhaust across 4000 parallel gemms; the result is still correct.
+    double max_diff = 0.0;
+    const crd::f64* cd = c.data();
+    const crd::f64* rd = c_ref.data();
+    for (crd::usize i = 0; i < n * n; ++i)
+    {
+        const double d = std::abs(cd[i] - rd[i]);
+        if (d > max_diff)
+        {
+            max_diff = d;
+        }
+    }
+    CHECK(max_diff < 1e-9);
 }
 
 TEST_CASE("gemm_parallel: f32 bit-exact across worker counts at N=64",

@@ -322,10 +322,20 @@ public:
     // assembly tree; the result is bit-identical across worker counts (the determinism moat). Uses ADAPTIVE
     // static pivoting: tries the natural diagonal first (faster + better-conditioned on strong-diagonal sim
     // matrices) and falls back to MC64 only if element growth blows up — both deterministic ⇒ moat-safe.
-    void factorize(const sparse::SparseMatrix<T, sparse::SparseFormat::Csr>& a, crd::u32 num_workers = 1);
+    // `pivot_threshold > 0` enables within-front THRESHOLD PARTIAL PIVOTING (v5f-(a)) — the root-cause fix for
+    // the saddle-point/indefinite systems where MC64+static-diagonal LU is a poor approximation (garon2/raefsky3
+    // class). Restricted to fully-summed rows ⇒ structure-preserving (no delayed pivots) ⇒ the symbolic + the
+    // {1,2,4,8} moat hold; an extra global row permutation P (`rowperm()`) is applied in the solve. Default 0 ⇒
+    // the byte-unchanged static path.
+    void factorize(const sparse::SparseMatrix<T, sparse::SparseFormat::Csr>& a, crd::u32 num_workers = 1,
+                   crd::hesap::dense::RealType<T> pivot_threshold = crd::hesap::dense::RealType<T>(0));
 
     [[nodiscard]] bool solve(crd::containers::Span<T> rhs, crd::usize nrhs) const override;
     using IFactorization<T>::solve; // un-hide the single-RHS convenience overload
+    // v5f: RAW factor apply (NO internal IR) — the mixed-precision IR driver's building block. Overrides the
+    // base default (which routes through solve()'s static-pivot GESP refinement + accept-gate; that inner IR
+    // would spuriously fail an outer working-precision IR on ill-conditioned systems).
+    void apply_inverse(crd::containers::Span<T> rhs, crd::usize nrhs) const override;
     [[nodiscard]] crd::usize n() const noexcept override { return m_n; }
     [[nodiscard]] crd::u64 factor_nnz() const noexcept override { return m_lnz + m_unz; }
     [[nodiscard]] crd::usize info() const noexcept override { return m_info; }
@@ -337,6 +347,12 @@ public:
     // {1,2,4,8} workers). The numeric is a deterministic pure function of the symbolic.
     [[nodiscard]] crd::containers::ConstSpan<T> l_values() const noexcept { return {m_lx.data(), m_lx.size()}; }
     [[nodiscard]] crd::containers::ConstSpan<T> u_values() const noexcept { return {m_ux.data(), m_ux.size()}; }
+    // The global row permutation P from within-front partial pivoting (PB = LU). Identity when pivoting is off.
+    // Empty span ⇒ no permutation (static path). For the moat test (bit-identical across {1,2,4,8} workers).
+    [[nodiscard]] crd::containers::ConstSpan<crd::u32> rowperm() const noexcept
+    {
+        return {m_rowperm.data(), m_rowperm.size()};
+    }
 
 private:
     // One factorization attempt with a fixed pivoting choice (use_mc64). Writes L/U/scale into the members
@@ -359,6 +375,8 @@ private:
     crd::containers::Array<crd::u32> m_up;                  // U column pointers, length n+1
     crd::containers::Array<crd::u32> m_ui;                  // U row indices (ascending, diagonal last)
     crd::containers::Array<T> m_ux;                         // U values
+    crd::containers::Array<crd::u32> m_rowperm;             // v5f-(a): global row perm P (PB=LU); empty ⇒ identity
+    crd::hesap::dense::RealType<T> m_pivot_threshold = crd::hesap::dense::RealType<T>(0); // 0 ⇒ static path
 };
 
 // Factor a general square unsymmetric matrix A (CSR) into a deterministic static-pivot
@@ -366,5 +384,16 @@ private:
 template <typename T>
 [[nodiscard]] MultifrontalLU<T> factor_multifrontal_lu(const sparse::SparseMatrix<T, sparse::SparseFormat::Csr>& a,
                                                        crd::memory::IAllocator* alloc, crd::u32 num_workers = 1);
+
+// v5f-(a): factor with within-front THRESHOLD PARTIAL PIVOTING enabled (default threshold 1 = full partial
+// pivoting within each front's fully-summed block) — the gold-standard-class robust LU for saddle-point /
+// indefinite systems where static-diagonal pivoting cannot reach f64. The {1,2,4,8} determinism moat holds
+// (deterministic pivot choice, tie-break by index). Falls back to GESP perturbation only if a whole column's
+// fully-summed block is below √ε (then GMRES-IR mops up).
+template <typename T>
+[[nodiscard]] MultifrontalLU<T>
+factor_multifrontal_lu_pp(const sparse::SparseMatrix<T, sparse::SparseFormat::Csr>& a, crd::memory::IAllocator* alloc,
+                          crd::u32 num_workers = 1,
+                          crd::hesap::dense::RealType<T> pivot_threshold = crd::hesap::dense::RealType<T>(1));
 
 } // namespace crd::hesap::direct

@@ -27,6 +27,35 @@ const cli::ResultBinaryBlob* as_blob(const cli::CommandResult& r)
 {
     return std::get_if<cli::ResultBinaryBlob>(&r.value);
 }
+
+// Invoke a hesap.direct.mixed.*.f64 command (factor-in-f32 + refine-to-f64) and assert it recovers x_true to
+// FULL f64 accuracy (~1e-9, far past the f32 floor) — i.e. the IR ran through the CLI surface.
+void check_mixed_cli(crd::memory::IAllocator* alloc, const char* cmd, crd::u32 n,
+                     crd::containers::ConstSpan<crd::i64> tr, crd::containers::ConstSpan<crd::i64> tc,
+                     crd::containers::ConstSpan<crd::f64> vals, crd::containers::ConstSpan<crd::f64> b,
+                     crd::containers::ConstSpan<crd::f64> xt)
+{
+    cli::CommandArgs args{alloc};
+    args.set_u64("rows", n);
+    args.set_u64("cols", n);
+    args.set_i64_array("triplet_rows", tr);
+    args.set_i64_array("triplet_cols", tc);
+    args.set_f64_array("values", vals);
+    args.set_f64_array("b", b);
+    const auto* rec = cli::CommandRegistry::global().find(cmd);
+    REQUIRE(rec != nullptr);
+    const cli::CommandResult r = rec->impl(args);
+    REQUIRE(r.ok);
+    const auto* blob = as_blob(r);
+    REQUIRE(blob != nullptr);
+    REQUIRE(blob->bytes.size() == (static_cast<crd::usize>(n) + 1) * sizeof(crd::f64));
+    const auto* out = reinterpret_cast<const crd::f64*>(blob->bytes.data());
+    CHECK(out[0] == 0.0); // info: success
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        CHECK(std::abs(out[1 + i] - xt[i]) < 1e-9);
+    }
+}
 } // namespace
 
 TEST_CASE("CLI: all four hesap.direct.chol type variants are registered", "[hesap][direct][v5a-2][cli]")
@@ -675,6 +704,122 @@ TEST_CASE("CLI: hesap.direct.qr.c64 solves a complex square system", "[hesap][di
         CHECK(std::abs(out[2 + 2 * i] - xtrue[i].re) < 1e-9);
         CHECK(std::abs(out[2 + 2 * i + 1] - xtrue[i].im) < 1e-9);
     }
+}
+
+TEST_CASE("CLI: the three hesap.direct.mixed.*.f64 variants are registered", "[hesap][direct][v5f][cli]")
+{
+    REQUIRE(kPullDirect);
+    auto& reg = cli::CommandRegistry::global();
+    for (const char* name :
+         {"hesap.direct.mixed.lu.f64", "hesap.direct.mixed.chol.f64", "hesap.direct.mixed.ldlt.f64"})
+    {
+        const auto* rec = reg.find(name);
+        REQUIRE(rec != nullptr);
+        REQUIRE(rec->impl != nullptr);
+    }
+}
+
+namespace
+{
+// Build COO triplets + b = A·x_true for an n×n matrix defined by `aij`, then drive a mixed.*.f64 CLI command.
+template <typename Aij>
+void mixed_cli_case(const char* cmd, crd::u32 n, Aij aij)
+{
+    crd::memory::TlsfAllocator alloc(16 << 20);
+    crd::containers::Array<crd::i64> tr(&alloc);
+    crd::containers::Array<crd::i64> tc(&alloc);
+    crd::containers::Array<crd::f64> vals(&alloc);
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        for (crd::u32 j = 0; j < n; ++j)
+        {
+            const crd::f64 v = aij(i, j);
+            if (v != 0.0)
+            {
+                tr.push_back(static_cast<crd::i64>(i));
+                tc.push_back(static_cast<crd::i64>(j));
+                vals.push_back(v);
+            }
+        }
+    }
+    crd::containers::Array<crd::f64> xt(&alloc);
+    crd::containers::Array<crd::f64> b(&alloc);
+    xt.resize(n);
+    b.resize(n);
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        xt[i] = 1.0 + 0.3 * static_cast<crd::f64>(i);
+    }
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        crd::f64 acc = 0.0;
+        for (crd::u32 j = 0; j < n; ++j)
+        {
+            acc += aij(i, j) * xt[j];
+        }
+        b[i] = acc;
+    }
+    check_mixed_cli(&alloc, cmd, n, {tr.data(), tr.size()}, {tc.data(), tc.size()}, {vals.data(), vals.size()},
+                    {b.data(), b.size()}, {xt.data(), xt.size()});
+}
+} // namespace
+
+TEST_CASE("CLI: hesap.direct.mixed.lu.f64 recovers f64 accuracy from an f32 factor", "[hesap][direct][v5f][cli]")
+{
+    REQUIRE(kPullDirect);
+    mixed_cli_case("hesap.direct.mixed.lu.f64", 8,
+                   [](crd::u32 i, crd::u32 j) -> crd::f64
+                   {
+                       if (i == j)
+                       {
+                           return 10.0;
+                       }
+                       if (j == i + 1)
+                       {
+                           return 1.0;
+                       }
+                       if (i == j + 1)
+                       {
+                           return -2.0;
+                       }
+                       return 0.0;
+                   });
+}
+
+TEST_CASE("CLI: hesap.direct.mixed.chol.f64 recovers f64 accuracy (SPD)", "[hesap][direct][v5f][cli]")
+{
+    REQUIRE(kPullDirect);
+    mixed_cli_case("hesap.direct.mixed.chol.f64", 8,
+                   [](crd::u32 i, crd::u32 j) -> crd::f64
+                   {
+                       if (i == j)
+                       {
+                           return 4.0;
+                       }
+                       if (i + 1 == j || j + 1 == i)
+                       {
+                           return -1.0;
+                       }
+                       return 0.0;
+                   });
+}
+
+TEST_CASE("CLI: hesap.direct.mixed.ldlt.f64 recovers f64 accuracy (indefinite)", "[hesap][direct][v5f][cli]")
+{
+    REQUIRE(kPullDirect);
+    mixed_cli_case("hesap.direct.mixed.ldlt.f64", 8,
+                   [](crd::u32 i, crd::u32 j) -> crd::f64
+                   {
+                       if (i == j)
+                       {
+                           return (i % 2 == 0) ? 2.0 : -2.0;
+                       }
+                       if (i + 1 == j || j + 1 == i)
+                       {
+                           return -0.3;
+                       }
+                       return 0.0;
+                   });
 }
 
 TEST_CASE("CLI: all six hesap.direct.ldlt/ldlh commands are registered", "[hesap][direct][v5d-g][cli]")

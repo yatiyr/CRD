@@ -203,7 +203,7 @@ TEST_CASE("v5e-3a BLR: smooth kernel compresses low-rank + reconstructs within t
     CHECK(frob_diff<double>(a, recon) < 1e-5 * frob<double>(a));  // ≲ tol·‖A‖ (modest accumulation constant)
 }
 
-TEST_CASE("v5e-3a BLR: tighter tol ⇒ smaller reconstruction error (monotone)", "[hesap][blr][real]")
+TEST_CASE("v5e-3a BLR: tighter tol => smaller reconstruction error (monotone)", "[hesap][blr][real]")
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(64U * 1024U * 1024U));
     const Matrix<double> a = smooth_kernel<double>(&alloc, 256);
@@ -239,7 +239,7 @@ TEST_CASE("v5e-3a BLR: f32 smooth-kernel reconstruct", "[hesap][blr][real]")
 
 // ---------- v5e-3b: BLR Cholesky factor + solve ----------
 
-TEST_CASE("v5e-3b BLR-Cholesky: SPD smooth kernel — low-rank L + solve within tol", "[hesap][blr][real]")
+TEST_CASE("v5e-3b BLR-Cholesky: SPD smooth kernel -- low-rank L + solve within tol", "[hesap][blr][real]")
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(128U * 1024U * 1024U));
     constexpr crd::usize n = 256;
@@ -295,7 +295,7 @@ TEST_CASE("v5e-3b BLR-Cholesky: generic full-rank SPD solves exactly (dense fall
     CHECK(solve_residual<double>(&alloc, a, x, b) < 1e-9);  // full-rank ⇒ dense ⇒ exact
 }
 
-TEST_CASE("v5e-3b BLR-Cholesky: non-SPD matrix ⇒ factor returns false", "[hesap][blr][real]")
+TEST_CASE("v5e-3b BLR-Cholesky: non-SPD matrix => factor returns false", "[hesap][blr][real]")
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(64U * 1024U * 1024U));
     Matrix<double> a = spd_kernel<double>(&alloc, 64);
@@ -562,7 +562,7 @@ Matrix<T> lower_llt(crd::memory::IAllocator* alloc, const Matrix<T>& l, crd::usi
 }
 } // namespace
 
-TEST_CASE("v5e-3d factor_front_cholesky_blr: full front (npiv=m) ⇒ L·Lᵀ = A", "[hesap][blr][real]")
+TEST_CASE("v5e-3d factor_front_cholesky_blr: full front (npiv=m) => L*L^T = A", "[hesap][blr][real]")
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(256U * 1024U * 1024U));
     constexpr crd::usize m = 320;
@@ -573,7 +573,7 @@ TEST_CASE("v5e-3d factor_front_cholesky_blr: full front (npiv=m) ⇒ L·Lᵀ = A
     CHECK(frob_diff<double>(a, llt) < 1e-5 * frob<double>(a));
 }
 
-TEST_CASE("v5e-3d factor_front_cholesky_blr: partial front ⇒ L + Schur complete to A", "[hesap][blr][real]")
+TEST_CASE("v5e-3d factor_front_cholesky_blr: partial front => L + Schur complete to A", "[hesap][blr][real]")
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(256U * 1024U * 1024U));
     constexpr crd::usize m = 384;

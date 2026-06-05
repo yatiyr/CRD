@@ -267,6 +267,8 @@ crd::memory::IAllocator* alloc = scratch;
     State s{a, c, b_pack, alpha, m, n, k};
     State* sp = &s;
 
+    // v5f-c (gemm-parallel-frame-arena-leak fix): reclaim this parallel_for's JobDecl array in place.
+    const crd::usize frame_mark = crd::jobs::frame_get_mark();
     auto* counter = crd::jobs::parallel_for(
         num_panels, num_workers, [sp](crd::u32 begin, crd::u32 end) {
             for (crd::u32 panel = begin; panel < end; ++panel)
@@ -280,6 +282,7 @@ crd::memory::IAllocator* alloc = scratch;
             }
         });
     crd::jobs::wait(counter);
+    crd::jobs::frame_set_mark(frame_mark); // reclaim the parallel_for JobDecls in place (leak fix)
 
     alloc->deallocate(b_pack);
 }
@@ -417,6 +420,12 @@ crd::memory::IAllocator* alloc = scratch;
     // to cache locality (workers warm cache lines that the inner loop on a
     // different worker then needs to fetch). The serial pack_b at N=4096
     // f64 costs ~5ms total across all (jc,pc) iters — <2% of GEMM wall.
+    //
+    // v5f-c (gemm-parallel-frame-arena-leak fix): scope the per-iteration parallel_for JobDecl arrays to
+    // this gemm call. Save the dispatching thread's frame-arena mark before the loop and restore it after
+    // each wait() — reclaims only THIS call's JobDecls, leaving any caller frame_alloc state below the mark
+    // intact (nest-safe, unlike frame_reset()). Fixes the cross-call arena exhaustion in heavy-gemm loops.
+    const crd::usize frame_mark = crd::jobs::frame_get_mark();
     for (crd::usize jc = 0; jc < n; jc += kNc)
     {
         const crd::usize nc = (jc + kNc < n) ? kNc : (n - jc);
@@ -458,10 +467,10 @@ crd::memory::IAllocator* alloc = scratch;
                     }
                 });
             crd::jobs::wait(counter);
-            // No frame_reset here — it would invalidate frame_alloc state the
-            // CALLER may hold. Per-call frame footprint at N=4096 is ~24 KB
-            // (3 parallel_for x 32 outer iters x ~256 B JobDecl arrays),
-            // well within the 1 MB default arena.
+            // Reclaim this parallel_for's JobDecl array in place (back to the gemm-entry mark): bounded
+            // arena use across the (jc,pc) iterations + no cross-call accumulation. The packed buffers come
+            // from `alloc` (an IAllocator), not the frame arena, so they are untouched.
+            crd::jobs::frame_set_mark(frame_mark);
         }
     }
 

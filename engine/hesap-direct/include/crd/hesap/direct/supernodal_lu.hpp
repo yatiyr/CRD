@@ -116,6 +116,10 @@ public:
 
     [[nodiscard]] bool solve(crd::containers::Span<T> rhs, crd::usize nrhs) const override;
     using IFactorization<T>::solve; // un-hide the single-RHS convenience overload
+    // v5f: RAW factor apply (NO internal IR) — the mixed-precision IR driver's building block. Like
+    // MultifrontalLU, this static-pivot LU's solve() runs internal GESP refinement + an accept-gate, so the
+    // base default (apply_inverse = solve) would nest IR under an outer working-precision IR; override it.
+    void apply_inverse(crd::containers::Span<T> rhs, crd::usize nrhs) const override;
     [[nodiscard]] crd::usize n() const noexcept override { return m_n; }
     [[nodiscard]] crd::u64 factor_nnz() const noexcept override { return m_lnz + m_unz; }
     [[nodiscard]] crd::usize info() const noexcept override { return m_info; }

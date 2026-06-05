@@ -20,7 +20,9 @@
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/core/types.hpp>
+#include <crd/hesap/direct/gmres_refine.hpp>    // v5f: factor_gmres_refined_lu (static-pivot divergence fix)
 #include <crd/hesap/direct/lu_symbolic.hpp>
+#include <crd/hesap/direct/mixed_refine.hpp>
 #include <crd/hesap/direct/multifrontal_lu.hpp>
 #include <crd/hesap/direct/supernodal_lu.hpp>
 #include <crd/hesap/ordering/ordering.hpp>
@@ -45,6 +47,8 @@
 
 #ifdef CRD_HESAP_VS_MUMPS
 #include <dmumps_c.h>
+#include <smumps_c.h> // v5f-c: SINGLE-precision MUMPS — the honest mixed-precision (factor-f32 + f64-IR) peer
+#include <limits>
 #endif
 
 #ifndef CRD_SUITESPARSE_DIR
@@ -532,6 +536,95 @@ void run(const char* name)
         umfpack_di_free_numeric(&unum);
     }
 #endif
+    // ---- v5f-c: Cerid f32-factor + f64 iterative refinement (mixed precision) on the SAME `ap`. ----
+    // factor_mixed_lu does the unsymmetric LU in f32 (~2x the dense-front kernel rate, ~½ the factor memory)
+    // and recovers f64 accuracy with a fixed-order f64 IR loop (64·eps backward-error target). The honest
+    // mixed-precision result: at MATCHED f64 residual it lands parity-class with the single-precision peer
+    // (smumps+IR below) AND keeps the {1,2,4,8}-worker bit-determinism MOAT that no MUMPS path carries.
+    crd::f64 t_mix_fac = best_ms(
+        [&]()
+        {
+            auto f = dir::factor_mixed_lu(ap, &g_alloc);
+            (void)f.info();
+        });
+    auto mixf = dir::factor_mixed_lu(ap, &g_alloc);
+    crd::f64 t_mix_slv = 0.0;
+    crd::f64 mix_res = 1e30;
+    crd::u32 mix_iters = 0;
+    bool mix_converged = false;
+    if (mixf.info() == 0)
+    {
+        bool mix_ok = false;
+        t_mix_slv = best_ms(
+            [&]()
+            {
+                for (crd::u32 i = 0; i < un; ++i)
+                {
+                    x[i] = b[i];
+                }
+                mix_ok = mixf.solve({x.data(), un}, 1);
+            });
+        mix_res = true_residual(ap, x.data(), b.data());
+        mix_iters = mixf.last_iters();
+        // Honest accept guard: the f32 factor reaches f64 only when κ(A)·u_f ≲ 1. On matrices needing true
+        // partial pivoting (static-pivot LU stalls at f64 too) the IR cannot recover — flag, do not race.
+        mix_converged = mix_ok && (mix_res <= 1e-8);
+    }
+    std::printf(" || Cerid-mix fac=%9.2f ms solve=%7.3f iters=%u resid=%.1e [%s]", t_mix_fac, t_mix_slv, mix_iters,
+                mix_res, mix_converged ? "ok" : "DIVERGED");
+    // ---- v5f-(a): Cerid within-front PARTIAL-PIVOTING LU (factor_multifrontal_lu_pp) — the root-cause fix for
+    // the static-pivot divergence (garon2/raefsky3). Does the bare partial-pivot factor now reach f64? ----
+    if (std::getenv("CRD_BENCH_LU_PP") != nullptr)
+    {
+        const auto ppt0 = Clock::now();
+        auto ppf = dir::factor_multifrontal_lu_pp<crd::f64>(ap, &g_alloc, 1);
+        const double pp_fac = std::chrono::duration<crd::f64, std::milli>(Clock::now() - ppt0).count();
+        if (ppf.info() == 0)
+        {
+            for (crd::u32 i = 0; i < un; ++i)
+            {
+                x[i] = b[i];
+            }
+            const auto pps0 = Clock::now();
+            const bool ppok = ppf.solve({x.data(), un});
+            const double pp_slv = std::chrono::duration<crd::f64, std::milli>(Clock::now() - pps0).count();
+            const double pp_res = true_residual(ap, x.data(), b.data());
+            std::printf(" || Cerid-pp fac=%9.2f solve=%7.3f resid=%.1e [%s]", pp_fac, pp_slv, pp_res,
+                        (ppok && pp_res <= 1e-8) ? "ok" : "INACCURATE");
+        }
+    }
+    // ---- v5f GMRES-IR PROBE (CRD_BENCH_LU_GMRESIR): the discriminating diagnostic for the static-pivot
+    // divergence. FGMRES preconditioned by the f64 static-pivot factor — does it reach f64 on garon2/raefsky3
+    // (where fixed-point IR diverges), and in how many iters? If yes ⇒ build GMRES-IR into the base solve. ----
+    if (std::getenv("CRD_BENCH_LU_GMRESIR") != nullptr)
+    {
+        dir::GmresRefineOptions gopts;
+        if (const char* re = std::getenv("CRD_GMRESIR_RESTART"))
+        {
+            gopts.restart = static_cast<crd::usize>(std::atoi(re));
+        }
+        if (const char* mi = std::getenv("CRD_GMRESIR_MAXIT"))
+        {
+            gopts.max_iter = static_cast<crd::usize>(std::atoi(mi));
+        }
+        const crd::f64 gpp = (std::getenv("CRD_GMRESIR_PP") != nullptr) ? 1.0 : 0.0; // pp preconditioner?
+        const auto fct0 = Clock::now();
+        auto grefined = dir::factor_gmres_refined_lu(ap, &g_alloc, 1, gopts, gpp); // the shipped API
+        const double gfac_ms = std::chrono::duration<crd::f64, std::milli>(Clock::now() - fct0).count();
+        if (grefined.info() == 0)
+        {
+            for (crd::u32 i = 0; i < un; ++i)
+            {
+                x[i] = b[i];
+            }
+            const auto gt0 = Clock::now();
+            const bool gok = grefined.solve({x.data(), un}, 1);
+            const double gms = std::chrono::duration<crd::f64, std::milli>(Clock::now() - gt0).count();
+            const double gres = true_residual(ap, x.data(), b.data());
+            std::printf(" || GMRES-IR fac=%9.2f solve=%7.3f iters=%u conv=%d resid=%.1e", gfac_ms, gms,
+                        grefined.last_iters(), gok ? 1 : 0, gres);
+        }
+    }
 #ifdef CRD_HESAP_VS_MUMPS
     // ---- MUMPS (parallel multifrontal, OpenMP) on the SAME `ap`. The HONEST parallel-peer comparison.
     // Run with OMP_NUM_THREADS=N for MUMPS's parallelism; Cerid-MF uses its own workers (CRD_BENCH_LU_WORKERS).
@@ -595,6 +688,126 @@ void run(const char* name)
         if (t_mf_fac > 0.0)
         {
             std::printf("  [MF %.2fx vs MUMPS]", t_mumps_fac / t_mf_fac);
+        }
+    }
+    // ---- v5f-c: smumps (SINGLE-precision MUMPS) + f64 iterative refinement — the HONEST mixed-precision peer.
+    // MUMPS does the f32 factor; we wrap it in the SAME f64 IR loop (64·eps backward-error target, fixed-order
+    // f64 residual) so BOTH paths reach f64 accuracy. The comparison Cerid-mix vs smumps+IR is mixed-vs-mixed
+    // (no dmumps-f64 asterisk); the differentiator is the cross-thread determinism MOAT smumps+IR cannot carry.
+    if (std::getenv("CRD_BENCH_LU_MUMPS") != nullptr)
+    {
+        const crd::u32 snnz = static_cast<crd::u32>(ap.pattern().inner_idx.size());
+        crd::containers::Array<MUMPS_INT> sirn(&g_alloc);
+        crd::containers::Array<MUMPS_INT> sjcn(&g_alloc);
+        crd::containers::Array<float> sav(&g_alloc);
+        sirn.resize(snnz);
+        sjcn.resize(snnz);
+        sav.resize(snnz);
+        const crd::u32* rp = ap.pattern().outer_ptr.data();
+        const crd::u32* ci = ap.pattern().inner_idx.data();
+        const double* av = ap.values().values.data();
+        crd::u32 w = 0;
+        for (crd::u32 i = 0; i < un; ++i)
+        {
+            for (crd::u32 p = rp[i]; p < rp[i + 1]; ++p)
+            {
+                sirn[w] = static_cast<MUMPS_INT>(i + 1); // COO, 1-based (Fortran)
+                sjcn[w] = static_cast<MUMPS_INT>(ci[p] + 1);
+                sav[w] = static_cast<float>(av[p]); // SINGLE-precision matrix copy
+                ++w;
+            }
+        }
+        SMUMPS_STRUC_C sid;
+        sid.comm_fortran = -987654; // USE_COMM_WORLD (sequential OpenMP build)
+        sid.par = 1;
+        sid.sym = 0; // unsymmetric
+        sid.job = -1;
+        smumps_c(&sid); // init
+        sid.icntl[0] = -1;
+        sid.icntl[1] = -1;
+        sid.icntl[2] = -1;
+        sid.icntl[3] = 0; // silence all output
+        sid.n = static_cast<MUMPS_INT>(un);
+        sid.nnz = static_cast<MUMPS_INT8>(snnz);
+        sid.irn = sirn.data();
+        sid.jcn = sjcn.data();
+        sid.a = sav.data();
+        const crd::f64 t_smumps_fac = best_ms(
+            [&]()
+            {
+                sid.job = 4; // analyze + factorize (single precision)
+                smumps_c(&sid);
+            });
+        // f64 iterative refinement around the single-precision factor (mirror of IterativeRefinedSolve):
+        // x=0 ⇒ r=b; converge at 64·eps·‖b‖∞; else single solve d=U⁻¹L⁻¹r (job 3), x+=d (f64). Stall guard.
+        crd::containers::Array<crd::f64> sx(&g_alloc);
+        crd::containers::Array<float> sr(&g_alloc);
+        sx.resize(un);
+        sr.resize(un);
+        for (crd::u32 i = 0; i < un; ++i)
+        {
+            sx[i] = 0.0;
+        }
+        const double eps = std::numeric_limits<double>::epsilon();
+        const double refine_tol = 64.0 * eps;
+        double bn = 0.0;
+        for (crd::u32 i = 0; i < un; ++i)
+        {
+            bn = std::fabs(b[i]) > bn ? std::fabs(b[i]) : bn;
+        }
+        bn = bn > 0.0 ? bn : 1.0;
+        crd::u32 smumps_iters = 0;
+        double prev_rn = 1e300;
+        const auto sir0 = Clock::now(); // IR-loop cost (the single-precision back-substitutions) is end-to-end
+        for (crd::u32 it = 0; it < 20U; ++it)
+        {
+            double rn = 0.0;
+            for (crd::u32 r0 = 0; r0 < un; ++r0) // r = b - A·sx (f64 CSR matvec on the permuted matrix)
+            {
+                double acc = 0.0;
+                for (crd::u32 p = rp[r0]; p < rp[r0 + 1]; ++p)
+                {
+                    acc += av[p] * sx[ci[p]];
+                }
+                const double rr = b[r0] - acc;
+                sr[r0] = static_cast<float>(rr);
+                const double m = std::fabs(rr);
+                rn = m > rn ? m : rn;
+            }
+            if (rn <= refine_tol * bn)
+            {
+                break; // machine-precision backward error
+            }
+            if (it >= 1U && rn >= 0.5 * prev_rn)
+            {
+                break; // stall guard (hit the f32 round-off floor)
+            }
+            prev_rn = rn;
+            sid.rhs = sr.data();
+            sid.job = 3; // single-precision solve, rhs overwritten with the correction d
+            smumps_c(&sid);
+            for (crd::u32 i = 0; i < un; ++i)
+            {
+                sx[i] += static_cast<double>(sr[i]);
+            }
+            ++smumps_iters;
+        }
+        const double t_smumps_ir = std::chrono::duration<crd::f64, std::milli>(Clock::now() - sir0).count();
+        const double smumps_res = (sid.infog[0] < 0) ? 1e30 : true_residual(ap, sx.data(), b.data());
+        sid.job = -2;
+        smumps_c(&sid); // finalize
+        const bool smumps_ok = smumps_res <= 1e-8;
+        std::printf(" || smumps+IR fac=%9.2f ms ir=%7.3f iters=%u resid=%.1e [%s]", t_smumps_fac, t_smumps_ir,
+                    smumps_iters, smumps_res, smumps_ok ? "ok" : "DIVERGED");
+        // Head-to-head ratio only when BOTH reached f64 accuracy (else the speed number compares a wrong answer).
+        if (mix_converged && smumps_ok && t_mix_fac > 0.0)
+        {
+            // >1 ⇒ Cerid-mix faster at MATCHED f64 accuracy (factor + IR, mixed-vs-mixed, no dmumps-f64 asterisk).
+            std::printf("  [Cerid-mix %.2fx vs smumps+IR]", (t_smumps_fac + t_smumps_ir) / (t_mix_fac + t_mix_slv));
+        }
+        else
+        {
+            std::printf("  [no matched-accuracy race: Cerid-mix %s]", mix_converged ? "ok" : "static-pivot wall");
         }
     }
 #endif

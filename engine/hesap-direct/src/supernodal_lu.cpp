@@ -1240,6 +1240,31 @@ SupernodalLU<T> factor_supernodal_lu(const sparse::SparseMatrix<T, sparse::Spars
     return lu;
 }
 
+// v5f: RAW factor apply (no internal IR) — the mixed-precision IR driver's building block. Same static-pivot
+// transform + (the file-local) lu_lu_solve as solve()'s x0 step, MINUS the GESP refinement loop + accept-gate.
+// (Uses the anonymous-namespace lu_lu_solve in this TU, not lu_solve.hpp's, to avoid the overload ambiguity.)
+template <typename T> void SupernodalLU<T>::apply_inverse(crd::containers::Span<T> rhs, crd::usize nrhs) const
+{
+    if (m_info != 0)
+    {
+        return; // invalid factor; the driver checks info() before iterating, so rhs is left untouched
+    }
+    const crd::u32 n = m_n;
+    if (n == 0)
+    {
+        return;
+    }
+    crd::containers::Array<T> y(m_alloc);
+    y.resize(n);
+    for (crd::usize col = 0; col < nrhs; ++col)
+    {
+        T* b = rhs.data() + col * n;
+        m_scale.transform_rhs({b, n}, {y.data(), n});         // y = D_r·b
+        lu_lu_solve<T>(n, m_lp.data(), m_li.data(), m_lx.data(), m_up.data(), m_ui.data(), m_ux.data(), y.data());
+        m_scale.untransform_solution({y.data(), n}, {b, n});  // x = D_c·y
+    }
+}
+
 // Explicit instantiations: f32 / f64 / Complex32 / Complex64.
 template struct StaticLuScaling<crd::f32>;
 template struct StaticLuScaling<crd::f64>;

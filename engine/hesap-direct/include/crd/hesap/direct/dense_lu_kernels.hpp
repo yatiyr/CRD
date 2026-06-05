@@ -143,12 +143,21 @@ void trsm_unit_lower_left(const T* l, crd::u32 ldl, crd::u32 nc, T* x, crd::u32 
 // `gemm_parallel_auto` — BLIS row-slab split, BIT-EXACT vs serial `gemm` (ADR-0063) ⇒ the {1,2,4,8} moat
 // holds. Set it ONLY when factor_front runs on the main thread (the multifrontal's narrow top levels), never
 // inside a parallel_for over fronts (that would nest). Default false (serial GEMM via `scratch`).
+// v5f-(a): `pivot_threshold > 0` enables THRESHOLD PARTIAL PIVOTING restricted to the fully-summed rows
+// [k, npiv) — pick the largest-magnitude candidate (tie-break by lowest index ⇒ deterministic ⇒ moat-safe),
+// swap the full front rows, and record the swap in `ipiv` (LAPACK getf2 convention: ipiv[k] = the row swapped
+// into position k). NEVER delays: if even the max candidate is below `tiny`, the existing GESP perturbation
+// takes over (GMRES-IR mops up the rare perturbed pivot). The structure is invariant under restricted
+// pivoting (no-delay), so the caller only remaps index LABELS (driver step). `pivot_threshold == 0` (default)
+// ⇒ the byte-unchanged static-diagonal path (SupernodalLU + the non-pivoting MultifrontalLU path).
 template <typename T>
 void factor_front(T* d, crd::u32 ld, crd::u32 m, crd::u32 n, crd::u32 npiv, dense::RealType<T> tiny,
-                  crd::memory::IAllocator* scratch = nullptr, bool gemm_par = false) noexcept
+                  crd::memory::IAllocator* scratch = nullptr, bool gemm_par = false,
+                  dense::RealType<T> pivot_threshold = dense::RealType<T>(0), crd::u32* ipiv = nullptr) noexcept
 {
     namespace dl = crd::hesap::dense;
     const crd::u32 panel = mf_panel_width();
+    const bool     do_pivot = pivot_threshold > dense::RealType<T>(0);
     if (npiv == 0)
     {
         return;
@@ -160,6 +169,37 @@ void factor_front(T* d, crd::u32 ld, crd::u32 m, crd::u32 n, crd::u32 npiv, dens
     {
         for (crd::u32 k = a; k < b; ++k)
         {
+            if (do_pivot) // threshold partial pivoting restricted to the fully-summed rows [k, npiv)
+            {
+                crd::u32 pmax = k;
+                dense::RealType<T> vmax = lu2_mag<T>(d[static_cast<crd::usize>(k) * ld + k]);
+                for (crd::u32 r = k + 1; r < npiv; ++r)
+                {
+                    const dense::RealType<T> vr = lu2_mag<T>(d[static_cast<crd::usize>(k) * ld + r]);
+                    if (vr > vmax) // strict > ⇒ ties keep the LOWER index (deterministic ⇒ moat-safe)
+                    {
+                        vmax = vr;
+                        pmax = r;
+                    }
+                }
+                if (ipiv != nullptr)
+                {
+                    ipiv[k] = pmax;
+                }
+                if (pmax != k) // swap the FULL front rows k <-> pmax across all n columns (LAPACK getf2 + laswp)
+                {
+                    for (crd::u32 c = 0; c < n; ++c)
+                    {
+                        const T tmp = d[static_cast<crd::usize>(c) * ld + k];
+                        d[static_cast<crd::usize>(c) * ld + k] = d[static_cast<crd::usize>(c) * ld + pmax];
+                        d[static_cast<crd::usize>(c) * ld + pmax] = tmp;
+                    }
+                }
+            }
+            else if (ipiv != nullptr)
+            {
+                ipiv[k] = k;
+            }
             T pivot = d[static_cast<crd::usize>(k) * ld + k];
             const dense::RealType<T> pm = lu2_mag<T>(pivot);
             if (pm < tiny)
@@ -236,7 +276,10 @@ void factor_front(T* d, crd::u32 ld, crd::u32 m, crd::u32 n, crd::u32 npiv, dens
         crd::jobs::wait(c);
     };
 
-    if (!gemm_par)
+    // Partial pivoting routes through the SERIAL within-front path: the parallel lookahead swaps full rows
+    // (incl. trailing columns updated concurrently) ⇒ a data race. Cross-FRONT tree parallelism (where the
+    // {1,2,4,8} moat lives) is unaffected — each front factors serially-deterministically, fronts in parallel.
+    if (do_pivot || !gemm_par)
     {
         // Serial path: the simple right-looking blocked LU (bit-identical to the prior implementation).
         for (crd::u32 j0 = 0; j0 < npiv; j0 += panel)

@@ -13,5 +13,6 @@
 
 #include <crd/hesap/direct/factorization.hpp>
 #include <crd/hesap/direct/frontal.hpp>
+#include <crd/hesap/direct/mixed_refine.hpp>
 #include <crd/hesap/direct/sparse_lu.hpp>
 #include <crd/hesap/direct/supernodal_cholesky.hpp>

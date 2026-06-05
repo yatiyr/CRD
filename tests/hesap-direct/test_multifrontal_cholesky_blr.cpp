@@ -159,12 +159,16 @@ TEST_CASE("v5e-3d MultifrontalCholeskyBlr: 2D Laplacian via the BLR front path",
     CHECK(check_solve(a, chol, &alloc) < 1e-6);  // BLR-approximate + IR recovers accuracy
 }
 
-TEST_CASE("v5e-3d MultifrontalCholeskyBlr: 3D Laplacian (big dense fronts) BLR path", "[hesap][mfblr][real]")
+TEST_CASE("v5e-3d MultifrontalCholeskyBlr: 3D Laplacian BLR front path", "[hesap][mfblr][real]")
 {
-    crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(1024U) * 1024U * 1024U);
-    const auto a = laplacian_3d(16, &alloc);  // n=4096, separator fronts ~256
+    // n=1000 (k=10), separator fronts ~100 >= blr_min=64 ⇒ the BLR front path is exercised on a 3D matrix
+    // (different front-rank structure than the 2D test above). Kept SMALL on purpose: the BLR factor is
+    // documented-slow (~138 s at n=4096), so a big-matrix BLR correctness check belongs in the [.] benches,
+    // not the default suite. The BLR kernels themselves are covered by the [blr] substrate tests.
+    crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(256U) * 1024U * 1024U);
+    const auto a = laplacian_3d(10, &alloc);
     dir::MultifrontalCholeskyBlr<double> chol(&alloc);
-    REQUIRE(chol.factorize(a, 128, 1e-9, 128));  // BLR on the large fronts
+    REQUIRE(chol.factorize(a, 64, 1e-9, 64));  // BLR on the >=64 fronts
     REQUIRE(chol.info() == 0);
     CHECK(check_solve(a, chol, &alloc) < 1e-6);
 }
@@ -193,7 +197,12 @@ TEST_CASE("v5e-3d MultifrontalCholeskyBlr: tree-parallel factor+solve bit-identi
         cfg.num_threads = nw;
         crd::jobs::init(cfg);  // the within-front gemm uses `nw` workers (node-parallel)
         dir::MultifrontalCholeskyBlr<double> chol(&alloc);
-        REQUIRE(chol.factorize(a, 128, 1e-9, 128));  // mix: BLR large + dense small fronts
+        // DENSE fronts (blr_min huge): the {1,2,4,8} moat exercises the WITHIN-FRONT gemm
+        // (gemm_parallel_auto on the big ~256 near-root fronts) — the SAME deterministic kernel on dense or
+        // BLR fronts. The dense path keeps this moat FAST (~0.2 s/factor) vs the BLR path's ~138 s at n=4096
+        // (the documented slow-BLR finding — a 4x-factor moat at 138 s each made the default suite ~550 s).
+        // The BLR front path's own determinism is covered by the [blr] substrate tests + the 2D BLR test.
+        REQUIRE(chol.factorize(a, 128, 1e-9, 100000U));
         crd::containers::Array<double> x(&alloc);
         x.resize(n);
         for (crd::u32 i = 0; i < n; ++i)

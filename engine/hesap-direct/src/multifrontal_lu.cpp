@@ -8,6 +8,7 @@
 #include <crd/memory/allocators/thread_safe_allocator.hpp>
 
 #include <cmath>
+#include <cstdio> // CRD_MF_PROFILE diagnostic (front-size + flop distribution)
 #include <cstdlib>
 #include <limits>
 #include <utility>
@@ -492,6 +493,18 @@ double MultifrontalLU<T>::factor_attempt(const sparse::SparseMatrix<T, sparse::S
     }
     constexpr crd::u32 no_loc = 0xFFFFFFFFU;
 
+    // v5f-(a) within-front partial pivoting. do_pivot ⇒ each front records its getf2 swaps in a per-worker
+    // ipiv buffer, applies them to the front's row_index, and writes the global row permutation P (m_rowperm);
+    // a post-walk invperm pass remaps m_li from physical B-rows to elimination indices (the solve then applies
+    // P). do_pivot == false ⇒ every line below is inert and the static path is byte-unchanged.
+    const bool do_pivot = m_pivot_threshold > dense::RealType<T>(0);
+    crd::containers::Array<crd::u32> ipiv_scr(m_alloc); // per-worker getf2 ipiv (length max_nr each)
+    if (do_pivot)
+    {
+        m_rowperm.resize_uninitialized(n); // every column is a pivot in exactly one front ⇒ all n filled
+        ipiv_scr.resize(static_cast<crd::usize>(sw) * max_nr);
+    }
+
     // cb[f]/cb_npiv[f]: written by f's worker (own index), read by f's parent (higher level, after the
     // jobs::wait barrier). Pre-sized so the parallel walk never resizes the shared arrays.
     cb.reserve(nf);
@@ -627,7 +640,27 @@ double MultifrontalLU<T>::factor_attempt(const sparse::SparseMatrix<T, sparse::S
         // 5c. factor (per-worker GEMM arena; fresh LinearAllocator resets the bump between fronts).
         crd::memory::LinearAllocator gemm_arena(gemm_scr.data() + static_cast<crd::usize>(wk) * gemm_arena_bytes,
                                                 gemm_arena_bytes);
-        factor_front<T>(front.data.data(), nr, nr, nr, npiv, tiny, &gemm_arena, gemm_par);
+        crd::u32* const ipiv = do_pivot ? (ipiv_scr.data() + static_cast<crd::usize>(wk) * max_nr) : nullptr;
+        factor_front<T>(front.data.data(), nr, nr, nr, npiv, tiny, &gemm_arena, gemm_par, m_pivot_threshold, ipiv);
+        if (do_pivot)
+        {
+            // Apply the getf2 swaps (in order) to the front's row_index so position t holds the PHYSICAL B-row
+            // its factored data now belongs to; then record P[c0+jj] = the physical B-row pivoting column c0+jj.
+            // Swaps are within [0, npiv) (restricted pivoting) ⇒ the contribution rows [npiv, nr) are untouched.
+            for (crd::u32 k = 0; k < npiv; ++k)
+            {
+                if (ipiv[k] != k)
+                {
+                    const crd::u32 tmp = front.row_index[k];
+                    front.row_index[k] = front.row_index[ipiv[k]];
+                    front.row_index[ipiv[k]] = tmp;
+                }
+            }
+            for (crd::u32 jj = 0; jj < npiv; ++jj)
+            {
+                m_rowperm[c0 + jj] = front.row_index[jj];
+            }
+        }
 
         // 5d. store L (own pivot columns ⇒ single-writer) + U (fixed uoff offsets ⇒ disjoint per front), while
         //     tracking the max |entry| for the adaptive MC64 growth check (near-free: piggybacks the stores).
@@ -636,9 +669,17 @@ double MultifrontalLU<T>::factor_attempt(const sparse::SparseMatrix<T, sparse::S
         {
             const crd::u32 c = c0 + jj;
             crd::u32 w = m_lp[c];
+            if (do_pivot)
+            {
+                m_li[w] = front.row_index[jj]; // PHYSICAL pivot row at the diagonal slot (post-walk invperm → c)
+            }
             m_lx[w++] = lu2_from_real<T>(dense::RealType<T>(1)); // unit L diagonal
             for (crd::u32 t = jj + 1; t < nr; ++t)
             {
+                if (do_pivot)
+                {
+                    m_li[w] = front.row_index[t]; // physical B-row at front position t (invperm → elim index)
+                }
                 const T lv = front.at(t, jj);
                 m_lx[w++] = lv;
                 const dense::RealType<T> am = lu2_mag<T>(lv);
@@ -789,6 +830,73 @@ double MultifrontalLU<T>::factor_attempt(const sparse::SparseMatrix<T, sparse::S
         }
     }
 
+    // v5f speed-gap profile (CRD_MF_PROFILE, read-only — runs for BOTH the serial and level-scheduled branch):
+    // the front-size + flop DISTRIBUTION from the symbolic. Discriminates the serial gap vs MUMPS — a high
+    // %-of-flops in SKINNY fronts (npiv<32) means the FUNDAMENTAL (un-amalgamated) supernodes factor at low
+    // GFLOP/s ⇒ relaxed amalgamation is the lever; flops concentrated in a few BIG fronts at ~MUMPS GFLOP/s ⇒
+    // the microkernel wall ⇒ parity is the ceiling.
+    if (mf_getenv("CRD_MF_PROFILE") != nullptr)
+    {
+        double total_fl = 0.0;
+        double skinny_fl = 0.0;
+        double big_fl = 0.0;
+        crd::u32 max_m = 0;
+        crd::u32 max_npiv = 0;
+        crd::u32 n_small = 0;
+        crd::u32 n_med = 0;
+        crd::u32 n_big = 0;
+        for (crd::u32 f = 0; f < nf; ++f)
+        {
+            const double m = static_cast<double>(mf.row_ptr[f + 1] - mf.row_ptr[f]);
+            const double p = static_cast<double>(mf.npiv(f));
+            const double fl = (2.0 / 3.0) * p * p * p + 2.0 * p * p * (m - p) + 2.0 * p * (m - p) * (m - p);
+            total_fl += fl;
+            const crd::u32 npv = mf.npiv(f);
+            if (npv < 32)
+            {
+                skinny_fl += fl;
+                ++n_small;
+            }
+            else if (npv < 256)
+            {
+                ++n_med;
+            }
+            else
+            {
+                ++n_big;
+            }
+            if (npv > max_npiv)
+            {
+                max_npiv = npv;
+                max_m = static_cast<crd::u32>(m);
+                big_fl = fl;
+            }
+        }
+        std::fprintf(stderr,
+                     "[mf-profile] nf=%u flops=%.3e (skinny npiv<32: %.1f%% of flops over %u fronts) "
+                     "npiv-buckets[<32:%u 32-255:%u >=256:%u] biggest front m=%u npiv=%u (%.1f%% of flops)\n",
+                     nf, total_fl, 100.0 * skinny_fl / (total_fl + 1e-300), n_small, n_small, n_med, n_big, max_m,
+                     max_npiv, 100.0 * big_fl / (total_fl + 1e-300));
+    }
+
+    // v5f-(a): finalize partial pivoting. The L row indices were written as PHYSICAL B-rows; remap them ONCE
+    // (uniformly) to ELIMINATION indices via invperm (P⁻¹). The diagonal slot holds P[c] ⇒ invperm[P[c]]=c
+    // ⇒ L-diagonal-first holds. m_ui is already elimination indices (U rows are always this front's pivots) ⇒
+    // untouched. Serial post-pass ⇒ deterministic ⇒ the {1,2,4,8} moat is unaffected.
+    if (do_pivot)
+    {
+        crd::containers::Array<crd::u32> invperm(m_alloc);
+        invperm.resize_uninitialized(n);
+        for (crd::u32 c = 0; c < n; ++c)
+        {
+            invperm[m_rowperm[c]] = c; // invperm[P[c]] = c
+        }
+        for (crd::usize p = 0; p < m_li.size(); ++p)
+        {
+            m_li[p] = invperm[m_li[p]];
+        }
+    }
+
     // Reduce the per-worker growth → the max-element-growth ratio vs ‖B‖ (max is order-independent ⇒ moat-safe).
     dense::RealType<T> mg = dense::RealType<T>(0);
     for (crd::u32 w = 0; w < sw; ++w)
@@ -802,11 +910,13 @@ double MultifrontalLU<T>::factor_attempt(const sparse::SparseMatrix<T, sparse::S
 }
 
 template <typename T>
-void MultifrontalLU<T>::factorize(const sparse::SparseMatrix<T, sparse::SparseFormat::Csr>& a, crd::u32 num_workers)
+void MultifrontalLU<T>::factorize(const sparse::SparseMatrix<T, sparse::SparseFormat::Csr>& a, crd::u32 num_workers,
+                                  dense::RealType<T> pivot_threshold)
 {
     CRD_ASSERT_MSG(a.pattern().rows == a.pattern().cols, "MultifrontalLU requires a square matrix");
     m_n = a.pattern().rows;
     m_info = 0;
+    m_pivot_threshold = pivot_threshold;
     if (m_n == 0)
     {
         m_lp.clear();
@@ -846,7 +956,20 @@ template <typename T> bool MultifrontalLU<T>::solve(crd::containers::Span<T> rhs
     }
     return static_lu_ir_solve<T>(m_n, m_lp.data(), m_li.data(), m_lx.data(), m_up.data(), m_ui.data(), m_ux.data(),
                                  m_b.pattern().outer_ptr.data(), m_b.pattern().inner_idx.data(),
-                                 m_b.values().values.data(), m_scale, rhs, nrhs, m_alloc);
+                                 m_b.values().values.data(), m_scale, rhs, nrhs, m_alloc,
+                                 m_rowperm.size() == 0 ? nullptr : m_rowperm.data());
+}
+
+// v5f: RAW factor apply (no internal IR) — the mixed-precision IR driver's building block (see the base
+// IFactorization::apply_inverse contract). transform_rhs → lu_lu_solve → untransform_solution, no GESP loop.
+template <typename T> void MultifrontalLU<T>::apply_inverse(crd::containers::Span<T> rhs, crd::usize nrhs) const
+{
+    if (m_info != 0)
+    {
+        return; // invalid factor; the driver checks info() before iterating, so rhs is left untouched
+    }
+    static_lu_apply<T>(m_n, m_lp.data(), m_li.data(), m_lx.data(), m_up.data(), m_ui.data(), m_ux.data(), m_scale,
+                       rhs, nrhs, m_alloc, m_rowperm.size() == 0 ? nullptr : m_rowperm.data());
 }
 
 template <typename T>
@@ -873,5 +996,21 @@ template MultifrontalLU<crd::hesap::Complex32> factor_multifrontal_lu<crd::hesap
     const sparse::SparseMatrix<crd::hesap::Complex32, sparse::SparseFormat::Csr>&, crd::memory::IAllocator*, crd::u32);
 template MultifrontalLU<crd::hesap::Complex64> factor_multifrontal_lu<crd::hesap::Complex64>(
     const sparse::SparseMatrix<crd::hesap::Complex64, sparse::SparseFormat::Csr>&, crd::memory::IAllocator*, crd::u32);
+
+template <typename T>
+MultifrontalLU<T> factor_multifrontal_lu_pp(const sparse::SparseMatrix<T, sparse::SparseFormat::Csr>& a,
+                                            crd::memory::IAllocator* alloc, crd::u32 num_workers,
+                                            dense::RealType<T> pivot_threshold)
+{
+    MultifrontalLU<T> lu(alloc);
+    lu.factorize(a, num_workers, pivot_threshold);
+    return lu;
+}
+template MultifrontalLU<crd::f32>
+factor_multifrontal_lu_pp<crd::f32>(const sparse::SparseMatrix<crd::f32, sparse::SparseFormat::Csr>&,
+                                    crd::memory::IAllocator*, crd::u32, dense::RealType<crd::f32>);
+template MultifrontalLU<crd::f64>
+factor_multifrontal_lu_pp<crd::f64>(const sparse::SparseMatrix<crd::f64, sparse::SparseFormat::Csr>&,
+                                    crd::memory::IAllocator*, crd::u32, dense::RealType<crd::f64>);
 
 } // namespace crd::hesap::direct

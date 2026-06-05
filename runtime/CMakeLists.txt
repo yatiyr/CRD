@@ -537,6 +537,22 @@ target_link_libraries(bench_hesap_gemm_parallel PRIVATE
 )
 crd_enable_default_pch(bench_hesap_gemm_parallel)
 
+# v5f-c mixed-precision INTERNAL crush gate — f32-factor + f64-IR vs f64-full. No external peer (just Cerid),
+# so it builds in the standard runtime build (run in win-release). The MUMPS-single+IR crush peer is WSL-gated.
+add_executable(bench_hesap_mixed_internal examples/bench_hesap_mixed_internal.cpp)
+target_link_libraries(bench_hesap_mixed_internal PRIVATE
+    crd-core
+    crd-memory
+    crd-containers
+    crd-math
+    crd-jobs
+    crd-hesap
+    crd-hesap-sparse
+    crd-hesap-ordering
+    crd-hesap-direct
+)
+crd_enable_default_pch(bench_hesap_mixed_internal)
+
 # Reference-class shootout — built only when CRD_BUILD_HESAP_VS_REFERENCE=ON.
 # Eigen 3.4 + OpenBLAS are fetched via CPM at configure time.
 #
@@ -685,7 +701,7 @@ if(CRD_BUILD_HESAP_VS_REFERENCE)
     # CRD_BUILD_HESAP_VS_UMFPACK=ON (WSL/Linux; GPL → dev-only, never shipped) — it links the
     # SuiteSparse umfpack apt-installed by scripts/setup-cholmod-ref.sh.
     crd_add_hesap_vs_ref_bench(bench_hesap_lu_supernodal_vs_reference USE_JOBS)
-    target_link_libraries(bench_hesap_lu_supernodal_vs_reference PRIVATE crd-hesap-sparse crd-hesap-ordering crd-hesap-direct)
+    target_link_libraries(bench_hesap_lu_supernodal_vs_reference PRIVATE crd-hesap-sparse crd-hesap-ordering crd-hesap-direct crd-hesap-iterative)
     target_compile_definitions(bench_hesap_lu_supernodal_vs_reference PRIVATE "CRD_SUITESPARSE_DIR=\"${CRD_SS_DIR}\"")
     if(CRD_BUILD_HESAP_VS_UMFPACK)
         find_library(CRD_UMFPACK_LIB umfpack)
@@ -712,8 +728,9 @@ if(CRD_BUILD_HESAP_VS_REFERENCE)
             message(FATAL_ERROR "[hesap-vs-mumps] libdmumps_seq / dmumps_c.h not found — apt install libmumps-seq-dev")
         endif()
         target_include_directories(bench_hesap_lu_supernodal_vs_reference PRIVATE ${CRD_MUMPS_INCLUDE})
+        # v5f-c: also link smumps_seq (single-precision MUMPS) for the mixed-precision (factor-f32 + f64-IR) peer.
         target_link_libraries(bench_hesap_lu_supernodal_vs_reference PRIVATE
-            dmumps_seq mumps_common_seq pord_seq mpiseq_seq)
+            dmumps_seq smumps_seq mumps_common_seq pord_seq mpiseq_seq)
         target_compile_definitions(bench_hesap_lu_supernodal_vs_reference PRIVATE CRD_HESAP_VS_MUMPS)
         # v5d-g: LDLᵀ vs MUMPS SYM=2 (the real same-class indefinite gold standard — 2×2 Bunch-Kaufman).
         # Also link LAPACK explicitly (dpotrf/dsytrf front-kernel ceiling probe; MUMPS pulls it but only as a

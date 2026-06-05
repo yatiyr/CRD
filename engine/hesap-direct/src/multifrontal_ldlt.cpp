@@ -801,6 +801,105 @@ void MultifrontalLDLT<T>::factorize(const sparse::SparseMatrix<T, sparse::Sparse
     m_lnz = nnz;
 }
 
+// v5f: ONE P·L·D·Lᵀ·Pᵀ triangular solve (A·out = bin, ORIGINAL order; tmp = factor-order scratch). The raw,
+// un-refined building block — solve()'s x0 + each IR-correction step forward to it, and apply_inverse drives
+// it directly (NO IR). `bin` may alias `out` (bin is fully gathered into tmp before out is written).
+// Conjugate-on-backward for Hermitian LDLᴴ (identity for real / complex-symmetric LDLᵀ).
+template <typename T> void MultifrontalLDLT<T>::ldlt_apply_once(const T* bin, T* out, T* tmp) const
+{
+    const crd::u32 n = m_n;
+    const crd::u32* lp = m_lp.data();
+    const crd::u32* li = m_li.data();
+    const T* lx = m_lx.data();
+    const T* dd = m_dd.data();
+    const T* doff = m_doff.data();
+    const crd::u8* bk = m_block_kinds.data();
+    const crd::u32* perm = m_perm.data();
+    const bool herm = m_hermitian;
+    auto cj = [herm](const T& x) -> T
+    {
+        if constexpr (dense::is_complex_v<T>)
+        {
+            return herm ? crd::hesap::conj(x) : x;
+        }
+        else
+        {
+            (void)herm;
+            return x;
+        }
+    };
+    for (crd::u32 fp = 0; fp < n; ++fp)
+    {
+        tmp[fp] = bin[perm[fp]]; // Pᵀ
+    }
+    for (crd::u32 j = 0; j < n; ++j) // forward unit-lower L
+    {
+        const T zj = tmp[j];
+        for (crd::u32 p = lp[j]; p < lp[j + 1]; ++p)
+        {
+            tmp[li[p]] -= lx[p] * zj;
+        }
+    }
+    crd::u32 k = 0; // block-diagonal D
+    while (k < n)
+    {
+        if (bk[k] == 1U)
+        {
+            tmp[k] = tmp[k] / dd[k];
+            k += 1;
+        }
+        else
+        {
+            const T d11 = dd[k];
+            const T d21 = doff[k];
+            const T d22 = dd[k + 1];
+            const T cd21 = cj(d21);
+            const T det = d11 * d22 - cd21 * d21;
+            const T z0 = tmp[k];
+            const T z1 = tmp[k + 1];
+            tmp[k] = (d22 * z0 - cd21 * z1) / det;
+            tmp[k + 1] = (d11 * z1 - d21 * z0) / det;
+            k += 2;
+        }
+    }
+    for (crd::u32 jj = n; jj > 0; --jj) // backward Lᵀ (Lᴴ for Hermitian)
+    {
+        const crd::u32 j = jj - 1;
+        T s = tmp[j];
+        for (crd::u32 p = lp[j]; p < lp[j + 1]; ++p)
+        {
+            s -= cj(lx[p]) * tmp[li[p]];
+        }
+        tmp[j] = s;
+    }
+    for (crd::u32 fp = 0; fp < n; ++fp)
+    {
+        out[perm[fp]] = tmp[fp]; // P
+    }
+}
+
+// v5f: RAW factor apply (no internal IR) — the mixed-precision driver's building block. One ldlt_apply_once
+// per column, in place; the driver owns all refinement at the working precision.
+template <typename T> void MultifrontalLDLT<T>::apply_inverse(crd::containers::Span<T> rhs, crd::usize nrhs) const
+{
+    if (m_info != 0)
+    {
+        return; // invalid factor; the driver checks info() before iterating, so rhs is left untouched
+    }
+    const crd::u32 n = m_n;
+    if (n == 0)
+    {
+        return;
+    }
+    crd::containers::Array<T> tmp(m_alloc);
+    tmp.resize(n);
+    for (crd::usize col = 0; col < nrhs; ++col)
+    {
+        T* b = rhs.data() + col * n;
+        ldlt_apply_once(b, b, tmp.data());
+    }
+}
+
 template <typename T> bool MultifrontalLDLT<T>::solve(crd::containers::Span<T> rhs, crd::usize nrhs) const
 {
     // A = P·L·D·Lᵀ·Pᵀ ⇒ A·x = b solved by: r = Pᵀ·b (gather to factor order) → forward unit-lower L·z = r
@@ -818,14 +917,6 @@ template <typename T> bool MultifrontalLDLT<T>::solve(crd::containers::Span<T> r
         return true;
     }
     CRD_ASSERT_MSG(rhs.size() == static_cast<crd::usize>(n) * nrhs, "MultifrontalLDLT::solve: rhs size != n*nrhs");
-
-    const crd::u32* lp = m_lp.data();
-    const crd::u32* li = m_li.data();
-    const T* lx = m_lx.data();
-    const T* dd = m_dd.data();
-    const T* doff = m_doff.data();
-    const crd::u8* bk = m_block_kinds.data();
-    const crd::u32* perm = m_perm.data();
 
     // Conjugate iff Hermitian (LDLᴴ): the backward solve is Lᴴ (not Lᵀ) and the 2×2 D-inverse uses conj(d21).
     // For real T (and complex LDLᵀ) this is the identity ⇒ the v5d-d real/symmetric solve is byte-identical.
@@ -870,58 +961,9 @@ template <typename T> bool MultifrontalLDLT<T>::solve(crd::containers::Span<T> r
     resid.resize(n);
     dx.resize(n);
 
-    // One triangular solve A·out = bin (P·L·D·Lᵀ·Pᵀ), bin/out in ORIGINAL order. Uses tmp as factor-order scratch.
-    auto tri_solve = [&](const T* bin, T* out)
-    {
-        for (crd::u32 fp = 0; fp < n; ++fp)
-        {
-            tmp[fp] = bin[perm[fp]]; // Pᵀ
-        }
-        for (crd::u32 j = 0; j < n; ++j) // forward unit-lower L
-        {
-            const T zj = tmp[j];
-            for (crd::u32 p = lp[j]; p < lp[j + 1]; ++p)
-            {
-                tmp[li[p]] -= lx[p] * zj;
-            }
-        }
-        crd::u32 k = 0; // block-diagonal D
-        while (k < n)
-        {
-            if (bk[k] == 1U)
-            {
-                tmp[k] = tmp[k] / dd[k];
-                k += 1;
-            }
-            else
-            {
-                const T d11 = dd[k];
-                const T d21 = doff[k];
-                const T d22 = dd[k + 1];
-                const T cd21 = cj(d21);
-                const T det = d11 * d22 - cd21 * d21;
-                const T z0 = tmp[k];
-                const T z1 = tmp[k + 1];
-                tmp[k] = (d22 * z0 - cd21 * z1) / det;
-                tmp[k + 1] = (d11 * z1 - d21 * z0) / det;
-                k += 2;
-            }
-        }
-        for (crd::u32 jj = n; jj > 0; --jj) // backward Lᵀ (Lᴴ for Hermitian)
-        {
-            const crd::u32 j = jj - 1;
-            T s = tmp[j];
-            for (crd::u32 p = lp[j]; p < lp[j + 1]; ++p)
-            {
-                s -= cj(lx[p]) * tmp[li[p]];
-            }
-            tmp[j] = s;
-        }
-        for (crd::u32 fp = 0; fp < n; ++fp)
-        {
-            out[perm[fp]] = tmp[fp]; // P
-        }
-    };
+    // One triangular solve A·out = bin (P·L·D·Lᵀ·Pᵀ), bin/out in ORIGINAL order. Body extracted to
+    // ldlt_apply_once (v5f, byte-identical) so the mixed-precision apply_inverse drives the same kernel.
+    auto tri_solve = [&](const T* bin, T* out) { ldlt_apply_once(bin, out, tmp.data()); };
 
     // Symmetric SpMV y = A·x from the stored LOWER triangle (upper is the mirror; off-diagonals hit both rows).
     auto symv = [&](const T* x, T* y)

@@ -50,6 +50,57 @@ inline void lu_lu_solve(crd::u32 n, const crd::u32* lp, const crd::u32* li, cons
     }
 }
 
+// RAW static-pivot LU apply (NO iterative refinement): X = (LU)⁻¹·B for the static factor, in place.
+// `rhs` is column-major n × nrhs (B in, X out). Per column: transform_rhs (c = D_r·b) → lu_lu_solve
+// (B·y = c) → untransform_solution (x = D_c·y). This is the building block the mixed-precision IR driver
+// (v5f `IterativeRefinedSolve`) composes — it deliberately OMITS the IR loop + accept-gate that
+// static_lu_ir_solve layers on top, because those would nest under an outer working-precision IR and
+// spuriously flag failure when the low-precision factor's own refinement stalls on the ill-conditioned
+// systems mixed-precision exists to handle. Deterministic (lu_lu_solve + the scaling are fixed-order) ⇒
+// moat-safe. Scratch `y` (one n-vector) is allocated from `alloc`; the IR driver calls this a few times
+// per solve, so a scratch-taking fast path is a measured perf follow-on, not a v5f-a concern.
+// `rowperm` (v5f-(a), default nullptr ⇒ identity ⇒ the static path): the global row permutation P from
+// within-front partial pivoting (PB = LU). When present, the transformed RHS is permuted (d = P·c) before the
+// triangular solve, since L·U·x = P·c. Pure permutation ⇒ deterministic ⇒ moat-safe.
+template <typename T>
+inline void static_lu_apply(crd::u32 n, const crd::u32* lp, const crd::u32* li, const T* lx, const crd::u32* up,
+                            const crd::u32* ui, const T* ux, const StaticLuScaling<T>& scale,
+                            crd::containers::Span<T> rhs, crd::usize nrhs, crd::memory::IAllocator* alloc,
+                            const crd::u32* rowperm = nullptr)
+{
+    if (n == 0)
+    {
+        return;
+    }
+    CRD_ASSERT_MSG(rhs.size() == static_cast<crd::usize>(n) * nrhs, "static_lu_apply rhs size mismatch");
+    crd::containers::Array<T> y(alloc);
+    y.resize(n);
+    crd::containers::Array<T> py(alloc); // P·y scratch (only when pivoting)
+    if (rowperm != nullptr)
+    {
+        py.resize(n);
+    }
+    for (crd::usize col = 0; col < nrhs; ++col)
+    {
+        T* b = rhs.data() + col * n;
+        scale.transform_rhs({b, n}, {y.data(), n}); // y = D_r·b
+        if (rowperm != nullptr)
+        {
+            for (crd::u32 i = 0; i < n; ++i)
+            {
+                py[i] = y[rowperm[i]]; // d = P·y
+            }
+            lu_lu_solve<T>(n, lp, li, lx, up, ui, ux, py.data()); // L·U·x = P·c
+            scale.untransform_solution({py.data(), n}, {b, n});
+        }
+        else
+        {
+            lu_lu_solve<T>(n, lp, li, lx, up, ui, ux, y.data()); // B·y = (transformed b), in place
+            scale.untransform_solution({y.data(), n}, {b, n});   // x = D_c·y (back to original order)
+        }
+    }
+}
+
 // Solve A·X = B in place for a static-pivot LU. `rhs` is column-major n × nrhs (B in, X out).
 // lp/li/lx + up/ui/ux are the CSC factors; bp/bi/bx is B (CSC, the MC64-transformed matrix) for
 // the IR true residual; `scale` is the MC64 StaticLuScaling. Returns false if a column's residual
@@ -59,7 +110,7 @@ template <typename T>
                                              const crd::u32* up, const crd::u32* ui, const T* ux, const crd::u32* bp,
                                              const crd::u32* bi, const T* bx, const StaticLuScaling<T>& scale,
                                              crd::containers::Span<T> rhs, crd::usize nrhs,
-                                             crd::memory::IAllocator* alloc)
+                                             crd::memory::IAllocator* alloc, const crd::u32* rowperm = nullptr)
 {
     if (n == 0)
     {
@@ -73,6 +124,13 @@ template <typename T>
     c.resize(n);
     y.resize(n);
     r.resize(n);
+    // v5f-(a) partial-pivoting row perm P (PB=LU): every triangular solve takes P·(rhs). `pr` holds P·r for
+    // the correction step. nullptr rowperm ⇒ identity ⇒ the static path (pr unused).
+    crd::containers::Array<T> pr(alloc);
+    if (rowperm != nullptr)
+    {
+        pr.resize(n);
+    }
     const dense::RealType<T> eps = std::numeric_limits<dense::RealType<T>>::epsilon();
     const dense::RealType<T> refine_tol = dense::RealType<T>(64) * eps;
     // Acceptance gate: static pivoting can DIVERGE on indefinite/saddle-point systems where IR never
@@ -87,9 +145,9 @@ template <typename T>
         scale.transform_rhs({b, n}, {c.data(), n}); // c = D_r·b
         for (crd::u32 i = 0; i < n; ++i)
         {
-            y[i] = c[i];
+            y[i] = (rowperm != nullptr) ? c[rowperm[i]] : c[i]; // seed with P·c (identity when static)
         }
-        lu_lu_solve<T>(n, lp, li, lx, up, ui, ux, y.data()); // B·y = c (static pivot ⇒ approximate)
+        lu_lu_solve<T>(n, lp, li, lx, up, ui, ux, y.data()); // L·U·y = P·c (static pivot ⇒ approximate)
         // Iterative refinement on the transformed system B·y = c (Demmel-Li GESP) — drives the
         // TRUE residual to machine precision so the bench compares at a matched residual.
         bool converged = false;
@@ -137,10 +195,25 @@ template <typename T>
                 break;
             }
             prev_rn = rn;
-            lu_lu_solve<T>(n, lp, li, lx, up, ui, ux, r.data()); // dy = (LU)\r, in place
-            for (crd::u32 i = 0; i < n; ++i)
+            if (rowperm != nullptr)
             {
-                y[i] = y[i] + r[i];
+                for (crd::u32 i = 0; i < n; ++i)
+                {
+                    pr[i] = r[rowperm[i]]; // P·r
+                }
+                lu_lu_solve<T>(n, lp, li, lx, up, ui, ux, pr.data()); // dy = (LU)⁻¹(P·r)
+                for (crd::u32 i = 0; i < n; ++i)
+                {
+                    y[i] = y[i] + pr[i];
+                }
+            }
+            else
+            {
+                lu_lu_solve<T>(n, lp, li, lx, up, ui, ux, r.data()); // dy = (LU)\r, in place
+                for (crd::u32 i = 0; i < n; ++i)
+                {
+                    y[i] = y[i] + r[i];
+                }
             }
         }
         if (!converged) // IR didn't reach refine_tol — recheck the FINAL y's residual
