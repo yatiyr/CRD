@@ -60,23 +60,24 @@ template <typename T> struct EigenOptions
 };
 
 // The shared result. Eigenvalues are COMPLEX in general (a real nonsymmetric A yields conjugate pairs); for
-// the symmetric problem the imaginary parts are exactly zero. Vectors are column-major n × nconv in the
-// OPERATOR scalar T (a real nonsymmetric eigenvector of a complex eigenvalue is stored as its real/imag
-// columns per the LAPACK convention — pinned per method). `residuals[k] = ‖A·x_k − λ_k·x_k‖ / ‖x_k‖`.
+// the symmetric problem the imaginary parts are exactly zero. The k-th eigenvector is `vectors[:,k] (REAL part)
+// + i·vectors_im[:,k] (IMAGINARY part)`, both column-major n × nconv; `vectors_im` is EMPTY for the symmetric/
+// real solvers (the eigenvectors are real). `residuals[k] = ‖A·x_k − λ_k·x_k‖ / ‖x_k‖` (the TRUE residual).
 template <typename T> struct EigenResult
 {
     using R = crd::hesap::dense::RealType<T>;
 
-    crd::containers::Array<crd::hesap::Complex<R>> values;    // length nconv (ascending by `Which`)
-    crd::containers::Array<T>                      vectors;   // n × nconv, column-major (empty if !compute_vectors)
-    crd::containers::Array<R>                      residuals; // length nconv
+    crd::containers::Array<crd::hesap::Complex<R>> values;     // length nconv (ascending by `Which`)
+    crd::containers::Array<T>                      vectors;    // n × nconv, column-major (Re; empty if !compute_vectors)
+    crd::containers::Array<T>                      vectors_im; // n × nconv (Im; EMPTY for real/symmetric eigenvectors)
+    crd::containers::Array<R>                      residuals;  // length nconv
     crd::u32                                       n = 0;
     crd::u32                                       nconv = 0;       // converged eigenpairs
     crd::u32                                       iterations = 0;  // matvecs / restart cycles
     bool                                           converged = false; // nconv >= nev
 
     explicit EigenResult(crd::memory::IAllocator* alloc) noexcept
-        : values(alloc), vectors(alloc), residuals(alloc)
+        : values(alloc), vectors(alloc), vectors_im(alloc), residuals(alloc)
     {
     }
 };

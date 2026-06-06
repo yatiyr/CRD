@@ -195,6 +195,19 @@ template <typename T>
 
     result.values.resize(k);
     result.residuals.resize(k);
+    crd::containers::Array<T> xre(alloc); // complex eigenvector X = xre + i·xim (recovered = V·S)
+    crd::containers::Array<T> xim(alloc);
+    crd::containers::Array<T> axre(alloc);
+    crd::containers::Array<T> axim(alloc);
+    if (opts.compute_vectors)
+    {
+        result.vectors.resize(static_cast<crd::usize>(n) * k);
+        result.vectors_im.resize(static_cast<crd::usize>(n) * k);
+        xre.resize(n);
+        xim.resize(n);
+        axre.resize(n);
+        axim.resize(n);
+    }
     const R tol = opts.effective_tol();
     crd::u32 nconv = 0;
     for (crd::u32 s = 0; s < k; ++s)
@@ -202,14 +215,91 @@ template <typename T>
         const crd::u32 idx = pick[s];
         const C th = es.values.data()[idx];
         result.values[s] = th;
-        // Arnoldi residual estimate β_m·|s[m-1]| (s = the idx-th Ritz vector of H).
-        const C slast = es.vectors.at(mm - 1, idx);
-        const R rest = beta_m * detail::cmag<R>(slast);
-        result.residuals[s] = rest;
+        if (!opts.compute_vectors)
+        {
+            // Cheap Arnoldi residual estimate β_m·|s[m-1]| (no eigenvector needed).
+            const R rest = beta_m * detail::cmag<R>(es.vectors.at(mm - 1, idx));
+            result.residuals[s] = rest;
+            const R scale = detail::cmag<R>(th);
+            if (rest <= tol * (scale > R{1} ? scale : R{1}))
+            {
+                ++nconv;
+            }
+            continue;
+        }
+        // Recover the complex Ritz vector X = V·S[:,idx]: Re(X)=Σ Re(S_j)·v_j, Im(X)=Σ Im(S_j)·v_j.
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            xre[i] = T{0};
+            xim[i] = T{0};
+        }
+        for (crd::u32 jj = 0; jj < mm; ++jj)
+        {
+            const C sj = es.vectors.at(jj, idx);
+            dn::axpy<T>(sj.re, {col(jj), n}, {xre.data(), n});
+            dn::axpy<T>(sj.im, {col(jj), n}, {xim.data(), n});
+        }
+        // Normalize to unit complex 2-norm.
+        R xn2 = R{0};
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            xn2 += xre[i] * xre[i] + xim[i] * xim[i];
+        }
+        const R xn = std::sqrt(xn2);
+        if (xn > R{0})
+        {
+            const T inv = static_cast<T>(R{1} / xn);
+            dn::scal<T>(inv, {xre.data(), n});
+            dn::scal<T>(inv, {xim.data(), n});
+        }
+        // Phase convention (moat): rotate by e^{−iφ} so the largest-magnitude component is real-positive.
+        crd::u32 imax = 0;
+        R vmax = R{0};
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            const R m2 = xre[i] * xre[i] + xim[i] * xim[i];
+            if (m2 > vmax)
+            {
+                vmax = m2;
+                imax = i;
+            }
+        }
+        const R mag = std::sqrt(vmax);
+        if (mag > R{0})
+        {
+            const R c = xre[imax] / mag;   // cos φ
+            const R sp = xim[imax] / mag;  // sin φ
+            for (crd::u32 i = 0; i < n; ++i) // X' = X·(c − i·sp)
+            {
+                const R nr = xre[i] * c + xim[i] * sp;
+                const R ni = xim[i] * c - xre[i] * sp;
+                xre[i] = nr;
+                xim[i] = ni;
+            }
+        }
+        // True residual ‖A·X − λ·X‖ (A real, X + λ complex): A·X = A·xre + i·A·xim.
+        (void)a.apply({xre.data(), n}, {axre.data(), n});
+        (void)a.apply({xim.data(), n}, {axim.data(), n});
+        R rn2 = R{0};
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            const R rr = axre[i] - (th.re * xre[i] - th.im * xim[i]);
+            const R ri = axim[i] - (th.re * xim[i] + th.im * xre[i]);
+            rn2 += rr * rr + ri * ri;
+        }
+        const R rn = std::sqrt(rn2);
+        result.residuals[s] = rn;
         const R scale = detail::cmag<R>(th);
-        if (rest <= tol * (scale > R{1} ? scale : R{1}))
+        if (rn <= tol * (scale > R{1} ? scale : R{1}))
         {
             ++nconv;
+        }
+        T* vr = result.vectors.data() + static_cast<crd::usize>(s) * n;
+        T* vi = result.vectors_im.data() + static_cast<crd::usize>(s) * n;
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            vr[i] = xre[i];
+            vi[i] = xim[i];
         }
     }
     result.nconv = nconv;

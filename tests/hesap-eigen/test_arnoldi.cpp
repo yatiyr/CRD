@@ -74,7 +74,9 @@ TEST_CASE("v6-c nonsymmetric Arnoldi determinism moat {1,2,4,8}", "[hesap][eigen
     opts.nev = 4;
     opts.which = eig::Which::LargestReal;
 
-    crd::containers::Array<crd::f64> ref(&alloc); // interleaved re/im of the 4 wanted values
+    crd::containers::Array<crd::f64> ref(&alloc);    // interleaved re/im of the 4 wanted values
+    crd::containers::Array<crd::f64> vref(&alloc);   // eigenvector real parts
+    crd::containers::Array<crd::f64> viref(&alloc);  // eigenvector imaginary parts
     bool have_ref = false;
     for (crd::u32 nw : {1U, 2U, 4U, 8U})
     {
@@ -85,6 +87,7 @@ TEST_CASE("v6-c nonsymmetric Arnoldi determinism moat {1,2,4,8}", "[hesap][eigen
             sp::ParallelSparseLinearOp<crd::f64> op(a, &alloc, /*parallel_min_stored_bytes=*/0);
             auto r = eig::eigs_nonsym<crd::f64>(op, opts, &alloc);
             REQUIRE(r.values.size() == 4);
+            REQUIRE(r.vectors_im.size() == r.vectors.size());
             if (!have_ref)
             {
                 ref.resize(static_cast<crd::usize>(r.values.size()) * 2);
@@ -92,6 +95,13 @@ TEST_CASE("v6-c nonsymmetric Arnoldi determinism moat {1,2,4,8}", "[hesap][eigen
                 {
                     ref[2 * s] = r.values[s].re;
                     ref[2 * s + 1] = r.values[s].im;
+                }
+                vref.resize(r.vectors.size());
+                viref.resize(r.vectors_im.size());
+                for (crd::usize i = 0; i < r.vectors.size(); ++i)
+                {
+                    vref[i] = r.vectors[i];
+                    viref[i] = r.vectors_im[i];
                 }
                 have_ref = true;
             }
@@ -102,7 +112,11 @@ TEST_CASE("v6-c nonsymmetric Arnoldi determinism moat {1,2,4,8}", "[hesap][eigen
                 {
                     ident = (r.values[s].re == ref[2 * s]) && (r.values[s].im == ref[2 * s + 1]);
                 }
-                CHECK(ident); // complex Ritz values bit-identical across worker counts
+                for (crd::usize i = 0; i < r.vectors.size() && ident; ++i)
+                {
+                    ident = (r.vectors[i] == vref[i]) && (r.vectors_im[i] == viref[i]); // re AND im
+                }
+                CHECK(ident); // complex Ritz VALUES + EIGENVECTORS (Re+Im) bit-identical across worker counts
             }
         }
         crd::jobs::shutdown();
