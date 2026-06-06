@@ -84,7 +84,7 @@ TEST_CASE("v6-d shift-invert determinism moat {1,2,4,8}", "[hesap][eigen][v6][mo
     crd::containers::Array<crd::f64> val_ref(&alloc);
     crd::containers::Array<crd::f64> vec_ref(&alloc);
     bool have_ref = false;
-    for (crd::u32 nw : {1U, 2U, 4U, 8U})
+    for (crd::u32 nw : {1U, 2U, 4U, 8U, 16U})
     {
         crd::jobs::Config cfg;
         cfg.num_threads = nw;

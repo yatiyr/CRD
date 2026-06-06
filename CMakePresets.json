@@ -272,7 +272,8 @@
         },
         { "name": "win-asan",
           "configurePreset": "win-asan",
-          "output": { "outputOnFailure": true }
+          "output": { "outputOnFailure": true },
+          "execution": { "timeout": 3600 }
         },
         { "name": "win-clang-cl",
           "configurePreset": "win-clang-cl",
@@ -297,6 +298,7 @@
         { "name": "linux-gcc-asan",
           "configurePreset": "linux-gcc-asan",
           "output": { "outputOnFailure": true },
+          "execution": { "timeout": 3600 },
           "environment": {
             "UBSAN_OPTIONS": "print_stacktrace=1"
           }

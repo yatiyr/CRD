@@ -5,8 +5,9 @@
 # Determinism moat: deterministic counter-RNG start + fixed-order reorthogonalization + pinned sign/order
 # convention ⇒ eigenpairs bit-identical across {1,2,4,8} workers (the differentiator). ADR-0065 §v6.
 #
-# Edges (acyclic; eigen is high in the hesap stack): hesap-dense (Rayleigh-Ritz), hesap-sparse (SparseLinearOp).
-# Later slices add hesap-direct (shift-invert, v6-d), hesap-preconditioners + hesap-iterative (LOBPCG/JD, v6-e/f).
+# Edges (acyclic; eigen is high in the hesap stack): hesap-dense (Rayleigh-Ritz), hesap-sparse (SparseLinearOp),
+# hesap-direct (shift-invert, v6-d), hesap-iterative (v6-f JD correction equation via FGMRES — iterative is a
+# lower sibling, same direction as the proven v5f-c2 hesap-direct→hesap-iterative edge).
 
 crd_collect_sources(SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src")
 crd_collect_sources(HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/include")
@@ -28,6 +29,7 @@ target_link_libraries(crd-hesap-eigen
         crd-hesap-dense    # eig_sym / eig_nonsym Rayleigh-Ritz + Vector/Matrix/Symmetric + blas1
         crd-hesap-sparse   # SparseLinearOp<T>
         crd-hesap-direct   # v6-d shift-invert: the v5 multifrontal LU factor of (A − σI)
+        crd-hesap-iterative # v6-f Jacobi-Davidson: FGMRES solves the correction equation
         crd-jobs           # parallel spmv (the only parallel step; the moat keeps it bit-exact)
     PRIVATE
         crd-warnings

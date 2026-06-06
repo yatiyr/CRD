@@ -568,6 +568,35 @@ target_link_libraries(bench_hesap_eigen_lobpcg PRIVATE
 )
 crd_enable_default_pch(bench_hesap_eigen_lobpcg)
 
+add_executable(bench_hesap_eigen_gen_lobpcg examples/bench_hesap_eigen_gen_lobpcg.cpp)
+target_link_libraries(bench_hesap_eigen_gen_lobpcg PRIVATE
+    crd-core
+    crd-memory
+    crd-containers
+    crd-math
+    crd-jobs
+    crd-hesap
+    crd-hesap-sparse
+    crd-hesap-dense
+    crd-hesap-eigen
+    crd-hesap-amg
+)
+crd_enable_default_pch(bench_hesap_eigen_gen_lobpcg)
+
+add_executable(bench_hesap_svds examples/bench_hesap_svds.cpp)
+target_link_libraries(bench_hesap_svds PRIVATE
+    crd-core
+    crd-memory
+    crd-containers
+    crd-math
+    crd-jobs
+    crd-hesap
+    crd-hesap-sparse
+    crd-hesap-dense
+    crd-hesap-eigen
+)
+crd_enable_default_pch(bench_hesap_svds)
+
 # Reference-class shootout — built only when CRD_BUILD_HESAP_VS_REFERENCE=ON.
 # Eigen 3.4 + OpenBLAS are fetched via CPM at configure time.
 #

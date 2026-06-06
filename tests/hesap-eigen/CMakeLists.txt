@@ -1,11 +1,17 @@
 add_executable(crd-hesap-eigen-tests
     test_arnoldi.cpp
+    test_cli.cpp
+    test_feast.cpp
+    test_jacobi_davidson.cpp
     test_krylov_schur.cpp
     test_lanczos.cpp
     test_lobpcg.cpp
+    test_lobpcg_anisotropic.cpp
     test_lobpcg_gen.cpp
+    test_lobpcg_gen_precond.cpp
     test_lobpcg_precond.cpp
     test_shift_invert.cpp
+    test_svds.cpp
 )
 
 target_link_libraries(crd-hesap-eigen-tests PRIVATE
