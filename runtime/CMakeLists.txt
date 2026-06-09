@@ -508,6 +508,27 @@ target_link_libraries(smoke_hesap_solve_cli PRIVATE
 )
 crd_enable_default_pch(smoke_hesap_solve_cli)
 
+# v7-e-2: generate representative NLS-derived JᵀJ matrices (3D elastic lattice) as Matrix-Market files for the
+# SupernodalCholesky-vs-CHOLMOD head-to-head. Pure crd (no external deps) ⇒ always built.
+add_executable(dump_nls_lattice_jtj
+    examples/dump_nls_lattice_jtj.cpp
+)
+target_link_libraries(dump_nls_lattice_jtj PRIVATE
+    crd-core
+    crd-log
+    crd-memory
+    crd-containers
+    crd-math
+    crd-platform
+    crd-jobs
+    crd-hesap
+    crd-hesap-dense
+    crd-hesap-sparse
+    crd-hesap-ordering
+    crd-hesap-direct
+)
+crd_enable_default_pch(dump_nls_lattice_jtj)
+
 add_executable(bench_hesap_gemm
     examples/bench_hesap_gemm.cpp
 )
@@ -841,6 +862,44 @@ if(CRD_BUILD_HESAP_VS_REFERENCE)
     target_compile_definitions(bench_hesap_spai_vs_reference PRIVATE "CRD_SUITESPARSE_DIR=\"${CRD_SS_DIR}\"")
 endif()
 
+# --- v7-d: Cerid L-BFGS vs liblbfgs (the reference C L-BFGS; its default line search IS More-Thuente) ---
+# liblbfgs is MIT (permissive), built local-only by scripts/setup-lbfgs-ref.sh into a gitignored deps dir. Gated
+# behind CRD_BUILD_HESAP_VS_LBFGS (default OFF); never CI/shipped. The verdict is iteration + point-eval count at
+# matched m + matched More-Thuente + matched accuracy (the ‖g‖ achieved is reported for both). No Eigen/SuiteSparse.
+if(CRD_BUILD_HESAP_VS_LBFGS)
+    set(CRD_LBFGS_DIR "$ENV{HOME}/cerid-deps/liblbfgs/install" CACHE PATH "liblbfgs install prefix (lib/ + include/)")
+    if(NOT EXISTS "${CRD_LBFGS_DIR}/lib/liblbfgs.a")
+        message(FATAL_ERROR "[hesap-vs-lbfgs] ${CRD_LBFGS_DIR}/lib/liblbfgs.a not found — run scripts/setup-lbfgs-ref.sh")
+    endif()
+    add_executable(bench_hesap_lbfgs_vs_reference examples/bench_hesap_lbfgs_vs_reference.cpp)
+    target_link_libraries(bench_hesap_lbfgs_vs_reference PRIVATE
+        crd-core crd-log crd-memory crd-containers crd-math crd-jobs
+        crd-hesap crd-hesap-dense crd-hesap-sparse crd-hesap-opt
+        "${CRD_LBFGS_DIR}/lib/liblbfgs.a")
+    target_include_directories(bench_hesap_lbfgs_vs_reference PRIVATE "${CRD_LBFGS_DIR}/include")
+    crd_enable_default_pch(bench_hesap_lbfgs_vs_reference)
+    message(STATUS "[hesap-vs-lbfgs] L-BFGS bench enabled (${CRD_LBFGS_DIR}/lib/liblbfgs.a)")
+endif()
+
+# --- v7-d-3: L-BFGS-B DIFFERENTIAL TEST vs the reference C (Zhu-Byrd-Lu-Nocedal, via stephenbeckr/L-BFGS-B-C) ---
+# The faithful L-BFGS-B port is verified by diffing EVERY routine (foundation + cauchy/formk/subsm + the mainlb
+# driver end-to-end vs setulb) against the reference on identical inputs. Local-only oracle (the reference is a TEST
+# oracle, not a dependency — Cerid ships its own from-principles L-BFGS-B). Gated behind CRD_BUILD_HESAP_VS_LBFGSB;
+# build the oracle with scripts/setup-lbfgsb-ref.sh. Never CI/shipped.
+if(CRD_BUILD_HESAP_VS_LBFGSB)
+    set(CRD_LBFGSB_REF_DIR "$ENV{HOME}/cerid-deps/lbfgsb-ref/install" CACHE PATH "L-BFGS-B reference install prefix")
+    if(NOT EXISTS "${CRD_LBFGSB_REF_DIR}/lib/liblbfgsb_ref.a")
+        message(FATAL_ERROR "[hesap-vs-lbfgsb] ${CRD_LBFGSB_REF_DIR}/lib/liblbfgsb_ref.a not found — run scripts/setup-lbfgsb-ref.sh")
+    endif()
+    add_executable(lbfgsb_difftest examples/lbfgsb_difftest.cpp)
+    target_link_libraries(lbfgsb_difftest PRIVATE
+        crd-core crd-log crd-memory crd-containers crd-math crd-jobs
+        crd-hesap crd-hesap-dense crd-hesap-sparse crd-hesap-opt
+        "${CRD_LBFGSB_REF_DIR}/lib/liblbfgsb_ref.a")
+    crd_enable_default_pch(lbfgsb_difftest)
+    message(STATUS "[hesap-vs-lbfgsb] L-BFGS-B differential test enabled (${CRD_LBFGSB_REF_DIR}/lib/liblbfgsb_ref.a)")
+endif()
+
 # --- v4j-2a: Cerid InverseBasedIlu vs ILUPACK V2.4 (local-only, non-commercial) ---
 # ILUPACK is non-commercial/binary-only ⇒ a precompiled lib under the gitignored
 # external/ilupack (run scripts/setup-ilupack-ref.sh first). WSL/Linux only
@@ -899,7 +958,7 @@ if(CRD_BUILD_HESAP_VS_CHOLMOD)
         target_link_libraries(bench_hesap_cholesky_vs_cholmod PRIVATE
             crd-core crd-memory crd-containers crd-math crd-jobs crd-platform
             crd-hesap crd-hesap-sparse crd-hesap-ordering crd-hesap-dense crd-hesap-sched crd-hesap-direct
-            cholmod amd colamd suitesparseconfig)
+            cholmod amd colamd suitesparseconfig openblas)
         target_compile_definitions(bench_hesap_cholesky_vs_cholmod PRIVATE "CRD_SUITESPARSE_DIR=\"${_cholmod_ss}\"")
         set_source_files_properties(examples/bench_hesap_cholesky_vs_cholmod.cpp PROPERTIES COMPILE_FLAGS "-Wno-error")
         message(STATUS "[hesap-vs-cholmod] bench enabled (${CRD_CHOLMOD_LIB}); matrices=${_cholmod_ss}")

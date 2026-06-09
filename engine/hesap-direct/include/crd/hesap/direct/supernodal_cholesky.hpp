@@ -130,7 +130,18 @@ public:
     // supernode writes only its own panel, reads already-factored descendants,
     // per-worker scratch) — the determinism moat.
     void factorize(const sparse::SparsePattern& pattern, crd::containers::ConstSpan<T> values,
-                   crd::u32 nrelax = kSupernodeRelax, crd::u32 num_workers = 1);
+                   crd::u32 nrelax = kSupernodeRelax, crd::u32 num_workers = 1, bool reuse_symbolic = false);
+
+    // refactorize — NUMERIC re-factorization reusing the symbolic analysis (m_sym) from a prior factorize() on a
+    // STRUCTURALLY-IDENTICAL `pattern` (same nonzero structure; new `values`). Skips the expensive symbolic phase
+    // (symbolic_factorize: AMD + etree + supernode amalgamation — the v5a CHOLMOD-gap cost). The LM normal-equations
+    // loop calls this every λ-trial (JᵀJ pattern is constant across the whole solve) so it pays symbolic ONCE — the
+    // gate to matching Ceres (which caches symbolic). Bit-identical to a fresh factorize() on the same matrix.
+    void refactorize(const sparse::SparsePattern& pattern, crd::containers::ConstSpan<T> values,
+                     crd::u32 num_workers = 1)
+    {
+        factorize(pattern, values, kSupernodeRelax, num_workers, /*reuse_symbolic=*/true);
+    }
 
     [[nodiscard]] bool solve(crd::containers::Span<T> rhs, crd::usize nrhs) const override;
     using IFactorization<T>::solve; // un-hide the single-RHS convenience overload

@@ -111,12 +111,28 @@ void gemm(T alpha, MatrixView<const T, L> a, MatrixView<const T, L> b, T beta,
     CRD_ASSERT_MSG(k == k2, "gemm: inner dimensions of A and B must match");
     CRD_ASSERT_MSG(c.rows() == m && c.cols() == n, "gemm: C must be m*n");
 
-    // Scale C by beta first (or zero if beta == 0).
-    for (crd::usize i = 0; i < m; ++i)
+    // Scale C by beta first. beta == 0 STORES zero (does NOT read C) — the BLAS contract: when beta is zero, C
+    // need not be initialized on input. `0 * c` would propagate a NaN/Inf from uninitialized C (0*NaN=NaN); the
+    // store-zero path is bit-identical for finite C (0*finite=±0.0, and ±0.0+alpha·AB = alpha·AB) yet correct
+    // for uninitialized scratch — which is why supernodal scratch (ubuf) can be left uninitialized.
+    if (beta == T{0})
     {
-        for (crd::usize j = 0; j < n; ++j)
+        for (crd::usize i = 0; i < m; ++i)
         {
-            view_at_ref(c, i, j) = beta * view_at_ref(c, i, j);
+            for (crd::usize j = 0; j < n; ++j)
+            {
+                view_at_ref(c, i, j) = T{0};
+            }
+        }
+    }
+    else
+    {
+        for (crd::usize i = 0; i < m; ++i)
+        {
+            for (crd::usize j = 0; j < n; ++j)
+            {
+                view_at_ref(c, i, j) = beta * view_at_ref(c, i, j);
+            }
         }
     }
 
@@ -226,12 +242,26 @@ void small_gemm_parallel(crd::u32 num_workers, T alpha, MatrixView<const T, L> a
     const crd::usize n = b.cols();
     const crd::usize k = a.cols();
 
-    // Scale C by beta (serial; small enough at fast-path sizes).
-    for (crd::usize i = 0; i < m; ++i)
+    // Scale C by beta (serial; small enough at fast-path sizes). beta == 0 STORES zero (BLAS contract: C not
+    // read on input) — bit-identical for finite C, correct for uninitialized scratch (see gemm() above).
+    if (beta == T{0})
     {
-        for (crd::usize j = 0; j < n; ++j)
+        for (crd::usize i = 0; i < m; ++i)
         {
-            view_at_ref(c, i, j) = beta * view_at_ref(c, i, j);
+            for (crd::usize j = 0; j < n; ++j)
+            {
+                view_at_ref(c, i, j) = T{0};
+            }
+        }
+    }
+    else
+    {
+        for (crd::usize i = 0; i < m; ++i)
+        {
+            for (crd::usize j = 0; j < n; ++j)
+            {
+                view_at_ref(c, i, j) = beta * view_at_ref(c, i, j);
+            }
         }
     }
 
@@ -337,11 +367,26 @@ void gemm_parallel(crd::u32 num_workers, T alpha, MatrixView<const T, L> a, Matr
     // overhead being comparable to or exceeding the memory-bandwidth-bound
     // scale work. Reverted to serial. Beta scale is at most O(m*n) and
     // negligible compared to GEMM's O(m*n*k) inner work for k >= 64.
-    for (crd::usize i = 0; i < m; ++i)
+    // beta == 0 STORES zero (BLAS contract: C not read on input) — bit-identical for finite C, correct for
+    // uninitialized scratch (see gemm() above).
+    if (beta == T{0})
     {
-        for (crd::usize j = 0; j < n; ++j)
+        for (crd::usize i = 0; i < m; ++i)
         {
-            view_at_ref(c, i, j) = beta * view_at_ref(c, i, j);
+            for (crd::usize j = 0; j < n; ++j)
+            {
+                view_at_ref(c, i, j) = T{0};
+            }
+        }
+    }
+    else
+    {
+        for (crd::usize i = 0; i < m; ++i)
+        {
+            for (crd::usize j = 0; j < n; ++j)
+            {
+                view_at_ref(c, i, j) = beta * view_at_ref(c, i, j);
+            }
         }
     }
 
@@ -844,11 +889,26 @@ void gemm_mixed(TAcc alpha, MatrixView<const TIn, L> a, MatrixView<const TIn, L>
     CRD_ASSERT_MSG(b.rows() == k, "gemm_mixed: inner dims must match");
     CRD_ASSERT_MSG(c.rows() == m && c.cols() == n, "gemm_mixed: C must be m×n");
 
-    for (crd::usize i = 0; i < m; ++i)
+    // beta == 0 STORES zero (BLAS contract: C not read on input) — bit-identical for finite C, correct for
+    // uninitialized scratch (see gemm() above).
+    if (beta == TAcc{0})
     {
-        for (crd::usize j = 0; j < n; ++j)
+        for (crd::usize i = 0; i < m; ++i)
         {
-            view_at_ref(c, i, j) = beta * view_at_ref(c, i, j);
+            for (crd::usize j = 0; j < n; ++j)
+            {
+                view_at_ref(c, i, j) = TAcc{0};
+            }
+        }
+    }
+    else
+    {
+        for (crd::usize i = 0; i < m; ++i)
+        {
+            for (crd::usize j = 0; j < n; ++j)
+            {
+                view_at_ref(c, i, j) = beta * view_at_ref(c, i, j);
+            }
         }
     }
 

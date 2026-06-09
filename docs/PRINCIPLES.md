@@ -46,6 +46,12 @@ consumers. The architecture serves all of them; no domain is privileged.
 - **Every shipped slice ends green on Debug + Release + ASan.** Three
   flavours. No exceptions.
 - **The engine is allowed to be slow before it is allowed to be wrong.**
+- **Sanity is a practice, not a phase.** Root-cause over workaround; verify
+  the *shipped* artifact; test boundaries, not just volume; know what your
+  diagnostics can't see; honest scoreboards — including about ourselves. The
+  full doctrine (each rule tied to the bug that taught it) and the living
+  **Sanity Ledger** every agent contributes to live in **`docs/SANITY.md`**
+  — read every session.
 - **Units live at the API surface, raw scalars live in the inner loop.**
   Cerid runs a **two-layer typed architecture** (formalised at Phase 3.1.7.5
   close; ADR-0078 §5):

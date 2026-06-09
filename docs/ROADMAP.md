@@ -12,11 +12,11 @@
 
 ---
 
-## Core docs (read every session)
+## Start here
 
-- **`AGENTS.md`** (project root) — project rules, agent roster, coding standards
-- **`docs/PRINCIPLES.md`** — engineering principles + pinned cornerstones
-- **`context.md`** (project root) — live "where we are now" state
+New to the project? Read **`docs/README.md`** — the Documentation Map (canonical reading
+order + a map of every doc area). This file (ROADMAP) is the phase / decision-log / detour
+hub the map points you to; below is the live phase status.
 
 ## Status (snapshot)
 

@@ -8,6 +8,7 @@
 #include <crd/hesap/dense/real_type.hpp>
 #include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocator.hpp>
+#include <crd/memory/allocators/linear_allocator.hpp>
 
 #include <cstdlib>
 
@@ -153,7 +154,8 @@ void trsm_unit_lower_left(const T* l, crd::u32 ldl, crd::u32 nc, T* x, crd::u32 
 template <typename T>
 void factor_front(T* d, crd::u32 ld, crd::u32 m, crd::u32 n, crd::u32 npiv, dense::RealType<T> tiny,
                   crd::memory::IAllocator* scratch = nullptr, bool gemm_par = false,
-                  dense::RealType<T> pivot_threshold = dense::RealType<T>(0), crd::u32* ipiv = nullptr) noexcept
+                  dense::RealType<T> pivot_threshold = dense::RealType<T>(0), crd::u32* ipiv = nullptr,
+                  crd::memory::LinearAllocator* arena = nullptr) noexcept
 {
     namespace dl = crd::hesap::dense;
     const crd::u32 panel = mf_panel_width();
@@ -162,6 +164,13 @@ void factor_front(T* d, crd::u32 ld, crd::u32 m, crd::u32 n, crd::u32 npiv, dens
     {
         return;
     }
+    // When `scratch` is a bump arena (LinearAllocator, passed as `arena`), its deallocate is a no-op, so the
+    // per-panel serial-schur gemm packs would ACCUMULATE across the panel loop and overflow the arena —
+    // silently writing into the next worker's arena slab (a flaky AV in the FRONT-PARALLEL walk; harmless in
+    // the serial/within-front walk where the neighbour slab is idle). The packs are dead the instant a gemm
+    // returns, so we rewind the arena to this base after each serial schur. Other callers pass a real allocator
+    // (deallocate frees) or nullptr ⇒ arena == nullptr ⇒ no rewind, byte-unchanged.
+    const crd::usize arena_base = (arena != nullptr) ? arena->used() : 0;
 
     // Factor panel columns [a,b) over the FULL row height [a,m): static pivot + GESP, scale L below the
     // diagonal, rank-1 trailing updates restricted to the panel columns. (The prior inline step 1.)
@@ -246,6 +255,10 @@ void factor_front(T* d, crd::u32 ld, crd::u32 m, crd::u32 n, crd::u32 npiv, dens
         {
             dl::gemm<T, dl::Layout::ColMajor>(lu2_from_real<T>(dense::RealType<T>(-1)), l21, u12, lu2_one<T>(), c22,
                                               dl::Trans::None, dl::Trans::None, scratch);
+            if (arena != nullptr)
+            {
+                arena->reset_to(arena_base); // the gemm packs are dead ⇒ rewind so they don't accumulate
+            }
         }
     };
 

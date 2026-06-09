@@ -32,11 +32,15 @@ namespace crd::hesap::dense::detail
 // optimization (normal equations AᵀA) all want syrk.
 // -----------------------------------------------------------------------
 
+// `allow_parallel` (default true): self-parallelize over block-rows when large. Pass FALSE when calling from a hot
+// per-block loop that already manages its own parallelism (e.g. the supernodal cmod's per-descendant diagonal
+// update — one self-fork per call there would be 1000s of fork/joins). `a` may be RowMajor OR ColMajor: the pack
+// reads it through the layout-generic MatrixView::at(); the C output is always indexed row-major (ldc, i≥j) so the
+// caller reads it back the same way regardless of a's layout.
 template <typename T, Layout L>
-inline void syrk_lower_minus(MatrixView<const T, L> a, MatrixView<T, L> c,
-                             crd::memory::IAllocator* scratch)
+inline void syrk_lower_minus(MatrixView<const T, L> a, MatrixView<T, L> c, crd::memory::IAllocator* scratch,
+                             bool allow_parallel = true)
 {
-    static_assert(L == Layout::RowMajor, "syrk_lower_minus supports RowMajor only");
     const crd::usize m = a.rows();
     const crd::usize k = a.cols();
     if (m == 0 || k == 0)
@@ -134,7 +138,7 @@ inline void syrk_lower_minus(MatrixView<const T, L> a, MatrixView<T, L> c,
     // Parallelize over block-rows when the update is large enough to amortize
     // fork/join (mirrors gemm_parallel_auto's mnk threshold).
     const crd::u32 nw = crd::jobs::num_workers();
-    const bool parallel = (nw > 1) && (m * m * k > crd::usize{256} * 1024);
+    const bool parallel = allow_parallel && (nw > 1) && (m * m * k > crd::usize{256} * 1024);
     if (parallel)
     {
         auto* counter = crd::jobs::parallel_for(

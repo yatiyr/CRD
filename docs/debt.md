@@ -5,6 +5,41 @@ move to a session log entry and remove from here.
 
 ## Active debt
 
+### ✅ `mf-lu-frontparallel-flaky-uaf` — FIXED 2026-06-09 (root cause: `TlsfAllocator::init_pool` end-sentinel mistiling). No remaining debt.
+
+> **FIXED at the allocator root.** The pre-existing flaky crash (~20/30 runs) in the PARALLEL multifrontal-LU
+> front-walk (`tests/hesap-direct/test_multifrontal_lu_pp.cpp` → "CONNECTED large grid", `grid3d_weak(22)`,
+> nw∈{2,4,8}; always an AV in `TlsfAllocator` coalescing a free block whose links were overwritten) was a bug in
+> **`TlsfAllocator::init_pool`**, the engine's most-used allocator.
+>
+> **Root cause (pinpointed):** `init_pool` reserves `free_block_size = capacity − 3·16` (start sentinel + free
+> block's own header + end sentinel = 48 B), but placed the **end sentinel** at `base + 16 + free_block_size`
+> (= `capacity − 32`) — accounting for only ONE preceding header, **16 bytes too early**. `block_next(free_block)`
+> correctly lands at `base + 32 + free_block_size = capacity − 16`, so it **overshot the (mis-placed) sentinel into
+> the chunk's uninitialised tail slack**, whose low bit reads as `kFreeBit`. The moment a block reached the chunk's
+> end and was freed, coalescing merged that garbage → a free-list smash. **Benign until a chunk fills to its tail.**
+> That is why it only ever surfaced under the **multi-chunk** GrowableTlsf path (the LU's heavy front alloc/free/
+> **reuse** churn grows the pool into 256 MB chunks and fills them to the end); a single big chunk never fills to its
+> tail, and the memory tests never allocated-to-tail-then-freed — so 820 K+ assertions passed over it for a long
+> time. It is **placement, not a race** (hence ts-wrap serialized everything and still crashed; TSan clean).
+>
+> **The fix (`engine/memory/src/allocators/tlsf_allocator.cpp`):** place the end sentinel at
+> `base + 2·kBlockHeaderOverhead + free_block_size` (= `block_next(free_block)` = `capacity − 16`), so the three
+> 16-byte headers + payload tile the chunk exactly. One line; compiler-agnostic pointer arithmetic.
+>
+> **The LU single-chunk `factor_pool` workaround was REMOVED** — `factor_attempt` is back to a plain
+> `ThreadSafeAllocator ts(m_alloc)` over the caller's (multi-chunk) allocator. The real v7-e-2 GEMM arena
+> (`&gemm_arena` on `factor_front`) is unrelated and kept.
+>
+> **Verified:** clean shipped binary (no diagnostics, multi-chunk path forced) — grid3d moat **30/30 clean**;
+> `crd-memory-tests` 820 014 assertions / 108 cases green with the fix relinked; win-debug `ctest -R "memory|hesap"`
+> 48/48; the {1,2,4,8}-worker determinism moat intact. The previously-noted `growable-tlsf-multichunk-freelist`
+> "remaining debt" **does not exist** — there was no separate multi-chunk free-list bug; the multi-chunk path was
+> simply the only consumer that filled a chunk to its tail and tripped the single `init_pool` defect.
+>
+> **Lesson for the test suites:** the foundational allocators are validated by volume, not by boundary adversaries.
+> A deliberate fill-to-tail / fragment-to-end TLSF stress test would have caught this years earlier — worth adding.
+
 ### ✅ `gemm-parallel-frame-arena-leak` — RESOLVED 2026-06-05 (v5f-c, central mark fix)
 
 > **RESOLVED.** Added the scoped frame marker to the jobs API (`frame_get_mark()`/`frame_set_mark()` +

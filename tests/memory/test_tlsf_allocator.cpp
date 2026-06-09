@@ -378,3 +378,81 @@ TEST_CASE("TLSF try_allocate(0) returns nullptr", "[memory][tlsf][try]")
     TlsfAllocator a{kPoolMB};
     CHECK(a.try_allocate(0) == nullptr);
 }
+
+// BOUNDARY-ADVERSARY regression for the init_pool end-sentinel bug (the multifrontal-LU flaky-AV root cause,
+// fixed 2026-06-09; see docs/SANITY.md "Boundary adversaries, not volume"). init_pool placed the end sentinel
+// 16 B BEFORE block_next(free_block), so a block that EXACTLY reached the pool's TAIL read uninitialised slack
+// as its "next" block; if that slack's low bit looked like kFreeBit, freeing the tail block coalesced garbage
+// and smashed the free list (list_remove on junk links → AV). It was benign until a block fit the pool to its
+// last byte, so 820 K+ random-stress assertions never tripped it — random alloc/free almost never produces the
+// exact-fit-to-tail block, and uniform fill leaves a free remainder that shields the tail.
+//
+// This test is the DECISIVE trigger: it PRE-POISONS the buffer with 0xCD (low bit set ⇒ "looks free") before
+// construction, then allocates the LARGEST single block the pool can serve — which by construction spans to the
+// tail, so block_next(block) == the end sentinel (the exact computation the bug got wrong) — touches every byte
+// (ASan flags a write past the buffer edge), and FREES it, repeatedly. With the buggy placement this AVs/smashes
+// on the first free; with the fix block_next lands on the size-0 end sentinel (block_is_last ⇒ no coalesce) and
+// every round is clean. Verified to FAIL on the buggy one-liner and PASS on the fix (docs/SANITY.md rule #2/#3).
+TEST_CASE("TLSF exact-fit-to-tail alloc/free does not corrupt the free list (init_pool end-sentinel regression)",
+          "[memory][tlsf][boundary][regression]")
+{
+    constexpr crd::usize cap = 64U * 1024U;
+    alignas(16) static crd::u8 buffer[cap];
+    std::memset(buffer, 0xCD, cap); // poison the tail slack BEFORE the allocator overwrites it with sentinels
+
+    TlsfAllocator a{buffer, cap};
+
+    // Largest single block the pool can serve right now (each probe allocates then frees ⇒ state restored).
+    auto largest_serviceable = [&a, cap]() -> crd::usize
+    {
+        crd::usize lo = 0U;
+        crd::usize hi = cap;
+        while (lo < hi)
+        {
+            const crd::usize mid = lo + (hi - lo + 1U) / 2U;
+            void* p = a.try_allocate(mid);
+            if (p != nullptr)
+            {
+                a.deallocate(p);
+                lo = mid;
+            }
+            else
+            {
+                hi = mid - 1U;
+            }
+        }
+        return lo;
+    };
+
+    // Fill the pool to exhaustion by always taking the LARGEST serviceable block. TLSF rounds large requests up
+    // by ~1 KB, so a big request always SPLITS and leaves a free remainder shielding the tail — that is exactly
+    // why a "largest single block" test (and uniform fill) does NOT bite. But the remainder shrinks each round;
+    // once it drops below the small-block boundary (512 B) the serviceable-max allocation NO-SPLITS and consumes
+    // the free block to its last byte, so block_next(that block) == the end sentinel. The LAST allocated block is
+    // therefore exact-fit-to-tail — the precise edge the init_pool bug got wrong.
+    crd::containers::Array<void*> live;
+    for (int guard = 0; guard < 100000; ++guard)
+    {
+        const crd::usize sz = largest_serviceable();
+        if (sz == 0U) { break; } // pool exhausted
+        void* p = a.try_allocate(sz);
+        if (p == nullptr) { break; }
+        CHECK(a.owns(p));
+        std::memset(p, 0xAB, sz); // touch every byte ⇒ ASan catches a write over the buffer edge
+        live.push_back(p);
+    }
+    REQUIRE(live.size() > 0U);
+
+    // Free the TAIL-MOST block first: its block_next is the end sentinel. With the buggy placement that is
+    // uninitialised 0xCD slack whose low bit looks like kFreeBit, so deallocate coalesces garbage and smashes the
+    // free list (OOB free-list index / AV). With the fix it is the real size-0 sentinel (block_is_last ⇒ no
+    // coalesce) and the free survives. Drain the rest tail-first too, then prove the list still serves a refill.
+    while (live.size() > 0U)
+    {
+        a.deallocate(live[live.size() - 1U]);
+        live.swap_remove(live.size() - 1U);
+    }
+    void* refill = a.try_allocate(largest_serviceable());
+    REQUIRE(refill != nullptr); // a smashed list would fail or AV here
+    a.deallocate(refill);
+}

@@ -215,7 +215,13 @@ void TlsfAllocator::init_pool(void* buffer, usize capacity) noexcept
     free_block->next_free = nullptr;
     free_block->prev_free = nullptr;
 
-    BlockHeader* end_sentinel = reinterpret_cast<BlockHeader*>(base + kBlockHeaderOverhead + free_block_size);
+    // The end sentinel sits immediately AFTER the free block's payload, i.e. at block_next(free_block) =
+    // free_block + kBlockHeaderOverhead + free_block_size = base + 2·kBlockHeaderOverhead + free_block_size.
+    // (The earlier `base + kBlockHeaderOverhead + free_block_size` omitted the free block's OWN 16-byte header,
+    // placing the sentinel 16 B too early — block_next then overshot it into the uninitialised tail slack, whose
+    // low bits read as kFreeBit, so coalescing a block that reached the chunk's end merged that garbage → a
+    // free-list smash. Benign until a chunk filled to its tail; surfaced as the multi-chunk GrowableTlsf flaky AV.)
+    BlockHeader* end_sentinel = reinterpret_cast<BlockHeader*>(base + 2U * kBlockHeaderOverhead + free_block_size);
     end_sentinel->prev_phys_block = free_block;
     end_sentinel->size_and_flags = 0 | kPrevFreeBit; // size=0 (last), in-use, prev_free=true
 

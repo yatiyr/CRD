@@ -329,6 +329,124 @@ TEST_CASE("supernodal Cholesky: TREE-PARALLEL factor is bit-identical to serial 
     }
 }
 
+// v7-e-2 gate: refactorize() reuses the symbolic analysis (m_sym) for a NUMERIC re-factorization on a
+// structurally-identical pattern with NEW values. The symbolic phase is a pure function of the pattern, so a
+// refactorize() must be BIT-IDENTICAL to a fresh factorize() on those values — that lets the sparse-LM
+// normal-equations loop pay symbolic once across all λ-trials without changing the answer. The determinism moat
+// (bit-exact across {1,2,4,8} workers) must survive the reuse too.
+TEST_CASE("supernodal Cholesky: refactorize (reuse symbolic) == fresh factorize, bit-identical (v7-e-2 gate)",
+          "[hesap][direct][v7-e-2][determinism]")
+{
+    crd::memory::TlsfAllocator alloc(256 << 20);
+    // Two SPD matrices with the SAME nonzero structure (grid2d), DIFFERENT (still diag-dominant) values.
+    auto build = [&alloc](crd::u32 w, crd::u32 h, crd::f64 diag, crd::f64 off) -> Csr
+    {
+        const crd::u32 n = w * h;
+        sp::TripletBuilder<crd::f64> tb(&alloc, n, n);
+        auto idx = [w](crd::u32 r, crd::u32 c)
+        {
+            return r * w + c;
+        };
+        for (crd::u32 r = 0; r < h; ++r)
+        {
+            for (crd::u32 c = 0; c < w; ++c)
+            {
+                const crd::u32 v = idx(r, c);
+                tb.add(v, v, diag);
+                if (r > 0)
+                    tb.add(v, idx(r - 1, c), off);
+                if (r + 1 < h)
+                    tb.add(v, idx(r + 1, c), off);
+                if (c > 0)
+                    tb.add(v, idx(r, c - 1), off);
+                if (c + 1 < w)
+                    tb.add(v, idx(r, c + 1), off);
+            }
+        }
+        return tb.compress();
+    };
+    auto m1 = build(12, 12, 4.0, -1.0);
+    auto m2 = build(12, 12, 6.5, -1.3); // same structure, different values
+    const crd::u32 n = m1.rows();
+
+    const auto& pat1 = m1.pattern();
+    const auto& pat2 = m2.pattern();
+    const auto& vals1 = m1.values().values;
+    const auto& vals2 = m2.values().values;
+    const crd::containers::ConstSpan<crd::f64> v1{vals1.data(), vals1.size()};
+    const crd::containers::ConstSpan<crd::f64> v2{vals2.data(), vals2.size()};
+
+    crd::containers::Array<crd::f64> b(&alloc);
+    b.resize(n);
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        b[i] = 1.0 + 0.013 * static_cast<crd::f64>(i);
+    }
+
+    crd::jobs::init();
+
+    // Fresh factorize on m2 (the reference).
+    crd::containers::Array<crd::f64> x_fresh(&alloc);
+    x_fresh.resize(n);
+    crd::u64 nnz_fresh = 0;
+    {
+        dir::SupernodalCholesky<crd::f64> f(&alloc);
+        f.factorize(pat2, v2, dir::kSupernodeRelax, 1);
+        REQUIRE(f.info() == 0);
+        nnz_fresh = f.factor_nnz();
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            x_fresh[i] = b[i];
+        }
+        REQUIRE(f.solve({x_fresh.data(), n}));
+    }
+
+    // factorize on m1, then refactorize with m2's values (reuse the symbolic from m1).
+    {
+        dir::SupernodalCholesky<crd::f64> f(&alloc);
+        f.factorize(pat1, v1, dir::kSupernodeRelax, 1);
+        REQUIRE(f.info() == 0);
+        f.refactorize(pat2, v2, 1); // reuse symbolic — same structure, new values
+        REQUIRE(f.info() == 0);
+        REQUIRE(f.factor_nnz() == nnz_fresh); // identical structure
+        crd::containers::Array<crd::f64> x_reuse(&alloc);
+        x_reuse.resize(n);
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            x_reuse[i] = b[i];
+        }
+        REQUIRE(f.solve({x_reuse.data(), n}));
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            REQUIRE(x_reuse[i] == x_fresh[i]); // refactorize == fresh factorize, bit-identical
+        }
+    }
+
+    // The determinism moat survives refactorize: factorize(m1)+refactorize(m2)+solve is bit-identical to the
+    // serial fresh-m2 reference across worker counts.
+    const crd::u32 w = crd::jobs::num_workers();
+    for (crd::u32 nw : {2U, 4U, w > 4U ? w : 4U})
+    {
+        dir::SupernodalCholesky<crd::f64> f(&alloc);
+        f.factorize(pat1, v1, dir::kSupernodeRelax, nw);
+        f.refactorize(pat2, v2, nw);
+        REQUIRE(f.info() == 0);
+        crd::containers::Array<crd::f64> xp(&alloc);
+        xp.resize(n);
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            xp[i] = b[i];
+        }
+        REQUIRE(f.solve({xp.data(), n}));
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            REQUIRE(xp[i] == x_fresh[i]); // bit-exact across worker counts after refactorize — the moat
+        }
+    }
+
+    crd::jobs::shutdown();
+}
+
 // v5a-4 moat: the grid2d(144) test above never produces a supernode ≥ kNodeParallelMinCols=512,
 // so it exercises only the TREE-parallel path. The two-level cdiv (v5a-4) and the no-pack cmod
 // (v5a-4) introduce code that DIVERGES by worker count ONLY on a node-parallel front (serial-gemm

@@ -166,13 +166,11 @@ Use when starting the next session and asking the assistant to pick up where the
 ```text
 You are working on the Cerid Engine. Read context surgically.
 
-# Mandatory reads (always, in this order):
+# Mandatory reads (always)
 
-1. CLAUDE.md — build commands, module index, troubleshooting, coding standards.
-2. AGENTS.md — project rules, agent conduct, DoD, architectural cornerstones.
-3. docs/PRINCIPLES.md — engineering principles (short).
-4. context.md — live state: current focus, last shipped, next up, recent slice history.
-5. docs/ROADMAP.md — navigation hub.
+Follow the canonical reading order in docs/README.md (the Documentation Map / Start
+Here): CLAUDE.md -> AGENTS.md -> PRINCIPLES -> SANITY -> context.md -> ROADMAP. The map
+also points to every other doc area (ADRs, systems, research, debt, detours).
 
 # Then ONE phase doc
 
@@ -244,19 +242,12 @@ Side missions that interrupt the main roadmap. Active detour is named in `contex
 
 ## Documentation Conventions
 
-- **`CLAUDE.md`** — stable project bible: build commands, module index, troubleshooting, coding standards. Auto-loaded each session.
-- **`AGENTS.md`** (this file) — rules of engagement: principles, agent conduct, DoD, cornerstones, session ritual.
-- **`docs/PRINCIPLES.md`** — engineering principles + pinned cornerstones. Short. Read every session.
-- **`context.md`** — live "where we are now" state at project root. Short (≤300 lines). Updated at session end.
-- **`docs/ROADMAP.md`** — master plan: phases, decision log (tagged), detour queue, glossary.
-- **`docs/phases/<phase>.md`** — one file per phase. Detailed per-slice ledger.
-- **`docs/sessions/YYYY-MM-DD-<slug>.md`** — one file per session. Format from `SESSION_TEMPLATE.md` if present.
-- **`docs/systems/<module>.md`** — short overview per shipped module. Stable; sessions detail the story.
-- **`docs/research/YYYY-MM-DD-<slug>.md`** — research dossiers. Format from `RESEARCH_TEMPLATE.md` if present.
-- **`docs/decisions/<NNNN>-<slug>.md`** — individual ADRs. Index at `docs/decisions/README.md`.
-- **`docs/<module>/<MODULE>_FILE.md`** — long-form deep-dive for major modules (log, memory, containers, …).
-- **`docs/debt.md`** — open follow-ons + known cleanup.
-- **`MEMORY.md`** — agent memory index (one-line entries, ≤200 chars each; full text in linked `feedback_*.md` files).
+The full doc-system map — every doc area, its purpose, its index file, and the doc-design
+rules (two classes: *living/scannable* get size budgets, *append-only historical* records
+don't) — lives in **`docs/README.md`** (the single home; not duplicated here). Quick frame:
+`CLAUDE.md`/`AGENTS.md` = rules · `PRINCIPLES`/`SANITY` = compass · `context.md` = live
+state · `ROADMAP` = hub · then `decisions/` (ADRs, indexed in its `README.md`) · `systems/`
+· `phases/` · `sessions/` · `research/` · `debt.md` · `detours/` · `MEMORY.md`.
 
 After a system ships, **prefer adding to its session log over rewriting its overview**.
 

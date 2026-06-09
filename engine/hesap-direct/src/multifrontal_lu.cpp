@@ -641,7 +641,8 @@ double MultifrontalLU<T>::factor_attempt(const sparse::SparseMatrix<T, sparse::S
         crd::memory::LinearAllocator gemm_arena(gemm_scr.data() + static_cast<crd::usize>(wk) * gemm_arena_bytes,
                                                 gemm_arena_bytes);
         crd::u32* const ipiv = do_pivot ? (ipiv_scr.data() + static_cast<crd::usize>(wk) * max_nr) : nullptr;
-        factor_front<T>(front.data.data(), nr, nr, nr, npiv, tiny, &gemm_arena, gemm_par, m_pivot_threshold, ipiv);
+        factor_front<T>(front.data.data(), nr, nr, nr, npiv, tiny, &gemm_arena, gemm_par, m_pivot_threshold, ipiv,
+                        &gemm_arena); // arena = the bump scratch ⇒ factor_front rewinds packs per serial schur
         if (do_pivot)
         {
             // Apply the getf2 swaps (in order) to the front's row_index so position t holds the PHYSICAL B-row

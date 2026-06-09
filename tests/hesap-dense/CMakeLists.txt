@@ -11,6 +11,7 @@ add_executable(crd-hesap-dense-tests
     test_blas3_real.cpp
     test_blas3_complex.cpp
     test_blas3_parallel.cpp
+    test_parallel_triangular.cpp
     test_lu.cpp
     test_cholesky.cpp
     test_ldlt.cpp
