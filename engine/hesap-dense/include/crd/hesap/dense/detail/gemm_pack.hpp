@@ -98,7 +98,24 @@ inline void pack_a(MatrixView<const T, L> a, crd::usize ic, crd::usize pc, crd::
         T* panel_out = out + panel * GemmTraits<T>::MR * kc;
         if (eff_colmajor)
         {
-            for (crd::usize p = 0; p < kc; ++p) // contiguous source read over i for fixed p
+            // 4-way p-INTERLEAVE (2026-06-11 multi-stream dig): a cold source served one column at a
+            // time is a SINGLE DRAM stream (~22.7 GB/s on the dev host); four interleaved column
+            // streams reach ~36.9 GB/s (bank/page-level parallelism — the same measured mechanism that
+            // flipped the solve). Pure copy reordering ⇒ bit-identical packed bytes.
+            crd::usize p = 0;
+            for (; p + 4 <= kc; p += 4)
+            {
+                for (crd::usize i_local = 0; i_local < GemmTraits<T>::MR; ++i_local)
+                {
+                    const bool inside = (row_base + i_local) < mc;
+                    const crd::usize ig = ic + row_base + i_local;
+                    panel_out[i_local * kc + p + 0] = inside ? eff_a_read<T, L>(a, ig, pc + p + 0, trans_a) : T{};
+                    panel_out[i_local * kc + p + 1] = inside ? eff_a_read<T, L>(a, ig, pc + p + 1, trans_a) : T{};
+                    panel_out[i_local * kc + p + 2] = inside ? eff_a_read<T, L>(a, ig, pc + p + 2, trans_a) : T{};
+                    panel_out[i_local * kc + p + 3] = inside ? eff_a_read<T, L>(a, ig, pc + p + 3, trans_a) : T{};
+                }
+            }
+            for (; p < kc; ++p) // remainder columns
             {
                 for (crd::usize i_local = 0; i_local < GemmTraits<T>::MR; ++i_local)
                 {
@@ -136,7 +153,28 @@ inline void pack_b(MatrixView<const T, L> b, crd::usize pc, crd::usize jc, crd::
     {
         const crd::usize col_base = panel * GemmTraits<T>::NR;
         T* panel_out = out + panel * kc * GemmTraits<T>::NR;
-        for (crd::usize p = 0; p < kc; ++p)
+        // 4-way p-INTERLEAVE — for the hot effective-row-major cases (RowMajor/None, ColMajor/adjoint:
+        // the supernodal panels) each effective row p is a contiguous source run; reading rows one at a
+        // time is a single DRAM stream, four interleaved rows are four (the measured 22.7 → 36.9 GB/s
+        // mechanism). Pure copy reordering ⇒ bit-identical packed bytes.
+        crd::usize p = 0;
+        for (; p + 4 <= kc; p += 4)
+        {
+            for (crd::usize j_local = 0; j_local < GemmTraits<T>::NR; ++j_local)
+            {
+                const crd::usize j_global = jc + col_base + j_local;
+                const bool inside = (col_base + j_local) < nc;
+                panel_out[(p + 0) * GemmTraits<T>::NR + j_local] =
+                    inside ? eff_a_read<T, L>(b, pc + p + 0, j_global, trans_b) : T{};
+                panel_out[(p + 1) * GemmTraits<T>::NR + j_local] =
+                    inside ? eff_a_read<T, L>(b, pc + p + 1, j_global, trans_b) : T{};
+                panel_out[(p + 2) * GemmTraits<T>::NR + j_local] =
+                    inside ? eff_a_read<T, L>(b, pc + p + 2, j_global, trans_b) : T{};
+                panel_out[(p + 3) * GemmTraits<T>::NR + j_local] =
+                    inside ? eff_a_read<T, L>(b, pc + p + 3, j_global, trans_b) : T{};
+            }
+        }
+        for (; p < kc; ++p) // remainder rows
         {
             for (crd::usize j_local = 0; j_local < GemmTraits<T>::NR; ++j_local)
             {

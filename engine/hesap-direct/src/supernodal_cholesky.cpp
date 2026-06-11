@@ -342,24 +342,830 @@ template <typename T> [[nodiscard]] inline T solve_dot_conj(const T* a, const T*
     }
 }
 
-// Warm the head of the NEXT column before processing the current one: the solve walks the panel column
-// by column with dead-prefix jumps between them, and each jump restarts the hardware prefetch stream cold
-// (~80 ns × thousands of columns). A pure hint ⇒ zero value change.
-template <typename T> inline void solve_prefetch_col(const T* col, crd::u32 n) noexcept
+// ---- 4-COLUMN-FUSED solve phase kernels (2026-06-11, the multi-stream dig). MEASURED MECHANISM: one
+// sequential read stream tops out at ~22.7 GB/s on this machine while 4 interleaved streams reach
+// ~36.9 GB/s (DRAM bank/page-level parallelism) — exactly how OpenBLAS's dgemv-based CHOLMOD solve hits
+// ~29 GB/s per pass on the IDENTICAL trapezoid (67.87M doubles BOTH sides, computed from both data
+// structures; the old "22% less fill" compared our trapezoid to their rectangle count). Fusing 4 panel
+// columns per pass turns each solve phase into 4 concurrent read streams and cuts the cache-side tmp/x
+// traffic 4×.
+//   · FORWARD fusion is BIT-IDENTICAL: every output element still accumulates its column terms in
+//     ascending-k order with the same mul-then-add/sub per term — only the loop interleaving changes.
+//   · BACKWARD fusion is a NEW fixed deterministic reduction order (2 FMA accumulators per column + a
+//     fixed scalar tail). Serial and level-parallel paths share these helpers BY CONSTRUCTION ⇒ x is
+//     bit-identical across worker counts. Non-f64 keeps the single-column kernels.
+
+// acc[i] += Σ_{k<nc} col_k[i]·y[k] (columns at stride ld) — the forward below-accumulate.
+template <typename T>
+inline void solve_fwd_below_acc(T* acc, const T* panel0, crd::usize ld, crd::u32 nc, const T* y, crd::u32 n) noexcept
 {
-#if CRD_SIMD_HAS_AVX2
-    constexpr crd::u32 lines = 4; // 256 B head — enough to cover the stream-restart latency
-    for (crd::u32 l = 0; l < lines && l * 8 < n; ++l)
+    crd::u32 k = 0;
+    if constexpr (std::is_same_v<T, crd::f64>)
     {
-        dense::detail::gemm_prefetch_t0(col + static_cast<crd::usize>(l) * 8);
+        namespace simd = crd::math::simd;
+        for (; k + 4 <= nc; k += 4)
+        {
+            const T* c0 = panel0 + static_cast<crd::usize>(k + 0) * ld;
+            const T* c1 = panel0 + static_cast<crd::usize>(k + 1) * ld;
+            const T* c2 = panel0 + static_cast<crd::usize>(k + 2) * ld;
+            const T* c3 = panel0 + static_cast<crd::usize>(k + 3) * ld;
+            const simd::Vec4d y0(y[k + 0]);
+            const simd::Vec4d y1(y[k + 1]);
+            const simd::Vec4d y2(y[k + 2]);
+            const simd::Vec4d y3(y[k + 3]);
+            crd::u32 i = 0;
+            for (; i + 8 <= n; i += 8) // two independent chains hide the add latency
+            {
+                simd::Vec4d ta = simd::Vec4d::load(acc + i);
+                simd::Vec4d tb = simd::Vec4d::load(acc + i + 4);
+                ta = ta + simd::Vec4d::load(c0 + i) * y0;
+                tb = tb + simd::Vec4d::load(c0 + i + 4) * y0;
+                ta = ta + simd::Vec4d::load(c1 + i) * y1;
+                tb = tb + simd::Vec4d::load(c1 + i + 4) * y1;
+                ta = ta + simd::Vec4d::load(c2 + i) * y2;
+                tb = tb + simd::Vec4d::load(c2 + i + 4) * y2;
+                ta = ta + simd::Vec4d::load(c3 + i) * y3;
+                tb = tb + simd::Vec4d::load(c3 + i + 4) * y3;
+                ta.store(acc + i);
+                tb.store(acc + i + 4);
+            }
+            for (; i < n; ++i)
+            {
+                acc[i] = ((((acc[i] + c0[i] * y[k + 0]) + c1[i] * y[k + 1]) + c2[i] * y[k + 2]) + c3[i] * y[k + 3]);
+            }
+        }
     }
-#else
-    (void)col;
-    (void)n;
-#endif
+    for (; k < nc; ++k) // remainder columns (and the whole loop for non-f64) — ascending k preserved
+    {
+        solve_acc_plus<T>(acc, panel0 + static_cast<crd::usize>(k) * ld, y[k], n);
+    }
 }
 
-// =======================================================================
+// x[i] −= Σ_{k<nc} col_k[i]·y[k] — the fused-minus twin (the forward diagonal's below-block update).
+template <typename T>
+inline void solve_fwd_apply_minus(T* x, const T* panel0, crd::usize ld, crd::u32 nc, const T* y, crd::u32 n) noexcept
+{
+    crd::u32 k = 0;
+    if constexpr (std::is_same_v<T, crd::f64>)
+    {
+        namespace simd = crd::math::simd;
+        for (; k + 4 <= nc; k += 4)
+        {
+            const T* c0 = panel0 + static_cast<crd::usize>(k + 0) * ld;
+            const T* c1 = panel0 + static_cast<crd::usize>(k + 1) * ld;
+            const T* c2 = panel0 + static_cast<crd::usize>(k + 2) * ld;
+            const T* c3 = panel0 + static_cast<crd::usize>(k + 3) * ld;
+            const simd::Vec4d y0(y[k + 0]);
+            const simd::Vec4d y1(y[k + 1]);
+            const simd::Vec4d y2(y[k + 2]);
+            const simd::Vec4d y3(y[k + 3]);
+            crd::u32 i = 0;
+            for (; i + 8 <= n; i += 8)
+            {
+                simd::Vec4d ta = simd::Vec4d::load(x + i);
+                simd::Vec4d tb = simd::Vec4d::load(x + i + 4);
+                ta = ta - simd::Vec4d::load(c0 + i) * y0;
+                tb = tb - simd::Vec4d::load(c0 + i + 4) * y0;
+                ta = ta - simd::Vec4d::load(c1 + i) * y1;
+                tb = tb - simd::Vec4d::load(c1 + i + 4) * y1;
+                ta = ta - simd::Vec4d::load(c2 + i) * y2;
+                tb = tb - simd::Vec4d::load(c2 + i + 4) * y2;
+                ta = ta - simd::Vec4d::load(c3 + i) * y3;
+                tb = tb - simd::Vec4d::load(c3 + i + 4) * y3;
+                ta.store(x + i);
+                tb.store(x + i + 4);
+            }
+            for (; i < n; ++i)
+            {
+                x[i] = ((((x[i] - c0[i] * y[k + 0]) - c1[i] * y[k + 1]) - c2[i] * y[k + 2]) - c3[i] * y[k + 3]);
+            }
+        }
+    }
+    for (; k < nc; ++k)
+    {
+        solve_axpy_minus<T>(x, panel0 + static_cast<crd::usize>(k) * ld, y[k], n);
+    }
+}
+
+// The forward DIAGONAL triangle solve in 4-column blocks: the in-block recurrence is the exact sequential
+// scalar form; rows below the block receive the block's 4 columns ascending via the fused update ⇒
+// bit-identical for f64; the generic path IS the original per-column loop.
+template <typename T> inline void solve_fwd_diag(T* x, const T* panel, crd::usize ld, crd::u32 nc) noexcept
+{
+    if constexpr (std::is_same_v<T, crd::f64>)
+    {
+        for (crd::u32 j0 = 0; j0 < nc; j0 += 4)
+        {
+            const crd::u32 jb = (j0 + 4 <= nc) ? 4U : (nc - j0);
+            for (crd::u32 jj = j0; jj < j0 + jb; ++jj)
+            {
+                const T yj = x[jj] / panel[static_cast<crd::usize>(jj) * ld + jj];
+                x[jj] = yj;
+                const T* colj = panel + static_cast<crd::usize>(jj) * ld;
+                for (crd::u32 i = jj + 1; i < j0 + jb; ++i)
+                {
+                    x[i] -= colj[i] * yj;
+                }
+            }
+            const crd::u32 rest = nc - (j0 + jb);
+            if (rest > 0)
+            {
+                solve_fwd_apply_minus<T>(x + j0 + jb, panel + static_cast<crd::usize>(j0) * ld + j0 + jb, ld, jb,
+                                         x + j0, rest);
+            }
+        }
+    }
+    else
+    {
+        for (crd::u32 j = 0; j < nc; ++j)
+        {
+            const T yj = x[j] / panel[static_cast<crd::usize>(j) * ld + j];
+            x[j] = yj;
+            solve_axpy_minus<T>(x + j + 1, panel + static_cast<crd::usize>(j) * ld + j + 1, yj, nc - j - 1);
+        }
+    }
+}
+
+// out[k] = Σ_i col_k[i]·b[i] for 4 columns fused (4 read streams; 2 FMA accumulators per column + a fixed
+// scalar tail) — a fixed deterministic reduction order.
+inline void solve_dot4_f64(const crd::f64* c0, const crd::f64* c1, const crd::f64* c2, const crd::f64* c3,
+                           const crd::f64* b, crd::u32 n, crd::f64 out[4]) noexcept
+{
+    namespace simd = crd::math::simd;
+    simd::Vec4d a0l = simd::Vec4d::zero();
+    simd::Vec4d a0h = simd::Vec4d::zero();
+    simd::Vec4d a1l = simd::Vec4d::zero();
+    simd::Vec4d a1h = simd::Vec4d::zero();
+    simd::Vec4d a2l = simd::Vec4d::zero();
+    simd::Vec4d a2h = simd::Vec4d::zero();
+    simd::Vec4d a3l = simd::Vec4d::zero();
+    simd::Vec4d a3h = simd::Vec4d::zero();
+    crd::u32 i = 0;
+    for (; i + 8 <= n; i += 8)
+    {
+        const simd::Vec4d bl = simd::Vec4d::load(b + i);
+        const simd::Vec4d bh = simd::Vec4d::load(b + i + 4);
+        a0l = simd::fma(simd::Vec4d::load(c0 + i), bl, a0l);
+        a0h = simd::fma(simd::Vec4d::load(c0 + i + 4), bh, a0h);
+        a1l = simd::fma(simd::Vec4d::load(c1 + i), bl, a1l);
+        a1h = simd::fma(simd::Vec4d::load(c1 + i + 4), bh, a1h);
+        a2l = simd::fma(simd::Vec4d::load(c2 + i), bl, a2l);
+        a2h = simd::fma(simd::Vec4d::load(c2 + i + 4), bh, a2h);
+        a3l = simd::fma(simd::Vec4d::load(c3 + i), bl, a3l);
+        a3h = simd::fma(simd::Vec4d::load(c3 + i + 4), bh, a3h);
+    }
+    crd::f64 t0 = 0.0;
+    crd::f64 t1 = 0.0;
+    crd::f64 t2 = 0.0;
+    crd::f64 t3 = 0.0;
+    for (; i < n; ++i)
+    {
+        t0 += c0[i] * b[i];
+        t1 += c1[i] * b[i];
+        t2 += c2[i] * b[i];
+        t3 += c3[i] * b[i];
+    }
+    out[0] = simd::horizontal_sum(a0l + a0h) + t0;
+    out[1] = simd::horizontal_sum(a1l + a1h) + t1;
+    out[2] = simd::horizontal_sum(a2l + a2h) + t2;
+    out[3] = simd::horizontal_sum(a3l + a3h) + t3;
+}
+
+// x[k] −= Σ_i conj(col_k[i])·tmp[i] over nc columns — the backward below-block, 4-fused for f64.
+template <typename T>
+inline void solve_back_below(T* x, const T* panel0, crd::usize ld, crd::u32 nc, const T* tmp, crd::u32 below) noexcept
+{
+    crd::u32 k = 0;
+    if constexpr (std::is_same_v<T, crd::f64>)
+    {
+        for (; k + 4 <= nc; k += 4)
+        {
+            crd::f64 d[4];
+            solve_dot4_f64(panel0 + static_cast<crd::usize>(k + 0) * ld, panel0 + static_cast<crd::usize>(k + 1) * ld,
+                           panel0 + static_cast<crd::usize>(k + 2) * ld, panel0 + static_cast<crd::usize>(k + 3) * ld,
+                           tmp, below, d);
+            x[k + 0] -= d[0];
+            x[k + 1] -= d[1];
+            x[k + 2] -= d[2];
+            x[k + 3] -= d[3];
+        }
+    }
+    for (; k < nc; ++k)
+    {
+        x[k] -= solve_dot_conj<T>(panel0 + static_cast<crd::usize>(k) * ld, tmp, below);
+    }
+}
+
+// The backward DIAGONAL solve (Lᴴ, columns descending) in 4-column blocks: the block's FAR dots (against
+// the already-final x below it) run 4-fused, then the in-block descending recurrence adds the near terms —
+// v = (x_j − near…) − far_j is the fixed deterministic order.
+template <typename T> inline void solve_back_diag(T* x, const T* panel, crd::usize ld, crd::u32 nc) noexcept
+{
+    if constexpr (std::is_same_v<T, crd::f64>)
+    {
+        if (nc == 0)
+        {
+            return;
+        }
+        crd::u32 q = ((nc - 1) / 4) * 4; // the top (possibly partial) block start, descending
+        for (;;)
+        {
+            const crd::u32 qb = ((q + 4 <= nc) ? 4U : (nc - q));
+            const crd::u32 far0 = q + qb; // rows below the block (already final)
+            crd::f64 far[4] = {0.0, 0.0, 0.0, 0.0};
+            if (far0 < nc)
+            {
+                if (qb == 4)
+                {
+                    solve_dot4_f64(panel + static_cast<crd::usize>(q + 0) * ld + far0,
+                                   panel + static_cast<crd::usize>(q + 1) * ld + far0,
+                                   panel + static_cast<crd::usize>(q + 2) * ld + far0,
+                                   panel + static_cast<crd::usize>(q + 3) * ld + far0, x + far0, nc - far0, far);
+                }
+                else
+                {
+                    for (crd::u32 t = 0; t < qb; ++t)
+                    {
+                        far[t] =
+                            solve_dot_conj<T>(panel + static_cast<crd::usize>(q + t) * ld + far0, x + far0, nc - far0);
+                    }
+                }
+            }
+            for (crd::u32 jj = q + qb; jj-- > q;)
+            {
+                const T* coljj = panel + static_cast<crd::usize>(jj) * ld;
+                T v = x[jj];
+                for (crd::u32 kk = jj + 1; kk < q + qb; ++kk) // near terms (within the block)
+                {
+                    v -= coljj[kk] * x[kk];
+                }
+                v -= far[jj - q];
+                x[jj] = v / coljj[jj];
+            }
+            if (q == 0)
+            {
+                break;
+            }
+            q -= 4;
+        }
+    }
+    else
+    {
+        for (crd::u32 jj = nc; jj-- > 0;)
+        {
+            const T* coljj = panel + static_cast<crd::usize>(jj) * ld;
+            const T v = x[jj] - solve_dot_conj<T>(coljj + jj + 1, x + jj + 1, nc - jj - 1);
+            x[jj] = v / coljj[jj];
+        }
+    }
+}
+
+// Single-rounded scalar fma matching the SIMD kernels' per-lane op (tail elements must carry the same
+// rounding as their vectorized siblings to preserve the gemm-path bit-identity contract).
+template <typename T> inline T solve_fma1(T a, T b, T c) noexcept
+{
+    if constexpr (std::is_same_v<T, crd::f64>)
+    {
+        namespace simd = crd::math::simd;
+        T out[4];
+        simd::fma(simd::Vec4d(a), simd::Vec4d(b), simd::Vec4d(c)).store(out);
+        return out[0];
+    }
+    else
+    {
+        return a * b + c;
+    }
+}
+
+// ---- MULTI-RHS solve block kernels (2026-06-11, the x16 dig). The multi-RHS paths ran ONE dense::gemm
+// per supernode per pass (~2·nsuper calls): each call pays allocator + pack + driver setup — overhead-
+// dominated on the thousands of tiny supernodes — and the cold packs were single-stream. These hand
+// kernels are allocation-free, pack-free, 4-fused (4 concurrent column streams, the measured 22.7 →
+// 36.9 GB/s DRAM mechanism) and keep the EXACT per-element fma chains of the gemm path (k-ascending,
+// zero-init, single sweep — vectorization only across INDEPENDENT elements) ⇒ BIT-IDENTICAL to
+// dense::gemm for K ≤ kGemmKc, which is the dispatch gate (bigger K keeps dense::gemm, identical values
+// via its Kc-chunks... those have K > kGemmKc and stay on the gemm path entirely).
+
+// tm (ColMajor below×nrhs, ld=below) := Σ_{k<nc} col_k ⊗ y(k,:) — the forward below-update block.
+// y is ColMajor (ldy = the RHS leading dim). Requires nc ≤ kGemmKc for the bit-identity contract.
+template <typename T>
+inline void solve_mrhs_fwd_below(T* tm, const T* panel0, crd::usize ld, crd::u32 nc, const T* y, crd::usize ldy,
+                                 crd::u32 below, crd::usize nrhs) noexcept
+{
+    for (crd::usize c = 0; c < nrhs; ++c) // zero-init (the gemm path's beta=0 store)
+    {
+        T* tc = tm + c * below;
+        for (crd::u32 r = 0; r < below; ++r)
+        {
+            tc[r] = T{0};
+        }
+    }
+    if constexpr (std::is_same_v<T, crd::f64>)
+    {
+        namespace simd = crd::math::simd;
+        // r-BLOCKED: the tm block (rblk x nrhs) stays cache-resident across ALL k while each panel
+        // column streams exactly once; the per-element k-ascending fma chain is unchanged (f64 memory
+        // roundtrips between blocks are exact) => bit-identical at any block size.
+        constexpr crd::u32 rblk = 256;
+        for (crd::u32 r0 = 0; r0 < below; r0 += rblk)
+        {
+            const crd::u32 r1 = (r0 + rblk <= below) ? (r0 + rblk) : below;
+            crd::u32 k = 0;
+            for (; k + 4 <= nc; k += 4) // 4 fused column streams
+            {
+                const T* c0 = panel0 + static_cast<crd::usize>(k + 0) * ld;
+                const T* c1 = panel0 + static_cast<crd::usize>(k + 1) * ld;
+                const T* c2 = panel0 + static_cast<crd::usize>(k + 2) * ld;
+                const T* c3 = panel0 + static_cast<crd::usize>(k + 3) * ld;
+                for (crd::usize c = 0; c < nrhs; ++c)
+                {
+                    const simd::Vec4d y0(y[(k + 0) + c * ldy]);
+                    const simd::Vec4d y1(y[(k + 1) + c * ldy]);
+                    const simd::Vec4d y2(y[(k + 2) + c * ldy]);
+                    const simd::Vec4d y3(y[(k + 3) + c * ldy]);
+                    T* tc = tm + c * below;
+                    crd::u32 r = r0;
+                    for (; r + 8 <= r1; r += 8) // two independent chains hide the fma latency
+                    {
+                        simd::Vec4d ta = simd::Vec4d::load(tc + r);
+                        simd::Vec4d tb = simd::Vec4d::load(tc + r + 4);
+                        ta = simd::fma(simd::Vec4d::load(c0 + r), y0, ta); // k-ascending fma chain
+                        tb = simd::fma(simd::Vec4d::load(c0 + r + 4), y0, tb);
+                        ta = simd::fma(simd::Vec4d::load(c1 + r), y1, ta);
+                        tb = simd::fma(simd::Vec4d::load(c1 + r + 4), y1, tb);
+                        ta = simd::fma(simd::Vec4d::load(c2 + r), y2, ta);
+                        tb = simd::fma(simd::Vec4d::load(c2 + r + 4), y2, tb);
+                        ta = simd::fma(simd::Vec4d::load(c3 + r), y3, ta);
+                        tb = simd::fma(simd::Vec4d::load(c3 + r + 4), y3, tb);
+                        ta.store(tc + r);
+                        tb.store(tc + r + 4);
+                    }
+                    for (; r + 4 <= r1; r += 4)
+                    {
+                        simd::Vec4d t = simd::Vec4d::load(tc + r);
+                        t = simd::fma(simd::Vec4d::load(c0 + r), y0, t);
+                        t = simd::fma(simd::Vec4d::load(c1 + r), y1, t);
+                        t = simd::fma(simd::Vec4d::load(c2 + r), y2, t);
+                        t = simd::fma(simd::Vec4d::load(c3 + r), y3, t);
+                        t.store(tc + r);
+                    }
+                    for (; r < r1; ++r)
+                    {
+                        T t = tc[r];
+                        t = solve_fma1<T>(c0[r], y[(k + 0) + c * ldy], t);
+                        t = solve_fma1<T>(c1[r], y[(k + 1) + c * ldy], t);
+                        t = solve_fma1<T>(c2[r], y[(k + 2) + c * ldy], t);
+                        t = solve_fma1<T>(c3[r], y[(k + 3) + c * ldy], t);
+                        tc[r] = t;
+                    }
+                }
+            }
+            for (; k < nc; ++k) // remainder columns
+            {
+                const T* ck = panel0 + static_cast<crd::usize>(k) * ld;
+                for (crd::usize c = 0; c < nrhs; ++c)
+                {
+                    const simd::Vec4d yk(y[k + c * ldy]);
+                    T* tc = tm + c * below;
+                    crd::u32 r = r0;
+                    for (; r + 4 <= r1; r += 4)
+                    {
+                        simd::fma(simd::Vec4d::load(ck + r), yk, simd::Vec4d::load(tc + r)).store(tc + r);
+                    }
+                    for (; r < r1; ++r)
+                    {
+                        tc[r] = solve_fma1<T>(ck[r], y[k + c * ldy], tc[r]);
+                    }
+                }
+            }
+        }
+    }
+    else
+    {
+        for (crd::u32 k = 0; k < nc; ++k)
+        {
+            const T* ck = panel0 + static_cast<crd::usize>(k) * ld;
+            for (crd::usize c = 0; c < nrhs; ++c)
+            {
+                const T yk = y[k + c * ldy];
+                T* tc = tm + c * below;
+                for (crd::u32 r = 0; r < below; ++r)
+                {
+                    tc[r] += ck[r] * yk;
+                }
+            }
+        }
+    }
+}
+
+// y(k,c) −= Σ_{r<below} conj(col_k[r])·wt(r,c) — the backward below-update block. wt is ROW-major
+// (below×nrhs, ld=nrhs: the gather writes it that way) so a row's RHS values are contiguous; each
+// y-element keeps a sequential r-ascending fma chain (lanes = independent RHS columns) ⇒ bit-identical
+// to the gemm path for below ≤ kGemmKc (the dispatch gate).
+template <typename T>
+inline void solve_mrhs_back_below(T* y, crd::usize ldy, const T* panel0, crd::usize ld, crd::u32 nc, const T* wt,
+                                  crd::u32 below, crd::usize nrhs, T* acc) noexcept
+{
+    if constexpr (std::is_same_v<T, crd::f64>)
+    {
+        namespace simd = crd::math::simd;
+        // r-BLOCKED accumulation into `acc` (nc x nrhs RowMajor): the wt block and acc stay cache-
+        // resident while each panel column streams exactly once; per-element r-ascending fma chains
+        // continue across blocks through exact f64 memory roundtrips => deterministic fixed order.
+        constexpr crd::u32 rblk = 256;
+        for (crd::u32 k = 0; k < nc; ++k)
+        {
+            T* ak = acc + static_cast<crd::usize>(k) * nrhs;
+            for (crd::usize c = 0; c < nrhs; ++c)
+            {
+                ak[c] = T{0};
+            }
+        }
+        for (crd::u32 r0 = 0; r0 < below; r0 += rblk)
+        {
+            const crd::u32 r1 = (r0 + rblk <= below) ? (r0 + rblk) : below;
+            crd::u32 k = 0;
+            for (; k + 8 <= nc; k += 8) // 8 fused column streams = 8 independent fma chains
+            {
+                const T* cp[8];
+                T* ap[8];
+                for (crd::u32 t = 0; t < 8; ++t)
+                {
+                    cp[t] = panel0 + static_cast<crd::usize>(k + t) * ld;
+                    ap[t] = acc + static_cast<crd::usize>(k + t) * nrhs;
+                }
+                crd::usize c = 0;
+                for (; c + 4 <= nrhs; c += 4)
+                {
+                    simd::Vec4d a0 = simd::Vec4d::load(ap[0] + c);
+                    simd::Vec4d a1 = simd::Vec4d::load(ap[1] + c);
+                    simd::Vec4d a2 = simd::Vec4d::load(ap[2] + c);
+                    simd::Vec4d a3 = simd::Vec4d::load(ap[3] + c);
+                    simd::Vec4d a4 = simd::Vec4d::load(ap[4] + c);
+                    simd::Vec4d a5 = simd::Vec4d::load(ap[5] + c);
+                    simd::Vec4d a6 = simd::Vec4d::load(ap[6] + c);
+                    simd::Vec4d a7 = simd::Vec4d::load(ap[7] + c);
+                    for (crd::u32 r = r0; r < r1; ++r)
+                    {
+                        const simd::Vec4d wrow = simd::Vec4d::load(wt + static_cast<crd::usize>(r) * nrhs + c);
+                        a0 = simd::fma(simd::Vec4d(cp[0][r]), wrow, a0);
+                        a1 = simd::fma(simd::Vec4d(cp[1][r]), wrow, a1);
+                        a2 = simd::fma(simd::Vec4d(cp[2][r]), wrow, a2);
+                        a3 = simd::fma(simd::Vec4d(cp[3][r]), wrow, a3);
+                        a4 = simd::fma(simd::Vec4d(cp[4][r]), wrow, a4);
+                        a5 = simd::fma(simd::Vec4d(cp[5][r]), wrow, a5);
+                        a6 = simd::fma(simd::Vec4d(cp[6][r]), wrow, a6);
+                        a7 = simd::fma(simd::Vec4d(cp[7][r]), wrow, a7);
+                    }
+                    a0.store(ap[0] + c);
+                    a1.store(ap[1] + c);
+                    a2.store(ap[2] + c);
+                    a3.store(ap[3] + c);
+                    a4.store(ap[4] + c);
+                    a5.store(ap[5] + c);
+                    a6.store(ap[6] + c);
+                    a7.store(ap[7] + c);
+                }
+                for (; c < nrhs; ++c)
+                {
+                    for (crd::u32 t = 0; t < 8; ++t)
+                    {
+                        T s = ap[t][c];
+                        for (crd::u32 r = r0; r < r1; ++r)
+                        {
+                            s = solve_fma1<T>(cp[t][r], wt[static_cast<crd::usize>(r) * nrhs + c], s);
+                        }
+                        ap[t][c] = s;
+                    }
+                }
+            }
+            for (; k + 4 <= nc; k += 4) // 4 fused column streams
+            {
+                const T* c0 = panel0 + static_cast<crd::usize>(k + 0) * ld;
+                const T* c1 = panel0 + static_cast<crd::usize>(k + 1) * ld;
+                const T* c2 = panel0 + static_cast<crd::usize>(k + 2) * ld;
+                const T* c3 = panel0 + static_cast<crd::usize>(k + 3) * ld;
+                T* a0p = acc + static_cast<crd::usize>(k + 0) * nrhs;
+                T* a1p = acc + static_cast<crd::usize>(k + 1) * nrhs;
+                T* a2p = acc + static_cast<crd::usize>(k + 2) * nrhs;
+                T* a3p = acc + static_cast<crd::usize>(k + 3) * nrhs;
+                crd::usize c = 0;
+                for (; c + 4 <= nrhs; c += 4)
+                {
+                    simd::Vec4d a0 = simd::Vec4d::load(a0p + c);
+                    simd::Vec4d a1 = simd::Vec4d::load(a1p + c);
+                    simd::Vec4d a2 = simd::Vec4d::load(a2p + c);
+                    simd::Vec4d a3 = simd::Vec4d::load(a3p + c);
+                    for (crd::u32 r = r0; r < r1; ++r)
+                    {
+                        const simd::Vec4d wrow = simd::Vec4d::load(wt + static_cast<crd::usize>(r) * nrhs + c);
+                        a0 = simd::fma(simd::Vec4d(c0[r]), wrow, a0);
+                        a1 = simd::fma(simd::Vec4d(c1[r]), wrow, a1);
+                        a2 = simd::fma(simd::Vec4d(c2[r]), wrow, a2);
+                        a3 = simd::fma(simd::Vec4d(c3[r]), wrow, a3);
+                    }
+                    a0.store(a0p + c);
+                    a1.store(a1p + c);
+                    a2.store(a2p + c);
+                    a3.store(a3p + c);
+                }
+                for (; c < nrhs; ++c)
+                {
+                    T s0 = a0p[c];
+                    T s1 = a1p[c];
+                    T s2 = a2p[c];
+                    T s3 = a3p[c];
+                    for (crd::u32 r = r0; r < r1; ++r)
+                    {
+                        const T w = wt[static_cast<crd::usize>(r) * nrhs + c];
+                        s0 = solve_fma1<T>(c0[r], w, s0);
+                        s1 = solve_fma1<T>(c1[r], w, s1);
+                        s2 = solve_fma1<T>(c2[r], w, s2);
+                        s3 = solve_fma1<T>(c3[r], w, s3);
+                    }
+                    a0p[c] = s0;
+                    a1p[c] = s1;
+                    a2p[c] = s2;
+                    a3p[c] = s3;
+                }
+            }
+            for (; k < nc; ++k)
+            {
+                const T* ck = panel0 + static_cast<crd::usize>(k) * ld;
+                T* akp = acc + static_cast<crd::usize>(k) * nrhs;
+                for (crd::usize c = 0; c < nrhs; ++c)
+                {
+                    T s = akp[c];
+                    for (crd::u32 r = r0; r < r1; ++r)
+                    {
+                        s = solve_fma1<T>(ck[r], wt[static_cast<crd::usize>(r) * nrhs + c], s);
+                    }
+                    akp[c] = s;
+                }
+            }
+        }
+        for (crd::u32 k = 0; k < nc; ++k) // one subtract per element, after the full reduction
+        {
+            const T* akp = acc + static_cast<crd::usize>(k) * nrhs;
+            for (crd::usize c = 0; c < nrhs; ++c)
+            {
+                y[k + c * ldy] -= akp[c];
+            }
+        }
+    }
+    else
+    {
+        (void)acc;
+        for (crd::u32 k = 0; k < nc; ++k)
+        {
+            const T* ck = panel0 + static_cast<crd::usize>(k) * ld;
+            for (crd::usize c = 0; c < nrhs; ++c)
+            {
+                T s{};
+                for (crd::u32 r = 0; r < below; ++r)
+                {
+                    s += chol_conj<T>(ck[r]) * wt[static_cast<crd::usize>(r) * nrhs + c];
+                }
+                y[k + c * ldy] -= s;
+            }
+        }
+    }
+}
+
+// dscr (ROW-major nc x nrhs) forward diagonal solve, 4-column-blocked: the in-block recurrence keeps the
+// exact sequential op order; rows below the block receive the 4 columns' contributions ascending with the
+// same mul-then-sub per term => BIT-IDENTICAL to the unblocked batched loop, with the dscr rmw traffic
+// cut 4x and the L-columns read as 4 concurrent streams. Shared by the serial and level-parallel paths.
+template <typename T>
+inline void solve_mrhs_fwd_diag(T* d, crd::usize nrhs, const T* panel, crd::usize ld, crd::u32 nc) noexcept
+{
+    if constexpr (std::is_same_v<T, crd::f64>)
+    {
+        namespace simd = crd::math::simd;
+        for (crd::u32 j0 = 0; j0 < nc; j0 += 4)
+        {
+            const crd::u32 jb = (j0 + 4 <= nc) ? 4U : (nc - j0);
+            for (crd::u32 jj = j0; jj < j0 + jb; ++jj) // exact sequential recurrence within the block
+            {
+                const T ljj = panel[static_cast<crd::usize>(jj) * ld + jj];
+                T* djj = d + static_cast<crd::usize>(jj) * nrhs;
+                for (crd::usize c = 0; c < nrhs; ++c)
+                {
+                    djj[c] = djj[c] / ljj;
+                }
+                const T* colj = panel + static_cast<crd::usize>(jj) * ld;
+                for (crd::u32 i = jj + 1; i < j0 + jb; ++i)
+                {
+                    const T lij = colj[i];
+                    T* di = d + static_cast<crd::usize>(i) * nrhs;
+                    for (crd::usize c = 0; c < nrhs; ++c)
+                    {
+                        di[c] -= lij * djj[c];
+                    }
+                }
+            }
+            const T* c0 = panel + static_cast<crd::usize>(j0 + 0) * ld;
+            const T* c1 = panel + static_cast<crd::usize>(j0 + 1) * ld;
+            const T* c2 = panel + static_cast<crd::usize>(j0 + 2) * ld;
+            const T* c3 = panel + static_cast<crd::usize>(j0 + 3) * ld;
+            const T* d0 = d + static_cast<crd::usize>(j0 + 0) * nrhs;
+            const T* d1 = d + static_cast<crd::usize>(j0 + 1) * nrhs;
+            const T* d2 = d + static_cast<crd::usize>(j0 + 2) * nrhs;
+            const T* d3 = d + static_cast<crd::usize>(j0 + 3) * nrhs;
+            if (jb == 4) // fused 4-stream update of the rows below the block (ascending j per element)
+            {
+                for (crd::usize ct = 0; ct < nrhs; ct += 8) // RHS tile of 8 (clamped below)
+                {
+                    const crd::usize cw = (ct + 8 <= nrhs) ? 8 : (nrhs - ct);
+                    if (cw == 8)
+                    {
+                        const simd::Vec4d y0a = simd::Vec4d::load(d0 + ct);
+                        const simd::Vec4d y0b = simd::Vec4d::load(d0 + ct + 4);
+                        const simd::Vec4d y1a = simd::Vec4d::load(d1 + ct);
+                        const simd::Vec4d y1b = simd::Vec4d::load(d1 + ct + 4);
+                        const simd::Vec4d y2a = simd::Vec4d::load(d2 + ct);
+                        const simd::Vec4d y2b = simd::Vec4d::load(d2 + ct + 4);
+                        const simd::Vec4d y3a = simd::Vec4d::load(d3 + ct);
+                        const simd::Vec4d y3b = simd::Vec4d::load(d3 + ct + 4);
+                        for (crd::u32 i = j0 + 4; i < nc; ++i)
+                        {
+                            T* di = d + static_cast<crd::usize>(i) * nrhs + ct;
+                            simd::Vec4d ta = simd::Vec4d::load(di);
+                            simd::Vec4d tb = simd::Vec4d::load(di + 4);
+                            const simd::Vec4d l0(c0[i]);
+                            ta = ta - l0 * y0a;
+                            tb = tb - l0 * y0b;
+                            const simd::Vec4d l1(c1[i]);
+                            ta = ta - l1 * y1a;
+                            tb = tb - l1 * y1b;
+                            const simd::Vec4d l2(c2[i]);
+                            ta = ta - l2 * y2a;
+                            tb = tb - l2 * y2b;
+                            const simd::Vec4d l3(c3[i]);
+                            ta = ta - l3 * y3a;
+                            tb = tb - l3 * y3b;
+                            ta.store(di);
+                            tb.store(di + 4);
+                        }
+                    }
+                    else
+                    {
+                        for (crd::u32 i = j0 + 4; i < nc; ++i)
+                        {
+                            T* di = d + static_cast<crd::usize>(i) * nrhs;
+                            for (crd::usize c = ct; c < ct + cw; ++c)
+                            {
+                                di[c] = (((di[c] - c0[i] * d0[c]) - c1[i] * d1[c]) - c2[i] * d2[c]) - c3[i] * d3[c];
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    else
+    {
+        for (crd::u32 j = 0; j < nc; ++j)
+        {
+            const T ljj = panel[static_cast<crd::usize>(j) * ld + j];
+            T* dj = d + static_cast<crd::usize>(j) * nrhs;
+            for (crd::usize c = 0; c < nrhs; ++c)
+            {
+                dj[c] = dj[c] / ljj;
+            }
+            const T* colj = panel + static_cast<crd::usize>(j) * ld;
+            for (crd::u32 i = j + 1; i < nc; ++i)
+            {
+                const T lij = colj[i];
+                T* di = d + static_cast<crd::usize>(i) * nrhs;
+                for (crd::usize c = 0; c < nrhs; ++c)
+                {
+                    di[c] -= lij * dj[c];
+                }
+            }
+        }
+    }
+}
+
+// dscr (ROW-major nc x nrhs) backward diagonal solve (L^H upper, columns descending), 4-column-blocked:
+// per block, the FAR sums (k >= block end, rows already final) are subtracted into the block rows first
+// (4 fused L-column streams, per-element sequential k-ascending fma chains), then the exact in-block
+// descending recurrence runs. Fixed deterministic order; shared by the serial and parallel paths.
+template <typename T>
+inline void solve_mrhs_back_diag(T* d, crd::usize nrhs, const T* panel, crd::usize ld, crd::u32 nc) noexcept
+{
+    if constexpr (std::is_same_v<T, crd::f64>)
+    {
+        namespace simd = crd::math::simd;
+        if (nc == 0)
+        {
+            return;
+        }
+        crd::u32 q = ((nc - 1) / 4) * 4;
+        for (;;)
+        {
+            const crd::u32 qb = ((q + 4 <= nc) ? 4U : (nc - q));
+            const crd::u32 far0 = q + qb;
+            if (far0 < nc) // FAR: d_row(jj) -= sum_{k>=far0} conj(L[k][jj]) * d_row(k), 4 jj fused
+            {
+                const T* cc[4] = {
+                    panel + static_cast<crd::usize>(q + 0) * ld, panel + static_cast<crd::usize>(q + 1) * ld,
+                    panel + static_cast<crd::usize>(q + 2) * ld, panel + static_cast<crd::usize>(q + 3) * ld};
+                for (crd::usize ct = 0; ct < nrhs; ct += 4)
+                {
+                    const crd::usize cw = (ct + 4 <= nrhs) ? 4 : (nrhs - ct);
+                    if (cw == 4 && qb == 4)
+                    {
+                        simd::Vec4d a0 = simd::Vec4d::zero();
+                        simd::Vec4d a1 = simd::Vec4d::zero();
+                        simd::Vec4d a2 = simd::Vec4d::zero();
+                        simd::Vec4d a3 = simd::Vec4d::zero();
+                        for (crd::u32 k = far0; k < nc; ++k)
+                        {
+                            const simd::Vec4d dk = simd::Vec4d::load(d + static_cast<crd::usize>(k) * nrhs + ct);
+                            a0 = simd::fma(simd::Vec4d(cc[0][k]), dk, a0);
+                            a1 = simd::fma(simd::Vec4d(cc[1][k]), dk, a1);
+                            a2 = simd::fma(simd::Vec4d(cc[2][k]), dk, a2);
+                            a3 = simd::fma(simd::Vec4d(cc[3][k]), dk, a3);
+                        }
+                        (simd::Vec4d::load(d + static_cast<crd::usize>(q + 0) * nrhs + ct) - a0)
+                            .store(d + static_cast<crd::usize>(q + 0) * nrhs + ct);
+                        (simd::Vec4d::load(d + static_cast<crd::usize>(q + 1) * nrhs + ct) - a1)
+                            .store(d + static_cast<crd::usize>(q + 1) * nrhs + ct);
+                        (simd::Vec4d::load(d + static_cast<crd::usize>(q + 2) * nrhs + ct) - a2)
+                            .store(d + static_cast<crd::usize>(q + 2) * nrhs + ct);
+                        (simd::Vec4d::load(d + static_cast<crd::usize>(q + 3) * nrhs + ct) - a3)
+                            .store(d + static_cast<crd::usize>(q + 3) * nrhs + ct);
+                    }
+                    else
+                    {
+                        for (crd::u32 t = 0; t < qb; ++t)
+                        {
+                            for (crd::usize c = ct; c < ct + cw; ++c)
+                            {
+                                T s{};
+                                const T* col = panel + static_cast<crd::usize>(q + t) * ld;
+                                for (crd::u32 k = far0; k < nc; ++k)
+                                {
+                                    s = solve_fma1<T>(col[k], d[static_cast<crd::usize>(k) * nrhs + c], s);
+                                }
+                                d[static_cast<crd::usize>(q + t) * nrhs + c] -= s;
+                            }
+                        }
+                    }
+                }
+            }
+            for (crd::u32 jj = q + qb; jj-- > q;) // exact in-block descending recurrence (near terms)
+            {
+                const T* coljj = panel + static_cast<crd::usize>(jj) * ld;
+                T* djj = d + static_cast<crd::usize>(jj) * nrhs;
+                for (crd::u32 k = jj + 1; k < q + qb; ++k)
+                {
+                    const T lk = coljj[k];
+                    const T* dk = d + static_cast<crd::usize>(k) * nrhs;
+                    for (crd::usize c = 0; c < nrhs; ++c)
+                    {
+                        djj[c] -= lk * dk[c];
+                    }
+                }
+                const T ljj = coljj[jj];
+                for (crd::usize c = 0; c < nrhs; ++c)
+                {
+                    djj[c] = djj[c] / ljj;
+                }
+            }
+            if (q == 0)
+            {
+                break;
+            }
+            q -= 4;
+        }
+    }
+    else
+    {
+        for (crd::u32 jj = nc; jj-- > 0;)
+        {
+            const T* coljj = panel + static_cast<crd::usize>(jj) * ld;
+            T* djj = d + static_cast<crd::usize>(jj) * nrhs;
+            for (crd::u32 k = jj + 1; k < nc; ++k)
+            {
+                const T lk = chol_conj<T>(coljj[k]);
+                const T* dk = d + static_cast<crd::usize>(k) * nrhs;
+                for (crd::usize c = 0; c < nrhs; ++c)
+                {
+                    djj[c] -= lk * dk[c];
+                }
+            }
+            const T ljj = coljj[jj];
+            for (crd::usize c = 0; c < nrhs; ++c)
+            {
+                djj[c] = djj[c] / ljj;
+            }
+        }
+    }
+}
+
+// =====================================================================
 // v5a-1b step 1 — relaxed supernode amalgamation (D(direct)-2).
 //
 // Builds the amalgamated supernodal structure from a v2c SymbolicFactor.
@@ -1951,7 +2757,7 @@ template <typename T> bool SupernodalCholesky<T>::solve(crd::containers::Span<T>
     // solve_with_workers still honors a forced nw, so the determinism moat test can exercise the parallel
     // path on any matrix regardless of this gate (parallel ≡ serial bit-identically by construction).
     constexpr crd::u64 solve_parallel_min_work = 160'000'000; // lnz·nrhs break-even (≈ lat20×16..lat24×16)
-    constexpr crd::u32 solve_max_workers = 8;                // memory-saturation cap (i9-14900K measured)
+    constexpr crd::u32 solve_max_workers = 8;                 // memory-saturation cap (i9-14900K measured)
     crd::u32 nw = 1U;
     if (nrhs > 1 && static_cast<crd::u64>(m_lnz) * nrhs >= solve_parallel_min_work)
     {
@@ -2003,14 +2809,7 @@ bool SupernodalCholesky<T>::solve_with_workers(crd::containers::Span<T> rhs, crd
             const crd::u32 firstcol = sym.scol[s];
             const crd::u32 nc = sym.scol[s + 1] - firstcol;
             const T* panel = &m_lx[m_lxp[s]];
-            for (crd::u32 j = 0; j < nc; ++j) // right-looking: contiguous column axpy on the ColMajor panel
-            {
-                const T yj = x[firstcol + j] / panel[static_cast<crd::usize>(j) * nr + j];
-                x[firstcol + j] = yj;
-                const T* colj = panel + static_cast<crd::usize>(j) * nr;
-                solve_prefetch_col<T>(colj + nr + j + 1, nc - j - 1); // warm col j+1's head across the jump
-                solve_axpy_minus<T>(x + firstcol + j + 1, colj + j + 1, yj, nc - j - 1); // bit-identical map
-            }
+            solve_fwd_diag<T>(x + firstcol, panel, nr, nc); // 4-col-blocked, bit-identical
             const crd::u32 below = nr - nc;
             if (below > 0)
             {
@@ -2018,13 +2817,7 @@ bool SupernodalCholesky<T>::solve_with_workers(crd::containers::Span<T> rhs, crd
                 {
                     tmp[r] = T{0};
                 }
-                for (crd::u32 k = 0; k < nc; ++k)
-                {
-                    const T yk = x[firstcol + k];
-                    const T* colk = panel + static_cast<crd::usize>(k) * nr + nc;
-                    solve_prefetch_col<T>(colk + nr, below);        // warm col k+1's below segment
-                    solve_acc_plus<T>(tmp.data(), colk, yk, below); // bit-identical map
-                }
+                solve_fwd_below_acc<T>(tmp.data(), panel + nc, nr, nc, x + firstcol, below); // 4-stream fused
                 for (crd::u32 r = 0; r < below; ++r)
                 {
                     x[sym.srow[rb + nc + r]] -= tmp[r];
@@ -2045,28 +2838,16 @@ bool SupernodalCholesky<T>::solve_with_workers(crd::containers::Span<T> rhs, crd
                 {
                     tmp[r] = x[sym.srow[rb + nc + r]];
                 }
-                for (crd::u32 k = 0; k < nc; ++k)
-                {
-                    const T* colk = panel + static_cast<crd::usize>(k) * nr + nc;
-                    solve_prefetch_col<T>(colk + nr, below);                       // warm col k+1's below segment
-                    x[firstcol + k] -= solve_dot_conj<T>(colk, tmp.data(), below); // Lᴴ entry = conj(L)
-                }
+                solve_back_below<T>(x + firstcol, panel + nc, nr, nc, tmp.data(), below); // 4-stream fused dots
             }
-            for (crd::u32 jj = nc; jj-- > 0;)
-            {
-                const T* coljj = panel + static_cast<crd::usize>(jj) * nr;
-                if (jj > 0) // warm col jj−1's diag segment (the backward walks columns DESCENDING)
-                {
-                    solve_prefetch_col<T>(coljj - nr + jj, nc - jj);
-                }
-                const T v = x[firstcol + jj] -
-                            solve_dot_conj<T>(coljj + jj + 1, x + firstcol + jj + 1, nc - jj - 1); // Lᴴ = conj(L)
-                x[firstcol + jj] = v / coljj[jj]; // coljj[jj] = L[jj][jj] is real
-            }
+            solve_back_diag<T>(x + firstcol, panel, nr, nc); // 4-col-blocked descending
         }
         return true;
     }
 
+    if (nrhs > 1)
+    {
+    }
     // Multi-RHS: column-major n × nrhs, ld = m_n. `nw` (caller-forced, = num_workers() in the public solve)
     // selects the path: nw>1 ⇒ level-PARALLEL race-free LEFT-looking (each supernode writes only its own
     // columns — the forward gathers from descendants ascending, the backward from ancestors descending);
@@ -2139,24 +2920,14 @@ bool SupernodalCholesky<T>::solve_with_workers(crd::containers::Span<T> rhs, crd
                 {
                     wdscr[i] = T{0};
                 }
-                for (crd::u32 j = 0; j < knc; ++j) // sum descendant k's columns ascending (== dedicated)
-                {
-                    const T yj = xb[kfirstcol + j];
-                    const T* col = kpanel + static_cast<crd::usize>(j) * knr + p0;
-                    solve_acc_plus<T>(wdscr, col, yj, m1); // the SAME bit-identical map as the serial path
-                }
+                // The SAME fused kernel as the serial path (ascending descendant-columns ⇒ bit-identical).
+                solve_fwd_below_acc<T>(wdscr, kpanel + p0, knr, knc, xb + kfirstcol, m1);
                 for (crd::u32 i = 0; i < m1; ++i)
                 {
                     xb[sym.srow[krb + p0 + i]] -= wdscr[i];
                 }
             }
-            for (crd::u32 j = 0; j < nc; ++j) // diagonal forward solve: right-looking contiguous column axpy
-            {
-                const T yj = xb[firstcol + j] / panel[static_cast<crd::usize>(j) * nr + j];
-                xb[firstcol + j] = yj;
-                const T* colj = panel + static_cast<crd::usize>(j) * nr;
-                solve_axpy_minus<T>(xb + firstcol + j + 1, colj + j + 1, yj, nc - j - 1);
-            }
+            solve_fwd_diag<T>(xb + firstcol, panel, nr, nc); // the shared 4-col-blocked diagonal solve
             return;
         }
         for (crd::u32 ui = m_upd_ptr[s]; ui < m_upd_ptr[s + 1]; ++ui) // gather from descendants (k-ascending)
@@ -2193,11 +2964,7 @@ bool SupernodalCholesky<T>::solve_with_workers(crd::containers::Span<T> rhs, crd
             }
             // C(m1×nrhs, ColMajor ld=m1) = kpanel[p0.., :knc] (m1×knc) · Y_k(knc×nrhs). Forward uses L
             // (NOT Lᴴ — the conj is the backward's); here None/None. wdscr holds C (consumed before diag).
-            const dense::MatrixView<const T, dense::Layout::ColMajor> akv(kpanel + p0, m1, knc, knr);
-            const dense::MatrixView<const T, dense::Layout::ColMajor> ykv(xb + kfirstcol, knc, nrhs, ldx);
-            const dense::MatrixView<T, dense::Layout::ColMajor> cv(wdscr, m1, nrhs, m1);
-            dense::gemm<T, dense::Layout::ColMajor>(T{1}, akv, ykv, T{0}, cv, dense::Trans::None, dense::Trans::None,
-                                                    nullptr);
+            solve_mrhs_fwd_below<T>(wdscr, kpanel + p0, knr, knc, xb + kfirstcol, ldx, m1, nrhs);
             for (crd::usize c = 0; c < nrhs; ++c) // B_s -= C at global rows srow[k][p0+i]
             {
                 T* xc = xb + c * ldx;
@@ -2222,25 +2989,7 @@ bool SupernodalCholesky<T>::solve_with_workers(crd::containers::Span<T> rhs, crd
                     dj[c] = xj[c * ldx];
                 }
             }
-            for (crd::u32 j = 0; j < nc; ++j)
-            {
-                const T ljj = panel[static_cast<crd::usize>(j) * nr + j];
-                T* dj = wdscr + static_cast<crd::usize>(j) * nrhs;
-                for (crd::usize c = 0; c < nrhs; ++c)
-                {
-                    dj[c] = dj[c] / ljj;
-                }
-                const T* colj = panel + static_cast<crd::usize>(j) * nr;
-                for (crd::u32 i = j + 1; i < nc; ++i)
-                {
-                    const T lij = colj[i];
-                    T* di = wdscr + static_cast<crd::usize>(i) * nrhs;
-                    for (crd::usize c = 0; c < nrhs; ++c)
-                    {
-                        di[c] -= lij * dj[c];
-                    }
-                }
-            }
+            solve_mrhs_fwd_diag<T>(wdscr, nrhs, panel, nr, nc); // 4-col-blocked, bit-identical order
             for (crd::u32 j = 0; j < nc; ++j)
             {
                 const T* dj = wdscr + static_cast<crd::usize>(j) * nrhs;
@@ -2323,25 +3072,7 @@ bool SupernodalCholesky<T>::solve_with_workers(crd::containers::Span<T> rhs, crd
                         dj[c] = xj[c * ldx];
                     }
                 }
-                for (crd::u32 j = 0; j < nc; ++j)
-                {
-                    const T ljj = panel[static_cast<crd::usize>(j) * nr + j];
-                    T* dj = dscr.data() + static_cast<crd::usize>(j) * nrhs;
-                    for (crd::usize c = 0; c < nrhs; ++c)
-                    {
-                        dj[c] = dj[c] / ljj;
-                    }
-                    const T* colj = panel + static_cast<crd::usize>(j) * nr;
-                    for (crd::u32 i = j + 1; i < nc; ++i)
-                    {
-                        const T lij = colj[i];
-                        T* di = dscr.data() + static_cast<crd::usize>(i) * nrhs;
-                        for (crd::usize c = 0; c < nrhs; ++c)
-                        {
-                            di[c] -= lij * dj[c];
-                        }
-                    }
-                }
+                solve_mrhs_fwd_diag<T>(dscr.data(), nrhs, panel, nr, nc); // 4-col-blocked
                 for (crd::u32 j = 0; j < nc; ++j)
                 {
                     const T* dj = dscr.data() + static_cast<crd::usize>(j) * nrhs;
@@ -2372,11 +3103,7 @@ bool SupernodalCholesky<T>::solve_with_workers(crd::containers::Span<T> rhs, crd
             const crd::u32 below = nr - nc;
             if (below > 0)
             {
-                const dense::MatrixView<const T, dense::Layout::ColMajor> lb(panel + nc, below, nc, nr);
-                const dense::MatrixView<const T, dense::Layout::ColMajor> yt(xb + firstcol, nc, nrhs, ldx);
-                const dense::MatrixView<T, dense::Layout::ColMajor> tm(tmp.data(), below, nrhs, below);
-                dense::gemm<T, dense::Layout::ColMajor>(T{1}, lb, yt, T{0}, tm, dense::Trans::None, dense::Trans::None,
-                                                        nullptr);
+                solve_mrhs_fwd_below<T>(tmp.data(), panel + nc, nr, nc, xb + firstcol, ldx, below, nrhs);
                 for (crd::usize c = 0; c < nrhs; ++c)
                 {
                     T* xc = xb + c * ldx;
@@ -2413,37 +3140,23 @@ bool SupernodalCholesky<T>::solve_with_workers(crd::containers::Span<T> rhs, crd
                 {
                     wtmp[r] = xb[sym.srow[rb + nc + r]];
                 }
-                for (crd::u32 k = 0; k < nc; ++k)
-                {
-                    const T* colk = panel + static_cast<crd::usize>(k) * nr + nc;
-                    xb[firstcol + k] -= solve_dot_conj<T>(colk, wtmp, below); // same kernel as the serial path
-                }
+                solve_back_below<T>(xb + firstcol, panel + nc, nr, nc, wtmp, below); // shared fused kernel
             }
-            for (crd::u32 jj = nc; jj-- > 0;)
-            {
-                const T* coljj = panel + static_cast<crd::usize>(jj) * nr;
-                const T v = xb[firstcol + jj] - solve_dot_conj<T>(coljj + jj + 1, xb + firstcol + jj + 1, nc - jj - 1);
-                xb[firstcol + jj] = v / coljj[jj]; // coljj[jj] = L[jj][jj] is real
-            }
+            solve_back_diag<T>(xb + firstcol, panel, nr, nc); // shared 4-col-blocked descending solve
             return;
         }
         if (below > 0)
         {
-            for (crd::usize c = 0; c < nrhs; ++c) // gather below rows
+            for (crd::u32 r = 0; r < below; ++r) // ROW-major gather (a row's RHS values contiguous)
             {
-                const T* xc = xb + c * ldx;
-                T* tc = wtmp + c * static_cast<crd::usize>(below);
-                for (crd::u32 r = 0; r < below; ++r)
+                T* wrow = wtmp + static_cast<crd::usize>(r) * nrhs;
+                const crd::u32 g = sym.srow[rb + nc + r];
+                for (crd::usize c = 0; c < nrhs; ++c)
                 {
-                    tc[r] = xc[sym.srow[rb + nc + r]];
+                    wrow[c] = xb[g + c * ldx];
                 }
             }
-            const dense::MatrixView<const T, dense::Layout::ColMajor> lb(panel + nc, below, nc, nr);
-            const dense::MatrixView<const T, dense::Layout::ColMajor> tm(wtmp, below, nrhs, below);
-            const dense::MatrixView<T, dense::Layout::ColMajor> yt(xb + firstcol, nc, nrhs, ldx);
-            // Y -= Lᴴ_below · gathered (ConjTranspose for complex Hermitian; Lᵀ for real).
-            dense::gemm<T, dense::Layout::ColMajor>(T{-1}, lb, tm, T{1}, yt, kCholAdjoint<T>, dense::Trans::None,
-                                                    nullptr);
+            solve_mrhs_back_below<T>(xb + firstcol, ldx, panel + nc, nr, nc, wtmp, below, nrhs, wdscr);
         }
         if (nc >= solve_batch_min_nc)
         {
@@ -2458,25 +3171,7 @@ bool SupernodalCholesky<T>::solve_with_workers(crd::containers::Span<T> rhs, crd
                     dj[c] = xj[c * ldx];
                 }
             }
-            for (crd::u32 jj = nc; jj-- > 0;)
-            {
-                const T* coljj = panel + static_cast<crd::usize>(jj) * nr;
-                T* djj = wdscr + static_cast<crd::usize>(jj) * nrhs;
-                for (crd::u32 k = jj + 1; k < nc; ++k)
-                {
-                    const T lkk = chol_conj<T>(coljj[k]); // Lᴴ entry = conj(L)
-                    const T* dk = wdscr + static_cast<crd::usize>(k) * nrhs;
-                    for (crd::usize c = 0; c < nrhs; ++c)
-                    {
-                        djj[c] -= lkk * dk[c];
-                    }
-                }
-                const T ljj = coljj[jj]; // L[jj][jj] is real
-                for (crd::usize c = 0; c < nrhs; ++c)
-                {
-                    djj[c] = djj[c] / ljj;
-                }
-            }
+            solve_mrhs_back_diag<T>(wdscr, nrhs, panel, nr, nc); // 4-col-blocked descending
             for (crd::u32 j = 0; j < nc; ++j)
             {
                 const T* dj = wdscr + static_cast<crd::usize>(j) * nrhs;

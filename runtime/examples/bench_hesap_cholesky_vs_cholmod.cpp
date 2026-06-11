@@ -238,6 +238,16 @@ void run(const char* name)
                 cerid_min_fl += r * r;
             }
         }
+        // TRUE TRAPEZOID nnz (the bytes a triangular solve must stream per pass): Σ_s (nr·nc − nc(nc−1)/2).
+        double cerid_trap = 0.0;
+        for (crd::u32 s = 0; s < sym.nsuper; ++s)
+        {
+            const double nc = static_cast<double>(sym.scol[s + 1] - sym.scol[s]);
+            const double m = static_cast<double>(sym.srowp[s + 1] - sym.srowp[s]);
+            cerid_trap += m * nc - nc * (nc - 1.0) / 2.0;
+        }
+        std::printf("  %-10s CERID solve-trapezoid=%.2fM doubles (%.0f MB/pass)\n", name, cerid_trap * 1e-6,
+                    cerid_trap * 8e-6);
         std::printf("  %-10s CERID Cholesky-min-flops=%.2fe9 (symmetry-aware minimum on Cerid's supernodes)\n", name,
                     cerid_min_fl * 1e-9);
         std::printf("  %-10s CERID   nsuper=%lld maxnc=%lld | nc[1|2-4|5-8|9-16|17-32|33+]=%lld %lld %lld %lld %lld "
@@ -401,6 +411,56 @@ void run(const char* name)
                 }
                 xd = cholmod_solve(CHOLMOD_A, L, bd, &cc);
             });
+        { // RESEARCH probe: CHOLMOD per-pass split (L vs Lt) + its TRUE trapezoid from its own arrays.
+            cholmod_dense* yL = nullptr;
+            const crd::f64 t_l = best_ms(
+                [&]()
+                {
+                    if (yL != nullptr)
+                    {
+                        cholmod_free_dense(&yL, &cc);
+                    }
+                    yL = cholmod_solve(CHOLMOD_L, L, bd, &cc);
+                });
+            cholmod_dense* yLt = nullptr;
+            const crd::f64 t_lt = best_ms(
+                [&]()
+                {
+                    if (yLt != nullptr)
+                    {
+                        cholmod_free_dense(&yLt, &cc);
+                    }
+                    yLt = cholmod_solve(CHOLMOD_Lt, L, yL, &cc);
+                });
+            const auto* lsuper = static_cast<const crd::i64*>(L->super); // SuiteSparse_long? use itype-safe read
+            const auto* lpi = static_cast<const crd::i64*>(L->pi);
+            double trap = 0.0;
+            if (L->itype == CHOLMOD_INT)
+            {
+                const auto* su = static_cast<const crd::i32*>(L->super);
+                const auto* pi = static_cast<const crd::i32*>(L->pi);
+                for (size_t s = 0; s < L->nsuper; ++s)
+                {
+                    const double nc = static_cast<double>(su[s + 1] - su[s]);
+                    const double m = static_cast<double>(pi[s + 1] - pi[s]);
+                    trap += m * nc - nc * (nc - 1.0) / 2.0;
+                }
+            }
+            else
+            {
+                for (size_t s = 0; s < L->nsuper; ++s)
+                {
+                    const double nc = static_cast<double>(lsuper[s + 1] - lsuper[s]);
+                    const double m = static_cast<double>(lpi[s + 1] - lpi[s]);
+                    trap += m * nc - nc * (nc - 1.0) / 2.0;
+                }
+            }
+            std::printf("  [CHOLMOD-SOLVE-SPLIT L=%.2fms Lt=%.2fms | trapezoid=%.2fM doubles (%.0f MB/pass) | "
+                        "L-rate=%.1f GB/s Lt-rate=%.1f GB/s]\n",
+                        t_l, t_lt, trap * 1e-6, trap * 8e-6, trap * 8e-6 / t_l, trap * 8e-6 / t_lt);
+            cholmod_free_dense(&yLt, &cc);
+            cholmod_free_dense(&yL, &cc);
+        }
         const auto* xx = static_cast<const crd::f64*>(xd->x);
         crd::f64 acc = 0.0;
         for (crd::u32 i = 0; i < un; ++i)

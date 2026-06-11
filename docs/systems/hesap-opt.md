@@ -129,16 +129,23 @@ members only.
     **within-supernode PANEL FACTORIZATION (cdiv), and 83% of cdiv is the below-diagonal TRSM** (35% of the whole
     factor) at ~40 GF/s vs **OpenBLAS dtrsm 65** (the code's own v5a-4 comment). The cmod GEMM is the *competitive*
     path (≈0.7× OpenBLAS). Large-supernode dense-3D ⇒ big panel factorization ⇒ TRSM dominates ⇒ loss; small-panel
-    FEA ⇒ panel factor negligible ⇒ parity/win. **2026-06-11 UPDATE (the lattice kernel dig, session
-    `2026-06-11-lattice-kernel-crush.md`): the serial gap was ⅓ wall, ⅔ fixable.** Three levers landed: the
-    `syrk_lower_minus` elementwise-pack pathology (rebuilt as a Goto-blocked triangular gemm — gemm-value-identical,
-    heals a latent serial-vs-parallel value divergence at knc>256), the ColMajor merge stride fix (bit-identical),
-    and the below-outer TRSM in bit-identical in-place wide-N RowMajor form. **lat32 serial 0.73× → 0.85-class;
-    lat24 8T = 0.99× PARITY; FEA improved (hood 1.57×, bcsstk25 1.85× WIN); residuals unchanged.** The ONE named
-    remaining lever for lat28/32: a dedicated packed-TRSM driver (the B1 M=64-skinny shape is B-restream
-    bandwidth-bound at ~50 GF/s; OpenBLAS-style fused solve kernel, C-level, NOT asm). Honest claim: matched
-    accuracy + universal `{1..16}` moat + per-factor wins on FEA + 8T parity through lat24 —
-    **NOT yet** "crush Ceres-sparse on dense-3D." scipy `least_squares` = correctness cross-check only.
+    FEA ⇒ panel factor negligible ⇒ parity/win. **2026-06-11 UPDATE (the lattice kernel dig + the solve crush,
+    sessions `2026-06-11-lattice-kernel-crush.md` + `2026-06-11-solve-crush-full-scoreboard.md`): the serial gap
+    was ⅓ wall, ⅔ fixable, and the FULL board (factor AND solve AND x16) is now the only reporting format.**
+    FACTOR levers: the `syrk_lower_minus` elementwise-pack pathology (rebuilt as a Goto-blocked triangular gemm —
+    gemm-value-identical, heals a latent serial-vs-parallel value divergence at knc>256), the ColMajor merge stride
+    fix (bit-identical), the in-place TRSM/(C) forms, the 16T per-worker-scratch OOM root fix. SOLVE levers: the
+    always-serial single-RHS gate (the level-parallel path was net-negative), shared SIMD solve kernels (the
+    backward was an unvectorizable scalar FP-add chain; 70→51 ms), the multi-RHS work gate + 8-lane cap (the 16T
+    collapse). **THE FINAL BOARD (after the multi-stream rounds — 4-col-fused solve kernels, 4-way interleaved packs,
+    fused mRHS kernels; sessions `2026-06-11-multistream-solve-win.md` + `2026-06-11-x16-factor-crush.md`):
+    single-RHS SOLVE WINS every matrix at 1T (1.03–1.39×, bcsstk25 to 3.19× @16T) · x16 WINS lat24
+    (1.28×/1.21×), lat32 @16T (1.29×), hood (1.67×/1.52×) · FACTOR 8/16T parity-to-WIN lat20/24/28
+    (1.02–1.04×), lat32 0.94 @16T, FEA 1.4–1.9× · residuals 8.9e-15.** Remaining cells under parity, named
+    with measured causes in the session logs: sub-25 ms-problem x16 (0.60–0.77), lat28/32 1-RHS @8T
+    (0.83–0.90, their threaded gemv ⇒ the within-supernode-parallel lever), lat28/32 factor serial
+    (0.81–0.84, the last ~10% gemm-rate to OpenBLAS asm). Honest claim: matched accuracy + the universal
+    `{1..16}` moat + wins or parity on the broad board. scipy `least_squares` = correctness cross-check only.
 
 ## Determinism moat
 
