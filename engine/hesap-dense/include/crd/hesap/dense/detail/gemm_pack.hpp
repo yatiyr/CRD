@@ -58,19 +58,19 @@ template <typename T, Layout L>
     };
     switch (tr)
     {
-    case Trans::None:
-        return base(r, c);
-    case Trans::Transpose:
-        return base(c, r);
-    case Trans::ConjTranspose:
-        if constexpr (std::is_floating_point_v<T>)
-        {
+        case Trans::None:
+            return base(r, c);
+        case Trans::Transpose:
             return base(c, r);
-        }
-        else
-        {
-            return crd::hesap::conj(base(c, r));
-        }
+        case Trans::ConjTranspose:
+            if constexpr (std::is_floating_point_v<T>)
+            {
+                return base(c, r);
+            }
+            else
+            {
+                return crd::hesap::conj(base(c, r));
+            }
     }
     return base(r, c);
 }
@@ -80,8 +80,8 @@ template <typename T, Layout L>
 // `ceil(mc / GemmTraits<T>::MR) * GemmTraits<T>::MR * kc`. Row-panels are stacked vertically;
 // rows beyond `mc` within the final panel are zero-padded.
 template <typename T, Layout L>
-inline void pack_a(MatrixView<const T, L> a, crd::usize ic, crd::usize pc, crd::usize mc, crd::usize kc,
-                   Trans trans_a, T* out) noexcept
+inline void pack_a(MatrixView<const T, L> a, crd::usize ic, crd::usize pc, crd::usize mc, crd::usize kc, Trans trans_a,
+                   T* out) noexcept
 {
     const crd::usize num_panels = (mc + GemmTraits<T>::MR - 1) / GemmTraits<T>::MR;
     // op(A) is effective-COLUMN-major (source columns contiguous in memory) when the
@@ -128,8 +128,8 @@ inline void pack_a(MatrixView<const T, L> a, crd::usize ic, crd::usize pc, crd::
 // Col-panels are stacked horizontally; cols beyond `nc` within the final
 // panel are zero-padded.
 template <typename T, Layout L>
-inline void pack_b(MatrixView<const T, L> b, crd::usize pc, crd::usize jc, crd::usize kc, crd::usize nc,
-                   Trans trans_b, T* out) noexcept
+inline void pack_b(MatrixView<const T, L> b, crd::usize pc, crd::usize jc, crd::usize kc, crd::usize nc, Trans trans_b,
+                   T* out) noexcept
 {
     const crd::usize num_panels = (nc + GemmTraits<T>::NR - 1) / GemmTraits<T>::NR;
     for (crd::usize panel = 0; panel < num_panels; ++panel)
@@ -142,7 +142,8 @@ inline void pack_b(MatrixView<const T, L> b, crd::usize pc, crd::usize jc, crd::
             {
                 const crd::usize j_global = jc + col_base + j_local;
                 const bool inside = (col_base + j_local) < nc;
-                panel_out[p * GemmTraits<T>::NR + j_local] = inside ? eff_a_read<T, L>(b, pc + p, j_global, trans_b) : T{};
+                panel_out[p * GemmTraits<T>::NR + j_local] =
+                    inside ? eff_a_read<T, L>(b, pc + p, j_global, trans_b) : T{};
             }
         }
     }
@@ -159,11 +160,8 @@ inline void pack_b(MatrixView<const T, L> b, crd::usize pc, crd::usize jc, crd::
 // micro-tile as a temp, run the microkernel into it, then add alpha *
 // micro_tile to C.
 template <typename T, Layout L>
-inline void gemm_packed_inner(
-    T alpha,
-    crd::usize ic, crd::usize jc, crd::usize mc, crd::usize nc, crd::usize kc,
-    const T* a_packed, const T* b_packed,
-    MatrixView<T, L> c) noexcept
+inline void gemm_packed_inner(T alpha, crd::usize ic, crd::usize jc, crd::usize mc, crd::usize nc, crd::usize kc,
+                              const T* a_packed, const T* b_packed, MatrixView<T, L> c) noexcept
 {
     const crd::usize num_panels_m = (mc + GemmTraits<T>::MR - 1) / GemmTraits<T>::MR;
     const crd::usize num_panels_n = (nc + GemmTraits<T>::NR - 1) / GemmTraits<T>::NR;
@@ -188,18 +186,31 @@ inline void gemm_packed_inner(
             // Merge alpha * micro into C; only the rows_in_panel × cols_in_panel
             // sub-tile (the rest of the micro tile came from zero-padded A/B
             // and is itself zero, but we skip it to avoid touching C outside
-            // the [ic, ic+mc) × [jc, jc+nc) macro tile).
-            for (crd::usize i = 0; i < rows_in_panel; ++i)
+            // the [ic, ic+mc) × [jc, jc+nc) macro tile). The inner loop walks
+            // C's CONTIGUOUS index per layout (j for RowMajor, i for ColMajor —
+            // the ColMajor i-inner order is the lattice-crush merge fix 2026-06-11:
+            // the old j-inner walk strided EVERY ColMajor write by ld). Pure
+            // reordering of independent element writes ⇒ bit-identical.
+            if constexpr (L == Layout::RowMajor)
+            {
+                for (crd::usize i = 0; i < rows_in_panel; ++i)
+                {
+                    T* crow = c.data() + (i_global + i) * c.ld() + j_global;
+                    const T* mrow = micro + i * GemmTraits<T>::NR;
+                    for (crd::usize j = 0; j < cols_in_panel; ++j)
+                    {
+                        crow[j] += alpha * mrow[j];
+                    }
+                }
+            }
+            else
             {
                 for (crd::usize j = 0; j < cols_in_panel; ++j)
                 {
-                    if constexpr (L == Layout::RowMajor)
+                    T* ccol = c.data() + (j_global + j) * c.ld() + i_global;
+                    for (crd::usize i = 0; i < rows_in_panel; ++i)
                     {
-                        c.data()[(i_global + i) * c.ld() + (j_global + j)] += alpha * micro[i * GemmTraits<T>::NR + j];
-                    }
-                    else
-                    {
-                        c.data()[(j_global + j) * c.ld() + (i_global + i)] += alpha * micro[i * GemmTraits<T>::NR + j];
+                        ccol[i] += alpha * micro[i * GemmTraits<T>::NR + j];
                     }
                 }
             }

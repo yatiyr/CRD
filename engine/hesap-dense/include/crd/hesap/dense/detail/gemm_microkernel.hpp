@@ -50,27 +50,26 @@ inline constexpr crd::usize kGemmNr = 8;
 // read GemmTraits<T>::MR/NR so the packed layout matches the microkernel per type.
 // BIT-IDENTICAL across tile shapes: every C[i][j] is still Σ_p a[i][p]·b[p][j] in p-order
 // — only the register tiling changes, never the math ⇒ zero blast radius on values.
-template <typename T>
-struct GemmTraits
+template <typename T> struct GemmTraits
 {
     static constexpr crd::usize MR = 8;
     static constexpr crd::usize NR = 8;
 };
-template <>
-struct GemmTraits<crd::f64>
+template <> struct GemmTraits<crd::f64>
 {
     static constexpr crd::usize MR = 6;
     static constexpr crd::usize NR = 8;
 };
 
 // Scalar microkernel — works for any T and any MR×NR tile. Loads C, accumulates K, stores.
+// `lda` is the A row stride (== k for the standard packed Ac layout; the packed-TRSM panel
+// walk passes lda = obw to read a K-slice of a wider resident row — same math, same p-order).
 template <typename T, crd::usize MR, crd::usize NR>
-inline void gemm_microkernel_scalar(
-    crd::usize k,
-    const T* a_packed,    // MR × K row-major
-    const T* b_packed,    // K  × NR row-major
-    T*       c_tile,      // MR × NR strided
-    crd::usize ldc) noexcept
+inline void gemm_microkernel_scalar(crd::usize k, crd::usize lda,
+                                    const T* a_packed, // MR × K row-major (row stride lda)
+                                    const T* b_packed, // K  × NR row-major
+                                    T* c_tile,         // MR × NR strided
+                                    crd::usize ldc) noexcept
 {
     T c[MR][NR]{};
     // Load existing C into accumulators.
@@ -86,7 +85,7 @@ inline void gemm_microkernel_scalar(
     {
         for (crd::usize i = 0; i < MR; ++i)
         {
-            const T a_ip = a_packed[i * k + p];
+            const T a_ip = a_packed[i * lda + p];
             for (crd::usize j = 0; j < NR; ++j)
             {
                 c[i][j] = c[i][j] + a_ip * b_packed[p * NR + j];
@@ -129,12 +128,10 @@ inline void gemm_prefetch_t0(const void* p) noexcept
 // standalone (build/_uk_spike.cpp), vs 86% for the old 8×8. MR=6 (= GemmTraits<f64>::MR);
 // pack_a feeds 6-row panels. Mul/add fuse via single-rounded simd::fma (ADR-0082); each
 // C[i][j] = Σ_p a[i][p]·b[p][j] in p-order ⇒ bit-identical to the old tile.
-inline void gemm_microkernel_avx2_f64(
-    crd::usize k,
-    const crd::f64* a_packed,
-    const crd::f64* b_packed,
-    crd::f64* c_tile,
-    crd::usize ldc) noexcept
+inline void
+gemm_microkernel_avx2_f64(crd::usize k,
+                          crd::usize lda, // A row stride (== k for packed Ac; obw for the packed-TRSM resident panel)
+                          const crd::f64* a_packed, const crd::f64* b_packed, crd::f64* c_tile, crd::usize ldc) noexcept
 {
     namespace simd = crd::math::simd;
 
@@ -164,22 +161,22 @@ inline void gemm_microkernel_avx2_f64(
         // ONE reused A-broadcast register: broadcast row i, do both C-halves, discard.
         // Keeps the live set at 12 accumulators + 2 B + 1 A = 15 of 16 YMM (no spill).
         // Single-rounded AVX2 FMA per ADR-0082; each C[i][j] = Σ_p a[i][p]·b[p][j] in p-order.
-        simd::Vec4d a = simd::Vec4d(a_packed[0 * k + p]);
+        simd::Vec4d a = simd::Vec4d(a_packed[0 * lda + p]);
         c00 = simd::fma(a, b0, c00);
         c01 = simd::fma(a, b1, c01);
-        a = simd::Vec4d(a_packed[1 * k + p]);
+        a = simd::Vec4d(a_packed[1 * lda + p]);
         c10 = simd::fma(a, b0, c10);
         c11 = simd::fma(a, b1, c11);
-        a = simd::Vec4d(a_packed[2 * k + p]);
+        a = simd::Vec4d(a_packed[2 * lda + p]);
         c20 = simd::fma(a, b0, c20);
         c21 = simd::fma(a, b1, c21);
-        a = simd::Vec4d(a_packed[3 * k + p]);
+        a = simd::Vec4d(a_packed[3 * lda + p]);
         c30 = simd::fma(a, b0, c30);
         c31 = simd::fma(a, b1, c31);
-        a = simd::Vec4d(a_packed[4 * k + p]);
+        a = simd::Vec4d(a_packed[4 * lda + p]);
         c40 = simd::fma(a, b0, c40);
         c41 = simd::fma(a, b1, c41);
-        a = simd::Vec4d(a_packed[5 * k + p]);
+        a = simd::Vec4d(a_packed[5 * lda + p]);
         c50 = simd::fma(a, b0, c50);
         c51 = simd::fma(a, b1, c51);
     }
@@ -201,12 +198,10 @@ inline void gemm_microkernel_avx2_f64(
 // AVX2 microkernel for f32. Uses Vec8f registers for the 8-wide NR axis.
 // Tile shape: MR=8 × NR=8. Holds 8 Vec8f register accumulators for C
 // rows, broadcasts A[i,p] as needed, loads B[p,:] as a Vec8f.
-inline void gemm_microkernel_avx2_f32(
-    crd::usize k,
-    const crd::f32* a_packed,
-    const crd::f32* b_packed,
-    crd::f32* c_tile,
-    crd::usize ldc) noexcept
+inline void gemm_microkernel_avx2_f32(crd::usize k,
+                                      crd::usize lda, // A row stride (== k for packed Ac)
+                                      const crd::f32* a_packed, const crd::f32* b_packed, crd::f32* c_tile,
+                                      crd::usize ldc) noexcept
 {
     namespace simd = crd::math::simd;
 
@@ -223,14 +218,14 @@ inline void gemm_microkernel_avx2_f32(
     for (crd::usize p = 0; p < k; ++p)
     {
         // Broadcast each A row's p-th element.
-        const simd::Vec8f a0(a_packed[0 * k + p]);
-        const simd::Vec8f a1(a_packed[1 * k + p]);
-        const simd::Vec8f a2(a_packed[2 * k + p]);
-        const simd::Vec8f a3(a_packed[3 * k + p]);
-        const simd::Vec8f a4(a_packed[4 * k + p]);
-        const simd::Vec8f a5(a_packed[5 * k + p]);
-        const simd::Vec8f a6(a_packed[6 * k + p]);
-        const simd::Vec8f a7(a_packed[7 * k + p]);
+        const simd::Vec8f a0(a_packed[0 * lda + p]);
+        const simd::Vec8f a1(a_packed[1 * lda + p]);
+        const simd::Vec8f a2(a_packed[2 * lda + p]);
+        const simd::Vec8f a3(a_packed[3 * lda + p]);
+        const simd::Vec8f a4(a_packed[4 * lda + p]);
+        const simd::Vec8f a5(a_packed[5 * lda + p]);
+        const simd::Vec8f a6(a_packed[6 * lda + p]);
+        const simd::Vec8f a7(a_packed[7 * lda + p]);
         // Load B[p, 0..7] as one Vec8f.
         const simd::Vec8f bp = simd::Vec8f::load(b_packed + p * kGemmNr);
         // Prefetch line p of the NEXT b-panel (b_packed + k·NR), spread across the k-loop so it
@@ -271,31 +266,40 @@ inline void gemm_microkernel_avx2_f32(
 // implemented; the ASM branch is reserved for the future
 // v0d-asm-microkernel slice once the three-condition revisit gate
 // in ADR-0082 §revisit is satisfied.
+// lda overload: A row stride decoupled from k (the packed-TRSM resident-panel walk reads a K-slice
+// of a wider row-major panel). Same math, same p-order — lda==k is the standard packed-Ac case.
 template <typename T>
-inline void gemm_microkernel(crd::usize k, const T* a_packed, const T* b_packed, T* c_tile, crd::usize ldc) noexcept
+inline void gemm_microkernel(crd::usize k, crd::usize lda, const T* a_packed, const T* b_packed, T* c_tile,
+                             crd::usize ldc) noexcept
 {
 #if CRD_HESAP_MICROKERNEL_BACKEND == CRD_HESAP_MICROKERNEL_BACKEND_INTRINSICS
 #if CRD_SIMD_HAS_AVX2
     if constexpr (std::is_same_v<T, crd::f32>)
     {
-        gemm_microkernel_avx2_f32(k, a_packed, b_packed, c_tile, ldc);
+        gemm_microkernel_avx2_f32(k, lda, a_packed, b_packed, c_tile, ldc);
     }
     else if constexpr (std::is_same_v<T, crd::f64>)
     {
-        gemm_microkernel_avx2_f64(k, a_packed, b_packed, c_tile, ldc);
+        gemm_microkernel_avx2_f64(k, lda, a_packed, b_packed, c_tile, ldc);
     }
     else
     {
-        gemm_microkernel_scalar<T, GemmTraits<T>::MR, GemmTraits<T>::NR>(k, a_packed, b_packed, c_tile, ldc);
+        gemm_microkernel_scalar<T, GemmTraits<T>::MR, GemmTraits<T>::NR>(k, lda, a_packed, b_packed, c_tile, ldc);
     }
 #else
-    gemm_microkernel_scalar<T, GemmTraits<T>::MR, GemmTraits<T>::NR>(k, a_packed, b_packed, c_tile, ldc);
+    gemm_microkernel_scalar<T, GemmTraits<T>::MR, GemmTraits<T>::NR>(k, lda, a_packed, b_packed, c_tile, ldc);
 #endif
 #else
     // Reserved ASM backend; see detail/microkernel_backend.hpp.
     static_assert(sizeof(T) == 0,
-        "CRD_HESAP_MICROKERNEL_BACKEND_ASM is reserved-but-unimplemented; see ADR-0082 §revisit");
+                  "CRD_HESAP_MICROKERNEL_BACKEND_ASM is reserved-but-unimplemented; see ADR-0082 §revisit");
 #endif
+}
+
+template <typename T>
+inline void gemm_microkernel(crd::usize k, const T* a_packed, const T* b_packed, T* c_tile, crd::usize ldc) noexcept
+{
+    gemm_microkernel<T>(k, k, a_packed, b_packed, c_tile, ldc);
 }
 
 } // namespace crd::hesap::dense::detail

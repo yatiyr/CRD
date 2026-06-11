@@ -566,6 +566,7 @@ add_subdirectory(engine/hesap-sched)  # depends on crd-jobs above + crd-hesap (d
 add_subdirectory(engine/hesap-direct)  # v5; sparse DIRECT factorization (depends on hesap-dense/ordering/sparse/sched)
 add_subdirectory(engine/hesap-eigen)  # v6; sparse EIGENVALUE, matrix-free (Rayleigh-Ritz via hesap-dense; shift-invert via hesap-direct)
 add_subdirectory(engine/hesap-opt)  # v7; OPTIMISATION (unconstrained + constrained) over Objective<T>; ADR-0090
+add_subdirectory(engine/hesap-stats)  # v12 cluster (created early as a v12-pull: Philox counter-RNG for v7-i)
 add_subdirectory(engine/resources)
 add_subdirectory(engine/scene)
 add_subdirectory(engine/preset)

@@ -353,8 +353,8 @@ void run(const char* name)
         });
     const bool chol_ok = (cc.status >= 0) && (L != nullptr) && (L->minor >= L->n);
     long long chol_lnz = (L != nullptr) ? static_cast<long long>(L->xsize) : -1;
-    std::printf("  %-10s CHOLMOD flops cc.fl=%.2fe9 (CHOLMOD's necessary factor flops) | fill=%lld\n", name, cc.fl * 1e-9,
-                chol_lnz);
+    std::printf("  %-10s CHOLMOD flops cc.fl=%.2fe9 (CHOLMOD's necessary factor flops) | fill=%lld\n", name,
+                cc.fl * 1e-9, chol_lnz);
 
     // v5a-4 AMALGAMATION PROBE: CHOLMOD's supernode count + size histogram. Cerid factors bmwcra
     // as 16007 supernodes (11813 of them nc 2-4 = tiny BLAS-1/2) with 87803 cmod calls. If CHOLMOD

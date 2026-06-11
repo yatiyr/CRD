@@ -12,19 +12,19 @@
 //   • The two MUST agree (a debug assert in the optimizer enforces it).
 //
 // VTABLE (LOCKED — new virtuals append AT END forever, per feedback_vtable_stability_append_at_end):
-//   0 dtor · 1 value · 2 n · 3 gradient · 4 hessian_vector
+//   0 dtor · 1 value · 2 n · 3 gradient · 4 hessian_vector · 5 hessian (v7-g) · 6 sparse_hessian (v7-g)
 //   [RESERVED slot, appended at END when the hot path needs it: a FUSED `value_and_gradient(x, g) -> T` for
 //    objectives that share work between f and ∇f (e.g. A·x reused) — L-BFGS / LM / line searches want it; ADR-0090
 //    reserves it so adding it later is non-breaking. NOT built in v7-a.]
 
 #include <crd/containers/span.hpp>
 #include <crd/core/types.hpp>
+#include <crd/hesap/sparse/sparse_matrix.hpp>
 
 namespace crd::hesap::opt
 {
 
-template <typename T>
-class Objective
+template <typename T> class Objective
 {
 public:
     virtual ~Objective() = default;
@@ -58,15 +58,41 @@ public:
         return false;
     }
 
+    // Dense Hessian ∇²f(x) → h (n×n, ROW-MAJOR, FULL symmetric — both triangles filled). Returns true iff filled.
+    // The v7-g full/modified Newton path factors it (with the N&W 3.4 τ·I modification when indefinite). Vtable
+    // slot appended at END.
+    [[nodiscard]] virtual bool hessian(crd::containers::ConstSpan<T> x, crd::containers::Span<T> h) const
+    {
+        (void)x;
+        (void)h;
+        return false;
+    }
+
+    // SPARSE Hessian ∇²f(x) (CSR, n×n, FULL symmetric storage): fills `out` (the caller owns + reuses it). The
+    // v7-g sparse Newton path factors it with the moat-proven hesap-direct supernodal Cholesky; for a fixed-pattern
+    // objective the sparsity is constant across iterations (values change) — the symbolic-once contract. Returns
+    // true iff filled. Vtable slot appended at END.
+    [[nodiscard]] virtual bool sparse_hessian(crd::containers::ConstSpan<T> x,
+                                              sparse::SparseMatrix<T, sparse::SparseFormat::Csr>& out) const
+    {
+        (void)x;
+        (void)out;
+        return false;
+    }
+
     // ---- Capability queries (non-virtual; set in the protected ctor) ----
 
     [[nodiscard]] bool has_gradient() const noexcept { return m_has_gradient; }
     [[nodiscard]] bool has_hessian_vector() const noexcept { return m_has_hessian_vector; }
+    [[nodiscard]] bool has_hessian() const noexcept { return m_has_hessian; }
+    [[nodiscard]] bool has_sparse_hessian() const noexcept { return m_has_sparse_hessian; }
 
 protected:
     Objective() = default;
-    explicit Objective(bool has_gradient, bool has_hessian_vector) noexcept
-        : m_has_gradient(has_gradient), m_has_hessian_vector(has_hessian_vector)
+    explicit Objective(bool has_gradient, bool has_hessian_vector, bool has_hessian = false,
+                       bool has_sparse_hessian = false) noexcept
+        : m_has_gradient(has_gradient), m_has_hessian_vector(has_hessian_vector), m_has_hessian(has_hessian),
+          m_has_sparse_hessian(has_sparse_hessian)
     {
     }
     Objective(const Objective&) = default;
@@ -76,6 +102,8 @@ protected:
 
     bool m_has_gradient = false;
     bool m_has_hessian_vector = false;
+    bool m_has_hessian = false;
+    bool m_has_sparse_hessian = false;
 };
 
 } // namespace crd::hesap::opt
