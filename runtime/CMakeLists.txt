@@ -885,6 +885,11 @@ endif()
 # The faithful L-BFGS-B port is verified by diffing EVERY routine (foundation + cauchy/formk/subsm + the mainlb
 # driver end-to-end vs setulb) against the reference on identical inputs. Local-only oracle (the reference is a TEST
 # oracle, not a dependency — Cerid ships its own from-principles L-BFGS-B). Gated behind CRD_BUILD_HESAP_VS_LBFGSB;
+# --- v9-b: scipy step-sequence difftest (headless; the python side is scripts/ode_scipy_ref.py) ---
+add_executable(ode_scipy_difftest examples/ode_scipy_difftest.cpp)
+target_link_libraries(ode_scipy_difftest PRIVATE crd-core crd-containers crd-memory crd-hesap-ode)
+crd_enable_default_pch(ode_scipy_difftest)
+
 # build the oracle with scripts/setup-lbfgsb-ref.sh. Never CI/shipped.
 if(CRD_BUILD_HESAP_VS_LBFGSB)
     set(CRD_LBFGSB_REF_DIR "$ENV{HOME}/cerid-deps/lbfgsb-ref/install" CACHE PATH "L-BFGS-B reference install prefix")

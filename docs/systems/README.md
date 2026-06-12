@@ -25,6 +25,7 @@ engine *is*; read `docs/sessions/` to remember how it got that way.
 | `crd-sandbox`    | ✅        | [sandbox.md](sandbox.md) — interactive desktop app: orbit camera, ForwardRenderPath, unified Asset Browser (procedural shapes + cooked glTF imports), ImGui overlay |
 | `crd-scene`      | 🚧 (v1c2)| [scene.md](scene.md) — Phase 3.0 foundation: `EntityId`/`SlotMap`/`World`, `ComponentRegistry` + trait grammar, archetype storage (`Archetype` + `ArchetypeGraph` + `ArchetypeChunkStorage`), typed `add_component<T>`/`get`/`remove`, `IStorageEventSink` (the L5 plug point). 8-layer slot architecture; v1d–v1n in flight |
 | `crd-hesap-dense`| ✅ (v0d) | [hesap-dense.md](hesap-dense.md) — BLAS L1 + L2 + L3 over Matrix / Symmetric / Triangular / Banded; 10/10 GEMM WINS over Eigen-MT (i9-14900K, AVX2, both f32+f64); reference-class shootout vs Eigen 3.4 + OpenBLAS 0.3.27; FMA microkernel; allocator-propagating; continuous-benchmark policy |
+| `crd-hesap-ode` | 🚧 (v9-a) | [hesap-ode.md](hesap-ode.md) — ODE/DAE cluster (ADR-0091): two API layers (raw-span alloc-free stepper kernels for eylem/animation/DAW hot loops + the OdeFunction driver substrate), deterministic controllers (scipy-exact + Hairer PI), dense-output contract, work-precision counters |
 
 When a new module ships, add a row here and link to its overview. If a module
 gets a long-form deep-dive document (like `LOG_FILE.md`), link to that too —
