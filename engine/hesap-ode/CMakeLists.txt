@@ -23,9 +23,11 @@ target_link_libraries(crd-hesap-ode
         crd-core
         crd-containers
         crd-memory
+        crd-hesap # v9-z: the CLI command registry (hesap.ode.* registration)
         crd-hesap-dense # v9-d: the OdeLinearSolver dense LU (Radau adds complex LU at v9-e)
         crd-hesap-sparse # v9-j: the sparse-Jacobian contract (CSR)
         crd-hesap-direct # v9-j: SparseOdeLinearSolver over the multifrontal LU
+        crd-hesap-iterative # v9-j: KrylovOdeLinearSolver over FGMRES (matrix-free, CVODE SPGMR)
     PRIVATE
         crd-warnings
 )

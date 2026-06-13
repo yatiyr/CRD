@@ -10,6 +10,11 @@
     test_ode_rosenbrock.cpp
     test_ode_mass.cpp
     test_ode_sparse.cpp
+    test_ode_imex.cpp
+    test_ode_krylov.cpp
+    test_ode_sensitivity.cpp
+    test_ode_dae.cpp
+    test_ode_cli.cpp
 )
 
 target_link_libraries(crd-hesap-ode-tests PRIVATE

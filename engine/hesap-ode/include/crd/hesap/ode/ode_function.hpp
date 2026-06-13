@@ -13,9 +13,10 @@
 //   • Drivers own ALL work counting (OdeWork) — implementations stay pure evaluations (const, reentrant).
 //
 // VTABLE (LOCKED — new virtuals append AT END forever, per feedback_vtable_stability_append_at_end):
-//   0 dtor · 1 rhs · 2 dim · 3 jacobian · 4 jacobian_vector · 5 mass_matrix (v9-h)
-//   [PLANNED append: sparse_jacobian over hesap-sparse CSR (v9-j). Event functions are deliberately NOT
-//    part of this interface — they are integration options (v9-c), scipy-style.]
+//   0 dtor · 1 rhs · 2 dim · 3 jacobian · 4 jacobian_vector · 5 mass_matrix (v9-h) · 6 sparse_jacobian (v9-j)
+//   7 rhs_explicit · 8 rhs_implicit · 9 jacobian_implicit (the IMEX additive split, v9-i)
+//   [Event functions are deliberately NOT part of this interface — they are integration options (v9-c),
+//    scipy-style.]
 //
 // NOTE for hot loops: this virtual interface is the DRIVER-layer contract (callback cost amortized over the
 // state dimension). Per-body game/animation integration must use the steppers.hpp kernels directly with an
@@ -90,15 +91,52 @@ public:
         return false;
     }
 
+    // ---- IMEX additive split (v9-i) ----
+    // Additive Runge-Kutta (IMEX) splits f = f_E + f_I: f_E (the EXPLICIT, non-stiff part — advection,
+    // reaction) is advanced by the explicit tableau; f_I (the IMPLICIT, stiff part — diffusion) by the
+    // ESDIRK tableau via Newton through the OdeLinearSolver seam. INVARIANT for an IMEX function: `rhs`
+    // MUST equal f_E + f_I (the driver uses the combined RHS for the initial-step heuristic + the FSAL-free
+    // restart). Each returns true iff filled. Vtable slots 7/8.
+    [[nodiscard]] virtual bool rhs_explicit(T t, crd::containers::ConstSpan<T> y, crd::containers::Span<T> out) const
+    {
+        (void)t;
+        (void)y;
+        (void)out;
+        return false;
+    }
+    [[nodiscard]] virtual bool rhs_implicit(T t, crd::containers::ConstSpan<T> y, crd::containers::Span<T> out) const
+    {
+        (void)t;
+        (void)y;
+        (void)out;
+        return false;
+    }
+    // The IMPLICIT-part Jacobian J_I = ∂f_I/∂y (n×n, ROW-MAJOR) — the IMEX Newton iteration matrix is
+    // (I − c·J_I). A DEDICATED slot (NOT the slot-3 full Jacobian) so an IMEX function is unambiguous if it
+    // ever reaches a non-IMEX driver. Returns true iff filled; default = not provided ⇒ the driver
+    // finite-differences f_I. Vtable slot 9.
+    [[nodiscard]] virtual bool jacobian_implicit(T t, crd::containers::ConstSpan<T> y,
+                                                 crd::containers::Span<T> jac) const
+    {
+        (void)t;
+        (void)y;
+        (void)jac;
+        return false;
+    }
+
     // ---- Capability queries (non-virtual; set in the protected ctor) ----
 
     [[nodiscard]] bool has_jacobian() const noexcept { return m_has_jacobian; }
     [[nodiscard]] bool has_jacobian_vector() const noexcept { return m_has_jacobian_vector; }
     [[nodiscard]] bool has_mass_matrix() const noexcept { return m_has_mass_matrix; }
     [[nodiscard]] bool has_sparse_jacobian() const noexcept { return m_has_sparse_jacobian; }
+    [[nodiscard]] bool has_imex_split() const noexcept { return m_has_imex_split; }            // v9-i
+    [[nodiscard]] bool has_implicit_jacobian() const noexcept { return m_has_implicit_jacobian; } // v9-i
 
 protected:
-    void set_has_sparse_jacobian(bool v) noexcept { m_has_sparse_jacobian = v; } // ctor-time, v9-j
+    void set_has_sparse_jacobian(bool v) noexcept { m_has_sparse_jacobian = v; }     // ctor-time, v9-j
+    void set_has_imex_split(bool v) noexcept { m_has_imex_split = v; }               // ctor-time, v9-i
+    void set_has_implicit_jacobian(bool v) noexcept { m_has_implicit_jacobian = v; } // ctor-time, v9-i
 
 protected:
     OdeFunction() = default;
@@ -116,6 +154,8 @@ protected:
     bool m_has_jacobian_vector = false;
     bool m_has_mass_matrix = false;
     bool m_has_sparse_jacobian = false;
+    bool m_has_imex_split = false;        // v9-i
+    bool m_has_implicit_jacobian = false; // v9-i
 };
 
 // Adapter: wrap any callable `f(T t, ConstSpan<const T> y, Span<T> dydt)` as an OdeFunction (the v7

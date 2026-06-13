@@ -1,15 +1,17 @@
 # crd-hesap-ode — ODE/DAE solvers
 
 > Phase 3.1.6 v9. ADR-0091. Plan: `docs/phases/phase-3.1.6-hesap.md` (the v9 block).
-> Status: **v9-a substrate + v9-b embedded ERK + v9-c events/dense-output + v9-g symplectic shipped**
-> (sessions `2026-06-11-v9a-ode-substrate.md`, `2026-06-12-v9bcg-erk-events-symplectic.md`). Shipped on
-> top of the v9-a surface: `erk.hpp` (`integrate_erk`: RK23/RK45/DOP853 scipy-EXACT — tableaus extracted
-> from the installed scipy by `scripts/gen_erk_tableaus.py`, **step sequences proven identical to scipy**
-> via `ode_scipy_difftest` — + Cash-Karp + Tsit5), `solution.hpp` (`OdeSolution` Hermite dense output),
-> `events.hpp` + `detail/brentq.hpp` (scipy event semantics, terminal truncation), `symplectic.hpp`
-> (symplectic Euler / velocity Verlet / Yoshida-4/6 compositions — the eylem kernel layer). Remaining
-> cluster: v9-d BDF → v9-e Radau → v9-f Rosenbrock/SDIRK → v9-h DAE → v9-i IMEX → v9-j sparse/Krylov →
-> v9-k sensitivities → v9-z CLI + work-precision scoreboard.
+> Status: **CLUSTER COMPLETE (a→z)** — sessions `2026-06-11-v9a-ode-substrate.md`,
+> `2026-06-12-v9bcg-erk-events-symplectic.md` (b/c/d/e/f/g/h/j-sparse), `2026-06-13-v9-imex-krylov-sens-dae-batch.md`
+> (i/j-Krylov/k/l/z). Explicit RK (`erk.hpp`: RK23/RK45/DOP853 — tableaus extracted from scipy, **step
+> sequences proven identical** via `ode_scipy_difftest` — + Cash-Karp + Tsit5) · events + dense output
+> (`solution.hpp`/`events.hpp`/`brentq`) · BDF/NDF (`bdf.hpp`, **scipy-counter-exact**) · Radau IIA(5)
+> (`radau.hpp`, scipy-counter-exact) · Rosenbrock RODAS4 + TR-BDF2 (`rosenbrock.hpp`/`sdirk.hpp` — found+fixed
+> a real odeint d4-sign bug) · symplectic (`symplectic.hpp`) · mass-matrix/index-1 DAE (`bdf.hpp` mass path)
+> · sparse + matrix-free Krylov Newton (`ode_sparse_solver.hpp`/`ode_krylov_solver.hpp` = CVODE-KLU / SPGMR)
+> · IMEX additive RK (`imex.hpp`: ARK3/4/5 extracted from ARKODE) · sensitivities (`sensitivity.hpp`: forward
+> + adjoint, CVODES patterns) · higher-index DAE (`dae_structural.hpp` Pryce Σ-method + `dae.hpp` mechanical
+> index reduction) · CLI (`hesap.ode.solve.f64`).
 
 ## What it is
 
@@ -46,6 +48,33 @@ integration math in a consumer (the kernels are the proven, gated formulas).
   cubics, exact endpoints, O(h⁴)).
 - `integrate.hpp` — `integrate_fixed` (Euler/Midpoint/Rk4 over the kernels; recomputed `t_i = t0 + i·h`,
   final step lands on t1 exactly; per-step NotFinite check lives in the driver, NOT the kernels).
+
+## Adaptive + stiff + structured surface (v9-b … v9-z)
+
+- `erk.hpp` — `integrate_erk` (RK23/RK45/DOP853/Cash-Karp/Tsit5), scipy step-sequence-exact; the explicit
+  spine + IMEX explicit-stage evaluator.
+- `bdf.hpp` — `integrate_bdf` variable-order NDF, scipy-counter-exact; the stiff spine. Branches dense /
+  sparse (`has_sparse_jacobian`) / matrix-free (`solver->is_matrix_free()`) / mass-matrix.
+- `radau.hpp` / `rosenbrock.hpp` / `sdirk.hpp` — Radau IIA(5), RODAS4, TR-BDF2 (the real-time / SPICE / DAW
+  stiff workhorses; complex LU edge for Radau).
+- `imex.hpp` — `integrate_imex` (ARK3(2)4L[2]SA / ARK4(3)6L[2]SA / ARK5(4)8L[2]SA, Kennedy-Carpenter,
+  coefficients extracted from SUNDIALS v6.4.1 by `scripts/gen_ark_tableaus.py` → `detail/ark_tableaus.hpp`,
+  bit-identical to ARKODE). Explicit ⊕ implicit split through the `OdeFunction` slots 7/8/9 (rhs_explicit /
+  rhs_implicit / jacobian_implicit); the implicit ESDIRK solves share one iteration matrix.
+- `ode_linear_solver.hpp` — THE seam. `DenseOdeLinearSolver` (hesap-dense LU). `ode_sparse_solver.hpp`
+  (`SparseOdeLinearSolver` over the v5b multifrontal LU = CVODE-KLU) and `ode_krylov_solver.hpp`
+  (`KrylovOdeLinearSolver`, matrix-free FGMRES over `jacobian_vector` + `OdeKrylovPreconditioner`
+  PrecSetup/PrecSolve = CVODE-SPGMR) slot in without touching the drivers.
+- `sensitivity.hpp` — `ParametricOdeFunction<T>` + `integrate_forward_sensitivities` (CVODES simultaneous
+  corrector: augmented `[y;S]` through the existing drivers, block-diagonal `J_y` for the stiff path) +
+  `integrate_adjoint_sensitivities` (CVODES ASA: backward `[λ;q]` over stored dense output). Three-oracle
+  gate (forward = adjoint = FD).
+- `dae_structural.hpp` — `StructuralDae` + `structural_index` (Pryce Σ-method = the Pantelides-equivalent
+  structural index + differentiation offsets). `dae.hpp` — `ConstrainedMechanicalSystem<T>` +
+  `IndexReducedMechanicalOde` (index-3 → index-1 via the acceleration constraint + λ-elimination; the
+  multibody/eylem consumer).
+- `src/cli_register_ode.cpp` — `hesap.ode.solve.f64` (canned problems × the full method set; anchor
+  `register_ode_cli_anchor`).
 
 ## Determinism
 

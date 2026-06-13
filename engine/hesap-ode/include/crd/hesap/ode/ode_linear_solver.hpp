@@ -18,6 +18,8 @@
 namespace crd::hesap::ode
 {
 
+template <typename T> class OdeFunction; // v9-j: the matrix-free Krylov seam takes it by reference
+
 template <typename T> class OdeLinearSolver
 {
 public:
@@ -50,6 +52,25 @@ public:
     {
         (void)c;
         (void)jac;
+        return false;
+    }
+
+    // v9-j append (vtable END): the MATRIX-FREE Krylov mode (CVODE SPGMR). A solver that returns true here
+    // is driven without ANY Jacobian assembly: the stiff driver records the linearization point and calls
+    // factor_iteration_matrix_matfree instead of the dense/sparse factor; solve() then runs GMRES on the
+    // operator v ↦ v − c·(J·v) using OdeFunction::jacobian_vector. Default = false (dense/sparse solvers).
+    [[nodiscard]] virtual bool is_matrix_free() const noexcept { return false; }
+
+    // v9-j append (vtable END): set up the matrix-free iteration operator (I − c·J_lin) at the linearization
+    // point (t, y) and (re)build any preconditioner. `fn` must provide jacobian_vector. Counted as nlu.
+    // Default = unsupported.
+    [[nodiscard]] virtual bool factor_iteration_matrix_matfree(const OdeFunction<T>& fn, T t,
+                                                               crd::containers::ConstSpan<T> y, T c)
+    {
+        (void)fn;
+        (void)t;
+        (void)y;
+        (void)c;
         return false;
     }
 };

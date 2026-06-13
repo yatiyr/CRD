@@ -158,6 +158,11 @@ template <typename T>
     DenseOdeLinearSolver<T> internal_solver(alloc);
     OdeLinearSolver<T>* lin = (solver != nullptr) ? solver : &internal_solver;
 
+    // v9-j (Krylov): a matrix-free solver (KrylovOdeLinearSolver) is driven WITHOUT any Jacobian assembly —
+    // the linearization point is recorded and the inner solve is GMRES over jacobian_vector (CVODE SPGMR).
+    const bool use_matfree = (solver != nullptr) && solver->is_matrix_free();
+    CRD_ASSERT(!use_matfree || fn.has_jacobian_vector());
+
     const T direction = (t1 > t0) ? static_cast<T>(1) : static_cast<T>(-1);
     const T interval_length = std::abs(t1 - t0);
     const T max_step = opts.hmax;
@@ -185,8 +190,15 @@ template <typename T>
     dbuf.resize((bdf_max_order + 3) * n);
     cont::Array<T> work(alloc); // change_D scratch ((max_order + 1) x n)
     work.resize((bdf_max_order + 1) * n);
-    cont::Array<T> jac(alloc); // dense row-major Jacobian (NOT allocated on the sparse path — n² is the point)
-    jac.resize(fn.has_sparse_jacobian() ? 0 : n * n);
+    cont::Array<T> jac(alloc); // dense row-major Jacobian (NOT allocated on the sparse/matrix-free path)
+    jac.resize((fn.has_sparse_jacobian() || use_matfree) ? 0 : n * n);
+    // v9-j matrix-free: the linearization point (no dense J ever formed).
+    cont::Array<T> ylin(alloc);
+    if (use_matfree)
+    {
+        ylin.resize(n);
+    }
+    T tlin = t0;
     cont::Array<T> y_predict(alloc);
     y_predict.resize(n);
     cont::Array<T> psi(alloc);
@@ -213,7 +225,8 @@ template <typename T>
     // v9-h: constant (possibly singular) mass matrix — M·y' = f. The M-less path below is BYTE-IDENTICAL
     // to the scipy-exact v9-d code (every mass branch is behind `has_mass`).
     const bool has_mass = fn.has_mass_matrix();
-    CRD_ASSERT(!(has_mass && use_sparse)); // named follow-on, not yet wired
+    CRD_ASSERT(!(has_mass && use_sparse));                    // named follow-on, not yet wired
+    CRD_ASSERT(!(use_matfree && (use_sparse || has_mass)));   // matrix-free × sparse/mass = named follow-on
     cont::Array<T> mass(alloc);
     cont::Array<T> mv(alloc);
     if (has_mass)
@@ -235,6 +248,17 @@ template <typename T>
     // non-scipy-exact fallback).
     auto build_jacobian = [&](T t, cont::ConstSpan<T> yy)
     {
+        if (use_matfree)
+        {
+            // No dense J: just record the linearization point for the matrix-free operator.
+            tlin = t;
+            for (crd::usize i = 0; i < n; ++i)
+            {
+                ylin[i] = yy[i];
+            }
+            ++result.work.njev;
+            return;
+        }
         if (use_sparse)
         {
             const bool ok = fn.sparse_jacobian(t, yy, sjac);
@@ -463,7 +487,11 @@ template <typename T>
                 if (!lu_valid)
                 {
                     bool ok;
-                    if (use_sparse)
+                    if (use_matfree)
+                    {
+                        ok = lin->factor_iteration_matrix_matfree(fn, tlin, cont::ConstSpan<T>(ylin.data(), n), c);
+                    }
+                    else if (use_sparse)
                     {
                         ok = lin->factor_iteration_matrix_sparse(c, sjac);
                     }

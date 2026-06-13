@@ -9,13 +9,18 @@
 
 #include <crd/hesap/ode/bdf.hpp>
 #include <crd/hesap/ode/controller.hpp>
+#include <crd/hesap/ode/dae.hpp>
+#include <crd/hesap/ode/dae_structural.hpp>
 #include <crd/hesap/ode/dense_output.hpp>
 #include <crd/hesap/ode/erk.hpp>
+#include <crd/hesap/ode/imex.hpp>
+#include <crd/hesap/ode/ode_krylov_solver.hpp>
 #include <crd/hesap/ode/ode_linear_solver.hpp>
 #include <crd/hesap/ode/ode_sparse_solver.hpp>
 #include <crd/hesap/ode/radau.hpp>
 #include <crd/hesap/ode/rosenbrock.hpp>
 #include <crd/hesap/ode/sdirk.hpp>
+#include <crd/hesap/ode/sensitivity.hpp>
 #include <crd/hesap/ode/events.hpp>
 #include <crd/hesap/ode/integrate.hpp>
 #include <crd/hesap/ode/ode_function.hpp>
