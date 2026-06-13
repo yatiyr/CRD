@@ -198,7 +198,9 @@ TEST_CASE("krylov: matrix-free == the proven dense BDF trajectory", "[ode][krylo
 
     containers::Array<f64> uk(&alloc);
     fill_mode(uk, nx, dx, 2);
-    ode::KrylovOdeLinearSolver<f64> krylov(&alloc, /*restart*/ nx);
+    // Tight forcing here: this test's POINT is bit-for-bit reproduction of the direct-solve trajectory
+    // (the default 0.05 forcing is inexact-Newton — correct but not direct-solve-identical).
+    ode::KrylovOdeLinearSolver<f64> krylov(&alloc, /*restart*/ nx, 1e-9);
     const ode::OdeResult<f64> rk =
         ode::integrate_bdf<f64>(f, 0.0, 0.4, containers::Span<f64>(uk.data(), nx), opts, &alloc, &krylov);
     REQUIRE(rk.success);
@@ -223,9 +225,11 @@ TEST_CASE("krylov: the preconditioner seam cuts GMRES iterations (CVODE PrecSolv
     opts.rtol = 1e-8;
     opts.atol = 1e-10;
 
+    // Both solvers pinned to the SAME tight forcing (1e-7) so the GMRES count is large enough to show the
+    // preconditioner's reduction cleanly — apples-to-apples (the production default forcing is 0.05).
     containers::Array<f64> u_un(&alloc);
     fill_mode(u_un, nx, dx, 1);
-    ode::KrylovOdeLinearSolver<f64> plain(&alloc, /*restart*/ nx);
+    ode::KrylovOdeLinearSolver<f64> plain(&alloc, /*restart*/ nx, 1e-7);
     const ode::OdeResult<f64> r_un =
         ode::integrate_bdf<f64>(f, 0.0, 0.5, containers::Span<f64>(u_un.data(), nx), opts, &alloc, &plain);
     REQUIRE(r_un.success);

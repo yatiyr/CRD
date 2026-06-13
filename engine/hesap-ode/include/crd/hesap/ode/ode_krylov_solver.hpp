@@ -111,8 +111,13 @@ template <typename T> class KrylovOdeLinearSolver final : public OdeLinearSolver
     };
 
 public:
+    // `rel_tol` is the INEXACT-NEWTON FORCING tolerance: the inner FGMRES solves (I − c·J)·dy = r only to
+    // ‖r‖ ≤ rel_tol·‖r₀‖ — as tightly as the Newton step needs, not to machine precision (CVODE's eplifac
+    // default 0.05). Over-solving the inner system (a tight rel_tol like 1e-7) inflates the GMRES iteration
+    // count ~5× for no accuracy gain — the Newton converges to its own tolerance regardless. Pass a tight
+    // rel_tol only when you specifically want to REPRODUCE a direct-solve trajectory bit-for-bit.
     explicit KrylovOdeLinearSolver(crd::memory::IAllocator* alloc, crd::usize restart = 30,
-                                   R rel_tol = static_cast<R>(1e-7), crd::usize max_iter = 1000,
+                                   R rel_tol = static_cast<R>(0.05), crd::usize max_iter = 1000,
                                    OdeKrylovPreconditioner<T>* precond = nullptr)
         : m_alloc(alloc), m_restart(restart), m_rel_tol(rel_tol), m_max_iter(max_iter), m_precond(precond),
           m_op(alloc), m_ws(alloc, 0, restart), m_rhs(alloc), m_x(alloc), m_ylin(alloc)

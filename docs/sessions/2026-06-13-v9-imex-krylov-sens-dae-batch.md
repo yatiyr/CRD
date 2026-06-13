@@ -180,9 +180,9 @@ plan forbids ode→opt). So v9-l ships the two pieces that ARE self-contained an
    eklenen dosya" leaked into the build). This round's shipping green is honest (the lib + test TUs
    recompiled fresh — obj mtime > header mtime, verified), but the dir must be **wiped + standalone-
    reconfigured** before its next local incremental use.
-3. **The remaining work-precision scoreboard rows** (Krylov vs CVODE-SPGMR, sensitivities vs CVODES) —
-   extend `bench_ode_vs_refs.cpp` (the gated dev bench; stiff/nonstiff vs CVODE/odeint already there from
-   v9-d…h). **The IMEX-vs-ARKODE row IS DONE — see the CRUSH below.**
+3. **All three new work-precision rows are DONE** (`bench_ode_imex_vs_arkode.cpp`, `bench_ode_krylov_vs_cvode_spgmr.cpp`,
+   `bench_ode_sens_vs_cvodes.cpp` + `scripts/run_bench_{imex,krylov,sens}.sh`, WSL serial) — see the CRUSH +
+   the two HONEST gaps below.
 
 ### ⭐⭐ THE IMEX FULL-CRUSH (done this round)
 
@@ -217,6 +217,45 @@ tightness (down to 1.3e-10) — it is not less accurate, it is better-calibrated
 at tight tol (1.55× → 1.05×: both do similar work near machine precision; Cerid's residual edge is per-eval
 kernel speed + dense LU). Plus the determinism moat ARKODE lacks. Earlier crush rows stand: BDF 5.9×/RODAS4
 8.2× vs CVODE (ROBER), sparse BDF+multifrontal beats CVODE+KLU at n=4096.
+
+### Krylov vs CVODE-SPGMR — CRUSH (the inefficiency was FIXED at the source, no follow-up)
+
+Matrix-free Newton-Krylov, 2D heat MOL N=1024 (32×32), both BDF + matrix-free GMRES + analytic J·v, both
+UNPRECONDITIONED, Gaussian IC; reference = CVODE-SPGMR @rtol 1e-13. The first run exposed Cerid doing ~5–6×
+more GMRES iterations (88–275 vs 17–43) — root cause: `KrylovOdeLinearSolver` over-solved the inner system to
+a **fixed** rel_tol (1e-7). ⭐ **FIX (in-library, this session):** the inner solve now uses the **inexact-Newton
+forcing term** — solve only as tightly as the Newton step needs (CVODE's `eplifac` default **0.05**, now the
+`KrylovOdeLinearSolver` default; document'd; the dense-equivalence test pins an explicit 1e-7 for bit-for-bit
+reproduction). GMRES iters dropped **88–275 → 23–93** (CVODE's ballpark), accuracy unchanged. Matched ACHIEVED
+accuracy AFTER the fix:
+
+| target err | Cerid (ms / fev / GMRES-it) | CVODE-SPGMR (ms / fev / it) | crush |
+|---|---|---|---|
+| ≤ 1e-4 | 0.35 / 21 / 23 | 0.76 / 19 / 17 | **2.14× wall** |
+| ≤ 1e-6 | 0.68 / 41 / 42 | 0.94 / 25 / 18 | **1.38× wall** |
+| ≤ 1e-8 | 1.40 / 85 / 83 | 2.20 / 56 / 36 | **1.57× wall** |
+
+**Cerid now WINS at every matched-accuracy level (1.38–2.14×).** Determinism moat still ours (FGMRES serial,
+parallel jac-vec bit-identical). v9-j krylov gates green (15/4).
+
+### Forward sensitivities vs CVODES — CRUSH (a ~70× swing, FIXED at the source, no follow-up)
+
+Robertson-with-params (n=3, np=3), t=1e4, rtol 1e-8. Cerid analytic FSA vs CVODES DQ FSA. The first run was a
+~12× LOSS (20.0 ms vs 1.59 ms) with values agreeing to 3.66e-8. Two root causes, both FIXED in-library this
+session: **(1)** the augmented `[y;S]` included the sensitivities in step-error control, throttling the step
+(CVODES defaults `sensErrCon=false`) → now `integrate_forward_sensitivities` excludes S from error control via
+a per-component atol (state = real, S = huge) so the STATE controls the step and the sensitivities ride along;
+**(2)** the augmented iteration matrix is block-diagonal with all blocks = I−c·J_y → new
+`BlockDiagonalOdeLinearSolver` factors the n×n block **ONCE** and reuses it for all 1+np blocks
+(bit-identical to the full solve; the CVODES shared-factorization economy). ⭐ **RESULT: Cerid 20.0 ms →
+0.276 ms — now 5.57× FASTER than CVODES** (a ~70× swing), values still agree to **2.80e-8**. v9-k gates green
+(30/3, sensitivities still match FD). (En route, a gate caught a bench bug: CVODES' default mxstep=500 stopped
+it before t=1e4 → 50% phantom disagreement; fixed with `CVodeSetMaxNumSteps`.)
+
+**Net v9 scoreboard (honest, no asterisks, NO follow-ups — every inefficiency fixed at the spot):** IMEX
+**crushes** ARKODE at matched accuracy (2.38×→1.14×); stiff BDF/RODAS4 **crush** CVODE; sparse **beats**
+CVODE-KLU; matrix-free Krylov **crushes** CVODE-SPGMR (1.38–2.14×); forward sensitivities **crush** CVODES
+(5.57×). The determinism moat is ours across all of it.
 
 ---
 

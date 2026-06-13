@@ -229,6 +229,47 @@ private:
     mutable crd::containers::Array<T> m_tmp;
 };
 
+// Linear solver for the augmented sensitivity system: its iteration matrix (I − c·J_aug) is BLOCK-DIAGONAL
+// with all (1+np) diagonal blocks IDENTICAL (= I − c·J_y, since J_y depends only on the state block). So
+// factor the n×n block ONCE and apply it to each n-subvector of the RHS — the CVODES shared-factorization
+// economy: O(n³) factor + (1+np)·O(n²) solves instead of factoring the full (n·(1+np))² matrix. The result
+// is BIT-IDENTICAL to a full block-diagonal solve (the matrix IS block-diagonal). v9-k.
+template <typename T> class BlockDiagonalOdeLinearSolver final : public OdeLinearSolver<T>
+{
+public:
+    BlockDiagonalOdeLinearSolver(crd::memory::IAllocator* alloc, crd::usize n_base, crd::usize n_blocks)
+        : m_nb(n_base), m_blocks(n_blocks), m_m(alloc, n_base, n_base), m_lu(alloc, n_base)
+    {
+    }
+    [[nodiscard]] bool factor_iteration_matrix(T c, crd::containers::ConstSpan<T> jac, crd::usize big_n) override
+    {
+        CRD_ASSERT(big_n == m_nb * m_blocks && jac.size() == big_n * big_n);
+        for (crd::usize i = 0; i < m_nb; ++i)
+        {
+            for (crd::usize j = 0; j < m_nb; ++j)
+            {
+                const T iden = (i == j) ? static_cast<T>(1) : static_cast<T>(0);
+                m_m.at(i, j) = iden - c * jac[i * big_n + j]; // top-left block (all blocks identical)
+            }
+        }
+        dense::factor_lu(m_lu, m_m);
+        return m_lu.info() == 0;
+    }
+    void solve(crd::containers::Span<T> b) override
+    {
+        for (crd::usize k = 0; k < m_blocks; ++k)
+        {
+            dense::solve_lu(m_lu, crd::containers::Span<T>(b.data() + k * m_nb, m_nb));
+        }
+    }
+
+private:
+    crd::usize m_nb;
+    crd::usize m_blocks;
+    dense::Matrix<T, dense::Layout::RowMajor> m_m;
+    dense::LU<T, dense::Layout::RowMajor> m_lu;
+};
+
 } // namespace detail
 
 // FORWARD sensitivities. `y` (size n) in-out state; `S` (size n·np, ROW-MAJOR by parameter: S[j·n + i] =
@@ -260,9 +301,31 @@ template <typename T>
         }
     }
 
+    // CVODES sensErrCon = FALSE (the default): exclude the sensitivity block from step-error control — the
+    // STATE controls the step and the sensitivities ride along. Without this the augmented WRMS norm is
+    // dominated by S (whose magnitudes can dwarf y), throttling the step to a fraction of the state-only
+    // size — the dominant cost. Implemented through the per-component atol: real atol on the state, a huge
+    // atol on S so its error contribution vanishes.
+    cont::Array<T> atolv(alloc);
+    atolv.resize(N);
+    const T big = static_cast<T>(1e200);
+    for (crd::usize i = 0; i < n; ++i)
+    {
+        atolv[i] = opts.atol_vec.empty() ? opts.atol : opts.atol_vec[i];
+    }
+    for (crd::usize k = n; k < N; ++k)
+    {
+        atolv[k] = big;
+    }
+    OdeOptions<T> sopts = opts;
+    sopts.atol_vec = cont::ConstSpan<T>(atolv.data(), N);
+
     detail::AugmentedSensitivityFn<T> aug(alloc, pfn, p);
-    const OdeResult<T> r = stiff ? integrate_bdf<T>(aug, t0, t1, cont::Span<T>(Y.data(), N), opts, alloc)
-                                 : integrate_erk<T>(aug, t0, t1, cont::Span<T>(Y.data(), N), opts, alloc);
+    // Shared-factorization solver (factor the n×n block once, reuse for all 1+np blocks) — the stiff path.
+    detail::BlockDiagonalOdeLinearSolver<T> bsolver(alloc, n, 1 + np);
+    const OdeResult<T> r = stiff
+                               ? integrate_bdf<T>(aug, t0, t1, cont::Span<T>(Y.data(), N), sopts, alloc, &bsolver)
+                               : integrate_erk<T>(aug, t0, t1, cont::Span<T>(Y.data(), N), sopts, alloc);
 
     for (crd::usize i = 0; i < n; ++i)
     {
