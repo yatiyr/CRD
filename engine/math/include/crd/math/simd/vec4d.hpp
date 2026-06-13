@@ -188,6 +188,24 @@ CRD_FORCEINLINE Vec4d fma(Vec4d a, Vec4d b, Vec4d c) noexcept
 #endif
 }
 
+// Single-rounded negated FMA: c - a*b (one rounding). The complex-twiddle workhorse
+// (re = wr*ar - wi*ai). Same all-fma-or-all-mul_add contract per call site.
+CRD_FORCEINLINE Vec4d fnmadd(Vec4d a, Vec4d b, Vec4d c) noexcept
+{
+#if CRD_SIMD_HAS_AVX2
+    Vec4d r;
+    r.v = _mm256_fnmadd_pd(a.v, b.v, c.v);
+    return r;
+#else
+    Vec4d r;
+    for (usize i = 0; i < 4; ++i)
+    {
+        r.lanes[i] = std::fma(-a.lanes[i], b.lanes[i], c.lanes[i]);
+    }
+    return r;
+#endif
+}
+
 // ---- min / max / abs / sqrt -----------------------------------------------
 
 CRD_FORCEINLINE Vec4d min(Vec4d a, Vec4d b) noexcept
@@ -353,6 +371,69 @@ CRD_FORCEINLINE Vec4d select(Vec4d mask, Vec4d true_v, Vec4d false_v) noexcept
         r.lanes[i] = (mask_bits != 0) ? true_v.lanes[i] : false_v.lanes[i];
     }
     return r;
+#endif
+}
+
+// AoS<->SoA for complex f64: load 4 consecutive complex {r0,i0,r1,i1,r2,i2,r3,i3} from `p` (8 contiguous
+// f64) into split re={r0,r1,r2,r3}, im={i0,i1,i2,i3}; and the inverse store. Pure data shuffles (no
+// arithmetic) ⇒ bit-identical to the scalar fallback on every backend (no determinism caveat, ADR-0063).
+// Lets SoA-kernel consumers (FFT first/last pass) read/write interleaved complex without a separate pass.
+CRD_FORCEINLINE void load_complex_deinterleaved(const f64* p, Vec4d& re, Vec4d& im) noexcept
+{
+#if CRD_SIMD_HAS_AVX2
+    const __m256d lo = _mm256_loadu_pd(p);         // r0 i0 r1 i1
+    const __m256d hi = _mm256_loadu_pd(p + 4);     // r2 i2 r3 i3
+    const __m256d ev = _mm256_unpacklo_pd(lo, hi); // r0 r2 r1 r3
+    const __m256d od = _mm256_unpackhi_pd(lo, hi); // i0 i2 i1 i3
+    re.v = _mm256_permute4x64_pd(ev, 0xD8);        // r0 r1 r2 r3
+    im.v = _mm256_permute4x64_pd(od, 0xD8);        // i0 i1 i2 i3
+#else
+    re = Vec4d(p[0], p[2], p[4], p[6]);
+    im = Vec4d(p[1], p[3], p[5], p[7]);
+#endif
+}
+
+CRD_FORCEINLINE void store_complex_interleaved(f64* p, Vec4d re, Vec4d im) noexcept
+{
+#if CRD_SIMD_HAS_AVX2
+    const __m256d ul = _mm256_unpacklo_pd(re.v, im.v); // r0 i0 r2 i2
+    const __m256d uh = _mm256_unpackhi_pd(re.v, im.v); // r1 i1 r3 i3
+    _mm256_storeu_pd(p, _mm256_permute2f128_pd(ul, uh, 0x20));     // r0 i0 r1 i1
+    _mm256_storeu_pd(p + 4, _mm256_permute2f128_pd(ul, uh, 0x31)); // r2 i2 r3 i3
+#else
+    p[0] = re.lanes[0];
+    p[1] = im.lanes[0];
+    p[2] = re.lanes[1];
+    p[3] = im.lanes[1];
+    p[4] = re.lanes[2];
+    p[5] = im.lanes[2];
+    p[6] = re.lanes[3];
+    p[7] = im.lanes[3];
+#endif
+}
+
+// In-register 4x4 transpose of f64 (rows r0..r3 ↔ columns). AVX2 unpack+permute (8 ops, no memory); the
+// building block for a bandwidth-efficient matrix transpose. Pure shuffles ⇒ bit-exact vs the scalar path.
+CRD_FORCEINLINE void transpose4x4(Vec4d& r0, Vec4d& r1, Vec4d& r2, Vec4d& r3) noexcept
+{
+#if CRD_SIMD_HAS_AVX2
+    const __m256d t0 = _mm256_unpacklo_pd(r0.v, r1.v);
+    const __m256d t1 = _mm256_unpackhi_pd(r0.v, r1.v);
+    const __m256d t2 = _mm256_unpacklo_pd(r2.v, r3.v);
+    const __m256d t3 = _mm256_unpackhi_pd(r2.v, r3.v);
+    r0.v = _mm256_permute2f128_pd(t0, t2, 0x20);
+    r1.v = _mm256_permute2f128_pd(t1, t3, 0x20);
+    r2.v = _mm256_permute2f128_pd(t0, t2, 0x31);
+    r3.v = _mm256_permute2f128_pd(t1, t3, 0x31);
+#else
+    const Vec4d o0(r0.lanes[0], r1.lanes[0], r2.lanes[0], r3.lanes[0]);
+    const Vec4d o1(r0.lanes[1], r1.lanes[1], r2.lanes[1], r3.lanes[1]);
+    const Vec4d o2(r0.lanes[2], r1.lanes[2], r2.lanes[2], r3.lanes[2]);
+    const Vec4d o3(r0.lanes[3], r1.lanes[3], r2.lanes[3], r3.lanes[3]);
+    r0 = o0;
+    r1 = o1;
+    r2 = o2;
+    r3 = o3;
 #endif
 }
 

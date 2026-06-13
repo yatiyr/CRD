@@ -175,6 +175,18 @@ CRD_FORCEINLINE Vec8f fma(Vec8f a, Vec8f b, Vec8f c) noexcept
 #endif
 }
 
+// Single-rounded negated FMA: c - a*b. The complex-twiddle workhorse.
+CRD_FORCEINLINE Vec8f fnmadd(Vec8f a, Vec8f b, Vec8f c) noexcept
+{
+#if CRD_SIMD_HAS_AVX2
+    Vec8f r;
+    r.v = _mm256_fnmadd_ps(a.v, b.v, c.v);
+    return r;
+#else
+    return c - (a * b); // scalar fallback (non-AVX2); the AVX2 build uses the fused op
+#endif
+}
+
 // ---- min / max / abs / sqrt -----------------------------------------------
 
 CRD_FORCEINLINE Vec8f min(Vec8f a, Vec8f b) noexcept
