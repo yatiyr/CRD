@@ -473,16 +473,25 @@ not a swing. (Also: 0.68-0.75 are inside the +-9% 14900K throttle band — measu
 - over-2 Stockham (transpose-free): 0.57 (pass-bound — transpose-free ALONE is WORSE, not the lever).
 - radix-2 composition (2x sub + merge): 0.58 (Eb/Ob staging buffers, cannot fit registers).
 - four-step 32x16 spill over-2 sr32: 0.75 (size-32 over-2 spills 32 ymm).
-- four-step 32x16 no-spill per-column lane-split: 0.72 (per-column gather offsets the spill-fix).
+- four-step 32x16 no-spill per-column lane-split: 0.716 (build/four512c.cpp, gate 9.9e-16). The clean no-spill
+  size-32 (crush32's lane-split, 16 ymm) lands EXACTLY on the over-2 0.72. Mechanism: lane-split halves load/store
+  WIDTH (32x128-bit scatter-loads + 32x128-bit scatter-stores/col vs over-2's 256-bit contiguous) => no-spill +
+  2x mem-op-count == spill + 1x mem-op-count. They cancel.
+- ⭐ THIS PROBE PRE-REFUTES LEVER 3 (scheduled size-32 codelet): the scheduled-codelet win is ALSO spill reduction,
+  and this measured spill reduction == NEUTRAL here (binding constraint = mem-op width/traffic, NOT register spill).
+  A 20-min probe saved the multi-day genfft-size-32 build. Do NOT build lever 3 cold; it lands at 0.72.
 - => the four-step IS the best structure; the gap is the transpose-pass MEMORY overhead (~1.13x flops vs ~1.4x
-  time). MKL = integrated, fewer memory passes, deep-tuned over years.
+  time), NOT spill. Spill reduction is measured-neutral. Transpose elimination (Stockham) is measured-WORSE (0.57).
+  6 measured 2-level variants ALL land 0.72 +- noise => 0.72 is the robust 2-level frontier on this AVX2 box.
+  MKL = integrated multi-level fused-codelet engine, fewer memory passes, deep-tuned over years (FFTW only 0.85).
 
 ### The actual campaign levers (sustained, profile-driven, fresh-context, clock-pinned)
 1. MEASUREMENT FIRST — clock-pin the rig (BIOS turbo off / fixed freq) or tight-interleaved 3-way (ours/FFTW/MKL)
    bursts + confidence intervals. The +-9% throttle noise currently HIDES every <10% lever.
 2. Reduce the transpose-pass memory overhead (the profiled root) — fuse the transpose into the codelet strided I/O
    (never a separate L1 round-trip; FFTW twiddle-codelet model); blocked-tile transpose; measure L1/DRAM traffic.
-3. Bigger register-fitting sub-codelets — a genfft-register-scheduled size-32 (the `_schedule` lifted N=16 +22%).
+3. ~~Bigger register-fitting sub-codelets — genfft-scheduled size-32~~ REFUTED 2026-06-15 by the four512c lane-split
+   probe (spill reduction is measured-neutral at N=512; the binding constraint is mem-op width/traffic). Do NOT build.
 4. Factorization + L1-block sweep — 32x16 vs 16x32 vs 8x64 vs 3-level 8x8x8.
 5. Prefetch-distance sweep — `_mm_prefetch` on the strided gathers, tuned to the cache hierarchy.
 6. Wire the WON codegen band (N<=256) into a generator four-step driver so large-N reuses the crushing sub-codelets.
@@ -492,3 +501,95 @@ Match MKL (parity) at N=512/1024; beating FFTW's 0.85 is the milestone, MKL's 1.
 (FFTW/MKL spent years here); progress is single-digit % per lever => MEASUREMENT (lever 1) gates everything.
 The WON band (crush <=32, beat FFTW <=256, the codegen generator) is durable + the foundation; this is the large-N
 chapter. Seeds: build/four256.cpp (0.92, beats FFTW), four512.cpp + four512b.cpp (0.72-0.75 + profile probes).
+
+## 13. ⭐ FRESH-SESSION BRIEF — the genfft-AoS register-scheduling codegen (THE one remaining MKL-parity lever)
+
+**Read `project_v10_fft_plan.md` Part 24 (the ⛔⛔ READ-FIRST banner) FIRST. The cheap-lever space is exhausted
+(~13 measured dead-ends). The ONLY path to 1D MKL parity is this codegen. Start here, execute — do NOT re-derive.**
+
+### The one-paragraph why
+Cerid's AoS within-transform codelet is THE layout (SoA-within refuted; SoA-over-k caps radix-8 @25 GFLOPS). The
+isolated AoS radix-32 codelet runs **43 GFLOPS = 0.665× MKL@1024's live 64.4** on this box. The gap to parity is
+NOT structure, NOT spill, NOT memory — it is **codelet schedule quality**: `gen_aos_codelets.py` emits UNSCHEDULED
+structural Cooley-Tukey stages, while MKL/genfft emit register-scheduled split-radix. The scheduler that already
+flipped radix-8 +22% in the SoA generator is sitting one file over, unused by the AoS path. Port it. Target 43→~71.
+
+### The de-risked brick loop (already built + verified this session)
+```
+edit scripts/gen_aos_codelets.py  ->  python regenerates build/aos_candidate.hpp
+  ->  (WSL) g++ -O3 -march=native -funroll-loops -I/usr/include/mkl aos_codelet_bench.cpp -o aos_codelet_bench \
+            -Wl,--no-as-needed -lmkl_intel_lp64 -lmkl_sequential -lmkl_core -lpthread -lm -ldl  &&  ./aos_codelet_bench
+  ->  read:  GATE (vs brute DFT, 1e-12)  +  "ISOLATED x GFLOPS / MKL@1024 live y / ratio z"  +  MOVED✓/REVERT✗
+```
+- Harness: `build/aos_codelet_bench.cpp` (gate + isolated GFLOPS + tight-interleaved live MKL@1024 = throttle-robust).
+- Contract: `build/aos_candidate.hpp` defines `kCodeletN`, `aos_codelet_natural(in,out)` [gate], `aos_codelet_contig(buf)`
+  [timing]. Default = radix-32 CT (43 GFLOPS baseline, GATE 2.9e-16 PASS). The generator REPLACES this file.
+- Each brick MUST move the isolated GFLOPS or be reverted. Throttle cancels in the live ratio (no BIOS needed).
+
+### Exact code surfaces (named, not vague)
+- **The scheduler to port** = `scripts/gen_fft_codelets.py:190` `def _schedule(nodes, outs)` — register-pressure list
+  scheduler, key `(1-dying, is_load, fanout, -i)` @L215 (loads-late / kill-live-ASAP / short-lived-first). Flipped
+  radix-8 from −17% spill to a WIN. This is the BIG 43→~71 lever.
+- **The split-radix DAG** = `scripts/gen_fft_codelets.py:148` `def fft(xs)` (SPLIT-RADIX 2/4, ~33% fewer real muls).
+- **The AoS emitter to upgrade** = `scripts/gen_aos_codelets.py:76` `def emit_codelet(b, inverse, contig)` — currently
+  emits hardcoded structural CT stage loops (L98–126), NO symbolic DAG, never schedules. THIS is the floor cause.
+- **The AoS numpy gate** = `gen_aos_codelets.py:30` `aos_model` + `:60` `check_model` (keep; it self-checks pre-emit).
+
+### Brick sequence (each measured on the harness; revert if not MOVED)
+1. ⛔ **Split-radix-AoS — MEASURED-REVERT 2026-06-15 (do NOT re-try).** Lifted `build/sr32.cpp`'s split-radix-32 AoS
+   into the candidate (GATE 3.0e-16 PASS) → **38.5 GFLOPS, −10.5% vs CT 43.** The remembered "+5%" (sr16/sr32) was a
+   NO-STORE-harness artifact (those probes timed compute-only: register-resident input, `sink+=out[0]`, never stored
+   the 16 ymm). With the realistic 16-load+16-store regime the codelet is **load/store-port-bound, not FP-bound** ⇒
+   split-radix's fewer muls don't help and its extra structure hurts. **flop-reduction is the WRONG axis here.**
+2. ⛔ **Multi-stage FUSION (store/load amortization) — MEASURED-WRONG-AXIS 2026-06-15 (build/aos_fusion_probe.cpp).**
+   Decomposed the 43-GFLOPS ceiling: FULL 43.3 · 1-STORE 40.0 (15 fewer stores ⇒ −7.5%, SLOWER) · 1-LOAD 38.3
+   (−11.4%, SLOWER) · NOPERM 51.2 (+18%). ⇒ the codelet is NOT load/store-bound (it's fully L1-pipelined; removing
+   mem-ops only adds dependency work). The ONE real leaf cost = the **port-5 PERMUTES** in the AoS cmul (+18% if
+   removed). But even permute-free the leaf caps **51.2 = 0.79× MKL@1024** ⇒ NO isolated-codelet optimization reaches
+   MKL. fusion-of-the-leaf is dead; `_schedule` has nothing to grip (no spill, not mem-bound).
+3. ⭐⭐ **CORRECTED PREMISE (the whole "climb the isolated leaf 43→71" framing was a category error):** the isolated
+   32-pt codelet rate (43) is NOT comparable to MKL@1024 (64.8) — a 32-pt transform inherently sustains a LOWER
+   GFLOPS rate than a 1024 (less overhead amortization). At MATCHED N=32 Cerid's codelet already **CRUSHES MKL 1.16×**
+   (prior sessions). The leaf is FINE. MKL's 64.8@1024 = its LARGE-N STRUCTURE, not leaf quality (confirmed: leaf
+   caps 51 < 64.8). ⇒ the ONLY open lever = the **large-N AoS-leaf ASSEMBLY** (Stockham-AoS or recursive-AoS keeping
+   sub-results register-resident across radix stages — NOT four-step, Part 19 = 0.26× DEAD), which is the genfft/
+   Spiral structural codegen = person-WEEKS. The isolated-codelet harness is good for killing leaf-level false leads
+   (it killed bricks 1 & 2) but is NOT the yardstick for the assembly — that needs a full-transform-vs-MKL@matched-N
+   harness (the existing run_bench_fft.sh / bench_fft_vs_refs.cpp).
+4. THE actual remaining build = large-N AoS-leaf Stockham assembly, measured by the FULL-transform bench vs MKL@same-N
+   (NOT the isolated-codelet harness). Person-weeks, fresh-context. Bricks 1 & 2 proved the leaf is not the lever.
+
+## 14. ⭐ STRUCTURAL-BUILD SPEC — the blocked-tile NT transpose in the four-step (large-N parity lever, user-chosen 2026-06-15)
+
+**The leaf is solved (§13). The entire large-N MKL gap is the four-step's TRANSPOSE/intermediate efficiency — NOT
+the codelet, NOT an AoS layout swap (AoS-four-step = 0.26× DEAD, Part 19; SoA-four-step = 0.72 is the best assembly).**
+
+### The lever (the ONE genuinely-untested structural piece, Part 13)
+The SoA four-step (0.72) spends ~54% of large-N time in the FLOOR = strided column gather/twiddle-scatter at ~14 GB/s.
+`transbw.cpp` proved a **blocked-tile (B=64) in-register transpose + contiguous NT-store = 25.7 GB/s** in isolation
+(3× the strided rate, ABOVE MKL's ~20). FLOOR ARITHMETIC (Part 12): floor 48→~15 ms ⇒ 8M ~66 ms ≈ **0.94× = parity**.
+OPEN QUESTION (Part 13, still genuinely open): does 25.7 survive woven into the four-step's gather + sub-FFT SCRATCH
+read, or is it capped by the strided scratch access? Answering it IS the build (a cheap probe cannot — see warning).
+
+### ⛔ Flawed-probe warning (2026-06-15)
+`build/four_step_mem_probe.cpp` tried to cheap-probe this and FAILED representatively: it did element-by-element NT
+stores to the strided dst (scattered writes = WC-buffer thrash) → fake 3.9 GB/s "cap". The REAL method needs the
+**in-register BxB SIMD transpose THEN contiguous NT-store per output row** (transbw.cpp). Even the "cheap" structural
+probe needs the careful in-register transpose ⇒ this is genuinely the delicate fresh-context build, not a quick test.
+
+### The build (fresh-context, oracle-gated every step)
+- Target: `fft.hpp` `execute_four_step` (~L870–950), `kBudget=1MB` (~L953), kFourStepMin=2¹⁹ (~L777).
+- Replace the strided column gather/scatter with: read a B×B tile (rows contiguous) → **in-register SIMD transpose**
+  (`transpose_simd_c64` exists per Part 12) → contiguous **NT-store** (`_mm_stream_pd` + `_mm_sfence`; 32B-align). The
+  sub-FFT then reads the transposed scratch UNIT-STRIDE (this is the part to measure — does it stay near 25.7?).
+- ⚠ DELICATE: partial blocks (n2 not div-B), NT 32B alignment, the in-tile transpose. Gate vs the brute-DFT oracle
+  AND the {1..16} determinism moat at EACH step (NT stores are byte-identical for finite data ⇒ moat-safe).
+- Measure with the FULL-transform bench `scripts/run_bench_fft.sh` (GFLOPS vs MKL@same-N), NOT the isolated harness.
+- If the woven rate holds near 25.7 → 0.72→~0.9+ at large-N = the crush. If it caps (strided scratch read binds) →
+  Part 13's wall is REAL and the remainder is the full genfft/Spiral plan. Either way it's a measured, honest answer.
+
+### Targets / honest frame
+Isolated codelet 43 → ~71 GFLOPS (live MKL@1024 ≈ 64–71 thermal-dependent). hpkfft-paper-2023 PROVES 1.6× MKL in AoS
+C++ on this exact AVX2 class ⇒ REACHABLE, not a ceiling — but it is person-weeks of codegen, fresh-context only.
+Seeds: `build/aos_codelet_bench.cpp`, `build/aos_candidate.hpp`, `build/aos_probe.cpp` (45 proof), `build/sr16.cpp`
+(split-radix +5% brick), `build/soa16.cpp` (SoA-within refutation), `build/aos_fft1024.cpp` (the 0.26×-assembly wall).
