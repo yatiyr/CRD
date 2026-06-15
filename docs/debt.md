@@ -5,6 +5,18 @@ move to a session log entry and remove from here.
 
 ## Active debt
 
+### `dct-gcc-f32-werror-conversion` — pre-existing gcc-f32 `-Werror=conversion` in `dct.hpp` (found 2026-06-15)
+
+`engine/hesap-fft/include/crd/hesap/fft/dct.hpp:244` (and the sibling DCT-III/DST-III direct loops) computes
+`std::sin(pi * static_cast<double>(2*nn+1) * static_cast<double>(k+1) / (2.0*n))` where `nn,k,n` are `usize`;
+the **f32** instantiation (`DctPlan<float>::direct_dst3`, triggered by `test_dct.cpp`) trips gcc
+`-Werror=conversion` (`unsigned long → double` may change value). This blocks the WSL-gcc build of
+`crd-hesap-fft-tests`. **It is latent because the v10-f DCT slice was DoD'd only on the 4 Windows configs**
+(MSVC accepts it silently) — the documented `feedback_T_double_literal` / no-`T{double_literal}` hazard class.
+**Fix:** wrap the integer subexpressions in explicit `static_cast<double>` (or compute the angle from an `int`
+index), then re-confirm the DCT gates stay bit-identical on Windows. Not fixed in the FFT small-N slice (off
+its scope; the FFT code itself is gcc-strict-clean). → `docs/sessions/2026-06-15-fft-small-n-engine-crush.md`.
+
 ### ✅ `mf-lu-frontparallel-flaky-uaf` — FIXED 2026-06-09 (root cause: `TlsfAllocator::init_pool` end-sentinel mistiling). No remaining debt.
 
 > **FIXED at the allocator root.** The pre-existing flaky crash (~20/30 runs) in the PARALLEL multifrontal-LU

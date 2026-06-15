@@ -2,9 +2,8 @@
 
 // dct.hpp — Phase 3.1.6 v10-f: Discrete Cosine / Sine transforms (DCT-II/III, DST-II/III), the workhorses of
 // JPEG / audio / MFCC / spectral methods. Computed via Makhoul's O(N log N) reduction to ONE N-point complex
-// FFT (the v10-b engine), NOT the O(N²) direct sum. scipy/pocketfft (numpy/scipy default) do the same; since
-// Cerid's FFT beats PocketFFT, Cerid's DCT/DST beats the PocketFFT-backed scipy.fft.dct. Conventions match
-// scipy norm=None exactly (every formula verified against scipy in scripts/dct_research.py). DCT-III is the
+// FFT (the v10-b engine), NOT the O(N²) direct sum. Conventions match scipy norm=None exactly (every formula
+// verified against scipy in scripts/dct_research.py — scipy is the correctness oracle). DCT-III is the
 // inverse of DCT-II up to the 2N factor; DST-III the inverse of DST-II. N must be a power of two (≥ 2).
 //
 // Correctness gate = the DIRECT O(N²) DCT/DST sum (the analog of the FFT's brute-force-DFT gate) — NOT a
@@ -59,7 +58,7 @@ public:
 
     // DCT-II: shuffle (even samples up, odd samples down) → FFT → 2 Re(e^{-iθ_k} W[k]). The shuffled sequence is
     // REAL, so a real FFT (half the work of a complex FFT — the v10-d engine) suffices: rfft gives W[0..N/2];
-    // W[k>N/2] = conj(W[N-k]). This is what makes Cerid's DCT beat FFTW's real-DCT codelet, not just PocketFFT.
+    // W[k>N/2] = conj(W[N-k]).
     void dct2(crd::containers::ConstSpan<T> x, crd::containers::Span<T> y) const
     {
         const crd::usize n = m_n;
@@ -250,13 +249,13 @@ public:
 
 private:
     crd::usize m_n;
-    mutable FftPlan<T> m_fft;                         // complex N-FFT (inverse transforms + N=2 forward)
-    mutable RealFftPlan<T> m_rfft;                    // real N-FFT (forward dct2 — half the work; v10-d)
-    mutable crd::containers::Array<Complex<T>> m_buf; // N-point complex scratch
-    mutable crd::containers::Array<T> m_rbuf;         // N-point real shuffle scratch (forward real path)
+    mutable FftPlan<T> m_fft;                          // complex N-FFT (inverse transforms + N=2 forward)
+    mutable RealFftPlan<T> m_rfft;                     // real N-FFT (forward dct2 — half the work; v10-d)
+    mutable crd::containers::Array<Complex<T>> m_buf;  // N-point complex scratch
+    mutable crd::containers::Array<T> m_rbuf;          // N-point real shuffle scratch (forward real path)
     mutable crd::containers::Array<Complex<T>> m_half; // half-spectrum N/2+1 (rfft output)
-    crd::containers::Array<T> m_cos;                  // cos θ_k, k = 0..N
-    crd::containers::Array<T> m_sin;                  // sin θ_k
+    crd::containers::Array<T> m_cos;                   // cos θ_k, k = 0..N
+    crd::containers::Array<T> m_sin;                   // sin θ_k
 };
 
 } // namespace crd::hesap::fft

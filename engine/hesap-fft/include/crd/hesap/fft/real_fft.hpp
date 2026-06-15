@@ -2,9 +2,9 @@
 
 // real_fft.hpp — Phase 3.1.6 v10-d: real-input FFT (RFFT/IRFFT) via the half-size complex transform +
 // Hermitian symmetry. A real n-point DFT has only n/2+1 independent outputs (X[n-k] = conj(X[k])), so we
-// pack the n reals as n/2 complex, run ONE size-(n/2) complex FftPlan, and recombine — ~2× the work of a
-// full complex FFT. Reuses the v10-b engine (deterministic plan, beats PocketFFT) ⇒ Cerid's rfft beats
-// numpy/scipy/PocketFFT's rfft. Normalization: forward unnormalized, irfft applies 1/n (round-trip exact).
+// pack the n reals as n/2 complex, run ONE size-(n/2) complex FftPlan, and recombine — about half the work of a
+// full complex FFT. Reuses the v10-b engine (deterministic plan). Normalization: forward unnormalized, irfft
+// applies 1/n (round-trip exact).
 // Lower-layer RAW (Complex<f32/f64>, ADR-0078).
 
 #include <crd/hesap/fft/fft.hpp>
@@ -55,7 +55,7 @@ public:
             const Complex<T> znk = z[(h - k) % h];
             const T er = (zk.re + znk.re) * static_cast<T>(0.5);
             const T ei = (zk.im - znk.im) * static_cast<T>(0.5);
-            const T orr = (zk.im + znk.im) * static_cast<T>(0.5);  // O = (Z[k]-conj Z[h-k])/(2i)
+            const T orr = (zk.im + znk.im) * static_cast<T>(0.5); // O = (Z[k]-conj Z[h-k])/(2i)
             const T oii = (znk.re - zk.re) * static_cast<T>(0.5);
             const T wr = m_wn_re[k];
             const T wi = m_wn_im[k];
@@ -78,10 +78,10 @@ public:
             const T dr = (xk.re - xhk.re) * static_cast<T>(0.5);
             const T di = (xk.im + xhk.im) * static_cast<T>(0.5); // D = (X[k]-conj X[h-k])/2
             const T wr = m_wn_re[k];
-            const T wi = m_wn_im[k];                  // W_n^{-k} = conj(W_n^k) = (wr, -wi)
-            const T orr = wr * dr + wi * di;          // O[k] = W_n^{-k}·D
+            const T wi = m_wn_im[k];         // W_n^{-k} = conj(W_n^k) = (wr, -wi)
+            const T orr = wr * dr + wi * di; // O[k] = W_n^{-k}·D
             const T oii = wr * di - wi * dr;
-            z[k] = Complex<T>{er - oii, ei + orr};    // Z[k] = E[k] + i·O[k]
+            z[k] = Complex<T>{er - oii, ei + orr}; // Z[k] = E[k] + i·O[k]
         }
         m_half.execute(crd::containers::Span<Complex<T>>(z, h), FftDirection::Inverse); // = h·z (unnormalized)
         const T inv = static_cast<T>(1) / static_cast<T>(h);
@@ -94,9 +94,9 @@ public:
 
 private:
     crd::usize m_n;
-    mutable FftPlan<T> m_half;             // size n/2 complex transform (its scratch is reused)
+    mutable FftPlan<T> m_half; // size n/2 complex transform (its scratch is reused)
     mutable crd::containers::Array<Complex<T>> m_z;
-    crd::containers::Array<T> m_wn_re;     // W_n^k, k = 0..n/2
+    crd::containers::Array<T> m_wn_re; // W_n^k, k = 0..n/2
     crd::containers::Array<T> m_wn_im;
 };
 } // namespace crd::hesap::fft

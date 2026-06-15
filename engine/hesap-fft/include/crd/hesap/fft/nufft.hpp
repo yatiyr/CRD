@@ -1,11 +1,11 @@
 #pragma once
 
 // nufft.hpp — Phase 3.1.6 v10-g: Non-Uniform FFT (Greengard-Lee), type-1 (nonuniform->uniform "spread") and
-// type-2 (uniform->nonuniform "interp"), 1D, complex f32/f64. The gold standard is FINUFFT (Barnett-Magland-
-// af Klinteberg); we match its knobs so a speed delta is implementation, not kernel choice: the ES kernel
-// ("exponential of semicircle", phi(z)=exp(beta(sqrt(1-z^2)-1))), upsample factor sigma=2, kernel half-width
-// w tied to the requested tolerance. The fine-grid FFT reuses the v10-b FftPlan (which is sub-MKL on the raw
-// kernel — but a NUFFT is GRIDDING-bound, not FFT-kernel-bound, so the spreader is where the fight is won).
+// type-2 (uniform->nonuniform "interp"), 1D, complex f32/f64. Kernel parameters follow the FINUFFT reference
+// (Barnett-Magland-af Klinteberg) so the construction is directly comparable: the ES kernel ("exponential of
+// semicircle", phi(z)=exp(beta(sqrt(1-z^2)-1))), upsample factor sigma=2, kernel half-width w tied to the
+// requested tolerance. The fine-grid FFT reuses the v10-b FftPlan; a NUFFT is GRIDDING-bound, not
+// FFT-kernel-bound, so the spreader is where the time goes.
 //
 // DETERMINISM (and the one genuine correctness hazard in the whole FFT cluster): type-1 SCATTERS each source
 // onto w neighbouring fine-grid cells WITH ACCUMULATION. Serial accumulation in point order is a fixed reduction
@@ -45,8 +45,8 @@ namespace crd::hesap::fft
 // Spreading-kernel / accuracy options. Defaults track FINUFFT's upsampfac=2.0 path.
 struct NufftOpts
 {
-    double tol = 1e-9;   // requested accuracy => kernel half-width w
-    double sigma = 2.0;  // upsample factor (fine grid n ~ sigma * N, rounded UP to a power of two)
+    double tol = 1e-9;  // requested accuracy => kernel half-width w
+    double sigma = 2.0; // upsample factor (fine grid n ~ sigma * N, rounded UP to a power of two)
 };
 
 // 1D NUFFT plan: N uniform modes (k=-N/2..N/2-1) <-> M nonuniform points x_j. The kernel weights are
@@ -173,9 +173,12 @@ public:
         }
 #ifdef CRD_NUFFT_PROFILE
         const auto t_end = std::chrono::steady_clock::now();
-        auto us = [](auto a, auto b) { return std::chrono::duration<double, std::micro>(b - a).count(); };
-        std::fprintf(stderr, "[nufft-prof t1 n=%zu m=%zu] zero+spread=%.1fus fft=%.1fus deconv=%.1fus\n", m_n,
-                     m_npts, us(t_spread0, t_fft0), us(t_fft0, t_deconv0), us(t_deconv0, t_end));
+        auto us = [](auto a, auto b)
+        {
+            return std::chrono::duration<double, std::micro>(b - a).count();
+        };
+        std::fprintf(stderr, "[nufft-prof t1 n=%zu m=%zu] zero+spread=%.1fus fft=%.1fus deconv=%.1fus\n", m_n, m_npts,
+                     us(t_spread0, t_fft0), us(t_fft0, t_deconv0), us(t_deconv0, t_end));
 #endif
     }
 
@@ -254,8 +257,7 @@ public:
     // -------- direct O(N*M) references (the CORRECTNESS GATE — exact, no kernel) -------------------------
 
     // Direct type-1: f_k = sum_j c_j exp(isign*i*k*x_j). Cross-checks type1() to the kernel's tolerance.
-    void direct_type1(crd::containers::ConstSpan<Complex<T>> c, crd::containers::Span<Complex<T>> f,
-                      int isign) const
+    void direct_type1(crd::containers::ConstSpan<Complex<T>> c, crd::containers::Span<Complex<T>> f, int isign) const
     {
         CRD_ASSERT(m_have_points && c.size() == m_npts && f.size() == m_nmodes);
         const double s = (isign >= 0) ? 1.0 : -1.0;
@@ -278,8 +280,7 @@ public:
     }
 
     // Direct type-2: c_j = sum_k f_k exp(isign*i*k*x_j).
-    void direct_type2(crd::containers::ConstSpan<Complex<T>> f, crd::containers::Span<Complex<T>> c,
-                      int isign) const
+    void direct_type2(crd::containers::ConstSpan<Complex<T>> f, crd::containers::Span<Complex<T>> c, int isign) const
     {
         CRD_ASSERT(m_have_points && f.size() == m_nmodes && c.size() == m_npts);
         const double s = (isign >= 0) ? 1.0 : -1.0;
@@ -407,14 +408,14 @@ private:
     crd::memory::IAllocator* m_alloc;
     crd::usize m_nmodes;
     crd::usize m_npts;
-    crd::usize m_n;   // fine grid size (power of two)
-    crd::usize m_w;   // kernel half-width (grid points)
-    double m_beta;    // ES kernel shape
-    mutable FftPlan<T> m_fft;                 // size m_n complex transform (scratch reused)
-    crd::containers::Array<T> m_dk;           // deconvolution factors, one per output mode
-    crd::containers::Array<T> m_x;            // folded points (radians)
-    crd::containers::Array<crd::i64> m_i1;    // per-point base fine-grid index
-    crd::containers::Array<T> m_kw;           // per-point kernel weights (M * w), shared by type-1/type-2
+    crd::usize m_n;                                    // fine grid size (power of two)
+    crd::usize m_w;                                    // kernel half-width (grid points)
+    double m_beta;                                     // ES kernel shape
+    mutable FftPlan<T> m_fft;                          // size m_n complex transform (scratch reused)
+    crd::containers::Array<T> m_dk;                    // deconvolution factors, one per output mode
+    crd::containers::Array<T> m_x;                     // folded points (radians)
+    crd::containers::Array<crd::i64> m_i1;             // per-point base fine-grid index
+    crd::containers::Array<T> m_kw;                    // per-point kernel weights (M * w), shared by type-1/type-2
     mutable crd::containers::Array<Complex<T>> m_grid; // fine grid scratch
     bool m_have_points;
 };

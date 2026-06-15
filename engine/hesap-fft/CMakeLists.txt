@@ -1,5 +1,5 @@
-# crd-hesap-fft — Phase 3.1.6 v10 (FFT cluster). New ADR. Gold standards FFTW3 + PocketFFT + MKL; ratified
-# bar = BEAT MKL, scope = a→h (memory project_v10_fft_plan; plan in docs/phases/phase-3.1.6-hesap.md).
+# crd-hesap-fft — Phase 3.1.6 v10 (FFT cluster). New ADR. Scope = a→h (memory project_v10_fft_plan; plan in
+# docs/phases/phase-3.1.6-hesap.md; performance scoreboard + reference comparisons in docs/research/).
 # v10-a: complex FFT substrate — deterministic plan-from-factorization (no runtime measurement), precomputed
 # twiddle table, radix-2 (the correct baseline + the contract); Stockham radix-8 SIMD codelets = v10-b.
 #

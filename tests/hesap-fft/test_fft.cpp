@@ -119,26 +119,32 @@ TEST_CASE("fft: forward matches the brute-force DFT (f32) across sizes", "[fft]"
     }
 }
 
-TEST_CASE("fft: inverse matches the brute-force IDFT (unnormalized)", "[fft]")
+TEST_CASE("fft: inverse matches the brute-force IDFT (unnormalized) across sizes", "[fft]")
 {
     crd::memory::TlsfAllocator alloc(1U << 24);
-    const usize n = 256;
-    cont::Array<Complex<f64>> x(&alloc);
-    fill_lcg(x, n, 12345ULL);
-    cont::Array<Complex<f64>> ref(&alloc);
-    ref.resize(n);
-    naive_dft(cont::ConstSpan<Complex<f64>>(x.data(), n), cont::Span<Complex<f64>>(ref.data(), n), true);
-
-    const fft::FftPlan<f64> plan(&alloc, n);
-    plan.execute(cont::Span<Complex<f64>>(x.data(), n), fft::FftDirection::Inverse);
-
-    double maxerr = 0.0;
-    for (usize k = 0; k < n; ++k)
+    // Sizes 8/16/32 exercise the AoS lane-trick small-N codelets (conj-trick inverse) — the forward sizes test
+    // alone leaves their inverse path ungated. The rest cover the Stockham/four-step inverse.
+    for (usize n : {8U, 16U, 32U, 64U, 256U, 1024U})
     {
-        maxerr = std::max(maxerr, std::hypot(x[k].re - ref[k].re, x[k].im - ref[k].im));
+        cont::Array<Complex<f64>> x(&alloc);
+        fill_lcg(x, n, 12345ULL + n);
+        cont::Array<Complex<f64>> ref(&alloc);
+        ref.resize(n);
+        naive_dft(cont::ConstSpan<Complex<f64>>(x.data(), n), cont::Span<Complex<f64>>(ref.data(), n), true);
+
+        const fft::FftPlan<f64> plan(&alloc, n);
+        plan.execute(cont::Span<Complex<f64>>(x.data(), n), fft::FftDirection::Inverse);
+
+        double maxerr = 0.0;
+        double maxref = 0.0;
+        for (usize k = 0; k < n; ++k)
+        {
+            maxerr = std::max(maxerr, std::hypot(x[k].re - ref[k].re, x[k].im - ref[k].im));
+            maxref = std::max(maxref, std::hypot(ref[k].re, ref[k].im));
+        }
+        INFO("n=" << n << " inverse-vs-naive maxerr=" << maxerr);
+        CHECK(maxerr < 1e-10 * (1.0 + maxref));
     }
-    INFO("inverse-vs-naive maxerr=" << maxerr);
-    CHECK(maxerr < 1e-10);
 }
 
 TEST_CASE("fft: round-trip ifft_normalized(fft(x)) == x", "[fft]")
@@ -222,7 +228,7 @@ TEST_CASE("fft: four-step path (large n) matches the radix-2 reference oracle", 
         std::memcpy(b.data(), x.data(), n * sizeof(Complex<f64>));
 
         const fft::FftPlan<f64> plan(&alloc, n);
-        plan.execute(cont::Span<Complex<f64>>(a.data(), n), fft::FftDirection::Forward); // four-step
+        plan.execute(cont::Span<Complex<f64>>(a.data(), n), fft::FftDirection::Forward);           // four-step
         plan.execute_reference(cont::Span<Complex<f64>>(b.data(), n), fft::FftDirection::Forward); // oracle
 
         double maxref = 0.0;
@@ -267,7 +273,7 @@ TEST_CASE("fft: scheduled radix-8/16 combine passes match the radix-2 oracle", "
         std::memcpy(b.data(), x.data(), n * sizeof(Complex<f64>));
 
         const fft::FftPlan<f64> plan(&alloc, n);
-        plan.execute(cont::Span<Complex<f64>>(a.data(), n), fft::FftDirection::Forward);          // radix-8/16
+        plan.execute(cont::Span<Complex<f64>>(a.data(), n), fft::FftDirection::Forward);           // radix-8/16
         plan.execute_reference(cont::Span<Complex<f64>>(b.data(), n), fft::FftDirection::Forward); // oracle
 
         double maxref = 0.0;
@@ -326,13 +332,60 @@ TEST_CASE("fft: batched FFT matches the per-transform oracle", "[fft]")
             for (usize i = 0; i < m; ++i)
             {
                 maxref = std::max(maxref, std::hypot(single[i].re, single[i].im));
-                maxerr = std::max(maxerr, std::hypot(work[i * batch + t].re - single[i].re,
-                                                     work[i * batch + t].im - single[i].im));
+                maxerr = std::max(
+                    maxerr, std::hypot(work[i * batch + t].re - single[i].re, work[i * batch + t].im - single[i].im));
             }
             maxrel = std::max(maxrel, maxerr / (1.0 + maxref));
         }
         INFO("m=" << m << " batched-vs-oracle maxrel=" << maxrel);
         CHECK(maxrel < 1e-12);
+    }
+}
+
+TEST_CASE("fft: batched FFT even-batch (AoS over-2 fast path) matches the oracle, both directions", "[fft]")
+{
+    crd::memory::TlsfAllocator alloc(1ULL << 24);
+    // batch even ⇒ engages the N=8 and N=16 AoS over-2 fast paths (m=16 batch=8 is cache-resident → atom);
+    // m=64 stays on the SoA path (even-batch coverage, both directions).
+    for (usize m : {8U, 16U, 64U})
+    {
+        const usize batch = 8;
+        for (auto dir : {fft::FftDirection::Forward, fft::FftDirection::Inverse})
+        {
+            const fft::FftPlan<f64> plan(&alloc, m);
+            cont::Array<Complex<f64>> in(&alloc);
+            in.resize(m * batch);
+            fill_lcg(in, m * batch, 0xBEEFULL + m + (dir == fft::FftDirection::Inverse ? 1U : 0U));
+            cont::Array<Complex<f64>> work(&alloc);
+            work.resize(m * batch);
+            std::memcpy(work.data(), in.data(), m * batch * sizeof(Complex<f64>));
+
+            plan.execute_batched(cont::Span<Complex<f64>>(work.data(), m * batch), batch, dir);
+
+            double maxrel = 0.0;
+            for (usize t = 0; t < batch; ++t)
+            {
+                cont::Array<Complex<f64>> single(&alloc);
+                single.resize(m);
+                for (usize i = 0; i < m; ++i)
+                {
+                    single[i] = in[i * batch + t];
+                }
+                plan.execute_reference(cont::Span<Complex<f64>>(single.data(), m), dir);
+                double maxref = 0.0;
+                double maxerr = 0.0;
+                for (usize i = 0; i < m; ++i)
+                {
+                    maxref = std::max(maxref, std::hypot(single[i].re, single[i].im));
+                    maxerr = std::max(maxerr, std::hypot(work[i * batch + t].re - single[i].re,
+                                                         work[i * batch + t].im - single[i].im));
+                }
+                maxrel = std::max(maxrel, maxerr / (1.0 + maxref));
+            }
+            INFO("m=" << m << " dir=" << (dir == fft::FftDirection::Forward ? "fwd" : "inv")
+                      << " even-batch maxrel=" << maxrel);
+            CHECK(maxrel < 1e-12);
+        }
     }
 }
 
