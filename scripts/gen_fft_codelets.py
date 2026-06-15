@@ -74,18 +74,29 @@ class Gen:
         )
 
     def fft(self, xs, sign):
-        """Recursive radix-2 Cooley-Tukey on the list of value-names xs (len = power of 2)."""
+        """Recursive SPLIT-RADIX (2/4) DIT on xs (len = power of 2): X[k]=U[k]+(T1+T3),
+        X[k+n/2]=U[k]-(T1+T3), X[k+n/4]=U[k+n/4]+sign*i*(T1-T3), X[k+3n/4]=U[k+n/4]-sign*i*(T1-T3),
+        with U=DFT(even), Z1=DFT(xs[1::4]), Z3=DFT(xs[3::4]), T1=W^k*Z1, T3=W^{3k}*Z3. ~33% fewer real muls
+        than radix-2 (the i-multiply is free). Self-checked vs numpy before emit."""
         n = len(xs)
         if n == 1:
             return xs
-        even = self.fft(xs[0::2], sign)
-        odd = self.fft(xs[1::2], sign)
+        if n == 2:  # radix-2 base (split-radix bottoms out here)
+            return [self.add(xs[0], xs[1]), self.sub(xs[0], xs[1])]
+        u = self.fft(xs[0::2], sign)   # n/2 DFT of the even-indexed points
+        z1 = self.fft(xs[1::4], sign)  # n/4 DFT of the j=4m+1 coset
+        z3 = self.fft(xs[3::4], sign)  # n/4 DFT of the j=4m+3 coset
         out = [None] * n
-        for k in range(n // 2):
-            w = cmath.exp(sign * 2j * cmath.pi * k / n)
-            t = self.mul_tw(odd[k], w)
-            out[k] = self.add(even[k], t)
-            out[k + n // 2] = self.sub(even[k], t)
+        q = n // 4
+        for k in range(q):
+            t1 = self.mul_tw(z1[k], cmath.exp(sign * 2j * cmath.pi * k / n))
+            t3 = self.mul_tw(z3[k], cmath.exp(sign * 2j * cmath.pi * 3 * k / n))
+            a = self.add(t1, t3)
+            b = self.mul_tw(self.sub(t1, t3), complex(0.0, sign))  # sign*i*(T1-T3); free ±i mul
+            out[k] = self.add(u[k], a)
+            out[k + n // 2] = self.sub(u[k], a)
+            out[k + q] = self.add(u[k + q], b)
+            out[k + 3 * q] = self.sub(u[k + q], b)
         return out
 
 
@@ -134,17 +145,27 @@ def _build_twiddle_dag(L, inverse):
             return add(("mulnj", src), vals[src] * w)  # × -i
         return add(("mulc", src, repr(wr), repr(wi)), vals[src] * w)
 
-    def fft(xs):
+    def fft(xs):  # SPLIT-RADIX (2/4) DIT — ~33% fewer real muls than radix-2; self-checked vs numpy
         nn = len(xs)
         if nn == 1:
             return xs
-        ev = fft(xs[0::2])
-        od = fft(xs[1::2])
+        if nn == 2:
+            return [add(("add", xs[0], xs[1]), vals[xs[0]] + vals[xs[1]]),
+                    add(("sub", xs[0], xs[1]), vals[xs[0]] - vals[xs[1]])]
+        u = fft(xs[0::2])
+        z1 = fft(xs[1::4])
+        z3 = fft(xs[3::4])
         out = [None] * nn
-        for k in range(nn // 2):
-            t = mul_tw(od[k], cmath.exp(sign * 2j * cmath.pi * k / nn))
-            out[k] = add(("add", ev[k], t), vals[ev[k]] + vals[t])
-            out[k + nn // 2] = add(("sub", ev[k], t), vals[ev[k]] - vals[t])
+        q = nn // 4
+        for k in range(q):
+            t1 = mul_tw(z1[k], cmath.exp(sign * 2j * cmath.pi * k / nn))
+            t3 = mul_tw(z3[k], cmath.exp(sign * 2j * cmath.pi * 3 * k / nn))
+            a = add(("add", t1, t3), vals[t1] + vals[t3])
+            b = mul_tw(add(("sub", t1, t3), vals[t1] - vals[t3]), complex(0.0, sign))  # sign*i*(T1-T3)
+            out[k] = add(("add", u[k], a), vals[u[k]] + vals[a])
+            out[k + nn // 2] = add(("sub", u[k], a), vals[u[k]] - vals[a])
+            out[k + q] = add(("add", u[k + q], b), vals[u[k + q]] + vals[b])
+            out[k + 3 * q] = add(("sub", u[k + q], b), vals[u[k + q]] - vals[b])
         return out
 
     outs = fft(a)

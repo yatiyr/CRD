@@ -12,6 +12,7 @@ Filename convention: `YYYY-MM-DD-<kebab-case-topic>.md` (2-4 word slug).
 | Date | Topic | Used by |
 | ---- | ----- | ------- |
 | 2026-05-27 | [Streaming allocators (virtual-memory substrate)](cerid-streaming-allocators.md) | Phase 2.2 S2+ (ADR-0085) |
+| 2026-06-14 | [Beating MKL on 1D complex FFT — every number + dead end](fft-mkl-crush.md) | v10 `crd-hesap-fft` (FRONTIER, open) |
 
 ## How to add an entry
 

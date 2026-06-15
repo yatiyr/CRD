@@ -27,6 +27,9 @@
 #include <crd/memory/allocator.hpp>
 
 #include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <immintrin.h> // non-temporal stores for the four-step scatter (Lever D resurrection)
 #include <type_traits>
 
 #ifdef CRD_FFT_PROFILE
@@ -75,7 +78,8 @@ template <typename T> class FftPlan
 public:
     FftPlan(crd::memory::IAllocator* alloc, crd::usize n)
         : m_alloc(alloc), m_n(n), m_log2(0), m_tw_re(alloc), m_tw_im(alloc), m_rev(alloc), m_re0(alloc), m_im0(alloc),
-          m_re1(alloc), m_im1(alloc), m_abuf(alloc), m_bbuf(alloc), m_ptw_re(alloc), m_ptw_im(alloc)
+          m_re1(alloc), m_im1(alloc), m_abuf(alloc), m_bbuf(alloc), m_ftw_hi_re(alloc), m_ftw_hi_im(alloc),
+          m_ftw_lo_re(alloc), m_ftw_lo_im(alloc), m_ptw_re(alloc), m_ptw_im(alloc)
     {
         CRD_ASSERT(is_pow2(n)); // v10: power-of-2 (Bluestein/Rader make any size O(n log n) at v10-c)
         while ((crd::usize{1} << m_log2) < n)
@@ -102,20 +106,62 @@ public:
         {
             m_rev[i] = bitrev(i, m_log2);
         }
-        m_re0.resize(n);
-        m_im0.resize(n);
-        m_re1.resize(n);
-        m_im1.resize(n);
-        if (m_use_four_step) // the six-step transpose buffers, allocated ONCE (never per execute call)
+        if (m_use_four_step) // Lever D resurrection: four-step buffers + HOISTED sub-plans + linear twiddle
         {
-            m_abuf.resize(n);
-            m_bbuf.resize(n);
+            // tbuf (transpose intermediate) + scratch (cache-resident block) are RAW 64-BYTE-ALIGNED (NT stores
+            // need ≥32B; crd Array gives only 8B). Freed in the dtor. m_abuf/m_bbuf left empty (unused now).
+            m_tbuf = static_cast<Complex<T>*>(m_alloc->allocate(n * sizeof(Complex<T>), 64));
+            m_scratch = static_cast<Complex<T>*>(m_alloc->allocate(n * sizeof(Complex<T>), 64));
+            const crd::usize n2 = n / m_n1;
+            // Two ~√n twiddle tables (the read-floor cut): W_n^a = W_n^{a_hi·M}·W_n^{a_lo}, M = 1<<m_ftw_h.
+            // h = ⌊log2(n)/2⌋ ⇒ lo size M ≈ √n, hi size n/M ≈ √n; together ~96 KB @8M (L2-resident, not a
+            // 128 MB streaming read). Both tables hold the (cos,−sin) convention so their product is W_n^a.
+            m_ftw_h = m_log2 / 2U;
+            const crd::usize m_split = crd::usize{1} << m_ftw_h; // M
+            const crd::usize hi_count = n / m_split;             // n/M
+            m_ftw_lo_re.resize(m_split);
+            m_ftw_lo_im.resize(m_split);
+            for (crd::usize j = 0; j < m_split; ++j)
+            {
+                m_ftw_lo_re[j] = m_tw_re[j]; // W_n^j
+                m_ftw_lo_im[j] = m_tw_im[j];
+            }
+            m_ftw_hi_re.resize(hi_count);
+            m_ftw_hi_im.resize(hi_count);
+            for (crd::usize j = 0; j < hi_count; ++j)
+            {
+                m_ftw_hi_re[j] = m_tw_re[j * m_split]; // W_n^{j·M}
+                m_ftw_hi_im[j] = m_tw_im[j * m_split];
+            }
+            m_p1 = static_cast<FftPlan<T>*>(m_alloc->allocate(sizeof(FftPlan<T>), alignof(FftPlan<T>)));
+            ::new (static_cast<void*>(m_p1)) FftPlan<T>(m_alloc, m_n1);
+            m_p2 = static_cast<FftPlan<T>*>(m_alloc->allocate(sizeof(FftPlan<T>), alignof(FftPlan<T>)));
+            ::new (static_cast<void*>(m_p2)) FftPlan<T>(m_alloc, n2);
         }
-        // Lever A: the per-pass combine radix is fixed by the size ⇒ precompute the twiddles in the exact
-        // linear (j,m) order the passes consume, killing the per-group `m*j*r` imul + the strided gather.
-        m_rmax_bits = (m_log2 >= 15U && m_log2 <= 20U) ? 5U : (m_log2 >= 12U ? 4U : 3U);
-        build_combine_twiddles();
+        else // direct radix path: SoA ping-pong scratch + Lever A per-pass combine twiddles
+        {
+            m_re0.resize(n);
+            m_im0.resize(n);
+            m_re1.resize(n);
+            m_im1.resize(n);
+            m_rmax_bits = (m_log2 >= 15U && m_log2 <= 20U) ? 5U : (m_log2 >= 12U ? 4U : 3U);
+            build_combine_twiddles();
+        }
     }
+
+    // Owns the hoisted four-step sub-plans + raw aligned buffers ⇒ the plan is PINNED (never copied/moved
+    // in-tree; verified). Deleting copy+move makes any accidental copy a compile error, not a double-free.
+    ~FftPlan()
+    {
+        if (m_p2 != nullptr) { m_p2->~FftPlan(); m_alloc->deallocate(m_p2); }
+        if (m_p1 != nullptr) { m_p1->~FftPlan(); m_alloc->deallocate(m_p1); }
+        if (m_scratch != nullptr) { m_alloc->deallocate(m_scratch); }
+        if (m_tbuf != nullptr) { m_alloc->deallocate(m_tbuf); }
+    }
+    FftPlan(const FftPlan&) = delete;
+    FftPlan& operator=(const FftPlan&) = delete;
+    FftPlan(FftPlan&&) = delete;
+    FftPlan& operator=(FftPlan&&) = delete;
 
     // Build the flat per-pass twiddle table (Lever A). Replays the SAME size-aware planner as `execute`, so the
     // table is laid out in pass order; `execute` walks it with a running pointer. m*j*r ≤ n-1 (bounded).
@@ -202,6 +248,11 @@ public:
             execute_four_step(data, dir);
             return;
         }
+        // NB (2026-06-14): the depth-first recursion (rec_fft_soa) was MEASURED for the mid-band and is dead —
+        // worse than this Stockham path at every size (8192 −6%, 65536 −27%, 131072 −33% collapsing). Decisive:
+        // at n=1024 (fully L1-resident, ZERO cache penalty) this codelet path is ~0.46× MKL — so the mid-band
+        // wall is CODELET QUALITY in isolation, not cache structure; the lever is gen_fft_codelets.py (modified
+        // split-radix + scheduling), not a recursive driver. rec_fft_soa kept as a seed only.
         const T isign = (dir == FftDirection::Inverse) ? static_cast<T>(-1) : static_cast<T>(1);
         T* xr = m_re0.data();
         T* xi = m_im0.data();
@@ -368,46 +419,240 @@ public:
             }
         }
         const T isign = (dir == FftDirection::Inverse) ? static_cast<T>(-1) : static_cast<T>(1);
-        for (crd::usize len = 2; len <= m_n; len <<= 1)
+        // RADIX-8 DIT (⅓ the passes of radix-2). One radix-2 or radix-4 remainder stage first so the rest is
+        // pure radix-8 (log2(n) mod 3 → 0/1/2). All butterflies are NESTED (fused radix-2 stages) for the
+        // bit-reversed input. q = current sub-size; step = n/(building size); twiddles carry isign.
+        crd::usize len = 1;
+        const crd::u32 rem = m_log2 % 3U;
+        if (rem == 1U) // one radix-2 stage (1→2)
         {
-            const crd::usize half = len >> 1;
-            const crd::usize step = m_n / len;
-            for (crd::usize base = 0; base < m_n; base += len)
+            const crd::usize step = m_n >> 1;
+            for (crd::usize base = 0; base < m_n; base += 2)
+            {
+                batched_butterfly2(d, b, base * b, (base + 1) * b, m_tw_re[0], isign * m_tw_im[0]);
+            }
+            (void)step;
+            len = 2;
+        }
+        else if (rem == 2U) // one radix-4 stage (1→4): q=1 ⇒ ws=W_2^0=1, w0=W_4^0=1, w1=W_4^1
+        {
+            const crd::usize tq = m_n >> 2;
+            for (crd::usize base = 0; base < m_n; base += 4)
+            {
+                batched_butterfly4(d, b, base * b, (base + 1) * b, (base + 2) * b, (base + 3) * b, m_tw_re[0],
+                                   isign * m_tw_im[0], m_tw_re[0], isign * m_tw_im[0], m_tw_re[tq],
+                                   isign * m_tw_im[tq]);
+            }
+            len = 4;
+        }
+        for (; len < m_n; len <<= 3) // radix-8 stages: q = len, builds 8·len
+        {
+            const crd::usize q = len;
+            const crd::usize step = m_n / (len << 3);
+            const crd::usize n4 = m_n >> 2, n8 = m_n >> 3, n38 = (3 * m_n) >> 3;
+            for (crd::usize base = 0; base < m_n; base += (len << 3))
             {
                 crd::usize tw = 0;
-                for (crd::usize k = 0; k < half; ++k)
+                for (crd::usize k = 0; k < q; ++k)
                 {
-                    const T wr = m_tw_re[tw];
-                    const T wi = isign * m_tw_im[tw];
-                    Complex<T>* arow = d + (base + k) * b;
-                    Complex<T>* brow = d + (base + k + half) * b;
-                    crd::usize t = 0;
-                    if constexpr (std::is_same_v<T, crd::f64>)
-                    {
-                        namespace simd = crd::math::simd;
-                        using V = simd::Vec4d;
-                        const V wrv(wr), wiv(wi);
-                        for (; t + 4 <= b; t += 4)
-                        {
-                            V ar, ai, br, bi;
-                            simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(arow + t), ar, ai);
-                            simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(brow + t), br, bi);
-                            const V vr = wrv * br - wiv * bi, vi = wrv * bi + wiv * br;
-                            simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(arow + t), ar + vr, ai + vi);
-                            simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(brow + t), ar - vr, ai - vi);
-                        }
-                    }
-                    for (; t < b; ++t)
-                    {
-                        const T ar = arow[t].re, ai = arow[t].im;
-                        const T vr = wr * brow[t].re - wi * brow[t].im;
-                        const T vi = wr * brow[t].im + wi * brow[t].re;
-                        arow[t] = Complex<T>{ar + vr, ai + vi};
-                        brow[t] = Complex<T>{ar - vr, ai - vi};
-                    }
+                    // Nested radix-8 DIT twiddles: ws=W_{2q}^k; w0=W_{4q}^k, w1=W_{4q}^{k+q};
+                    // v0=W_{8q}^k, v1=W_{8q}^{k+q}, v2=W_{8q}^{k+2q}, v3=W_{8q}^{k+3q}.
+                    const T wsr = m_tw_re[4 * tw], wsi = isign * m_tw_im[4 * tw];
+                    const T w0r = m_tw_re[2 * tw], w0i = isign * m_tw_im[2 * tw];
+                    const T w1r = m_tw_re[2 * tw + n4], w1i = isign * m_tw_im[2 * tw + n4];
+                    const T v0r = m_tw_re[tw], v0i = isign * m_tw_im[tw];
+                    const T v1r = m_tw_re[tw + n8], v1i = isign * m_tw_im[tw + n8];
+                    const T v2r = m_tw_re[tw + n4], v2i = isign * m_tw_im[tw + n4];
+                    const T v3r = m_tw_re[tw + n38], v3i = isign * m_tw_im[tw + n38];
+                    const crd::usize p = (base + k) * b;
+                    batched_butterfly8(d, b, p, p + q * b, p + 2 * q * b, p + 3 * q * b, p + 4 * q * b,
+                                       p + 5 * q * b, p + 6 * q * b, p + 7 * q * b, wsr, wsi, w0r, w0i, w1r, w1i,
+                                       v0r, v0i, v1r, v1i, v2r, v2i, v3r, v3i);
                     tw += step;
                 }
             }
+        }
+    }
+
+    // One radix-2 batched butterfly over the contiguous batch axis (Vec4d over t for f64; scalar tail).
+    static void batched_butterfly2(Complex<T>* d, crd::usize b, crd::usize o0, crd::usize o1, T wr, T wi) noexcept
+    {
+        Complex<T>* arow = d + o0;
+        Complex<T>* brow = d + o1;
+        crd::usize t = 0;
+        if constexpr (std::is_same_v<T, crd::f64>)
+        {
+            namespace simd = crd::math::simd;
+            using V = simd::Vec4d;
+            const V wrv(wr), wiv(wi);
+            for (; t + 4 <= b; t += 4)
+            {
+                V ar, ai, br, bi;
+                simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(arow + t), ar, ai);
+                simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(brow + t), br, bi);
+                const V vr = wrv * br - wiv * bi, vi = wrv * bi + wiv * br;
+                simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(arow + t), ar + vr, ai + vi);
+                simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(brow + t), ar - vr, ai - vi);
+            }
+        }
+        for (; t < b; ++t)
+        {
+            const T ar = arow[t].re, ai = arow[t].im;
+            const T vr = wr * brow[t].re - wi * brow[t].im, vi = wr * brow[t].im + wi * brow[t].re;
+            arow[t] = Complex<T>{ar + vr, ai + vi};
+            brow[t] = Complex<T>{ar - vr, ai - vi};
+        }
+    }
+
+    // One radix-4 batched DIT butterfly over the contiguous batch axis, for BIT-REVERSED input. Two fused
+    // radix-2 stages: inner pairs (o0,o1)&(o2,o3) with ws=W_{2q}^k, then outer (e0,f0)&(e1,f1) with
+    // w0=W_{4q}^k / w1=W_{4q}^{k+q}. In place; twiddles carry isign (pre-conjugated for inverse).
+    static void batched_butterfly4(Complex<T>* d, crd::usize b, crd::usize o0, crd::usize o1, crd::usize o2,
+                                   crd::usize o3, T wsr, T wsi, T w0r, T w0i, T w1r, T w1i) noexcept
+    {
+        Complex<T>* r0 = d + o0;
+        Complex<T>* r1 = d + o1;
+        Complex<T>* r2 = d + o2;
+        Complex<T>* r3 = d + o3;
+        crd::usize t = 0;
+        if constexpr (std::is_same_v<T, crd::f64>)
+        {
+            namespace simd = crd::math::simd;
+            using V = simd::Vec4d;
+            const V wsrv(wsr), wsiv(wsi), w0rv(w0r), w0iv(w0i), w1rv(w1r), w1iv(w1i);
+            for (; t + 4 <= b; t += 4)
+            {
+                V x0r, x0i, x1r, x1i, x2r, x2i, x3r, x3i;
+                simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(r0 + t), x0r, x0i);
+                simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(r1 + t), x1r, x1i);
+                simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(r2 + t), x2r, x2i);
+                simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(r3 + t), x3r, x3i);
+                const V br = wsrv * x1r - wsiv * x1i, bi = wsrv * x1i + wsiv * x1r;   // ws·x1
+                const V er = wsrv * x3r - wsiv * x3i, ei = wsrv * x3i + wsiv * x3r;   // ws·x3
+                const V e0r = x0r + br, e0i = x0i + bi, e1r = x0r - br, e1i = x0i - bi;
+                const V f0r = x2r + er, f0i = x2i + ei, f1r = x2r - er, f1i = x2i - ei;
+                const V g0r = w0rv * f0r - w0iv * f0i, g0i = w0rv * f0i + w0iv * f0r; // w0·f0
+                const V g1r = w1rv * f1r - w1iv * f1i, g1i = w1rv * f1i + w1iv * f1r; // w1·f1
+                simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(r0 + t), e0r + g0r, e0i + g0i);
+                simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(r1 + t), e1r + g1r, e1i + g1i);
+                simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(r2 + t), e0r - g0r, e0i - g0i);
+                simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(r3 + t), e1r - g1r, e1i - g1i);
+            }
+        }
+        for (; t < b; ++t)
+        {
+            const T x0r = r0[t].re, x0i = r0[t].im, x2r = r2[t].re, x2i = r2[t].im;
+            const T br = wsr * r1[t].re - wsi * r1[t].im, bi = wsr * r1[t].im + wsi * r1[t].re;
+            const T er = wsr * r3[t].re - wsi * r3[t].im, ei = wsr * r3[t].im + wsi * r3[t].re;
+            const T e0r = x0r + br, e0i = x0i + bi, e1r = x0r - br, e1i = x0i - bi;
+            const T f0r = x2r + er, f0i = x2i + ei, f1r = x2r - er, f1i = x2i - ei;
+            const T g0r = w0r * f0r - w0i * f0i, g0i = w0r * f0i + w0i * f0r;
+            const T g1r = w1r * f1r - w1i * f1i, g1i = w1r * f1i + w1i * f1r;
+            r0[t] = Complex<T>{e0r + g0r, e0i + g0i};
+            r1[t] = Complex<T>{e1r + g1r, e1i + g1i};
+            r2[t] = Complex<T>{e0r - g0r, e0i - g0i};
+            r3[t] = Complex<T>{e1r - g1r, e1i - g1i};
+        }
+    }
+
+    // One radix-8 batched DIT butterfly, BIT-REVERSED input — three fused radix-2 stages: A) ws=W_{2q}^k on
+    // pairs (0,1)(2,3)(4,5)(6,7); B) w0=W_{4q}^k on (0,2)(4,6), w1=W_{4q}^{k+q} on (1,3)(5,7); C) v0..v3=
+    // W_{8q}^{k,k+q,k+2q,k+3q} on (0,4)(1,5)(2,6)(3,7). In place; twiddles carry isign. Vec4d over the batch +
+    // scalar tail (the 8-pt waist = 16 ymm at peak ⇒ some spill to L1, cheap on the L2-resident block).
+    static void batched_butterfly8(Complex<T>* d, crd::usize b, crd::usize o0, crd::usize o1, crd::usize o2,
+                                   crd::usize o3, crd::usize o4, crd::usize o5, crd::usize o6, crd::usize o7,
+                                   T wsr, T wsi, T w0r, T w0i, T w1r, T w1i, T v0r, T v0i, T v1r, T v1i, T v2r,
+                                   T v2i, T v3r, T v3i) noexcept
+    {
+        Complex<T>* r0 = d + o0;
+        Complex<T>* r1 = d + o1;
+        Complex<T>* r2 = d + o2;
+        Complex<T>* r3 = d + o3;
+        Complex<T>* r4 = d + o4;
+        Complex<T>* r5 = d + o5;
+        Complex<T>* r6 = d + o6;
+        Complex<T>* r7 = d + o7;
+        crd::usize t = 0;
+        if constexpr (std::is_same_v<T, crd::f64>)
+        {
+            namespace simd = crd::math::simd;
+            using V = simd::Vec4d;
+            const V wsrv(wsr), wsiv(wsi), w0rv(w0r), w0iv(w0i), w1rv(w1r), w1iv(w1i);
+            const V v0rv(v0r), v0iv(v0i), v1rv(v1r), v1iv(v1i), v2rv(v2r), v2iv(v2i), v3rv(v3r), v3iv(v3i);
+            for (; t + 4 <= b; t += 4)
+            {
+                V x0r, x0i, x1r, x1i, x2r, x2i, x3r, x3i, x4r, x4i, x5r, x5i, x6r, x6i, x7r, x7i;
+                simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(r0 + t), x0r, x0i);
+                simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(r1 + t), x1r, x1i);
+                simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(r2 + t), x2r, x2i);
+                simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(r3 + t), x3r, x3i);
+                simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(r4 + t), x4r, x4i);
+                simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(r5 + t), x5r, x5i);
+                simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(r6 + t), x6r, x6i);
+                simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(r7 + t), x7r, x7i);
+                const V s1r = wsrv * x1r - wsiv * x1i, s1i = wsrv * x1i + wsiv * x1r;
+                const V s3r = wsrv * x3r - wsiv * x3i, s3i = wsrv * x3i + wsiv * x3r;
+                const V s5r = wsrv * x5r - wsiv * x5i, s5i = wsrv * x5i + wsiv * x5r;
+                const V s7r = wsrv * x7r - wsiv * x7i, s7i = wsrv * x7i + wsiv * x7r;
+                const V a0r = x0r + s1r, a0i = x0i + s1i, a1r = x0r - s1r, a1i = x0i - s1i;
+                const V a2r = x2r + s3r, a2i = x2i + s3i, a3r = x2r - s3r, a3i = x2i - s3i;
+                const V a4r = x4r + s5r, a4i = x4i + s5i, a5r = x4r - s5r, a5i = x4i - s5i;
+                const V a6r = x6r + s7r, a6i = x6i + s7i, a7r = x6r - s7r, a7i = x6i - s7i;
+                const V m2r = w0rv * a2r - w0iv * a2i, m2i = w0rv * a2i + w0iv * a2r;
+                const V m3r = w1rv * a3r - w1iv * a3i, m3i = w1rv * a3i + w1iv * a3r;
+                const V m6r = w0rv * a6r - w0iv * a6i, m6i = w0rv * a6i + w0iv * a6r;
+                const V m7r = w1rv * a7r - w1iv * a7i, m7i = w1rv * a7i + w1iv * a7r;
+                const V c0r = a0r + m2r, c0i = a0i + m2i, c2r = a0r - m2r, c2i = a0i - m2i;
+                const V c1r = a1r + m3r, c1i = a1i + m3i, c3r = a1r - m3r, c3i = a1i - m3i;
+                const V c4r = a4r + m6r, c4i = a4i + m6i, c6r = a4r - m6r, c6i = a4i - m6i;
+                const V c5r = a5r + m7r, c5i = a5i + m7i, c7r = a5r - m7r, c7i = a5i - m7i;
+                const V n4r = v0rv * c4r - v0iv * c4i, n4i = v0rv * c4i + v0iv * c4r;
+                const V n5r = v1rv * c5r - v1iv * c5i, n5i = v1rv * c5i + v1iv * c5r;
+                const V n6r = v2rv * c6r - v2iv * c6i, n6i = v2rv * c6i + v2iv * c6r;
+                const V n7r = v3rv * c7r - v3iv * c7i, n7i = v3rv * c7i + v3iv * c7r;
+                simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(r0 + t), c0r + n4r, c0i + n4i);
+                simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(r1 + t), c1r + n5r, c1i + n5i);
+                simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(r2 + t), c2r + n6r, c2i + n6i);
+                simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(r3 + t), c3r + n7r, c3i + n7i);
+                simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(r4 + t), c0r - n4r, c0i - n4i);
+                simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(r5 + t), c1r - n5r, c1i - n5i);
+                simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(r6 + t), c2r - n6r, c2i - n6i);
+                simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(r7 + t), c3r - n7r, c3i - n7i);
+            }
+        }
+        for (; t < b; ++t)
+        {
+            // stage A: a_even = x_even + ws·x_odd, a_odd = x_even - ws·x_odd
+            const T s1r = wsr * r1[t].re - wsi * r1[t].im, s1i = wsr * r1[t].im + wsi * r1[t].re;
+            const T s3r = wsr * r3[t].re - wsi * r3[t].im, s3i = wsr * r3[t].im + wsi * r3[t].re;
+            const T s5r = wsr * r5[t].re - wsi * r5[t].im, s5i = wsr * r5[t].im + wsi * r5[t].re;
+            const T s7r = wsr * r7[t].re - wsi * r7[t].im, s7i = wsr * r7[t].im + wsi * r7[t].re;
+            const T a0r = r0[t].re + s1r, a0i = r0[t].im + s1i, a1r = r0[t].re - s1r, a1i = r0[t].im - s1i;
+            const T a2r = r2[t].re + s3r, a2i = r2[t].im + s3i, a3r = r2[t].re - s3r, a3i = r2[t].im - s3i;
+            const T a4r = r4[t].re + s5r, a4i = r4[t].im + s5i, a5r = r4[t].re - s5r, a5i = r4[t].im - s5i;
+            const T a6r = r6[t].re + s7r, a6i = r6[t].im + s7i, a7r = r6[t].re - s7r, a7i = r6[t].im - s7i;
+            // stage B: w0 on (a0,a2)(a4,a6); w1 on (a1,a3)(a5,a7)
+            const T m2r = w0r * a2r - w0i * a2i, m2i = w0r * a2i + w0i * a2r;
+            const T m3r = w1r * a3r - w1i * a3i, m3i = w1r * a3i + w1i * a3r;
+            const T m6r = w0r * a6r - w0i * a6i, m6i = w0r * a6i + w0i * a6r;
+            const T m7r = w1r * a7r - w1i * a7i, m7i = w1r * a7i + w1i * a7r;
+            const T c0r = a0r + m2r, c0i = a0i + m2i, c2r = a0r - m2r, c2i = a0i - m2i;
+            const T c1r = a1r + m3r, c1i = a1i + m3i, c3r = a1r - m3r, c3i = a1i - m3i;
+            const T c4r = a4r + m6r, c4i = a4i + m6i, c6r = a4r - m6r, c6i = a4i - m6i;
+            const T c5r = a5r + m7r, c5i = a5i + m7i, c7r = a5r - m7r, c7i = a5i - m7i;
+            // stage C: v0..v3 on (c0,c4)(c1,c5)(c2,c6)(c3,c7)
+            const T n4r = v0r * c4r - v0i * c4i, n4i = v0r * c4i + v0i * c4r;
+            const T n5r = v1r * c5r - v1i * c5i, n5i = v1r * c5i + v1i * c5r;
+            const T n6r = v2r * c6r - v2i * c6i, n6i = v2r * c6i + v2i * c6r;
+            const T n7r = v3r * c7r - v3i * c7i, n7i = v3r * c7i + v3i * c7r;
+            r0[t] = Complex<T>{c0r + n4r, c0i + n4i};
+            r1[t] = Complex<T>{c1r + n5r, c1i + n5i};
+            r2[t] = Complex<T>{c2r + n6r, c2i + n6i};
+            r3[t] = Complex<T>{c3r + n7r, c3i + n7i};
+            r4[t] = Complex<T>{c0r - n4r, c0i - n4i};
+            r5[t] = Complex<T>{c1r - n5r, c1i - n5i};
+            r6[t] = Complex<T>{c2r - n6r, c2i - n6i};
+            r7[t] = Complex<T>{c3r - n7r, c3i - n7i};
         }
     }
 
@@ -538,9 +783,13 @@ private:
     // (4M 3.58 vs direct 4.89) AND with the AVX2 register transpose (transpose_simd_c64; 4M 3.63 vs direct
     // 7.5, 2M 4.49 vs 7.8). So transpose SPEED was never the issue: 3 full-array transposes + scattered
     // tile access can't beat the direct radix-4's prefetcher-friendly SEQUENTIAL streaming on this hardware.
-    // The only large-N lever left is TRUE cache-oblivious recursion (no explicit transpose) — a larger
-    // rewrite. The transpose/codelet machinery stays as validated scaffold. kFourStepMin beyond any real size.
-    static constexpr crd::usize kFourStepMin = crd::usize{1} << 62;
+    // ⭐ Lever D RESURRECTION (2026-06-14): the prior floor (~51 ms ≈ MKL @8M) was the SCALAR/strided transpose
+    // running at ~8 GB/s. A blocked transpose with NON-TEMPORAL STORES measured 25.7 GB/s on this box (3× that,
+    // above MKL's ~20) ⇒ the 4n transpose floor drops to ~21 ms ≪ MKL's 52 ⇒ four-step viable at large N. The
+    // block four-step below uses NT-store scatter + the hoisted batched sub-FFTs. Enabled above the crossover
+    // (SCAN value — narrow once the kernel + transpose are tuned). Gated vs the radix-2 oracle.
+    static constexpr crd::usize kFourStepMin = crd::usize{1} << 19; // 512K+ = the DRAM-wall trough (SCAN)
+    static constexpr crd::usize kGatherPf = 8; // four-step gather prefetch distance (rows ahead; probe-tuned)
 
     // Dispatch the in-place leaf transform to its generated straight-line codelet (m_n ∈ {2,4,8,16,32}).
     void dispatch_codelet(T* re, T* im, FftDirection dir) const
@@ -634,9 +883,10 @@ private:
         }
     }
 
-    // Bailey six-step (n = n1·n2): three BLOCKED transposes + two contiguous-row sub-FFT phases ⇒ the
-    // sub-FFTs are cache-resident and every pass is cache-friendly — O(1) DRAM passes, not O(log n). Reuses
-    // the validated execute() for the row FFTs (low bug surface; the radix-2-oracle gate validates).
+    // Block four-step RESURRECTION (n = n1·n2): cache-resident BATCHED sub-FFTs + NON-TEMPORAL-STORE scatter
+    // (the 25.7 GB/s transpose lever). Phase 1 = n2 column FFTs (length n1) + inter-stage twiddle, scattered to
+    // m_tbuf with NT stores; phase 2 = n1 row FFTs (length n2), scattered to data with NT stores → natural
+    // order. Gather = block-contiguous (memcpy); the implicit transpose is fused into gather+NT-scatter.
     //   X[k1 + n1·k2] = Σ_{i2} W_n^{k1·i2} · W_{n2}^{i2·k2} · ( Σ_{i1} x[i1·n2 + i2] · W_{n1}^{i1·k1} ).
     void execute_four_step(crd::containers::Span<Complex<T>> data, FftDirection dir) const
     {
@@ -645,42 +895,99 @@ private:
         const crd::usize n1 = m_n1;
         const crd::usize n2 = n / n1;
         const T isign = (dir == FftDirection::Inverse) ? static_cast<T>(-1) : static_cast<T>(1);
-        const FftPlan<T> p1(m_alloc, n1);
-        const FftPlan<T> p2(m_alloc, n2);
-        Complex<T>* a = m_abuf.data();  // ctor-allocated (NOT per call — the alloc was inside the timed loop)
-        Complex<T>* bb = m_bbuf.data();
+        Complex<T>* const tbuf = m_tbuf;
+        Complex<T>* const scratch = m_scratch;
+        Complex<T>* const din = data.data();
+        const crd::usize b1 = block_width(n1);
+        const crd::usize b2 = block_width(n2);
 
-        // T1: data (n1×n2) → a (n2×n1): a[i2·n1 + i1] = data[i1·n2 + i2].
-        transpose(data.data(), a, n1, n2);
-        // length-n1 FFT along each of the n2 contiguous rows of a ⇒ a[i2·n1 + k1] = G[k1][i2].
-        for (crd::usize i2 = 0; i2 < n2; ++i2)
+        // ---- PHASE 1: column FFTs (length n1) + twiddle, NT-scatter to tbuf[i2·n1 + k1] ----
+        for (crd::usize i2 = 0; i2 < n2; i2 += b1)
         {
-            p1.execute(cont::Span<Complex<T>>(a + i2 * n1, n1), dir);
-        }
-        // twiddle a[i2·n1 + k1] *= W_n^{k1·i2}.
-        for (crd::usize i2 = 0; i2 < n2; ++i2)
-        {
-            for (crd::usize k1 = 0; k1 < n1; ++k1)
+            const crd::usize bw = (i2 + b1 < n2) ? b1 : (n2 - i2);
+            for (crd::usize i1 = 0; i1 < n1; ++i1) // gather B columns (each a contiguous bw-run) → element-major
             {
-                const crd::usize idx = (k1 * i2) % n;
-                const T wr = m_tw_re[idx];
-                const T wi = isign * m_tw_im[idx];
-                Complex<T>& z = a[i2 * n1 + k1];
-                const T zr = z.re;
-                const T zi = z.im;
-                z.re = zr * wr - zi * wi;
-                z.im = zr * wi + zi * wr;
+                if (i1 + kGatherPf < n1) // prefetch the strided next row (hint-only ⇒ bit-identical; latency hide)
+                {
+                    _mm_prefetch(reinterpret_cast<const char*>(din + (i1 + kGatherPf) * n2 + i2), _MM_HINT_T0);
+                }
+                std::memcpy(scratch + i1 * bw, din + i1 * n2 + i2, bw * sizeof(Complex<T>));
+            }
+            m_p1->execute_batched(cont::Span<Complex<T>>(scratch, n1 * bw), bw, dir);
+            // twiddle scratch[k1·bw+bb] *= W_n^{k1·col}; NT-store to tbuf row. The twiddle is FACTORED from two
+            // ~√n L2-resident tables (no 128 MB streaming read): W_n^a = W_n^{a_hi·M}·W_n^{a_lo}, a = col·k1 < n.
+            const crd::usize mmask = (crd::usize{1} << m_ftw_h) - 1;
+            const T* const hir = m_ftw_hi_re.data();
+            const T* const hii = m_ftw_hi_im.data();
+            const T* const lor = m_ftw_lo_re.data();
+            const T* const loi = m_ftw_lo_im.data();
+            for (crd::usize bb = 0; bb < bw; ++bb)
+            {
+                const crd::usize col = i2 + bb;
+                Complex<T>* const trow = tbuf + col * n1;
+                for (crd::usize k1 = 0; k1 < n1; ++k1)
+                {
+                    const crd::usize a = col * k1; // < n
+                    const T hr = hir[a >> m_ftw_h];
+                    const T hi = hii[a >> m_ftw_h];
+                    const T lr = lor[a & mmask];
+                    const T li = loi[a & mmask];
+                    const T wr = hr * lr - hi * li;  // Re W_n^a
+                    const T wim = hr * li + hi * lr; // Im W_n^a  (cos,−sin convention preserved by the product)
+                    const T wi = isign * wim;
+                    const Complex<T> z = scratch[k1 * bw + bb];
+                    store_complex(trow + k1, z.re * wr - z.im * wi, z.re * wi + z.im * wr, true); // tbuf 64B
+                }
             }
         }
-        // T2: a (n2×n1) → b (n1×n2): b[k1·n2 + i2] = a[i2·n1 + k1].
-        transpose(a, bb, n2, n1);
-        // length-n2 FFT along each of the n1 contiguous rows of b ⇒ b[k1·n2 + k2] = X[k1 + n1·k2].
-        for (crd::usize k1 = 0; k1 < n1; ++k1)
+
+        // ---- PHASE 2: row FFTs (length n2), NT-scatter to data (natural order) ----
+        // NT-store to `data` only if the caller's buffer is ≥16B aligned (Complex<f64> array is only 8B-aligned
+        // by alignof); else a plain store. Checked ONCE; all per-element offsets preserve the base alignment.
+        const bool nt_out = (reinterpret_cast<std::uintptr_t>(din) % 16U) == 0U;
+        for (crd::usize k1 = 0; k1 < n1; k1 += b2)
         {
-            p2.execute(cont::Span<Complex<T>>(bb + k1 * n2, n2), dir);
+            const crd::usize bw = (k1 + b2 < n1) ? b2 : (n1 - k1);
+            for (crd::usize i2 = 0; i2 < n2; ++i2) // gather B rows (each a contiguous bw-run from tbuf)
+            {
+                if (i2 + kGatherPf < n2) // prefetch the strided next row (hint-only ⇒ bit-identical; latency hide)
+                {
+                    _mm_prefetch(reinterpret_cast<const char*>(tbuf + (i2 + kGatherPf) * n1 + k1), _MM_HINT_T0);
+                }
+                std::memcpy(scratch + i2 * bw, tbuf + i2 * n1 + k1, bw * sizeof(Complex<T>));
+            }
+            m_p2->execute_batched(cont::Span<Complex<T>>(scratch, n2 * bw), bw, dir);
+            for (crd::usize k2 = 0; k2 < n2; ++k2) // X[(k1+bb)+n1·k2] = scratch[k2·bw+bb] → data, NT-store
+            {
+                const Complex<T>* const srow = scratch + k2 * bw;
+                Complex<T>* const drow = din + k2 * n1 + k1;
+                for (crd::usize bb = 0; bb < bw; ++bb)
+                {
+                    store_complex(drow + bb, srow[bb].re, srow[bb].im, nt_out);
+                }
+            }
         }
-        // T3: b (n1×n2) → data (n2×n1): data[k2·n1 + k1] = b[k1·n2 + k2] = X[k1 + n1·k2] ⇒ natural order.
-        transpose(bb, data.data(), n1, n2);
+        _mm_sfence(); // order the non-temporal stores before the caller reads the result
+    }
+
+    // Store one Complex<T>, optionally non-temporal (skips read-for-ownership — the 25.7 GB/s lever). NT path
+    // taken only when nt && f64 && dst is ≥16B aligned (m_tbuf is 64B; the caller's `data` is checked once).
+    static void store_complex(Complex<T>* dst, T re, T im, bool nt) noexcept
+    {
+        if constexpr (std::is_same_v<T, crd::f64>)
+        {
+            if (nt) { _mm_stream_pd(reinterpret_cast<double*>(dst), _mm_set_pd(im, re)); return; }
+        }
+        *dst = Complex<T>{re, im};
+    }
+
+    // Block width so the batched sub-FFT working set (size·B complex) stays cache-resident (~512 KB L2 budget).
+    static crd::usize block_width(crd::usize size) noexcept
+    {
+        constexpr crd::usize kBudget = crd::usize{1} << 20; // 1 MB block (bigger ⇒ larger contiguous gather runs)
+        const crd::usize per = size * sizeof(Complex<T>);
+        const crd::usize b = (per >= kBudget) ? crd::usize{1} : (kBudget / per);
+        return b == 0 ? crd::usize{1} : b;
     }
 
     // One radix-2 Stockham pass: l_half (j) groups, each r unit-stride butterflies. r = n/L, L = 2·l_half.
@@ -1161,11 +1468,15 @@ private:
         return res;
     }
 
-    crd::memory::IAllocator* m_alloc; // for the per-call four-step sub-plans
+    crd::memory::IAllocator* m_alloc; // owns the hoisted four-step sub-plans + raw aligned buffers (dtor frees)
     crd::usize m_n;
     crd::u32 m_log2;
     crd::usize m_n1 = 0;              // four-step split ≈ √n (n2 = n/n1)
     bool m_use_four_step = false;
+    FftPlan<T>* m_p1 = nullptr;       // Lever D: hoisted length-n1 sub-FFT (ctor-built ONCE)
+    FftPlan<T>* m_p2 = nullptr;       // Lever D: hoisted length-n2 sub-FFT
+    Complex<T>* m_tbuf = nullptr;     // Lever D: transpose intermediate, 64B-aligned (NT-store target)
+    Complex<T>* m_scratch = nullptr;  // Lever D: cache-resident block scratch, 64B-aligned
     crd::containers::Array<T> m_tw_re;
     crd::containers::Array<T> m_tw_im;
     crd::containers::Array<crd::usize> m_rev;
@@ -1175,6 +1486,15 @@ private:
     mutable crd::containers::Array<T> m_im1;
     mutable crd::containers::Array<Complex<T>> m_abuf; // six-step transpose buffers (ctor-allocated)
     mutable crd::containers::Array<Complex<T>> m_bbuf;
+    // Lever D twiddle FACTORIZATION (the read-floor cut): the inter-stage twiddle W_n^{i2·k1} is NOT a stored
+    // n-sized table (that was 128 MB of streaming DRAM read per transform @8M — a third of the four-step read
+    // floor, pure overhead MKL never pays). Instead W_n^a = W_n^{a_hi·M}·W_n^{a_lo} from two ~√n L2-resident
+    // tables (a = i2·k1 < n, a_lo = a & (M−1), a_hi = a >> m_ftw_h, M = 1<<m_ftw_h) + one complex multiply.
+    crd::containers::Array<T> m_ftw_hi_re; // W_n^{j·M}, j ∈ [0, n/M)
+    crd::containers::Array<T> m_ftw_hi_im;
+    crd::containers::Array<T> m_ftw_lo_re; // W_n^{j},   j ∈ [0, M)
+    crd::containers::Array<T> m_ftw_lo_im;
+    crd::u32 m_ftw_h = 0; // split shift: M = 1<<m_ftw_h ≈ √n
     crd::containers::Array<T> m_ptw_re; // Lever A: per-pass combine twiddles, flat in (j,m) pass order
     crd::containers::Array<T> m_ptw_im;
     crd::u32 m_rmax_bits = 3U; // size-aware max radix bits/pass (set in ctor; mirrored by build + execute)
