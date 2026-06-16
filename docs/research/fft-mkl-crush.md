@@ -4,9 +4,11 @@
 
 **1. Executive summary.** The large-N (2M–16M) complex-FFT campaign began with a *premature* "AVX2 ceiling"
 conclusion. Black-box + internal **archaeology** (study MKL's behavior → find the structural cause → build the
-closest legal fix → DoD → commit) overturned it and produced **three real banked engine wins**, lifting **f32 8M
-from ~0.61× to ~0.78× MKL** and **f64 8M from ~0.76× to ~0.80×**. The f32-specific gap is closed (f32 caught up to
-the f64 class). Local patching is now closed; the residual is a substrate-level gap vs MKL's mature planner/codegen.
+closest legal fix → DoD → commit) overturned it and produced **FOUR real banked engine wins**, lifting **f32 8M
+from ~0.61× to ~0.78× MKL** and **f64 8M from ~0.76× to ~0.84×**. (4th win: f64 bb-axis SIMD twiddle +5.6%, the f64
+mirror of the f32 twiddle — proving the bb-axis twiddle is a SHARED substrate, not f32-only.) Parity gap closed:
+f64 ~33%, f32 ~44%. The remaining residual is a substrate-level gap vs MKL's mature planner/codegen — the next
+levers are generated codelets + planner cost-model (the parity-assault phase), NOT local patches.
 
 **2. Final scoreboard** (single-thread, core-pinned, MKL_NUM_THREADS=1, AVX2 i9-14900K; all correct: f64 ~1e-15,
 f32 ~3e-7; ratios drift ±5–7% thermally between processes):
@@ -27,6 +29,7 @@ f32 ~3e-7; ratios drift ±5–7% thermally between processes):
 | larger-factor-first split (`m_n1=2^ceil`) | +9–13% large-N | fixed odd-log2 split asymmetry (smaller factor was first) | KEPT |
 | f32 non-temporal scatter store | +~5% f32 | removed RFO/write-allocate penalty (NT was f64-only) | KEPT |
 | f32 SIMD twiddle (bb-axis Vec8f recurrence) | +~11–12% f32 | vectorized the scalar transpose-multiply on the L2-banded axis | KEPT |
+| f64 SIMD twiddle (bb-axis Vec4d recurrence, K=32) | +~5.6% f64 | f64 mirror of the f32 twiddle; bb-axis is a shared substrate | KEPT |
 
 **4. Rejected candidates (each measured, not assumed):**
 | candidate | reason |
@@ -55,6 +58,56 @@ produced the wins.
 **7. Current remaining gap.** f64 ~0.80× / f32 ~0.78× at 8M — **precision-agnostic**, no single phase failing
 (gather/sub-FFT/twiddle/scatter all scale). It is the general FFT movement + codelet micro-arch vs MKL's mature
 planner — a substrate gap, not a defective phase.
+
+### Candidate C-21 — sub-FFT bound analysis: port-bound, not flop-bound; parity = genfft project (2026-06-16)
+After the 4 wins the sub-FFT is the biggest remaining phase. Bound analysis (4096, ~5 GHz): **CRD 2.71 ns/el =
+~13.5 cyc/el vs the radix-8 flop floor ~3.75 (5·N·logN / 16 flop·cyc⁻¹) = 3.6× ABOVE the floor.** MKL ~1.05 ns/el =
+~5.25 cyc/el (~1.75× the split-radix floor 3.0). ⭐ **The sub-FFT is NOT flop-bound — the 9.75 cyc/el over the floor
+is shuffles (160, port-5, port-parallel +10% max per C-12) + spills (110, gcc-optimal per A2) + L2 traffic.**
+⇒ **(a) stage-specialized radix-8 reschedule = refuted (same butterfly, overhead batch-amortized, A2 reorder made
+spills worse) — NOT built (refuted-experiment trap). (b) split-radix codelet: flops are only ~28% of the cyc/el, so
+−20% flops ≈ +6% full = BELOW the 1.10× bar (flops aren't the bottleneck).** No one-cycle POC clears the sub-FFT.
+**The 2.6× MKL sub-FFT edge needs genfft-class codegen (SoA-friendly scheduling + split-radix + optimal register
+allocation SIMULTANEOUSLY) = a code-GENERATOR project (Front A), person-weeks, not a one-cycle POC.** Verified this
+cycle: 4 wins = full DoD green (win-debug/asan/shipping/tidy FFT ctest 17/17; asan confirms the NT-store alignment).
+git: 3 wins committed (d5ae96d, d0f2484), f64 twiddle pending commit. This is correct scoping, NOT a ceiling — the
+bounded experiments are exhausted; the next lever is project-scale.
+
+### ⭐⭐⭐ Candidate C-22 — GENERATED CODELET PROJECT (Fork A) M0: generator beats the engine at N=32/64 (2026-06-16)
+Fork A chosen. Design doc: `docs/design/hesap_fft_generated_codelets.md`. Generator skeleton: `build/gen_subfft.py`
+(split-radix DAG + CSE + numpy self-check at gen + the `_schedule` register-pressure list scheduler → batched Vec4d
+AoS codelets, engine-native layout, no SoA/gather). **M0 result (f64 b=32, vs engine execute_batched, vs MKL):**
+| N | engine ns/el | generated ns/el | speedup | gen err |
+|---|---|---|---|---|
+| 16 | 0.221 | 0.470 | 0.47× | 2.0e-16 (loses to hand-tuned small_n lane-trick — expected) |
+| 32 | 1.061 | 0.545 | **1.95×** | 2.1e-16 |
+| 64 | 1.314 | 1.057 | **1.24×** | 2.3e-16 |
+⭐ **The generated scheduled split-radix codelet BEATS the engine's radix path at N=32 (1.95×) and N=64 (1.24×),
+correct at machine-eps.** Proves the generator pipeline works AND that scheduled-generated > compiler-scheduled
+generic radix for these sizes. **N=64 is the building block (4096 = 64×64) — validates the path to the 4096 sub-FFT
+POC.** Full DoD green for the 4 banked wins (debug/asan/shipping/tidy 17/17). Next: M1 ladder (N=256/512/1024
+generated codelets) → M2 (compose into a 4096 sub-FFT, ≥1.10× → full 8M). The generator project is live and
+producing wins at the leaf level — exactly the substrate lever the bound analysis pointed to.
+
+### ⭐⭐⭐ Candidate C-23 — generator M1 ladder: straight-line caps at N≈64; 4096 path = hierarchical 64×64 (2026-06-16)
+Generated batched Vec4d codelets N=16..1024 (split-radix DAG + `_schedule`, numpy-self-checked, all machine-eps):
+| N | engine ns/el | generated ns/el | speedup | spills | compile |
+|---|---|---|---|---|---|
+| 32 | 1.066 | 0.537 | **1.98×** | low | fast |
+| 64 | 1.285 | 1.033 | **1.24×** | low | fast |
+| 256 | 1.726 | 1.746 | 0.99× | 4454 | — |
+| 512 | 1.948 | 1.860 | 1.05× | 9887 | — |
+| 1024 | 2.353 | 2.564 | **0.92×** | **21996** | **574 s** |
+⭐⭐ **CROSSOVER at N≈64: full straight-line wins to N=64 (1.24×) then collapses** — the DAG (15361 nodes @1024)
+vastly exceeds the 16-ymm file → spills explode (21996 @1024) → loses + 574 s compile (impractical). This is the
+genfft lesson confirmed by measurement: straight-line ONLY for small leaves; larger sizes need recursive
+composition. ⭐ **PATH DECISION for 4096: Path B — hierarchical 64×64** (4096 = 64×64), using the **generated-64
+leaf (1.24× over engine)** as the radix-64 building block + the already-vectorized bb-axis twiddle + a transpose.
+Path A (full 4096 straight-line) REJECTED (would be ~4× the 1024 = catastrophic spills + ~40 min compile). 4096
+plan table: full-DAG ✗(code/compile/spills) · **64×64 hierarchical ✓(generated-64 wins, fits registers)** ·
+256×16 ✗(256 already neutral) · stage-Stockham △(radix-8 near-limit per prior audits). Next M2: build the 4096 =
+64×64 hierarchical batched sub-FFT from the generated-64 leaf, measure ≥1.10× → compose into full 8M. The generator
+produces real leaf wins (N=32 1.98×, N=64 1.24×); the 4096 lever is composing them, not a monster straight-line.
 
 **8. Valid future fronts (substrate-level, NOT local patches):** (A) generated codelet/planner architecture
 (genfft/SPIRAL-class — best long-term CPU path); (B) AVX-512 backend (server targets); (C) GPU FFT backend

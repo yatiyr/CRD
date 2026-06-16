@@ -433,6 +433,69 @@ determinism + replay tests.
 | ↳ **v10-g** ✅ (DONE 2026-06-14, type-1/2 1D) | **NUFFT (Greengard-Lee) vs FINUFFT — WINS small/mid at SUPERIOR accuracy.** SHIPPED `nufft.hpp`: `NufftPlan<T>` type-1 (nonuniform→uniform spread) + type-2 (interp), ES kernel (exp-of-semicircle, β=2.30w) + σ=2 + width-from-tol, the spread→FFT(v10-b)→deconvolve pipeline (`d_k` = GL-quadratured kernel-FT, precomputed/shared → deterministic), `set_points` shared weights. GATE = **direct O(NM) nonuniform DFT** (NOT round-trip — the odeint-d4 trap) both isign + f32/f64 + tol-monotonicity + spreader run-twice **bit-identical**; 13/5, suite 66/16 on **4 configs (debug+asan+tidy+shipping LTCG)**. ⭐ **THE FINUFFT SHOOTOUT** (`bench_nufft_vs_finufft.cpp`, FINUFFT built from src, 1 thread, EXECUTE-only, Cerid width+2 ⇒ **3× MORE accurate than FINUFFT**): naive 0.5× → 3 measured levers (wrap-split fast path + memset zero; multi-accumulator interp breaking the reduction chain) → **WINS small/mid (4096 T1 1.99× / 16384 T2 1.73×), PARITY at 1M (T2 1.14×), loses only the FFT-bound n=2^18** (262144 modes, 62–91% FFT = the inherited v10-b FFT-engine deficit, the deferred scheduler project — FINUFFT's FFT there is FFTW_ESTIMATE). ⚠ bin-sort MEASURED-REGRESSED (14900K's 36MB L3 hides the scatter) ⇒ reverted. HONEST scoping: serial run-twice determinism (NOT a built {1..16} moat — parallel owner-per-subgrid spread designed, not implemented); EXECUTE-only timing. Follow-ons (named): type-3, 2D/3D, jobs-parallel deterministic spread. | ~600 | 13 | — |
 | ↳ **v10-h** (PLANNED) | **Sparse FFT (Hassanieh-Indyk-Katabi-Price 2012).** Sub-linear for k-sparse spectra. Gates: exact k-sparse recovery; sub-linear scaling vs full FFT at large n / small k. Research-grade. | ~450 | ~12 | — |
 | ↳ **v10-z** (PLANNED) | **CLOSE.** CLI `hesap.fft.*`; the full reference-class scoreboard vs FFTW + PocketFFT + MKL (throughput GFLOPS + accuracy + planning-time — the beat-MKL verdict on the AVX2-level dev box, with the honest AVX-512 caveat); {1..16} correctness sweep; 4-config DoD + gcc; `docs/systems/hesap-fft.md` + new ADR + session log; `context.md` + phase-doc + the reference-class-policy FFT row updated. | ~400 | ~14 | — |
+
+#### ⭐ Generated Codelet / Planner Project (Fork A) — the parity-assault substrate (OPEN, multi-milestone)
+
+> Opened 2026-06-16 after the AVX2 large-N local-patch campaign closed with **four banked archaeology wins**
+> (larger-factor-first split · f32 NT scatter · f32 bb-axis SIMD twiddle · f64 bb-axis SIMD twiddle) lifting
+> **f64 8M 0.76→0.84× and f32 8M 0.61→0.78× MKL**. Bound analysis proved the residual sub-FFT gap (≈3.6× over its
+> flop floor — port-bound on shuffles + spills, not flops) needs **genfft/SPIRAL-class generated codelets**, not
+> local patches. **Fork A chosen by the user.** Design doc: `docs/design/hesap_fft_generated_codelets.md`; measured
+> history: `docs/research/fft-mkl-crush.md` C-22/C-23; memory `project_v10_fft_plan`. Generator:
+> `build/gen_subfft.py` (split-radix DAG + CSE + numpy self-check at generation + the `_schedule` register-pressure
+> list scheduler → batched Vec4d AoS codelets, engine-native element-major, no gather). All probes live in
+> gitignored `build/` — **NO engine integration until a size wins ≥1.10× sub-FFT AND ≥1.05× full 8M.**
+
+**M0 ✅ + M1 ✅ (2026-06-16) — the decisive CROSSOVER measured** (generated batched Vec4d codelets vs the engine's
+`execute_batched`, f64 b=32, all machine-eps correct):
+
+| N | engine ns/el | generated ns/el | speedup | spills | compile |
+|---|---|---|---|---|---|
+| 16 | 0.221 | 0.470 | 0.47× (hand-tuned `small_n` lane-trick wins — expected) | low | fast |
+| 32 | 1.066 | 0.537 | **1.98×** | low | fast |
+| 64 | 1.285 | 1.033 | **1.24×** | low | fast |
+| 256 | 1.726 | 1.746 | 0.99× | 4454 | — |
+| 512 | 1.948 | 1.860 | 1.05× | 9887 | — |
+| 1024 | 2.353 | 2.564 | **0.92×** | **21996** | **574 s** |
+
+⭐⭐ **Crossover at N≈64: the full straight-line codelet wins to N=64 then collapses** — the DAG (15361 nodes @1024)
+vastly exceeds the 16-ymm file ⇒ spills explode (21996) ⇒ loses + a 574 s compile (impractical). The genfft lesson,
+confirmed by measurement: **straight-line ONLY for small leaves; larger sizes need recursive composition.**
+
+**PATH DECISION for the 4096 sub-FFT → Path B (hierarchical 64×64).** Build 4096 = 64×64 from the **generated-64
+leaf (1.24× over the engine)** as the radix-64 building block + the already-vectorized bb-axis twiddle + a 64×64
+transpose. Rejected alternatives: **Path A** full-4096 straight-line (≈4× the 1024 ⇒ catastrophic spills + ~40 min
+compile); 256×16 (256 already neutral); stage-Stockham △ (radix-8 near the gcc limit per prior audits). ⚠ **Do not
+assume the N=64 leaf win automatically composes into 4096 — M2 must PROVE the composition.**
+
+**M2 (NEXT — fresh-context, multi-step) — hierarchical 64×64 4096 sub-FFT POC.** Standalone f64 `build/` probe;
+baseline = current `execute_batched(4096)`. **Acceptance:** 4096 sub-FFT ≥1.10× → compose into full 8M; full 8M
+≥1.05× → keep behind a gate; else diagnose / revise (never revert to full straight-line). **Step plan:**
+(1) lock baseline (current 4096 + the generated-64 leaf, ns/el + cyc/el + max_rel_err);
+(2) the 64×64 decomposition map — answer explicitly: does stage-1 output feed stage-2 directly · is a 64×64
+transpose required · can transpose+twiddle fuse · can it stay L1/L2-resident · does it preserve the engine-native
+batched contract · is the extra movement < the saved generic-kernel overhead;
+(3) component benchmarks (stage-1 leaf · stage-2 leaf · 64×64 transpose · twiddle · fused twiddle+transpose ·
+predicted hierarchical total) — the leaf is 1.24× but 4096 only wins if transpose+twiddle don't eat it;
+(4) build **at most TWO** variants — A simple (leaf · explicit twiddle · explicit 64×64 transpose · leaf),
+B fused (twiddle-while-writing-the-transposed-tile);
+(5) assembly / pressure check (spills · shuffles · loads/stores · code size · L1/L2 traffic · llvm-mca) — expected
+mechanism: avoid the full-4096 spill explosion, reuse the fast leaf, keep the 64×64 intermediate cache-resident;
+(6) correctness vs current CRD + MKL + impulse + sine/bin (f64 ~1e-15 class);
+(7) full-8M composition **only if** the sub-FFT ≥1.10× (keep/revert table at 2M/4M/8M/16M, no regression);
+(8) parity-dashboard update. **If both variants lose:** diagnose (transpose cost / leaf-call overhead / layout
+mismatch / icache / twiddle / shuffles) → choose one of {M2b fused layout · generated stage-Stockham · generated
+leaves inside the current radix tree · close the generator path}. **STRICT non-goals (unchanged from Fork A):** no
+full-4096 straight-line DAG · no atom transform-major detour · no global SoA rewrite · no engine integration before
+the 4096 phase win · no report-only predictions (every cycle ends with a measurement + a keep/reject decision).
+
+**Phase 0 bank/clean status (2026-06-16):** the 4 archaeology wins — split / f32 NT scatter / f32 SIMD twiddle =
+**committed** (`d5ae96d`, `d0f2484`); **f64 bb-axis SIMD twiddle = UNCOMMITTED** (working-tree
+`engine/hesap-fft/include/crd/hesap/fft/fft.hpp`, +65 lines; the user commits — agents never commit). M0/M1
+generator artifacts isolated in gitignored `build/`. Engine hot path clean (the only engine delta is the f64
+twiddle addition). The 4-win DoD (debug/asan/shipping/tidy 17/17) was green at C-22; re-run before any M2
+integration. **➜ Commit the f64 twiddle before M2.**
+
 | **v11** | DSP: FIR (windowed sinc + Parks-McClellan Remez) + IIR (bilinear-transform Butterworth/Cheb-I/Cheb-II/Elliptic/Bessel) + biquad + resampling (polyphase) + spectral analysis (Welch / Bartlett) + Z-transform + complex variants + CLI registration | ~2800 | ~110 | ~2 wk |
 | **v12** | Statistics: 50+ distributions (Stan-math reference) + statistical tests (t / chi² / KS / Mann-Whitney / Wilcoxon / Friedman / Kruskal-Wallis / ANOVA) + special functions (gamma / beta / erf / Bessel J/Y/I/K / Legendre / Hermite / Chebyshev) + RNGs (splittable PCG + Xoshiro256** + **Philox** + **Threefry** for parallel-deterministic) + bootstrap / jackknife + CLI registration | ~3500 | ~130 | ~2.5 wk |
 | **v13** | Polynomial / interpolation (linear / cubic spline / Akima / Hermite / monotone / Chebyshev / barycentric / RBF) + quadrature (Gauss-Legendre / Hermite / Laguerre / Lobatto / Radau / Clenshaw-Curtis / adaptive Simpson / Romberg) + numerical differentiation (FD / Richardson extrapolation / Hermite extrapolation) + CLI registration | ~2300 | ~90 | ~1.5 wk |
