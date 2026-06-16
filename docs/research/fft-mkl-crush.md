@@ -1,5 +1,68 @@
 # Research Dossier — Beating MKL on 1D Complex FFT (v10 `crd-hesap-fft`)
 
+## ⭐⭐⭐ AVX2 SINGLE-THREAD LARGE-N C2C CAMPAIGN — CLOSED 2026-06-16 (FINAL SUMMARY)
+
+**1. Executive summary.** The large-N (2M–16M) complex-FFT campaign began with a *premature* "AVX2 ceiling"
+conclusion. Black-box + internal **archaeology** (study MKL's behavior → find the structural cause → build the
+closest legal fix → DoD → commit) overturned it and produced **three real banked engine wins**, lifting **f32 8M
+from ~0.61× to ~0.78× MKL** and **f64 8M from ~0.76× to ~0.80×**. The f32-specific gap is closed (f32 caught up to
+the f64 class). Local patching is now closed; the residual is a substrate-level gap vs MKL's mature planner/codegen.
+
+**2. Final scoreboard** (single-thread, core-pinned, MKL_NUM_THREADS=1, AVX2 i9-14900K; all correct: f64 ~1e-15,
+f32 ~3e-7; ratios drift ±5–7% thermally between processes):
+| target | CRD/MKL |
+|---|---|
+| 2M f64 | ~0.83× |
+| 4M f64 | ~0.90× |
+| 8M f64 | ~0.78–0.80× |
+| 16M f64 | ~0.81× |
+| 2M f32 | ~0.62× |
+| 4M f32 | ~0.68× |
+| 8M f32 | **~0.78×** |
+| 16M f32 | ~0.74× |
+
+**3. Banked wins:**
+| patch | result | reason it worked | status |
+|---|---|---|---|
+| larger-factor-first split (`m_n1=2^ceil`) | +9–13% large-N | fixed odd-log2 split asymmetry (smaller factor was first) | KEPT |
+| f32 non-temporal scatter store | +~5% f32 | removed RFO/write-allocate penalty (NT was f64-only) | KEPT |
+| f32 SIMD twiddle (bb-axis Vec8f recurrence) | +~11–12% f32 | vectorized the scalar transpose-multiply on the L2-banded axis | KEPT |
+
+**4. Rejected candidates (each measured, not assumed):**
+| candidate | reason |
+|---|---|
+| atom(E) compose into 8M | layout adapter (transform↔element major) killed the isolated win |
+| f64 twiddle SIMD (k1/gather axis) | gather/table locality wrong |
+| gather local patches (A/B/C/D) | stride/bandwidth/TLB wall (22.5 GB/s) |
+| f64 scatter NT256 | phase win didn't compose (overlap-hidden) |
+| tbuf elimination | dependency proof: P2 needs all P1 columns (full transpose necessary) |
+| 3-factor / multi-factor plan | extra transpose round-trip (+24ms) > sub-FFT saving |
+| SoA-split sub-FFT | shuffles are port-parallel (10% max), de/interleave eats it |
+| twiddle table layout (recurrence) | lookups L2-resident/cheap (+4% only) |
+| f32 sub-FFT batch-width | b16≈b32 already optimal; gcc-scheduled |
+
+**5. What the archaeology taught us.** (a) A failed local patch is NOT a ceiling — it narrows the search. (b) The
+*planner/factorization* (split shape) mattered more than any micro-patch. (c) "Doesn't halve for f32" must be
+localized to a phase (it was the store-NT-f64-only + scalar-twiddle), not asserted globally. (d) Phase wins must be
+re-measured *composed* (several isolated wins vanished in-context: scatter256, atom). (e) The 14900K has AVX-512
+fused off, so MKL's f32 ~2×-over-f64 is pure AVX2 8-wide — the f32 gap was software (scalar twiddle), not hardware.
+
+**6. Why the premature ceiling was wrong.** The "ceiling" was called after local movement patches failed, but it
+assumed the *current four-step layout/split* was fixed. MKL used a better factorization; once the split was fixed
+(+9–13%) and the f32 store/twiddle vectorized, two-thirds of the f32 gap closed. The method, not ceiling claims,
+produced the wins.
+
+**7. Current remaining gap.** f64 ~0.80× / f32 ~0.78× at 8M — **precision-agnostic**, no single phase failing
+(gather/sub-FFT/twiddle/scatter all scale). It is the general FFT movement + codelet micro-arch vs MKL's mature
+planner — a substrate gap, not a defective phase.
+
+**8. Valid future fronts (substrate-level, NOT local patches):** (A) generated codelet/planner architecture
+(genfft/SPIRAL-class — best long-term CPU path); (B) AVX-512 backend (server targets); (C) GPU FFT backend
+(Vulkan/WebGPU); (D) multi-threaded large-N. **The AVX2 single-thread four-step is now well-optimized; further
+large-N gains need a different substrate.** Local patching CLOSED; substrate-level fronts REMAIN.
+
+---
+
 > **⭐ ENGINE-SHIPPED 2026-06-15 — the small-N crush is now IN THE ENGINE, not just probes (gated machine-eps).**
 > The N≤32 crushes had lived only in `build/crush*.cpp`. Ported the winning AoS **lane-trick** construction into
 > `engine/.../detail/small_n_codelets.hpp` (f64, AVX2-guarded; SoA fallback for f32/SSE2/scalar/NEON) and wired two
@@ -621,6 +684,89 @@ f32 2M ~0.58 · 4M ~0.67 · 8M ~0.65 (was 0.62).** ⭐ The archaeology sprint pr
 large-N improvement — H1 (split shape), not the exhausted local patches. ⚠ engine change (m_n1 formula) PENDING the
 full DoD before commit (correctness-validated; bit-accuracy class preserved). Next archaeology: whether a 3-factor
 split helps the largest N further, and the f32 movement (still ~0.58–0.65×, MKL's f32 1.81×-over-f64 vs CRD ~1.3×).
+
+### Candidate C-15 — Phase 3: 3-factor / multi-factor REJECTED by component measurement (2026-06-16)
+After banking the larger-factor-first split, tested whether a 3-factor plan beats the kept 2-factor (8M=4096×2048).
+Two measured components: **(1) sub-FFT ns/el sweep (b=16):** 128:1.71 · 256:1.78 · 512:2.05 · 1024:2.44 · 2048:2.54
+· 4096:2.59 — smaller factors only **1.46× faster** (256 vs 4096). **(2) extra-transpose cost** (`movement_passes.cpp`,
+8M blocked transpose round-trip 256MB): **+24.2 ms @ 10.3 GB/s.** ⭐ A 3-factor has the SAME total butterfly work
+(N log N) split over **3 sub-FFT passes not 2** (3×1.8 = 5.3 ≥ 2×2.55 = 5.1 ns/el-equiv ⇒ sub-FFT net neutral)
+PLUS **one extra global transpose (+24 ms measured)**. Predicted 3-factor 8M ≈ 104 ms vs 2-factor 80 ms = **~0.77×
+(≈30% slower)**. The extra transpose alone exceeds the MAX achievable sub-FFT saving (~14 ms), and the extra
+sub-FFT pass cancels even that. **REJECT (measured, not assumed).** ⇒ MKL is NOT using a 3-factor either (same
+penalty). MKL's remaining ~20% 8M edge (CRD 0.80×) is the **movement/transpose micro-arch** (the naive transpose
+runs 10.3 GB/s; the engine's bw-gather is 22.7 — MKL's is likely better still) and/or AVX-512. Engine clean
+(probes build/-only). Next archaeology front: **f32-specific** (biggest gap 0.58–0.65×; MKL f32 1.81×-over-f64 vs
+CRD 1.3× — the f32 movement/plan, not random SIMD) + the 16M square-split check (2^24 even → 4096² square, may hit
+the 4M-class ~0.95× near-parity behavior).
+
+### ⭐⭐⭐ Candidate C-16 — f32 archaeology: NT-store was f64-ONLY; f32 scatter NT fix KEPT (2026-06-16)
+f32 phase profile vs f64 8M (Mcyc/call, ratio = f32/f64, 0.5 = halved): P1 gather 0.48✓ · P1 sub-FFT 0.57✓ ·
+**P1 twiddle 0.91✗** · P2 gather 0.44✓ · P2 sub-FFT 0.56✓ · **P2 scatter 0.85✗**. ⭐ **The store-heavy phases
+(twiddle, scatter) did NOT halve for f32; gather+sub-FFT did.** ROOT (smoking gun): `store_complex`'s NT path is
+`if constexpr (is_same_v<T, f64>)` — **f32 had NO non-temporal store, paying read-for-ownership on every store.**
+Fix: f32 complex = 8B < 16B NT-min, so **pair two f32-complex into one 16B `_mm_stream_pd`** in the scatter (drow
+16B-aligned). **Measured: scatter phase 18.0→10.8 Mcyc @8M (HALVED, 0.60); f32 8M ~+5% (phase-derived; noisy
+scoreboard showed up to +9.8%).** ⚠ The same NT applied to the TWIDDLE store was a NO-OP (25.6→26.1) — the twiddle
+is **table-lookup-bound** (4 factored-table gathers/element, same count f32/f64), NOT store-bound; removed that
+dead code. KEPT (scatter NT only). f64 unchanged (already had NT). DoD: win-debug + win-shipping FFT ctest 17/17,
+correctness + run-twice determinism preserved (pure data move). ⭐ **NEXT: the TWIDDLE (table-lookup-bound, 10.5%
+of f64 / 16% of f32) — a blocked/contiguous per-block twiddle panel (sequential lookups vs the 2-table gather)
+would help BOTH precisions.** PENDING USER COMMIT (the f32 scatter NT, like the split). Updated scoreboard: f64
+unchanged (2M 0.80 · 4M 0.85 · 8M 0.80); f32 ~+5% large-N (8M ~0.62→~0.65).
+
+### Candidate C-17 — twiddle TABLE-LAYOUT archaeology REJECTED: lookups are NOT the bottleneck (2026-06-16)
+Hypothesis: twiddle is table-lookup-bound (4 scattered factored-table gathers/element). Phase-exact microbench
+(f32, 8M P1 layout): current 2.98 ns/el vs **hybrid recurrence (reseed from exact table every K, recurrence
+between — removes ALL lookups): K=16 = 2.87 ns/el = only 1.04×** (rel_err 2.7e-7, at the f32 edge). ⭐⭐ **Removing
+every table lookup buys only +4% ⇒ the lookups are NOT the bottleneck** — the factored √n tables are L2-resident and
+pipeline fine. The lookup-bound premise (C-11/C-16) was WRONG. REJECT (below 1.10×, error grows with K). ⭐ **The
+twiddle's real nature: it is a TRANSPOSE-MULTIPLY** (reads scratch[k1·bw+bb] strided-by-bw over k1, scalar complex
+mul, writes tbuf contiguous-per-col) — scalar + strided-read bound, which is why it doesn't halve for f32 (scalar
+ops don't shrink with precision) and why SIMD-ing it hits the inherent transpose scatter (the f64 SIMD-twiddle
+already failed on exactly that). ⇒ The twiddle is not improvable by table layout. **POST-ARCHAEOLOGY STATE: two
+banked wins (split +9–13%, f32 scatter NT +5%); f64 ~0.85× · f32 ~0.65× MKL.** Remaining f32 levers: a
+SIMD-recurrence twiddle that also solves the transpose-write (high effort, transpose-bound like movement), or
+AVX-512 (this box AVX2-only). Next front: f32 sub-FFT scales already (0.56, Vec8f active — little headroom), so the
+honest remaining levers are the transpose-multiply twiddle (hard) and AVX-512 (hardware) — NOT table layout.
+
+### ⭐⭐⭐⭐ Candidate C-18 — f32 SIMD twiddle (bb-axis Vec8f recurrence) WON +11%, KEPT (2026-06-16)
+The transpose-multiply twiddle CAN be SIMD'd — on the **bb axis** (the one not tried; the failed f64 attempt used
+the k1 gather axis). Loop-axis map: bb-inner = **contiguous scratch read** + Vec8f mul + transposed tbuf write that
+hits **8-row L2-resident bands** (NOT DRAM-scattered, the key). Twiddle by **recurrence** (`w*=W_n^col`, 8 cols/
+lane) reseeded from the factored table every K=8 (bounds f32 drift). Candidate table (phase-exact f32 microbench):
+current scalar 1.16 ns/el → **candA bb-Vec8f 0.539 = 2.15×** (rel_err 3.0e-7). In-engine (gated→unconditional
+AVX2): **twiddle phase 25.6→16.4 Mcyc @8M (1.56× in-context); clean interleaved f32 8M A/B = +11–12%** (checksum
+bit-identical, the noisy scoreboard's −1% was thermal). Correctness 2.82e-7 (f32 class), round-trip clean. f64
+unchanged (stays scalar — Vec4d gives less and f64 isn't the gap). DoD: win-debug + win-shipping FFT ctest 17/17.
+KEPT (PENDING USER COMMIT). ⭐⭐ **THREE banked archaeology wins now: split (+9-13%), f32 scatter NT (+5%), f32 SIMD
+twiddle (+11%). Scoreboard: f64 ~0.80–0.85× · f32 8M 0.61→~0.75× MKL** (f32 lifted most). Lesson: "transpose-
+multiply can't be SIMD'd" (C-17) was wrong for the bb axis — the transposed write lands in L2 bands, not DRAM
+scatter. Next front: the sub-FFT (now the biggest phase ~73 Mcyc f32; scales via Vec8f but check schedule headroom)
+or accept the much-healthier state. The archaeology method keeps producing wins — NOT a ceiling.
+
+### ⭐⭐ Candidate C-19 — f32 sub-FFT batch-width: no headroom; f32 large-N campaign CLOSES with 3 wins (2026-06-16)
+f32 sub-FFT 4096 batch sweep: b=8 1.63 · **b=16 1.333 · b=32 1.340** (current) · b=64 1.350 ns/el. **b16≈b32 (0.5%,
+noise) — the f32 block_width=32 is already optimal; no batch-width win.** The sub-FFT scales via Vec8f (f32/f64
+0.56) and the C-11 f64 audit already showed scheduler reordering is gcc-optimal (no headroom). REJECT (no patchable
+sub-FFT headroom). ⭐⭐⭐⭐ **POST-ARCHAEOLOGY BASELINE LOCKED (3 banked wins): f64 4M 0.92 · 8M 0.77 · 16M 0.81 ·
+f32 4M 0.68 · 8M 0.78 · 16M 0.74. f32 8M caught up to f64 8M (both ~0.77) — the f32-specific gap is CLOSED.**
+=== FINAL LARGE-N DOSSIER (8M, AVX2 14900K, single-thread) ===
+| front | result |
+|---|---|
+| larger-factor-first split (planner) | ✅ KEPT (+9–13% f64+f32) |
+| f32 non-temporal scatter store | ✅ KEPT (+5% f32) |
+| f32 SIMD twiddle (bb-axis Vec8f recurrence) | ✅ KEPT (+11% f32) |
+| 3-factor / multi-factor plan | ❌ rejected (extra transpose +24ms > sub-FFT saving) |
+| twiddle table layout (recurrence) | ❌ rejected (lookups cheap, +4% only) |
+| f32 sub-FFT batch-width / schedule | ❌ rejected (b16≈b32 optimal; gcc-scheduled) |
+| atom / 3-factor / SoA-split / local gather / f64-SIMD-twiddle-wrong-axis | ❌ rejected earlier |
+⭐ **The remaining gap (f64 ~0.80× · f32 ~0.78× at 8M) is now PRECISION-AGNOSTIC** — it's the general FFT
+movement/micro-arch vs MKL, no single phase failing. Both precisions improved markedly from the archaeology (f64
+8M 0.76→0.80, f32 8M 0.61→0.78). **Future fronts (beyond the AVX2 single-thread four-step, NOT local patches):**
+AVX-512 backend · GPU FFT · generated codelet/planner architecture · multi-threaded large-N. The black-box
+archaeology method produced 3 real banked wins where the prior "AVX2 ceiling" call had given up — the method, not
+ceiling claims, is what worked.
 
 ## 1d. ⭐⭐⭐ THE GENFFT ATOM BEATS MKL — N=64 four-step, over-2 leaves (2026-06-14)
 

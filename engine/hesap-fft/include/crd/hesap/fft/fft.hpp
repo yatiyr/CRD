@@ -1012,24 +1012,94 @@ private:
 #ifdef CRD_FFT_PROFILE
             const unsigned long long pt0 = prof::rdtsc();
 #endif
-            for (crd::usize bb = 0; bb < bw; ++bb)
+#if CRD_SIMD_HAS_AVX2
+            // f32 SIMD twiddle (Vec8f over the bb axis = contiguous scratch read; transposed tbuf write hits
+            // 8-row L2-resident bands). Twiddle by recurrence (w*=W_n^col), reseeded from the factored table every
+            // K=8 to bound f32 drift (~1.5e-7, in class). Measured 2.15× on the f32 twiddle phase. f64 stays scalar.
+            if constexpr (std::is_same_v<T, crd::f32>)
             {
-                const crd::usize col = i2 + bb;
-                Complex<T>* const trow = tbuf + col * n1;
-                for (crd::usize k1 = 0; k1 < n1; ++k1)
+                constexpr crd::usize kRe = 8;
+                const crd::f32 fis = static_cast<crd::f32>(isign);
+                const __m256i didx = _mm256_setr_epi32(0, 1, 4, 5, 2, 3, 6, 7);
+                crd::usize g = 0;
+                for (; g + 8 <= bw; g += 8)
                 {
-                    const crd::usize a = col * k1; // < n
-                    const T hr = hir[a >> m_ftw_h];
-                    const T hi = hii[a >> m_ftw_h];
-                    const T lr = lor[a & mmask];
-                    const T li = loi[a & mmask];
-                    const T wr = hr * lr - hi * li;  // Re W_n^a
-                    const T wim = hr * li + hi * lr; // Im W_n^a  (cos,−sin convention preserved by the product)
-                    const T wi = isign * wim;
-                    const Complex<T> z = scratch[k1 * bw + bb];
-                    store_complex(trow + k1, z.re * wr - z.im * wi, z.re * wi + z.im * wr, true); // tbuf 64B
+                    alignas(32) crd::f32 wsr[8], wsi[8];
+                    for (int l = 0; l < 8; ++l)
+                    {
+                        const crd::usize c = i2 + g + (crd::usize)l, hh = c >> m_ftw_h, ll = c & mmask;
+                        wsr[l] = hir[hh] * lor[ll] - hii[hh] * loi[ll];
+                        wsi[l] = fis * (hir[hh] * loi[ll] + hii[hh] * lor[ll]);
+                    }
+                    const __m256 wsrv = _mm256_load_ps(wsr), wsiv = _mm256_load_ps(wsi);
+                    __m256 wr = _mm256_setzero_ps(), wi = _mm256_setzero_ps();
+                    for (crd::usize k1 = 0; k1 < n1; ++k1)
+                    {
+                        if ((k1 & (kRe - 1)) == 0) // reseed from the exact factored table (bounds recurrence drift)
+                        {
+                            alignas(32) crd::f32 sr[8], si[8];
+                            for (int l = 0; l < 8; ++l)
+                            {
+                                const crd::usize a = (i2 + g + (crd::usize)l) * k1, hh = a >> m_ftw_h, ll = a & mmask;
+                                sr[l] = hir[hh] * lor[ll] - hii[hh] * loi[ll];
+                                si[l] = fis * (hir[hh] * loi[ll] + hii[hh] * lor[ll]);
+                            }
+                            wr = _mm256_load_ps(sr);
+                            wi = _mm256_load_ps(si);
+                        }
+                        const crd::f32* const zp = reinterpret_cast<const crd::f32*>(scratch + k1 * bw + g);
+                        const __m256 a0 = _mm256_loadu_ps(zp), b0 = _mm256_loadu_ps(zp + 8);
+                        const __m256 ev = _mm256_shuffle_ps(a0, b0, _MM_SHUFFLE(2, 0, 2, 0));
+                        const __m256 od = _mm256_shuffle_ps(a0, b0, _MM_SHUFFLE(3, 1, 3, 1));
+                        const __m256 zr = _mm256_permutevar8x32_ps(ev, didx), zi = _mm256_permutevar8x32_ps(od, didx);
+                        const __m256 outr = _mm256_sub_ps(_mm256_mul_ps(zr, wr), _mm256_mul_ps(zi, wi));
+                        const __m256 outi = _mm256_add_ps(_mm256_mul_ps(zr, wi), _mm256_mul_ps(zi, wr));
+                        alignas(32) crd::f32 orr[8], oii[8];
+                        _mm256_store_ps(orr, outr);
+                        _mm256_store_ps(oii, outi);
+                        for (int l = 0; l < 8; ++l) { (tbuf + (i2 + g + (crd::usize)l) * n1)[k1] = Complex<T>{orr[l], oii[l]}; }
+                        if ((k1 & (kRe - 1)) != kRe - 1) // advance recurrence: w *= W_n^col
+                        {
+                            const __m256 nr = _mm256_sub_ps(_mm256_mul_ps(wr, wsrv), _mm256_mul_ps(wi, wsiv));
+                            const __m256 ni = _mm256_add_ps(_mm256_mul_ps(wr, wsiv), _mm256_mul_ps(wi, wsrv));
+                            wr = nr;
+                            wi = ni;
+                        }
+                    }
+                }
+                for (; g < bw; ++g) // bw-tail (bw multiple of 8 at 8M, but keep correct)
+                {
+                    const crd::usize col = i2 + g;
+                    Complex<T>* const trow = tbuf + col * n1;
+                    for (crd::usize k1 = 0; k1 < n1; ++k1)
+                    {
+                        const crd::usize a = col * k1, hh = a >> m_ftw_h, ll = a & mmask;
+                        const T wr = hir[hh] * lor[ll] - hii[hh] * loi[ll], wi = isign * (hir[hh] * loi[ll] + hii[hh] * lor[ll]);
+                        const Complex<T> z = scratch[k1 * bw + g];
+                        store_complex(trow + k1, z.re * wr - z.im * wi, z.re * wi + z.im * wr, true);
+                    }
                 }
             }
+            else
+#endif
+                for (crd::usize bb = 0; bb < bw; ++bb)
+                {
+                    const crd::usize col = i2 + bb;
+                    Complex<T>* const trow = tbuf + col * n1;
+                    for (crd::usize k1 = 0; k1 < n1; ++k1)
+                    {
+                        const crd::usize a = col * k1; // < n
+                        const T hr = hir[a >> m_ftw_h];
+                        const T hi = hii[a >> m_ftw_h];
+                        const T lr = lor[a & mmask];
+                        const T li = loi[a & mmask];
+                        const T wr = hr * lr - hi * li;  // Re W_n^a
+                        const T wim = hr * li + hi * lr; // Im W_n^a  (cos,−sin convention preserved by the product)
+                        const T wi = isign * wim;
+                        const Complex<T> z = scratch[k1 * bw + bb];
+                        store_complex(trow + k1, z.re * wr - z.im * wi, z.re * wi + z.im * wr, true); // tbuf 64B
+                    }
+                }
 #ifdef CRD_FFT_PROFILE
             prof::g_p1_tw += prof::rdtsc() - pt0;
 #endif
@@ -1066,7 +1136,24 @@ private:
             {
                 const Complex<T>* const srow = scratch + k2 * bw;
                 Complex<T>* const drow = din + k2 * n1 + k1;
-                for (crd::usize bb = 0; bb < bw; ++bb)
+                crd::usize bb = 0;
+#if CRD_SIMD_HAS_AVX2
+                // f32: 1 complex = 8B < 16B NT minimum ⇒ pair two complex into one 16B NT store (drow 16B-aligned:
+                // k2·n1+k1 even, bb steps 2). Gives the f32 scatter the RFO-skipping store f64 already had — the
+                // store-bound f32 scatter phase HALVES (measured 18.0→10.8 Mcyc @8M). Found by f32 phase archaeology.
+                if constexpr (std::is_same_v<T, crd::f32>)
+                {
+                    if (nt_out)
+                    {
+                        for (; bb + 2 <= bw; bb += 2)
+                        {
+                            const __m128 v = _mm_set_ps(srow[bb + 1].im, srow[bb + 1].re, srow[bb].im, srow[bb].re);
+                            _mm_stream_pd(reinterpret_cast<double*>(drow + bb), _mm_castps_pd(v));
+                        }
+                    }
+                }
+#endif
+                for (; bb < bw; ++bb)
                 {
                     store_complex(drow + bb, srow[bb].re, srow[bb].im, nt_out);
                 }
