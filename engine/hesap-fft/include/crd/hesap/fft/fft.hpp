@@ -137,26 +137,28 @@ public:
         }
 #ifndef CRD_FFT_DISABLE_HIER
         // DEFAULT (disable with -DCRD_FFT_DISABLE_HIER): the hierarchical generated-codelet sub-FFTs. 4096 = 64×64
-        // (M2, BB=16) and 2048 = 64×32 (M3, BB=32) — N1=64 (outer/stage-1 leaf), N2 = N/64 (inner/stage-2). Build the
-        // transposed intermediate (n·BB = 65536 complex either way) + the inner twiddle W_N^{n2·k1} (index n2·64+k1,
-        // the codelet stride is N1=64 for both). Dispatched f64, Forward, b==BB only (the 8M/16M four-step sub-FFTs).
+        // (M2, BB=16) and 2048 = 64×32 (M3, BB=32); N1 = stage-1 leaf (twiddle stride), N2 = inner stage-2 leaf.
+        // Build the transposed intermediate (n·BB = 65536 complex) + the inner twiddle W_N^{n2·k1} (index n2·N1+k1).
+        // Dispatched f64, Forward, b==BB only. M5 (experimental, -DCRD_FFT_HIER_1024): 1024 = 32×32 (BB=64) too.
         if constexpr (std::is_same_v<T, crd::f64>)
         {
-            const crd::usize h_n2 = (n == 4096) ? 64U : ((n == 2048) ? 32U : 0U); // N2 = N/64
-            const crd::usize h_bb = (n == 4096) ? 16U : 32U;                      // BB = block_width(n)
+            crd::usize h_n2 = (n == 4096) ? 64U : ((n == 2048) ? 32U : 0U); // N2 = inner count
+            crd::usize h_n1 = 64U;                                          // N1 = stage-1 leaf = twiddle stride
+            crd::usize h_bb = (n == 4096) ? 16U : 32U;                      // BB = block_width(n)
+            if (n == 1024) { h_n2 = 32U; h_n1 = 32U; h_bb = 64U; } // M5: 1024 = 32×32 (BB=64) — 1M/2M sub-FFT
             if (h_n2 != 0)
             {
                 m_hier_bbuf = static_cast<Complex<T>*>(m_alloc->allocate(n * h_bb * sizeof(Complex<T>), 64));
-                m_hier_twr = static_cast<T*>(m_alloc->allocate(h_n2 * 64 * sizeof(T), 32));
-                m_hier_twi = static_cast<T*>(m_alloc->allocate(h_n2 * 64 * sizeof(T), 32));
+                m_hier_twr = static_cast<T*>(m_alloc->allocate(h_n2 * h_n1 * sizeof(T), 32));
+                m_hier_twi = static_cast<T*>(m_alloc->allocate(h_n2 * h_n1 * sizeof(T), 32));
                 constexpr double tp = 6.283185307179586476925286766559;
                 for (crd::usize n2 = 0; n2 < h_n2; ++n2)
                 {
-                    for (crd::usize k1 = 0; k1 < 64; ++k1)
+                    for (crd::usize k1 = 0; k1 < h_n1; ++k1)
                     {
                         const double th = tp * static_cast<double>(n2 * k1) / static_cast<double>(n);
-                        m_hier_twr[n2 * 64 + k1] = static_cast<T>(std::cos(th));
-                        m_hier_twi[n2 * 64 + k1] = static_cast<T>(-std::sin(th));
+                        m_hier_twr[n2 * h_n1 + k1] = static_cast<T>(std::cos(th));
+                        m_hier_twi[n2 * h_n1 + k1] = static_cast<T>(-std::sin(th));
                     }
                 }
             }
@@ -530,11 +532,13 @@ public:
 #endif
 #ifndef CRD_FFT_DISABLE_HIER
         // DEFAULT (disable with -DCRD_FFT_DISABLE_HIER): the hierarchical generated-codelet sub-FFTs replace the
-        // radix-8 path for the f64 four-step sub-FFTs — 4096 = 64×64 (b==16: 8M-n1 + both 16M) and 2048 = 64×32
-        // (b==32: 8M-n2 + both 4M). Stage-1 FUSED (split-radix leaf + inner twiddle + transposed store into
-        // m_hier_bbuf) then a plain leaf stage-2 back into d (natural order). Isolated 4096 1.24× / 2048 1.26×;
-        // full 8M ~1.13–1.17× → ~0.94× MKL, 4M near parity, machine-eps (~1e-15), deterministic. Inverse and f32
-        // fall through to the radix-8 path below (round-trip stays machine-eps). See the 2026-06-17 FFT session logs.
+        // radix-8 path for the f64 four-step sub-FFTs — 4096 = 64×64 (b==16: 8M-n1 + both 16M), 2048 = 64×32
+        // (b==32: 8M-n2 + both 4M), 1024 = 32×32 (b==64: M5, 2M-n2 + both 1M). Stage-1 FUSED (split-radix leaf +
+        // inner twiddle + transposed store into m_hier_bbuf) then a plain leaf stage-2 back into d (natural order).
+        // Isolated 4096 1.24× / 2048 1.26× / 1024 1.23×. Full f64 vs MKL (CANONICAL bench_fft_vs_refs best-of-reps):
+        // 4M ~1.04× (beats), 8M ~0.91×, 16M ~0.90×, 2M ~0.75×, 1M ~0.60× — the hier improves every size vs radix-8
+        // (e.g. 1M 0.53→0.60, 2M 0.68→0.75) but MKL is very fast at the small cache-resident sizes. machine-eps
+        // (~1e-15), deterministic. Inverse + f32 fall through to radix-8. See the 2026-06-17 FFT logs.
         if constexpr (std::is_same_v<T, crd::f64>)
         {
             if (dir == FftDirection::Forward && m_hier_bbuf != nullptr)
@@ -548,6 +552,12 @@ public:
                 if (m_n == 2048 && b == 32) // M3: 64×32 (BB=32); stage-1 b=N2·BB=1024, stage-2 b=N1·BB=2048
                 {
                     gen::codelet64_stage1_fused_64x32(d, m_hier_bbuf, 1024, m_hier_twr, m_hier_twi);
+                    gen::codelet32_batched(m_hier_bbuf, d, 2048);
+                    return;
+                }
+                if (m_n == 1024 && b == 64) // M5: 32×32 (BB=64); both stages b=N1·BB=N2·BB=2048 (the 1M/2M sub-FFT)
+                {
+                    gen::codelet32_stage1_fused_32x32(d, m_hier_bbuf, 2048, m_hier_twr, m_hier_twi);
                     gen::codelet32_batched(m_hier_bbuf, d, 2048);
                     return;
                 }
