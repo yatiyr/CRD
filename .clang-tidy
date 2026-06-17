@@ -8,6 +8,7 @@ Checks: >
   -bugprone-suspicious-stringview-data-usage,
   -bugprone-multi-level-implicit-pointer-conversion,
   -bugprone-sizeof-expression,
+  -bugprone-multiple-new-in-one-expression,
   cppcoreguidelines-*,
   -cppcoreguidelines-avoid-magic-numbers,
   -cppcoreguidelines-pro-type-reinterpret-cast,

@@ -205,23 +205,23 @@ int main()
     std::fprintf(stdout, "==== f64 cmod-shape (supernodal Schur-update gemm) ====\n");
     using crd::hesap::dense::Trans;
     using crd::hesap::dense::Layout;
-    constexpr auto N = Trans::None;
-    constexpr auto Tr = Trans::Transpose;
+    constexpr auto none = Trans::None;
+    constexpr auto trans = Trans::Transpose;
     // LAYOUT/TRANS GRID at K=512 (square RowMajor-NN = 80% is the ceiling): isolate which axis costs.
     // cmod is ColMajor-NT; reinterpreting the ColMajor K-panel as RowMajor makes it RowMajor-TN (zero-copy).
     // If RowMajor-TN hits ~80%, the cmod can reroute (view-flip + transposed scatter), no kernel rewrite.
-    run_gemm_shape<crd::f64, Layout::RowMajor>("rm-NN", 512, 512, 512, N, N, peak_f64, &alloc);
-    run_gemm_shape<crd::f64, Layout::RowMajor>("rm-TN", 512, 512, 512, Tr, N, peak_f64, &alloc); // cmod reroute target
-    run_gemm_shape<crd::f64, Layout::RowMajor>("rm-NT", 512, 512, 512, N, Tr, peak_f64, &alloc);
-    run_gemm_shape<crd::f64, Layout::RowMajor>("rm-TT", 512, 512, 512, Tr, Tr, peak_f64, &alloc);
-    run_gemm_shape<crd::f64, Layout::ColMajor>("cm-NN", 512, 512, 512, N, N, peak_f64, &alloc);
-    run_gemm_shape<crd::f64, Layout::ColMajor>("cm-NT", 512, 512, 512, N, Tr, peak_f64, &alloc); // = cmod, K512
+    run_gemm_shape<crd::f64, Layout::RowMajor>("rm-NN", 512, 512, 512, none, none, peak_f64, &alloc);
+    run_gemm_shape<crd::f64, Layout::RowMajor>("rm-TN", 512, 512, 512, trans, none, peak_f64, &alloc); // cmod reroute target
+    run_gemm_shape<crd::f64, Layout::RowMajor>("rm-NT", 512, 512, 512, none, trans, peak_f64, &alloc);
+    run_gemm_shape<crd::f64, Layout::RowMajor>("rm-TT", 512, 512, 512, trans, trans, peak_f64, &alloc);
+    run_gemm_shape<crd::f64, Layout::ColMajor>("cm-NN", 512, 512, 512, none, none, peak_f64, &alloc);
+    run_gemm_shape<crd::f64, Layout::ColMajor>("cm-NT", 512, 512, 512, none, trans, peak_f64, &alloc); // = cmod, K512
     // In-situ cmod shapes (ColMajor-NT). Tall-M is the DOMINANT real shape — the target metric.
-    run_gemm_shape<crd::f64, Layout::ColMajor>("cm-NT", 512, 512, 200, N, Tr, peak_f64, &alloc);  // advisor canonical
-    run_gemm_shape<crd::f64, Layout::ColMajor>("cm-NT", 1024, 512, 256, N, Tr, peak_f64, &alloc);
-    run_gemm_shape<crd::f64, Layout::ColMajor>("cm-NT", 2048, 512, 200, N, Tr, peak_f64, &alloc); // tall front (dominant)
+    run_gemm_shape<crd::f64, Layout::ColMajor>("cm-NT", 512, 512, 200, none, trans, peak_f64, &alloc);  // advisor canonical
+    run_gemm_shape<crd::f64, Layout::ColMajor>("cm-NT", 1024, 512, 256, none, trans, peak_f64, &alloc);
+    run_gemm_shape<crd::f64, Layout::ColMajor>("cm-NT", 2048, 512, 200, none, trans, peak_f64, &alloc); // tall front (dominant)
     // The reroute target at the dominant tall shape (RowMajor-TN, transposed dims k×m / k×n):
-    run_gemm_shape<crd::f64, Layout::RowMajor>("rm-TN", 2048, 512, 200, Tr, N, peak_f64, &alloc);
+    run_gemm_shape<crd::f64, Layout::RowMajor>("rm-TN", 2048, 512, 200, trans, none, peak_f64, &alloc);
     std::fprintf(stdout, "\nDone.\n");
     return 0;
 }

@@ -85,7 +85,9 @@ int main(int argc, char** argv)
     for (crd::u32 mi = 0; mi < (argc > 1 ? static_cast<crd::u32>(argc - 1) : 5U); ++mi)
     {
         const crd::u32 s = (argc > 1) ? static_cast<crd::u32>(std::atoi(argv[mi + 1])) : ss[mi];
-        const crd::u32 mx = s, my = s + 3, mz = s + 7; // rectangular ⇒ non-degenerate
+        const crd::u32 mx = s; // rectangular ⇒ non-degenerate
+        const crd::u32 my = s + 3;
+        const crd::u32 mz = s + 7;
         const crd::u32 n = mx * my * mz;
         crd::memory::GrowableTlsfAllocator alloc;
         Csr k = stiffness_3d(&alloc, mx, my, mz);

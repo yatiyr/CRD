@@ -54,9 +54,9 @@ crd::memory::GrowableTlsfAllocator g_alloc;
 // Deterministic, reproducible perturbation in [-0.3, 0.3] (PCG-style integer hash — no RNG state).
 crd::f64 pert(crd::u32 seed) noexcept
 {
-    seed = seed * 747796405u + 2891336453u;
-    crd::u32 w = ((seed >> ((seed >> 28u) + 4u)) ^ seed) * 277803737u;
-    w = (w >> 22u) ^ w;
+    seed = seed * 747796405U + 2891336453U;
+    crd::u32 w = ((seed >> ((seed >> 28U) + 4U)) ^ seed) * 277803737U;
+    w = (w >> 22U) ^ w;
     return (static_cast<crd::f64>(w) / 4294967296.0 - 0.5) * 0.6;
 }
 
@@ -64,8 +64,8 @@ crd::f64 pert(crd::u32 seed) noexcept
 Csr build_lattice_jacobian(crd::u32 s)
 {
     const crd::u32 nn = s * s * s;            // node count
-    const crd::u32 n = 3u * nn;               // variables (3 DOF / node)
-    const crd::u32 edges = 3u * s * s * (s - 1u);
+    const crd::u32 n = 3U * nn;               // variables (3 DOF / node)
+    const crd::u32 edges = 3U * s * s * (s - 1U);
     const crd::u32 m = edges + n;             // residuals: edges + per-DOF anchors
     const crd::f64 w = 0.1;                   // anchor weight (soft data term ⇒ SPD)
     const crd::f64 l0 = 1.0;                  // rest edge length
@@ -78,29 +78,31 @@ Csr build_lattice_jacobian(crd::u32 s)
         const crd::u32 x = node % s;
         const crd::u32 y = (node / s) % s;
         const crd::u32 z = node / (s * s);
-        p[node * 3u + 0u] = static_cast<crd::f64>(x) + pert(node * 3u + 0u);
-        p[node * 3u + 1u] = static_cast<crd::f64>(y) + pert(node * 3u + 1u);
-        p[node * 3u + 2u] = static_cast<crd::f64>(z) + pert(node * 3u + 2u);
+        p[node * 3U + 0U] = static_cast<crd::f64>(x) + pert(node * 3U + 0U);
+        p[node * 3U + 1U] = static_cast<crd::f64>(y) + pert(node * 3U + 1U);
+        p[node * 3U + 2U] = static_cast<crd::f64>(z) + pert(node * 3U + 2U);
     }
 
     sp::TripletBuilder<crd::f64> jb(&g_alloc, m, n);
-    jb.reserve(static_cast<crd::usize>(edges) * 6u + n);
+    jb.reserve(static_cast<crd::usize>(edges) * 6U + n);
     crd::u32 row = 0;
     auto add_edge = [&](crd::u32 i, crd::u32 j)
     {
-        const crd::f64 dx = p[i * 3u + 0u] - p[j * 3u + 0u];
-        const crd::f64 dy = p[i * 3u + 1u] - p[j * 3u + 1u];
-        const crd::f64 dz = p[i * 3u + 2u] - p[j * 3u + 2u];
+        const crd::f64 dx = p[i * 3U + 0U] - p[j * 3U + 0U];
+        const crd::f64 dy = p[i * 3U + 1U] - p[j * 3U + 1U];
+        const crd::f64 dz = p[i * 3U + 2U] - p[j * 3U + 2U];
         const crd::f64 len = std::sqrt(dx * dx + dy * dy + dz * dz);
         const crd::f64 inv = len > 0.0 ? 1.0 / len : 0.0;
-        const crd::f64 u0 = dx * inv, u1 = dy * inv, u2 = dz * inv; // ∂‖p_i−p_j‖/∂p_i
+        const crd::f64 u0 = dx * inv; // ∂‖p_i−p_j‖/∂p_i
+        const crd::f64 u1 = dy * inv;
+        const crd::f64 u2 = dz * inv;
         (void)l0;                                                  // residual value unused; J only
-        jb.add(row, i * 3u + 0u, u0);
-        jb.add(row, i * 3u + 1u, u1);
-        jb.add(row, i * 3u + 2u, u2);
-        jb.add(row, j * 3u + 0u, -u0);
-        jb.add(row, j * 3u + 1u, -u1);
-        jb.add(row, j * 3u + 2u, -u2);
+        jb.add(row, i * 3U + 0U, u0);
+        jb.add(row, i * 3U + 1U, u1);
+        jb.add(row, i * 3U + 2U, u2);
+        jb.add(row, j * 3U + 0U, -u0);
+        jb.add(row, j * 3U + 1U, -u1);
+        jb.add(row, j * 3U + 2U, -u2);
         ++row;
     };
     for (crd::u32 z = 0; z < s; ++z)
@@ -110,11 +112,11 @@ Csr build_lattice_jacobian(crd::u32 s)
             for (crd::u32 x = 0; x < s; ++x)
             {
                 const crd::u32 i = (z * s + y) * s + x;
-                if (x + 1u < s)
-                    add_edge(i, i + 1u);
-                if (y + 1u < s)
+                if (x + 1U < s)
+                    add_edge(i, i + 1U);
+                if (y + 1U < s)
                     add_edge(i, i + s);
-                if (z + 1u < s)
+                if (z + 1U < s)
                     add_edge(i, i + s * s);
             }
         }
@@ -151,7 +153,7 @@ bool write_symmetric_mtx(const char* path, const Csr& a)
     }
 
     crd::containers::String out(&g_alloc);
-    out.reserve(static_cast<crd::usize>(lo_nnz) * 28u + 128u);
+    out.reserve(static_cast<crd::usize>(lo_nnz) * 28U + 128U);
     char buf[64];
     auto append = [&](const char* sptr)
     {
@@ -195,9 +197,9 @@ bool write_symmetric_mtx(const char* path, const Csr& a)
             const crd::u32 j = pat.inner_idx[st + k];
             if (j <= i)
             {
-                append_u64(static_cast<crd::u64>(i) + 1u);
+                append_u64(static_cast<crd::u64>(i) + 1U);
                 out.push_back(' ');
-                append_u64(static_cast<crd::u64>(j) + 1u);
+                append_u64(static_cast<crd::u64>(j) + 1U);
                 out.push_back(' ');
                 append_f64(vals[st + k]);
                 out.push_back('\n');
@@ -225,7 +227,7 @@ void gen(const char* out_dir, crd::u32 s)
     bool spd = true;
     crd::u64 fill = 0;
     crd::f64 fac_ms = 0.0;
-    if (n <= 30000u)
+    if (n <= 30000U)
     {
         const auto tf0 = Clock::now();
         auto f = dir::factor_supernodal_cholesky<crd::f64>(jtj.pattern(),
@@ -255,9 +257,14 @@ void gen(const char* out_dir, crd::u32 s)
 
     const bool ok = spd ? write_symmetric_mtx(file_path.c_str(), jtj) : false;
 
+    const char* spd_status = "skip";
+    if (n <= 30000U)
+    {
+        spd_status = spd ? "SPD" : "NOT-SPD!";
+    }
     std::printf("  s=%-3u n=%-8u JtJ_nnz=%-9llu | form(J->JtJ)=%8.1f ms | Cerid factor: %s fill=%-10llu %8.1f ms | "
                 "wrote=%s %s\n",
-                s, n, static_cast<unsigned long long>(jtj_nnz), form_ms, n <= 30000u ? (spd ? "SPD" : "NOT-SPD!") : "skip",
+                s, n, static_cast<unsigned long long>(jtj_nnz), form_ms, spd_status,
                 static_cast<unsigned long long>(fill), fac_ms, ok ? "OK" : "FAIL", file_path.c_str());
 }
 } // namespace
