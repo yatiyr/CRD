@@ -23,6 +23,9 @@
 #include <crd/hesap/complex.hpp>
 #include <crd/hesap/fft/detail/codelets.hpp>         // generated straight-line leaf codelets (genfft-lite, v10-b)
 #include <crd/hesap/fft/detail/small_n_codelets.hpp> // AoS lane-trick small-N codelets (N≤32 f64; see header)
+#ifndef CRD_FFT_DISABLE_HIER
+#include <crd/hesap/fft/detail/hier_codelets.hpp> // DEFAULT: hierarchical generated sub-FFTs (M2 4096 + M3 2048). Disable with -DCRD_FFT_DISABLE_HIER.
+#endif
 #include <crd/math/simd/vec4d.hpp>
 #include <crd/math/simd/vec8f.hpp>
 #include <crd/memory/allocator.hpp>
@@ -132,6 +135,33 @@ public:
         {
             m_rev[i] = bitrev(i, m_log2);
         }
+#ifndef CRD_FFT_DISABLE_HIER
+        // DEFAULT (disable with -DCRD_FFT_DISABLE_HIER): the hierarchical generated-codelet sub-FFTs. 4096 = 64×64
+        // (M2, BB=16) and 2048 = 64×32 (M3, BB=32) — N1=64 (outer/stage-1 leaf), N2 = N/64 (inner/stage-2). Build the
+        // transposed intermediate (n·BB = 65536 complex either way) + the inner twiddle W_N^{n2·k1} (index n2·64+k1,
+        // the codelet stride is N1=64 for both). Dispatched f64, Forward, b==BB only (the 8M/16M four-step sub-FFTs).
+        if constexpr (std::is_same_v<T, crd::f64>)
+        {
+            const crd::usize h_n2 = (n == 4096) ? 64U : ((n == 2048) ? 32U : 0U); // N2 = N/64
+            const crd::usize h_bb = (n == 4096) ? 16U : 32U;                      // BB = block_width(n)
+            if (h_n2 != 0)
+            {
+                m_hier_bbuf = static_cast<Complex<T>*>(m_alloc->allocate(n * h_bb * sizeof(Complex<T>), 64));
+                m_hier_twr = static_cast<T*>(m_alloc->allocate(h_n2 * 64 * sizeof(T), 32));
+                m_hier_twi = static_cast<T*>(m_alloc->allocate(h_n2 * 64 * sizeof(T), 32));
+                constexpr double tp = 6.283185307179586476925286766559;
+                for (crd::usize n2 = 0; n2 < h_n2; ++n2)
+                {
+                    for (crd::usize k1 = 0; k1 < 64; ++k1)
+                    {
+                        const double th = tp * static_cast<double>(n2 * k1) / static_cast<double>(n);
+                        m_hier_twr[n2 * 64 + k1] = static_cast<T>(std::cos(th));
+                        m_hier_twi[n2 * 64 + k1] = static_cast<T>(-std::sin(th));
+                    }
+                }
+            }
+        }
+#endif
         if (m_use_four_step) // Lever D resurrection: four-step buffers + HOISTED sub-plans + linear twiddle
         {
             // tbuf (transpose intermediate) + scratch (cache-resident block) are RAW 64-BYTE-ALIGNED (NT stores
@@ -197,6 +227,20 @@ public:
         {
             m_alloc->deallocate(m_tbuf);
         }
+#ifndef CRD_FFT_DISABLE_HIER
+        if (m_hier_bbuf != nullptr)
+        {
+            m_alloc->deallocate(m_hier_bbuf);
+        }
+        if (m_hier_twr != nullptr)
+        {
+            m_alloc->deallocate(m_hier_twr);
+        }
+        if (m_hier_twi != nullptr)
+        {
+            m_alloc->deallocate(m_hier_twi);
+        }
+#endif
     }
     FftPlan(const FftPlan&) = delete;
     FftPlan& operator=(const FftPlan&) = delete;
@@ -481,6 +525,32 @@ public:
             {
                 detail::small_n_batched16_f64(reinterpret_cast<crd::f64*>(d), b, dir == FftDirection::Forward);
                 return;
+            }
+        }
+#endif
+#ifndef CRD_FFT_DISABLE_HIER
+        // DEFAULT (disable with -DCRD_FFT_DISABLE_HIER): the hierarchical generated-codelet sub-FFTs replace the
+        // radix-8 path for the f64 four-step sub-FFTs — 4096 = 64×64 (b==16: 8M-n1 + both 16M) and 2048 = 64×32
+        // (b==32: 8M-n2 + both 4M). Stage-1 FUSED (split-radix leaf + inner twiddle + transposed store into
+        // m_hier_bbuf) then a plain leaf stage-2 back into d (natural order). Isolated 4096 1.24× / 2048 1.26×;
+        // full 8M ~1.13–1.17× → ~0.94× MKL, 4M near parity, machine-eps (~1e-15), deterministic. Inverse and f32
+        // fall through to the radix-8 path below (round-trip stays machine-eps). See the 2026-06-17 FFT session logs.
+        if constexpr (std::is_same_v<T, crd::f64>)
+        {
+            if (dir == FftDirection::Forward && m_hier_bbuf != nullptr)
+            {
+                if (m_n == 4096 && b == 16) // M2: 64×64 (BB=16); stage-1 b=N2·BB=1024, stage-2 b=N1·BB=1024
+                {
+                    gen::codelet64_stage1_fused_64x64(d, m_hier_bbuf, 1024, m_hier_twr, m_hier_twi);
+                    gen::codelet64_batched(m_hier_bbuf, d, 1024);
+                    return;
+                }
+                if (m_n == 2048 && b == 32) // M3: 64×32 (BB=32); stage-1 b=N2·BB=1024, stage-2 b=N1·BB=2048
+                {
+                    gen::codelet64_stage1_fused_64x32(d, m_hier_bbuf, 1024, m_hier_twr, m_hier_twi);
+                    gen::codelet32_batched(m_hier_bbuf, d, 2048);
+                    return;
+                }
             }
         }
 #endif
@@ -1768,6 +1838,11 @@ private:
     crd::containers::Array<T> m_ptw_re; // Lever A: per-pass combine twiddles, flat in (j,m) pass order
     crd::containers::Array<T> m_ptw_im;
     crd::u32 m_rmax_bits = 3U; // size-aware max radix bits/pass (set in ctor; mirrored by build + execute)
+#ifndef CRD_FFT_DISABLE_HIER
+    Complex<T>* m_hier_bbuf = nullptr; // M2: transposed intermediate for the hierarchical 64x64 4096 sub-FFT
+    T* m_hier_twr = nullptr;           // M2: inner 64x64 twiddle  cos(2π·n2·k1/4096)
+    T* m_hier_twi = nullptr;           // M2: inner 64x64 twiddle −sin(2π·n2·k1/4096)
+#endif
 };
 
 // One-shot: builds a transient plan, transforms in place. Forward + inverse UNNORMALIZED.

@@ -81,9 +81,22 @@ Generated codelets emit to `engine/hesap-fft/include/crd/hesap/fft/detail/`; the
 ## 14. Milestones
 - **M0 ✅ (2026-06-16):** design doc + generator skeleton (`build/gen_subfft.py`) + N=16/32/64 emitted, numpy-self-checked, benchmarked vs `execute_batched`. **Generated BEATS the engine at N=32 (1.98×) and N=64 (1.24×)** — proves the pipeline. Dossier C-22.
 - **M1 ✅ (2026-06-16):** N=256/512/1024 ladder with the same schedule + register model. **Found the decisive crossover (see §15).** Dossier C-23.
-- **M2 (NEXT):** hierarchical 64×64 4096 sub-FFT POC ≥1.10× → compose into full 8M behind a gate. Step plan in §16.
-- **M3:** f32 port (Vec8f).
-- **M4:** planner dispatch + full-suite DoD + 18-config sweep + parity dashboard close.
+- **M2 ✅ (2026-06-17):** hierarchical 64×64 4096 sub-FFT POC. **Variant B (fused twiddle+transpose into stage-1
+  stores) = 1.240× over `execute_batched(4096,16)`, machine-eps.** Composed into the full FFT behind `CRD_FFT_M2_HIER`
+  (gated OFF): **full-16M ~1.10× (both sub-FFTs 4096, clears the 1.05× gate), full-8M ~1.04× (only n1=4096 = 27%
+  accelerated)**, all machine-eps + reproducible. Variant A (explicit transpose) lost (0.740×). See §15.5 + the
+  session log. The approach is VALIDATED; 8M needs P2 too (M3).
+- **M3 ✅ (2026-06-17):** the 2048 = **64×32** hierarchical sub-FFT (Choice B, 1.260× isolated; Choice A 32×64 =
+  1.224×). Wired alongside M2's 4096 path ⇒ at 8M BOTH sub-FFTs hierarchical (~51%). **Full-8M 1.13–1.17× engine
+  (~0.94× MKL), 4M 1.13–1.24× (~0.95–0.99× MKL), 16M unchanged-by-construction, all machine-eps** — the ≥1.05× gate
+  cleared. See §15.6 + the session log. Default-enable candidate (gated OFF pending the M4 DoD).
+- **M4 ✅ (2026-06-17, enable done; multi-config sweep + commit pending the user):** the hier path is now the
+  **default** f64 forward sub-FFT for n∈{2048,4096} (`#ifndef CRD_FFT_DISABLE_HIER`; inverse/f32 → radix-8). Verified
+  4 win-configs FFT-scope + ASan-clean + LTCG + clang-tidy + gcc; **`ctest --preset win-debug` GREEN 3935/3935 incl.
+  guards**; 8M ~1.13–1.21× → ~0.90–0.94× MKL, 4M near parity, machine-eps. Hit 2 pre-existing env landmines (C1853
+  stale-PCH from an MSVC update; the dumpbin-guard needing vcvars). Session `2026-06-17-fft-m4-enable-default.md`.
+- **M5 (NEXT):** finish the multi-config DoD sweep (after clearing stale PCHs) + commit + f32 (Vec8f) hier port +
+  inverse hier codelets + planner cost-model + the parity dashboard close.
 
 ## 15. M1 result — the crossover (the architecture-deciding measurement)
 Generated batched Vec4d codelets vs `execute_batched` (f64, b=32), all machine-eps correct:
@@ -105,6 +118,49 @@ by measurement — **straight-line ONLY for small leaves; larger sizes need recu
 radix-64 building block + the already-vectorized bb-axis twiddle + a 64×64 transpose. Rejected: Path A full-4096
 straight-line (≈4× the 1024 = catastrophic spills + ~40 min compile); 256×16 (256 already neutral); stage-Stockham
 △ (radix-8 near the gcc limit). ⚠ The N=64 leaf win does NOT automatically compose — M2 must prove it.
+
+## 15.5 M2 result — the composition proved (2026-06-17)
+Built both variants (`build/gen_subfft_m2.py` + `m2_4096_bench.cpp`); gated into the engine four-step behind
+`CRD_FFT_M2_HIER` (OFF by default). Decomposition `n=64·n1+n2`, `k=64·k2+k1`, element-major `scratch[n·16+bb]`:
+stage-1 = one `codelet64(b=1024)` (element n1) → twiddle `W_4096^{n2·k1}` → transpose k1↔n2 → stage-2 = `codelet64(b=1024)`.
+
+**4096 sub-FFT (isolated):** Variant B (fused twiddle+transpose into stage-1 stores, 2 passes) = **1.240×** machine-eps;
+Variant A (explicit transpose pass, 4 passes) = 0.740× (the separate pass eats the win — the memory-pass model held).
+The generated-64 leaf survives the b=1024/1MB regime (1.115 vs engine 1.456 ns/el = 1.31×).
+
+**Parity dashboard (f64, the M2 line is in situ behind the gate):**
+| version | 8M f64 ×MKL | 16M f64 ×MKL | notes |
+|---|---|---|---|
+| pre-archaeology | 0.76 | — | |
+| after 4 archaeology wins | ~0.84 | ~0.85 | the committed engine |
+| **M2 hierarchical 64×64 (gated)** | **~0.86 (8M +1.04×)** | **~0.96 (16M +1.10×)** | machine-eps; 16M clears the 1.05× gate |
+
+**Why 8M < 16M:** at 8M only the n1=4096 sub-FFT is hierarchical (**27%** of the four-step — the "~46%" in §2
+conflated *both* sub-FFTs); at 16M both n1 and n2 are 4096 (~51%). The gain scales with the accelerated fraction;
+no mechanism difference. In-situ erosion (isolated 1.24× → ~1.1–1.18× in situ) is a cold-bbuf hypothesis, not a
+finding. **M3 closes 8M by making the 2048 sub-FFT hierarchical (32×64) too.** Full detail + the interleaved 16M
+correctness/timing table: `docs/sessions/2026-06-17-fft-m2-hierarchical-64x64.md`.
+
+## 15.6 M3 result — the 2048 sub-FFT closes 8M (2026-06-17)
+The M2 diagnosis (gain ∝ accelerated fraction) predicted that accelerating the n2=2048 sub-FFT too would lift 8M to
+the 16M class. Confirmed. 2048 = N1·N2 with **N1=64, N2=32, BB=32** (the M2 generalization, `gen_subfft_m3.py`):
+stage-1 fused `codelet64_stage1_fused_64x32(b=N2·BB=1024)` (twiddle `W_2048^{n2·k1}` + transposed store) → stage-2
+plain `codelet32_batched(b=N1·BB=2048)`. **Choice B (64×32) = 1.260× isolated; Choice A (32×64) = 1.224× — B chosen.**
+
+Wired into the gate beside the 4096 path (one ctor builds bbuf=65536 complex + the twiddle for n∈{4096,2048};
+dispatch on f64/Forward/b==BB). **8M now has both sub-FFTs hierarchical (~51%).** Measured (primary = `m3_full`
+interleaved; ×MKL = canonical `bench_fft_vs_refs` within-run):
+
+| n | engine speedup (M3 vs BASE) | ×MKL (M3) | note |
+|---|---|---|---|
+| 4M (both 2048) | 1.13–1.24× | ~0.95–0.99 | biggest gain |
+| 8M (4096+2048) | 1.13–1.17× | ~0.94 | the M3 target — cleared |
+| 16M (both 4096) | 1.06–1.08× | ~0.90 | unchanged-by-construction (byte-identical 4096 codelet) |
+
+All machine-eps (1.1–1.2e-15). 8M ~0.94× MKL matches the prompt's "≥1.10× ⇒ 8M ~0.92–0.94× MKL". Three independent
+measurements agree (isolated 1.26× · interleaved 1.13–1.17× · canonical 1.115×) — solid, unlike M2's wobbly 8M.
+Default-enable candidate; gated OFF pending the M4 18-config DoD + the forward-bit backward-compat check.
+Full detail: `docs/sessions/2026-06-17-fft-m3-hierarchical-2048.md`.
 
 ## 16. M2 plan — hierarchical 64×64 4096 sub-FFT POC
 Standalone f64 `build/` probe; baseline = current `execute_batched(4096)`. **Acceptance:** 4096 sub-FFT ≥1.10× →

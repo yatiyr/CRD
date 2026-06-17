@@ -211,12 +211,13 @@ TEST_CASE("fft: run-twice bit identity (deterministic plan)", "[fft][determinism
 
 TEST_CASE("fft: four-step path (large n) matches the radix-2 reference oracle", "[fft]")
 {
-    crd::memory::TlsfAllocator alloc(1ULL << 30);
+    crd::memory::TlsfAllocator alloc(1ULL << 31);
     // n >= kFourStepMin (2^19) triggers the four-step path; the naive O(N^2) DFT is too slow here, so cross-check
     // against execute_reference (the radix-2 oracle, validated against the naive DFT at small n, O(n log n)). Gate
-    // the WHOLE crossover band (2^19..2^22), not just 2^22 — the four-step runs at every size in it, and the
-    // block-width/partial-block boundaries differ across n1/n2 splits (e.g. odd m_log2 ⇒ n1≠n2).
-    for (usize n : {1U << 19, 1U << 20, 1U << 21, 1U << 22})
+    // the WHOLE crossover band (2^19..2^23), not just 2^22 — the four-step runs at every size in it, and the
+    // block-width/partial-block boundaries differ across n1/n2 splits (e.g. odd m_log2 ⇒ n1≠n2). 2^21/2^22 exercise
+    // the default 2048=64×32 hierarchical sub-FFT (n1=2048); 2^23 the 4096=64×64 one too (n1=4096, n2=2048).
+    for (usize n : {1U << 19, 1U << 20, 1U << 21, 1U << 22, 1U << 23})
     {
         cont::Array<Complex<f64>> x(&alloc);
         fill_lcg(x, n, 31337ULL + n);
