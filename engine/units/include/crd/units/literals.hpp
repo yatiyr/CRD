@@ -301,6 +301,20 @@ CRD_UNITS_CURRENT_UDL(uA,   Microampere)
 [[nodiscard]] inline Quantity<dim::Power, crd::f64> operator""_dBm(unsigned long long v) noexcept
 { return quantity_from_nonlinear<DecibelMilliwatt>(static_cast<crd::f64>(v)); }
 
+// DSP ratio dB (dimensionless). _dB_amp = amplitude/field (20*log10); _dB_pow = power (10*log10).
+// WARNING: literals are for POSITIVE dB only. `-60.0_dB_amp` parses as -(60.0_dB_amp) and negates the LINEAR
+// ratio (the sign escapes the log). For negative/attenuation dB (the DSP-dominant case) use the conversion
+// function: quantity_from_nonlinear<DecibelRatio>(-60.0).
+[[nodiscard]] inline Quantity<dim::Dimensionless, crd::f64> operator""_dB_amp(long double v) noexcept
+{ return quantity_from_nonlinear<DecibelRatio>(static_cast<crd::f64>(v)); }
+[[nodiscard]] inline Quantity<dim::Dimensionless, crd::f64> operator""_dB_amp(unsigned long long v) noexcept
+{ return quantity_from_nonlinear<DecibelRatio>(static_cast<crd::f64>(v)); }
+
+[[nodiscard]] inline Quantity<dim::Dimensionless, crd::f64> operator""_dB_pow(long double v) noexcept
+{ return quantity_from_nonlinear<DecibelPower>(static_cast<crd::f64>(v)); }
+[[nodiscard]] inline Quantity<dim::Dimensionless, crd::f64> operator""_dB_pow(unsigned long long v) noexcept
+{ return quantity_from_nonlinear<DecibelPower>(static_cast<crd::f64>(v)); }
+
 [[nodiscard]] inline Quantity<dim::Frequency, crd::f64> operator""_cents(long double v) noexcept
 { return quantity_from_nonlinear<Cents>(static_cast<crd::f64>(v)); }
 [[nodiscard]] inline Quantity<dim::Frequency, crd::f64> operator""_cents(unsigned long long v) noexcept

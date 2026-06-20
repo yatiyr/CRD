@@ -138,6 +138,47 @@ struct DecibelMilliwatt  // dBm
 };
 
 // ===========================================================================
+// DSP ratio-dB family (Phase 3.1.6 v11-a)
+// ===========================================================================
+//
+// Unlike dB SPL/V/W (referenced to a PHYSICAL unit), DSP works in dB as a
+// DIMENSIONLESS RATIO of a transfer magnitude |H| = out/in. Two conventions,
+// both shipped explicitly (the type name carries the convention so the
+// amplitude-vs-power ambiguity is impossible to hide):
+//
+//   DecibelRatio  (amplitude / field quantities): the |H| convention.
+//     lin = 10^(dB/20)        dB = 20*log10(lin)
+//     -- magnitude responses, "Rs dB down" stopband edges (|H| = 10^(-Rs/20)).
+//
+//   DecibelPower  (power quantities): the |H|^2 convention.
+//     lin = 10^(dB/10)        dB = 10*log10(lin)
+//     -- the 10^(0.1*Rp) form scipy/MATLAB filter-ORDER routines (cheb1ord,
+//        ellipord, ...) use on the squared magnitude.
+//
+// Both carry dimension = Dimensionless: a ratio has no SI dimension. Per the
+// architectural pin at the top of this file, these are I/O lenses -- DSP
+// design code converts a dB spec to the linear ratio at the boundary and does
+// all arithmetic on the linear ratio.
+
+struct DecibelRatio
+{
+    using dimension = dim::Dimensionless;
+    static constexpr bool is_nonlinear = true;
+
+    [[nodiscard]] static crd::f64 to_si(crd::f64 db) noexcept { return std::pow(10.0, db / 20.0); }
+    [[nodiscard]] static crd::f64 from_si(crd::f64 ratio) noexcept { return 20.0 * std::log10(ratio); }
+};
+
+struct DecibelPower
+{
+    using dimension = dim::Dimensionless;
+    static constexpr bool is_nonlinear = true;
+
+    [[nodiscard]] static crd::f64 to_si(crd::f64 db) noexcept { return std::pow(10.0, db / 10.0); }
+    [[nodiscard]] static crd::f64 from_si(crd::f64 ratio) noexcept { return 10.0 * std::log10(ratio); }
+};
+
+// ===========================================================================
 // Musical pitch family
 // ===========================================================================
 //

@@ -15,6 +15,7 @@
 #include <crd/units/dim.hpp>
 #include <crd/units/dim_aliases.hpp>
 #include <crd/units/literals.hpp>
+#include <crd/units/normalized_frequency.hpp>
 #include <crd/units/quantity.hpp>
 #include <crd/units/quantity_aliases.hpp>
 #include <crd/units/units_affine.hpp>

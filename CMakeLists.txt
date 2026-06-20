@@ -569,6 +569,7 @@ add_subdirectory(engine/hesap-opt)  # v7; OPTIMISATION (unconstrained + constrai
 add_subdirectory(engine/hesap-stats)  # v12 cluster (created early as a v12-pull: Philox counter-RNG for v7-i)
 add_subdirectory(engine/hesap-ode)  # v9; ODE/DAE — stepper kernel headers + driver substrate; ADR-0091
 add_subdirectory(engine/hesap-fft)  # v10; FFT — Complex<T> transforms; gold standards FFTW/PocketFFT/MKL
+add_subdirectory(engine/hesap-dsp)  # v11; DSP — filters/spectral/multirate (depends on hesap-fft/eigen/units); ADR-0093
 add_subdirectory(engine/resources)
 add_subdirectory(engine/scene)
 add_subdirectory(engine/preset)

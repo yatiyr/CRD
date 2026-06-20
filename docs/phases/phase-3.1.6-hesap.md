@@ -434,7 +434,40 @@ determinism + replay tests.
 | ↳ **v10-h** ✅ (DONE 2026-06-20 — END-TO-END SUB-LINEAR + NOISE-ROBUST) | **Sparse FFT (Hassanieh-Indyk-Katabi-Price, SODA 2012 "Simple & Practical").** SHIPPED `sparse_fft.hpp` `SparseFftPlan<T>`: random odd permutation σ hashes frequencies → Gaussian-windowed-sinc flat filter → fold to B≈8k bins → B-point engine FFT at **log₂(n)+1 dyadic spatial offsets** → **multi-scale BINARY location** (bit j of f from the sign of the low-bit-corrected β_j=2^{m-j-1} phase, each bit ±π/2-robust — replaces the noise-fragile single-offset ratio) → hash-back verification → **voting + component-MEDIAN bucket estimation** across rounds. ⭐ **NO O(n) STEP ANYWHERE** — bucketise touches w+B samples (w=1.6–50% of n), so the whole recovery is **O(R·log n·(w+B log B))**, genuinely sub-linear. GATES: **(1) EXACT k-sparse** — frequencies exact + coeffs ~1e-7–1e-8, n≤65536 k≤10 all matched k/k; **(2) NOISY k-sparse** — k dominant tones + complex Gaussian noise (σ≤0.008/bin) → ALL frequencies recovered (robust location) + coeffs to the √(n/B)·σ/√R floor (1.7–10%). Integrated into `test_fft.cpp` (suite **184/25**, GREEN). The sub-linear-B regime is robust where bucket-SNR=|c|/(√(n/B)·σ)≳10 (the standard sparse-FFT trade: lower SNR ⇒ larger B toward dense). | ~450 | ~14 | — |
 | ↳ **v10-z** ✅ (DONE 2026-06-20 — v10 CLUSTER COMPLETE a→z) | **CLOSE.** SHIPPED CLI `hesap.fft.*` (`cli_register_fft.cpp` + `cli_anchor.hpp`): `hesap.fft.forward.f64` (arbitrary-size FFT/IFFT via Bluestein, interleaved-re/im vector I/O) + `hesap.fft.sparse.f64` (HIKP sparse recovery → [count,(f,re,im)*]); `register_fft_cli_anchor()`; `test_cli.cpp` drives both vs the brute-force DFT + planted tones (registered + direct-invoke-tested; the `data` `VectorId` param flows inline via `set_f64_array` — MCP vector-store front-end resolution is a follow-on). System doc `docs/systems/hesap-fft.md` (the 7 transforms + the determinism contract + the banked perf board + the CLI) + **ADR-0092** finalized + index row. Determinism = the deterministic plan-from-factorization + the run-twice bit-identity gate (a shared FFT has no thread-dependent reduction ⇒ {1..16} is by-construction; no parallel-batched FFT API yet — a v10-e follow-on). The MKL scoreboard is the BANKED portable-adjacent board (parity DEFERRED per ADR-0092, not a beat-MKL chase). FFT suite **GREEN 259/28** (linux-gcc-release). ✅ **FULL 4-CONFIG WINDOWS DoD GREEN 2026-06-20** (`per-slice-check.ps1 -Reconfigure`): win-debug 3942/3942 + win-asan 3942/3942 + win-shipping 3855/3855 (build+ctest) + win-tidy build-clean (one test-helper loop-var naming violation `K/N/X`→`kk/nn/out` caught + fixed). PENDING USER: commit + 18-config CI sweep. | ~400 | ~14 | — |
 
-| **v11** | DSP: FIR (windowed sinc + Parks-McClellan Remez) + IIR (bilinear-transform Butterworth/Cheb-I/Cheb-II/Elliptic/Bessel) + biquad + resampling (polyphase) + spectral analysis (Welch / Bartlett) + Z-transform + complex variants + CLI registration | ~2800 | ~110 | ~2 wk |
+| **v11** | **DSP — the MAXIMAL subject** (ADR-0093; **full deep-dive below, § "v11 — DSP … DETAILED PLAN"**). 3 isolated modules + a `crd-units` add: **`crd-hesap-dsp`** (core+adaptive, v11-a…t) + **`crd-hesap-wavelet`** (v11w-a…e) + **`crd-hesap-comms`** (v11c-a…g) + `crd-units` `Decibel`/`NormalizedFrequency`. Gold standards: scipy.signal + MATLAB-SP-Toolbox + Intel-IPP + liquid-dsp + CMSIS-DSP + PyWavelets. ⭐ Honest gate: DESIGN = spec-compliance · APPLICATION = bit-exact + {1..16} MOAT. Sub-slices promoted into this table below ↓ | ~12000 | ~425 | multi-session |
+| ↳ **v11-a** ✅ | SUBSTRATE: reps tf/zpk/**SOS**/ss/lattice + conversions + freqz/group_delay + `crd-units` dB/NormalizedFreq. Data-flow rule locked (design in zpk→sos). | ~600 | 661 | ✅ |
+| ↳ **v11-b** ✅ | WINDOWS: 24 (cosine-sum/Kaiser/DPSS/Dolph-Cheb/Taylor/…) vs scipy 1e-13. **PERF: beats scipy+MATLAB on all.** | ~500 | — | ✅ |
+| ↳ **v11-c** ✅ | FIR windowed: `firwin`/`firwin2` (closed-form 1e-12). **PERF: 8.6× scipy / 3.9× MATLAB.** | ~250 | — | ✅ |
+| ↳ **v11-d** ✅ | FIR optimal: `firls` + **Parks-McClellan `remez`** (exchange) + Savitzky-Golay + RRC. **firls 41.8× scipy.** | ~600 | — | ✅ |
+| ↳ **v11-e** ✅ | IIR analog prototypes: `buttap`/`cheb1ap`/`cheb2ap`/`besselap` + bilinear + digital `butter`/`cheby1`/`cheby2`/`bessel`. | ~350 | — | ✅ |
+| ↳ **v11-f** ✅ | **ELLIPTIC (Cauer)** — ellipk/ellipj/ellipdeg/arc_jac_sc substrate (each gated vs scipy.special) + `ellipap`/`ellip`. | ~400 | — | ✅ |
+| ↳ **v11-g** ▶ NEXT | IIR digital: lp2hp/bp/bs freq-transforms + order-est (`*ord`) + `iirdesign`/`iirfilter` + notch/peak/comb. | ~400 | ~16 | — |
+| ↳ **v11-h** | **AUDIO biquads** (DAW): RBJ cookbook (LPF/HPF/BPF/notch/APF/peaking/shelf) + parametric EQ, typed Freq+dB+Q. | ~250 | ~12 | — |
+| ↳ **v11-i** ✅ | FILTERING + STREAMING: `sosfilt_stream`/`sosfilt`/`sosfiltfilt` + `lfilter`/`lfilter_zi`/`filtfilt`. **Bit-exact + {1..16} moat. PERF: beats scipy + liquid.** | ~300 | — | ✅ |
+| ↳ **v11-j** ✅ | CONVOLUTION: `convolve`/`fftconvolve`/`FftConvolver`/`correlate`/`oaconvolve`/`deconvolve`/`matched_filter`. **FftConvolver 2.1× scipy.** | ~250 | — | ✅ |
+| ↳ **v11-k** | MULTIRATE: decimate/interp/`upfirdn`/`resample`/`resample_poly` + polyphase + Farrow + CIC + half-band. | ~400 | ~16 | — |
+| ↳ **v11-l** | HILBERT: analytic signal + envelope + instantaneous freq/phase (over crd-hesap-fft). | ~150 | ~8 | — |
+| ↳ **v11-m** ✅ | SPECTRAL: **`welch_psd`/`spectrogram`/`stft`/`istft`/`periodogram`/`csd`/`coherence`** — **THE MULTI-THREADED FFT** (parallel batched, bit-identical across threads). **PERF: welch 15.3× MATLAB pwelch / 11.5× scipy.** | ~500 | — | ✅ |
+| ↳ **v11-n** | **MULTITAPER** (Thomson): DPSS-tapered + adaptive eigenvalue weighting (→ eigen). | ~250 | ~10 | — |
+| ↳ **v11-o** | PARAMETRIC AR: Yule-Walker + Burg + (modified-)covariance + AR-PSD + AIC/MDL. | ~350 | ~14 | — |
+| ↳ **v11-p** | **SUBSPACE**: MUSIC + root-MUSIC + ESPRIT + min-norm (→ eigen). | ~400 | ~14 | — |
+| ↳ **v11-q** | TRANSFORMS: cepstrum + liftering + Goertzel + Walsh-Hadamard + CZT/zoom-FFT + Z-transform inverse. | ~350 | ~14 | — |
+| ↳ **v11-r** | WAVEFORMS: chirp + sawtooth/square + gausspulse + sweep_poly + unit_impulse + MLS + Gold/Kasami. | ~300 | ~12 | — |
+| ↳ **v11-s** | DETECTION + MEASUREMENTS: `find_peaks` + argrelextrema + detrend + B-splines + SNR/THD/SINAD/SFDR/ENOB. | ~400 | ~16 | — |
+| ↳ **v11-t** | ADAPTIVE: LMS + NLMS + sign-LMS + RLS + affine-projection + Wiener-Hopf. | ~300 | ~12 | — |
+| ↳ **v11w-a** | WAVELET families + filter banks: Haar/Daubechies/Symlets/Coiflets/(reverse-)biorthogonal + QMF. | ~250 | ~10 | — |
+| ↳ **v11w-b** | DWT/IDWT (1-D) + boundary modes + multilevel `wavedec`/`waverec`. | ~300 | ~12 | — |
+| ↳ **v11w-c** | SWT (stationary) + WPT (packets) + best-basis. | ~250 | ~10 | — |
+| ↳ **v11w-d** | CWT + Morlet/Mexican-hat/Gaussian/Paul + scales↔freq + ridge extraction. | ~250 | ~10 | — |
+| ↳ **v11w-e** | 2-D DWT + denoising (soft/hard/SURE/BayesShrink) + MODWT. | ~300 | ~12 | — |
+| ↳ **v11c-a** | COMMS modulation: PSK/QAM/PAM/FSK map+demap + constellation + Gray coding. | ~300 | ~12 | — |
+| ↳ **v11c-b** | pulse shaping: RRC/RC + Gaussian + matched filter + ISI/eye. | ~200 | ~8 | — |
+| ↳ **v11c-c** | timing sync: Gardner + Mueller-Müller + polyphase timing loop. | ~250 | ~10 | — |
+| ↳ **v11c-d** | carrier recovery: Costas + PLL + AFC + loop-filter design. | ~250 | ~10 | — |
+| ↳ **v11c-e** | equalizers: LMS-DD + CMA + DFE + MLSE (Viterbi). | ~350 | ~12 | — |
+| ↳ **v11c-f** | AGC + framing + channel models (AWGN/Rayleigh/Rician) + FEC hook. | ~300 | ~10 | — |
+| ↳ **v11c-g** | OFDM: FFT-based mod/demod + cyclic prefix + pilots/equalization. | ~300 | ~12 | — |
+| ↳ **v11-z** | CLOSE: CLI `hesap.{dsp,wavelet,comms}.*` + full scoreboard + {1..16} sweep + 3 system docs + ADR-0093. | ~300 | ~10 | — |
 | **v12** | Statistics: 50+ distributions (Stan-math reference) + statistical tests (t / chi² / KS / Mann-Whitney / Wilcoxon / Friedman / Kruskal-Wallis / ANOVA) + special functions (gamma / beta / erf / Bessel J/Y/I/K / Legendre / Hermite / Chebyshev) + RNGs (splittable PCG + Xoshiro256** + **Philox** + **Threefry** for parallel-deterministic) + bootstrap / jackknife + CLI registration | ~3500 | ~130 | ~2.5 wk |
 | **v13** | Polynomial / interpolation (linear / cubic spline / Akima / Hermite / monotone / Chebyshev / barycentric / RBF) + quadrature (Gauss-Legendre / Hermite / Laguerre / Lobatto / Radau / Clenshaw-Curtis / adaptive Simpson / Romberg) + numerical differentiation (FD / Richardson extrapolation / Hermite extrapolation) + CLI registration | ~2300 | ~90 | ~1.5 wk |
 | **v14** | N-dim tensors + broadcasting + einsum + reductions + reshape/transpose/slice/gather/scatter + tensor LinearOp + complex variants + CLI registration | ~2800 | ~110 | ~2 wk |
@@ -473,6 +506,127 @@ substrate.** Comparable in scope to eylem itself.
 > v17 (GPU) and v18 (REPL) are independently shippable. If schedule
 > pressure surfaces, they can defer to a later "Phase 3.1.6 follow-up"
 > without blocking the CPU substrate's usefulness.
+
+---
+
+## v11 — DSP (the MAXIMAL subject: core + adaptive + wavelets + comms) — DETAILED PLAN (planned 2026-06-20)
+
+> ADR-0093 (to be written at v11-a / finalised at close). **MAXIMAL scope (user direction 2026-06-20): "every
+> functionality of the DSP subject" — the full Signal-Processing-Toolbox surface + Adaptive filters + Wavelets +
+> Comms/SDR.** Delivered across THREE isolated modules + a `crd-units` addition (module-isolation cornerstone — a
+> DAW build links `crd-hesap-dsp`, not comms):
+> - **`crd-hesap-dsp`** — core DSP + adaptive filters (the bulk)
+> - **`crd-hesap-wavelet`** — wavelets (own module; consumes `crd-hesap-fft`)
+> - **`crd-hesap-comms`** — comms/SDR (own module; consumes `crd-hesap-dsp`)
+> - **`crd-units`** — `Decibel` (a LOGARITHMIC-scale type, NOT a linear `Quantity<D,T>`) + `NormalizedFrequency`
+>
+> Realistic size: **~36 slices · ~12,000 LOC · ~425 tests · multi-session — the largest hesap cluster.** (The
+> phase-table ~2800/~110/~2wk estimate was the core-only stub; this is the full subject. The OLD "## v12 — DSP
+> filters" block far below is the superseded stub-level plan.)
+
+### Gold standards (all gated; availability confirmed 2026-06-20)
+- **scipy.signal** — the primary spec/trajectory-exact gate (free).
+- **MATLAB Signal Processing Toolbox** — the industry gold standard (student license → INSTALL; `firpm`/`designfilt`/`ellipap`/`pmtm`/`snr`/`thd`/`sinad`/`sfdr` — the spec-compliance reference for the transcendental designs).
+- **Intel IPP** — the x86 kernel-perf CRUSH target (biquad cascade / FIR / FFT / resample).
+- **liquid-dsp** — the comms/SDR C peer (the comms gate).
+- **ARM CMSIS-DSP** — the embedded kernel reference (biquad cascades, FIR).
+- **PyWavelets** — the wavelet gate.
+
+### ⭐ Performance gold standards + the per-slice benchmark plan (scipy is CORRECTNESS, NOT perf)
+scipy.signal/MATLAB are the **correctness** references; the **performance** gold standards are the SIMD-tuned
+kernel libraries — and only the HOT-PATH (application) slices get benchmarked (design is one-time; nobody
+benchmarks `ellip()`). The `bench_*_vs_<gold>` pattern (like `bench_hesap_cholesky_vs_cholmod` / `bench_fft_vs_refs`
+vs MKL):
+
+| slice group | hot path? | PERF gold standard | benchmark |
+|---|---|---|---|
+| a (reps/conversions), b (windows), c–g (filter DESIGN), o (AR design), p (subspace) | ❌ one-time | — (correctness only) | none — would be dishonest |
+| **i (filtering: lfilter/sosfilt/biquad streaming)** | ✅ **THE hot loop** | **Intel IPP** (`ippsIIR`/`ippsFIR`) + **ARM CMSIS-DSP** + **liquid-dsp** | `bench_dsp_filter_vs_ipp` |
+| **j (fast convolution)** | ✅ | Intel IPP (+ inherits v10 FFT-vs-MKL) | `bench_dsp_conv_vs_ipp` |
+| **k (multirate / resample)** | ✅ | Intel IPP (`ippsResample`) | `bench_dsp_resample_vs_ipp` |
+| **m/n (spectral Welch/STFT/multitaper)** | ✅ FFT-bound | inherits the v10 MKL FFT benchmark | (FFT-bound) |
+| **t (adaptive LMS/RLS), comms** | ✅ | liquid-dsp | `bench_dsp_*_vs_liquid` |
+
+⭐ **The v11-i crush gate** (parallel to FFT-vs-MKL, Cholesky-vs-CHOLMOD): the portable-C++ streaming kernels
+match/beat IPP's hand-tuned SIMD **AND keep bit-determinism + {1..16}** — the moat IPP/CMSIS/liquid-dsp lack.
+**USER PREREQUISITE for v11-i** (like the SUNDIALS/MATLAB installs): Intel IPP (via oneAPI) + liquid-dsp (from
+source) + CMSIS-DSP. Until installed, v11-i ships correctness-gated; the perf rows land when the libs are present.
+
+### ⭐ The honest-gate design (the v10 scar — LOAD-BEARING, advisor-flagged)
+- **Filter DESIGN** (`ellip`/`cheby2`/`remez`/`firls` route through transcendental + iterative numerics): gate =
+  **SPEC-COMPLIANCE** (passband ripple ≤ Rp · stopband ≥ Rs · equiripple alternation count · monotonicity) **+
+  coefficients-agree-to-N-digits** vs scipy/MATLAB. **NOT bit-match** (won't hold cross-compiler — that would be a
+  fake scoreboard, the `[[feedback_source_must_match_honest_scoreboard]]` lesson).
+- **Filter APPLICATION** (`lfilter`/`sosfilt`/biquad/conv): gate = **BIT-EXACT vs scipy + the {1..16} determinism MOAT.**
+- **The determinism moat scopes to APPLICATION + STREAMING ONLY** (DAW replay, certification). Design is one-time
+  setup — "deterministic `ellip()`" is not the differentiator; don't reflex-claim it on every design slice.
+
+### The two-layer (ADR-0078) + streaming (user: EVERY filter)
+- **Upper (typed, batch):** scipy-style whole-array API over `Frequency<T>` (Hz) + the new `Decibel`/`NormalizedFrequency`.
+- **Lower (raw, streaming):** allocation-free **STATEFUL block-processing kernels** (Direct-II-transposed biquads,
+  FIR delay-line, polyphase resamplers) — the DAW/SDR real-time hot loop, fixed per-element FP order (bit-deterministic).
+  EVERY filter ships BOTH (the ode/eylem two-layer pattern).
+
+### Module edges (acyclic)
+`crd-hesap-dsp` → `crd-hesap-fft` (spectral / fast-conv / Hilbert / CZT) + `crd-hesap-eigen` (DPSS multitaper,
+MUSIC/ESPRIT subspace, AR) + `crd-math` (simd) + `crd-units` + core/containers/memory. `crd-hesap-wavelet` →
+`crd-hesap-fft`. `crd-hesap-comms` → `crd-hesap-dsp`. **NO edge to `crd-hesap-opt`** (firls/remez use their own
+exchange/LS — keep acyclic; revisit only if constrained-FIR wants the v7 QP).
+
+### v12-pull (decided): spectral-confidence statistics
+Multitaper + AR spectral CIs need χ²/F inverse-CDF (v12 Statistics, AFTER v11). DECISION: ship the estimators in
+v11 WITHOUT the parametric CIs; the CI layer is a thin v12-followup (or a v12-pull of the 2 quantile fns per the
+v9-i Philox-pull pattern if a consumer needs it sooner). AIC/MDL order-selection ships in v11 (log-likelihood only,
+no distributions).
+
+### Sub-slices — `crd-hesap-dsp` (core + adaptive)
+| slice | deliverable | gate / gold standard |
+|---|---|---|
+| **v11-a** ✅ (DONE 2026-06-20) | SUBSTRATE SHIPPED: `crd-hesap-dsp` module (edges→fft/eigen/units/math/hesap) + reps tf/zpk/**SOS**/state-space/lattice + conversions (zpk↔tf · zpk→sos nearest-pairing · sos→tf · tf↔ss controllable-canonical+Faddeev-LeVerrier · denom↔lattice Levinson) + **`freqz`/`sosfreqz`/`zpk_freqz`/`group_delay`** + `crd-units` `DecibelRatio`/`DecibelPower` (nonlinear lenses, NOT a linear type — the existing pinned dB framework) + `NormalizedFrequency`. ⭐ DATA-FLOW RULE LOCKED (design in zpk→sos directly; tf output-only; roots-of-tf Wilkinson-ill-conditioned >order~8). ADR-0093 + N-digit design tolerance = **10 sig digits**. Tests **661 asrt/10 cases GREEN** (linux-gcc): analytic-exact + cross-representation + order-12 conditioning gate + ss/lattice round-trips + |k|<1 stability. **Streaming two-layer kernels deferred to v11-i** (per the design — application layer). Gate met: round-trips + analytic + conditioning (scipy/MATLAB spec-compliance harness lands at the design slices v11-c+). | conversion round-trips byte-stable · `freqz` analytic-exact · dB↔linear exact |
+| **v11-b** ✅ (DONE 2026-06-20) | WINDOWS SHIPPED (`windows.hpp`, 24 windows): cosine-sum (hann/hamming/blackman/blackmanharris/nuttall/flattop via one `general_cosine`) + simple (boxcar/bartlett/triang/cosine/lanczos/barthann/bohman/parzen) + periodic(fftbins) variants + parametric (**Kaiser** via Bessel-I0/gaussian/general_gaussian/tukey/exponential) + **Taylor** (radar) + **Dolph-Chebyshev** (`chebwin`, equiripple, via crd-hesap-fft) + **DPSS/Slepian** (→ `dense::eig_sym` tridiagonal, scipy 'approximate' norm M²/(M²+NW) reverse-engineered from source) + `enbw`. Harness: `gen_window_refs.py` → `window_refs.inc` (scipy 1.17.1 reference vectors, the SUNDIALS-tableau pattern). Tests **vs scipy 1e-10…1e-13**, full DSP suite **1117 asrt/18 cases GREEN** (linux-gcc). ⭐⭐ **PERF: Cerid BEATS scipy AND MATLAB on every window** (`bench_dsp_windows_vs_refs.cpp`, N=2²⁰ compute-bound fair fight): hann 8.0× scipy/2.6× MATLAB · hamming 8.0×/2.7× · blackmanharris 10.4×/1.5× · kaiser 1.9×/1.2× · gaussian 4.0×/1.5×. EARNED (first measurement LOST to MATLAB) via Chebyshev cosine-recurrence (1 cos/sample not K) + symmetry (compute half); correctness preserved 1e-12. ⚠ window_refs.inc uses std::map/vector (test-only ref data — convert if win-tidy flags owning-STL). | each window vs scipy ~1e-12 · DPSS vs `dpss` · ENBW |
+| **v11-c** ✅ (DONE 2026-06-20) | FIR windowed: **`firwin`** (lp/hp/bp/bs/multiband via pass_zero+bands) + **`firwin2`** (frequency sampling — interp + linear-phase + Hermitian-extended inverse-FFT realization of irfft over crd-hesap-fft). Both faithful scipy ports — closed-form ⇒ FULL 1e-12 coeff match AND perf crush (unlike transcendental remez/ellip). Gates: coeffs vs scipy 1e-11…1e-12 (`fir_refs.inc`, 10 cases) + spec-compliance (passband ~1, stopband >53dB, linear phase). Tests **823 asrt**, full DSP suite **1940 asrt/21 GREEN**. ⭐⭐ PERF (`bench_dsp_fir_vs_refs.cpp`, N=2²⁰): **firwin Cerid 6.8ms vs scipy 58.9 (8.6×) vs MATLAB fir1 26.9 (3.9×)** — beats both (single-fused-loop + linear-phase symmetry, correctness preserved). | spec-compliance + coeffs vs scipy `firwin` |
+| **v11-d** ✅ (DONE 2026-06-20; Hilbert/differentiator = type III/IV remez follow-on) | FIR optimal: **`firls`** (least-squares, Toeplitz+Hankel normal-eqn + LU; scipy 1e-9) + **Parks-McClellan `remez`** (`remez.hpp`, the full EXCHANGE — dense grid + barycentric-Lagrange + closed-form δ + extremal search/exchange + DCT-I final coeffs; equiripple pass [0.998,1.001]/stop −58dB, scipy 4e-4, SPEC-compliance NOT bit-match) + **Savitzky-Golay** `savgol_coeffs` (polynomial-LS, vs scipy 1e-12) + **raised-cosine / RRC** `root_raised_cosine`/`raised_cosine` (Nyquist pulses, vs MATLAB rcosdesign 1e-10). Tests **full DSP suite 2361/25 GREEN.** ⭐⭐ PERF: firls(1601) **Cerid 11.4ms vs scipy 476.8 (41.8×) / MATLAB 38.3 (3.4×)** (stable where MATLAB warns RCOND~1e-19); RRC(524289) **Cerid 3.96ms(f64) vs liquid-dsp 6.6ms(f32) = 1.67×** (symmetry). Hilbert/differentiator deferred (need type III/IV antisymmetric remez). | equiripple alternation+δ · firls normal-eqn vs scipy/MATLAB |
+| **v11-e** ✅ (DONE 2026-06-21) | IIR analog prototypes: **`buttap`/`cheb1ap`/`cheb2ap`/`besselap`** (`iir.hpp`, closed-form pole/zero placement; Bessel = reverse-Bessel-poly θ_N roots via companion+eig, delay-normalized) + **`bilinear_zpk`** + `lp2lp_zpk` + digital **`butter`/`cheby1`/`cheby2`/`bessel`** (analog proto → prewarp → lp2lp → bilinear → digital zpk → v11-a `zpk_to_sos`; the DATA-FLOW rule — design in zpk, never tf). Gates: analog poles vs scipy `*ap` (Butter 1e-12 / Cheb/Bessel 1e-9) + digital RESPONSE-equality vs scipy `output='sos'` (order-independent |H| 64 pts 1e-9) + spec (Butterworth monotonic + −3dB). lp2hp/bp/bs + order-est + notch/comb = v11-g. | pole-placement vs scipy `*ap` + magnitude spec |
+| **v11-f** ✅ (DONE 2026-06-21) | **ELLIPTIC (Cauer)** — the elite IIR. `elliptic_fn.hpp` SPECIAL-FUNCTION SUBSTRATE, each gated INDEPENDENTLY vs scipy.special before composing: **`ellipk`** (complete elliptic integral, AGM, 1e-13) + **`ellipj`** (Jacobi sn/cn/dn, descending Landen, 1e-12 + identities) + **`ellipdeg`** (degree equation via nome/theta series, 1e-11) + **`arc_jac_sc`** (inverse Jacobi sc, complex ascending Landen w/ crd-Complex csqrt/casin, 1e-10). `ellip.hpp` **`ellipap`** (analog proto — imaginary zeros from ellipj j-grid + poles from displaced v0; vs scipy poles/zeros/gain 1e-9) + digital **`ellip`** (bilinear chain → zpk_to_sos; response vs scipy `output='sos'` 1e-8, equiripple BOTH bands). 107 asrt/6 cases. **Bottom-up independent gating = the elite-hard slice shipped first-try.** | equiripple BOTH bands + exact selectivity vs scipy/MATLAB `ellipap` |
+| **v11-g** | IIR digital: bilinear + freq-transforms (lp2lp/hp/bp/bs) + order-est (`*ord`) + `iirdesign`/`iirfilter` + notch/peak/comb + group delay. | full-design spec-compliance vs scipy `iirdesign` |
+| **v11-h** | **AUDIO biquads** (DAW): the RBJ cookbook (LPF/HPF/BPF/notch/APF/peaking/low-/high-shelf) + parametric EQ, typed `Frequency<T>`+dB+Q. | RBJ closed-form coeffs exact + freqz · the DAW EQ chain |
+| **v11-i** ✅ (DONE 2026-06-21) | FILTERING + STREAMING (the two-layer LOWER layer, the hot loop): **`sosfilt_stream`** (alloc-free stateful DF2T biquad-cascade kernel) + **`sosfilt`** + **`sosfiltfilt_nopad`** + **`lfilter`** (tf-form DF2T, bit-exact — matched scipy's exact `b·x+z−a·y` association) + **`lfilter_zi`** (steady-state via (I−companionᵀ)⁻¹ LU solve) + **`filtfilt`** (odd-pad + lfilter_zi, vs scipy 1e-10). `filtering.hpp`. ⭐ Gates: **BIT-EXACT vs scipy.signal.sosfilt + lfilter** (pure mul-add, -ffp-contract=off ⇒ `==`) + **the STREAMING MOAT** (arbitrary block sizes == batch, bit-identical memcmp) + filtfilt zero-phase. ⭐⭐⭐ **PERF CRUSH** (`bench_dsp_sosfilt_vs_refs`, 12th-order, 10M): **Cerid 52.4ms vs scipy 58.2 (1.11×) vs liquid-dsp 95.5 (1.82×, f64 vs f32!)** — beats both AND bit-exact+deterministic. | **BIT-EXACT vs scipy + {1..16} streaming MOAT** |
+| **v11-j** 🔄 (convolve/fftconvolve/correlate DONE 2026-06-21; oaconvolve/deconvolve/matched-filter pending) | CONVOLUTION: **`convolve`** (direct, bit-exact) + **`fftconvolve`** (REAL-FFT path over the v10 engine — rfft a+b, multiply half-spectra, irfft) + **`correlate`** (`convolution.hpp`). Gates: direct vs scipy 1e-10 + fftconvolve == direct == scipy 1e-9 + correlate vs scipy. + **`oaconvolve`** (overlap-add, == scipy) + **`deconvolve`** (polynomial long division, recovers quotient) + **`matched_filter`** (= correlate). ⭐ PERF (HONEST, profiled): the one-shot `fftconvolve` was 67.5ms NOT from an "MKL gap" (WRONG read) but because it REBUILT the FFT plan (28ms twiddle precompute @2²¹) every call. **FIX = `FftConvolver`** (plan built ONCE, reusable): **Cerid 41.7ms · scipy 87.6 (2.1× WIN) · MATLAB 30-84ms host-noisy.** Raw FFT fast (12.7ms). Multi-core FFT crush landed at v11-m (Welch). [[feedback_bench_all_peers_never_cherry_pick]]. (N-D conv = future.) | vs scipy bit-exact (FFT-path ε) · overlap-add == direct |
+| **v11-k** | MULTIRATE: `decimate`/`interp`/`upfirdn`/`resample`/`resample_poly` + polyphase + Farrow + CIC + half-band + noble identities. | vs scipy `resample_poly`/`upfirdn` + polyphase-identity bit-equality |
+| **v11-l** | HILBERT: analytic signal + envelope + instantaneous freq/phase + hilbert2. | vs scipy `hilbert` + the analytic property |
+| **v11-m** ✅ (DONE 2026-06-21) | SPECTRAL non-parametric: **`welch_psd`** (`spectral.hpp`, scipy.welch — periodic-hann/density/onesided/detrend-constant) ⭐⭐ **THE MULTI-THREADED FFT** (the advisor's safe target: Welch = many INDEPENDENT segment FFTs ⇒ `crd::jobs::parallel_for` with PER-JOB RealFftPlans built serially up-front, no four-step surgery; SERIAL fixed-order average ⇒ **PSD bit-identical across {1,2,4,8,16} threads** = a determinism moat MKL/FFTW LACK). + **`spectrogram`** (the per-segment periodograms WITHOUT averaging — time-freq map; shares the `segment_periodograms` parallel core; vs scipy.signal.spectrogram 1e-9 + {1,4,16}-thread bit-identity). Gates: vs scipy.welch/spectrogram + the {1..16} bit-identity moat. ⭐⭐⭐ **PERF CRUSH** (`bench_dsp_welch_vs_refs`, welch 10M nperseg=4096): **Cerid MULTI 21.9ms / 1-thread 99.7ms (4.5× scaling, 32 logical cores) vs scipy 251ms (11.5×) vs MATLAB pwelch 335ms (15.3×).** ⇒ CORRECTS the earlier "FFT-bound ops lose to MKL" — on the MANY-FFT target Cerid CRUSHES MKL-MATLAB via the parallel batched FFT (spectrogram shares it). + **`stft`/`istft`** (complex spectra over the same parallel core + overlap-add COLA reconstruction; gate = **perfect reconstruction** `istft(stft(x))==x` interior 1e-11 + {1,4,16}-thread STFT bit-identity) + **`periodogram`** (single-segment, detrend, vs scipy) + **`csd`** (cross-spectral density, conj(X)·Y convention, vs scipy) + **`coherence`** (|Pxy|²/Pxx·Pyy, vs scipy, ∈[0,1]). | vs scipy `welch` + {1..16} moat |
+| **v11-n** | **MULTITAPER** (Thomson): DPSS-tapered + adaptive eigenvalue weighting (→ eigen). | vs nitime/MATLAB `pmtm` |
+| **v11-o** | PARAMETRIC AR: Yule-Walker + Burg + (modified-)covariance + AR-PSD + AIC/MDL order-selection. | vs spectrum/MATLAB `pburg`/`pyulear` + reflection-coeff stability |
+| **v11-p** | **SUBSPACE** (super-resolution): MUSIC + root-MUSIC + ESPRIT + min-norm (→ eigen signal/noise split). | K tones below FFT resolution recovered · vs MATLAB `rootmusic`/`espritdoa` |
+| **v11-q** | TRANSFORMS: real/complex cepstrum + liftering + Goertzel + Walsh-Hadamard + CZT/zoom-FFT (over Bluestein) + Z-transform inverse (residues/partial-fractions). | vs scipy/MATLAB `cceps`/`rceps`/`czt`/Goertzel |
+| **v11-r** | WAVEFORMS: chirp (lin/quad/log/hyperbolic) + sawtooth/square + gausspulse + sweep_poly + unit_impulse + MLS + Gold/Kasami. | vs scipy `chirp`/`gausspulse` + the MLS autocorrelation |
+| **v11-s** | DETECTION + MEASUREMENTS: `find_peaks` (+prominences/widths/plateau) + argrelextrema + detrend + B-splines + SNR/THD/SINAD/SFDR/ENOB + RMS/peak/crest. | vs scipy `find_peaks`/`detrend` + measurements vs MATLAB `snr`/`thd`/`sinad`/`sfdr` |
+| **v11-t** | ADAPTIVE: LMS + NLMS + sign-LMS + RLS + affine-projection + Wiener-Hopf. | system-ID convergence (known-plant recovery) + vs padasip/MATLAB `dsp.LMSFilter` |
+
+### Sub-slices — `crd-hesap-wavelet`
+| slice | deliverable | gate |
+|---|---|---|
+| **v11w-a** | families + filter banks: Haar/Daubechies/Symlets/Coiflets/(reverse-)biorthogonal + QMF + scaling/wavelet filters. | vs PyWavelets `Wavelet().filter_bank` |
+| **v11w-b** | DWT/IDWT (1-D) + boundary modes (zero/sym/periodic/reflect) + multilevel `wavedec`/`waverec`. | vs `pywt.dwt`/`wavedec` bit-exact per mode + perfect reconstruction |
+| **v11w-c** | SWT (stationary/undecimated) + WPT (packets) + best-basis. | vs `pywt.swt`/`WaveletPacket` + shift-invariance |
+| **v11w-d** | CWT + wavelets (Morlet/Mexican-hat/Gaussian/Paul) + scales↔frequency + ridge extraction. | vs `pywt.cwt`/scipy + admissibility |
+| **v11w-e** | 2-D DWT (`dwt2`/`wavedec2`) + denoising (soft/hard/SURE/BayesShrink) + MODWT. | vs `pywt.dwt2` + denoising-SNR + 2-D reconstruction |
+
+### Sub-slices — `crd-hesap-comms`
+| slice | deliverable | gate |
+|---|---|---|
+| **v11c-a** | modulation: PSK/QAM/PAM/FSK map+demap + constellation + Gray coding. | BER-vs-Eb/N0 (AWGN textbook curves) vs commpy/liquid-dsp |
+| **v11c-b** | pulse shaping: RRC/RC + Gaussian + matched filter + ISI/eye. | Nyquist-ISI-free property + vs liquid-dsp `firdes_rrc` |
+| **v11c-c** | timing sync: Gardner + Mueller-Müller + polyphase timing loop. | timing-error convergence + vs liquid-dsp `symsync` |
+| **v11c-d** | carrier recovery: Costas + PLL + AFC + loop-filter design. | frequency/phase-lock + vs liquid-dsp |
+| **v11c-e** | equalizers: LMS-DD + CMA + DFE + MLSE (Viterbi). | channel-inversion BER + vs liquid-dsp `eqlms`/`eqrls` |
+| **v11c-f** | AGC + framing + channel models (AWGN/Rayleigh/Rician) + FEC interface hook. | vs liquid-dsp `agc`/`channel` |
+| **v11c-g** | OFDM: FFT-based mod/demod + cyclic prefix + pilots/equalization. | CP-ISI-free + textbook OFDM |
+
+### Close
+| slice | deliverable |
+|---|---|
+| **v11-z** | CLOSE: CLI `hesap.{dsp,wavelet,comms}.*` + the FULL scoreboard (scipy/MATLAB/IPP/liquid-dsp/CMSIS/PyWavelets — design-spec-compliance · application-bit-exactness · kernel-perf-crush) + {1..16} application-moat sweep + 3 system docs + ADR-0093 + the reference-class-policy DSP rows. |
 
 ---
 
@@ -2072,6 +2226,9 @@ suite green.
 ---
 
 ## v12 — DSP filters + resampling + spectral (~2 weeks)
+
+> ⛔ **SUPERSEDED** by the current-numbering **"## v11 — DSP … DETAILED PLAN (planned 2026-06-20)"** above (the
+> MAXIMAL 3-module elite plan). This is the original stub-level surface, kept for history only.
 
 **Goal:** FIR (windowed sinc + Parks-McClellan Remez) + IIR (bilinear
 transform Butterworth/Cheb1/Cheb2/Elliptic/Bessel) + biquad cookbook

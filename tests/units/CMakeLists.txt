@@ -6,6 +6,7 @@ add_executable(crd-units-tests
     test_value_in.cpp
     test_affine_units.cpp
     test_nonlinear_units.cpp
+    test_dsp_units.cpp  # v11-a: ratio-dB + NormalizedFrequency
     test_literals.cpp
     test_vec_quantity.cpp  # v0b-1
     test_vec_quantity_reductions.cpp  # v0d-1
