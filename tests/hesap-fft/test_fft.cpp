@@ -5,8 +5,11 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/hesap/complex.hpp>
+#include <crd/hesap/fft/bluestein.hpp>
 #include <crd/hesap/fft/fft.hpp>
+#include <crd/hesap/fft/nd_fft.hpp>
 #include <crd/hesap/fft/real_fft.hpp>
+#include <crd/hesap/fft/sparse_fft.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -256,6 +259,54 @@ TEST_CASE("fft: four-step path (large n) matches the radix-2 reference oracle", 
     }
 }
 
+TEST_CASE("fft: four-step path (large n, f32) matches the radix-2 reference oracle", "[fft]")
+{
+    crd::memory::TlsfAllocator alloc(1ULL << 30);
+    // M7 Phase 5: f32 FORWARD now uses the Vec8f hierarchical sub-FFTs by default (1024=32×32, 2048=64×32,
+    // 4096=64×64). Gate the crossover band 2^19..2^23 against the f32 radix-2 oracle in the f32 tolerance class
+    // (~1e-3 — the hier and the oracle are different f32 summation orders; both ≈f32-eps vs the exact DFT). 2^20
+    // exercises 1024 (both sub-FFTs), 2^21/2^22 the 2048, 2^23 the 4096. Disable with -DCRD_FFT_DISABLE_F32_HIER.
+    for (usize n : {1U << 19, 1U << 20, 1U << 21, 1U << 22, 1U << 23})
+    {
+        cont::Array<Complex<f32>> x(&alloc);
+        fill_lcg(x, n, 31337ULL + n);
+        cont::Array<Complex<f32>> a(&alloc);
+        cont::Array<Complex<f32>> b(&alloc);
+        a.resize(n);
+        b.resize(n);
+        std::memcpy(a.data(), x.data(), n * sizeof(Complex<f32>));
+        std::memcpy(b.data(), x.data(), n * sizeof(Complex<f32>));
+
+        const fft::FftPlan<f32> plan(&alloc, n);
+        plan.execute(cont::Span<Complex<f32>>(a.data(), n), fft::FftDirection::Forward);           // hier four-step
+        plan.execute_reference(cont::Span<Complex<f32>>(b.data(), n), fft::FftDirection::Forward); // oracle
+
+        double maxref = 0.0;
+        double maxerr = 0.0;
+        for (usize k = 0; k < n; ++k)
+        {
+            maxref = std::max(maxref, std::hypot(static_cast<double>(b[k].re), static_cast<double>(b[k].im)));
+            maxerr = std::max(maxerr, std::hypot(static_cast<double>(a[k].re) - static_cast<double>(b[k].re),
+                                                 static_cast<double>(a[k].im) - static_cast<double>(b[k].im)));
+        }
+        const double rel = maxerr / (1.0 + maxref);
+        INFO("n=" << n << " f32 four-step vs oracle rel=" << rel);
+        CHECK(rel < 1e-3); // f32 class
+
+        // round-trip: forward (hier) + inverse (radix-8 fallback) recovers x in f32 class.
+        plan.execute(cont::Span<Complex<f32>>(a.data(), n), fft::FftDirection::Inverse);
+        const double inv = 1.0 / static_cast<double>(n);
+        double rtmax = 0.0;
+        for (usize k = 0; k < n; ++k)
+        {
+            rtmax = std::max(rtmax, std::hypot(static_cast<double>(a[k].re) * inv - static_cast<double>(x[k].re),
+                                               static_cast<double>(a[k].im) * inv - static_cast<double>(x[k].im)));
+        }
+        INFO("n=" << n << " f32 four-step round-trip max=" << rtmax);
+        CHECK(rtmax < 1e-3);
+    }
+}
+
 TEST_CASE("fft: scheduled radix-8/16 combine passes match the radix-2 oracle", "[fft]")
 {
     crd::memory::TlsfAllocator alloc(1ULL << 27);
@@ -473,5 +524,241 @@ TEST_CASE("fft: a plan is reusable across inputs", "[fft]")
         }
         INFO("seed=" << seed << " maxerr=" << maxerr);
         CHECK(maxerr < 1e-11);
+    }
+}
+
+// v10-c — Bluestein (chirp-z) arbitrary-size FFT. Gate = the brute-force DFT (NOT round-trip) over prime AND
+// composite non-power-of-two sizes, plus the round-trip. Proves any-size O(n log n) over the pow-2 engine.
+TEST_CASE("fft: Bluestein arbitrary-size (primes + composites, f64) vs brute-force DFT + round-trip", "[fft][bluestein]")
+{
+    crd::memory::TlsfAllocator alloc(1U << 26);
+    for (usize n : {1U, 2U, 3U, 5U, 7U, 17U, 100U, 360U, 1009U, 1031U, 4000U})
+    {
+        cont::Array<Complex<f64>> x(&alloc);
+        cont::Array<Complex<f64>> y(&alloc);
+        cont::Array<Complex<f64>> ref(&alloc);
+        fill_lcg(x, n, 0xB5297A4DULL ^ n);
+        y.resize(n);
+        ref.resize(n);
+        for (usize i = 0; i < n; ++i)
+        {
+            y[i] = x[i];
+        }
+        naive_dft(cont::ConstSpan<Complex<f64>>(x.data(), n), cont::Span<Complex<f64>>(ref.data(), n), false);
+
+        const fft::BluesteinPlan<f64> plan(&alloc, n);
+        plan.execute(cont::Span<Complex<f64>>(y.data(), n), fft::FftDirection::Forward);
+
+        double maxref = 0.0;
+        double maxerr = 0.0;
+        for (usize k = 0; k < n; ++k)
+        {
+            maxref = std::max(maxref, std::hypot(ref[k].re, ref[k].im));
+            maxerr = std::max(maxerr, std::hypot(y[k].re - ref[k].re, y[k].im - ref[k].im));
+        }
+        INFO("n=" << n << " fwd-vs-DFT rel=" << (maxerr / (1.0 + maxref)));
+        CHECK(maxerr / (1.0 + maxref) < 1e-12);
+
+        plan.execute(cont::Span<Complex<f64>>(y.data(), n), fft::FftDirection::Inverse);
+        double rt = 0.0;
+        for (usize k = 0; k < n; ++k)
+        {
+            rt = std::max(rt, std::hypot(y[k].re - x[k].re, y[k].im - x[k].im));
+        }
+        INFO("n=" << n << " roundtrip=" << rt);
+        CHECK(rt < 1e-12);
+    }
+}
+
+// v10-e — N-dimensional FFT. Gate = a direct full N-D DFT (O(total²), small shapes) — independent of the
+// row-column structure — over 2D/3D/4D shapes INCLUDING non-power-of-two axes (routed through Bluestein), plus
+// the round-trip. The result is thread-count-independent by construction (each 1D line is an independent transform).
+namespace
+{
+void naive_ndft(const Complex<f64>* x, Complex<f64>* out, const usize* dims, usize ndim, usize total, bool inv)
+{
+    usize st[8];
+    usize s = 1;
+    for (usize i = ndim; i-- > 0;)
+    {
+        st[i] = s;
+        s *= dims[i];
+    }
+    const double sgn = inv ? 1.0 : -1.0;
+    for (usize kk = 0; kk < total; ++kk) // output flat multi-index
+    {
+        double re = 0.0;
+        double im = 0.0;
+        for (usize nn = 0; nn < total; ++nn) // input flat multi-index
+        {
+            double frac = 0.0;
+            for (usize ax = 0; ax < ndim; ++ax)
+            {
+                const usize kax = (kk / st[ax]) % dims[ax];
+                const usize nax = (nn / st[ax]) % dims[ax];
+                frac += static_cast<double>((kax * nax) % dims[ax]) / static_cast<double>(dims[ax]);
+            }
+            const double th = sgn * kTwoPi * frac;
+            re += x[nn].re * std::cos(th) - x[nn].im * std::sin(th);
+            im += x[nn].re * std::sin(th) + x[nn].im * std::cos(th);
+        }
+        out[kk] = Complex<f64>{re, im};
+    }
+}
+} // namespace
+
+TEST_CASE("fft: N-D (2D/3D/4D, pow-2 + non-pow-2 axes) vs full N-D DFT + round-trip", "[fft][ndfft]")
+{
+    crd::memory::TlsfAllocator alloc(1U << 24);
+    const usize shapes[][4] = {{4, 4, 0, 0}, {8, 6, 0, 0}, {16, 3, 0, 0}, {4, 4, 4, 0}, {8, 4, 2, 0}, {6, 5, 2, 0}};
+    const usize ndims[] = {2, 2, 2, 3, 3, 3};
+    for (usize si = 0; si < 6; ++si)
+    {
+        const usize nd = ndims[si];
+        usize total = 1;
+        for (usize i = 0; i < nd; ++i)
+        {
+            total *= shapes[si][i];
+        }
+        cont::Array<Complex<f64>> x(&alloc);
+        cont::Array<Complex<f64>> y(&alloc);
+        cont::Array<Complex<f64>> ref(&alloc);
+        fill_lcg(x, total, 0xC0FFEEULL ^ total);
+        y.resize(total);
+        ref.resize(total);
+        for (usize i = 0; i < total; ++i)
+        {
+            y[i] = x[i];
+        }
+        cont::Array<usize> dims(&alloc);
+        dims.resize(nd);
+        for (usize i = 0; i < nd; ++i)
+        {
+            dims[i] = shapes[si][i];
+        }
+        const fft::NdFftPlan<f64> plan(&alloc, cont::ConstSpan<usize>(dims.data(), nd));
+        plan.execute(cont::Span<Complex<f64>>(y.data(), total), fft::FftDirection::Forward);
+        naive_ndft(x.data(), ref.data(), dims.data(), nd, total, false);
+
+        double maxref = 0.0;
+        double maxerr = 0.0;
+        for (usize k = 0; k < total; ++k)
+        {
+            maxref = std::max(maxref, std::hypot(ref[k].re, ref[k].im));
+            maxerr = std::max(maxerr, std::hypot(y[k].re - ref[k].re, y[k].im - ref[k].im));
+        }
+        INFO("shape#" << si << " nd=" << nd << " fwd-vs-DFT=" << (maxerr / (1.0 + maxref)));
+        CHECK(maxerr / (1.0 + maxref) < 1e-12);
+
+        plan.execute(cont::Span<Complex<f64>>(y.data(), total), fft::FftDirection::Inverse);
+        double rt = 0.0;
+        for (usize k = 0; k < total; ++k)
+        {
+            rt = std::max(rt, std::hypot(y[k].re - x[k].re, y[k].im - x[k].im));
+        }
+        CHECK(rt < 1e-12);
+    }
+}
+
+// v10-h — Sparse FFT (HIKP 2012), END-TO-END SUB-LINEAR + NOISE-ROBUST. Multi-scale binary location (f bit-by-bit
+// from O(log n) offset phases) + voting + median bucket estimation; no O(n) step. Gate: EXACT k-sparse (frequencies
+// exact + coeffs to filter accuracy) AND NOISY k-sparse (k dominant tones + Gaussian noise → all frequencies
+// recovered, coeffs to the √(n/B)·σ/√R floor). Tones planted, x = (1/n)Σ cⱼ e^{2πi fⱼ·/n}.
+TEST_CASE("fft: Sparse FFT (HIKP) sub-linear + noise-robust recovery", "[fft][sparsefft]")
+{
+    crd::memory::TlsfAllocator alloc(1U << 28);
+    const usize ns[] = {1024U, 4096U, 16384U, 4096U, 16384U, 65536U};
+    const usize ks[] = {3U, 8U, 6U, 5U, 8U, 6U};
+    const double noises[] = {0.0, 0.0, 0.0, 0.006, 0.004, 0.0015};
+    for (usize ci = 0; ci < 6; ++ci)
+    {
+        const usize n = ns[ci];
+        const usize k = ks[ci];
+        const double noise = noises[ci];
+        cont::Array<usize> pf(&alloc);
+        cont::Array<Complex<f64>> pc(&alloc);
+        pf.resize(k);
+        pc.resize(k);
+        crd::u64 s = (0x51ED270BULL ^ (n + k)) + static_cast<crd::u64>(noise * 1e6);
+        auto nextd = [&s]()
+        {
+            s = s * 6364136223846793005ULL + 1442695040888963407ULL;
+            return (static_cast<double>(s >> 11) / static_cast<double>(1ULL << 53)) * 2.0 - 1.0;
+        };
+        double cscale = 0.0;
+        for (usize j = 0; j < k; ++j)
+        {
+            usize f = 0;
+            bool dup = true;
+            while (dup)
+            {
+                s = s * 6364136223846793005ULL + 1ULL;
+                f = (s >> 20) % n;
+                dup = false;
+                for (usize m = 0; m < j; ++m)
+                {
+                    if (pf[m] == f)
+                    {
+                        dup = true;
+                    }
+                }
+            }
+            pf[j] = f;
+            pc[j] = Complex<f64>{nextd(), nextd()};
+            cscale = std::max(cscale, std::hypot(pc[j].re, pc[j].im));
+        }
+        cont::Array<Complex<f64>> x(&alloc);
+        x.resize(n);
+        for (usize i = 0; i < n; ++i)
+        {
+            double xr = 0.0;
+            double xi = 0.0;
+            for (usize j = 0; j < k; ++j)
+            {
+                const double a = kTwoPi * static_cast<double>((pf[j] * i) % n) / static_cast<double>(n);
+                xr += pc[j].re * std::cos(a) - pc[j].im * std::sin(a);
+                xi += pc[j].re * std::sin(a) + pc[j].im * std::cos(a);
+            }
+            x[i] = Complex<f64>{xr / static_cast<double>(n), xi / static_cast<double>(n)};
+        }
+        if (noise > 0.0) // complex Gaussian noise (Box-Muller), std `noise` per frequency bin
+        {
+            for (usize i = 0; i < n; ++i)
+            {
+                s = s * 6364136223846793005ULL + 1ULL;
+                const double u1 = static_cast<double>(s >> 11) / static_cast<double>(1ULL << 53);
+                s = s * 6364136223846793005ULL + 1ULL;
+                const double u2 = static_cast<double>(s >> 11) / static_cast<double>(1ULL << 53);
+                const double r = std::sqrt(-2.0 * std::log(u1 + 1e-300)) * noise / std::sqrt(static_cast<double>(n));
+                x[i].re += r * std::cos(kTwoPi * u2);
+                x[i].im += r * std::sin(kTwoPi * u2);
+            }
+        }
+        const fft::SparseFftPlan<f64> plan(&alloc, n, k, 20);
+        cont::Array<usize> rf(&alloc);
+        cont::Array<Complex<f64>> rc(&alloc);
+        rf.resize(k);
+        rc.resize(k);
+        const usize got =
+            plan.recover(cont::ConstSpan<Complex<f64>>(x.data(), n), cont::Span<usize>(rf.data(), k),
+                         cont::Span<Complex<f64>>(rc.data(), k));
+        usize matched = 0;
+        double maxerr = 0.0;
+        for (usize j = 0; j < k; ++j)
+        {
+            for (usize m = 0; m < got; ++m)
+            {
+                if (rf[m] == pf[j])
+                {
+                    matched++;
+                    maxerr = std::max(maxerr, std::hypot(rc[m].re - pc[j].re, rc[m].im - pc[j].im));
+                    break;
+                }
+            }
+        }
+        INFO("n=" << n << " k=" << k << " noise=" << noise << " matched=" << matched << "/" << k
+                  << " coeff-relerr=" << (maxerr / cscale));
+        CHECK(matched == k);                                       // all frequencies recovered (robust location)
+        CHECK(maxerr / cscale < (noise > 0.0 ? 0.12 : 1e-4));      // exact ⇒ filter accuracy; noisy ⇒ √(n/B)σ/√R floor
     }
 }

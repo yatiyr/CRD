@@ -84,6 +84,16 @@ inline void dump_four_step() noexcept
 }
 } // namespace prof
 #endif
+#ifdef CRD_FFT_M16B_FUSED_BRIDGE_POC
+inline bool g_m16b_on = true;      // runtime toggle for clean interleaved M16-B vs gather benchmarking
+inline bool g_m16b_bb128 = false;  // V1.7: feed the tiled producer from a BB=128 gather (16 sub-tiles) vs BB=8
+inline bool g_m17_on = false;      // M17: fuse the final NT-scatter into the P2 stage-2 store (skip the scatter pass)
+inline bool g_m18_on = false;      // M18: fuse P2 leaf+stage2+final store over a 64KB per-group tile (no 1MB bbuf)
+inline bool g_m19_on = false;      // M19-A: REJECTED experiment — P1 gather+producer fusion (correct but +0.8 Mcyc
+                                   // slower: 64KB tile + br_ transpose double-buffer spills; M19-B proven
+                                   // structurally impossible). Kept gated/default-OFF for the record. NOT a candidate.
+inline bool g_m18_2m = false;      // M18-2M: 64×32 rectangular fused chain for f32 N=2M forward (n1=2048, n2=1024)
+#endif
 
 enum class FftDirection : crd::u8
 {
@@ -112,6 +122,10 @@ public:
         // Above kFourStepMin the direct Stockham is DRAM-bound (log4(n) full passes); switch to the Bailey
         // four-step (n = n1·n2 ≈ √n × √n) so the sub-FFTs are cache-resident — O(1) DRAM passes, not O(log n).
         m_use_four_step = (n >= kFourStepMin);
+        // f32 256K (2^18): enable the four-step (1024×256 split below) — the P2 256-axis then uses the default 16×16
+        // hier codelet + gather/scatter fusion, fixing the small-N Stockham trough (0.33→~0.85× MKL, 3.6× CRD). f64
+        // 256K stays direct (there is no f64 256-pt hier codelet). Larger sizes keep the square split.
+        if (n == (crd::usize{1} << 18) && std::is_same_v<T, crd::f32>) { m_use_four_step = true; }
         // n1 ≈ √n (n2 = n/n1, both powers of 2) — the square split, confirmed near-optimal by a full-FFT n1/n2
         // plan search 2026-06-15 (±1 shift is marginal and size-dependent: 8M ~+1.5%, 4M worse).
         // n1 = 2^ceil(log2/2): the LARGER factor first. Square split for even log2 (unchanged); for ODD log2 the
@@ -119,6 +133,7 @@ public:
         // unchanged, accuracy preserved (~1e-15). Found by the black-box MKL-archaeology factorization sweep
         // (2026-06-16): the old floor(log2/2) put the SMALLER factor first for odd log2, underusing pass-1.
         m_n1 = crd::usize{1} << ((m_log2 + 1) / 2);
+        if (m_use_four_step && n == (crd::usize{1} << 18)) { m_n1 = 1024; } // 256K = 1024×256 (n2=256 → 16×16 hier P2)
         // Full table W_n^k, k = 0 .. n-1 (radix-4 indexes up to 3·j·r < n). Precomputed ONCE, shared — the
         // determinism contract. Computed in f64 then narrowed (accuracy for the f32 plan).
         m_tw_re.resize(n);
@@ -136,16 +151,25 @@ public:
             m_rev[i] = bitrev(i, m_log2);
         }
 #ifndef CRD_FFT_DISABLE_HIER
-        // DEFAULT (disable with -DCRD_FFT_DISABLE_HIER): the hierarchical generated-codelet sub-FFTs. 4096 = 64×64
-        // (M2, BB=16) and 2048 = 64×32 (M3, BB=32); N1 = stage-1 leaf (twiddle stride), N2 = inner stage-2 leaf.
-        // Build the transposed intermediate (n·BB = 65536 complex) + the inner twiddle W_N^{n2·k1} (index n2·N1+k1).
-        // Dispatched f64, Forward, b==BB only. M5 (experimental, -DCRD_FFT_HIER_1024): 1024 = 32×32 (BB=64) too.
-        if constexpr (std::is_same_v<T, crd::f64>)
+        // DEFAULT (disable with -DCRD_FFT_DISABLE_HIER): the hierarchical generated-codelet sub-FFTs. 4096 = 64×64,
+        // 2048 = 64×32, 1024 = 32×32; N1 = stage-1 leaf (twiddle stride), N2 = inner stage-2 leaf. Build the
+        // transposed intermediate (n·BB complex) + the inner twiddle W_N^{n2·k1} (index n2·N1+k1). Dispatched
+        // Forward, b==block_width(n). f64 default-on; f32 under -DCRD_FFT_DISABLE_F32_HIER (M9-fixed: the dispatch
+        // gate now matches the ctor — see the M9 note; f32 had been silently radix-8). The h_n1/h_n2 + block_width
+        // reproduce the f64 BBs byte-identically (4096→16, 2048→32, 1024→64), so the f64 path is unchanged.
+        constexpr bool k_hier = std::is_same_v<T, crd::f64>
+#ifndef CRD_FFT_DISABLE_F32_HIER
+                                || std::is_same_v<T, crd::f32>
+#endif
+            ;
+        if constexpr (k_hier)
         {
             crd::usize h_n2 = (n == 4096) ? 64U : ((n == 2048) ? 32U : 0U); // N2 = inner count
             crd::usize h_n1 = 64U;                                          // N1 = stage-1 leaf = twiddle stride
-            crd::usize h_bb = (n == 4096) ? 16U : 32U;                      // BB = block_width(n)
-            if (n == 1024) { h_n2 = 32U; h_n1 = 32U; h_bb = 64U; } // M5: 1024 = 32×32 (BB=64) — 1M/2M sub-FFT
+            crd::usize h_bb = block_width(n);                               // BB (T-aware: f32 = 2× f64)
+            if (n == 1024) { h_n2 = 32U; h_n1 = 32U; } // 1024 = 32×32 — 1M/2M sub-FFT
+            // 256 = 16×16 hier sub-FFT for the 256K four-step P2 (f32 only — the codelet16 stage-1 is Vec8f).
+            if (n == 256 && std::is_same_v<T, crd::f32>) { h_n2 = 16U; h_n1 = 16U; }
             if (h_n2 != 0)
             {
                 m_hier_bbuf = static_cast<Complex<T>*>(m_alloc->allocate(n * h_bb * sizeof(Complex<T>), 64));
@@ -538,28 +562,49 @@ public:
         // Isolated 4096 1.24× / 2048 1.26× / 1024 1.23×. Full f64 vs MKL (CANONICAL bench_fft_vs_refs best-of-reps):
         // 4M ~1.04× (beats), 8M ~0.91×, 16M ~0.90×, 2M ~0.75×, 1M ~0.60× — the hier improves every size vs radix-8
         // (e.g. 1M 0.53→0.60, 2M 0.68→0.75) but MKL is very fast at the small cache-resident sizes. machine-eps
-        // (~1e-15), deterministic. Inverse + f32 fall through to radix-8. See the 2026-06-17 FFT logs.
-        if constexpr (std::is_same_v<T, crd::f64>)
+        // (~1e-15), deterministic. M7: f32 FORWARD also uses the hier (Vec8f, same decompositions, BB=block_width;
+        // f32 8M 0.79→~1.0× MKL parity band, ~3e-7) — disable f32-only with -DCRD_FFT_DISABLE_F32_HIER. Inverse
+        // (f32+f64) falls through to radix-8. See the 2026-06-17 FFT logs.
+        // f64 + f32 (M9-FIXED: this gate was #ifdef CRD_FFT_F32_HIER — an M7 replace_all indentation miss that left
+        // the f32 dispatch OFF in the default build ⇒ f32 silently ran radix-8 despite the ctor allocating hier
+        // buffers; now matches the ctor's #ifndef CRD_FFT_DISABLE_F32_HIER). Stage b's = N2·BB (stage-1) / N1·BB
+        // (stage-2), BB = block_width(m_n) (T-aware ⇒ f64 reproduces the old 1024/2048 literals exactly).
+        constexpr bool k_hier_d = std::is_same_v<T, crd::f64>
+#ifndef CRD_FFT_DISABLE_F32_HIER
+                                  || std::is_same_v<T, crd::f32>
+#endif
+            ;
+        if constexpr (k_hier_d)
         {
             if (dir == FftDirection::Forward && m_hier_bbuf != nullptr)
             {
-                if (m_n == 4096 && b == 16) // M2: 64×64 (BB=16); stage-1 b=N2·BB=1024, stage-2 b=N1·BB=1024
+                if (m_n == 4096 && b == block_width(4096)) // 64×64; stage-1 b=64·BB, stage-2 b=64·BB
                 {
-                    gen::codelet64_stage1_fused_64x64(d, m_hier_bbuf, 1024, m_hier_twr, m_hier_twi);
-                    gen::codelet64_batched(m_hier_bbuf, d, 1024);
+                    gen::codelet64_stage1_fused_64x64(d, m_hier_bbuf, 64 * b, m_hier_twr, m_hier_twi);
+                    gen::codelet64_batched(m_hier_bbuf, d, 64 * b);
                     return;
                 }
-                if (m_n == 2048 && b == 32) // M3: 64×32 (BB=32); stage-1 b=N2·BB=1024, stage-2 b=N1·BB=2048
+                if (m_n == 2048 && b == block_width(2048)) // 64×32; stage-1 b=32·BB, stage-2 b=64·BB
                 {
-                    gen::codelet64_stage1_fused_64x32(d, m_hier_bbuf, 1024, m_hier_twr, m_hier_twi);
-                    gen::codelet32_batched(m_hier_bbuf, d, 2048);
+                    gen::codelet64_stage1_fused_64x32(d, m_hier_bbuf, 32 * b, m_hier_twr, m_hier_twi);
+                    gen::codelet32_batched(m_hier_bbuf, d, 64 * b);
                     return;
                 }
-                if (m_n == 1024 && b == 64) // M5: 32×32 (BB=64); both stages b=N1·BB=N2·BB=2048 (the 1M/2M sub-FFT)
+                if (m_n == 1024 && b == block_width(1024)) // 32×32; both stages b=32·BB
                 {
-                    gen::codelet32_stage1_fused_32x32(d, m_hier_bbuf, 2048, m_hier_twr, m_hier_twi);
-                    gen::codelet32_batched(m_hier_bbuf, d, 2048);
+                    gen::codelet32_stage1_fused_32x32(d, m_hier_bbuf, 32 * b, m_hier_twr, m_hier_twi);
+                    gen::codelet32_batched(m_hier_bbuf, d, 32 * b);
                     return;
+                }
+                // 256 = 16×16 hier sub-FFT (256K four-step P2); f32 only (the codelet16 stage-1 is Vec8f).
+                if constexpr (std::is_same_v<T, crd::f32>)
+                {
+                    if (m_n == 256 && b == block_width(256)) // both stages b=16·BB
+                    {
+                        gen::codelet16_stage1_fused_16x16(d, m_hier_bbuf, 16 * b, m_hier_twr, m_hier_twi);
+                        gen::codelet16_batched(m_hier_bbuf, d, 16 * b);
+                        return;
+                    }
                 }
             }
         }
@@ -948,7 +993,7 @@ private:
     // ⇒ the 4n transpose floor drops to ~21 ms ⇒ four-step viable at large N. The
     // block four-step below uses NT-store scatter + the hoisted batched sub-FFTs. Enabled above the crossover
     // (SCAN value — narrow once the kernel + transpose are tuned). Gated vs the radix-2 oracle.
-    static constexpr crd::usize kFourStepMin = crd::usize{1} << 19; // 512K+ = the DRAM-wall trough (SCAN)
+    static constexpr crd::usize kFourStepMin = crd::usize{1} << 19; // 512K+ DRAM trough (f32 256K opted in via the ctor)
     static constexpr crd::usize kGatherPf = 8; // four-step gather prefetch distance (rows ahead; probe-tuned)
 
     // Dispatch the in-place leaf transform to its generated straight-line codelet (m_n ∈ {2,4,8,16,32}).
@@ -1058,30 +1103,209 @@ private:
         Complex<T>* const din = data.data();
         const crd::usize b1 = block_width(n1);
         const crd::usize b2 = block_width(n2);
+        bool m16b_active = false;
+        bool m18_2m_active = false; (void)m18_2m_active; // M18-2M: f32 2M forward (n1=2048,n2=1024) rectangular chain
+        const crd::f32* m16b_br_p = nullptr; const crd::f32* m16b_bi_p = nullptr;
+        const crd::f32* m16b_lr_p = nullptr; const crd::f32* m16b_li_p = nullptr;
+        (void)m16b_br_p; (void)m16b_bi_p; (void)m16b_lr_p; (void)m16b_li_p;
+#ifdef CRD_FFT_M16B_FUSED_BRIDGE_POC
+        // M16-B contract-breaking kernel (f32 1M forward, gated): P1 = BB=8 gather + 8x8-register-transpose tiled
+        // producer → native_tiled (reuse m_tbuf); NO old inter-stage twiddle/NT pass. P2 (below) reads native_tiled
+        // contiguously + applies W_N^{i2*k1} by recurrence (base*lane tables). Default path unchanged.
+        if constexpr (std::is_same_v<T, crd::f32>)
+        {
+            if (g_m16b_on && dir == FftDirection::Forward && n1 == 1024 && n2 == 1024 && m_p1->m_hier_bbuf != nullptr)
+            {
+                static crd::f32 m16b_br[1024 * 128], m16b_bi[1024 * 128], m16b_lr[1024 * 8], m16b_li[1024 * 8];
+                static bool m16b_built = false;
+                if (!m16b_built)
+                {
+                    const double tp = 6.283185307179586;
+                    const double NN = 1024.0 * 1024.0;
+                    for (crd::usize i2t = 0; i2t < 1024; ++i2t)
+                    {
+                        const crd::usize ml = i2t / 32, n2v = i2t % 32; // V1.6 reorder: base2[grp*1024 + n2v*32 + ml]
+                        for (crd::usize grp = 0; grp < 128; ++grp)
+                        {
+                            double th = tp * (double)((i2t * grp * 8) % 1048576U) / NN;
+                            m16b_br[grp * 1024 + n2v * 32 + ml] = (crd::f32)std::cos(th);
+                            m16b_bi[grp * 1024 + n2v * 32 + ml] = (crd::f32)(-std::sin(th));
+                        }
+                        for (crd::usize l = 0; l < 8; ++l)
+                        {
+                            double th = tp * (double)((i2t * l) % 1048576U) / NN;
+                            m16b_lr[i2t * 8 + l] = (crd::f32)std::cos(th);
+                            m16b_li[i2t * 8 + l] = (crd::f32)(-std::sin(th));
+                        }
+                    }
+                    m16b_built = true;
+                }
+                m16b_br_p = m16b_br; m16b_bi_p = m16b_bi; m16b_lr_p = m16b_lr; m16b_li_p = m16b_li;
+#ifdef CRD_FFT_M19_P1_FUSED_POC
+                if (g_m19_on) // M19: P1 gather+producer fused over a 64KB per-sub-tile tile (no 1MB P1 bbuf)
+                {
+                    for (crd::usize blk = 0; blk < n2 / 128; ++blk)
+                    {
+#ifdef CRD_FFT_PROFILE
+                        const unsigned long long mf0 = prof::rdtsc();
+#endif
+                        gen::codelet32_p1_fused_tile64(din + blk * 128, tbuf + blk * 16 * 8192, n2,
+                                                       m_p1->m_hier_twr, m_p1->m_hier_twi);
+#ifdef CRD_FFT_PROFILE
+                        prof::g_p1_sub += prof::rdtsc() - mf0; // M19: fused P1 (gather+producer)
+#endif
+                    }
+                }
+                else
+#endif
+                if (g_m16b_bb128) // V1.7: BB=128 gather (8 blocks) + 16-sub-tile tiled producer
+                {
+                    for (crd::usize blk = 0; blk < n2 / 128; ++blk)
+                    {
+#ifdef CRD_FFT_PROFILE
+                        const unsigned long long mg0 = prof::rdtsc();
+#endif
+                        gen::codelet32_stage1_fused_32x32_gather(din + blk * 128, m_p1->m_hier_bbuf, n2,
+                                                                 m_p1->m_hier_twr, m_p1->m_hier_twi);
+#ifdef CRD_FFT_PROFILE
+                        const unsigned long long mg1 = prof::rdtsc();
+                        prof::g_p1_gather += mg1 - mg0; // V1.7: BB=128 gather
+#endif
+                        gen::codelet32_batched_tiled_bb128(m_p1->m_hier_bbuf, tbuf + blk * 16 * 8192);
+#ifdef CRD_FFT_PROFILE
+                        prof::g_p1_sub += prof::rdtsc() - mg1; // V1.7: 16-sub-tile producer
+#endif
+                    }
+                }
+                else
+                for (crd::usize ch = 0; ch < n2 / 8; ++ch)
+                {
+#ifdef CRD_FFT_PROFILE
+                    const unsigned long long mg0 = prof::rdtsc();
+#endif
+                    gen::codelet32_stage1_fused_32x32_gather_bb8(din + ch * 8, m_p1->m_hier_bbuf, n2, m_p1->m_hier_twr,
+                                                                 m_p1->m_hier_twi);
+#ifdef CRD_FFT_PROFILE
+                    const unsigned long long mg1 = prof::rdtsc();
+                    prof::g_p1_gather += mg1 - mg0; // M16-B: gather_bb8
+#endif
+                    gen::codelet32_batched_tiled(m_p1->m_hier_bbuf, tbuf + ch * 8192);
+#ifdef CRD_FFT_PROFILE
+                    prof::g_p1_sub += prof::rdtsc() - mg1; // M16-B: tiled producer (stage2 + transpose + store)
+#endif
+                }
+                m16b_active = true;
+            }
+        }
+#endif
+        (void)m16b_active;
+#ifdef CRD_FFT_M18_2M_POC
+        // M18-2M (f32 2M forward, n1=2048=64×32, n2=1024): 64-pt gather + rectangular 32-pt producer → native_tiled
+        // (CHUNK=16384), then P2 = codelet32_p2_fused_tile64_2m with base2m/lane2m (N=2M recurrence). Default-off.
+        if constexpr (std::is_same_v<T, crd::f32>)
+        {
+            if (g_m18_2m && dir == FftDirection::Forward && n1 == 2048 && n2 == 1024 && m_p1->m_hier_bbuf != nullptr)
+            {
+                static crd::f32 b2m_r[256 * 1024], b2m_i[256 * 1024], l2m_r[1024 * 8], l2m_i[1024 * 8];
+                static bool b2m_built = false;
+                if (!b2m_built)
+                {
+                    const double tp = 6.283185307179586, NN = 2097152.0;
+                    for (crd::usize i2t = 0; i2t < 1024; ++i2t)
+                    {
+                        const crd::usize ml = i2t / 32, n2v = i2t % 32;
+                        for (crd::usize grp = 0; grp < 256; ++grp)
+                        {
+                            double th = tp * (double)((i2t * grp * 8) % 2097152ULL) / NN;
+                            b2m_r[grp * 1024 + n2v * 32 + ml] = (crd::f32)std::cos(th);
+                            b2m_i[grp * 1024 + n2v * 32 + ml] = (crd::f32)(-std::sin(th));
+                        }
+                        for (crd::usize l = 0; l < 8; ++l)
+                        {
+                            double th = tp * (double)((i2t * l) % 2097152ULL) / NN;
+                            l2m_r[i2t * 8 + l] = (crd::f32)std::cos(th);
+                            l2m_i[i2t * 8 + l] = (crd::f32)(-std::sin(th));
+                        }
+                    }
+                    b2m_built = true;
+                }
+                m16b_br_p = b2m_r; m16b_bi_p = b2m_i; m16b_lr_p = l2m_r; m16b_li_p = l2m_i;
+                // intermediate bbuf for the 2M producer needs 262144 complex (n2v 32 × m' 64 × bb0 128 stride);
+                // m_p1->m_hier_bbuf (2048 plan = 65536) is too small ⇒ use scratch (sized n=2M, free in the fused P2 path).
+                for (crd::usize blk = 0; blk < n2 / 128; ++blk)
+                {
+                    gen::codelet64_stage1_fused_64x32_gather(din + blk * 128, scratch, n2, m_p1->m_hier_twr,
+                                                             m_p1->m_hier_twi);
+                    gen::codelet32g64_batched_tiled_bb128(scratch, tbuf + blk * 16 * 16384);
+                }
+                m16b_active = true; m18_2m_active = true;
+            }
+        }
+#endif
 
         // ---- PHASE 1: column FFTs (length n1) + twiddle, NT-scatter to tbuf[i2·n1 + k1] ----
-        for (crd::usize i2 = 0; i2 < n2; i2 += b1)
+        for (crd::usize i2 = 0; !m16b_active && i2 < n2; i2 += b1)
         {
             const crd::usize bw = (i2 + b1 < n2) ? b1 : (n2 - i2);
-#ifdef CRD_FFT_PROFILE
-            const unsigned long long pg0 = prof::rdtsc();
-#endif
-            for (crd::usize i1 = 0; i1 < n1; ++i1) // gather B columns (each a contiguous bw-run) → element-major
+#ifndef CRD_FFT_DISABLE_FUSED
+            // 1024 GATHER FUSION (banked default-on; disable via CRD_FFT_DISABLE_FUSED). f32 1M ~1.085× / f64 1M ~1.086×
+            // vs the phase-separated path: the gather-fused stage-1 reads din DIRECTLY (rs=n2) — no gather memcpy, no
+            // scratch round-trip (A moves 32 MB, this 16 MB) — then stage-2 → scratch. BIT-equivalent (verified
+            // m13_equiv). M15: 2048/4096 gather + per-tile/split orchestrators all rejected (regress) — see docs.
+            bool m13_fused = false;
+            if constexpr (std::is_same_v<T, crd::f32>)
             {
-                if (i1 + kGatherPf < n1) // prefetch the strided next row (hint-only ⇒ bit-identical; latency hide)
+                if (dir == FftDirection::Forward && n1 == 1024 && bw == 128 && m_p1->m_hier_bbuf != nullptr)
                 {
-                    _mm_prefetch(reinterpret_cast<const char*>(din + (i1 + kGatherPf) * n2 + i2), _MM_HINT_T0);
+#ifdef CRD_FFT_PROFILE
+                    const unsigned long long fp0 = prof::rdtsc();
+#endif
+                    gen::codelet32_stage1_fused_32x32_gather(din + i2, m_p1->m_hier_bbuf, n2, m_p1->m_hier_twr,
+                                                             m_p1->m_hier_twi);
+#ifdef CRD_FFT_PROFILE
+                    const unsigned long long fp1 = prof::rdtsc();
+                    prof::g_p1_gather += fp1 - fp0; // M14: fused stage-1 (gather + leaf + inner twiddle)
+#endif
+                    gen::codelet32_batched(m_p1->m_hier_bbuf, scratch, 32 * bw);
+#ifdef CRD_FFT_PROFILE
+                    prof::g_p1_sub += prof::rdtsc() - fp1; // M14: stage-2
+#endif
+                    m13_fused = true;
                 }
-                std::memcpy(scratch + i1 * bw, din + i1 * n2 + i2, bw * sizeof(Complex<T>));
             }
-#ifdef CRD_FFT_PROFILE
-            const unsigned long long pg1 = prof::rdtsc();
-            prof::g_p1_gather += pg1 - pg0;
+            else if constexpr (std::is_same_v<T, crd::f64>) // M13 f64 1M port (bw=block_width(1024)=64 for f64)
+            {
+                if (dir == FftDirection::Forward && n1 == 1024 && bw == 64 && m_p1->m_hier_bbuf != nullptr)
+                {
+                    gen::codelet32_stage1_fused_32x32_gather(din + i2, m_p1->m_hier_bbuf, n2, m_p1->m_hier_twr,
+                                                             m_p1->m_hier_twi);
+                    gen::codelet32_batched(m_p1->m_hier_bbuf, scratch, 32 * bw);
+                    m13_fused = true;
+                }
+            }
+            if (!m13_fused)
 #endif
-            m_p1->execute_batched(cont::Span<Complex<T>>(scratch, n1 * bw), bw, dir);
+            {
 #ifdef CRD_FFT_PROFILE
-            prof::g_p1_sub += prof::rdtsc() - pg1;
+                const unsigned long long pg0 = prof::rdtsc();
 #endif
+                for (crd::usize i1 = 0; i1 < n1; ++i1) // gather B columns (each a contiguous bw-run) → element-major
+                {
+                    if (i1 + kGatherPf < n1) // prefetch the strided next row (hint-only ⇒ bit-identical; latency hide)
+                    {
+                        _mm_prefetch(reinterpret_cast<const char*>(din + (i1 + kGatherPf) * n2 + i2), _MM_HINT_T0);
+                    }
+                    std::memcpy(scratch + i1 * bw, din + i1 * n2 + i2, bw * sizeof(Complex<T>));
+                }
+#ifdef CRD_FFT_PROFILE
+                const unsigned long long pg1 = prof::rdtsc();
+                prof::g_p1_gather += pg1 - pg0;
+#endif
+                m_p1->execute_batched(cont::Span<Complex<T>>(scratch, n1 * bw), bw, dir);
+#ifdef CRD_FFT_PROFILE
+                prof::g_p1_sub += prof::rdtsc() - pg1;
+#endif
+            }
             // twiddle scratch[k1·bw+bb] *= W_n^{k1·col}; NT-store to tbuf row. The twiddle is FACTORED from two
             // ~√n L2-resident tables (no 128 MB streaming read): W_n^a = W_n^{a_hi·M}·W_n^{a_lo}, a = col·k1 < n.
             const crd::usize mmask = (crd::usize{1} << m_ftw_h) - 1;
@@ -1227,6 +1451,32 @@ private:
             }
             else
 #endif
+            {
+#if defined(CRD_FFT_P1_NT) && CRD_SIMD_HAS_AVX2
+              // Lane A1: f32 P1 twiddle paired-NT store (2 complex = 16B → _mm_stream_pd, skips RFO on the 64MB tbuf,
+              // mirroring the scatter). trow+k1 is 16B-aligned for even k1 (tbuf 64B, n1 even).
+              if constexpr (std::is_same_v<T, crd::f32>)
+              {
+                for (crd::usize bb = 0; bb < bw; ++bb)
+                {
+                    const crd::usize col = i2 + bb;
+                    Complex<T>* const trow = tbuf + col * n1;
+                    for (crd::usize k1 = 0; k1 + 2 <= n1; k1 += 2)
+                    {
+                        const crd::usize a0 = col * k1, a1 = a0 + col;
+                        const T w0r = hir[a0 >> m_ftw_h] * lor[a0 & mmask] - hii[a0 >> m_ftw_h] * loi[a0 & mmask];
+                        const T w0i = isign * (hir[a0 >> m_ftw_h] * loi[a0 & mmask] + hii[a0 >> m_ftw_h] * lor[a0 & mmask]);
+                        const T w1r = hir[a1 >> m_ftw_h] * lor[a1 & mmask] - hii[a1 >> m_ftw_h] * loi[a1 & mmask];
+                        const T w1i = isign * (hir[a1 >> m_ftw_h] * loi[a1 & mmask] + hii[a1 >> m_ftw_h] * lor[a1 & mmask]);
+                        const Complex<T> z0 = scratch[k1 * bw + bb], z1 = scratch[(k1 + 1) * bw + bb];
+                        _mm_stream_pd(reinterpret_cast<double*>(trow + k1),
+                                      _mm_castps_pd(_mm_set_ps(z1.re * w1i + z1.im * w1r, z1.re * w1r - z1.im * w1i,
+                                                               z0.re * w0i + z0.im * w0r, z0.re * w0r - z0.im * w0i)));
+                    }
+                }
+              }
+              else
+#endif
                 for (crd::usize bb = 0; bb < bw; ++bb)
                 {
                     const crd::usize col = i2 + bb;
@@ -1245,6 +1495,7 @@ private:
                         store_complex(trow + k1, z.re * wr - z.im * wi, z.re * wi + z.im * wr, true); // tbuf 64B
                     }
                 }
+            } // close Lane A1 block
 #ifdef CRD_FFT_PROFILE
             prof::g_p1_tw += prof::rdtsc() - pt0;
 #endif
@@ -1257,27 +1508,132 @@ private:
         for (crd::usize k1 = 0; k1 < n1; k1 += b2)
         {
             const crd::usize bw = (k1 + b2 < n1) ? b2 : (n1 - k1);
+            bool m17_fused = false; // M17: the P2 stage-2 wrote final output directly ⇒ skip the scatter pass
+            (void)m17_fused;
 #ifdef CRD_FFT_PROFILE
-            const unsigned long long qg0 = prof::rdtsc();
+            unsigned long long qg2 = prof::rdtsc(); // M14: loop-scope so the scatter timer survives the fused branch
 #endif
-            for (crd::usize i2 = 0; i2 < n2; ++i2) // gather B rows (each a contiguous bw-run from tbuf)
+#ifndef CRD_FFT_DISABLE_FUSED
+            // 1024 GATHER FUSION P2 (banked default-on; disable via CRD_FFT_DISABLE_FUSED): symmetric to P1 — the
+            // gather-fused stage-1 reads tbuf DIRECTLY (rs=n1), no gather memcpy / scratch round-trip, then stage-2 →
+            // scratch. Same codelet (source=tbuf+k1). BIT-equivalent; f32/f64 1M win composes with P1.
+            bool m13_fused2 = false;
+            if constexpr (std::is_same_v<T, crd::f32>)
             {
-                if (i2 + kGatherPf < n2) // prefetch the strided next row (hint-only ⇒ bit-identical; latency hide)
+#ifdef CRD_FFT_M16B_FUSED_BRIDGE_POC
+                // M16-B P2: read native_tiled (m_tbuf, written by the tiled producer) CONTIGUOUSLY + apply the
+                // inter-stage twiddle W_N^{i2*k1} by recurrence (base*lane), then the 32-pt leaf + inner twiddle.
+                if (m16b_active && bw == 128 && m_p2->m_hier_bbuf != nullptr)
                 {
-                    _mm_prefetch(reinterpret_cast<const char*>(tbuf + (i2 + kGatherPf) * n1 + k1), _MM_HINT_T0);
+#ifdef CRD_FFT_M18_2M_POC
+                  if (m18_2m_active) // M18-2M: fused P2, ti_stride=16384, base2m/lane2m (N=2M), n1p=2048
+                  {
+                    gen::codelet32_p2_fused_tile64_2m(tbuf, din, k1, n1, m16b_br_p, m16b_bi_p, m16b_lr_p, m16b_li_p,
+                                                      m_p2->m_hier_twr, m_p2->m_hier_twi);
+                    m17_fused = true; m13_fused2 = true;
+                  }
+                  else
+#endif
+#ifdef CRD_FFT_M18_P2_FUSED_POC
+                  if (g_m18_on) // M18: leaf+stage2+final fused over a 64KB per-group tile (no 1MB bbuf round-trip)
+                  {
+#ifdef CRD_FFT_PROFILE
+                    const unsigned long long mf0 = prof::rdtsc();
+#endif
+                    gen::codelet32_p2_fused_tile64(tbuf, din, k1, n1, m16b_br_p, m16b_bi_p, m16b_lr_p, m16b_li_p,
+                                                   m_p2->m_hier_twr, m_p2->m_hier_twi);
+#ifdef CRD_FFT_PROFILE
+                    prof::g_p2_sub += prof::rdtsc() - mf0; qg2 = prof::rdtsc();
+#endif
+                    m17_fused = true; m13_fused2 = true;
+                  }
+                  else
+#endif
+                  {
+#ifdef CRD_FFT_PROFILE
+                    const unsigned long long ml0 = prof::rdtsc();
+#endif
+#ifndef CRD_FFT_M16B_ABLATE_NOLEAF
+                    gen::codelet32_stage1_fused_32x32_native_tiled(tbuf, m_p2->m_hier_bbuf, k1, m16b_br_p, m16b_bi_p,
+                                                                   m16b_lr_p, m16b_li_p, m_p2->m_hier_twr,
+                                                                   m_p2->m_hier_twi);
+#endif
+#ifdef CRD_FFT_PROFILE
+                    const unsigned long long ml1 = prof::rdtsc();
+                    prof::g_p2_gather += ml1 - ml0; // M16-B: native_tiled leaf (contiguous load + recurrence twiddle)
+#endif
+#ifdef CRD_FFT_M17_SCATTER_FUSION_POC
+                    if (g_m17_on) // M17: stage-2 writes final output directly (no scratch, no scatter pass)
+                    {
+                        gen::codelet32_batched_scatter(m_p2->m_hier_bbuf, din, k1, n1, 32 * bw);
+                        m17_fused = true;
+                    }
+                    else
+#endif
+                    gen::codelet32_batched(m_p2->m_hier_bbuf, scratch, 32 * bw);
+#ifdef CRD_FFT_PROFILE
+                    prof::g_p2_sub += prof::rdtsc() - ml1; // M16-B: P2 stage2 (+ M17 fused final store)
+                    qg2 = prof::rdtsc(); // M18 fix: reset the scatter-timer base on the fused path (was misattributing)
+#endif
+                    m13_fused2 = true;
+                  }
                 }
-                std::memcpy(scratch + i2 * bw, tbuf + i2 * n1 + k1, bw * sizeof(Complex<T>));
+                else
+#endif
+                if (dir == FftDirection::Forward && n2 == 1024 && bw == 128 && m_p2->m_hier_bbuf != nullptr)
+                {
+                    gen::codelet32_stage1_fused_32x32_gather(tbuf + k1, m_p2->m_hier_bbuf, n1, m_p2->m_hier_twr,
+                                                             m_p2->m_hier_twi);
+                    gen::codelet32_batched(m_p2->m_hier_bbuf, scratch, 32 * bw);
+                    m13_fused2 = true;
+                }
+                // 256K small-N fix (f32): 256-axis P2 = 16×16 hier, GATHER-fused (reads tbuf directly, rs=n1, no
+                // memcpy round-trip) + SCATTER-fused (stage-2 writes the final output directly, no scratch pass).
+                // Default-on for the 1024×256 four-step split → 256K ~0.85× MKL (3.6× CRD over direct Stockham).
+                if (dir == FftDirection::Forward && n2 == 256 && bw == 512 && m_p2->m_hier_bbuf != nullptr)
+                {
+                    gen::codelet16_stage1_fused_16x16_gather(tbuf + k1, m_p2->m_hier_bbuf, n1, m_p2->m_hier_twr,
+                                                             m_p2->m_hier_twi);
+                    gen::codelet16_batched_scatter(m_p2->m_hier_bbuf, din, k1, n1, 16 * bw);
+                    m17_fused = true;
+                    m13_fused2 = true;
+                }
             }
-#ifdef CRD_FFT_PROFILE
-            const unsigned long long qg1 = prof::rdtsc();
-            prof::g_p2_gather += qg1 - qg0;
+            else if constexpr (std::is_same_v<T, crd::f64>) // M13 f64 1M port (bw=block_width(1024)=64 for f64)
+            {
+                if (dir == FftDirection::Forward && n2 == 1024 && bw == 64 && m_p2->m_hier_bbuf != nullptr)
+                {
+                    gen::codelet32_stage1_fused_32x32_gather(tbuf + k1, m_p2->m_hier_bbuf, n1, m_p2->m_hier_twr,
+                                                             m_p2->m_hier_twi);
+                    gen::codelet32_batched(m_p2->m_hier_bbuf, scratch, 32 * bw);
+                    m13_fused2 = true;
+                }
+            }
+            if (!m13_fused2)
 #endif
-            m_p2->execute_batched(cont::Span<Complex<T>>(scratch, n2 * bw), bw, dir);
+            {
 #ifdef CRD_FFT_PROFILE
-            const unsigned long long qg2 = prof::rdtsc();
-            prof::g_p2_sub += qg2 - qg1;
+                const unsigned long long qg0 = prof::rdtsc();
 #endif
-            for (crd::usize k2 = 0; k2 < n2; ++k2) // X[(k1+bb)+n1·k2] = scratch[k2·bw+bb] → data, NT-store
+                for (crd::usize i2 = 0; i2 < n2; ++i2) // gather B rows (each a contiguous bw-run from tbuf)
+                {
+                    if (i2 + kGatherPf < n2) // prefetch the strided next row (hint-only ⇒ bit-identical; latency hide)
+                    {
+                        _mm_prefetch(reinterpret_cast<const char*>(tbuf + (i2 + kGatherPf) * n1 + k1), _MM_HINT_T0);
+                    }
+                    std::memcpy(scratch + i2 * bw, tbuf + i2 * n1 + k1, bw * sizeof(Complex<T>));
+                }
+#ifdef CRD_FFT_PROFILE
+                const unsigned long long qg1 = prof::rdtsc();
+                prof::g_p2_gather += qg1 - qg0;
+#endif
+                m_p2->execute_batched(cont::Span<Complex<T>>(scratch, n2 * bw), bw, dir);
+#ifdef CRD_FFT_PROFILE
+                qg2 = prof::rdtsc();
+                prof::g_p2_sub += qg2 - qg1;
+#endif
+            }
+            for (crd::usize k2 = 0; !m17_fused && k2 < n2; ++k2) // X[(k1+bb)+n1·k2] = scratch[k2·bw+bb] → data, NT-store
             {
                 const Complex<T>* const srow = scratch + k2 * bw;
                 Complex<T>* const drow = din + k2 * n1 + k1;

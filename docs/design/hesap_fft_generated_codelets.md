@@ -95,8 +95,20 @@ Generated codelets emit to `engine/hesap-fft/include/crd/hesap/fft/detail/`; the
   4 win-configs FFT-scope + ASan-clean + LTCG + clang-tidy + gcc; **`ctest --preset win-debug` GREEN 3935/3935 incl.
   guards**; 8M ~1.13–1.21× → ~0.90–0.94× MKL, 4M near parity, machine-eps. Hit 2 pre-existing env landmines (C1853
   stale-PCH from an MSVC update; the dumpbin-guard needing vcvars). Session `2026-06-17-fft-m4-enable-default.md`.
-- **M5 (NEXT):** finish the multi-config DoD sweep (after clearing stale PCHs) + commit + f32 (Vec8f) hier port +
-  inverse hier codelets + planner cost-model + the parity dashboard close.
+- **M5 ✅ (2026-06-17):** the hier **1024 = 32×32** sub-FFT added to the default hier path (the four-step n=1024
+  sub-FFT at 1M/2M). A real KEEP: engine ~1.15–1.20× on 1M/2M vs radix-8, no 4M/8M/16M regression, machine-eps.
+  ⚠ HONESTY: the M5 "2M ~0.99× / 1M 0.78×" used `m3_full` (flatters MKL ~20%); CANONICAL `bench_fft_vs_refs`:
+  **1M 0.60× · 2M 0.75×** (vs radix-8 0.53/0.68). Session `2026-06-17-fft-m5-hierarchical-1024.md`.
+- **M4+M5 COMMITTED** (`251bd79`,`d602c30`) + toolchain-cleanup (`aeb0086`); full 4-config DoD GREEN.
+- **M6 Phase 0+1 ✅ (2026-06-17, profile-first):** canonical board 1M 0.60 / 2M 0.75 / 4M **1.04 (beats)** / 8M 0.91 /
+  16M ~0.90. Residual profile: sub-FFTs are hier-optimized; **8M/16M loss is MOVEMENT — the four-step GATHER is the
+  biggest lever (~34–35%)**; 1M is MKL-near-optimal (hard).
+- **M6 Front C / Variant A (gather⊗stage-1 fusion) ⛔ MEASURED-REVERT (2026-06-17):** the gather-fused stage-1 reads
+  din directly (index map bit-identical) and removes the scratch round-trip (+1.077× input-side), but the full FFT
+  REGRESSES (8M ~30% / 16M ~20% slower, clean CRD-vs-CRD) — the dominant cost is the strided din-read, and the
+  codelet's interspersed strided loads lose the dedicated gather's prefetch + are buffer-placement-sensitive.
+  Reverted to M5-clean; probes in `build/m6_gather_*`. **NEXT = M7: f32 Vec8f hierarchical port** (the biggest
+  untouched lever, f32 ~0.78×), per the kill condition.
 
 ## 15. M1 result — the crossover (the architecture-deciding measurement)
 Generated batched Vec4d codelets vs `execute_batched` (f64, b=32), all machine-eps correct:
@@ -191,3 +203,22 @@ was green at C-22. **➜ Commit the f64 twiddle before M2.**
 f64 8M 0.84× → parity needs ~1.19× full; sub-FFT is ~46% → if only sub-FFT improves, parity needs ~1.5× sub-FFT.
 Sub-FFT headroom (13.5 → ~5.25 cyc/el = MKL) is 2.6×, so ~1.5× is within the generator's reach if it closes
 half the shuffle+spill overhead. Hard but not absurd.
+
+## 18. M16–M19 contract-breaking fused-codelet campaign (2026-06-19) — status
+
+All gated, **default-OFF**; the banked **gather fusion remains the shipped default for every size**. Honest
+**same-harness** f32 1M (MIN metric — medians were host-contention-noisy): MKL 1.71 / gather 2.49 / M17 2.08 /
+**M18 2.01 ms = 0.85× MKL, 19% faster than gather**, all maxrel vs MKL ~2.6e-7.
+
+| milestone | gate | what | verdict |
+|---|---|---|---|
+| M16-B | `CRD_FFT_M16B_FUSED_BRIDGE_POC` | native tiled producer + in-register 8×8 transpose + recurrence twiddle (reordered base) | required by M17/M18 |
+| M17 | `CRD_FFT_M17_SCATTER_FUSION_POC` | fuse final NT-scatter into P2 stage-2 store (no scratch/scatter pass) | win, fallback |
+| **M18** | `CRD_FFT_M18_P2_FUSED_POC` | **fuse P2 leaf+stage2+final over a 64KB tile (no 1MB bbuf)** | **best CRD path, gated candidate** |
+| M19-A | `CRD_FFT_M19_P1_FUSED_POC` | P1 gather+producer fusion | **REJECTED by measurement** (correct, but +0.8 Mcyc: 64KB tile + br_ transpose double-buffer spills) |
+| M19-B | — | register-streaming P1 fusion | **structurally blocked** (proof: P1 stage-2 needs all 32 n2v ⇒ full tile; transpose needs all 8 kl ⇒ br_ buffer — both mandatory) |
+
+**Scope: M18 = f32, N=1M, forward ONLY.** 2M's four-step is n1=2048/n2=1024 — the M16-B→M18 chain hardcodes the
+32×32 (1024) decomposition, so 2M falls back to gather (correct, ~0.65× MKL). Extending to 2M = a new 64×32 fused
+chain. **The remaining ~15% to MKL is genuine kernel/bandwidth, not a removable stage boundary.** No engine
+default change; not committed.

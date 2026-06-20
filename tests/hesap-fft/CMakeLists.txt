@@ -2,6 +2,7 @@ add_executable(crd-hesap-fft-tests
     test_fft.cpp
     test_nufft.cpp
     test_dct.cpp
+    test_cli.cpp
 )
 
 target_link_libraries(crd-hesap-fft-tests PRIVATE

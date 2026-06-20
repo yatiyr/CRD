@@ -4,6 +4,21 @@
 #include <crd/core/types.hpp>
 #include <crd/hesap/complex.hpp>
 #include <crd/math/simd/simd.hpp>
+#ifdef CRD_FFT_M16B_FUSED_BRIDGE_POC
+#include <immintrin.h>
+namespace m16tr {
+using V8 = crd::math::simd::Vec8f;
+CRD_FORCEINLINE void transpose8x8(V8&R0,V8&R1,V8&R2,V8&R3,V8&R4,V8&R5,V8&R6,V8&R7) noexcept {
+  __m256 r0=R0.v,r1=R1.v,r2=R2.v,r3=R3.v,r4=R4.v,r5=R5.v,r6=R6.v,r7=R7.v;
+  __m256 u0=_mm256_unpacklo_ps(r0,r1),u1=_mm256_unpackhi_ps(r0,r1),u2=_mm256_unpacklo_ps(r2,r3),u3=_mm256_unpackhi_ps(r2,r3),
+         u4=_mm256_unpacklo_ps(r4,r5),u5=_mm256_unpackhi_ps(r4,r5),u6=_mm256_unpacklo_ps(r6,r7),u7=_mm256_unpackhi_ps(r6,r7);
+  __m256 s0=_mm256_shuffle_ps(u0,u2,0x44),s1=_mm256_shuffle_ps(u0,u2,0xEE),s2=_mm256_shuffle_ps(u1,u3,0x44),s3=_mm256_shuffle_ps(u1,u3,0xEE),
+         s4=_mm256_shuffle_ps(u4,u6,0x44),s5=_mm256_shuffle_ps(u4,u6,0xEE),s6=_mm256_shuffle_ps(u5,u7,0x44),s7=_mm256_shuffle_ps(u5,u7,0xEE);
+  R0.v=_mm256_permute2f128_ps(s0,s4,0x20);R1.v=_mm256_permute2f128_ps(s1,s5,0x20);R2.v=_mm256_permute2f128_ps(s2,s6,0x20);R3.v=_mm256_permute2f128_ps(s3,s7,0x20);
+  R4.v=_mm256_permute2f128_ps(s0,s4,0x31);R5.v=_mm256_permute2f128_ps(s1,s5,0x31);R6.v=_mm256_permute2f128_ps(s2,s6,0x31);R7.v=_mm256_permute2f128_ps(s3,s7,0x31);
+}
+}
+#endif
 namespace crd::hesap::fft::gen {
 // N=16 batched split-radix codelet (Vec4d over batch). GENERATED.
 CRD_FORCEINLINE void codelet16_batched(const crd::hesap::Complex<crd::f64>* in,
@@ -3322,6 +3337,484 @@ CRD_FORCEINLINE void codelet32_stage1_fused_32x32(const crd::hesap::Complex<crd:
           simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + n2 * 2048 + 0 * 64 + bb0), or_, oi_); }
     }
 }
+// N=1024=32x32 GATHER-FUSED stage-1 (BB=64): reads the four-step input directly (row stride rs), no gather memcpy. GENERATED.
+CRD_FORCEINLINE void codelet32_stage1_fused_32x32_gather(const crd::hesap::Complex<crd::f64>* din_block,
+    crd::hesap::Complex<crd::f64>* out, crd::usize rs, const crd::f64* twr, const crd::f64* twi) noexcept
+{
+    using V = crd::math::simd::Vec4d;
+    namespace simd = crd::math::simd;
+    for (crd::usize t = 0; t + 4 <= 2048; t += 4)
+    {
+        const crd::usize n2v = t >> 6, bb0 = t & 63;
+        const crd::hesap::Complex<crd::f64>* const base = din_block + n2v * rs + bb0;
+        const crd::f64* const tr = twr + n2v * 32, * const ti = twi + n2v * 32;
+        V n31r, n31i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(base + 992 * rs), n31r, n31i);
+        V n30r, n30i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(base + 960 * rs), n30r, n30i);
+        V n29r, n29i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(base + 928 * rs), n29r, n29i);
+        V n28r, n28i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(base + 896 * rs), n28r, n28i);
+        V n27r, n27i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(base + 864 * rs), n27r, n27i);
+        V n26r, n26i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(base + 832 * rs), n26r, n26i);
+        V n25r, n25i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(base + 800 * rs), n25r, n25i);
+        V n24r, n24i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(base + 768 * rs), n24r, n24i);
+        V n23r, n23i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(base + 736 * rs), n23r, n23i);
+        V n22r, n22i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(base + 704 * rs), n22r, n22i);
+        V n21r, n21i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(base + 672 * rs), n21r, n21i);
+        V n20r, n20i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(base + 640 * rs), n20r, n20i);
+        V n19r, n19i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(base + 608 * rs), n19r, n19i);
+        V n18r, n18i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(base + 576 * rs), n18r, n18i);
+        V n17r, n17i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(base + 544 * rs), n17r, n17i);
+        V n16r, n16i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(base + 512 * rs), n16r, n16i);
+        V n15r, n15i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(base + 480 * rs), n15r, n15i);
+        const V n154r = n15r - n31r, n154i = n15i - n31i;
+        const V n153r = n15r + n31r, n153i = n15i + n31i;
+        const V n163r = V(-0.7071067811865475) * n154r - V(-0.7071067811865476) * n154i, n163i = V(-0.7071067811865475) * n154i + V(-0.7071067811865476) * n154r;
+        V n14r, n14i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(base + 448 * rs), n14r, n14i);
+        const V n73r = n14r - n30r, n73i = n14i - n30i;
+        const V n72r = n14r + n30r, n72i = n14i + n30i;
+        const V n74r = n73i, n74i = -n73r;
+        V n13r, n13i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(base + 416 * rs), n13r, n13i);
+        const V n125r = n13r - n29r, n125i = n13i - n29i;
+        const V n124r = n13r + n29r, n124i = n13i + n29i;
+        const V n134r = V(-0.7071067811865475) * n125r - V(-0.7071067811865476) * n125i, n134i = V(-0.7071067811865475) * n125i + V(-0.7071067811865476) * n125r;
+        V n12r, n12i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(base + 384 * rs), n12r, n12i);
+        const V n44r = n12r - n28r, n44i = n12i - n28i;
+        const V n43r = n12r + n28r, n43i = n12i + n28i;
+        const V n53r = V(-0.7071067811865475) * n44r - V(-0.7071067811865476) * n44i, n53i = V(-0.7071067811865475) * n44i + V(-0.7071067811865476) * n44r;
+        V n11r, n11i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(base + 352 * rs), n11r, n11i);
+        const V n145r = n11r - n27r, n145i = n11i - n27i;
+        const V n144r = n11r + n27r, n144i = n11i + n27i;
+        const V n146r = n145i, n146i = -n145r;
+        V n10r, n10i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(base + 320 * rs), n10r, n10i);
+        const V n64r = n10r - n26r, n64i = n10i - n26i;
+        const V n63r = n10r + n26r, n63i = n10i + n26i;
+        const V n65r = n64i, n65i = -n64r;
+        V n9r, n9i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(base + 288 * rs), n9r, n9i);
+        const V n116r = n9r - n25r, n116i = n9i - n25i;
+        const V n115r = n9r + n25r, n115i = n9i + n25i;
+        const V n117r = n116i, n117i = -n116r;
+        V n8r, n8i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(base + 256 * rs), n8r, n8i);
+        const V n35r = n8r - n24r, n35i = n8i - n24i;
+        const V n34r = n8r + n24r, n34i = n8i + n24i;
+        const V n36r = n35i, n36i = -n35r;
+        V n7r, n7i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(base + 224 * rs), n7r, n7i);
+        const V n152r = n7r - n23r, n152i = n7i - n23i;
+        const V n151r = n7r + n23r, n151i = n7i + n23i;
+        const V n162r = V(0.7071067811865476) * n152r - V(-0.7071067811865475) * n152i, n162i = V(0.7071067811865476) * n152i + V(-0.7071067811865475) * n152r;
+        const V n165r = n162r - n163r, n165i = n162i - n163i;
+        const V n164r = n162r + n163r, n164i = n162i + n163i;
+        const V n166r = n165i, n166i = -n165r;
+        const V n156r = n151r - n153r, n156i = n151i - n153i;
+        const V n155r = n151r + n153r, n155i = n151i + n153i;
+        const V n157r = n156i, n157i = -n156r;
+        V n6r, n6i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(base + 192 * rs), n6r, n6i);
+        const V n71r = n6r - n22r, n71i = n6i - n22i;
+        const V n70r = n6r + n22r, n70i = n6i + n22i;
+        const V n78r = n71r - n74r, n78i = n71i - n74i;
+        const V n77r = n71r + n74r, n77i = n71i + n74i;
+        const V n105r = V(-0.9238795325112868) * n78r - V(0.38268343236508967) * n78i, n105i = V(-0.9238795325112868) * n78i + V(0.38268343236508967) * n78r;
+        const V n87r = V(0.38268343236508984) * n77r - V(-0.9238795325112867) * n77i, n87i = V(0.38268343236508984) * n77i + V(-0.9238795325112867) * n77r;
+        const V n76r = n70r - n72r, n76i = n70i - n72i;
+        const V n75r = n70r + n72r, n75i = n70i + n72i;
+        const V n96r = V(-0.7071067811865475) * n76r - V(-0.7071067811865476) * n76i, n96i = V(-0.7071067811865475) * n76i + V(-0.7071067811865476) * n76r;
+        V n5r, n5i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(base + 160 * rs), n5r, n5i);
+        const V n123r = n5r - n21r, n123i = n5i - n21i;
+        const V n122r = n5r + n21r, n122i = n5i + n21i;
+        const V n133r = V(0.7071067811865476) * n123r - V(-0.7071067811865475) * n123i, n133i = V(0.7071067811865476) * n123i + V(-0.7071067811865475) * n123r;
+        const V n136r = n133r - n134r, n136i = n133i - n134i;
+        const V n135r = n133r + n134r, n135i = n133i + n134i;
+        const V n137r = n136i, n137i = -n136r;
+        const V n127r = n122r - n124r, n127i = n122i - n124i;
+        const V n126r = n122r + n124r, n126i = n122i + n124i;
+        const V n128r = n127i, n128i = -n127r;
+        V n4r, n4i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(base + 128 * rs), n4r, n4i);
+        const V n42r = n4r - n20r, n42i = n4i - n20i;
+        const V n41r = n4r + n20r, n41i = n4i + n20i;
+        const V n52r = V(0.7071067811865476) * n42r - V(-0.7071067811865475) * n42i, n52i = V(0.7071067811865476) * n42i + V(-0.7071067811865475) * n42r;
+        const V n55r = n52r - n53r, n55i = n52i - n53i;
+        const V n54r = n52r + n53r, n54i = n52i + n53i;
+        const V n56r = n55i, n56i = -n55r;
+        const V n46r = n41r - n43r, n46i = n41i - n43i;
+        const V n45r = n41r + n43r, n45i = n41i + n43i;
+        const V n47r = n46i, n47i = -n46r;
+        V n3r, n3i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(base + 96 * rs), n3r, n3i);
+        const V n143r = n3r - n19r, n143i = n3i - n19i;
+        const V n142r = n3r + n19r, n142i = n3i + n19i;
+        const V n150r = n143r - n146r, n150i = n143i - n146i;
+        const V n149r = n143r + n146r, n149i = n143i + n146i;
+        const V n170r = n150r - n166r, n170i = n150i - n166i;
+        const V n169r = n150r + n166r, n169i = n150i + n166i;
+        const V n233r = V(-0.5555702330196022) * n170r - V(0.8314696123025452) * n170i, n233i = V(-0.5555702330196022) * n170i + V(0.8314696123025452) * n170r;
+        const V n197r = V(-0.1950903220161282) * n169r - V(-0.9807852804032304) * n169i, n197i = V(-0.1950903220161282) * n169i + V(-0.9807852804032304) * n169r;
+        const V n168r = n149r - n164r, n168i = n149i - n164i;
+        const V n167r = n149r + n164r, n167i = n149i + n164i;
+        const V n215r = V(-0.9807852804032304) * n168r - V(-0.1950903220161286) * n168i, n215i = V(-0.9807852804032304) * n168i + V(-0.1950903220161286) * n168r;
+        const V n179r = V(0.8314696123025452) * n167r - V(-0.5555702330196022) * n167i, n179i = V(0.8314696123025452) * n167i + V(-0.5555702330196022) * n167r;
+        const V n148r = n142r - n144r, n148i = n142i - n144i;
+        const V n147r = n142r + n144r, n147i = n142i + n144i;
+        const V n161r = n148r - n157r, n161i = n148i - n157i;
+        const V n160r = n148r + n157r, n160i = n148i + n157i;
+        const V n224r = V(-0.9238795325112868) * n161r - V(0.38268343236508967) * n161i, n224i = V(-0.9238795325112868) * n161i + V(0.38268343236508967) * n161r;
+        const V n188r = V(0.38268343236508984) * n160r - V(-0.9238795325112867) * n160i, n188i = V(0.38268343236508984) * n160i + V(-0.9238795325112867) * n160r;
+        const V n159r = n147r - n155r, n159i = n147i - n155i;
+        const V n158r = n147r + n155r, n158i = n147i + n155i;
+        const V n206r = V(-0.7071067811865475) * n159r - V(-0.7071067811865476) * n159i, n206i = V(-0.7071067811865475) * n159i + V(-0.7071067811865476) * n159r;
+        V n2r, n2i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(base + 64 * rs), n2r, n2i);
+        const V n62r = n2r - n18r, n62i = n2i - n18i;
+        const V n61r = n2r + n18r, n61i = n2i + n18i;
+        const V n69r = n62r - n65r, n69i = n62i - n65i;
+        const V n68r = n62r + n65r, n68i = n62i + n65i;
+        const V n104r = V(0.38268343236508984) * n69r - V(-0.9238795325112867) * n69i, n104i = V(0.38268343236508984) * n69i + V(-0.9238795325112867) * n69r;
+        const V n86r = V(0.9238795325112867) * n68r - V(-0.3826834323650898) * n68i, n86i = V(0.9238795325112867) * n68i + V(-0.3826834323650898) * n68r;
+        const V n107r = n104r - n105r, n107i = n104i - n105i;
+        const V n106r = n104r + n105r, n106i = n104i + n105i;
+        const V n108r = n107i, n108i = -n107r;
+        const V n89r = n86r - n87r, n89i = n86i - n87i;
+        const V n88r = n86r + n87r, n88i = n86i + n87i;
+        const V n90r = n89i, n90i = -n89r;
+        const V n67r = n61r - n63r, n67i = n61i - n63i;
+        const V n66r = n61r + n63r, n66i = n61i + n63i;
+        const V n95r = V(0.7071067811865476) * n67r - V(-0.7071067811865475) * n67i, n95i = V(0.7071067811865476) * n67i + V(-0.7071067811865475) * n67r;
+        const V n98r = n95r - n96r, n98i = n95i - n96i;
+        const V n97r = n95r + n96r, n97i = n95i + n96i;
+        const V n99r = n98i, n99i = -n98r;
+        const V n80r = n66r - n75r, n80i = n66i - n75i;
+        const V n79r = n66r + n75r, n79i = n66i + n75i;
+        const V n81r = n80i, n81i = -n80r;
+        V n1r, n1i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(base + 32 * rs), n1r, n1i);
+        const V n114r = n1r - n17r, n114i = n1i - n17i;
+        const V n113r = n1r + n17r, n113i = n1i + n17i;
+        const V n121r = n114r - n117r, n121i = n114i - n117i;
+        const V n120r = n114r + n117r, n120i = n114i + n117i;
+        const V n141r = n121r - n137r, n141i = n121i - n137i;
+        const V n140r = n121r + n137r, n140i = n121i + n137i;
+        const V n232r = V(0.19509032201612833) * n141r - V(-0.9807852804032304) * n141i, n232i = V(0.19509032201612833) * n141i + V(-0.9807852804032304) * n141r;
+        const V n196r = V(0.8314696123025452) * n140r - V(-0.5555702330196022) * n140i, n196i = V(0.8314696123025452) * n140i + V(-0.5555702330196022) * n140r;
+        const V n235r = n232r - n233r, n235i = n232i - n233i;
+        const V n234r = n232r + n233r, n234i = n232i + n233i;
+        const V n236r = n235i, n236i = -n235r;
+        const V n199r = n196r - n197r, n199i = n196i - n197i;
+        const V n198r = n196r + n197r, n198i = n196i + n197i;
+        const V n200r = n199i, n200i = -n199r;
+        const V n139r = n120r - n135r, n139i = n120i - n135i;
+        const V n138r = n120r + n135r, n138i = n120i + n135i;
+        const V n214r = V(0.5555702330196023) * n139r - V(-0.8314696123025452) * n139i, n214i = V(0.5555702330196023) * n139i + V(-0.8314696123025452) * n139r;
+        const V n178r = V(0.9807852804032304) * n138r - V(-0.19509032201612825) * n138i, n178i = V(0.9807852804032304) * n138i + V(-0.19509032201612825) * n138r;
+        const V n217r = n214r - n215r, n217i = n214i - n215i;
+        const V n216r = n214r + n215r, n216i = n214i + n215i;
+        const V n218r = n217i, n218i = -n217r;
+        const V n181r = n178r - n179r, n181i = n178i - n179i;
+        const V n180r = n178r + n179r, n180i = n178i + n179i;
+        const V n182r = n181i, n182i = -n181r;
+        const V n119r = n113r - n115r, n119i = n113i - n115i;
+        const V n118r = n113r + n115r, n118i = n113i + n115i;
+        const V n132r = n119r - n128r, n132i = n119i - n128i;
+        const V n131r = n119r + n128r, n131i = n119i + n128i;
+        const V n223r = V(0.38268343236508984) * n132r - V(-0.9238795325112867) * n132i, n223i = V(0.38268343236508984) * n132i + V(-0.9238795325112867) * n132r;
+        const V n187r = V(0.9238795325112867) * n131r - V(-0.3826834323650898) * n131i, n187i = V(0.9238795325112867) * n131i + V(-0.3826834323650898) * n131r;
+        const V n226r = n223r - n224r, n226i = n223i - n224i;
+        const V n225r = n223r + n224r, n225i = n223i + n224i;
+        const V n227r = n226i, n227i = -n226r;
+        const V n190r = n187r - n188r, n190i = n187i - n188i;
+        const V n189r = n187r + n188r, n189i = n187i + n188i;
+        const V n191r = n190i, n191i = -n190r;
+        const V n130r = n118r - n126r, n130i = n118i - n126i;
+        const V n129r = n118r + n126r, n129i = n118i + n126i;
+        const V n205r = V(0.7071067811865476) * n130r - V(-0.7071067811865475) * n130i, n205i = V(0.7071067811865476) * n130i + V(-0.7071067811865475) * n130r;
+        const V n208r = n205r - n206r, n208i = n205i - n206i;
+        const V n207r = n205r + n206r, n207i = n205i + n206i;
+        const V n209r = n208i, n209i = -n208r;
+        const V n172r = n129r - n158r, n172i = n129i - n158i;
+        const V n171r = n129r + n158r, n171i = n129i + n158i;
+        const V n173r = n172i, n173i = -n172r;
+        V n0r, n0i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(base + 0 * rs), n0r, n0i);
+        const V n33r = n0r - n16r, n33i = n0i - n16i;
+        const V n32r = n0r + n16r, n32i = n0i + n16i;
+        const V n40r = n33r - n36r, n40i = n33i - n36i;
+        const V n39r = n33r + n36r, n39i = n33i + n36i;
+        const V n60r = n40r - n56r, n60i = n40i - n56i;
+        const V n59r = n40r + n56r, n59i = n40i + n56i;
+        const V n112r = n60r - n108r, n112i = n60i - n108i;
+        const V n111r = n60r + n108r, n111i = n60i + n108i;
+        const V n240r = n112r - n236r, n240i = n112i - n236i;
+        { const V wr = V(tr[31]), wi = V(ti[31]);
+          const V or_ = n240r * wr - n240i * wi, oi_ = n240r * wi + n240i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + ((n2v * 2048 + 31 * 64 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + n2v * 2048 + 31 * 64 + bb0), or_, oi_); }
+#endif
+        const V n239r = n112r + n236r, n239i = n112i + n236i;
+        { const V wr = V(tr[15]), wi = V(ti[15]);
+          const V or_ = n239r * wr - n239i * wi, oi_ = n239r * wi + n239i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + ((n2v * 2048 + 15 * 64 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + n2v * 2048 + 15 * 64 + bb0), or_, oi_); }
+#endif
+        const V n238r = n111r - n234r, n238i = n111i - n234i;
+        { const V wr = V(tr[23]), wi = V(ti[23]);
+          const V or_ = n238r * wr - n238i * wi, oi_ = n238r * wi + n238i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + ((n2v * 2048 + 23 * 64 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + n2v * 2048 + 23 * 64 + bb0), or_, oi_); }
+#endif
+        const V n237r = n111r + n234r, n237i = n111i + n234i;
+        { const V wr = V(tr[7]), wi = V(ti[7]);
+          const V or_ = n237r * wr - n237i * wi, oi_ = n237r * wi + n237i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + ((n2v * 2048 + 7 * 64 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + n2v * 2048 + 7 * 64 + bb0), or_, oi_); }
+#endif
+        const V n110r = n59r - n106r, n110i = n59i - n106i;
+        const V n109r = n59r + n106r, n109i = n59i + n106i;
+        const V n204r = n110r - n200r, n204i = n110i - n200i;
+        { const V wr = V(tr[27]), wi = V(ti[27]);
+          const V or_ = n204r * wr - n204i * wi, oi_ = n204r * wi + n204i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + ((n2v * 2048 + 27 * 64 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + n2v * 2048 + 27 * 64 + bb0), or_, oi_); }
+#endif
+        const V n203r = n110r + n200r, n203i = n110i + n200i;
+        { const V wr = V(tr[11]), wi = V(ti[11]);
+          const V or_ = n203r * wr - n203i * wi, oi_ = n203r * wi + n203i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + ((n2v * 2048 + 11 * 64 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + n2v * 2048 + 11 * 64 + bb0), or_, oi_); }
+#endif
+        const V n202r = n109r - n198r, n202i = n109i - n198i;
+        { const V wr = V(tr[19]), wi = V(ti[19]);
+          const V or_ = n202r * wr - n202i * wi, oi_ = n202r * wi + n202i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + ((n2v * 2048 + 19 * 64 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + n2v * 2048 + 19 * 64 + bb0), or_, oi_); }
+#endif
+        const V n201r = n109r + n198r, n201i = n109i + n198i;
+        { const V wr = V(tr[3]), wi = V(ti[3]);
+          const V or_ = n201r * wr - n201i * wi, oi_ = n201r * wi + n201i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + ((n2v * 2048 + 3 * 64 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + n2v * 2048 + 3 * 64 + bb0), or_, oi_); }
+#endif
+        const V n58r = n39r - n54r, n58i = n39i - n54i;
+        const V n57r = n39r + n54r, n57i = n39i + n54i;
+        const V n94r = n58r - n90r, n94i = n58i - n90i;
+        const V n93r = n58r + n90r, n93i = n58i + n90i;
+        const V n222r = n94r - n218r, n222i = n94i - n218i;
+        { const V wr = V(tr[29]), wi = V(ti[29]);
+          const V or_ = n222r * wr - n222i * wi, oi_ = n222r * wi + n222i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + ((n2v * 2048 + 29 * 64 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + n2v * 2048 + 29 * 64 + bb0), or_, oi_); }
+#endif
+        const V n221r = n94r + n218r, n221i = n94i + n218i;
+        { const V wr = V(tr[13]), wi = V(ti[13]);
+          const V or_ = n221r * wr - n221i * wi, oi_ = n221r * wi + n221i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + ((n2v * 2048 + 13 * 64 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + n2v * 2048 + 13 * 64 + bb0), or_, oi_); }
+#endif
+        const V n220r = n93r - n216r, n220i = n93i - n216i;
+        { const V wr = V(tr[21]), wi = V(ti[21]);
+          const V or_ = n220r * wr - n220i * wi, oi_ = n220r * wi + n220i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + ((n2v * 2048 + 21 * 64 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + n2v * 2048 + 21 * 64 + bb0), or_, oi_); }
+#endif
+        const V n219r = n93r + n216r, n219i = n93i + n216i;
+        { const V wr = V(tr[5]), wi = V(ti[5]);
+          const V or_ = n219r * wr - n219i * wi, oi_ = n219r * wi + n219i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + ((n2v * 2048 + 5 * 64 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + n2v * 2048 + 5 * 64 + bb0), or_, oi_); }
+#endif
+        const V n92r = n57r - n88r, n92i = n57i - n88i;
+        const V n91r = n57r + n88r, n91i = n57i + n88i;
+        const V n186r = n92r - n182r, n186i = n92i - n182i;
+        { const V wr = V(tr[25]), wi = V(ti[25]);
+          const V or_ = n186r * wr - n186i * wi, oi_ = n186r * wi + n186i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + ((n2v * 2048 + 25 * 64 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + n2v * 2048 + 25 * 64 + bb0), or_, oi_); }
+#endif
+        const V n185r = n92r + n182r, n185i = n92i + n182i;
+        { const V wr = V(tr[9]), wi = V(ti[9]);
+          const V or_ = n185r * wr - n185i * wi, oi_ = n185r * wi + n185i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + ((n2v * 2048 + 9 * 64 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + n2v * 2048 + 9 * 64 + bb0), or_, oi_); }
+#endif
+        const V n184r = n91r - n180r, n184i = n91i - n180i;
+        { const V wr = V(tr[17]), wi = V(ti[17]);
+          const V or_ = n184r * wr - n184i * wi, oi_ = n184r * wi + n184i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + ((n2v * 2048 + 17 * 64 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + n2v * 2048 + 17 * 64 + bb0), or_, oi_); }
+#endif
+        const V n183r = n91r + n180r, n183i = n91i + n180i;
+        { const V wr = V(tr[1]), wi = V(ti[1]);
+          const V or_ = n183r * wr - n183i * wi, oi_ = n183r * wi + n183i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + ((n2v * 2048 + 1 * 64 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + n2v * 2048 + 1 * 64 + bb0), or_, oi_); }
+#endif
+        const V n38r = n32r - n34r, n38i = n32i - n34i;
+        const V n37r = n32r + n34r, n37i = n32i + n34i;
+        const V n51r = n38r - n47r, n51i = n38i - n47i;
+        const V n50r = n38r + n47r, n50i = n38i + n47i;
+        const V n103r = n51r - n99r, n103i = n51i - n99i;
+        const V n102r = n51r + n99r, n102i = n51i + n99i;
+        const V n231r = n103r - n227r, n231i = n103i - n227i;
+        { const V wr = V(tr[30]), wi = V(ti[30]);
+          const V or_ = n231r * wr - n231i * wi, oi_ = n231r * wi + n231i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + ((n2v * 2048 + 30 * 64 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + n2v * 2048 + 30 * 64 + bb0), or_, oi_); }
+#endif
+        const V n230r = n103r + n227r, n230i = n103i + n227i;
+        { const V wr = V(tr[14]), wi = V(ti[14]);
+          const V or_ = n230r * wr - n230i * wi, oi_ = n230r * wi + n230i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + ((n2v * 2048 + 14 * 64 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + n2v * 2048 + 14 * 64 + bb0), or_, oi_); }
+#endif
+        const V n229r = n102r - n225r, n229i = n102i - n225i;
+        { const V wr = V(tr[22]), wi = V(ti[22]);
+          const V or_ = n229r * wr - n229i * wi, oi_ = n229r * wi + n229i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + ((n2v * 2048 + 22 * 64 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + n2v * 2048 + 22 * 64 + bb0), or_, oi_); }
+#endif
+        const V n228r = n102r + n225r, n228i = n102i + n225i;
+        { const V wr = V(tr[6]), wi = V(ti[6]);
+          const V or_ = n228r * wr - n228i * wi, oi_ = n228r * wi + n228i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + ((n2v * 2048 + 6 * 64 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + n2v * 2048 + 6 * 64 + bb0), or_, oi_); }
+#endif
+        const V n101r = n50r - n97r, n101i = n50i - n97i;
+        const V n100r = n50r + n97r, n100i = n50i + n97i;
+        const V n195r = n101r - n191r, n195i = n101i - n191i;
+        { const V wr = V(tr[26]), wi = V(ti[26]);
+          const V or_ = n195r * wr - n195i * wi, oi_ = n195r * wi + n195i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + ((n2v * 2048 + 26 * 64 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + n2v * 2048 + 26 * 64 + bb0), or_, oi_); }
+#endif
+        const V n194r = n101r + n191r, n194i = n101i + n191i;
+        { const V wr = V(tr[10]), wi = V(ti[10]);
+          const V or_ = n194r * wr - n194i * wi, oi_ = n194r * wi + n194i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + ((n2v * 2048 + 10 * 64 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + n2v * 2048 + 10 * 64 + bb0), or_, oi_); }
+#endif
+        const V n193r = n100r - n189r, n193i = n100i - n189i;
+        { const V wr = V(tr[18]), wi = V(ti[18]);
+          const V or_ = n193r * wr - n193i * wi, oi_ = n193r * wi + n193i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + ((n2v * 2048 + 18 * 64 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + n2v * 2048 + 18 * 64 + bb0), or_, oi_); }
+#endif
+        const V n192r = n100r + n189r, n192i = n100i + n189i;
+        { const V wr = V(tr[2]), wi = V(ti[2]);
+          const V or_ = n192r * wr - n192i * wi, oi_ = n192r * wi + n192i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + ((n2v * 2048 + 2 * 64 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + n2v * 2048 + 2 * 64 + bb0), or_, oi_); }
+#endif
+        const V n49r = n37r - n45r, n49i = n37i - n45i;
+        const V n48r = n37r + n45r, n48i = n37i + n45i;
+        const V n85r = n49r - n81r, n85i = n49i - n81i;
+        const V n84r = n49r + n81r, n84i = n49i + n81i;
+        const V n213r = n85r - n209r, n213i = n85i - n209i;
+        { const V wr = V(tr[28]), wi = V(ti[28]);
+          const V or_ = n213r * wr - n213i * wi, oi_ = n213r * wi + n213i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + ((n2v * 2048 + 28 * 64 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + n2v * 2048 + 28 * 64 + bb0), or_, oi_); }
+#endif
+        const V n212r = n85r + n209r, n212i = n85i + n209i;
+        { const V wr = V(tr[12]), wi = V(ti[12]);
+          const V or_ = n212r * wr - n212i * wi, oi_ = n212r * wi + n212i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + ((n2v * 2048 + 12 * 64 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + n2v * 2048 + 12 * 64 + bb0), or_, oi_); }
+#endif
+        const V n211r = n84r - n207r, n211i = n84i - n207i;
+        { const V wr = V(tr[20]), wi = V(ti[20]);
+          const V or_ = n211r * wr - n211i * wi, oi_ = n211r * wi + n211i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + ((n2v * 2048 + 20 * 64 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + n2v * 2048 + 20 * 64 + bb0), or_, oi_); }
+#endif
+        const V n210r = n84r + n207r, n210i = n84i + n207i;
+        { const V wr = V(tr[4]), wi = V(ti[4]);
+          const V or_ = n210r * wr - n210i * wi, oi_ = n210r * wi + n210i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + ((n2v * 2048 + 4 * 64 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + n2v * 2048 + 4 * 64 + bb0), or_, oi_); }
+#endif
+        const V n83r = n48r - n79r, n83i = n48i - n79i;
+        const V n82r = n48r + n79r, n82i = n48i + n79i;
+        const V n177r = n83r - n173r, n177i = n83i - n173i;
+        { const V wr = V(tr[24]), wi = V(ti[24]);
+          const V or_ = n177r * wr - n177i * wi, oi_ = n177r * wi + n177i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + ((n2v * 2048 + 24 * 64 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + n2v * 2048 + 24 * 64 + bb0), or_, oi_); }
+#endif
+        const V n176r = n83r + n173r, n176i = n83i + n173i;
+        { const V wr = V(tr[8]), wi = V(ti[8]);
+          const V or_ = n176r * wr - n176i * wi, oi_ = n176r * wi + n176i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + ((n2v * 2048 + 8 * 64 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + n2v * 2048 + 8 * 64 + bb0), or_, oi_); }
+#endif
+        const V n175r = n82r - n171r, n175i = n82i - n171i;
+        { const V wr = V(tr[16]), wi = V(ti[16]);
+          const V or_ = n175r * wr - n175i * wi, oi_ = n175r * wi + n175i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + ((n2v * 2048 + 16 * 64 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + n2v * 2048 + 16 * 64 + bb0), or_, oi_); }
+#endif
+        const V n174r = n82r + n171r, n174i = n82i + n171i;
+        { const V wr = V(tr[0]), wi = V(ti[0]);
+          const V or_ = n174r * wr - n174i * wi, oi_ = n174r * wi + n174i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + ((n2v * 2048 + 0 * 64 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + n2v * 2048 + 0 * 64 + bb0), or_, oi_); }
+#endif
+    }
+}
 // N=1024=64x16 stage-1 FUSED (BB=64): leaf codelet64 + twiddle W_1024^(n2*k1) + transposed store. GENERATED.
 CRD_FORCEINLINE void codelet64_stage1_fused_64x16(const crd::hesap::Complex<crd::f64>* in,
     crd::hesap::Complex<crd::f64>* out, crd::usize b, const crd::f64* twr, const crd::f64* twi) noexcept
@@ -4260,4 +4753,9689 @@ CRD_FORCEINLINE void codelet16_stage1_fused_16x64(const crd::hesap::Complex<crd:
           simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + n2 * 1024 + 0 * 64 + bb0), or_, oi_); }
     }
 }
+#ifndef CRD_FFT_DISABLE_F32_HIER
+// N=32 batched split-radix codelet (Vec8f over batch). GENERATED.
+CRD_FORCEINLINE void codelet32_batched(const crd::hesap::Complex<crd::f32>* in,
+    crd::hesap::Complex<crd::f32>* out, crd::usize b) noexcept
+{
+    using V = crd::math::simd::Vec8f;
+    namespace simd = crd::math::simd;
+    for (crd::usize t = 0; t + 8 <= b; t += 8)
+    {
+        V n31r, n31i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 31 * b + t), n31r, n31i);
+        V n30r, n30i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 30 * b + t), n30r, n30i);
+        V n29r, n29i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 29 * b + t), n29r, n29i);
+        V n28r, n28i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 28 * b + t), n28r, n28i);
+        V n27r, n27i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 27 * b + t), n27r, n27i);
+        V n26r, n26i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 26 * b + t), n26r, n26i);
+        V n25r, n25i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 25 * b + t), n25r, n25i);
+        V n24r, n24i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 24 * b + t), n24r, n24i);
+        V n23r, n23i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 23 * b + t), n23r, n23i);
+        V n22r, n22i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 22 * b + t), n22r, n22i);
+        V n21r, n21i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 21 * b + t), n21r, n21i);
+        V n20r, n20i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 20 * b + t), n20r, n20i);
+        V n19r, n19i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 19 * b + t), n19r, n19i);
+        V n18r, n18i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 18 * b + t), n18r, n18i);
+        V n17r, n17i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 17 * b + t), n17r, n17i);
+        V n16r, n16i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 16 * b + t), n16r, n16i);
+        V n15r, n15i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 15 * b + t), n15r, n15i);
+        const V n154r = n15r - n31r, n154i = n15i - n31i;
+        const V n153r = n15r + n31r, n153i = n15i + n31i;
+        const V n163r = V(static_cast<crd::f32>(-0.7071067811865475)) * n154r - V(static_cast<crd::f32>(-0.7071067811865476)) * n154i, n163i = V(static_cast<crd::f32>(-0.7071067811865475)) * n154i + V(static_cast<crd::f32>(-0.7071067811865476)) * n154r;
+        V n14r, n14i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 14 * b + t), n14r, n14i);
+        const V n73r = n14r - n30r, n73i = n14i - n30i;
+        const V n72r = n14r + n30r, n72i = n14i + n30i;
+        const V n74r = n73i, n74i = -n73r;
+        V n13r, n13i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 13 * b + t), n13r, n13i);
+        const V n125r = n13r - n29r, n125i = n13i - n29i;
+        const V n124r = n13r + n29r, n124i = n13i + n29i;
+        const V n134r = V(static_cast<crd::f32>(-0.7071067811865475)) * n125r - V(static_cast<crd::f32>(-0.7071067811865476)) * n125i, n134i = V(static_cast<crd::f32>(-0.7071067811865475)) * n125i + V(static_cast<crd::f32>(-0.7071067811865476)) * n125r;
+        V n12r, n12i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 12 * b + t), n12r, n12i);
+        const V n44r = n12r - n28r, n44i = n12i - n28i;
+        const V n43r = n12r + n28r, n43i = n12i + n28i;
+        const V n53r = V(static_cast<crd::f32>(-0.7071067811865475)) * n44r - V(static_cast<crd::f32>(-0.7071067811865476)) * n44i, n53i = V(static_cast<crd::f32>(-0.7071067811865475)) * n44i + V(static_cast<crd::f32>(-0.7071067811865476)) * n44r;
+        V n11r, n11i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 11 * b + t), n11r, n11i);
+        const V n145r = n11r - n27r, n145i = n11i - n27i;
+        const V n144r = n11r + n27r, n144i = n11i + n27i;
+        const V n146r = n145i, n146i = -n145r;
+        V n10r, n10i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 10 * b + t), n10r, n10i);
+        const V n64r = n10r - n26r, n64i = n10i - n26i;
+        const V n63r = n10r + n26r, n63i = n10i + n26i;
+        const V n65r = n64i, n65i = -n64r;
+        V n9r, n9i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 9 * b + t), n9r, n9i);
+        const V n116r = n9r - n25r, n116i = n9i - n25i;
+        const V n115r = n9r + n25r, n115i = n9i + n25i;
+        const V n117r = n116i, n117i = -n116r;
+        V n8r, n8i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 8 * b + t), n8r, n8i);
+        const V n35r = n8r - n24r, n35i = n8i - n24i;
+        const V n34r = n8r + n24r, n34i = n8i + n24i;
+        const V n36r = n35i, n36i = -n35r;
+        V n7r, n7i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 7 * b + t), n7r, n7i);
+        const V n152r = n7r - n23r, n152i = n7i - n23i;
+        const V n151r = n7r + n23r, n151i = n7i + n23i;
+        const V n162r = V(static_cast<crd::f32>(0.7071067811865476)) * n152r - V(static_cast<crd::f32>(-0.7071067811865475)) * n152i, n162i = V(static_cast<crd::f32>(0.7071067811865476)) * n152i + V(static_cast<crd::f32>(-0.7071067811865475)) * n152r;
+        const V n165r = n162r - n163r, n165i = n162i - n163i;
+        const V n164r = n162r + n163r, n164i = n162i + n163i;
+        const V n166r = n165i, n166i = -n165r;
+        const V n156r = n151r - n153r, n156i = n151i - n153i;
+        const V n155r = n151r + n153r, n155i = n151i + n153i;
+        const V n157r = n156i, n157i = -n156r;
+        V n6r, n6i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 6 * b + t), n6r, n6i);
+        const V n71r = n6r - n22r, n71i = n6i - n22i;
+        const V n70r = n6r + n22r, n70i = n6i + n22i;
+        const V n78r = n71r - n74r, n78i = n71i - n74i;
+        const V n77r = n71r + n74r, n77i = n71i + n74i;
+        const V n105r = V(static_cast<crd::f32>(-0.9238795325112868)) * n78r - V(static_cast<crd::f32>(0.38268343236508967)) * n78i, n105i = V(static_cast<crd::f32>(-0.9238795325112868)) * n78i + V(static_cast<crd::f32>(0.38268343236508967)) * n78r;
+        const V n87r = V(static_cast<crd::f32>(0.38268343236508984)) * n77r - V(static_cast<crd::f32>(-0.9238795325112867)) * n77i, n87i = V(static_cast<crd::f32>(0.38268343236508984)) * n77i + V(static_cast<crd::f32>(-0.9238795325112867)) * n77r;
+        const V n76r = n70r - n72r, n76i = n70i - n72i;
+        const V n75r = n70r + n72r, n75i = n70i + n72i;
+        const V n96r = V(static_cast<crd::f32>(-0.7071067811865475)) * n76r - V(static_cast<crd::f32>(-0.7071067811865476)) * n76i, n96i = V(static_cast<crd::f32>(-0.7071067811865475)) * n76i + V(static_cast<crd::f32>(-0.7071067811865476)) * n76r;
+        V n5r, n5i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 5 * b + t), n5r, n5i);
+        const V n123r = n5r - n21r, n123i = n5i - n21i;
+        const V n122r = n5r + n21r, n122i = n5i + n21i;
+        const V n133r = V(static_cast<crd::f32>(0.7071067811865476)) * n123r - V(static_cast<crd::f32>(-0.7071067811865475)) * n123i, n133i = V(static_cast<crd::f32>(0.7071067811865476)) * n123i + V(static_cast<crd::f32>(-0.7071067811865475)) * n123r;
+        const V n136r = n133r - n134r, n136i = n133i - n134i;
+        const V n135r = n133r + n134r, n135i = n133i + n134i;
+        const V n137r = n136i, n137i = -n136r;
+        const V n127r = n122r - n124r, n127i = n122i - n124i;
+        const V n126r = n122r + n124r, n126i = n122i + n124i;
+        const V n128r = n127i, n128i = -n127r;
+        V n4r, n4i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 4 * b + t), n4r, n4i);
+        const V n42r = n4r - n20r, n42i = n4i - n20i;
+        const V n41r = n4r + n20r, n41i = n4i + n20i;
+        const V n52r = V(static_cast<crd::f32>(0.7071067811865476)) * n42r - V(static_cast<crd::f32>(-0.7071067811865475)) * n42i, n52i = V(static_cast<crd::f32>(0.7071067811865476)) * n42i + V(static_cast<crd::f32>(-0.7071067811865475)) * n42r;
+        const V n55r = n52r - n53r, n55i = n52i - n53i;
+        const V n54r = n52r + n53r, n54i = n52i + n53i;
+        const V n56r = n55i, n56i = -n55r;
+        const V n46r = n41r - n43r, n46i = n41i - n43i;
+        const V n45r = n41r + n43r, n45i = n41i + n43i;
+        const V n47r = n46i, n47i = -n46r;
+        V n3r, n3i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 3 * b + t), n3r, n3i);
+        const V n143r = n3r - n19r, n143i = n3i - n19i;
+        const V n142r = n3r + n19r, n142i = n3i + n19i;
+        const V n150r = n143r - n146r, n150i = n143i - n146i;
+        const V n149r = n143r + n146r, n149i = n143i + n146i;
+        const V n170r = n150r - n166r, n170i = n150i - n166i;
+        const V n169r = n150r + n166r, n169i = n150i + n166i;
+        const V n233r = V(static_cast<crd::f32>(-0.5555702330196022)) * n170r - V(static_cast<crd::f32>(0.8314696123025452)) * n170i, n233i = V(static_cast<crd::f32>(-0.5555702330196022)) * n170i + V(static_cast<crd::f32>(0.8314696123025452)) * n170r;
+        const V n197r = V(static_cast<crd::f32>(-0.1950903220161282)) * n169r - V(static_cast<crd::f32>(-0.9807852804032304)) * n169i, n197i = V(static_cast<crd::f32>(-0.1950903220161282)) * n169i + V(static_cast<crd::f32>(-0.9807852804032304)) * n169r;
+        const V n168r = n149r - n164r, n168i = n149i - n164i;
+        const V n167r = n149r + n164r, n167i = n149i + n164i;
+        const V n215r = V(static_cast<crd::f32>(-0.9807852804032304)) * n168r - V(static_cast<crd::f32>(-0.1950903220161286)) * n168i, n215i = V(static_cast<crd::f32>(-0.9807852804032304)) * n168i + V(static_cast<crd::f32>(-0.1950903220161286)) * n168r;
+        const V n179r = V(static_cast<crd::f32>(0.8314696123025452)) * n167r - V(static_cast<crd::f32>(-0.5555702330196022)) * n167i, n179i = V(static_cast<crd::f32>(0.8314696123025452)) * n167i + V(static_cast<crd::f32>(-0.5555702330196022)) * n167r;
+        const V n148r = n142r - n144r, n148i = n142i - n144i;
+        const V n147r = n142r + n144r, n147i = n142i + n144i;
+        const V n161r = n148r - n157r, n161i = n148i - n157i;
+        const V n160r = n148r + n157r, n160i = n148i + n157i;
+        const V n224r = V(static_cast<crd::f32>(-0.9238795325112868)) * n161r - V(static_cast<crd::f32>(0.38268343236508967)) * n161i, n224i = V(static_cast<crd::f32>(-0.9238795325112868)) * n161i + V(static_cast<crd::f32>(0.38268343236508967)) * n161r;
+        const V n188r = V(static_cast<crd::f32>(0.38268343236508984)) * n160r - V(static_cast<crd::f32>(-0.9238795325112867)) * n160i, n188i = V(static_cast<crd::f32>(0.38268343236508984)) * n160i + V(static_cast<crd::f32>(-0.9238795325112867)) * n160r;
+        const V n159r = n147r - n155r, n159i = n147i - n155i;
+        const V n158r = n147r + n155r, n158i = n147i + n155i;
+        const V n206r = V(static_cast<crd::f32>(-0.7071067811865475)) * n159r - V(static_cast<crd::f32>(-0.7071067811865476)) * n159i, n206i = V(static_cast<crd::f32>(-0.7071067811865475)) * n159i + V(static_cast<crd::f32>(-0.7071067811865476)) * n159r;
+        V n2r, n2i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 2 * b + t), n2r, n2i);
+        const V n62r = n2r - n18r, n62i = n2i - n18i;
+        const V n61r = n2r + n18r, n61i = n2i + n18i;
+        const V n69r = n62r - n65r, n69i = n62i - n65i;
+        const V n68r = n62r + n65r, n68i = n62i + n65i;
+        const V n104r = V(static_cast<crd::f32>(0.38268343236508984)) * n69r - V(static_cast<crd::f32>(-0.9238795325112867)) * n69i, n104i = V(static_cast<crd::f32>(0.38268343236508984)) * n69i + V(static_cast<crd::f32>(-0.9238795325112867)) * n69r;
+        const V n86r = V(static_cast<crd::f32>(0.9238795325112867)) * n68r - V(static_cast<crd::f32>(-0.3826834323650898)) * n68i, n86i = V(static_cast<crd::f32>(0.9238795325112867)) * n68i + V(static_cast<crd::f32>(-0.3826834323650898)) * n68r;
+        const V n107r = n104r - n105r, n107i = n104i - n105i;
+        const V n106r = n104r + n105r, n106i = n104i + n105i;
+        const V n108r = n107i, n108i = -n107r;
+        const V n89r = n86r - n87r, n89i = n86i - n87i;
+        const V n88r = n86r + n87r, n88i = n86i + n87i;
+        const V n90r = n89i, n90i = -n89r;
+        const V n67r = n61r - n63r, n67i = n61i - n63i;
+        const V n66r = n61r + n63r, n66i = n61i + n63i;
+        const V n95r = V(static_cast<crd::f32>(0.7071067811865476)) * n67r - V(static_cast<crd::f32>(-0.7071067811865475)) * n67i, n95i = V(static_cast<crd::f32>(0.7071067811865476)) * n67i + V(static_cast<crd::f32>(-0.7071067811865475)) * n67r;
+        const V n98r = n95r - n96r, n98i = n95i - n96i;
+        const V n97r = n95r + n96r, n97i = n95i + n96i;
+        const V n99r = n98i, n99i = -n98r;
+        const V n80r = n66r - n75r, n80i = n66i - n75i;
+        const V n79r = n66r + n75r, n79i = n66i + n75i;
+        const V n81r = n80i, n81i = -n80r;
+        V n1r, n1i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 1 * b + t), n1r, n1i);
+        const V n114r = n1r - n17r, n114i = n1i - n17i;
+        const V n113r = n1r + n17r, n113i = n1i + n17i;
+        const V n121r = n114r - n117r, n121i = n114i - n117i;
+        const V n120r = n114r + n117r, n120i = n114i + n117i;
+        const V n141r = n121r - n137r, n141i = n121i - n137i;
+        const V n140r = n121r + n137r, n140i = n121i + n137i;
+        const V n232r = V(static_cast<crd::f32>(0.19509032201612833)) * n141r - V(static_cast<crd::f32>(-0.9807852804032304)) * n141i, n232i = V(static_cast<crd::f32>(0.19509032201612833)) * n141i + V(static_cast<crd::f32>(-0.9807852804032304)) * n141r;
+        const V n196r = V(static_cast<crd::f32>(0.8314696123025452)) * n140r - V(static_cast<crd::f32>(-0.5555702330196022)) * n140i, n196i = V(static_cast<crd::f32>(0.8314696123025452)) * n140i + V(static_cast<crd::f32>(-0.5555702330196022)) * n140r;
+        const V n235r = n232r - n233r, n235i = n232i - n233i;
+        const V n234r = n232r + n233r, n234i = n232i + n233i;
+        const V n236r = n235i, n236i = -n235r;
+        const V n199r = n196r - n197r, n199i = n196i - n197i;
+        const V n198r = n196r + n197r, n198i = n196i + n197i;
+        const V n200r = n199i, n200i = -n199r;
+        const V n139r = n120r - n135r, n139i = n120i - n135i;
+        const V n138r = n120r + n135r, n138i = n120i + n135i;
+        const V n214r = V(static_cast<crd::f32>(0.5555702330196023)) * n139r - V(static_cast<crd::f32>(-0.8314696123025452)) * n139i, n214i = V(static_cast<crd::f32>(0.5555702330196023)) * n139i + V(static_cast<crd::f32>(-0.8314696123025452)) * n139r;
+        const V n178r = V(static_cast<crd::f32>(0.9807852804032304)) * n138r - V(static_cast<crd::f32>(-0.19509032201612825)) * n138i, n178i = V(static_cast<crd::f32>(0.9807852804032304)) * n138i + V(static_cast<crd::f32>(-0.19509032201612825)) * n138r;
+        const V n217r = n214r - n215r, n217i = n214i - n215i;
+        const V n216r = n214r + n215r, n216i = n214i + n215i;
+        const V n218r = n217i, n218i = -n217r;
+        const V n181r = n178r - n179r, n181i = n178i - n179i;
+        const V n180r = n178r + n179r, n180i = n178i + n179i;
+        const V n182r = n181i, n182i = -n181r;
+        const V n119r = n113r - n115r, n119i = n113i - n115i;
+        const V n118r = n113r + n115r, n118i = n113i + n115i;
+        const V n132r = n119r - n128r, n132i = n119i - n128i;
+        const V n131r = n119r + n128r, n131i = n119i + n128i;
+        const V n223r = V(static_cast<crd::f32>(0.38268343236508984)) * n132r - V(static_cast<crd::f32>(-0.9238795325112867)) * n132i, n223i = V(static_cast<crd::f32>(0.38268343236508984)) * n132i + V(static_cast<crd::f32>(-0.9238795325112867)) * n132r;
+        const V n187r = V(static_cast<crd::f32>(0.9238795325112867)) * n131r - V(static_cast<crd::f32>(-0.3826834323650898)) * n131i, n187i = V(static_cast<crd::f32>(0.9238795325112867)) * n131i + V(static_cast<crd::f32>(-0.3826834323650898)) * n131r;
+        const V n226r = n223r - n224r, n226i = n223i - n224i;
+        const V n225r = n223r + n224r, n225i = n223i + n224i;
+        const V n227r = n226i, n227i = -n226r;
+        const V n190r = n187r - n188r, n190i = n187i - n188i;
+        const V n189r = n187r + n188r, n189i = n187i + n188i;
+        const V n191r = n190i, n191i = -n190r;
+        const V n130r = n118r - n126r, n130i = n118i - n126i;
+        const V n129r = n118r + n126r, n129i = n118i + n126i;
+        const V n205r = V(static_cast<crd::f32>(0.7071067811865476)) * n130r - V(static_cast<crd::f32>(-0.7071067811865475)) * n130i, n205i = V(static_cast<crd::f32>(0.7071067811865476)) * n130i + V(static_cast<crd::f32>(-0.7071067811865475)) * n130r;
+        const V n208r = n205r - n206r, n208i = n205i - n206i;
+        const V n207r = n205r + n206r, n207i = n205i + n206i;
+        const V n209r = n208i, n209i = -n208r;
+        const V n172r = n129r - n158r, n172i = n129i - n158i;
+        const V n171r = n129r + n158r, n171i = n129i + n158i;
+        const V n173r = n172i, n173i = -n172r;
+        V n0r, n0i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 0 * b + t), n0r, n0i);
+        const V n33r = n0r - n16r, n33i = n0i - n16i;
+        const V n32r = n0r + n16r, n32i = n0i + n16i;
+        const V n40r = n33r - n36r, n40i = n33i - n36i;
+        const V n39r = n33r + n36r, n39i = n33i + n36i;
+        const V n60r = n40r - n56r, n60i = n40i - n56i;
+        const V n59r = n40r + n56r, n59i = n40i + n56i;
+        const V n112r = n60r - n108r, n112i = n60i - n108i;
+        const V n111r = n60r + n108r, n111i = n60i + n108i;
+        const V n240r = n112r - n236r, n240i = n112i - n236i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 31 * b + t), n240r, n240i);
+        const V n239r = n112r + n236r, n239i = n112i + n236i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 15 * b + t), n239r, n239i);
+        const V n238r = n111r - n234r, n238i = n111i - n234i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 23 * b + t), n238r, n238i);
+        const V n237r = n111r + n234r, n237i = n111i + n234i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 7 * b + t), n237r, n237i);
+        const V n110r = n59r - n106r, n110i = n59i - n106i;
+        const V n109r = n59r + n106r, n109i = n59i + n106i;
+        const V n204r = n110r - n200r, n204i = n110i - n200i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 27 * b + t), n204r, n204i);
+        const V n203r = n110r + n200r, n203i = n110i + n200i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 11 * b + t), n203r, n203i);
+        const V n202r = n109r - n198r, n202i = n109i - n198i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 19 * b + t), n202r, n202i);
+        const V n201r = n109r + n198r, n201i = n109i + n198i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 3 * b + t), n201r, n201i);
+        const V n58r = n39r - n54r, n58i = n39i - n54i;
+        const V n57r = n39r + n54r, n57i = n39i + n54i;
+        const V n94r = n58r - n90r, n94i = n58i - n90i;
+        const V n93r = n58r + n90r, n93i = n58i + n90i;
+        const V n222r = n94r - n218r, n222i = n94i - n218i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 29 * b + t), n222r, n222i);
+        const V n221r = n94r + n218r, n221i = n94i + n218i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 13 * b + t), n221r, n221i);
+        const V n220r = n93r - n216r, n220i = n93i - n216i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 21 * b + t), n220r, n220i);
+        const V n219r = n93r + n216r, n219i = n93i + n216i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 5 * b + t), n219r, n219i);
+        const V n92r = n57r - n88r, n92i = n57i - n88i;
+        const V n91r = n57r + n88r, n91i = n57i + n88i;
+        const V n186r = n92r - n182r, n186i = n92i - n182i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 25 * b + t), n186r, n186i);
+        const V n185r = n92r + n182r, n185i = n92i + n182i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 9 * b + t), n185r, n185i);
+        const V n184r = n91r - n180r, n184i = n91i - n180i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 17 * b + t), n184r, n184i);
+        const V n183r = n91r + n180r, n183i = n91i + n180i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 1 * b + t), n183r, n183i);
+        const V n38r = n32r - n34r, n38i = n32i - n34i;
+        const V n37r = n32r + n34r, n37i = n32i + n34i;
+        const V n51r = n38r - n47r, n51i = n38i - n47i;
+        const V n50r = n38r + n47r, n50i = n38i + n47i;
+        const V n103r = n51r - n99r, n103i = n51i - n99i;
+        const V n102r = n51r + n99r, n102i = n51i + n99i;
+        const V n231r = n103r - n227r, n231i = n103i - n227i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 30 * b + t), n231r, n231i);
+        const V n230r = n103r + n227r, n230i = n103i + n227i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 14 * b + t), n230r, n230i);
+        const V n229r = n102r - n225r, n229i = n102i - n225i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 22 * b + t), n229r, n229i);
+        const V n228r = n102r + n225r, n228i = n102i + n225i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 6 * b + t), n228r, n228i);
+        const V n101r = n50r - n97r, n101i = n50i - n97i;
+        const V n100r = n50r + n97r, n100i = n50i + n97i;
+        const V n195r = n101r - n191r, n195i = n101i - n191i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 26 * b + t), n195r, n195i);
+        const V n194r = n101r + n191r, n194i = n101i + n191i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 10 * b + t), n194r, n194i);
+        const V n193r = n100r - n189r, n193i = n100i - n189i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 18 * b + t), n193r, n193i);
+        const V n192r = n100r + n189r, n192i = n100i + n189i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 2 * b + t), n192r, n192i);
+        const V n49r = n37r - n45r, n49i = n37i - n45i;
+        const V n48r = n37r + n45r, n48i = n37i + n45i;
+        const V n85r = n49r - n81r, n85i = n49i - n81i;
+        const V n84r = n49r + n81r, n84i = n49i + n81i;
+        const V n213r = n85r - n209r, n213i = n85i - n209i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 28 * b + t), n213r, n213i);
+        const V n212r = n85r + n209r, n212i = n85i + n209i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 12 * b + t), n212r, n212i);
+        const V n211r = n84r - n207r, n211i = n84i - n207i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 20 * b + t), n211r, n211i);
+        const V n210r = n84r + n207r, n210i = n84i + n207i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 4 * b + t), n210r, n210i);
+        const V n83r = n48r - n79r, n83i = n48i - n79i;
+        const V n82r = n48r + n79r, n82i = n48i + n79i;
+        const V n177r = n83r - n173r, n177i = n83i - n173i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 24 * b + t), n177r, n177i);
+        const V n176r = n83r + n173r, n176i = n83i + n173i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 8 * b + t), n176r, n176i);
+        const V n175r = n82r - n171r, n175i = n82i - n171i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 16 * b + t), n175r, n175i);
+        const V n174r = n82r + n171r, n174i = n82i + n171i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 0 * b + t), n174r, n174i);
+    }
+}
+// N=64 batched split-radix codelet (Vec8f over batch). GENERATED.
+CRD_FORCEINLINE void codelet64_batched(const crd::hesap::Complex<crd::f32>* in,
+    crd::hesap::Complex<crd::f32>* out, crd::usize b) noexcept
+{
+    using V = crd::math::simd::Vec8f;
+    namespace simd = crd::math::simd;
+    for (crd::usize t = 0; t + 8 <= b; t += 8)
+    {
+        V n63r, n63i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 63 * b + t), n63r, n63i);
+        V n62r, n62i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 62 * b + t), n62r, n62i);
+        V n61r, n61i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 61 * b + t), n61r, n61i);
+        V n60r, n60i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 60 * b + t), n60r, n60i);
+        V n59r, n59i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 59 * b + t), n59r, n59i);
+        V n58r, n58i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 58 * b + t), n58r, n58i);
+        V n57r, n57i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 57 * b + t), n57r, n57i);
+        V n56r, n56i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 56 * b + t), n56r, n56i);
+        V n55r, n55i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 55 * b + t), n55r, n55i);
+        V n54r, n54i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 54 * b + t), n54r, n54i);
+        V n53r, n53i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 53 * b + t), n53r, n53i);
+        V n52r, n52i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 52 * b + t), n52r, n52i);
+        V n51r, n51i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 51 * b + t), n51r, n51i);
+        V n50r, n50i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 50 * b + t), n50r, n50i);
+        V n49r, n49i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 49 * b + t), n49r, n49i);
+        V n48r, n48i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 48 * b + t), n48r, n48i);
+        V n47r, n47i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 47 * b + t), n47r, n47i);
+        V n46r, n46i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 46 * b + t), n46r, n46i);
+        V n45r, n45i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 45 * b + t), n45r, n45i);
+        V n44r, n44i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 44 * b + t), n44r, n44i);
+        V n43r, n43i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 43 * b + t), n43r, n43i);
+        V n42r, n42i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 42 * b + t), n42r, n42i);
+        V n41r, n41i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 41 * b + t), n41r, n41i);
+        V n40r, n40i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 40 * b + t), n40r, n40i);
+        V n39r, n39i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 39 * b + t), n39r, n39i);
+        V n38r, n38i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 38 * b + t), n38r, n38i);
+        V n37r, n37i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 37 * b + t), n37r, n37i);
+        V n36r, n36i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 36 * b + t), n36r, n36i);
+        V n35r, n35i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 35 * b + t), n35r, n35i);
+        V n34r, n34i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 34 * b + t), n34r, n34i);
+        V n33r, n33i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 33 * b + t), n33r, n33i);
+        V n32r, n32i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 32 * b + t), n32r, n32i);
+        V n31r, n31i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 31 * b + t), n31r, n31i);
+        const V n395r = n31r - n63r, n395i = n31i - n63i;
+        const V n394r = n31r + n63r, n394i = n31i + n63i;
+        const V n396r = n395i, n396i = -n395r;
+        V n30r, n30i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 30 * b + t), n30r, n30i);
+        const V n186r = n30r - n62r, n186i = n30i - n62i;
+        const V n185r = n30r + n62r, n185i = n30i + n62i;
+        const V n195r = V(static_cast<crd::f32>(-0.7071067811865475)) * n186r - V(static_cast<crd::f32>(-0.7071067811865476)) * n186i, n195i = V(static_cast<crd::f32>(-0.7071067811865475)) * n186i + V(static_cast<crd::f32>(-0.7071067811865476)) * n186r;
+        V n29r, n29i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 29 * b + t), n29r, n29i);
+        const V n314r = n29r - n61r, n314i = n29i - n61i;
+        const V n313r = n29r + n61r, n313i = n29i + n61i;
+        const V n315r = n314i, n315i = -n314r;
+        V n28r, n28i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 28 * b + t), n28r, n28i);
+        const V n105r = n28r - n60r, n105i = n28i - n60i;
+        const V n104r = n28r + n60r, n104i = n28i + n60i;
+        const V n106r = n105i, n106i = -n105r;
+        V n27r, n27i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 27 * b + t), n27r, n27i);
+        const V n366r = n27r - n59r, n366i = n27i - n59i;
+        const V n365r = n27r + n59r, n365i = n27i + n59i;
+        const V n375r = V(static_cast<crd::f32>(-0.7071067811865475)) * n366r - V(static_cast<crd::f32>(-0.7071067811865476)) * n366i, n375i = V(static_cast<crd::f32>(-0.7071067811865475)) * n366i + V(static_cast<crd::f32>(-0.7071067811865476)) * n366r;
+        V n26r, n26i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 26 * b + t), n26r, n26i);
+        const V n157r = n26r - n58r, n157i = n26i - n58i;
+        const V n156r = n26r + n58r, n156i = n26i + n58i;
+        const V n166r = V(static_cast<crd::f32>(-0.7071067811865475)) * n157r - V(static_cast<crd::f32>(-0.7071067811865476)) * n157i, n166i = V(static_cast<crd::f32>(-0.7071067811865475)) * n157i + V(static_cast<crd::f32>(-0.7071067811865476)) * n157r;
+        V n25r, n25i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 25 * b + t), n25r, n25i);
+        const V n285r = n25r - n57r, n285i = n25i - n57i;
+        const V n284r = n25r + n57r, n284i = n25i + n57i;
+        const V n294r = V(static_cast<crd::f32>(-0.7071067811865475)) * n285r - V(static_cast<crd::f32>(-0.7071067811865476)) * n285i, n294i = V(static_cast<crd::f32>(-0.7071067811865475)) * n285i + V(static_cast<crd::f32>(-0.7071067811865476)) * n285r;
+        V n24r, n24i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 24 * b + t), n24r, n24i);
+        const V n76r = n24r - n56r, n76i = n24i - n56i;
+        const V n75r = n24r + n56r, n75i = n24i + n56i;
+        const V n85r = V(static_cast<crd::f32>(-0.7071067811865475)) * n76r - V(static_cast<crd::f32>(-0.7071067811865476)) * n76i, n85i = V(static_cast<crd::f32>(-0.7071067811865475)) * n76i + V(static_cast<crd::f32>(-0.7071067811865476)) * n76r;
+        V n23r, n23i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 23 * b + t), n23r, n23i);
+        const V n386r = n23r - n55r, n386i = n23i - n55i;
+        const V n385r = n23r + n55r, n385i = n23i + n55i;
+        const V n387r = n386i, n387i = -n386r;
+        V n22r, n22i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 22 * b + t), n22r, n22i);
+        const V n177r = n22r - n54r, n177i = n22i - n54i;
+        const V n176r = n22r + n54r, n176i = n22i + n54i;
+        const V n178r = n177i, n178i = -n177r;
+        V n21r, n21i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 21 * b + t), n21r, n21i);
+        const V n305r = n21r - n53r, n305i = n21i - n53i;
+        const V n304r = n21r + n53r, n304i = n21i + n53i;
+        const V n306r = n305i, n306i = -n305r;
+        V n20r, n20i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 20 * b + t), n20r, n20i);
+        const V n96r = n20r - n52r, n96i = n20i - n52i;
+        const V n95r = n20r + n52r, n95i = n20i + n52i;
+        const V n97r = n96i, n97i = -n96r;
+        V n19r, n19i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 19 * b + t), n19r, n19i);
+        const V n357r = n19r - n51r, n357i = n19i - n51i;
+        const V n356r = n19r + n51r, n356i = n19i + n51i;
+        const V n358r = n357i, n358i = -n357r;
+        V n18r, n18i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 18 * b + t), n18r, n18i);
+        const V n148r = n18r - n50r, n148i = n18i - n50i;
+        const V n147r = n18r + n50r, n147i = n18i + n50i;
+        const V n149r = n148i, n149i = -n148r;
+        V n17r, n17i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 17 * b + t), n17r, n17i);
+        const V n276r = n17r - n49r, n276i = n17i - n49i;
+        const V n275r = n17r + n49r, n275i = n17i + n49i;
+        const V n277r = n276i, n277i = -n276r;
+        V n16r, n16i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 16 * b + t), n16r, n16i);
+        const V n67r = n16r - n48r, n67i = n16i - n48i;
+        const V n66r = n16r + n48r, n66i = n16i + n48i;
+        const V n68r = n67i, n68i = -n67r;
+        V n15r, n15i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 15 * b + t), n15r, n15i);
+        const V n393r = n15r - n47r, n393i = n15i - n47i;
+        const V n392r = n15r + n47r, n392i = n15i + n47i;
+        const V n400r = n393r - n396r, n400i = n393i - n396i;
+        const V n399r = n393r + n396r, n399i = n393i + n396i;
+        const V n427r = V(static_cast<crd::f32>(-0.9238795325112868)) * n400r - V(static_cast<crd::f32>(0.38268343236508967)) * n400i, n427i = V(static_cast<crd::f32>(-0.9238795325112868)) * n400i + V(static_cast<crd::f32>(0.38268343236508967)) * n400r;
+        const V n409r = V(static_cast<crd::f32>(0.38268343236508984)) * n399r - V(static_cast<crd::f32>(-0.9238795325112867)) * n399i, n409i = V(static_cast<crd::f32>(0.38268343236508984)) * n399i + V(static_cast<crd::f32>(-0.9238795325112867)) * n399r;
+        const V n398r = n392r - n394r, n398i = n392i - n394i;
+        const V n397r = n392r + n394r, n397i = n392i + n394i;
+        const V n418r = V(static_cast<crd::f32>(-0.7071067811865475)) * n398r - V(static_cast<crd::f32>(-0.7071067811865476)) * n398i, n418i = V(static_cast<crd::f32>(-0.7071067811865475)) * n398i + V(static_cast<crd::f32>(-0.7071067811865476)) * n398r;
+        V n14r, n14i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 14 * b + t), n14r, n14i);
+        const V n184r = n14r - n46r, n184i = n14i - n46i;
+        const V n183r = n14r + n46r, n183i = n14i + n46i;
+        const V n194r = V(static_cast<crd::f32>(0.7071067811865476)) * n184r - V(static_cast<crd::f32>(-0.7071067811865475)) * n184i, n194i = V(static_cast<crd::f32>(0.7071067811865476)) * n184i + V(static_cast<crd::f32>(-0.7071067811865475)) * n184r;
+        const V n197r = n194r - n195r, n197i = n194i - n195i;
+        const V n196r = n194r + n195r, n196i = n194i + n195i;
+        const V n198r = n197i, n198i = -n197r;
+        const V n188r = n183r - n185r, n188i = n183i - n185i;
+        const V n187r = n183r + n185r, n187i = n183i + n185i;
+        const V n189r = n188i, n189i = -n188r;
+        V n13r, n13i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 13 * b + t), n13r, n13i);
+        const V n312r = n13r - n45r, n312i = n13i - n45i;
+        const V n311r = n13r + n45r, n311i = n13i + n45i;
+        const V n319r = n312r - n315r, n319i = n312i - n315i;
+        const V n318r = n312r + n315r, n318i = n312i + n315i;
+        const V n346r = V(static_cast<crd::f32>(-0.9238795325112868)) * n319r - V(static_cast<crd::f32>(0.38268343236508967)) * n319i, n346i = V(static_cast<crd::f32>(-0.9238795325112868)) * n319i + V(static_cast<crd::f32>(0.38268343236508967)) * n319r;
+        const V n328r = V(static_cast<crd::f32>(0.38268343236508984)) * n318r - V(static_cast<crd::f32>(-0.9238795325112867)) * n318i, n328i = V(static_cast<crd::f32>(0.38268343236508984)) * n318i + V(static_cast<crd::f32>(-0.9238795325112867)) * n318r;
+        const V n317r = n311r - n313r, n317i = n311i - n313i;
+        const V n316r = n311r + n313r, n316i = n311i + n313i;
+        const V n337r = V(static_cast<crd::f32>(-0.7071067811865475)) * n317r - V(static_cast<crd::f32>(-0.7071067811865476)) * n317i, n337i = V(static_cast<crd::f32>(-0.7071067811865475)) * n317i + V(static_cast<crd::f32>(-0.7071067811865476)) * n317r;
+        V n12r, n12i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 12 * b + t), n12r, n12i);
+        const V n103r = n12r - n44r, n103i = n12i - n44i;
+        const V n102r = n12r + n44r, n102i = n12i + n44i;
+        const V n110r = n103r - n106r, n110i = n103i - n106i;
+        const V n109r = n103r + n106r, n109i = n103i + n106i;
+        const V n137r = V(static_cast<crd::f32>(-0.9238795325112868)) * n110r - V(static_cast<crd::f32>(0.38268343236508967)) * n110i, n137i = V(static_cast<crd::f32>(-0.9238795325112868)) * n110i + V(static_cast<crd::f32>(0.38268343236508967)) * n110r;
+        const V n119r = V(static_cast<crd::f32>(0.38268343236508984)) * n109r - V(static_cast<crd::f32>(-0.9238795325112867)) * n109i, n119i = V(static_cast<crd::f32>(0.38268343236508984)) * n109i + V(static_cast<crd::f32>(-0.9238795325112867)) * n109r;
+        const V n108r = n102r - n104r, n108i = n102i - n104i;
+        const V n107r = n102r + n104r, n107i = n102i + n104i;
+        const V n128r = V(static_cast<crd::f32>(-0.7071067811865475)) * n108r - V(static_cast<crd::f32>(-0.7071067811865476)) * n108i, n128i = V(static_cast<crd::f32>(-0.7071067811865475)) * n108i + V(static_cast<crd::f32>(-0.7071067811865476)) * n108r;
+        V n11r, n11i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 11 * b + t), n11r, n11i);
+        const V n364r = n11r - n43r, n364i = n11i - n43i;
+        const V n363r = n11r + n43r, n363i = n11i + n43i;
+        const V n374r = V(static_cast<crd::f32>(0.7071067811865476)) * n364r - V(static_cast<crd::f32>(-0.7071067811865475)) * n364i, n374i = V(static_cast<crd::f32>(0.7071067811865476)) * n364i + V(static_cast<crd::f32>(-0.7071067811865475)) * n364r;
+        const V n377r = n374r - n375r, n377i = n374i - n375i;
+        const V n376r = n374r + n375r, n376i = n374i + n375i;
+        const V n378r = n377i, n378i = -n377r;
+        const V n368r = n363r - n365r, n368i = n363i - n365i;
+        const V n367r = n363r + n365r, n367i = n363i + n365i;
+        const V n369r = n368i, n369i = -n368r;
+        V n10r, n10i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 10 * b + t), n10r, n10i);
+        const V n155r = n10r - n42r, n155i = n10i - n42i;
+        const V n154r = n10r + n42r, n154i = n10i + n42i;
+        const V n165r = V(static_cast<crd::f32>(0.7071067811865476)) * n155r - V(static_cast<crd::f32>(-0.7071067811865475)) * n155i, n165i = V(static_cast<crd::f32>(0.7071067811865476)) * n155i + V(static_cast<crd::f32>(-0.7071067811865475)) * n155r;
+        const V n168r = n165r - n166r, n168i = n165i - n166i;
+        const V n167r = n165r + n166r, n167i = n165i + n166i;
+        const V n169r = n168i, n169i = -n168r;
+        const V n159r = n154r - n156r, n159i = n154i - n156i;
+        const V n158r = n154r + n156r, n158i = n154i + n156i;
+        const V n160r = n159i, n160i = -n159r;
+        V n9r, n9i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 9 * b + t), n9r, n9i);
+        const V n283r = n9r - n41r, n283i = n9i - n41i;
+        const V n282r = n9r + n41r, n282i = n9i + n41i;
+        const V n293r = V(static_cast<crd::f32>(0.7071067811865476)) * n283r - V(static_cast<crd::f32>(-0.7071067811865475)) * n283i, n293i = V(static_cast<crd::f32>(0.7071067811865476)) * n283i + V(static_cast<crd::f32>(-0.7071067811865475)) * n283r;
+        const V n296r = n293r - n294r, n296i = n293i - n294i;
+        const V n295r = n293r + n294r, n295i = n293i + n294i;
+        const V n297r = n296i, n297i = -n296r;
+        const V n287r = n282r - n284r, n287i = n282i - n284i;
+        const V n286r = n282r + n284r, n286i = n282i + n284i;
+        const V n288r = n287i, n288i = -n287r;
+        V n8r, n8i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 8 * b + t), n8r, n8i);
+        const V n74r = n8r - n40r, n74i = n8i - n40i;
+        const V n73r = n8r + n40r, n73i = n8i + n40i;
+        const V n84r = V(static_cast<crd::f32>(0.7071067811865476)) * n74r - V(static_cast<crd::f32>(-0.7071067811865475)) * n74i, n84i = V(static_cast<crd::f32>(0.7071067811865476)) * n74i + V(static_cast<crd::f32>(-0.7071067811865475)) * n74r;
+        const V n87r = n84r - n85r, n87i = n84i - n85i;
+        const V n86r = n84r + n85r, n86i = n84i + n85i;
+        const V n88r = n87i, n88i = -n87r;
+        const V n78r = n73r - n75r, n78i = n73i - n75i;
+        const V n77r = n73r + n75r, n77i = n73i + n75i;
+        const V n79r = n78i, n79i = -n78r;
+        V n7r, n7i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 7 * b + t), n7r, n7i);
+        const V n384r = n7r - n39r, n384i = n7i - n39i;
+        const V n383r = n7r + n39r, n383i = n7i + n39i;
+        const V n391r = n384r - n387r, n391i = n384i - n387i;
+        const V n390r = n384r + n387r, n390i = n384i + n387i;
+        const V n426r = V(static_cast<crd::f32>(0.38268343236508984)) * n391r - V(static_cast<crd::f32>(-0.9238795325112867)) * n391i, n426i = V(static_cast<crd::f32>(0.38268343236508984)) * n391i + V(static_cast<crd::f32>(-0.9238795325112867)) * n391r;
+        const V n408r = V(static_cast<crd::f32>(0.9238795325112867)) * n390r - V(static_cast<crd::f32>(-0.3826834323650898)) * n390i, n408i = V(static_cast<crd::f32>(0.9238795325112867)) * n390i + V(static_cast<crd::f32>(-0.3826834323650898)) * n390r;
+        const V n429r = n426r - n427r, n429i = n426i - n427i;
+        const V n428r = n426r + n427r, n428i = n426i + n427i;
+        const V n430r = n429i, n430i = -n429r;
+        const V n411r = n408r - n409r, n411i = n408i - n409i;
+        const V n410r = n408r + n409r, n410i = n408i + n409i;
+        const V n412r = n411i, n412i = -n411r;
+        const V n389r = n383r - n385r, n389i = n383i - n385i;
+        const V n388r = n383r + n385r, n388i = n383i + n385i;
+        const V n417r = V(static_cast<crd::f32>(0.7071067811865476)) * n389r - V(static_cast<crd::f32>(-0.7071067811865475)) * n389i, n417i = V(static_cast<crd::f32>(0.7071067811865476)) * n389i + V(static_cast<crd::f32>(-0.7071067811865475)) * n389r;
+        const V n420r = n417r - n418r, n420i = n417i - n418i;
+        const V n419r = n417r + n418r, n419i = n417i + n418i;
+        const V n421r = n420i, n421i = -n420r;
+        const V n402r = n388r - n397r, n402i = n388i - n397i;
+        const V n401r = n388r + n397r, n401i = n388i + n397i;
+        const V n403r = n402i, n403i = -n402r;
+        V n6r, n6i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 6 * b + t), n6r, n6i);
+        const V n175r = n6r - n38r, n175i = n6i - n38i;
+        const V n174r = n6r + n38r, n174i = n6i + n38i;
+        const V n182r = n175r - n178r, n182i = n175i - n178i;
+        const V n181r = n175r + n178r, n181i = n175i + n178i;
+        const V n202r = n182r - n198r, n202i = n182i - n198i;
+        const V n201r = n182r + n198r, n201i = n182i + n198i;
+        const V n265r = V(static_cast<crd::f32>(-0.5555702330196022)) * n202r - V(static_cast<crd::f32>(0.8314696123025452)) * n202i, n265i = V(static_cast<crd::f32>(-0.5555702330196022)) * n202i + V(static_cast<crd::f32>(0.8314696123025452)) * n202r;
+        const V n229r = V(static_cast<crd::f32>(-0.1950903220161282)) * n201r - V(static_cast<crd::f32>(-0.9807852804032304)) * n201i, n229i = V(static_cast<crd::f32>(-0.1950903220161282)) * n201i + V(static_cast<crd::f32>(-0.9807852804032304)) * n201r;
+        const V n200r = n181r - n196r, n200i = n181i - n196i;
+        const V n199r = n181r + n196r, n199i = n181i + n196i;
+        const V n247r = V(static_cast<crd::f32>(-0.9807852804032304)) * n200r - V(static_cast<crd::f32>(-0.1950903220161286)) * n200i, n247i = V(static_cast<crd::f32>(-0.9807852804032304)) * n200i + V(static_cast<crd::f32>(-0.1950903220161286)) * n200r;
+        const V n211r = V(static_cast<crd::f32>(0.8314696123025452)) * n199r - V(static_cast<crd::f32>(-0.5555702330196022)) * n199i, n211i = V(static_cast<crd::f32>(0.8314696123025452)) * n199i + V(static_cast<crd::f32>(-0.5555702330196022)) * n199r;
+        const V n180r = n174r - n176r, n180i = n174i - n176i;
+        const V n179r = n174r + n176r, n179i = n174i + n176i;
+        const V n193r = n180r - n189r, n193i = n180i - n189i;
+        const V n192r = n180r + n189r, n192i = n180i + n189i;
+        const V n256r = V(static_cast<crd::f32>(-0.9238795325112868)) * n193r - V(static_cast<crd::f32>(0.38268343236508967)) * n193i, n256i = V(static_cast<crd::f32>(-0.9238795325112868)) * n193i + V(static_cast<crd::f32>(0.38268343236508967)) * n193r;
+        const V n220r = V(static_cast<crd::f32>(0.38268343236508984)) * n192r - V(static_cast<crd::f32>(-0.9238795325112867)) * n192i, n220i = V(static_cast<crd::f32>(0.38268343236508984)) * n192i + V(static_cast<crd::f32>(-0.9238795325112867)) * n192r;
+        const V n191r = n179r - n187r, n191i = n179i - n187i;
+        const V n190r = n179r + n187r, n190i = n179i + n187i;
+        const V n238r = V(static_cast<crd::f32>(-0.7071067811865475)) * n191r - V(static_cast<crd::f32>(-0.7071067811865476)) * n191i, n238i = V(static_cast<crd::f32>(-0.7071067811865475)) * n191i + V(static_cast<crd::f32>(-0.7071067811865476)) * n191r;
+        V n5r, n5i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 5 * b + t), n5r, n5i);
+        const V n303r = n5r - n37r, n303i = n5i - n37i;
+        const V n302r = n5r + n37r, n302i = n5i + n37i;
+        const V n310r = n303r - n306r, n310i = n303i - n306i;
+        const V n309r = n303r + n306r, n309i = n303i + n306i;
+        const V n345r = V(static_cast<crd::f32>(0.38268343236508984)) * n310r - V(static_cast<crd::f32>(-0.9238795325112867)) * n310i, n345i = V(static_cast<crd::f32>(0.38268343236508984)) * n310i + V(static_cast<crd::f32>(-0.9238795325112867)) * n310r;
+        const V n327r = V(static_cast<crd::f32>(0.9238795325112867)) * n309r - V(static_cast<crd::f32>(-0.3826834323650898)) * n309i, n327i = V(static_cast<crd::f32>(0.9238795325112867)) * n309i + V(static_cast<crd::f32>(-0.3826834323650898)) * n309r;
+        const V n348r = n345r - n346r, n348i = n345i - n346i;
+        const V n347r = n345r + n346r, n347i = n345i + n346i;
+        const V n349r = n348i, n349i = -n348r;
+        const V n330r = n327r - n328r, n330i = n327i - n328i;
+        const V n329r = n327r + n328r, n329i = n327i + n328i;
+        const V n331r = n330i, n331i = -n330r;
+        const V n308r = n302r - n304r, n308i = n302i - n304i;
+        const V n307r = n302r + n304r, n307i = n302i + n304i;
+        const V n336r = V(static_cast<crd::f32>(0.7071067811865476)) * n308r - V(static_cast<crd::f32>(-0.7071067811865475)) * n308i, n336i = V(static_cast<crd::f32>(0.7071067811865476)) * n308i + V(static_cast<crd::f32>(-0.7071067811865475)) * n308r;
+        const V n339r = n336r - n337r, n339i = n336i - n337i;
+        const V n338r = n336r + n337r, n338i = n336i + n337i;
+        const V n340r = n339i, n340i = -n339r;
+        const V n321r = n307r - n316r, n321i = n307i - n316i;
+        const V n320r = n307r + n316r, n320i = n307i + n316i;
+        const V n322r = n321i, n322i = -n321r;
+        V n4r, n4i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 4 * b + t), n4r, n4i);
+        const V n94r = n4r - n36r, n94i = n4i - n36i;
+        const V n93r = n4r + n36r, n93i = n4i + n36i;
+        const V n101r = n94r - n97r, n101i = n94i - n97i;
+        const V n100r = n94r + n97r, n100i = n94i + n97i;
+        const V n136r = V(static_cast<crd::f32>(0.38268343236508984)) * n101r - V(static_cast<crd::f32>(-0.9238795325112867)) * n101i, n136i = V(static_cast<crd::f32>(0.38268343236508984)) * n101i + V(static_cast<crd::f32>(-0.9238795325112867)) * n101r;
+        const V n118r = V(static_cast<crd::f32>(0.9238795325112867)) * n100r - V(static_cast<crd::f32>(-0.3826834323650898)) * n100i, n118i = V(static_cast<crd::f32>(0.9238795325112867)) * n100i + V(static_cast<crd::f32>(-0.3826834323650898)) * n100r;
+        const V n139r = n136r - n137r, n139i = n136i - n137i;
+        const V n138r = n136r + n137r, n138i = n136i + n137i;
+        const V n140r = n139i, n140i = -n139r;
+        const V n121r = n118r - n119r, n121i = n118i - n119i;
+        const V n120r = n118r + n119r, n120i = n118i + n119i;
+        const V n122r = n121i, n122i = -n121r;
+        const V n99r = n93r - n95r, n99i = n93i - n95i;
+        const V n98r = n93r + n95r, n98i = n93i + n95i;
+        const V n127r = V(static_cast<crd::f32>(0.7071067811865476)) * n99r - V(static_cast<crd::f32>(-0.7071067811865475)) * n99i, n127i = V(static_cast<crd::f32>(0.7071067811865476)) * n99i + V(static_cast<crd::f32>(-0.7071067811865475)) * n99r;
+        const V n130r = n127r - n128r, n130i = n127i - n128i;
+        const V n129r = n127r + n128r, n129i = n127i + n128i;
+        const V n131r = n130i, n131i = -n130r;
+        const V n112r = n98r - n107r, n112i = n98i - n107i;
+        const V n111r = n98r + n107r, n111i = n98i + n107i;
+        const V n113r = n112i, n113i = -n112r;
+        V n3r, n3i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 3 * b + t), n3r, n3i);
+        const V n355r = n3r - n35r, n355i = n3i - n35i;
+        const V n354r = n3r + n35r, n354i = n3i + n35i;
+        const V n362r = n355r - n358r, n362i = n355i - n358i;
+        const V n361r = n355r + n358r, n361i = n355i + n358i;
+        const V n382r = n362r - n378r, n382i = n362i - n378i;
+        const V n381r = n362r + n378r, n381i = n362i + n378i;
+        const V n434r = n382r - n430r, n434i = n382i - n430i;
+        const V n433r = n382r + n430r, n433i = n382i + n430i;
+        const V n569r = V(static_cast<crd::f32>(-0.29028467725446244)) * n434r - V(static_cast<crd::f32>(0.9569403357322088)) * n434i, n569i = V(static_cast<crd::f32>(-0.29028467725446244)) * n434i + V(static_cast<crd::f32>(0.9569403357322088)) * n434r;
+        const V n497r = V(static_cast<crd::f32>(-0.4713967368259977)) * n433r - V(static_cast<crd::f32>(-0.881921264348355)) * n433i, n497i = V(static_cast<crd::f32>(-0.4713967368259977)) * n433i + V(static_cast<crd::f32>(-0.881921264348355)) * n433r;
+        const V n432r = n381r - n428r, n432i = n381i - n428i;
+        const V n431r = n381r + n428r, n431i = n381i + n428i;
+        const V n533r = V(static_cast<crd::f32>(-0.9951847266721969)) * n432r - V(static_cast<crd::f32>(0.09801714032956059)) * n432i, n533i = V(static_cast<crd::f32>(-0.9951847266721969)) * n432i + V(static_cast<crd::f32>(0.09801714032956059)) * n432r;
+        const V n461r = V(static_cast<crd::f32>(0.6343932841636455)) * n431r - V(static_cast<crd::f32>(-0.773010453362737)) * n431i, n461i = V(static_cast<crd::f32>(0.6343932841636455)) * n431i + V(static_cast<crd::f32>(-0.773010453362737)) * n431r;
+        const V n380r = n361r - n376r, n380i = n361i - n376i;
+        const V n379r = n361r + n376r, n379i = n361i + n376i;
+        const V n416r = n380r - n412r, n416i = n380i - n412i;
+        const V n415r = n380r + n412r, n415i = n380i + n412i;
+        const V n551r = V(static_cast<crd::f32>(-0.7730104533627371)) * n416r - V(static_cast<crd::f32>(0.6343932841636453)) * n416i, n551i = V(static_cast<crd::f32>(-0.7730104533627371)) * n416i + V(static_cast<crd::f32>(0.6343932841636453)) * n416r;
+        const V n479r = V(static_cast<crd::f32>(0.09801714032956077)) * n415r - V(static_cast<crd::f32>(-0.9951847266721968)) * n415i, n479i = V(static_cast<crd::f32>(0.09801714032956077)) * n415i + V(static_cast<crd::f32>(-0.9951847266721968)) * n415r;
+        const V n414r = n379r - n410r, n414i = n379i - n410i;
+        const V n413r = n379r + n410r, n413i = n379i + n410i;
+        const V n515r = V(static_cast<crd::f32>(-0.8819212643483549)) * n414r - V(static_cast<crd::f32>(-0.47139673682599786)) * n414i, n515i = V(static_cast<crd::f32>(-0.8819212643483549)) * n414i + V(static_cast<crd::f32>(-0.47139673682599786)) * n414r;
+        const V n443r = V(static_cast<crd::f32>(0.9569403357322088)) * n413r - V(static_cast<crd::f32>(-0.29028467725446233)) * n413i, n443i = V(static_cast<crd::f32>(0.9569403357322088)) * n413i + V(static_cast<crd::f32>(-0.29028467725446233)) * n413r;
+        const V n360r = n354r - n356r, n360i = n354i - n356i;
+        const V n359r = n354r + n356r, n359i = n354i + n356i;
+        const V n373r = n360r - n369r, n373i = n360i - n369i;
+        const V n372r = n360r + n369r, n372i = n360i + n369i;
+        const V n425r = n373r - n421r, n425i = n373i - n421i;
+        const V n424r = n373r + n421r, n424i = n373i + n421i;
+        const V n560r = V(static_cast<crd::f32>(-0.5555702330196022)) * n425r - V(static_cast<crd::f32>(0.8314696123025452)) * n425i, n560i = V(static_cast<crd::f32>(-0.5555702330196022)) * n425i + V(static_cast<crd::f32>(0.8314696123025452)) * n425r;
+        const V n488r = V(static_cast<crd::f32>(-0.1950903220161282)) * n424r - V(static_cast<crd::f32>(-0.9807852804032304)) * n424i, n488i = V(static_cast<crd::f32>(-0.1950903220161282)) * n424i + V(static_cast<crd::f32>(-0.9807852804032304)) * n424r;
+        const V n423r = n372r - n419r, n423i = n372i - n419i;
+        const V n422r = n372r + n419r, n422i = n372i + n419i;
+        const V n524r = V(static_cast<crd::f32>(-0.9807852804032304)) * n423r - V(static_cast<crd::f32>(-0.1950903220161286)) * n423i, n524i = V(static_cast<crd::f32>(-0.9807852804032304)) * n423i + V(static_cast<crd::f32>(-0.1950903220161286)) * n423r;
+        const V n452r = V(static_cast<crd::f32>(0.8314696123025452)) * n422r - V(static_cast<crd::f32>(-0.5555702330196022)) * n422i, n452i = V(static_cast<crd::f32>(0.8314696123025452)) * n422i + V(static_cast<crd::f32>(-0.5555702330196022)) * n422r;
+        const V n371r = n359r - n367r, n371i = n359i - n367i;
+        const V n370r = n359r + n367r, n370i = n359i + n367i;
+        const V n407r = n371r - n403r, n407i = n371i - n403i;
+        const V n406r = n371r + n403r, n406i = n371i + n403i;
+        const V n542r = V(static_cast<crd::f32>(-0.9238795325112868)) * n407r - V(static_cast<crd::f32>(0.38268343236508967)) * n407i, n542i = V(static_cast<crd::f32>(-0.9238795325112868)) * n407i + V(static_cast<crd::f32>(0.38268343236508967)) * n407r;
+        const V n470r = V(static_cast<crd::f32>(0.38268343236508984)) * n406r - V(static_cast<crd::f32>(-0.9238795325112867)) * n406i, n470i = V(static_cast<crd::f32>(0.38268343236508984)) * n406i + V(static_cast<crd::f32>(-0.9238795325112867)) * n406r;
+        const V n405r = n370r - n401r, n405i = n370i - n401i;
+        const V n404r = n370r + n401r, n404i = n370i + n401i;
+        const V n506r = V(static_cast<crd::f32>(-0.7071067811865475)) * n405r - V(static_cast<crd::f32>(-0.7071067811865476)) * n405i, n506i = V(static_cast<crd::f32>(-0.7071067811865475)) * n405i + V(static_cast<crd::f32>(-0.7071067811865476)) * n405r;
+        V n2r, n2i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 2 * b + t), n2r, n2i);
+        const V n146r = n2r - n34r, n146i = n2i - n34i;
+        const V n145r = n2r + n34r, n145i = n2i + n34i;
+        const V n153r = n146r - n149r, n153i = n146i - n149i;
+        const V n152r = n146r + n149r, n152i = n146i + n149i;
+        const V n173r = n153r - n169r, n173i = n153i - n169i;
+        const V n172r = n153r + n169r, n172i = n153i + n169i;
+        const V n264r = V(static_cast<crd::f32>(0.19509032201612833)) * n173r - V(static_cast<crd::f32>(-0.9807852804032304)) * n173i, n264i = V(static_cast<crd::f32>(0.19509032201612833)) * n173i + V(static_cast<crd::f32>(-0.9807852804032304)) * n173r;
+        const V n228r = V(static_cast<crd::f32>(0.8314696123025452)) * n172r - V(static_cast<crd::f32>(-0.5555702330196022)) * n172i, n228i = V(static_cast<crd::f32>(0.8314696123025452)) * n172i + V(static_cast<crd::f32>(-0.5555702330196022)) * n172r;
+        const V n267r = n264r - n265r, n267i = n264i - n265i;
+        const V n266r = n264r + n265r, n266i = n264i + n265i;
+        const V n268r = n267i, n268i = -n267r;
+        const V n231r = n228r - n229r, n231i = n228i - n229i;
+        const V n230r = n228r + n229r, n230i = n228i + n229i;
+        const V n232r = n231i, n232i = -n231r;
+        const V n171r = n152r - n167r, n171i = n152i - n167i;
+        const V n170r = n152r + n167r, n170i = n152i + n167i;
+        const V n246r = V(static_cast<crd::f32>(0.5555702330196023)) * n171r - V(static_cast<crd::f32>(-0.8314696123025452)) * n171i, n246i = V(static_cast<crd::f32>(0.5555702330196023)) * n171i + V(static_cast<crd::f32>(-0.8314696123025452)) * n171r;
+        const V n210r = V(static_cast<crd::f32>(0.9807852804032304)) * n170r - V(static_cast<crd::f32>(-0.19509032201612825)) * n170i, n210i = V(static_cast<crd::f32>(0.9807852804032304)) * n170i + V(static_cast<crd::f32>(-0.19509032201612825)) * n170r;
+        const V n249r = n246r - n247r, n249i = n246i - n247i;
+        const V n248r = n246r + n247r, n248i = n246i + n247i;
+        const V n250r = n249i, n250i = -n249r;
+        const V n213r = n210r - n211r, n213i = n210i - n211i;
+        const V n212r = n210r + n211r, n212i = n210i + n211i;
+        const V n214r = n213i, n214i = -n213r;
+        const V n151r = n145r - n147r, n151i = n145i - n147i;
+        const V n150r = n145r + n147r, n150i = n145i + n147i;
+        const V n164r = n151r - n160r, n164i = n151i - n160i;
+        const V n163r = n151r + n160r, n163i = n151i + n160i;
+        const V n255r = V(static_cast<crd::f32>(0.38268343236508984)) * n164r - V(static_cast<crd::f32>(-0.9238795325112867)) * n164i, n255i = V(static_cast<crd::f32>(0.38268343236508984)) * n164i + V(static_cast<crd::f32>(-0.9238795325112867)) * n164r;
+        const V n219r = V(static_cast<crd::f32>(0.9238795325112867)) * n163r - V(static_cast<crd::f32>(-0.3826834323650898)) * n163i, n219i = V(static_cast<crd::f32>(0.9238795325112867)) * n163i + V(static_cast<crd::f32>(-0.3826834323650898)) * n163r;
+        const V n258r = n255r - n256r, n258i = n255i - n256i;
+        const V n257r = n255r + n256r, n257i = n255i + n256i;
+        const V n259r = n258i, n259i = -n258r;
+        const V n222r = n219r - n220r, n222i = n219i - n220i;
+        const V n221r = n219r + n220r, n221i = n219i + n220i;
+        const V n223r = n222i, n223i = -n222r;
+        const V n162r = n150r - n158r, n162i = n150i - n158i;
+        const V n161r = n150r + n158r, n161i = n150i + n158i;
+        const V n237r = V(static_cast<crd::f32>(0.7071067811865476)) * n162r - V(static_cast<crd::f32>(-0.7071067811865475)) * n162i, n237i = V(static_cast<crd::f32>(0.7071067811865476)) * n162i + V(static_cast<crd::f32>(-0.7071067811865475)) * n162r;
+        const V n240r = n237r - n238r, n240i = n237i - n238i;
+        const V n239r = n237r + n238r, n239i = n237i + n238i;
+        const V n241r = n240i, n241i = -n240r;
+        const V n204r = n161r - n190r, n204i = n161i - n190i;
+        const V n203r = n161r + n190r, n203i = n161i + n190i;
+        const V n205r = n204i, n205i = -n204r;
+        V n1r, n1i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 1 * b + t), n1r, n1i);
+        const V n274r = n1r - n33r, n274i = n1i - n33i;
+        const V n273r = n1r + n33r, n273i = n1i + n33i;
+        const V n281r = n274r - n277r, n281i = n274i - n277i;
+        const V n280r = n274r + n277r, n280i = n274i + n277i;
+        const V n301r = n281r - n297r, n301i = n281i - n297i;
+        const V n300r = n281r + n297r, n300i = n281i + n297i;
+        const V n353r = n301r - n349r, n353i = n301i - n349i;
+        const V n352r = n301r + n349r, n352i = n301i + n349i;
+        const V n568r = V(static_cast<crd::f32>(0.09801714032956077)) * n353r - V(static_cast<crd::f32>(-0.9951847266721968)) * n353i, n568i = V(static_cast<crd::f32>(0.09801714032956077)) * n353i + V(static_cast<crd::f32>(-0.9951847266721968)) * n353r;
+        const V n496r = V(static_cast<crd::f32>(0.773010453362737)) * n352r - V(static_cast<crd::f32>(-0.6343932841636455)) * n352i, n496i = V(static_cast<crd::f32>(0.773010453362737)) * n352i + V(static_cast<crd::f32>(-0.6343932841636455)) * n352r;
+        const V n571r = n568r - n569r, n571i = n568i - n569i;
+        const V n570r = n568r + n569r, n570i = n568i + n569i;
+        const V n572r = n571i, n572i = -n571r;
+        const V n499r = n496r - n497r, n499i = n496i - n497i;
+        const V n498r = n496r + n497r, n498i = n496i + n497i;
+        const V n500r = n499i, n500i = -n499r;
+        const V n351r = n300r - n347r, n351i = n300i - n347i;
+        const V n350r = n300r + n347r, n350i = n300i + n347i;
+        const V n532r = V(static_cast<crd::f32>(0.4713967368259978)) * n351r - V(static_cast<crd::f32>(-0.8819212643483549)) * n351i, n532i = V(static_cast<crd::f32>(0.4713967368259978)) * n351i + V(static_cast<crd::f32>(-0.8819212643483549)) * n351r;
+        const V n460r = V(static_cast<crd::f32>(0.9569403357322088)) * n350r - V(static_cast<crd::f32>(-0.29028467725446233)) * n350i, n460i = V(static_cast<crd::f32>(0.9569403357322088)) * n350i + V(static_cast<crd::f32>(-0.29028467725446233)) * n350r;
+        const V n535r = n532r - n533r, n535i = n532i - n533i;
+        const V n534r = n532r + n533r, n534i = n532i + n533i;
+        const V n536r = n535i, n536i = -n535r;
+        const V n463r = n460r - n461r, n463i = n460i - n461i;
+        const V n462r = n460r + n461r, n462i = n460i + n461i;
+        const V n464r = n463i, n464i = -n463r;
+        const V n299r = n280r - n295r, n299i = n280i - n295i;
+        const V n298r = n280r + n295r, n298i = n280i + n295i;
+        const V n335r = n299r - n331r, n335i = n299i - n331i;
+        const V n334r = n299r + n331r, n334i = n299i + n331i;
+        const V n550r = V(static_cast<crd::f32>(0.29028467725446233)) * n335r - V(static_cast<crd::f32>(-0.9569403357322089)) * n335i, n550i = V(static_cast<crd::f32>(0.29028467725446233)) * n335i + V(static_cast<crd::f32>(-0.9569403357322089)) * n335r;
+        const V n478r = V(static_cast<crd::f32>(0.881921264348355)) * n334r - V(static_cast<crd::f32>(-0.47139673682599764)) * n334i, n478i = V(static_cast<crd::f32>(0.881921264348355)) * n334i + V(static_cast<crd::f32>(-0.47139673682599764)) * n334r;
+        const V n553r = n550r - n551r, n553i = n550i - n551i;
+        const V n552r = n550r + n551r, n552i = n550i + n551i;
+        const V n554r = n553i, n554i = -n553r;
+        const V n481r = n478r - n479r, n481i = n478i - n479i;
+        const V n480r = n478r + n479r, n480i = n478i + n479i;
+        const V n482r = n481i, n482i = -n481r;
+        const V n333r = n298r - n329r, n333i = n298i - n329i;
+        const V n332r = n298r + n329r, n332i = n298i + n329i;
+        const V n514r = V(static_cast<crd::f32>(0.6343932841636455)) * n333r - V(static_cast<crd::f32>(-0.773010453362737)) * n333i, n514i = V(static_cast<crd::f32>(0.6343932841636455)) * n333i + V(static_cast<crd::f32>(-0.773010453362737)) * n333r;
+        const V n442r = V(static_cast<crd::f32>(0.9951847266721969)) * n332r - V(static_cast<crd::f32>(-0.0980171403295606)) * n332i, n442i = V(static_cast<crd::f32>(0.9951847266721969)) * n332i + V(static_cast<crd::f32>(-0.0980171403295606)) * n332r;
+        const V n517r = n514r - n515r, n517i = n514i - n515i;
+        const V n516r = n514r + n515r, n516i = n514i + n515i;
+        const V n518r = n517i, n518i = -n517r;
+        const V n445r = n442r - n443r, n445i = n442i - n443i;
+        const V n444r = n442r + n443r, n444i = n442i + n443i;
+        const V n446r = n445i, n446i = -n445r;
+        const V n279r = n273r - n275r, n279i = n273i - n275i;
+        const V n278r = n273r + n275r, n278i = n273i + n275i;
+        const V n292r = n279r - n288r, n292i = n279i - n288i;
+        const V n291r = n279r + n288r, n291i = n279i + n288i;
+        const V n344r = n292r - n340r, n344i = n292i - n340i;
+        const V n343r = n292r + n340r, n343i = n292i + n340i;
+        const V n559r = V(static_cast<crd::f32>(0.19509032201612833)) * n344r - V(static_cast<crd::f32>(-0.9807852804032304)) * n344i, n559i = V(static_cast<crd::f32>(0.19509032201612833)) * n344i + V(static_cast<crd::f32>(-0.9807852804032304)) * n344r;
+        const V n487r = V(static_cast<crd::f32>(0.8314696123025452)) * n343r - V(static_cast<crd::f32>(-0.5555702330196022)) * n343i, n487i = V(static_cast<crd::f32>(0.8314696123025452)) * n343i + V(static_cast<crd::f32>(-0.5555702330196022)) * n343r;
+        const V n562r = n559r - n560r, n562i = n559i - n560i;
+        const V n561r = n559r + n560r, n561i = n559i + n560i;
+        const V n563r = n562i, n563i = -n562r;
+        const V n490r = n487r - n488r, n490i = n487i - n488i;
+        const V n489r = n487r + n488r, n489i = n487i + n488i;
+        const V n491r = n490i, n491i = -n490r;
+        const V n342r = n291r - n338r, n342i = n291i - n338i;
+        const V n341r = n291r + n338r, n341i = n291i + n338i;
+        const V n523r = V(static_cast<crd::f32>(0.5555702330196023)) * n342r - V(static_cast<crd::f32>(-0.8314696123025452)) * n342i, n523i = V(static_cast<crd::f32>(0.5555702330196023)) * n342i + V(static_cast<crd::f32>(-0.8314696123025452)) * n342r;
+        const V n451r = V(static_cast<crd::f32>(0.9807852804032304)) * n341r - V(static_cast<crd::f32>(-0.19509032201612825)) * n341i, n451i = V(static_cast<crd::f32>(0.9807852804032304)) * n341i + V(static_cast<crd::f32>(-0.19509032201612825)) * n341r;
+        const V n526r = n523r - n524r, n526i = n523i - n524i;
+        const V n525r = n523r + n524r, n525i = n523i + n524i;
+        const V n527r = n526i, n527i = -n526r;
+        const V n454r = n451r - n452r, n454i = n451i - n452i;
+        const V n453r = n451r + n452r, n453i = n451i + n452i;
+        const V n455r = n454i, n455i = -n454r;
+        const V n290r = n278r - n286r, n290i = n278i - n286i;
+        const V n289r = n278r + n286r, n289i = n278i + n286i;
+        const V n326r = n290r - n322r, n326i = n290i - n322i;
+        const V n325r = n290r + n322r, n325i = n290i + n322i;
+        const V n541r = V(static_cast<crd::f32>(0.38268343236508984)) * n326r - V(static_cast<crd::f32>(-0.9238795325112867)) * n326i, n541i = V(static_cast<crd::f32>(0.38268343236508984)) * n326i + V(static_cast<crd::f32>(-0.9238795325112867)) * n326r;
+        const V n469r = V(static_cast<crd::f32>(0.9238795325112867)) * n325r - V(static_cast<crd::f32>(-0.3826834323650898)) * n325i, n469i = V(static_cast<crd::f32>(0.9238795325112867)) * n325i + V(static_cast<crd::f32>(-0.3826834323650898)) * n325r;
+        const V n544r = n541r - n542r, n544i = n541i - n542i;
+        const V n543r = n541r + n542r, n543i = n541i + n542i;
+        const V n545r = n544i, n545i = -n544r;
+        const V n472r = n469r - n470r, n472i = n469i - n470i;
+        const V n471r = n469r + n470r, n471i = n469i + n470i;
+        const V n473r = n472i, n473i = -n472r;
+        const V n324r = n289r - n320r, n324i = n289i - n320i;
+        const V n323r = n289r + n320r, n323i = n289i + n320i;
+        const V n505r = V(static_cast<crd::f32>(0.7071067811865476)) * n324r - V(static_cast<crd::f32>(-0.7071067811865475)) * n324i, n505i = V(static_cast<crd::f32>(0.7071067811865476)) * n324i + V(static_cast<crd::f32>(-0.7071067811865475)) * n324r;
+        const V n508r = n505r - n506r, n508i = n505i - n506i;
+        const V n507r = n505r + n506r, n507i = n505i + n506i;
+        const V n509r = n508i, n509i = -n508r;
+        const V n436r = n323r - n404r, n436i = n323i - n404i;
+        const V n435r = n323r + n404r, n435i = n323i + n404i;
+        const V n437r = n436i, n437i = -n436r;
+        V n0r, n0i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 0 * b + t), n0r, n0i);
+        const V n65r = n0r - n32r, n65i = n0i - n32i;
+        const V n64r = n0r + n32r, n64i = n0i + n32i;
+        const V n72r = n65r - n68r, n72i = n65i - n68i;
+        const V n71r = n65r + n68r, n71i = n65i + n68i;
+        const V n92r = n72r - n88r, n92i = n72i - n88i;
+        const V n91r = n72r + n88r, n91i = n72i + n88i;
+        const V n144r = n92r - n140r, n144i = n92i - n140i;
+        const V n143r = n92r + n140r, n143i = n92i + n140i;
+        const V n272r = n144r - n268r, n272i = n144i - n268i;
+        const V n271r = n144r + n268r, n271i = n144i + n268i;
+        const V n576r = n272r - n572r, n576i = n272i - n572i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 63 * b + t), n576r, n576i);
+        const V n575r = n272r + n572r, n575i = n272i + n572i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 31 * b + t), n575r, n575i);
+        const V n574r = n271r - n570r, n574i = n271i - n570i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 47 * b + t), n574r, n574i);
+        const V n573r = n271r + n570r, n573i = n271i + n570i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 15 * b + t), n573r, n573i);
+        const V n270r = n143r - n266r, n270i = n143i - n266i;
+        const V n269r = n143r + n266r, n269i = n143i + n266i;
+        const V n504r = n270r - n500r, n504i = n270i - n500i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 55 * b + t), n504r, n504i);
+        const V n503r = n270r + n500r, n503i = n270i + n500i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 23 * b + t), n503r, n503i);
+        const V n502r = n269r - n498r, n502i = n269i - n498i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 39 * b + t), n502r, n502i);
+        const V n501r = n269r + n498r, n501i = n269i + n498i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 7 * b + t), n501r, n501i);
+        const V n142r = n91r - n138r, n142i = n91i - n138i;
+        const V n141r = n91r + n138r, n141i = n91i + n138i;
+        const V n236r = n142r - n232r, n236i = n142i - n232i;
+        const V n235r = n142r + n232r, n235i = n142i + n232i;
+        const V n540r = n236r - n536r, n540i = n236i - n536i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 59 * b + t), n540r, n540i);
+        const V n539r = n236r + n536r, n539i = n236i + n536i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 27 * b + t), n539r, n539i);
+        const V n538r = n235r - n534r, n538i = n235i - n534i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 43 * b + t), n538r, n538i);
+        const V n537r = n235r + n534r, n537i = n235i + n534i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 11 * b + t), n537r, n537i);
+        const V n234r = n141r - n230r, n234i = n141i - n230i;
+        const V n233r = n141r + n230r, n233i = n141i + n230i;
+        const V n468r = n234r - n464r, n468i = n234i - n464i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 51 * b + t), n468r, n468i);
+        const V n467r = n234r + n464r, n467i = n234i + n464i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 19 * b + t), n467r, n467i);
+        const V n466r = n233r - n462r, n466i = n233i - n462i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 35 * b + t), n466r, n466i);
+        const V n465r = n233r + n462r, n465i = n233i + n462i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 3 * b + t), n465r, n465i);
+        const V n90r = n71r - n86r, n90i = n71i - n86i;
+        const V n89r = n71r + n86r, n89i = n71i + n86i;
+        const V n126r = n90r - n122r, n126i = n90i - n122i;
+        const V n125r = n90r + n122r, n125i = n90i + n122i;
+        const V n254r = n126r - n250r, n254i = n126i - n250i;
+        const V n253r = n126r + n250r, n253i = n126i + n250i;
+        const V n558r = n254r - n554r, n558i = n254i - n554i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 61 * b + t), n558r, n558i);
+        const V n557r = n254r + n554r, n557i = n254i + n554i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 29 * b + t), n557r, n557i);
+        const V n556r = n253r - n552r, n556i = n253i - n552i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 45 * b + t), n556r, n556i);
+        const V n555r = n253r + n552r, n555i = n253i + n552i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 13 * b + t), n555r, n555i);
+        const V n252r = n125r - n248r, n252i = n125i - n248i;
+        const V n251r = n125r + n248r, n251i = n125i + n248i;
+        const V n486r = n252r - n482r, n486i = n252i - n482i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 53 * b + t), n486r, n486i);
+        const V n485r = n252r + n482r, n485i = n252i + n482i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 21 * b + t), n485r, n485i);
+        const V n484r = n251r - n480r, n484i = n251i - n480i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 37 * b + t), n484r, n484i);
+        const V n483r = n251r + n480r, n483i = n251i + n480i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 5 * b + t), n483r, n483i);
+        const V n124r = n89r - n120r, n124i = n89i - n120i;
+        const V n123r = n89r + n120r, n123i = n89i + n120i;
+        const V n218r = n124r - n214r, n218i = n124i - n214i;
+        const V n217r = n124r + n214r, n217i = n124i + n214i;
+        const V n522r = n218r - n518r, n522i = n218i - n518i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 57 * b + t), n522r, n522i);
+        const V n521r = n218r + n518r, n521i = n218i + n518i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 25 * b + t), n521r, n521i);
+        const V n520r = n217r - n516r, n520i = n217i - n516i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 41 * b + t), n520r, n520i);
+        const V n519r = n217r + n516r, n519i = n217i + n516i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 9 * b + t), n519r, n519i);
+        const V n216r = n123r - n212r, n216i = n123i - n212i;
+        const V n215r = n123r + n212r, n215i = n123i + n212i;
+        const V n450r = n216r - n446r, n450i = n216i - n446i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 49 * b + t), n450r, n450i);
+        const V n449r = n216r + n446r, n449i = n216i + n446i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 17 * b + t), n449r, n449i);
+        const V n448r = n215r - n444r, n448i = n215i - n444i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 33 * b + t), n448r, n448i);
+        const V n447r = n215r + n444r, n447i = n215i + n444i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 1 * b + t), n447r, n447i);
+        const V n70r = n64r - n66r, n70i = n64i - n66i;
+        const V n69r = n64r + n66r, n69i = n64i + n66i;
+        const V n83r = n70r - n79r, n83i = n70i - n79i;
+        const V n82r = n70r + n79r, n82i = n70i + n79i;
+        const V n135r = n83r - n131r, n135i = n83i - n131i;
+        const V n134r = n83r + n131r, n134i = n83i + n131i;
+        const V n263r = n135r - n259r, n263i = n135i - n259i;
+        const V n262r = n135r + n259r, n262i = n135i + n259i;
+        const V n567r = n263r - n563r, n567i = n263i - n563i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 62 * b + t), n567r, n567i);
+        const V n566r = n263r + n563r, n566i = n263i + n563i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 30 * b + t), n566r, n566i);
+        const V n565r = n262r - n561r, n565i = n262i - n561i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 46 * b + t), n565r, n565i);
+        const V n564r = n262r + n561r, n564i = n262i + n561i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 14 * b + t), n564r, n564i);
+        const V n261r = n134r - n257r, n261i = n134i - n257i;
+        const V n260r = n134r + n257r, n260i = n134i + n257i;
+        const V n495r = n261r - n491r, n495i = n261i - n491i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 54 * b + t), n495r, n495i);
+        const V n494r = n261r + n491r, n494i = n261i + n491i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 22 * b + t), n494r, n494i);
+        const V n493r = n260r - n489r, n493i = n260i - n489i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 38 * b + t), n493r, n493i);
+        const V n492r = n260r + n489r, n492i = n260i + n489i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 6 * b + t), n492r, n492i);
+        const V n133r = n82r - n129r, n133i = n82i - n129i;
+        const V n132r = n82r + n129r, n132i = n82i + n129i;
+        const V n227r = n133r - n223r, n227i = n133i - n223i;
+        const V n226r = n133r + n223r, n226i = n133i + n223i;
+        const V n531r = n227r - n527r, n531i = n227i - n527i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 58 * b + t), n531r, n531i);
+        const V n530r = n227r + n527r, n530i = n227i + n527i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 26 * b + t), n530r, n530i);
+        const V n529r = n226r - n525r, n529i = n226i - n525i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 42 * b + t), n529r, n529i);
+        const V n528r = n226r + n525r, n528i = n226i + n525i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 10 * b + t), n528r, n528i);
+        const V n225r = n132r - n221r, n225i = n132i - n221i;
+        const V n224r = n132r + n221r, n224i = n132i + n221i;
+        const V n459r = n225r - n455r, n459i = n225i - n455i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 50 * b + t), n459r, n459i);
+        const V n458r = n225r + n455r, n458i = n225i + n455i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 18 * b + t), n458r, n458i);
+        const V n457r = n224r - n453r, n457i = n224i - n453i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 34 * b + t), n457r, n457i);
+        const V n456r = n224r + n453r, n456i = n224i + n453i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 2 * b + t), n456r, n456i);
+        const V n81r = n69r - n77r, n81i = n69i - n77i;
+        const V n80r = n69r + n77r, n80i = n69i + n77i;
+        const V n117r = n81r - n113r, n117i = n81i - n113i;
+        const V n116r = n81r + n113r, n116i = n81i + n113i;
+        const V n245r = n117r - n241r, n245i = n117i - n241i;
+        const V n244r = n117r + n241r, n244i = n117i + n241i;
+        const V n549r = n245r - n545r, n549i = n245i - n545i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 60 * b + t), n549r, n549i);
+        const V n548r = n245r + n545r, n548i = n245i + n545i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 28 * b + t), n548r, n548i);
+        const V n547r = n244r - n543r, n547i = n244i - n543i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 44 * b + t), n547r, n547i);
+        const V n546r = n244r + n543r, n546i = n244i + n543i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 12 * b + t), n546r, n546i);
+        const V n243r = n116r - n239r, n243i = n116i - n239i;
+        const V n242r = n116r + n239r, n242i = n116i + n239i;
+        const V n477r = n243r - n473r, n477i = n243i - n473i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 52 * b + t), n477r, n477i);
+        const V n476r = n243r + n473r, n476i = n243i + n473i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 20 * b + t), n476r, n476i);
+        const V n475r = n242r - n471r, n475i = n242i - n471i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 36 * b + t), n475r, n475i);
+        const V n474r = n242r + n471r, n474i = n242i + n471i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 4 * b + t), n474r, n474i);
+        const V n115r = n80r - n111r, n115i = n80i - n111i;
+        const V n114r = n80r + n111r, n114i = n80i + n111i;
+        const V n209r = n115r - n205r, n209i = n115i - n205i;
+        const V n208r = n115r + n205r, n208i = n115i + n205i;
+        const V n513r = n209r - n509r, n513i = n209i - n509i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 56 * b + t), n513r, n513i);
+        const V n512r = n209r + n509r, n512i = n209i + n509i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 24 * b + t), n512r, n512i);
+        const V n511r = n208r - n507r, n511i = n208i - n507i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 40 * b + t), n511r, n511i);
+        const V n510r = n208r + n507r, n510i = n208i + n507i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 8 * b + t), n510r, n510i);
+        const V n207r = n114r - n203r, n207i = n114i - n203i;
+        const V n206r = n114r + n203r, n206i = n114i + n203i;
+        const V n441r = n207r - n437r, n441i = n207i - n437i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 48 * b + t), n441r, n441i);
+        const V n440r = n207r + n437r, n440i = n207i + n437i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 16 * b + t), n440r, n440i);
+        const V n439r = n206r - n435r, n439i = n206i - n435i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 32 * b + t), n439r, n439i);
+        const V n438r = n206r + n435r, n438i = n206i + n435i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 0 * b + t), n438r, n438i);
+    }
+}
+// N=1024=32x32 stage-1 FUSED (BB=128): leaf codelet32 + twiddle W_1024^(n2*k1) + transposed store. GENERATED.
+CRD_FORCEINLINE void codelet32_stage1_fused_32x32(const crd::hesap::Complex<crd::f32>* in,
+    crd::hesap::Complex<crd::f32>* out, crd::usize b, const crd::f32* twr, const crd::f32* twi) noexcept
+{
+    using V = crd::math::simd::Vec8f;
+    namespace simd = crd::math::simd;
+    for (crd::usize t = 0; t + 8 <= b; t += 8)
+    {
+        const crd::usize n2 = t >> 7, bb0 = t & 127;
+        const crd::f32* const tr = twr + n2 * 32, * const ti = twi + n2 * 32;
+        V n31r, n31i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 31 * b + t), n31r, n31i);
+        V n30r, n30i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 30 * b + t), n30r, n30i);
+        V n29r, n29i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 29 * b + t), n29r, n29i);
+        V n28r, n28i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 28 * b + t), n28r, n28i);
+        V n27r, n27i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 27 * b + t), n27r, n27i);
+        V n26r, n26i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 26 * b + t), n26r, n26i);
+        V n25r, n25i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 25 * b + t), n25r, n25i);
+        V n24r, n24i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 24 * b + t), n24r, n24i);
+        V n23r, n23i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 23 * b + t), n23r, n23i);
+        V n22r, n22i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 22 * b + t), n22r, n22i);
+        V n21r, n21i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 21 * b + t), n21r, n21i);
+        V n20r, n20i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 20 * b + t), n20r, n20i);
+        V n19r, n19i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 19 * b + t), n19r, n19i);
+        V n18r, n18i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 18 * b + t), n18r, n18i);
+        V n17r, n17i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 17 * b + t), n17r, n17i);
+        V n16r, n16i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 16 * b + t), n16r, n16i);
+        V n15r, n15i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 15 * b + t), n15r, n15i);
+        const V n154r = n15r - n31r, n154i = n15i - n31i;
+        const V n153r = n15r + n31r, n153i = n15i + n31i;
+        const V n163r = V(static_cast<crd::f32>(-0.7071067811865475)) * n154r - V(static_cast<crd::f32>(-0.7071067811865476)) * n154i, n163i = V(static_cast<crd::f32>(-0.7071067811865475)) * n154i + V(static_cast<crd::f32>(-0.7071067811865476)) * n154r;
+        V n14r, n14i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 14 * b + t), n14r, n14i);
+        const V n73r = n14r - n30r, n73i = n14i - n30i;
+        const V n72r = n14r + n30r, n72i = n14i + n30i;
+        const V n74r = n73i, n74i = -n73r;
+        V n13r, n13i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 13 * b + t), n13r, n13i);
+        const V n125r = n13r - n29r, n125i = n13i - n29i;
+        const V n124r = n13r + n29r, n124i = n13i + n29i;
+        const V n134r = V(static_cast<crd::f32>(-0.7071067811865475)) * n125r - V(static_cast<crd::f32>(-0.7071067811865476)) * n125i, n134i = V(static_cast<crd::f32>(-0.7071067811865475)) * n125i + V(static_cast<crd::f32>(-0.7071067811865476)) * n125r;
+        V n12r, n12i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 12 * b + t), n12r, n12i);
+        const V n44r = n12r - n28r, n44i = n12i - n28i;
+        const V n43r = n12r + n28r, n43i = n12i + n28i;
+        const V n53r = V(static_cast<crd::f32>(-0.7071067811865475)) * n44r - V(static_cast<crd::f32>(-0.7071067811865476)) * n44i, n53i = V(static_cast<crd::f32>(-0.7071067811865475)) * n44i + V(static_cast<crd::f32>(-0.7071067811865476)) * n44r;
+        V n11r, n11i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 11 * b + t), n11r, n11i);
+        const V n145r = n11r - n27r, n145i = n11i - n27i;
+        const V n144r = n11r + n27r, n144i = n11i + n27i;
+        const V n146r = n145i, n146i = -n145r;
+        V n10r, n10i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 10 * b + t), n10r, n10i);
+        const V n64r = n10r - n26r, n64i = n10i - n26i;
+        const V n63r = n10r + n26r, n63i = n10i + n26i;
+        const V n65r = n64i, n65i = -n64r;
+        V n9r, n9i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 9 * b + t), n9r, n9i);
+        const V n116r = n9r - n25r, n116i = n9i - n25i;
+        const V n115r = n9r + n25r, n115i = n9i + n25i;
+        const V n117r = n116i, n117i = -n116r;
+        V n8r, n8i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 8 * b + t), n8r, n8i);
+        const V n35r = n8r - n24r, n35i = n8i - n24i;
+        const V n34r = n8r + n24r, n34i = n8i + n24i;
+        const V n36r = n35i, n36i = -n35r;
+        V n7r, n7i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 7 * b + t), n7r, n7i);
+        const V n152r = n7r - n23r, n152i = n7i - n23i;
+        const V n151r = n7r + n23r, n151i = n7i + n23i;
+        const V n162r = V(static_cast<crd::f32>(0.7071067811865476)) * n152r - V(static_cast<crd::f32>(-0.7071067811865475)) * n152i, n162i = V(static_cast<crd::f32>(0.7071067811865476)) * n152i + V(static_cast<crd::f32>(-0.7071067811865475)) * n152r;
+        const V n165r = n162r - n163r, n165i = n162i - n163i;
+        const V n164r = n162r + n163r, n164i = n162i + n163i;
+        const V n166r = n165i, n166i = -n165r;
+        const V n156r = n151r - n153r, n156i = n151i - n153i;
+        const V n155r = n151r + n153r, n155i = n151i + n153i;
+        const V n157r = n156i, n157i = -n156r;
+        V n6r, n6i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 6 * b + t), n6r, n6i);
+        const V n71r = n6r - n22r, n71i = n6i - n22i;
+        const V n70r = n6r + n22r, n70i = n6i + n22i;
+        const V n78r = n71r - n74r, n78i = n71i - n74i;
+        const V n77r = n71r + n74r, n77i = n71i + n74i;
+        const V n105r = V(static_cast<crd::f32>(-0.9238795325112868)) * n78r - V(static_cast<crd::f32>(0.38268343236508967)) * n78i, n105i = V(static_cast<crd::f32>(-0.9238795325112868)) * n78i + V(static_cast<crd::f32>(0.38268343236508967)) * n78r;
+        const V n87r = V(static_cast<crd::f32>(0.38268343236508984)) * n77r - V(static_cast<crd::f32>(-0.9238795325112867)) * n77i, n87i = V(static_cast<crd::f32>(0.38268343236508984)) * n77i + V(static_cast<crd::f32>(-0.9238795325112867)) * n77r;
+        const V n76r = n70r - n72r, n76i = n70i - n72i;
+        const V n75r = n70r + n72r, n75i = n70i + n72i;
+        const V n96r = V(static_cast<crd::f32>(-0.7071067811865475)) * n76r - V(static_cast<crd::f32>(-0.7071067811865476)) * n76i, n96i = V(static_cast<crd::f32>(-0.7071067811865475)) * n76i + V(static_cast<crd::f32>(-0.7071067811865476)) * n76r;
+        V n5r, n5i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 5 * b + t), n5r, n5i);
+        const V n123r = n5r - n21r, n123i = n5i - n21i;
+        const V n122r = n5r + n21r, n122i = n5i + n21i;
+        const V n133r = V(static_cast<crd::f32>(0.7071067811865476)) * n123r - V(static_cast<crd::f32>(-0.7071067811865475)) * n123i, n133i = V(static_cast<crd::f32>(0.7071067811865476)) * n123i + V(static_cast<crd::f32>(-0.7071067811865475)) * n123r;
+        const V n136r = n133r - n134r, n136i = n133i - n134i;
+        const V n135r = n133r + n134r, n135i = n133i + n134i;
+        const V n137r = n136i, n137i = -n136r;
+        const V n127r = n122r - n124r, n127i = n122i - n124i;
+        const V n126r = n122r + n124r, n126i = n122i + n124i;
+        const V n128r = n127i, n128i = -n127r;
+        V n4r, n4i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 4 * b + t), n4r, n4i);
+        const V n42r = n4r - n20r, n42i = n4i - n20i;
+        const V n41r = n4r + n20r, n41i = n4i + n20i;
+        const V n52r = V(static_cast<crd::f32>(0.7071067811865476)) * n42r - V(static_cast<crd::f32>(-0.7071067811865475)) * n42i, n52i = V(static_cast<crd::f32>(0.7071067811865476)) * n42i + V(static_cast<crd::f32>(-0.7071067811865475)) * n42r;
+        const V n55r = n52r - n53r, n55i = n52i - n53i;
+        const V n54r = n52r + n53r, n54i = n52i + n53i;
+        const V n56r = n55i, n56i = -n55r;
+        const V n46r = n41r - n43r, n46i = n41i - n43i;
+        const V n45r = n41r + n43r, n45i = n41i + n43i;
+        const V n47r = n46i, n47i = -n46r;
+        V n3r, n3i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 3 * b + t), n3r, n3i);
+        const V n143r = n3r - n19r, n143i = n3i - n19i;
+        const V n142r = n3r + n19r, n142i = n3i + n19i;
+        const V n150r = n143r - n146r, n150i = n143i - n146i;
+        const V n149r = n143r + n146r, n149i = n143i + n146i;
+        const V n170r = n150r - n166r, n170i = n150i - n166i;
+        const V n169r = n150r + n166r, n169i = n150i + n166i;
+        const V n233r = V(static_cast<crd::f32>(-0.5555702330196022)) * n170r - V(static_cast<crd::f32>(0.8314696123025452)) * n170i, n233i = V(static_cast<crd::f32>(-0.5555702330196022)) * n170i + V(static_cast<crd::f32>(0.8314696123025452)) * n170r;
+        const V n197r = V(static_cast<crd::f32>(-0.1950903220161282)) * n169r - V(static_cast<crd::f32>(-0.9807852804032304)) * n169i, n197i = V(static_cast<crd::f32>(-0.1950903220161282)) * n169i + V(static_cast<crd::f32>(-0.9807852804032304)) * n169r;
+        const V n168r = n149r - n164r, n168i = n149i - n164i;
+        const V n167r = n149r + n164r, n167i = n149i + n164i;
+        const V n215r = V(static_cast<crd::f32>(-0.9807852804032304)) * n168r - V(static_cast<crd::f32>(-0.1950903220161286)) * n168i, n215i = V(static_cast<crd::f32>(-0.9807852804032304)) * n168i + V(static_cast<crd::f32>(-0.1950903220161286)) * n168r;
+        const V n179r = V(static_cast<crd::f32>(0.8314696123025452)) * n167r - V(static_cast<crd::f32>(-0.5555702330196022)) * n167i, n179i = V(static_cast<crd::f32>(0.8314696123025452)) * n167i + V(static_cast<crd::f32>(-0.5555702330196022)) * n167r;
+        const V n148r = n142r - n144r, n148i = n142i - n144i;
+        const V n147r = n142r + n144r, n147i = n142i + n144i;
+        const V n161r = n148r - n157r, n161i = n148i - n157i;
+        const V n160r = n148r + n157r, n160i = n148i + n157i;
+        const V n224r = V(static_cast<crd::f32>(-0.9238795325112868)) * n161r - V(static_cast<crd::f32>(0.38268343236508967)) * n161i, n224i = V(static_cast<crd::f32>(-0.9238795325112868)) * n161i + V(static_cast<crd::f32>(0.38268343236508967)) * n161r;
+        const V n188r = V(static_cast<crd::f32>(0.38268343236508984)) * n160r - V(static_cast<crd::f32>(-0.9238795325112867)) * n160i, n188i = V(static_cast<crd::f32>(0.38268343236508984)) * n160i + V(static_cast<crd::f32>(-0.9238795325112867)) * n160r;
+        const V n159r = n147r - n155r, n159i = n147i - n155i;
+        const V n158r = n147r + n155r, n158i = n147i + n155i;
+        const V n206r = V(static_cast<crd::f32>(-0.7071067811865475)) * n159r - V(static_cast<crd::f32>(-0.7071067811865476)) * n159i, n206i = V(static_cast<crd::f32>(-0.7071067811865475)) * n159i + V(static_cast<crd::f32>(-0.7071067811865476)) * n159r;
+        V n2r, n2i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 2 * b + t), n2r, n2i);
+        const V n62r = n2r - n18r, n62i = n2i - n18i;
+        const V n61r = n2r + n18r, n61i = n2i + n18i;
+        const V n69r = n62r - n65r, n69i = n62i - n65i;
+        const V n68r = n62r + n65r, n68i = n62i + n65i;
+        const V n104r = V(static_cast<crd::f32>(0.38268343236508984)) * n69r - V(static_cast<crd::f32>(-0.9238795325112867)) * n69i, n104i = V(static_cast<crd::f32>(0.38268343236508984)) * n69i + V(static_cast<crd::f32>(-0.9238795325112867)) * n69r;
+        const V n86r = V(static_cast<crd::f32>(0.9238795325112867)) * n68r - V(static_cast<crd::f32>(-0.3826834323650898)) * n68i, n86i = V(static_cast<crd::f32>(0.9238795325112867)) * n68i + V(static_cast<crd::f32>(-0.3826834323650898)) * n68r;
+        const V n107r = n104r - n105r, n107i = n104i - n105i;
+        const V n106r = n104r + n105r, n106i = n104i + n105i;
+        const V n108r = n107i, n108i = -n107r;
+        const V n89r = n86r - n87r, n89i = n86i - n87i;
+        const V n88r = n86r + n87r, n88i = n86i + n87i;
+        const V n90r = n89i, n90i = -n89r;
+        const V n67r = n61r - n63r, n67i = n61i - n63i;
+        const V n66r = n61r + n63r, n66i = n61i + n63i;
+        const V n95r = V(static_cast<crd::f32>(0.7071067811865476)) * n67r - V(static_cast<crd::f32>(-0.7071067811865475)) * n67i, n95i = V(static_cast<crd::f32>(0.7071067811865476)) * n67i + V(static_cast<crd::f32>(-0.7071067811865475)) * n67r;
+        const V n98r = n95r - n96r, n98i = n95i - n96i;
+        const V n97r = n95r + n96r, n97i = n95i + n96i;
+        const V n99r = n98i, n99i = -n98r;
+        const V n80r = n66r - n75r, n80i = n66i - n75i;
+        const V n79r = n66r + n75r, n79i = n66i + n75i;
+        const V n81r = n80i, n81i = -n80r;
+        V n1r, n1i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 1 * b + t), n1r, n1i);
+        const V n114r = n1r - n17r, n114i = n1i - n17i;
+        const V n113r = n1r + n17r, n113i = n1i + n17i;
+        const V n121r = n114r - n117r, n121i = n114i - n117i;
+        const V n120r = n114r + n117r, n120i = n114i + n117i;
+        const V n141r = n121r - n137r, n141i = n121i - n137i;
+        const V n140r = n121r + n137r, n140i = n121i + n137i;
+        const V n232r = V(static_cast<crd::f32>(0.19509032201612833)) * n141r - V(static_cast<crd::f32>(-0.9807852804032304)) * n141i, n232i = V(static_cast<crd::f32>(0.19509032201612833)) * n141i + V(static_cast<crd::f32>(-0.9807852804032304)) * n141r;
+        const V n196r = V(static_cast<crd::f32>(0.8314696123025452)) * n140r - V(static_cast<crd::f32>(-0.5555702330196022)) * n140i, n196i = V(static_cast<crd::f32>(0.8314696123025452)) * n140i + V(static_cast<crd::f32>(-0.5555702330196022)) * n140r;
+        const V n235r = n232r - n233r, n235i = n232i - n233i;
+        const V n234r = n232r + n233r, n234i = n232i + n233i;
+        const V n236r = n235i, n236i = -n235r;
+        const V n199r = n196r - n197r, n199i = n196i - n197i;
+        const V n198r = n196r + n197r, n198i = n196i + n197i;
+        const V n200r = n199i, n200i = -n199r;
+        const V n139r = n120r - n135r, n139i = n120i - n135i;
+        const V n138r = n120r + n135r, n138i = n120i + n135i;
+        const V n214r = V(static_cast<crd::f32>(0.5555702330196023)) * n139r - V(static_cast<crd::f32>(-0.8314696123025452)) * n139i, n214i = V(static_cast<crd::f32>(0.5555702330196023)) * n139i + V(static_cast<crd::f32>(-0.8314696123025452)) * n139r;
+        const V n178r = V(static_cast<crd::f32>(0.9807852804032304)) * n138r - V(static_cast<crd::f32>(-0.19509032201612825)) * n138i, n178i = V(static_cast<crd::f32>(0.9807852804032304)) * n138i + V(static_cast<crd::f32>(-0.19509032201612825)) * n138r;
+        const V n217r = n214r - n215r, n217i = n214i - n215i;
+        const V n216r = n214r + n215r, n216i = n214i + n215i;
+        const V n218r = n217i, n218i = -n217r;
+        const V n181r = n178r - n179r, n181i = n178i - n179i;
+        const V n180r = n178r + n179r, n180i = n178i + n179i;
+        const V n182r = n181i, n182i = -n181r;
+        const V n119r = n113r - n115r, n119i = n113i - n115i;
+        const V n118r = n113r + n115r, n118i = n113i + n115i;
+        const V n132r = n119r - n128r, n132i = n119i - n128i;
+        const V n131r = n119r + n128r, n131i = n119i + n128i;
+        const V n223r = V(static_cast<crd::f32>(0.38268343236508984)) * n132r - V(static_cast<crd::f32>(-0.9238795325112867)) * n132i, n223i = V(static_cast<crd::f32>(0.38268343236508984)) * n132i + V(static_cast<crd::f32>(-0.9238795325112867)) * n132r;
+        const V n187r = V(static_cast<crd::f32>(0.9238795325112867)) * n131r - V(static_cast<crd::f32>(-0.3826834323650898)) * n131i, n187i = V(static_cast<crd::f32>(0.9238795325112867)) * n131i + V(static_cast<crd::f32>(-0.3826834323650898)) * n131r;
+        const V n226r = n223r - n224r, n226i = n223i - n224i;
+        const V n225r = n223r + n224r, n225i = n223i + n224i;
+        const V n227r = n226i, n227i = -n226r;
+        const V n190r = n187r - n188r, n190i = n187i - n188i;
+        const V n189r = n187r + n188r, n189i = n187i + n188i;
+        const V n191r = n190i, n191i = -n190r;
+        const V n130r = n118r - n126r, n130i = n118i - n126i;
+        const V n129r = n118r + n126r, n129i = n118i + n126i;
+        const V n205r = V(static_cast<crd::f32>(0.7071067811865476)) * n130r - V(static_cast<crd::f32>(-0.7071067811865475)) * n130i, n205i = V(static_cast<crd::f32>(0.7071067811865476)) * n130i + V(static_cast<crd::f32>(-0.7071067811865475)) * n130r;
+        const V n208r = n205r - n206r, n208i = n205i - n206i;
+        const V n207r = n205r + n206r, n207i = n205i + n206i;
+        const V n209r = n208i, n209i = -n208r;
+        const V n172r = n129r - n158r, n172i = n129i - n158i;
+        const V n171r = n129r + n158r, n171i = n129i + n158i;
+        const V n173r = n172i, n173i = -n172r;
+        V n0r, n0i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 0 * b + t), n0r, n0i);
+        const V n33r = n0r - n16r, n33i = n0i - n16i;
+        const V n32r = n0r + n16r, n32i = n0i + n16i;
+        const V n40r = n33r - n36r, n40i = n33i - n36i;
+        const V n39r = n33r + n36r, n39i = n33i + n36i;
+        const V n60r = n40r - n56r, n60i = n40i - n56i;
+        const V n59r = n40r + n56r, n59i = n40i + n56i;
+        const V n112r = n60r - n108r, n112i = n60i - n108i;
+        const V n111r = n60r + n108r, n111i = n60i + n108i;
+        const V n240r = n112r - n236r, n240i = n112i - n236i;
+        { const V wr = V(tr[31]), wi = V(ti[31]);
+          const V or_ = n240r * wr - n240i * wi, oi_ = n240r * wi + n240i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 31 * 128 + bb0), or_, oi_); }
+        const V n239r = n112r + n236r, n239i = n112i + n236i;
+        { const V wr = V(tr[15]), wi = V(ti[15]);
+          const V or_ = n239r * wr - n239i * wi, oi_ = n239r * wi + n239i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 15 * 128 + bb0), or_, oi_); }
+        const V n238r = n111r - n234r, n238i = n111i - n234i;
+        { const V wr = V(tr[23]), wi = V(ti[23]);
+          const V or_ = n238r * wr - n238i * wi, oi_ = n238r * wi + n238i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 23 * 128 + bb0), or_, oi_); }
+        const V n237r = n111r + n234r, n237i = n111i + n234i;
+        { const V wr = V(tr[7]), wi = V(ti[7]);
+          const V or_ = n237r * wr - n237i * wi, oi_ = n237r * wi + n237i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 7 * 128 + bb0), or_, oi_); }
+        const V n110r = n59r - n106r, n110i = n59i - n106i;
+        const V n109r = n59r + n106r, n109i = n59i + n106i;
+        const V n204r = n110r - n200r, n204i = n110i - n200i;
+        { const V wr = V(tr[27]), wi = V(ti[27]);
+          const V or_ = n204r * wr - n204i * wi, oi_ = n204r * wi + n204i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 27 * 128 + bb0), or_, oi_); }
+        const V n203r = n110r + n200r, n203i = n110i + n200i;
+        { const V wr = V(tr[11]), wi = V(ti[11]);
+          const V or_ = n203r * wr - n203i * wi, oi_ = n203r * wi + n203i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 11 * 128 + bb0), or_, oi_); }
+        const V n202r = n109r - n198r, n202i = n109i - n198i;
+        { const V wr = V(tr[19]), wi = V(ti[19]);
+          const V or_ = n202r * wr - n202i * wi, oi_ = n202r * wi + n202i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 19 * 128 + bb0), or_, oi_); }
+        const V n201r = n109r + n198r, n201i = n109i + n198i;
+        { const V wr = V(tr[3]), wi = V(ti[3]);
+          const V or_ = n201r * wr - n201i * wi, oi_ = n201r * wi + n201i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 3 * 128 + bb0), or_, oi_); }
+        const V n58r = n39r - n54r, n58i = n39i - n54i;
+        const V n57r = n39r + n54r, n57i = n39i + n54i;
+        const V n94r = n58r - n90r, n94i = n58i - n90i;
+        const V n93r = n58r + n90r, n93i = n58i + n90i;
+        const V n222r = n94r - n218r, n222i = n94i - n218i;
+        { const V wr = V(tr[29]), wi = V(ti[29]);
+          const V or_ = n222r * wr - n222i * wi, oi_ = n222r * wi + n222i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 29 * 128 + bb0), or_, oi_); }
+        const V n221r = n94r + n218r, n221i = n94i + n218i;
+        { const V wr = V(tr[13]), wi = V(ti[13]);
+          const V or_ = n221r * wr - n221i * wi, oi_ = n221r * wi + n221i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 13 * 128 + bb0), or_, oi_); }
+        const V n220r = n93r - n216r, n220i = n93i - n216i;
+        { const V wr = V(tr[21]), wi = V(ti[21]);
+          const V or_ = n220r * wr - n220i * wi, oi_ = n220r * wi + n220i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 21 * 128 + bb0), or_, oi_); }
+        const V n219r = n93r + n216r, n219i = n93i + n216i;
+        { const V wr = V(tr[5]), wi = V(ti[5]);
+          const V or_ = n219r * wr - n219i * wi, oi_ = n219r * wi + n219i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 5 * 128 + bb0), or_, oi_); }
+        const V n92r = n57r - n88r, n92i = n57i - n88i;
+        const V n91r = n57r + n88r, n91i = n57i + n88i;
+        const V n186r = n92r - n182r, n186i = n92i - n182i;
+        { const V wr = V(tr[25]), wi = V(ti[25]);
+          const V or_ = n186r * wr - n186i * wi, oi_ = n186r * wi + n186i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 25 * 128 + bb0), or_, oi_); }
+        const V n185r = n92r + n182r, n185i = n92i + n182i;
+        { const V wr = V(tr[9]), wi = V(ti[9]);
+          const V or_ = n185r * wr - n185i * wi, oi_ = n185r * wi + n185i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 9 * 128 + bb0), or_, oi_); }
+        const V n184r = n91r - n180r, n184i = n91i - n180i;
+        { const V wr = V(tr[17]), wi = V(ti[17]);
+          const V or_ = n184r * wr - n184i * wi, oi_ = n184r * wi + n184i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 17 * 128 + bb0), or_, oi_); }
+        const V n183r = n91r + n180r, n183i = n91i + n180i;
+        { const V wr = V(tr[1]), wi = V(ti[1]);
+          const V or_ = n183r * wr - n183i * wi, oi_ = n183r * wi + n183i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 1 * 128 + bb0), or_, oi_); }
+        const V n38r = n32r - n34r, n38i = n32i - n34i;
+        const V n37r = n32r + n34r, n37i = n32i + n34i;
+        const V n51r = n38r - n47r, n51i = n38i - n47i;
+        const V n50r = n38r + n47r, n50i = n38i + n47i;
+        const V n103r = n51r - n99r, n103i = n51i - n99i;
+        const V n102r = n51r + n99r, n102i = n51i + n99i;
+        const V n231r = n103r - n227r, n231i = n103i - n227i;
+        { const V wr = V(tr[30]), wi = V(ti[30]);
+          const V or_ = n231r * wr - n231i * wi, oi_ = n231r * wi + n231i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 30 * 128 + bb0), or_, oi_); }
+        const V n230r = n103r + n227r, n230i = n103i + n227i;
+        { const V wr = V(tr[14]), wi = V(ti[14]);
+          const V or_ = n230r * wr - n230i * wi, oi_ = n230r * wi + n230i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 14 * 128 + bb0), or_, oi_); }
+        const V n229r = n102r - n225r, n229i = n102i - n225i;
+        { const V wr = V(tr[22]), wi = V(ti[22]);
+          const V or_ = n229r * wr - n229i * wi, oi_ = n229r * wi + n229i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 22 * 128 + bb0), or_, oi_); }
+        const V n228r = n102r + n225r, n228i = n102i + n225i;
+        { const V wr = V(tr[6]), wi = V(ti[6]);
+          const V or_ = n228r * wr - n228i * wi, oi_ = n228r * wi + n228i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 6 * 128 + bb0), or_, oi_); }
+        const V n101r = n50r - n97r, n101i = n50i - n97i;
+        const V n100r = n50r + n97r, n100i = n50i + n97i;
+        const V n195r = n101r - n191r, n195i = n101i - n191i;
+        { const V wr = V(tr[26]), wi = V(ti[26]);
+          const V or_ = n195r * wr - n195i * wi, oi_ = n195r * wi + n195i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 26 * 128 + bb0), or_, oi_); }
+        const V n194r = n101r + n191r, n194i = n101i + n191i;
+        { const V wr = V(tr[10]), wi = V(ti[10]);
+          const V or_ = n194r * wr - n194i * wi, oi_ = n194r * wi + n194i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 10 * 128 + bb0), or_, oi_); }
+        const V n193r = n100r - n189r, n193i = n100i - n189i;
+        { const V wr = V(tr[18]), wi = V(ti[18]);
+          const V or_ = n193r * wr - n193i * wi, oi_ = n193r * wi + n193i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 18 * 128 + bb0), or_, oi_); }
+        const V n192r = n100r + n189r, n192i = n100i + n189i;
+        { const V wr = V(tr[2]), wi = V(ti[2]);
+          const V or_ = n192r * wr - n192i * wi, oi_ = n192r * wi + n192i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 2 * 128 + bb0), or_, oi_); }
+        const V n49r = n37r - n45r, n49i = n37i - n45i;
+        const V n48r = n37r + n45r, n48i = n37i + n45i;
+        const V n85r = n49r - n81r, n85i = n49i - n81i;
+        const V n84r = n49r + n81r, n84i = n49i + n81i;
+        const V n213r = n85r - n209r, n213i = n85i - n209i;
+        { const V wr = V(tr[28]), wi = V(ti[28]);
+          const V or_ = n213r * wr - n213i * wi, oi_ = n213r * wi + n213i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 28 * 128 + bb0), or_, oi_); }
+        const V n212r = n85r + n209r, n212i = n85i + n209i;
+        { const V wr = V(tr[12]), wi = V(ti[12]);
+          const V or_ = n212r * wr - n212i * wi, oi_ = n212r * wi + n212i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 12 * 128 + bb0), or_, oi_); }
+        const V n211r = n84r - n207r, n211i = n84i - n207i;
+        { const V wr = V(tr[20]), wi = V(ti[20]);
+          const V or_ = n211r * wr - n211i * wi, oi_ = n211r * wi + n211i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 20 * 128 + bb0), or_, oi_); }
+        const V n210r = n84r + n207r, n210i = n84i + n207i;
+        { const V wr = V(tr[4]), wi = V(ti[4]);
+          const V or_ = n210r * wr - n210i * wi, oi_ = n210r * wi + n210i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 4 * 128 + bb0), or_, oi_); }
+        const V n83r = n48r - n79r, n83i = n48i - n79i;
+        const V n82r = n48r + n79r, n82i = n48i + n79i;
+        const V n177r = n83r - n173r, n177i = n83i - n173i;
+        { const V wr = V(tr[24]), wi = V(ti[24]);
+          const V or_ = n177r * wr - n177i * wi, oi_ = n177r * wi + n177i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 24 * 128 + bb0), or_, oi_); }
+        const V n176r = n83r + n173r, n176i = n83i + n173i;
+        { const V wr = V(tr[8]), wi = V(ti[8]);
+          const V or_ = n176r * wr - n176i * wi, oi_ = n176r * wi + n176i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 8 * 128 + bb0), or_, oi_); }
+        const V n175r = n82r - n171r, n175i = n82i - n171i;
+        { const V wr = V(tr[16]), wi = V(ti[16]);
+          const V or_ = n175r * wr - n175i * wi, oi_ = n175r * wi + n175i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 16 * 128 + bb0), or_, oi_); }
+        const V n174r = n82r + n171r, n174i = n82i + n171i;
+        { const V wr = V(tr[0]), wi = V(ti[0]);
+          const V or_ = n174r * wr - n174i * wi, oi_ = n174r * wi + n174i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 0 * 128 + bb0), or_, oi_); }
+    }
+}
+// N=2048=64x32 stage-1 FUSED (BB=64): leaf codelet64 + twiddle W_2048^(n2*k1) + transposed store. GENERATED.
+CRD_FORCEINLINE void codelet64_stage1_fused_64x32(const crd::hesap::Complex<crd::f32>* in,
+    crd::hesap::Complex<crd::f32>* out, crd::usize b, const crd::f32* twr, const crd::f32* twi) noexcept
+{
+    using V = crd::math::simd::Vec8f;
+    namespace simd = crd::math::simd;
+    for (crd::usize t = 0; t + 8 <= b; t += 8)
+    {
+        const crd::usize n2 = t >> 6, bb0 = t & 63;
+        const crd::f32* const tr = twr + n2 * 64, * const ti = twi + n2 * 64;
+        V n63r, n63i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 63 * b + t), n63r, n63i);
+        V n62r, n62i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 62 * b + t), n62r, n62i);
+        V n61r, n61i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 61 * b + t), n61r, n61i);
+        V n60r, n60i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 60 * b + t), n60r, n60i);
+        V n59r, n59i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 59 * b + t), n59r, n59i);
+        V n58r, n58i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 58 * b + t), n58r, n58i);
+        V n57r, n57i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 57 * b + t), n57r, n57i);
+        V n56r, n56i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 56 * b + t), n56r, n56i);
+        V n55r, n55i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 55 * b + t), n55r, n55i);
+        V n54r, n54i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 54 * b + t), n54r, n54i);
+        V n53r, n53i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 53 * b + t), n53r, n53i);
+        V n52r, n52i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 52 * b + t), n52r, n52i);
+        V n51r, n51i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 51 * b + t), n51r, n51i);
+        V n50r, n50i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 50 * b + t), n50r, n50i);
+        V n49r, n49i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 49 * b + t), n49r, n49i);
+        V n48r, n48i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 48 * b + t), n48r, n48i);
+        V n47r, n47i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 47 * b + t), n47r, n47i);
+        V n46r, n46i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 46 * b + t), n46r, n46i);
+        V n45r, n45i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 45 * b + t), n45r, n45i);
+        V n44r, n44i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 44 * b + t), n44r, n44i);
+        V n43r, n43i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 43 * b + t), n43r, n43i);
+        V n42r, n42i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 42 * b + t), n42r, n42i);
+        V n41r, n41i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 41 * b + t), n41r, n41i);
+        V n40r, n40i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 40 * b + t), n40r, n40i);
+        V n39r, n39i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 39 * b + t), n39r, n39i);
+        V n38r, n38i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 38 * b + t), n38r, n38i);
+        V n37r, n37i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 37 * b + t), n37r, n37i);
+        V n36r, n36i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 36 * b + t), n36r, n36i);
+        V n35r, n35i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 35 * b + t), n35r, n35i);
+        V n34r, n34i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 34 * b + t), n34r, n34i);
+        V n33r, n33i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 33 * b + t), n33r, n33i);
+        V n32r, n32i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 32 * b + t), n32r, n32i);
+        V n31r, n31i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 31 * b + t), n31r, n31i);
+        const V n395r = n31r - n63r, n395i = n31i - n63i;
+        const V n394r = n31r + n63r, n394i = n31i + n63i;
+        const V n396r = n395i, n396i = -n395r;
+        V n30r, n30i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 30 * b + t), n30r, n30i);
+        const V n186r = n30r - n62r, n186i = n30i - n62i;
+        const V n185r = n30r + n62r, n185i = n30i + n62i;
+        const V n195r = V(static_cast<crd::f32>(-0.7071067811865475)) * n186r - V(static_cast<crd::f32>(-0.7071067811865476)) * n186i, n195i = V(static_cast<crd::f32>(-0.7071067811865475)) * n186i + V(static_cast<crd::f32>(-0.7071067811865476)) * n186r;
+        V n29r, n29i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 29 * b + t), n29r, n29i);
+        const V n314r = n29r - n61r, n314i = n29i - n61i;
+        const V n313r = n29r + n61r, n313i = n29i + n61i;
+        const V n315r = n314i, n315i = -n314r;
+        V n28r, n28i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 28 * b + t), n28r, n28i);
+        const V n105r = n28r - n60r, n105i = n28i - n60i;
+        const V n104r = n28r + n60r, n104i = n28i + n60i;
+        const V n106r = n105i, n106i = -n105r;
+        V n27r, n27i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 27 * b + t), n27r, n27i);
+        const V n366r = n27r - n59r, n366i = n27i - n59i;
+        const V n365r = n27r + n59r, n365i = n27i + n59i;
+        const V n375r = V(static_cast<crd::f32>(-0.7071067811865475)) * n366r - V(static_cast<crd::f32>(-0.7071067811865476)) * n366i, n375i = V(static_cast<crd::f32>(-0.7071067811865475)) * n366i + V(static_cast<crd::f32>(-0.7071067811865476)) * n366r;
+        V n26r, n26i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 26 * b + t), n26r, n26i);
+        const V n157r = n26r - n58r, n157i = n26i - n58i;
+        const V n156r = n26r + n58r, n156i = n26i + n58i;
+        const V n166r = V(static_cast<crd::f32>(-0.7071067811865475)) * n157r - V(static_cast<crd::f32>(-0.7071067811865476)) * n157i, n166i = V(static_cast<crd::f32>(-0.7071067811865475)) * n157i + V(static_cast<crd::f32>(-0.7071067811865476)) * n157r;
+        V n25r, n25i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 25 * b + t), n25r, n25i);
+        const V n285r = n25r - n57r, n285i = n25i - n57i;
+        const V n284r = n25r + n57r, n284i = n25i + n57i;
+        const V n294r = V(static_cast<crd::f32>(-0.7071067811865475)) * n285r - V(static_cast<crd::f32>(-0.7071067811865476)) * n285i, n294i = V(static_cast<crd::f32>(-0.7071067811865475)) * n285i + V(static_cast<crd::f32>(-0.7071067811865476)) * n285r;
+        V n24r, n24i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 24 * b + t), n24r, n24i);
+        const V n76r = n24r - n56r, n76i = n24i - n56i;
+        const V n75r = n24r + n56r, n75i = n24i + n56i;
+        const V n85r = V(static_cast<crd::f32>(-0.7071067811865475)) * n76r - V(static_cast<crd::f32>(-0.7071067811865476)) * n76i, n85i = V(static_cast<crd::f32>(-0.7071067811865475)) * n76i + V(static_cast<crd::f32>(-0.7071067811865476)) * n76r;
+        V n23r, n23i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 23 * b + t), n23r, n23i);
+        const V n386r = n23r - n55r, n386i = n23i - n55i;
+        const V n385r = n23r + n55r, n385i = n23i + n55i;
+        const V n387r = n386i, n387i = -n386r;
+        V n22r, n22i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 22 * b + t), n22r, n22i);
+        const V n177r = n22r - n54r, n177i = n22i - n54i;
+        const V n176r = n22r + n54r, n176i = n22i + n54i;
+        const V n178r = n177i, n178i = -n177r;
+        V n21r, n21i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 21 * b + t), n21r, n21i);
+        const V n305r = n21r - n53r, n305i = n21i - n53i;
+        const V n304r = n21r + n53r, n304i = n21i + n53i;
+        const V n306r = n305i, n306i = -n305r;
+        V n20r, n20i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 20 * b + t), n20r, n20i);
+        const V n96r = n20r - n52r, n96i = n20i - n52i;
+        const V n95r = n20r + n52r, n95i = n20i + n52i;
+        const V n97r = n96i, n97i = -n96r;
+        V n19r, n19i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 19 * b + t), n19r, n19i);
+        const V n357r = n19r - n51r, n357i = n19i - n51i;
+        const V n356r = n19r + n51r, n356i = n19i + n51i;
+        const V n358r = n357i, n358i = -n357r;
+        V n18r, n18i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 18 * b + t), n18r, n18i);
+        const V n148r = n18r - n50r, n148i = n18i - n50i;
+        const V n147r = n18r + n50r, n147i = n18i + n50i;
+        const V n149r = n148i, n149i = -n148r;
+        V n17r, n17i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 17 * b + t), n17r, n17i);
+        const V n276r = n17r - n49r, n276i = n17i - n49i;
+        const V n275r = n17r + n49r, n275i = n17i + n49i;
+        const V n277r = n276i, n277i = -n276r;
+        V n16r, n16i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 16 * b + t), n16r, n16i);
+        const V n67r = n16r - n48r, n67i = n16i - n48i;
+        const V n66r = n16r + n48r, n66i = n16i + n48i;
+        const V n68r = n67i, n68i = -n67r;
+        V n15r, n15i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 15 * b + t), n15r, n15i);
+        const V n393r = n15r - n47r, n393i = n15i - n47i;
+        const V n392r = n15r + n47r, n392i = n15i + n47i;
+        const V n400r = n393r - n396r, n400i = n393i - n396i;
+        const V n399r = n393r + n396r, n399i = n393i + n396i;
+        const V n427r = V(static_cast<crd::f32>(-0.9238795325112868)) * n400r - V(static_cast<crd::f32>(0.38268343236508967)) * n400i, n427i = V(static_cast<crd::f32>(-0.9238795325112868)) * n400i + V(static_cast<crd::f32>(0.38268343236508967)) * n400r;
+        const V n409r = V(static_cast<crd::f32>(0.38268343236508984)) * n399r - V(static_cast<crd::f32>(-0.9238795325112867)) * n399i, n409i = V(static_cast<crd::f32>(0.38268343236508984)) * n399i + V(static_cast<crd::f32>(-0.9238795325112867)) * n399r;
+        const V n398r = n392r - n394r, n398i = n392i - n394i;
+        const V n397r = n392r + n394r, n397i = n392i + n394i;
+        const V n418r = V(static_cast<crd::f32>(-0.7071067811865475)) * n398r - V(static_cast<crd::f32>(-0.7071067811865476)) * n398i, n418i = V(static_cast<crd::f32>(-0.7071067811865475)) * n398i + V(static_cast<crd::f32>(-0.7071067811865476)) * n398r;
+        V n14r, n14i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 14 * b + t), n14r, n14i);
+        const V n184r = n14r - n46r, n184i = n14i - n46i;
+        const V n183r = n14r + n46r, n183i = n14i + n46i;
+        const V n194r = V(static_cast<crd::f32>(0.7071067811865476)) * n184r - V(static_cast<crd::f32>(-0.7071067811865475)) * n184i, n194i = V(static_cast<crd::f32>(0.7071067811865476)) * n184i + V(static_cast<crd::f32>(-0.7071067811865475)) * n184r;
+        const V n197r = n194r - n195r, n197i = n194i - n195i;
+        const V n196r = n194r + n195r, n196i = n194i + n195i;
+        const V n198r = n197i, n198i = -n197r;
+        const V n188r = n183r - n185r, n188i = n183i - n185i;
+        const V n187r = n183r + n185r, n187i = n183i + n185i;
+        const V n189r = n188i, n189i = -n188r;
+        V n13r, n13i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 13 * b + t), n13r, n13i);
+        const V n312r = n13r - n45r, n312i = n13i - n45i;
+        const V n311r = n13r + n45r, n311i = n13i + n45i;
+        const V n319r = n312r - n315r, n319i = n312i - n315i;
+        const V n318r = n312r + n315r, n318i = n312i + n315i;
+        const V n346r = V(static_cast<crd::f32>(-0.9238795325112868)) * n319r - V(static_cast<crd::f32>(0.38268343236508967)) * n319i, n346i = V(static_cast<crd::f32>(-0.9238795325112868)) * n319i + V(static_cast<crd::f32>(0.38268343236508967)) * n319r;
+        const V n328r = V(static_cast<crd::f32>(0.38268343236508984)) * n318r - V(static_cast<crd::f32>(-0.9238795325112867)) * n318i, n328i = V(static_cast<crd::f32>(0.38268343236508984)) * n318i + V(static_cast<crd::f32>(-0.9238795325112867)) * n318r;
+        const V n317r = n311r - n313r, n317i = n311i - n313i;
+        const V n316r = n311r + n313r, n316i = n311i + n313i;
+        const V n337r = V(static_cast<crd::f32>(-0.7071067811865475)) * n317r - V(static_cast<crd::f32>(-0.7071067811865476)) * n317i, n337i = V(static_cast<crd::f32>(-0.7071067811865475)) * n317i + V(static_cast<crd::f32>(-0.7071067811865476)) * n317r;
+        V n12r, n12i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 12 * b + t), n12r, n12i);
+        const V n103r = n12r - n44r, n103i = n12i - n44i;
+        const V n102r = n12r + n44r, n102i = n12i + n44i;
+        const V n110r = n103r - n106r, n110i = n103i - n106i;
+        const V n109r = n103r + n106r, n109i = n103i + n106i;
+        const V n137r = V(static_cast<crd::f32>(-0.9238795325112868)) * n110r - V(static_cast<crd::f32>(0.38268343236508967)) * n110i, n137i = V(static_cast<crd::f32>(-0.9238795325112868)) * n110i + V(static_cast<crd::f32>(0.38268343236508967)) * n110r;
+        const V n119r = V(static_cast<crd::f32>(0.38268343236508984)) * n109r - V(static_cast<crd::f32>(-0.9238795325112867)) * n109i, n119i = V(static_cast<crd::f32>(0.38268343236508984)) * n109i + V(static_cast<crd::f32>(-0.9238795325112867)) * n109r;
+        const V n108r = n102r - n104r, n108i = n102i - n104i;
+        const V n107r = n102r + n104r, n107i = n102i + n104i;
+        const V n128r = V(static_cast<crd::f32>(-0.7071067811865475)) * n108r - V(static_cast<crd::f32>(-0.7071067811865476)) * n108i, n128i = V(static_cast<crd::f32>(-0.7071067811865475)) * n108i + V(static_cast<crd::f32>(-0.7071067811865476)) * n108r;
+        V n11r, n11i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 11 * b + t), n11r, n11i);
+        const V n364r = n11r - n43r, n364i = n11i - n43i;
+        const V n363r = n11r + n43r, n363i = n11i + n43i;
+        const V n374r = V(static_cast<crd::f32>(0.7071067811865476)) * n364r - V(static_cast<crd::f32>(-0.7071067811865475)) * n364i, n374i = V(static_cast<crd::f32>(0.7071067811865476)) * n364i + V(static_cast<crd::f32>(-0.7071067811865475)) * n364r;
+        const V n377r = n374r - n375r, n377i = n374i - n375i;
+        const V n376r = n374r + n375r, n376i = n374i + n375i;
+        const V n378r = n377i, n378i = -n377r;
+        const V n368r = n363r - n365r, n368i = n363i - n365i;
+        const V n367r = n363r + n365r, n367i = n363i + n365i;
+        const V n369r = n368i, n369i = -n368r;
+        V n10r, n10i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 10 * b + t), n10r, n10i);
+        const V n155r = n10r - n42r, n155i = n10i - n42i;
+        const V n154r = n10r + n42r, n154i = n10i + n42i;
+        const V n165r = V(static_cast<crd::f32>(0.7071067811865476)) * n155r - V(static_cast<crd::f32>(-0.7071067811865475)) * n155i, n165i = V(static_cast<crd::f32>(0.7071067811865476)) * n155i + V(static_cast<crd::f32>(-0.7071067811865475)) * n155r;
+        const V n168r = n165r - n166r, n168i = n165i - n166i;
+        const V n167r = n165r + n166r, n167i = n165i + n166i;
+        const V n169r = n168i, n169i = -n168r;
+        const V n159r = n154r - n156r, n159i = n154i - n156i;
+        const V n158r = n154r + n156r, n158i = n154i + n156i;
+        const V n160r = n159i, n160i = -n159r;
+        V n9r, n9i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 9 * b + t), n9r, n9i);
+        const V n283r = n9r - n41r, n283i = n9i - n41i;
+        const V n282r = n9r + n41r, n282i = n9i + n41i;
+        const V n293r = V(static_cast<crd::f32>(0.7071067811865476)) * n283r - V(static_cast<crd::f32>(-0.7071067811865475)) * n283i, n293i = V(static_cast<crd::f32>(0.7071067811865476)) * n283i + V(static_cast<crd::f32>(-0.7071067811865475)) * n283r;
+        const V n296r = n293r - n294r, n296i = n293i - n294i;
+        const V n295r = n293r + n294r, n295i = n293i + n294i;
+        const V n297r = n296i, n297i = -n296r;
+        const V n287r = n282r - n284r, n287i = n282i - n284i;
+        const V n286r = n282r + n284r, n286i = n282i + n284i;
+        const V n288r = n287i, n288i = -n287r;
+        V n8r, n8i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 8 * b + t), n8r, n8i);
+        const V n74r = n8r - n40r, n74i = n8i - n40i;
+        const V n73r = n8r + n40r, n73i = n8i + n40i;
+        const V n84r = V(static_cast<crd::f32>(0.7071067811865476)) * n74r - V(static_cast<crd::f32>(-0.7071067811865475)) * n74i, n84i = V(static_cast<crd::f32>(0.7071067811865476)) * n74i + V(static_cast<crd::f32>(-0.7071067811865475)) * n74r;
+        const V n87r = n84r - n85r, n87i = n84i - n85i;
+        const V n86r = n84r + n85r, n86i = n84i + n85i;
+        const V n88r = n87i, n88i = -n87r;
+        const V n78r = n73r - n75r, n78i = n73i - n75i;
+        const V n77r = n73r + n75r, n77i = n73i + n75i;
+        const V n79r = n78i, n79i = -n78r;
+        V n7r, n7i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 7 * b + t), n7r, n7i);
+        const V n384r = n7r - n39r, n384i = n7i - n39i;
+        const V n383r = n7r + n39r, n383i = n7i + n39i;
+        const V n391r = n384r - n387r, n391i = n384i - n387i;
+        const V n390r = n384r + n387r, n390i = n384i + n387i;
+        const V n426r = V(static_cast<crd::f32>(0.38268343236508984)) * n391r - V(static_cast<crd::f32>(-0.9238795325112867)) * n391i, n426i = V(static_cast<crd::f32>(0.38268343236508984)) * n391i + V(static_cast<crd::f32>(-0.9238795325112867)) * n391r;
+        const V n408r = V(static_cast<crd::f32>(0.9238795325112867)) * n390r - V(static_cast<crd::f32>(-0.3826834323650898)) * n390i, n408i = V(static_cast<crd::f32>(0.9238795325112867)) * n390i + V(static_cast<crd::f32>(-0.3826834323650898)) * n390r;
+        const V n429r = n426r - n427r, n429i = n426i - n427i;
+        const V n428r = n426r + n427r, n428i = n426i + n427i;
+        const V n430r = n429i, n430i = -n429r;
+        const V n411r = n408r - n409r, n411i = n408i - n409i;
+        const V n410r = n408r + n409r, n410i = n408i + n409i;
+        const V n412r = n411i, n412i = -n411r;
+        const V n389r = n383r - n385r, n389i = n383i - n385i;
+        const V n388r = n383r + n385r, n388i = n383i + n385i;
+        const V n417r = V(static_cast<crd::f32>(0.7071067811865476)) * n389r - V(static_cast<crd::f32>(-0.7071067811865475)) * n389i, n417i = V(static_cast<crd::f32>(0.7071067811865476)) * n389i + V(static_cast<crd::f32>(-0.7071067811865475)) * n389r;
+        const V n420r = n417r - n418r, n420i = n417i - n418i;
+        const V n419r = n417r + n418r, n419i = n417i + n418i;
+        const V n421r = n420i, n421i = -n420r;
+        const V n402r = n388r - n397r, n402i = n388i - n397i;
+        const V n401r = n388r + n397r, n401i = n388i + n397i;
+        const V n403r = n402i, n403i = -n402r;
+        V n6r, n6i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 6 * b + t), n6r, n6i);
+        const V n175r = n6r - n38r, n175i = n6i - n38i;
+        const V n174r = n6r + n38r, n174i = n6i + n38i;
+        const V n182r = n175r - n178r, n182i = n175i - n178i;
+        const V n181r = n175r + n178r, n181i = n175i + n178i;
+        const V n202r = n182r - n198r, n202i = n182i - n198i;
+        const V n201r = n182r + n198r, n201i = n182i + n198i;
+        const V n265r = V(static_cast<crd::f32>(-0.5555702330196022)) * n202r - V(static_cast<crd::f32>(0.8314696123025452)) * n202i, n265i = V(static_cast<crd::f32>(-0.5555702330196022)) * n202i + V(static_cast<crd::f32>(0.8314696123025452)) * n202r;
+        const V n229r = V(static_cast<crd::f32>(-0.1950903220161282)) * n201r - V(static_cast<crd::f32>(-0.9807852804032304)) * n201i, n229i = V(static_cast<crd::f32>(-0.1950903220161282)) * n201i + V(static_cast<crd::f32>(-0.9807852804032304)) * n201r;
+        const V n200r = n181r - n196r, n200i = n181i - n196i;
+        const V n199r = n181r + n196r, n199i = n181i + n196i;
+        const V n247r = V(static_cast<crd::f32>(-0.9807852804032304)) * n200r - V(static_cast<crd::f32>(-0.1950903220161286)) * n200i, n247i = V(static_cast<crd::f32>(-0.9807852804032304)) * n200i + V(static_cast<crd::f32>(-0.1950903220161286)) * n200r;
+        const V n211r = V(static_cast<crd::f32>(0.8314696123025452)) * n199r - V(static_cast<crd::f32>(-0.5555702330196022)) * n199i, n211i = V(static_cast<crd::f32>(0.8314696123025452)) * n199i + V(static_cast<crd::f32>(-0.5555702330196022)) * n199r;
+        const V n180r = n174r - n176r, n180i = n174i - n176i;
+        const V n179r = n174r + n176r, n179i = n174i + n176i;
+        const V n193r = n180r - n189r, n193i = n180i - n189i;
+        const V n192r = n180r + n189r, n192i = n180i + n189i;
+        const V n256r = V(static_cast<crd::f32>(-0.9238795325112868)) * n193r - V(static_cast<crd::f32>(0.38268343236508967)) * n193i, n256i = V(static_cast<crd::f32>(-0.9238795325112868)) * n193i + V(static_cast<crd::f32>(0.38268343236508967)) * n193r;
+        const V n220r = V(static_cast<crd::f32>(0.38268343236508984)) * n192r - V(static_cast<crd::f32>(-0.9238795325112867)) * n192i, n220i = V(static_cast<crd::f32>(0.38268343236508984)) * n192i + V(static_cast<crd::f32>(-0.9238795325112867)) * n192r;
+        const V n191r = n179r - n187r, n191i = n179i - n187i;
+        const V n190r = n179r + n187r, n190i = n179i + n187i;
+        const V n238r = V(static_cast<crd::f32>(-0.7071067811865475)) * n191r - V(static_cast<crd::f32>(-0.7071067811865476)) * n191i, n238i = V(static_cast<crd::f32>(-0.7071067811865475)) * n191i + V(static_cast<crd::f32>(-0.7071067811865476)) * n191r;
+        V n5r, n5i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 5 * b + t), n5r, n5i);
+        const V n303r = n5r - n37r, n303i = n5i - n37i;
+        const V n302r = n5r + n37r, n302i = n5i + n37i;
+        const V n310r = n303r - n306r, n310i = n303i - n306i;
+        const V n309r = n303r + n306r, n309i = n303i + n306i;
+        const V n345r = V(static_cast<crd::f32>(0.38268343236508984)) * n310r - V(static_cast<crd::f32>(-0.9238795325112867)) * n310i, n345i = V(static_cast<crd::f32>(0.38268343236508984)) * n310i + V(static_cast<crd::f32>(-0.9238795325112867)) * n310r;
+        const V n327r = V(static_cast<crd::f32>(0.9238795325112867)) * n309r - V(static_cast<crd::f32>(-0.3826834323650898)) * n309i, n327i = V(static_cast<crd::f32>(0.9238795325112867)) * n309i + V(static_cast<crd::f32>(-0.3826834323650898)) * n309r;
+        const V n348r = n345r - n346r, n348i = n345i - n346i;
+        const V n347r = n345r + n346r, n347i = n345i + n346i;
+        const V n349r = n348i, n349i = -n348r;
+        const V n330r = n327r - n328r, n330i = n327i - n328i;
+        const V n329r = n327r + n328r, n329i = n327i + n328i;
+        const V n331r = n330i, n331i = -n330r;
+        const V n308r = n302r - n304r, n308i = n302i - n304i;
+        const V n307r = n302r + n304r, n307i = n302i + n304i;
+        const V n336r = V(static_cast<crd::f32>(0.7071067811865476)) * n308r - V(static_cast<crd::f32>(-0.7071067811865475)) * n308i, n336i = V(static_cast<crd::f32>(0.7071067811865476)) * n308i + V(static_cast<crd::f32>(-0.7071067811865475)) * n308r;
+        const V n339r = n336r - n337r, n339i = n336i - n337i;
+        const V n338r = n336r + n337r, n338i = n336i + n337i;
+        const V n340r = n339i, n340i = -n339r;
+        const V n321r = n307r - n316r, n321i = n307i - n316i;
+        const V n320r = n307r + n316r, n320i = n307i + n316i;
+        const V n322r = n321i, n322i = -n321r;
+        V n4r, n4i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 4 * b + t), n4r, n4i);
+        const V n94r = n4r - n36r, n94i = n4i - n36i;
+        const V n93r = n4r + n36r, n93i = n4i + n36i;
+        const V n101r = n94r - n97r, n101i = n94i - n97i;
+        const V n100r = n94r + n97r, n100i = n94i + n97i;
+        const V n136r = V(static_cast<crd::f32>(0.38268343236508984)) * n101r - V(static_cast<crd::f32>(-0.9238795325112867)) * n101i, n136i = V(static_cast<crd::f32>(0.38268343236508984)) * n101i + V(static_cast<crd::f32>(-0.9238795325112867)) * n101r;
+        const V n118r = V(static_cast<crd::f32>(0.9238795325112867)) * n100r - V(static_cast<crd::f32>(-0.3826834323650898)) * n100i, n118i = V(static_cast<crd::f32>(0.9238795325112867)) * n100i + V(static_cast<crd::f32>(-0.3826834323650898)) * n100r;
+        const V n139r = n136r - n137r, n139i = n136i - n137i;
+        const V n138r = n136r + n137r, n138i = n136i + n137i;
+        const V n140r = n139i, n140i = -n139r;
+        const V n121r = n118r - n119r, n121i = n118i - n119i;
+        const V n120r = n118r + n119r, n120i = n118i + n119i;
+        const V n122r = n121i, n122i = -n121r;
+        const V n99r = n93r - n95r, n99i = n93i - n95i;
+        const V n98r = n93r + n95r, n98i = n93i + n95i;
+        const V n127r = V(static_cast<crd::f32>(0.7071067811865476)) * n99r - V(static_cast<crd::f32>(-0.7071067811865475)) * n99i, n127i = V(static_cast<crd::f32>(0.7071067811865476)) * n99i + V(static_cast<crd::f32>(-0.7071067811865475)) * n99r;
+        const V n130r = n127r - n128r, n130i = n127i - n128i;
+        const V n129r = n127r + n128r, n129i = n127i + n128i;
+        const V n131r = n130i, n131i = -n130r;
+        const V n112r = n98r - n107r, n112i = n98i - n107i;
+        const V n111r = n98r + n107r, n111i = n98i + n107i;
+        const V n113r = n112i, n113i = -n112r;
+        V n3r, n3i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 3 * b + t), n3r, n3i);
+        const V n355r = n3r - n35r, n355i = n3i - n35i;
+        const V n354r = n3r + n35r, n354i = n3i + n35i;
+        const V n362r = n355r - n358r, n362i = n355i - n358i;
+        const V n361r = n355r + n358r, n361i = n355i + n358i;
+        const V n382r = n362r - n378r, n382i = n362i - n378i;
+        const V n381r = n362r + n378r, n381i = n362i + n378i;
+        const V n434r = n382r - n430r, n434i = n382i - n430i;
+        const V n433r = n382r + n430r, n433i = n382i + n430i;
+        const V n569r = V(static_cast<crd::f32>(-0.29028467725446244)) * n434r - V(static_cast<crd::f32>(0.9569403357322088)) * n434i, n569i = V(static_cast<crd::f32>(-0.29028467725446244)) * n434i + V(static_cast<crd::f32>(0.9569403357322088)) * n434r;
+        const V n497r = V(static_cast<crd::f32>(-0.4713967368259977)) * n433r - V(static_cast<crd::f32>(-0.881921264348355)) * n433i, n497i = V(static_cast<crd::f32>(-0.4713967368259977)) * n433i + V(static_cast<crd::f32>(-0.881921264348355)) * n433r;
+        const V n432r = n381r - n428r, n432i = n381i - n428i;
+        const V n431r = n381r + n428r, n431i = n381i + n428i;
+        const V n533r = V(static_cast<crd::f32>(-0.9951847266721969)) * n432r - V(static_cast<crd::f32>(0.09801714032956059)) * n432i, n533i = V(static_cast<crd::f32>(-0.9951847266721969)) * n432i + V(static_cast<crd::f32>(0.09801714032956059)) * n432r;
+        const V n461r = V(static_cast<crd::f32>(0.6343932841636455)) * n431r - V(static_cast<crd::f32>(-0.773010453362737)) * n431i, n461i = V(static_cast<crd::f32>(0.6343932841636455)) * n431i + V(static_cast<crd::f32>(-0.773010453362737)) * n431r;
+        const V n380r = n361r - n376r, n380i = n361i - n376i;
+        const V n379r = n361r + n376r, n379i = n361i + n376i;
+        const V n416r = n380r - n412r, n416i = n380i - n412i;
+        const V n415r = n380r + n412r, n415i = n380i + n412i;
+        const V n551r = V(static_cast<crd::f32>(-0.7730104533627371)) * n416r - V(static_cast<crd::f32>(0.6343932841636453)) * n416i, n551i = V(static_cast<crd::f32>(-0.7730104533627371)) * n416i + V(static_cast<crd::f32>(0.6343932841636453)) * n416r;
+        const V n479r = V(static_cast<crd::f32>(0.09801714032956077)) * n415r - V(static_cast<crd::f32>(-0.9951847266721968)) * n415i, n479i = V(static_cast<crd::f32>(0.09801714032956077)) * n415i + V(static_cast<crd::f32>(-0.9951847266721968)) * n415r;
+        const V n414r = n379r - n410r, n414i = n379i - n410i;
+        const V n413r = n379r + n410r, n413i = n379i + n410i;
+        const V n515r = V(static_cast<crd::f32>(-0.8819212643483549)) * n414r - V(static_cast<crd::f32>(-0.47139673682599786)) * n414i, n515i = V(static_cast<crd::f32>(-0.8819212643483549)) * n414i + V(static_cast<crd::f32>(-0.47139673682599786)) * n414r;
+        const V n443r = V(static_cast<crd::f32>(0.9569403357322088)) * n413r - V(static_cast<crd::f32>(-0.29028467725446233)) * n413i, n443i = V(static_cast<crd::f32>(0.9569403357322088)) * n413i + V(static_cast<crd::f32>(-0.29028467725446233)) * n413r;
+        const V n360r = n354r - n356r, n360i = n354i - n356i;
+        const V n359r = n354r + n356r, n359i = n354i + n356i;
+        const V n373r = n360r - n369r, n373i = n360i - n369i;
+        const V n372r = n360r + n369r, n372i = n360i + n369i;
+        const V n425r = n373r - n421r, n425i = n373i - n421i;
+        const V n424r = n373r + n421r, n424i = n373i + n421i;
+        const V n560r = V(static_cast<crd::f32>(-0.5555702330196022)) * n425r - V(static_cast<crd::f32>(0.8314696123025452)) * n425i, n560i = V(static_cast<crd::f32>(-0.5555702330196022)) * n425i + V(static_cast<crd::f32>(0.8314696123025452)) * n425r;
+        const V n488r = V(static_cast<crd::f32>(-0.1950903220161282)) * n424r - V(static_cast<crd::f32>(-0.9807852804032304)) * n424i, n488i = V(static_cast<crd::f32>(-0.1950903220161282)) * n424i + V(static_cast<crd::f32>(-0.9807852804032304)) * n424r;
+        const V n423r = n372r - n419r, n423i = n372i - n419i;
+        const V n422r = n372r + n419r, n422i = n372i + n419i;
+        const V n524r = V(static_cast<crd::f32>(-0.9807852804032304)) * n423r - V(static_cast<crd::f32>(-0.1950903220161286)) * n423i, n524i = V(static_cast<crd::f32>(-0.9807852804032304)) * n423i + V(static_cast<crd::f32>(-0.1950903220161286)) * n423r;
+        const V n452r = V(static_cast<crd::f32>(0.8314696123025452)) * n422r - V(static_cast<crd::f32>(-0.5555702330196022)) * n422i, n452i = V(static_cast<crd::f32>(0.8314696123025452)) * n422i + V(static_cast<crd::f32>(-0.5555702330196022)) * n422r;
+        const V n371r = n359r - n367r, n371i = n359i - n367i;
+        const V n370r = n359r + n367r, n370i = n359i + n367i;
+        const V n407r = n371r - n403r, n407i = n371i - n403i;
+        const V n406r = n371r + n403r, n406i = n371i + n403i;
+        const V n542r = V(static_cast<crd::f32>(-0.9238795325112868)) * n407r - V(static_cast<crd::f32>(0.38268343236508967)) * n407i, n542i = V(static_cast<crd::f32>(-0.9238795325112868)) * n407i + V(static_cast<crd::f32>(0.38268343236508967)) * n407r;
+        const V n470r = V(static_cast<crd::f32>(0.38268343236508984)) * n406r - V(static_cast<crd::f32>(-0.9238795325112867)) * n406i, n470i = V(static_cast<crd::f32>(0.38268343236508984)) * n406i + V(static_cast<crd::f32>(-0.9238795325112867)) * n406r;
+        const V n405r = n370r - n401r, n405i = n370i - n401i;
+        const V n404r = n370r + n401r, n404i = n370i + n401i;
+        const V n506r = V(static_cast<crd::f32>(-0.7071067811865475)) * n405r - V(static_cast<crd::f32>(-0.7071067811865476)) * n405i, n506i = V(static_cast<crd::f32>(-0.7071067811865475)) * n405i + V(static_cast<crd::f32>(-0.7071067811865476)) * n405r;
+        V n2r, n2i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 2 * b + t), n2r, n2i);
+        const V n146r = n2r - n34r, n146i = n2i - n34i;
+        const V n145r = n2r + n34r, n145i = n2i + n34i;
+        const V n153r = n146r - n149r, n153i = n146i - n149i;
+        const V n152r = n146r + n149r, n152i = n146i + n149i;
+        const V n173r = n153r - n169r, n173i = n153i - n169i;
+        const V n172r = n153r + n169r, n172i = n153i + n169i;
+        const V n264r = V(static_cast<crd::f32>(0.19509032201612833)) * n173r - V(static_cast<crd::f32>(-0.9807852804032304)) * n173i, n264i = V(static_cast<crd::f32>(0.19509032201612833)) * n173i + V(static_cast<crd::f32>(-0.9807852804032304)) * n173r;
+        const V n228r = V(static_cast<crd::f32>(0.8314696123025452)) * n172r - V(static_cast<crd::f32>(-0.5555702330196022)) * n172i, n228i = V(static_cast<crd::f32>(0.8314696123025452)) * n172i + V(static_cast<crd::f32>(-0.5555702330196022)) * n172r;
+        const V n267r = n264r - n265r, n267i = n264i - n265i;
+        const V n266r = n264r + n265r, n266i = n264i + n265i;
+        const V n268r = n267i, n268i = -n267r;
+        const V n231r = n228r - n229r, n231i = n228i - n229i;
+        const V n230r = n228r + n229r, n230i = n228i + n229i;
+        const V n232r = n231i, n232i = -n231r;
+        const V n171r = n152r - n167r, n171i = n152i - n167i;
+        const V n170r = n152r + n167r, n170i = n152i + n167i;
+        const V n246r = V(static_cast<crd::f32>(0.5555702330196023)) * n171r - V(static_cast<crd::f32>(-0.8314696123025452)) * n171i, n246i = V(static_cast<crd::f32>(0.5555702330196023)) * n171i + V(static_cast<crd::f32>(-0.8314696123025452)) * n171r;
+        const V n210r = V(static_cast<crd::f32>(0.9807852804032304)) * n170r - V(static_cast<crd::f32>(-0.19509032201612825)) * n170i, n210i = V(static_cast<crd::f32>(0.9807852804032304)) * n170i + V(static_cast<crd::f32>(-0.19509032201612825)) * n170r;
+        const V n249r = n246r - n247r, n249i = n246i - n247i;
+        const V n248r = n246r + n247r, n248i = n246i + n247i;
+        const V n250r = n249i, n250i = -n249r;
+        const V n213r = n210r - n211r, n213i = n210i - n211i;
+        const V n212r = n210r + n211r, n212i = n210i + n211i;
+        const V n214r = n213i, n214i = -n213r;
+        const V n151r = n145r - n147r, n151i = n145i - n147i;
+        const V n150r = n145r + n147r, n150i = n145i + n147i;
+        const V n164r = n151r - n160r, n164i = n151i - n160i;
+        const V n163r = n151r + n160r, n163i = n151i + n160i;
+        const V n255r = V(static_cast<crd::f32>(0.38268343236508984)) * n164r - V(static_cast<crd::f32>(-0.9238795325112867)) * n164i, n255i = V(static_cast<crd::f32>(0.38268343236508984)) * n164i + V(static_cast<crd::f32>(-0.9238795325112867)) * n164r;
+        const V n219r = V(static_cast<crd::f32>(0.9238795325112867)) * n163r - V(static_cast<crd::f32>(-0.3826834323650898)) * n163i, n219i = V(static_cast<crd::f32>(0.9238795325112867)) * n163i + V(static_cast<crd::f32>(-0.3826834323650898)) * n163r;
+        const V n258r = n255r - n256r, n258i = n255i - n256i;
+        const V n257r = n255r + n256r, n257i = n255i + n256i;
+        const V n259r = n258i, n259i = -n258r;
+        const V n222r = n219r - n220r, n222i = n219i - n220i;
+        const V n221r = n219r + n220r, n221i = n219i + n220i;
+        const V n223r = n222i, n223i = -n222r;
+        const V n162r = n150r - n158r, n162i = n150i - n158i;
+        const V n161r = n150r + n158r, n161i = n150i + n158i;
+        const V n237r = V(static_cast<crd::f32>(0.7071067811865476)) * n162r - V(static_cast<crd::f32>(-0.7071067811865475)) * n162i, n237i = V(static_cast<crd::f32>(0.7071067811865476)) * n162i + V(static_cast<crd::f32>(-0.7071067811865475)) * n162r;
+        const V n240r = n237r - n238r, n240i = n237i - n238i;
+        const V n239r = n237r + n238r, n239i = n237i + n238i;
+        const V n241r = n240i, n241i = -n240r;
+        const V n204r = n161r - n190r, n204i = n161i - n190i;
+        const V n203r = n161r + n190r, n203i = n161i + n190i;
+        const V n205r = n204i, n205i = -n204r;
+        V n1r, n1i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 1 * b + t), n1r, n1i);
+        const V n274r = n1r - n33r, n274i = n1i - n33i;
+        const V n273r = n1r + n33r, n273i = n1i + n33i;
+        const V n281r = n274r - n277r, n281i = n274i - n277i;
+        const V n280r = n274r + n277r, n280i = n274i + n277i;
+        const V n301r = n281r - n297r, n301i = n281i - n297i;
+        const V n300r = n281r + n297r, n300i = n281i + n297i;
+        const V n353r = n301r - n349r, n353i = n301i - n349i;
+        const V n352r = n301r + n349r, n352i = n301i + n349i;
+        const V n568r = V(static_cast<crd::f32>(0.09801714032956077)) * n353r - V(static_cast<crd::f32>(-0.9951847266721968)) * n353i, n568i = V(static_cast<crd::f32>(0.09801714032956077)) * n353i + V(static_cast<crd::f32>(-0.9951847266721968)) * n353r;
+        const V n496r = V(static_cast<crd::f32>(0.773010453362737)) * n352r - V(static_cast<crd::f32>(-0.6343932841636455)) * n352i, n496i = V(static_cast<crd::f32>(0.773010453362737)) * n352i + V(static_cast<crd::f32>(-0.6343932841636455)) * n352r;
+        const V n571r = n568r - n569r, n571i = n568i - n569i;
+        const V n570r = n568r + n569r, n570i = n568i + n569i;
+        const V n572r = n571i, n572i = -n571r;
+        const V n499r = n496r - n497r, n499i = n496i - n497i;
+        const V n498r = n496r + n497r, n498i = n496i + n497i;
+        const V n500r = n499i, n500i = -n499r;
+        const V n351r = n300r - n347r, n351i = n300i - n347i;
+        const V n350r = n300r + n347r, n350i = n300i + n347i;
+        const V n532r = V(static_cast<crd::f32>(0.4713967368259978)) * n351r - V(static_cast<crd::f32>(-0.8819212643483549)) * n351i, n532i = V(static_cast<crd::f32>(0.4713967368259978)) * n351i + V(static_cast<crd::f32>(-0.8819212643483549)) * n351r;
+        const V n460r = V(static_cast<crd::f32>(0.9569403357322088)) * n350r - V(static_cast<crd::f32>(-0.29028467725446233)) * n350i, n460i = V(static_cast<crd::f32>(0.9569403357322088)) * n350i + V(static_cast<crd::f32>(-0.29028467725446233)) * n350r;
+        const V n535r = n532r - n533r, n535i = n532i - n533i;
+        const V n534r = n532r + n533r, n534i = n532i + n533i;
+        const V n536r = n535i, n536i = -n535r;
+        const V n463r = n460r - n461r, n463i = n460i - n461i;
+        const V n462r = n460r + n461r, n462i = n460i + n461i;
+        const V n464r = n463i, n464i = -n463r;
+        const V n299r = n280r - n295r, n299i = n280i - n295i;
+        const V n298r = n280r + n295r, n298i = n280i + n295i;
+        const V n335r = n299r - n331r, n335i = n299i - n331i;
+        const V n334r = n299r + n331r, n334i = n299i + n331i;
+        const V n550r = V(static_cast<crd::f32>(0.29028467725446233)) * n335r - V(static_cast<crd::f32>(-0.9569403357322089)) * n335i, n550i = V(static_cast<crd::f32>(0.29028467725446233)) * n335i + V(static_cast<crd::f32>(-0.9569403357322089)) * n335r;
+        const V n478r = V(static_cast<crd::f32>(0.881921264348355)) * n334r - V(static_cast<crd::f32>(-0.47139673682599764)) * n334i, n478i = V(static_cast<crd::f32>(0.881921264348355)) * n334i + V(static_cast<crd::f32>(-0.47139673682599764)) * n334r;
+        const V n553r = n550r - n551r, n553i = n550i - n551i;
+        const V n552r = n550r + n551r, n552i = n550i + n551i;
+        const V n554r = n553i, n554i = -n553r;
+        const V n481r = n478r - n479r, n481i = n478i - n479i;
+        const V n480r = n478r + n479r, n480i = n478i + n479i;
+        const V n482r = n481i, n482i = -n481r;
+        const V n333r = n298r - n329r, n333i = n298i - n329i;
+        const V n332r = n298r + n329r, n332i = n298i + n329i;
+        const V n514r = V(static_cast<crd::f32>(0.6343932841636455)) * n333r - V(static_cast<crd::f32>(-0.773010453362737)) * n333i, n514i = V(static_cast<crd::f32>(0.6343932841636455)) * n333i + V(static_cast<crd::f32>(-0.773010453362737)) * n333r;
+        const V n442r = V(static_cast<crd::f32>(0.9951847266721969)) * n332r - V(static_cast<crd::f32>(-0.0980171403295606)) * n332i, n442i = V(static_cast<crd::f32>(0.9951847266721969)) * n332i + V(static_cast<crd::f32>(-0.0980171403295606)) * n332r;
+        const V n517r = n514r - n515r, n517i = n514i - n515i;
+        const V n516r = n514r + n515r, n516i = n514i + n515i;
+        const V n518r = n517i, n518i = -n517r;
+        const V n445r = n442r - n443r, n445i = n442i - n443i;
+        const V n444r = n442r + n443r, n444i = n442i + n443i;
+        const V n446r = n445i, n446i = -n445r;
+        const V n279r = n273r - n275r, n279i = n273i - n275i;
+        const V n278r = n273r + n275r, n278i = n273i + n275i;
+        const V n292r = n279r - n288r, n292i = n279i - n288i;
+        const V n291r = n279r + n288r, n291i = n279i + n288i;
+        const V n344r = n292r - n340r, n344i = n292i - n340i;
+        const V n343r = n292r + n340r, n343i = n292i + n340i;
+        const V n559r = V(static_cast<crd::f32>(0.19509032201612833)) * n344r - V(static_cast<crd::f32>(-0.9807852804032304)) * n344i, n559i = V(static_cast<crd::f32>(0.19509032201612833)) * n344i + V(static_cast<crd::f32>(-0.9807852804032304)) * n344r;
+        const V n487r = V(static_cast<crd::f32>(0.8314696123025452)) * n343r - V(static_cast<crd::f32>(-0.5555702330196022)) * n343i, n487i = V(static_cast<crd::f32>(0.8314696123025452)) * n343i + V(static_cast<crd::f32>(-0.5555702330196022)) * n343r;
+        const V n562r = n559r - n560r, n562i = n559i - n560i;
+        const V n561r = n559r + n560r, n561i = n559i + n560i;
+        const V n563r = n562i, n563i = -n562r;
+        const V n490r = n487r - n488r, n490i = n487i - n488i;
+        const V n489r = n487r + n488r, n489i = n487i + n488i;
+        const V n491r = n490i, n491i = -n490r;
+        const V n342r = n291r - n338r, n342i = n291i - n338i;
+        const V n341r = n291r + n338r, n341i = n291i + n338i;
+        const V n523r = V(static_cast<crd::f32>(0.5555702330196023)) * n342r - V(static_cast<crd::f32>(-0.8314696123025452)) * n342i, n523i = V(static_cast<crd::f32>(0.5555702330196023)) * n342i + V(static_cast<crd::f32>(-0.8314696123025452)) * n342r;
+        const V n451r = V(static_cast<crd::f32>(0.9807852804032304)) * n341r - V(static_cast<crd::f32>(-0.19509032201612825)) * n341i, n451i = V(static_cast<crd::f32>(0.9807852804032304)) * n341i + V(static_cast<crd::f32>(-0.19509032201612825)) * n341r;
+        const V n526r = n523r - n524r, n526i = n523i - n524i;
+        const V n525r = n523r + n524r, n525i = n523i + n524i;
+        const V n527r = n526i, n527i = -n526r;
+        const V n454r = n451r - n452r, n454i = n451i - n452i;
+        const V n453r = n451r + n452r, n453i = n451i + n452i;
+        const V n455r = n454i, n455i = -n454r;
+        const V n290r = n278r - n286r, n290i = n278i - n286i;
+        const V n289r = n278r + n286r, n289i = n278i + n286i;
+        const V n326r = n290r - n322r, n326i = n290i - n322i;
+        const V n325r = n290r + n322r, n325i = n290i + n322i;
+        const V n541r = V(static_cast<crd::f32>(0.38268343236508984)) * n326r - V(static_cast<crd::f32>(-0.9238795325112867)) * n326i, n541i = V(static_cast<crd::f32>(0.38268343236508984)) * n326i + V(static_cast<crd::f32>(-0.9238795325112867)) * n326r;
+        const V n469r = V(static_cast<crd::f32>(0.9238795325112867)) * n325r - V(static_cast<crd::f32>(-0.3826834323650898)) * n325i, n469i = V(static_cast<crd::f32>(0.9238795325112867)) * n325i + V(static_cast<crd::f32>(-0.3826834323650898)) * n325r;
+        const V n544r = n541r - n542r, n544i = n541i - n542i;
+        const V n543r = n541r + n542r, n543i = n541i + n542i;
+        const V n545r = n544i, n545i = -n544r;
+        const V n472r = n469r - n470r, n472i = n469i - n470i;
+        const V n471r = n469r + n470r, n471i = n469i + n470i;
+        const V n473r = n472i, n473i = -n472r;
+        const V n324r = n289r - n320r, n324i = n289i - n320i;
+        const V n323r = n289r + n320r, n323i = n289i + n320i;
+        const V n505r = V(static_cast<crd::f32>(0.7071067811865476)) * n324r - V(static_cast<crd::f32>(-0.7071067811865475)) * n324i, n505i = V(static_cast<crd::f32>(0.7071067811865476)) * n324i + V(static_cast<crd::f32>(-0.7071067811865475)) * n324r;
+        const V n508r = n505r - n506r, n508i = n505i - n506i;
+        const V n507r = n505r + n506r, n507i = n505i + n506i;
+        const V n509r = n508i, n509i = -n508r;
+        const V n436r = n323r - n404r, n436i = n323i - n404i;
+        const V n435r = n323r + n404r, n435i = n323i + n404i;
+        const V n437r = n436i, n437i = -n436r;
+        V n0r, n0i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 0 * b + t), n0r, n0i);
+        const V n65r = n0r - n32r, n65i = n0i - n32i;
+        const V n64r = n0r + n32r, n64i = n0i + n32i;
+        const V n72r = n65r - n68r, n72i = n65i - n68i;
+        const V n71r = n65r + n68r, n71i = n65i + n68i;
+        const V n92r = n72r - n88r, n92i = n72i - n88i;
+        const V n91r = n72r + n88r, n91i = n72i + n88i;
+        const V n144r = n92r - n140r, n144i = n92i - n140i;
+        const V n143r = n92r + n140r, n143i = n92i + n140i;
+        const V n272r = n144r - n268r, n272i = n144i - n268i;
+        const V n271r = n144r + n268r, n271i = n144i + n268i;
+        const V n576r = n272r - n572r, n576i = n272i - n572i;
+        { const V wr = V(tr[63]), wi = V(ti[63]);
+          const V or_ = n576r * wr - n576i * wi, oi_ = n576r * wi + n576i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 63 * 64 + bb0), or_, oi_); }
+        const V n575r = n272r + n572r, n575i = n272i + n572i;
+        { const V wr = V(tr[31]), wi = V(ti[31]);
+          const V or_ = n575r * wr - n575i * wi, oi_ = n575r * wi + n575i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 31 * 64 + bb0), or_, oi_); }
+        const V n574r = n271r - n570r, n574i = n271i - n570i;
+        { const V wr = V(tr[47]), wi = V(ti[47]);
+          const V or_ = n574r * wr - n574i * wi, oi_ = n574r * wi + n574i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 47 * 64 + bb0), or_, oi_); }
+        const V n573r = n271r + n570r, n573i = n271i + n570i;
+        { const V wr = V(tr[15]), wi = V(ti[15]);
+          const V or_ = n573r * wr - n573i * wi, oi_ = n573r * wi + n573i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 15 * 64 + bb0), or_, oi_); }
+        const V n270r = n143r - n266r, n270i = n143i - n266i;
+        const V n269r = n143r + n266r, n269i = n143i + n266i;
+        const V n504r = n270r - n500r, n504i = n270i - n500i;
+        { const V wr = V(tr[55]), wi = V(ti[55]);
+          const V or_ = n504r * wr - n504i * wi, oi_ = n504r * wi + n504i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 55 * 64 + bb0), or_, oi_); }
+        const V n503r = n270r + n500r, n503i = n270i + n500i;
+        { const V wr = V(tr[23]), wi = V(ti[23]);
+          const V or_ = n503r * wr - n503i * wi, oi_ = n503r * wi + n503i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 23 * 64 + bb0), or_, oi_); }
+        const V n502r = n269r - n498r, n502i = n269i - n498i;
+        { const V wr = V(tr[39]), wi = V(ti[39]);
+          const V or_ = n502r * wr - n502i * wi, oi_ = n502r * wi + n502i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 39 * 64 + bb0), or_, oi_); }
+        const V n501r = n269r + n498r, n501i = n269i + n498i;
+        { const V wr = V(tr[7]), wi = V(ti[7]);
+          const V or_ = n501r * wr - n501i * wi, oi_ = n501r * wi + n501i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 7 * 64 + bb0), or_, oi_); }
+        const V n142r = n91r - n138r, n142i = n91i - n138i;
+        const V n141r = n91r + n138r, n141i = n91i + n138i;
+        const V n236r = n142r - n232r, n236i = n142i - n232i;
+        const V n235r = n142r + n232r, n235i = n142i + n232i;
+        const V n540r = n236r - n536r, n540i = n236i - n536i;
+        { const V wr = V(tr[59]), wi = V(ti[59]);
+          const V or_ = n540r * wr - n540i * wi, oi_ = n540r * wi + n540i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 59 * 64 + bb0), or_, oi_); }
+        const V n539r = n236r + n536r, n539i = n236i + n536i;
+        { const V wr = V(tr[27]), wi = V(ti[27]);
+          const V or_ = n539r * wr - n539i * wi, oi_ = n539r * wi + n539i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 27 * 64 + bb0), or_, oi_); }
+        const V n538r = n235r - n534r, n538i = n235i - n534i;
+        { const V wr = V(tr[43]), wi = V(ti[43]);
+          const V or_ = n538r * wr - n538i * wi, oi_ = n538r * wi + n538i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 43 * 64 + bb0), or_, oi_); }
+        const V n537r = n235r + n534r, n537i = n235i + n534i;
+        { const V wr = V(tr[11]), wi = V(ti[11]);
+          const V or_ = n537r * wr - n537i * wi, oi_ = n537r * wi + n537i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 11 * 64 + bb0), or_, oi_); }
+        const V n234r = n141r - n230r, n234i = n141i - n230i;
+        const V n233r = n141r + n230r, n233i = n141i + n230i;
+        const V n468r = n234r - n464r, n468i = n234i - n464i;
+        { const V wr = V(tr[51]), wi = V(ti[51]);
+          const V or_ = n468r * wr - n468i * wi, oi_ = n468r * wi + n468i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 51 * 64 + bb0), or_, oi_); }
+        const V n467r = n234r + n464r, n467i = n234i + n464i;
+        { const V wr = V(tr[19]), wi = V(ti[19]);
+          const V or_ = n467r * wr - n467i * wi, oi_ = n467r * wi + n467i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 19 * 64 + bb0), or_, oi_); }
+        const V n466r = n233r - n462r, n466i = n233i - n462i;
+        { const V wr = V(tr[35]), wi = V(ti[35]);
+          const V or_ = n466r * wr - n466i * wi, oi_ = n466r * wi + n466i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 35 * 64 + bb0), or_, oi_); }
+        const V n465r = n233r + n462r, n465i = n233i + n462i;
+        { const V wr = V(tr[3]), wi = V(ti[3]);
+          const V or_ = n465r * wr - n465i * wi, oi_ = n465r * wi + n465i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 3 * 64 + bb0), or_, oi_); }
+        const V n90r = n71r - n86r, n90i = n71i - n86i;
+        const V n89r = n71r + n86r, n89i = n71i + n86i;
+        const V n126r = n90r - n122r, n126i = n90i - n122i;
+        const V n125r = n90r + n122r, n125i = n90i + n122i;
+        const V n254r = n126r - n250r, n254i = n126i - n250i;
+        const V n253r = n126r + n250r, n253i = n126i + n250i;
+        const V n558r = n254r - n554r, n558i = n254i - n554i;
+        { const V wr = V(tr[61]), wi = V(ti[61]);
+          const V or_ = n558r * wr - n558i * wi, oi_ = n558r * wi + n558i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 61 * 64 + bb0), or_, oi_); }
+        const V n557r = n254r + n554r, n557i = n254i + n554i;
+        { const V wr = V(tr[29]), wi = V(ti[29]);
+          const V or_ = n557r * wr - n557i * wi, oi_ = n557r * wi + n557i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 29 * 64 + bb0), or_, oi_); }
+        const V n556r = n253r - n552r, n556i = n253i - n552i;
+        { const V wr = V(tr[45]), wi = V(ti[45]);
+          const V or_ = n556r * wr - n556i * wi, oi_ = n556r * wi + n556i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 45 * 64 + bb0), or_, oi_); }
+        const V n555r = n253r + n552r, n555i = n253i + n552i;
+        { const V wr = V(tr[13]), wi = V(ti[13]);
+          const V or_ = n555r * wr - n555i * wi, oi_ = n555r * wi + n555i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 13 * 64 + bb0), or_, oi_); }
+        const V n252r = n125r - n248r, n252i = n125i - n248i;
+        const V n251r = n125r + n248r, n251i = n125i + n248i;
+        const V n486r = n252r - n482r, n486i = n252i - n482i;
+        { const V wr = V(tr[53]), wi = V(ti[53]);
+          const V or_ = n486r * wr - n486i * wi, oi_ = n486r * wi + n486i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 53 * 64 + bb0), or_, oi_); }
+        const V n485r = n252r + n482r, n485i = n252i + n482i;
+        { const V wr = V(tr[21]), wi = V(ti[21]);
+          const V or_ = n485r * wr - n485i * wi, oi_ = n485r * wi + n485i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 21 * 64 + bb0), or_, oi_); }
+        const V n484r = n251r - n480r, n484i = n251i - n480i;
+        { const V wr = V(tr[37]), wi = V(ti[37]);
+          const V or_ = n484r * wr - n484i * wi, oi_ = n484r * wi + n484i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 37 * 64 + bb0), or_, oi_); }
+        const V n483r = n251r + n480r, n483i = n251i + n480i;
+        { const V wr = V(tr[5]), wi = V(ti[5]);
+          const V or_ = n483r * wr - n483i * wi, oi_ = n483r * wi + n483i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 5 * 64 + bb0), or_, oi_); }
+        const V n124r = n89r - n120r, n124i = n89i - n120i;
+        const V n123r = n89r + n120r, n123i = n89i + n120i;
+        const V n218r = n124r - n214r, n218i = n124i - n214i;
+        const V n217r = n124r + n214r, n217i = n124i + n214i;
+        const V n522r = n218r - n518r, n522i = n218i - n518i;
+        { const V wr = V(tr[57]), wi = V(ti[57]);
+          const V or_ = n522r * wr - n522i * wi, oi_ = n522r * wi + n522i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 57 * 64 + bb0), or_, oi_); }
+        const V n521r = n218r + n518r, n521i = n218i + n518i;
+        { const V wr = V(tr[25]), wi = V(ti[25]);
+          const V or_ = n521r * wr - n521i * wi, oi_ = n521r * wi + n521i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 25 * 64 + bb0), or_, oi_); }
+        const V n520r = n217r - n516r, n520i = n217i - n516i;
+        { const V wr = V(tr[41]), wi = V(ti[41]);
+          const V or_ = n520r * wr - n520i * wi, oi_ = n520r * wi + n520i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 41 * 64 + bb0), or_, oi_); }
+        const V n519r = n217r + n516r, n519i = n217i + n516i;
+        { const V wr = V(tr[9]), wi = V(ti[9]);
+          const V or_ = n519r * wr - n519i * wi, oi_ = n519r * wi + n519i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 9 * 64 + bb0), or_, oi_); }
+        const V n216r = n123r - n212r, n216i = n123i - n212i;
+        const V n215r = n123r + n212r, n215i = n123i + n212i;
+        const V n450r = n216r - n446r, n450i = n216i - n446i;
+        { const V wr = V(tr[49]), wi = V(ti[49]);
+          const V or_ = n450r * wr - n450i * wi, oi_ = n450r * wi + n450i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 49 * 64 + bb0), or_, oi_); }
+        const V n449r = n216r + n446r, n449i = n216i + n446i;
+        { const V wr = V(tr[17]), wi = V(ti[17]);
+          const V or_ = n449r * wr - n449i * wi, oi_ = n449r * wi + n449i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 17 * 64 + bb0), or_, oi_); }
+        const V n448r = n215r - n444r, n448i = n215i - n444i;
+        { const V wr = V(tr[33]), wi = V(ti[33]);
+          const V or_ = n448r * wr - n448i * wi, oi_ = n448r * wi + n448i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 33 * 64 + bb0), or_, oi_); }
+        const V n447r = n215r + n444r, n447i = n215i + n444i;
+        { const V wr = V(tr[1]), wi = V(ti[1]);
+          const V or_ = n447r * wr - n447i * wi, oi_ = n447r * wi + n447i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 1 * 64 + bb0), or_, oi_); }
+        const V n70r = n64r - n66r, n70i = n64i - n66i;
+        const V n69r = n64r + n66r, n69i = n64i + n66i;
+        const V n83r = n70r - n79r, n83i = n70i - n79i;
+        const V n82r = n70r + n79r, n82i = n70i + n79i;
+        const V n135r = n83r - n131r, n135i = n83i - n131i;
+        const V n134r = n83r + n131r, n134i = n83i + n131i;
+        const V n263r = n135r - n259r, n263i = n135i - n259i;
+        const V n262r = n135r + n259r, n262i = n135i + n259i;
+        const V n567r = n263r - n563r, n567i = n263i - n563i;
+        { const V wr = V(tr[62]), wi = V(ti[62]);
+          const V or_ = n567r * wr - n567i * wi, oi_ = n567r * wi + n567i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 62 * 64 + bb0), or_, oi_); }
+        const V n566r = n263r + n563r, n566i = n263i + n563i;
+        { const V wr = V(tr[30]), wi = V(ti[30]);
+          const V or_ = n566r * wr - n566i * wi, oi_ = n566r * wi + n566i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 30 * 64 + bb0), or_, oi_); }
+        const V n565r = n262r - n561r, n565i = n262i - n561i;
+        { const V wr = V(tr[46]), wi = V(ti[46]);
+          const V or_ = n565r * wr - n565i * wi, oi_ = n565r * wi + n565i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 46 * 64 + bb0), or_, oi_); }
+        const V n564r = n262r + n561r, n564i = n262i + n561i;
+        { const V wr = V(tr[14]), wi = V(ti[14]);
+          const V or_ = n564r * wr - n564i * wi, oi_ = n564r * wi + n564i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 14 * 64 + bb0), or_, oi_); }
+        const V n261r = n134r - n257r, n261i = n134i - n257i;
+        const V n260r = n134r + n257r, n260i = n134i + n257i;
+        const V n495r = n261r - n491r, n495i = n261i - n491i;
+        { const V wr = V(tr[54]), wi = V(ti[54]);
+          const V or_ = n495r * wr - n495i * wi, oi_ = n495r * wi + n495i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 54 * 64 + bb0), or_, oi_); }
+        const V n494r = n261r + n491r, n494i = n261i + n491i;
+        { const V wr = V(tr[22]), wi = V(ti[22]);
+          const V or_ = n494r * wr - n494i * wi, oi_ = n494r * wi + n494i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 22 * 64 + bb0), or_, oi_); }
+        const V n493r = n260r - n489r, n493i = n260i - n489i;
+        { const V wr = V(tr[38]), wi = V(ti[38]);
+          const V or_ = n493r * wr - n493i * wi, oi_ = n493r * wi + n493i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 38 * 64 + bb0), or_, oi_); }
+        const V n492r = n260r + n489r, n492i = n260i + n489i;
+        { const V wr = V(tr[6]), wi = V(ti[6]);
+          const V or_ = n492r * wr - n492i * wi, oi_ = n492r * wi + n492i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 6 * 64 + bb0), or_, oi_); }
+        const V n133r = n82r - n129r, n133i = n82i - n129i;
+        const V n132r = n82r + n129r, n132i = n82i + n129i;
+        const V n227r = n133r - n223r, n227i = n133i - n223i;
+        const V n226r = n133r + n223r, n226i = n133i + n223i;
+        const V n531r = n227r - n527r, n531i = n227i - n527i;
+        { const V wr = V(tr[58]), wi = V(ti[58]);
+          const V or_ = n531r * wr - n531i * wi, oi_ = n531r * wi + n531i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 58 * 64 + bb0), or_, oi_); }
+        const V n530r = n227r + n527r, n530i = n227i + n527i;
+        { const V wr = V(tr[26]), wi = V(ti[26]);
+          const V or_ = n530r * wr - n530i * wi, oi_ = n530r * wi + n530i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 26 * 64 + bb0), or_, oi_); }
+        const V n529r = n226r - n525r, n529i = n226i - n525i;
+        { const V wr = V(tr[42]), wi = V(ti[42]);
+          const V or_ = n529r * wr - n529i * wi, oi_ = n529r * wi + n529i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 42 * 64 + bb0), or_, oi_); }
+        const V n528r = n226r + n525r, n528i = n226i + n525i;
+        { const V wr = V(tr[10]), wi = V(ti[10]);
+          const V or_ = n528r * wr - n528i * wi, oi_ = n528r * wi + n528i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 10 * 64 + bb0), or_, oi_); }
+        const V n225r = n132r - n221r, n225i = n132i - n221i;
+        const V n224r = n132r + n221r, n224i = n132i + n221i;
+        const V n459r = n225r - n455r, n459i = n225i - n455i;
+        { const V wr = V(tr[50]), wi = V(ti[50]);
+          const V or_ = n459r * wr - n459i * wi, oi_ = n459r * wi + n459i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 50 * 64 + bb0), or_, oi_); }
+        const V n458r = n225r + n455r, n458i = n225i + n455i;
+        { const V wr = V(tr[18]), wi = V(ti[18]);
+          const V or_ = n458r * wr - n458i * wi, oi_ = n458r * wi + n458i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 18 * 64 + bb0), or_, oi_); }
+        const V n457r = n224r - n453r, n457i = n224i - n453i;
+        { const V wr = V(tr[34]), wi = V(ti[34]);
+          const V or_ = n457r * wr - n457i * wi, oi_ = n457r * wi + n457i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 34 * 64 + bb0), or_, oi_); }
+        const V n456r = n224r + n453r, n456i = n224i + n453i;
+        { const V wr = V(tr[2]), wi = V(ti[2]);
+          const V or_ = n456r * wr - n456i * wi, oi_ = n456r * wi + n456i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 2 * 64 + bb0), or_, oi_); }
+        const V n81r = n69r - n77r, n81i = n69i - n77i;
+        const V n80r = n69r + n77r, n80i = n69i + n77i;
+        const V n117r = n81r - n113r, n117i = n81i - n113i;
+        const V n116r = n81r + n113r, n116i = n81i + n113i;
+        const V n245r = n117r - n241r, n245i = n117i - n241i;
+        const V n244r = n117r + n241r, n244i = n117i + n241i;
+        const V n549r = n245r - n545r, n549i = n245i - n545i;
+        { const V wr = V(tr[60]), wi = V(ti[60]);
+          const V or_ = n549r * wr - n549i * wi, oi_ = n549r * wi + n549i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 60 * 64 + bb0), or_, oi_); }
+        const V n548r = n245r + n545r, n548i = n245i + n545i;
+        { const V wr = V(tr[28]), wi = V(ti[28]);
+          const V or_ = n548r * wr - n548i * wi, oi_ = n548r * wi + n548i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 28 * 64 + bb0), or_, oi_); }
+        const V n547r = n244r - n543r, n547i = n244i - n543i;
+        { const V wr = V(tr[44]), wi = V(ti[44]);
+          const V or_ = n547r * wr - n547i * wi, oi_ = n547r * wi + n547i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 44 * 64 + bb0), or_, oi_); }
+        const V n546r = n244r + n543r, n546i = n244i + n543i;
+        { const V wr = V(tr[12]), wi = V(ti[12]);
+          const V or_ = n546r * wr - n546i * wi, oi_ = n546r * wi + n546i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 12 * 64 + bb0), or_, oi_); }
+        const V n243r = n116r - n239r, n243i = n116i - n239i;
+        const V n242r = n116r + n239r, n242i = n116i + n239i;
+        const V n477r = n243r - n473r, n477i = n243i - n473i;
+        { const V wr = V(tr[52]), wi = V(ti[52]);
+          const V or_ = n477r * wr - n477i * wi, oi_ = n477r * wi + n477i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 52 * 64 + bb0), or_, oi_); }
+        const V n476r = n243r + n473r, n476i = n243i + n473i;
+        { const V wr = V(tr[20]), wi = V(ti[20]);
+          const V or_ = n476r * wr - n476i * wi, oi_ = n476r * wi + n476i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 20 * 64 + bb0), or_, oi_); }
+        const V n475r = n242r - n471r, n475i = n242i - n471i;
+        { const V wr = V(tr[36]), wi = V(ti[36]);
+          const V or_ = n475r * wr - n475i * wi, oi_ = n475r * wi + n475i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 36 * 64 + bb0), or_, oi_); }
+        const V n474r = n242r + n471r, n474i = n242i + n471i;
+        { const V wr = V(tr[4]), wi = V(ti[4]);
+          const V or_ = n474r * wr - n474i * wi, oi_ = n474r * wi + n474i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 4 * 64 + bb0), or_, oi_); }
+        const V n115r = n80r - n111r, n115i = n80i - n111i;
+        const V n114r = n80r + n111r, n114i = n80i + n111i;
+        const V n209r = n115r - n205r, n209i = n115i - n205i;
+        const V n208r = n115r + n205r, n208i = n115i + n205i;
+        const V n513r = n209r - n509r, n513i = n209i - n509i;
+        { const V wr = V(tr[56]), wi = V(ti[56]);
+          const V or_ = n513r * wr - n513i * wi, oi_ = n513r * wi + n513i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 56 * 64 + bb0), or_, oi_); }
+        const V n512r = n209r + n509r, n512i = n209i + n509i;
+        { const V wr = V(tr[24]), wi = V(ti[24]);
+          const V or_ = n512r * wr - n512i * wi, oi_ = n512r * wi + n512i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 24 * 64 + bb0), or_, oi_); }
+        const V n511r = n208r - n507r, n511i = n208i - n507i;
+        { const V wr = V(tr[40]), wi = V(ti[40]);
+          const V or_ = n511r * wr - n511i * wi, oi_ = n511r * wi + n511i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 40 * 64 + bb0), or_, oi_); }
+        const V n510r = n208r + n507r, n510i = n208i + n507i;
+        { const V wr = V(tr[8]), wi = V(ti[8]);
+          const V or_ = n510r * wr - n510i * wi, oi_ = n510r * wi + n510i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 8 * 64 + bb0), or_, oi_); }
+        const V n207r = n114r - n203r, n207i = n114i - n203i;
+        const V n206r = n114r + n203r, n206i = n114i + n203i;
+        const V n441r = n207r - n437r, n441i = n207i - n437i;
+        { const V wr = V(tr[48]), wi = V(ti[48]);
+          const V or_ = n441r * wr - n441i * wi, oi_ = n441r * wi + n441i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 48 * 64 + bb0), or_, oi_); }
+        const V n440r = n207r + n437r, n440i = n207i + n437i;
+        { const V wr = V(tr[16]), wi = V(ti[16]);
+          const V or_ = n440r * wr - n440i * wi, oi_ = n440r * wi + n440i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 16 * 64 + bb0), or_, oi_); }
+        const V n439r = n206r - n435r, n439i = n206i - n435i;
+        { const V wr = V(tr[32]), wi = V(ti[32]);
+          const V or_ = n439r * wr - n439i * wi, oi_ = n439r * wi + n439i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 32 * 64 + bb0), or_, oi_); }
+        const V n438r = n206r + n435r, n438i = n206i + n435i;
+        { const V wr = V(tr[0]), wi = V(ti[0]);
+          const V or_ = n438r * wr - n438i * wi, oi_ = n438r * wi + n438i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 4096 + 0 * 64 + bb0), or_, oi_); }
+    }
+}
+// N=4096=64x64 stage-1 FUSED (BB=32): leaf codelet64 + twiddle W_4096^(n2*k1) + transposed store. GENERATED.
+CRD_FORCEINLINE void codelet64_stage1_fused_64x64(const crd::hesap::Complex<crd::f32>* in,
+    crd::hesap::Complex<crd::f32>* out, crd::usize b, const crd::f32* twr, const crd::f32* twi) noexcept
+{
+    using V = crd::math::simd::Vec8f;
+    namespace simd = crd::math::simd;
+    for (crd::usize t = 0; t + 8 <= b; t += 8)
+    {
+        const crd::usize n2 = t >> 5, bb0 = t & 31;
+        const crd::f32* const tr = twr + n2 * 64, * const ti = twi + n2 * 64;
+        V n63r, n63i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 63 * b + t), n63r, n63i);
+        V n62r, n62i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 62 * b + t), n62r, n62i);
+        V n61r, n61i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 61 * b + t), n61r, n61i);
+        V n60r, n60i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 60 * b + t), n60r, n60i);
+        V n59r, n59i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 59 * b + t), n59r, n59i);
+        V n58r, n58i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 58 * b + t), n58r, n58i);
+        V n57r, n57i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 57 * b + t), n57r, n57i);
+        V n56r, n56i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 56 * b + t), n56r, n56i);
+        V n55r, n55i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 55 * b + t), n55r, n55i);
+        V n54r, n54i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 54 * b + t), n54r, n54i);
+        V n53r, n53i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 53 * b + t), n53r, n53i);
+        V n52r, n52i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 52 * b + t), n52r, n52i);
+        V n51r, n51i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 51 * b + t), n51r, n51i);
+        V n50r, n50i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 50 * b + t), n50r, n50i);
+        V n49r, n49i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 49 * b + t), n49r, n49i);
+        V n48r, n48i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 48 * b + t), n48r, n48i);
+        V n47r, n47i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 47 * b + t), n47r, n47i);
+        V n46r, n46i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 46 * b + t), n46r, n46i);
+        V n45r, n45i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 45 * b + t), n45r, n45i);
+        V n44r, n44i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 44 * b + t), n44r, n44i);
+        V n43r, n43i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 43 * b + t), n43r, n43i);
+        V n42r, n42i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 42 * b + t), n42r, n42i);
+        V n41r, n41i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 41 * b + t), n41r, n41i);
+        V n40r, n40i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 40 * b + t), n40r, n40i);
+        V n39r, n39i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 39 * b + t), n39r, n39i);
+        V n38r, n38i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 38 * b + t), n38r, n38i);
+        V n37r, n37i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 37 * b + t), n37r, n37i);
+        V n36r, n36i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 36 * b + t), n36r, n36i);
+        V n35r, n35i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 35 * b + t), n35r, n35i);
+        V n34r, n34i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 34 * b + t), n34r, n34i);
+        V n33r, n33i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 33 * b + t), n33r, n33i);
+        V n32r, n32i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 32 * b + t), n32r, n32i);
+        V n31r, n31i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 31 * b + t), n31r, n31i);
+        const V n395r = n31r - n63r, n395i = n31i - n63i;
+        const V n394r = n31r + n63r, n394i = n31i + n63i;
+        const V n396r = n395i, n396i = -n395r;
+        V n30r, n30i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 30 * b + t), n30r, n30i);
+        const V n186r = n30r - n62r, n186i = n30i - n62i;
+        const V n185r = n30r + n62r, n185i = n30i + n62i;
+        const V n195r = V(static_cast<crd::f32>(-0.7071067811865475)) * n186r - V(static_cast<crd::f32>(-0.7071067811865476)) * n186i, n195i = V(static_cast<crd::f32>(-0.7071067811865475)) * n186i + V(static_cast<crd::f32>(-0.7071067811865476)) * n186r;
+        V n29r, n29i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 29 * b + t), n29r, n29i);
+        const V n314r = n29r - n61r, n314i = n29i - n61i;
+        const V n313r = n29r + n61r, n313i = n29i + n61i;
+        const V n315r = n314i, n315i = -n314r;
+        V n28r, n28i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 28 * b + t), n28r, n28i);
+        const V n105r = n28r - n60r, n105i = n28i - n60i;
+        const V n104r = n28r + n60r, n104i = n28i + n60i;
+        const V n106r = n105i, n106i = -n105r;
+        V n27r, n27i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 27 * b + t), n27r, n27i);
+        const V n366r = n27r - n59r, n366i = n27i - n59i;
+        const V n365r = n27r + n59r, n365i = n27i + n59i;
+        const V n375r = V(static_cast<crd::f32>(-0.7071067811865475)) * n366r - V(static_cast<crd::f32>(-0.7071067811865476)) * n366i, n375i = V(static_cast<crd::f32>(-0.7071067811865475)) * n366i + V(static_cast<crd::f32>(-0.7071067811865476)) * n366r;
+        V n26r, n26i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 26 * b + t), n26r, n26i);
+        const V n157r = n26r - n58r, n157i = n26i - n58i;
+        const V n156r = n26r + n58r, n156i = n26i + n58i;
+        const V n166r = V(static_cast<crd::f32>(-0.7071067811865475)) * n157r - V(static_cast<crd::f32>(-0.7071067811865476)) * n157i, n166i = V(static_cast<crd::f32>(-0.7071067811865475)) * n157i + V(static_cast<crd::f32>(-0.7071067811865476)) * n157r;
+        V n25r, n25i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 25 * b + t), n25r, n25i);
+        const V n285r = n25r - n57r, n285i = n25i - n57i;
+        const V n284r = n25r + n57r, n284i = n25i + n57i;
+        const V n294r = V(static_cast<crd::f32>(-0.7071067811865475)) * n285r - V(static_cast<crd::f32>(-0.7071067811865476)) * n285i, n294i = V(static_cast<crd::f32>(-0.7071067811865475)) * n285i + V(static_cast<crd::f32>(-0.7071067811865476)) * n285r;
+        V n24r, n24i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 24 * b + t), n24r, n24i);
+        const V n76r = n24r - n56r, n76i = n24i - n56i;
+        const V n75r = n24r + n56r, n75i = n24i + n56i;
+        const V n85r = V(static_cast<crd::f32>(-0.7071067811865475)) * n76r - V(static_cast<crd::f32>(-0.7071067811865476)) * n76i, n85i = V(static_cast<crd::f32>(-0.7071067811865475)) * n76i + V(static_cast<crd::f32>(-0.7071067811865476)) * n76r;
+        V n23r, n23i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 23 * b + t), n23r, n23i);
+        const V n386r = n23r - n55r, n386i = n23i - n55i;
+        const V n385r = n23r + n55r, n385i = n23i + n55i;
+        const V n387r = n386i, n387i = -n386r;
+        V n22r, n22i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 22 * b + t), n22r, n22i);
+        const V n177r = n22r - n54r, n177i = n22i - n54i;
+        const V n176r = n22r + n54r, n176i = n22i + n54i;
+        const V n178r = n177i, n178i = -n177r;
+        V n21r, n21i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 21 * b + t), n21r, n21i);
+        const V n305r = n21r - n53r, n305i = n21i - n53i;
+        const V n304r = n21r + n53r, n304i = n21i + n53i;
+        const V n306r = n305i, n306i = -n305r;
+        V n20r, n20i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 20 * b + t), n20r, n20i);
+        const V n96r = n20r - n52r, n96i = n20i - n52i;
+        const V n95r = n20r + n52r, n95i = n20i + n52i;
+        const V n97r = n96i, n97i = -n96r;
+        V n19r, n19i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 19 * b + t), n19r, n19i);
+        const V n357r = n19r - n51r, n357i = n19i - n51i;
+        const V n356r = n19r + n51r, n356i = n19i + n51i;
+        const V n358r = n357i, n358i = -n357r;
+        V n18r, n18i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 18 * b + t), n18r, n18i);
+        const V n148r = n18r - n50r, n148i = n18i - n50i;
+        const V n147r = n18r + n50r, n147i = n18i + n50i;
+        const V n149r = n148i, n149i = -n148r;
+        V n17r, n17i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 17 * b + t), n17r, n17i);
+        const V n276r = n17r - n49r, n276i = n17i - n49i;
+        const V n275r = n17r + n49r, n275i = n17i + n49i;
+        const V n277r = n276i, n277i = -n276r;
+        V n16r, n16i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 16 * b + t), n16r, n16i);
+        const V n67r = n16r - n48r, n67i = n16i - n48i;
+        const V n66r = n16r + n48r, n66i = n16i + n48i;
+        const V n68r = n67i, n68i = -n67r;
+        V n15r, n15i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 15 * b + t), n15r, n15i);
+        const V n393r = n15r - n47r, n393i = n15i - n47i;
+        const V n392r = n15r + n47r, n392i = n15i + n47i;
+        const V n400r = n393r - n396r, n400i = n393i - n396i;
+        const V n399r = n393r + n396r, n399i = n393i + n396i;
+        const V n427r = V(static_cast<crd::f32>(-0.9238795325112868)) * n400r - V(static_cast<crd::f32>(0.38268343236508967)) * n400i, n427i = V(static_cast<crd::f32>(-0.9238795325112868)) * n400i + V(static_cast<crd::f32>(0.38268343236508967)) * n400r;
+        const V n409r = V(static_cast<crd::f32>(0.38268343236508984)) * n399r - V(static_cast<crd::f32>(-0.9238795325112867)) * n399i, n409i = V(static_cast<crd::f32>(0.38268343236508984)) * n399i + V(static_cast<crd::f32>(-0.9238795325112867)) * n399r;
+        const V n398r = n392r - n394r, n398i = n392i - n394i;
+        const V n397r = n392r + n394r, n397i = n392i + n394i;
+        const V n418r = V(static_cast<crd::f32>(-0.7071067811865475)) * n398r - V(static_cast<crd::f32>(-0.7071067811865476)) * n398i, n418i = V(static_cast<crd::f32>(-0.7071067811865475)) * n398i + V(static_cast<crd::f32>(-0.7071067811865476)) * n398r;
+        V n14r, n14i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 14 * b + t), n14r, n14i);
+        const V n184r = n14r - n46r, n184i = n14i - n46i;
+        const V n183r = n14r + n46r, n183i = n14i + n46i;
+        const V n194r = V(static_cast<crd::f32>(0.7071067811865476)) * n184r - V(static_cast<crd::f32>(-0.7071067811865475)) * n184i, n194i = V(static_cast<crd::f32>(0.7071067811865476)) * n184i + V(static_cast<crd::f32>(-0.7071067811865475)) * n184r;
+        const V n197r = n194r - n195r, n197i = n194i - n195i;
+        const V n196r = n194r + n195r, n196i = n194i + n195i;
+        const V n198r = n197i, n198i = -n197r;
+        const V n188r = n183r - n185r, n188i = n183i - n185i;
+        const V n187r = n183r + n185r, n187i = n183i + n185i;
+        const V n189r = n188i, n189i = -n188r;
+        V n13r, n13i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 13 * b + t), n13r, n13i);
+        const V n312r = n13r - n45r, n312i = n13i - n45i;
+        const V n311r = n13r + n45r, n311i = n13i + n45i;
+        const V n319r = n312r - n315r, n319i = n312i - n315i;
+        const V n318r = n312r + n315r, n318i = n312i + n315i;
+        const V n346r = V(static_cast<crd::f32>(-0.9238795325112868)) * n319r - V(static_cast<crd::f32>(0.38268343236508967)) * n319i, n346i = V(static_cast<crd::f32>(-0.9238795325112868)) * n319i + V(static_cast<crd::f32>(0.38268343236508967)) * n319r;
+        const V n328r = V(static_cast<crd::f32>(0.38268343236508984)) * n318r - V(static_cast<crd::f32>(-0.9238795325112867)) * n318i, n328i = V(static_cast<crd::f32>(0.38268343236508984)) * n318i + V(static_cast<crd::f32>(-0.9238795325112867)) * n318r;
+        const V n317r = n311r - n313r, n317i = n311i - n313i;
+        const V n316r = n311r + n313r, n316i = n311i + n313i;
+        const V n337r = V(static_cast<crd::f32>(-0.7071067811865475)) * n317r - V(static_cast<crd::f32>(-0.7071067811865476)) * n317i, n337i = V(static_cast<crd::f32>(-0.7071067811865475)) * n317i + V(static_cast<crd::f32>(-0.7071067811865476)) * n317r;
+        V n12r, n12i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 12 * b + t), n12r, n12i);
+        const V n103r = n12r - n44r, n103i = n12i - n44i;
+        const V n102r = n12r + n44r, n102i = n12i + n44i;
+        const V n110r = n103r - n106r, n110i = n103i - n106i;
+        const V n109r = n103r + n106r, n109i = n103i + n106i;
+        const V n137r = V(static_cast<crd::f32>(-0.9238795325112868)) * n110r - V(static_cast<crd::f32>(0.38268343236508967)) * n110i, n137i = V(static_cast<crd::f32>(-0.9238795325112868)) * n110i + V(static_cast<crd::f32>(0.38268343236508967)) * n110r;
+        const V n119r = V(static_cast<crd::f32>(0.38268343236508984)) * n109r - V(static_cast<crd::f32>(-0.9238795325112867)) * n109i, n119i = V(static_cast<crd::f32>(0.38268343236508984)) * n109i + V(static_cast<crd::f32>(-0.9238795325112867)) * n109r;
+        const V n108r = n102r - n104r, n108i = n102i - n104i;
+        const V n107r = n102r + n104r, n107i = n102i + n104i;
+        const V n128r = V(static_cast<crd::f32>(-0.7071067811865475)) * n108r - V(static_cast<crd::f32>(-0.7071067811865476)) * n108i, n128i = V(static_cast<crd::f32>(-0.7071067811865475)) * n108i + V(static_cast<crd::f32>(-0.7071067811865476)) * n108r;
+        V n11r, n11i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 11 * b + t), n11r, n11i);
+        const V n364r = n11r - n43r, n364i = n11i - n43i;
+        const V n363r = n11r + n43r, n363i = n11i + n43i;
+        const V n374r = V(static_cast<crd::f32>(0.7071067811865476)) * n364r - V(static_cast<crd::f32>(-0.7071067811865475)) * n364i, n374i = V(static_cast<crd::f32>(0.7071067811865476)) * n364i + V(static_cast<crd::f32>(-0.7071067811865475)) * n364r;
+        const V n377r = n374r - n375r, n377i = n374i - n375i;
+        const V n376r = n374r + n375r, n376i = n374i + n375i;
+        const V n378r = n377i, n378i = -n377r;
+        const V n368r = n363r - n365r, n368i = n363i - n365i;
+        const V n367r = n363r + n365r, n367i = n363i + n365i;
+        const V n369r = n368i, n369i = -n368r;
+        V n10r, n10i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 10 * b + t), n10r, n10i);
+        const V n155r = n10r - n42r, n155i = n10i - n42i;
+        const V n154r = n10r + n42r, n154i = n10i + n42i;
+        const V n165r = V(static_cast<crd::f32>(0.7071067811865476)) * n155r - V(static_cast<crd::f32>(-0.7071067811865475)) * n155i, n165i = V(static_cast<crd::f32>(0.7071067811865476)) * n155i + V(static_cast<crd::f32>(-0.7071067811865475)) * n155r;
+        const V n168r = n165r - n166r, n168i = n165i - n166i;
+        const V n167r = n165r + n166r, n167i = n165i + n166i;
+        const V n169r = n168i, n169i = -n168r;
+        const V n159r = n154r - n156r, n159i = n154i - n156i;
+        const V n158r = n154r + n156r, n158i = n154i + n156i;
+        const V n160r = n159i, n160i = -n159r;
+        V n9r, n9i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 9 * b + t), n9r, n9i);
+        const V n283r = n9r - n41r, n283i = n9i - n41i;
+        const V n282r = n9r + n41r, n282i = n9i + n41i;
+        const V n293r = V(static_cast<crd::f32>(0.7071067811865476)) * n283r - V(static_cast<crd::f32>(-0.7071067811865475)) * n283i, n293i = V(static_cast<crd::f32>(0.7071067811865476)) * n283i + V(static_cast<crd::f32>(-0.7071067811865475)) * n283r;
+        const V n296r = n293r - n294r, n296i = n293i - n294i;
+        const V n295r = n293r + n294r, n295i = n293i + n294i;
+        const V n297r = n296i, n297i = -n296r;
+        const V n287r = n282r - n284r, n287i = n282i - n284i;
+        const V n286r = n282r + n284r, n286i = n282i + n284i;
+        const V n288r = n287i, n288i = -n287r;
+        V n8r, n8i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 8 * b + t), n8r, n8i);
+        const V n74r = n8r - n40r, n74i = n8i - n40i;
+        const V n73r = n8r + n40r, n73i = n8i + n40i;
+        const V n84r = V(static_cast<crd::f32>(0.7071067811865476)) * n74r - V(static_cast<crd::f32>(-0.7071067811865475)) * n74i, n84i = V(static_cast<crd::f32>(0.7071067811865476)) * n74i + V(static_cast<crd::f32>(-0.7071067811865475)) * n74r;
+        const V n87r = n84r - n85r, n87i = n84i - n85i;
+        const V n86r = n84r + n85r, n86i = n84i + n85i;
+        const V n88r = n87i, n88i = -n87r;
+        const V n78r = n73r - n75r, n78i = n73i - n75i;
+        const V n77r = n73r + n75r, n77i = n73i + n75i;
+        const V n79r = n78i, n79i = -n78r;
+        V n7r, n7i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 7 * b + t), n7r, n7i);
+        const V n384r = n7r - n39r, n384i = n7i - n39i;
+        const V n383r = n7r + n39r, n383i = n7i + n39i;
+        const V n391r = n384r - n387r, n391i = n384i - n387i;
+        const V n390r = n384r + n387r, n390i = n384i + n387i;
+        const V n426r = V(static_cast<crd::f32>(0.38268343236508984)) * n391r - V(static_cast<crd::f32>(-0.9238795325112867)) * n391i, n426i = V(static_cast<crd::f32>(0.38268343236508984)) * n391i + V(static_cast<crd::f32>(-0.9238795325112867)) * n391r;
+        const V n408r = V(static_cast<crd::f32>(0.9238795325112867)) * n390r - V(static_cast<crd::f32>(-0.3826834323650898)) * n390i, n408i = V(static_cast<crd::f32>(0.9238795325112867)) * n390i + V(static_cast<crd::f32>(-0.3826834323650898)) * n390r;
+        const V n429r = n426r - n427r, n429i = n426i - n427i;
+        const V n428r = n426r + n427r, n428i = n426i + n427i;
+        const V n430r = n429i, n430i = -n429r;
+        const V n411r = n408r - n409r, n411i = n408i - n409i;
+        const V n410r = n408r + n409r, n410i = n408i + n409i;
+        const V n412r = n411i, n412i = -n411r;
+        const V n389r = n383r - n385r, n389i = n383i - n385i;
+        const V n388r = n383r + n385r, n388i = n383i + n385i;
+        const V n417r = V(static_cast<crd::f32>(0.7071067811865476)) * n389r - V(static_cast<crd::f32>(-0.7071067811865475)) * n389i, n417i = V(static_cast<crd::f32>(0.7071067811865476)) * n389i + V(static_cast<crd::f32>(-0.7071067811865475)) * n389r;
+        const V n420r = n417r - n418r, n420i = n417i - n418i;
+        const V n419r = n417r + n418r, n419i = n417i + n418i;
+        const V n421r = n420i, n421i = -n420r;
+        const V n402r = n388r - n397r, n402i = n388i - n397i;
+        const V n401r = n388r + n397r, n401i = n388i + n397i;
+        const V n403r = n402i, n403i = -n402r;
+        V n6r, n6i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 6 * b + t), n6r, n6i);
+        const V n175r = n6r - n38r, n175i = n6i - n38i;
+        const V n174r = n6r + n38r, n174i = n6i + n38i;
+        const V n182r = n175r - n178r, n182i = n175i - n178i;
+        const V n181r = n175r + n178r, n181i = n175i + n178i;
+        const V n202r = n182r - n198r, n202i = n182i - n198i;
+        const V n201r = n182r + n198r, n201i = n182i + n198i;
+        const V n265r = V(static_cast<crd::f32>(-0.5555702330196022)) * n202r - V(static_cast<crd::f32>(0.8314696123025452)) * n202i, n265i = V(static_cast<crd::f32>(-0.5555702330196022)) * n202i + V(static_cast<crd::f32>(0.8314696123025452)) * n202r;
+        const V n229r = V(static_cast<crd::f32>(-0.1950903220161282)) * n201r - V(static_cast<crd::f32>(-0.9807852804032304)) * n201i, n229i = V(static_cast<crd::f32>(-0.1950903220161282)) * n201i + V(static_cast<crd::f32>(-0.9807852804032304)) * n201r;
+        const V n200r = n181r - n196r, n200i = n181i - n196i;
+        const V n199r = n181r + n196r, n199i = n181i + n196i;
+        const V n247r = V(static_cast<crd::f32>(-0.9807852804032304)) * n200r - V(static_cast<crd::f32>(-0.1950903220161286)) * n200i, n247i = V(static_cast<crd::f32>(-0.9807852804032304)) * n200i + V(static_cast<crd::f32>(-0.1950903220161286)) * n200r;
+        const V n211r = V(static_cast<crd::f32>(0.8314696123025452)) * n199r - V(static_cast<crd::f32>(-0.5555702330196022)) * n199i, n211i = V(static_cast<crd::f32>(0.8314696123025452)) * n199i + V(static_cast<crd::f32>(-0.5555702330196022)) * n199r;
+        const V n180r = n174r - n176r, n180i = n174i - n176i;
+        const V n179r = n174r + n176r, n179i = n174i + n176i;
+        const V n193r = n180r - n189r, n193i = n180i - n189i;
+        const V n192r = n180r + n189r, n192i = n180i + n189i;
+        const V n256r = V(static_cast<crd::f32>(-0.9238795325112868)) * n193r - V(static_cast<crd::f32>(0.38268343236508967)) * n193i, n256i = V(static_cast<crd::f32>(-0.9238795325112868)) * n193i + V(static_cast<crd::f32>(0.38268343236508967)) * n193r;
+        const V n220r = V(static_cast<crd::f32>(0.38268343236508984)) * n192r - V(static_cast<crd::f32>(-0.9238795325112867)) * n192i, n220i = V(static_cast<crd::f32>(0.38268343236508984)) * n192i + V(static_cast<crd::f32>(-0.9238795325112867)) * n192r;
+        const V n191r = n179r - n187r, n191i = n179i - n187i;
+        const V n190r = n179r + n187r, n190i = n179i + n187i;
+        const V n238r = V(static_cast<crd::f32>(-0.7071067811865475)) * n191r - V(static_cast<crd::f32>(-0.7071067811865476)) * n191i, n238i = V(static_cast<crd::f32>(-0.7071067811865475)) * n191i + V(static_cast<crd::f32>(-0.7071067811865476)) * n191r;
+        V n5r, n5i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 5 * b + t), n5r, n5i);
+        const V n303r = n5r - n37r, n303i = n5i - n37i;
+        const V n302r = n5r + n37r, n302i = n5i + n37i;
+        const V n310r = n303r - n306r, n310i = n303i - n306i;
+        const V n309r = n303r + n306r, n309i = n303i + n306i;
+        const V n345r = V(static_cast<crd::f32>(0.38268343236508984)) * n310r - V(static_cast<crd::f32>(-0.9238795325112867)) * n310i, n345i = V(static_cast<crd::f32>(0.38268343236508984)) * n310i + V(static_cast<crd::f32>(-0.9238795325112867)) * n310r;
+        const V n327r = V(static_cast<crd::f32>(0.9238795325112867)) * n309r - V(static_cast<crd::f32>(-0.3826834323650898)) * n309i, n327i = V(static_cast<crd::f32>(0.9238795325112867)) * n309i + V(static_cast<crd::f32>(-0.3826834323650898)) * n309r;
+        const V n348r = n345r - n346r, n348i = n345i - n346i;
+        const V n347r = n345r + n346r, n347i = n345i + n346i;
+        const V n349r = n348i, n349i = -n348r;
+        const V n330r = n327r - n328r, n330i = n327i - n328i;
+        const V n329r = n327r + n328r, n329i = n327i + n328i;
+        const V n331r = n330i, n331i = -n330r;
+        const V n308r = n302r - n304r, n308i = n302i - n304i;
+        const V n307r = n302r + n304r, n307i = n302i + n304i;
+        const V n336r = V(static_cast<crd::f32>(0.7071067811865476)) * n308r - V(static_cast<crd::f32>(-0.7071067811865475)) * n308i, n336i = V(static_cast<crd::f32>(0.7071067811865476)) * n308i + V(static_cast<crd::f32>(-0.7071067811865475)) * n308r;
+        const V n339r = n336r - n337r, n339i = n336i - n337i;
+        const V n338r = n336r + n337r, n338i = n336i + n337i;
+        const V n340r = n339i, n340i = -n339r;
+        const V n321r = n307r - n316r, n321i = n307i - n316i;
+        const V n320r = n307r + n316r, n320i = n307i + n316i;
+        const V n322r = n321i, n322i = -n321r;
+        V n4r, n4i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 4 * b + t), n4r, n4i);
+        const V n94r = n4r - n36r, n94i = n4i - n36i;
+        const V n93r = n4r + n36r, n93i = n4i + n36i;
+        const V n101r = n94r - n97r, n101i = n94i - n97i;
+        const V n100r = n94r + n97r, n100i = n94i + n97i;
+        const V n136r = V(static_cast<crd::f32>(0.38268343236508984)) * n101r - V(static_cast<crd::f32>(-0.9238795325112867)) * n101i, n136i = V(static_cast<crd::f32>(0.38268343236508984)) * n101i + V(static_cast<crd::f32>(-0.9238795325112867)) * n101r;
+        const V n118r = V(static_cast<crd::f32>(0.9238795325112867)) * n100r - V(static_cast<crd::f32>(-0.3826834323650898)) * n100i, n118i = V(static_cast<crd::f32>(0.9238795325112867)) * n100i + V(static_cast<crd::f32>(-0.3826834323650898)) * n100r;
+        const V n139r = n136r - n137r, n139i = n136i - n137i;
+        const V n138r = n136r + n137r, n138i = n136i + n137i;
+        const V n140r = n139i, n140i = -n139r;
+        const V n121r = n118r - n119r, n121i = n118i - n119i;
+        const V n120r = n118r + n119r, n120i = n118i + n119i;
+        const V n122r = n121i, n122i = -n121r;
+        const V n99r = n93r - n95r, n99i = n93i - n95i;
+        const V n98r = n93r + n95r, n98i = n93i + n95i;
+        const V n127r = V(static_cast<crd::f32>(0.7071067811865476)) * n99r - V(static_cast<crd::f32>(-0.7071067811865475)) * n99i, n127i = V(static_cast<crd::f32>(0.7071067811865476)) * n99i + V(static_cast<crd::f32>(-0.7071067811865475)) * n99r;
+        const V n130r = n127r - n128r, n130i = n127i - n128i;
+        const V n129r = n127r + n128r, n129i = n127i + n128i;
+        const V n131r = n130i, n131i = -n130r;
+        const V n112r = n98r - n107r, n112i = n98i - n107i;
+        const V n111r = n98r + n107r, n111i = n98i + n107i;
+        const V n113r = n112i, n113i = -n112r;
+        V n3r, n3i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 3 * b + t), n3r, n3i);
+        const V n355r = n3r - n35r, n355i = n3i - n35i;
+        const V n354r = n3r + n35r, n354i = n3i + n35i;
+        const V n362r = n355r - n358r, n362i = n355i - n358i;
+        const V n361r = n355r + n358r, n361i = n355i + n358i;
+        const V n382r = n362r - n378r, n382i = n362i - n378i;
+        const V n381r = n362r + n378r, n381i = n362i + n378i;
+        const V n434r = n382r - n430r, n434i = n382i - n430i;
+        const V n433r = n382r + n430r, n433i = n382i + n430i;
+        const V n569r = V(static_cast<crd::f32>(-0.29028467725446244)) * n434r - V(static_cast<crd::f32>(0.9569403357322088)) * n434i, n569i = V(static_cast<crd::f32>(-0.29028467725446244)) * n434i + V(static_cast<crd::f32>(0.9569403357322088)) * n434r;
+        const V n497r = V(static_cast<crd::f32>(-0.4713967368259977)) * n433r - V(static_cast<crd::f32>(-0.881921264348355)) * n433i, n497i = V(static_cast<crd::f32>(-0.4713967368259977)) * n433i + V(static_cast<crd::f32>(-0.881921264348355)) * n433r;
+        const V n432r = n381r - n428r, n432i = n381i - n428i;
+        const V n431r = n381r + n428r, n431i = n381i + n428i;
+        const V n533r = V(static_cast<crd::f32>(-0.9951847266721969)) * n432r - V(static_cast<crd::f32>(0.09801714032956059)) * n432i, n533i = V(static_cast<crd::f32>(-0.9951847266721969)) * n432i + V(static_cast<crd::f32>(0.09801714032956059)) * n432r;
+        const V n461r = V(static_cast<crd::f32>(0.6343932841636455)) * n431r - V(static_cast<crd::f32>(-0.773010453362737)) * n431i, n461i = V(static_cast<crd::f32>(0.6343932841636455)) * n431i + V(static_cast<crd::f32>(-0.773010453362737)) * n431r;
+        const V n380r = n361r - n376r, n380i = n361i - n376i;
+        const V n379r = n361r + n376r, n379i = n361i + n376i;
+        const V n416r = n380r - n412r, n416i = n380i - n412i;
+        const V n415r = n380r + n412r, n415i = n380i + n412i;
+        const V n551r = V(static_cast<crd::f32>(-0.7730104533627371)) * n416r - V(static_cast<crd::f32>(0.6343932841636453)) * n416i, n551i = V(static_cast<crd::f32>(-0.7730104533627371)) * n416i + V(static_cast<crd::f32>(0.6343932841636453)) * n416r;
+        const V n479r = V(static_cast<crd::f32>(0.09801714032956077)) * n415r - V(static_cast<crd::f32>(-0.9951847266721968)) * n415i, n479i = V(static_cast<crd::f32>(0.09801714032956077)) * n415i + V(static_cast<crd::f32>(-0.9951847266721968)) * n415r;
+        const V n414r = n379r - n410r, n414i = n379i - n410i;
+        const V n413r = n379r + n410r, n413i = n379i + n410i;
+        const V n515r = V(static_cast<crd::f32>(-0.8819212643483549)) * n414r - V(static_cast<crd::f32>(-0.47139673682599786)) * n414i, n515i = V(static_cast<crd::f32>(-0.8819212643483549)) * n414i + V(static_cast<crd::f32>(-0.47139673682599786)) * n414r;
+        const V n443r = V(static_cast<crd::f32>(0.9569403357322088)) * n413r - V(static_cast<crd::f32>(-0.29028467725446233)) * n413i, n443i = V(static_cast<crd::f32>(0.9569403357322088)) * n413i + V(static_cast<crd::f32>(-0.29028467725446233)) * n413r;
+        const V n360r = n354r - n356r, n360i = n354i - n356i;
+        const V n359r = n354r + n356r, n359i = n354i + n356i;
+        const V n373r = n360r - n369r, n373i = n360i - n369i;
+        const V n372r = n360r + n369r, n372i = n360i + n369i;
+        const V n425r = n373r - n421r, n425i = n373i - n421i;
+        const V n424r = n373r + n421r, n424i = n373i + n421i;
+        const V n560r = V(static_cast<crd::f32>(-0.5555702330196022)) * n425r - V(static_cast<crd::f32>(0.8314696123025452)) * n425i, n560i = V(static_cast<crd::f32>(-0.5555702330196022)) * n425i + V(static_cast<crd::f32>(0.8314696123025452)) * n425r;
+        const V n488r = V(static_cast<crd::f32>(-0.1950903220161282)) * n424r - V(static_cast<crd::f32>(-0.9807852804032304)) * n424i, n488i = V(static_cast<crd::f32>(-0.1950903220161282)) * n424i + V(static_cast<crd::f32>(-0.9807852804032304)) * n424r;
+        const V n423r = n372r - n419r, n423i = n372i - n419i;
+        const V n422r = n372r + n419r, n422i = n372i + n419i;
+        const V n524r = V(static_cast<crd::f32>(-0.9807852804032304)) * n423r - V(static_cast<crd::f32>(-0.1950903220161286)) * n423i, n524i = V(static_cast<crd::f32>(-0.9807852804032304)) * n423i + V(static_cast<crd::f32>(-0.1950903220161286)) * n423r;
+        const V n452r = V(static_cast<crd::f32>(0.8314696123025452)) * n422r - V(static_cast<crd::f32>(-0.5555702330196022)) * n422i, n452i = V(static_cast<crd::f32>(0.8314696123025452)) * n422i + V(static_cast<crd::f32>(-0.5555702330196022)) * n422r;
+        const V n371r = n359r - n367r, n371i = n359i - n367i;
+        const V n370r = n359r + n367r, n370i = n359i + n367i;
+        const V n407r = n371r - n403r, n407i = n371i - n403i;
+        const V n406r = n371r + n403r, n406i = n371i + n403i;
+        const V n542r = V(static_cast<crd::f32>(-0.9238795325112868)) * n407r - V(static_cast<crd::f32>(0.38268343236508967)) * n407i, n542i = V(static_cast<crd::f32>(-0.9238795325112868)) * n407i + V(static_cast<crd::f32>(0.38268343236508967)) * n407r;
+        const V n470r = V(static_cast<crd::f32>(0.38268343236508984)) * n406r - V(static_cast<crd::f32>(-0.9238795325112867)) * n406i, n470i = V(static_cast<crd::f32>(0.38268343236508984)) * n406i + V(static_cast<crd::f32>(-0.9238795325112867)) * n406r;
+        const V n405r = n370r - n401r, n405i = n370i - n401i;
+        const V n404r = n370r + n401r, n404i = n370i + n401i;
+        const V n506r = V(static_cast<crd::f32>(-0.7071067811865475)) * n405r - V(static_cast<crd::f32>(-0.7071067811865476)) * n405i, n506i = V(static_cast<crd::f32>(-0.7071067811865475)) * n405i + V(static_cast<crd::f32>(-0.7071067811865476)) * n405r;
+        V n2r, n2i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 2 * b + t), n2r, n2i);
+        const V n146r = n2r - n34r, n146i = n2i - n34i;
+        const V n145r = n2r + n34r, n145i = n2i + n34i;
+        const V n153r = n146r - n149r, n153i = n146i - n149i;
+        const V n152r = n146r + n149r, n152i = n146i + n149i;
+        const V n173r = n153r - n169r, n173i = n153i - n169i;
+        const V n172r = n153r + n169r, n172i = n153i + n169i;
+        const V n264r = V(static_cast<crd::f32>(0.19509032201612833)) * n173r - V(static_cast<crd::f32>(-0.9807852804032304)) * n173i, n264i = V(static_cast<crd::f32>(0.19509032201612833)) * n173i + V(static_cast<crd::f32>(-0.9807852804032304)) * n173r;
+        const V n228r = V(static_cast<crd::f32>(0.8314696123025452)) * n172r - V(static_cast<crd::f32>(-0.5555702330196022)) * n172i, n228i = V(static_cast<crd::f32>(0.8314696123025452)) * n172i + V(static_cast<crd::f32>(-0.5555702330196022)) * n172r;
+        const V n267r = n264r - n265r, n267i = n264i - n265i;
+        const V n266r = n264r + n265r, n266i = n264i + n265i;
+        const V n268r = n267i, n268i = -n267r;
+        const V n231r = n228r - n229r, n231i = n228i - n229i;
+        const V n230r = n228r + n229r, n230i = n228i + n229i;
+        const V n232r = n231i, n232i = -n231r;
+        const V n171r = n152r - n167r, n171i = n152i - n167i;
+        const V n170r = n152r + n167r, n170i = n152i + n167i;
+        const V n246r = V(static_cast<crd::f32>(0.5555702330196023)) * n171r - V(static_cast<crd::f32>(-0.8314696123025452)) * n171i, n246i = V(static_cast<crd::f32>(0.5555702330196023)) * n171i + V(static_cast<crd::f32>(-0.8314696123025452)) * n171r;
+        const V n210r = V(static_cast<crd::f32>(0.9807852804032304)) * n170r - V(static_cast<crd::f32>(-0.19509032201612825)) * n170i, n210i = V(static_cast<crd::f32>(0.9807852804032304)) * n170i + V(static_cast<crd::f32>(-0.19509032201612825)) * n170r;
+        const V n249r = n246r - n247r, n249i = n246i - n247i;
+        const V n248r = n246r + n247r, n248i = n246i + n247i;
+        const V n250r = n249i, n250i = -n249r;
+        const V n213r = n210r - n211r, n213i = n210i - n211i;
+        const V n212r = n210r + n211r, n212i = n210i + n211i;
+        const V n214r = n213i, n214i = -n213r;
+        const V n151r = n145r - n147r, n151i = n145i - n147i;
+        const V n150r = n145r + n147r, n150i = n145i + n147i;
+        const V n164r = n151r - n160r, n164i = n151i - n160i;
+        const V n163r = n151r + n160r, n163i = n151i + n160i;
+        const V n255r = V(static_cast<crd::f32>(0.38268343236508984)) * n164r - V(static_cast<crd::f32>(-0.9238795325112867)) * n164i, n255i = V(static_cast<crd::f32>(0.38268343236508984)) * n164i + V(static_cast<crd::f32>(-0.9238795325112867)) * n164r;
+        const V n219r = V(static_cast<crd::f32>(0.9238795325112867)) * n163r - V(static_cast<crd::f32>(-0.3826834323650898)) * n163i, n219i = V(static_cast<crd::f32>(0.9238795325112867)) * n163i + V(static_cast<crd::f32>(-0.3826834323650898)) * n163r;
+        const V n258r = n255r - n256r, n258i = n255i - n256i;
+        const V n257r = n255r + n256r, n257i = n255i + n256i;
+        const V n259r = n258i, n259i = -n258r;
+        const V n222r = n219r - n220r, n222i = n219i - n220i;
+        const V n221r = n219r + n220r, n221i = n219i + n220i;
+        const V n223r = n222i, n223i = -n222r;
+        const V n162r = n150r - n158r, n162i = n150i - n158i;
+        const V n161r = n150r + n158r, n161i = n150i + n158i;
+        const V n237r = V(static_cast<crd::f32>(0.7071067811865476)) * n162r - V(static_cast<crd::f32>(-0.7071067811865475)) * n162i, n237i = V(static_cast<crd::f32>(0.7071067811865476)) * n162i + V(static_cast<crd::f32>(-0.7071067811865475)) * n162r;
+        const V n240r = n237r - n238r, n240i = n237i - n238i;
+        const V n239r = n237r + n238r, n239i = n237i + n238i;
+        const V n241r = n240i, n241i = -n240r;
+        const V n204r = n161r - n190r, n204i = n161i - n190i;
+        const V n203r = n161r + n190r, n203i = n161i + n190i;
+        const V n205r = n204i, n205i = -n204r;
+        V n1r, n1i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 1 * b + t), n1r, n1i);
+        const V n274r = n1r - n33r, n274i = n1i - n33i;
+        const V n273r = n1r + n33r, n273i = n1i + n33i;
+        const V n281r = n274r - n277r, n281i = n274i - n277i;
+        const V n280r = n274r + n277r, n280i = n274i + n277i;
+        const V n301r = n281r - n297r, n301i = n281i - n297i;
+        const V n300r = n281r + n297r, n300i = n281i + n297i;
+        const V n353r = n301r - n349r, n353i = n301i - n349i;
+        const V n352r = n301r + n349r, n352i = n301i + n349i;
+        const V n568r = V(static_cast<crd::f32>(0.09801714032956077)) * n353r - V(static_cast<crd::f32>(-0.9951847266721968)) * n353i, n568i = V(static_cast<crd::f32>(0.09801714032956077)) * n353i + V(static_cast<crd::f32>(-0.9951847266721968)) * n353r;
+        const V n496r = V(static_cast<crd::f32>(0.773010453362737)) * n352r - V(static_cast<crd::f32>(-0.6343932841636455)) * n352i, n496i = V(static_cast<crd::f32>(0.773010453362737)) * n352i + V(static_cast<crd::f32>(-0.6343932841636455)) * n352r;
+        const V n571r = n568r - n569r, n571i = n568i - n569i;
+        const V n570r = n568r + n569r, n570i = n568i + n569i;
+        const V n572r = n571i, n572i = -n571r;
+        const V n499r = n496r - n497r, n499i = n496i - n497i;
+        const V n498r = n496r + n497r, n498i = n496i + n497i;
+        const V n500r = n499i, n500i = -n499r;
+        const V n351r = n300r - n347r, n351i = n300i - n347i;
+        const V n350r = n300r + n347r, n350i = n300i + n347i;
+        const V n532r = V(static_cast<crd::f32>(0.4713967368259978)) * n351r - V(static_cast<crd::f32>(-0.8819212643483549)) * n351i, n532i = V(static_cast<crd::f32>(0.4713967368259978)) * n351i + V(static_cast<crd::f32>(-0.8819212643483549)) * n351r;
+        const V n460r = V(static_cast<crd::f32>(0.9569403357322088)) * n350r - V(static_cast<crd::f32>(-0.29028467725446233)) * n350i, n460i = V(static_cast<crd::f32>(0.9569403357322088)) * n350i + V(static_cast<crd::f32>(-0.29028467725446233)) * n350r;
+        const V n535r = n532r - n533r, n535i = n532i - n533i;
+        const V n534r = n532r + n533r, n534i = n532i + n533i;
+        const V n536r = n535i, n536i = -n535r;
+        const V n463r = n460r - n461r, n463i = n460i - n461i;
+        const V n462r = n460r + n461r, n462i = n460i + n461i;
+        const V n464r = n463i, n464i = -n463r;
+        const V n299r = n280r - n295r, n299i = n280i - n295i;
+        const V n298r = n280r + n295r, n298i = n280i + n295i;
+        const V n335r = n299r - n331r, n335i = n299i - n331i;
+        const V n334r = n299r + n331r, n334i = n299i + n331i;
+        const V n550r = V(static_cast<crd::f32>(0.29028467725446233)) * n335r - V(static_cast<crd::f32>(-0.9569403357322089)) * n335i, n550i = V(static_cast<crd::f32>(0.29028467725446233)) * n335i + V(static_cast<crd::f32>(-0.9569403357322089)) * n335r;
+        const V n478r = V(static_cast<crd::f32>(0.881921264348355)) * n334r - V(static_cast<crd::f32>(-0.47139673682599764)) * n334i, n478i = V(static_cast<crd::f32>(0.881921264348355)) * n334i + V(static_cast<crd::f32>(-0.47139673682599764)) * n334r;
+        const V n553r = n550r - n551r, n553i = n550i - n551i;
+        const V n552r = n550r + n551r, n552i = n550i + n551i;
+        const V n554r = n553i, n554i = -n553r;
+        const V n481r = n478r - n479r, n481i = n478i - n479i;
+        const V n480r = n478r + n479r, n480i = n478i + n479i;
+        const V n482r = n481i, n482i = -n481r;
+        const V n333r = n298r - n329r, n333i = n298i - n329i;
+        const V n332r = n298r + n329r, n332i = n298i + n329i;
+        const V n514r = V(static_cast<crd::f32>(0.6343932841636455)) * n333r - V(static_cast<crd::f32>(-0.773010453362737)) * n333i, n514i = V(static_cast<crd::f32>(0.6343932841636455)) * n333i + V(static_cast<crd::f32>(-0.773010453362737)) * n333r;
+        const V n442r = V(static_cast<crd::f32>(0.9951847266721969)) * n332r - V(static_cast<crd::f32>(-0.0980171403295606)) * n332i, n442i = V(static_cast<crd::f32>(0.9951847266721969)) * n332i + V(static_cast<crd::f32>(-0.0980171403295606)) * n332r;
+        const V n517r = n514r - n515r, n517i = n514i - n515i;
+        const V n516r = n514r + n515r, n516i = n514i + n515i;
+        const V n518r = n517i, n518i = -n517r;
+        const V n445r = n442r - n443r, n445i = n442i - n443i;
+        const V n444r = n442r + n443r, n444i = n442i + n443i;
+        const V n446r = n445i, n446i = -n445r;
+        const V n279r = n273r - n275r, n279i = n273i - n275i;
+        const V n278r = n273r + n275r, n278i = n273i + n275i;
+        const V n292r = n279r - n288r, n292i = n279i - n288i;
+        const V n291r = n279r + n288r, n291i = n279i + n288i;
+        const V n344r = n292r - n340r, n344i = n292i - n340i;
+        const V n343r = n292r + n340r, n343i = n292i + n340i;
+        const V n559r = V(static_cast<crd::f32>(0.19509032201612833)) * n344r - V(static_cast<crd::f32>(-0.9807852804032304)) * n344i, n559i = V(static_cast<crd::f32>(0.19509032201612833)) * n344i + V(static_cast<crd::f32>(-0.9807852804032304)) * n344r;
+        const V n487r = V(static_cast<crd::f32>(0.8314696123025452)) * n343r - V(static_cast<crd::f32>(-0.5555702330196022)) * n343i, n487i = V(static_cast<crd::f32>(0.8314696123025452)) * n343i + V(static_cast<crd::f32>(-0.5555702330196022)) * n343r;
+        const V n562r = n559r - n560r, n562i = n559i - n560i;
+        const V n561r = n559r + n560r, n561i = n559i + n560i;
+        const V n563r = n562i, n563i = -n562r;
+        const V n490r = n487r - n488r, n490i = n487i - n488i;
+        const V n489r = n487r + n488r, n489i = n487i + n488i;
+        const V n491r = n490i, n491i = -n490r;
+        const V n342r = n291r - n338r, n342i = n291i - n338i;
+        const V n341r = n291r + n338r, n341i = n291i + n338i;
+        const V n523r = V(static_cast<crd::f32>(0.5555702330196023)) * n342r - V(static_cast<crd::f32>(-0.8314696123025452)) * n342i, n523i = V(static_cast<crd::f32>(0.5555702330196023)) * n342i + V(static_cast<crd::f32>(-0.8314696123025452)) * n342r;
+        const V n451r = V(static_cast<crd::f32>(0.9807852804032304)) * n341r - V(static_cast<crd::f32>(-0.19509032201612825)) * n341i, n451i = V(static_cast<crd::f32>(0.9807852804032304)) * n341i + V(static_cast<crd::f32>(-0.19509032201612825)) * n341r;
+        const V n526r = n523r - n524r, n526i = n523i - n524i;
+        const V n525r = n523r + n524r, n525i = n523i + n524i;
+        const V n527r = n526i, n527i = -n526r;
+        const V n454r = n451r - n452r, n454i = n451i - n452i;
+        const V n453r = n451r + n452r, n453i = n451i + n452i;
+        const V n455r = n454i, n455i = -n454r;
+        const V n290r = n278r - n286r, n290i = n278i - n286i;
+        const V n289r = n278r + n286r, n289i = n278i + n286i;
+        const V n326r = n290r - n322r, n326i = n290i - n322i;
+        const V n325r = n290r + n322r, n325i = n290i + n322i;
+        const V n541r = V(static_cast<crd::f32>(0.38268343236508984)) * n326r - V(static_cast<crd::f32>(-0.9238795325112867)) * n326i, n541i = V(static_cast<crd::f32>(0.38268343236508984)) * n326i + V(static_cast<crd::f32>(-0.9238795325112867)) * n326r;
+        const V n469r = V(static_cast<crd::f32>(0.9238795325112867)) * n325r - V(static_cast<crd::f32>(-0.3826834323650898)) * n325i, n469i = V(static_cast<crd::f32>(0.9238795325112867)) * n325i + V(static_cast<crd::f32>(-0.3826834323650898)) * n325r;
+        const V n544r = n541r - n542r, n544i = n541i - n542i;
+        const V n543r = n541r + n542r, n543i = n541i + n542i;
+        const V n545r = n544i, n545i = -n544r;
+        const V n472r = n469r - n470r, n472i = n469i - n470i;
+        const V n471r = n469r + n470r, n471i = n469i + n470i;
+        const V n473r = n472i, n473i = -n472r;
+        const V n324r = n289r - n320r, n324i = n289i - n320i;
+        const V n323r = n289r + n320r, n323i = n289i + n320i;
+        const V n505r = V(static_cast<crd::f32>(0.7071067811865476)) * n324r - V(static_cast<crd::f32>(-0.7071067811865475)) * n324i, n505i = V(static_cast<crd::f32>(0.7071067811865476)) * n324i + V(static_cast<crd::f32>(-0.7071067811865475)) * n324r;
+        const V n508r = n505r - n506r, n508i = n505i - n506i;
+        const V n507r = n505r + n506r, n507i = n505i + n506i;
+        const V n509r = n508i, n509i = -n508r;
+        const V n436r = n323r - n404r, n436i = n323i - n404i;
+        const V n435r = n323r + n404r, n435i = n323i + n404i;
+        const V n437r = n436i, n437i = -n436r;
+        V n0r, n0i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 0 * b + t), n0r, n0i);
+        const V n65r = n0r - n32r, n65i = n0i - n32i;
+        const V n64r = n0r + n32r, n64i = n0i + n32i;
+        const V n72r = n65r - n68r, n72i = n65i - n68i;
+        const V n71r = n65r + n68r, n71i = n65i + n68i;
+        const V n92r = n72r - n88r, n92i = n72i - n88i;
+        const V n91r = n72r + n88r, n91i = n72i + n88i;
+        const V n144r = n92r - n140r, n144i = n92i - n140i;
+        const V n143r = n92r + n140r, n143i = n92i + n140i;
+        const V n272r = n144r - n268r, n272i = n144i - n268i;
+        const V n271r = n144r + n268r, n271i = n144i + n268i;
+        const V n576r = n272r - n572r, n576i = n272i - n572i;
+        { const V wr = V(tr[63]), wi = V(ti[63]);
+          const V or_ = n576r * wr - n576i * wi, oi_ = n576r * wi + n576i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 63 * 32 + bb0), or_, oi_); }
+        const V n575r = n272r + n572r, n575i = n272i + n572i;
+        { const V wr = V(tr[31]), wi = V(ti[31]);
+          const V or_ = n575r * wr - n575i * wi, oi_ = n575r * wi + n575i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 31 * 32 + bb0), or_, oi_); }
+        const V n574r = n271r - n570r, n574i = n271i - n570i;
+        { const V wr = V(tr[47]), wi = V(ti[47]);
+          const V or_ = n574r * wr - n574i * wi, oi_ = n574r * wi + n574i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 47 * 32 + bb0), or_, oi_); }
+        const V n573r = n271r + n570r, n573i = n271i + n570i;
+        { const V wr = V(tr[15]), wi = V(ti[15]);
+          const V or_ = n573r * wr - n573i * wi, oi_ = n573r * wi + n573i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 15 * 32 + bb0), or_, oi_); }
+        const V n270r = n143r - n266r, n270i = n143i - n266i;
+        const V n269r = n143r + n266r, n269i = n143i + n266i;
+        const V n504r = n270r - n500r, n504i = n270i - n500i;
+        { const V wr = V(tr[55]), wi = V(ti[55]);
+          const V or_ = n504r * wr - n504i * wi, oi_ = n504r * wi + n504i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 55 * 32 + bb0), or_, oi_); }
+        const V n503r = n270r + n500r, n503i = n270i + n500i;
+        { const V wr = V(tr[23]), wi = V(ti[23]);
+          const V or_ = n503r * wr - n503i * wi, oi_ = n503r * wi + n503i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 23 * 32 + bb0), or_, oi_); }
+        const V n502r = n269r - n498r, n502i = n269i - n498i;
+        { const V wr = V(tr[39]), wi = V(ti[39]);
+          const V or_ = n502r * wr - n502i * wi, oi_ = n502r * wi + n502i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 39 * 32 + bb0), or_, oi_); }
+        const V n501r = n269r + n498r, n501i = n269i + n498i;
+        { const V wr = V(tr[7]), wi = V(ti[7]);
+          const V or_ = n501r * wr - n501i * wi, oi_ = n501r * wi + n501i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 7 * 32 + bb0), or_, oi_); }
+        const V n142r = n91r - n138r, n142i = n91i - n138i;
+        const V n141r = n91r + n138r, n141i = n91i + n138i;
+        const V n236r = n142r - n232r, n236i = n142i - n232i;
+        const V n235r = n142r + n232r, n235i = n142i + n232i;
+        const V n540r = n236r - n536r, n540i = n236i - n536i;
+        { const V wr = V(tr[59]), wi = V(ti[59]);
+          const V or_ = n540r * wr - n540i * wi, oi_ = n540r * wi + n540i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 59 * 32 + bb0), or_, oi_); }
+        const V n539r = n236r + n536r, n539i = n236i + n536i;
+        { const V wr = V(tr[27]), wi = V(ti[27]);
+          const V or_ = n539r * wr - n539i * wi, oi_ = n539r * wi + n539i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 27 * 32 + bb0), or_, oi_); }
+        const V n538r = n235r - n534r, n538i = n235i - n534i;
+        { const V wr = V(tr[43]), wi = V(ti[43]);
+          const V or_ = n538r * wr - n538i * wi, oi_ = n538r * wi + n538i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 43 * 32 + bb0), or_, oi_); }
+        const V n537r = n235r + n534r, n537i = n235i + n534i;
+        { const V wr = V(tr[11]), wi = V(ti[11]);
+          const V or_ = n537r * wr - n537i * wi, oi_ = n537r * wi + n537i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 11 * 32 + bb0), or_, oi_); }
+        const V n234r = n141r - n230r, n234i = n141i - n230i;
+        const V n233r = n141r + n230r, n233i = n141i + n230i;
+        const V n468r = n234r - n464r, n468i = n234i - n464i;
+        { const V wr = V(tr[51]), wi = V(ti[51]);
+          const V or_ = n468r * wr - n468i * wi, oi_ = n468r * wi + n468i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 51 * 32 + bb0), or_, oi_); }
+        const V n467r = n234r + n464r, n467i = n234i + n464i;
+        { const V wr = V(tr[19]), wi = V(ti[19]);
+          const V or_ = n467r * wr - n467i * wi, oi_ = n467r * wi + n467i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 19 * 32 + bb0), or_, oi_); }
+        const V n466r = n233r - n462r, n466i = n233i - n462i;
+        { const V wr = V(tr[35]), wi = V(ti[35]);
+          const V or_ = n466r * wr - n466i * wi, oi_ = n466r * wi + n466i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 35 * 32 + bb0), or_, oi_); }
+        const V n465r = n233r + n462r, n465i = n233i + n462i;
+        { const V wr = V(tr[3]), wi = V(ti[3]);
+          const V or_ = n465r * wr - n465i * wi, oi_ = n465r * wi + n465i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 3 * 32 + bb0), or_, oi_); }
+        const V n90r = n71r - n86r, n90i = n71i - n86i;
+        const V n89r = n71r + n86r, n89i = n71i + n86i;
+        const V n126r = n90r - n122r, n126i = n90i - n122i;
+        const V n125r = n90r + n122r, n125i = n90i + n122i;
+        const V n254r = n126r - n250r, n254i = n126i - n250i;
+        const V n253r = n126r + n250r, n253i = n126i + n250i;
+        const V n558r = n254r - n554r, n558i = n254i - n554i;
+        { const V wr = V(tr[61]), wi = V(ti[61]);
+          const V or_ = n558r * wr - n558i * wi, oi_ = n558r * wi + n558i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 61 * 32 + bb0), or_, oi_); }
+        const V n557r = n254r + n554r, n557i = n254i + n554i;
+        { const V wr = V(tr[29]), wi = V(ti[29]);
+          const V or_ = n557r * wr - n557i * wi, oi_ = n557r * wi + n557i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 29 * 32 + bb0), or_, oi_); }
+        const V n556r = n253r - n552r, n556i = n253i - n552i;
+        { const V wr = V(tr[45]), wi = V(ti[45]);
+          const V or_ = n556r * wr - n556i * wi, oi_ = n556r * wi + n556i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 45 * 32 + bb0), or_, oi_); }
+        const V n555r = n253r + n552r, n555i = n253i + n552i;
+        { const V wr = V(tr[13]), wi = V(ti[13]);
+          const V or_ = n555r * wr - n555i * wi, oi_ = n555r * wi + n555i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 13 * 32 + bb0), or_, oi_); }
+        const V n252r = n125r - n248r, n252i = n125i - n248i;
+        const V n251r = n125r + n248r, n251i = n125i + n248i;
+        const V n486r = n252r - n482r, n486i = n252i - n482i;
+        { const V wr = V(tr[53]), wi = V(ti[53]);
+          const V or_ = n486r * wr - n486i * wi, oi_ = n486r * wi + n486i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 53 * 32 + bb0), or_, oi_); }
+        const V n485r = n252r + n482r, n485i = n252i + n482i;
+        { const V wr = V(tr[21]), wi = V(ti[21]);
+          const V or_ = n485r * wr - n485i * wi, oi_ = n485r * wi + n485i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 21 * 32 + bb0), or_, oi_); }
+        const V n484r = n251r - n480r, n484i = n251i - n480i;
+        { const V wr = V(tr[37]), wi = V(ti[37]);
+          const V or_ = n484r * wr - n484i * wi, oi_ = n484r * wi + n484i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 37 * 32 + bb0), or_, oi_); }
+        const V n483r = n251r + n480r, n483i = n251i + n480i;
+        { const V wr = V(tr[5]), wi = V(ti[5]);
+          const V or_ = n483r * wr - n483i * wi, oi_ = n483r * wi + n483i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 5 * 32 + bb0), or_, oi_); }
+        const V n124r = n89r - n120r, n124i = n89i - n120i;
+        const V n123r = n89r + n120r, n123i = n89i + n120i;
+        const V n218r = n124r - n214r, n218i = n124i - n214i;
+        const V n217r = n124r + n214r, n217i = n124i + n214i;
+        const V n522r = n218r - n518r, n522i = n218i - n518i;
+        { const V wr = V(tr[57]), wi = V(ti[57]);
+          const V or_ = n522r * wr - n522i * wi, oi_ = n522r * wi + n522i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 57 * 32 + bb0), or_, oi_); }
+        const V n521r = n218r + n518r, n521i = n218i + n518i;
+        { const V wr = V(tr[25]), wi = V(ti[25]);
+          const V or_ = n521r * wr - n521i * wi, oi_ = n521r * wi + n521i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 25 * 32 + bb0), or_, oi_); }
+        const V n520r = n217r - n516r, n520i = n217i - n516i;
+        { const V wr = V(tr[41]), wi = V(ti[41]);
+          const V or_ = n520r * wr - n520i * wi, oi_ = n520r * wi + n520i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 41 * 32 + bb0), or_, oi_); }
+        const V n519r = n217r + n516r, n519i = n217i + n516i;
+        { const V wr = V(tr[9]), wi = V(ti[9]);
+          const V or_ = n519r * wr - n519i * wi, oi_ = n519r * wi + n519i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 9 * 32 + bb0), or_, oi_); }
+        const V n216r = n123r - n212r, n216i = n123i - n212i;
+        const V n215r = n123r + n212r, n215i = n123i + n212i;
+        const V n450r = n216r - n446r, n450i = n216i - n446i;
+        { const V wr = V(tr[49]), wi = V(ti[49]);
+          const V or_ = n450r * wr - n450i * wi, oi_ = n450r * wi + n450i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 49 * 32 + bb0), or_, oi_); }
+        const V n449r = n216r + n446r, n449i = n216i + n446i;
+        { const V wr = V(tr[17]), wi = V(ti[17]);
+          const V or_ = n449r * wr - n449i * wi, oi_ = n449r * wi + n449i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 17 * 32 + bb0), or_, oi_); }
+        const V n448r = n215r - n444r, n448i = n215i - n444i;
+        { const V wr = V(tr[33]), wi = V(ti[33]);
+          const V or_ = n448r * wr - n448i * wi, oi_ = n448r * wi + n448i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 33 * 32 + bb0), or_, oi_); }
+        const V n447r = n215r + n444r, n447i = n215i + n444i;
+        { const V wr = V(tr[1]), wi = V(ti[1]);
+          const V or_ = n447r * wr - n447i * wi, oi_ = n447r * wi + n447i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 1 * 32 + bb0), or_, oi_); }
+        const V n70r = n64r - n66r, n70i = n64i - n66i;
+        const V n69r = n64r + n66r, n69i = n64i + n66i;
+        const V n83r = n70r - n79r, n83i = n70i - n79i;
+        const V n82r = n70r + n79r, n82i = n70i + n79i;
+        const V n135r = n83r - n131r, n135i = n83i - n131i;
+        const V n134r = n83r + n131r, n134i = n83i + n131i;
+        const V n263r = n135r - n259r, n263i = n135i - n259i;
+        const V n262r = n135r + n259r, n262i = n135i + n259i;
+        const V n567r = n263r - n563r, n567i = n263i - n563i;
+        { const V wr = V(tr[62]), wi = V(ti[62]);
+          const V or_ = n567r * wr - n567i * wi, oi_ = n567r * wi + n567i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 62 * 32 + bb0), or_, oi_); }
+        const V n566r = n263r + n563r, n566i = n263i + n563i;
+        { const V wr = V(tr[30]), wi = V(ti[30]);
+          const V or_ = n566r * wr - n566i * wi, oi_ = n566r * wi + n566i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 30 * 32 + bb0), or_, oi_); }
+        const V n565r = n262r - n561r, n565i = n262i - n561i;
+        { const V wr = V(tr[46]), wi = V(ti[46]);
+          const V or_ = n565r * wr - n565i * wi, oi_ = n565r * wi + n565i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 46 * 32 + bb0), or_, oi_); }
+        const V n564r = n262r + n561r, n564i = n262i + n561i;
+        { const V wr = V(tr[14]), wi = V(ti[14]);
+          const V or_ = n564r * wr - n564i * wi, oi_ = n564r * wi + n564i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 14 * 32 + bb0), or_, oi_); }
+        const V n261r = n134r - n257r, n261i = n134i - n257i;
+        const V n260r = n134r + n257r, n260i = n134i + n257i;
+        const V n495r = n261r - n491r, n495i = n261i - n491i;
+        { const V wr = V(tr[54]), wi = V(ti[54]);
+          const V or_ = n495r * wr - n495i * wi, oi_ = n495r * wi + n495i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 54 * 32 + bb0), or_, oi_); }
+        const V n494r = n261r + n491r, n494i = n261i + n491i;
+        { const V wr = V(tr[22]), wi = V(ti[22]);
+          const V or_ = n494r * wr - n494i * wi, oi_ = n494r * wi + n494i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 22 * 32 + bb0), or_, oi_); }
+        const V n493r = n260r - n489r, n493i = n260i - n489i;
+        { const V wr = V(tr[38]), wi = V(ti[38]);
+          const V or_ = n493r * wr - n493i * wi, oi_ = n493r * wi + n493i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 38 * 32 + bb0), or_, oi_); }
+        const V n492r = n260r + n489r, n492i = n260i + n489i;
+        { const V wr = V(tr[6]), wi = V(ti[6]);
+          const V or_ = n492r * wr - n492i * wi, oi_ = n492r * wi + n492i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 6 * 32 + bb0), or_, oi_); }
+        const V n133r = n82r - n129r, n133i = n82i - n129i;
+        const V n132r = n82r + n129r, n132i = n82i + n129i;
+        const V n227r = n133r - n223r, n227i = n133i - n223i;
+        const V n226r = n133r + n223r, n226i = n133i + n223i;
+        const V n531r = n227r - n527r, n531i = n227i - n527i;
+        { const V wr = V(tr[58]), wi = V(ti[58]);
+          const V or_ = n531r * wr - n531i * wi, oi_ = n531r * wi + n531i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 58 * 32 + bb0), or_, oi_); }
+        const V n530r = n227r + n527r, n530i = n227i + n527i;
+        { const V wr = V(tr[26]), wi = V(ti[26]);
+          const V or_ = n530r * wr - n530i * wi, oi_ = n530r * wi + n530i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 26 * 32 + bb0), or_, oi_); }
+        const V n529r = n226r - n525r, n529i = n226i - n525i;
+        { const V wr = V(tr[42]), wi = V(ti[42]);
+          const V or_ = n529r * wr - n529i * wi, oi_ = n529r * wi + n529i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 42 * 32 + bb0), or_, oi_); }
+        const V n528r = n226r + n525r, n528i = n226i + n525i;
+        { const V wr = V(tr[10]), wi = V(ti[10]);
+          const V or_ = n528r * wr - n528i * wi, oi_ = n528r * wi + n528i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 10 * 32 + bb0), or_, oi_); }
+        const V n225r = n132r - n221r, n225i = n132i - n221i;
+        const V n224r = n132r + n221r, n224i = n132i + n221i;
+        const V n459r = n225r - n455r, n459i = n225i - n455i;
+        { const V wr = V(tr[50]), wi = V(ti[50]);
+          const V or_ = n459r * wr - n459i * wi, oi_ = n459r * wi + n459i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 50 * 32 + bb0), or_, oi_); }
+        const V n458r = n225r + n455r, n458i = n225i + n455i;
+        { const V wr = V(tr[18]), wi = V(ti[18]);
+          const V or_ = n458r * wr - n458i * wi, oi_ = n458r * wi + n458i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 18 * 32 + bb0), or_, oi_); }
+        const V n457r = n224r - n453r, n457i = n224i - n453i;
+        { const V wr = V(tr[34]), wi = V(ti[34]);
+          const V or_ = n457r * wr - n457i * wi, oi_ = n457r * wi + n457i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 34 * 32 + bb0), or_, oi_); }
+        const V n456r = n224r + n453r, n456i = n224i + n453i;
+        { const V wr = V(tr[2]), wi = V(ti[2]);
+          const V or_ = n456r * wr - n456i * wi, oi_ = n456r * wi + n456i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 2 * 32 + bb0), or_, oi_); }
+        const V n81r = n69r - n77r, n81i = n69i - n77i;
+        const V n80r = n69r + n77r, n80i = n69i + n77i;
+        const V n117r = n81r - n113r, n117i = n81i - n113i;
+        const V n116r = n81r + n113r, n116i = n81i + n113i;
+        const V n245r = n117r - n241r, n245i = n117i - n241i;
+        const V n244r = n117r + n241r, n244i = n117i + n241i;
+        const V n549r = n245r - n545r, n549i = n245i - n545i;
+        { const V wr = V(tr[60]), wi = V(ti[60]);
+          const V or_ = n549r * wr - n549i * wi, oi_ = n549r * wi + n549i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 60 * 32 + bb0), or_, oi_); }
+        const V n548r = n245r + n545r, n548i = n245i + n545i;
+        { const V wr = V(tr[28]), wi = V(ti[28]);
+          const V or_ = n548r * wr - n548i * wi, oi_ = n548r * wi + n548i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 28 * 32 + bb0), or_, oi_); }
+        const V n547r = n244r - n543r, n547i = n244i - n543i;
+        { const V wr = V(tr[44]), wi = V(ti[44]);
+          const V or_ = n547r * wr - n547i * wi, oi_ = n547r * wi + n547i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 44 * 32 + bb0), or_, oi_); }
+        const V n546r = n244r + n543r, n546i = n244i + n543i;
+        { const V wr = V(tr[12]), wi = V(ti[12]);
+          const V or_ = n546r * wr - n546i * wi, oi_ = n546r * wi + n546i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 12 * 32 + bb0), or_, oi_); }
+        const V n243r = n116r - n239r, n243i = n116i - n239i;
+        const V n242r = n116r + n239r, n242i = n116i + n239i;
+        const V n477r = n243r - n473r, n477i = n243i - n473i;
+        { const V wr = V(tr[52]), wi = V(ti[52]);
+          const V or_ = n477r * wr - n477i * wi, oi_ = n477r * wi + n477i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 52 * 32 + bb0), or_, oi_); }
+        const V n476r = n243r + n473r, n476i = n243i + n473i;
+        { const V wr = V(tr[20]), wi = V(ti[20]);
+          const V or_ = n476r * wr - n476i * wi, oi_ = n476r * wi + n476i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 20 * 32 + bb0), or_, oi_); }
+        const V n475r = n242r - n471r, n475i = n242i - n471i;
+        { const V wr = V(tr[36]), wi = V(ti[36]);
+          const V or_ = n475r * wr - n475i * wi, oi_ = n475r * wi + n475i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 36 * 32 + bb0), or_, oi_); }
+        const V n474r = n242r + n471r, n474i = n242i + n471i;
+        { const V wr = V(tr[4]), wi = V(ti[4]);
+          const V or_ = n474r * wr - n474i * wi, oi_ = n474r * wi + n474i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 4 * 32 + bb0), or_, oi_); }
+        const V n115r = n80r - n111r, n115i = n80i - n111i;
+        const V n114r = n80r + n111r, n114i = n80i + n111i;
+        const V n209r = n115r - n205r, n209i = n115i - n205i;
+        const V n208r = n115r + n205r, n208i = n115i + n205i;
+        const V n513r = n209r - n509r, n513i = n209i - n509i;
+        { const V wr = V(tr[56]), wi = V(ti[56]);
+          const V or_ = n513r * wr - n513i * wi, oi_ = n513r * wi + n513i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 56 * 32 + bb0), or_, oi_); }
+        const V n512r = n209r + n509r, n512i = n209i + n509i;
+        { const V wr = V(tr[24]), wi = V(ti[24]);
+          const V or_ = n512r * wr - n512i * wi, oi_ = n512r * wi + n512i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 24 * 32 + bb0), or_, oi_); }
+        const V n511r = n208r - n507r, n511i = n208i - n507i;
+        { const V wr = V(tr[40]), wi = V(ti[40]);
+          const V or_ = n511r * wr - n511i * wi, oi_ = n511r * wi + n511i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 40 * 32 + bb0), or_, oi_); }
+        const V n510r = n208r + n507r, n510i = n208i + n507i;
+        { const V wr = V(tr[8]), wi = V(ti[8]);
+          const V or_ = n510r * wr - n510i * wi, oi_ = n510r * wi + n510i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 8 * 32 + bb0), or_, oi_); }
+        const V n207r = n114r - n203r, n207i = n114i - n203i;
+        const V n206r = n114r + n203r, n206i = n114i + n203i;
+        const V n441r = n207r - n437r, n441i = n207i - n437i;
+        { const V wr = V(tr[48]), wi = V(ti[48]);
+          const V or_ = n441r * wr - n441i * wi, oi_ = n441r * wi + n441i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 48 * 32 + bb0), or_, oi_); }
+        const V n440r = n207r + n437r, n440i = n207i + n437i;
+        { const V wr = V(tr[16]), wi = V(ti[16]);
+          const V or_ = n440r * wr - n440i * wi, oi_ = n440r * wi + n440i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 16 * 32 + bb0), or_, oi_); }
+        const V n439r = n206r - n435r, n439i = n206i - n435i;
+        { const V wr = V(tr[32]), wi = V(ti[32]);
+          const V or_ = n439r * wr - n439i * wi, oi_ = n439r * wi + n439i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 32 * 32 + bb0), or_, oi_); }
+        const V n438r = n206r + n435r, n438i = n206i + n435i;
+        { const V wr = V(tr[0]), wi = V(ti[0]);
+          const V or_ = n438r * wr - n438i * wi, oi_ = n438r * wi + n438i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 2048 + 0 * 32 + bb0), or_, oi_); }
+    }
+}
+// N=16 batched split-radix codelet (Vec8f over batch). GENERATED.
+CRD_FORCEINLINE void codelet16_batched(const crd::hesap::Complex<crd::f32>* in,
+    crd::hesap::Complex<crd::f32>* out, crd::usize b) noexcept
+{
+    using V = crd::math::simd::Vec8f;
+    namespace simd = crd::math::simd;
+    for (crd::usize t = 0; t + 8 <= b; t += 8)
+    {
+        V n15r, n15i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 15 * b + t), n15r, n15i);
+        V n14r, n14i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 14 * b + t), n14r, n14i);
+        V n13r, n13i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 13 * b + t), n13r, n13i);
+        V n12r, n12i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 12 * b + t), n12r, n12i);
+        V n11r, n11i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 11 * b + t), n11r, n11i);
+        V n10r, n10i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 10 * b + t), n10r, n10i);
+        V n9r, n9i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 9 * b + t), n9r, n9i);
+        V n8r, n8i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 8 * b + t), n8r, n8i);
+        V n7r, n7i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 7 * b + t), n7r, n7i);
+        const V n57r = n7r - n15r, n57i = n7i - n15i;
+        const V n56r = n7r + n15r, n56i = n7i + n15i;
+        const V n58r = n57i, n58i = -n57r;
+        V n6r, n6i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 6 * b + t), n6r, n6i);
+        const V n28r = n6r - n14r, n28i = n6i - n14i;
+        const V n27r = n6r + n14r, n27i = n6i + n14i;
+        const V n37r = V(static_cast<crd::f32>(-0.7071067811865475)) * n28r - V(static_cast<crd::f32>(-0.7071067811865476)) * n28i, n37i = V(static_cast<crd::f32>(-0.7071067811865475)) * n28i + V(static_cast<crd::f32>(-0.7071067811865476)) * n28r;
+        V n5r, n5i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 5 * b + t), n5r, n5i);
+        const V n48r = n5r - n13r, n48i = n5i - n13i;
+        const V n47r = n5r + n13r, n47i = n5i + n13i;
+        const V n49r = n48i, n49i = -n48r;
+        V n4r, n4i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 4 * b + t), n4r, n4i);
+        const V n19r = n4r - n12r, n19i = n4i - n12i;
+        const V n18r = n4r + n12r, n18i = n4i + n12i;
+        const V n20r = n19i, n20i = -n19r;
+        V n3r, n3i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 3 * b + t), n3r, n3i);
+        const V n55r = n3r - n11r, n55i = n3i - n11i;
+        const V n54r = n3r + n11r, n54i = n3i + n11i;
+        const V n62r = n55r - n58r, n62i = n55i - n58i;
+        const V n61r = n55r + n58r, n61i = n55i + n58i;
+        const V n89r = V(static_cast<crd::f32>(-0.9238795325112868)) * n62r - V(static_cast<crd::f32>(0.38268343236508967)) * n62i, n89i = V(static_cast<crd::f32>(-0.9238795325112868)) * n62i + V(static_cast<crd::f32>(0.38268343236508967)) * n62r;
+        const V n71r = V(static_cast<crd::f32>(0.38268343236508984)) * n61r - V(static_cast<crd::f32>(-0.9238795325112867)) * n61i, n71i = V(static_cast<crd::f32>(0.38268343236508984)) * n61i + V(static_cast<crd::f32>(-0.9238795325112867)) * n61r;
+        const V n60r = n54r - n56r, n60i = n54i - n56i;
+        const V n59r = n54r + n56r, n59i = n54i + n56i;
+        const V n80r = V(static_cast<crd::f32>(-0.7071067811865475)) * n60r - V(static_cast<crd::f32>(-0.7071067811865476)) * n60i, n80i = V(static_cast<crd::f32>(-0.7071067811865475)) * n60i + V(static_cast<crd::f32>(-0.7071067811865476)) * n60r;
+        V n2r, n2i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 2 * b + t), n2r, n2i);
+        const V n26r = n2r - n10r, n26i = n2i - n10i;
+        const V n25r = n2r + n10r, n25i = n2i + n10i;
+        const V n36r = V(static_cast<crd::f32>(0.7071067811865476)) * n26r - V(static_cast<crd::f32>(-0.7071067811865475)) * n26i, n36i = V(static_cast<crd::f32>(0.7071067811865476)) * n26i + V(static_cast<crd::f32>(-0.7071067811865475)) * n26r;
+        const V n39r = n36r - n37r, n39i = n36i - n37i;
+        const V n38r = n36r + n37r, n38i = n36i + n37i;
+        const V n40r = n39i, n40i = -n39r;
+        const V n30r = n25r - n27r, n30i = n25i - n27i;
+        const V n29r = n25r + n27r, n29i = n25i + n27i;
+        const V n31r = n30i, n31i = -n30r;
+        V n1r, n1i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 1 * b + t), n1r, n1i);
+        const V n46r = n1r - n9r, n46i = n1i - n9i;
+        const V n45r = n1r + n9r, n45i = n1i + n9i;
+        const V n53r = n46r - n49r, n53i = n46i - n49i;
+        const V n52r = n46r + n49r, n52i = n46i + n49i;
+        const V n88r = V(static_cast<crd::f32>(0.38268343236508984)) * n53r - V(static_cast<crd::f32>(-0.9238795325112867)) * n53i, n88i = V(static_cast<crd::f32>(0.38268343236508984)) * n53i + V(static_cast<crd::f32>(-0.9238795325112867)) * n53r;
+        const V n70r = V(static_cast<crd::f32>(0.9238795325112867)) * n52r - V(static_cast<crd::f32>(-0.3826834323650898)) * n52i, n70i = V(static_cast<crd::f32>(0.9238795325112867)) * n52i + V(static_cast<crd::f32>(-0.3826834323650898)) * n52r;
+        const V n91r = n88r - n89r, n91i = n88i - n89i;
+        const V n90r = n88r + n89r, n90i = n88i + n89i;
+        const V n92r = n91i, n92i = -n91r;
+        const V n73r = n70r - n71r, n73i = n70i - n71i;
+        const V n72r = n70r + n71r, n72i = n70i + n71i;
+        const V n74r = n73i, n74i = -n73r;
+        const V n51r = n45r - n47r, n51i = n45i - n47i;
+        const V n50r = n45r + n47r, n50i = n45i + n47i;
+        const V n79r = V(static_cast<crd::f32>(0.7071067811865476)) * n51r - V(static_cast<crd::f32>(-0.7071067811865475)) * n51i, n79i = V(static_cast<crd::f32>(0.7071067811865476)) * n51i + V(static_cast<crd::f32>(-0.7071067811865475)) * n51r;
+        const V n82r = n79r - n80r, n82i = n79i - n80i;
+        const V n81r = n79r + n80r, n81i = n79i + n80i;
+        const V n83r = n82i, n83i = -n82r;
+        const V n64r = n50r - n59r, n64i = n50i - n59i;
+        const V n63r = n50r + n59r, n63i = n50i + n59i;
+        const V n65r = n64i, n65i = -n64r;
+        V n0r, n0i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 0 * b + t), n0r, n0i);
+        const V n17r = n0r - n8r, n17i = n0i - n8i;
+        const V n16r = n0r + n8r, n16i = n0i + n8i;
+        const V n24r = n17r - n20r, n24i = n17i - n20i;
+        const V n23r = n17r + n20r, n23i = n17i + n20i;
+        const V n44r = n24r - n40r, n44i = n24i - n40i;
+        const V n43r = n24r + n40r, n43i = n24i + n40i;
+        const V n96r = n44r - n92r, n96i = n44i - n92i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 15 * b + t), n96r, n96i);
+        const V n95r = n44r + n92r, n95i = n44i + n92i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 7 * b + t), n95r, n95i);
+        const V n94r = n43r - n90r, n94i = n43i - n90i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 11 * b + t), n94r, n94i);
+        const V n93r = n43r + n90r, n93i = n43i + n90i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 3 * b + t), n93r, n93i);
+        const V n42r = n23r - n38r, n42i = n23i - n38i;
+        const V n41r = n23r + n38r, n41i = n23i + n38i;
+        const V n78r = n42r - n74r, n78i = n42i - n74i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 13 * b + t), n78r, n78i);
+        const V n77r = n42r + n74r, n77i = n42i + n74i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 5 * b + t), n77r, n77i);
+        const V n76r = n41r - n72r, n76i = n41i - n72i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 9 * b + t), n76r, n76i);
+        const V n75r = n41r + n72r, n75i = n41i + n72i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 1 * b + t), n75r, n75i);
+        const V n22r = n16r - n18r, n22i = n16i - n18i;
+        const V n21r = n16r + n18r, n21i = n16i + n18i;
+        const V n35r = n22r - n31r, n35i = n22i - n31i;
+        const V n34r = n22r + n31r, n34i = n22i + n31i;
+        const V n87r = n35r - n83r, n87i = n35i - n83i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 14 * b + t), n87r, n87i);
+        const V n86r = n35r + n83r, n86i = n35i + n83i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 6 * b + t), n86r, n86i);
+        const V n85r = n34r - n81r, n85i = n34i - n81i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 10 * b + t), n85r, n85i);
+        const V n84r = n34r + n81r, n84i = n34i + n81i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 2 * b + t), n84r, n84i);
+        const V n33r = n21r - n29r, n33i = n21i - n29i;
+        const V n32r = n21r + n29r, n32i = n21i + n29i;
+        const V n69r = n33r - n65r, n69i = n33i - n65i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 12 * b + t), n69r, n69i);
+        const V n68r = n33r + n65r, n68i = n33i + n65i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 4 * b + t), n68r, n68i);
+        const V n67r = n32r - n63r, n67i = n32i - n63i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 8 * b + t), n67r, n67i);
+        const V n66r = n32r + n63r, n66i = n32i + n63i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 0 * b + t), n66r, n66i);
+    }
+}
+// N=256=16x16 stage-1 FUSED (BB=512): leaf codelet16 + twiddle W_256^(n2*k1) + transposed store. GENERATED.
+CRD_FORCEINLINE void codelet16_stage1_fused_16x16(const crd::hesap::Complex<crd::f32>* in,
+    crd::hesap::Complex<crd::f32>* out, crd::usize b, const crd::f32* twr, const crd::f32* twi) noexcept
+{
+    using V = crd::math::simd::Vec8f;
+    namespace simd = crd::math::simd;
+    for (crd::usize t = 0; t + 8 <= b; t += 8)
+    {
+        const crd::usize n2 = t >> 9, bb0 = t & 511;
+        const crd::f32* const tr = twr + n2 * 16, * const ti = twi + n2 * 16;
+        V n15r, n15i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 15 * b + t), n15r, n15i);
+        V n14r, n14i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 14 * b + t), n14r, n14i);
+        V n13r, n13i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 13 * b + t), n13r, n13i);
+        V n12r, n12i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 12 * b + t), n12r, n12i);
+        V n11r, n11i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 11 * b + t), n11r, n11i);
+        V n10r, n10i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 10 * b + t), n10r, n10i);
+        V n9r, n9i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 9 * b + t), n9r, n9i);
+        V n8r, n8i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 8 * b + t), n8r, n8i);
+        V n7r, n7i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 7 * b + t), n7r, n7i);
+        const V n57r = n7r - n15r, n57i = n7i - n15i;
+        const V n56r = n7r + n15r, n56i = n7i + n15i;
+        const V n58r = n57i, n58i = -n57r;
+        V n6r, n6i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 6 * b + t), n6r, n6i);
+        const V n28r = n6r - n14r, n28i = n6i - n14i;
+        const V n27r = n6r + n14r, n27i = n6i + n14i;
+        const V n37r = V(static_cast<crd::f32>(-0.7071067811865475)) * n28r - V(static_cast<crd::f32>(-0.7071067811865476)) * n28i, n37i = V(static_cast<crd::f32>(-0.7071067811865475)) * n28i + V(static_cast<crd::f32>(-0.7071067811865476)) * n28r;
+        V n5r, n5i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 5 * b + t), n5r, n5i);
+        const V n48r = n5r - n13r, n48i = n5i - n13i;
+        const V n47r = n5r + n13r, n47i = n5i + n13i;
+        const V n49r = n48i, n49i = -n48r;
+        V n4r, n4i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 4 * b + t), n4r, n4i);
+        const V n19r = n4r - n12r, n19i = n4i - n12i;
+        const V n18r = n4r + n12r, n18i = n4i + n12i;
+        const V n20r = n19i, n20i = -n19r;
+        V n3r, n3i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 3 * b + t), n3r, n3i);
+        const V n55r = n3r - n11r, n55i = n3i - n11i;
+        const V n54r = n3r + n11r, n54i = n3i + n11i;
+        const V n62r = n55r - n58r, n62i = n55i - n58i;
+        const V n61r = n55r + n58r, n61i = n55i + n58i;
+        const V n89r = V(static_cast<crd::f32>(-0.9238795325112868)) * n62r - V(static_cast<crd::f32>(0.38268343236508967)) * n62i, n89i = V(static_cast<crd::f32>(-0.9238795325112868)) * n62i + V(static_cast<crd::f32>(0.38268343236508967)) * n62r;
+        const V n71r = V(static_cast<crd::f32>(0.38268343236508984)) * n61r - V(static_cast<crd::f32>(-0.9238795325112867)) * n61i, n71i = V(static_cast<crd::f32>(0.38268343236508984)) * n61i + V(static_cast<crd::f32>(-0.9238795325112867)) * n61r;
+        const V n60r = n54r - n56r, n60i = n54i - n56i;
+        const V n59r = n54r + n56r, n59i = n54i + n56i;
+        const V n80r = V(static_cast<crd::f32>(-0.7071067811865475)) * n60r - V(static_cast<crd::f32>(-0.7071067811865476)) * n60i, n80i = V(static_cast<crd::f32>(-0.7071067811865475)) * n60i + V(static_cast<crd::f32>(-0.7071067811865476)) * n60r;
+        V n2r, n2i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 2 * b + t), n2r, n2i);
+        const V n26r = n2r - n10r, n26i = n2i - n10i;
+        const V n25r = n2r + n10r, n25i = n2i + n10i;
+        const V n36r = V(static_cast<crd::f32>(0.7071067811865476)) * n26r - V(static_cast<crd::f32>(-0.7071067811865475)) * n26i, n36i = V(static_cast<crd::f32>(0.7071067811865476)) * n26i + V(static_cast<crd::f32>(-0.7071067811865475)) * n26r;
+        const V n39r = n36r - n37r, n39i = n36i - n37i;
+        const V n38r = n36r + n37r, n38i = n36i + n37i;
+        const V n40r = n39i, n40i = -n39r;
+        const V n30r = n25r - n27r, n30i = n25i - n27i;
+        const V n29r = n25r + n27r, n29i = n25i + n27i;
+        const V n31r = n30i, n31i = -n30r;
+        V n1r, n1i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 1 * b + t), n1r, n1i);
+        const V n46r = n1r - n9r, n46i = n1i - n9i;
+        const V n45r = n1r + n9r, n45i = n1i + n9i;
+        const V n53r = n46r - n49r, n53i = n46i - n49i;
+        const V n52r = n46r + n49r, n52i = n46i + n49i;
+        const V n88r = V(static_cast<crd::f32>(0.38268343236508984)) * n53r - V(static_cast<crd::f32>(-0.9238795325112867)) * n53i, n88i = V(static_cast<crd::f32>(0.38268343236508984)) * n53i + V(static_cast<crd::f32>(-0.9238795325112867)) * n53r;
+        const V n70r = V(static_cast<crd::f32>(0.9238795325112867)) * n52r - V(static_cast<crd::f32>(-0.3826834323650898)) * n52i, n70i = V(static_cast<crd::f32>(0.9238795325112867)) * n52i + V(static_cast<crd::f32>(-0.3826834323650898)) * n52r;
+        const V n91r = n88r - n89r, n91i = n88i - n89i;
+        const V n90r = n88r + n89r, n90i = n88i + n89i;
+        const V n92r = n91i, n92i = -n91r;
+        const V n73r = n70r - n71r, n73i = n70i - n71i;
+        const V n72r = n70r + n71r, n72i = n70i + n71i;
+        const V n74r = n73i, n74i = -n73r;
+        const V n51r = n45r - n47r, n51i = n45i - n47i;
+        const V n50r = n45r + n47r, n50i = n45i + n47i;
+        const V n79r = V(static_cast<crd::f32>(0.7071067811865476)) * n51r - V(static_cast<crd::f32>(-0.7071067811865475)) * n51i, n79i = V(static_cast<crd::f32>(0.7071067811865476)) * n51i + V(static_cast<crd::f32>(-0.7071067811865475)) * n51r;
+        const V n82r = n79r - n80r, n82i = n79i - n80i;
+        const V n81r = n79r + n80r, n81i = n79i + n80i;
+        const V n83r = n82i, n83i = -n82r;
+        const V n64r = n50r - n59r, n64i = n50i - n59i;
+        const V n63r = n50r + n59r, n63i = n50i + n59i;
+        const V n65r = n64i, n65i = -n64r;
+        V n0r, n0i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 0 * b + t), n0r, n0i);
+        const V n17r = n0r - n8r, n17i = n0i - n8i;
+        const V n16r = n0r + n8r, n16i = n0i + n8i;
+        const V n24r = n17r - n20r, n24i = n17i - n20i;
+        const V n23r = n17r + n20r, n23i = n17i + n20i;
+        const V n44r = n24r - n40r, n44i = n24i - n40i;
+        const V n43r = n24r + n40r, n43i = n24i + n40i;
+        const V n96r = n44r - n92r, n96i = n44i - n92i;
+        { const V wr = V(tr[15]), wi = V(ti[15]);
+          const V or_ = n96r * wr - n96i * wi, oi_ = n96r * wi + n96i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 8192 + 15 * 512 + bb0), or_, oi_); }
+        const V n95r = n44r + n92r, n95i = n44i + n92i;
+        { const V wr = V(tr[7]), wi = V(ti[7]);
+          const V or_ = n95r * wr - n95i * wi, oi_ = n95r * wi + n95i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 8192 + 7 * 512 + bb0), or_, oi_); }
+        const V n94r = n43r - n90r, n94i = n43i - n90i;
+        { const V wr = V(tr[11]), wi = V(ti[11]);
+          const V or_ = n94r * wr - n94i * wi, oi_ = n94r * wi + n94i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 8192 + 11 * 512 + bb0), or_, oi_); }
+        const V n93r = n43r + n90r, n93i = n43i + n90i;
+        { const V wr = V(tr[3]), wi = V(ti[3]);
+          const V or_ = n93r * wr - n93i * wi, oi_ = n93r * wi + n93i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 8192 + 3 * 512 + bb0), or_, oi_); }
+        const V n42r = n23r - n38r, n42i = n23i - n38i;
+        const V n41r = n23r + n38r, n41i = n23i + n38i;
+        const V n78r = n42r - n74r, n78i = n42i - n74i;
+        { const V wr = V(tr[13]), wi = V(ti[13]);
+          const V or_ = n78r * wr - n78i * wi, oi_ = n78r * wi + n78i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 8192 + 13 * 512 + bb0), or_, oi_); }
+        const V n77r = n42r + n74r, n77i = n42i + n74i;
+        { const V wr = V(tr[5]), wi = V(ti[5]);
+          const V or_ = n77r * wr - n77i * wi, oi_ = n77r * wi + n77i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 8192 + 5 * 512 + bb0), or_, oi_); }
+        const V n76r = n41r - n72r, n76i = n41i - n72i;
+        { const V wr = V(tr[9]), wi = V(ti[9]);
+          const V or_ = n76r * wr - n76i * wi, oi_ = n76r * wi + n76i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 8192 + 9 * 512 + bb0), or_, oi_); }
+        const V n75r = n41r + n72r, n75i = n41i + n72i;
+        { const V wr = V(tr[1]), wi = V(ti[1]);
+          const V or_ = n75r * wr - n75i * wi, oi_ = n75r * wi + n75i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 8192 + 1 * 512 + bb0), or_, oi_); }
+        const V n22r = n16r - n18r, n22i = n16i - n18i;
+        const V n21r = n16r + n18r, n21i = n16i + n18i;
+        const V n35r = n22r - n31r, n35i = n22i - n31i;
+        const V n34r = n22r + n31r, n34i = n22i + n31i;
+        const V n87r = n35r - n83r, n87i = n35i - n83i;
+        { const V wr = V(tr[14]), wi = V(ti[14]);
+          const V or_ = n87r * wr - n87i * wi, oi_ = n87r * wi + n87i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 8192 + 14 * 512 + bb0), or_, oi_); }
+        const V n86r = n35r + n83r, n86i = n35i + n83i;
+        { const V wr = V(tr[6]), wi = V(ti[6]);
+          const V or_ = n86r * wr - n86i * wi, oi_ = n86r * wi + n86i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 8192 + 6 * 512 + bb0), or_, oi_); }
+        const V n85r = n34r - n81r, n85i = n34i - n81i;
+        { const V wr = V(tr[10]), wi = V(ti[10]);
+          const V or_ = n85r * wr - n85i * wi, oi_ = n85r * wi + n85i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 8192 + 10 * 512 + bb0), or_, oi_); }
+        const V n84r = n34r + n81r, n84i = n34i + n81i;
+        { const V wr = V(tr[2]), wi = V(ti[2]);
+          const V or_ = n84r * wr - n84i * wi, oi_ = n84r * wi + n84i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 8192 + 2 * 512 + bb0), or_, oi_); }
+        const V n33r = n21r - n29r, n33i = n21i - n29i;
+        const V n32r = n21r + n29r, n32i = n21i + n29i;
+        const V n69r = n33r - n65r, n69i = n33i - n65i;
+        { const V wr = V(tr[12]), wi = V(ti[12]);
+          const V or_ = n69r * wr - n69i * wi, oi_ = n69r * wi + n69i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 8192 + 12 * 512 + bb0), or_, oi_); }
+        const V n68r = n33r + n65r, n68i = n33i + n65i;
+        { const V wr = V(tr[4]), wi = V(ti[4]);
+          const V or_ = n68r * wr - n68i * wi, oi_ = n68r * wi + n68i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 8192 + 4 * 512 + bb0), or_, oi_); }
+        const V n67r = n32r - n63r, n67i = n32i - n63i;
+        { const V wr = V(tr[8]), wi = V(ti[8]);
+          const V or_ = n67r * wr - n67i * wi, oi_ = n67r * wi + n67i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 8192 + 8 * 512 + bb0), or_, oi_); }
+        const V n66r = n32r + n63r, n66i = n32i + n63i;
+        { const V wr = V(tr[0]), wi = V(ti[0]);
+          const V or_ = n66r * wr - n66i * wi, oi_ = n66r * wi + n66i * wr;
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2 * 8192 + 0 * 512 + bb0), or_, oi_); }
+    }
+}
+// N=256=16x16 GATHER-FUSED stage-1 (BB=512): reads the four-step input directly (row stride rs), no gather memcpy. GENERATED.
+CRD_FORCEINLINE void codelet16_stage1_fused_16x16_gather(const crd::hesap::Complex<crd::f32>* din_block,
+    crd::hesap::Complex<crd::f32>* out, crd::usize rs, const crd::f32* twr, const crd::f32* twi) noexcept
+{
+    using V = crd::math::simd::Vec8f;
+    namespace simd = crd::math::simd;
+    for (crd::usize t = 0; t + 8 <= 8192; t += 8)
+    {
+        const crd::usize n2v = t >> 9, bb0 = t & 511;
+        const crd::hesap::Complex<crd::f32>* const base = din_block + n2v * rs + bb0;
+        const crd::f32* const tr = twr + n2v * 16, * const ti = twi + n2v * 16;
+        V n15r, n15i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 240 * rs), n15r, n15i);
+        V n14r, n14i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 224 * rs), n14r, n14i);
+        V n13r, n13i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 208 * rs), n13r, n13i);
+        V n12r, n12i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 192 * rs), n12r, n12i);
+        V n11r, n11i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 176 * rs), n11r, n11i);
+        V n10r, n10i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 160 * rs), n10r, n10i);
+        V n9r, n9i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 144 * rs), n9r, n9i);
+        V n8r, n8i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 128 * rs), n8r, n8i);
+        V n7r, n7i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 112 * rs), n7r, n7i);
+        const V n57r = n7r - n15r, n57i = n7i - n15i;
+        const V n56r = n7r + n15r, n56i = n7i + n15i;
+        const V n58r = n57i, n58i = -n57r;
+        V n6r, n6i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 96 * rs), n6r, n6i);
+        const V n28r = n6r - n14r, n28i = n6i - n14i;
+        const V n27r = n6r + n14r, n27i = n6i + n14i;
+        const V n37r = V(static_cast<crd::f32>(-0.7071067811865475)) * n28r - V(static_cast<crd::f32>(-0.7071067811865476)) * n28i, n37i = V(static_cast<crd::f32>(-0.7071067811865475)) * n28i + V(static_cast<crd::f32>(-0.7071067811865476)) * n28r;
+        V n5r, n5i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 80 * rs), n5r, n5i);
+        const V n48r = n5r - n13r, n48i = n5i - n13i;
+        const V n47r = n5r + n13r, n47i = n5i + n13i;
+        const V n49r = n48i, n49i = -n48r;
+        V n4r, n4i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 64 * rs), n4r, n4i);
+        const V n19r = n4r - n12r, n19i = n4i - n12i;
+        const V n18r = n4r + n12r, n18i = n4i + n12i;
+        const V n20r = n19i, n20i = -n19r;
+        V n3r, n3i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 48 * rs), n3r, n3i);
+        const V n55r = n3r - n11r, n55i = n3i - n11i;
+        const V n54r = n3r + n11r, n54i = n3i + n11i;
+        const V n62r = n55r - n58r, n62i = n55i - n58i;
+        const V n61r = n55r + n58r, n61i = n55i + n58i;
+        const V n89r = V(static_cast<crd::f32>(-0.9238795325112868)) * n62r - V(static_cast<crd::f32>(0.38268343236508967)) * n62i, n89i = V(static_cast<crd::f32>(-0.9238795325112868)) * n62i + V(static_cast<crd::f32>(0.38268343236508967)) * n62r;
+        const V n71r = V(static_cast<crd::f32>(0.38268343236508984)) * n61r - V(static_cast<crd::f32>(-0.9238795325112867)) * n61i, n71i = V(static_cast<crd::f32>(0.38268343236508984)) * n61i + V(static_cast<crd::f32>(-0.9238795325112867)) * n61r;
+        const V n60r = n54r - n56r, n60i = n54i - n56i;
+        const V n59r = n54r + n56r, n59i = n54i + n56i;
+        const V n80r = V(static_cast<crd::f32>(-0.7071067811865475)) * n60r - V(static_cast<crd::f32>(-0.7071067811865476)) * n60i, n80i = V(static_cast<crd::f32>(-0.7071067811865475)) * n60i + V(static_cast<crd::f32>(-0.7071067811865476)) * n60r;
+        V n2r, n2i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 32 * rs), n2r, n2i);
+        const V n26r = n2r - n10r, n26i = n2i - n10i;
+        const V n25r = n2r + n10r, n25i = n2i + n10i;
+        const V n36r = V(static_cast<crd::f32>(0.7071067811865476)) * n26r - V(static_cast<crd::f32>(-0.7071067811865475)) * n26i, n36i = V(static_cast<crd::f32>(0.7071067811865476)) * n26i + V(static_cast<crd::f32>(-0.7071067811865475)) * n26r;
+        const V n39r = n36r - n37r, n39i = n36i - n37i;
+        const V n38r = n36r + n37r, n38i = n36i + n37i;
+        const V n40r = n39i, n40i = -n39r;
+        const V n30r = n25r - n27r, n30i = n25i - n27i;
+        const V n29r = n25r + n27r, n29i = n25i + n27i;
+        const V n31r = n30i, n31i = -n30r;
+        V n1r, n1i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 16 * rs), n1r, n1i);
+        const V n46r = n1r - n9r, n46i = n1i - n9i;
+        const V n45r = n1r + n9r, n45i = n1i + n9i;
+        const V n53r = n46r - n49r, n53i = n46i - n49i;
+        const V n52r = n46r + n49r, n52i = n46i + n49i;
+        const V n88r = V(static_cast<crd::f32>(0.38268343236508984)) * n53r - V(static_cast<crd::f32>(-0.9238795325112867)) * n53i, n88i = V(static_cast<crd::f32>(0.38268343236508984)) * n53i + V(static_cast<crd::f32>(-0.9238795325112867)) * n53r;
+        const V n70r = V(static_cast<crd::f32>(0.9238795325112867)) * n52r - V(static_cast<crd::f32>(-0.3826834323650898)) * n52i, n70i = V(static_cast<crd::f32>(0.9238795325112867)) * n52i + V(static_cast<crd::f32>(-0.3826834323650898)) * n52r;
+        const V n91r = n88r - n89r, n91i = n88i - n89i;
+        const V n90r = n88r + n89r, n90i = n88i + n89i;
+        const V n92r = n91i, n92i = -n91r;
+        const V n73r = n70r - n71r, n73i = n70i - n71i;
+        const V n72r = n70r + n71r, n72i = n70i + n71i;
+        const V n74r = n73i, n74i = -n73r;
+        const V n51r = n45r - n47r, n51i = n45i - n47i;
+        const V n50r = n45r + n47r, n50i = n45i + n47i;
+        const V n79r = V(static_cast<crd::f32>(0.7071067811865476)) * n51r - V(static_cast<crd::f32>(-0.7071067811865475)) * n51i, n79i = V(static_cast<crd::f32>(0.7071067811865476)) * n51i + V(static_cast<crd::f32>(-0.7071067811865475)) * n51r;
+        const V n82r = n79r - n80r, n82i = n79i - n80i;
+        const V n81r = n79r + n80r, n81i = n79i + n80i;
+        const V n83r = n82i, n83i = -n82r;
+        const V n64r = n50r - n59r, n64i = n50i - n59i;
+        const V n63r = n50r + n59r, n63i = n50i + n59i;
+        const V n65r = n64i, n65i = -n64r;
+        V n0r, n0i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 0 * rs), n0r, n0i);
+        const V n17r = n0r - n8r, n17i = n0i - n8i;
+        const V n16r = n0r + n8r, n16i = n0i + n8i;
+        const V n24r = n17r - n20r, n24i = n17i - n20i;
+        const V n23r = n17r + n20r, n23i = n17i + n20i;
+        const V n44r = n24r - n40r, n44i = n24i - n40i;
+        const V n43r = n24r + n40r, n43i = n24i + n40i;
+        const V n96r = n44r - n92r, n96i = n44i - n92i;
+        { const V wr = V(tr[15]), wi = V(ti[15]);
+          const V or_ = n96r * wr - n96i * wi, oi_ = n96r * wi + n96i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 15 * 512 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 15 * 512 + bb0), or_, oi_); }
+#endif
+        const V n95r = n44r + n92r, n95i = n44i + n92i;
+        { const V wr = V(tr[7]), wi = V(ti[7]);
+          const V or_ = n95r * wr - n95i * wi, oi_ = n95r * wi + n95i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 7 * 512 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 7 * 512 + bb0), or_, oi_); }
+#endif
+        const V n94r = n43r - n90r, n94i = n43i - n90i;
+        { const V wr = V(tr[11]), wi = V(ti[11]);
+          const V or_ = n94r * wr - n94i * wi, oi_ = n94r * wi + n94i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 11 * 512 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 11 * 512 + bb0), or_, oi_); }
+#endif
+        const V n93r = n43r + n90r, n93i = n43i + n90i;
+        { const V wr = V(tr[3]), wi = V(ti[3]);
+          const V or_ = n93r * wr - n93i * wi, oi_ = n93r * wi + n93i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 3 * 512 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 3 * 512 + bb0), or_, oi_); }
+#endif
+        const V n42r = n23r - n38r, n42i = n23i - n38i;
+        const V n41r = n23r + n38r, n41i = n23i + n38i;
+        const V n78r = n42r - n74r, n78i = n42i - n74i;
+        { const V wr = V(tr[13]), wi = V(ti[13]);
+          const V or_ = n78r * wr - n78i * wi, oi_ = n78r * wi + n78i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 13 * 512 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 13 * 512 + bb0), or_, oi_); }
+#endif
+        const V n77r = n42r + n74r, n77i = n42i + n74i;
+        { const V wr = V(tr[5]), wi = V(ti[5]);
+          const V or_ = n77r * wr - n77i * wi, oi_ = n77r * wi + n77i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 5 * 512 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 5 * 512 + bb0), or_, oi_); }
+#endif
+        const V n76r = n41r - n72r, n76i = n41i - n72i;
+        { const V wr = V(tr[9]), wi = V(ti[9]);
+          const V or_ = n76r * wr - n76i * wi, oi_ = n76r * wi + n76i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 9 * 512 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 9 * 512 + bb0), or_, oi_); }
+#endif
+        const V n75r = n41r + n72r, n75i = n41i + n72i;
+        { const V wr = V(tr[1]), wi = V(ti[1]);
+          const V or_ = n75r * wr - n75i * wi, oi_ = n75r * wi + n75i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 1 * 512 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 1 * 512 + bb0), or_, oi_); }
+#endif
+        const V n22r = n16r - n18r, n22i = n16i - n18i;
+        const V n21r = n16r + n18r, n21i = n16i + n18i;
+        const V n35r = n22r - n31r, n35i = n22i - n31i;
+        const V n34r = n22r + n31r, n34i = n22i + n31i;
+        const V n87r = n35r - n83r, n87i = n35i - n83i;
+        { const V wr = V(tr[14]), wi = V(ti[14]);
+          const V or_ = n87r * wr - n87i * wi, oi_ = n87r * wi + n87i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 14 * 512 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 14 * 512 + bb0), or_, oi_); }
+#endif
+        const V n86r = n35r + n83r, n86i = n35i + n83i;
+        { const V wr = V(tr[6]), wi = V(ti[6]);
+          const V or_ = n86r * wr - n86i * wi, oi_ = n86r * wi + n86i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 6 * 512 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 6 * 512 + bb0), or_, oi_); }
+#endif
+        const V n85r = n34r - n81r, n85i = n34i - n81i;
+        { const V wr = V(tr[10]), wi = V(ti[10]);
+          const V or_ = n85r * wr - n85i * wi, oi_ = n85r * wi + n85i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 10 * 512 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 10 * 512 + bb0), or_, oi_); }
+#endif
+        const V n84r = n34r + n81r, n84i = n34i + n81i;
+        { const V wr = V(tr[2]), wi = V(ti[2]);
+          const V or_ = n84r * wr - n84i * wi, oi_ = n84r * wi + n84i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 2 * 512 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 2 * 512 + bb0), or_, oi_); }
+#endif
+        const V n33r = n21r - n29r, n33i = n21i - n29i;
+        const V n32r = n21r + n29r, n32i = n21i + n29i;
+        const V n69r = n33r - n65r, n69i = n33i - n65i;
+        { const V wr = V(tr[12]), wi = V(ti[12]);
+          const V or_ = n69r * wr - n69i * wi, oi_ = n69r * wi + n69i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 12 * 512 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 12 * 512 + bb0), or_, oi_); }
+#endif
+        const V n68r = n33r + n65r, n68i = n33i + n65i;
+        { const V wr = V(tr[4]), wi = V(ti[4]);
+          const V or_ = n68r * wr - n68i * wi, oi_ = n68r * wi + n68i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 4 * 512 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 4 * 512 + bb0), or_, oi_); }
+#endif
+        const V n67r = n32r - n63r, n67i = n32i - n63i;
+        { const V wr = V(tr[8]), wi = V(ti[8]);
+          const V or_ = n67r * wr - n67i * wi, oi_ = n67r * wi + n67i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 8 * 512 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 8 * 512 + bb0), or_, oi_); }
+#endif
+        const V n66r = n32r + n63r, n66i = n32i + n63i;
+        { const V wr = V(tr[0]), wi = V(ti[0]);
+          const V or_ = n66r * wr - n66i * wi, oi_ = n66r * wi + n66i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 0 * 512 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 0 * 512 + bb0), or_, oi_); }
+#endif
+    }
+}
+// M17 scatter-FUSED stage-2 (N=16, bw=512): 32-pt FFT + direct final-output store (no scratch/scatter). GEN.
+CRD_FORCEINLINE void codelet16_batched_scatter(const crd::hesap::Complex<crd::f32>* in,
+    crd::hesap::Complex<crd::f32>* data_base, crd::usize k1, crd::usize n1, crd::usize b) noexcept
+{
+    using V = crd::math::simd::Vec8f;
+    namespace simd = crd::math::simd;
+    for (crd::usize t = 0; t + 8 <= b; t += 8)
+    {
+        V n15r, n15i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 15 * b + t), n15r, n15i);
+        V n14r, n14i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 14 * b + t), n14r, n14i);
+        V n13r, n13i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 13 * b + t), n13r, n13i);
+        V n12r, n12i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 12 * b + t), n12r, n12i);
+        V n11r, n11i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 11 * b + t), n11r, n11i);
+        V n10r, n10i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 10 * b + t), n10r, n10i);
+        V n9r, n9i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 9 * b + t), n9r, n9i);
+        V n8r, n8i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 8 * b + t), n8r, n8i);
+        V n7r, n7i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 7 * b + t), n7r, n7i);
+        const V n57r = n7r - n15r, n57i = n7i - n15i;
+        const V n56r = n7r + n15r, n56i = n7i + n15i;
+        const V n58r = n57i, n58i = -n57r;
+        V n6r, n6i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 6 * b + t), n6r, n6i);
+        const V n28r = n6r - n14r, n28i = n6i - n14i;
+        const V n27r = n6r + n14r, n27i = n6i + n14i;
+        const V n37r = V(static_cast<crd::f32>(-0.7071067811865475)) * n28r - V(static_cast<crd::f32>(-0.7071067811865476)) * n28i, n37i = V(static_cast<crd::f32>(-0.7071067811865475)) * n28i + V(static_cast<crd::f32>(-0.7071067811865476)) * n28r;
+        V n5r, n5i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 5 * b + t), n5r, n5i);
+        const V n48r = n5r - n13r, n48i = n5i - n13i;
+        const V n47r = n5r + n13r, n47i = n5i + n13i;
+        const V n49r = n48i, n49i = -n48r;
+        V n4r, n4i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 4 * b + t), n4r, n4i);
+        const V n19r = n4r - n12r, n19i = n4i - n12i;
+        const V n18r = n4r + n12r, n18i = n4i + n12i;
+        const V n20r = n19i, n20i = -n19r;
+        V n3r, n3i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 3 * b + t), n3r, n3i);
+        const V n55r = n3r - n11r, n55i = n3i - n11i;
+        const V n54r = n3r + n11r, n54i = n3i + n11i;
+        const V n62r = n55r - n58r, n62i = n55i - n58i;
+        const V n61r = n55r + n58r, n61i = n55i + n58i;
+        const V n89r = V(static_cast<crd::f32>(-0.9238795325112868)) * n62r - V(static_cast<crd::f32>(0.38268343236508967)) * n62i, n89i = V(static_cast<crd::f32>(-0.9238795325112868)) * n62i + V(static_cast<crd::f32>(0.38268343236508967)) * n62r;
+        const V n71r = V(static_cast<crd::f32>(0.38268343236508984)) * n61r - V(static_cast<crd::f32>(-0.9238795325112867)) * n61i, n71i = V(static_cast<crd::f32>(0.38268343236508984)) * n61i + V(static_cast<crd::f32>(-0.9238795325112867)) * n61r;
+        const V n60r = n54r - n56r, n60i = n54i - n56i;
+        const V n59r = n54r + n56r, n59i = n54i + n56i;
+        const V n80r = V(static_cast<crd::f32>(-0.7071067811865475)) * n60r - V(static_cast<crd::f32>(-0.7071067811865476)) * n60i, n80i = V(static_cast<crd::f32>(-0.7071067811865475)) * n60i + V(static_cast<crd::f32>(-0.7071067811865476)) * n60r;
+        V n2r, n2i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 2 * b + t), n2r, n2i);
+        const V n26r = n2r - n10r, n26i = n2i - n10i;
+        const V n25r = n2r + n10r, n25i = n2i + n10i;
+        const V n36r = V(static_cast<crd::f32>(0.7071067811865476)) * n26r - V(static_cast<crd::f32>(-0.7071067811865475)) * n26i, n36i = V(static_cast<crd::f32>(0.7071067811865476)) * n26i + V(static_cast<crd::f32>(-0.7071067811865475)) * n26r;
+        const V n39r = n36r - n37r, n39i = n36i - n37i;
+        const V n38r = n36r + n37r, n38i = n36i + n37i;
+        const V n40r = n39i, n40i = -n39r;
+        const V n30r = n25r - n27r, n30i = n25i - n27i;
+        const V n29r = n25r + n27r, n29i = n25i + n27i;
+        const V n31r = n30i, n31i = -n30r;
+        V n1r, n1i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 1 * b + t), n1r, n1i);
+        const V n46r = n1r - n9r, n46i = n1i - n9i;
+        const V n45r = n1r + n9r, n45i = n1i + n9i;
+        const V n53r = n46r - n49r, n53i = n46i - n49i;
+        const V n52r = n46r + n49r, n52i = n46i + n49i;
+        const V n88r = V(static_cast<crd::f32>(0.38268343236508984)) * n53r - V(static_cast<crd::f32>(-0.9238795325112867)) * n53i, n88i = V(static_cast<crd::f32>(0.38268343236508984)) * n53i + V(static_cast<crd::f32>(-0.9238795325112867)) * n53r;
+        const V n70r = V(static_cast<crd::f32>(0.9238795325112867)) * n52r - V(static_cast<crd::f32>(-0.3826834323650898)) * n52i, n70i = V(static_cast<crd::f32>(0.9238795325112867)) * n52i + V(static_cast<crd::f32>(-0.3826834323650898)) * n52r;
+        const V n91r = n88r - n89r, n91i = n88i - n89i;
+        const V n90r = n88r + n89r, n90i = n88i + n89i;
+        const V n92r = n91i, n92i = -n91r;
+        const V n73r = n70r - n71r, n73i = n70i - n71i;
+        const V n72r = n70r + n71r, n72i = n70i + n71i;
+        const V n74r = n73i, n74i = -n73r;
+        const V n51r = n45r - n47r, n51i = n45i - n47i;
+        const V n50r = n45r + n47r, n50i = n45i + n47i;
+        const V n79r = V(static_cast<crd::f32>(0.7071067811865476)) * n51r - V(static_cast<crd::f32>(-0.7071067811865475)) * n51i, n79i = V(static_cast<crd::f32>(0.7071067811865476)) * n51i + V(static_cast<crd::f32>(-0.7071067811865475)) * n51r;
+        const V n82r = n79r - n80r, n82i = n79i - n80i;
+        const V n81r = n79r + n80r, n81i = n79i + n80i;
+        const V n83r = n82i, n83i = -n82r;
+        const V n64r = n50r - n59r, n64i = n50i - n59i;
+        const V n63r = n50r + n59r, n63i = n50i + n59i;
+        const V n65r = n64i, n65i = -n64r;
+        V n0r, n0i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 0 * b + t), n0r, n0i);
+        const V n17r = n0r - n8r, n17i = n0i - n8i;
+        const V n16r = n0r + n8r, n16i = n0i + n8i;
+        const V n24r = n17r - n20r, n24i = n17i - n20i;
+        const V n23r = n17r + n20r, n23i = n17i + n20i;
+        const V n44r = n24r - n40r, n44i = n24i - n40i;
+        const V n43r = n24r + n40r, n43i = n24i + n40i;
+        const V n96r = n44r - n92r, n96i = n44i - n92i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (15 * 16 + (t >> 9)) * n1 + (t & 511)), n96r, n96i);
+        const V n95r = n44r + n92r, n95i = n44i + n92i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (7 * 16 + (t >> 9)) * n1 + (t & 511)), n95r, n95i);
+        const V n94r = n43r - n90r, n94i = n43i - n90i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (11 * 16 + (t >> 9)) * n1 + (t & 511)), n94r, n94i);
+        const V n93r = n43r + n90r, n93i = n43i + n90i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (3 * 16 + (t >> 9)) * n1 + (t & 511)), n93r, n93i);
+        const V n42r = n23r - n38r, n42i = n23i - n38i;
+        const V n41r = n23r + n38r, n41i = n23i + n38i;
+        const V n78r = n42r - n74r, n78i = n42i - n74i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (13 * 16 + (t >> 9)) * n1 + (t & 511)), n78r, n78i);
+        const V n77r = n42r + n74r, n77i = n42i + n74i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (5 * 16 + (t >> 9)) * n1 + (t & 511)), n77r, n77i);
+        const V n76r = n41r - n72r, n76i = n41i - n72i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (9 * 16 + (t >> 9)) * n1 + (t & 511)), n76r, n76i);
+        const V n75r = n41r + n72r, n75i = n41i + n72i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (1 * 16 + (t >> 9)) * n1 + (t & 511)), n75r, n75i);
+        const V n22r = n16r - n18r, n22i = n16i - n18i;
+        const V n21r = n16r + n18r, n21i = n16i + n18i;
+        const V n35r = n22r - n31r, n35i = n22i - n31i;
+        const V n34r = n22r + n31r, n34i = n22i + n31i;
+        const V n87r = n35r - n83r, n87i = n35i - n83i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (14 * 16 + (t >> 9)) * n1 + (t & 511)), n87r, n87i);
+        const V n86r = n35r + n83r, n86i = n35i + n83i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (6 * 16 + (t >> 9)) * n1 + (t & 511)), n86r, n86i);
+        const V n85r = n34r - n81r, n85i = n34i - n81i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (10 * 16 + (t >> 9)) * n1 + (t & 511)), n85r, n85i);
+        const V n84r = n34r + n81r, n84i = n34i + n81i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (2 * 16 + (t >> 9)) * n1 + (t & 511)), n84r, n84i);
+        const V n33r = n21r - n29r, n33i = n21i - n29i;
+        const V n32r = n21r + n29r, n32i = n21i + n29i;
+        const V n69r = n33r - n65r, n69i = n33i - n65i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (12 * 16 + (t >> 9)) * n1 + (t & 511)), n69r, n69i);
+        const V n68r = n33r + n65r, n68i = n33i + n65i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (4 * 16 + (t >> 9)) * n1 + (t & 511)), n68r, n68i);
+        const V n67r = n32r - n63r, n67i = n32i - n63i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (8 * 16 + (t >> 9)) * n1 + (t & 511)), n67r, n67i);
+        const V n66r = n32r + n63r, n66i = n32i + n63i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (0 * 16 + (t >> 9)) * n1 + (t & 511)), n66r, n66i);
+    }
+}
+// N=1024=32x32 GATHER-FUSED stage-1 (BB=128): reads the four-step input directly (row stride rs), no gather memcpy. GENERATED.
+CRD_FORCEINLINE void codelet32_stage1_fused_32x32_gather(const crd::hesap::Complex<crd::f32>* din_block,
+    crd::hesap::Complex<crd::f32>* out, crd::usize rs, const crd::f32* twr, const crd::f32* twi) noexcept
+{
+    using V = crd::math::simd::Vec8f;
+    namespace simd = crd::math::simd;
+    for (crd::usize t = 0; t + 8 <= 4096; t += 8)
+    {
+        const crd::usize n2v = t >> 7, bb0 = t & 127;
+        const crd::hesap::Complex<crd::f32>* const base = din_block + n2v * rs + bb0;
+        const crd::f32* const tr = twr + n2v * 32, * const ti = twi + n2v * 32;
+        V n31r, n31i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 992 * rs), n31r, n31i);
+        V n30r, n30i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 960 * rs), n30r, n30i);
+        V n29r, n29i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 928 * rs), n29r, n29i);
+        V n28r, n28i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 896 * rs), n28r, n28i);
+        V n27r, n27i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 864 * rs), n27r, n27i);
+        V n26r, n26i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 832 * rs), n26r, n26i);
+        V n25r, n25i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 800 * rs), n25r, n25i);
+        V n24r, n24i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 768 * rs), n24r, n24i);
+        V n23r, n23i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 736 * rs), n23r, n23i);
+        V n22r, n22i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 704 * rs), n22r, n22i);
+        V n21r, n21i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 672 * rs), n21r, n21i);
+        V n20r, n20i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 640 * rs), n20r, n20i);
+        V n19r, n19i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 608 * rs), n19r, n19i);
+        V n18r, n18i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 576 * rs), n18r, n18i);
+        V n17r, n17i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 544 * rs), n17r, n17i);
+        V n16r, n16i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 512 * rs), n16r, n16i);
+        V n15r, n15i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 480 * rs), n15r, n15i);
+        const V n154r = n15r - n31r, n154i = n15i - n31i;
+        const V n153r = n15r + n31r, n153i = n15i + n31i;
+        const V n163r = V(static_cast<crd::f32>(-0.7071067811865475)) * n154r - V(static_cast<crd::f32>(-0.7071067811865476)) * n154i, n163i = V(static_cast<crd::f32>(-0.7071067811865475)) * n154i + V(static_cast<crd::f32>(-0.7071067811865476)) * n154r;
+        V n14r, n14i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 448 * rs), n14r, n14i);
+        const V n73r = n14r - n30r, n73i = n14i - n30i;
+        const V n72r = n14r + n30r, n72i = n14i + n30i;
+        const V n74r = n73i, n74i = -n73r;
+        V n13r, n13i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 416 * rs), n13r, n13i);
+        const V n125r = n13r - n29r, n125i = n13i - n29i;
+        const V n124r = n13r + n29r, n124i = n13i + n29i;
+        const V n134r = V(static_cast<crd::f32>(-0.7071067811865475)) * n125r - V(static_cast<crd::f32>(-0.7071067811865476)) * n125i, n134i = V(static_cast<crd::f32>(-0.7071067811865475)) * n125i + V(static_cast<crd::f32>(-0.7071067811865476)) * n125r;
+        V n12r, n12i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 384 * rs), n12r, n12i);
+        const V n44r = n12r - n28r, n44i = n12i - n28i;
+        const V n43r = n12r + n28r, n43i = n12i + n28i;
+        const V n53r = V(static_cast<crd::f32>(-0.7071067811865475)) * n44r - V(static_cast<crd::f32>(-0.7071067811865476)) * n44i, n53i = V(static_cast<crd::f32>(-0.7071067811865475)) * n44i + V(static_cast<crd::f32>(-0.7071067811865476)) * n44r;
+        V n11r, n11i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 352 * rs), n11r, n11i);
+        const V n145r = n11r - n27r, n145i = n11i - n27i;
+        const V n144r = n11r + n27r, n144i = n11i + n27i;
+        const V n146r = n145i, n146i = -n145r;
+        V n10r, n10i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 320 * rs), n10r, n10i);
+        const V n64r = n10r - n26r, n64i = n10i - n26i;
+        const V n63r = n10r + n26r, n63i = n10i + n26i;
+        const V n65r = n64i, n65i = -n64r;
+        V n9r, n9i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 288 * rs), n9r, n9i);
+        const V n116r = n9r - n25r, n116i = n9i - n25i;
+        const V n115r = n9r + n25r, n115i = n9i + n25i;
+        const V n117r = n116i, n117i = -n116r;
+        V n8r, n8i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 256 * rs), n8r, n8i);
+        const V n35r = n8r - n24r, n35i = n8i - n24i;
+        const V n34r = n8r + n24r, n34i = n8i + n24i;
+        const V n36r = n35i, n36i = -n35r;
+        V n7r, n7i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 224 * rs), n7r, n7i);
+        const V n152r = n7r - n23r, n152i = n7i - n23i;
+        const V n151r = n7r + n23r, n151i = n7i + n23i;
+        const V n162r = V(static_cast<crd::f32>(0.7071067811865476)) * n152r - V(static_cast<crd::f32>(-0.7071067811865475)) * n152i, n162i = V(static_cast<crd::f32>(0.7071067811865476)) * n152i + V(static_cast<crd::f32>(-0.7071067811865475)) * n152r;
+        const V n165r = n162r - n163r, n165i = n162i - n163i;
+        const V n164r = n162r + n163r, n164i = n162i + n163i;
+        const V n166r = n165i, n166i = -n165r;
+        const V n156r = n151r - n153r, n156i = n151i - n153i;
+        const V n155r = n151r + n153r, n155i = n151i + n153i;
+        const V n157r = n156i, n157i = -n156r;
+        V n6r, n6i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 192 * rs), n6r, n6i);
+        const V n71r = n6r - n22r, n71i = n6i - n22i;
+        const V n70r = n6r + n22r, n70i = n6i + n22i;
+        const V n78r = n71r - n74r, n78i = n71i - n74i;
+        const V n77r = n71r + n74r, n77i = n71i + n74i;
+        const V n105r = V(static_cast<crd::f32>(-0.9238795325112868)) * n78r - V(static_cast<crd::f32>(0.38268343236508967)) * n78i, n105i = V(static_cast<crd::f32>(-0.9238795325112868)) * n78i + V(static_cast<crd::f32>(0.38268343236508967)) * n78r;
+        const V n87r = V(static_cast<crd::f32>(0.38268343236508984)) * n77r - V(static_cast<crd::f32>(-0.9238795325112867)) * n77i, n87i = V(static_cast<crd::f32>(0.38268343236508984)) * n77i + V(static_cast<crd::f32>(-0.9238795325112867)) * n77r;
+        const V n76r = n70r - n72r, n76i = n70i - n72i;
+        const V n75r = n70r + n72r, n75i = n70i + n72i;
+        const V n96r = V(static_cast<crd::f32>(-0.7071067811865475)) * n76r - V(static_cast<crd::f32>(-0.7071067811865476)) * n76i, n96i = V(static_cast<crd::f32>(-0.7071067811865475)) * n76i + V(static_cast<crd::f32>(-0.7071067811865476)) * n76r;
+        V n5r, n5i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 160 * rs), n5r, n5i);
+        const V n123r = n5r - n21r, n123i = n5i - n21i;
+        const V n122r = n5r + n21r, n122i = n5i + n21i;
+        const V n133r = V(static_cast<crd::f32>(0.7071067811865476)) * n123r - V(static_cast<crd::f32>(-0.7071067811865475)) * n123i, n133i = V(static_cast<crd::f32>(0.7071067811865476)) * n123i + V(static_cast<crd::f32>(-0.7071067811865475)) * n123r;
+        const V n136r = n133r - n134r, n136i = n133i - n134i;
+        const V n135r = n133r + n134r, n135i = n133i + n134i;
+        const V n137r = n136i, n137i = -n136r;
+        const V n127r = n122r - n124r, n127i = n122i - n124i;
+        const V n126r = n122r + n124r, n126i = n122i + n124i;
+        const V n128r = n127i, n128i = -n127r;
+        V n4r, n4i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 128 * rs), n4r, n4i);
+        const V n42r = n4r - n20r, n42i = n4i - n20i;
+        const V n41r = n4r + n20r, n41i = n4i + n20i;
+        const V n52r = V(static_cast<crd::f32>(0.7071067811865476)) * n42r - V(static_cast<crd::f32>(-0.7071067811865475)) * n42i, n52i = V(static_cast<crd::f32>(0.7071067811865476)) * n42i + V(static_cast<crd::f32>(-0.7071067811865475)) * n42r;
+        const V n55r = n52r - n53r, n55i = n52i - n53i;
+        const V n54r = n52r + n53r, n54i = n52i + n53i;
+        const V n56r = n55i, n56i = -n55r;
+        const V n46r = n41r - n43r, n46i = n41i - n43i;
+        const V n45r = n41r + n43r, n45i = n41i + n43i;
+        const V n47r = n46i, n47i = -n46r;
+        V n3r, n3i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 96 * rs), n3r, n3i);
+        const V n143r = n3r - n19r, n143i = n3i - n19i;
+        const V n142r = n3r + n19r, n142i = n3i + n19i;
+        const V n150r = n143r - n146r, n150i = n143i - n146i;
+        const V n149r = n143r + n146r, n149i = n143i + n146i;
+        const V n170r = n150r - n166r, n170i = n150i - n166i;
+        const V n169r = n150r + n166r, n169i = n150i + n166i;
+        const V n233r = V(static_cast<crd::f32>(-0.5555702330196022)) * n170r - V(static_cast<crd::f32>(0.8314696123025452)) * n170i, n233i = V(static_cast<crd::f32>(-0.5555702330196022)) * n170i + V(static_cast<crd::f32>(0.8314696123025452)) * n170r;
+        const V n197r = V(static_cast<crd::f32>(-0.1950903220161282)) * n169r - V(static_cast<crd::f32>(-0.9807852804032304)) * n169i, n197i = V(static_cast<crd::f32>(-0.1950903220161282)) * n169i + V(static_cast<crd::f32>(-0.9807852804032304)) * n169r;
+        const V n168r = n149r - n164r, n168i = n149i - n164i;
+        const V n167r = n149r + n164r, n167i = n149i + n164i;
+        const V n215r = V(static_cast<crd::f32>(-0.9807852804032304)) * n168r - V(static_cast<crd::f32>(-0.1950903220161286)) * n168i, n215i = V(static_cast<crd::f32>(-0.9807852804032304)) * n168i + V(static_cast<crd::f32>(-0.1950903220161286)) * n168r;
+        const V n179r = V(static_cast<crd::f32>(0.8314696123025452)) * n167r - V(static_cast<crd::f32>(-0.5555702330196022)) * n167i, n179i = V(static_cast<crd::f32>(0.8314696123025452)) * n167i + V(static_cast<crd::f32>(-0.5555702330196022)) * n167r;
+        const V n148r = n142r - n144r, n148i = n142i - n144i;
+        const V n147r = n142r + n144r, n147i = n142i + n144i;
+        const V n161r = n148r - n157r, n161i = n148i - n157i;
+        const V n160r = n148r + n157r, n160i = n148i + n157i;
+        const V n224r = V(static_cast<crd::f32>(-0.9238795325112868)) * n161r - V(static_cast<crd::f32>(0.38268343236508967)) * n161i, n224i = V(static_cast<crd::f32>(-0.9238795325112868)) * n161i + V(static_cast<crd::f32>(0.38268343236508967)) * n161r;
+        const V n188r = V(static_cast<crd::f32>(0.38268343236508984)) * n160r - V(static_cast<crd::f32>(-0.9238795325112867)) * n160i, n188i = V(static_cast<crd::f32>(0.38268343236508984)) * n160i + V(static_cast<crd::f32>(-0.9238795325112867)) * n160r;
+        const V n159r = n147r - n155r, n159i = n147i - n155i;
+        const V n158r = n147r + n155r, n158i = n147i + n155i;
+        const V n206r = V(static_cast<crd::f32>(-0.7071067811865475)) * n159r - V(static_cast<crd::f32>(-0.7071067811865476)) * n159i, n206i = V(static_cast<crd::f32>(-0.7071067811865475)) * n159i + V(static_cast<crd::f32>(-0.7071067811865476)) * n159r;
+        V n2r, n2i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 64 * rs), n2r, n2i);
+        const V n62r = n2r - n18r, n62i = n2i - n18i;
+        const V n61r = n2r + n18r, n61i = n2i + n18i;
+        const V n69r = n62r - n65r, n69i = n62i - n65i;
+        const V n68r = n62r + n65r, n68i = n62i + n65i;
+        const V n104r = V(static_cast<crd::f32>(0.38268343236508984)) * n69r - V(static_cast<crd::f32>(-0.9238795325112867)) * n69i, n104i = V(static_cast<crd::f32>(0.38268343236508984)) * n69i + V(static_cast<crd::f32>(-0.9238795325112867)) * n69r;
+        const V n86r = V(static_cast<crd::f32>(0.9238795325112867)) * n68r - V(static_cast<crd::f32>(-0.3826834323650898)) * n68i, n86i = V(static_cast<crd::f32>(0.9238795325112867)) * n68i + V(static_cast<crd::f32>(-0.3826834323650898)) * n68r;
+        const V n107r = n104r - n105r, n107i = n104i - n105i;
+        const V n106r = n104r + n105r, n106i = n104i + n105i;
+        const V n108r = n107i, n108i = -n107r;
+        const V n89r = n86r - n87r, n89i = n86i - n87i;
+        const V n88r = n86r + n87r, n88i = n86i + n87i;
+        const V n90r = n89i, n90i = -n89r;
+        const V n67r = n61r - n63r, n67i = n61i - n63i;
+        const V n66r = n61r + n63r, n66i = n61i + n63i;
+        const V n95r = V(static_cast<crd::f32>(0.7071067811865476)) * n67r - V(static_cast<crd::f32>(-0.7071067811865475)) * n67i, n95i = V(static_cast<crd::f32>(0.7071067811865476)) * n67i + V(static_cast<crd::f32>(-0.7071067811865475)) * n67r;
+        const V n98r = n95r - n96r, n98i = n95i - n96i;
+        const V n97r = n95r + n96r, n97i = n95i + n96i;
+        const V n99r = n98i, n99i = -n98r;
+        const V n80r = n66r - n75r, n80i = n66i - n75i;
+        const V n79r = n66r + n75r, n79i = n66i + n75i;
+        const V n81r = n80i, n81i = -n80r;
+        V n1r, n1i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 32 * rs), n1r, n1i);
+        const V n114r = n1r - n17r, n114i = n1i - n17i;
+        const V n113r = n1r + n17r, n113i = n1i + n17i;
+        const V n121r = n114r - n117r, n121i = n114i - n117i;
+        const V n120r = n114r + n117r, n120i = n114i + n117i;
+        const V n141r = n121r - n137r, n141i = n121i - n137i;
+        const V n140r = n121r + n137r, n140i = n121i + n137i;
+        const V n232r = V(static_cast<crd::f32>(0.19509032201612833)) * n141r - V(static_cast<crd::f32>(-0.9807852804032304)) * n141i, n232i = V(static_cast<crd::f32>(0.19509032201612833)) * n141i + V(static_cast<crd::f32>(-0.9807852804032304)) * n141r;
+        const V n196r = V(static_cast<crd::f32>(0.8314696123025452)) * n140r - V(static_cast<crd::f32>(-0.5555702330196022)) * n140i, n196i = V(static_cast<crd::f32>(0.8314696123025452)) * n140i + V(static_cast<crd::f32>(-0.5555702330196022)) * n140r;
+        const V n235r = n232r - n233r, n235i = n232i - n233i;
+        const V n234r = n232r + n233r, n234i = n232i + n233i;
+        const V n236r = n235i, n236i = -n235r;
+        const V n199r = n196r - n197r, n199i = n196i - n197i;
+        const V n198r = n196r + n197r, n198i = n196i + n197i;
+        const V n200r = n199i, n200i = -n199r;
+        const V n139r = n120r - n135r, n139i = n120i - n135i;
+        const V n138r = n120r + n135r, n138i = n120i + n135i;
+        const V n214r = V(static_cast<crd::f32>(0.5555702330196023)) * n139r - V(static_cast<crd::f32>(-0.8314696123025452)) * n139i, n214i = V(static_cast<crd::f32>(0.5555702330196023)) * n139i + V(static_cast<crd::f32>(-0.8314696123025452)) * n139r;
+        const V n178r = V(static_cast<crd::f32>(0.9807852804032304)) * n138r - V(static_cast<crd::f32>(-0.19509032201612825)) * n138i, n178i = V(static_cast<crd::f32>(0.9807852804032304)) * n138i + V(static_cast<crd::f32>(-0.19509032201612825)) * n138r;
+        const V n217r = n214r - n215r, n217i = n214i - n215i;
+        const V n216r = n214r + n215r, n216i = n214i + n215i;
+        const V n218r = n217i, n218i = -n217r;
+        const V n181r = n178r - n179r, n181i = n178i - n179i;
+        const V n180r = n178r + n179r, n180i = n178i + n179i;
+        const V n182r = n181i, n182i = -n181r;
+        const V n119r = n113r - n115r, n119i = n113i - n115i;
+        const V n118r = n113r + n115r, n118i = n113i + n115i;
+        const V n132r = n119r - n128r, n132i = n119i - n128i;
+        const V n131r = n119r + n128r, n131i = n119i + n128i;
+        const V n223r = V(static_cast<crd::f32>(0.38268343236508984)) * n132r - V(static_cast<crd::f32>(-0.9238795325112867)) * n132i, n223i = V(static_cast<crd::f32>(0.38268343236508984)) * n132i + V(static_cast<crd::f32>(-0.9238795325112867)) * n132r;
+        const V n187r = V(static_cast<crd::f32>(0.9238795325112867)) * n131r - V(static_cast<crd::f32>(-0.3826834323650898)) * n131i, n187i = V(static_cast<crd::f32>(0.9238795325112867)) * n131i + V(static_cast<crd::f32>(-0.3826834323650898)) * n131r;
+        const V n226r = n223r - n224r, n226i = n223i - n224i;
+        const V n225r = n223r + n224r, n225i = n223i + n224i;
+        const V n227r = n226i, n227i = -n226r;
+        const V n190r = n187r - n188r, n190i = n187i - n188i;
+        const V n189r = n187r + n188r, n189i = n187i + n188i;
+        const V n191r = n190i, n191i = -n190r;
+        const V n130r = n118r - n126r, n130i = n118i - n126i;
+        const V n129r = n118r + n126r, n129i = n118i + n126i;
+        const V n205r = V(static_cast<crd::f32>(0.7071067811865476)) * n130r - V(static_cast<crd::f32>(-0.7071067811865475)) * n130i, n205i = V(static_cast<crd::f32>(0.7071067811865476)) * n130i + V(static_cast<crd::f32>(-0.7071067811865475)) * n130r;
+        const V n208r = n205r - n206r, n208i = n205i - n206i;
+        const V n207r = n205r + n206r, n207i = n205i + n206i;
+        const V n209r = n208i, n209i = -n208r;
+        const V n172r = n129r - n158r, n172i = n129i - n158i;
+        const V n171r = n129r + n158r, n171i = n129i + n158i;
+        const V n173r = n172i, n173i = -n172r;
+        V n0r, n0i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 0 * rs), n0r, n0i);
+        const V n33r = n0r - n16r, n33i = n0i - n16i;
+        const V n32r = n0r + n16r, n32i = n0i + n16i;
+        const V n40r = n33r - n36r, n40i = n33i - n36i;
+        const V n39r = n33r + n36r, n39i = n33i + n36i;
+        const V n60r = n40r - n56r, n60i = n40i - n56i;
+        const V n59r = n40r + n56r, n59i = n40i + n56i;
+        const V n112r = n60r - n108r, n112i = n60i - n108i;
+        const V n111r = n60r + n108r, n111i = n60i + n108i;
+        const V n240r = n112r - n236r, n240i = n112i - n236i;
+        { const V wr = V(tr[31]), wi = V(ti[31]);
+          const V or_ = n240r * wr - n240i * wi, oi_ = n240r * wi + n240i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 31 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 31 * 128 + bb0), or_, oi_); }
+#endif
+        const V n239r = n112r + n236r, n239i = n112i + n236i;
+        { const V wr = V(tr[15]), wi = V(ti[15]);
+          const V or_ = n239r * wr - n239i * wi, oi_ = n239r * wi + n239i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 15 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 15 * 128 + bb0), or_, oi_); }
+#endif
+        const V n238r = n111r - n234r, n238i = n111i - n234i;
+        { const V wr = V(tr[23]), wi = V(ti[23]);
+          const V or_ = n238r * wr - n238i * wi, oi_ = n238r * wi + n238i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 23 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 23 * 128 + bb0), or_, oi_); }
+#endif
+        const V n237r = n111r + n234r, n237i = n111i + n234i;
+        { const V wr = V(tr[7]), wi = V(ti[7]);
+          const V or_ = n237r * wr - n237i * wi, oi_ = n237r * wi + n237i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 7 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 7 * 128 + bb0), or_, oi_); }
+#endif
+        const V n110r = n59r - n106r, n110i = n59i - n106i;
+        const V n109r = n59r + n106r, n109i = n59i + n106i;
+        const V n204r = n110r - n200r, n204i = n110i - n200i;
+        { const V wr = V(tr[27]), wi = V(ti[27]);
+          const V or_ = n204r * wr - n204i * wi, oi_ = n204r * wi + n204i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 27 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 27 * 128 + bb0), or_, oi_); }
+#endif
+        const V n203r = n110r + n200r, n203i = n110i + n200i;
+        { const V wr = V(tr[11]), wi = V(ti[11]);
+          const V or_ = n203r * wr - n203i * wi, oi_ = n203r * wi + n203i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 11 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 11 * 128 + bb0), or_, oi_); }
+#endif
+        const V n202r = n109r - n198r, n202i = n109i - n198i;
+        { const V wr = V(tr[19]), wi = V(ti[19]);
+          const V or_ = n202r * wr - n202i * wi, oi_ = n202r * wi + n202i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 19 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 19 * 128 + bb0), or_, oi_); }
+#endif
+        const V n201r = n109r + n198r, n201i = n109i + n198i;
+        { const V wr = V(tr[3]), wi = V(ti[3]);
+          const V or_ = n201r * wr - n201i * wi, oi_ = n201r * wi + n201i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 3 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 3 * 128 + bb0), or_, oi_); }
+#endif
+        const V n58r = n39r - n54r, n58i = n39i - n54i;
+        const V n57r = n39r + n54r, n57i = n39i + n54i;
+        const V n94r = n58r - n90r, n94i = n58i - n90i;
+        const V n93r = n58r + n90r, n93i = n58i + n90i;
+        const V n222r = n94r - n218r, n222i = n94i - n218i;
+        { const V wr = V(tr[29]), wi = V(ti[29]);
+          const V or_ = n222r * wr - n222i * wi, oi_ = n222r * wi + n222i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 29 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 29 * 128 + bb0), or_, oi_); }
+#endif
+        const V n221r = n94r + n218r, n221i = n94i + n218i;
+        { const V wr = V(tr[13]), wi = V(ti[13]);
+          const V or_ = n221r * wr - n221i * wi, oi_ = n221r * wi + n221i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 13 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 13 * 128 + bb0), or_, oi_); }
+#endif
+        const V n220r = n93r - n216r, n220i = n93i - n216i;
+        { const V wr = V(tr[21]), wi = V(ti[21]);
+          const V or_ = n220r * wr - n220i * wi, oi_ = n220r * wi + n220i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 21 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 21 * 128 + bb0), or_, oi_); }
+#endif
+        const V n219r = n93r + n216r, n219i = n93i + n216i;
+        { const V wr = V(tr[5]), wi = V(ti[5]);
+          const V or_ = n219r * wr - n219i * wi, oi_ = n219r * wi + n219i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 5 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 5 * 128 + bb0), or_, oi_); }
+#endif
+        const V n92r = n57r - n88r, n92i = n57i - n88i;
+        const V n91r = n57r + n88r, n91i = n57i + n88i;
+        const V n186r = n92r - n182r, n186i = n92i - n182i;
+        { const V wr = V(tr[25]), wi = V(ti[25]);
+          const V or_ = n186r * wr - n186i * wi, oi_ = n186r * wi + n186i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 25 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 25 * 128 + bb0), or_, oi_); }
+#endif
+        const V n185r = n92r + n182r, n185i = n92i + n182i;
+        { const V wr = V(tr[9]), wi = V(ti[9]);
+          const V or_ = n185r * wr - n185i * wi, oi_ = n185r * wi + n185i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 9 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 9 * 128 + bb0), or_, oi_); }
+#endif
+        const V n184r = n91r - n180r, n184i = n91i - n180i;
+        { const V wr = V(tr[17]), wi = V(ti[17]);
+          const V or_ = n184r * wr - n184i * wi, oi_ = n184r * wi + n184i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 17 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 17 * 128 + bb0), or_, oi_); }
+#endif
+        const V n183r = n91r + n180r, n183i = n91i + n180i;
+        { const V wr = V(tr[1]), wi = V(ti[1]);
+          const V or_ = n183r * wr - n183i * wi, oi_ = n183r * wi + n183i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 1 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 1 * 128 + bb0), or_, oi_); }
+#endif
+        const V n38r = n32r - n34r, n38i = n32i - n34i;
+        const V n37r = n32r + n34r, n37i = n32i + n34i;
+        const V n51r = n38r - n47r, n51i = n38i - n47i;
+        const V n50r = n38r + n47r, n50i = n38i + n47i;
+        const V n103r = n51r - n99r, n103i = n51i - n99i;
+        const V n102r = n51r + n99r, n102i = n51i + n99i;
+        const V n231r = n103r - n227r, n231i = n103i - n227i;
+        { const V wr = V(tr[30]), wi = V(ti[30]);
+          const V or_ = n231r * wr - n231i * wi, oi_ = n231r * wi + n231i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 30 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 30 * 128 + bb0), or_, oi_); }
+#endif
+        const V n230r = n103r + n227r, n230i = n103i + n227i;
+        { const V wr = V(tr[14]), wi = V(ti[14]);
+          const V or_ = n230r * wr - n230i * wi, oi_ = n230r * wi + n230i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 14 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 14 * 128 + bb0), or_, oi_); }
+#endif
+        const V n229r = n102r - n225r, n229i = n102i - n225i;
+        { const V wr = V(tr[22]), wi = V(ti[22]);
+          const V or_ = n229r * wr - n229i * wi, oi_ = n229r * wi + n229i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 22 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 22 * 128 + bb0), or_, oi_); }
+#endif
+        const V n228r = n102r + n225r, n228i = n102i + n225i;
+        { const V wr = V(tr[6]), wi = V(ti[6]);
+          const V or_ = n228r * wr - n228i * wi, oi_ = n228r * wi + n228i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 6 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 6 * 128 + bb0), or_, oi_); }
+#endif
+        const V n101r = n50r - n97r, n101i = n50i - n97i;
+        const V n100r = n50r + n97r, n100i = n50i + n97i;
+        const V n195r = n101r - n191r, n195i = n101i - n191i;
+        { const V wr = V(tr[26]), wi = V(ti[26]);
+          const V or_ = n195r * wr - n195i * wi, oi_ = n195r * wi + n195i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 26 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 26 * 128 + bb0), or_, oi_); }
+#endif
+        const V n194r = n101r + n191r, n194i = n101i + n191i;
+        { const V wr = V(tr[10]), wi = V(ti[10]);
+          const V or_ = n194r * wr - n194i * wi, oi_ = n194r * wi + n194i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 10 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 10 * 128 + bb0), or_, oi_); }
+#endif
+        const V n193r = n100r - n189r, n193i = n100i - n189i;
+        { const V wr = V(tr[18]), wi = V(ti[18]);
+          const V or_ = n193r * wr - n193i * wi, oi_ = n193r * wi + n193i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 18 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 18 * 128 + bb0), or_, oi_); }
+#endif
+        const V n192r = n100r + n189r, n192i = n100i + n189i;
+        { const V wr = V(tr[2]), wi = V(ti[2]);
+          const V or_ = n192r * wr - n192i * wi, oi_ = n192r * wi + n192i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 2 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 2 * 128 + bb0), or_, oi_); }
+#endif
+        const V n49r = n37r - n45r, n49i = n37i - n45i;
+        const V n48r = n37r + n45r, n48i = n37i + n45i;
+        const V n85r = n49r - n81r, n85i = n49i - n81i;
+        const V n84r = n49r + n81r, n84i = n49i + n81i;
+        const V n213r = n85r - n209r, n213i = n85i - n209i;
+        { const V wr = V(tr[28]), wi = V(ti[28]);
+          const V or_ = n213r * wr - n213i * wi, oi_ = n213r * wi + n213i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 28 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 28 * 128 + bb0), or_, oi_); }
+#endif
+        const V n212r = n85r + n209r, n212i = n85i + n209i;
+        { const V wr = V(tr[12]), wi = V(ti[12]);
+          const V or_ = n212r * wr - n212i * wi, oi_ = n212r * wi + n212i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 12 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 12 * 128 + bb0), or_, oi_); }
+#endif
+        const V n211r = n84r - n207r, n211i = n84i - n207i;
+        { const V wr = V(tr[20]), wi = V(ti[20]);
+          const V or_ = n211r * wr - n211i * wi, oi_ = n211r * wi + n211i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 20 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 20 * 128 + bb0), or_, oi_); }
+#endif
+        const V n210r = n84r + n207r, n210i = n84i + n207i;
+        { const V wr = V(tr[4]), wi = V(ti[4]);
+          const V or_ = n210r * wr - n210i * wi, oi_ = n210r * wi + n210i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 4 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 4 * 128 + bb0), or_, oi_); }
+#endif
+        const V n83r = n48r - n79r, n83i = n48i - n79i;
+        const V n82r = n48r + n79r, n82i = n48i + n79i;
+        const V n177r = n83r - n173r, n177i = n83i - n173i;
+        { const V wr = V(tr[24]), wi = V(ti[24]);
+          const V or_ = n177r * wr - n177i * wi, oi_ = n177r * wi + n177i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 24 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 24 * 128 + bb0), or_, oi_); }
+#endif
+        const V n176r = n83r + n173r, n176i = n83i + n173i;
+        { const V wr = V(tr[8]), wi = V(ti[8]);
+          const V or_ = n176r * wr - n176i * wi, oi_ = n176r * wi + n176i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 8 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 8 * 128 + bb0), or_, oi_); }
+#endif
+        const V n175r = n82r - n171r, n175i = n82i - n171i;
+        { const V wr = V(tr[16]), wi = V(ti[16]);
+          const V or_ = n175r * wr - n175i * wi, oi_ = n175r * wi + n175i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 16 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 16 * 128 + bb0), or_, oi_); }
+#endif
+        const V n174r = n82r + n171r, n174i = n82i + n171i;
+        { const V wr = V(tr[0]), wi = V(ti[0]);
+          const V or_ = n174r * wr - n174i * wi, oi_ = n174r * wi + n174i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 0 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 0 * 128 + bb0), or_, oi_); }
+#endif
+    }
+}
+#ifdef CRD_FFT_M16B_FUSED_BRIDGE_POC
+// N=1024=32x32 GATHER-FUSED stage-1 (BB=8): reads the four-step input directly (row stride rs), no gather memcpy. GENERATED.
+CRD_FORCEINLINE void codelet32_stage1_fused_32x32_gather_bb8(const crd::hesap::Complex<crd::f32>* din_block,
+    crd::hesap::Complex<crd::f32>* out, crd::usize rs, const crd::f32* twr, const crd::f32* twi) noexcept
+{
+    using V = crd::math::simd::Vec8f;
+    namespace simd = crd::math::simd;
+    for (crd::usize t = 0; t + 8 <= 256; t += 8)
+    {
+        const crd::usize n2v = t >> 3, bb0 = t & 7;
+        const crd::hesap::Complex<crd::f32>* const base = din_block + n2v * rs + bb0;
+        const crd::f32* const tr = twr + n2v * 32, * const ti = twi + n2v * 32;
+        V n31r, n31i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 992 * rs), n31r, n31i);
+        V n30r, n30i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 960 * rs), n30r, n30i);
+        V n29r, n29i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 928 * rs), n29r, n29i);
+        V n28r, n28i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 896 * rs), n28r, n28i);
+        V n27r, n27i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 864 * rs), n27r, n27i);
+        V n26r, n26i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 832 * rs), n26r, n26i);
+        V n25r, n25i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 800 * rs), n25r, n25i);
+        V n24r, n24i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 768 * rs), n24r, n24i);
+        V n23r, n23i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 736 * rs), n23r, n23i);
+        V n22r, n22i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 704 * rs), n22r, n22i);
+        V n21r, n21i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 672 * rs), n21r, n21i);
+        V n20r, n20i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 640 * rs), n20r, n20i);
+        V n19r, n19i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 608 * rs), n19r, n19i);
+        V n18r, n18i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 576 * rs), n18r, n18i);
+        V n17r, n17i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 544 * rs), n17r, n17i);
+        V n16r, n16i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 512 * rs), n16r, n16i);
+        V n15r, n15i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 480 * rs), n15r, n15i);
+        const V n154r = n15r - n31r, n154i = n15i - n31i;
+        const V n153r = n15r + n31r, n153i = n15i + n31i;
+        const V n163r = V(static_cast<crd::f32>(-0.7071067811865475)) * n154r - V(static_cast<crd::f32>(-0.7071067811865476)) * n154i, n163i = V(static_cast<crd::f32>(-0.7071067811865475)) * n154i + V(static_cast<crd::f32>(-0.7071067811865476)) * n154r;
+        V n14r, n14i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 448 * rs), n14r, n14i);
+        const V n73r = n14r - n30r, n73i = n14i - n30i;
+        const V n72r = n14r + n30r, n72i = n14i + n30i;
+        const V n74r = n73i, n74i = -n73r;
+        V n13r, n13i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 416 * rs), n13r, n13i);
+        const V n125r = n13r - n29r, n125i = n13i - n29i;
+        const V n124r = n13r + n29r, n124i = n13i + n29i;
+        const V n134r = V(static_cast<crd::f32>(-0.7071067811865475)) * n125r - V(static_cast<crd::f32>(-0.7071067811865476)) * n125i, n134i = V(static_cast<crd::f32>(-0.7071067811865475)) * n125i + V(static_cast<crd::f32>(-0.7071067811865476)) * n125r;
+        V n12r, n12i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 384 * rs), n12r, n12i);
+        const V n44r = n12r - n28r, n44i = n12i - n28i;
+        const V n43r = n12r + n28r, n43i = n12i + n28i;
+        const V n53r = V(static_cast<crd::f32>(-0.7071067811865475)) * n44r - V(static_cast<crd::f32>(-0.7071067811865476)) * n44i, n53i = V(static_cast<crd::f32>(-0.7071067811865475)) * n44i + V(static_cast<crd::f32>(-0.7071067811865476)) * n44r;
+        V n11r, n11i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 352 * rs), n11r, n11i);
+        const V n145r = n11r - n27r, n145i = n11i - n27i;
+        const V n144r = n11r + n27r, n144i = n11i + n27i;
+        const V n146r = n145i, n146i = -n145r;
+        V n10r, n10i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 320 * rs), n10r, n10i);
+        const V n64r = n10r - n26r, n64i = n10i - n26i;
+        const V n63r = n10r + n26r, n63i = n10i + n26i;
+        const V n65r = n64i, n65i = -n64r;
+        V n9r, n9i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 288 * rs), n9r, n9i);
+        const V n116r = n9r - n25r, n116i = n9i - n25i;
+        const V n115r = n9r + n25r, n115i = n9i + n25i;
+        const V n117r = n116i, n117i = -n116r;
+        V n8r, n8i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 256 * rs), n8r, n8i);
+        const V n35r = n8r - n24r, n35i = n8i - n24i;
+        const V n34r = n8r + n24r, n34i = n8i + n24i;
+        const V n36r = n35i, n36i = -n35r;
+        V n7r, n7i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 224 * rs), n7r, n7i);
+        const V n152r = n7r - n23r, n152i = n7i - n23i;
+        const V n151r = n7r + n23r, n151i = n7i + n23i;
+        const V n162r = V(static_cast<crd::f32>(0.7071067811865476)) * n152r - V(static_cast<crd::f32>(-0.7071067811865475)) * n152i, n162i = V(static_cast<crd::f32>(0.7071067811865476)) * n152i + V(static_cast<crd::f32>(-0.7071067811865475)) * n152r;
+        const V n165r = n162r - n163r, n165i = n162i - n163i;
+        const V n164r = n162r + n163r, n164i = n162i + n163i;
+        const V n166r = n165i, n166i = -n165r;
+        const V n156r = n151r - n153r, n156i = n151i - n153i;
+        const V n155r = n151r + n153r, n155i = n151i + n153i;
+        const V n157r = n156i, n157i = -n156r;
+        V n6r, n6i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 192 * rs), n6r, n6i);
+        const V n71r = n6r - n22r, n71i = n6i - n22i;
+        const V n70r = n6r + n22r, n70i = n6i + n22i;
+        const V n78r = n71r - n74r, n78i = n71i - n74i;
+        const V n77r = n71r + n74r, n77i = n71i + n74i;
+        const V n105r = V(static_cast<crd::f32>(-0.9238795325112868)) * n78r - V(static_cast<crd::f32>(0.38268343236508967)) * n78i, n105i = V(static_cast<crd::f32>(-0.9238795325112868)) * n78i + V(static_cast<crd::f32>(0.38268343236508967)) * n78r;
+        const V n87r = V(static_cast<crd::f32>(0.38268343236508984)) * n77r - V(static_cast<crd::f32>(-0.9238795325112867)) * n77i, n87i = V(static_cast<crd::f32>(0.38268343236508984)) * n77i + V(static_cast<crd::f32>(-0.9238795325112867)) * n77r;
+        const V n76r = n70r - n72r, n76i = n70i - n72i;
+        const V n75r = n70r + n72r, n75i = n70i + n72i;
+        const V n96r = V(static_cast<crd::f32>(-0.7071067811865475)) * n76r - V(static_cast<crd::f32>(-0.7071067811865476)) * n76i, n96i = V(static_cast<crd::f32>(-0.7071067811865475)) * n76i + V(static_cast<crd::f32>(-0.7071067811865476)) * n76r;
+        V n5r, n5i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 160 * rs), n5r, n5i);
+        const V n123r = n5r - n21r, n123i = n5i - n21i;
+        const V n122r = n5r + n21r, n122i = n5i + n21i;
+        const V n133r = V(static_cast<crd::f32>(0.7071067811865476)) * n123r - V(static_cast<crd::f32>(-0.7071067811865475)) * n123i, n133i = V(static_cast<crd::f32>(0.7071067811865476)) * n123i + V(static_cast<crd::f32>(-0.7071067811865475)) * n123r;
+        const V n136r = n133r - n134r, n136i = n133i - n134i;
+        const V n135r = n133r + n134r, n135i = n133i + n134i;
+        const V n137r = n136i, n137i = -n136r;
+        const V n127r = n122r - n124r, n127i = n122i - n124i;
+        const V n126r = n122r + n124r, n126i = n122i + n124i;
+        const V n128r = n127i, n128i = -n127r;
+        V n4r, n4i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 128 * rs), n4r, n4i);
+        const V n42r = n4r - n20r, n42i = n4i - n20i;
+        const V n41r = n4r + n20r, n41i = n4i + n20i;
+        const V n52r = V(static_cast<crd::f32>(0.7071067811865476)) * n42r - V(static_cast<crd::f32>(-0.7071067811865475)) * n42i, n52i = V(static_cast<crd::f32>(0.7071067811865476)) * n42i + V(static_cast<crd::f32>(-0.7071067811865475)) * n42r;
+        const V n55r = n52r - n53r, n55i = n52i - n53i;
+        const V n54r = n52r + n53r, n54i = n52i + n53i;
+        const V n56r = n55i, n56i = -n55r;
+        const V n46r = n41r - n43r, n46i = n41i - n43i;
+        const V n45r = n41r + n43r, n45i = n41i + n43i;
+        const V n47r = n46i, n47i = -n46r;
+        V n3r, n3i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 96 * rs), n3r, n3i);
+        const V n143r = n3r - n19r, n143i = n3i - n19i;
+        const V n142r = n3r + n19r, n142i = n3i + n19i;
+        const V n150r = n143r - n146r, n150i = n143i - n146i;
+        const V n149r = n143r + n146r, n149i = n143i + n146i;
+        const V n170r = n150r - n166r, n170i = n150i - n166i;
+        const V n169r = n150r + n166r, n169i = n150i + n166i;
+        const V n233r = V(static_cast<crd::f32>(-0.5555702330196022)) * n170r - V(static_cast<crd::f32>(0.8314696123025452)) * n170i, n233i = V(static_cast<crd::f32>(-0.5555702330196022)) * n170i + V(static_cast<crd::f32>(0.8314696123025452)) * n170r;
+        const V n197r = V(static_cast<crd::f32>(-0.1950903220161282)) * n169r - V(static_cast<crd::f32>(-0.9807852804032304)) * n169i, n197i = V(static_cast<crd::f32>(-0.1950903220161282)) * n169i + V(static_cast<crd::f32>(-0.9807852804032304)) * n169r;
+        const V n168r = n149r - n164r, n168i = n149i - n164i;
+        const V n167r = n149r + n164r, n167i = n149i + n164i;
+        const V n215r = V(static_cast<crd::f32>(-0.9807852804032304)) * n168r - V(static_cast<crd::f32>(-0.1950903220161286)) * n168i, n215i = V(static_cast<crd::f32>(-0.9807852804032304)) * n168i + V(static_cast<crd::f32>(-0.1950903220161286)) * n168r;
+        const V n179r = V(static_cast<crd::f32>(0.8314696123025452)) * n167r - V(static_cast<crd::f32>(-0.5555702330196022)) * n167i, n179i = V(static_cast<crd::f32>(0.8314696123025452)) * n167i + V(static_cast<crd::f32>(-0.5555702330196022)) * n167r;
+        const V n148r = n142r - n144r, n148i = n142i - n144i;
+        const V n147r = n142r + n144r, n147i = n142i + n144i;
+        const V n161r = n148r - n157r, n161i = n148i - n157i;
+        const V n160r = n148r + n157r, n160i = n148i + n157i;
+        const V n224r = V(static_cast<crd::f32>(-0.9238795325112868)) * n161r - V(static_cast<crd::f32>(0.38268343236508967)) * n161i, n224i = V(static_cast<crd::f32>(-0.9238795325112868)) * n161i + V(static_cast<crd::f32>(0.38268343236508967)) * n161r;
+        const V n188r = V(static_cast<crd::f32>(0.38268343236508984)) * n160r - V(static_cast<crd::f32>(-0.9238795325112867)) * n160i, n188i = V(static_cast<crd::f32>(0.38268343236508984)) * n160i + V(static_cast<crd::f32>(-0.9238795325112867)) * n160r;
+        const V n159r = n147r - n155r, n159i = n147i - n155i;
+        const V n158r = n147r + n155r, n158i = n147i + n155i;
+        const V n206r = V(static_cast<crd::f32>(-0.7071067811865475)) * n159r - V(static_cast<crd::f32>(-0.7071067811865476)) * n159i, n206i = V(static_cast<crd::f32>(-0.7071067811865475)) * n159i + V(static_cast<crd::f32>(-0.7071067811865476)) * n159r;
+        V n2r, n2i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 64 * rs), n2r, n2i);
+        const V n62r = n2r - n18r, n62i = n2i - n18i;
+        const V n61r = n2r + n18r, n61i = n2i + n18i;
+        const V n69r = n62r - n65r, n69i = n62i - n65i;
+        const V n68r = n62r + n65r, n68i = n62i + n65i;
+        const V n104r = V(static_cast<crd::f32>(0.38268343236508984)) * n69r - V(static_cast<crd::f32>(-0.9238795325112867)) * n69i, n104i = V(static_cast<crd::f32>(0.38268343236508984)) * n69i + V(static_cast<crd::f32>(-0.9238795325112867)) * n69r;
+        const V n86r = V(static_cast<crd::f32>(0.9238795325112867)) * n68r - V(static_cast<crd::f32>(-0.3826834323650898)) * n68i, n86i = V(static_cast<crd::f32>(0.9238795325112867)) * n68i + V(static_cast<crd::f32>(-0.3826834323650898)) * n68r;
+        const V n107r = n104r - n105r, n107i = n104i - n105i;
+        const V n106r = n104r + n105r, n106i = n104i + n105i;
+        const V n108r = n107i, n108i = -n107r;
+        const V n89r = n86r - n87r, n89i = n86i - n87i;
+        const V n88r = n86r + n87r, n88i = n86i + n87i;
+        const V n90r = n89i, n90i = -n89r;
+        const V n67r = n61r - n63r, n67i = n61i - n63i;
+        const V n66r = n61r + n63r, n66i = n61i + n63i;
+        const V n95r = V(static_cast<crd::f32>(0.7071067811865476)) * n67r - V(static_cast<crd::f32>(-0.7071067811865475)) * n67i, n95i = V(static_cast<crd::f32>(0.7071067811865476)) * n67i + V(static_cast<crd::f32>(-0.7071067811865475)) * n67r;
+        const V n98r = n95r - n96r, n98i = n95i - n96i;
+        const V n97r = n95r + n96r, n97i = n95i + n96i;
+        const V n99r = n98i, n99i = -n98r;
+        const V n80r = n66r - n75r, n80i = n66i - n75i;
+        const V n79r = n66r + n75r, n79i = n66i + n75i;
+        const V n81r = n80i, n81i = -n80r;
+        V n1r, n1i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 32 * rs), n1r, n1i);
+        const V n114r = n1r - n17r, n114i = n1i - n17i;
+        const V n113r = n1r + n17r, n113i = n1i + n17i;
+        const V n121r = n114r - n117r, n121i = n114i - n117i;
+        const V n120r = n114r + n117r, n120i = n114i + n117i;
+        const V n141r = n121r - n137r, n141i = n121i - n137i;
+        const V n140r = n121r + n137r, n140i = n121i + n137i;
+        const V n232r = V(static_cast<crd::f32>(0.19509032201612833)) * n141r - V(static_cast<crd::f32>(-0.9807852804032304)) * n141i, n232i = V(static_cast<crd::f32>(0.19509032201612833)) * n141i + V(static_cast<crd::f32>(-0.9807852804032304)) * n141r;
+        const V n196r = V(static_cast<crd::f32>(0.8314696123025452)) * n140r - V(static_cast<crd::f32>(-0.5555702330196022)) * n140i, n196i = V(static_cast<crd::f32>(0.8314696123025452)) * n140i + V(static_cast<crd::f32>(-0.5555702330196022)) * n140r;
+        const V n235r = n232r - n233r, n235i = n232i - n233i;
+        const V n234r = n232r + n233r, n234i = n232i + n233i;
+        const V n236r = n235i, n236i = -n235r;
+        const V n199r = n196r - n197r, n199i = n196i - n197i;
+        const V n198r = n196r + n197r, n198i = n196i + n197i;
+        const V n200r = n199i, n200i = -n199r;
+        const V n139r = n120r - n135r, n139i = n120i - n135i;
+        const V n138r = n120r + n135r, n138i = n120i + n135i;
+        const V n214r = V(static_cast<crd::f32>(0.5555702330196023)) * n139r - V(static_cast<crd::f32>(-0.8314696123025452)) * n139i, n214i = V(static_cast<crd::f32>(0.5555702330196023)) * n139i + V(static_cast<crd::f32>(-0.8314696123025452)) * n139r;
+        const V n178r = V(static_cast<crd::f32>(0.9807852804032304)) * n138r - V(static_cast<crd::f32>(-0.19509032201612825)) * n138i, n178i = V(static_cast<crd::f32>(0.9807852804032304)) * n138i + V(static_cast<crd::f32>(-0.19509032201612825)) * n138r;
+        const V n217r = n214r - n215r, n217i = n214i - n215i;
+        const V n216r = n214r + n215r, n216i = n214i + n215i;
+        const V n218r = n217i, n218i = -n217r;
+        const V n181r = n178r - n179r, n181i = n178i - n179i;
+        const V n180r = n178r + n179r, n180i = n178i + n179i;
+        const V n182r = n181i, n182i = -n181r;
+        const V n119r = n113r - n115r, n119i = n113i - n115i;
+        const V n118r = n113r + n115r, n118i = n113i + n115i;
+        const V n132r = n119r - n128r, n132i = n119i - n128i;
+        const V n131r = n119r + n128r, n131i = n119i + n128i;
+        const V n223r = V(static_cast<crd::f32>(0.38268343236508984)) * n132r - V(static_cast<crd::f32>(-0.9238795325112867)) * n132i, n223i = V(static_cast<crd::f32>(0.38268343236508984)) * n132i + V(static_cast<crd::f32>(-0.9238795325112867)) * n132r;
+        const V n187r = V(static_cast<crd::f32>(0.9238795325112867)) * n131r - V(static_cast<crd::f32>(-0.3826834323650898)) * n131i, n187i = V(static_cast<crd::f32>(0.9238795325112867)) * n131i + V(static_cast<crd::f32>(-0.3826834323650898)) * n131r;
+        const V n226r = n223r - n224r, n226i = n223i - n224i;
+        const V n225r = n223r + n224r, n225i = n223i + n224i;
+        const V n227r = n226i, n227i = -n226r;
+        const V n190r = n187r - n188r, n190i = n187i - n188i;
+        const V n189r = n187r + n188r, n189i = n187i + n188i;
+        const V n191r = n190i, n191i = -n190r;
+        const V n130r = n118r - n126r, n130i = n118i - n126i;
+        const V n129r = n118r + n126r, n129i = n118i + n126i;
+        const V n205r = V(static_cast<crd::f32>(0.7071067811865476)) * n130r - V(static_cast<crd::f32>(-0.7071067811865475)) * n130i, n205i = V(static_cast<crd::f32>(0.7071067811865476)) * n130i + V(static_cast<crd::f32>(-0.7071067811865475)) * n130r;
+        const V n208r = n205r - n206r, n208i = n205i - n206i;
+        const V n207r = n205r + n206r, n207i = n205i + n206i;
+        const V n209r = n208i, n209i = -n208r;
+        const V n172r = n129r - n158r, n172i = n129i - n158i;
+        const V n171r = n129r + n158r, n171i = n129i + n158i;
+        const V n173r = n172i, n173i = -n172r;
+        V n0r, n0i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 0 * rs), n0r, n0i);
+        const V n33r = n0r - n16r, n33i = n0i - n16i;
+        const V n32r = n0r + n16r, n32i = n0i + n16i;
+        const V n40r = n33r - n36r, n40i = n33i - n36i;
+        const V n39r = n33r + n36r, n39i = n33i + n36i;
+        const V n60r = n40r - n56r, n60i = n40i - n56i;
+        const V n59r = n40r + n56r, n59i = n40i + n56i;
+        const V n112r = n60r - n108r, n112i = n60i - n108i;
+        const V n111r = n60r + n108r, n111i = n60i + n108i;
+        const V n240r = n112r - n236r, n240i = n112i - n236i;
+        { const V wr = V(tr[31]), wi = V(ti[31]);
+          const V or_ = n240r * wr - n240i * wi, oi_ = n240r * wi + n240i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 256 + 31 * 8 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 256 + 31 * 8 + bb0), or_, oi_); }
+#endif
+        const V n239r = n112r + n236r, n239i = n112i + n236i;
+        { const V wr = V(tr[15]), wi = V(ti[15]);
+          const V or_ = n239r * wr - n239i * wi, oi_ = n239r * wi + n239i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 256 + 15 * 8 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 256 + 15 * 8 + bb0), or_, oi_); }
+#endif
+        const V n238r = n111r - n234r, n238i = n111i - n234i;
+        { const V wr = V(tr[23]), wi = V(ti[23]);
+          const V or_ = n238r * wr - n238i * wi, oi_ = n238r * wi + n238i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 256 + 23 * 8 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 256 + 23 * 8 + bb0), or_, oi_); }
+#endif
+        const V n237r = n111r + n234r, n237i = n111i + n234i;
+        { const V wr = V(tr[7]), wi = V(ti[7]);
+          const V or_ = n237r * wr - n237i * wi, oi_ = n237r * wi + n237i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 256 + 7 * 8 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 256 + 7 * 8 + bb0), or_, oi_); }
+#endif
+        const V n110r = n59r - n106r, n110i = n59i - n106i;
+        const V n109r = n59r + n106r, n109i = n59i + n106i;
+        const V n204r = n110r - n200r, n204i = n110i - n200i;
+        { const V wr = V(tr[27]), wi = V(ti[27]);
+          const V or_ = n204r * wr - n204i * wi, oi_ = n204r * wi + n204i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 256 + 27 * 8 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 256 + 27 * 8 + bb0), or_, oi_); }
+#endif
+        const V n203r = n110r + n200r, n203i = n110i + n200i;
+        { const V wr = V(tr[11]), wi = V(ti[11]);
+          const V or_ = n203r * wr - n203i * wi, oi_ = n203r * wi + n203i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 256 + 11 * 8 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 256 + 11 * 8 + bb0), or_, oi_); }
+#endif
+        const V n202r = n109r - n198r, n202i = n109i - n198i;
+        { const V wr = V(tr[19]), wi = V(ti[19]);
+          const V or_ = n202r * wr - n202i * wi, oi_ = n202r * wi + n202i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 256 + 19 * 8 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 256 + 19 * 8 + bb0), or_, oi_); }
+#endif
+        const V n201r = n109r + n198r, n201i = n109i + n198i;
+        { const V wr = V(tr[3]), wi = V(ti[3]);
+          const V or_ = n201r * wr - n201i * wi, oi_ = n201r * wi + n201i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 256 + 3 * 8 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 256 + 3 * 8 + bb0), or_, oi_); }
+#endif
+        const V n58r = n39r - n54r, n58i = n39i - n54i;
+        const V n57r = n39r + n54r, n57i = n39i + n54i;
+        const V n94r = n58r - n90r, n94i = n58i - n90i;
+        const V n93r = n58r + n90r, n93i = n58i + n90i;
+        const V n222r = n94r - n218r, n222i = n94i - n218i;
+        { const V wr = V(tr[29]), wi = V(ti[29]);
+          const V or_ = n222r * wr - n222i * wi, oi_ = n222r * wi + n222i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 256 + 29 * 8 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 256 + 29 * 8 + bb0), or_, oi_); }
+#endif
+        const V n221r = n94r + n218r, n221i = n94i + n218i;
+        { const V wr = V(tr[13]), wi = V(ti[13]);
+          const V or_ = n221r * wr - n221i * wi, oi_ = n221r * wi + n221i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 256 + 13 * 8 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 256 + 13 * 8 + bb0), or_, oi_); }
+#endif
+        const V n220r = n93r - n216r, n220i = n93i - n216i;
+        { const V wr = V(tr[21]), wi = V(ti[21]);
+          const V or_ = n220r * wr - n220i * wi, oi_ = n220r * wi + n220i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 256 + 21 * 8 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 256 + 21 * 8 + bb0), or_, oi_); }
+#endif
+        const V n219r = n93r + n216r, n219i = n93i + n216i;
+        { const V wr = V(tr[5]), wi = V(ti[5]);
+          const V or_ = n219r * wr - n219i * wi, oi_ = n219r * wi + n219i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 256 + 5 * 8 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 256 + 5 * 8 + bb0), or_, oi_); }
+#endif
+        const V n92r = n57r - n88r, n92i = n57i - n88i;
+        const V n91r = n57r + n88r, n91i = n57i + n88i;
+        const V n186r = n92r - n182r, n186i = n92i - n182i;
+        { const V wr = V(tr[25]), wi = V(ti[25]);
+          const V or_ = n186r * wr - n186i * wi, oi_ = n186r * wi + n186i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 256 + 25 * 8 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 256 + 25 * 8 + bb0), or_, oi_); }
+#endif
+        const V n185r = n92r + n182r, n185i = n92i + n182i;
+        { const V wr = V(tr[9]), wi = V(ti[9]);
+          const V or_ = n185r * wr - n185i * wi, oi_ = n185r * wi + n185i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 256 + 9 * 8 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 256 + 9 * 8 + bb0), or_, oi_); }
+#endif
+        const V n184r = n91r - n180r, n184i = n91i - n180i;
+        { const V wr = V(tr[17]), wi = V(ti[17]);
+          const V or_ = n184r * wr - n184i * wi, oi_ = n184r * wi + n184i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 256 + 17 * 8 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 256 + 17 * 8 + bb0), or_, oi_); }
+#endif
+        const V n183r = n91r + n180r, n183i = n91i + n180i;
+        { const V wr = V(tr[1]), wi = V(ti[1]);
+          const V or_ = n183r * wr - n183i * wi, oi_ = n183r * wi + n183i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 256 + 1 * 8 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 256 + 1 * 8 + bb0), or_, oi_); }
+#endif
+        const V n38r = n32r - n34r, n38i = n32i - n34i;
+        const V n37r = n32r + n34r, n37i = n32i + n34i;
+        const V n51r = n38r - n47r, n51i = n38i - n47i;
+        const V n50r = n38r + n47r, n50i = n38i + n47i;
+        const V n103r = n51r - n99r, n103i = n51i - n99i;
+        const V n102r = n51r + n99r, n102i = n51i + n99i;
+        const V n231r = n103r - n227r, n231i = n103i - n227i;
+        { const V wr = V(tr[30]), wi = V(ti[30]);
+          const V or_ = n231r * wr - n231i * wi, oi_ = n231r * wi + n231i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 256 + 30 * 8 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 256 + 30 * 8 + bb0), or_, oi_); }
+#endif
+        const V n230r = n103r + n227r, n230i = n103i + n227i;
+        { const V wr = V(tr[14]), wi = V(ti[14]);
+          const V or_ = n230r * wr - n230i * wi, oi_ = n230r * wi + n230i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 256 + 14 * 8 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 256 + 14 * 8 + bb0), or_, oi_); }
+#endif
+        const V n229r = n102r - n225r, n229i = n102i - n225i;
+        { const V wr = V(tr[22]), wi = V(ti[22]);
+          const V or_ = n229r * wr - n229i * wi, oi_ = n229r * wi + n229i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 256 + 22 * 8 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 256 + 22 * 8 + bb0), or_, oi_); }
+#endif
+        const V n228r = n102r + n225r, n228i = n102i + n225i;
+        { const V wr = V(tr[6]), wi = V(ti[6]);
+          const V or_ = n228r * wr - n228i * wi, oi_ = n228r * wi + n228i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 256 + 6 * 8 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 256 + 6 * 8 + bb0), or_, oi_); }
+#endif
+        const V n101r = n50r - n97r, n101i = n50i - n97i;
+        const V n100r = n50r + n97r, n100i = n50i + n97i;
+        const V n195r = n101r - n191r, n195i = n101i - n191i;
+        { const V wr = V(tr[26]), wi = V(ti[26]);
+          const V or_ = n195r * wr - n195i * wi, oi_ = n195r * wi + n195i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 256 + 26 * 8 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 256 + 26 * 8 + bb0), or_, oi_); }
+#endif
+        const V n194r = n101r + n191r, n194i = n101i + n191i;
+        { const V wr = V(tr[10]), wi = V(ti[10]);
+          const V or_ = n194r * wr - n194i * wi, oi_ = n194r * wi + n194i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 256 + 10 * 8 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 256 + 10 * 8 + bb0), or_, oi_); }
+#endif
+        const V n193r = n100r - n189r, n193i = n100i - n189i;
+        { const V wr = V(tr[18]), wi = V(ti[18]);
+          const V or_ = n193r * wr - n193i * wi, oi_ = n193r * wi + n193i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 256 + 18 * 8 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 256 + 18 * 8 + bb0), or_, oi_); }
+#endif
+        const V n192r = n100r + n189r, n192i = n100i + n189i;
+        { const V wr = V(tr[2]), wi = V(ti[2]);
+          const V or_ = n192r * wr - n192i * wi, oi_ = n192r * wi + n192i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 256 + 2 * 8 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 256 + 2 * 8 + bb0), or_, oi_); }
+#endif
+        const V n49r = n37r - n45r, n49i = n37i - n45i;
+        const V n48r = n37r + n45r, n48i = n37i + n45i;
+        const V n85r = n49r - n81r, n85i = n49i - n81i;
+        const V n84r = n49r + n81r, n84i = n49i + n81i;
+        const V n213r = n85r - n209r, n213i = n85i - n209i;
+        { const V wr = V(tr[28]), wi = V(ti[28]);
+          const V or_ = n213r * wr - n213i * wi, oi_ = n213r * wi + n213i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 256 + 28 * 8 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 256 + 28 * 8 + bb0), or_, oi_); }
+#endif
+        const V n212r = n85r + n209r, n212i = n85i + n209i;
+        { const V wr = V(tr[12]), wi = V(ti[12]);
+          const V or_ = n212r * wr - n212i * wi, oi_ = n212r * wi + n212i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 256 + 12 * 8 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 256 + 12 * 8 + bb0), or_, oi_); }
+#endif
+        const V n211r = n84r - n207r, n211i = n84i - n207i;
+        { const V wr = V(tr[20]), wi = V(ti[20]);
+          const V or_ = n211r * wr - n211i * wi, oi_ = n211r * wi + n211i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 256 + 20 * 8 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 256 + 20 * 8 + bb0), or_, oi_); }
+#endif
+        const V n210r = n84r + n207r, n210i = n84i + n207i;
+        { const V wr = V(tr[4]), wi = V(ti[4]);
+          const V or_ = n210r * wr - n210i * wi, oi_ = n210r * wi + n210i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 256 + 4 * 8 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 256 + 4 * 8 + bb0), or_, oi_); }
+#endif
+        const V n83r = n48r - n79r, n83i = n48i - n79i;
+        const V n82r = n48r + n79r, n82i = n48i + n79i;
+        const V n177r = n83r - n173r, n177i = n83i - n173i;
+        { const V wr = V(tr[24]), wi = V(ti[24]);
+          const V or_ = n177r * wr - n177i * wi, oi_ = n177r * wi + n177i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 256 + 24 * 8 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 256 + 24 * 8 + bb0), or_, oi_); }
+#endif
+        const V n176r = n83r + n173r, n176i = n83i + n173i;
+        { const V wr = V(tr[8]), wi = V(ti[8]);
+          const V or_ = n176r * wr - n176i * wi, oi_ = n176r * wi + n176i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 256 + 8 * 8 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 256 + 8 * 8 + bb0), or_, oi_); }
+#endif
+        const V n175r = n82r - n171r, n175i = n82i - n171i;
+        { const V wr = V(tr[16]), wi = V(ti[16]);
+          const V or_ = n175r * wr - n175i * wi, oi_ = n175r * wi + n175i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 256 + 16 * 8 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 256 + 16 * 8 + bb0), or_, oi_); }
+#endif
+        const V n174r = n82r + n171r, n174i = n82i + n171i;
+        { const V wr = V(tr[0]), wi = V(ti[0]);
+          const V or_ = n174r * wr - n174i * wi, oi_ = n174r * wi + n174i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 256 + 0 * 8 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 256 + 0 * 8 + bb0), or_, oi_); }
+#endif
+    }
+}
+// M16-B/M18-2M RECT P1 TILED producer (stage1_n=32, stage2_n=32, gpv=4, b=256). GENERATED.
+CRD_FORCEINLINE void codelet32_batched_tiled(const crd::hesap::Complex<crd::f32>* in,
+    crd::hesap::Complex<crd::f32>* out) noexcept
+{
+    using V = crd::math::simd::Vec8f;
+    namespace simd = crd::math::simd;
+    const crd::usize b = 256;
+    for (crd::usize n2vh = 0; n2vh < 4; ++n2vh)
+    {
+        V br_[32][8], bi_[32][8];  // [m][kl] so the per-m transpose read is CONTIGUOUS
+        for (crd::usize kl = 0; kl < 8; ++kl)
+        {
+            const crd::usize t = n2vh * 64 + kl * 8;
+            V n31r, n31i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 31 * b + t), n31r, n31i);
+            V n30r, n30i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 30 * b + t), n30r, n30i);
+            V n29r, n29i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 29 * b + t), n29r, n29i);
+            V n28r, n28i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 28 * b + t), n28r, n28i);
+            V n27r, n27i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 27 * b + t), n27r, n27i);
+            V n26r, n26i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 26 * b + t), n26r, n26i);
+            V n25r, n25i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 25 * b + t), n25r, n25i);
+            V n24r, n24i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 24 * b + t), n24r, n24i);
+            V n23r, n23i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 23 * b + t), n23r, n23i);
+            V n22r, n22i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 22 * b + t), n22r, n22i);
+            V n21r, n21i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 21 * b + t), n21r, n21i);
+            V n20r, n20i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 20 * b + t), n20r, n20i);
+            V n19r, n19i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 19 * b + t), n19r, n19i);
+            V n18r, n18i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 18 * b + t), n18r, n18i);
+            V n17r, n17i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 17 * b + t), n17r, n17i);
+            V n16r, n16i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 16 * b + t), n16r, n16i);
+            V n15r, n15i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 15 * b + t), n15r, n15i);
+            const V n154r = n15r - n31r, n154i = n15i - n31i;
+            const V n153r = n15r + n31r, n153i = n15i + n31i;
+            const V n163r = V(static_cast<crd::f32>(-0.7071067811865475)) * n154r - V(static_cast<crd::f32>(-0.7071067811865476)) * n154i, n163i = V(static_cast<crd::f32>(-0.7071067811865475)) * n154i + V(static_cast<crd::f32>(-0.7071067811865476)) * n154r;
+            V n14r, n14i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 14 * b + t), n14r, n14i);
+            const V n73r = n14r - n30r, n73i = n14i - n30i;
+            const V n72r = n14r + n30r, n72i = n14i + n30i;
+            const V n74r = n73i, n74i = -n73r;
+            V n13r, n13i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 13 * b + t), n13r, n13i);
+            const V n125r = n13r - n29r, n125i = n13i - n29i;
+            const V n124r = n13r + n29r, n124i = n13i + n29i;
+            const V n134r = V(static_cast<crd::f32>(-0.7071067811865475)) * n125r - V(static_cast<crd::f32>(-0.7071067811865476)) * n125i, n134i = V(static_cast<crd::f32>(-0.7071067811865475)) * n125i + V(static_cast<crd::f32>(-0.7071067811865476)) * n125r;
+            V n12r, n12i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 12 * b + t), n12r, n12i);
+            const V n44r = n12r - n28r, n44i = n12i - n28i;
+            const V n43r = n12r + n28r, n43i = n12i + n28i;
+            const V n53r = V(static_cast<crd::f32>(-0.7071067811865475)) * n44r - V(static_cast<crd::f32>(-0.7071067811865476)) * n44i, n53i = V(static_cast<crd::f32>(-0.7071067811865475)) * n44i + V(static_cast<crd::f32>(-0.7071067811865476)) * n44r;
+            V n11r, n11i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 11 * b + t), n11r, n11i);
+            const V n145r = n11r - n27r, n145i = n11i - n27i;
+            const V n144r = n11r + n27r, n144i = n11i + n27i;
+            const V n146r = n145i, n146i = -n145r;
+            V n10r, n10i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 10 * b + t), n10r, n10i);
+            const V n64r = n10r - n26r, n64i = n10i - n26i;
+            const V n63r = n10r + n26r, n63i = n10i + n26i;
+            const V n65r = n64i, n65i = -n64r;
+            V n9r, n9i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 9 * b + t), n9r, n9i);
+            const V n116r = n9r - n25r, n116i = n9i - n25i;
+            const V n115r = n9r + n25r, n115i = n9i + n25i;
+            const V n117r = n116i, n117i = -n116r;
+            V n8r, n8i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 8 * b + t), n8r, n8i);
+            const V n35r = n8r - n24r, n35i = n8i - n24i;
+            const V n34r = n8r + n24r, n34i = n8i + n24i;
+            const V n36r = n35i, n36i = -n35r;
+            V n7r, n7i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 7 * b + t), n7r, n7i);
+            const V n152r = n7r - n23r, n152i = n7i - n23i;
+            const V n151r = n7r + n23r, n151i = n7i + n23i;
+            const V n162r = V(static_cast<crd::f32>(0.7071067811865476)) * n152r - V(static_cast<crd::f32>(-0.7071067811865475)) * n152i, n162i = V(static_cast<crd::f32>(0.7071067811865476)) * n152i + V(static_cast<crd::f32>(-0.7071067811865475)) * n152r;
+            const V n165r = n162r - n163r, n165i = n162i - n163i;
+            const V n164r = n162r + n163r, n164i = n162i + n163i;
+            const V n166r = n165i, n166i = -n165r;
+            const V n156r = n151r - n153r, n156i = n151i - n153i;
+            const V n155r = n151r + n153r, n155i = n151i + n153i;
+            const V n157r = n156i, n157i = -n156r;
+            V n6r, n6i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 6 * b + t), n6r, n6i);
+            const V n71r = n6r - n22r, n71i = n6i - n22i;
+            const V n70r = n6r + n22r, n70i = n6i + n22i;
+            const V n78r = n71r - n74r, n78i = n71i - n74i;
+            const V n77r = n71r + n74r, n77i = n71i + n74i;
+            const V n105r = V(static_cast<crd::f32>(-0.9238795325112868)) * n78r - V(static_cast<crd::f32>(0.38268343236508967)) * n78i, n105i = V(static_cast<crd::f32>(-0.9238795325112868)) * n78i + V(static_cast<crd::f32>(0.38268343236508967)) * n78r;
+            const V n87r = V(static_cast<crd::f32>(0.38268343236508984)) * n77r - V(static_cast<crd::f32>(-0.9238795325112867)) * n77i, n87i = V(static_cast<crd::f32>(0.38268343236508984)) * n77i + V(static_cast<crd::f32>(-0.9238795325112867)) * n77r;
+            const V n76r = n70r - n72r, n76i = n70i - n72i;
+            const V n75r = n70r + n72r, n75i = n70i + n72i;
+            const V n96r = V(static_cast<crd::f32>(-0.7071067811865475)) * n76r - V(static_cast<crd::f32>(-0.7071067811865476)) * n76i, n96i = V(static_cast<crd::f32>(-0.7071067811865475)) * n76i + V(static_cast<crd::f32>(-0.7071067811865476)) * n76r;
+            V n5r, n5i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 5 * b + t), n5r, n5i);
+            const V n123r = n5r - n21r, n123i = n5i - n21i;
+            const V n122r = n5r + n21r, n122i = n5i + n21i;
+            const V n133r = V(static_cast<crd::f32>(0.7071067811865476)) * n123r - V(static_cast<crd::f32>(-0.7071067811865475)) * n123i, n133i = V(static_cast<crd::f32>(0.7071067811865476)) * n123i + V(static_cast<crd::f32>(-0.7071067811865475)) * n123r;
+            const V n136r = n133r - n134r, n136i = n133i - n134i;
+            const V n135r = n133r + n134r, n135i = n133i + n134i;
+            const V n137r = n136i, n137i = -n136r;
+            const V n127r = n122r - n124r, n127i = n122i - n124i;
+            const V n126r = n122r + n124r, n126i = n122i + n124i;
+            const V n128r = n127i, n128i = -n127r;
+            V n4r, n4i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 4 * b + t), n4r, n4i);
+            const V n42r = n4r - n20r, n42i = n4i - n20i;
+            const V n41r = n4r + n20r, n41i = n4i + n20i;
+            const V n52r = V(static_cast<crd::f32>(0.7071067811865476)) * n42r - V(static_cast<crd::f32>(-0.7071067811865475)) * n42i, n52i = V(static_cast<crd::f32>(0.7071067811865476)) * n42i + V(static_cast<crd::f32>(-0.7071067811865475)) * n42r;
+            const V n55r = n52r - n53r, n55i = n52i - n53i;
+            const V n54r = n52r + n53r, n54i = n52i + n53i;
+            const V n56r = n55i, n56i = -n55r;
+            const V n46r = n41r - n43r, n46i = n41i - n43i;
+            const V n45r = n41r + n43r, n45i = n41i + n43i;
+            const V n47r = n46i, n47i = -n46r;
+            V n3r, n3i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 3 * b + t), n3r, n3i);
+            const V n143r = n3r - n19r, n143i = n3i - n19i;
+            const V n142r = n3r + n19r, n142i = n3i + n19i;
+            const V n150r = n143r - n146r, n150i = n143i - n146i;
+            const V n149r = n143r + n146r, n149i = n143i + n146i;
+            const V n170r = n150r - n166r, n170i = n150i - n166i;
+            const V n169r = n150r + n166r, n169i = n150i + n166i;
+            const V n233r = V(static_cast<crd::f32>(-0.5555702330196022)) * n170r - V(static_cast<crd::f32>(0.8314696123025452)) * n170i, n233i = V(static_cast<crd::f32>(-0.5555702330196022)) * n170i + V(static_cast<crd::f32>(0.8314696123025452)) * n170r;
+            const V n197r = V(static_cast<crd::f32>(-0.1950903220161282)) * n169r - V(static_cast<crd::f32>(-0.9807852804032304)) * n169i, n197i = V(static_cast<crd::f32>(-0.1950903220161282)) * n169i + V(static_cast<crd::f32>(-0.9807852804032304)) * n169r;
+            const V n168r = n149r - n164r, n168i = n149i - n164i;
+            const V n167r = n149r + n164r, n167i = n149i + n164i;
+            const V n215r = V(static_cast<crd::f32>(-0.9807852804032304)) * n168r - V(static_cast<crd::f32>(-0.1950903220161286)) * n168i, n215i = V(static_cast<crd::f32>(-0.9807852804032304)) * n168i + V(static_cast<crd::f32>(-0.1950903220161286)) * n168r;
+            const V n179r = V(static_cast<crd::f32>(0.8314696123025452)) * n167r - V(static_cast<crd::f32>(-0.5555702330196022)) * n167i, n179i = V(static_cast<crd::f32>(0.8314696123025452)) * n167i + V(static_cast<crd::f32>(-0.5555702330196022)) * n167r;
+            const V n148r = n142r - n144r, n148i = n142i - n144i;
+            const V n147r = n142r + n144r, n147i = n142i + n144i;
+            const V n161r = n148r - n157r, n161i = n148i - n157i;
+            const V n160r = n148r + n157r, n160i = n148i + n157i;
+            const V n224r = V(static_cast<crd::f32>(-0.9238795325112868)) * n161r - V(static_cast<crd::f32>(0.38268343236508967)) * n161i, n224i = V(static_cast<crd::f32>(-0.9238795325112868)) * n161i + V(static_cast<crd::f32>(0.38268343236508967)) * n161r;
+            const V n188r = V(static_cast<crd::f32>(0.38268343236508984)) * n160r - V(static_cast<crd::f32>(-0.9238795325112867)) * n160i, n188i = V(static_cast<crd::f32>(0.38268343236508984)) * n160i + V(static_cast<crd::f32>(-0.9238795325112867)) * n160r;
+            const V n159r = n147r - n155r, n159i = n147i - n155i;
+            const V n158r = n147r + n155r, n158i = n147i + n155i;
+            const V n206r = V(static_cast<crd::f32>(-0.7071067811865475)) * n159r - V(static_cast<crd::f32>(-0.7071067811865476)) * n159i, n206i = V(static_cast<crd::f32>(-0.7071067811865475)) * n159i + V(static_cast<crd::f32>(-0.7071067811865476)) * n159r;
+            V n2r, n2i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 2 * b + t), n2r, n2i);
+            const V n62r = n2r - n18r, n62i = n2i - n18i;
+            const V n61r = n2r + n18r, n61i = n2i + n18i;
+            const V n69r = n62r - n65r, n69i = n62i - n65i;
+            const V n68r = n62r + n65r, n68i = n62i + n65i;
+            const V n104r = V(static_cast<crd::f32>(0.38268343236508984)) * n69r - V(static_cast<crd::f32>(-0.9238795325112867)) * n69i, n104i = V(static_cast<crd::f32>(0.38268343236508984)) * n69i + V(static_cast<crd::f32>(-0.9238795325112867)) * n69r;
+            const V n86r = V(static_cast<crd::f32>(0.9238795325112867)) * n68r - V(static_cast<crd::f32>(-0.3826834323650898)) * n68i, n86i = V(static_cast<crd::f32>(0.9238795325112867)) * n68i + V(static_cast<crd::f32>(-0.3826834323650898)) * n68r;
+            const V n107r = n104r - n105r, n107i = n104i - n105i;
+            const V n106r = n104r + n105r, n106i = n104i + n105i;
+            const V n108r = n107i, n108i = -n107r;
+            const V n89r = n86r - n87r, n89i = n86i - n87i;
+            const V n88r = n86r + n87r, n88i = n86i + n87i;
+            const V n90r = n89i, n90i = -n89r;
+            const V n67r = n61r - n63r, n67i = n61i - n63i;
+            const V n66r = n61r + n63r, n66i = n61i + n63i;
+            const V n95r = V(static_cast<crd::f32>(0.7071067811865476)) * n67r - V(static_cast<crd::f32>(-0.7071067811865475)) * n67i, n95i = V(static_cast<crd::f32>(0.7071067811865476)) * n67i + V(static_cast<crd::f32>(-0.7071067811865475)) * n67r;
+            const V n98r = n95r - n96r, n98i = n95i - n96i;
+            const V n97r = n95r + n96r, n97i = n95i + n96i;
+            const V n99r = n98i, n99i = -n98r;
+            const V n80r = n66r - n75r, n80i = n66i - n75i;
+            const V n79r = n66r + n75r, n79i = n66i + n75i;
+            const V n81r = n80i, n81i = -n80r;
+            V n1r, n1i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 1 * b + t), n1r, n1i);
+            const V n114r = n1r - n17r, n114i = n1i - n17i;
+            const V n113r = n1r + n17r, n113i = n1i + n17i;
+            const V n121r = n114r - n117r, n121i = n114i - n117i;
+            const V n120r = n114r + n117r, n120i = n114i + n117i;
+            const V n141r = n121r - n137r, n141i = n121i - n137i;
+            const V n140r = n121r + n137r, n140i = n121i + n137i;
+            const V n232r = V(static_cast<crd::f32>(0.19509032201612833)) * n141r - V(static_cast<crd::f32>(-0.9807852804032304)) * n141i, n232i = V(static_cast<crd::f32>(0.19509032201612833)) * n141i + V(static_cast<crd::f32>(-0.9807852804032304)) * n141r;
+            const V n196r = V(static_cast<crd::f32>(0.8314696123025452)) * n140r - V(static_cast<crd::f32>(-0.5555702330196022)) * n140i, n196i = V(static_cast<crd::f32>(0.8314696123025452)) * n140i + V(static_cast<crd::f32>(-0.5555702330196022)) * n140r;
+            const V n235r = n232r - n233r, n235i = n232i - n233i;
+            const V n234r = n232r + n233r, n234i = n232i + n233i;
+            const V n236r = n235i, n236i = -n235r;
+            const V n199r = n196r - n197r, n199i = n196i - n197i;
+            const V n198r = n196r + n197r, n198i = n196i + n197i;
+            const V n200r = n199i, n200i = -n199r;
+            const V n139r = n120r - n135r, n139i = n120i - n135i;
+            const V n138r = n120r + n135r, n138i = n120i + n135i;
+            const V n214r = V(static_cast<crd::f32>(0.5555702330196023)) * n139r - V(static_cast<crd::f32>(-0.8314696123025452)) * n139i, n214i = V(static_cast<crd::f32>(0.5555702330196023)) * n139i + V(static_cast<crd::f32>(-0.8314696123025452)) * n139r;
+            const V n178r = V(static_cast<crd::f32>(0.9807852804032304)) * n138r - V(static_cast<crd::f32>(-0.19509032201612825)) * n138i, n178i = V(static_cast<crd::f32>(0.9807852804032304)) * n138i + V(static_cast<crd::f32>(-0.19509032201612825)) * n138r;
+            const V n217r = n214r - n215r, n217i = n214i - n215i;
+            const V n216r = n214r + n215r, n216i = n214i + n215i;
+            const V n218r = n217i, n218i = -n217r;
+            const V n181r = n178r - n179r, n181i = n178i - n179i;
+            const V n180r = n178r + n179r, n180i = n178i + n179i;
+            const V n182r = n181i, n182i = -n181r;
+            const V n119r = n113r - n115r, n119i = n113i - n115i;
+            const V n118r = n113r + n115r, n118i = n113i + n115i;
+            const V n132r = n119r - n128r, n132i = n119i - n128i;
+            const V n131r = n119r + n128r, n131i = n119i + n128i;
+            const V n223r = V(static_cast<crd::f32>(0.38268343236508984)) * n132r - V(static_cast<crd::f32>(-0.9238795325112867)) * n132i, n223i = V(static_cast<crd::f32>(0.38268343236508984)) * n132i + V(static_cast<crd::f32>(-0.9238795325112867)) * n132r;
+            const V n187r = V(static_cast<crd::f32>(0.9238795325112867)) * n131r - V(static_cast<crd::f32>(-0.3826834323650898)) * n131i, n187i = V(static_cast<crd::f32>(0.9238795325112867)) * n131i + V(static_cast<crd::f32>(-0.3826834323650898)) * n131r;
+            const V n226r = n223r - n224r, n226i = n223i - n224i;
+            const V n225r = n223r + n224r, n225i = n223i + n224i;
+            const V n227r = n226i, n227i = -n226r;
+            const V n190r = n187r - n188r, n190i = n187i - n188i;
+            const V n189r = n187r + n188r, n189i = n187i + n188i;
+            const V n191r = n190i, n191i = -n190r;
+            const V n130r = n118r - n126r, n130i = n118i - n126i;
+            const V n129r = n118r + n126r, n129i = n118i + n126i;
+            const V n205r = V(static_cast<crd::f32>(0.7071067811865476)) * n130r - V(static_cast<crd::f32>(-0.7071067811865475)) * n130i, n205i = V(static_cast<crd::f32>(0.7071067811865476)) * n130i + V(static_cast<crd::f32>(-0.7071067811865475)) * n130r;
+            const V n208r = n205r - n206r, n208i = n205i - n206i;
+            const V n207r = n205r + n206r, n207i = n205i + n206i;
+            const V n209r = n208i, n209i = -n208r;
+            const V n172r = n129r - n158r, n172i = n129i - n158i;
+            const V n171r = n129r + n158r, n171i = n129i + n158i;
+            const V n173r = n172i, n173i = -n172r;
+            V n0r, n0i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 0 * b + t), n0r, n0i);
+            const V n33r = n0r - n16r, n33i = n0i - n16i;
+            const V n32r = n0r + n16r, n32i = n0i + n16i;
+            const V n40r = n33r - n36r, n40i = n33i - n36i;
+            const V n39r = n33r + n36r, n39i = n33i + n36i;
+            const V n60r = n40r - n56r, n60i = n40i - n56i;
+            const V n59r = n40r + n56r, n59i = n40i + n56i;
+            const V n112r = n60r - n108r, n112i = n60i - n108i;
+            const V n111r = n60r + n108r, n111i = n60i + n108i;
+            const V n240r = n112r - n236r, n240i = n112i - n236i;
+            br_[31][kl] = n240r; bi_[31][kl] = n240i;
+            const V n239r = n112r + n236r, n239i = n112i + n236i;
+            br_[15][kl] = n239r; bi_[15][kl] = n239i;
+            const V n238r = n111r - n234r, n238i = n111i - n234i;
+            br_[23][kl] = n238r; bi_[23][kl] = n238i;
+            const V n237r = n111r + n234r, n237i = n111i + n234i;
+            br_[7][kl] = n237r; bi_[7][kl] = n237i;
+            const V n110r = n59r - n106r, n110i = n59i - n106i;
+            const V n109r = n59r + n106r, n109i = n59i + n106i;
+            const V n204r = n110r - n200r, n204i = n110i - n200i;
+            br_[27][kl] = n204r; bi_[27][kl] = n204i;
+            const V n203r = n110r + n200r, n203i = n110i + n200i;
+            br_[11][kl] = n203r; bi_[11][kl] = n203i;
+            const V n202r = n109r - n198r, n202i = n109i - n198i;
+            br_[19][kl] = n202r; bi_[19][kl] = n202i;
+            const V n201r = n109r + n198r, n201i = n109i + n198i;
+            br_[3][kl] = n201r; bi_[3][kl] = n201i;
+            const V n58r = n39r - n54r, n58i = n39i - n54i;
+            const V n57r = n39r + n54r, n57i = n39i + n54i;
+            const V n94r = n58r - n90r, n94i = n58i - n90i;
+            const V n93r = n58r + n90r, n93i = n58i + n90i;
+            const V n222r = n94r - n218r, n222i = n94i - n218i;
+            br_[29][kl] = n222r; bi_[29][kl] = n222i;
+            const V n221r = n94r + n218r, n221i = n94i + n218i;
+            br_[13][kl] = n221r; bi_[13][kl] = n221i;
+            const V n220r = n93r - n216r, n220i = n93i - n216i;
+            br_[21][kl] = n220r; bi_[21][kl] = n220i;
+            const V n219r = n93r + n216r, n219i = n93i + n216i;
+            br_[5][kl] = n219r; bi_[5][kl] = n219i;
+            const V n92r = n57r - n88r, n92i = n57i - n88i;
+            const V n91r = n57r + n88r, n91i = n57i + n88i;
+            const V n186r = n92r - n182r, n186i = n92i - n182i;
+            br_[25][kl] = n186r; bi_[25][kl] = n186i;
+            const V n185r = n92r + n182r, n185i = n92i + n182i;
+            br_[9][kl] = n185r; bi_[9][kl] = n185i;
+            const V n184r = n91r - n180r, n184i = n91i - n180i;
+            br_[17][kl] = n184r; bi_[17][kl] = n184i;
+            const V n183r = n91r + n180r, n183i = n91i + n180i;
+            br_[1][kl] = n183r; bi_[1][kl] = n183i;
+            const V n38r = n32r - n34r, n38i = n32i - n34i;
+            const V n37r = n32r + n34r, n37i = n32i + n34i;
+            const V n51r = n38r - n47r, n51i = n38i - n47i;
+            const V n50r = n38r + n47r, n50i = n38i + n47i;
+            const V n103r = n51r - n99r, n103i = n51i - n99i;
+            const V n102r = n51r + n99r, n102i = n51i + n99i;
+            const V n231r = n103r - n227r, n231i = n103i - n227i;
+            br_[30][kl] = n231r; bi_[30][kl] = n231i;
+            const V n230r = n103r + n227r, n230i = n103i + n227i;
+            br_[14][kl] = n230r; bi_[14][kl] = n230i;
+            const V n229r = n102r - n225r, n229i = n102i - n225i;
+            br_[22][kl] = n229r; bi_[22][kl] = n229i;
+            const V n228r = n102r + n225r, n228i = n102i + n225i;
+            br_[6][kl] = n228r; bi_[6][kl] = n228i;
+            const V n101r = n50r - n97r, n101i = n50i - n97i;
+            const V n100r = n50r + n97r, n100i = n50i + n97i;
+            const V n195r = n101r - n191r, n195i = n101i - n191i;
+            br_[26][kl] = n195r; bi_[26][kl] = n195i;
+            const V n194r = n101r + n191r, n194i = n101i + n191i;
+            br_[10][kl] = n194r; bi_[10][kl] = n194i;
+            const V n193r = n100r - n189r, n193i = n100i - n189i;
+            br_[18][kl] = n193r; bi_[18][kl] = n193i;
+            const V n192r = n100r + n189r, n192i = n100i + n189i;
+            br_[2][kl] = n192r; bi_[2][kl] = n192i;
+            const V n49r = n37r - n45r, n49i = n37i - n45i;
+            const V n48r = n37r + n45r, n48i = n37i + n45i;
+            const V n85r = n49r - n81r, n85i = n49i - n81i;
+            const V n84r = n49r + n81r, n84i = n49i + n81i;
+            const V n213r = n85r - n209r, n213i = n85i - n209i;
+            br_[28][kl] = n213r; bi_[28][kl] = n213i;
+            const V n212r = n85r + n209r, n212i = n85i + n209i;
+            br_[12][kl] = n212r; bi_[12][kl] = n212i;
+            const V n211r = n84r - n207r, n211i = n84i - n207i;
+            br_[20][kl] = n211r; bi_[20][kl] = n211i;
+            const V n210r = n84r + n207r, n210i = n84i + n207i;
+            br_[4][kl] = n210r; bi_[4][kl] = n210i;
+            const V n83r = n48r - n79r, n83i = n48i - n79i;
+            const V n82r = n48r + n79r, n82i = n48i + n79i;
+            const V n177r = n83r - n173r, n177i = n83i - n173i;
+            br_[24][kl] = n177r; bi_[24][kl] = n177i;
+            const V n176r = n83r + n173r, n176i = n83i + n173i;
+            br_[8][kl] = n176r; bi_[8][kl] = n176i;
+            const V n175r = n82r - n171r, n175i = n82i - n171i;
+            br_[16][kl] = n175r; bi_[16][kl] = n175i;
+            const V n174r = n82r + n171r, n174i = n82i + n171i;
+            br_[0][kl] = n174r; bi_[0][kl] = n174i;
+        }
+        for (crd::usize m = 0; m < 32; ++m)
+        {
+            V r0=br_[m][0],r1=br_[m][1],r2=br_[m][2],r3=br_[m][3],r4=br_[m][4],r5=br_[m][5],r6=br_[m][6],r7=br_[m][7];
+            V i0=bi_[m][0],i1=bi_[m][1],i2=bi_[m][2],i3=bi_[m][3],i4=bi_[m][4],i5=bi_[m][5],i6=bi_[m][6],i7=bi_[m][7];
+            m16tr::transpose8x8(r0,r1,r2,r3,r4,r5,r6,r7); m16tr::transpose8x8(i0,i1,i2,i3,i4,i5,i6,i7);
+            crd::f32* op = reinterpret_cast<crd::f32*>(out + (m * 4 + n2vh) * 64);
+            simd::store_complex_interleaved(op+0, r0, i0); simd::store_complex_interleaved(op+16, r1, i1);
+            simd::store_complex_interleaved(op+32, r2, i2); simd::store_complex_interleaved(op+48, r3, i3);
+            simd::store_complex_interleaved(op+64, r4, i4); simd::store_complex_interleaved(op+80, r5, i5);
+            simd::store_complex_interleaved(op+96, r6, i6); simd::store_complex_interleaved(op+112, r7, i7);
+        }
+    }
+}
+// M16-B/M18-2M RECT BB=128 producer (stage1_n=32, stage2_n=32, gpv=4, b=4096, CHUNK=8192). GEN.
+CRD_FORCEINLINE void codelet32_batched_tiled_bb128(const crd::hesap::Complex<crd::f32>* in,
+    crd::hesap::Complex<crd::f32>* out) noexcept
+{
+    using V = crd::math::simd::Vec8f;
+    namespace simd = crd::math::simd;
+    const crd::usize b = 4096;
+    for (crd::usize s = 0; s < 16; ++s)
+    {
+      for (crd::usize n2vh = 0; n2vh < 4; ++n2vh)
+      {
+        V br_[32][8], bi_[32][8];
+        for (crd::usize kl = 0; kl < 8; ++kl)
+        {
+            const crd::usize t = n2vh * 1024 + kl * 128 + s * 8;
+            V n31r, n31i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 31 * b + t), n31r, n31i);
+            V n30r, n30i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 30 * b + t), n30r, n30i);
+            V n29r, n29i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 29 * b + t), n29r, n29i);
+            V n28r, n28i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 28 * b + t), n28r, n28i);
+            V n27r, n27i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 27 * b + t), n27r, n27i);
+            V n26r, n26i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 26 * b + t), n26r, n26i);
+            V n25r, n25i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 25 * b + t), n25r, n25i);
+            V n24r, n24i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 24 * b + t), n24r, n24i);
+            V n23r, n23i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 23 * b + t), n23r, n23i);
+            V n22r, n22i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 22 * b + t), n22r, n22i);
+            V n21r, n21i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 21 * b + t), n21r, n21i);
+            V n20r, n20i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 20 * b + t), n20r, n20i);
+            V n19r, n19i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 19 * b + t), n19r, n19i);
+            V n18r, n18i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 18 * b + t), n18r, n18i);
+            V n17r, n17i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 17 * b + t), n17r, n17i);
+            V n16r, n16i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 16 * b + t), n16r, n16i);
+            V n15r, n15i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 15 * b + t), n15r, n15i);
+            const V n154r = n15r - n31r, n154i = n15i - n31i;
+            const V n153r = n15r + n31r, n153i = n15i + n31i;
+            const V n163r = V(static_cast<crd::f32>(-0.7071067811865475)) * n154r - V(static_cast<crd::f32>(-0.7071067811865476)) * n154i, n163i = V(static_cast<crd::f32>(-0.7071067811865475)) * n154i + V(static_cast<crd::f32>(-0.7071067811865476)) * n154r;
+            V n14r, n14i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 14 * b + t), n14r, n14i);
+            const V n73r = n14r - n30r, n73i = n14i - n30i;
+            const V n72r = n14r + n30r, n72i = n14i + n30i;
+            const V n74r = n73i, n74i = -n73r;
+            V n13r, n13i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 13 * b + t), n13r, n13i);
+            const V n125r = n13r - n29r, n125i = n13i - n29i;
+            const V n124r = n13r + n29r, n124i = n13i + n29i;
+            const V n134r = V(static_cast<crd::f32>(-0.7071067811865475)) * n125r - V(static_cast<crd::f32>(-0.7071067811865476)) * n125i, n134i = V(static_cast<crd::f32>(-0.7071067811865475)) * n125i + V(static_cast<crd::f32>(-0.7071067811865476)) * n125r;
+            V n12r, n12i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 12 * b + t), n12r, n12i);
+            const V n44r = n12r - n28r, n44i = n12i - n28i;
+            const V n43r = n12r + n28r, n43i = n12i + n28i;
+            const V n53r = V(static_cast<crd::f32>(-0.7071067811865475)) * n44r - V(static_cast<crd::f32>(-0.7071067811865476)) * n44i, n53i = V(static_cast<crd::f32>(-0.7071067811865475)) * n44i + V(static_cast<crd::f32>(-0.7071067811865476)) * n44r;
+            V n11r, n11i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 11 * b + t), n11r, n11i);
+            const V n145r = n11r - n27r, n145i = n11i - n27i;
+            const V n144r = n11r + n27r, n144i = n11i + n27i;
+            const V n146r = n145i, n146i = -n145r;
+            V n10r, n10i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 10 * b + t), n10r, n10i);
+            const V n64r = n10r - n26r, n64i = n10i - n26i;
+            const V n63r = n10r + n26r, n63i = n10i + n26i;
+            const V n65r = n64i, n65i = -n64r;
+            V n9r, n9i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 9 * b + t), n9r, n9i);
+            const V n116r = n9r - n25r, n116i = n9i - n25i;
+            const V n115r = n9r + n25r, n115i = n9i + n25i;
+            const V n117r = n116i, n117i = -n116r;
+            V n8r, n8i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 8 * b + t), n8r, n8i);
+            const V n35r = n8r - n24r, n35i = n8i - n24i;
+            const V n34r = n8r + n24r, n34i = n8i + n24i;
+            const V n36r = n35i, n36i = -n35r;
+            V n7r, n7i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 7 * b + t), n7r, n7i);
+            const V n152r = n7r - n23r, n152i = n7i - n23i;
+            const V n151r = n7r + n23r, n151i = n7i + n23i;
+            const V n162r = V(static_cast<crd::f32>(0.7071067811865476)) * n152r - V(static_cast<crd::f32>(-0.7071067811865475)) * n152i, n162i = V(static_cast<crd::f32>(0.7071067811865476)) * n152i + V(static_cast<crd::f32>(-0.7071067811865475)) * n152r;
+            const V n165r = n162r - n163r, n165i = n162i - n163i;
+            const V n164r = n162r + n163r, n164i = n162i + n163i;
+            const V n166r = n165i, n166i = -n165r;
+            const V n156r = n151r - n153r, n156i = n151i - n153i;
+            const V n155r = n151r + n153r, n155i = n151i + n153i;
+            const V n157r = n156i, n157i = -n156r;
+            V n6r, n6i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 6 * b + t), n6r, n6i);
+            const V n71r = n6r - n22r, n71i = n6i - n22i;
+            const V n70r = n6r + n22r, n70i = n6i + n22i;
+            const V n78r = n71r - n74r, n78i = n71i - n74i;
+            const V n77r = n71r + n74r, n77i = n71i + n74i;
+            const V n105r = V(static_cast<crd::f32>(-0.9238795325112868)) * n78r - V(static_cast<crd::f32>(0.38268343236508967)) * n78i, n105i = V(static_cast<crd::f32>(-0.9238795325112868)) * n78i + V(static_cast<crd::f32>(0.38268343236508967)) * n78r;
+            const V n87r = V(static_cast<crd::f32>(0.38268343236508984)) * n77r - V(static_cast<crd::f32>(-0.9238795325112867)) * n77i, n87i = V(static_cast<crd::f32>(0.38268343236508984)) * n77i + V(static_cast<crd::f32>(-0.9238795325112867)) * n77r;
+            const V n76r = n70r - n72r, n76i = n70i - n72i;
+            const V n75r = n70r + n72r, n75i = n70i + n72i;
+            const V n96r = V(static_cast<crd::f32>(-0.7071067811865475)) * n76r - V(static_cast<crd::f32>(-0.7071067811865476)) * n76i, n96i = V(static_cast<crd::f32>(-0.7071067811865475)) * n76i + V(static_cast<crd::f32>(-0.7071067811865476)) * n76r;
+            V n5r, n5i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 5 * b + t), n5r, n5i);
+            const V n123r = n5r - n21r, n123i = n5i - n21i;
+            const V n122r = n5r + n21r, n122i = n5i + n21i;
+            const V n133r = V(static_cast<crd::f32>(0.7071067811865476)) * n123r - V(static_cast<crd::f32>(-0.7071067811865475)) * n123i, n133i = V(static_cast<crd::f32>(0.7071067811865476)) * n123i + V(static_cast<crd::f32>(-0.7071067811865475)) * n123r;
+            const V n136r = n133r - n134r, n136i = n133i - n134i;
+            const V n135r = n133r + n134r, n135i = n133i + n134i;
+            const V n137r = n136i, n137i = -n136r;
+            const V n127r = n122r - n124r, n127i = n122i - n124i;
+            const V n126r = n122r + n124r, n126i = n122i + n124i;
+            const V n128r = n127i, n128i = -n127r;
+            V n4r, n4i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 4 * b + t), n4r, n4i);
+            const V n42r = n4r - n20r, n42i = n4i - n20i;
+            const V n41r = n4r + n20r, n41i = n4i + n20i;
+            const V n52r = V(static_cast<crd::f32>(0.7071067811865476)) * n42r - V(static_cast<crd::f32>(-0.7071067811865475)) * n42i, n52i = V(static_cast<crd::f32>(0.7071067811865476)) * n42i + V(static_cast<crd::f32>(-0.7071067811865475)) * n42r;
+            const V n55r = n52r - n53r, n55i = n52i - n53i;
+            const V n54r = n52r + n53r, n54i = n52i + n53i;
+            const V n56r = n55i, n56i = -n55r;
+            const V n46r = n41r - n43r, n46i = n41i - n43i;
+            const V n45r = n41r + n43r, n45i = n41i + n43i;
+            const V n47r = n46i, n47i = -n46r;
+            V n3r, n3i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 3 * b + t), n3r, n3i);
+            const V n143r = n3r - n19r, n143i = n3i - n19i;
+            const V n142r = n3r + n19r, n142i = n3i + n19i;
+            const V n150r = n143r - n146r, n150i = n143i - n146i;
+            const V n149r = n143r + n146r, n149i = n143i + n146i;
+            const V n170r = n150r - n166r, n170i = n150i - n166i;
+            const V n169r = n150r + n166r, n169i = n150i + n166i;
+            const V n233r = V(static_cast<crd::f32>(-0.5555702330196022)) * n170r - V(static_cast<crd::f32>(0.8314696123025452)) * n170i, n233i = V(static_cast<crd::f32>(-0.5555702330196022)) * n170i + V(static_cast<crd::f32>(0.8314696123025452)) * n170r;
+            const V n197r = V(static_cast<crd::f32>(-0.1950903220161282)) * n169r - V(static_cast<crd::f32>(-0.9807852804032304)) * n169i, n197i = V(static_cast<crd::f32>(-0.1950903220161282)) * n169i + V(static_cast<crd::f32>(-0.9807852804032304)) * n169r;
+            const V n168r = n149r - n164r, n168i = n149i - n164i;
+            const V n167r = n149r + n164r, n167i = n149i + n164i;
+            const V n215r = V(static_cast<crd::f32>(-0.9807852804032304)) * n168r - V(static_cast<crd::f32>(-0.1950903220161286)) * n168i, n215i = V(static_cast<crd::f32>(-0.9807852804032304)) * n168i + V(static_cast<crd::f32>(-0.1950903220161286)) * n168r;
+            const V n179r = V(static_cast<crd::f32>(0.8314696123025452)) * n167r - V(static_cast<crd::f32>(-0.5555702330196022)) * n167i, n179i = V(static_cast<crd::f32>(0.8314696123025452)) * n167i + V(static_cast<crd::f32>(-0.5555702330196022)) * n167r;
+            const V n148r = n142r - n144r, n148i = n142i - n144i;
+            const V n147r = n142r + n144r, n147i = n142i + n144i;
+            const V n161r = n148r - n157r, n161i = n148i - n157i;
+            const V n160r = n148r + n157r, n160i = n148i + n157i;
+            const V n224r = V(static_cast<crd::f32>(-0.9238795325112868)) * n161r - V(static_cast<crd::f32>(0.38268343236508967)) * n161i, n224i = V(static_cast<crd::f32>(-0.9238795325112868)) * n161i + V(static_cast<crd::f32>(0.38268343236508967)) * n161r;
+            const V n188r = V(static_cast<crd::f32>(0.38268343236508984)) * n160r - V(static_cast<crd::f32>(-0.9238795325112867)) * n160i, n188i = V(static_cast<crd::f32>(0.38268343236508984)) * n160i + V(static_cast<crd::f32>(-0.9238795325112867)) * n160r;
+            const V n159r = n147r - n155r, n159i = n147i - n155i;
+            const V n158r = n147r + n155r, n158i = n147i + n155i;
+            const V n206r = V(static_cast<crd::f32>(-0.7071067811865475)) * n159r - V(static_cast<crd::f32>(-0.7071067811865476)) * n159i, n206i = V(static_cast<crd::f32>(-0.7071067811865475)) * n159i + V(static_cast<crd::f32>(-0.7071067811865476)) * n159r;
+            V n2r, n2i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 2 * b + t), n2r, n2i);
+            const V n62r = n2r - n18r, n62i = n2i - n18i;
+            const V n61r = n2r + n18r, n61i = n2i + n18i;
+            const V n69r = n62r - n65r, n69i = n62i - n65i;
+            const V n68r = n62r + n65r, n68i = n62i + n65i;
+            const V n104r = V(static_cast<crd::f32>(0.38268343236508984)) * n69r - V(static_cast<crd::f32>(-0.9238795325112867)) * n69i, n104i = V(static_cast<crd::f32>(0.38268343236508984)) * n69i + V(static_cast<crd::f32>(-0.9238795325112867)) * n69r;
+            const V n86r = V(static_cast<crd::f32>(0.9238795325112867)) * n68r - V(static_cast<crd::f32>(-0.3826834323650898)) * n68i, n86i = V(static_cast<crd::f32>(0.9238795325112867)) * n68i + V(static_cast<crd::f32>(-0.3826834323650898)) * n68r;
+            const V n107r = n104r - n105r, n107i = n104i - n105i;
+            const V n106r = n104r + n105r, n106i = n104i + n105i;
+            const V n108r = n107i, n108i = -n107r;
+            const V n89r = n86r - n87r, n89i = n86i - n87i;
+            const V n88r = n86r + n87r, n88i = n86i + n87i;
+            const V n90r = n89i, n90i = -n89r;
+            const V n67r = n61r - n63r, n67i = n61i - n63i;
+            const V n66r = n61r + n63r, n66i = n61i + n63i;
+            const V n95r = V(static_cast<crd::f32>(0.7071067811865476)) * n67r - V(static_cast<crd::f32>(-0.7071067811865475)) * n67i, n95i = V(static_cast<crd::f32>(0.7071067811865476)) * n67i + V(static_cast<crd::f32>(-0.7071067811865475)) * n67r;
+            const V n98r = n95r - n96r, n98i = n95i - n96i;
+            const V n97r = n95r + n96r, n97i = n95i + n96i;
+            const V n99r = n98i, n99i = -n98r;
+            const V n80r = n66r - n75r, n80i = n66i - n75i;
+            const V n79r = n66r + n75r, n79i = n66i + n75i;
+            const V n81r = n80i, n81i = -n80r;
+            V n1r, n1i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 1 * b + t), n1r, n1i);
+            const V n114r = n1r - n17r, n114i = n1i - n17i;
+            const V n113r = n1r + n17r, n113i = n1i + n17i;
+            const V n121r = n114r - n117r, n121i = n114i - n117i;
+            const V n120r = n114r + n117r, n120i = n114i + n117i;
+            const V n141r = n121r - n137r, n141i = n121i - n137i;
+            const V n140r = n121r + n137r, n140i = n121i + n137i;
+            const V n232r = V(static_cast<crd::f32>(0.19509032201612833)) * n141r - V(static_cast<crd::f32>(-0.9807852804032304)) * n141i, n232i = V(static_cast<crd::f32>(0.19509032201612833)) * n141i + V(static_cast<crd::f32>(-0.9807852804032304)) * n141r;
+            const V n196r = V(static_cast<crd::f32>(0.8314696123025452)) * n140r - V(static_cast<crd::f32>(-0.5555702330196022)) * n140i, n196i = V(static_cast<crd::f32>(0.8314696123025452)) * n140i + V(static_cast<crd::f32>(-0.5555702330196022)) * n140r;
+            const V n235r = n232r - n233r, n235i = n232i - n233i;
+            const V n234r = n232r + n233r, n234i = n232i + n233i;
+            const V n236r = n235i, n236i = -n235r;
+            const V n199r = n196r - n197r, n199i = n196i - n197i;
+            const V n198r = n196r + n197r, n198i = n196i + n197i;
+            const V n200r = n199i, n200i = -n199r;
+            const V n139r = n120r - n135r, n139i = n120i - n135i;
+            const V n138r = n120r + n135r, n138i = n120i + n135i;
+            const V n214r = V(static_cast<crd::f32>(0.5555702330196023)) * n139r - V(static_cast<crd::f32>(-0.8314696123025452)) * n139i, n214i = V(static_cast<crd::f32>(0.5555702330196023)) * n139i + V(static_cast<crd::f32>(-0.8314696123025452)) * n139r;
+            const V n178r = V(static_cast<crd::f32>(0.9807852804032304)) * n138r - V(static_cast<crd::f32>(-0.19509032201612825)) * n138i, n178i = V(static_cast<crd::f32>(0.9807852804032304)) * n138i + V(static_cast<crd::f32>(-0.19509032201612825)) * n138r;
+            const V n217r = n214r - n215r, n217i = n214i - n215i;
+            const V n216r = n214r + n215r, n216i = n214i + n215i;
+            const V n218r = n217i, n218i = -n217r;
+            const V n181r = n178r - n179r, n181i = n178i - n179i;
+            const V n180r = n178r + n179r, n180i = n178i + n179i;
+            const V n182r = n181i, n182i = -n181r;
+            const V n119r = n113r - n115r, n119i = n113i - n115i;
+            const V n118r = n113r + n115r, n118i = n113i + n115i;
+            const V n132r = n119r - n128r, n132i = n119i - n128i;
+            const V n131r = n119r + n128r, n131i = n119i + n128i;
+            const V n223r = V(static_cast<crd::f32>(0.38268343236508984)) * n132r - V(static_cast<crd::f32>(-0.9238795325112867)) * n132i, n223i = V(static_cast<crd::f32>(0.38268343236508984)) * n132i + V(static_cast<crd::f32>(-0.9238795325112867)) * n132r;
+            const V n187r = V(static_cast<crd::f32>(0.9238795325112867)) * n131r - V(static_cast<crd::f32>(-0.3826834323650898)) * n131i, n187i = V(static_cast<crd::f32>(0.9238795325112867)) * n131i + V(static_cast<crd::f32>(-0.3826834323650898)) * n131r;
+            const V n226r = n223r - n224r, n226i = n223i - n224i;
+            const V n225r = n223r + n224r, n225i = n223i + n224i;
+            const V n227r = n226i, n227i = -n226r;
+            const V n190r = n187r - n188r, n190i = n187i - n188i;
+            const V n189r = n187r + n188r, n189i = n187i + n188i;
+            const V n191r = n190i, n191i = -n190r;
+            const V n130r = n118r - n126r, n130i = n118i - n126i;
+            const V n129r = n118r + n126r, n129i = n118i + n126i;
+            const V n205r = V(static_cast<crd::f32>(0.7071067811865476)) * n130r - V(static_cast<crd::f32>(-0.7071067811865475)) * n130i, n205i = V(static_cast<crd::f32>(0.7071067811865476)) * n130i + V(static_cast<crd::f32>(-0.7071067811865475)) * n130r;
+            const V n208r = n205r - n206r, n208i = n205i - n206i;
+            const V n207r = n205r + n206r, n207i = n205i + n206i;
+            const V n209r = n208i, n209i = -n208r;
+            const V n172r = n129r - n158r, n172i = n129i - n158i;
+            const V n171r = n129r + n158r, n171i = n129i + n158i;
+            const V n173r = n172i, n173i = -n172r;
+            V n0r, n0i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 0 * b + t), n0r, n0i);
+            const V n33r = n0r - n16r, n33i = n0i - n16i;
+            const V n32r = n0r + n16r, n32i = n0i + n16i;
+            const V n40r = n33r - n36r, n40i = n33i - n36i;
+            const V n39r = n33r + n36r, n39i = n33i + n36i;
+            const V n60r = n40r - n56r, n60i = n40i - n56i;
+            const V n59r = n40r + n56r, n59i = n40i + n56i;
+            const V n112r = n60r - n108r, n112i = n60i - n108i;
+            const V n111r = n60r + n108r, n111i = n60i + n108i;
+            const V n240r = n112r - n236r, n240i = n112i - n236i;
+            br_[31][kl] = n240r; bi_[31][kl] = n240i;
+            const V n239r = n112r + n236r, n239i = n112i + n236i;
+            br_[15][kl] = n239r; bi_[15][kl] = n239i;
+            const V n238r = n111r - n234r, n238i = n111i - n234i;
+            br_[23][kl] = n238r; bi_[23][kl] = n238i;
+            const V n237r = n111r + n234r, n237i = n111i + n234i;
+            br_[7][kl] = n237r; bi_[7][kl] = n237i;
+            const V n110r = n59r - n106r, n110i = n59i - n106i;
+            const V n109r = n59r + n106r, n109i = n59i + n106i;
+            const V n204r = n110r - n200r, n204i = n110i - n200i;
+            br_[27][kl] = n204r; bi_[27][kl] = n204i;
+            const V n203r = n110r + n200r, n203i = n110i + n200i;
+            br_[11][kl] = n203r; bi_[11][kl] = n203i;
+            const V n202r = n109r - n198r, n202i = n109i - n198i;
+            br_[19][kl] = n202r; bi_[19][kl] = n202i;
+            const V n201r = n109r + n198r, n201i = n109i + n198i;
+            br_[3][kl] = n201r; bi_[3][kl] = n201i;
+            const V n58r = n39r - n54r, n58i = n39i - n54i;
+            const V n57r = n39r + n54r, n57i = n39i + n54i;
+            const V n94r = n58r - n90r, n94i = n58i - n90i;
+            const V n93r = n58r + n90r, n93i = n58i + n90i;
+            const V n222r = n94r - n218r, n222i = n94i - n218i;
+            br_[29][kl] = n222r; bi_[29][kl] = n222i;
+            const V n221r = n94r + n218r, n221i = n94i + n218i;
+            br_[13][kl] = n221r; bi_[13][kl] = n221i;
+            const V n220r = n93r - n216r, n220i = n93i - n216i;
+            br_[21][kl] = n220r; bi_[21][kl] = n220i;
+            const V n219r = n93r + n216r, n219i = n93i + n216i;
+            br_[5][kl] = n219r; bi_[5][kl] = n219i;
+            const V n92r = n57r - n88r, n92i = n57i - n88i;
+            const V n91r = n57r + n88r, n91i = n57i + n88i;
+            const V n186r = n92r - n182r, n186i = n92i - n182i;
+            br_[25][kl] = n186r; bi_[25][kl] = n186i;
+            const V n185r = n92r + n182r, n185i = n92i + n182i;
+            br_[9][kl] = n185r; bi_[9][kl] = n185i;
+            const V n184r = n91r - n180r, n184i = n91i - n180i;
+            br_[17][kl] = n184r; bi_[17][kl] = n184i;
+            const V n183r = n91r + n180r, n183i = n91i + n180i;
+            br_[1][kl] = n183r; bi_[1][kl] = n183i;
+            const V n38r = n32r - n34r, n38i = n32i - n34i;
+            const V n37r = n32r + n34r, n37i = n32i + n34i;
+            const V n51r = n38r - n47r, n51i = n38i - n47i;
+            const V n50r = n38r + n47r, n50i = n38i + n47i;
+            const V n103r = n51r - n99r, n103i = n51i - n99i;
+            const V n102r = n51r + n99r, n102i = n51i + n99i;
+            const V n231r = n103r - n227r, n231i = n103i - n227i;
+            br_[30][kl] = n231r; bi_[30][kl] = n231i;
+            const V n230r = n103r + n227r, n230i = n103i + n227i;
+            br_[14][kl] = n230r; bi_[14][kl] = n230i;
+            const V n229r = n102r - n225r, n229i = n102i - n225i;
+            br_[22][kl] = n229r; bi_[22][kl] = n229i;
+            const V n228r = n102r + n225r, n228i = n102i + n225i;
+            br_[6][kl] = n228r; bi_[6][kl] = n228i;
+            const V n101r = n50r - n97r, n101i = n50i - n97i;
+            const V n100r = n50r + n97r, n100i = n50i + n97i;
+            const V n195r = n101r - n191r, n195i = n101i - n191i;
+            br_[26][kl] = n195r; bi_[26][kl] = n195i;
+            const V n194r = n101r + n191r, n194i = n101i + n191i;
+            br_[10][kl] = n194r; bi_[10][kl] = n194i;
+            const V n193r = n100r - n189r, n193i = n100i - n189i;
+            br_[18][kl] = n193r; bi_[18][kl] = n193i;
+            const V n192r = n100r + n189r, n192i = n100i + n189i;
+            br_[2][kl] = n192r; bi_[2][kl] = n192i;
+            const V n49r = n37r - n45r, n49i = n37i - n45i;
+            const V n48r = n37r + n45r, n48i = n37i + n45i;
+            const V n85r = n49r - n81r, n85i = n49i - n81i;
+            const V n84r = n49r + n81r, n84i = n49i + n81i;
+            const V n213r = n85r - n209r, n213i = n85i - n209i;
+            br_[28][kl] = n213r; bi_[28][kl] = n213i;
+            const V n212r = n85r + n209r, n212i = n85i + n209i;
+            br_[12][kl] = n212r; bi_[12][kl] = n212i;
+            const V n211r = n84r - n207r, n211i = n84i - n207i;
+            br_[20][kl] = n211r; bi_[20][kl] = n211i;
+            const V n210r = n84r + n207r, n210i = n84i + n207i;
+            br_[4][kl] = n210r; bi_[4][kl] = n210i;
+            const V n83r = n48r - n79r, n83i = n48i - n79i;
+            const V n82r = n48r + n79r, n82i = n48i + n79i;
+            const V n177r = n83r - n173r, n177i = n83i - n173i;
+            br_[24][kl] = n177r; bi_[24][kl] = n177i;
+            const V n176r = n83r + n173r, n176i = n83i + n173i;
+            br_[8][kl] = n176r; bi_[8][kl] = n176i;
+            const V n175r = n82r - n171r, n175i = n82i - n171i;
+            br_[16][kl] = n175r; bi_[16][kl] = n175i;
+            const V n174r = n82r + n171r, n174i = n82i + n171i;
+            br_[0][kl] = n174r; bi_[0][kl] = n174i;
+        }
+        for (crd::usize m = 0; m < 32; ++m)
+        {
+            V r0=br_[m][0],r1=br_[m][1],r2=br_[m][2],r3=br_[m][3],r4=br_[m][4],r5=br_[m][5],r6=br_[m][6],r7=br_[m][7];
+            V i0=bi_[m][0],i1=bi_[m][1],i2=bi_[m][2],i3=bi_[m][3],i4=bi_[m][4],i5=bi_[m][5],i6=bi_[m][6],i7=bi_[m][7];
+#ifndef CRD_FFT_M16B_ABLATE_NOTRANSPOSE
+            m16tr::transpose8x8(r0,r1,r2,r3,r4,r5,r6,r7); m16tr::transpose8x8(i0,i1,i2,i3,i4,i5,i6,i7);
+#endif
+            crd::f32* op = reinterpret_cast<crd::f32*>(out + s * 8192 + (m * 4 + n2vh) * 64);
+            simd::store_complex_interleaved(op+0, r0, i0); simd::store_complex_interleaved(op+16, r1, i1);
+            simd::store_complex_interleaved(op+32, r2, i2); simd::store_complex_interleaved(op+48, r3, i3);
+            simd::store_complex_interleaved(op+64, r4, i4); simd::store_complex_interleaved(op+80, r5, i5);
+            simd::store_complex_interleaved(op+96, r6, i6); simd::store_complex_interleaved(op+112, r7, i7);
+        }
+      }
+    }
+}
+// M16-B V1 native-TILED leaf (BB=128): contiguous Vec8 over kl + recurrence twiddle. GENERATED.
+CRD_FORCEINLINE void codelet32_stage1_fused_32x32_native_tiled(const crd::hesap::Complex<crd::f32>* nt, crd::hesap::Complex<crd::f32>* out, crd::usize k1blk, const crd::f32* baser, const crd::f32* basei, const crd::f32* laner, const crd::f32* lanei, const crd::f32* twr, const crd::f32* twi) noexcept
+{
+    using V = crd::math::simd::Vec8f;
+    namespace simd = crd::math::simd;
+    for (crd::usize t = 0; t + 8 <= 4096; t += 8)
+    {
+        const crd::usize n2v = t >> 7, bb0 = t & 127, grp_ = (k1blk + bb0) >> 3;
+        const crd::f32* const tr = twr + n2v * 32, * const ti = twi + n2v * 32;
+        V n31r, n31i; { const crd::usize i2_ = 31 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+          V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+          const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+#ifdef CRD_FFT_M16B_ABLATE_CONSTBASE
+          const crd::f32 br_ = static_cast<crd::f32>(1), bi_ = static_cast<crd::f32>(0); // ablation: no base-table read (timing-only)
+#else
+          // V1.6: reordered base table [grp*1024 + n2v*32 + ml] — the 32 ml reads per t are CONTIGUOUS
+          const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 31], bi_ = basei[grp_ * 1024 + n2v * 32 + 31];
+#endif
+          const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+          n31r = vr_ * wr_ - vi_ * wi_; n31i = vr_ * wi_ + vi_ * wr_; }
+        V n30r, n30i; { const crd::usize i2_ = 30 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+          V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+          const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+#ifdef CRD_FFT_M16B_ABLATE_CONSTBASE
+          const crd::f32 br_ = static_cast<crd::f32>(1), bi_ = static_cast<crd::f32>(0); // ablation: no base-table read (timing-only)
+#else
+          // V1.6: reordered base table [grp*1024 + n2v*32 + ml] — the 32 ml reads per t are CONTIGUOUS
+          const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 30], bi_ = basei[grp_ * 1024 + n2v * 32 + 30];
+#endif
+          const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+          n30r = vr_ * wr_ - vi_ * wi_; n30i = vr_ * wi_ + vi_ * wr_; }
+        V n29r, n29i; { const crd::usize i2_ = 29 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+          V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+          const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+#ifdef CRD_FFT_M16B_ABLATE_CONSTBASE
+          const crd::f32 br_ = static_cast<crd::f32>(1), bi_ = static_cast<crd::f32>(0); // ablation: no base-table read (timing-only)
+#else
+          // V1.6: reordered base table [grp*1024 + n2v*32 + ml] — the 32 ml reads per t are CONTIGUOUS
+          const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 29], bi_ = basei[grp_ * 1024 + n2v * 32 + 29];
+#endif
+          const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+          n29r = vr_ * wr_ - vi_ * wi_; n29i = vr_ * wi_ + vi_ * wr_; }
+        V n28r, n28i; { const crd::usize i2_ = 28 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+          V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+          const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+#ifdef CRD_FFT_M16B_ABLATE_CONSTBASE
+          const crd::f32 br_ = static_cast<crd::f32>(1), bi_ = static_cast<crd::f32>(0); // ablation: no base-table read (timing-only)
+#else
+          // V1.6: reordered base table [grp*1024 + n2v*32 + ml] — the 32 ml reads per t are CONTIGUOUS
+          const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 28], bi_ = basei[grp_ * 1024 + n2v * 32 + 28];
+#endif
+          const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+          n28r = vr_ * wr_ - vi_ * wi_; n28i = vr_ * wi_ + vi_ * wr_; }
+        V n27r, n27i; { const crd::usize i2_ = 27 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+          V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+          const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+#ifdef CRD_FFT_M16B_ABLATE_CONSTBASE
+          const crd::f32 br_ = static_cast<crd::f32>(1), bi_ = static_cast<crd::f32>(0); // ablation: no base-table read (timing-only)
+#else
+          // V1.6: reordered base table [grp*1024 + n2v*32 + ml] — the 32 ml reads per t are CONTIGUOUS
+          const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 27], bi_ = basei[grp_ * 1024 + n2v * 32 + 27];
+#endif
+          const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+          n27r = vr_ * wr_ - vi_ * wi_; n27i = vr_ * wi_ + vi_ * wr_; }
+        V n26r, n26i; { const crd::usize i2_ = 26 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+          V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+          const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+#ifdef CRD_FFT_M16B_ABLATE_CONSTBASE
+          const crd::f32 br_ = static_cast<crd::f32>(1), bi_ = static_cast<crd::f32>(0); // ablation: no base-table read (timing-only)
+#else
+          // V1.6: reordered base table [grp*1024 + n2v*32 + ml] — the 32 ml reads per t are CONTIGUOUS
+          const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 26], bi_ = basei[grp_ * 1024 + n2v * 32 + 26];
+#endif
+          const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+          n26r = vr_ * wr_ - vi_ * wi_; n26i = vr_ * wi_ + vi_ * wr_; }
+        V n25r, n25i; { const crd::usize i2_ = 25 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+          V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+          const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+#ifdef CRD_FFT_M16B_ABLATE_CONSTBASE
+          const crd::f32 br_ = static_cast<crd::f32>(1), bi_ = static_cast<crd::f32>(0); // ablation: no base-table read (timing-only)
+#else
+          // V1.6: reordered base table [grp*1024 + n2v*32 + ml] — the 32 ml reads per t are CONTIGUOUS
+          const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 25], bi_ = basei[grp_ * 1024 + n2v * 32 + 25];
+#endif
+          const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+          n25r = vr_ * wr_ - vi_ * wi_; n25i = vr_ * wi_ + vi_ * wr_; }
+        V n24r, n24i; { const crd::usize i2_ = 24 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+          V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+          const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+#ifdef CRD_FFT_M16B_ABLATE_CONSTBASE
+          const crd::f32 br_ = static_cast<crd::f32>(1), bi_ = static_cast<crd::f32>(0); // ablation: no base-table read (timing-only)
+#else
+          // V1.6: reordered base table [grp*1024 + n2v*32 + ml] — the 32 ml reads per t are CONTIGUOUS
+          const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 24], bi_ = basei[grp_ * 1024 + n2v * 32 + 24];
+#endif
+          const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+          n24r = vr_ * wr_ - vi_ * wi_; n24i = vr_ * wi_ + vi_ * wr_; }
+        V n23r, n23i; { const crd::usize i2_ = 23 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+          V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+          const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+#ifdef CRD_FFT_M16B_ABLATE_CONSTBASE
+          const crd::f32 br_ = static_cast<crd::f32>(1), bi_ = static_cast<crd::f32>(0); // ablation: no base-table read (timing-only)
+#else
+          // V1.6: reordered base table [grp*1024 + n2v*32 + ml] — the 32 ml reads per t are CONTIGUOUS
+          const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 23], bi_ = basei[grp_ * 1024 + n2v * 32 + 23];
+#endif
+          const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+          n23r = vr_ * wr_ - vi_ * wi_; n23i = vr_ * wi_ + vi_ * wr_; }
+        V n22r, n22i; { const crd::usize i2_ = 22 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+          V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+          const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+#ifdef CRD_FFT_M16B_ABLATE_CONSTBASE
+          const crd::f32 br_ = static_cast<crd::f32>(1), bi_ = static_cast<crd::f32>(0); // ablation: no base-table read (timing-only)
+#else
+          // V1.6: reordered base table [grp*1024 + n2v*32 + ml] — the 32 ml reads per t are CONTIGUOUS
+          const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 22], bi_ = basei[grp_ * 1024 + n2v * 32 + 22];
+#endif
+          const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+          n22r = vr_ * wr_ - vi_ * wi_; n22i = vr_ * wi_ + vi_ * wr_; }
+        V n21r, n21i; { const crd::usize i2_ = 21 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+          V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+          const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+#ifdef CRD_FFT_M16B_ABLATE_CONSTBASE
+          const crd::f32 br_ = static_cast<crd::f32>(1), bi_ = static_cast<crd::f32>(0); // ablation: no base-table read (timing-only)
+#else
+          // V1.6: reordered base table [grp*1024 + n2v*32 + ml] — the 32 ml reads per t are CONTIGUOUS
+          const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 21], bi_ = basei[grp_ * 1024 + n2v * 32 + 21];
+#endif
+          const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+          n21r = vr_ * wr_ - vi_ * wi_; n21i = vr_ * wi_ + vi_ * wr_; }
+        V n20r, n20i; { const crd::usize i2_ = 20 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+          V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+          const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+#ifdef CRD_FFT_M16B_ABLATE_CONSTBASE
+          const crd::f32 br_ = static_cast<crd::f32>(1), bi_ = static_cast<crd::f32>(0); // ablation: no base-table read (timing-only)
+#else
+          // V1.6: reordered base table [grp*1024 + n2v*32 + ml] — the 32 ml reads per t are CONTIGUOUS
+          const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 20], bi_ = basei[grp_ * 1024 + n2v * 32 + 20];
+#endif
+          const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+          n20r = vr_ * wr_ - vi_ * wi_; n20i = vr_ * wi_ + vi_ * wr_; }
+        V n19r, n19i; { const crd::usize i2_ = 19 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+          V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+          const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+#ifdef CRD_FFT_M16B_ABLATE_CONSTBASE
+          const crd::f32 br_ = static_cast<crd::f32>(1), bi_ = static_cast<crd::f32>(0); // ablation: no base-table read (timing-only)
+#else
+          // V1.6: reordered base table [grp*1024 + n2v*32 + ml] — the 32 ml reads per t are CONTIGUOUS
+          const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 19], bi_ = basei[grp_ * 1024 + n2v * 32 + 19];
+#endif
+          const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+          n19r = vr_ * wr_ - vi_ * wi_; n19i = vr_ * wi_ + vi_ * wr_; }
+        V n18r, n18i; { const crd::usize i2_ = 18 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+          V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+          const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+#ifdef CRD_FFT_M16B_ABLATE_CONSTBASE
+          const crd::f32 br_ = static_cast<crd::f32>(1), bi_ = static_cast<crd::f32>(0); // ablation: no base-table read (timing-only)
+#else
+          // V1.6: reordered base table [grp*1024 + n2v*32 + ml] — the 32 ml reads per t are CONTIGUOUS
+          const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 18], bi_ = basei[grp_ * 1024 + n2v * 32 + 18];
+#endif
+          const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+          n18r = vr_ * wr_ - vi_ * wi_; n18i = vr_ * wi_ + vi_ * wr_; }
+        V n17r, n17i; { const crd::usize i2_ = 17 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+          V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+          const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+#ifdef CRD_FFT_M16B_ABLATE_CONSTBASE
+          const crd::f32 br_ = static_cast<crd::f32>(1), bi_ = static_cast<crd::f32>(0); // ablation: no base-table read (timing-only)
+#else
+          // V1.6: reordered base table [grp*1024 + n2v*32 + ml] — the 32 ml reads per t are CONTIGUOUS
+          const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 17], bi_ = basei[grp_ * 1024 + n2v * 32 + 17];
+#endif
+          const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+          n17r = vr_ * wr_ - vi_ * wi_; n17i = vr_ * wi_ + vi_ * wr_; }
+        V n16r, n16i; { const crd::usize i2_ = 16 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+          V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+          const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+#ifdef CRD_FFT_M16B_ABLATE_CONSTBASE
+          const crd::f32 br_ = static_cast<crd::f32>(1), bi_ = static_cast<crd::f32>(0); // ablation: no base-table read (timing-only)
+#else
+          // V1.6: reordered base table [grp*1024 + n2v*32 + ml] — the 32 ml reads per t are CONTIGUOUS
+          const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 16], bi_ = basei[grp_ * 1024 + n2v * 32 + 16];
+#endif
+          const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+          n16r = vr_ * wr_ - vi_ * wi_; n16i = vr_ * wi_ + vi_ * wr_; }
+        V n15r, n15i; { const crd::usize i2_ = 15 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+          V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+          const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+#ifdef CRD_FFT_M16B_ABLATE_CONSTBASE
+          const crd::f32 br_ = static_cast<crd::f32>(1), bi_ = static_cast<crd::f32>(0); // ablation: no base-table read (timing-only)
+#else
+          // V1.6: reordered base table [grp*1024 + n2v*32 + ml] — the 32 ml reads per t are CONTIGUOUS
+          const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 15], bi_ = basei[grp_ * 1024 + n2v * 32 + 15];
+#endif
+          const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+          n15r = vr_ * wr_ - vi_ * wi_; n15i = vr_ * wi_ + vi_ * wr_; }
+        const V n154r = n15r - n31r, n154i = n15i - n31i;
+        const V n153r = n15r + n31r, n153i = n15i + n31i;
+        const V n163r = V(static_cast<crd::f32>(-0.7071067811865475)) * n154r - V(static_cast<crd::f32>(-0.7071067811865476)) * n154i, n163i = V(static_cast<crd::f32>(-0.7071067811865475)) * n154i + V(static_cast<crd::f32>(-0.7071067811865476)) * n154r;
+        V n14r, n14i; { const crd::usize i2_ = 14 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+          V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+          const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+#ifdef CRD_FFT_M16B_ABLATE_CONSTBASE
+          const crd::f32 br_ = static_cast<crd::f32>(1), bi_ = static_cast<crd::f32>(0); // ablation: no base-table read (timing-only)
+#else
+          // V1.6: reordered base table [grp*1024 + n2v*32 + ml] — the 32 ml reads per t are CONTIGUOUS
+          const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 14], bi_ = basei[grp_ * 1024 + n2v * 32 + 14];
+#endif
+          const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+          n14r = vr_ * wr_ - vi_ * wi_; n14i = vr_ * wi_ + vi_ * wr_; }
+        const V n73r = n14r - n30r, n73i = n14i - n30i;
+        const V n72r = n14r + n30r, n72i = n14i + n30i;
+        const V n74r = n73i, n74i = -n73r;
+        V n13r, n13i; { const crd::usize i2_ = 13 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+          V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+          const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+#ifdef CRD_FFT_M16B_ABLATE_CONSTBASE
+          const crd::f32 br_ = static_cast<crd::f32>(1), bi_ = static_cast<crd::f32>(0); // ablation: no base-table read (timing-only)
+#else
+          // V1.6: reordered base table [grp*1024 + n2v*32 + ml] — the 32 ml reads per t are CONTIGUOUS
+          const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 13], bi_ = basei[grp_ * 1024 + n2v * 32 + 13];
+#endif
+          const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+          n13r = vr_ * wr_ - vi_ * wi_; n13i = vr_ * wi_ + vi_ * wr_; }
+        const V n125r = n13r - n29r, n125i = n13i - n29i;
+        const V n124r = n13r + n29r, n124i = n13i + n29i;
+        const V n134r = V(static_cast<crd::f32>(-0.7071067811865475)) * n125r - V(static_cast<crd::f32>(-0.7071067811865476)) * n125i, n134i = V(static_cast<crd::f32>(-0.7071067811865475)) * n125i + V(static_cast<crd::f32>(-0.7071067811865476)) * n125r;
+        V n12r, n12i; { const crd::usize i2_ = 12 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+          V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+          const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+#ifdef CRD_FFT_M16B_ABLATE_CONSTBASE
+          const crd::f32 br_ = static_cast<crd::f32>(1), bi_ = static_cast<crd::f32>(0); // ablation: no base-table read (timing-only)
+#else
+          // V1.6: reordered base table [grp*1024 + n2v*32 + ml] — the 32 ml reads per t are CONTIGUOUS
+          const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 12], bi_ = basei[grp_ * 1024 + n2v * 32 + 12];
+#endif
+          const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+          n12r = vr_ * wr_ - vi_ * wi_; n12i = vr_ * wi_ + vi_ * wr_; }
+        const V n44r = n12r - n28r, n44i = n12i - n28i;
+        const V n43r = n12r + n28r, n43i = n12i + n28i;
+        const V n53r = V(static_cast<crd::f32>(-0.7071067811865475)) * n44r - V(static_cast<crd::f32>(-0.7071067811865476)) * n44i, n53i = V(static_cast<crd::f32>(-0.7071067811865475)) * n44i + V(static_cast<crd::f32>(-0.7071067811865476)) * n44r;
+        V n11r, n11i; { const crd::usize i2_ = 11 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+          V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+          const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+#ifdef CRD_FFT_M16B_ABLATE_CONSTBASE
+          const crd::f32 br_ = static_cast<crd::f32>(1), bi_ = static_cast<crd::f32>(0); // ablation: no base-table read (timing-only)
+#else
+          // V1.6: reordered base table [grp*1024 + n2v*32 + ml] — the 32 ml reads per t are CONTIGUOUS
+          const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 11], bi_ = basei[grp_ * 1024 + n2v * 32 + 11];
+#endif
+          const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+          n11r = vr_ * wr_ - vi_ * wi_; n11i = vr_ * wi_ + vi_ * wr_; }
+        const V n145r = n11r - n27r, n145i = n11i - n27i;
+        const V n144r = n11r + n27r, n144i = n11i + n27i;
+        const V n146r = n145i, n146i = -n145r;
+        V n10r, n10i; { const crd::usize i2_ = 10 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+          V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+          const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+#ifdef CRD_FFT_M16B_ABLATE_CONSTBASE
+          const crd::f32 br_ = static_cast<crd::f32>(1), bi_ = static_cast<crd::f32>(0); // ablation: no base-table read (timing-only)
+#else
+          // V1.6: reordered base table [grp*1024 + n2v*32 + ml] — the 32 ml reads per t are CONTIGUOUS
+          const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 10], bi_ = basei[grp_ * 1024 + n2v * 32 + 10];
+#endif
+          const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+          n10r = vr_ * wr_ - vi_ * wi_; n10i = vr_ * wi_ + vi_ * wr_; }
+        const V n64r = n10r - n26r, n64i = n10i - n26i;
+        const V n63r = n10r + n26r, n63i = n10i + n26i;
+        const V n65r = n64i, n65i = -n64r;
+        V n9r, n9i; { const crd::usize i2_ = 9 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+          V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+          const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+#ifdef CRD_FFT_M16B_ABLATE_CONSTBASE
+          const crd::f32 br_ = static_cast<crd::f32>(1), bi_ = static_cast<crd::f32>(0); // ablation: no base-table read (timing-only)
+#else
+          // V1.6: reordered base table [grp*1024 + n2v*32 + ml] — the 32 ml reads per t are CONTIGUOUS
+          const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 9], bi_ = basei[grp_ * 1024 + n2v * 32 + 9];
+#endif
+          const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+          n9r = vr_ * wr_ - vi_ * wi_; n9i = vr_ * wi_ + vi_ * wr_; }
+        const V n116r = n9r - n25r, n116i = n9i - n25i;
+        const V n115r = n9r + n25r, n115i = n9i + n25i;
+        const V n117r = n116i, n117i = -n116r;
+        V n8r, n8i; { const crd::usize i2_ = 8 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+          V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+          const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+#ifdef CRD_FFT_M16B_ABLATE_CONSTBASE
+          const crd::f32 br_ = static_cast<crd::f32>(1), bi_ = static_cast<crd::f32>(0); // ablation: no base-table read (timing-only)
+#else
+          // V1.6: reordered base table [grp*1024 + n2v*32 + ml] — the 32 ml reads per t are CONTIGUOUS
+          const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 8], bi_ = basei[grp_ * 1024 + n2v * 32 + 8];
+#endif
+          const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+          n8r = vr_ * wr_ - vi_ * wi_; n8i = vr_ * wi_ + vi_ * wr_; }
+        const V n35r = n8r - n24r, n35i = n8i - n24i;
+        const V n34r = n8r + n24r, n34i = n8i + n24i;
+        const V n36r = n35i, n36i = -n35r;
+        V n7r, n7i; { const crd::usize i2_ = 7 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+          V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+          const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+#ifdef CRD_FFT_M16B_ABLATE_CONSTBASE
+          const crd::f32 br_ = static_cast<crd::f32>(1), bi_ = static_cast<crd::f32>(0); // ablation: no base-table read (timing-only)
+#else
+          // V1.6: reordered base table [grp*1024 + n2v*32 + ml] — the 32 ml reads per t are CONTIGUOUS
+          const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 7], bi_ = basei[grp_ * 1024 + n2v * 32 + 7];
+#endif
+          const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+          n7r = vr_ * wr_ - vi_ * wi_; n7i = vr_ * wi_ + vi_ * wr_; }
+        const V n152r = n7r - n23r, n152i = n7i - n23i;
+        const V n151r = n7r + n23r, n151i = n7i + n23i;
+        const V n162r = V(static_cast<crd::f32>(0.7071067811865476)) * n152r - V(static_cast<crd::f32>(-0.7071067811865475)) * n152i, n162i = V(static_cast<crd::f32>(0.7071067811865476)) * n152i + V(static_cast<crd::f32>(-0.7071067811865475)) * n152r;
+        const V n165r = n162r - n163r, n165i = n162i - n163i;
+        const V n164r = n162r + n163r, n164i = n162i + n163i;
+        const V n166r = n165i, n166i = -n165r;
+        const V n156r = n151r - n153r, n156i = n151i - n153i;
+        const V n155r = n151r + n153r, n155i = n151i + n153i;
+        const V n157r = n156i, n157i = -n156r;
+        V n6r, n6i; { const crd::usize i2_ = 6 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+          V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+          const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+#ifdef CRD_FFT_M16B_ABLATE_CONSTBASE
+          const crd::f32 br_ = static_cast<crd::f32>(1), bi_ = static_cast<crd::f32>(0); // ablation: no base-table read (timing-only)
+#else
+          // V1.6: reordered base table [grp*1024 + n2v*32 + ml] — the 32 ml reads per t are CONTIGUOUS
+          const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 6], bi_ = basei[grp_ * 1024 + n2v * 32 + 6];
+#endif
+          const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+          n6r = vr_ * wr_ - vi_ * wi_; n6i = vr_ * wi_ + vi_ * wr_; }
+        const V n71r = n6r - n22r, n71i = n6i - n22i;
+        const V n70r = n6r + n22r, n70i = n6i + n22i;
+        const V n78r = n71r - n74r, n78i = n71i - n74i;
+        const V n77r = n71r + n74r, n77i = n71i + n74i;
+        const V n105r = V(static_cast<crd::f32>(-0.9238795325112868)) * n78r - V(static_cast<crd::f32>(0.38268343236508967)) * n78i, n105i = V(static_cast<crd::f32>(-0.9238795325112868)) * n78i + V(static_cast<crd::f32>(0.38268343236508967)) * n78r;
+        const V n87r = V(static_cast<crd::f32>(0.38268343236508984)) * n77r - V(static_cast<crd::f32>(-0.9238795325112867)) * n77i, n87i = V(static_cast<crd::f32>(0.38268343236508984)) * n77i + V(static_cast<crd::f32>(-0.9238795325112867)) * n77r;
+        const V n76r = n70r - n72r, n76i = n70i - n72i;
+        const V n75r = n70r + n72r, n75i = n70i + n72i;
+        const V n96r = V(static_cast<crd::f32>(-0.7071067811865475)) * n76r - V(static_cast<crd::f32>(-0.7071067811865476)) * n76i, n96i = V(static_cast<crd::f32>(-0.7071067811865475)) * n76i + V(static_cast<crd::f32>(-0.7071067811865476)) * n76r;
+        V n5r, n5i; { const crd::usize i2_ = 5 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+          V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+          const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+#ifdef CRD_FFT_M16B_ABLATE_CONSTBASE
+          const crd::f32 br_ = static_cast<crd::f32>(1), bi_ = static_cast<crd::f32>(0); // ablation: no base-table read (timing-only)
+#else
+          // V1.6: reordered base table [grp*1024 + n2v*32 + ml] — the 32 ml reads per t are CONTIGUOUS
+          const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 5], bi_ = basei[grp_ * 1024 + n2v * 32 + 5];
+#endif
+          const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+          n5r = vr_ * wr_ - vi_ * wi_; n5i = vr_ * wi_ + vi_ * wr_; }
+        const V n123r = n5r - n21r, n123i = n5i - n21i;
+        const V n122r = n5r + n21r, n122i = n5i + n21i;
+        const V n133r = V(static_cast<crd::f32>(0.7071067811865476)) * n123r - V(static_cast<crd::f32>(-0.7071067811865475)) * n123i, n133i = V(static_cast<crd::f32>(0.7071067811865476)) * n123i + V(static_cast<crd::f32>(-0.7071067811865475)) * n123r;
+        const V n136r = n133r - n134r, n136i = n133i - n134i;
+        const V n135r = n133r + n134r, n135i = n133i + n134i;
+        const V n137r = n136i, n137i = -n136r;
+        const V n127r = n122r - n124r, n127i = n122i - n124i;
+        const V n126r = n122r + n124r, n126i = n122i + n124i;
+        const V n128r = n127i, n128i = -n127r;
+        V n4r, n4i; { const crd::usize i2_ = 4 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+          V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+          const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+#ifdef CRD_FFT_M16B_ABLATE_CONSTBASE
+          const crd::f32 br_ = static_cast<crd::f32>(1), bi_ = static_cast<crd::f32>(0); // ablation: no base-table read (timing-only)
+#else
+          // V1.6: reordered base table [grp*1024 + n2v*32 + ml] — the 32 ml reads per t are CONTIGUOUS
+          const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 4], bi_ = basei[grp_ * 1024 + n2v * 32 + 4];
+#endif
+          const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+          n4r = vr_ * wr_ - vi_ * wi_; n4i = vr_ * wi_ + vi_ * wr_; }
+        const V n42r = n4r - n20r, n42i = n4i - n20i;
+        const V n41r = n4r + n20r, n41i = n4i + n20i;
+        const V n52r = V(static_cast<crd::f32>(0.7071067811865476)) * n42r - V(static_cast<crd::f32>(-0.7071067811865475)) * n42i, n52i = V(static_cast<crd::f32>(0.7071067811865476)) * n42i + V(static_cast<crd::f32>(-0.7071067811865475)) * n42r;
+        const V n55r = n52r - n53r, n55i = n52i - n53i;
+        const V n54r = n52r + n53r, n54i = n52i + n53i;
+        const V n56r = n55i, n56i = -n55r;
+        const V n46r = n41r - n43r, n46i = n41i - n43i;
+        const V n45r = n41r + n43r, n45i = n41i + n43i;
+        const V n47r = n46i, n47i = -n46r;
+        V n3r, n3i; { const crd::usize i2_ = 3 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+          V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+          const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+#ifdef CRD_FFT_M16B_ABLATE_CONSTBASE
+          const crd::f32 br_ = static_cast<crd::f32>(1), bi_ = static_cast<crd::f32>(0); // ablation: no base-table read (timing-only)
+#else
+          // V1.6: reordered base table [grp*1024 + n2v*32 + ml] — the 32 ml reads per t are CONTIGUOUS
+          const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 3], bi_ = basei[grp_ * 1024 + n2v * 32 + 3];
+#endif
+          const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+          n3r = vr_ * wr_ - vi_ * wi_; n3i = vr_ * wi_ + vi_ * wr_; }
+        const V n143r = n3r - n19r, n143i = n3i - n19i;
+        const V n142r = n3r + n19r, n142i = n3i + n19i;
+        const V n150r = n143r - n146r, n150i = n143i - n146i;
+        const V n149r = n143r + n146r, n149i = n143i + n146i;
+        const V n170r = n150r - n166r, n170i = n150i - n166i;
+        const V n169r = n150r + n166r, n169i = n150i + n166i;
+        const V n233r = V(static_cast<crd::f32>(-0.5555702330196022)) * n170r - V(static_cast<crd::f32>(0.8314696123025452)) * n170i, n233i = V(static_cast<crd::f32>(-0.5555702330196022)) * n170i + V(static_cast<crd::f32>(0.8314696123025452)) * n170r;
+        const V n197r = V(static_cast<crd::f32>(-0.1950903220161282)) * n169r - V(static_cast<crd::f32>(-0.9807852804032304)) * n169i, n197i = V(static_cast<crd::f32>(-0.1950903220161282)) * n169i + V(static_cast<crd::f32>(-0.9807852804032304)) * n169r;
+        const V n168r = n149r - n164r, n168i = n149i - n164i;
+        const V n167r = n149r + n164r, n167i = n149i + n164i;
+        const V n215r = V(static_cast<crd::f32>(-0.9807852804032304)) * n168r - V(static_cast<crd::f32>(-0.1950903220161286)) * n168i, n215i = V(static_cast<crd::f32>(-0.9807852804032304)) * n168i + V(static_cast<crd::f32>(-0.1950903220161286)) * n168r;
+        const V n179r = V(static_cast<crd::f32>(0.8314696123025452)) * n167r - V(static_cast<crd::f32>(-0.5555702330196022)) * n167i, n179i = V(static_cast<crd::f32>(0.8314696123025452)) * n167i + V(static_cast<crd::f32>(-0.5555702330196022)) * n167r;
+        const V n148r = n142r - n144r, n148i = n142i - n144i;
+        const V n147r = n142r + n144r, n147i = n142i + n144i;
+        const V n161r = n148r - n157r, n161i = n148i - n157i;
+        const V n160r = n148r + n157r, n160i = n148i + n157i;
+        const V n224r = V(static_cast<crd::f32>(-0.9238795325112868)) * n161r - V(static_cast<crd::f32>(0.38268343236508967)) * n161i, n224i = V(static_cast<crd::f32>(-0.9238795325112868)) * n161i + V(static_cast<crd::f32>(0.38268343236508967)) * n161r;
+        const V n188r = V(static_cast<crd::f32>(0.38268343236508984)) * n160r - V(static_cast<crd::f32>(-0.9238795325112867)) * n160i, n188i = V(static_cast<crd::f32>(0.38268343236508984)) * n160i + V(static_cast<crd::f32>(-0.9238795325112867)) * n160r;
+        const V n159r = n147r - n155r, n159i = n147i - n155i;
+        const V n158r = n147r + n155r, n158i = n147i + n155i;
+        const V n206r = V(static_cast<crd::f32>(-0.7071067811865475)) * n159r - V(static_cast<crd::f32>(-0.7071067811865476)) * n159i, n206i = V(static_cast<crd::f32>(-0.7071067811865475)) * n159i + V(static_cast<crd::f32>(-0.7071067811865476)) * n159r;
+        V n2r, n2i; { const crd::usize i2_ = 2 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+          V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+          const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+#ifdef CRD_FFT_M16B_ABLATE_CONSTBASE
+          const crd::f32 br_ = static_cast<crd::f32>(1), bi_ = static_cast<crd::f32>(0); // ablation: no base-table read (timing-only)
+#else
+          // V1.6: reordered base table [grp*1024 + n2v*32 + ml] — the 32 ml reads per t are CONTIGUOUS
+          const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 2], bi_ = basei[grp_ * 1024 + n2v * 32 + 2];
+#endif
+          const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+          n2r = vr_ * wr_ - vi_ * wi_; n2i = vr_ * wi_ + vi_ * wr_; }
+        const V n62r = n2r - n18r, n62i = n2i - n18i;
+        const V n61r = n2r + n18r, n61i = n2i + n18i;
+        const V n69r = n62r - n65r, n69i = n62i - n65i;
+        const V n68r = n62r + n65r, n68i = n62i + n65i;
+        const V n104r = V(static_cast<crd::f32>(0.38268343236508984)) * n69r - V(static_cast<crd::f32>(-0.9238795325112867)) * n69i, n104i = V(static_cast<crd::f32>(0.38268343236508984)) * n69i + V(static_cast<crd::f32>(-0.9238795325112867)) * n69r;
+        const V n86r = V(static_cast<crd::f32>(0.9238795325112867)) * n68r - V(static_cast<crd::f32>(-0.3826834323650898)) * n68i, n86i = V(static_cast<crd::f32>(0.9238795325112867)) * n68i + V(static_cast<crd::f32>(-0.3826834323650898)) * n68r;
+        const V n107r = n104r - n105r, n107i = n104i - n105i;
+        const V n106r = n104r + n105r, n106i = n104i + n105i;
+        const V n108r = n107i, n108i = -n107r;
+        const V n89r = n86r - n87r, n89i = n86i - n87i;
+        const V n88r = n86r + n87r, n88i = n86i + n87i;
+        const V n90r = n89i, n90i = -n89r;
+        const V n67r = n61r - n63r, n67i = n61i - n63i;
+        const V n66r = n61r + n63r, n66i = n61i + n63i;
+        const V n95r = V(static_cast<crd::f32>(0.7071067811865476)) * n67r - V(static_cast<crd::f32>(-0.7071067811865475)) * n67i, n95i = V(static_cast<crd::f32>(0.7071067811865476)) * n67i + V(static_cast<crd::f32>(-0.7071067811865475)) * n67r;
+        const V n98r = n95r - n96r, n98i = n95i - n96i;
+        const V n97r = n95r + n96r, n97i = n95i + n96i;
+        const V n99r = n98i, n99i = -n98r;
+        const V n80r = n66r - n75r, n80i = n66i - n75i;
+        const V n79r = n66r + n75r, n79i = n66i + n75i;
+        const V n81r = n80i, n81i = -n80r;
+        V n1r, n1i; { const crd::usize i2_ = 1 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+          V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+          const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+#ifdef CRD_FFT_M16B_ABLATE_CONSTBASE
+          const crd::f32 br_ = static_cast<crd::f32>(1), bi_ = static_cast<crd::f32>(0); // ablation: no base-table read (timing-only)
+#else
+          // V1.6: reordered base table [grp*1024 + n2v*32 + ml] — the 32 ml reads per t are CONTIGUOUS
+          const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 1], bi_ = basei[grp_ * 1024 + n2v * 32 + 1];
+#endif
+          const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+          n1r = vr_ * wr_ - vi_ * wi_; n1i = vr_ * wi_ + vi_ * wr_; }
+        const V n114r = n1r - n17r, n114i = n1i - n17i;
+        const V n113r = n1r + n17r, n113i = n1i + n17i;
+        const V n121r = n114r - n117r, n121i = n114i - n117i;
+        const V n120r = n114r + n117r, n120i = n114i + n117i;
+        const V n141r = n121r - n137r, n141i = n121i - n137i;
+        const V n140r = n121r + n137r, n140i = n121i + n137i;
+        const V n232r = V(static_cast<crd::f32>(0.19509032201612833)) * n141r - V(static_cast<crd::f32>(-0.9807852804032304)) * n141i, n232i = V(static_cast<crd::f32>(0.19509032201612833)) * n141i + V(static_cast<crd::f32>(-0.9807852804032304)) * n141r;
+        const V n196r = V(static_cast<crd::f32>(0.8314696123025452)) * n140r - V(static_cast<crd::f32>(-0.5555702330196022)) * n140i, n196i = V(static_cast<crd::f32>(0.8314696123025452)) * n140i + V(static_cast<crd::f32>(-0.5555702330196022)) * n140r;
+        const V n235r = n232r - n233r, n235i = n232i - n233i;
+        const V n234r = n232r + n233r, n234i = n232i + n233i;
+        const V n236r = n235i, n236i = -n235r;
+        const V n199r = n196r - n197r, n199i = n196i - n197i;
+        const V n198r = n196r + n197r, n198i = n196i + n197i;
+        const V n200r = n199i, n200i = -n199r;
+        const V n139r = n120r - n135r, n139i = n120i - n135i;
+        const V n138r = n120r + n135r, n138i = n120i + n135i;
+        const V n214r = V(static_cast<crd::f32>(0.5555702330196023)) * n139r - V(static_cast<crd::f32>(-0.8314696123025452)) * n139i, n214i = V(static_cast<crd::f32>(0.5555702330196023)) * n139i + V(static_cast<crd::f32>(-0.8314696123025452)) * n139r;
+        const V n178r = V(static_cast<crd::f32>(0.9807852804032304)) * n138r - V(static_cast<crd::f32>(-0.19509032201612825)) * n138i, n178i = V(static_cast<crd::f32>(0.9807852804032304)) * n138i + V(static_cast<crd::f32>(-0.19509032201612825)) * n138r;
+        const V n217r = n214r - n215r, n217i = n214i - n215i;
+        const V n216r = n214r + n215r, n216i = n214i + n215i;
+        const V n218r = n217i, n218i = -n217r;
+        const V n181r = n178r - n179r, n181i = n178i - n179i;
+        const V n180r = n178r + n179r, n180i = n178i + n179i;
+        const V n182r = n181i, n182i = -n181r;
+        const V n119r = n113r - n115r, n119i = n113i - n115i;
+        const V n118r = n113r + n115r, n118i = n113i + n115i;
+        const V n132r = n119r - n128r, n132i = n119i - n128i;
+        const V n131r = n119r + n128r, n131i = n119i + n128i;
+        const V n223r = V(static_cast<crd::f32>(0.38268343236508984)) * n132r - V(static_cast<crd::f32>(-0.9238795325112867)) * n132i, n223i = V(static_cast<crd::f32>(0.38268343236508984)) * n132i + V(static_cast<crd::f32>(-0.9238795325112867)) * n132r;
+        const V n187r = V(static_cast<crd::f32>(0.9238795325112867)) * n131r - V(static_cast<crd::f32>(-0.3826834323650898)) * n131i, n187i = V(static_cast<crd::f32>(0.9238795325112867)) * n131i + V(static_cast<crd::f32>(-0.3826834323650898)) * n131r;
+        const V n226r = n223r - n224r, n226i = n223i - n224i;
+        const V n225r = n223r + n224r, n225i = n223i + n224i;
+        const V n227r = n226i, n227i = -n226r;
+        const V n190r = n187r - n188r, n190i = n187i - n188i;
+        const V n189r = n187r + n188r, n189i = n187i + n188i;
+        const V n191r = n190i, n191i = -n190r;
+        const V n130r = n118r - n126r, n130i = n118i - n126i;
+        const V n129r = n118r + n126r, n129i = n118i + n126i;
+        const V n205r = V(static_cast<crd::f32>(0.7071067811865476)) * n130r - V(static_cast<crd::f32>(-0.7071067811865475)) * n130i, n205i = V(static_cast<crd::f32>(0.7071067811865476)) * n130i + V(static_cast<crd::f32>(-0.7071067811865475)) * n130r;
+        const V n208r = n205r - n206r, n208i = n205i - n206i;
+        const V n207r = n205r + n206r, n207i = n205i + n206i;
+        const V n209r = n208i, n209i = -n208r;
+        const V n172r = n129r - n158r, n172i = n129i - n158i;
+        const V n171r = n129r + n158r, n171i = n129i + n158i;
+        const V n173r = n172i, n173i = -n172r;
+        V n0r, n0i; { const crd::usize i2_ = 0 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+          V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+          const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+#ifdef CRD_FFT_M16B_ABLATE_CONSTBASE
+          const crd::f32 br_ = static_cast<crd::f32>(1), bi_ = static_cast<crd::f32>(0); // ablation: no base-table read (timing-only)
+#else
+          // V1.6: reordered base table [grp*1024 + n2v*32 + ml] — the 32 ml reads per t are CONTIGUOUS
+          const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 0], bi_ = basei[grp_ * 1024 + n2v * 32 + 0];
+#endif
+          const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+          n0r = vr_ * wr_ - vi_ * wi_; n0i = vr_ * wi_ + vi_ * wr_; }
+        const V n33r = n0r - n16r, n33i = n0i - n16i;
+        const V n32r = n0r + n16r, n32i = n0i + n16i;
+        const V n40r = n33r - n36r, n40i = n33i - n36i;
+        const V n39r = n33r + n36r, n39i = n33i + n36i;
+        const V n60r = n40r - n56r, n60i = n40i - n56i;
+        const V n59r = n40r + n56r, n59i = n40i + n56i;
+        const V n112r = n60r - n108r, n112i = n60i - n108i;
+        const V n111r = n60r + n108r, n111i = n60i + n108i;
+        const V n240r = n112r - n236r, n240i = n112i - n236i;
+        { const V wr = V(tr[31]), wi = V(ti[31]);
+          const V or_ = n240r * wr - n240i * wi, oi_ = n240r * wi + n240i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 31 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 31 * 128 + bb0), or_, oi_); }
+#endif
+        const V n239r = n112r + n236r, n239i = n112i + n236i;
+        { const V wr = V(tr[15]), wi = V(ti[15]);
+          const V or_ = n239r * wr - n239i * wi, oi_ = n239r * wi + n239i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 15 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 15 * 128 + bb0), or_, oi_); }
+#endif
+        const V n238r = n111r - n234r, n238i = n111i - n234i;
+        { const V wr = V(tr[23]), wi = V(ti[23]);
+          const V or_ = n238r * wr - n238i * wi, oi_ = n238r * wi + n238i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 23 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 23 * 128 + bb0), or_, oi_); }
+#endif
+        const V n237r = n111r + n234r, n237i = n111i + n234i;
+        { const V wr = V(tr[7]), wi = V(ti[7]);
+          const V or_ = n237r * wr - n237i * wi, oi_ = n237r * wi + n237i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 7 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 7 * 128 + bb0), or_, oi_); }
+#endif
+        const V n110r = n59r - n106r, n110i = n59i - n106i;
+        const V n109r = n59r + n106r, n109i = n59i + n106i;
+        const V n204r = n110r - n200r, n204i = n110i - n200i;
+        { const V wr = V(tr[27]), wi = V(ti[27]);
+          const V or_ = n204r * wr - n204i * wi, oi_ = n204r * wi + n204i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 27 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 27 * 128 + bb0), or_, oi_); }
+#endif
+        const V n203r = n110r + n200r, n203i = n110i + n200i;
+        { const V wr = V(tr[11]), wi = V(ti[11]);
+          const V or_ = n203r * wr - n203i * wi, oi_ = n203r * wi + n203i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 11 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 11 * 128 + bb0), or_, oi_); }
+#endif
+        const V n202r = n109r - n198r, n202i = n109i - n198i;
+        { const V wr = V(tr[19]), wi = V(ti[19]);
+          const V or_ = n202r * wr - n202i * wi, oi_ = n202r * wi + n202i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 19 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 19 * 128 + bb0), or_, oi_); }
+#endif
+        const V n201r = n109r + n198r, n201i = n109i + n198i;
+        { const V wr = V(tr[3]), wi = V(ti[3]);
+          const V or_ = n201r * wr - n201i * wi, oi_ = n201r * wi + n201i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 3 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 3 * 128 + bb0), or_, oi_); }
+#endif
+        const V n58r = n39r - n54r, n58i = n39i - n54i;
+        const V n57r = n39r + n54r, n57i = n39i + n54i;
+        const V n94r = n58r - n90r, n94i = n58i - n90i;
+        const V n93r = n58r + n90r, n93i = n58i + n90i;
+        const V n222r = n94r - n218r, n222i = n94i - n218i;
+        { const V wr = V(tr[29]), wi = V(ti[29]);
+          const V or_ = n222r * wr - n222i * wi, oi_ = n222r * wi + n222i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 29 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 29 * 128 + bb0), or_, oi_); }
+#endif
+        const V n221r = n94r + n218r, n221i = n94i + n218i;
+        { const V wr = V(tr[13]), wi = V(ti[13]);
+          const V or_ = n221r * wr - n221i * wi, oi_ = n221r * wi + n221i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 13 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 13 * 128 + bb0), or_, oi_); }
+#endif
+        const V n220r = n93r - n216r, n220i = n93i - n216i;
+        { const V wr = V(tr[21]), wi = V(ti[21]);
+          const V or_ = n220r * wr - n220i * wi, oi_ = n220r * wi + n220i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 21 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 21 * 128 + bb0), or_, oi_); }
+#endif
+        const V n219r = n93r + n216r, n219i = n93i + n216i;
+        { const V wr = V(tr[5]), wi = V(ti[5]);
+          const V or_ = n219r * wr - n219i * wi, oi_ = n219r * wi + n219i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 5 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 5 * 128 + bb0), or_, oi_); }
+#endif
+        const V n92r = n57r - n88r, n92i = n57i - n88i;
+        const V n91r = n57r + n88r, n91i = n57i + n88i;
+        const V n186r = n92r - n182r, n186i = n92i - n182i;
+        { const V wr = V(tr[25]), wi = V(ti[25]);
+          const V or_ = n186r * wr - n186i * wi, oi_ = n186r * wi + n186i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 25 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 25 * 128 + bb0), or_, oi_); }
+#endif
+        const V n185r = n92r + n182r, n185i = n92i + n182i;
+        { const V wr = V(tr[9]), wi = V(ti[9]);
+          const V or_ = n185r * wr - n185i * wi, oi_ = n185r * wi + n185i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 9 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 9 * 128 + bb0), or_, oi_); }
+#endif
+        const V n184r = n91r - n180r, n184i = n91i - n180i;
+        { const V wr = V(tr[17]), wi = V(ti[17]);
+          const V or_ = n184r * wr - n184i * wi, oi_ = n184r * wi + n184i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 17 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 17 * 128 + bb0), or_, oi_); }
+#endif
+        const V n183r = n91r + n180r, n183i = n91i + n180i;
+        { const V wr = V(tr[1]), wi = V(ti[1]);
+          const V or_ = n183r * wr - n183i * wi, oi_ = n183r * wi + n183i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 1 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 1 * 128 + bb0), or_, oi_); }
+#endif
+        const V n38r = n32r - n34r, n38i = n32i - n34i;
+        const V n37r = n32r + n34r, n37i = n32i + n34i;
+        const V n51r = n38r - n47r, n51i = n38i - n47i;
+        const V n50r = n38r + n47r, n50i = n38i + n47i;
+        const V n103r = n51r - n99r, n103i = n51i - n99i;
+        const V n102r = n51r + n99r, n102i = n51i + n99i;
+        const V n231r = n103r - n227r, n231i = n103i - n227i;
+        { const V wr = V(tr[30]), wi = V(ti[30]);
+          const V or_ = n231r * wr - n231i * wi, oi_ = n231r * wi + n231i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 30 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 30 * 128 + bb0), or_, oi_); }
+#endif
+        const V n230r = n103r + n227r, n230i = n103i + n227i;
+        { const V wr = V(tr[14]), wi = V(ti[14]);
+          const V or_ = n230r * wr - n230i * wi, oi_ = n230r * wi + n230i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 14 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 14 * 128 + bb0), or_, oi_); }
+#endif
+        const V n229r = n102r - n225r, n229i = n102i - n225i;
+        { const V wr = V(tr[22]), wi = V(ti[22]);
+          const V or_ = n229r * wr - n229i * wi, oi_ = n229r * wi + n229i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 22 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 22 * 128 + bb0), or_, oi_); }
+#endif
+        const V n228r = n102r + n225r, n228i = n102i + n225i;
+        { const V wr = V(tr[6]), wi = V(ti[6]);
+          const V or_ = n228r * wr - n228i * wi, oi_ = n228r * wi + n228i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 6 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 6 * 128 + bb0), or_, oi_); }
+#endif
+        const V n101r = n50r - n97r, n101i = n50i - n97i;
+        const V n100r = n50r + n97r, n100i = n50i + n97i;
+        const V n195r = n101r - n191r, n195i = n101i - n191i;
+        { const V wr = V(tr[26]), wi = V(ti[26]);
+          const V or_ = n195r * wr - n195i * wi, oi_ = n195r * wi + n195i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 26 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 26 * 128 + bb0), or_, oi_); }
+#endif
+        const V n194r = n101r + n191r, n194i = n101i + n191i;
+        { const V wr = V(tr[10]), wi = V(ti[10]);
+          const V or_ = n194r * wr - n194i * wi, oi_ = n194r * wi + n194i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 10 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 10 * 128 + bb0), or_, oi_); }
+#endif
+        const V n193r = n100r - n189r, n193i = n100i - n189i;
+        { const V wr = V(tr[18]), wi = V(ti[18]);
+          const V or_ = n193r * wr - n193i * wi, oi_ = n193r * wi + n193i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 18 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 18 * 128 + bb0), or_, oi_); }
+#endif
+        const V n192r = n100r + n189r, n192i = n100i + n189i;
+        { const V wr = V(tr[2]), wi = V(ti[2]);
+          const V or_ = n192r * wr - n192i * wi, oi_ = n192r * wi + n192i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 2 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 2 * 128 + bb0), or_, oi_); }
+#endif
+        const V n49r = n37r - n45r, n49i = n37i - n45i;
+        const V n48r = n37r + n45r, n48i = n37i + n45i;
+        const V n85r = n49r - n81r, n85i = n49i - n81i;
+        const V n84r = n49r + n81r, n84i = n49i + n81i;
+        const V n213r = n85r - n209r, n213i = n85i - n209i;
+        { const V wr = V(tr[28]), wi = V(ti[28]);
+          const V or_ = n213r * wr - n213i * wi, oi_ = n213r * wi + n213i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 28 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 28 * 128 + bb0), or_, oi_); }
+#endif
+        const V n212r = n85r + n209r, n212i = n85i + n209i;
+        { const V wr = V(tr[12]), wi = V(ti[12]);
+          const V or_ = n212r * wr - n212i * wi, oi_ = n212r * wi + n212i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 12 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 12 * 128 + bb0), or_, oi_); }
+#endif
+        const V n211r = n84r - n207r, n211i = n84i - n207i;
+        { const V wr = V(tr[20]), wi = V(ti[20]);
+          const V or_ = n211r * wr - n211i * wi, oi_ = n211r * wi + n211i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 20 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 20 * 128 + bb0), or_, oi_); }
+#endif
+        const V n210r = n84r + n207r, n210i = n84i + n207i;
+        { const V wr = V(tr[4]), wi = V(ti[4]);
+          const V or_ = n210r * wr - n210i * wi, oi_ = n210r * wi + n210i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 4 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 4 * 128 + bb0), or_, oi_); }
+#endif
+        const V n83r = n48r - n79r, n83i = n48i - n79i;
+        const V n82r = n48r + n79r, n82i = n48i + n79i;
+        const V n177r = n83r - n173r, n177i = n83i - n173i;
+        { const V wr = V(tr[24]), wi = V(ti[24]);
+          const V or_ = n177r * wr - n177i * wi, oi_ = n177r * wi + n177i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 24 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 24 * 128 + bb0), or_, oi_); }
+#endif
+        const V n176r = n83r + n173r, n176i = n83i + n173i;
+        { const V wr = V(tr[8]), wi = V(ti[8]);
+          const V or_ = n176r * wr - n176i * wi, oi_ = n176r * wi + n176i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 8 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 8 * 128 + bb0), or_, oi_); }
+#endif
+        const V n175r = n82r - n171r, n175i = n82i - n171i;
+        { const V wr = V(tr[16]), wi = V(ti[16]);
+          const V or_ = n175r * wr - n175i * wi, oi_ = n175r * wi + n175i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 16 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 16 * 128 + bb0), or_, oi_); }
+#endif
+        const V n174r = n82r + n171r, n174i = n82i + n171i;
+        { const V wr = V(tr[0]), wi = V(ti[0]);
+          const V or_ = n174r * wr - n174i * wi, oi_ = n174r * wi + n174i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 4096 + 0 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 0 * 128 + bb0), or_, oi_); }
+#endif
+    }
+}
+// M17 scatter-FUSED stage-2 (N=32, bw=128): 32-pt FFT + direct final-output store (no scratch/scatter). GEN.
+CRD_FORCEINLINE void codelet32_batched_scatter(const crd::hesap::Complex<crd::f32>* in,
+    crd::hesap::Complex<crd::f32>* data_base, crd::usize k1, crd::usize n1, crd::usize b) noexcept
+{
+    using V = crd::math::simd::Vec8f;
+    namespace simd = crd::math::simd;
+    for (crd::usize t = 0; t + 8 <= b; t += 8)
+    {
+        V n31r, n31i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 31 * b + t), n31r, n31i);
+        V n30r, n30i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 30 * b + t), n30r, n30i);
+        V n29r, n29i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 29 * b + t), n29r, n29i);
+        V n28r, n28i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 28 * b + t), n28r, n28i);
+        V n27r, n27i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 27 * b + t), n27r, n27i);
+        V n26r, n26i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 26 * b + t), n26r, n26i);
+        V n25r, n25i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 25 * b + t), n25r, n25i);
+        V n24r, n24i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 24 * b + t), n24r, n24i);
+        V n23r, n23i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 23 * b + t), n23r, n23i);
+        V n22r, n22i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 22 * b + t), n22r, n22i);
+        V n21r, n21i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 21 * b + t), n21r, n21i);
+        V n20r, n20i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 20 * b + t), n20r, n20i);
+        V n19r, n19i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 19 * b + t), n19r, n19i);
+        V n18r, n18i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 18 * b + t), n18r, n18i);
+        V n17r, n17i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 17 * b + t), n17r, n17i);
+        V n16r, n16i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 16 * b + t), n16r, n16i);
+        V n15r, n15i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 15 * b + t), n15r, n15i);
+        const V n154r = n15r - n31r, n154i = n15i - n31i;
+        const V n153r = n15r + n31r, n153i = n15i + n31i;
+        const V n163r = V(static_cast<crd::f32>(-0.7071067811865475)) * n154r - V(static_cast<crd::f32>(-0.7071067811865476)) * n154i, n163i = V(static_cast<crd::f32>(-0.7071067811865475)) * n154i + V(static_cast<crd::f32>(-0.7071067811865476)) * n154r;
+        V n14r, n14i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 14 * b + t), n14r, n14i);
+        const V n73r = n14r - n30r, n73i = n14i - n30i;
+        const V n72r = n14r + n30r, n72i = n14i + n30i;
+        const V n74r = n73i, n74i = -n73r;
+        V n13r, n13i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 13 * b + t), n13r, n13i);
+        const V n125r = n13r - n29r, n125i = n13i - n29i;
+        const V n124r = n13r + n29r, n124i = n13i + n29i;
+        const V n134r = V(static_cast<crd::f32>(-0.7071067811865475)) * n125r - V(static_cast<crd::f32>(-0.7071067811865476)) * n125i, n134i = V(static_cast<crd::f32>(-0.7071067811865475)) * n125i + V(static_cast<crd::f32>(-0.7071067811865476)) * n125r;
+        V n12r, n12i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 12 * b + t), n12r, n12i);
+        const V n44r = n12r - n28r, n44i = n12i - n28i;
+        const V n43r = n12r + n28r, n43i = n12i + n28i;
+        const V n53r = V(static_cast<crd::f32>(-0.7071067811865475)) * n44r - V(static_cast<crd::f32>(-0.7071067811865476)) * n44i, n53i = V(static_cast<crd::f32>(-0.7071067811865475)) * n44i + V(static_cast<crd::f32>(-0.7071067811865476)) * n44r;
+        V n11r, n11i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 11 * b + t), n11r, n11i);
+        const V n145r = n11r - n27r, n145i = n11i - n27i;
+        const V n144r = n11r + n27r, n144i = n11i + n27i;
+        const V n146r = n145i, n146i = -n145r;
+        V n10r, n10i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 10 * b + t), n10r, n10i);
+        const V n64r = n10r - n26r, n64i = n10i - n26i;
+        const V n63r = n10r + n26r, n63i = n10i + n26i;
+        const V n65r = n64i, n65i = -n64r;
+        V n9r, n9i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 9 * b + t), n9r, n9i);
+        const V n116r = n9r - n25r, n116i = n9i - n25i;
+        const V n115r = n9r + n25r, n115i = n9i + n25i;
+        const V n117r = n116i, n117i = -n116r;
+        V n8r, n8i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 8 * b + t), n8r, n8i);
+        const V n35r = n8r - n24r, n35i = n8i - n24i;
+        const V n34r = n8r + n24r, n34i = n8i + n24i;
+        const V n36r = n35i, n36i = -n35r;
+        V n7r, n7i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 7 * b + t), n7r, n7i);
+        const V n152r = n7r - n23r, n152i = n7i - n23i;
+        const V n151r = n7r + n23r, n151i = n7i + n23i;
+        const V n162r = V(static_cast<crd::f32>(0.7071067811865476)) * n152r - V(static_cast<crd::f32>(-0.7071067811865475)) * n152i, n162i = V(static_cast<crd::f32>(0.7071067811865476)) * n152i + V(static_cast<crd::f32>(-0.7071067811865475)) * n152r;
+        const V n165r = n162r - n163r, n165i = n162i - n163i;
+        const V n164r = n162r + n163r, n164i = n162i + n163i;
+        const V n166r = n165i, n166i = -n165r;
+        const V n156r = n151r - n153r, n156i = n151i - n153i;
+        const V n155r = n151r + n153r, n155i = n151i + n153i;
+        const V n157r = n156i, n157i = -n156r;
+        V n6r, n6i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 6 * b + t), n6r, n6i);
+        const V n71r = n6r - n22r, n71i = n6i - n22i;
+        const V n70r = n6r + n22r, n70i = n6i + n22i;
+        const V n78r = n71r - n74r, n78i = n71i - n74i;
+        const V n77r = n71r + n74r, n77i = n71i + n74i;
+        const V n105r = V(static_cast<crd::f32>(-0.9238795325112868)) * n78r - V(static_cast<crd::f32>(0.38268343236508967)) * n78i, n105i = V(static_cast<crd::f32>(-0.9238795325112868)) * n78i + V(static_cast<crd::f32>(0.38268343236508967)) * n78r;
+        const V n87r = V(static_cast<crd::f32>(0.38268343236508984)) * n77r - V(static_cast<crd::f32>(-0.9238795325112867)) * n77i, n87i = V(static_cast<crd::f32>(0.38268343236508984)) * n77i + V(static_cast<crd::f32>(-0.9238795325112867)) * n77r;
+        const V n76r = n70r - n72r, n76i = n70i - n72i;
+        const V n75r = n70r + n72r, n75i = n70i + n72i;
+        const V n96r = V(static_cast<crd::f32>(-0.7071067811865475)) * n76r - V(static_cast<crd::f32>(-0.7071067811865476)) * n76i, n96i = V(static_cast<crd::f32>(-0.7071067811865475)) * n76i + V(static_cast<crd::f32>(-0.7071067811865476)) * n76r;
+        V n5r, n5i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 5 * b + t), n5r, n5i);
+        const V n123r = n5r - n21r, n123i = n5i - n21i;
+        const V n122r = n5r + n21r, n122i = n5i + n21i;
+        const V n133r = V(static_cast<crd::f32>(0.7071067811865476)) * n123r - V(static_cast<crd::f32>(-0.7071067811865475)) * n123i, n133i = V(static_cast<crd::f32>(0.7071067811865476)) * n123i + V(static_cast<crd::f32>(-0.7071067811865475)) * n123r;
+        const V n136r = n133r - n134r, n136i = n133i - n134i;
+        const V n135r = n133r + n134r, n135i = n133i + n134i;
+        const V n137r = n136i, n137i = -n136r;
+        const V n127r = n122r - n124r, n127i = n122i - n124i;
+        const V n126r = n122r + n124r, n126i = n122i + n124i;
+        const V n128r = n127i, n128i = -n127r;
+        V n4r, n4i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 4 * b + t), n4r, n4i);
+        const V n42r = n4r - n20r, n42i = n4i - n20i;
+        const V n41r = n4r + n20r, n41i = n4i + n20i;
+        const V n52r = V(static_cast<crd::f32>(0.7071067811865476)) * n42r - V(static_cast<crd::f32>(-0.7071067811865475)) * n42i, n52i = V(static_cast<crd::f32>(0.7071067811865476)) * n42i + V(static_cast<crd::f32>(-0.7071067811865475)) * n42r;
+        const V n55r = n52r - n53r, n55i = n52i - n53i;
+        const V n54r = n52r + n53r, n54i = n52i + n53i;
+        const V n56r = n55i, n56i = -n55r;
+        const V n46r = n41r - n43r, n46i = n41i - n43i;
+        const V n45r = n41r + n43r, n45i = n41i + n43i;
+        const V n47r = n46i, n47i = -n46r;
+        V n3r, n3i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 3 * b + t), n3r, n3i);
+        const V n143r = n3r - n19r, n143i = n3i - n19i;
+        const V n142r = n3r + n19r, n142i = n3i + n19i;
+        const V n150r = n143r - n146r, n150i = n143i - n146i;
+        const V n149r = n143r + n146r, n149i = n143i + n146i;
+        const V n170r = n150r - n166r, n170i = n150i - n166i;
+        const V n169r = n150r + n166r, n169i = n150i + n166i;
+        const V n233r = V(static_cast<crd::f32>(-0.5555702330196022)) * n170r - V(static_cast<crd::f32>(0.8314696123025452)) * n170i, n233i = V(static_cast<crd::f32>(-0.5555702330196022)) * n170i + V(static_cast<crd::f32>(0.8314696123025452)) * n170r;
+        const V n197r = V(static_cast<crd::f32>(-0.1950903220161282)) * n169r - V(static_cast<crd::f32>(-0.9807852804032304)) * n169i, n197i = V(static_cast<crd::f32>(-0.1950903220161282)) * n169i + V(static_cast<crd::f32>(-0.9807852804032304)) * n169r;
+        const V n168r = n149r - n164r, n168i = n149i - n164i;
+        const V n167r = n149r + n164r, n167i = n149i + n164i;
+        const V n215r = V(static_cast<crd::f32>(-0.9807852804032304)) * n168r - V(static_cast<crd::f32>(-0.1950903220161286)) * n168i, n215i = V(static_cast<crd::f32>(-0.9807852804032304)) * n168i + V(static_cast<crd::f32>(-0.1950903220161286)) * n168r;
+        const V n179r = V(static_cast<crd::f32>(0.8314696123025452)) * n167r - V(static_cast<crd::f32>(-0.5555702330196022)) * n167i, n179i = V(static_cast<crd::f32>(0.8314696123025452)) * n167i + V(static_cast<crd::f32>(-0.5555702330196022)) * n167r;
+        const V n148r = n142r - n144r, n148i = n142i - n144i;
+        const V n147r = n142r + n144r, n147i = n142i + n144i;
+        const V n161r = n148r - n157r, n161i = n148i - n157i;
+        const V n160r = n148r + n157r, n160i = n148i + n157i;
+        const V n224r = V(static_cast<crd::f32>(-0.9238795325112868)) * n161r - V(static_cast<crd::f32>(0.38268343236508967)) * n161i, n224i = V(static_cast<crd::f32>(-0.9238795325112868)) * n161i + V(static_cast<crd::f32>(0.38268343236508967)) * n161r;
+        const V n188r = V(static_cast<crd::f32>(0.38268343236508984)) * n160r - V(static_cast<crd::f32>(-0.9238795325112867)) * n160i, n188i = V(static_cast<crd::f32>(0.38268343236508984)) * n160i + V(static_cast<crd::f32>(-0.9238795325112867)) * n160r;
+        const V n159r = n147r - n155r, n159i = n147i - n155i;
+        const V n158r = n147r + n155r, n158i = n147i + n155i;
+        const V n206r = V(static_cast<crd::f32>(-0.7071067811865475)) * n159r - V(static_cast<crd::f32>(-0.7071067811865476)) * n159i, n206i = V(static_cast<crd::f32>(-0.7071067811865475)) * n159i + V(static_cast<crd::f32>(-0.7071067811865476)) * n159r;
+        V n2r, n2i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 2 * b + t), n2r, n2i);
+        const V n62r = n2r - n18r, n62i = n2i - n18i;
+        const V n61r = n2r + n18r, n61i = n2i + n18i;
+        const V n69r = n62r - n65r, n69i = n62i - n65i;
+        const V n68r = n62r + n65r, n68i = n62i + n65i;
+        const V n104r = V(static_cast<crd::f32>(0.38268343236508984)) * n69r - V(static_cast<crd::f32>(-0.9238795325112867)) * n69i, n104i = V(static_cast<crd::f32>(0.38268343236508984)) * n69i + V(static_cast<crd::f32>(-0.9238795325112867)) * n69r;
+        const V n86r = V(static_cast<crd::f32>(0.9238795325112867)) * n68r - V(static_cast<crd::f32>(-0.3826834323650898)) * n68i, n86i = V(static_cast<crd::f32>(0.9238795325112867)) * n68i + V(static_cast<crd::f32>(-0.3826834323650898)) * n68r;
+        const V n107r = n104r - n105r, n107i = n104i - n105i;
+        const V n106r = n104r + n105r, n106i = n104i + n105i;
+        const V n108r = n107i, n108i = -n107r;
+        const V n89r = n86r - n87r, n89i = n86i - n87i;
+        const V n88r = n86r + n87r, n88i = n86i + n87i;
+        const V n90r = n89i, n90i = -n89r;
+        const V n67r = n61r - n63r, n67i = n61i - n63i;
+        const V n66r = n61r + n63r, n66i = n61i + n63i;
+        const V n95r = V(static_cast<crd::f32>(0.7071067811865476)) * n67r - V(static_cast<crd::f32>(-0.7071067811865475)) * n67i, n95i = V(static_cast<crd::f32>(0.7071067811865476)) * n67i + V(static_cast<crd::f32>(-0.7071067811865475)) * n67r;
+        const V n98r = n95r - n96r, n98i = n95i - n96i;
+        const V n97r = n95r + n96r, n97i = n95i + n96i;
+        const V n99r = n98i, n99i = -n98r;
+        const V n80r = n66r - n75r, n80i = n66i - n75i;
+        const V n79r = n66r + n75r, n79i = n66i + n75i;
+        const V n81r = n80i, n81i = -n80r;
+        V n1r, n1i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 1 * b + t), n1r, n1i);
+        const V n114r = n1r - n17r, n114i = n1i - n17i;
+        const V n113r = n1r + n17r, n113i = n1i + n17i;
+        const V n121r = n114r - n117r, n121i = n114i - n117i;
+        const V n120r = n114r + n117r, n120i = n114i + n117i;
+        const V n141r = n121r - n137r, n141i = n121i - n137i;
+        const V n140r = n121r + n137r, n140i = n121i + n137i;
+        const V n232r = V(static_cast<crd::f32>(0.19509032201612833)) * n141r - V(static_cast<crd::f32>(-0.9807852804032304)) * n141i, n232i = V(static_cast<crd::f32>(0.19509032201612833)) * n141i + V(static_cast<crd::f32>(-0.9807852804032304)) * n141r;
+        const V n196r = V(static_cast<crd::f32>(0.8314696123025452)) * n140r - V(static_cast<crd::f32>(-0.5555702330196022)) * n140i, n196i = V(static_cast<crd::f32>(0.8314696123025452)) * n140i + V(static_cast<crd::f32>(-0.5555702330196022)) * n140r;
+        const V n235r = n232r - n233r, n235i = n232i - n233i;
+        const V n234r = n232r + n233r, n234i = n232i + n233i;
+        const V n236r = n235i, n236i = -n235r;
+        const V n199r = n196r - n197r, n199i = n196i - n197i;
+        const V n198r = n196r + n197r, n198i = n196i + n197i;
+        const V n200r = n199i, n200i = -n199r;
+        const V n139r = n120r - n135r, n139i = n120i - n135i;
+        const V n138r = n120r + n135r, n138i = n120i + n135i;
+        const V n214r = V(static_cast<crd::f32>(0.5555702330196023)) * n139r - V(static_cast<crd::f32>(-0.8314696123025452)) * n139i, n214i = V(static_cast<crd::f32>(0.5555702330196023)) * n139i + V(static_cast<crd::f32>(-0.8314696123025452)) * n139r;
+        const V n178r = V(static_cast<crd::f32>(0.9807852804032304)) * n138r - V(static_cast<crd::f32>(-0.19509032201612825)) * n138i, n178i = V(static_cast<crd::f32>(0.9807852804032304)) * n138i + V(static_cast<crd::f32>(-0.19509032201612825)) * n138r;
+        const V n217r = n214r - n215r, n217i = n214i - n215i;
+        const V n216r = n214r + n215r, n216i = n214i + n215i;
+        const V n218r = n217i, n218i = -n217r;
+        const V n181r = n178r - n179r, n181i = n178i - n179i;
+        const V n180r = n178r + n179r, n180i = n178i + n179i;
+        const V n182r = n181i, n182i = -n181r;
+        const V n119r = n113r - n115r, n119i = n113i - n115i;
+        const V n118r = n113r + n115r, n118i = n113i + n115i;
+        const V n132r = n119r - n128r, n132i = n119i - n128i;
+        const V n131r = n119r + n128r, n131i = n119i + n128i;
+        const V n223r = V(static_cast<crd::f32>(0.38268343236508984)) * n132r - V(static_cast<crd::f32>(-0.9238795325112867)) * n132i, n223i = V(static_cast<crd::f32>(0.38268343236508984)) * n132i + V(static_cast<crd::f32>(-0.9238795325112867)) * n132r;
+        const V n187r = V(static_cast<crd::f32>(0.9238795325112867)) * n131r - V(static_cast<crd::f32>(-0.3826834323650898)) * n131i, n187i = V(static_cast<crd::f32>(0.9238795325112867)) * n131i + V(static_cast<crd::f32>(-0.3826834323650898)) * n131r;
+        const V n226r = n223r - n224r, n226i = n223i - n224i;
+        const V n225r = n223r + n224r, n225i = n223i + n224i;
+        const V n227r = n226i, n227i = -n226r;
+        const V n190r = n187r - n188r, n190i = n187i - n188i;
+        const V n189r = n187r + n188r, n189i = n187i + n188i;
+        const V n191r = n190i, n191i = -n190r;
+        const V n130r = n118r - n126r, n130i = n118i - n126i;
+        const V n129r = n118r + n126r, n129i = n118i + n126i;
+        const V n205r = V(static_cast<crd::f32>(0.7071067811865476)) * n130r - V(static_cast<crd::f32>(-0.7071067811865475)) * n130i, n205i = V(static_cast<crd::f32>(0.7071067811865476)) * n130i + V(static_cast<crd::f32>(-0.7071067811865475)) * n130r;
+        const V n208r = n205r - n206r, n208i = n205i - n206i;
+        const V n207r = n205r + n206r, n207i = n205i + n206i;
+        const V n209r = n208i, n209i = -n208r;
+        const V n172r = n129r - n158r, n172i = n129i - n158i;
+        const V n171r = n129r + n158r, n171i = n129i + n158i;
+        const V n173r = n172i, n173i = -n172r;
+        V n0r, n0i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 0 * b + t), n0r, n0i);
+        const V n33r = n0r - n16r, n33i = n0i - n16i;
+        const V n32r = n0r + n16r, n32i = n0i + n16i;
+        const V n40r = n33r - n36r, n40i = n33i - n36i;
+        const V n39r = n33r + n36r, n39i = n33i + n36i;
+        const V n60r = n40r - n56r, n60i = n40i - n56i;
+        const V n59r = n40r + n56r, n59i = n40i + n56i;
+        const V n112r = n60r - n108r, n112i = n60i - n108i;
+        const V n111r = n60r + n108r, n111i = n60i + n108i;
+        const V n240r = n112r - n236r, n240i = n112i - n236i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (31 * 32 + (t >> 7)) * n1 + (t & 127)), n240r, n240i);
+        const V n239r = n112r + n236r, n239i = n112i + n236i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (15 * 32 + (t >> 7)) * n1 + (t & 127)), n239r, n239i);
+        const V n238r = n111r - n234r, n238i = n111i - n234i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (23 * 32 + (t >> 7)) * n1 + (t & 127)), n238r, n238i);
+        const V n237r = n111r + n234r, n237i = n111i + n234i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (7 * 32 + (t >> 7)) * n1 + (t & 127)), n237r, n237i);
+        const V n110r = n59r - n106r, n110i = n59i - n106i;
+        const V n109r = n59r + n106r, n109i = n59i + n106i;
+        const V n204r = n110r - n200r, n204i = n110i - n200i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (27 * 32 + (t >> 7)) * n1 + (t & 127)), n204r, n204i);
+        const V n203r = n110r + n200r, n203i = n110i + n200i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (11 * 32 + (t >> 7)) * n1 + (t & 127)), n203r, n203i);
+        const V n202r = n109r - n198r, n202i = n109i - n198i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (19 * 32 + (t >> 7)) * n1 + (t & 127)), n202r, n202i);
+        const V n201r = n109r + n198r, n201i = n109i + n198i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (3 * 32 + (t >> 7)) * n1 + (t & 127)), n201r, n201i);
+        const V n58r = n39r - n54r, n58i = n39i - n54i;
+        const V n57r = n39r + n54r, n57i = n39i + n54i;
+        const V n94r = n58r - n90r, n94i = n58i - n90i;
+        const V n93r = n58r + n90r, n93i = n58i + n90i;
+        const V n222r = n94r - n218r, n222i = n94i - n218i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (29 * 32 + (t >> 7)) * n1 + (t & 127)), n222r, n222i);
+        const V n221r = n94r + n218r, n221i = n94i + n218i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (13 * 32 + (t >> 7)) * n1 + (t & 127)), n221r, n221i);
+        const V n220r = n93r - n216r, n220i = n93i - n216i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (21 * 32 + (t >> 7)) * n1 + (t & 127)), n220r, n220i);
+        const V n219r = n93r + n216r, n219i = n93i + n216i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (5 * 32 + (t >> 7)) * n1 + (t & 127)), n219r, n219i);
+        const V n92r = n57r - n88r, n92i = n57i - n88i;
+        const V n91r = n57r + n88r, n91i = n57i + n88i;
+        const V n186r = n92r - n182r, n186i = n92i - n182i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (25 * 32 + (t >> 7)) * n1 + (t & 127)), n186r, n186i);
+        const V n185r = n92r + n182r, n185i = n92i + n182i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (9 * 32 + (t >> 7)) * n1 + (t & 127)), n185r, n185i);
+        const V n184r = n91r - n180r, n184i = n91i - n180i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (17 * 32 + (t >> 7)) * n1 + (t & 127)), n184r, n184i);
+        const V n183r = n91r + n180r, n183i = n91i + n180i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (1 * 32 + (t >> 7)) * n1 + (t & 127)), n183r, n183i);
+        const V n38r = n32r - n34r, n38i = n32i - n34i;
+        const V n37r = n32r + n34r, n37i = n32i + n34i;
+        const V n51r = n38r - n47r, n51i = n38i - n47i;
+        const V n50r = n38r + n47r, n50i = n38i + n47i;
+        const V n103r = n51r - n99r, n103i = n51i - n99i;
+        const V n102r = n51r + n99r, n102i = n51i + n99i;
+        const V n231r = n103r - n227r, n231i = n103i - n227i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (30 * 32 + (t >> 7)) * n1 + (t & 127)), n231r, n231i);
+        const V n230r = n103r + n227r, n230i = n103i + n227i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (14 * 32 + (t >> 7)) * n1 + (t & 127)), n230r, n230i);
+        const V n229r = n102r - n225r, n229i = n102i - n225i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (22 * 32 + (t >> 7)) * n1 + (t & 127)), n229r, n229i);
+        const V n228r = n102r + n225r, n228i = n102i + n225i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (6 * 32 + (t >> 7)) * n1 + (t & 127)), n228r, n228i);
+        const V n101r = n50r - n97r, n101i = n50i - n97i;
+        const V n100r = n50r + n97r, n100i = n50i + n97i;
+        const V n195r = n101r - n191r, n195i = n101i - n191i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (26 * 32 + (t >> 7)) * n1 + (t & 127)), n195r, n195i);
+        const V n194r = n101r + n191r, n194i = n101i + n191i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (10 * 32 + (t >> 7)) * n1 + (t & 127)), n194r, n194i);
+        const V n193r = n100r - n189r, n193i = n100i - n189i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (18 * 32 + (t >> 7)) * n1 + (t & 127)), n193r, n193i);
+        const V n192r = n100r + n189r, n192i = n100i + n189i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (2 * 32 + (t >> 7)) * n1 + (t & 127)), n192r, n192i);
+        const V n49r = n37r - n45r, n49i = n37i - n45i;
+        const V n48r = n37r + n45r, n48i = n37i + n45i;
+        const V n85r = n49r - n81r, n85i = n49i - n81i;
+        const V n84r = n49r + n81r, n84i = n49i + n81i;
+        const V n213r = n85r - n209r, n213i = n85i - n209i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (28 * 32 + (t >> 7)) * n1 + (t & 127)), n213r, n213i);
+        const V n212r = n85r + n209r, n212i = n85i + n209i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (12 * 32 + (t >> 7)) * n1 + (t & 127)), n212r, n212i);
+        const V n211r = n84r - n207r, n211i = n84i - n207i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (20 * 32 + (t >> 7)) * n1 + (t & 127)), n211r, n211i);
+        const V n210r = n84r + n207r, n210i = n84i + n207i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (4 * 32 + (t >> 7)) * n1 + (t & 127)), n210r, n210i);
+        const V n83r = n48r - n79r, n83i = n48i - n79i;
+        const V n82r = n48r + n79r, n82i = n48i + n79i;
+        const V n177r = n83r - n173r, n177i = n83i - n173i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (24 * 32 + (t >> 7)) * n1 + (t & 127)), n177r, n177i);
+        const V n176r = n83r + n173r, n176i = n83i + n173i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (8 * 32 + (t >> 7)) * n1 + (t & 127)), n176r, n176i);
+        const V n175r = n82r - n171r, n175i = n82i - n171i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (16 * 32 + (t >> 7)) * n1 + (t & 127)), n175r, n175i);
+        const V n174r = n82r + n171r, n174i = n82i + n171i;
+        simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data_base + k1 + (0 * 32 + (t >> 7)) * n1 + (t & 127)), n174r, n174i);
+    }
+}
+// M18 FUSED P2 (N=1024, ti_stride=8192): native_tiled leaf + stage2 + final over 64KB tile. GEN.
+CRD_FORCEINLINE void codelet32_p2_fused_tile64(const crd::hesap::Complex<crd::f32>* nt,
+    crd::hesap::Complex<crd::f32>* data, crd::usize k1, crd::usize n1p, const crd::f32* baser, const crd::f32* basei,
+    const crd::f32* laner, const crd::f32* lanei, const crd::f32* twr, const crd::f32* twi) noexcept
+{
+    using V = crd::math::simd::Vec8f;
+    namespace simd = crd::math::simd;
+    V tile_r[32][32], tile_i[32][32];
+    for (crd::usize g = 0; g < 16; ++g)
+    {
+        const crd::usize bb0 = g * 8, grp_ = (k1 + bb0) >> 3;
+        for (crd::usize n2v = 0; n2v < 32; ++n2v)
+        {
+            const crd::f32* const tr = twr + n2v * 32, * const ti = twi + n2v * 32;
+            V n31r, n31i; { const crd::usize i2_ = 31 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 31], bi_ = basei[grp_ * 1024 + n2v * 32 + 31];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n31r = vr_ * wr_ - vi_ * wi_; n31i = vr_ * wi_ + vi_ * wr_; }
+            V n30r, n30i; { const crd::usize i2_ = 30 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 30], bi_ = basei[grp_ * 1024 + n2v * 32 + 30];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n30r = vr_ * wr_ - vi_ * wi_; n30i = vr_ * wi_ + vi_ * wr_; }
+            V n29r, n29i; { const crd::usize i2_ = 29 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 29], bi_ = basei[grp_ * 1024 + n2v * 32 + 29];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n29r = vr_ * wr_ - vi_ * wi_; n29i = vr_ * wi_ + vi_ * wr_; }
+            V n28r, n28i; { const crd::usize i2_ = 28 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 28], bi_ = basei[grp_ * 1024 + n2v * 32 + 28];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n28r = vr_ * wr_ - vi_ * wi_; n28i = vr_ * wi_ + vi_ * wr_; }
+            V n27r, n27i; { const crd::usize i2_ = 27 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 27], bi_ = basei[grp_ * 1024 + n2v * 32 + 27];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n27r = vr_ * wr_ - vi_ * wi_; n27i = vr_ * wi_ + vi_ * wr_; }
+            V n26r, n26i; { const crd::usize i2_ = 26 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 26], bi_ = basei[grp_ * 1024 + n2v * 32 + 26];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n26r = vr_ * wr_ - vi_ * wi_; n26i = vr_ * wi_ + vi_ * wr_; }
+            V n25r, n25i; { const crd::usize i2_ = 25 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 25], bi_ = basei[grp_ * 1024 + n2v * 32 + 25];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n25r = vr_ * wr_ - vi_ * wi_; n25i = vr_ * wi_ + vi_ * wr_; }
+            V n24r, n24i; { const crd::usize i2_ = 24 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 24], bi_ = basei[grp_ * 1024 + n2v * 32 + 24];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n24r = vr_ * wr_ - vi_ * wi_; n24i = vr_ * wi_ + vi_ * wr_; }
+            V n23r, n23i; { const crd::usize i2_ = 23 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 23], bi_ = basei[grp_ * 1024 + n2v * 32 + 23];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n23r = vr_ * wr_ - vi_ * wi_; n23i = vr_ * wi_ + vi_ * wr_; }
+            V n22r, n22i; { const crd::usize i2_ = 22 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 22], bi_ = basei[grp_ * 1024 + n2v * 32 + 22];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n22r = vr_ * wr_ - vi_ * wi_; n22i = vr_ * wi_ + vi_ * wr_; }
+            V n21r, n21i; { const crd::usize i2_ = 21 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 21], bi_ = basei[grp_ * 1024 + n2v * 32 + 21];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n21r = vr_ * wr_ - vi_ * wi_; n21i = vr_ * wi_ + vi_ * wr_; }
+            V n20r, n20i; { const crd::usize i2_ = 20 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 20], bi_ = basei[grp_ * 1024 + n2v * 32 + 20];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n20r = vr_ * wr_ - vi_ * wi_; n20i = vr_ * wi_ + vi_ * wr_; }
+            V n19r, n19i; { const crd::usize i2_ = 19 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 19], bi_ = basei[grp_ * 1024 + n2v * 32 + 19];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n19r = vr_ * wr_ - vi_ * wi_; n19i = vr_ * wi_ + vi_ * wr_; }
+            V n18r, n18i; { const crd::usize i2_ = 18 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 18], bi_ = basei[grp_ * 1024 + n2v * 32 + 18];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n18r = vr_ * wr_ - vi_ * wi_; n18i = vr_ * wi_ + vi_ * wr_; }
+            V n17r, n17i; { const crd::usize i2_ = 17 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 17], bi_ = basei[grp_ * 1024 + n2v * 32 + 17];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n17r = vr_ * wr_ - vi_ * wi_; n17i = vr_ * wi_ + vi_ * wr_; }
+            V n16r, n16i; { const crd::usize i2_ = 16 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 16], bi_ = basei[grp_ * 1024 + n2v * 32 + 16];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n16r = vr_ * wr_ - vi_ * wi_; n16i = vr_ * wi_ + vi_ * wr_; }
+            V n15r, n15i; { const crd::usize i2_ = 15 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 15], bi_ = basei[grp_ * 1024 + n2v * 32 + 15];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n15r = vr_ * wr_ - vi_ * wi_; n15i = vr_ * wi_ + vi_ * wr_; }
+            const V n154r = n15r - n31r, n154i = n15i - n31i;
+            const V n153r = n15r + n31r, n153i = n15i + n31i;
+            const V n163r = V(static_cast<crd::f32>(-0.7071067811865475)) * n154r - V(static_cast<crd::f32>(-0.7071067811865476)) * n154i, n163i = V(static_cast<crd::f32>(-0.7071067811865475)) * n154i + V(static_cast<crd::f32>(-0.7071067811865476)) * n154r;
+            V n14r, n14i; { const crd::usize i2_ = 14 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 14], bi_ = basei[grp_ * 1024 + n2v * 32 + 14];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n14r = vr_ * wr_ - vi_ * wi_; n14i = vr_ * wi_ + vi_ * wr_; }
+            const V n73r = n14r - n30r, n73i = n14i - n30i;
+            const V n72r = n14r + n30r, n72i = n14i + n30i;
+            const V n74r = n73i, n74i = -n73r;
+            V n13r, n13i; { const crd::usize i2_ = 13 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 13], bi_ = basei[grp_ * 1024 + n2v * 32 + 13];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n13r = vr_ * wr_ - vi_ * wi_; n13i = vr_ * wi_ + vi_ * wr_; }
+            const V n125r = n13r - n29r, n125i = n13i - n29i;
+            const V n124r = n13r + n29r, n124i = n13i + n29i;
+            const V n134r = V(static_cast<crd::f32>(-0.7071067811865475)) * n125r - V(static_cast<crd::f32>(-0.7071067811865476)) * n125i, n134i = V(static_cast<crd::f32>(-0.7071067811865475)) * n125i + V(static_cast<crd::f32>(-0.7071067811865476)) * n125r;
+            V n12r, n12i; { const crd::usize i2_ = 12 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 12], bi_ = basei[grp_ * 1024 + n2v * 32 + 12];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n12r = vr_ * wr_ - vi_ * wi_; n12i = vr_ * wi_ + vi_ * wr_; }
+            const V n44r = n12r - n28r, n44i = n12i - n28i;
+            const V n43r = n12r + n28r, n43i = n12i + n28i;
+            const V n53r = V(static_cast<crd::f32>(-0.7071067811865475)) * n44r - V(static_cast<crd::f32>(-0.7071067811865476)) * n44i, n53i = V(static_cast<crd::f32>(-0.7071067811865475)) * n44i + V(static_cast<crd::f32>(-0.7071067811865476)) * n44r;
+            V n11r, n11i; { const crd::usize i2_ = 11 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 11], bi_ = basei[grp_ * 1024 + n2v * 32 + 11];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n11r = vr_ * wr_ - vi_ * wi_; n11i = vr_ * wi_ + vi_ * wr_; }
+            const V n145r = n11r - n27r, n145i = n11i - n27i;
+            const V n144r = n11r + n27r, n144i = n11i + n27i;
+            const V n146r = n145i, n146i = -n145r;
+            V n10r, n10i; { const crd::usize i2_ = 10 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 10], bi_ = basei[grp_ * 1024 + n2v * 32 + 10];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n10r = vr_ * wr_ - vi_ * wi_; n10i = vr_ * wi_ + vi_ * wr_; }
+            const V n64r = n10r - n26r, n64i = n10i - n26i;
+            const V n63r = n10r + n26r, n63i = n10i + n26i;
+            const V n65r = n64i, n65i = -n64r;
+            V n9r, n9i; { const crd::usize i2_ = 9 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 9], bi_ = basei[grp_ * 1024 + n2v * 32 + 9];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n9r = vr_ * wr_ - vi_ * wi_; n9i = vr_ * wi_ + vi_ * wr_; }
+            const V n116r = n9r - n25r, n116i = n9i - n25i;
+            const V n115r = n9r + n25r, n115i = n9i + n25i;
+            const V n117r = n116i, n117i = -n116r;
+            V n8r, n8i; { const crd::usize i2_ = 8 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 8], bi_ = basei[grp_ * 1024 + n2v * 32 + 8];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n8r = vr_ * wr_ - vi_ * wi_; n8i = vr_ * wi_ + vi_ * wr_; }
+            const V n35r = n8r - n24r, n35i = n8i - n24i;
+            const V n34r = n8r + n24r, n34i = n8i + n24i;
+            const V n36r = n35i, n36i = -n35r;
+            V n7r, n7i; { const crd::usize i2_ = 7 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 7], bi_ = basei[grp_ * 1024 + n2v * 32 + 7];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n7r = vr_ * wr_ - vi_ * wi_; n7i = vr_ * wi_ + vi_ * wr_; }
+            const V n152r = n7r - n23r, n152i = n7i - n23i;
+            const V n151r = n7r + n23r, n151i = n7i + n23i;
+            const V n162r = V(static_cast<crd::f32>(0.7071067811865476)) * n152r - V(static_cast<crd::f32>(-0.7071067811865475)) * n152i, n162i = V(static_cast<crd::f32>(0.7071067811865476)) * n152i + V(static_cast<crd::f32>(-0.7071067811865475)) * n152r;
+            const V n165r = n162r - n163r, n165i = n162i - n163i;
+            const V n164r = n162r + n163r, n164i = n162i + n163i;
+            const V n166r = n165i, n166i = -n165r;
+            const V n156r = n151r - n153r, n156i = n151i - n153i;
+            const V n155r = n151r + n153r, n155i = n151i + n153i;
+            const V n157r = n156i, n157i = -n156r;
+            V n6r, n6i; { const crd::usize i2_ = 6 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 6], bi_ = basei[grp_ * 1024 + n2v * 32 + 6];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n6r = vr_ * wr_ - vi_ * wi_; n6i = vr_ * wi_ + vi_ * wr_; }
+            const V n71r = n6r - n22r, n71i = n6i - n22i;
+            const V n70r = n6r + n22r, n70i = n6i + n22i;
+            const V n78r = n71r - n74r, n78i = n71i - n74i;
+            const V n77r = n71r + n74r, n77i = n71i + n74i;
+            const V n105r = V(static_cast<crd::f32>(-0.9238795325112868)) * n78r - V(static_cast<crd::f32>(0.38268343236508967)) * n78i, n105i = V(static_cast<crd::f32>(-0.9238795325112868)) * n78i + V(static_cast<crd::f32>(0.38268343236508967)) * n78r;
+            const V n87r = V(static_cast<crd::f32>(0.38268343236508984)) * n77r - V(static_cast<crd::f32>(-0.9238795325112867)) * n77i, n87i = V(static_cast<crd::f32>(0.38268343236508984)) * n77i + V(static_cast<crd::f32>(-0.9238795325112867)) * n77r;
+            const V n76r = n70r - n72r, n76i = n70i - n72i;
+            const V n75r = n70r + n72r, n75i = n70i + n72i;
+            const V n96r = V(static_cast<crd::f32>(-0.7071067811865475)) * n76r - V(static_cast<crd::f32>(-0.7071067811865476)) * n76i, n96i = V(static_cast<crd::f32>(-0.7071067811865475)) * n76i + V(static_cast<crd::f32>(-0.7071067811865476)) * n76r;
+            V n5r, n5i; { const crd::usize i2_ = 5 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 5], bi_ = basei[grp_ * 1024 + n2v * 32 + 5];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n5r = vr_ * wr_ - vi_ * wi_; n5i = vr_ * wi_ + vi_ * wr_; }
+            const V n123r = n5r - n21r, n123i = n5i - n21i;
+            const V n122r = n5r + n21r, n122i = n5i + n21i;
+            const V n133r = V(static_cast<crd::f32>(0.7071067811865476)) * n123r - V(static_cast<crd::f32>(-0.7071067811865475)) * n123i, n133i = V(static_cast<crd::f32>(0.7071067811865476)) * n123i + V(static_cast<crd::f32>(-0.7071067811865475)) * n123r;
+            const V n136r = n133r - n134r, n136i = n133i - n134i;
+            const V n135r = n133r + n134r, n135i = n133i + n134i;
+            const V n137r = n136i, n137i = -n136r;
+            const V n127r = n122r - n124r, n127i = n122i - n124i;
+            const V n126r = n122r + n124r, n126i = n122i + n124i;
+            const V n128r = n127i, n128i = -n127r;
+            V n4r, n4i; { const crd::usize i2_ = 4 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 4], bi_ = basei[grp_ * 1024 + n2v * 32 + 4];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n4r = vr_ * wr_ - vi_ * wi_; n4i = vr_ * wi_ + vi_ * wr_; }
+            const V n42r = n4r - n20r, n42i = n4i - n20i;
+            const V n41r = n4r + n20r, n41i = n4i + n20i;
+            const V n52r = V(static_cast<crd::f32>(0.7071067811865476)) * n42r - V(static_cast<crd::f32>(-0.7071067811865475)) * n42i, n52i = V(static_cast<crd::f32>(0.7071067811865476)) * n42i + V(static_cast<crd::f32>(-0.7071067811865475)) * n42r;
+            const V n55r = n52r - n53r, n55i = n52i - n53i;
+            const V n54r = n52r + n53r, n54i = n52i + n53i;
+            const V n56r = n55i, n56i = -n55r;
+            const V n46r = n41r - n43r, n46i = n41i - n43i;
+            const V n45r = n41r + n43r, n45i = n41i + n43i;
+            const V n47r = n46i, n47i = -n46r;
+            V n3r, n3i; { const crd::usize i2_ = 3 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 3], bi_ = basei[grp_ * 1024 + n2v * 32 + 3];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n3r = vr_ * wr_ - vi_ * wi_; n3i = vr_ * wi_ + vi_ * wr_; }
+            const V n143r = n3r - n19r, n143i = n3i - n19i;
+            const V n142r = n3r + n19r, n142i = n3i + n19i;
+            const V n150r = n143r - n146r, n150i = n143i - n146i;
+            const V n149r = n143r + n146r, n149i = n143i + n146i;
+            const V n170r = n150r - n166r, n170i = n150i - n166i;
+            const V n169r = n150r + n166r, n169i = n150i + n166i;
+            const V n233r = V(static_cast<crd::f32>(-0.5555702330196022)) * n170r - V(static_cast<crd::f32>(0.8314696123025452)) * n170i, n233i = V(static_cast<crd::f32>(-0.5555702330196022)) * n170i + V(static_cast<crd::f32>(0.8314696123025452)) * n170r;
+            const V n197r = V(static_cast<crd::f32>(-0.1950903220161282)) * n169r - V(static_cast<crd::f32>(-0.9807852804032304)) * n169i, n197i = V(static_cast<crd::f32>(-0.1950903220161282)) * n169i + V(static_cast<crd::f32>(-0.9807852804032304)) * n169r;
+            const V n168r = n149r - n164r, n168i = n149i - n164i;
+            const V n167r = n149r + n164r, n167i = n149i + n164i;
+            const V n215r = V(static_cast<crd::f32>(-0.9807852804032304)) * n168r - V(static_cast<crd::f32>(-0.1950903220161286)) * n168i, n215i = V(static_cast<crd::f32>(-0.9807852804032304)) * n168i + V(static_cast<crd::f32>(-0.1950903220161286)) * n168r;
+            const V n179r = V(static_cast<crd::f32>(0.8314696123025452)) * n167r - V(static_cast<crd::f32>(-0.5555702330196022)) * n167i, n179i = V(static_cast<crd::f32>(0.8314696123025452)) * n167i + V(static_cast<crd::f32>(-0.5555702330196022)) * n167r;
+            const V n148r = n142r - n144r, n148i = n142i - n144i;
+            const V n147r = n142r + n144r, n147i = n142i + n144i;
+            const V n161r = n148r - n157r, n161i = n148i - n157i;
+            const V n160r = n148r + n157r, n160i = n148i + n157i;
+            const V n224r = V(static_cast<crd::f32>(-0.9238795325112868)) * n161r - V(static_cast<crd::f32>(0.38268343236508967)) * n161i, n224i = V(static_cast<crd::f32>(-0.9238795325112868)) * n161i + V(static_cast<crd::f32>(0.38268343236508967)) * n161r;
+            const V n188r = V(static_cast<crd::f32>(0.38268343236508984)) * n160r - V(static_cast<crd::f32>(-0.9238795325112867)) * n160i, n188i = V(static_cast<crd::f32>(0.38268343236508984)) * n160i + V(static_cast<crd::f32>(-0.9238795325112867)) * n160r;
+            const V n159r = n147r - n155r, n159i = n147i - n155i;
+            const V n158r = n147r + n155r, n158i = n147i + n155i;
+            const V n206r = V(static_cast<crd::f32>(-0.7071067811865475)) * n159r - V(static_cast<crd::f32>(-0.7071067811865476)) * n159i, n206i = V(static_cast<crd::f32>(-0.7071067811865475)) * n159i + V(static_cast<crd::f32>(-0.7071067811865476)) * n159r;
+            V n2r, n2i; { const crd::usize i2_ = 2 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 2], bi_ = basei[grp_ * 1024 + n2v * 32 + 2];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n2r = vr_ * wr_ - vi_ * wi_; n2i = vr_ * wi_ + vi_ * wr_; }
+            const V n62r = n2r - n18r, n62i = n2i - n18i;
+            const V n61r = n2r + n18r, n61i = n2i + n18i;
+            const V n69r = n62r - n65r, n69i = n62i - n65i;
+            const V n68r = n62r + n65r, n68i = n62i + n65i;
+            const V n104r = V(static_cast<crd::f32>(0.38268343236508984)) * n69r - V(static_cast<crd::f32>(-0.9238795325112867)) * n69i, n104i = V(static_cast<crd::f32>(0.38268343236508984)) * n69i + V(static_cast<crd::f32>(-0.9238795325112867)) * n69r;
+            const V n86r = V(static_cast<crd::f32>(0.9238795325112867)) * n68r - V(static_cast<crd::f32>(-0.3826834323650898)) * n68i, n86i = V(static_cast<crd::f32>(0.9238795325112867)) * n68i + V(static_cast<crd::f32>(-0.3826834323650898)) * n68r;
+            const V n107r = n104r - n105r, n107i = n104i - n105i;
+            const V n106r = n104r + n105r, n106i = n104i + n105i;
+            const V n108r = n107i, n108i = -n107r;
+            const V n89r = n86r - n87r, n89i = n86i - n87i;
+            const V n88r = n86r + n87r, n88i = n86i + n87i;
+            const V n90r = n89i, n90i = -n89r;
+            const V n67r = n61r - n63r, n67i = n61i - n63i;
+            const V n66r = n61r + n63r, n66i = n61i + n63i;
+            const V n95r = V(static_cast<crd::f32>(0.7071067811865476)) * n67r - V(static_cast<crd::f32>(-0.7071067811865475)) * n67i, n95i = V(static_cast<crd::f32>(0.7071067811865476)) * n67i + V(static_cast<crd::f32>(-0.7071067811865475)) * n67r;
+            const V n98r = n95r - n96r, n98i = n95i - n96i;
+            const V n97r = n95r + n96r, n97i = n95i + n96i;
+            const V n99r = n98i, n99i = -n98r;
+            const V n80r = n66r - n75r, n80i = n66i - n75i;
+            const V n79r = n66r + n75r, n79i = n66i + n75i;
+            const V n81r = n80i, n81i = -n80r;
+            V n1r, n1i; { const crd::usize i2_ = 1 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 1], bi_ = basei[grp_ * 1024 + n2v * 32 + 1];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n1r = vr_ * wr_ - vi_ * wi_; n1i = vr_ * wi_ + vi_ * wr_; }
+            const V n114r = n1r - n17r, n114i = n1i - n17i;
+            const V n113r = n1r + n17r, n113i = n1i + n17i;
+            const V n121r = n114r - n117r, n121i = n114i - n117i;
+            const V n120r = n114r + n117r, n120i = n114i + n117i;
+            const V n141r = n121r - n137r, n141i = n121i - n137i;
+            const V n140r = n121r + n137r, n140i = n121i + n137i;
+            const V n232r = V(static_cast<crd::f32>(0.19509032201612833)) * n141r - V(static_cast<crd::f32>(-0.9807852804032304)) * n141i, n232i = V(static_cast<crd::f32>(0.19509032201612833)) * n141i + V(static_cast<crd::f32>(-0.9807852804032304)) * n141r;
+            const V n196r = V(static_cast<crd::f32>(0.8314696123025452)) * n140r - V(static_cast<crd::f32>(-0.5555702330196022)) * n140i, n196i = V(static_cast<crd::f32>(0.8314696123025452)) * n140i + V(static_cast<crd::f32>(-0.5555702330196022)) * n140r;
+            const V n235r = n232r - n233r, n235i = n232i - n233i;
+            const V n234r = n232r + n233r, n234i = n232i + n233i;
+            const V n236r = n235i, n236i = -n235r;
+            const V n199r = n196r - n197r, n199i = n196i - n197i;
+            const V n198r = n196r + n197r, n198i = n196i + n197i;
+            const V n200r = n199i, n200i = -n199r;
+            const V n139r = n120r - n135r, n139i = n120i - n135i;
+            const V n138r = n120r + n135r, n138i = n120i + n135i;
+            const V n214r = V(static_cast<crd::f32>(0.5555702330196023)) * n139r - V(static_cast<crd::f32>(-0.8314696123025452)) * n139i, n214i = V(static_cast<crd::f32>(0.5555702330196023)) * n139i + V(static_cast<crd::f32>(-0.8314696123025452)) * n139r;
+            const V n178r = V(static_cast<crd::f32>(0.9807852804032304)) * n138r - V(static_cast<crd::f32>(-0.19509032201612825)) * n138i, n178i = V(static_cast<crd::f32>(0.9807852804032304)) * n138i + V(static_cast<crd::f32>(-0.19509032201612825)) * n138r;
+            const V n217r = n214r - n215r, n217i = n214i - n215i;
+            const V n216r = n214r + n215r, n216i = n214i + n215i;
+            const V n218r = n217i, n218i = -n217r;
+            const V n181r = n178r - n179r, n181i = n178i - n179i;
+            const V n180r = n178r + n179r, n180i = n178i + n179i;
+            const V n182r = n181i, n182i = -n181r;
+            const V n119r = n113r - n115r, n119i = n113i - n115i;
+            const V n118r = n113r + n115r, n118i = n113i + n115i;
+            const V n132r = n119r - n128r, n132i = n119i - n128i;
+            const V n131r = n119r + n128r, n131i = n119i + n128i;
+            const V n223r = V(static_cast<crd::f32>(0.38268343236508984)) * n132r - V(static_cast<crd::f32>(-0.9238795325112867)) * n132i, n223i = V(static_cast<crd::f32>(0.38268343236508984)) * n132i + V(static_cast<crd::f32>(-0.9238795325112867)) * n132r;
+            const V n187r = V(static_cast<crd::f32>(0.9238795325112867)) * n131r - V(static_cast<crd::f32>(-0.3826834323650898)) * n131i, n187i = V(static_cast<crd::f32>(0.9238795325112867)) * n131i + V(static_cast<crd::f32>(-0.3826834323650898)) * n131r;
+            const V n226r = n223r - n224r, n226i = n223i - n224i;
+            const V n225r = n223r + n224r, n225i = n223i + n224i;
+            const V n227r = n226i, n227i = -n226r;
+            const V n190r = n187r - n188r, n190i = n187i - n188i;
+            const V n189r = n187r + n188r, n189i = n187i + n188i;
+            const V n191r = n190i, n191i = -n190r;
+            const V n130r = n118r - n126r, n130i = n118i - n126i;
+            const V n129r = n118r + n126r, n129i = n118i + n126i;
+            const V n205r = V(static_cast<crd::f32>(0.7071067811865476)) * n130r - V(static_cast<crd::f32>(-0.7071067811865475)) * n130i, n205i = V(static_cast<crd::f32>(0.7071067811865476)) * n130i + V(static_cast<crd::f32>(-0.7071067811865475)) * n130r;
+            const V n208r = n205r - n206r, n208i = n205i - n206i;
+            const V n207r = n205r + n206r, n207i = n205i + n206i;
+            const V n209r = n208i, n209i = -n208r;
+            const V n172r = n129r - n158r, n172i = n129i - n158i;
+            const V n171r = n129r + n158r, n171i = n129i + n158i;
+            const V n173r = n172i, n173i = -n172r;
+            V n0r, n0i; { const crd::usize i2_ = 0 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 8192 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 0], bi_ = basei[grp_ * 1024 + n2v * 32 + 0];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n0r = vr_ * wr_ - vi_ * wi_; n0i = vr_ * wi_ + vi_ * wr_; }
+            const V n33r = n0r - n16r, n33i = n0i - n16i;
+            const V n32r = n0r + n16r, n32i = n0i + n16i;
+            const V n40r = n33r - n36r, n40i = n33i - n36i;
+            const V n39r = n33r + n36r, n39i = n33i + n36i;
+            const V n60r = n40r - n56r, n60i = n40i - n56i;
+            const V n59r = n40r + n56r, n59i = n40i + n56i;
+            const V n112r = n60r - n108r, n112i = n60i - n108i;
+            const V n111r = n60r + n108r, n111i = n60i + n108i;
+            const V n240r = n112r - n236r, n240i = n112i - n236i;
+            { const V wr = V(tr[31]), wi = V(ti[31]);
+              tile_r[n2v][31] = n240r * wr - n240i * wi;
+              tile_i[n2v][31] = n240r * wi + n240i * wr; }
+            const V n239r = n112r + n236r, n239i = n112i + n236i;
+            { const V wr = V(tr[15]), wi = V(ti[15]);
+              tile_r[n2v][15] = n239r * wr - n239i * wi;
+              tile_i[n2v][15] = n239r * wi + n239i * wr; }
+            const V n238r = n111r - n234r, n238i = n111i - n234i;
+            { const V wr = V(tr[23]), wi = V(ti[23]);
+              tile_r[n2v][23] = n238r * wr - n238i * wi;
+              tile_i[n2v][23] = n238r * wi + n238i * wr; }
+            const V n237r = n111r + n234r, n237i = n111i + n234i;
+            { const V wr = V(tr[7]), wi = V(ti[7]);
+              tile_r[n2v][7] = n237r * wr - n237i * wi;
+              tile_i[n2v][7] = n237r * wi + n237i * wr; }
+            const V n110r = n59r - n106r, n110i = n59i - n106i;
+            const V n109r = n59r + n106r, n109i = n59i + n106i;
+            const V n204r = n110r - n200r, n204i = n110i - n200i;
+            { const V wr = V(tr[27]), wi = V(ti[27]);
+              tile_r[n2v][27] = n204r * wr - n204i * wi;
+              tile_i[n2v][27] = n204r * wi + n204i * wr; }
+            const V n203r = n110r + n200r, n203i = n110i + n200i;
+            { const V wr = V(tr[11]), wi = V(ti[11]);
+              tile_r[n2v][11] = n203r * wr - n203i * wi;
+              tile_i[n2v][11] = n203r * wi + n203i * wr; }
+            const V n202r = n109r - n198r, n202i = n109i - n198i;
+            { const V wr = V(tr[19]), wi = V(ti[19]);
+              tile_r[n2v][19] = n202r * wr - n202i * wi;
+              tile_i[n2v][19] = n202r * wi + n202i * wr; }
+            const V n201r = n109r + n198r, n201i = n109i + n198i;
+            { const V wr = V(tr[3]), wi = V(ti[3]);
+              tile_r[n2v][3] = n201r * wr - n201i * wi;
+              tile_i[n2v][3] = n201r * wi + n201i * wr; }
+            const V n58r = n39r - n54r, n58i = n39i - n54i;
+            const V n57r = n39r + n54r, n57i = n39i + n54i;
+            const V n94r = n58r - n90r, n94i = n58i - n90i;
+            const V n93r = n58r + n90r, n93i = n58i + n90i;
+            const V n222r = n94r - n218r, n222i = n94i - n218i;
+            { const V wr = V(tr[29]), wi = V(ti[29]);
+              tile_r[n2v][29] = n222r * wr - n222i * wi;
+              tile_i[n2v][29] = n222r * wi + n222i * wr; }
+            const V n221r = n94r + n218r, n221i = n94i + n218i;
+            { const V wr = V(tr[13]), wi = V(ti[13]);
+              tile_r[n2v][13] = n221r * wr - n221i * wi;
+              tile_i[n2v][13] = n221r * wi + n221i * wr; }
+            const V n220r = n93r - n216r, n220i = n93i - n216i;
+            { const V wr = V(tr[21]), wi = V(ti[21]);
+              tile_r[n2v][21] = n220r * wr - n220i * wi;
+              tile_i[n2v][21] = n220r * wi + n220i * wr; }
+            const V n219r = n93r + n216r, n219i = n93i + n216i;
+            { const V wr = V(tr[5]), wi = V(ti[5]);
+              tile_r[n2v][5] = n219r * wr - n219i * wi;
+              tile_i[n2v][5] = n219r * wi + n219i * wr; }
+            const V n92r = n57r - n88r, n92i = n57i - n88i;
+            const V n91r = n57r + n88r, n91i = n57i + n88i;
+            const V n186r = n92r - n182r, n186i = n92i - n182i;
+            { const V wr = V(tr[25]), wi = V(ti[25]);
+              tile_r[n2v][25] = n186r * wr - n186i * wi;
+              tile_i[n2v][25] = n186r * wi + n186i * wr; }
+            const V n185r = n92r + n182r, n185i = n92i + n182i;
+            { const V wr = V(tr[9]), wi = V(ti[9]);
+              tile_r[n2v][9] = n185r * wr - n185i * wi;
+              tile_i[n2v][9] = n185r * wi + n185i * wr; }
+            const V n184r = n91r - n180r, n184i = n91i - n180i;
+            { const V wr = V(tr[17]), wi = V(ti[17]);
+              tile_r[n2v][17] = n184r * wr - n184i * wi;
+              tile_i[n2v][17] = n184r * wi + n184i * wr; }
+            const V n183r = n91r + n180r, n183i = n91i + n180i;
+            { const V wr = V(tr[1]), wi = V(ti[1]);
+              tile_r[n2v][1] = n183r * wr - n183i * wi;
+              tile_i[n2v][1] = n183r * wi + n183i * wr; }
+            const V n38r = n32r - n34r, n38i = n32i - n34i;
+            const V n37r = n32r + n34r, n37i = n32i + n34i;
+            const V n51r = n38r - n47r, n51i = n38i - n47i;
+            const V n50r = n38r + n47r, n50i = n38i + n47i;
+            const V n103r = n51r - n99r, n103i = n51i - n99i;
+            const V n102r = n51r + n99r, n102i = n51i + n99i;
+            const V n231r = n103r - n227r, n231i = n103i - n227i;
+            { const V wr = V(tr[30]), wi = V(ti[30]);
+              tile_r[n2v][30] = n231r * wr - n231i * wi;
+              tile_i[n2v][30] = n231r * wi + n231i * wr; }
+            const V n230r = n103r + n227r, n230i = n103i + n227i;
+            { const V wr = V(tr[14]), wi = V(ti[14]);
+              tile_r[n2v][14] = n230r * wr - n230i * wi;
+              tile_i[n2v][14] = n230r * wi + n230i * wr; }
+            const V n229r = n102r - n225r, n229i = n102i - n225i;
+            { const V wr = V(tr[22]), wi = V(ti[22]);
+              tile_r[n2v][22] = n229r * wr - n229i * wi;
+              tile_i[n2v][22] = n229r * wi + n229i * wr; }
+            const V n228r = n102r + n225r, n228i = n102i + n225i;
+            { const V wr = V(tr[6]), wi = V(ti[6]);
+              tile_r[n2v][6] = n228r * wr - n228i * wi;
+              tile_i[n2v][6] = n228r * wi + n228i * wr; }
+            const V n101r = n50r - n97r, n101i = n50i - n97i;
+            const V n100r = n50r + n97r, n100i = n50i + n97i;
+            const V n195r = n101r - n191r, n195i = n101i - n191i;
+            { const V wr = V(tr[26]), wi = V(ti[26]);
+              tile_r[n2v][26] = n195r * wr - n195i * wi;
+              tile_i[n2v][26] = n195r * wi + n195i * wr; }
+            const V n194r = n101r + n191r, n194i = n101i + n191i;
+            { const V wr = V(tr[10]), wi = V(ti[10]);
+              tile_r[n2v][10] = n194r * wr - n194i * wi;
+              tile_i[n2v][10] = n194r * wi + n194i * wr; }
+            const V n193r = n100r - n189r, n193i = n100i - n189i;
+            { const V wr = V(tr[18]), wi = V(ti[18]);
+              tile_r[n2v][18] = n193r * wr - n193i * wi;
+              tile_i[n2v][18] = n193r * wi + n193i * wr; }
+            const V n192r = n100r + n189r, n192i = n100i + n189i;
+            { const V wr = V(tr[2]), wi = V(ti[2]);
+              tile_r[n2v][2] = n192r * wr - n192i * wi;
+              tile_i[n2v][2] = n192r * wi + n192i * wr; }
+            const V n49r = n37r - n45r, n49i = n37i - n45i;
+            const V n48r = n37r + n45r, n48i = n37i + n45i;
+            const V n85r = n49r - n81r, n85i = n49i - n81i;
+            const V n84r = n49r + n81r, n84i = n49i + n81i;
+            const V n213r = n85r - n209r, n213i = n85i - n209i;
+            { const V wr = V(tr[28]), wi = V(ti[28]);
+              tile_r[n2v][28] = n213r * wr - n213i * wi;
+              tile_i[n2v][28] = n213r * wi + n213i * wr; }
+            const V n212r = n85r + n209r, n212i = n85i + n209i;
+            { const V wr = V(tr[12]), wi = V(ti[12]);
+              tile_r[n2v][12] = n212r * wr - n212i * wi;
+              tile_i[n2v][12] = n212r * wi + n212i * wr; }
+            const V n211r = n84r - n207r, n211i = n84i - n207i;
+            { const V wr = V(tr[20]), wi = V(ti[20]);
+              tile_r[n2v][20] = n211r * wr - n211i * wi;
+              tile_i[n2v][20] = n211r * wi + n211i * wr; }
+            const V n210r = n84r + n207r, n210i = n84i + n207i;
+            { const V wr = V(tr[4]), wi = V(ti[4]);
+              tile_r[n2v][4] = n210r * wr - n210i * wi;
+              tile_i[n2v][4] = n210r * wi + n210i * wr; }
+            const V n83r = n48r - n79r, n83i = n48i - n79i;
+            const V n82r = n48r + n79r, n82i = n48i + n79i;
+            const V n177r = n83r - n173r, n177i = n83i - n173i;
+            { const V wr = V(tr[24]), wi = V(ti[24]);
+              tile_r[n2v][24] = n177r * wr - n177i * wi;
+              tile_i[n2v][24] = n177r * wi + n177i * wr; }
+            const V n176r = n83r + n173r, n176i = n83i + n173i;
+            { const V wr = V(tr[8]), wi = V(ti[8]);
+              tile_r[n2v][8] = n176r * wr - n176i * wi;
+              tile_i[n2v][8] = n176r * wi + n176i * wr; }
+            const V n175r = n82r - n171r, n175i = n82i - n171i;
+            { const V wr = V(tr[16]), wi = V(ti[16]);
+              tile_r[n2v][16] = n175r * wr - n175i * wi;
+              tile_i[n2v][16] = n175r * wi + n175i * wr; }
+            const V n174r = n82r + n171r, n174i = n82i + n171i;
+            { const V wr = V(tr[0]), wi = V(ti[0]);
+              tile_r[n2v][0] = n174r * wr - n174i * wi;
+              tile_i[n2v][0] = n174r * wi + n174i * wr; }
+        }
+        for (crd::usize ml2 = 0; ml2 < 32; ++ml2)
+        {
+            const V n31r = tile_r[31][ml2], n31i = tile_i[31][ml2];
+            const V n30r = tile_r[30][ml2], n30i = tile_i[30][ml2];
+            const V n29r = tile_r[29][ml2], n29i = tile_i[29][ml2];
+            const V n28r = tile_r[28][ml2], n28i = tile_i[28][ml2];
+            const V n27r = tile_r[27][ml2], n27i = tile_i[27][ml2];
+            const V n26r = tile_r[26][ml2], n26i = tile_i[26][ml2];
+            const V n25r = tile_r[25][ml2], n25i = tile_i[25][ml2];
+            const V n24r = tile_r[24][ml2], n24i = tile_i[24][ml2];
+            const V n23r = tile_r[23][ml2], n23i = tile_i[23][ml2];
+            const V n22r = tile_r[22][ml2], n22i = tile_i[22][ml2];
+            const V n21r = tile_r[21][ml2], n21i = tile_i[21][ml2];
+            const V n20r = tile_r[20][ml2], n20i = tile_i[20][ml2];
+            const V n19r = tile_r[19][ml2], n19i = tile_i[19][ml2];
+            const V n18r = tile_r[18][ml2], n18i = tile_i[18][ml2];
+            const V n17r = tile_r[17][ml2], n17i = tile_i[17][ml2];
+            const V n16r = tile_r[16][ml2], n16i = tile_i[16][ml2];
+            const V n15r = tile_r[15][ml2], n15i = tile_i[15][ml2];
+            const V n154r = n15r - n31r, n154i = n15i - n31i;
+            const V n153r = n15r + n31r, n153i = n15i + n31i;
+            const V n163r = V(static_cast<crd::f32>(-0.7071067811865475)) * n154r - V(static_cast<crd::f32>(-0.7071067811865476)) * n154i, n163i = V(static_cast<crd::f32>(-0.7071067811865475)) * n154i + V(static_cast<crd::f32>(-0.7071067811865476)) * n154r;
+            const V n14r = tile_r[14][ml2], n14i = tile_i[14][ml2];
+            const V n73r = n14r - n30r, n73i = n14i - n30i;
+            const V n72r = n14r + n30r, n72i = n14i + n30i;
+            const V n74r = n73i, n74i = -n73r;
+            const V n13r = tile_r[13][ml2], n13i = tile_i[13][ml2];
+            const V n125r = n13r - n29r, n125i = n13i - n29i;
+            const V n124r = n13r + n29r, n124i = n13i + n29i;
+            const V n134r = V(static_cast<crd::f32>(-0.7071067811865475)) * n125r - V(static_cast<crd::f32>(-0.7071067811865476)) * n125i, n134i = V(static_cast<crd::f32>(-0.7071067811865475)) * n125i + V(static_cast<crd::f32>(-0.7071067811865476)) * n125r;
+            const V n12r = tile_r[12][ml2], n12i = tile_i[12][ml2];
+            const V n44r = n12r - n28r, n44i = n12i - n28i;
+            const V n43r = n12r + n28r, n43i = n12i + n28i;
+            const V n53r = V(static_cast<crd::f32>(-0.7071067811865475)) * n44r - V(static_cast<crd::f32>(-0.7071067811865476)) * n44i, n53i = V(static_cast<crd::f32>(-0.7071067811865475)) * n44i + V(static_cast<crd::f32>(-0.7071067811865476)) * n44r;
+            const V n11r = tile_r[11][ml2], n11i = tile_i[11][ml2];
+            const V n145r = n11r - n27r, n145i = n11i - n27i;
+            const V n144r = n11r + n27r, n144i = n11i + n27i;
+            const V n146r = n145i, n146i = -n145r;
+            const V n10r = tile_r[10][ml2], n10i = tile_i[10][ml2];
+            const V n64r = n10r - n26r, n64i = n10i - n26i;
+            const V n63r = n10r + n26r, n63i = n10i + n26i;
+            const V n65r = n64i, n65i = -n64r;
+            const V n9r = tile_r[9][ml2], n9i = tile_i[9][ml2];
+            const V n116r = n9r - n25r, n116i = n9i - n25i;
+            const V n115r = n9r + n25r, n115i = n9i + n25i;
+            const V n117r = n116i, n117i = -n116r;
+            const V n8r = tile_r[8][ml2], n8i = tile_i[8][ml2];
+            const V n35r = n8r - n24r, n35i = n8i - n24i;
+            const V n34r = n8r + n24r, n34i = n8i + n24i;
+            const V n36r = n35i, n36i = -n35r;
+            const V n7r = tile_r[7][ml2], n7i = tile_i[7][ml2];
+            const V n152r = n7r - n23r, n152i = n7i - n23i;
+            const V n151r = n7r + n23r, n151i = n7i + n23i;
+            const V n162r = V(static_cast<crd::f32>(0.7071067811865476)) * n152r - V(static_cast<crd::f32>(-0.7071067811865475)) * n152i, n162i = V(static_cast<crd::f32>(0.7071067811865476)) * n152i + V(static_cast<crd::f32>(-0.7071067811865475)) * n152r;
+            const V n165r = n162r - n163r, n165i = n162i - n163i;
+            const V n164r = n162r + n163r, n164i = n162i + n163i;
+            const V n166r = n165i, n166i = -n165r;
+            const V n156r = n151r - n153r, n156i = n151i - n153i;
+            const V n155r = n151r + n153r, n155i = n151i + n153i;
+            const V n157r = n156i, n157i = -n156r;
+            const V n6r = tile_r[6][ml2], n6i = tile_i[6][ml2];
+            const V n71r = n6r - n22r, n71i = n6i - n22i;
+            const V n70r = n6r + n22r, n70i = n6i + n22i;
+            const V n78r = n71r - n74r, n78i = n71i - n74i;
+            const V n77r = n71r + n74r, n77i = n71i + n74i;
+            const V n105r = V(static_cast<crd::f32>(-0.9238795325112868)) * n78r - V(static_cast<crd::f32>(0.38268343236508967)) * n78i, n105i = V(static_cast<crd::f32>(-0.9238795325112868)) * n78i + V(static_cast<crd::f32>(0.38268343236508967)) * n78r;
+            const V n87r = V(static_cast<crd::f32>(0.38268343236508984)) * n77r - V(static_cast<crd::f32>(-0.9238795325112867)) * n77i, n87i = V(static_cast<crd::f32>(0.38268343236508984)) * n77i + V(static_cast<crd::f32>(-0.9238795325112867)) * n77r;
+            const V n76r = n70r - n72r, n76i = n70i - n72i;
+            const V n75r = n70r + n72r, n75i = n70i + n72i;
+            const V n96r = V(static_cast<crd::f32>(-0.7071067811865475)) * n76r - V(static_cast<crd::f32>(-0.7071067811865476)) * n76i, n96i = V(static_cast<crd::f32>(-0.7071067811865475)) * n76i + V(static_cast<crd::f32>(-0.7071067811865476)) * n76r;
+            const V n5r = tile_r[5][ml2], n5i = tile_i[5][ml2];
+            const V n123r = n5r - n21r, n123i = n5i - n21i;
+            const V n122r = n5r + n21r, n122i = n5i + n21i;
+            const V n133r = V(static_cast<crd::f32>(0.7071067811865476)) * n123r - V(static_cast<crd::f32>(-0.7071067811865475)) * n123i, n133i = V(static_cast<crd::f32>(0.7071067811865476)) * n123i + V(static_cast<crd::f32>(-0.7071067811865475)) * n123r;
+            const V n136r = n133r - n134r, n136i = n133i - n134i;
+            const V n135r = n133r + n134r, n135i = n133i + n134i;
+            const V n137r = n136i, n137i = -n136r;
+            const V n127r = n122r - n124r, n127i = n122i - n124i;
+            const V n126r = n122r + n124r, n126i = n122i + n124i;
+            const V n128r = n127i, n128i = -n127r;
+            const V n4r = tile_r[4][ml2], n4i = tile_i[4][ml2];
+            const V n42r = n4r - n20r, n42i = n4i - n20i;
+            const V n41r = n4r + n20r, n41i = n4i + n20i;
+            const V n52r = V(static_cast<crd::f32>(0.7071067811865476)) * n42r - V(static_cast<crd::f32>(-0.7071067811865475)) * n42i, n52i = V(static_cast<crd::f32>(0.7071067811865476)) * n42i + V(static_cast<crd::f32>(-0.7071067811865475)) * n42r;
+            const V n55r = n52r - n53r, n55i = n52i - n53i;
+            const V n54r = n52r + n53r, n54i = n52i + n53i;
+            const V n56r = n55i, n56i = -n55r;
+            const V n46r = n41r - n43r, n46i = n41i - n43i;
+            const V n45r = n41r + n43r, n45i = n41i + n43i;
+            const V n47r = n46i, n47i = -n46r;
+            const V n3r = tile_r[3][ml2], n3i = tile_i[3][ml2];
+            const V n143r = n3r - n19r, n143i = n3i - n19i;
+            const V n142r = n3r + n19r, n142i = n3i + n19i;
+            const V n150r = n143r - n146r, n150i = n143i - n146i;
+            const V n149r = n143r + n146r, n149i = n143i + n146i;
+            const V n170r = n150r - n166r, n170i = n150i - n166i;
+            const V n169r = n150r + n166r, n169i = n150i + n166i;
+            const V n233r = V(static_cast<crd::f32>(-0.5555702330196022)) * n170r - V(static_cast<crd::f32>(0.8314696123025452)) * n170i, n233i = V(static_cast<crd::f32>(-0.5555702330196022)) * n170i + V(static_cast<crd::f32>(0.8314696123025452)) * n170r;
+            const V n197r = V(static_cast<crd::f32>(-0.1950903220161282)) * n169r - V(static_cast<crd::f32>(-0.9807852804032304)) * n169i, n197i = V(static_cast<crd::f32>(-0.1950903220161282)) * n169i + V(static_cast<crd::f32>(-0.9807852804032304)) * n169r;
+            const V n168r = n149r - n164r, n168i = n149i - n164i;
+            const V n167r = n149r + n164r, n167i = n149i + n164i;
+            const V n215r = V(static_cast<crd::f32>(-0.9807852804032304)) * n168r - V(static_cast<crd::f32>(-0.1950903220161286)) * n168i, n215i = V(static_cast<crd::f32>(-0.9807852804032304)) * n168i + V(static_cast<crd::f32>(-0.1950903220161286)) * n168r;
+            const V n179r = V(static_cast<crd::f32>(0.8314696123025452)) * n167r - V(static_cast<crd::f32>(-0.5555702330196022)) * n167i, n179i = V(static_cast<crd::f32>(0.8314696123025452)) * n167i + V(static_cast<crd::f32>(-0.5555702330196022)) * n167r;
+            const V n148r = n142r - n144r, n148i = n142i - n144i;
+            const V n147r = n142r + n144r, n147i = n142i + n144i;
+            const V n161r = n148r - n157r, n161i = n148i - n157i;
+            const V n160r = n148r + n157r, n160i = n148i + n157i;
+            const V n224r = V(static_cast<crd::f32>(-0.9238795325112868)) * n161r - V(static_cast<crd::f32>(0.38268343236508967)) * n161i, n224i = V(static_cast<crd::f32>(-0.9238795325112868)) * n161i + V(static_cast<crd::f32>(0.38268343236508967)) * n161r;
+            const V n188r = V(static_cast<crd::f32>(0.38268343236508984)) * n160r - V(static_cast<crd::f32>(-0.9238795325112867)) * n160i, n188i = V(static_cast<crd::f32>(0.38268343236508984)) * n160i + V(static_cast<crd::f32>(-0.9238795325112867)) * n160r;
+            const V n159r = n147r - n155r, n159i = n147i - n155i;
+            const V n158r = n147r + n155r, n158i = n147i + n155i;
+            const V n206r = V(static_cast<crd::f32>(-0.7071067811865475)) * n159r - V(static_cast<crd::f32>(-0.7071067811865476)) * n159i, n206i = V(static_cast<crd::f32>(-0.7071067811865475)) * n159i + V(static_cast<crd::f32>(-0.7071067811865476)) * n159r;
+            const V n2r = tile_r[2][ml2], n2i = tile_i[2][ml2];
+            const V n62r = n2r - n18r, n62i = n2i - n18i;
+            const V n61r = n2r + n18r, n61i = n2i + n18i;
+            const V n69r = n62r - n65r, n69i = n62i - n65i;
+            const V n68r = n62r + n65r, n68i = n62i + n65i;
+            const V n104r = V(static_cast<crd::f32>(0.38268343236508984)) * n69r - V(static_cast<crd::f32>(-0.9238795325112867)) * n69i, n104i = V(static_cast<crd::f32>(0.38268343236508984)) * n69i + V(static_cast<crd::f32>(-0.9238795325112867)) * n69r;
+            const V n86r = V(static_cast<crd::f32>(0.9238795325112867)) * n68r - V(static_cast<crd::f32>(-0.3826834323650898)) * n68i, n86i = V(static_cast<crd::f32>(0.9238795325112867)) * n68i + V(static_cast<crd::f32>(-0.3826834323650898)) * n68r;
+            const V n107r = n104r - n105r, n107i = n104i - n105i;
+            const V n106r = n104r + n105r, n106i = n104i + n105i;
+            const V n108r = n107i, n108i = -n107r;
+            const V n89r = n86r - n87r, n89i = n86i - n87i;
+            const V n88r = n86r + n87r, n88i = n86i + n87i;
+            const V n90r = n89i, n90i = -n89r;
+            const V n67r = n61r - n63r, n67i = n61i - n63i;
+            const V n66r = n61r + n63r, n66i = n61i + n63i;
+            const V n95r = V(static_cast<crd::f32>(0.7071067811865476)) * n67r - V(static_cast<crd::f32>(-0.7071067811865475)) * n67i, n95i = V(static_cast<crd::f32>(0.7071067811865476)) * n67i + V(static_cast<crd::f32>(-0.7071067811865475)) * n67r;
+            const V n98r = n95r - n96r, n98i = n95i - n96i;
+            const V n97r = n95r + n96r, n97i = n95i + n96i;
+            const V n99r = n98i, n99i = -n98r;
+            const V n80r = n66r - n75r, n80i = n66i - n75i;
+            const V n79r = n66r + n75r, n79i = n66i + n75i;
+            const V n81r = n80i, n81i = -n80r;
+            const V n1r = tile_r[1][ml2], n1i = tile_i[1][ml2];
+            const V n114r = n1r - n17r, n114i = n1i - n17i;
+            const V n113r = n1r + n17r, n113i = n1i + n17i;
+            const V n121r = n114r - n117r, n121i = n114i - n117i;
+            const V n120r = n114r + n117r, n120i = n114i + n117i;
+            const V n141r = n121r - n137r, n141i = n121i - n137i;
+            const V n140r = n121r + n137r, n140i = n121i + n137i;
+            const V n232r = V(static_cast<crd::f32>(0.19509032201612833)) * n141r - V(static_cast<crd::f32>(-0.9807852804032304)) * n141i, n232i = V(static_cast<crd::f32>(0.19509032201612833)) * n141i + V(static_cast<crd::f32>(-0.9807852804032304)) * n141r;
+            const V n196r = V(static_cast<crd::f32>(0.8314696123025452)) * n140r - V(static_cast<crd::f32>(-0.5555702330196022)) * n140i, n196i = V(static_cast<crd::f32>(0.8314696123025452)) * n140i + V(static_cast<crd::f32>(-0.5555702330196022)) * n140r;
+            const V n235r = n232r - n233r, n235i = n232i - n233i;
+            const V n234r = n232r + n233r, n234i = n232i + n233i;
+            const V n236r = n235i, n236i = -n235r;
+            const V n199r = n196r - n197r, n199i = n196i - n197i;
+            const V n198r = n196r + n197r, n198i = n196i + n197i;
+            const V n200r = n199i, n200i = -n199r;
+            const V n139r = n120r - n135r, n139i = n120i - n135i;
+            const V n138r = n120r + n135r, n138i = n120i + n135i;
+            const V n214r = V(static_cast<crd::f32>(0.5555702330196023)) * n139r - V(static_cast<crd::f32>(-0.8314696123025452)) * n139i, n214i = V(static_cast<crd::f32>(0.5555702330196023)) * n139i + V(static_cast<crd::f32>(-0.8314696123025452)) * n139r;
+            const V n178r = V(static_cast<crd::f32>(0.9807852804032304)) * n138r - V(static_cast<crd::f32>(-0.19509032201612825)) * n138i, n178i = V(static_cast<crd::f32>(0.9807852804032304)) * n138i + V(static_cast<crd::f32>(-0.19509032201612825)) * n138r;
+            const V n217r = n214r - n215r, n217i = n214i - n215i;
+            const V n216r = n214r + n215r, n216i = n214i + n215i;
+            const V n218r = n217i, n218i = -n217r;
+            const V n181r = n178r - n179r, n181i = n178i - n179i;
+            const V n180r = n178r + n179r, n180i = n178i + n179i;
+            const V n182r = n181i, n182i = -n181r;
+            const V n119r = n113r - n115r, n119i = n113i - n115i;
+            const V n118r = n113r + n115r, n118i = n113i + n115i;
+            const V n132r = n119r - n128r, n132i = n119i - n128i;
+            const V n131r = n119r + n128r, n131i = n119i + n128i;
+            const V n223r = V(static_cast<crd::f32>(0.38268343236508984)) * n132r - V(static_cast<crd::f32>(-0.9238795325112867)) * n132i, n223i = V(static_cast<crd::f32>(0.38268343236508984)) * n132i + V(static_cast<crd::f32>(-0.9238795325112867)) * n132r;
+            const V n187r = V(static_cast<crd::f32>(0.9238795325112867)) * n131r - V(static_cast<crd::f32>(-0.3826834323650898)) * n131i, n187i = V(static_cast<crd::f32>(0.9238795325112867)) * n131i + V(static_cast<crd::f32>(-0.3826834323650898)) * n131r;
+            const V n226r = n223r - n224r, n226i = n223i - n224i;
+            const V n225r = n223r + n224r, n225i = n223i + n224i;
+            const V n227r = n226i, n227i = -n226r;
+            const V n190r = n187r - n188r, n190i = n187i - n188i;
+            const V n189r = n187r + n188r, n189i = n187i + n188i;
+            const V n191r = n190i, n191i = -n190r;
+            const V n130r = n118r - n126r, n130i = n118i - n126i;
+            const V n129r = n118r + n126r, n129i = n118i + n126i;
+            const V n205r = V(static_cast<crd::f32>(0.7071067811865476)) * n130r - V(static_cast<crd::f32>(-0.7071067811865475)) * n130i, n205i = V(static_cast<crd::f32>(0.7071067811865476)) * n130i + V(static_cast<crd::f32>(-0.7071067811865475)) * n130r;
+            const V n208r = n205r - n206r, n208i = n205i - n206i;
+            const V n207r = n205r + n206r, n207i = n205i + n206i;
+            const V n209r = n208i, n209i = -n208r;
+            const V n172r = n129r - n158r, n172i = n129i - n158i;
+            const V n171r = n129r + n158r, n171i = n129i + n158i;
+            const V n173r = n172i, n173i = -n172r;
+            const V n0r = tile_r[0][ml2], n0i = tile_i[0][ml2];
+            const V n33r = n0r - n16r, n33i = n0i - n16i;
+            const V n32r = n0r + n16r, n32i = n0i + n16i;
+            const V n40r = n33r - n36r, n40i = n33i - n36i;
+            const V n39r = n33r + n36r, n39i = n33i + n36i;
+            const V n60r = n40r - n56r, n60i = n40i - n56i;
+            const V n59r = n40r + n56r, n59i = n40i + n56i;
+            const V n112r = n60r - n108r, n112i = n60i - n108i;
+            const V n111r = n60r + n108r, n111i = n60i + n108i;
+            const V n240r = n112r - n236r, n240i = n112i - n236i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (31 * 32 + ml2) * n1p + bb0), n240r, n240i);
+            const V n239r = n112r + n236r, n239i = n112i + n236i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (15 * 32 + ml2) * n1p + bb0), n239r, n239i);
+            const V n238r = n111r - n234r, n238i = n111i - n234i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (23 * 32 + ml2) * n1p + bb0), n238r, n238i);
+            const V n237r = n111r + n234r, n237i = n111i + n234i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (7 * 32 + ml2) * n1p + bb0), n237r, n237i);
+            const V n110r = n59r - n106r, n110i = n59i - n106i;
+            const V n109r = n59r + n106r, n109i = n59i + n106i;
+            const V n204r = n110r - n200r, n204i = n110i - n200i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (27 * 32 + ml2) * n1p + bb0), n204r, n204i);
+            const V n203r = n110r + n200r, n203i = n110i + n200i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (11 * 32 + ml2) * n1p + bb0), n203r, n203i);
+            const V n202r = n109r - n198r, n202i = n109i - n198i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (19 * 32 + ml2) * n1p + bb0), n202r, n202i);
+            const V n201r = n109r + n198r, n201i = n109i + n198i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (3 * 32 + ml2) * n1p + bb0), n201r, n201i);
+            const V n58r = n39r - n54r, n58i = n39i - n54i;
+            const V n57r = n39r + n54r, n57i = n39i + n54i;
+            const V n94r = n58r - n90r, n94i = n58i - n90i;
+            const V n93r = n58r + n90r, n93i = n58i + n90i;
+            const V n222r = n94r - n218r, n222i = n94i - n218i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (29 * 32 + ml2) * n1p + bb0), n222r, n222i);
+            const V n221r = n94r + n218r, n221i = n94i + n218i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (13 * 32 + ml2) * n1p + bb0), n221r, n221i);
+            const V n220r = n93r - n216r, n220i = n93i - n216i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (21 * 32 + ml2) * n1p + bb0), n220r, n220i);
+            const V n219r = n93r + n216r, n219i = n93i + n216i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (5 * 32 + ml2) * n1p + bb0), n219r, n219i);
+            const V n92r = n57r - n88r, n92i = n57i - n88i;
+            const V n91r = n57r + n88r, n91i = n57i + n88i;
+            const V n186r = n92r - n182r, n186i = n92i - n182i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (25 * 32 + ml2) * n1p + bb0), n186r, n186i);
+            const V n185r = n92r + n182r, n185i = n92i + n182i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (9 * 32 + ml2) * n1p + bb0), n185r, n185i);
+            const V n184r = n91r - n180r, n184i = n91i - n180i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (17 * 32 + ml2) * n1p + bb0), n184r, n184i);
+            const V n183r = n91r + n180r, n183i = n91i + n180i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (1 * 32 + ml2) * n1p + bb0), n183r, n183i);
+            const V n38r = n32r - n34r, n38i = n32i - n34i;
+            const V n37r = n32r + n34r, n37i = n32i + n34i;
+            const V n51r = n38r - n47r, n51i = n38i - n47i;
+            const V n50r = n38r + n47r, n50i = n38i + n47i;
+            const V n103r = n51r - n99r, n103i = n51i - n99i;
+            const V n102r = n51r + n99r, n102i = n51i + n99i;
+            const V n231r = n103r - n227r, n231i = n103i - n227i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (30 * 32 + ml2) * n1p + bb0), n231r, n231i);
+            const V n230r = n103r + n227r, n230i = n103i + n227i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (14 * 32 + ml2) * n1p + bb0), n230r, n230i);
+            const V n229r = n102r - n225r, n229i = n102i - n225i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (22 * 32 + ml2) * n1p + bb0), n229r, n229i);
+            const V n228r = n102r + n225r, n228i = n102i + n225i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (6 * 32 + ml2) * n1p + bb0), n228r, n228i);
+            const V n101r = n50r - n97r, n101i = n50i - n97i;
+            const V n100r = n50r + n97r, n100i = n50i + n97i;
+            const V n195r = n101r - n191r, n195i = n101i - n191i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (26 * 32 + ml2) * n1p + bb0), n195r, n195i);
+            const V n194r = n101r + n191r, n194i = n101i + n191i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (10 * 32 + ml2) * n1p + bb0), n194r, n194i);
+            const V n193r = n100r - n189r, n193i = n100i - n189i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (18 * 32 + ml2) * n1p + bb0), n193r, n193i);
+            const V n192r = n100r + n189r, n192i = n100i + n189i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (2 * 32 + ml2) * n1p + bb0), n192r, n192i);
+            const V n49r = n37r - n45r, n49i = n37i - n45i;
+            const V n48r = n37r + n45r, n48i = n37i + n45i;
+            const V n85r = n49r - n81r, n85i = n49i - n81i;
+            const V n84r = n49r + n81r, n84i = n49i + n81i;
+            const V n213r = n85r - n209r, n213i = n85i - n209i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (28 * 32 + ml2) * n1p + bb0), n213r, n213i);
+            const V n212r = n85r + n209r, n212i = n85i + n209i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (12 * 32 + ml2) * n1p + bb0), n212r, n212i);
+            const V n211r = n84r - n207r, n211i = n84i - n207i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (20 * 32 + ml2) * n1p + bb0), n211r, n211i);
+            const V n210r = n84r + n207r, n210i = n84i + n207i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (4 * 32 + ml2) * n1p + bb0), n210r, n210i);
+            const V n83r = n48r - n79r, n83i = n48i - n79i;
+            const V n82r = n48r + n79r, n82i = n48i + n79i;
+            const V n177r = n83r - n173r, n177i = n83i - n173i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (24 * 32 + ml2) * n1p + bb0), n177r, n177i);
+            const V n176r = n83r + n173r, n176i = n83i + n173i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (8 * 32 + ml2) * n1p + bb0), n176r, n176i);
+            const V n175r = n82r - n171r, n175i = n82i - n171i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (16 * 32 + ml2) * n1p + bb0), n175r, n175i);
+            const V n174r = n82r + n171r, n174i = n82i + n171i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (0 * 32 + ml2) * n1p + bb0), n174r, n174i);
+        }
+    }
+}
+// M19 FUSED P1 (N=1024): gather stage-1 + tiled-producer stage-2 + transpose over 64KB tile. GENERATED.
+CRD_FORCEINLINE void codelet32_p1_fused_tile64(const crd::hesap::Complex<crd::f32>* din_block,
+    crd::hesap::Complex<crd::f32>* out, crd::usize rs, const crd::f32* twr, const crd::f32* twi) noexcept
+{
+    using V = crd::math::simd::Vec8f;
+    namespace simd = crd::math::simd;
+    V tile_r[32][32], tile_i[32][32];
+    for (crd::usize s = 0; s < 16; ++s)
+    {
+        const crd::usize bb0 = s * 8;
+        for (crd::usize n2v = 0; n2v < 32; ++n2v)
+        {
+            const crd::f32* const tr = twr + n2v * 32, * const ti = twi + n2v * 32;
+            const crd::hesap::Complex<crd::f32>* const base = din_block + n2v * rs + bb0;
+            V n31r, n31i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 992 * rs), n31r, n31i);
+            V n30r, n30i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 960 * rs), n30r, n30i);
+            V n29r, n29i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 928 * rs), n29r, n29i);
+            V n28r, n28i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 896 * rs), n28r, n28i);
+            V n27r, n27i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 864 * rs), n27r, n27i);
+            V n26r, n26i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 832 * rs), n26r, n26i);
+            V n25r, n25i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 800 * rs), n25r, n25i);
+            V n24r, n24i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 768 * rs), n24r, n24i);
+            V n23r, n23i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 736 * rs), n23r, n23i);
+            V n22r, n22i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 704 * rs), n22r, n22i);
+            V n21r, n21i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 672 * rs), n21r, n21i);
+            V n20r, n20i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 640 * rs), n20r, n20i);
+            V n19r, n19i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 608 * rs), n19r, n19i);
+            V n18r, n18i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 576 * rs), n18r, n18i);
+            V n17r, n17i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 544 * rs), n17r, n17i);
+            V n16r, n16i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 512 * rs), n16r, n16i);
+            V n15r, n15i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 480 * rs), n15r, n15i);
+            const V n154r = n15r - n31r, n154i = n15i - n31i;
+            const V n153r = n15r + n31r, n153i = n15i + n31i;
+            const V n163r = V(static_cast<crd::f32>(-0.7071067811865475)) * n154r - V(static_cast<crd::f32>(-0.7071067811865476)) * n154i, n163i = V(static_cast<crd::f32>(-0.7071067811865475)) * n154i + V(static_cast<crd::f32>(-0.7071067811865476)) * n154r;
+            V n14r, n14i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 448 * rs), n14r, n14i);
+            const V n73r = n14r - n30r, n73i = n14i - n30i;
+            const V n72r = n14r + n30r, n72i = n14i + n30i;
+            const V n74r = n73i, n74i = -n73r;
+            V n13r, n13i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 416 * rs), n13r, n13i);
+            const V n125r = n13r - n29r, n125i = n13i - n29i;
+            const V n124r = n13r + n29r, n124i = n13i + n29i;
+            const V n134r = V(static_cast<crd::f32>(-0.7071067811865475)) * n125r - V(static_cast<crd::f32>(-0.7071067811865476)) * n125i, n134i = V(static_cast<crd::f32>(-0.7071067811865475)) * n125i + V(static_cast<crd::f32>(-0.7071067811865476)) * n125r;
+            V n12r, n12i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 384 * rs), n12r, n12i);
+            const V n44r = n12r - n28r, n44i = n12i - n28i;
+            const V n43r = n12r + n28r, n43i = n12i + n28i;
+            const V n53r = V(static_cast<crd::f32>(-0.7071067811865475)) * n44r - V(static_cast<crd::f32>(-0.7071067811865476)) * n44i, n53i = V(static_cast<crd::f32>(-0.7071067811865475)) * n44i + V(static_cast<crd::f32>(-0.7071067811865476)) * n44r;
+            V n11r, n11i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 352 * rs), n11r, n11i);
+            const V n145r = n11r - n27r, n145i = n11i - n27i;
+            const V n144r = n11r + n27r, n144i = n11i + n27i;
+            const V n146r = n145i, n146i = -n145r;
+            V n10r, n10i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 320 * rs), n10r, n10i);
+            const V n64r = n10r - n26r, n64i = n10i - n26i;
+            const V n63r = n10r + n26r, n63i = n10i + n26i;
+            const V n65r = n64i, n65i = -n64r;
+            V n9r, n9i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 288 * rs), n9r, n9i);
+            const V n116r = n9r - n25r, n116i = n9i - n25i;
+            const V n115r = n9r + n25r, n115i = n9i + n25i;
+            const V n117r = n116i, n117i = -n116r;
+            V n8r, n8i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 256 * rs), n8r, n8i);
+            const V n35r = n8r - n24r, n35i = n8i - n24i;
+            const V n34r = n8r + n24r, n34i = n8i + n24i;
+            const V n36r = n35i, n36i = -n35r;
+            V n7r, n7i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 224 * rs), n7r, n7i);
+            const V n152r = n7r - n23r, n152i = n7i - n23i;
+            const V n151r = n7r + n23r, n151i = n7i + n23i;
+            const V n162r = V(static_cast<crd::f32>(0.7071067811865476)) * n152r - V(static_cast<crd::f32>(-0.7071067811865475)) * n152i, n162i = V(static_cast<crd::f32>(0.7071067811865476)) * n152i + V(static_cast<crd::f32>(-0.7071067811865475)) * n152r;
+            const V n165r = n162r - n163r, n165i = n162i - n163i;
+            const V n164r = n162r + n163r, n164i = n162i + n163i;
+            const V n166r = n165i, n166i = -n165r;
+            const V n156r = n151r - n153r, n156i = n151i - n153i;
+            const V n155r = n151r + n153r, n155i = n151i + n153i;
+            const V n157r = n156i, n157i = -n156r;
+            V n6r, n6i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 192 * rs), n6r, n6i);
+            const V n71r = n6r - n22r, n71i = n6i - n22i;
+            const V n70r = n6r + n22r, n70i = n6i + n22i;
+            const V n78r = n71r - n74r, n78i = n71i - n74i;
+            const V n77r = n71r + n74r, n77i = n71i + n74i;
+            const V n105r = V(static_cast<crd::f32>(-0.9238795325112868)) * n78r - V(static_cast<crd::f32>(0.38268343236508967)) * n78i, n105i = V(static_cast<crd::f32>(-0.9238795325112868)) * n78i + V(static_cast<crd::f32>(0.38268343236508967)) * n78r;
+            const V n87r = V(static_cast<crd::f32>(0.38268343236508984)) * n77r - V(static_cast<crd::f32>(-0.9238795325112867)) * n77i, n87i = V(static_cast<crd::f32>(0.38268343236508984)) * n77i + V(static_cast<crd::f32>(-0.9238795325112867)) * n77r;
+            const V n76r = n70r - n72r, n76i = n70i - n72i;
+            const V n75r = n70r + n72r, n75i = n70i + n72i;
+            const V n96r = V(static_cast<crd::f32>(-0.7071067811865475)) * n76r - V(static_cast<crd::f32>(-0.7071067811865476)) * n76i, n96i = V(static_cast<crd::f32>(-0.7071067811865475)) * n76i + V(static_cast<crd::f32>(-0.7071067811865476)) * n76r;
+            V n5r, n5i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 160 * rs), n5r, n5i);
+            const V n123r = n5r - n21r, n123i = n5i - n21i;
+            const V n122r = n5r + n21r, n122i = n5i + n21i;
+            const V n133r = V(static_cast<crd::f32>(0.7071067811865476)) * n123r - V(static_cast<crd::f32>(-0.7071067811865475)) * n123i, n133i = V(static_cast<crd::f32>(0.7071067811865476)) * n123i + V(static_cast<crd::f32>(-0.7071067811865475)) * n123r;
+            const V n136r = n133r - n134r, n136i = n133i - n134i;
+            const V n135r = n133r + n134r, n135i = n133i + n134i;
+            const V n137r = n136i, n137i = -n136r;
+            const V n127r = n122r - n124r, n127i = n122i - n124i;
+            const V n126r = n122r + n124r, n126i = n122i + n124i;
+            const V n128r = n127i, n128i = -n127r;
+            V n4r, n4i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 128 * rs), n4r, n4i);
+            const V n42r = n4r - n20r, n42i = n4i - n20i;
+            const V n41r = n4r + n20r, n41i = n4i + n20i;
+            const V n52r = V(static_cast<crd::f32>(0.7071067811865476)) * n42r - V(static_cast<crd::f32>(-0.7071067811865475)) * n42i, n52i = V(static_cast<crd::f32>(0.7071067811865476)) * n42i + V(static_cast<crd::f32>(-0.7071067811865475)) * n42r;
+            const V n55r = n52r - n53r, n55i = n52i - n53i;
+            const V n54r = n52r + n53r, n54i = n52i + n53i;
+            const V n56r = n55i, n56i = -n55r;
+            const V n46r = n41r - n43r, n46i = n41i - n43i;
+            const V n45r = n41r + n43r, n45i = n41i + n43i;
+            const V n47r = n46i, n47i = -n46r;
+            V n3r, n3i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 96 * rs), n3r, n3i);
+            const V n143r = n3r - n19r, n143i = n3i - n19i;
+            const V n142r = n3r + n19r, n142i = n3i + n19i;
+            const V n150r = n143r - n146r, n150i = n143i - n146i;
+            const V n149r = n143r + n146r, n149i = n143i + n146i;
+            const V n170r = n150r - n166r, n170i = n150i - n166i;
+            const V n169r = n150r + n166r, n169i = n150i + n166i;
+            const V n233r = V(static_cast<crd::f32>(-0.5555702330196022)) * n170r - V(static_cast<crd::f32>(0.8314696123025452)) * n170i, n233i = V(static_cast<crd::f32>(-0.5555702330196022)) * n170i + V(static_cast<crd::f32>(0.8314696123025452)) * n170r;
+            const V n197r = V(static_cast<crd::f32>(-0.1950903220161282)) * n169r - V(static_cast<crd::f32>(-0.9807852804032304)) * n169i, n197i = V(static_cast<crd::f32>(-0.1950903220161282)) * n169i + V(static_cast<crd::f32>(-0.9807852804032304)) * n169r;
+            const V n168r = n149r - n164r, n168i = n149i - n164i;
+            const V n167r = n149r + n164r, n167i = n149i + n164i;
+            const V n215r = V(static_cast<crd::f32>(-0.9807852804032304)) * n168r - V(static_cast<crd::f32>(-0.1950903220161286)) * n168i, n215i = V(static_cast<crd::f32>(-0.9807852804032304)) * n168i + V(static_cast<crd::f32>(-0.1950903220161286)) * n168r;
+            const V n179r = V(static_cast<crd::f32>(0.8314696123025452)) * n167r - V(static_cast<crd::f32>(-0.5555702330196022)) * n167i, n179i = V(static_cast<crd::f32>(0.8314696123025452)) * n167i + V(static_cast<crd::f32>(-0.5555702330196022)) * n167r;
+            const V n148r = n142r - n144r, n148i = n142i - n144i;
+            const V n147r = n142r + n144r, n147i = n142i + n144i;
+            const V n161r = n148r - n157r, n161i = n148i - n157i;
+            const V n160r = n148r + n157r, n160i = n148i + n157i;
+            const V n224r = V(static_cast<crd::f32>(-0.9238795325112868)) * n161r - V(static_cast<crd::f32>(0.38268343236508967)) * n161i, n224i = V(static_cast<crd::f32>(-0.9238795325112868)) * n161i + V(static_cast<crd::f32>(0.38268343236508967)) * n161r;
+            const V n188r = V(static_cast<crd::f32>(0.38268343236508984)) * n160r - V(static_cast<crd::f32>(-0.9238795325112867)) * n160i, n188i = V(static_cast<crd::f32>(0.38268343236508984)) * n160i + V(static_cast<crd::f32>(-0.9238795325112867)) * n160r;
+            const V n159r = n147r - n155r, n159i = n147i - n155i;
+            const V n158r = n147r + n155r, n158i = n147i + n155i;
+            const V n206r = V(static_cast<crd::f32>(-0.7071067811865475)) * n159r - V(static_cast<crd::f32>(-0.7071067811865476)) * n159i, n206i = V(static_cast<crd::f32>(-0.7071067811865475)) * n159i + V(static_cast<crd::f32>(-0.7071067811865476)) * n159r;
+            V n2r, n2i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 64 * rs), n2r, n2i);
+            const V n62r = n2r - n18r, n62i = n2i - n18i;
+            const V n61r = n2r + n18r, n61i = n2i + n18i;
+            const V n69r = n62r - n65r, n69i = n62i - n65i;
+            const V n68r = n62r + n65r, n68i = n62i + n65i;
+            const V n104r = V(static_cast<crd::f32>(0.38268343236508984)) * n69r - V(static_cast<crd::f32>(-0.9238795325112867)) * n69i, n104i = V(static_cast<crd::f32>(0.38268343236508984)) * n69i + V(static_cast<crd::f32>(-0.9238795325112867)) * n69r;
+            const V n86r = V(static_cast<crd::f32>(0.9238795325112867)) * n68r - V(static_cast<crd::f32>(-0.3826834323650898)) * n68i, n86i = V(static_cast<crd::f32>(0.9238795325112867)) * n68i + V(static_cast<crd::f32>(-0.3826834323650898)) * n68r;
+            const V n107r = n104r - n105r, n107i = n104i - n105i;
+            const V n106r = n104r + n105r, n106i = n104i + n105i;
+            const V n108r = n107i, n108i = -n107r;
+            const V n89r = n86r - n87r, n89i = n86i - n87i;
+            const V n88r = n86r + n87r, n88i = n86i + n87i;
+            const V n90r = n89i, n90i = -n89r;
+            const V n67r = n61r - n63r, n67i = n61i - n63i;
+            const V n66r = n61r + n63r, n66i = n61i + n63i;
+            const V n95r = V(static_cast<crd::f32>(0.7071067811865476)) * n67r - V(static_cast<crd::f32>(-0.7071067811865475)) * n67i, n95i = V(static_cast<crd::f32>(0.7071067811865476)) * n67i + V(static_cast<crd::f32>(-0.7071067811865475)) * n67r;
+            const V n98r = n95r - n96r, n98i = n95i - n96i;
+            const V n97r = n95r + n96r, n97i = n95i + n96i;
+            const V n99r = n98i, n99i = -n98r;
+            const V n80r = n66r - n75r, n80i = n66i - n75i;
+            const V n79r = n66r + n75r, n79i = n66i + n75i;
+            const V n81r = n80i, n81i = -n80r;
+            V n1r, n1i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 32 * rs), n1r, n1i);
+            const V n114r = n1r - n17r, n114i = n1i - n17i;
+            const V n113r = n1r + n17r, n113i = n1i + n17i;
+            const V n121r = n114r - n117r, n121i = n114i - n117i;
+            const V n120r = n114r + n117r, n120i = n114i + n117i;
+            const V n141r = n121r - n137r, n141i = n121i - n137i;
+            const V n140r = n121r + n137r, n140i = n121i + n137i;
+            const V n232r = V(static_cast<crd::f32>(0.19509032201612833)) * n141r - V(static_cast<crd::f32>(-0.9807852804032304)) * n141i, n232i = V(static_cast<crd::f32>(0.19509032201612833)) * n141i + V(static_cast<crd::f32>(-0.9807852804032304)) * n141r;
+            const V n196r = V(static_cast<crd::f32>(0.8314696123025452)) * n140r - V(static_cast<crd::f32>(-0.5555702330196022)) * n140i, n196i = V(static_cast<crd::f32>(0.8314696123025452)) * n140i + V(static_cast<crd::f32>(-0.5555702330196022)) * n140r;
+            const V n235r = n232r - n233r, n235i = n232i - n233i;
+            const V n234r = n232r + n233r, n234i = n232i + n233i;
+            const V n236r = n235i, n236i = -n235r;
+            const V n199r = n196r - n197r, n199i = n196i - n197i;
+            const V n198r = n196r + n197r, n198i = n196i + n197i;
+            const V n200r = n199i, n200i = -n199r;
+            const V n139r = n120r - n135r, n139i = n120i - n135i;
+            const V n138r = n120r + n135r, n138i = n120i + n135i;
+            const V n214r = V(static_cast<crd::f32>(0.5555702330196023)) * n139r - V(static_cast<crd::f32>(-0.8314696123025452)) * n139i, n214i = V(static_cast<crd::f32>(0.5555702330196023)) * n139i + V(static_cast<crd::f32>(-0.8314696123025452)) * n139r;
+            const V n178r = V(static_cast<crd::f32>(0.9807852804032304)) * n138r - V(static_cast<crd::f32>(-0.19509032201612825)) * n138i, n178i = V(static_cast<crd::f32>(0.9807852804032304)) * n138i + V(static_cast<crd::f32>(-0.19509032201612825)) * n138r;
+            const V n217r = n214r - n215r, n217i = n214i - n215i;
+            const V n216r = n214r + n215r, n216i = n214i + n215i;
+            const V n218r = n217i, n218i = -n217r;
+            const V n181r = n178r - n179r, n181i = n178i - n179i;
+            const V n180r = n178r + n179r, n180i = n178i + n179i;
+            const V n182r = n181i, n182i = -n181r;
+            const V n119r = n113r - n115r, n119i = n113i - n115i;
+            const V n118r = n113r + n115r, n118i = n113i + n115i;
+            const V n132r = n119r - n128r, n132i = n119i - n128i;
+            const V n131r = n119r + n128r, n131i = n119i + n128i;
+            const V n223r = V(static_cast<crd::f32>(0.38268343236508984)) * n132r - V(static_cast<crd::f32>(-0.9238795325112867)) * n132i, n223i = V(static_cast<crd::f32>(0.38268343236508984)) * n132i + V(static_cast<crd::f32>(-0.9238795325112867)) * n132r;
+            const V n187r = V(static_cast<crd::f32>(0.9238795325112867)) * n131r - V(static_cast<crd::f32>(-0.3826834323650898)) * n131i, n187i = V(static_cast<crd::f32>(0.9238795325112867)) * n131i + V(static_cast<crd::f32>(-0.3826834323650898)) * n131r;
+            const V n226r = n223r - n224r, n226i = n223i - n224i;
+            const V n225r = n223r + n224r, n225i = n223i + n224i;
+            const V n227r = n226i, n227i = -n226r;
+            const V n190r = n187r - n188r, n190i = n187i - n188i;
+            const V n189r = n187r + n188r, n189i = n187i + n188i;
+            const V n191r = n190i, n191i = -n190r;
+            const V n130r = n118r - n126r, n130i = n118i - n126i;
+            const V n129r = n118r + n126r, n129i = n118i + n126i;
+            const V n205r = V(static_cast<crd::f32>(0.7071067811865476)) * n130r - V(static_cast<crd::f32>(-0.7071067811865475)) * n130i, n205i = V(static_cast<crd::f32>(0.7071067811865476)) * n130i + V(static_cast<crd::f32>(-0.7071067811865475)) * n130r;
+            const V n208r = n205r - n206r, n208i = n205i - n206i;
+            const V n207r = n205r + n206r, n207i = n205i + n206i;
+            const V n209r = n208i, n209i = -n208r;
+            const V n172r = n129r - n158r, n172i = n129i - n158i;
+            const V n171r = n129r + n158r, n171i = n129i + n158i;
+            const V n173r = n172i, n173i = -n172r;
+            V n0r, n0i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 0 * rs), n0r, n0i);
+            const V n33r = n0r - n16r, n33i = n0i - n16i;
+            const V n32r = n0r + n16r, n32i = n0i + n16i;
+            const V n40r = n33r - n36r, n40i = n33i - n36i;
+            const V n39r = n33r + n36r, n39i = n33i + n36i;
+            const V n60r = n40r - n56r, n60i = n40i - n56i;
+            const V n59r = n40r + n56r, n59i = n40i + n56i;
+            const V n112r = n60r - n108r, n112i = n60i - n108i;
+            const V n111r = n60r + n108r, n111i = n60i + n108i;
+            const V n240r = n112r - n236r, n240i = n112i - n236i;
+            { const V wr = V(tr[31]), wi = V(ti[31]);
+              tile_r[n2v][31] = n240r * wr - n240i * wi;
+              tile_i[n2v][31] = n240r * wi + n240i * wr; }
+            const V n239r = n112r + n236r, n239i = n112i + n236i;
+            { const V wr = V(tr[15]), wi = V(ti[15]);
+              tile_r[n2v][15] = n239r * wr - n239i * wi;
+              tile_i[n2v][15] = n239r * wi + n239i * wr; }
+            const V n238r = n111r - n234r, n238i = n111i - n234i;
+            { const V wr = V(tr[23]), wi = V(ti[23]);
+              tile_r[n2v][23] = n238r * wr - n238i * wi;
+              tile_i[n2v][23] = n238r * wi + n238i * wr; }
+            const V n237r = n111r + n234r, n237i = n111i + n234i;
+            { const V wr = V(tr[7]), wi = V(ti[7]);
+              tile_r[n2v][7] = n237r * wr - n237i * wi;
+              tile_i[n2v][7] = n237r * wi + n237i * wr; }
+            const V n110r = n59r - n106r, n110i = n59i - n106i;
+            const V n109r = n59r + n106r, n109i = n59i + n106i;
+            const V n204r = n110r - n200r, n204i = n110i - n200i;
+            { const V wr = V(tr[27]), wi = V(ti[27]);
+              tile_r[n2v][27] = n204r * wr - n204i * wi;
+              tile_i[n2v][27] = n204r * wi + n204i * wr; }
+            const V n203r = n110r + n200r, n203i = n110i + n200i;
+            { const V wr = V(tr[11]), wi = V(ti[11]);
+              tile_r[n2v][11] = n203r * wr - n203i * wi;
+              tile_i[n2v][11] = n203r * wi + n203i * wr; }
+            const V n202r = n109r - n198r, n202i = n109i - n198i;
+            { const V wr = V(tr[19]), wi = V(ti[19]);
+              tile_r[n2v][19] = n202r * wr - n202i * wi;
+              tile_i[n2v][19] = n202r * wi + n202i * wr; }
+            const V n201r = n109r + n198r, n201i = n109i + n198i;
+            { const V wr = V(tr[3]), wi = V(ti[3]);
+              tile_r[n2v][3] = n201r * wr - n201i * wi;
+              tile_i[n2v][3] = n201r * wi + n201i * wr; }
+            const V n58r = n39r - n54r, n58i = n39i - n54i;
+            const V n57r = n39r + n54r, n57i = n39i + n54i;
+            const V n94r = n58r - n90r, n94i = n58i - n90i;
+            const V n93r = n58r + n90r, n93i = n58i + n90i;
+            const V n222r = n94r - n218r, n222i = n94i - n218i;
+            { const V wr = V(tr[29]), wi = V(ti[29]);
+              tile_r[n2v][29] = n222r * wr - n222i * wi;
+              tile_i[n2v][29] = n222r * wi + n222i * wr; }
+            const V n221r = n94r + n218r, n221i = n94i + n218i;
+            { const V wr = V(tr[13]), wi = V(ti[13]);
+              tile_r[n2v][13] = n221r * wr - n221i * wi;
+              tile_i[n2v][13] = n221r * wi + n221i * wr; }
+            const V n220r = n93r - n216r, n220i = n93i - n216i;
+            { const V wr = V(tr[21]), wi = V(ti[21]);
+              tile_r[n2v][21] = n220r * wr - n220i * wi;
+              tile_i[n2v][21] = n220r * wi + n220i * wr; }
+            const V n219r = n93r + n216r, n219i = n93i + n216i;
+            { const V wr = V(tr[5]), wi = V(ti[5]);
+              tile_r[n2v][5] = n219r * wr - n219i * wi;
+              tile_i[n2v][5] = n219r * wi + n219i * wr; }
+            const V n92r = n57r - n88r, n92i = n57i - n88i;
+            const V n91r = n57r + n88r, n91i = n57i + n88i;
+            const V n186r = n92r - n182r, n186i = n92i - n182i;
+            { const V wr = V(tr[25]), wi = V(ti[25]);
+              tile_r[n2v][25] = n186r * wr - n186i * wi;
+              tile_i[n2v][25] = n186r * wi + n186i * wr; }
+            const V n185r = n92r + n182r, n185i = n92i + n182i;
+            { const V wr = V(tr[9]), wi = V(ti[9]);
+              tile_r[n2v][9] = n185r * wr - n185i * wi;
+              tile_i[n2v][9] = n185r * wi + n185i * wr; }
+            const V n184r = n91r - n180r, n184i = n91i - n180i;
+            { const V wr = V(tr[17]), wi = V(ti[17]);
+              tile_r[n2v][17] = n184r * wr - n184i * wi;
+              tile_i[n2v][17] = n184r * wi + n184i * wr; }
+            const V n183r = n91r + n180r, n183i = n91i + n180i;
+            { const V wr = V(tr[1]), wi = V(ti[1]);
+              tile_r[n2v][1] = n183r * wr - n183i * wi;
+              tile_i[n2v][1] = n183r * wi + n183i * wr; }
+            const V n38r = n32r - n34r, n38i = n32i - n34i;
+            const V n37r = n32r + n34r, n37i = n32i + n34i;
+            const V n51r = n38r - n47r, n51i = n38i - n47i;
+            const V n50r = n38r + n47r, n50i = n38i + n47i;
+            const V n103r = n51r - n99r, n103i = n51i - n99i;
+            const V n102r = n51r + n99r, n102i = n51i + n99i;
+            const V n231r = n103r - n227r, n231i = n103i - n227i;
+            { const V wr = V(tr[30]), wi = V(ti[30]);
+              tile_r[n2v][30] = n231r * wr - n231i * wi;
+              tile_i[n2v][30] = n231r * wi + n231i * wr; }
+            const V n230r = n103r + n227r, n230i = n103i + n227i;
+            { const V wr = V(tr[14]), wi = V(ti[14]);
+              tile_r[n2v][14] = n230r * wr - n230i * wi;
+              tile_i[n2v][14] = n230r * wi + n230i * wr; }
+            const V n229r = n102r - n225r, n229i = n102i - n225i;
+            { const V wr = V(tr[22]), wi = V(ti[22]);
+              tile_r[n2v][22] = n229r * wr - n229i * wi;
+              tile_i[n2v][22] = n229r * wi + n229i * wr; }
+            const V n228r = n102r + n225r, n228i = n102i + n225i;
+            { const V wr = V(tr[6]), wi = V(ti[6]);
+              tile_r[n2v][6] = n228r * wr - n228i * wi;
+              tile_i[n2v][6] = n228r * wi + n228i * wr; }
+            const V n101r = n50r - n97r, n101i = n50i - n97i;
+            const V n100r = n50r + n97r, n100i = n50i + n97i;
+            const V n195r = n101r - n191r, n195i = n101i - n191i;
+            { const V wr = V(tr[26]), wi = V(ti[26]);
+              tile_r[n2v][26] = n195r * wr - n195i * wi;
+              tile_i[n2v][26] = n195r * wi + n195i * wr; }
+            const V n194r = n101r + n191r, n194i = n101i + n191i;
+            { const V wr = V(tr[10]), wi = V(ti[10]);
+              tile_r[n2v][10] = n194r * wr - n194i * wi;
+              tile_i[n2v][10] = n194r * wi + n194i * wr; }
+            const V n193r = n100r - n189r, n193i = n100i - n189i;
+            { const V wr = V(tr[18]), wi = V(ti[18]);
+              tile_r[n2v][18] = n193r * wr - n193i * wi;
+              tile_i[n2v][18] = n193r * wi + n193i * wr; }
+            const V n192r = n100r + n189r, n192i = n100i + n189i;
+            { const V wr = V(tr[2]), wi = V(ti[2]);
+              tile_r[n2v][2] = n192r * wr - n192i * wi;
+              tile_i[n2v][2] = n192r * wi + n192i * wr; }
+            const V n49r = n37r - n45r, n49i = n37i - n45i;
+            const V n48r = n37r + n45r, n48i = n37i + n45i;
+            const V n85r = n49r - n81r, n85i = n49i - n81i;
+            const V n84r = n49r + n81r, n84i = n49i + n81i;
+            const V n213r = n85r - n209r, n213i = n85i - n209i;
+            { const V wr = V(tr[28]), wi = V(ti[28]);
+              tile_r[n2v][28] = n213r * wr - n213i * wi;
+              tile_i[n2v][28] = n213r * wi + n213i * wr; }
+            const V n212r = n85r + n209r, n212i = n85i + n209i;
+            { const V wr = V(tr[12]), wi = V(ti[12]);
+              tile_r[n2v][12] = n212r * wr - n212i * wi;
+              tile_i[n2v][12] = n212r * wi + n212i * wr; }
+            const V n211r = n84r - n207r, n211i = n84i - n207i;
+            { const V wr = V(tr[20]), wi = V(ti[20]);
+              tile_r[n2v][20] = n211r * wr - n211i * wi;
+              tile_i[n2v][20] = n211r * wi + n211i * wr; }
+            const V n210r = n84r + n207r, n210i = n84i + n207i;
+            { const V wr = V(tr[4]), wi = V(ti[4]);
+              tile_r[n2v][4] = n210r * wr - n210i * wi;
+              tile_i[n2v][4] = n210r * wi + n210i * wr; }
+            const V n83r = n48r - n79r, n83i = n48i - n79i;
+            const V n82r = n48r + n79r, n82i = n48i + n79i;
+            const V n177r = n83r - n173r, n177i = n83i - n173i;
+            { const V wr = V(tr[24]), wi = V(ti[24]);
+              tile_r[n2v][24] = n177r * wr - n177i * wi;
+              tile_i[n2v][24] = n177r * wi + n177i * wr; }
+            const V n176r = n83r + n173r, n176i = n83i + n173i;
+            { const V wr = V(tr[8]), wi = V(ti[8]);
+              tile_r[n2v][8] = n176r * wr - n176i * wi;
+              tile_i[n2v][8] = n176r * wi + n176i * wr; }
+            const V n175r = n82r - n171r, n175i = n82i - n171i;
+            { const V wr = V(tr[16]), wi = V(ti[16]);
+              tile_r[n2v][16] = n175r * wr - n175i * wi;
+              tile_i[n2v][16] = n175r * wi + n175i * wr; }
+            const V n174r = n82r + n171r, n174i = n82i + n171i;
+            { const V wr = V(tr[0]), wi = V(ti[0]);
+              tile_r[n2v][0] = n174r * wr - n174i * wi;
+              tile_i[n2v][0] = n174r * wi + n174i * wr; }
+        }
+        for (crd::usize n2vh = 0; n2vh < 4; ++n2vh)
+        {
+            V br_[32][8], bi_[32][8];
+            for (crd::usize kl = 0; kl < 8; ++kl)
+            {
+                const crd::usize mp = n2vh * 8 + kl;
+                const V n31r = tile_r[31][mp], n31i = tile_i[31][mp];
+                const V n30r = tile_r[30][mp], n30i = tile_i[30][mp];
+                const V n29r = tile_r[29][mp], n29i = tile_i[29][mp];
+                const V n28r = tile_r[28][mp], n28i = tile_i[28][mp];
+                const V n27r = tile_r[27][mp], n27i = tile_i[27][mp];
+                const V n26r = tile_r[26][mp], n26i = tile_i[26][mp];
+                const V n25r = tile_r[25][mp], n25i = tile_i[25][mp];
+                const V n24r = tile_r[24][mp], n24i = tile_i[24][mp];
+                const V n23r = tile_r[23][mp], n23i = tile_i[23][mp];
+                const V n22r = tile_r[22][mp], n22i = tile_i[22][mp];
+                const V n21r = tile_r[21][mp], n21i = tile_i[21][mp];
+                const V n20r = tile_r[20][mp], n20i = tile_i[20][mp];
+                const V n19r = tile_r[19][mp], n19i = tile_i[19][mp];
+                const V n18r = tile_r[18][mp], n18i = tile_i[18][mp];
+                const V n17r = tile_r[17][mp], n17i = tile_i[17][mp];
+                const V n16r = tile_r[16][mp], n16i = tile_i[16][mp];
+                const V n15r = tile_r[15][mp], n15i = tile_i[15][mp];
+                const V n154r = n15r - n31r, n154i = n15i - n31i;
+                const V n153r = n15r + n31r, n153i = n15i + n31i;
+                const V n163r = V(static_cast<crd::f32>(-0.7071067811865475)) * n154r - V(static_cast<crd::f32>(-0.7071067811865476)) * n154i, n163i = V(static_cast<crd::f32>(-0.7071067811865475)) * n154i + V(static_cast<crd::f32>(-0.7071067811865476)) * n154r;
+                const V n14r = tile_r[14][mp], n14i = tile_i[14][mp];
+                const V n73r = n14r - n30r, n73i = n14i - n30i;
+                const V n72r = n14r + n30r, n72i = n14i + n30i;
+                const V n74r = n73i, n74i = -n73r;
+                const V n13r = tile_r[13][mp], n13i = tile_i[13][mp];
+                const V n125r = n13r - n29r, n125i = n13i - n29i;
+                const V n124r = n13r + n29r, n124i = n13i + n29i;
+                const V n134r = V(static_cast<crd::f32>(-0.7071067811865475)) * n125r - V(static_cast<crd::f32>(-0.7071067811865476)) * n125i, n134i = V(static_cast<crd::f32>(-0.7071067811865475)) * n125i + V(static_cast<crd::f32>(-0.7071067811865476)) * n125r;
+                const V n12r = tile_r[12][mp], n12i = tile_i[12][mp];
+                const V n44r = n12r - n28r, n44i = n12i - n28i;
+                const V n43r = n12r + n28r, n43i = n12i + n28i;
+                const V n53r = V(static_cast<crd::f32>(-0.7071067811865475)) * n44r - V(static_cast<crd::f32>(-0.7071067811865476)) * n44i, n53i = V(static_cast<crd::f32>(-0.7071067811865475)) * n44i + V(static_cast<crd::f32>(-0.7071067811865476)) * n44r;
+                const V n11r = tile_r[11][mp], n11i = tile_i[11][mp];
+                const V n145r = n11r - n27r, n145i = n11i - n27i;
+                const V n144r = n11r + n27r, n144i = n11i + n27i;
+                const V n146r = n145i, n146i = -n145r;
+                const V n10r = tile_r[10][mp], n10i = tile_i[10][mp];
+                const V n64r = n10r - n26r, n64i = n10i - n26i;
+                const V n63r = n10r + n26r, n63i = n10i + n26i;
+                const V n65r = n64i, n65i = -n64r;
+                const V n9r = tile_r[9][mp], n9i = tile_i[9][mp];
+                const V n116r = n9r - n25r, n116i = n9i - n25i;
+                const V n115r = n9r + n25r, n115i = n9i + n25i;
+                const V n117r = n116i, n117i = -n116r;
+                const V n8r = tile_r[8][mp], n8i = tile_i[8][mp];
+                const V n35r = n8r - n24r, n35i = n8i - n24i;
+                const V n34r = n8r + n24r, n34i = n8i + n24i;
+                const V n36r = n35i, n36i = -n35r;
+                const V n7r = tile_r[7][mp], n7i = tile_i[7][mp];
+                const V n152r = n7r - n23r, n152i = n7i - n23i;
+                const V n151r = n7r + n23r, n151i = n7i + n23i;
+                const V n162r = V(static_cast<crd::f32>(0.7071067811865476)) * n152r - V(static_cast<crd::f32>(-0.7071067811865475)) * n152i, n162i = V(static_cast<crd::f32>(0.7071067811865476)) * n152i + V(static_cast<crd::f32>(-0.7071067811865475)) * n152r;
+                const V n165r = n162r - n163r, n165i = n162i - n163i;
+                const V n164r = n162r + n163r, n164i = n162i + n163i;
+                const V n166r = n165i, n166i = -n165r;
+                const V n156r = n151r - n153r, n156i = n151i - n153i;
+                const V n155r = n151r + n153r, n155i = n151i + n153i;
+                const V n157r = n156i, n157i = -n156r;
+                const V n6r = tile_r[6][mp], n6i = tile_i[6][mp];
+                const V n71r = n6r - n22r, n71i = n6i - n22i;
+                const V n70r = n6r + n22r, n70i = n6i + n22i;
+                const V n78r = n71r - n74r, n78i = n71i - n74i;
+                const V n77r = n71r + n74r, n77i = n71i + n74i;
+                const V n105r = V(static_cast<crd::f32>(-0.9238795325112868)) * n78r - V(static_cast<crd::f32>(0.38268343236508967)) * n78i, n105i = V(static_cast<crd::f32>(-0.9238795325112868)) * n78i + V(static_cast<crd::f32>(0.38268343236508967)) * n78r;
+                const V n87r = V(static_cast<crd::f32>(0.38268343236508984)) * n77r - V(static_cast<crd::f32>(-0.9238795325112867)) * n77i, n87i = V(static_cast<crd::f32>(0.38268343236508984)) * n77i + V(static_cast<crd::f32>(-0.9238795325112867)) * n77r;
+                const V n76r = n70r - n72r, n76i = n70i - n72i;
+                const V n75r = n70r + n72r, n75i = n70i + n72i;
+                const V n96r = V(static_cast<crd::f32>(-0.7071067811865475)) * n76r - V(static_cast<crd::f32>(-0.7071067811865476)) * n76i, n96i = V(static_cast<crd::f32>(-0.7071067811865475)) * n76i + V(static_cast<crd::f32>(-0.7071067811865476)) * n76r;
+                const V n5r = tile_r[5][mp], n5i = tile_i[5][mp];
+                const V n123r = n5r - n21r, n123i = n5i - n21i;
+                const V n122r = n5r + n21r, n122i = n5i + n21i;
+                const V n133r = V(static_cast<crd::f32>(0.7071067811865476)) * n123r - V(static_cast<crd::f32>(-0.7071067811865475)) * n123i, n133i = V(static_cast<crd::f32>(0.7071067811865476)) * n123i + V(static_cast<crd::f32>(-0.7071067811865475)) * n123r;
+                const V n136r = n133r - n134r, n136i = n133i - n134i;
+                const V n135r = n133r + n134r, n135i = n133i + n134i;
+                const V n137r = n136i, n137i = -n136r;
+                const V n127r = n122r - n124r, n127i = n122i - n124i;
+                const V n126r = n122r + n124r, n126i = n122i + n124i;
+                const V n128r = n127i, n128i = -n127r;
+                const V n4r = tile_r[4][mp], n4i = tile_i[4][mp];
+                const V n42r = n4r - n20r, n42i = n4i - n20i;
+                const V n41r = n4r + n20r, n41i = n4i + n20i;
+                const V n52r = V(static_cast<crd::f32>(0.7071067811865476)) * n42r - V(static_cast<crd::f32>(-0.7071067811865475)) * n42i, n52i = V(static_cast<crd::f32>(0.7071067811865476)) * n42i + V(static_cast<crd::f32>(-0.7071067811865475)) * n42r;
+                const V n55r = n52r - n53r, n55i = n52i - n53i;
+                const V n54r = n52r + n53r, n54i = n52i + n53i;
+                const V n56r = n55i, n56i = -n55r;
+                const V n46r = n41r - n43r, n46i = n41i - n43i;
+                const V n45r = n41r + n43r, n45i = n41i + n43i;
+                const V n47r = n46i, n47i = -n46r;
+                const V n3r = tile_r[3][mp], n3i = tile_i[3][mp];
+                const V n143r = n3r - n19r, n143i = n3i - n19i;
+                const V n142r = n3r + n19r, n142i = n3i + n19i;
+                const V n150r = n143r - n146r, n150i = n143i - n146i;
+                const V n149r = n143r + n146r, n149i = n143i + n146i;
+                const V n170r = n150r - n166r, n170i = n150i - n166i;
+                const V n169r = n150r + n166r, n169i = n150i + n166i;
+                const V n233r = V(static_cast<crd::f32>(-0.5555702330196022)) * n170r - V(static_cast<crd::f32>(0.8314696123025452)) * n170i, n233i = V(static_cast<crd::f32>(-0.5555702330196022)) * n170i + V(static_cast<crd::f32>(0.8314696123025452)) * n170r;
+                const V n197r = V(static_cast<crd::f32>(-0.1950903220161282)) * n169r - V(static_cast<crd::f32>(-0.9807852804032304)) * n169i, n197i = V(static_cast<crd::f32>(-0.1950903220161282)) * n169i + V(static_cast<crd::f32>(-0.9807852804032304)) * n169r;
+                const V n168r = n149r - n164r, n168i = n149i - n164i;
+                const V n167r = n149r + n164r, n167i = n149i + n164i;
+                const V n215r = V(static_cast<crd::f32>(-0.9807852804032304)) * n168r - V(static_cast<crd::f32>(-0.1950903220161286)) * n168i, n215i = V(static_cast<crd::f32>(-0.9807852804032304)) * n168i + V(static_cast<crd::f32>(-0.1950903220161286)) * n168r;
+                const V n179r = V(static_cast<crd::f32>(0.8314696123025452)) * n167r - V(static_cast<crd::f32>(-0.5555702330196022)) * n167i, n179i = V(static_cast<crd::f32>(0.8314696123025452)) * n167i + V(static_cast<crd::f32>(-0.5555702330196022)) * n167r;
+                const V n148r = n142r - n144r, n148i = n142i - n144i;
+                const V n147r = n142r + n144r, n147i = n142i + n144i;
+                const V n161r = n148r - n157r, n161i = n148i - n157i;
+                const V n160r = n148r + n157r, n160i = n148i + n157i;
+                const V n224r = V(static_cast<crd::f32>(-0.9238795325112868)) * n161r - V(static_cast<crd::f32>(0.38268343236508967)) * n161i, n224i = V(static_cast<crd::f32>(-0.9238795325112868)) * n161i + V(static_cast<crd::f32>(0.38268343236508967)) * n161r;
+                const V n188r = V(static_cast<crd::f32>(0.38268343236508984)) * n160r - V(static_cast<crd::f32>(-0.9238795325112867)) * n160i, n188i = V(static_cast<crd::f32>(0.38268343236508984)) * n160i + V(static_cast<crd::f32>(-0.9238795325112867)) * n160r;
+                const V n159r = n147r - n155r, n159i = n147i - n155i;
+                const V n158r = n147r + n155r, n158i = n147i + n155i;
+                const V n206r = V(static_cast<crd::f32>(-0.7071067811865475)) * n159r - V(static_cast<crd::f32>(-0.7071067811865476)) * n159i, n206i = V(static_cast<crd::f32>(-0.7071067811865475)) * n159i + V(static_cast<crd::f32>(-0.7071067811865476)) * n159r;
+                const V n2r = tile_r[2][mp], n2i = tile_i[2][mp];
+                const V n62r = n2r - n18r, n62i = n2i - n18i;
+                const V n61r = n2r + n18r, n61i = n2i + n18i;
+                const V n69r = n62r - n65r, n69i = n62i - n65i;
+                const V n68r = n62r + n65r, n68i = n62i + n65i;
+                const V n104r = V(static_cast<crd::f32>(0.38268343236508984)) * n69r - V(static_cast<crd::f32>(-0.9238795325112867)) * n69i, n104i = V(static_cast<crd::f32>(0.38268343236508984)) * n69i + V(static_cast<crd::f32>(-0.9238795325112867)) * n69r;
+                const V n86r = V(static_cast<crd::f32>(0.9238795325112867)) * n68r - V(static_cast<crd::f32>(-0.3826834323650898)) * n68i, n86i = V(static_cast<crd::f32>(0.9238795325112867)) * n68i + V(static_cast<crd::f32>(-0.3826834323650898)) * n68r;
+                const V n107r = n104r - n105r, n107i = n104i - n105i;
+                const V n106r = n104r + n105r, n106i = n104i + n105i;
+                const V n108r = n107i, n108i = -n107r;
+                const V n89r = n86r - n87r, n89i = n86i - n87i;
+                const V n88r = n86r + n87r, n88i = n86i + n87i;
+                const V n90r = n89i, n90i = -n89r;
+                const V n67r = n61r - n63r, n67i = n61i - n63i;
+                const V n66r = n61r + n63r, n66i = n61i + n63i;
+                const V n95r = V(static_cast<crd::f32>(0.7071067811865476)) * n67r - V(static_cast<crd::f32>(-0.7071067811865475)) * n67i, n95i = V(static_cast<crd::f32>(0.7071067811865476)) * n67i + V(static_cast<crd::f32>(-0.7071067811865475)) * n67r;
+                const V n98r = n95r - n96r, n98i = n95i - n96i;
+                const V n97r = n95r + n96r, n97i = n95i + n96i;
+                const V n99r = n98i, n99i = -n98r;
+                const V n80r = n66r - n75r, n80i = n66i - n75i;
+                const V n79r = n66r + n75r, n79i = n66i + n75i;
+                const V n81r = n80i, n81i = -n80r;
+                const V n1r = tile_r[1][mp], n1i = tile_i[1][mp];
+                const V n114r = n1r - n17r, n114i = n1i - n17i;
+                const V n113r = n1r + n17r, n113i = n1i + n17i;
+                const V n121r = n114r - n117r, n121i = n114i - n117i;
+                const V n120r = n114r + n117r, n120i = n114i + n117i;
+                const V n141r = n121r - n137r, n141i = n121i - n137i;
+                const V n140r = n121r + n137r, n140i = n121i + n137i;
+                const V n232r = V(static_cast<crd::f32>(0.19509032201612833)) * n141r - V(static_cast<crd::f32>(-0.9807852804032304)) * n141i, n232i = V(static_cast<crd::f32>(0.19509032201612833)) * n141i + V(static_cast<crd::f32>(-0.9807852804032304)) * n141r;
+                const V n196r = V(static_cast<crd::f32>(0.8314696123025452)) * n140r - V(static_cast<crd::f32>(-0.5555702330196022)) * n140i, n196i = V(static_cast<crd::f32>(0.8314696123025452)) * n140i + V(static_cast<crd::f32>(-0.5555702330196022)) * n140r;
+                const V n235r = n232r - n233r, n235i = n232i - n233i;
+                const V n234r = n232r + n233r, n234i = n232i + n233i;
+                const V n236r = n235i, n236i = -n235r;
+                const V n199r = n196r - n197r, n199i = n196i - n197i;
+                const V n198r = n196r + n197r, n198i = n196i + n197i;
+                const V n200r = n199i, n200i = -n199r;
+                const V n139r = n120r - n135r, n139i = n120i - n135i;
+                const V n138r = n120r + n135r, n138i = n120i + n135i;
+                const V n214r = V(static_cast<crd::f32>(0.5555702330196023)) * n139r - V(static_cast<crd::f32>(-0.8314696123025452)) * n139i, n214i = V(static_cast<crd::f32>(0.5555702330196023)) * n139i + V(static_cast<crd::f32>(-0.8314696123025452)) * n139r;
+                const V n178r = V(static_cast<crd::f32>(0.9807852804032304)) * n138r - V(static_cast<crd::f32>(-0.19509032201612825)) * n138i, n178i = V(static_cast<crd::f32>(0.9807852804032304)) * n138i + V(static_cast<crd::f32>(-0.19509032201612825)) * n138r;
+                const V n217r = n214r - n215r, n217i = n214i - n215i;
+                const V n216r = n214r + n215r, n216i = n214i + n215i;
+                const V n218r = n217i, n218i = -n217r;
+                const V n181r = n178r - n179r, n181i = n178i - n179i;
+                const V n180r = n178r + n179r, n180i = n178i + n179i;
+                const V n182r = n181i, n182i = -n181r;
+                const V n119r = n113r - n115r, n119i = n113i - n115i;
+                const V n118r = n113r + n115r, n118i = n113i + n115i;
+                const V n132r = n119r - n128r, n132i = n119i - n128i;
+                const V n131r = n119r + n128r, n131i = n119i + n128i;
+                const V n223r = V(static_cast<crd::f32>(0.38268343236508984)) * n132r - V(static_cast<crd::f32>(-0.9238795325112867)) * n132i, n223i = V(static_cast<crd::f32>(0.38268343236508984)) * n132i + V(static_cast<crd::f32>(-0.9238795325112867)) * n132r;
+                const V n187r = V(static_cast<crd::f32>(0.9238795325112867)) * n131r - V(static_cast<crd::f32>(-0.3826834323650898)) * n131i, n187i = V(static_cast<crd::f32>(0.9238795325112867)) * n131i + V(static_cast<crd::f32>(-0.3826834323650898)) * n131r;
+                const V n226r = n223r - n224r, n226i = n223i - n224i;
+                const V n225r = n223r + n224r, n225i = n223i + n224i;
+                const V n227r = n226i, n227i = -n226r;
+                const V n190r = n187r - n188r, n190i = n187i - n188i;
+                const V n189r = n187r + n188r, n189i = n187i + n188i;
+                const V n191r = n190i, n191i = -n190r;
+                const V n130r = n118r - n126r, n130i = n118i - n126i;
+                const V n129r = n118r + n126r, n129i = n118i + n126i;
+                const V n205r = V(static_cast<crd::f32>(0.7071067811865476)) * n130r - V(static_cast<crd::f32>(-0.7071067811865475)) * n130i, n205i = V(static_cast<crd::f32>(0.7071067811865476)) * n130i + V(static_cast<crd::f32>(-0.7071067811865475)) * n130r;
+                const V n208r = n205r - n206r, n208i = n205i - n206i;
+                const V n207r = n205r + n206r, n207i = n205i + n206i;
+                const V n209r = n208i, n209i = -n208r;
+                const V n172r = n129r - n158r, n172i = n129i - n158i;
+                const V n171r = n129r + n158r, n171i = n129i + n158i;
+                const V n173r = n172i, n173i = -n172r;
+                const V n0r = tile_r[0][mp], n0i = tile_i[0][mp];
+                const V n33r = n0r - n16r, n33i = n0i - n16i;
+                const V n32r = n0r + n16r, n32i = n0i + n16i;
+                const V n40r = n33r - n36r, n40i = n33i - n36i;
+                const V n39r = n33r + n36r, n39i = n33i + n36i;
+                const V n60r = n40r - n56r, n60i = n40i - n56i;
+                const V n59r = n40r + n56r, n59i = n40i + n56i;
+                const V n112r = n60r - n108r, n112i = n60i - n108i;
+                const V n111r = n60r + n108r, n111i = n60i + n108i;
+                const V n240r = n112r - n236r, n240i = n112i - n236i;
+                br_[31][kl] = n240r; bi_[31][kl] = n240i;
+                const V n239r = n112r + n236r, n239i = n112i + n236i;
+                br_[15][kl] = n239r; bi_[15][kl] = n239i;
+                const V n238r = n111r - n234r, n238i = n111i - n234i;
+                br_[23][kl] = n238r; bi_[23][kl] = n238i;
+                const V n237r = n111r + n234r, n237i = n111i + n234i;
+                br_[7][kl] = n237r; bi_[7][kl] = n237i;
+                const V n110r = n59r - n106r, n110i = n59i - n106i;
+                const V n109r = n59r + n106r, n109i = n59i + n106i;
+                const V n204r = n110r - n200r, n204i = n110i - n200i;
+                br_[27][kl] = n204r; bi_[27][kl] = n204i;
+                const V n203r = n110r + n200r, n203i = n110i + n200i;
+                br_[11][kl] = n203r; bi_[11][kl] = n203i;
+                const V n202r = n109r - n198r, n202i = n109i - n198i;
+                br_[19][kl] = n202r; bi_[19][kl] = n202i;
+                const V n201r = n109r + n198r, n201i = n109i + n198i;
+                br_[3][kl] = n201r; bi_[3][kl] = n201i;
+                const V n58r = n39r - n54r, n58i = n39i - n54i;
+                const V n57r = n39r + n54r, n57i = n39i + n54i;
+                const V n94r = n58r - n90r, n94i = n58i - n90i;
+                const V n93r = n58r + n90r, n93i = n58i + n90i;
+                const V n222r = n94r - n218r, n222i = n94i - n218i;
+                br_[29][kl] = n222r; bi_[29][kl] = n222i;
+                const V n221r = n94r + n218r, n221i = n94i + n218i;
+                br_[13][kl] = n221r; bi_[13][kl] = n221i;
+                const V n220r = n93r - n216r, n220i = n93i - n216i;
+                br_[21][kl] = n220r; bi_[21][kl] = n220i;
+                const V n219r = n93r + n216r, n219i = n93i + n216i;
+                br_[5][kl] = n219r; bi_[5][kl] = n219i;
+                const V n92r = n57r - n88r, n92i = n57i - n88i;
+                const V n91r = n57r + n88r, n91i = n57i + n88i;
+                const V n186r = n92r - n182r, n186i = n92i - n182i;
+                br_[25][kl] = n186r; bi_[25][kl] = n186i;
+                const V n185r = n92r + n182r, n185i = n92i + n182i;
+                br_[9][kl] = n185r; bi_[9][kl] = n185i;
+                const V n184r = n91r - n180r, n184i = n91i - n180i;
+                br_[17][kl] = n184r; bi_[17][kl] = n184i;
+                const V n183r = n91r + n180r, n183i = n91i + n180i;
+                br_[1][kl] = n183r; bi_[1][kl] = n183i;
+                const V n38r = n32r - n34r, n38i = n32i - n34i;
+                const V n37r = n32r + n34r, n37i = n32i + n34i;
+                const V n51r = n38r - n47r, n51i = n38i - n47i;
+                const V n50r = n38r + n47r, n50i = n38i + n47i;
+                const V n103r = n51r - n99r, n103i = n51i - n99i;
+                const V n102r = n51r + n99r, n102i = n51i + n99i;
+                const V n231r = n103r - n227r, n231i = n103i - n227i;
+                br_[30][kl] = n231r; bi_[30][kl] = n231i;
+                const V n230r = n103r + n227r, n230i = n103i + n227i;
+                br_[14][kl] = n230r; bi_[14][kl] = n230i;
+                const V n229r = n102r - n225r, n229i = n102i - n225i;
+                br_[22][kl] = n229r; bi_[22][kl] = n229i;
+                const V n228r = n102r + n225r, n228i = n102i + n225i;
+                br_[6][kl] = n228r; bi_[6][kl] = n228i;
+                const V n101r = n50r - n97r, n101i = n50i - n97i;
+                const V n100r = n50r + n97r, n100i = n50i + n97i;
+                const V n195r = n101r - n191r, n195i = n101i - n191i;
+                br_[26][kl] = n195r; bi_[26][kl] = n195i;
+                const V n194r = n101r + n191r, n194i = n101i + n191i;
+                br_[10][kl] = n194r; bi_[10][kl] = n194i;
+                const V n193r = n100r - n189r, n193i = n100i - n189i;
+                br_[18][kl] = n193r; bi_[18][kl] = n193i;
+                const V n192r = n100r + n189r, n192i = n100i + n189i;
+                br_[2][kl] = n192r; bi_[2][kl] = n192i;
+                const V n49r = n37r - n45r, n49i = n37i - n45i;
+                const V n48r = n37r + n45r, n48i = n37i + n45i;
+                const V n85r = n49r - n81r, n85i = n49i - n81i;
+                const V n84r = n49r + n81r, n84i = n49i + n81i;
+                const V n213r = n85r - n209r, n213i = n85i - n209i;
+                br_[28][kl] = n213r; bi_[28][kl] = n213i;
+                const V n212r = n85r + n209r, n212i = n85i + n209i;
+                br_[12][kl] = n212r; bi_[12][kl] = n212i;
+                const V n211r = n84r - n207r, n211i = n84i - n207i;
+                br_[20][kl] = n211r; bi_[20][kl] = n211i;
+                const V n210r = n84r + n207r, n210i = n84i + n207i;
+                br_[4][kl] = n210r; bi_[4][kl] = n210i;
+                const V n83r = n48r - n79r, n83i = n48i - n79i;
+                const V n82r = n48r + n79r, n82i = n48i + n79i;
+                const V n177r = n83r - n173r, n177i = n83i - n173i;
+                br_[24][kl] = n177r; bi_[24][kl] = n177i;
+                const V n176r = n83r + n173r, n176i = n83i + n173i;
+                br_[8][kl] = n176r; bi_[8][kl] = n176i;
+                const V n175r = n82r - n171r, n175i = n82i - n171i;
+                br_[16][kl] = n175r; bi_[16][kl] = n175i;
+                const V n174r = n82r + n171r, n174i = n82i + n171i;
+                br_[0][kl] = n174r; bi_[0][kl] = n174i;
+            }
+            for (crd::usize m = 0; m < 32; ++m)
+            {
+                V r0=br_[m][0],r1=br_[m][1],r2=br_[m][2],r3=br_[m][3],r4=br_[m][4],r5=br_[m][5],r6=br_[m][6],r7=br_[m][7];
+                V i0=bi_[m][0],i1=bi_[m][1],i2=bi_[m][2],i3=bi_[m][3],i4=bi_[m][4],i5=bi_[m][5],i6=bi_[m][6],i7=bi_[m][7];
+                m16tr::transpose8x8(r0,r1,r2,r3,r4,r5,r6,r7); m16tr::transpose8x8(i0,i1,i2,i3,i4,i5,i6,i7);
+                crd::f32* op = reinterpret_cast<crd::f32*>(out + s * 8192 + (m * 4 + n2vh) * 64);
+                simd::store_complex_interleaved(op+0, r0, i0); simd::store_complex_interleaved(op+16, r1, i1);
+                simd::store_complex_interleaved(op+32, r2, i2); simd::store_complex_interleaved(op+48, r3, i3);
+                simd::store_complex_interleaved(op+64, r4, i4); simd::store_complex_interleaved(op+80, r5, i5);
+                simd::store_complex_interleaved(op+96, r6, i6); simd::store_complex_interleaved(op+112, r7, i7);
+            }
+        }
+    }
+}
+#endif
+#ifdef CRD_FFT_M18_2M_POC
+// N=2048=64x32 GATHER-FUSED stage-1 (BB=128): reads the four-step input directly (row stride rs), no gather memcpy. GENERATED.
+CRD_FORCEINLINE void codelet64_stage1_fused_64x32_gather(const crd::hesap::Complex<crd::f32>* din_block,
+    crd::hesap::Complex<crd::f32>* out, crd::usize rs, const crd::f32* twr, const crd::f32* twi) noexcept
+{
+    using V = crd::math::simd::Vec8f;
+    namespace simd = crd::math::simd;
+    for (crd::usize t = 0; t + 8 <= 4096; t += 8)
+    {
+        const crd::usize n2v = t >> 7, bb0 = t & 127;
+        const crd::hesap::Complex<crd::f32>* const base = din_block + n2v * rs + bb0;
+        const crd::f32* const tr = twr + n2v * 64, * const ti = twi + n2v * 64;
+        V n63r, n63i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 2016 * rs), n63r, n63i);
+        V n62r, n62i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 1984 * rs), n62r, n62i);
+        V n61r, n61i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 1952 * rs), n61r, n61i);
+        V n60r, n60i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 1920 * rs), n60r, n60i);
+        V n59r, n59i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 1888 * rs), n59r, n59i);
+        V n58r, n58i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 1856 * rs), n58r, n58i);
+        V n57r, n57i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 1824 * rs), n57r, n57i);
+        V n56r, n56i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 1792 * rs), n56r, n56i);
+        V n55r, n55i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 1760 * rs), n55r, n55i);
+        V n54r, n54i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 1728 * rs), n54r, n54i);
+        V n53r, n53i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 1696 * rs), n53r, n53i);
+        V n52r, n52i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 1664 * rs), n52r, n52i);
+        V n51r, n51i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 1632 * rs), n51r, n51i);
+        V n50r, n50i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 1600 * rs), n50r, n50i);
+        V n49r, n49i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 1568 * rs), n49r, n49i);
+        V n48r, n48i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 1536 * rs), n48r, n48i);
+        V n47r, n47i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 1504 * rs), n47r, n47i);
+        V n46r, n46i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 1472 * rs), n46r, n46i);
+        V n45r, n45i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 1440 * rs), n45r, n45i);
+        V n44r, n44i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 1408 * rs), n44r, n44i);
+        V n43r, n43i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 1376 * rs), n43r, n43i);
+        V n42r, n42i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 1344 * rs), n42r, n42i);
+        V n41r, n41i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 1312 * rs), n41r, n41i);
+        V n40r, n40i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 1280 * rs), n40r, n40i);
+        V n39r, n39i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 1248 * rs), n39r, n39i);
+        V n38r, n38i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 1216 * rs), n38r, n38i);
+        V n37r, n37i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 1184 * rs), n37r, n37i);
+        V n36r, n36i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 1152 * rs), n36r, n36i);
+        V n35r, n35i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 1120 * rs), n35r, n35i);
+        V n34r, n34i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 1088 * rs), n34r, n34i);
+        V n33r, n33i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 1056 * rs), n33r, n33i);
+        V n32r, n32i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 1024 * rs), n32r, n32i);
+        V n31r, n31i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 992 * rs), n31r, n31i);
+        const V n395r = n31r - n63r, n395i = n31i - n63i;
+        const V n394r = n31r + n63r, n394i = n31i + n63i;
+        const V n396r = n395i, n396i = -n395r;
+        V n30r, n30i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 960 * rs), n30r, n30i);
+        const V n186r = n30r - n62r, n186i = n30i - n62i;
+        const V n185r = n30r + n62r, n185i = n30i + n62i;
+        const V n195r = V(static_cast<crd::f32>(-0.7071067811865475)) * n186r - V(static_cast<crd::f32>(-0.7071067811865476)) * n186i, n195i = V(static_cast<crd::f32>(-0.7071067811865475)) * n186i + V(static_cast<crd::f32>(-0.7071067811865476)) * n186r;
+        V n29r, n29i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 928 * rs), n29r, n29i);
+        const V n314r = n29r - n61r, n314i = n29i - n61i;
+        const V n313r = n29r + n61r, n313i = n29i + n61i;
+        const V n315r = n314i, n315i = -n314r;
+        V n28r, n28i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 896 * rs), n28r, n28i);
+        const V n105r = n28r - n60r, n105i = n28i - n60i;
+        const V n104r = n28r + n60r, n104i = n28i + n60i;
+        const V n106r = n105i, n106i = -n105r;
+        V n27r, n27i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 864 * rs), n27r, n27i);
+        const V n366r = n27r - n59r, n366i = n27i - n59i;
+        const V n365r = n27r + n59r, n365i = n27i + n59i;
+        const V n375r = V(static_cast<crd::f32>(-0.7071067811865475)) * n366r - V(static_cast<crd::f32>(-0.7071067811865476)) * n366i, n375i = V(static_cast<crd::f32>(-0.7071067811865475)) * n366i + V(static_cast<crd::f32>(-0.7071067811865476)) * n366r;
+        V n26r, n26i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 832 * rs), n26r, n26i);
+        const V n157r = n26r - n58r, n157i = n26i - n58i;
+        const V n156r = n26r + n58r, n156i = n26i + n58i;
+        const V n166r = V(static_cast<crd::f32>(-0.7071067811865475)) * n157r - V(static_cast<crd::f32>(-0.7071067811865476)) * n157i, n166i = V(static_cast<crd::f32>(-0.7071067811865475)) * n157i + V(static_cast<crd::f32>(-0.7071067811865476)) * n157r;
+        V n25r, n25i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 800 * rs), n25r, n25i);
+        const V n285r = n25r - n57r, n285i = n25i - n57i;
+        const V n284r = n25r + n57r, n284i = n25i + n57i;
+        const V n294r = V(static_cast<crd::f32>(-0.7071067811865475)) * n285r - V(static_cast<crd::f32>(-0.7071067811865476)) * n285i, n294i = V(static_cast<crd::f32>(-0.7071067811865475)) * n285i + V(static_cast<crd::f32>(-0.7071067811865476)) * n285r;
+        V n24r, n24i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 768 * rs), n24r, n24i);
+        const V n76r = n24r - n56r, n76i = n24i - n56i;
+        const V n75r = n24r + n56r, n75i = n24i + n56i;
+        const V n85r = V(static_cast<crd::f32>(-0.7071067811865475)) * n76r - V(static_cast<crd::f32>(-0.7071067811865476)) * n76i, n85i = V(static_cast<crd::f32>(-0.7071067811865475)) * n76i + V(static_cast<crd::f32>(-0.7071067811865476)) * n76r;
+        V n23r, n23i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 736 * rs), n23r, n23i);
+        const V n386r = n23r - n55r, n386i = n23i - n55i;
+        const V n385r = n23r + n55r, n385i = n23i + n55i;
+        const V n387r = n386i, n387i = -n386r;
+        V n22r, n22i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 704 * rs), n22r, n22i);
+        const V n177r = n22r - n54r, n177i = n22i - n54i;
+        const V n176r = n22r + n54r, n176i = n22i + n54i;
+        const V n178r = n177i, n178i = -n177r;
+        V n21r, n21i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 672 * rs), n21r, n21i);
+        const V n305r = n21r - n53r, n305i = n21i - n53i;
+        const V n304r = n21r + n53r, n304i = n21i + n53i;
+        const V n306r = n305i, n306i = -n305r;
+        V n20r, n20i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 640 * rs), n20r, n20i);
+        const V n96r = n20r - n52r, n96i = n20i - n52i;
+        const V n95r = n20r + n52r, n95i = n20i + n52i;
+        const V n97r = n96i, n97i = -n96r;
+        V n19r, n19i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 608 * rs), n19r, n19i);
+        const V n357r = n19r - n51r, n357i = n19i - n51i;
+        const V n356r = n19r + n51r, n356i = n19i + n51i;
+        const V n358r = n357i, n358i = -n357r;
+        V n18r, n18i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 576 * rs), n18r, n18i);
+        const V n148r = n18r - n50r, n148i = n18i - n50i;
+        const V n147r = n18r + n50r, n147i = n18i + n50i;
+        const V n149r = n148i, n149i = -n148r;
+        V n17r, n17i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 544 * rs), n17r, n17i);
+        const V n276r = n17r - n49r, n276i = n17i - n49i;
+        const V n275r = n17r + n49r, n275i = n17i + n49i;
+        const V n277r = n276i, n277i = -n276r;
+        V n16r, n16i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 512 * rs), n16r, n16i);
+        const V n67r = n16r - n48r, n67i = n16i - n48i;
+        const V n66r = n16r + n48r, n66i = n16i + n48i;
+        const V n68r = n67i, n68i = -n67r;
+        V n15r, n15i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 480 * rs), n15r, n15i);
+        const V n393r = n15r - n47r, n393i = n15i - n47i;
+        const V n392r = n15r + n47r, n392i = n15i + n47i;
+        const V n400r = n393r - n396r, n400i = n393i - n396i;
+        const V n399r = n393r + n396r, n399i = n393i + n396i;
+        const V n427r = V(static_cast<crd::f32>(-0.9238795325112868)) * n400r - V(static_cast<crd::f32>(0.38268343236508967)) * n400i, n427i = V(static_cast<crd::f32>(-0.9238795325112868)) * n400i + V(static_cast<crd::f32>(0.38268343236508967)) * n400r;
+        const V n409r = V(static_cast<crd::f32>(0.38268343236508984)) * n399r - V(static_cast<crd::f32>(-0.9238795325112867)) * n399i, n409i = V(static_cast<crd::f32>(0.38268343236508984)) * n399i + V(static_cast<crd::f32>(-0.9238795325112867)) * n399r;
+        const V n398r = n392r - n394r, n398i = n392i - n394i;
+        const V n397r = n392r + n394r, n397i = n392i + n394i;
+        const V n418r = V(static_cast<crd::f32>(-0.7071067811865475)) * n398r - V(static_cast<crd::f32>(-0.7071067811865476)) * n398i, n418i = V(static_cast<crd::f32>(-0.7071067811865475)) * n398i + V(static_cast<crd::f32>(-0.7071067811865476)) * n398r;
+        V n14r, n14i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 448 * rs), n14r, n14i);
+        const V n184r = n14r - n46r, n184i = n14i - n46i;
+        const V n183r = n14r + n46r, n183i = n14i + n46i;
+        const V n194r = V(static_cast<crd::f32>(0.7071067811865476)) * n184r - V(static_cast<crd::f32>(-0.7071067811865475)) * n184i, n194i = V(static_cast<crd::f32>(0.7071067811865476)) * n184i + V(static_cast<crd::f32>(-0.7071067811865475)) * n184r;
+        const V n197r = n194r - n195r, n197i = n194i - n195i;
+        const V n196r = n194r + n195r, n196i = n194i + n195i;
+        const V n198r = n197i, n198i = -n197r;
+        const V n188r = n183r - n185r, n188i = n183i - n185i;
+        const V n187r = n183r + n185r, n187i = n183i + n185i;
+        const V n189r = n188i, n189i = -n188r;
+        V n13r, n13i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 416 * rs), n13r, n13i);
+        const V n312r = n13r - n45r, n312i = n13i - n45i;
+        const V n311r = n13r + n45r, n311i = n13i + n45i;
+        const V n319r = n312r - n315r, n319i = n312i - n315i;
+        const V n318r = n312r + n315r, n318i = n312i + n315i;
+        const V n346r = V(static_cast<crd::f32>(-0.9238795325112868)) * n319r - V(static_cast<crd::f32>(0.38268343236508967)) * n319i, n346i = V(static_cast<crd::f32>(-0.9238795325112868)) * n319i + V(static_cast<crd::f32>(0.38268343236508967)) * n319r;
+        const V n328r = V(static_cast<crd::f32>(0.38268343236508984)) * n318r - V(static_cast<crd::f32>(-0.9238795325112867)) * n318i, n328i = V(static_cast<crd::f32>(0.38268343236508984)) * n318i + V(static_cast<crd::f32>(-0.9238795325112867)) * n318r;
+        const V n317r = n311r - n313r, n317i = n311i - n313i;
+        const V n316r = n311r + n313r, n316i = n311i + n313i;
+        const V n337r = V(static_cast<crd::f32>(-0.7071067811865475)) * n317r - V(static_cast<crd::f32>(-0.7071067811865476)) * n317i, n337i = V(static_cast<crd::f32>(-0.7071067811865475)) * n317i + V(static_cast<crd::f32>(-0.7071067811865476)) * n317r;
+        V n12r, n12i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 384 * rs), n12r, n12i);
+        const V n103r = n12r - n44r, n103i = n12i - n44i;
+        const V n102r = n12r + n44r, n102i = n12i + n44i;
+        const V n110r = n103r - n106r, n110i = n103i - n106i;
+        const V n109r = n103r + n106r, n109i = n103i + n106i;
+        const V n137r = V(static_cast<crd::f32>(-0.9238795325112868)) * n110r - V(static_cast<crd::f32>(0.38268343236508967)) * n110i, n137i = V(static_cast<crd::f32>(-0.9238795325112868)) * n110i + V(static_cast<crd::f32>(0.38268343236508967)) * n110r;
+        const V n119r = V(static_cast<crd::f32>(0.38268343236508984)) * n109r - V(static_cast<crd::f32>(-0.9238795325112867)) * n109i, n119i = V(static_cast<crd::f32>(0.38268343236508984)) * n109i + V(static_cast<crd::f32>(-0.9238795325112867)) * n109r;
+        const V n108r = n102r - n104r, n108i = n102i - n104i;
+        const V n107r = n102r + n104r, n107i = n102i + n104i;
+        const V n128r = V(static_cast<crd::f32>(-0.7071067811865475)) * n108r - V(static_cast<crd::f32>(-0.7071067811865476)) * n108i, n128i = V(static_cast<crd::f32>(-0.7071067811865475)) * n108i + V(static_cast<crd::f32>(-0.7071067811865476)) * n108r;
+        V n11r, n11i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 352 * rs), n11r, n11i);
+        const V n364r = n11r - n43r, n364i = n11i - n43i;
+        const V n363r = n11r + n43r, n363i = n11i + n43i;
+        const V n374r = V(static_cast<crd::f32>(0.7071067811865476)) * n364r - V(static_cast<crd::f32>(-0.7071067811865475)) * n364i, n374i = V(static_cast<crd::f32>(0.7071067811865476)) * n364i + V(static_cast<crd::f32>(-0.7071067811865475)) * n364r;
+        const V n377r = n374r - n375r, n377i = n374i - n375i;
+        const V n376r = n374r + n375r, n376i = n374i + n375i;
+        const V n378r = n377i, n378i = -n377r;
+        const V n368r = n363r - n365r, n368i = n363i - n365i;
+        const V n367r = n363r + n365r, n367i = n363i + n365i;
+        const V n369r = n368i, n369i = -n368r;
+        V n10r, n10i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 320 * rs), n10r, n10i);
+        const V n155r = n10r - n42r, n155i = n10i - n42i;
+        const V n154r = n10r + n42r, n154i = n10i + n42i;
+        const V n165r = V(static_cast<crd::f32>(0.7071067811865476)) * n155r - V(static_cast<crd::f32>(-0.7071067811865475)) * n155i, n165i = V(static_cast<crd::f32>(0.7071067811865476)) * n155i + V(static_cast<crd::f32>(-0.7071067811865475)) * n155r;
+        const V n168r = n165r - n166r, n168i = n165i - n166i;
+        const V n167r = n165r + n166r, n167i = n165i + n166i;
+        const V n169r = n168i, n169i = -n168r;
+        const V n159r = n154r - n156r, n159i = n154i - n156i;
+        const V n158r = n154r + n156r, n158i = n154i + n156i;
+        const V n160r = n159i, n160i = -n159r;
+        V n9r, n9i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 288 * rs), n9r, n9i);
+        const V n283r = n9r - n41r, n283i = n9i - n41i;
+        const V n282r = n9r + n41r, n282i = n9i + n41i;
+        const V n293r = V(static_cast<crd::f32>(0.7071067811865476)) * n283r - V(static_cast<crd::f32>(-0.7071067811865475)) * n283i, n293i = V(static_cast<crd::f32>(0.7071067811865476)) * n283i + V(static_cast<crd::f32>(-0.7071067811865475)) * n283r;
+        const V n296r = n293r - n294r, n296i = n293i - n294i;
+        const V n295r = n293r + n294r, n295i = n293i + n294i;
+        const V n297r = n296i, n297i = -n296r;
+        const V n287r = n282r - n284r, n287i = n282i - n284i;
+        const V n286r = n282r + n284r, n286i = n282i + n284i;
+        const V n288r = n287i, n288i = -n287r;
+        V n8r, n8i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 256 * rs), n8r, n8i);
+        const V n74r = n8r - n40r, n74i = n8i - n40i;
+        const V n73r = n8r + n40r, n73i = n8i + n40i;
+        const V n84r = V(static_cast<crd::f32>(0.7071067811865476)) * n74r - V(static_cast<crd::f32>(-0.7071067811865475)) * n74i, n84i = V(static_cast<crd::f32>(0.7071067811865476)) * n74i + V(static_cast<crd::f32>(-0.7071067811865475)) * n74r;
+        const V n87r = n84r - n85r, n87i = n84i - n85i;
+        const V n86r = n84r + n85r, n86i = n84i + n85i;
+        const V n88r = n87i, n88i = -n87r;
+        const V n78r = n73r - n75r, n78i = n73i - n75i;
+        const V n77r = n73r + n75r, n77i = n73i + n75i;
+        const V n79r = n78i, n79i = -n78r;
+        V n7r, n7i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 224 * rs), n7r, n7i);
+        const V n384r = n7r - n39r, n384i = n7i - n39i;
+        const V n383r = n7r + n39r, n383i = n7i + n39i;
+        const V n391r = n384r - n387r, n391i = n384i - n387i;
+        const V n390r = n384r + n387r, n390i = n384i + n387i;
+        const V n426r = V(static_cast<crd::f32>(0.38268343236508984)) * n391r - V(static_cast<crd::f32>(-0.9238795325112867)) * n391i, n426i = V(static_cast<crd::f32>(0.38268343236508984)) * n391i + V(static_cast<crd::f32>(-0.9238795325112867)) * n391r;
+        const V n408r = V(static_cast<crd::f32>(0.9238795325112867)) * n390r - V(static_cast<crd::f32>(-0.3826834323650898)) * n390i, n408i = V(static_cast<crd::f32>(0.9238795325112867)) * n390i + V(static_cast<crd::f32>(-0.3826834323650898)) * n390r;
+        const V n429r = n426r - n427r, n429i = n426i - n427i;
+        const V n428r = n426r + n427r, n428i = n426i + n427i;
+        const V n430r = n429i, n430i = -n429r;
+        const V n411r = n408r - n409r, n411i = n408i - n409i;
+        const V n410r = n408r + n409r, n410i = n408i + n409i;
+        const V n412r = n411i, n412i = -n411r;
+        const V n389r = n383r - n385r, n389i = n383i - n385i;
+        const V n388r = n383r + n385r, n388i = n383i + n385i;
+        const V n417r = V(static_cast<crd::f32>(0.7071067811865476)) * n389r - V(static_cast<crd::f32>(-0.7071067811865475)) * n389i, n417i = V(static_cast<crd::f32>(0.7071067811865476)) * n389i + V(static_cast<crd::f32>(-0.7071067811865475)) * n389r;
+        const V n420r = n417r - n418r, n420i = n417i - n418i;
+        const V n419r = n417r + n418r, n419i = n417i + n418i;
+        const V n421r = n420i, n421i = -n420r;
+        const V n402r = n388r - n397r, n402i = n388i - n397i;
+        const V n401r = n388r + n397r, n401i = n388i + n397i;
+        const V n403r = n402i, n403i = -n402r;
+        V n6r, n6i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 192 * rs), n6r, n6i);
+        const V n175r = n6r - n38r, n175i = n6i - n38i;
+        const V n174r = n6r + n38r, n174i = n6i + n38i;
+        const V n182r = n175r - n178r, n182i = n175i - n178i;
+        const V n181r = n175r + n178r, n181i = n175i + n178i;
+        const V n202r = n182r - n198r, n202i = n182i - n198i;
+        const V n201r = n182r + n198r, n201i = n182i + n198i;
+        const V n265r = V(static_cast<crd::f32>(-0.5555702330196022)) * n202r - V(static_cast<crd::f32>(0.8314696123025452)) * n202i, n265i = V(static_cast<crd::f32>(-0.5555702330196022)) * n202i + V(static_cast<crd::f32>(0.8314696123025452)) * n202r;
+        const V n229r = V(static_cast<crd::f32>(-0.1950903220161282)) * n201r - V(static_cast<crd::f32>(-0.9807852804032304)) * n201i, n229i = V(static_cast<crd::f32>(-0.1950903220161282)) * n201i + V(static_cast<crd::f32>(-0.9807852804032304)) * n201r;
+        const V n200r = n181r - n196r, n200i = n181i - n196i;
+        const V n199r = n181r + n196r, n199i = n181i + n196i;
+        const V n247r = V(static_cast<crd::f32>(-0.9807852804032304)) * n200r - V(static_cast<crd::f32>(-0.1950903220161286)) * n200i, n247i = V(static_cast<crd::f32>(-0.9807852804032304)) * n200i + V(static_cast<crd::f32>(-0.1950903220161286)) * n200r;
+        const V n211r = V(static_cast<crd::f32>(0.8314696123025452)) * n199r - V(static_cast<crd::f32>(-0.5555702330196022)) * n199i, n211i = V(static_cast<crd::f32>(0.8314696123025452)) * n199i + V(static_cast<crd::f32>(-0.5555702330196022)) * n199r;
+        const V n180r = n174r - n176r, n180i = n174i - n176i;
+        const V n179r = n174r + n176r, n179i = n174i + n176i;
+        const V n193r = n180r - n189r, n193i = n180i - n189i;
+        const V n192r = n180r + n189r, n192i = n180i + n189i;
+        const V n256r = V(static_cast<crd::f32>(-0.9238795325112868)) * n193r - V(static_cast<crd::f32>(0.38268343236508967)) * n193i, n256i = V(static_cast<crd::f32>(-0.9238795325112868)) * n193i + V(static_cast<crd::f32>(0.38268343236508967)) * n193r;
+        const V n220r = V(static_cast<crd::f32>(0.38268343236508984)) * n192r - V(static_cast<crd::f32>(-0.9238795325112867)) * n192i, n220i = V(static_cast<crd::f32>(0.38268343236508984)) * n192i + V(static_cast<crd::f32>(-0.9238795325112867)) * n192r;
+        const V n191r = n179r - n187r, n191i = n179i - n187i;
+        const V n190r = n179r + n187r, n190i = n179i + n187i;
+        const V n238r = V(static_cast<crd::f32>(-0.7071067811865475)) * n191r - V(static_cast<crd::f32>(-0.7071067811865476)) * n191i, n238i = V(static_cast<crd::f32>(-0.7071067811865475)) * n191i + V(static_cast<crd::f32>(-0.7071067811865476)) * n191r;
+        V n5r, n5i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 160 * rs), n5r, n5i);
+        const V n303r = n5r - n37r, n303i = n5i - n37i;
+        const V n302r = n5r + n37r, n302i = n5i + n37i;
+        const V n310r = n303r - n306r, n310i = n303i - n306i;
+        const V n309r = n303r + n306r, n309i = n303i + n306i;
+        const V n345r = V(static_cast<crd::f32>(0.38268343236508984)) * n310r - V(static_cast<crd::f32>(-0.9238795325112867)) * n310i, n345i = V(static_cast<crd::f32>(0.38268343236508984)) * n310i + V(static_cast<crd::f32>(-0.9238795325112867)) * n310r;
+        const V n327r = V(static_cast<crd::f32>(0.9238795325112867)) * n309r - V(static_cast<crd::f32>(-0.3826834323650898)) * n309i, n327i = V(static_cast<crd::f32>(0.9238795325112867)) * n309i + V(static_cast<crd::f32>(-0.3826834323650898)) * n309r;
+        const V n348r = n345r - n346r, n348i = n345i - n346i;
+        const V n347r = n345r + n346r, n347i = n345i + n346i;
+        const V n349r = n348i, n349i = -n348r;
+        const V n330r = n327r - n328r, n330i = n327i - n328i;
+        const V n329r = n327r + n328r, n329i = n327i + n328i;
+        const V n331r = n330i, n331i = -n330r;
+        const V n308r = n302r - n304r, n308i = n302i - n304i;
+        const V n307r = n302r + n304r, n307i = n302i + n304i;
+        const V n336r = V(static_cast<crd::f32>(0.7071067811865476)) * n308r - V(static_cast<crd::f32>(-0.7071067811865475)) * n308i, n336i = V(static_cast<crd::f32>(0.7071067811865476)) * n308i + V(static_cast<crd::f32>(-0.7071067811865475)) * n308r;
+        const V n339r = n336r - n337r, n339i = n336i - n337i;
+        const V n338r = n336r + n337r, n338i = n336i + n337i;
+        const V n340r = n339i, n340i = -n339r;
+        const V n321r = n307r - n316r, n321i = n307i - n316i;
+        const V n320r = n307r + n316r, n320i = n307i + n316i;
+        const V n322r = n321i, n322i = -n321r;
+        V n4r, n4i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 128 * rs), n4r, n4i);
+        const V n94r = n4r - n36r, n94i = n4i - n36i;
+        const V n93r = n4r + n36r, n93i = n4i + n36i;
+        const V n101r = n94r - n97r, n101i = n94i - n97i;
+        const V n100r = n94r + n97r, n100i = n94i + n97i;
+        const V n136r = V(static_cast<crd::f32>(0.38268343236508984)) * n101r - V(static_cast<crd::f32>(-0.9238795325112867)) * n101i, n136i = V(static_cast<crd::f32>(0.38268343236508984)) * n101i + V(static_cast<crd::f32>(-0.9238795325112867)) * n101r;
+        const V n118r = V(static_cast<crd::f32>(0.9238795325112867)) * n100r - V(static_cast<crd::f32>(-0.3826834323650898)) * n100i, n118i = V(static_cast<crd::f32>(0.9238795325112867)) * n100i + V(static_cast<crd::f32>(-0.3826834323650898)) * n100r;
+        const V n139r = n136r - n137r, n139i = n136i - n137i;
+        const V n138r = n136r + n137r, n138i = n136i + n137i;
+        const V n140r = n139i, n140i = -n139r;
+        const V n121r = n118r - n119r, n121i = n118i - n119i;
+        const V n120r = n118r + n119r, n120i = n118i + n119i;
+        const V n122r = n121i, n122i = -n121r;
+        const V n99r = n93r - n95r, n99i = n93i - n95i;
+        const V n98r = n93r + n95r, n98i = n93i + n95i;
+        const V n127r = V(static_cast<crd::f32>(0.7071067811865476)) * n99r - V(static_cast<crd::f32>(-0.7071067811865475)) * n99i, n127i = V(static_cast<crd::f32>(0.7071067811865476)) * n99i + V(static_cast<crd::f32>(-0.7071067811865475)) * n99r;
+        const V n130r = n127r - n128r, n130i = n127i - n128i;
+        const V n129r = n127r + n128r, n129i = n127i + n128i;
+        const V n131r = n130i, n131i = -n130r;
+        const V n112r = n98r - n107r, n112i = n98i - n107i;
+        const V n111r = n98r + n107r, n111i = n98i + n107i;
+        const V n113r = n112i, n113i = -n112r;
+        V n3r, n3i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 96 * rs), n3r, n3i);
+        const V n355r = n3r - n35r, n355i = n3i - n35i;
+        const V n354r = n3r + n35r, n354i = n3i + n35i;
+        const V n362r = n355r - n358r, n362i = n355i - n358i;
+        const V n361r = n355r + n358r, n361i = n355i + n358i;
+        const V n382r = n362r - n378r, n382i = n362i - n378i;
+        const V n381r = n362r + n378r, n381i = n362i + n378i;
+        const V n434r = n382r - n430r, n434i = n382i - n430i;
+        const V n433r = n382r + n430r, n433i = n382i + n430i;
+        const V n569r = V(static_cast<crd::f32>(-0.29028467725446244)) * n434r - V(static_cast<crd::f32>(0.9569403357322088)) * n434i, n569i = V(static_cast<crd::f32>(-0.29028467725446244)) * n434i + V(static_cast<crd::f32>(0.9569403357322088)) * n434r;
+        const V n497r = V(static_cast<crd::f32>(-0.4713967368259977)) * n433r - V(static_cast<crd::f32>(-0.881921264348355)) * n433i, n497i = V(static_cast<crd::f32>(-0.4713967368259977)) * n433i + V(static_cast<crd::f32>(-0.881921264348355)) * n433r;
+        const V n432r = n381r - n428r, n432i = n381i - n428i;
+        const V n431r = n381r + n428r, n431i = n381i + n428i;
+        const V n533r = V(static_cast<crd::f32>(-0.9951847266721969)) * n432r - V(static_cast<crd::f32>(0.09801714032956059)) * n432i, n533i = V(static_cast<crd::f32>(-0.9951847266721969)) * n432i + V(static_cast<crd::f32>(0.09801714032956059)) * n432r;
+        const V n461r = V(static_cast<crd::f32>(0.6343932841636455)) * n431r - V(static_cast<crd::f32>(-0.773010453362737)) * n431i, n461i = V(static_cast<crd::f32>(0.6343932841636455)) * n431i + V(static_cast<crd::f32>(-0.773010453362737)) * n431r;
+        const V n380r = n361r - n376r, n380i = n361i - n376i;
+        const V n379r = n361r + n376r, n379i = n361i + n376i;
+        const V n416r = n380r - n412r, n416i = n380i - n412i;
+        const V n415r = n380r + n412r, n415i = n380i + n412i;
+        const V n551r = V(static_cast<crd::f32>(-0.7730104533627371)) * n416r - V(static_cast<crd::f32>(0.6343932841636453)) * n416i, n551i = V(static_cast<crd::f32>(-0.7730104533627371)) * n416i + V(static_cast<crd::f32>(0.6343932841636453)) * n416r;
+        const V n479r = V(static_cast<crd::f32>(0.09801714032956077)) * n415r - V(static_cast<crd::f32>(-0.9951847266721968)) * n415i, n479i = V(static_cast<crd::f32>(0.09801714032956077)) * n415i + V(static_cast<crd::f32>(-0.9951847266721968)) * n415r;
+        const V n414r = n379r - n410r, n414i = n379i - n410i;
+        const V n413r = n379r + n410r, n413i = n379i + n410i;
+        const V n515r = V(static_cast<crd::f32>(-0.8819212643483549)) * n414r - V(static_cast<crd::f32>(-0.47139673682599786)) * n414i, n515i = V(static_cast<crd::f32>(-0.8819212643483549)) * n414i + V(static_cast<crd::f32>(-0.47139673682599786)) * n414r;
+        const V n443r = V(static_cast<crd::f32>(0.9569403357322088)) * n413r - V(static_cast<crd::f32>(-0.29028467725446233)) * n413i, n443i = V(static_cast<crd::f32>(0.9569403357322088)) * n413i + V(static_cast<crd::f32>(-0.29028467725446233)) * n413r;
+        const V n360r = n354r - n356r, n360i = n354i - n356i;
+        const V n359r = n354r + n356r, n359i = n354i + n356i;
+        const V n373r = n360r - n369r, n373i = n360i - n369i;
+        const V n372r = n360r + n369r, n372i = n360i + n369i;
+        const V n425r = n373r - n421r, n425i = n373i - n421i;
+        const V n424r = n373r + n421r, n424i = n373i + n421i;
+        const V n560r = V(static_cast<crd::f32>(-0.5555702330196022)) * n425r - V(static_cast<crd::f32>(0.8314696123025452)) * n425i, n560i = V(static_cast<crd::f32>(-0.5555702330196022)) * n425i + V(static_cast<crd::f32>(0.8314696123025452)) * n425r;
+        const V n488r = V(static_cast<crd::f32>(-0.1950903220161282)) * n424r - V(static_cast<crd::f32>(-0.9807852804032304)) * n424i, n488i = V(static_cast<crd::f32>(-0.1950903220161282)) * n424i + V(static_cast<crd::f32>(-0.9807852804032304)) * n424r;
+        const V n423r = n372r - n419r, n423i = n372i - n419i;
+        const V n422r = n372r + n419r, n422i = n372i + n419i;
+        const V n524r = V(static_cast<crd::f32>(-0.9807852804032304)) * n423r - V(static_cast<crd::f32>(-0.1950903220161286)) * n423i, n524i = V(static_cast<crd::f32>(-0.9807852804032304)) * n423i + V(static_cast<crd::f32>(-0.1950903220161286)) * n423r;
+        const V n452r = V(static_cast<crd::f32>(0.8314696123025452)) * n422r - V(static_cast<crd::f32>(-0.5555702330196022)) * n422i, n452i = V(static_cast<crd::f32>(0.8314696123025452)) * n422i + V(static_cast<crd::f32>(-0.5555702330196022)) * n422r;
+        const V n371r = n359r - n367r, n371i = n359i - n367i;
+        const V n370r = n359r + n367r, n370i = n359i + n367i;
+        const V n407r = n371r - n403r, n407i = n371i - n403i;
+        const V n406r = n371r + n403r, n406i = n371i + n403i;
+        const V n542r = V(static_cast<crd::f32>(-0.9238795325112868)) * n407r - V(static_cast<crd::f32>(0.38268343236508967)) * n407i, n542i = V(static_cast<crd::f32>(-0.9238795325112868)) * n407i + V(static_cast<crd::f32>(0.38268343236508967)) * n407r;
+        const V n470r = V(static_cast<crd::f32>(0.38268343236508984)) * n406r - V(static_cast<crd::f32>(-0.9238795325112867)) * n406i, n470i = V(static_cast<crd::f32>(0.38268343236508984)) * n406i + V(static_cast<crd::f32>(-0.9238795325112867)) * n406r;
+        const V n405r = n370r - n401r, n405i = n370i - n401i;
+        const V n404r = n370r + n401r, n404i = n370i + n401i;
+        const V n506r = V(static_cast<crd::f32>(-0.7071067811865475)) * n405r - V(static_cast<crd::f32>(-0.7071067811865476)) * n405i, n506i = V(static_cast<crd::f32>(-0.7071067811865475)) * n405i + V(static_cast<crd::f32>(-0.7071067811865476)) * n405r;
+        V n2r, n2i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 64 * rs), n2r, n2i);
+        const V n146r = n2r - n34r, n146i = n2i - n34i;
+        const V n145r = n2r + n34r, n145i = n2i + n34i;
+        const V n153r = n146r - n149r, n153i = n146i - n149i;
+        const V n152r = n146r + n149r, n152i = n146i + n149i;
+        const V n173r = n153r - n169r, n173i = n153i - n169i;
+        const V n172r = n153r + n169r, n172i = n153i + n169i;
+        const V n264r = V(static_cast<crd::f32>(0.19509032201612833)) * n173r - V(static_cast<crd::f32>(-0.9807852804032304)) * n173i, n264i = V(static_cast<crd::f32>(0.19509032201612833)) * n173i + V(static_cast<crd::f32>(-0.9807852804032304)) * n173r;
+        const V n228r = V(static_cast<crd::f32>(0.8314696123025452)) * n172r - V(static_cast<crd::f32>(-0.5555702330196022)) * n172i, n228i = V(static_cast<crd::f32>(0.8314696123025452)) * n172i + V(static_cast<crd::f32>(-0.5555702330196022)) * n172r;
+        const V n267r = n264r - n265r, n267i = n264i - n265i;
+        const V n266r = n264r + n265r, n266i = n264i + n265i;
+        const V n268r = n267i, n268i = -n267r;
+        const V n231r = n228r - n229r, n231i = n228i - n229i;
+        const V n230r = n228r + n229r, n230i = n228i + n229i;
+        const V n232r = n231i, n232i = -n231r;
+        const V n171r = n152r - n167r, n171i = n152i - n167i;
+        const V n170r = n152r + n167r, n170i = n152i + n167i;
+        const V n246r = V(static_cast<crd::f32>(0.5555702330196023)) * n171r - V(static_cast<crd::f32>(-0.8314696123025452)) * n171i, n246i = V(static_cast<crd::f32>(0.5555702330196023)) * n171i + V(static_cast<crd::f32>(-0.8314696123025452)) * n171r;
+        const V n210r = V(static_cast<crd::f32>(0.9807852804032304)) * n170r - V(static_cast<crd::f32>(-0.19509032201612825)) * n170i, n210i = V(static_cast<crd::f32>(0.9807852804032304)) * n170i + V(static_cast<crd::f32>(-0.19509032201612825)) * n170r;
+        const V n249r = n246r - n247r, n249i = n246i - n247i;
+        const V n248r = n246r + n247r, n248i = n246i + n247i;
+        const V n250r = n249i, n250i = -n249r;
+        const V n213r = n210r - n211r, n213i = n210i - n211i;
+        const V n212r = n210r + n211r, n212i = n210i + n211i;
+        const V n214r = n213i, n214i = -n213r;
+        const V n151r = n145r - n147r, n151i = n145i - n147i;
+        const V n150r = n145r + n147r, n150i = n145i + n147i;
+        const V n164r = n151r - n160r, n164i = n151i - n160i;
+        const V n163r = n151r + n160r, n163i = n151i + n160i;
+        const V n255r = V(static_cast<crd::f32>(0.38268343236508984)) * n164r - V(static_cast<crd::f32>(-0.9238795325112867)) * n164i, n255i = V(static_cast<crd::f32>(0.38268343236508984)) * n164i + V(static_cast<crd::f32>(-0.9238795325112867)) * n164r;
+        const V n219r = V(static_cast<crd::f32>(0.9238795325112867)) * n163r - V(static_cast<crd::f32>(-0.3826834323650898)) * n163i, n219i = V(static_cast<crd::f32>(0.9238795325112867)) * n163i + V(static_cast<crd::f32>(-0.3826834323650898)) * n163r;
+        const V n258r = n255r - n256r, n258i = n255i - n256i;
+        const V n257r = n255r + n256r, n257i = n255i + n256i;
+        const V n259r = n258i, n259i = -n258r;
+        const V n222r = n219r - n220r, n222i = n219i - n220i;
+        const V n221r = n219r + n220r, n221i = n219i + n220i;
+        const V n223r = n222i, n223i = -n222r;
+        const V n162r = n150r - n158r, n162i = n150i - n158i;
+        const V n161r = n150r + n158r, n161i = n150i + n158i;
+        const V n237r = V(static_cast<crd::f32>(0.7071067811865476)) * n162r - V(static_cast<crd::f32>(-0.7071067811865475)) * n162i, n237i = V(static_cast<crd::f32>(0.7071067811865476)) * n162i + V(static_cast<crd::f32>(-0.7071067811865475)) * n162r;
+        const V n240r = n237r - n238r, n240i = n237i - n238i;
+        const V n239r = n237r + n238r, n239i = n237i + n238i;
+        const V n241r = n240i, n241i = -n240r;
+        const V n204r = n161r - n190r, n204i = n161i - n190i;
+        const V n203r = n161r + n190r, n203i = n161i + n190i;
+        const V n205r = n204i, n205i = -n204r;
+        V n1r, n1i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 32 * rs), n1r, n1i);
+        const V n274r = n1r - n33r, n274i = n1i - n33i;
+        const V n273r = n1r + n33r, n273i = n1i + n33i;
+        const V n281r = n274r - n277r, n281i = n274i - n277i;
+        const V n280r = n274r + n277r, n280i = n274i + n277i;
+        const V n301r = n281r - n297r, n301i = n281i - n297i;
+        const V n300r = n281r + n297r, n300i = n281i + n297i;
+        const V n353r = n301r - n349r, n353i = n301i - n349i;
+        const V n352r = n301r + n349r, n352i = n301i + n349i;
+        const V n568r = V(static_cast<crd::f32>(0.09801714032956077)) * n353r - V(static_cast<crd::f32>(-0.9951847266721968)) * n353i, n568i = V(static_cast<crd::f32>(0.09801714032956077)) * n353i + V(static_cast<crd::f32>(-0.9951847266721968)) * n353r;
+        const V n496r = V(static_cast<crd::f32>(0.773010453362737)) * n352r - V(static_cast<crd::f32>(-0.6343932841636455)) * n352i, n496i = V(static_cast<crd::f32>(0.773010453362737)) * n352i + V(static_cast<crd::f32>(-0.6343932841636455)) * n352r;
+        const V n571r = n568r - n569r, n571i = n568i - n569i;
+        const V n570r = n568r + n569r, n570i = n568i + n569i;
+        const V n572r = n571i, n572i = -n571r;
+        const V n499r = n496r - n497r, n499i = n496i - n497i;
+        const V n498r = n496r + n497r, n498i = n496i + n497i;
+        const V n500r = n499i, n500i = -n499r;
+        const V n351r = n300r - n347r, n351i = n300i - n347i;
+        const V n350r = n300r + n347r, n350i = n300i + n347i;
+        const V n532r = V(static_cast<crd::f32>(0.4713967368259978)) * n351r - V(static_cast<crd::f32>(-0.8819212643483549)) * n351i, n532i = V(static_cast<crd::f32>(0.4713967368259978)) * n351i + V(static_cast<crd::f32>(-0.8819212643483549)) * n351r;
+        const V n460r = V(static_cast<crd::f32>(0.9569403357322088)) * n350r - V(static_cast<crd::f32>(-0.29028467725446233)) * n350i, n460i = V(static_cast<crd::f32>(0.9569403357322088)) * n350i + V(static_cast<crd::f32>(-0.29028467725446233)) * n350r;
+        const V n535r = n532r - n533r, n535i = n532i - n533i;
+        const V n534r = n532r + n533r, n534i = n532i + n533i;
+        const V n536r = n535i, n536i = -n535r;
+        const V n463r = n460r - n461r, n463i = n460i - n461i;
+        const V n462r = n460r + n461r, n462i = n460i + n461i;
+        const V n464r = n463i, n464i = -n463r;
+        const V n299r = n280r - n295r, n299i = n280i - n295i;
+        const V n298r = n280r + n295r, n298i = n280i + n295i;
+        const V n335r = n299r - n331r, n335i = n299i - n331i;
+        const V n334r = n299r + n331r, n334i = n299i + n331i;
+        const V n550r = V(static_cast<crd::f32>(0.29028467725446233)) * n335r - V(static_cast<crd::f32>(-0.9569403357322089)) * n335i, n550i = V(static_cast<crd::f32>(0.29028467725446233)) * n335i + V(static_cast<crd::f32>(-0.9569403357322089)) * n335r;
+        const V n478r = V(static_cast<crd::f32>(0.881921264348355)) * n334r - V(static_cast<crd::f32>(-0.47139673682599764)) * n334i, n478i = V(static_cast<crd::f32>(0.881921264348355)) * n334i + V(static_cast<crd::f32>(-0.47139673682599764)) * n334r;
+        const V n553r = n550r - n551r, n553i = n550i - n551i;
+        const V n552r = n550r + n551r, n552i = n550i + n551i;
+        const V n554r = n553i, n554i = -n553r;
+        const V n481r = n478r - n479r, n481i = n478i - n479i;
+        const V n480r = n478r + n479r, n480i = n478i + n479i;
+        const V n482r = n481i, n482i = -n481r;
+        const V n333r = n298r - n329r, n333i = n298i - n329i;
+        const V n332r = n298r + n329r, n332i = n298i + n329i;
+        const V n514r = V(static_cast<crd::f32>(0.6343932841636455)) * n333r - V(static_cast<crd::f32>(-0.773010453362737)) * n333i, n514i = V(static_cast<crd::f32>(0.6343932841636455)) * n333i + V(static_cast<crd::f32>(-0.773010453362737)) * n333r;
+        const V n442r = V(static_cast<crd::f32>(0.9951847266721969)) * n332r - V(static_cast<crd::f32>(-0.0980171403295606)) * n332i, n442i = V(static_cast<crd::f32>(0.9951847266721969)) * n332i + V(static_cast<crd::f32>(-0.0980171403295606)) * n332r;
+        const V n517r = n514r - n515r, n517i = n514i - n515i;
+        const V n516r = n514r + n515r, n516i = n514i + n515i;
+        const V n518r = n517i, n518i = -n517r;
+        const V n445r = n442r - n443r, n445i = n442i - n443i;
+        const V n444r = n442r + n443r, n444i = n442i + n443i;
+        const V n446r = n445i, n446i = -n445r;
+        const V n279r = n273r - n275r, n279i = n273i - n275i;
+        const V n278r = n273r + n275r, n278i = n273i + n275i;
+        const V n292r = n279r - n288r, n292i = n279i - n288i;
+        const V n291r = n279r + n288r, n291i = n279i + n288i;
+        const V n344r = n292r - n340r, n344i = n292i - n340i;
+        const V n343r = n292r + n340r, n343i = n292i + n340i;
+        const V n559r = V(static_cast<crd::f32>(0.19509032201612833)) * n344r - V(static_cast<crd::f32>(-0.9807852804032304)) * n344i, n559i = V(static_cast<crd::f32>(0.19509032201612833)) * n344i + V(static_cast<crd::f32>(-0.9807852804032304)) * n344r;
+        const V n487r = V(static_cast<crd::f32>(0.8314696123025452)) * n343r - V(static_cast<crd::f32>(-0.5555702330196022)) * n343i, n487i = V(static_cast<crd::f32>(0.8314696123025452)) * n343i + V(static_cast<crd::f32>(-0.5555702330196022)) * n343r;
+        const V n562r = n559r - n560r, n562i = n559i - n560i;
+        const V n561r = n559r + n560r, n561i = n559i + n560i;
+        const V n563r = n562i, n563i = -n562r;
+        const V n490r = n487r - n488r, n490i = n487i - n488i;
+        const V n489r = n487r + n488r, n489i = n487i + n488i;
+        const V n491r = n490i, n491i = -n490r;
+        const V n342r = n291r - n338r, n342i = n291i - n338i;
+        const V n341r = n291r + n338r, n341i = n291i + n338i;
+        const V n523r = V(static_cast<crd::f32>(0.5555702330196023)) * n342r - V(static_cast<crd::f32>(-0.8314696123025452)) * n342i, n523i = V(static_cast<crd::f32>(0.5555702330196023)) * n342i + V(static_cast<crd::f32>(-0.8314696123025452)) * n342r;
+        const V n451r = V(static_cast<crd::f32>(0.9807852804032304)) * n341r - V(static_cast<crd::f32>(-0.19509032201612825)) * n341i, n451i = V(static_cast<crd::f32>(0.9807852804032304)) * n341i + V(static_cast<crd::f32>(-0.19509032201612825)) * n341r;
+        const V n526r = n523r - n524r, n526i = n523i - n524i;
+        const V n525r = n523r + n524r, n525i = n523i + n524i;
+        const V n527r = n526i, n527i = -n526r;
+        const V n454r = n451r - n452r, n454i = n451i - n452i;
+        const V n453r = n451r + n452r, n453i = n451i + n452i;
+        const V n455r = n454i, n455i = -n454r;
+        const V n290r = n278r - n286r, n290i = n278i - n286i;
+        const V n289r = n278r + n286r, n289i = n278i + n286i;
+        const V n326r = n290r - n322r, n326i = n290i - n322i;
+        const V n325r = n290r + n322r, n325i = n290i + n322i;
+        const V n541r = V(static_cast<crd::f32>(0.38268343236508984)) * n326r - V(static_cast<crd::f32>(-0.9238795325112867)) * n326i, n541i = V(static_cast<crd::f32>(0.38268343236508984)) * n326i + V(static_cast<crd::f32>(-0.9238795325112867)) * n326r;
+        const V n469r = V(static_cast<crd::f32>(0.9238795325112867)) * n325r - V(static_cast<crd::f32>(-0.3826834323650898)) * n325i, n469i = V(static_cast<crd::f32>(0.9238795325112867)) * n325i + V(static_cast<crd::f32>(-0.3826834323650898)) * n325r;
+        const V n544r = n541r - n542r, n544i = n541i - n542i;
+        const V n543r = n541r + n542r, n543i = n541i + n542i;
+        const V n545r = n544i, n545i = -n544r;
+        const V n472r = n469r - n470r, n472i = n469i - n470i;
+        const V n471r = n469r + n470r, n471i = n469i + n470i;
+        const V n473r = n472i, n473i = -n472r;
+        const V n324r = n289r - n320r, n324i = n289i - n320i;
+        const V n323r = n289r + n320r, n323i = n289i + n320i;
+        const V n505r = V(static_cast<crd::f32>(0.7071067811865476)) * n324r - V(static_cast<crd::f32>(-0.7071067811865475)) * n324i, n505i = V(static_cast<crd::f32>(0.7071067811865476)) * n324i + V(static_cast<crd::f32>(-0.7071067811865475)) * n324r;
+        const V n508r = n505r - n506r, n508i = n505i - n506i;
+        const V n507r = n505r + n506r, n507i = n505i + n506i;
+        const V n509r = n508i, n509i = -n508r;
+        const V n436r = n323r - n404r, n436i = n323i - n404i;
+        const V n435r = n323r + n404r, n435i = n323i + n404i;
+        const V n437r = n436i, n437i = -n436r;
+        V n0r, n0i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(base + 0 * rs), n0r, n0i);
+        const V n65r = n0r - n32r, n65i = n0i - n32i;
+        const V n64r = n0r + n32r, n64i = n0i + n32i;
+        const V n72r = n65r - n68r, n72i = n65i - n68i;
+        const V n71r = n65r + n68r, n71i = n65i + n68i;
+        const V n92r = n72r - n88r, n92i = n72i - n88i;
+        const V n91r = n72r + n88r, n91i = n72i + n88i;
+        const V n144r = n92r - n140r, n144i = n92i - n140i;
+        const V n143r = n92r + n140r, n143i = n92i + n140i;
+        const V n272r = n144r - n268r, n272i = n144i - n268i;
+        const V n271r = n144r + n268r, n271i = n144i + n268i;
+        const V n576r = n272r - n572r, n576i = n272i - n572i;
+        { const V wr = V(tr[63]), wi = V(ti[63]);
+          const V or_ = n576r * wr - n576i * wi, oi_ = n576r * wi + n576i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 63 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 63 * 128 + bb0), or_, oi_); }
+#endif
+        const V n575r = n272r + n572r, n575i = n272i + n572i;
+        { const V wr = V(tr[31]), wi = V(ti[31]);
+          const V or_ = n575r * wr - n575i * wi, oi_ = n575r * wi + n575i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 31 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 31 * 128 + bb0), or_, oi_); }
+#endif
+        const V n574r = n271r - n570r, n574i = n271i - n570i;
+        { const V wr = V(tr[47]), wi = V(ti[47]);
+          const V or_ = n574r * wr - n574i * wi, oi_ = n574r * wi + n574i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 47 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 47 * 128 + bb0), or_, oi_); }
+#endif
+        const V n573r = n271r + n570r, n573i = n271i + n570i;
+        { const V wr = V(tr[15]), wi = V(ti[15]);
+          const V or_ = n573r * wr - n573i * wi, oi_ = n573r * wi + n573i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 15 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 15 * 128 + bb0), or_, oi_); }
+#endif
+        const V n270r = n143r - n266r, n270i = n143i - n266i;
+        const V n269r = n143r + n266r, n269i = n143i + n266i;
+        const V n504r = n270r - n500r, n504i = n270i - n500i;
+        { const V wr = V(tr[55]), wi = V(ti[55]);
+          const V or_ = n504r * wr - n504i * wi, oi_ = n504r * wi + n504i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 55 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 55 * 128 + bb0), or_, oi_); }
+#endif
+        const V n503r = n270r + n500r, n503i = n270i + n500i;
+        { const V wr = V(tr[23]), wi = V(ti[23]);
+          const V or_ = n503r * wr - n503i * wi, oi_ = n503r * wi + n503i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 23 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 23 * 128 + bb0), or_, oi_); }
+#endif
+        const V n502r = n269r - n498r, n502i = n269i - n498i;
+        { const V wr = V(tr[39]), wi = V(ti[39]);
+          const V or_ = n502r * wr - n502i * wi, oi_ = n502r * wi + n502i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 39 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 39 * 128 + bb0), or_, oi_); }
+#endif
+        const V n501r = n269r + n498r, n501i = n269i + n498i;
+        { const V wr = V(tr[7]), wi = V(ti[7]);
+          const V or_ = n501r * wr - n501i * wi, oi_ = n501r * wi + n501i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 7 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 7 * 128 + bb0), or_, oi_); }
+#endif
+        const V n142r = n91r - n138r, n142i = n91i - n138i;
+        const V n141r = n91r + n138r, n141i = n91i + n138i;
+        const V n236r = n142r - n232r, n236i = n142i - n232i;
+        const V n235r = n142r + n232r, n235i = n142i + n232i;
+        const V n540r = n236r - n536r, n540i = n236i - n536i;
+        { const V wr = V(tr[59]), wi = V(ti[59]);
+          const V or_ = n540r * wr - n540i * wi, oi_ = n540r * wi + n540i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 59 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 59 * 128 + bb0), or_, oi_); }
+#endif
+        const V n539r = n236r + n536r, n539i = n236i + n536i;
+        { const V wr = V(tr[27]), wi = V(ti[27]);
+          const V or_ = n539r * wr - n539i * wi, oi_ = n539r * wi + n539i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 27 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 27 * 128 + bb0), or_, oi_); }
+#endif
+        const V n538r = n235r - n534r, n538i = n235i - n534i;
+        { const V wr = V(tr[43]), wi = V(ti[43]);
+          const V or_ = n538r * wr - n538i * wi, oi_ = n538r * wi + n538i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 43 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 43 * 128 + bb0), or_, oi_); }
+#endif
+        const V n537r = n235r + n534r, n537i = n235i + n534i;
+        { const V wr = V(tr[11]), wi = V(ti[11]);
+          const V or_ = n537r * wr - n537i * wi, oi_ = n537r * wi + n537i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 11 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 11 * 128 + bb0), or_, oi_); }
+#endif
+        const V n234r = n141r - n230r, n234i = n141i - n230i;
+        const V n233r = n141r + n230r, n233i = n141i + n230i;
+        const V n468r = n234r - n464r, n468i = n234i - n464i;
+        { const V wr = V(tr[51]), wi = V(ti[51]);
+          const V or_ = n468r * wr - n468i * wi, oi_ = n468r * wi + n468i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 51 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 51 * 128 + bb0), or_, oi_); }
+#endif
+        const V n467r = n234r + n464r, n467i = n234i + n464i;
+        { const V wr = V(tr[19]), wi = V(ti[19]);
+          const V or_ = n467r * wr - n467i * wi, oi_ = n467r * wi + n467i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 19 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 19 * 128 + bb0), or_, oi_); }
+#endif
+        const V n466r = n233r - n462r, n466i = n233i - n462i;
+        { const V wr = V(tr[35]), wi = V(ti[35]);
+          const V or_ = n466r * wr - n466i * wi, oi_ = n466r * wi + n466i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 35 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 35 * 128 + bb0), or_, oi_); }
+#endif
+        const V n465r = n233r + n462r, n465i = n233i + n462i;
+        { const V wr = V(tr[3]), wi = V(ti[3]);
+          const V or_ = n465r * wr - n465i * wi, oi_ = n465r * wi + n465i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 3 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 3 * 128 + bb0), or_, oi_); }
+#endif
+        const V n90r = n71r - n86r, n90i = n71i - n86i;
+        const V n89r = n71r + n86r, n89i = n71i + n86i;
+        const V n126r = n90r - n122r, n126i = n90i - n122i;
+        const V n125r = n90r + n122r, n125i = n90i + n122i;
+        const V n254r = n126r - n250r, n254i = n126i - n250i;
+        const V n253r = n126r + n250r, n253i = n126i + n250i;
+        const V n558r = n254r - n554r, n558i = n254i - n554i;
+        { const V wr = V(tr[61]), wi = V(ti[61]);
+          const V or_ = n558r * wr - n558i * wi, oi_ = n558r * wi + n558i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 61 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 61 * 128 + bb0), or_, oi_); }
+#endif
+        const V n557r = n254r + n554r, n557i = n254i + n554i;
+        { const V wr = V(tr[29]), wi = V(ti[29]);
+          const V or_ = n557r * wr - n557i * wi, oi_ = n557r * wi + n557i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 29 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 29 * 128 + bb0), or_, oi_); }
+#endif
+        const V n556r = n253r - n552r, n556i = n253i - n552i;
+        { const V wr = V(tr[45]), wi = V(ti[45]);
+          const V or_ = n556r * wr - n556i * wi, oi_ = n556r * wi + n556i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 45 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 45 * 128 + bb0), or_, oi_); }
+#endif
+        const V n555r = n253r + n552r, n555i = n253i + n552i;
+        { const V wr = V(tr[13]), wi = V(ti[13]);
+          const V or_ = n555r * wr - n555i * wi, oi_ = n555r * wi + n555i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 13 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 13 * 128 + bb0), or_, oi_); }
+#endif
+        const V n252r = n125r - n248r, n252i = n125i - n248i;
+        const V n251r = n125r + n248r, n251i = n125i + n248i;
+        const V n486r = n252r - n482r, n486i = n252i - n482i;
+        { const V wr = V(tr[53]), wi = V(ti[53]);
+          const V or_ = n486r * wr - n486i * wi, oi_ = n486r * wi + n486i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 53 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 53 * 128 + bb0), or_, oi_); }
+#endif
+        const V n485r = n252r + n482r, n485i = n252i + n482i;
+        { const V wr = V(tr[21]), wi = V(ti[21]);
+          const V or_ = n485r * wr - n485i * wi, oi_ = n485r * wi + n485i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 21 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 21 * 128 + bb0), or_, oi_); }
+#endif
+        const V n484r = n251r - n480r, n484i = n251i - n480i;
+        { const V wr = V(tr[37]), wi = V(ti[37]);
+          const V or_ = n484r * wr - n484i * wi, oi_ = n484r * wi + n484i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 37 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 37 * 128 + bb0), or_, oi_); }
+#endif
+        const V n483r = n251r + n480r, n483i = n251i + n480i;
+        { const V wr = V(tr[5]), wi = V(ti[5]);
+          const V or_ = n483r * wr - n483i * wi, oi_ = n483r * wi + n483i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 5 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 5 * 128 + bb0), or_, oi_); }
+#endif
+        const V n124r = n89r - n120r, n124i = n89i - n120i;
+        const V n123r = n89r + n120r, n123i = n89i + n120i;
+        const V n218r = n124r - n214r, n218i = n124i - n214i;
+        const V n217r = n124r + n214r, n217i = n124i + n214i;
+        const V n522r = n218r - n518r, n522i = n218i - n518i;
+        { const V wr = V(tr[57]), wi = V(ti[57]);
+          const V or_ = n522r * wr - n522i * wi, oi_ = n522r * wi + n522i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 57 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 57 * 128 + bb0), or_, oi_); }
+#endif
+        const V n521r = n218r + n518r, n521i = n218i + n518i;
+        { const V wr = V(tr[25]), wi = V(ti[25]);
+          const V or_ = n521r * wr - n521i * wi, oi_ = n521r * wi + n521i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 25 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 25 * 128 + bb0), or_, oi_); }
+#endif
+        const V n520r = n217r - n516r, n520i = n217i - n516i;
+        { const V wr = V(tr[41]), wi = V(ti[41]);
+          const V or_ = n520r * wr - n520i * wi, oi_ = n520r * wi + n520i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 41 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 41 * 128 + bb0), or_, oi_); }
+#endif
+        const V n519r = n217r + n516r, n519i = n217i + n516i;
+        { const V wr = V(tr[9]), wi = V(ti[9]);
+          const V or_ = n519r * wr - n519i * wi, oi_ = n519r * wi + n519i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 9 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 9 * 128 + bb0), or_, oi_); }
+#endif
+        const V n216r = n123r - n212r, n216i = n123i - n212i;
+        const V n215r = n123r + n212r, n215i = n123i + n212i;
+        const V n450r = n216r - n446r, n450i = n216i - n446i;
+        { const V wr = V(tr[49]), wi = V(ti[49]);
+          const V or_ = n450r * wr - n450i * wi, oi_ = n450r * wi + n450i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 49 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 49 * 128 + bb0), or_, oi_); }
+#endif
+        const V n449r = n216r + n446r, n449i = n216i + n446i;
+        { const V wr = V(tr[17]), wi = V(ti[17]);
+          const V or_ = n449r * wr - n449i * wi, oi_ = n449r * wi + n449i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 17 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 17 * 128 + bb0), or_, oi_); }
+#endif
+        const V n448r = n215r - n444r, n448i = n215i - n444i;
+        { const V wr = V(tr[33]), wi = V(ti[33]);
+          const V or_ = n448r * wr - n448i * wi, oi_ = n448r * wi + n448i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 33 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 33 * 128 + bb0), or_, oi_); }
+#endif
+        const V n447r = n215r + n444r, n447i = n215i + n444i;
+        { const V wr = V(tr[1]), wi = V(ti[1]);
+          const V or_ = n447r * wr - n447i * wi, oi_ = n447r * wi + n447i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 1 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 1 * 128 + bb0), or_, oi_); }
+#endif
+        const V n70r = n64r - n66r, n70i = n64i - n66i;
+        const V n69r = n64r + n66r, n69i = n64i + n66i;
+        const V n83r = n70r - n79r, n83i = n70i - n79i;
+        const V n82r = n70r + n79r, n82i = n70i + n79i;
+        const V n135r = n83r - n131r, n135i = n83i - n131i;
+        const V n134r = n83r + n131r, n134i = n83i + n131i;
+        const V n263r = n135r - n259r, n263i = n135i - n259i;
+        const V n262r = n135r + n259r, n262i = n135i + n259i;
+        const V n567r = n263r - n563r, n567i = n263i - n563i;
+        { const V wr = V(tr[62]), wi = V(ti[62]);
+          const V or_ = n567r * wr - n567i * wi, oi_ = n567r * wi + n567i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 62 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 62 * 128 + bb0), or_, oi_); }
+#endif
+        const V n566r = n263r + n563r, n566i = n263i + n563i;
+        { const V wr = V(tr[30]), wi = V(ti[30]);
+          const V or_ = n566r * wr - n566i * wi, oi_ = n566r * wi + n566i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 30 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 30 * 128 + bb0), or_, oi_); }
+#endif
+        const V n565r = n262r - n561r, n565i = n262i - n561i;
+        { const V wr = V(tr[46]), wi = V(ti[46]);
+          const V or_ = n565r * wr - n565i * wi, oi_ = n565r * wi + n565i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 46 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 46 * 128 + bb0), or_, oi_); }
+#endif
+        const V n564r = n262r + n561r, n564i = n262i + n561i;
+        { const V wr = V(tr[14]), wi = V(ti[14]);
+          const V or_ = n564r * wr - n564i * wi, oi_ = n564r * wi + n564i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 14 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 14 * 128 + bb0), or_, oi_); }
+#endif
+        const V n261r = n134r - n257r, n261i = n134i - n257i;
+        const V n260r = n134r + n257r, n260i = n134i + n257i;
+        const V n495r = n261r - n491r, n495i = n261i - n491i;
+        { const V wr = V(tr[54]), wi = V(ti[54]);
+          const V or_ = n495r * wr - n495i * wi, oi_ = n495r * wi + n495i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 54 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 54 * 128 + bb0), or_, oi_); }
+#endif
+        const V n494r = n261r + n491r, n494i = n261i + n491i;
+        { const V wr = V(tr[22]), wi = V(ti[22]);
+          const V or_ = n494r * wr - n494i * wi, oi_ = n494r * wi + n494i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 22 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 22 * 128 + bb0), or_, oi_); }
+#endif
+        const V n493r = n260r - n489r, n493i = n260i - n489i;
+        { const V wr = V(tr[38]), wi = V(ti[38]);
+          const V or_ = n493r * wr - n493i * wi, oi_ = n493r * wi + n493i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 38 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 38 * 128 + bb0), or_, oi_); }
+#endif
+        const V n492r = n260r + n489r, n492i = n260i + n489i;
+        { const V wr = V(tr[6]), wi = V(ti[6]);
+          const V or_ = n492r * wr - n492i * wi, oi_ = n492r * wi + n492i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 6 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 6 * 128 + bb0), or_, oi_); }
+#endif
+        const V n133r = n82r - n129r, n133i = n82i - n129i;
+        const V n132r = n82r + n129r, n132i = n82i + n129i;
+        const V n227r = n133r - n223r, n227i = n133i - n223i;
+        const V n226r = n133r + n223r, n226i = n133i + n223i;
+        const V n531r = n227r - n527r, n531i = n227i - n527i;
+        { const V wr = V(tr[58]), wi = V(ti[58]);
+          const V or_ = n531r * wr - n531i * wi, oi_ = n531r * wi + n531i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 58 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 58 * 128 + bb0), or_, oi_); }
+#endif
+        const V n530r = n227r + n527r, n530i = n227i + n527i;
+        { const V wr = V(tr[26]), wi = V(ti[26]);
+          const V or_ = n530r * wr - n530i * wi, oi_ = n530r * wi + n530i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 26 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 26 * 128 + bb0), or_, oi_); }
+#endif
+        const V n529r = n226r - n525r, n529i = n226i - n525i;
+        { const V wr = V(tr[42]), wi = V(ti[42]);
+          const V or_ = n529r * wr - n529i * wi, oi_ = n529r * wi + n529i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 42 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 42 * 128 + bb0), or_, oi_); }
+#endif
+        const V n528r = n226r + n525r, n528i = n226i + n525i;
+        { const V wr = V(tr[10]), wi = V(ti[10]);
+          const V or_ = n528r * wr - n528i * wi, oi_ = n528r * wi + n528i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 10 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 10 * 128 + bb0), or_, oi_); }
+#endif
+        const V n225r = n132r - n221r, n225i = n132i - n221i;
+        const V n224r = n132r + n221r, n224i = n132i + n221i;
+        const V n459r = n225r - n455r, n459i = n225i - n455i;
+        { const V wr = V(tr[50]), wi = V(ti[50]);
+          const V or_ = n459r * wr - n459i * wi, oi_ = n459r * wi + n459i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 50 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 50 * 128 + bb0), or_, oi_); }
+#endif
+        const V n458r = n225r + n455r, n458i = n225i + n455i;
+        { const V wr = V(tr[18]), wi = V(ti[18]);
+          const V or_ = n458r * wr - n458i * wi, oi_ = n458r * wi + n458i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 18 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 18 * 128 + bb0), or_, oi_); }
+#endif
+        const V n457r = n224r - n453r, n457i = n224i - n453i;
+        { const V wr = V(tr[34]), wi = V(ti[34]);
+          const V or_ = n457r * wr - n457i * wi, oi_ = n457r * wi + n457i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 34 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 34 * 128 + bb0), or_, oi_); }
+#endif
+        const V n456r = n224r + n453r, n456i = n224i + n453i;
+        { const V wr = V(tr[2]), wi = V(ti[2]);
+          const V or_ = n456r * wr - n456i * wi, oi_ = n456r * wi + n456i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 2 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 2 * 128 + bb0), or_, oi_); }
+#endif
+        const V n81r = n69r - n77r, n81i = n69i - n77i;
+        const V n80r = n69r + n77r, n80i = n69i + n77i;
+        const V n117r = n81r - n113r, n117i = n81i - n113i;
+        const V n116r = n81r + n113r, n116i = n81i + n113i;
+        const V n245r = n117r - n241r, n245i = n117i - n241i;
+        const V n244r = n117r + n241r, n244i = n117i + n241i;
+        const V n549r = n245r - n545r, n549i = n245i - n545i;
+        { const V wr = V(tr[60]), wi = V(ti[60]);
+          const V or_ = n549r * wr - n549i * wi, oi_ = n549r * wi + n549i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 60 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 60 * 128 + bb0), or_, oi_); }
+#endif
+        const V n548r = n245r + n545r, n548i = n245i + n545i;
+        { const V wr = V(tr[28]), wi = V(ti[28]);
+          const V or_ = n548r * wr - n548i * wi, oi_ = n548r * wi + n548i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 28 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 28 * 128 + bb0), or_, oi_); }
+#endif
+        const V n547r = n244r - n543r, n547i = n244i - n543i;
+        { const V wr = V(tr[44]), wi = V(ti[44]);
+          const V or_ = n547r * wr - n547i * wi, oi_ = n547r * wi + n547i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 44 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 44 * 128 + bb0), or_, oi_); }
+#endif
+        const V n546r = n244r + n543r, n546i = n244i + n543i;
+        { const V wr = V(tr[12]), wi = V(ti[12]);
+          const V or_ = n546r * wr - n546i * wi, oi_ = n546r * wi + n546i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 12 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 12 * 128 + bb0), or_, oi_); }
+#endif
+        const V n243r = n116r - n239r, n243i = n116i - n239i;
+        const V n242r = n116r + n239r, n242i = n116i + n239i;
+        const V n477r = n243r - n473r, n477i = n243i - n473i;
+        { const V wr = V(tr[52]), wi = V(ti[52]);
+          const V or_ = n477r * wr - n477i * wi, oi_ = n477r * wi + n477i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 52 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 52 * 128 + bb0), or_, oi_); }
+#endif
+        const V n476r = n243r + n473r, n476i = n243i + n473i;
+        { const V wr = V(tr[20]), wi = V(ti[20]);
+          const V or_ = n476r * wr - n476i * wi, oi_ = n476r * wi + n476i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 20 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 20 * 128 + bb0), or_, oi_); }
+#endif
+        const V n475r = n242r - n471r, n475i = n242i - n471i;
+        { const V wr = V(tr[36]), wi = V(ti[36]);
+          const V or_ = n475r * wr - n475i * wi, oi_ = n475r * wi + n475i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 36 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 36 * 128 + bb0), or_, oi_); }
+#endif
+        const V n474r = n242r + n471r, n474i = n242i + n471i;
+        { const V wr = V(tr[4]), wi = V(ti[4]);
+          const V or_ = n474r * wr - n474i * wi, oi_ = n474r * wi + n474i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 4 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 4 * 128 + bb0), or_, oi_); }
+#endif
+        const V n115r = n80r - n111r, n115i = n80i - n111i;
+        const V n114r = n80r + n111r, n114i = n80i + n111i;
+        const V n209r = n115r - n205r, n209i = n115i - n205i;
+        const V n208r = n115r + n205r, n208i = n115i + n205i;
+        const V n513r = n209r - n509r, n513i = n209i - n509i;
+        { const V wr = V(tr[56]), wi = V(ti[56]);
+          const V or_ = n513r * wr - n513i * wi, oi_ = n513r * wi + n513i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 56 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 56 * 128 + bb0), or_, oi_); }
+#endif
+        const V n512r = n209r + n509r, n512i = n209i + n509i;
+        { const V wr = V(tr[24]), wi = V(ti[24]);
+          const V or_ = n512r * wr - n512i * wi, oi_ = n512r * wi + n512i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 24 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 24 * 128 + bb0), or_, oi_); }
+#endif
+        const V n511r = n208r - n507r, n511i = n208i - n507i;
+        { const V wr = V(tr[40]), wi = V(ti[40]);
+          const V or_ = n511r * wr - n511i * wi, oi_ = n511r * wi + n511i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 40 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 40 * 128 + bb0), or_, oi_); }
+#endif
+        const V n510r = n208r + n507r, n510i = n208i + n507i;
+        { const V wr = V(tr[8]), wi = V(ti[8]);
+          const V or_ = n510r * wr - n510i * wi, oi_ = n510r * wi + n510i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 8 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 8 * 128 + bb0), or_, oi_); }
+#endif
+        const V n207r = n114r - n203r, n207i = n114i - n203i;
+        const V n206r = n114r + n203r, n206i = n114i + n203i;
+        const V n441r = n207r - n437r, n441i = n207i - n437i;
+        { const V wr = V(tr[48]), wi = V(ti[48]);
+          const V or_ = n441r * wr - n441i * wi, oi_ = n441r * wi + n441i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 48 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 48 * 128 + bb0), or_, oi_); }
+#endif
+        const V n440r = n207r + n437r, n440i = n207i + n437i;
+        { const V wr = V(tr[16]), wi = V(ti[16]);
+          const V or_ = n440r * wr - n440i * wi, oi_ = n440r * wi + n440i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 16 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 16 * 128 + bb0), or_, oi_); }
+#endif
+        const V n439r = n206r - n435r, n439i = n206i - n435i;
+        { const V wr = V(tr[32]), wi = V(ti[32]);
+          const V or_ = n439r * wr - n439i * wi, oi_ = n439r * wi + n439i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 32 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 32 * 128 + bb0), or_, oi_); }
+#endif
+        const V n438r = n206r + n435r, n438i = n206i + n435i;
+        { const V wr = V(tr[0]), wi = V(ti[0]);
+          const V or_ = n438r * wr - n438i * wi, oi_ = n438r * wi + n438i * wr;
+#ifdef CRD_FFT_M18_ABLATE_SMALLBBUF
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + ((n2v * 8192 + 0 * 128 + bb0) & 8191)), or_, oi_); } // ablation: bbuf write capped to L1
+#else
+          simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 8192 + 0 * 128 + bb0), or_, oi_); }
+#endif
+    }
+}
+// M16-B/M18-2M RECT BB=128 producer (stage1_n=64, stage2_n=32, gpv=8, b=8192, CHUNK=16384). GEN.
+CRD_FORCEINLINE void codelet32g64_batched_tiled_bb128(const crd::hesap::Complex<crd::f32>* in,
+    crd::hesap::Complex<crd::f32>* out) noexcept
+{
+    using V = crd::math::simd::Vec8f;
+    namespace simd = crd::math::simd;
+    const crd::usize b = 8192;
+    for (crd::usize s = 0; s < 16; ++s)
+    {
+      for (crd::usize n2vh = 0; n2vh < 8; ++n2vh)
+      {
+        V br_[32][8], bi_[32][8];
+        for (crd::usize kl = 0; kl < 8; ++kl)
+        {
+            const crd::usize t = n2vh * 1024 + kl * 128 + s * 8;
+            V n31r, n31i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 31 * b + t), n31r, n31i);
+            V n30r, n30i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 30 * b + t), n30r, n30i);
+            V n29r, n29i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 29 * b + t), n29r, n29i);
+            V n28r, n28i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 28 * b + t), n28r, n28i);
+            V n27r, n27i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 27 * b + t), n27r, n27i);
+            V n26r, n26i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 26 * b + t), n26r, n26i);
+            V n25r, n25i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 25 * b + t), n25r, n25i);
+            V n24r, n24i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 24 * b + t), n24r, n24i);
+            V n23r, n23i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 23 * b + t), n23r, n23i);
+            V n22r, n22i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 22 * b + t), n22r, n22i);
+            V n21r, n21i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 21 * b + t), n21r, n21i);
+            V n20r, n20i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 20 * b + t), n20r, n20i);
+            V n19r, n19i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 19 * b + t), n19r, n19i);
+            V n18r, n18i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 18 * b + t), n18r, n18i);
+            V n17r, n17i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 17 * b + t), n17r, n17i);
+            V n16r, n16i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 16 * b + t), n16r, n16i);
+            V n15r, n15i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 15 * b + t), n15r, n15i);
+            const V n154r = n15r - n31r, n154i = n15i - n31i;
+            const V n153r = n15r + n31r, n153i = n15i + n31i;
+            const V n163r = V(static_cast<crd::f32>(-0.7071067811865475)) * n154r - V(static_cast<crd::f32>(-0.7071067811865476)) * n154i, n163i = V(static_cast<crd::f32>(-0.7071067811865475)) * n154i + V(static_cast<crd::f32>(-0.7071067811865476)) * n154r;
+            V n14r, n14i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 14 * b + t), n14r, n14i);
+            const V n73r = n14r - n30r, n73i = n14i - n30i;
+            const V n72r = n14r + n30r, n72i = n14i + n30i;
+            const V n74r = n73i, n74i = -n73r;
+            V n13r, n13i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 13 * b + t), n13r, n13i);
+            const V n125r = n13r - n29r, n125i = n13i - n29i;
+            const V n124r = n13r + n29r, n124i = n13i + n29i;
+            const V n134r = V(static_cast<crd::f32>(-0.7071067811865475)) * n125r - V(static_cast<crd::f32>(-0.7071067811865476)) * n125i, n134i = V(static_cast<crd::f32>(-0.7071067811865475)) * n125i + V(static_cast<crd::f32>(-0.7071067811865476)) * n125r;
+            V n12r, n12i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 12 * b + t), n12r, n12i);
+            const V n44r = n12r - n28r, n44i = n12i - n28i;
+            const V n43r = n12r + n28r, n43i = n12i + n28i;
+            const V n53r = V(static_cast<crd::f32>(-0.7071067811865475)) * n44r - V(static_cast<crd::f32>(-0.7071067811865476)) * n44i, n53i = V(static_cast<crd::f32>(-0.7071067811865475)) * n44i + V(static_cast<crd::f32>(-0.7071067811865476)) * n44r;
+            V n11r, n11i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 11 * b + t), n11r, n11i);
+            const V n145r = n11r - n27r, n145i = n11i - n27i;
+            const V n144r = n11r + n27r, n144i = n11i + n27i;
+            const V n146r = n145i, n146i = -n145r;
+            V n10r, n10i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 10 * b + t), n10r, n10i);
+            const V n64r = n10r - n26r, n64i = n10i - n26i;
+            const V n63r = n10r + n26r, n63i = n10i + n26i;
+            const V n65r = n64i, n65i = -n64r;
+            V n9r, n9i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 9 * b + t), n9r, n9i);
+            const V n116r = n9r - n25r, n116i = n9i - n25i;
+            const V n115r = n9r + n25r, n115i = n9i + n25i;
+            const V n117r = n116i, n117i = -n116r;
+            V n8r, n8i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 8 * b + t), n8r, n8i);
+            const V n35r = n8r - n24r, n35i = n8i - n24i;
+            const V n34r = n8r + n24r, n34i = n8i + n24i;
+            const V n36r = n35i, n36i = -n35r;
+            V n7r, n7i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 7 * b + t), n7r, n7i);
+            const V n152r = n7r - n23r, n152i = n7i - n23i;
+            const V n151r = n7r + n23r, n151i = n7i + n23i;
+            const V n162r = V(static_cast<crd::f32>(0.7071067811865476)) * n152r - V(static_cast<crd::f32>(-0.7071067811865475)) * n152i, n162i = V(static_cast<crd::f32>(0.7071067811865476)) * n152i + V(static_cast<crd::f32>(-0.7071067811865475)) * n152r;
+            const V n165r = n162r - n163r, n165i = n162i - n163i;
+            const V n164r = n162r + n163r, n164i = n162i + n163i;
+            const V n166r = n165i, n166i = -n165r;
+            const V n156r = n151r - n153r, n156i = n151i - n153i;
+            const V n155r = n151r + n153r, n155i = n151i + n153i;
+            const V n157r = n156i, n157i = -n156r;
+            V n6r, n6i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 6 * b + t), n6r, n6i);
+            const V n71r = n6r - n22r, n71i = n6i - n22i;
+            const V n70r = n6r + n22r, n70i = n6i + n22i;
+            const V n78r = n71r - n74r, n78i = n71i - n74i;
+            const V n77r = n71r + n74r, n77i = n71i + n74i;
+            const V n105r = V(static_cast<crd::f32>(-0.9238795325112868)) * n78r - V(static_cast<crd::f32>(0.38268343236508967)) * n78i, n105i = V(static_cast<crd::f32>(-0.9238795325112868)) * n78i + V(static_cast<crd::f32>(0.38268343236508967)) * n78r;
+            const V n87r = V(static_cast<crd::f32>(0.38268343236508984)) * n77r - V(static_cast<crd::f32>(-0.9238795325112867)) * n77i, n87i = V(static_cast<crd::f32>(0.38268343236508984)) * n77i + V(static_cast<crd::f32>(-0.9238795325112867)) * n77r;
+            const V n76r = n70r - n72r, n76i = n70i - n72i;
+            const V n75r = n70r + n72r, n75i = n70i + n72i;
+            const V n96r = V(static_cast<crd::f32>(-0.7071067811865475)) * n76r - V(static_cast<crd::f32>(-0.7071067811865476)) * n76i, n96i = V(static_cast<crd::f32>(-0.7071067811865475)) * n76i + V(static_cast<crd::f32>(-0.7071067811865476)) * n76r;
+            V n5r, n5i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 5 * b + t), n5r, n5i);
+            const V n123r = n5r - n21r, n123i = n5i - n21i;
+            const V n122r = n5r + n21r, n122i = n5i + n21i;
+            const V n133r = V(static_cast<crd::f32>(0.7071067811865476)) * n123r - V(static_cast<crd::f32>(-0.7071067811865475)) * n123i, n133i = V(static_cast<crd::f32>(0.7071067811865476)) * n123i + V(static_cast<crd::f32>(-0.7071067811865475)) * n123r;
+            const V n136r = n133r - n134r, n136i = n133i - n134i;
+            const V n135r = n133r + n134r, n135i = n133i + n134i;
+            const V n137r = n136i, n137i = -n136r;
+            const V n127r = n122r - n124r, n127i = n122i - n124i;
+            const V n126r = n122r + n124r, n126i = n122i + n124i;
+            const V n128r = n127i, n128i = -n127r;
+            V n4r, n4i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 4 * b + t), n4r, n4i);
+            const V n42r = n4r - n20r, n42i = n4i - n20i;
+            const V n41r = n4r + n20r, n41i = n4i + n20i;
+            const V n52r = V(static_cast<crd::f32>(0.7071067811865476)) * n42r - V(static_cast<crd::f32>(-0.7071067811865475)) * n42i, n52i = V(static_cast<crd::f32>(0.7071067811865476)) * n42i + V(static_cast<crd::f32>(-0.7071067811865475)) * n42r;
+            const V n55r = n52r - n53r, n55i = n52i - n53i;
+            const V n54r = n52r + n53r, n54i = n52i + n53i;
+            const V n56r = n55i, n56i = -n55r;
+            const V n46r = n41r - n43r, n46i = n41i - n43i;
+            const V n45r = n41r + n43r, n45i = n41i + n43i;
+            const V n47r = n46i, n47i = -n46r;
+            V n3r, n3i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 3 * b + t), n3r, n3i);
+            const V n143r = n3r - n19r, n143i = n3i - n19i;
+            const V n142r = n3r + n19r, n142i = n3i + n19i;
+            const V n150r = n143r - n146r, n150i = n143i - n146i;
+            const V n149r = n143r + n146r, n149i = n143i + n146i;
+            const V n170r = n150r - n166r, n170i = n150i - n166i;
+            const V n169r = n150r + n166r, n169i = n150i + n166i;
+            const V n233r = V(static_cast<crd::f32>(-0.5555702330196022)) * n170r - V(static_cast<crd::f32>(0.8314696123025452)) * n170i, n233i = V(static_cast<crd::f32>(-0.5555702330196022)) * n170i + V(static_cast<crd::f32>(0.8314696123025452)) * n170r;
+            const V n197r = V(static_cast<crd::f32>(-0.1950903220161282)) * n169r - V(static_cast<crd::f32>(-0.9807852804032304)) * n169i, n197i = V(static_cast<crd::f32>(-0.1950903220161282)) * n169i + V(static_cast<crd::f32>(-0.9807852804032304)) * n169r;
+            const V n168r = n149r - n164r, n168i = n149i - n164i;
+            const V n167r = n149r + n164r, n167i = n149i + n164i;
+            const V n215r = V(static_cast<crd::f32>(-0.9807852804032304)) * n168r - V(static_cast<crd::f32>(-0.1950903220161286)) * n168i, n215i = V(static_cast<crd::f32>(-0.9807852804032304)) * n168i + V(static_cast<crd::f32>(-0.1950903220161286)) * n168r;
+            const V n179r = V(static_cast<crd::f32>(0.8314696123025452)) * n167r - V(static_cast<crd::f32>(-0.5555702330196022)) * n167i, n179i = V(static_cast<crd::f32>(0.8314696123025452)) * n167i + V(static_cast<crd::f32>(-0.5555702330196022)) * n167r;
+            const V n148r = n142r - n144r, n148i = n142i - n144i;
+            const V n147r = n142r + n144r, n147i = n142i + n144i;
+            const V n161r = n148r - n157r, n161i = n148i - n157i;
+            const V n160r = n148r + n157r, n160i = n148i + n157i;
+            const V n224r = V(static_cast<crd::f32>(-0.9238795325112868)) * n161r - V(static_cast<crd::f32>(0.38268343236508967)) * n161i, n224i = V(static_cast<crd::f32>(-0.9238795325112868)) * n161i + V(static_cast<crd::f32>(0.38268343236508967)) * n161r;
+            const V n188r = V(static_cast<crd::f32>(0.38268343236508984)) * n160r - V(static_cast<crd::f32>(-0.9238795325112867)) * n160i, n188i = V(static_cast<crd::f32>(0.38268343236508984)) * n160i + V(static_cast<crd::f32>(-0.9238795325112867)) * n160r;
+            const V n159r = n147r - n155r, n159i = n147i - n155i;
+            const V n158r = n147r + n155r, n158i = n147i + n155i;
+            const V n206r = V(static_cast<crd::f32>(-0.7071067811865475)) * n159r - V(static_cast<crd::f32>(-0.7071067811865476)) * n159i, n206i = V(static_cast<crd::f32>(-0.7071067811865475)) * n159i + V(static_cast<crd::f32>(-0.7071067811865476)) * n159r;
+            V n2r, n2i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 2 * b + t), n2r, n2i);
+            const V n62r = n2r - n18r, n62i = n2i - n18i;
+            const V n61r = n2r + n18r, n61i = n2i + n18i;
+            const V n69r = n62r - n65r, n69i = n62i - n65i;
+            const V n68r = n62r + n65r, n68i = n62i + n65i;
+            const V n104r = V(static_cast<crd::f32>(0.38268343236508984)) * n69r - V(static_cast<crd::f32>(-0.9238795325112867)) * n69i, n104i = V(static_cast<crd::f32>(0.38268343236508984)) * n69i + V(static_cast<crd::f32>(-0.9238795325112867)) * n69r;
+            const V n86r = V(static_cast<crd::f32>(0.9238795325112867)) * n68r - V(static_cast<crd::f32>(-0.3826834323650898)) * n68i, n86i = V(static_cast<crd::f32>(0.9238795325112867)) * n68i + V(static_cast<crd::f32>(-0.3826834323650898)) * n68r;
+            const V n107r = n104r - n105r, n107i = n104i - n105i;
+            const V n106r = n104r + n105r, n106i = n104i + n105i;
+            const V n108r = n107i, n108i = -n107r;
+            const V n89r = n86r - n87r, n89i = n86i - n87i;
+            const V n88r = n86r + n87r, n88i = n86i + n87i;
+            const V n90r = n89i, n90i = -n89r;
+            const V n67r = n61r - n63r, n67i = n61i - n63i;
+            const V n66r = n61r + n63r, n66i = n61i + n63i;
+            const V n95r = V(static_cast<crd::f32>(0.7071067811865476)) * n67r - V(static_cast<crd::f32>(-0.7071067811865475)) * n67i, n95i = V(static_cast<crd::f32>(0.7071067811865476)) * n67i + V(static_cast<crd::f32>(-0.7071067811865475)) * n67r;
+            const V n98r = n95r - n96r, n98i = n95i - n96i;
+            const V n97r = n95r + n96r, n97i = n95i + n96i;
+            const V n99r = n98i, n99i = -n98r;
+            const V n80r = n66r - n75r, n80i = n66i - n75i;
+            const V n79r = n66r + n75r, n79i = n66i + n75i;
+            const V n81r = n80i, n81i = -n80r;
+            V n1r, n1i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 1 * b + t), n1r, n1i);
+            const V n114r = n1r - n17r, n114i = n1i - n17i;
+            const V n113r = n1r + n17r, n113i = n1i + n17i;
+            const V n121r = n114r - n117r, n121i = n114i - n117i;
+            const V n120r = n114r + n117r, n120i = n114i + n117i;
+            const V n141r = n121r - n137r, n141i = n121i - n137i;
+            const V n140r = n121r + n137r, n140i = n121i + n137i;
+            const V n232r = V(static_cast<crd::f32>(0.19509032201612833)) * n141r - V(static_cast<crd::f32>(-0.9807852804032304)) * n141i, n232i = V(static_cast<crd::f32>(0.19509032201612833)) * n141i + V(static_cast<crd::f32>(-0.9807852804032304)) * n141r;
+            const V n196r = V(static_cast<crd::f32>(0.8314696123025452)) * n140r - V(static_cast<crd::f32>(-0.5555702330196022)) * n140i, n196i = V(static_cast<crd::f32>(0.8314696123025452)) * n140i + V(static_cast<crd::f32>(-0.5555702330196022)) * n140r;
+            const V n235r = n232r - n233r, n235i = n232i - n233i;
+            const V n234r = n232r + n233r, n234i = n232i + n233i;
+            const V n236r = n235i, n236i = -n235r;
+            const V n199r = n196r - n197r, n199i = n196i - n197i;
+            const V n198r = n196r + n197r, n198i = n196i + n197i;
+            const V n200r = n199i, n200i = -n199r;
+            const V n139r = n120r - n135r, n139i = n120i - n135i;
+            const V n138r = n120r + n135r, n138i = n120i + n135i;
+            const V n214r = V(static_cast<crd::f32>(0.5555702330196023)) * n139r - V(static_cast<crd::f32>(-0.8314696123025452)) * n139i, n214i = V(static_cast<crd::f32>(0.5555702330196023)) * n139i + V(static_cast<crd::f32>(-0.8314696123025452)) * n139r;
+            const V n178r = V(static_cast<crd::f32>(0.9807852804032304)) * n138r - V(static_cast<crd::f32>(-0.19509032201612825)) * n138i, n178i = V(static_cast<crd::f32>(0.9807852804032304)) * n138i + V(static_cast<crd::f32>(-0.19509032201612825)) * n138r;
+            const V n217r = n214r - n215r, n217i = n214i - n215i;
+            const V n216r = n214r + n215r, n216i = n214i + n215i;
+            const V n218r = n217i, n218i = -n217r;
+            const V n181r = n178r - n179r, n181i = n178i - n179i;
+            const V n180r = n178r + n179r, n180i = n178i + n179i;
+            const V n182r = n181i, n182i = -n181r;
+            const V n119r = n113r - n115r, n119i = n113i - n115i;
+            const V n118r = n113r + n115r, n118i = n113i + n115i;
+            const V n132r = n119r - n128r, n132i = n119i - n128i;
+            const V n131r = n119r + n128r, n131i = n119i + n128i;
+            const V n223r = V(static_cast<crd::f32>(0.38268343236508984)) * n132r - V(static_cast<crd::f32>(-0.9238795325112867)) * n132i, n223i = V(static_cast<crd::f32>(0.38268343236508984)) * n132i + V(static_cast<crd::f32>(-0.9238795325112867)) * n132r;
+            const V n187r = V(static_cast<crd::f32>(0.9238795325112867)) * n131r - V(static_cast<crd::f32>(-0.3826834323650898)) * n131i, n187i = V(static_cast<crd::f32>(0.9238795325112867)) * n131i + V(static_cast<crd::f32>(-0.3826834323650898)) * n131r;
+            const V n226r = n223r - n224r, n226i = n223i - n224i;
+            const V n225r = n223r + n224r, n225i = n223i + n224i;
+            const V n227r = n226i, n227i = -n226r;
+            const V n190r = n187r - n188r, n190i = n187i - n188i;
+            const V n189r = n187r + n188r, n189i = n187i + n188i;
+            const V n191r = n190i, n191i = -n190r;
+            const V n130r = n118r - n126r, n130i = n118i - n126i;
+            const V n129r = n118r + n126r, n129i = n118i + n126i;
+            const V n205r = V(static_cast<crd::f32>(0.7071067811865476)) * n130r - V(static_cast<crd::f32>(-0.7071067811865475)) * n130i, n205i = V(static_cast<crd::f32>(0.7071067811865476)) * n130i + V(static_cast<crd::f32>(-0.7071067811865475)) * n130r;
+            const V n208r = n205r - n206r, n208i = n205i - n206i;
+            const V n207r = n205r + n206r, n207i = n205i + n206i;
+            const V n209r = n208i, n209i = -n208r;
+            const V n172r = n129r - n158r, n172i = n129i - n158i;
+            const V n171r = n129r + n158r, n171i = n129i + n158i;
+            const V n173r = n172i, n173i = -n172r;
+            V n0r, n0i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 0 * b + t), n0r, n0i);
+            const V n33r = n0r - n16r, n33i = n0i - n16i;
+            const V n32r = n0r + n16r, n32i = n0i + n16i;
+            const V n40r = n33r - n36r, n40i = n33i - n36i;
+            const V n39r = n33r + n36r, n39i = n33i + n36i;
+            const V n60r = n40r - n56r, n60i = n40i - n56i;
+            const V n59r = n40r + n56r, n59i = n40i + n56i;
+            const V n112r = n60r - n108r, n112i = n60i - n108i;
+            const V n111r = n60r + n108r, n111i = n60i + n108i;
+            const V n240r = n112r - n236r, n240i = n112i - n236i;
+            br_[31][kl] = n240r; bi_[31][kl] = n240i;
+            const V n239r = n112r + n236r, n239i = n112i + n236i;
+            br_[15][kl] = n239r; bi_[15][kl] = n239i;
+            const V n238r = n111r - n234r, n238i = n111i - n234i;
+            br_[23][kl] = n238r; bi_[23][kl] = n238i;
+            const V n237r = n111r + n234r, n237i = n111i + n234i;
+            br_[7][kl] = n237r; bi_[7][kl] = n237i;
+            const V n110r = n59r - n106r, n110i = n59i - n106i;
+            const V n109r = n59r + n106r, n109i = n59i + n106i;
+            const V n204r = n110r - n200r, n204i = n110i - n200i;
+            br_[27][kl] = n204r; bi_[27][kl] = n204i;
+            const V n203r = n110r + n200r, n203i = n110i + n200i;
+            br_[11][kl] = n203r; bi_[11][kl] = n203i;
+            const V n202r = n109r - n198r, n202i = n109i - n198i;
+            br_[19][kl] = n202r; bi_[19][kl] = n202i;
+            const V n201r = n109r + n198r, n201i = n109i + n198i;
+            br_[3][kl] = n201r; bi_[3][kl] = n201i;
+            const V n58r = n39r - n54r, n58i = n39i - n54i;
+            const V n57r = n39r + n54r, n57i = n39i + n54i;
+            const V n94r = n58r - n90r, n94i = n58i - n90i;
+            const V n93r = n58r + n90r, n93i = n58i + n90i;
+            const V n222r = n94r - n218r, n222i = n94i - n218i;
+            br_[29][kl] = n222r; bi_[29][kl] = n222i;
+            const V n221r = n94r + n218r, n221i = n94i + n218i;
+            br_[13][kl] = n221r; bi_[13][kl] = n221i;
+            const V n220r = n93r - n216r, n220i = n93i - n216i;
+            br_[21][kl] = n220r; bi_[21][kl] = n220i;
+            const V n219r = n93r + n216r, n219i = n93i + n216i;
+            br_[5][kl] = n219r; bi_[5][kl] = n219i;
+            const V n92r = n57r - n88r, n92i = n57i - n88i;
+            const V n91r = n57r + n88r, n91i = n57i + n88i;
+            const V n186r = n92r - n182r, n186i = n92i - n182i;
+            br_[25][kl] = n186r; bi_[25][kl] = n186i;
+            const V n185r = n92r + n182r, n185i = n92i + n182i;
+            br_[9][kl] = n185r; bi_[9][kl] = n185i;
+            const V n184r = n91r - n180r, n184i = n91i - n180i;
+            br_[17][kl] = n184r; bi_[17][kl] = n184i;
+            const V n183r = n91r + n180r, n183i = n91i + n180i;
+            br_[1][kl] = n183r; bi_[1][kl] = n183i;
+            const V n38r = n32r - n34r, n38i = n32i - n34i;
+            const V n37r = n32r + n34r, n37i = n32i + n34i;
+            const V n51r = n38r - n47r, n51i = n38i - n47i;
+            const V n50r = n38r + n47r, n50i = n38i + n47i;
+            const V n103r = n51r - n99r, n103i = n51i - n99i;
+            const V n102r = n51r + n99r, n102i = n51i + n99i;
+            const V n231r = n103r - n227r, n231i = n103i - n227i;
+            br_[30][kl] = n231r; bi_[30][kl] = n231i;
+            const V n230r = n103r + n227r, n230i = n103i + n227i;
+            br_[14][kl] = n230r; bi_[14][kl] = n230i;
+            const V n229r = n102r - n225r, n229i = n102i - n225i;
+            br_[22][kl] = n229r; bi_[22][kl] = n229i;
+            const V n228r = n102r + n225r, n228i = n102i + n225i;
+            br_[6][kl] = n228r; bi_[6][kl] = n228i;
+            const V n101r = n50r - n97r, n101i = n50i - n97i;
+            const V n100r = n50r + n97r, n100i = n50i + n97i;
+            const V n195r = n101r - n191r, n195i = n101i - n191i;
+            br_[26][kl] = n195r; bi_[26][kl] = n195i;
+            const V n194r = n101r + n191r, n194i = n101i + n191i;
+            br_[10][kl] = n194r; bi_[10][kl] = n194i;
+            const V n193r = n100r - n189r, n193i = n100i - n189i;
+            br_[18][kl] = n193r; bi_[18][kl] = n193i;
+            const V n192r = n100r + n189r, n192i = n100i + n189i;
+            br_[2][kl] = n192r; bi_[2][kl] = n192i;
+            const V n49r = n37r - n45r, n49i = n37i - n45i;
+            const V n48r = n37r + n45r, n48i = n37i + n45i;
+            const V n85r = n49r - n81r, n85i = n49i - n81i;
+            const V n84r = n49r + n81r, n84i = n49i + n81i;
+            const V n213r = n85r - n209r, n213i = n85i - n209i;
+            br_[28][kl] = n213r; bi_[28][kl] = n213i;
+            const V n212r = n85r + n209r, n212i = n85i + n209i;
+            br_[12][kl] = n212r; bi_[12][kl] = n212i;
+            const V n211r = n84r - n207r, n211i = n84i - n207i;
+            br_[20][kl] = n211r; bi_[20][kl] = n211i;
+            const V n210r = n84r + n207r, n210i = n84i + n207i;
+            br_[4][kl] = n210r; bi_[4][kl] = n210i;
+            const V n83r = n48r - n79r, n83i = n48i - n79i;
+            const V n82r = n48r + n79r, n82i = n48i + n79i;
+            const V n177r = n83r - n173r, n177i = n83i - n173i;
+            br_[24][kl] = n177r; bi_[24][kl] = n177i;
+            const V n176r = n83r + n173r, n176i = n83i + n173i;
+            br_[8][kl] = n176r; bi_[8][kl] = n176i;
+            const V n175r = n82r - n171r, n175i = n82i - n171i;
+            br_[16][kl] = n175r; bi_[16][kl] = n175i;
+            const V n174r = n82r + n171r, n174i = n82i + n171i;
+            br_[0][kl] = n174r; bi_[0][kl] = n174i;
+        }
+        for (crd::usize m = 0; m < 32; ++m)
+        {
+            V r0=br_[m][0],r1=br_[m][1],r2=br_[m][2],r3=br_[m][3],r4=br_[m][4],r5=br_[m][5],r6=br_[m][6],r7=br_[m][7];
+            V i0=bi_[m][0],i1=bi_[m][1],i2=bi_[m][2],i3=bi_[m][3],i4=bi_[m][4],i5=bi_[m][5],i6=bi_[m][6],i7=bi_[m][7];
+#ifndef CRD_FFT_M16B_ABLATE_NOTRANSPOSE
+            m16tr::transpose8x8(r0,r1,r2,r3,r4,r5,r6,r7); m16tr::transpose8x8(i0,i1,i2,i3,i4,i5,i6,i7);
+#endif
+            crd::f32* op = reinterpret_cast<crd::f32*>(out + s * 16384 + (m * 8 + n2vh) * 64);
+            simd::store_complex_interleaved(op+0, r0, i0); simd::store_complex_interleaved(op+16, r1, i1);
+            simd::store_complex_interleaved(op+32, r2, i2); simd::store_complex_interleaved(op+48, r3, i3);
+            simd::store_complex_interleaved(op+64, r4, i4); simd::store_complex_interleaved(op+80, r5, i5);
+            simd::store_complex_interleaved(op+96, r6, i6); simd::store_complex_interleaved(op+112, r7, i7);
+        }
+      }
+    }
+}
+// M18 FUSED P2 (N=1024, ti_stride=16384): native_tiled leaf + stage2 + final over 64KB tile. GEN.
+CRD_FORCEINLINE void codelet32_p2_fused_tile64_2m(const crd::hesap::Complex<crd::f32>* nt,
+    crd::hesap::Complex<crd::f32>* data, crd::usize k1, crd::usize n1p, const crd::f32* baser, const crd::f32* basei,
+    const crd::f32* laner, const crd::f32* lanei, const crd::f32* twr, const crd::f32* twi) noexcept
+{
+    using V = crd::math::simd::Vec8f;
+    namespace simd = crd::math::simd;
+    V tile_r[32][32], tile_i[32][32];
+    for (crd::usize g = 0; g < 16; ++g)
+    {
+        const crd::usize bb0 = g * 8, grp_ = (k1 + bb0) >> 3;
+        for (crd::usize n2v = 0; n2v < 32; ++n2v)
+        {
+            const crd::f32* const tr = twr + n2v * 32, * const ti = twi + n2v * 32;
+            V n31r, n31i; { const crd::usize i2_ = 31 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 16384 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 31], bi_ = basei[grp_ * 1024 + n2v * 32 + 31];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n31r = vr_ * wr_ - vi_ * wi_; n31i = vr_ * wi_ + vi_ * wr_; }
+            V n30r, n30i; { const crd::usize i2_ = 30 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 16384 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 30], bi_ = basei[grp_ * 1024 + n2v * 32 + 30];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n30r = vr_ * wr_ - vi_ * wi_; n30i = vr_ * wi_ + vi_ * wr_; }
+            V n29r, n29i; { const crd::usize i2_ = 29 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 16384 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 29], bi_ = basei[grp_ * 1024 + n2v * 32 + 29];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n29r = vr_ * wr_ - vi_ * wi_; n29i = vr_ * wi_ + vi_ * wr_; }
+            V n28r, n28i; { const crd::usize i2_ = 28 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 16384 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 28], bi_ = basei[grp_ * 1024 + n2v * 32 + 28];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n28r = vr_ * wr_ - vi_ * wi_; n28i = vr_ * wi_ + vi_ * wr_; }
+            V n27r, n27i; { const crd::usize i2_ = 27 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 16384 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 27], bi_ = basei[grp_ * 1024 + n2v * 32 + 27];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n27r = vr_ * wr_ - vi_ * wi_; n27i = vr_ * wi_ + vi_ * wr_; }
+            V n26r, n26i; { const crd::usize i2_ = 26 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 16384 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 26], bi_ = basei[grp_ * 1024 + n2v * 32 + 26];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n26r = vr_ * wr_ - vi_ * wi_; n26i = vr_ * wi_ + vi_ * wr_; }
+            V n25r, n25i; { const crd::usize i2_ = 25 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 16384 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 25], bi_ = basei[grp_ * 1024 + n2v * 32 + 25];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n25r = vr_ * wr_ - vi_ * wi_; n25i = vr_ * wi_ + vi_ * wr_; }
+            V n24r, n24i; { const crd::usize i2_ = 24 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 16384 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 24], bi_ = basei[grp_ * 1024 + n2v * 32 + 24];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n24r = vr_ * wr_ - vi_ * wi_; n24i = vr_ * wi_ + vi_ * wr_; }
+            V n23r, n23i; { const crd::usize i2_ = 23 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 16384 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 23], bi_ = basei[grp_ * 1024 + n2v * 32 + 23];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n23r = vr_ * wr_ - vi_ * wi_; n23i = vr_ * wi_ + vi_ * wr_; }
+            V n22r, n22i; { const crd::usize i2_ = 22 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 16384 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 22], bi_ = basei[grp_ * 1024 + n2v * 32 + 22];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n22r = vr_ * wr_ - vi_ * wi_; n22i = vr_ * wi_ + vi_ * wr_; }
+            V n21r, n21i; { const crd::usize i2_ = 21 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 16384 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 21], bi_ = basei[grp_ * 1024 + n2v * 32 + 21];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n21r = vr_ * wr_ - vi_ * wi_; n21i = vr_ * wi_ + vi_ * wr_; }
+            V n20r, n20i; { const crd::usize i2_ = 20 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 16384 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 20], bi_ = basei[grp_ * 1024 + n2v * 32 + 20];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n20r = vr_ * wr_ - vi_ * wi_; n20i = vr_ * wi_ + vi_ * wr_; }
+            V n19r, n19i; { const crd::usize i2_ = 19 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 16384 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 19], bi_ = basei[grp_ * 1024 + n2v * 32 + 19];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n19r = vr_ * wr_ - vi_ * wi_; n19i = vr_ * wi_ + vi_ * wr_; }
+            V n18r, n18i; { const crd::usize i2_ = 18 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 16384 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 18], bi_ = basei[grp_ * 1024 + n2v * 32 + 18];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n18r = vr_ * wr_ - vi_ * wi_; n18i = vr_ * wi_ + vi_ * wr_; }
+            V n17r, n17i; { const crd::usize i2_ = 17 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 16384 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 17], bi_ = basei[grp_ * 1024 + n2v * 32 + 17];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n17r = vr_ * wr_ - vi_ * wi_; n17i = vr_ * wi_ + vi_ * wr_; }
+            V n16r, n16i; { const crd::usize i2_ = 16 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 16384 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 16], bi_ = basei[grp_ * 1024 + n2v * 32 + 16];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n16r = vr_ * wr_ - vi_ * wi_; n16i = vr_ * wi_ + vi_ * wr_; }
+            V n15r, n15i; { const crd::usize i2_ = 15 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 16384 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 15], bi_ = basei[grp_ * 1024 + n2v * 32 + 15];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n15r = vr_ * wr_ - vi_ * wi_; n15i = vr_ * wi_ + vi_ * wr_; }
+            const V n154r = n15r - n31r, n154i = n15i - n31i;
+            const V n153r = n15r + n31r, n153i = n15i + n31i;
+            const V n163r = V(static_cast<crd::f32>(-0.7071067811865475)) * n154r - V(static_cast<crd::f32>(-0.7071067811865476)) * n154i, n163i = V(static_cast<crd::f32>(-0.7071067811865475)) * n154i + V(static_cast<crd::f32>(-0.7071067811865476)) * n154r;
+            V n14r, n14i; { const crd::usize i2_ = 14 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 16384 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 14], bi_ = basei[grp_ * 1024 + n2v * 32 + 14];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n14r = vr_ * wr_ - vi_ * wi_; n14i = vr_ * wi_ + vi_ * wr_; }
+            const V n73r = n14r - n30r, n73i = n14i - n30i;
+            const V n72r = n14r + n30r, n72i = n14i + n30i;
+            const V n74r = n73i, n74i = -n73r;
+            V n13r, n13i; { const crd::usize i2_ = 13 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 16384 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 13], bi_ = basei[grp_ * 1024 + n2v * 32 + 13];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n13r = vr_ * wr_ - vi_ * wi_; n13i = vr_ * wi_ + vi_ * wr_; }
+            const V n125r = n13r - n29r, n125i = n13i - n29i;
+            const V n124r = n13r + n29r, n124i = n13i + n29i;
+            const V n134r = V(static_cast<crd::f32>(-0.7071067811865475)) * n125r - V(static_cast<crd::f32>(-0.7071067811865476)) * n125i, n134i = V(static_cast<crd::f32>(-0.7071067811865475)) * n125i + V(static_cast<crd::f32>(-0.7071067811865476)) * n125r;
+            V n12r, n12i; { const crd::usize i2_ = 12 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 16384 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 12], bi_ = basei[grp_ * 1024 + n2v * 32 + 12];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n12r = vr_ * wr_ - vi_ * wi_; n12i = vr_ * wi_ + vi_ * wr_; }
+            const V n44r = n12r - n28r, n44i = n12i - n28i;
+            const V n43r = n12r + n28r, n43i = n12i + n28i;
+            const V n53r = V(static_cast<crd::f32>(-0.7071067811865475)) * n44r - V(static_cast<crd::f32>(-0.7071067811865476)) * n44i, n53i = V(static_cast<crd::f32>(-0.7071067811865475)) * n44i + V(static_cast<crd::f32>(-0.7071067811865476)) * n44r;
+            V n11r, n11i; { const crd::usize i2_ = 11 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 16384 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 11], bi_ = basei[grp_ * 1024 + n2v * 32 + 11];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n11r = vr_ * wr_ - vi_ * wi_; n11i = vr_ * wi_ + vi_ * wr_; }
+            const V n145r = n11r - n27r, n145i = n11i - n27i;
+            const V n144r = n11r + n27r, n144i = n11i + n27i;
+            const V n146r = n145i, n146i = -n145r;
+            V n10r, n10i; { const crd::usize i2_ = 10 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 16384 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 10], bi_ = basei[grp_ * 1024 + n2v * 32 + 10];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n10r = vr_ * wr_ - vi_ * wi_; n10i = vr_ * wi_ + vi_ * wr_; }
+            const V n64r = n10r - n26r, n64i = n10i - n26i;
+            const V n63r = n10r + n26r, n63i = n10i + n26i;
+            const V n65r = n64i, n65i = -n64r;
+            V n9r, n9i; { const crd::usize i2_ = 9 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 16384 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 9], bi_ = basei[grp_ * 1024 + n2v * 32 + 9];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n9r = vr_ * wr_ - vi_ * wi_; n9i = vr_ * wi_ + vi_ * wr_; }
+            const V n116r = n9r - n25r, n116i = n9i - n25i;
+            const V n115r = n9r + n25r, n115i = n9i + n25i;
+            const V n117r = n116i, n117i = -n116r;
+            V n8r, n8i; { const crd::usize i2_ = 8 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 16384 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 8], bi_ = basei[grp_ * 1024 + n2v * 32 + 8];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n8r = vr_ * wr_ - vi_ * wi_; n8i = vr_ * wi_ + vi_ * wr_; }
+            const V n35r = n8r - n24r, n35i = n8i - n24i;
+            const V n34r = n8r + n24r, n34i = n8i + n24i;
+            const V n36r = n35i, n36i = -n35r;
+            V n7r, n7i; { const crd::usize i2_ = 7 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 16384 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 7], bi_ = basei[grp_ * 1024 + n2v * 32 + 7];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n7r = vr_ * wr_ - vi_ * wi_; n7i = vr_ * wi_ + vi_ * wr_; }
+            const V n152r = n7r - n23r, n152i = n7i - n23i;
+            const V n151r = n7r + n23r, n151i = n7i + n23i;
+            const V n162r = V(static_cast<crd::f32>(0.7071067811865476)) * n152r - V(static_cast<crd::f32>(-0.7071067811865475)) * n152i, n162i = V(static_cast<crd::f32>(0.7071067811865476)) * n152i + V(static_cast<crd::f32>(-0.7071067811865475)) * n152r;
+            const V n165r = n162r - n163r, n165i = n162i - n163i;
+            const V n164r = n162r + n163r, n164i = n162i + n163i;
+            const V n166r = n165i, n166i = -n165r;
+            const V n156r = n151r - n153r, n156i = n151i - n153i;
+            const V n155r = n151r + n153r, n155i = n151i + n153i;
+            const V n157r = n156i, n157i = -n156r;
+            V n6r, n6i; { const crd::usize i2_ = 6 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 16384 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 6], bi_ = basei[grp_ * 1024 + n2v * 32 + 6];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n6r = vr_ * wr_ - vi_ * wi_; n6i = vr_ * wi_ + vi_ * wr_; }
+            const V n71r = n6r - n22r, n71i = n6i - n22i;
+            const V n70r = n6r + n22r, n70i = n6i + n22i;
+            const V n78r = n71r - n74r, n78i = n71i - n74i;
+            const V n77r = n71r + n74r, n77i = n71i + n74i;
+            const V n105r = V(static_cast<crd::f32>(-0.9238795325112868)) * n78r - V(static_cast<crd::f32>(0.38268343236508967)) * n78i, n105i = V(static_cast<crd::f32>(-0.9238795325112868)) * n78i + V(static_cast<crd::f32>(0.38268343236508967)) * n78r;
+            const V n87r = V(static_cast<crd::f32>(0.38268343236508984)) * n77r - V(static_cast<crd::f32>(-0.9238795325112867)) * n77i, n87i = V(static_cast<crd::f32>(0.38268343236508984)) * n77i + V(static_cast<crd::f32>(-0.9238795325112867)) * n77r;
+            const V n76r = n70r - n72r, n76i = n70i - n72i;
+            const V n75r = n70r + n72r, n75i = n70i + n72i;
+            const V n96r = V(static_cast<crd::f32>(-0.7071067811865475)) * n76r - V(static_cast<crd::f32>(-0.7071067811865476)) * n76i, n96i = V(static_cast<crd::f32>(-0.7071067811865475)) * n76i + V(static_cast<crd::f32>(-0.7071067811865476)) * n76r;
+            V n5r, n5i; { const crd::usize i2_ = 5 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 16384 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 5], bi_ = basei[grp_ * 1024 + n2v * 32 + 5];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n5r = vr_ * wr_ - vi_ * wi_; n5i = vr_ * wi_ + vi_ * wr_; }
+            const V n123r = n5r - n21r, n123i = n5i - n21i;
+            const V n122r = n5r + n21r, n122i = n5i + n21i;
+            const V n133r = V(static_cast<crd::f32>(0.7071067811865476)) * n123r - V(static_cast<crd::f32>(-0.7071067811865475)) * n123i, n133i = V(static_cast<crd::f32>(0.7071067811865476)) * n123i + V(static_cast<crd::f32>(-0.7071067811865475)) * n123r;
+            const V n136r = n133r - n134r, n136i = n133i - n134i;
+            const V n135r = n133r + n134r, n135i = n133i + n134i;
+            const V n137r = n136i, n137i = -n136r;
+            const V n127r = n122r - n124r, n127i = n122i - n124i;
+            const V n126r = n122r + n124r, n126i = n122i + n124i;
+            const V n128r = n127i, n128i = -n127r;
+            V n4r, n4i; { const crd::usize i2_ = 4 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 16384 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 4], bi_ = basei[grp_ * 1024 + n2v * 32 + 4];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n4r = vr_ * wr_ - vi_ * wi_; n4i = vr_ * wi_ + vi_ * wr_; }
+            const V n42r = n4r - n20r, n42i = n4i - n20i;
+            const V n41r = n4r + n20r, n41i = n4i + n20i;
+            const V n52r = V(static_cast<crd::f32>(0.7071067811865476)) * n42r - V(static_cast<crd::f32>(-0.7071067811865475)) * n42i, n52i = V(static_cast<crd::f32>(0.7071067811865476)) * n42i + V(static_cast<crd::f32>(-0.7071067811865475)) * n42r;
+            const V n55r = n52r - n53r, n55i = n52i - n53i;
+            const V n54r = n52r + n53r, n54i = n52i + n53i;
+            const V n56r = n55i, n56i = -n55r;
+            const V n46r = n41r - n43r, n46i = n41i - n43i;
+            const V n45r = n41r + n43r, n45i = n41i + n43i;
+            const V n47r = n46i, n47i = -n46r;
+            V n3r, n3i; { const crd::usize i2_ = 3 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 16384 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 3], bi_ = basei[grp_ * 1024 + n2v * 32 + 3];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n3r = vr_ * wr_ - vi_ * wi_; n3i = vr_ * wi_ + vi_ * wr_; }
+            const V n143r = n3r - n19r, n143i = n3i - n19i;
+            const V n142r = n3r + n19r, n142i = n3i + n19i;
+            const V n150r = n143r - n146r, n150i = n143i - n146i;
+            const V n149r = n143r + n146r, n149i = n143i + n146i;
+            const V n170r = n150r - n166r, n170i = n150i - n166i;
+            const V n169r = n150r + n166r, n169i = n150i + n166i;
+            const V n233r = V(static_cast<crd::f32>(-0.5555702330196022)) * n170r - V(static_cast<crd::f32>(0.8314696123025452)) * n170i, n233i = V(static_cast<crd::f32>(-0.5555702330196022)) * n170i + V(static_cast<crd::f32>(0.8314696123025452)) * n170r;
+            const V n197r = V(static_cast<crd::f32>(-0.1950903220161282)) * n169r - V(static_cast<crd::f32>(-0.9807852804032304)) * n169i, n197i = V(static_cast<crd::f32>(-0.1950903220161282)) * n169i + V(static_cast<crd::f32>(-0.9807852804032304)) * n169r;
+            const V n168r = n149r - n164r, n168i = n149i - n164i;
+            const V n167r = n149r + n164r, n167i = n149i + n164i;
+            const V n215r = V(static_cast<crd::f32>(-0.9807852804032304)) * n168r - V(static_cast<crd::f32>(-0.1950903220161286)) * n168i, n215i = V(static_cast<crd::f32>(-0.9807852804032304)) * n168i + V(static_cast<crd::f32>(-0.1950903220161286)) * n168r;
+            const V n179r = V(static_cast<crd::f32>(0.8314696123025452)) * n167r - V(static_cast<crd::f32>(-0.5555702330196022)) * n167i, n179i = V(static_cast<crd::f32>(0.8314696123025452)) * n167i + V(static_cast<crd::f32>(-0.5555702330196022)) * n167r;
+            const V n148r = n142r - n144r, n148i = n142i - n144i;
+            const V n147r = n142r + n144r, n147i = n142i + n144i;
+            const V n161r = n148r - n157r, n161i = n148i - n157i;
+            const V n160r = n148r + n157r, n160i = n148i + n157i;
+            const V n224r = V(static_cast<crd::f32>(-0.9238795325112868)) * n161r - V(static_cast<crd::f32>(0.38268343236508967)) * n161i, n224i = V(static_cast<crd::f32>(-0.9238795325112868)) * n161i + V(static_cast<crd::f32>(0.38268343236508967)) * n161r;
+            const V n188r = V(static_cast<crd::f32>(0.38268343236508984)) * n160r - V(static_cast<crd::f32>(-0.9238795325112867)) * n160i, n188i = V(static_cast<crd::f32>(0.38268343236508984)) * n160i + V(static_cast<crd::f32>(-0.9238795325112867)) * n160r;
+            const V n159r = n147r - n155r, n159i = n147i - n155i;
+            const V n158r = n147r + n155r, n158i = n147i + n155i;
+            const V n206r = V(static_cast<crd::f32>(-0.7071067811865475)) * n159r - V(static_cast<crd::f32>(-0.7071067811865476)) * n159i, n206i = V(static_cast<crd::f32>(-0.7071067811865475)) * n159i + V(static_cast<crd::f32>(-0.7071067811865476)) * n159r;
+            V n2r, n2i; { const crd::usize i2_ = 2 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 16384 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 2], bi_ = basei[grp_ * 1024 + n2v * 32 + 2];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n2r = vr_ * wr_ - vi_ * wi_; n2i = vr_ * wi_ + vi_ * wr_; }
+            const V n62r = n2r - n18r, n62i = n2i - n18i;
+            const V n61r = n2r + n18r, n61i = n2i + n18i;
+            const V n69r = n62r - n65r, n69i = n62i - n65i;
+            const V n68r = n62r + n65r, n68i = n62i + n65i;
+            const V n104r = V(static_cast<crd::f32>(0.38268343236508984)) * n69r - V(static_cast<crd::f32>(-0.9238795325112867)) * n69i, n104i = V(static_cast<crd::f32>(0.38268343236508984)) * n69i + V(static_cast<crd::f32>(-0.9238795325112867)) * n69r;
+            const V n86r = V(static_cast<crd::f32>(0.9238795325112867)) * n68r - V(static_cast<crd::f32>(-0.3826834323650898)) * n68i, n86i = V(static_cast<crd::f32>(0.9238795325112867)) * n68i + V(static_cast<crd::f32>(-0.3826834323650898)) * n68r;
+            const V n107r = n104r - n105r, n107i = n104i - n105i;
+            const V n106r = n104r + n105r, n106i = n104i + n105i;
+            const V n108r = n107i, n108i = -n107r;
+            const V n89r = n86r - n87r, n89i = n86i - n87i;
+            const V n88r = n86r + n87r, n88i = n86i + n87i;
+            const V n90r = n89i, n90i = -n89r;
+            const V n67r = n61r - n63r, n67i = n61i - n63i;
+            const V n66r = n61r + n63r, n66i = n61i + n63i;
+            const V n95r = V(static_cast<crd::f32>(0.7071067811865476)) * n67r - V(static_cast<crd::f32>(-0.7071067811865475)) * n67i, n95i = V(static_cast<crd::f32>(0.7071067811865476)) * n67i + V(static_cast<crd::f32>(-0.7071067811865475)) * n67r;
+            const V n98r = n95r - n96r, n98i = n95i - n96i;
+            const V n97r = n95r + n96r, n97i = n95i + n96i;
+            const V n99r = n98i, n99i = -n98r;
+            const V n80r = n66r - n75r, n80i = n66i - n75i;
+            const V n79r = n66r + n75r, n79i = n66i + n75i;
+            const V n81r = n80i, n81i = -n80r;
+            V n1r, n1i; { const crd::usize i2_ = 1 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 16384 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 1], bi_ = basei[grp_ * 1024 + n2v * 32 + 1];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n1r = vr_ * wr_ - vi_ * wi_; n1i = vr_ * wi_ + vi_ * wr_; }
+            const V n114r = n1r - n17r, n114i = n1i - n17i;
+            const V n113r = n1r + n17r, n113i = n1i + n17i;
+            const V n121r = n114r - n117r, n121i = n114i - n117i;
+            const V n120r = n114r + n117r, n120i = n114i + n117i;
+            const V n141r = n121r - n137r, n141i = n121i - n137i;
+            const V n140r = n121r + n137r, n140i = n121i + n137i;
+            const V n232r = V(static_cast<crd::f32>(0.19509032201612833)) * n141r - V(static_cast<crd::f32>(-0.9807852804032304)) * n141i, n232i = V(static_cast<crd::f32>(0.19509032201612833)) * n141i + V(static_cast<crd::f32>(-0.9807852804032304)) * n141r;
+            const V n196r = V(static_cast<crd::f32>(0.8314696123025452)) * n140r - V(static_cast<crd::f32>(-0.5555702330196022)) * n140i, n196i = V(static_cast<crd::f32>(0.8314696123025452)) * n140i + V(static_cast<crd::f32>(-0.5555702330196022)) * n140r;
+            const V n235r = n232r - n233r, n235i = n232i - n233i;
+            const V n234r = n232r + n233r, n234i = n232i + n233i;
+            const V n236r = n235i, n236i = -n235r;
+            const V n199r = n196r - n197r, n199i = n196i - n197i;
+            const V n198r = n196r + n197r, n198i = n196i + n197i;
+            const V n200r = n199i, n200i = -n199r;
+            const V n139r = n120r - n135r, n139i = n120i - n135i;
+            const V n138r = n120r + n135r, n138i = n120i + n135i;
+            const V n214r = V(static_cast<crd::f32>(0.5555702330196023)) * n139r - V(static_cast<crd::f32>(-0.8314696123025452)) * n139i, n214i = V(static_cast<crd::f32>(0.5555702330196023)) * n139i + V(static_cast<crd::f32>(-0.8314696123025452)) * n139r;
+            const V n178r = V(static_cast<crd::f32>(0.9807852804032304)) * n138r - V(static_cast<crd::f32>(-0.19509032201612825)) * n138i, n178i = V(static_cast<crd::f32>(0.9807852804032304)) * n138i + V(static_cast<crd::f32>(-0.19509032201612825)) * n138r;
+            const V n217r = n214r - n215r, n217i = n214i - n215i;
+            const V n216r = n214r + n215r, n216i = n214i + n215i;
+            const V n218r = n217i, n218i = -n217r;
+            const V n181r = n178r - n179r, n181i = n178i - n179i;
+            const V n180r = n178r + n179r, n180i = n178i + n179i;
+            const V n182r = n181i, n182i = -n181r;
+            const V n119r = n113r - n115r, n119i = n113i - n115i;
+            const V n118r = n113r + n115r, n118i = n113i + n115i;
+            const V n132r = n119r - n128r, n132i = n119i - n128i;
+            const V n131r = n119r + n128r, n131i = n119i + n128i;
+            const V n223r = V(static_cast<crd::f32>(0.38268343236508984)) * n132r - V(static_cast<crd::f32>(-0.9238795325112867)) * n132i, n223i = V(static_cast<crd::f32>(0.38268343236508984)) * n132i + V(static_cast<crd::f32>(-0.9238795325112867)) * n132r;
+            const V n187r = V(static_cast<crd::f32>(0.9238795325112867)) * n131r - V(static_cast<crd::f32>(-0.3826834323650898)) * n131i, n187i = V(static_cast<crd::f32>(0.9238795325112867)) * n131i + V(static_cast<crd::f32>(-0.3826834323650898)) * n131r;
+            const V n226r = n223r - n224r, n226i = n223i - n224i;
+            const V n225r = n223r + n224r, n225i = n223i + n224i;
+            const V n227r = n226i, n227i = -n226r;
+            const V n190r = n187r - n188r, n190i = n187i - n188i;
+            const V n189r = n187r + n188r, n189i = n187i + n188i;
+            const V n191r = n190i, n191i = -n190r;
+            const V n130r = n118r - n126r, n130i = n118i - n126i;
+            const V n129r = n118r + n126r, n129i = n118i + n126i;
+            const V n205r = V(static_cast<crd::f32>(0.7071067811865476)) * n130r - V(static_cast<crd::f32>(-0.7071067811865475)) * n130i, n205i = V(static_cast<crd::f32>(0.7071067811865476)) * n130i + V(static_cast<crd::f32>(-0.7071067811865475)) * n130r;
+            const V n208r = n205r - n206r, n208i = n205i - n206i;
+            const V n207r = n205r + n206r, n207i = n205i + n206i;
+            const V n209r = n208i, n209i = -n208r;
+            const V n172r = n129r - n158r, n172i = n129i - n158i;
+            const V n171r = n129r + n158r, n171i = n129i + n158i;
+            const V n173r = n172i, n173i = -n172r;
+            V n0r, n0i; { const crd::usize i2_ = 0 * 32 + n2v, ti_ = i2_ >> 3, il_ = i2_ & 7;
+              V vr_, vi_; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(nt + ti_ * 16384 + grp_ * 64 + il_ * 8), vr_, vi_);
+              const V lr_ = V::load(laner + i2_ * 8), li_ = V::load(lanei + i2_ * 8);
+              const crd::f32 br_ = baser[grp_ * 1024 + n2v * 32 + 0], bi_ = basei[grp_ * 1024 + n2v * 32 + 0];
+              const V wr_ = V(br_) * lr_ - V(bi_) * li_, wi_ = V(br_) * li_ + V(bi_) * lr_;
+              n0r = vr_ * wr_ - vi_ * wi_; n0i = vr_ * wi_ + vi_ * wr_; }
+            const V n33r = n0r - n16r, n33i = n0i - n16i;
+            const V n32r = n0r + n16r, n32i = n0i + n16i;
+            const V n40r = n33r - n36r, n40i = n33i - n36i;
+            const V n39r = n33r + n36r, n39i = n33i + n36i;
+            const V n60r = n40r - n56r, n60i = n40i - n56i;
+            const V n59r = n40r + n56r, n59i = n40i + n56i;
+            const V n112r = n60r - n108r, n112i = n60i - n108i;
+            const V n111r = n60r + n108r, n111i = n60i + n108i;
+            const V n240r = n112r - n236r, n240i = n112i - n236i;
+            { const V wr = V(tr[31]), wi = V(ti[31]);
+              tile_r[n2v][31] = n240r * wr - n240i * wi;
+              tile_i[n2v][31] = n240r * wi + n240i * wr; }
+            const V n239r = n112r + n236r, n239i = n112i + n236i;
+            { const V wr = V(tr[15]), wi = V(ti[15]);
+              tile_r[n2v][15] = n239r * wr - n239i * wi;
+              tile_i[n2v][15] = n239r * wi + n239i * wr; }
+            const V n238r = n111r - n234r, n238i = n111i - n234i;
+            { const V wr = V(tr[23]), wi = V(ti[23]);
+              tile_r[n2v][23] = n238r * wr - n238i * wi;
+              tile_i[n2v][23] = n238r * wi + n238i * wr; }
+            const V n237r = n111r + n234r, n237i = n111i + n234i;
+            { const V wr = V(tr[7]), wi = V(ti[7]);
+              tile_r[n2v][7] = n237r * wr - n237i * wi;
+              tile_i[n2v][7] = n237r * wi + n237i * wr; }
+            const V n110r = n59r - n106r, n110i = n59i - n106i;
+            const V n109r = n59r + n106r, n109i = n59i + n106i;
+            const V n204r = n110r - n200r, n204i = n110i - n200i;
+            { const V wr = V(tr[27]), wi = V(ti[27]);
+              tile_r[n2v][27] = n204r * wr - n204i * wi;
+              tile_i[n2v][27] = n204r * wi + n204i * wr; }
+            const V n203r = n110r + n200r, n203i = n110i + n200i;
+            { const V wr = V(tr[11]), wi = V(ti[11]);
+              tile_r[n2v][11] = n203r * wr - n203i * wi;
+              tile_i[n2v][11] = n203r * wi + n203i * wr; }
+            const V n202r = n109r - n198r, n202i = n109i - n198i;
+            { const V wr = V(tr[19]), wi = V(ti[19]);
+              tile_r[n2v][19] = n202r * wr - n202i * wi;
+              tile_i[n2v][19] = n202r * wi + n202i * wr; }
+            const V n201r = n109r + n198r, n201i = n109i + n198i;
+            { const V wr = V(tr[3]), wi = V(ti[3]);
+              tile_r[n2v][3] = n201r * wr - n201i * wi;
+              tile_i[n2v][3] = n201r * wi + n201i * wr; }
+            const V n58r = n39r - n54r, n58i = n39i - n54i;
+            const V n57r = n39r + n54r, n57i = n39i + n54i;
+            const V n94r = n58r - n90r, n94i = n58i - n90i;
+            const V n93r = n58r + n90r, n93i = n58i + n90i;
+            const V n222r = n94r - n218r, n222i = n94i - n218i;
+            { const V wr = V(tr[29]), wi = V(ti[29]);
+              tile_r[n2v][29] = n222r * wr - n222i * wi;
+              tile_i[n2v][29] = n222r * wi + n222i * wr; }
+            const V n221r = n94r + n218r, n221i = n94i + n218i;
+            { const V wr = V(tr[13]), wi = V(ti[13]);
+              tile_r[n2v][13] = n221r * wr - n221i * wi;
+              tile_i[n2v][13] = n221r * wi + n221i * wr; }
+            const V n220r = n93r - n216r, n220i = n93i - n216i;
+            { const V wr = V(tr[21]), wi = V(ti[21]);
+              tile_r[n2v][21] = n220r * wr - n220i * wi;
+              tile_i[n2v][21] = n220r * wi + n220i * wr; }
+            const V n219r = n93r + n216r, n219i = n93i + n216i;
+            { const V wr = V(tr[5]), wi = V(ti[5]);
+              tile_r[n2v][5] = n219r * wr - n219i * wi;
+              tile_i[n2v][5] = n219r * wi + n219i * wr; }
+            const V n92r = n57r - n88r, n92i = n57i - n88i;
+            const V n91r = n57r + n88r, n91i = n57i + n88i;
+            const V n186r = n92r - n182r, n186i = n92i - n182i;
+            { const V wr = V(tr[25]), wi = V(ti[25]);
+              tile_r[n2v][25] = n186r * wr - n186i * wi;
+              tile_i[n2v][25] = n186r * wi + n186i * wr; }
+            const V n185r = n92r + n182r, n185i = n92i + n182i;
+            { const V wr = V(tr[9]), wi = V(ti[9]);
+              tile_r[n2v][9] = n185r * wr - n185i * wi;
+              tile_i[n2v][9] = n185r * wi + n185i * wr; }
+            const V n184r = n91r - n180r, n184i = n91i - n180i;
+            { const V wr = V(tr[17]), wi = V(ti[17]);
+              tile_r[n2v][17] = n184r * wr - n184i * wi;
+              tile_i[n2v][17] = n184r * wi + n184i * wr; }
+            const V n183r = n91r + n180r, n183i = n91i + n180i;
+            { const V wr = V(tr[1]), wi = V(ti[1]);
+              tile_r[n2v][1] = n183r * wr - n183i * wi;
+              tile_i[n2v][1] = n183r * wi + n183i * wr; }
+            const V n38r = n32r - n34r, n38i = n32i - n34i;
+            const V n37r = n32r + n34r, n37i = n32i + n34i;
+            const V n51r = n38r - n47r, n51i = n38i - n47i;
+            const V n50r = n38r + n47r, n50i = n38i + n47i;
+            const V n103r = n51r - n99r, n103i = n51i - n99i;
+            const V n102r = n51r + n99r, n102i = n51i + n99i;
+            const V n231r = n103r - n227r, n231i = n103i - n227i;
+            { const V wr = V(tr[30]), wi = V(ti[30]);
+              tile_r[n2v][30] = n231r * wr - n231i * wi;
+              tile_i[n2v][30] = n231r * wi + n231i * wr; }
+            const V n230r = n103r + n227r, n230i = n103i + n227i;
+            { const V wr = V(tr[14]), wi = V(ti[14]);
+              tile_r[n2v][14] = n230r * wr - n230i * wi;
+              tile_i[n2v][14] = n230r * wi + n230i * wr; }
+            const V n229r = n102r - n225r, n229i = n102i - n225i;
+            { const V wr = V(tr[22]), wi = V(ti[22]);
+              tile_r[n2v][22] = n229r * wr - n229i * wi;
+              tile_i[n2v][22] = n229r * wi + n229i * wr; }
+            const V n228r = n102r + n225r, n228i = n102i + n225i;
+            { const V wr = V(tr[6]), wi = V(ti[6]);
+              tile_r[n2v][6] = n228r * wr - n228i * wi;
+              tile_i[n2v][6] = n228r * wi + n228i * wr; }
+            const V n101r = n50r - n97r, n101i = n50i - n97i;
+            const V n100r = n50r + n97r, n100i = n50i + n97i;
+            const V n195r = n101r - n191r, n195i = n101i - n191i;
+            { const V wr = V(tr[26]), wi = V(ti[26]);
+              tile_r[n2v][26] = n195r * wr - n195i * wi;
+              tile_i[n2v][26] = n195r * wi + n195i * wr; }
+            const V n194r = n101r + n191r, n194i = n101i + n191i;
+            { const V wr = V(tr[10]), wi = V(ti[10]);
+              tile_r[n2v][10] = n194r * wr - n194i * wi;
+              tile_i[n2v][10] = n194r * wi + n194i * wr; }
+            const V n193r = n100r - n189r, n193i = n100i - n189i;
+            { const V wr = V(tr[18]), wi = V(ti[18]);
+              tile_r[n2v][18] = n193r * wr - n193i * wi;
+              tile_i[n2v][18] = n193r * wi + n193i * wr; }
+            const V n192r = n100r + n189r, n192i = n100i + n189i;
+            { const V wr = V(tr[2]), wi = V(ti[2]);
+              tile_r[n2v][2] = n192r * wr - n192i * wi;
+              tile_i[n2v][2] = n192r * wi + n192i * wr; }
+            const V n49r = n37r - n45r, n49i = n37i - n45i;
+            const V n48r = n37r + n45r, n48i = n37i + n45i;
+            const V n85r = n49r - n81r, n85i = n49i - n81i;
+            const V n84r = n49r + n81r, n84i = n49i + n81i;
+            const V n213r = n85r - n209r, n213i = n85i - n209i;
+            { const V wr = V(tr[28]), wi = V(ti[28]);
+              tile_r[n2v][28] = n213r * wr - n213i * wi;
+              tile_i[n2v][28] = n213r * wi + n213i * wr; }
+            const V n212r = n85r + n209r, n212i = n85i + n209i;
+            { const V wr = V(tr[12]), wi = V(ti[12]);
+              tile_r[n2v][12] = n212r * wr - n212i * wi;
+              tile_i[n2v][12] = n212r * wi + n212i * wr; }
+            const V n211r = n84r - n207r, n211i = n84i - n207i;
+            { const V wr = V(tr[20]), wi = V(ti[20]);
+              tile_r[n2v][20] = n211r * wr - n211i * wi;
+              tile_i[n2v][20] = n211r * wi + n211i * wr; }
+            const V n210r = n84r + n207r, n210i = n84i + n207i;
+            { const V wr = V(tr[4]), wi = V(ti[4]);
+              tile_r[n2v][4] = n210r * wr - n210i * wi;
+              tile_i[n2v][4] = n210r * wi + n210i * wr; }
+            const V n83r = n48r - n79r, n83i = n48i - n79i;
+            const V n82r = n48r + n79r, n82i = n48i + n79i;
+            const V n177r = n83r - n173r, n177i = n83i - n173i;
+            { const V wr = V(tr[24]), wi = V(ti[24]);
+              tile_r[n2v][24] = n177r * wr - n177i * wi;
+              tile_i[n2v][24] = n177r * wi + n177i * wr; }
+            const V n176r = n83r + n173r, n176i = n83i + n173i;
+            { const V wr = V(tr[8]), wi = V(ti[8]);
+              tile_r[n2v][8] = n176r * wr - n176i * wi;
+              tile_i[n2v][8] = n176r * wi + n176i * wr; }
+            const V n175r = n82r - n171r, n175i = n82i - n171i;
+            { const V wr = V(tr[16]), wi = V(ti[16]);
+              tile_r[n2v][16] = n175r * wr - n175i * wi;
+              tile_i[n2v][16] = n175r * wi + n175i * wr; }
+            const V n174r = n82r + n171r, n174i = n82i + n171i;
+            { const V wr = V(tr[0]), wi = V(ti[0]);
+              tile_r[n2v][0] = n174r * wr - n174i * wi;
+              tile_i[n2v][0] = n174r * wi + n174i * wr; }
+        }
+        for (crd::usize ml2 = 0; ml2 < 32; ++ml2)
+        {
+            const V n31r = tile_r[31][ml2], n31i = tile_i[31][ml2];
+            const V n30r = tile_r[30][ml2], n30i = tile_i[30][ml2];
+            const V n29r = tile_r[29][ml2], n29i = tile_i[29][ml2];
+            const V n28r = tile_r[28][ml2], n28i = tile_i[28][ml2];
+            const V n27r = tile_r[27][ml2], n27i = tile_i[27][ml2];
+            const V n26r = tile_r[26][ml2], n26i = tile_i[26][ml2];
+            const V n25r = tile_r[25][ml2], n25i = tile_i[25][ml2];
+            const V n24r = tile_r[24][ml2], n24i = tile_i[24][ml2];
+            const V n23r = tile_r[23][ml2], n23i = tile_i[23][ml2];
+            const V n22r = tile_r[22][ml2], n22i = tile_i[22][ml2];
+            const V n21r = tile_r[21][ml2], n21i = tile_i[21][ml2];
+            const V n20r = tile_r[20][ml2], n20i = tile_i[20][ml2];
+            const V n19r = tile_r[19][ml2], n19i = tile_i[19][ml2];
+            const V n18r = tile_r[18][ml2], n18i = tile_i[18][ml2];
+            const V n17r = tile_r[17][ml2], n17i = tile_i[17][ml2];
+            const V n16r = tile_r[16][ml2], n16i = tile_i[16][ml2];
+            const V n15r = tile_r[15][ml2], n15i = tile_i[15][ml2];
+            const V n154r = n15r - n31r, n154i = n15i - n31i;
+            const V n153r = n15r + n31r, n153i = n15i + n31i;
+            const V n163r = V(static_cast<crd::f32>(-0.7071067811865475)) * n154r - V(static_cast<crd::f32>(-0.7071067811865476)) * n154i, n163i = V(static_cast<crd::f32>(-0.7071067811865475)) * n154i + V(static_cast<crd::f32>(-0.7071067811865476)) * n154r;
+            const V n14r = tile_r[14][ml2], n14i = tile_i[14][ml2];
+            const V n73r = n14r - n30r, n73i = n14i - n30i;
+            const V n72r = n14r + n30r, n72i = n14i + n30i;
+            const V n74r = n73i, n74i = -n73r;
+            const V n13r = tile_r[13][ml2], n13i = tile_i[13][ml2];
+            const V n125r = n13r - n29r, n125i = n13i - n29i;
+            const V n124r = n13r + n29r, n124i = n13i + n29i;
+            const V n134r = V(static_cast<crd::f32>(-0.7071067811865475)) * n125r - V(static_cast<crd::f32>(-0.7071067811865476)) * n125i, n134i = V(static_cast<crd::f32>(-0.7071067811865475)) * n125i + V(static_cast<crd::f32>(-0.7071067811865476)) * n125r;
+            const V n12r = tile_r[12][ml2], n12i = tile_i[12][ml2];
+            const V n44r = n12r - n28r, n44i = n12i - n28i;
+            const V n43r = n12r + n28r, n43i = n12i + n28i;
+            const V n53r = V(static_cast<crd::f32>(-0.7071067811865475)) * n44r - V(static_cast<crd::f32>(-0.7071067811865476)) * n44i, n53i = V(static_cast<crd::f32>(-0.7071067811865475)) * n44i + V(static_cast<crd::f32>(-0.7071067811865476)) * n44r;
+            const V n11r = tile_r[11][ml2], n11i = tile_i[11][ml2];
+            const V n145r = n11r - n27r, n145i = n11i - n27i;
+            const V n144r = n11r + n27r, n144i = n11i + n27i;
+            const V n146r = n145i, n146i = -n145r;
+            const V n10r = tile_r[10][ml2], n10i = tile_i[10][ml2];
+            const V n64r = n10r - n26r, n64i = n10i - n26i;
+            const V n63r = n10r + n26r, n63i = n10i + n26i;
+            const V n65r = n64i, n65i = -n64r;
+            const V n9r = tile_r[9][ml2], n9i = tile_i[9][ml2];
+            const V n116r = n9r - n25r, n116i = n9i - n25i;
+            const V n115r = n9r + n25r, n115i = n9i + n25i;
+            const V n117r = n116i, n117i = -n116r;
+            const V n8r = tile_r[8][ml2], n8i = tile_i[8][ml2];
+            const V n35r = n8r - n24r, n35i = n8i - n24i;
+            const V n34r = n8r + n24r, n34i = n8i + n24i;
+            const V n36r = n35i, n36i = -n35r;
+            const V n7r = tile_r[7][ml2], n7i = tile_i[7][ml2];
+            const V n152r = n7r - n23r, n152i = n7i - n23i;
+            const V n151r = n7r + n23r, n151i = n7i + n23i;
+            const V n162r = V(static_cast<crd::f32>(0.7071067811865476)) * n152r - V(static_cast<crd::f32>(-0.7071067811865475)) * n152i, n162i = V(static_cast<crd::f32>(0.7071067811865476)) * n152i + V(static_cast<crd::f32>(-0.7071067811865475)) * n152r;
+            const V n165r = n162r - n163r, n165i = n162i - n163i;
+            const V n164r = n162r + n163r, n164i = n162i + n163i;
+            const V n166r = n165i, n166i = -n165r;
+            const V n156r = n151r - n153r, n156i = n151i - n153i;
+            const V n155r = n151r + n153r, n155i = n151i + n153i;
+            const V n157r = n156i, n157i = -n156r;
+            const V n6r = tile_r[6][ml2], n6i = tile_i[6][ml2];
+            const V n71r = n6r - n22r, n71i = n6i - n22i;
+            const V n70r = n6r + n22r, n70i = n6i + n22i;
+            const V n78r = n71r - n74r, n78i = n71i - n74i;
+            const V n77r = n71r + n74r, n77i = n71i + n74i;
+            const V n105r = V(static_cast<crd::f32>(-0.9238795325112868)) * n78r - V(static_cast<crd::f32>(0.38268343236508967)) * n78i, n105i = V(static_cast<crd::f32>(-0.9238795325112868)) * n78i + V(static_cast<crd::f32>(0.38268343236508967)) * n78r;
+            const V n87r = V(static_cast<crd::f32>(0.38268343236508984)) * n77r - V(static_cast<crd::f32>(-0.9238795325112867)) * n77i, n87i = V(static_cast<crd::f32>(0.38268343236508984)) * n77i + V(static_cast<crd::f32>(-0.9238795325112867)) * n77r;
+            const V n76r = n70r - n72r, n76i = n70i - n72i;
+            const V n75r = n70r + n72r, n75i = n70i + n72i;
+            const V n96r = V(static_cast<crd::f32>(-0.7071067811865475)) * n76r - V(static_cast<crd::f32>(-0.7071067811865476)) * n76i, n96i = V(static_cast<crd::f32>(-0.7071067811865475)) * n76i + V(static_cast<crd::f32>(-0.7071067811865476)) * n76r;
+            const V n5r = tile_r[5][ml2], n5i = tile_i[5][ml2];
+            const V n123r = n5r - n21r, n123i = n5i - n21i;
+            const V n122r = n5r + n21r, n122i = n5i + n21i;
+            const V n133r = V(static_cast<crd::f32>(0.7071067811865476)) * n123r - V(static_cast<crd::f32>(-0.7071067811865475)) * n123i, n133i = V(static_cast<crd::f32>(0.7071067811865476)) * n123i + V(static_cast<crd::f32>(-0.7071067811865475)) * n123r;
+            const V n136r = n133r - n134r, n136i = n133i - n134i;
+            const V n135r = n133r + n134r, n135i = n133i + n134i;
+            const V n137r = n136i, n137i = -n136r;
+            const V n127r = n122r - n124r, n127i = n122i - n124i;
+            const V n126r = n122r + n124r, n126i = n122i + n124i;
+            const V n128r = n127i, n128i = -n127r;
+            const V n4r = tile_r[4][ml2], n4i = tile_i[4][ml2];
+            const V n42r = n4r - n20r, n42i = n4i - n20i;
+            const V n41r = n4r + n20r, n41i = n4i + n20i;
+            const V n52r = V(static_cast<crd::f32>(0.7071067811865476)) * n42r - V(static_cast<crd::f32>(-0.7071067811865475)) * n42i, n52i = V(static_cast<crd::f32>(0.7071067811865476)) * n42i + V(static_cast<crd::f32>(-0.7071067811865475)) * n42r;
+            const V n55r = n52r - n53r, n55i = n52i - n53i;
+            const V n54r = n52r + n53r, n54i = n52i + n53i;
+            const V n56r = n55i, n56i = -n55r;
+            const V n46r = n41r - n43r, n46i = n41i - n43i;
+            const V n45r = n41r + n43r, n45i = n41i + n43i;
+            const V n47r = n46i, n47i = -n46r;
+            const V n3r = tile_r[3][ml2], n3i = tile_i[3][ml2];
+            const V n143r = n3r - n19r, n143i = n3i - n19i;
+            const V n142r = n3r + n19r, n142i = n3i + n19i;
+            const V n150r = n143r - n146r, n150i = n143i - n146i;
+            const V n149r = n143r + n146r, n149i = n143i + n146i;
+            const V n170r = n150r - n166r, n170i = n150i - n166i;
+            const V n169r = n150r + n166r, n169i = n150i + n166i;
+            const V n233r = V(static_cast<crd::f32>(-0.5555702330196022)) * n170r - V(static_cast<crd::f32>(0.8314696123025452)) * n170i, n233i = V(static_cast<crd::f32>(-0.5555702330196022)) * n170i + V(static_cast<crd::f32>(0.8314696123025452)) * n170r;
+            const V n197r = V(static_cast<crd::f32>(-0.1950903220161282)) * n169r - V(static_cast<crd::f32>(-0.9807852804032304)) * n169i, n197i = V(static_cast<crd::f32>(-0.1950903220161282)) * n169i + V(static_cast<crd::f32>(-0.9807852804032304)) * n169r;
+            const V n168r = n149r - n164r, n168i = n149i - n164i;
+            const V n167r = n149r + n164r, n167i = n149i + n164i;
+            const V n215r = V(static_cast<crd::f32>(-0.9807852804032304)) * n168r - V(static_cast<crd::f32>(-0.1950903220161286)) * n168i, n215i = V(static_cast<crd::f32>(-0.9807852804032304)) * n168i + V(static_cast<crd::f32>(-0.1950903220161286)) * n168r;
+            const V n179r = V(static_cast<crd::f32>(0.8314696123025452)) * n167r - V(static_cast<crd::f32>(-0.5555702330196022)) * n167i, n179i = V(static_cast<crd::f32>(0.8314696123025452)) * n167i + V(static_cast<crd::f32>(-0.5555702330196022)) * n167r;
+            const V n148r = n142r - n144r, n148i = n142i - n144i;
+            const V n147r = n142r + n144r, n147i = n142i + n144i;
+            const V n161r = n148r - n157r, n161i = n148i - n157i;
+            const V n160r = n148r + n157r, n160i = n148i + n157i;
+            const V n224r = V(static_cast<crd::f32>(-0.9238795325112868)) * n161r - V(static_cast<crd::f32>(0.38268343236508967)) * n161i, n224i = V(static_cast<crd::f32>(-0.9238795325112868)) * n161i + V(static_cast<crd::f32>(0.38268343236508967)) * n161r;
+            const V n188r = V(static_cast<crd::f32>(0.38268343236508984)) * n160r - V(static_cast<crd::f32>(-0.9238795325112867)) * n160i, n188i = V(static_cast<crd::f32>(0.38268343236508984)) * n160i + V(static_cast<crd::f32>(-0.9238795325112867)) * n160r;
+            const V n159r = n147r - n155r, n159i = n147i - n155i;
+            const V n158r = n147r + n155r, n158i = n147i + n155i;
+            const V n206r = V(static_cast<crd::f32>(-0.7071067811865475)) * n159r - V(static_cast<crd::f32>(-0.7071067811865476)) * n159i, n206i = V(static_cast<crd::f32>(-0.7071067811865475)) * n159i + V(static_cast<crd::f32>(-0.7071067811865476)) * n159r;
+            const V n2r = tile_r[2][ml2], n2i = tile_i[2][ml2];
+            const V n62r = n2r - n18r, n62i = n2i - n18i;
+            const V n61r = n2r + n18r, n61i = n2i + n18i;
+            const V n69r = n62r - n65r, n69i = n62i - n65i;
+            const V n68r = n62r + n65r, n68i = n62i + n65i;
+            const V n104r = V(static_cast<crd::f32>(0.38268343236508984)) * n69r - V(static_cast<crd::f32>(-0.9238795325112867)) * n69i, n104i = V(static_cast<crd::f32>(0.38268343236508984)) * n69i + V(static_cast<crd::f32>(-0.9238795325112867)) * n69r;
+            const V n86r = V(static_cast<crd::f32>(0.9238795325112867)) * n68r - V(static_cast<crd::f32>(-0.3826834323650898)) * n68i, n86i = V(static_cast<crd::f32>(0.9238795325112867)) * n68i + V(static_cast<crd::f32>(-0.3826834323650898)) * n68r;
+            const V n107r = n104r - n105r, n107i = n104i - n105i;
+            const V n106r = n104r + n105r, n106i = n104i + n105i;
+            const V n108r = n107i, n108i = -n107r;
+            const V n89r = n86r - n87r, n89i = n86i - n87i;
+            const V n88r = n86r + n87r, n88i = n86i + n87i;
+            const V n90r = n89i, n90i = -n89r;
+            const V n67r = n61r - n63r, n67i = n61i - n63i;
+            const V n66r = n61r + n63r, n66i = n61i + n63i;
+            const V n95r = V(static_cast<crd::f32>(0.7071067811865476)) * n67r - V(static_cast<crd::f32>(-0.7071067811865475)) * n67i, n95i = V(static_cast<crd::f32>(0.7071067811865476)) * n67i + V(static_cast<crd::f32>(-0.7071067811865475)) * n67r;
+            const V n98r = n95r - n96r, n98i = n95i - n96i;
+            const V n97r = n95r + n96r, n97i = n95i + n96i;
+            const V n99r = n98i, n99i = -n98r;
+            const V n80r = n66r - n75r, n80i = n66i - n75i;
+            const V n79r = n66r + n75r, n79i = n66i + n75i;
+            const V n81r = n80i, n81i = -n80r;
+            const V n1r = tile_r[1][ml2], n1i = tile_i[1][ml2];
+            const V n114r = n1r - n17r, n114i = n1i - n17i;
+            const V n113r = n1r + n17r, n113i = n1i + n17i;
+            const V n121r = n114r - n117r, n121i = n114i - n117i;
+            const V n120r = n114r + n117r, n120i = n114i + n117i;
+            const V n141r = n121r - n137r, n141i = n121i - n137i;
+            const V n140r = n121r + n137r, n140i = n121i + n137i;
+            const V n232r = V(static_cast<crd::f32>(0.19509032201612833)) * n141r - V(static_cast<crd::f32>(-0.9807852804032304)) * n141i, n232i = V(static_cast<crd::f32>(0.19509032201612833)) * n141i + V(static_cast<crd::f32>(-0.9807852804032304)) * n141r;
+            const V n196r = V(static_cast<crd::f32>(0.8314696123025452)) * n140r - V(static_cast<crd::f32>(-0.5555702330196022)) * n140i, n196i = V(static_cast<crd::f32>(0.8314696123025452)) * n140i + V(static_cast<crd::f32>(-0.5555702330196022)) * n140r;
+            const V n235r = n232r - n233r, n235i = n232i - n233i;
+            const V n234r = n232r + n233r, n234i = n232i + n233i;
+            const V n236r = n235i, n236i = -n235r;
+            const V n199r = n196r - n197r, n199i = n196i - n197i;
+            const V n198r = n196r + n197r, n198i = n196i + n197i;
+            const V n200r = n199i, n200i = -n199r;
+            const V n139r = n120r - n135r, n139i = n120i - n135i;
+            const V n138r = n120r + n135r, n138i = n120i + n135i;
+            const V n214r = V(static_cast<crd::f32>(0.5555702330196023)) * n139r - V(static_cast<crd::f32>(-0.8314696123025452)) * n139i, n214i = V(static_cast<crd::f32>(0.5555702330196023)) * n139i + V(static_cast<crd::f32>(-0.8314696123025452)) * n139r;
+            const V n178r = V(static_cast<crd::f32>(0.9807852804032304)) * n138r - V(static_cast<crd::f32>(-0.19509032201612825)) * n138i, n178i = V(static_cast<crd::f32>(0.9807852804032304)) * n138i + V(static_cast<crd::f32>(-0.19509032201612825)) * n138r;
+            const V n217r = n214r - n215r, n217i = n214i - n215i;
+            const V n216r = n214r + n215r, n216i = n214i + n215i;
+            const V n218r = n217i, n218i = -n217r;
+            const V n181r = n178r - n179r, n181i = n178i - n179i;
+            const V n180r = n178r + n179r, n180i = n178i + n179i;
+            const V n182r = n181i, n182i = -n181r;
+            const V n119r = n113r - n115r, n119i = n113i - n115i;
+            const V n118r = n113r + n115r, n118i = n113i + n115i;
+            const V n132r = n119r - n128r, n132i = n119i - n128i;
+            const V n131r = n119r + n128r, n131i = n119i + n128i;
+            const V n223r = V(static_cast<crd::f32>(0.38268343236508984)) * n132r - V(static_cast<crd::f32>(-0.9238795325112867)) * n132i, n223i = V(static_cast<crd::f32>(0.38268343236508984)) * n132i + V(static_cast<crd::f32>(-0.9238795325112867)) * n132r;
+            const V n187r = V(static_cast<crd::f32>(0.9238795325112867)) * n131r - V(static_cast<crd::f32>(-0.3826834323650898)) * n131i, n187i = V(static_cast<crd::f32>(0.9238795325112867)) * n131i + V(static_cast<crd::f32>(-0.3826834323650898)) * n131r;
+            const V n226r = n223r - n224r, n226i = n223i - n224i;
+            const V n225r = n223r + n224r, n225i = n223i + n224i;
+            const V n227r = n226i, n227i = -n226r;
+            const V n190r = n187r - n188r, n190i = n187i - n188i;
+            const V n189r = n187r + n188r, n189i = n187i + n188i;
+            const V n191r = n190i, n191i = -n190r;
+            const V n130r = n118r - n126r, n130i = n118i - n126i;
+            const V n129r = n118r + n126r, n129i = n118i + n126i;
+            const V n205r = V(static_cast<crd::f32>(0.7071067811865476)) * n130r - V(static_cast<crd::f32>(-0.7071067811865475)) * n130i, n205i = V(static_cast<crd::f32>(0.7071067811865476)) * n130i + V(static_cast<crd::f32>(-0.7071067811865475)) * n130r;
+            const V n208r = n205r - n206r, n208i = n205i - n206i;
+            const V n207r = n205r + n206r, n207i = n205i + n206i;
+            const V n209r = n208i, n209i = -n208r;
+            const V n172r = n129r - n158r, n172i = n129i - n158i;
+            const V n171r = n129r + n158r, n171i = n129i + n158i;
+            const V n173r = n172i, n173i = -n172r;
+            const V n0r = tile_r[0][ml2], n0i = tile_i[0][ml2];
+            const V n33r = n0r - n16r, n33i = n0i - n16i;
+            const V n32r = n0r + n16r, n32i = n0i + n16i;
+            const V n40r = n33r - n36r, n40i = n33i - n36i;
+            const V n39r = n33r + n36r, n39i = n33i + n36i;
+            const V n60r = n40r - n56r, n60i = n40i - n56i;
+            const V n59r = n40r + n56r, n59i = n40i + n56i;
+            const V n112r = n60r - n108r, n112i = n60i - n108i;
+            const V n111r = n60r + n108r, n111i = n60i + n108i;
+            const V n240r = n112r - n236r, n240i = n112i - n236i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (31 * 32 + ml2) * n1p + bb0), n240r, n240i);
+            const V n239r = n112r + n236r, n239i = n112i + n236i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (15 * 32 + ml2) * n1p + bb0), n239r, n239i);
+            const V n238r = n111r - n234r, n238i = n111i - n234i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (23 * 32 + ml2) * n1p + bb0), n238r, n238i);
+            const V n237r = n111r + n234r, n237i = n111i + n234i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (7 * 32 + ml2) * n1p + bb0), n237r, n237i);
+            const V n110r = n59r - n106r, n110i = n59i - n106i;
+            const V n109r = n59r + n106r, n109i = n59i + n106i;
+            const V n204r = n110r - n200r, n204i = n110i - n200i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (27 * 32 + ml2) * n1p + bb0), n204r, n204i);
+            const V n203r = n110r + n200r, n203i = n110i + n200i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (11 * 32 + ml2) * n1p + bb0), n203r, n203i);
+            const V n202r = n109r - n198r, n202i = n109i - n198i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (19 * 32 + ml2) * n1p + bb0), n202r, n202i);
+            const V n201r = n109r + n198r, n201i = n109i + n198i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (3 * 32 + ml2) * n1p + bb0), n201r, n201i);
+            const V n58r = n39r - n54r, n58i = n39i - n54i;
+            const V n57r = n39r + n54r, n57i = n39i + n54i;
+            const V n94r = n58r - n90r, n94i = n58i - n90i;
+            const V n93r = n58r + n90r, n93i = n58i + n90i;
+            const V n222r = n94r - n218r, n222i = n94i - n218i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (29 * 32 + ml2) * n1p + bb0), n222r, n222i);
+            const V n221r = n94r + n218r, n221i = n94i + n218i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (13 * 32 + ml2) * n1p + bb0), n221r, n221i);
+            const V n220r = n93r - n216r, n220i = n93i - n216i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (21 * 32 + ml2) * n1p + bb0), n220r, n220i);
+            const V n219r = n93r + n216r, n219i = n93i + n216i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (5 * 32 + ml2) * n1p + bb0), n219r, n219i);
+            const V n92r = n57r - n88r, n92i = n57i - n88i;
+            const V n91r = n57r + n88r, n91i = n57i + n88i;
+            const V n186r = n92r - n182r, n186i = n92i - n182i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (25 * 32 + ml2) * n1p + bb0), n186r, n186i);
+            const V n185r = n92r + n182r, n185i = n92i + n182i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (9 * 32 + ml2) * n1p + bb0), n185r, n185i);
+            const V n184r = n91r - n180r, n184i = n91i - n180i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (17 * 32 + ml2) * n1p + bb0), n184r, n184i);
+            const V n183r = n91r + n180r, n183i = n91i + n180i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (1 * 32 + ml2) * n1p + bb0), n183r, n183i);
+            const V n38r = n32r - n34r, n38i = n32i - n34i;
+            const V n37r = n32r + n34r, n37i = n32i + n34i;
+            const V n51r = n38r - n47r, n51i = n38i - n47i;
+            const V n50r = n38r + n47r, n50i = n38i + n47i;
+            const V n103r = n51r - n99r, n103i = n51i - n99i;
+            const V n102r = n51r + n99r, n102i = n51i + n99i;
+            const V n231r = n103r - n227r, n231i = n103i - n227i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (30 * 32 + ml2) * n1p + bb0), n231r, n231i);
+            const V n230r = n103r + n227r, n230i = n103i + n227i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (14 * 32 + ml2) * n1p + bb0), n230r, n230i);
+            const V n229r = n102r - n225r, n229i = n102i - n225i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (22 * 32 + ml2) * n1p + bb0), n229r, n229i);
+            const V n228r = n102r + n225r, n228i = n102i + n225i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (6 * 32 + ml2) * n1p + bb0), n228r, n228i);
+            const V n101r = n50r - n97r, n101i = n50i - n97i;
+            const V n100r = n50r + n97r, n100i = n50i + n97i;
+            const V n195r = n101r - n191r, n195i = n101i - n191i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (26 * 32 + ml2) * n1p + bb0), n195r, n195i);
+            const V n194r = n101r + n191r, n194i = n101i + n191i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (10 * 32 + ml2) * n1p + bb0), n194r, n194i);
+            const V n193r = n100r - n189r, n193i = n100i - n189i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (18 * 32 + ml2) * n1p + bb0), n193r, n193i);
+            const V n192r = n100r + n189r, n192i = n100i + n189i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (2 * 32 + ml2) * n1p + bb0), n192r, n192i);
+            const V n49r = n37r - n45r, n49i = n37i - n45i;
+            const V n48r = n37r + n45r, n48i = n37i + n45i;
+            const V n85r = n49r - n81r, n85i = n49i - n81i;
+            const V n84r = n49r + n81r, n84i = n49i + n81i;
+            const V n213r = n85r - n209r, n213i = n85i - n209i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (28 * 32 + ml2) * n1p + bb0), n213r, n213i);
+            const V n212r = n85r + n209r, n212i = n85i + n209i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (12 * 32 + ml2) * n1p + bb0), n212r, n212i);
+            const V n211r = n84r - n207r, n211i = n84i - n207i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (20 * 32 + ml2) * n1p + bb0), n211r, n211i);
+            const V n210r = n84r + n207r, n210i = n84i + n207i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (4 * 32 + ml2) * n1p + bb0), n210r, n210i);
+            const V n83r = n48r - n79r, n83i = n48i - n79i;
+            const V n82r = n48r + n79r, n82i = n48i + n79i;
+            const V n177r = n83r - n173r, n177i = n83i - n173i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (24 * 32 + ml2) * n1p + bb0), n177r, n177i);
+            const V n176r = n83r + n173r, n176i = n83i + n173i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (8 * 32 + ml2) * n1p + bb0), n176r, n176i);
+            const V n175r = n82r - n171r, n175i = n82i - n171i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (16 * 32 + ml2) * n1p + bb0), n175r, n175i);
+            const V n174r = n82r + n171r, n174i = n82i + n171i;
+            simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(data + k1 + (0 * 32 + ml2) * n1p + bb0), n174r, n174i);
+        }
+    }
+}
+#endif
+#endif
 } // namespace crd::hesap::fft::gen

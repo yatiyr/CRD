@@ -114,7 +114,7 @@ public:
     {
         CRD_ASSERT(m_have_points && c.size() == m_npts && f.size() == m_nmodes);
         Complex<T>* g = m_grid.data();
-        std::memset(g, 0, m_n * sizeof(Complex<T>)); // all-zero bytes == (0,0); spread accumulates into it
+        std::memset(static_cast<void*>(g), 0, m_n * sizeof(Complex<T>)); // all-zero bytes == (0,0); spread accumulates into it
 #ifdef CRD_NUFFT_PROFILE
         const auto t_spread0 = std::chrono::steady_clock::now();
 #endif
@@ -188,7 +188,7 @@ public:
     {
         CRD_ASSERT(m_have_points && f.size() == m_nmodes && c.size() == m_npts);
         Complex<T>* g = m_grid.data();
-        std::memset(g, 0, m_n * sizeof(Complex<T>)); // zero the fine grid; deconvolved modes scattered below
+        std::memset(static_cast<void*>(g), 0, m_n * sizeof(Complex<T>)); // zero the fine grid; deconvolved modes scattered below
         const crd::usize half = m_nmodes / 2;
         const crd::usize top = m_n - half;
         for (crd::usize idx = 0; idx < half; ++idx) // k = -N/2..-1  =>  gi = n - N/2 + idx (grid top)
