@@ -22,6 +22,8 @@
 // USER-supplied tf, with its high-order limit documented.
 // ---------------------------------------------------------------------------
 
+#include <crd/hesap/dsp/adaptive.hpp>
+#include <crd/hesap/dsp/ar.hpp>
 #include <crd/hesap/dsp/ellip.hpp>
 #include <crd/hesap/dsp/convolution.hpp>
 #include <crd/hesap/dsp/filter.hpp>
@@ -30,10 +32,20 @@
 #include <crd/hesap/dsp/fir_special.hpp>
 #include <crd/hesap/dsp/firls.hpp>
 #include <crd/hesap/dsp/freqz.hpp>
+#include <crd/hesap/dsp/hilbert.hpp>
 #include <crd/hesap/dsp/iir.hpp>
+#include <crd/hesap/dsp/iir_design.hpp>
 #include <crd/hesap/dsp/lattice.hpp>
+#include <crd/hesap/dsp/measurements.hpp>
+#include <crd/hesap/dsp/multirate.hpp>
+#include <crd/hesap/dsp/multitaper.hpp>
 #include <crd/hesap/dsp/polynomial.hpp>
+#include <crd/hesap/dsp/rbj.hpp>
 #include <crd/hesap/dsp/remez.hpp>
+#include <crd/hesap/dsp/sequences.hpp>
 #include <crd/hesap/dsp/spectral.hpp>
 #include <crd/hesap/dsp/state_space.hpp>
+#include <crd/hesap/dsp/subspace.hpp>
+#include <crd/hesap/dsp/transforms.hpp>
+#include <crd/hesap/dsp/waveforms.hpp>
 #include <crd/hesap/dsp/windows.hpp>

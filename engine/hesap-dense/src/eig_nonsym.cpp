@@ -5236,6 +5236,12 @@ EigNonsym<T> eig_real_impl(crd::memory::IAllocator* alloc, const Matrix<T>& a)
     {
         return out;
     }
+    if (n == 1) // a 1×1 matrix: its single entry is the (real) eigenvalue, eigenvector [1]. The balance/Hessenberg
+    {           // pipeline below assumes n >= 2 (ihi > ilo) — guard here so degree-1 `roots` / 1×1 eig is safe.
+        out.values.data()[0] = Complex<T>{a.data()[0], T{0}};
+        out.vectors.at(0, 0) = Complex<T>{T{1}, T{0}};
+        return out;
+    }
 
     // 1. balance — isolating permutation + radix-2 diagonal scaling.
     Matrix<T> work = a.clone();
@@ -5371,6 +5377,12 @@ EigNonsym<T> eig_complex_impl(crd::memory::IAllocator* alloc, const Matrix<T>& a
     EigNonsym<T> out(alloc, n);
     if (n == 0)
     {
+        return out;
+    }
+    if (n == 1) // 1×1: the single entry is the eigenvalue, eigenvector [1] (the pipeline below assumes n >= 2).
+    {
+        out.values.data()[0] = a.data()[0];
+        out.vectors.at(0, 0) = T{R{1}, R{0}};
         return out;
     }
     const T czero{R{0}, R{0}};
