@@ -33,7 +33,7 @@ template <crd::usize N> void check_taps(const double (&ref)[N], const cont::Arra
 }
 } // namespace
 
-TEST_CASE("dsp fir: firwin coefficients match scipy (closed-form ⇒ 1e-12)", "[v11-c][dsp][fir]")
+TEST_CASE("dsp fir: firwin coefficients match scipy (closed-form => 1e-12)", "[v11-c][dsp][fir]")
 {
     crd::memory::TlsfAllocator alloc(1U << 20);
     const f64 c1[] = {0.3};
@@ -110,13 +110,13 @@ TEST_CASE("dsp fir: firwin lowpass meets its SPEC (passband ~1, stopband attenua
     }
     tf.a.push_back(1.0);
     cont::Array<f64> w(&alloc);
-    cont::Array<Complex<f64>> H(&alloc);
-    dsp::freqz<f64>(tf, 512, w, H);
+    cont::Array<Complex<f64>> hf(&alloc);
+    dsp::freqz<f64>(tf, 512, w, hf);
     // passband (w < 0.25*pi): gain ~1 (hamming ripple ~0.002). stopband (w > 0.4*pi): attenuated > 40 dB.
     const f64 cutoff_w = 0.3 * std::numbers::pi_v<f64>;
     for (usize i = 0; i < 512; ++i)
     {
-        const f64 mag = std::hypot(H[i].re, H[i].im);
+        const f64 mag = std::hypot(hf[i].re, hf[i].im);
         if (w[i] < 0.6 * cutoff_w) // well inside passband
         {
             CHECK_THAT(mag, WithinAbs(1.0, 0.02));

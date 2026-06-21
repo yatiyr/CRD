@@ -39,7 +39,7 @@ TEST_CASE("modwt: perfect reconstruction + energy partition", "[v11w-e][wavelet]
     crd::memory::TlsfAllocator alloc(1U << 22);
     for (const char* name : {"haar", "db2", "db4", "sym4"})
     {
-        for (usize n : {200u, 256u}) // MODWT works for ANY length (not just powers of two)
+        for (usize n : {200U, 256U}) // MODWT works for ANY length (not just powers of two)
         {
             const auto x = make_signal(&alloc, n);
             const cont::ConstSpan<f64> xs(x.data(), n);

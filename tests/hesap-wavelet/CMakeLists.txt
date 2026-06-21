@@ -4,6 +4,7 @@ add_executable(crd-hesap-wavelet-tests
     test_swt_wpt.cpp
     test_cwt.cpp
     test_dwt2_denoise.cpp
+    test_cli.cpp
     test_modwt.cpp
 )
 

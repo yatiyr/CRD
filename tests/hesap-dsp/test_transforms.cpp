@@ -24,7 +24,8 @@ constexpr f64 kPi = std::numbers::pi_v<f64>;
 // direct DFT value at normalized frequency f (cycles/sample).
 Complex<f64> dft_at(cont::ConstSpan<f64> x, f64 f)
 {
-    f64 re = 0, im = 0;
+    f64 re = 0;
+    f64 im = 0;
     for (usize n = 0; n < x.size(); ++n)
     {
         const f64 w = -2.0 * kPi * f * static_cast<f64>(n);
@@ -53,7 +54,7 @@ TEST_CASE("dsp transforms: Goertzel == the direct DFT bin", "[v11-q][dsp][transf
     crd::memory::TlsfAllocator alloc(1U << 18);
     const auto x = noise(&alloc, 64, 7ULL);
     const cont::ConstSpan<f64> xs(x.data(), 64);
-    for (usize k : {3u, 5u, 11u})
+    for (usize k : {3U, 5U, 11U})
     {
         const f64 f = static_cast<f64>(k) / 64.0;
         const auto g = dsp::goertzel<f64>(xs, f);
@@ -70,31 +71,33 @@ TEST_CASE("dsp transforms: CZT default == DFT, zoom arc == direct sum", "[v11-q]
     const auto x = noise(&alloc, 32, 13ULL);
     const cont::ConstSpan<f64> xs(x.data(), 32);
     // default params (theta_w = -2π/m, theta_a = 0) ⇒ the 32-point DFT.
-    const auto X = dsp::czt<f64>(&alloc, xs, 32, -2.0 * kPi / 32.0, 0.0);
+    const auto xf = dsp::czt<f64>(&alloc, xs, 32, -2.0 * kPi / 32.0, 0.0);
     for (usize k = 0; k < 32; ++k)
     {
         const auto ref = dft_at(xs, static_cast<f64>(k) / 32.0);
         INFO("dft bin " << k);
-        CHECK_THAT(X[k].re, WithinAbs(ref.re, 1e-9));
-        CHECK_THAT(X[k].im, WithinAbs(ref.im, 1e-9));
+        CHECK_THAT(xf[k].re, WithinAbs(ref.re, 1e-9));
+        CHECK_THAT(xf[k].im, WithinAbs(ref.im, 1e-9));
     }
     // zoom: M=24 points from f0=0.1, step df=0.005 ⇒ theta_a = 2π f0, theta_w = -2π df.
-    const f64 f0 = 0.1, df = 0.005;
+    const f64 f0 = 0.1;
+    const f64 df = 0.005;
     const usize m = 24;
-    const auto Z = dsp::czt<f64>(&alloc, xs, m, -2.0 * kPi * df, 2.0 * kPi * f0);
+    const auto z = dsp::czt<f64>(&alloc, xs, m, -2.0 * kPi * df, 2.0 * kPi * f0);
     for (usize k = 0; k < m; ++k)
     {
         const auto ref = dft_at(xs, f0 + static_cast<f64>(k) * df);
         INFO("zoom bin " << k);
-        CHECK_THAT(Z[k].re, WithinAbs(ref.re, 1e-8));
-        CHECK_THAT(Z[k].im, WithinAbs(ref.im, 1e-8));
+        CHECK_THAT(z[k].re, WithinAbs(ref.re, 1e-8));
+        CHECK_THAT(z[k].im, WithinAbs(ref.im, 1e-8));
     }
 }
 
 TEST_CASE("dsp transforms: rceps recovers an echo delay", "[v11-q][dsp][transforms]")
 {
     crd::memory::TlsfAllocator alloc(1U << 20);
-    const usize n = 512, delay = 40;
+    const usize n = 512;
+    const usize delay = 40;
     cont::Array<f64> s(&alloc);
     s.resize(n);
     for (usize i = 0; i < n; ++i)
@@ -136,7 +139,8 @@ TEST_CASE("dsp transforms: impz + residuez + lifter", "[v11-q][dsp][transforms]"
         CHECK_THAT(h[n], WithinAbs(std::pow(0.5, static_cast<f64>(n)), 1e-12));
     }
     // residuez: single pole 0.5, residue 1 ⇒ reconstruct h[n] = Σ r_i p_iⁿ.
-    cont::Array<Complex<f64>> poles(&alloc), res(&alloc);
+    cont::Array<Complex<f64>> poles(&alloc);
+    cont::Array<Complex<f64>> res(&alloc);
     dsp::residuez<f64>(&alloc, cont::ConstSpan<f64>(b, 1), cont::ConstSpan<f64>(a, 2), poles, res);
     REQUIRE(poles.size() == 1);
     CHECK_THAT(poles[0].re, WithinAbs(0.5, 1e-10));
@@ -145,7 +149,8 @@ TEST_CASE("dsp transforms: impz + residuez + lifter", "[v11-q][dsp][transforms]"
         f64 re = 0.0;
         for (usize i = 0; i < poles.size(); ++i) // Σ r_i p_iⁿ
         {
-            f64 pr = 1.0, pim = 0.0;
+            f64 pr = 1.0;
+            f64 pim = 0.0;
             for (usize k = 0; k < n; ++k)
             {
                 const f64 nr = pr * poles[i].re - pim * poles[i].im;

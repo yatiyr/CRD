@@ -47,6 +47,7 @@ TEST_CASE("swt: per-level coefficients vs pywt + iswt round trip", "[v11w-c][wav
     crd::memory::TlsfAllocator alloc(1U << 22);
     const cont::ConstSpan<f64> xs(ref_swt_input, sizeof(ref_swt_input) / sizeof(ref_swt_input[0]));
 
+// NOLINTBEGIN(cppcoreguidelines-macro-usage,bugprone-macro-parentheses) -- token-pasting test helper
 #define CHECK_SWT(WAV, WAVSAN)                                                                                          \
     do                                                                                                                  \
     {                                                                                                                   \
@@ -74,6 +75,7 @@ TEST_CASE("swt: per-level coefficients vs pywt + iswt round trip", "[v11w-c][wav
     CHECK_SWT("db4", db4);
     CHECK_SWT("sym3", sym3);
 #undef CHECK_SWT
+    // NOLINTEND(cppcoreguidelines-macro-usage,bugprone-macro-parentheses)
 }
 
 TEST_CASE("wpt: node coefficients vs pywt + reconstruction + best basis", "[v11w-c][wavelet][wpt]")
@@ -81,6 +83,7 @@ TEST_CASE("wpt: node coefficients vs pywt + reconstruction + best basis", "[v11w
     crd::memory::TlsfAllocator alloc(1U << 22);
     const cont::ConstSpan<f64> xs(ref_swt_input, sizeof(ref_swt_input) / sizeof(ref_swt_input[0]));
 
+// NOLINTNEXTLINE(cppcoreguidelines-macro-usage,bugprone-macro-parentheses) -- token-pasting test helper
 #define CHECK_WP_NODE(WAVSAN, PATH) check_span(ref_wp_##WAVSAN##_##PATH, wp.node(#PATH), 1e-10)
 
     {
@@ -104,7 +107,8 @@ TEST_CASE("wpt: node coefficients vs pywt + reconstruction + best basis", "[v11w
             CHECK_THAT(r[i], WithinAbs(xs[i], 1e-9));
         }
         // best basis: optimal cost <= the full deepest-level cost (a fixed basis).
-        cont::Array<usize> lv(&alloc), ix(&alloc);
+        cont::Array<usize> lv(&alloc);
+        cont::Array<usize> ix(&alloc);
         const f64 best = wp.best_basis(&alloc, lv, ix);
         REQUIRE(lv.size() == ix.size());
         REQUIRE(lv.size() >= 1);

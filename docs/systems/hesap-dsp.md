@@ -1,10 +1,9 @@
 # crd-hesap-dsp — DSP cluster (core + adaptive)
 
 > Phase 3.1.6 **v11**. ADR-0093. Plan: `docs/phases/phase-3.1.6-hesap.md` (the v11 block + the promoted sub-slice
-> table). Status: **9 sub-slices shipped (a, b, c, d, e, f, i, j, m)** — substrate · windows · FIR windowed ·
-> FIR optimal (Parks-McClellan) · IIR Butterworth/Cheb/Bessel · **Elliptic (Cauer)** · filter application +
-> streaming · convolution · spectral (Welch/spectrogram/STFT) on a **multi-threaded FFT**. Suite 6252 asrt / 47
-> cases GREEN (linux-gcc-release), std-clean. Sessions: `docs/sessions/2026-06-21-v11-dsp-core.md`.
+> table). Status: **COMPLETE (a–t)** — the full analysis surface. Suite 100 cases / ~27,069 assertions GREEN on
+> linux-gcc + win-clang-cl + win-release. CLI `hesap.dsp.{welch,resample}.f64`. Siblings `crd-hesap-wavelet` +
+> `crd-hesap-comms` likewise complete. Sessions: `docs/sessions/2026-06-21-v11-dsp-core.md` + `…-g-h-k-l.md`.
 
 ## What it is
 
@@ -93,8 +92,12 @@ headers (`gen_*.py` / `.m` → `*.inc`, the SUNDIALS-tableau pattern — never p
 owning STL anywhere, tests included). Application kernels carry the {1..16} bit-identity moat; the multi-threaded
 spectral functions carry it across thread counts.
 
-## Remaining (in order)
+## Status — COMPLETE (a–t)
 
-v11-g (IIR digital: lp2hp/bp/bs + order-est + notch/comb) → h (RBJ-EQ) → k (multirate) → l (Hilbert) → n
-(multitaper) → o (AR) → p (subspace) → q (cepstrum/Goertzel/CZT) → r (waveforms) → s (peaks + measurements) → t
-(adaptive) → the `crd-hesap-wavelet` + `crd-hesap-comms` modules → v11-z (close: CLI + full scoreboard + system docs).
+The whole analysis surface is shipped: filter design (FIR windowed/firls/remez/SavGol/RRC, IIR
+Butter/Cheb/Bessel/Elliptic, RBJ biquads, IIR digital + order-est + notch/comb), filtering (lfilter/sosfilt/filtfilt
+streaming), fast convolution, multirate, Hilbert, spectral (Welch/STFT/multitaper — the multi-threaded FFT), AR,
+subspace MUSIC/ESPRIT, transforms (Goertzel/CZT/cepstrum/FWHT), waveforms + PN sequences, detection + measurements,
+adaptive (LMS/NLMS/RLS/AP). CLI `hesap.dsp.{welch,resample}.f64`. The sibling `crd-hesap-wavelet`
+(`docs/systems/hesap-wavelet.md`) and `crd-hesap-comms` (`docs/systems/hesap-comms.md`) modules are likewise
+complete. v11-z close = CLI + the three system docs + the per-bench scoreboards (in the bench sources + session logs).

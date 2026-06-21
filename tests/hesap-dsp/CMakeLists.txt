@@ -22,6 +22,7 @@ add_executable(crd-hesap-dsp-tests
     test_filtering.cpp
     test_convolution.cpp
     test_spectral.cpp
+    test_cli.cpp
 )
 
 target_link_libraries(crd-hesap-dsp-tests PRIVATE

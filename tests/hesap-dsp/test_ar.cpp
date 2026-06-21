@@ -24,11 +24,13 @@ constexpr f64 kPi = std::numbers::pi_v<f64>;
 // AR(2) with poles r·e^{±jθ}: x[n] = a1·x[n-1] + a2·x[n-2] + e[n]; a1 = 2r cosθ, a2 = -r².
 cont::Array<f64> ar2_signal(crd::memory::IAllocator* a, usize n, f64 r, f64 theta)
 {
-    const f64 a1 = 2.0 * r * std::cos(theta), a2 = -r * r;
+    const f64 a1 = 2.0 * r * std::cos(theta);
+    const f64 a2 = -r * r;
     cont::Array<f64> x(a);
     x.resize(n);
     u64 s = 99991ULL;
-    f64 xm1 = 0.0, xm2 = 0.0;
+    f64 xm1 = 0.0;
+    f64 xm2 = 0.0;
     for (usize i = 0; i < n; ++i)
     {
         s = s * 6364136223846793005ULL + 1442695040888963407ULL;
@@ -45,8 +47,10 @@ cont::Array<f64> ar2_signal(crd::memory::IAllocator* a, usize n, f64 r, f64 thet
 TEST_CASE("dsp ar: Yule-Walker + Burg recover a known AR(2) process", "[v11-o][dsp][ar]")
 {
     crd::memory::TlsfAllocator alloc(1U << 22);
-    const f64 r = 0.9, theta = kPi / 4.0;
-    const f64 a1 = 2.0 * r * std::cos(theta), a2 = -r * r;
+    const f64 r = 0.9;
+    const f64 theta = kPi / 4.0;
+    const f64 a1 = 2.0 * r * std::cos(theta);
+    const f64 a2 = -r * r;
     const auto x = ar2_signal(&alloc, 8000, r, theta);
     const cont::ConstSpan<f64> xs(x.data(), x.size());
     for (const char* which : {"yule", "burg"})
@@ -65,8 +69,10 @@ TEST_CASE("dsp ar: Yule-Walker + Burg recover a known AR(2) process", "[v11-o][d
 TEST_CASE("dsp ar: covariance + modified-covariance recover a known AR(2)", "[v11-o][dsp][ar]")
 {
     crd::memory::TlsfAllocator alloc(1U << 22);
-    const f64 r = 0.9, theta = kPi / 4.0;
-    const f64 a1 = 2.0 * r * std::cos(theta), a2 = -r * r;
+    const f64 r = 0.9;
+    const f64 theta = kPi / 4.0;
+    const f64 a1 = 2.0 * r * std::cos(theta);
+    const f64 a2 = -r * r;
     const auto x = ar2_signal(&alloc, 4000, r, theta);
     const cont::ConstSpan<f64> xs(x.data(), x.size());
     for (const char* which : {"cov", "mcov"})
@@ -82,7 +88,8 @@ TEST_CASE("dsp ar: covariance + modified-covariance recover a known AR(2)", "[v1
 TEST_CASE("dsp ar: AR-PSD peaks at the resonance frequency", "[v11-o][dsp][ar]")
 {
     crd::memory::TlsfAllocator alloc(1U << 22);
-    const f64 r = 0.95, theta = kPi / 3.0; // resonance at θ/(2π) cycles/sample
+    const f64 r = 0.95;
+    const f64 theta = kPi / 3.0; // resonance at θ/(2π) cycles/sample
     const auto x = ar2_signal(&alloc, 8000, r, theta);
     const auto m = dsp::arburg<f64>(&alloc, cont::ConstSpan<f64>(x.data(), x.size()), 2);
     const usize nfft = 1024;

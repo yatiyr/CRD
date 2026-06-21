@@ -38,8 +38,10 @@ template <usize N> void check_arr(const double (&ref)[N], const cont::Array<f64>
 TEST_CASE("dwt2: subbands vs pywt + round trip", "[v11w-e][wavelet][dwt2]")
 {
     crd::memory::TlsfAllocator alloc(1U << 22);
-    const usize R = static_cast<usize>(ref_img_rows), C = static_cast<usize>(ref_img_cols);
+    const usize R = static_cast<usize>(ref_img_rows);
+    const usize C = static_cast<usize>(ref_img_cols);
 
+// NOLINTBEGIN(cppcoreguidelines-macro-usage,bugprone-macro-parentheses,readability-isolate-declaration) -- token-paste helper
 #define CHECK_DWT2(WAV, MODESAN, MODEENUM)                                                                              \
     do                                                                                                                  \
     {                                                                                                                   \
@@ -68,21 +70,24 @@ TEST_CASE("dwt2: subbands vs pywt + round trip", "[v11w-e][wavelet][dwt2]")
     CHECK_DWT2("haar", haar_symmetric, Symmetric);
     CHECK_DWT2("db2", db2_symmetric, Symmetric);
 #undef CHECK_DWT2
+    // NOLINTEND(cppcoreguidelines-macro-usage,bugprone-macro-parentheses,readability-isolate-declaration)
 }
 
 TEST_CASE("wavedec2: multilevel 2-D round trip", "[v11w-e][wavelet][dwt2]")
 {
     crd::memory::TlsfAllocator alloc(1U << 22);
-    const usize R = static_cast<usize>(ref_img_rows), C = static_cast<usize>(ref_img_cols);
+    const usize r = static_cast<usize>(ref_img_rows);
+    const usize c = static_cast<usize>(ref_img_cols);
     const auto w = wv::wavelet_by_name("db2");
-    const auto dec = wv::wavedec2<f64>(&alloc, ref_img, R, C, *w, Mode::Periodization, 2);
+    const auto dec = wv::wavedec2<f64>(&alloc, ref_img, r, c, *w, Mode::Periodization, 2);
     REQUIRE(dec.details.size() == 2);
     cont::Array<f64> rec(&alloc);
-    usize rr = 0, rc = 0;
+    usize rr = 0;
+    usize rc = 0;
     rec = wv::waverec2<f64>(&alloc, dec, *w, Mode::Periodization, rr, rc);
-    REQUIRE(rr == R);
-    REQUIRE(rc == C);
-    for (usize i = 0; i < R * C; ++i)
+    REQUIRE(rr == r);
+    REQUIRE(rc == c);
+    for (usize i = 0; i < r * c; ++i)
     {
         INFO("idx " << i);
         CHECK_THAT(rec[i], WithinAbs(ref_img[i], 1e-9));
@@ -106,7 +111,8 @@ TEST_CASE("denoise: improves SNR on a noisy signal", "[v11w-e][wavelet][denoise]
 {
     crd::memory::TlsfAllocator alloc(1U << 22);
     const usize n = 1024;
-    cont::Array<f64> clean(&alloc), noisy(&alloc);
+    cont::Array<f64> clean(&alloc);
+    cont::Array<f64> noisy(&alloc);
     clean.resize(n);
     noisy.resize(n);
     u64 s = 12345ULL;
@@ -143,10 +149,11 @@ TEST_CASE("denoise: improves SNR on a noisy signal", "[v11w-e][wavelet][denoise]
 TEST_CASE("dwt2 + denoise: run-twice bit-identical (determinism moat)", "[v11w-e][wavelet][moat]")
 {
     crd::memory::TlsfAllocator alloc(1U << 22);
-    const usize R = static_cast<usize>(ref_img_rows), C = static_cast<usize>(ref_img_cols);
+    const usize r = static_cast<usize>(ref_img_rows);
+    const usize c = static_cast<usize>(ref_img_cols);
     const auto w = wv::wavelet_by_name("db2");
-    const auto a = wv::dwt2<f64>(&alloc, ref_img, R, C, *w, Mode::Periodization);
-    const auto b = wv::dwt2<f64>(&alloc, ref_img, R, C, *w, Mode::Periodization);
+    const auto a = wv::dwt2<f64>(&alloc, ref_img, r, c, *w, Mode::Periodization);
+    const auto b = wv::dwt2<f64>(&alloc, ref_img, r, c, *w, Mode::Periodization);
     REQUIRE(a.cA.size() == b.cA.size());
     CHECK(std::memcmp(a.cA.data(), b.cA.data(), a.cA.size() * sizeof(f64)) == 0);
     CHECK(std::memcmp(a.cD.data(), b.cD.data(), a.cD.size() * sizeof(f64)) == 0);
@@ -156,11 +163,12 @@ TEST_CASE("dwt2: {1,4,16}-thread bit-identical (2-D batched moat)", "[v11w-e][wa
 {
     crd::memory::TlsfAllocator alloc(1U << 24);
     // a large enough image to engage the parallel path (>= 16×16).
-    const usize R = 128, C = 96;
+    const usize r = 128;
+    const usize c = 96;
     cont::Array<f64> img(&alloc);
-    img.resize(R * C);
+    img.resize(r * c);
     u64 s = 4242ULL;
-    for (usize i = 0; i < R * C; ++i)
+    for (usize i = 0; i < r * c; ++i)
     {
         s = s * 6364136223846793005ULL + 1442695040888963407ULL;
         img[i] = (static_cast<f64>(s >> 11) * (1.0 / 9007199254740992.0)) * 2.0 - 1.0;
@@ -174,7 +182,7 @@ TEST_CASE("dwt2: {1,4,16}-thread bit-identical (2-D batched moat)", "[v11w-e][wa
         cfg.num_threads = nw;
         crd::jobs::init(cfg);
         {
-            const auto d = wv::dwt2<f64>(&alloc, img.data(), R, C, *w, Mode::Symmetric);
+            const auto d = wv::dwt2<f64>(&alloc, img.data(), r, c, *w, Mode::Symmetric);
             if (!have)
             {
                 ref.resize(d.cD.size());

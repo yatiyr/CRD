@@ -52,7 +52,7 @@ TEST_CASE("dsp remez: Hilbert transformer (type III) is ~unity in band + antisym
     }
 }
 
-TEST_CASE("dsp remez: differentiator (type III) has |H(w)| ≈ w", "[v11-d][dsp][remez]")
+TEST_CASE("dsp remez: differentiator (type III) has |H(w)| ~ w", "[v11-d][dsp][remez]")
 {
     crd::memory::TlsfAllocator alloc(1U << 20);
     const usize numtaps = 41;

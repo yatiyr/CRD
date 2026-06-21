@@ -29,7 +29,7 @@ template <crd::usize N> void check(const double (&ref)[N], const cont::Array<f64
 }
 } // namespace
 
-TEST_CASE("dsp fir_special: Savitzky-Golay coeffs match scipy (closed-form ⇒ 1e-12)", "[v11-d][dsp][savgol]")
+TEST_CASE("dsp fir_special: Savitzky-Golay coeffs match scipy (closed-form => 1e-12)", "[v11-d][dsp][savgol]")
 {
     crd::memory::TlsfAllocator alloc(1U << 20);
     check(ref_savgol_5_2, dsp::savgol_coeffs<f64>(&alloc, 5, 2), 1e-12);

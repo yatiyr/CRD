@@ -37,7 +37,9 @@ cont::ConstSpan<f64> span_of(const cont::Array<f64>& a)
 }
 } // namespace
 
-// Per (wavelet, mode): dwt the shared input and gate cA/cD vs pywt.
+// Per (wavelet, mode): dwt the shared input and gate cA/cD vs pywt. Token-pasting test helpers (paste the per-case
+// reference-array identifiers) cannot be constexpr functions or have parenthesized args.
+// NOLINTBEGIN(cppcoreguidelines-macro-usage,bugprone-macro-parentheses,readability-isolate-declaration,readability-identifier-naming)
 #define CHECK_DWT(WAV, WAVSAN, MODE, MODEENUM)                                                                          \
     do                                                                                                                  \
     {                                                                                                                   \
@@ -60,6 +62,7 @@ cont::ConstSpan<f64> span_of(const cont::Array<f64>& a)
     CHECK_DWT(WAV, WAVSAN, smooth, Smooth);                                                                             \
     CHECK_DWT(WAV, WAVSAN, antisymmetric, Antisymmetric);                                                               \
     CHECK_DWT(WAV, WAVSAN, antireflect, Antireflect)
+// NOLINTEND(cppcoreguidelines-macro-usage,bugprone-macro-parentheses,readability-isolate-declaration,readability-identifier-naming)
 
 TEST_CASE("dwt: single-level coefficients per-mode vs pywt", "[v11w-b][wavelet][dwt]")
 {
@@ -87,9 +90,11 @@ TEST_CASE("idwt: single-level inverse vs pywt", "[v11w-b][wavelet][dwt]")
     const auto run = [&](const char* name, Mode mode, auto&& ref) {
         const auto w = wv::wavelet_by_name(name);
         REQUIRE(w.has_value());
-        cont::Array<f64> cA(&alloc), cD(&alloc), y(&alloc);
-        wv::dwt<f64>(&alloc, xs, *w, mode, cA, cD);
-        wv::idwt<f64>(&alloc, span_of(cA), span_of(cD), *w, mode, y);
+        cont::Array<f64> c_a(&alloc);
+        cont::Array<f64> c_d(&alloc);
+        cont::Array<f64> y(&alloc);
+        wv::dwt<f64>(&alloc, xs, *w, mode, c_a, c_d);
+        wv::idwt<f64>(&alloc, span_of(c_a), span_of(c_d), *w, mode, y);
         check_arr(ref, y, 1e-11);
     };
     run("db4", Mode::Symmetric, ref_idwt_db4_symmetric);

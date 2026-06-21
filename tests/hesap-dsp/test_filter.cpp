@@ -157,8 +157,10 @@ TEST_CASE("dsp: zpk -> sos -> tf reconstructs H(z) (the SOS pairing gate)", "[v1
 
     // The honest gate: the SOS cascade response == the zpk response at every w.
     const auto tf_ref = dsp::zpk_to_tf<f64>(&alloc, zpk);
-    cont::Array<f64> w1(&alloc), w2(&alloc);
-    cont::Array<Complex<f64>> h_tf(&alloc), h_sos(&alloc);
+    cont::Array<f64> w1(&alloc);
+    cont::Array<f64> w2(&alloc);
+    cont::Array<Complex<f64>> h_tf(&alloc);
+    cont::Array<Complex<f64>> h_sos(&alloc);
     dsp::freqz<f64>(tf_ref, 128, w1, h_tf);
     dsp::sosfreqz<f64>(sos, 128, w2, h_sos);
     for (usize i = 0; i < 128; ++i)
@@ -199,8 +201,10 @@ TEST_CASE("dsp: order-12 design path lock (zpk->sos accurate; tf path diverges)"
     const auto sos = dsp::zpk_to_sos<f64>(&alloc, zpk);
     REQUIRE(sos.sections.size() == 6);
 
-    cont::Array<f64> w0(&alloc), w1(&alloc);
-    cont::Array<Complex<f64>> h_ref(&alloc), h_sos(&alloc);
+    cont::Array<f64> w0(&alloc);
+    cont::Array<f64> w1(&alloc);
+    cont::Array<Complex<f64>> h_ref(&alloc);
+    cont::Array<Complex<f64>> h_sos(&alloc);
     dsp::zpk_freqz<f64>(zpk, 256, w0, h_ref);     // well-conditioned factored reference
     dsp::sosfreqz<f64>(sos, 256, w1, h_sos);
     // SOS cascade reconstructs the reference to ~1e-9 even at order 12.
@@ -272,8 +276,10 @@ TEST_CASE("dsp: tf <-> ss round-trip (controllable canonical + Faddeev-LeVerrier
         CHECK_THAT(tf2.b[i], WithinAbs(tf.b[i], 1e-12));
     }
     // and the state-space response equals the tf response.
-    cont::Array<f64> w1(&alloc), w2(&alloc);
-    cont::Array<Complex<f64>> h1(&alloc), h2(&alloc);
+    cont::Array<f64> w1(&alloc);
+    cont::Array<f64> w2(&alloc);
+    cont::Array<Complex<f64>> h1(&alloc);
+    cont::Array<Complex<f64>> h2(&alloc);
     dsp::freqz<f64>(tf, 64, w1, h1);
     dsp::freqz<f64>(tf2, 64, w2, h2);
     for (usize i = 0; i < 64; ++i)

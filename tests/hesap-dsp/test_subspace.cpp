@@ -41,8 +41,10 @@ cont::Array<f64> two_tones(crd::memory::IAllocator* a, usize n, f64 f1, f64 f2, 
 TEST_CASE("dsp subspace: root-MUSIC resolves tones below the FFT bin width", "[v11-p][dsp][subspace]")
 {
     crd::memory::TlsfAllocator alloc(1U << 22);
-    const usize n = 128, m = 40;
-    const f64 f1 = 0.200, f2 = 0.206; // Δf = 0.006 < FFT bin 1/128 ≈ 0.0078 ⇒ a periodogram CANNOT resolve
+    const usize n = 128;
+    const usize m = 40;
+    const f64 f1 = 0.200;
+    const f64 f2 = 0.206; // Δf = 0.006 < FFT bin 1/128 ≈ 0.0078 ⇒ a periodogram CANNOT resolve
     const auto x = two_tones(&alloc, n, f1, f2, 0.02);
     const auto f = dsp::root_music<f64>(&alloc, cont::ConstSpan<f64>(x.data(), n), m, 2);
     REQUIRE(f.size() == 2);
@@ -54,8 +56,10 @@ TEST_CASE("dsp subspace: root-MUSIC resolves tones below the FFT bin width", "[v
 TEST_CASE("dsp subspace: ESPRIT + min-norm resolve sub-FFT-bin tones", "[v11-p][dsp][subspace]")
 {
     crd::memory::TlsfAllocator alloc(1U << 22);
-    const usize n = 128, m = 40;
-    const f64 f1 = 0.200, f2 = 0.206;
+    const usize n = 128;
+    const usize m = 40;
+    const f64 f1 = 0.200;
+    const f64 f2 = 0.206;
     const auto x = two_tones(&alloc, n, f1, f2, 0.02);
     const cont::ConstSpan<f64> xs(x.data(), n);
     const auto fe = dsp::esprit<f64>(&alloc, xs, m, 2);
@@ -73,8 +77,11 @@ TEST_CASE("dsp subspace: ESPRIT + min-norm resolve sub-FFT-bin tones", "[v11-p][
 TEST_CASE("dsp subspace: MUSIC pseudospectrum peaks at the tones", "[v11-p][dsp][subspace]")
 {
     crd::memory::TlsfAllocator alloc(1U << 22);
-    const usize n = 128, m = 40, nfreq = 2000;
-    const f64 f1 = 0.20, f2 = 0.25;
+    const usize n = 128;
+    const usize m = 40;
+    const usize nfreq = 2000;
+    const f64 f1 = 0.20;
+    const f64 f2 = 0.25;
     const auto x = two_tones(&alloc, n, f1, f2, 0.02);
     const auto p = dsp::music_spectrum<f64>(&alloc, cont::ConstSpan<f64>(x.data(), n), m, 2, nfreq);
     // the two highest local maxima should sit at f1 and f2 (frequency grid covers [0, 0.5)).
@@ -95,7 +102,8 @@ TEST_CASE("dsp subspace: MUSIC pseudospectrum peaks at the tones", "[v11-p][dsp]
             p2 = i;
         }
     }
-    f64 lo = bin_to_f(p1 < p2 ? p1 : p2), hi = bin_to_f(p1 < p2 ? p2 : p1);
+    f64 lo = bin_to_f(p1 < p2 ? p1 : p2);
+    f64 hi = bin_to_f(p1 < p2 ? p2 : p1);
     CHECK_THAT(lo, WithinAbs(f1, 0.003));
     CHECK_THAT(hi, WithinAbs(f2, 0.003));
 }

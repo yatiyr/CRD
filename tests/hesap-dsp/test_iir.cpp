@@ -75,7 +75,7 @@ TEST_CASE("dsp iir: analog prototypes (Butterworth/Cheb-I/Cheb-II) match scipy p
     check_poles(ref_cheb2ap4_poles, dsp::cheb2ap<f64>(&alloc, 4, 40.0), 1e-10);
 }
 
-TEST_CASE("dsp iir: digital butter/cheby1/cheby2 — response matches scipy sos (order-independent)", "[v11-e][dsp][iir]")
+TEST_CASE("dsp iir: digital butter/cheby1/cheby2 -- response matches scipy sos (order-independent)", "[v11-e][dsp][iir]")
 {
     crd::memory::TlsfAllocator alloc(1U << 22);
     check_response(ref_butter6_mag, &alloc, dsp::butter<f64>(&alloc, 6, 0.3));

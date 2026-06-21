@@ -78,7 +78,8 @@ TEST_CASE("dsp multirate: decimate (FIR) matches scipy", "[v11-k][dsp][multirate
 TEST_CASE("dsp multirate: resample (FFT) band-limited interpolation is exact for a periodic tone", "[v11-k][dsp][multirate]")
 {
     crd::memory::TlsfAllocator alloc(1U << 22);
-    const usize n = 100, num = 200;
+    const usize n = 100;
+    const usize num = 200;
     cont::Array<f64> x(&alloc);
     x.resize(n);
     for (usize i = 0; i < n; ++i) // exactly 5 cycles over N ⇒ periodic, no leakage
@@ -108,7 +109,7 @@ TEST_CASE("dsp multirate: interp/half_band/cic/farrow", "[v11-k][dsp][multirate]
     // half_band: centre tap 0.5, every even offset from centre is zero, symmetric.
     const auto hb = dsp::half_band<f64>(&alloc, 11);
     CHECK_THAT(hb[5], WithinAbs(0.5, 1e-12));
-    for (usize i : {1u, 3u, 7u, 9u})
+    for (usize i : {1U, 3U, 7U, 9U})
     {
         CHECK_THAT(hb[i], WithinAbs(0.0, 1e-12)); // even offsets from centre vanish
     }

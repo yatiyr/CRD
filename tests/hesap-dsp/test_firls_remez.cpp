@@ -35,7 +35,7 @@ template <crd::usize N> void check(const double (&ref)[N], const cont::Array<f64
 }
 } // namespace
 
-TEST_CASE("dsp firls: least-squares FIR matches scipy (closed-form ⇒ 1e-10)", "[v11-d][dsp][firls]")
+TEST_CASE("dsp firls: least-squares FIR matches scipy (closed-form => 1e-10)", "[v11-d][dsp][firls]")
 {
     crd::memory::TlsfAllocator alloc(1U << 22);
     {
@@ -59,7 +59,7 @@ TEST_CASE("dsp firls: least-squares FIR matches scipy (closed-form ⇒ 1e-10)", 
     }
 }
 
-TEST_CASE("dsp remez: Parks-McClellan lowpass — equiripple SPEC + scipy coeff agreement", "[v11-d][dsp][remez]")
+TEST_CASE("dsp remez: Parks-McClellan lowpass -- equiripple SPEC + scipy coeff agreement", "[v11-d][dsp][remez]")
 {
     crd::memory::TlsfAllocator alloc(1U << 22);
     // lowpass: passband [0,0.15], stopband [0.2,0.5] (fs=1), desired {1,0}.
@@ -82,14 +82,16 @@ TEST_CASE("dsp remez: Parks-McClellan lowpass — equiripple SPEC + scipy coeff 
     }
     tf.a.push_back(1.0);
     cont::Array<f64> w(&alloc);
-    cont::Array<Complex<f64>> H(&alloc);
-    dsp::freqz<f64>(tf, 2048, w, H);
+    cont::Array<Complex<f64>> hf(&alloc);
+    dsp::freqz<f64>(tf, 2048, w, hf);
     const f64 pi = std::numbers::pi_v<f64>;
-    f64 pass_max = 0.0, pass_min = 2.0, stop_max = 0.0;
+    f64 pass_max = 0.0;
+    f64 pass_min = 2.0;
+    f64 stop_max = 0.0;
     for (usize i = 0; i < 2048; ++i)
     {
         const f64 f = w[i] / (2.0 * pi); // back to [0,0.5]
-        const f64 mag = std::hypot(H[i].re, H[i].im);
+        const f64 mag = std::hypot(hf[i].re, hf[i].im);
         if (f <= 0.15)
         {
             pass_max = std::max(pass_max, mag);

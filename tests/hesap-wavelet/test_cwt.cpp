@@ -31,8 +31,10 @@ usize cwt_ns() { return sizeof(ref_cwt_scales) / sizeof(ref_cwt_scales[0]); }
 TEST_CASE("cwt: real wavelets vs pywt (mexh/morl/gaus)", "[v11w-d][wavelet][cwt]")
 {
     crd::memory::TlsfAllocator alloc(1U << 24);
-    const usize n = cwt_n(), ns = cwt_ns();
-    const cont::ConstSpan<f64> xs(ref_cwt_input, n), sc(ref_cwt_scales, ns);
+    const usize n = cwt_n();
+    const usize ns = cwt_ns();
+    const cont::ConstSpan<f64> xs(ref_cwt_input, n);
+    const cont::ConstSpan<f64> sc(ref_cwt_scales, ns);
 
     struct C
     {
@@ -62,8 +64,10 @@ TEST_CASE("cwt: real wavelets vs pywt (mexh/morl/gaus)", "[v11w-d][wavelet][cwt]
 TEST_CASE("cwt: complex wavelets vs pywt (cmor/cgau/shan/fbsp)", "[v11w-d][wavelet][cwt]")
 {
     crd::memory::TlsfAllocator alloc(1U << 24);
-    const usize n = cwt_n(), ns = cwt_ns();
-    const cont::ConstSpan<f64> xs(ref_cwt_input, n), sc(ref_cwt_scales, ns);
+    const usize n = cwt_n();
+    const usize ns = cwt_ns();
+    const cont::ConstSpan<f64> xs(ref_cwt_input, n);
+    const cont::ConstSpan<f64> sc(ref_cwt_scales, ns);
 
     struct C
     {
@@ -143,8 +147,10 @@ TEST_CASE("cwt: a tone localizes to scale ~ fc/f (morl + paul)", "[v11w-d][wavel
 TEST_CASE("cwt: run-twice + {1,4,16}-thread bit-identical (batched-FFT moat)", "[v11w-d][wavelet][cwt][moat]")
 {
     crd::memory::TlsfAllocator alloc(1U << 25);
-    const usize n = cwt_n(), ns = cwt_ns();
-    const cont::ConstSpan<f64> xs(ref_cwt_input, n), sc(ref_cwt_scales, ns);
+    const usize n = cwt_n();
+    const usize ns = cwt_ns();
+    const cont::ConstSpan<f64> xs(ref_cwt_input, n);
+    const cont::ConstSpan<f64> sc(ref_cwt_scales, ns);
     const auto w = wv::continuous_wavelet("cmor1.5-1.0");
 
     cont::Array<Complex<f64>> ref(&alloc);

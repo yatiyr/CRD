@@ -53,7 +53,7 @@ TEST_CASE("dsp filtering: sosfilt is BIT-EXACT vs scipy.signal.sosfilt", "[v11-i
     }
 }
 
-TEST_CASE("dsp filtering: STREAMING moat — arbitrary block sizes == one batch call (bit-identical)",
+TEST_CASE("dsp filtering: STREAMING moat -- arbitrary block sizes == one batch call (bit-identical)",
           "[v11-i][dsp][filtering][moat]")
 {
     crd::memory::TlsfAllocator alloc(1U << 20);
@@ -116,7 +116,9 @@ TEST_CASE("dsp filtering: sosfiltfilt is zero-phase (symmetric impulse response)
 TEST_CASE("dsp filtering: lfilter BIT-EXACT vs scipy + filtfilt matches scipy (zero-phase)", "[v11-i][dsp][filtering]")
 {
     crd::memory::TlsfAllocator alloc(1U << 21);
-    const usize nx = sizeof(ref_lf_x)/sizeof(double), nb = sizeof(ref_lf_b)/sizeof(double), na = sizeof(ref_lf_a)/sizeof(double);
+    const usize nx = sizeof(ref_lf_x)/sizeof(double);
+    const usize nb = sizeof(ref_lf_b)/sizeof(double);
+    const usize na = sizeof(ref_lf_a)/sizeof(double);
     const auto yl = dsp::lfilter<f64>(&alloc, cont::ConstSpan<f64>(ref_lf_b,nb), cont::ConstSpan<f64>(ref_lf_a,na), cont::ConstSpan<f64>(ref_lf_x,nx));
     REQUIRE(yl.size() == nx);
     for (usize i = 0; i < nx; ++i) { INFO("lf[" << i << "]"); CHECK(yl[i] == ref_lfilter[i]); } // BIT-EXACT (DF2T mul-add)

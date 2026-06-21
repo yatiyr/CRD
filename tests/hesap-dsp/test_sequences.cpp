@@ -32,7 +32,7 @@ TEST_CASE("dsp sequences: MLS has the two-valued autocorrelation (maximal length
     crd::memory::TlsfAllocator alloc(1U << 18);
     const usize n = 7;
     const auto s = dsp::mls<i8>(&alloc, n);
-    const usize len = (1u << n) - 1; // 127
+    const usize len = (1U << n) - 1; // 127
     REQUIRE(s.size() == len);
     const cont::ConstSpan<i8> ss(s.data(), len);
     CHECK(circ_corr(ss, ss, 0) == static_cast<long>(len)); // peak
@@ -53,7 +53,7 @@ TEST_CASE("dsp sequences: Gold preferred pair has bounded cross-correlation", "[
 {
     crd::memory::TlsfAllocator alloc(1U << 18);
     const usize n = 5;
-    const usize len = (1u << n) - 1; // 31
+    const usize len = (1U << n) - 1; // 31
     const auto a = dsp::mls<i8>(&alloc, n);
     const auto b = dsp::decimate_seq<i8>(&alloc, cont::ConstSpan<i8>(a.data(), len), 9); // preferred-pair decimation
     const auto g = dsp::gold<i8>(&alloc, cont::ConstSpan<i8>(a.data(), len), cont::ConstSpan<i8>(b.data(), len));
@@ -72,12 +72,12 @@ TEST_CASE("dsp sequences: Gold preferred pair has bounded cross-correlation", "[
     CHECK(maxabs <= 9);
 }
 
-TEST_CASE("dsp sequences: Kasami sequence is ±1, full length", "[v11-r][dsp][sequences]")
+TEST_CASE("dsp sequences: Kasami sequence is +/-1, full length", "[v11-r][dsp][sequences]")
 {
     crd::memory::TlsfAllocator alloc(1U << 18);
     const usize n = 6;
     const auto k = dsp::kasami<i8>(&alloc, n, 3);
-    const usize len = (1u << n) - 1; // 63
+    const usize len = (1U << n) - 1; // 63
     REQUIRE(k.size() == len);
     for (usize i = 0; i < len; ++i)
     {

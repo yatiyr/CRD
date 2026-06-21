@@ -17,7 +17,6 @@ namespace dsp = crd::hesap::dsp;
 namespace cont = crd::containers;
 using crd::f64;
 using crd::usize;
-using crd::hesap::Complex;
 using Catch::Matchers::WithinAbs;
 
 namespace
@@ -82,7 +81,8 @@ TEST_CASE("dsp hilbert: envelope of an AM signal matches scipy", "[v11-l][dsp][h
 TEST_CASE("dsp hilbert: hilbert2 matches scipy.signal.hilbert2", "[v11-l][dsp][hilbert]")
 {
     crd::memory::TlsfAllocator alloc(1U << 22);
-    const usize r = 8, c = 8;
+    const usize r = 8;
+    const usize c = 8;
     cont::Array<f64> img(&alloc);
     img.resize(r * c);
     for (usize i = 0; i < r; ++i)
@@ -107,7 +107,10 @@ TEST_CASE("dsp hilbert: instantaneous frequency of a linear chirp matches scipy"
 {
     crd::memory::TlsfAllocator alloc(1U << 22);
     const usize n = 512;
-    const f64 fs = 512.0, f0 = 20.0, f1 = 100.0, tt = n / fs;
+    const f64 fs = 512.0;
+    const f64 f0 = 20.0;
+    const f64 f1 = 100.0;
+    const f64 tt = n / fs;
     cont::Array<f64> ch(&alloc);
     ch.resize(n);
     for (usize i = 0; i < n; ++i)

@@ -54,7 +54,8 @@ void mean_var(cont::ConstSpan<f64> v, usize lo, usize hi, f64& mean, f64& var)
 TEST_CASE("dsp multitaper: a tone yields a sharp peak at its bin", "[v11-n][dsp][multitaper]")
 {
     crd::memory::TlsfAllocator alloc(1U << 26);
-    const usize n = 512, nfft = 512;
+    const usize n = 512;
+    const usize nfft = 512;
     cont::Array<f64> x(&alloc);
     x.resize(n);
     const f64 f0 = 0.2;
@@ -78,7 +79,8 @@ TEST_CASE("dsp multitaper: a tone yields a sharp peak at its bin", "[v11-n][dsp]
 TEST_CASE("dsp multitaper: adaptive weighting resolves a tone + stays positive", "[v11-n][dsp][multitaper]")
 {
     crd::memory::TlsfAllocator alloc(1U << 26);
-    const usize n = 512, nfft = 512;
+    const usize n = 512;
+    const usize nfft = 512;
     cont::Array<f64> x(&alloc);
     x.resize(n);
     const f64 f0 = 0.2;
@@ -102,12 +104,16 @@ TEST_CASE("dsp multitaper: adaptive weighting resolves a tone + stays positive",
 TEST_CASE("dsp multitaper: lower variance than a single periodogram on white noise", "[v11-n][dsp][multitaper]")
 {
     crd::memory::TlsfAllocator alloc(1U << 26);
-    const usize n = 512, nfft = 512;
+    const usize n = 512;
+    const usize nfft = 512;
     const auto x = noise(&alloc, n, 2024ULL);
     const cont::ConstSpan<f64> xs(x.data(), n);
     const auto mt = dsp::multitaper_psd<f64>(&alloc, xs, 4.0, 7, nfft); // K=7 tapers
     const auto sp = dsp::multitaper_psd<f64>(&alloc, xs, 4.0, 1, nfft); // K=1 ⇒ a single (tapered) periodogram
-    f64 mmt, vmt, msp, vsp;
+    f64 mmt;
+    f64 vmt;
+    f64 msp;
+    f64 vsp;
     mean_var(cont::ConstSpan<f64>(mt.data(), mt.size()), 20, mt.size() - 20, mmt, vmt);
     mean_var(cont::ConstSpan<f64>(sp.data(), sp.size()), 20, sp.size() - 20, msp, vsp);
     // multitaper smooths ⇒ a much smaller coefficient of variation than the single periodogram.

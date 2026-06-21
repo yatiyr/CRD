@@ -30,8 +30,12 @@ constexpr f64 kPi = std::numbers::pi_v<f64>;
 // |H(e^{jw})| of an SOS cascade at a single angular frequency w (rad/sample) — direct evaluation.
 [[nodiscard]] f64 sos_mag_at(const dsp::SecondOrderSections<f64>& sos, f64 w)
 {
-    const f64 c1 = std::cos(w), c2 = std::cos(2.0 * w), s1 = std::sin(w), s2 = std::sin(2.0 * w);
-    f64 hre = 1.0, him = 0.0;
+    const f64 c1 = std::cos(w);
+    const f64 c2 = std::cos(2.0 * w);
+    const f64 s1 = std::sin(w);
+    const f64 s2 = std::sin(2.0 * w);
+    f64 hre = 1.0;
+    f64 him = 0.0;
     for (usize k = 0; k < sos.sections.size(); ++k)
     {
         const auto& bq = sos.sections[k];
@@ -123,13 +127,17 @@ TEST_CASE("dsp iir_design: frequency transforms (hp/bp/bs) match scipy response"
     check_response(ref_ellip_bs_mag, &alloc, dsp::iirfilter<f64>(&alloc, 5, span2(wn_bs), dsp::BandType::Bandstop, dsp::IirKind::Ellip, 1.0, 40.0));
 }
 
-TEST_CASE("dsp iir_design: buttord — exact N, Wn, and spec-compliance", "[v11-g][dsp][iir]")
+TEST_CASE("dsp iir_design: buttord -- exact N, Wn, and spec-compliance", "[v11-g][dsp][iir]")
 {
     crd::memory::TlsfAllocator alloc(1U << 22);
-    const f64 lp_wp[] = {0.2}, lp_ws[] = {0.3};
-    const f64 hp_wp[] = {0.3}, hp_ws[] = {0.2};
-    const f64 bp_wp[] = {0.2, 0.5}, bp_ws[] = {0.1, 0.6};
-    const f64 bs_wp[] = {0.1, 0.6}, bs_ws[] = {0.2, 0.5};
+    const f64 lp_wp[] = {0.2};
+    const f64 lp_ws[] = {0.3};
+    const f64 hp_wp[] = {0.3};
+    const f64 hp_ws[] = {0.2};
+    const f64 bp_wp[] = {0.2, 0.5};
+    const f64 bp_ws[] = {0.1, 0.6};
+    const f64 bs_wp[] = {0.1, 0.6};
+    const f64 bs_ws[] = {0.2, 0.5};
     check_order(&alloc, dsp::buttord<f64>(&alloc, span1(lp_wp), span1(lp_ws), 1.0, 40.0), ref_buttord_lp_n,
                 ref_buttord_lp_wn, dsp::IirKind::Butter, span1(lp_wp), span1(lp_ws), 1.0, 40.0, 1e-10);
     check_order(&alloc, dsp::buttord<f64>(&alloc, span1(hp_wp), span1(hp_ws), 1.0, 40.0), ref_buttord_hp_n,
@@ -140,11 +148,13 @@ TEST_CASE("dsp iir_design: buttord — exact N, Wn, and spec-compliance", "[v11-
                 ref_buttord_bs_wn, dsp::IirKind::Butter, span2(bs_wp), span2(bs_ws), 1.0, 40.0, 1e-6);
 }
 
-TEST_CASE("dsp iir_design: cheb1ord/cheb2ord — exact N, Wn, and spec-compliance", "[v11-g][dsp][iir]")
+TEST_CASE("dsp iir_design: cheb1ord/cheb2ord -- exact N, Wn, and spec-compliance", "[v11-g][dsp][iir]")
 {
     crd::memory::TlsfAllocator alloc(1U << 22);
-    const f64 lp_wp[] = {0.2}, lp_ws[] = {0.3};
-    const f64 bp_wp[] = {0.2, 0.5}, bp_ws[] = {0.1, 0.6};
+    const f64 lp_wp[] = {0.2};
+    const f64 lp_ws[] = {0.3};
+    const f64 bp_wp[] = {0.2, 0.5};
+    const f64 bp_ws[] = {0.1, 0.6};
     check_order(&alloc, dsp::cheb1ord<f64>(&alloc, span1(lp_wp), span1(lp_ws), 1.0, 40.0), ref_cheb1ord_lp_n,
                 ref_cheb1ord_lp_wn, dsp::IirKind::Cheby1, span1(lp_wp), span1(lp_ws), 1.0, 40.0, 1e-10);
     check_order(&alloc, dsp::cheb1ord<f64>(&alloc, span2(bp_wp), span2(bp_ws), 1.0, 40.0), ref_cheb1ord_bp_n,
@@ -155,11 +165,13 @@ TEST_CASE("dsp iir_design: cheb1ord/cheb2ord — exact N, Wn, and spec-complianc
                 ref_cheb2ord_bp_wn, dsp::IirKind::Cheby2, span2(bp_wp), span2(bp_ws), 1.0, 40.0, 1e-6);
 }
 
-TEST_CASE("dsp iir_design: ellipord — exact N, Wn, and spec-compliance", "[v11-g][dsp][iir]")
+TEST_CASE("dsp iir_design: ellipord -- exact N, Wn, and spec-compliance", "[v11-g][dsp][iir]")
 {
     crd::memory::TlsfAllocator alloc(1U << 22);
-    const f64 lp_wp[] = {0.2}, lp_ws[] = {0.3};
-    const f64 bs_wp[] = {0.1, 0.6}, bs_ws[] = {0.2, 0.5};
+    const f64 lp_wp[] = {0.2};
+    const f64 lp_ws[] = {0.3};
+    const f64 bs_wp[] = {0.1, 0.6};
+    const f64 bs_ws[] = {0.2, 0.5};
     check_order(&alloc, dsp::ellipord<f64>(&alloc, span1(lp_wp), span1(lp_ws), 1.0, 40.0), ref_ellipord_lp_n,
                 ref_ellipord_lp_wn, dsp::IirKind::Ellip, span1(lp_wp), span1(lp_ws), 1.0, 40.0, 1e-10);
     check_order(&alloc, dsp::ellipord<f64>(&alloc, span2(bs_wp), span2(bs_ws), 1.0, 40.0), ref_ellipord_bs_n,
@@ -169,7 +181,8 @@ TEST_CASE("dsp iir_design: ellipord — exact N, Wn, and spec-compliance", "[v11
 TEST_CASE("dsp iir_design: iirdesign end-to-end meets spec", "[v11-g][dsp][iir]")
 {
     crd::memory::TlsfAllocator alloc(1U << 22);
-    const f64 wp[] = {0.2}, ws[] = {0.3};
+    const f64 wp[] = {0.2};
+    const f64 ws[] = {0.3};
     // iirdesign(Butter) must equal iirfilter(buttord(...)) and meet the spec.
     const auto zpk = dsp::iirdesign<f64>(&alloc, span1(wp), span1(ws), 1.0, 40.0, dsp::IirKind::Ellip);
     const auto sos = dsp::zpk_to_sos<f64>(&alloc, zpk);

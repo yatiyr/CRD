@@ -69,7 +69,8 @@ void check_plant(cont::ConstSpan<f64> w, f64 tol)
 TEST_CASE("dsp adaptive: LMS / NLMS / sign-LMS recover a known plant", "[v11-t][dsp][adaptive]")
 {
     crd::memory::TlsfAllocator alloc(1U << 22);
-    cont::Array<f64> x(&alloc), d(&alloc);
+    cont::Array<f64> x(&alloc);
+    cont::Array<f64> d(&alloc);
     make_signals(x, d, 30000);
     {
         dsp::NlmsFilter<f64> f(&alloc, kM, 0.5);
@@ -100,7 +101,8 @@ TEST_CASE("dsp adaptive: LMS / NLMS / sign-LMS recover a known plant", "[v11-t][
 TEST_CASE("dsp adaptive: affine projection recovers a known plant", "[v11-t][dsp][adaptive]")
 {
     crd::memory::TlsfAllocator alloc(1U << 22);
-    cont::Array<f64> x(&alloc), d(&alloc);
+    cont::Array<f64> x(&alloc);
+    cont::Array<f64> d(&alloc);
     make_signals(x, d, 20000);
     dsp::ApFilter<f64> f(&alloc, kM, 2, 0.5); // projection order 2
     for (usize n = 0; n < x.size(); ++n)
@@ -113,7 +115,8 @@ TEST_CASE("dsp adaptive: affine projection recovers a known plant", "[v11-t][dsp
 TEST_CASE("dsp adaptive: RLS recovers a known plant fast + exactly", "[v11-t][dsp][adaptive]")
 {
     crd::memory::TlsfAllocator alloc(1U << 22);
-    cont::Array<f64> x(&alloc), d(&alloc);
+    cont::Array<f64> x(&alloc);
+    cont::Array<f64> d(&alloc);
     make_signals(x, d, 4000);
     dsp::RlsFilter<f64> f(&alloc, kM, 1.0, 1e4);
     for (usize n = 0; n < x.size(); ++n)
@@ -126,7 +129,8 @@ TEST_CASE("dsp adaptive: RLS recovers a known plant fast + exactly", "[v11-t][ds
 TEST_CASE("dsp adaptive: Wiener-Hopf recovers the plant (autocorrelation method)", "[v11-t][dsp][adaptive]")
 {
     crd::memory::TlsfAllocator alloc(1U << 22);
-    cont::Array<f64> x(&alloc), d(&alloc);
+    cont::Array<f64> x(&alloc);
+    cont::Array<f64> d(&alloc);
     make_signals(x, d, 4000);
     const auto w = dsp::wiener_hopf<f64>(&alloc, cont::ConstSpan<f64>(x.data(), x.size()),
                                          cont::ConstSpan<f64>(d.data(), d.size()), kM);
@@ -138,7 +142,8 @@ TEST_CASE("dsp adaptive: Wiener-Hopf recovers the plant (autocorrelation method)
 TEST_CASE("dsp adaptive: NLMS is deterministic (run-twice bit-identical)", "[v11-t][dsp][adaptive]")
 {
     crd::memory::TlsfAllocator alloc(1U << 22);
-    cont::Array<f64> x(&alloc), d(&alloc);
+    cont::Array<f64> x(&alloc);
+    cont::Array<f64> d(&alloc);
     make_signals(x, d, 5000);
     auto run = [&](cont::Array<f64>& out)
     {
@@ -153,7 +158,8 @@ TEST_CASE("dsp adaptive: NLMS is deterministic (run-twice bit-identical)", "[v11
             out[j] = f.weights()[j];
         }
     };
-    cont::Array<f64> a(&alloc), b(&alloc);
+    cont::Array<f64> a(&alloc);
+    cont::Array<f64> b(&alloc);
     run(a);
     run(b);
     CHECK(std::memcmp(a.data(), b.data(), kM * sizeof(f64)) == 0); // the determinism moat

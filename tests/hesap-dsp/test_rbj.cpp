@@ -25,9 +25,14 @@ constexpr f64 kQ = 0.7071067811865476;
 // |H(e^{jw})| of a single biquad at angular frequency w (rad/sample).
 [[nodiscard]] f64 biquad_mag(const dsp::Biquad<f64>& bq, f64 w)
 {
-    const f64 c1 = std::cos(w), c2 = std::cos(2.0 * w), s1 = std::sin(w), s2 = std::sin(2.0 * w);
-    const f64 nre = bq.b0 + bq.b1 * c1 + bq.b2 * c2, nim = -(bq.b1 * s1 + bq.b2 * s2);
-    const f64 dre = 1.0 + bq.a1 * c1 + bq.a2 * c2, dim = -(bq.a1 * s1 + bq.a2 * s2);
+    const f64 c1 = std::cos(w);
+    const f64 c2 = std::cos(2.0 * w);
+    const f64 s1 = std::sin(w);
+    const f64 s2 = std::sin(2.0 * w);
+    const f64 nre = bq.b0 + bq.b1 * c1 + bq.b2 * c2;
+    const f64 nim = -(bq.b1 * s1 + bq.b2 * s2);
+    const f64 dre = 1.0 + bq.a1 * c1 + bq.a2 * c2;
+    const f64 dim = -(bq.a1 * s1 + bq.a2 * s2);
     return std::sqrt((nre * nre + nim * nim) / (dre * dre + dim * dim));
 }
 
@@ -55,7 +60,8 @@ TEST_CASE("dsp rbj: coefficients match the cookbook transcription", "[v11-h][dsp
 
 TEST_CASE("dsp rbj: spec properties (DC / Nyquist / centre-frequency gains)", "[v11-h][dsp][rbj]")
 {
-    const f64 f0 = 0.25, w0 = f0 * kPi;
+    const f64 f0 = 0.25;
+    const f64 w0 = f0 * kPi;
     // lowpass: |H(0)|=1, |H(Nyquist)|≈0.
     {
         const auto bq = dsp::rbj_lowpass<f64>(f0, kQ);

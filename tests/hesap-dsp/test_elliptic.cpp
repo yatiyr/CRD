@@ -16,7 +16,6 @@
 #include <cmath>
 
 namespace dsp = crd::hesap::dsp;
-namespace cont = crd::containers;
 using crd::f64;
 using crd::usize;
 using Catch::Matchers::WithinAbs;
@@ -54,9 +53,9 @@ TEST_CASE("dsp elliptic: ellipdeg (the degree equation) matches scipy _ellipdeg"
 {
     for (usize i = 0; i < sizeof(ref_ellipdeg_N) / sizeof(double); ++i)
     {
-        const usize N = static_cast<usize>(ref_ellipdeg_N[i]);
-        INFO("N=" << N << " m1=" << ref_ellipdeg_m1[i]);
-        CHECK_THAT(dsp::ellipdeg<f64>(N, ref_ellipdeg_m1[i]), WithinRel(ref_ellipdeg[i], 1e-11));
+        const usize n = static_cast<usize>(ref_ellipdeg_N[i]);
+        INFO("N=" << n << " m1=" << ref_ellipdeg_m1[i]);
+        CHECK_THAT(dsp::ellipdeg<f64>(n, ref_ellipdeg_m1[i]), WithinRel(ref_ellipdeg[i], 1e-11));
     }
 }
 
@@ -75,7 +74,8 @@ TEST_CASE("dsp elliptic: ellipap analog prototype matches scipy (poles + zeros +
     const auto zpk = dsp::ellipap<f64>(&alloc, 4, 1.0, 40.0);
     // poles (sorted by rounded key, like scipy).
     auto key = [](double v) { return std::round(v * 1e9) / 1e9; };
-    crd::containers::Array<f64> pre(zpk.p.allocator()), pim(zpk.p.allocator());
+    crd::containers::Array<f64> pre(zpk.p.allocator());
+    crd::containers::Array<f64> pim(zpk.p.allocator());
     crd::containers::Array<crd::usize> ord(zpk.p.allocator());
     for (usize i = 0; i < zpk.p.size(); ++i) { pre.push_back(zpk.p[i].re); pim.push_back(zpk.p[i].im); ord.push_back(i); }
     std::sort(ord.data(), ord.data() + ord.size(), [&](usize a, usize b) {

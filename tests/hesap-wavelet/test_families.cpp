@@ -65,7 +65,11 @@ TEST_CASE("wavelet families: QMF builder reproduces the stored orthogonal bank",
         const auto w = wv::wavelet_by_name(name);
         REQUIRE(w.has_value());
         const usize l = w->len();
-        cont::Array<f64> dl(&alloc), dh(&alloc), rl(&alloc), rh(&alloc), scaling(&alloc);
+        cont::Array<f64> dl(&alloc);
+        cont::Array<f64> dh(&alloc);
+        cont::Array<f64> rl(&alloc);
+        cont::Array<f64> rh(&alloc);
+        cont::Array<f64> scaling(&alloc);
         dl.resize(l);
         dh.resize(l);
         rl.resize(l);
@@ -98,7 +102,8 @@ TEST_CASE("wavelet families: orthonormality of orthogonal scaling filters", "[v1
         REQUIRE(w.has_value());
         REQUIRE(w->orthogonal);
         const usize l = w->len();
-        f64 sum = 0.0, energy = 0.0;
+        f64 sum = 0.0;
+        f64 energy = 0.0;
         for (usize k = 0; k < l; ++k)
         {
             sum += w->dec_lo[k];
