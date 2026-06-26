@@ -38,7 +38,7 @@
 #include <crd/hesap/opt/opt_types.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::hesap::opt
@@ -93,12 +93,12 @@ template <typename T>
         return result;
     }
 
-    auto inf_nrm = [](crd::containers::ConstSpan<T> v) -> T
+    [[maybe_unused]] auto inf_nrm = [](crd::containers::ConstSpan<T> v) -> T
     {
         T mx = static_cast<T>(0);
         for (crd::usize i = 0; i < v.size(); ++i)
         {
-            const T a = std::fabs(v[i]);
+            const T a = crd::math::fabs(v[i]);
             mx = a > mx ? a : mx;
         }
         return mx;
@@ -162,11 +162,11 @@ template <typename T>
         T t = static_cast<T>(0);
         for (crd::usize i = 0; i < me; ++i)
         {
-            t += std::fabs(cev[i]);
+            t += crd::math::fabs(cev[i]);
         }
         for (crd::usize i = 0; i < mi; ++i)
         {
-            t += std::fabs(civ[i] - sv[i]);
+            t += crd::math::fabs(civ[i] - sv[i]);
         }
         return t;
     };
@@ -175,7 +175,7 @@ template <typename T>
         T p = fval;
         for (crd::usize i = 0; i < mi; ++i)
         {
-            p -= mu * std::log(sv[i]);
+            p -= mu * crd::math::log(sv[i]);
         }
         return p;
     };
@@ -227,19 +227,19 @@ template <typename T>
                 {
                     acc -= z[i] * ji[i * n + j];
                 }
-                const T a = std::fabs(acc);
+                const T a = crd::math::fabs(acc);
                 e = a > e ? a : e;
             }
             for (crd::usize i = 0; i < me; ++i)
             {
-                const T a = std::fabs(ce[i]);
+                const T a = crd::math::fabs(ce[i]);
                 e = a > e ? a : e;
             }
             for (crd::usize i = 0; i < mi; ++i)
             {
-                const T a = std::fabs(ci[i] - s[i]);
+                const T a = crd::math::fabs(ci[i] - s[i]);
                 e = a > e ? a : e;
-                const T c = std::fabs(s[i] * z[i] - mu_val);
+                const T c = crd::math::fabs(s[i] * z[i] - mu_val);
                 e = c > e ? c : e;
             }
             return e;
@@ -254,7 +254,7 @@ template <typename T>
         {
             // The barrier problem is solved to its tolerance ⇒ shrink μ (monotone Fiacco-McCormick) + reset.
             const T lin = iopts.kappa_mu * mu;
-            const T sup = std::pow(mu, iopts.theta_mu);
+            const T sup = crd::math::pow(mu, iopts.theta_mu);
             T next = lin < sup ? lin : sup;
             const T floor_mu = opts.grad_tol / static_cast<T>(10);
             mu = next > floor_mu ? next : floor_mu;
@@ -387,7 +387,7 @@ template <typename T>
                     // Switching condition ⇒ f-type: additionally require Armijo on φ.
                     const T m = alpha * dphi;
                     const bool switching = dphi < static_cast<T>(0) &&
-                                           std::pow(-m, iopts.s_phi) > iopts.delta * std::pow(theta0, iopts.s_theta);
+                                           crd::math::pow(-m, iopts.s_phi) > iopts.delta * crd::math::pow(theta0, iopts.s_theta);
                     if (switching)
                     {
                         if (phi_t <= phi0 + iopts.eta_phi * alpha * dphi)
@@ -458,20 +458,20 @@ template <typename T>
         {
             acc -= z[i] * ji[i * n + j];
         }
-        const T a = std::fabs(acc);
+        const T a = crd::math::fabs(acc);
         st = a > st ? a : st;
     }
     T worst = st;
     for (crd::usize i = 0; i < me; ++i)
     {
-        const T a = std::fabs(ce[i]);
+        const T a = crd::math::fabs(ce[i]);
         worst = a > worst ? a : worst;
     }
     for (crd::usize i = 0; i < mi; ++i)
     {
         const T viol = ci[i] < static_cast<T>(0) ? -ci[i] : static_cast<T>(0);
         worst = viol > worst ? viol : worst;
-        const T comp = std::fabs(z[i] * ci[i]);
+        const T comp = crd::math::fabs(z[i] * ci[i]);
         worst = comp > worst ? comp : worst;
     }
     result.fx = fx;

@@ -40,7 +40,7 @@
 #include <crd/hesap/linear_op.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 #include <type_traits>
 
@@ -260,7 +260,7 @@ template <typename T>
         for (crd::u32 i = 0; i < nsv && i < kk; ++i)
         {
             const R sg = bs.s.data()[i];
-            const R est = std::fabs(static_cast<R>(blast)) * std::fabs(static_cast<R>(bs.u.at(kk - 1, i)));
+            const R est = crd::math::fabs(static_cast<R>(blast)) * crd::math::fabs(static_cast<R>(bs.u.at(kk - 1, i)));
             const R sc = sg > R{1} ? sg : R{1};
             if (est > tol * sc)
             {
@@ -369,7 +369,7 @@ template <typename T>
             const R e = static_cast<R>(atu[r]) - sigma * static_cast<R>(vo[r]);
             r2 += e * e;
         }
-        const R rn = std::sqrt(r2);
+        const R rn = crd::math::sqrt(r2);
         result.residuals[i] = rn;
         const R sc = sigma > R{1} ? sigma : R{1};
         if (rn / sc <= tol)

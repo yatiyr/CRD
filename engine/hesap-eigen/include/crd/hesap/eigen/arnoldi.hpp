@@ -23,7 +23,7 @@
 #include <crd/hesap/linear_op.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 #include <type_traits>
 
@@ -33,7 +33,7 @@ namespace detail
 {
 template <typename R> [[nodiscard]] inline R cmag(crd::hesap::Complex<R> z) noexcept
 {
-    return std::sqrt(z.re * z.re + z.im * z.im);
+    return crd::math::sqrt(z.re * z.re + z.im * z.im);
 }
 
 // `which` ordering for a COMPLEX Ritz value (nonsymmetric). Algebraic == real part.
@@ -137,7 +137,7 @@ template <typename T>
             }
         }
         R beta = dn::nrm2<T>({w.data(), n});
-        const R hm = std::fabs(static_cast<R>(h.at(j, j)));
+        const R hm = crd::math::fabs(static_cast<R>(h.at(j, j)));
         amax = hm > amax ? hm : amax;
         mdone = j + 1;
         beta_m = beta;
@@ -245,7 +245,7 @@ template <typename T>
         {
             xn2 += xre[i] * xre[i] + xim[i] * xim[i];
         }
-        const R xn = std::sqrt(xn2);
+        const R xn = crd::math::sqrt(xn2);
         if (xn > R{0})
         {
             const T inv = static_cast<T>(R{1} / xn);
@@ -264,7 +264,7 @@ template <typename T>
                 imax = i;
             }
         }
-        const R mag = std::sqrt(vmax);
+        const R mag = crd::math::sqrt(vmax);
         if (mag > R{0})
         {
             const R c = xre[imax] / mag;   // cos φ
@@ -287,7 +287,7 @@ template <typename T>
             const R ri = axim[i] - (th.re * xim[i] + th.im * xre[i]);
             rn2 += rr * rr + ri * ri;
         }
-        const R rn = std::sqrt(rn2);
+        const R rn = crd::math::sqrt(rn2);
         result.residuals[s] = rn;
         const R scale = detail::cmag<R>(th);
         if (rn <= tol * (scale > R{1} ? scale : R{1}))

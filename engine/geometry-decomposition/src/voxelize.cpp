@@ -17,7 +17,7 @@
 
 #include <algorithm>
 #include <atomic>
-#include <cmath>
+#include <crd/math/cmath.hpp>
 
 namespace crd::geometry::decomposition
 {
@@ -134,20 +134,20 @@ choose_resolution(const VoxelizationOptions& opts, const AABB3<crd::f32>& aabb) 
     {
         const crd::f32 n_along_longest = static_cast<crd::f32>(opts.fixed_resolution);
         const crd::f32 voxel = ext_max / n_along_longest;
-        nx = std::max(1U, static_cast<crd::u32>(std::ceil(ex / voxel)));
-        ny = std::max(1U, static_cast<crd::u32>(std::ceil(ey / voxel)));
-        nz = std::max(1U, static_cast<crd::u32>(std::ceil(ez / voxel)));
+        nx = std::max(1U, static_cast<crd::u32>(crd::math::ceil(ex / voxel)));
+        ny = std::max(1U, static_cast<crd::u32>(crd::math::ceil(ey / voxel)));
+        nz = std::max(1U, static_cast<crd::u32>(crd::math::ceil(ez / voxel)));
     }
     else
     {
         const crd::f64 volume = static_cast<crd::f64>(ex)
                               * static_cast<crd::f64>(ey)
                               * static_cast<crd::f64>(ez);
-        const crd::f64 voxel = std::cbrt(volume / static_cast<crd::f64>(opts.target_voxel_count));
+        const crd::f64 voxel = crd::math::cbrt(volume / static_cast<crd::f64>(opts.target_voxel_count));
         const crd::f32 vox_f = static_cast<crd::f32>(voxel);
-        nx = std::max(1U, static_cast<crd::u32>(std::ceil(ex / vox_f)));
-        ny = std::max(1U, static_cast<crd::u32>(std::ceil(ey / vox_f)));
-        nz = std::max(1U, static_cast<crd::u32>(std::ceil(ez / vox_f)));
+        nx = std::max(1U, static_cast<crd::u32>(crd::math::ceil(ex / vox_f)));
+        ny = std::max(1U, static_cast<crd::u32>(crd::math::ceil(ey / vox_f)));
+        nz = std::max(1U, static_cast<crd::u32>(crd::math::ceil(ez / vox_f)));
     }
 
     const crd::u32 cap = opts.max_resolution_per_axis;
@@ -174,13 +174,13 @@ void mark_surface_for_triangle(VoxelGrid& grid, const GridGeom& geom,
 
     // World → ijk (floor on min, ceil on max), clamp to grid bounds.
     const auto to_ix = [&](crd::f32 v) noexcept -> crd::i32 {
-        return static_cast<crd::i32>(std::floor((v - geom.origin.x) * geom.inv_voxel_size.x));
+        return static_cast<crd::i32>(crd::math::floor((v - geom.origin.x) * geom.inv_voxel_size.x));
     };
     const auto to_iy = [&](crd::f32 v) noexcept -> crd::i32 {
-        return static_cast<crd::i32>(std::floor((v - geom.origin.y) * geom.inv_voxel_size.y));
+        return static_cast<crd::i32>(crd::math::floor((v - geom.origin.y) * geom.inv_voxel_size.y));
     };
     const auto to_iz = [&](crd::f32 v) noexcept -> crd::i32 {
-        return static_cast<crd::i32>(std::floor((v - geom.origin.z) * geom.inv_voxel_size.z));
+        return static_cast<crd::i32>(crd::math::floor((v - geom.origin.z) * geom.inv_voxel_size.z));
     };
 
     // First, detect "triangle entirely outside grid" via the UNCLAMPED

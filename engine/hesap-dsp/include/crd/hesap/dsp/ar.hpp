@@ -22,7 +22,7 @@
 #include <crd/hesap/complex.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <numbers>
 
 namespace crd::hesap::dsp
@@ -268,8 +268,8 @@ template <typename T>
         T re = T(0), im = T(0);
         for (crd::usize j = 0; j <= p; ++j) // A(e^{jω}) = Σ a[j] e^{-jωj}
         {
-            re += m.a[j] * std::cos(w * static_cast<T>(j));
-            im -= m.a[j] * std::sin(w * static_cast<T>(j));
+            re += m.a[j] * crd::math::cos(w * static_cast<T>(j));
+            im -= m.a[j] * crd::math::sin(w * static_cast<T>(j));
         }
         psd[bin] = m.variance / (fs * (re * re + im * im));
     }
@@ -278,11 +278,11 @@ template <typename T>
 
 template <typename T> [[nodiscard]] T ar_aic(crd::usize n, T variance, crd::usize p) noexcept
 {
-    return static_cast<T>(n) * std::log(variance) + T(2) * static_cast<T>(p);
+    return static_cast<T>(n) * crd::math::log(variance) + T(2) * static_cast<T>(p);
 }
 template <typename T> [[nodiscard]] T ar_mdl(crd::usize n, T variance, crd::usize p) noexcept
 {
-    return static_cast<T>(n) * std::log(variance) + static_cast<T>(p) * std::log(static_cast<T>(n));
+    return static_cast<T>(n) * crd::math::log(variance) + static_cast<T>(p) * crd::math::log(static_cast<T>(n));
 }
 
 } // namespace crd::hesap::dsp

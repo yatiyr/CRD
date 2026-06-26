@@ -25,7 +25,7 @@
 #include <crd/hesap/dsp/filter.hpp> // Biquad<T>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <numbers>
 
 namespace crd::hesap::dsp
@@ -43,8 +43,8 @@ template <typename T> [[nodiscard]] RbjCommon<T> rbj_common(T f0, T q) noexcept
     const T pi = static_cast<T>(std::numbers::pi_v<double>);
     RbjCommon<T> c;
     c.w0 = pi * f0; // f0 is the Nyquist fraction ⇒ w0 = pi*f0 = 2*pi*(f0/2)/1
-    c.cw = std::cos(c.w0);
-    c.sw = std::sin(c.w0);
+    c.cw = crd::math::cos(c.w0);
+    c.sw = crd::math::sin(c.w0);
     c.alpha = c.sw / (T(2) * q);
     return c;
 }
@@ -103,7 +103,7 @@ template <typename T> [[nodiscard]] Biquad<T> rbj_allpass(T f0, T q) noexcept
 template <typename T> [[nodiscard]] Biquad<T> rbj_peaking(T f0, T q, T gain_db) noexcept
 {
     const auto c = detail::rbj_common<T>(f0, q);
-    const T a = std::pow(T(10), gain_db / T(40));
+    const T a = crd::math::pow(T(10), gain_db / T(40));
     return detail::rbj_normalize<T>(T(1) + c.alpha * a, T(-2) * c.cw, T(1) - c.alpha * a, T(1) + c.alpha / a,
                                     T(-2) * c.cw, T(1) - c.alpha / a);
 }
@@ -112,8 +112,8 @@ template <typename T> [[nodiscard]] Biquad<T> rbj_peaking(T f0, T q, T gain_db) 
 template <typename T> [[nodiscard]] Biquad<T> rbj_lowshelf(T f0, T q, T gain_db) noexcept
 {
     const auto c = detail::rbj_common<T>(f0, q);
-    const T a = std::pow(T(10), gain_db / T(40));
-    const T sa = std::sqrt(a);
+    const T a = crd::math::pow(T(10), gain_db / T(40));
+    const T sa = crd::math::sqrt(a);
     const T ap1 = a + T(1), am1 = a - T(1);
     return detail::rbj_normalize<T>(a * (ap1 - am1 * c.cw + T(2) * sa * c.alpha), T(2) * a * (am1 - ap1 * c.cw),
                                     a * (ap1 - am1 * c.cw - T(2) * sa * c.alpha), ap1 + am1 * c.cw + T(2) * sa * c.alpha,
@@ -124,8 +124,8 @@ template <typename T> [[nodiscard]] Biquad<T> rbj_lowshelf(T f0, T q, T gain_db)
 template <typename T> [[nodiscard]] Biquad<T> rbj_highshelf(T f0, T q, T gain_db) noexcept
 {
     const auto c = detail::rbj_common<T>(f0, q);
-    const T a = std::pow(T(10), gain_db / T(40));
-    const T sa = std::sqrt(a);
+    const T a = crd::math::pow(T(10), gain_db / T(40));
+    const T sa = crd::math::sqrt(a);
     const T ap1 = a + T(1), am1 = a - T(1);
     return detail::rbj_normalize<T>(a * (ap1 + am1 * c.cw + T(2) * sa * c.alpha), T(-2) * a * (am1 + ap1 * c.cw),
                                     a * (ap1 + am1 * c.cw - T(2) * sa * c.alpha), ap1 - am1 * c.cw + T(2) * sa * c.alpha,

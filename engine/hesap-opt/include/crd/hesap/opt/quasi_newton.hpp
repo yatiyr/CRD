@@ -19,7 +19,7 @@
 #include <crd/hesap/opt/opt_types.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::hesap::opt
@@ -59,7 +59,7 @@ template <typename T>
         T mx = static_cast<T>(0);
         for (crd::usize i = 0; i < v.size(); ++i)
         {
-            const T a = std::fabs(v[i]);
+            const T a = crd::math::fabs(v[i]);
             mx = a > mx ? a : mx;
         }
         return mx;
@@ -131,7 +131,7 @@ template <typename T>
         T step0 = static_cast<T>(1);
         if (first_update)
         {
-            const T gnorm2 = std::sqrt(dn::dot<T>({g.data(), n}, {g.data(), n}));
+            const T gnorm2 = crd::math::sqrt(dn::dot<T>({g.data(), n}, {g.data(), n}));
             step0 = gnorm2 > static_cast<T>(0) ? static_cast<T>(1) / gnorm2 : static_cast<T>(1);
         }
 
@@ -162,7 +162,7 @@ template <typename T>
             step_norm_sq += s[i] * s[i];
         }
 
-        const T df = std::fabs(r.fx_new - fx);
+        const T df = crd::math::fabs(r.fx_new - fx);
         for (crd::usize i = 0; i < n; ++i)
         {
             x[i] = x_new[i];
@@ -228,9 +228,9 @@ template <typename T>
                 hy[i] = s[i] - acc; // w
             }
             const T wy = dn::dot<T>({hy.data(), n}, {y.data(), n});
-            const T wnorm = std::sqrt(dn::dot<T>({hy.data(), n}, {hy.data(), n}));
-            const T ynorm = std::sqrt(yy);
-            if (std::fabs(wy) > static_cast<T>(1e-8) * wnorm * ynorm) // SR1 skip safeguard
+            const T wnorm = crd::math::sqrt(dn::dot<T>({hy.data(), n}, {hy.data(), n}));
+            const T ynorm = crd::math::sqrt(yy);
+            if (crd::math::fabs(wy) > static_cast<T>(1e-8) * wnorm * ynorm) // SR1 skip safeguard
             {
                 const T inv = static_cast<T>(1) / wy;
                 for (crd::usize i = 0; i < n; ++i)
@@ -246,7 +246,7 @@ template <typename T>
         }
 
         const T x_norm = inf_norm({x, n});
-        const auto stop = check_convergence<T>(grad_norm, std::sqrt(step_norm_sq), df, x_norm, fx, opts);
+        const auto stop = check_convergence<T>(grad_norm, crd::math::sqrt(step_norm_sq), df, x_norm, fx, opts);
         if (stop.has_value())
         {
             status = *stop;

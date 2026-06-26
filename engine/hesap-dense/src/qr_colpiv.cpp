@@ -5,7 +5,7 @@
 #include <crd/math/simd/vec4d.hpp>
 #include <crd/math/simd/vec8f.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 #include <type_traits>
 
@@ -83,7 +83,7 @@ inline void cp_axpy(T* row, const T* col, T s, crd::usize len) noexcept
 template <typename T>
 inline T cp_nrm2(const T* a, crd::usize len) noexcept
 {
-    return std::sqrt(cp_dot<T>(a, a, len));
+    return crd::math::sqrt(cp_dot<T>(a, a, len));
 }
 
 } // namespace
@@ -140,7 +140,7 @@ void factor_qr_colpiv(QRColPiv<T, L>& qr, RealType<T> rcond)
         jpvt[j] = j;
     }
 
-    const T tol3z = std::sqrt(std::numeric_limits<T>::epsilon());
+    const T tol3z = crd::math::sqrt(std::numeric_limits<T>::epsilon());
 
     for (crd::usize k = 0; k < k_count; ++k)
     {
@@ -223,7 +223,7 @@ void factor_qr_colpiv(QRColPiv<T, L>& qr, RealType<T> rcond)
                 }
                 else
                 {
-                    vn1[j] = vn1[j] * std::sqrt(temp);
+                    vn1[j] = vn1[j] * crd::math::sqrt(temp);
                 }
             }
         }

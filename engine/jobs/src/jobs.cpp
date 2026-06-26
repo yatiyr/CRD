@@ -26,6 +26,7 @@ void init(const Config& cfg)
     wc.max_counters       = cfg.max_counters;
     wc.injection_capacity = cfg.injection_queue_capacity;
     wc.frame_arena_bytes  = cfg.frame_alloc_bytes;
+    wc.pcore_routing      = cfg.pcore_routing;
 
     [[maybe_unused]] const bool ok = g_pool.init(wc);
     CRD_ASSERT_MSG(ok, "crd::jobs::init: WorkerPool::init failed");
@@ -188,6 +189,11 @@ crd::u32 worker_index() noexcept
 crd::u32 num_workers() noexcept
 {
     return g_pool.num_threads();
+}
+
+bool is_pcore_routing() noexcept
+{
+    return g_pool.is_pcore_routing();
 }
 
 } // namespace crd::jobs

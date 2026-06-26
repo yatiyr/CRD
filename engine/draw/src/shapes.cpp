@@ -2,7 +2,7 @@
 
 #include <crd/draw/shapes.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 
 namespace crd::draw
 {
@@ -164,20 +164,20 @@ void sphere_wire_to(RenderBuffer& buf, crd::math::Vec3f center, crd::f32 radius,
     for (crd::u32 m = 0; m < nlong; ++m)
     {
         const crd::f32 phi = (static_cast<crd::f32>(m) / static_cast<crd::f32>(nlong)) * two_pi;
-        const crd::f32 cosp = std::cos(phi);
-        const crd::f32 sinp = std::sin(phi);
+        const crd::f32 cosp = crd::math::cos(phi);
+        const crd::f32 sinp = crd::math::sin(phi);
         for (crd::u32 t = 0; t < nlat; ++t)
         {
             const crd::f32 t0 = (static_cast<crd::f32>(t)        / static_cast<crd::f32>(nlat)) * pi;
             const crd::f32 t1 = (static_cast<crd::f32>(t + 1)    / static_cast<crd::f32>(nlat)) * pi;
             const crd::math::Vec3f p0{
-                center.x + radius * std::sin(t0) * cosp,
-                center.y + radius * std::cos(t0),
-                center.z + radius * std::sin(t0) * sinp};
+                center.x + radius * crd::math::sin(t0) * cosp,
+                center.y + radius * crd::math::cos(t0),
+                center.z + radius * crd::math::sin(t0) * sinp};
             const crd::math::Vec3f p1{
-                center.x + radius * std::sin(t1) * cosp,
-                center.y + radius * std::cos(t1),
-                center.z + radius * std::sin(t1) * sinp};
+                center.x + radius * crd::math::sin(t1) * cosp,
+                center.y + radius * crd::math::cos(t1),
+                center.z + radius * crd::math::sin(t1) * sinp};
             buf.add_line(DebugLine{p0, p1, packed, flags, width_px, lifetime_s});
         }
     }
@@ -186,14 +186,14 @@ void sphere_wire_to(RenderBuffer& buf, crd::math::Vec3f center, crd::f32 radius,
     for (crd::u32 r = 1; r < nlat; ++r)
     {
         const crd::f32 theta = (static_cast<crd::f32>(r) / static_cast<crd::f32>(nlat)) * pi;
-        const crd::f32 y     = center.y + radius * std::cos(theta);
-        const crd::f32 ring_r = radius * std::sin(theta);
+        const crd::f32 y     = center.y + radius * crd::math::cos(theta);
+        const crd::f32 ring_r = radius * crd::math::sin(theta);
         for (crd::u32 m = 0; m < nlong; ++m)
         {
             const crd::f32 phi0 = (static_cast<crd::f32>(m)     / static_cast<crd::f32>(nlong)) * two_pi;
             const crd::f32 phi1 = (static_cast<crd::f32>(m + 1) / static_cast<crd::f32>(nlong)) * two_pi;
-            const crd::math::Vec3f p0{center.x + ring_r * std::cos(phi0), y, center.z + ring_r * std::sin(phi0)};
-            const crd::math::Vec3f p1{center.x + ring_r * std::cos(phi1), y, center.z + ring_r * std::sin(phi1)};
+            const crd::math::Vec3f p0{center.x + ring_r * crd::math::cos(phi0), y, center.z + ring_r * crd::math::sin(phi0)};
+            const crd::math::Vec3f p1{center.x + ring_r * crd::math::cos(phi1), y, center.z + ring_r * crd::math::sin(phi1)};
             buf.add_line(DebugLine{p0, p1, packed, flags, width_px, lifetime_s});
         }
     }
@@ -212,10 +212,10 @@ namespace
 inline crd::math::Vec3f sphere_uv_vertex(crd::math::Vec3f center, crd::f32 radius,
                                           crd::f32 phi, crd::f32 theta) noexcept
 {
-    const crd::f32 sin_t = std::sin(theta);
-    return {center.x + radius * sin_t * std::cos(phi),
-            center.y + radius * std::cos(theta),
-            center.z + radius * sin_t * std::sin(phi)};
+    const crd::f32 sin_t = crd::math::sin(theta);
+    return {center.x + radius * sin_t * crd::math::cos(phi),
+            center.y + radius * crd::math::cos(theta),
+            center.z + radius * sin_t * crd::math::sin(phi)};
 }
 } // namespace
 
@@ -293,7 +293,7 @@ CapsuleFrame compute_capsule_frame(crd::math::Vec3f a, crd::math::Vec3f b) noexc
     }
     else
     {
-        f.length = std::sqrt(len2);
+        f.length = crd::math::sqrt(len2);
         f.axis   = {d.x / f.length, d.y / f.length, d.z / f.length};
         f.valid  = true;
     }
@@ -306,7 +306,7 @@ CapsuleFrame compute_capsule_frame(crd::math::Vec3f a, crd::math::Vec3f b) noexc
         seed.y * f.axis.z - seed.z * f.axis.y,
         seed.z * f.axis.x - seed.x * f.axis.z,
         seed.x * f.axis.y - seed.y * f.axis.x};
-    const crd::f32 r_len = std::sqrt(r.x * r.x + r.y * r.y + r.z * r.z);
+    const crd::f32 r_len = crd::math::sqrt(r.x * r.x + r.y * r.y + r.z * r.z);
     if (r_len > 0.0F) { r = {r.x / r_len, r.y / r_len, r.z / r_len}; }
     else              { r = {1.0F, 0.0F, 0.0F}; }
     f.right = r;
@@ -340,10 +340,10 @@ void capsule_wire_to(RenderBuffer& buf, crd::math::Vec3f a, crd::math::Vec3f b,
     {
         const crd::f32 t0 = (static_cast<crd::f32>(i)     / static_cast<crd::f32>(segments)) * two_pi;
         const crd::f32 t1 = (static_cast<crd::f32>(i + 1) / static_cast<crd::f32>(segments)) * two_pi;
-        const crd::math::Vec3f a0 = offset_along(a, radius, std::cos(t0), std::sin(t0), 0.0F);
-        const crd::math::Vec3f a1 = offset_along(a, radius, std::cos(t1), std::sin(t1), 0.0F);
-        const crd::math::Vec3f b0 = offset_along(b, radius, std::cos(t0), std::sin(t0), 0.0F);
-        const crd::math::Vec3f b1 = offset_along(b, radius, std::cos(t1), std::sin(t1), 0.0F);
+        const crd::math::Vec3f a0 = offset_along(a, radius, crd::math::cos(t0), crd::math::sin(t0), 0.0F);
+        const crd::math::Vec3f a1 = offset_along(a, radius, crd::math::cos(t1), crd::math::sin(t1), 0.0F);
+        const crd::math::Vec3f b0 = offset_along(b, radius, crd::math::cos(t0), crd::math::sin(t0), 0.0F);
+        const crd::math::Vec3f b1 = offset_along(b, radius, crd::math::cos(t1), crd::math::sin(t1), 0.0F);
         buf.add_line(DebugLine{a0, a1, packed, flags, width_px, lifetime_s});
         buf.add_line(DebugLine{b0, b1, packed, flags, width_px, lifetime_s});
     }
@@ -352,8 +352,8 @@ void capsule_wire_to(RenderBuffer& buf, crd::math::Vec3f a, crd::math::Vec3f b,
     for (crd::u32 i = 0; i < 4; ++i)
     {
         const crd::f32 t = (static_cast<crd::f32>(i) / 4.0F) * two_pi;
-        const crd::math::Vec3f a_pt = offset_along(a, radius, std::cos(t), std::sin(t), 0.0F);
-        const crd::math::Vec3f b_pt = offset_along(b, radius, std::cos(t), std::sin(t), 0.0F);
+        const crd::math::Vec3f a_pt = offset_along(a, radius, crd::math::cos(t), crd::math::sin(t), 0.0F);
+        const crd::math::Vec3f b_pt = offset_along(b, radius, crd::math::cos(t), crd::math::sin(t), 0.0F);
         buf.add_line(DebugLine{a_pt, b_pt, packed, flags, width_px, lifetime_s});
     }
 
@@ -373,8 +373,8 @@ void capsule_wire_to(RenderBuffer& buf, crd::math::Vec3f a, crd::math::Vec3f b,
         {
             const crd::f32 t0 = (static_cast<crd::f32>(i)     / static_cast<crd::f32>(hemi_segs)) * pi;
             const crd::f32 t1 = (static_cast<crd::f32>(i + 1) / static_cast<crd::f32>(hemi_segs)) * pi;
-            const crd::f32 c0 = std::cos(t0); const crd::f32 s0 = std::sin(t0);
-            const crd::f32 c1 = std::cos(t1); const crd::f32 s1 = std::sin(t1);
+            const crd::f32 c0 = crd::math::cos(t0); const crd::f32 s0 = crd::math::sin(t0);
+            const crd::f32 c1 = crd::math::cos(t1); const crd::f32 s1 = crd::math::sin(t1);
             // a-cap extends in -axis direction (away from b).
             const crd::math::Vec3f ap0{a.x + tangent.x * c0 * radius - f.axis.x * s0 * radius,
                                        a.y + tangent.y * c0 * radius - f.axis.y * s0 * radius,
@@ -409,12 +409,12 @@ void capsule_solid_to(RenderBuffer& buf, crd::math::Vec3f a, crd::math::Vec3f b,
     auto cap_vert = [&](crd::math::Vec3f base, crd::f32 phi, crd::f32 theta,
                         crd::f32 axial_sign) {
         // theta in [0, pi/2]: 0 = pole on axis_sign side, pi/2 = equator.
-        const crd::f32 s = std::sin(theta);
-        const crd::f32 c = std::cos(theta);
+        const crd::f32 s = crd::math::sin(theta);
+        const crd::f32 c = crd::math::cos(theta);
         const crd::math::Vec3f tangential{
-            (f.right.x * std::cos(phi) + f.forward.x * std::sin(phi)) * radius * s,
-            (f.right.y * std::cos(phi) + f.forward.y * std::sin(phi)) * radius * s,
-            (f.right.z * std::cos(phi) + f.forward.z * std::sin(phi)) * radius * s};
+            (f.right.x * crd::math::cos(phi) + f.forward.x * crd::math::sin(phi)) * radius * s,
+            (f.right.y * crd::math::cos(phi) + f.forward.y * crd::math::sin(phi)) * radius * s,
+            (f.right.z * crd::math::cos(phi) + f.forward.z * crd::math::sin(phi)) * radius * s};
         const crd::math::Vec3f axial{f.axis.x * radius * c * axial_sign,
                                      f.axis.y * radius * c * axial_sign,
                                      f.axis.z * radius * c * axial_sign};
@@ -480,7 +480,7 @@ DirFrame frame_from_direction(crd::math::Vec3f dir) noexcept
         seed.y * dir.z - seed.z * dir.y,
         seed.z * dir.x - seed.x * dir.z,
         seed.x * dir.y - seed.y * dir.x};
-    const crd::f32 r_len = std::sqrt(right.x * right.x + right.y * right.y + right.z * right.z);
+    const crd::f32 r_len = crd::math::sqrt(right.x * right.x + right.y * right.y + right.z * right.z);
     if (r_len > 0.0F) { right = {right.x / r_len, right.y / r_len, right.z / r_len}; }
     else              { right = {1.0F, 0.0F, 0.0F}; }
     const crd::math::Vec3f up{
@@ -497,7 +497,7 @@ void arrow_to(RenderBuffer& buf, crd::math::Vec3f origin, crd::math::Vec3f dir,
               PrimFlags flags, crd::f32 lifetime_s)
 {
     if (length <= 0.0F) return;
-    const crd::f32 dlen = std::sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
+    const crd::f32 dlen = crd::math::sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
     if (dlen <= 0.0F) return;
     const crd::math::Vec3f udir{dir.x / dlen, dir.y / dlen, dir.z / dlen};
 
@@ -523,8 +523,8 @@ void arrow_to(RenderBuffer& buf, crd::math::Vec3f origin, crd::math::Vec3f dir,
     for (int i = 0; i < 4; ++i)
     {
         const crd::f32 angle = static_cast<crd::f32>(i) * 1.57079632679489661923F; // pi/2
-        const crd::f32 c = std::cos(angle);
-        const crd::f32 s = std::sin(angle);
+        const crd::f32 c = crd::math::cos(angle);
+        const crd::f32 s = crd::math::sin(angle);
         corners[i] = {base.x + (frame.right.x * c + frame.up.x * s) * head_radius,
                       base.y + (frame.right.y * c + frame.up.y * s) * head_radius,
                       base.z + (frame.right.z * c + frame.up.z * s) * head_radius};
@@ -565,13 +565,13 @@ void arc_to(RenderBuffer& buf, crd::math::Vec3f center, crd::math::Vec3f axis,
 {
     if (radius <= 0.0F || segments < 1) return;
     // Normalize axis + zero_dir; compute perpendicular = axis x zero_dir.
-    const crd::f32 ax_len = std::sqrt(axis.x * axis.x + axis.y * axis.y + axis.z * axis.z);
+    const crd::f32 ax_len = crd::math::sqrt(axis.x * axis.x + axis.y * axis.y + axis.z * axis.z);
     if (ax_len <= 0.0F) return;
     const crd::math::Vec3f a{axis.x / ax_len, axis.y / ax_len, axis.z / ax_len};
     // Project zero_dir onto the plane perpendicular to a, then normalize.
     const crd::f32 zdota = zero_dir.x * a.x + zero_dir.y * a.y + zero_dir.z * a.z;
     crd::math::Vec3f r0{zero_dir.x - a.x * zdota, zero_dir.y - a.y * zdota, zero_dir.z - a.z * zdota};
-    const crd::f32 r0_len = std::sqrt(r0.x * r0.x + r0.y * r0.y + r0.z * r0.z);
+    const crd::f32 r0_len = crd::math::sqrt(r0.x * r0.x + r0.y * r0.y + r0.z * r0.z);
     if (r0_len <= 0.0F) return;
     r0 = {r0.x / r0_len, r0.y / r0_len, r0.z / r0_len};
     // perp = a x r0 (right-handed).
@@ -582,14 +582,14 @@ void arc_to(RenderBuffer& buf, crd::math::Vec3f center, crd::math::Vec3f axis,
     const crd::f32 packed_w = width_px;
     const crd::u32 packed_c = color.packed_rgba();
     const crd::f32 sweep = angle_max - angle_min;
-    crd::math::Vec3f prev{center.x + r0.x * radius * std::cos(angle_min) + r1.x * radius * std::sin(angle_min),
-                          center.y + r0.y * radius * std::cos(angle_min) + r1.y * radius * std::sin(angle_min),
-                          center.z + r0.z * radius * std::cos(angle_min) + r1.z * radius * std::sin(angle_min)};
+    crd::math::Vec3f prev{center.x + r0.x * radius * crd::math::cos(angle_min) + r1.x * radius * crd::math::sin(angle_min),
+                          center.y + r0.y * radius * crd::math::cos(angle_min) + r1.y * radius * crd::math::sin(angle_min),
+                          center.z + r0.z * radius * crd::math::cos(angle_min) + r1.z * radius * crd::math::sin(angle_min)};
     for (crd::u32 i = 1; i <= segments; ++i)
     {
         const crd::f32 t = angle_min + sweep * (static_cast<crd::f32>(i) / static_cast<crd::f32>(segments));
-        const crd::f32 ct = std::cos(t);
-        const crd::f32 st = std::sin(t);
+        const crd::f32 ct = crd::math::cos(t);
+        const crd::f32 st = crd::math::sin(t);
         const crd::math::Vec3f next{center.x + r0.x * radius * ct + r1.x * radius * st,
                                      center.y + r0.y * radius * ct + r1.y * radius * st,
                                      center.z + r0.z * radius * ct + r1.z * radius * st};

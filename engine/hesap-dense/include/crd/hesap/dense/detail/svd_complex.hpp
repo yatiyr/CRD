@@ -7,7 +7,7 @@
 #include <crd/memory/allocator.hpp>
 
 #include <algorithm>
-#include <cmath>
+#include <crd/math/cmath.hpp>
 
 namespace crd::hesap::dense::detail
 {
@@ -47,7 +47,7 @@ template <typename T>
     const T rx = ax / w;
     const T ry = ay / w;
     const T rz = az / w;
-    return w * std::sqrt(rx * rx + ry * ry + rz * rz);
+    return w * crd::math::sqrt(rx * rx + ry * ry + rz * rz);
 }
 
 // make_complex_householder — faithful port of LAPACK zlarfg. Generates a
@@ -73,7 +73,7 @@ template <typename C>
     {
         xnorm_sq += norm_sq(x[i]);
     }
-    const R xnorm = std::sqrt(xnorm_sq);
+    const R xnorm = crd::math::sqrt(xnorm_sq);
 
     if (xnorm == R{0} && alphi == R{0})
     {

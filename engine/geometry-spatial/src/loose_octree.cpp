@@ -6,7 +6,7 @@
 #include <crd/geometry/spatial/loose_octree.hpp>
 
 #include <algorithm>
-#include <cmath>
+#include <crd/math/cmath.hpp>
 
 namespace crd::geometry::spatial
 {
@@ -250,9 +250,9 @@ u8 LooseOctree<T>::target_depth_for(const Vec3<T>& extent) const noexcept
         if (fit_factor <= T{0}) { return 0; } // loosening=1 â‡’ classical octree, root only
         const T ratio = fit_factor * root_ext_axis / ext;
         if (!(ratio > T{1})) { return 0; } // root only
-        // d = floor(log2(ratio)). std::log2 is a boundary scalar use, OK in
+        // d = floor(log2(ratio)). crd::math::log2 is a boundary scalar use, OK in
         // builder code (geometry-spatial is not in the crd-no-std-math-check scope).
-        const f64 d_f = std::log2(static_cast<f64>(ratio));
+        const f64 d_f = crd::math::log2(static_cast<f64>(ratio));
         if (d_f >= static_cast<f64>(m_max_depth)) { return static_cast<i32>(m_max_depth); }
         return static_cast<i32>(d_f);
     };

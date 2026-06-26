@@ -24,7 +24,7 @@
 //   * `P1 = 73856093`, `P2 = 19349663`, `P3 = 83492791` (large primes).
 //   * `bucket_count` is **power-of-two** so the mod becomes `& (bucket_count-1)`.
 //   * Cell coords: `ix = floor(x / cell_size)` — signed-safe via
-//     `static_cast<i32>(std::floor)` to handle negative coords correctly.
+//     `static_cast<i32>(crd::math::floor)` to handle negative coords correctly.
 //
 // ── Object storage ────────────────────────────────────────────────────────
 //
@@ -109,6 +109,7 @@
 // ---------------------------------------------------------------------------
 
 #include <crd/containers/array.hpp>
+#include <crd/math/cmath.hpp>
 #include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
 #include <crd/geometry/primitives/is_finite.hpp>
@@ -335,7 +336,7 @@ private:
     // Hash function — Teschner 2003 §3.2.
     [[nodiscard]] crd::u32 hash_cell(crd::i32 ix, crd::i32 iy, crd::i32 iz) const noexcept;
 
-    // Cell coords from world position (signed-safe via std::floor).
+    // Cell coords from world position (signed-safe via crd::math::floor).
     void aabb_cell_range(const AABB3<T>& a, crd::i32& min_x, crd::i32& min_y, crd::i32& min_z,
                                               crd::i32& max_x, crd::i32& max_y, crd::i32& max_z) const noexcept;
 

@@ -16,7 +16,7 @@
 #include <crd/containers/span.hpp>
 #include <crd/core/types.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 
 namespace crd::hesap::opt
 {
@@ -29,7 +29,7 @@ template <typename T>
     T pen = static_cast<T>(0);
     for (crd::usize i = 0; i < ce.size(); ++i)
     {
-        pen += std::fabs(ce[i]);
+        pen += crd::math::fabs(ce[i]);
     }
     for (crd::usize i = 0; i < ci.size(); ++i)
     {
@@ -71,7 +71,7 @@ template <typename T>
         }
         else
         {
-            d += nu * std::fabs(jp);
+            d += nu * crd::math::fabs(jp);
         }
     }
     for (crd::usize i = 0; i < ci.size(); ++i)

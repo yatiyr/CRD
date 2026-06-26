@@ -24,7 +24,7 @@
 #include <crd/hesap/wavelet/families.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 
 namespace crd::hesap::wavelet
 {
@@ -39,7 +39,7 @@ template <typename T> [[nodiscard]] T shannon_entropy_cost(crd::containers::Cons
         const T e = s[i] * s[i];
         if (e > T(0))
         {
-            cost -= e * std::log(e);
+            cost -= e * crd::math::log(e);
         }
     }
     return cost;

@@ -31,7 +31,7 @@
 #include <crd/hesap/stats/philox.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::hesap::opt
@@ -145,8 +145,8 @@ template <typename T>
             const T d = fpop[k] - fmean;
             fvar += d * d;
         }
-        const T fstd = std::sqrt(fvar / static_cast<T>(np));
-        if (fstd <= de.atol + de.tol * std::fabs(fmean))
+        const T fstd = crd::math::sqrt(fvar / static_cast<T>(np));
+        if (fstd <= de.atol + de.tol * crd::math::fabs(fmean))
         {
             status = OptStatus::Success;
             ++gen;
@@ -196,7 +196,7 @@ template <typename T>
         return result;
     }
 
-    const crd::usize swarm = po.swarm > 0 ? po.swarm : 10 + 2 * static_cast<crd::usize>(std::sqrt(static_cast<T>(n)));
+    const crd::usize swarm = po.swarm > 0 ? po.swarm : 10 + 2 * static_cast<crd::usize>(crd::math::sqrt(static_cast<T>(n)));
     crd::containers::Array<T> x(alloc);
     crd::containers::Array<T> v(alloc);
     crd::containers::Array<T> pbest(alloc);
@@ -352,7 +352,7 @@ template <typename T>
             ++evals;
             const bool accept =
                 fc <= fcur || static_cast<T>(rng.next_f64()) <
-                                  std::exp((fcur - fc) / (t > static_cast<T>(1e-300) ? t : static_cast<T>(1e-300)));
+                                  crd::math::exp((fcur - fc) / (t > static_cast<T>(1e-300) ? t : static_cast<T>(1e-300)));
             if (accept)
             {
                 for (crd::usize i = 0; i < n; ++i)
@@ -513,7 +513,7 @@ template <typename T>
         OptResult<T> rl = local_min({cand.data(), n});
         const T fl = rl.fx;
         const bool accept = fl <= fcur || static_cast<T>(rng.next_f64()) <
-                                              std::exp((fcur - fl) / (bh.temperature > static_cast<T>(1e-300)
+                                              crd::math::exp((fcur - fl) / (bh.temperature > static_cast<T>(1e-300)
                                                                           ? bh.temperature
                                                                           : static_cast<T>(1e-300)));
         if (accept)

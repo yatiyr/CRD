@@ -19,7 +19,7 @@
 #include <crd/hesap/dense/matrix.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <numbers>
 
 namespace crd::hesap::dsp
@@ -51,7 +51,7 @@ template <typename T>
             T s = T(0);
             for (crd::usize j = 0; j < window_length; ++j)
             {
-                s += std::pow(x[j], static_cast<T>(k + l));
+                s += crd::math::pow(x[j], static_cast<T>(k + l));
             }
             Mtx(k, l) = s;
         }
@@ -69,7 +69,7 @@ template <typename T>
     }
     if (deriv <= polyorder)
     {
-        z[deriv] = fact / std::pow(delta, static_cast<T>(deriv));
+        z[deriv] = fact / crd::math::pow(delta, static_cast<T>(deriv));
     }
     dense::LU<T> lu(alloc, po1);
     dense::factor_lu<T, dense::Layout::RowMajor>(lu, Mtx);
@@ -115,12 +115,12 @@ template <typename T>
         }
         else if (std::abs(std::abs(t) - T(1) / (T(4) * beta)) < static_cast<T>(1e-9))
         {
-            v = (beta / std::sqrt(T(2))) *
-                ((T(1) + T(2) / pi) * std::sin(pi / (T(4) * beta)) + (T(1) - T(2) / pi) * std::cos(pi / (T(4) * beta)));
+            v = (beta / crd::math::sqrt(T(2))) *
+                ((T(1) + T(2) / pi) * crd::math::sin(pi / (T(4) * beta)) + (T(1) - T(2) / pi) * crd::math::cos(pi / (T(4) * beta)));
         }
         else
         {
-            const T num = std::sin(pi * t * (T(1) - beta)) + T(4) * beta * t * std::cos(pi * t * (T(1) + beta));
+            const T num = crd::math::sin(pi * t * (T(1) - beta)) + T(4) * beta * t * crd::math::cos(pi * t * (T(1) + beta));
             const T den = pi * t * (T(1) - (T(4) * beta * t) * (T(4) * beta * t));
             v = num / den;
         }
@@ -133,7 +133,7 @@ template <typename T>
     {
         e += h[i] * h[i];
     }
-    const T inv = T(1) / std::sqrt(e);
+    const T inv = T(1) / crd::math::sqrt(e);
     for (crd::usize i = 0; i < n; ++i)
     {
         h[i] *= inv;
@@ -158,12 +158,12 @@ template <typename T>
         T v;
         if (std::abs(std::abs(t) - T(1) / (T(2) * beta)) < static_cast<T>(1e-9))
         {
-            v = (pi / T(4)) * (std::sin(pi * t) / (pi * t)); // l'Hopital limit
+            v = (pi / T(4)) * (crd::math::sin(pi * t) / (pi * t)); // l'Hopital limit
         }
         else
         {
-            const T sinc = (std::abs(t) < static_cast<T>(1e-12)) ? T(1) : std::sin(pi * t) / (pi * t);
-            v = sinc * std::cos(pi * beta * t) / (T(1) - (T(2) * beta * t) * (T(2) * beta * t));
+            const T sinc = (std::abs(t) < static_cast<T>(1e-12)) ? T(1) : crd::math::sin(pi * t) / (pi * t);
+            v = sinc * crd::math::cos(pi * beta * t) / (T(1) - (T(2) * beta * t) * (T(2) * beta * t));
         }
         h[i] = v;
         h[n - 1 - i] = v;
@@ -173,7 +173,7 @@ template <typename T>
     {
         e += h[i] * h[i];
     }
-    const T inv = T(1) / std::sqrt(e);
+    const T inv = T(1) / crd::math::sqrt(e);
     for (crd::usize i = 0; i < n; ++i)
     {
         h[i] *= inv;

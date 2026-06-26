@@ -26,7 +26,7 @@
 #include <crd/hesap/opt/opt_types.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::hesap::opt
@@ -96,7 +96,7 @@ template <typename T>
     /* Function Body */
     half = static_cast<T>(.5);
     zero = static_cast<T>(0.);
-    twopi = std::atan(static_cast<T>(1.)) * static_cast<T>(8.);
+    twopi = crd::math::atan(static_cast<T>(1.)) * static_cast<T>(8.);
     delsq = *delta * *delta;
     iterc = 0;
     itermax = *n;
@@ -136,7 +136,7 @@ L20:
 L40:
     ++iterc;
     temp = delsq - ss;
-    bstep = temp / (ds + std::sqrt(ds * ds + dd * temp));
+    bstep = temp / (ds + crd::math::sqrt(ds * ds + dd * temp));
     goto L170;
 L50:
     dhd = zero;
@@ -231,7 +231,7 @@ L90:
         shs += step[i__] * hs[i__];
     }
     sgk = sg + shs;
-    angtest = sgk / std::sqrt(gg * delsq);
+    angtest = sgk / crd::math::sqrt(gg * delsq);
     if (angtest <= static_cast<T>(-.99))
     {
         goto L160;
@@ -239,7 +239,7 @@ L90:
 
     /* The alternative iteration: D, HD and scalar products. */
     ++iterc;
-    temp = std::sqrt(delsq * gg - sgk * sgk);
+    temp = crd::math::sqrt(delsq * gg - sgk * sgk);
     tempa = delsq / temp;
     tempb = sgk / temp;
     i__1 = *n;
@@ -273,8 +273,8 @@ L120:
     for (i__ = 1; i__ <= i__1; ++i__)
     {
         angle = static_cast<T>(i__) * temp;
-        cth = std::cos(angle);
-        sth = std::sin(angle);
+        cth = crd::math::cos(angle);
+        sth = crd::math::sin(angle);
         qnew = (sg + cf * cth) * cth + (dg + dhs * cth) * sth;
         if (qnew < qmin)
         {
@@ -306,8 +306,8 @@ L120:
     angle = temp * (static_cast<T>(isave) + angle);
 
     /* New STEP and HS; convergence test. */
-    cth = std::cos(angle);
-    sth = std::sin(angle);
+    cth = crd::math::cos(angle);
+    sth = crd::math::sin(angle);
     reduc = qbeg - (sg + cf * cth) * cth - (dg + dhs * cth) * sth;
     gg = zero;
     i__1 = *n;
@@ -423,7 +423,7 @@ inline void update(const int* n, const int* npt, T* bmat, T* zmat, int* idz, con
         {
             d__1 = zmat[*knew + jl * zmat_dim1];
             d__2 = zmat[*knew + j * zmat_dim1];
-            temp = std::sqrt(d__1 * d__1 + d__2 * d__2);
+            temp = crd::math::sqrt(d__1 * d__1 + d__2 * d__2);
             tempa = zmat[*knew + jl * zmat_dim1] / temp;
             tempb = zmat[*knew + j * zmat_dim1] / temp;
             i__2 = *npt;
@@ -466,7 +466,7 @@ inline void update(const int* n, const int* npt, T* bmat, T* zmat, int* idz, con
     iflag = 0;
     if (jl == 1)
     {
-        temp = std::sqrt(std::fabs(denom));
+        temp = crd::math::sqrt(crd::math::fabs(denom));
         tempb = tempa / temp;
         tempa = tau / temp;
         i__1 = *npt;
@@ -498,8 +498,8 @@ inline void update(const int* n, const int* npt, T* bmat, T* zmat, int* idz, con
         tempa = temp * *beta;
         tempb = temp * tau;
         temp = zmat[*knew + ja * zmat_dim1];
-        scala = one / std::sqrt(std::fabs(*beta) * temp * temp + tausq);
-        scalb_ = scala * std::sqrt(std::fabs(denom));
+        scala = one / crd::math::sqrt(crd::math::fabs(*beta) * temp * temp + tausq);
+        scalb_ = scala * crd::math::sqrt(crd::math::fabs(denom));
         i__1 = *npt;
         for (i__ = 1; i__ <= i__1; ++i__)
         {
@@ -597,7 +597,7 @@ template <typename T>
     half = static_cast<T>(.5);
     one = static_cast<T>(1.);
     zero = static_cast<T>(0.);
-    twopi = std::atan(one) * static_cast<T>(8.);
+    twopi = crd::math::atan(one) * static_cast<T>(8.);
     delsq = *delta * *delta;
     nptm = *npt - *n - 1;
 
@@ -672,7 +672,7 @@ template <typename T>
         sp += d__[i__] * gc[i__];
         dhd += d__[i__] * gd[i__];
     }
-    scale = *delta / std::sqrt(dd);
+    scale = *delta / crd::math::sqrt(dd);
     if (sp * dhd < zero)
     {
         scale = -scale;
@@ -682,7 +682,7 @@ template <typename T>
     {
         temp = one;
     }
-    tau = scale * (std::fabs(sp) + half * scale * std::fabs(dhd));
+    tau = scale * (crd::math::fabs(sp) + half * scale * crd::math::fabs(dhd));
     if (gg * delsq < tau * static_cast<T>(.01) * tau)
     {
         temp = one;
@@ -715,7 +715,7 @@ L80:
     {
         goto L160;
     }
-    denom = std::sqrt(temp);
+    denom = crd::math::sqrt(temp);
     i__1 = *n;
     for (i__ = 1; i__ <= i__1; ++i__)
     {
@@ -769,10 +769,10 @@ L80:
     for (i__ = 1; i__ <= i__2; ++i__)
     {
         angle = static_cast<T>(i__) * temp;
-        cth = std::cos(angle);
-        sth = std::sin(angle);
+        cth = crd::math::cos(angle);
+        sth = crd::math::sin(angle);
         tau = cf1 + (cf2 + cf4 * cth) * cth + (cf3 + cf5 * cth) * sth;
-        if (std::fabs(tau) > std::fabs(taumax))
+        if (crd::math::fabs(tau) > crd::math::fabs(taumax))
         {
             taumax = tau;
             isave = i__;
@@ -802,8 +802,8 @@ L80:
     angle = temp * (static_cast<T>(isave) + step);
 
     /* New D and GD; convergence test. */
-    cth = std::cos(angle);
-    sth = std::sin(angle);
+    cth = crd::math::cos(angle);
+    sth = crd::math::sin(angle);
     tau = cf1 + (cf2 + cf4 * cth) * cth + (cf3 + cf5 * cth) * sth;
     i__2 = *n;
     for (i__ = 1; i__ <= i__2; ++i__)
@@ -812,7 +812,7 @@ L80:
         gd[i__] = cth * gd[i__] + sth * w[i__];
         s[i__] = gc[i__] + gd[i__];
     }
-    if (std::fabs(tau) <= std::fabs(taubeg) * static_cast<T>(1.1))
+    if (crd::math::fabs(tau) <= crd::math::fabs(taubeg) * static_cast<T>(1.1))
     {
         goto L160;
     }
@@ -883,7 +883,7 @@ template <typename T>
     quart = static_cast<T>(.25);
     two = static_cast<T>(2.);
     zero = static_cast<T>(0.);
-    twopi = std::atan(one) * static_cast<T>(8.);
+    twopi = crd::math::atan(one) * static_cast<T>(8.);
     nptm = *npt - *n - 1;
     ksav = 0;
     tempa = zero;
@@ -976,7 +976,7 @@ L70:
     {
         return Rc::RoundoffLimited;
     }
-    temp = one / std::sqrt(ssden);
+    temp = one / crd::math::sqrt(ssden);
     xoptd = zero;
     xopts = zero;
     i__2 = *n;
@@ -1168,8 +1168,8 @@ L70:
     for (i__ = 1; i__ <= i__1; ++i__)
     {
         angle = static_cast<T>(i__) * temp;
-        par[1] = std::cos(angle);
-        par[2] = std::sin(angle);
+        par[1] = crd::math::cos(angle);
+        par[2] = crd::math::sin(angle);
         for (j = 4; j <= 8; j += 2)
         {
             par[j - 1] = par[1] * par[j - 3] - par[2] * par[j - 2];
@@ -1181,7 +1181,7 @@ L70:
         {
             sum += denex[j - 1] * par[j - 1];
         }
-        if (std::fabs(sum) > std::fabs(denmax))
+        if (crd::math::fabs(sum) > crd::math::fabs(denmax))
         {
             denmax = sum;
             isave = i__;
@@ -1210,8 +1210,8 @@ L70:
     angle = temp * (static_cast<T>(isave) + step);
 
     /* New denominator parameters, VLAG and D; convergence test. */
-    par[1] = std::cos(angle);
-    par[2] = std::sin(angle);
+    par[1] = crd::math::cos(angle);
+    par[2] = crd::math::sin(angle);
     for (j = 4; j <= 8; j += 2)
     {
         par[j - 1] = par[1] * par[j - 3] - par[2] * par[j - 2];
@@ -1255,7 +1255,7 @@ L70:
     {
         densav = densav >= denold ? densav : denold;
     }
-    if (std::fabs(denmax) <= std::fabs(densav) * static_cast<T>(1.1))
+    if (crd::math::fabs(denmax) <= crd::math::fabs(densav) * static_cast<T>(1.1))
     {
         goto L340;
     }
@@ -1435,7 +1435,7 @@ template <typename T, typename Calfun>
     /* The initialization procedure: the next initial point's displacement goes into XPT(NF, ·). */
     rhosq = *rhobeg * *rhobeg;
     recip = one / rhosq;
-    reciq = std::sqrt(half) / rhosq;
+    reciq = crd::math::sqrt(half) / rhosq;
     nf = 0;
 L50:
     nfm = nf;
@@ -1583,7 +1583,7 @@ L100:
         dsq += d__1 * d__1;
     }
     d__1 = delta;
-    d__2 = std::sqrt(dsq);
+    d__2 = crd::math::sqrt(dsq);
     dnorm = d__1 <= d__2 ? d__1 : d__2;
     if (dnorm < half * rho)
     {
@@ -1811,7 +1811,7 @@ L120:
             goto L530;
         }
         temp = one + alpha * beta / (d__1 * d__1);
-        if (std::fabs(temp) <= static_cast<T>(.8))
+        if (crd::math::fabs(temp) <= static_cast<T>(.8))
         {
             rc2 = bigden<T>(n, npt, &xopt[1], &xpt[xpt_offset], &bmat[bmat_offset], &zmat[zmat_offset], &idz, ndim,
                             &kopt, &knew, &d__[1], &w[1], &vlag[1], &beta, &xnew[1], &w[*ndim + 1], &w[*ndim * 6 + 1]);
@@ -1889,7 +1889,7 @@ L310:
     diff = f - fopt - vquad;
     diffc = diffb;
     diffb = diffa;
-    diffa = std::fabs(diff);
+    diffa = crd::math::fabs(diff);
     if (dnorm > rho)
     {
         nfsav = nf;
@@ -1974,7 +1974,7 @@ L310:
         }
         d__2 = vlag[k];
         d__1 = beta * hdiag + d__2 * d__2;
-        temp = std::fabs(d__1);
+        temp = crd::math::fabs(d__1);
         distsq = zero;
         i__2 = *n;
         for (j = 1; j <= i__2; ++j)
@@ -2044,7 +2044,7 @@ L410:
     /* Possibly replace the model by the least-Frobenius-norm interpolant (the ITEST mechanism). */
     if (ksave == 0 && delta == rho)
     {
-        if (std::fabs(ratio) > static_cast<T>(.01))
+        if (crd::math::fabs(ratio) > static_cast<T>(.01))
         {
             itest = 0;
         }
@@ -2152,7 +2152,7 @@ L460:
     /* KNEW > 0 ⇒ set DSTEP and go generate a "model step". */
     if (knew > 0)
     {
-        d__2 = tenth * std::sqrt(distsq);
+        d__2 = tenth * crd::math::sqrt(distsq);
         d__3 = half * delta;
         d__1 = d__2 <= d__3 ? d__2 : d__3;
         dstep = d__1 >= rho ? d__1 : rho;
@@ -2180,7 +2180,7 @@ L490:
         }
         else if (ratio <= static_cast<T>(250.))
         {
-            rho = std::sqrt(ratio) * rhoend;
+            rho = crd::math::sqrt(ratio) * rhoend;
         }
         else
         {

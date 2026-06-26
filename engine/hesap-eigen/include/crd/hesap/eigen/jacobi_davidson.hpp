@@ -38,7 +38,7 @@
 #include <crd/hesap/linear_op.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 #include <type_traits>
 #include <utility>
@@ -369,7 +369,7 @@ template <typename T>
             }
         }
         const R rnorm = dn::nrm2<T>({r.data(), n});
-        const R sc = std::fabs(theta) > R{1} ? std::fabs(theta) : R{1};
+        const R sc = crd::math::fabs(theta) > R{1} ? crd::math::fabs(theta) : R{1};
 
         if (rnorm / sc <= tol)
         {
@@ -384,7 +384,7 @@ template <typename T>
             R vmax = R{0};
             for (crd::u32 i = 0; i < n; ++i)
             {
-                const R mv = std::fabs(static_cast<R>(u[i]));
+                const R mv = crd::math::fabs(static_cast<R>(u[i]));
                 if (mv > vmax)
                 {
                     vmax = mv;

@@ -5,7 +5,7 @@
 
 #include <crd/hesap/opt/opt_types.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <optional>
 
 namespace crd::hesap::opt
@@ -25,7 +25,7 @@ template <typename T>
     {
         return OptStatus::Success;
     }
-    if (opts.func_tol > static_cast<T>(0) && df <= opts.func_tol * (static_cast<T>(1) + std::fabs(fx)))
+    if (opts.func_tol > static_cast<T>(0) && df <= opts.func_tol * (static_cast<T>(1) + crd::math::fabs(fx)))
     {
         return OptStatus::Success; // objective flattened out
     }

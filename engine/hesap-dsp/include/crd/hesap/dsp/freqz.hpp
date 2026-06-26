@@ -16,7 +16,7 @@
 #include <crd/hesap/dsp/polynomial.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <numbers>
 
 namespace crd::hesap::dsp
@@ -36,7 +36,7 @@ void freqz(const TransferFunction<T>& tf, crd::usize worN, crd::containers::Arra
     {
         const T wi = span * static_cast<T>(i) / static_cast<T>(worN);
         w[i] = wi;
-        const Complex<T> zinv{std::cos(wi), -std::sin(wi)}; // e^{-jw}
+        const Complex<T> zinv{crd::math::cos(wi), -crd::math::sin(wi)}; // e^{-jw}
         const Complex<T> num = poly_eval_negpow<T>(crd::containers::ConstSpan<T>(tf.b.data(), tf.b.size()), zinv);
         const Complex<T> den = tf.a.empty()
                                    ? Complex<T>{T(1), T(0)}
@@ -62,7 +62,7 @@ void zpk_freqz(const Zpk<T>& zpk, crd::usize worN, crd::containers::Array<T>& w,
     {
         const T wi = span * static_cast<T>(i) / static_cast<T>(worN);
         w[i] = wi;
-        const Complex<T> zinv{std::cos(wi), -std::sin(wi)}; // e^{-jw}
+        const Complex<T> zinv{crd::math::cos(wi), -crd::math::sin(wi)}; // e^{-jw}
         Complex<T> num{zpk.k, T(0)};
         for (crd::usize j = 0; j < zpk.z.size(); ++j)
         {
@@ -96,8 +96,8 @@ void sosfreqz(const SecondOrderSections<T>& sos, crd::usize worN, crd::container
     {
         const T wi = span * static_cast<T>(i) / static_cast<T>(worN);
         w[i] = wi;
-        const Complex<T> zi{std::cos(wi), -std::sin(wi)};
-        const Complex<T> zi2{std::cos(T(2) * wi), -std::sin(T(2) * wi)};
+        const Complex<T> zi{crd::math::cos(wi), -crd::math::sin(wi)};
+        const Complex<T> zi2{crd::math::cos(T(2) * wi), -crd::math::sin(T(2) * wi)};
         Complex<T> acc{T(1), T(0)};
         for (crd::usize s = 0; s < sos.sections.size(); ++s)
         {
@@ -145,7 +145,7 @@ void group_delay(const TransferFunction<T>& tf, crd::usize worN, crd::containers
     {
         const T wi = pi * static_cast<T>(i) / static_cast<T>(worN);
         w[i] = wi;
-        const Complex<T> zi{std::cos(wi), -std::sin(wi)};
+        const Complex<T> zi{crd::math::cos(wi), -crd::math::sin(wi)};
         const T db = darg(crd::containers::ConstSpan<T>(tf.b.data(), tf.b.size()), zi);
         const T da = tf.a.empty() ? T(0) : darg(crd::containers::ConstSpan<T>(tf.a.data(), tf.a.size()), zi);
         gd[i] = -(db - da);

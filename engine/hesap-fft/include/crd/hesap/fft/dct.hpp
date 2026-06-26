@@ -25,7 +25,7 @@
 #include <crd/hesap/fft/real_fft.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 
 namespace crd::hesap::fft
 {
@@ -49,8 +49,8 @@ public:
         for (crd::usize k = 0; k <= n; ++k)
         {
             const double th = pi * static_cast<double>(k) / (2.0 * static_cast<double>(n)); // θ_k = πk/2N
-            m_cos[k] = static_cast<T>(std::cos(th));
-            m_sin[k] = static_cast<T>(std::sin(th));
+            m_cos[k] = static_cast<T>(crd::math::cos(th));
+            m_sin[k] = static_cast<T>(crd::math::sin(th));
         }
     }
 
@@ -192,7 +192,7 @@ public:
             for (crd::usize nn = 0; nn < n; ++nn)
             {
                 acc += static_cast<double>(x[nn]) *
-                       std::cos(pi * static_cast<double>(2 * nn + 1) * static_cast<double>(k) / (2.0 * static_cast<double>(n)));
+                       crd::math::cos(pi * static_cast<double>(2 * nn + 1) * static_cast<double>(k) / (2.0 * static_cast<double>(n)));
             }
             y[k] = static_cast<T>(2.0 * acc);
         }
@@ -208,7 +208,7 @@ public:
             for (crd::usize nn = 1; nn < n; ++nn)
             {
                 acc += static_cast<double>(x[nn]) *
-                       std::cos(pi * static_cast<double>(nn) * static_cast<double>(2 * k + 1) / (2.0 * static_cast<double>(n)));
+                       crd::math::cos(pi * static_cast<double>(nn) * static_cast<double>(2 * k + 1) / (2.0 * static_cast<double>(n)));
             }
             y[k] = static_cast<T>(static_cast<double>(x[0]) + 2.0 * acc);
         }
@@ -224,7 +224,7 @@ public:
             for (crd::usize nn = 0; nn < n; ++nn)
             {
                 acc += static_cast<double>(x[nn]) *
-                       std::sin(pi * static_cast<double>(2 * nn + 1) * static_cast<double>(k + 1) / (2.0 * static_cast<double>(n)));
+                       crd::math::sin(pi * static_cast<double>(2 * nn + 1) * static_cast<double>(k + 1) / (2.0 * static_cast<double>(n)));
             }
             y[k] = static_cast<T>(2.0 * acc);
         }
@@ -240,7 +240,7 @@ public:
             for (crd::usize nn = 0; nn + 1 < n; ++nn)
             {
                 acc += static_cast<double>(x[nn]) *
-                       std::sin(pi * static_cast<double>(nn + 1) * static_cast<double>(2 * k + 1) /
+                       crd::math::sin(pi * static_cast<double>(nn + 1) * static_cast<double>(2 * k + 1) /
                                 (2.0 * static_cast<double>(n)));
             }
             const double sgn = (k % 2 == 0) ? 1.0 : -1.0;

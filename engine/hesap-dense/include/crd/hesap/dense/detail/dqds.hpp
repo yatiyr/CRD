@@ -4,7 +4,7 @@
 #include <crd/hesap/dense/detail/sturm_count.hpp>
 
 #include <algorithm>
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::hesap::dense::detail
@@ -357,8 +357,8 @@ inline void dlasq4(int i0, int n0, Z1<R> z, int pp, int n0in, R dmin, R dmin1, R
         // No eigenvalues deflated.
         if (dmin == dn || dmin == dn1)
         {
-            b1 = std::sqrt(z[nn - 3]) * std::sqrt(z[nn - 5]);
-            b2 = std::sqrt(z[nn - 7]) * std::sqrt(z[nn - 9]);
+            b1 = crd::math::sqrt(z[nn - 3]) * crd::math::sqrt(z[nn - 5]);
+            b2 = crd::math::sqrt(z[nn - 7]) * crd::math::sqrt(z[nn - 9]);
             a2 = z[nn - 7] + z[nn - 5];
 
             if (dmin == dn && dmin1 == dn1)
@@ -449,7 +449,7 @@ inline void dlasq4(int i0, int n0, Z1<R> z, int pp, int n0in, R dmin, R dmin1, R
                 a2 = cnst3 * a2;
                 if (a2 < cnst1)
                 {
-                    s = gam * (R{1} - std::sqrt(a2)) / (R{1} + a2);
+                    s = gam * (R{1} - crd::math::sqrt(a2)) / (R{1} + a2);
                 }
             }
         }
@@ -494,7 +494,7 @@ inline void dlasq4(int i0, int n0, Z1<R> z, int pp, int n0in, R dmin, R dmin1, R
             }
             if (a2 < cnst1)
             {
-                s = gam * (R{1} - std::sqrt(a2)) / (R{1} + a2);
+                s = gam * (R{1} - crd::math::sqrt(a2)) / (R{1} + a2);
             }
         }
         else
@@ -547,7 +547,7 @@ inline void dlasq4(int i0, int n0, Z1<R> z, int pp, int n0in, R dmin, R dmin1, R
                     }
                 }
             }
-            b2 = std::sqrt(cnst3 * b2);
+            b2 = crd::math::sqrt(cnst3 * b2);
             a2 = dmin1 / (R{1} + b2 * b2);
             gap2 = half * dmin2 - a2;
             if (gap2 > R{0} && gap2 > b2 * a2)
@@ -600,9 +600,9 @@ inline void dlasq4(int i0, int n0, Z1<R> z, int pp, int n0in, R dmin, R dmin1, R
                     }
                 }
             }
-            b2 = std::sqrt(cnst3 * b2);
+            b2 = crd::math::sqrt(cnst3 * b2);
             a2 = dmin2 / (R{1} + b2 * b2);
-            gap2 = z[nn - 7] + z[nn - 9] - std::sqrt(z[nn - 11]) * std::sqrt(z[nn - 9]) - a2;
+            gap2 = z[nn - 7] + z[nn - 9] - crd::math::sqrt(z[nn - 11]) * crd::math::sqrt(z[nn - 9]) - a2;
             if (gap2 > R{0} && gap2 > b2 * a2)
             {
                 s = std::max(s, a2 * (R{1} - cnst2 * a2 * (b2 / gap2) * b2));
@@ -708,11 +708,11 @@ inline void dlasq3(int i0, int& n0, Z1<R> z, int& pp, R& dmin, R& sigma, R& desi
             R s = z[nn - 3] * (z[nn - 5] / t);
             if (s <= t)
             {
-                s = z[nn - 3] * (z[nn - 5] / (t * (R{1} + std::sqrt(R{1} + s / t))));
+                s = z[nn - 3] * (z[nn - 5] / (t * (R{1} + crd::math::sqrt(R{1} + s / t))));
             }
             else
             {
-                s = z[nn - 3] * (z[nn - 5] / (t + std::sqrt(t) * std::sqrt(t + s)));
+                s = z[nn - 3] * (z[nn - 5] / (t + crd::math::sqrt(t) * crd::math::sqrt(t + s)));
             }
             t = z[nn - 7] + (s + z[nn - 5]);
             z[nn - 3] = z[nn - 3] * (z[nn - 7] / t);
@@ -908,11 +908,11 @@ template <typename R>
             R s = z[3] * (z[2] / t);
             if (s <= t)
             {
-                s = z[3] * (z[2] / (t * (R{1} + std::sqrt(R{1} + s / t))));
+                s = z[3] * (z[2] / (t * (R{1} + crd::math::sqrt(R{1} + s / t))));
             }
             else
             {
-                s = z[3] * (z[2] / (t + std::sqrt(t) * std::sqrt(t + s)));
+                s = z[3] * (z[2] / (t + crd::math::sqrt(t) * crd::math::sqrt(t + s)));
             }
             t = z[1] + (s + z[2]);
             z[3] = z[3] * (z[1] / t);
@@ -1194,7 +1194,7 @@ template <typename R>
         }
 
         // Put -(initial shift) into DMIN.
-        dmin = -std::max(R{0}, qmin - two * std::sqrt(qmin) * std::sqrt(emax));
+        dmin = -std::max(R{0}, qmin - two * crd::math::sqrt(qmin) * crd::math::sqrt(emax));
 
         const int nbig = 100 * (n0 - i0 + 1);
         bool submatrix_done = false;
@@ -1494,7 +1494,7 @@ inline void tridiag_eigenvalues_dqds(const R* d_in, const R* e_in, int n, R* e_w
     e_work[n - 1] = R{0};
     e2_work[n - 1] = R{0};
 
-    const R spltol = std::sqrt(std::numeric_limits<R>::epsilon());
+    const R spltol = crd::math::sqrt(std::numeric_limits<R>::epsilon());
     const int nsplit = tridiag_split(d_in, e_work, e2_work, n, spltol, isplit);
 
     int out = 0;

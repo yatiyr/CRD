@@ -20,7 +20,7 @@
 #include <crd/hesap/fft/fft.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <numbers>
 
 namespace crd::hesap::dsp
@@ -34,7 +34,7 @@ template <typename T> [[nodiscard]] T np_sinc(T x) noexcept
         return T(1);
     }
     const T px = static_cast<T>(std::numbers::pi_v<double>) * x;
-    return std::sin(px) / px;
+    return crd::math::sin(px) / px;
 }
 
 // firwin core. `cutoff` = band-edge frequencies normalized to Nyquist (each in (0,1), strictly increasing).
@@ -97,7 +97,7 @@ template <typename T>
         for (crd::usize i = 0; i < numtaps; ++i)
         {
             const T m = static_cast<T>(i) - alpha;
-            s += h[i] * std::cos(pi * m * scale_freq);
+            s += h[i] * crd::math::cos(pi * m * scale_freq);
         }
         for (crd::usize i = 0; i < numtaps; ++i)
         {
@@ -159,7 +159,7 @@ template <typename T>
         const T x = static_cast<T>(k) / static_cast<T>(nfreqs - 1); // x in [0,1], nyq=1
         const T fx = interp(x);
         const T phase = -alpha * pi * x; // linear-phase shift
-        spec[k] = Complex<T>{fx * std::cos(phase), fx * std::sin(phase)};
+        spec[k] = Complex<T>{fx * crd::math::cos(phase), fx * crd::math::sin(phase)};
     }
     for (crd::usize k = 1; k < nfreqs - 1; ++k) // Hermitian-extend the upper half
     {

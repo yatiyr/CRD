@@ -20,7 +20,7 @@
 #include <crd/hesap/dsp/fir.hpp> // np_sinc
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <numbers>
 
 namespace crd::hesap::dsp
@@ -91,7 +91,7 @@ template <typename T>
                 }
                 else
                 {
-                    v += m * std::cos(static_cast<T>(i) * pi * edge) / (pi * static_cast<T>(i)) / (pi * static_cast<T>(i));
+                    v += m * crd::math::cos(static_cast<T>(i) * pi * edge) / (pi * static_cast<T>(i)) / (pi * static_cast<T>(i));
                 }
                 return v;
             };

@@ -23,7 +23,7 @@
 #include <crd/hesap/fft/real_fft.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <numbers>
 
 namespace crd::hesap::dsp
@@ -63,7 +63,7 @@ template <typename T>
     for (crd::usize nidx = 0; nidx < m; ++nidx)
     {
         const double centered = (static_cast<double>(m) - 1.0) / 2.0 - static_cast<double>(nidx);
-        a.at(nidx, nidx) = static_cast<T>(centered * centered * std::cos(2.0 * pi * bigW));
+        a.at(nidx, nidx) = static_cast<T>(centered * centered * crd::math::cos(2.0 * pi * bigW));
         if (nidx + 1 < m)
         {
             const double off =
@@ -88,7 +88,7 @@ template <typename T>
         sinc[0] = static_cast<T>(2.0 * bw);
         for (crd::usize k = 1; k < m; ++k)
         {
-            sinc[k] = static_cast<T>(std::sin(2.0 * pi * bw * static_cast<double>(k)) /
+            sinc[k] = static_cast<T>(crd::math::sin(2.0 * pi * bw * static_cast<double>(k)) /
                                      (pi * static_cast<double>(k)));
         }
     }

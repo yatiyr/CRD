@@ -20,7 +20,7 @@
 #include <crd/hesap/stats/normal.hpp>
 #include <crd/hesap/stats/philox.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <numbers>
 
 namespace crd::hesap::comms
@@ -40,8 +40,8 @@ void awgn_add(crd::containers::Span<Complex<T>> x, T sigma, crd::hesap::stats::N
 // σ per complex dimension for a target SNR (dB), given the average signal power. SNR = signal_power/(2σ²).
 template <typename T> [[nodiscard]] T noise_sigma_for_snr(T signal_power, T snr_db) noexcept
 {
-    const T snr = std::pow(T(10), snr_db / T(10));
-    return std::sqrt(signal_power / (T(2) * snr));
+    const T snr = crd::math::pow(T(10), snr_db / T(10));
+    return crd::math::sqrt(signal_power / (T(2) * snr));
 }
 
 // Average power of a complex signal.
@@ -71,8 +71,8 @@ void rayleigh_flat(crd::containers::Span<Complex<T>> x, crd::hesap::stats::Norma
 template <typename T>
 void rician_flat(crd::containers::Span<Complex<T>> x, T k_factor, crd::hesap::stats::NormalSampler& g) noexcept
 {
-    const T los = std::sqrt(k_factor / (k_factor + T(1)));
-    const T sca = std::sqrt(T(1) / (T(2) * (k_factor + T(1))));
+    const T los = crd::math::sqrt(k_factor / (k_factor + T(1)));
+    const T sca = crd::math::sqrt(T(1) / (T(2) * (k_factor + T(1))));
     for (crd::usize i = 0; i < x.size(); ++i)
     {
         const Complex<T> gain{los + sca * static_cast<T>(g.next()), sca * static_cast<T>(g.next())};
@@ -86,7 +86,7 @@ template <typename T> void add_cfo(crd::containers::Span<Complex<T>> x, T dphi, 
     for (crd::usize i = 0; i < x.size(); ++i)
     {
         const T ph = phi0 + dphi * static_cast<T>(i);
-        const T c = std::cos(ph), s = std::sin(ph);
+        const T c = crd::math::cos(ph), s = crd::math::sin(ph);
         x[i] = Complex<T>{x[i].re * c - x[i].im * s, x[i].re * s + x[i].im * c};
     }
 }

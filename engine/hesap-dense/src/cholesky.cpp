@@ -7,7 +7,7 @@
 #include <crd/hesap/dense/detail/syrk_microkernel.hpp>
 #include <crd/jobs/jobs.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <type_traits>
 
 namespace crd::hesap::dense
@@ -21,7 +21,7 @@ constexpr crd::usize kBlockSize = 64;
 template <typename T>
 inline T sqrt_value(T x) noexcept
 {
-    return std::sqrt(x);
+    return crd::math::sqrt(x);
 }
 
 // SIMD dot over contiguous [0, len) (2-accumulator, slim for small len).
@@ -75,7 +75,7 @@ crd::usize unblocked_cholesky_full(T* data, crd::usize n, crd::usize ld)
         {
             return j + 1;
         }
-        const T diag = std::sqrt(diag_val);
+        const T diag = crd::math::sqrt(diag_val);
         row_j[j] = diag;
         const T inv_diag = T{1} / diag;
 

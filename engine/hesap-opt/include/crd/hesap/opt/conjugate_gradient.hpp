@@ -27,7 +27,7 @@
 #include <crd/hesap/opt/wolfe_line_search.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::hesap::opt
@@ -74,7 +74,7 @@ template <typename T>
         T mx = static_cast<T>(0);
         for (crd::usize i = 0; i < v.size(); ++i)
         {
-            const T a = std::fabs(v[i]);
+            const T a = crd::math::fabs(v[i]);
             mx = a > mx ? a : mx;
         }
         return mx;
@@ -142,7 +142,7 @@ template <typename T>
         T step0;
         if (restarted)
         {
-            const T gnorm2 = std::sqrt(gg);
+            const T gnorm2 = crd::math::sqrt(gg);
             step0 = gnorm2 > static_cast<T>(0) ? static_cast<T>(1) / gnorm2 : static_cast<T>(1);
         }
         else
@@ -198,18 +198,18 @@ template <typename T>
             beta = beta > static_cast<T>(0) ? beta : static_cast<T>(0);
             break;
         case CgVariant::HestenesStiefel:
-            beta = std::fabs(py) > tiny ? gy / py : static_cast<T>(0);
+            beta = crd::math::fabs(py) > tiny ? gy / py : static_cast<T>(0);
             beta = beta > static_cast<T>(0) ? beta : static_cast<T>(0);
             break;
         case CgVariant::DaiYuan:
         default:
-            beta = std::fabs(py) > tiny ? gg_new / py : static_cast<T>(0);
+            beta = crd::math::fabs(py) > tiny ? gg_new / py : static_cast<T>(0);
             break;
         }
 
         // Restarts → β = 0 (pure steepest descent next step): Powell's test (loss of conjugacy: gₖ₊₁ not ~orthogonal
         // to gₖ) + the classic n-step periodic restart.
-        const bool powell = std::fabs(g_new_dot_g) >= static_cast<T>(0.2) * gg_new;
+        const bool powell = crd::math::fabs(g_new_dot_g) >= static_cast<T>(0.2) * gg_new;
         const bool n_step = ((it + 1) % n) == 0;
         if (powell || n_step)
         {
@@ -217,7 +217,7 @@ template <typename T>
         }
 
         // Accept the step and form the next direction p ← −gₖ₊₁ + β·pₖ.
-        const T df = std::fabs(r.fx_new - fx);
+        const T df = crd::math::fabs(r.fx_new - fx);
         for (crd::usize i = 0; i < n; ++i)
         {
             x[i] = x_new[i];
@@ -232,7 +232,7 @@ template <typename T>
         prev_dphi0 = dphi0;
 
         const T    x_norm = inf_norm({x, n});
-        const auto stop = check_convergence<T>(grad_norm, std::sqrt(step_norm_sq), df, x_norm, fx, opts);
+        const auto stop = check_convergence<T>(grad_norm, crd::math::sqrt(step_norm_sq), df, x_norm, fx, opts);
         if (stop.has_value())
         {
             status = *stop;

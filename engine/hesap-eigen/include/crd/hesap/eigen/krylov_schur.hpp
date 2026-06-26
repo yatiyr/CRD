@@ -25,7 +25,7 @@
 #include <crd/hesap/linear_op.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 #include <type_traits>
 
@@ -50,7 +50,7 @@ template <typename T>
         const T q = half * half + b * c; // < 0 for a complex-conjugate pair (standardized block)
         if (q < T{0})
         {
-            return crd::hesap::Complex<T>{re, std::sqrt(-q)}; // representative = the +imag member
+            return crd::hesap::Complex<T>{re, crd::math::sqrt(-q)}; // representative = the +imag member
         }
         size = 1; // degenerate: treat as 1×1
     }
@@ -424,7 +424,7 @@ template <typename T>
         {
             xn2 += xre[i] * xre[i] + xim[i] * xim[i];
         }
-        const R xn = std::sqrt(xn2);
+        const R xn = crd::math::sqrt(xn2);
         if (xn > R{0})
         {
             const T inv = static_cast<T>(R{1} / xn);
@@ -442,7 +442,7 @@ template <typename T>
                 imax = i;
             }
         }
-        const R mag = std::sqrt(vmax);
+        const R mag = crd::math::sqrt(vmax);
         if (mag > R{0})
         {
             const R cph = xre[imax] / mag;
@@ -464,7 +464,7 @@ template <typename T>
             const R ri = axim[i] - (th.re * xim[i] + th.im * xre[i]);
             rn2 += rr * rr + ri * ri;
         }
-        const R rn = std::sqrt(rn2);
+        const R rn = crd::math::sqrt(rn2);
         result.residuals[s] = rn;
         const R sc = detail::cmag<R>(th);
         if (rn <= tol * (sc > R{1} ? sc : R{1}))

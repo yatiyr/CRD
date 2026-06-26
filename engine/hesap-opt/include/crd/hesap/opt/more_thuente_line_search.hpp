@@ -22,7 +22,7 @@
 #include <crd/hesap/opt/objective.hpp>
 
 #include <algorithm>
-#include <cmath>
+#include <crd/math/cmath.hpp>
 
 namespace crd::hesap::opt
 {
@@ -39,15 +39,15 @@ inline void mt_dcstep(T& stx, T& fx, T& dx, T& sty, T& fy, T& dy, T& stp, T fp, 
     const T two = static_cast<T>(2);
     const T three = static_cast<T>(3);
 
-    const T sgnd = dp * (dx / std::fabs(dx));
+    const T sgnd = dp * (dx / crd::math::fabs(dx));
     T stpf;
 
     if (fp > fx)
     {
         // Case 1: a higher function value ⇒ the minimizer is bracketed; cubic step (closer to stx is safer).
         const T theta = three * (fx - fp) / (stp - stx) + dx + dp;
-        const T s = std::max({std::fabs(theta), std::fabs(dx), std::fabs(dp)});
-        T gamma = s * std::sqrt(std::max(zero, (theta / s) * (theta / s) - (dx / s) * (dp / s)));
+        const T s = std::max({crd::math::fabs(theta), crd::math::fabs(dx), crd::math::fabs(dp)});
+        T gamma = s * crd::math::sqrt(std::max(zero, (theta / s) * (theta / s) - (dx / s) * (dp / s)));
         if (stp < stx)
         {
             gamma = -gamma;
@@ -57,15 +57,15 @@ inline void mt_dcstep(T& stx, T& fx, T& dx, T& sty, T& fy, T& dy, T& stp, T fp, 
         const T r = p / q;
         const T stpc = stx + r * (stp - stx);
         const T stpq = stx + ((dx / ((fx - fp) / (stp - stx) + dx)) / two) * (stp - stx);
-        stpf = (std::fabs(stpc - stx) < std::fabs(stpq - stx)) ? stpc : stpc + (stpq - stpc) / two;
+        stpf = (crd::math::fabs(stpc - stx) < crd::math::fabs(stpq - stx)) ? stpc : stpc + (stpq - stpc) / two;
         brackt = true;
     }
     else if (sgnd < zero)
     {
         // Case 2: lower value, derivatives opposite sign ⇒ bracketed; cubic step (farther from stp is safer).
         const T theta = three * (fx - fp) / (stp - stx) + dx + dp;
-        const T s = std::max({std::fabs(theta), std::fabs(dx), std::fabs(dp)});
-        T gamma = s * std::sqrt(std::max(zero, (theta / s) * (theta / s) - (dx / s) * (dp / s)));
+        const T s = std::max({crd::math::fabs(theta), crd::math::fabs(dx), crd::math::fabs(dp)});
+        T gamma = s * crd::math::sqrt(std::max(zero, (theta / s) * (theta / s) - (dx / s) * (dp / s)));
         if (stp > stx)
         {
             gamma = -gamma;
@@ -75,16 +75,16 @@ inline void mt_dcstep(T& stx, T& fx, T& dx, T& sty, T& fy, T& dy, T& stp, T fp, 
         const T r = p / q;
         const T stpc = stp + r * (stx - stp);
         const T stpq = stp + (dp / (dp - dx)) * (stx - stp);
-        stpf = (std::fabs(stpc - stp) > std::fabs(stpq - stp)) ? stpc : stpq;
+        stpf = (crd::math::fabs(stpc - stp) > crd::math::fabs(stpq - stp)) ? stpc : stpq;
         brackt = true;
     }
-    else if (std::fabs(dp) < std::fabs(dx))
+    else if (crd::math::fabs(dp) < crd::math::fabs(dx))
     {
         // Case 3: lower value, derivatives same sign, |dp| decreasing ⇒ cubic only if it tends toward the
         // minimizer; otherwise extrapolate to the step bound.
         const T theta = three * (fx - fp) / (stp - stx) + dx + dp;
-        const T s = std::max({std::fabs(theta), std::fabs(dx), std::fabs(dp)});
-        T gamma = s * std::sqrt(std::max(zero, (theta / s) * (theta / s) - (dx / s) * (dp / s)));
+        const T s = std::max({crd::math::fabs(theta), crd::math::fabs(dx), crd::math::fabs(dp)});
+        T gamma = s * crd::math::sqrt(std::max(zero, (theta / s) * (theta / s) - (dx / s) * (dp / s)));
         if (stp > stx)
         {
             gamma = -gamma;
@@ -108,7 +108,7 @@ inline void mt_dcstep(T& stx, T& fx, T& dx, T& sty, T& fy, T& dy, T& stp, T fp, 
         const T stpq = stp + (dp / (dp - dx)) * (stx - stp);
         if (brackt)
         {
-            stpf = (std::fabs(stpc - stp) < std::fabs(stpq - stp)) ? stpc : stpq;
+            stpf = (crd::math::fabs(stpc - stp) < crd::math::fabs(stpq - stp)) ? stpc : stpq;
             if (stp > stx)
             {
                 stpf = std::min(stp + p66 * (sty - stp), stpf);
@@ -120,7 +120,7 @@ inline void mt_dcstep(T& stx, T& fx, T& dx, T& sty, T& fy, T& dy, T& stp, T fp, 
         }
         else
         {
-            stpf = (std::fabs(stpc - stp) > std::fabs(stpq - stp)) ? stpc : stpq;
+            stpf = (crd::math::fabs(stpc - stp) > crd::math::fabs(stpq - stp)) ? stpc : stpq;
             stpf = std::min(stpmax, stpf);
             stpf = std::max(stpmin, stpf);
         }
@@ -131,8 +131,8 @@ inline void mt_dcstep(T& stx, T& fx, T& dx, T& sty, T& fy, T& dy, T& stp, T fp, 
         if (brackt)
         {
             const T theta = three * (fp - fy) / (sty - stp) + dy + dp;
-            const T s = std::max({std::fabs(theta), std::fabs(dy), std::fabs(dp)});
-            T gamma = s * std::sqrt(std::max(zero, (theta / s) * (theta / s) - (dy / s) * (dp / s)));
+            const T s = std::max({crd::math::fabs(theta), crd::math::fabs(dy), crd::math::fabs(dp)});
+            T gamma = s * crd::math::sqrt(std::max(zero, (theta / s) * (theta / s) - (dy / s) * (dp / s)));
             if (stp > sty)
             {
                 gamma = -gamma;
@@ -255,7 +255,7 @@ public:
             const T ftest1 = finit + stp * dgtest;
 
             // Strong-Wolfe convergence.
-            if (std::isfinite(f) && f <= ftest1 && std::fabs(dg) <= m_c2 * (-dginit))
+            if (std::isfinite(f) && f <= ftest1 && crd::math::fabs(dg) <= m_c2 * (-dginit))
             {
                 r.alpha = stp;
                 r.fx_new = f;
@@ -301,12 +301,12 @@ public:
             // Bisection safeguard on a slowly shrinking bracketed interval.
             if (brackt)
             {
-                if (std::fabs(sty - stx) >= static_cast<T>(0.66) * prev_width)
+                if (crd::math::fabs(sty - stx) >= static_cast<T>(0.66) * prev_width)
                 {
                     stp = stx + static_cast<T>(0.5) * (sty - stx);
                 }
                 prev_width = width;
-                width = std::fabs(sty - stx);
+                width = crd::math::fabs(sty - stx);
             }
         }
 

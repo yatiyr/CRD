@@ -9,7 +9,7 @@
 #include <crd/math/simd/vec4d.hpp>
 #include <crd/math/simd/vec8f.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 #include <type_traits>
 
@@ -174,8 +174,8 @@ void balance(Matrix<T>& a, crd::containers::Array<RealType<T>>& scale, crd::usiz
                 c += bal_nsq<T>(at(p, i));
                 r += bal_nsq<T>(at(i, p));
             }
-            c = std::sqrt(c);
-            r = std::sqrt(r);
+            c = crd::math::sqrt(c);
+            r = crd::math::sqrt(r);
             // ca = max|A(1:l, i)| ; ra = max|A(i, k:n)|.
             R ca = R{0};
             for (crd::isize p = 1; p <= l; ++p)
@@ -736,7 +736,7 @@ Lanv2Out<T> dlanv2(T& a, T& b, T& c, T& d)
     const T multpl = static_cast<T>(4);
     const T safmin = std::numeric_limits<T>::min();
     const T eps = std::numeric_limits<T>::epsilon();
-    const T safmn2 = std::pow(two, std::floor(std::log(safmin / eps) / std::log(two) / two));
+    const T safmn2 = crd::math::pow(two, crd::math::floor(crd::math::log(safmin / eps) / crd::math::log(two) / two));
     const T safmx2 = one / safmn2;
     auto sgn = [](T x, T y) -> T { return (y >= T{0}) ? std::abs(x) : -std::abs(x); };
 
@@ -774,7 +774,7 @@ Lanv2Out<T> dlanv2(T& a, T& b, T& c, T& d)
         T z = (p / scale) * p + (bcmax / scale) * bcmis;
         if (z >= multpl * eps)
         {
-            z = p + sgn(std::sqrt(scale) * std::sqrt(z), p);
+            z = p + sgn(crd::math::sqrt(scale) * crd::math::sqrt(z), p);
             a = d + z;
             d = d - (bcmax / z) * bcmis;
             const T tau = detail::hypot2(c, z);
@@ -807,7 +807,7 @@ Lanv2Out<T> dlanv2(T& a, T& b, T& c, T& d)
             }
             p = half * temp;
             T tau = detail::hypot2(sigma, temp);
-            o.cs = std::sqrt(half * (one + std::abs(sigma) / tau));
+            o.cs = crd::math::sqrt(half * (one + std::abs(sigma) / tau));
             o.sn = -(p / (tau * o.cs)) * sgn(one, sigma);
             const T aa = a * o.cs + b * o.sn;
             const T bb = -a * o.sn + b * o.cs;
@@ -826,10 +826,10 @@ Lanv2Out<T> dlanv2(T& a, T& b, T& c, T& d)
                 {
                     if ((b >= zero) == (c >= zero))
                     {
-                        const T sab = std::sqrt(std::abs(b));
-                        const T sac = std::sqrt(std::abs(c));
+                        const T sab = crd::math::sqrt(std::abs(b));
+                        const T sac = crd::math::sqrt(std::abs(c));
                         p = sgn(sab * sac, c);
-                        tau = one / std::sqrt(std::abs(b + c));
+                        tau = one / crd::math::sqrt(std::abs(b + c));
                         a = temp + p;
                         d = temp - p;
                         b = b - c;
@@ -861,7 +861,7 @@ Lanv2Out<T> dlanv2(T& a, T& b, T& c, T& d)
     }
     else
     {
-        o.rt1i = std::sqrt(std::abs(b)) * std::sqrt(std::abs(c));
+        o.rt1i = crd::math::sqrt(std::abs(b)) * crd::math::sqrt(std::abs(c));
         o.rt2i = -o.rt1i;
     }
     return o;
@@ -1036,7 +1036,7 @@ RealSchur<T> real_schur(crd::memory::IAllocator* alloc, const Matrix<T>& h_in, c
                     h22 /= s;
                     const T tr = (h11 + h22) / T{2};
                     const T det = (h11 - tr) * (h22 - tr) - h12 * h21;
-                    const T rtdisc = std::sqrt(std::abs(det));
+                    const T rtdisc = crd::math::sqrt(std::abs(det));
                     if (det >= T{0})
                     {
                         rt1r = tr * s;
@@ -1287,7 +1287,7 @@ T dlarfg_vec(T* u, crd::usize len, crd::usize ai)
         return T{0};
     }
     const T alpha = u[ai];
-    const T beta = -(alpha >= T{0} ? T{1} : T{-1}) * detail::hypot2(alpha, std::sqrt(xnsq));
+    const T beta = -(alpha >= T{0} ? T{1} : T{-1}) * detail::hypot2(alpha, crd::math::sqrt(xnsq));
     const T tau = (beta - alpha) / beta;
     const T inv = T{1} / (alpha - beta);
     for (crd::usize i = 0; i < len; ++i)
@@ -2580,7 +2580,7 @@ AedResult<T> aed_deflate(crd::memory::IAllocator* alloc, Matrix<T>& h, crd::usiz
         else  // complex-conjugate pair
         {
             T foo = std::abs(t1(ns, ns)) +
-                    std::sqrt(std::abs(t1(ns, ns - 1))) * std::sqrt(std::abs(t1(ns - 1, ns)));
+                    crd::math::sqrt(std::abs(t1(ns, ns - 1))) * crd::math::sqrt(std::abs(t1(ns - 1, ns)));
             if (foo == T{0})
             {
                 foo = std::abs(s);
@@ -2879,7 +2879,7 @@ void dtrevc_right(crd::memory::IAllocator* alloc, const Matrix<T>& t_in, Matrix<
             // ---- Complex right eigenvector (block (ki-1, ki)) ----
             const crd::usize k1 = kiu - 1;
             const T wr = t(kiu, kiu);
-            const T wi = std::sqrt(std::abs(t(kiu, k1))) * std::sqrt(std::abs(t(k1, kiu)));
+            const T wi = crd::math::sqrt(std::abs(t(kiu, k1))) * crd::math::sqrt(std::abs(t(k1, kiu)));
             const T smin = std::max(ulp * (std::abs(wr) + std::abs(wi)), smlnum);
             if (std::abs(t(k1, kiu)) >= std::abs(t(kiu, k1)))
             {
@@ -5308,7 +5308,7 @@ EigNonsym<T> eig_real_impl(crd::memory::IAllocator* alloc, const Matrix<T>& a)
                     istar = i;
                 }
             }
-            norm2 = std::sqrt(norm2);
+            norm2 = crd::math::sqrt(norm2);
             const T sgn = (vat(istar, k) < T{0}) ? T{-1} : T{1};
             const T s = (norm2 > T{0}) ? sgn / norm2 : T{1};
             for (crd::usize i = 0; i < n; ++i)
@@ -5337,10 +5337,10 @@ EigNonsym<T> eig_real_impl(crd::memory::IAllocator* alloc, const Matrix<T>& a)
                     istar = i;
                 }
             }
-            norm2 = std::sqrt(norm2);
+            norm2 = crd::math::sqrt(norm2);
             const T rr = vat(istar, k);
             const T ri = vat(istar, k + 1);
-            const T m = std::sqrt(rr * rr + ri * ri);
+            const T m = crd::math::sqrt(rr * rr + ri * ri);
             const T inv = (m > T{0} && norm2 > T{0}) ? T{1} / (m * norm2) : T{1};
             for (crd::usize i = 0; i < n; ++i)
             {
@@ -5444,9 +5444,9 @@ EigNonsym<T> eig_complex_impl(crd::memory::IAllocator* alloc, const Matrix<T>& a
                 istar = i;
             }
         }
-        norm2 = std::sqrt(norm2);
+        norm2 = crd::math::sqrt(norm2);
         const T piv = vat(istar, k);
-        const R pm = std::sqrt(piv.re * piv.re + piv.im * piv.im);
+        const R pm = crd::math::sqrt(piv.re * piv.re + piv.im * piv.im);
         const R inv = (pm > R{0} && norm2 > R{0}) ? R{1} / (pm * norm2) : R{1};
         for (crd::usize i = 0; i < n; ++i)
         {

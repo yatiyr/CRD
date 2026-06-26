@@ -14,7 +14,7 @@
 #include <crd/containers/sort.hpp>
 
 #include <algorithm>
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::geometry::spatial
@@ -896,7 +896,7 @@ u32 RTree<T>::str_pack_level(crd::containers::Array<RTreeEntry<T>>& level_entrie
     usize S; // NOLINT(readability-identifier-naming)
     {
         // S = ceil(sqrt(L))
-        const f64 sf = std::sqrt(static_cast<f64>(L));
+        const f64 sf = crd::math::sqrt(static_cast<f64>(L));
         S = static_cast<usize>(sf);
         if (S * S < L) { ++S; }
         if (S == 0) { S = 1; }

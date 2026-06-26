@@ -40,7 +40,7 @@
 #include <crd/memory/allocator.hpp>
 
 #include <algorithm>
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::hesap::opt::detail::lbfgsb
@@ -130,7 +130,7 @@ inline void dpofa(T* a, int lda, int n, int& info) noexcept
         {
             return; // info = j (not positive definite)
         }
-        a[j + j * lda] = std::sqrt(s);
+        a[j + j * lda] = crd::math::sqrt(s);
     }
     info = 0;
 }
@@ -284,7 +284,7 @@ inline void bmv(int m, const T* sy, const T* wt, int col, const T* v, T* p, int&
     // solve D^{1/2}·p1 = v1.
     for (int i = 1; i <= col; ++i)
     {
-        p[i] = v[i] / std::sqrt(sy[i + i * m]);
+        p[i] = v[i] / crd::math::sqrt(sy[i + i * m]);
     }
     // PART II: solve Jᵀ·p2 = p2.
     dtrsl<T>(wt, m, col, &p[col], /*job=*/1, info);
@@ -295,7 +295,7 @@ inline void bmv(int m, const T* sy, const T* wt, int col, const T* v, T* p, int&
     // p1 = -D^{-1/2}·p1 + D^{-1}·Lᵀ·p2.
     for (int i = 1; i <= col; ++i)
     {
-        p[i] = -p[i] / std::sqrt(sy[i + i * m]);
+        p[i] = -p[i] / crd::math::sqrt(sy[i + i * m]);
     }
     for (int i = 1; i <= col; ++i)
     {
@@ -556,7 +556,7 @@ inline void projgr(int n, const T* l, const T* u, const int* nbd, const T* x, co
                 }
             }
         }
-        const T ag = std::fabs(gi);
+        const T ag = crd::math::fabs(gi);
         sbgnrm = ag > sbgnrm ? ag : sbgnrm;
     }
 }
@@ -620,7 +620,7 @@ inline void cauchy(int n, const T* x, const T* l, const T* u, const int* nbd, co
             }
             else
             {
-                if (std::fabs(neggi) <= static_cast<T>(0))
+                if (crd::math::fabs(neggi) <= static_cast<T>(0))
                 {
                     iwhere[i] = -3;
                 }
@@ -667,7 +667,7 @@ inline void cauchy(int n, const T* x, const T* l, const T* u, const int* nbd, co
             {
                 --nfree;
                 iorder[nfree] = i;
-                if (std::fabs(neggi) > static_cast<T>(0))
+                if (crd::math::fabs(neggi) > static_cast<T>(0))
                 {
                     bnded = false;
                 }
@@ -1212,7 +1212,7 @@ inline void lnsrlb(const Obj& obj, int n, const T* l, const T* u, const int* nbd
     const T stpmn = static_cast<T>(0);
     info = 0;
     dtd = lb_ddot<T>(n, &d[0], 1, &d[0], 1);
-    dnorm = std::sqrt(dtd);
+    dnorm = crd::math::sqrt(dtd);
     stpmx = static_cast<T>(1e10);
     if (cnstnd)
     {
@@ -1320,7 +1320,7 @@ inline void lnsrlb(const Obj& obj, int n, const T* l, const T* u, const int* nbd
         bool warn = (brackt && (stp <= stmin || stp >= stmax)) || (brackt && stmax - stmin <= xtol * stmax) ||
                     (stp == stpmx && f <= ftest && gd <= gtest) ||
                     (stp == stpmn && (f > ftest || gd >= gtest));
-        const bool conv = (f <= ftest && std::fabs(gd) <= gtol * (-ginit));
+        const bool conv = (f <= ftest && crd::math::fabs(gd) <= gtol * (-ginit));
         if (warn || conv || iback >= 20)
         {
             break; // line search done (x/f/g hold the accepted/best point); mainlb handles iback>=20
@@ -1345,12 +1345,12 @@ inline void lnsrlb(const Obj& obj, int n, const T* l, const T* u, const int* nbd
         }
         if (brackt)
         {
-            if (std::fabs(sty - stx) >= static_cast<T>(0.66) * width1)
+            if (crd::math::fabs(sty - stx) >= static_cast<T>(0.66) * width1)
             {
                 stp = stx + static_cast<T>(0.5) * (sty - stx);
             }
             width1 = width;
-            width = std::fabs(sty - stx);
+            width = crd::math::fabs(sty - stx);
         }
         if (brackt)
         {
@@ -1623,8 +1623,8 @@ template <typename T>
                 status = OptStatus::Success;
                 break;
             }
-            T ddum = std::fabs(fold);
-            ddum = std::max(ddum, std::fabs(fval));
+            T ddum = crd::math::fabs(fold);
+            ddum = std::max(ddum, crd::math::fabs(fval));
             ddum = std::max(ddum, static_cast<T>(1));
             if (fold - fval <= tol * ddum)
             {

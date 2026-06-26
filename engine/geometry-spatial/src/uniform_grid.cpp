@@ -11,7 +11,7 @@
 #include <crd/containers/sort.hpp>
 
 #include <algorithm>
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::geometry::spatial
@@ -31,7 +31,7 @@ namespace
 template <MathScalar T>
 inline T floor_t(T v) noexcept
 {
-    return static_cast<T>(std::floor(static_cast<f64>(v)));
+    return static_cast<T>(crd::math::floor(static_cast<f64>(v)));
 }
 
 } // namespace
@@ -58,7 +58,7 @@ UniformGrid<T>::UniformGrid(crd::memory::IAllocator* alloc, const UniformGridCon
     // Compute (nx, ny, nz) via ceil((bounds_max - bounds_min) / cell_size).
     auto ceil_div = [&](T extent) -> u32 {
         const f64 raw = static_cast<f64>(extent) * static_cast<f64>(m_inv_cell_size);
-        const u32 rounded = static_cast<u32>(std::ceil(raw));
+        const u32 rounded = static_cast<u32>(crd::math::ceil(raw));
         return rounded == 0U ? 1U : rounded;
     };
     m_nx = ceil_div(m_bounds.max.x - m_bounds.min.x);

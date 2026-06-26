@@ -20,7 +20,7 @@
 #include <crd/containers/sort.hpp>
 
 #include <algorithm>
-#include <cmath>
+#include <crd/math/cmath.hpp>
 
 namespace crd::hesap::fft
 {
@@ -69,8 +69,8 @@ public:
             const double xp = static_cast<double>(i) - c;
             const double sinc = (std::abs(xp) < 1e-12)
                                     ? 1.0
-                                    : std::sin(pi * xp / static_cast<double>(m_b)) / (pi * xp / static_cast<double>(m_b));
-            const double g = sinc * std::exp(-0.5 * (xp / s) * (xp / s));
+                                    : crd::math::sin(pi * xp / static_cast<double>(m_b)) / (pi * xp / static_cast<double>(m_b));
+            const double g = sinc * crd::math::exp(-0.5 * (xp / s) * (xp / s));
             m_filter[i] = static_cast<T>(g);
             sum += g;
         }
@@ -121,7 +121,7 @@ public:
             double zmax = 0.0;
             for (crd::usize t = 0; t < m_b; ++t)
             {
-                zmax = std::max(zmax, std::hypot(static_cast<double>(m_zbuf[t].re), static_cast<double>(m_zbuf[t].im)));
+                zmax = std::max(zmax, crd::math::hypot(static_cast<double>(m_zbuf[t].re), static_cast<double>(m_zbuf[t].im)));
             }
             const double thresh = 1e-3 * zmax + 1e-300; // a bin holds a tone if it carries energy
 
@@ -129,7 +129,7 @@ public:
             {
                 const double z0r = static_cast<double>(m_zbuf[t].re);
                 const double z0i = static_cast<double>(m_zbuf[t].im);
-                if (std::hypot(z0r, z0i) < thresh)
+                if (crd::math::hypot(z0r, z0i) < thresh)
                 {
                     continue;
                 }
@@ -139,10 +139,10 @@ public:
                 {
                     const double zbr = static_cast<double>(m_zbuf[(j + 1) * m_b + t].re);
                     const double zbi = static_cast<double>(m_zbuf[(j + 1) * m_b + t].im);
-                    const double ph = std::atan2(zbi * z0r - zbr * z0i, zbr * z0r + zbi * z0i); // angle(z_β/z_0)
+                    const double ph = crd::math::atan2(zbi * z0r - zbr * z0i, zbr * z0r + zbi * z0i); // angle(z_β/z_0)
                     const double corr = pi * static_cast<double>(f & ((crd::usize{1} << j) - 1)) /
                                         static_cast<double>(crd::usize{1} << j);
-                    if (std::cos(ph - corr) < 0.0) // ph − corr ≈ π·bit_j  ⇒  bit set when cos < 0 (±π/2 robust)
+                    if (crd::math::cos(ph - corr) < 0.0) // ph − corr ≈ π·bit_j  ⇒  bit set when cos < 0 (±π/2 robust)
                     {
                         f |= (crd::usize{1} << j);
                     }
@@ -273,8 +273,8 @@ private:
         {
             const double a = w * static_cast<double>(i);
             const double f = static_cast<double>(m_filter[i]);
-            re += f * std::cos(a);
-            im += f * std::sin(a);
+            re += f * crd::math::cos(a);
+            im += f * crd::math::sin(a);
         }
         gr = re;
         gi = im;

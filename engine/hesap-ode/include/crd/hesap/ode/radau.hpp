@@ -27,7 +27,7 @@
 #include <crd/hesap/ode/solution.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::hesap::ode
@@ -96,7 +96,7 @@ template <typename T>
     const T max_step = opts.hmax;
     const T eps = std::numeric_limits<T>::epsilon();
     const T nt_lo = static_cast<T>(10) * eps / opts.rtol;
-    const T nt_hi = std::sqrt(opts.rtol) < static_cast<T>(0.03) ? std::sqrt(opts.rtol) : static_cast<T>(0.03);
+    const T nt_hi = crd::math::sqrt(opts.rtol) < static_cast<T>(0.03) ? crd::math::sqrt(opts.rtol) : static_cast<T>(0.03);
     const T newton_tol = nt_lo > nt_hi ? nt_lo : nt_hi;
 
     auto atol_i = [&opts](crd::usize i)
@@ -160,7 +160,7 @@ template <typename T>
         {
             ytmp[i] = yy[i];
         }
-        const T sqrt_eps = std::sqrt(eps);
+        const T sqrt_eps = crd::math::sqrt(eps);
         for (crd::usize j = 0; j < n; ++j)
         {
             const T yj = ytmp[j];
@@ -217,7 +217,7 @@ template <typename T>
                 sum += q * q;
             }
         }
-        return std::sqrt(sum / static_cast<T>(3 * n));
+        return crd::math::sqrt(sum / static_cast<T>(3 * n));
     };
 
     // f0 + initial step (scipy Radau: select_initial_step with order = 3) + initial Jacobian.
@@ -249,8 +249,8 @@ template <typename T>
             d0s += q0 * q0;
             d1s += q1 * q1;
         }
-        const T d0 = std::sqrt(d0s / static_cast<T>(n));
-        const T d1 = std::sqrt(d1s / static_cast<T>(n));
+        const T d0 = crd::math::sqrt(d0s / static_cast<T>(n));
+        const T d1 = crd::math::sqrt(d1s / static_cast<T>(n));
         T h0_try = (d0 < static_cast<T>(1e-5) || d1 < static_cast<T>(1e-5)) ? static_cast<T>(1e-6)
                                                                             : static_cast<T>(0.01) * d0 / d1;
         h0_try = h0_try < interval_length ? h0_try : interval_length;
@@ -266,7 +266,7 @@ template <typename T>
             const T q = (err[i] - fvec[i]) / sc;
             d2s += q * q;
         }
-        const T d2 = std::sqrt(d2s / static_cast<T>(n)) / h0_try;
+        const T d2 = crd::math::sqrt(d2s / static_cast<T>(n)) / h0_try;
         T h1;
         if (d1 <= static_cast<T>(1e-15) && d2 <= static_cast<T>(1e-15))
         {
@@ -276,7 +276,7 @@ template <typename T>
         else
         {
             const T dm = d1 > d2 ? d1 : d2;
-            h1 = std::pow(static_cast<T>(0.01) / dm, static_cast<T>(1) / static_cast<T>(4)); // order 3 ⇒ 1/(3+1)
+            h1 = crd::math::pow(static_cast<T>(0.01) / dm, static_cast<T>(1) / static_cast<T>(4)); // order 3 ⇒ 1/(3+1)
         }
         h_abs = static_cast<T>(100) * h0_try;
         h_abs = h_abs < h1 ? h_abs : h1;
@@ -297,11 +297,11 @@ template <typename T>
         T multiplier = static_cast<T>(1);
         if (error_norm_old >= static_cast<T>(0) && h_abs_old >= static_cast<T>(0) && error_norm != static_cast<T>(0))
         {
-            multiplier = h_abs_cur / h_abs_old * std::pow(error_norm_old / error_norm, static_cast<T>(0.25));
+            multiplier = h_abs_cur / h_abs_old * crd::math::pow(error_norm_old / error_norm, static_cast<T>(0.25));
         }
         const T m1 = multiplier < static_cast<T>(1) ? multiplier : static_cast<T>(1);
         return (error_norm == static_cast<T>(0)) ? std::numeric_limits<T>::infinity()
-                                                 : m1 * std::pow(error_norm, static_cast<T>(-0.25));
+                                                 : m1 * crd::math::pow(error_norm, static_cast<T>(-0.25));
     };
 
     T t = t0;
@@ -469,7 +469,7 @@ template <typename T>
                     const bool have_rate = dw_norm_old >= static_cast<T>(0);
                     rate = have_rate ? dw_norm / dw_norm_old : static_cast<T>(0);
                     if (have_rate &&
-                        (rate >= static_cast<T>(1) || std::pow(rate, static_cast<T>(detail::radau_newton_maxiter - k)) /
+                        (rate >= static_cast<T>(1) || crd::math::pow(rate, static_cast<T>(detail::radau_newton_maxiter - k)) /
                                                               (static_cast<T>(1) - rate) * dw_norm >
                                                           newton_tol))
                     {
@@ -540,7 +540,7 @@ template <typename T>
                 const T q = err[i] / scale[i];
                 esum += q * q;
             }
-            error_norm = std::sqrt(esum / static_cast<T>(n));
+            error_norm = crd::math::sqrt(esum / static_cast<T>(n));
             safety = static_cast<T>(0.9) * static_cast<T>(2 * detail::radau_newton_maxiter + 1) /
                      static_cast<T>(2 * detail::radau_newton_maxiter + n_iter);
 
@@ -566,7 +566,7 @@ template <typename T>
                     const T q = err[i] / scale[i];
                     esum += q * q;
                 }
-                error_norm = std::sqrt(esum / static_cast<T>(n));
+                error_norm = crd::math::sqrt(esum / static_cast<T>(n));
             }
 
             if (error_norm > static_cast<T>(1))

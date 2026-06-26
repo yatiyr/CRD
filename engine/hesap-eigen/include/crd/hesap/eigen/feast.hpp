@@ -47,7 +47,7 @@
 #include <crd/hesap/sparse/triplet_builder.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 #include <type_traits>
 #include <utility>
@@ -105,8 +105,8 @@ template <typename T>
     for (int k = 0; k < nq; ++k)
     {
         const R theta = (kpi * static_cast<R>(0.5)) * (static_cast<R>(detail::kFeastGlX[k]) + R{1});
-        const R ct = std::cos(theta);
-        const R st = std::sin(theta);
+        const R ct = crd::math::cos(theta);
+        const R st = crd::math::sin(theta);
         zq[k] = C{center + radius * ct, radius * st};
         const R wmag = static_cast<R>(detail::kFeastGlW[k]) * radius * static_cast<R>(0.5);
         wq[k] = C{wmag * ct, wmag * st};
@@ -292,8 +292,8 @@ template <typename T>
                     const R e = ax - lam * static_cast<R>(xt[i]);
                     rn2 += e * e;
                 }
-                const R rn = std::sqrt(rn2);
-                const R sc = std::fabs(lam) > R{1} ? std::fabs(lam) : R{1};
+                const R rn = crd::math::sqrt(rn2);
+                const R sc = crd::math::fabs(lam) > R{1} ? crd::math::fabs(lam) : R{1};
                 if (rn / sc > tol)
                 {
                     all_conv = false;
@@ -332,8 +332,8 @@ template <typename T>
                     const R e = ax - lam * static_cast<R>(xt[i]);
                     rn2 += e * e;
                 }
-                const R rn = std::sqrt(rn2);
-                const R sc = std::fabs(lam) > R{1} ? std::fabs(lam) : R{1};
+                const R rn = crd::math::sqrt(rn2);
+                const R sc = crd::math::fabs(lam) > R{1} ? crd::math::fabs(lam) : R{1};
                 if (rn / sc > tol)
                 {
                     continue; // in-interval but not a genuine eigenpair ⇒ excluded (the safety net)
@@ -342,7 +342,7 @@ template <typename T>
                 R vmax = R{0};
                 for (crd::u32 i = 0; i < n; ++i)
                 {
-                    const R mv = std::fabs(static_cast<R>(xt[i]));
+                    const R mv = crd::math::fabs(static_cast<R>(xt[i]));
                     if (mv > vmax)
                     {
                         vmax = mv;

@@ -41,7 +41,7 @@
 #include <crd/math/scalar.hpp>
 #include <crd/math/vec.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 
 namespace crd::geometry::curves
 {
@@ -309,14 +309,14 @@ constexpr void cr_knots(const crd::math::Vec3<T>& p0,
 
     // Centripetal: t_{k+1} = t_k + |P_{k+1} - P_k|^0.5. Yuksel 2011.
     // chord = sqrt(len_sq); chord^0.5 = sqrt(chord) = sqrt(sqrt(len_sq)).
-    // We use std::sqrt (IEEE 754 correctly-rounded — deterministic per
+    // We use crd::math::sqrt (IEEE 754 correctly-rounded — deterministic per
     // ADR-0063 build flags).
     const T len_sq_01 = crd::math::length_squared(p1 - p0);
     const T len_sq_12 = crd::math::length_squared(p2 - p1);
     const T len_sq_23 = crd::math::length_squared(p3 - p2);
-    const T e01       = static_cast<T>(std::sqrt(std::sqrt(static_cast<double>(len_sq_01))));
-    const T e12       = static_cast<T>(std::sqrt(std::sqrt(static_cast<double>(len_sq_12))));
-    const T e23       = static_cast<T>(std::sqrt(std::sqrt(static_cast<double>(len_sq_23))));
+    const T e01       = static_cast<T>(crd::math::sqrt(crd::math::sqrt(static_cast<double>(len_sq_01))));
+    const T e12       = static_cast<T>(crd::math::sqrt(crd::math::sqrt(static_cast<double>(len_sq_12))));
+    const T e23       = static_cast<T>(crd::math::sqrt(crd::math::sqrt(static_cast<double>(len_sq_23))));
     t0_out            = static_cast<T>(0);
     t1_out            = t0_out + e01;
     t2_out            = t1_out + e12;

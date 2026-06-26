@@ -39,7 +39,7 @@
 #include <crd/math/vec.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::geometry::delaunay
@@ -248,7 +248,7 @@ lloyd_relax_3d(crd::containers::ConstSpan<crd::math::Vec3<T>> sites,
             result.relaxed_sites[i] = new_sites[i];
         }
         result.iterations_run = iter + 1U;
-        result.final_max_displacement = std::sqrt(max_disp2);
+        result.final_max_displacement = crd::math::sqrt(max_disp2);
         if (result.final_max_displacement < opts.tolerance)
         {
             result.converged = true;

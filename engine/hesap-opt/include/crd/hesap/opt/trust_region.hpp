@@ -38,7 +38,7 @@
 #include <crd/hesap/opt/opt_types.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::hesap::opt
@@ -126,7 +126,7 @@ solve_trust_region_subproblem_exact(crd::memory::IAllocator* alloc, const crd::h
             const T yi = -d[i] / den;
             s += yi * yi;
         }
-        return std::sqrt(s);
+        return crd::math::sqrt(s);
     };
     auto finish = [&](T lambda, bool boundary) -> void
     {
@@ -159,7 +159,7 @@ solve_trust_region_subproblem_exact(crd::memory::IAllocator* alloc, const crd::h
             y[i] = -d[i] / lam[i];
             s += y[i] * y[i];
         }
-        if (std::sqrt(s) <= delta)
+        if (crd::math::sqrt(s) <= delta)
         {
             finish(static_cast<T>(0), false);
             return out;
@@ -170,9 +170,9 @@ solve_trust_region_subproblem_exact(crd::memory::IAllocator* alloc, const crd::h
     // and the λ → −λ₁ limit already fits inside Δ ⇒ pad with a boundary component along q₁ (only when λ₁ ≤ 0;
     // for λ₁ > 0 the interior test above failed ⇒ ‖y(0)‖ > Δ and a regular root exists).
     const T lam_lo = lam1 < static_cast<T>(0) ? -lam1 : static_cast<T>(0);
-    T scale = std::fabs(lam[n - 1]) > std::fabs(lam1) ? std::fabs(lam[n - 1]) : std::fabs(lam1);
+    T scale = crd::math::fabs(lam[n - 1]) > crd::math::fabs(lam1) ? crd::math::fabs(lam[n - 1]) : crd::math::fabs(lam1);
     scale = scale > static_cast<T>(1) ? scale : static_cast<T>(1);
-    const T cluster_tol = std::sqrt(std::numeric_limits<T>::epsilon()) * scale;
+    const T cluster_tol = crd::math::sqrt(std::numeric_limits<T>::epsilon()) * scale;
 
     if (lam1 <= static_cast<T>(0))
     {
@@ -193,7 +193,7 @@ solve_trust_region_subproblem_exact(crd::memory::IAllocator* alloc, const crd::h
         if (dmin_sq <= cluster_tol * cluster_tol && limit_sq <= delta * delta)
         {
             // HARD CASE: y = the limit solution + τ along the FIRST λ₁-cluster direction so ‖y‖ = Δ.
-            const T tau = std::sqrt(delta * delta - limit_sq);
+            const T tau = crd::math::sqrt(delta * delta - limit_sq);
             bool tau_placed = false;
             for (crd::usize i = 0; i < n; ++i)
             {
@@ -219,7 +219,7 @@ solve_trust_region_subproblem_exact(crd::memory::IAllocator* alloc, const crd::h
     {
         dnorm += d[i] * d[i];
     }
-    dnorm = std::sqrt(dnorm);
+    dnorm = crd::math::sqrt(dnorm);
     T lo = lam_lo;
     T hi = lam_lo + dnorm / delta + cluster_tol;
     T lambda = lam_lo + (dnorm / delta) * static_cast<T>(0.5) + cluster_tol; // start inside the bracket
@@ -228,7 +228,7 @@ solve_trust_region_subproblem_exact(crd::memory::IAllocator* alloc, const crd::h
     for (int iter = 0; iter < 200; ++iter)
     {
         const T nrm = norm_at(lambda);
-        if (std::fabs(nrm - delta) <= secular_tol * delta)
+        if (crd::math::fabs(nrm - delta) <= secular_tol * delta)
         {
             break;
         }
@@ -286,7 +286,7 @@ template <typename T>
     const T dd = dn::dot<T>(d, d);
     const T zz = dn::dot<T>(z, z);
     const T disc = zd * zd + dd * (delta * delta - zz);
-    const T root = std::sqrt(disc > static_cast<T>(0) ? disc : static_cast<T>(0));
+    const T root = crd::math::sqrt(disc > static_cast<T>(0) ? disc : static_cast<T>(0));
     return (-zd + root) / dd;
 }
 
@@ -331,7 +331,7 @@ template <typename T>
         T mx = static_cast<T>(0);
         for (crd::usize i = 0; i < w.size(); ++i)
         {
-            const T a = std::fabs(w[i]);
+            const T a = crd::math::fabs(w[i]);
             mx = a > mx ? a : mx;
         }
         return mx;
@@ -415,7 +415,7 @@ template <typename T>
         {
             case Sub::Cauchy:
             {
-                const T gnorm2 = std::sqrt(dn::dot<T>({g.data(), n}, {g.data(), n}));
+                const T gnorm2 = crd::math::sqrt(dn::dot<T>({g.data(), n}, {g.data(), n}));
                 hv({g.data(), n}, {scratch_a.data(), n}); // Hg
                 const T ghg = dn::dot<T>({g.data(), n}, {scratch_a.data(), n});
                 T tau = static_cast<T>(1);
@@ -449,7 +449,7 @@ template <typename T>
                 const bool pd = detail::chol_solve<T>(mtx.data(), n, scratch_b.data()); // scratch_b = pB
                 if (!pd)
                 {
-                    const T gnorm2 = std::sqrt(dn::dot<T>({g.data(), n}, {g.data(), n}));
+                    const T gnorm2 = crd::math::sqrt(dn::dot<T>({g.data(), n}, {g.data(), n}));
                     hv({g.data(), n}, {scratch_a.data(), n});
                     const T ghg = dn::dot<T>({g.data(), n}, {scratch_a.data(), n});
                     T tau = static_cast<T>(1);
@@ -467,7 +467,7 @@ template <typename T>
                 }
                 else
                 {
-                    const T pb_norm = std::sqrt(dn::dot<T>({scratch_b.data(), n}, {scratch_b.data(), n}));
+                    const T pb_norm = crd::math::sqrt(dn::dot<T>({scratch_b.data(), n}, {scratch_b.data(), n}));
                     if (pb_norm <= delta)
                     {
                         for (crd::usize i = 0; i < n; ++i)
@@ -482,11 +482,11 @@ template <typename T>
                         const T gg = dn::dot<T>({g.data(), n}, {g.data(), n});
                         const T ghg = dn::dot<T>({g.data(), n}, {scratch_a.data(), n});
                         const T pu_coef = -gg / ghg; // PD ⇒ ghg > 0
-                        const T pu_norm = -pu_coef * std::sqrt(gg);
+                        const T pu_norm = -pu_coef * crd::math::sqrt(gg);
                         boundary = true;
                         if (pu_norm >= delta)
                         {
-                            const T coef = -delta / std::sqrt(gg);
+                            const T coef = -delta / crd::math::sqrt(gg);
                             for (crd::usize i = 0; i < n; ++i)
                             {
                                 p[i] = coef * g[i]; // boundary along −g
@@ -522,7 +522,7 @@ template <typename T>
                 {
                     const T dgi = h[i * n + i];
                     mindiag = dgi < mindiag ? dgi : mindiag;
-                    const T a = std::fabs(dgi);
+                    const T a = crd::math::fabs(dgi);
                     maxabsdiag = a > maxabsdiag ? a : maxabsdiag;
                 }
                 const T beta_reg =
@@ -548,7 +548,7 @@ template <typename T>
                     }
                 }
                 // Orthonormal basis: b1 = g/‖g‖; b2 = s − (b1ᵀs)b1, normalized (dropped if collinear).
-                const T gnorm2 = std::sqrt(dn::dot<T>({g.data(), n}, {g.data(), n}));
+                const T gnorm2 = crd::math::sqrt(dn::dot<T>({g.data(), n}, {g.data(), n}));
                 for (crd::usize i = 0; i < n; ++i)
                 {
                     scratch_a[i] = g[i] / gnorm2; // b1
@@ -563,9 +563,9 @@ template <typename T>
                         scratch_c[i] = scratch_b[i] - proj * scratch_a[i];
                         res += scratch_c[i] * scratch_c[i];
                     }
-                    res = std::sqrt(res);
-                    const T s_norm = std::sqrt(dn::dot<T>({scratch_b.data(), n}, {scratch_b.data(), n}));
-                    if (res > std::sqrt(std::numeric_limits<T>::epsilon()) * (s_norm + static_cast<T>(1)))
+                    res = crd::math::sqrt(res);
+                    const T s_norm = crd::math::sqrt(dn::dot<T>({scratch_b.data(), n}, {scratch_b.data(), n}));
+                    if (res > crd::math::sqrt(std::numeric_limits<T>::epsilon()) * (s_norm + static_cast<T>(1)))
                     {
                         for (crd::usize i = 0; i < n; ++i)
                         {
@@ -620,8 +620,8 @@ template <typename T>
                 T* r = scratch_a.data();
                 T* dvec = scratch_b.data();
                 T* hd = scratch_c.data();
-                const T gnorm2 = std::sqrt(dn::dot<T>({g.data(), n}, {g.data(), n}));
-                const T eta_f = std::sqrt(gnorm2) < static_cast<T>(0.5) ? std::sqrt(gnorm2) : static_cast<T>(0.5);
+                const T gnorm2 = crd::math::sqrt(dn::dot<T>({g.data(), n}, {g.data(), n}));
+                const T eta_f = crd::math::sqrt(gnorm2) < static_cast<T>(0.5) ? crd::math::sqrt(gnorm2) : static_cast<T>(0.5);
                 const T inner_tol = eta_f * gnorm2;
                 for (crd::usize i = 0; i < n; ++i)
                 {
@@ -652,7 +652,7 @@ template <typename T>
                         const T zi = z[i] + alpha * dvec[i];
                         znew_sq += zi * zi;
                     }
-                    if (std::sqrt(znew_sq) >= delta)
+                    if (crd::math::sqrt(znew_sq) >= delta)
                     {
                         const T tau = detail::boundary_tau<T>({z, n}, {dvec, n}, delta);
                         for (crd::usize i = 0; i < n; ++i)
@@ -668,7 +668,7 @@ template <typename T>
                         r[i] += alpha * hd[i];
                     }
                     const T rr_new = dn::dot<T>({r, n}, {r, n});
-                    if (std::sqrt(rr_new) <= inner_tol)
+                    if (crd::math::sqrt(rr_new) <= inner_tol)
                     {
                         break;
                     }
@@ -687,8 +687,8 @@ template <typename T>
             {
                 // GLTR: Lanczos (FULL reorthogonalization, V stored) + the k×k tridiagonal subproblem solved
                 // EXACTLY each step; converged when the GLTR residual β_k·|y_k| ≤ η‖g‖ (same forcing as Steihaug).
-                const T gnorm2 = std::sqrt(dn::dot<T>({g.data(), n}, {g.data(), n}));
-                const T eta_f = std::sqrt(gnorm2) < static_cast<T>(0.5) ? std::sqrt(gnorm2) : static_cast<T>(0.5);
+                const T gnorm2 = crd::math::sqrt(dn::dot<T>({g.data(), n}, {g.data(), n}));
+                const T eta_f = crd::math::sqrt(gnorm2) < static_cast<T>(0.5) ? crd::math::sqrt(gnorm2) : static_cast<T>(0.5);
                 const T inner_tol = eta_f * gnorm2;
                 crd::containers::Array<T> vmat(alloc); // V columns, n each
                 crd::containers::Array<T> alphas(alloc);
@@ -735,7 +735,7 @@ template <typename T>
                             w[i] -= proj * vj[i];
                         }
                     }
-                    const T bk = std::sqrt(dn::dot<T>({w.data(), n}, {w.data(), n}));
+                    const T bk = crd::math::sqrt(dn::dot<T>({w.data(), n}, {w.data(), n}));
                     betas[k] = bk;
                     kdim = k + 1;
 
@@ -752,7 +752,7 @@ template <typename T>
                     }
                     sub = solve_trust_region_subproblem_exact<T>(alloc, tsmall, {tg.data(), kdim}, delta,
                                                                  {ty.data(), kdim});
-                    const T residual = bk * std::fabs(ty[kdim - 1]); // the GLTR convergence estimate
+                    const T residual = bk * crd::math::fabs(ty[kdim - 1]); // the GLTR convergence estimate
                     if (residual <= inner_tol || bk <= std::numeric_limits<T>::epsilon() * gnorm2 || k + 1 == kry_cap)
                     {
                         break;
@@ -828,13 +828,13 @@ template <typename T>
                 step_norm_sq += p[i] * p[i];
                 x[i] = x_new[i];
             }
-            const T df = std::fabs(fx_trial - fx);
+            const T df = crd::math::fabs(fx_trial - fx);
             fx = fx_trial;
             (void)obj.gradient({x, n}, {g.data(), n});
             ++result.grad_evals;
             grad_norm = inf_nrm({g.data(), n});
             need_h = true;
-            const auto stop = check_convergence<T>(grad_norm, std::sqrt(step_norm_sq), df, inf_nrm({x, n}), fx, opts);
+            const auto stop = check_convergence<T>(grad_norm, crd::math::sqrt(step_norm_sq), df, inf_nrm({x, n}), fx, opts);
             if (stop.has_value())
             {
                 status = *stop;

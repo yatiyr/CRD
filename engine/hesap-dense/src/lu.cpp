@@ -6,7 +6,7 @@
 #include <crd/hesap/dense/real_type.hpp>
 #include <crd/jobs/jobs.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 
 namespace crd::hesap::dense
 {
@@ -22,7 +22,7 @@ constexpr crd::usize kBlockSize = 64;
 template <typename T>
 inline RealType<T> abs_value(T x) noexcept
 {
-    if constexpr (is_complex_v<T>) { return std::sqrt(x.re * x.re + x.im * x.im); }
+    if constexpr (is_complex_v<T>) { return crd::math::sqrt(x.re * x.re + x.im * x.im); }
     else { return x < T{0} ? -x : x; }
 }
 

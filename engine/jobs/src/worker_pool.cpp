@@ -1,5 +1,6 @@
 #include "worker_pool.hpp"
 #include <crd/jobs/detail/fiber_context.hpp>
+#include <crd/jobs/jobs.hpp> // performance_core_cpu_ids (ADR-0094 affinity)
 #include <crd/jobs/observer.hpp>
 #include <crd/core/assert.hpp>
 #include <crd/core/platform.hpp>
@@ -7,6 +8,13 @@
 
 #include <cstring>
 #include <thread>
+
+#if CRD_OS_WINDOWS
+#include <windows.h>
+#elif CRD_OS_LINUX
+#include <pthread.h>
+#include <sched.h>
+#endif
 
 namespace crd::jobs::detail
 {
@@ -347,7 +355,7 @@ void WorkerPool::worker_loop(WorkerPool* self, crd::u32 thread_index)
         }
         else
         {
-            self->m_scheduler.wait_for_work();
+            self->m_scheduler.wait_for_work(thread_index);
         }
     }
 }
@@ -355,6 +363,70 @@ void WorkerPool::worker_loop(WorkerPool* self, crd::u32 thread_index)
 // ---------------------------------------------------------------------------
 // WorkerPool — lifecycle
 // ---------------------------------------------------------------------------
+
+namespace
+{
+// ADR-0094 affinity. Build a P-cores-first CPU order and pin the main thread (index 0) + each worker (index i) to
+// order[i]. No-op when topology is unknown (e.g. WSL) ⇒ unsupported hosts and the default path are unaffected.
+void pin_pool_to_pcores([[maybe_unused]] std::vector<std::thread>& workers,
+                        [[maybe_unused]] crd::u32 num_threads) noexcept
+{
+    crd::u32 pids[64];
+    const crd::u32 k = crd::jobs::performance_core_cpu_ids(pids, 64U);
+    if (k == 0U)
+    {
+        return; // unknown topology → leave placement to the OS
+    }
+    const auto hw = static_cast<crd::u32>(std::thread::hardware_concurrency());
+    crd::u32 order[64];
+    crd::u32 n = 0U;
+    for (crd::u32 i = 0U; i < k && n < 64U; ++i)
+    {
+        order[n++] = pids[i];
+    }
+    for (crd::u32 c = 0U; c < hw && n < 64U; ++c)
+    {
+        bool seen = false;
+        for (crd::u32 j = 0U; j < k; ++j)
+        {
+            if (pids[j] == c)
+            {
+                seen = true;
+                break;
+            }
+        }
+        if (!seen)
+        {
+            order[n++] = c;
+        }
+    }
+    if (n == 0U)
+    {
+        return;
+    }
+#if CRD_OS_WINDOWS
+    ::SetThreadAffinityMask(::GetCurrentThread(), static_cast<DWORD_PTR>(1) << order[0]);
+    for (crd::u32 i = 1U; i < num_threads; ++i)
+    {
+        ::SetThreadAffinityMask(reinterpret_cast<HANDLE>(workers[i - 1U].native_handle()),
+                                static_cast<DWORD_PTR>(1) << order[i < n ? i : i % n]);
+    }
+#elif CRD_OS_LINUX
+    auto pin = [](pthread_t h, crd::u32 cpu)
+    {
+        cpu_set_t set;
+        CPU_ZERO(&set);
+        CPU_SET(static_cast<int>(cpu), &set);
+        (void)pthread_setaffinity_np(h, sizeof(set), &set);
+    };
+    pin(pthread_self(), order[0]);
+    for (crd::u32 i = 1U; i < num_threads; ++i)
+    {
+        pin(static_cast<pthread_t>(workers[i - 1U].native_handle()), order[i < n ? i : i % n]);
+    }
+#endif
+}
+} // namespace
 
 bool WorkerPool::init(const WorkerConfig& cfg)
 {
@@ -366,10 +438,13 @@ bool WorkerPool::init(const WorkerConfig& cfg)
     if (m_num_threads == 0U)
         m_num_threads = 1U; // hardware_concurrency() returned 0 on this platform
 
+    m_pcore_routing = cfg.pcore_routing;
+
     SchedulerConfig sched_cfg;
     sched_cfg.num_threads        = m_num_threads;
     sched_cfg.deque_capacity     = cfg.deque_capacity;
     sched_cfg.injection_capacity = cfg.injection_capacity;
+    sched_cfg.targeted_wake      = cfg.pcore_routing; // ADR-0094 opt-in; default false ⇒ shared-semaphore path
 
     if (!m_scheduler.init(sched_cfg))
         return false;
@@ -414,6 +489,11 @@ bool WorkerPool::init(const WorkerConfig& cfg)
     m_threads.reserve(worker_count);
     for (crd::u32 i = 1U; i < m_num_threads; ++i)
         m_threads.emplace_back(&WorkerPool::worker_loop, this, i);
+
+    if (m_pcore_routing)
+    {
+        pin_pool_to_pcores(m_threads, m_num_threads); // ADR-0094; no-op on unknown topology
+    }
 
     m_initialized = true;
     return true;

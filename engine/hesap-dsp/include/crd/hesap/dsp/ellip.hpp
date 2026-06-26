@@ -17,7 +17,7 @@
 #include <crd/hesap/dsp/iir.hpp>    // bilinear chain
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 
 namespace crd::hesap::dsp
 {
@@ -28,18 +28,18 @@ template <typename T> [[nodiscard]] Zpk<T> ellipap(crd::memory::IAllocator* allo
     Zpk<T> zpk(alloc);
     if (n == 1) // first-order special case
     {
-        const T p = -std::sqrt(T(1) / (std::pow(T(10), T(0.1) * rp) - T(1)));
+        const T p = -crd::math::sqrt(T(1) / (crd::math::pow(T(10), T(0.1) * rp) - T(1)));
         zpk.p.push_back(Complex<T>{p, T(0)});
         zpk.k = -p;
         return zpk;
     }
-    const T eps_sq = std::pow(T(10), T(0.1) * rp) - T(1);
-    const T eps = std::sqrt(eps_sq);
-    const T ck1_sq = eps_sq / (std::pow(T(10), T(0.1) * rs) - T(1));
+    const T eps_sq = crd::math::pow(T(10), T(0.1) * rp) - T(1);
+    const T eps = crd::math::sqrt(eps_sq);
+    const T ck1_sq = eps_sq / (crd::math::pow(T(10), T(0.1) * rs) - T(1));
     const T m = ellipdeg<T>(n, ck1_sq);
     const T capk = ellipk<T>(m);
     const T k1 = ellipk<T>(ck1_sq);
-    const T sqm = std::sqrt(m);
+    const T sqm = crd::math::sqrt(m);
     const T eps_t = static_cast<T>(1e-12);
 
     // displaced argument for the poles.
@@ -85,7 +85,7 @@ template <typename T> [[nodiscard]] Zpk<T> ellipap(crd::memory::IAllocator* allo
     zpk.k = detail::cdiv<T>(pnum, pden).re;
     if (n % 2 == 0)
     {
-        zpk.k = zpk.k / std::sqrt(T(1) + eps_sq);
+        zpk.k = zpk.k / crd::math::sqrt(T(1) + eps_sq);
     }
     return zpk;
 }

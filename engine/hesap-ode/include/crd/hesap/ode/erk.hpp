@@ -33,7 +33,7 @@
 #include <crd/hesap/ode/solution.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::hesap::ode
@@ -186,7 +186,7 @@ template <typename T> [[nodiscard]] T rms_norm(crd::containers::ConstSpan<T> x) 
     {
         sum += x[i] * x[i];
     }
-    return std::sqrt(sum / static_cast<T>(x.size()));
+    return crd::math::sqrt(sum / static_cast<T>(x.size()));
 }
 
 } // namespace detail
@@ -303,8 +303,8 @@ template <typename T>
             d0_sum += q0 * q0;
             d1_sum += q1 * q1;
         }
-        const T d0 = std::sqrt(d0_sum / static_cast<T>(n));
-        const T d1 = std::sqrt(d1_sum / static_cast<T>(n));
+        const T d0 = crd::math::sqrt(d0_sum / static_cast<T>(n));
+        const T d1 = crd::math::sqrt(d1_sum / static_cast<T>(n));
         T h0_try = (d0 < static_cast<T>(1e-5) || d1 < static_cast<T>(1e-5)) ? static_cast<T>(1e-6)
                                                                             : static_cast<T>(0.01) * d0 / d1;
         h0_try = h0_try < interval_length ? h0_try : interval_length;
@@ -320,7 +320,7 @@ template <typename T>
             const T q = (y_new[i] - kbuf[i]) / sc;
             d2_sum += q * q;
         }
-        const T d2 = std::sqrt(d2_sum / static_cast<T>(n)) / h0_try;
+        const T d2 = crd::math::sqrt(d2_sum / static_cast<T>(n)) / h0_try;
         T h1;
         if (d1 <= static_cast<T>(1e-15) && d2 <= static_cast<T>(1e-15))
         {
@@ -331,7 +331,7 @@ template <typename T>
         {
             const T dm = d1 > d2 ? d1 : d2;
             h1 =
-                std::pow(static_cast<T>(0.01) / dm, static_cast<T>(1) / static_cast<T>(desc.error_estimator_order + 1));
+                crd::math::pow(static_cast<T>(0.01) / dm, static_cast<T>(1) / static_cast<T>(desc.error_estimator_order + 1));
         }
         h_abs = static_cast<T>(100) * h0_try;
         h_abs = h_abs < h1 ? h_abs : h1;
@@ -425,7 +425,7 @@ template <typename T>
                     const T q = (acc * h) / scale_at(i, y[i], y_new[i]);
                     sum += q * q;
                 }
-                error_norm = std::sqrt(sum / static_cast<T>(n));
+                error_norm = crd::math::sqrt(sum / static_cast<T>(n));
             }
             else
             {
@@ -454,7 +454,7 @@ template <typename T>
                 else
                 {
                     const T denom = e5sum + static_cast<T>(0.01) * e3sum;
-                    error_norm = std::abs(h) * e5sum / std::sqrt(denom * static_cast<T>(n));
+                    error_norm = std::abs(h) * e5sum / crd::math::sqrt(denom * static_cast<T>(n));
                 }
             }
 

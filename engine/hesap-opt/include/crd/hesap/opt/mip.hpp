@@ -26,7 +26,7 @@
 #include <crd/hesap/opt/lp.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::hesap::opt
@@ -165,8 +165,8 @@ template <typename T>
             {
                 continue;
             }
-            const T r = std::floor(rel.x[j] + static_cast<T>(0.5));
-            const T dist = std::fabs(rel.x[j] - r);
+            const T r = crd::math::floor(rel.x[j] + static_cast<T>(0.5));
+            const T dist = crd::math::fabs(rel.x[j] - r);
             if (dist > best_frac)
             {
                 best_frac = dist;
@@ -180,7 +180,7 @@ template <typename T>
             result.has_incumbent = true;
             for (crd::usize j = 0; j < n; ++j)
             {
-                result.x[j] = integer_mask[j] ? std::floor(rel.x[j] + static_cast<T>(0.5)) : rel.x[j];
+                result.x[j] = integer_mask[j] ? crd::math::floor(rel.x[j] + static_cast<T>(0.5)) : rel.x[j];
             }
             continue;
         }
@@ -200,7 +200,7 @@ template <typename T>
             up_child[j] = up[j];
         }
         const T parent_up_branch = up[branch];
-        const T fl = std::floor(v);
+        const T fl = crd::math::floor(v);
         up_child[branch] = fl;
         if (lo_child[branch] <= up_child[branch])
         {

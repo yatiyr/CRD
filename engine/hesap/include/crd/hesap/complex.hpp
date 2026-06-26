@@ -3,7 +3,7 @@
 #include <crd/core/types.hpp>
 #include <crd/math/deterministic.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 #include <type_traits>
 
@@ -19,7 +19,7 @@ namespace crd::hesap
 // NOT wrap std::complex. The Cerid type is its own header so:
 //   - Division uses Smith 1962 robust algorithm (avoids spurious overflow
 //     and underflow when |re| or |im| is near the type's range bounds).
-//   - abs uses std::hypot (no spurious overflow on x*x + y*y).
+//   - abs uses crd::math::hypot (no spurious overflow on x*x + y*y).
 //   - arg uses the deterministic atan2 (handles quadrant correctly).
 //   - Every op is scalar in v0a; SIMD bit-exact parity arrives v0b
 //     (the algorithms here vectorise without changing summation order).
@@ -188,12 +188,12 @@ template <typename T>
     return z.re * z.re + z.im * z.im;
 }
 
-// Magnitude. Uses std::hypot — robust against overflow when one component
+// Magnitude. Uses crd::math::hypot — robust against overflow when one component
 // is near the type's range bound.
 template <typename T>
 [[nodiscard]] inline T abs(const Complex<T>& z) noexcept
 {
-    return std::hypot(z.re, z.im);
+    return crd::math::hypot(z.re, z.im);
 }
 
 // Argument (angle). Uses the deterministic atan2 (ADR-0063: bit-exact across
@@ -207,7 +207,7 @@ template <typename T>
 // Principal square root. Numerically-stable closed form (avoids cancellation
 // when re < 0 by computing the dominant component from |z|+|re| and the other
 // by division). Branch cut on the negative real axis; sqrt of a non-negative
-// real is the real sqrt. Uses std::sqrt (correctly-rounded) + abs (hypot) →
+// real is the real sqrt. Uses crd::math::sqrt (correctly-rounded) + abs (hypot) →
 // deterministic. Needed by the complex Wilkinson shift (zlahqr, v3d-2c-2).
 template <typename T>
 [[nodiscard]] inline Complex<T> sqrt(const Complex<T>& z) noexcept
@@ -219,10 +219,10 @@ template <typename T>
     const T t = abs(z);  // hypot(re, im)
     if (z.re >= T(0))
     {
-        const T w = std::sqrt((t + z.re) * T(0.5));
+        const T w = crd::math::sqrt((t + z.re) * T(0.5));
         return Complex<T>{w, z.im / (w + w)};
     }
-    const T w = std::sqrt((t - z.re) * T(0.5));
+    const T w = crd::math::sqrt((t - z.re) * T(0.5));
     const T imag = (z.im >= T(0)) ? w : -w;
     const T re = z.im / (imag + imag);  // = |im| / (2w), sign-correct
     return Complex<T>{re, imag};

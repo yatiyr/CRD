@@ -27,7 +27,7 @@
 #include <crd/hesap/linear_op.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 #include <type_traits>
 #include <utility>
@@ -192,7 +192,7 @@ template <typename T>
                 rj[i] = axj[i] - static_cast<T>(theta[j]) * xj[i];
             }
             const R rn = dn::nrm2<T>({rj, n});
-            const R sc = std::fabs(theta[j]) > R{1} ? std::fabs(theta[j]) : R{1};
+            const R sc = crd::math::fabs(theta[j]) > R{1} ? crd::math::fabs(theta[j]) : R{1};
             const R rel = rn / sc;
             if (rel <= tol)
             {
@@ -320,7 +320,7 @@ template <typename T>
         R vmax = R{0};
         for (crd::u32 i = 0; i < n; ++i)
         {
-            const R m = std::fabs(static_cast<R>(xj[i]));
+            const R m = crd::math::fabs(static_cast<R>(xj[i]));
             if (m > vmax)
             {
                 vmax = m;
@@ -340,9 +340,9 @@ template <typename T>
             const R e = static_cast<R>(axj[i]) - theta[j] * static_cast<R>(xj[i]);
             rn2 += e * e;
         }
-        const R rn = std::sqrt(rn2);
+        const R rn = crd::math::sqrt(rn2);
         result.residuals[j] = rn;
-        const R sc = std::fabs(theta[j]) > R{1} ? std::fabs(theta[j]) : R{1};
+        const R sc = crd::math::fabs(theta[j]) > R{1} ? crd::math::fabs(theta[j]) : R{1};
         if (rn / sc <= tol)
         {
             ++nconv;
@@ -423,7 +423,7 @@ template <typename T>
             }
         }
         const R q = dn::dot<T>({sj, n}, {bsj, n}); // sᵀ·B·s
-        return q > R{0} ? std::sqrt(q) : R{0};
+        return q > R{0} ? crd::math::sqrt(q) : R{0};
     };
 
     // ---- initial B-orthonormal block X (deterministic random) ----
@@ -513,7 +513,7 @@ template <typename T>
                 rj[i] = axj[i] - static_cast<T>(theta[j]) * bxj[i];
             }
             const R rn = dn::nrm2<T>({rj, n});
-            const R den = dn::nrm2<T>({axj, n}) + std::fabs(theta[j]) * dn::nrm2<T>({bxj, n});
+            const R den = dn::nrm2<T>({axj, n}) + crd::math::fabs(theta[j]) * dn::nrm2<T>({bxj, n});
             if (rn <= tol * (den > R{0} ? den : R{1}))
             {
                 ++nconv;
@@ -652,7 +652,7 @@ template <typename T>
         R vmax = R{0};
         for (crd::u32 i = 0; i < n; ++i)
         {
-            const R m = std::fabs(static_cast<R>(xj[i]));
+            const R m = crd::math::fabs(static_cast<R>(xj[i]));
             if (m > vmax)
             {
                 vmax = m;
@@ -672,9 +672,9 @@ template <typename T>
             an2 += static_cast<R>(axj[i]) * static_cast<R>(axj[i]);
             bn2 += static_cast<R>(bxj[i]) * static_cast<R>(bxj[i]);
         }
-        const R rn = std::sqrt(rn2);
+        const R rn = crd::math::sqrt(rn2);
         result.residuals[j] = rn;
-        const R den = std::sqrt(an2) + std::fabs(theta[j]) * std::sqrt(bn2);
+        const R den = crd::math::sqrt(an2) + crd::math::fabs(theta[j]) * crd::math::sqrt(bn2);
         if (rn <= tol * (den > R{0} ? den : R{1}))
         {
             ++nconv;

@@ -25,7 +25,7 @@
 #include <crd/hesap/ode/solution.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::hesap::ode
@@ -168,7 +168,7 @@ template <typename T>
     const T max_step = opts.hmax;
     const T eps = std::numeric_limits<T>::epsilon();
     const T newton_tol_lo = static_cast<T>(10) * eps / opts.rtol;
-    const T newton_tol_hi = std::sqrt(opts.rtol) < static_cast<T>(0.03) ? std::sqrt(opts.rtol) : static_cast<T>(0.03);
+    const T newton_tol_hi = crd::math::sqrt(opts.rtol) < static_cast<T>(0.03) ? crd::math::sqrt(opts.rtol) : static_cast<T>(0.03);
     const T newton_tol = newton_tol_lo > newton_tol_hi ? newton_tol_lo : newton_tol_hi;
 
     auto atol_i = [&opts](crd::usize i)
@@ -182,7 +182,7 @@ template <typename T>
         {
             sum += v[i] * v[i];
         }
-        return std::sqrt(sum / static_cast<T>(n));
+        return crd::math::sqrt(sum / static_cast<T>(n));
     };
 
     // Workspace.
@@ -280,7 +280,7 @@ template <typename T>
         {
             ytmp[i] = yy[i];
         }
-        const T sqrt_eps = std::sqrt(eps);
+        const T sqrt_eps = crd::math::sqrt(eps);
         for (crd::usize j = 0; j < n; ++j)
         {
             const T yj = ytmp[j];
@@ -326,8 +326,8 @@ template <typename T>
             d0s += q0 * q0;
             d1s += q1 * q1;
         }
-        const T d0 = std::sqrt(d0s / static_cast<T>(n));
-        const T d1 = std::sqrt(d1s / static_cast<T>(n));
+        const T d0 = crd::math::sqrt(d0s / static_cast<T>(n));
+        const T d1 = crd::math::sqrt(d1s / static_cast<T>(n));
         T h0_try = (d0 < static_cast<T>(1e-5) || d1 < static_cast<T>(1e-5)) ? static_cast<T>(1e-6)
                                                                             : static_cast<T>(0.01) * d0 / d1;
         h0_try = h0_try < interval_length ? h0_try : interval_length;
@@ -343,7 +343,7 @@ template <typename T>
             const T q = (dy[i] - fvec[i]) / sc;
             d2s += q * q;
         }
-        const T d2 = std::sqrt(d2s / static_cast<T>(n)) / h0_try;
+        const T d2 = crd::math::sqrt(d2s / static_cast<T>(n)) / h0_try;
         T h1;
         if (d1 <= static_cast<T>(1e-15) && d2 <= static_cast<T>(1e-15))
         {
@@ -353,7 +353,7 @@ template <typename T>
         else
         {
             const T dm = d1 > d2 ? d1 : d2;
-            h1 = std::pow(static_cast<T>(0.01) / dm, static_cast<T>(1) / static_cast<T>(2)); // order 1 ⇒ 1/(1+1)
+            h1 = crd::math::pow(static_cast<T>(0.01) / dm, static_cast<T>(1) / static_cast<T>(2)); // order 1 ⇒ 1/(1+1)
         }
         h_abs = static_cast<T>(100) * h0_try;
         h_abs = h_abs < h1 ? h_abs : h1;
@@ -567,7 +567,7 @@ template <typename T>
                     const bool have_rate = dy_norm_old >= static_cast<T>(0);
                     const T rate = have_rate ? dy_norm / dy_norm_old : static_cast<T>(0);
                     if (have_rate &&
-                        (rate >= static_cast<T>(1) || std::pow(rate, static_cast<T>(detail::bdf_newton_maxiter - k)) /
+                        (rate >= static_cast<T>(1) || crd::math::pow(rate, static_cast<T>(detail::bdf_newton_maxiter - k)) /
                                                               (static_cast<T>(1) - rate) * dy_norm >
                                                           newton_tol))
                     {
@@ -623,7 +623,7 @@ template <typename T>
 
             if (error_norm > static_cast<T>(1))
             {
-                T factor = safety * std::pow(error_norm, static_cast<T>(-1) / static_cast<T>(order + 1));
+                T factor = safety * crd::math::pow(error_norm, static_cast<T>(-1) / static_cast<T>(order + 1));
                 if (factor < static_cast<T>(0.2))
                 {
                     factor = static_cast<T>(0.2);
@@ -699,7 +699,7 @@ template <typename T>
         {
             const T expo = static_cast<T>(-1) / static_cast<T>(order + static_cast<crd::usize>(idx));
             factors[idx] =
-                (norms[idx] == static_cast<T>(0)) ? std::numeric_limits<T>::infinity() : std::pow(norms[idx], expo);
+                (norms[idx] == static_cast<T>(0)) ? std::numeric_limits<T>::infinity() : crd::math::pow(norms[idx], expo);
         }
         int best = 0;
         for (int idx = 1; idx < 3; ++idx)

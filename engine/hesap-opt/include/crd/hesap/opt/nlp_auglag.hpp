@@ -25,7 +25,7 @@
 #include <crd/hesap/opt/opt_types.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 
 namespace crd::hesap::opt
 {
@@ -192,14 +192,14 @@ template <typename T>
         T v = static_cast<T>(0);
         for (crd::usize i = 0; i < me; ++i)
         {
-            const T a = std::fabs(ce[i]);
+            const T a = crd::math::fabs(ce[i]);
             v = a > v ? a : v;
         }
         for (crd::usize i = 0; i < mi; ++i)
         {
             const T cap = la.mus()[i] / la.rho();
             const T m = ci[i] < cap ? ci[i] : cap;
-            const T a = std::fabs(m);
+            const T a = crd::math::fabs(m);
             v = a > v ? a : v;
         }
         return v;
@@ -221,21 +221,21 @@ template <typename T>
             {
                 acc -= mu[i] * ji[i * n + j];
             }
-            const T a = std::fabs(acc);
+            const T a = crd::math::fabs(acc);
             st = a > st ? a : st;
         }
         stationarity_out = st;
         T worst = st;
         for (crd::usize i = 0; i < me; ++i)
         {
-            const T a = std::fabs(ce[i]);
+            const T a = crd::math::fabs(ce[i]);
             worst = a > worst ? a : worst;
         }
         for (crd::usize i = 0; i < mi; ++i)
         {
             const T viol = ci[i] < static_cast<T>(0) ? -ci[i] : static_cast<T>(0);
             worst = viol > worst ? viol : worst;
-            const T comp = std::fabs(mu[i] * ci[i]);
+            const T comp = crd::math::fabs(mu[i] * ci[i]);
             worst = comp > worst ? comp : worst;
         }
         return worst;
@@ -244,7 +244,7 @@ template <typename T>
     // The classical (η, ω) schedule (N&W Framework 17.4 / LANCELOT).
     T rho = aopts.rho0;
     T omega = static_cast<T>(1) / rho;                              // inner tolerance
-    T eta = static_cast<T>(1) / std::pow(rho, static_cast<T>(0.1)); // required violation progress
+    T eta = static_cast<T>(1) / crd::math::pow(rho, static_cast<T>(0.1)); // required violation progress
 
     T stationarity = static_cast<T>(0);
     T kkt = std::numeric_limits<T>::max();
@@ -287,14 +287,14 @@ template <typename T>
                 break;
             }
             omega = omega / rho;
-            eta = eta / std::pow(rho, static_cast<T>(0.9));
+            eta = eta / crd::math::pow(rho, static_cast<T>(0.9));
         }
         else // stall ⇒ raise the penalty
         {
             rho *= aopts.rho_growth;
             la.set_rho(rho);
             omega = static_cast<T>(1) / rho;
-            eta = static_cast<T>(1) / std::pow(rho, static_cast<T>(0.1));
+            eta = static_cast<T>(1) / crd::math::pow(rho, static_cast<T>(0.1));
         }
         if (opts.record_history)
         {

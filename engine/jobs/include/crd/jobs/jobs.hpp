@@ -33,6 +33,11 @@ struct Config
     crd::u32 max_counters = 512U;
     crd::u32 injection_queue_capacity = 4096U;
     crd::u32 frame_alloc_bytes = 1U << 20U; // 1 MB per thread
+
+    // ADR-0094 — opt-in P-core routing. Default false ⇒ the historical shared-semaphore wake path runs verbatim
+    // (no behavior/perf change for any existing system). When true, the pool uses per-worker targeted wake +
+    // pins workers to cores (performance cores first) so MemoryBoundElementwise batches can route to P-cores.
+    bool pcore_routing = false;
 };
 
 void init(const Config& cfg = {});
@@ -125,6 +130,35 @@ private:
 [[nodiscard]] bool is_worker_fiber() noexcept;  // true when called from inside a job fiber
 [[nodiscard]] crd::u32 worker_index() noexcept; // thread index of the calling thread
 [[nodiscard]] crd::u32 num_workers() noexcept;  // total thread count (incl. thread 0)
+
+// ---------------------------------------------------------------------------
+// Worker-dispatch policy for parallel batches (ADR-0094).
+//
+// Bandwidth-bound elementwise work (e.g. an `out[i]=f(in[i])` sweep over millions of doubles) does NOT scale with
+// one-job-per-logical-CPU on a hybrid part: a 14900K's 32 logical (8 P + 16 E + HT) THRASHES the memory subsystem
+// (measured: ~0.19 ns/elem at 8 workers ≈ DDR5 peak, vs ~1.4 ns at 32). MemoryBoundElementwise asks the dispatcher
+// to limit concurrency to the performance-core count so the memory floor is hit without the E-core/HT cliff.
+// Compute-bound work should keep Default (it wants every core). A declarative request — callers must NOT hardcode
+// worker counts. Default preserves all existing behaviour exactly.
+// ---------------------------------------------------------------------------
+enum class WorkerPreference : crd::u8
+{
+    Default,                // one job per worker (compute-bound / mixed; the historical behaviour)
+    MemoryBoundElementwise, // limit to the performance-core count (bandwidth-bound elementwise)
+};
+
+// Detected performance (P) physical-core count. Intel-hybrid: cores at the top EfficiencyClass. Non-hybrid /
+// sandboxed (e.g. WSL where topology is hidden): returns 0 ("unknown") and policy degrades to Default. Cached.
+[[nodiscard]] crd::u32 performance_core_count() noexcept;
+
+// Fill out_ids[0..return) with the logical-CPU indices of the performance cores (for affinity pinning, ADR-0094).
+// Returns the count written (0 = unknown topology). Used by the pool when Config::pcore_routing is set.
+[[nodiscard]] crd::u32 performance_core_cpu_ids(crd::u32* out_ids, crd::u32 max_ids) noexcept;
+
+// Recommended job count for a `count`-element batch under `pref`, clamped to [1, min(num_workers(), count)].
+// MemoryBoundElementwise resolves to: env `CRD_JOBS_MEMBOUND_WORKERS` if set, else performance_core_count(), else
+// num_workers() (safe — never oversubscribes beyond the pool, never assumes hybrid).
+[[nodiscard]] crd::u32 recommended_jobs(WorkerPreference pref, crd::u32 count) noexcept;
 
 // Per-thread linear frame allocator. Each thread owns a private bump arena sized by
 // Config::frame_alloc_bytes. Allocation is lock-free and O(1).
@@ -250,6 +284,57 @@ template <typename F>
         std::memcpy(jobs + i, &j, sizeof(JobDecl));
     }
     return run(std::span<const JobDecl>(jobs, num_jobs));
+}
+
+// ---------------------------------------------------------------------------
+// P-core routing (ADR-0094). Valid only on a pool created with Config::pcore_routing = true (else falls back to a
+// plain parallel_for). is_pcore_routing() reports whether the pool opted in; pcore_worker_count() is how many
+// workers a memory-bound batch should use (the performance-core count, clamped to the pool).
+// ---------------------------------------------------------------------------
+[[nodiscard]] bool is_pcore_routing() noexcept;
+[[nodiscard]] crd::u32 pcore_worker_count() noexcept;
+
+// parallel_for_pcores — like parallel_for, but pins each job to a specific worker (0..K-1, K = pcore_worker_count())
+// via the pinned-job lane + the targeted-wake path, so the work lands on the performance-core-pinned workers and the
+// remaining workers stay parked (no E-core/HT oversubscription). On a non-pcore_routing pool it is exactly
+// parallel_for(count, num_workers, fn). Determinism is unaffected (fn ranges are disjoint).
+template <typename F>
+[[nodiscard]] Counter* parallel_for_pcores(crd::u32 count, F&& fn, StackSize stack = StackSize::Small,
+                                           Priority priority = Priority::Normal)
+{
+    using FD = std::decay_t<F>;
+    struct Task
+    {
+        crd::u32 begin;
+        crd::u32 end;
+        FD fn;
+        void operator()() { fn(begin, end); }
+    };
+    static_assert(sizeof(Task) <= 41U, "parallel_for_pcores: Task exceeds 41-byte SBO");
+    static_assert(std::is_trivially_copyable_v<Task>, "parallel_for_pcores: F must be trivially copyable");
+
+    CRD_ASSERT_MSG(count > 0U, "parallel_for_pcores: count must be > 0");
+    if (!is_pcore_routing())
+    {
+        return parallel_for(count, num_workers(), std::forward<F>(fn), stack, priority); // plain fallback
+    }
+    crd::u32 njobs = pcore_worker_count();
+    njobs = njobs < count ? njobs : count;
+    if (njobs == 0U)
+    {
+        njobs = 1U;
+    }
+    FD fn_copy(std::forward<F>(fn));
+    auto* const jobs = static_cast<JobDecl*>(frame_alloc(njobs * sizeof(JobDecl), alignof(JobDecl)));
+    for (crd::u32 i = 0U; i < njobs; ++i)
+    {
+        const crd::u32 begin = i * count / njobs;
+        const crd::u32 end = (i + 1U) * count / njobs;
+        JobDecl j = make_job(Task{begin, end, fn_copy}, stack, priority);
+        j.pin_thread = static_cast<crd::i32>(i); // pin to worker i (affinity-pinned to a performance core at init)
+        std::memcpy(jobs + i, &j, sizeof(JobDecl));
+    }
+    return run(std::span<const JobDecl>(jobs, njobs));
 }
 
 // ---------------------------------------------------------------------------

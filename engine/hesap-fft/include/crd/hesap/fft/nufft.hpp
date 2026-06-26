@@ -31,7 +31,7 @@
 #include <crd/hesap/fft/fft.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <cstring>
 
 #ifdef CRD_NUFFT_PROFILE
@@ -65,8 +65,8 @@ public:
         // Kernel half-width from tolerance, clamped; beta = 2.30 w @ sigma=2. The +2 (vs FINUFFT's +1) makes the
         // ACHIEVED error meet the requested tol with margin — our ES kernel runs ~3x looser than FINUFFT's tuned
         // beta at equal width, so we spend one extra width to actually deliver eps (a library must meet its tol).
-        const double digits = -std::log10(opts.tol > 0.0 ? opts.tol : 1e-16);
-        crd::i64 w = static_cast<crd::i64>(std::ceil(digits)) + 2;
+        const double digits = -crd::math::log10(opts.tol > 0.0 ? opts.tol : 1e-16);
+        crd::i64 w = static_cast<crd::i64>(crd::math::ceil(digits)) + 2;
         w = w < 2 ? 2 : (w > kMaxWidth ? kMaxWidth : w);
         m_w = static_cast<crd::usize>(w);
         m_beta = 2.30 * static_cast<double>(m_w); // ES kernel beta for sigma=2.0
@@ -93,10 +93,10 @@ public:
         for (crd::usize j = 0; j < m_npts; ++j)
         {
             double xj = static_cast<double>(x[j]);
-            xj -= two_pi * std::floor(xj / two_pi); // fold into [0, 2*pi)
+            xj -= two_pi * crd::math::floor(xj / two_pi); // fold into [0, 2*pi)
             m_x[j] = static_cast<T>(xj);
             const double xi = xj * n / two_pi; // fractional fine-grid coordinate in [0, n)
-            const crd::i64 i1 = static_cast<crd::i64>(std::ceil(xi - half_w));
+            const crd::i64 i1 = static_cast<crd::i64>(crd::math::ceil(xi - half_w));
             m_i1[j] = i1;
             T* kw = m_kw.data() + j * m_w;
             for (crd::usize l = 0; l < m_w; ++l)
@@ -270,8 +270,8 @@ public:
             for (crd::usize j = 0; j < m_npts; ++j)
             {
                 const double ang = s * k * static_cast<double>(m_x[j]);
-                const double cr = std::cos(ang);
-                const double ci = std::sin(ang);
+                const double cr = crd::math::cos(ang);
+                const double ci = crd::math::sin(ang);
                 re += static_cast<double>(c[j].re) * cr - static_cast<double>(c[j].im) * ci;
                 im += static_cast<double>(c[j].re) * ci + static_cast<double>(c[j].im) * cr;
             }
@@ -294,8 +294,8 @@ public:
             {
                 const double k = static_cast<double>(static_cast<crd::i64>(idx) - static_cast<crd::i64>(half));
                 const double ang = s * k * xj;
-                const double cr = std::cos(ang);
-                const double ci = std::sin(ang);
+                const double cr = crd::math::cos(ang);
+                const double ci = crd::math::sin(ang);
                 re += static_cast<double>(f[idx].re) * cr - static_cast<double>(f[idx].im) * ci;
                 im += static_cast<double>(f[idx].re) * ci + static_cast<double>(f[idx].im) * cr;
             }
@@ -323,9 +323,9 @@ private:
         const double s = 1.0 - t * t;
         if (s <= 0.0)
         {
-            return std::exp(-m_beta); // |t| >= 1 endpoint: kernel ~ exp(-beta), tiny
+            return crd::math::exp(-m_beta); // |t| >= 1 endpoint: kernel ~ exp(-beta), tiny
         }
-        return std::exp(m_beta * (std::sqrt(s) - 1.0));
+        return crd::math::exp(m_beta * (crd::math::sqrt(s) - 1.0));
     }
 
     // Deconvolution table d_k = 1 / K(k), K(k) = (w/2) integral_{-1}^{1} phi(t) cos(pi*w*k*t/n) dt, via
@@ -350,7 +350,7 @@ private:
             for (crd::usize i = 0; i < q; ++i)
             {
                 const double t = nodes[i];
-                acc += wts[i] * es_kernel(t) * std::cos(pwn * k * t);
+                acc += wts[i] * es_kernel(t) * crd::math::cos(pwn * k * t);
             }
             const double kk = 0.5 * static_cast<double>(m_w) * acc;
             m_dk[idx] = static_cast<T>(1.0 / kk);
@@ -364,7 +364,7 @@ private:
         const crd::usize m = (n + 1) / 2;
         for (crd::usize i = 0; i < m; ++i)
         {
-            double z = std::cos(pi * (static_cast<double>(i) + 0.75) / (static_cast<double>(n) + 0.5));
+            double z = crd::math::cos(pi * (static_cast<double>(i) + 0.75) / (static_cast<double>(n) + 0.5));
             double z1 = 0.0;
             double pp = 0.0;
             for (int it = 0; it < 100; ++it)

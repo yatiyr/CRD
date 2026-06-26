@@ -20,7 +20,7 @@
 #include <crd/hesap/opt/residual_function.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::hesap::opt
@@ -50,9 +50,9 @@ template <typename T>
     switch (loss)
     {
     case RobustLoss::Huber:
-        return s <= static_cast<T>(1) ? static_cast<T>(1) : std::sqrt(static_cast<T>(1) / std::sqrt(s));
+        return s <= static_cast<T>(1) ? static_cast<T>(1) : crd::math::sqrt(static_cast<T>(1) / crd::math::sqrt(s));
     case RobustLoss::Cauchy:
-        return std::sqrt(static_cast<T>(1) / (static_cast<T>(1) + s));
+        return crd::math::sqrt(static_cast<T>(1) / (static_cast<T>(1) + s));
     case RobustLoss::Tukey:
         return s <= static_cast<T>(1) ? (static_cast<T>(1) - s) : static_cast<T>(0); // sqrt((1-s)²)=|1-s|, s≤1
     case RobustLoss::None:
@@ -77,7 +77,7 @@ template <typename T>
         {
             return false; // not positive-definite
         }
-        d = std::sqrt(d);
+        d = crd::math::sqrt(d);
         a[j * n + j] = d;
         for (crd::usize i = j + 1; i < n; ++i)
         {
@@ -190,7 +190,7 @@ template <typename T>
         T mx = static_cast<T>(0);
         for (crd::usize i = 0; i < len; ++i)
         {
-            const T a = std::fabs(v[i]);
+            const T a = crd::math::fabs(v[i]);
             mx = a > mx ? a : mx;
         }
         return mx;
@@ -329,7 +329,7 @@ template <typename T>
                 nu = static_cast<T>(2);
             }
             const T x_norm = inf_norm(x, n);
-            const auto stop = check_convergence<T>(grad_norm, std::sqrt(step_norm_sq), std::fabs(df), x_norm, cost,
+            const auto stop = check_convergence<T>(grad_norm, crd::math::sqrt(step_norm_sq), crd::math::fabs(df), x_norm, cost,
                                                    opts);
             if (stop.has_value())
             {

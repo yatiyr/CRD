@@ -27,7 +27,7 @@
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 
 namespace crd::hesap::opt
 {
@@ -42,7 +42,7 @@ template <typename T> inline T clip_grad_norm(crd::containers::Span<T> g, T max_
     {
         nrm_sq += g[i] * g[i];
     }
-    const T nrm = std::sqrt(nrm_sq);
+    const T nrm = crd::math::sqrt(nrm_sq);
     if (nrm > max_norm && nrm > static_cast<T>(0))
     {
         const T scale = max_norm / nrm;
@@ -92,7 +92,7 @@ template <typename T>
 {
     constexpr T pi = static_cast<T>(3.14159265358979323846);
     const T frac = t_max > 0 ? static_cast<T>(t) / static_cast<T>(t_max) : static_cast<T>(1);
-    return eta_min + static_cast<T>(0.5) * (base - eta_min) * (static_cast<T>(1) + std::cos(pi * frac));
+    return eta_min + static_cast<T>(0.5) * (base - eta_min) * (static_cast<T>(1) + crd::math::cos(pi * frac));
 }
 
 // Linear warmup over the first `warmup` steps, then the base rate.
@@ -206,7 +206,7 @@ public:
             m_v[i] = m_cfg.beta2 * m_v[i] + (static_cast<T>(1) - m_cfg.beta2) * g * g;
             const T mhat = m_m[i] / bc1;
             const T vhat = m_v[i] / bc2;
-            x[i] -= m_cfg.lr * mhat / (std::sqrt(vhat) + m_cfg.eps);
+            x[i] -= m_cfg.lr * mhat / (crd::math::sqrt(vhat) + m_cfg.eps);
         }
     }
 
@@ -255,11 +255,11 @@ public:
         ++m_t;
         const T t = static_cast<T>(m_t);
         const T mu_t = m_cfg.beta1 * (static_cast<T>(1) -
-                                      static_cast<T>(0.5) * std::pow(static_cast<T>(0.96), t * m_cfg.momentum_decay));
+                                      static_cast<T>(0.5) * crd::math::pow(static_cast<T>(0.96), t * m_cfg.momentum_decay));
         const T mu_next =
             m_cfg.beta1 *
             (static_cast<T>(1) -
-             static_cast<T>(0.5) * std::pow(static_cast<T>(0.96), (t + static_cast<T>(1)) * m_cfg.momentum_decay));
+             static_cast<T>(0.5) * crd::math::pow(static_cast<T>(0.96), (t + static_cast<T>(1)) * m_cfg.momentum_decay));
         const T mu_prod_t = m_mu_prod * mu_t; // ∏_{i≤t} μ_i
         const T mu_prod_next = mu_prod_t * mu_next;
         m_b2t *= m_cfg.beta2;
@@ -272,7 +272,7 @@ public:
             const T mhat = mu_next * m_m[i] / (static_cast<T>(1) - mu_prod_next) +
                            (static_cast<T>(1) - mu_t) * g / (static_cast<T>(1) - mu_prod_t);
             const T vhat = m_v[i] / bc2;
-            x[i] -= m_cfg.lr * mhat / (std::sqrt(vhat) + m_cfg.eps);
+            x[i] -= m_cfg.lr * mhat / (crd::math::sqrt(vhat) + m_cfg.eps);
         }
         m_mu_prod = mu_prod_t;
     }
@@ -330,7 +330,7 @@ public:
         T r_t = static_cast<T>(1);
         if (rectified)
         {
-            r_t = std::sqrt(((rho_t - static_cast<T>(4)) * (rho_t - static_cast<T>(2)) * rho_inf) /
+            r_t = crd::math::sqrt(((rho_t - static_cast<T>(4)) * (rho_t - static_cast<T>(2)) * rho_inf) /
                             ((rho_inf - static_cast<T>(4)) * (rho_inf - static_cast<T>(2)) * rho_t));
         }
         for (crd::usize i = 0; i < n; ++i)
@@ -341,7 +341,7 @@ public:
             const T mhat = m_m[i] / bc1;
             if (rectified)
             {
-                const T vhat = std::sqrt(m_v[i] / bc2);
+                const T vhat = crd::math::sqrt(m_v[i] / bc2);
                 x[i] -= m_cfg.lr * r_t * mhat / (vhat + m_cfg.eps);
             }
             else
@@ -397,7 +397,7 @@ public:
         {
             const T g = grad[i] + m_cfg.weight_decay * x[i];
             m_sq[i] = m_cfg.alpha * m_sq[i] + (static_cast<T>(1) - m_cfg.alpha) * g * g;
-            const T denom = std::sqrt(m_sq[i]) + m_cfg.eps;
+            const T denom = crd::math::sqrt(m_sq[i]) + m_cfg.eps;
             if (m_cfg.momentum > static_cast<T>(0))
             {
                 m_buf[i] = m_cfg.momentum * m_buf[i] + g / denom;
@@ -450,7 +450,7 @@ public:
         {
             const T g = grad[i] + m_cfg.weight_decay * x[i];
             m_sum[i] += g * g;
-            x[i] -= m_cfg.lr * g / (std::sqrt(m_sum[i]) + m_cfg.eps);
+            x[i] -= m_cfg.lr * g / (crd::math::sqrt(m_sum[i]) + m_cfg.eps);
         }
     }
 
@@ -496,7 +496,7 @@ public:
         {
             const T g = grad[i] + m_cfg.weight_decay * x[i];
             m_sq[i] = m_cfg.rho * m_sq[i] + (static_cast<T>(1) - m_cfg.rho) * g * g;
-            const T delta = std::sqrt(m_acc[i] + m_cfg.eps) / std::sqrt(m_sq[i] + m_cfg.eps) * g;
+            const T delta = crd::math::sqrt(m_acc[i] + m_cfg.eps) / crd::math::sqrt(m_sq[i] + m_cfg.eps) * g;
             m_acc[i] = m_cfg.rho * m_acc[i] + (static_cast<T>(1) - m_cfg.rho) * delta * delta;
             x[i] -= m_cfg.lr * delta;
         }
@@ -602,12 +602,12 @@ public:
             m_v[i] = m_cfg.beta2 * m_v[i] + (static_cast<T>(1) - m_cfg.beta2) * g * g;
             const T mhat = m_m[i] / bc1;
             const T vhat = m_v[i] / bc2;
-            m_r[i] = mhat / (std::sqrt(vhat) + m_cfg.eps) + m_cfg.weight_decay * x[i];
+            m_r[i] = mhat / (crd::math::sqrt(vhat) + m_cfg.eps) + m_cfg.weight_decay * x[i];
             x_norm_sq += x[i] * x[i];
             r_norm_sq += m_r[i] * m_r[i];
         }
-        const T x_norm = std::sqrt(x_norm_sq);
-        const T r_norm = std::sqrt(r_norm_sq);
+        const T x_norm = crd::math::sqrt(x_norm_sq);
+        const T r_norm = crd::math::sqrt(r_norm_sq);
         const T trust =
             (x_norm > static_cast<T>(0) && r_norm > static_cast<T>(0)) ? x_norm / r_norm : static_cast<T>(1);
         for (crd::usize i = 0; i < n; ++i)

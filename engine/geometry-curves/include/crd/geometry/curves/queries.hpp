@@ -55,7 +55,7 @@
 #include <crd/math/vec.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <optional>
 
 namespace crd::geometry::curves
@@ -208,7 +208,7 @@ template <typename Curve>
 {
     using T          = typename Curve::scalar_t;
     const auto cp    = closest_point(curve, p, tolerance, alloc);
-    return static_cast<T>(std::sqrt(static_cast<double>(cp.distance_squared)));
+    return static_cast<T>(crd::math::sqrt(static_cast<double>(cp.distance_squared)));
 }
 
 // ---------------------------------------------------------------------------

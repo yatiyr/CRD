@@ -24,7 +24,7 @@
 #include <crd/memory/allocator.hpp>
 
 #include <algorithm>
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::hesap::dsp
@@ -392,7 +392,7 @@ template <typename T> [[nodiscard]] T rms(crd::containers::ConstSpan<T> x) noexc
     {
         s += x[i] * x[i];
     }
-    return std::sqrt(s / static_cast<T>(x.size()));
+    return crd::math::sqrt(s / static_cast<T>(x.size()));
 }
 template <typename T> [[nodiscard]] T peak_value(crd::containers::ConstSpan<T> x) noexcept
 {
@@ -500,7 +500,7 @@ template <typename T>
 }
 template <typename T> [[nodiscard]] inline T to_db_power(T num, T den) noexcept
 {
-    return T(10) * std::log10(num / (den + static_cast<T>(1e-300)));
+    return T(10) * crd::math::log10(num / (den + static_cast<T>(1e-300)));
 }
 } // namespace detail
 

@@ -2,7 +2,7 @@
 
 #include <crd/containers/array.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::hesap::ordering
@@ -81,14 +81,14 @@ Mc64Scaling mc64_match_and_scale(const sparse::SparsePattern& pat, crd::containe
     {
         crd::f64 mx = 0.0;
         for (crd::u32 k = outer[i]; k < outer[i + 1]; ++k) { if (mag[k] > mx) { mx = mag[k]; } }
-        logrm[i] = mx > 0.0 ? std::log(mx) : -inf;
+        logrm[i] = mx > 0.0 ? crd::math::log(mx) : -inf;
     }
     // Precompute log|a_ij| per stored entry ONCE. The shortest-augmenting-path Dijkstra below revisits the
-    // same edges across many augmentations and previously recomputed std::log per visit (the dominant MC64
+    // same edges across many augmentations and previously recomputed crd::math::log per visit (the dominant MC64
     // cost on dense matrices). This is bit-identical (same log values) ⇒ matching/scaling unchanged.
     crd::containers::Array<crd::f64> logmag(alloc);
     logmag.resize(mag.size());
-    for (crd::usize k = 0; k < mag.size(); ++k) { logmag[k] = mag[k] > 0.0 ? std::log(mag[k]) : -inf; }
+    for (crd::usize k = 0; k < mag.size(); ++k) { logmag[k] = mag[k] > 0.0 ? crd::math::log(mag[k]) : -inf; }
 
     crd::containers::Array<crd::f64> u(alloc); // row dual potentials
     crd::containers::Array<crd::f64> v(alloc); // col dual potentials
@@ -246,13 +246,13 @@ Mc64Scaling mc64_match_and_scale(const sparse::SparsePattern& pat, crd::containe
     // Scaling from the duals: D_r[i] = exp(u[i])/rowmax[i], D_c[j] = exp(v[j]). Matched entry → 1.
     for (crd::u32 i = 0; i < n; ++i)
     {
-        const crd::f64 rm = std::exp(logrm[i]); // = rowmax (or 0 for an empty row)
-        res.dr[i] = (logrm[i] > -inf && std::isfinite(u[i])) ? std::exp(u[i]) / rm : 1.0;
+        const crd::f64 rm = crd::math::exp(logrm[i]); // = rowmax (or 0 for an empty row)
+        res.dr[i] = (logrm[i] > -inf && std::isfinite(u[i])) ? crd::math::exp(u[i]) / rm : 1.0;
         if (!(res.dr[i] > 0.0) || !std::isfinite(res.dr[i])) { res.dr[i] = 1.0; }
     }
     for (crd::u32 j = 0; j < n; ++j)
     {
-        res.dc[j] = std::isfinite(v[j]) ? std::exp(v[j]) : 1.0;
+        res.dc[j] = std::isfinite(v[j]) ? crd::math::exp(v[j]) : 1.0;
         if (!(res.dc[j] > 0.0) || !std::isfinite(res.dc[j])) { res.dc[j] = 1.0; }
     }
     return res;

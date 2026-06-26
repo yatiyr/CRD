@@ -45,7 +45,7 @@
 #include <crd/math/vec.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::geometry::delaunay
@@ -450,7 +450,7 @@ NniResult<T> NniInterpolator2<T>::interpolate(const crd::math::Vec2<T>& query) c
 
         stolen_poly.push_back(new_right);
 
-        const T area = std::fabs(polygon_signed_area<T>(stolen_poly.data(),
+        const T area = crd::math::fabs(polygon_signed_area<T>(stolen_poly.data(),
                                                           static_cast<crd::u32>(stolen_poly.size())));
         stolen_areas[i] = area;
         total_stolen += area;

@@ -3,7 +3,7 @@
 #include <crd/containers/array.hpp>
 #include <crd/core/assert.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::hesap::dense
@@ -76,7 +76,7 @@ struct PassiveQR
         {
             rho_sq += rv[i] * rv[i];
         }
-        const T rho = std::sqrt(rho_sq);
+        const T rho = crd::math::sqrt(rho_sq);
         const T tiny = std::numeric_limits<T>::epsilon() * static_cast<T>(16);
         if (rho <= tiny)
         {
@@ -147,7 +147,7 @@ struct PassiveQR
         {
             const T alpha = r[cc * pmax + cc];
             const T beta = r[(cc + 1) * pmax + cc];
-            const T rr = std::sqrt(alpha * alpha + beta * beta);
+            const T rr = crd::math::sqrt(alpha * alpha + beta * beta);
             if (rr == T{0})
             {
                 continue;
@@ -210,7 +210,7 @@ NNLS<T> nnls(crd::memory::IAllocator* alloc, const Matrix<T>& a, const Vector<T>
             const T v = a.at(i, j);
             s += v * v;
         }
-        s = std::sqrt(s);
+        s = crd::math::sqrt(s);
         if (s > scale)
         {
             scale = s;

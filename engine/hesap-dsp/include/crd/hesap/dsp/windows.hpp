@@ -23,7 +23,7 @@
 #include <crd/hesap/fft/fft.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <numbers>
 
 namespace crd::hesap::dsp
@@ -61,7 +61,7 @@ inline crd::usize win_len(crd::usize m, bool sym, bool& trunc) noexcept
 } // namespace detail
 
 // general_cosine: w[i] = Σ_k a[k] cos(k * fac[i]), fac = linspace(-pi, pi, N).
-// Optimized: ONE std::cos per sample via the Chebyshev recurrence cos(k x) = 2 cos(x) cos((k-1)x) - cos((k-2)x)
+// Optimized: ONE crd::math::cos per sample via the Chebyshev recurrence cos(k x) = 2 cos(x) cos((k-1)x) - cos((k-2)x)
 // (vs K transcendental calls — the blackmanharris/nuttall hot spot), and symmetry w[i] = w[m-1-i] for the
 // symmetric (sym=true) case (compute half). Matches scipy to ~1e-13 (the recurrence error is ~K·eps for K≤5).
 template <typename T>
@@ -85,7 +85,7 @@ template <typename T>
     auto sample = [&](crd::usize i) -> double
     {
         const double fac = -pi + 2.0 * pi * static_cast<double>(i) / static_cast<double>(n - 1);
-        const double c1 = std::cos(fac); // the only transcendental call
+        const double c1 = crd::math::cos(fac); // the only transcendental call
         double s = a[0];
         if (kt > 1)
         {
@@ -219,7 +219,7 @@ template <typename T>
     constexpr double pi = std::numbers::pi_v<double>;
     for (crd::usize i = 0; i < m; ++i)
     {
-        w[i] = static_cast<T>(std::sin(pi / static_cast<double>(n) * (static_cast<double>(i) + 0.5)));
+        w[i] = static_cast<T>(crd::math::sin(pi / static_cast<double>(n) * (static_cast<double>(i) + 0.5)));
     }
     return w;
 }
@@ -232,7 +232,7 @@ template <typename T>
     const crd::usize n = detail::win_len(m, sym, trunc);
     w.resize(m);
     constexpr double pi = std::numbers::pi_v<double>;
-    auto sinc = [](double x) { return (std::abs(x) < 1e-15) ? 1.0 : std::sin(pi * x) / (pi * x); };
+    auto sinc = [](double x) { return (std::abs(x) < 1e-15) ? 1.0 : crd::math::sin(pi * x) / (pi * x); };
     for (crd::usize i = 0; i < m; ++i)
     {
         w[i] = static_cast<T>(sinc(2.0 * static_cast<double>(i) / static_cast<double>(n - 1) - 1.0));
@@ -255,7 +255,7 @@ template <typename T>
     for (crd::usize i = 0; i < half; ++i)
     {
         const double r = (static_cast<double>(i) - alpha) / alpha;
-        const double v = bessel_i0<double>(beta * std::sqrt(1.0 - r * r)) * inv_denom;
+        const double v = bessel_i0<double>(beta * crd::math::sqrt(1.0 - r * r)) * inv_denom;
         w[i] = static_cast<T>(v);
         if (sym)
         {
@@ -278,7 +278,7 @@ template <typename T>
     for (crd::usize i = 0; i < half; ++i)
     {
         const double x = static_cast<double>(i) - c;
-        const double v = std::exp(-0.5 * (x / std_dev) * (x / std_dev));
+        const double v = crd::math::exp(-0.5 * (x / std_dev) * (x / std_dev));
         w[i] = static_cast<T>(v);
         if (sym)
         {
@@ -301,7 +301,7 @@ template <typename T>
     for (crd::usize i = 0; i < half; ++i)
     {
         const double x = static_cast<double>(i) - c;
-        const double v = std::exp(-0.5 * std::pow(std::abs(x / sig), 2.0 * p));
+        const double v = crd::math::exp(-0.5 * crd::math::pow(std::abs(x / sig), 2.0 * p));
         w[i] = static_cast<T>(v);
         if (sym)
         {
@@ -322,7 +322,7 @@ template <typename T>
     const double center = (static_cast<double>(n) - 1.0) / 2.0; // scipy default center = (M-1)/2
     for (crd::usize i = 0; i < m; ++i)
     {
-        w[i] = static_cast<T>(std::exp(-std::abs(static_cast<double>(i) - center) / tau));
+        w[i] = static_cast<T>(crd::math::exp(-std::abs(static_cast<double>(i) - center) / tau));
     }
     return w;
 }
@@ -338,7 +338,7 @@ template <typename T>
     for (crd::usize i = 0; i < m; ++i)
     {
         const double fac = std::abs(static_cast<double>(i) / static_cast<double>(n - 1) - 0.5);
-        w[i] = static_cast<T>(0.62 - 0.48 * fac + 0.38 * std::cos(2.0 * pi * fac));
+        w[i] = static_cast<T>(0.62 - 0.48 * fac + 0.38 * crd::math::cos(2.0 * pi * fac));
     }
     return w;
 }
@@ -360,7 +360,7 @@ template <typename T>
             continue;
         }
         const double x = std::abs(-1.0 + 2.0 * static_cast<double>(i) / static_cast<double>(n - 1));
-        w[i] = static_cast<T>((1.0 - x) * std::cos(pi * x) + (1.0 / pi) * std::sin(pi * x));
+        w[i] = static_cast<T>((1.0 - x) * crd::math::cos(pi * x) + (1.0 / pi) * crd::math::sin(pi * x));
     }
     return w;
 }
@@ -416,7 +416,7 @@ template <typename T>
         const double x = static_cast<double>(i);
         if (x < width)
         {
-            w[i] = static_cast<T>(0.5 * (1.0 + std::cos(pi * (x / width - 1.0))));
+            w[i] = static_cast<T>(0.5 * (1.0 + crd::math::cos(pi * (x / width - 1.0))));
         }
         else if (x <= nm1 - width)
         {
@@ -424,7 +424,7 @@ template <typename T>
         }
         else
         {
-            w[i] = static_cast<T>(0.5 * (1.0 + std::cos(pi * (x / width - 2.0 / alpha + 1.0))));
+            w[i] = static_cast<T>(0.5 * (1.0 + crd::math::cos(pi * (x / width - 2.0 / alpha + 1.0))));
         }
     }
     return w;
@@ -442,8 +442,8 @@ template <typename T>
     const crd::usize n = detail::win_len(m, sym, trunc);
     w.resize(m);
     constexpr double pi = std::numbers::pi_v<double>;
-    const double bdb = std::pow(10.0, std::abs(sll) / 20.0);
-    const double A = std::acosh(bdb) / pi;
+    const double bdb = crd::math::pow(10.0, std::abs(sll) / 20.0);
+    const double A = crd::math::acosh(bdb) / pi;
     const double s2 = static_cast<double>(nbar * nbar) / (A * A + (static_cast<double>(nbar) - 0.5) * (static_cast<double>(nbar) - 0.5));
     crd::containers::Array<double> Fm(alloc);
     Fm.resize(nbar - 1);
@@ -472,7 +472,7 @@ template <typename T>
         double s = 1.0;
         for (crd::usize mi = 1; mi < nbar; ++mi)
         {
-            s += 2.0 * Fm[mi - 1] * std::cos(2.0 * pi * static_cast<double>(mi) * xi / static_cast<double>(n));
+            s += 2.0 * Fm[mi - 1] * crd::math::cos(2.0 * pi * static_cast<double>(mi) * xi / static_cast<double>(n));
         }
         w[i] = static_cast<T>(s);
         if (s > mx)
@@ -516,7 +516,7 @@ template <typename T>
     for (crd::usize n = 0; n < m; ++n)
     {
         const double centered = (static_cast<double>(m) - 1.0) / 2.0 - static_cast<double>(n);
-        A.at(n, n) = centered * centered * std::cos(2.0 * pi * bigW);
+        A.at(n, n) = centered * centered * crd::math::cos(2.0 * pi * bigW);
         if (n + 1 < m)
         {
             const double off = static_cast<double>(n + 1) * (static_cast<double>(m) - static_cast<double>(n + 1)) / 2.0;
@@ -571,26 +571,26 @@ template <typename T>
     }
     constexpr double pi = std::numbers::pi_v<double>;
     const double order = static_cast<double>(m) - 1.0;
-    const double beta = std::cosh(std::acosh(std::pow(10.0, std::abs(at) / 20.0)) / order);
+    const double beta = crd::math::cosh(crd::math::acosh(crd::math::pow(10.0, std::abs(at) / 20.0)) / order);
     // p[k] = T_order(beta cos(pi k / M)), the three-branch Chebyshev evaluation.
     crd::containers::Array<Complex<double>> p(alloc);
     p.resize(m);
     for (crd::usize k = 0; k < m; ++k)
     {
-        const double x = beta * std::cos(pi * static_cast<double>(k) / static_cast<double>(m));
+        const double x = beta * crd::math::cos(pi * static_cast<double>(k) / static_cast<double>(m));
         double pk;
         if (x > 1.0)
         {
-            pk = std::cosh(order * std::acosh(x));
+            pk = crd::math::cosh(order * crd::math::acosh(x));
         }
         else if (x < -1.0)
         {
             const double s = (static_cast<int>(order) % 2 == 0) ? 1.0 : -1.0;
-            pk = s * std::cosh(order * std::acosh(-x));
+            pk = s * crd::math::cosh(order * crd::math::acosh(-x));
         }
         else
         {
-            pk = std::cos(order * std::acos(x));
+            pk = crd::math::cos(order * crd::math::acos(x));
         }
         p[k] = Complex<double>{pk, 0.0};
     }
@@ -619,8 +619,8 @@ template <typename T>
         for (crd::usize k = 0; k < m; ++k)
         {
             const double ph = pi * static_cast<double>(k) / static_cast<double>(m);
-            const double cr = std::cos(ph);
-            const double ci = std::sin(ph);
+            const double cr = crd::math::cos(ph);
+            const double ci = crd::math::sin(ph);
             p[k] = Complex<double>{p[k].re * cr, p[k].re * ci};
         }
         crd::hesap::fft::FftPlan<double> plan(alloc, m);

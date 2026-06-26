@@ -26,6 +26,7 @@ struct WorkerConfig
     crd::u32 large_fiber_count  = 16U;
     crd::u32 max_counters       = 512U;
     crd::u32 frame_arena_bytes  = 1U << 20U; // 1 MB per thread
+    bool     pcore_routing      = false;     // ADR-0094 opt-in (targeted wake + P-core affinity)
 };
 
 // Owns the Scheduler, FiberPool, and CounterPool. Spawns N-1 OS worker threads;
@@ -89,6 +90,7 @@ public:
     [[nodiscard]] CounterPool& counter_pool()   noexcept { return m_counter_pool; }
     [[nodiscard]] crd::u32     num_threads()    const noexcept { return m_num_threads; }
     [[nodiscard]] bool         is_initialized() const noexcept { return m_initialized; }
+    [[nodiscard]] bool         is_pcore_routing() const noexcept { return m_pcore_routing; }
 
 private:
     static void worker_loop(WorkerPool* self, crd::u32 thread_index);
@@ -109,6 +111,7 @@ private:
     std::atomic<bool>        m_stopping{false};
     crd::u32                 m_num_threads = 0U;
     bool                     m_initialized = false;
+    bool                     m_pcore_routing = false; // ADR-0094 opt-in (Config::pcore_routing)
 };
 
 // ---------------------------------------------------------------------------

@@ -22,7 +22,7 @@
 #include <crd/hesap/dsp/polynomial.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 
 namespace crd::hesap::dsp
 {
@@ -158,7 +158,7 @@ void build_quads(crd::memory::IAllocator* alloc, crd::containers::Array<Complex<
         q.c1 = T(-2) * cc[i].re;
         q.c2 = cc[i].re * cc[i].re + cc[i].im * cc[i].im;
         q.repr = cc[i];
-        q.mag = std::sqrt(q.c2);
+        q.mag = crd::math::sqrt(q.c2);
         out.push_back(q);
     }
     crd::usize i = 0;

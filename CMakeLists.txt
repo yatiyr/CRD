@@ -539,7 +539,9 @@ add_subdirectory(engine/geometry-bvh-gpu)
 add_subdirectory(engine/geometry-shader-helpers)
 add_subdirectory(engine/geometry-curves)
 add_subdirectory(engine/hesap)
+add_subdirectory(engine/hesap-special)  # v12; special functions + orthogonal polynomials (leaf; substrate for stats/quadrature/dsp); ADR-0094
 add_subdirectory(engine/hesap-dense)
+add_subdirectory(engine/hesap-quadrature)  # v12-c; Gauss quadrature via Golub-Welsch (REUSES hesap-dense eig_sym + hesap-special recurrences); ADR-0094
 add_subdirectory(engine/hesap-sparse)  # v1a; links crd-jobs (declared below — CMake resolves target names at generation)
 add_subdirectory(engine/hesap-ordering)  # v2; fill-reducing reorderings + symbolic factorisation (depends on hesap-sparse)
 add_subdirectory(engine/hesap-resources)  # v4-corpus; matrices as cooked resources (depends on hesap-sparse + resources)

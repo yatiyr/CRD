@@ -27,7 +27,7 @@
 #include <crd/hesap/opt/opt_types.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::hesap::opt
@@ -91,7 +91,7 @@ inline void update(const int* n, const int* npt, T* bmat, T* zmat, const int* nd
         {
             d__1 = zmat[k + j * zmat_dim1];
             d__2 = ztest;
-            d__3 = std::fabs(d__1);
+            d__3 = crd::math::fabs(d__1);
             ztest = d__2 >= d__3 ? d__2 : d__3;
         }
     }
@@ -102,11 +102,11 @@ inline void update(const int* n, const int* npt, T* bmat, T* zmat, const int* nd
     for (j = 2; j <= i__2; ++j)
     {
         d__1 = zmat[*knew + j * zmat_dim1];
-        if (std::fabs(d__1) > ztest)
+        if (crd::math::fabs(d__1) > ztest)
         {
             d__1 = zmat[*knew + zmat_dim1];
             d__2 = zmat[*knew + j * zmat_dim1];
-            temp = std::sqrt(d__1 * d__1 + d__2 * d__2);
+            temp = crd::math::sqrt(d__1 * d__1 + d__2 * d__2);
             tempa = zmat[*knew + zmat_dim1] / temp;
             tempb = zmat[*knew + j * zmat_dim1] / temp;
             i__1 = *npt;
@@ -131,7 +131,7 @@ inline void update(const int* n, const int* npt, T* bmat, T* zmat, const int* nd
     vlag[*knew] -= one;
 
     /* Complete ZMAT. */
-    temp = std::sqrt(*denom);
+    temp = crd::math::sqrt(*denom);
     tempb = zmat[*knew + zmat_dim1] / temp;
     tempa = tau / temp;
     i__2 = *npt;
@@ -366,8 +366,8 @@ L50:
             bmat[nfx * bmat_dim1 + 1] = -(stepa + stepb) / (stepa * stepb);
             bmat[nf + nfx * bmat_dim1] = -half / xpt[nf - *n + nfx * xpt_dim1];
             bmat[nf - *n + nfx * bmat_dim1] = -bmat[nfx * bmat_dim1 + 1] - bmat[nf + nfx * bmat_dim1];
-            zmat[nfx * zmat_dim1 + 1] = std::sqrt(two) / (stepa * stepb);
-            zmat[nf + nfx * zmat_dim1] = std::sqrt(half) / rhosq;
+            zmat[nfx * zmat_dim1 + 1] = crd::math::sqrt(two) / (stepa * stepb);
+            zmat[nf + nfx * zmat_dim1] = crd::math::sqrt(half) / rhosq;
             zmat[nf - *n + nfx * zmat_dim1] = -zmat[nfx * zmat_dim1 + 1] - zmat[nf + nfx * zmat_dim1];
         }
     }
@@ -447,7 +447,7 @@ inline void altmov(const int* n, const int* npt, T* xpt, T* xopt, T* bmat, T* zm
     half = static_cast<T>(.5);
     one = static_cast<T>(1.);
     zero = static_cast<T>(0.);
-    const__ = one + std::sqrt(static_cast<T>(2.));
+    const__ = one + crd::math::sqrt(static_cast<T>(2.));
     i__1 = *npt;
     for (k = 1; k <= i__1; ++k)
     {
@@ -508,7 +508,7 @@ inline void altmov(const int* n, const int* npt, T* xpt, T* xopt, T* bmat, T* zm
             dderiv += glag[i__] * temp;
             distsq += temp * temp;
         }
-        subd = *adelt / std::sqrt(distsq);
+        subd = *adelt / crd::math::sqrt(distsq);
         slbd = -subd;
         ilbd = 0;
         iubd = 0;
@@ -559,7 +559,7 @@ inline void altmov(const int* n, const int* npt, T* xpt, T* xopt, T* bmat, T* zm
             vlag = slbd * (dderiv - slbd * diff);
             isbd = ilbd;
             temp = subd * (dderiv - subd * diff);
-            if (std::fabs(temp) > std::fabs(vlag))
+            if (crd::math::fabs(temp) > crd::math::fabs(vlag))
             {
                 step = subd;
                 vlag = temp;
@@ -571,7 +571,7 @@ inline void altmov(const int* n, const int* npt, T* xpt, T* xopt, T* bmat, T* zm
             if (tempa * tempb < zero)
             {
                 temp = tempd * tempd / diff;
-                if (std::fabs(temp) > std::fabs(vlag))
+                if (crd::math::fabs(temp) > crd::math::fabs(vlag))
                 {
                     step = tempd / diff;
                     vlag = temp;
@@ -585,7 +585,7 @@ inline void altmov(const int* n, const int* npt, T* xpt, T* xopt, T* bmat, T* zm
             vlag = slbd * (one - slbd);
             isbd = ilbd;
             temp = subd * (one - subd);
-            if (std::fabs(temp) > std::fabs(vlag))
+            if (crd::math::fabs(temp) > crd::math::fabs(vlag))
             {
                 step = subd;
                 vlag = temp;
@@ -593,7 +593,7 @@ inline void altmov(const int* n, const int* npt, T* xpt, T* xopt, T* bmat, T* zm
             }
             if (subd > half)
             {
-                if (std::fabs(vlag) < static_cast<T>(.25))
+                if (crd::math::fabs(vlag) < static_cast<T>(.25))
                 {
                     step = half;
                     vlag = static_cast<T>(.25);
@@ -670,7 +670,7 @@ L120:
     if (temp > zero)
     {
         wsqsav = wfixsq;
-        step = std::sqrt(temp / ggfree);
+        step = crd::math::sqrt(temp / ggfree);
         ggfree = zero;
         i__1 = *n;
         for (i__ = 1; i__ <= i__1; ++i__)
@@ -940,7 +940,7 @@ L50:
     {
         goto L90;
     }
-    temp = std::sqrt(stepsq * resid + ds * ds);
+    temp = crd::math::sqrt(stepsq * resid + ds * ds);
     if (ds < zero)
     {
         blen = (temp - ds) / stepsq;
@@ -1085,7 +1085,7 @@ L120:
     {
         goto L190;
     }
-    temp = std::sqrt(temp);
+    temp = crd::math::sqrt(temp);
     i__1 = *n;
     for (i__ = 1; i__ <= i__1; ++i__)
     {
@@ -1129,7 +1129,7 @@ L120:
             temp = ssq - d__1 * d__1;
             if (temp > zero)
             {
-                temp = std::sqrt(temp) - s[i__];
+                temp = crd::math::sqrt(temp) - s[i__];
                 if (angbd * temp > tempa)
                 {
                     angbd = tempa / temp;
@@ -1141,7 +1141,7 @@ L120:
             temp = ssq - d__1 * d__1;
             if (temp > zero)
             {
-                temp = std::sqrt(temp) + s[i__];
+                temp = crd::math::sqrt(temp) + s[i__];
                 if (angbd * temp > tempb)
                 {
                     angbd = tempb / temp;
@@ -1448,7 +1448,7 @@ template <typename T, typename Calfun>
         }
         d__2 = ptsaux[(j << 1) + 2];
         d__1 = ptsaux[(j << 1) + 1];
-        if (std::fabs(d__2) < half * std::fabs(d__1))
+        if (crd::math::fabs(d__2) < half * crd::math::fabs(d__1))
         {
             ptsaux[(j << 1) + 2] = half * ptsaux[(j << 1) + 1];
         }
@@ -1476,7 +1476,7 @@ template <typename T, typename Calfun>
             bmat[jpn + j * bmat_dim1] = temp + one / ptsaux[(j << 1) + 2];
             bmat[j * bmat_dim1 + 1] = -bmat[jp + j * bmat_dim1] - bmat[jpn + j * bmat_dim1];
             d__1 = ptsaux[(j << 1) + 1] * ptsaux[(j << 1) + 2];
-            zmat[j * zmat_dim1 + 1] = std::sqrt(static_cast<T>(2.)) / std::fabs(d__1);
+            zmat[j * zmat_dim1 + 1] = crd::math::sqrt(static_cast<T>(2.)) / crd::math::fabs(d__1);
             zmat[jp + j * zmat_dim1] = zmat[j * zmat_dim1 + 1] * ptsaux[(j << 1) + 2] * temp;
             zmat[jpn + j * zmat_dim1] = -zmat[j * zmat_dim1 + 1] * ptsaux[(j << 1) + 1] * temp;
         }
@@ -1550,7 +1550,7 @@ L80:
         for (k = 1; k <= i__2; ++k)
         {
             d__1 = w[*ndim + k];
-            w[*ndim + k] = std::fabs(d__1);
+            w[*ndim + k] = crd::math::fabs(d__1);
         }
     }
 
@@ -2026,7 +2026,7 @@ L60:
     trsbox<T>(n, npt, &xpt[xpt_offset], &xopt[1], &gopt[1], &hq[1], &pq[1], &sl[1], &su[1], &delta, &xnew[1], &d__[1],
               &w[1], &w[np], &w[np + *n], &w[np + (*n << 1)], &w[np + *n * 3], &dsq, &crvmin);
     d__1 = delta;
-    d__2 = std::sqrt(dsq);
+    d__2 = crd::math::sqrt(dsq);
     dnorm = d__1 <= d__2 ? d__1 : d__2;
     if (dnorm < half * rho)
     {
@@ -2458,7 +2458,7 @@ L360:
     diff = f - fopt - vquad;
     diffc = diffb;
     diffb = diffa;
-    diffa = std::fabs(diff);
+    diffa = crd::math::fabs(diff);
     if (dnorm > rho)
     {
         nfsav = stop->nevals;
@@ -2793,7 +2793,7 @@ L650:
     /* KNEW > 0 ⇒ ALTMOV via L90; else another TR iteration or the RHO schedule. */
     if (knew > 0)
     {
-        dist = std::sqrt(distsq);
+        dist = crd::math::sqrt(distsq);
         if (ntrits == -1)
         {
             d__1 = tenth * delta;
@@ -2836,7 +2836,7 @@ L680:
         }
         else if (ratio <= static_cast<T>(250.))
         {
-            rho = std::sqrt(ratio) * *rhoend;
+            rho = crd::math::sqrt(ratio) * *rhoend;
         }
         else
         {

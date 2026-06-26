@@ -9,7 +9,7 @@
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
 #include <algorithm>
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::hesap::dense::detail
@@ -489,7 +489,7 @@ inline Lar1vOut<R> dlar1v(int n, int b1, int bn, R lambda, Z1<R> d, Z1<R> l, Z1<
     }
 
     const R tinv = R{1} / ztz;
-    const R nrminv = std::sqrt(tinv);
+    const R nrminv = crd::math::sqrt(tinv);
     const R resid = std::abs(mingma) * nrminv;
     const R rqcorr = mingma * tinv;
 
@@ -550,7 +550,7 @@ inline int dlarrf(int n, const R* d, const R* l, const R* ld, const R* lld, int 
 
     R smlgrowth = one / safmin;
     const R fail = static_cast<R>(n - 1) * mingap / (spdiam * eps);
-    const R fail2 = static_cast<R>(n - 1) * mingap / (spdiam * std::sqrt(eps));
+    const R fail2 = static_cast<R>(n - 1) * mingap / (spdiam * crd::math::sqrt(eps));
     R bestshift = lsigma;
     int ktry = 0;
     const R growthbound = maxgrowth1 * spdiam;
@@ -668,7 +668,7 @@ inline int dlarrf(int n, const R* d, const R* l, const R* ld, const R* lld, int 
                     znm2 += prod * prod;
                     tmp = std::max(tmp, std::abs(dplus[i] * prod));
                 }
-                if (tmp / (spdiam * std::sqrt(znm2)) <= maxgrowth2)
+                if (tmp / (spdiam * crd::math::sqrt(znm2)) <= maxgrowth2)
                 {
                     sigma = lsigma;
                     shift = kSLeft;
@@ -695,7 +695,7 @@ inline int dlarrf(int n, const R* d, const R* l, const R* ld, const R* lld, int 
                     znm2 += prod * prod;
                     tmp = std::max(tmp, std::abs(work[i] * prod));
                 }
-                if (tmp / (spdiam * std::sqrt(znm2)) <= maxgrowth2)
+                if (tmp / (spdiam * crd::math::sqrt(znm2)) <= maxgrowth2)
                 {
                     sigma = rsigma;
                     shift = kSRight;
@@ -769,7 +769,7 @@ inline void mrrr_single_rrr_vectors(crd::memory::IAllocator* alloc, int n, const
 
     const R eps = std::numeric_limits<R>::epsilon();
     const R rqtol = R{2} * eps;
-    const R tol = std::sqrt(eps);
+    const R tol = crd::math::sqrt(eps);
     constexpr int kMaxItr = 10;
 
     R gl = R{0};
@@ -906,7 +906,7 @@ inline void gram_schmidt_columns(R* z, int n, int ldz, int lo, int hi) noexcept
         {
             nrm += z[r * ldz + c] * z[r * ldz + c];
         }
-        nrm = std::sqrt(nrm);
+        nrm = crd::math::sqrt(nrm);
         if (nrm > R{0})
         {
             const R inv = R{1} / nrm;
@@ -927,7 +927,7 @@ inline void mrrr_one_vector(int n, const R* D, const R* L, const R* LD, const R*
 {
     const R eps = std::numeric_limits<R>::epsilon();
     const R rqtol = R{2} * eps;
-    const R tol = std::sqrt(eps);
+    const R tol = crd::math::sqrt(eps);
     constexpr int kMaxItr = 10;
     const R left = lambda - R{0.5} * gap;
     const R right = lambda + R{0.5} * gap;

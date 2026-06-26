@@ -30,7 +30,7 @@
 #include <crd/math/simd/vec8f.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <cstdint>
 #include <cstring>
 #include <immintrin.h> // non-temporal stores for the four-step scatter (Lever D resurrection)
@@ -142,8 +142,8 @@ public:
         for (crd::usize k = 0; k < n; ++k)
         {
             const double ang = -two_pi * static_cast<double>(k) / static_cast<double>(n);
-            m_tw_re[k] = static_cast<T>(std::cos(ang)); //  cos(2πk/n)
-            m_tw_im[k] = static_cast<T>(std::sin(ang)); // -sin(2πk/n) ⇒ (re,im) == W_n^k
+            m_tw_re[k] = static_cast<T>(crd::math::cos(ang)); //  cos(2πk/n)
+            m_tw_im[k] = static_cast<T>(crd::math::sin(ang)); // -sin(2πk/n) ⇒ (re,im) == W_n^k
         }
         m_rev.resize(n);
         for (crd::usize i = 0; i < n; ++i)
@@ -181,8 +181,8 @@ public:
                     for (crd::usize k1 = 0; k1 < h_n1; ++k1)
                     {
                         const double th = tp * static_cast<double>(n2 * k1) / static_cast<double>(n);
-                        m_hier_twr[n2 * h_n1 + k1] = static_cast<T>(std::cos(th));
-                        m_hier_twi[n2 * h_n1 + k1] = static_cast<T>(-std::sin(th));
+                        m_hier_twr[n2 * h_n1 + k1] = static_cast<T>(crd::math::cos(th));
+                        m_hier_twi[n2 * h_n1 + k1] = static_cast<T>(-crd::math::sin(th));
                     }
                 }
             }
@@ -1128,14 +1128,14 @@ private:
                         for (crd::usize grp = 0; grp < 128; ++grp)
                         {
                             double th = tp * (double)((i2t * grp * 8) % 1048576U) / NN;
-                            m16b_br[grp * 1024 + n2v * 32 + ml] = (crd::f32)std::cos(th);
-                            m16b_bi[grp * 1024 + n2v * 32 + ml] = (crd::f32)(-std::sin(th));
+                            m16b_br[grp * 1024 + n2v * 32 + ml] = (crd::f32)crd::math::cos(th);
+                            m16b_bi[grp * 1024 + n2v * 32 + ml] = (crd::f32)(-crd::math::sin(th));
                         }
                         for (crd::usize l = 0; l < 8; ++l)
                         {
                             double th = tp * (double)((i2t * l) % 1048576U) / NN;
-                            m16b_lr[i2t * 8 + l] = (crd::f32)std::cos(th);
-                            m16b_li[i2t * 8 + l] = (crd::f32)(-std::sin(th));
+                            m16b_lr[i2t * 8 + l] = (crd::f32)crd::math::cos(th);
+                            m16b_li[i2t * 8 + l] = (crd::f32)(-crd::math::sin(th));
                         }
                     }
                     m16b_built = true;
@@ -1217,14 +1217,14 @@ private:
                         for (crd::usize grp = 0; grp < 256; ++grp)
                         {
                             double th = tp * (double)((i2t * grp * 8) % 2097152ULL) / NN;
-                            b2m_r[grp * 1024 + n2v * 32 + ml] = (crd::f32)std::cos(th);
-                            b2m_i[grp * 1024 + n2v * 32 + ml] = (crd::f32)(-std::sin(th));
+                            b2m_r[grp * 1024 + n2v * 32 + ml] = (crd::f32)crd::math::cos(th);
+                            b2m_i[grp * 1024 + n2v * 32 + ml] = (crd::f32)(-crd::math::sin(th));
                         }
                         for (crd::usize l = 0; l < 8; ++l)
                         {
                             double th = tp * (double)((i2t * l) % 2097152ULL) / NN;
-                            l2m_r[i2t * 8 + l] = (crd::f32)std::cos(th);
-                            l2m_i[i2t * 8 + l] = (crd::f32)(-std::sin(th));
+                            l2m_r[i2t * 8 + l] = (crd::f32)crd::math::cos(th);
+                            l2m_i[i2t * 8 + l] = (crd::f32)(-crd::math::sin(th));
                         }
                     }
                     b2m_built = true;

@@ -3,6 +3,8 @@
 #include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
 
+#include <bit>
+#include <chrono>
 #include <optional>
 
 namespace crd::jobs::detail
@@ -27,6 +29,10 @@ bool Scheduler::init(const SchedulerConfig& cfg)
                    "Scheduler: injection_capacity must be a power of two");
 
     m_config = cfg;
+    m_targeted_wake = cfg.targeted_wake;
+    CRD_ASSERT_MSG(!m_targeted_wake || cfg.num_threads <= 64U,
+                   "Scheduler: targeted_wake supports up to 64 workers (idle mask is 64-bit)");
+    m_idle_mask.store(0U, std::memory_order_relaxed);
 
     m_high_injection   = std::make_unique<JobInjectionQueue>(cfg.injection_capacity);
     m_normal_injection = std::make_unique<JobInjectionQueue>(cfg.injection_capacity);
@@ -77,7 +83,14 @@ void Scheduler::push(const crd::jobs::JobDecl& job)
                        "Scheduler::push: pinned slot already occupied");
         ts.pinned_storage = job;
         ts.pinned_available.store(true, std::memory_order_release);
-        m_semaphore.release(1);
+        if (m_targeted_wake)
+        {
+            wake_worker(pin); // wake the SPECIFIC target (the shared semaphore couldn't)
+        }
+        else
+        {
+            m_semaphore.release(1);
+        }
         return;
     }
 
@@ -95,7 +108,14 @@ void Scheduler::push(const crd::jobs::JobDecl& job)
         break;
     }
     CRD_ASSERT_MSG(ok, "Scheduler::push: injection queue full — raise injection_capacity");
-    m_semaphore.release(1);
+    if (m_targeted_wake)
+    {
+        wake_one_idle();
+    }
+    else
+    {
+        m_semaphore.release(1);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -120,7 +140,14 @@ void Scheduler::push_local(crd::u32 thread_index, const crd::jobs::JobDecl& job)
     case crd::jobs::Priority::Low:    ok = ts.low.push(job);    break;
     }
     CRD_ASSERT_MSG(ok, "Scheduler::push_local: local deque full — raise deque_capacity");
-    m_semaphore.release(1);
+    if (m_targeted_wake)
+    {
+        wake_one_idle();
+    }
+    else
+    {
+        m_semaphore.release(1);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -275,21 +302,62 @@ std::optional<crd::jobs::JobDecl> Scheduler::try_pop(crd::u32 thread_idx)
 // wait_for_work
 // ---------------------------------------------------------------------------
 
-void Scheduler::wait_for_work()
+void Scheduler::wait_for_work(crd::u32 thread_index)
 {
     CRD_ASSERT_MSG(m_initialized, "Scheduler::wait_for_work called before init");
-    m_semaphore.acquire();
+    if (!m_targeted_wake)
+    {
+        m_semaphore.acquire(); // DEFAULT PATH — unchanged
+        return;
+    }
+    // TARGETED PATH (opt-in): mark this worker idle, then park on its own semaphore with a short timeout. The
+    // timeout is a deadlock-proof backstop — a missed wake self-heals within 1 ms (the worker loops back to
+    // execute_one). In the common case wake_worker/wake_one_idle posts this semaphore and the wait returns at once.
+    const crd::u64 bit = crd::u64{1} << thread_index;
+    m_idle_mask.fetch_or(bit, std::memory_order_seq_cst);
+    (void)m_thread_states[thread_index]->wake.try_acquire_for(std::chrono::milliseconds(1));
+    m_idle_mask.fetch_and(~bit, std::memory_order_seq_cst);
 }
 
 // ---------------------------------------------------------------------------
-// wake_all
+// wake_all / wake_worker / wake_one_idle
 // ---------------------------------------------------------------------------
 
 void Scheduler::wake_all(crd::u32 count)
 {
     CRD_ASSERT_MSG(m_initialized, "Scheduler::wake_all called before init");
+    if (m_targeted_wake)
+    {
+        for (auto& ts : m_thread_states) // wake every per-worker semaphore (shutdown/broadcast)
+        {
+            ts->wake.release(1);
+        }
+        return;
+    }
     if (count > 0U)
         m_semaphore.release(static_cast<std::ptrdiff_t>(count));
+}
+
+void Scheduler::wake_worker(crd::u32 thread_index) noexcept
+{
+    m_thread_states[thread_index]->wake.release(1);
+}
+
+void Scheduler::wake_one_idle() noexcept
+{
+    crd::u64 m = m_idle_mask.load(std::memory_order_acquire);
+    while (m != 0U)
+    {
+        const auto i = static_cast<crd::u32>(std::countr_zero(m));
+        const crd::u64 bit = crd::u64{1} << i;
+        if (m_idle_mask.compare_exchange_weak(m, m & ~bit, std::memory_order_acq_rel))
+        {
+            m_thread_states[i]->wake.release(1);
+            return;
+        }
+        // CAS failed → `m` reloaded with the current mask; retry.
+    }
+    // No parked worker → a busy worker drains the job via execute_one; parked workers' 1 ms timeout is the backstop.
 }
 
 // ---------------------------------------------------------------------------

@@ -48,7 +48,7 @@
 #include <crd/math/vec.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 #include <utility>
 
@@ -565,7 +565,7 @@ convex_hull_for_cell(const VoronoiResult3<T>&                          result,
             continue;
         }
         // Normalize via f64 sqrt for stability on large coords.
-        const T inv_len = static_cast<T>(1.0 / std::sqrt(static_cast<double>(len2)));
+        const T inv_len = static_cast<T>(1.0 / crd::math::sqrt(static_cast<double>(len2)));
         nx *= inv_len;
         ny *= inv_len;
         nz *= inv_len;

@@ -22,7 +22,7 @@
 #include <crd/hesap/dense/real_type.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::hesap::eigen
@@ -55,7 +55,7 @@ template <typename T> struct EigenOptions
     // wants the thick-restart of v6-b). Relative residual ‖A·x − θ·x‖ ≤ tol·max(|θ|, 1).
     [[nodiscard]] R effective_tol() const noexcept
     {
-        return tol > static_cast<R>(0) ? tol : std::sqrt(std::numeric_limits<R>::epsilon());
+        return tol > static_cast<R>(0) ? tol : crd::math::sqrt(std::numeric_limits<R>::epsilon());
     }
 };
 

@@ -12,7 +12,7 @@
 #include <crd/math/simd/vec4d.hpp>
 #include <crd/math/simd/vec8f.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 #include <type_traits>
 
@@ -64,12 +64,12 @@ template <typename R>
     if (std::abs(f) > std::abs(g))
     {
         const R t = g / f;
-        const R u = sgn(f) * std::sqrt(R{1} + t * t);
+        const R u = sgn(f) * crd::math::sqrt(R{1} + t * t);
         const R c = R{1} / u;
         return Givens<R>{c, t * c, f * u};
     }
     const R t = f / g;
-    const R u = sgn(g) * std::sqrt(R{1} + t * t);
+    const R u = sgn(g) * crd::math::sqrt(R{1} + t * t);
     const R s = R{1} / u;
     return Givens<R>{t * s, s, g * u};
 }
@@ -108,16 +108,16 @@ template <typename R>
     if (adf > ab)
     {
         const R q = ab / adf;
-        rt = adf * std::sqrt(R{1} + q * q);
+        rt = adf * crd::math::sqrt(R{1} + q * q);
     }
     else if (adf < ab)
     {
         const R q = adf / ab;
-        rt = ab * std::sqrt(R{1} + q * q);
+        rt = ab * crd::math::sqrt(R{1} + q * q);
     }
     else
     {
-        rt = ab * std::sqrt(R{2});
+        rt = ab * crd::math::sqrt(R{2});
     }
     Eig2<R> out{};
     if (sm < R{0})
@@ -163,16 +163,16 @@ template <typename R>
     if (adf > ab)
     {
         const R q = ab / adf;
-        rt = adf * std::sqrt(R{1} + q * q);
+        rt = adf * crd::math::sqrt(R{1} + q * q);
     }
     else if (adf < ab)
     {
         const R q = adf / ab;
-        rt = ab * std::sqrt(R{1} + q * q);
+        rt = ab * crd::math::sqrt(R{1} + q * q);
     }
     else
     {
-        rt = ab * std::sqrt(R{2});
+        rt = ab * crd::math::sqrt(R{2});
     }
     Eig2<R> out{};
     int sgn1;
@@ -212,7 +212,7 @@ template <typename R>
     if (acs > ab)
     {
         const R ct = -tb / cs;
-        out.sn1 = R{1} / std::sqrt(R{1} + ct * ct);
+        out.sn1 = R{1} / crd::math::sqrt(R{1} + ct * ct);
         out.cs1 = ct * out.sn1;
     }
     else
@@ -225,7 +225,7 @@ template <typename R>
         else
         {
             const R tn = -cs / tb;
-            out.cs1 = R{1} / std::sqrt(R{1} + tn * tn);
+            out.cs1 = R{1} / crd::math::sqrt(R{1} + tn * tn);
             out.sn1 = tn * out.cs1;
         }
     }
@@ -369,8 +369,8 @@ int steqr(R* d, R* e, crd::usize n_, Z* z, crd::usize ldz, bool want_vectors)
     const R eps2 = eps * eps;
     const R safmin = std::numeric_limits<R>::min();
     const R safmax = R{1} / safmin;
-    const R ssfmax = std::sqrt(safmax) / R{3};
-    const R ssfmin = std::sqrt(safmin) / eps2;
+    const R ssfmax = crd::math::sqrt(safmax) / R{3};
+    const R ssfmin = crd::math::sqrt(safmin) / eps2;
     constexpr int maxit = 30;
     const int nmaxit = n * maxit;
     int jtot = 0;
@@ -400,7 +400,7 @@ int steqr(R* d, R* e, crd::usize n_, Z* z, crd::usize ldz, bool want_vectors)
                     m = mm;
                     break;
                 }
-                if (tst <= (std::sqrt(std::abs(d[mm - 1])) * std::sqrt(std::abs(d[mm]))) * eps)
+                if (tst <= (crd::math::sqrt(std::abs(d[mm - 1])) * crd::math::sqrt(std::abs(d[mm]))) * eps)
                 {
                     e[mm - 1] = R{0};
                     m = mm;
@@ -1180,7 +1180,7 @@ void rank1_eigensolve(crd::memory::IAllocator* alloc, crd::usize n, const T* d_i
         return;
     }
 
-    const T znorm = std::sqrt(znorm2);
+    const T znorm = crd::math::sqrt(znorm2);
     const T rhop = rho * znorm2;  // secular eqn for diag(ds) + rhop*zs*zs^T, ||zs||=1
 
     crd::containers::Array<T> ds(alloc);
@@ -1335,7 +1335,7 @@ void rank1_eigensolve(crd::memory::IAllocator* alloc, crd::usize n, const T* d_i
                     w2 *= (-deltam[j * big_k + a]) / (dnd[j] - dnd[a]);
                 }
             }
-            const T w = std::sqrt(std::abs(w2));
+            const T w = crd::math::sqrt(std::abs(w2));
             what[a] = (znd[a] < T{0}) ? -w : w;
         }
         // Secular eigenvectors: vsec[a*K+i] = what[a]/delta_i[a], column-normalized.
@@ -1350,7 +1350,7 @@ void rank1_eigensolve(crd::memory::IAllocator* alloc, crd::usize n, const T* d_i
                 vsec[a * big_k + i] = u;
                 nrm2 += u * u;
             }
-            const T inv = T{1} / std::sqrt(nrm2);
+            const T inv = T{1} / crd::math::sqrt(nrm2);
             for (crd::usize a = 0; a < big_k; ++a)
             {
                 vsec[a * big_k + i] *= inv;
@@ -2163,7 +2163,7 @@ EigSym<C> eig_herm(crd::memory::IAllocator* alloc, const Hermitian<C>& a)
         C phase{R{1}, R{0}};
         if (bestmag2 > R{0})
         {
-            const R bestmag = std::sqrt(bestmag2);
+            const R bestmag = crd::math::sqrt(bestmag2);
             phase = crd::hesap::conj(C{zir[pivot * n + c], zii[pivot * n + c]}) * (R{1} / bestmag);
         }
         for (crd::usize r = 0; r < n; ++r)

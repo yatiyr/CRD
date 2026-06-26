@@ -12,7 +12,7 @@
 #include <crd/containers/sort.hpp>
 
 #include <algorithm>
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::geometry::spatial
@@ -45,7 +45,7 @@ constexpr u32 kP3 = 83492791U;
 template <MathScalar T>
 inline i32 floor_to_i32(T v) noexcept
 {
-    return static_cast<i32>(std::floor(static_cast<f64>(v)));
+    return static_cast<i32>(crd::math::floor(static_cast<f64>(v)));
 }
 
 } // namespace

@@ -19,6 +19,10 @@ add_library(crd-units STATIC ${SOURCES} ${HEADERS})
 target_include_directories(crd-units
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
+        # tx-route: the crd::math::* transcendental headers are header-only (inline, deps = crd-core only) and never
+        # pull scalar.hpp (the Vec3<Quantity> part that makes crd-math depend on crd-units). So units INCLUDES them
+        # for its deterministic nonlinear (dB) conversions WITHOUT linking crd-math — which would be a dep cycle.
+        "${CMAKE_SOURCE_DIR}/engine/math/include"
 )
 
 target_link_libraries(crd-units

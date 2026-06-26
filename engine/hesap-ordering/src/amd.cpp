@@ -3,7 +3,7 @@
 #include <crd/containers/sort.hpp>
 #include <crd/core/assert.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <utility>
 
 // -----------------------------------------------------------------------
@@ -396,7 +396,7 @@ Permutation amd_order(const AdjacencyGraph& g, crd::memory::IAllocator* alloc)
     };
     // Dense-node threshold (cs_amd): nodes with degree > dense are removed from the
     // quotient graph and ordered LAST, so the sparse structure is eliminated first.
-    crd::i32 dense = static_cast<crd::i32>(10.0 * std::sqrt(static_cast<double>(n)));
+    crd::i32 dense = static_cast<crd::i32>(10.0 * crd::math::sqrt(static_cast<double>(n)));
     if (dense < 16)
     {
         dense = 16;

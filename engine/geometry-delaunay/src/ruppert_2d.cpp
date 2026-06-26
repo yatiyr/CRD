@@ -55,7 +55,7 @@
 #include <crd/memory/allocator.hpp>
 
 #include <algorithm>
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::geometry::delaunay
@@ -133,14 +133,14 @@ T triangle_min_angle_rad(const crd::math::Vec2<T>& a,
     {
         return static_cast<T>(0);
     }
-    const T len_ab = std::sqrt(len2_ab);
-    const T len_ac = std::sqrt(len2_ac);
-    const T len_bc = std::sqrt(len2_bc);
+    const T len_ab = crd::math::sqrt(len2_ab);
+    const T len_ac = crd::math::sqrt(len2_ac);
+    const T len_bc = crd::math::sqrt(len2_bc);
     // Cos of each angle via dot product. Angle at A = between AB and AC.
     auto safe_acos = [](T x) -> T {
         if (x > static_cast<T>(1))  { x = static_cast<T>(1); }
         if (x < static_cast<T>(-1)) { x = static_cast<T>(-1); }
-        return std::acos(x);
+        return crd::math::acos(x);
     };
     const T cos_a = (abx * acx + aby * acy) / (len_ab * len_ac);
     const T cos_b = ((-abx) * bcx + (-aby) * bcy) / (len_ab * len_bc);

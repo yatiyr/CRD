@@ -25,7 +25,7 @@
 #include <crd/hesap/dsp/fir_special.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <numbers>
 
 namespace crd::hesap::comms
@@ -57,13 +57,13 @@ template <typename T>
     h.resize(n);
     const T pi = static_cast<T>(std::numbers::pi_v<double>);
     const T ts = static_cast<T>(sps);
-    const T sigma = std::sqrt(std::log(T(2))) / (T(2) * pi * bt) * ts;
+    const T sigma = crd::math::sqrt(crd::math::log(T(2))) / (T(2) * pi * bt) * ts;
     const crd::isize half = static_cast<crd::isize>(n / 2);
     T sum = T(0);
     for (crd::usize i = 0; i < n; ++i)
     {
         const T t = static_cast<T>(static_cast<crd::isize>(i) - half);
-        h[i] = std::exp(-t * t / (T(2) * sigma * sigma));
+        h[i] = crd::math::exp(-t * t / (T(2) * sigma * sigma));
         sum += h[i];
     }
     for (crd::usize i = 0; i < n; ++i)
@@ -171,7 +171,7 @@ template <typename T>
     {
         const T dr = recovered[k].re - syms[k].re;
         const T di = recovered[k].im - syms[k].im;
-        const T d = std::sqrt(dr * dr + di * di);
+        const T d = crd::math::sqrt(dr * dr + di * di);
         worst = (d > worst) ? d : worst;
     }
     return worst;

@@ -3,7 +3,7 @@
 #include <crd/core/types.hpp>
 
 #include <algorithm>
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::hesap::dense::detail
@@ -213,7 +213,7 @@ template <typename R>
     for (int i = 0; i < n - 1; ++i)
     {
         const R eabs = std::abs(e[i]);
-        const R thresh = spltol * std::sqrt(std::abs(d[i])) * std::sqrt(std::abs(d[i + 1]));
+        const R thresh = spltol * crd::math::sqrt(std::abs(d[i])) * crd::math::sqrt(std::abs(d[i + 1]));
         if (eabs <= thresh)
         {
             e[i] = R{0};
@@ -254,7 +254,7 @@ template <typename R>
     const R rtoli = reltol;
 
     // Deterministic iteration cap ~ log2((tnorm+pivmin)/pivmin)+2, via integer
-    // doubling (no std::log in the numeric path). Hard ceiling guards overflow.
+    // doubling (no crd::math::log in the numeric path). Hard ceiling guards overflow.
     int itmax = 2;
     {
         const R ratio = (tnorm + pivmin) / pivmin;
@@ -453,7 +453,7 @@ inline void tridiag_eigenvalues(const R* d_in, const R* e_in, int n, R* e_work, 
     e_work[n - 1] = R{0};
     e2_work[n - 1] = R{0};
 
-    const R spltol = std::sqrt(std::numeric_limits<R>::epsilon());  // relative split tolerance
+    const R spltol = crd::math::sqrt(std::numeric_limits<R>::epsilon());  // relative split tolerance
     const int nsplit = tridiag_split(d_in, e_work, e2_work, n, spltol, isplit);
 
     int out = 0;

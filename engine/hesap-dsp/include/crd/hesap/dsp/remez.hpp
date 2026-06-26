@@ -23,7 +23,7 @@
 #include <crd/hesap/dense/matrix.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <numbers>
 
 namespace crd::hesap::dsp
@@ -82,7 +82,7 @@ template <typename T>
     crd::containers::Array<T> err(alloc);
     err.resize(ngrid);
 
-    auto cosg = [&](crd::usize gi) { return std::cos(two_pi * grid[gi]); };
+    auto cosg = [&](crd::usize gi) { return crd::math::cos(two_pi * grid[gi]); };
 
     for (crd::usize iter = 0; iter < max_iter; ++iter)
     {
@@ -260,7 +260,7 @@ template <typename T>
     }
     auto Aeval = [&](T w) -> T
     {
-        const T xf = std::cos(w);
+        const T xf = crd::math::cos(w);
         T num = T(0), den = T(0);
         for (crd::usize j = 0; j < next; ++j)
         {
@@ -285,7 +285,7 @@ template <typename T>
         const T wk = pi * static_cast<T>(k) / static_cast<T>(M == 0 ? 1 : M);
         for (crd::usize nn = 0; nn < dim; ++nn)
         {
-            C(k, nn) = std::cos(static_cast<T>(nn) * wk);
+            C(k, nn) = crd::math::cos(static_cast<T>(nn) * wk);
         }
         rhs[k] = Aeval(wk);
     }
@@ -319,7 +319,7 @@ template <typename T>
     const T two_pi = static_cast<T>(2.0 * std::numbers::pi_v<double>);
     const T pi = static_cast<T>(std::numbers::pi_v<double>);
     const crd::usize ngrid = grid.size();
-    auto cosg = [&](crd::usize gi) { return std::cos(two_pi * grid[gi]); };
+    auto cosg = [&](crd::usize gi) { return crd::math::cos(two_pi * grid[gi]); };
 
     crd::containers::Array<crd::usize> ext(alloc);
     ext.resize(next);
@@ -476,7 +476,7 @@ template <typename T>
     }
     auto Peval = [&](T w) -> T // P(w) = the barycentric interpolant (already = A/sin, i.e. gdes scale)
     {
-        const T xf = std::cos(w);
+        const T xf = crd::math::cos(w);
         T num = T(0), den = T(0);
         for (crd::usize j = 0; j < next; ++j)
         {
@@ -501,7 +501,7 @@ template <typename T>
                      static_cast<T>(0.25) * pi; // interior points (avoid w=0,π where sin=0)
         for (crd::usize nn = 0; nn < dim; ++nn)
         {
-            cmat(k, nn) = std::cos(static_cast<T>(nn) * wk);
+            cmat(k, nn) = crd::math::cos(static_cast<T>(nn) * wk);
         }
         rhs[k] = Peval(wk);
     }
@@ -545,7 +545,7 @@ template <typename T>
     for (T f = f1; f <= f2 + delf * T(0.5); f += delf)
     {
         const T ff = (f > f2) ? f2 : f;
-        const T sw = std::sin(two_pi * ff);
+        const T sw = crd::math::sin(two_pi * ff);
         grid.push_back(ff);
         gdes.push_back(T(1) / sw); // D = 1 ⇒ D/sin
         gwt.push_back(sw);         // W = 1 ⇒ W·sin
@@ -572,7 +572,7 @@ template <typename T>
     for (T f = f0; f <= fmax + delf * T(0.5); f += delf)
     {
         const T ff = (f > fmax) ? fmax : f;
-        const T sw = std::sin(two_pi * ff);
+        const T sw = crd::math::sin(two_pi * ff);
         grid.push_back(ff);
         gdes.push_back(two_pi * ff / sw);          // D(f) = 2π·f ⇒ D/sin
         gwt.push_back(sw / (two_pi * ff));         // relative-error weight W = 1/D ⇒ W·sin

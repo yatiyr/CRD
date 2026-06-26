@@ -8,15 +8,15 @@
 //
 // SCALAR-GENERIC FUNCTOR CONTRACT: a functor written `template <class S> S operator()(ConstSpan<S> x) const`
 // instantiates on both T (the real value path) and Dual<T> (the derivative path). It should use the arithmetic
-// operators (which work for both) and, for transcendentals, the unqualified-call-with-`using std::sin;` idiom so
-// ADL finds std::sin for T and crd::hesap::opt::sin for Dual<T> (the standard autodiff idiom).
+// operators (which work for both) and, for transcendentals, the unqualified-call-with-`using crd::math::sin;` idiom so
+// ADL finds crd::math::sin for T and crd::hesap::opt::sin for Dual<T> (the standard autodiff idiom).
 //
 // NOTE: Dual<T> lives in crd-hesap-opt for v7-b. When the ADR-0065 reverse-mode autodiff module lands it may
 // migrate to a shared autodiff home; the type + free functions are header-only so a move is mechanical.
 
 #include <crd/core/types.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 
 namespace crd::hesap::opt
 {
@@ -86,46 +86,46 @@ struct Dual
 template <typename T>
 [[nodiscard]] inline Dual<T> sin(const Dual<T>& x) noexcept
 {
-    return Dual<T>{std::sin(x.v), x.d * std::cos(x.v)};
+    return Dual<T>{crd::math::sin(x.v), x.d * crd::math::cos(x.v)};
 }
 
 template <typename T>
 [[nodiscard]] inline Dual<T> cos(const Dual<T>& x) noexcept
 {
-    return Dual<T>{std::cos(x.v), -x.d * std::sin(x.v)};
+    return Dual<T>{crd::math::cos(x.v), -x.d * crd::math::sin(x.v)};
 }
 
 template <typename T>
 [[nodiscard]] inline Dual<T> tan(const Dual<T>& x) noexcept
 {
-    const T c = std::cos(x.v);
-    return Dual<T>{std::tan(x.v), x.d / (c * c)}; // sec²(x)·x'
+    const T c = crd::math::cos(x.v);
+    return Dual<T>{crd::math::tan(x.v), x.d / (c * c)}; // sec²(x)·x'
 }
 
 template <typename T>
 [[nodiscard]] inline Dual<T> exp(const Dual<T>& x) noexcept
 {
-    const T e = std::exp(x.v);
+    const T e = crd::math::exp(x.v);
     return Dual<T>{e, x.d * e};
 }
 
 template <typename T>
 [[nodiscard]] inline Dual<T> log(const Dual<T>& x) noexcept
 {
-    return Dual<T>{std::log(x.v), x.d / x.v};
+    return Dual<T>{crd::math::log(x.v), x.d / x.v};
 }
 
 template <typename T>
 [[nodiscard]] inline Dual<T> sqrt(const Dual<T>& x) noexcept
 {
-    const T s = std::sqrt(x.v);
+    const T s = crd::math::sqrt(x.v);
     return Dual<T>{s, x.d / (static_cast<T>(2) * s)};
 }
 
 template <typename T>
 [[nodiscard]] inline Dual<T> tanh(const Dual<T>& x) noexcept
 {
-    const T t = std::tanh(x.v);
+    const T t = crd::math::tanh(x.v);
     return Dual<T>{t, x.d * (static_cast<T>(1) - t * t)}; // sech²(x)·x'
 }
 
@@ -140,15 +140,15 @@ template <typename T>
 template <typename T>
 [[nodiscard]] inline Dual<T> pow(const Dual<T>& x, T p) noexcept
 {
-    return Dual<T>{std::pow(x.v, p), x.d * p * std::pow(x.v, p - static_cast<T>(1))};
+    return Dual<T>{crd::math::pow(x.v, p), x.d * p * crd::math::pow(x.v, p - static_cast<T>(1))};
 }
 
 // pow with a dual exponent: d/dt x^y = x^y·(y'·ln x + y·x'/x).
 template <typename T>
 [[nodiscard]] inline Dual<T> pow(const Dual<T>& x, const Dual<T>& y) noexcept
 {
-    const T f = std::pow(x.v, y.v);
-    return Dual<T>{f, f * (y.d * std::log(x.v) + y.v * x.d / x.v)};
+    const T f = crd::math::pow(x.v, y.v);
+    return Dual<T>{f, f * (y.d * crd::math::log(x.v) + y.v * x.d / x.v)};
 }
 
 // ---- Mixed scalar/dual operators (so `2.0 * x`, `x + 1.0` read naturally in generic code) ------------------

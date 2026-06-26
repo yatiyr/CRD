@@ -10,7 +10,7 @@
 #include <crd/hesap/dense/real_type.hpp>
 #include <crd/hesap/dense/svd.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 #include <type_traits>
 
@@ -68,7 +68,7 @@ void compute_residuals(const Matrix<T>& a, const Matrix<T>& x, const Matrix<T>& 
             const T r = ax - b.at(i, c);
             acc += mag<T>(r) * mag<T>(r);
         }
-        residual(c) = std::sqrt(acc);
+        residual(c) = crd::math::sqrt(acc);
     }
 }
 

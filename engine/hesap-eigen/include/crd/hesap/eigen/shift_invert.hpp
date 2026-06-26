@@ -22,7 +22,7 @@
 #include <crd/hesap/sparse/triplet_builder.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <type_traits>
 #include <utility>
 
@@ -148,9 +148,9 @@ template <typename T>
             const R d = static_cast<R>(ax[i]) - lam * static_cast<R>(x[i]);
             rn += d * d;
         }
-        rn = std::sqrt(rn);
+        rn = crd::math::sqrt(rn);
         result.residuals[s] = rn;
-        if (rn <= tol * (std::fabs(lam) > R{1} ? std::fabs(lam) : R{1}))
+        if (rn <= tol * (crd::math::fabs(lam) > R{1} ? crd::math::fabs(lam) : R{1}))
         {
             ++nconv;
         }

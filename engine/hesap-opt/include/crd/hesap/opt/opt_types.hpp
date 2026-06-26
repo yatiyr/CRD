@@ -7,7 +7,7 @@
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::hesap::opt
@@ -26,7 +26,7 @@ template <typename T> struct OptOptions
 {
     crd::usize max_iters = 1000;
     // Stop when ‖∇f(x)‖∞ ≤ grad_tol (the primary first-order optimality test). Default ≈ √eps.
-    T grad_tol = std::sqrt(std::numeric_limits<T>::epsilon());
+    T grad_tol = crd::math::sqrt(std::numeric_limits<T>::epsilon());
     // Stop when ‖Δx‖ ≤ step_tol·(1 + ‖x‖) (stall guard). 0 ⇒ disabled.
     T step_tol = static_cast<T>(0);
     // Stop when |Δf| ≤ func_tol·(1 + |f|) (flat-objective guard). 0 ⇒ disabled.

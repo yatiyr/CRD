@@ -24,7 +24,7 @@
 #include <crd/hesap/linear_op.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 #include <type_traits>
 
@@ -56,9 +56,9 @@ template <typename R> [[nodiscard]] inline bool more_wanted(Which w, R x, R y) n
     case Which::SmallestReal:
         return x < y;
     case Which::LargestMagnitude:
-        return std::fabs(x) > std::fabs(y);
+        return crd::math::fabs(x) > crd::math::fabs(y);
     case Which::SmallestMagnitude:
-        return std::fabs(x) < std::fabs(y);
+        return crd::math::fabs(x) < crd::math::fabs(y);
     }
     return x > y;
 }
@@ -147,7 +147,7 @@ template <typename T>
         const R bj = dn::nrm2<T>({w.data(), n});
         beta[j] = bj;
         mdone = j + 1;
-        const R am = std::fabs(aj);
+        const R am = crd::math::fabs(aj);
         amax = am > amax ? am : amax;
         if (bj <= static_cast<R>(16) * eps * (amax > R{0} ? amax : R{1}))
         {
@@ -237,7 +237,7 @@ template <typename T>
         R vmax = R{0};
         for (crd::u32 i = 0; i < n; ++i)
         {
-            const R am = std::fabs(static_cast<R>(x[i]));
+            const R am = crd::math::fabs(static_cast<R>(x[i]));
             if (am > vmax)
             {
                 vmax = am;
@@ -256,9 +256,9 @@ template <typename T>
             const R d = static_cast<R>(ax[i]) - th * static_cast<R>(x[i]);
             rn += d * d;
         }
-        rn = std::sqrt(rn);
+        rn = crd::math::sqrt(rn);
         result.residuals[s] = rn;
-        if (rn <= tol * (std::fabs(th) > R{1} ? std::fabs(th) : R{1}))
+        if (rn <= tol * (crd::math::fabs(th) > R{1} ? crd::math::fabs(th) : R{1}))
         {
             ++nconv;
         }

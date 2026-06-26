@@ -8,7 +8,7 @@
 #include <crd/hesap/sparse/sparse_pattern.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 
 namespace crd::hesap::ordering
 {
@@ -61,7 +61,7 @@ namespace detail
 template <typename R>
 [[nodiscard]] inline crd::f64 mc64_abs(const crd::hesap::Complex<R>& v) noexcept
 {
-    return std::sqrt(static_cast<crd::f64>(v.re) * static_cast<crd::f64>(v.re)
+    return crd::math::sqrt(static_cast<crd::f64>(v.re) * static_cast<crd::f64>(v.re)
                      + static_cast<crd::f64>(v.im) * static_cast<crd::f64>(v.im));
 }
 } // namespace detail

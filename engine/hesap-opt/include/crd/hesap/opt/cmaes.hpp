@@ -30,7 +30,7 @@
 #include <crd/hesap/stats/philox.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::hesap::opt
@@ -72,7 +72,7 @@ template <typename T>
 
     const T nn = static_cast<T>(n);
     // ---- Hansen's default strategy parameters.
-    const crd::usize lambda = co.lambda > 0 ? co.lambda : 4 + static_cast<crd::usize>(static_cast<T>(3) * std::log(nn));
+    const crd::usize lambda = co.lambda > 0 ? co.lambda : 4 + static_cast<crd::usize>(static_cast<T>(3) * crd::math::log(nn));
     const crd::usize mu = lambda / 2;
     // Raw weights w'_i = ln((λ+1)/2) − ln i over ALL λ ranks (tutorial eq. 49; positive for i ≤ μ).
     crd::containers::Array<T> weights(alloc);
@@ -82,8 +82,8 @@ template <typename T>
     T wneg_sq = static_cast<T>(0);
     for (crd::usize i = 0; i < lambda; ++i)
     {
-        weights[i] = std::log((static_cast<T>(lambda) + static_cast<T>(1)) / static_cast<T>(2)) -
-                     std::log(static_cast<T>(i + 1));
+        weights[i] = crd::math::log((static_cast<T>(lambda) + static_cast<T>(1)) / static_cast<T>(2)) -
+                     crd::math::log(static_cast<T>(i + 1));
         if (i < mu)
         {
             wsum += weights[i];
@@ -103,7 +103,7 @@ template <typename T>
     const T mueff = static_cast<T>(1) / mueff_num;
     const T mueff_neg = wneg_sq > static_cast<T>(0) ? wneg_sum * wneg_sum / wneg_sq : static_cast<T>(0);
     const T csig = (mueff + static_cast<T>(2)) / (nn + mueff + static_cast<T>(5));
-    const T sq = std::sqrt((mueff - static_cast<T>(1)) / (nn + static_cast<T>(1))) - static_cast<T>(1);
+    const T sq = crd::math::sqrt((mueff - static_cast<T>(1)) / (nn + static_cast<T>(1))) - static_cast<T>(1);
     const T dsig = static_cast<T>(1) + static_cast<T>(2) * (sq > static_cast<T>(0) ? sq : static_cast<T>(0)) + csig;
     const T cc = (static_cast<T>(4) + mueff / nn) / (nn + static_cast<T>(4) + static_cast<T>(2) * mueff / nn);
     const T c1 = static_cast<T>(2) / ((nn + static_cast<T>(1.3)) * (nn + static_cast<T>(1.3)) + mueff);
@@ -134,7 +134,7 @@ template <typename T>
             weights[i] = static_cast<T>(0); // plain (non-active) CMA: the worst half does not feed C
         }
     }
-    const T chin = std::sqrt(nn) * (static_cast<T>(1) - static_cast<T>(1) / (static_cast<T>(4) * nn) +
+    const T chin = crd::math::sqrt(nn) * (static_cast<T>(1) - static_cast<T>(1) / (static_cast<T>(4) * nn) +
                                     static_cast<T>(1) / (static_cast<T>(21) * nn * nn));
 
     // ---- State.
@@ -208,7 +208,7 @@ template <typename T>
                 spd = false;
             }
             const T li = lamv[i] > static_cast<T>(1e-20) ? lamv[i] : static_cast<T>(1e-20);
-            dvec[i] = std::sqrt(li);
+            dvec[i] = crd::math::sqrt(li);
             dmax = dvec[i] > dmax ? dvec[i] : dmax;
         }
         if (!spd && gen > 1)
@@ -300,25 +300,25 @@ template <typename T>
             }
             cinvhalf_dy[i] = acc;
         }
-        const T csig_scale = std::sqrt(csig * (static_cast<T>(2) - csig) * mueff);
+        const T csig_scale = crd::math::sqrt(csig * (static_cast<T>(2) - csig) * mueff);
         T psig_norm_sq = static_cast<T>(0);
         for (crd::usize i = 0; i < n; ++i)
         {
             psig[i] = (static_cast<T>(1) - csig) * psig[i] + csig_scale * cinvhalf_dy[i];
             psig_norm_sq += psig[i] * psig[i];
         }
-        const T psig_norm = std::sqrt(psig_norm_sq);
+        const T psig_norm = crd::math::sqrt(psig_norm_sq);
 
         // hσ stall guard (Hansen's (1 − (1−cσ)^{2·evals/λ}) denominator).
         const T denom_pow =
             static_cast<T>(1) -
-            std::pow(static_cast<T>(1) - csig, static_cast<T>(2) * static_cast<T>(evals) / static_cast<T>(lambda));
+            crd::math::pow(static_cast<T>(1) - csig, static_cast<T>(2) * static_cast<T>(evals) / static_cast<T>(lambda));
         const T hsig_thresh =
-            (static_cast<T>(1.4) + static_cast<T>(2) / (nn + static_cast<T>(1))) * chin * std::sqrt(denom_pow);
+            (static_cast<T>(1.4) + static_cast<T>(2) / (nn + static_cast<T>(1))) * chin * crd::math::sqrt(denom_pow);
         const T hsig = psig_norm < hsig_thresh ? static_cast<T>(1) : static_cast<T>(0);
 
         // ---- pc and the covariance update (rank-one + rank-μ, with the hσ correction).
-        const T cc_scale = std::sqrt(cc * (static_cast<T>(2) - cc) * mueff);
+        const T cc_scale = crd::math::sqrt(cc * (static_cast<T>(2) - cc) * mueff);
         for (crd::usize i = 0; i < n; ++i)
         {
             pc[i] = (static_cast<T>(1) - cc) * pc[i] + hsig * cc_scale * ymean[i];
@@ -339,7 +339,7 @@ template <typename T>
                 {
                     znorm_sq += z[i] * z[i];
                 }
-                const T znorm = std::sqrt(znorm_sq) + static_cast<T>(1e-9);
+                const T znorm = crd::math::sqrt(znorm_sq) + static_cast<T>(1e-9);
                 w *= nn / (znorm * znorm);
             }
             weff[k] = w;
@@ -362,7 +362,7 @@ template <typename T>
         }
 
         // ---- Step-size: σ ← σ·exp((cσ/dσ)(‖pσ‖/E‖N(0,I)‖ − 1)).
-        sigma *= std::exp((csig / dsig) * (psig_norm / chin - static_cast<T>(1)));
+        sigma *= crd::math::exp((csig / dsig) * (psig_norm / chin - static_cast<T>(1)));
     }
 
     result.fx = best_f;

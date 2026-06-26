@@ -14,7 +14,7 @@
 
 #include <crd/containers/array.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 
 namespace crd::hesap::fft
 {
@@ -43,7 +43,7 @@ public:
         {
             const crd::usize kk = (k % (2 * n)) * (k % (2 * n)) % (2 * n); // k² mod 2n (overflow-safe for practical n)
             const double th = pi * static_cast<double>(kk) / static_cast<double>(n);
-            m_chirp[k] = Complex<T>{static_cast<T>(std::cos(th)), static_cast<T>(std::sin(th))};
+            m_chirp[k] = Complex<T>{static_cast<T>(crd::math::cos(th)), static_cast<T>(crd::math::sin(th))};
         }
 
         // b_circ (length M): b_circ[0]=chirp[0]=1, b_circ[m]=chirp[m] and b_circ[M-m]=chirp[m] (chirp is even),

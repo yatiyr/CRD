@@ -3,7 +3,7 @@
 #include <crd/core/types.hpp>
 #include <crd/jobs/jobs.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 
 // -----------------------------------------------------------------------
 // Balanced-triangular parallel partition (Phase 3.1.6 v7-e-2).
@@ -40,7 +40,7 @@ namespace crd::hesap::dense::detail
         return n;
     }
     const double frac = static_cast<double>(k) / static_cast<double>(w);
-    const double r = static_cast<double>(n) * std::sqrt(frac) + 0.5;
+    const double r = static_cast<double>(n) * crd::math::sqrt(frac) + 0.5;
     auto b = static_cast<crd::u32>(r);
     return b > n ? n : b; // clamp (defensive against fp rounding at the top)
 }

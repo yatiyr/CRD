@@ -20,7 +20,7 @@
 #include <crd/hesap/opt/opt_types.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 
 namespace crd::hesap::opt
 {
@@ -135,10 +135,10 @@ template <typename T>
             const T* row = sim.data() + order[i] * n;
             for (crd::usize j = 0; j < n; ++j)
             {
-                const T d = std::fabs(row[j] - best[j]);
+                const T d = crd::math::fabs(row[j] - best[j]);
                 xspread = d > xspread ? d : xspread;
             }
-            const T df = std::fabs(fsim[order[i]] - fsim[order[0]]);
+            const T df = crd::math::fabs(fsim[order[i]] - fsim[order[0]]);
             fspread = df > fspread ? df : fspread;
         }
         if (xspread <= nm.xatol && fspread <= nm.fatol)

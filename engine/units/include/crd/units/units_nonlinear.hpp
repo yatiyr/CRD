@@ -31,7 +31,7 @@
 #include <crd/units/dim_aliases.hpp>
 #include <crd/units/quantity.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 
 namespace crd::units
 {
@@ -46,7 +46,7 @@ namespace crd::units
 //
 // We use struct-based dispatch because constexpr lambdas as template
 // parameters require C++20 with full constant-evaluable bodies, and we
-// also want std::pow / std::log10 which aren't constexpr in C++20.
+// also want crd::math::pow / crd::math::log10 which aren't constexpr in C++20.
 //
 // Per-unit definitions live below as concrete types (DecibelSPL etc.) with
 // static `to_si` / `from_si` member functions. The framework supports any
@@ -84,11 +84,11 @@ struct DecibelSPL
 
     [[nodiscard]] static crd::f64 to_si(crd::f64 db) noexcept
     {
-        return 20.0e-6 * std::pow(10.0, db / 20.0);
+        return 20.0e-6 * crd::math::pow(10.0, db / 20.0);
     }
     [[nodiscard]] static crd::f64 from_si(crd::f64 pa) noexcept
     {
-        return 20.0 * std::log10(pa / 20.0e-6);
+        return 20.0 * crd::math::log10(pa / 20.0e-6);
     }
 };
 
@@ -99,11 +99,11 @@ struct DecibelV
 
     [[nodiscard]] static crd::f64 to_si(crd::f64 db) noexcept
     {
-        return std::pow(10.0, db / 20.0);
+        return crd::math::pow(10.0, db / 20.0);
     }
     [[nodiscard]] static crd::f64 from_si(crd::f64 v) noexcept
     {
-        return 20.0 * std::log10(v);
+        return 20.0 * crd::math::log10(v);
     }
 };
 
@@ -114,11 +114,11 @@ struct DecibelW
 
     [[nodiscard]] static crd::f64 to_si(crd::f64 db) noexcept
     {
-        return std::pow(10.0, db / 10.0);
+        return crd::math::pow(10.0, db / 10.0);
     }
     [[nodiscard]] static crd::f64 from_si(crd::f64 w) noexcept
     {
-        return 10.0 * std::log10(w);
+        return 10.0 * crd::math::log10(w);
     }
 };
 
@@ -129,11 +129,11 @@ struct DecibelMilliwatt  // dBm
 
     [[nodiscard]] static crd::f64 to_si(crd::f64 dbm) noexcept
     {
-        return 1.0e-3 * std::pow(10.0, dbm / 10.0);
+        return 1.0e-3 * crd::math::pow(10.0, dbm / 10.0);
     }
     [[nodiscard]] static crd::f64 from_si(crd::f64 w) noexcept
     {
-        return 10.0 * std::log10(w / 1.0e-3);
+        return 10.0 * crd::math::log10(w / 1.0e-3);
     }
 };
 
@@ -165,8 +165,8 @@ struct DecibelRatio
     using dimension = dim::Dimensionless;
     static constexpr bool is_nonlinear = true;
 
-    [[nodiscard]] static crd::f64 to_si(crd::f64 db) noexcept { return std::pow(10.0, db / 20.0); }
-    [[nodiscard]] static crd::f64 from_si(crd::f64 ratio) noexcept { return 20.0 * std::log10(ratio); }
+    [[nodiscard]] static crd::f64 to_si(crd::f64 db) noexcept { return crd::math::pow(10.0, db / 20.0); }
+    [[nodiscard]] static crd::f64 from_si(crd::f64 ratio) noexcept { return 20.0 * crd::math::log10(ratio); }
 };
 
 struct DecibelPower
@@ -174,8 +174,8 @@ struct DecibelPower
     using dimension = dim::Dimensionless;
     static constexpr bool is_nonlinear = true;
 
-    [[nodiscard]] static crd::f64 to_si(crd::f64 db) noexcept { return std::pow(10.0, db / 10.0); }
-    [[nodiscard]] static crd::f64 from_si(crd::f64 ratio) noexcept { return 10.0 * std::log10(ratio); }
+    [[nodiscard]] static crd::f64 to_si(crd::f64 db) noexcept { return crd::math::pow(10.0, db / 10.0); }
+    [[nodiscard]] static crd::f64 from_si(crd::f64 ratio) noexcept { return 10.0 * crd::math::log10(ratio); }
 };
 
 // ===========================================================================
@@ -200,11 +200,11 @@ struct Cents
 
     [[nodiscard]] static crd::f64 to_si(crd::f64 cents) noexcept
     {
-        return kCentsReferenceFrequencyHz * std::pow(2.0, cents / 1200.0);
+        return kCentsReferenceFrequencyHz * crd::math::pow(2.0, cents / 1200.0);
     }
     [[nodiscard]] static crd::f64 from_si(crd::f64 hz) noexcept
     {
-        return 1200.0 * std::log2(hz / kCentsReferenceFrequencyHz);
+        return 1200.0 * crd::math::log2(hz / kCentsReferenceFrequencyHz);
     }
 };
 
@@ -215,11 +215,11 @@ struct Semitones
 
     [[nodiscard]] static crd::f64 to_si(crd::f64 semitones) noexcept
     {
-        return kCentsReferenceFrequencyHz * std::pow(2.0, semitones / 12.0);
+        return kCentsReferenceFrequencyHz * crd::math::pow(2.0, semitones / 12.0);
     }
     [[nodiscard]] static crd::f64 from_si(crd::f64 hz) noexcept
     {
-        return 12.0 * std::log2(hz / kCentsReferenceFrequencyHz);
+        return 12.0 * crd::math::log2(hz / kCentsReferenceFrequencyHz);
     }
 };
 

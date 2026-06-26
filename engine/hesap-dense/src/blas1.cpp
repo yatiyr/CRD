@@ -4,7 +4,7 @@
 #include <crd/hesap/dense/detail/dot_simd.hpp>
 #include <crd/hesap/dense/detail/pairwise_sum.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <type_traits>
 #include <utility>
 
@@ -93,22 +93,22 @@ RealType<T> nrm2(crd::containers::ConstSpan<T> x)
         const R sum_sq = detail::pairwise_sum_produced<R>(
             x.size(),
             [&](crd::usize i) -> R { return norm_sq(x[i]); });
-        return std::sqrt(sum_sq);
+        return crd::math::sqrt(sum_sq);
     }
     else if constexpr (std::is_same_v<T, crd::f32>)
     {
-        return std::sqrt(detail::simd_sumsq_f32(x.data(), x.size()));
+        return crd::math::sqrt(detail::simd_sumsq_f32(x.data(), x.size()));
     }
     else if constexpr (std::is_same_v<T, crd::f64>)
     {
-        return std::sqrt(detail::simd_sumsq_f64(x.data(), x.size()));
+        return crd::math::sqrt(detail::simd_sumsq_f64(x.data(), x.size()));
     }
     else
     {
         const R sum_sq = detail::pairwise_sum_produced<R>(
             x.size(),
             [&](crd::usize i) -> R { return x[i] * x[i]; });
-        return std::sqrt(sum_sq);
+        return crd::math::sqrt(sum_sq);
     }
 }
 

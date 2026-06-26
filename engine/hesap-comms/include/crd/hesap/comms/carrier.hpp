@@ -23,7 +23,7 @@
 #include <crd/hesap/complex.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <numbers>
 
 namespace crd::hesap::comms
@@ -50,7 +50,7 @@ public:
     {
         for (crd::usize i = 0; i < in.size(); ++i)
         {
-            const T c = std::cos(m_phase), s = std::sin(m_phase);
+            const T c = crd::math::cos(m_phase), s = crd::math::sin(m_phase);
             const Complex<T> y{in[i].re * c + in[i].im * s, -in[i].re * s + in[i].im * c}; // de-rotate by -phase
             const crd::u32 d = m_psk->demodulate(y);
             const Complex<T> dec = m_psk->constellation(d);
@@ -98,7 +98,7 @@ public:
     // Track one input sample; returns the NCO phase estimate after the update.
     [[nodiscard]] T track(Complex<T> x) noexcept
     {
-        const T in_phase = std::atan2(x.im, x.re);
+        const T in_phase = crd::math::atan2(x.im, x.re);
         T e = in_phase - m_phase;
         e = wrap(e);
         m_freq += m_beta * e;
@@ -146,7 +146,7 @@ template <typename T>
         acc_re += a.re * b.re + a.im * b.im;
         acc_im += a.im * b.re - a.re * b.im;
     }
-    return std::atan2(acc_im, acc_re) / static_cast<T>(m_order);
+    return crd::math::atan2(acc_im, acc_re) / static_cast<T>(m_order);
 }
 
 } // namespace crd::hesap::comms

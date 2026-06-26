@@ -25,7 +25,7 @@
 #include <crd/hesap/ode/solution.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::hesap::ode
@@ -177,8 +177,8 @@ template <typename T>
                 d0s += (y[i] / sc) * (y[i] / sc);
                 d1s += (f0[i] / sc) * (f0[i] / sc);
             }
-            const T d0 = std::sqrt(d0s / static_cast<T>(n));
-            const T d1 = std::sqrt(d1s / static_cast<T>(n));
+            const T d0 = crd::math::sqrt(d0s / static_cast<T>(n));
+            const T d1 = crd::math::sqrt(d1s / static_cast<T>(n));
             T h0_try = (d0 < static_cast<T>(1e-5) || d1 < static_cast<T>(1e-5)) ? static_cast<T>(1e-6)
                                                                                 : static_cast<T>(0.01) * d0 / d1;
             h0_try = h0_try < interval_length ? h0_try : interval_length;
@@ -194,7 +194,7 @@ template <typename T>
                 const T q = (ftmp[i] - f0[i]) / sc;
                 d2s += q * q;
             }
-            const T d2 = std::sqrt(d2s / static_cast<T>(n)) / h0_try;
+            const T d2 = crd::math::sqrt(d2s / static_cast<T>(n)) / h0_try;
             T h1;
             if (d1 <= static_cast<T>(1e-15) && d2 <= static_cast<T>(1e-15))
             {
@@ -204,7 +204,7 @@ template <typename T>
             else
             {
                 const T dm = d1 > d2 ? d1 : d2;
-                h1 = std::pow(static_cast<T>(0.01) / dm, static_cast<T>(1) / static_cast<T>(4));
+                h1 = crd::math::pow(static_cast<T>(0.01) / dm, static_cast<T>(1) / static_cast<T>(4));
             }
             h_abs = static_cast<T>(100) * h0_try;
             h_abs = h_abs < h1 ? h_abs : h1;
@@ -261,7 +261,7 @@ template <typename T>
         }
         else
         {
-            const T sqrt_eps = std::sqrt(eps);
+            const T sqrt_eps = crd::math::sqrt(eps);
             for (crd::usize i = 0; i < n; ++i)
             {
                 xtmp[i] = y[i];
@@ -283,7 +283,7 @@ template <typename T>
         }
         // ∂f/∂t by forward difference (exactly 0 for autonomous f).
         {
-            const T dt_t = std::sqrt(eps) * (std::abs(t) > static_cast<T>(1) ? std::abs(t) : static_cast<T>(1));
+            const T dt_t = crd::math::sqrt(eps) * (std::abs(t) > static_cast<T>(1) ? std::abs(t) : static_cast<T>(1));
             eval(t + dt_t, cont::ConstSpan<T>(y.data(), n), cont::Span<T>(dfdt.data(), n));
             for (crd::usize i = 0; i < n; ++i)
             {
@@ -385,13 +385,13 @@ template <typename T>
                 atol_i(i) + opts.rtol * (std::abs(y[i]) > std::abs(xout[i]) ? std::abs(y[i]) : std::abs(xout[i]));
             esum += (xerr[i] / sk) * (xerr[i] / sk);
         }
-        const T err = std::sqrt(esum / static_cast<T>(n));
+        const T err = crd::math::sqrt(esum / static_cast<T>(n));
         ++result.work.nsteps;
 
         const T safe = static_cast<T>(0.9);
         const T fac1 = static_cast<T>(5);
         const T fac2 = static_cast<T>(1) / static_cast<T>(6);
-        T fac = std::pow(err, static_cast<T>(0.25)) / safe;
+        T fac = crd::math::pow(err, static_cast<T>(0.25)) / safe;
         fac = fac < fac1 ? fac : fac1;
         fac = fac > fac2 ? fac : fac2;
         T dt_new_abs = h_abs / fac;
@@ -404,7 +404,7 @@ template <typename T>
             }
             else
             {
-                T fac_pred = (dt_old / h_abs) * std::pow(err * err / err_old, static_cast<T>(0.25)) / safe;
+                T fac_pred = (dt_old / h_abs) * crd::math::pow(err * err / err_old, static_cast<T>(0.25)) / safe;
                 fac_pred = fac_pred < fac1 ? fac_pred : fac1;
                 fac_pred = fac_pred > fac2 ? fac_pred : fac2;
                 fac = fac > fac_pred ? fac : fac_pred;

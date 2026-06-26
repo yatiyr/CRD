@@ -468,7 +468,26 @@ determinism + replay tests.
 | ↳ **v11c-f** ✅ | channels (AWGN/Rayleigh/Rician, deterministic Philox) + `Agc` + preamble sync (`find_preamble`) + FEC (Hamming(7,4)). Gate: measured SNR/fading stats + AGC converge + sync peak + 1-bit correction. | ~330 | — | ✅ |
 | ↳ **v11c-g** ✅ | OFDM: `OfdmModulator` (IFFT+CP / strip-CP+FFT over the v10 FFT) + pilot channel estimation + ZF equalize. Gate: round-trip + multipath-through-CP recovery (BER 0). **PERF: 3.0× liquid (FFT engine).** | ~280 | — | ✅ |
 | ↳ **v11-z** | CLOSE: CLI `hesap.{dsp,wavelet,comms}.*` + full scoreboard + {1..16} sweep + 3 system docs + ADR-0093. | ~300 | ~10 | — |
-| **v12** | Statistics: 50+ distributions (Stan-math reference) + statistical tests (t / chi² / KS / Mann-Whitney / Wilcoxon / Friedman / Kruskal-Wallis / ANOVA) + special functions (gamma / beta / erf / Bessel J/Y/I/K / Legendre / Hermite / Chebyshev) + RNGs (splittable PCG + Xoshiro256** + **Philox** + **Threefry** for parallel-deterministic) + bootstrap / jackknife + CLI registration | ~3500 | ~130 | ~2.5 wk |
+| **v12** (DETAILED PLAN below ↓) | **Statistics — the MAXIMAL subject (full elite + "insane" scope, user direction 2026-06-22).** TWO modules: NEW leaf **`crd-hesap-special`** (gamma/beta/erf + regularized-incomplete + INVERSES · Bessel/Airy/Kelvin · orthogonal polys + Golub-Welsch roots/weights · hypergeometric ₁F₁/₂F₁/pFq · Lambert-W · zeta/polylog · Ei/Si/Ci · Fresnel · Struve · Marcum-Q · Carlson elliptic) + expand **`crd-hesap-stats`** (counter-RNG suite PCG64-DXSM/Threefry/Xoshiro256**/SFC64/SplitMix + ChaCha20 + fast samplers Ziggurat/Marsaglia-Tsang + QMC Sobol/Halton/lattice/LHS · ~50 univariate + multivariate {MVN/MVt/Dirichlet/Wishart/LKJ} + heavy-tail/extreme/noncentral distributions w/ **autodiff-ready log-densities** · descriptive + the full hypothesis-test suite + bootstrap/jackknife/permutation · KDE/robust/streaming · **MCMC HMC/NUTS** · regression/GLM/PCA). **BE THE FASTEST — honest all-peers benchmark** vs scipy.stats + scipy.special + **MATLAB Stats & ML Toolbox** + R + Stan-math + Boost.Math + GSL + NumPy-random. {1,4,16} determinism moat (counter-RNG = bit-identical parallel sampling). Unlocks the deferred v11 spectral CIs (χ²/F ppf). **~19 sub-slices ↓.** ⭐ Standing arch rule from this cluster: SEARCH ENGINE BEFORE BUILD (SANITY rule 8). + NEW module `crd-hesap-quadrature` (Golub-Welsch). | ~9000 | ~400 | 🔄 a–d ✅ |
+| ↳ **v12-a** ✅ (DONE 2026-06-22) | **Special — the cdf/ppf engine** (NEW module `crd-hesap-special`). gamma/lgamma/digamma/polygamma · beta/lbeta · regularized incomplete gamma P,Q + **inverse** · incomplete beta I_x + **inverse** · erf/erfc/erfcx/erfinv/erfcinv/Dawson/Faddeeva-Voigt. SIMD minimax. | ~900 | ~30 | — |
+| ↳ **v12-b** ✅ (DONE 2026-06-22, 24/24 all-peers crush + parallel batch) | **Special — Bessel & Airy.** J/Y/I/K (integer+real+complex order) · spherical Bessel/Neumann · Hankel · Airy Ai/Bi+deriv · Kelvin. Gold: Boost/GSL/MATLAB. | ~900 | ~30 | — |
+| ↳ **v12-c** ✅ (DONE 2026-06-23) | **Special — orthogonal polynomials.** Legendre/Hermite/Laguerre/Chebyshev/Gegenbauer/Jacobi — recurrence eval + **Golub-Welsch roots/weights** (NEW module crd-hesap-quadrature, reuses hesap-dense eig_sym). | ~700 | ~25 | — |
+| ↳ **v12-d** ✅ (DONE 2026-06-23) | **Special — transcendental tail.** hypergeometric ₀F₁/₁F₁/₂F₁ (+ degenerate log forms) + general pFq · Lambert W₀/W₋₁ · Hurwitz/Riemann zeta (incl. s<1) · Ei/E₁/Eₙ/Si/Ci · Fresnel S/C · Struve H/L · Marcum-Q · Carlson R_F/R_D/R_J/R_C + K/E/F/E/Π + Jacobi sn/cn/dn. Gated vs scipy <1e-12 (~490 asrt). | ~1100 | ~35 | — |
+| ↳ **v12-e** ✅ (DONE 2026-06-24) | **RNG — counter+classic suite** (expand `crd-hesap-stats`). PCG64-DXSM · Threefry4x64-20 · Xoshiro256**/++ (+jump/long_jump) · SplitMix64 · SFC64 · MT19937 (+ existing Philox) + BitGenerator concept + Lemire bounded + **AVX2 bulk fill (Philox 8-block / Threefry 4-block, bit-identical to scalar)**. Bit-exact-gated vs published KATs / NumPy random_raw. ⭐⭐ **FULL CRUSH (ns/u64) vs NumPy AND MATLAB — every same-generator WIN, no losses**: PCG64-DXSM 1.54×N · SFC64 2.91×N · Philox 1.37×N/3.13×M · Threefry 1.81×M · MT19937 1.52×N/2.37×M · xoshiro/splitmix fastest (2.5–4.4× MATLAB simdTwister). | ~700 | ~30 | — |
+| ↳ **v12-f** ✅ (DONE 2026-06-24) | **RNG — fast samplers.** Ziggurat (normal/exp) · Marsaglia-Tsang gamma · gamma-ratio beta · χ² · Knuth+**PTRS** Poisson · BINV+**BTPE** binomial · geometric · **Vose alias** (O(1) categorical) · reservoir. Gated moments + empirical-CDF-vs-special-fn-CDF + {seed}-determinism. ⭐⭐ **CRUSHES MATLAB-1T 8/8** (1.26×–**277×** binom-1000); **beats NumPy 7/8** (normal 2.10× · gamma 1.47× · beta 1.50× · poisson 1.38×,1.41× · **binomial 1.76×/1.20×**), exp ~parity (DXSM-quality tradeoff, not chased). 4-config DoD GREEN (302539 asrt debug/asan/shipping + tidy + guards). ⭐ FIXED a real **binomial_inversion infinite-loop** (not reflection-aware ⇒ p>0.5,large-n underflows q^n → spins; reflect like BTPE). ⭐ stateful **`BinomialSampler`** (precompute BTPE/BINV setup once = NumPy's `binomial_t` pattern) flipped the 2 NumPy binomial losses to wins; bit-identical to free `binomial()` (gated 20000 checks). | ~600 | ~25 | — |
+| ↳ **v12-g** ✅ (DONE 2026-06-24) | **RNG — QMC + crypto.** Sobol (Joe-Kuo new-joe-kuo-6.21 dirs, 32-bit Gray-code, dims≤21) · Halton (radical-inverse, 32 primes) · rank-1 lattice · Latin Hypercube · **ChaCha20** (RFC 8439). Sobol **bit-vs-scipy.stats.qmc** (gen_qmc_refs.py) + Halton anchors + ChaCha RFC all-zero-key KAT + low-discrepancy-beats-1/√N integration + LHS perfect stratification + determinism. Part of the 282539-asrt 4-config-green stats suite. | ~600 | ~25 | — |
+| ↳ **v12-h** ✅ (DONE 2026-06-24) | **Distributions — `Distribution<T>` framework + 25 univariate CONTINUOUS** (normal/lognormal/exp/gamma/beta/χ²/t/F/Cauchy/Laplace/logistic/Weibull/Gumbel/Pareto/Rayleigh/Maxwell/uniform/triangular/halfnormal/halfcauchy/invgamma/Nakagami/Wald/vonMises/Rice). CRTP base + concept; CDFs ride hesap-special (erf/gammainc/betainc + inverses), rvs rides v12-f. **Gated vs scipy.stats: pdf/logpdf/cdf/sf <1e-9, ppf <1e-7, moments+entropy = 650/0.** ⭐⭐⭐ PERF (ns/elem) **after the betainc/gammainc crush** (amortise lgamma via cached overloads + looser CF eps + binomial.cdf direct-sum + studentt.ppf=Hill AS-396): **vs scipy 16/16 WIN** (1.04×–6.48×; pdf to 5.8× · binomial.cdf 5.4× · normal.ppf 6.48× via AS-241 ndtri · studentt.ppf 1.6×) — NO losses; **vs MATLAB-1T 16/16 WIN (to 20×)**. Accuracy preserved (special suite still 402081/37 <1e-12). | ~1100 | ~40 | — |
+| ↳ **v12-i** ✅ (DONE 2026-06-24) | **Distributions — 12 univariate DISCRETE** (Bernoulli/binomial/Poisson/geometric/neg-binom/discrete-uniform/hypergeometric/Skellam/Zipf-zeta/Yule-Simon/beta-binomial/logarithmic; COM-Poisson omitted — no scipy gate). Closed-form CDFs (Poisson→gammainc_q, Binomial/NegBinom→betainc) + finite pmf-sum elsewhere; integer ppf via bracket-bisect (exact-boundary-robust). **Gated vs scipy.stats: pmf/logpmf/cdf/sf <1e-9, integer ppf exact, moments+entropy = 304/0.** ⭐⭐ PERF: **pmf CRUSHES** (poisson 2.4×scipy/10.7×MATLAB · binomial 2.1×/13.9×); poisson.cdf 1.5×/4.2×. | ~600 | ~25 | — |
+| ↳ **v12-j** ✅ (DONE 2026-06-24) | **Distributions — heavy-tail/extreme/noncentral** (`heavy_tail.hpp`): GEV · GPD · Lévy · BetaPrime · NoncentralChiSquared (cdf via shipped Marcum-Q) · SkewNormal (cdf = Φ−2·Owen's-T, tan-sub+composite Gauss-Legendre) · NoncentralT (Lenth AS-243 series) · NoncentralF (Poisson-mixture series) + **α-stable CMS sampler** (Nolan S1). **Gated vs scipy.stats 208/0** (8 dists; stable gated by special cases α=2→normal/α=1→Cauchy + determinism). 4-config DoD green (a→j 317795/44, tidy, guards). ⚠ general-α stable pdf/cdf (Zolotarev quadrature) deferred — scipy itself does it numerically. | ~900 | ~30 | — |
+| ↳ **v12-k** ✅ (DONE 2026-06-25) | **Distributions — multivariate** (`multivariate.hpp`): MVN · MVt · Dirichlet · Wishart · InverseWishart · LKJ · Multinomial over `dense::factor_cholesky` (new acyclic stats→hesap-dense edge; L→flat raw f64 hot path). Gated vs scipy.stats <1e-9 + analytic LKJ p=2 + Bartlett-moment + determinism moat (`[v12-k]` 50; suite 317845/52; 4-config DoD + gcc green). ⭐ CRUSH all peers: MVN logpdf 2.35×scipy/3.17×MATLAB, MVN rvs 4.07×numpy/2.30×mvnrnd, MVt 1.44×, Dirichlet 3.48×, Multinomial 2.36×/2.89×, Wishart rvs 7.17×/22.4×, InvWishart 4.10×/16.9× (LKJ = no fair peer). | ~750 | ~30 | — |
+| ↳ **v12-l** | **Distributions — autodiff-ready log-densities.** analytic ∂logp/∂x and ∂logp/∂θ for every distribution (the HMC/NUTS + MLE enabler). Gold: Stan-math + FD grad-check. | ~600 | ~25 | — |
+| ↳ **v12-m** | **Inference — descriptive + estimators.** moments (+robust) · quantiles (R types 1–9 + Harrell-Davis) · ECDF · histograms · weighted · cov/corr matrices. Gold: scipy/R/MATLAB. | ~500 | ~20 | — |
+| ↳ **v12-n** | **Inference — the full test suite.** parametric (t/z/Welch/ANOVA/Bartlett/Levene) + nonparametric (Mann-Whitney/Wilcoxon/Kruskal-Wallis/Friedman/sign/Mood) + GoF (KS/AD/CvM/Shapiro/JB/D'Agostino) + categorical (χ²/Fisher/McNemar/G) + correlation (Pearson/Spearman/Kendall/dCor) + multcompare (Tukey/Holm/BH-FDR/Scheffé/Dunnett/Games-Howell) + effect sizes. Gold: scipy.stats/R/MATLAB. | ~1100 | ~45 | — |
+| ↳ **v12-o** | **Inference — resampling.** bootstrap (basic/percentile/**BCa**/studentized) · block · jackknife (+delete-d) · permutation · CV. **Parallel + {1,4,16} moat.** Gold: scipy/R-boot/MATLAB. | ~600 | ~25 | — |
+| ↳ **v12-p** | **Insane — KDE + robust + streaming.** KDE (+Silverman/Scott/CV bw) · robust (Huber/Tukey-M, MCD, Theil-Sen, Hodges-Lehmann) · cov shrinkage (Ledoit-Wolf/OAS) · online (Welford/P²/t-digest/HLL). Gold: sklearn/statsmodels/MATLAB/R. | ~800 | ~30 | — |
+| ↳ **v12-q** | **Insane — MCMC/Bayesian** (uses v12-l). Metropolis/adaptive/Gibbs/**HMC/NUTS**/slice/SMC + diagnostics (R-hat/ESS/autocorr/Geweke). Gold: Stan/PyMC/MATLAB hmcSampler. | ~1100 | ~30 | — |
+| ↳ **v12-r** | **Insane — regression/GLM/multivariate.** OLS/WLS/GLS · ridge/lasso/elastic-net · GLM-IRLS · robust/quantile · PCA/LDA/QDA (rides the shipped dense GEMM/QR/SVD). Gold: statsmodels/sklearn/MATLAB/R. | ~1000 | ~35 | — |
+| ↳ **v12-z** | **CLOSE.** CLI `hesap.{stats,special}.*` + system docs (`hesap-special.md`, `hesap-stats.md`) + **back-wire the v11 spectral CIs (χ²/F ppf → multitaper/AR)** + all-peers scoreboard + {1,4,16} moat audit + ADR-0094. | ~400 | ~15 | — |
 | **v13** | Polynomial / interpolation (linear / cubic spline / Akima / Hermite / monotone / Chebyshev / barycentric / RBF) + quadrature (Gauss-Legendre / Hermite / Laguerre / Lobatto / Radau / Clenshaw-Curtis / adaptive Simpson / Romberg) + numerical differentiation (FD / Richardson extrapolation / Hermite extrapolation) + CLI registration | ~2300 | ~90 | ~1.5 wk |
 | **v14** | N-dim tensors + broadcasting + einsum + reductions + reshape/transpose/slice/gather/scatter + tensor LinearOp + complex variants + CLI registration | ~2800 | ~110 | ~2 wk |
 | **v15** | Autodiff v1 forward mode: dual numbers (Jet types) + hyper-dual (2nd order) + sparse Jacobian (Curtis-Powell-Reid coloring) + **per-op manual VJP / JVP rules for entire BLAS surface** (JAX pattern — custom `solve` VJP avoids AD-through-LU) + CLI registration | ~3000 | ~120 | ~2.5 wk |
@@ -578,6 +597,128 @@ Multitaper + AR spectral CIs need χ²/F inverse-CDF (v12 Statistics, AFTER v11)
 v11 WITHOUT the parametric CIs; the CI layer is a thin v12-followup (or a v12-pull of the 2 quantile fns per the
 v9-i Philox-pull pattern if a consumer needs it sooner). AIC/MDL order-selection ships in v11 (log-likelihood only,
 no distributions).
+
+---
+
+## v12 — Statistics + Special functions — DETAILED PLAN (planned 2026-06-22)
+
+> ADR-0094 (to be written at v12-a / finalised at close). **MAXIMAL "elite + insane" scope (user direction
+> 2026-06-22 — selected EVERY option across special-functions / distributions / RNG / inference):** a full
+> Stan-math + scipy.stats + Boost.Math-class statistics stack. Delivered across TWO modules (module-isolation
+> cornerstone):
+> - **`crd-hesap-special`** (NEW leaf) — special functions + orthogonal polynomials. A reusable substrate that
+>   v13-quadrature (Golub-Welsch roots/weights), the distribution layer, and DSP all consume. Edges:
+>   `special → core / containers / memory / math (simd) / crd-hesap (Complex<T>)`. No edge to stats.
+> - **`crd-hesap-stats`** (EXPAND the existing v7-i module) — RNG · distributions · descriptive · tests · resampling ·
+>   KDE/robust/streaming · MCMC · regression. Edges: `stats → crd-hesap-special + crd-hesap-dense (QR/SVD/Cholesky
+>   for MVN + regression) + crd-jobs (parallel sampling/bootstrap/MCMC) + math + core/containers/memory`.
+>   **Regression solvers stay inside stats (IRLS / coordinate-descent / normal-eqns over the shipped dense factors)
+>   to keep `stats ↛ opt` acyclic** — revisit only if elastic-net wants the v7 ADMM (would be a new acyclic edge).
+>
+> Realistic size: **~19 sub-slices · ~9,000 LOC · ~400 tests · multi-session — the second-largest hesap cluster
+> after DSP. DO NOT marathon.** The old "## v13 — Statistics + Special functions + RNG" stub far below is superseded.
+
+### The performance mandate (user, 2026-06-22): BE THE FASTEST — honest all-peers benchmark
+Every perf-bearing kernel is benched head-to-head against **all** available peers, never cherry-picked
+([[feedback_bench_all_peers_never_cherry_pick]]); report losses; name which ops win vs which are bound. Peers:
+- **scipy.stats / scipy.special** (1.16+) — the primary spec/accuracy + perf gate (free).
+- **MATLAB R2026a Statistics & ML Toolbox** — WE HAVE IT (`C:\Program Files\MATLAB\R2026a`, all toolboxes;
+  [[reference_matlab_gold_standard]]). The industry reference: `gammainc`/`betainc`/`besselj`/`erfcinv` · `pdf`/`cdf`/`icdf`/`random`/`fitdist`/`makedist` ·
+  `ttest`/`anovan`/`ranksum`/`kstest`/`adtest`/`swtest`/`chi2gof`/`fishertest`/`corr`/`multcompare` · `bootci`/`jackknife` ·
+  `ksdensity`/`robustcov`/`robustfit` · **`hmcSampler`/`mhsample`/`slicesample`** (MCMC) · `fitlm`/`fitglm`/`lasso`/`ridge`/`pca`/`fitcdiscr`.
+  ⭐ MATLAB's RNG natively supports **`'threefry'` and `'philox'` generators** ⇒ direct bit-level cross-check for our counter-RNG.
+  ⚠ `matlab -batch` ~44.5 s startup ⇒ batch ALL slice reference vectors into ONE call → committed `.inc` (the SUNDIALS-tableau pattern).
+- **R** (stats + boot + MASS + nortest) — the statistical-computing authority for tests / GoF / robust.
+- **Stan-math** — the reference for log-densities + their gradients + HMC/NUTS.
+- **Boost.Math / GSL / Cephes** — the special-function accuracy + scalar-perf reference.
+- **NumPy-random** (PCG64-DXSM / Philox / SFC64) — RNG throughput + KAT vectors.
+
+**How we win (the perf thesis):** (1) **SIMD-vectorized** special-function + pdf/cdf/ppf kernels (minimax/Estrin
+polynomial eval over `Vec8f`/`Vec4d`) where the peers call scalar libm per element; (2) **counter-based RNG
+throughput** (GB/s of random bytes, O(1) random access) + branchless Ziggurat; (3) **parallel bootstrap / MCMC /
+batch-sampling** over `crd-jobs` with the determinism moat the peers cannot match; (4) **regression rides the
+already-crushing dense GEMM/QR/SVD** (v0/v3). Accuracy gate FIRST (≤ few-ulp vs Boost / 1e-12–1e-14 vs scipy),
+then the perf crush — chk-identical-where-applicable proves correctness before any speed claim.
+
+### Elite contract (pinned BEFORE v12-a — D(stat) decisions)
+- **D(stat)-1 — determinism by construction:** all RNG is counter-based (`(key, counter)` → block; O(1) seek), so
+  parallel sampling is bit-identical across {1,4,16} threads with NO cross-thread reduction. Any statistic that
+  reduces (mean/var/bootstrap-aggregate) uses the fixed-order KBN-pairwise tree from `crd-hesap` blas1.
+- **D(stat)-2 — log-space numerics everywhere:** `logsumexp`, `log1p`/`expm1`, log-pdf / log-cdf / log-sf as
+  first-class (cdf via regularized-incomplete-gamma/beta in log space) — the Stan-math stability discipline.
+- **D(stat)-3 — reference vectors are GENERATED, not hand-typed:** one batched scipy/MATLAB/R/mpmath script per
+  slice → committed plain-C-array `.inc` (NO std containers, [[feedback_no_std_containers_anywhere_incl_tests]]).
+- **D(stat)-4 — the `Distribution<T>` concept:** every distribution exposes pdf/logpdf/cdf/logcdf/sf/ppf/rvs/
+  mean/var/skew/kurtosis/entropy/mgf/fit through one generic interface (f32/f64; the rv_continuous/rv_discrete twin).
+- **D(stat)-5 — special functions carry an accuracy tag** (target ulp) per function; gated against Boost at that tag.
+
+> **ADR-0094 runtime-policy note — E-core oversubscription on elementwise batches (v12-a; measured + root-caused
+> 2026-06-22).** The parallel `*_batch()` kernels are bandwidth-bound. On a 14900K (8 P + 16 E + HT = 32 logical),
+> one-job-per-worker THRASHES memory: `memfloor(out[i]=in[i]+1)` = **0.19 ns/elem at an 8-worker pool (~76 GB/s,
+> near DDR5 peak) vs 1.4 ns at 32 (7×)**.
+> **Implemented (the jobs layer):** `jobs::performance_core_count()` (cross-platform P-physical-core detection —
+> Windows `GetLogicalProcessorInformationEx` EfficiencyClass / Linux top-cpufreq tier / conservative 0-fallback),
+> `jobs::WorkerPreference{Default,MemoryBoundElementwise}`, `jobs::recommended_jobs(pref,count)`, + a diagnostic test.
+> **The honest blocker (root-caused):** simply dispatching FEWER jobs does NOT realise the win and REGRESSES (erf
+> 1.24→1.51, erfinv 2.0→3.8) — with no CPU affinity the OS lands the few job-threads on E-cores (job submission is
+> already targeted: a counting semaphore `release(1)` per job, so the surplus workers DO block; the loss is purely
+> placement). So `recommended_jobs(MemoryBoundElementwise)` ships as a **safe no-op** (returns `num_workers()` unless
+> `CRD_JOBS_MEMBOUND_WORKERS` is set, for experiments). **The clean win needs worker→P-core AFFINITY**: pin the
+> worker threads at init + route memory-bound jobs to the P-core subset via the scheduler's existing pinned-job lane.
+> That is the scoped follow-up jobs feature (topology groundwork done). Rejected alternatives (measured): NT-stores
+> regressed; blind `njobs` cap starves compute-bound (gammainc 5.4→12.4).
+> **The compute lever shipped + lgamma/tgamma WON (2026-06-22):** reusable SIMD `log` (3.11×) + SIMD `exp` (deg-11
+> Taylor, <1e-13) + recurrence-free **Lanczos** SIMD `lgamma` (2.07× — it vectorizes; the Stirling masked-recurrence
+> SIMD lgamma was 0.65× and rejected) + tgamma = exp(lgamma). On a **P-core pool** (the policy at init) vs MATLAB-MT:
+> **lgamma 0.53 WIN 1.39× · tgamma 0.63 WIN 1.75×** (the two former losses), + erf 1.80× / erfc 1.12× / digamma 3.10×
+> / gammainc 5.85× = **6/7 on the P-core pool**; erfinv prefers the full pool (wins 1.35× there). ⇒ **all 7 beat
+> MATLAB-MT with each on its optimal pool** — which the worker-affinity feature (now shipped, below) makes transparent.
+> All SIMD primitives are bit-identical scalar↔SIMD (the moat) + gated vs scipy; nothing faked.
+>
+> **WORKER-AFFINITY ROUTING SHIPPED (gated dual-path, 2026-06-22):** opt-in `jobs::Config::pcore_routing` (default
+> false ⇒ the historical shared-semaphore wake path runs verbatim — every shipped system/bench unaffected; jobs suite
+> 29236/88 proves it). ON ⇒ per-worker targeted-wake scheduler (per-worker `counting_semaphore` + idle-mask + 1 ms
+> timeout backstop = deadlock-proof) + worker→P-core affinity at init (Win EfficiencyClass GroupMask / Linux cpufreq;
+> no-op on WSL) + `parallel_for_pcores`. `batch.hpp` routes bandwidth-bound (erf/erfc/erfcx/digamma/lgamma/tgamma) →
+> P-cores, compute-heavy (erfinv/erfcinv/gammainc/betainc) → all cores. New path tested byte-identical to scalar refs
+> + no deadlock (suite 400414/16). **TRANSPARENT single-run board (one pool) vs MATLAB-MT: lgamma 1.27× · tgamma
+> 1.44× · erfinv 1.45× · erf 1.48× · digamma 2.30× · gammainc 14× WIN** (erfc ~parity on WSL = no-affinity noise; wins
+> 1.12× on the clean P-core pool, reliable on Windows). ⇒ 6–7/7 transparent in ONE pool; lgamma/tgamma solidly won.
+
+### Sub-slice plan (dependency-ordered, ~19 leaves)
+
+| Slice | Content | Gold standards (accuracy + perf) | LOC | Tests |
+| :---: | --- | --- | :---: | :---: |
+| **— SPECIAL FUNCTIONS (`crd-hesap-special`) —** | | | | |
+| **v12-a** ✅ (DONE 2026-06-22) | **The cdf/ppf engine** (NEW leaf module `crd-hesap-special`). gamma/lgamma/digamma/trigamma/polygamma · beta/lbeta · **regularized incomplete gamma P(a,x), Q(a,x) + inverse** · **regularized incomplete beta I_x(a,b) + inverse** · erf/erfc/erfcx/erfinv/erfcinv/Dawson · Faddeeva w(z)/Voigt. Reusable f64 SIMD log/exp/Lanczos primitives (→ crd-math) + parallel `*_batch()` (ADR-0094 P-core routing). Gated vs scipy <1e-12 + std cross-check + {1,4,16} moat + f32. CRUSHES Boost all-7; beats scipy/MATLAB-1T 5/7; lgamma/tgamma win MATLAB-MT on the P-core pool. | Boost.Math · Cephes · scipy.special · MATLAB `gammainc`/`betainc`/`*inv` | ~900 | ~30 |
+| **v12-b** ✅ (DONE 2026-06-22) | **Bessel & Airy.** cyl J/Y/I/K + derivatives + negative orders (Steed/Temme CF; dedicated J-only fast path) · spherical j_n/y_n · Hankel H^(1,2) · Airy Ai/Bi+deriv (direct Maclaurin series + Bessel-⅓ tail) · Kelvin ber/bei/ker/kei · **complex-argument J/Y/I/K+Hankel** (series + asymptotic + exact integer DLMF Y_n/K_n). Suite 401377/25 GREEN vs scipy <1e-12 real / <1e-9 complex + Wronskian self-checks + f32. ⭐⭐ **ALL-PEERS CRUSH (1-thread): Cerid WINS ALL 6 vs ALL 3 = 18/18** — vs Boost (J 2.2×/Y 1.03×/I 1.58×/K 1.79×/airy 8.5×,9.3×), scipy (J 4.1×/Y 2.4×/I 1.45×/K 1.58×/airy 1.72×,1.24×), MATLAB-1T (J 5.3×/Y 3.4×/I 1.5×/K 1.7×/airy 5.7×,5.4×). Kelvin ker/kei crossover x~6–12 dbl-prec-limited ~1e-8 (documented). | Boost · GSL · MATLAB `besselj/y/i/k`,`airy` | ~900 | ~30 |
+| **v12-c** ✅ (DONE 2026-06-23) | **Orthogonal polynomials + Gauss quadrature.** PART 1 (`hesap-special/orthopoly.hpp`, leaf): Legendre(+assoc) · Hermite(phys+prob) · Laguerre(+gen) · Chebyshev 1–4 · Gegenbauer · Jacobi — 3-term-recurrence eval, 454 asrt vs scipy <1e-12 + identities + f32. PART 2 (NEW module **`crd-hesap-quadrature`**): **Golub-Welsch roots/weights** Legendre/Hermite/Laguerre(+gen)/Jacobi/Gegenbauer/Chebyshev — **REUSES `crd::hesap::dense::eig_sym`** (SANITY rule 8, not a bespoke QL); non-leaf so hesap-special stays leaf; 130 asrt vs scipy roots_* <1e-11 + degree-(2n−1) exactness. ⭐ Triggered the standing **"search engine before build"** rule (SANITY rule 8 + CLAUDE.md) + moved f64 SIMD log/exp to crd-math. | scipy.special · MATLAB `legendre` · Boost | ~700 | ~25 |
+| **v12-d** ✅ (DONE 2026-06-23) | **Transcendental tail.** ₀F₁/₁F₁(Kummer)/₂F₁(Gauss,Pfaff) · Lambert W₀/W₋₁ · Riemann+Hurwitz zeta (Euler-Maclaurin) · Ei/E₁/Eₙ/Si/Ci · Fresnel S/C · Struve H/L · Marcum-Q (reuses gammainc_q) · Carlson R_F/R_D/R_J/R_C + K/E/F/E/Π (AGM) + Jacobi sn/cn/dn — CANONICAL home; **hesap-dsp filter ellipk/ellipj now delegate here** (duplicate eliminated, v11 filters re-verified). ₂F₁ full coverage incl. **degenerate log forms** (DLMF 15.8.8); zeta s<1 (analytic continuation); general pFq. ~490 asrt gated vs scipy/scipy.stats <1e-12 + identities + f32. ⚠ HONEST: accuracy-gold but loses Boost on cold-tail PERF (minimax gap); Struve-H crossover x~14–30 ~1e-10 (genuine f64 limit). | Boost · mpmath · GSL · scipy.special | ~1100 | ~35 |
+| **— RNG + SAMPLING (`crd-hesap-stats`) —** | | | | |
+| **v12-e** ✅ (DONE 2026-06-24) | **Counter/classic RNG suite** atop the shipped Philox: PCG64-DXSM · Threefry-4×64-20 · Xoshiro256**/++ (+jump/long_jump) · SplitMix64 · SFC64 · MT19937 + `BitGenerator` concept + Lemire bounded + next_double. Bit-exact-gated: SplitMix64/Threefry/MT19937 published KATs (Threefry4x64x20 zero-KAT matched), PCG64-DXSM/SFC64 vs NumPy random_raw (set-state), xoshiro vs anchor+reference. 34061 asrt (incl. AVX2-bulk-fill == scalar gate). **AVX2 bulk fill** added: Philox 8-block + Threefry 4-block SoA, bit-identical to scalar (drain-buffer → SIMD → tail). ⭐⭐ **FULL CRUSH (ns/u64) vs NumPy AND MATLAB — every same-generator WIN, no losses**: PCG64-DXSM 1.54×N · SFC64 2.91×N · Philox 1.97 (1.37×N · 3.13×M) · Threefry 2.05 (1.81×M) · MT19937 1.46 (1.52×N · 2.37×M) · xoshiro256** 0.67 + splitmix 0.38 = fastest (2.5–4.4× MATLAB simdTwister 1.69). | NumPy KAT · MATLAB `'threefry'`/`'philox'`/`'twister'` · published vectors | ~700 | ~30 |
+| **v12-f** ✅ (DONE 2026-06-24) | **Fast distribution samplers:** Ziggurat (normal/exp, Marsaglia-Tsang 128/256 layer) · Marsaglia-Tsang gamma (boost for shape<1) · gamma-ratio beta · χ² · Knuth+**PTRS** Poisson · BINV+**BTPE** binomial (NumPy method) · geometric · **Vose alias** O(1) categorical · reservoir. ⭐ caught+fixed a real binomial_inversion infinite-loop (reflect for p>0.5 like BTPE). | moments + empirical-CDF-vs-special-fn-CDF + determinism; throughput vs NumPy/MATLAB `random` → **MATLAB-1T 8/8 (to 277×), NumPy 7/8** (binomial losses → wins via cached `BinomialSampler`), exp ~parity (DXSM-quality) | ~600 | ~25 |
+| **v12-g** ✅ (DONE 2026-06-24) | **QMC + crypto:** Sobol (Joe-Kuo new-joe-kuo-6.21 dirs, 32-bit Gray-code, dims≤21) · Halton (radical-inverse) · rank-1 lattice · Latin Hypercube · **ChaCha20** (RFC 8439). | Sobol bit-vs-scipy.stats.qmc + Halton anchors + ChaCha RFC KAT + known-integral convergence beats 1/√N + LHS stratification + determinism | ~600 | ~25 |
+| **— DISTRIBUTIONS (`crd-hesap-stats`) —** | | | | |
+| **v12-h** ✅ (DONE 2026-06-24) | **`Distribution<T>` framework (CRTP base + concept) + 25 univariate CONTINUOUS** (full pdf/logpdf/cdf/sf/ppf/rvs/moments/entropy + fit on the closed-form ones): normal/lognormal/exp/gamma/beta/χ²/t/F/Cauchy/Laplace/logistic/Weibull/Gumbel/Pareto/Rayleigh/Maxwell/uniform/triangular/Wald/vonMises/Rice/Nakagami/invgamma/halfnormal/halfcauchy. CDFs ride hesap-special; rvs rides v12-f. **650/0 vs scipy.stats** (pdf/logpdf/cdf/sf <1e-9, ppf <1e-7, moments+entropy); 4-config DoD green. ⭐ pdf crushes scipy+MATLAB (to 5.7×/8.2×); betainc-bound cdf/ppf = honest losses (v12-a follow-on). | scipy.stats · MATLAB `pdf/cdf/icdf` · R · Boost.Math.dist | ~1100 | ~40 |
+| **v12-i** ✅ (DONE 2026-06-24) | **12 univariate DISCRETE:** Bernoulli/binomial/Poisson/geometric/neg-binom/discrete-uniform/hypergeometric/Skellam/Zipf-zeta/Yule-Simon/beta-binomial/logarithmic (COM-Poisson omitted — no scipy gate). Closed-form CDFs where they exist + finite pmf-sum; exact-boundary-robust integer ppf. **304/0 vs scipy.stats.** ⭐ pmf crushes scipy+MATLAB (poisson 2.4×/10.7×, binomial 2.1×/13.9×). | scipy.stats · MATLAB · R | ~600 | ~25 |
+| **v12-j** ✅ (DONE 2026-06-24) | **Heavy-tail / extreme / noncentral:** GEV · GPD · Lévy · BetaPrime · NoncentralChiSquared (Marcum-Q) · SkewNormal (Owen's-T) · NoncentralT (Lenth) · NoncentralF + **α-stable CMS sampler**. **208/0 vs scipy.stats**; a→j 4-config DoD green (317795/44). general-α stable pdf/cdf (Zolotarev) deferred = scipy-numerical too. | scipy.stats · R (evd/stabledist) | ~900 | ~30 |
+| **v12-k** ✅ (DONE 2026-06-25) | **Multivariate:** MVN · MVt · Dirichlet · Wishart / inverse-Wishart · LKJ correlation · multinomial (over `dense::factor_cholesky` — new acyclic stats→dense edge; L→flat raw f64; ctor-amortized log-Γ_p). Gated vs scipy.stats <1e-9 + analytic LKJ p=2 + Bartlett-moment + determinism moat (50 asrt; suite 317845/52; 4-config DoD + gcc). **CRUSH all peers** (MVN logpdf 2.35×/3.17×, rvs 4.07×/2.30×; MVt 1.44×; Dirichlet 3.48×; Multinomial 2.36×/2.89×; Wishart rvs 7.17×/22.4×; InvWishart 4.10×/16.9×). | scipy.stats · Stan · MATLAB `mvnpdf`/`mvnrnd` | ~750 | ~30 |
+| **v12-l** | **Autodiff-ready log-densities:** analytic ∂logp/∂x and ∂logp/∂θ for every distribution (the HMC/NUTS + MLE enabler; gradient-checked vs FD now, vs the v15/16 AD module later). | Stan-math reference gradients · FD grad-check | ~600 | ~25 |
+| **— INFERENCE (`crd-hesap-stats`) —** | | | | |
+| **v12-m** | **Descriptive + estimators:** moments (+ robust) · quantiles (R types 1–9 + Harrell-Davis) · ECDF · histograms (FD/Scott/Sturges) · weighted variants · covariance/correlation matrices. | scipy.stats · R `quantile(type=)` · MATLAB `quantile`/`prctile` | ~500 | ~20 |
+| **v12-n** | **The full test suite:** parametric (t/z/Welch/ANOVA 1-2-way/repeated/Bartlett/Levene) · nonparametric (Mann-Whitney/Wilcoxon/Kruskal-Wallis/Friedman/sign/Mood) · GoF (KS 1-2-sample/Anderson-Darling/Cramér-von-Mises/Shapiro-Wilk/Jarque-Bera/D'Agostino/Lilliefors) · categorical (χ²/Fisher-exact/McNemar/G) · correlation (Pearson/Spearman/Kendall/distance-corr) · multiple-comparisons (Tukey HSD/Bonferroni/Holm/Benjamini-Hochberg-FDR/Scheffé/Dunnett/Games-Howell) · effect sizes (Cohen's d/η²/Cramér's V). | scipy.stats · R · MATLAB `ttest*`/`anovan`/`ranksum`/`kstest`/`adtest`/`swtest`/`chi2gof`/`multcompare` | ~1100 | ~45 |
+| **v12-o** | **Resampling:** bootstrap (basic/percentile/**BCa**/studentized) · block bootstrap (time series) · jackknife (+ delete-d) · permutation tests · CV utilities. **Parallel over `crd-jobs` + the determinism moat.** | scipy.stats.bootstrap · R `boot`/`bootci` · MATLAB `bootci`/`jackknife` | ~600 | ~25 |
+| **— THE INSANE TAIL (`crd-hesap-stats`) —** | | | | |
+| **v12-p** | **KDE + robust + streaming:** KDE (Gaussian/Epanechnikov + Silverman/Scott/CV bandwidth) · robust (Huber/Tukey-biweight M-est · MCD covariance · Theil-Sen · Hodges-Lehmann) · covariance shrinkage (Ledoit-Wolf/OAS) · online (Welford · P² quantile · t-digest · HyperLogLog · count-min). | sklearn · statsmodels · MATLAB `ksdensity`/`robustcov` · R | ~800 | ~30 |
+| **v12-q** | **MCMC / Bayesian** (uses v12-l gradients): Metropolis-Hastings + adaptive (Haario) · Gibbs · **HMC** · **NUTS** (the Stan algorithm) · slice sampling · SMC + diagnostics (R-hat / ESS / autocorr / Geweke). Metric = effective-samples/sec. | Stan · PyMC · MATLAB `hmcSampler`/`mhsample`/`slicesample` | ~1100 | ~30 |
+| **v12-r** | **Regression / GLM / multivariate:** OLS/WLS/GLS (over QR/SVD) · ridge/lasso/elastic-net (coordinate descent) · GLM via IRLS (logistic/Poisson/gamma/…) · robust (RANSAC/Huber) + quantile regression · PCA/LDA/QDA/factor analysis. **Rides the shipped fast dense factors.** | statsmodels · sklearn · MATLAB `fitlm`/`fitglm`/`lasso`/`pca`/`fitcdiscr` · R | ~1000 | ~35 |
+| **— CLOSE —** | | | | |
+| **v12-z** | CLI `hesap.stats.*` + `hesap.special.*` · system docs `hesap-special.md` + `hesap-stats.md` (rewrite) · **back-wire the deferred v11 spectral CIs (χ²/F ppf → multitaper + AR confidence intervals)** · full all-peers scoreboard (scipy/MATLAB/R/Stan/Boost) · {1,4,16} determinism-moat audit · ADR-0094. | — | ~400 | ~15 |
+
+**Sequencing rationale:** special functions (a–d) are the leaf substrate everything else needs (cdf/ppf = incomplete
+gamma/beta). RNG (e–g) is independent and can interleave. Distributions (h–l) need both. Inference (m–o) needs
+distributions for p-values/critical-values. The insane tail (p–r): KDE/robust are independent; MCMC needs the
+autodiff-ready log-densities (v12-l); regression rides the dense factors. Close (z) wires the CLI + the v11 CI debt.
 
 ---
 

@@ -19,6 +19,9 @@ target_link_libraries(crd-hesap-stats
     PUBLIC
         crd-core
         crd-containers
+        crd-memory          # v12-f: IAllocator (AliasTable)
+        crd-hesap-special   # v12-f: lgamma (Poisson PTRS) + CDFs for distribution layer; acyclic (special is a leaf)
+        crd-hesap-dense     # v12-k: factor_cholesky for the multivariate distributions (SANITY rule 8; acyclic — dense never references stats)
     PRIVATE
         crd-warnings
 )

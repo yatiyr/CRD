@@ -67,6 +67,11 @@ struct ThreadState
     // is visible to the consumer after step 1 of consumer succeeds.
     alignas(64) std::atomic<bool>  pinned_available{false};
     crd::jobs::JobDecl             pinned_storage{};
+
+    // Per-worker wake semaphore — used ONLY on the opt-in targeted-wake path (ADR-0094 P-core routing). The default
+    // path uses the shared Scheduler::m_semaphore and never touches this. It lets a SPECIFIC worker be woken (e.g.
+    // for a pinned P-core job), which the single shared semaphore cannot do.
+    std::counting_semaphore<> wake{0};
 };
 
 // Configuration for Scheduler::init().
@@ -77,6 +82,7 @@ struct SchedulerConfig
     crd::u32 num_threads        = 1;
     crd::u32 deque_capacity     = 256;
     crd::u32 injection_capacity = 4096;
+    bool     targeted_wake      = false; // opt-in per-worker wake (ADR-0094); default = shared-semaphore path
 };
 
 // Priority scheduler: three global injection queues, per-thread local Chase-Lev
@@ -133,9 +139,11 @@ public:
     // Used by WorkerPool to run jobs through the fiber context switch.
     [[nodiscard]] std::optional<crd::jobs::JobDecl> try_pop(crd::u32 thread_index);
 
-    // Block until push() or push_local() posts the semaphore.
+    // Block until push() or push_local() posts a wake.
     // Call after execute_one() / try_pop() returns false/nullopt to avoid spinning.
-    void wait_for_work();
+    // Default path: acquire the shared semaphore (unchanged). Targeted path: park on this worker's own semaphore
+    // with a short timeout safety-net (a missed wake self-heals within the timeout ⇒ no deadlock possible).
+    void wait_for_work(crd::u32 thread_index);
 
     // Release count units on the semaphore to wake up to count sleeping workers.
     // Called by WorkerPool::shutdown() to unblock workers that are in wait_for_work().
@@ -146,6 +154,12 @@ public:
 
 private:
     static void run_job(const crd::jobs::JobDecl& job);
+
+    // Targeted-wake helpers (no-ops conceptually unless m_targeted_wake). wake_worker posts one worker's semaphore;
+    // wake_one_idle picks a parked worker from m_idle_mask (CAS) and posts it (falls back to nothing if none idle —
+    // a busy worker will drain the job via execute_one, and the parked workers' timeout is the backstop).
+    void wake_worker(crd::u32 thread_index) noexcept;
+    void wake_one_idle() noexcept;
 
     // Injection queues — MPMC, shared across all threads. Allocated in init().
     // crd::containers::ConcurrentQueue is the promoted (allocator-aware) form of
@@ -158,8 +172,13 @@ private:
     // Per-thread state, indexed by thread_index.
     std::vector<std::unique_ptr<ThreadState>> m_thread_states;
 
-    // Counting semaphore: posted once per push/push_local; workers acquire() to sleep.
+    // Counting semaphore: posted once per push/push_local; workers acquire() to sleep. (Default-path wake.)
     std::counting_semaphore<> m_semaphore{0};
+
+    // Targeted-wake state (opt-in; untouched on the default path). idle bit i set ⇒ worker i is parked on its own
+    // ThreadState::wake. ≤ 64 workers (asserted in init when targeted_wake is requested).
+    bool                  m_targeted_wake = false;
+    std::atomic<crd::u64> m_idle_mask{0};
 
     SchedulerConfig m_config;
     bool   m_initialized = false;

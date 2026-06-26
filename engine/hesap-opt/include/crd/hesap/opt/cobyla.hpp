@@ -27,7 +27,7 @@
 #include <crd/hesap/opt/opt_types.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::hesap::opt
@@ -73,8 +73,8 @@ template <typename T> [[nodiscard]] inline bool relstop(T vold, T vnew, T reltol
     {
         return false;
     }
-    return std::fabs(vnew - vold) < abstol ||
-           std::fabs(vnew - vold) < reltol * (std::fabs(vnew) + std::fabs(vold)) * static_cast<T>(0.5) ||
+    return crd::math::fabs(vnew - vold) < abstol ||
+           crd::math::fabs(vnew - vold) < reltol * (crd::math::fabs(vnew) + crd::math::fabs(vold)) * static_cast<T>(0.5) ||
            (reltol > static_cast<T>(0) && vnew == vold);
 }
 
@@ -252,10 +252,10 @@ L100:
         {
             temp = z__[i__ + k * z_dim1] * dxnew[i__];
             sp += temp;
-            spabs += std::fabs(temp);
+            spabs += crd::math::fabs(temp);
         }
-        acca = spabs + std::fabs(sp) * static_cast<T>(.1);
-        accb = spabs + std::fabs(sp) * static_cast<T>(.2);
+        acca = spabs + crd::math::fabs(sp) * static_cast<T>(.1);
+        accb = spabs + crd::math::fabs(sp) * static_cast<T>(.2);
         if (spabs >= acca || acca >= accb)
         {
             sp = static_cast<T>(0);
@@ -267,7 +267,7 @@ L100:
         else
         {
             kp = k + 1;
-            temp = std::sqrt(sp * sp + tot * tot);
+            temp = crd::math::sqrt(sp * sp + tot * tot);
             alpha = sp / temp;
             beta = tot / temp;
             tot = temp;
@@ -305,10 +305,10 @@ L130:
     {
         temp = z__[i__ + k * z_dim1] * dxnew[i__];
         zdotv += temp;
-        zdvabs += std::fabs(temp);
+        zdvabs += crd::math::fabs(temp);
     }
-    acca = zdvabs + std::fabs(zdotv) * static_cast<T>(.1);
-    accb = zdvabs + std::fabs(zdotv) * static_cast<T>(.2);
+    acca = zdvabs + crd::math::fabs(zdotv) * static_cast<T>(.1);
+    accb = zdvabs + crd::math::fabs(zdotv) * static_cast<T>(.2);
     if (zdvabs < acca && acca < accb)
     {
         temp = zdotv / zdota[k];
@@ -368,7 +368,7 @@ L130:
             sp += z__[i__ + k * z_dim1] * a[i__ + kw * a_dim1];
         }
         d__1 = zdota[kp];
-        temp = std::sqrt(sp * sp + d__1 * d__1);
+        temp = crd::math::sqrt(sp * sp + d__1 * d__1);
         alpha = zdota[kp] / temp;
         beta = sp / temp;
         zdota[kp] = alpha * zdota[k];
@@ -418,7 +418,7 @@ L210:
             sp += z__[i__ + k * z_dim1] * a[i__ + kk * a_dim1];
         }
         d__1 = zdota[nact];
-        temp = std::sqrt(sp * sp + d__1 * d__1);
+        temp = crd::math::sqrt(sp * sp + d__1 * d__1);
         alpha = zdota[nact] / temp;
         beta = sp / temp;
         zdota[nact] = alpha * zdota[k];
@@ -475,7 +475,7 @@ L260:
             sp += z__[i__ + k * z_dim1] * a[i__ + kk * a_dim1];
         }
         d__1 = zdota[kp];
-        temp = std::sqrt(sp * sp + d__1 * d__1);
+        temp = crd::math::sqrt(sp * sp + d__1 * d__1);
         alpha = zdota[kp] / temp;
         beta = sp / temp;
         zdota[kp] = alpha * zdota[k];
@@ -534,7 +534,7 @@ L340:
     for (i__ = 1; i__ <= i__1; ++i__)
     {
         d__1 = dx[i__];
-        if (std::fabs(d__1) >= *rho * static_cast<T>(1e-6F))
+        if (crd::math::fabs(d__1) >= *rho * static_cast<T>(1e-6F))
         {
             d__2 = dx[i__];
             dd -= d__2 * d__2;
@@ -547,10 +547,10 @@ L340:
     {
         goto L490;
     }
-    temp = std::sqrt(ss * dd);
-    if (std::fabs(sd) >= temp * static_cast<T>(1e-6F))
+    temp = crd::math::sqrt(ss * dd);
+    if (crd::math::fabs(sd) >= temp * static_cast<T>(1e-6F))
     {
-        temp = std::sqrt(ss * dd + sd * sd);
+        temp = crd::math::sqrt(ss * dd + sd * sd);
     }
     stpful = dd / (temp + sd);
     step = stpful;
@@ -603,10 +603,10 @@ L390:
     {
         temp = z__[i__ + k * z_dim1] * dxnew[i__];
         zdotw += temp;
-        zdwabs += std::fabs(temp);
+        zdwabs += crd::math::fabs(temp);
     }
-    acca = zdwabs + std::fabs(zdotw) * static_cast<T>(.1);
-    accb = zdwabs + std::fabs(zdotw) * static_cast<T>(.2);
+    acca = zdwabs + crd::math::fabs(zdotw) * static_cast<T>(.1);
+    accb = zdwabs + crd::math::fabs(zdotw) * static_cast<T>(.2);
     if (zdwabs >= acca || acca >= accb)
     {
         zdotw = static_cast<T>(0);
@@ -645,16 +645,16 @@ L390:
             kk = iact[k];
             sum = resmax - b[kk];
             d__1 = b[kk];
-            sumabs = resmax + std::fabs(d__1);
+            sumabs = resmax + crd::math::fabs(d__1);
             i__2 = *n;
             for (i__ = 1; i__ <= i__2; ++i__)
             {
                 temp = a[i__ + kk * a_dim1] * dxnew[i__];
                 sum += temp;
-                sumabs += std::fabs(temp);
+                sumabs += crd::math::fabs(temp);
             }
-            acca = sumabs + std::fabs(sum) * static_cast<T>(.1F);
-            accb = sumabs + std::fabs(sum) * static_cast<T>(.2F);
+            acca = sumabs + crd::math::fabs(sum) * static_cast<T>(.1F);
+            accb = sumabs + crd::math::fabs(sum) * static_cast<T>(.2F);
             if (sumabs >= acca || acca >= accb)
             {
                 sum = static_cast<T>(0);
@@ -1011,7 +1011,7 @@ L140:
                 }
             }
             d__1 = error;
-            d__2 = std::fabs(temp);
+            d__2 = crd::math::fabs(temp);
             error = d__1 >= d__2 ? d__1 : d__2;
         }
     }
@@ -1065,8 +1065,8 @@ L140:
             d__1 = sim[i__ + j * sim_dim1];
             weta += d__1 * d__1;
         }
-        vsig[j] = static_cast<T>(1) / std::sqrt(wsig);
-        veta[j] = std::sqrt(weta);
+        vsig[j] = static_cast<T>(1) / crd::math::sqrt(wsig);
+        veta[j] = crd::math::sqrt(weta);
         if (vsig[j] < parsig || veta[j] > pareta)
         {
             iflag = 0;
@@ -1320,7 +1320,7 @@ L440:
         {
             temp += simi[j + i__ * simi_dim1] * dx[i__];
         }
-        temp = std::fabs(temp);
+        temp = crd::math::fabs(temp);
         if (temp > ratio)
         {
             jdrop = j;
@@ -1347,7 +1347,7 @@ L440:
                     d__1 = dx[i__] - sim[i__ + j * sim_dim1];
                     temp += d__1 * d__1;
                 }
-                temp = std::sqrt(temp);
+                temp = crd::math::sqrt(temp);
             }
             if (temp > edgmax)
             {

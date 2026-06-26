@@ -25,7 +25,7 @@
 #include <crd/core/types.hpp>
 #include <crd/math/simd/backend.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 
 namespace crd::hesap::fft::detail
 {
@@ -46,26 +46,26 @@ struct SmallNTwiddles
 {
     constexpr double pi = 3.141592653589793238;
     SmallNTwiddles t{};
-    t.w81r = _mm256_set1_pd(std::cos(-2.0 * pi / 8.0));
-    t.w81i = _mm256_set1_pd(std::sin(-2.0 * pi / 8.0));
-    t.w83r = _mm256_set1_pd(std::cos(-2.0 * pi * 3.0 / 8.0));
-    t.w83i = _mm256_set1_pd(std::sin(-2.0 * pi * 3.0 / 8.0));
+    t.w81r = _mm256_set1_pd(crd::math::cos(-2.0 * pi / 8.0));
+    t.w81i = _mm256_set1_pd(crd::math::sin(-2.0 * pi / 8.0));
+    t.w83r = _mm256_set1_pd(crd::math::cos(-2.0 * pi * 3.0 / 8.0));
+    t.w83i = _mm256_set1_pd(crd::math::sin(-2.0 * pi * 3.0 / 8.0));
     for (int k = 0; k < 4; ++k)
     {
-        t.w16r[k] = _mm256_set1_pd(std::cos(-2.0 * pi * k / 16.0));
-        t.w16i[k] = _mm256_set1_pd(std::sin(-2.0 * pi * k / 16.0));
-        t.w163r[k] = _mm256_set1_pd(std::cos(-2.0 * pi * 3.0 * k / 16.0));
-        t.w163i[k] = _mm256_set1_pd(std::sin(-2.0 * pi * 3.0 * k / 16.0));
+        t.w16r[k] = _mm256_set1_pd(crd::math::cos(-2.0 * pi * k / 16.0));
+        t.w16i[k] = _mm256_set1_pd(crd::math::sin(-2.0 * pi * k / 16.0));
+        t.w163r[k] = _mm256_set1_pd(crd::math::cos(-2.0 * pi * 3.0 * k / 16.0));
+        t.w163i[k] = _mm256_set1_pd(crd::math::sin(-2.0 * pi * 3.0 * k / 16.0));
     }
     // Combine pair j packs [W_N^{2j} | W_N^{2j+1}] across the two 128-bit lanes (set_pd is high→low).
     auto fill = [](int n, int count, __m256d* wr, __m256d* wi)
     {
         for (int j = 0; j < count; ++j)
         {
-            const double c0 = std::cos(-2.0 * pi * (2 * j) / n);
-            const double s0 = std::sin(-2.0 * pi * (2 * j) / n);
-            const double c1 = std::cos(-2.0 * pi * (2 * j + 1) / n);
-            const double s1 = std::sin(-2.0 * pi * (2 * j + 1) / n);
+            const double c0 = crd::math::cos(-2.0 * pi * (2 * j) / n);
+            const double s0 = crd::math::sin(-2.0 * pi * (2 * j) / n);
+            const double c1 = crd::math::cos(-2.0 * pi * (2 * j + 1) / n);
+            const double s1 = crd::math::sin(-2.0 * pi * (2 * j + 1) / n);
             wr[j] = _mm256_set_pd(c1, c1, c0, c0);
             wi[j] = _mm256_set_pd(s1, s1, s0, s0);
         }

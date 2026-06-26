@@ -18,7 +18,7 @@
 #include <crd/hesap/opt/objective.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 
 namespace crd::hesap::opt
 {
@@ -52,11 +52,11 @@ template <typename T>
     GradCheckResult<T> res;
     for (crd::usize i = 0; i < n; ++i)
     {
-        const T abs_err = std::fabs(ga[i] - gf[i]);
-        T denom = std::fabs(ga[i]);
-        if (std::fabs(gf[i]) > denom)
+        const T abs_err = crd::math::fabs(ga[i] - gf[i]);
+        T denom = crd::math::fabs(ga[i]);
+        if (crd::math::fabs(gf[i]) > denom)
         {
-            denom = std::fabs(gf[i]);
+            denom = crd::math::fabs(gf[i]);
         }
         if (denom < static_cast<T>(1))
         {

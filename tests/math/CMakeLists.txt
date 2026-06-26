@@ -4,6 +4,8 @@ add_executable(crd-math-tests
     test_soa.cpp
     test_deterministic.cpp
     test_reduce.cpp
+    test_simd_transcendental.cpp
+    test_transcendental.cpp
 )
 
 target_link_libraries(crd-math-tests PRIVATE
@@ -47,6 +49,12 @@ if(WIN32)
                 -File "${CMAKE_SOURCE_DIR}/scripts/check_no_std_math.ps1"
     )
     add_test(
+        NAME    crd-no-std-transcendental-check
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+                -File "${CMAKE_SOURCE_DIR}/scripts/check_no_std_transcendental.ps1"
+                "${CMAKE_SOURCE_DIR}"
+    )
+    add_test(
         NAME    crd-no-std-sort-check
         COMMAND powershell -NoProfile -ExecutionPolicy Bypass
                 -File "${CMAKE_SOURCE_DIR}/scripts/check_no_std_sort.ps1"
@@ -76,6 +84,11 @@ elseif(UNIX)
     add_test(
         NAME    crd-no-std-math-check
         COMMAND bash "${CMAKE_SOURCE_DIR}/scripts/check_no_std_math.sh"
+                "${CMAKE_SOURCE_DIR}"
+    )
+    add_test(
+        NAME    crd-no-std-transcendental-check
+        COMMAND bash "${CMAKE_SOURCE_DIR}/scripts/check_no_std_transcendental.sh"
                 "${CMAKE_SOURCE_DIR}"
     )
     add_test(

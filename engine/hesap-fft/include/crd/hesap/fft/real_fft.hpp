@@ -9,7 +9,7 @@
 
 #include <crd/hesap/fft/fft.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 
 namespace crd::hesap::fft
 {
@@ -30,8 +30,8 @@ public:
         for (crd::usize k = 0; k <= h; ++k)
         {
             const double ang = -two_pi * static_cast<double>(k) / static_cast<double>(n);
-            m_wn_re[k] = static_cast<T>(std::cos(ang)); //  cos(2πk/n)
-            m_wn_im[k] = static_cast<T>(std::sin(ang)); // -sin(2πk/n) ⇒ W_n^k = exp(-2πik/n)
+            m_wn_re[k] = static_cast<T>(crd::math::cos(ang)); //  cos(2πk/n)
+            m_wn_im[k] = static_cast<T>(crd::math::sin(ang)); // -sin(2πk/n) ⇒ W_n^k = exp(-2πik/n)
         }
     }
 

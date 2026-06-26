@@ -26,7 +26,7 @@
 #include <crd/hesap/opt/opt_types.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::hesap::opt
@@ -64,7 +64,7 @@ void momentum_heavy_ball_loop(const Objective<T>& obj, const OptOptions<T>& opts
         T mx = static_cast<T>(0);
         for (crd::usize i = 0; i < w.size(); ++i)
         {
-            const T a = std::fabs(w[i]);
+            const T a = crd::math::fabs(w[i]);
             mx = a > mx ? a : mx;
         }
         return mx;
@@ -117,7 +117,7 @@ void momentum_heavy_ball_loop(const Objective<T>& obj, const OptOptions<T>& opts
         (void)obj.gradient({x_new.data(), n}, {g_new.data(), n});
         ++result.grad_evals;
 
-        const T df = std::fabs(fx_new - fx);
+        const T df = crd::math::fabs(fx_new - fx);
         for (crd::usize i = 0; i < n; ++i)
         {
             x[i] = x_new[i];
@@ -126,7 +126,7 @@ void momentum_heavy_ball_loop(const Objective<T>& obj, const OptOptions<T>& opts
         fx = fx_new;
         grad_norm = inf_nrm({g.data(), n});
 
-        const auto stop = check_convergence<T>(grad_norm, std::sqrt(step_norm_sq), df, inf_nrm({x, n}), fx, opts);
+        const auto stop = check_convergence<T>(grad_norm, crd::math::sqrt(step_norm_sq), df, inf_nrm({x, n}), fx, opts);
         if (stop.has_value())
         {
             status = *stop;
@@ -154,7 +154,7 @@ void momentum_nesterov_loop(const Objective<T>& obj, const OptOptions<T>& opts, 
         T mx = static_cast<T>(0);
         for (crd::usize i = 0; i < w.size(); ++i)
         {
-            const T a = std::fabs(w[i]);
+            const T a = crd::math::fabs(w[i]);
             mx = a > mx ? a : mx;
         }
         return mx;
@@ -196,7 +196,7 @@ void momentum_nesterov_loop(const Objective<T>& obj, const OptOptions<T>& opts, 
         else
         {
             const T t_new =
-                static_cast<T>(0.5) * (static_cast<T>(1) + std::sqrt(static_cast<T>(1) + static_cast<T>(4) * t * t));
+                static_cast<T>(0.5) * (static_cast<T>(1) + crd::math::sqrt(static_cast<T>(1) + static_cast<T>(4) * t * t));
             mu = (t - static_cast<T>(1)) / t_new;
             t = t_new;
         }
@@ -258,14 +258,14 @@ void momentum_nesterov_loop(const Objective<T>& obj, const OptOptions<T>& opts, 
             }
         }
 
-        const T df = std::fabs(fx_new - fx);
+        const T df = crd::math::fabs(fx_new - fx);
         for (crd::usize i = 0; i < n; ++i)
         {
             x[i] = x_new[i];
         }
         fx = fx_new;
 
-        const auto stop = check_convergence<T>(grad_norm, std::sqrt(step_norm_sq), df, inf_nrm({x, n}), fx, opts);
+        const auto stop = check_convergence<T>(grad_norm, crd::math::sqrt(step_norm_sq), df, inf_nrm({x, n}), fx, opts);
         if (stop.has_value())
         {
             status = *stop;

@@ -30,7 +30,7 @@
 #include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <numbers>
 
 namespace crd::hesap::wavelet
@@ -75,7 +75,7 @@ template <typename T> [[nodiscard]] inline Complex<double> cmul(Complex<double> 
         return 1.0;
     }
     const double px = std::numbers::pi_v<double> * x;
-    return std::sin(px) / px;
+    return crd::math::sin(px) / px;
 }
 
 // Build the real polynomial coefficients (ascending) of d^P/dx^P e^{-x^2} via D_{k+1}=D_k' - 2x·D_k, D_0=1.
@@ -166,18 +166,18 @@ inline void sample_psi(const ContinuousWavelet& w, crd::usize grid_n, Complex<do
         {
         case ContinuousWaveletKind::Mexh:
         {
-            const double c = 2.0 / (std::sqrt(3.0) * std::pow(pi, 0.25));
-            v = Complex<double>{c * (1.0 - t * t) * std::exp(-t * t / 2.0), 0.0};
+            const double c = 2.0 / (crd::math::sqrt(3.0) * crd::math::pow(pi, 0.25));
+            v = Complex<double>{c * (1.0 - t * t) * crd::math::exp(-t * t / 2.0), 0.0};
             break;
         }
         case ContinuousWaveletKind::Morl:
-            v = Complex<double>{std::exp(-t * t / 2.0) * std::cos(5.0 * t), 0.0};
+            v = Complex<double>{crd::math::exp(-t * t / 2.0) * crd::math::cos(5.0 * t), 0.0};
             break;
         case ContinuousWaveletKind::Cmor:
         {
-            const double amp = std::pow(pi * w.bandwidth, -0.5) * std::exp(-t * t / w.bandwidth);
+            const double amp = crd::math::pow(pi * w.bandwidth, -0.5) * crd::math::exp(-t * t / w.bandwidth);
             const double ph = 2.0 * pi * w.center * t;
-            v = Complex<double>{amp * std::cos(ph), amp * std::sin(ph)};
+            v = Complex<double>{amp * crd::math::cos(ph), amp * crd::math::sin(ph)};
             break;
         }
         case ContinuousWaveletKind::Gaus:
@@ -188,7 +188,7 @@ inline void sample_psi(const ContinuousWavelet& w, crd::usize grid_n, Complex<do
                 poly += gc[j] * tp;
                 tp *= t;
             }
-            v = Complex<double>{gsign * poly * std::exp(-t * t), 0.0};
+            v = Complex<double>{gsign * poly * crd::math::exp(-t * t), 0.0};
             break;
         }
         case ContinuousWaveletKind::Cgau:
@@ -201,24 +201,24 @@ inline void sample_psi(const ContinuousWavelet& w, crd::usize grid_n, Complex<do
                 poly.im += cc[j].im * tp;
                 tp *= t;
             }
-            const double e = std::exp(-t * t);
-            const Complex<double> g{e * std::cos(t), -e * std::sin(t)}; // e^{-x^2-ix}
+            const double e = crd::math::exp(-t * t);
+            const Complex<double> g{e * crd::math::cos(t), -e * crd::math::sin(t)}; // e^{-x^2-ix}
             v = cmul<double>(poly, g);
             break;
         }
         case ContinuousWaveletKind::Shan:
         {
-            const double amp = std::sqrt(w.bandwidth) * np_sinc(w.bandwidth * t);
+            const double amp = crd::math::sqrt(w.bandwidth) * np_sinc(w.bandwidth * t);
             const double ph = 2.0 * pi * w.center * t;
-            v = Complex<double>{amp * std::cos(ph), amp * std::sin(ph)};
+            v = Complex<double>{amp * crd::math::cos(ph), amp * crd::math::sin(ph)};
             break;
         }
         case ContinuousWaveletKind::Fbsp:
         {
             const double sc = np_sinc(w.bandwidth * t / static_cast<double>(w.order));
-            const double amp = std::sqrt(w.bandwidth) * std::pow(sc, w.order);
+            const double amp = crd::math::sqrt(w.bandwidth) * crd::math::pow(sc, w.order);
             const double ph = 2.0 * pi * w.center * t;
-            v = Complex<double>{amp * std::cos(ph), amp * std::sin(ph)};
+            v = Complex<double>{amp * crd::math::cos(ph), amp * crd::math::sin(ph)};
             break;
         }
         case ContinuousWaveletKind::Paul:
@@ -234,7 +234,7 @@ inline void sample_psi(const ContinuousWavelet& w, crd::usize grid_n, Complex<do
             {
                 fact_2m *= j;
             }
-            const double norm = std::pow(2.0, m) * fact_m / std::sqrt(pi * fact_2m);
+            const double norm = crd::math::pow(2.0, m) * fact_m / crd::math::sqrt(pi * fact_2m);
             Complex<double> im_m{1.0, 0.0}; // i^m
             for (int j = 0; j < m; ++j)
             {
@@ -242,11 +242,11 @@ inline void sample_psi(const ContinuousWavelet& w, crd::usize grid_n, Complex<do
             }
             // (1 - i t)^{-(m+1)} = exp(-(m+1)·log(1 - i t))
             const double re1 = 1.0, im1 = -t;
-            const double r = std::sqrt(re1 * re1 + im1 * im1);
-            const double th = std::atan2(im1, re1);
-            const double mag = std::pow(r, -(m + 1.0));
+            const double r = crd::math::sqrt(re1 * re1 + im1 * im1);
+            const double th = crd::math::atan2(im1, re1);
+            const double mag = crd::math::pow(r, -(m + 1.0));
             const double ang = -(m + 1.0) * th;
-            const Complex<double> pw{mag * std::cos(ang), mag * std::sin(ang)};
+            const Complex<double> pw{mag * crd::math::cos(ang), mag * crd::math::sin(ang)};
             v = cmul<double>(Complex<double>{norm * im_m.re, norm * im_m.im}, pw);
             break;
         }
@@ -260,7 +260,7 @@ inline void sample_psi(const ContinuousWavelet& w, crd::usize grid_n, Complex<do
         {
             nrm2 += (out[k].re * out[k].re + out[k].im * out[k].im) * step;
         }
-        const double inv = 1.0 / std::sqrt(nrm2);
+        const double inv = 1.0 / crd::math::sqrt(nrm2);
         for (crd::usize k = 0; k < grid_n; ++k)
         {
             out[k].re *= inv;
@@ -472,7 +472,7 @@ template <typename T>
     for (crd::usize s = 0; s < ns; ++s)
     {
         const double a = static_cast<double>(scales[s]);
-        const crd::usize count_raw = static_cast<crd::usize>(std::ceil(a * xrange + 1.0));
+        const crd::usize count_raw = static_cast<crd::usize>(crd::math::ceil(a * xrange + 1.0));
         crd::usize kk = 0;
         for (crd::usize m = 0; m < count_raw; ++m)
         {
@@ -534,7 +534,7 @@ template <typename T>
         const double a = static_cast<double>(scales[s]);
         Complex<T>* kb = kbuf.data() + static_cast<crd::usize>(job) * lfft;
         Complex<T>* wb = wbuf.data() + static_cast<crd::usize>(job) * lfft;
-        const crd::usize count_raw = static_cast<crd::usize>(std::ceil(a * xrange + 1.0));
+        const crd::usize count_raw = static_cast<crd::usize>(crd::math::ceil(a * xrange + 1.0));
         crd::usize kk = 0;
         for (crd::usize m = 0; m < count_raw; ++m) // kernel = int_psi[j] reversed, j=floor(m/(a·step))
         {
@@ -573,7 +573,7 @@ template <typename T>
             wb[i] = Complex<T>{d.re * kb[i].re - d.im * kb[i].im, d.re * kb[i].im + d.im * kb[i].re};
         }
         plans[job]->execute(crd::containers::Span<Complex<T>>(wb, lfft), fft::FftDirection::Inverse);
-        const T scale_amp = -static_cast<T>(std::sqrt(a));
+        const T scale_amp = -static_cast<T>(crd::math::sqrt(a));
         const crd::usize off = (kk - 2) / 2;
         for (crd::usize i = 0; i < n; ++i)
         {

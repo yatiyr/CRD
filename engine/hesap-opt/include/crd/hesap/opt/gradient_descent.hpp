@@ -18,7 +18,7 @@
 #include <crd/hesap/opt/opt_types.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 
 namespace crd::hesap::opt
 {
@@ -29,7 +29,7 @@ template <typename T> [[nodiscard]] inline T inf_norm(crd::containers::ConstSpan
     T m = static_cast<T>(0);
     for (crd::usize i = 0; i < v.size(); ++i)
     {
-        const T a = std::fabs(v[i]);
+        const T a = crd::math::fabs(v[i]);
         if (a > m)
         {
             m = a;
@@ -108,8 +108,8 @@ template <typename T>
             const T d = x_new[i] - x[i];
             step_norm += d * d;
         }
-        step_norm = std::sqrt(step_norm);
-        const T df = std::fabs(r.fx_new - fx);
+        step_norm = crd::math::sqrt(step_norm);
+        const T df = crd::math::fabs(r.fx_new - fx);
         for (crd::usize i = 0; i < n; ++i)
         {
             x[i] = x_new[i];

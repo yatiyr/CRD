@@ -25,7 +25,7 @@
 #include <crd/hesap/fft/fft.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <numbers>
 
 namespace crd::hesap::dsp
@@ -36,7 +36,7 @@ template <typename T>
 [[nodiscard]] Complex<T> goertzel(crd::containers::ConstSpan<T> x, T f0)
 {
     const T w = static_cast<T>(2.0 * std::numbers::pi_v<double>) * f0;
-    const T cw = std::cos(w), sw = std::sin(w);
+    const T cw = crd::math::cos(w), sw = crd::math::sin(w);
     const T coeff = T(2) * cw;
     T s1 = T(0), s2 = T(0);
     for (crd::usize n = 0; n < x.size(); ++n)
@@ -53,7 +53,7 @@ namespace detail
 {
 template <typename T> [[nodiscard]] inline Complex<T> cexpj(T theta) noexcept
 {
-    return Complex<T>{std::cos(theta), std::sin(theta)};
+    return Complex<T>{crd::math::cos(theta), crd::math::sin(theta)};
 }
 template <typename T> [[nodiscard]] inline Complex<T> cmulx(Complex<T> a, Complex<T> b) noexcept
 {
@@ -177,7 +177,7 @@ template <typename T>
     const T floor = static_cast<T>(1e-30);
     for (crd::usize i = 0; i < nf; ++i)
     {
-        sp[i] = Complex<T>{std::log(std::hypot(sp[i].re, sp[i].im) + floor), T(0)};
+        sp[i] = Complex<T>{crd::math::log(crd::math::hypot(sp[i].re, sp[i].im) + floor), T(0)};
     }
     fft::ifft_normalized<T>(alloc, crd::containers::Span<Complex<T>>(sp.data(), nf));
     crd::containers::Array<T> c(alloc);
@@ -211,12 +211,12 @@ template <typename T>
     T prev = T(0), cum = T(0);
     for (crd::usize i = 0; i < nf; ++i)
     {
-        const T mag = std::log(std::hypot(sp[i].re, sp[i].im) + static_cast<T>(1e-30));
-        T ph = std::atan2(sp[i].im, sp[i].re);
+        const T mag = crd::math::log(crd::math::hypot(sp[i].re, sp[i].im) + static_cast<T>(1e-30));
+        T ph = crd::math::atan2(sp[i].im, sp[i].re);
         if (i > 0) // running unwrap
         {
             T dd = ph - prev;
-            T ddm = std::fmod(dd + pi, two_pi);
+            T ddm = crd::math::fmod(dd + pi, two_pi);
             if (ddm < T(0))
             {
                 ddm += two_pi;

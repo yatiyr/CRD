@@ -21,7 +21,7 @@
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <numbers>
 
 namespace crd::hesap::dsp
@@ -56,8 +56,8 @@ template <typename T> [[nodiscard]] T chirp_phase(T t, T f0, T t1, T f1, ChirpMe
         {
             return two_pi * f0 * t;
         }
-        const T beta = t1 / std::log(f1 / f0);
-        return two_pi * beta * f0 * (std::pow(f1 / f0, t / t1) - T(1));
+        const T beta = t1 / crd::math::log(f1 / f0);
+        return two_pi * beta * f0 * (crd::math::pow(f1 / f0, t / t1) - T(1));
     }
     // Hyperbolic
     if (f0 == f1)
@@ -65,7 +65,7 @@ template <typename T> [[nodiscard]] T chirp_phase(T t, T f0, T t1, T f1, ChirpMe
         return two_pi * f0 * t;
     }
     const T sing = -f1 * t1 / (f0 - f1);
-    return two_pi * (-sing * f0) * std::log(std::abs(T(1) - t / sing));
+    return two_pi * (-sing * f0) * crd::math::log(std::abs(T(1) - t / sing));
 }
 } // namespace detail
 
@@ -79,7 +79,7 @@ template <typename T>
     y.resize(t.size());
     for (crd::usize i = 0; i < t.size(); ++i)
     {
-        y[i] = std::cos(detail::chirp_phase<T>(t[i], f0, t1, f1, method) + phi);
+        y[i] = crd::math::cos(detail::chirp_phase<T>(t[i], f0, t1, f1, method) + phi);
     }
     return y;
 }
@@ -95,7 +95,7 @@ template <typename T>
     y.resize(t.size());
     for (crd::usize i = 0; i < t.size(); ++i)
     {
-        T tmod = std::fmod(t[i], two_pi);
+        T tmod = crd::math::fmod(t[i], two_pi);
         if (tmod < T(0))
         {
             tmod += two_pi; // numpy mod ⇒ non-negative
@@ -116,7 +116,7 @@ template <typename T>
     y.resize(t.size());
     for (crd::usize i = 0; i < t.size(); ++i)
     {
-        T tmod = std::fmod(t[i], two_pi);
+        T tmod = crd::math::fmod(t[i], two_pi);
         if (tmod < T(0))
         {
             tmod += two_pi;
@@ -132,13 +132,13 @@ template <typename T>
                                                    T fc = T(1000), T bw = T(0.5), T bwr = T(-6))
 {
     const T pi = static_cast<T>(std::numbers::pi_v<double>);
-    const T ref = std::pow(T(10), bwr / T(20));
-    const T a = -(pi * fc * bw) * (pi * fc * bw) / (T(4) * std::log(ref));
+    const T ref = crd::math::pow(T(10), bwr / T(20));
+    const T a = -(pi * fc * bw) * (pi * fc * bw) / (T(4) * crd::math::log(ref));
     crd::containers::Array<T> y(alloc);
     y.resize(t.size());
     for (crd::usize i = 0; i < t.size(); ++i)
     {
-        y[i] = std::exp(-a * t[i] * t[i]) * std::cos(T(2) * pi * fc * t[i]);
+        y[i] = crd::math::exp(-a * t[i] * t[i]) * crd::math::cos(T(2) * pi * fc * t[i]);
     }
     return y;
 }
@@ -168,7 +168,7 @@ template <typename T>
         {
             p = p * t[i] + ic[k];
         }
-        y[i] = std::cos(two_pi * p + phi);
+        y[i] = crd::math::cos(two_pi * p + phi);
     }
     return y;
 }

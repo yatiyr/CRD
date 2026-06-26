@@ -3,7 +3,7 @@
 #include <crd/core/types.hpp>
 
 #include <algorithm>
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::hesap::dense::detail
@@ -59,8 +59,8 @@ inline void dlasd5(int i, const R* d, const R* z, R* delta, R rho, R& dsigma, R*
             const R b = delsq + rho * (z[0] * z[0] + z[1] * z[1]);
             const R c = rho * z[0] * z[0] * delsq;
             // tau = sigma^2 - d[0]^2 ; then tau = sigma - d[0].
-            R tau = two * c / (b + std::sqrt(std::abs(b * b - four * c)));
-            tau = tau / (d[0] + std::sqrt(d[0] * d[0] + tau));
+            R tau = two * c / (b + crd::math::sqrt(std::abs(b * b - four * c)));
+            tau = tau / (d[0] + crd::math::sqrt(d[0] * d[0] + tau));
             dsigma = d[0] + tau;
             delta[0] = -tau;
             delta[1] = del - tau;
@@ -74,13 +74,13 @@ inline void dlasd5(int i, const R* d, const R* z, R* delta, R rho, R& dsigma, R*
             R tau;
             if (b > R{0})
             {
-                tau = -two * c / (b + std::sqrt(b * b + four * c));
+                tau = -two * c / (b + crd::math::sqrt(b * b + four * c));
             }
             else
             {
-                tau = (b - std::sqrt(b * b + four * c)) / two;
+                tau = (b - crd::math::sqrt(b * b + four * c)) / two;
             }
-            tau = tau / (d[1] + std::sqrt(std::abs(d[1] * d[1] + tau)));
+            tau = tau / (d[1] + crd::math::sqrt(std::abs(d[1] * d[1] + tau)));
             dsigma = d[1] + tau;
             delta[0] = -(del + tau);
             delta[1] = -tau;
@@ -95,13 +95,13 @@ inline void dlasd5(int i, const R* d, const R* z, R* delta, R rho, R& dsigma, R*
         R tau;
         if (b > R{0})
         {
-            tau = (b + std::sqrt(b * b + four * c)) / two;
+            tau = (b + crd::math::sqrt(b * b + four * c)) / two;
         }
         else
         {
-            tau = two * c / (-b + std::sqrt(b * b + four * c));
+            tau = two * c / (-b + crd::math::sqrt(b * b + four * c));
         }
-        tau = tau / (d[1] + std::sqrt(d[1] * d[1] + tau));
+        tau = tau / (d[1] + crd::math::sqrt(d[1] * d[1] + tau));
         dsigma = d[1] + tau;
         delta[0] = -(del + tau);
         delta[1] = -tau;
@@ -185,11 +185,11 @@ inline void dlaed6(int kniter, bool orgati, R rho, const R* d3, const R* z3, R f
         }
         else if (a <= zero)
         {
-            tau = (a - std::sqrt(std::abs(a * a - four * b * c))) / (two * c);
+            tau = (a - crd::math::sqrt(std::abs(a * a - four * b * c))) / (two * c);
         }
         else
         {
-            tau = two * b / (a + std::sqrt(std::abs(a * a - four * b * c)));
+            tau = two * b / (a + crd::math::sqrt(std::abs(a * a - four * b * c)));
         }
         if (tau < lbd || tau > ubd)
         {
@@ -329,11 +329,11 @@ inline void dlaed6(int kniter, bool orgati, R rho, const R* d3, const R* z3, R f
             }
             else if (a <= zero)
             {
-                eta = (a - std::sqrt(std::abs(a * a - four * b * c))) / (two * c);
+                eta = (a - crd::math::sqrt(std::abs(a * a - four * b * c))) / (two * c);
             }
             else
             {
-                eta = two * b / (a + std::sqrt(std::abs(a * a - four * b * c)));
+                eta = two * b / (a + crd::math::sqrt(std::abs(a * a - four * b * c)));
             }
             if (f * eta >= zero)
             {
@@ -434,7 +434,7 @@ inline void dlasd4(int n, int i_in, const R* d, const R* z, R* delta, R rho, R& 
 
     if (n == 1)
     {
-        sigma = std::sqrt(dia(1) * dia(1) + rho * zee(1) * zee(1));
+        sigma = crd::math::sqrt(dia(1) * dia(1) + rho * zee(1) * zee(1));
         del(1) = one;
         wrk(1) = one;
         return;
@@ -471,7 +471,7 @@ inline void dlasd4(int n, int i_in, const R* d, const R* z, R* delta, R rho, R& 
         ii = n - 1;
         int niter = 1;
         R temp = rho / two;
-        R temp1 = temp / (dia(n) + std::sqrt(dia(n) * dia(n) + temp));
+        R temp1 = temp / (dia(n) + crd::math::sqrt(dia(n) * dia(n) + temp));
         for (int j = 1; j <= n; ++j)
         {
             wrk(j) = dia(j) + dia(n) + temp1;
@@ -487,7 +487,7 @@ inline void dlasd4(int n, int i_in, const R* d, const R* z, R* delta, R rho, R& 
 
         if (w <= zero)
         {
-            temp1 = std::sqrt(dia(n) * dia(n) + rho);
+            temp1 = crd::math::sqrt(dia(n) * dia(n) + rho);
             temp = zee(n - 1) * zee(n - 1) /
                        ((dia(n - 1) + temp1) * (dia(n) - dia(n - 1) + rho / (dia(n) + temp1))) +
                    zee(n) * zee(n) / rho;
@@ -502,13 +502,13 @@ inline void dlasd4(int n, int i_in, const R* d, const R* z, R* delta, R rho, R& 
                 const R b = zee(n) * zee(n) * delsq;
                 if (a < zero)
                 {
-                    tau2 = two * b / (std::sqrt(a * a + four * b * c) - a);
+                    tau2 = two * b / (crd::math::sqrt(a * a + four * b * c) - a);
                 }
                 else
                 {
-                    tau2 = (a + std::sqrt(a * a + four * b * c)) / (two * c);
+                    tau2 = (a + crd::math::sqrt(a * a + four * b * c)) / (two * c);
                 }
-                tau = tau2 / (dia(n) + std::sqrt(dia(n) * dia(n) + tau2));
+                tau = tau2 / (dia(n) + crd::math::sqrt(dia(n) * dia(n) + tau2));
             }
         }
         else
@@ -518,13 +518,13 @@ inline void dlasd4(int n, int i_in, const R* d, const R* z, R* delta, R rho, R& 
             const R b = zee(n) * zee(n) * delsq;
             if (a < zero)
             {
-                tau2 = two * b / (std::sqrt(a * a + four * b * c) - a);
+                tau2 = two * b / (crd::math::sqrt(a * a + four * b * c) - a);
             }
             else
             {
-                tau2 = (a + std::sqrt(a * a + four * b * c)) / (two * c);
+                tau2 = (a + crd::math::sqrt(a * a + four * b * c)) / (two * c);
             }
-            tau = tau2 / (dia(n) + std::sqrt(dia(n) * dia(n) + tau2));
+            tau = tau2 / (dia(n) + crd::math::sqrt(dia(n) * dia(n) + tau2));
         }
 
         sigma = dia(n) + tau;
@@ -577,11 +577,11 @@ inline void dlasd4(int n, int i_in, const R* d, const R* z, R* delta, R rho, R& 
         }
         else if (a >= zero)
         {
-            eta = (a + std::sqrt(std::abs(a * a - four * b * c2))) / (two * c2);
+            eta = (a + crd::math::sqrt(std::abs(a * a - four * b * c2))) / (two * c2);
         }
         else
         {
-            eta = two * b / (a - std::sqrt(std::abs(a * a - four * b * c2)));
+            eta = two * b / (a - crd::math::sqrt(std::abs(a * a - four * b * c2)));
         }
         if (w * eta > zero)
         {
@@ -592,7 +592,7 @@ inline void dlasd4(int n, int i_in, const R* d, const R* z, R* delta, R rho, R& 
         {
             eta = rho + dtnsq;
         }
-        eta = eta / (sigma + std::sqrt(eta + sigma * sigma));
+        eta = eta / (sigma + crd::math::sqrt(eta + sigma * sigma));
         tau = tau + eta;
         sigma = sigma + eta;
         for (int j = 1; j <= n; ++j)
@@ -619,11 +619,11 @@ inline void dlasd4(int n, int i_in, const R* d, const R* z, R* delta, R rho, R& 
             b = dtnsq1 * dtnsq * w;
             if (a >= zero)
             {
-                eta = (a + std::sqrt(std::abs(a * a - four * b * c2))) / (two * c2);
+                eta = (a + crd::math::sqrt(std::abs(a * a - four * b * c2))) / (two * c2);
             }
             else
             {
-                eta = two * b / (a - std::sqrt(std::abs(a * a - four * b * c2)));
+                eta = two * b / (a - crd::math::sqrt(std::abs(a * a - four * b * c2)));
             }
             if (w * eta > zero)
             {
@@ -634,7 +634,7 @@ inline void dlasd4(int n, int i_in, const R* d, const R* z, R* delta, R rho, R& 
             {
                 eta = eta / two;
             }
-            eta = eta / (sigma + std::sqrt(eta + sigma * sigma));
+            eta = eta / (sigma + crd::math::sqrt(eta + sigma * sigma));
             tau = tau + eta;
             sigma = sigma + eta;
             for (int j = 1; j <= n; ++j)
@@ -656,7 +656,7 @@ inline void dlasd4(int n, int i_in, const R* d, const R* z, R* delta, R rho, R& 
     const int ip1 = iv + 1;
     const R delsq = (dia(ip1) - dia(iv)) * (dia(ip1) + dia(iv));
     const R delsq2 = delsq / two;
-    const R sq2 = std::sqrt((dia(iv) * dia(iv) + dia(ip1) * dia(ip1)) / two);
+    const R sq2 = crd::math::sqrt((dia(iv) * dia(iv) + dia(ip1) * dia(ip1)) / two);
     R temp = delsq2 / (dia(iv) + sq2);
     for (int j = 1; j <= n; ++j)
     {
@@ -687,14 +687,14 @@ inline void dlasd4(int n, int i_in, const R* d, const R* z, R* delta, R rho, R& 
         const R b = zee(iv) * zee(iv) * delsq;
         if (a > zero)
         {
-            tau2 = two * b / (a + std::sqrt(std::abs(a * a - four * b * c)));
+            tau2 = two * b / (a + crd::math::sqrt(std::abs(a * a - four * b * c)));
         }
         else
         {
-            tau2 = (a - std::sqrt(std::abs(a * a - four * b * c))) / (two * c);
+            tau2 = (a - crd::math::sqrt(std::abs(a * a - four * b * c))) / (two * c);
         }
-        tau = tau2 / (dia(iv) + std::sqrt(dia(iv) * dia(iv) + tau2));
-        const R t = std::sqrt(eps);
+        tau = tau2 / (dia(iv) + crd::math::sqrt(dia(iv) * dia(iv) + tau2));
+        const R t = crd::math::sqrt(eps);
         if ((dia(iv) <= t * dia(ip1)) && (std::abs(zee(iv)) <= t) && (dia(iv) > zero))
         {
             tau = std::min(ten * dia(iv), sgub);
@@ -712,13 +712,13 @@ inline void dlasd4(int n, int i_in, const R* d, const R* z, R* delta, R rho, R& 
         const R b = zee(ip1) * zee(ip1) * delsq;
         if (a < zero)
         {
-            tau2 = two * b / (a - std::sqrt(std::abs(a * a + four * b * c)));
+            tau2 = two * b / (a - crd::math::sqrt(std::abs(a * a + four * b * c)));
         }
         else
         {
-            tau2 = -(a + std::sqrt(std::abs(a * a + four * b * c))) / (two * c);
+            tau2 = -(a + crd::math::sqrt(std::abs(a * a + four * b * c))) / (two * c);
         }
-        tau = tau2 / (dia(ip1) + std::sqrt(std::abs(dia(ip1) * dia(ip1) + tau2)));
+        tau = tau2 / (dia(ip1) + crd::math::sqrt(std::abs(dia(ip1) * dia(ip1) + tau2)));
     }
 
     sigma = dia(ii) + tau;
@@ -835,11 +835,11 @@ inline void dlasd4(int n, int i_in, const R* d, const R* z, R* delta, R rho, R& 
             }
             else if (a <= zero)
             {
-                eta = (a - std::sqrt(std::abs(a * a - four * b * c))) / (two * c);
+                eta = (a - crd::math::sqrt(std::abs(a * a - four * b * c))) / (two * c);
             }
             else
             {
-                eta = two * b / (a + std::sqrt(std::abs(a * a - four * b * c)));
+                eta = two * b / (a + crd::math::sqrt(std::abs(a * a - four * b * c)));
             }
         }
         else
@@ -918,11 +918,11 @@ inline void dlasd4(int n, int i_in, const R* d, const R* z, R* delta, R rho, R& 
                 }
                 else if (a <= zero)
                 {
-                    eta = (a - std::sqrt(std::abs(a * a - four * b * c))) / (two * c);
+                    eta = (a - crd::math::sqrt(std::abs(a * a - four * b * c))) / (two * c);
                 }
                 else
                 {
-                    eta = two * b / (a + std::sqrt(std::abs(a * a - four * b * c)));
+                    eta = two * b / (a + crd::math::sqrt(std::abs(a * a - four * b * c)));
                 }
             }
         }
@@ -930,7 +930,7 @@ inline void dlasd4(int n, int i_in, const R* d, const R* z, R* delta, R rho, R& 
         {
             eta = -w / dw;
         }
-        eta = eta / (sigma + std::sqrt(sigma * sigma + eta));
+        eta = eta / (sigma + crd::math::sqrt(sigma * sigma + eta));
         temp = tau + eta;
         if (temp > sgub || temp < sglb)
         {
@@ -948,14 +948,14 @@ inline void dlasd4(int n, int i_in, const R* d, const R* z, R* delta, R rho, R& 
                 {
                     if (tau > zero)
                     {
-                        eta = std::sqrt(sgub * tau) - tau;
+                        eta = crd::math::sqrt(sgub * tau) - tau;
                     }
                 }
                 else
                 {
                     if (sglb > zero)
                     {
-                        eta = std::sqrt(sglb * tau) - tau;
+                        eta = crd::math::sqrt(sglb * tau) - tau;
                     }
                 }
             }
@@ -1065,18 +1065,18 @@ inline void dlasd4(int n, int i_in, const R* d, const R* z, R* delta, R rho, R& 
                 }
                 else if (a <= zero)
                 {
-                    eta = (a - std::sqrt(std::abs(a * a - four * b * c))) / (two * c);
+                    eta = (a - crd::math::sqrt(std::abs(a * a - four * b * c))) / (two * c);
                 }
                 else
                 {
-                    eta = two * b / (a + std::sqrt(std::abs(a * a - four * b * c)));
+                    eta = two * b / (a + crd::math::sqrt(std::abs(a * a - four * b * c)));
                 }
                 // apply step (shared below)
                 if (w * eta >= zero)
                 {
                     eta = -w / dw;
                 }
-                eta = eta / (sigma + std::sqrt(sigma * sigma + eta));
+                eta = eta / (sigma + crd::math::sqrt(sigma * sigma + eta));
                 temp = tau + eta;
                 if (temp > sgub || temp < sglb)
                 {
@@ -1094,14 +1094,14 @@ inline void dlasd4(int n, int i_in, const R* d, const R* z, R* delta, R rho, R& 
                         {
                             if (tau > zero)
                             {
-                                eta = std::sqrt(sgub * tau) - tau;
+                                eta = crd::math::sqrt(sgub * tau) - tau;
                             }
                         }
                         else
                         {
                             if (sglb > zero)
                             {
-                                eta = std::sqrt(sglb * tau) - tau;
+                                eta = crd::math::sqrt(sglb * tau) - tau;
                             }
                         }
                     }
@@ -1223,18 +1223,18 @@ inline void dlasd4(int n, int i_in, const R* d, const R* z, R* delta, R rho, R& 
                     }
                     else if (a <= zero)
                     {
-                        eta = (a - std::sqrt(std::abs(a * a - four * b * c))) / (two * c);
+                        eta = (a - crd::math::sqrt(std::abs(a * a - four * b * c))) / (two * c);
                     }
                     else
                     {
-                        eta = two * b / (a + std::sqrt(std::abs(a * a - four * b * c)));
+                        eta = two * b / (a + crd::math::sqrt(std::abs(a * a - four * b * c)));
                     }
                 }
                 if (w * eta >= zero)
                 {
                     eta = -w / dw;
                 }
-                eta = eta / (sigma + std::sqrt(sigma * sigma + eta));
+                eta = eta / (sigma + crd::math::sqrt(sigma * sigma + eta));
                 temp = tau + eta;
                 if (temp > sgub || temp < sglb)
                 {
@@ -1252,14 +1252,14 @@ inline void dlasd4(int n, int i_in, const R* d, const R* z, R* delta, R rho, R& 
                         {
                             if (tau > zero)
                             {
-                                eta = std::sqrt(sgub * tau) - tau;
+                                eta = crd::math::sqrt(sgub * tau) - tau;
                             }
                         }
                         else
                         {
                             if (sglb > zero)
                             {
-                                eta = std::sqrt(sglb * tau) - tau;
+                                eta = crd::math::sqrt(sglb * tau) - tau;
                             }
                         }
                     }

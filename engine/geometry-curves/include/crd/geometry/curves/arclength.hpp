@@ -41,6 +41,7 @@
 // ---------------------------------------------------------------------------
 
 #include <crd/containers/array.hpp>
+#include <crd/math/cmath.hpp>
 #include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
 #include <crd/geometry/curves/evaluator.hpp>
@@ -153,7 +154,7 @@ template <crd::math::MathScalar T>
         value < static_cast<T>(0) ? value - modulus + static_cast<T>(1) : value));
     (void)n; // unused; explicit floor below avoids edge-case off-by-one.
     // Use long double arithmetic in the floor() avoidance: compute
-    // `value - floor(value / modulus) * modulus` without std::floor (we
+    // `value - floor(value / modulus) * modulus` without crd::math::floor (we
     // stay in deterministic-FP territory by hand).
     const T quotient = value / modulus;
     const crd::i64 i_quot = (quotient < static_cast<T>(0))

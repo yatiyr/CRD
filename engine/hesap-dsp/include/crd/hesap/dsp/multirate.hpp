@@ -25,7 +25,7 @@
 #include <crd/memory/allocator.hpp>
 
 #include <algorithm>
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <numbers>
 #include <numeric>
 
@@ -272,7 +272,7 @@ template <typename T>
         else
         {
             const T xm = static_cast<T>(mm);
-            s = std::sin(pi * xm / T(2)) / (pi * xm); // ideal half-band impulse (cutoff 0.5 Nyquist)
+            s = crd::math::sin(pi * xm / T(2)) / (pi * xm); // ideal half-band impulse (cutoff 0.5 Nyquist)
         }
         h[i] = s * win[i];
     }

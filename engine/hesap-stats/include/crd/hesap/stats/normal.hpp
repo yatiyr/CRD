@@ -10,7 +10,7 @@
 #include <crd/core/types.hpp>
 #include <crd/hesap/stats/philox.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 
 namespace crd::hesap::stats
 {
@@ -31,11 +31,11 @@ public:
         }
         const crd::f64 u1 = 1.0 - m_rng->next_f64(); // (0, 1]
         const crd::f64 u2 = m_rng->next_f64();       // [0, 1)
-        const crd::f64 r = std::sqrt(-2.0 * std::log(u1));
+        const crd::f64 r = crd::math::sqrt(-2.0 * crd::math::log(u1));
         const crd::f64 theta = 6.283185307179586476925286766559 * u2; // 2π
-        m_spare = r * std::sin(theta);
+        m_spare = r * crd::math::sin(theta);
         m_has_spare = true;
-        return r * std::cos(theta);
+        return r * crd::math::cos(theta);
     }
 
     void fill(crd::containers::Span<crd::f64> out) noexcept

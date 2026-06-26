@@ -12,7 +12,7 @@
 #include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 
 namespace crd::hesap::ode
 {
@@ -43,7 +43,7 @@ template <typename T>
         const T q = e[i] / scale;
         sum += q * q;
     }
-    return std::sqrt(sum / static_cast<T>(n));
+    return crd::math::sqrt(sum / static_cast<T>(n));
 }
 
 // scipy's elementary (integral) controller, exact semantics (scipy/integrate/_ivp/rk.py):
@@ -70,7 +70,7 @@ template <typename T> struct ElementaryController
             T factor = max_factor;
             if (err != static_cast<T>(0))
             {
-                const T raw = safety * std::pow(err, exponent);
+                const T raw = safety * crd::math::pow(err, exponent);
                 factor = raw < max_factor ? raw : max_factor;
             }
             if (rejected_last && factor > static_cast<T>(1))
@@ -80,7 +80,7 @@ template <typename T> struct ElementaryController
             rejected_last = false;
             return factor;
         }
-        const T raw = safety * std::pow(err, exponent);
+        const T raw = safety * crd::math::pow(err, exponent);
         rejected_last = true;
         return raw > min_factor ? raw : min_factor;
     }
@@ -106,7 +106,7 @@ template <typename T> struct PiController
     {
         accept = err <= static_cast<T>(1);
         const T e = err > err_floor ? err : err_floor; // also guards err == 0 in the pow
-        T factor = safety * std::pow(e, -beta1) * std::pow(err_prev, beta2);
+        T factor = safety * crd::math::pow(e, -beta1) * crd::math::pow(err_prev, beta2);
         if (factor < min_factor)
         {
             factor = min_factor;

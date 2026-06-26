@@ -9,7 +9,7 @@
 #include <crd/memory/allocator.hpp>
 
 #include <algorithm>
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::hesap::dense::detail
@@ -96,7 +96,7 @@ template <typename R>
         const R t = x[k * incx] / scale;
         ssq += t * t;
     }
-    return scale * std::sqrt(ssq);
+    return scale * crd::math::sqrt(ssq);
 }
 
 // =======================================================================
@@ -552,7 +552,7 @@ inline int dlasd3(int nl, int nr, int sqre, int k, R* d, R* q, int ldq, const R*
         {
             zee(i) = zee(i) * (um(i, j) * vtm(i, j) / (dsig(i) - dsig(j + 1)) / (dsig(i) + dsig(j + 1)));
         }
-        zee(i) = fsign(std::sqrt(std::abs(zee(i))), qm(i, 1));
+        zee(i) = fsign(crd::math::sqrt(std::abs(zee(i))), qm(i, 1));
     }
 
     // Left singular vectors of the modified diagonal matrix; store right info.
@@ -881,7 +881,7 @@ inline int dlasd1(int nl, int nr, int sqre, R* d, R& alpha, R& beta, R* u, int l
 // bisection of [1..n], leaves of size <= msub. Outputs the per-node center
 // (inode), left size (ndiml), right size (ndimr); lvl = #levels, nd = #nodes.
 // Faithful port of dlasdt.f (1-based node indices). lvl computed without
-// std::log: floor(log2(n/(msub+1)))+1 via doubling.
+// crd::math::log: floor(log2(n/(msub+1)))+1 via doubling.
 // =======================================================================
 inline void dlasdt(int n, int& lvl, int& nd, int* inode, int* ndiml, int* ndimr, int msub) noexcept
 {

@@ -23,7 +23,7 @@
 #include <crd/hesap/complex.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 #include <numbers>
 
@@ -79,8 +79,8 @@ public:
         {
             const T two_pi = static_cast<T>(2.0 * std::numbers::pi_v<double>);
             const T step = two_pi / static_cast<T>(m_m);
-            T ang = std::atan2(r.im, r.re);
-            crd::i64 k = static_cast<crd::i64>(std::lround(ang / step));
+            T ang = crd::math::atan2(r.im, r.re);
+            crd::i64 k = static_cast<crd::i64>(crd::math::lround(ang / step));
             k = ((k % static_cast<crd::i64>(m_m)) + static_cast<crd::i64>(m_m)) % static_cast<crd::i64>(m_m);
             return gray_encode(static_cast<crd::u32>(k));
         }
@@ -166,7 +166,7 @@ private:
             {
                 const crd::u32 k = gray_decode(v); // position on the circle (adjacent positions = 1-bit Gray apart)
                 const T th = two_pi * static_cast<T>(k) / static_cast<T>(m_m);
-                m_constel[v] = Complex<T>{std::cos(th), std::sin(th)};
+                m_constel[v] = Complex<T>{crd::math::cos(th), crd::math::sin(th)};
             }
         }
         else if (m_family == ModFamily::Pam)
@@ -203,7 +203,7 @@ private:
         {
             e += m_constel[v].re * m_constel[v].re + m_constel[v].im * m_constel[v].im;
         }
-        const T inv = T(1) / std::sqrt(e / static_cast<T>(m_m));
+        const T inv = T(1) / crd::math::sqrt(e / static_cast<T>(m_m));
         for (crd::u32 v = 0; v < m_m; ++v)
         {
             m_constel[v] = Complex<T>{m_constel[v].re * inv, m_constel[v].im * inv};
@@ -214,7 +214,7 @@ private:
     // Quantize an axis value to the nearest of `levels` PAM positions {0..levels-1} (levels {-(L-1)..(L-1)}·m_scale).
     [[nodiscard]] crd::u32 slice_axis(T v, crd::u32 levels) const noexcept
     {
-        crd::i64 k = static_cast<crd::i64>(std::lround((v / m_scale + static_cast<T>(levels) - T(1)) / T(2)));
+        crd::i64 k = static_cast<crd::i64>(crd::math::lround((v / m_scale + static_cast<T>(levels) - T(1)) / T(2)));
         if (k < 0)
         {
             k = 0;
@@ -275,7 +275,7 @@ void fsk_modulate(crd::containers::ConstSpan<crd::u32> syms, crd::u32 sps, crd::
         for (crd::u32 n = 0; n < sps; ++n)
         {
             const T ph = two_pi * f * static_cast<T>(n);
-            out[s * sps + n] = Complex<T>{std::cos(ph), std::sin(ph)};
+            out[s * sps + n] = Complex<T>{crd::math::cos(ph), crd::math::sin(ph)};
         }
     }
 }
@@ -300,8 +300,8 @@ void fsk_demodulate_noncoherent(crd::containers::ConstSpan<Complex<T>> r, crd::u
             {
                 const T ph = -two_pi * f * static_cast<T>(n);
                 const Complex<T> rn = r[s * sps + n];
-                cr += rn.re * std::cos(ph) - rn.im * std::sin(ph);
-                ci += rn.re * std::sin(ph) + rn.im * std::cos(ph);
+                cr += rn.re * crd::math::cos(ph) - rn.im * crd::math::sin(ph);
+                ci += rn.re * crd::math::sin(ph) + rn.im * crd::math::cos(ph);
             }
             const T mag = cr * cr + ci * ci;
             if (mag > bestmag)

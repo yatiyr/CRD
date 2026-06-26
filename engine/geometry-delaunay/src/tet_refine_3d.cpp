@@ -43,7 +43,7 @@
 #include <crd/memory/allocator.hpp>
 
 #include <algorithm>
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::geometry::delaunay
@@ -124,10 +124,10 @@ T min_dihedral_of_tet_rad(const crd::math::Vec3<T>& v0,
             return static_cast<T>(0); // degenerate
         }
         T cos_d = (n1.x * n2.x + n1.y * n2.y + n1.z * n2.z)
-                / std::sqrt(n1_len2 * n2_len2);
+                / crd::math::sqrt(n1_len2 * n2_len2);
         if (cos_d > static_cast<T>(1))  { cos_d = static_cast<T>(1); }
         if (cos_d < static_cast<T>(-1)) { cos_d = static_cast<T>(-1); }
-        const T d = std::acos(cos_d);
+        const T d = crd::math::acos(cos_d);
         if (d < min_rad) { min_rad = d; }
     }
     return min_rad;
@@ -183,7 +183,7 @@ tet_refine_3d(crd::containers::ConstSpan<crd::math::Vec3<T>> points,
     const T dx = xmax - xmin;
     const T dy = ymax - ymin;
     const T dz = zmax - zmin;
-    const T diag = std::sqrt(dx * dx + dy * dy + dz * dz);
+    const T diag = crd::math::sqrt(dx * dx + dy * dy + dz * dz);
     T pad = diag * static_cast<T>(0.1);
     if (pad <= static_cast<T>(0)) { pad = static_cast<T>(0.1); }
     const T xlo = xmin - pad;

@@ -20,7 +20,7 @@
 #include <crd/hesap/opt/opt_types.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 
 namespace crd::hesap::opt
 {
@@ -59,7 +59,7 @@ template <typename T, typename F> inline void brent_bracket(const F& f, T& ax, T
         const T r = (bx - ax) * (fb - fc);
         const T q = (bx - cx) * (fb - fa);
         T denom = q - r;
-        const T mag = std::fabs(denom) > tiny ? std::fabs(denom) : tiny;
+        const T mag = crd::math::fabs(denom) > tiny ? crd::math::fabs(denom) : tiny;
         denom = denom >= static_cast<T>(0) ? mag : -mag;
         T u = bx - ((bx - cx) * q - (bx - ax) * r) / (static_cast<T>(2) * denom);
         const T ulim = bx + glimit * (cx - bx);
@@ -137,14 +137,14 @@ template <typename T, typename F>
     for (int iter = 0; iter < itmax; ++iter)
     {
         const T xm = static_cast<T>(0.5) * (a + b);
-        const T tol1 = tol * std::fabs(x) + zeps;
+        const T tol1 = tol * crd::math::fabs(x) + zeps;
         const T tol2 = static_cast<T>(2) * tol1;
-        if (std::fabs(x - xm) <= tol2 - static_cast<T>(0.5) * (b - a))
+        if (crd::math::fabs(x - xm) <= tol2 - static_cast<T>(0.5) * (b - a))
         {
             break;
         }
         bool golden = true;
-        if (std::fabs(e) > tol1) // try the parabolic fit through (x, w, v)
+        if (crd::math::fabs(e) > tol1) // try the parabolic fit through (x, w, v)
         {
             const T r = (x - w) * (fx - fv);
             T q = (x - v) * (fx - fw);
@@ -154,10 +154,10 @@ template <typename T, typename F>
             {
                 p = -p;
             }
-            q = std::fabs(q);
+            q = crd::math::fabs(q);
             const T etemp = e;
             e = d;
-            if (!(std::fabs(p) >= std::fabs(static_cast<T>(0.5) * q * etemp) || p <= q * (a - x) || p >= q * (b - x)))
+            if (!(crd::math::fabs(p) >= crd::math::fabs(static_cast<T>(0.5) * q * etemp) || p <= q * (a - x) || p >= q * (b - x)))
             {
                 d = p / q; // parabolic step accepted
                 const T u = x + d;
@@ -173,7 +173,7 @@ template <typename T, typename F>
             e = x >= xm ? a - x : b - x;
             d = cgold * e;
         }
-        const T u = std::fabs(d) >= tol1 ? x + d : x + (d >= static_cast<T>(0) ? tol1 : -tol1);
+        const T u = crd::math::fabs(d) >= tol1 ? x + d : x + (d >= static_cast<T>(0) ? tol1 : -tol1);
         const T fu = f(u);
         if (fu <= fx)
         {
@@ -328,7 +328,7 @@ template <typename T>
         }
         // Termination (scipy/NR relative-decrease form).
         if (static_cast<T>(2) * (fx_start - fx) <=
-            po.ftol * (std::fabs(fx_start) + std::fabs(fx)) + static_cast<T>(1e-25))
+            po.ftol * (crd::math::fabs(fx_start) + crd::math::fabs(fx)) + static_cast<T>(1e-25))
         {
             status = OptStatus::Success;
             ++it;

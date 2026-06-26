@@ -20,7 +20,7 @@
 #include <crd/hesap/dsp/filter.hpp> // Zpk<T>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <numbers>
 
 namespace crd::hesap::dsp
@@ -40,7 +40,7 @@ template <typename T> [[nodiscard]] Complex<T> cdiv(Complex<T> a, Complex<T> b) 
 // complex sinh(x+iy) = sinh x cos y + i cosh x sin y.
 template <typename T> [[nodiscard]] Complex<T> csinh(T re, T im) noexcept
 {
-    return Complex<T>{std::sinh(re) * std::cos(im), std::cosh(re) * std::sin(im)};
+    return Complex<T>{crd::math::sinh(re) * crd::math::cos(im), crd::math::cosh(re) * crd::math::sin(im)};
 }
 } // namespace detail
 
@@ -53,7 +53,7 @@ template <typename T> [[nodiscard]] Zpk<T> buttap(crd::memory::IAllocator* alloc
     {
         const T m = static_cast<T>(-static_cast<long long>(n) + 1 + 2 * static_cast<long long>(i));
         const T th = pi * m / (T(2) * static_cast<T>(n));
-        zpk.p.push_back(Complex<T>{-std::cos(th), -std::sin(th)}); // -exp(j th)
+        zpk.p.push_back(Complex<T>{-crd::math::cos(th), -crd::math::sin(th)}); // -exp(j th)
     }
     zpk.k = T(1);
     return zpk;
@@ -64,8 +64,8 @@ template <typename T> [[nodiscard]] Zpk<T> cheb1ap(crd::memory::IAllocator* allo
 {
     Zpk<T> zpk(alloc);
     const T pi = static_cast<T>(std::numbers::pi_v<double>);
-    const T eps = std::sqrt(std::pow(T(10), T(0.1) * rp) - T(1));
-    const T mu = std::asinh(T(1) / eps) / static_cast<T>(n);
+    const T eps = crd::math::sqrt(crd::math::pow(T(10), T(0.1) * rp) - T(1));
+    const T mu = crd::math::asinh(T(1) / eps) / static_cast<T>(n);
     T kprod = T(1);
     for (crd::usize i = 0; i < n; ++i)
     {
@@ -73,7 +73,7 @@ template <typename T> [[nodiscard]] Zpk<T> cheb1ap(crd::memory::IAllocator* allo
         const T th = pi * m / (T(2) * static_cast<T>(n));
         const Complex<T> p{-detail::csinh<T>(mu, th).re, -detail::csinh<T>(mu, th).im}; // -sinh(mu + i th)
         zpk.p.push_back(p);
-        kprod *= std::hypot(-p.re, -p.im); // |−p|; product is real (conjugate pairs)
+        kprod *= crd::math::hypot(-p.re, -p.im); // |−p|; product is real (conjugate pairs)
     }
     // k = Re(prod(-p)); since poles come in conjugate pairs, prod(-p) is real and positive.
     T kre = T(1), kim = T(0);
@@ -88,7 +88,7 @@ template <typename T> [[nodiscard]] Zpk<T> cheb1ap(crd::memory::IAllocator* allo
     zpk.k = kre;
     if (n % 2 == 0)
     {
-        zpk.k = zpk.k / std::sqrt(T(1) + eps * eps);
+        zpk.k = zpk.k / crd::math::sqrt(T(1) + eps * eps);
     }
     (void)kprod;
     return zpk;
@@ -99,8 +99,8 @@ template <typename T> [[nodiscard]] Zpk<T> cheb2ap(crd::memory::IAllocator* allo
 {
     Zpk<T> zpk(alloc);
     const T pi = static_cast<T>(std::numbers::pi_v<double>);
-    const T de = T(1) / std::sqrt(std::pow(T(10), T(0.1) * rs) - T(1));
-    const T mu = std::asinh(T(1) / de) / static_cast<T>(n);
+    const T de = T(1) / crd::math::sqrt(crd::math::pow(T(10), T(0.1) * rs) - T(1));
+    const T mu = crd::math::asinh(T(1) / de) / static_cast<T>(n);
     // zeros z = i / sin(m pi/(2N)); for N odd the centre m=0 is skipped (zero at infinity).
     for (crd::usize i = 0; i < n; ++i)
     {
@@ -110,7 +110,7 @@ template <typename T> [[nodiscard]] Zpk<T> cheb2ap(crd::memory::IAllocator* allo
             continue; // N odd ⇒ skip (zero at infinity)
         }
         const T m = static_cast<T>(mm);
-        zpk.z.push_back(Complex<T>{T(0), T(1) / std::sin(m * pi / (T(2) * static_cast<T>(n)))});
+        zpk.z.push_back(Complex<T>{T(0), T(1) / crd::math::sin(m * pi / (T(2) * static_cast<T>(n)))});
     }
     // poles p = -1 / sinh(mu + i theta).
     for (crd::usize i = 0; i < n; ++i)
@@ -184,7 +184,7 @@ template <typename T> [[nodiscard]] Zpk<T> lp2lp_zpk(crd::memory::IAllocator* al
     {
         out.p.push_back(Complex<T>{in.p[i].re * wo, in.p[i].im * wo});
     }
-    out.k = in.k * std::pow(wo, static_cast<T>(degree));
+    out.k = in.k * crd::math::pow(wo, static_cast<T>(degree));
     return out;
 }
 
@@ -222,7 +222,7 @@ template <typename T> [[nodiscard]] Zpk<T> iir_lowpass_digital(crd::memory::IAll
 {
     const T fs = T(2);
     const T pi = static_cast<T>(std::numbers::pi_v<double>);
-    const T warped = T(2) * fs * std::tan(pi * wn / fs);
+    const T warped = T(2) * fs * crd::math::tan(pi * wn / fs);
     const Zpk<T> lp = lp2lp_zpk<T>(alloc, proto, warped);
     return bilinear_zpk<T>(alloc, lp, fs);
 }

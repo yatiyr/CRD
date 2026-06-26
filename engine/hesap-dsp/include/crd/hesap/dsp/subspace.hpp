@@ -24,7 +24,7 @@
 #include <crd/hesap/dsp/polynomial.hpp> // roots
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <numbers>
 
 namespace crd::hesap::dsp
@@ -81,8 +81,8 @@ template <typename T>
             for (crd::usize mm = 0; mm < m; ++mm)
             {
                 const T w = two_pi * f * static_cast<T>(mm);
-                re += e.vectors(mm, c) * std::cos(w);
-                im -= e.vectors(mm, c) * std::sin(w);
+                re += e.vectors(mm, c) * crd::math::cos(w);
+                im -= e.vectors(mm, c) * crd::math::sin(w);
             }
             denom += re * re + im * im;
         }
@@ -128,10 +128,10 @@ template <typename T>
     const T two_pi = static_cast<T>(2.0 * std::numbers::pi_v<double>);
     for (crd::usize i = 0; i < rts.size(); ++i)
     {
-        const T mag = std::hypot(rts[i].re, rts[i].im);
+        const T mag = crd::math::hypot(rts[i].re, rts[i].im);
         if (mag < T(1) && mag > T(1e-6))
         {
-            const T f = std::atan2(rts[i].im, rts[i].re) / two_pi;
+            const T f = crd::math::atan2(rts[i].im, rts[i].re) / two_pi;
             if (f > T(1e-6)) // positive-frequency root
             {
                 freqs.push_back(f);
@@ -248,7 +248,7 @@ template <typename T>
     crd::containers::Array<T> freqs(alloc);
     for (crd::usize i = 0; i < d; ++i)
     {
-        const T f = std::atan2(eg.values(i).im, eg.values(i).re) / two_pi;
+        const T f = crd::math::atan2(eg.values(i).im, eg.values(i).re) / two_pi;
         if (f > static_cast<T>(1e-6))
         {
             freqs.push_back(f);
@@ -296,11 +296,11 @@ template <typename T>
     crd::containers::Array<T> freqs(alloc), dist(alloc);
     for (crd::usize i = 0; i < rts.size(); ++i)
     {
-        const T f = std::atan2(rts[i].im, rts[i].re) / two_pi;
+        const T f = crd::math::atan2(rts[i].im, rts[i].re) / two_pi;
         if (f > static_cast<T>(1e-6))
         {
             freqs.push_back(f);
-            dist.push_back(std::abs(std::hypot(rts[i].re, rts[i].im) - T(1))); // closeness to the unit circle
+            dist.push_back(std::abs(crd::math::hypot(rts[i].re, rts[i].im) - T(1))); // closeness to the unit circle
         }
     }
     for (crd::usize i = 0; i + 1 < freqs.size(); ++i) // keep the K closest to |z|=1

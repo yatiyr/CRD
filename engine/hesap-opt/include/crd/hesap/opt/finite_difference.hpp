@@ -18,7 +18,7 @@
 #include <crd/hesap/opt/objective.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::hesap::opt
@@ -35,7 +35,7 @@ namespace detail
 template <typename T>
 [[nodiscard]] inline T fd_step(T xi, T base) noexcept
 {
-    const T scale = std::fabs(xi) > static_cast<T>(1) ? std::fabs(xi) : static_cast<T>(1);
+    const T scale = crd::math::fabs(xi) > static_cast<T>(1) ? crd::math::fabs(xi) : static_cast<T>(1);
     return base * scale;
 }
 } // namespace detail
@@ -57,7 +57,7 @@ inline void finite_difference_gradient(const Objective<T>& obj, crd::containers:
     const T eps = std::numeric_limits<T>::epsilon();
     if (mode == FdMode::Forward)
     {
-        const T base = std::sqrt(eps);
+        const T base = crd::math::sqrt(eps);
         const T f0 = obj.value({xp.data(), n});
         for (crd::usize i = 0; i < n; ++i)
         {
@@ -72,7 +72,7 @@ inline void finite_difference_gradient(const Objective<T>& obj, crd::containers:
     }
     else
     {
-        const T base = std::cbrt(eps);
+        const T base = crd::math::cbrt(eps);
         for (crd::usize i = 0; i < n; ++i)
         {
             const T xi = xp[i];

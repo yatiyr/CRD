@@ -35,7 +35,7 @@
 #include <crd/memory/allocator.hpp>
 
 #include <algorithm>
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <numbers>
 #include <utility>
 
@@ -77,9 +77,9 @@ namespace detail
 // Principal-branch complex square root (numpy/scipy convention: Re >= 0).
 template <typename T> [[nodiscard]] Complex<T> csqrt_pb(Complex<T> w) noexcept
 {
-    const T r = std::hypot(w.re, w.im);
-    T re = std::sqrt((r + w.re) / T(2));
-    T im = std::sqrt((r - w.re) / T(2));
+    const T r = crd::math::hypot(w.re, w.im);
+    T re = crd::math::sqrt((r + w.re) / T(2));
+    T im = crd::math::sqrt((r - w.re) / T(2));
     if (w.im < T(0))
     {
         im = -im;
@@ -134,7 +134,7 @@ template <typename T> [[nodiscard]] Zpk<T> lp2bp_zpk(crd::memory::IAllocator* al
     {
         out.z.push_back(Complex<T>{T(0), T(0)});
     }
-    out.k = in.k * std::pow(bw, static_cast<T>(degree));
+    out.k = in.k * crd::math::pow(bw, static_cast<T>(degree));
     return out;
 }
 
@@ -211,7 +211,7 @@ template <typename T>
     const T fs = T(2);
     const T pi = static_cast<T>(std::numbers::pi_v<double>);
     // prewarp the band edges (bilinear): warped = 2*fs*tan(pi*wn/fs).
-    T w0 = T(2) * fs * std::tan(pi * wn[0] / fs);
+    T w0 = T(2) * fs * crd::math::tan(pi * wn[0] / fs);
     Zpk<T> sxf(alloc);
     if (btype == BandType::Lowpass)
     {
@@ -223,9 +223,9 @@ template <typename T>
     }
     else
     {
-        const T w1 = T(2) * fs * std::tan(pi * wn[1] / fs);
+        const T w1 = T(2) * fs * crd::math::tan(pi * wn[1] / fs);
         const T bw = w1 - w0;
-        const T wo = std::sqrt(w0 * w1);
+        const T wo = crd::math::sqrt(w0 * w1);
         sxf = (btype == BandType::Bandpass) ? lp2bp_zpk<T>(alloc, proto, wo, bw) : lp2bs_zpk<T>(alloc, proto, wo, bw);
     }
     return bilinear_zpk<T>(alloc, sxf, fs);
@@ -248,20 +248,20 @@ template <typename T>
     const T nat = std::min(std::abs(nat0), std::abs(nat1));
     if (kind == IirKind::Butter)
     {
-        const T gs = std::pow(T(10), T(0.1) * std::abs(gstop));
-        const T gp = std::pow(T(10), T(0.1) * std::abs(gpass));
-        return std::log10((gs - T(1)) / (gp - T(1))) / (T(2) * std::log10(nat));
+        const T gs = crd::math::pow(T(10), T(0.1) * std::abs(gstop));
+        const T gp = crd::math::pow(T(10), T(0.1) * std::abs(gpass));
+        return crd::math::log10((gs - T(1)) / (gp - T(1))) / (T(2) * crd::math::log10(nat));
     }
     if (kind == IirKind::Cheby1 || kind == IirKind::Cheby2)
     {
-        const T gs = std::pow(T(10), T(0.1) * std::abs(gstop));
-        const T gp = std::pow(T(10), T(0.1) * std::abs(gpass));
-        return std::acosh(std::sqrt((gs - T(1)) / (gp - T(1)))) / std::acosh(nat);
+        const T gs = crd::math::pow(T(10), T(0.1) * std::abs(gstop));
+        const T gp = crd::math::pow(T(10), T(0.1) * std::abs(gpass));
+        return crd::math::acosh(crd::math::sqrt((gs - T(1)) / (gp - T(1)))) / crd::math::acosh(nat);
     }
     // Ellip (note: scipy uses gstop/gpass WITHOUT abs here).
-    const T gs = std::pow(T(10), T(0.1) * gstop);
-    const T gp = std::pow(T(10), T(0.1) * gpass);
-    const T arg1 = std::sqrt((gp - T(1)) / (gs - T(1)));
+    const T gs = crd::math::pow(T(10), T(0.1) * gstop);
+    const T gp = crd::math::pow(T(10), T(0.1) * gpass);
+    const T arg1 = crd::math::sqrt((gp - T(1)) / (gs - T(1)));
     const T arg0 = T(1) / nat;
     const T d00 = ellipk<T>(arg0 * arg0), d01 = ellipk<T>(T(1) - arg0 * arg0);
     const T d10 = ellipk<T>(arg1 * arg1), d11 = ellipk<T>(T(1) - arg1 * arg1);
@@ -274,8 +274,8 @@ template <typename T, typename F> [[nodiscard]] T fminbound(F func, T x1, T x2) 
 {
     const T xatol = static_cast<T>(1e-5);
     const int maxfun = 500;
-    const T sqrt_eps = std::sqrt(static_cast<T>(2.2e-16));
-    const T golden_mean = T(0.5) * (T(3) - std::sqrt(T(5)));
+    const T sqrt_eps = crd::math::sqrt(static_cast<T>(2.2e-16));
+    const T golden_mean = T(0.5) * (T(3) - crd::math::sqrt(T(5)));
     T a = x1, b = x2;
     T fulc = a + golden_mean * (b - a);
     T nfc = fulc, xf = fulc;
@@ -405,8 +405,8 @@ template <typename T>
     const T pi = static_cast<T>(std::numbers::pi_v<double>);
     for (crd::usize i = 0; i < nwp; ++i)
     {
-        s.passb[i] = std::tan(pi * wp[i] / T(2));
-        s.stopb[i] = std::tan(pi * ws[i] / T(2));
+        s.passb[i] = crd::math::tan(pi * wp[i] / T(2));
+        s.stopb[i] = crd::math::tan(pi * ws[i] / T(2));
     }
     if (ft == 1)
     {
@@ -442,7 +442,7 @@ template <typename T> void postprocess_wn(T* wn, crd::usize n) noexcept // WN ->
     const T pi = static_cast<T>(std::numbers::pi_v<double>);
     for (crd::usize i = 0; i < n; ++i)
     {
-        wn[i] = std::atan(wn[i]) * T(2) / pi;
+        wn[i] = crd::math::atan(wn[i]) * T(2) / pi;
     }
 }
 } // namespace detail
@@ -452,10 +452,10 @@ template <typename T>
                                   crd::containers::ConstSpan<T> ws, T gpass, T gstop)
 {
     const auto s = detail::order_setup<T>(wp, ws, gpass, gstop, IirKind::Butter);
-    const T gs = std::pow(T(10), T(0.1) * std::abs(gstop));
-    const T gp = std::pow(T(10), T(0.1) * std::abs(gpass));
-    const int ord = static_cast<int>(std::ceil(std::log10((gs - T(1)) / (gp - T(1))) / (T(2) * std::log10(s.nat))));
-    const T w0 = std::pow(gp - T(1), T(-1) / (T(2) * static_cast<T>(ord)));
+    const T gs = crd::math::pow(T(10), T(0.1) * std::abs(gstop));
+    const T gp = crd::math::pow(T(10), T(0.1) * std::abs(gpass));
+    const int ord = static_cast<int>(crd::math::ceil(crd::math::log10((gs - T(1)) / (gp - T(1))) / (T(2) * crd::math::log10(s.nat))));
+    const T w0 = crd::math::pow(gp - T(1), T(-1) / (T(2) * static_cast<T>(ord)));
     IirOrder<T> r(alloc);
     r.n = static_cast<crd::usize>(ord);
     if (s.filter_type == 1)
@@ -469,7 +469,7 @@ template <typename T>
     else if (s.filter_type == 3)
     {
         const T diff = s.passb[1] - s.passb[0];
-        const T discr = std::sqrt(diff * diff + T(4) * w0 * w0 * s.passb[0] * s.passb[1]);
+        const T discr = crd::math::sqrt(diff * diff + T(4) * w0 * w0 * s.passb[0] * s.passb[1]);
         T a0 = std::abs((diff + discr) / (T(2) * w0));
         T a1 = std::abs((diff - discr) / (T(2) * w0));
         if (a0 > a1)
@@ -482,7 +482,7 @@ template <typename T>
     else // 4
     {
         const T diff = s.passb[1] - s.passb[0];
-        const T root = std::sqrt(w0 * w0 / T(4) * diff * diff + s.passb[0] * s.passb[1]);
+        const T root = crd::math::sqrt(w0 * w0 / T(4) * diff * diff + s.passb[0] * s.passb[1]);
         T a0 = std::abs(w0 * diff / T(2) + root);  // W0[0] = -w0
         T a1 = std::abs(-w0 * diff / T(2) + root); // W0[1] = +w0
         if (a0 > a1)
@@ -501,10 +501,10 @@ template <typename T>
                                    crd::containers::ConstSpan<T> ws, T gpass, T gstop)
 {
     const auto s = detail::order_setup<T>(wp, ws, gpass, gstop, IirKind::Cheby1);
-    const T gs = std::pow(T(10), T(0.1) * std::abs(gstop));
-    const T gp = std::pow(T(10), T(0.1) * std::abs(gpass));
-    const T v = std::acosh(std::sqrt((gs - T(1)) / (gp - T(1))));
-    const int ord = static_cast<int>(std::ceil(v / std::acosh(s.nat)));
+    const T gs = crd::math::pow(T(10), T(0.1) * std::abs(gstop));
+    const T gp = crd::math::pow(T(10), T(0.1) * std::abs(gpass));
+    const T v = crd::math::acosh(crd::math::sqrt((gs - T(1)) / (gp - T(1))));
+    const int ord = static_cast<int>(crd::math::ceil(v / crd::math::acosh(s.nat)));
     IirOrder<T> r(alloc);
     r.n = static_cast<crd::usize>(ord);
     for (crd::usize i = 0; i < s.npassb; ++i)
@@ -520,11 +520,11 @@ template <typename T>
                                    crd::containers::ConstSpan<T> ws, T gpass, T gstop)
 {
     const auto s = detail::order_setup<T>(wp, ws, gpass, gstop, IirKind::Cheby2);
-    const T gs = std::pow(T(10), T(0.1) * std::abs(gstop));
-    const T gp = std::pow(T(10), T(0.1) * std::abs(gpass));
-    const T v = std::acosh(std::sqrt((gs - T(1)) / (gp - T(1))));
-    const int ord = static_cast<int>(std::ceil(v / std::acosh(s.nat)));
-    const T new_freq = T(1) / std::cosh((T(1) / static_cast<T>(ord)) * v);
+    const T gs = crd::math::pow(T(10), T(0.1) * std::abs(gstop));
+    const T gp = crd::math::pow(T(10), T(0.1) * std::abs(gpass));
+    const T v = crd::math::acosh(crd::math::sqrt((gs - T(1)) / (gp - T(1))));
+    const int ord = static_cast<int>(crd::math::ceil(v / crd::math::acosh(s.nat)));
+    const T new_freq = T(1) / crd::math::cosh((T(1) / static_cast<T>(ord)) * v);
     IirOrder<T> r(alloc);
     r.n = static_cast<crd::usize>(ord);
     if (s.filter_type == 1)
@@ -539,7 +539,7 @@ template <typename T>
     {
         const T diff = s.passb[1] - s.passb[0];
         const T nat0 = new_freq / T(2) * (s.passb[0] - s.passb[1]) +
-                       std::sqrt(new_freq * new_freq * diff * diff / T(4) + s.passb[1] * s.passb[0]);
+                       crd::math::sqrt(new_freq * new_freq * diff * diff / T(4) + s.passb[1] * s.passb[0]);
         const T nat1 = s.passb[1] * s.passb[0] / nat0;
         r.wn.push_back(nat0);
         r.wn.push_back(nat1);
@@ -548,7 +548,7 @@ template <typename T>
     {
         const T diff = s.passb[1] - s.passb[0];
         const T nat0 = T(1) / (T(2) * new_freq) * (s.passb[0] - s.passb[1]) +
-                       std::sqrt(diff * diff / (T(4) * new_freq * new_freq) + s.passb[1] * s.passb[0]);
+                       crd::math::sqrt(diff * diff / (T(4) * new_freq * new_freq) + s.passb[1] * s.passb[0]);
         const T nat1 = s.passb[0] * s.passb[1] / nat0;
         r.wn.push_back(nat0);
         r.wn.push_back(nat1);
@@ -562,11 +562,11 @@ template <typename T>
                                    crd::containers::ConstSpan<T> ws, T gpass, T gstop)
 {
     const auto s = detail::order_setup<T>(wp, ws, gpass, gstop, IirKind::Ellip);
-    const T arg1_sq = (std::pow(T(10), T(0.1) * gpass) - T(1)) / (std::pow(T(10), T(0.1) * gstop) - T(1));
+    const T arg1_sq = (crd::math::pow(T(10), T(0.1) * gpass) - T(1)) / (crd::math::pow(T(10), T(0.1) * gstop) - T(1));
     const T arg0 = T(1) / s.nat;
     const T d00 = ellipk<T>(arg0 * arg0), d01 = ellipk<T>(T(1) - arg0 * arg0);
     const T d10 = ellipk<T>(arg1_sq), d11 = ellipk<T>(T(1) - arg1_sq);
-    const int ord = static_cast<int>(std::ceil(d00 * d11 / (d01 * d10)));
+    const int ord = static_cast<int>(crd::math::ceil(d00 * d11 / (d01 * d10)));
     IirOrder<T> r(alloc);
     r.n = static_cast<crd::usize>(ord);
     for (crd::usize i = 0; i < s.npassb; ++i)
@@ -629,13 +629,13 @@ template <typename T>
     T bw = w0n / q;
     bw *= pi;
     w0n *= pi;
-    const T beta = std::tan(bw / T(2));
+    const T beta = crd::math::tan(bw / T(2));
     const T gain = T(1) / (T(1) + beta);
     TransferFunction<T> tf(alloc);
     if (!peak)
     {
         tf.b.push_back(gain * T(1));
-        tf.b.push_back(gain * (T(-2) * std::cos(w0n)));
+        tf.b.push_back(gain * (T(-2) * crd::math::cos(w0n)));
         tf.b.push_back(gain * T(1));
     }
     else
@@ -645,7 +645,7 @@ template <typename T>
         tf.b.push_back(-(T(1) - gain));
     }
     tf.a.push_back(T(1));
-    tf.a.push_back(T(-2) * gain * std::cos(w0n));
+    tf.a.push_back(T(-2) * gain * crd::math::cos(w0n));
     tf.a.push_back(T(2) * gain - T(1));
     return tf;
 }
@@ -667,12 +667,12 @@ template <typename T>
 {
     const T pi = static_cast<T>(std::numbers::pi_v<double>);
     const T fs = T(2);
-    const auto nn = static_cast<crd::usize>(std::lround(static_cast<double>(fs / w0)));
+    const auto nn = static_cast<crd::usize>(crd::math::lround(static_cast<double>(fs / w0)));
     const T w0r = T(2) * pi * w0 / fs;
     const T w_delta = w0r / q;
     const T g0 = peak ? T(0) : T(1);
     const T g = peak ? T(1) : T(0);
-    const T beta = std::tan(static_cast<T>(nn) * w_delta / T(4));
+    const T beta = crd::math::tan(static_cast<T>(nn) * w_delta / T(4));
     const T ax = (T(1) - beta) / (T(1) + beta);
     const T bx = (g0 + g * beta) / (T(1) + beta);
     const T cx = (g0 - g * beta) / (T(1) + beta);

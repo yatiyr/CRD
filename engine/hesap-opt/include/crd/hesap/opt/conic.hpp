@@ -33,7 +33,7 @@
 #include <crd/hesap/opt/qp.hpp> // QpStatus + the detail mat-vec/inf-norm helpers + the LDLT factor seam
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 
 namespace crd::hesap::opt
 {
@@ -134,7 +134,7 @@ inline void project_cone(crd::containers::ConstSpan<ConeDesc> cones, crd::contai
                 {
                     wn += v[off + i] * v[off + i];
                 }
-                wn = std::sqrt(wn);
+                wn = crd::math::sqrt(wn);
                 const T t = v[off];
                 if (wn <= t)
                 {
@@ -207,7 +207,7 @@ template <typename T>
     T d = static_cast<T>(0);
     for (crd::usize i = 0; i < v.size(); ++i)
     {
-        const T a = std::fabs(v[i] - w[i]);
+        const T a = crd::math::fabs(v[i] - w[i]);
         d = a > d ? a : d;
     }
     return d;
@@ -401,10 +401,10 @@ template <typename T>
         T pscale = static_cast<T>(0);
         for (crd::usize i = 0; i < m; ++i)
         {
-            const T d = std::fabs(ax[i] - z[i]);
+            const T d = crd::math::fabs(ax[i] - z[i]);
             pres = d > pres ? d : pres;
-            const T s1 = std::fabs(ax[i]);
-            const T s2 = std::fabs(z[i]);
+            const T s1 = crd::math::fabs(ax[i]);
+            const T s2 = crd::math::fabs(z[i]);
             pscale = s1 > pscale ? s1 : pscale;
             pscale = s2 > pscale ? s2 : pscale;
         }
@@ -412,10 +412,10 @@ template <typename T>
         T dscale = static_cast<T>(0);
         for (crd::usize j = 0; j < n; ++j)
         {
-            const T d = std::fabs(prob.c[j] + aty[j]);
+            const T d = crd::math::fabs(prob.c[j] + aty[j]);
             dres = d > dres ? d : dres;
-            T s = std::fabs(prob.c[j]);
-            s = std::fabs(aty[j]) > s ? std::fabs(aty[j]) : s;
+            T s = crd::math::fabs(prob.c[j]);
+            s = crd::math::fabs(aty[j]) > s ? crd::math::fabs(aty[j]) : s;
             dscale = s > dscale ? s : dscale;
         }
         T ctx = static_cast<T>(0);
@@ -428,8 +428,8 @@ template <typename T>
         {
             bty += prob.b[i] * y[i];
         }
-        const T gap = std::fabs(ctx + bty);
-        const T gscale = std::fabs(ctx) > std::fabs(bty) ? std::fabs(ctx) : std::fabs(bty);
+        const T gap = crd::math::fabs(ctx + bty);
+        const T gscale = crd::math::fabs(ctx) > crd::math::fabs(bty) ? crd::math::fabs(ctx) : crd::math::fabs(bty);
         if (pres <= opts.eps_abs + opts.eps_rel * pscale && dres <= opts.eps_abs + opts.eps_rel * dscale &&
             gap <= opts.eps_abs + opts.eps_rel * gscale)
         {
@@ -443,7 +443,7 @@ template <typename T>
             T dy_norm = static_cast<T>(0);
             for (crd::usize i = 0; i < m; ++i)
             {
-                const T d = std::fabs(y[i] - y_prev[i]);
+                const T d = crd::math::fabs(y[i] - y_prev[i]);
                 dy_norm = d > dy_norm ? d : dy_norm;
             }
             if (dy_norm > static_cast<T>(0))
@@ -468,7 +468,7 @@ template <typename T>
             T dx_norm = static_cast<T>(0);
             for (crd::usize i = 0; i < n; ++i)
             {
-                const T d = std::fabs(x[i] - x_prev[i]);
+                const T d = crd::math::fabs(x[i] - x_prev[i]);
                 dx_norm = d > dx_norm ? d : dx_norm;
             }
             if (dx_norm > static_cast<T>(0))
@@ -503,7 +503,7 @@ template <typename T>
             const T dr = dres / (dscale > static_cast<T>(1e-30) ? dscale : static_cast<T>(1));
             if (pr > static_cast<T>(0) && dr > static_cast<T>(0))
             {
-                const T ratio = std::sqrt(pr / dr);
+                const T ratio = crd::math::sqrt(pr / dr);
                 if (ratio > static_cast<T>(5) || ratio < static_cast<T>(0.2))
                 {
                     T next = base_rho * ratio;
@@ -529,18 +529,18 @@ template <typename T>
     for (crd::usize j = 0; j < n; ++j)
     {
         obj += prob.c[j] * x[j];
-        const T d = std::fabs(prob.c[j] + aty[j]);
+        const T d = crd::math::fabs(prob.c[j] + aty[j]);
         result.dual_res = d > result.dual_res ? d : result.dual_res;
     }
     for (crd::usize i = 0; i < m; ++i)
     {
         result.s[i] = prob.b[i] - z[i];
-        const T d = std::fabs(ax[i] + result.s[i] - prob.b[i]);
+        const T d = crd::math::fabs(ax[i] + result.s[i] - prob.b[i]);
         result.primal_res = d > result.primal_res ? d : result.primal_res;
         bty += prob.b[i] * y[i];
     }
     result.obj = obj;
-    result.gap = std::fabs(obj + bty);
+    result.gap = crd::math::fabs(obj + bty);
     result.status = status;
     result.iterations = it;
     return result;

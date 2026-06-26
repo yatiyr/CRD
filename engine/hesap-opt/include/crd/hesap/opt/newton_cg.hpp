@@ -27,7 +27,7 @@
 #include <crd/hesap/opt/wolfe_line_search.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 
 namespace crd::hesap::opt
 {
@@ -65,7 +65,7 @@ template <typename T>
         T mx = static_cast<T>(0);
         for (crd::usize i = 0; i < w.size(); ++i)
         {
-            const T a = std::fabs(w[i]);
+            const T a = crd::math::fabs(w[i]);
             mx = a > mx ? a : mx;
         }
         return mx;
@@ -111,8 +111,8 @@ template <typename T>
         }
 
         // Inner CG on ∇²f·z = −g (N&W Alg 7.1): z₀ = 0, r₀ = g, d₀ = −g.
-        const T gnorm2 = std::sqrt(dn::dot<T>({g.data(), n}, {g.data(), n}));
-        const T eta = std::sqrt(gnorm2) < static_cast<T>(0.5) ? std::sqrt(gnorm2) : static_cast<T>(0.5);
+        const T gnorm2 = crd::math::sqrt(dn::dot<T>({g.data(), n}, {g.data(), n}));
+        const T eta = crd::math::sqrt(gnorm2) < static_cast<T>(0.5) ? crd::math::sqrt(gnorm2) : static_cast<T>(0.5);
         const T inner_tol = eta * gnorm2;
 
         for (crd::usize i = 0; i < n; ++i)
@@ -145,7 +145,7 @@ template <typename T>
                 r[i] += alpha * hd[i];
             }
             const T rr_new = dn::dot<T>({r.data(), n}, {r.data(), n});
-            if (std::sqrt(rr_new) <= inner_tol)
+            if (crd::math::sqrt(rr_new) <= inner_tol)
             {
                 break; // forcing test met — truncate
             }
@@ -180,11 +180,11 @@ template <typename T>
             x[i] = x_new[i];
             g[i] = g_new[i];
         }
-        const T df = std::fabs(lr.fx_new - fx);
+        const T df = crd::math::fabs(lr.fx_new - fx);
         fx = lr.fx_new;
         grad_norm = inf_nrm({g.data(), n});
 
-        const auto stop = check_convergence<T>(grad_norm, std::sqrt(step_norm_sq), df, inf_nrm({x, n}), fx, opts);
+        const auto stop = check_convergence<T>(grad_norm, crd::math::sqrt(step_norm_sq), df, inf_nrm({x, n}), fx, opts);
         if (stop.has_value())
         {
             status = *stop;

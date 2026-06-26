@@ -3,7 +3,7 @@
 #include <crd/core/types.hpp>
 #include <crd/hesap/complex.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::hesap::dense::detail
@@ -51,7 +51,7 @@ template <typename T>
         return w;
     }
     const T r = z / w;
-    return w * std::sqrt(T{1} + r * r);
+    return w * crd::math::sqrt(T{1} + r * r);
 }
 
 // make_householder — dlarfg-faithful. `x` is contiguous length `n` with
@@ -81,7 +81,7 @@ template <typename T>
         // H == I (the tail is already zero).
         return Householder<T>{T{0}, alpha0};
     }
-    T xnorm = std::sqrt(xnorm_sq);
+    T xnorm = crd::math::sqrt(xnorm_sq);
 
     T alpha = alpha0;
     T beta = -(alpha >= T{0} ? T{1} : T{-1}) * hypot2(alpha, xnorm);
@@ -112,7 +112,7 @@ template <typename T>
         {
             xnorm_sq += x[i] * x[i];
         }
-        xnorm = std::sqrt(xnorm_sq);
+        xnorm = crd::math::sqrt(xnorm_sq);
         beta = -(alpha >= T{0} ? T{1} : T{-1}) * hypot2(alpha, xnorm);
     }
 
@@ -177,7 +177,7 @@ template <typename R>
         // H == I (the tail is already zero and alpha is real).
         return HouseholderComplex<R>{C{R{0}, R{0}}, alphr};
     }
-    R beta = -(alphr >= R{0} ? R{1} : R{-1}) * std::sqrt(alphr * alphr + alphi * alphi + xnorm2);
+    R beta = -(alphr >= R{0} ? R{1} : R{-1}) * crd::math::sqrt(alphr * alphr + alphi * alphi + xnorm2);
     const R safmin = std::numeric_limits<R>::min() / std::numeric_limits<R>::epsilon();
     int knt = 0;
     if (std::abs(beta) < safmin)
@@ -200,7 +200,7 @@ template <typename R>
         {
             xnorm2 += x[k].re * x[k].re + x[k].im * x[k].im;
         }
-        beta = -(alphr >= R{0} ? R{1} : R{-1}) * std::sqrt(alphr * alphr + alphi * alphi + xnorm2);
+        beta = -(alphr >= R{0} ? R{1} : R{-1}) * crd::math::sqrt(alphr * alphr + alphi * alphi + xnorm2);
     }
     const C tau{(beta - alphr) / beta, -alphi / beta};
     const C denom{alphr - beta, alphi};  // alpha - beta (beta real)

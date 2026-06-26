@@ -37,7 +37,7 @@
 #include <crd/hesap/opt/qp_active_set.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::hesap::opt
@@ -81,7 +81,7 @@ template <typename T>
         T mx = static_cast<T>(0);
         for (crd::usize i = 0; i < v.size(); ++i)
         {
-            const T a = std::fabs(v[i]);
+            const T a = crd::math::fabs(v[i]);
             mx = a > mx ? a : mx;
         }
         return mx;
@@ -149,14 +149,14 @@ template <typename T>
             {
                 acc -= mu[i] * ji[i * n + j];
             }
-            const T a = std::fabs(acc);
+            const T a = crd::math::fabs(acc);
             st = a > st ? a : st;
         }
         stationarity_out = st;
         T worst = st;
         for (crd::usize i = 0; i < me; ++i)
         {
-            const T a = std::fabs(ce[i]);
+            const T a = crd::math::fabs(ce[i]);
             worst = a > worst ? a : worst;
         }
         for (crd::usize i = 0; i < mi; ++i)
@@ -165,7 +165,7 @@ template <typename T>
             worst = viol > worst ? viol : worst;
             const T dviol = mu[i] < static_cast<T>(0) ? -mu[i] : static_cast<T>(0);
             worst = dviol > worst ? dviol : worst;
-            const T comp = std::fabs(mu[i] * ci[i]);
+            const T comp = crd::math::fabs(mu[i] * ci[i]);
             worst = comp > worst ? comp : worst;
         }
         return worst;
@@ -464,7 +464,7 @@ template <typename T>
         kkt = kkt_max(stationarity);
 
         if (opts.step_tol > static_cast<T>(0) &&
-            std::sqrt(step_norm_sq) <= opts.step_tol * (static_cast<T>(1) + inf_nrm({x, n})))
+            crd::math::sqrt(step_norm_sq) <= opts.step_tol * (static_cast<T>(1) + inf_nrm({x, n})))
         {
             status = OptStatus::SmallStep;
             break;

@@ -39,7 +39,7 @@
 #include <crd/hesap/opt/kkt.hpp> // solve_kkt_dense (the polish + IPM saddle)
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::hesap::opt
@@ -126,7 +126,7 @@ template <typename T> [[nodiscard]] inline T qp_inf_norm(crd::containers::ConstS
     T mx = static_cast<T>(0);
     for (crd::usize i = 0; i < v.size(); ++i)
     {
-        const T a = std::fabs(v[i]);
+        const T a = crd::math::fabs(v[i]);
         mx = a > mx ? a : mx;
     }
     return mx;
@@ -151,7 +151,7 @@ inline void qp_finalize(const QpProblem<T>& prob, QpResult<T>& result, crd::memo
     for (crd::usize j = 0; j < prob.n; ++j)
     {
         obj += static_cast<T>(0.5) * result.x[j] * px[j] + prob.q[j] * result.x[j];
-        const T d = std::fabs(px[j] + prob.q[j] + aty[j]);
+        const T d = crd::math::fabs(px[j] + prob.q[j] + aty[j]);
         finite = finite && std::isfinite(d);
         dres = d > dres ? d : dres;
     }
@@ -159,7 +159,7 @@ inline void qp_finalize(const QpProblem<T>& prob, QpResult<T>& result, crd::memo
     for (crd::usize i = 0; i < prob.m; ++i)
     {
         const T zi = ax[i] < prob.l[i] ? prob.l[i] : (ax[i] > prob.u[i] ? prob.u[i] : ax[i]);
-        const T d = std::fabs(ax[i] - zi);
+        const T d = crd::math::fabs(ax[i] - zi);
         finite = finite && std::isfinite(d);
         pres = d > pres ? d : pres;
     }
@@ -338,10 +338,10 @@ template <typename T>
         T pscale = static_cast<T>(0);
         for (crd::usize i = 0; i < m; ++i)
         {
-            const T d = std::fabs(ax[i] - z[i]);
+            const T d = crd::math::fabs(ax[i] - z[i]);
             pres = d > pres ? d : pres;
-            const T s1 = std::fabs(ax[i]);
-            const T s2 = std::fabs(z[i]);
+            const T s1 = crd::math::fabs(ax[i]);
+            const T s2 = crd::math::fabs(z[i]);
             pscale = s1 > pscale ? s1 : pscale;
             pscale = s2 > pscale ? s2 : pscale;
         }
@@ -349,11 +349,11 @@ template <typename T>
         T dscale = static_cast<T>(0);
         for (crd::usize j = 0; j < n; ++j)
         {
-            const T d = std::fabs(px[j] + prob.q[j] + aty[j]);
+            const T d = crd::math::fabs(px[j] + prob.q[j] + aty[j]);
             dres = d > dres ? d : dres;
-            T s = std::fabs(px[j]);
-            s = std::fabs(prob.q[j]) > s ? std::fabs(prob.q[j]) : s;
-            s = std::fabs(aty[j]) > s ? std::fabs(aty[j]) : s;
+            T s = crd::math::fabs(px[j]);
+            s = crd::math::fabs(prob.q[j]) > s ? crd::math::fabs(prob.q[j]) : s;
+            s = crd::math::fabs(aty[j]) > s ? crd::math::fabs(aty[j]) : s;
             dscale = s > dscale ? s : dscale;
         }
         if (pres <= opts.eps_abs + opts.eps_rel * pscale && dres <= opts.eps_abs + opts.eps_rel * dscale)
@@ -368,7 +368,7 @@ template <typename T>
             T dy_norm = static_cast<T>(0);
             for (crd::usize i = 0; i < m; ++i)
             {
-                const T d = std::fabs(y[i] - y_prev[i]);
+                const T d = crd::math::fabs(y[i] - y_prev[i]);
                 dy_norm = d > dy_norm ? d : dy_norm;
             }
             if (dy_norm > static_cast<T>(0))
@@ -406,7 +406,7 @@ template <typename T>
             T dx_norm = static_cast<T>(0);
             for (crd::usize i = 0; i < n; ++i)
             {
-                const T d = std::fabs(x[i] - x_prev[i]);
+                const T d = crd::math::fabs(x[i] - x_prev[i]);
                 dx_norm = d > dx_norm ? d : dx_norm;
             }
             if (dx_norm > static_cast<T>(0))
@@ -432,7 +432,7 @@ template <typename T>
                     const T v = ax[i];
                     if (lf && uf)
                     {
-                        dir_ok = std::fabs(v) <= opts.eps_infeas;
+                        dir_ok = crd::math::fabs(v) <= opts.eps_infeas;
                     }
                     else if (uf)
                     {
@@ -459,7 +459,7 @@ template <typename T>
             const T dr = dres / (dscale > static_cast<T>(1e-30) ? dscale : static_cast<T>(1));
             if (pr > static_cast<T>(0) && dr > static_cast<T>(0))
             {
-                const T ratio = std::sqrt(pr / dr);
+                const T ratio = crd::math::sqrt(pr / dr);
                 if (ratio > static_cast<T>(5) || ratio < static_cast<T>(0.2))
                 {
                     T next = base_rho * ratio;
@@ -654,15 +654,15 @@ template <typename T>
             T nrm = static_cast<T>(0);
             for (crd::usize i = 0; i < n; ++i)
             {
-                const T v = std::fabs(ps[i * n + j]);
+                const T v = crd::math::fabs(ps[i * n + j]);
                 nrm = v > nrm ? v : nrm;
             }
             for (crd::usize k = 0; k < m; ++k)
             {
-                const T v = std::fabs(as[k * n + j]);
+                const T v = crd::math::fabs(as[k * n + j]);
                 nrm = v > nrm ? v : nrm;
             }
-            const T dj = clamp_scale(static_cast<T>(1) / std::sqrt(nrm > tiny ? nrm : static_cast<T>(1)));
+            const T dj = clamp_scale(static_cast<T>(1) / crd::math::sqrt(nrm > tiny ? nrm : static_cast<T>(1)));
             dvec[j] *= dj;
             qs[j] *= dj;
             for (crd::usize i = 0; i < n; ++i) // P̄ ← δ P̄ (column j), the row side comes from the i-sweep
@@ -680,10 +680,10 @@ template <typename T>
             T nrm = static_cast<T>(0);
             for (crd::usize j = 0; j < n; ++j)
             {
-                const T v = std::fabs(as[i * n + j]);
+                const T v = crd::math::fabs(as[i * n + j]);
                 nrm = v > nrm ? v : nrm;
             }
-            const T ei = clamp_scale(static_cast<T>(1) / std::sqrt(nrm > tiny ? nrm : static_cast<T>(1)));
+            const T ei = clamp_scale(static_cast<T>(1) / crd::math::sqrt(nrm > tiny ? nrm : static_cast<T>(1)));
             evec[i] *= ei;
             ls[i] *= ei;
             us[i] *= ei;
@@ -699,7 +699,7 @@ template <typename T>
             T nrm = static_cast<T>(0);
             for (crd::usize i = 0; i < n; ++i)
             {
-                const T v = std::fabs(ps[i * n + j]);
+                const T v = crd::math::fabs(ps[i * n + j]);
                 nrm = v > nrm ? v : nrm;
             }
             pmean += nrm;

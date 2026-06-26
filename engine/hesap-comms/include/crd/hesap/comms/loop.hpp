@@ -17,7 +17,7 @@
 #include <crd/core/types.hpp>
 #include <crd/hesap/complex.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <numbers>
 
 namespace crd::hesap::comms
@@ -66,18 +66,18 @@ public:
     void adjust_phase(T d) noexcept { m_phase = wrap(m_phase + d); }
     void adjust_frequency(T d) noexcept { m_freq += d; }
 
-    [[nodiscard]] Complex<T> exp_j() const noexcept { return Complex<T>{std::cos(m_phase), std::sin(m_phase)}; }
+    [[nodiscard]] Complex<T> exp_j() const noexcept { return Complex<T>{crd::math::cos(m_phase), crd::math::sin(m_phase)}; }
 
     // Mix a sample DOWN by the NCO (multiply by e^{-jφ}).
     [[nodiscard]] Complex<T> mix_down(Complex<T> x) const noexcept
     {
-        const T c = std::cos(m_phase), s = std::sin(m_phase);
+        const T c = crd::math::cos(m_phase), s = crd::math::sin(m_phase);
         return Complex<T>{x.re * c + x.im * s, -x.re * s + x.im * c};
     }
     // Mix UP (multiply by e^{+jφ}).
     [[nodiscard]] Complex<T> mix_up(Complex<T> x) const noexcept
     {
-        const T c = std::cos(m_phase), s = std::sin(m_phase);
+        const T c = crd::math::cos(m_phase), s = crd::math::sin(m_phase);
         return Complex<T>{x.re * c - x.im * s, x.re * s + x.im * c};
     }
 

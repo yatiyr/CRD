@@ -589,6 +589,20 @@ target_link_libraries(bench_hesap_eigen_lobpcg PRIVATE
 )
 crd_enable_default_pch(bench_hesap_eigen_lobpcg)
 
+add_executable(bench_multivariate examples/bench_multivariate.cpp)
+target_link_libraries(bench_multivariate PRIVATE
+    crd-core
+    crd-memory
+    crd-containers
+    crd-math
+    crd-jobs
+    crd-hesap
+    crd-hesap-dense
+    crd-hesap-special
+    crd-hesap-stats
+)
+crd_enable_default_pch(bench_multivariate)
+
 add_executable(bench_hesap_eigen_gen_lobpcg examples/bench_hesap_eigen_gen_lobpcg.cpp)
 target_link_libraries(bench_hesap_eigen_gen_lobpcg PRIVATE
     crd-core

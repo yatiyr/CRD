@@ -3,7 +3,7 @@
 #include <crd/core/types.hpp>
 
 #include <algorithm>
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::hesap::dense::detail
@@ -49,8 +49,8 @@ inline void dlartg(R f, R g, R& c, R& s, R& r) noexcept
 {
     const R safmin = std::numeric_limits<R>::min();
     const R safmax = std::numeric_limits<R>::max();
-    const R rtmin = std::sqrt(safmin);
-    const R rtmax = std::sqrt(safmax / R{2});
+    const R rtmin = crd::math::sqrt(safmin);
+    const R rtmax = crd::math::sqrt(safmax / R{2});
 
     const R f1 = std::abs(f);
     const R g1 = std::abs(g);
@@ -68,7 +68,7 @@ inline void dlartg(R f, R g, R& c, R& s, R& r) noexcept
     }
     else if (f1 > rtmin && f1 < rtmax && g1 > rtmin && g1 < rtmax)
     {
-        const R d = std::sqrt(f * f + g * g);
+        const R d = crd::math::sqrt(f * f + g * g);
         c = f1 / d;
         r = fsign(d, f);
         s = g / r;
@@ -78,7 +78,7 @@ inline void dlartg(R f, R g, R& c, R& s, R& r) noexcept
         const R u = std::min(safmax, std::max(safmin, std::max(f1, g1)));
         const R fs = f / u;
         const R gs = g / u;
-        const R d = std::sqrt(fs * fs + gs * gs);
+        const R d = crd::math::sqrt(fs * fs + gs * gs);
         c = std::abs(fs) / d;
         r = fsign(d, f);
         s = gs / r;
@@ -108,7 +108,7 @@ inline void dlas2(R f, R g, R h, R& ssmin, R& ssmax) noexcept
         else
         {
             const R rt = std::min(fhmx, ga) / std::max(fhmx, ga);
-            ssmax = std::max(fhmx, ga) * std::sqrt(R{1} + rt * rt);
+            ssmax = std::max(fhmx, ga) * crd::math::sqrt(R{1} + rt * rt);
         }
     }
     else if (ga < fhmx)
@@ -116,7 +116,7 @@ inline void dlas2(R f, R g, R h, R& ssmin, R& ssmax) noexcept
         const R as = R{1} + fhmn / fhmx;
         const R at = (fhmx - fhmn) / fhmx;
         const R au = (ga / fhmx) * (ga / fhmx);
-        const R cc = R{2} / (std::sqrt(as * as + au) + std::sqrt(at * at + au));
+        const R cc = R{2} / (crd::math::sqrt(as * as + au) + crd::math::sqrt(at * at + au));
         ssmin = fhmn * cc;
         ssmax = fhmx / cc;
     }
@@ -132,7 +132,7 @@ inline void dlas2(R f, R g, R h, R& ssmin, R& ssmax) noexcept
         {
             const R as = R{1} + fhmn / fhmx;
             const R at = (fhmx - fhmn) / fhmx;
-            const R cc = R{1} / (std::sqrt(R{1} + (as * au) * (as * au)) + std::sqrt(R{1} + (at * au) * (at * au)));
+            const R cc = R{1} / (crd::math::sqrt(R{1} + (as * au) * (as * au)) + crd::math::sqrt(R{1} + (at * au) * (at * au)));
             ssmin = ((fhmn * cc) * au) * R{2};
             ssmax = ga / (cc + cc);
         }
@@ -215,8 +215,8 @@ inline void dlasv2(R f, R g, R h, R& ssmin, R& ssmax, R& snr, R& csr, R& snl, R&
             R t = R{2} - l;
             const R mm = m * m;
             const R tt = t * t;
-            const R sv = std::sqrt(tt + mm);
-            const R rr = (l == R{0}) ? std::abs(m) : std::sqrt(l * l + mm);
+            const R sv = crd::math::sqrt(tt + mm);
+            const R rr = (l == R{0}) ? std::abs(m) : crd::math::sqrt(l * l + mm);
             const R a = R{0.5} * (sv + rr);
             ssmin = ha / a;
             ssmax = fa * a;
@@ -235,7 +235,7 @@ inline void dlasv2(R f, R g, R h, R& ssmin, R& ssmax, R& snr, R& csr, R& snl, R&
             {
                 t = (m / (sv + t) + m / (rr + l)) * (R{1} + a);
             }
-            l = std::sqrt(t * t + R{4});
+            l = crd::math::sqrt(t * t + R{4});
             crt = R{2} / l;
             srt = t / l;
             clt = (crt + srt * m) / a;
@@ -471,9 +471,9 @@ inline int dbdsqr(bool upper, int n, int ncvt, int nru, int ncc, R* d, R* e, R* 
     }
 
     // Convergence tolerance. TOLMUL = max(10, min(100, eps^(-1/8))); the
-    // eighth root of 1/eps is sqrt(sqrt(sqrt(.))) — avoids std::pow (and the
+    // eighth root of 1/eps is sqrt(sqrt(sqrt(.))) — avoids crd::math::pow (and the
     // no-std-math guard) while staying bit-faithful to LAPACK's intent.
-    const R tolmul = std::max(ten, std::min(hndrd, std::sqrt(std::sqrt(std::sqrt(one / eps)))));
+    const R tolmul = std::max(ten, std::min(hndrd, crd::math::sqrt(crd::math::sqrt(crd::math::sqrt(one / eps)))));
     const R tol = tolmul * eps;
 
     // Approximate max / min singular values.
@@ -504,7 +504,7 @@ inline int dbdsqr(bool upper, int n, int ncvt, int nru, int ncc, R* d, R* e, R* 
                 }
             }
         }
-        sminoa = sminoa / std::sqrt(static_cast<R>(n));
+        sminoa = sminoa / crd::math::sqrt(static_cast<R>(n));
         thresh = std::max(tol * sminoa, static_cast<R>(maxitr) * (static_cast<R>(n) * (static_cast<R>(n) * unfl)));
     }
     else

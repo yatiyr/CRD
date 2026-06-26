@@ -5,7 +5,7 @@
 #include <crd/renderer/mesh_resource.hpp>
 
 #include <algorithm>
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <numbers>
 
 namespace crd::meshgen
@@ -245,14 +245,14 @@ crd::renderer::MeshResource make_sphere(
     for (crd::u32 lat = 0; lat <= lat_bands; ++lat)
     {
         const F theta     = k_pi * static_cast<F>(lat) / static_cast<F>(lat_bands);
-        const F sin_theta = std::sin(theta);
-        const F cos_theta = std::cos(theta);
+        const F sin_theta = crd::math::sin(theta);
+        const F cos_theta = crd::math::cos(theta);
 
         for (crd::u32 lon = 0; lon <= lon_bands; ++lon)
         {
             const F phi     = 2.0F * k_pi * static_cast<F>(lon) / static_cast<F>(lon_bands);
-            const F sin_phi = std::sin(phi);
-            const F cos_phi = std::cos(phi);
+            const F sin_phi = crd::math::sin(phi);
+            const F cos_phi = crd::math::cos(phi);
 
             V v{};
             v.nrm[0] = cos_phi * sin_theta;
@@ -309,7 +309,7 @@ crd::renderer::MeshResource make_icosphere(
 
     auto add_pos = [&](float x, float y, float z) -> crd::u32
     {
-        const float len = std::sqrt(x*x + y*y + z*z);
+        const float len = crd::math::sqrt(x*x + y*y + z*z);
         const float inv = 1.0F / len;
         const crd::u32 idx = static_cast<crd::u32>(positions.size() / 3U);
         positions.push_back(x * inv);
@@ -414,7 +414,7 @@ crd::renderer::MeshResource make_icosphere(
             // Near poles: use world right
             tx = 1.0F; ty = 0.0F; tz = 0.0F;
         }
-        float tlen = std::sqrt(tx*tx + ty*ty + tz*tz);
+        float tlen = crd::math::sqrt(tx*tx + ty*ty + tz*tz);
         const float tinv = (tlen > 1e-6F) ? 1.0F / tlen : 1.0F;
         tx *= tinv; ty *= tinv; tz *= tinv;
 
@@ -423,8 +423,8 @@ crd::renderer::MeshResource make_icosphere(
         v.pos[1] = ny * radius;
         v.pos[2] = nz * radius;
         v.nrm[0] = nx; v.nrm[1] = ny; v.nrm[2] = nz;
-        v.uv[0]  = 0.5F + std::atan2(nz, nx) / (2.0F * std::numbers::pi_v<float>);
-        v.uv[1]  = 0.5F - std::asin(ny) / std::numbers::pi_v<float>;
+        v.uv[0]  = 0.5F + crd::math::atan2(nz, nx) / (2.0F * std::numbers::pi_v<float>);
+        v.uv[1]  = 0.5F - crd::math::asin(ny) / std::numbers::pi_v<float>;
         v.tan[0] = tx; v.tan[1] = ty; v.tan[2] = tz;
         v.tan[3] = 1.0F;
         push_v(mesh.vertices, v);
@@ -453,8 +453,8 @@ crd::renderer::MeshResource make_cylinder(
     for (crd::u32 j = 0; j <= segs; ++j)
     {
         const float phi     = 2.0F * k_pi * static_cast<float>(j) / static_cast<float>(segs);
-        const float cos_phi = std::cos(phi);
-        const float sin_phi = std::sin(phi);
+        const float cos_phi = crd::math::cos(phi);
+        const float sin_phi = crd::math::sin(phi);
         const float u       = static_cast<float>(j) / static_cast<float>(segs);
 
         // Bottom ring vertex
@@ -505,8 +505,8 @@ crd::renderer::MeshResource make_cylinder(
     for (crd::u32 j = 0; j <= segs; ++j)
     {
         const float phi = 2.0F * k_pi * static_cast<float>(j) / static_cast<float>(segs);
-        const float cp  = std::cos(phi);
-        const float sp  = std::sin(phi);
+        const float cp  = crd::math::cos(phi);
+        const float sp  = crd::math::sin(phi);
         V v{};
         v.pos[0] = radius * cp; v.pos[1] = -half_h; v.pos[2] = radius * sp;
         v.nrm[0] = 0.0F; v.nrm[1] = -1.0F; v.nrm[2] = 0.0F;
@@ -536,8 +536,8 @@ crd::renderer::MeshResource make_cylinder(
     for (crd::u32 j = 0; j <= segs; ++j)
     {
         const float phi = 2.0F * k_pi * static_cast<float>(j) / static_cast<float>(segs);
-        const float cp  = std::cos(phi);
-        const float sp  = std::sin(phi);
+        const float cp  = crd::math::cos(phi);
+        const float sp  = crd::math::sin(phi);
         V v{};
         v.pos[0] = radius * cp; v.pos[1] = half_h; v.pos[2] = radius * sp;
         v.nrm[0] = 0.0F; v.nrm[1] = 1.0F; v.nrm[2] = 0.0F;
@@ -568,7 +568,7 @@ crd::renderer::MeshResource make_cone(
     const float half_h = height * 0.5F;
 
     // Slant normal: (height, radius, 0) normalized (in XY plane at phi=0).
-    const float slant_len = std::sqrt(height * height + radius * radius);
+    const float slant_len = crd::math::sqrt(height * height + radius * radius);
     const float ny_slant  = radius / slant_len;  // Y component
     const float nr_slant  = height / slant_len;  // radial component
 
@@ -577,8 +577,8 @@ crd::renderer::MeshResource make_cone(
     for (crd::u32 j = 0; j <= segs; ++j)
     {
         const float phi = 2.0F * k_pi * static_cast<float>(j) / static_cast<float>(segs);
-        const float cp  = std::cos(phi);
-        const float sp  = std::sin(phi);
+        const float cp  = crd::math::cos(phi);
+        const float sp  = crd::math::sin(phi);
         const float u   = static_cast<float>(j) / static_cast<float>(segs);
 
         // Apex vertex
@@ -628,9 +628,9 @@ crd::renderer::MeshResource make_cone(
     {
         const float phi = 2.0F * k_pi * static_cast<float>(j) / static_cast<float>(segs);
         V v{};
-        v.pos[0] = radius * std::cos(phi); v.pos[1] = -half_h; v.pos[2] = radius * std::sin(phi);
+        v.pos[0] = radius * crd::math::cos(phi); v.pos[1] = -half_h; v.pos[2] = radius * crd::math::sin(phi);
         v.nrm[0] = 0.0F; v.nrm[1] = -1.0F; v.nrm[2] = 0.0F;
-        v.uv[0]  = 0.5F + 0.5F * std::cos(phi); v.uv[1] = 0.5F + 0.5F * std::sin(phi);
+        v.uv[0]  = 0.5F + 0.5F * crd::math::cos(phi); v.uv[1] = 0.5F + 0.5F * crd::math::sin(phi);
         v.tan[0] = 1.0F; v.tan[1] = 0.0F; v.tan[2] = 0.0F; v.tan[3] = 1.0F;
         push_v(m.vertices, v);
     }
@@ -661,14 +661,14 @@ crd::renderer::MeshResource make_capsule(
         for (crd::u32 ri = 0; ri <= ring_count; ++ri)
         {
             const float theta = theta_start + (theta_end - theta_start) * static_cast<float>(ri) / static_cast<float>(ring_count);
-            const float sin_t = std::sin(theta);
-            const float cos_t = std::cos(theta);
+            const float sin_t = crd::math::sin(theta);
+            const float cos_t = crd::math::cos(theta);
 
             for (crd::u32 j = 0; j <= segs; ++j)
             {
                 const float phi = 2.0F * k_pi * static_cast<float>(j) / static_cast<float>(segs);
-                const float cp  = std::cos(phi);
-                const float sp  = std::sin(phi);
+                const float cp  = crd::math::cos(phi);
+                const float sp  = crd::math::sin(phi);
 
                 V v{};
                 v.nrm[0] = cp * sin_t; v.nrm[1] = cos_t; v.nrm[2] = sp * sin_t;
@@ -743,14 +743,14 @@ crd::renderer::MeshResource make_torus(
     for (crd::u32 i = 0; i <= maj_segs; ++i)
     {
         const float phi = 2.0F * k_pi * static_cast<float>(i) / static_cast<float>(maj_segs);
-        const float cp  = std::cos(phi);
-        const float sp  = std::sin(phi);
+        const float cp  = crd::math::cos(phi);
+        const float sp  = crd::math::sin(phi);
 
         for (crd::u32 j = 0; j <= min_segs; ++j)
         {
             const float theta = 2.0F * k_pi * static_cast<float>(j) / static_cast<float>(min_segs);
-            const float ct    = std::cos(theta);
-            const float st    = std::sin(theta);
+            const float ct    = crd::math::cos(theta);
+            const float st    = crd::math::sin(theta);
 
             // Position
             const float px = (major_r + minor_r * ct) * cp;
@@ -767,7 +767,7 @@ crd::renderer::MeshResource make_torus(
             float tx = -sp * ring_r;
             float ty = 0.0F;
             float tz =  cp * ring_r;
-            const float tlen = std::sqrt(tx*tx + ty*ty + tz*tz);
+            const float tlen = crd::math::sqrt(tx*tx + ty*ty + tz*tz);
             const float tinv = (tlen > 1e-6F) ? 1.0F / tlen : 1.0F;
             tx *= tinv; tz *= tinv;
 

@@ -13,7 +13,7 @@
 #include <crd/hesap/dense/qr.hpp>
 
 #include <algorithm>
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 #include <type_traits>
 
@@ -987,7 +987,7 @@ Vector<RealType<T>> svdvals(crd::memory::IAllocator* alloc, const Matrix<T>& a_i
 
     const R eps = std::numeric_limits<R>::epsilon();
     const R safmin = std::numeric_limits<R>::min();
-    const R scale = std::sqrt(eps / safmin);
+    const R scale = crd::math::sqrt(eps / safmin);
     const R factor = scale / smax;
 
     // Compact qd array Z[1..2n-1] = (q1,e1,q2,e2,...,qn), squared + scaled.
@@ -1017,7 +1017,7 @@ Vector<RealType<T>> svdvals(crd::memory::IAllocator* alloc, const Matrix<T>& a_i
         for (crd::usize i = 0; i < nmin; ++i)
         {
             const R q = zz[static_cast<int>(i) + 1];
-            out.data()[i] = std::sqrt(q > R{0} ? q : R{0}) * unscale;
+            out.data()[i] = crd::math::sqrt(q > R{0} ? q : R{0}) * unscale;
         }
     }
     else
@@ -1076,7 +1076,7 @@ SVD<T> rsvd(crd::memory::IAllocator* alloc, const Matrix<T>& a_in, crd::usize ra
     MatrixView<const T, Layout::RowMajor> a_v{amat.data(), m, n, n};
 
     // Deterministic Gaussian Omega (n x ell) via sum-of-12 uniforms (CLT;
-    // avoids std::log/cos — adequate for a random range sketch).
+    // avoids crd::math::log/cos — adequate for a random range sketch).
     crd::containers::Array<T> omega(alloc);
     omega.resize(n * ell);
     crd::u64 st = seed;

@@ -30,7 +30,7 @@
 #include <crd/hesap/ode/solution.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::hesap::ode
@@ -117,7 +117,7 @@ template <typename T>
     const T direction = (t1 > t0) ? static_cast<T>(1) : static_cast<T>(-1);
     const T eps = std::numeric_limits<T>::epsilon();
     const T nt_lo = static_cast<T>(10) * eps / opts.rtol;
-    const T nt_hi = std::sqrt(opts.rtol) < static_cast<T>(0.03) ? std::sqrt(opts.rtol) : static_cast<T>(0.03);
+    const T nt_hi = crd::math::sqrt(opts.rtol) < static_cast<T>(0.03) ? crd::math::sqrt(opts.rtol) : static_cast<T>(0.03);
     const T newton_tol = nt_lo > nt_hi ? nt_lo : nt_hi;
     auto atol_i = [&opts](crd::usize i)
     {
@@ -182,7 +182,7 @@ template <typename T>
         {
             ytmp[i] = yy[i];
         }
-        const T sqrt_eps = std::sqrt(eps);
+        const T sqrt_eps = crd::math::sqrt(eps);
         for (crd::usize j = 0; j < n; ++j)
         {
             const T yj = ytmp[j];
@@ -228,7 +228,7 @@ template <typename T>
                 const T q = rhsv[i] / scale[i];
                 sum += q * q;
             }
-            const T dy_norm = std::sqrt(sum / static_cast<T>(n));
+            const T dy_norm = crd::math::sqrt(sum / static_cast<T>(n));
             const bool have_rate = dy_norm_old >= static_cast<T>(0);
             const T rate = have_rate ? dy_norm / dy_norm_old : static_cast<T>(0);
             if (have_rate && rate >= static_cast<T>(1))
@@ -280,8 +280,8 @@ template <typename T>
                 d0s += (y[i] / sc) * (y[i] / sc);
                 d1s += (fnode[i] / sc) * (fnode[i] / sc);
             }
-            const T d0 = std::sqrt(d0s / static_cast<T>(n));
-            const T d1 = std::sqrt(d1s / static_cast<T>(n));
+            const T d0 = crd::math::sqrt(d0s / static_cast<T>(n));
+            const T d1 = crd::math::sqrt(d1s / static_cast<T>(n));
             T h0_try = (d0 < static_cast<T>(1e-5) || d1 < static_cast<T>(1e-5)) ? static_cast<T>(1e-6)
                                                                                 : static_cast<T>(0.01) * d0 / d1;
             h0_try = h0_try < interval_length ? h0_try : interval_length;
@@ -300,7 +300,7 @@ template <typename T>
                 const T q = (f1 - fnode[i]) / sc;
                 d2s += q * q;
             }
-            const T d2 = std::sqrt(d2s / static_cast<T>(n)) / h0_try;
+            const T d2 = crd::math::sqrt(d2s / static_cast<T>(n)) / h0_try;
             T h1;
             if (d1 <= static_cast<T>(1e-15) && d2 <= static_cast<T>(1e-15))
             {
@@ -310,7 +310,7 @@ template <typename T>
             else
             {
                 const T dm = d1 > d2 ? d1 : d2;
-                h1 = std::pow(static_cast<T>(0.01) / dm,
+                h1 = crd::math::pow(static_cast<T>(0.01) / dm,
                               static_cast<T>(1) / static_cast<T>(desc.error_estimator_order + 1));
             }
             h_abs = static_cast<T>(100) * h0_try;
@@ -446,7 +446,7 @@ template <typename T>
                     atol_i(i) + opts.rtol * (std::abs(y[i]) > std::abs(ys[i]) ? std::abs(y[i]) : std::abs(ys[i]));
                 esum += (e_i / sk) * (e_i / sk);
             }
-            const T error_norm = std::sqrt(esum / static_cast<T>(n));
+            const T error_norm = crd::math::sqrt(esum / static_cast<T>(n));
 
             bool accept = false;
             const T factor = controller.update(error_norm, accept);

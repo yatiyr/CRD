@@ -7,7 +7,7 @@
 #include <crd/math/simd/vec4d.hpp>
 #include <crd/math/simd/vec8f.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <type_traits>
 
 namespace crd::hesap::dense
@@ -126,7 +126,7 @@ inline T sign_or_one(T x) noexcept
 template <typename T>
 inline T sqrt_value(T x) noexcept
 {
-    return std::sqrt(x);
+    return crd::math::sqrt(x);
 }
 
 // Unblocked Householder factor on the panel A[k:m, k:k+nb], performed on

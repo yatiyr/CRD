@@ -25,7 +25,7 @@
 #include <crd/hesap/opt/wolfe_line_search.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 
 namespace crd::hesap::opt
 {
@@ -60,7 +60,7 @@ template <typename T>
         T mx = static_cast<T>(0);
         for (crd::usize i = 0; i < w.size(); ++i)
         {
-            const T a = std::fabs(w[i]);
+            const T a = crd::math::fabs(w[i]);
             mx = a > mx ? a : mx;
         }
         return mx;
@@ -115,7 +115,7 @@ template <typename T>
         {
             const T d = h[i * n + i];
             mindiag = d < mindiag ? d : mindiag;
-            const T a = std::fabs(d);
+            const T a = crd::math::fabs(d);
             maxabsdiag = a > maxabsdiag ? a : maxabsdiag;
         }
         const T beta = static_cast<T>(1e-3) * (maxabsdiag > static_cast<T>(0) ? maxabsdiag : static_cast<T>(1));
@@ -170,11 +170,11 @@ template <typename T>
             x[i] = x_new[i];
             g[i] = g_new[i];
         }
-        const T df = std::fabs(r.fx_new - fx);
+        const T df = crd::math::fabs(r.fx_new - fx);
         fx = r.fx_new;
         grad_norm = inf_nrm({g.data(), n});
 
-        const auto stop = check_convergence<T>(grad_norm, std::sqrt(step_norm_sq), df, inf_nrm({x, n}), fx, opts);
+        const auto stop = check_convergence<T>(grad_norm, crd::math::sqrt(step_norm_sq), df, inf_nrm({x, n}), fx, opts);
         if (stop.has_value())
         {
             status = *stop;

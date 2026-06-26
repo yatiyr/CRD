@@ -27,7 +27,7 @@
 #include <crd/hesap/sparse/structural.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 
 namespace crd::hesap::opt
 {
@@ -95,7 +95,7 @@ template <typename T>
         T mx = static_cast<T>(0);
         for (crd::usize i = 0; i < len; ++i)
         {
-            const T a = std::fabs(v[i]);
+            const T a = crd::math::fabs(v[i]);
             mx = a > mx ? a : mx;
         }
         return mx;
@@ -263,7 +263,7 @@ template <typename T>
             lambda *= factor > lo ? factor : lo;
             nu = static_cast<T>(2);
             const T x_norm = inf_norm(x, n);
-            const auto stop = check_convergence<T>(grad_norm, std::sqrt(step_norm_sq), std::fabs(df), x_norm, cost,
+            const auto stop = check_convergence<T>(grad_norm, crd::math::sqrt(step_norm_sq), crd::math::fabs(df), x_norm, cost,
                                                    opts);
             if (stop.has_value())
             {

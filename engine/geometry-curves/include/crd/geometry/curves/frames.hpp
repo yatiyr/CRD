@@ -68,7 +68,7 @@
 #include <crd/math/vec.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 
 namespace crd::geometry::curves
 {
@@ -354,12 +354,12 @@ template <typename Curve>
             // step is theta * (k / n). Use Rodrigues with the angle's
             // n-th root via repeated rotation OR compute theta via atan2.
             //
-            // Use std::atan2 here — closure twist is a once-per-curve
+            // Use crd::math::atan2 here — closure twist is a once-per-curve
             // computation, not on the inner sampling hot path, and
             // visualisation tolerates ~1e-7 ULP variance across compilers
             // for this specific path. The per-step rotation below uses
             // crd::math::deterministic::sin/cos for portability.
-            const T theta = static_cast<T>(std::atan2(static_cast<double>(sin_t),
+            const T theta = static_cast<T>(crd::math::atan2(static_cast<double>(sin_t),
                                                        static_cast<double>(cos_t)));
             // Redistribute. Frame k in [0, n_samples - 1] rotates by
             // -theta * (k / n_samples) around its own tangent.

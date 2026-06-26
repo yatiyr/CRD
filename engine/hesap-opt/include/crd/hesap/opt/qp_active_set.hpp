@@ -22,7 +22,7 @@
 #include <crd/hesap/opt/qp.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::hesap::opt
@@ -149,7 +149,7 @@ template <typename T>
             }
             return result;
         }
-        d = std::sqrt(d);
+        d = crd::math::sqrt(d);
         lmat[j * n + j] = d;
         for (crd::usize i = j + 1; i < n; ++i)
         {
@@ -265,7 +265,7 @@ template <typename T>
         {
             const T cc = d[k - 1];
             const T ss = d[k];
-            const T h = std::sqrt(cc * cc + ss * ss);
+            const T h = crd::math::sqrt(cc * cc + ss * ss);
             if (h == static_cast<T>(0))
             {
                 continue;
@@ -282,7 +282,7 @@ template <typename T>
                 jat(i, k) = -s1 * t1 + c1 * t2;
             }
         }
-        if (std::fabs(d[iq]) < feas_tol * (static_cast<T>(1) + std::fabs(d[0])))
+        if (crd::math::fabs(d[iq]) < feas_tol * (static_cast<T>(1) + crd::math::fabs(d[0])))
         {
             return false; // the new normal is linearly dependent on the actives
         }
@@ -309,7 +309,7 @@ template <typename T>
         {
             const T cc = rfac[j * n + j];
             const T ss = rfac[(j + 1) * n + j];
-            const T h = std::sqrt(cc * cc + ss * ss);
+            const T h = crd::math::sqrt(cc * cc + ss * ss);
             if (h == static_cast<T>(0))
             {
                 continue;
@@ -356,9 +356,9 @@ template <typename T>
             zn += z[i] * cn[p * n + i];
         }
         const T sp = slack(p);
-        if (std::fabs(zn) < feas_tol)
+        if (crd::math::fabs(zn) < feas_tol)
         {
-            if (std::fabs(sp) > static_cast<T>(1e3) * feas_tol * (static_cast<T>(1) + std::fabs(c0[p])))
+            if (crd::math::fabs(sp) > static_cast<T>(1e3) * feas_tol * (static_cast<T>(1) + crd::math::fabs(c0[p])))
             {
                 result.status = QpStatus::PrimalInfeasible; // dependent + inconsistent equality
                 return result;
@@ -445,7 +445,7 @@ template <typename T>
                 zn += z[i] * cn[p * n + i];
                 znorm += z[i] * z[i];
             }
-            const bool z_zero = std::sqrt(znorm) < feas_tol;
+            const bool z_zero = crd::math::sqrt(znorm) < feas_tol;
             const T t2 = z_zero ? inf : -sp / zn;
             const T t = t1 < t2 ? t1 : t2;
 

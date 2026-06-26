@@ -34,6 +34,7 @@ target_link_libraries(crd-hesap-dsp
         crd-hesap
         crd-hesap-fft
         crd-hesap-eigen
+        crd-hesap-special  # v12 consolidation: canonical elliptic K/ellipj (was a local copy); SANITY rule 8
         crd-jobs   # v11-m: parallel batched FFT (Welch/STFT — many independent FFTs, per-job plans)
     PRIVATE
         crd-warnings

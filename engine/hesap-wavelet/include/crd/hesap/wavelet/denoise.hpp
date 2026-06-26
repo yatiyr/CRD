@@ -25,7 +25,7 @@
 #include <crd/memory/allocator.hpp>
 
 #include <algorithm>
-#include <cmath>
+#include <crd/math/cmath.hpp>
 
 namespace crd::hesap::wavelet
 {
@@ -91,7 +91,7 @@ template <typename T> [[nodiscard]] T mad_sigma(crd::memory::IAllocator* alloc, 
 // VisuShrink (universal) threshold: σ·√(2 ln N).
 template <typename T> [[nodiscard]] T universal_threshold(T sigma, crd::usize n) noexcept
 {
-    return sigma * static_cast<T>(std::sqrt(2.0 * std::log(static_cast<double>(n))));
+    return sigma * static_cast<T>(crd::math::sqrt(2.0 * crd::math::log(static_cast<double>(n))));
 }
 
 // BayesShrink per-subband threshold: σ²/σ_x, σ_x = √(max(var(subband)-σ², 0)). If σ_x → 0, threshold everything.
@@ -126,7 +126,7 @@ template <typename T> [[nodiscard]] T bayes_threshold(crd::containers::ConstSpan
         }
         return mx;
     }
-    return sig2 / std::sqrt(sx2);
+    return sig2 / crd::math::sqrt(sx2);
 }
 
 // SureShrink (Donoho-Johnstone) per-subband threshold: the hybrid that uses the universal threshold when the
@@ -140,7 +140,7 @@ template <typename T>
     {
         return T(0);
     }
-    const T uthr = static_cast<T>(std::sqrt(2.0 * std::log(static_cast<double>(n)))); // universal (normalized units)
+    const T uthr = static_cast<T>(crd::math::sqrt(2.0 * crd::math::log(static_cast<double>(n)))); // universal (normalized units)
     // sparsity test: if the normalized energy excess is small, the universal threshold is better than SURE.
     T s2 = T(0);
     for (crd::usize i = 0; i < n; ++i)
@@ -149,7 +149,7 @@ template <typename T>
         s2 += y * y;
     }
     const T eta = (s2 - static_cast<T>(n)) / static_cast<T>(n);
-    const T gamma = static_cast<T>(std::pow(std::log2(static_cast<double>(n)), 1.5) / std::sqrt(static_cast<double>(n)));
+    const T gamma = static_cast<T>(crd::math::pow(crd::math::log2(static_cast<double>(n)), 1.5) / crd::math::sqrt(static_cast<double>(n)));
     if (eta <= gamma)
     {
         return sigma * uthr;

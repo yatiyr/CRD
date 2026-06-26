@@ -21,7 +21,7 @@
 #include <crd/hesap/opt/line_search.hpp>
 #include <crd/hesap/opt/objective.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 
 namespace crd::hesap::opt
 {
@@ -74,7 +74,7 @@ public:
 
         const T curv_rhs = m_c2 * (m_strong ? -dphi0 : dphi0); // strong: c2·|φ'(0)|; weak: c2·φ'(0)
         auto curvature_ok = [&](T dphi_a) -> bool
-        { return m_strong ? (std::fabs(dphi_a) <= -m_c2 * dphi0) : (dphi_a >= curv_rhs); };
+        { return m_strong ? (crd::math::fabs(dphi_a) <= -m_c2 * dphi0) : (dphi_a >= curv_rhs); };
 
         // ---- zoom(α_lo, α_hi): the interval brackets a Wolfe point (φ(α_lo) is the lowest acceptable-Armijo end).
         auto zoom = [&](T a_lo, T phi_lo, T a_hi) -> LineSearchResult<T>

@@ -27,7 +27,7 @@
 #include <crd/hesap/opt/qp.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::hesap::opt
@@ -256,7 +256,7 @@ template <typename T>
         }
         resid[i] = -r; // the artificial must contribute exactly −r
         art_sign[i] = resid[i] >= static_cast<T>(0) ? static_cast<T>(1) : static_cast<T>(-1);
-        val[n + m + i] = std::fabs(resid[i]);
+        val[n + m + i] = crd::math::fabs(resid[i]);
     }
 
     // Basis = the artificials; explicit dense B⁻¹ (= diag(sign) initially, since B = diag(art_sign)).
@@ -295,10 +295,10 @@ template <typename T>
         for (crd::usize col = 0; col < m; ++col)
         {
             crd::usize piv = col;
-            T best = std::fabs(work[col * 2 * m + col]);
+            T best = crd::math::fabs(work[col * 2 * m + col]);
             for (crd::usize r = col + 1; r < m; ++r)
             {
-                const T a = std::fabs(work[r * 2 * m + col]);
+                const T a = crd::math::fabs(work[r * 2 * m + col]);
                 if (a > best)
                 {
                     best = a;

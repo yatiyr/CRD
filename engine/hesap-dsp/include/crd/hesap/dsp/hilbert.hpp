@@ -24,7 +24,7 @@
 #include <crd/hesap/fft/fft.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <numbers>
 
 namespace crd::hesap::dsp
@@ -134,7 +134,7 @@ template <typename T>
     e.resize(a.size());
     for (crd::usize i = 0; i < a.size(); ++i)
     {
-        e[i] = std::hypot(a[i].re, a[i].im);
+        e[i] = crd::math::hypot(a[i].re, a[i].im);
     }
     return e;
 }
@@ -152,7 +152,7 @@ template <typename T> void unwrap(T* p, crd::usize n) noexcept
     {
         const T raw = p[k];
         const T dd = raw - prev_raw;
-        T ddmod = std::fmod(dd + pi, two_pi);
+        T ddmod = crd::math::fmod(dd + pi, two_pi);
         if (ddmod < T(0))
         {
             ddmod += two_pi;
@@ -184,7 +184,7 @@ template <typename T>
     ph.resize(a.size());
     for (crd::usize i = 0; i < a.size(); ++i)
     {
-        ph[i] = std::atan2(a[i].im, a[i].re);
+        ph[i] = crd::math::atan2(a[i].im, a[i].re);
     }
     detail::unwrap<T>(ph.data(), ph.size());
     return ph;

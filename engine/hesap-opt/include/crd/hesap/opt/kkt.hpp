@@ -36,7 +36,7 @@
 #include <crd/hesap/opt/objective.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::hesap::opt
@@ -96,12 +96,12 @@ template <typename T>
         {
             acc -= mu[i] * ji[i * n + j];
         }
-        const T a = std::fabs(acc);
+        const T a = crd::math::fabs(acc);
         r.stationarity = a > r.stationarity ? a : r.stationarity;
     }
     for (crd::usize i = 0; i < me; ++i)
     {
-        const T a = std::fabs(ce[i]);
+        const T a = crd::math::fabs(ce[i]);
         r.primal = a > r.primal ? a : r.primal;
     }
     for (crd::usize i = 0; i < mi; ++i)
@@ -110,7 +110,7 @@ template <typename T>
         r.primal = viol > r.primal ? viol : r.primal;
         const T dviol = mu[i] < static_cast<T>(0) ? -mu[i] : static_cast<T>(0);
         r.dual = dviol > r.dual ? dviol : r.dual;
-        const T comp = std::fabs(mu[i] * ci[i]);
+        const T comp = crd::math::fabs(mu[i] * ci[i]);
         r.complementarity = comp > r.complementarity ? comp : r.complementarity;
     }
     return r;
@@ -228,12 +228,12 @@ template <typename T>
     T wscale = static_cast<T>(0);
     for (crd::usize i = 0; i < n; ++i)
     {
-        const T a = std::fabs(w[i * n + i]);
+        const T a = crd::math::fabs(w[i * n + i]);
         wscale = a > wscale ? a : wscale;
     }
     wscale = wscale > static_cast<T>(1) ? wscale : static_cast<T>(1);
     const T delta0 = static_cast<T>(1e-8) * wscale;
-    const T gamma0 = std::sqrt(std::numeric_limits<T>::epsilon()) * wscale;
+    const T gamma0 = crd::math::sqrt(std::numeric_limits<T>::epsilon()) * wscale;
 
     crd::containers::Array<T> rhs(alloc);
     rhs.resize(nk);

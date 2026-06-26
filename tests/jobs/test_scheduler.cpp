@@ -423,7 +423,7 @@ TEST_CASE("scheduler: push increments semaphore for wait_for_work", "[jobs][sche
     // Each wait_for_work() should return immediately (semaphore count = kCount).
     for (int i = 0; i < kCount; ++i)
     {
-        sched.wait_for_work();
+        sched.wait_for_work(0U);
     }
 
     // Jobs are still in the injection queue — drain them.
@@ -449,7 +449,7 @@ TEST_CASE("scheduler: push wakes blocked wait_for_work", "[jobs][scheduler]")
 
     std::thread waiter([&sched, &woke]()
     {
-        sched.wait_for_work(); // blocks until semaphore > 0
+        sched.wait_for_work(0U); // blocks until semaphore > 0
         woke.store(true, std::memory_order_release);
     });
 

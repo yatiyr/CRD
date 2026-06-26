@@ -13,7 +13,7 @@
 #include <crd/hesap/dense/matrix_types.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 
 namespace crd::hesap::dense
 {
@@ -59,7 +59,7 @@ inline T two_norm(crd::containers::ConstSpan<T> x) noexcept
     {
         s += x[i] * x[i];
     }
-    return std::sqrt(s);
+    return crd::math::sqrt(s);
 }
 } // namespace detail
 

@@ -33,7 +33,7 @@
 #include <crd/hesap/opt/opt_types.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 
 namespace crd::hesap::opt
 {
@@ -75,7 +75,7 @@ template <typename T>
         T mx = static_cast<T>(0);
         for (crd::usize i = 0; i < v.size(); ++i)
         {
-            const T a = std::fabs(v[i]);
+            const T a = crd::math::fabs(v[i]);
             mx = a > mx ? a : mx;
         }
         return mx;
@@ -126,7 +126,7 @@ template <typename T>
             {
                 acc -= lam[i] * je[i * n + j];
             }
-            const T a = std::fabs(acc);
+            const T a = crd::math::fabs(acc);
             st = a > st ? a : st;
         }
         stationarity_out = st;
@@ -274,7 +274,7 @@ template <typename T>
         kkt = kkt_max(stationarity);
 
         if (opts.step_tol > static_cast<T>(0) &&
-            std::sqrt(step_norm_sq) <= opts.step_tol * (static_cast<T>(1) + inf_nrm({x, n})))
+            crd::math::sqrt(step_norm_sq) <= opts.step_tol * (static_cast<T>(1) + inf_nrm({x, n})))
         {
             status = OptStatus::SmallStep;
             break;

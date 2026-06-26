@@ -8,7 +8,7 @@
 #include <crd/core/assert.hpp>
 #include <crd/math/scalar.hpp>
 
-#include <cmath>
+#include <crd/math/cmath.hpp>
 
 namespace crd::geometry::mesh
 {
@@ -28,9 +28,9 @@ inline crd::f32 solid_angle(const Vec3<crd::f32>& a,
                              const Vec3<crd::f32>& c) noexcept
 {
     // |a|, |b|, |c|
-    const crd::f32 la = std::sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
-    const crd::f32 lb = std::sqrt(b.x * b.x + b.y * b.y + b.z * b.z);
-    const crd::f32 lc = std::sqrt(c.x * c.x + c.y * c.y + c.z * c.z);
+    const crd::f32 la = crd::math::sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
+    const crd::f32 lb = crd::math::sqrt(b.x * b.x + b.y * b.y + b.z * b.z);
+    const crd::f32 lc = crd::math::sqrt(c.x * c.x + c.y * c.y + c.z * c.z);
 
     // Degenerate: p coincident with a vertex → 0 contribution from this
     // triangle (the surrounding triangles around the vertex provide the
@@ -52,7 +52,7 @@ inline crd::f32 solid_angle(const Vec3<crd::f32>& a,
     const crd::f32 ca = c.x * a.x + c.y * a.y + c.z * a.z;
     const crd::f32 denom = la * lb * lc + ab * lc + bc * la + ca * lb;
 
-    return 2.0F * std::atan2(num, denom);
+    return 2.0F * crd::math::atan2(num, denom);
 }
 
 } // namespace
