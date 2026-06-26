@@ -602,7 +602,9 @@ template <typename T>
                     do_scale(job, s);
                 }
             }
-        });
+            // the per-scale FFT recurses on this worker fiber; the default 64 KB Small stack overflows under ASan
+            // redzones (CI linux-gcc-asan, T1 stack-overflow) — Medium (512 KB) gives the recursion ample headroom.
+        }, crd::jobs::StackSize::Medium);
         crd::jobs::wait(c);
     }
     for (crd::u32 j = 0; j < njobs; ++j)

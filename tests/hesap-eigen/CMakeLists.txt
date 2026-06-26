@@ -30,4 +30,7 @@ target_link_libraries(crd-hesap-eigen-tests PRIVATE
 
 crd_enable_default_pch(crd-hesap-eigen-tests)
 
-catch_discover_tests(crd-hesap-eigen-tests)
+# The v6 determinism-moat tests sweep {1,2,4,8} threads x a full eigensolve -- slow but finite (they pass locally).
+# Give every eigen test generous headroom so the CI `ctest --timeout` default doesn't kill the slow moats (the
+# first-ever 18-config CI run surfaced these; eigen is not route-slowed -- it uses the select-tier sqrt = std::sqrt).
+catch_discover_tests(crd-hesap-eigen-tests PROPERTIES TIMEOUT 1200)

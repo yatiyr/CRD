@@ -100,8 +100,12 @@ template <typename T>
         {
             tmod += two_pi; // numpy mod ⇒ non-negative
         }
-        y[i] = (tmod < width * two_pi) ? (tmod / (pi * width) - T(1))
-                                       : ((pi * (width + T(1)) - tmod) / (pi * (T(1) - width)));
+        // falling-edge divisor pi·(1−width) is 0 only at width==1, where the first branch always wins (tmod<two_pi),
+        // so that path is unreachable — the guard makes MSVC's LTCG see no divide-by-0 (C4723) without changing values.
+        const T fall_denom = pi * (T(1) - width);
+        y[i] = (tmod < width * two_pi)
+                   ? (tmod / (pi * width) - T(1))
+                   : ((pi * (width + T(1)) - tmod) / (fall_denom != T(0) ? fall_denom : T(1)));
     }
     return y;
 }

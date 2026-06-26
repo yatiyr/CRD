@@ -191,13 +191,24 @@ jobs:
       - name: Add LLVM to PATH
         shell: pwsh
         run: |
-          $llvm = "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\Llvm\x64\bin"
-          if (-not (Test-Path $llvm)) {
-            $llvm = "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\Llvm\x64\bin"
+          # Locate clang-cl robustly across runner-image changes: the GitHub windows-latest image has trimmed the
+          # VS-bundled LLVM component (and shifts VS year/edition), which broke the old hard-coded
+          # `2022\{Enterprise,Community}\VC\Tools\Llvm\x64\bin` lookup. Prefer the VS-bundled LLVM for ANY VS
+          # year/edition, then fall back to the standalone C:\Program Files\LLVM (reliably present on the runner),
+          # then to whatever clang-cl is already on PATH (msvc-dev-cmd). Only fail if truly none is found.
+          $candidates = @()
+          $candidates += Get-ChildItem "C:\Program Files\Microsoft Visual Studio\*\*\VC\Tools\Llvm\x64\bin\clang-cl.exe" `
+                          -ErrorAction SilentlyContinue | ForEach-Object { $_.DirectoryName }
+          $candidates += "C:\Program Files\LLVM\bin"
+          $llvm = $candidates | Where-Object { $_ -and (Test-Path (Join-Path $_ "clang-cl.exe")) } | Select-Object -First 1
+          if (-not $llvm) {
+            $cmd = Get-Command clang-cl -ErrorAction SilentlyContinue
+            if ($cmd) { $llvm = Split-Path $cmd.Source }
           }
-          if (-not (Test-Path $llvm)) {
-            throw "clang-cl not found"
+          if (-not $llvm) {
+            throw "clang-cl not found (checked VS-bundled LLVM for all editions, C:\Program Files\LLVM, and PATH)"
           }
+          Write-Host "Using clang-cl at: $llvm"
           Add-Content -Path $env:GITHUB_PATH -Value $llvm
 
       - name: Cache Vulkan SDK
@@ -387,13 +398,24 @@ jobs:
       - name: Add LLVM to PATH
         shell: pwsh
         run: |
-          $llvm = "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\Llvm\x64\bin"
-          if (-not (Test-Path $llvm)) {
-            $llvm = "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\Llvm\x64\bin"
+          # Locate clang-cl robustly across runner-image changes: the GitHub windows-latest image has trimmed the
+          # VS-bundled LLVM component (and shifts VS year/edition), which broke the old hard-coded
+          # `2022\{Enterprise,Community}\VC\Tools\Llvm\x64\bin` lookup. Prefer the VS-bundled LLVM for ANY VS
+          # year/edition, then fall back to the standalone C:\Program Files\LLVM (reliably present on the runner),
+          # then to whatever clang-cl is already on PATH (msvc-dev-cmd). Only fail if truly none is found.
+          $candidates = @()
+          $candidates += Get-ChildItem "C:\Program Files\Microsoft Visual Studio\*\*\VC\Tools\Llvm\x64\bin\clang-cl.exe" `
+                          -ErrorAction SilentlyContinue | ForEach-Object { $_.DirectoryName }
+          $candidates += "C:\Program Files\LLVM\bin"
+          $llvm = $candidates | Where-Object { $_ -and (Test-Path (Join-Path $_ "clang-cl.exe")) } | Select-Object -First 1
+          if (-not $llvm) {
+            $cmd = Get-Command clang-cl -ErrorAction SilentlyContinue
+            if ($cmd) { $llvm = Split-Path $cmd.Source }
           }
-          if (-not (Test-Path $llvm)) {
-            throw "clang-cl not found"
+          if (-not $llvm) {
+            throw "clang-cl not found (checked VS-bundled LLVM for all editions, C:\Program Files\LLVM, and PATH)"
           }
+          Write-Host "Using clang-cl at: $llvm"
           Add-Content -Path $env:GITHUB_PATH -Value $llvm
 
       - name: Cache Vulkan SDK

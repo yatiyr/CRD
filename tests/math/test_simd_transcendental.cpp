@@ -16,7 +16,7 @@ using crd::f64;
 
 namespace
 {
-bool same_bits(f64 a, f64 b)
+[[maybe_unused]] bool same_bits(f64 a, f64 b) // used only by the AVX2-gated SIMD bit-identity checks (unused on SSE2)
 {
     std::uint64_t ba;
     std::uint64_t bb;
