@@ -52,6 +52,38 @@ inline constexpr double kZetaB[] = {1.0 / 12.0,
     }
     return sum;
 }
+
+// ζ'(s,a) = ∂/∂s ζ(s,a) — the same Euler-Maclaurin, differentiated term-by-term. d/ds (a+k)^{−s} = −log(a+k)(a+k)^{−s};
+// the Bernoulli terms (s)_{2k−1}·t^{−(s+2k−1)} pick up the Pochhammer log-derivative P_k = Σ_{j=0}^{2k−2} 1/(s+j) minus
+// log t. Used by Zipf's score (∂a logpmf = −log k − ζ'(a)/ζ(a)).
+[[nodiscard]] inline double hurwitz_zeta_prime_impl(double s, double a) noexcept
+{
+    constexpr int kDirect = 9;
+    double dsum = 0.0;
+    for (int k = 0; k < kDirect; ++k)
+    {
+        const double ak = a + k;
+        dsum -= crd::math::log(ak) * crd::math::pow(ak, -s); // −log(a+k)(a+k)^{−s}  (k=0,a=1 ⇒ 0)
+    }
+    const double t = a + kDirect;
+    const double lt = crd::math::log(t);
+    const double tpow = crd::math::pow(t, -s);
+    const double t1ms = t * tpow;                                                    // t^{1−s}
+    const double sm1 = s - 1.0;
+    dsum += -t1ms * (lt * sm1 + 1.0) / (sm1 * sm1);                                   // d/ds[t^{1−s}/(s−1)]
+    dsum += -0.5 * lt * tpow;                                                         // d/ds[½ t^{−s}]
+    double rf = s;                                                                    // (s)_{2k−1}
+    double tp = crd::math::pow(t, -(s + 1.0));                                        // t^{−(s+1)}
+    double pk = 1.0 / s;                                                              // P_1 = Σ_{j=0}^{0} 1/(s+j)
+    for (int k = 1; k <= 8; ++k)
+    {
+        dsum += kZetaB[k - 1] * rf * tp * (pk - lt);
+        rf *= (s + 2.0 * k - 1.0) * (s + 2.0 * k);
+        tp /= (t * t);
+        pk += 1.0 / (s + 2.0 * k - 1.0) + 1.0 / (s + 2.0 * k);                        // P_{k+1}
+    }
+    return dsum;
+}
 } // namespace detail
 
 template <Real T>
@@ -75,6 +107,13 @@ template <Real T>
         return static_cast<T>(detail::horner_t(detail::kZetaR2P, t) / detail::horner_t(detail::kZetaR2Q, t));
     }
     return static_cast<T>(detail::hurwitz_zeta_impl(sd, 1.0)); // s<1.8, s>16, functional-equation region
+}
+
+// ζ'(s) = dζ/ds. Euler-Maclaurin (no Horner fast-path — minimax-ζ fits are not derivative-accurate). For s>1.
+template <Real T>
+[[nodiscard]] T riemann_zeta_prime(T s) noexcept
+{
+    return static_cast<T>(detail::hurwitz_zeta_prime_impl(static_cast<double>(s), 1.0));
 }
 
 } // namespace crd::hesap::special

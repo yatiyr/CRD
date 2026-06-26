@@ -169,6 +169,23 @@ public:
     }
     [[nodiscard]] T pdf(crd::containers::Span<const T> x) const noexcept { return crd::math::exp(logpdf(x)); }
 
+    // v12-l: ∇_x log p = −Σ⁻¹(x−μ) — the HMC gradient, via the cached Cholesky (spd_solve = Lᵀ\(L\b)).
+    // grad.size() must equal dim(). Pure raw f64 hot path (ADR-0078).
+    void dlogpdf_dx(crd::containers::Span<const T> x, crd::containers::Span<T> grad) const noexcept
+    {
+        T b[detail::kMvMaxDim];
+        T scratch[detail::kMvMaxDim];
+        for (crd::usize i = 0; i < m_k; ++i)
+        {
+            b[i] = x[i] - m_mean[i];
+        }
+        detail::spd_solve<T>(m_l.data(), m_k, b, grad.data(), scratch);
+        for (crd::usize i = 0; i < m_k; ++i)
+        {
+            grad[i] = -grad[i];
+        }
+    }
+
     [[nodiscard]] T entropy() const noexcept
     {
         return static_cast<T>(0.5) * static_cast<T>(m_k) * (static_cast<T>(1) + detail::kLn2Pi<T>) +
@@ -243,6 +260,24 @@ public:
         const T q = detail::forward_quadform<T>(m_l.data(), m_k, b, y);
         // log(1+q/ν): the argument ≥ 1 (q≥0) ⇒ no cancellation, so plain log matches log1p to f64 but is ~3× faster.
         return m_lognorm - static_cast<T>(0.5) * (m_df + static_cast<T>(m_k)) * crd::math::log(static_cast<T>(1) + q / m_df);
+    }
+
+    // v12-l: ∇_x log p = −(ν+k)/(ν+q)·Σ⁻¹(x−μ),  q = (x−μ)ᵀΣ⁻¹(x−μ) — the HMC gradient for the heavy-tailed prior.
+    void dlogpdf_dx(crd::containers::Span<const T> x, crd::containers::Span<T> grad) const noexcept
+    {
+        T b[detail::kMvMaxDim];
+        T scratch[detail::kMvMaxDim];
+        for (crd::usize i = 0; i < m_k; ++i)
+        {
+            b[i] = x[i] - m_loc[i];
+        }
+        const T q = detail::forward_quadform<T>(m_l.data(), m_k, b, scratch);
+        detail::spd_solve<T>(m_l.data(), m_k, b, grad.data(), scratch);
+        const T c = -(m_df + static_cast<T>(m_k)) / (m_df + q);
+        for (crd::usize i = 0; i < m_k; ++i)
+        {
+            grad[i] = c * grad[i];
+        }
     }
     [[nodiscard]] T pdf(crd::containers::Span<const T> x) const noexcept { return crd::math::exp(logpdf(x)); }
 

@@ -8,6 +8,8 @@ add_executable(crd-hesap-stats-tests
     test_discrete.cpp
     test_heavy.cpp
     test_multivariate.cpp
+    test_log_density_grad.cpp
+    test_descriptive.cpp
 )
 
 target_link_libraries(crd-hesap-stats-tests PRIVATE
