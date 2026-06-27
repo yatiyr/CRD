@@ -9,6 +9,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include <cmath>
+#include <cstdio> // TEMP: WPT_MARK CI diagnostic (stderr pinpoint)
 #include <cstring>
 
 namespace wv = crd::hesap::wavelet;
@@ -17,6 +18,16 @@ using crd::f64;
 using crd::usize;
 using Catch::Matchers::WithinAbs;
 using Mode = wv::SignalExtensionMode;
+
+// TEMP CI diagnostic — pinpoint the wpt SegFault op on VS2022 /O2+LTCG. stderr is unbuffered ⇒ the last WPT-MARK line
+// printed before the crash names the faulting operation. Remove once the win-release/shipping miscompile is localized.
+// NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
+#define WPT_MARK(s)                                                                                                    \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        (void)std::fputs("WPT-MARK: " s "\n", stderr);                                                                \
+        (void)std::fflush(stderr);                                                                                     \
+    } while (false)
 
 namespace
 {
@@ -88,7 +99,9 @@ TEST_CASE("wpt: node coefficients vs pywt + reconstruction + best basis", "[v11w
 
     {
         const auto w = wv::wavelet_by_name("db2");
+        WPT_MARK("db2: ctor begin");
         wv::WaveletPacket<f64> wp(&alloc, xs, *w, Mode::Periodization, 3);
+        WPT_MARK("db2: ctor done (nodes begin)");
         CHECK_WP_NODE(db2, a);
         CHECK_WP_NODE(db2, d);
         CHECK_WP_NODE(db2, aa);
@@ -98,8 +111,10 @@ TEST_CASE("wpt: node coefficients vs pywt + reconstruction + best basis", "[v11w
         CHECK_WP_NODE(db2, aaa);
         CHECK_WP_NODE(db2, ddd);
         CHECK_WP_NODE(db2, ada);
+        WPT_MARK("db2: nodes done (reconstruct begin)");
         // reconstruction round trip
         const auto r = wp.reconstruct(&alloc, *w);
+        WPT_MARK("db2: reconstruct done");
         REQUIRE(r.size() == xs.size());
         for (usize i = 0; i < xs.size(); ++i)
         {
@@ -109,7 +124,9 @@ TEST_CASE("wpt: node coefficients vs pywt + reconstruction + best basis", "[v11w
         // best basis: optimal cost <= the full deepest-level cost (a fixed basis).
         cont::Array<usize> lv(&alloc);
         cont::Array<usize> ix(&alloc);
+        WPT_MARK("db2: best_basis begin");
         const f64 best = wp.best_basis(&alloc, lv, ix);
+        WPT_MARK("db2: best_basis done");
         REQUIRE(lv.size() == ix.size());
         REQUIRE(lv.size() >= 1);
         f64 level3_cost = 0.0;
@@ -123,15 +140,19 @@ TEST_CASE("wpt: node coefficients vs pywt + reconstruction + best basis", "[v11w
             }
             level3_cost += wv::shannon_entropy_cost<f64>(wp.node(cont::StringView(path, 3)));
         }
+        WPT_MARK("db2: level3 cost loop done");
         CHECK(best <= level3_cost + 1e-9); // best-basis is optimal by construction
     }
 
     {
         const auto w = wv::wavelet_by_name("sym3");
+        WPT_MARK("sym3: ctor begin");
         wv::WaveletPacket<f64> wp(&alloc, xs, *w, Mode::Periodization, 3);
+        WPT_MARK("sym3: ctor done (nodes begin)");
         CHECK_WP_NODE(sym3, a);
         CHECK_WP_NODE(sym3, dd);
         CHECK_WP_NODE(sym3, ddd);
+        WPT_MARK("sym3: nodes done (test end)");
     }
 #undef CHECK_WP_NODE
 }

@@ -24,6 +24,7 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
+#include <crd/core/platform.hpp> // CRD_NOINLINE
 #include <crd/core/types.hpp>
 #include <crd/hesap/wavelet/families.hpp>
 #include <crd/memory/allocator.hpp>
@@ -206,9 +207,12 @@ namespace detail
 // ascending-contiguous: out[i] = Σ_j rfilt[j] · x[base+j], base = 2i+2-F. The interior (where the whole window is
 // in [0,N)) runs branch-free (the hot, vectorizable path, like the resample_poly reversed bank); only the few left/
 // right edge outputs pay the boundary cost. This is what closes the ~8× gap vs pywt's split convolution.
+// CRD_NOINLINE: VS2022 (MSVC 14.4x) /O2+LTCG miscompiles this hot kernel when fused into its caller (a deterministic
+// SegFault in the wpt test on win-release/shipping; VS2026/gcc compile it correctly). Forcing standalone codegen is
+// the engine's documented LTCG remedy and costs nothing here — the vectorized inner loop is unchanged.
 template <typename T>
-void downsampling_convolution(const T* x, crd::usize n, crd::containers::ConstSpan<T> rfilt,
-                              SignalExtensionMode mode, T* out, crd::usize out_len) noexcept
+CRD_NOINLINE void downsampling_convolution(const T* x, crd::usize n, crd::containers::ConstSpan<T> rfilt,
+                                           SignalExtensionMode mode, T* out, crd::usize out_len) noexcept
 {
     const crd::isize ni = static_cast<crd::isize>(n);
     const crd::isize f = static_cast<crd::isize>(rfilt.size());
@@ -240,8 +244,9 @@ void downsampling_convolution(const T* x, crd::usize n, crd::containers::ConstSp
 // i in [0, ceil(n/2)). ODD n pads to even ne=n+1 by REPEATING the last sample (pywt-matched, probed); even n: ne=n.
 // Interior outputs (window inside [0,N)) run branch-free; only wrap-around edges pay the mod.
 template <typename T>
-void downsampling_convolution_periodization(const T* x, crd::usize n, crd::containers::ConstSpan<T> rfilt, T* out,
-                                            crd::usize out_len) noexcept
+CRD_NOINLINE void downsampling_convolution_periodization(const T* x, crd::usize n,
+                                                         crd::containers::ConstSpan<T> rfilt, T* out,
+                                                         crd::usize out_len) noexcept
 {
     const crd::isize ni = static_cast<crd::isize>(n);
     const crd::isize ne = (n % 2 == 0) ? ni : ni + 1;
@@ -321,8 +326,8 @@ namespace detail
 // Upsampling convolution accumulator for IDWT: y += full_conv(upsample2(c), rec), trimmed to the central region.
 // y has length out_len = 2·m - F + 2 (standard) or 2·m (periodization). c has length m, rec length F.
 template <typename T>
-void upsampling_convolution_add(const T* c, crd::usize m, crd::containers::ConstSpan<T> rec, T* y,
-                                crd::usize out_len, bool periodization) noexcept
+CRD_NOINLINE void upsampling_convolution_add(const T* c, crd::usize m, crd::containers::ConstSpan<T> rec, T* y,
+                                             crd::usize out_len, bool periodization) noexcept
 {
     const crd::isize f = static_cast<crd::isize>(rec.size());
     const crd::isize mi = static_cast<crd::isize>(m);

@@ -403,7 +403,7 @@ TEST_CASE("TLSF exact-fit-to-tail alloc/free does not corrupt the free list (ini
     TlsfAllocator a{buffer, cap};
 
     // Largest single block the pool can serve right now (each probe allocates then frees ⇒ state restored).
-    auto largest_serviceable = [&a, cap]() -> crd::usize
+    auto largest_serviceable = [&a]() -> crd::usize // `cap` is constexpr ⇒ usable without capture (clang-cl -Wunused-lambda-capture)
     {
         crd::usize lo = 0U;
         crd::usize hi = cap;
