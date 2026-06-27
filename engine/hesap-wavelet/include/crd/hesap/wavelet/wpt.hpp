@@ -132,32 +132,26 @@ public:
             split[id] = 0;
         }
         wpt_dbg("WPT-MARK: bb: leaf loop done"); // TEMP wpt-debug
-        // upward: compare own cost vs children's best total.
-        // NB: written as l = maxlevel..1 with level = l-1, NOT the `level-- > 0` reverse idiom. MSVC 19.51/14.51
-        // (/O2+LTCG) miscompiles that unsigned-underflow idiom here — it runs one extra iteration with level==SIZE_MAX,
-        // making count = 1<<(SIZE_MAX&63) = 1<<63 and indexing m_nodes/best out of bounds → SegFault. See docs/SANITY.md.
-        for (crd::usize l = m_maxlevel; l > 0; --l)
+        // upward: process internal nodes bottom-up by heap id (children 2*id+1, 2*id+2 are deeper, already computed).
+        // Iterating by id deliberately avoids the inline `1 << level` count: MSVC 19.51/14.51 (/O2+LTCG) miscompiled
+        // that shift here to a garbage value (~a stack address), so the inner loop ran ~1e14 times -> OOB -> SegFault.
+        // See docs/SANITY.md.
+        const crd::usize internal_count = total - leaf_count;
+        for (crd::usize k = internal_count; k > 0; --k)
         {
-            const crd::usize level = l - 1;
-            const crd::usize count = crd::usize{1} << level;
-            wpt_dbg_n2("bb: outer level/count", level, count); // TEMP wpt-debug
-            for (crd::usize idx = 0; idx < count; ++idx)
+            const crd::usize id = k - 1;
+            wpt_dbg("WPT-MARK: bb: up cost"); // TEMP wpt-debug
+            const T own = node_cost(id);
+            const T child = best[2 * id + 1] + best[2 * id + 2];
+            if (own <= child)
             {
-                const crd::usize id = node_id(level, idx);
-                wpt_dbg("WPT-MARK: bb: up cost"); // TEMP wpt-debug
-                const T own = node_cost(id);
-                wpt_dbg("WPT-MARK: bb: up reads"); // TEMP wpt-debug
-                const T child = best[node_id(level + 1, 2 * idx)] + best[node_id(level + 1, 2 * idx + 1)];
-                if (own <= child)
-                {
-                    best[id] = own;
-                    split[id] = 0;
-                }
-                else
-                {
-                    best[id] = child;
-                    split[id] = 1;
-                }
+                best[id] = own;
+                split[id] = 0;
+            }
+            else
+            {
+                best[id] = child;
+                split[id] = 1;
             }
         }
         wpt_dbg("WPT-MARK: bb: upward loop done"); // TEMP wpt-debug
