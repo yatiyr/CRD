@@ -39,6 +39,13 @@ inline void wpt_dbg(const char* s) noexcept
     std::fputc('\n', stderr);
     std::fflush(stderr);
 }
+// TEMP wpt-debug: numeric marker (loop variable values). Remove at closeout.
+inline void wpt_dbg_n2(const char* s, crd::usize a, crd::usize b) noexcept
+{
+    std::fprintf(stderr, "WPT-MARK: %s a=%llu b=%llu\n", s, static_cast<unsigned long long>(a),
+                 static_cast<unsigned long long>(b));
+    std::fflush(stderr);
+}
 
 // Additive Shannon entropy cost (MATLAB wentropy 'shannon'): -Σ s²·log(s²), with 0·log0 := 0. Additive across
 // a partition ⇒ usable for best-basis. Lower = more concentrated (a better basis for the data).
@@ -115,6 +122,7 @@ public:
         best.resize(total);
         split.resize(total);
         wpt_dbg("WPT-MARK: bb: arrays sized"); // TEMP wpt-debug
+        wpt_dbg_n2("bb: sizes total/maxlevel", total, m_maxlevel); // TEMP wpt-debug
         // bottom level: keep the leaves.
         const crd::usize leaf_count = crd::usize{1} << m_maxlevel;
         for (crd::usize idx = 0; idx < leaf_count; ++idx)
@@ -132,6 +140,7 @@ public:
         {
             const crd::usize level = l - 1;
             const crd::usize count = crd::usize{1} << level;
+            wpt_dbg_n2("bb: outer level/count", level, count); // TEMP wpt-debug
             for (crd::usize idx = 0; idx < count; ++idx)
             {
                 const crd::usize id = node_id(level, idx);
