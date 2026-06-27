@@ -125,8 +125,12 @@ public:
         }
         wpt_dbg("WPT-MARK: bb: leaf loop done"); // TEMP wpt-debug
         // upward: compare own cost vs children's best total.
-        for (crd::usize level = m_maxlevel; level-- > 0;)
+        // NB: written as l = maxlevel..1 with level = l-1, NOT the `level-- > 0` reverse idiom. MSVC 19.51/14.51
+        // (/O2+LTCG) miscompiles that unsigned-underflow idiom here — it runs one extra iteration with level==SIZE_MAX,
+        // making count = 1<<(SIZE_MAX&63) = 1<<63 and indexing m_nodes/best out of bounds → SegFault. See docs/SANITY.md.
+        for (crd::usize l = m_maxlevel; l > 0; --l)
         {
+            const crd::usize level = l - 1;
             const crd::usize count = crd::usize{1} << level;
             for (crd::usize idx = 0; idx < count; ++idx)
             {
@@ -173,8 +177,9 @@ public:
             }
             cur.push_back(std::move(a));
         }
-        for (crd::usize level = m_maxlevel; level-- > 0;)
+        for (crd::usize l = m_maxlevel; l > 0; --l) // see best_basis: avoid the MSVC-miscompiled `level-- > 0` idiom
         {
+            const crd::usize level = l - 1;
             const crd::usize count = crd::usize{1} << level;
             crd::containers::Array<crd::containers::Array<T>> next(alloc);
             next.reserve(count);
