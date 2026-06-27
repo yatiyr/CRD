@@ -19,6 +19,7 @@
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
 #include <crd/containers/string_view.hpp>
+#include <crd/core/platform.hpp> // CRD_NOINLINE
 #include <crd/core/types.hpp>
 #include <crd/hesap/wavelet/dwt.hpp>
 #include <crd/hesap/wavelet/families.hpp>
@@ -41,7 +42,7 @@ inline void wpt_dbg(const char* s) noexcept
 
 // Additive Shannon entropy cost (MATLAB wentropy 'shannon'): -Σ s²·log(s²), with 0·log0 := 0. Additive across
 // a partition ⇒ usable for best-basis. Lower = more concentrated (a better basis for the data).
-template <typename T> [[nodiscard]] T shannon_entropy_cost(crd::containers::ConstSpan<T> s) noexcept
+template <typename T> [[nodiscard]] CRD_NOINLINE T shannon_entropy_cost(crd::containers::ConstSpan<T> s) noexcept
 {
     T cost = T(0);
     for (crd::usize i = 0; i < s.size(); ++i)
@@ -130,7 +131,9 @@ public:
             for (crd::usize idx = 0; idx < count; ++idx)
             {
                 const crd::usize id = node_id(level, idx);
+                wpt_dbg("WPT-MARK: bb: up cost"); // TEMP wpt-debug
                 const T own = node_cost(id);
+                wpt_dbg("WPT-MARK: bb: up reads"); // TEMP wpt-debug
                 const T child = best[node_id(level + 1, 2 * idx)] + best[node_id(level + 1, 2 * idx + 1)];
                 if (own <= child)
                 {
