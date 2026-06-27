@@ -26,8 +26,18 @@
 
 #include <crd/math/cmath.hpp>
 
+#include <cstdio> // TEMP wpt-debug: stderr pinpoint markers (remove together with the wpt_dbg calls below)
+
 namespace crd::hesap::wavelet
 {
+
+// TEMP wpt-debug: flushed-stderr pinpoint marker for the VS2022 14.51 /O2+LTCG best_basis SegFault. Remove at closeout.
+inline void wpt_dbg(const char* s) noexcept
+{
+    std::fputs(s, stderr);
+    std::fputc('\n', stderr);
+    std::fflush(stderr);
+}
 
 // Additive Shannon entropy cost (MATLAB wentropy 'shannon'): -Σ s²·log(s²), with 0·log0 := 0. Additive across
 // a partition ⇒ usable for best-basis. Lower = more concentrated (a better basis for the data).
@@ -103,6 +113,7 @@ public:
         crd::containers::Array<crd::u8> split(alloc); // 1 = use children, 0 = keep this node
         best.resize(total);
         split.resize(total);
+        wpt_dbg("WPT-MARK: bb: arrays sized"); // TEMP wpt-debug
         // bottom level: keep the leaves.
         const crd::usize leaf_count = crd::usize{1} << m_maxlevel;
         for (crd::usize idx = 0; idx < leaf_count; ++idx)
@@ -111,6 +122,7 @@ public:
             best[id] = node_cost(id);
             split[id] = 0;
         }
+        wpt_dbg("WPT-MARK: bb: leaf loop done"); // TEMP wpt-debug
         // upward: compare own cost vs children's best total.
         for (crd::usize level = m_maxlevel; level-- > 0;)
         {
@@ -132,9 +144,12 @@ public:
                 }
             }
         }
+        wpt_dbg("WPT-MARK: bb: upward loop done"); // TEMP wpt-debug
         out_levels.clear();
         out_indices.clear();
+        wpt_dbg("WPT-MARK: bb: collect begin"); // TEMP wpt-debug
         collect_basis(0, 0, split, out_levels, out_indices);
+        wpt_dbg("WPT-MARK: bb: collect done"); // TEMP wpt-debug
         return best[0];
     }
 
