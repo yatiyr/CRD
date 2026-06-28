@@ -107,6 +107,24 @@
   "Honest about losing" is the start of the work, not the end of it. Beating Boost means doing what Boost does
   (minimax rationals, Fritsch/Halley with a good seed) — reach for that, don't fall back to the textbook series.
 
+### 10. A CI-only failure is a config-specific miscompile — confirm the toolchain, name the blind spot, pinpoint, fix at the source.
+- **Scar:** the `wpt` test SegFaulted *only* on win-release/shipping in CI (3/3 runs), never locally (27/27 + gcc green).
+  Three guesses cost real time: "older CI MSVC" (it was *newer* — 19.51/14.51 vs local 14.50), the `level-- > 0` reverse
+  idiom (rewriting it changed nothing), and a NOINLINE (didn't help). The green **win-asan** run was *misleading* — MSVC
+  ASan builds carry **no LTCG**, so they are structurally blind to an LTCG miscompile (rule #4). The real bug: 19.51
+  `/O2`+LTCG miscompiled the inline `crd::usize{1} << level` in three hot loops to a garbage stack-address value (markers
+  printed `count = 140698301264476` for `level == 2`) ⇒ ~1e14-iteration inner loop ⇒ OOB ⇒ SegFault.
+- **Rule:** a deterministic pass-here/fail-there is a codegen/toolchain bug, not luck. Don't theorize from clean source —
+  get runtime facts from the *failing* config, and never trust a green from a build that doesn't exercise the failing
+  codegen path.
+- **Check:** (1) pull the CI compiler version first (`cl` banner) — the local-vs-CI delta is the lead, and CI can be
+  *newer*; (2) spin a **minimal temporary CI job** (one failing config × one target × one test, `branches-ignore: [main]`
+  so the full matrix stays silent — ~3 min vs ~30) for a tight loop; (3) pinpoint with **flushed-stderr markers**
+  (`fputs`+`fflush`; catch2's crash handler gives only the TEST_CASE line), escalating to printing the **actual variable
+  values** when the structure looks right but the result is wrong (that exposed the garbage `count`); (4) **fix
+  engine-side** — eliminate the miscompiled construct for all consumers (here: drop the in-loop `1 << level`, iterate by
+  heap id), never mask by lowering the *test's* optimization; (5) strip every marker + the temp job before close (grep).
+
 ---
 
 ## How to contribute to sanity (a little at a time)
@@ -139,8 +157,10 @@ the point — the core gets to A++ by accretion, not by a heroic pass.
 
 - 2026-06-24 — Root-caused a win-debug **infinite loop** (595 s CPU, never terminating) in v12-f `binomial_inversion`: it was not reflection-aware, so the dispatcher's {n=500, p=0.95} (routed to inversion because n·min(p,1−p)=25<30) used raw p ⇒ `q^n = 0.05^500` underflows to 0 ⇒ the inversion `px` stays 0 ⇒ x climbs past `bound` ⇒ x>n ⇒ outer loop retries forever. Fix = reflect internally like `binomial_btpe` already does (sample Binomial(n, 1−p), return n−x). **Boundary-adversary (rule #3):** 282 K passing assertions sailed over it — only the single adversarial param p>0.5-at-large-n ({500,0.95}) reached the dead branch; the optimized full-suite run is what exposed the non-termination (debug just hid it behind slowness). Also: an optimized green is the artifact to trust (rule #2) — the debug "still running" was a *hang*, not slowness.
 - 2026-06-21 — Root-caused a SIGSEGV in `crd-hesap-dense` `eig_real_impl`/`eig_complex_impl`: both guarded **n==0** but not **n==1** (the balance/Hessenberg pipeline assumes n ≥ 2), so a 1×1 matrix crashed in `hessenberg`. Exposed by v11-q `residuez` calling `roots()` on a degree-1 polynomial (1×1 companion). Fixed at the root (a 1×1 matrix's single entry IS its eigenvalue, eigenvector [1]) in both paths — benefits every eig consumer, not just `roots`. Boundary-adversary class (rule #3): the bug lived only at the smallest valid size, which random/large tests never hit. (Confirmed via grep: NO malloc/new/std-container in the new DSP code — crd containers only.)
+- 2026-06-28 — Added **rule #10** + root-caused/fixed the `wpt` CI SegFault: MSVC 19.51/14.51 `/O2`+LTCG miscompiled the inline `crd::usize{1} << level` in `WaveletPacket`'s ctor, `best_basis`, and `reconstruct` to a garbage stack-address value (`count=140698301264476` at `level=2`) ⇒ ~1e14-iteration inner loop ⇒ OOB ⇒ SegFault. **win-release/shipping only**; local MSVC 14.50 + gcc green; **win-asan blind (ASan disables LTCG)**. Found via a minimal `branches-ignore:[main]` CI job + flushed-stderr markers (escalated to numeric values when structure looked right). Fix: iterate by heap id (ctor + best_basis) / halving counter (reconstruct) — no in-loop variable shift; **verified green on the CI's exact 14.51**. Also fixed a clang-cl `-Wunused-lambda-capture` (constexpr `cap`). **3 wrong guesses first** (older-MSVC, reverse-idiom, NOINLINE) — the numeric marker was decisive.
 
 ### Open sanity backlog (small, claimable)
+- Harden the remaining in-loop `crd::usize{1} << <loop-var>` shifts (swt.hpp `dil`/`step`, modwt.hpp `dil`) against the rule-#10 MSVC-LTCG miscompile — they pass on 14.51 today (CI-proven), but are the same fragile pattern; prefer a non-shift form (doubling counter / heap-id iteration) when next touched.
 - Trim `MEMORY.md` back under its session-load limit (it currently exceeds it and loads only partially) — do it incrementally, don't risk losing info.
 - Adversarial boundary-test pass on `crd-containers` (String/Array/HashMap capacity-edge cases).
 - Confirm (don't assume) no other heavy-churn `GrowableTlsfAllocator` consumer was relying on the old behaviour now that `init_pool` is fixed.

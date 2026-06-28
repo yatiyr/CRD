@@ -19,7 +19,6 @@
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
 #include <crd/containers/string_view.hpp>
-#include <crd/core/platform.hpp> // CRD_NOINLINE
 #include <crd/core/types.hpp>
 #include <crd/hesap/wavelet/dwt.hpp>
 #include <crd/hesap/wavelet/families.hpp>
@@ -27,29 +26,12 @@
 
 #include <crd/math/cmath.hpp>
 
-#include <cstdio> // TEMP wpt-debug: stderr pinpoint markers (remove together with the wpt_dbg calls below)
-
 namespace crd::hesap::wavelet
 {
 
-// TEMP wpt-debug: flushed-stderr pinpoint marker for the VS2022 14.51 /O2+LTCG best_basis SegFault. Remove at closeout.
-inline void wpt_dbg(const char* s) noexcept
-{
-    std::fputs(s, stderr);
-    std::fputc('\n', stderr);
-    std::fflush(stderr);
-}
-// TEMP wpt-debug: numeric marker (loop variable values). Remove at closeout.
-inline void wpt_dbg_n2(const char* s, crd::usize a, crd::usize b) noexcept
-{
-    std::fprintf(stderr, "WPT-MARK: %s a=%llu b=%llu\n", s, static_cast<unsigned long long>(a),
-                 static_cast<unsigned long long>(b));
-    std::fflush(stderr);
-}
-
 // Additive Shannon entropy cost (MATLAB wentropy 'shannon'): -Σ s²·log(s²), with 0·log0 := 0. Additive across
 // a partition ⇒ usable for best-basis. Lower = more concentrated (a better basis for the data).
-template <typename T> [[nodiscard]] CRD_NOINLINE T shannon_entropy_cost(crd::containers::ConstSpan<T> s) noexcept
+template <typename T> [[nodiscard]] T shannon_entropy_cost(crd::containers::ConstSpan<T> s) noexcept
 {
     T cost = T(0);
     for (crd::usize i = 0; i < s.size(); ++i)
@@ -119,8 +101,6 @@ public:
         crd::containers::Array<crd::u8> split(alloc); // 1 = use children, 0 = keep this node
         best.resize(total);
         split.resize(total);
-        wpt_dbg("WPT-MARK: bb: arrays sized"); // TEMP wpt-debug
-        wpt_dbg_n2("bb: sizes total/maxlevel", total, m_maxlevel); // TEMP wpt-debug
         // bottom level: keep the leaves.
         const crd::usize leaf_count = crd::usize{1} << m_maxlevel;
         for (crd::usize idx = 0; idx < leaf_count; ++idx)
@@ -129,7 +109,6 @@ public:
             best[id] = node_cost(id);
             split[id] = 0;
         }
-        wpt_dbg("WPT-MARK: bb: leaf loop done"); // TEMP wpt-debug
         // upward: process internal nodes bottom-up by heap id (children 2*id+1, 2*id+2 are deeper, already computed).
         // Iterating by id deliberately avoids the inline `1 << level` count: MSVC 19.51/14.51 (/O2+LTCG) miscompiled
         // that shift here to a garbage value (~a stack address), so the inner loop ran ~1e14 times -> OOB -> SegFault.
@@ -138,7 +117,6 @@ public:
         for (crd::usize k = internal_count; k > 0; --k)
         {
             const crd::usize id = k - 1;
-            wpt_dbg("WPT-MARK: bb: up cost"); // TEMP wpt-debug
             const T own = node_cost(id);
             const T child = best[2 * id + 1] + best[2 * id + 2];
             if (own <= child)
@@ -152,12 +130,9 @@ public:
                 split[id] = 1;
             }
         }
-        wpt_dbg("WPT-MARK: bb: upward loop done"); // TEMP wpt-debug
         out_levels.clear();
         out_indices.clear();
-        wpt_dbg("WPT-MARK: bb: collect begin"); // TEMP wpt-debug
         collect_basis(0, 0, split, out_levels, out_indices);
-        wpt_dbg("WPT-MARK: bb: collect done"); // TEMP wpt-debug
         return best[0];
     }
 

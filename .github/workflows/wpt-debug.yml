@@ -4,14 +4,13 @@ name: wpt-debug (TEMP)
 # TEMPORARY fast-feedback job for the VS2022 (/O2+LTCG) wpt SegFault.
 #
 # Builds ONLY crd-hesap-wavelet-tests and runs ONLY the wpt test, on the two
-# configs that fail (win-release + win-shipping), with the WPT-MARK stderr
-# pinpoint markers visible in the log. ~3-5 min vs the full ~30-min matrix.
+# configs that fail (win-release + win-shipping). ~3-5 min vs the full ~30-min
+# matrix.
 #
 # Trigger: push to ANY non-main branch (the real CI is main-only, so a debug
 # branch runs ONLY this), or manual dispatch once it's on the default branch.
 #
-# DELETE this file — together with the WPT-MARK markers in test_swt_wpt.cpp —
-# the moment the miscompile is localized and the real fix is confirmed green.
+# DELETE this file the moment the fix is confirmed green on the cleaned code.
 # ─────────────────────────────────────────────────────────────────────────────
 
 on:
@@ -43,7 +42,7 @@ jobs:
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Print MSVC version banner (confirm the CI toolchain vs local 14.50)
+      - name: Print MSVC version banner
         shell: cmd
         run: cl 2>&1 & exit /b 0
 
@@ -86,6 +85,6 @@ jobs:
       - name: Build ONLY the wavelet test target
         run: cmake --build --preset ${{ matrix.preset }} --target crd-hesap-wavelet-tests
 
-      - name: Run ONLY the wpt test (WPT-MARK pinpoint markers go to stderr)
+      - name: Run ONLY the wpt test (clean code, no diagnostics)
         shell: cmd
         run: build\${{ matrix.preset }}\tests\hesap-wavelet\crd-hesap-wavelet-tests.exe "wpt:*"
