@@ -10,6 +10,11 @@ add_executable(crd-hesap-stats-tests
     test_multivariate.cpp
     test_log_density_grad.cpp
     test_descriptive.cpp
+    test_hypothesis.cpp
+    test_resampling.cpp
+    test_kde.cpp
+    test_robust.cpp
+    test_streaming.cpp
 )
 
 target_link_libraries(crd-hesap-stats-tests PRIVATE

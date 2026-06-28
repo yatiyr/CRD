@@ -22,6 +22,8 @@ target_link_libraries(crd-hesap-stats
         crd-memory          # v12-f: IAllocator (AliasTable)
         crd-hesap-special   # v12-f: lgamma (Poisson PTRS) + CDFs for distribution layer; acyclic (special is a leaf)
         crd-hesap-dense     # v12-k: factor_cholesky for the multivariate distributions (SANITY rule 8; acyclic — dense never references stats)
+        crd-hesap-quadrature # v12-n: gauss_hermite/laguerre for the studentized range (Tukey HSD); acyclic
+        crd-jobs            # v12-o: parallel resampling (resampling_parallel.hpp); acyclic (jobs = core+containers)
     PRIVATE
         crd-warnings
 )
