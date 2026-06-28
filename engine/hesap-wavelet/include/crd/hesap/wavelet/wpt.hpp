@@ -82,17 +82,15 @@ public:
         {
             m_nodes[0][i] = x[i];
         }
-        for (crd::usize level = 0; level < maxlevel; ++level)
+        // Decompose every internal node top-down by heap id (children 2*id+1, 2*id+2). Iterating by id avoids the
+        // inline `1 << level` count, which MSVC 19.51/14.51 (/O2+LTCG) miscompiles to a garbage value here. See SANITY.md.
+        const crd::usize internal_count = (crd::usize{1} << maxlevel) - 1;
+        for (crd::usize id = 0; id < internal_count; ++id)
         {
-            const crd::usize count = crd::usize{1} << level;
-            for (crd::usize idx = 0; idx < count; ++idx)
-            {
-                const crd::usize pid = node_id(level, idx);
-                crd::containers::Array<T> cA(alloc), cD(alloc);
-                dwt<T>(alloc, crd::containers::ConstSpan<T>(m_nodes[pid].data(), m_nodes[pid].size()), w, mode, cA, cD);
-                m_nodes[node_id(level + 1, 2 * idx)] = std::move(cA);
-                m_nodes[node_id(level + 1, 2 * idx + 1)] = std::move(cD);
-            }
+            crd::containers::Array<T> cA(alloc), cD(alloc);
+            dwt<T>(alloc, crd::containers::ConstSpan<T>(m_nodes[id].data(), m_nodes[id].size()), w, mode, cA, cD);
+            m_nodes[2 * id + 1] = std::move(cA);
+            m_nodes[2 * id + 2] = std::move(cD);
         }
     }
 
@@ -180,10 +178,10 @@ public:
             }
             cur.push_back(std::move(a));
         }
-        for (crd::usize l = m_maxlevel; l > 0; --l) // see best_basis: avoid the MSVC-miscompiled `level-- > 0` idiom
+        crd::usize count = leaf_count;
+        for (crd::usize l = m_maxlevel; l > 0; --l)
         {
-            const crd::usize level = l - 1;
-            const crd::usize count = crd::usize{1} << level;
+            count /= 2; // node count at this level (2^(l-1)); avoids the MSVC-miscompiled inline `1 << level`
             crd::containers::Array<crd::containers::Array<T>> next(alloc);
             next.reserve(count);
             for (crd::usize idx = 0; idx < count; ++idx)
