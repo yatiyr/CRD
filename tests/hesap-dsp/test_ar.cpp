@@ -125,3 +125,45 @@ TEST_CASE("dsp ar: AIC/MDL select the true order", "[v11-o][dsp][ar]")
     }
     CHECK(best_p == 2); // the true AR order
 }
+
+TEST_CASE("dsp ar: AR-PSD asymptotic-normal confidence interval", "[v11-o][v12-z][dsp][ar]")
+{
+    crd::memory::TlsfAllocator alloc(1U << 24);
+    const usize n = 512;
+    const usize nfft = 256;
+    const usize p = 4;
+    const auto x = ar2_signal(&alloc, n, 0.9, kPi * 0.25);
+    const auto model = dsp::aryule<f64>(&alloc, cont::ConstSpan<f64>(x.data(), n), p);
+    const auto ci = dsp::ar_psd_ci<f64>(&alloc, model, n, nfft, 0.05);
+    // No external peer: gate analytically. z = Phi^{-1}(0.975) (a known constant), sigma = sqrt(2p/N), mult = exp(±z·sigma).
+    // The known z cross-checks our ndtri (the impl computes z via special::ndtri(0.975)); the formula is Berk (1974).
+    const f64 z = 1.959963984540054;
+    const f64 sigma = std::sqrt(2.0 * static_cast<f64>(p) / static_cast<f64>(n));
+    const f64 lower_mult = std::exp(-z * sigma);
+    const f64 upper_mult = std::exp(z * sigma);
+    bool lo_ok = true;
+    bool hi_ok = true;
+    bool brackets = true;
+    for (usize i = 0; i < ci.psd.size(); ++i)
+    {
+        if (ci.psd[i] <= 0.0)
+        {
+            continue;
+        }
+        if (std::fabs(ci.lower[i] / ci.psd[i] - lower_mult) > 1e-9)
+        {
+            lo_ok = false;
+        }
+        if (std::fabs(ci.upper[i] / ci.psd[i] - upper_mult) > 1e-9)
+        {
+            hi_ok = false;
+        }
+        if (ci.lower[i] > ci.psd[i] || ci.upper[i] < ci.psd[i])
+        {
+            brackets = false;
+        }
+    }
+    CHECK(lo_ok); // matches the closed-form log-normal multiplier (cross-checks ndtri(0.975))
+    CHECK(hi_ok);
+    CHECK(brackets);
+}

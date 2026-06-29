@@ -15,12 +15,16 @@ add_executable(crd-hesap-stats-tests
     test_kde.cpp
     test_robust.cpp
     test_streaming.cpp
+    test_mcmc.cpp
+    test_regression.cpp
+    test_cli.cpp
 )
 
 target_link_libraries(crd-hesap-stats-tests PRIVATE
     crd-core
     crd-containers
     crd-memory
+    crd-hesap
     crd-hesap-stats
     crd-hesap-special
     Catch2::Catch2WithMain

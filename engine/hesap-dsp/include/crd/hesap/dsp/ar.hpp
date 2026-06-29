@@ -20,6 +20,7 @@
 #include <crd/containers/span.hpp>
 #include <crd/core/types.hpp>
 #include <crd/hesap/complex.hpp>
+#include <crd/hesap/special/erf.hpp> // ndtri (normal ppf) → the asymptotic AR-PSD CI (v12-z)
 #include <crd/memory/allocator.hpp>
 
 #include <crd/math/cmath.hpp>
@@ -274,6 +275,38 @@ template <typename T>
         psd[bin] = m.variance / (fs * (re * re + im * im));
     }
     return psd;
+}
+
+template <typename T> struct ArPsdCI
+{
+    crd::containers::Array<T> psd;
+    crd::containers::Array<T> lower;
+    crd::containers::Array<T> upper;
+    explicit ArPsdCI(crd::memory::IAllocator* alloc) : psd(alloc), lower(alloc), upper(alloc) {}
+};
+
+// AR PSD + asymptotic-normal (1−α) confidence interval. Berk (1974): Var{log Ŝ(f)} ≈ 2p/N, so a constant-relative-width
+// band Ŝ(f)·exp(±z·√(2p/N)) with z = ndtri(1−α/2). NOTE: unlike the multitaper χ² CI, NO scipy/MATLAB peer returns this
+// — it is gated analytically against the closed-form log-width + bracketing (v12-z; the honest "no gold peer" case).
+template <typename T>
+[[nodiscard]] ArPsdCI<T> ar_psd_ci(crd::memory::IAllocator* alloc, const ArModel<T>& m, crd::usize n_samples,
+                                   crd::usize nfft, double alpha = 0.05, T fs = T(1))
+{
+    ArPsdCI<T> out(alloc);
+    out.psd = ar_psd<T>(alloc, m, nfft, fs);
+    const crd::usize p = m.a.size() - 1;
+    const T z = special::ndtri<T>(static_cast<T>(1.0 - alpha / 2.0));
+    const T sigma = crd::math::sqrt(static_cast<T>(2 * p) / static_cast<T>(n_samples));
+    const T mlo = crd::math::exp(-z * sigma);
+    const T mhi = crd::math::exp(z * sigma);
+    out.lower.resize(nfft);
+    out.upper.resize(nfft);
+    for (crd::usize i = 0; i < nfft; ++i)
+    {
+        out.lower[i] = out.psd[i] * mlo;
+        out.upper[i] = out.psd[i] * mhi;
+    }
+    return out;
 }
 
 template <typename T> [[nodiscard]] T ar_aic(crd::usize n, T variance, crd::usize p) noexcept

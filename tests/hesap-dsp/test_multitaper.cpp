@@ -120,3 +120,59 @@ TEST_CASE("dsp multitaper: lower variance than a single periodogram on white noi
     CHECK((vmt / (mmt * mmt)) < (vsp / (msp * msp)));
     CHECK(mmt > 0.0);
 }
+
+TEST_CASE("dsp multitaper: chi-square confidence interval vs scipy", "[v11-n][v12-z][dsp][multitaper]")
+{
+    crd::memory::TlsfAllocator alloc(1U << 26);
+    const usize n = 512;
+    const usize nfft = 512;
+    const auto x = noise(&alloc, n, 7ULL);
+    const cont::ConstSpan<f64> xs(x.data(), n);
+    const auto ci = dsp::multitaper_psd_ci<f64>(&alloc, xs, 4.0, 6, nfft, 0.05, false); // K=6 ⇒ ν=12
+    // scipy: 12/chi2.ppf(0.975,12)=0.51421231065514 (lower), 12/chi2.ppf(0.025,12)=2.7249264993029 (upper)
+    constexpr f64 lower_mult = 0.51421231065514;
+    constexpr f64 upper_mult = 2.7249264993029;
+    bool lo_ok = true;
+    bool hi_ok = true;
+    bool inv_ok = true; // unweighted ⇒ the multiplier is constant across frequency (advisor's invariant)
+    f64 first = -1.0;
+    for (usize i = 0; i < ci.psd.size(); ++i)
+    {
+        if (ci.psd[i] <= 0.0)
+        {
+            continue;
+        }
+        const f64 lo = ci.lower[i] / ci.psd[i];
+        const f64 hi = ci.upper[i] / ci.psd[i];
+        if (std::fabs(lo - lower_mult) > 1e-9)
+        {
+            lo_ok = false;
+        }
+        if (std::fabs(hi - upper_mult) > 1e-9)
+        {
+            hi_ok = false;
+        }
+        if (first < 0.0)
+        {
+            first = lo;
+        }
+        else if (std::fabs(lo - first) > 1e-12)
+        {
+            inv_ok = false;
+        }
+    }
+    CHECK(lo_ok);  // matches scipy chi2.ppf
+    CHECK(hi_ok);
+    CHECK(inv_ok); // frequency-constant multiplier
+    // adaptive: ν(f) varies, but the interval still brackets the estimate
+    const auto cia = dsp::multitaper_psd_ci<f64>(&alloc, xs, 4.0, 6, nfft, 0.05, true);
+    bool brackets = true;
+    for (usize i = 1; i < cia.psd.size(); ++i)
+    {
+        if (cia.lower[i] > cia.psd[i] || cia.upper[i] < cia.psd[i])
+        {
+            brackets = false;
+        }
+    }
+    CHECK(brackets);
+}

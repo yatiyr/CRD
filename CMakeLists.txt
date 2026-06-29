@@ -574,6 +574,7 @@ add_subdirectory(engine/hesap-fft)  # v10; FFT — Complex<T> transforms; gold s
 add_subdirectory(engine/hesap-dsp)  # v11; DSP — filters/spectral/multirate (depends on hesap-fft/eigen/units); ADR-0093
 add_subdirectory(engine/hesap-wavelet)  # v11w; WAVELETS — DWT/IDWT/SWT/WPT/CWT (depends on hesap-fft); ADR-0093
 add_subdirectory(engine/hesap-comms)  # v11c; COMMS/SDR — modulation/sync/equalizers/OFDM (depends on hesap-dsp/fft/stats); ADR-0093
+add_subdirectory(engine/hesap-interp)  # v13; INTERPOLATION — 1-D piecewise/spline/poly/rational + scattered N-D; ADR-0095
 add_subdirectory(engine/resources)
 add_subdirectory(engine/scene)
 add_subdirectory(engine/preset)

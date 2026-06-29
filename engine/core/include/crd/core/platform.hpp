@@ -94,6 +94,10 @@
 #define CRD_NOINLINE __attribute__((noinline))
 #endif
 
+/// Restrict-qualify a pointer: assert it does not alias other restrict pointers in scope, enabling the autovectorizer
+/// to assume no overlap (vdivpd/vmaxpd over independent lanes). MSVC, GCC, and Clang all accept `__restrict`.
+#define CRD_RESTRICT __restrict
+
 /// Hint that `x` is true in the common case; may improve branch-prediction layout on GCC/Clang.
 #if CRD_COMPILER_MSVC
 #define CRD_LIKELY(x) (x)

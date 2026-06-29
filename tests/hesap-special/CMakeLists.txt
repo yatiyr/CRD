@@ -4,6 +4,7 @@ add_executable(crd-hesap-special-tests
     test_bessel.cpp
     test_orthopoly.cpp
     test_expint.cpp
+    test_cli.cpp
 )
 
 target_link_libraries(crd-hesap-special-tests PRIVATE
