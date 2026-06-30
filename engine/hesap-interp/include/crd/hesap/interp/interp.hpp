@@ -6,8 +6,10 @@
 
 #include <crd/hesap/interp/akima.hpp>
 #include <crd/hesap/interp/barycentric.hpp>
+#include <crd/hesap/interp/clough_tocher.hpp>
 #include <crd/hesap/interp/cubic_spline.hpp>
 #include <crd/hesap/interp/grid.hpp>
+#include <crd/hesap/interp/kriging.hpp>
 #include <crd/hesap/interp/piecewise.hpp>
 #include <crd/hesap/interp/rational.hpp>
 #include <crd/hesap/interp/rbf.hpp>

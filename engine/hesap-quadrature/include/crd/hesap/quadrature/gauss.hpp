@@ -12,8 +12,9 @@
 // This module is NOT a leaf (it needs the eigensolver) — which is exactly why it is separate from the leaf
 // crd-hesap-special: gamma/erf/bessel consumers must not transitively link the dense-LA stack.
 
-#include <crd/hesap/dense/eig_sym.hpp>   // eig_sym, Symmetric, EigSym, Matrix, Vector
-#include <crd/hesap/special/gamma.hpp>   // gamma, beta (μ₀ for Jacobi/Laguerre)
+#include <crd/hesap/dense/eig_sym.hpp>     // eig_sym, Symmetric, EigSym, Matrix, Vector
+#include <crd/hesap/special/gamma.hpp>     // gamma, beta (μ₀ for Jacobi/Laguerre)
+#include <crd/hesap/special/orthopoly.hpp> // legendre (Gauss-Lobatto / Gauss-Radau weights; SANITY 8 reuse)
 
 #include <crd/containers/array.hpp>
 #include <crd/core/types.hpp>
@@ -149,6 +150,61 @@ void gauss_chebyshev_t(int n, T* nodes, T* weights)
     {
         nodes[i] = -crd::math::cos(static_cast<T>(2 * i + 1) * pi / static_cast<T>(2 * n)); // ascending
         weights[i] = pi / static_cast<T>(n);
+    }
+}
+
+// Gauss-Lobatto-Legendre on [−1,1], n ≥ 2 points INCLUDING both endpoints ±1. Exact for polynomials of degree ≤ 2n−3
+// (two fewer than Gauss — the endpoints are spent). Interior nodes = roots of the Jacobi polynomial P^{(1,1)}_{n−2}
+// (∝ P′_{n−1}); weights wᵢ = 2/(n(n−1)·[P_{n−1}(xᵢ)]²) at EVERY node, all positive. The spectral-element / "closed"
+// rule (endpoints shared between panels). Verified by degree-(2n−3) exactness; n=5 = the textbook rule.
+template <typename T>
+void gauss_lobatto(crd::memory::IAllocator* alloc, int n, T* nodes, T* weights)
+{
+    nodes[0]     = static_cast<T>(-1);
+    nodes[n - 1] = static_cast<T>(1);
+    if (n > 2)
+    {
+        crd::containers::Array<T> xi(alloc);
+        crd::containers::Array<T> wi(alloc);
+        xi.resize(static_cast<crd::usize>(n - 2));
+        wi.resize(static_cast<crd::usize>(n - 2));
+        gauss_jacobi<T>(alloc, n - 2, T{1}, T{1}, xi.data(), wi.data()); // interior = roots of P^{(1,1)}_{n−2}
+        for (int i = 0; i < n - 2; ++i)
+        {
+            nodes[i + 1] = xi[static_cast<crd::usize>(i)];
+        }
+    }
+    const T c = T{2} / static_cast<T>(n * (n - 1));
+    for (int i = 0; i < n; ++i)
+    {
+        const T p  = crd::hesap::special::legendre(n - 1, nodes[i]); // P_{n−1}(xᵢ)
+        weights[i] = c / (p * p);
+    }
+}
+
+// Gauss-Radau-Legendre on [−1,1], n ≥ 1 points INCLUDING the LEFT endpoint −1. Exact for degree ≤ 2n−2 (one fewer
+// than Gauss). Free nodes = roots of the Jacobi polynomial P^{(0,1)}_{n−1} (orthogonal w.r.t. (1+x)); w₀ = 2/n² at
+// −1, wᵢ = (1−xᵢ)/(n²·[P_{n−1}(xᵢ)]²) at the free nodes, all positive. (Right-Radau = mirror x→−x.) Verified by
+// degree-(2n−2) exactness.
+template <typename T>
+void gauss_radau(crd::memory::IAllocator* alloc, int n, T* nodes, T* weights)
+{
+    nodes[0]   = static_cast<T>(-1);
+    weights[0] = T{2} / static_cast<T>(n * n);
+    if (n > 1)
+    {
+        crd::containers::Array<T> xi(alloc);
+        crd::containers::Array<T> wi(alloc);
+        xi.resize(static_cast<crd::usize>(n - 1));
+        wi.resize(static_cast<crd::usize>(n - 1));
+        gauss_jacobi<T>(alloc, n - 1, T{0}, T{1}, xi.data(), wi.data()); // free = roots of P^{(0,1)}_{n−1}
+        for (int i = 0; i < n - 1; ++i)
+        {
+            const T x        = xi[static_cast<crd::usize>(i)];
+            nodes[i + 1]     = x;
+            const T p        = crd::hesap::special::legendre(n - 1, x); // P_{n−1}(xᵢ)
+            weights[i + 1]   = (T{1} - x) / (static_cast<T>(n * n) * p * p);
+        }
     }
 }
 

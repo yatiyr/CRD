@@ -134,3 +134,51 @@ TEST_CASE("v13-f: bicubic vs MATLAB interpn('cubic') + reproduction", "[v13-f][i
         CHECK(close(gl.eval_cubic(ConstSpan<double>{q, 2}), fl, 1e-10));
     }
 }
+
+TEST_CASE("v13-f: cubic B-spline (Unser prefilter) vs scipy.ndimage", "[v13-f][interp]")
+{
+    crd::memory::TlsfAllocator alloc(1U << 16);
+    // 1-D prefilter coefficients vs scipy.ndimage.spline_filter1d(order=3, mode='mirror')
+    constexpr double v1[8] = {1, 3, 2, 5, 4, 6, 2, 1};
+    constexpr double c1ref[8] = {-0.84335279972518029, 4.6867055994503612,  0.096530401923737894, 6.9271727928546891,
+                                 2.1947784266575061,   8.2937135005152882,  0.63036757128134668,  1.184816214359327};
+    constexpr double o1[1] = {0.0};
+    constexpr double s1[1] = {1.0};
+    constexpr usize n1[1] = {8};
+    RegularGridInterpolant<double> g1(&alloc);
+    REQUIRE(g1.build(ConstSpan<double>{o1, 1}, ConstSpan<double>{s1, 1}, ConstSpan<usize>{n1, 1}, 1,
+                     ConstSpan<double>{v1, 8}) == InterpStatus::Ok);
+    REQUIRE(g1.build_bspline() == InterpStatus::Ok);
+    for (int i = 0; i < 8; ++i)
+    {
+        CHECK(close(g1.coefficients()[i], c1ref[i], 1e-11)); // exact Unser prefilter
+    }
+
+    // 2-D eval vs scipy.ndimage.map_coordinates(order=3, mode='mirror') on the 6×6 grid
+    constexpr double origin[2] = {0.0, 0.0};
+    constexpr double spacing[2] = {1.0, 1.0};
+    constexpr usize count[2] = {6, 6};
+    constexpr double vc[36] = {1,  2.5,  6,  11.5, 19, 28.5, 0,  2.5,  7,  13.5, 22, 32.5, 1,  4.5,  10, 17.5, 27, 38.5,
+                               4,  8.5,  15, 23.5, 34, 46.5, 9,  14.5, 22, 31.5, 43, 56.5, 16, 22.5, 31, 41.5, 54, 68.5};
+    RegularGridInterpolant<double> g2(&alloc);
+    REQUIRE(g2.build(ConstSpan<double>{origin, 2}, ConstSpan<double>{spacing, 2}, ConstSpan<usize>{count, 2}, 2,
+                     ConstSpan<double>{vc, 36}) == InterpStatus::Ok);
+    REQUIRE(g2.build_bspline() == InterpStatus::Ok);
+    constexpr double qc[4][2] = {{1.3, 1.7}, {2.7, 2.2}, {3.4, 3.8}, {2.1, 1.4}};
+    constexpr double bs2ref[4] = {6.0219504497607668, 14.919717374968529, 34.09760176479476, 6.9204726587761272};
+    for (int i = 0; i < 4; ++i)
+    {
+        CHECK(close(g2.eval_bspline(ConstSpan<double>{qc[i], 2}), bs2ref[i], 1e-9));
+    }
+    // interpolation property: exact at every grid node (the defining B-spline property)
+    for (usize xi = 0; xi < 6; ++xi)
+    {
+        for (usize yj = 0; yj < 6; ++yj)
+        {
+            const double q[2] = {static_cast<double>(xi), static_cast<double>(yj)};
+            CHECK(close(g2.eval_bspline(ConstSpan<double>{q, 2}), vc[xi * 6 + yj], 1e-9));
+        }
+    }
+    // determinism
+    CHECK(g2.eval_bspline(ConstSpan<double>{qc[0], 2}) == g2.eval_bspline(ConstSpan<double>{qc[0], 2}));
+}

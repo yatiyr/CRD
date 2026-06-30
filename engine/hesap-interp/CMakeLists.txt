@@ -25,6 +25,7 @@ target_link_libraries(crd-hesap-interp
         crd-hesap          # Complex<T> (v13-d trig)
         crd-hesap-fft      # DCT-II / rFFT (v13-d Chebyshev / trigonometric); SANITY 8
         crd-hesap-dense    # lstsq (v13-d Padé); acyclic — dense never references interp
+        crd-geometry-delaunay # v13-f Clough-Tocher: Delaunay triangulation + adjacency + orient2d (geometry below hesap ⇒ acyclic)
     PRIVATE
         crd-warnings
 )

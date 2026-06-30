@@ -67,6 +67,30 @@ gQ = np.array([[rnd() * (gn - 1), rnd() * (gn - 1)] for _ in range(100000)])
 bench_eval("grid-linear 2D", "grid", gQ, grgi, reps=100)
 grgic = RegularGridInterpolator((gax, gax), gV, method="cubic")
 bench_eval("grid-cubic 2D", "grid", gQ, grgic, reps=20)
+from scipy.ndimage import map_coordinates, spline_filter
+gVf = spline_filter(gV, order=3, mode="mirror")
+coordsT = gQ.T
+bench_eval("grid-bspline 2D", "ndimage", coordsT,
+           lambda c: map_coordinates(gVf, c, order=3, mode="mirror", prefilter=False), reps=30)
+
+# --- v13-f: Gaussian-process kriging (n=100 scattered 2D) ---
+from sklearn.gaussian_process import GaussianProcessRegressor
+from sklearn.gaussian_process.kernels import RBF
+gpn = 100
+gp_pts = np.column_stack([np.array([rnd() for _ in range(gpn)]), np.array([rnd() for _ in range(gpn)])])
+gp_val = np.array([rnd() * 2 - 1 for _ in range(gpn)])
+def _gp_fit():
+    g = GaussianProcessRegressor(kernel=RBF(1.0), alpha=1e-6, optimizer=None, normalize_y=False)
+    g.fit(gp_pts, gp_val)
+    return g
+bench_build("GP fit n100", 50, _gp_fit)
+gpm = _gp_fit()
+gp_q = np.column_stack([np.array([rnd() for _ in range(1000)]), np.array([rnd() for _ in range(1000)])])
+gpm.predict(gp_q, return_std=True)  # warm
+_t = time.perf_counter()
+for _ in range(20):
+    _m, _s = gpm.predict(gp_q, return_std=True)
+print("GP n100            predict %.2f ns/pt  (mean+std)" % ((time.perf_counter() - _t) / 20 * 1e9 / 1000))
 
 # --- v13-d ---
 from numpy.polynomial import chebyshev as npcheb

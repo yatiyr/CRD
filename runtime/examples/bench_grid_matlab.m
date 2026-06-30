@@ -22,4 +22,11 @@ function bench_grid_matlab()
     end
     el = toc(t) / reps;
     fprintf('MATLAB_interpn_cubic %.2f ns/pt  (100x100 grid, %d queries)\n', el * 1e9 / nq, nq);
+    interpn(X, Y, V, qx, qy, 'spline'); % warm
+    t = tic;
+    for r = 1:reps
+        vq = interpn(X, Y, V, qx, qy, 'spline'); %#ok<NASGU>
+    end
+    el = toc(t) / reps;
+    fprintf('MATLAB_interpn_spline %.2f ns/pt  (100x100 grid, %d queries)\n', el * 1e9 / nq, nq);
 end

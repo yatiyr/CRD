@@ -5,6 +5,8 @@ add_executable(crd-hesap-interp-tests
     test_spectral_rational.cpp
     test_rbf.cpp
     test_grid.cpp
+    test_kriging.cpp
+    test_clough_tocher.cpp
 )
 
 target_link_libraries(crd-hesap-interp-tests PRIVATE

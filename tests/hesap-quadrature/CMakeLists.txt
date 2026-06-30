@@ -1,5 +1,8 @@
 add_executable(crd-hesap-quadrature-tests
     test_gauss.cpp
+    test_integrate.cpp
+    test_adaptive.cpp
+    test_de.cpp
 )
 
 target_link_libraries(crd-hesap-quadrature-tests PRIVATE

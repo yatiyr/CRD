@@ -238,6 +238,64 @@ int main()
         std::printf("%-18s eval        %6.2f ns/pt\n", "RBF gauss n100", ns);
     }
 
+    // --- v13-f: Gaussian-process kriging (n=100 scattered 2-D) — fit + predict(mean+variance) ---
+    GaussianProcessInterpolant<f64> gp(&alloc);
+    bench_build("GP fit n100", 3000, [&] {
+        return gp.fit(ConstSpan<f64>{rp.data(), nrb * 2}, ConstSpan<f64>{rv.data(), nrb}, nrb, 2, 1.0, 1e-6);
+    });
+    gp.fit(ConstSpan<f64>{rp.data(), nrb * 2}, ConstSpan<f64>{rv.data(), nrb}, nrb, 2, 1.0, 1e-6);
+    {
+        const auto t0 = clk::now();
+        for (int r = 0; r < 10; ++r)
+        {
+            for (usize i = 0; i < 1000; ++i)
+            {
+                f64 m = 0.0;
+                f64 var = 0.0;
+                gp.predict(ConstSpan<f64>{&rqx[2 * i], 2}, m, var);
+                acc += m + var;
+            }
+        }
+        const auto t1 = clk::now();
+        const f64 ns = std::chrono::duration<f64, std::nano>(t1 - t0).count() / 10.0 / 1000.0;
+        std::printf("%-18s predict     %6.2f ns/pt  (mean+var)\n", "GP n100", ns);
+    }
+
+    // --- v13-f: Clough-Tocher C¹ (n=100 scattered 2-D) — fit + eval. 4 corners ⇒ hull = [0,1] ⇒ no outside-hull NaN. ---
+    crd::containers::Array<crd::math::Vec2<f64>> cp(&alloc);
+    crd::containers::Array<crd::math::Vec2<f64>> cq(&alloc);
+    cp.resize(nrb);
+    cq.resize(1000);
+    cp[0] = crd::math::Vec2<f64>{0.0, 0.0};
+    cp[1] = crd::math::Vec2<f64>{1.0, 0.0};
+    cp[2] = crd::math::Vec2<f64>{0.0, 1.0};
+    cp[3] = crd::math::Vec2<f64>{1.0, 1.0};
+    for (usize i = 4; i < nrb; ++i)
+    {
+        cp[i] = crd::math::Vec2<f64>{rnd(), rnd()};
+    }
+    for (usize i = 0; i < 1000; ++i)
+    {
+        cq[i] = crd::math::Vec2<f64>{0.02 + 0.96 * rnd(), 0.02 + 0.96 * rnd()};
+    }
+    CloughTocher2DInterpolant<f64> cti(&alloc);
+    bench_build("CT fit n100", 1000,
+                [&] { return cti.fit(ConstSpan<crd::math::Vec2<f64>>{cp.data(), nrb}, ConstSpan<f64>{rv.data(), nrb}); });
+    cti.fit(ConstSpan<crd::math::Vec2<f64>>{cp.data(), nrb}, ConstSpan<f64>{rv.data(), nrb});
+    {
+        const auto t0 = clk::now();
+        for (int r = 0; r < 10; ++r)
+        {
+            for (usize i = 0; i < 1000; ++i)
+            {
+                acc += cti.eval(cq[i]);
+            }
+        }
+        const auto t1 = clk::now();
+        const f64 ns = std::chrono::duration<f64, std::nano>(t1 - t0).count() / 10.0 / 1000.0;
+        std::printf("%-18s eval        %6.2f ns/pt\n", "CT n100", ns);
+    }
+
     // --- v13-f: gridded N-linear (100x100 2-D, 100k queries) ---
     constexpr usize gn = 100;
     crd::containers::Array<f64> gv(&alloc);
@@ -278,6 +336,17 @@ int main()
         const f64 ns = std::chrono::duration<f64, std::nano>(t1 - t0).count() / 100000.0;
         std::printf("%-18s eval        %6.2f ns/pt\n", "grid-cubic 2D", ns);
     }
+    grid.build_bspline();
+    {
+        const auto t0 = clk::now();
+        for (usize i = 0; i < 100000; ++i)
+        {
+            acc += grid.eval_bspline(ConstSpan<f64>{&gqx[2 * i], 2});
+        }
+        const auto t1 = clk::now();
+        const f64 ns = std::chrono::duration<f64, std::nano>(t1 - t0).count() / 100000.0;
+        std::printf("%-18s eval        %6.2f ns/pt\n", "grid-bspline 2D", ns);
+    }
     // --- v13-f: 1-D grid cubic (n=1000) — the dim where Boost cardinal_cubic_b_spline applies ---
     {
         constexpr usize g1n = 1000;
@@ -307,6 +376,15 @@ int main()
         const auto t1 = clk::now();
         const f64 ns = std::chrono::duration<f64, std::nano>(t1 - t0).count() / 100000.0;
         std::printf("%-18s eval        %6.2f ns/pt\n", "grid-cubic 1D", ns);
+        grid1.build_bspline();
+        const auto t2 = clk::now();
+        for (usize i = 0; i < 100000; ++i)
+        {
+            acc += grid1.eval_bspline(ConstSpan<f64>{&q1[i], 1});
+        }
+        const auto t3 = clk::now();
+        const f64 nb = std::chrono::duration<f64, std::nano>(t3 - t2).count() / 100000.0;
+        std::printf("%-18s eval        %6.2f ns/pt\n", "grid-bspline 1D", nb);
     }
 
     std::printf("# checksum %.3f\n", acc);
