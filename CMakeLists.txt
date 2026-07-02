@@ -575,6 +575,8 @@ add_subdirectory(engine/hesap-dsp)  # v11; DSP — filters/spectral/multirate (d
 add_subdirectory(engine/hesap-wavelet)  # v11w; WAVELETS — DWT/IDWT/SWT/WPT/CWT (depends on hesap-fft); ADR-0093
 add_subdirectory(engine/hesap-comms)  # v11c; COMMS/SDR — modulation/sync/equalizers/OFDM (depends on hesap-dsp/fft/stats); ADR-0093
 add_subdirectory(engine/hesap-interp)  # v13; INTERPOLATION — 1-D piecewise/spline/poly/rational + scattered N-D; ADR-0095
+add_subdirectory(engine/hesap-diff)  # v13-l/m; NUMERICAL DIFFERENTIATION — Fornberg/Ridders/complex-step/SavGol/spectral; ADR-0095
+add_subdirectory(engine/hesap-motion)  # v13-n/o/p/q; TRAJECTORY GENERATION — SQUAD/clothoid/NURBS/min-snap/S-curve/TCB; ADR-0095
 add_subdirectory(engine/resources)
 add_subdirectory(engine/scene)
 add_subdirectory(engine/preset)

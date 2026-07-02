@@ -7,12 +7,14 @@ add_executable(crd-hesap-interp-tests
     test_grid.cpp
     test_kriging.cpp
     test_clough_tocher.cpp
+    test_cli.cpp
 )
 
 target_link_libraries(crd-hesap-interp-tests PRIVATE
     crd-core
     crd-containers
     crd-memory
+    crd-hesap
     crd-hesap-interp
     Catch2::Catch2WithMain
 )

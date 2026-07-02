@@ -5,12 +5,11 @@
 // Romberg (Richardson extrapolation of the trapezoidal rule). The Clenshaw-Curtis weights are the Trefethen
 // "clencurt" form; verified by degree-n exactness (`build/cc_proto.py`). Determinism by construction.
 
-#include <crd/hesap/quadrature/gauss_kronrod.hpp> // detail::qmax/qmin
-#include <crd/hesap/quadrature/integrate.hpp>
-
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
 #include <crd/core/types.hpp>
+#include <crd/hesap/quadrature/gauss_kronrod.hpp> // detail::qmax/qmin
+#include <crd/hesap/quadrature/integrate.hpp>
 #include <crd/math/cmath.hpp>
 #include <crd/memory/allocator.hpp>
 
@@ -18,27 +17,24 @@ namespace crd::hesap::quadrature
 {
 namespace detail
 {
-template <typename T>
-[[nodiscard]] constexpr T cc_pi() noexcept
+template <typename T> [[nodiscard]] constexpr T cc_pi() noexcept
 {
     return static_cast<T>(3.14159265358979323846264338327950288);
 }
 } // namespace detail
 
 // A precomputed Chebyshev-point rule on [−1,1]: n+1 (Clenshaw-Curtis) or n (Fejér) nodes + always-positive weights.
-template <typename T>
-struct ChebyshevRule
+template <typename T> struct ChebyshevRule
 {
     crd::containers::Array<T> x;
     crd::containers::Array<T> w;
-    int                       count = 0;
+    int count = 0;
 
     explicit ChebyshevRule(crd::memory::IAllocator* alloc) : x(alloc), w(alloc) {}
 };
 
 // Clenshaw-Curtis: n+1 nodes xₖ = cos(kπ/n), exact for polynomials of degree ≤ n, weights always positive.
-template <typename T>
-[[nodiscard]] ChebyshevRule<T> build_clenshaw_curtis_rule(crd::memory::IAllocator* alloc, int n)
+template <typename T> [[nodiscard]] ChebyshevRule<T> build_clenshaw_curtis_rule(crd::memory::IAllocator* alloc, int n)
 {
     ChebyshevRule<T> r(alloc);
     r.count = n + 1;
@@ -50,12 +46,12 @@ template <typename T>
         r.x[static_cast<crd::usize>(k)] = crd::math::cos(pi * static_cast<T>(k) / static_cast<T>(n));
     }
     const bool even = (n % 2 == 0);
-    r.w[0]          = even ? T{1} / static_cast<T>(n * n - 1) : T{1} / static_cast<T>(n * n);
+    r.w[0] = even ? T{1} / static_cast<T>(n * n - 1) : T{1} / static_cast<T>(n * n);
     r.w[static_cast<crd::usize>(n)] = r.w[0];
     for (int k = 1; k < n; ++k)
     {
         const T theta = pi * static_cast<T>(k) / static_cast<T>(n);
-        T       v     = T{1};
+        T v = T{1};
         if (even)
         {
             for (int j = 1; j < n / 2; ++j)
@@ -77,8 +73,7 @@ template <typename T>
 }
 
 // Fejér's first rule: n nodes xₖ = cos((2k−1)π/2n) (interior Chebyshev points), exact for degree ≤ n−1.
-template <typename T>
-[[nodiscard]] ChebyshevRule<T> build_fejer_rule(crd::memory::IAllocator* alloc, int n)
+template <typename T> [[nodiscard]] ChebyshevRule<T> build_fejer_rule(crd::memory::IAllocator* alloc, int n)
 {
     ChebyshevRule<T> r(alloc);
     r.count = n;
@@ -109,27 +104,26 @@ template <typename T, typename F>
     }
     const T h = (b - a) / T{2};
     const T m = (a + b) / T{2};
-    T       s = T{0};
+    T s = T{0};
     for (int i = 0; i < rule.count; ++i)
     {
         s += rule.w[static_cast<crd::usize>(i)] * f(h * rule.x[static_cast<crd::usize>(i)] + m);
     }
     QuadResult<T> r;
-    r.value      = h * s;
+    r.value = h * s;
     r.eval_count = static_cast<crd::u32>(rule.count);
     return r;
 }
 
 // Precomputed nested Clenshaw-Curtis rule: the always-positive CC weights for each doubling level (N = n0·2ᴸ), built
 // ONCE (all the cos transcendentals) and reused. nmax = the finest order.
-template <typename T>
-struct CcAdaptiveRule
+template <typename T> struct CcAdaptiveRule
 {
-    crd::containers::Array<T>        w;    // per-level weights, flat (level L: [woff[L], woff[L]+nlev[L]])
+    crd::containers::Array<T> w;           // per-level weights, flat (level l: [woff[l], woff[l]+nlev[l]])
     crd::containers::Array<crd::u32> woff; // weight offset per level
-    crd::containers::Array<int>      nlev; // n_L
-    int                              maxlevel = 0;
-    int                              nmax     = 0;
+    crd::containers::Array<int> nlev;      // n_L
+    int maxlevel = 0;
+    int nmax = 0;
 
     explicit CcAdaptiveRule(crd::memory::IAllocator* alloc) : w(alloc), woff(alloc), nlev(alloc) {}
 };
@@ -139,11 +133,11 @@ template <typename T>
 {
     CcAdaptiveRule<T> r(alloc);
     r.maxlevel = maxlevel;
-    r.nmax     = n0 << (maxlevel - 1);
+    r.nmax = n0 << (maxlevel - 1);
     const T pi = detail::cc_pi<T>();
-    for (int L = 0; L < maxlevel; ++L)
+    for (int l = 0; l < maxlevel; ++l)
     {
-        const int n = n0 << L;
+        const int n = n0 << l;
         r.nlev.push_back(n);
         r.woff.push_back(static_cast<crd::u32>(r.w.size()));
         const bool even = (n % 2 == 0);
@@ -151,7 +145,7 @@ template <typename T>
         for (int k = 1; k < n; ++k)
         {
             const T theta = pi * static_cast<T>(k) / static_cast<T>(n);
-            T       v     = T{1};
+            T v = T{1};
             if (even)
             {
                 for (int j = 1; j < n / 2; ++j)
@@ -185,11 +179,11 @@ template <typename T, typename F>
         return QuadResult<T>{T{0}, T{0}, 0, 0, QuadStatus::BadInput, false};
     }
     const int nmax = rule.nmax;
-    const T   h    = (b - a) / T{2};
-    const T   mid  = (a + b) / T{2};
-    const T   pi   = detail::cc_pi<T>();
+    const T h = (b - a) / T{2};
+    const T mid = (a + b) / T{2};
+    const T pi = detail::cc_pi<T>();
 
-    crd::containers::Array<T>            fcache(alloc);
+    crd::containers::Array<T> fcache(alloc);
     crd::containers::Array<unsigned char> filled(alloc);
     fcache.resize(static_cast<crd::usize>(nmax + 1));
     filled.resize(static_cast<crd::usize>(nmax + 1));
@@ -197,7 +191,8 @@ template <typename T, typename F>
     {
         filled[static_cast<crd::usize>(i)] = 0;
     }
-    auto fval = [&](int jfine) -> T {
+    auto fval = [&](int jfine) -> T
+    {
         const crd::usize idx = static_cast<crd::usize>(jfine);
         if (!filled[idx])
         {
@@ -207,29 +202,29 @@ template <typename T, typename F>
         return fcache[idx];
     };
 
-    T        S    = T{0};
-    T        err  = T{0};
-    crd::u32 nev  = 0;
-    bool     done = false;
-    int      lvl  = 0;
-    for (int L = 0; L < rule.maxlevel; ++L)
+    T s_est = T{0};
+    T err = T{0};
+    crd::u32 nev = 0;
+    bool done = false;
+    int lvl = 0;
+    for (int l = 0; l < rule.maxlevel; ++l)
     {
-        const int        n      = rule.nlev[static_cast<crd::usize>(L)];
-        const int        stride = nmax / n;
-        const crd::u32   woff   = rule.woff[static_cast<crd::usize>(L)];
-        T                s      = T{0};
+        const int n = rule.nlev[static_cast<crd::usize>(l)];
+        const int stride = nmax / n;
+        const crd::u32 woff = rule.woff[static_cast<crd::usize>(l)];
+        T s = T{0};
         for (int k = 0; k <= n; ++k)
         {
             s += rule.w[woff + static_cast<crd::u32>(k)] * fval(k * stride);
         }
-        const T Sprev = S;
-        S             = h * s;
-        nev           = static_cast<crd::u32>(n + 1);
-        lvl           = L;
-        if (L >= 1)
+        const T s_prev = s_est;
+        s_est = h * s;
+        nev = static_cast<crd::u32>(n + 1);
+        lvl = l;
+        if (l >= 1)
         {
-            err = crd::math::fabs(S - Sprev);
-            if (err <= detail::qmax<T>(epsabs, epsrel * crd::math::fabs(S)))
+            err = crd::math::fabs(s_est - s_prev);
+            if (err <= detail::qmax<T>(epsabs, epsrel * crd::math::fabs(s_est)))
             {
                 done = true;
                 break;
@@ -237,12 +232,12 @@ template <typename T, typename F>
         }
     }
     QuadResult<T> out;
-    out.value          = S;
+    out.value = s_est;
     out.error_estimate = err;
-    out.eval_count     = nev;
-    out.subdiv_count   = static_cast<crd::u32>(lvl + 1);
-    out.tolerance_met  = done;
-    out.status         = done ? QuadStatus::Ok : QuadStatus::MaxSubdivisions;
+    out.eval_count = nev;
+    out.subdiv_count = static_cast<crd::u32>(lvl + 1);
+    out.tolerance_met = done;
+    out.status = done ? QuadStatus::Ok : QuadStatus::MaxSubdivisions;
     return out;
 }
 
@@ -260,42 +255,42 @@ template <typename T, typename F>
 template <typename T, typename F>
 [[nodiscard]] QuadResult<T> integrate_romberg(F&& f, T a, T b, T epsabs, T epsrel, int maxk = 18)
 {
-    if (!detail::quad_finite(a) || !detail::quad_finite(b) || maxk < 2 || maxk > 24
-        || (epsabs <= T{0} && epsrel <= T{0}))
+    if (!detail::quad_finite(a) || !detail::quad_finite(b) || maxk < 2 || maxk > 24 ||
+        (epsabs <= T{0} && epsrel <= T{0}))
     {
         return QuadResult<T>{T{0}, T{0}, 0, 0, QuadStatus::BadInput, false};
     }
-    T        R[24];
-    T        h    = b - a;
-    R[0]          = (f(a) + f(b)) * h / T{2};
-    T        diag = R[0];
-    T        err  = crd::math::fabs(R[0]);
-    crd::u32 nev  = 2;
-    bool     done = false;
-    int      kk   = 0;
+    T r[24];
+    T h = b - a;
+    r[0] = (f(a) + f(b)) * h / T{2};
+    T diag = r[0];
+    T err = crd::math::fabs(r[0]);
+    crd::u32 nev = 2;
+    bool done = false;
+    int kk = 0;
     for (int k = 1; k < maxk; ++k)
     {
         h /= T{2};
-        T         s    = T{0};
+        T s = T{0};
         const int npts = 1 << (k - 1);
         for (int i = 1; i <= npts; ++i)
         {
             s += f(a + static_cast<T>(2 * i - 1) * h);
         }
         nev += static_cast<crd::u32>(npts);
-        T prev = R[0];
-        R[0]   = R[0] * static_cast<T>(0.5) + h * s; // R[k][0]
+        T prev = r[0];
+        r[0] = r[0] * static_cast<T>(0.5) + h * s; // r[k][0]
         T pow4 = T{4};
         for (int j = 1; j <= k; ++j)
         {
-            const T save                    = R[static_cast<crd::usize>(j)]; // R[k-1][j]
-            R[static_cast<crd::usize>(j)]   = R[static_cast<crd::usize>(j - 1)]
-                                            + (R[static_cast<crd::usize>(j - 1)] - prev) / (pow4 - T{1});
+            const T save = r[static_cast<crd::usize>(j)]; // r[k-1][j]
+            r[static_cast<crd::usize>(j)] =
+                r[static_cast<crd::usize>(j - 1)] + (r[static_cast<crd::usize>(j - 1)] - prev) / (pow4 - T{1});
             prev = save;
             pow4 *= T{4};
         }
-        const T newdiag = R[static_cast<crd::usize>(k)];
-        kk              = k;
+        const T newdiag = r[static_cast<crd::usize>(k)];
+        kk = k;
         if (k >= 2)
         {
             err = crd::math::fabs(newdiag - diag);
@@ -309,18 +304,17 @@ template <typename T, typename F>
         diag = newdiag;
     }
     QuadResult<T> out;
-    out.value          = diag;
+    out.value = diag;
     out.error_estimate = err;
-    out.eval_count     = nev;
-    out.subdiv_count   = static_cast<crd::u32>(kk + 1);
-    out.tolerance_met  = done;
-    out.status         = done ? QuadStatus::Ok : QuadStatus::MaxSubdivisions;
+    out.eval_count = nev;
+    out.subdiv_count = static_cast<crd::u32>(kk + 1);
+    out.tolerance_met = done;
+    out.status = done ? QuadStatus::Ok : QuadStatus::MaxSubdivisions;
     return out;
 }
 
 // Romberg on 2^k+1 UNIFORMLY-spaced samples (no function calls). scipy.integrate.romb.
-template <typename T>
-[[nodiscard]] T romberg_samples(crd::containers::ConstSpan<T> y, T dx)
+template <typename T> [[nodiscard]] T romberg_samples(crd::containers::ConstSpan<T> y, T dx)
 {
     const crd::usize npts = y.size();
     if (npts < 2)
@@ -336,31 +330,31 @@ template <typename T>
     {
         return T{0}; // not 2^k+1
     }
-    T   R[24];
-    T   h = dx * static_cast<T>(npts - 1);
-    R[0]  = (y[0] + y[npts - 1]) * h / T{2};
+    T r[24];
+    T h = dx * static_cast<T>(npts - 1);
+    r[0] = (y[0] + y[npts - 1]) * h / T{2};
     for (int k = 1; k <= n; ++k)
     {
         h /= T{2};
         const crd::usize step = static_cast<crd::usize>(1u) << static_cast<unsigned>(n - k);
-        T                s    = T{0};
+        T s = T{0};
         for (crd::usize i = step; i < npts - 1; i += 2 * step)
         {
             s += y[i];
         }
-        T prev = R[0];
-        R[0]   = R[0] * static_cast<T>(0.5) + h * s;
+        T prev = r[0];
+        r[0] = r[0] * static_cast<T>(0.5) + h * s;
         T pow4 = T{4};
         for (int j = 1; j <= k; ++j)
         {
-            const T save                  = R[static_cast<crd::usize>(j)];
-            R[static_cast<crd::usize>(j)] = R[static_cast<crd::usize>(j - 1)]
-                                          + (R[static_cast<crd::usize>(j - 1)] - prev) / (pow4 - T{1});
+            const T save = r[static_cast<crd::usize>(j)];
+            r[static_cast<crd::usize>(j)] =
+                r[static_cast<crd::usize>(j - 1)] + (r[static_cast<crd::usize>(j - 1)] - prev) / (pow4 - T{1});
             prev = save;
             pow4 *= T{4};
         }
     }
-    return R[static_cast<crd::usize>(n)];
+    return r[static_cast<crd::usize>(n)];
 }
 
 } // namespace crd::hesap::quadrature

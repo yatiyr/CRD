@@ -12,11 +12,10 @@
 // crd::math cos/sin). Build rides the shipped FFT/DCT (its precomputed-twiddle determinism moat). Gated by
 // exponential convergence to the analytic function + band-limited exactness; benched vs numpy/scipy.
 
-#include <crd/hesap/interp/piecewise.hpp>
-
 #include <crd/hesap/complex.hpp>
 #include <crd/hesap/fft/dct.hpp>
 #include <crd/hesap/fft/real_fft.hpp>
+#include <crd/hesap/interp/piecewise.hpp>
 #include <crd/math/cmath.hpp>
 
 namespace crd::hesap::interp
@@ -24,10 +23,9 @@ namespace crd::hesap::interp
 
 namespace detail
 {
-inline constexpr double k_pi = 3.14159265358979323846;
+inline constexpr double kPi = 3.14159265358979323846;
 
-template <Real T>
-[[nodiscard]] constexpr bool is_pow2(crd::usize n) noexcept
+template <Real T> [[nodiscard]] constexpr bool is_pow2(crd::usize n) noexcept
 {
     return n >= 2 && (n & (n - 1)) == 0;
 }
@@ -35,20 +33,18 @@ template <Real T>
 
 // The N 1st-kind Chebyshev nodes mapped to [lo,hi], in the DCT-II input order: out[j] = mid + halfw·cos(π(j+½)/N).
 // Sample f here (in order), then pass the values to ChebyshevInterpolant::build.
-template <Real T>
-void chebyshev_nodes(crd::usize n, T lo, T hi, crd::containers::Span<T> out) noexcept
+template <Real T> void chebyshev_nodes(crd::usize n, T lo, T hi, crd::containers::Span<T> out) noexcept
 {
     const T mid = (lo + hi) / static_cast<T>(2);
     const T halfw = (hi - lo) / static_cast<T>(2);
     for (crd::usize j = 0; j < n; ++j)
     {
-        const T th = static_cast<T>(detail::k_pi) * (static_cast<T>(j) + static_cast<T>(0.5)) / static_cast<T>(n);
+        const T th = static_cast<T>(detail::kPi) * (static_cast<T>(j) + static_cast<T>(0.5)) / static_cast<T>(n);
         out[j] = mid + halfw * crd::math::cos(th);
     }
 }
 
-template <Real T>
-class ChebyshevInterpolant
+template <Real T> class ChebyshevInterpolant
 {
 public:
     explicit ChebyshevInterpolant(crd::memory::IAllocator* alloc) noexcept : m_alloc(alloc), m_a(alloc) {}
@@ -140,8 +136,7 @@ private:
     crd::containers::Array<T> m_a;
 };
 
-template <Real T>
-class TrigInterpolant
+template <Real T> class TrigInterpolant
 {
 public:
     explicit TrigInterpolant(crd::memory::IAllocator* alloc) noexcept : m_alloc(alloc), m_re(alloc), m_im(alloc) {}
@@ -184,7 +179,7 @@ public:
     {
         const crd::usize n = m_n;
         const crd::usize h = n / 2;
-        const T omega = static_cast<T>(2) * static_cast<T>(detail::k_pi) / m_period;
+        const T omega = static_cast<T>(2) * static_cast<T>(detail::kPi) / m_period;
         const T xp = x - m_lo;
         T sum = m_re[0];
         for (crd::usize j = 1; j < h; ++j)

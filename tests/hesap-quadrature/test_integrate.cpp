@@ -58,7 +58,7 @@ TEST_CASE("v13-g: Gauss-Lobatto / Gauss-Radau nodes+weights vs scipy + endpoints
     CHECK(x[0] == -1.0); // includes the left endpoint
 }
 
-TEST_CASE("v13-g: Lobatto/Radau exactness degree (≤2n−3 / ≤2n−2) + Gauss ≤2n−1", "[v13-g][quadrature]")
+TEST_CASE("v13-g: Lobatto/Radau exactness degree (<=2n-3 / <=2n-2) + Gauss <=2n-1", "[v13-g][quadrature]")
 {
     crd::memory::TlsfAllocator alloc(1U << 22);
     for (int n : {3, 5, 8})

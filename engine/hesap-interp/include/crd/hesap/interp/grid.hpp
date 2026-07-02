@@ -11,16 +11,14 @@
 // — a robotics/LUT consumer wants a bounded value, never a NaN.
 
 #include <crd/hesap/interp/piecewise.hpp>
-
 #include <crd/math/cmath.hpp>
 
 namespace crd::hesap::interp
 {
 
-inline constexpr crd::usize k_grid_max_dim = 8;
+inline constexpr crd::usize kGridMaxDim = 8;
 
-template <Real T>
-class RegularGridInterpolant
+template <Real T> class RegularGridInterpolant
 {
 public:
     explicit RegularGridInterpolant(crd::memory::IAllocator* alloc) noexcept
@@ -34,7 +32,7 @@ public:
                                      crd::containers::ConstSpan<crd::usize> count, crd::usize dim,
                                      crd::containers::ConstSpan<T> values)
     {
-        if (dim < 1 || dim > k_grid_max_dim || origin.size() != dim || spacing.size() != dim || count.size() != dim)
+        if (dim < 1 || dim > kGridMaxDim || origin.size() != dim || spacing.size() != dim || count.size() != dim)
         {
             return InterpStatus::BadInput;
         }
@@ -62,7 +60,8 @@ public:
         {
             m_origin[d] = origin[d];
             m_spacing[d] = spacing[d];
-            m_inv_spacing[d] = static_cast<T>(1) / spacing[d]; // precomputed reciprocal ⇒ locate multiplies, not divides
+            m_inv_spacing[d] =
+                static_cast<T>(1) / spacing[d]; // precomputed reciprocal ⇒ locate multiplies, not divides
             m_count[d] = count[d];
         }
         m_stride[dim - 1] = 1; // row-major strides
@@ -117,8 +116,8 @@ public:
                 g1 * (g2 * v[i0 + s0] + f2 * v[i0 + s0 + 1]) + f1 * (g2 * v[i0 + s0 + s1] + f2 * v[i0 + s0 + s1 + 1]);
             return g0 * e0 + f0 * e1;
         }
-        crd::usize base[k_grid_max_dim]; // general N-linear (dim ≥ 4 / dim 1): 2^d-corner blend
-        T frac[k_grid_max_dim];
+        crd::usize base[kGridMaxDim]; // general N-linear (dim ≥ 4 / dim 1): 2^d-corner blend
+        T frac[kGridMaxDim];
         for (crd::usize d = 0; d < m_dim; ++d)
         {
             locate(d, query[d], base[d], frac[d]);
@@ -186,8 +185,8 @@ public:
             }
             return sum;
         }
-        crd::usize tap[k_grid_max_dim][4];
-        T cw[k_grid_max_dim][4];
+        crd::usize tap[kGridMaxDim][4];
+        T cw[kGridMaxDim][4];
         for (crd::usize d = 0; d < m_dim; ++d)
         {
             crd::usize base;
@@ -241,7 +240,7 @@ public:
         }
         const T z = crd::math::sqrt(static_cast<T>(3)) - static_cast<T>(2); // the cubic B-spline pole ≈ −0.2679
         const crd::usize horizon = static_cast<crd::usize>(
-            crd::math::ceil(crd::math::log(static_cast<T>(1e-16)) / crd::math::log(detail::abs_(z))));
+            crd::math::ceil(crd::math::log(static_cast<T>(1e-16)) / crd::math::log(detail::abs_val(z))));
         T* c = m_coeffs.data();
         for (crd::usize d = 0; d < m_dim; ++d)
         {
@@ -279,7 +278,7 @@ private:
     {
         const T t = (q - m_origin[d]) * m_inv_spacing[d];
         const T tf = t > static_cast<T>(0) ? t : static_cast<T>(0); // clamp below origin (cmov)
-        crd::usize ib = static_cast<crd::usize>(tf);                 // floor (tf ≥ 0)
+        crd::usize ib = static_cast<crd::usize>(tf);                // floor (tf ≥ 0)
         const crd::usize maxb = m_count[d] - 2;
         ib = ib < maxb ? ib : maxb; // clamp above the last cell (cmov)
         base = ib;

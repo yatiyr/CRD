@@ -1,12 +1,11 @@
 // v12-n (parametric) — t-tests, ANOVA, Bartlett, Levene gated bit-for-bit against scipy.stats on a fixed 3-group
 // dataset (statistic + p-value + df where scipy exposes it).
 
-#include <catch2/catch_test_macros.hpp>
-
 #include <crd/hesap/stats/hypothesis.hpp>
-
 #include <crd/math/cmath.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
+
+#include <catch2/catch_test_macros.hpp>
 
 namespace
 {
@@ -22,45 +21,54 @@ constexpr double kA[] = {2.1, 3.4, 1.9, 5.2, 4.1, 2.8, 6.3, 3.0};
 constexpr double kB[] = {1.0, 2.0, 1.5, 3.0, 2.5, 2.0, 3.5, 1.8};
 constexpr double kC[] = {5.0, 4.0, 6.0, 2.0, 3.0, 4.5, 1.0, 4.2};
 
-[[nodiscard]] ConstSpan<double> a_() noexcept { return {kA, 8}; }
-[[nodiscard]] ConstSpan<double> b_() noexcept { return {kB, 8}; }
-[[nodiscard]] ConstSpan<double> c_() noexcept { return {kC, 8}; }
+[[nodiscard]] ConstSpan<double> sample_a() noexcept
+{
+    return {kA, 8};
+}
+[[nodiscard]] ConstSpan<double> sample_b() noexcept
+{
+    return {kB, 8};
+}
+[[nodiscard]] ConstSpan<double> sample_c() noexcept
+{
+    return {kC, 8};
+}
 } // namespace
 
 TEST_CASE("v12-n: t-tests vs scipy", "[v12-n][stats][hypothesis]")
 {
     {
-        const auto r = t_test_1samp(a_(), 3.0); // scipy.stats.ttest_1samp
+        const auto r = t_test_1samp(sample_a(), 3.0); // scipy.stats.ttest_1samp
         CHECK(close(r.statistic, 1.11280242555866));
         CHECK(close(r.pvalue, 0.302542469993592));
         CHECK(close(r.df, 7.0));
     }
     {
-        const auto r = t_test_ind(a_(), b_(), true); // pooled (Student)
+        const auto r = t_test_ind(sample_a(), sample_b(), true); // pooled (Student)
         CHECK(close(r.statistic, 2.35536234308948));
         CHECK(close(r.pvalue, 0.0336179791516164));
         CHECK(close(r.df, 14.0));
     }
     {
-        const auto r = t_test_ind(a_(), b_(), false); // Welch
+        const auto r = t_test_ind(sample_a(), sample_b(), false); // Welch
         CHECK(close(r.statistic, 2.35536234308948));
         CHECK(close(r.pvalue, 0.0388295001766022));
         CHECK(close(r.df, 10.6488687782805));
     }
     {
-        const auto r = t_test_rel(a_(), b_()); // paired
+        const auto r = t_test_rel(sample_a(), sample_b()); // paired
         CHECK(close(r.statistic, 5.30052821830237));
         CHECK(close(r.pvalue, 0.00112272426595492));
         CHECK(close(r.df, 7.0));
     }
     // one-sided alternatives
-    CHECK(close(t_test_1samp(a_(), 3.0, Alternative::Greater).pvalue, 0.151271234996796));
-    CHECK(close(t_test_1samp(a_(), 3.0, Alternative::Less).pvalue, 0.848728765003204));
+    CHECK(close(t_test_1samp(sample_a(), 3.0, Alternative::Greater).pvalue, 0.151271234996796));
+    CHECK(close(t_test_1samp(sample_a(), 3.0, Alternative::Less).pvalue, 0.848728765003204));
 }
 
 TEST_CASE("v12-n: ANOVA / variance tests vs scipy", "[v12-n][stats][hypothesis]")
 {
-    const ConstSpan<double> grp[] = {a_(), b_(), c_()};
+    const ConstSpan<double> grp[] = {sample_a(), sample_b(), sample_c()};
     const ConstSpan<ConstSpan<double>> groups{grp, 3};
     {
         const auto r = f_oneway(groups); // scipy.stats.f_oneway
@@ -89,19 +97,20 @@ TEST_CASE("v12-n: nonparametric (rank) tests vs scipy", "[v12-n][stats][hypothes
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(1) << 16);
     {
-        const auto r = mann_whitney_u(a_(), b_(), &alloc); // scipy.stats.mannwhitneyu (asymptotic, continuity)
+        const auto r =
+            mann_whitney_u(sample_a(), sample_b(), &alloc); // scipy.stats.mannwhitneyu (asymptotic, continuity)
         CHECK(close(r.statistic, 51.5));
         CHECK(close(r.pvalue, 0.0456798096400443));
     }
     {
         // paired set with a zero diff (dropped) + a 5-way tie in |d| — exercises the zero/tie corrections
-        constexpr double kWa[] = {5.0, 3.4, 1.9, 5.2, 4.1, 2.8, 6.3, 3.0};
-        constexpr double kWb[] = {5.0, 3.0, 2.2, 4.8, 4.5, 3.5, 5.9, 2.6};
-        const auto r = wilcoxon(ConstSpan<double>{kWa, 8}, ConstSpan<double>{kWb, 8}, &alloc); // scipy.stats.wilcoxon
+        constexpr double k_wa[] = {5.0, 3.4, 1.9, 5.2, 4.1, 2.8, 6.3, 3.0};
+        constexpr double k_wb[] = {5.0, 3.0, 2.2, 4.8, 4.5, 3.5, 5.9, 2.6};
+        const auto r = wilcoxon(ConstSpan<double>{k_wa, 8}, ConstSpan<double>{k_wb, 8}, &alloc); // scipy.stats.wilcoxon
         CHECK(close(r.statistic, 13.5));
         CHECK(close(r.pvalue, 0.932405373249338));
     }
-    const ConstSpan<double> grp[] = {a_(), b_(), c_()};
+    const ConstSpan<double> grp[] = {sample_a(), sample_b(), sample_c()};
     const ConstSpan<ConstSpan<double>> groups{grp, 3};
     {
         const auto r = kruskal(groups, &alloc); // scipy.stats.kruskal
@@ -121,17 +130,17 @@ TEST_CASE("v12-n: correlation vs scipy", "[v12-n][stats][hypothesis]")
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(1) << 16);
     {
-        const auto r = pearsonr(a_(), b_()); // scipy.stats.pearsonr
+        const auto r = pearsonr(sample_a(), sample_b()); // scipy.stats.pearsonr
         CHECK(close(r.statistic, 0.969448609096053));
         CHECK(close(r.pvalue, 6.96671732921854e-05));
     }
     {
-        const auto r = spearmanr(a_(), b_(), &alloc); // scipy.stats.spearmanr
+        const auto r = spearmanr(sample_a(), sample_b(), &alloc); // scipy.stats.spearmanr
         CHECK(close(r.statistic, 0.934148484292342));
         CHECK(close(r.pvalue, 0.000679105745231097));
     }
     {
-        const auto r = kendalltau(a_(), b_(), &alloc); // scipy.stats.kendalltau (tau-b, asymptotic)
+        const auto r = kendalltau(sample_a(), sample_b(), &alloc); // scipy.stats.kendalltau (tau-b, asymptotic)
         CHECK(close(r.statistic, 0.836501912571304));
         CHECK(close(r.pvalue, 0.00413673709867665));
     }
@@ -170,38 +179,41 @@ TEST_CASE("v12-n: GoF / effect size / multcompare vs scipy", "[v12-n][stats][hyp
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(1) << 16);
     {
-        const auto r = jarque_bera(a_()); // scipy.stats.jarque_bera
+        const auto r = jarque_bera(sample_a()); // scipy.stats.jarque_bera
         CHECK(close(r.statistic, 0.747538232988901));
         CHECK(close(r.pvalue, 0.68813577268859));
     }
     {
-        const auto ncdf = [](double v) { return 0.5 * crd::hesap::special::erfc(-v / 1.4142135623730951); };
-        const auto r = ks_1samp(a_(), ncdf, &alloc); // KS vs N(0,1), asymptotic (scipy.special.kolmogorov)
+        const auto ncdf = [](double v)
+        {
+            return 0.5 * crd::hesap::special::erfc(-v / 1.4142135623730951);
+        };
+        const auto r = ks_1samp(sample_a(), ncdf, &alloc); // KS vs N(0,1), asymptotic (scipy.special.kolmogorov)
         CHECK(close(r.statistic, 0.971283440183998));
         CHECK(close(r.pvalue, 5.56768023713558e-07));
     }
     {
-        const auto r = ks_2samp(a_(), b_(), &alloc); // scipy.stats.ks_2samp (asymptotic)
+        const auto r = ks_2samp(sample_a(), sample_b(), &alloc); // scipy.stats.ks_2samp (asymptotic)
         CHECK(close(r.statistic, 0.5));
         CHECK(close(r.pvalue, 0.269999671677355));
     }
-    CHECK(close(cohens_d(a_(), b_()), 1.17768117154474));
+    CHECK(close(cohens_d(sample_a(), sample_b()), 1.17768117154474));
     {
-        const ConstSpan<double> grp[] = {a_(), b_(), c_()};
+        const ConstSpan<double> grp[] = {sample_a(), sample_b(), sample_c()};
         CHECK(close(eta_squared(ConstSpan<ConstSpan<double>>{grp, 3}), 0.232333214528724));
     }
     {
         constexpr double ps[] = {0.01, 0.04, 0.03, 0.005, 0.2};
-        constexpr double kHolm[] = {0.04, 0.09, 0.09, 0.025, 0.2};
-        constexpr double kBh[] = {0.025, 0.05, 0.05, 0.025, 0.2};
+        constexpr double k_holm[] = {0.04, 0.09, 0.09, 0.025, 0.2};
+        constexpr double k_bh[] = {0.025, 0.05, 0.05, 0.025, 0.2};
         double h[5];
         double bh[5];
-        holm(ConstSpan<double>{ps, 5}, crd::containers::Span<double>{h, 5}, &alloc);             // statsmodels 'holm'
+        holm(ConstSpan<double>{ps, 5}, crd::containers::Span<double>{h, 5}, &alloc); // statsmodels 'holm'
         benjamini_hochberg(ConstSpan<double>{ps, 5}, crd::containers::Span<double>{bh, 5}, &alloc); // scipy BH
         for (int i = 0; i < 5; ++i)
         {
-            CHECK(close(h[i], kHolm[i]));
-            CHECK(close(bh[i], kBh[i]));
+            CHECK(close(h[i], k_holm[i]));
+            CHECK(close(bh[i], k_bh[i]));
         }
     }
 }
@@ -210,22 +222,22 @@ TEST_CASE("v12-n: Shapiro / Anderson-Darling / distance correlation vs scipy", "
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(1) << 16);
     {
-        const auto r = anderson_darling(a_(), &alloc); // scipy.stats.anderson statistic + D'Agostino p
+        const auto r = anderson_darling(sample_a(), &alloc); // scipy.stats.anderson statistic + D'Agostino p
         CHECK(close(r.statistic, 0.276336473641585, 1e-9));
         CHECK(close(r.pvalue, 0.550886439610157, 1e-9));
     }
     {
-        const auto r = shapiro(a_(), &alloc); // scipy.stats.shapiro (Royston AS R94)
+        const auto r = shapiro(sample_a(), &alloc); // scipy.stats.shapiro (Royston AS R94)
         CHECK(close(r.statistic, 0.930944870950909, 1e-6));
         CHECK(close(r.pvalue, 0.524715214796725, 1e-6));
     }
-    CHECK(close(distance_correlation(a_(), b_(), &alloc), 0.978862331499961, 1e-9));
+    CHECK(close(distance_correlation(sample_a(), sample_b(), &alloc), 0.978862331499961, 1e-9));
 }
 
 TEST_CASE("v12-n: Tukey HSD vs scipy", "[v12-n][stats][hypothesis]")
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(1) << 20);
-    const ConstSpan<double> grp[] = {a_(), b_(), c_()};
+    const ConstSpan<double> grp[] = {sample_a(), sample_b(), sample_c()};
     const ConstSpan<ConstSpan<double>> groups{grp, 3};
     {
         const auto r = tukey_hsd(groups, 0, 1, &alloc); // a vs b
@@ -244,16 +256,17 @@ TEST_CASE("v12-n: Tukey HSD vs scipy", "[v12-n][stats][hypothesis]")
     }
 }
 
-TEST_CASE("v12-n variants A: z / sign / G-test / Cramér's V / Bonferroni / Games-Howell vs scipy", "[v12-n][stats][hypothesis]")
+TEST_CASE("v12-n variants A: z / sign / G-test / Cramer's V / Bonferroni / Games-Howell vs scipy",
+          "[v12-n][stats][hypothesis]")
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(1) << 20);
     {
-        const auto r = z_test_1samp(a_(), 3.0); // statsmodels ztest
+        const auto r = z_test_1samp(sample_a(), 3.0); // statsmodels ztest
         CHECK(close(r.statistic, 1.11280242555866));
         CHECK(close(r.pvalue, 0.265793293450749));
     }
     {
-        const auto r = sign_test(a_(), b_()); // statsmodels sign_test
+        const auto r = sign_test(sample_a(), sample_b()); // statsmodels sign_test
         CHECK(close(r.statistic, 0.0));
         CHECK(close(r.pvalue, 0.0078125));
     }
@@ -267,16 +280,16 @@ TEST_CASE("v12-n variants A: z / sign / G-test / Cramér's V / Bonferroni / Game
     }
     {
         constexpr double ps[] = {0.01, 0.04, 0.03, 0.005, 0.2};
-        constexpr double kBonf[] = {0.05, 0.2, 0.15, 0.025, 1.0};
+        constexpr double k_bonf[] = {0.05, 0.2, 0.15, 0.025, 1.0};
         double bf[5];
         bonferroni(ConstSpan<double>{ps, 5}, crd::containers::Span<double>{bf, 5});
         for (int i = 0; i < 5; ++i)
         {
-            CHECK(close(bf[i], kBonf[i]));
+            CHECK(close(bf[i], k_bonf[i]));
         }
     }
     {
-        const ConstSpan<double> grp[] = {a_(), b_(), c_()};
+        const ConstSpan<double> grp[] = {sample_a(), sample_b(), sample_c()};
         const ConstSpan<ConstSpan<double>> groups{grp, 3};
         const auto r = games_howell(groups, 0, 1, &alloc); // a vs b, Welch df
         CHECK(close(r.statistic, 1.4375, 1e-9));
@@ -284,17 +297,18 @@ TEST_CASE("v12-n variants A: z / sign / G-test / Cramér's V / Bonferroni / Game
     }
 }
 
-TEST_CASE("v12-n variants B: Mood / D'Agostino K² / Cramér-von-Mises / Lilliefors vs scipy", "[v12-n][stats][hypothesis]")
+TEST_CASE("v12-n variants B: Mood / D'Agostino K2 / Cramer-von-Mises / Lilliefors vs scipy",
+          "[v12-n][stats][hypothesis]")
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(1) << 18);
-    constexpr double kX20[] = {-1.5, -1.0, -0.8, -0.5, -0.3, -0.2, 0.0, 0.1, 0.2, 0.3,
-                               0.4,  0.5,  0.6,  0.7,  0.9,  1.0,  1.2, 1.4, 1.6, 2.0};
-    const auto x20 = ConstSpan<double>{kX20, 20};
+    constexpr double k_x20[] = {-1.5, -1.0, -0.8, -0.5, -0.3, -0.2, 0.0, 0.1, 0.2, 0.3,
+                                0.4,  0.5,  0.6,  0.7,  0.9,  1.0,  1.2, 1.4, 1.6, 2.0};
+    const auto x20 = ConstSpan<double>{k_x20, 20};
     {
         // tie-free samples (narrow vs wide) → scipy's no-tie path, which mood_scale models exactly
-        constexpr double kMa[] = {2.8, 3.1, 2.9, 3.3, 2.7, 3.2, 3.05, 2.95};
-        constexpr double kMb[] = {1.0, 5.5, 0.5, 6.2, 1.8, 4.9, 2.3, 5.1};
-        const auto r = mood_scale(ConstSpan<double>{kMa, 8}, ConstSpan<double>{kMb, 8}, &alloc); // scipy.stats.mood
+        constexpr double k_ma[] = {2.8, 3.1, 2.9, 3.3, 2.7, 3.2, 3.05, 2.95};
+        constexpr double k_mb[] = {1.0, 5.5, 0.5, 6.2, 1.8, 4.9, 2.3, 5.1};
+        const auto r = mood_scale(ConstSpan<double>{k_ma, 8}, ConstSpan<double>{k_mb, 8}, &alloc); // scipy.stats.mood
         CHECK(close(r.statistic, -3.27968024676315, 1e-9));
         CHECK(close(r.pvalue, 0.00103924800037198, 1e-9));
     }
@@ -304,7 +318,10 @@ TEST_CASE("v12-n variants B: Mood / D'Agostino K² / Cramér-von-Mises / Lillief
         CHECK(close(r.pvalue, 0.953007575823612, 1e-6));
     }
     {
-        const auto ncdf = [](double v) { return 0.5 * crd::hesap::special::erfc(-v / 1.4142135623730951); };
+        const auto ncdf = [](double v)
+        {
+            return 0.5 * crd::hesap::special::erfc(-v / 1.4142135623730951);
+        };
         const auto r = cramervonmises(x20, ncdf, &alloc); // scipy.stats.cramervonmises
         CHECK(close(r.statistic, 0.252471086018524, 1e-9));
         CHECK(close(r.pvalue, 0.185424667924077, 1e-3)); // asymptotic (scipy adds a ~2e-4 finite-n correction)
@@ -316,10 +333,11 @@ TEST_CASE("v12-n variants B: Mood / D'Agostino K² / Cramér-von-Mises / Lillief
     }
 }
 
-TEST_CASE("v12-n variants C: Scheffé / Dunnett / 2-way ANOVA / repeated ANOVA vs scipy+statsmodels", "[v12-n][stats][hypothesis]")
+TEST_CASE("v12-n variants C: Scheffe / Dunnett / 2-way ANOVA / repeated ANOVA vs scipy+statsmodels",
+          "[v12-n][stats][hypothesis]")
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(1) << 20);
-    const ConstSpan<double> grp[] = {a_(), b_(), c_()};
+    const ConstSpan<double> grp[] = {sample_a(), sample_b(), sample_c()};
     const ConstSpan<ConstSpan<double>> groups{grp, 3};
     {
         const auto r = scheffe(groups, 0, 1); // a vs b

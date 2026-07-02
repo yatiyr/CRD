@@ -12,11 +12,10 @@
 // the work-stack is allocated once (size limit = the WCET bound). ⚠ HONESTY (pillar 3): error_estimate is the
 // extrapolated Tier-1 estimate, never a guaranteed bound.
 
-#include <crd/hesap/quadrature/gauss_kronrod.hpp>
-#include <crd/hesap/quadrature/integrate.hpp>
-
 #include <crd/containers/array.hpp>
 #include <crd/core/types.hpp>
+#include <crd/hesap/quadrature/gauss_kronrod.hpp>
+#include <crd/hesap/quadrature/integrate.hpp>
 #include <crd/math/cmath.hpp>
 #include <crd/memory/allocator.hpp>
 
@@ -28,15 +27,14 @@ namespace crd::hesap::quadrature
 // Reusable work-stack for the adaptive QAGS/QAGI drivers: the subinterval lists (a/b/result/error) + the error-order
 // index, sized once to `limit`. Allocate ONCE, integrate many — the allocation-free hot path (ADR-0095 pillar 2). The
 // per-call-allocating convenience overloads create one of these internally; pass your own to amortize across calls.
-template <typename T>
-struct AdaptiveWorkspace
+template <typename T> struct AdaptiveWorkspace
 {
-    crd::containers::Array<T>   alist;
-    crd::containers::Array<T>   blist;
-    crd::containers::Array<T>   rlist;
-    crd::containers::Array<T>   elist;
+    crd::containers::Array<T> alist;
+    crd::containers::Array<T> blist;
+    crd::containers::Array<T> rlist;
+    crd::containers::Array<T> elist;
     crd::containers::Array<int> iord;
-    int                         limit;
+    int limit;
 
     AdaptiveWorkspace(crd::memory::IAllocator* alloc, int subdivision_limit)
         : alist(alloc), blist(alloc), rlist(alloc), elist(alloc), iord(alloc), limit(subdivision_limit)
@@ -63,7 +61,7 @@ inline void qpsrt(int limit, int last, int* maxerr, T* ermax, const T* elist, in
         iord[0] = 0;
         iord[1] = 1;
         *maxerr = iord[*nrmax];
-        *ermax  = elist[*maxerr];
+        *ermax = elist[*maxerr];
         return;
     }
     T errmax = elist[*maxerr];
@@ -72,12 +70,12 @@ inline void qpsrt(int limit, int last, int* maxerr, T* ermax, const T* elist, in
         iord[*nrmax] = iord[*nrmax - 1];
         *nrmax -= 1;
     }
-    const int jupbn  = (last > limit / 2 + 2) ? (limit - last + 2) : (last - 1);
-    const T   errmin = elist[last - 1];
-    const int jbnd   = jupbn - 1;
-    const int ibeg   = *nrmax + 1;
-    int       i      = ibeg;
-    bool      to60   = false;
+    const int jupbn = (last > limit / 2 + 2) ? (limit - last + 2) : (last - 1);
+    const T errmin = elist[last - 1];
+    const int jbnd = jupbn - 1;
+    const int ibeg = *nrmax + 1;
+    int i = ibeg;
+    bool to60 = false;
     if (ibeg <= jbnd)
     {
         for (i = ibeg; i <= jbnd; ++i)
@@ -92,15 +90,15 @@ inline void qpsrt(int limit, int last, int* maxerr, T* ermax, const T* elist, in
     }
     if (!to60)
     {
-        iord[jbnd]  = *maxerr;
+        iord[jbnd] = *maxerr;
         iord[jupbn] = last - 1;
-        *maxerr     = iord[*nrmax];
-        *ermax      = elist[*maxerr];
+        *maxerr = iord[*nrmax];
+        *ermax = elist[*maxerr];
         return;
     }
     // LINE60 — insert errmin bottom-up
     iord[i - 1] = *maxerr;
-    int k       = jbnd;
+    int k = jbnd;
     for (int j = i; j <= jbnd; ++j)
     {
         if (errmin < elist[iord[k]])
@@ -119,21 +117,20 @@ inline void qpsrt(int limit, int last, int* maxerr, T* ermax, const T* elist, in
         iord[i] = last - 1;
     }
     *maxerr = iord[*nrmax];
-    *ermax  = elist[*maxerr];
+    *ermax = elist[*maxerr];
 }
 
 // QUADPACK dqelg — the epsilon algorithm (Wynn). epstab (size ≥ 52) holds the two lower diagonals of the ε-table;
 // res3la holds the last 3 results. Faithful port.
-template <typename T>
-inline void qelg(int* n, T* epstab, T* result, T* abserr, T* res3la, int* nres)
+template <typename T> inline void qelg(int* n, T* epstab, T* result, T* abserr, T* res3la, int* nres)
 {
-    const T   epmach = std::numeric_limits<T>::epsilon();
-    const T   oflow  = std::numeric_limits<T>::max();
-    int       i, indx, k1, k2, k3, newelm, num;
-    T         delta1, delta2, delta3, epsinf, error, err1, err2, err3;
-    T         e0, e1, e1abs, e2, e3, res, ss, tol1, tol2, tol3;
+    const T epmach = std::numeric_limits<T>::epsilon();
+    const T oflow = std::numeric_limits<T>::max();
+    int i, indx, k1, k2, k3, newelm, num;
+    T delta1, delta2, delta3, epsinf, error, err1, err2, err3;
+    T e0, e1, e1abs, e2, e3, res, ss, tol1, tol2, tol3;
 
-    num     = *n;
+    num = *n;
     *nres += 1;
     *abserr = oflow;
     *result = epstab[*n];
@@ -143,25 +140,25 @@ inline void qelg(int* n, T* epstab, T* result, T* abserr, T* res3la, int* nres)
         return;
     }
     const int limexp = 49;
-    epstab[*n + 2]   = epstab[*n];
-    newelm           = *n / 2;
-    epstab[*n]       = oflow;
-    k1               = *n;
+    epstab[*n + 2] = epstab[*n];
+    newelm = *n / 2;
+    epstab[*n] = oflow;
+    k1 = *n;
     for (i = 0; i < newelm; ++i)
     {
-        k2     = k1 - 1;
-        k3     = k1 - 2;
-        res    = epstab[k1 + 2];
-        e0     = epstab[k3];
-        e1     = epstab[k2];
-        e2     = res;
-        e1abs  = crd::math::fabs(e1);
+        k2 = k1 - 1;
+        k3 = k1 - 2;
+        res = epstab[k1 + 2];
+        e0 = epstab[k3];
+        e1 = epstab[k2];
+        e2 = res;
+        e1abs = crd::math::fabs(e1);
         delta2 = e2 - e1;
-        err2   = crd::math::fabs(delta2);
-        tol2   = detail::qmax<T>(crd::math::fabs(e2), e1abs) * epmach;
+        err2 = crd::math::fabs(delta2);
+        tol2 = detail::qmax<T>(crd::math::fabs(e2), e1abs) * epmach;
         delta3 = e1 - e0;
-        err3   = crd::math::fabs(delta3);
-        tol3   = detail::qmax<T>(e1abs, crd::math::fabs(e0)) * epmach;
+        err3 = crd::math::fabs(delta3);
+        tol3 = detail::qmax<T>(e1abs, crd::math::fabs(e0)) * epmach;
         if (!((err2 > tol2) || (err3 > tol3)))
         {
             *result = res;
@@ -169,24 +166,24 @@ inline void qelg(int* n, T* epstab, T* result, T* abserr, T* res3la, int* nres)
             *abserr = detail::qmax<T>(*abserr, static_cast<T>(5) * epmach * crd::math::fabs(*result));
             return;
         }
-        e3         = epstab[k1];
+        e3 = epstab[k1];
         epstab[k1] = e1;
-        delta1     = e1 - e3;
-        err1       = crd::math::fabs(delta1);
-        tol1       = detail::qmax<T>(e1abs, crd::math::fabs(e3)) * epmach;
+        delta1 = e1 - e3;
+        err1 = crd::math::fabs(delta1);
+        tol1 = detail::qmax<T>(e1abs, crd::math::fabs(e3)) * epmach;
         if ((err1 <= tol1) || (err2 <= tol2) || (err3 <= tol3))
         {
             *n = i + i;
             break;
         }
-        ss     = static_cast<T>(1) / delta1 + static_cast<T>(1) / delta2 - static_cast<T>(1) / delta3;
+        ss = static_cast<T>(1) / delta1 + static_cast<T>(1) / delta2 - static_cast<T>(1) / delta3;
         epsinf = crd::math::fabs(ss * e1);
         if (!(epsinf > static_cast<T>(1e-4)))
         {
             *n = i + i;
             break;
         }
-        res        = e1 + static_cast<T>(1) / ss;
+        res = e1 + static_cast<T>(1) / ss;
         epstab[k1] = res;
         k1 -= 2;
         error = err2 + crd::math::fabs(res - e2) + err3;
@@ -217,12 +214,12 @@ inline void qelg(int* n, T* epstab, T* result, T* abserr, T* res3la, int* nres)
     if (*nres < 4)
     {
         res3la[*nres - 1] = *result;
-        *abserr           = oflow;
+        *abserr = oflow;
     }
     else
     {
-        *abserr   = crd::math::fabs(*result - res3la[2]) + crd::math::fabs(*result - res3la[1])
-                  + crd::math::fabs(*result - res3la[0]);
+        *abserr = crd::math::fabs(*result - res3la[2]) + crd::math::fabs(*result - res3la[1]) +
+                  crd::math::fabs(*result - res3la[0]);
         res3la[0] = res3la[1];
         res3la[1] = res3la[2];
         res3la[2] = *result;
@@ -233,58 +230,47 @@ inline void qelg(int* n, T* epstab, T* result, T* abserr, T* res3la, int* nres)
 // QUADPACK dqk15i — the 15-point Gauss-Kronrod rule on a SEMI/DOUBLY-INFINITE range mapped onto (0,1) via
 // x = boun + dinf·(1−t)/t (Jacobian 1/t²). inf = +1 → (boun,+∞), −1 → (−∞,boun), +2 → (−∞,+∞) (the two halves are
 // summed). [a,b] ⊆ (0,1) is the current panel in t-space. Faithful port.
-template <typename T, typename F>
-[[nodiscard]] GkResult<T> gk15i(F&& f, T boun, int inf, T a, T b)
+template <typename T, typename F> [[nodiscard]] GkResult<T> gk15i(F&& f, T boun, int inf, T a, T b)
 {
-    static constexpr T wg[8]  = {static_cast<T>(0),
-                                 static_cast<T>(0.129484966168869693270611432679082),
-                                 static_cast<T>(0),
-                                 static_cast<T>(0.279705391489276667901467771423780),
-                                 static_cast<T>(0),
-                                 static_cast<T>(0.381830050505118944950369775488975),
-                                 static_cast<T>(0),
-                                 static_cast<T>(0.417959183673469387755102040816327)};
-    static constexpr T xgk[8] = {static_cast<T>(0.991455371120812639206854697526329),
-                                 static_cast<T>(0.949107912342758524526189684047851),
-                                 static_cast<T>(0.864864423359769072789712788640926),
-                                 static_cast<T>(0.741531185599394439863864773280788),
-                                 static_cast<T>(0.586087235467691130294144838258730),
-                                 static_cast<T>(0.405845151377397166906606412076961),
-                                 static_cast<T>(0.207784955007898467600689403773245),
-                                 static_cast<T>(0)};
-    static constexpr T wgk[8] = {static_cast<T>(0.022935322010529224963732008058970),
-                                 static_cast<T>(0.063092092629978553290700663189204),
-                                 static_cast<T>(0.104790010322250183839876322541518),
-                                 static_cast<T>(0.140653259715525918745189590510238),
-                                 static_cast<T>(0.169004726639267902826583426598550),
-                                 static_cast<T>(0.190350578064785409913256402421014),
-                                 static_cast<T>(0.204432940075298892414161999234649),
-                                 static_cast<T>(0.209482141084727828012999174891714)};
-    const T dinf  = (inf > 1) ? T{1} : static_cast<T>(inf);
+    static constexpr T kWg[8] = {static_cast<T>(0), static_cast<T>(0.129484966168869693270611432679082),
+                                 static_cast<T>(0), static_cast<T>(0.279705391489276667901467771423780),
+                                 static_cast<T>(0), static_cast<T>(0.381830050505118944950369775488975),
+                                 static_cast<T>(0), static_cast<T>(0.417959183673469387755102040816327)};
+    static constexpr T kXgk[8] = {
+        static_cast<T>(0.991455371120812639206854697526329), static_cast<T>(0.949107912342758524526189684047851),
+        static_cast<T>(0.864864423359769072789712788640926), static_cast<T>(0.741531185599394439863864773280788),
+        static_cast<T>(0.586087235467691130294144838258730), static_cast<T>(0.405845151377397166906606412076961),
+        static_cast<T>(0.207784955007898467600689403773245), static_cast<T>(0)};
+    static constexpr T kWgk[8] = {
+        static_cast<T>(0.022935322010529224963732008058970), static_cast<T>(0.063092092629978553290700663189204),
+        static_cast<T>(0.104790010322250183839876322541518), static_cast<T>(0.140653259715525918745189590510238),
+        static_cast<T>(0.169004726639267902826583426598550), static_cast<T>(0.190350578064785409913256402421014),
+        static_cast<T>(0.204432940075298892414161999234649), static_cast<T>(0.209482141084727828012999174891714)};
+    const T dinf = (inf > 1) ? T{1} : static_cast<T>(inf);
     const T centr = static_cast<T>(0.5) * (a + b);
     const T hlgth = static_cast<T>(0.5) * (b - a);
-    T       tabsc1 = boun + dinf * (T{1} - centr) / centr;
-    T       fval1  = f(tabsc1);
+    T tabsc1 = boun + dinf * (T{1} - centr) / centr;
+    T fval1 = f(tabsc1);
     if (inf == 2)
     {
         tabsc1 = -tabsc1;
-        fval1  = fval1 + f(tabsc1);
+        fval1 = fval1 + f(tabsc1);
     }
-    const T fc     = (fval1 / centr) / centr;
-    T       resg   = fc * wg[7];
-    T       resk   = fc * wgk[7];
-    T       resabs = crd::math::fabs(resk);
-    T       fv1[7];
-    T       fv2[7];
+    const T fc = (fval1 / centr) / centr;
+    T resg = fc * kWg[7];
+    T resk = fc * kWgk[7];
+    T resabs = crd::math::fabs(resk);
+    T fv1[7];
+    T fv2[7];
     for (int j = 0; j < 7; ++j)
     {
-        const T absc  = hlgth * xgk[j];
+        const T absc = hlgth * kXgk[j];
         const T absc1 = centr - absc;
         const T absc2 = centr + absc;
-        T       t1    = boun + dinf * (T{1} - absc1) / absc1;
-        T       t2    = boun + dinf * (T{1} - absc2) / absc2;
-        T       f1    = f(t1);
-        T       f2    = f(t2);
+        T t1 = boun + dinf * (T{1} - absc1) / absc1;
+        T t2 = boun + dinf * (T{1} - absc2) / absc2;
+        T f1 = f(t1);
+        T f2 = f(t2);
         if (inf == 2)
         {
             t1 = -t1;
@@ -292,32 +278,32 @@ template <typename T, typename F>
             f1 = f1 + f(t1);
             f2 = f2 + f(t2);
         }
-        f1     = (f1 / absc1) / absc1;
-        f2     = (f2 / absc2) / absc2;
+        f1 = (f1 / absc1) / absc1;
+        f2 = (f2 / absc2) / absc2;
         fv1[j] = f1;
         fv2[j] = f2;
         const T fsum = f1 + f2;
-        resg += wg[j] * fsum;
-        resk += wgk[j] * fsum;
-        resabs += wgk[j] * (crd::math::fabs(f1) + crd::math::fabs(f2));
+        resg += kWg[j] * fsum;
+        resk += kWgk[j] * fsum;
+        resabs += kWgk[j] * (crd::math::fabs(f1) + crd::math::fabs(f2));
     }
-    const T reskh  = resk * static_cast<T>(0.5);
-    T       resasc = wgk[7] * crd::math::fabs(fc - reskh);
+    const T reskh = resk * static_cast<T>(0.5);
+    T resasc = kWgk[7] * crd::math::fabs(fc - reskh);
     for (int j = 0; j < 7; ++j)
     {
-        resasc += wgk[j] * (crd::math::fabs(fv1[j] - reskh) + crd::math::fabs(fv2[j] - reskh));
+        resasc += kWgk[j] * (crd::math::fabs(fv1[j] - reskh) + crd::math::fabs(fv2[j] - reskh));
     }
     GkResult<T> r;
-    r.value      = resk * hlgth;
-    r.resabs     = resabs * hlgth;
-    r.resasc     = resasc * hlgth;
-    T abserr     = crd::math::fabs((resk - resg) * hlgth);
+    r.value = resk * hlgth;
+    r.resabs = resabs * hlgth;
+    r.resasc = resasc * hlgth;
+    T abserr = crd::math::fabs((resk - resg) * hlgth);
     if (r.resasc != T{0} && abserr != T{0})
     {
         const T rat = static_cast<T>(200) * abserr / r.resasc; // x^1.5 = x·√x — avoid the heavy double-double pow
-        abserr      = r.resasc * qmin<T>(T{1}, rat * crd::math::sqrt(rat));
+        abserr = r.resasc * qmin<T>(T{1}, rat * crd::math::sqrt(rat));
     }
-    const T uflow  = std::numeric_limits<T>::min();
+    const T uflow = std::numeric_limits<T>::min();
     const T epmach = std::numeric_limits<T>::epsilon();
     if (r.resabs > uflow / (static_cast<T>(50) * epmach))
     {
@@ -334,12 +320,11 @@ template <typename T, typename Panel>
 [[nodiscard]] QuadResult<T> qags_driver(AdaptiveWorkspace<T>& ws, Panel&& panel, T a0, T b0, T epsabs, T epsrel,
                                         int evals_per_panel)
 {
-    const T   epmach = std::numeric_limits<T>::epsilon();
-    const T   uflow  = std::numeric_limits<T>::min();
-    const T   oflow  = std::numeric_limits<T>::max();
-    const int limit  = ws.limit;
-    if (limit < 1
-        || ((epsabs <= T{0}) && (epsrel < qmax<T>(static_cast<T>(50) * epmach, static_cast<T>(0.5e-28)))))
+    const T epmach = std::numeric_limits<T>::epsilon();
+    const T uflow = std::numeric_limits<T>::min();
+    const T oflow = std::numeric_limits<T>::max();
+    const int limit = ws.limit;
+    if (limit < 1 || ((epsabs <= T{0}) && (epsrel < qmax<T>(static_cast<T>(50) * epmach, static_cast<T>(0.5e-28)))))
     {
         return QuadResult<T>{T{0}, T{0}, 0, 0, QuadStatus::BadInput, false};
     }
@@ -348,17 +333,17 @@ template <typename T, typename Panel>
     auto& blist = ws.blist;
     auto& rlist = ws.rlist;
     auto& elist = ws.elist;
-    auto& iord  = ws.iord;
-    T     rlist2[52] = {};
-    T     res3la[3]  = {};
+    auto& iord = ws.iord;
+    T rlist2[52] = {};
+    T res3la[3] = {};
 
     // declare everything up front (the gotos forbid jumping over initializers)
-    int  ier = 0, ierror = 0, last = 1, maxerr = 0, nrmax = 0, nres = 0, numrl2 = 0, ktmin = 0;
-    int  extrap = 0, noext = 0, iroff1 = 0, iroff2 = 0, iroff3 = 0, ksgn = 0, jupbnd = 0, k = 0, L = 0;
-    T    result = T{0}, abserr = T{0}, defabs = T{0}, resabs = T{0}, dres = T{0}, errbnd = T{0};
-    T    erlarg = T{0}, ertest = T{0}, correc = T{0}, errmax = T{0}, area = T{0}, errsum = T{0};
-    T    small = T{0}, a1, b1, a2, b2, area1, area2, area12, error1, error2, error12, defab1, defab2, erlast;
-    T    reseps = T{0}, abseps = T{0};
+    int ier = 0, ierror = 0, last = 1, maxerr = 0, nrmax = 0, nres = 0, numrl2 = 0, ktmin = 0;
+    int extrap = 0, noext = 0, iroff1 = 0, iroff2 = 0, iroff3 = 0, ksgn = 0, jupbnd = 0, k = 0, l = 0;
+    T result = T{0}, abserr = T{0}, defabs = T{0}, resabs = T{0}, dres = T{0}, errbnd = T{0};
+    T erlarg = T{0}, ertest = T{0}, correc = T{0}, errmax = T{0}, area = T{0}, errsum = T{0};
+    T small = T{0}, a1, b1, a2, b2, area1, area2, area12, error1, error2, error12, defab1, defab2, erlast;
+    T reseps = T{0}, abseps = T{0};
 
     alist[0] = a0;
     blist[0] = b0;
@@ -369,12 +354,12 @@ template <typename T, typename Panel>
     defabs = g0.resabs;
     resabs = g0.resasc;
 
-    dres     = crd::math::fabs(result);
-    errbnd   = detail::qmax<T>(epsabs, epsrel * dres);
-    last     = 1;
+    dres = crd::math::fabs(result);
+    errbnd = detail::qmax<T>(epsabs, epsrel * dres);
+    last = 1;
     rlist[0] = result;
     elist[0] = abserr;
-    iord[0]  = 0;
+    iord[0] = 0;
     if ((abserr <= static_cast<T>(100) * epmach * defabs) && (abserr > errbnd))
     {
         ier = 2;
@@ -389,46 +374,46 @@ template <typename T, typename Panel>
     }
 
     rlist2[0] = result;
-    errmax    = abserr;
-    maxerr    = 0;
-    area      = result;
-    errsum    = abserr;
-    abserr    = oflow;
-    nrmax     = 0;
-    nres      = 0;
-    numrl2    = 1;
-    ktmin     = 0;
-    extrap    = 0;
-    noext     = 0;
+    errmax = abserr;
+    maxerr = 0;
+    area = result;
+    errsum = abserr;
+    abserr = oflow;
+    nrmax = 0;
+    nres = 0;
+    numrl2 = 1;
+    ktmin = 0;
+    extrap = 0;
+    noext = 0;
     iroff1 = iroff2 = iroff3 = 0;
     ksgn = (dres >= (static_cast<T>(1) - static_cast<T>(50) * epmach) * defabs) ? 1 : -1;
 
-    for (L = 1; L < limit; ++L)
+    for (l = 1; l < limit; ++l)
     {
-        last = L + 1;
-        a1   = alist[maxerr];
-        b1   = static_cast<T>(0.5) * (alist[maxerr] + blist[maxerr]);
-        a2   = b1;
-        b2   = blist[maxerr];
+        last = l + 1;
+        a1 = alist[maxerr];
+        b1 = static_cast<T>(0.5) * (alist[maxerr] + blist[maxerr]);
+        a2 = b1;
+        b2 = blist[maxerr];
         erlast = errmax;
         {
             const GkResult<T> r1 = panel(a1, b1);
             const GkResult<T> r2 = panel(a2, b2);
-            area1  = r1.value;
+            area1 = r1.value;
             error1 = r1.abserr;
             defab1 = r1.resasc;
-            area2  = r2.value;
+            area2 = r2.value;
             error2 = r2.abserr;
             defab2 = r2.resasc;
         }
-        area12  = area1 + area2;
+        area12 = area1 + area2;
         error12 = error1 + error2;
-        errsum  = errsum + error12 - errmax;
-        area    = area + area12 - rlist[maxerr];
+        errsum = errsum + error12 - errmax;
+        area = area + area12 - rlist[maxerr];
         if ((defab1 != error1) && (defab2 != error2))
         {
-            if (!((crd::math::fabs(rlist[maxerr] - area12) > static_cast<T>(1e-5) * crd::math::fabs(area12))
-                  || (error12 < static_cast<T>(0.99) * errmax)))
+            if (!((crd::math::fabs(rlist[maxerr] - area12) > static_cast<T>(1e-5) * crd::math::fabs(area12)) ||
+                  (error12 < static_cast<T>(0.99) * errmax)))
             {
                 if (extrap)
                 {
@@ -439,14 +424,14 @@ template <typename T, typename Panel>
                     ++iroff1;
                 }
             }
-            if ((L > 9) && (error12 > errmax))
+            if ((l > 9) && (error12 > errmax))
             {
                 ++iroff3;
             }
         }
         rlist[maxerr] = area1;
-        rlist[L]      = area2;
-        errbnd        = detail::qmax<T>(epsabs, epsrel * crd::math::fabs(area));
+        rlist[l] = area2;
+        errbnd = detail::qmax<T>(epsabs, epsrel * crd::math::fabs(area));
         if (((iroff1 + iroff2) >= 10) || (iroff3 >= 20))
         {
             ier = 2;
@@ -459,28 +444,28 @@ template <typename T, typename Panel>
         {
             ier = 1;
         }
-        if (detail::qmax<T>(crd::math::fabs(a1), crd::math::fabs(b2))
-            <= (static_cast<T>(1) + static_cast<T>(100) * epmach) * (crd::math::fabs(a2) + static_cast<T>(1000) * uflow))
+        if (detail::qmax<T>(crd::math::fabs(a1), crd::math::fabs(b2)) <=
+            (static_cast<T>(1) + static_cast<T>(100) * epmach) * (crd::math::fabs(a2) + static_cast<T>(1000) * uflow))
         {
             ier = 4;
         }
         if (!(error2 > error1))
         {
-            alist[L]      = a2;
+            alist[l] = a2;
             blist[maxerr] = b1;
-            blist[L]      = b2;
+            blist[l] = b2;
             elist[maxerr] = error1;
-            elist[L]      = error2;
+            elist[l] = error2;
         }
         else
         {
             alist[maxerr] = a2;
-            alist[L]      = a1;
-            blist[L]      = b1;
+            alist[l] = a1;
+            blist[l] = b1;
             rlist[maxerr] = area2;
-            rlist[L]      = area1;
+            rlist[l] = area1;
             elist[maxerr] = error2;
-            elist[L]      = error1;
+            elist[l] = error1;
         }
         detail::qpsrt<T>(limit, last, &maxerr, &errmax, elist.data(), iord.data(), &nrmax);
         if (errsum <= errbnd)
@@ -491,7 +476,7 @@ template <typename T, typename Panel>
         {
             break;
         }
-        if (L == 1)
+        if (l == 1)
         {
             goto LINE80;
         }
@@ -511,7 +496,7 @@ template <typename T, typename Panel>
                 continue;
             }
             extrap = 1;
-            nrmax  = 1;
+            nrmax = 1;
         }
         if ((ierror == 3) || (erlarg <= ertest))
         {
@@ -547,7 +532,7 @@ template <typename T, typename Panel>
         }
         if (!(abseps >= abserr))
         {
-            ktmin  = 0;
+            ktmin = 0;
             abserr = abseps;
             result = reseps;
             correc = erlarg;
@@ -567,15 +552,15 @@ template <typename T, typename Panel>
         }
         maxerr = iord[0];
         errmax = elist[maxerr];
-        nrmax  = 0;
+        nrmax = 0;
         extrap = 0;
-        small  = small * static_cast<T>(0.5);
+        small = small * static_cast<T>(0.5);
         erlarg = errsum;
         continue;
     LINE80:
-        small     = crd::math::fabs(b0 - a0) * static_cast<T>(0.375);
-        erlarg    = errsum;
-        ertest    = errbnd;
+        small = crd::math::fabs(b0 - a0) * static_cast<T>(0.375);
+        erlarg = errsum;
+        ertest = errbnd;
         rlist2[1] = area;
     }
 
@@ -613,19 +598,20 @@ template <typename T, typename Panel>
         goto LINE130;
     }
 LINE110:
-    if ((ksgn == -1) && (detail::qmax<T>(crd::math::fabs(result), crd::math::fabs(area)) <= defabs * static_cast<T>(0.01)))
+    if ((ksgn == -1) &&
+        (detail::qmax<T>(crd::math::fabs(result), crd::math::fabs(area)) <= defabs * static_cast<T>(0.01)))
     {
         goto LINE130;
     }
-    if ((static_cast<T>(0.01) > (result / area)) || ((result / area) > static_cast<T>(100))
-        || (errsum > crd::math::fabs(area)))
+    if ((static_cast<T>(0.01) > (result / area)) || ((result / area) > static_cast<T>(100)) ||
+        (errsum > crd::math::fabs(area)))
     {
         ier = 6;
     }
     goto LINE130;
 LINE115:
     result = T{0};
-    for (k = 0; k <= L; ++k)
+    for (k = 0; k <= l; ++k)
     {
         result = result + rlist[k];
     }
@@ -637,14 +623,12 @@ LINE130:
     }
 LINE140:
     QuadResult<T> out;
-    out.value          = result;
+    out.value = result;
     out.error_estimate = abserr;
-    out.subdiv_count   = static_cast<crd::u32>(last);
-    out.eval_count     = static_cast<crd::u32>(evals_per_panel * (2 * last - 1));
-    out.tolerance_met  = (ier == 0);
-    out.status         = (ier == 0)   ? QuadStatus::Ok
-                         : (ier == 1) ? QuadStatus::MaxSubdivisions
-                                      : QuadStatus::RoundoffError;
+    out.subdiv_count = static_cast<crd::u32>(last);
+    out.eval_count = static_cast<crd::u32>(evals_per_panel * (2 * last - 1));
+    out.tolerance_met = (ier == 0);
+    out.status = (ier == 0) ? QuadStatus::Ok : (ier == 1) ? QuadStatus::MaxSubdivisions : QuadStatus::RoundoffError;
     return out;
 }
 
@@ -682,8 +666,8 @@ template <typename T, typename F>
     {
         return QuadResult<T>{T{0}, T{0}, 0, 0, QuadStatus::BadInput, false};
     }
-    const T   boun = (inf == 2) ? T{0} : bound;
-    const int epp  = (inf == 2) ? 30 : 15;
+    const T boun = (inf == 2) ? T{0} : bound;
+    const int epp = (inf == 2) ? 30 : 15;
     return detail::qags_driver<T>(
         ws, [&](T pa, T pb) { return detail::gk15i<T>(f, boun, inf, pa, pb); }, T{0}, T{1}, epsabs, epsrel, epp);
 }
@@ -710,11 +694,11 @@ template <typename T, typename F>
         return QuadResult<T>{T{0}, T{0}, 0, 0, QuadStatus::BadInput, false};
     }
     const T sign = (a <= b) ? T{1} : T{-1};
-    const T lo   = a < b ? a : b;
-    const T hi   = a < b ? b : a;
-    T       pts[34];
-    int     n  = 0;
-    pts[n++]   = lo;
+    const T lo = a < b ? a : b;
+    const T hi = a < b ? b : a;
+    T pts[34];
+    int n = 0;
+    pts[n++] = lo;
     for (crd::usize i = 0; i < points.size() && n < 33; ++i)
     {
         if (detail::quad_finite(points[i]) && points[i] > lo && points[i] < hi)
@@ -726,7 +710,7 @@ template <typename T, typename F>
     for (int i = 1; i < n; ++i) // insertion-sort the break-points
     {
         const T v = pts[i];
-        int     j = i - 1;
+        int j = i - 1;
         while (j >= 0 && pts[j] > v)
         {
             pts[j + 1] = pts[j];
@@ -734,10 +718,10 @@ template <typename T, typename F>
         }
         pts[j + 1] = v;
     }
-    const int     npieces   = n - 1;
-    const T       eps_piece = epsabs / static_cast<T>(npieces);
+    const int npieces = n - 1;
+    const T eps_piece = epsabs / static_cast<T>(npieces);
     QuadResult<T> total;
-    total.status        = QuadStatus::Ok;
+    total.status = QuadStatus::Ok;
     total.tolerance_met = true;
     for (int i = 0; i < npieces; ++i)
     {

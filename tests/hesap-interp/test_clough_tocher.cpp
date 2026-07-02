@@ -2,21 +2,19 @@
 // (bit-close ≤1e-9 — the macro-element + curvature-min gradient are transcribed from scipy _interpnd.pyx), the
 // interpolation property, exact linear reproduction, C¹ smoothness, outside-hull NaN, + determinism.
 
-#include <catch2/catch_test_macros.hpp>
-
-#include <crd/hesap/interp/interp.hpp>
-
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
+#include <crd/hesap/interp/interp.hpp>
 #include <crd/math/vec.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
+#include <catch2/catch_test_macros.hpp>
 #include <cmath>
 
 using namespace crd::hesap::interp;
+using crd::usize;
 using crd::containers::ConstSpan;
 using crd::math::Vec2;
-using crd::usize;
 
 namespace
 {
@@ -29,26 +27,77 @@ namespace
 // Gate dataset + scipy references (tol=1e-10, maxiter=10000) — build/ct_gate_ref.py.
 constexpr crd::usize kN = 16;
 constexpr crd::usize kNq = 8;
-constexpr double kPts[] = {0, 0, 1, 0, 0, 1, 1, 1, 0.39963209507788999, 0.86057144512793293, 0.68559515344912403,
-                           0.57892678735762926, 0.22481491235394924, 0.22479561626896213, 0.14646688973455957,
-                           0.79294091661994814, 0.58089200939456709, 0.66645806223683635, 0.11646759543664197,
-                           0.87592788172959546, 0.76595411264033741, 0.26987128854262094, 0.24545997376568052,
-                           0.24672360788274705, 0.34339379436763018, 0.51980514530579025, 0.44555601491369268,
-                           0.33298331215843358, 0.58948231577790355, 0.21159508852163347, 0.33371571882817452,
+constexpr double kPts[] = {0,
+                           0,
+                           1,
+                           0,
+                           0,
+                           1,
+                           1,
+                           1,
+                           0.39963209507788999,
+                           0.86057144512793293,
+                           0.68559515344912403,
+                           0.57892678735762926,
+                           0.22481491235394924,
+                           0.22479561626896213,
+                           0.14646688973455957,
+                           0.79294091661994814,
+                           0.58089200939456709,
+                           0.66645806223683635,
+                           0.11646759543664197,
+                           0.87592788172959546,
+                           0.76595411264033741,
+                           0.26987128854262094,
+                           0.24545997376568052,
+                           0.24672360788274705,
+                           0.34339379436763018,
+                           0.51980514530579025,
+                           0.44555601491369268,
+                           0.33298331215843358,
+                           0.58948231577790355,
+                           0.21159508852163347,
+                           0.33371571882817452,
                            0.39308947463495336};
-constexpr double kValQ[] = {1, 4, 0.5, 2.5, 1.124778192948297, 2.0329729469193971, 1.2501050810334626,
-                            0.71968347146213385, 1.6677044945410298, 0.65217962276517261, 2.6784288722557603,
-                            1.2743224373947291, 1.2415025748044826, 1.6637251055846491, 2.2125136216033292,
+constexpr double kValQ[] = {1,
+                            4,
+                            0.5,
+                            2.5,
+                            1.124778192948297,
+                            2.0329729469193971,
+                            1.2501050810334626,
+                            0.71968347146213385,
+                            1.6677044945410298,
+                            0.65217962276517261,
+                            2.6784288722557603,
+                            1.2743224373947291,
+                            1.2415025748044826,
+                            1.6637251055846491,
+                            2.2125136216033292,
                             1.3317876749571997};
-constexpr double kValL[] = {1.5, 3.5, -1.5, 0.5, -0.28245014522801881, 1.1344099448253604, 1.275242975901012,
-                            -0.58588897039072529, 0.66240983207862514, -0.89484845431550264, 2.2222943596528122,
-                            1.2507491238831199, 0.62737215281788972, 1.3921620933520846, 2.0441793659909067,
+constexpr double kValL[] = {1.5,
+                            3.5,
+                            -1.5,
+                            0.5,
+                            -0.28245014522801881,
+                            1.1344099448253604,
+                            1.275242975901012,
+                            -0.58588897039072529,
+                            0.66240983207862514,
+                            -0.89484845431550264,
+                            2.2222943596528122,
+                            1.2507491238831199,
+                            0.62737215281788972,
+                            1.3921620933520846,
+                            2.0441793659909067,
                             0.98816301375148896};
 constexpr double kQ[] = {0.4, 0.4, 0.6, 0.5, 0.5, 0.6, 0.35, 0.45, 0.3, 0.3, 0.65, 0.4, 0.45, 0.7, 0.55, 0.55};
 constexpr double kRefQ[] = {1.4816966340616453, 1.8869005713552072, 1.5298999536858966, 1.3165471610843833,
                             1.3457445895622724, 2.1405823493246436, 1.3333008959677195, 1.7020024651624139};
-constexpr double kRefL[] = {1.0999999999999999, 1.2, 0.70000000000000018, 0.84999999999999987, 1.2000000000000002,
-                            1.5999999999999999, 0.30000000000000027, 0.94999999999999996};
+constexpr double kRefL[] = {1.0999999999999999,  1.2,
+                            0.70000000000000018, 0.84999999999999987,
+                            1.2000000000000002,  1.5999999999999999,
+                            0.30000000000000027, 0.94999999999999996};
 
 void fill_pts(Vec2<double>* out)
 {
@@ -62,7 +111,7 @@ void fill_pts(Vec2<double>* out)
 TEST_CASE("v13-f: Clough-Tocher bit-close vs scipy CloughTocher2DInterpolator", "[v13-f][interp]")
 {
     crd::memory::TlsfAllocator alloc(1U << 20);
-    Vec2<double>               vpts[kN];
+    Vec2<double> vpts[kN];
     fill_pts(vpts);
     const auto pts = ConstSpan<Vec2<double>>{vpts, kN};
 
@@ -80,7 +129,7 @@ TEST_CASE("v13-f: Clough-Tocher bit-close vs scipy CloughTocher2DInterpolator", 
 TEST_CASE("v13-f: Clough-Tocher interpolation property + outside-hull NaN", "[v13-f][interp]")
 {
     crd::memory::TlsfAllocator alloc(1U << 20);
-    Vec2<double>               vpts[kN];
+    Vec2<double> vpts[kN];
     fill_pts(vpts);
     CloughTocher2DInterpolant<double> ct(&alloc);
     REQUIRE(ct.fit(ConstSpan<Vec2<double>>{vpts, kN}, ConstSpan<double>{kValQ, kN}, 1e-10, 10000) == InterpStatus::Ok);
@@ -100,7 +149,7 @@ TEST_CASE("v13-f: Clough-Tocher interpolation property + outside-hull NaN", "[v1
 TEST_CASE("v13-f: Clough-Tocher reproduces a linear field exactly", "[v13-f][interp]")
 {
     crd::memory::TlsfAllocator alloc(1U << 20);
-    Vec2<double>               vpts[kN];
+    Vec2<double> vpts[kN];
     fill_pts(vpts);
     CloughTocher2DInterpolant<double> ct(&alloc);
     REQUIRE(ct.fit(ConstSpan<Vec2<double>>{vpts, kN}, ConstSpan<double>{kValL, kN}, 1e-10, 10000) == InterpStatus::Ok);
@@ -115,22 +164,24 @@ TEST_CASE("v13-f: Clough-Tocher reproduces a linear field exactly", "[v13-f][int
 TEST_CASE("v13-f: Clough-Tocher is C1-smooth (no derivative jumps across edges)", "[v13-f][interp]")
 {
     crd::memory::TlsfAllocator alloc(1U << 20);
-    Vec2<double>               vpts[kN];
+    Vec2<double> vpts[kN];
     fill_pts(vpts);
     CloughTocher2DInterpolant<double> ct(&alloc);
     REQUIRE(ct.fit(ConstSpan<Vec2<double>>{vpts, kN}, ConstSpan<double>{kValQ, kN}, 1e-10, 10000) == InterpStatus::Ok);
 
     // Sample along an interior line; the finite-difference first derivative must vary SMOOTHLY (a C0-only interpolant
     // would jump by O(1) at every triangle edge it crosses). Quadratic field ⇒ a true C1 surface has |Δderiv| = O(h).
-    constexpr int    kSteps = 240;
-    constexpr double x0 = 0.12, x1 = 0.88, yline = 0.46;
-    const double     h = (x1 - x0) / kSteps;
-    double           prev_d = 0.0;
-    double           max_jump = 0.0;
-    bool             have_prev = false;
-    for (int i = 1; i < kSteps; ++i)
+    constexpr int k_steps = 240;
+    constexpr double x0 = 0.12;
+    constexpr double x1 = 0.88;
+    constexpr double yline = 0.46;
+    const double h = (x1 - x0) / k_steps;
+    double prev_d = 0.0;
+    double max_jump = 0.0;
+    bool have_prev = false;
+    for (int i = 1; i < k_steps; ++i)
     {
-        const double x  = x0 + i * h;
+        const double x = x0 + i * h;
         const double fm = ct.eval(Vec2<double>{x - h, yline});
         const double fp = ct.eval(Vec2<double>{x + h, yline});
         if (std::isnan(fm) || std::isnan(fp))
@@ -141,9 +192,9 @@ TEST_CASE("v13-f: Clough-Tocher is C1-smooth (no derivative jumps across edges)"
         if (have_prev)
         {
             const double jump = std::abs(d - prev_d);
-            max_jump          = jump > max_jump ? jump : max_jump;
+            max_jump = jump > max_jump ? jump : max_jump;
         }
-        prev_d    = d;
+        prev_d = d;
         have_prev = true;
     }
     // C1 sanity check (the rigorous C1 proof is the bit-close scipy match above — scipy's CT is provably C1). The
@@ -155,10 +206,11 @@ TEST_CASE("v13-f: Clough-Tocher is C1-smooth (no derivative jumps across edges)"
 TEST_CASE("v13-f: Clough-Tocher fit is deterministic + rejects bad input", "[v13-f][interp]")
 {
     crd::memory::TlsfAllocator alloc(1U << 20);
-    Vec2<double>               vpts[kN];
+    Vec2<double> vpts[kN];
     fill_pts(vpts);
-    const auto                        pts = ConstSpan<Vec2<double>>{vpts, kN};
-    CloughTocher2DInterpolant<double> a(&alloc), b(&alloc);
+    const auto pts = ConstSpan<Vec2<double>>{vpts, kN};
+    CloughTocher2DInterpolant<double> a(&alloc);
+    CloughTocher2DInterpolant<double> b(&alloc);
     REQUIRE(a.fit(pts, ConstSpan<double>{kValQ, kN}, 1e-10, 10000) == InterpStatus::Ok);
     REQUIRE(b.fit(pts, ConstSpan<double>{kValQ, kN}, 1e-10, 10000) == InterpStatus::Ok);
     for (usize i = 0; i < kNq; ++i)
@@ -168,7 +220,7 @@ TEST_CASE("v13-f: Clough-Tocher fit is deterministic + rejects bad input", "[v13
     }
 
     CloughTocher2DInterpolant<double> bad(&alloc);
-    Vec2<double>                      two[2] = {{0, 0}, {1, 1}};
+    Vec2<double> two[2] = {{0, 0}, {1, 1}};
     CHECK(bad.fit(ConstSpan<Vec2<double>>{two, 2}, ConstSpan<double>{kValQ, 2}) == InterpStatus::BadInput);
 }
 
@@ -179,36 +231,37 @@ TEST_CASE("v13-f: Clough-Tocher locates every interior point (no NaN) + eval is 
     // of evaluation order (the m_last_tri walk-start cache must not change the located triangle ⇒ eval is a pure
     // function of the query, the property a safety-critical replay depends on).
     crd::memory::TlsfAllocator alloc(1U << 22);
-    Vec2<double>               vpts[kN];
+    Vec2<double> vpts[kN];
     fill_pts(vpts);
     CloughTocher2DInterpolant<double> ct(&alloc);
     REQUIRE(ct.fit(ConstSpan<Vec2<double>>{vpts, kN}, ConstSpan<double>{kValQ, kN}, 1e-10, 10000) == InterpStatus::Ok);
 
-    constexpr int                  kG = 200;
+    constexpr int k_g = 200;
     crd::containers::Array<double> fwd(&alloc);
-    fwd.resize(static_cast<crd::usize>(kG) * kG);
-    auto at = [&](int ix, int iy) {
-        const double x = 0.005 + 0.99 * (static_cast<double>(ix) / (kG - 1));
-        const double y = 0.005 + 0.99 * (static_cast<double>(iy) / (kG - 1));
+    fwd.resize(static_cast<crd::usize>(k_g) * k_g);
+    auto at = [&](int ix, int iy)
+    {
+        const double x = 0.005 + 0.99 * (static_cast<double>(ix) / (k_g - 1));
+        const double y = 0.005 + 0.99 * (static_cast<double>(iy) / (k_g - 1));
         return ct.eval(Vec2<double>{x, y});
     };
     bool any_nan = false;
-    for (int iy = 0; iy < kG; ++iy)
+    for (int iy = 0; iy < k_g; ++iy)
     {
-        for (int ix = 0; ix < kG; ++ix)
+        for (int ix = 0; ix < k_g; ++ix)
         {
-            const double v               = at(ix, iy);
-            fwd[static_cast<usize>(iy) * kG + ix] = v;
-            any_nan                       = any_nan || std::isnan(v);
+            const double v = at(ix, iy);
+            fwd[static_cast<usize>(iy) * k_g + ix] = v;
+            any_nan = any_nan || std::isnan(v);
         }
     }
     CHECK_FALSE(any_nan); // (a) no interior query NaNs
     bool order_independent = true;
-    for (int iy = kG - 1; iy >= 0; --iy)
+    for (int iy = k_g - 1; iy >= 0; --iy)
     {
-        for (int ix = kG - 1; ix >= 0; --ix)
+        for (int ix = k_g - 1; ix >= 0; --ix)
         {
-            order_independent = order_independent && (at(ix, iy) == fwd[static_cast<usize>(iy) * kG + ix]);
+            order_independent = order_independent && (at(ix, iy) == fwd[static_cast<usize>(iy) * k_g + ix]);
         }
     }
     CHECK(order_independent); // (b) reverse-order eval is bit-identical

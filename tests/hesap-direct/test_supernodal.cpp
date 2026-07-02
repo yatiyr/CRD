@@ -112,6 +112,43 @@ Csr grid3d(crd::memory::IAllocator* a, crd::u32 s)
     return tb.compress();
 }
 
+// Bordered block-diagonal SPD: nb dense bs×bs blocks + a dense nbord-column border coupled to every block.
+// Purpose-built for the v5a-4 NODE-parallel moat at a fraction of grid3d(28)'s cost: under AMD the low-degree
+// block nodes eliminate first and the dense border becomes the ROOT supernode (nc ≈ nbord ≥ kNodeParallelMinCols)
+// that RECEIVES cmod from every block supernode — the same divergent paths (two-level cdiv, no-pack cmod vs
+// gemm_parallel) at ~450 Mflop instead of grid3d(28)'s tens of Gflop. (grid3d(28) took 456 s in win-debug and
+// ~40 min under win-asan — 2026-07-02 diagnosis: slow, not hung; ASan shadow checks on every microkernel load.)
+Csr bordered_spd(crd::memory::IAllocator* a, crd::u32 nb, crd::u32 bs, crd::u32 nbord)
+{
+    const crd::u32 n = nb * bs + nbord;
+    const crd::u32 b0 = nb * bs; // first border row
+    sp::TripletBuilder<crd::f64> tb(a, n, n);
+    for (crd::u32 b = 0; b < nb; ++b) // dense diagonal blocks
+    {
+        const crd::u32 r0 = b * bs;
+        for (crd::u32 i = 0; i < bs; ++i)
+        {
+            for (crd::u32 j = 0; j < bs; ++j)
+            {
+                tb.add(r0 + i, r0 + j, i == j ? static_cast<crd::f64>(n + 1) : 1.0);
+            }
+        }
+    }
+    for (crd::u32 i = b0; i < n; ++i) // dense border block + border↔block coupling (both triangles)
+    {
+        for (crd::u32 j = b0; j < n; ++j)
+        {
+            tb.add(i, j, i == j ? static_cast<crd::f64>(n + 1) : 1.0);
+        }
+        for (crd::u32 j = 0; j < b0; ++j)
+        {
+            tb.add(i, j, 1.0);
+            tb.add(j, i, 1.0);
+        }
+    }
+    return tb.compress();
+}
+
 // Structural invariants every amalgamated symbolic must satisfy.
 void check_valid(const dir::SupernodalSymbolic& s, const ord::SymbolicFactor& sf)
 {
@@ -450,9 +487,11 @@ TEST_CASE("supernodal Cholesky: refactorize (reuse symbolic) == fresh factorize,
 // v5a-4 moat: the grid2d(144) test above never produces a supernode ≥ kNodeParallelMinCols=512,
 // so it exercises only the TREE-parallel path. The two-level cdiv (v5a-4) and the no-pack cmod
 // (v5a-4) introduce code that DIVERGES by worker count ONLY on a node-parallel front (serial-gemm
-// /no-pack at 1 worker vs generic gemm_parallel at N). This test factors matrices whose near-root
-// supernode genuinely exceeds 512 — so the divergent paths actually run — and REQUIRES the factor
-// (hence the solve) bit-identical across {1,2,4,8} workers. Capped at 8 workers (i9-14900K host).
+// /no-pack at 1 worker vs generic gemm_parallel at N). This test factors matrices whose fat
+// supernode genuinely exceeds 512 — dense_spd(600) for the cdiv-only path and bordered_spd for a
+// fat root WITH descendants sending cmod — so the divergent paths actually run — and REQUIRES the
+// factor (hence the solve) bit-identical across {1,2,4,8} workers. Capped at 8 workers (i9-14900K
+// host). Both shape guards (maxnc ≥ 512, nsuper ≥ min) fail loudly if the coverage ever narrows.
 TEST_CASE("supernodal Cholesky: fat-front NODE-PARALLEL factor is bit-identical to serial (v5a-4 moat)",
           "[hesap][direct][v5a-4][determinism]")
 {
@@ -462,7 +501,7 @@ TEST_CASE("supernodal Cholesky: fat-front NODE-PARALLEL factor is bit-identical 
     crd::jobs::init(cfg);
     const crd::u32 w = crd::jobs::num_workers();
 
-    auto moat = [&](const Csr& m)
+    auto moat = [&](const Csr& m, crd::u32 min_nsuper)
     {
         const crd::u32 n = m.rows();
         const auto& pat = m.pattern();
@@ -482,6 +521,10 @@ TEST_CASE("supernodal Cholesky: fat-front NODE-PARALLEL factor is bit-identical 
             }
         }
         REQUIRE(maxnc >= 512); // kNodeParallelMinCols — proves the divergent paths actually run
+        // Guard #2: the fat front must have DESCENDANTS for the cmod/no-pack divergence to run (a
+        // single-supernode matrix like dense_spd covers only the cdiv path). Loud, not silent: if
+        // amalgamation ever merges the bordered matrix into one supernode, this fails immediately.
+        REQUIRE(sym.nsuper >= min_nsuper);
 
         crd::containers::Array<crd::f64> xtrue(&alloc);
         crd::containers::Array<crd::f64> b(&alloc);
@@ -584,8 +627,10 @@ TEST_CASE("supernodal Cholesky: fat-front NODE-PARALLEL factor is bit-identical 
         }
     };
 
-    moat(dense_spd(&alloc, 600)); // ONE supernode nc=600 → two-level cdiv runs NODE-parallel
-    moat(grid3d(&alloc, 28));     // 21952-node; fat near-root front WITH cmod → no-pack divergence
+    moat(dense_spd(&alloc, 600), 1);            // ONE supernode nc=600 → two-level cdiv runs NODE-parallel
+    moat(bordered_spd(&alloc, 24, 48, 560), 2); // 560-col ROOT front receiving cmod from ~24 block supernodes
+                                                // → the no-pack divergence, at ~1/100 the cost of grid3d(28)
+                                                // (456 s win-debug / ~40 min win-asan — the 2026-07-02 scar)
 
     crd::jobs::shutdown();
 }

@@ -24,7 +24,7 @@ bool close(f64 g, f64 r, f64 rtol, f64 atol) noexcept
 }
 } // namespace
 
-TEST_CASE("v13-h: GK21 rule — degree-31 exactness + single-panel value vs scipy", "[v13-h][quadrature]")
+TEST_CASE("v13-h: GK21 rule -- degree-31 exactness + single-panel value vs scipy", "[v13-h][quadrature]")
 {
     for (int k = 0; k <= 31; ++k) // (2n+1)=21-point Kronrod is exact to degree 3n+1 = 31
     {
@@ -79,7 +79,7 @@ TEST_CASE("v13-h: adaptive respects the WCET subdivision bound (no unbounded rec
     CHECK(r.subdiv_count <= 3); // never exceeded the budget
 }
 
-TEST_CASE("v13-h: Lyness-Kaganove honesty — the error estimate is NOT a bound", "[v13-h][quadrature]")
+TEST_CASE("v13-h: Lyness-Kaganove honesty -- the error estimate is NOT a bound", "[v13-h][quadrature]")
 {
     // A Gaussian peak at x=0.3 narrower than the GK21 node spacing on [0,1]: every node sees f≈0, so the single
     // panel returns ~0 with a TINY error estimate — yet the true integral is √π/1000 ≈ 1.77e-3. The estimate is
@@ -91,7 +91,7 @@ TEST_CASE("v13-h: Lyness-Kaganove honesty — the error estimate is NOT a bound"
     CHECK(std::abs(g.value - true_val) > 1e-4); // ...while being far from the truth: the estimate was fooled
 }
 
-TEST_CASE("v13-h: QAGS handles endpoint singularities via Wynn-ε extrapolation", "[v13-h][quadrature]")
+TEST_CASE("v13-h: QAGS handles endpoint singularities via Wynn-eps extrapolation", "[v13-h][quadrature]")
 {
     crd::memory::TlsfAllocator alloc(1U << 20);
     // Endpoint-singular integrands where plain QAG converges only slowly — QAGS extrapolates to full precision.

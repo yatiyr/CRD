@@ -301,6 +301,34 @@ template <MathScalar T>
     return Quat<T>(a.x * w0 + b.x * w1, a.y * w0 + b.y * w1, a.z * w0 + b.z * w1, a.w * w0 + b.w * w1);
 }
 
+// Quaternion logarithm of a UNIT quaternion q = (v, w): log(q) = (θ·v̂, 0), a PURE quaternion where θ = atan2(|v|, w)
+// is the half-rotation-angle and v̂ = v/|v|. The manifold-correct tangent used by SQUAD / quaternion-B-spline control
+// points. Small-angle safe (|v|→0 ⇒ log→(v,0)).
+template <MathScalar T> [[nodiscard]] inline Quat<T> quat_log(const Quat<T>& q, T epsilon = default_epsilon<T>()) noexcept
+{
+    const T vlen = static_cast<T>(std::sqrt(q.x * q.x + q.y * q.y + q.z * q.z));
+    if (vlen < epsilon)
+    {
+        return Quat<T>(q.x, q.y, q.z, static_cast<T>(0)); // small angle: log ≈ v
+    }
+    const T theta = static_cast<T>(std::atan2(vlen, q.w));
+    const T k     = theta / vlen;
+    return Quat<T>(q.x * k, q.y * k, q.z * k, static_cast<T>(0));
+}
+
+// Quaternion exponential of a PURE quaternion q = (v, 0): exp(q) = (sin|v|·v̂, cos|v|), a UNIT quaternion. Inverse of
+// quat_log. Small-angle safe (|v|→0 ⇒ exp→(v, 1)).
+template <MathScalar T> [[nodiscard]] inline Quat<T> quat_exp(const Quat<T>& q, T epsilon = default_epsilon<T>()) noexcept
+{
+    const T vlen = static_cast<T>(std::sqrt(q.x * q.x + q.y * q.y + q.z * q.z));
+    if (vlen < epsilon)
+    {
+        return Quat<T>(q.x, q.y, q.z, static_cast<T>(1)); // small angle: exp ≈ (v, 1)
+    }
+    const T s = static_cast<T>(std::sin(vlen)) / vlen;
+    return Quat<T>(q.x * s, q.y * s, q.z * s, static_cast<T>(std::cos(vlen)));
+}
+
 // ---- TRS Mat4 build / decompose (lives here because it bridges Quat + Mat) ---
 //
 // from_trs / to_trs encode the canonical column-major M = T * R * S.

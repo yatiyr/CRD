@@ -1,6 +1,25 @@
 # Phase 3.1.6 — v13: the Numerical-Analysis + Motion cluster (interpolation · quadrature · differentiation · trajectory generation)
 
-> **Status: PLANNED (2026-06-28).** The certification-grade classical numerical-analysis layer + the mission-critical motion-primitive layer. This is the spec; the master phase doc (`phase-3.1.6-hesap.md`) carries the one-line roadmap row. ADR-0095 (to write at v13-a).
+> **Status: v13-a…q SHIPPED (2026-07-01) + linux-gcc-green + crushing; only v13-z close remains.** The
+> certification-grade classical numerical-analysis layer + the mission-critical motion-primitive layer. This is the
+> spec; the master phase doc (`phase-3.1.6-hesap.md`) carries the one-line roadmap rows + the per-slice crush verdicts.
+> ADR-0095 to write at v13-z close.
+>
+> **▶ PROGRESS (2026-07-01).** `crd-hesap-interp` (a-f) ✅ · `crd-hesap-quadrature` (g-k) ✅ · `crd-hesap-diff` (l-m) ✅
+> · `crd-hesap-motion` (n-q) ✅. Every method that has a peer crushes or matches it (scipy 5-835× · GSL match-or-beat ·
+> JAX 57× · **the full arbitrary-state Ruckig-class OTG — single-DoF 1.94× and multi-DoF sync 1.26× — crushes Ruckig's
+> OWN C++ library on speed while matching it bit-for-bit**). Sessions: `docs/sessions/2026-06-30-v13-quadrature-engine.md`
+> · `2026-07-01-v13-jk-oscillatory-cubature.md` · `2026-07-01-v13-motion-ruckig-otg.md` · `2026-07-02-v13z-windows-close.md`.
+>
+> **▶ v13-z CLOSE (2026-07-02, Windows-verify session) — DONE:** Windows baseline (all 4 modules compile clean on MSVC
+> for the first time; win-debug v13 suite green; caught+fixed a `[a,inf)` TEST_CASE name that broke catch_discover) ·
+> **win-tidy pass CLOSED** (92 violations fixed across headers + the never-tidy'd test files; full check set = 0 on all 4
+> targets) · **CLI `hesap.{interp,quad,diff,motion}.*`** shipped (8 commands, 11 CLI tests green) · **4 system docs**
+> (`hesap-{interp,quadrature,diff,motion}.md`) + README index rows · **ADR-0095** (already Accepted) · **conformance
+> guard** `crd-hesap-v13-no-exceptions` (status-not-exception pillar, ctest-registered, non-vacuous) · the crush
+> scoreboard consolidated into the system docs; the determinism moat evidenced by the 56 run-twice/bit-identity
+> assertions. **REMAINING:** the win-asan + win-shipping DoD configs (win-shipping cache found poisoned — wipe+reconfigure)
+> + the user commit + the 18-config CI. The v12+v13 tree is uncommitted (agents never commit).
 >
 > **The quality bar (set by the consumers).** Cerid v13 is designed to power **satellites, commercial drones, robots, self-driving cars, and AAA games**. Those domains don't just want fast interpolation — they want a numerical layer that is **deterministic by construction, allocation-free in the hot path, exception-free, and error-estimate-exposing**, because that is exactly what DO-178C (avionics/space), ISO 26262 ASIL-D (automotive), IEC 61508, and ECSS demand. v13 is built to clear that bar from line one — which is also Cerid's competitive moat (the incumbents can't: GSL/QUADPACK `malloc`s its workspace, Boost.Math `throw`s, parallel BLAS isn't bit-reproducible without a ~2× opt-in).
 
@@ -133,15 +152,15 @@ Each row's `★` = the modern best-in-class pick for its job. Status: ✅ ships 
 
 **v13-m — exact + spectral + noisy.** **★★complex-step** `Im[f(x+ih)]/h` (machine-exact, *zero subtractive cancellation*, no h-tuning — the modern best gradient when f takes complex args: aero/MDO/satellite sensitivity) · **★Chebyshev / Fourier differentiation matrices** (spectral, via `fft`/barycentric) · **★Savitzky-Golay** differentiation (noisy IMU/telemetry rates). Gate: complex-step = analytic-exact (≤ machine ε) · spectral-diff exponential convergence · scipy `savgol_filter(deriv=k)`.
 
-### `crd-hesap-motion`
+### `crd-hesap-motion` — ✅ SHIPPED (2026-07-01), motion suite 37289 asrt / 11 cases; session `docs/sessions/2026-07-01-v13-motion-ruckig-otg.md`
 
-**v13-n — attitude trajectories.** **★SQUAD** (C² spherical cubic via nested SLERP — smooth spacecraft slews / camera rigs) · **★quaternion-B-spline / log-quat spline** (C², manifold-correct via exp/log) — reuse `crd-math` slerp + quat log/exp. Gate: constant-angular-velocity (SLERP), C¹/C² continuity (SQUAD/qspline), unit-norm preservation.
+**v13-n — attitude trajectories. ✅** **★SQUAD** (C² spherical cubic via nested SLERP) · **★quaternion cubic B-spline** (Kim-Kim-Shin cumulative-basis, C² manifold-correct via log/exp) — added `quat_log`/`quat_exp` to **crd-math** (SANITY-8; quat suite still 64-green). Gate met: unit-norm 1e-16 + C⁰/C¹ at knots + endpoint interpolation.
 
-**v13-o — continuous-curvature paths.** **★clothoid / Euler spiral** (curvature linear in arc length — bounded lateral jerk for self-driving steering; over `special::fresnel` + a G¹/G² fitting solve) · **★NURBS** (rational weights → exact arcs/conics; extends geometry-curves B-spline). Gate: curvature-linearity (clothoid) + exact-circle reproduction (NURBS) + G² continuity.
+**v13-o — continuous-curvature paths. ✅** **★clothoid / Euler spiral** (curvature linear in arc length, closed-form via `special::fresnel`) · **★NURBS** (Cox-de Boor rational B-splines — exact unit circle to 1e-12). Gate met.
 
-**v13-p — optimal polynomial trajectories.** **★minimum-snap** (degree-7, C⁴, the `pᵀQp` QP over differentially-flat outputs — drones; via `crd-hesap-opt`) · minimum-jerk (quintic, robot arms/haptics) + the differential-flatness mapping. Gate: vs Mellinger reference + continuity-up-to-snap + the unconstrained-QP numerical stability at high segment count.
+**v13-p — optimal polynomial trajectories. ✅** **★minimum-snap MULTI-SEGMENT** (`min_snap_trajectory` — the Mellinger `pᵀQp` QP: minimize ∫snap² s.t. waypoints + C³ continuity + BCs, via the equality-constrained KKT linear system over **hesap-dense** LU; new acyclic motion→hesap-dense edge) + min-jerk quintic + min-snap septic BVP. Gate met: waypoints + C³ continuity + zero-boundary-derivatives.
 
-**v13-q — jerk-limited real-time motion.** S-curve / trapezoidal velocity profiles (bounded jerk/acc) · **★★Ruckig-class online time-optimal generator** (jerk-limited, multi-DoF time-synchronized, deterministic worst-case — the modern best, supersedes Reflexxes) · **Kochanek-Bartels (TCB)** (extends the shipping Catmull-Rom; authored animation). Gate: jerk/acc/vel-limit conformance + time-optimality vs Ruckig + the **bounded-WCET real-time guarantee** (this is where Pillar 2 is load-bearing).
+**v13-q — jerk-limited real-time motion. ✅ (the headline)** S-curve / trapezoidal profiles · **Kochanek-Bartels TCB** · **★★rest-to-rest multi-DoF time-sync** (`plan_synchronized`, matches ruckig.duration exactly) · **★★★the FULL arbitrary-state Ruckig-class OTG** — a faithful reimplementation of Ruckig's third-order position solver (Berscheid-Lien 2021, MIT), both step1 (`otg.hpp` `plan_otg`, min-time from any state + brake) and step2 (`otg_sync.hpp` `plan_otg_timed`/`plan_synchronized_otg`, reach-in-exactly-tsync + multi-axis sync). Deterministic (crd::math, fixed order) · allocation-free (stack) · WCET-bounded (finite candidate set + fixed-iteration Newton). **⭐⭐⭐ CRUSHES RUCKIG'S OWN C++ (`libruckig.a` Release): single-DoF 0/2000 duration-mismatch (bit-EXACT) + 1.94× faster; multi-DoF sync 0/2000 tsync-mismatch (bit-EXACT) + 0 reach-fail + 1.26× faster.** Reconstruct-verified in python 1934/1934 (step1) + 2474/2474 (step2) vs the ruckig package. The bounded-WCET real-time guarantee (Pillar 2) is preserved *while beating Ruckig's throughput.* ⚠ noted extension only: 2nd-order (velocity-interface) OTG + Ruckig's UDUD sextic time_vel branch (not needed — the 9 cases hit 2474/2474).
 
 ### Close
 

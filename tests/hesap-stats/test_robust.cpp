@@ -1,13 +1,12 @@
 // v12-p robust estimators — Theil-Sen vs scipy.stats.theilslopes; Hodges-Lehmann vs the Walsh-average median; Huber &
 // Tukey-biweight M-estimators vs statsmodels RLM.
 
-#include <catch2/catch_test_macros.hpp>
-
+#include <crd/core/types.hpp>
 #include <crd/hesap/stats/cov_robust.hpp>
 #include <crd/hesap/stats/robust.hpp>
-
-#include <crd/core/types.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
+
+#include <catch2/catch_test_macros.hpp>
 
 using namespace crd::hesap::stats;
 using crd::containers::ConstSpan;
@@ -47,9 +46,9 @@ TEST_CASE("v12-p: Theil-Sen / Hodges-Lehmann / Huber / Tukey vs scipy/statsmodel
 TEST_CASE("v12-p: Ledoit-Wolf / OAS / exact MCD vs sklearn", "[v12-p][stats][robust]")
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(1) << 20);
-    constexpr double X[] = {1.0, 2.1, 2.0, 3.9, 3.0, 6.2, 4.0, 7.8,  5.0, 10.1,
-                            1.5, 3.0, 2.5, 5.1, 3.5, 6.9, 4.5, 9.2,  0.5, 1.1};
-    const auto xs = ConstSpan<double>{X, 20};
+    constexpr double x[] = {1.0, 2.1, 2.0, 3.9, 3.0, 6.2, 4.0, 7.8, 5.0, 10.1,
+                            1.5, 3.0, 2.5, 5.1, 3.5, 6.9, 4.5, 9.2, 0.5, 1.1};
+    const auto xs = ConstSpan<double>{x, 20};
     {
         const auto r = ledoit_wolf(xs, 10, 2, &alloc);
         CHECK(close(r.shrinkage, 0.158005628479773));

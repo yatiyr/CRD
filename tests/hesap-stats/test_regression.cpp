@@ -1,13 +1,12 @@
 // v12-r linear models — OLS (coef + R^2 + standard errors), WLS, GLS gated vs statsmodels.
 
-#include <catch2/catch_test_macros.hpp>
-
-#include <crd/hesap/stats/regression.hpp>
-
 #include <crd/containers/array.hpp>
 #include <crd/core/types.hpp>
+#include <crd/hesap/stats/regression.hpp>
 #include <crd/math/cmath.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
+
+#include <catch2/catch_test_macros.hpp>
 
 using namespace crd::hesap::stats;
 using crd::containers::ConstSpan;
@@ -51,8 +50,8 @@ TEST_CASE("v12-r: OLS / WLS / GLS vs statsmodels", "[v12-r][stats][regression]")
         CHECK(close(r.se[2], 0.31998524665222, 1e-6));
     }
     {
-        constexpr double kW[] = {1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2};
-        const auto c = wls(xs, ys, ConstSpan<double>{kW, n}, n, p, &alloc);
+        constexpr double k_w[] = {1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2};
+        const auto c = wls(xs, ys, ConstSpan<double>{k_w, n}, n, p, &alloc);
         CHECK(close(c[0], 0.17142857142857, 1e-7));
         CHECK(close(c[1], 0.704761904761906, 1e-7));
         CHECK(close(c[2], 0.871428571428571, 1e-7));
@@ -161,8 +160,7 @@ TEST_CASE("v12-r: PCA vs sklearn", "[v12-r][stats][regression]")
 TEST_CASE("v12-r: LDA / QDA predictions vs sklearn", "[v12-r][stats][regression]")
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(1) << 20);
-    constexpr double xd[] = {1, 2, 2, 1, 2, 3, 3, 2, 1, 1, 2, 2, 4, 5,
-                             5, 4, 5, 6, 6, 5, 4, 4, 5, 5, 3.5, 3.5, 3, 4};
+    constexpr double xd[] = {1, 2, 2, 1, 2, 3, 3, 2, 1, 1, 2, 2, 4, 5, 5, 4, 5, 6, 6, 5, 4, 4, 5, 5, 3.5, 3.5, 3, 4};
     constexpr crd::u32 yl[] = {0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 1};
     constexpr crd::u32 ref[] = {0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1};
     constexpr crd::usize n = 14;

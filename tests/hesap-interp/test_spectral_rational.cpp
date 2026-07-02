@@ -30,7 +30,7 @@ constexpr double kPi = 3.14159265358979323846;
 }
 } // namespace
 
-TEST_CASE("v13-d: Chebyshev interpolation — exponential convergence", "[v13-d][interp]")
+TEST_CASE("v13-d: Chebyshev interpolation -- exponential convergence", "[v13-d][interp]")
 {
     crd::memory::TlsfAllocator alloc(1U << 18);
     constexpr usize n = 16;
@@ -83,7 +83,7 @@ TEST_CASE("v13-d: Chebyshev interpolation — exponential convergence", "[v13-d]
     CHECK(same);
 }
 
-TEST_CASE("v13-d: trigonometric interpolation — band-limited exactness", "[v13-d][interp]")
+TEST_CASE("v13-d: trigonometric interpolation -- band-limited exactness", "[v13-d][interp]")
 {
     crd::memory::TlsfAllocator alloc(1U << 16);
     constexpr usize n = 8;
@@ -102,7 +102,7 @@ TEST_CASE("v13-d: trigonometric interpolation — band-limited exactness", "[v13
     }
 }
 
-TEST_CASE("v13-d: Padé approximation vs scipy + spurious-pole guard", "[v13-d][interp]")
+TEST_CASE("v13-d: Pade approximation vs scipy + spurious-pole guard", "[v13-d][interp]")
 {
     crd::memory::TlsfAllocator alloc(1U << 16);
     constexpr double c[] = {1.0, 1.0, 0.5, 1.0 / 6, 1.0 / 24, 1.0 / 120, 1.0 / 720}; // exp Taylor c_0..c_6

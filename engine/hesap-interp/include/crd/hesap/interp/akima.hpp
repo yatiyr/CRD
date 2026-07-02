@@ -41,7 +41,10 @@ template <Real T>
             return InterpStatus::NotIncreasing;
         }
     }
-    const auto sec = [&](crd::usize k) { return (y[k + 1] - y[k]) / (x[k + 1] - x[k]); };
+    const auto sec = [&](crd::usize k)
+    {
+        return (y[k + 1] - y[k]) / (x[k + 1] - x[k]);
+    };
     if (n == 2)
     {
         const T s = sec(0);
@@ -79,8 +82,9 @@ template <Real T>
     {
         for (crd::usize i = 0; i < n; ++i)
         {
-            const T f2 = detail::abs_(me[i + 1] - me[i]) + static_cast<T>(0.5) * detail::abs_(me[i + 1] + me[i]);
-            const T f1 = detail::abs_(me[i + 3] - me[i + 2]) + static_cast<T>(0.5) * detail::abs_(me[i + 3] + me[i + 2]);
+            const T f2 = detail::abs_val(me[i + 1] - me[i]) + static_cast<T>(0.5) * detail::abs_val(me[i + 1] + me[i]);
+            const T f1 =
+                detail::abs_val(me[i + 3] - me[i + 2]) + static_cast<T>(0.5) * detail::abs_val(me[i + 3] + me[i + 2]);
             const T f12 = f1 + f2;
             fc[i] = f12;
             dp[i] = me[i + 1] + (f2 / f12) * (me[i + 2] - me[i + 1]);
@@ -90,8 +94,8 @@ template <Real T>
     {
         for (crd::usize i = 0; i < n; ++i)
         {
-            const T f2 = detail::abs_(me[i + 1] - me[i]);
-            const T f1 = detail::abs_(me[i + 3] - me[i + 2]);
+            const T f2 = detail::abs_val(me[i + 1] - me[i]);
+            const T f1 = detail::abs_val(me[i + 3] - me[i + 2]);
             const T f12 = f1 + f2;
             fc[i] = f12;
             dp[i] = me[i + 1] + (f2 / f12) * (me[i + 2] - me[i + 1]);
@@ -112,8 +116,7 @@ template <Real T>
 }
 
 // Build-once / evaluate-many Akima (or makima) interpolant.
-template <Real T>
-class AkimaInterpolant
+template <Real T> class AkimaInterpolant
 {
 public:
     explicit AkimaInterpolant(crd::memory::IAllocator* alloc) noexcept : m_d(alloc), m_scratch(alloc), m_f12(alloc) {}

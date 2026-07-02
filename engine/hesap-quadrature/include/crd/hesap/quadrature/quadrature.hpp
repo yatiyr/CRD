@@ -5,10 +5,16 @@
 // Deliberately NOT a leaf — that is why Golub-Welsch lives here and not in the leaf crd-hesap-special.
 
 #include <crd/hesap/quadrature/adaptive.hpp>
+#include <crd/hesap/quadrature/cubature.hpp>
 #include <crd/hesap/quadrature/de.hpp>
 #include <crd/hesap/quadrature/gauss.hpp>
 #include <crd/hesap/quadrature/gauss_kronrod.hpp>
 #include <crd/hesap/quadrature/integrate.hpp>
+#include <crd/hesap/quadrature/lebedev.hpp>
+#include <crd/hesap/quadrature/levin.hpp>
 #include <crd/hesap/quadrature/nongauss.hpp>
+#include <crd/hesap/quadrature/oscillatory.hpp>
 #include <crd/hesap/quadrature/qags.hpp>
 #include <crd/hesap/quadrature/qng.hpp>
+#include <crd/hesap/quadrature/simplex.hpp>
+#include <crd/hesap/quadrature/smolyak.hpp>

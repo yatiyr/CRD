@@ -1,22 +1,21 @@
 #pragma once
 
 // v12-o — Resampling inference (crd-hesap-stats). Bootstrap (percentile / basic / BCa / studentized) · block bootstrap
-// (time series) · jackknife (+ delete-d) · permutation tests · cross-validation utilities. The RNG-driven resamples ride
-// the counter-based Threefry generator, so a fixed seed is bit-reproducible AND thread-partition-invariant (the
+// (time series) · jackknife (+ delete-d) · permutation tests · cross-validation utilities. The RNG-driven resamples
+// ride the counter-based Threefry generator, so a fixed seed is bit-reproducible AND thread-partition-invariant (the
 // determinism moat scipy/R/MATLAB cannot offer). The deterministic core (jackknife, the CI math, exact permutation)
 // gates bit-for-bit vs scipy/statsmodels; the random bootstrap is validated against scipy at large B within
 // Monte-Carlo tolerance. Gold: scipy.stats.bootstrap/permutation_test · R boot/bootci · MATLAB bootci/jackknife.
-
-#include <crd/hesap/stats/descriptive.hpp> // Real, mean, quantile_sorted (numpy method 7) — SANITY 8 reuse
-#include <crd/hesap/special/erf.hpp>       // ndtri (probit), erfc (normal cdf for BCa)
-#include <crd/hesap/stats/threefry.hpp>    // ThreefryRng — counter-based (permutation / CV shuffles)
-#include <crd/hesap/stats/philox.hpp>      // PhiloxRng — counter-based, u32-native (the fast bootstrap index path)
-#include <crd/hesap/stats/bitgen.hpp>      // bounded — Lemire unbiased index (one multiply, not a division)
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/sort.hpp>
 #include <crd/containers/span.hpp>
 #include <crd/core/types.hpp>
+#include <crd/hesap/special/erf.hpp>       // ndtri (probit), erfc (normal cdf for BCa)
+#include <crd/hesap/stats/bitgen.hpp>      // bounded — Lemire unbiased index (one multiply, not a division)
+#include <crd/hesap/stats/descriptive.hpp> // Real, mean, quantile_sorted (numpy method 7) — SANITY 8 reuse
+#include <crd/hesap/stats/philox.hpp>      // PhiloxRng — counter-based, u32-native (the fast bootstrap index path)
+#include <crd/hesap/stats/threefry.hpp>    // ThreefryRng — counter-based (permutation / CV shuffles)
 #include <crd/math/cmath.hpp>
 #include <crd/memory/allocator.hpp>
 
@@ -58,7 +57,8 @@ template <typename G> [[nodiscard]] inline crd::u32 bounded_u32(G& g, crd::u32 b
     crd::u32 lo = static_cast<crd::u32>(m);
     if (lo < bound)
     {
-        const crd::u32 t = static_cast<crd::u32>(-bound) % bound; // 2^32 mod bound
+        const crd::u32 t =
+            (crd::u32{0} - bound) % bound; // 2^32 mod bound (0-bound wraps; avoids C4146 unary-minus-on-unsigned)
         while (lo < t)
         {
             m = static_cast<crd::u64>(g.next_u32()) * static_cast<crd::u64>(bound);
@@ -245,7 +245,8 @@ template <Real T>
         den += dd * dd;
     }
     const T acc = num / (static_cast<T>(6) * crd::math::pow(den, static_cast<T>(1.5)));
-    const auto adj = [&](T al) {
+    const auto adj = [&](T al)
+    {
         const T za = special::ndtri(al);
         return detail::resample_norm_cdf(z0 + (z0 + za) / (static_cast<T>(1) - acc * (z0 + za)));
     };
@@ -318,7 +319,8 @@ template <Real T, typename Stat>
     {
         total_d *= static_cast<double>(n - i) / static_cast<double>(i + 1);
     }
-    const auto eval_split = [&](const crd::usize* idx) {
+    const auto eval_split = [&](const crd::usize* idx)
+    {
         // idx[0..na) selects group a from the pool; the complement is group b
         crd::usize ia = 0;
         crd::usize ib = 0;
@@ -412,8 +414,8 @@ enum class BootMethod
 // thread-partition-invariant (the determinism moat). Stat is a callable ConstSpan<T> -> T.
 template <Real T, typename Stat>
 [[nodiscard]] crd::containers::Array<T> bootstrap_distribution(crd::containers::ConstSpan<T> data, Stat stat,
-                                                              crd::usize n_resamples, crd::u64 seed,
-                                                              crd::memory::IAllocator* alloc)
+                                                               crd::usize n_resamples, crd::u64 seed,
+                                                               crd::memory::IAllocator* alloc)
 {
     const crd::usize n = data.size();
     crd::containers::Array<T> out(alloc);
@@ -456,8 +458,8 @@ template <Real T, typename Stat>
 // consecutive observations (block starts drawn uniformly), truncated to n. R `tsboot`/`boot::tsboot`.
 template <Real T, typename Stat>
 [[nodiscard]] crd::containers::Array<T> block_bootstrap_distribution(crd::containers::ConstSpan<T> data, Stat stat,
-                                                                    crd::usize n_resamples, crd::usize block_len,
-                                                                    crd::u64 seed, crd::memory::IAllocator* alloc)
+                                                                     crd::usize n_resamples, crd::usize block_len,
+                                                                     crd::u64 seed, crd::memory::IAllocator* alloc)
 {
     const crd::usize n = data.size();
     const crd::usize n_blocks = (n + block_len - 1) / block_len;

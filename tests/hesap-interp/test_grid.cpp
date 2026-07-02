@@ -1,16 +1,15 @@
 // crd-hesap-interp v13-f — gridded N-D N-linear. Gated ≤1e-12 vs scipy.RegularGridInterpolator('linear') (2-D + 3-D),
 // exact bilinear reproduction, edge-clamp returns a finite value (no NaN), + determinism.
 
-#include <catch2/catch_test_macros.hpp>
-
-#include <crd/hesap/interp/interp.hpp>
-
 #include <crd/containers/span.hpp>
+#include <crd/hesap/interp/interp.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
+#include <catch2/catch_test_macros.hpp>
+
 using namespace crd::hesap::interp;
-using crd::containers::ConstSpan;
 using crd::usize;
+using crd::containers::ConstSpan;
 
 namespace
 {
@@ -21,7 +20,7 @@ namespace
 }
 [[nodiscard]] bool is_fin(double v)
 {
-    return (v == v) && (v - v == 0.0);
+    return detail::is_finite(v);
 }
 } // namespace
 
@@ -31,8 +30,7 @@ TEST_CASE("v13-f: N-linear 2-D vs scipy + bilinear reproduction", "[v13-f][inter
     constexpr double origin[2] = {0.0, 0.0};
     constexpr double spacing[2] = {1.0, 1.0};
     constexpr usize count[2] = {5, 4};
-    constexpr double v2[20] = {1, 2.5, 6, 11.5, 0, 2.5, 7,  13.5, 1,  4.5,
-                               10, 17.5, 4, 8.5, 15, 23.5, 9, 14.5, 22, 31.5};
+    constexpr double v2[20] = {1, 2.5, 6, 11.5, 0, 2.5, 7, 13.5, 1, 4.5, 10, 17.5, 4, 8.5, 15, 23.5, 9, 14.5, 22, 31.5};
     RegularGridInterpolant<double> g(&alloc);
     REQUIRE(g.build(ConstSpan<double>{origin, 2}, ConstSpan<double>{spacing, 2}, ConstSpan<usize>{count, 2}, 2,
                     ConstSpan<double>{v2, 20}) == InterpStatus::Ok);
@@ -73,10 +71,10 @@ TEST_CASE("v13-f: N-linear 3-D vs scipy + determinism", "[v13-f][interp]")
     constexpr double origin[3] = {0.0, 0.0, 0.0};
     constexpr double spacing[3] = {1.0, 1.0, 1.0};
     constexpr usize count[3] = {4, 4, 4};
-    constexpr double v3[64] = {2,  2,    2,  2,    1,  2,    3,  4,    0,  2,    4,  6,    -1, 2,    5,  8,
-                               3,  3.5,  4,  4.5,  2,  3.5,  5,  6.5,  1,  3.5,  6,  8.5,  0,  3.5,  7,  10.5,
-                               6,  7,    8,  9,    5,  7,    9,  11,   4,  7,    10, 13,   3,  7,    11, 15,
-                               11, 12.5, 14, 15.5, 10, 12.5, 15, 17.5, 9,  12.5, 16, 19.5, 8,  12.5, 17, 21.5};
+    constexpr double v3[64] = {2,  2,    2,  2,    1,  2,    3,  4,    0, 2,    4,  6,    -1, 2,    5,  8,
+                               3,  3.5,  4,  4.5,  2,  3.5,  5,  6.5,  1, 3.5,  6,  8.5,  0,  3.5,  7,  10.5,
+                               6,  7,    8,  9,    5,  7,    9,  11,   4, 7,    10, 13,   3,  7,    11, 15,
+                               11, 12.5, 14, 15.5, 10, 12.5, 15, 17.5, 9, 12.5, 16, 19.5, 8,  12.5, 17, 21.5};
     RegularGridInterpolant<double> g(&alloc);
     REQUIRE(g.build(ConstSpan<double>{origin, 3}, ConstSpan<double>{spacing, 3}, ConstSpan<usize>{count, 3}, 3,
                     ConstSpan<double>{v3, 64}) == InterpStatus::Ok);
@@ -96,8 +94,8 @@ TEST_CASE("v13-f: bicubic vs MATLAB interpn('cubic') + reproduction", "[v13-f][i
     constexpr double origin[2] = {0.0, 0.0};
     constexpr double spacing[2] = {1.0, 1.0};
     constexpr usize count[2] = {6, 6};
-    constexpr double vc[36] = {1,  2.5,  6,  11.5, 19, 28.5, 0,  2.5,  7,  13.5, 22, 32.5, 1,  4.5,  10, 17.5, 27, 38.5,
-                               4,  8.5,  15, 23.5, 34, 46.5, 9,  14.5, 22, 31.5, 43, 56.5, 16, 22.5, 31, 41.5, 54, 68.5};
+    constexpr double vc[36] = {1, 2.5, 6,  11.5, 19, 28.5, 0, 2.5,  7,  13.5, 22, 32.5, 1,  4.5,  10, 17.5, 27, 38.5,
+                               4, 8.5, 15, 23.5, 34, 46.5, 9, 14.5, 22, 31.5, 43, 56.5, 16, 22.5, 31, 41.5, 54, 68.5};
     RegularGridInterpolant<double> g(&alloc);
     REQUIRE(g.build(ConstSpan<double>{origin, 2}, ConstSpan<double>{spacing, 2}, ConstSpan<usize>{count, 2}, 2,
                     ConstSpan<double>{vc, 36}) == InterpStatus::Ok);
@@ -140,8 +138,8 @@ TEST_CASE("v13-f: cubic B-spline (Unser prefilter) vs scipy.ndimage", "[v13-f][i
     crd::memory::TlsfAllocator alloc(1U << 16);
     // 1-D prefilter coefficients vs scipy.ndimage.spline_filter1d(order=3, mode='mirror')
     constexpr double v1[8] = {1, 3, 2, 5, 4, 6, 2, 1};
-    constexpr double c1ref[8] = {-0.84335279972518029, 4.6867055994503612,  0.096530401923737894, 6.9271727928546891,
-                                 2.1947784266575061,   8.2937135005152882,  0.63036757128134668,  1.184816214359327};
+    constexpr double c1ref[8] = {-0.84335279972518029, 4.6867055994503612, 0.096530401923737894, 6.9271727928546891,
+                                 2.1947784266575061,   8.2937135005152882, 0.63036757128134668,  1.184816214359327};
     constexpr double o1[1] = {0.0};
     constexpr double s1[1] = {1.0};
     constexpr usize n1[1] = {8};
@@ -158,8 +156,8 @@ TEST_CASE("v13-f: cubic B-spline (Unser prefilter) vs scipy.ndimage", "[v13-f][i
     constexpr double origin[2] = {0.0, 0.0};
     constexpr double spacing[2] = {1.0, 1.0};
     constexpr usize count[2] = {6, 6};
-    constexpr double vc[36] = {1,  2.5,  6,  11.5, 19, 28.5, 0,  2.5,  7,  13.5, 22, 32.5, 1,  4.5,  10, 17.5, 27, 38.5,
-                               4,  8.5,  15, 23.5, 34, 46.5, 9,  14.5, 22, 31.5, 43, 56.5, 16, 22.5, 31, 41.5, 54, 68.5};
+    constexpr double vc[36] = {1, 2.5, 6,  11.5, 19, 28.5, 0, 2.5,  7,  13.5, 22, 32.5, 1,  4.5,  10, 17.5, 27, 38.5,
+                               4, 8.5, 15, 23.5, 34, 46.5, 9, 14.5, 22, 31.5, 43, 56.5, 16, 22.5, 31, 41.5, 54, 68.5};
     RegularGridInterpolant<double> g2(&alloc);
     REQUIRE(g2.build(ConstSpan<double>{origin, 2}, ConstSpan<double>{spacing, 2}, ConstSpan<usize>{count, 2}, 2,
                      ConstSpan<double>{vc, 36}) == InterpStatus::Ok);

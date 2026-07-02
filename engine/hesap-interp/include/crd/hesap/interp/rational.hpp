@@ -9,17 +9,15 @@
 //
 // Eval is deterministic (Horner, pure FMUL/FADD). Gated ≤1e-10 vs scipy.interpolate.pade.
 
-#include <crd/hesap/interp/piecewise.hpp>
-
 #include <crd/hesap/dense/lstsq.hpp>
 #include <crd/hesap/dense/matrix.hpp>
 #include <crd/hesap/dense/vector.hpp>
+#include <crd/hesap/interp/piecewise.hpp>
 
 namespace crd::hesap::interp
 {
 
-template <Real T>
-class RationalPade
+template <Real T> class RationalPade
 {
 public:
     explicit RationalPade(crd::memory::IAllocator* alloc) noexcept : m_alloc(alloc), m_p(alloc), m_q(alloc) {}
@@ -94,11 +92,11 @@ public:
     // Spurious-pole guard: the smallest |q(x)| over a uniform sampling of [lo,hi]. Near zero ⇒ a pole in the interval.
     [[nodiscard]] T min_denominator_abs(T lo, T hi, crd::usize samples) const noexcept
     {
-        T mn = detail::abs_(denominator(lo));
+        T mn = detail::abs_val(denominator(lo));
         for (crd::usize k = 1; k <= samples; ++k)
         {
             const T x = lo + (hi - lo) * static_cast<T>(k) / static_cast<T>(samples);
-            const T a = detail::abs_(denominator(x));
+            const T a = detail::abs_val(denominator(x));
             if (a < mn)
             {
                 mn = a;

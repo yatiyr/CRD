@@ -108,7 +108,7 @@ TEST_CASE("v13-b: cubic spline periodic + n==3 not-a-knot + n==2 vs scipy", "[v1
     CHECK(close(s2.slopes()[1], 2.0));
 }
 
-TEST_CASE("v13-b: C² continuity + Tier-2 Hall-Meyer bound + determinism", "[v13-b][interp]")
+TEST_CASE("v13-b: C2 continuity + Tier-2 Hall-Meyer bound + determinism", "[v13-b][interp]")
 {
     crd::memory::TlsfAllocator alloc(1U << 18);
     // C² continuity (analytic, exact): the cubic-Hermite second derivative from the left segment equals the right one

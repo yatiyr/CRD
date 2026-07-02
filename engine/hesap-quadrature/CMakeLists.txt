@@ -20,6 +20,7 @@ target_link_libraries(crd-hesap-quadrature
         crd-core
         crd-containers
         crd-memory
+        crd-hesap          # CLI registry (hesap.quad.*); acyclic — crd-hesap is the leaf substrate
         crd-hesap-special
         crd-hesap-dense
     PRIVATE

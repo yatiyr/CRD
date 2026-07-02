@@ -38,20 +38,17 @@ enum class InterpStatus : crd::u8
 namespace detail
 {
 // Finite without <cmath> (and without fast-math, which we never enable): NaN fails v==v; ±Inf fails v−v==0.
-template <Real T>
-[[nodiscard]] constexpr bool is_finite(T v) noexcept
+template <Real T> [[nodiscard]] constexpr bool is_finite(T v) noexcept
 {
     return (v == v) && (v - v == static_cast<T>(0));
 }
 
-template <Real T>
-[[nodiscard]] constexpr int sgn(T v) noexcept
+template <Real T> [[nodiscard]] constexpr int sgn(T v) noexcept
 {
     return static_cast<int>(v > static_cast<T>(0)) - static_cast<int>(v < static_cast<T>(0));
 }
 
-template <Real T>
-[[nodiscard]] constexpr T abs_(T v) noexcept
+template <Real T> [[nodiscard]] constexpr T abs_val(T v) noexcept
 {
     return v < static_cast<T>(0) ? -v : v;
 }
@@ -93,7 +90,8 @@ template <Real T>
     return y[i] + t * (y[i + 1] - y[i]);
 }
 
-// Nearest-neighbour (scipy.interp1d(kind='nearest')). Ties (xq exactly at a segment midpoint) resolve to the right node.
+// Nearest-neighbour (scipy.interp1d(kind='nearest')). Ties (xq exactly at a segment midpoint) resolve to the right
+// node.
 template <Real T>
 [[nodiscard]] T interp_nearest(crd::containers::ConstSpan<T> x, crd::containers::ConstSpan<T> y, T xq,
                                crd::usize& cache) noexcept
@@ -125,15 +123,14 @@ template <Real T>
 namespace detail
 {
 // PCHIP endpoint slope (scipy _edge_case): one-sided 3-point estimate, shape-limited so no overshoot is introduced.
-template <Real T>
-[[nodiscard]] T pchip_edge(T h0, T h1, T m0, T m1) noexcept
+template <Real T> [[nodiscard]] T pchip_edge(T h0, T h1, T m0, T m1) noexcept
 {
     const T d = ((static_cast<T>(2) * h0 + h1) * m0 - h0 * m1) / (h0 + h1);
     if (sgn(d) != sgn(m0))
     {
         return static_cast<T>(0);
     }
-    if (sgn(m0) != sgn(m1) && abs_(d) > static_cast<T>(3) * abs_(m0))
+    if (sgn(m0) != sgn(m1) && abs_val(d) > static_cast<T>(3) * abs_val(m0))
     {
         return static_cast<T>(3) * m0;
     }
@@ -167,7 +164,10 @@ template <Real T>
             return InterpStatus::NotIncreasing;
         }
     }
-    const auto sec = [&](crd::usize k) { return (y[k + 1] - y[k]) / (x[k + 1] - x[k]); }; // secant slope mk[k]
+    const auto sec = [&](crd::usize k)
+    {
+        return (y[k + 1] - y[k]) / (x[k + 1] - x[k]);
+    }; // secant slope mk[k]
     if (n == 2)
     {
         const T m = sec(0);
@@ -198,17 +198,16 @@ template <Real T>
 }
 
 // Tier-2 a-priori certified error bound for linear interpolation: ‖f − L‖∞ ≤ (h²/8)·max|f″| (the constant is tight).
-// A GUARANTEED upper bound (not an estimate) when the caller supplies a rigorous |f″| bound — see ADR-0095 §error-tiers.
-template <Real T>
-[[nodiscard]] constexpr T linear_worst_case_error(T max_h, T second_deriv_bound) noexcept
+// A GUARANTEED upper bound (not an estimate) when the caller supplies a rigorous |f″| bound — see ADR-0095
+// §error-tiers.
+template <Real T> [[nodiscard]] constexpr T linear_worst_case_error(T max_h, T second_deriv_bound) noexcept
 {
     return max_h * max_h / static_cast<T>(8) * second_deriv_bound;
 }
 
 // Build-once / evaluate-many PCHIP interpolant. ctor allocates the tangents ONCE (the init phase); eval is
 // allocation-free, noexcept, O(1)-amortized (the real-time hot path). References the caller's x/y (kept alive).
-template <Real T>
-class PchipInterpolant
+template <Real T> class PchipInterpolant
 {
 public:
     explicit PchipInterpolant(crd::memory::IAllocator* alloc) noexcept : m_d(alloc) {}

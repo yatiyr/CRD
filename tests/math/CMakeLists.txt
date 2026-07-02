@@ -74,6 +74,12 @@ if(WIN32)
         COMMAND powershell -NoProfile -ExecutionPolicy Bypass
                 -File "${CMAKE_SOURCE_DIR}/scripts/check_no_malloc_allocator.ps1"
     )
+    add_test(
+        NAME    crd-hesap-v13-no-exceptions
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+                -File "${CMAKE_SOURCE_DIR}/scripts/check_hesap_v13_no_exceptions.ps1"
+                "${CMAKE_SOURCE_DIR}"
+    )
 elseif(UNIX)
     add_test(
         NAME    crd-simd-emission-check
@@ -109,6 +115,11 @@ elseif(UNIX)
     add_test(
         NAME    crd-no-malloc-allocator
         COMMAND bash "${CMAKE_SOURCE_DIR}/scripts/check_no_malloc_allocator.sh"
+                "${CMAKE_SOURCE_DIR}"
+    )
+    add_test(
+        NAME    crd-hesap-v13-no-exceptions
+        COMMAND bash "${CMAKE_SOURCE_DIR}/scripts/check_hesap_v13_no_exceptions.sh"
                 "${CMAKE_SOURCE_DIR}"
     )
 endif()

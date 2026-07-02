@@ -17,11 +17,10 @@
 // left-endpoint singularity is full precision, a right-endpoint one ~1e-8 (the single-argument f(x) interface limit).
 // Determinism by construction (crd::math + fixed summation order).
 
-#include <crd/hesap/quadrature/gauss_kronrod.hpp> // detail::qmax
-#include <crd/hesap/quadrature/integrate.hpp>
-
 #include <crd/containers/array.hpp>
 #include <crd/core/types.hpp>
+#include <crd/hesap/quadrature/gauss_kronrod.hpp> // detail::qmax
+#include <crd/hesap/quadrature/integrate.hpp>
 #include <crd/math/cmath.hpp>
 #include <crd/memory/allocator.hpp>
 
@@ -33,34 +32,31 @@ namespace crd::hesap::quadrature
 // A precomputed DE rule: per-node coefficient c (the transformed abscissa, or the endpoint-offset for tanh-sinh) and
 // weight w, grouped by refinement level. Each level [level_start, split[m]) is the +t run and [split[m], level_end[m])
 // the −t run (tanh-sinh leaves the −t run empty). h0 = the level-0 step.
-template <typename T>
-struct DeRule
+template <typename T> struct DeRule
 {
-    crd::containers::Array<T>        c;
-    crd::containers::Array<T>        w;
+    crd::containers::Array<T> c;
+    crd::containers::Array<T> w;
     crd::containers::Array<crd::u32> split;
     crd::containers::Array<crd::u32> level_end;
-    T                                h0     = T{1};
-    int                              levels = 0;
+    T h0 = T{1};
+    int levels = 0;
 
     explicit DeRule(crd::memory::IAllocator* alloc) : c(alloc), w(alloc), split(alloc), level_end(alloc) {}
 };
 
 namespace detail
 {
-template <typename T>
-[[nodiscard]] constexpr T de_halfpi() noexcept
+template <typename T> [[nodiscard]] constexpr T de_halfpi() noexcept
 {
     return static_cast<T>(1.5707963267948966192313216916398);
 }
 
 // Sum eval(i) over nodes [lo,hi), TRUNCATING the negligible tail: once a term has fallen below machine-relative to the
 // running peak for several consecutive nodes, the rest of this (monotone-decaying) run is skipped.
-template <typename T, typename Eval>
-[[nodiscard]] T de_run_sum(crd::u32 lo, crd::u32 hi, Eval&& eval)
+template <typename T, typename Eval> [[nodiscard]] T de_run_sum(crd::u32 lo, crd::u32 hi, Eval&& eval)
 {
-    T   s     = T{0};
-    T   maxt  = T{0};
+    T s = T{0};
+    T maxt = T{0};
     int small = 0;
     for (crd::u32 i = lo; i < hi; ++i)
     {
@@ -94,14 +90,14 @@ template <typename T>
 [[nodiscard]] DeRule<T> build_exp_sinh_rule(crd::memory::IAllocator* alloc, int levels = 12, T h0 = T{1}, T tmax = T{4})
 {
     DeRule<T> r(alloc);
-    r.h0     = h0;
+    r.h0 = h0;
     r.levels = levels;
     const T hp = detail::de_halfpi<T>();
     for (int m = 0; m < levels; ++m)
     {
-        const T   hm    = h0 / static_cast<T>(1u << m);
+        const T hm = h0 / static_cast<T>(1u << m);
         const int start = (m == 0) ? 0 : 1;
-        const int step  = (m == 0) ? 1 : 2;
+        const int step = (m == 0) ? 1 : 2;
         for (int j = start;; j += step) // +t run (incl. t=0 for level 0)
         {
             const T t = static_cast<T>(j) * hm;
@@ -133,17 +129,18 @@ template <typename T>
 
 // sinh-sinh for (−∞,∞): x = sinh(π/2·sinh t), w = cosh(π/2·sinh t)·(π/2·cosh t).
 template <typename T>
-[[nodiscard]] DeRule<T> build_sinh_sinh_rule(crd::memory::IAllocator* alloc, int levels = 12, T h0 = T{1}, T tmax = T{4})
+[[nodiscard]] DeRule<T> build_sinh_sinh_rule(crd::memory::IAllocator* alloc, int levels = 12, T h0 = T{1},
+                                             T tmax = T{4})
 {
     DeRule<T> r(alloc);
-    r.h0     = h0;
+    r.h0 = h0;
     r.levels = levels;
     const T hp = detail::de_halfpi<T>();
     for (int m = 0; m < levels; ++m)
     {
-        const T   hm    = h0 / static_cast<T>(1u << m);
+        const T hm = h0 / static_cast<T>(1u << m);
         const int start = (m == 0) ? 0 : 1;
-        const int step  = (m == 0) ? 1 : 2;
+        const int step = (m == 0) ? 1 : 2;
         for (int j = start;; j += step) // +t run
         {
             const T t = static_cast<T>(j) * hm;
@@ -176,17 +173,18 @@ template <typename T>
 // tanh-sinh for [a,b]: c = the endpoint offset 2/(e^{2s}+1) (= 1−tanh s), w = g'(t) (the (b−a)/2 applied at
 // integration). One entry per |t|; the left and right nodes share it. split is unused (the offsets are monotone).
 template <typename T>
-[[nodiscard]] DeRule<T> build_tanh_sinh_rule(crd::memory::IAllocator* alloc, int levels = 12, T h0 = T{1}, T tmax = T{4})
+[[nodiscard]] DeRule<T> build_tanh_sinh_rule(crd::memory::IAllocator* alloc, int levels = 12, T h0 = T{1},
+                                             T tmax = T{4})
 {
     DeRule<T> r(alloc);
-    r.h0     = h0;
+    r.h0 = h0;
     r.levels = levels;
     const T hp = detail::de_halfpi<T>();
     for (int m = 0; m < levels; ++m)
     {
-        const T   hm    = h0 / static_cast<T>(1u << m);
+        const T hm = h0 / static_cast<T>(1u << m);
         const int start = (m == 0) ? 0 : 1;
-        const int step  = (m == 0) ? 1 : 2;
+        const int step = (m == 0) ? 1 : 2;
         for (int j = start;; j += step)
         {
             const T t = static_cast<T>(j) * hm;
@@ -194,7 +192,7 @@ template <typename T>
             {
                 break;
             }
-            const T s  = hp * crd::math::sinh(t);
+            const T s = hp * crd::math::sinh(t);
             const T cs = crd::math::cosh(s);
             r.c.push_back(T{2} / (crd::math::exp(T{2} * s) + T{1}));
             r.w.push_back((hp * crd::math::cosh(t)) / (cs * cs));
@@ -217,41 +215,40 @@ template <typename T, typename LevelSum>
     {
         return QuadResult<T>{T{0}, T{0}, 0, 0, QuadStatus::BadInput, false};
     }
-    T        S      = r.h0 * level_sum(0);
-    crd::u32 nev    = r.level_end[0];
-    T        err    = qmax<T>(crd::math::fabs(S), T{1});
-    bool     done   = false;
-    int      last_m = 0;
-    T        dprev  = T{0};
+    T s = r.h0 * level_sum(0);
+    crd::u32 nev = r.level_end[0];
+    T err = qmax<T>(crd::math::fabs(s), T{1});
+    bool done = false;
+    int last_m = 0;
+    T dprev = T{0};
     for (int m = 1; m < r.levels; ++m)
     {
-        const T hm  = r.h0 / static_cast<T>(1u << m);
-        const T Sm  = S * static_cast<T>(0.5) + hm * level_sum(m);
+        const T hm = r.h0 / static_cast<T>(1u << m);
+        const T sm = s * static_cast<T>(0.5) + hm * level_sum(m);
         nev += r.level_end[m] - r.level_end[m - 1];
-        const T d = crd::math::fabs(Sm - S);
-        err       = (m >= 2 && dprev > T{0}) ? (d * d / dprev) : d;
-        dprev     = d;
-        S         = Sm;
-        last_m    = m;
-        if (m >= 2 && err <= qmax<T>(epsabs, epsrel * crd::math::fabs(Sm)))
+        const T d = crd::math::fabs(sm - s);
+        err = (m >= 2 && dprev > T{0}) ? (d * d / dprev) : d;
+        dprev = d;
+        s = sm;
+        last_m = m;
+        if (m >= 2 && err <= qmax<T>(epsabs, epsrel * crd::math::fabs(sm)))
         {
             done = true;
             break;
         }
     }
     QuadResult<T> out;
-    out.value          = S;
+    out.value = s;
     out.error_estimate = err;
-    out.eval_count     = nev; // upper bound (the tail truncation evaluates fewer)
-    out.subdiv_count   = static_cast<crd::u32>(last_m + 1);
-    out.tolerance_met  = done;
-    out.status         = done ? QuadStatus::Ok : QuadStatus::MaxSubdivisions;
+    out.eval_count = nev; // upper bound (the tail truncation evaluates fewer)
+    out.subdiv_count = static_cast<crd::u32>(last_m + 1);
+    out.tolerance_met = done;
+    out.status = done ? QuadStatus::Ok : QuadStatus::MaxSubdivisions;
     return out;
 }
 
 // Bounds of level m's +t and −t runs in the flat node arrays.
-template <typename T>
-void de_level_bounds(const DeRule<T>& r, int m, crd::u32& lo, crd::u32& sp, crd::u32& hi) noexcept
+template <typename T> void de_level_bounds(const DeRule<T>& r, int m, crd::u32& lo, crd::u32& sp, crd::u32& hi) noexcept
 {
     lo = (m == 0) ? 0u : r.level_end[m - 1];
     sp = r.split[static_cast<crd::usize>(m)];
@@ -269,10 +266,14 @@ template <typename T, typename F>
     }
     return detail::de_refine<T>(
         rule,
-        [&](int m) {
+        [&](int m)
+        {
             crd::u32 lo, sp, hi;
             detail::de_level_bounds<T>(rule, m, lo, sp, hi);
-            const auto ev  = [&](crd::u32 i) { return f(a + rule.c[i]) * rule.w[i]; };
+            const auto ev = [&](crd::u32 i)
+            {
+                return f(a + rule.c[i]) * rule.w[i];
+            };
             return detail::de_run_sum<T>(lo, sp, ev) + detail::de_run_sum<T>(sp, hi, ev);
         },
         epsabs, epsrel);
@@ -284,10 +285,14 @@ template <typename T, typename F>
 {
     return detail::de_refine<T>(
         rule,
-        [&](int m) {
+        [&](int m)
+        {
             crd::u32 lo, sp, hi;
             detail::de_level_bounds<T>(rule, m, lo, sp, hi);
-            const auto ev = [&](crd::u32 i) { return f(rule.c[i]) * rule.w[i]; };
+            const auto ev = [&](crd::u32 i)
+            {
+                return f(rule.c[i]) * rule.w[i];
+            };
             return detail::de_run_sum<T>(lo, sp, ev) + detail::de_run_sum<T>(sp, hi, ev);
         },
         epsabs, epsrel);
@@ -305,25 +310,28 @@ template <typename T, typename F>
     const T half = (b - a) / T{2};
     return detail::de_refine<T>(
         rule,
-        [&](int m) {
+        [&](int m)
+        {
             const crd::u32 lo = (m == 0) ? 0u : rule.level_end[m - 1];
             const crd::u32 hi = rule.level_end[static_cast<crd::usize>(m)];
-            return detail::de_run_sum<T>(lo, hi, [&](crd::u32 i) {
-                const T off = rule.c[i];
-                const T wt  = half * rule.w[i];
-                const T xl  = a + half * off;
-                const T xr  = b - half * off;
-                T       s   = T{0};
-                if (xl > a && xl < b)
-                {
-                    s += f(xl) * wt;
-                }
-                if (xr > a && xr < b && xr != xl)
-                {
-                    s += f(xr) * wt;
-                }
-                return s;
-            });
+            return detail::de_run_sum<T>(lo, hi,
+                                         [&](crd::u32 i)
+                                         {
+                                             const T off = rule.c[i];
+                                             const T wt = half * rule.w[i];
+                                             const T xl = a + half * off;
+                                             const T xr = b - half * off;
+                                             T s = T{0};
+                                             if (xl > a && xl < b)
+                                             {
+                                                 s += f(xl) * wt;
+                                             }
+                                             if (xr > a && xr < b && xr != xl)
+                                             {
+                                                 s += f(xr) * wt;
+                                             }
+                                             return s;
+                                         });
         },
         epsabs, epsrel);
 }
