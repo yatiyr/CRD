@@ -132,6 +132,53 @@ zero ASan errors** · win-shipping **4280/4280 PASS** (LTCG, wiped + standalone-
 **build PASS** (warnings-as-errors). The v12 + v13 tree is commit-ready; the 18-config CI is the remaining
 post-commit gate.
 
+## The planning arc (same session, continued): v14 → v18 fully planned + the gap-packs pinned
+
+With the DoD green, the session pivoted to planning. **Every future hesap slice now has a gold-standard sub-slice
+table in the master phase doc** (`phase-3.1.6-hesap.md`), each row carrying peers, gates, reuse map, and moat claims —
+web-researched against the 2025-26 frontier and expanded round-by-round with user-approved additions (every option
+offered was approved — maximal scope everywhere):
+
+- **v14 `crd-hesap-tensor`** (a–m+z, ~24.1 KLOC / ~880 tests): substrate/broadcast · deterministic reductions + a
+  **ReproBLAS-class partition-independent tier** + **deterministic stochastic rounding** (Philox SR) · HPTT-class
+  transpose · einsum (opt_einsum paths + a **cotengra-class hyper-optimizer w/ dynamic slicing**) · TTGT over the own
+  GEMM · batched LA · **sparse tensors (COO/CSF + MTTKRP; SPLATT/TACO peers)** · CP/Tucker/TT (+ **randomized** =
+  deterministic-randomized via counter-RNG, + **TT-cross/maxvol**) · **f16/bf16 + FP8 + int8/int4-block quantized
+  storage** · npy/**safetensors/DLPack** · **NN inference pack + the certified-tiny-ML demo (integer inference =
+  bit-exact across ALL hardware)**. ADR-0096 + `phase-3.1.6-v14.md` at kickoff.
+- **v15 forward AD** (a–h+z, ~11 KLOC / ~455): Dual/Jet (migrates v7-b) · hyper-dual · **SIMD vector-forward** ·
+  **★automatic sparsity tracing + CPR coloring** (the Julia-ASD frontier, no C++ incumbent) · Giles JVPs ·
+  **★Taylor-mode jets + a Taylor ODE integrator** · **★Wirtinger complex AD** · AD-through-the-suite JVPs.
+- **v16 reverse AD** (a–k+z, ~16.1 KLOC / ~605): deterministic tape (no atomics) · tensor/matrix/suite VJPs
+  (FFT VJP = IFFT) · revolve checkpointing + v9-k adjoint unification · **★★implicit-diff-through-solvers**
+  (IFT: linear/nonlinear/argmin-KKT + second-order implicit; jaxopt is unmaintained ⇒ the C++ lane is open) ·
+  **★tape→`.crds.cpp` hot-reload codegen** · **★★the deterministic-training moat** (bit-identical `{1..16}`
+  gradients; world-first; trains the v14-m certified controller) · **★topology-opt showcase** (top88) ·
+  **★neural-ODE + KAN showcase** (KANs on the v13 splines). ADR-0097 covers the v15+v16 pair.
+- **v17 GPU** (a–m+z, ~23.1 KLOC / ~690): **API-agnostic by construction, Vulkan first (user direction)** — all
+  dispatch through rhi-compute; ADR-0098 decides the **★Slang kernel track** (one source → SPIR-V/CUDA/Metal) + the
+  reserved **`crd-rhi-cuda` kernel-ABI seam**. Coopmat GEMM · merge-SpMV · FFT-vs-vkFFT · deterministic-reduction
+  Krylov · batched + **large single-matrix SVD/eig** · Philox-on-device · quantized NN inference (ncnn/llama.cpp-Vulkan
+  peers) · GPU autodiff (sort-based scatter-add) · **★★the GPU DETERMINISM TIERS research slice** (T1 same-device /
+  T2 cross-arch binned-RFA / T3 cross-vendor IEEE-only + **crd::math transcendentals as GLSL**) + **★computation
+  certificates** (hash-chained transcripts). NO float atomics anywhere.
+- **v18 notebook + agent platform** (a–i+z, ~15.7 KLOC / ~490): pulls the hesap-scoped Phase-4.0 kernel forward
+  (ADR-0081 phasing amendment) — `crd-cli` parser/REPL + JSON-RPC + **the MCP server (gate: a real Claude Code
+  session drives hesap tools)** · hot-reload `.crds.cpp` cells (full-native vs xeus-cpp/clang-repl interpreters) ·
+  **★★the REPRODUCIBLE reactive DAG** (declared typed I/O, beyond marimo/Pluto; whole-notebook run-twice
+  bit-identity = a certification artifact) · `'CNBK'` pure-source format · in-engine plotting (sciviz boundary named)
+  · MATLAB-class C++ ergonomics + expression REPL · **★write-a-cell → instant MCP tool** + schema codegen
+  (stubs/python-bindings/docs from the ONE registry) · agent-native `notebook.*` commands. ADR-0099 at kickoff.
+
+**The four gap-packs pinned into `docs/ROADMAP.md`** (from the capability assessment — micro-LLMs/procgen/Cascadeur-
+class animation/robotics/embedded/drones/satellites/material-testing/CFD/mission-sim all mapped to shipped+planned
+substrate): (1) **3.1.14 first rows** = BPE tokenizer + KV-cache + CPU attention (the micro-LLM loop); (2) **NEW
+Phase 3.1.18 `crd-embedded`** = NEON backend + cross CI + Cortex-M/RTOS reference (the pillars ARE the embedded
+contract; the port is the work); (3) **NEW Phase 3.1.19 `crd-astro`** = force models/frames/SPICE-I/O/Lambert (thin
+over shipped math); (4) **3.1.11 amendment** = pseudospectral/direct-collocation optimal control (the GPOPS/CasADi
+class from shipped parts). Planned-total across v14–v18: **~90 KLOC / ~3,100 tests**, ADRs 0096–0099 queued at their
+kickoffs.
+
 ## Proposed commit
 
 ```
