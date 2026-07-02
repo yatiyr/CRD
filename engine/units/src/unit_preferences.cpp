@@ -1,4 +1,4 @@
-﻿// crd-units Layer-6 â€” UnitPreferences + format/parse impl (Phase 3.1.7.5 v0d-5).
+// crd-units Layer-6 — UnitPreferences + format/parse impl (Phase 3.1.7.5 v0d-5).
 
 #include <crd/units/unit_preferences.hpp>
 
@@ -23,7 +23,7 @@ namespace
 // E.g. length to display mm: 1.0 m / 0.001 = 1000.0 (display).
 // Affine units (temperature) handled separately.
 
-// â”€â”€ Length: SI = meter â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Length: SI = meter ────────────────────────────────────────────────────
 constexpr double kLengthFactor[] = {
     1.0,         // Meter
     1.0e-3,      // Millimeter
@@ -38,7 +38,7 @@ constexpr double kLengthFactor[] = {
 };
 constexpr const char* kLengthSuffix[] = {"_m", "_mm", "_cm", "_km", "_um", "_in", "_ft", "_yd", "_mi", "_mil"};
 
-// â”€â”€ Mass: SI = kilogram â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Mass: SI = kilogram ───────────────────────────────────────────────────
 constexpr double kMassFactor[] = {
     1.0,         // Kilogram
     1.0e-3,      // Gram
@@ -49,7 +49,7 @@ constexpr double kMassFactor[] = {
 };
 constexpr const char* kMassSuffix[] = {"_kg", "_g", "_mg", "_t", "_lb_mass", "_oz_mass"};
 
-// â”€â”€ Time: SI = second â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Time: SI = second ─────────────────────────────────────────────────────
 constexpr double kTimeFactor[] = {
     1.0,         // Second
     1.0e-3,      // Millisecond
@@ -60,7 +60,7 @@ constexpr double kTimeFactor[] = {
 };
 constexpr const char* kTimeSuffix[] = {"_s", "_ms", "_us", "_min", "_h", "_day"};
 
-// â”€â”€ Angle: SI = radian â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Angle: SI = radian ────────────────────────────────────────────────────
 constexpr double kPiD = 3.14159265358979323846;
 constexpr double kAngleFactor[] = {
     1.0,            // Radian
@@ -69,7 +69,7 @@ constexpr double kAngleFactor[] = {
 };
 constexpr const char* kAngleSuffix[] = {"_rad", "_deg", "_turn"};
 
-// â”€â”€ Velocity: SI = m/s â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Velocity: SI = m/s ────────────────────────────────────────────────────
 constexpr double kVelocityFactor[] = {
     1.0,            // MeterPerSecond
     1.0 / 3.6,      // KilometerPerHour
@@ -78,7 +78,7 @@ constexpr double kVelocityFactor[] = {
 };
 constexpr const char* kVelocitySuffix[] = {"_mps", "_kmph", "_mph", "_knots"};
 
-// â”€â”€ Force: SI = newton â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Force: SI = newton ────────────────────────────────────────────────────
 constexpr double kForceFactor[] = {
     1.0,            // Newton
     1.0e3,          // Kilonewton
@@ -86,7 +86,7 @@ constexpr double kForceFactor[] = {
 };
 constexpr const char* kForceSuffix[] = {"_N", "_kN", "_lbf"};
 
-// â”€â”€ Pressure: SI = pascal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Pressure: SI = pascal ─────────────────────────────────────────────────
 constexpr double kPressureFactor[] = {
     1.0,            // Pascal
     1.0e3,          // Kilopascal
@@ -97,7 +97,7 @@ constexpr double kPressureFactor[] = {
 };
 constexpr const char* kPressureSuffix[] = {"_Pa", "_kPa", "_MPa", "_bar", "_psi", "_atm"};
 
-// â”€â”€ Energy: SI = joule â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Energy: SI = joule ────────────────────────────────────────────────────
 constexpr double kEnergyFactor[] = {
     1.0,            // Joule
     1.0e3,          // Kilojoule
@@ -108,7 +108,7 @@ constexpr double kEnergyFactor[] = {
 };
 constexpr const char* kEnergySuffix[] = {"_J", "_kJ", "_cal", "_kcal", "_kWh", "_eV"};
 
-// â”€â”€ Power: SI = watt â€” `format_power` not yet shipped; tables reserved. â”€â”€
+// ── Power: SI = watt — `format_power` not yet shipped; tables reserved. ──
 [[maybe_unused]] constexpr double kPowerFactor[] = {
     1.0,            // Watt
     1.0e3,          // Kilowatt
@@ -116,7 +116,7 @@ constexpr const char* kEnergySuffix[] = {"_J", "_kJ", "_cal", "_kcal", "_kWh", "
 };
 constexpr const char* kPowerSuffix[] = {"_W", "_kW", "_hp"};
 
-// â”€â”€ Voltage: SI = volt â€” `format_voltage` not yet shipped; tables reserved. â”€â”€
+// ── Voltage: SI = volt — `format_voltage` not yet shipped; tables reserved. ──
 [[maybe_unused]] constexpr double kVoltageFactor[] = {
     1.0,            // Volt
     1.0e-3,         // Millivolt
@@ -124,7 +124,7 @@ constexpr const char* kPowerSuffix[] = {"_W", "_kW", "_hp"};
 };
 constexpr const char* kVoltageSuffix[] = {"_V", "_mV", "_kV"};
 
-// â”€â”€ Current: SI = ampere â€” `format_current` not yet shipped; tables reserved. â”€â”€
+// ── Current: SI = ampere — `format_current` not yet shipped; tables reserved. ──
 [[maybe_unused]] constexpr double kCurrentFactor[] = {
     1.0,            // Ampere
     1.0e-3,         // Milliampere
@@ -132,7 +132,7 @@ constexpr const char* kVoltageSuffix[] = {"_V", "_mV", "_kV"};
 };
 constexpr const char* kCurrentSuffix[] = {"_A", "_mA", "_uA"};
 
-// â”€â”€ Frequency: SI = hertz (= 1/s) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Frequency: SI = hertz (= 1/s) ─────────────────────────────────────────
 constexpr double kFrequencyFactor[] = {
     1.0,            // Hertz
     1.0e3,          // Kilohertz
@@ -142,7 +142,7 @@ constexpr double kFrequencyFactor[] = {
 };
 constexpr const char* kFrequencySuffix[] = {"_Hz", "_kHz", "_MHz", "_GHz", "_rpm"};
 
-// â”€â”€ Temperature: affine â€” Kelvin is the SI base â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Temperature: affine — Kelvin is the SI base ───────────────────────────
 constexpr const char* kTemperatureSuffix[] = {"_kelvin", "_celsius", "_fahrenheit", "_rankine"};
 
 // ---------------------------------------------------------------------------
@@ -213,7 +213,7 @@ bool parse_value_with_suffix(crd::containers::StringView text,
             }
         }
     }
-    // No suffix â€” interpret as bare SI value.
+    // No suffix — interpret as bare SI value.
     char buf[64] = {};
     if (text.size() >= sizeof(buf)) { return false; }
     for (crd::usize j = 0; j < text.size(); ++j) { buf[j] = text[j]; }
@@ -603,7 +603,7 @@ std::optional<crd::f32> parse_temperature_to_kelvin(crd::containers::StringView 
 }
 
 // Explicit instantiations for f32 / f64.
-// NOLINTBEGIN(bugprone-macro-parentheses) — RESULT is used as a template-type
+// NOLINTBEGIN(bugprone-macro-parentheses) � RESULT is used as a template-type
 // name (`RESULT<crd::f32>`); wrapping it in parens would make the expansion a
 // parse error (`(RESULT)<crd::f32>` is ill-formed).
 #define CRD_UNITS_INSTANTIATE_PARSE(NAME, RESULT)                                                                      \

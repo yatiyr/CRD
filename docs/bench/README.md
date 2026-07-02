@@ -1,0 +1,33 @@
+# docs/bench — captured benchmark results (append-only)
+
+Every measured benchmark board lands here as its own file, **at the time it is measured** — never quoted
+from memory (SANITY #2/#5). This is the single home for numbers; session logs and system docs LINK here
+instead of restating tables.
+
+**Naming:** `YYYY-MM-DD-<slice-or-module>-<subject>.md` (e.g. `2026-07-02-v14a-dtype-converts.md`).
+
+**Each file carries:**
+1. The exact machine/config (CPU, pinning, thread count, compiler + flags, peer versions).
+2. The harness used (script path — tracked under `scripts/`), so any board is re-runnable.
+3. The full peer board — every peer measured, losses and ties included (SANITY #6/#9: a loss is an open
+   bug, not a disclosure; N/A stated *with the check*).
+4. The verdict line quoted by session logs / phase tables.
+
+Historical results (v5–v13 + the transcendental cluster) were retro-ported 2026-07-02 from the session
+logs / phase tables (recorded numbers, not re-measured — each file carries the note). From v14 on, every
+board is written here AT MEASUREMENT TIME — this is part of the per-slice Definition of Done for any
+perf/crush claim (see AGENTS.md § Numerical/perf work).
+
+## Index
+
+- **2026-06-11-v5-sparse-direct-cholmod-crush.md** — v5 sparse direct (multifrontal LU/Cholesky/LDLᵀ) vs CHOLMOD/UMFPACK/MUMPS; factor kernel 49–53 GF/s BEATS MUMPS; small-RHS solve WIN up to 3.82×; moat proven {1,2,4,8}.
+- **2026-06-04-v5e-hss-strumpack-crush.md** — v5e HSS/ULV compress/factor/solve vs STRUMPACK; compress 3.41–1.39× (global-sample QR-then-SVD), factor 2.7–4.1×, solve parity/WIN; moat proven {1,2,4,8}.
+- **2026-06-05-v5f-mixed-precision-ir.md** — v5f mixed-precision (f32-factor + f64-IR) vs smumps+IR; af23560 1.14× WIN, wang3/ns3Da parity; saddle-point indefinite fixed (GMRES-IR); moat proven.
+- **2026-06-07-v6-sparse-eigensolvers-matrix-free.md** — v6 sparse eigenvalue (Lanczos/thick-restart) vs ARPACK/PRIMME; parity (matvec-count matched); algorithmic crush = preconditioned methods (shift-invert + v5 factors); moat proven {1,2,4,8}.
+- **2026-06-11-v7-optimization-full-crush.md** — v7 optimization (OSQP/CMA-ES/Powell/Adam) vs scipy/pycma/torch; Powell beats scipy, CMA-ES ros5 beats pycma, Adam 12-digit exact; all gates met.
+- **2026-07-02-v13-numerics-motion.md** — v13 numerical computing + motion (interpolation · quadrature · differentiation · trajectory generation · Ruckig OTG) vs scipy/MATLAB/Boost/GSL/libruckig; 3-pillar moat (determinism · allocation-free · error-estimate).
+- **2026-06-27-v12-statistics-special.md** — v12 statistics + special functions (samplers · distributions · log-density gradients · descriptive) vs scipy.stats/NumPy/MATLAB; counter-RNG determinism moat; betainc crush (4 CDF losses → wins).
+- **2026-06-26-crd-math-deterministic-transcendental.md** — crd-math deterministic transcendental cluster (exp/log/trig/hyperbolic/power/complex) vs libm; 100% engine re-route; bit-identical gcc↔MSVC moat; sin 2.5× slower (determinism cost).
+- **2026-06-13-v9-ode-dae.md** — v9 ODE/DAE cluster (ERK · BDF · Radau · IMEX · Krylov · sensitivities) vs SUNDIALS/scipy/Boost; determinism moat.
+- **2026-06-20-v10-fft-transforms.md** — v10 FFT cluster (1D FFT · NUFFT · DCT/DST · sparse FFT) vs MKL/FFTW/FINUFFT/PocketFFT; codelet crush vs orchestration gap.
+- **2026-06-22-v11-dsp-wavelet-comms.md** — v11 DSP/wavelet/comms (filters · spectral · wavelets · SDR) vs scipy/MATLAB/liquid/PyWavelets; multi-threaded determinism moat.

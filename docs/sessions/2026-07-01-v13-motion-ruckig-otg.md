@@ -74,7 +74,7 @@ open bug, not a closed slice.
    Progression: vel-cases 76% → +acc/simple-none 94% → +general-none (T2346/T0234/T3456/T0124/3-step) → **2474/2474**.
 4. **C++ port** of both, gated on baked Ruckig references (12 single-DoF, 9 sync) in the test suite.
 
-Verification scripts: `build/ruckig_step1.py` (1934/1934), `build/ruckig_step2.py` (2474/2474), `build/ruckig_recon.py`,
+Verification scripts: `scripts/ruckig_step1.py` (1934/1934), `scripts/ruckig_step2.py` (2474/2474), `build/ruckig_recon.py`,
 `build/gen_otg_ref.py`, `build/gen_sync_ref.py`. Ruckig 0.17.3 installed in a venv (`~/rvenv`).
 
 ## The crush levers (honest engineering notes)

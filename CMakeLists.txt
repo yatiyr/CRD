@@ -577,6 +577,7 @@ add_subdirectory(engine/hesap-comms)  # v11c; COMMS/SDR — modulation/sync/equa
 add_subdirectory(engine/hesap-interp)  # v13; INTERPOLATION — 1-D piecewise/spline/poly/rational + scattered N-D; ADR-0095
 add_subdirectory(engine/hesap-diff)  # v13-l/m; NUMERICAL DIFFERENTIATION — Fornberg/Ridders/complex-step/SavGol/spectral; ADR-0095
 add_subdirectory(engine/hesap-motion)  # v13-n/o/p/q; TRAJECTORY GENERATION — SQUAD/clothoid/NURBS/min-snap/S-curve/TCB; ADR-0095
+add_subdirectory(engine/hesap-tensor)  # v14; TENSORS — the N-D substrate (views/broadcast/einsum/sparse/decomp/nn); ADR-0096
 add_subdirectory(engine/resources)
 add_subdirectory(engine/scene)
 add_subdirectory(engine/preset)

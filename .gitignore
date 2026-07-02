@@ -84,3 +84,18 @@ CLAUDE.md
 CONTEXT.md
 AGENTS.md
 opencode.json
+
+# session/profiler artifacts (2026-07-02 cleanup — never track these again)
+cachegrind.out.*
+ev_stream_*.crdr
+PATH-backup-*
+*.log
+test_pack_body_*.crdr
+ev_stream_*.crdr
+.crd_*/
+imgui.ini
+crashes/
+out/
+.tmp-*.log
+__pycache__/
+CLAUDE.md

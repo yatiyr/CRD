@@ -1,10 +1,10 @@
-// Phase 3.0 v1m3a â€” obek_cooker tests (ADR-0058).
+// Phase 3.0 v1m3a — obek_cooker tests (ADR-0058).
 //
 // v1m3a coverage (substrate; v1m3b/c/d extend):
 //   - Empty .obek.toml cooks to a valid OBEK with zero entities.
-//   - Single-entity Ã¶bek with Transform round-trips via ObekLoader +
+//   - Single-entity öbek with Transform round-trips via ObekLoader +
 //     instantiate_obek.
-//   - Two-entity Ã¶bek with ChildOf relation round-trips and reparents
+//   - Two-entity öbek with ChildOf relation round-trips and reparents
 //     under the supplied parent at instantiate time.
 //   - `extends` / per-entity `obek` / `overrides` are explicitly rejected
 //     at v1m3a with the "reserved for v1m3X" error message.
@@ -99,7 +99,7 @@ TEST_CASE("Empty obek TOML cooks to a valid OBEK with zero entities", "[obek-coo
 {
     constexpr const char* toml_text = "";
     crd::containers::Array<CookError> errors{crd::memory::default_allocator()};
-    // Empty-string StringView is the intent — the test exercises the
+    // Empty-string StringView is the intent � the test exercises the
     // zero-entity TOML path.
     // NOLINTNEXTLINE(bugprone-string-constructor)
     auto bytes = obek_cooker_inline(crd::containers::StringView{toml_text, 0}, make_ctx(), &errors);
@@ -181,10 +181,10 @@ ChildOf   = "root"
 
     auto inst = target.instantiate_obek(*res, anchor);
     REQUIRE(inst.entities.size() == 2U);
-    // The Ã¶bek's "root" entity has no ChildOf in source â†’ gets ChildOf(anchor).
-    // The Ã¶bek's "hand" entity already has ChildOf("root") â†’ preserved.
+    // The öbek's "root" entity has no ChildOf in source → gets ChildOf(anchor).
+    // The öbek's "hand" entity already has ChildOf("root") → preserved.
     // We don't know which file_idx is which name (depends on TOML iteration
-    // order in toml++'s table â€” typically insertion order). Inspect both.
+    // order in toml++'s table — typically insertion order). Inspect both.
     EntityId e0 = inst.entities[0];
     EntityId e1 = inst.entities[1];
     EntityId t0 = target.get_relation_target<ChildOf>(e0);
@@ -192,7 +192,7 @@ ChildOf   = "root"
     // Exactly one of e0/e1 is parented to anchor, the other to its sibling.
     const bool e0_parents_to_anchor = (t0 == anchor);
     const bool e1_parents_to_anchor = (t1 == anchor);
-    CHECK((e0_parents_to_anchor ^ e1_parents_to_anchor));  // exactly one is the Ã¶bek root
+    CHECK((e0_parents_to_anchor ^ e1_parents_to_anchor));  // exactly one is the öbek root
     if (e0_parents_to_anchor)
     {
         CHECK(t1 == e0);
@@ -241,7 +241,7 @@ Transform = { translation = [0.0, 0.0, 0.0] }
     CHECK(inst.overrides_skipped == 0U);
     const Transform* t = target.get_component<Transform>(inst.entities[0]);
     REQUIRE(t != nullptr);
-    // Override wins over the entity's authored Transform (translation [0,0,0] â†’ [42,0,0]).
+    // Override wins over the entity's authored Transform (translation [0,0,0] → [42,0,0]).
     CHECK(approx(t->translation.x.value, 42.0F));
     unload_obek(res);
 }
@@ -440,7 +440,7 @@ TEST_CASE("Chain of 3 extends resolves deepest-first", "[obek-cooker][extends][c
     // Grandparent defines translation = [1,1,1]
     // Parent extends grandparent, overrides translation = [2,2,2]
     // Child extends parent, overrides translation = [3,3,3]
-    // Expected: child wins â†’ translation = [3,3,3]
+    // Expected: child wins → translation = [3,3,3]
     constexpr const char* k_grandparent = R"TOML(
 [entity.thing]
 Transform = { translation = [1.0, 1.0, 1.0] }
@@ -491,7 +491,7 @@ Transform = { translation = [3.0, 3.0, 3.0] }
 TEST_CASE("extends cycle detection emits error", "[obek-cooker][extends][cycle]")
 {
     // a.extends = b
-    // b.extends = a   â† cycle
+    // b.extends = a   ← cycle
     constexpr const char* k_a = R"TOML(
 extends = "obek/b.obek.toml"
 
@@ -560,7 +560,7 @@ Transform = { translation = [0, 0, 0] }
 }
 
 // -----------------------------------------------------------------------------
-// Nested Ã¶bek references (v1m3c)
+// Nested öbek references (v1m3c)
 // -----------------------------------------------------------------------------
 
 TEST_CASE("Nested obek reference splices entities and parents under placeholder",
@@ -677,7 +677,7 @@ Transform = { translation = [1.0, 0.0, 0.0] }
 
 TEST_CASE("Nested obek cycle detection emits error", "[obek-cooker][nested][cycle]")
 {
-    // a includes b, b includes a â†’ cycle.
+    // a includes b, b includes a → cycle.
     constexpr const char* k_a = R"TOML(
 [entity.thing_a]
 obek = "obek/b.obek.toml"

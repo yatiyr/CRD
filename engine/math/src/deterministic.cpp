@@ -1,5 +1,5 @@
-﻿// crd::math::deterministic â€” Cephes-style polynomial transcendentals.
-// Phase 3.1 v0c. ADR-0063 Â§2.
+// crd::math::deterministic — Cephes-style polynomial transcendentals.
+// Phase 3.1 v0c. ADR-0063 §2.
 //
 // Implementations are derived from Stephen Moshier's Cephes Math Library
 // (public domain). Each function below cites the Cephes source it derives
@@ -10,7 +10,7 @@
 // The CrdSimd.cmake module enforces /fp:precise (MSVC) +
 // -fno-fast-math -ffp-contract=off -mfpmath=sse (GCC/Clang) project-wide,
 // so the polynomial evaluations below produce bit-exact identical results
-// across MSVC / clang-cl / GCC Ã— x64 / ARM64.
+// across MSVC / clang-cl / GCC × x64 / ARM64.
 
 #include <crd/math/deterministic.hpp>
 #include <crd/math/simd/vec4f.hpp>
@@ -78,7 +78,7 @@ namespace
 }  // namespace
 
 // ===========================================================================
-// Rounding wrappers â€” IEEE hardware ops, deterministic by construction.
+// Rounding wrappers — IEEE hardware ops, deterministic by construction.
 // ===========================================================================
 
 f32 floor(f32 x) noexcept { return std::floor(x); }
@@ -108,40 +108,40 @@ f32 copysign(f32 magnitude, f32 sign_src) noexcept
 }
 
 // ===========================================================================
-// sin / cos / tan â€” Cephes sinf.c / cosf.c / tanf.c
+// sin / cos / tan — Cephes sinf.c / cosf.c / tanf.c
 // ===========================================================================
 //
-// Reduce |x| to [0, Ï€/4] using the constant FOPI = 4/Ï€. Track the octant
-// j âˆˆ {0..7} to determine which polynomial (sin or cos) to evaluate and
+// Reduce |x| to [0, π/4] using the constant FOPI = 4/π. Track the octant
+// j ∈ {0..7} to determine which polynomial (sin or cos) to evaluate and
 // whether to flip the sign of the result.
 //
-// The argument-reduction split (DP1+DP2+DP3 â‰ˆ Ï€/4) is the standard
-// trick for preserving precision after subtraction â€” Ï€/4 is broken into
-// three single-precision pieces so that x - j*Ï€/4 retains accuracy even
-// when j*Ï€/4 is large relative to x.
+// The argument-reduction split (DP1+DP2+DP3 ≈ π/4) is the standard
+// trick for preserving precision after subtraction — π/4 is broken into
+// three single-precision pieces so that x - j*π/4 retains accuracy even
+// when j*π/4 is large relative to x.
 
 namespace
 {
-// 4/Ï€ â€” used to count quadrants
+// 4/π — used to count quadrants
 inline constexpr f32 k4OverPi = 1.27323954473516F;
 
-// Ï€/4 split into three single-precision parts whose sum rounds to the
-// nearest representable Ï€/4. Cephes sinf.c.
+// π/4 split into three single-precision parts whose sum rounds to the
+// nearest representable π/4. Cephes sinf.c.
 inline constexpr f32 kDp1 = 0.78515625F;
 inline constexpr f32 kDp2 = 2.4187564849853515625e-4F;
 inline constexpr f32 kDp3 = 3.77489497744594108e-8F;
 
-// sin polynomial for |z| â‰¤ Ï€/4:  sin(z) â‰ˆ z + p2*z^3 + p1*z^5 + p0*z^7
+// sin polynomial for |z| ≤ π/4:  sin(z) ≈ z + p2*z^3 + p1*z^5 + p0*z^7
 inline constexpr f32 kSincofP0 = -1.9515295891E-4F;
 inline constexpr f32 kSincofP1 =  8.3321608736E-3F;
 inline constexpr f32 kSincofP2 = -1.6666654611E-1F;
 
-// cos polynomial for |z| â‰¤ Ï€/4:  cos(z) â‰ˆ 1 - z^2/2 + p2*z^4 + p1*z^6 + p0*z^8
+// cos polynomial for |z| ≤ π/4:  cos(z) ≈ 1 - z^2/2 + p2*z^4 + p1*z^6 + p0*z^8
 inline constexpr f32 kCoscofP0 =  2.443315711809948E-005F;
 inline constexpr f32 kCoscofP1 = -1.388731625493765E-003F;
 inline constexpr f32 kCoscofP2 =  4.166664568298827E-002F;
 
-// tan polynomial for |z| â‰¤ Ï€/4:
+// tan polynomial for |z| ≤ π/4:
 inline constexpr f32 kTancofP0 = 9.38540185543E-3F;
 inline constexpr f32 kTancofP1 = 3.11992232697E-3F;
 inline constexpr f32 kTancofP2 = 2.44301354525E-2F;
@@ -155,7 +155,7 @@ f32 sin(f32 xx) noexcept
     const crd::u32 sign = sign_bit(xx);
     f32 x = fast_abs(xx);
 
-    // Reduce x to [0, Ï€/4], with octant j âˆˆ {0..7}.
+    // Reduce x to [0, π/4], with octant j ∈ {0..7}.
     f32       j = trunc(x * k4OverPi);
     crd::u32  jq = static_cast<crd::u32>(j);
     if ((jq & 1U) != 0U)
@@ -172,7 +172,7 @@ f32 sin(f32 xx) noexcept
         jq      -= 4U;
     }
 
-    // x_reduced = x - j*Ï€/4  (high-precision split subtraction)
+    // x_reduced = x - j*π/4  (high-precision split subtraction)
     const f32 z  = ((x - j * kDp1) - j * kDp2) - j * kDp3;
     const f32 zz = z * z;
 
@@ -196,7 +196,7 @@ f32 cos(f32 xx) noexcept
 {
     f32 x = fast_abs(xx);
 
-    // Reduce. Same as sin but the octant rotation is shifted by Ï€/2.
+    // Reduce. Same as sin but the octant rotation is shifted by π/2.
     f32       j  = trunc(x * k4OverPi);
     crd::u32  jq = static_cast<crd::u32>(j);
     if ((jq & 1U) != 0U)
@@ -239,7 +239,7 @@ f32 tan(f32 xx) noexcept
     const crd::u32 sign = sign_bit(xx);
     f32 x = fast_abs(xx);
 
-    // Reduce to [-Ï€/4, Ï€/4]; track parity (j%2 selects cot path).
+    // Reduce to [-π/4, π/4]; track parity (j%2 selects cot path).
     f32       j  = trunc(x * k4OverPi);
     crd::u32  jq = static_cast<crd::u32>(j);
     if ((jq & 1U) != 0U)
@@ -270,19 +270,19 @@ f32 tan(f32 xx) noexcept
 }
 
 // ===========================================================================
-// atan / atan2 / asin / acos â€” Cephes atanf.c
+// atan / atan2 / asin / acos — Cephes atanf.c
 // ===========================================================================
 
 namespace
 {
-// Polynomial for |x| in [0, tan(Ï€/8)]  (â‰¤ ~0.4142)
+// Polynomial for |x| in [0, tan(π/8)]  (≤ ~0.4142)
 inline constexpr f32 kAtancofP0 =  8.05374449538E-2F;
 inline constexpr f32 kAtancofP1 = -1.38776856032E-1F;
 inline constexpr f32 kAtancofP2 =  1.99777106478E-1F;
 inline constexpr f32 kAtancofP3 = -3.33329491539E-1F;
 
-inline constexpr f32 kTan3Pi8 = 2.41421356237309504880F;  // tan(3Ï€/8)
-inline constexpr f32 kTanPi8  = 0.41421356237309504880F;  // tan(Ï€/8)
+inline constexpr f32 kTan3Pi8 = 2.41421356237309504880F;  // tan(3π/8)
+inline constexpr f32 kTanPi8  = 0.41421356237309504880F;  // tan(π/8)
 }  // namespace
 
 f32 atan(f32 xx) noexcept
@@ -290,7 +290,7 @@ f32 atan(f32 xx) noexcept
     const crd::u32 sign = sign_bit(xx);
     f32 x = fast_abs(xx);
 
-    // Range-reduce by tan(Ï€/8) and tan(3Ï€/8).
+    // Range-reduce by tan(π/8) and tan(3π/8).
     f32 y;
     if (x > kTan3Pi8)
     {
@@ -349,10 +349,10 @@ f32 acos(f32 x) noexcept
 }
 
 // ===========================================================================
-// exp / exp2 â€” Cephes expf.c
+// exp / exp2 — Cephes expf.c
 // ===========================================================================
 //
-// exp(x) = 2^k * exp(r) where x = k*ln(2) + r, |r| â‰¤ ln(2)/2.
+// exp(x) = 2^k * exp(r) where x = k*ln(2) + r, |r| ≤ ln(2)/2.
 // exp(r) is approximated by a degree-5 polynomial.
 
 namespace
@@ -361,7 +361,7 @@ inline constexpr f32 kLog2E = 1.44269504088896341F;   // 1/ln(2)
 inline constexpr f32 kLn2Hi = 0.693359375F;          // high part of ln(2)
 inline constexpr f32 kLn2Lo = -2.12194440e-4F;       // low part of ln(2)
 
-// exp polynomial for |r| â‰¤ ln(2)/2 â‰ˆ 0.3466
+// exp polynomial for |r| ≤ ln(2)/2 ≈ 0.3466
 inline constexpr f32 kExpcofP0 = 1.9875691500E-4F;
 inline constexpr f32 kExpcofP1 = 1.3981999507E-3F;
 inline constexpr f32 kExpcofP2 = 8.3334519073E-3F;
@@ -369,8 +369,8 @@ inline constexpr f32 kExpcofP3 = 4.1665795894E-2F;
 inline constexpr f32 kExpcofP4 = 1.6666665459E-1F;
 inline constexpr f32 kExpcofP5 = 5.0000001201E-1F;
 
-inline constexpr f32 kExpMax =  88.722832F;   // input above â†’ +inf
-inline constexpr f32 kExpMin = -87.336544F;   // input below â†’ +0
+inline constexpr f32 kExpMax =  88.722832F;   // input above → +inf
+inline constexpr f32 kExpMin = -87.336544F;   // input below → +0
 
 [[nodiscard]] inline f32 ldexp_int_pow2(f32 mantissa, crd::i32 exp_int) noexcept
 {
@@ -409,7 +409,7 @@ f32 exp2(f32 x) noexcept
 }
 
 // ===========================================================================
-// log / log2 / log10 â€” Cephes logf.c
+// log / log2 / log10 — Cephes logf.c
 // ===========================================================================
 
 namespace
@@ -436,7 +436,7 @@ inline constexpr f32 kLogQ2 =  0.693359375F;
     const crd::u32 b = to_bits(x);
     const crd::i32 raw_exp = static_cast<crd::i32>((b >> 23) & 0xFFU);
     exp_out = raw_exp - 126;
-    const crd::u32 mant_bits = (b & 0x807FFFFFU) | 0x3F000000U;  // exponent â†’ 0.5..<1
+    const crd::u32 mant_bits = (b & 0x807FFFFFU) | 0x3F000000U;  // exponent → 0.5..<1
     return from_bits(mant_bits);
 }
 }  // namespace
@@ -486,7 +486,7 @@ f32 log10(f32 x) noexcept
 }
 
 // ===========================================================================
-// pow â€” exp(exponent * log(base)) with edge-case handling.
+// pow — exp(exponent * log(base)) with edge-case handling.
 // ===========================================================================
 
 f32 pow(f32 base, f32 exponent) noexcept
@@ -501,7 +501,7 @@ f32 pow(f32 base, f32 exponent) noexcept
 
     if (base < 0.0F)
     {
-        // Negative base + integer exponent â†’ real result; otherwise NaN.
+        // Negative base + integer exponent → real result; otherwise NaN.
         const f32 r = round(exponent);
         if (r != exponent) return std::numeric_limits<f32>::quiet_NaN();
         const f32 result = exp(exponent * log(-base));
@@ -514,21 +514,21 @@ f32 pow(f32 base, f32 exponent) noexcept
 }
 
 // ===========================================================================
-// expm1 / log1p â€” cancellation-resistant near-zero variants.
+// expm1 / log1p — cancellation-resistant near-zero variants.
 // ===========================================================================
 //
-// expm1(x) = exp(x) - 1. For |x| â‰ª 1, exp(x) â‰ˆ 1 + tiny, so the subtraction
-// loses 5-6 digits to cancellation. The Taylor expansion x + xÂ²/2 + xÂ³/6
+// expm1(x) = exp(x) - 1. For |x| ≪ 1, exp(x) ≈ 1 + tiny, so the subtraction
+// loses 5-6 digits to cancellation. The Taylor expansion x + x²/2 + x³/6
 // truncated at second order preserves all f32 precision in that band.
 //
-// log1p(x) = log(1 + x). For |x| â‰ª 1, 1+x rounds to 1, then log(1) = 0,
-// losing ALL precision. Taylor x - xÂ²/2 + xÂ³/3 - ... fixes that.
+// log1p(x) = log(1 + x). For |x| ≪ 1, 1+x rounds to 1, then log(1) = 0,
+// losing ALL precision. Taylor x - x²/2 + x³/3 - ... fixes that.
 
 f32 expm1(f32 x) noexcept
 {
     if (fast_abs(x) < 0.4F)
     {
-        // Taylor degree 7 â€” truncation x^8/40320 â‰¤ 1.6e-9 in band, well
+        // Taylor degree 7 — truncation x^8/40320 ≤ 1.6e-9 in band, well
         // below f32 ulp at 0.5 (~6e-8). Horner-evaluated.
         return x * (1.0F + x * (1.0F / 2.0F + x * (1.0F / 6.0F + x *
                (1.0F / 24.0F + x * (1.0F / 120.0F + x * (1.0F / 720.0F + x *
@@ -541,8 +541,8 @@ f32 log1p(f32 x) noexcept
 {
     if (fast_abs(x) < 0.1F)
     {
-        // Taylor: log(1+x) = x - xÂ²/2 + xÂ³/3 - xâ´/4 + xâµ/5 - xâ¶/6 + xâ·/7
-        // Truncation x^8/8 â‰¤ 1.25e-9 at |x|=0.1. Horner-evaluated.
+        // Taylor: log(1+x) = x - x²/2 + x³/3 - x⁴/4 + x⁵/5 - x⁶/6 + x⁷/7
+        // Truncation x^8/8 ≤ 1.25e-9 at |x|=0.1. Horner-evaluated.
         return x * (1.0F + x * (-1.0F / 2.0F + x * (1.0F / 3.0F + x *
                (-1.0F / 4.0F + x * (1.0F / 5.0F + x * (-1.0F / 6.0F + x *
                (1.0F / 7.0F))))))) ;
@@ -551,18 +551,18 @@ f32 log1p(f32 x) noexcept
 }
 
 // ===========================================================================
-// sinh / cosh / tanh â€” hyperbolic functions.
+// sinh / cosh / tanh — hyperbolic functions.
 // ===========================================================================
 //
 // sinh(x) = (e^x - e^-x) / 2. For small |x|, use Taylor to avoid
 // cancellation. For |x| > about 1, the direct formula is well-conditioned.
 //
 // cosh(x) = (e^x + e^-x) / 2. No cancellation issue (both terms are
-// positive); direct formula works everywhere finite. Saturates to +âˆ
-// past |x| â‰ˆ 89.4.
+// positive); direct formula works everywhere finite. Saturates to +�?
+// past |x| ≈ 89.4.
 //
-// tanh(x) = (e^(2x) - 1) / (e^(2x) + 1). Saturates to Â±1 quickly past
-// |x| â‰ˆ 9 (single-precision precision limit).
+// tanh(x) = (e^(2x) - 1) / (e^(2x) + 1). Saturates to ±1 quickly past
+// |x| ≈ 9 (single-precision precision limit).
 
 f32 sinh(f32 x) noexcept
 {
@@ -570,7 +570,7 @@ f32 sinh(f32 x) noexcept
     const f32      ax   = fast_abs(x);
     if (ax < 0.5F)
     {
-        // Taylor degree 9 â€” truncation x^11/39916800 â‰¤ 1.2e-11 at |x|=0.5,
+        // Taylor degree 9 — truncation x^11/39916800 ≤ 1.2e-11 at |x|=0.5,
         // well below f32 ulp. Horner-evaluated odd-only series.
         const f32 x2 = ax * ax;
         const f32 r = ax * (1.0F + x2 * (1.0F / 6.0F + x2 * (1.0F / 120.0F
@@ -587,7 +587,7 @@ f32 cosh(f32 x) noexcept
 {
     const f32 ax = fast_abs(x);
     if (ax > 88.7F) return std::numeric_limits<f32>::infinity();
-    // (e^x + e^-x)/2 â€” no cancellation; both terms positive everywhere.
+    // (e^x + e^-x)/2 — no cancellation; both terms positive everywhere.
     const f32 ex = exp(ax);
     return 0.5F * (ex + 1.0F / ex);
 }
@@ -598,13 +598,13 @@ f32 tanh(f32 x) noexcept
     const f32      ax   = fast_abs(x);
     if (ax > 9.0F)
     {
-        // |tanh(x)| < 1 - 2*e^-18 < 1 - 2^-25 â€” beyond f32 precision.
+        // |tanh(x)| < 1 - 2*e^-18 < 1 - 2^-25 — beyond f32 precision.
         return apply_sign(1.0F, sign);
     }
     if (ax < 0.5F)
     {
-        // Taylor degree 7 â€” odd-only series.
-        // tanh(x) = x - xÂ³/3 + 2xâµ/15 - 17xâ·/315 + 62xâ¹/2835
+        // Taylor degree 7 — odd-only series.
+        // tanh(x) = x - x³/3 + 2x⁵/15 - 17x⁷/315 + 62x⁹/2835
         const f32 x2 = ax * ax;
         const f32 r = ax * (1.0F + x2 * (-1.0F / 3.0F + x2 * (2.0F / 15.0F
                     + x2 * (-17.0F / 315.0F + x2 * 62.0F / 2835.0F))));
@@ -618,18 +618,18 @@ f32 tanh(f32 x) noexcept
 }
 
 // ===========================================================================
-// Special functions: erf / erfc / gamma / lgamma / beta â€” f32 wrappers.
+// Special functions: erf / erfc / gamma / lgamma / beta — f32 wrappers.
 //
 // f32 special functions delegate to the proven f64 Cephes implementations
 // (defined below). Cast-down to f32 truncates to f32-natural precision
-// (~1e-7 absolute), which is at or below f32 ulp at typical values â€” same
+// (~1e-7 absolute), which is at or below f32 ulp at typical values — same
 // precision a hand-tuned f32 implementation would produce, with one
 // authoritative coefficient table to maintain. Forward-declared below so
 // the f32 versions can call into the f64 implementations.
 // ===========================================================================
 
 // Forward declarations for f32 entry points (defined later in this TU).
-// NOLINTBEGIN(readability-redundant-declaration) — explicit forward decls
+// NOLINTBEGIN(readability-redundant-declaration) � explicit forward decls
 // are required because the f64 implementations below take callbacks into
 // these f32 wrappers (defined further down). Removing the decls breaks the
 // f64-to-f32 call path during compilation. Intentional, not redundant.
@@ -642,9 +642,9 @@ f32 beta  (f32 a, f32 b) noexcept;
 
 // ===========================================================================
 // ===========================================================================
-// f64 implementations â€” Cephes f64 coefficient tables (Stephen Moshier,
+// f64 implementations — Cephes f64 coefficient tables (Stephen Moshier,
 // public domain). Same algorithmic structure as f32 but with the rational/
-// PadÃ© forms Cephes uses for f64 accuracy. Bit-exact across MSVC / GCC /
+// Padé forms Cephes uses for f64 accuracy. Bit-exact across MSVC / GCC /
 // clang under the same /fp:precise + -ffp-contract=off contract.
 // ===========================================================================
 // ===========================================================================
@@ -726,7 +726,7 @@ f64 copysign(f64 magnitude, f64 sign_src) noexcept
 }
 
 // ===========================================================================
-// f64 sin / cos â€” Cephes sin.c / cos.c
+// f64 sin / cos — Cephes sin.c / cos.c
 // ===========================================================================
 
 namespace
@@ -739,7 +739,7 @@ inline constexpr f64 k64Dp2 = 3.77489470793079817668E-8;
 inline constexpr f64 k64Dp3 = 2.69515142907905952645E-15;
 
 // sin polynomial degree 6 (zz powers):
-//   sin(z) â‰ˆ z + z*z*z * polevl(zz, sincof)
+//   sin(z) ≈ z + z*z*z * polevl(zz, sincof)
 inline constexpr f64 k64Sincof[6] = {
      1.58962301576546568060E-10,
     -2.50507477628578072866E-8,
@@ -750,7 +750,7 @@ inline constexpr f64 k64Sincof[6] = {
 };
 
 // cos polynomial degree 6:
-//   cos(z) â‰ˆ 1 - 0.5*zz + zz*zz * polevl(zz, coscof)
+//   cos(z) ≈ 1 - 0.5*zz + zz*zz * polevl(zz, coscof)
 inline constexpr f64 k64Coscof[6] = {
     -1.13585365213876817300E-11,
      2.08757008419747316778E-9,
@@ -840,7 +840,7 @@ f64 cos(f64 xx) noexcept
 }
 
 // ===========================================================================
-// f64 tan â€” Cephes tan.c (rational approximation)
+// f64 tan — Cephes tan.c (rational approximation)
 // ===========================================================================
 
 namespace
@@ -890,14 +890,14 @@ f64 tan(f64 xx) noexcept
 }
 
 // ===========================================================================
-// f64 atan â€” Cephes atan.c
+// f64 atan — Cephes atan.c
 // ===========================================================================
 
 namespace
 {
-// Cephes atan.c f64 PadÃ© coefficients (P/Q rational over z = xÂ²).
+// Cephes atan.c f64 Padé coefficients (P/Q rational over z = x²).
 // Sanity: P[4]/Q[4] = -64.85/194.55 = -1/3, matching the leading Taylor
-// coefficient of atan(x) âˆ’ x â‰ˆ âˆ’xÂ³/3 + xâµ/5 âˆ’ ... so R(0) = -1/3.
+// coefficient of atan(x) − x ≈ −x³/3 + x⁵/5 − ... so R(0) = -1/3.
 inline constexpr f64 k64AtanP[5] = {
     -8.750608600031904122785E-1,
     -1.615753718733365076637E1,
@@ -913,11 +913,11 @@ inline constexpr f64 k64AtanQ[5] = {
      1.945506571482613964425E2
 };
 
-inline constexpr f64 k64Tan3Pi8 = 2.41421356237309504880;  // tan(3Ï€/8)
-// Cephes uses 0.66 (not tan(Ï€/8)=0.4142) as the middle threshold â€” gives a
-// smaller |x| after (xâˆ’1)/(x+1) reduction, keeping the PadÃ© well-conditioned.
+inline constexpr f64 k64Tan3Pi8 = 2.41421356237309504880;  // tan(3π/8)
+// Cephes uses 0.66 (not tan(π/8)=0.4142) as the middle threshold — gives a
+// smaller |x| after (x−1)/(x+1) reduction, keeping the Padé well-conditioned.
 inline constexpr f64 k64AtanMid  = 0.66;
-// High-precision Ï€/2 low part for compensation in the long-x reduction path.
+// High-precision π/2 low part for compensation in the long-x reduction path.
 inline constexpr f64 k64Morebits  = 6.123233995736765886130E-17;
 }  // namespace
 
@@ -983,7 +983,7 @@ f64 acos(f64 x) noexcept
 }
 
 // ===========================================================================
-// f64 exp â€” Cephes exp.c (PadÃ© approximation)
+// f64 exp — Cephes exp.c (Padé approximation)
 // ===========================================================================
 
 namespace
@@ -1028,7 +1028,7 @@ f64 exp(f64 x) noexcept
     r -= fk * k64Ln2Hi;
     r -= fk * k64Ln2Lo;
 
-    // PadÃ© form: exp(r) = 1 + 2*r*P(rÂ²) / (Q(rÂ²) - r*P(rÂ²))
+    // Padé form: exp(r) = 1 + 2*r*P(r²) / (Q(r²) - r*P(r²))
     const f64 rr = r * r;
     const f64 px = r * polevl(rr, k64ExpP);
     const f64 y  = 1.0 + 2.0 * px / (polevl(rr, k64ExpQ) - px);
@@ -1039,7 +1039,7 @@ f64 exp(f64 x) noexcept
 f64 exp2(f64 x) noexcept { return exp(x * ln2_64); }
 
 // ===========================================================================
-// f64 log â€” Cephes log.c
+// f64 log — Cephes log.c
 // ===========================================================================
 
 namespace
@@ -1068,7 +1068,7 @@ inline constexpr f64 k64LogQ2 =  0.693359375;
     const crd::u64 b = to_bits64(x);
     const crd::i32 raw_exp = static_cast<crd::i32>((b >> 52) & 0x7FFULL);
     exp_out = raw_exp - 1022;
-    const crd::u64 mant_bits = (b & 0x800FFFFFFFFFFFFFULL) | 0x3FE0000000000000ULL;  // exp â†’ 0.5..<1
+    const crd::u64 mant_bits = (b & 0x800FFFFFFFFFFFFFULL) | 0x3FE0000000000000ULL;  // exp → 0.5..<1
     return from_bits64(mant_bits);
 }
 }  // namespace
@@ -1142,7 +1142,7 @@ f64 expm1(f64 x) noexcept
 {
     if (fast_abs64(x) < 0.25)
     {
-        // Taylor degree 11 â€” truncation x^12/12! â‰¤ 1.2e-16 at |x|=0.25,
+        // Taylor degree 11 — truncation x^12/12! ≤ 1.2e-16 at |x|=0.25,
         // about 2 f64 ulps. Outside the band, exp(x)-1 has no significant
         // cancellation (exp(x) >> 1).
         const f64 inv2  = 1.0 / 2.0;
@@ -1166,7 +1166,7 @@ f64 log1p(f64 x) noexcept
 {
     if (fast_abs64(x) < 0.05)
     {
-        // Taylor degree 11 â€” truncation x^12/12 â‰¤ 2e-17 at |x|=0.05.
+        // Taylor degree 11 — truncation x^12/12 ≤ 2e-17 at |x|=0.05.
         return x * (1.0 + x * (-1.0/2 + x * (1.0/3 + x * (-1.0/4 + x * (1.0/5
              + x * (-1.0/6 + x * (1.0/7 + x * (-1.0/8 + x * (1.0/9
              + x * (-1.0/10 + x * 1.0/11))))))))));
@@ -1184,8 +1184,8 @@ f64 sinh(f64 x) noexcept
     const f64 ax = fast_abs64(x);
     if (ax < 0.25)
     {
-        // Taylor degree 11 â€” odd-only series.
-        // Truncation x^13/13! â‰¤ 6e-15 at |x|=0.25, well below 16-ulp bound.
+        // Taylor degree 11 — odd-only series.
+        // Truncation x^13/13! ≤ 6e-15 at |x|=0.25, well below 16-ulp bound.
         const f64 x2 = ax * ax;
         const f64 r = ax * (1.0 + x2 * (1.0/6 + x2 * (1.0/120 + x2 * (1.0/5040
                     + x2 * (1.0/362880 + x2 * 1.0/39916800)))));
@@ -1228,7 +1228,7 @@ f64 tanh(f64 x) noexcept
 
 namespace
 {
-// Cephes erf.c: erf(x) = x * P(xÂ²)/Q(xÂ²) for |x| â‰¤ 0.84375.
+// Cephes erf.c: erf(x) = x * P(x²)/Q(x²) for |x| ≤ 0.84375.
 inline constexpr f64 k64ErfT[5] = {
      9.60497373987051638749E0,
      9.00260197203842689217E1,
@@ -1244,7 +1244,7 @@ inline constexpr f64 k64ErfU[5] = {
      4.92673942608635921086E4
 };
 
-// Cephes erfc.c: erfc(x) â‰ˆ exp(-xÂ²) * P(x)/Q(x) for x in [0.84375, 8].
+// Cephes erfc.c: erfc(x) ≈ exp(-x²) * P(x)/Q(x) for x in [0.84375, 8].
 inline constexpr f64 k64ErfcP[9] = {
      2.46196981473530512524E-10,
      5.64189564831068821977E-1,
@@ -1270,7 +1270,7 @@ inline constexpr f64 k64ErfcQ[8] = {
 // Cephes gamma.c: rational approximation for gamma(x+2) on x in [0, 1].
 // P has 7 coefficients (degree 6); Q has 8 coefficients (degree 7).
 // Constant terms: P[6] = 1.0 (so polevl(0, P) = 1.0) and Q[7] = 1.0,
-// giving gamma(2) = polevl(0, P)/polevl(0, Q) = 1.0/1.0 = 1.0 âœ“.
+// giving gamma(2) = polevl(0, P)/polevl(0, Q) = 1.0/1.0 = 1.0 ✓.
 inline constexpr f64 k64GammaP[7] = {
      1.60119522476751861407E-4,
      1.19135147006586384913E-3,
@@ -1315,7 +1315,7 @@ inline constexpr f64 k64GammaQ[8] = {
 }
 }  // namespace
 
-f64 erfc(f64 x) noexcept;  // forward decl — referenced by erf(x) for tail-symmetry  // NOLINT(readability-redundant-declaration)
+f64 erfc(f64 x) noexcept;  // forward decl � referenced by erf(x) for tail-symmetry  // NOLINT(readability-redundant-declaration)
 
 f64 erf(f64 a) noexcept
 {
@@ -1385,17 +1385,17 @@ f32 lgamma(f32 x)        noexcept { return static_cast<f32>(lgamma(static_cast<f
 f32 beta  (f32 a, f32 b) noexcept { return static_cast<f32>(beta  (static_cast<f64>(a), static_cast<f64>(b))); }
 
 // ===========================================================================
-// SIMD-batched overloads â€” Vec4f / Vec8f, branchless Cephes implementation.
+// SIMD-batched overloads — Vec4f / Vec8f, branchless Cephes implementation.
 //
 // Each function is a fully-vectorized version of the scalar f32 algorithm
 // from above. Octant reduction, sign tracking, and special-case handling
-// are all done with select() / bitmask ops â€” no per-lane branches. The
+// are all done with select() / bitmask ops — no per-lane branches. The
 // arithmetic is identical to the scalar form, so lane k of the SIMD result
 // equals the scalar result on lane k bit-for-bit (the math suite verifies
 // this; the [simd] tag in test_deterministic.cpp pins the contract).
 //
 // Performance: on AVX2 with Vec8f, the inner polynomial evaluation is one
-// vmulps+vaddps per Horner step over 8 lanes â€” the disasm check
+// vmulps+vaddps per Horner step over 8 lanes — the disasm check
 // (crd-simd-emission-check) confirms 256-bit FP ops are emitted.
 // ===========================================================================
 
@@ -1541,7 +1541,7 @@ inline constexpr f32 kSLogQ2      =  0.693359375F;
     Vec8f r = x - fk * Vec8f(kSLn2Hi);
     r = r - fk * Vec8f(kSLn2Lo);
 
-    // exp(r) = 1 + r + rÂ²*P(r)
+    // exp(r) = 1 + r + r²*P(r)
     const Vec8f rr = r * r;
     Vec8f p = Vec8f(kSExpcofP0);
     p = p * r + Vec8f(kSExpcofP1);
@@ -1617,7 +1617,7 @@ inline constexpr f32 kSLogQ2      =  0.693359375F;
 
 }  // namespace
 
-// Public Vec4f/Vec8f overloads â€” direct calls to the SIMD implementations.
+// Public Vec4f/Vec8f overloads — direct calls to the SIMD implementations.
 
 crd::math::simd::Vec8f sin(crd::math::simd::Vec8f x) noexcept { return simd_sin_v8(x); }
 crd::math::simd::Vec8f cos(crd::math::simd::Vec8f x) noexcept { return simd_cos_v8(x); }

@@ -11,8 +11,8 @@
 
 Read these in order; they go from stable rules → live state → the task at hand.
 
-1. **`CLAUDE.md`** (repo root) — stable project bible: build commands, coding standards, troubleshooting, module index. Auto-loaded each session.
-2. **`AGENTS.md`** (repo root) — agent roster, conduct, Definition of Done, architectural cornerstones.
+1. **`AGENTS.md`** (repo root) — the rulebook: principles, conduct, coding standards (canonical), Definition of Done, git policy, architectural cornerstones.
+2. **`docs/BUILDING.md`** — build presets, verification protocol, smoke tests, platform notes, and ALL troubleshooting. (An untracked local `CLAUDE.md` may exist as an AI-session pointer into these generic docs; project knowledge never lives there.)
 3. **`docs/PRINCIPLES.md`** — non-negotiable engineering principles + pinned cornerstones. Short.
 4. **`docs/SANITY.md`** — engineering sanity doctrine + the living **Sanity Ledger**. Short. Claim one ledger item when you have slack.
 5. **`context.md`** (repo root) — live "where we are now": current focus, last shipped, next up, test counts.
@@ -27,7 +27,7 @@ Then, as your task needs, pull the relevant ADR(s), system overview(s), and rese
 
 | Area | Where | Purpose | Index / entry | Class |
 |---|---|---|---|---|
-| Project rules | `CLAUDE.md`, `AGENTS.md` | Stable rulebook + agent conduct | — | living |
+| Project rules | `AGENTS.md`, `docs/BUILDING.md` | Stable rulebook + build/verification reference | — | living |
 | Principles | `docs/PRINCIPLES.md` | Engineering compass, pinned cornerstones | — | living |
 | Benchmarking policy | `docs/PRINCIPLES_reference_class_benchmarking.md` | Head-to-head-vs-strongest-references rule for every numerical kernel | — | living |
 | Sanity | `docs/SANITY.md` | Sanity doctrine + ledger (the *operational* rules) | self | living |

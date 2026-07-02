@@ -1,6 +1,6 @@
 #!/bin/bash
 # v11-b: build + run the window-generation throughput shootout (Cerid vs scipy vs MATLAB). WSL, single-threaded,
-# AVX2+FMA. N=2^20 (compute-bound — the fair compiled-vs-compiled regime). Run the .py + MATLAB .m separately for
+# AVX2+FMA. N=2^20 (compute-bound — the fair compiled-vs-compiled regime). Run the .py + MATLAB .m separately fo
 # the scipy/MATLAB columns. Honest: window gen is one-time setup, not a streaming hot path (see the .cpp header).
 set -e
 cd /mnt/d/Dev/cerid

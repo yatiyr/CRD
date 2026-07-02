@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # v6-e-d GENERALIZED same-class floor — pyamg(smoothed-aggregation AMG on K) + scipy.sparse.linalg.lobpcg with
 # the generalized mass B=M is EXACTLY Cerid's eigs_sym_gen_lobpcg (AMG-on-K-preconditioned generalized LOBPCG).
-# The honest expectation (advisor-gated) is PARITY + the determinism MOAT, NOT a crush: same algorithm ⇒ the fair
+# The honest expectation (advisor-gated) is PARITY + the determinism MOAT, NOT a crush: same algorithm ⇒ the fai
 # metric is ITERATIONS-TO-TOLERANCE (comparable across implementations). WALL-CLOCK is NOT comparable (scipy's
 # lobpcg loop is pure Python) — printed for context only.
 #

@@ -110,8 +110,6 @@ M2 validated 4096 = 64x64 at 1.24x. Full f64 C2C improves across large powers of
 machine-eps vs MKL (~1e-15); round-trip + determinism clean; ASan/LTCG/clang-tidy clean.
 Inverse and f32 remain on the execute_batched fallback pending later ports. The
 four-step-vs-oracle test now covers 2^23 to gate the 4096 hier path.
-
-Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
 ```
 
 ## Phase 8 — next fronts (after the DoD closes + commit)

@@ -1,7 +1,7 @@
-﻿// crd-geometry-spatial â€” `UniformGrid<T>` impl (Phase 3.1.7 v5e).
+// crd-geometry-spatial — `UniformGrid<T>` impl (Phase 3.1.7 v5e).
 //
 // Reference: classical uniform-grid acceleration; Eberly *3D Game Engine
-// Design* Â§11.6. Voxel raycast: Amanatides & Woo 1987 + grid-bounds entry-
+// Design* §11.6. Voxel raycast: Amanatides & Woo 1987 + grid-bounds entry-
 // clip via slab test.
 //
 // Header `uniform_grid.hpp` documents the design + locked decisions.
@@ -65,12 +65,12 @@ UniformGrid<T>::UniformGrid(crd::memory::IAllocator* alloc, const UniformGridCon
     m_ny = ceil_div(m_bounds.max.y - m_bounds.min.y);
     m_nz = ceil_div(m_bounds.max.z - m_bounds.min.z);
 
-    // Sanity cap: prevent accidental cosmic allocations. 1B cells Ã— 24 B
-    // (Array<u32> overhead) = 24 GB â€” never intentional.
+    // Sanity cap: prevent accidental cosmic allocations. 1B cells × 24 B
+    // (Array<u32> overhead) = 24 GB — never intentional.
     const usize cell_count = static_cast<usize>(m_nx) * m_ny * m_nz;
-    CRD_ASSERT(cell_count <= (1ULL << 28) && "UniformGrid: cell_count > 256M â€” pick a coarser cell_size or use SpatialHash for sparse domains");
+    CRD_ASSERT(cell_count <= (1ULL << 28) && "UniformGrid: cell_count > 256M — pick a coarser cell_size or use SpatialHash for sparse domains");
 
-    // Allocate flat cell array â€” each cell is a default-constructed empty
+    // Allocate flat cell array — each cell is a default-constructed empty
     // Array<u32> bound to our allocator. push_back into a cell allocates
     // its first capacity lazily on first insert into that cell.
     m_cells.resize(cell_count);
@@ -81,7 +81,7 @@ UniformGrid<T>::UniformGrid(crd::memory::IAllocator* alloc, const UniformGridCon
 }
 
 // =============================================================================
-// Cell range â€” clamped to grid bounds
+// Cell range — clamped to grid bounds
 // =============================================================================
 //
 // Returns the inclusive (min, max) cell range covering the AABB's intersection
@@ -107,7 +107,7 @@ void UniformGrid<T>::aabb_cell_range(const AABB3<T>& a,
         const T rel_hi = hi - bmin;
         i32 i_lo = static_cast<i32>(floor_t<T>(rel_lo * m_inv_cell_size));
         i32 i_hi = static_cast<i32>(floor_t<T>(rel_hi * m_inv_cell_size));
-        // Clamp to [0, n-1] â€” handles boundary case where hi == grid max
+        // Clamp to [0, n-1] — handles boundary case where hi == grid max
         // (cell index would be n; collapse to n-1).
         if (i_lo < 0) { i_lo = 0; }
         if (i_hi < 0) { i_hi = 0; }
@@ -191,7 +191,7 @@ void UniformGrid<T>::free_object(u32 idx)
 }
 
 // =============================================================================
-// Cell â†” object plumbing
+// Cell ↔ object plumbing
 // =============================================================================
 
 template <MathScalar T>
@@ -233,7 +233,7 @@ void UniformGrid<T>::remove_from_cells(u32 obj_idx, const AABB3<T>& aabb)
     for (u32 ix = min_x; ix <= max_x; ++ix)
     {
         auto& cell = m_cells[cell_index(ix, iy, iz)];
-        // Swap-with-last removal â€” bounded by per-cell occupancy.
+        // Swap-with-last removal — bounded by per-cell occupancy.
         for (usize i = 0; i < cell.size(); ++i)
         {
             if (cell[i] == obj_idx)
@@ -296,7 +296,7 @@ bool UniformGrid<T>::update(UniformGridObjectId id, const AABB3<T>& new_aabb)
     bool nempty = false;
     aabb_cell_range(new_aabb, nmin_x, nmin_y, nmin_z, nmax_x, nmax_y, nmax_z, nempty);
 
-    // Same cell range (or both empty / both wholly outside) â‡’ fast path.
+    // Same cell range (or both empty / both wholly outside) ⇒ fast path.
     if (oempty == nempty
         && (oempty
             || (omin_x == nmin_x && omin_y == nmin_y && omin_z == nmin_z
@@ -351,7 +351,7 @@ u32 UniformGrid<T>::object_payload(UniformGridObjectId id) const noexcept
 }
 
 // =============================================================================
-// overlap / radius â€” Array sink overloads (delegate to inline templates)
+// overlap / radius — Array sink overloads (delegate to inline templates)
 // =============================================================================
 
 template <MathScalar T>
@@ -381,7 +381,7 @@ void UniformGrid<T>::radius(const Vec3<T>& point, T r, UniformGridScratch& scrat
 }
 
 // =============================================================================
-// raycast â€” Amanatides-Woo voxel traversal with grid-bounds entry-clip
+// raycast — Amanatides-Woo voxel traversal with grid-bounds entry-clip
 // =============================================================================
 //
 // Setup:
@@ -489,7 +489,7 @@ UniformGrid<T>::raycast_traverse_(const Ray3<T>& ray, T tmax,
         ray.origin.y + t_entry * ray.direction.y - m_bounds.min.y,
         ray.origin.z + t_entry * ray.direction.z - m_bounds.min.z};
 
-    // Start cell. Clamp to [0, n-1] â€” entry can be exactly at grid_max which
+    // Start cell. Clamp to [0, n-1] — entry can be exactly at grid_max which
     // would yield cell n; pull back to n-1 (we still scan that cell on entry).
     auto clamp_cell = [&](T v, u32 n) -> i32 {
         i32 c = static_cast<i32>(floor_t<T>(v * m_inv_cell_size));
@@ -534,7 +534,7 @@ UniformGrid<T>::raycast_traverse_(const Ray3<T>& ray, T tmax,
     u32 best_payload = 0xFFFFFFFFU;
     bool any = false;
 
-    // Per-object slab raycast (scalar â€” same as v5b/v5d's f64 path).
+    // Per-object slab raycast (scalar — same as v5b/v5d's f64 path).
     auto ray_aabb = [&](const AABB3<T>& a, T& out_t) noexcept -> bool {
         T tmin_loc = T{0};
         T tcur_max = best_t;
@@ -605,7 +605,7 @@ UniformGrid<T>::raycast_traverse_(const Ray3<T>& ray, T tmax,
         if (tmax_y == t_min) { iy += step_y; tmax_y += tdelta_y; }
         if (tmax_z == t_min) { iz += step_z; tmax_z += tdelta_z; }
 
-        // Exited grid bounds on any axis â‡’ stop.
+        // Exited grid bounds on any axis ⇒ stop.
         if (ix < 0 || ix >= static_cast<i32>(m_nx)) { break; }
         if (iy < 0 || iy >= static_cast<i32>(m_ny)) { break; }
         if (iz < 0 || iz >= static_cast<i32>(m_nz)) { break; }
@@ -616,7 +616,7 @@ UniformGrid<T>::raycast_traverse_(const Ray3<T>& ray, T tmax,
 }
 
 // =============================================================================
-// find_overlapping_pairs â€” broadphase
+// find_overlapping_pairs — broadphase
 // =============================================================================
 
 template <MathScalar T>

@@ -210,8 +210,6 @@ feat(hesap): v13-z close — CLI + docs + guards + the Windows DoD debt paydown
   (456s->9.3s debug, ~40min->1min asan; same divergent paths, guard-enforced)
 - feat(tests): crd-hesap-v13-no-exceptions guard (ADR-0095 pillar 3)
 - docs(systems): hesap-{interp,quadrature,diff,motion}.md + README rows
-
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
 ```
 
 (The tree also carries the prior uncommitted v12 + v13 work; batch as preferred. Agents never commit.)

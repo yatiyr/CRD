@@ -1,4 +1,4 @@
-﻿// crd-geometry-mesh â€” TriangleMeshBvh builder (v4a).
+// crd-geometry-mesh — TriangleMeshBvh builder (v4a).
 
 #include <crd/geometry/mesh/mesh_bvh.hpp>
 

@@ -96,8 +96,6 @@ n=1024 sub-FFT (block_width 64), the weak link at 1M (both sub-FFTs 1024) and 2M
 machine-eps vs MKL (~1.2e-15); the four-step-vs-oracle test already gates 2^20/2^21.
 Chose 32x32 (codelet32 both stages) over 16x64/64x16. Inverse + f32 stay on the
 radix-8 fallback.
-
-Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
 ```
 
 ## Next (M6 — overtake campaign)

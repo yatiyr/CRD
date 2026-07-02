@@ -1,4 +1,4 @@
-﻿#include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_test_macros.hpp>
 
 #include "../../engine/jobs/src/scheduler.hpp"
 #include <crd/core/types.hpp>
@@ -200,7 +200,7 @@ TEST_CASE("scheduler: drain order High before Normal before Low", "[jobs][schedu
 // 7. Same-priority: injection queue drained before local deque
 //
 // Both injection and local hold a Normal job. Injection must be picked first
-// per the drain order: injection â†’ local â†’ steal.
+// per the drain order: injection → local → steal.
 // ---------------------------------------------------------------------------
 
 TEST_CASE("scheduler: injection checked before local for same priority", "[jobs][scheduler]")
@@ -212,8 +212,8 @@ TEST_CASE("scheduler: injection checked before local for same priority", "[jobs]
     bool injection_ran = false;
     bool local_ran     = false;
 
-    sched.push(make_flag_job(&injection_ran, Priority::Normal)); // â†’ injection queue
-    sched.push_local(0U, make_flag_job(&local_ran, Priority::Normal)); // â†’ local deque
+    sched.push(make_flag_job(&injection_ran, Priority::Normal)); // → injection queue
+    sched.push_local(0U, make_flag_job(&local_ran, Priority::Normal)); // → local deque
 
     // First execute_one must drain the injection queue.
     REQUIRE(sched.execute_one(0U));
@@ -253,7 +253,7 @@ TEST_CASE("scheduler: local deque drains LIFO", "[jobs][scheduler]")
     REQUIRE(sched.init({1U, 256U, 16U}));
 
     // Each job records its value into executed_values.
-    // Values pushed: 1, 2, 3 â€” expected LIFO pop order: 3, 2, 1.
+    // Values pushed: 1, 2, 3 — expected LIFO pop order: 3, 2, 1.
     struct PushData
     {
         int                  m_value{0};
@@ -311,7 +311,7 @@ TEST_CASE("scheduler: pinned job executes on target thread", "[jobs][scheduler]"
 }
 
 // ---------------------------------------------------------------------------
-// 11. Pinned job: slot cleared after execution â€” second execute_one finds nothing
+// 11. Pinned job: slot cleared after execution — second execute_one finds nothing
 // ---------------------------------------------------------------------------
 
 TEST_CASE("scheduler: pinned slot cleared after execution", "[jobs][scheduler]")
@@ -404,7 +404,7 @@ TEST_CASE("scheduler: steal High before Normal", "[jobs][scheduler]")
 // 14. Semaphore count: N pushes allow N immediate wait_for_work() returns
 //
 // This is the timing-independent semaphore correctness test. push() posts the
-// semaphore once; wait_for_work() acquires once. N pushes â†’ N non-blocking acquires.
+// semaphore once; wait_for_work() acquires once. N pushes → N non-blocking acquires.
 // ---------------------------------------------------------------------------
 
 TEST_CASE("scheduler: push increments semaphore for wait_for_work", "[jobs][scheduler]")
@@ -426,7 +426,7 @@ TEST_CASE("scheduler: push increments semaphore for wait_for_work", "[jobs][sche
         sched.wait_for_work(0U);
     }
 
-    // Jobs are still in the injection queue — drain them.
+    // Jobs are still in the injection queue � drain them.
     for (int i = 0; i < kCount; ++i)
     {
         REQUIRE(sched.execute_one(0U));
@@ -456,7 +456,7 @@ TEST_CASE("scheduler: push wakes blocked wait_for_work", "[jobs][scheduler]")
     // Brief sleep to give the waiter thread time to start and block.
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
 
-    // push() posts the semaphore â€” waiter must wake.
+    // push() posts the semaphore — waiter must wake.
     std::atomic<int> dummy{0};
     sched.push(make_count_job(&dummy, Priority::Normal));
 

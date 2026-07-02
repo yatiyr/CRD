@@ -104,7 +104,11 @@ if(_crd_simd_resolved STREQUAL "avx2")
         target_compile_options(crd-simd-flags INTERFACE
             $<$<COMPILE_LANGUAGE:CXX,C>:-mavx2>
             $<$<COMPILE_LANGUAGE:CXX,C>:-mfma>
-            $<$<COMPILE_LANGUAGE:CXX,C>:-msse4.2>)
+            $<$<COMPILE_LANGUAGE:CXX,C>:-msse4.2>
+            # F16C (VCVTPS2PH/VCVTPH2PS — crd/math/float_convert.hpp batch f16).
+            # Every AVX2 CPU has F16C (it predates Haswell); MSVC /arch:AVX2
+            # already implies it, GCC/Clang need the explicit flag.
+            $<$<COMPILE_LANGUAGE:CXX,C>:-mf16c>)
     endif()
 elseif(_crd_simd_resolved STREQUAL "sse2")
     set(_crd_simd_target_value ${_CRD_SIMD_TARGET_SSE2})

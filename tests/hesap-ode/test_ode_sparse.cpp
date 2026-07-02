@@ -1,5 +1,5 @@
-﻿// v9-j gates: the sparse-Jacobian path (BDF + SparseOdeLinearSolver over the multifrontal LU) on
-// method-of-lines heat diffusion â€” gated against the EXACT discrete-eigenmode solution (the discrete
+// v9-j gates: the sparse-Jacobian path (BDF + SparseOdeLinearSolver over the multifrontal LU) on
+// method-of-lines heat diffusion — gated against the EXACT discrete-eigenmode solution (the discrete
 // Laplacian's (1,1) eigenmode decays as e^{lambda_h t} exactly in the ODE system), the sparse-vs-dense
 // cross-check at moderate n, and determinism.
 
@@ -156,7 +156,7 @@ private:
 TEST_CASE("sparse: heat-2D MOL eigenmode decays at the EXACT discrete rate (n = 1024)", "[ode][sparse]")
 {
     crd::memory::TlsfAllocator alloc(1U << 26);
-    const u32 m = 32; // n = 1024 â€” dense LU would be 1024^3 per refactor; sparse makes it routine
+    const u32 m = 32; // n = 1024 — dense LU would be 1024^3 per refactor; sparse makes it routine
     Heat2d f(m, /*sparse*/ true, &alloc);
     ode::SparseOdeLinearSolver<f64> solver(&alloc);
 
@@ -178,8 +178,8 @@ TEST_CASE("sparse: heat-2D MOL eigenmode decays at the EXACT discrete rate (n = 
     const f64 mid = y[(static_cast<usize>(m / 2) * m) + m / 2];
     INFO("decay=" << decay << " naccept=" << r.work.naccept << " nlu=" << r.work.nlu << " nfev=" << r.work.nfev);
     CHECK(std::abs(mid - decay * y0_mid) < 1e-7);
-    // And the whole field stays a scaled eigenmode (shape preserved): check a second point —
-    // y[m + 1] is grid (i = 1, j = 1) ⇒ sin(2πΔ)·sin(2πΔ).
+    // And the whole field stays a scaled eigenmode (shape preserved): check a second point �
+    // y[m + 1] is grid (i = 1, j = 1) ? sin(2p?)�sin(2p?).
     const f64 s2 = std::sin(2.0 * 3.14159265358979323846 / static_cast<f64>(m + 1));
     CHECK(std::abs(y[m + 1] - decay * s2 * s2) < 1e-7);
 }
@@ -210,7 +210,7 @@ TEST_CASE("sparse: sparse path agrees with the dense path (n = 144 cross-check)"
         ode::integrate_bdf<f64>(fd, 0.0, 0.05, containers::Span<f64>(yd.data(), yd.size()), opts, &alloc);
     REQUIRE(rd.success);
 
-    // Same Jacobian values, same Newton decisions â‡’ identical work; states agree to solver roundoff.
+    // Same Jacobian values, same Newton decisions ⇒ identical work; states agree to solver roundoff.
     CHECK(rs.work.naccept == rd.work.naccept);
     CHECK(rs.work.nfev == rd.work.nfev);
     CHECK(rs.work.nlu == rd.work.nlu);

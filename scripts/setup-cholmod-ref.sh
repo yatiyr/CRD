@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-# setup-cholmod-ref.sh -- stand up the SuiteSparse CHOLMOD reference oracle for
+# setup-cholmod-ref.sh -- stand up the SuiteSparse CHOLMOD reference oracle fo
 # the crd-hesap v5a supernodal-Cholesky head-to-head (Phase 3.1.6 v5a-2).
 #
 # WHY CHOLMOD: it is THE gold-standard supernodal sparse Cholesky (Davis et al.,

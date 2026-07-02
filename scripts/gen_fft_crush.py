@@ -156,7 +156,7 @@ def _topo(outputs):
 
     for o in outputs:
         visit(o)
-    return order
+    return orde
 
 
 def schedule(outputs):
@@ -188,7 +188,7 @@ def schedule(outputs):
             indeg[u.id] -= 1
             if indeg[u.id] == 0:
                 ready.append(u)
-    return order
+    return orde
 
 
 def emit_codelet(N, outputs, name):

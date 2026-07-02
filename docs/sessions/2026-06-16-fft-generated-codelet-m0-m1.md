@@ -86,6 +86,4 @@ Vectorizes the four-step column twiddle over the batch axis (Vec4d), the f64
 mirror of the shipped f32 bb-axis twiddle — proving bb-axis twiddle is a shared
 substrate. +5.6% f64 8M (0.80→0.84x MKL), correct to ~1e-15, deterministic.
 DoD: win-debug/asan/shipping/tidy green; [fft] gate machine-eps.
-
-Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
 ```

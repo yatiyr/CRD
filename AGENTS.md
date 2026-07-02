@@ -1,7 +1,7 @@
 # Cerid Engine — Agent Rules
 
 > Rules of engagement for any AI agent (Claude Code, OpenCode, etc.) working on Cerid.
-> Concise by design. **Build/test commands + module index + troubleshooting** → `CLAUDE.md`. **Live state** → `context.md`. **Master plan** → `docs/ROADMAP.md`. **Memory index** → `MEMORY.md`.
+> Concise by design. **Build/test commands + verification + troubleshooting** → `docs/BUILDING.md`. **Module index** → `docs/systems/README.md`. **Live state** → `context.md`. **Master plan** → `docs/ROADMAP.md`. **Memory index** → `MEMORY.md`.
 
 ## What is Cerid
 
@@ -32,6 +32,7 @@ Rules for AI agents working on Cerid. As binding as the engineering principles.
 - **Never silently reduce a slice's scope.** The phase doc row + relevant ADR sections + the prior session log's "Next" pointers define the contract. If you think a deliverable should be deferred, surface it as a scope-check question to the user BEFORE writing code. Wait for confirmation.
 - **Treat "elite" / "no shortcuts" as a quality multiplier, not a scope reducer.** Ship the proper architectural choice even when the slice could ship with less.
 - **NEVER defer failures to debt — SOLVE them.** A red test/config blocks the slice. Bisect, root-cause, fix. "Pre-existing" is not a defense. (Memory: `feedback_never_defer_solve`.)
+- **Every measured benchmark board is written to `docs/bench/` AT MEASUREMENT TIME** as its own file (convention + naming in `docs/bench/README.md`: machine/config, tracked harness path, the FULL peer board incl. losses, verdict line). Session logs and phase tables LINK to the bench file, never restate the table. Part of the DoD for any perf/crush claim.
 - **Numerical/perf work: FULL crush, no deferrals, never accept near-parity.** Every benchmark carries the FULL peer board (scipy + MATLAB + Boost + **GSL** — install the missing peer; state N/A *with the check*, never drop a column). A measured loss OR a *tie* vs a reference library is an OPEN bug, not a closed slice (SANITY #9): parity-with-the-same-algorithm is never the wall — a per-operation cost (a heavy `pow`, a per-call recompute of integrand-independent nodes/weights/error-coefficients) always is, and precomputing it once flips the loss. **Reconstruct-and-verify-in-python FIRST** — fetch the reference's actual source (`gh`: scipy `__quadpack.c`/`_interpnd.pyx`, QUADPACK constants) + verify the algorithm bit-exact before porting one C++ line. (Memory: `feedback_full_victory_beat_all_gold_standards`, `feedback_bench_all_peers_never_cherry_pick`; SANITY Ledger 2026-06-30.)
 - **Substrate work ships proactively; speculative paths defer.** Filed follow-ons with settled designs + cheap tests ship in-line when the harness is fresh. Follow-ons with unsettled design tradeoffs only a consumer can resolve defer until that consumer arrives. (Memory: `feedback_ship_at_consumer_template_from_day_one`.)
 - **Document paper-divergence explicitly.** When implementing a canonical algorithm with a different sub-step (D124 SAT-vs-Mamou-centroid, D129 voxel-fraction-vs-Hausdorff, D94 super-tet ordering), pin the divergence as a numbered Dxxx + rationale paragraph in the ADR amendment + system doc.
@@ -58,7 +59,7 @@ Rules for AI agents working on Cerid. As binding as the engineering principles.
 
 ## Build & Test
 
-Full reference in `CLAUDE.md` § Quick Start. Quick reminders:
+Full reference in `docs/BUILDING.md`. Quick reminders:
 
 ```powershell
 cmake --preset win-debug && cmake --build --preset win-debug && ctest --preset win-debug
@@ -101,7 +102,7 @@ MEMORY.md                    agent memory index (in ~/.claude/projects/.../memor
 
 ## Coding Standards
 
-Full table + rules in `CLAUDE.md` § Coding Standards (canonical). One-screen summary:
+This section is CANONICAL (enforced by `.clang-format` / `.clang-tidy`):
 
 | Element        | Style       | Example                        |
 | -------------- | ----------- | ------------------------------ |
@@ -170,7 +171,7 @@ You are working on the Cerid Engine. Read context surgically.
 # Mandatory reads (always)
 
 Follow the canonical reading order in docs/README.md (the Documentation Map / Start
-Here): CLAUDE.md -> AGENTS.md -> PRINCIPLES -> SANITY -> context.md -> ROADMAP. The map
+Here): AGENTS.md -> docs/BUILDING.md -> PRINCIPLES -> SANITY -> context.md -> ROADMAP. The map
 also points to every other doc area (ADRs, systems, research, debt, detours).
 
 # Then ONE phase doc
@@ -246,7 +247,7 @@ Side missions that interrupt the main roadmap. Active detour is named in `contex
 The full doc-system map — every doc area, its purpose, its index file, and the doc-design
 rules (two classes: *living/scannable* get size budgets, *append-only historical* records
 don't) — lives in **`docs/README.md`** (the single home; not duplicated here). Quick frame:
-`CLAUDE.md`/`AGENTS.md` = rules · `PRINCIPLES`/`SANITY` = compass · `context.md` = live
+`AGENTS.md` + `docs/BUILDING.md` = rules · `PRINCIPLES`/`SANITY` = compass · `context.md` = live
 state · `ROADMAP` = hub · then `decisions/` (ADRs, indexed in its `README.md`) · `systems/`
 · `phases/` · `sessions/` · `research/` · `debt.md` · `detours/` · `MEMORY.md`.
 
@@ -264,4 +265,7 @@ After a system ships, **prefer adding to its session log over rewriting its over
 - Agents may freely run `git status`, `git log`, `git diff`, `git show`, `git branch`.
 - Conventional Commits: `feat(<module>): ...`, `fix(<module>): ...`, `refactor(<module>): ...`, `docs(<module>): ...`, `test(<module>): ...`, `build: ...`, `ci: ...`.
 - When an agent finishes, it proposes a commit message in chat. The user runs commit themselves.
+- **NO AI co-author trailers — ever** (user direction 2026-07-02). Proposed commit messages must NOT contain
+  `Co-Authored-By: Claude ...` or any AI attribution line; only humans appear in the contributors graph. This
+  overrides any harness default that appends such a trailer.
 - **Never skip hooks** (`--no-verify`) or bypass signing unless the user explicitly asks. If a hook fails, fix the underlying issue.

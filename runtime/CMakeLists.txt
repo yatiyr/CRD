@@ -415,6 +415,23 @@ target_link_libraries(smoke_hesap_substrate PRIVATE
 )
 crd_enable_default_pch(smoke_hesap_substrate)
 
+# v14-a smoke + THE LINK-ISOLATION GATE (ADR-0096 §1): links ONLY the tensor
+# module's public closure — deliberately NO crd-hesap-stats (Philox is
+# include-only) / hesap-dense / hesap-sparse. A future edit that link-drags
+# any of them into the substrate breaks THIS link — that is the test.
+add_executable(smoke_hesap_tensor
+    examples/smoke_hesap_tensor.cpp
+)
+
+target_link_libraries(smoke_hesap_tensor PRIVATE
+    crd-core
+    crd-memory
+    crd-containers
+    crd-math
+    crd-hesap-tensor
+)
+crd_enable_default_pch(smoke_hesap_tensor)
+
 add_executable(smoke_hesap_blas1
     examples/smoke_hesap_blas1.cpp
 )

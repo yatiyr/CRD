@@ -10,7 +10,7 @@
 1. **CI triage:** the timed-out tests normally run in **~0.02 s** (verified from the same runs' logs where the
    previously-failing test passed). A millisecond test hanging >1500 s is a genuine hang, not slowness (the
    `feedback_timeout_is_not_a_hang_proof` scar applied — but this time with the CPU-climb check done properly).
-2. **Local repro (SANITY #5 — measure, don't theorize):** a WSL harness (`build/repro_moat_hang.sh`) running both
+2. **Local repro (SANITY #5 — measure, don't theorize):** a WSL harness (`scripts/repro_moat_hang.sh`) running both
    moat binaries pinned to 4 CPUs (`taskset -c 0-3`, mimicking the 4-vCPU CI runner) reproduced the hang at
    iterations 46, 16, 76 and 6 of the `[moat]` tag sets. Crucially, the hung process's **CPU ticks over 5 s = 0** —
    fully parked, not spinning. That single number eliminated the `jobs::wait` spin-pump, all solver code, and any
@@ -73,7 +73,7 @@ the last std concurrency dependency in the hot path is gone, on every toolchain 
 - `engine/jobs/src/scheduler.hpp` / `scheduler.cpp` — both semaphores swapped; includes trimmed.
 - `engine/jobs/CMakeLists.txt` — `synchronization` link on Windows.
 - `tests/jobs/test_semaphore.cpp` — NEW: the 4 regression/adversary cases.
-- `build/repro_moat_hang.sh` — the repro + forensics harness (untracked probe, kept for re-verification).
+- `scripts/repro_moat_hang.sh` — the repro + forensics harness (tracked; rerun after any crd-jobs sleep/wake change).
 
 ## Proposed commit
 
@@ -92,6 +92,4 @@ crd::jobs::detail::Semaphore sleeps only with expected==0 observed by the CAS
 drain loop and always wakes on release. Both scheduler semaphores swapped;
 synchronization.lib linked on Windows; 4 boundary-adversary regression tests;
 the 4-CPU-pinned repro loop that hung by iteration <=76 ran 300 clean.
-
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
 ```

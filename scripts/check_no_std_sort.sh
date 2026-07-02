@@ -3,7 +3,7 @@
 # / std::partial_sort / std::push_heap / std::pop_heap / std::make_heap /
 # std::sort_heap in engine/eylem/** + engine/hesap/**.
 #
-# ADR-0063 §3 deterministic ordering contract. Lights up when eylem v1a or
+# ADR-0063 §3 deterministic ordering contract. Lights up when eylem v1a o
 # hesap v0a creates the directory.
 
 set -uo pipefail

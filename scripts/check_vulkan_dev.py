@@ -33,9 +33,9 @@ from typing import List, Sequence
 
 @dataclass
 class ToolStatus:
-    name: str
+    name: st
     found: bool
-    path: str
+    path: st
 
 
 def which(name: str) -> ToolStatus:
@@ -102,7 +102,7 @@ def detect_platform() -> str:
 
 
 def recommended_install_commands(
-    host: str, tools: Sequence[ToolStatus], sdk: str
+    host: str, tools: Sequence[ToolStatus], sdk: st
 ) -> List[str]:
     has_vulkaninfo = any(tool.name == "vulkaninfo" and tool.found for tool in tools)
     has_glslang = any(tool.name == "glslangValidator" and tool.found for tool in tools)

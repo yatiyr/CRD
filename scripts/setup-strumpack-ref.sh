@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# setup-strumpack-ref.sh -- build STRUMPACK as a local benchmarking oracle for
+# setup-strumpack-ref.sh -- build STRUMPACK as a local benchmarking oracle fo
 # the v5e HSS/ULV crush (bench_hesap_hss_vs_strumpack). WSL/Linux only; dev-only,
 # NEVER shipped, NEVER in CI. Installs to $HOME/strumpack/install.
 #

@@ -1,4 +1,4 @@
-// Phase 3.0 v1l â€” scene_cooker tests (ADR-0055).
+// Phase 3.0 v1l — scene_cooker tests (ADR-0055).
 //
 // Coverage:
 //   - Empty TOML cooks to a valid SCEN.
@@ -10,7 +10,7 @@
 //     with array of targets.
 //   - Non-acyclic relation (Targets) accepts an array of targets.
 //   - Empty Transform table = default-constructed Transform.
-//   - Determinism: same TOML cooked twice â†’ bit-exact bytes.
+//   - Determinism: same TOML cooked twice → bit-exact bytes.
 //   - 100-entity stress.
 
 #include <crd/cooker/scene_cooker.hpp>
@@ -229,7 +229,7 @@ Targets = ["tracked_a", "tracked_b"]
     REQUIRE(res != nullptr);
     // ONE relation in the SCEN: each Tag is a single component on the
     // source entity. The cooker iterates the array and calls
-    // add_relation_via_id for each â€” the runtime model UPSERTs, so the
+    // add_relation_via_id for each — the runtime model UPSERTs, so the
     // last entry wins. Final state = one Targets relation pointing at
     // the last array element.
     CHECK(res->info.relation_count == 1U);

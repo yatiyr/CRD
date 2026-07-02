@@ -12,7 +12,7 @@
 //
 // MOAT: deterministic by construction (crd::math, fixed evaluation order), allocation-free (all stack arrays), and
 // WCET-bounded (a fixed finite set of candidates, no unbounded iteration). Verified against the `ruckig` package on
-// 1934/1934 random feasible arbitrary-state cases (build/ruckig_step1.py). Velocity may transiently exceed vmax in the
+// 1934/1934 random feasible arbitrary-state cases (scripts/ruckig_step1.py). Velocity may transiently exceed vmax in the
 // first phases when |v0|,|a0| are physically too high to brake in time — Ruckig allows this and so do we (the accel
 // and jerk limits stay hard; the velocity limit is enforced on the back half + interior a=0 crossings, per Ruckig's
 // Profile::check).

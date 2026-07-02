@@ -1,4 +1,4 @@
-﻿// Phase 3.0 v1j â€” Transform + TransformPropagation tests (ADR-0054).
+// Phase 3.0 v1j — Transform + TransformPropagation tests (ADR-0054).
 //
 // Coverage:
 //   - Default Transform identity values.
@@ -9,8 +9,8 @@
 //   - Branching tree: siblings independent.
 //   - Detached entity: world == local.
 //   - Multiple roots independent.
-//   - Modify root â†’ descendants recompute.
-//   - Modify leaf â†’ siblings unaffected.
+//   - Modify root → descendants recompute.
+//   - Modify leaf → siblings unaffected.
 //   - Re-parenting via remove + add ChildOf.
 //   - Add new child via Commands.
 //   - Cascade-destroy parent (no crash, descendants gone).
@@ -140,7 +140,7 @@ TEST_CASE("Parent + child: child.world = parent.world * child.local", "[scene][t
     REQUIRE(ct != nullptr);
     REQUIRE(pt != nullptr);
     CHECK(approx(ct->world, pt->world * ct->local()));
-    // Child world translation should be (11, 0, 0) â€” parent + child local.
+    // Child world translation should be (11, 0, 0) — parent + child local.
     CHECK(approx(ct->world.c3.x, 11.0F));
 }
 
@@ -363,7 +363,7 @@ TEST_CASE("try_set_world returns false on singular matrix", "[scene][transform][
     EntityId e = spawn_with_transform(w, Vec3f{5, 5, 5});
 
     Mat4f singular = Mat4f::identity();
-    singular.c0 = crd::math::Vec4f{0, 0, 0, 0}; // zero column â†’ singular
+    singular.c0 = crd::math::Vec4f{0, 0, 0, 0}; // zero column → singular
     CHECK_FALSE(w.try_set_world(e, singular));
 
     // Transform unchanged.
@@ -448,8 +448,8 @@ TEST_CASE("Deep chain (30-deep): precision within documented f32 tolerance",
     // Tip entity should be at world translation (depth, 0, 0).
     const Transform* tip = w.get_component<Transform>(chain[depth - 1]);
     REQUIRE(tip != nullptr);
-    // Documented tolerance: ~1 ULP per multiplication Ã— 30 â‰ˆ 1e-5 radians /
-    // worst-case 30 Ã— 1e-6 â‰ˆ 3e-5 absolute for translation. Pin generous.
+    // Documented tolerance: ~1 ULP per multiplication × 30 ≈ 1e-5 radians /
+    // worst-case 30 × 1e-6 ≈ 3e-5 absolute for translation. Pin generous.
     CHECK(approx(tip->world.c3.x, static_cast<crd::f32>(depth), 1e-4F));
     CHECK(approx(tip->world.c3.y, 0.0F, 1e-5F));
     CHECK(approx(tip->world.c3.z, 0.0F, 1e-5F));
