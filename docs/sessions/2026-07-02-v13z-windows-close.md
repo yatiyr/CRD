@@ -179,6 +179,23 @@ over shipped math); (4) **3.1.11 amendment** = pseudospectral/direct-collocation
 class from shipped parts). Planned-total across v14–v18: **~90 KLOC / ~3,100 tests**, ADRs 0096–0099 queued at their
 kickoffs.
 
+## Post-hesap sequencing decisions (same session, final round — pinned in `phase-3.1-eylem.md` §Resume directive)
+
+User direction, recorded as the eylem **Resume directive 2026-07-02**:
+
+1. **The sequence:** hesap v14→v18 completes first → **eylem resume (v1c→v9)** as the flagship platform consumer →
+   `crd-ui` → the editor. Eylem waits for the arc so it consumes v16 AD + v17 GPU from day one (the geometry-before-
+   physics logic, again). Renderer/material = consumer-pulled slices, never a standalone phase; the gizmos cluster
+   joins the editor arc; the editor rides the v18/ADR-0081 command registry (GUI emits commands).
+2. **The eylem crush mandate:** stronger/faster/better than PhysX + Jolt + everything, honestly — the crush map
+   (unique wins: cross-platform determinism, Featherstone+sparse-direct articulation, stiff systems, differentiable,
+   FEM; fight-to-parity: raw throughput vs Jolt, GPU vs CUDA-PhysX) + the full-board scoreboard (Jolt samples, PhysX
+   SDK scenes, Bullet, MuJoCo/Drake) harness-first at resume.
+3. **Two modes = two solver profiles on ONE substrate** (not a fork): Game (f32/XPBD-TGS/frame-budget/LOD/lockstep) ·
+   Engineering (f64/implicit-over-hesap-direct/energy-audits/certificates) — same API/scene/constraints; the
+   engineering profile is the in-house oracle for the game profile.
+4. **Resume-opening tasks:** ratify ADR-0086 + reconcile ADR-0074; crush-harness first; Windows DoD per-slice.
+
 ## Proposed commit
 
 ```

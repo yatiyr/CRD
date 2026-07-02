@@ -18,6 +18,56 @@ discriminating-question answers. Read it once before starting.
 
 ---
 
+## Resume directive 2026-07-02 — post-hesap sequencing, the crush mandate, and the two-profile architecture
+
+> Pinned from the 2026-07-02 planning session (user direction; session
+> `docs/sessions/2026-07-02-v13z-windows-close.md`). Supplements the 2026-05-15 plan below.
+
+**1. THE SEQUENCE (locked):** hesap v14 (tensors) → v15/16 (autodiff) → v17 (GPU) → v18 (notebook + agent platform)
+→ **EYLEM RESUME (v1c → v9, the flagship platform consumer)** → `crd-ui` → the editor. **Rationale — eylem waits for
+the full arc** (the same logic as the geometry-before-physics pivot, ADR-0076 §12): ADR-0086's design (powered
+ragdolls with learned controllers, GPU crowds, differentiable contact) *consumes* v16 AD + v17 GPU — resuming after
+the arc means eylem integrates them from day one instead of retrofitting (the deferred-refactor debt we refuse).
+**Renderer/material work is NOT a standalone phase** — it is pulled by consumers (deformables ⇒ skinning/blend-shapes
+in the material system; the editor ⇒ picking/outline/viewport; sciviz ⇒ plot rendering), per the real-workload-before-
+optimization principle. The **gizmos/direct-manipulation cluster** (long-standing high user priority) is part of the
+editor arc. **The editor rides the v18/ADR-0081 registry** — the GUI emits commands, so undo = replay and every
+button is agent-drivable by construction; UI-before-command-surface is the mistake other engines made.
+
+**2. THE CRUSH MANDATE (user 2026-07-02): eylem must be stronger, more performant, and generally better than PhysX,
+Jolt, and everything else — honestly, full-board.** The honest crush map:
+
+| axis | posture |
+|---|---|
+| **Cross-platform bit-determinism** | UNIQUE WIN — Jolt is deterministic only same-binary/arch; PhysX not meaningfully at all. The crd::math moat is the enabler ⇒ lockstep multiplayer + replay-exact physics nobody else ships. |
+| **Articulated bodies** | WIN by import — reduced-coords Featherstone (ADR-0086) + hesap sparse direct + v15 exact Jacobians = Drake/MuJoCo-grade articulation in a game engine. |
+| **Stiff/large systems** | WIN — sparse-direct/implicit options (the CHOLMOD-crushing solvers) for stacks/vehicles/cables where iterative game solvers explode. |
+| **Differentiable physics** | WIN (v16) — only research engines have it; none deterministic, none shipping. |
+| **Soft body / real-time FEM** | WIN-capable (eylem v7 over hesap direct/iterative). |
+| **Raw rigid-body throughput vs Jolt** | FIGHT to parity-or-win, promise nothing early — the measure-first campaign (the v5/v7 lattice playbook: profile → find the lever → flip losses one by one). |
+| **GPU physics vs PhysX** | Honest: PhysX's CUDA home turf; v17 portable-Vulkan fights with the determinism column as differentiator (the FFT-vs-MKL posture: portable + principled, any residual gap named). |
+
+**The eylem scoreboard is full-board from day one** (ADR-0075 already mandates cross-engine bench): Jolt's own
+samples, PhysX SDK scenes, Bullet, MuJoCo/Drake (robotics), matched fidelity, ms/frame @ N bodies game-style budgets,
+losses named + fixed-or-escalated (SANITY #9). **Already-built inventory to assemble, not rebuild:** broadphase BVH +
+GJK/EPA/CCD raycast (geometry, shipped) · the QP/MLCP solver experience (v7-k) · raw-span fixed-step kernels (the v9
+two-layer contract was designed FOR eylem's hot loop) · the OTG for kinematic characters (v13) · fiber jobs · v14
+batched tensors for SoA body math.
+
+**3. TWO MODES = TWO SOLVER PROFILES ON ONE SUBSTRATE (user 2026-07-02), not a fork** — the convergence of
+ADR-0062/0063 (multi-domain) + ADR-0060 (profiles) + ADR-0078 (f32/f64 orthogonality):
+- **Game profile:** f32 · fixed-step XPBD/TGS · frame-budgeted (the v13 WCET pillars repurposed as a frame-time
+  contract) · the ADR-0086 LOD continuum + authoritative-coarse/cosmetic-fine split · deterministic for lockstep.
+- **Engineering profile:** f64 · implicit/variational integrators over hesap direct solvers · energy/momentum audit
+  gates · mm-accurate contact · the certification pillars + the v17-k certificate chain (auditable simulation runs).
+- Same API, same scene, same constraint graph; the profile picks integrator/precision/budget. Robotics + medical mix
+  per-system between the two. **The engineering profile is the in-house ORACLE for the game profile's accuracy
+  claims** — the hesap gold-standard doctrine applied to physics testing.
+
+**4. Resume-opening tasks:** ratify **ADR-0086** (still Proposed) + reconcile ADR-0074 (powered-ragdoll vs
+cinematic-kinematic) · write the resume session's crush-scoreboard harness FIRST (the ADR-0075 cross-engine bench,
+extended with the full board above) · per-slice Windows DoD from day one (the 2026-07-02 scar).
+
 ## Strategic Execution Plan 2026-05-15 — eylem v1c+ resume sequencing
 
 Per `docs/ROADMAP.md` § Strategic Execution Plan (locked 2026-05-15),
