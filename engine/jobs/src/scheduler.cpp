@@ -4,7 +4,6 @@
 #include <crd/core/types.hpp>
 
 #include <bit>
-#include <chrono>
 #include <optional>
 
 namespace crd::jobs::detail
@@ -315,7 +314,7 @@ void Scheduler::wait_for_work(crd::u32 thread_index)
     // execute_one). In the common case wake_worker/wake_one_idle posts this semaphore and the wait returns at once.
     const crd::u64 bit = crd::u64{1} << thread_index;
     m_idle_mask.fetch_or(bit, std::memory_order_seq_cst);
-    (void)m_thread_states[thread_index]->wake.try_acquire_for(std::chrono::milliseconds(1));
+    (void)m_thread_states[thread_index]->wake.try_acquire_for_ms(1U);
     m_idle_mask.fetch_and(~bit, std::memory_order_seq_cst);
 }
 
@@ -335,7 +334,7 @@ void Scheduler::wake_all(crd::u32 count)
         return;
     }
     if (count > 0U)
-        m_semaphore.release(static_cast<std::ptrdiff_t>(count));
+        m_semaphore.release(count);
 }
 
 void Scheduler::wake_worker(crd::u32 thread_index) noexcept

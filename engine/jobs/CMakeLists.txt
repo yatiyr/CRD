@@ -25,6 +25,13 @@ target_link_libraries(crd-jobs
         crd-containers  # internal: scheduler injection queues use crd::containers::ConcurrentQueue
 )
 
+# The worker-sleep Semaphore (src/semaphore.cpp) calls WaitOnAddress /
+# WakeByAddress{Single,All} directly on Windows; they live in synchronization.lib
+# (kernel32 API set), which is not linked by default.
+if(WIN32)
+    target_link_libraries(crd-jobs PRIVATE synchronization)
+endif()
+
 target_compile_features(crd-jobs PUBLIC cxx_std_20)
 
 # Hand-rolled asm context switch is incompatible with MSVC LTO (/GL+/LTCG):

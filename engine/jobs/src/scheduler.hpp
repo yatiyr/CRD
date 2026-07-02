@@ -1,5 +1,6 @@
 #pragma once
 
+#include "semaphore.hpp"
 #include "work_stealing_deque.hpp"
 #include <crd/containers/concurrent_queue.hpp>
 #include <crd/jobs/job_decl.hpp>
@@ -10,7 +11,6 @@
 #include <atomic>
 #include <memory>
 #include <optional>
-#include <semaphore>
 #include <vector>
 
 // MSVC C4324: structure padded due to alignment specifier. Expected — alignas(64) on
@@ -71,7 +71,7 @@ struct ThreadState
     // Per-worker wake semaphore — used ONLY on the opt-in targeted-wake path (ADR-0094 P-core routing). The default
     // path uses the shared Scheduler::m_semaphore and never touches this. It lets a SPECIFIC worker be woken (e.g.
     // for a pinned P-core job), which the single shared semaphore cannot do.
-    std::counting_semaphore<> wake{0};
+    Semaphore wake{};
 };
 
 // Configuration for Scheduler::init().
@@ -173,7 +173,9 @@ private:
     std::vector<std::unique_ptr<ThreadState>> m_thread_states;
 
     // Counting semaphore: posted once per push/push_local; workers acquire() to sleep. (Default-path wake.)
-    std::counting_semaphore<> m_semaphore{0};
+    // Cerid-owned futex/WaitOnAddress primitive — std::counting_semaphore lost wakes on the CI's libstdc++
+    // (GCC 13.3), hanging determinism-moat tests at shutdown. See semaphore.hpp for the full mechanism.
+    Semaphore m_semaphore{};
 
     // Targeted-wake state (opt-in; untouched on the default path). idle bit i set ⇒ worker i is parked on its own
     // ThreadState::wake. ≤ 64 workers (asserted in init when targeted_wake is requested).
