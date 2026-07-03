@@ -27,6 +27,7 @@ target_link_libraries(crd-hesap-tensor
         crd-containers
         crd-memory
         crd-math  # float_convert.hpp — the migrated f16/bf16/FP8 format primitives (header-only)
+        crd-jobs  # reduce.hpp Tier-D parallel blocks (deterministic parallel_for; acyclic)
     PRIVATE
         crd-warnings
 )

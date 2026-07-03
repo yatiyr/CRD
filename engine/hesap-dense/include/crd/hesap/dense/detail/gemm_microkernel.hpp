@@ -128,6 +128,7 @@ inline void gemm_prefetch_t0(const void* p) noexcept
 // standalone (build/_uk_spike.cpp), vs 86% for the old 8×8. MR=6 (= GemmTraits<f64>::MR);
 // pack_a feeds 6-row panels. Mul/add fuse via single-rounded simd::fma (ADR-0082); each
 // C[i][j] = Σ_p a[i][p]·b[p][j] in p-order ⇒ bit-identical to the old tile.
+template <bool ZeroInit = false>
 inline void
 gemm_microkernel_avx2_f64(crd::usize k,
                           crd::usize lda, // A row stride (== k for packed Ac; obw for the packed-TRSM resident panel)
@@ -135,19 +136,21 @@ gemm_microkernel_avx2_f64(crd::usize k,
 {
     namespace simd = crd::math::simd;
 
-    // Load existing C: 6 rows × (2 Vec4d halves = cols 0-3 and 4-7).
-    simd::Vec4d c00 = simd::Vec4d::load(c_tile + 0 * ldc + 0);
-    simd::Vec4d c01 = simd::Vec4d::load(c_tile + 0 * ldc + 4);
-    simd::Vec4d c10 = simd::Vec4d::load(c_tile + 1 * ldc + 0);
-    simd::Vec4d c11 = simd::Vec4d::load(c_tile + 1 * ldc + 4);
-    simd::Vec4d c20 = simd::Vec4d::load(c_tile + 2 * ldc + 0);
-    simd::Vec4d c21 = simd::Vec4d::load(c_tile + 2 * ldc + 4);
-    simd::Vec4d c30 = simd::Vec4d::load(c_tile + 3 * ldc + 0);
-    simd::Vec4d c31 = simd::Vec4d::load(c_tile + 3 * ldc + 4);
-    simd::Vec4d c40 = simd::Vec4d::load(c_tile + 4 * ldc + 0);
-    simd::Vec4d c41 = simd::Vec4d::load(c_tile + 4 * ldc + 4);
-    simd::Vec4d c50 = simd::Vec4d::load(c_tile + 5 * ldc + 0);
-    simd::Vec4d c51 = simd::Vec4d::load(c_tile + 5 * ldc + 4);
+    // Load existing C: 6 rows × (2 Vec4d halves). ZeroInit: the caller's tile
+    // is known-zero — start the accumulators at 0 in registers instead
+    // (identical bits; elides the zero-store pass AND this zero-load pass).
+    simd::Vec4d c00 = ZeroInit ? simd::Vec4d(0.0) : simd::Vec4d::load(c_tile + 0 * ldc + 0);
+    simd::Vec4d c01 = ZeroInit ? simd::Vec4d(0.0) : simd::Vec4d::load(c_tile + 0 * ldc + 4);
+    simd::Vec4d c10 = ZeroInit ? simd::Vec4d(0.0) : simd::Vec4d::load(c_tile + 1 * ldc + 0);
+    simd::Vec4d c11 = ZeroInit ? simd::Vec4d(0.0) : simd::Vec4d::load(c_tile + 1 * ldc + 4);
+    simd::Vec4d c20 = ZeroInit ? simd::Vec4d(0.0) : simd::Vec4d::load(c_tile + 2 * ldc + 0);
+    simd::Vec4d c21 = ZeroInit ? simd::Vec4d(0.0) : simd::Vec4d::load(c_tile + 2 * ldc + 4);
+    simd::Vec4d c30 = ZeroInit ? simd::Vec4d(0.0) : simd::Vec4d::load(c_tile + 3 * ldc + 0);
+    simd::Vec4d c31 = ZeroInit ? simd::Vec4d(0.0) : simd::Vec4d::load(c_tile + 3 * ldc + 4);
+    simd::Vec4d c40 = ZeroInit ? simd::Vec4d(0.0) : simd::Vec4d::load(c_tile + 4 * ldc + 0);
+    simd::Vec4d c41 = ZeroInit ? simd::Vec4d(0.0) : simd::Vec4d::load(c_tile + 4 * ldc + 4);
+    simd::Vec4d c50 = ZeroInit ? simd::Vec4d(0.0) : simd::Vec4d::load(c_tile + 5 * ldc + 0);
+    simd::Vec4d c51 = ZeroInit ? simd::Vec4d(0.0) : simd::Vec4d::load(c_tile + 5 * ldc + 4);
 
     for (crd::usize p = 0; p < k; ++p)
     {
@@ -198,6 +201,7 @@ gemm_microkernel_avx2_f64(crd::usize k,
 // AVX2 microkernel for f32. Uses Vec8f registers for the 8-wide NR axis.
 // Tile shape: MR=8 × NR=8. Holds 8 Vec8f register accumulators for C
 // rows, broadcasts A[i,p] as needed, loads B[p,:] as a Vec8f.
+template <bool ZeroInit = false>
 inline void gemm_microkernel_avx2_f32(crd::usize k,
                                       crd::usize lda, // A row stride (== k for packed Ac)
                                       const crd::f32* a_packed, const crd::f32* b_packed, crd::f32* c_tile,
@@ -205,15 +209,15 @@ inline void gemm_microkernel_avx2_f32(crd::usize k,
 {
     namespace simd = crd::math::simd;
 
-    // Load existing C into 8 Vec8f registers (one per row).
-    simd::Vec8f c0 = simd::Vec8f::load(c_tile + 0 * ldc);
-    simd::Vec8f c1 = simd::Vec8f::load(c_tile + 1 * ldc);
-    simd::Vec8f c2 = simd::Vec8f::load(c_tile + 2 * ldc);
-    simd::Vec8f c3 = simd::Vec8f::load(c_tile + 3 * ldc);
-    simd::Vec8f c4 = simd::Vec8f::load(c_tile + 4 * ldc);
-    simd::Vec8f c5 = simd::Vec8f::load(c_tile + 5 * ldc);
-    simd::Vec8f c6 = simd::Vec8f::load(c_tile + 6 * ldc);
-    simd::Vec8f c7 = simd::Vec8f::load(c_tile + 7 * ldc);
+    // Load existing C into 8 Vec8f registers (ZeroInit: start at 0 — same bits).
+    simd::Vec8f c0 = ZeroInit ? simd::Vec8f(0.0F) : simd::Vec8f::load(c_tile + 0 * ldc);
+    simd::Vec8f c1 = ZeroInit ? simd::Vec8f(0.0F) : simd::Vec8f::load(c_tile + 1 * ldc);
+    simd::Vec8f c2 = ZeroInit ? simd::Vec8f(0.0F) : simd::Vec8f::load(c_tile + 2 * ldc);
+    simd::Vec8f c3 = ZeroInit ? simd::Vec8f(0.0F) : simd::Vec8f::load(c_tile + 3 * ldc);
+    simd::Vec8f c4 = ZeroInit ? simd::Vec8f(0.0F) : simd::Vec8f::load(c_tile + 4 * ldc);
+    simd::Vec8f c5 = ZeroInit ? simd::Vec8f(0.0F) : simd::Vec8f::load(c_tile + 5 * ldc);
+    simd::Vec8f c6 = ZeroInit ? simd::Vec8f(0.0F) : simd::Vec8f::load(c_tile + 6 * ldc);
+    simd::Vec8f c7 = ZeroInit ? simd::Vec8f(0.0F) : simd::Vec8f::load(c_tile + 7 * ldc);
 
     for (crd::usize p = 0; p < k; ++p)
     {
@@ -266,9 +270,122 @@ inline void gemm_microkernel_avx2_f32(crd::usize k,
 // implemented; the ASM branch is reserved for the future
 // v0d-asm-microkernel slice once the three-condition revisit gate
 // in ADR-0082 §revisit is satisfied.
+// FUSED-MERGE kernels (E4 2026-07-03): the packed-inner pipeline previously
+// stored the finished tile to a stack buffer and re-read it in a merge loop
+// (`c += alpha*micro`). For FULL tiles the fused kernel updates the real C
+// directly from the accumulator REGISTERS with the EXACT same elementwise
+// operation sequence (mul then add — two roundings — or a single add for
+// alpha==1), so the results are bit-identical; ~96 memory ops per tile call
+// disappear. Partial edge tiles keep the micro+merge path.
+template <bool Alpha1>
+inline void gemm_microkernel_avx2_f64_fused(crd::usize k, const crd::f64* a_packed, const crd::f64* b_packed,
+                                            crd::f64* c, crd::usize ldc, crd::f64 alpha) noexcept
+{
+    namespace simd = crd::math::simd;
+    // BLIS-style C prefetch: the merge loads C AFTER the whole k-loop — issue
+    // the line requests now so they overlap the compute (order-free hint).
+    for (crd::usize i = 0; i < 6U; ++i)
+    {
+        gemm_prefetch_t0(c + i * ldc);
+        gemm_prefetch_t0(c + i * ldc + 4);
+    }
+    simd::Vec4d c00(0.0), c01(0.0), c10(0.0), c11(0.0), c20(0.0), c21(0.0);
+    simd::Vec4d c30(0.0), c31(0.0), c40(0.0), c41(0.0), c50(0.0), c51(0.0);
+    for (crd::usize p = 0; p < k; ++p)
+    {
+        const simd::Vec4d b0 = simd::Vec4d::load(b_packed + p * 8 + 0);
+        const simd::Vec4d b1 = simd::Vec4d::load(b_packed + p * 8 + 4);
+        gemm_prefetch_t0(b_packed + (k + p) * 8);
+        simd::Vec4d a = simd::Vec4d(a_packed[0 * k + p]);
+        c00 = simd::fma(a, b0, c00);
+        c01 = simd::fma(a, b1, c01);
+        a = simd::Vec4d(a_packed[1 * k + p]);
+        c10 = simd::fma(a, b0, c10);
+        c11 = simd::fma(a, b1, c11);
+        a = simd::Vec4d(a_packed[2 * k + p]);
+        c20 = simd::fma(a, b0, c20);
+        c21 = simd::fma(a, b1, c21);
+        a = simd::Vec4d(a_packed[3 * k + p]);
+        c30 = simd::fma(a, b0, c30);
+        c31 = simd::fma(a, b1, c31);
+        a = simd::Vec4d(a_packed[4 * k + p]);
+        c40 = simd::fma(a, b0, c40);
+        c41 = simd::fma(a, b1, c41);
+        a = simd::Vec4d(a_packed[5 * k + p]);
+        c50 = simd::fma(a, b0, c50);
+        c51 = simd::fma(a, b1, c51);
+    }
+    // merge from registers: same elementwise IEEE sequence as the old loop
+    const simd::Vec4d av(alpha);
+    const auto merge = [&](crd::f64* row, simd::Vec4d lo, simd::Vec4d hi) noexcept
+    {
+        if constexpr (Alpha1)
+        {
+            (simd::Vec4d::load(row + 0) + lo).store(row + 0);
+            (simd::Vec4d::load(row + 4) + hi).store(row + 4);
+        }
+        else
+        {
+            (simd::Vec4d::load(row + 0) + av * lo).store(row + 0); // mul, then add: two roundings,
+            (simd::Vec4d::load(row + 4) + av * hi).store(row + 4); // exactly like the scalar merge
+        }
+    };
+    merge(c + 0 * ldc, c00, c01);
+    merge(c + 1 * ldc, c10, c11);
+    merge(c + 2 * ldc, c20, c21);
+    merge(c + 3 * ldc, c30, c31);
+    merge(c + 4 * ldc, c40, c41);
+    merge(c + 5 * ldc, c50, c51);
+}
+
+template <bool Alpha1>
+inline void gemm_microkernel_avx2_f32_fused(crd::usize k, const crd::f32* a_packed, const crd::f32* b_packed,
+                                            crd::f32* c, crd::usize ldc, crd::f32 alpha) noexcept
+{
+    namespace simd = crd::math::simd;
+    for (crd::usize i = 0; i < 8U; ++i) // BLIS-style C prefetch (see the f64 fused kernel)
+    {
+        gemm_prefetch_t0(c + i * ldc);
+    }
+    simd::Vec8f c0(0.0F), c1(0.0F), c2(0.0F), c3(0.0F), c4(0.0F), c5(0.0F), c6(0.0F), c7(0.0F);
+    for (crd::usize p = 0; p < k; ++p)
+    {
+        const simd::Vec8f bp = simd::Vec8f::load(b_packed + p * kGemmNr);
+        gemm_prefetch_t0(b_packed + (k + p) * kGemmNr);
+        c0 = simd::fma(simd::Vec8f(a_packed[0 * k + p]), bp, c0);
+        c1 = simd::fma(simd::Vec8f(a_packed[1 * k + p]), bp, c1);
+        c2 = simd::fma(simd::Vec8f(a_packed[2 * k + p]), bp, c2);
+        c3 = simd::fma(simd::Vec8f(a_packed[3 * k + p]), bp, c3);
+        c4 = simd::fma(simd::Vec8f(a_packed[4 * k + p]), bp, c4);
+        c5 = simd::fma(simd::Vec8f(a_packed[5 * k + p]), bp, c5);
+        c6 = simd::fma(simd::Vec8f(a_packed[6 * k + p]), bp, c6);
+        c7 = simd::fma(simd::Vec8f(a_packed[7 * k + p]), bp, c7);
+    }
+    const simd::Vec8f av(alpha);
+    const auto merge = [&](crd::f32* row, simd::Vec8f acc) noexcept
+    {
+        if constexpr (Alpha1)
+        {
+            (simd::Vec8f::load(row) + acc).store(row);
+        }
+        else
+        {
+            (simd::Vec8f::load(row) + av * acc).store(row);
+        }
+    };
+    merge(c + 0 * ldc, c0);
+    merge(c + 1 * ldc, c1);
+    merge(c + 2 * ldc, c2);
+    merge(c + 3 * ldc, c3);
+    merge(c + 4 * ldc, c4);
+    merge(c + 5 * ldc, c5);
+    merge(c + 6 * ldc, c6);
+    merge(c + 7 * ldc, c7);
+}
+
 // lda overload: A row stride decoupled from k (the packed-TRSM resident-panel walk reads a K-slice
 // of a wider row-major panel). Same math, same p-order — lda==k is the standard packed-Ac case.
-template <typename T>
+template <typename T, bool ZeroInit = false>
 inline void gemm_microkernel(crd::usize k, crd::usize lda, const T* a_packed, const T* b_packed, T* c_tile,
                              crd::usize ldc) noexcept
 {
@@ -276,17 +393,37 @@ inline void gemm_microkernel(crd::usize k, crd::usize lda, const T* a_packed, co
 #if CRD_SIMD_HAS_AVX2
     if constexpr (std::is_same_v<T, crd::f32>)
     {
-        gemm_microkernel_avx2_f32(k, lda, a_packed, b_packed, c_tile, ldc);
+        gemm_microkernel_avx2_f32<ZeroInit>(k, lda, a_packed, b_packed, c_tile, ldc);
     }
     else if constexpr (std::is_same_v<T, crd::f64>)
     {
-        gemm_microkernel_avx2_f64(k, lda, a_packed, b_packed, c_tile, ldc);
+        gemm_microkernel_avx2_f64<ZeroInit>(k, lda, a_packed, b_packed, c_tile, ldc);
     }
     else
     {
+        if constexpr (ZeroInit)
+        {
+            for (crd::usize i = 0; i < GemmTraits<T>::MR; ++i)
+            {
+                for (crd::usize j = 0; j < GemmTraits<T>::NR; ++j)
+                {
+                    c_tile[i * ldc + j] = T{};
+                }
+            }
+        }
         gemm_microkernel_scalar<T, GemmTraits<T>::MR, GemmTraits<T>::NR>(k, lda, a_packed, b_packed, c_tile, ldc);
     }
 #else
+    if constexpr (ZeroInit)
+    {
+        for (crd::usize i = 0; i < GemmTraits<T>::MR; ++i)
+        {
+            for (crd::usize j = 0; j < GemmTraits<T>::NR; ++j)
+            {
+                c_tile[i * ldc + j] = T{};
+            }
+        }
+    }
     gemm_microkernel_scalar<T, GemmTraits<T>::MR, GemmTraits<T>::NR>(k, lda, a_packed, b_packed, c_tile, ldc);
 #endif
 #else
@@ -296,10 +433,44 @@ inline void gemm_microkernel(crd::usize k, crd::usize lda, const T* a_packed, co
 #endif
 }
 
-template <typename T>
+template <typename T, bool ZeroInit = false>
 inline void gemm_microkernel(crd::usize k, const T* a_packed, const T* b_packed, T* c_tile, crd::usize ldc) noexcept
 {
-    gemm_microkernel<T>(k, k, a_packed, b_packed, c_tile, ldc);
+    gemm_microkernel<T, ZeroInit>(k, k, a_packed, b_packed, c_tile, ldc);
+}
+
+// Fused-merge availability + dispatch (full tiles, RowMajor C). Returns
+// compile-time false for types without an AVX2 fused kernel so the caller
+// keeps the micro+merge path.
+template <typename T>
+inline constexpr bool kHasFusedMicrokernel =
+#if CRD_HESAP_MICROKERNEL_BACKEND == CRD_HESAP_MICROKERNEL_BACKEND_INTRINSICS && CRD_SIMD_HAS_AVX2
+    std::is_same_v<T, crd::f32> || std::is_same_v<T, crd::f64>;
+#else
+    false;
+#endif
+
+template <typename T, bool Alpha1>
+inline void gemm_microkernel_fused(crd::usize k, const T* a_packed, const T* b_packed, T* c, crd::usize ldc,
+                                   T alpha) noexcept
+{
+#if CRD_HESAP_MICROKERNEL_BACKEND == CRD_HESAP_MICROKERNEL_BACKEND_INTRINSICS && CRD_SIMD_HAS_AVX2
+    if constexpr (std::is_same_v<T, crd::f32>)
+    {
+        gemm_microkernel_avx2_f32_fused<Alpha1>(k, a_packed, b_packed, c, ldc, alpha);
+    }
+    else if constexpr (std::is_same_v<T, crd::f64>)
+    {
+        gemm_microkernel_avx2_f64_fused<Alpha1>(k, a_packed, b_packed, c, ldc, alpha);
+    }
+#else
+    (void)k;
+    (void)a_packed;
+    (void)b_packed;
+    (void)c;
+    (void)ldc;
+    (void)alpha;
+#endif
 }
 
 } // namespace crd::hesap::dense::detail

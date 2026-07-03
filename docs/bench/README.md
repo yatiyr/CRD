@@ -20,6 +20,16 @@ perf/crush claim (see AGENTS.md § Numerical/perf work).
 
 ## Index
 
+- **2026-07-03-v0d-gemm-zeroinit-pass.md** — v0d GEMM order-preserving crush: +8-12% (65-69→70-77 GF/s, gap vs OpenBLAS halved) via ZeroInit kernels + alpha==1 merge; E1/E2/Mc-sweep refuted+recorded; the bit-locked remainder → proposed ADR-0100 opt-in fast-order tier.
+
+- **2026-07-03-v14f-einsum-exec-vs-numpy-torch.md** — v14-f einsum execution: plan-reuse 3.5×/3.2× crush; TTGT copy-avoidance banked; 2 OPEN rows named (v0d f64 GEMM gap, thin-K direct kernels).
+- **2026-07-03-v14e-einsum-path-vs-opteinsum.md** — v14-e path optimizer vs opt_einsum: paths parity-or-BETTER on all 33 oracle cases (their optimal search is internally inconsistent — we minimize their reported metric); planning 9×/41× faster.
+
+- **2026-07-02-v14c-reduce-vs-reproblas.md** — v14-c reductions: Tier-R reproducible sum CRUSHES ReproBLAS 1.60×@1M / 1.01–1.23×@16M (12-accumulator SIMD + speculative single-pass); Tier-D fixed-tree 3× naive; {1..16} moat + repartition gates.
+- **2026-07-02-v14d-permute-vs-hptt.md** — v14-d permute vs HPTT 1T: FULL CRUSH 1.11×/1.16×/1.31× (NT-store premise refuted; src-locality odometer + stride-aware tiles were the levers).
+
+- **2026-07-02-v14b-elementwise-broadcast.md** — v14-b elementwise/broadcast engine vs numpy/torch; full-board win (broadcast 1.50×/1.68×, strided 1.57×, contiguous at the DRAM ceiling); NumPy bit-exact corpus.
+
 - **2026-06-11-v5-sparse-direct-cholmod-crush.md** — v5 sparse direct (multifrontal LU/Cholesky/LDLᵀ) vs CHOLMOD/UMFPACK/MUMPS; factor kernel 49–53 GF/s BEATS MUMPS; small-RHS solve WIN up to 3.82×; moat proven {1,2,4,8}.
 - **2026-06-04-v5e-hss-strumpack-crush.md** — v5e HSS/ULV compress/factor/solve vs STRUMPACK; compress 3.41–1.39× (global-sample QR-then-SVD), factor 2.7–4.1×, solve parity/WIN; moat proven {1,2,4,8}.
 - **2026-06-05-v5f-mixed-precision-ir.md** — v5f mixed-precision (f32-factor + f64-IR) vs smumps+IR; af23560 1.14× WIN, wang3/ns3Da parity; saddle-point indefinite fixed (GMRES-IR); moat proven.

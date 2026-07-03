@@ -75,8 +75,8 @@ inline void syrk_packed_inner_lower(crd::usize ic, crd::usize jc, crd::usize mc,
             }
             const T* b_panel = b_packed + pb * kc * GemmTraits<T>::NR;
             const crd::usize cols_in = std::min(GemmTraits<T>::NR, nc - pb * GemmTraits<T>::NR);
-            T micro[GemmTraits<T>::MR * GemmTraits<T>::NR]{};
-            gemm_microkernel<T>(kc, a_panel, b_panel, micro, GemmTraits<T>::NR);
+            T micro[GemmTraits<T>::MR * GemmTraits<T>::NR]; // ZeroInit kernel: no zero pass (identical bits)
+            gemm_microkernel<T, true>(kc, a_panel, b_panel, micro, GemmTraits<T>::NR);
             const bool fully_lower = i_global >= j_global + cols_in - 1; // min i ≥ max real j
             if (col_indexed_out)
             {

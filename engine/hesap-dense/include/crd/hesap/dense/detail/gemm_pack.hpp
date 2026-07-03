@@ -216,10 +216,31 @@ inline void gemm_packed_inner(T alpha, crd::usize ic, crd::usize jc, crd::usize 
             const crd::usize j_global = jc + pb * GemmTraits<T>::NR;
             const crd::usize cols_in_panel = std::min(GemmTraits<T>::NR, nc - pb * GemmTraits<T>::NR);
 
-            // Zero-initialised micro-tile of size MR × NR; microkernel
-            // accumulates into it. ldc = GemmTraits<T>::NR for this contiguous slab.
-            T micro[GemmTraits<T>::MR * GemmTraits<T>::NR]{};
-            gemm_microkernel<T>(kc, a_panel, b_panel, micro, GemmTraits<T>::NR);
+            // FULL RowMajor tiles: the fused kernel updates C directly from
+            // the accumulator registers (same elementwise op sequence as the
+            // merge loop => identical bits; no stack round-trip). Edges and
+            // ColMajor keep the micro+merge path.
+            if constexpr (L == Layout::RowMajor && kHasFusedMicrokernel<T>)
+            {
+                if (rows_in_panel == GemmTraits<T>::MR && cols_in_panel == GemmTraits<T>::NR)
+                {
+                    T* ctile = c.data() + i_global * c.ld() + j_global;
+                    if (alpha == T{1})
+                    {
+                        gemm_microkernel_fused<T, true>(kc, a_panel, b_panel, ctile, c.ld(), alpha);
+                    }
+                    else
+                    {
+                        gemm_microkernel_fused<T, false>(kc, a_panel, b_panel, ctile, c.ld(), alpha);
+                    }
+                    continue;
+                }
+            }
+            // Micro-tile of size MR × NR; the ZeroInit kernel starts its
+            // accumulators at 0 in REGISTERS (identical bits) — no zero-fill
+            // pass, no zero-load pass. ldc = GemmTraits<T>::NR (contiguous).
+            T micro[GemmTraits<T>::MR * GemmTraits<T>::NR];
+            gemm_microkernel<T, true>(kc, a_panel, b_panel, micro, GemmTraits<T>::NR);
 
             // Merge alpha * micro into C; only the rows_in_panel × cols_in_panel
             // sub-tile (the rest of the micro tile came from zero-padded A/B
@@ -231,13 +252,28 @@ inline void gemm_packed_inner(T alpha, crd::usize ic, crd::usize jc, crd::usize 
             // reordering of independent element writes ⇒ bit-identical.
             if constexpr (L == Layout::RowMajor)
             {
-                for (crd::usize i = 0; i < rows_in_panel; ++i)
+                if (alpha == T{1}) // IEEE: 1*m == m exactly — skip the multiply (bit-identical)
                 {
-                    T* crow = c.data() + (i_global + i) * c.ld() + j_global;
-                    const T* mrow = micro + i * GemmTraits<T>::NR;
-                    for (crd::usize j = 0; j < cols_in_panel; ++j)
+                    for (crd::usize i = 0; i < rows_in_panel; ++i)
                     {
-                        crow[j] += alpha * mrow[j];
+                        T* crow = c.data() + (i_global + i) * c.ld() + j_global;
+                        const T* mrow = micro + i * GemmTraits<T>::NR;
+                        for (crd::usize j = 0; j < cols_in_panel; ++j)
+                        {
+                            crow[j] += mrow[j];
+                        }
+                    }
+                }
+                else
+                {
+                    for (crd::usize i = 0; i < rows_in_panel; ++i)
+                    {
+                        T* crow = c.data() + (i_global + i) * c.ld() + j_global;
+                        const T* mrow = micro + i * GemmTraits<T>::NR;
+                        for (crd::usize j = 0; j < cols_in_panel; ++j)
+                        {
+                            crow[j] += alpha * mrow[j];
+                        }
                     }
                 }
             }

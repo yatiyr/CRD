@@ -5,6 +5,7 @@
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
 
+#include <complex>
 #include <cstring>
 #include <type_traits>
 
@@ -34,6 +35,13 @@ namespace crd::hesap::tensor
 {
 
 inline constexpr crd::u32 kMaxRank = 8U;
+
+// The compute dtype set (ADR-0096 §2): f32/f64 arithmetic, c32/c64 complex
+// (std::complex — the crd::math complex layer computes on it via the
+// deterministic real cores), i64 index tensors, u8 masks. The substrate is
+// dtype-generic; the elementwise/reduce SIMD kernels specialize f32/f64.
+using c32 = std::complex<crd::f32>;
+using c64 = std::complex<crd::f64>;
 
 enum class TensorStatus : crd::u8
 {
@@ -370,6 +378,11 @@ template <typename T> class Tensor
     static_assert(std::is_trivially_copyable_v<T>, "Tensor<T>: T must be trivially copyable");
 
 public:
+    // Detached tensor (no allocator): resize returns AllocFailed until it is
+    // move-assigned from an allocator-backed one. Enables fixed-size arrays
+    // of intermediates (the einsum executor's SSA slots).
+    Tensor() noexcept = default;
+
     explicit Tensor(crd::memory::IAllocator* alloc) noexcept : m_alloc(alloc)
     {
         CRD_ASSERT_MSG(alloc != nullptr, "Tensor: null allocator");
@@ -445,7 +458,16 @@ public:
         }
         if (n > 0U)
         {
-            m_data = static_cast<T*>(m_alloc->allocate(n * sizeof(T), alignof(T)));
+            if (m_alloc == nullptr) // detached (default-constructed): status, never a null deref
+            {
+                m_rank = 0;
+                m_size = 0;
+                return TensorStatus::AllocFailed;
+            }
+            // 64-byte alignment for ALL tensor storage: cache-line isolation, aligned
+            // SIMD loads, and the legality of streaming (non-temporal) stores in the
+            // permute/reduce kernels.
+            m_data = static_cast<T*>(m_alloc->allocate(n * sizeof(T), 64U));
             if (m_data == nullptr)
             {
                 m_rank = 0;

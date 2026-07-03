@@ -192,7 +192,7 @@ TEST_CASE("v14-a TensorView: composed permute-then-slice matches NumPy", "[hesap
     check_against_numpy(v, shape, strides, false, flat);
 }
 
-TEST_CASE("v14-a Tensor: status contract — rank overflow, count overflow, zero-size", "[hesap][tensor][v14]")
+TEST_CASE("v14-a Tensor: status contract - rank overflow, count overflow, zero-size", "[hesap][tensor][v14]")
 {
     crd::memory::TlsfAllocator alloc(1U << 20);
 

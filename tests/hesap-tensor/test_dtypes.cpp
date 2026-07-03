@@ -187,19 +187,19 @@ TEST_CASE("v14-a dtypes: ggml Q8_0/Q4_0 quantization is byte-exact vs the refere
     }
 }
 
-TEST_CASE("v14-a dtypes: deterministic SR — validity, unbiasedness, bit-identity", "[hesap][tensor][v14][dtypes]")
+TEST_CASE("v14-a dtypes: deterministic SR - validity, unbiasedness, bit-identity", "[hesap][tensor][v14][dtypes]")
 {
-    constexpr crd::u64 kSeed = 0xC0FFEE0123456789ULL;
+    constexpr crd::u64 seed = 0xC0FFEE0123456789ULL;
 
     // Validity: every SR result is one of the two truncation neighbors
     // (rand=0 IS truncation; the up-neighbor is +1 in the contiguous encoding).
     const crd::f32 samples[] = {1.0003F, -1.0003F, 0.10007F, 3.14159F, -777.7F, 6.1e-5F, 1.0e-7F, 42.42F};
     for (const crd::f32 x : samples)
     {
-        const crd::u16 rd = f32_to_f16_bits_sr(x, kSeed, 0U);
+        const crd::u16 rd = f32_to_f16_bits_sr(x, seed, 0U);
         for (crd::u64 idx = 1; idx < 64U; ++idx)
         {
-            const crd::u16 r = f32_to_f16_bits_sr(x, kSeed, idx);
+            const crd::u16 r = f32_to_f16_bits_sr(x, seed, idx);
             const crd::u16 mag_r = static_cast<crd::u16>(r & 0x7FFFU);
             const crd::u16 mag_d = static_cast<crd::u16>(rd & 0x7FFFU);
             const crd::u16 lo = mag_r < mag_d ? mag_r : mag_d;
@@ -212,12 +212,12 @@ TEST_CASE("v14-a dtypes: deterministic SR — validity, unbiasedness, bit-identi
     {
         const crd::f32 x = 1.0F + 0.3F * 0.0009765625F;
         crd::f64 acc = 0.0;
-        constexpr crd::u32 kN = 40000U;
-        for (crd::u64 i = 0; i < kN; ++i)
+        constexpr crd::u32 count = 40000U;
+        for (crd::u64 i = 0; i < count; ++i)
         {
-            acc += static_cast<crd::f64>(f16_bits_to_f32(f32_to_f16_bits_sr(x, kSeed, i)));
+            acc += static_cast<crd::f64>(f16_bits_to_f32(f32_to_f16_bits_sr(x, seed, i)));
         }
-        const crd::f64 mean = acc / kN;
+        const crd::f64 mean = acc / count;
         // 4σ window: σ_mean = ulp·sqrt(p(1−p)/N) ≈ 2.24e-6
         CHECK(mean > static_cast<crd::f64>(x) - 9.0e-6);
         CHECK(mean < static_cast<crd::f64>(x) + 9.0e-6);
@@ -227,39 +227,39 @@ TEST_CASE("v14-a dtypes: deterministic SR — validity, unbiasedness, bit-identi
     for (crd::u64 i = 0; i < 32U; ++i)
     {
         const crd::f32 x = 0.37F * static_cast<crd::f32>(i + 1U);
-        CHECK(f32_to_f16_bits_sr(x, kSeed, i) == f32_to_f16_bits_sr(x, kSeed, i));
-        CHECK(f32_to_bf16_bits_sr(x, kSeed, i) == f32_to_bf16_bits_sr(x, kSeed, i));
-        CHECK(f32_to_fp8_e4m3_bits_sr(x, kSeed, i) == f32_to_fp8_e4m3_bits_sr(x, kSeed, i));
-        CHECK(f32_to_fp8_e5m2_bits_sr(x, kSeed, i) == f32_to_fp8_e5m2_bits_sr(x, kSeed, i));
+        CHECK(f32_to_f16_bits_sr(x, seed, i) == f32_to_f16_bits_sr(x, seed, i));
+        CHECK(f32_to_bf16_bits_sr(x, seed, i) == f32_to_bf16_bits_sr(x, seed, i));
+        CHECK(f32_to_fp8_e4m3_bits_sr(x, seed, i) == f32_to_fp8_e4m3_bits_sr(x, seed, i));
+        CHECK(f32_to_fp8_e5m2_bits_sr(x, seed, i) == f32_to_fp8_e5m2_bits_sr(x, seed, i));
     }
 
     // SR never produces a non-finite from a finite input (saturation semantics).
-    CHECK((f32_to_f16_bits_sr(65519.9F, kSeed, 7U) & 0x7FFFU) <= 0x7BFFU);
-    CHECK((f32_to_fp8_e5m2_bits_sr(57343.9F, kSeed, 7U) & 0x7FU) <= 0x7BU);
-    CHECK((f32_to_fp8_e4m3_bits_sr(447.9F, kSeed, 7U) & 0x7FU) <= 0x7EU);
+    CHECK((f32_to_f16_bits_sr(65519.9F, seed, 7U) & 0x7FFFU) <= 0x7BFFU);
+    CHECK((f32_to_fp8_e5m2_bits_sr(57343.9F, seed, 7U) & 0x7FU) <= 0x7BU);
+    CHECK((f32_to_fp8_e4m3_bits_sr(447.9F, seed, 7U) & 0x7FU) <= 0x7EU);
 }
 
 TEST_CASE("v14-a dtypes: batch (SIMD) converts are bit-identical to scalar", "[hesap][tensor][v14][dtypes]")
 {
     // Corpus + a deterministic Philox-driven random-bit-pattern sweep covering
     // every f32 class (the SIMD==scalar contract on ALL inputs, NaN payloads included).
-    constexpr crd::u32 kRand = 100000U;
-    constexpr crd::u32 kN = kRefSrcCount + kRand;
-    static crd::f32 src[kN];
+    constexpr crd::u32 rand_count = 100000U;
+    constexpr crd::u32 count = kRefSrcCount + rand_count;
+    static crd::f32 src[count];
     for (crd::u32 i = 0; i < kRefSrcCount; ++i)
     {
         src[i] = std::bit_cast<crd::f32>(kRefSrcF32[i]);
     }
-    for (crd::u32 i = 0; i < kRand; ++i)
+    for (crd::u32 i = 0; i < rand_count; ++i)
     {
         // full 32-bit patterns: hits denormals/inf/nan/every exponent
         src[kRefSrcCount + i] = std::bit_cast<crd::f32>(crd::hesap::tensor::detail::sr_draw(0xB17E5ULL, i, 99U));
     }
 
-    static crd::u16 h_batch[kN];
-    static crd::u8 b_batch[kN];
-    convert_f32_to_f16({src, kN}, {h_batch, kN});
-    for (crd::u32 i = 0; i < kN; ++i)
+    static crd::u16 h_batch[count];
+    static crd::u8 b_batch[count];
+    convert_f32_to_f16({src, count}, {h_batch, count});
+    for (crd::u32 i = 0; i < count; ++i)
     {
         if (h_batch[i] != f32_to_f16_bits(src[i]))
         {
@@ -267,9 +267,9 @@ TEST_CASE("v14-a dtypes: batch (SIMD) converts are bit-identical to scalar", "[h
             REQUIRE(h_batch[i] == f32_to_f16_bits(src[i]));
         }
     }
-    static crd::f32 w_batch[kN];
-    convert_f16_to_f32({h_batch, kN}, {w_batch, kN});
-    for (crd::u32 i = 0; i < kN; ++i)
+    static crd::f32 w_batch[count];
+    convert_f16_to_f32({h_batch, count}, {w_batch, count});
+    for (crd::u32 i = 0; i < count; ++i)
     {
         if (std::bit_cast<crd::u32>(w_batch[i]) != std::bit_cast<crd::u32>(f16_bits_to_f32(h_batch[i])))
         {
@@ -277,13 +277,13 @@ TEST_CASE("v14-a dtypes: batch (SIMD) converts are bit-identical to scalar", "[h
             REQUIRE(std::bit_cast<crd::u32>(w_batch[i]) == std::bit_cast<crd::u32>(f16_bits_to_f32(h_batch[i])));
         }
     }
-    convert_f32_to_bf16({src, kN}, {h_batch, kN});
-    for (crd::u32 i = 0; i < kN; ++i)
+    convert_f32_to_bf16({src, count}, {h_batch, count});
+    for (crd::u32 i = 0; i < count; ++i)
     {
         REQUIRE(h_batch[i] == f32_to_bf16_bits(src[i]));
     }
-    convert_f32_to_fp8_e4m3({src, kN}, {b_batch, kN});
-    for (crd::u32 i = 0; i < kN; ++i)
+    convert_f32_to_fp8_e4m3({src, count}, {b_batch, count});
+    for (crd::u32 i = 0; i < count; ++i)
     {
         if (b_batch[i] != f32_to_fp8_e4m3_bits(src[i]))
         {
@@ -291,8 +291,8 @@ TEST_CASE("v14-a dtypes: batch (SIMD) converts are bit-identical to scalar", "[h
             REQUIRE(b_batch[i] == f32_to_fp8_e4m3_bits(src[i]));
         }
     }
-    convert_f32_to_fp8_e5m2({src, kN}, {b_batch, kN});
-    for (crd::u32 i = 0; i < kN; ++i)
+    convert_f32_to_fp8_e5m2({src, count}, {b_batch, count});
+    for (crd::u32 i = 0; i < count; ++i)
     {
         if (b_batch[i] != f32_to_fp8_e5m2_bits(src[i]))
         {
@@ -302,43 +302,43 @@ TEST_CASE("v14-a dtypes: batch (SIMD) converts are bit-identical to scalar", "[h
     }
 
     // Batch SR (AVX2 Philox draws + SIMD SR narrowers) ≡ the per-element scalar
-    // wrappers, bit-for-bit — kN is deliberately NOT a multiple of the chunk or
+    // wrappers, bit-for-bit — count is deliberately NOT a multiple of the chunk or
     // vector width, so tails and chunk seams are exercised.
-    constexpr crd::u64 kSrSeed = 0xFEEDFACE12345678ULL;
-    convert_f32_to_f16_sr({src, kN}, {h_batch, kN}, kSrSeed);
-    for (crd::u32 i = 0; i < kN; ++i)
+    constexpr crd::u64 sr_seed = 0xFEEDFACE12345678ULL;
+    convert_f32_to_f16_sr({src, count}, {h_batch, count}, sr_seed);
+    for (crd::u32 i = 0; i < count; ++i)
     {
-        if (h_batch[i] != f32_to_f16_bits_sr(src[i], kSrSeed, i))
+        if (h_batch[i] != f32_to_f16_bits_sr(src[i], sr_seed, i))
         {
             INFO("f16 SR mismatch at " << i << " bits=0x" << std::hex << std::bit_cast<crd::u32>(src[i]));
-            REQUIRE(h_batch[i] == f32_to_f16_bits_sr(src[i], kSrSeed, i));
+            REQUIRE(h_batch[i] == f32_to_f16_bits_sr(src[i], sr_seed, i));
         }
     }
-    convert_f32_to_bf16_sr({src, kN}, {h_batch, kN}, kSrSeed);
-    for (crd::u32 i = 0; i < kN; ++i)
+    convert_f32_to_bf16_sr({src, count}, {h_batch, count}, sr_seed);
+    for (crd::u32 i = 0; i < count; ++i)
     {
-        if (h_batch[i] != f32_to_bf16_bits_sr(src[i], kSrSeed, i))
+        if (h_batch[i] != f32_to_bf16_bits_sr(src[i], sr_seed, i))
         {
             INFO("bf16 SR mismatch at " << i << " bits=0x" << std::hex << std::bit_cast<crd::u32>(src[i]));
-            REQUIRE(h_batch[i] == f32_to_bf16_bits_sr(src[i], kSrSeed, i));
+            REQUIRE(h_batch[i] == f32_to_bf16_bits_sr(src[i], sr_seed, i));
         }
     }
-    convert_f32_to_fp8_e4m3_sr({src, kN}, {b_batch, kN}, kSrSeed);
-    for (crd::u32 i = 0; i < kN; ++i)
+    convert_f32_to_fp8_e4m3_sr({src, count}, {b_batch, count}, sr_seed);
+    for (crd::u32 i = 0; i < count; ++i)
     {
-        if (b_batch[i] != f32_to_fp8_e4m3_bits_sr(src[i], kSrSeed, i))
+        if (b_batch[i] != f32_to_fp8_e4m3_bits_sr(src[i], sr_seed, i))
         {
             INFO("e4m3 SR mismatch at " << i << " bits=0x" << std::hex << std::bit_cast<crd::u32>(src[i]));
-            REQUIRE(b_batch[i] == f32_to_fp8_e4m3_bits_sr(src[i], kSrSeed, i));
+            REQUIRE(b_batch[i] == f32_to_fp8_e4m3_bits_sr(src[i], sr_seed, i));
         }
     }
-    convert_f32_to_fp8_e5m2_sr({src, kN}, {b_batch, kN}, kSrSeed);
-    for (crd::u32 i = 0; i < kN; ++i)
+    convert_f32_to_fp8_e5m2_sr({src, count}, {b_batch, count}, sr_seed);
+    for (crd::u32 i = 0; i < count; ++i)
     {
-        if (b_batch[i] != f32_to_fp8_e5m2_bits_sr(src[i], kSrSeed, i))
+        if (b_batch[i] != f32_to_fp8_e5m2_bits_sr(src[i], sr_seed, i))
         {
             INFO("e5m2 SR mismatch at " << i << " bits=0x" << std::hex << std::bit_cast<crd::u32>(src[i]));
-            REQUIRE(b_batch[i] == f32_to_fp8_e5m2_bits_sr(src[i], kSrSeed, i));
+            REQUIRE(b_batch[i] == f32_to_fp8_e5m2_bits_sr(src[i], sr_seed, i));
         }
     }
 }
@@ -371,16 +371,16 @@ TEST_CASE("v14-a StorageTensor: strided converts + SR chunk/stride independence"
 
     // SR key = canonical destination index ⇒ the strided source and its
     // materialized contiguous copy produce IDENTICAL bits.
-    constexpr crd::u64 kSeed = 42U;
+    constexpr crd::u64 seed = 42U;
     StorageTensor<StorageDtype::Bf16> s1(&alloc);
-    REQUIRE(s1.convert_from_sr(pv, kSeed) == TensorStatus::Ok);
+    REQUIRE(s1.convert_from_sr(pv, seed) == TensorStatus::Ok);
 
     Tensor<crd::f32> mat(&alloc, h.shape()); // materialize the permuted view
     crd::u64 m = 0;
     pv.for_each([&](const crd::u64*, const crd::f32& v) { mat.data()[m++] = v; });
     StorageTensor<StorageDtype::Bf16> s2(&alloc);
     TensorView<const crd::f32> mv = mat.view();
-    REQUIRE(s2.convert_from_sr(mv, kSeed) == TensorStatus::Ok);
+    REQUIRE(s2.convert_from_sr(mv, seed) == TensorStatus::Ok);
 
     for (crd::u64 i = 0; i < 24U; ++i)
     {
