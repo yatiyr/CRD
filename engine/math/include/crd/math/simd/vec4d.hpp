@@ -90,6 +90,43 @@ struct alignas(32) Vec4d
 #endif
     }
 
+    // Masked partial load/store of the FIRST `count` lanes (1..3; count==4 is
+    // `load`/`store`). Unloaded lanes are ZERO; unstored lanes untouched. The
+    // vector-tail primitive for kernels whose column count is not a multiple
+    // of the width (v14-h batched tiny-GEMM tails — scalar tails lose the
+    // single-rounded-fma bit contract's throughput, masked lanes keep it).
+    [[nodiscard]] CRD_FORCEINLINE static Vec4d load_partial(const f64* p, usize count) noexcept
+    {
+#if CRD_SIMD_HAS_AVX2
+        alignas(32) static constexpr i64 kMaskLut[8] = {-1, -1, -1, -1, 0, 0, 0, 0};
+        const __m256i m = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(kMaskLut + (4U - count)));
+        Vec4d r;
+        r.v = _mm256_maskload_pd(p, m);
+        return r;
+#else
+        Vec4d r(0.0, 0.0, 0.0, 0.0);
+        for (usize i = 0; i < count; ++i)
+        {
+            r.lanes[i] = p[i];
+        }
+        return r;
+#endif
+    }
+
+    CRD_FORCEINLINE void store_partial(f64* p, usize count) const noexcept
+    {
+#if CRD_SIMD_HAS_AVX2
+        alignas(32) static constexpr i64 kMaskLut[8] = {-1, -1, -1, -1, 0, 0, 0, 0};
+        const __m256i m = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(kMaskLut + (4U - count)));
+        _mm256_maskstore_pd(p, m, v);
+#else
+        for (usize i = 0; i < count; ++i)
+        {
+            p[i] = lanes[i];
+        }
+#endif
+    }
+
     CRD_FORCEINLINE void store_aligned(f64* p) const noexcept
     {
 #if CRD_SIMD_HAS_AVX2
@@ -409,6 +446,110 @@ CRD_FORCEINLINE void store_complex_interleaved(f64* p, Vec4d re, Vec4d im) noexc
     p[5] = im.lanes[2];
     p[6] = re.lanes[3];
     p[7] = im.lanes[3];
+#endif
+}
+
+// ---- interleaved-complex idiom primitives (the FFT ip4-AoS engine, 2026-07-04) -------------------
+// A Vec4d as TWO interleaved complex f64 [z0.re z0.im z1.re z1.im]. All three are exact per lane
+// (shuffle / IEEE add+sub / single-rounded fused multiply-add) ⇒ deterministic like fma()/sqrt.
+
+// [a1 a0 a3 a2] — swap re/im within each complex pair. Pure shuffle, bit-exact vs scalar.
+CRD_FORCEINLINE Vec4d swap_pairs(Vec4d a) noexcept
+{
+#if CRD_SIMD_HAS_AVX2
+    Vec4d r;
+    r.v = _mm256_permute_pd(a.v, 0x5);
+    return r;
+#else
+    return Vec4d(a.lanes[1], a.lanes[0], a.lanes[3], a.lanes[2]);
+#endif
+}
+
+// [a0-b0, a1+b1, a2-b2, a3+b3] — subtract on even lanes, add on odd (the complex-mul combiner).
+CRD_FORCEINLINE Vec4d addsub(Vec4d a, Vec4d b) noexcept
+{
+#if CRD_SIMD_HAS_AVX2
+    Vec4d r;
+    r.v = _mm256_addsub_pd(a.v, b.v);
+    return r;
+#else
+    return Vec4d(a.lanes[0] - b.lanes[0], a.lanes[1] + b.lanes[1], a.lanes[2] - b.lanes[2],
+                 a.lanes[3] + b.lanes[3]);
+#endif
+}
+
+// [a0*b0-c0, a1*b1+c1, a2*b2-c2, a3*b3+c3] — fused single-rounded multiply-addsub.
+CRD_FORCEINLINE Vec4d fmaddsub(Vec4d a, Vec4d b, Vec4d c) noexcept
+{
+#if CRD_SIMD_HAS_AVX2
+    Vec4d r;
+    r.v = _mm256_fmaddsub_pd(a.v, b.v, c.v);
+    return r;
+#else
+    Vec4d r;
+    for (usize i = 0; i < 4; ++i)
+    {
+        r.lanes[i] = std::fma(a.lanes[i], b.lanes[i], (i & 1U) ? c.lanes[i] : -c.lanes[i]);
+    }
+    return r;
+#endif
+}
+
+// [lo[0] lo[1] hi[0] hi[1]] — two 128-bit loads concatenated (one interleaved complex per lane;
+// the gather's pair-builder: 3 µops vs 4-5 for scalar lane assembly).
+CRD_FORCEINLINE Vec4d load_pair128(const f64* lo, const f64* hi) noexcept
+{
+#if CRD_SIMD_HAS_AVX2
+    Vec4d r;
+    r.v = _mm256_insertf128_pd(_mm256_castpd128_pd256(_mm_loadu_pd(lo)), _mm_loadu_pd(hi), 1);
+    return r;
+#else
+    return Vec4d(lo[0], lo[1], hi[0], hi[1]);
+#endif
+}
+
+// [p[0] p[0] p[1] p[1]] — load two doubles, duplicating each within its 128-bit lane (the
+// interleaved-complex twiddle expander: halves twiddle-table bytes vs pre-duplicated storage).
+CRD_FORCEINLINE Vec4d load_dup_pairs(const f64* p) noexcept
+{
+#if CRD_SIMD_HAS_AVX2
+    Vec4d r;
+    r.v = _mm256_permute4x64_pd(_mm256_castpd128_pd256(_mm_loadu_pd(p)), 0x50);
+    return r;
+#else
+    return Vec4d(p[0], p[0], p[1], p[1]);
+#endif
+}
+
+// 128-bit-lane concatenations (pure shuffles, bit-exact): [a.lo|b.lo], [a.hi|b.hi], [a.lo|b.hi].
+CRD_FORCEINLINE Vec4d concat_lo(Vec4d a, Vec4d b) noexcept
+{
+#if CRD_SIMD_HAS_AVX2
+    Vec4d r;
+    r.v = _mm256_permute2f128_pd(a.v, b.v, 0x20);
+    return r;
+#else
+    return Vec4d(a.lanes[0], a.lanes[1], b.lanes[0], b.lanes[1]);
+#endif
+}
+CRD_FORCEINLINE Vec4d concat_hi(Vec4d a, Vec4d b) noexcept
+{
+#if CRD_SIMD_HAS_AVX2
+    Vec4d r;
+    r.v = _mm256_permute2f128_pd(a.v, b.v, 0x31);
+    return r;
+#else
+    return Vec4d(a.lanes[2], a.lanes[3], b.lanes[2], b.lanes[3]);
+#endif
+}
+CRD_FORCEINLINE Vec4d mix_lo_hi(Vec4d a, Vec4d b) noexcept
+{
+#if CRD_SIMD_HAS_AVX2
+    Vec4d r;
+    r.v = _mm256_permute2f128_pd(a.v, b.v, 0x30);
+    return r;
+#else
+    return Vec4d(a.lanes[0], a.lanes[1], b.lanes[2], b.lanes[3]);
 #endif
 }
 

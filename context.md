@@ -7,7 +7,72 @@
 
 ## Current focus — Phase 3.1.6 `crd-hesap` (numerical stack)
 
-> **═══ RIGHT NOW (2026-07-02, v14 kickoff session) — read this block first ═══**
+> **═══ RIGHT NOW (2026-07-05: v14-h batched LA + v14-g hyper-optimizer BOTH FULL CRUSH; v10 shipping gate closed) ═══**
+>
+> **v14-h (batched LA) ✅ core SHIPPED + CRUSHING (uncommitted).** `batched.hpp`: batched
+> GEMM (register-tiled tiny tier, fma-chain bit contract) · lane-batched AoSoA Cholesky ·
+> LU (pure-vector-argmax per-lane pivoting) · one-sided-Jacobi small-SVD — tier
+> bit-identity + poison isolation + bounded iteration + `{1..16}` moat GATED on every op;
+> crd-math gained `load_partial/store_partial`. **Boards (matched-state, pinned): EVERY
+> row beats BOTH compiled peers — GEMM 7W+1 DRAM-tie vs MKL batch-strided · chol 2.5–8.5×
+> vs potrf · LU 1.76–3.81× vs getrf · SVD 1.45–12× vs gesdd · all rows beat torch (to
+> 11.7×); MATLAB N/A-with-check (license 5001).** The day's THIRD MSVC scar root-caused
+> via 60-line repro + flag bisection: **/O1+/O2 auto-vectorizes per-lane conditional
+> two-array updates WRONGLY** (3 theories measured-and-killed first; the select-chain fix
+> is FASTER; ASan blind to it, fprintf suppressed it). svd.cpp std::sort→crd sort en
+> route (14.51 xutility tidy trip). 5-config ladder green. Boards
+> `docs/bench/2026-07-05-v14h-batched-la.md` · session `2026-07-05-v14h-batched-la.md`.
+> NEXT: v14-i (sparse tensors / CSF+MTTKRP) per the locked table.
+>
+> **═══ (v14-g, same day, below) ═══**
+>
+> **v14-g (cotengra-class hyper-optimizer) ✅ core SHIPPED + CRUSHING (uncommitted).**
+> `hyperopt.hpp` (~2900 lines): HyperNet/greedy/HyperTree+subset-DP-reconfigure/treesa-SA/
+> labels-divide (no kahypar dep)/SliceFinder (EXACT memory bound)/`hyper_optimize` driver
+> (Philox-keyed trials, crd-jobs parallel, `{1,2,4,8,16}` moat GATED bit-identical).
+> Reconstruct-verified in python FIRST (cost bit-match 6/6 · T=0 identical · slicer
+> matched-tree parity · oracle 5W/1T/0L). **C++ boards (fixed artifact): quality at-or-under
+> ctg greedy+kahypar 6/6 (ctest corpus gate) · 2.2–6.1× faster than their full stack ·
+> 1.07–2.2× faster than cotengrust (RUST).** Verification: linux-gcc 802/11 ✓ · win-debug
+> ctest 11/11 ✓ · win-asan 802/11 0-err ✓ · win-shipping ctest 11/11 ✓ · win-tidy ✓ (one
+> nodiscard finding fixed; transient tidy AVs retry-cleared — ALSO closed the v10 FFT tidy
+> gate locally ⇒ BOTH slices carry the full 5-config ladder). TWO UAFs root-caused in-session (pool-realloc merge; the HyperTree
+> borrowed-lifetime member — gcc silent, MSVC/ASan caught; pre-fix bench numbers were
+> garbage-derived and RE-MEASURED). Boards `docs/bench/2026-07-05-v14g-hyperopt-oracle.md` ·
+> session `docs/sessions/2026-07-05-v14g-hyperopt-crush.md` · row in `phase-3.1.6-v14.md`.
+> NEXT: v14-h (batched LA); the >16-op einsum bridge + CLI ride v14-z per the plan.
+>
+> **═══ (the 2026-07-04 v10 FFT block follows — its shipping gate CLOSED 2026-07-05, see the updated verification line) ═══**
+>
+> **v10 FFT: a NEW ENGINE (`execute_ip4aos`) built over a 19-round VTune-guided campaign and
+> PROMOTED to the default dispatch (uncommitted).** f64 1K–64K both parities BOTH directions +
+> f32 {2K,16K,32K,64K} per-size (sh keeps f32 {1K,4K,8K} where it measured faster — never-regress).
+> Interleaved in-place radix-4: COBRA line-complete digit-reverse gather + fused 3-layer entry,
+> block-pair k-unroll passes, hybrid w1-only tables (THE fix: VTune showed our 512KB pre-dup'd
+> tables = **DTLB 24.5% of clockticks vs MKL's 2.3%** — two aimed edits +8-17%/row), inverse via
+> sgn-flip conjugation (zero extra ops), f32 via the Vec8f twin-unit port (passed the FULL suite on
+> first compile). **Board: f64 0.66-0.94× MKL (native 16K 0.85×), BEATS FFTW at 32K (1.05×),
+> ≈parity 16K/64K; every row ≥ the old banked paths; oracle ≤7.6e-16/1.4e-07.** Refuted-with-
+> mechanism + retained-disabled: radix-8 plan, huge pages (set-conflict trap — even MKL −20%),
+> 4K-pad. Full record: `docs/research/fft-stockham-v2.md` (rounds 1-19) · boards in
+> `docs/bench/2026-07-03-v10-fft-remeasure-and-midband.md` · session
+> `docs/sessions/2026-07-04-v10-ip4aos-vtune-crush.md` · memory
+> `feedback_vtune_counters_first_tables_are_tlb_killers` (⭐ tables are TLB killers; counters
+> first). New tools: VTune 2026.0 + native MKL installed (oneAPI image + elevated scripts).
+> ⚠ **VS 2026 auto-updated mid-session (toolset 14.50→14.51) — every win build dir was cache-
+> poisoned; win-debug/asan/shipping/tidy DELETED + reconfigured fresh.**
+> **VERIFICATION (updated 2026-07-05): linux 281/29 ✓ · win-debug 25/25 (binary 281/29) ✓ ·
+> win-asan 27/27 ✓ · win-shipping ✓ 29/29 (4.4 s) — after ROOT-FIXING a real C1002/LNK1257:
+> MSVC honors __forceinline under LTCG ⇒ the 56 giant generated codelets + both execute_ip4aos
+> instantiations inlined into ONE execute() = pass-2 compiler-heap exhaustion; fix at the
+> emitter = `CRD_FFT_GEN_INLINE` (MSVC=plain inline, gcc/clang=always_inline ⇒ their boards +
+> prior greens stand) in batched_codelets_gen.hpp + gen_fft_batched.py + a noinline seam on
+> execute_ip4aos (session-log addendum 2026-07-05). win-tidy → CI per user direction.**
+> THEN the user commit. Sub-parity remainder (1K-2K 0.59-0.66, f32 sh
+> rows): the counter trail pins it to retiring-density on hand-scheduled asm — outside the
+> ADR-0082 portable/WASM mandate; recorded as counter-evidenced, not an open bug.
+>
+> **═══ (the 2026-07-02 v14-tensors block follows — still the active ARC) ═══**
 >
 > **ACTIVE: v14 TENSORS — `crd-hesap-tensor` OPENED (2026-07-02).** ADR-0096 written + **arch-reviewed (7 amendments folded)** + Accepted + indexed; detail doc **`docs/phases/phase-3.1.6-v14.md`** created (the a–m+z contract table + pillars + verification protocol). **v14-a increment 1 SHIPPED: the view substrate** — new module `engine/hesap-tensor` (`Tensor<T>`/`TensorView<T>`, kMaxRank=8, element strides signed/stride-0/broadcast, slice/select/flip/permute/broadcast_to/reshape, NumPy contiguity semantics incl. zero-size, `TensorStatus` w/ AllocFailed, overflow-safe resize) gated by the **NumPy view-semantics corpus** (`scripts/v14a_view_corpus.py`, reconstruct-verify-first; 9 cases / 255 asserts) — **green win-debug (MSVC /WX) + linux-gcc-release (-Werror)**. **v14-c AXIS REDUCTIONS + v14-d MT SHIPPED (2026-07-02):** reduce_axes (every-mask folds, VERTICAL/ROW/GENERAL dispatch, argminmax/cumsum-axis, exact-gated + moat; suite 31 cases/109,047) · permute MT (disjoint super-blocks, NT-at-8T lever, {1..16} gated; **8T FINAL 2026-07-03: 2D WIN · 4D WIN · 3D PARITY — no losing rows; v14-d COMPLETE** (full-column staged strips: each scattered column read once sequentially via 64KB stage → linear NT). **v14-e ✅ core SHIPPED (2026-07-03):** einsum parser + path optimizer + EinsumPlan — paths ≤ opt_einsum on all 33 oracle cases (their optimal search internally inconsistent — we beat their reported metric), planning 9×/41× faster (8.15 µs/plan); suite 34 cases/109,310. **v14-f ✅ core SHIPPED (2026-07-03):** einsum_execute (TTGT over the deterministic GEMM, copy-avoidance, diagonals/batch/pre-sum; 1,139 asserts + {1..16} moat) — FINAL: plan-reuse 3.9×/3.6× CRUSH, TN 1.53×/1.07× WIN (direct kernels), abc,bad 1.22× torch; chain+abc-vs-numpy = the ONE pinned root (v0d f64 GEMM rate, ADR-0063 bit-locked — sanctioned fixes in the bench doc). Exec suite 5,957 asserts. **v0d GEMM pass SHIPPED (2026-07-03):** ZeroInit kernels + alpha==1 merge (+8-12% f64 engine-wide, bit-identical, dense 359,508 + sparse + tensor suites green; E1/E2 refuted+recorded). Final einsum table: plan-reuse 4.0×/3.7× · TN 1.47×/parity · abc,bad 1.27× torch/0.89× numpy · chain 0.97×/0.86× — remainder = the bit-locked two-pass accumulation ⇒ **E4+E5 SHIPPED same day: fused-merge kernels + BLIS C-prefetch → 75-81 GF/s (cumulative +15-18%, bit-identical, all consumer suites + asan + tidy green) = OpenBLAS-class (80-84 same-day)**; TN einsum cell flipped to a torch WIN; chain residual = pure dgemm rate ~4-7% at 768-2048 (within daily variance at ≤512). ADR-0100 fast-order tier = only if that last sliver ever matters. NEXT: v14-g (cotengra-class hyper-optimizer) or v14-h (batched LA). **v14-a ✅ CLOSED (2026-07-02):** dtype-set completion (c32/c64+i64/u8 substrate gates) + tidy naming fixes + FULL 4-config DoD (debug+asan+shipping 104,760 asrt/28 cases · permute 1,389/10 · strict win-tidy · linux-gcc) + guards; master-doc mojibake (🟢/∞/₂) repaired. **v14-c (reductions+reproducible tier) ✅ core SHIPPED (2026-07-02):** Tier-D fixed-tree ops ({1,2,4,8,16} moat GATED, 3× naive) + Tier-R ReproBLAS-transcribed binned sum w/ 12-acc SIMD + speculative single-pass (**CRUSHES ReproBLAS 1.60×@1M / 1.01-1.23×@16M** — repro sum cheaper than naive; repartition+shuffle bit-identity gated) + ★SR-accum bf16; suite 26 cases/104,456 asserts debug+asan+gcc. **v14-d 1T HPTT board = FULL CRUSH 1.11×/1.16×/1.31×** (src-locality odometer + stride-aware tiles; NT-stores refuted 1T). Boards: `docs/bench/2026-07-02-v14{c,d}-*.md`. **v14-b (elementwise+broadcast) ✅ core SHIPPED (2026-07-02):** NumPy-bit-exact broadcast engine (P0/P1/P2 SIMD), 22 cases/104,415 asserts green debug+asan+gcc, **full-board crush vs numpy/torch** (bcast 1.50×/1.68×, strided 1.57×; board `docs/bench/2026-07-02-v14b-elementwise-broadcast.md`); v14-d + HPTT/ReproBLAS oracles delegated to parallel agents. **Increment 2 (the dtype set) ALSO SHIPPED (2026-07-02):** `dtypes.hpp` — **f16/FP8-e4m3fn/e5m2 BIT-EXACT vs ml_dtypes 0.5.4** (corpus pinned e4m3fn overflow→NaN) + bf16 + exhaustive fp8 decode/idempotence + **ggml Q8_0/Q4_0 BYTE-EXACT** (transcribed from fetched `ggml-quants.c`) + **★deterministic SR ×4 formats** (Philox include-only edge, canonical-destination-index key, saturating) + `StorageTensor<Dtype>` with the SR stride/chunk-independence gate. Suite now **15 cases / 3,369 asserts green win-debug /WX + linux-gcc -Werror**. Baseline bench (1 core): **bf16 0.126 ns/elem = 2.9× ml_dtypes / 3.6× torch WIN** · f16 1.17 ns edges numpy · ⚠ **OPEN LOSS: torch F16C f16 0.156 ns (7.5×) ⇒ the SIMD/F16C batch-convert crush pass BLOCKS the v14-a close** (SANITY #9). ALSO REMAINING for v14-a close: untagged-numeric-guard exemption · link-isolation smoke · win-asan/tidy. The v13-era "LAST SHIPPED" history below still applies to the committed tree.
 >

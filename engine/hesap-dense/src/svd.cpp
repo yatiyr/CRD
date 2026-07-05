@@ -1,6 +1,7 @@
 #include <crd/hesap/dense/svd.hpp>
 
 #include <crd/containers/array.hpp>
+#include <crd/containers/sort.hpp>
 #include <crd/hesap/complex.hpp>
 #include <crd/hesap/dense/blas3.hpp>
 #include <crd/hesap/dense/detail/bdsqr.hpp>
@@ -473,7 +474,10 @@ void bidiag_svd_real(R* d, R* e, crd::usize n, R* ub, R* vtb, crd::memory::IAllo
         {
             perm[i] = i;
         }
-        std::sort(perm.data(), perm.data() + n, [&](crd::usize a, crd::usize b) { return d[a] > d[b]; });
+        // crd sort: deterministic cross-platform AND avoids the 14.51 STL
+        // xutility pattern that trips clang-tidy through std::sort's innards
+        crd::containers::sort(perm.data(), perm.data() + n,
+                              [&](crd::usize a, crd::usize b) { return d[a] > d[b]; });
         crd::containers::Array<R> ds(alloc);
         ds.resize(n);
         for (crd::usize idx = 0; idx < n; ++idx)
@@ -765,7 +769,10 @@ SVD<T> svd(crd::memory::IAllocator* alloc, const Matrix<T>& a_in)
         {
             perm[i] = i;
         }
-        std::sort(perm.data(), perm.data() + n, [&](crd::usize a, crd::usize b) { return d[a] > d[b]; });
+        // crd sort: deterministic cross-platform AND avoids the 14.51 STL
+        // xutility pattern that trips clang-tidy through std::sort's innards
+        crd::containers::sort(perm.data(), perm.data() + n,
+                              [&](crd::usize a, crd::usize b) { return d[a] > d[b]; });
         crd::containers::Array<T> ubs(alloc);
         crd::containers::Array<T> vtbs(alloc);
         crd::containers::Array<R> ds(alloc);
@@ -977,7 +984,7 @@ Vector<RealType<T>> svdvals(crd::memory::IAllocator* alloc, const Matrix<T>& a_i
         {
             tmp[i] = std::abs(d[i]);
         }
-        std::sort(tmp.data(), tmp.data() + n, [](R x, R y) { return x > y; });
+        crd::containers::sort(tmp.data(), tmp.data() + n, [](R x, R y) { return x > y; });
         for (crd::usize i = 0; i < nmin; ++i)
         {
             out.data()[i] = tmp[i];

@@ -220,7 +220,8 @@ TEST_CASE("fft: four-step path (large n) matches the radix-2 reference oracle", 
     // the WHOLE crossover band (2^19..2^23), not just 2^22 — the four-step runs at every size in it, and the
     // block-width/partial-block boundaries differ across n1/n2 splits (e.g. odd m_log2 ⇒ n1≠n2). 2^21/2^22 exercise
     // the default 2048=64×32 hierarchical sub-FFT (n1=2048); 2^23 the 4096=64×64 one too (n1=4096, n2=2048).
-    for (usize n : {1U << 19, 1U << 20, 1U << 21, 1U << 22, 1U << 23})
+    // 2^17/2^18: the FFT-CRUSH 2026-07-03 f64 mid-band four-step opt-ins (128K = 1024x128, 256K square).
+    for (usize n : {1U << 17, 1U << 18, 1U << 19, 1U << 20, 1U << 21, 1U << 22, 1U << 23})
     {
         cont::Array<Complex<f64>> x(&alloc);
         fill_lcg(x, n, 31337ULL + n);
@@ -304,6 +305,55 @@ TEST_CASE("fft: four-step path (large n, f32) matches the radix-2 reference orac
         }
         INFO("n=" << n << " f32 four-step round-trip max=" << rtmax);
         CHECK(rtmax < 1e-3);
+    }
+}
+
+TEST_CASE("fft: standalone-hier band (f32) matches the radix-2 reference oracle", "[fft]")
+{
+    crd::memory::TlsfAllocator alloc(1ULL << 26);
+    // FFT-CRUSH 2026-07-03: f32 1024..65536 forward runs the standalone-hier 2-pass (Vec8f
+    // codelet{n1}_stage1_fused_sh -> codelet{n2}_batched, natural order) and 128K/256K the deep-split
+    // 3-pass (S1 fused_sh -> S2 fused_notr -> S3 batched_strided) — gate EVERY split of both bands
+    // against the f32 radix-2 oracle (different f32 summation orders ⇒ the f32 tolerance class), plus the
+    // inverse round-trip (inverse = Stockham / four-step fallback).
+    for (usize n : {1024U, 2048U, 4096U, 8192U, 16384U, 32768U, 65536U, 131072U, 262144U})
+    {
+        cont::Array<Complex<f32>> x(&alloc);
+        fill_lcg(x, n, 424242ULL + n);
+        cont::Array<Complex<f32>> a(&alloc);
+        cont::Array<Complex<f32>> b(&alloc);
+        a.resize(n);
+        b.resize(n);
+        std::memcpy(a.data(), x.data(), n * sizeof(Complex<f32>));
+        std::memcpy(b.data(), x.data(), n * sizeof(Complex<f32>));
+
+        const fft::FftPlan<f32> plan(&alloc, n);
+        plan.execute(cont::Span<Complex<f32>>(a.data(), n), fft::FftDirection::Forward);           // standalone-hier
+        plan.execute_reference(cont::Span<Complex<f32>>(b.data(), n), fft::FftDirection::Forward); // oracle
+
+        double maxref = 0.0;
+        double maxerr = 0.0;
+        for (usize k = 0; k < n; ++k)
+        {
+            maxref = std::max(maxref, std::hypot(static_cast<double>(b[k].re), static_cast<double>(b[k].im)));
+            maxerr = std::max(maxerr, std::hypot(static_cast<double>(a[k].re) - static_cast<double>(b[k].re),
+                                                 static_cast<double>(a[k].im) - static_cast<double>(b[k].im)));
+        }
+        const double rel = maxerr / (1.0 + maxref);
+        INFO("n=" << n << " f32 standalone-hier vs oracle rel=" << rel);
+        CHECK(rel < 2e-4); // f32 class (mid-band error growth is small)
+
+        // round-trip: forward (standalone-hier) + inverse (Stockham fallback) recovers x in f32 class.
+        plan.execute(cont::Span<Complex<f32>>(a.data(), n), fft::FftDirection::Inverse);
+        const double inv = 1.0 / static_cast<double>(n);
+        double rtmax = 0.0;
+        for (usize k = 0; k < n; ++k)
+        {
+            rtmax = std::max(rtmax, std::hypot(static_cast<double>(a[k].re) * inv - static_cast<double>(x[k].re),
+                                               static_cast<double>(a[k].im) * inv - static_cast<double>(x[k].im)));
+        }
+        INFO("n=" << n << " f32 standalone-hier round-trip max=" << rtmax);
+        CHECK(rtmax < 2e-4);
     }
 }
 

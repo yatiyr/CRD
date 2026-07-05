@@ -20,6 +20,8 @@ perf/crush claim (see AGENTS.md § Numerical/perf work).
 
 ## Index
 
+- **2026-07-03-v10-fft-remeasure-and-midband.md** — the FFT crush campaign (7 sessions over 2 days): generator REBUILT+tracked; standalone-hier 2-pass + deep-split A·B·C (now 8K–512K); 2026-07-04 research-led crush (VectorFFT existence proof): FMA emission + AoSoA block layout + factored twiddle + hier FMA rewrite + ds cascade ⇒ f64 mid-band 0.47→0.60–0.80× MKL, f32 0.17–0.55→0.54–0.93×, f64 4M 0.98× + BEATS FFTW ≥512K; SoA-vs-AoSoA stream-count law + the /Od dual-body scar recorded; remaining gaps mechanism-pinned.
+
 - **2026-07-03-v0d-gemm-zeroinit-pass.md** — v0d GEMM order-preserving crush: +8-12% (65-69→70-77 GF/s, gap vs OpenBLAS halved) via ZeroInit kernels + alpha==1 merge; E1/E2/Mc-sweep refuted+recorded; the bit-locked remainder → proposed ADR-0100 opt-in fast-order tier.
 
 - **2026-07-03-v14f-einsum-exec-vs-numpy-torch.md** — v14-f einsum execution: plan-reuse 3.5×/3.2× crush; TTGT copy-avoidance banked; 2 OPEN rows named (v0d f64 GEMM gap, thin-K direct kernels).
