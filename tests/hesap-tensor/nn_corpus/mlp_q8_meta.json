@@ -1,0 +1,1 @@
+{"fc1.weight": {"shape": [128, 64], "blocks": 256}, "fc2.weight": {"shape": [32, 128], "blocks": 128}, "fc3.weight": {"shape": [10, 32], "blocks": 10}}

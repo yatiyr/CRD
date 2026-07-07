@@ -189,6 +189,39 @@ int main()
 #endif
             std::printf("\n");
             std::fflush(stdout);
+            // ---- batched LU factor+solve nrhs=1 (the pagemldivide A\x row) ----
+            {
+                const crd::u64 rshp[3] = {bsz, n, 1U};
+                Tensor<crd::f64> rhs(&alloc, {rshp, 3});
+                Tensor<crd::f64> rwork(&alloc, {rshp, 3});
+                {
+                    crd::hesap::stats::PhiloxRng rrng(77U, n);
+                    for (crd::u64 e = 0; e < bsz * n; ++e)
+                    {
+                        rhs.data()[e] = 2.0 * rrng.next_f64() - 1.0;
+                    }
+                }
+                const double ours_lu_fs = best_of(5, [&] {
+                    for (crd::u64 e = 0; e < total; ++e)
+                    {
+                        work.data()[e] = a.data()[e];
+                    }
+                    for (crd::u64 e = 0; e < bsz * n; ++e)
+                    {
+                        rwork.data()[e] = rhs.data()[e];
+                    }
+                    (void)crd::hesap::tensor::batched_lu_factor<crd::f64>(
+                        work.view(), {piv.data(), static_cast<crd::usize>(bsz * n)},
+                        {info.data(), static_cast<crd::usize>(bsz)}, 1U);
+                    (void)crd::hesap::tensor::batched_lu_solve<crd::f64>(
+                        TensorView<const crd::f64>(work.view()),
+                        {piv.data(), static_cast<crd::usize>(bsz * n)}, rwork.view(), 1U);
+                });
+                std::printf("[n=%2llu b=%6llu] ours_lu_fs=%8.2fms (copy %6.2fms; factor+solve nrhs=1)\n",
+                            static_cast<unsigned long long>(n), static_cast<unsigned long long>(bsz),
+                            ours_lu_fs - copy_cost, copy_cost);
+                std::fflush(stdout);
+            }
             // ---- batched small-SVD ----
             Tensor<crd::f64> u(&alloc, {shp, 3});
             Tensor<crd::f64> v(&alloc, {shp, 3});

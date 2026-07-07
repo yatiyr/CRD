@@ -567,7 +567,8 @@ add_subdirectory(engine/jobs)
 add_subdirectory(engine/hesap-sched)  # depends on crd-jobs above + crd-hesap (declared earlier)
 add_subdirectory(engine/hesap-direct)  # v5; sparse DIRECT factorization (depends on hesap-dense/ordering/sparse/sched)
 add_subdirectory(engine/hesap-eigen)  # v6; sparse EIGENVALUE, matrix-free (Rayleigh-Ritz via hesap-dense; shift-invert via hesap-direct)
-add_subdirectory(engine/hesap-opt)  # v7; OPTIMISATION (unconstrained + constrained) over Objective<T>; ADR-0090
+add_subdirectory(engine/hesap-autodiff)  # v15/16; AUTODIFF — forward Dual/Jet + reverse tape; Dual migrated from opt (v15-a); ADR-0097
+add_subdirectory(engine/hesap-opt)  # v7; OPTIMISATION (unconstrained + constrained) over Objective<T>; ADR-0090 (now consumes hesap-autodiff)
 add_subdirectory(engine/hesap-stats)  # v12 cluster (created early as a v12-pull: Philox counter-RNG for v7-i)
 add_subdirectory(engine/hesap-ode)  # v9; ODE/DAE — stepper kernel headers + driver substrate; ADR-0091
 add_subdirectory(engine/hesap-fft)  # v10; FFT — Complex<T> transforms; gold standards FFTW/PocketFFT/MKL

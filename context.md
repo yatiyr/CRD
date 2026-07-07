@@ -7,7 +7,222 @@
 
 ## Current focus — Phase 3.1.6 `crd-hesap` (numerical stack)
 
-> **═══ RIGHT NOW (2026-07-05: v14-h batched LA + v14-g hyper-optimizer BOTH FULL CRUSH; v10 shipping gate closed) ═══**
+> **═══ RIGHT NOW (2026-07-06: v14 CLOSED a–z; v15 AUTODIFF forward-mode COMPLETE a–h+z; **v16 reverse-mode KICKED OFF** — deep research done + subslices refined + docs written: `docs/phases/phase-3.1.6-v16.md` + `docs/research/2026-07-06-v16-reverse-ad-crush.md`; 12 tasks queued (#10–21). **v16 COMPLETE (a–k + z)** — deterministic reverse tape (MOAT: batched ∇ bit-identical {1,2,4}; CRUSH ∇f one O(n) pass 5.2×/22.2× @n=1024) + full VJP rule library (3-oracle; exact 2.2e-16 vs FD 3e-9) + NN-VJP core (matmul/bias/relu/softmax-CE → MLP backprop one pass, torch-style gradcheck GREEN). v16-c DONE: full CNN op set + einsum-VJP over the real EinsumPlan + bicoloring (arrowhead 17→3) + sparse-reverse-LA (CSR spmv/spmm/solve, capability torch/TF lack); autodiff suite 2534/91. CLOSE CRUSH: torch+JAX value+grad PARITY & FASTER (MLP 1.59×/1.27×, CNN 2.69×/1.67×; rides v14 hesap-dense GEMM) + {1..16} deterministic moat. NEXT: v16-d. ⚠ v15+v16 6-config DoD + {1..16} moat sweep BATCHED (2-config) AFTER v16 per user) ═══**
+>
+> **v14 IS DONE.** Same-evening closes on top of the wave below: **v14-m** (NN inference —
+> f32 8/8, q8 vs torch-int8/ort-int8/ggml-from-source ALL WON incl. the last cell via the
+> per-tensor i8 tier 1.23× at better accuracy; 18 cases/5,194 asserts) · **v14-z** (12-command
+> `hesap.tensor.*` CLI + test_cli 5/5 · `docs/systems/hesap-tensor.md` · ADR-0096 amendments ·
+> the ALL-PEERS SCOREBOARD `docs/bench/2026-07-05-v14z-scoreboard.md` + conformance audit) ·
+> **TBLIS + xtensor measured at last** (TTGT case 1.14× WIN; 3 pure-GEMM rows = the named v0d
+> gap; xtensor 3/3) — **FINAL: 210 rows, 199 won, 7 tie/parity, 4 open = ONE named bug (v0d
+> raw f64 GEMM kernel, ADR-0100 proposal on file).** Module ctest 133/133 env-free.
+> **PENDING (deferred, not blocking): the whole-engine per-slice-check sweep (→ CI, per user) +
+> the combined commit (v10 FFT close + v14 g–z; user commits).**
+>
+> **v15 (AUTODIFF I — forward mode) KICKED OFF 2026-07-06.** New module `crd-hesap-autodiff` (shared with v16).
+> **ADR-0097 Accepted** (the v15+v16 pair — one module fwd+rev, the deterministic no-atomics tape = v16's crown,
+> `Dual<T>` migrates out of hesap-opt with a zero-regression gate, autodiff-lower-than-solvers edges, Enzyme OUT,
+> tape→C++ codegen graceful-gated, the 3-oracle gate). Detail doc `docs/phases/phase-3.1.6-v15.md`. Forward-AD
+> **peer environment stood up** under `external/` (Ceres Jets / autodiff.hpp / CoDiPack / Sacado / Adept / JAX-CPU
+> / ColPack; the HPTT/ReproBLAS WSL convention; `external/PEER_ORACLES.md`). Frontier crush levers + reconstruct-verify
+> formula tables captured in `docs/research/2026-07-06-v15-forward-ad-crush.md` (the a–z impl reference).
+>
+> **v15-a substrate + Dual migration LANDED (2026-07-06, win-debug green).** Module `crd-hesap-autodiff` created
+> (`autodiff/{dual,jet,forward}.hpp`); `Dual<T>` migrated VERBATIM (ns `autodiff::forward`), opt re-exports via shims;
+> `Jet<T,N>` (no-Eigen, one-pass N partials) + `select`/`min`/`max` added; edge `hesap-opt → hesap-autodiff` wired.
+> **ZERO-REGRESSION GATE GREEN**: opt suite 3782 assertions / 152 cases UNCHANGED. **▶ SIMD CARRIER `jet_simd.hpp`
+> (`JetPackD<N>`, Vec4d recursive named-register pack + FMA-order, sincos-fused) + FULL 7-PEER BOARD** (+ Sacado[apt]
+> + Adept[from-source]): **N=4 beats ALL 7 peers (Sacado 10.8×/Adept 24×); N=16 beats Ceres 1.24×; n-pass/Trilinos/
+> Adept field crushed 2–24× everywhere.** Array-LOSS→WIN@N=16 via named-register(SROA)+FMA-order (Fable-consulted).
+> **N=8 vs Ceres/CoDiPack-Vec = OPEN crush target (never traded for determinism).** Correct ≤1ulp + deterministic +
+> MSVC/clang-cl/gcc/asan green (autodiff 195/25). Board `docs/bench/2026-07-06-v15a-forward-carrier.md`.
+> **v15-a substrate + carrier DONE — 6-config DoD GREEN** (win-debug/asan/shipping/tidy + clang-cl + gcc; opt
+> zero-regression; math-mandate + name-check PASS).
+> **v15-b DONE — cmath JVP rule library + 3-oracle gate + CRUSH.** `detail/jvp_rules.hpp` (each slope once) + full
+> surface on Dual+Jet + hardened `pow` (branchless Ceres slope; NaN only at the (0,0) singularity — ⛔ a branched
+> version tripped an MSVC /O2 conditional miscompile) + `gradient_check.hpp` (analytic≡cstep≡FD). **CRUSH: tanh-MLP
+> 5.15×/4.39×/3.73× vs Ceres @ N=4/8/16, 5.17×/4.97×/3.48× vs CoDiPack** (`crd_v15a_batched_bench`). 238 asserts/32;
+> 6-config DoD GREEN; opt zero-regression re-held.
+> **v15-c DONE — exact 2nd-order (hyper-dual) + CRUSH.** `hyperdual.hpp`: flat `HyperDual<T>={f0,f1,f2,f12}`
+> (Fike-Alonso) + drivers `hessian`/`curvature` (vᵀHv one pass = TR/Newton lever) + nested `Dual<Dual>` cross-check +
+> exact-Hessian Newton gate. **CRUSH (batched curvature): 13.1×/13.3×/12.9× vs autodiff `dual2nd`, 17.2×/16.7×/16.2×
+> vs FD-of-FD @ N=4/8/16** (`crd_v15c_hyperdual_bench`), matched accuracy. 266 asserts/39; 6-config DoD GREEN; opt
+> zero-regression.
+> **v15-d DONE — forward drivers + runtime-n tiling + CRUSH.** `drivers.hpp`: `gradient`/`jacobian`/`jvp`/
+> `directional` over `JetPackD<W>`, runtime-n tiling (ragged tail), allocation-free, no Eigen. Determinism moat:
+> gradient BIT-IDENTICAL across tile widths W=4/8/16 (= {1..16}-worker moat by construction; explicit sweep → v15-z).
+> **CRUSH (batched dense Jacobian, fairness-gated bit-exact): 4.06×/2.90×/2.57× vs Ceres, 4.64×/3.50×/3.46× vs
+> CoDiPack @ N=4/8/16** (`crd_v15d_drivers_bench`). 315 asserts/44; 6-config DoD GREEN; opt zero-regression.
+> **v15-e DONE — automatic sparsity detection + coloring + recovery, BOTH crushes.** `sparsity.hpp` (`JacPattern<W>`
+> global tracer + `JacLocal<W>` local value+set tracer — deterministic/alloc-free) + `sparse_jacobian.hpp`
+> (trace→distance-2 color [= valid star coloring]→CSR O(nnz) recovery) + `sparsity_hessian.hpp` (5-flag, verified) +
+> `sparse_hessian.hpp` (`HessRow<W>` ε2-tiled recovery, W entries/pass, ≡ dense hyper-dual bit-exact). **CRUSH
+> (fairness-gated bit-exact): sparse Jacobian 2.5×/6.0×/11.7× vs Ceres-dense; sparse HESSIAN 13.3×/26.9×/40.7× vs
+> dense hyper-dual — BOTH GROWING.** Minimal star coloring + B=H·S HVP recovery = v16-e (forward-over-reverse; ships
+> with its consumer). 6-config DoD GREEN (1070 asserts/51); opt zero-regression. `docs/bench/2026-07-06-v15e-sparsity.md`.
+> **v15-f DONE — matrix-calculus + suite JVPs.** `matrix_jvp.hpp` (self-contained factor-reuse rules: gemm/solve/
+> cholesky/logdet/eigvals/svdvals) + `suite_jvp.hpp` (FFT linear / conv filter / Thomas spline). **HONESTY:**
+> value-only logdet/eigvals/svdvals finite at repeated λ where JAX/PyTorch NaN. **CRUSH (factor-reuse, fairness-gated
+> bit-exact): ∂x/∂b=A⁻¹ — 3.4×/8.3×/19.3× vs AD-through-Cholesky @ n=16/32/64, GROWING** (O(n³) vs O(n⁴)). 6-config
+> GREEN (1128 asserts/59); opt zero-regression. `docs/bench/2026-07-06-v15f-matrix-jvp.md`. **NEXT: v15-g** (Taylor-mode
+> jets + Taylor ODE integrator).
+> **v15-g DONE — Taylor-mode jets + Taylor ODE integrator (regime-honest crush).** `taylor.hpp` (`TaylorJet<T,K>`
+> normalized coeffs + master recurrence, O(K²), coeffs≡analytic) + `taylor_ode.hpp` (order-by-order + Jorba-Zou
+> adaptive; ≡ closed-form ODEs) + `taylor_tape.hpp` (**O(K²)/step TIDES-class taped integrator**: record RHS op-graph
+> once, propagate coeffs order-by-order; ~K× faster than the generic O(K³) build). **CRUSH:** (1) JETS — high-order
+> derivs Taylor-EXACT vs FD-garbage (3.7e3 err) + O(K²) vs nested-AD O(2^K) — total, no caveat; (2) ODE work-precision
+> (taped O(K²) vs adaptive DP45) — **Taylor CRUSHES 2.6×@1e-9, 10×@1e-12** + MORE ACCURATE at EVERY tol (36× @1e-3);
+> crossover ~1e-7, loose-tol = simple-stepper regime. ⚠ fixed a real oscillatory-divergence step-control bug. 6-config
+> GREEN (1170 asserts/63); opt zero-regression.
+> **v15-h DONE — complex/Wirtinger forward (capability crush).** `complex_dual.hpp`: holomorphic dual =
+> `Dual<std::complex<T>>` (holomorphic ops free via complex multiply) + non-holomorphic conj/Re/Im/abs/norm + Wirtinger
+> `(∂/∂z,∂/∂z̄)` via seeds ż=1,ż=i + CR gate; deterministic complex `sincos` added to crd/math. **CRUSH:** exact complex
+> sensitivities — holomorphic `∂sin(H)/∂h_m` EXACT 5.6e-17 (1 pass) vs FD ~1e-10; Wirtinger exact (2 passes); real-only
+> AD can't, JAX non-deterministic. 6-config GREEN (1204 asserts/67); opt zero-regression.
+> `docs/bench/2026-07-06-v15h-complex-wirtinger.md`.
+> **v15-z DONE — v15 FORWARD-MODE CLUSTER COMPLETE.** Shipped `hesap.ad.*` CLI (gradient/hessian/taylor via canned
+> functions; `cli_register_autodiff.cpp` + `cli_anchor.hpp`; acyclic edge hesap-autodiff→crd-hesap) + conformance test
+> + system doc `docs/systems/hesap-autodiff.md` + ADR-0097 finalized + **FULL CRUSH SCOREBOARD**
+> `docs/bench/2026-07-06-v15z-scoreboard.md`. 1249 asserts/72 GREEN (win-debug). ⚠ Per user plan the **6-config DoD +
+> {1..16} moat sweep is BATCHED WITH v16** (2-config after v16), NOT run now.
+> **v16 KICKED OFF (2026-07-06)** — deep research (`docs/research/2026-07-06-v16-reverse-ad-crush.md`) validated the
+> a–z plan vs 2025–26 SOTA + folded in NEW parts: **batch-invariant reductions** (Sep-2025: non-determinism =
+> batch-size-dependent reductions) · **local-adjoint preaccumulation** · **bicoloring** · **sparse reverse LA** ·
+> **discretize-then-optimize vs continuous-adjoint** honesty split · **Alt-Diff** · **Efficient-KAN**. Detail doc
+> `docs/phases/phase-3.1.6-v16.md`; master rows updated; 12 tasks (#10–21). MOAT: bit-identical {1..16}+batch-invariant
+> gradients = deterministic training (torch/JAX can't — atomic scatter-add).
+> **v16-a DONE — deterministic reverse-mode tape.** `tape.hpp` (SoA arena Wengert `Tape`+`Var`; VJP = transpose of the
+> v15 JVP slopes; fixed-order no-atomics `backward()`) + `reverse.hpp` (`gradient`/`jacobian`/`batch_gradient`). **MOAT:
+> batched ∇ BIT-IDENTICAL across {1,2,4} workers** (real crd-jobs parallelism, fixed-order fold). **CRUSH:** full ∇f in
+> one O(n) pass — 5.2× vs forward-SIMD, 22.2× vs FD @ n=1024, growing (forward wins small-n = its regime, honest). New
+> edge autodiff→crd-jobs. 1276 asserts/76 GREEN (win-debug). `docs/bench/2026-07-06-v16a-reverse-tape.md`.
+> **v16-b DONE — scalar VJP rule library.** `rules_reverse.hpp`: full crd::math surface reversed + binary
+> (atan2/hypot/pow) + control flow (abs/min/max/select). **Each partial REUSES the v15 forward slope — VJP=transpose
+> of JVP.** 3-oracle gate (reverse≡forward-JVP≡FD, 66 asserts). **CRUSH:** transcendental gradient MACHINE-EXACT
+> 2.2e-16 one pass vs FD ~3e-9. 1342 asserts/79 GREEN. `docs/bench/2026-07-06-v16b-reverse-rules.md`.
+> **v16-c DONE (2026-07-06).** Full v14-m NN VJP set trainable in-engine: `nn_reverse.hpp` (matmul/bias/ReLU/softmax-CE
+> + conv2d/max+avg-pool/LayerNorm/GELU/tanh/sigmoid/softmax) — full CNN one-pass gradcheck ≡ FD; `einsum_reverse.hpp`
+> (einsum VJP on the real v14 `EinsumPlan`, header-only bridge, `==nn::matmul_vjp`); `bicoloring.hpp` (bidirectional
+> coloring — **arrowhead 17→3 sweeps**, ≡ analytic); `sparse_reverse.hpp` (CSR spmv/spmm/solve VJPs wrt dense+sparse
+> entries — **capability torch/TF lack**). **Full autodiff suite 2534 asserts/91 GREEN** (win-debug). **▶▶ CLOSE CRUSH —
+> torch+JAX value+grad PARITY & FASTER** (WSL 1T f64, matched): loss+grads bit-match Cerid/torch-2.12/JAX-0.10; **MLP
+> 55µs vs torch 88µs (1.59×)/JAX 70µs (1.27×); CNN 458µs vs torch 1230µs (2.69×)/JAX 764µs (1.67×)** — rides the v14
+> hesap-dense GEMM (matmul VJP = GEMM); + `{1..16}` deterministic-gradient moat torch/JAX lack. Boards
+> `docs/bench/2026-07-06-v16c-{nn-vjp,bicolor-sparse}.md`. ColPack (built) TIES bicoloring at 3 seeds (honest; edge =
+> integrated deterministic pipeline).
+> **v16-d DONE (2026-07-06).** Matrix-calculus + suite VJPs (exact transpose of v15-f): `matrix_reverse.hpp`
+> (gemm/solve[LU+SPD]/chol/logdet/eigvals/svdvals, factor-reuse, value-only) + `suite_reverse.hpp` (FFT-VJP=adjoint
+> DFT=IFFT/DSP-filter/spline-Thomas). Gate = adjoint identity `⟨ȳ,JVP(v)⟩==⟨VJP(ȳ),v⟩` vs FD-gated v15-f JVPs +
+> value-only degeneracy + Jacobi eig/SVD (recon≡A). **Suite 2729 asserts/101 GREEN.** **▶▶ CRUSH: JAX value+grad PARITY**
+> (solve/logdet/svdvals/eigvals/fft, matched f64 10–12 digits) **+ SOLVE 3.77× FASTER than JAX** (factor-reuse+native) +
+> FFT-VJP=IFFT bit-parity + determinism moat. HONEST: value-only svdvals grad = parity with JAX/torch value-only (both
+> finite); only full-SVD U/V path NaNs (torch). Board `docs/bench/2026-07-06-v16d-matrix-suite.md`.
+> **v16-e DONE (2026-07-06).** Forward-over-reverse HVP: `hvp.hpp` — generic tape `RTape<T>` with `T=Dual<f64>` (seed
+> leaf `Dual{x_i,v_i}` → grad in `.v`, exact `∇²f·v` in `.d`, one fwd build + one backward) + Hessian-free
+> `newton_cg_step` (CG matvec=HVP). Production f64 tape untouched. Gate ≡ v15-c hyper-dual exact `H·v`+`vᵀHv`+FD+
+> determinism; Newton-CG exact-in-1-step on a quadratic. **Suite 2767 asserts/104 GREEN.** **▶▶ CRUSH: JAX `hvp`/torch
+> functorch PARITY** (10-digit) **+ crushes torch functorch 32–640× + beats JAX 2.6–4.1× in the opt regime (n≤~700)**
+> (scalar tape `hvp.hpp` = arbitrary functors). **★★ n=1024 GAP CLOSED — `vhvp.hpp` VECTORIZED forward-over-reverse HVP**
+> (tape of VECTOR ops, n-wide SoA DualVec auto-vectorized to SIMD, reductions=vectorizable sum+broadcast; gated ≡ scalar
+> HVP ≡ hyper-dual `H·v` ≡ FD) **BEATS JAX at EVERY n: 6.8×/4.5×/1.22× (n=64/256/1024), reversing the 0.49× loss** at
+> exact parity — down-payment on v16-h. + determinism moat. 3rd-order consumer-gated per plan. Suite **2803/105**.
+> Board `docs/bench/2026-07-06-v16e-hvp.md`.
+> **v16-f DONE (2026-07-07).** Revolve checkpointing + ODE-adjoint. `revolve.hpp` — GW-optimal treeverse via a memoized
+> DP (O(log T) memory, static/WCET schedule). `ode_adjoint.hpp` over a self-contained RK4: **DTO** (AD-through the
+> integrator, per-step so revolve checkpoints forward states — EXACT, the default) + **CTO** (continuous adjoint, the
+> caveated path). Gate: revolve VALID+GW-OPTIMAL; DTO ≡ FD (exact); revolve-DTO == store-all BIT-IDENTICAL; CTO
+> approximate. **Suite 2850 asserts/108 GREEN.** **▶▶ CRUSH (vs torchdiffeq 0.2.5 rk4):** DTO grad PARITY (10-digit,
+> both ≡FD) **+ 607–777× FASTER** (Cerid 48µs/311µs vs torchdiffeq 37.5ms/189ms) **+ EXACT AND O(log T) memory in one
+> path** (torchdiffeq forces exact-`odeint`-O(T) XOR inexact-`odeint_adjoint`-O(1)) + determinism moat. CTO honesty
+> caveat (|CTO−FD|=1.87e-5). Board `docs/bench/2026-07-07-v16f-ode-adjoint.md`.
+> **v16-g DONE (2026-07-07).** The implicit-diff suite — differentiate the SOLUTION via the IFT, never unroll.
+> `implicit_diff.hpp`: **root_vjp** (F(x*,θ)=0), **fixed_point_vjp** (x*=g(x*,θ)), **qp_eq_vjp** (equality QP via KKT,
+> OptNet). Backward=O(1) solves, factor-reuse, deterministic. Gate: all ≡ FD of the re-solved problem. **Suite 2869
+> asserts/111 GREEN.** **▶▶ CRUSH:** jaxopt PARITY (10-digit) +214× (root); cvxpylayers PARITY (10-digit, tight SCS;
+> Cerid KKT exact) +~4900× (QP); **Cerid solves nq=20 QP where cvxpylayers/SCS returns "infeasible".** Owns the OPEN
+> C++ implicit-diff lane (jaxopt dead). Board `docs/bench/2026-07-07-v16g-implicit-diff.md`. Follow-ons (scoped):
+> Alt-Diff, inequality-QP, 2nd-order-implicit.
+> **v16-h DONE (2026-07-07).** Structural graph AD + tape→C++ codegen. `graph_ad.hpp`: trace functor → DAG, **symbolic
+> reverse-AD** (grad = new graph nodes), **const-fold/CSE/DCE**, then INTERPRET or **emit straight-line C++**
+> (`emit_cpp`). Gate: graph fwd BIT-IDENTICAL to f64; grad ≡ tape ≡ FD; optimize shrinks nodes. **Suite 2881
+> asserts/113 GREEN.** **▶▶ CRUSH (trace→emit→g++→dlopen):** 281→657→535 nodes (−18.6%); **codegen BIT-IDENTICAL to
+> interpreter** (`-ffp-contract=off` bans FMA drift = deterministic codegen); **JAX-jit PARITY (14-digit)**; **codegen
+> 3.7× > interpreted tape + 13.7× > JAX jit** (316/1169/4317 ns). Portable C++ (no LLVM plugin/XLA runtime). Board
+> `docs/bench/2026-07-07-v16h-graph-codegen.md`.
+> **v16-i DONE (2026-07-07).** The deterministic-training moat, DEMONSTRATED. `batch_gradient`'s fixed-order fold ⇒ the
+> batched gradient (and a whole SGD training run) is bit-identical across worker counts. Gate
+> (`test_determinism_moat.cpp`): exact `==` for EVERY worker count 1..16; a 60-epoch SGD run replays BIT-FOR-BIT
+> run-to-run + worker-count-invariant. **Suite 2949 asserts/114 GREEN.** **▶▶ MOAT vs torch:** torch's batched gradient
+> is thread-count-nondeterministic (5.8e-12, no guarantee); Cerid GUARANTEES 0.0 across {1..16}, gated (honest: torch's
+> downstream drift benign on this well-conditioned task). Board `docs/bench/2026-07-07-v16i-determinism-moat.md`.
+> **⚙ TIDY-GATE REPAIR (2026-07-07):** win-tidy-local had silently broken (VS-bundled CMake rewrote CMAKE_COMMAND);
+> fixed toolchain + all 200+ accumulated autodiff tidy violations (0 errors, verified); added `scripts/tidy-files.ps1`
+> + AGENTS.md §DoD-2 per-slice-tidy rule.
+> **v16-j DONE (2026-07-07).** Adjoint topology optimization (SIMP), CRUSHES top88. `topopt.hpp`: Q4 FEA + **banded
+> Cholesky** (K half-bw 2·nely+5, exact/condition-independent) + discrete-adjoint SIMP sensitivity (IFT of the solve,
+> v16-g applied) + sens-filter + OC. Gate (`test_topopt.cpp`): the sensitivity passes the **dolfin-adjoint Taylor-
+> remainder test** (2nd-order ⇒ exact) + central FD; OC reduces compliance, holds volume, bit-deterministic. **Suite
+> 3255 asserts/116 GREEN.** **▶▶ CRUSH vs MATLAB top88:** COMPLIANCE PARITY (203.186 vs 203.192, 5 sig figs) **+ 8.1× /
+> 2.3× FASTER** (99ms/1944ms vs 799ms/4443ms @ 60×20/120×40). (Scar: first cut matrix-free Jacobi-PCG was 2.7–7.5×
+> SLOWER on the κ~1e9 SIMP K; banded direct = 22× speedup, flipped loss→win.) Board
+> `docs/bench/2026-07-07-v16j-topopt.md`.
+> **v16-k PART 1 DONE (2026-07-07): neural ODE, CRUSHES torchdiffeq.** MLP-RHS neural ODE trained through the v16-f DTO
+> adjoint + fixed-order batch fold (v16-i moat), fitting a damped-spiral flow map. Gate (`test_neural_ode.cpp`):
+> training halves the loss + replays BIT-FOR-BIT. **Suite 3301 asserts/117 GREEN.** **▶▶ CRUSH vs torchdiffeq:** LOSS
+> PARITY (0.0105014380 vs 0.0105014357, 7 sig figs) **+ 4.9× FASTER** (428ms vs 2108ms) + deterministic across {1..16}.
+> Board `docs/bench/2026-07-07-v16k-neural-ode.md`.
+> **v16-k PART 2 DONE (2026-07-07): KAN, CRUSHES efficient-kan. v16-k COMPLETE.** `kan.hpp` — Kolmogorov-Arnold net on
+> degree-3 B-spline edges with the **Efficient-KAN restructuring** (basis once per INPUT ⇒ two matmuls, not per-edge).
+> Gate (`test_kan.cpp`): partition-of-unity + derivative-FD, efficient==naive BIT-IDENTICAL, `kan_vjp`≡FD (incl. input
+> grad), 2-layer fits sin(2x+1.5y) + deterministic. **Suite 3426 asserts/120 GREEN.** **▶▶ CRUSH:** restructuring
+> **8.5–10.6× over naive** (bit-identical); vs **efficient-kan** (PyTorch/Adam) FIT PARITY (near-zero: 4.8e-5 vs 0.0)
+> **+ 31× FASTER** (73ms vs 2263ms) + deterministic (honest: plain SGD stalled at 0.56 → deterministic Adam). Board
+> `docs/bench/2026-07-07-v16k-kan.md`.
+> **v16 (a–k) FORMALLY CLOSED (2026-07-07): batched DoD sweep GREEN.** Built + ran the autodiff cluster (3426 asserts/
+> 120 cases + einsum 6465/5) across **6 configs, 2 compilers**: MSVC {win-debug /Od, win-asan, win-shipping /O2,
+> win-release /O2+LTCG} + gcc {linux-gcc-release -O3, linux-gcc-asan} — ALL green, no UAF/UMR/miscompile. **{1..16}
+> determinism moat bit-identical on MSVC AND gcc.** All 7 ctest guards + win-tidy clean. (Infra-blocked, not v16 code:
+> win-clang-cl = clang-cl can't assemble fiber_switch_win64.asm; fixed a stale ASan-DLL path in per-slice-check.ps1.)
+> **v16-z DONE (2026-07-07): cluster CLOSED.** Reverse+implicit CLI (`hesap.ad.rgradient/jacobian/hvp/implicit`, canned
+> callables, conformance ≡ analytic) + system doc + **ADR-0097 finalized (v16 SHIPPED)** + **full v16 scoreboard**
+> `docs/bench/2026-07-07-v16z-scoreboard.md` (all 11 slices vs torch/JAX/torchdiffeq/jaxopt/cvxpylayers/top88/efficient
+> -kan + the determinism moat). Suite **3488 asserts/124 GREEN**, 6-config DoD green, builds MSVC+gcc. **v16 (autodiff II
+> — reverse mode) FULLY COMPLETE.**
+> **NEXT: ▶▶ v17 — GPU compute (Vulkan), the full suite mirrored onto the GPU + the determinism moat's hardest test
+> (T1/T2/T3 tiers, deterministic transcendentals in GLSL, computation certificates). ADR-0098 at kickoff. Gold-standard
+> frontier GPU computing — the foundation for every Cerid project.**
+> **Crush lessons → `docs/hints/crush-playbook.md`** (living; referenced in docs/README + AGENTS.md).
+> `docs/bench/2026-07-06-v15g-taylor.md`. **NEXT: v15-h** (complex/Wirtinger forward).
+>
+> **⭐ N=8 CRUSHED (v15-a = FULL CRUSH, no losses).** Forward AD's real workload is BATCHED gradients; the batched
+> throughput bench (`external/crd_v15a_batched_bench.cpp`, SIMD-across-4-points + crd_exp4/log4) CRUSHES Ceres AND
+> CoDiPack at EVERY N — 4.02×/3.11×/2.56× vs Ceres @ N=4/8/16, bit-exact, determinism intact. The single-point N=8
+> Eigen edge was the AVX-512-fused-off latency floor (2 AVX2 regs vs 1 zmm), resolved by batching — never a loss.
+>
+> **═══ (the afternoon wave: i/j/k/l, below) ═══**
+>
+> **v14-i/j/k/l ✅ cores SHIPPED CONCURRENTLY (4 parallel agents + integrator; uncommitted).**
+> Every measured board row on every slice is a WIN vs the strongest peers:
+> **i sparse** (`sparse.hpp`/`sparse_mttkrp.hpp`/`sparse_cp.hpp` glue): 10/10 — MTTKRP
+> **1.5× vs SPLATT-from-source**, 2.3× vs TACO (their broken CLI patched for honest
+> numbers), TTM 2.7–2.8×; CSF≡COO bit-identity; a real TTM moat violation caught pre-board.
+> **j decomp** (`decomp.hpp`): 9/9 vs TensorLy at equal-or-better fit (CP 5.2–5.6×, HOOI
+> 5.1–5.8×); deterministic-randomized sketches gated; first board lost EVERY row → probed →
+> flipped (rule #9). **k TT** (`tt.hpp`): 8/8 vs tntorch (eval 13.1×, cross 12.6–15×);
+> **the LUT demo: 1748× compression from 19k evals, 1.5× faster than materialized-table
+> interp**. **l I/O** (`io.hpp`+DLPack+TNSR): 12/12 vs numpy/safetensors-py; npy writer
+> byte-identical to np.save; safetensors read 11.15 GB/s. Suites 906+191+280+655; ALL
+> slices green on the FULL 5-config ladder. Session log
+> `docs/sessions/2026-07-05-v14-parallel-wave.md`; boards `docs/bench/2026-07-05-v14{i,j,k,l}-*`.
+> **OPEN: v14-m (NN inference) agent in flight · v14-z close (CLI/system doc/ADR-0096/
+> scoreboard/audit/whole-engine sweep) · sparse-CP end-to-end perf row. **MATLAB
+> rows LANDED same evening (service restored): pagemtimes 2.0–8.2× · pagemldivide
+> 1.11–1.14× · TTB cp_als/tucker 1.11–1.67× (tol=0 fixed budgets — its default
+> early-stops) · TTB mttkrp 29–39× — ALL WON; every 2026-07-05 board is now
+> complete across ALL contracted peers.**
+>
+> **═══ (earlier today: v14-h + v14-g + the v10 shipping close, below) ═══**
 >
 > **v14-h (batched LA) ✅ core SHIPPED + CRUSHING (uncommitted).** `batched.hpp`: batched
 > GEMM (register-tiled tiny tier, fma-chain bit contract) · lane-batched AoSoA Cholesky ·

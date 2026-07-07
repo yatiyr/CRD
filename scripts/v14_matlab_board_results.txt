@@ -1,0 +1,38 @@
+MATLAB 26.1.0.3276743 (R2026a) Update 3 | maxNumCompThreads(1) | best-of-5
+
+[v14-h pagemtimes f64]
+  n= 4 b= 10000  pagemtimes =      0.437 ms
+  n= 4 b=100000  pagemtimes =      3.784 ms
+  n= 6 b= 10000  pagemtimes =      1.027 ms
+  n= 6 b=100000  pagemtimes =     10.136 ms
+  n= 8 b= 10000  pagemtimes =      2.058 ms
+  n= 8 b=100000  pagemtimes =     20.280 ms
+  n=16 b= 10000  pagemtimes =      5.397 ms
+  n=16 b=100000  pagemtimes =     55.541 ms
+
+[v14-h pagemldivide f64]
+  n= 4 b=100000  pagemldivide =      5.638 ms
+  n= 8 b=100000  pagemldivide =     16.762 ms
+  n=16 b=100000  pagemldivide =     77.205 ms
+
+[TTB] Tensor Toolbox (Sandia) not on path — cp_als/tucker_als/mttkrp rows skipped. Install: https://www.tensortoolbox.org (addpath after download).
+
+[v14-j TTB cp_als / tucker_als, 1T best-of-5]
+  cp_als 64^3 r=16 it=10 :     10.038 ms  fit 0.505160
+  tucker_als 64^3 core16 it=5 :     15.404 ms
+  cp_als 32^4 r=8 it=10 :     12.939 ms
+
+[v14-i TTB sptensor mttkrp, 1024^3 / 5M nnz r=16, 1T best-of-5]
+  mttkrp mode-1 :    413.604 ms
+  mttkrp mode-2 :    326.608 ms
+  mttkrp mode-3 :    313.160 ms
+
+[v14-j TTB cp_als / tucker_als, 1T best-of-5, tol=0 FIXED-BUDGET (default tol early-stops)]
+  cp_als 64^3 r=16 it=10 :     13.612 ms  fit 0.505249
+  tucker_als 64^3 core16 it=5 :     15.657 ms
+  cp_als 32^4 r=8 it=10 :     39.182 ms
+
+[v14-i TTB sptensor mttkrp, 1024^3 / 5M nnz r=16, 1T best-of-5]
+  mttkrp mode-1 :    411.043 ms
+  mttkrp mode-2 :    326.928 ms
+  mttkrp mode-3 :    307.270 ms

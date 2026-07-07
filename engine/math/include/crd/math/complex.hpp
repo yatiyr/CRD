@@ -105,6 +105,20 @@ template <class T>
 {
     return {cosh(z.real()) * cos(z.imag()), sinh(z.real()) * sin(z.imag())};
 }
+// Fused complex sincos — one real range reduction (real `sincos`) shared between sin(z) and cos(z), plus one
+// sinh/cosh pair. Cheaper than two separate calls; the forward-AD carrier (Dual<complex>) uses it for sin/cos.
+template <class T>
+inline void sincos(const std::complex<T>& z, std::complex<T>& s, std::complex<T>& c) noexcept
+{
+    T sa = T(0);
+    T ca = T(0);
+    sincos(z.real(), sa, ca);
+    const T shb = sinh(z.imag());
+    const T chb = cosh(z.imag());
+    s = {sa * chb, ca * shb};
+    c = {ca * chb, -sa * shb};
+}
+
 template <class T>
 [[nodiscard]] inline std::complex<T> tan(const std::complex<T>& z) noexcept
 {

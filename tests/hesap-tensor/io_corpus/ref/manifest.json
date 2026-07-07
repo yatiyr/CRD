@@ -1,0 +1,256 @@
+{
+ "npy": [
+  {
+   "descr": "<f4",
+   "name": "f32_2x3x4",
+   "shape": [
+    2,
+    3,
+    4
+   ]
+  },
+  {
+   "descr": "<f8",
+   "name": "f64_5x7",
+   "shape": [
+    5,
+    7
+   ]
+  },
+  {
+   "descr": "<f2",
+   "name": "f16_3x5",
+   "shape": [
+    3,
+    5
+   ]
+  },
+  {
+   "descr": "|i1",
+   "name": "i8_16",
+   "shape": [
+    16
+   ]
+  },
+  {
+   "descr": "<i2",
+   "name": "i16_9",
+   "shape": [
+    9
+   ]
+  },
+  {
+   "descr": "<i4",
+   "name": "i32_4x4",
+   "shape": [
+    4,
+    4
+   ]
+  },
+  {
+   "descr": "<i8",
+   "name": "i64_2x2",
+   "shape": [
+    2,
+    2
+   ]
+  },
+  {
+   "descr": "|u1",
+   "name": "u8_8",
+   "shape": [
+    8
+   ]
+  },
+  {
+   "descr": "<u2",
+   "name": "u16_6",
+   "shape": [
+    6
+   ]
+  },
+  {
+   "descr": "<u4",
+   "name": "u32_3",
+   "shape": [
+    3
+   ]
+  },
+  {
+   "descr": "<u8",
+   "name": "u64_2x5",
+   "shape": [
+    2,
+    5
+   ]
+  },
+  {
+   "descr": "|b1",
+   "name": "bool_7",
+   "shape": [
+    7
+   ]
+  },
+  {
+   "descr": "<c8",
+   "name": "c32_2x3",
+   "shape": [
+    2,
+    3
+   ]
+  },
+  {
+   "descr": "<c16",
+   "name": "c64_3",
+   "shape": [
+    3
+   ]
+  },
+  {
+   "descr": "<f4",
+   "name": "f32_0d",
+   "shape": []
+  },
+  {
+   "descr": "<f4",
+   "name": "f32_empty_0x5",
+   "shape": [
+    0,
+    5
+   ]
+  },
+  {
+   "descr": "<f4",
+   "name": "f32_2x3x4_v2",
+   "shape": [
+    2,
+    3,
+    4
+   ]
+  },
+  {
+   "descr": "<f4",
+   "fortran_order": true,
+   "name": "f32_fortran",
+   "shape": [
+    4,
+    3
+   ]
+  }
+ ],
+ "npz": [
+  {
+   "descr": "<f4",
+   "name": "a",
+   "shape": [
+    3,
+    4
+   ]
+  },
+  {
+   "descr": "<i8",
+   "name": "b",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "descr": "<f2",
+   "name": "c",
+   "shape": [
+    11
+   ]
+  }
+ ],
+ "safetensors": [
+  {
+   "dtype": "float32",
+   "name": "w_f32",
+   "shape": [
+    16,
+    32
+   ]
+  },
+  {
+   "dtype": "float64",
+   "name": "w_f64",
+   "shape": [
+    4,
+    4
+   ]
+  },
+  {
+   "dtype": "float16",
+   "name": "w_f16",
+   "shape": [
+    8,
+    8
+   ]
+  },
+  {
+   "dtype": "bfloat16",
+   "name": "w_bf16",
+   "shape": [
+    8,
+    8
+   ]
+  },
+  {
+   "dtype": "int8",
+   "name": "b_i8",
+   "shape": [
+    24
+   ]
+  },
+  {
+   "dtype": "uint8",
+   "name": "b_u8",
+   "shape": [
+    24
+   ]
+  },
+  {
+   "dtype": "int16",
+   "name": "b_i16",
+   "shape": [
+    5
+   ]
+  },
+  {
+   "dtype": "int32",
+   "name": "b_i32",
+   "shape": [
+    5
+   ]
+  },
+  {
+   "dtype": "int64",
+   "name": "idx_i64",
+   "shape": [
+    2,
+    3
+   ]
+  },
+  {
+   "dtype": "float32",
+   "name": "scalar_f32",
+   "shape": []
+  },
+  {
+   "dtype": "float32",
+   "name": "empty_f32",
+   "shape": [
+    0,
+    4
+   ]
+  },
+  {
+   "dtype": "float8_e4m3fn",
+   "name": "w_f8e4m3",
+   "shape": [
+    10
+   ]
+  }
+ ]
+}

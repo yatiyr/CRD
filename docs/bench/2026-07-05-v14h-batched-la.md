@@ -47,17 +47,41 @@ thread-safe-wrapped under the across-batch parallel driver (grain = f(shape) onl
 | 16 | 10k | 2.55 | 2.78 | **1.09×** | WIN |
 | 16 | 100k | 27.28 | 32.81 | **1.20×** | WIN |
 
-vs torch bmm (from the baseline table): 3–10× wins on every row (e.g. 6×6@100k: ours
-~3.1 ms vs torch 15.1 ms). The kernel history is itself the lesson: the first direct kernel
+vs torch bmm (from the baseline table): 1.02–8.7× — every row a win (e.g. 6×6@100k: ours
+~3.1 ms vs torch 15.1 ms; thinnest: 16×16@10k at 1.02×). The kernel history is itself the lesson: the first direct kernel
 LOST to MKL at n∈{6,8,16} (1–2 fma chains = latency-bound); the 4-row×2-vector register
 tile flipped 7 rows; the single-block R∈[5,8] 1-vector variant (B streams exactly once)
 took n=6@10k from 1.18× to 1.55× and pushed the 100k row to the memory wall. New crd-math
 primitives (home rule): `Vec4d/Vec8f::load_partial/store_partial` (masked tails — no scalar
 rounding divergence, the bit contract holds on every lane).
 
-- MATLAB `pagemtimes` rows: **N/A-with-the-check today** — MATLAB's license service is
-  unreachable (error 5001, twice, one retry spaced); the one-batch-call script is staged in
-  the session transcript and runs the moment the service returns. Column NOT dropped.
+- **MATLAB rows (measured 2026-07-05 evening, service restored; R2026a, maxNumCompThreads(1),
+  best-of-5, `scripts/v14_matlab_board.m` → results file): ALL WINS.**
+
+  `pagemtimes` (vs our GEMM rows above):
+
+  | n | B | MATLAB ms | ours ms | vs MATLAB |
+  |---|---|---|---|---|
+  | 4 | 10k | 0.437 | 0.09 | **4.86×** |
+  | 4 | 100k | 3.784 | 1.45 | **2.61×** |
+  | 6 | 10k | 1.027 | 0.16 | **6.42×** |
+  | 6 | 100k | 10.136 | 3.07 | **3.30×** |
+  | 8 | 10k | 2.058 | 0.25 | **8.23×** |
+  | 8 | 100k | 20.280 | 5.90 | **3.44×** |
+  | 16 | 10k | 5.397 | 2.55 | **2.12×** |
+  | 16 | 100k | 55.541 | 27.28 | **2.04×** |
+
+  `pagemldivide` A\x vs our **LU factor+solve nrhs=1** (net of copy, same protocol —
+  `ours_lu_fs` rows added to the bench harness for exactly this comparison):
+
+  | n | B | MATLAB ms | ours ms | vs MATLAB |
+  |---|---|---|---|---|
+  | 4 | 100k | 5.638 | 4.93 | **1.14×** |
+  | 8 | 100k | 16.762 | 14.78 | **1.13×** |
+  | 16 | 100k | 77.205 | 69.25 | **1.11×** |
+
+  ⇒ **the v14-h scoreboard is now complete across ALL contracted peers: MKL, torch, MATLAB —
+  every measured row a WIN (plus the one documented DRAM-wall tie vs MKL).**
 
 ## Increment B (same day): batched Cholesky factor+solve — the lane-batched tier
 
@@ -150,8 +174,10 @@ also the faster code.** Full ladder re-verified green incl. win-shipping 8/8.
 
 ## Verdict line
 
-**v14-h COMPLETE ON THE BOARDS: every operation × every size × every batch beats BOTH
-compiled peers** — GEMM 7 WIN + 1 DRAM-wall tie vs MKL batch-strided (3–10× vs torch) ·
-Cholesky 2.48–10.58× vs MKL · LU 1.21–2.87× vs MKL · SVD 1.45–12.03× vs MKL, 1.4–11.7× vs
-torch — plus tier bit-identity, poison isolation, bounded iteration, and the `{1..16}`
-moat on every op. MATLAB rows N/A-with-check (license service down; script staged).
+**v14-h COMPLETE ON THE BOARDS ACROSS ALL CONTRACTED PEERS: every operation × every size ×
+every batch beats every peer** — GEMM 7 WIN + 1 DRAM-wall tie vs MKL batch-strided
+(1.02–8.7× vs torch) · Cholesky 2.51–8.48× vs MKL · LU 1.76–3.81× vs MKL (the post-fix
+re-measure — the pure-vector-argmax scan is FASTER than the miscompiled loop it replaced) ·
+SVD 1.45–12.03× vs MKL, 1.4–11.7× vs torch · **MATLAB pagemtimes 2.04–8.23× + pagemldivide
+1.11–1.14× (measured after the license service returned — tables above)** — plus tier
+bit-identity, poison isolation, bounded iteration, and the `{1..16}` moat on every op.

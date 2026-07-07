@@ -5,6 +5,8 @@
 
 #include <zstd.h>
 
+#include <crd/containers/sort.hpp>
+
 #include <algorithm>
 #include <cstring>
 
@@ -316,12 +318,14 @@ void CrdrWriter::add_chunk_compressed(
 
 crd::containers::Array<crd::u8> CrdrWriter::finish()
 {
-    // Sort chunks ascending by fourcc for determinism.
-    std::sort(m_chunks.begin(), m_chunks.end(),
-              [](const PendingChunk& a, const PendingChunk& b) noexcept
-              {
-                  return a.fourcc < b.fourcc;
-              });
+    // Sort chunks ascending by fourcc for determinism — crd sort (bit-exact
+    // cross-platform, and the 14.51 STL xutility pattern trips clang-tidy
+    // through std::sort's innards).
+    crd::containers::sort(m_chunks.begin(), m_chunks.end(),
+                          [](const PendingChunk& a, const PendingChunk& b) noexcept
+                          {
+                              return a.fourcc < b.fourcc;
+                          });
 
     constexpr crd::usize header_size      = 32U;
     constexpr crd::usize chunk_header_size = 24U;

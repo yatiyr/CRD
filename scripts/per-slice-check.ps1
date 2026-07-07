@@ -62,7 +62,7 @@ param(
     # See CLAUDE.md Troubleshooting "Host instability". 0 = uncapped (old behaviour).
     [int]$BuildJobs = [Math]::Max(1, [int]([Environment]::ProcessorCount / 2)),
     [string]$VcvarsPath = 'C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat',
-    [string]$AsanRuntimeDir = 'C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.50.35717\bin\Hostx64\x64',
+    [string]$AsanRuntimeDir = 'C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\bin\Hostx64\x64',
     [string]$VswhereDir = 'C:\Program Files (x86)\Microsoft Visual Studio\Installer'
 )
 

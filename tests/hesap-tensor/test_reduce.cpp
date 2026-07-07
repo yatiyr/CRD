@@ -81,7 +81,7 @@ TEST_CASE("v14-c Tier D: values vs analytic references", "[hesap][tensor][v14][r
     CHECK(lse < 2.5 + 2.0794415416798357 + 1e-12);
 }
 
-TEST_CASE("v14-c Tier D: the {1,2,4,8,16} moat — serial == parallel, bit-identical",
+TEST_CASE("v14-c Tier D: the {1,2,4,8,16} moat - serial == parallel, bit-identical",
           "[hesap][tensor][v14][reduce][moat]")
 {
     crd::memory::TlsfAllocator alloc(1U << 25U);

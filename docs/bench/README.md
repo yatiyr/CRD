@@ -20,6 +20,17 @@ perf/crush claim (see AGENTS.md § Numerical/perf work).
 
 ## Index
 
+- **2026-07-05-v14z-scoreboard.md** — the consolidated v14 ALL-PEERS scoreboard (a–m): 210 measured rows — 199 won / 7 tie-parity / 4 open (all four = the one named v0d GEMM-kernel gap) — across 19 peers, with the conformance audit mapping every moat claim to its ctest gate.
+- **2026-07-05-v14z-tblis-xtensor.md** — the v14-z close rows: TBLIS measured at last (TTGT case won 1.14×; 3 pure-GEMM rows = the named v0d gap) + xtensor 3/3 wins.
+- **2026-07-05-v14m-nn.md** — v14-m NN inference: f32 8/8 (torch 1.9–9.7×, ort 1.15–2.1×), q8 7/8 (torch-int8 6.6–10.2×, ggml-from-source 1.22–1.48×/layer); torch parity ≤6e-8; Q8_0 byte-exact; zero-alloc infer; the ort per-tensor cell CLOSED same evening (i8 tier 1.23× at better accuracy) — every cell on every v14-m board won.
+- **2026-07-05-v14l-io.md** — v14-l I/O: 12/12 vs numpy/safetensors-py (writes 1.8–3.0×, st-read 11.15 GB/s); npy writer byte-identical to np.save 17/17; DLPack zero-copy; npz-DEFLATE write N/A-with-check.
+- **2026-07-05-v14k-tt.md** — v14-k tensor trains: 8/8 vs tntorch (eval 13.1×, cross 12.6–15×); the 16⁶ LUT demo 1748× compression, 1.5× faster than materialized-table interp; honesty rows (raw gather; TT-rank wall).
+- **2026-07-05-v14j-decomp.md** — v14-j CP/Tucker/randomized: 9/9 vs TensorLy at equal-or-better fit (CP 5.2–5.6×, HOOI 5.1–5.8×); MATLAB TTB 1.11–1.67× (tol=0 fixed budgets — its default early-stops, trap recorded); first-board full loss root-caused + flipped.
+- **2026-07-05-v14i-sparse.md** — v14-i sparse: 13/13 incl. SPLATT-from-source 1.5× on MTTKRP, TACO 2.3×/2.8×, MATLAB TTB 29–39×; CSF≡COO bit-identity; three losing rows flipped (registers/staged-TTM/branchless merges).
+- **2026-07-05-v14h-batched-la.md** — v14-h batched LA vs MKL/torch/MATLAB: GEMM 7 wins + 1 DRAM-wall tie, chol 2.5–8.5×, LU 1.8–3.8× (post-miscompile-fix re-measure), SVD 1.45–12×, pagemtimes 2.0–8.2×, pagemldivide 1.11–1.14×; the MSVC autovec wrong-code scar lives here.
+- **2026-07-05-v14g-hyperopt-oracle.md** — v14-g contraction-path hyper-optimizer vs cotengra/cotengrust: better-or-equal quality on every corpus network, matched-protocol wall-clock 1.81–5.83×; deterministic-by-seed at any worker count.
+- **2026-07-02-v14a-dtype-converts.md** — v14-a dtype/SR converts vs numpy/ml_dtypes/torch (see the float_convert-migration caveat noted in the v14-z scoreboard).
+
 - **2026-07-03-v10-fft-remeasure-and-midband.md** — the FFT crush campaign (7 sessions over 2 days): generator REBUILT+tracked; standalone-hier 2-pass + deep-split A·B·C (now 8K–512K); 2026-07-04 research-led crush (VectorFFT existence proof): FMA emission + AoSoA block layout + factored twiddle + hier FMA rewrite + ds cascade ⇒ f64 mid-band 0.47→0.60–0.80× MKL, f32 0.17–0.55→0.54–0.93×, f64 4M 0.98× + BEATS FFTW ≥512K; SoA-vs-AoSoA stream-count law + the /Od dual-body scar recorded; remaining gaps mechanism-pinned.
 
 - **2026-07-03-v0d-gemm-zeroinit-pass.md** — v0d GEMM order-preserving crush: +8-12% (65-69→70-77 GF/s, gap vs OpenBLAS halved) via ZeroInit kernels + alpha==1 merge; E1/E2/Mc-sweep refuted+recorded; the bit-locked remainder → proposed ADR-0100 opt-in fast-order tier.

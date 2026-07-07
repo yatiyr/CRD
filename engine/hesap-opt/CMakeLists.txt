@@ -30,6 +30,7 @@ target_link_libraries(crd-hesap-opt
         crd-containers
         crd-memory
         crd-math
+        crd-hesap-autodiff # Dual<T> forward-AD (migrated here in v15-a; opt re-exports via opt/dual.hpp) — ADR-0097
         crd-hesap          # LinearOp<T> + the cli substrate
         crd-hesap-dense    # dense Vector + blas1 (the optimizer arithmetic)
         crd-hesap-sparse   # SparseLinearOp / ParallelSpmvLeastSquaresOp (parallel-bit-exact objective eval)

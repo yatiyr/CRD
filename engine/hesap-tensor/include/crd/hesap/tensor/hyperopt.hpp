@@ -37,11 +37,11 @@
 #include <crd/core/types.hpp>
 #include <crd/hesap/stats/philox.hpp>
 #include <crd/jobs/jobs.hpp>
+#include <crd/math/cmath.hpp> // Cerid Math Mandate: crd::math::* (deterministic transcendentals), never std::
 #include <crd/memory/allocator.hpp>
 #include <crd/memory/allocators/thread_safe_allocator.hpp>
 
 #include <bit>
-#include <cmath>
 
 namespace crd::hesap::tensor
 {
@@ -249,7 +249,7 @@ private:
     {
         u = 0x1p-53;
     }
-    return -std::log(-std::log(u));
+    return -crd::math::log(-crd::math::log(u));
 }
 
 // The greedy local score (reference-exact): sab/costmod - (sa+sb)*costmod;
@@ -267,11 +267,11 @@ private:
     crd::f64 base = 0.0;
     if (s > 0.0)
     {
-        base = std::log(s);
+        base = crd::math::log(s);
     }
     else if (s < 0.0)
     {
-        base = -std::log(-s);
+        base = -crd::math::log(-s);
     }
     return base - temperature * gumbel(rng);
 }
@@ -994,12 +994,12 @@ struct HyperTreeStats
     switch (obj)
     {
     case HyperObjective::Flops:
-        return std::log2(fl) + 1e-3 * std::log2(wr) + 1e-3 * std::log2(sz);
+        return crd::math::log2(fl) + 1e-3 * crd::math::log2(wr) + 1e-3 * crd::math::log2(sz);
     case HyperObjective::Size:
-        return std::log2(sz) + 1e-3 * std::log2(fl) + 1e-3 * std::log2(wr);
+        return crd::math::log2(sz) + 1e-3 * crd::math::log2(fl) + 1e-3 * crd::math::log2(wr);
     case HyperObjective::Combo:
     default:
-        return std::log2(fl + factor * wr);
+        return crd::math::log2(fl + factor * wr);
     }
 }
 
@@ -1915,7 +1915,7 @@ private:
                 {
                     continue;
                 }
-                crd::f64 sc = std::log(static_cast<crd::f64>(costs.flop_red(ix)) +
+                crd::f64 sc = crd::math::log(static_cast<crd::f64>(costs.flop_red(ix)) +
                                        1e-3 * static_cast<crd::f64>(costs.write_red(ix)) + 1.0);
                 sc += temperature * hyperdetail::gumbel(rng);
                 if (!found || sc > best_sc)
@@ -2036,7 +2036,7 @@ namespace hyperdetail
     {
         for (const HyperLeg& l : net.legs(ids[id_begin + k]))
         {
-            const crd::f64 w = std::log2(static_cast<crd::f64>(net.index_size(l.ix))) + 1.0;
+            const crd::f64 w = crd::math::log2(static_cast<crd::f64>(net.index_size(l.ix))) + 1.0;
             if (w > maxw)
             {
                 maxw = w;
@@ -2048,7 +2048,7 @@ namespace hyperdetail
         const crd::u32 node = ids[id_begin + k];
         for (const HyperLeg& l : net.legs(node))
         {
-            const crd::f64 w = (std::log2(static_cast<crd::f64>(net.index_size(l.ix))) + 1.0) / maxw;
+            const crd::f64 w = (crd::math::log2(static_cast<crd::f64>(net.index_size(l.ix))) + 1.0) / maxw;
             net.for_edge_members(l.ix, ~crd::u32{0}, [&](crd::u32 other) noexcept
             {
                 if (other == node)
@@ -2092,7 +2092,7 @@ namespace hyperdetail
                 }
             }
         }
-        a.w *= std::pow(static_cast<crd::f64>(shared), opt.con_pow);
+        a.w *= crd::math::pow(static_cast<crd::f64>(shared), opt.con_pow);
     }
     // label propagation
     crd::containers::Array<crd::u32> labels(alloc);
@@ -2125,7 +2125,7 @@ namespace hyperdetail
             sites[j] = t;
         }
         bool moved = false;
-        const crd::f64 decay = std::pow(static_cast<crd::f64>(r + 1U), opt.pop_decay);
+        const crd::f64 decay = crd::math::pow(static_cast<crd::f64>(r + 1U), opt.pop_decay);
         for (crd::u32 si = 0; si < n; ++si)
         {
             const crd::u32 i = sites[si];
@@ -2158,12 +2158,12 @@ namespace hyperdetail
                 crd::f64 bias;
                 if (p <= m)
                 {
-                    bias = opt.pop_small_bias * static_cast<crd::f64>(n) * std::sin(3.14159265358979323846 * p / m);
+                    bias = opt.pop_small_bias * static_cast<crd::f64>(n) * crd::math::sin(3.14159265358979323846 * p / m);
                 }
                 else
                 {
                     bias = -opt.pop_big_bias * static_cast<crd::f64>(n) *
-                           std::sin(3.14159265358979323846 * 0.5 * (p - m) /
+                           crd::math::sin(3.14159265358979323846 * 0.5 * (p - m) /
                                     (static_cast<crd::f64>(n) - m > 1e-12 ? static_cast<crd::f64>(n) - m : 1e-12));
                 }
                 score[lbl] += bias / decay;
@@ -2455,7 +2455,7 @@ struct DivideCtx
     {
         crd::hesap::stats::PhiloxRng trng(glue_seed, t);
         const crd::f64 cm = 0.1 + (4.0 - 0.1) * trng.next_f64();
-        const crd::f64 tp = std::exp(std::log(0.001) + (std::log(1.0) - std::log(0.001)) * trng.next_f64());
+        const crd::f64 tp = crd::math::exp(crd::math::log(0.001) + (crd::math::log(1.0) - crd::math::log(0.001)) * trng.next_f64());
         pool.resize(0);
         off.resize(0);
         len.resize(0);
@@ -2539,11 +2539,11 @@ struct DivideCtx
                     crd::f64 base = 0.0;
                     if (s > 0.0)
                     {
-                        base = std::log(s);
+                        base = crd::math::log(s);
                     }
                     else if (s < 0.0)
                     {
-                        base = -std::log(-s);
+                        base = -crd::math::log(-s);
                     }
                     const crd::f64 sc = base - tp * gumbel(trng);
                     if (!found || sc < bsc)
@@ -2681,7 +2681,7 @@ struct DivideCtx
         return divide_greedy_fill(c, b, e);
     }
     const crd::f64 s = static_cast<crd::f64>(n) / static_cast<crd::f64>(c.total_n);
-    crd::u32 parts_s = static_cast<crd::u32>(std::pow(s, c.opt.parts_decay) * static_cast<crd::f64>(c.opt.parts));
+    crd::u32 parts_s = static_cast<crd::u32>(crd::math::pow(s, c.opt.parts_decay) * static_cast<crd::f64>(c.opt.parts));
     if (parts_s < 2U)
     {
         parts_s = 2U;
@@ -2802,7 +2802,7 @@ inline void hyper_run_trial(const HyperNet& net0, crd::u32 t, crd::u32 half, con
         // stratified costmod over the greedy half; log-uniform temperature
         const crd::f64 u0 = (static_cast<crd::f64>(t) + prng.next_f64()) / static_cast<crd::f64>(half);
         g.costmod = 0.1 + (4.0 - 0.1) * (u0 < 1.0 ? u0 : 0.999999);
-        g.temperature = std::exp(std::log(0.001) + (std::log(1.0) - std::log(0.001)) * prng.next_f64());
+        g.temperature = crd::math::exp(crd::math::log(0.001) + (crd::math::log(1.0) - crd::math::log(0.001)) * prng.next_f64());
         if (hyper_greedy(net, g, grng, 0.0) != HyperStatus::Ok)
         {
             return;
@@ -3175,19 +3175,19 @@ inline HyperStatus HyperTree::anneal(crd::f64 tstart, crd::f64 tfinal, crd::u32 
         case HyperObjective::Size:
         {
             const crd::u64 mx = s0 > s1 ? s0 : s1;
-            return std::log2(static_cast<crd::f64>(mx > 1U ? mx : 1U));
+            return crd::math::log2(static_cast<crd::f64>(mx > 1U ? mx : 1U));
         }
         case HyperObjective::Flops:
         {
             const crd::f64 fs = static_cast<crd::f64>(f0) + static_cast<crd::f64>(f1);
-            return std::log2(fs > 1.0 ? fs : 1.0);
+            return crd::math::log2(fs > 1.0 ? fs : 1.0);
         }
         case HyperObjective::Combo:
         default:
         {
             const crd::f64 v = static_cast<crd::f64>(f0) + static_cast<crd::f64>(f1) +
                                cf * (static_cast<crd::f64>(s0) + static_cast<crd::f64>(s1));
-            return std::log2(v > 1.0 ? v : 1.0);
+            return crd::math::log2(v > 1.0 ? v : 1.0);
         }
         }
     };
@@ -3197,9 +3197,9 @@ inline HyperStatus HyperTree::anneal(crd::f64 tstart, crd::f64 tfinal, crd::u32 
         crd::f64 temp = tstart;
         if (tsteps > 1U)
         {
-            const crd::f64 l0 = std::log2(tstart);
-            const crd::f64 l1 = std::log2(tfinal);
-            temp = std::exp2(l0 + static_cast<crd::f64>(step) * (l1 - l0) / static_cast<crd::f64>(tsteps - 1U));
+            const crd::f64 l0 = crd::math::log2(tstart);
+            const crd::f64 l1 = crd::math::log2(tfinal);
+            temp = crd::math::exp2(l0 + static_cast<crd::f64>(step) * (l1 - l0) / static_cast<crd::f64>(tsteps - 1U));
         }
         for (crd::u32 it = 0; it < numiter; ++it)
         {
@@ -3279,7 +3279,7 @@ inline HyperStatus HyperTree::anneal(crd::f64 tstart, crd::f64 tfinal, crd::u32 
                         {
                             u = 0x1p-53;
                         }
-                        accept = std::log(u) < -de / temp;
+                        accept = crd::math::log(u) < -de / temp;
                     }
                     if (accept)
                     {

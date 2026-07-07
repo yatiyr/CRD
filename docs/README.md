@@ -30,6 +30,7 @@ Then, as your task needs, pull the relevant ADR(s), system overview(s), and rese
 | Project rules | `AGENTS.md`, `docs/BUILDING.md` | Stable rulebook + build/verification reference | — | living |
 | Principles | `docs/PRINCIPLES.md` | Engineering compass, pinned cornerstones | — | living |
 | Benchmarking policy | `docs/PRINCIPLES_reference_class_benchmarking.md` | Head-to-head-vs-strongest-references rule for every numerical kernel | — | living |
+| Crush hints | `docs/hints/crush-playbook.md` | Living playbook of crush/optimization levers + traps (bench fairness, algorithmic wins, SIMD/memory, cross-config miscompiles) — read before a crush, append after one | self | living |
 | Sanity | `docs/SANITY.md` | Sanity doctrine + ledger (the *operational* rules) | self | living |
 | Lessons | `docs/lessons/` | Meta-reflective teaching lessons — the *why* + reusable patterns (sibling of sessions; deeper than SANITY) | `docs/lessons/README.md` | append-only |
 | Live status | `context.md` | Where we are now | — | living |

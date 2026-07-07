@@ -33,7 +33,7 @@ Rules for AI agents working on Cerid. As binding as the engineering principles.
 - **Treat "elite" / "no shortcuts" as a quality multiplier, not a scope reducer.** Ship the proper architectural choice even when the slice could ship with less.
 - **NEVER defer failures to debt — SOLVE them.** A red test/config blocks the slice. Bisect, root-cause, fix. "Pre-existing" is not a defense. (Memory: `feedback_never_defer_solve`.)
 - **Every measured benchmark board is written to `docs/bench/` AT MEASUREMENT TIME** as its own file (convention + naming in `docs/bench/README.md`: machine/config, tracked harness path, the FULL peer board incl. losses, verdict line). Session logs and phase tables LINK to the bench file, never restate the table. Part of the DoD for any perf/crush claim.
-- **Numerical/perf work: FULL crush, no deferrals, never accept near-parity.** Every benchmark carries the FULL peer board (scipy + MATLAB + Boost + **GSL** — install the missing peer; state N/A *with the check*, never drop a column). A measured loss OR a *tie* vs a reference library is an OPEN bug, not a closed slice (SANITY #9): parity-with-the-same-algorithm is never the wall — a per-operation cost (a heavy `pow`, a per-call recompute of integrand-independent nodes/weights/error-coefficients) always is, and precomputing it once flips the loss. **Reconstruct-and-verify-in-python FIRST** — fetch the reference's actual source (`gh`: scipy `__quadpack.c`/`_interpnd.pyx`, QUADPACK constants) + verify the algorithm bit-exact before porting one C++ line. (Memory: `feedback_full_victory_beat_all_gold_standards`, `feedback_bench_all_peers_never_cherry_pick`; SANITY Ledger 2026-06-30.)
+- **Numerical/perf work: FULL crush, no deferrals, never accept near-parity.** Every benchmark carries the FULL peer board (scipy + MATLAB + Boost + **GSL** — install the missing peer; state N/A *with the check*, never drop a column). A measured loss OR a *tie* vs a reference library is an OPEN bug, not a closed slice (SANITY #9): parity-with-the-same-algorithm is never the wall — a per-operation cost (a heavy `pow`, a per-call recompute of integrand-independent nodes/weights/error-coefficients) always is, and precomputing it once flips the loss. **Reconstruct-and-verify-in-python FIRST** — fetch the reference's actual source (`gh`: scipy `__quadpack.c`/`_interpnd.pyx`, QUADPACK constants) + verify the algorithm bit-exact before porting one C++ line. (Memory: `feedback_full_victory_beat_all_gold_standards`, `feedback_bench_all_peers_never_cherry_pick`; SANITY Ledger 2026-06-30.) **The recurring crush levers + traps live in `docs/hints/crush-playbook.md` (living) — read it before a crush, and APPEND the new lesson after one.**
 - **Substrate work ships proactively; speculative paths defer.** Filed follow-ons with settled designs + cheap tests ship in-line when the harness is fresh. Follow-ons with unsettled design tradeoffs only a consumer can resolve defer until that consumer arrives. (Memory: `feedback_ship_at_consumer_template_from_day_one`.)
 - **Document paper-divergence explicitly.** When implementing a canonical algorithm with a different sub-step (D124 SAT-vs-Mamou-centroid, D129 voxel-fraction-vs-Hausdorff, D94 super-tet ordering), pin the divergence as a numbered Dxxx + rationale paragraph in the ADR amendment + system doc.
 - **Append new pure-virtuals at the END of an interface.** Inserting in the middle shifts vtable slots and silently dispatches to the wrong method in win-release LTCG. (Memory: `feedback_vtable_stability_append_at_end`. Case study: rhi-compute v0-close SEGV 2026-05-17.)
@@ -141,7 +141,17 @@ Pinned decisions from `docs/decisions/`. Don't re-litigate; circumstances change
 Every shipped slice must pass **all** of these:
 
 1. Compile clean — zero warnings (`/WX` on MSVC, `-Werror` on GCC/Clang).
-2. Pass clang-tidy + clang-format for changed files.
+2. Pass clang-tidy + clang-format for changed files. **Run tidy INCREMENTALLY, per file, as part of testing EACH
+   slice — never defer it to cluster close.** The moment you add or edit a test/header, run
+   `powershell -File scripts/tidy-files.ps1 <the .cpp/.hpp files you touched>` (the CI-faithful LLVM-20 gate with
+   `--warnings-as-errors=*`) right alongside the module's test run, and fix any hit before moving on. A whole cluster's
+   worth of `readability-isolate-declaration` / `readability-identifier-naming` violations is trivial to fix one file
+   at a time and miserable to fix 200-at-once at the end. **Scar (2026-07-07):** the `win-tidy-local` gate silently
+   broke (its `CMakeCache` `CMAKE_COMMAND` got rewritten to the VS-bundled CMake — see docs/BUILDING.md §"Ninja
+   `#deps 0`"), so an entire autodiff cluster (v16-c…h) was written UNGATED and accumulated 200+ tidy violations
+   discovered only at close. Rule: if the tidy gate ever appears to pass trivially or errors on configure, VERIFY it
+   is actually running (`scripts/tidy-files.ps1` uses clang-tidy directly and cannot be silently disabled); a broken
+   gate is a DoD failure, not a convenience.
 3. Have unit tests. All existing tests pass.
 4. **Per-slice quality pass via `scripts/per-slice-check.ps1`:**
 

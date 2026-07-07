@@ -7,6 +7,8 @@
   `scripts/bench_dtypes_peers.py`). Correctness gates: 16 cases / 103,496 asserts
   (`tests/hesap-tensor/`), bit-exact vs the ml_dtypes corpus + ggml `quantize_row_*_ref`.
 
+> **2026-07-05 note:** measured BEFORE the float_convert migration; the phase log records f16 = 1.30× torch post-migration vs this board's 1.5× — still a win, but treat THIS board's f16 row as superseded (caveat carried in docs/bench/2026-07-05-v14z-scoreboard.md).
+
 ## The board (ns/element; lower is better)
 
 | Op | Cerid (batch) | numpy | ml_dtypes | torch | Verdict |

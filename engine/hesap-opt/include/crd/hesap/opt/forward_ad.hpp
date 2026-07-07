@@ -13,6 +13,7 @@
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
 #include <crd/core/types.hpp>
+#include <crd/hesap/autodiff/forward.hpp>
 #include <crd/hesap/opt/dual.hpp>
 #include <crd/hesap/opt/objective.hpp>
 #include <crd/memory/allocator.hpp>
@@ -23,13 +24,9 @@
 namespace crd::hesap::opt
 {
 
-// A functor usable with forward-mode AD: callable on a span of Dual<T> returning a Dual<T>. (The real-value path
-// — callable on ConstSpan<T> returning T — is the same templated operator(); not re-stated in the concept since
-// the gradient drivers only need the Dual path, and the value path is checked at the real call site.)
-template <typename F, typename T>
-concept DiffFunctor = requires(const F& f, crd::containers::ConstSpan<Dual<T>> xd) {
-    { f(xd) } -> std::convertible_to<Dual<T>>;
-};
+// DiffFunctor migrated to its canonical home in crd-hesap-autodiff (ADR-0097 §1); re-exported so `opt::DiffFunctor`
+// and the requires-clauses below still name it — zero regressions for the Dual migration.
+using autodiff::forward::DiffFunctor;
 
 // Fused value + gradient: returns f(x) and fills g with ∇f(x), both exact. `g.size() == x.size()`. Allocates an
 // n-vector of Dual<T> from `alloc`. (This IS the value_and_gradient the Objective vtable reserves — forward AD

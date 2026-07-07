@@ -99,10 +99,11 @@ cotengra's hq default on 6/6 networks — CHECK line in every row:**
 its index metadata). The numbers above are the FIXED artifact, re-measured, consistent
 with the ctest corpus gate in every config.
 
-C++ driver wall-clock (FIXED artifact, serial, 64 trials + per-trial reconf + 3 SA
-finalists): rand30 251 ms · rand60 1125 ms · rand120 1844 ms · rand200 2600 ms ·
-lat8x8 1044 ms · lat4x4x4 1536 ms ⇒ **2.2–6.1× faster than ctg's stack**. Raw
-random-greedy ×32 engine: 0.36–10.4 ms per network.
+C++ driver wall-clock (FIXED artifact, serial, a LIGHTER config than the matched table
+below — 64 trials + per-trial reconf + 3 SA finalists): rand30 251 ms · rand60 1125 ms ·
+rand120 1844 ms · rand200 2600 ms · lat8x8 1044 ms · lat4x4x4 1536 ms. The HEADLINE
+speedup is the matched-protocol table below (**1.81–5.83×**) — do not ratio these
+lighter-config times against ctg's. Raw random-greedy ×32 engine: 0.36–10.4 ms per network.
 
 **Wall-clock — driver vs their full hyper stack (matched 64 trials, both serial, core 4;
 theirs runs kahypar's C++ internally):**
