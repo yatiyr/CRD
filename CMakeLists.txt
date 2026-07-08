@@ -568,6 +568,13 @@ add_subdirectory(engine/hesap-sched)  # depends on crd-jobs above + crd-hesap (d
 add_subdirectory(engine/hesap-direct)  # v5; sparse DIRECT factorization (depends on hesap-dense/ordering/sparse/sched)
 add_subdirectory(engine/hesap-eigen)  # v6; sparse EIGENVALUE, matrix-free (Rayleigh-Ritz via hesap-dense; shift-invert via hesap-direct)
 add_subdirectory(engine/hesap-autodiff)  # v15/16; AUTODIFF — forward Dual/Jet + reverse tape; Dual migrated from opt (v15-a); ADR-0097
+add_subdirectory(engine/kir)  # v17; CERID KERNEL IR (CKIR) — the GPU compute compiler substrate (IR -> tile -> 6 backends); ADR-0098
+add_subdirectory(engine/kir-vulkan)  # v17-b; CKIR Vulkan backend (KirBackend over rhi-compute + shader); ADR-0098
+add_subdirectory(engine/kir-cuda)  # v17-c; CKIR CUDA backend (KirBackend over the CUDA driver + NVRTC); guarded on CUDAToolkit; ADR-0098
+add_subdirectory(engine/kir-dx12)  # v17-d; CKIR DirectX 12 backend (KirBackend over D3D12 + dxc); Windows-only; ADR-0098
+add_subdirectory(engine/kir-webgpu)  # v17-d; CKIR WebGPU backend (KirBackend over wgpu-native); browser/everywhere; guarded on the prebuilt; ADR-0098
+add_subdirectory(engine/kir-hip)  # v17-d; CKIR HIP/ROCm backend (KirBackend over HIP + hiprtc); guarded on the HIP SDK; validated at Part C; ADR-0098
+add_subdirectory(engine/kir-metal)  # v17-d; CKIR Metal backend (KirBackend over Apple Metal, Objective-C++); APPLE-only; validated at Part C; ADR-0098
 add_subdirectory(engine/hesap-opt)  # v7; OPTIMISATION (unconstrained + constrained) over Objective<T>; ADR-0090 (now consumes hesap-autodiff)
 add_subdirectory(engine/hesap-stats)  # v12 cluster (created early as a v12-pull: Philox counter-RNG for v7-i)
 add_subdirectory(engine/hesap-ode)  # v9; ODE/DAE — stepper kernel headers + driver substrate; ADR-0091

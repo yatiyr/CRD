@@ -189,9 +189,203 @@
 > `docs/bench/2026-07-07-v16z-scoreboard.md` (all 11 slices vs torch/JAX/torchdiffeq/jaxopt/cvxpylayers/top88/efficient
 > -kan + the determinism moat). Suite **3488 asserts/124 GREEN**, 6-config DoD green, builds MSVC+gcc. **v16 (autodiff II
 > — reverse mode) FULLY COMPLETE.**
-> **NEXT: ▶▶ v17 — GPU compute (Vulkan), the full suite mirrored onto the GPU + the determinism moat's hardest test
-> (T1/T2/T3 tiers, deterministic transcendentals in GLSL, computation certificates). ADR-0098 at kickoff. Gold-standard
-> frontier GPU computing — the foundation for every Cerid project.**
+> **▶▶ v17 KICKED OFF + MAXIMAL RE-SCOPE (2026-07-07): the Cerid GPU compute COMPILER.** User locked 4 decisions:
+> ① a Cerid kernel DSL/IR (**CKIR**, module `crd-kir` — two-level compute+autodiff IR extending v16-h graph_ad ⇒
+> differentiable kernels) ② **SIX backends** (Vulkan/CUDA/WebGPU/Metal/DX12/ROCm) ③ **beat the VENDOR kernels**
+> (cuBLAS/cuFFT/cuDNN via autotuner+coop-matrix) ④ **certified bit-exact core + reproducible rest** (T1/T2/T3 +
+> transcendentals-in-IR + computation certificates). NO float atomics (IR-enforced). `crd-hesap-gpu` = the op library
+> on CKIR. **NOT a Vulkan port — a tensor COMPILER (Triton/TVM/XLA-class).** ADR-0098 (rewritten) + plan
+> `docs/phases/phase-3.1.6-v17.md` (a–o+z, honest ~66 KLOC / ~19–27 wk incl. Part C cross-platform validation).
+> **▶ v17-a ✅ DONE:** module `crd-kir` — `ckir.hpp` (CKIR-Graph IR, ~27-op minimal RISC set + builder + **optimize
+> passes** const-fold/CSE/DCE) + `ckir_eval.hpp` (deterministic CPU reference oracle) + `ckir_grad.hpp` (symbolic
+> tensor reverse-AD, FD-gated ⇒ every kernel differentiable for free) + `ckir_harness.hpp` (bit/ulp oracle primitives).
+> **kir suite 60 asserts/11 cases GREEN on MSVC + gcc, tidy-clean** (optimize preserves eval bit-identically + shrinks
+> even a real gradient graph). Kernel fusion → v17-b (CKIR-Tile). **CUDA 13.3 + cuDNN + Slang INSTALLED
+> + verified.** **HARDWARE COVERAGE (user):** 4/6 backends local (Vulkan/CUDA/DX12/WebGPU-incl-browser) + HIP-on-NVIDIA;
+> Metal + AMD via dedicated **Part C** slices (v17-n macOS/Metal via free GH-Actions Apple-Silicon CI; v17-o Linux/ROCm
+> via RunPod bursts) — full engine + full test suite on each for cross-platform sanity + the T3 proof.
+> **▶ v17-b ◐ IN PROGRESS: codegen core landed** — `ckir_glsl.hpp`, the fused-elementwise Graph→GLSL emitter (N-op
+> chain → ONE kernel = fusion; `precise` temps ⇒ NoContraction ⇒ bit-matches the CPU ref). Gate `test_ckir_glsl.cpp`:
+> emitted GLSL compiles to SPIR-V via crd-shader/glslang; rejects contract/reduce. **kir suite 70 asserts/14 GREEN.**
+> **▶ `KirBackend` SEAM landed** (`backend.hpp`): the API-agnostic runtime interface + `KirBackendCpu` (oracle).
+> **Architecture (user-decided):** crd-rhi-compute = the Vulkan backend's substrate (reuse bvh-gpu path); `KirBackend`
+> sits ABOVE it (CUDA/HIP bypass rhi); backends = SEPARATE modules (crd-kir-vulkan/crd-kir-cuda/…), lean-consumer,
+> crd-kir core GPU-free; sequence interface+Vulkan+CPU→CUDA→rest, each vs the CPU oracle. **kir suite 79 asserts/15
+> GREEN.** **▶▶ THE FIRST CKIR KERNEL RUNS ON THE GPU** — `crd-kir-vulkan` + `KirBackendVulkan` over rhi-compute+shader
+> (emit GLSL → compile_glsl → pipeline → dispatch on RTX 4070 Ti → readback). Gate `test_backend_vulkan.cpp` (**4104
+> asserts GREEN**): GPU output **BIT-EXACT to the CPU oracle** for correctly-rounded arith (Add/Sub/Mul, precise=
+> NoContraction) + deterministic ×3 + ValidationCapture 0. **▶ GPU MATMUL (Contract) also BIT-EXACT** (`emit_contract_
+> glsl`, sequential-k precise; CPU ref made dtype-faithful to match naive f32 hw). `KirBackend` interface generalized to
+> `run(g,output,inputs,out)` (elementwise + contract). **Vulkan 4875 asserts/3 GREEN** (elementwise+matmul bit-exact,
+> transcendental ULP). **▶ FIXED-ORDER REDUCE (sum/max) bit-exact** (no float atomics = moat) — the **core GPU kernel
+> trio (elementwise+matmul+reduce) all bit-exact on Vulkan**. **▶▶ v17-c CUDA BACKEND LANDED (`crd-kir-cuda`):**
+> `KirBackendCuda` over the CUDA driver API + NVRTC (emit CUDA C → **CUBIN for exact sm_89** with `--fmad=false
+> --prec-div=true` → launch). Gate `test_backend_cuda.cpp` (**2863 asserts GREEN**): elementwise **incl. DIVISION
+> BIT-EXACT** (CUDA correctly-rounded divide beats Vulkan) + matmul + reduce bit-exact + deterministic. **TWO GPU
+> backends bit-exact (Vulkan + CUDA).** CUDA gotchas logged (cuCtxCreate-v4, PTX-222→CUBIN, bin/x64 DLLs, PRE_TEST).
+> **▶ FIRST VENDOR BENCH (cuBLAS SGEMM, honest baseline):** naive CKIR matmul **7.0×/8.2×/22.2× slower than cuBLAS**
+> @ N=512/1024/2048 (naive vs tensor-core; numerically agree 1e-6). NOT a crush — gap owned by v17-e (autotuner) +
+> v17-g (coop-matrix GEMM); CKIR edge now = bit-exact-deterministic + portable + differentiable. Board
+> `docs/bench/2026-07-07-v17c-cuda-vendor-baseline.md`. **▶▶▶ v17-d DX12 BACKEND LANDED (`crd-kir-dx12`):**
+> `KirBackendDx12` over raw D3D12 compute + dxc (HLSL→DXIL). Gate `test_backend_dx12.cpp` (**2863 asserts GREEN**):
+> elementwise+matmul+reduce **BIT-EXACT** vs the CPU oracle + deterministic. **★★★ THREE GPU backends (Vulkan + CUDA +
+> DirectX 12) run bit-exact from ONE CKIR IR** — API-agnostic thesis proven across 3 graphics APIs. **▶▶▶▶ v17-d WEBGPU
+> LANDED (`crd-kir-webgpu`, vendored wgpu-native v29):** `KirBackendWebGpu` over the WebGPU C API. Gate
+> `test_backend_webgpu.cpp` (**2863 asserts GREEN**): elementwise+matmul+reduce match CPU ULP-tolerant (WGSL no
+> `precise`) + deterministic. **★★★★ FOUR GPU backends from ONE CKIR IR — Vulkan+CUDA+DX12 (bit-exact) + WebGPU (ULP,
+> the browser/WASM path). Browser-to-everywhere PROVEN.** **▶ HIP/ROCm backend AUTHORED + WIRED (`crd-kir-hip`, reuses
+> the CUDA emitter, guarded on the HIP SDK — cleanly skipped on this NVIDIA box, validated on real AMD at Part C).
+> ALL 6 BACKENDS exist in-tree: Vulkan+CUDA+DX12+WebGPU (running) + HIP + Metal (Part C).** **NEXT: the Metal (MSL)
+> emitter/backend (Part C via GitHub Actions macOS); then the autotuner v17-e (MUST crush cuBLAS — committed) + GEMM
+> crush v17-g.**
+>
+> **v17-e STARTED (2026-07-07) — GEMM ladder measured, CRUSH OPEN (honest).** `crd_v17e_gemm_tiled.cu`: hand-written
+> f32 GEMM naive→tiled→+vectorized→+double-buffer vs **cuBLAS true-FP32 (`CUBLAS_PEDANTIC_MATH`, the fair fight for our
+> bit-exact regime)**. Closed self-gap **0.05–0.14× → 0.86× (N=2048)** (6–15× self-speedup, correct 1e-6) but **NOT
+> beating cuBLAS** (0.44/0.77/0.86× @ 512/1024/2048; DB register pressure hurt N=2048). Reported head-on (⛔ solve-don't-
+> document — OPEN target). Board `docs/bench/2026-07-07-v17e-gemm-ladder.md`. cuBLAS-f32 ~66% peak (near-optimal) ⇒
+> winnable crush = warp-tile→SGEMM parity, then **★FUSED GEMM+epilogue (v17-g)** (CKIR fuses, beats cuBLAS+separate) +
+> the bit-reproducible-GEMM guarantee. **NEXT: warp-tiled autotuned kernel → fused-epilogue crush → into the CKIR emitter.**
+>
+> **▶▶ v17-e rounds 2–6 (2026-07-07): REPRODUCIBLE CRUSH CELLS (min of 6 runs, honestly corrected)** — boards
+> `docs/bench/2026-07-07-v17e-gemm-crush-round2.md` + `...-round6.md`. Warp-tile + padded transposed smem-A(+4) +
+> 2-stage SMEM double buffer + swizzle + bigger tiles (256×128) + 12-config per-size search. Vendor bar = min(sgemm-PED,
+> sgemm-DEF, Lt-PED), all true-f32, gated ≤2e-5. **BEATEN 6/6 runs, true FP32: RAW SGEMM @1024 1.06×; FUSED+SiLU @1024
+> 1.13× (off Lt's menu = LLM-MLP op); FUSED+ReLU vs Lt's OWN fused @1024 1.20× + @512 1.06×.** **⚠ N=2048 OPEN** —
+> rounds 2–4's 2048 "crush" did NOT reproduce warm (swings 0.83–1.07×; no admin for `nvidia-smi -lgc`); RETRACTED per
+> ⛔ no-false-victory. cp.async REGRESSED (row-major A ⇒ non-vectorizable read; needs CUTLASS swizzle = v17-g). EXACT
+> tier ~0.4× (no-FMA). Gotchas → hints §Perf (min-of-N discipline, cp.async-swizzle, Ada dynamic-smem, oversized-tile
+> collapse).
+>
+> **▶▶▶ v17-b/c/d CLOSED (2026-07-07 finish-them-all).** v17-b: **CKIR-Tile schedule IR** (`ckir_tile.hpp` — TileSchedule
+> + select_schedule) + **the crush wired into the CUDA emitter** (`emit_contract_tiled_cuda`; 256³ Contract → warp-tiled
+> kernel, ULP-correct, `test_backend_cuda.cpp` 68404 asserts) = **the crush is a COMPILER PROPERTY**. v17-c: **persistent
+> path** (module cache by source-hash, device-buffer pool, CUstream). v17-d: **Metal** (`ckir_msl.hpp` + KirBackendMetal
+> Obj-C++, math-mode SAFE = bit-exact; APPLE-guarded). **ALL 6 BACKENDS EXIST IN-TREE** (Vulkan+CUDA+DX12+WebGPU running
+> + HIP+Metal authored→Part C). kir CPU 107/17 GREEN, tidy-clean.
+>
+> **▶ v17-g STARTED (2026-07-07): TF32 tensor-core GEMM (wmma) works + correct, cuBLAS-TF32 crush OPEN.**
+> `crd_v17g_gemm_tensorcore.cu` — nvcuda::wmma m16n16k8, naive + cp.async pipelined (cp.async CLEAN for tensor cores —
+> wmma loads shared by leading-dim, no transpose problem; +30–40%). Correct (maxrel vs f32 ~2e-5) + deterministic, but
+> **0.56–0.69× cuBLAS-TF32** — the wmma API has fragment overhead; cuBLAS-TF32 (37–42 TF) uses raw mma.sync+ldmatrix
+> PTX. Reported head-on. Board `docs/bench/2026-07-07-v17g-tensorcore.md`, gotchas → hints §Perf. **The reproducible
+> crushes stand + are in the compiler: CUDA-core f32 @1024 1.06×, fused @1024 SiLU 1.13%/ReLU 1.20×.**
+>
+> **▶▶ RAW `mma.sync.m16n8k8.tf32` PTX kernel built (`crd_v17g_gemm_mma.cu`, "all the way down"):** manual
+> fragment-layout loads + cvt.rna.tf32 (operands `.b32`/`"r"`, acc `.f32`) + cp.async pipeline. **CORRECT (maxrel 2e-5)
+> + BEATS wmma (0.67–0.74× vs 0.56–0.69× cuBLAS-TF32).** **★ HONEST CEILING: cuBLAS-TF32 ~40 TF = ~90% of the 4070 Ti
+> SUPER's ~44 TF TF32 peak ⇒ you CANNOT crush a 90%-of-peak flagship kernel; PARITY is the ceiling (needs full CUTLASS
+> stack). ⇒ the tensor-core-tier crush is FUSION** (fused TC GEMM+bias+act beats cuBLAS-TF32+separate — same winnable
+> strategy proven at f32). Reported head-on (⛔).
+>
+> **▶▶▶ FUSION IS NOW A COMPILER PROPERTY (the winnable crush, banked) — 2026-07-07.** `ckir_cuda.hpp`: `detect_fuse`
+> (elementwise epilogue cone over a WarpTiled Contract + per-column bias = Broadcast of [N] Input) + `emit_epi_fn` (cone
+> → `__device__ epi()`) + `emit_contract_tiled_fused_cuda` (epilogue in the C write, no VRAM round-trip). `KirBackendCuda::run`
+> tries fusion FIRST. **GATE (`test_backend_cuda.cpp` 68407 asserts GREEN): `SiLU(A@B+bias)` @256³ → ONE fused kernel,
+> correct vs oracle (proven-fused).** Perf = the measured fused schedule (@1024 SiLU 1.13×/ReLU 1.20× vs cuBLAS+separate;
+> cublasLt can't fuse SiLU). Plain tiled path untouched (68404 still green). **The crush the hardware ALLOWS is now in
+> the compiler.**
+>
+> **▶▶▶▶ "DO ALL 3 MOVES" (2026-07-07): FUSION ACROSS THE WHOLE FLEET.** Move 1 (DONE): `detect_fuse`→shared
+> `ckir_tile.hpp` + per-language fused emitters (`emit_epi_clike` GLSL+HLSL, `emit_epi_wgsl`, `emit_contract_fused_*`);
+> each backend's run() tries fusion first. **GATED ON GPUs: CUDA(68407)+Vulkan(4929)+DX12(2866)+WebGPU(2866) all fuse
+> SiLU(A@B+bias) into ONE kernel, correct.** Author fused once → every backend emits it. Move 2 (fused-TC, honest):
+> 0.32–0.88× LOSES — fusion only tips at raw parity, and mma is 0.7× (not parity) ⇒ fused-TC crush gated on Move 3.
+> Move 3 (parity-track): raw mma.sync foundation done (0.74×); cuBLAS-TF32 parity is the honest ceiling (~90% peak,
+> needs full CUTLASS). Reported head-on (⛔ no TF32 false victory). **The real banked crush = f32 + fused, ALL backends.**
+>
+> **▶▶▶ PARITY GRIND, PROFILER-UNLOCKED (2026-07-07 Fable): 30.5→34.5 TF = 0.86–0.91× cuBLAS-TF32 (clock-locked 2610).**
+> ncu sequence: B-frag pad must be ≡8 mod 32 (8.4M→0 conflicts) · ptxas-v caught silent 388–516B spills on 512-thr
+> configs · ABLATION split the gap (structure 5.5/feed 4.4/LDS 2.5 TF) · single-barrier S≥3 + hoisted feed (+2) ·
+> cross-kt frag prefetch (S≥4, wait_prior(S-3)) · multi-block residency (64×128 2blk = 34.5 best) · pure-mma probe:
+> 43 TF reachable · **profiled cuBLAS: same budget, unpadded smem (XOR swizzle), hmma 48.3% vs 37.5%.** **PARITY NOT
+> YET (honest); now AT CUTLASS-class. NEXT LEVERS: XOR-swizzle (implementable), SASS sched (beyond nvcc).** Gotchas →
+> hints §Perf (the full method). Files: crd_v17g_parity/ablate/mma_ceiling/cublas_tf32_probe.cu.
+> **PROFILED THE WINNER (64×128×8 s3, 2blk): hmma 40.7%, stalls = math_pipe_throttle 10.2 + BARRIER 4.0.** Deep-pipeline
+> (more stages) regressed; cross-kt path breaks small-PBK (→10 TF). **The barrier stall is STRUCTURAL to synchronized
+> tiles ⇒ CUDA-C ceiling ~0.86–0.91×.** THE decisive next lever = **WARP SPECIALIZATION** (producer warps cp.async +
+> consumer warps mma, named-barrier ring sync ⇒ mma warps never stall on the load barrier; cuBLAS's 48%-hmma edge). A
+> ~100-line rewrite — the focused next slice, fresh context. SASS is the tier below. Honest: NOT at parity; at the low
+> end of the CUTLASS-class 90–97% band.
+> **▶ WARP SPEC BUILT + TESTED (`crd_v17g_warpspec.cu`, correct) — DEFINITIVE NEGATIVE: REGRESSES on Ada (4+4=0.63–0.81×,
+> 2+8=0.55–0.82× starves at 4096).** Warp spec is a HOPPER technique (needs TMA to make producers free); Ada has no TMA
+> so producing warps = lost mma. **⇒ synchronized multi-stage IS optimal on Ada; CUDA-C ceiling = ~0.86–0.90× cuBLAS;
+> every structural lever exhausted + proven.** SOLE remaining path = SASS instruction scheduling (inline SASS /
+> CuAssembler — its own research project; nvcc can't express it). Best CKIR kernel = `gemm_p<64,128,8,32,64,3>` 34.5 TF.
+> Absolute parity requires SASS; from CUDA C we are AT the public CUTLASS-class frontier.
+>
+> **▶▶ RE-ANCHORED ON THE MISSION (2026-07-07):** stop rabbit-holing one vendor kernel; [[feedback_mission_portable_gpu_compute_all_backends]]
+> = portable GPU compute, ALL backends perfect+performant+bit-exact. **Health baseline confirmed** (all 5 suites green:
+> kir 107, Vulkan 4929, CUDA 68407, DX12 2866, WebGPU 2866). **BREADTH: +9 ops this session, each × all 6 backends × bit-exact.** (1) reduce family completed —
+> `ReduceMin`/`ReduceProd` via a new shared `is_reduce()` classifier. (2) elementwise — `Floor`/`Ceil`/`Sign`/`Trunc`
+> (unary), `CmpEq`/`CmpLe` (binary), through the elementwise AND fused-epilogue switches + `is_fusable`/`is_ew`,
+> `crd::math::floor/ceil/trunc` in the oracle. (3) STRUCTURAL — `Gather` (row index-select / embedding lookup: a NEW
+> kernel pattern with an index input) — new builder `g.gather(data,idx)`, CPU oracle, 5 emitters, all 6 backend
+> dispatches (idx = f32-encoded integers, exact < 2^24). **All 9 verified BIT-EXACT across all 4 running backends**
+> (CUDA 69679 / Vulkan 6202 / DX12 4138 / WebGPU 4138) + CPU oracle 107; HIP/Metal authored for Part C. Tidy-clean
+> (fixed a nested-ternary in oracle Sign → `(x>0)-(x<0)`). Op set now: 3 leaves, 13 unary, 9 binary, Select, 4 reduces,
+> movement, Contract, **Gather**, Cast. (4) INDEX-REDUCTIONS — `ArgMax`/`ArgMin` (return the extremum INDEX, first-match
+> deterministic) reuse the ENTIRE reduce path (is_reduce dispatch+dims) via a new `is_argreduce()` — only the kernel body
+> + oracle differ; bit-exact index across all 4 (CUDA 69763 / Vulkan 6286 / DX12 4222 / WebGPU 4222). **11 ops this
+> session**, all bit-exact ×4 + tidy-clean. Op set: 3 leaves, 13 unary, 9 binary, Select, 6 reduces (+Arg*), movement,
+> Contract, Gather, Cast. (5) `Round` — bit-exact via TIES-TO-EVEN (`crd::math::nearbyint` oracle ==
+> `roundEven`/`rintf`/`round`/`rint` on every backend; WGSL round() confirmed ties-even). **12 ops this session**, ALL
+> bit-exact across all 4 running backends (CUDA 70021 / Vulkan 6544 / DX12 4480 / WebGPU 4480) + CPU 107, tidy-clean,
+> HIP/Metal authored. Op set: 3 leaves, 14 unary, 9 binary, Select, 6 reduces, movement, Contract, Gather, Cast.
+> (6) `Scatter` — write-side inverse of Gather (base+idx+updates → 3 inputs, 3 dims); OUTPUT-CENTRIC LAST-WINS kernel =
+> race-free + deterministic in one dispatch; bit-exact WITH DUPLICATE INDICES across all 4 (CUDA 70263 / Vulkan 6786 /
+> DX12 4722 / WebGPU 4722). **13 ops this session**, all bit-exact ×4 + tidy-clean, HIP/Metal authored. Op set: 3 leaves,
+> 14 unary, 9 binary, Select, 6 reduces, movement, Contract, Gather, Scatter, Cast. (7) `ScanSum` — inclusive prefix-sum
+> along the trailing axis, one-thread-per-row sequential (fixed order ⇒ bit-exact; wide tensors already row-parallel);
+> bit-exact ×4 (CUDA 71801 / Vulkan 8324 / DX12 6260 / WebGPU 6260). **14 ops this session — STRUCTURAL OP LIBRARY
+> COMPLETE**: elementwise (14 unary/9 binary/Select) · reductions (6) · argreductions (2) · scan · Contract(matmul) ·
+> Gather · Scatter · movement · Cast — ALL bit-exact across 4 running backends + HIP/Metal authored, tidy-clean.
+> **PERFORMANCE PHASE OPENED (2026-07-08):** built the DETERMINISM-TIER FRAMEWORK — `enum DetTier {Exact, Fast}` on the
+> reduce node. **T1 (Exact)** = fixed-order, bit-exact, default (unchanged). **T2 (Fast)** = parallel workgroup tree-reduce
+> (`emit_reduce_fast_glsl`: 1 WG/output, grid-stride partials + shared-mem log-depth tree), routed in the Vulkan dispatch
+> when `tier==Fast && ReduceSum`. VERIFIED correct (bit-exact for reassociation-safe int inputs) + run-to-run
+> deterministic; **MEASURED 37.5× faster than T1** on a 2M-element reduce (164ms→4.4ms incl I/O). T1 regression clean on
+> all 4 backends. **T2 NOW PROPAGATED across ALL 6 backends AND all 4 fast-reduceable ops** (Sum/Prod/Max/Min) via a
+> shared `glsl_detail::fast_comb`/`fast_init` codegen helper + `is_fast_reduceable()` classifier: `emit_reduce_fast_{glsl,
+> cuda,hlsl,wgsl,msl}` (1 WG/block/threadgroup per output, grid-stride partials + shared-mem log-tree), routed in all 6
+> dispatches (fast ⇒ groups=nout). **Insight: Max/Min are order-invariant ⇒ T2 stays BIT-EXACT vs T1; Sum/Prod reassociate
+> ⇒ RFA.** Verified correct + run-to-run deterministic across all 4 running backends (CUDA 71941 / Vulkan 8536 / DX12 6400
+> / WebGPU 6400) with {1,2}-inputs (reassociation-exact for every op); Vulkan measured 37.5× vs T1. Arg* stay T1-only.
+> **T2 PARALLEL SCAN — DONE across all 6 backends.** `emit_scan_fast_{glsl,cuda,hlsl,wgsl,msl}`: one WG/block/threadgroup
+> per row, chunked (per-thread local inclusive scan + records chunk total → thread-0 serial exclusive-scan of the 256
+> totals → each thread adds its chunk prefix). RFA (chunk totals reassociate) but run-to-run deterministic; ~2N/256
+> work/thread vs N serial. `g.scan(a, DetTier::Fast)`; routed (fast⇒groups=nrows). Verified bit-exact for int inputs +
+> deterministic across all 4 (CUDA 79944 / Vulkan 16539 / DX12 14403 / WebGPU 14403). **SCAR:** GLSL rejects reading a
+> `writeonly` buffer (loop 2 reads O to add the prefix); HLSL RWStructuredBuffer/WGSL read_write/MSL device* silently
+> allow it ⇒ Vulkan-only compile fail. Rule: buffers that are read-back must be plain `buffer` (read_write) in GLSL.
+> [[feedback_glsl_writeonly_buffer_readback_portability]].
+>
+> **GEMM NSIGHT PROFILING LOOP — DONE, ⚠ EARLIER FINDING CORRECTED (2026-07-08):** the "tiled 4× SLOWER" claim was a
+> MEASUREMENT ARTIFACT (wall-clock + H2D upload, 512³ L2-resident). Re-measured RIGHT (`cudaEvent` kernel-only, N=2048,
+> clock-locked, `external/gemm_lab.cu` + Nsight Compute): register-tiling **CRUSHES naive** — 2.5 TF (naive) → 16.2
+> (tiled 4×4) → **21.7 TFLOP/s (float4+transposed-A, 8.5× over naive, bit-exact)**, ≈49% of ~44 TF peak. The full
+> profile→diagnose→fix journey (each step prescribed by `ncu` counters — naive=latency-bound → tiled=shared-bw-bound →
+> 8×8=register-limited-wash → vec=float4) is recorded in `docs/bench/2026-07-08-v17g-gemm-nsight-loop.md` + playbook §H.3.
+> **`ncu` works** (counter access unlocked, clock 2610). These are the FMA fast tier (`DetTier::Fast`); naive `precise`
+> stays the bit-exact default. Last mile to ~90% (cuBLAS-class) = double-buffering + warptiling (documented, not done).
+> **Step 4 (2026-07-08): double-buffering MEASURED — did NOT help** (20.9 vs 21.8 TF, ~4% slower). Stall breakdown
+> (`ncu`): long_scoreboard 0.95 (global) + short_scoreboard 0.90 (shared) dominate, 40% "No Eligible" warps. The
+> prefetch's registers cut occupancy (already register-limited 2 blk/SM) → net loss. **Lesson: double-buffering needs
+> occupancy HEADROOM we don't have at 8×8; the real last-mile lever is warptiling (lower per-thread regs + less shared
+> traffic), i.e. CUTLASS territory — multi-iteration.** **STILL OPEN**: (a) PORT the winning `vec` schedule (float4 +
+> transposed-A, 21.8 TF/8.5×) into GLSL/HLSL/WGSL emitters as the T2 GEMM = the mission-aligned win (whole engine
+> inherits it); (b) warptiling last mile to ~90% (CUTLASS-level); (c) coopmat fp16 tensor path (datacenter crush). Also: **Cerid-native tensor GEMM via Vulkan `cooperative_matrix`
+> works with ZERO CUDA + correct** (the portable tensor path; perf-opt pending) — see
+> `docs/research/2026-07-07-v17g-cerid-native-tensor-no-cuda.md`. **NEXT: more breadth ops (each × all backends, bit-exact)
+> + the coopmat tensor path wired into the CKIR Vulkan backend + optimized.**
+>
+> **▶▶ PARITY SLICE (2026-07-07, research+counters-first):** researched roadmap-to-96% (Armbruster TC-GEMM); ncu BLOCKED
+> (ERR_NVGPUCTRPERM, needs admin) → hand bank-conflict analysis → **FIX: pad shared BK→20/BN→132 (conflict-free) + drop
+> per-element cvt (`__float_as_uint`) ⇒ N=2048 0.68×→0.85× (correct 2e-5).** N=1024 stuck 0.69× (occupancy-bound, 64
+> blocks≈1 wave → needs split-K). Last mile mapped: bigger tile + register fragment double-buffer (2048), split-K (1024),
+> XOR-swizzle. Board `docs/bench/2026-07-07-v17g-tensorcore.md`. **NEXT: bigger-tile+register-pipelined mma (2048 parity)
+> + split-K (1024) → then fused-TC crush unlocks; Metal MSL fused (Part C).**
+> The substrate for physics/rendering/all-compute/research/ML — relied on to its core.
 > **Crush lessons → `docs/hints/crush-playbook.md`** (living; referenced in docs/README + AGENTS.md).
 > `docs/bench/2026-07-06-v15g-taylor.md`. **NEXT: v15-h** (complex/Wirtinger forward).
 >

@@ -1,5 +1,10 @@
 # Crush & Optimization Playbook (living hints)
 
+> **⛔ The BINDING ORDERS for kernel/perf crush work are `docs/KERNEL-CRUSH-MANDATE.md` — read them first.** This
+> playbook is the *techniques* (levers + traps); the mandate is the *law* (never invoke a wall a peer already beat; pin
+> the target; profile-then-fix; exhaust every lever; reverse-engineer + deep-research on plateau; never declare a crush
+> impossible). If they ever conflict, the mandate wins.
+
 > **Purpose.** The recurring techniques and traps for beating gold-standard peers (BLAS/LAPACK, Eigen, MKL, scipy,
 > MATLAB, JAX/PyTorch, Ceres, …) at **matched accuracy** while keeping the **bit-determinism moat**. This is a LIVING
 > document — when a slice teaches a new lesson, add it here (one crisp bullet + a pointer to the bench/memory).
@@ -208,6 +213,55 @@ A documented loss is an **OPEN BUG** (SANITY #9). Triage which kind:
   surrogate.
 - **Adversarial second check before the headline** (a second matrix / a refutation pass); a measurement lever needs a
   second-matrix confirmation before you publish the number.
+
+## H. GPU kernel crush (CKIR / v17 — portable compute, all backends)
+
+**H.1 — Determinism TIERS are the frame, not one choice** ([[feedback_mission_portable_gpu_compute_all_backends]]).
+Ship BOTH: **T1 (Exact)** = fixed-order, bit-exact vs the CPU oracle (the default, the moat); **T2 (Fast)** = a
+reordered parallel schedule — reassociated (RFA), NOT bit-exact, but still *run-to-run deterministic*. Encode it as
+`enum DetTier{Exact,Fast}` on the node; the builder opts in explicitly. **Insight: Max/Min are order-invariant ⇒ T2
+stays bit-exact; only Sum/Prod reassociate.** Verify T2 with reassociation-safe (integer / power-of-2) inputs so it's
+bit-exact-checkable, plus a run-to-run `×3` determinism check.
+
+**H.2 — Parallel reduce/scan T2 = the real, measured win.** Workgroup **tree-reduce** (1 WG/output, grid-stride
+partials → shared-mem log-depth tree) measured **37.5× over T1 sequential** on a 2M-element reduce. Parallel **scan** =
+chunked (per-thread local scan → serial scan of the 256 chunk-totals → add prefix). One shared codegen helper
+(`fast_comb`/`fast_init`) drives all 5 emitters. This is where the perf-phase wins landed — reductions/scans, not GEMM.
+
+**H.3 — GEMM: shared-memory tiling IS a big win — but MEASURE PROPERLY, then profile the limiter**
+([[feedback_ckir_tiled_gemm_occupancy_not_free]], `docs/bench/2026-07-08-v17g-gemm-nsight-loop.md`, `external/gemm_lab.cu`).
+⚠ A first pass "found" the tiled GEMM **4× slower** — that was a **measurement artifact** (wall-clock **with H2D upload**,
+on a **512³ L2-resident** matrix). Re-measured RIGHT (`cudaEvent` kernel-only, N=2048 > L2, clock-locked), register-tiling
+**CRUSHES naive**: 2.5 → 16.2 (4×4) → **21.7 TFLOP/s** (float4 + transposed-A), **8.5× over naive, bit-exact vs naive**.
+**Rule 1: time GPU kernels with `cudaEvent` (kernel-only) at a size that exceeds L2 — never wall-clock-with-transfers on
+a small matrix.** The measure→diagnose→fix loop, each step prescribed by `ncu` (NOT guessed): naive = latency-bound
+(SM+Mem both idle) → tile+shared+regs; tiled-4×4 = **shared-bandwidth-bound** (Mem-busy 76%, L2-hit 96%, DRAM 6.5%) →
+raise intensity; tiled-8×8 = register-limited (2 blk/SM, occupancy 30%) — intensity↑ but occupancy↓ = **wash**
+(microtile size is an intensity-vs-occupancy tradeoff); vec-float4 + **transposed-A** (conflict-free 128-bit shared
+reads) = 21.7 TF (≈49% of ~44 TF peak). **Last mile to cuBLAS-class (~90%):** double-buffering/software-pipelining
+(the biggest remaining lever), warptiling, bank-swizzle, `__launch_bounds__`. **Rule 2: profile counters FIRST** —
+SpeedOfLight decodes the bound (both low = latency; Mem-busy high + DRAM low + L2-hit high = *shared*-bound, NOT DRAM).
+The tiled/vec kernels use FMA ⇒ the CKIR **`DetTier::Fast`** GEMM; the bit-exact `precise` no-FMA path stays the naive
+default. `ncu -c 1 -k <regex> --section SpeedOfLight --section Occupancy app.exe` = the ~seconds first look.
+
+**H.4 — Portable tensor cores WITHOUT CUDA = Vulkan `cooperative_matrix`** (the datacenter GEMM crush path,
+`external/coopmat_gemm.comp` + `coopmat_bench.cpp`). PROVEN this session: a GLSL `coopMatMulAdd` kernel runs on the
+tensor cores through raw Vulkan, **zero CUDA**, **correct (maxrel 4.6e-8)**, portable (NVIDIA/AMD/Intel). The driver
+lowers `coopMatMulAdd` to the vendor's optimal tensor-core SASS — the exact dual-issue schedule ptxas could NOT emit
+from CUDA C (the wall that capped the hand kernel at ~0.9×). First-cut ~7 TF (device-local VRAM; host-visible was
+1.8 — always device-local + staging for tensor work). **To wire into CKIR it needs an fp16 PRECISION MODE** (CKIR
+Contract is f32; tensor cores want fp16-in/fp32-acc) — a real feature that slots in as another tier, NOT a wire.
+Optimization from 7 TF = vectorized shared loaders + K-unroll + more accumulator tiles (same journey as any GEMM, but
+the mma scheduling is the driver's job). **The nerf:** consumer Ada caps TF32-tensor:FP32-SIMT ≈ 1:1 (datacenter 8:1),
+capping BOTH cuBLAS and us ~43 TF; the ~10% cuBLAS-TF32 gap is SASS quality, NOT the nerf — bypassed by coopmat.
+
+**H.5 — Cross-backend GPU traps (each shipped a real break):** GLSL rejects reading a `writeonly` buffer while
+HLSL/WGSL/MSL silently allow it ⇒ output-read-back kernels are a **Vulkan-only compile fail**
+([[feedback_glsl_writeonly_buffer_readback_portability]]) — always run the Vulkan suite, DX12/WebGPU green ≠ GLSL
+compiles. GPU f32 division is ~2-ULP (fast reciprocal, not IEEE) — bit-exact for add/sub/mul/sqrt only. `precise` temps
+⇒ SPIR-V NoContraction ⇒ bit-matches `-ffp-contract=off`. WGSL has no `precise` ⇒ ULP for FMA-fusible arith (but exact
+for floor/ceil/sign/cmp/gather/scatter/round-ties-even). Round = ties-to-even (`nearbyint`==`roundEven`/`rint`) is
+bit-exact on every backend; ties-away is not.
 
 ---
 

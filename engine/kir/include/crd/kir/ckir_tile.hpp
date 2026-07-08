@@ -1,0 +1,157 @@
+#pragma once
+
+// ckir_tile.hpp — Phase 3.1.6 v17-b: the CKIR-Tile **schedule IR** — the missing layer between CKIR-Graph (what to
+// compute) and codegen (how, per backend). A `TileSchedule` names a concrete kernel schedule for one op (tile sizes,
+// warp/thread tiles, double-buffering, FMA-vs-exact); `select_schedule` is the Graph→Tile lowering: it consults a
+// small CHECKED-IN tuning table (the v17-e measured winners, deterministic replay — no runtime tuning) keyed by op +
+// shape, and FALLS BACK to the naive (bit-exact) schedule whenever the tiled kernel's shape constraints aren't met.
+// This is what turns the v17-e GEMM crush into a *property of the compiler*: every backend that honors the schedule
+// inherits it. ADR-0098.
+
+#include <crd/kir/ckir.hpp>
+
+namespace crd::kir
+{
+
+// The schedule kind for an op. Naive = the one-thread-per-output reference lowering (bit-exact vs the CPU oracle).
+// WarpTiled = the CUTLASS-hierarchy register-tiled kernel (block→warp→thread tile), the v17-e crush schedule.
+enum class Sched : crd::u8
+{
+    Naive     = 0,
+    WarpTiled = 1
+};
+
+// A concrete kernel schedule. For WarpTiled Contract: the block tile (BM×BN×BK), warp tile (WM×WN, WNITER sub-iters),
+// thread micro-tile (TM×TN), thread count (NT), double-buffering, and the arithmetic tier (fma = the fast fixed-order
+// deterministic tier T1; !fma = the bit-exact no-contraction tier T3). Defaults describe the Naive schedule.
+struct TileSchedule
+{
+    Sched kind = Sched::Naive;
+    int   bm = 128, bn = 128, bk = 8;
+    int   wm = 64, wn = 32, wniter = 1;
+    int   tm = 8, tn = 8;
+    int   nt = 256;
+    bool  double_buffer = false;
+    bool  fma           = true; // fast tier; false ⇒ __fmul_rn/__fadd_rn (bit-matches the -ffp-contract=off oracle)
+};
+
+// Graph→Tile lowering for `node`: pick the best checked-in schedule (the v17-e tuning DB), or Naive when the tiled
+// kernel's constraints don't hold. Constraints for the WarpTiled GEMM: single batch, M/N multiples of the block tile,
+// K a multiple of BK, and large enough to amortize (small GEMMs stay naive — and thus bit-exact for the odd shapes
+// the existing conformance tests use). fma=true ⇒ the fast/perf path (validated ULP-tolerant vs the oracle).
+inline TileSchedule select_schedule(const KGraph& g, int node)
+{
+    const KNode& n = g.node(node);
+    if (n.op == KOp::Contract)
+    {
+        const KNode& a = g.node(n.a);
+        const KNode& b = g.node(n.b);
+        const int    r = a.shape.rank;
+        if (r >= 2 && b.shape.rank >= 2)
+        {
+            const crd::i64 mm = a.shape.dims[r - 2];
+            const crd::i64 kk = a.shape.dims[r - 1];
+            const crd::i64 nn = b.shape.dims[b.shape.rank - 1];
+            crd::i64       nbatch = 1;
+            for (int k = 0; k < r - 2; ++k) { nbatch *= a.shape.dims[k]; }
+            // the v17-e N=1024 winner (config Bd): 128x128x8, warp 64x32, thread 8x8, 256 threads, double-buffered.
+            if (nbatch == 1 && mm >= 128 && nn >= 128 && (mm % 128) == 0 && (nn % 128) == 0 && (kk % 8) == 0)
+            {
+                TileSchedule s;
+                s.kind          = Sched::WarpTiled;
+                s.bm            = 128;
+                s.bn            = 128;
+                s.bk            = 8;
+                s.wm            = 64;
+                s.wn            = 32;
+                s.wniter        = 1;
+                s.tm            = 8;
+                s.tn            = 8;
+                s.nt            = 256;
+                s.double_buffer = true;
+                s.fma           = true;
+                return s;
+            }
+        }
+    }
+    return TileSchedule{}; // Naive (bit-exact reference lowering)
+}
+
+// --------------------------------------------------------------------------------- GEMM + elementwise-epilogue FUSION
+namespace fuse_detail
+{
+inline bool is_ew(KOp op) noexcept
+{
+    switch (op)
+    {
+    case KOp::Input: case KOp::Const:
+    case KOp::Neg: case KOp::Recip: case KOp::Abs: case KOp::Exp: case KOp::Log:
+    case KOp::Sin: case KOp::Cos: case KOp::Sqrt: case KOp::Tanh: case KOp::Floor: case KOp::Ceil: case KOp::Sign: case KOp::Trunc: case KOp::Round:
+    case KOp::Add: case KOp::Sub: case KOp::Mul: case KOp::Div: case KOp::Max: case KOp::Min:
+    case KOp::CmpLt: case KOp::CmpEq: case KOp::CmpLe:
+    case KOp::Select: return true;
+    default: return false;
+    }
+}
+} // namespace fuse_detail
+
+constexpr int kMaxFusedBias = 4;
+
+// The detected fused pattern (shared across ALL backends): an elementwise cone rooted at `output` whose leaves are
+// exactly ONE Contract + up to kMaxFusedBias per-column bias inputs (each a Broadcast of an [N] Input). This is the
+// LLM-MLP op GEMM+bias+activation — the structural crush a vendor GEMM library can't match (it pays a separate pass).
+struct FuseInfo
+{
+    int  contract                 = -1;
+    int  n_bias                   = 0;
+    int  bias_node[kMaxFusedBias] = {};  // the Broadcast node ids (leaves in the cone)
+    int  bias_iidx[kMaxFusedBias] = {};  // the underlying Input iidx (device buffer to bind)
+    bool ok                       = false;
+};
+
+// Detect the fusable epilogue. Rejects (ok=false) anything non-elementwise, >1 Contract, a non-per-column bias, or a
+// bare Input leaf — those fall back to the unfused path (still correct, just not fused). Language-agnostic graph
+// analysis, consumed by every backend's fused emitter.
+inline FuseInfo detect_fuse(const KGraph& g, int output, crd::memory::IAllocator* scratch)
+{
+    FuseInfo fi;
+    if (g.node(output).op == KOp::Contract) { return fi; } // no epilogue → the plain path handles it
+    const crd::i64                  ncol = g.node(output).shape.dims[g.node(output).shape.rank - 1];
+    const int                       n    = g.size();
+    crd::containers::Array<crd::u8> reach(scratch);
+    crd::containers::Array<int>     stk(scratch);
+    reach.resize(static_cast<crd::usize>(n), 0);
+    stk.push_back(output);
+    while (stk.size() > 0)
+    {
+        const int i = stk[stk.size() - 1];
+        stk.resize(stk.size() - 1);
+        if (reach[static_cast<crd::usize>(i)]) { continue; }
+        reach[static_cast<crd::usize>(i)] = 1;
+        const KNode& nd = g.node(i);
+        if (nd.op == KOp::Contract)
+        {
+            if (fi.contract >= 0 && fi.contract != i) { return FuseInfo{}; }
+            fi.contract = i;
+            continue;
+        }
+        if (nd.op == KOp::Broadcast)
+        {
+            const KNode& src = g.node(nd.a);
+            if (src.op != KOp::Input || src.shape.numel() != ncol) { return FuseInfo{}; }
+            if (fi.n_bias >= kMaxFusedBias) { return FuseInfo{}; }
+            fi.bias_node[fi.n_bias] = i;
+            fi.bias_iidx[fi.n_bias] = src.iidx;
+            ++fi.n_bias;
+            continue;
+        }
+        if (nd.op == KOp::Input || !fuse_detail::is_ew(nd.op)) { return FuseInfo{}; }
+        if (nd.a >= 0) { stk.push_back(nd.a); }
+        if (nd.b >= 0) { stk.push_back(nd.b); }
+        if (nd.c >= 0) { stk.push_back(nd.c); }
+    }
+    fi.ok = (fi.contract >= 0);
+    return fi;
+}
+
+} // namespace crd::kir
