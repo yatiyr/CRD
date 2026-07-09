@@ -1,9 +1,9 @@
-# crd-kir-vulkan — Phase 3.1.6 v17-b: the CKIR Vulkan backend. `KirBackendVulkan` implements the KirBackend seam over
-# crd-rhi-compute (ADR-0080) + crd-shader (GLSL→SPIR-V). A SEPARATE module (ADR-0096 lean-consumer): only a consumer
-# that wants the Vulkan backend links Vulkan/shaderc — `crd-kir` core stays GPU-free. ADR-0098.
+# crd-kir-vulkan — Phase 3.1.6 v17-b/v17-i: the CKIR Vulkan backend. `KirBackendVulkan` implements the KirBackend seam
+# over the crd-gpu-context COMPUTE layer (ADR-0099) + crd-shader (GLSL→SPIR-V). A SEPARATE module (ADR-0096 lean-
+# consumer): only a consumer that wants the Vulkan backend links Vulkan/shaderc — `crd-kir` core stays GPU-free. ADR-0098.
 #
-# Edges (acyclic): crd-kir (the IR + emitter + KirBackend interface) + crd-rhi + crd-rhi-vulkan (device/dispatch) +
-# crd-shader (compile the emitted GLSL) + the base substrate.
+# Edges (acyclic): crd-kir (the IR + emitter + KirBackend interface) + crd-gpu-context + crd-gpu-context-vulkan (the
+# compute context/device — NO rendering RHI) + crd-shader (compile the emitted GLSL) + the base substrate.
 
 crd_collect_sources(SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src")
 crd_collect_sources(HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/include")
@@ -18,8 +18,8 @@ target_include_directories(crd-kir-vulkan
 target_link_libraries(crd-kir-vulkan
     PUBLIC
         crd-kir
-        crd-rhi
-        crd-rhi-vulkan
+        crd-gpu-context
+        crd-gpu-context-vulkan
         crd-shader
         crd-core
         crd-containers

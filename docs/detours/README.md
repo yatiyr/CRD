@@ -20,8 +20,12 @@ external request).
 
 ## Active detours
 
-(none active — D-003 opened + closed 2026-05-15 same session, all 8
-slices shipped; see "Closed detours" below. D-004 / D-005 queued.)
+- **D-007 — CKIR becomes the universal shader IR (ADR-0101).** ACTIVE (opened 2026-07-09). Extends CKIR from a
+  compute-kernel IR into the backend-neutral universal shader IR that all shaders (compute + future materials) are
+  authored through. Phase A (full scalar+vec/mat/quat math corpus) SHIPPED on the CPU oracle + Vulkan + DX12; the one
+  remaining core slice is **A4 structured control flow** (if/for/while/switch). Pauses Phase 3.1.6 v17 hesap-gpu compute;
+  resumes there on exit. See `docs/detours/D-007-ckir-universal-shader-ir.md`. (D-003 closed 2026-05-15; D-004 / D-005
+  queued.)
 
 <!-- Historical D-003 plan retained for reference; see Closed detours
      for the actual shipped state. Each slice has its own session log

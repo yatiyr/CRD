@@ -58,7 +58,6 @@ bool KirBackendMetal::run(const KGraph& g, int output, const float* const* input
 
         if (outn.op == KOp::Contract)
         {
-            if (!emit_contract_msl(g, output, kern) || kern.n_inputs != n_inputs) { return false; }
             const KNode& an = g.node(outn.a);
             const KNode& bn = g.node(outn.b);
             const int    r  = an.shape.rank;
@@ -70,8 +69,18 @@ bool KirBackendMetal::run(const KGraph& g, int output, const float* const* input
             in_bytes[0] = static_cast<crd::u64>(pc[0]) * pc[1] * pc[3] * sizeof(float);
             in_bytes[1] = static_cast<crd::u64>(pc[1]) * pc[2] * pc[3] * sizeof(float);
             out_bytes   = static_cast<crd::u64>(pc[0]) * pc[2] * pc[3] * sizeof(float);
-            total       = static_cast<crd::u64>(pc[0]) * pc[2] * pc[3];
             pc_index    = 3;
+            // T2 FAST tiled GEMM (FMA, transposed-A threadgroup) — Metal inherits the crush schedule; else naive T1.
+            if (outn.tier == DetTier::Fast && pc[3] == 1U && pc[0] % 64U == 0U && pc[2] % 64U == 0U && pc[1] % 8U == 0U
+                && emit_contract_fast_msl(g, output, kern) && kern.n_inputs == n_inputs)
+            {
+                total = static_cast<crd::u64>(pc[0] / 64U) * (pc[2] / 64U) * 256U; // (M/64)*(N/64) threadgroups x 256 threads
+            }
+            else
+            {
+                if (!emit_contract_msl(g, output, kern) || kern.n_inputs != n_inputs) { return false; }
+                total = static_cast<crd::u64>(pc[0]) * pc[2] * pc[3];
+            }
         }
         else if (is_reduce(outn.op))
         {

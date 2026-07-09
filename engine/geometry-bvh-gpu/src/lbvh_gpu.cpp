@@ -1,7 +1,8 @@
 // ---------------------------------------------------------------------------
 // LbvhGpuPipeline — GPU-side fat-node LBVH (Karras 2012 + KittenGpuLBVH-style
 // 64 B node layout). Phase 3.1.7 v9a-c-followon "Track A elite rewrite"
-// (2026-05-18).
+// (2026-05-18); v17-i-c: migrated off the rendering RHI onto the crd-gpu-context
+// COMPUTE layer (VulkanComputeContext) — dedicated compute queue, no rendering.
 //
 // **TWO** GPU dispatches per call (down from THREE in the compact-node
 // version — no separate finalize, because the fat-node array IS the final
@@ -25,25 +26,13 @@
 //
 // **Readback** is just the final 64 B nodes array (N-1 × 64 B). No separate
 // child_left / child_right / bounds buffers — they don't exist in the
-// fat-node layout. For 1 M: ~64 MB nodes readback (down from ~76 MB in the
-// compact-node version).
-//
-// `prim_indices` is derived on CPU from `sorted_pairs` (already in caller's
-// memory — zero readback cost). The upsweep kernel reads leaf AABBs by
-// ORIGINAL primitive index (NOT sorted order); the staging buffer mirrors
-// the caller's `leaf_aabbs` argument verbatim.
+// fat-node layout. For 1 M: ~64 MB nodes readback.
 //
 // **All working-set buffers cached in the pipeline ctor** at kRadixMaxItems
 // capacity. Per-call buffer-create cost: 0 ms.
 //
-// Expected pure-GPU compute on RTX 4070 Ti SUPER for 1 M:
-//   - Build kernel:  ~1-2 ms (N-1 threads, Karras logic)
-//   - Upsweep kernel: ~1-3 ms (carry-register walk; coherent buffer)
-//   - Total compute: ~2-5 ms (matches/beats KittenGpuLBVH's 1.5 ms on RTX
-//     3090, scaled to our hardware).
-//
-// Synchronous dispatch (matches v9a-b2 pattern). Async-compute follow-on
-// when a consumer needs overlap.
+// Synchronous dispatch (VulkanComputeContext::submit_and_wait). Async-compute
+// follow-on when a consumer needs overlap.
 // ---------------------------------------------------------------------------
 
 #include <crd/geometry/bvh_gpu/lbvh.hpp>
@@ -51,16 +40,7 @@
 #include <crd/containers/string.hpp>
 #include <crd/core/assert.hpp>
 #include <crd/geometry/bvh_gpu/radix_sort.hpp>   // kRadixMaxItems for pre-allocation
-#include <crd/platform/filesystem.hpp>
-#include <crd/rhi/buffer.hpp>
-#include <crd/rhi/command_buffer.hpp>
-#include <crd/rhi/compute_pipeline.hpp>
-#include <crd/rhi/descriptor.hpp>
-#include <crd/rhi/device.hpp>
-#include <crd/rhi/fence.hpp>
-#include <crd/rhi/pipeline.hpp>
-#include <crd/rhi/queue.hpp>
-#include <crd/rhi/shader_module.hpp>
+#include <crd/gpu/compute.hpp>
 
 #include <algorithm>
 #include <cstdint>
@@ -73,6 +53,7 @@ namespace
 {
 
 using crd::geometry::primitives::AABB3;
+namespace gpu = crd::gpu;
 
 struct alignas(16) BuildPushConstants
 {
@@ -95,186 +76,66 @@ struct alignas(16) MergeLevelPushConstants
 };
 static_assert(sizeof(MergeLevelPushConstants) == 16U);
 
-struct PipelineQuad
-{
-    std::unique_ptr<crd::rhi::ShaderModule>        shader{};
-    std::unique_ptr<crd::rhi::DescriptorSetLayout> set_layout{};
-    std::unique_ptr<crd::rhi::PipelineLayout>      pipeline_layout{};
-    std::unique_ptr<crd::rhi::ComputePipeline>     pipeline{};
-};
-
-[[nodiscard]] bool
-build_pipeline(crd::rhi::Device& device, const crd::platform::fs::Path& spv_path,
-               crd::containers::ConstSpan<crd::rhi::DescriptorBinding> bindings,
-               std::uint32_t push_constants_size, PipelineQuad& out) noexcept
-{
-    crd::containers::Array<crd::u8> spv;
-    if (!crd::platform::fs::read_file_binary(spv_path, spv)) { return false; }
-
-    out.shader = device.create_shader_module(
-        {crd::rhi::ShaderStage::Compute, "main",
-         crd::containers::ConstSpan<crd::u8>(spv.data(), spv.size())});
-    if (out.shader == nullptr) { return false; }
-
-    crd::rhi::DescriptorSetLayoutDesc set_desc{};
-    set_desc.bindings = bindings;
-    out.set_layout = device.create_descriptor_set_layout(set_desc);
-    if (out.set_layout == nullptr) { return false; }
-
-    const crd::rhi::DescriptorSetLayout* layouts[] = {out.set_layout.get()};
-    crd::rhi::PushConstantRange pc_range{};
-    pc_range.stages = crd::rhi::ShaderStage::Compute;
-    pc_range.offset = 0U;
-    pc_range.size   = push_constants_size;
-    crd::rhi::PipelineLayoutDesc layout_desc{};
-    layout_desc.set_layouts =
-        crd::containers::ConstSpan<const crd::rhi::DescriptorSetLayout*>(layouts, 1);
-    layout_desc.push_constant_ranges =
-        crd::containers::ConstSpan<crd::rhi::PushConstantRange>(&pc_range, 1);
-    out.pipeline_layout = device.create_pipeline_layout(layout_desc);
-    if (out.pipeline_layout == nullptr) { return false; }
-
-    crd::rhi::ComputePipelineDesc pipe_desc{};
-    pipe_desc.compute_shader  = out.shader.get();
-    pipe_desc.pipeline_layout = out.pipeline_layout.get();
-    out.pipeline = device.create_compute_pipeline(pipe_desc);
-    return out.pipeline != nullptr;
-}
-
 } // namespace
 
 struct LbvhGpuPipeline::Impl
 {
-    crd::rhi::Device* device = nullptr;
-    PipelineQuad      build{};
-    PipelineQuad      upsweep{};        // carry-register (fallback for small N + degenerate all-equal codes)
-    PipelineQuad      init_leaves{};    // level-by-level pass 1 (leaf scatter)
-    PipelineQuad      merge_level{};    // level-by-level pass 2..K (internal merge)
-    PipelineQuad      extract_prim_indices{};  // v9a-c-gpu-inputs: GPU-side prim_indices extraction
-    PipelineQuad      upsweep_persistent{};    // v9a-c-persistent-threads: atomic-queue upsweep
-    std::unique_ptr<crd::rhi::DescriptorAllocator> desc_alloc{};
+    gpu::IComputeContext*             ctx = nullptr;
+    std::unique_ptr<gpu::ComputePipeline> build{};
+    std::unique_ptr<gpu::ComputePipeline> upsweep{};             // carry-register (fallback for small N + degenerate all-equal codes)
+    std::unique_ptr<gpu::ComputePipeline> init_leaves{};         // level-by-level pass 1 (leaf scatter)
+    std::unique_ptr<gpu::ComputePipeline> merge_level{};         // level-by-level pass 2..K (internal merge)
+    std::unique_ptr<gpu::ComputePipeline> extract_prim_indices{}; // v9a-c-gpu-inputs: GPU-side prim_indices extraction
+    std::unique_ptr<gpu::ComputePipeline> upsweep_persistent{};  // v9a-c-persistent-threads: atomic-queue upsweep
 
-    // All working-set buffers pre-allocated at kRadixMaxItems capacity in
-    // the ctor. Reused across dispatch_build_lbvh calls — avoids the per-
-    // call cost of `device.create_buffer()` allocations. Per-call we just
-    // memcpy into the staging slots and dispatch.
-    std::unique_ptr<crd::rhi::Buffer> pairs_staging{};
-    std::unique_ptr<crd::rhi::Buffer> pairs_gpu{};
-    std::unique_ptr<crd::rhi::Buffer> leaf_aabbs_staging{};
-    std::unique_ptr<crd::rhi::Buffer> leaf_aabbs_gpu{};
-    std::unique_ptr<crd::rhi::Buffer> nodes_gpu{};               // 64 B per LbvhFatNode
-    std::unique_ptr<crd::rhi::Buffer> prim_indices_gpu{};        // 4 B per leaf (sorted-order original prim index)
-    std::unique_ptr<crd::rhi::Buffer> prim_indices_staging{};    // CPU-staged source of the GPU prim_indices
-    std::unique_ptr<crd::rhi::Buffer> leaf_parents_gpu{};
-    std::unique_ptr<crd::rhi::Buffer> done_staging{};
-    std::unique_ptr<crd::rhi::Buffer> done_gpu{};
-    std::unique_ptr<crd::rhi::Buffer> nodes_readback{};
-    // 4-byte staging holding 0xFFFFFFFF — copied to nodes_gpu offset 0 each
-    // call (= nodes[0].parent_idx, the root sentinel). The build kernel
-    // writes every NON-root parent_idx; the root has no parent thread.
-    std::unique_ptr<crd::rhi::Buffer> root_parent_init_staging{};
-
-    // v9a-c-persistent-threads: 4-byte atomic counter for the persistent-
-    // threads work queue. work_queue_init is a pre-zeroed staging buffer
-    // (same pattern as root_init); the dispatch copies it to work_queue at
-    // call start.
-    std::unique_ptr<crd::rhi::Buffer> work_queue_gpu{};
-    std::unique_ptr<crd::rhi::Buffer> work_queue_init_staging{};
-
-    // v9a-c-cmd-cache: pre-allocated cmd buffer + fence, reused across calls.
-    // Each call resets and re-records the cmd buffer; saves the per-call
-    // create_command_buffer + create_fence cost (~0.1-0.2 ms / 1 M).
-    std::unique_ptr<crd::rhi::CommandBuffer> cached_cmd{};
-    std::unique_ptr<crd::rhi::Fence>         cached_fence{};
+    // All working-set buffers pre-allocated at kRadixMaxItems capacity in the ctor. Reused across dispatch calls.
+    std::unique_ptr<gpu::ComputeBuffer> pairs_staging{};
+    std::unique_ptr<gpu::ComputeBuffer> pairs_gpu{};
+    std::unique_ptr<gpu::ComputeBuffer> leaf_aabbs_staging{};
+    std::unique_ptr<gpu::ComputeBuffer> leaf_aabbs_gpu{};
+    std::unique_ptr<gpu::ComputeBuffer> nodes_gpu{};               // 64 B per LbvhFatNode
+    std::unique_ptr<gpu::ComputeBuffer> prim_indices_gpu{};        // 4 B per leaf (sorted-order original prim index)
+    std::unique_ptr<gpu::ComputeBuffer> prim_indices_staging{};    // CPU-staged source of the GPU prim_indices
+    std::unique_ptr<gpu::ComputeBuffer> leaf_parents_gpu{};
+    std::unique_ptr<gpu::ComputeBuffer> done_staging{};
+    std::unique_ptr<gpu::ComputeBuffer> done_gpu{};
+    std::unique_ptr<gpu::ComputeBuffer> nodes_readback{};
+    // 4-byte staging holding 0xFFFFFFFF — copied to nodes_gpu offset 0 each call (= nodes[0].parent_idx, root sentinel).
+    std::unique_ptr<gpu::ComputeBuffer> root_parent_init_staging{};
+    // v9a-c-persistent-threads: 4-byte atomic counter + pre-zeroed staging seed.
+    std::unique_ptr<gpu::ComputeBuffer> work_queue_gpu{};
+    std::unique_ptr<gpu::ComputeBuffer> work_queue_init_staging{};
 
     bool valid = false;
 };
 
-LbvhGpuPipeline::LbvhGpuPipeline(crd::rhi::Device&            device,
+LbvhGpuPipeline::LbvhGpuPipeline(gpu::IComputeContext&        ctx,
                                  crd::containers::StringView shader_dir) noexcept
     : m_impl(std::make_unique<Impl>())
 {
-    auto& impl  = *m_impl;
-    impl.device = &device;
-
-    const crd::platform::fs::Path base{shader_dir};
-    auto path_for = [&](const char* name) {
-        return base / crd::containers::StringView{name};
-    };
+    auto& impl = *m_impl;
+    impl.ctx   = &ctx;
+    // Kernels requested BY NAME — the backend loads its own cooked kernel; this code names no API + no file format.
+    const auto sv = [](const char* s) { return crd::containers::StringView{s}; };
 
     // Build kernel: in_pairs(0) + out_nodes(1) + out_leaf_parents(2).
-    crd::rhi::DescriptorBinding build_bindings[] = {
-        {.binding = 0, .type = crd::rhi::DescriptorType::StorageBuffer, .count = 1, .stages = crd::rhi::ShaderStage::Compute},
-        {.binding = 1, .type = crd::rhi::DescriptorType::StorageBuffer, .count = 1, .stages = crd::rhi::ShaderStage::Compute},
-        {.binding = 2, .type = crd::rhi::DescriptorType::StorageBuffer, .count = 1, .stages = crd::rhi::ShaderStage::Compute},
-    };
-
+    impl.build = ctx.create_pipeline(shader_dir, sv("lbvh_fat_build"), 3, sizeof(BuildPushConstants));
+    if (impl.build == nullptr) { return; }
     // Upsweep kernel: nodes(0) + leaf_parents(1) + done(2) + pairs(3) + leaf_aabbs(4).
-    crd::rhi::DescriptorBinding upsweep_bindings[] = {
-        {.binding = 0, .type = crd::rhi::DescriptorType::StorageBuffer, .count = 1, .stages = crd::rhi::ShaderStage::Compute},
-        {.binding = 1, .type = crd::rhi::DescriptorType::StorageBuffer, .count = 1, .stages = crd::rhi::ShaderStage::Compute},
-        {.binding = 2, .type = crd::rhi::DescriptorType::StorageBuffer, .count = 1, .stages = crd::rhi::ShaderStage::Compute},
-        {.binding = 3, .type = crd::rhi::DescriptorType::StorageBuffer, .count = 1, .stages = crd::rhi::ShaderStage::Compute},
-        {.binding = 4, .type = crd::rhi::DescriptorType::StorageBuffer, .count = 1, .stages = crd::rhi::ShaderStage::Compute},
-    };
-
-    if (!build_pipeline(device, path_for("lbvh_fat_build.comp.spv"),
-                        crd::containers::ConstSpan<crd::rhi::DescriptorBinding>(build_bindings, 3),
-                        sizeof(BuildPushConstants), impl.build))
-    { return; }
-
-    if (!build_pipeline(device, path_for("lbvh_fat_upsweep.comp.spv"),
-                        crd::containers::ConstSpan<crd::rhi::DescriptorBinding>(upsweep_bindings, 5),
-                        sizeof(UpsweepPushConstants), impl.upsweep))
-    { return; }
-
+    impl.upsweep = ctx.create_pipeline(shader_dir, sv("lbvh_fat_upsweep"), 5, sizeof(UpsweepPushConstants));
+    if (impl.upsweep == nullptr) { return; }
     // init_leaves uses the same 5-binding layout as upsweep.
-    if (!build_pipeline(device, path_for("lbvh_fat_init_leaves.comp.spv"),
-                        crd::containers::ConstSpan<crd::rhi::DescriptorBinding>(upsweep_bindings, 5),
-                        sizeof(UpsweepPushConstants), impl.init_leaves))
-    { return; }
-
+    impl.init_leaves = ctx.create_pipeline(shader_dir, sv("lbvh_fat_init_leaves"), 5, sizeof(UpsweepPushConstants));
+    if (impl.init_leaves == nullptr) { return; }
     // merge_level: just nodes(0) + done(1).
-    crd::rhi::DescriptorBinding merge_bindings[] = {
-        {.binding = 0, .type = crd::rhi::DescriptorType::StorageBuffer, .count = 1, .stages = crd::rhi::ShaderStage::Compute},
-        {.binding = 1, .type = crd::rhi::DescriptorType::StorageBuffer, .count = 1, .stages = crd::rhi::ShaderStage::Compute},
-    };
-    if (!build_pipeline(device, path_for("lbvh_fat_merge_level.comp.spv"),
-                        crd::containers::ConstSpan<crd::rhi::DescriptorBinding>(merge_bindings, 2),
-                        sizeof(MergeLevelPushConstants), impl.merge_level))
-    { return; }
-
+    impl.merge_level = ctx.create_pipeline(shader_dir, sv("lbvh_fat_merge_level"), 2, sizeof(MergeLevelPushConstants));
+    if (impl.merge_level == nullptr) { return; }
     // extract_prim_indices: in_pairs(0) + out_prim_indices(1).
-    crd::rhi::DescriptorBinding extract_bindings[] = {
-        {.binding = 0, .type = crd::rhi::DescriptorType::StorageBuffer, .count = 1, .stages = crd::rhi::ShaderStage::Compute},
-        {.binding = 1, .type = crd::rhi::DescriptorType::StorageBuffer, .count = 1, .stages = crd::rhi::ShaderStage::Compute},
-    };
-    if (!build_pipeline(device, path_for("lbvh_fat_extract_prim_indices.comp.spv"),
-                        crd::containers::ConstSpan<crd::rhi::DescriptorBinding>(extract_bindings, 2),
-                        sizeof(UpsweepPushConstants), impl.extract_prim_indices))
-    { return; }
-
-    // upsweep_persistent: 6 storage-buffer bindings (same 5 as regular
-    // upsweep + work_queue at binding 5).
-    crd::rhi::DescriptorBinding upsweep_persistent_bindings[] = {
-        {.binding = 0, .type = crd::rhi::DescriptorType::StorageBuffer, .count = 1, .stages = crd::rhi::ShaderStage::Compute},
-        {.binding = 1, .type = crd::rhi::DescriptorType::StorageBuffer, .count = 1, .stages = crd::rhi::ShaderStage::Compute},
-        {.binding = 2, .type = crd::rhi::DescriptorType::StorageBuffer, .count = 1, .stages = crd::rhi::ShaderStage::Compute},
-        {.binding = 3, .type = crd::rhi::DescriptorType::StorageBuffer, .count = 1, .stages = crd::rhi::ShaderStage::Compute},
-        {.binding = 4, .type = crd::rhi::DescriptorType::StorageBuffer, .count = 1, .stages = crd::rhi::ShaderStage::Compute},
-        {.binding = 5, .type = crd::rhi::DescriptorType::StorageBuffer, .count = 1, .stages = crd::rhi::ShaderStage::Compute},
-    };
-    if (!build_pipeline(device, path_for("lbvh_fat_upsweep_persistent.comp.spv"),
-                        crd::containers::ConstSpan<crd::rhi::DescriptorBinding>(upsweep_persistent_bindings, 6),
-                        sizeof(UpsweepPushConstants), impl.upsweep_persistent))
-    { return; }
-
-    crd::rhi::DescriptorAllocatorDesc alloc_desc{};
-    alloc_desc.frames_in_flight              = 2;
-    alloc_desc.max_sets_per_frame            = 8;
-    alloc_desc.max_storage_buffers_per_frame = 32;
-    impl.desc_alloc = device.create_descriptor_allocator(alloc_desc);
-    if (impl.desc_alloc == nullptr) { return; }
+    impl.extract_prim_indices = ctx.create_pipeline(shader_dir, sv("lbvh_fat_extract_prim_indices"), 2, sizeof(UpsweepPushConstants));
+    if (impl.extract_prim_indices == nullptr) { return; }
+    // upsweep_persistent: 6 storage-buffer bindings (same 5 as regular upsweep + work_queue at binding 5).
+    impl.upsweep_persistent = ctx.create_pipeline(shader_dir, sv("lbvh_fat_upsweep_persistent"), 6, sizeof(UpsweepPushConstants));
+    if (impl.upsweep_persistent == nullptr) { return; }
 
     // ---- Pre-allocate all working-set buffers at kRadixMaxItems capacity --
     constexpr crd::u64 max_n           = static_cast<crd::u64>(kRadixMaxItems);
@@ -284,61 +145,23 @@ LbvhGpuPipeline::LbvhGpuPipeline(crd::rhi::Device&            device,
     constexpr crd::u64 max_nodes_bytes  = max_n_int * 64U;          // 64 B per LbvhFatNode
     constexpr crd::u64 max_parent_bytes = max_n    * sizeof(crd::u32);
     constexpr crd::u64 max_done_bytes   = max_n_int * sizeof(crd::u32);
+    using gpu::compute_usage::storage;
+    using gpu::compute_usage::transfer_dst;
+    using gpu::compute_usage::transfer_src;
 
-    impl.pairs_staging = device.create_buffer(
-        {max_pairs_bytes, crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferSrc),
-         crd::rhi::MemoryUsage::CpuToGpu});
-    impl.pairs_gpu = device.create_buffer(
-        {max_pairs_bytes,
-         crd::rhi::enum_bits(crd::rhi::BufferUsage::Storage) |
-             crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferDst),
-         crd::rhi::MemoryUsage::GpuOnly});
+    impl.pairs_staging = ctx.create_buffer(max_pairs_bytes, transfer_src, gpu::ComputeMemory::CpuToGpu);
+    impl.pairs_gpu     = ctx.create_buffer(max_pairs_bytes, storage | transfer_dst, gpu::ComputeMemory::GpuOnly);
+    impl.leaf_aabbs_staging = ctx.create_buffer(max_aabb_bytes, transfer_src, gpu::ComputeMemory::CpuToGpu);
+    impl.leaf_aabbs_gpu     = ctx.create_buffer(max_aabb_bytes, storage | transfer_dst, gpu::ComputeMemory::GpuOnly);
+    impl.nodes_gpu = ctx.create_buffer(max_nodes_bytes, storage | transfer_src | transfer_dst, gpu::ComputeMemory::GpuOnly);
+    impl.prim_indices_staging = ctx.create_buffer(max_n * sizeof(crd::u32), transfer_src, gpu::ComputeMemory::CpuToGpu);
+    impl.prim_indices_gpu     = ctx.create_buffer(max_n * sizeof(crd::u32), storage | transfer_dst | transfer_src, gpu::ComputeMemory::GpuOnly);
+    impl.leaf_parents_gpu     = ctx.create_buffer(max_parent_bytes, storage, gpu::ComputeMemory::GpuOnly);
+    impl.done_staging = ctx.create_buffer(max_done_bytes, transfer_src, gpu::ComputeMemory::CpuToGpu);
+    impl.done_gpu     = ctx.create_buffer(max_done_bytes, storage | transfer_dst, gpu::ComputeMemory::GpuOnly);
+    impl.nodes_readback = ctx.create_buffer(max_nodes_bytes, transfer_dst, gpu::ComputeMemory::GpuToCpu);
 
-    impl.leaf_aabbs_staging = device.create_buffer(
-        {max_aabb_bytes, crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferSrc),
-         crd::rhi::MemoryUsage::CpuToGpu});
-    impl.leaf_aabbs_gpu = device.create_buffer(
-        {max_aabb_bytes,
-         crd::rhi::enum_bits(crd::rhi::BufferUsage::Storage) |
-             crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferDst),
-         crd::rhi::MemoryUsage::GpuOnly});
-
-    impl.nodes_gpu = device.create_buffer(
-        {max_nodes_bytes,
-         crd::rhi::enum_bits(crd::rhi::BufferUsage::Storage) |
-             crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferSrc) |
-             crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferDst),
-         crd::rhi::MemoryUsage::GpuOnly});
-    impl.prim_indices_staging = device.create_buffer(
-        {max_n * sizeof(crd::u32), crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferSrc),
-         crd::rhi::MemoryUsage::CpuToGpu});
-    impl.prim_indices_gpu = device.create_buffer(
-        {max_n * sizeof(crd::u32),
-         crd::rhi::enum_bits(crd::rhi::BufferUsage::Storage) |
-             crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferDst) |
-             crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferSrc),
-         crd::rhi::MemoryUsage::GpuOnly});
-    impl.leaf_parents_gpu = device.create_buffer(
-        {max_parent_bytes,
-         crd::rhi::enum_bits(crd::rhi::BufferUsage::Storage),
-         crd::rhi::MemoryUsage::GpuOnly});
-
-    impl.done_staging = device.create_buffer(
-        {max_done_bytes, crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferSrc),
-         crd::rhi::MemoryUsage::CpuToGpu});
-    impl.done_gpu = device.create_buffer(
-        {max_done_bytes,
-         crd::rhi::enum_bits(crd::rhi::BufferUsage::Storage) |
-             crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferDst),
-         crd::rhi::MemoryUsage::GpuOnly});
-
-    impl.nodes_readback = device.create_buffer(
-        {max_nodes_bytes, crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferDst),
-         crd::rhi::MemoryUsage::GpuToCpu});
-
-    impl.root_parent_init_staging = device.create_buffer(
-        {4U, crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferSrc),
-         crd::rhi::MemoryUsage::CpuToGpu});
+    impl.root_parent_init_staging = ctx.create_buffer(4U, transfer_src, gpu::ComputeMemory::CpuToGpu);
     if (impl.root_parent_init_staging != nullptr)
     {
         if (auto* dst = static_cast<crd::u32*>(impl.root_parent_init_staging->map()))
@@ -348,10 +171,8 @@ LbvhGpuPipeline::LbvhGpuPipeline(crd::rhi::Device&            device,
         }
     }
 
-    // Pre-zero done_staging ONCE in the ctor. Subsequent per-call memsets
-    // were a ~0.5-1 ms waste — staging buffers are host-coherent CpuToGpu
-    // memory; the CPU never reads from them. They stay zeroed across calls.
-    // Saves CPU memcpy on every dispatch (v9a-c-perf-tune sub-win 2026-05-18).
+    // Pre-zero done_staging ONCE in the ctor. Staging buffers are host-coherent CpuToGpu memory the CPU never reads;
+    // they stay zeroed across calls, so per-call memsets were a ~0.5-1 ms waste (v9a-c-perf-tune sub-win 2026-05-18).
     if (impl.done_staging != nullptr)
     {
         if (auto* dst = static_cast<crd::u32*>(impl.done_staging->map()))
@@ -363,14 +184,8 @@ LbvhGpuPipeline::LbvhGpuPipeline(crd::rhi::Device&            device,
     }
 
     // v9a-c-persistent-threads: 4-byte work-queue counter + pre-zeroed staging.
-    impl.work_queue_gpu = device.create_buffer(
-        {4U,
-         crd::rhi::enum_bits(crd::rhi::BufferUsage::Storage) |
-             crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferDst),
-         crd::rhi::MemoryUsage::GpuOnly});
-    impl.work_queue_init_staging = device.create_buffer(
-        {4U, crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferSrc),
-         crd::rhi::MemoryUsage::CpuToGpu});
+    impl.work_queue_gpu          = ctx.create_buffer(4U, storage | transfer_dst, gpu::ComputeMemory::GpuOnly);
+    impl.work_queue_init_staging = ctx.create_buffer(4U, transfer_src, gpu::ComputeMemory::CpuToGpu);
     if (impl.work_queue_init_staging != nullptr)
     {
         if (auto* dst = static_cast<crd::u32*>(impl.work_queue_init_staging->map()))
@@ -392,12 +207,6 @@ LbvhGpuPipeline::LbvhGpuPipeline(crd::rhi::Device&            device,
         return;
     }
 
-    // v9a-c-cmd-cache: pre-allocate cmd buffer + fence. Reused across all
-    // dispatch_* calls; reset + re-record per call.
-    impl.cached_cmd   = device.create_command_buffer();
-    impl.cached_fence = device.create_fence();
-    if (impl.cached_cmd == nullptr || impl.cached_fence == nullptr) { return; }
-
     impl.valid = true;
 }
 
@@ -413,14 +222,8 @@ bool LbvhGpuPipeline::is_valid() const noexcept
 namespace
 {
 
-// Shared helper: stage inputs, dispatch build + upsweep, populate
-// `impl.nodes_gpu` (n_int × 64 B) + `impl.prim_indices_gpu` (n × 4 B),
-// optionally also issue a readback copy + wait the fence. Returns true on
-// success. Caller is responsible for any post-fence CPU work.
-//
-// `request_nodes_readback` controls whether the cmd buffer issues the
-// nodes_gpu → nodes_readback transfer. If false, the GPU-resident path
-// can skip the 64 MB transfer (the big perf win at 1 M).
+// Shared helper: stage inputs, dispatch build + upsweep, populate `impl.nodes_gpu` (n_int × 64 B) +
+// `impl.prim_indices_gpu` (n × 4 B), optionally also issue a readback copy. Returns true on success.
 [[nodiscard]] bool
 run_build_upsweep(LbvhGpuPipeline::Impl& impl,
                   crd::containers::ConstSpan<MortonPair<crd::u32>> sorted_pairs,
@@ -429,13 +232,12 @@ run_build_upsweep(LbvhGpuPipeline::Impl& impl,
                   bool      request_nodes_readback,
                   bool      upload_prim_indices_gpu) noexcept
 {
-    auto& device = *impl.device;
+    auto& ctx = *impl.ctx;
     const crd::u32 n_int = n - 1U;
 
     const crd::u64 pairs_bytes        = static_cast<crd::u64>(n)     * sizeof(MortonPair<crd::u32>);
     const crd::u64 aabbs_bytes        = static_cast<crd::u64>(n)     * (6U * sizeof(crd::f32));
     const crd::u64 nodes_bytes        = static_cast<crd::u64>(n_int) * 64U;
-    const crd::u64 parent_bytes       = static_cast<crd::u64>(n)     * sizeof(crd::u32);
     const crd::u64 done_bytes         = static_cast<crd::u64>(n_int) * sizeof(crd::u32);
     const crd::u64 prim_indices_bytes = static_cast<crd::u64>(n)     * sizeof(crd::u32);
 
@@ -460,9 +262,8 @@ run_build_upsweep(LbvhGpuPipeline::Impl& impl,
     }
     else { return false; }
 
-    // Upload leaf AABBs in ORIGINAL prim-index order (NOT sorted order). The
-    // upsweep kernel reads `in_leaf_aabbs.aabbs[prim_idx * 6]` where prim_idx
-    // comes from `in_sorted_pairs.pairs[2*k + 1]`.
+    // Upload leaf AABBs in ORIGINAL prim-index order (NOT sorted order). The upsweep kernel reads
+    // `in_leaf_aabbs.aabbs[prim_idx * 6]` where prim_idx comes from `in_sorted_pairs.pairs[2*k + 1]`.
     if (auto* dst = static_cast<crd::f32*>(leaf_aabbs_staging.map()))
     {
         for (crd::u32 k = 0U; k < n; ++k)
@@ -476,14 +277,9 @@ run_build_upsweep(LbvhGpuPipeline::Impl& impl,
     }
     else { return false; }
 
-    // done_staging is pre-zeroed in the ctor (kept zero across calls); no
-    // per-call CPU memcpy needed.
+    // done_staging is pre-zeroed in the ctor (kept zero across calls); no per-call CPU memcpy needed.
 
-    // Stage prim_indices to GPU only if the caller needs them on GPU (i.e.
-    // GPU-resident path). The CPU-output path builds prim_indices directly
-    // into LbvhTree.prim_indices_mut() and never reads from prim_indices_gpu.
-    // Skipping this saves ~1 M × 4 B = 4 MB of CPU memcpy + GPU transfer per
-    // call (~0.3-0.5 ms at 1 M on RTX 4070 Ti SUPER).
+    // Stage prim_indices to GPU only if the caller needs them on GPU (GPU-resident path).
     if (upload_prim_indices_gpu)
     {
         if (auto* dst = static_cast<crd::u32*>(prim_indices_staging.map()))
@@ -494,212 +290,97 @@ run_build_upsweep(LbvhGpuPipeline::Impl& impl,
         else { return false; }
     }
 
-    // ---- Descriptor sets ---------------------------------------------------
-    impl.desc_alloc->begin_frame(0U);
-
-    auto ds_build = impl.desc_alloc->allocate(*impl.build.set_layout);
-    if (ds_build == nullptr) { return false; }
-    ds_build->update_buffer(0U, pairs_gpu,        0U, pairs_bytes);
-    ds_build->update_buffer(1U, nodes_gpu,        0U, nodes_bytes);
-    ds_build->update_buffer(2U, leaf_parents_gpu, 0U, parent_bytes);
-
-    // Upsweep strategy: carry-register single-dispatch always on this
-    // hardware. Tested level-by-level (init_leaves + ~32 merge_level
-    // dispatches) at 1 M / RTX 4070 Ti SUPER win-shipping (v9a-c-perf-tune
-    // 2026-05-18): 7.7-8.5 ms vs carry-register's 7.4 ms — barrier overhead
-    // (~70 μs × 32 barriers ≈ 2.2 ms) eats the algorithmic gain. The level-
-    // wise pipelines remain compiled but unused; threshold = u32 max so the
-    // condition always selects carry-register. Future: re-enable when (a)
-    // RHI grows a batched buffer_barrier API, or (b) consumer hardware has
-    // cheaper pipeline barriers.
+    // Upsweep strategy: carry-register single-dispatch always on this hardware. Tested level-by-level (init_leaves +
+    // ~32 merge_level dispatches) at 1 M / RTX 4070 Ti SUPER win-shipping (v9a-c-perf-tune 2026-05-18): 7.7-8.5 ms vs
+    // carry-register's 7.4 ms — barrier overhead (~70 μs × 32 barriers ≈ 2.2 ms) eats the algorithmic gain. The level-
+    // wise pipelines remain compiled but unused; threshold = u32 max so the condition always selects carry-register.
     constexpr crd::u32 level_wise_threshold = ~0U;
     const bool use_level_wise = (n >= level_wise_threshold);
 
-    std::unique_ptr<crd::rhi::DescriptorSet> ds_upsweep;
-    std::unique_ptr<crd::rhi::DescriptorSet> ds_init_leaves;
-    std::unique_ptr<crd::rhi::DescriptorSet> ds_merge_level;
-
-    if (use_level_wise)
-    {
-        ds_init_leaves = impl.desc_alloc->allocate(*impl.init_leaves.set_layout);
-        if (ds_init_leaves == nullptr) { return false; }
-        ds_init_leaves->update_buffer(0U, nodes_gpu,        0U, nodes_bytes);
-        ds_init_leaves->update_buffer(1U, leaf_parents_gpu, 0U, parent_bytes);
-        ds_init_leaves->update_buffer(2U, done_gpu,         0U, done_bytes);
-        ds_init_leaves->update_buffer(3U, pairs_gpu,        0U, pairs_bytes);
-        ds_init_leaves->update_buffer(4U, leaf_aabbs_gpu,   0U, aabbs_bytes);
-
-        ds_merge_level = impl.desc_alloc->allocate(*impl.merge_level.set_layout);
-        if (ds_merge_level == nullptr) { return false; }
-        ds_merge_level->update_buffer(0U, nodes_gpu, 0U, nodes_bytes);
-        ds_merge_level->update_buffer(1U, done_gpu,  0U, done_bytes);
-    }
-    else
-    {
-        ds_upsweep = impl.desc_alloc->allocate(*impl.upsweep.set_layout);
-        if (ds_upsweep == nullptr) { return false; }
-        ds_upsweep->update_buffer(0U, nodes_gpu,        0U, nodes_bytes);
-        ds_upsweep->update_buffer(1U, leaf_parents_gpu, 0U, parent_bytes);
-        ds_upsweep->update_buffer(2U, done_gpu,         0U, done_bytes);
-        ds_upsweep->update_buffer(3U, pairs_gpu,        0U, pairs_bytes);
-        ds_upsweep->update_buffer(4U, leaf_aabbs_gpu,   0U, aabbs_bytes);
-    }
-
     // ---- Record + submit ---------------------------------------------------
-    // v9a-c-cmd-cache: reuse the pipeline-cached cmd buffer + fence.
-    auto* cmd   = impl.cached_cmd.get();
-    auto* fence = impl.cached_fence.get();
-    cmd->reset();
-    fence->reset();
-
-    cmd->begin();
-    cmd->copy_buffer(pairs_staging,        pairs_gpu,        0U, 0U, pairs_bytes);
-    cmd->copy_buffer(leaf_aabbs_staging,   leaf_aabbs_gpu,   0U, 0U, aabbs_bytes);
-    cmd->copy_buffer(done_staging,         done_gpu,         0U, 0U, done_bytes);
+    auto& rec = ctx.begin();
+    rec.copy(pairs_staging,        pairs_gpu,        0U, 0U, pairs_bytes);
+    rec.copy(leaf_aabbs_staging,   leaf_aabbs_gpu,   0U, 0U, aabbs_bytes);
+    rec.copy(done_staging,         done_gpu,         0U, 0U, done_bytes);
     if (upload_prim_indices_gpu)
     {
-        cmd->copy_buffer(prim_indices_staging, prim_indices_gpu, 0U, 0U, prim_indices_bytes);
+        rec.copy(prim_indices_staging, prim_indices_gpu, 0U, 0U, prim_indices_bytes);
     }
-    // Seed nodes[0].parent_idx (dword 0 = byte offset 0) with 0xFFFFFFFF —
-    // the root sentinel. The build kernel writes every NON-root parent_idx;
-    // the root has no parent thread.
-    cmd->copy_buffer(root_init_staging, nodes_gpu, 0U, 0U, 4U);
+    // Seed nodes[0].parent_idx (dword 0 = byte offset 0) with 0xFFFFFFFF — the root sentinel. The build kernel writes
+    // every NON-root parent_idx; the root has no parent thread.
+    rec.copy(root_init_staging, nodes_gpu, 0U, 0U, 4U);
 
-    cmd->buffer_barrier(pairs_gpu,        crd::rhi::BufferAccess::TransferDst,
-                                            crd::rhi::BufferAccess::ComputeShaderRead);
-    cmd->buffer_barrier(leaf_aabbs_gpu,   crd::rhi::BufferAccess::TransferDst,
-                                            crd::rhi::BufferAccess::ComputeShaderRead);
-    cmd->buffer_barrier(done_gpu,         crd::rhi::BufferAccess::TransferDst,
-                                            crd::rhi::BufferAccess::ComputeShaderWrite);
-    cmd->buffer_barrier(nodes_gpu,        crd::rhi::BufferAccess::TransferDst,
-                                            crd::rhi::BufferAccess::ComputeShaderWrite);
+    rec.barrier(pairs_gpu,        gpu::ComputeAccess::TransferDst, gpu::ComputeAccess::ShaderRead);
+    rec.barrier(leaf_aabbs_gpu,   gpu::ComputeAccess::TransferDst, gpu::ComputeAccess::ShaderRead);
+    rec.barrier(done_gpu,         gpu::ComputeAccess::TransferDst, gpu::ComputeAccess::ShaderWrite);
+    rec.barrier(nodes_gpu,        gpu::ComputeAccess::TransferDst, gpu::ComputeAccess::ShaderWrite);
     // prim_indices_gpu doesn't need a barrier — no shader reads/writes it.
 
     // Build kernel — N-1 internal-node threads.
     {
-        cmd->bind_compute_pipeline(*impl.build.pipeline);
-        crd::rhi::DescriptorSet* sets[] = {ds_build.get()};
-        cmd->bind_compute_descriptor_sets(*impl.build.pipeline_layout, 0U,
-            crd::containers::ConstSpan<crd::rhi::DescriptorSet*>(sets, 1));
         BuildPushConstants pc{};
         pc.n = n;
-        cmd->push_constants(*impl.build.pipeline_layout, crd::rhi::ShaderStage::Compute,
-                            0U, sizeof(pc), &pc);
+        gpu::ComputeBuffer* binds[] = {&pairs_gpu, &nodes_gpu, &leaf_parents_gpu};
         const crd::u32 groups = (n_int + 255U) / 256U;
-        cmd->dispatch(std::max<crd::u32>(groups, 1U), 1U, 1U);
+        rec.dispatch(*impl.build, crd::containers::ConstSpan<gpu::ComputeBuffer*>(binds, 3), &pc, sizeof(pc),
+                     std::max<crd::u32>(groups, 1U), 1U, 1U);
     }
-    cmd->buffer_barrier(nodes_gpu,        crd::rhi::BufferAccess::ComputeShaderWrite,
-                                            crd::rhi::BufferAccess::ComputeShaderRead);
-    cmd->buffer_barrier(leaf_parents_gpu, crd::rhi::BufferAccess::ComputeShaderWrite,
-                                            crd::rhi::BufferAccess::ComputeShaderRead);
+    rec.barrier(nodes_gpu,        gpu::ComputeAccess::ShaderWrite, gpu::ComputeAccess::ShaderRead);
+    rec.barrier(leaf_parents_gpu, gpu::ComputeAccess::ShaderWrite, gpu::ComputeAccess::ShaderRead);
 
     if (use_level_wise)
     {
-        // Level-by-level upsweep (v9a-c-perf-tune 2026-05-18):
-        //
-        //   Step A: init_leaves dispatch — N threads. Each leaf scatters its
-        //           AABB into parent.bounds[isRight], atomicAdd done[parent].
-        //           After this dispatch, internal nodes whose BOTH children
-        //           are leaves have done == 2 (ready); rest are in {0, 1}.
-        //
-        //   Step B: merge_level dispatched K times. Each thread for internal
-        //           node i checks done[i] == 2 (ready+not-yet-processed),
-        //           atomicCompSwap (2 → 3), merges bounds[0]∪bounds[1],
-        //           scatters to parent.bounds[isRight], atomicAdd done[parent].
-        //           Each dispatch advances at most one level toward the root.
-        //
-        // Iteration bound: ceil(log₂(N)) + slack covers all non-pathological
-        // scenes. Tree-build hard caps at 32-bit code = depth ≤ 32 levels per
-        // bit-level, but random unit-cube inputs we benchmark on hit ~25-30.
-        // Cap at 48 for safety; small overhead per wasted dispatch.
+        // Level-by-level upsweep (v9a-c-perf-tune 2026-05-18). Step A: init_leaves (N threads, scatter + atomicAdd done).
+        // Step B: merge_level dispatched K times, each advancing one level toward the root, with a barrier between.
         crd::u32 log2_n = 0U;
         for (crd::u32 v = n; v > 1U; v >>= 1U) { ++log2_n; }
-        // Cap iterations: random unit-cube tree depth ≈ 2·log₂(N) for random
-        // binary trees; 32 covers N up to ~16 M. Each iteration adds buffer-
-        // barrier driver cost (~50-100 μs on NVIDIA), so over-iterating burns
-        // time without doing work. If a consumer hits a deeper pathological
-        // tree, raise this cap or fall through to carry-register.
         const crd::u32 max_iters = std::min<crd::u32>(32U, log2_n + 8U);
 
         // Step A — init_leaves.
         {
-            cmd->bind_compute_pipeline(*impl.init_leaves.pipeline);
-            crd::rhi::DescriptorSet* sets[] = {ds_init_leaves.get()};
-            cmd->bind_compute_descriptor_sets(*impl.init_leaves.pipeline_layout, 0U,
-                crd::containers::ConstSpan<crd::rhi::DescriptorSet*>(sets, 1));
             UpsweepPushConstants pc{};
             pc.n = n;
-            cmd->push_constants(*impl.init_leaves.pipeline_layout, crd::rhi::ShaderStage::Compute,
-                                0U, sizeof(pc), &pc);
+            gpu::ComputeBuffer* binds[] = {&nodes_gpu, &leaf_parents_gpu, &done_gpu, &pairs_gpu, &leaf_aabbs_gpu};
             const crd::u32 groups = (n + 63U) / 64U;
-            cmd->dispatch(groups, 1U, 1U);
+            rec.dispatch(*impl.init_leaves, crd::containers::ConstSpan<gpu::ComputeBuffer*>(binds, 5), &pc, sizeof(pc), groups, 1U, 1U);
         }
-        cmd->buffer_barrier(nodes_gpu, crd::rhi::BufferAccess::ComputeShaderWrite,
-                                         crd::rhi::BufferAccess::ComputeShaderRead);
-        cmd->buffer_barrier(done_gpu,  crd::rhi::BufferAccess::ComputeShaderWrite,
-                                         crd::rhi::BufferAccess::ComputeShaderRead);
+        rec.barrier(nodes_gpu, gpu::ComputeAccess::ShaderWrite, gpu::ComputeAccess::ShaderRead);
+        rec.barrier(done_gpu,  gpu::ComputeAccess::ShaderWrite, gpu::ComputeAccess::ShaderRead);
 
-        // Step B — merge_level loop. Bind once (descriptors don't change
-        // across iterations), push_constants once, then dispatch K times
-        // with barriers between.
-        cmd->bind_compute_pipeline(*impl.merge_level.pipeline);
-        {
-            crd::rhi::DescriptorSet* sets[] = {ds_merge_level.get()};
-            cmd->bind_compute_descriptor_sets(*impl.merge_level.pipeline_layout, 0U,
-                crd::containers::ConstSpan<crd::rhi::DescriptorSet*>(sets, 1));
-            MergeLevelPushConstants pc{};
-            pc.n_int = n_int;
-            cmd->push_constants(*impl.merge_level.pipeline_layout, crd::rhi::ShaderStage::Compute,
-                                0U, sizeof(pc), &pc);
-        }
+        // Step B — merge_level loop.
+        MergeLevelPushConstants pc{};
+        pc.n_int = n_int;
+        gpu::ComputeBuffer* binds[] = {&nodes_gpu, &done_gpu};
         const crd::u32 merge_groups = (n_int + 63U) / 64U;
         for (crd::u32 iter = 0U; iter < max_iters; ++iter)
         {
-            cmd->dispatch(merge_groups, 1U, 1U);
-            // Single barrier per iteration: Vulkan's COMPUTE→COMPUTE
-            // SHADER_WRITE→SHADER_READ pipeline barrier provides device-wide
-            // memory visibility independent of which buffer is named in the
-            // VkBufferMemoryBarrier (the per-buffer reference is only used
-            // for queue ownership transfers). Using one barrier instead of
-            // two halves the per-iteration driver cost.
-            cmd->buffer_barrier(nodes_gpu, crd::rhi::BufferAccess::ComputeShaderWrite,
-                                             crd::rhi::BufferAccess::ComputeShaderRead);
+            rec.dispatch(*impl.merge_level, crd::containers::ConstSpan<gpu::ComputeBuffer*>(binds, 2), &pc, sizeof(pc), merge_groups, 1U, 1U);
+            // Single COMPUTE→COMPUTE SHADER_WRITE→SHADER_READ barrier per iteration (device-wide visibility).
+            rec.barrier(nodes_gpu, gpu::ComputeAccess::ShaderWrite, gpu::ComputeAccess::ShaderRead);
         }
     }
     else
     {
-        // Carry-register upsweep — N leaf-walker threads, single dispatch.
-        // Handles arbitrary depth (used for small N + degenerate all-equal-
-        // codes inputs where level-by-level would need too many iterations).
-        cmd->bind_compute_pipeline(*impl.upsweep.pipeline);
-        crd::rhi::DescriptorSet* sets[] = {ds_upsweep.get()};
-        cmd->bind_compute_descriptor_sets(*impl.upsweep.pipeline_layout, 0U,
-            crd::containers::ConstSpan<crd::rhi::DescriptorSet*>(sets, 1));
+        // Carry-register upsweep — N leaf-walker threads, single dispatch. Handles arbitrary depth.
         UpsweepPushConstants pc{};
         pc.n = n;
-        cmd->push_constants(*impl.upsweep.pipeline_layout, crd::rhi::ShaderStage::Compute,
-                            0U, sizeof(pc), &pc);
+        gpu::ComputeBuffer* binds[] = {&nodes_gpu, &leaf_parents_gpu, &done_gpu, &pairs_gpu, &leaf_aabbs_gpu};
         const crd::u32 groups = (n + 63U) / 64U;
-        cmd->dispatch(groups, 1U, 1U);
+        rec.dispatch(*impl.upsweep, crd::containers::ConstSpan<gpu::ComputeBuffer*>(binds, 5), &pc, sizeof(pc), groups, 1U, 1U);
     }
 
     if (request_nodes_readback)
     {
-        cmd->buffer_barrier(nodes_gpu, crd::rhi::BufferAccess::ComputeShaderWrite,
-                                         crd::rhi::BufferAccess::TransferSrc);
-        cmd->copy_buffer(nodes_gpu, nodes_readback, 0U, 0U, nodes_bytes);
+        rec.barrier(nodes_gpu, gpu::ComputeAccess::ShaderWrite, gpu::ComputeAccess::TransferSrc);
+        rec.copy(nodes_gpu, nodes_readback, 0U, 0U, nodes_bytes);
     }
     else
     {
-        // GPU-resident output: leave nodes_gpu in compute-write state. The
-        // caller will issue subsequent compute/transfer ops against it.
-        cmd->buffer_barrier(nodes_gpu, crd::rhi::BufferAccess::ComputeShaderWrite,
-                                         crd::rhi::BufferAccess::ComputeShaderRead);
+        // GPU-resident output: leave nodes_gpu readable for subsequent GPU ops.
+        rec.barrier(nodes_gpu, gpu::ComputeAccess::ShaderWrite, gpu::ComputeAccess::ShaderRead);
     }
 
-    cmd->end();
-    device.graphics_queue().submit(*cmd, *fence);
-    fence->wait();
+    ctx.submit_and_wait();
     return true;
 }
 
@@ -779,23 +460,16 @@ LbvhGpuPipeline::dispatch_build_lbvh_gpu_resident(
 
     if (n == 1U)
     {
-        // Singleton: prim_indices buffer holds the one prim index; no nodes.
-        // Stage the single prim index into prim_indices_gpu in this call.
-        auto& device = *impl.device;
+        // Singleton: prim_indices buffer holds the one prim index; no nodes. Stage it in this call.
+        auto& ctx = *impl.ctx;
         if (auto* dst = static_cast<crd::u32*>(impl.prim_indices_staging->map()))
         {
             dst[0] = sorted_pairs[0].index;
             impl.prim_indices_staging->unmap();
         }
-        auto* cmd   = impl.cached_cmd.get();
-        auto* fence = impl.cached_fence.get();
-        cmd->reset();
-        fence->reset();
-        cmd->begin();
-        cmd->copy_buffer(*impl.prim_indices_staging, *impl.prim_indices_gpu, 0U, 0U, sizeof(crd::u32));
-        cmd->end();
-        device.graphics_queue().submit(*cmd, *fence);
-        fence->wait();
+        auto& rec = ctx.begin();
+        rec.copy(*impl.prim_indices_staging, *impl.prim_indices_gpu, 0U, 0U, sizeof(crd::u32));
+        ctx.submit_and_wait();
 
         out.nodes           = nullptr;
         out.internal_count  = 0U;
@@ -829,8 +503,8 @@ LbvhGpuPipeline::dispatch_build_lbvh_from_gpu(const GpuInputView& inputs) noexce
     if (inputs.n == 0U) { return out; }
 
     const crd::u32 n = inputs.n;
-    auto& impl   = *m_impl;
-    auto& device = *impl.device;
+    auto& impl = *m_impl;
+    auto& ctx  = *impl.ctx;
 
     out.prim_count             = n;
     out.prim_indices           = impl.prim_indices_gpu.get();
@@ -840,29 +514,12 @@ LbvhGpuPipeline::dispatch_build_lbvh_from_gpu(const GpuInputView& inputs) noexce
     if (n == 1U)
     {
         // Extract prim_indices[0] from inputs.sorted_pairs[1].
-        impl.desc_alloc->begin_frame(0U);
-        auto ds = impl.desc_alloc->allocate(*impl.extract_prim_indices.set_layout);
-        if (ds == nullptr) { return GpuResidentTree{}; }
-        ds->update_buffer(0U, *inputs.sorted_pairs, 0U, 2U * sizeof(crd::u32));
-        ds->update_buffer(1U, *impl.prim_indices_gpu, 0U, sizeof(crd::u32));
-
-        auto* cmd   = impl.cached_cmd.get();
-        auto* fence = impl.cached_fence.get();
-        cmd->reset();
-        fence->reset();
-        cmd->begin();
-        cmd->bind_compute_pipeline(*impl.extract_prim_indices.pipeline);
-        crd::rhi::DescriptorSet* sets[] = {ds.get()};
-        cmd->bind_compute_descriptor_sets(*impl.extract_prim_indices.pipeline_layout, 0U,
-            crd::containers::ConstSpan<crd::rhi::DescriptorSet*>(sets, 1));
+        auto&               rec  = ctx.begin();
+        gpu::ComputeBuffer* binds[] = {inputs.sorted_pairs, impl.prim_indices_gpu.get()};
         UpsweepPushConstants pc{};
         pc.n = 1U;
-        cmd->push_constants(*impl.extract_prim_indices.pipeline_layout, crd::rhi::ShaderStage::Compute,
-                            0U, sizeof(pc), &pc);
-        cmd->dispatch(1U, 1U, 1U);
-        cmd->end();
-        device.graphics_queue().submit(*cmd, *fence);
-        fence->wait();
+        rec.dispatch(*impl.extract_prim_indices, crd::containers::ConstSpan<gpu::ComputeBuffer*>(binds, 2), &pc, sizeof(pc), 1U, 1U, 1U);
+        ctx.submit_and_wait();
 
         out.nodes           = nullptr;
         out.internal_count  = 0U;
@@ -871,12 +528,6 @@ LbvhGpuPipeline::dispatch_build_lbvh_from_gpu(const GpuInputView& inputs) noexce
     }
 
     const crd::u32 n_int = n - 1U;
-    const crd::u64 pairs_bytes        = static_cast<crd::u64>(n)     * sizeof(MortonPair<crd::u32>);
-    const crd::u64 aabbs_bytes        = static_cast<crd::u64>(n)     * (6U * sizeof(crd::f32));
-    const crd::u64 nodes_bytes        = static_cast<crd::u64>(n_int) * 64U;
-    const crd::u64 parent_bytes       = static_cast<crd::u64>(n)     * sizeof(crd::u32);
-    const crd::u64 done_bytes         = static_cast<crd::u64>(n_int) * sizeof(crd::u32);
-    const crd::u64 prim_indices_bytes = static_cast<crd::u64>(n)     * sizeof(crd::u32);
 
     auto& sorted_pairs_gpu = *inputs.sorted_pairs;
     auto& leaf_aabbs_gpu   = *inputs.leaf_aabbs;
@@ -887,113 +538,55 @@ LbvhGpuPipeline::dispatch_build_lbvh_from_gpu(const GpuInputView& inputs) noexce
     auto& done_gpu         = *impl.done_gpu;
     auto& root_init        = *impl.root_parent_init_staging;
 
-    // ---- Descriptor sets --------------------------------------------------
-    impl.desc_alloc->begin_frame(0U);
-
-    auto ds_build = impl.desc_alloc->allocate(*impl.build.set_layout);
-    if (ds_build == nullptr) { return GpuResidentTree{}; }
-    ds_build->update_buffer(0U, sorted_pairs_gpu, 0U, pairs_bytes);
-    ds_build->update_buffer(1U, nodes_gpu,        0U, nodes_bytes);
-    ds_build->update_buffer(2U, leaf_parents_gpu, 0U, parent_bytes);
-
-    // v9a-c-persistent-threads measurement 2026-05-18: persistent kernel
-    // tested at 4K/16K/64K threads + warp-batched atomic pulls; all variants
-    // within noise of regular flat-dispatch (1.39-1.64 ms range overall).
-    // The upsweep is memory-bandwidth-bound at our 64 MB working set —
-    // scheduling pattern is irrelevant. Reverting to regular upsweep (simpler,
-    // same perf). Persistent kernel remains compiled for future-hardware /
-    // mesh-coherent-input experiments.
-    auto ds_upsweep = impl.desc_alloc->allocate(*impl.upsweep.set_layout);
-    if (ds_upsweep == nullptr) { return GpuResidentTree{}; }
-    ds_upsweep->update_buffer(0U, nodes_gpu,        0U, nodes_bytes);
-    ds_upsweep->update_buffer(1U, leaf_parents_gpu, 0U, parent_bytes);
-    ds_upsweep->update_buffer(2U, done_gpu,         0U, done_bytes);
-    ds_upsweep->update_buffer(3U, sorted_pairs_gpu, 0U, pairs_bytes);
-    ds_upsweep->update_buffer(4U, leaf_aabbs_gpu,   0U, aabbs_bytes);
-
-    auto ds_extract = impl.desc_alloc->allocate(*impl.extract_prim_indices.set_layout);
-    if (ds_extract == nullptr) { return GpuResidentTree{}; }
-    ds_extract->update_buffer(0U, sorted_pairs_gpu, 0U, pairs_bytes);
-    ds_extract->update_buffer(1U, prim_indices_gpu, 0U, prim_indices_bytes);
+    const crd::u64 done_bytes = static_cast<crd::u64>(n_int) * sizeof(crd::u32);
 
     // ---- Record + submit ---------------------------------------------------
-    auto* cmd   = impl.cached_cmd.get();
-    auto* fence = impl.cached_fence.get();
-    cmd->reset();
-    fence->reset();
+    auto& rec = ctx.begin();
 
-    cmd->begin();
+    // Init done_gpu (zeros, from pre-zeroed staging) + nodes[0].parent_idx (sentinel). The only GPU transfers.
+    rec.copy(done_staging, done_gpu,  0U, 0U, done_bytes);
+    rec.copy(root_init,    nodes_gpu, 0U, 0U, 4U);
 
-    // Init done_gpu (zeros, from pre-zeroed staging) + nodes[0].parent_idx
-    // (sentinel). These are the only GPU transfers; inputs are already on GPU.
-    cmd->copy_buffer(done_staging, done_gpu,  0U, 0U, done_bytes);
-    cmd->copy_buffer(root_init,    nodes_gpu, 0U, 0U, 4U);
-
-    cmd->buffer_barrier(done_gpu,         crd::rhi::BufferAccess::TransferDst,
-                                            crd::rhi::BufferAccess::ComputeShaderWrite);
-    cmd->buffer_barrier(nodes_gpu,        crd::rhi::BufferAccess::TransferDst,
-                                            crd::rhi::BufferAccess::ComputeShaderWrite);
-    // sorted_pairs_gpu + leaf_aabbs_gpu are assumed to be in ComputeShaderRead
-    // state already (caller's contract; typically just-written by the prior
-    // morton/sort kernels which signal-then-handover). No barrier needed.
+    rec.barrier(done_gpu,  gpu::ComputeAccess::TransferDst, gpu::ComputeAccess::ShaderWrite);
+    rec.barrier(nodes_gpu, gpu::ComputeAccess::TransferDst, gpu::ComputeAccess::ShaderWrite);
+    // sorted_pairs_gpu + leaf_aabbs_gpu are assumed in ShaderRead state already (caller's contract).
 
     // Build kernel.
     {
-        cmd->bind_compute_pipeline(*impl.build.pipeline);
-        crd::rhi::DescriptorSet* sets[] = {ds_build.get()};
-        cmd->bind_compute_descriptor_sets(*impl.build.pipeline_layout, 0U,
-            crd::containers::ConstSpan<crd::rhi::DescriptorSet*>(sets, 1));
         BuildPushConstants pc{};
         pc.n = n;
-        cmd->push_constants(*impl.build.pipeline_layout, crd::rhi::ShaderStage::Compute,
-                            0U, sizeof(pc), &pc);
+        gpu::ComputeBuffer* binds[] = {&sorted_pairs_gpu, &nodes_gpu, &leaf_parents_gpu};
         const crd::u32 groups = (n_int + 255U) / 256U;
-        cmd->dispatch(std::max<crd::u32>(groups, 1U), 1U, 1U);
+        rec.dispatch(*impl.build, crd::containers::ConstSpan<gpu::ComputeBuffer*>(binds, 3), &pc, sizeof(pc), std::max<crd::u32>(groups, 1U), 1U, 1U);
     }
-    cmd->buffer_barrier(nodes_gpu,        crd::rhi::BufferAccess::ComputeShaderWrite,
-                                            crd::rhi::BufferAccess::ComputeShaderRead);
-    cmd->buffer_barrier(leaf_parents_gpu, crd::rhi::BufferAccess::ComputeShaderWrite,
-                                            crd::rhi::BufferAccess::ComputeShaderRead);
+    rec.barrier(nodes_gpu,        gpu::ComputeAccess::ShaderWrite, gpu::ComputeAccess::ShaderRead);
+    rec.barrier(leaf_parents_gpu, gpu::ComputeAccess::ShaderWrite, gpu::ComputeAccess::ShaderRead);
 
     // Regular flat-dispatch carry-register upsweep.
     {
-        cmd->bind_compute_pipeline(*impl.upsweep.pipeline);
-        crd::rhi::DescriptorSet* sets[] = {ds_upsweep.get()};
-        cmd->bind_compute_descriptor_sets(*impl.upsweep.pipeline_layout, 0U,
-            crd::containers::ConstSpan<crd::rhi::DescriptorSet*>(sets, 1));
         UpsweepPushConstants pc{};
         pc.n = n;
-        cmd->push_constants(*impl.upsweep.pipeline_layout, crd::rhi::ShaderStage::Compute,
-                            0U, sizeof(pc), &pc);
+        gpu::ComputeBuffer* binds[] = {&nodes_gpu, &leaf_parents_gpu, &done_gpu, &sorted_pairs_gpu, &leaf_aabbs_gpu};
         const crd::u32 groups = (n + 63U) / 64U;
-        cmd->dispatch(groups, 1U, 1U);
+        rec.dispatch(*impl.upsweep, crd::containers::ConstSpan<gpu::ComputeBuffer*>(binds, 5), &pc, sizeof(pc), groups, 1U, 1U);
     }
-    cmd->buffer_barrier(nodes_gpu, crd::rhi::BufferAccess::ComputeShaderWrite,
-                                     crd::rhi::BufferAccess::ComputeShaderRead);
+    rec.barrier(nodes_gpu, gpu::ComputeAccess::ShaderWrite, gpu::ComputeAccess::ShaderRead);
 
     // Extract prim_indices on GPU (avoids CPU memcpy + transfer of 4 MB).
     {
-        cmd->bind_compute_pipeline(*impl.extract_prim_indices.pipeline);
-        crd::rhi::DescriptorSet* sets[] = {ds_extract.get()};
-        cmd->bind_compute_descriptor_sets(*impl.extract_prim_indices.pipeline_layout, 0U,
-            crd::containers::ConstSpan<crd::rhi::DescriptorSet*>(sets, 1));
         UpsweepPushConstants pc{};
         pc.n = n;
-        cmd->push_constants(*impl.extract_prim_indices.pipeline_layout, crd::rhi::ShaderStage::Compute,
-                            0U, sizeof(pc), &pc);
+        gpu::ComputeBuffer* binds[] = {&sorted_pairs_gpu, &prim_indices_gpu};
         const crd::u32 groups = (n + 63U) / 64U;
-        cmd->dispatch(groups, 1U, 1U);
+        rec.dispatch(*impl.extract_prim_indices, crd::containers::ConstSpan<gpu::ComputeBuffer*>(binds, 2), &pc, sizeof(pc), groups, 1U, 1U);
     }
-    cmd->buffer_barrier(prim_indices_gpu, crd::rhi::BufferAccess::ComputeShaderWrite,
-                                            crd::rhi::BufferAccess::ComputeShaderRead);
+    rec.barrier(prim_indices_gpu, gpu::ComputeAccess::ShaderWrite, gpu::ComputeAccess::ShaderRead);
 
-    cmd->end();
-    device.graphics_queue().submit(*cmd, *fence);
-    fence->wait();
+    ctx.submit_and_wait();
 
     out.nodes           = impl.nodes_gpu.get();
     out.internal_count  = n_int;
-    out.nodes_byte_size = nodes_bytes;
+    out.nodes_byte_size = static_cast<crd::u64>(n_int) * 64U;
     return out;
 }
 
@@ -1010,16 +603,14 @@ LbvhGpuPipeline::dispatch_refit_lbvh(const RefitInputs& inputs) noexcept
     if (inputs.n == 0U) { return out; }
 
     const crd::u32 n = inputs.n;
-    auto& impl   = *m_impl;
-    auto& device = *impl.device;
+    auto& impl = *m_impl;
+    auto& ctx  = *impl.ctx;
 
     out.prim_count             = n;
     out.prim_indices           = impl.prim_indices_gpu.get();
     out.prim_indices_byte_size = static_cast<crd::u64>(n) * sizeof(crd::u32);
 
-    // ---- N=1 singleton: nothing to refit (no internal bounds to recompute);
-    // the tree had no internal nodes after build. Caller's leaf_aabbs is the
-    // entire spatial information — they query it directly via prim_indices[0].
+    // ---- N=1 singleton: nothing to refit -----------------------------------
     if (n == 1U)
     {
         out.nodes           = nullptr;
@@ -1029,11 +620,7 @@ LbvhGpuPipeline::dispatch_refit_lbvh(const RefitInputs& inputs) noexcept
     }
 
     const crd::u32 n_int = n - 1U;
-    const crd::u64 pairs_bytes  = static_cast<crd::u64>(n)     * sizeof(MortonPair<crd::u32>);
-    const crd::u64 aabbs_bytes  = static_cast<crd::u64>(n)     * (6U * sizeof(crd::f32));
-    const crd::u64 nodes_bytes  = static_cast<crd::u64>(n_int) * 64U;
-    const crd::u64 parent_bytes = static_cast<crd::u64>(n)     * sizeof(crd::u32);
-    const crd::u64 done_bytes   = static_cast<crd::u64>(n_int) * sizeof(crd::u32);
+    const crd::u64 done_bytes = static_cast<crd::u64>(n_int) * sizeof(crd::u32);
 
     auto& sorted_pairs_gpu = *inputs.sorted_pairs;
     auto& leaf_aabbs_gpu   = *inputs.leaf_aabbs;
@@ -1042,61 +629,32 @@ LbvhGpuPipeline::dispatch_refit_lbvh(const RefitInputs& inputs) noexcept
     auto& done_staging     = *impl.done_staging;
     auto& done_gpu         = *impl.done_gpu;
 
-    // ---- Descriptor set: upsweep only (5 bindings) -----------------------
-    impl.desc_alloc->begin_frame(0U);
-    auto ds_upsweep = impl.desc_alloc->allocate(*impl.upsweep.set_layout);
-    if (ds_upsweep == nullptr) { return GpuResidentTree{}; }
-    ds_upsweep->update_buffer(0U, nodes_gpu,        0U, nodes_bytes);
-    ds_upsweep->update_buffer(1U, leaf_parents_gpu, 0U, parent_bytes);
-    ds_upsweep->update_buffer(2U, done_gpu,         0U, done_bytes);
-    ds_upsweep->update_buffer(3U, sorted_pairs_gpu, 0U, pairs_bytes);
-    ds_upsweep->update_buffer(4U, leaf_aabbs_gpu,   0U, aabbs_bytes);
+    // ---- Record + submit ---------------------------------------------------
+    auto& rec = ctx.begin();
 
-    // ---- Record + submit -------------------------------------------------
-    auto* cmd   = impl.cached_cmd.get();
-    auto* fence = impl.cached_fence.get();
-    cmd->reset();
-    fence->reset();
+    // Reset done_gpu to zero (from pre-zeroed staging). nodes_gpu topology is preserved from the build; only its bounds
+    // slots will be overwritten by the upsweep's `store_slot` calls.
+    rec.copy(done_staging, done_gpu, 0U, 0U, done_bytes);
 
-    cmd->begin();
+    rec.barrier(done_gpu,  gpu::ComputeAccess::TransferDst, gpu::ComputeAccess::ShaderWrite);
+    // nodes_gpu: prior call left it in ShaderRead (or TransferSrc if readback'd). Need ShaderWrite for the new bounds.
+    rec.barrier(nodes_gpu, gpu::ComputeAccess::ShaderRead, gpu::ComputeAccess::ShaderWrite);
 
-    // Reset done_gpu to zero (from pre-zeroed staging). nodes_gpu topology
-    // is preserved from the build; only its bounds slots will be overwritten
-    // by the upsweep's `store_slot` calls.
-    cmd->copy_buffer(done_staging, done_gpu, 0U, 0U, done_bytes);
-
-    cmd->buffer_barrier(done_gpu,  crd::rhi::BufferAccess::TransferDst,
-                                     crd::rhi::BufferAccess::ComputeShaderWrite);
-    // nodes_gpu transition: prior call left it in ComputeShaderRead state
-    // (or TransferSrc if the caller readback'd). Need ComputeShaderWrite
-    // for the upsweep kernel to publish new bounds.
-    cmd->buffer_barrier(nodes_gpu, crd::rhi::BufferAccess::ComputeShaderRead,
-                                     crd::rhi::BufferAccess::ComputeShaderWrite);
-
-    // Upsweep kernel — carry-register walks with NEW leaf AABBs. Topology
-    // (parent_idx, left_idx, right_idx, leaf_parents) is untouched.
+    // Upsweep kernel — carry-register walks with NEW leaf AABBs. Topology untouched.
     {
-        cmd->bind_compute_pipeline(*impl.upsweep.pipeline);
-        crd::rhi::DescriptorSet* sets[] = {ds_upsweep.get()};
-        cmd->bind_compute_descriptor_sets(*impl.upsweep.pipeline_layout, 0U,
-            crd::containers::ConstSpan<crd::rhi::DescriptorSet*>(sets, 1));
         UpsweepPushConstants pc{};
         pc.n = n;
-        cmd->push_constants(*impl.upsweep.pipeline_layout, crd::rhi::ShaderStage::Compute,
-                            0U, sizeof(pc), &pc);
+        gpu::ComputeBuffer* binds[] = {&nodes_gpu, &leaf_parents_gpu, &done_gpu, &sorted_pairs_gpu, &leaf_aabbs_gpu};
         const crd::u32 groups = (n + 63U) / 64U;
-        cmd->dispatch(groups, 1U, 1U);
+        rec.dispatch(*impl.upsweep, crd::containers::ConstSpan<gpu::ComputeBuffer*>(binds, 5), &pc, sizeof(pc), groups, 1U, 1U);
     }
-    cmd->buffer_barrier(nodes_gpu, crd::rhi::BufferAccess::ComputeShaderWrite,
-                                     crd::rhi::BufferAccess::ComputeShaderRead);
+    rec.barrier(nodes_gpu, gpu::ComputeAccess::ShaderWrite, gpu::ComputeAccess::ShaderRead);
 
-    cmd->end();
-    device.graphics_queue().submit(*cmd, *fence);
-    fence->wait();
+    ctx.submit_and_wait();
 
     out.nodes           = impl.nodes_gpu.get();
     out.internal_count  = n_int;
-    out.nodes_byte_size = nodes_bytes;
+    out.nodes_byte_size = static_cast<crd::u64>(n_int) * 64U;
     return out;
 }
 

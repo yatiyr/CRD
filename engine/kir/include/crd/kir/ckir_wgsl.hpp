@@ -128,6 +128,60 @@ inline bool emit_contract_wgsl(const KGraph& g, int output, GlslKernel& out)
     return true;
 }
 
+// T2 FAST GEMM (DetTier::Fast) WGSL/WebGPU — the ported crush schedule (64×64 block, 4×4 microtile, TRANSPOSED-A
+// var<workgroup>, `fma()`). Group-per-tile. Mirrors emit_contract_fast_glsl; WebGPU inherits the crush schedule.
+inline bool emit_contract_fast_wgsl(const KGraph& g, int output, GlslKernel& out)
+{
+    const KNode& c = g.node(output);
+    if (c.op != KOp::Contract || g.node(c.a).op != KOp::Input || g.node(c.b).op != KOp::Input) { return false; }
+    out.n_inputs      = 2;
+    out.input_iidx[0] = g.node(c.a).iidx;
+    out.input_iidx[1] = g.node(c.b).iidx;
+    crd::containers::String& s = out.source;
+    s.clear();
+    s.append("@group(0) @binding(0) var<storage, read> A : array<f32>;\n@group(0) @binding(1) var<storage, read> Bm : array<f32>;\n@group(0) @binding(2) var<storage, read_write> C : array<f32>;\n");
+    wgsl_detail::emit_uniform(s, 3);
+    s.append("var<workgroup> As : array<f32, 512>;\n"); // TRANSPOSED [k][m]
+    s.append("var<workgroup> Bs : array<f32, 512>;\n");
+    s.append("@compute @workgroup_size(256)\nfn cs_main(@builtin(workgroup_id) wid : vec3<u32>, @builtin(local_invocation_id) lid : vec3<u32>) {\n");
+    s.append("  let K = pc.d1; let N = pc.d2;\n");
+    s.append("  let nbc = N / 64u; let bid = wid.x;\n");
+    s.append("  let blockRow = (bid / nbc) * 64u; let blockCol = (bid % nbc) * 64u;\n");
+    s.append("  let tid = lid.x; let tr = tid / 16u; let tc = tid % 16u;\n");
+    s.append("  let arow = blockRow + tr * 4u; let acol = blockCol + tc * 4u;\n");
+    const char* d[4] = {"0", "1", "2", "3"};
+    for (int i = 0; i < 4; ++i)
+    {
+        for (int j = 0; j < 4; ++j) { s.append("  var a"); s.append(d[i]); s.append(d[j]); s.append(" : f32 = 0.0;\n"); }
+    }
+    s.append("  for (var k0 : u32 = 0u; k0 < K; k0 = k0 + 8u) {\n");
+    s.append("    for (var t : u32 = tid; t < 512u; t = t + 256u) { let r = t / 8u; let cc = t % 8u; As[cc * 64u + r] = A[(blockRow + r) * K + (k0 + cc)]; }\n");
+    s.append("    for (var t : u32 = tid; t < 512u; t = t + 256u) { let r = t / 64u; let cc = t % 64u; Bs[r * 64u + cc] = Bm[(k0 + r) * N + (blockCol + cc)]; }\n");
+    s.append("    workgroupBarrier();\n");
+    s.append("    for (var kk : u32 = 0u; kk < 8u; kk = kk + 1u) {\n");
+    s.append("      let ar0 = As[kk*64u+tr*4u+0u]; let ar1 = As[kk*64u+tr*4u+1u]; let ar2 = As[kk*64u+tr*4u+2u]; let ar3 = As[kk*64u+tr*4u+3u];\n");
+    s.append("      let br0 = Bs[kk*64u+tc*4u+0u]; let br1 = Bs[kk*64u+tc*4u+1u]; let br2 = Bs[kk*64u+tc*4u+2u]; let br3 = Bs[kk*64u+tc*4u+3u];\n");
+    const char* ar[4] = {"ar0", "ar1", "ar2", "ar3"};
+    const char* br[4] = {"br0", "br1", "br2", "br3"};
+    for (int i = 0; i < 4; ++i)
+    {
+        for (int j = 0; j < 4; ++j)
+        {
+            s.append("      a"); s.append(d[i]); s.append(d[j]); s.append(" = fma("); s.append(ar[i]); s.append(", "); s.append(br[j]); s.append(", a"); s.append(d[i]); s.append(d[j]); s.append(");\n");
+        }
+    }
+    s.append("    }\n    workgroupBarrier();\n  }\n");
+    for (int i = 0; i < 4; ++i)
+    {
+        for (int j = 0; j < 4; ++j)
+        {
+            s.append("  C[(arow + "); s.append(d[i]); s.append("u) * N + (acol + "); s.append(d[j]); s.append("u)] = a"); s.append(d[i]); s.append(d[j]); s.append(";\n");
+        }
+    }
+    s.append("}\n");
+    return true;
+}
+
 // Reduce WGSL kernel (trailing-contiguous; dims d0=nout, d1=redsize).
 inline bool emit_reduce_wgsl(const KGraph& g, int output, GlslKernel& out)
 {

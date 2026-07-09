@@ -50,6 +50,20 @@ TEST_CASE("v17-d: MSL emitter produces well-formed compute kernels", "[kir][msl]
         CHECK(has(k, "device const float* Bm [[buffer(1)]]"));
         CHECK(has(k, "acc = acc + prod"));
     }
+    SECTION("fast matmul (T2 tiled, transposed-A, FMA)")
+    {
+        kir::KGraph     g(&alloc);
+        const int       a = g.input(kir::make_shape({128, 64}), kir::DType::F32);
+        const int       b = g.input(kir::make_shape({64, 128}), kir::DType::F32);
+        kir::GlslKernel k(&alloc);
+        REQUIRE(emit_contract_fast_msl(g, g.contract(a, b, kir::DetTier::Fast), k));
+        CHECK(k.n_inputs == 2);
+        CHECK(has(k, "kernel void ckir"));
+        CHECK(has(k, "threadgroup float As[512]"));           // transposed-A shared tile
+        CHECK(has(k, "threadgroup_position_in_grid"));        // group-per-tile dispatch
+        CHECK(has(k, "threadgroup_barrier(mem_flags::mem_threadgroup)"));
+        CHECK(has(k, "fma("));                                // FMA (fast tier)
+    }
     SECTION("reduce")
     {
         kir::KGraph     g(&alloc);

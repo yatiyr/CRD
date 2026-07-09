@@ -103,6 +103,37 @@ TEST_CASE("v17-g: WebGPU FUSES GEMM+bias+SiLU into one kernel, correct vs the or
     CHECK(maxrel < 2e-3F);
 }
 
+TEST_CASE("v17-h: WebGPU T2 FAST tiled GEMM (FMA, transposed-A) matches the oracle within tolerance + deterministic", "[kir][webgpu][gpu]")
+{
+    crd::memory::TlsfAllocator alloc(64 << 20);
+    kir::KirBackendWebGpu      wg(&alloc);
+    if (!wg.valid()) { WARN("no WebGPU adapter available; skipping"); return; }
+    kir::KirBackendCpu cpu(&alloc);
+
+    constexpr int mm = 128; // 64x64x8-tileable => routes to emit_contract_fast_wgsl (the ported crush kernel)
+    constexpr int kk = 64;
+    constexpr int nn = 128;
+    kir::KGraph   g(&alloc);
+    const int     a = g.input(kir::make_shape({mm, kk}), kir::DType::F32);
+    const int     b = g.input(kir::make_shape({kk, nn}), kir::DType::F32);
+    const int     c = g.contract(a, b, kir::DetTier::Fast);
+    float         av[mm * kk];
+    float         bv[kk * nn];
+    fill(av, mm * kk, 0.2F);
+    fill(bv, kk * nn, -0.15F);
+    const float* inputs[] = {av, bv};
+    float        gpu_out[mm * nn];
+    float        cpu_out[mm * nn];
+    REQUIRE(wg.run(g, c, inputs, 2, gpu_out));
+    REQUIRE(cpu.run(g, c, inputs, 2, cpu_out));
+    float maxrel = 0.0F; // FMA tier ⇒ relative-tolerance
+    for (int i = 0; i < mm * nn; ++i) { float df = gpu_out[i] - cpu_out[i]; if (df < 0.0F) { df = -df; } float cv = cpu_out[i] < 0.0F ? -cpu_out[i] : cpu_out[i]; float rd = df / (cv + 1e-3F); if (rd > maxrel) { maxrel = rd; } }
+    CHECK(maxrel < 1e-4F);
+    float d2[mm * nn]; // T2 determinism: run-to-run bit-identical
+    REQUIRE(wg.run(g, c, inputs, 2, d2));
+    for (int i = 0; i < mm * nn; ++i) { CHECK(gpu_out[i] == d2[i]); }
+}
+
 TEST_CASE("v17-d: WebGPU matmul + reduce match the CPU oracle (ULP-tolerant)", "[kir][webgpu][gpu]")
 {
     crd::memory::TlsfAllocator alloc(64 << 20);

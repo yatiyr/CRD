@@ -62,9 +62,9 @@
 #include <cstdint>
 #include <memory>
 
-namespace crd::rhi
+namespace crd::gpu
 {
-class Device;
+class IComputeContext;
 }
 
 namespace crd::geometry::bvh_gpu
@@ -123,7 +123,7 @@ public:
     //   - radix_sort_histogram.comp.spv
     //   - radix_sort_scan.comp.spv
     //   - radix_sort_scatter.comp.spv
-    MortonRadixGpuPipeline(crd::rhi::Device& device,
+    MortonRadixGpuPipeline(crd::gpu::IComputeContext& ctx,
                             crd::containers::StringView shader_dir) noexcept;
 
     MortonRadixGpuPipeline(const MortonRadixGpuPipeline&)            = delete;

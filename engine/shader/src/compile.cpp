@@ -23,6 +23,7 @@ struct ShadercApi
     using OptionsSetTargetEnv = void (*)(shaderc_compile_options_t, shaderc_target_env,
                                          shaderc_env_version);
     using OptionsSetTargetSpv = void (*)(shaderc_compile_options_t, shaderc_spirv_version);
+    using OptionsSetOptLevel  = void (*)(shaderc_compile_options_t, shaderc_optimization_level);
     using CompileIntoSpv      = shaderc_compilation_result_t (*)(
         shaderc_compiler_t, const char*, size_t, shaderc_shader_kind,
         const char*, const char*, const shaderc_compile_options_t);
@@ -38,6 +39,7 @@ struct ShadercApi
     OptionsRelease      options_release      = nullptr;
     OptionsSetTargetEnv options_set_target_env = nullptr;
     OptionsSetTargetSpv options_set_target_spv = nullptr;
+    OptionsSetOptLevel  options_set_opt_level  = nullptr; // optional: spirv-opt performance passes
     CompileIntoSpv      compile_into_spv      = nullptr;
     ResultRelease       result_release        = nullptr;
     ResultStatus        result_status         = nullptr;
@@ -139,6 +141,8 @@ public:
             "shaderc_compile_options_set_target_env");
         m_api.options_set_target_spv = m_lib.resolve_as<ShadercApi::OptionsSetTargetSpv>(
             "shaderc_compile_options_set_target_spirv");
+        m_api.options_set_opt_level = m_lib.resolve_as<ShadercApi::OptionsSetOptLevel>(
+            "shaderc_compile_options_set_optimization_level"); // optional (older shaderc may lack it)
         m_api.compile_into_spv      = m_lib.resolve_as<ShadercApi::CompileIntoSpv>(
             "shaderc_compile_into_spv");
         m_api.result_release        = m_lib.resolve_as<ShadercApi::ResultRelease>(
@@ -198,6 +202,10 @@ public:
         const shaderc_compile_options_t opts = m_api.options_initialize();
         m_api.options_set_target_env(opts, shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_3);
         m_api.options_set_target_spv(opts, shaderc_spirv_version_1_6);
+        // Run shaderc's spirv-opt PERFORMANCE passes — WITHOUT this shaderc defaults to optimization_level_zero and
+        // ships UNOPTIMIZED SPIR-V (redundant loads, no code motion / register coalescing) ⇒ the driver JITs poor SASS.
+        // This was the ~30× gap between our GLSL GEMM and the identical CUDA schedule (nsys: SM-issue 1.5%). (v17-h)
+        if (m_api.options_set_opt_level != nullptr) { m_api.options_set_opt_level(opts, shaderc_optimization_level_performance); }
 
         // Null-terminate the name for C API.
         crd::containers::String name_str(name.data(), name.size(), a);

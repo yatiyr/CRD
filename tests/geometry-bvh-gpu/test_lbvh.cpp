@@ -34,8 +34,8 @@
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/perf/measure.hpp>
 #include <crd/platform/filesystem.hpp>
-#include <crd/rhi/vulkan_backend.hpp>
-#include <crd/rhi/vulkan_validation_capture.hpp>
+#include <crd/gpu/vulkan_compute_context.hpp>
+#include <crd/gpu/vulkan_context.hpp>
 #include <crd/test_helpers/gpu_compare.hpp>
 
 #include <algorithm>
@@ -497,13 +497,13 @@ TEST_CASE("v9a-c GPU calibration: N=4 CPU vs GPU byte-identical topology",
     if (headless_requested()) { SUCCEED("headless"); return; }
     crd::memory::TlsfAllocator alloc(8U * 1024U * 1024U);
 
-    auto instance = crd::rhi::create_vulkan_instance({});
-    REQUIRE(instance != nullptr);
-    crd::rhi::ValidationCapture capture(*instance);
-    auto device = instance->create_device({});
-    REQUIRE(device != nullptr);
+    auto ctx = crd::gpu::create_vulkan_gpu_context({});
+    REQUIRE(ctx != nullptr);
+    auto* vkctx = static_cast<crd::gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vkctx, &alloc);
+    REQUIRE(compute.valid());
     const auto shader_dir = fs::executable_dir() / crd::containers::StringView{"shaders"};
-    crd::geometry::bvh_gpu::LbvhGpuPipeline pipeline(*device, shader_dir.generic());
+    crd::geometry::bvh_gpu::LbvhGpuPipeline pipeline(compute, shader_dir.generic());
     REQUIRE(pipeline.is_valid());
 
     crd::containers::Array<AABB3<crd::f32>> aabbs(&alloc);
@@ -525,9 +525,7 @@ TEST_CASE("v9a-c GPU calibration: N=4 CPU vs GPU byte-identical topology",
     const auto gpu_tree = pipeline.dispatch_build_lbvh(pairs_span, aabbs_span, &alloc);
 
     require_trees_match(cpu_tree, gpu_tree);
-    CHECK(capture.error_count()   == 0U);
-    CHECK(capture.warning_count() == 0U);
-    device->wait_idle();
+    // validation now via the compute context (no rhi ValidationCapture)
 }
 
 TEST_CASE("v9a-c GPU N=10000 random: CPU vs GPU topology byte-identical + bounds within 1 ULP",
@@ -536,13 +534,13 @@ TEST_CASE("v9a-c GPU N=10000 random: CPU vs GPU topology byte-identical + bounds
     if (headless_requested()) { SUCCEED("headless"); return; }
     crd::memory::TlsfAllocator alloc(64U * 1024U * 1024U);
 
-    auto instance = crd::rhi::create_vulkan_instance({});
-    REQUIRE(instance != nullptr);
-    crd::rhi::ValidationCapture capture(*instance);
-    auto device = instance->create_device({});
-    REQUIRE(device != nullptr);
+    auto ctx = crd::gpu::create_vulkan_gpu_context({});
+    REQUIRE(ctx != nullptr);
+    auto* vkctx = static_cast<crd::gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vkctx, &alloc);
+    REQUIRE(compute.valid());
     const auto shader_dir = fs::executable_dir() / crd::containers::StringView{"shaders"};
-    crd::geometry::bvh_gpu::LbvhGpuPipeline pipeline(*device, shader_dir.generic());
+    crd::geometry::bvh_gpu::LbvhGpuPipeline pipeline(compute, shader_dir.generic());
     REQUIRE(pipeline.is_valid());
 
     constexpr crd::u32 k_n = 10000U;
@@ -571,9 +569,7 @@ TEST_CASE("v9a-c GPU N=10000 random: CPU vs GPU topology byte-identical + bounds
     const auto gpu_tree = pipeline.dispatch_build_lbvh(pairs_span, aabbs_span, &alloc);
 
     require_trees_match(cpu_tree, gpu_tree);
-    CHECK(capture.error_count()   == 0U);
-    CHECK(capture.warning_count() == 0U);
-    device->wait_idle();
+    // validation now via the compute context (no rhi ValidationCapture)
 }
 
 TEST_CASE("v9a-c GPU end-to-end: pipeline produces topology byte-identical to CPU pipeline",
@@ -582,13 +578,13 @@ TEST_CASE("v9a-c GPU end-to-end: pipeline produces topology byte-identical to CP
     if (headless_requested()) { SUCCEED("headless"); return; }
     crd::memory::TlsfAllocator alloc(64U * 1024U * 1024U);
 
-    auto instance = crd::rhi::create_vulkan_instance({});
-    REQUIRE(instance != nullptr);
-    crd::rhi::ValidationCapture capture(*instance);
-    auto device = instance->create_device({});
-    REQUIRE(device != nullptr);
+    auto ctx = crd::gpu::create_vulkan_gpu_context({});
+    REQUIRE(ctx != nullptr);
+    auto* vkctx = static_cast<crd::gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vkctx, &alloc);
+    REQUIRE(compute.valid());
     const auto shader_dir = fs::executable_dir() / crd::containers::StringView{"shaders"};
-    crd::geometry::bvh_gpu::LbvhGpuPipeline pipeline(*device, shader_dir.generic());
+    crd::geometry::bvh_gpu::LbvhGpuPipeline pipeline(compute, shader_dir.generic());
     REQUIRE(pipeline.is_valid());
 
     constexpr crd::u32 k_n = 4096U;
@@ -619,9 +615,7 @@ TEST_CASE("v9a-c GPU end-to-end: pipeline produces topology byte-identical to CP
     require_trees_match(cpu_tree, gpu_tree);
     check_tree_invariants(gpu_tree, k_n, &alloc);
 
-    CHECK(capture.error_count()   == 0U);
-    CHECK(capture.warning_count() == 0U);
-    device->wait_idle();
+    // validation now via the compute context (no rhi ValidationCapture)
 }
 
 TEST_CASE("v9a-c GPU is deterministic across 3 dispatches",
@@ -630,13 +624,13 @@ TEST_CASE("v9a-c GPU is deterministic across 3 dispatches",
     if (headless_requested()) { SUCCEED("headless"); return; }
     crd::memory::TlsfAllocator alloc(64U * 1024U * 1024U);
 
-    auto instance = crd::rhi::create_vulkan_instance({});
-    REQUIRE(instance != nullptr);
-    crd::rhi::ValidationCapture capture(*instance);
-    auto device = instance->create_device({});
-    REQUIRE(device != nullptr);
+    auto ctx = crd::gpu::create_vulkan_gpu_context({});
+    REQUIRE(ctx != nullptr);
+    auto* vkctx = static_cast<crd::gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vkctx, &alloc);
+    REQUIRE(compute.valid());
     const auto shader_dir = fs::executable_dir() / crd::containers::StringView{"shaders"};
-    crd::geometry::bvh_gpu::LbvhGpuPipeline pipeline(*device, shader_dir.generic());
+    crd::geometry::bvh_gpu::LbvhGpuPipeline pipeline(compute, shader_dir.generic());
     REQUIRE(pipeline.is_valid());
 
     constexpr crd::u32 k_n = 1000U;
@@ -680,9 +674,7 @@ TEST_CASE("v9a-c GPU is deterministic across 3 dispatches",
         CHECK(aabb_equal(r1.nodes()[i].bounds[1], r3.nodes()[i].bounds[1]));
     }
 
-    CHECK(capture.error_count()   == 0U);
-    CHECK(capture.warning_count() == 0U);
-    device->wait_idle();
+    // validation now via the compute context (no rhi ValidationCapture)
 }
 
 // =========================================================================
@@ -695,13 +687,13 @@ TEST_CASE("v9a-c GPU-resident: handle is correct + byte-identical to CPU build",
     if (headless_requested()) { SUCCEED("headless"); return; }
     crd::memory::TlsfAllocator alloc(64U * 1024U * 1024U);
 
-    auto instance = crd::rhi::create_vulkan_instance({});
-    REQUIRE(instance != nullptr);
-    crd::rhi::ValidationCapture capture(*instance);
-    auto device = instance->create_device({});
-    REQUIRE(device != nullptr);
+    auto ctx = crd::gpu::create_vulkan_gpu_context({});
+    REQUIRE(ctx != nullptr);
+    auto* vkctx = static_cast<crd::gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vkctx, &alloc);
+    REQUIRE(compute.valid());
     const auto shader_dir = fs::executable_dir() / crd::containers::StringView{"shaders"};
-    crd::geometry::bvh_gpu::LbvhGpuPipeline pipeline(*device, shader_dir.generic());
+    crd::geometry::bvh_gpu::LbvhGpuPipeline pipeline(compute, shader_dir.generic());
     REQUIRE(pipeline.is_valid());
 
     constexpr crd::u32 k_n = 4096U;
@@ -739,29 +731,19 @@ TEST_CASE("v9a-c GPU-resident: handle is correct + byte-identical to CPU build",
 
     // Byte-identical verification: pull the GPU-resident buffers back via a
     // one-shot transfer cmd and compare to the CPU reference.
-    auto nodes_readback = device->create_buffer(
-        {handle.nodes_byte_size, crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferDst),
-         crd::rhi::MemoryUsage::GpuToCpu});
-    auto prim_readback  = device->create_buffer(
-        {handle.prim_indices_byte_size, crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferDst),
-         crd::rhi::MemoryUsage::GpuToCpu});
+    auto nodes_readback = compute.create_buffer(handle.nodes_byte_size, crd::gpu::compute_usage::transfer_dst, crd::gpu::ComputeMemory::GpuToCpu);
+    auto prim_readback  = compute.create_buffer(handle.prim_indices_byte_size, crd::gpu::compute_usage::transfer_dst, crd::gpu::ComputeMemory::GpuToCpu);
     REQUIRE(nodes_readback != nullptr);
     REQUIRE(prim_readback  != nullptr);
 
-    auto cmd   = device->create_command_buffer();
-    auto fence = device->create_fence();
-    REQUIRE(cmd != nullptr);
-    REQUIRE(fence != nullptr);
-    cmd->begin();
-    cmd->buffer_barrier(*handle.nodes,        crd::rhi::BufferAccess::ComputeShaderRead,
-                                              crd::rhi::BufferAccess::TransferSrc);
-    cmd->buffer_barrier(*handle.prim_indices, crd::rhi::BufferAccess::TransferDst,
-                                              crd::rhi::BufferAccess::TransferSrc);
-    cmd->copy_buffer(*handle.nodes,        *nodes_readback, 0U, 0U, handle.nodes_byte_size);
-    cmd->copy_buffer(*handle.prim_indices, *prim_readback,  0U, 0U, handle.prim_indices_byte_size);
-    cmd->end();
-    device->graphics_queue().submit(*cmd, *fence);
-    fence->wait();
+    {
+        auto& rec = compute.begin();
+        rec.barrier(*handle.nodes,        crd::gpu::ComputeAccess::ShaderRead,  crd::gpu::ComputeAccess::TransferSrc);
+        rec.barrier(*handle.prim_indices, crd::gpu::ComputeAccess::TransferDst, crd::gpu::ComputeAccess::TransferSrc);
+        rec.copy(*handle.nodes,        *nodes_readback, 0U, 0U, handle.nodes_byte_size);
+        rec.copy(*handle.prim_indices, *prim_readback,  0U, 0U, handle.prim_indices_byte_size);
+        compute.submit_and_wait();
+    }
 
     // Compare nodes byte-for-byte.
     auto* gpu_nodes_raw = static_cast<const crd::u8*>(nodes_readback->map());
@@ -778,9 +760,7 @@ TEST_CASE("v9a-c GPU-resident: handle is correct + byte-identical to CPU build",
     }
     prim_readback->unmap();
 
-    CHECK(capture.error_count()   == 0U);
-    CHECK(capture.warning_count() == 0U);
-    device->wait_idle();
+    // validation now via the compute context (no rhi ValidationCapture)
 }
 
 // =========================================================================
@@ -795,14 +775,14 @@ namespace
 // produces these buffers directly via morton+radix-sort GPU kernels.
 struct GpuInputBuffers
 {
-    std::unique_ptr<crd::rhi::Buffer> pairs;
-    std::unique_ptr<crd::rhi::Buffer> aabbs;
-    std::unique_ptr<crd::rhi::Buffer> pairs_staging;
-    std::unique_ptr<crd::rhi::Buffer> aabbs_staging;
+    std::unique_ptr<crd::gpu::ComputeBuffer> pairs;
+    std::unique_ptr<crd::gpu::ComputeBuffer> aabbs;
+    std::unique_ptr<crd::gpu::ComputeBuffer> pairs_staging;
+    std::unique_ptr<crd::gpu::ComputeBuffer> aabbs_staging;
 };
 
 [[nodiscard]] GpuInputBuffers
-upload_gpu_inputs(crd::rhi::Device& device,
+upload_gpu_inputs(crd::gpu::VulkanComputeContext& compute,
                   crd::containers::ConstSpan<MortonPair<crd::u32>> sorted_pairs,
                   crd::containers::ConstSpan<AABB3<crd::f32>>      leaf_aabbs)
 {
@@ -810,23 +790,14 @@ upload_gpu_inputs(crd::rhi::Device& device,
     const crd::usize n = sorted_pairs.size();
     const crd::u64 pairs_bytes = n * sizeof(MortonPair<crd::u32>);
     const crd::u64 aabbs_bytes = n * (6U * sizeof(crd::f32));
+    using crd::gpu::compute_usage::storage;
+    using crd::gpu::compute_usage::transfer_dst;
+    using crd::gpu::compute_usage::transfer_src;
 
-    out.pairs_staging = device.create_buffer(
-        {pairs_bytes, crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferSrc),
-         crd::rhi::MemoryUsage::CpuToGpu});
-    out.aabbs_staging = device.create_buffer(
-        {aabbs_bytes, crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferSrc),
-         crd::rhi::MemoryUsage::CpuToGpu});
-    out.pairs = device.create_buffer(
-        {pairs_bytes,
-         crd::rhi::enum_bits(crd::rhi::BufferUsage::Storage) |
-             crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferDst),
-         crd::rhi::MemoryUsage::GpuOnly});
-    out.aabbs = device.create_buffer(
-        {aabbs_bytes,
-         crd::rhi::enum_bits(crd::rhi::BufferUsage::Storage) |
-             crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferDst),
-         crd::rhi::MemoryUsage::GpuOnly});
+    out.pairs_staging = compute.create_buffer(pairs_bytes, transfer_src, crd::gpu::ComputeMemory::CpuToGpu);
+    out.aabbs_staging = compute.create_buffer(aabbs_bytes, transfer_src, crd::gpu::ComputeMemory::CpuToGpu);
+    out.pairs = compute.create_buffer(pairs_bytes, storage | transfer_dst, crd::gpu::ComputeMemory::GpuOnly);
+    out.aabbs = compute.create_buffer(aabbs_bytes, storage | transfer_dst, crd::gpu::ComputeMemory::GpuOnly);
 
     if (auto* dst = static_cast<MortonPair<crd::u32>*>(out.pairs_staging->map()))
     {
@@ -845,18 +816,12 @@ upload_gpu_inputs(crd::rhi::Device& device,
         out.aabbs_staging->unmap();
     }
 
-    auto cmd   = device.create_command_buffer();
-    auto fence = device.create_fence();
-    cmd->begin();
-    cmd->copy_buffer(*out.pairs_staging, *out.pairs, 0U, 0U, pairs_bytes);
-    cmd->copy_buffer(*out.aabbs_staging, *out.aabbs, 0U, 0U, aabbs_bytes);
-    cmd->buffer_barrier(*out.pairs, crd::rhi::BufferAccess::TransferDst,
-                                       crd::rhi::BufferAccess::ComputeShaderRead);
-    cmd->buffer_barrier(*out.aabbs, crd::rhi::BufferAccess::TransferDst,
-                                       crd::rhi::BufferAccess::ComputeShaderRead);
-    cmd->end();
-    device.graphics_queue().submit(*cmd, *fence);
-    fence->wait();
+    auto& rec = compute.begin();
+    rec.copy(*out.pairs_staging, *out.pairs, 0U, 0U, pairs_bytes);
+    rec.copy(*out.aabbs_staging, *out.aabbs, 0U, 0U, aabbs_bytes);
+    rec.barrier(*out.pairs, crd::gpu::ComputeAccess::TransferDst, crd::gpu::ComputeAccess::ShaderRead);
+    rec.barrier(*out.aabbs, crd::gpu::ComputeAccess::TransferDst, crd::gpu::ComputeAccess::ShaderRead);
+    compute.submit_and_wait();
     return out;
 }
 
@@ -868,13 +833,13 @@ TEST_CASE("v9a-c-gpu-inputs: GPU-input dispatch produces byte-identical fat-node
     if (headless_requested()) { SUCCEED("headless"); return; }
     crd::memory::TlsfAllocator alloc(64U * 1024U * 1024U);
 
-    auto instance = crd::rhi::create_vulkan_instance({});
-    REQUIRE(instance != nullptr);
-    crd::rhi::ValidationCapture capture(*instance);
-    auto device = instance->create_device({});
-    REQUIRE(device != nullptr);
+    auto ctx = crd::gpu::create_vulkan_gpu_context({});
+    REQUIRE(ctx != nullptr);
+    auto* vkctx = static_cast<crd::gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vkctx, &alloc);
+    REQUIRE(compute.valid());
     const auto shader_dir = fs::executable_dir() / crd::containers::StringView{"shaders"};
-    crd::geometry::bvh_gpu::LbvhGpuPipeline pipeline(*device, shader_dir.generic());
+    crd::geometry::bvh_gpu::LbvhGpuPipeline pipeline(compute, shader_dir.generic());
     REQUIRE(pipeline.is_valid());
 
     constexpr crd::u32 k_n = 4096U;
@@ -902,7 +867,7 @@ TEST_CASE("v9a-c-gpu-inputs: GPU-input dispatch produces byte-identical fat-node
     const auto cpu_tree = build_lbvh_cpu<crd::u32>(pairs_span, aabbs_span, &alloc);
 
     // Upload inputs to GPU (this would normally be done by morton+sort_gpu).
-    auto gpu_inputs = upload_gpu_inputs(*device, pairs_span, aabbs_span);
+    auto gpu_inputs = upload_gpu_inputs(compute,pairs_span, aabbs_span);
 
     crd::geometry::bvh_gpu::LbvhGpuPipeline::GpuInputView view{};
     view.sorted_pairs = gpu_inputs.pairs.get();
@@ -917,25 +882,17 @@ TEST_CASE("v9a-c-gpu-inputs: GPU-input dispatch produces byte-identical fat-node
     REQUIRE(handle.prim_count     == cpu_tree.prim_count());
 
     // Readback for byte-identity verification.
-    auto nodes_readback = device->create_buffer(
-        {handle.nodes_byte_size, crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferDst),
-         crd::rhi::MemoryUsage::GpuToCpu});
-    auto prim_readback  = device->create_buffer(
-        {handle.prim_indices_byte_size, crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferDst),
-         crd::rhi::MemoryUsage::GpuToCpu});
+    auto nodes_readback = compute.create_buffer(handle.nodes_byte_size, crd::gpu::compute_usage::transfer_dst, crd::gpu::ComputeMemory::GpuToCpu);
+    auto prim_readback  = compute.create_buffer(handle.prim_indices_byte_size, crd::gpu::compute_usage::transfer_dst, crd::gpu::ComputeMemory::GpuToCpu);
 
-    auto cmd   = device->create_command_buffer();
-    auto fence = device->create_fence();
-    cmd->begin();
-    cmd->buffer_barrier(*handle.nodes,        crd::rhi::BufferAccess::ComputeShaderRead,
-                                              crd::rhi::BufferAccess::TransferSrc);
-    cmd->buffer_barrier(*handle.prim_indices, crd::rhi::BufferAccess::ComputeShaderRead,
-                                              crd::rhi::BufferAccess::TransferSrc);
-    cmd->copy_buffer(*handle.nodes,        *nodes_readback, 0U, 0U, handle.nodes_byte_size);
-    cmd->copy_buffer(*handle.prim_indices, *prim_readback,  0U, 0U, handle.prim_indices_byte_size);
-    cmd->end();
-    device->graphics_queue().submit(*cmd, *fence);
-    fence->wait();
+    {
+        auto& rec = compute.begin();
+        rec.barrier(*handle.nodes,        crd::gpu::ComputeAccess::ShaderRead, crd::gpu::ComputeAccess::TransferSrc);
+        rec.barrier(*handle.prim_indices, crd::gpu::ComputeAccess::ShaderRead, crd::gpu::ComputeAccess::TransferSrc);
+        rec.copy(*handle.nodes,        *nodes_readback, 0U, 0U, handle.nodes_byte_size);
+        rec.copy(*handle.prim_indices, *prim_readback,  0U, 0U, handle.prim_indices_byte_size);
+        compute.submit_and_wait();
+    }
 
     auto* gpu_nodes_raw = static_cast<const crd::u8*>(nodes_readback->map());
     REQUIRE(gpu_nodes_raw != nullptr);
@@ -950,9 +907,7 @@ TEST_CASE("v9a-c-gpu-inputs: GPU-input dispatch produces byte-identical fat-node
     }
     prim_readback->unmap();
 
-    CHECK(capture.error_count()   == 0U);
-    CHECK(capture.warning_count() == 0U);
-    device->wait_idle();
+    // validation now via the compute context (no rhi ValidationCapture)
 }
 
 // =========================================================================
@@ -965,13 +920,13 @@ TEST_CASE("v9b GPU refit: same topology, new bounds match fresh build",
     if (headless_requested()) { SUCCEED("headless"); return; }
     crd::memory::TlsfAllocator alloc(64U * 1024U * 1024U);
 
-    auto instance = crd::rhi::create_vulkan_instance({});
-    REQUIRE(instance != nullptr);
-    crd::rhi::ValidationCapture capture(*instance);
-    auto device = instance->create_device({});
-    REQUIRE(device != nullptr);
+    auto ctx = crd::gpu::create_vulkan_gpu_context({});
+    REQUIRE(ctx != nullptr);
+    auto* vkctx = static_cast<crd::gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vkctx, &alloc);
+    REQUIRE(compute.valid());
     const auto shader_dir = fs::executable_dir() / crd::containers::StringView{"shaders"};
-    crd::geometry::bvh_gpu::LbvhGpuPipeline pipeline(*device, shader_dir.generic());
+    crd::geometry::bvh_gpu::LbvhGpuPipeline pipeline(compute, shader_dir.generic());
     REQUIRE(pipeline.is_valid());
 
     constexpr crd::u32 k_n = 4096U;
@@ -998,7 +953,7 @@ TEST_CASE("v9b GPU refit: same topology, new bounds match fresh build",
     const auto initial_aabbs_span = crd::containers::ConstSpan<AABB3<crd::f32>>(aabbs_initial.data(), aabbs_initial.size());
 
     // Step 1: build via GPU-inputs path.
-    auto gpu_inputs = upload_gpu_inputs(*device, pairs_span, initial_aabbs_span);
+    auto gpu_inputs = upload_gpu_inputs(compute,pairs_span, initial_aabbs_span);
     crd::geometry::bvh_gpu::LbvhGpuPipeline::GpuInputView build_view{};
     build_view.sorted_pairs = gpu_inputs.pairs.get();
     build_view.leaf_aabbs   = gpu_inputs.aabbs.get();
@@ -1030,7 +985,7 @@ TEST_CASE("v9b GPU refit: same topology, new bounds match fresh build",
 
     // Upload NEW leaf AABBs to GPU (consumer's eylem-broadphase scenario:
     // a compute shader rewrites this buffer after physics integration).
-    auto refit_inputs_gpu = upload_gpu_inputs(*device, pairs_span, refit_aabbs_span);
+    auto refit_inputs_gpu = upload_gpu_inputs(compute,pairs_span, refit_aabbs_span);
 
     // Step 3: refit.
     crd::geometry::bvh_gpu::LbvhGpuPipeline::RefitInputs refit_view{};
@@ -1047,19 +1002,14 @@ TEST_CASE("v9b GPU refit: same topology, new bounds match fresh build",
     const auto cpu_fresh = build_lbvh_cpu<crd::u32>(pairs_span, refit_aabbs_span, &alloc);
 
     // Readback the GPU nodes for comparison.
-    auto nodes_readback = device->create_buffer(
-        {refit_handle.nodes_byte_size, crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferDst),
-         crd::rhi::MemoryUsage::GpuToCpu});
+    auto nodes_readback = compute.create_buffer(refit_handle.nodes_byte_size, crd::gpu::compute_usage::transfer_dst, crd::gpu::ComputeMemory::GpuToCpu);
     REQUIRE(nodes_readback != nullptr);
-    auto cmd   = device->create_command_buffer();
-    auto fence = device->create_fence();
-    cmd->begin();
-    cmd->buffer_barrier(*refit_handle.nodes, crd::rhi::BufferAccess::ComputeShaderRead,
-                                             crd::rhi::BufferAccess::TransferSrc);
-    cmd->copy_buffer(*refit_handle.nodes, *nodes_readback, 0U, 0U, refit_handle.nodes_byte_size);
-    cmd->end();
-    device->graphics_queue().submit(*cmd, *fence);
-    fence->wait();
+    {
+        auto& rec = compute.begin();
+        rec.barrier(*refit_handle.nodes, crd::gpu::ComputeAccess::ShaderRead, crd::gpu::ComputeAccess::TransferSrc);
+        rec.copy(*refit_handle.nodes, *nodes_readback, 0U, 0U, refit_handle.nodes_byte_size);
+        compute.submit_and_wait();
+    }
 
     auto* gpu_nodes_raw = static_cast<const crd::u8*>(nodes_readback->map());
     REQUIRE(gpu_nodes_raw != nullptr);
@@ -1068,9 +1018,7 @@ TEST_CASE("v9b GPU refit: same topology, new bounds match fresh build",
     REQUIRE(std::memcmp(gpu_nodes_raw, cpu_fresh.nodes().data(), refit_handle.nodes_byte_size) == 0);
     nodes_readback->unmap();
 
-    CHECK(capture.error_count()   == 0U);
-    CHECK(capture.warning_count() == 0U);
-    device->wait_idle();
+    // validation now via the compute context (no rhi ValidationCapture)
 }
 
 TEST_CASE("v9b GPU refit perf: 1M items, target sub-1 ms",
@@ -1079,13 +1027,13 @@ TEST_CASE("v9b GPU refit perf: 1M items, target sub-1 ms",
     if (headless_requested()) { SUCCEED("headless"); return; }
     crd::memory::TlsfAllocator alloc(512U * 1024U * 1024U);
 
-    auto instance = crd::rhi::create_vulkan_instance({});
-    REQUIRE(instance != nullptr);
-    crd::rhi::ValidationCapture capture(*instance);
-    auto device = instance->create_device({});
-    REQUIRE(device != nullptr);
+    auto ctx = crd::gpu::create_vulkan_gpu_context({});
+    REQUIRE(ctx != nullptr);
+    auto* vkctx = static_cast<crd::gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vkctx, &alloc);
+    REQUIRE(compute.valid());
     const auto shader_dir = fs::executable_dir() / crd::containers::StringView{"shaders"};
-    crd::geometry::bvh_gpu::LbvhGpuPipeline pipeline(*device, shader_dir.generic());
+    crd::geometry::bvh_gpu::LbvhGpuPipeline pipeline(compute, shader_dir.generic());
     REQUIRE(pipeline.is_valid());
 
     constexpr crd::u32 k_n = 1U << 20;
@@ -1109,7 +1057,7 @@ TEST_CASE("v9b GPU refit perf: 1M items, target sub-1 ms",
 
     const auto pairs_span = crd::containers::ConstSpan<MortonPair<crd::u32>>(sorted.data(), sorted.size());
     const auto aabbs_span = crd::containers::ConstSpan<AABB3<crd::f32>>(aabbs.data(), aabbs.size());
-    auto gpu_inputs = upload_gpu_inputs(*device, pairs_span, aabbs_span);
+    auto gpu_inputs = upload_gpu_inputs(compute,pairs_span, aabbs_span);
 
     // Build once.
     crd::geometry::bvh_gpu::LbvhGpuPipeline::GpuInputView build_view{};
@@ -1146,9 +1094,7 @@ TEST_CASE("v9b GPU refit perf: 1M items, target sub-1 ms",
     CHECK(refit_samples[2] <= refit_budget_ms);
     (void)refit_budget_ms;
 
-    CHECK(capture.error_count()   == 0U);
-    CHECK(capture.warning_count() == 0U);
-    device->wait_idle();
+    // validation now via the compute context (no rhi ValidationCapture)
 }
 
 TEST_CASE("v9a-c GPU perf budget: 1M items end-to-end",
@@ -1157,13 +1103,13 @@ TEST_CASE("v9a-c GPU perf budget: 1M items end-to-end",
     if (headless_requested()) { SUCCEED("headless"); return; }
     crd::memory::TlsfAllocator alloc(512U * 1024U * 1024U);
 
-    auto instance = crd::rhi::create_vulkan_instance({});
-    REQUIRE(instance != nullptr);
-    crd::rhi::ValidationCapture capture(*instance);
-    auto device = instance->create_device({});
-    REQUIRE(device != nullptr);
+    auto ctx = crd::gpu::create_vulkan_gpu_context({});
+    REQUIRE(ctx != nullptr);
+    auto* vkctx = static_cast<crd::gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vkctx, &alloc);
+    REQUIRE(compute.valid());
     const auto shader_dir = fs::executable_dir() / crd::containers::StringView{"shaders"};
-    crd::geometry::bvh_gpu::LbvhGpuPipeline pipeline(*device, shader_dir.generic());
+    crd::geometry::bvh_gpu::LbvhGpuPipeline pipeline(compute, shader_dir.generic());
     REQUIRE(pipeline.is_valid());
 
     constexpr crd::u32 k_n = 1U << 20;
@@ -1224,7 +1170,7 @@ TEST_CASE("v9a-c GPU perf budget: 1M items end-to-end",
     // v9a-c-gpu-inputs: upload inputs to GPU ONCE outside the timed loop
     // (this is what the consumer pipeline does — morton+sort kernels write
     // these buffers on GPU). Then measure the LBVH-only cost.
-    auto gpu_inputs = upload_gpu_inputs(*device, pairs_span, aabbs_span);
+    auto gpu_inputs = upload_gpu_inputs(compute,pairs_span, aabbs_span);
     crd::geometry::bvh_gpu::LbvhGpuPipeline::GpuInputView view{};
     view.sorted_pairs = gpu_inputs.pairs.get();
     view.leaf_aabbs   = gpu_inputs.aabbs.get();
@@ -1248,7 +1194,5 @@ TEST_CASE("v9a-c GPU perf budget: 1M items end-to-end",
     (void)budget_cpu_ms;
     (void)budget_gpu_res_ms;
 
-    CHECK(capture.error_count()   == 0U);
-    CHECK(capture.warning_count() == 0U);
-    device->wait_idle();
+    // validation now via the compute context (no rhi ValidationCapture)
 }

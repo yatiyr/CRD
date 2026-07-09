@@ -130,6 +130,61 @@ inline bool emit_contract_msl(const KGraph& g, int output, GlslKernel& out)
     return true;
 }
 
+// T2 FAST GEMM (DetTier::Fast) MSL/Metal — the ported crush schedule (64×64 block, 4×4 microtile, TRANSPOSED-A
+// threadgroup, `fma()`). Threadgroup-per-tile. Mirrors emit_contract_fast_glsl; Metal inherits the crush schedule.
+inline bool emit_contract_fast_msl(const KGraph& g, int output, GlslKernel& out)
+{
+    const KNode& c = g.node(output);
+    if (c.op != KOp::Contract || g.node(c.a).op != KOp::Input || g.node(c.b).op != KOp::Input) { return false; }
+    out.n_inputs      = 2;
+    out.input_iidx[0] = g.node(c.a).iidx;
+    out.input_iidx[1] = g.node(c.b).iidx;
+    crd::containers::String& s = out.source;
+    s.clear();
+    msl_detail::header(s);
+    s.append("struct PC { uint M; uint K; uint N; uint nbatch; };\n");
+    s.append("kernel void ckir(device const float* A [[buffer(0)]], device const float* Bm [[buffer(1)]], device float* C [[buffer(2)]], constant PC& pc [[buffer(3)]], uint gid [[threadgroup_position_in_grid]], uint tid [[thread_position_in_threadgroup]]) {\n");
+    s.append("  threadgroup float As[512];\n  threadgroup float Bs[512];\n"); // As TRANSPOSED [k][m]
+    s.append("  uint N = pc.N; uint K = pc.K;\n");
+    s.append("  uint nbc = N / 64u; uint bid = gid;\n");
+    s.append("  uint blockRow = (bid / nbc) * 64u; uint blockCol = (bid % nbc) * 64u;\n");
+    s.append("  uint tr = tid / 16u; uint tc = tid % 16u;\n");
+    s.append("  uint arow = blockRow + tr * 4u; uint acol = blockCol + tc * 4u;\n");
+    const char* d[4] = {"0", "1", "2", "3"};
+    for (int i = 0; i < 4; ++i)
+    {
+        s.append("  float ");
+        for (int j = 0; j < 4; ++j) { s.append("a"); s.append(d[i]); s.append(d[j]); s.append(" = 0.0f"); if (j < 3) { s.append(", "); } }
+        s.append(";\n");
+    }
+    s.append("  for (uint k0 = 0u; k0 < K; k0 += 8u) {\n");
+    s.append("    for (uint t = tid; t < 512u; t += 256u) { uint r = t / 8u; uint cc = t % 8u; As[cc * 64u + r] = A[(blockRow + r) * K + (k0 + cc)]; }\n");
+    s.append("    for (uint t = tid; t < 512u; t += 256u) { uint r = t / 64u; uint cc = t % 64u; Bs[r * 64u + cc] = Bm[(k0 + r) * N + (blockCol + cc)]; }\n");
+    s.append("    threadgroup_barrier(mem_flags::mem_threadgroup);\n");
+    s.append("    for (uint kk = 0u; kk < 8u; ++kk) {\n");
+    s.append("      float ar0 = As[kk*64u+tr*4u+0u], ar1 = As[kk*64u+tr*4u+1u], ar2 = As[kk*64u+tr*4u+2u], ar3 = As[kk*64u+tr*4u+3u];\n");
+    s.append("      float br0 = Bs[kk*64u+tc*4u+0u], br1 = Bs[kk*64u+tc*4u+1u], br2 = Bs[kk*64u+tc*4u+2u], br3 = Bs[kk*64u+tc*4u+3u];\n");
+    const char* ar[4] = {"ar0", "ar1", "ar2", "ar3"};
+    const char* br[4] = {"br0", "br1", "br2", "br3"};
+    for (int i = 0; i < 4; ++i)
+    {
+        for (int j = 0; j < 4; ++j)
+        {
+            s.append("      a"); s.append(d[i]); s.append(d[j]); s.append(" = fma("); s.append(ar[i]); s.append(", "); s.append(br[j]); s.append(", a"); s.append(d[i]); s.append(d[j]); s.append(");\n");
+        }
+    }
+    s.append("    }\n    threadgroup_barrier(mem_flags::mem_threadgroup);\n  }\n");
+    for (int i = 0; i < 4; ++i)
+    {
+        for (int j = 0; j < 4; ++j)
+        {
+            s.append("  C[(arow + "); s.append(d[i]); s.append("u) * N + (acol + "); s.append(d[j]); s.append("u)] = a"); s.append(d[i]); s.append(d[j]); s.append(";\n");
+        }
+    }
+    s.append("}\n");
+    return true;
+}
+
 // Reduce MSL kernel (trailing-contiguous; dims d0=nout, d1=redsize).
 inline bool emit_reduce_msl(const KGraph& g, int output, GlslKernel& out)
 {

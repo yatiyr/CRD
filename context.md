@@ -5,9 +5,30 @@
 
 ---
 
-## Current focus — Phase 3.1.6 `crd-hesap` (numerical stack)
+## Current focus — Phase 3.1.6 **v17 GPU compute (CKIR)** — on **DETOUR D-007** (universal shader IR)
 
-> **═══ RIGHT NOW (2026-07-06: v14 CLOSED a–z; v15 AUTODIFF forward-mode COMPLETE a–h+z; **v16 reverse-mode KICKED OFF** — deep research done + subslices refined + docs written: `docs/phases/phase-3.1.6-v16.md` + `docs/research/2026-07-06-v16-reverse-ad-crush.md`; 12 tasks queued (#10–21). **v16 COMPLETE (a–k + z)** — deterministic reverse tape (MOAT: batched ∇ bit-identical {1,2,4}; CRUSH ∇f one O(n) pass 5.2×/22.2× @n=1024) + full VJP rule library (3-oracle; exact 2.2e-16 vs FD 3e-9) + NN-VJP core (matmul/bias/relu/softmax-CE → MLP backprop one pass, torch-style gradcheck GREEN). v16-c DONE: full CNN op set + einsum-VJP over the real EinsumPlan + bicoloring (arrowhead 17→3) + sparse-reverse-LA (CSR spmv/spmm/solve, capability torch/TF lack); autodiff suite 2534/91. CLOSE CRUSH: torch+JAX value+grad PARITY & FASTER (MLP 1.59×/1.27×, CNN 2.69×/1.67×; rides v14 hesap-dense GEMM) + {1..16} deterministic moat. NEXT: v16-d. ⚠ v15+v16 6-config DoD + {1..16} moat sweep BATCHED (2-config) AFTER v16 per user) ═══**
+> **═══ RIGHT NOW (2026-07-09): hesap v14–v16 CLOSED (numerical stack + forward/reverse autodiff — detail preserved below).
+> Phase 3.1.6 **v17 GPU compute (CKIR)** is the active phase (the kernel/shader COMPILER — ADR-0098/0099/0100). Currently
+> on **DETOUR D-007 — CKIR becomes the universal shader IR** (ADR-0101: the IR is the single source of truth for EVERY
+> shader; GLSL/HLSL/… are outputs only). **Phase A of D-007 SHIPPED:** the entire GLM-equivalent math/value corpus —
+> scalars + comparisons + bit ops + vec2/3/4 + swizzle + geometric + relational + mat3/4 (+det/inv/outer) + interp +
+> quaternions — in the IR + CPU oracle (bit-exact) AND running on **Vulkan + DX12** (comps-aware `emit_vec_glsl`/
+> `emit_vec_hlsl`). Also shipped this arc: the multi-kernel scheduler (`run_graph`) + full radix sort as one GPU pipeline.
+> **A4 CONTROL FLOW COMPLETE** — fixed-count (`unroll_for`) + DYNAMIC (`for_loop` native per-thread GPU loop with divergent
+> per-element count + body-scoped LoopIndex/LoopAcc; bounded `while_loop`; `switch`/if via Select), bit-exact on CPU oracle
+> + Vulkan + DX12. **PHASE A of D-007 DONE.** Suites: kir 129 · kir-vulkan 32983 · kir-dx12 30804, zero regression. D-007
+> now has a SOLID hesap-style subslice plan (A✅ · fan-out · B material B0–B8 · C node editor C1–C5 · D cook D1–D5), refined
+> to frontier grade (Slang/MaterialX/OpenPBR-1.1/mesh-shaders). **RENDER-DATA/LIGHTING/PASS ARCHITECTURE DECIDED — ADR-0102**:
+> engine ALREADY has a mature renderer (frame graph · Forward/Forward+/Deferred/VisBuffer planned · PerFrameUbo · Material
+> Template+variants · cooking) → CKIR replaces the hand-written GLSL SOURCE only; globals live in renderer set-0 NOT the GPU
+> context (ADR-0099); frequency sets 0/1/2/3; **material=surface-response lighting-agnostic, render-path=lighting → one
+> material Forward+ OR Deferred (hybrid)**; multi-pass=frame graph. **D-007 RE-SCOPED (session close 2026-07-09): D-007 =
+> the IR SUBSTRATE = Phase A(✅) + Phase B (material/shading capability incl B9 ray-tracing + NPR/toon) + Phase D (cook).
+> FRONT-ENDS (node editor UI + text DSL = Phase C) DEFERRED to the editor phase; authored via C++ builders.** On exit the IR
+> can EXPRESS everything (ML/AI/FFT/sim/skinning/particles/lighting/PBR+stylized/RT/effects). **ROADMAP: D-007 → hesap →
+> eylem/physics (GPU cloth/deformation/crowds/ragdolls) → rendering → UI → first editor → node editor.** **NEXT: Phase B,
+> entry B0 (type-system completion: int/bool vecs · mat2 · structs · arrays).** Docs: `docs/detours/D-007-*.md`,
+> `docs/decisions/0101-*.md` + **`0102-*.md`**, `docs/sessions/2026-07-09-d007-*.md`. ═══**
 >
 > **v14 IS DONE.** Same-evening closes on top of the wave below: **v14-m** (NN inference —
 > f32 8/8, q8 vs torch-int8/ort-int8/ggml-from-source ALL WON incl. the last cell via the

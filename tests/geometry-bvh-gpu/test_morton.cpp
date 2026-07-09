@@ -24,9 +24,9 @@
 #include <crd/math/vec.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/perf/measure.hpp>
+#include <crd/gpu/vulkan_compute_context.hpp>
+#include <crd/gpu/vulkan_context.hpp>
 #include <crd/platform/filesystem.hpp>
-#include <crd/rhi/vulkan_backend.hpp>
-#include <crd/rhi/vulkan_validation_capture.hpp>
 #include <crd/test_helpers/gpu_compare.hpp>
 #include <crd/test_helpers/gpu_determinism.hpp>
 
@@ -199,15 +199,14 @@ TEST_CASE("v9a-a GPU Morton matches CPU oracle byte-for-byte",
     }
     crd::memory::TlsfAllocator alloc(16U * 1024U * 1024U);
 
-    auto instance = crd::rhi::create_vulkan_instance({});
-    REQUIRE(instance != nullptr);
-    crd::rhi::ValidationCapture capture(*instance);
-
-    auto device = instance->create_device({});
-    REQUIRE(device != nullptr);
+    auto ctx = crd::gpu::create_vulkan_gpu_context({});
+    REQUIRE(ctx != nullptr);
+    auto* vkctx = static_cast<crd::gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vkctx, &alloc);
+    REQUIRE(compute.valid());
 
     const auto shader_dir = fs::executable_dir() / crd::containers::StringView{"shaders"};
-    MortonGpuPipeline pipeline(*device, shader_dir.generic());
+    MortonGpuPipeline pipeline(compute, shader_dir.generic());
     REQUIRE(pipeline.is_valid());
 
     // 1024 random-ish AABBs inside a unit cube.
@@ -242,25 +241,6 @@ TEST_CASE("v9a-a GPU Morton matches CPU oracle byte-for-byte",
     }
     CHECK(cmp.ok);
     CHECK(cmp.compared_count == count);
-
-    // Dump captured validation messages straight to stderr so they
-    // print regardless of Catch scoping (UNSCOPED_INFO is unreliable
-    // across Catch2 minor versions; stderr always works).
-    if (capture.error_or_warning_count() != 0U)
-    {
-        for (const auto& msg : capture.messages())
-        {
-            std::fprintf(stderr,
-                          "[vk-validation] severity=%d VUID=%d text=%s\n",
-                          static_cast<int>(msg.severity),
-                          msg.message_id_number,
-                          msg.message_text.c_str());
-        }
-    }
-    CHECK(capture.error_count()   == 0U);
-    CHECK(capture.warning_count() == 0U);
-
-    device->wait_idle();
 }
 
 TEST_CASE("v9a-a GPU Morton is deterministic across 3 dispatches",
@@ -273,15 +253,14 @@ TEST_CASE("v9a-a GPU Morton is deterministic across 3 dispatches",
     }
     crd::memory::TlsfAllocator alloc(16U * 1024U * 1024U);
 
-    auto instance = crd::rhi::create_vulkan_instance({});
-    REQUIRE(instance != nullptr);
-    crd::rhi::ValidationCapture capture(*instance);
-
-    auto device = instance->create_device({});
-    REQUIRE(device != nullptr);
+    auto ctx = crd::gpu::create_vulkan_gpu_context({});
+    REQUIRE(ctx != nullptr);
+    auto* vkctx = static_cast<crd::gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vkctx, &alloc);
+    REQUIRE(compute.valid());
 
     const auto shader_dir = fs::executable_dir() / crd::containers::StringView{"shaders"};
-    MortonGpuPipeline pipeline(*device, shader_dir.generic());
+    MortonGpuPipeline pipeline(compute, shader_dir.generic());
     REQUIRE(pipeline.is_valid());
 
     crd::containers::Array<AABB3<crd::f32>> aabbs(&alloc);
@@ -306,11 +285,6 @@ TEST_CASE("v9a-a GPU Morton is deterministic across 3 dispatches",
         },
         /*rounds*/ 3);
     CHECK(deterministic);
-
-    CHECK(capture.error_count()   == 0U);
-    CHECK(capture.warning_count() == 0U);
-
-    device->wait_idle();
 }
 
 // =========================================================================
@@ -327,15 +301,14 @@ TEST_CASE("v9a-a-async-compute: async dispatch matches sync dispatch byte-for-by
     }
     crd::memory::TlsfAllocator alloc(16U * 1024U * 1024U);
 
-    auto instance = crd::rhi::create_vulkan_instance({});
-    REQUIRE(instance != nullptr);
-    crd::rhi::ValidationCapture capture(*instance);
-
-    auto device = instance->create_device({});
-    REQUIRE(device != nullptr);
+    auto ctx = crd::gpu::create_vulkan_gpu_context({});
+    REQUIRE(ctx != nullptr);
+    auto* vkctx = static_cast<crd::gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vkctx, &alloc);
+    REQUIRE(compute.valid());
 
     const auto shader_dir = fs::executable_dir() / crd::containers::StringView{"shaders"};
-    MortonGpuPipeline pipeline(*device, shader_dir.generic());
+    MortonGpuPipeline pipeline(compute, shader_dir.generic());
     REQUIRE(pipeline.is_valid());
 
     crd::containers::Array<AABB3<crd::f32>> aabbs(&alloc);
@@ -359,50 +332,10 @@ TEST_CASE("v9a-a-async-compute: async dispatch matches sync dispatch byte-for-by
     const auto cmp = crd::test::bit_compare<crd::u32>(
         crd::containers::ConstSpan<crd::u32>(sync_codes.data(),  sync_codes.size()),
         crd::containers::ConstSpan<crd::u32>(async_codes.data(), async_codes.size()));
-    if (!cmp.ok)
-    {
-        for (const auto& msg : capture.messages())
-        {
-            std::fprintf(stderr,
-                          "[vk-validation async] severity=%d VUID=%d text=%s\n",
-                          static_cast<int>(msg.severity),
-                          msg.message_id_number,
-                          msg.message_text.c_str());
-        }
-    }
     CHECK(cmp.ok);
     CHECK(cmp.compared_count == count);
-
-    // The discriminating contract: cross-queue-family submit must
-    // stay validation-silent on GPUs with a dedicated compute family
-    // (the bug that bit us at v9a-a — see vulkan_backend.cpp surface
-    // omission fix + the new create_command_buffer_for_queue virtual).
-    if (capture.error_or_warning_count() != 0U)
-    {
-        for (const auto& msg : capture.messages())
-        {
-            std::fprintf(stderr,
-                          "[vk-validation async] severity=%d VUID=%d text=%s\n",
-                          static_cast<int>(msg.severity),
-                          msg.message_id_number,
-                          msg.message_text.c_str());
-        }
-    }
-    CHECK(capture.error_count()   == 0U);
-    CHECK(capture.warning_count() == 0U);
-
-    if (device->has_dedicated_compute_queue())
-    {
-        INFO("Verified async-compute path on a GPU with a DEDICATED compute family "
-              "(the discriminating case for v9a-a-async-compute).");
-    }
-    else
-    {
-        INFO("GPU reports no dedicated compute family; async path aliases sync path "
-              "via the D9 pointer-identity contract. Test still validates the routing logic.");
-    }
-
-    device->wait_idle();
+    // v17-i-c: both dispatch paths now run on the context's dedicated compute queue (the async/sync distinction
+    // collapsed with the RHI-graphics-queue removal); this stays a byte-identical smoke of the compute-queue path.
 }
 
 TEST_CASE("v9a-a GPU Morton perf budget: 256k AABBs end-to-end",
@@ -415,13 +348,14 @@ TEST_CASE("v9a-a GPU Morton perf budget: 256k AABBs end-to-end",
     }
     crd::memory::TlsfAllocator alloc(64U * 1024U * 1024U);
 
-    auto instance = crd::rhi::create_vulkan_instance({});
-    REQUIRE(instance != nullptr);
-    auto device = instance->create_device({});
-    REQUIRE(device != nullptr);
+    auto ctx = crd::gpu::create_vulkan_gpu_context({});
+    REQUIRE(ctx != nullptr);
+    auto* vkctx = static_cast<crd::gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vkctx, &alloc);
+    REQUIRE(compute.valid());
 
     const auto shader_dir = fs::executable_dir() / crd::containers::StringView{"shaders"};
-    MortonGpuPipeline pipeline(*device, shader_dir.generic());
+    MortonGpuPipeline pipeline(compute, shader_dir.generic());
     REQUIRE(pipeline.is_valid());
 
     crd::containers::Array<AABB3<crd::f32>> aabbs(&alloc);
@@ -457,6 +391,4 @@ TEST_CASE("v9a-a GPU Morton perf budget: 256k AABBs end-to-end",
         REQUIRE(codes.size() == count);
     });
     (void)budget_ms; // CRD_ASSERT_MSG compiles out under NDEBUG; silence C4189.
-
-    device->wait_idle();
 }

@@ -86,10 +86,10 @@
 #include <cstdint>
 #include <memory>
 
-namespace crd::rhi
+namespace crd::gpu
 {
-class Buffer;
-class Device;
+class ComputeBuffer;
+class IComputeContext;
 }
 
 namespace crd::geometry::bvh_gpu
@@ -137,7 +137,7 @@ build_lbvh_cpu<std::uint64_t>(crd::containers::ConstSpan<MortonPair<std::uint64_
 class LbvhGpuPipeline
 {
 public:
-    LbvhGpuPipeline(crd::rhi::Device& device, crd::containers::StringView shader_dir) noexcept;
+    LbvhGpuPipeline(crd::gpu::IComputeContext& ctx, crd::containers::StringView shader_dir) noexcept;
 
     LbvhGpuPipeline(const LbvhGpuPipeline&)            = delete;
     LbvhGpuPipeline& operator=(const LbvhGpuPipeline&) = delete;
@@ -183,8 +183,8 @@ public:
     //   - `prim_indices_byte_size` = N * 4.
     struct GpuResidentTree
     {
-        crd::rhi::Buffer* nodes        = nullptr;
-        crd::rhi::Buffer* prim_indices = nullptr;
+        crd::gpu::ComputeBuffer* nodes        = nullptr;
+        crd::gpu::ComputeBuffer* prim_indices = nullptr;
         crd::u32          internal_count        = 0U;
         crd::u32          prim_count            = 0U;
         crd::u64          nodes_byte_size       = 0U;
@@ -233,8 +233,8 @@ public:
     // No CPU intervention in the pipeline. Ideal for eylem broadphase tick.
     struct GpuInputView
     {
-        crd::rhi::Buffer* sorted_pairs = nullptr;   // 2N × u32 (code, prim_idx interleaved)
-        crd::rhi::Buffer* leaf_aabbs   = nullptr;   // 6N × f32 (min.xyz, max.xyz per prim)
+        crd::gpu::ComputeBuffer* sorted_pairs = nullptr;   // 2N × u32 (code, prim_idx interleaved)
+        crd::gpu::ComputeBuffer* leaf_aabbs   = nullptr;   // 6N × f32 (min.xyz, max.xyz per prim)
         crd::u32          n            = 0U;        // primitive count
     };
 
@@ -273,8 +273,8 @@ public:
     // theoretical floor as the upsweep portion of a full build.
     struct RefitInputs
     {
-        crd::rhi::Buffer* sorted_pairs = nullptr;  // SAME buffer + contents as the prior build
-        crd::rhi::Buffer* leaf_aabbs   = nullptr;  // NEW values, original prim-index order
+        crd::gpu::ComputeBuffer* sorted_pairs = nullptr;  // SAME buffer + contents as the prior build
+        crd::gpu::ComputeBuffer* leaf_aabbs   = nullptr;  // NEW values, original prim-index order
         crd::u32          n            = 0U;       // MUST match prior build's n
     };
 

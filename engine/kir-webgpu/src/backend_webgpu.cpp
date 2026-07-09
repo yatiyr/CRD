@@ -138,7 +138,6 @@ bool KirBackendWebGpu::run(const KGraph& g, int output, const float* const* inpu
     if (fused) {} // fused kernel emitted above
     else if (outn.op == KOp::Contract)
     {
-        if (!emit_contract_wgsl(g, output, kern) || kern.n_inputs != n_inputs) { return false; }
         const KNode& an = g.node(outn.a);
         const KNode& bn = g.node(outn.b);
         const int    r  = an.shape.rank;
@@ -150,7 +149,17 @@ bool KirBackendWebGpu::run(const KGraph& g, int output, const float* const* inpu
         in_bytes[0] = static_cast<crd::u64>(consts[0]) * consts[1] * consts[3] * sizeof(float);
         in_bytes[1] = static_cast<crd::u64>(consts[1]) * consts[2] * consts[3] * sizeof(float);
         out_bytes   = static_cast<crd::u64>(consts[0]) * consts[2] * consts[3] * sizeof(float);
-        groups      = (consts[0] * consts[2] * consts[3] + 255U) / 256U;
+        // T2 FAST tiled GEMM (FMA, transposed-A var<workgroup>) — WebGPU inherits the crush schedule; else naive T1.
+        if (outn.tier == DetTier::Fast && consts[3] == 1U && consts[0] % 64U == 0U && consts[2] % 64U == 0U && consts[1] % 8U == 0U
+            && emit_contract_fast_wgsl(g, output, kern) && kern.n_inputs == n_inputs)
+        {
+            groups = (consts[0] / 64U) * (consts[2] / 64U);
+        }
+        else
+        {
+            if (!emit_contract_wgsl(g, output, kern) || kern.n_inputs != n_inputs) { return false; }
+            groups = (consts[0] * consts[2] * consts[3] + 255U) / 256U;
+        }
     }
     else if (is_reduce(outn.op))
     {

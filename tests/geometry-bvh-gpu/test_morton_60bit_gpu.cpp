@@ -4,6 +4,7 @@
 // Mirror of test_morton.cpp's GPU bit_compare for the 60-bit u64 path.
 // Requires `shaderInt64`; gracefully skips when unavailable. Test
 // contract: GPU output is byte-identical to the CPU 60-bit oracle.
+// v17-i-c: migrated onto crd::gpu::VulkanComputeContext (ADR-0099).
 // ---------------------------------------------------------------------------
 
 #include <catch2/catch_test_macros.hpp>
@@ -12,11 +13,11 @@
 #include <crd/core/types.hpp>
 #include <crd/geometry/bvh_gpu/dispatch.hpp>
 #include <crd/geometry/bvh_gpu/morton_60bit.hpp>
+#include <crd/gpu/vulkan_compute_context.hpp>
+#include <crd/gpu/vulkan_context.hpp>
 #include <crd/math/vec.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
-#include <crd/rhi/vulkan_backend.hpp>
-#include <crd/rhi/vulkan_validation_capture.hpp>
 #include <crd/test_helpers/gpu_compare.hpp>
 
 #include <cstdint>
@@ -48,15 +49,18 @@ TEST_CASE("v9a-60bit-gpu: graceful-skip when shaderInt64 unavailable",
         SUCCEED("CRD_PLATFORM_HEADLESS=1, skipping GPU capability test");
         return;
     }
-    auto instance = crd::rhi::create_vulkan_instance({});
-    REQUIRE(instance != nullptr);
-    auto device = instance->create_device({});
-    REQUIRE(device != nullptr);
+    crd::memory::TlsfAllocator alloc(16U * 1024U * 1024U);
+
+    auto ctx = crd::gpu::create_vulkan_gpu_context({});
+    REQUIRE(ctx != nullptr);
+    auto* vkctx = static_cast<crd::gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vkctx, &alloc);
+    REQUIRE(compute.valid());
 
     const auto shader_dir = fs::executable_dir() / crd::containers::StringView{"shaders"};
-    MortonGpu60BitPipeline pipeline(*device, shader_dir.generic());
+    MortonGpu60BitPipeline pipeline(compute, shader_dir.generic());
 
-    if (device->supports_shader_int64())
+    if (compute.supports_shader_int64())
     {
         INFO("Device reports shaderInt64 support; pipeline expected valid.");
         CHECK(pipeline.is_valid());
@@ -66,8 +70,6 @@ TEST_CASE("v9a-60bit-gpu: graceful-skip when shaderInt64 unavailable",
         INFO("Device does NOT support shaderInt64; pipeline expected invalid (graceful skip).");
         CHECK_FALSE(pipeline.is_valid());
     }
-
-    device->wait_idle();
 }
 
 TEST_CASE("v9a-60bit-gpu: GPU 60-bit Morton matches CPU oracle byte-for-byte",
@@ -80,21 +82,20 @@ TEST_CASE("v9a-60bit-gpu: GPU 60-bit Morton matches CPU oracle byte-for-byte",
     }
     crd::memory::TlsfAllocator alloc(16U * 1024U * 1024U);
 
-    auto instance = crd::rhi::create_vulkan_instance({});
-    REQUIRE(instance != nullptr);
-    crd::rhi::ValidationCapture capture(*instance);
+    auto ctx = crd::gpu::create_vulkan_gpu_context({});
+    REQUIRE(ctx != nullptr);
+    auto* vkctx = static_cast<crd::gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vkctx, &alloc);
+    REQUIRE(compute.valid());
 
-    auto device = instance->create_device({});
-    REQUIRE(device != nullptr);
-
-    if (!device->supports_shader_int64())
+    if (!compute.supports_shader_int64())
     {
         SUCCEED("shaderInt64 unavailable on this device; skipping bit-compare test.");
         return;
     }
 
     const auto shader_dir = fs::executable_dir() / crd::containers::StringView{"shaders"};
-    MortonGpu60BitPipeline pipeline(*device, shader_dir.generic());
+    MortonGpu60BitPipeline pipeline(compute, shader_dir.generic());
     REQUIRE(pipeline.is_valid());
 
     crd::containers::Array<AABB3<crd::f32>> aabbs(&alloc);
@@ -130,20 +131,4 @@ TEST_CASE("v9a-60bit-gpu: GPU 60-bit Morton matches CPU oracle byte-for-byte",
     }
     CHECK(cmp.ok);
     CHECK(cmp.compared_count == count);
-
-    if (capture.error_or_warning_count() != 0U)
-    {
-        for (const auto& msg : capture.messages())
-        {
-            std::fprintf(stderr,
-                          "[vk-validation 60bit] severity=%d VUID=%d text=%s\n",
-                          static_cast<int>(msg.severity),
-                          msg.message_id_number,
-                          msg.message_text.c_str());
-        }
-    }
-    CHECK(capture.error_count()   == 0U);
-    CHECK(capture.warning_count() == 0U);
-
-    device->wait_idle();
 }

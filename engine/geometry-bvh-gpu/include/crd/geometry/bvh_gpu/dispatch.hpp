@@ -34,9 +34,9 @@
 #include <cstdint>
 #include <memory>
 
-namespace crd::rhi
+namespace crd::gpu
 {
-class Device;
+class IComputeContext;
 }
 
 namespace crd::geometry::bvh_gpu
@@ -57,7 +57,7 @@ public:
     // `compute_morton_codes.comp.spv` (the cooker-produced SPIR-V).
     // Defaults to looking next to the executable; pass an explicit path
     // for test-binary scenarios.
-    MortonGpuPipeline(crd::rhi::Device& device,
+    MortonGpuPipeline(crd::gpu::IComputeContext& ctx,
                        crd::containers::StringView shader_dir) noexcept;
 
     MortonGpuPipeline(const MortonGpuPipeline&)            = delete;
@@ -130,7 +130,7 @@ private:
 class MortonGpu60BitPipeline
 {
 public:
-    MortonGpu60BitPipeline(crd::rhi::Device& device,
+    MortonGpu60BitPipeline(crd::gpu::IComputeContext& ctx,
                             crd::containers::StringView shader_dir) noexcept;
 
     MortonGpu60BitPipeline(const MortonGpu60BitPipeline&)            = delete;

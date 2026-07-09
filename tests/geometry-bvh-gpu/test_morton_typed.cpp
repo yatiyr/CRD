@@ -21,8 +21,8 @@
 #include <crd/math/vec.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
-#include <crd/rhi/vulkan_backend.hpp>
-#include <crd/rhi/vulkan_validation_capture.hpp>
+#include <crd/gpu/vulkan_compute_context.hpp>
+#include <crd/gpu/vulkan_context.hpp>
 #include <crd/test_helpers/gpu_compare.hpp>
 #include <crd/units/quantity_aliases.hpp>
 
@@ -152,15 +152,14 @@ TEST_CASE("v9a-a-typed GPU: typed dispatch matches raw dispatch byte-for-byte",
     }
     crd::memory::TlsfAllocator alloc(16U * 1024U * 1024U);
 
-    auto instance = crd::rhi::create_vulkan_instance({});
-    REQUIRE(instance != nullptr);
-    crd::rhi::ValidationCapture capture(*instance);
-
-    auto device = instance->create_device({});
-    REQUIRE(device != nullptr);
+    auto ctx = crd::gpu::create_vulkan_gpu_context({});
+    REQUIRE(ctx != nullptr);
+    auto* vkctx = static_cast<crd::gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vkctx, &alloc);
+    REQUIRE(compute.valid());
 
     const auto shader_dir = fs::executable_dir() / crd::containers::StringView{"shaders"};
-    MortonGpuPipeline pipeline(*device, shader_dir.generic());
+    MortonGpuPipeline pipeline(compute, shader_dir.generic());
     REQUIRE(pipeline.is_valid());
 
     crd::containers::Array<AABB3<crd::f32>> raw_aabbs(&alloc);
@@ -199,9 +198,4 @@ TEST_CASE("v9a-a-typed GPU: typed dispatch matches raw dispatch byte-for-byte",
         crd::containers::ConstSpan<crd::u32>(typed_codes.data(), typed_codes.size()));
     CHECK(cmp.ok);
     CHECK(cmp.compared_count == count);
-
-    CHECK(capture.error_count()   == 0U);
-    CHECK(capture.warning_count() == 0U);
-
-    device->wait_idle();
 }

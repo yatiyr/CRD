@@ -37,8 +37,8 @@ target_link_libraries(crd-geometry-bvh-gpu-tests PRIVATE
     crd-geometry-bvh
     crd-geometry-bvh-gpu
     crd-jobs                # v9a-b1-parallel listener uses jobs::init/shutdown
-    crd-rhi
-    crd-rhi-vulkan
+    crd-gpu-context         # ADR-0099 v17-i-c: geometry runs on the compute layer, not the rendering RHI
+    crd-gpu-context-vulkan
     crd-perf
     crd-test-helpers
     Catch2::Catch2WithMain

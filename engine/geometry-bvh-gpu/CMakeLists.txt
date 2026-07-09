@@ -52,9 +52,8 @@ target_link_libraries(crd-geometry-bvh-gpu
         crd-geometry-primitives
         crd-geometry-bvh    # for `BvhTree` / `BvhNode` output types at v9a-c
         crd-jobs            # for `sort_morton_pairs_parallel` (v9a-b1-parallel)
-        crd-rhi             # for the backend-agnostic Device / Buffer / dispatch surface
-    PRIVATE
-        crd-rhi-vulkan      # impl-only — module is intended to be Vulkan-only initially
+        crd-gpu-context         # ADR-0100: the ABSTRACT IComputeContext ONLY — geometry is backend-agnostic (no Vulkan
+                                # backend, no file I/O; the composition layer injects a concrete backend at runtime)
 )
 
 target_compile_features(crd-geometry-bvh-gpu PUBLIC cxx_std_20)

@@ -92,6 +92,30 @@ void make_uav(ID3D12Device* dev, ID3D12Resource* res, UINT n_elem, D3D12_CPU_DES
     uav.Buffer.StructureByteStride  = sizeof(float);
     dev->CreateUnorderedAccessView(res, nullptr, &uav, h);
 }
+
+// A3: does the graph reachable from `output` use any vector value (comps > 1)? → route to the vec emitter.
+[[nodiscard]] bool graph_uses_vec(const KGraph& g, int output, crd::memory::IAllocator* scratch)
+{
+    const int                       n = g.size();
+    crd::containers::Array<crd::u8> reach(scratch);
+    reach.resize(static_cast<crd::usize>(n), 0);
+    crd::containers::Array<int> stk(scratch);
+    stk.push_back(output);
+    while (stk.size() > 0)
+    {
+        const int i = stk[stk.size() - 1];
+        stk.resize(stk.size() - 1);
+        if (reach[static_cast<crd::usize>(i)]) { continue; }
+        reach[static_cast<crd::usize>(i)] = 1;
+        const KNode& nd = g.node(i);
+        if (nd.comps > 1 || nd.op == KOp::For || nd.op == KOp::LoopIndex || nd.op == KOp::LoopAcc) { return true; } // A4 tier-2: For graphs route to the vec emitter
+        if (nd.a >= 0) { stk.push_back(nd.a); }
+        if (nd.b >= 0) { stk.push_back(nd.b); }
+        if (nd.c >= 0) { stk.push_back(nd.c); }
+        if (nd.d >= 0) { stk.push_back(nd.d); }
+    }
+    return false;
+}
 } // namespace
 
 KirBackendDx12::KirBackendDx12(crd::memory::IAllocator* alloc) : m_impl(std::make_unique<Impl>())
@@ -157,7 +181,6 @@ bool KirBackendDx12::run(const KGraph& g, int output, const float* const* inputs
     if (fused) {} // fused kernel emitted above
     else if (outn.op == KOp::Contract)
     {
-        if (!emit_contract_hlsl(g, output, kern) || kern.n_inputs != n_inputs) { return false; }
         const KNode& an = g.node(outn.a);
         const KNode& bn = g.node(outn.b);
         const int    r  = an.shape.rank;
@@ -169,7 +192,17 @@ bool KirBackendDx12::run(const KGraph& g, int output, const float* const* inputs
         in_bytes[0] = static_cast<crd::u64>(consts[0]) * consts[1] * consts[3] * sizeof(float);
         in_bytes[1] = static_cast<crd::u64>(consts[1]) * consts[2] * consts[3] * sizeof(float);
         out_bytes   = static_cast<crd::u64>(consts[0]) * consts[2] * consts[3] * sizeof(float);
-        groups      = (consts[0] * consts[2] * consts[3] + 255U) / 256U;
+        // T2 FAST tiled GEMM (FMA, transposed-A groupshared) — DX12 inherits the crush schedule; else naive precise T1.
+        if (outn.tier == DetTier::Fast && consts[3] == 1U && consts[0] % 64U == 0U && consts[2] % 64U == 0U && consts[1] % 8U == 0U
+            && emit_contract_fast_hlsl(g, output, kern) && kern.n_inputs == n_inputs)
+        {
+            groups = (consts[0] / 64U) * (consts[2] / 64U);
+        }
+        else
+        {
+            if (!emit_contract_hlsl(g, output, kern) || kern.n_inputs != n_inputs) { return false; }
+            groups = (consts[0] * consts[2] * consts[3] + 255U) / 256U;
+        }
     }
     else if (is_reduce(outn.op))
     {
@@ -215,6 +248,17 @@ bool KirBackendDx12::run(const KGraph& g, int output, const float* const* inputs
         out_bytes                 = out_numel * sizeof(float);
         groups                    = (static_cast<crd::u32>(out_numel) + 255U) / 256U;
     }
+    else if (outn.op == KOp::ScatterAdd) // atomic histogram: D3D12 zero-inits committed resources, then InterlockedAdd
+    {
+        if (!emit_scatteradd_hlsl(g, output, kern) || kern.n_inputs != n_inputs) { return false; }
+        const crd::u64 nin  = static_cast<crd::u64>(g.node(outn.a).shape.numel()); // N inputs
+        const crd::u64 mbin = static_cast<crd::u64>(outn.shape.numel());           // M bins (output)
+        consts[0]           = static_cast<crd::u32>(nin);
+        in_bytes[0]         = nin * sizeof(float);
+        in_bytes[1]         = nin * sizeof(float);
+        out_bytes           = mbin * sizeof(float);
+        groups              = (static_cast<crd::u32>(nin) + 255U) / 256U;
+    }
     else if (outn.op == KOp::ScanSum)
     {
         const bool fast = (outn.tier == DetTier::Fast); // T2 parallel group prefix-sum
@@ -227,6 +271,15 @@ bool KirBackendDx12::run(const KGraph& g, int output, const float* const* inputs
         in_bytes[0]            = numel * sizeof(float);
         out_bytes             = numel * sizeof(float);         // scan KEEPS the shape
         groups                = fast ? consts[0] : (consts[0] + 255U) / 256U; // T2: 1 group/row
+    }
+    else if (graph_uses_vec(g, output, impl.alloc)) // A3: vector elementwise cone → comps-aware HLSL emitter (interleaved I/O)
+    {
+        if (!emit_vec_hlsl(g, output, impl.alloc, kern) || kern.n_inputs != n_inputs) { return false; }
+        const crd::u64 on = static_cast<crd::u64>(outn.shape.numel());
+        consts[0]         = static_cast<crd::u32>(on);
+        for (int i = 0; i < n_inputs; ++i) { in_bytes[i] = on * static_cast<crd::u64>(kern.in_comps[i]) * sizeof(float); }
+        out_bytes = on * static_cast<crd::u64>(kern.out_comps) * sizeof(float);
+        groups    = (static_cast<crd::u32>(on) + 255U) / 256U;
     }
     else
     {

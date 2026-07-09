@@ -563,6 +563,9 @@ add_subdirectory(engine/meshgen)
 add_subdirectory(engine/shader)
 add_subdirectory(engine/rhi)
 add_subdirectory(engine/rhi-vulkan)
+add_subdirectory(engine/gpu-context)          # ADR-0099 v17-i-a: backend-agnostic GPU context foundation
+add_subdirectory(engine/gpu-context-vulkan)   # ADR-0099 v17-i-a: headless Vulkan compute context
+add_subdirectory(engine/gpu-context-dx12)     # ADR-0100 v17-i: second IComputeContext backend (D3D12); Windows-only
 add_subdirectory(engine/jobs)
 add_subdirectory(engine/hesap-sched)  # depends on crd-jobs above + crd-hesap (declared earlier)
 add_subdirectory(engine/hesap-direct)  # v5; sparse DIRECT factorization (depends on hesap-dense/ordering/sparse/sched)
