@@ -58,7 +58,7 @@ TEST_CASE("v17-a: CKIR Contract is matmul (2x3 @ 3x2)", "[kir][ckir]")
     CHECK(out[3] == 11.0);
 }
 
-TEST_CASE("v17-a: CKIR movement — permute + broadcast + reshape", "[kir][ckir]")
+TEST_CASE("v17-a: CKIR movement -- permute + broadcast + reshape", "[kir][ckir]")
 {
     crd::memory::TlsfAllocator alloc(8 << 20);
     kir::KGraph                g(&alloc);
@@ -86,7 +86,7 @@ TEST_CASE("v17-a: CKIR movement — permute + broadcast + reshape", "[kir][ckir]
     for (int i = 0; i < 6; ++i) { CHECK(out2[i] == expect2[i]); }
 }
 
-TEST_CASE("v17-a: CKIR composed graph — matmul then bias then max(0,.) then sum", "[kir][ckir]")
+TEST_CASE("v17-a: CKIR composed graph -- matmul then bias then max(0,.) then sum", "[kir][ckir]")
 {
     crd::memory::TlsfAllocator alloc(16 << 20);
     kir::KGraph                g(&alloc);
@@ -125,7 +125,7 @@ TEST_CASE("v17-a: CKIR CPU reference is DETERMINISTIC (bit-identical run-to-run)
     CHECK(o1[0] == o2[0]); // EXACT — the determinism ground truth
 }
 
-TEST_CASE("v17-a: CKIR is dtype-faithful — an F32 node rounds to f32", "[kir][ckir]")
+TEST_CASE("v17-a: CKIR is dtype-faithful -- an F32 node rounds to f32", "[kir][ckir]")
 {
     crd::memory::TlsfAllocator alloc(8 << 20);
     kir::KGraph                g(&alloc);

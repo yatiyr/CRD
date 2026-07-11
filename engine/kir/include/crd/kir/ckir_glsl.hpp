@@ -33,7 +33,11 @@ struct GlslKernel
 
 namespace glsl_detail
 {
-inline void app_uint(crd::containers::String& s, int v) { char b[24]; std::snprintf(b, sizeof(b), "%d", v); s.append(b); }
+// Accepts any integral index type (int / u32 / usize) WITHOUT a narrowing conversion at the call site: the ~60 callers
+// pass `static_cast<crd::u32>(idx)`, which used to narrow straight back to this `int` parameter. The explicit cast here
+// keeps the emitted text bit-identical (every value is a small non-negative index) while stating the truncation.
+template <typename T>
+inline void app_uint(crd::containers::String& s, T v) { char b[24]; std::snprintf(b, sizeof(b), "%d", static_cast<int>(v)); s.append(b); }
 inline void app_flit(crd::containers::String& s, crd::f64 v) // a GLSL float literal (always has a '.' or exponent)
 {
     char b[40];
@@ -45,8 +49,18 @@ inline void app_flit(crd::containers::String& s, crd::f64 v) // a GLSL float lit
 }
 // Integer dtypes lower to `int` (bit ops, morton/radix); float dtypes to `float`. GLSL `int` is 32-bit; morton stays
 // within 30 bits (positive) so signed `int` agrees bit-for-bit with the i64 CPU reference.
-[[nodiscard]] inline bool        dt_is_int(DType d) noexcept { return d == DType::I32 || d == DType::I64 || d == DType::U8 || d == DType::Bool; }
-[[nodiscard]] inline const char* ctype(DType d) noexcept { return dt_is_int(d) ? "int" : "float"; }
+[[nodiscard]] inline bool        dt_is_int(DType d) noexcept { return d == DType::I32 || d == DType::I64; }
+[[nodiscard]] inline bool        dt_is_uint(DType d) noexcept { return d == DType::U8 || d == DType::U32; }
+[[nodiscard]] inline bool        is_float_dtype(DType d) noexcept { return !dt_is_int(d) && !dt_is_uint(d) && d != DType::Bool; }
+[[nodiscard]] inline const char* ctype(DType d) noexcept
+{
+    if (d == DType::Bool) { return "bool"; }
+    if (dt_is_uint(d)) { return "uint"; }
+    return dt_is_int(d) ? "int" : "float";
+}
+// The element type of a storage BUFFER. std430 has no `bool` (its size is undefined), so a bool-typed value is stored
+// as a float 0.0/1.0 — the CPU oracle materializes exactly those, so a readback still compares bit-exact.
+[[nodiscard]] inline const char* buf_ctype(DType d) noexcept { return d == DType::Bool ? "float" : ctype(d); }
 inline void app_ilit(crd::containers::String& s, crd::f64 v) { char b[24]; std::snprintf(b, sizeof(b), "%lld", static_cast<long long>(v)); s.append(b); }
 [[nodiscard]] inline bool is_fusable(KOp op) noexcept
 {
@@ -122,7 +136,7 @@ inline bool emit_elementwise_glsl(const KGraph& g, int output, crd::memory::IAll
         {
             binding_of[static_cast<crd::usize>(i)] = out.n_inputs;
             out.input_iidx[out.n_inputs]           = g.node(i).iidx;
-            in_dtype[out.n_inputs]                 = g.node(i).dtype;
+            in_dtype[out.n_inputs]                 = g.node(i).dtype();
             ++out.n_inputs;
         }
     }
@@ -135,7 +149,7 @@ inline bool emit_elementwise_glsl(const KGraph& g, int output, crd::memory::IAll
     {
         s.append("layout(std430, binding = "); app_uint(s, b); s.append(") readonly buffer B"); app_uint(s, b); s.append(" { "); s.append(ctype(in_dtype[b])); s.append(" in"); app_uint(s, b); s.append("[]; };\n");
     }
-    s.append("layout(std430, binding = "); app_uint(s, out.n_inputs); s.append(") writeonly buffer BOUT { "); s.append(ctype(g.node(output).dtype)); s.append(" outb[]; };\n");
+    s.append("layout(std430, binding = "); app_uint(s, out.n_inputs); s.append(") writeonly buffer BOUT { "); s.append(buf_ctype(g.node(output).dtype())); s.append(" outb[]; };\n");
     s.append("layout(push_constant) uniform PC { uint n; };\n");
     s.append("void main() {\n  uint gid = gl_GlobalInvocationID.x;\n  if (gid >= n) { return; }\n");
 
@@ -143,8 +157,10 @@ inline bool emit_elementwise_glsl(const KGraph& g, int output, crd::memory::IAll
     {
         if (!reach[static_cast<crd::usize>(i)]) { continue; }
         const KNode& nd = g.node(i);
-        const bool ii = dt_is_int(nd.dtype);
-        s.append(ii ? "  int t" : "  precise float t"); app_uint(s, i); s.append(" = ");
+        const bool ii = dt_is_int(nd.dtype()) || dt_is_uint(nd.dtype());
+        if (nd.dtype() == DType::Bool) { s.append("  bool t"); }
+        else { s.append(ii ? "  int t" : "  precise float t"); }
+        app_uint(s, i); s.append(" = ");
         const auto ta = [&](int id) { s.append("t"); app_uint(s, id); };
         switch (nd.op)
         {
@@ -171,12 +187,13 @@ inline bool emit_elementwise_glsl(const KGraph& g, int output, crd::memory::IAll
         case KOp::Div: ta(nd.a); s.append(" / "); ta(nd.b); break;
         case KOp::Max: s.append("max("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
         case KOp::Min: s.append("min("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
-        case KOp::CmpLt: s.append("(("); ta(nd.a); s.append(" < "); ta(nd.b); s.append(") ? 1.0 : 0.0)"); break;
-        case KOp::CmpEq: s.append("(("); ta(nd.a); s.append(" == "); ta(nd.b); s.append(") ? 1.0 : 0.0)"); break;
-        case KOp::CmpLe: s.append("(("); ta(nd.a); s.append(" <= "); ta(nd.b); s.append(") ? 1.0 : 0.0)"); break;
-        case KOp::CmpGt: s.append("(("); ta(nd.a); s.append(" > "); ta(nd.b); s.append(") ? 1.0 : 0.0)"); break;
-        case KOp::CmpGe: s.append("(("); ta(nd.a); s.append(" >= "); ta(nd.b); s.append(") ? 1.0 : 0.0)"); break;
-        case KOp::CmpNe: s.append("(("); ta(nd.a); s.append(" != "); ta(nd.b); s.append(") ? 1.0 : 0.0)"); break;
+        // comparisons are BOOL-typed (B0-3): the temp is a `bool`, so no `? 1.0 : 0.0` lowering here.
+        case KOp::CmpLt: s.append("("); ta(nd.a); s.append(" < "); ta(nd.b); s.append(")"); break;
+        case KOp::CmpEq: s.append("("); ta(nd.a); s.append(" == "); ta(nd.b); s.append(")"); break;
+        case KOp::CmpLe: s.append("("); ta(nd.a); s.append(" <= "); ta(nd.b); s.append(")"); break;
+        case KOp::CmpGt: s.append("("); ta(nd.a); s.append(" > "); ta(nd.b); s.append(")"); break;
+        case KOp::CmpGe: s.append("("); ta(nd.a); s.append(" >= "); ta(nd.b); s.append(")"); break;
+        case KOp::CmpNe: s.append("("); ta(nd.a); s.append(" != "); ta(nd.b); s.append(")"); break;
         case KOp::BitNot: s.append("(~"); ta(nd.a); s.append(")"); break;
         case KOp::BitCount: s.append("bitCount("); ta(nd.a); s.append(")"); break;
         case KOp::FindLSB: s.append("findLSB("); ta(nd.a); s.append(")"); break;
@@ -212,19 +229,47 @@ inline bool emit_elementwise_glsl(const KGraph& g, int output, crd::memory::IAll
         case KOp::Cbrt: s.append("(sign("); ta(nd.a); s.append(") * pow(abs("); ta(nd.a); s.append("), 0.3333333333333333))"); break; // no builtin
         case KOp::Mod: s.append("("); ta(nd.a); s.append(" - "); ta(nd.b); s.append(" * trunc("); ta(nd.a); s.append(" / "); ta(nd.b); s.append("))"); break; // C fmod
         case KOp::Fma: s.append("fma("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(")"); break;
-        case KOp::Select: s.append("(("); ta(nd.c); s.append(" != 0.0) ? "); ta(nd.a); s.append(" : "); ta(nd.b); s.append(")"); break;
+        // a Bool condition tests directly; a numeric one (bit-extraction flags) still compares against zero.
+        case KOp::Select: s.append("("); if (g.node(nd.c).dtype() == DType::Bool) { ta(nd.c); } else { s.append("("); ta(nd.c); s.append(" != 0.0)"); } s.append(" ? "); ta(nd.a); s.append(" : "); ta(nd.b); s.append(")"); break;
         default: return false;
         }
         s.append(";\n");
     }
-    s.append("  outb[gid] = t"); app_uint(s, output); s.append(";\n}\n");
+    // std430 cannot hold a `bool`, so a bool result is written as float 0.0/1.0 (matches the oracle's materialization).
+    s.append("  outb[gid] = ");
+    if (g.node(output).dtype() == DType::Bool) { s.append("float(t"); app_uint(s, output); s.append(")"); }
+    else { s.append("t"); app_uint(s, output); }
+    s.append(";\n}\n");
     return true;
 }
 
-// GLSL type for a component count: 1=float, 2/3/4=vecN, 9=mat3, 16=mat4.
-inline const char* vtype(int comps) noexcept
+// GLSL type name for a CKIR value type. GLSL spells a matrix `matCxR` -- COLUMNS first, then rows -- and abbreviates
+// the square case to `matN`; its constructors and `m[col][row]` indexing are column-major, matching our flat storage
+// exactly. This is the TRANSPOSE of HLSL's `floatRxC` spelling (see `htype` in ckir_hlsl.hpp); getting the two mixed up
+// silently transposes every matrix, which is why naming is driven by KType and never by a component count (a comps==4
+// value is a vec4 OR a mat2, and only the type knows which).
+inline const char* vtype(KType t) noexcept
 {
-    switch (comps) { case 2: return "vec2"; case 3: return "vec3"; case 4: return "vec4"; case 9: return "mat3"; case 16: return "mat4"; default: return "float"; }
+    if (t.kind == TKind::Mat)
+    {
+        if (t.rows == t.cols) { switch (t.rows) { case 2: return "mat2"; case 3: return "mat3"; case 4: return "mat4"; default: return "float"; } }
+        switch (static_cast<int>(t.cols) * 10 + static_cast<int>(t.rows))
+        {
+        case 23: return "mat2x3"; case 24: return "mat2x4";
+        case 32: return "mat3x2"; case 34: return "mat3x4";
+        case 42: return "mat4x2"; case 43: return "mat4x3";
+        default: return "float";
+        }
+    }
+    // vecN / ivecN / uvecN / bvecN -- the component scalar picks the prefix. (Matrices are float-only in GLSL.)
+    if (t.kind == TKind::Vec)
+    {
+        if (t.scalar == DType::Bool) { switch (t.rows) { case 2: return "bvec2"; case 3: return "bvec3"; case 4: return "bvec4"; default: break; } }
+        else if (glsl_detail::dt_is_uint(t.scalar)) { switch (t.rows) { case 2: return "uvec2"; case 3: return "uvec3"; case 4: return "uvec4"; default: break; } }
+        else if (glsl_detail::dt_is_int(t.scalar)) { switch (t.rows) { case 2: return "ivec2"; case 3: return "ivec3"; case 4: return "ivec4"; default: break; } }
+        else { switch (t.rows) { case 2: return "vec2"; case 3: return "vec3"; case 4: return "vec4"; default: break; } }
+    }
+    return glsl_detail::ctype(t.scalar);
 }
 // ops the vec/mat emitter fuses into one per-element kernel (scalar-fusable + the vec/mat value ops backed by GLSL builtins).
 inline bool is_vec_fusable(KOp op) noexcept
@@ -236,9 +281,40 @@ inline bool is_vec_fusable(KOp op) noexcept
     case KOp::Dot: case KOp::Cross: case KOp::Normalize: case KOp::VecLen: case KOp::Reflect: case KOp::Refract: case KOp::Faceforward:
     case KOp::MatVecMul: case KOp::MatMatMul: case KOp::MatTranspose: case KOp::Determinant: case KOp::MatInverse: case KOp::OuterProduct: case KOp::MatFromCols:
     case KOp::VecAny: case KOp::VecAll: case KOp::Slerp: case KOp::QuatMul: case KOp::QuatConj: case KOp::QuatRotate: case KOp::QuatAxisAngle: case KOp::QuatToMat3:
-    case KOp::For: case KOp::LoopIndex: case KOp::LoopAcc: return true; // A4 tier-2 dynamic control flow
+    case KOp::For: case KOp::LoopIndex: case KOp::LoopAcc:                                          // A4 tier-2 dynamic control flow
+    case KOp::StructMake: case KOp::ArrayMake: case KOp::FieldGet: case KOp::ArrayGet:              // B0-4 aggregates (SROA'd)
+    case KOp::StageIn: case KOp::Builtin: case KOp::UniformBlock: return true;                      // B3 raster leaves
     default: return false;
     }
+}
+
+// Does the graph reachable from `output` carry any vec/mat/bool/struct VALUE (or dynamic control flow)? ⇒ route to the
+// type-aware emitter rather than the scalar one. Shared by every backend: it used to be copy-pasted as an
+// EXTERNAL-LINKAGE function in both backend_vulkan.cpp and backend_dx12.cpp — two definitions of one symbol, an ODR
+// violation that only stayed quiet because no program links both backends at once.
+[[nodiscard]] inline bool graph_uses_vec(const KGraph& g, int output, crd::memory::IAllocator* scratch)
+{
+    const int                       n = g.size();
+    crd::containers::Array<crd::u8> reach(scratch);
+    crd::containers::Array<int>     stk(scratch);
+    reach.resize(static_cast<crd::usize>(n), 0);
+    stk.push_back(output);
+    while (stk.size() > 0)
+    {
+        const int i = stk[stk.size() - 1];
+        stk.resize(stk.size() - 1);
+        if (i < 0 || reach[static_cast<crd::usize>(i)]) { continue; }
+        reach[static_cast<crd::usize>(i)] = 1;
+        const KNode& nd = g.node(i);
+        if (nd.comps() > 1 || nd.op == KOp::For || nd.op == KOp::LoopIndex || nd.op == KOp::LoopAcc) { return true; }
+        if (is_aggregate(nd.op)) { return true; } // a struct of one scalar has comps == 1, so route by OP
+        if (nd.a >= 0) { stk.push_back(nd.a); }
+        if (nd.b >= 0) { stk.push_back(nd.b); }
+        if (nd.c >= 0) { stk.push_back(nd.c); }
+        if (nd.d >= 0) { stk.push_back(nd.d); }
+        for (int k = 0; k < static_cast<int>(nd.n_ext); ++k) { stk.push_back(g.ext_operand(nd, k)); }
+    }
+    return false;
 }
 
 // A3: comps-aware VECTOR/MATRIX elementwise emitter — vecN/matN temps, INTERLEAVED buffer I/O (comps floats/element),
@@ -263,6 +339,7 @@ inline bool emit_vec_glsl(const KGraph& g, int output, crd::memory::IAllocator* 
         if (nd.b >= 0) { stk.push_back(nd.b); }
         if (nd.c >= 0) { stk.push_back(nd.c); }
         if (nd.d >= 0) { stk.push_back(nd.d); }
+        for (int k = 0; k < static_cast<int>(nd.n_ext); ++k) { stk.push_back(g.ext_operand(nd, k)); } // B0-4 variadic operands
     }
     crd::containers::Array<int> binding_of(scratch);
     binding_of.resize(static_cast<crd::usize>(n), -1);
@@ -274,11 +351,11 @@ inline bool emit_vec_glsl(const KGraph& g, int output, crd::memory::IAllocator* 
         {
             binding_of[static_cast<crd::usize>(i)] = out.n_inputs;
             out.input_iidx[out.n_inputs]           = g.node(i).iidx;
-            out.in_comps[out.n_inputs]             = g.node(i).comps;
+            out.in_comps[out.n_inputs]             = g.node(i).comps();
             ++out.n_inputs;
         }
     }
-    out.out_comps              = g.node(output).comps;
+    out.out_comps              = g.node(output).comps();
     crd::containers::String& s = out.source;
     s.clear();
     s.append("#version 450\n");
@@ -287,7 +364,12 @@ inline bool emit_vec_glsl(const KGraph& g, int output, crd::memory::IAllocator* 
     s.append("layout(std430, binding = "); app_uint(s, static_cast<crd::u32>(out.n_inputs)); s.append(") writeonly buffer BOUT { float outb[]; };\n");
     s.append("layout(push_constant) uniform PC { uint n; };\n");
     { // quaternion/slerp helper functions (no GLSL builtins) — emitted once when the graph uses them
-        bool qm = false, qc = false, qr = false, qa = false, qt = false, sl = false;
+        bool qm = false;
+        bool qc = false;
+        bool qr = false;
+        bool qa = false;
+        bool qt = false;
+        bool sl = false;
         for (int i = 0; i < n; ++i) { if (!reach[static_cast<crd::usize>(i)]) { continue; } switch (g.node(i).op) { case KOp::QuatMul: qm = true; break; case KOp::QuatConj: qc = true; break; case KOp::QuatRotate: qr = true; break; case KOp::QuatAxisAngle: qa = true; break; case KOp::QuatToMat3: qt = true; break; case KOp::Slerp: sl = true; break; default: break; } }
         if (qm) { s.append("vec4 crd_qmul(vec4 a,vec4 b){return vec4(a.w*b.xyz+b.w*a.xyz+cross(a.xyz,b.xyz),a.w*b.w-dot(a.xyz,b.xyz));}\n"); }
         if (qc) { s.append("vec4 crd_qconj(vec4 q){return vec4(-q.xyz,q.w);}\n"); }
@@ -300,7 +382,7 @@ inline bool emit_vec_glsl(const KGraph& g, int output, crd::memory::IAllocator* 
     // A4 tier-2: body-scoping — mark loop-varying nodes (LoopIndex/LoopAcc + consumers; For = barrier) + their owning For.
     crd::containers::Array<crd::u8> varying(scratch);
     varying.resize(static_cast<crd::usize>(n), 0);
-    for (int i = 0; i < n; ++i) { const KNode& v = g.node(i); if (v.op == KOp::For) { continue; } if (v.op == KOp::LoopIndex || v.op == KOp::LoopAcc) { varying[static_cast<crd::usize>(i)] = 1; } else if ((v.a >= 0 && varying[static_cast<crd::usize>(v.a)]) || (v.b >= 0 && varying[static_cast<crd::usize>(v.b)]) || (v.c >= 0 && varying[static_cast<crd::usize>(v.c)]) || (v.d >= 0 && varying[static_cast<crd::usize>(v.d)])) { varying[static_cast<crd::usize>(i)] = 1; } }
+    for (int i = 0; i < n; ++i) { const KNode& v = g.node(i); if (v.op == KOp::For) { continue; } const bool loop_leaf = v.op == KOp::LoopIndex || v.op == KOp::LoopAcc; const bool from_operand = (v.a >= 0 && varying[static_cast<crd::usize>(v.a)]) || (v.b >= 0 && varying[static_cast<crd::usize>(v.b)]) || (v.c >= 0 && varying[static_cast<crd::usize>(v.c)]) || (v.d >= 0 && varying[static_cast<crd::usize>(v.d)]); if (loop_leaf || from_operand) { varying[static_cast<crd::usize>(i)] = 1; } }
     crd::containers::Array<int> body_of(scratch);
     body_of.resize(static_cast<crd::usize>(n), -1);
     crd::containers::Array<int> rstk(scratch);
@@ -311,13 +393,27 @@ inline bool emit_vec_glsl(const KGraph& g, int output, crd::memory::IAllocator* 
     const auto emit_expr = [&](int i) -> bool
     {
         const KNode& nd = g.node(i);
-        const int    c  = nd.comps;
-        s.append("  precise "); s.append(vtype(c)); s.append(" t"); app_uint(s, static_cast<crd::u32>(i)); s.append(" = ");
+        const int    c  = nd.comps();
+        // B0-4 SROA: an aggregate is never materialized on the GPU. `StructMake`/`ArrayMake` emit nothing, and a
+        // `FieldGet`/`ArrayGet` resolves straight to the operand temp its index names -- what Slang and DXC do. This
+        // means the aggregate must come from a Make node; a struct produced by a `Select` would need a real GLSL struct
+        // type, so refuse it loudly rather than emit something subtly wrong.
+        if (nd.op == KOp::StructMake || nd.op == KOp::ArrayMake) { return true; }
+        if (nd.op == KOp::FieldGet || nd.op == KOp::ArrayGet)
+        {
+            const KNode& agg = g.node(nd.a);
+            if (agg.op != KOp::StructMake && agg.op != KOp::ArrayMake) { return false; }
+            s.append(glsl_detail::is_float_dtype(nd.dtype()) ? "  precise " : "  "); s.append(vtype(nd.type));
+            s.append(" t"); app_uint(s, i); s.append(" = "); ta(g.ext_operand(agg, nd.iidx)); s.append(";\n");
+            return true;
+        }
+        // `precise` is a float-only qualifier in GLSL -- a `precise bool`/`precise ivec3` is a compile error.
+        s.append(glsl_detail::is_float_dtype(nd.dtype()) ? "  precise " : "  "); s.append(vtype(nd.type)); s.append(" t"); app_uint(s, static_cast<crd::u32>(i)); s.append(" = ");
         switch (nd.op)
         {
-        case KOp::Input: { const int bd = binding_of[static_cast<crd::usize>(i)]; if (c == 1) { s.append("in"); app_uint(s, static_cast<crd::u32>(bd)); s.append("[gid]"); } else { s.append(vtype(c)); s.append("("); for (int k = 0; k < c; ++k) { if (k) { s.append(", "); } s.append("in"); app_uint(s, static_cast<crd::u32>(bd)); s.append("[gid*"); app_uint(s, static_cast<crd::u32>(c)); s.append("+"); app_uint(s, static_cast<crd::u32>(k)); s.append("]"); } s.append(")"); } break; }
+        case KOp::Input: { const int bd = binding_of[static_cast<crd::usize>(i)]; if (c == 1) { s.append("in"); app_uint(s, static_cast<crd::u32>(bd)); s.append("[gid]"); } else { s.append(vtype(nd.type)); s.append("("); for (int k = 0; k < c; ++k) { if (k) { s.append(", "); } s.append("in"); app_uint(s, static_cast<crd::u32>(bd)); s.append("[gid*"); app_uint(s, static_cast<crd::u32>(c)); s.append("+"); app_uint(s, static_cast<crd::u32>(k)); s.append("]"); } s.append(")"); } break; } // GLSL matrix ctors take column-major scalars — exactly our flat layout
         case KOp::Const: app_flit(s, nd.cval); break;
-        case KOp::Cast: s.append(vtype(c)); s.append("("); ta(nd.a); s.append(")"); break;
+        case KOp::Cast: s.append(vtype(nd.type)); s.append("("); ta(nd.a); s.append(")"); break;
         case KOp::Neg: s.append("-"); ta(nd.a); break;
         case KOp::Recip: s.append("(1.0 / "); ta(nd.a); s.append(")"); break;
         case KOp::Abs: s.append("abs("); ta(nd.a); s.append(")"); break;
@@ -340,10 +436,10 @@ inline bool emit_vec_glsl(const KGraph& g, int output, crd::memory::IAllocator* 
         case KOp::Mix: s.append("mix("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(")"); break;
         case KOp::Vec2: s.append("vec2("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
         case KOp::Vec3: s.append("vec3("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(")"); break;
-        case KOp::VecConcat: s.append(vtype(c)); s.append("("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
+        case KOp::VecConcat: s.append(vtype(nd.type)); s.append("("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
         case KOp::VecComp: ta(nd.a); s.append("."); { const char sw[2] = {xyzw[nd.iidx], '\0'}; s.append(sw); } break;
         case KOp::Swizzle: ta(nd.a); s.append("."); for (int k = 0; k < c; ++k) { const char sw[2] = {xyzw[nd.perm[k]], '\0'}; s.append(sw); } break;
-        case KOp::Splat: s.append(vtype(c)); s.append("("); ta(nd.a); s.append(")"); break;
+        case KOp::Splat: s.append(vtype(nd.type)); s.append("("); ta(nd.a); s.append(")"); break;
         case KOp::Dot: s.append("dot("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
         case KOp::Cross: s.append("cross("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
         case KOp::Normalize: s.append("normalize("); ta(nd.a); s.append(")"); break;
@@ -351,15 +447,37 @@ inline bool emit_vec_glsl(const KGraph& g, int output, crd::memory::IAllocator* 
         case KOp::Reflect: s.append("reflect("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
         case KOp::Refract: s.append("refract("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(")"); break;
         case KOp::Faceforward: s.append("faceforward("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(")"); break;
-        case KOp::MatVecMul: ta(nd.a); s.append(" * "); ta(nd.b); break;
+        case KOp::MatVecMul: // GLSL spells both as the `*` operator (column-major); HLSL needs mul() — see ckir_hlsl.hpp
         case KOp::MatMatMul: ta(nd.a); s.append(" * "); ta(nd.b); break;
         case KOp::MatTranspose: s.append("transpose("); ta(nd.a); s.append(")"); break;
         case KOp::Determinant: s.append("determinant("); ta(nd.a); s.append(")"); break;
         case KOp::MatInverse: s.append("inverse("); ta(nd.a); s.append(")"); break;
         case KOp::OuterProduct: s.append("outerProduct("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
-        case KOp::MatFromCols: if (c == 16) { s.append("mat4("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(", "); ta(nd.d); s.append(")"); } else { s.append("mat3("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(")"); } break;
-        case KOp::VecAny: s.append("(any(notEqual("); ta(nd.a); s.append(", "); s.append(vtype(g.node(nd.a).comps)); s.append("(0.0))) ? 1.0 : 0.0)"); break;
-        case KOp::VecAll: s.append("(all(notEqual("); ta(nd.a); s.append(", "); s.append(vtype(g.node(nd.a).comps)); s.append("(0.0))) ? 1.0 : 0.0)"); break;
+        // C column-vectors -> matCxR. Driven by type.cols, not by comps: mat2 has only 2 operands (c/d are -1).
+        case KOp::MatFromCols: { const int mcols = nd.type.cols; const int operand[4] = {nd.a, nd.b, nd.c, nd.d}; s.append(vtype(nd.type)); s.append("("); for (int k = 0; k < mcols; ++k) { if (k) { s.append(", "); } ta(operand[k]); } s.append(")"); break; }
+        // any/all take a bvec directly; a numeric vector is first compared componentwise against zero. Result is `bool`.
+        case KOp::VecAny: if (g.node(nd.a).dtype() == DType::Bool) { s.append("any("); ta(nd.a); s.append(")"); } else { s.append("any(notEqual("); ta(nd.a); s.append(", "); s.append(vtype(g.node(nd.a).type)); s.append("(0.0)))"); } break;
+        case KOp::VecAll: if (g.node(nd.a).dtype() == DType::Bool) { s.append("all("); ta(nd.a); s.append(")"); } else { s.append("all(notEqual("); ta(nd.a); s.append(", "); s.append(vtype(g.node(nd.a).type)); s.append("(0.0)))"); } break;
+        // B0-3 comparisons. GLSL has no `<` on vectors -- componentwise needs lessThan()/equal()/... yielding a bvecN.
+        case KOp::CmpLt: case KOp::CmpLe: case KOp::CmpGt: case KOp::CmpGe: case KOp::CmpEq: case KOp::CmpNe:
+        {
+            const bool  vecop = g.node(nd.a).type.kind == TKind::Vec;
+            const char* fn    = "";
+            const char* sym   = "";
+            switch (nd.op)
+            {
+            case KOp::CmpLt: fn = "lessThan("; sym = " < "; break;
+            case KOp::CmpLe: fn = "lessThanEqual("; sym = " <= "; break;
+            case KOp::CmpGt: fn = "greaterThan("; sym = " > "; break;
+            case KOp::CmpGe: fn = "greaterThanEqual("; sym = " >= "; break;
+            case KOp::CmpEq: fn = "equal("; sym = " == "; break;
+            default: fn = "notEqual("; sym = " != "; break;
+            }
+            if (vecop) { s.append(fn); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); }
+            else { s.append("("); ta(nd.a); s.append(sym); ta(nd.b); s.append(")"); }
+            break;
+        }
+        case KOp::Select: s.append("("); if (g.node(nd.c).dtype() == DType::Bool) { ta(nd.c); } else { s.append("("); ta(nd.c); s.append(" != 0.0)"); } s.append(" ? "); ta(nd.a); s.append(" : "); ta(nd.b); s.append(")"); break;
         case KOp::Slerp: s.append("crd_slerp("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(")"); break;
         case KOp::QuatMul: s.append("crd_qmul("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
         case KOp::QuatConj: s.append("crd_qconj("); ta(nd.a); s.append(")"); break;
@@ -378,24 +496,45 @@ inline bool emit_vec_glsl(const KGraph& g, int output, crd::memory::IAllocator* 
         const KNode& nd = g.node(i);
         if (nd.op == KOp::For) // A4 tier-2: native per-thread `for`; body-scoped nodes (loop-varying) emit INSIDE the loop
         {
-            s.append("  precise "); s.append(vtype(nd.comps)); s.append(" t"); app_uint(s, static_cast<crd::u32>(i)); s.append(" = t"); app_uint(s, static_cast<crd::u32>(nd.b)); s.append(";\n");
+            s.append("  precise "); s.append(vtype(nd.type)); s.append(" t"); app_uint(s, static_cast<crd::u32>(i)); s.append(" = t"); app_uint(s, static_cast<crd::u32>(nd.b)); s.append(";\n");
             s.append("  for (int li_"); app_uint(s, static_cast<crd::u32>(i)); s.append(" = 0; li_"); app_uint(s, static_cast<crd::u32>(i)); s.append(" < int(t"); app_uint(s, static_cast<crd::u32>(nd.a)); s.append("); li_"); app_uint(s, static_cast<crd::u32>(i)); s.append("++) {\n");
             for (int bid = 0; bid < i; ++bid)
             {
                 if (body_of[static_cast<crd::usize>(bid)] != i) { continue; }
                 const KNode& bn = g.node(bid);
                 if (bn.op == KOp::LoopIndex) { s.append("  precise float t"); app_uint(s, static_cast<crd::u32>(bid)); s.append(" = float(li_"); app_uint(s, static_cast<crd::u32>(i)); s.append(");\n"); }
-                else if (bn.op == KOp::LoopAcc) { s.append("  precise "); s.append(vtype(bn.comps)); s.append(" t"); app_uint(s, static_cast<crd::u32>(bid)); s.append(" = t"); app_uint(s, static_cast<crd::u32>(i)); s.append(";\n"); }
+                else if (bn.op == KOp::LoopAcc) { s.append("  precise "); s.append(vtype(bn.type)); s.append(" t"); app_uint(s, static_cast<crd::u32>(bid)); s.append(" = t"); app_uint(s, static_cast<crd::u32>(i)); s.append(";\n"); }
                 else if (!emit_expr(bid)) { return false; }
             }
             s.append("  t"); app_uint(s, static_cast<crd::u32>(i)); s.append(" = t"); app_uint(s, static_cast<crd::u32>(nd.c)); s.append(";\n  }\n");
         }
         else if (!emit_expr(i)) { return false; }
     }
-    const int oc = out.out_comps;
-    if (oc == 1) { s.append("  outb[gid] = t"); app_uint(s, static_cast<crd::u32>(output)); s.append(";\n"); }
-    else if (oc <= 4) { for (int k = 0; k < oc; ++k) { s.append("  outb[gid*"); app_uint(s, static_cast<crd::u32>(oc)); s.append("+"); app_uint(s, static_cast<crd::u32>(k)); s.append("] = t"); app_uint(s, static_cast<crd::u32>(output)); s.append("["); app_uint(s, static_cast<crd::u32>(k)); s.append("];\n"); } }
-    else { const int d = (oc == 16) ? 4 : 3; for (int col = 0; col < d; ++col) { for (int row = 0; row < d; ++row) { s.append("  outb[gid*"); app_uint(s, static_cast<crd::u32>(oc)); s.append("+"); app_uint(s, static_cast<crd::u32>(col * d + row)); s.append("] = t"); app_uint(s, static_cast<crd::u32>(output)); s.append("["); app_uint(s, static_cast<crd::u32>(col)); s.append("]["); app_uint(s, static_cast<crd::u32>(row)); s.append("];\n"); } } }
+    // Write back column-major. Matrix-ness comes from the TYPE, not from the component count: a comps==4 output is a
+    // vec4 (indexed `t[k]`) or a mat2 (indexed `t[col][row]`), and guessing from `oc` gets mat2 wrong.
+    const int    oc  = out.out_comps;
+    const KType& oty = g.node(output).type;
+    if (oty.kind == TKind::Mat)
+    {
+        for (int col = 0; col < oty.cols; ++col) { for (int row = 0; row < oty.rows; ++row) { s.append("  outb[gid*"); app_uint(s, oc); s.append("+"); app_uint(s, col * oty.rows + row); s.append("] = t"); app_uint(s, output); s.append("["); app_uint(s, col); s.append("]["); app_uint(s, row); s.append("];\n"); } }
+    }
+    // the output buffer is `float`; a bool / bvec component converts on write (the oracle materializes 0.0 / 1.0 too).
+    else if (oc == 1)
+    {
+        s.append("  outb[gid] = ");
+        if (oty.scalar == DType::Bool) { s.append("float(t"); app_uint(s, output); s.append(")"); } else { s.append("t"); app_uint(s, output); }
+        s.append(";\n");
+    }
+    else
+    {
+        for (int k = 0; k < oc; ++k)
+        {
+            s.append("  outb[gid*"); app_uint(s, oc); s.append("+"); app_uint(s, k); s.append("] = ");
+            if (oty.scalar == DType::Bool) { s.append("float(t"); app_uint(s, output); s.append("["); app_uint(s, k); s.append("])"); }
+            else { s.append("t"); app_uint(s, output); s.append("["); app_uint(s, k); s.append("]"); }
+            s.append(";\n");
+        }
+    }
     s.append("}\n");
     return true;
 }
@@ -782,8 +921,8 @@ inline bool emit_broadcast_glsl(const KGraph& g, int output, GlslKernel& out)
     s.clear();
     s.append("#version 450\n");
     s.append("layout(local_size_x = 256) in;\n");
-    s.append("layout(std430, binding = 0) readonly buffer BA { "); s.append(glsl_detail::ctype(g.node(bn.a).dtype)); s.append(" A[]; };\n");
-    s.append("layout(std430, binding = 1) writeonly buffer BO { "); s.append(glsl_detail::ctype(bn.dtype)); s.append(" O[]; };\n");
+    s.append("layout(std430, binding = 0) readonly buffer BA { "); s.append(glsl_detail::ctype(g.node(bn.a).dtype())); s.append(" A[]; };\n");
+    s.append("layout(std430, binding = 1) writeonly buffer BO { "); s.append(glsl_detail::ctype(bn.dtype())); s.append(" O[]; };\n");
     s.append("layout(push_constant) uniform PC { uint n; };\n");
     s.append("void main() {\n  uint gid = gl_GlobalInvocationID.x;\n  if (gid >= n) { return; }\n");
     s.append("  O[gid] = A[0];\n}\n");
@@ -800,10 +939,10 @@ inline bool emit_iota_glsl(const KGraph& g, int output, GlslKernel& out)
     s.clear();
     s.append("#version 450\n");
     s.append("layout(local_size_x = 256) in;\n");
-    s.append("layout(std430, binding = 0) writeonly buffer BO { "); s.append(glsl_detail::ctype(in.dtype)); s.append(" O[]; };\n");
+    s.append("layout(std430, binding = 0) writeonly buffer BO { "); s.append(glsl_detail::ctype(in.dtype())); s.append(" O[]; };\n");
     s.append("layout(push_constant) uniform PC { uint n; };\n");
     s.append("void main() {\n  uint gid = gl_GlobalInvocationID.x;\n  if (gid >= n) { return; }\n");
-    s.append("  O[gid] = "); s.append(glsl_detail::dt_is_int(in.dtype) ? "int(gid)" : "float(gid)"); s.append(";\n}\n");
+    s.append("  O[gid] = "); s.append(glsl_detail::dt_is_int(in.dtype()) ? "int(gid)" : "float(gid)"); s.append(";\n}\n");
     return true;
 }
 

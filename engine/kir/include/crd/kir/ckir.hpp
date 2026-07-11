@@ -17,6 +17,7 @@
 // work. NO std containers; caller-owned allocator throughout.
 
 #include <crd/containers/array.hpp>
+#include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
 #include <crd/math/cmath.hpp>
 #include <crd/memory/allocator.hpp>
@@ -30,7 +31,74 @@ namespace crd::kir
 // ADR-0096 dtypes. v17-a computes/rounds F32 + F64 (the reference tier); F16/BF16/int are storage, exact eval in later
 // slices. round_dtype below rounds an f64 accumulator to the node's storage precision so the reference matches an
 // IEEE f32 GPU kernel.
-enum class DType : crd::u8 { F32, F64, F16, BF16, I32, I64, U8, Bool };
+// Appended, never reordered: a DType is stored in the IR and will be serialized by the Phase-D cook, so an existing
+// value's numeric tag must stay put (the vtable-stability discipline, applied to an enum).
+enum class DType : crd::u8 { F32, F64, F16, BF16, I32, I64, U8, Bool, U32 };
+
+[[nodiscard]] inline bool is_bool_dtype(DType d) noexcept { return d == DType::Bool; }
+
+// The VALUE FORM of a node's per-element type. A CKIR value is a scalar, a vecN, or a matRxC of `scalar` components
+// (column-major: `cols` columns of `rows` elements). Modelled as ONE composed type, the way SPIR-V (OpTypeVector /
+// OpTypeMatrix) and Slang do, rather than a loose (dtype, component-count) pair — a component count alone cannot tell
+// a vec4 from a mat2, and carries no scalar type, so `ivec3` / `bvec4` / `mat2` are unrepresentable without it.
+// Extended in a later slice: Sampler + Texture kinds (B2).
+enum class TKind : crd::u8 { Scalar, Vec, Mat, Struct };
+
+struct KType
+{
+    DType    scalar = DType::F32;
+    TKind    kind   = TKind::Scalar;
+    crd::u8  rows   = 1; // vec width, or matrix row count
+    crd::u8  cols   = 1; // matrix column count (1 for scalar + vec)
+    // B0-4 aggregates. `count` is a fixed ARRAY length — array-ness applies to ANY element form, so there is no separate
+    // `TKind::Array` (a `vec3[2]` is kind=Vec, rows=3, count=2). `elem_comps` caches the flat scalar count of ONE element
+    // for structs, whose real definition lives in the graph's struct registry; its only writer is `KGraph::struct_type()`,
+    // so two types with the same `struct_id` always agree and `operator==` stays a plain value compare.
+    crd::u16 count      = 1;  // fixed array length (1 = not an array)
+    crd::i16 struct_id  = -1; // index into KGraph's struct registry (-1 = not a struct)
+    crd::u16 elem_comps = 0;  // flat scalars in one element; 0 => derive as rows*cols
+
+    [[nodiscard]] constexpr int elem_size() const noexcept
+    {
+        return elem_comps != 0 ? static_cast<int>(elem_comps) : static_cast<int>(rows) * static_cast<int>(cols);
+    }
+    // flat component count — what the eval buffers and the emitters index elements with.
+    [[nodiscard]] constexpr int  comps() const noexcept { return elem_size() * static_cast<int>(count); }
+    [[nodiscard]] constexpr bool is_array() const noexcept { return count > 1; }
+
+    [[nodiscard]] constexpr bool operator==(const KType&) const noexcept = default;
+
+    // same form, different component scalar — `cast` and the bit-reinterpret ops (floatBitsToInt / intBitsToFloat).
+    [[nodiscard]] constexpr KType with_scalar(DType d) const noexcept { KType t = *this; t.scalar = d; return t; }
+
+    [[nodiscard]] static constexpr KType make_scalar(DType d) noexcept { return KType{d, TKind::Scalar, 1, 1, 1, -1, 0}; }
+    // a 1-wide vector IS a scalar — keep one canonical spelling so CSE never sees two types for one value.
+    [[nodiscard]] static constexpr KType vec(DType d, int n) noexcept
+    {
+        return n <= 1 ? make_scalar(d) : KType{d, TKind::Vec, static_cast<crd::u8>(n), 1, 1, -1, 0};
+    }
+    [[nodiscard]] static constexpr KType mat(DType d, int r, int c) noexcept
+    {
+        return KType{d, TKind::Mat, static_cast<crd::u8>(r), static_cast<crd::u8>(c), 1, -1, 0};
+    }
+    // an ARRAY of `n` copies of `elem`. Nested arrays are not representable (there is one `count`); an array of arrays
+    // goes through a struct — which is also the only way GLSL/HLSL let you spell it.
+    [[nodiscard]] static constexpr KType array_of(KType elem, int n) noexcept
+    {
+        KType t = elem;
+        t.count = static_cast<crd::u16>(n);
+        return t;
+    }
+    // Rebuild the A3 form from a flat component count (1 scalar · 2/3/4 vecN · 9 mat3 · 16 mat4) — the exact mapping the
+    // pre-KType emitters hard-coded. `4` is ambiguous (vec4 or mat2) and resolves to the A3 meaning, vec4; callers that
+    // mean mat2 construct it explicitly via `mat()`.
+    [[nodiscard]] static constexpr KType from_comps(DType d, int n) noexcept
+    {
+        if (n == 9) { return mat(d, 3, 3); }
+        if (n == 16) { return mat(d, 4, 4); }
+        return vec(d, n);
+    }
+};
 
 enum class KOp : crd::u8
 {
@@ -52,6 +120,8 @@ enum class KOp : crd::u8
     Slerp, QuatMul, QuatConj, QuatRotate, QuatAxisAngle, QuatToMat3, // A3 interp+quats (quat=vec4 x,y,z,w): slerp · Hamilton mul · conj · rotate vec · from axis-angle · to mat3
     For, LoopIndex, LoopAcc,                                // A4 tier-2 dynamic control flow: bounded For loop + its body leaves (index, accumulator)
     BitReverse, Ldexp, FloatBitsToInt, IntBitsToFloat, Modf, // minor gaps: reverse 32 bits · m*2^e · reinterpret f32↔i32 bits · modf→vec2(int,frac)
+    StructMake, ArrayMake, FieldGet, ArrayGet,              // B0-4 aggregates (variadic operands in the graph's ext pool)
+    StageIn, Builtin, UniformBlock,                         // B3 raster leaves: location-indexed stage input · per-stage builtin · UBO at (set, binding)
     Select,                                                 // ternary: cond ? a : b
     ReduceSum, ReduceMax, ReduceMin, ReduceProd, ArgMax, ArgMin, // reductions over an axis mask (keepdims; Arg* -> index)
     ScanSum,                                                     // inclusive prefix-sum along the trailing axis (keeps shape)
@@ -62,6 +132,274 @@ enum class KOp : crd::u8
     ScatterAdd,                                             // atomic scatter-ADD (histogram): out[M]=0, then out[idx[i]] += updates[i]
     Cast                                                    // dtype conversion
 };
+
+// Comparisons yield a BOOLEAN, not a numeric 0/1 — `bool` for scalar operands, `bvecN` componentwise for vectors, the
+// way GLSL / HLSL / SPIR-V all define them. (Emitting `? 1.0 : 0.0` is a LOWERING choice a backend may still make; it
+// is not the IR's type.) A `Select` accepts either a Bool condition or a numeric one — bit-extraction produces numeric
+// flags (radix/morton), and forcing those through a cast would buy nothing.
+// B0-4 aggregate ops. `StructMake`/`ArrayMake` carry VARIADIC operands (the ext pool); `FieldGet`/`ArrayGet` slice one
+// field/element out. Every operand walk must handle the variadic pair; every emitter must route these to the value path.
+[[nodiscard]] inline bool is_aggregate(KOp op) noexcept
+{
+    return op == KOp::StructMake || op == KOp::ArrayMake || op == KOp::FieldGet || op == KOp::ArrayGet;
+}
+
+// ── B3: the STAGE model (ADR-0101 "one core, two profiles" · ADR-0103 "gpu-context owns every GPU program") ───────────
+// CKIR was compute-only: every emitter hardcoded a compute entry point. A stage is now explicit, because `dFdx`,
+// `discard` and frag-depth (B1) are fragment constructs, materials (B5..B8) are vertex+fragment programs, and B4/B9 add
+// mesh-shading and ray tracing.
+//
+// The enum is COMPLETE from day one — all 14 SPIR-V execution models — even though most stages have no emitter yet.
+// Reference: `docs/systems/shader-ir-corpus-and-stages.md` §2 (mesh-first; geometry supported-but-discouraged).
+// **Declaring only the stages we can emit today would bake a 3-stage assumption into every `switch` that consumes this
+// enum, and each such `switch` is a silent `default:` waiting to mis-lower a mesh shader** — the same class of defect as
+// `MatFromCols` hardcoding three columns (B0-2) and `KOp::Cast` hitting `default: return false` in three emitters
+// (B0-4). A backend that cannot yet lower a stage must REFUSE LOUDLY; it must never fall back to compute.
+//
+// Ordered by pipeline position, not by SPIR-V's numbering. Once D1 serializes a `KEntry` this numbering FREEZES and the
+// enum becomes append-only (the `DType::U32` rule).
+enum class KStage : crd::u8
+{
+    Compute = 0,
+    // classic raster — always available
+    Vertex,
+    TessControl, // hull
+    TessEval,    // domain
+    Geometry,    // LEGACY: single-thread amplification bottleneck. Supported for ports; never build a pipeline on it.
+    Fragment,
+    // modern raster — the amplification path (DX12 2019 / VK_EXT_mesh_shader 2022)
+    Task, // amplification
+    Mesh,
+    // ray tracing — DXR / VK_KHR_ray_tracing_pipeline
+    RayGen,
+    Intersection,
+    AnyHit,
+    ClosestHit,
+    Miss,
+    Callable,
+};
+constexpr int kStageCount = 14;
+
+[[nodiscard]] constexpr crd::u32 stage_bit(KStage s) noexcept { return 1U << static_cast<crd::u32>(s); }
+
+// Stage-set masks. A constants namespace (the `crd::gpu::compute_usage` pattern), so `stage_mask::workgroup` reads as
+// prose at the use site.
+namespace stage_mask
+{
+constexpr crd::u32 kCompute     = stage_bit(KStage::Compute);
+constexpr crd::u32 kVertex      = stage_bit(KStage::Vertex);
+constexpr crd::u32 kTessControl = stage_bit(KStage::TessControl);
+constexpr crd::u32 kTessEval    = stage_bit(KStage::TessEval);
+constexpr crd::u32 kGeometry    = stage_bit(KStage::Geometry);
+constexpr crd::u32 kFragment    = stage_bit(KStage::Fragment);
+constexpr crd::u32 kTask        = stage_bit(KStage::Task);
+constexpr crd::u32 kMesh        = stage_bit(KStage::Mesh);
+constexpr crd::u32 kRayGen      = stage_bit(KStage::RayGen);
+constexpr crd::u32 kIntersection = stage_bit(KStage::Intersection);
+constexpr crd::u32 kAnyHit      = stage_bit(KStage::AnyHit);
+constexpr crd::u32 kClosestHit  = stage_bit(KStage::ClosestHit);
+constexpr crd::u32 kMiss        = stage_bit(KStage::Miss);
+constexpr crd::u32 kCallable    = stage_bit(KStage::Callable);
+
+// Stages dispatched as a workgroup grid — they share the compute builtin family verbatim.
+constexpr crd::u32 kWorkgroup = kCompute | kTask | kMesh;
+// Every ray-tracing stage.
+constexpr crd::u32 kRayAny = kRayGen | kIntersection | kAnyHit | kClosestHit | kMiss | kCallable;
+// RT stages that have an INCOMING ray (raygen has not traced yet; callable carries no ray).
+constexpr crd::u32 kRayIncoming = kIntersection | kAnyHit | kClosestHit | kMiss;
+// RT stages positioned at a hit — object space, instance data, and the object<->world transforms exist.
+constexpr crd::u32 kRayHit = kIntersection | kAnyHit | kClosestHit;
+} // namespace stage_mask
+
+[[nodiscard]] constexpr bool is_raster_stage(KStage s) noexcept
+{
+    return (stage_bit(s)
+            & (stage_mask::kVertex | stage_mask::kTessControl | stage_mask::kTessEval | stage_mask::kGeometry
+               | stage_mask::kFragment | stage_mask::kTask | stage_mask::kMesh))
+           != 0U;
+}
+[[nodiscard]] constexpr bool is_ray_tracing_stage(KStage s) noexcept
+{
+    return (stage_bit(s) & stage_mask::kRayAny) != 0U;
+}
+
+// Which stages emit the clip-space position. Fragment consumes it (as `FragCoord`); it never writes it.
+[[nodiscard]] constexpr bool stage_writes_position(KStage s) noexcept
+{
+    return (stage_bit(s) & (stage_mask::kVertex | stage_mask::kTessEval | stage_mask::kGeometry | stage_mask::kMesh))
+           != 0U;
+}
+[[nodiscard]] constexpr bool stage_writes_frag_depth(KStage s) noexcept { return s == KStage::Fragment; }
+
+[[nodiscard]] inline const char* stage_name(KStage s) noexcept
+{
+    switch (s)
+    {
+    case KStage::Compute: return "Compute";
+    case KStage::Vertex: return "Vertex";
+    case KStage::TessControl: return "TessControl";
+    case KStage::TessEval: return "TessEval";
+    case KStage::Geometry: return "Geometry";
+    case KStage::Fragment: return "Fragment";
+    case KStage::Task: return "Task";
+    case KStage::Mesh: return "Mesh";
+    case KStage::RayGen: return "RayGen";
+    case KStage::Intersection: return "Intersection";
+    case KStage::AnyHit: return "AnyHit";
+    case KStage::ClosestHit: return "ClosestHit";
+    case KStage::Miss: return "Miss";
+    case KStage::Callable: return "Callable";
+    }
+    return "?";
+}
+
+// Per-stage builtin INPUTS. Stage OUTPUTS (clip position, frag depth) are named by `KEntry`, not read as values.
+// Each builtin carries ONE type and ONE set of stages in which it may be read — both in `builtin_info` below, so the
+// type and the legality can never drift apart. GLSL/HLSL/MSL spellings belong to the emitters, not here.
+enum class KBuiltin : crd::u8
+{
+    // workgroup family — Compute / Task / Mesh
+    GlobalInvocationId,   // uvec3
+    LocalInvocationId,    // uvec3
+    WorkgroupId,          // uvec3
+    NumWorkgroups,        // uvec3
+    LocalInvocationIndex, // uint
+    // vertex
+    VertexIndex,   // int — gl_VertexIndex   / SV_VertexID
+    InstanceIndex, // int — gl_InstanceIndex / SV_InstanceID
+    // tessellation + geometry
+    InvocationId,     // int  — gl_InvocationID (TCS, and the instanced-GS invocation)
+    PatchVertexCount, // int  — gl_PatchVerticesIn
+    TessCoord,        // vec3 — gl_TessCoord (TES)
+    PrimitiveId,      // int  — gl_PrimitiveID / gl_PrimitiveIDIn; also readable at an RT hit
+    // fragment
+    FragCoord,   // vec4 — gl_FragCoord / SV_Position
+    FrontFacing, // bool — gl_FrontFacing / SV_IsFrontFace
+    PointCoord,  // vec2
+    SampleId,    // int  — per-sample shading
+    Layer,       // int  — the layer a GS/mesh stage routed this primitive to
+    // ray tracing
+    LaunchId,           // uvec3 — gl_LaunchIDEXT   (all RT stages)
+    LaunchSize,         // uvec3 — gl_LaunchSizeEXT (all RT stages)
+    WorldRayOrigin,     // vec3
+    WorldRayDirection,  // vec3
+    ObjectRayOrigin,    // vec3
+    ObjectRayDirection, // vec3
+    RayTmin,            // float
+    RayTmax,            // float
+    HitT,               // float — gl_HitTEXT (any-hit / closest-hit)
+    HitKind,            // uint
+    RayFlags,           // uint  — gl_IncomingRayFlagsEXT
+    InstanceId,         // int
+    InstanceCustomIndex,// int
+    GeometryIndex,      // int
+    ObjectToWorld,      // mat4x3 — 4 columns of 3 rows
+    WorldToObject,      // mat4x3
+};
+
+struct KBuiltinInfo
+{
+    KType       type;
+    crd::u32    stages; // bitmask of `stage_bit(...)` — the stages in which reading this builtin is legal
+    const char* name;   // diagnostics only; each emitter owns its own spelling
+};
+
+[[nodiscard]] inline KBuiltinInfo builtin_info(KBuiltin b) noexcept
+{
+    const KType t_uvec3 = KType::vec(DType::U32, 3);
+    const KType t_vec3  = KType::vec(DType::F32, 3);
+    const KType t_uint  = KType::make_scalar(DType::U32);
+    const KType t_int   = KType::make_scalar(DType::I32);
+    const KType t_float = KType::make_scalar(DType::F32);
+
+    switch (b)
+    {
+    case KBuiltin::GlobalInvocationId:   return {t_uvec3, stage_mask::kWorkgroup, "GlobalInvocationId"};
+    case KBuiltin::LocalInvocationId:    return {t_uvec3, stage_mask::kWorkgroup, "LocalInvocationId"};
+    case KBuiltin::WorkgroupId:          return {t_uvec3, stage_mask::kWorkgroup, "WorkgroupId"};
+    case KBuiltin::NumWorkgroups:        return {t_uvec3, stage_mask::kWorkgroup, "NumWorkgroups"};
+    case KBuiltin::LocalInvocationIndex: return {t_uint, stage_mask::kWorkgroup, "LocalInvocationIndex"};
+
+    case KBuiltin::VertexIndex:   return {t_int, stage_mask::kVertex, "VertexIndex"};
+    case KBuiltin::InstanceIndex: return {t_int, stage_mask::kVertex, "InstanceIndex"};
+
+    case KBuiltin::InvocationId:     return {t_int, stage_mask::kTessControl | stage_mask::kGeometry, "InvocationId"};
+    case KBuiltin::PatchVertexCount: return {t_int, stage_mask::kTessControl | stage_mask::kTessEval, "PatchVertexCount"};
+    case KBuiltin::TessCoord:        return {t_vec3, stage_mask::kTessEval, "TessCoord"};
+    case KBuiltin::PrimitiveId:
+        return {t_int,
+                stage_mask::kTessControl | stage_mask::kTessEval | stage_mask::kGeometry | stage_mask::kFragment
+                    | stage_mask::kRayHit,
+                "PrimitiveId"};
+
+    case KBuiltin::FragCoord:   return {KType::vec(DType::F32, 4), stage_mask::kFragment, "FragCoord"};
+    case KBuiltin::FrontFacing: return {KType::make_scalar(DType::Bool), stage_mask::kFragment, "FrontFacing"};
+    case KBuiltin::PointCoord:  return {KType::vec(DType::F32, 2), stage_mask::kFragment, "PointCoord"};
+    case KBuiltin::SampleId:    return {t_int, stage_mask::kFragment, "SampleId"};
+    case KBuiltin::Layer:       return {t_int, stage_mask::kFragment, "Layer"};
+
+    case KBuiltin::LaunchId:            return {t_uvec3, stage_mask::kRayAny, "LaunchId"};
+    case KBuiltin::LaunchSize:          return {t_uvec3, stage_mask::kRayAny, "LaunchSize"};
+    case KBuiltin::WorldRayOrigin:      return {t_vec3, stage_mask::kRayIncoming, "WorldRayOrigin"};
+    case KBuiltin::WorldRayDirection:   return {t_vec3, stage_mask::kRayIncoming, "WorldRayDirection"};
+    case KBuiltin::ObjectRayOrigin:     return {t_vec3, stage_mask::kRayHit, "ObjectRayOrigin"};
+    case KBuiltin::ObjectRayDirection:  return {t_vec3, stage_mask::kRayHit, "ObjectRayDirection"};
+    case KBuiltin::RayTmin:             return {t_float, stage_mask::kRayIncoming, "RayTmin"};
+    case KBuiltin::RayTmax:             return {t_float, stage_mask::kRayIncoming, "RayTmax"};
+    case KBuiltin::HitT:                return {t_float, stage_mask::kAnyHit | stage_mask::kClosestHit, "HitT"};
+    case KBuiltin::HitKind:             return {t_uint, stage_mask::kAnyHit | stage_mask::kClosestHit, "HitKind"};
+    case KBuiltin::RayFlags:            return {t_uint, stage_mask::kRayIncoming, "RayFlags"};
+    case KBuiltin::InstanceId:          return {t_int, stage_mask::kRayHit, "InstanceId"};
+    case KBuiltin::InstanceCustomIndex: return {t_int, stage_mask::kRayHit, "InstanceCustomIndex"};
+    case KBuiltin::GeometryIndex:       return {t_int, stage_mask::kRayHit, "GeometryIndex"};
+    case KBuiltin::ObjectToWorld:       return {KType::mat(DType::F32, 3, 4), stage_mask::kRayHit, "ObjectToWorld"};
+    case KBuiltin::WorldToObject:       return {KType::mat(DType::F32, 3, 4), stage_mask::kRayHit, "WorldToObject"};
+    }
+    return {KType::make_scalar(DType::F32), 0U, "?"};
+}
+
+[[nodiscard]] inline KType builtin_type(KBuiltin b) noexcept { return builtin_info(b).type; }
+[[nodiscard]] inline bool  builtin_allowed_in(KBuiltin b, KStage s) noexcept
+{
+    return (builtin_info(b).stages & stage_bit(s)) != 0U;
+}
+
+// The raster leaves. `StageIn` is location-indexed and serves BOTH a vertex attribute and a fragment interpolant —
+// the entry point's stage disambiguates them, exactly as SPIR-V models it (one `Input` storage class per location).
+[[nodiscard]] inline bool is_stage_leaf(KOp op) noexcept
+{
+    return op == KOp::StageIn || op == KOp::Builtin || op == KOp::UniformBlock;
+}
+
+// A stage ENTRY POINT over a graph: which node feeds each output. Position-writing stages must set `position` (the
+// clip-space vec4); fragment entries write colour attachments and may set `frag_depth`. Interpolants (VS out -> FS in)
+// and colour attachments are both location-indexed, so one table serves both.
+constexpr int kMaxStageOutputs = 8;
+
+struct KStageOutput
+{
+    int node     = -1;
+    int location = 0;
+};
+
+struct KEntry
+{
+    KStage       stage      = KStage::Fragment;
+    int          position   = -1; // clip-space vec4. Required iff `stage_writes_position(stage)`.
+    int          frag_depth = -1; // Fragment: optional explicit depth (defeats early-Z; B1 makes the intent explicit).
+    int          n_out      = 0;
+    KStageOutput out[kMaxStageOutputs] = {};
+};
+
+[[nodiscard]] inline bool is_compare(KOp op) noexcept
+{
+    switch (op)
+    {
+    case KOp::CmpLt: case KOp::CmpEq: case KOp::CmpLe:
+    case KOp::CmpGt: case KOp::CmpGe: case KOp::CmpNe: return true;
+    default: return false;
+    }
+}
 
 // a reduction op (fixed-order accumulation over a trailing-contiguous axis mask). Central classifier so every emitter
 // + backend dispatch handles the whole family; adding a reduce = extend this + the per-op combine.
@@ -123,7 +461,7 @@ struct Shape
 struct KNode
 {
     KOp      op;
-    DType    dtype;
+    KType    type;                   // per-element value type (scalar dtype + form) — the single source of truth
     Shape    shape;
     crd::i32 a = -1, b = -1, c = -1, d = -1; // operands (-1 = none); d added for 4-operand ops (mat4-from-columns)
     crd::f64 cval = 0.0;             // Const value
@@ -131,13 +469,25 @@ struct KNode
     crd::u32 axes = 0;               // ReduceSum/Max/Broadcast: axis bitmask
     crd::u8  perm[kMaxRank] = {};    // Permute permutation
     DetTier  tier = DetTier::Exact;  // reductions/scan: T1 exact (default) vs T2 fast-parallel
-    crd::u8  comps = 1;              // A3 value width: 1=scalar, 2/3/4 = vecN (per-element vector value)
+    // B0-4: VARIADIC operands. Four slots (a/b/c/d) cannot hold a struct's N fields, so aggregate constructors park
+    // their operand list in `KGraph`'s flat ext pool at [ext, ext + n_ext). Every operand walk — DCE, the CSE key, the
+    // `optimize()` renumber — must visit these too; that is exactly the bug class the missing `d` remap was (B0-0), so
+    // `operands_valid()` checks them.
+    crd::i32 ext   = -1;             // offset into KGraph's ext-operand pool (-1 = none)
+    crd::u16 n_ext = 0;              // operand count at that offset
+    // B3: `UniformBlock` lives at (dset, iidx=binding). `dset` IS ADR-0102's frequency: 0 frame · 1 pass/lighting ·
+    // 2 material · 3 object. `StageIn` uses `iidx` as its location; `Builtin` uses `iidx` as the KBuiltin value.
+    crd::u8 dset = 0;
+
+    [[nodiscard]] constexpr DType dtype() const noexcept { return type.scalar; }
+    [[nodiscard]] constexpr int   comps() const noexcept { return type.comps(); }
 };
 
 // round an f64 accumulator to a storage dtype so the reference is bit-faithful to that precision.
 [[nodiscard]] inline crd::f64 round_dtype(crd::f64 v, DType dt) noexcept
 {
     if (dt == DType::F32) { return static_cast<crd::f64>(static_cast<float>(v)); }
+    if (dt == DType::Bool) { return v != 0.0 ? 1.0 : 0.0; } // a bool materializes as exactly 0.0 or 1.0 in the oracle
     return v; // F64 (and, for now, the storage dtypes — exact narrow rounding lands with their backends)
 }
 
@@ -220,7 +570,7 @@ struct KNode
     {
     case KOp::Clamp: { const crd::f64 m = a > b ? a : b; return m < c ? m : c; } // clamp(x=a, min=b, max=c) = min(max(a,b),c)
     case KOp::Mix: return a * (1.0 - c) + b * c;                                 // mix(x=a, y=b, t=c) = x*(1-t)+y*t
-    case KOp::Smoothstep: { const crd::f64 u = (c - a) / (b - a); const crd::f64 t = u < 0.0 ? 0.0 : (u > 1.0 ? 1.0 : u); return t * t * (3.0 - 2.0 * t); } // smoothstep(e0=a,e1=b,x=c) — ULP
+    case KOp::Smoothstep: { const crd::f64 u = (c - a) / (b - a); const crd::f64 hi = u > 1.0 ? 1.0 : u; const crd::f64 t = u < 0.0 ? 0.0 : hi; return t * t * (3.0 - 2.0 * t); } // smoothstep(e0=a,e1=b,x=c) — ULP; NaN u falls through both tests, as GLSL requires
     case KOp::Fma: return crd::math::fma(a, b, c);                               // a*b+c single-rounded (IEEE fma) — bit-exact
     case KOp::BitfieldExtract: { const crd::i64 iv = static_cast<crd::i64>(a); const crd::i64 off = static_cast<crd::i64>(b); const crd::i64 bits = static_cast<crd::i64>(c); return static_cast<crd::f64>((iv >> off) & ((static_cast<crd::i64>(1) << bits) - 1)); } // (v>>off)&mask
     default: return a;
@@ -230,24 +580,82 @@ struct KNode
 class KGraph
 {
 public:
-    explicit KGraph(crd::memory::IAllocator* alloc) noexcept : m_nodes(alloc) {}
+    explicit KGraph(crd::memory::IAllocator* alloc) noexcept
+        : m_nodes(alloc), m_ext(alloc), m_sfields(alloc), m_sbegin(alloc)
+    {
+    }
 
-    [[nodiscard]] int input(const Shape& shape, DType dt) { KNode n; n.op = KOp::Input; n.dtype = dt; n.shape = shape; n.iidx = m_ninput++; return push(n); }
+    // ── B0-4: struct registry ────────────────────────────────────────────────────────────────────────────────────────
+    // A struct is a named, ordered list of field types, stored CSR-style (m_sbegin indexes into m_sfields). Fields are
+    // laid out contiguously in the flat component run — the same interleaved storage vec/mat values already use — so no
+    // std430 padding rules appear here. Buffer-BACKED structs (which do need std430) are the resource-binding slice, B3.
+    [[nodiscard]] int define_struct(const KType* fields, int n_fields)
+    {
+        const int id = static_cast<int>(m_sbegin.size());
+        m_sbegin.push_back(static_cast<crd::u32>(m_sfields.size())); // one `begin` per struct; the end is the next begin
+        for (int i = 0; i < n_fields; ++i) { m_sfields.push_back(fields[i]); }
+        return id;
+    }
+    [[nodiscard]] int struct_field_count(int id) const noexcept
+    {
+        const crd::u32 b = m_sbegin[static_cast<crd::usize>(id)];
+        const crd::u32 e = (static_cast<crd::usize>(id) + 1 < m_sbegin.size()) ? m_sbegin[static_cast<crd::usize>(id) + 1]
+                                                                              : static_cast<crd::u32>(m_sfields.size());
+        return static_cast<int>(e - b);
+    }
+    [[nodiscard]] KType struct_field(int id, int k) const noexcept
+    {
+        return m_sfields[static_cast<crd::usize>(m_sbegin[static_cast<crd::usize>(id)]) + static_cast<crd::usize>(k)];
+    }
+    // flat scalar offset of field `k` within one struct element
+    [[nodiscard]] int struct_field_offset(int id, int k) const noexcept
+    {
+        int off = 0;
+        for (int i = 0; i < k; ++i) { off += struct_field(id, i).comps(); }
+        return off;
+    }
+    [[nodiscard]] int struct_flat_comps(int id) const noexcept
+    {
+        return struct_field_offset(id, struct_field_count(id));
+    }
+    // the KType naming a registered struct (carries the cached flat size so `KType::comps()` needs no registry lookup).
+    [[nodiscard]] KType struct_type(int id) const noexcept
+    {
+        KType t;
+        t.kind       = TKind::Struct;
+        t.struct_id  = static_cast<crd::i16>(id);
+        t.elem_comps = static_cast<crd::u16>(struct_flat_comps(id));
+        return t;
+    }
+
+    // variadic-operand accessors (the ext pool)
+    [[nodiscard]] int ext_operand(const KNode& n, int k) const noexcept
+    {
+        return m_ext[static_cast<crd::usize>(n.ext) + static_cast<crd::usize>(k)];
+    }
+
+    [[nodiscard]] int input(const Shape& shape, DType dt) { KNode n; n.op = KOp::Input; n.type = KType::make_scalar(dt); n.shape = shape; n.iidx = m_ninput++; return push(n); }
     // A3: a vector/matrix input (comps>1) — per-element vecN/matN, fed as comps interleaved values per element.
-    [[nodiscard]] int input_vec(const Shape& shape, DType dt, int comps) { KNode n; n.op = KOp::Input; n.dtype = dt; n.shape = shape; n.iidx = m_ninput++; n.comps = static_cast<crd::u8>(comps); return push(n); }
-    [[nodiscard]] int constant(crd::f64 v, const Shape& shape, DType dt) { KNode n; n.op = KOp::Const; n.dtype = dt; n.shape = shape; n.cval = v; return push(n); }
-    [[nodiscard]] int iota(const Shape& shape, int axis, DType dt) { KNode n; n.op = KOp::Iota; n.dtype = dt; n.shape = shape; n.iidx = axis; return push(n); }
+    // NOTE `comps == 4` resolves to vec4 (the A3 meaning); a mat2 input is ambiguous there and must use `input_mat`.
+    [[nodiscard]] int input_vec(const Shape& shape, DType dt, int comps) { KNode n; n.op = KOp::Input; n.type = KType::from_comps(dt, comps); n.shape = shape; n.iidx = m_ninput++; return push(n); }
+    // B0-2: an explicit RxC matrix input, fed as rows*cols column-major values per element. The only way to feed a mat2
+    // (comps 4 collides with vec4) or any non-square matrix.
+    [[nodiscard]] int input_mat(const Shape& shape, DType dt, int rows, int cols) { KNode n; n.op = KOp::Input; n.type = KType::mat(dt, rows, cols); n.shape = shape; n.iidx = m_ninput++; return push(n); }
+    [[nodiscard]] int constant(crd::f64 v, const Shape& shape, DType dt) { KNode n; n.op = KOp::Const; n.type = KType::make_scalar(dt); n.shape = shape; n.cval = v; return push(n); }
+    [[nodiscard]] int iota(const Shape& shape, int axis, DType dt) { KNode n; n.op = KOp::Iota; n.type = KType::make_scalar(dt); n.shape = shape; n.iidx = axis; return push(n); }
 
-    [[nodiscard]] int unary(KOp op, int a) { KNode n; n.op = op; n.dtype = t(a).dtype; n.shape = t(a).shape; n.a = a; n.comps = t(a).comps; return push(n); }
-    [[nodiscard]] int binary(KOp op, int a, int b) { KNode n; n.op = op; n.dtype = t(a).dtype; n.shape = t(a).shape; n.a = a; n.b = b; n.comps = t(a).comps; return push(n); }
-    [[nodiscard]] int ternary(KOp op, int a, int b, int c) { KNode n; n.op = op; n.dtype = t(a).dtype; n.shape = t(a).shape; n.a = a; n.b = b; n.c = c; n.comps = t(a).comps; return push(n); } // Clamp/Mix/Fma
-    [[nodiscard]] int select(int cond, int a, int b) { KNode n; n.op = KOp::Select; n.dtype = t(a).dtype; n.shape = t(a).shape; n.a = a; n.b = b; n.c = cond; n.comps = t(a).comps; return push(n); }
+    [[nodiscard]] int unary(KOp op, int a) { KNode n; n.op = op; n.type = t(a).type; n.shape = t(a).shape; n.a = a; return push(n); }
+    [[nodiscard]] int binary(KOp op, int a, int b) { KNode n; n.op = op; n.type = is_compare(op) ? t(a).type.with_scalar(DType::Bool) : t(a).type; n.shape = t(a).shape; n.a = a; n.b = b; return push(n); }
+    [[nodiscard]] int ternary(KOp op, int a, int b, int c) { KNode n; n.op = op; n.type = t(a).type; n.shape = t(a).shape; n.a = a; n.b = b; n.c = c; return push(n); } // Clamp/Mix/Fma
+    [[nodiscard]] int select(int cond, int a, int b) { KNode n; n.op = KOp::Select; n.type = t(a).type; n.shape = t(a).shape; n.a = a; n.b = b; n.c = cond; return push(n); }
     // Structured control flow — FIXED-count loop (A4 tier 1): acc = init; for it in [0,count): acc = body(it, acc); return acc.
     // Compile-time UNROLL ⇒ pure dataflow ⇒ runs on EVERY backend through the existing emitters (no IR/eval/emit change).
     // `body(int it, int acc) -> int` returns the next accumulator node. For DYNAMIC/large trip counts, the region-based
     // dynamic For/While (tier 2) is the follow-on slice (needs loop-body scoping in the eval + emitters).
+    // `body` is taken BY VALUE, not by forwarding reference: it is invoked once per iteration, so forwarding it would
+    // move from it on the first call. Same reason for `for_loop` / `while_loop` below.
     template <typename BodyFn>
-    [[nodiscard]] int unroll_for(int count, int init, BodyFn&& body)
+    [[nodiscard]] int unroll_for(int count, int init, BodyFn body)
     {
         int acc = init;
         for (int it = 0; it < count; ++it) { acc = body(it, acc); }
@@ -257,128 +665,223 @@ public:
     // `count` may be a per-element (divergent) node; `body_fn(index_node, acc_node) -> next-acc node` builds the body from
     // the body-scoped `LoopIndex` (F32 iteration) + `LoopAcc` (current accumulator) leaves. Single-level (no nesting yet).
     template <typename BodyFn>
-    [[nodiscard]] int for_loop(int count, int init, BodyFn&& body_fn)
+    [[nodiscard]] int for_loop(int count, int init, BodyFn body_fn)
     {
-        KNode     ix; ix.op = KOp::LoopIndex; ix.dtype = DType::F32; ix.shape = t(init).shape; ix.comps = 1; const int idx = push(ix);
-        KNode     ac; ac.op = KOp::LoopAcc; ac.dtype = t(init).dtype; ac.shape = t(init).shape; ac.comps = t(init).comps; const int acc = push(ac);
+        KNode     ix; ix.op = KOp::LoopIndex; ix.type = KType::make_scalar(DType::F32); ix.shape = t(init).shape; const int idx = push(ix);
+        KNode     ac; ac.op = KOp::LoopAcc; ac.type = t(init).type; ac.shape = t(init).shape; const int acc = push(ac);
         const int body = body_fn(idx, acc);
-        KNode     n; n.op = KOp::For; n.dtype = t(init).dtype; n.shape = t(init).shape; n.a = count; n.b = init; n.c = body; n.comps = t(init).comps;
+        KNode     n; n.op = KOp::For; n.type = t(init).type; n.shape = t(init).shape; n.a = count; n.b = init; n.c = body;
         return push(n);
     }
     // A4 tier-2 BOUNDED while (the GPU-safe form — no unbounded loops on a GPU): run up to max_iter, but each element
     // FREEZES its accumulator once `cond_fn(acc)` becomes 0. cond_fn(acc)->keep-node (nonzero = keep looping);
     // body_fn(index, acc)->next-acc node. Lowers to a For + a per-step Select ⇒ runs on every backend.
     template <typename CondFn, typename BodyFn>
-    [[nodiscard]] int while_loop(int max_iter, int init, CondFn&& cond_fn, BodyFn&& body_fn)
+    [[nodiscard]] int while_loop(int max_iter, int init, CondFn cond_fn, BodyFn body_fn)
     {
-        const int mi = constant(static_cast<crd::f64>(max_iter), t(init).shape, t(init).dtype);
+        const int mi = constant(static_cast<crd::f64>(max_iter), t(init).shape, t(init).dtype());
         return for_loop(mi, init, [&](int idx, int acc) { const int keep = cond_fn(acc); const int nxt = body_fn(idx, acc); return select(keep, nxt, acc); });
     }
     // A4 tier-2 SWITCH/if-branch multiplex: (selector == key) ? val : fallback. Chain these for a full switch; a plain
     // if/else on VALUES is just `select(cond, then, else)`. Branchless (both arms evaluated) — the shader-correct form.
     [[nodiscard]] int switch_case(int selector, int key, int val, int fallback) { return select(binary(KOp::CmpNe, selector, key), fallback, val); }
-    [[nodiscard]] int cast(int a, DType dt) { KNode n; n.op = KOp::Cast; n.dtype = dt; n.shape = t(a).shape; n.a = a; n.comps = t(a).comps; return push(n); }
+    [[nodiscard]] int cast(int a, DType dt) { KNode n; n.op = KOp::Cast; n.type = t(a).type.with_scalar(dt); n.shape = t(a).shape; n.a = a; return push(n); }
     // A3 vector values (per-element vecN; components stored interleaved in the eval buffer / emitter).
-    [[nodiscard]] int vec2(int a, int b) { KNode n; n.op = KOp::Vec2; n.dtype = t(a).dtype; n.shape = t(a).shape; n.a = a; n.b = b; n.comps = 2; return push(n); }
-    [[nodiscard]] int vec3(int a, int b, int c) { KNode n; n.op = KOp::Vec3; n.dtype = t(a).dtype; n.shape = t(a).shape; n.a = a; n.b = b; n.c = c; n.comps = 3; return push(n); }
-    [[nodiscard]] int vec_comp(int v, int idx) { KNode n; n.op = KOp::VecComp; n.dtype = t(v).dtype; n.shape = t(v).shape; n.a = v; n.iidx = idx; n.comps = 1; return push(n); }
-    [[nodiscard]] int dot(int a, int b) { KNode n; n.op = KOp::Dot; n.dtype = t(a).dtype; n.shape = t(a).shape; n.a = a; n.b = b; n.comps = 1; return push(n); }
-    [[nodiscard]] int cross(int a, int b) { KNode n; n.op = KOp::Cross; n.dtype = t(a).dtype; n.shape = t(a).shape; n.a = a; n.b = b; n.comps = 3; return push(n); }
-    [[nodiscard]] int normalize(int a) { KNode n; n.op = KOp::Normalize; n.dtype = t(a).dtype; n.shape = t(a).shape; n.a = a; n.comps = t(a).comps; return push(n); }
-    [[nodiscard]] int vlength(int a) { KNode n; n.op = KOp::VecLen; n.dtype = t(a).dtype; n.shape = t(a).shape; n.a = a; n.comps = 1; return push(n); }
+    [[nodiscard]] int vec2(int a, int b) { KNode n; n.op = KOp::Vec2; n.type = KType::vec(t(a).dtype(), 2); n.shape = t(a).shape; n.a = a; n.b = b; return push(n); }
+    [[nodiscard]] int vec3(int a, int b, int c) { KNode n; n.op = KOp::Vec3; n.type = KType::vec(t(a).dtype(), 3); n.shape = t(a).shape; n.a = a; n.b = b; n.c = c; return push(n); }
+    [[nodiscard]] int vec_comp(int v, int idx) { KNode n; n.op = KOp::VecComp; n.type = KType::make_scalar(t(v).dtype()); n.shape = t(v).shape; n.a = v; n.iidx = idx; return push(n); }
+    [[nodiscard]] int dot(int a, int b) { KNode n; n.op = KOp::Dot; n.type = KType::make_scalar(t(a).dtype()); n.shape = t(a).shape; n.a = a; n.b = b; return push(n); }
+    [[nodiscard]] int cross(int a, int b) { KNode n; n.op = KOp::Cross; n.type = KType::vec(t(a).dtype(), 3); n.shape = t(a).shape; n.a = a; n.b = b; return push(n); }
+    [[nodiscard]] int normalize(int a) { KNode n; n.op = KOp::Normalize; n.type = t(a).type; n.shape = t(a).shape; n.a = a; return push(n); }
+    [[nodiscard]] int vlength(int a) { KNode n; n.op = KOp::VecLen; n.type = KType::make_scalar(t(a).dtype()); n.shape = t(a).shape; n.a = a; return push(n); }
     // concat two vec values → a wider vec (comps sum). The primitive for vec4 = concat(vec3, w) and general assembly.
-    [[nodiscard]] int vec_concat(int a, int b) { KNode n; n.op = KOp::VecConcat; n.dtype = t(a).dtype; n.shape = t(a).shape; n.a = a; n.b = b; n.comps = static_cast<crd::u8>(t(a).comps + t(b).comps); return push(n); }
+    [[nodiscard]] int vec_concat(int a, int b) { KNode n; n.op = KOp::VecConcat; n.type = KType::vec(t(a).dtype(), t(a).comps() + t(b).comps()); n.shape = t(a).shape; n.a = a; n.b = b; return push(n); }
     [[nodiscard]] int vec4(int x, int y, int z, int w) { return vec_concat(vec3(x, y, z), w); } // (x,y,z,w) — comps 4
     // arbitrary swizzle: out component k = source component idx[k]. width = count of valid (>=0) indices. Covers
     // .x (swizzle(v,0)), .xy (v,0,1), .yzx (v,1,2,0), .wzyx (v,3,2,1,0) — reorder + subset + broadcast (repeat) alike.
     [[nodiscard]] int swizzle(int v, int i0, int i1 = -1, int i2 = -1, int i3 = -1)
     {
-        KNode n; n.op = KOp::Swizzle; n.dtype = t(v).dtype; n.shape = t(v).shape; n.a = v;
+        KNode n; n.op = KOp::Swizzle; n.shape = t(v).shape; n.a = v;
         int w = 0; const int idx[4] = {i0, i1, i2, i3};
         for (int k = 0; k < 4; ++k) { if (idx[k] >= 0) { n.perm[k] = static_cast<crd::u8>(idx[k]); ++w; } }
-        n.comps = static_cast<crd::u8>(w);
+        n.type = KType::vec(t(v).dtype(), w); // a 1-wide swizzle (.x) is a scalar
         return push(n);
     }
-    // Matrices (column-major, stored as concatenated columns): mat3 = 9 comps, mat4 = 16 comps.
-    [[nodiscard]] int mat3(int c0, int c1, int c2) { KNode n; n.op = KOp::MatFromCols; n.dtype = t(c0).dtype; n.shape = t(c0).shape; n.a = c0; n.b = c1; n.c = c2; n.comps = 9; return push(n); } // GPU-constructible
-    [[nodiscard]] int mat4(int c0, int c1, int c2, int c3) { KNode n; n.op = KOp::MatFromCols; n.dtype = t(c0).dtype; n.shape = t(c0).shape; n.a = c0; n.b = c1; n.c = c2; n.d = c3; n.comps = 16; return push(n); } // GPU-constructible (4 vec4 columns)
-    [[nodiscard]] int mat_mul_vec(int m, int v) { KNode n; n.op = KOp::MatVecMul; n.dtype = t(v).dtype; n.shape = t(v).shape; n.a = m; n.b = v; n.comps = t(v).comps; return push(n); }
-    [[nodiscard]] int mat_mul(int a, int b) { KNode n; n.op = KOp::MatMatMul; n.dtype = t(a).dtype; n.shape = t(a).shape; n.a = a; n.b = b; n.comps = t(a).comps; return push(n); }
-    [[nodiscard]] int mat_transpose(int m) { KNode n; n.op = KOp::MatTranspose; n.dtype = t(m).dtype; n.shape = t(m).shape; n.a = m; n.comps = t(m).comps; return push(n); }
+    // Matrices (column-major, stored as concatenated columns): matRxC has C columns of R rows, comps = R*C. Square
+    // mat2/mat3/mat4 = 4/9/16 comps. NOTE mat2 and vec4 share comps==4 — only `KType::kind` tells them apart, which is
+    // why the emitters key on the TYPE and never on the component count.
+    [[nodiscard]] int mat2(int c0, int c1) { KNode n; n.op = KOp::MatFromCols; n.type = KType::mat(t(c0).dtype(), t(c0).comps(), 2); n.shape = t(c0).shape; n.a = c0; n.b = c1; return push(n); }
+    [[nodiscard]] int mat3(int c0, int c1, int c2) { KNode n; n.op = KOp::MatFromCols; n.type = KType::mat(t(c0).dtype(), t(c0).comps(), 3); n.shape = t(c0).shape; n.a = c0; n.b = c1; n.c = c2; return push(n); } // GPU-constructible
+    [[nodiscard]] int mat4(int c0, int c1, int c2, int c3) { KNode n; n.op = KOp::MatFromCols; n.type = KType::mat(t(c0).dtype(), t(c0).comps(), 4); n.shape = t(c0).shape; n.a = c0; n.b = c1; n.c = c2; n.d = c3; return push(n); } // GPU-constructible (4 vec4 columns)
+    // (RxC) * vecC -> vecR · (RxK) * (KxC) -> (RxC). Square is the special case, not the assumption.
+    [[nodiscard]] int mat_mul_vec(int m, int v) { KNode n; n.op = KOp::MatVecMul; n.type = KType::vec(t(v).dtype(), t(m).type.rows); n.shape = t(v).shape; n.a = m; n.b = v; return push(n); }
+    [[nodiscard]] int mat_mul(int a, int b) { KNode n; n.op = KOp::MatMatMul; n.type = KType::mat(t(a).dtype(), t(a).type.rows, t(b).type.cols); n.shape = t(a).shape; n.a = a; n.b = b; return push(n); }
+    // transpose SWAPS the dimensions (identity for the square mat3/mat4 of A3; the correct form once B0-2 lands mat2/non-square).
+    [[nodiscard]] int mat_transpose(int m) { KNode n; n.op = KOp::MatTranspose; n.type = KType::mat(t(m).dtype(), t(m).type.cols, t(m).type.rows); n.shape = t(m).shape; n.a = m; return push(n); }
     // scalar → vecN broadcast (the enabler for scalar*vec, mix(vec,vec,scalar), etc.).
-    [[nodiscard]] int splat(int a, int width) { KNode n; n.op = KOp::Splat; n.dtype = t(a).dtype; n.shape = t(a).shape; n.a = a; n.comps = static_cast<crd::u8>(width); return push(n); }
+    [[nodiscard]] int splat(int a, int width) { KNode n; n.op = KOp::Splat; n.type = KType::vec(t(a).dtype(), width); n.shape = t(a).shape; n.a = a; return push(n); }
     // geometric (GLSL semantics). reflect(I,N)=I-2*dot(N,I)*N · refract(I,N,eta) · faceforward(N,I,Nref) · distance=|a-b|.
-    [[nodiscard]] int reflect(int i, int nrm) { KNode n; n.op = KOp::Reflect; n.dtype = t(i).dtype; n.shape = t(i).shape; n.a = i; n.b = nrm; n.comps = t(i).comps; return push(n); }
-    [[nodiscard]] int refract(int i, int nrm, int eta) { KNode n; n.op = KOp::Refract; n.dtype = t(i).dtype; n.shape = t(i).shape; n.a = i; n.b = nrm; n.c = eta; n.comps = t(i).comps; return push(n); }
-    [[nodiscard]] int faceforward(int nrm, int i, int nref) { KNode n; n.op = KOp::Faceforward; n.dtype = t(nrm).dtype; n.shape = t(nrm).shape; n.a = nrm; n.b = i; n.c = nref; n.comps = t(nrm).comps; return push(n); }
+    [[nodiscard]] int reflect(int i, int nrm) { KNode n; n.op = KOp::Reflect; n.type = t(i).type; n.shape = t(i).shape; n.a = i; n.b = nrm; return push(n); }
+    [[nodiscard]] int refract(int i, int nrm, int eta) { KNode n; n.op = KOp::Refract; n.type = t(i).type; n.shape = t(i).shape; n.a = i; n.b = nrm; n.c = eta; return push(n); }
+    [[nodiscard]] int faceforward(int nrm, int i, int nref) { KNode n; n.op = KOp::Faceforward; n.type = t(nrm).type; n.shape = t(nrm).shape; n.a = nrm; n.b = i; n.c = nref; return push(n); }
     [[nodiscard]] int distance(int a, int b) { return vlength(binary(KOp::Sub, a, b)); }
-    // relational reductions over the components → scalar 0/1.
-    [[nodiscard]] int vany(int v) { KNode n; n.op = KOp::VecAny; n.dtype = t(v).dtype; n.shape = t(v).shape; n.a = v; n.comps = 1; return push(n); }
-    [[nodiscard]] int vall(int v) { KNode n; n.op = KOp::VecAll; n.dtype = t(v).dtype; n.shape = t(v).shape; n.a = v; n.comps = 1; return push(n); }
-    // matrix: outer product (vecN ⊗ vecN → NxN mat, column-major) · determinant (→ scalar) · inverse.
-    [[nodiscard]] int outer_product(int a, int b) { KNode n; n.op = KOp::OuterProduct; n.dtype = t(a).dtype; n.shape = t(a).shape; n.a = a; n.b = b; n.comps = static_cast<crd::u8>(t(a).comps * t(b).comps); return push(n); }
-    [[nodiscard]] int determinant(int m) { KNode n; n.op = KOp::Determinant; n.dtype = t(m).dtype; n.shape = t(m).shape; n.a = m; n.comps = 1; return push(n); }
-    [[nodiscard]] int mat_inverse(int m) { KNode n; n.op = KOp::MatInverse; n.dtype = t(m).dtype; n.shape = t(m).shape; n.a = m; n.comps = t(m).comps; return push(n); }
+    // relational reductions over the components → a scalar BOOL (any/all of a bvec, or of "componentwise != 0").
+    [[nodiscard]] int vany(int v) { KNode n; n.op = KOp::VecAny; n.type = KType::make_scalar(DType::Bool); n.shape = t(v).shape; n.a = v; return push(n); }
+    [[nodiscard]] int vall(int v) { KNode n; n.op = KOp::VecAll; n.type = KType::make_scalar(DType::Bool); n.shape = t(v).shape; n.a = v; return push(n); }
+    // matrix: outer product (vecR ⊗ vecC → RxC mat, column-major) · determinant (→ scalar) · inverse.
+    [[nodiscard]] int outer_product(int a, int b) { KNode n; n.op = KOp::OuterProduct; n.type = KType::mat(t(a).dtype(), t(a).comps(), t(b).comps()); n.shape = t(a).shape; n.a = a; n.b = b; return push(n); }
+    [[nodiscard]] int determinant(int m) { KNode n; n.op = KOp::Determinant; n.type = KType::make_scalar(t(m).dtype()); n.shape = t(m).shape; n.a = m; return push(n); }
+    [[nodiscard]] int mat_inverse(int m) { KNode n; n.op = KOp::MatInverse; n.type = t(m).type; n.shape = t(m).shape; n.a = m; return push(n); }
     // interpolation + quaternions (quat = vec4 (x,y,z,w), w = scalar). lerp = mix ✅; nlerp = normalize(mix).
-    [[nodiscard]] int slerp(int a, int b, int tt) { KNode n; n.op = KOp::Slerp; n.dtype = t(a).dtype; n.shape = t(a).shape; n.a = a; n.b = b; n.c = tt; n.comps = t(a).comps; return push(n); }
-    [[nodiscard]] int nlerp(int a, int b, int tt) { return normalize(ternary(KOp::Mix, a, b, splat(tt, t(a).comps))); }
-    [[nodiscard]] int quat_mul(int a, int b) { KNode n; n.op = KOp::QuatMul; n.dtype = t(a).dtype; n.shape = t(a).shape; n.a = a; n.b = b; n.comps = 4; return push(n); }
-    [[nodiscard]] int quat_conj(int q) { KNode n; n.op = KOp::QuatConj; n.dtype = t(q).dtype; n.shape = t(q).shape; n.a = q; n.comps = 4; return push(n); }
-    [[nodiscard]] int quat_rotate(int q, int v) { KNode n; n.op = KOp::QuatRotate; n.dtype = t(q).dtype; n.shape = t(q).shape; n.a = q; n.b = v; n.comps = 3; return push(n); }
-    [[nodiscard]] int quat_axis_angle(int axis, int angle) { KNode n; n.op = KOp::QuatAxisAngle; n.dtype = t(axis).dtype; n.shape = t(axis).shape; n.a = axis; n.b = angle; n.comps = 4; return push(n); }
-    [[nodiscard]] int quat_to_mat3(int q) { KNode n; n.op = KOp::QuatToMat3; n.dtype = t(q).dtype; n.shape = t(q).shape; n.a = q; n.comps = 9; return push(n); }
+    [[nodiscard]] int slerp(int a, int b, int tt) { KNode n; n.op = KOp::Slerp; n.type = t(a).type; n.shape = t(a).shape; n.a = a; n.b = b; n.c = tt; return push(n); }
+    [[nodiscard]] int nlerp(int a, int b, int tt) { return normalize(ternary(KOp::Mix, a, b, splat(tt, t(a).comps()))); }
+    [[nodiscard]] int quat_mul(int a, int b) { KNode n; n.op = KOp::QuatMul; n.type = KType::vec(t(a).dtype(), 4); n.shape = t(a).shape; n.a = a; n.b = b; return push(n); }
+    [[nodiscard]] int quat_conj(int q) { KNode n; n.op = KOp::QuatConj; n.type = KType::vec(t(q).dtype(), 4); n.shape = t(q).shape; n.a = q; return push(n); }
+    [[nodiscard]] int quat_rotate(int q, int v) { KNode n; n.op = KOp::QuatRotate; n.type = KType::vec(t(q).dtype(), 3); n.shape = t(q).shape; n.a = q; n.b = v; return push(n); }
+    [[nodiscard]] int quat_axis_angle(int axis, int angle) { KNode n; n.op = KOp::QuatAxisAngle; n.type = KType::vec(t(axis).dtype(), 4); n.shape = t(axis).shape; n.a = axis; n.b = angle; return push(n); }
+    [[nodiscard]] int quat_to_mat3(int q) { KNode n; n.op = KOp::QuatToMat3; n.type = KType::mat(t(q).dtype(), 3, 3); n.shape = t(q).shape; n.a = q; return push(n); }
     // minor gaps
     [[nodiscard]] int bit_reverse(int a) { return unary(KOp::BitReverse, a); }
     [[nodiscard]] int ldexp(int m, int e) { return binary(KOp::Ldexp, m, e); }
-    [[nodiscard]] int float_bits_to_int(int a) { KNode n; n.op = KOp::FloatBitsToInt; n.dtype = DType::I32; n.shape = t(a).shape; n.a = a; n.comps = t(a).comps; return push(n); }
-    [[nodiscard]] int int_bits_to_float(int a) { KNode n; n.op = KOp::IntBitsToFloat; n.dtype = DType::F32; n.shape = t(a).shape; n.a = a; n.comps = t(a).comps; return push(n); }
-    [[nodiscard]] int modf(int x) { KNode n; n.op = KOp::Modf; n.dtype = t(x).dtype; n.shape = t(x).shape; n.a = x; n.comps = 2; return push(n); } // → vec2(intpart, fracpart)
+    [[nodiscard]] int float_bits_to_int(int a) { KNode n; n.op = KOp::FloatBitsToInt; n.type = t(a).type.with_scalar(DType::I32); n.shape = t(a).shape; n.a = a; return push(n); }
+    [[nodiscard]] int int_bits_to_float(int a) { KNode n; n.op = KOp::IntBitsToFloat; n.type = t(a).type.with_scalar(DType::F32); n.shape = t(a).shape; n.a = a; return push(n); }
+    [[nodiscard]] int modf(int x) { KNode n; n.op = KOp::Modf; n.type = KType::vec(t(x).dtype(), 2); n.shape = t(x).shape; n.a = x; return push(n); } // → vec2(intpart, fracpart)
     // bitfieldInsert(base, insert, off, bits) = (base & ~mask) | ((insert<<off) & mask), mask = ((1<<bits)-1)<<off — composed.
     [[nodiscard]] int bitfield_insert(int base, int ins, int off, int bits)
     {
-        const int one  = constant(1.0, t(base).shape, t(base).dtype);
+        const int one  = constant(1.0, t(base).shape, t(base).dtype());
         const int mask = binary(KOp::Shl, binary(KOp::Sub, binary(KOp::Shl, one, bits), one), off);
         const int keep = binary(KOp::BitAnd, base, unary(KOp::BitNot, mask));
         const int set  = binary(KOp::BitAnd, binary(KOp::Shl, ins, off), mask);
         return binary(KOp::BitOr, keep, set);
     }
+    // ── B3 raster leaves ────────────────────────────────────────────────────────────────────────────────────────────
+    // A location-indexed stage input: a VERTEX ATTRIBUTE in a vertex entry, an INTERPOLANT in a fragment entry. One op
+    // for both, disambiguated by the entry's stage — SPIR-V models it the same way (one `Input` storage class).
+    [[nodiscard]] int stage_in(KType t, int location)
+    {
+        KNode n;
+        n.op    = KOp::StageIn;
+        n.type  = t;
+        n.shape = make_shape({1}); // a stage value is per-invocation; the tensor Shape carries no meaning here
+        n.iidx  = location;
+        return push(n);
+    }
+    // A per-stage builtin INPUT. Its type is fixed by the builtin, so callers cannot get it wrong. LEGALITY (is this
+    // builtin readable in this stage?) is not knowable here — a graph has no stage; it is checked by `entry_valid`.
+    [[nodiscard]] int builtin(KBuiltin b)
+    {
+        KNode n;
+        n.op    = KOp::Builtin;
+        n.type  = builtin_type(b);
+        n.shape = make_shape({1});
+        n.iidx  = static_cast<int>(b);
+        return push(n);
+    }
+    // A uniform block at (set, binding): a STRUCT-typed leaf, whose members are read with `field_get`. This reuses the
+    // B0-4 struct registry wholesale rather than inventing a second aggregate. `set` is ADR-0102's frequency slot:
+    // 0 = per-frame (camera/time/env) · 1 = per-pass/lighting · 2 = per-material · 3 = per-object.
+    [[nodiscard]] int uniform_block(int struct_id, int set, int binding)
+    {
+        KNode n;
+        n.op    = KOp::UniformBlock;
+        n.type  = struct_type(struct_id);
+        n.shape = make_shape({1});
+        n.iidx  = binding;
+        n.dset  = static_cast<crd::u8>(set);
+        return push(n);
+    }
+
+    // ── B0-4 aggregates ─────────────────────────────────────────────────────────────────────────────────────────────
+    // A struct/array VALUE is a contiguous run of components (fields/elements back to back) — the same flat storage
+    // vec/mat already use. `StructMake`/`ArrayMake` take N operands from the ext pool; `FieldGet`/`ArrayGet` slice one
+    // field/element out (index in `iidx`). The GPU emitters lower these by SROA — the aggregate is never materialized,
+    // and a `FieldGet` resolves straight to the field's temp — which is exactly what Slang and DXC do.
+    [[nodiscard]] int struct_make(int struct_id, const int* fields, int n_fields)
+    {
+        CRD_ASSERT(n_fields == struct_field_count(struct_id));
+        KNode n;
+        n.op    = KOp::StructMake;
+        n.type  = struct_type(struct_id);
+        n.shape = t(fields[0]).shape;
+        n.ext   = push_ext(fields, n_fields);
+        n.n_ext = static_cast<crd::u16>(n_fields);
+        return push(n);
+    }
+    // an array of `n_elems` values, all of the same element type.
+    [[nodiscard]] int array_make(const int* elems, int n_elems)
+    {
+        KNode n;
+        n.op    = KOp::ArrayMake;
+        n.type  = KType::array_of(t(elems[0]).type, n_elems);
+        n.shape = t(elems[0]).shape;
+        n.ext   = push_ext(elems, n_elems);
+        n.n_ext = static_cast<crd::u16>(n_elems);
+        return push(n);
+    }
+    [[nodiscard]] int field_get(int s, int field_idx)
+    {
+        KNode n;
+        n.op    = KOp::FieldGet;
+        n.type  = struct_field(t(s).type.struct_id, field_idx);
+        n.shape = t(s).shape;
+        n.a     = s;
+        n.iidx  = field_idx;
+        return push(n);
+    }
+    // constant-index element read. A DYNAMIC index needs a real array in memory, not an SSA value — that is a
+    // buffer-backed access (B3), not a value-layer one.
+    [[nodiscard]] int array_get(int arr, int elem_idx)
+    {
+        KNode n;
+        n.op    = KOp::ArrayGet;
+        n.type  = t(arr).type;
+        n.type.count = 1; // one element of the array
+        n.shape = t(arr).shape;
+        n.a     = arr;
+        n.iidx  = elem_idx;
+        return push(n);
+    }
+
     // GLM-style transform matrices — pure COMPOSITION of the mat4/vec4 primitives (column-major). translate/scale shown;
     // rotate = mat4-from-quat, perspective/ortho/lookAt = the same pattern (consumer/engine-math level, add on demand).
     [[nodiscard]] int translate(int tx, int ty, int tz)
     {
-        const int z = constant(0.0, t(tx).shape, t(tx).dtype);
-        const int o = constant(1.0, t(tx).shape, t(tx).dtype);
+        const int z = constant(0.0, t(tx).shape, t(tx).dtype());
+        const int o = constant(1.0, t(tx).shape, t(tx).dtype());
         return mat4(vec4(o, z, z, z), vec4(z, o, z, z), vec4(z, z, o, z), vec4(tx, ty, tz, o));
     }
     [[nodiscard]] int scale(int sx, int sy, int sz)
     {
-        const int z = constant(0.0, t(sx).shape, t(sx).dtype);
-        const int o = constant(1.0, t(sx).shape, t(sx).dtype);
+        const int z = constant(0.0, t(sx).shape, t(sx).dtype());
+        const int o = constant(1.0, t(sx).shape, t(sx).dtype());
         return mat4(vec4(sx, z, z, z), vec4(z, sy, z, z), vec4(z, z, sz, z), vec4(z, z, z, o));
     }
 
+    // The TENSOR layer (reduce / movement / contraction / indexing) operates on tensors of SCALARS: the element type is
+    // always scalar, the multi-dimensionality lives in `Shape`. (Per-element vec/mat values are the A3 VALUE layer above.)
     // reduce over the axes in `mask` (keepdims: reduced axes become 1). `tier` selects the determinism tier: Exact (T1,
     // bit-exact fixed order — default) or Fast (T2, parallel workgroup tree-reduce — reordered, RFA, run-to-run stable).
     [[nodiscard]] int reduce(KOp op, int a, crd::u32 mask, DetTier tier = DetTier::Exact)
     {
-        KNode n; n.op = op; n.dtype = t(a).dtype; n.a = a; n.axes = mask; n.shape = t(a).shape; n.tier = tier;
+        KNode n; n.op = op; n.type = KType::make_scalar(t(a).dtype()); n.a = a; n.axes = mask; n.shape = t(a).shape; n.tier = tier;
         for (int i = 0; i < n.shape.rank; ++i) { if ((mask >> i) & 1U) { n.shape.dims[i] = 1; } }
         return push(n);
     }
-    [[nodiscard]] int reshape(int a, const Shape& out) { KNode n; n.op = KOp::Reshape; n.dtype = t(a).dtype; n.shape = out; n.a = a; return push(n); }
+    [[nodiscard]] int reshape(int a, const Shape& out) { KNode n; n.op = KOp::Reshape; n.type = KType::make_scalar(t(a).dtype()); n.shape = out; n.a = a; return push(n); }
     [[nodiscard]] int permute(int a, const crd::u8* p)
     {
-        KNode n; n.op = KOp::Permute; n.dtype = t(a).dtype; n.a = a; n.shape.rank = t(a).shape.rank;
+        KNode n; n.op = KOp::Permute; n.type = KType::make_scalar(t(a).dtype()); n.a = a; n.shape.rank = t(a).shape.rank;
         for (int i = 0; i < n.shape.rank; ++i) { n.perm[i] = p[i]; n.shape.dims[i] = t(a).shape.dims[p[i]]; }
         return push(n);
     }
-    [[nodiscard]] int broadcast(int a, const Shape& out) { KNode n; n.op = KOp::Broadcast; n.dtype = t(a).dtype; n.shape = out; n.a = a; return push(n); }
+    [[nodiscard]] int broadcast(int a, const Shape& out) { KNode n; n.op = KOp::Broadcast; n.type = KType::make_scalar(t(a).dtype()); n.shape = out; n.a = a; return push(n); }
     // batched matmul: a[...,M,K], b[...,K,N] -> [...,M,N] (leading batch dims must match). `tier` selects determinism:
     // Exact (T1, `precise`/no-FMA fixed-order — bit-exact vs the CPU oracle, default) or Fast (T2, FMA + tiled schedule —
     // run-to-run deterministic, matches the FMA-tier oracle; the ported crush kernel).
     [[nodiscard]] int contract(int a, int b, DetTier tier = DetTier::Exact)
     {
-        KNode n; n.op = KOp::Contract; n.dtype = t(a).dtype; n.a = a; n.b = b; n.tier = tier;
+        KNode n; n.op = KOp::Contract; n.type = KType::make_scalar(t(a).dtype()); n.a = a; n.b = b; n.tier = tier;
         const Shape& sa = t(a).shape;
         n.shape = sa;
         n.shape.dims[sa.rank - 1] = t(b).shape.dims[t(b).shape.rank - 1]; // N
@@ -388,7 +891,7 @@ public:
     // out[m, ...] = data[idx[m], ...]. The embedding-lookup / index-select pattern.
     [[nodiscard]] int gather(int data, int idx)
     {
-        KNode n; n.op = KOp::Gather; n.dtype = t(data).dtype; n.a = data; n.b = idx;
+        KNode n; n.op = KOp::Gather; n.type = KType::make_scalar(t(data).dtype()); n.a = data; n.b = idx;
         n.shape          = t(data).shape;
         n.shape.dims[0]  = t(idx).shape.dims[0]; // R -> M (leading axis becomes the index count)
         return push(n);
@@ -397,7 +900,7 @@ public:
     // ...] for m=0..M-1 in order (a later m overrides an earlier one at the same index). The write-side inverse of gather.
     [[nodiscard]] int scatter(int base, int idx, int updates)
     {
-        KNode n; n.op = KOp::Scatter; n.dtype = t(base).dtype; n.a = base; n.b = idx; n.c = updates;
+        KNode n; n.op = KOp::Scatter; n.type = KType::make_scalar(t(base).dtype()); n.a = base; n.b = idx; n.c = updates;
         n.shape = t(base).shape; // output has the SAME shape as base
         return push(n);
     }
@@ -406,20 +909,58 @@ public:
     // atomics (the determinism moat survives). The building block of the radix histogram / counting sort.
     [[nodiscard]] int scatter_add(int idx, int updates, const Shape& bins)
     {
-        KNode n; n.op = KOp::ScatterAdd; n.dtype = t(updates).dtype; n.a = idx; n.b = updates; n.shape = bins;
+        KNode n; n.op = KOp::ScatterAdd; n.type = KType::make_scalar(t(updates).dtype()); n.a = idx; n.b = updates; n.shape = bins;
         return push(n);
     }
     // inclusive prefix-sum along the TRAILING axis (out[..., c] = sum of a[..., 0..c]); keeps the input shape. Fixed
     // ascending order per row ⇒ deterministic + bit-exact vs the naive f32 GPU scan.
-    [[nodiscard]] int scan(int a, DetTier tier = DetTier::Exact) { KNode n; n.op = KOp::ScanSum; n.dtype = t(a).dtype; n.a = a; n.shape = t(a).shape; n.tier = tier; return push(n); }
+    [[nodiscard]] int scan(int a, DetTier tier = DetTier::Exact) { KNode n; n.op = KOp::ScanSum; n.type = KType::make_scalar(t(a).dtype()); n.a = a; n.shape = t(a).shape; n.tier = tier; return push(n); }
 
     [[nodiscard]] int          size() const noexcept { return static_cast<int>(m_nodes.size()); }
     [[nodiscard]] int          n_inputs() const noexcept { return m_ninput; }
     [[nodiscard]] const KNode& node(int i) const noexcept { return m_nodes[static_cast<crd::usize>(i)]; }
 
+    // Structural invariant: every operand references a STRICTLY EARLIER node, because `push()` appends and an operand
+    // always exists before its consumer — push order IS topological order. A pass that compacts and renumbers the array
+    // must remap all FOUR operands; one left behind surfaces here as a forward or out-of-range reference.
+    [[nodiscard]] bool operands_valid() const noexcept
+    {
+        for (int i = 0; i < size(); ++i)
+        {
+            const KNode&   n      = node(i);
+            const crd::i32 ops[4] = {n.a, n.b, n.c, n.d};
+            for (const crd::i32 o : ops)
+            {
+                if (o == -1) { continue; }
+                if (o < 0 || o >= i) { return false; }
+            }
+            // the VARIADIC operands are operands too — the `d`-remap bug, one field further out
+            for (int k = 0; k < static_cast<int>(n.n_ext); ++k)
+            {
+                const crd::i32 o = ext_operand(n, k);
+                if (o < 0 || o >= i) { return false; }
+            }
+        }
+        return true;
+    }
+
     // Append a COPY of an already-validated node (op/shape/dtype/axes preserved; caller remaps a/b/c to this graph's ids).
     // For the multi-kernel scheduler's per-kernel mini-graphs — it clones a subgraph, so no shape/dtype re-inference.
-    [[nodiscard]] int clone(const KNode& n) { return push(n); }
+    // A node with VARIADIC operands cannot be cloned this way: `ext` indexes the SOURCE graph's pool, and copying the
+    // offset verbatim would silently read someone else's operands (the B0-0 bug, one field further out). Use
+    // `clone_with_ext` so the operand list is re-pushed into THIS graph.
+    [[nodiscard]] int clone(const KNode& n)
+    {
+        CRD_ASSERT_MSG(n.n_ext == 0, "clone() cannot carry variadic operands across graphs - use clone_with_ext()");
+        return push(n);
+    }
+    // Clone a variadic node, copying its operand list from `src_ext` into this graph's pool (caller remaps the ids).
+    [[nodiscard]] int clone_with_ext(const KNode& n, const int* src_ext)
+    {
+        KNode c = n;
+        c.ext   = push_ext(src_ext, static_cast<int>(n.n_ext));
+        return push(c);
+    }
 
     // const-fold -> DCE (reachability from roots) -> CSE (hash-cons). Updates roots[] to their new ids. Semantics-
     // preserving + idempotent. (Kernel FUSION is a CKIR-Tile pass — v17-b — where kernels exist; not this level.)
@@ -436,7 +977,10 @@ public:
             KNode& g = m_nodes[static_cast<crd::usize>(i)];
             if (g.op == KOp::Const) { isc[static_cast<crd::usize>(i)] = 1; cval[static_cast<crd::usize>(i)] = g.cval; continue; }
             if (g.op == KOp::Input || g.op == KOp::Iota || g.op == KOp::Contract || g.op == KOp::For || g.op == KOp::LoopIndex || g.op == KOp::LoopAcc) { continue; }
-            if (g.comps != 1) { continue; } // vec/mat values fold to multiple components — never a single scalar Const
+            if (is_stage_leaf(g.op)) { continue; } // B3 leaves have no operands — a SCALAR one (Builtin::VertexIndex, a
+                                                  // scalar StageIn) would otherwise const-fold into a compile-time value
+            if (g.n_ext != 0 || g.op == KOp::FieldGet || g.op == KOp::ArrayGet) { continue; } // aggregates never fold to one scalar Const
+            if (g.comps() != 1) { continue; } // vec/mat values fold to multiple components — never a single scalar Const
             const bool ac = g.a < 0 || isc[static_cast<crd::usize>(g.a)];
             const bool bc = g.b < 0 || isc[static_cast<crd::usize>(g.b)];
             const bool cc = g.c < 0 || isc[static_cast<crd::usize>(g.c)];
@@ -445,16 +989,16 @@ public:
             const crd::f64 bv = g.b >= 0 ? cval[static_cast<crd::usize>(g.b)] : 0.0;
             crd::f64       r  = 0.0;
             if (g.op == KOp::Select) { r = (g.c >= 0 && cval[static_cast<crd::usize>(g.c)] != 0.0) ? av : bv; }
-            else if (g.op == KOp::Cast) { r = round_dtype(av, g.dtype); }
+            else if (g.op == KOp::Cast) { r = round_dtype(av, g.dtype()); }
             // movement (Reshape/Permute/Broadcast) + ReduceMax of a uniform fill are all identity on the value
             else if (g.op == KOp::Reshape || g.op == KOp::Permute || g.op == KOp::Broadcast || g.op == KOp::ReduceMax) { r = av; }
             else if (g.op == KOp::ReduceSum) { crd::i64 c = 1; const Shape& sa = m_nodes[static_cast<crd::usize>(g.a)].shape; for (int k = 0; k < sa.rank; ++k) { if ((g.axes >> k) & 1U) { c *= sa.dims[k]; } } r = av * static_cast<crd::f64>(c); }
             else if (g.b >= 0) { r = apply_binary(g.op, av, bv); }
             else { r = apply_unary(g.op, av); }
             const Shape sh = g.shape;
-            const DType dt = g.dtype;
+            const KType ty = g.type;
             g = KNode{};
-            g.op = KOp::Const; g.shape = sh; g.dtype = dt; g.cval = r;
+            g.op = KOp::Const; g.shape = sh; g.type = ty; g.cval = r;
             isc[static_cast<crd::usize>(i)] = 1; cval[static_cast<crd::usize>(i)] = r;
         }
         crd::containers::Array<crd::u8> keep(al);
@@ -472,12 +1016,14 @@ public:
             if (g.b >= 0) { stk.push_back(g.b); }
             if (g.c >= 0) { stk.push_back(g.c); }
             if (g.d >= 0) { stk.push_back(g.d); }
+            for (int k = 0; k < static_cast<int>(g.n_ext); ++k) { stk.push_back(ext_operand(g, k)); } // variadic operands keep their fields alive
         }
         int cap = 1;
         while (cap < 2 * n + 4) { cap <<= 1; }
-        crd::containers::Array<int>   table(al);
-        crd::containers::Array<int>   newid(al);
-        crd::containers::Array<KNode> nn(al);
+        crd::containers::Array<int>      table(al);
+        crd::containers::Array<int>      newid(al);
+        crd::containers::Array<KNode>    nn(al);
+        crd::containers::Array<crd::i32> nx(al); // the rebuilt ext pool — old offsets are meaningless after compaction
         table.resize(static_cast<crd::usize>(cap), -1);
         newid.resize(static_cast<crd::usize>(n), -1);
         for (int i = 0; i < n; ++i)
@@ -487,51 +1033,85 @@ public:
             if (g.a >= 0) { g.a = newid[static_cast<crd::usize>(g.a)]; }
             if (g.b >= 0) { g.b = newid[static_cast<crd::usize>(g.b)]; }
             if (g.c >= 0) { g.c = newid[static_cast<crd::usize>(g.c)]; }
-            newid[static_cast<crd::usize>(i)] = intern(table, cap, nn, g);
+            if (g.d >= 0) { g.d = newid[static_cast<crd::usize>(g.d)]; } // 4th operand (mat4 column) — renumbered like the rest
+            if (g.n_ext != 0)
+            {
+                const int noff = static_cast<int>(nx.size());
+                for (int k = 0; k < static_cast<int>(g.n_ext); ++k) { nx.push_back(newid[static_cast<crd::usize>(m_ext[static_cast<crd::usize>(g.ext) + static_cast<crd::usize>(k)])]); }
+                g.ext = noff;
+            }
+            newid[static_cast<crd::usize>(i)] = intern(table, cap, nn, g, nx);
         }
         m_nodes = static_cast<crd::containers::Array<KNode>&&>(nn);
+        m_ext   = static_cast<crd::containers::Array<crd::i32>&&>(nx);
         for (int r = 0; r < n_roots; ++r) { roots[r] = newid[static_cast<crd::usize>(roots[r])]; }
+        CRD_ASSERT(operands_valid());
     }
 
 private:
     int push(const KNode& n) { m_nodes.push_back(n); return static_cast<int>(m_nodes.size()) - 1; }
     [[nodiscard]] const KNode& t(int i) const noexcept { return m_nodes[static_cast<crd::usize>(i)]; }
+    int push_ext(const int* ops, int n)
+    {
+        const int off = static_cast<int>(m_ext.size());
+        for (int i = 0; i < n; ++i) { m_ext.push_back(ops[i]); }
+        return off;
+    }
 
-    [[nodiscard]] static crd::u64 key_hash(const KNode& g) noexcept
+    [[nodiscard]] static crd::u64 key_hash(const KNode& g, const crd::containers::Array<crd::i32>& pool) noexcept
     {
         crd::u64 h = 1469598103934665603ULL;
         const auto mix = [&h](crd::u64 v) { h ^= v; h *= 1099511628211ULL; };
         mix(static_cast<crd::u64>(g.op));
-        mix(static_cast<crd::u64>(g.dtype));
+        // the FULL type participates in the key — two values that differ only in scalar type or form (ivec3 vs vec3,
+        // vec4 vs mat2, Light vs Material) must never hash-cons together.
+        mix(static_cast<crd::u64>(g.type.scalar));
+        mix(static_cast<crd::u64>(g.type.kind));
+        mix(static_cast<crd::u64>(g.type.rows));
+        mix(static_cast<crd::u64>(g.type.cols));
+        mix(static_cast<crd::u64>(g.type.count));
+        mix(static_cast<crd::u64>(static_cast<crd::u16>(g.type.struct_id)));
+        mix(static_cast<crd::u64>(g.type.elem_comps));
+        // hash the variadic operand VALUES, never the pool offset — two identical StructMakes sit at different offsets.
+        mix(static_cast<crd::u64>(g.n_ext));
+        for (int k = 0; k < static_cast<int>(g.n_ext); ++k) { mix(static_cast<crd::u64>(static_cast<crd::u32>(pool[static_cast<crd::usize>(g.ext) + static_cast<crd::usize>(k)]))); }
         mix(static_cast<crd::u64>(static_cast<crd::u32>(g.a)));
         mix(static_cast<crd::u64>(static_cast<crd::u32>(g.b)));
         mix(static_cast<crd::u64>(static_cast<crd::u32>(g.c)));
         mix(static_cast<crd::u64>(static_cast<crd::u32>(g.d)));
-        mix(static_cast<crd::u64>(g.comps));
         crd::u64 cb = 0;
         std::memcpy(&cb, &g.cval, sizeof(cb));
         mix(cb);
         mix(static_cast<crd::u64>(static_cast<crd::u32>(g.iidx)));
+        mix(static_cast<crd::u64>(g.dset)); // B3: two UniformBlocks at the same binding but different SETS are distinct
         mix(static_cast<crd::u64>(g.axes));
         mix(static_cast<crd::u64>(g.shape.rank));
         for (int k = 0; k < g.shape.rank; ++k) { mix(static_cast<crd::u64>(g.shape.dims[k])); mix(static_cast<crd::u64>(g.perm[k])); }
         return h;
     }
-    [[nodiscard]] static bool node_equal(const KNode& x, const KNode& y) noexcept
+    [[nodiscard]] static bool node_equal(const KNode& x, const KNode& y, const crd::containers::Array<crd::i32>& pool) noexcept
     {
         if (x.op == KOp::For || x.op == KOp::LoopIndex || x.op == KOp::LoopAcc) { return false; } // never CSE loop constructs — operandless leaves belong to a specific loop
-        if (x.op != y.op || x.dtype != y.dtype || x.a != y.a || x.b != y.b || x.c != y.c || x.d != y.d || x.comps != y.comps || x.iidx != y.iidx || x.axes != y.axes) { return false; }
+        if (x.op != y.op || !(x.type == y.type) || x.a != y.a || x.b != y.b || x.c != y.c || x.d != y.d || x.iidx != y.iidx || x.dset != y.dset || x.axes != y.axes) { return false; }
         if (x.cval != y.cval || !(x.shape == y.shape)) { return false; }
         for (int k = 0; k < x.shape.rank; ++k) { if (x.perm[k] != y.perm[k]) { return false; } }
+        if (x.n_ext != y.n_ext) { return false; }
+        for (int k = 0; k < static_cast<int>(x.n_ext); ++k)
+        {
+            const crd::usize xk = static_cast<crd::usize>(x.ext) + static_cast<crd::usize>(k);
+            const crd::usize yk = static_cast<crd::usize>(y.ext) + static_cast<crd::usize>(k);
+            if (pool[xk] != pool[yk]) { return false; }
+        }
         return true;
     }
-    static int intern(crd::containers::Array<int>& table, int cap, crd::containers::Array<KNode>& nn, const KNode& g)
+    static int intern(crd::containers::Array<int>& table, int cap, crd::containers::Array<KNode>& nn, const KNode& g,
+                      const crd::containers::Array<crd::i32>& pool)
     {
         const int mask = cap - 1;
-        int       slot = static_cast<int>(key_hash(g) & static_cast<crd::u64>(mask));
+        int       slot = static_cast<int>(key_hash(g, pool) & static_cast<crd::u64>(mask));
         while (table[static_cast<crd::usize>(slot)] >= 0)
         {
-            if (node_equal(nn[static_cast<crd::usize>(table[static_cast<crd::usize>(slot)])], g)) { return table[static_cast<crd::usize>(slot)]; }
+            if (node_equal(nn[static_cast<crd::usize>(table[static_cast<crd::usize>(slot)])], g, pool)) { return table[static_cast<crd::usize>(slot)]; }
             slot = (slot + 1) & mask;
         }
         const int id = static_cast<int>(nn.size());
@@ -540,8 +1120,78 @@ private:
         return id;
     }
 
-    crd::containers::Array<KNode> m_nodes;
-    int                           m_ninput = 0;
+    crd::containers::Array<KNode>    m_nodes;
+    crd::containers::Array<crd::i32> m_ext;     // B0-4: flat variadic-operand pool
+    crd::containers::Array<KType>    m_sfields; // struct registry: field types, CSR-packed
+    crd::containers::Array<crd::u32> m_sbegin;  // struct registry: first field of struct id
+    int                              m_ninput = 0;
 };
+
+// ── B3-a': stage/entry VALIDATION ────────────────────────────────────────────────────────────────────────────────────
+// A `KGraph` carries no stage, so `builtin()` cannot reject `gl_FragCoord` in a vertex shader — only an ENTRY knows the
+// stage. This is the check that makes the per-stage builtin table load-bearing rather than decorative: without it the
+// table is a comment. Backends call it before emitting; the emitted source then compiles by construction.
+//
+// `why` (optional) receives a static reason string — worth threading, because "the graph is invalid" is not a diagnosis.
+[[nodiscard]] inline bool entry_valid(const KGraph& g, const KEntry& e, const char** why = nullptr)
+{
+    const auto fail = [&](const char* reason) {
+        if (why != nullptr) { *why = reason; }
+        return false;
+    };
+
+    const int n = g.size();
+    const auto node_ok = [&](int id) { return id >= 0 && id < n; };
+
+    // Position: required exactly where the stage produces one. A compute or fragment entry with a `position` is a
+    // mis-built graph, not a harmless extra — it means the author thought they were writing a vertex stage.
+    if (stage_writes_position(e.stage))
+    {
+        if (!node_ok(e.position)) { return fail("stage must write `position` (clip-space vec4)"); }
+        if (g.node(e.position).type != KType::vec(DType::F32, 4)) { return fail("`position` must be a vec4"); }
+    }
+    else if (e.position >= 0) { return fail("stage does not write `position`"); }
+
+    if (e.frag_depth >= 0)
+    {
+        if (!stage_writes_frag_depth(e.stage)) { return fail("only a fragment stage writes `frag_depth`"); }
+        if (!node_ok(e.frag_depth)) { return fail("`frag_depth` names no node"); }
+        if (g.node(e.frag_depth).type != KType::make_scalar(DType::F32)) { return fail("`frag_depth` must be a float"); }
+    }
+
+    if (e.n_out < 0 || e.n_out > kMaxStageOutputs) { return fail("output count out of range"); }
+    for (int i = 0; i < e.n_out; ++i)
+    {
+        if (!node_ok(e.out[i].node)) { return fail("output names no node"); }
+        if (e.out[i].location < 0) { return fail("output location is negative"); }
+        for (int j = 0; j < i; ++j)
+        {
+            if (e.out[j].location == e.out[i].location) { return fail("two outputs share one location"); }
+        }
+    }
+
+    // Every builtin READ by the graph must be legal in this stage, and every location-indexed input distinct.
+    for (int i = 0; i < n; ++i)
+    {
+        const KNode& nd = g.node(i);
+        if (nd.op == KOp::Builtin)
+        {
+            const auto b = static_cast<KBuiltin>(nd.iidx);
+            if (!builtin_allowed_in(b, e.stage)) { return fail("builtin is not readable in this stage"); }
+        }
+        else if (nd.op == KOp::StageIn)
+        {
+            if (e.stage == KStage::Compute) { return fail("a compute stage has no location-indexed inputs"); }
+            for (int j = 0; j < i; ++j)
+            {
+                if (g.node(j).op == KOp::StageIn && g.node(j).iidx == nd.iidx)
+                {
+                    return fail("two stage inputs share one location");
+                }
+            }
+        }
+    }
+    return true;
+}
 
 } // namespace crd::kir

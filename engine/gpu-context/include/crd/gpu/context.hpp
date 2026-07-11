@@ -7,9 +7,20 @@
 // This is the deep module both the compute backends (CKIR, geometry-bvh-gpu) and the renderer draw from — independent
 // concerns, composed by choice. Per ADR-0099 (supersedes the compute/rendering coupling of the RHI reuse).
 
+#include <crd/gpu/program.hpp>
+
+#include <crd/containers/span.hpp>
 #include <crd/core/types.hpp>
 
 #include <memory>
+
+// ADR-0103: the IR is the shader currency. `create_program(KGraph, KEntry)` takes it directly; forward-declared here so
+// the base interface stays light — only the backend impl (gpu-context-vulkan) links crd-kir (the acyclic edge).
+namespace crd::kir
+{
+class KGraph;
+struct KEntry;
+} // namespace crd::kir
 
 namespace crd::gpu
 {
@@ -47,6 +58,19 @@ public:
     [[nodiscard]] virtual bool        valid() const noexcept        = 0; // false ⇒ no usable device (skip / fall back)
     [[nodiscard]] virtual GpuBackend  backend() const noexcept      = 0;
     [[nodiscard]] virtual const char* adapter_name() const noexcept = 0;
+
+    // ADR-0103, the shader seam. Mint a GPU program from COOKED bytecode already in this backend's format (SPIR-V for
+    // Vulkan) — the ship path (Phase D) and the non-portable escape hatch (ADR-0101 §4). Returns nullptr if the backend
+    // cannot build it. `stage` names what the bytecode is; a mismatch is the caller's bug.
+    [[nodiscard]] virtual std::unique_ptr<IGpuProgram>
+    create_program(ShaderStage stage, crd::containers::ConstSpan<crd::u8> cooked) = 0;
+
+    // ADR-0103, the IR on-ramp (D-008 C1-c): emit this backend's language from the graph, compile it, and wrap the
+    // result. `entry.stage` selects the stage; `entry.out[0].node` names the output for a compute entry. Returns nullptr
+    // if the backend can't lower it (COMPUTE lands now via the crd-kir GLSL emitter; the RASTER path needs the stage
+    // emitter, D-007 B3-c). Appended at the vtable end (append-only interface stability).
+    [[nodiscard]] virtual std::unique_ptr<IGpuProgram>
+    create_program(const crd::kir::KGraph& graph, const crd::kir::KEntry& entry) = 0;
 };
 
 // Owns the configured set of live contexts. Per-backend factories construct them; the manager holds + serves them, so

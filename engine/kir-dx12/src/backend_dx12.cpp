@@ -93,29 +93,7 @@ void make_uav(ID3D12Device* dev, ID3D12Resource* res, UINT n_elem, D3D12_CPU_DES
     dev->CreateUnorderedAccessView(res, nullptr, &uav, h);
 }
 
-// A3: does the graph reachable from `output` use any vector value (comps > 1)? → route to the vec emitter.
-[[nodiscard]] bool graph_uses_vec(const KGraph& g, int output, crd::memory::IAllocator* scratch)
-{
-    const int                       n = g.size();
-    crd::containers::Array<crd::u8> reach(scratch);
-    reach.resize(static_cast<crd::usize>(n), 0);
-    crd::containers::Array<int> stk(scratch);
-    stk.push_back(output);
-    while (stk.size() > 0)
-    {
-        const int i = stk[stk.size() - 1];
-        stk.resize(stk.size() - 1);
-        if (reach[static_cast<crd::usize>(i)]) { continue; }
-        reach[static_cast<crd::usize>(i)] = 1;
-        const KNode& nd = g.node(i);
-        if (nd.comps > 1 || nd.op == KOp::For || nd.op == KOp::LoopIndex || nd.op == KOp::LoopAcc) { return true; } // A4 tier-2: For graphs route to the vec emitter
-        if (nd.a >= 0) { stk.push_back(nd.a); }
-        if (nd.b >= 0) { stk.push_back(nd.b); }
-        if (nd.c >= 0) { stk.push_back(nd.c); }
-        if (nd.d >= 0) { stk.push_back(nd.d); }
-    }
-    return false;
-}
+// `graph_uses_vec` now lives (inline) in `ckir_glsl.hpp` — see the note in backend_vulkan.cpp (it was an ODR violation).
 } // namespace
 
 KirBackendDx12::KirBackendDx12(crd::memory::IAllocator* alloc) : m_impl(std::make_unique<Impl>())
@@ -133,7 +111,8 @@ KirBackendDx12::KirBackendDx12(crd::memory::IAllocator* alloc) : m_impl(std::mak
     impl.event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     const HMODULE dxc_dll = LoadLibraryW(L"dxcompiler.dll");
     if (dxc_dll == nullptr) { return; }
-    auto create = reinterpret_cast<DxcCreateInstanceProc>(reinterpret_cast<void*>(GetProcAddress(dxc_dll, "DxcCreateInstance")));
+    // FARPROC -> the real proc type directly; laundering through void* is UB for function pointers, not a workaround.
+    auto create = reinterpret_cast<DxcCreateInstanceProc>(GetProcAddress(dxc_dll, "DxcCreateInstance"));
     if (create == nullptr || FAILED(create(CLSID_DxcCompiler, IID_PPV_ARGS(&impl.dxc)))) { return; }
     impl.ok = impl.event != nullptr;
 }

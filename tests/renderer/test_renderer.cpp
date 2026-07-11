@@ -9,6 +9,7 @@
 #include <crd/renderer/renderer.hpp>
 #include <crd/renderer/swapchain_blit.hpp>
 #include <crd/shader/shader.hpp>
+#include <crd/shader/vulkan_spirv_compiler.hpp> // D-008 C2-e: injected GLSL->SPIR-V compiler
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -259,11 +260,6 @@ public:
         ++create_image_count;
         return std::make_unique<FakeImage>(desc);
     }
-    [[nodiscard]] std::unique_ptr<crd::rhi::ShaderModule>
-    create_shader_module(const crd::rhi::ShaderModuleDesc&) override
-    {
-        return nullptr;
-    }
     [[nodiscard]] std::unique_ptr<crd::rhi::Pipeline>
     create_graphics_pipeline(const crd::rhi::GraphicsPipelineDesc&) override
     {
@@ -350,12 +346,15 @@ public:
 
 struct ShaderFixture
 {
+    // D-008 C2-e: compiler declared BEFORE runtime so the runtime (which borrows it) destructs first.
+    std::unique_ptr<crd::shader::ISpirvCompiler> compiler;
     std::unique_ptr<crd::shader::Runtime> runtime;
     crd::shader::VariantHandle variant;
 
     ShaderFixture()
     {
-        runtime = crd::shader::create_runtime();
+        compiler = crd::shader::create_vulkan_spirv_compiler();
+        runtime = crd::shader::create_runtime(*compiler);
         crd::shader::EffectDesc desc;
         desc.name = crd::containers::String("renderer_case");
         desc.frontend_modules.push_back({source_path("runtime/examples/shaders/reflect_triangle.vert"),
@@ -1232,7 +1231,7 @@ TEST_CASE("Renderer build_frame copies material pointer into DrawItem", "[render
 TEST_CASE("ForwardRenderPath skips resolver for material-path items (null template)",
           "[renderer][forward][material_path]")
 {
-    // FakeDevice returns nullptr from create_shader_module and create_graphics_pipeline,
+    // FakeDevice returns nullptr from create_program and create_graphics_pipeline,
     // so material-path items end up with null depth/color pipelines and are skipped.
     // Legacy-path items use FakeResolver which returns a real FakePipeline.
     FakeDevice device;

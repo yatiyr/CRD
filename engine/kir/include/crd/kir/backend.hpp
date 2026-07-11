@@ -33,8 +33,16 @@ public:
     [[nodiscard]] virtual bool run(const KGraph& g, int output, const float* const* inputs, int n_inputs, float* out) = 0;
 };
 
-// The CPU reference as a backend — the oracle. Wraps eval_cpu (computes each op in f64 then rounds to the node dtype,
-// so an F32 graph is f32-faithful ⇒ IEEE-arithmetic kernels bit-match a GPU f32 kernel). Always available, no GPU.
+// The CPU reference as a backend — the oracle. Wraps eval_cpu, which computes in f64 but rounds EVERY elementary IEEE
+// operation to the node's dtype, so an F32 graph is f32-faithful ⇒ an IEEE-arithmetic kernel with no FMA contraction
+// bit-matches it. Always available, no GPU.
+// This held for the elementwise/tensor ops from the start; the A3 vec/mat corpus (Dot/VecLen/Normalize/MatVecMul/
+// MatMatMul/Determinant/MatInverse/geometric/quats/slerp) used to accumulate in f64 and round only on store — making
+// the oracle ~1 ULP MORE accurate than any f32 kernel, and leaving ADR-0098's T1 certified-bit-exact core unreachable
+// for vec/mat. Fixed 2026-07-10 (`eval_detail::rnd`). NOTE: a backend only matches bit-for-bit when it emits the same
+// elementary operations in the same order — the CUDA emitter (explicit scalarized formulas, `--fmad=false`) does; GLSL/
+// HLSL/WGSL `dot()`/`normalize()`/`inverse()` builtins have implementation-defined internal order, so those stay within
+// tolerance until the ADR-0098 §5 `float_controls` audit pins them.
 class KirBackendCpu final : public KirBackend
 {
 public:
@@ -42,15 +50,19 @@ public:
 
     [[nodiscard]] const char* name() const noexcept override { return "cpu"; }
 
+    // NOTE the `* comps()`: a vec/mat/struct value stores `comps` interleaved scalars PER ELEMENT, so both the input
+    // staging and the output buffer are `numel * comps` long, not `numel`. Omitting it silently under-reads every vec
+    // input and overflows `fout` on write (a heap SIGSEGV, found when the WGSL fan-out first gated a vec3 graph against
+    // this oracle — the Vulkan/DX12 vec tests all compare against analytic references, so nothing had exercised it).
     [[nodiscard]] bool run(const KGraph& g, int output, const float* const* inputs, int n_inputs, float* out) override
     {
-        const crd::i64                   on = g.node(output).shape.numel();
-        crd::containers::Array<crd::i64> inum(m_alloc); // numel of each Input by iidx
+        const crd::i64                   on = g.node(output).shape.numel() * g.node(output).comps();
+        crd::containers::Array<crd::i64> inum(m_alloc); // element count of each Input by iidx (numel * comps)
         inum.resize(static_cast<crd::usize>(n_inputs), 0);
         for (int i = 0; i < g.size(); ++i)
         {
             const KNode& nd = g.node(i);
-            if (nd.op == KOp::Input && nd.iidx < n_inputs) { inum[static_cast<crd::usize>(nd.iidx)] = nd.shape.numel(); }
+            if (nd.op == KOp::Input && nd.iidx < n_inputs) { inum[static_cast<crd::usize>(nd.iidx)] = nd.shape.numel() * nd.comps(); }
         }
         crd::i64 total = 0;
         for (int k = 0; k < n_inputs; ++k) { total += inum[static_cast<crd::usize>(k)]; }

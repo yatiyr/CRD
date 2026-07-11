@@ -48,8 +48,8 @@ inline void reverse_ad(KGraph& g, int output, int seed, crd::memory::IAllocator*
         const KNode    node = g.node(i); // COPY — g grows below
         const int      gi   = cot[i];
         const Shape    ash  = node.a >= 0 ? g.node(node.a).shape : Shape{};
-        const DType    adt  = node.a >= 0 ? g.node(node.a).dtype : node.dtype;
-        const int      one  = g.constant(1.0, node.shape, node.dtype); // reused as needed (CSE folds duplicates later)
+        const DType    adt  = node.a >= 0 ? g.node(node.a).dtype() : node.dtype();
+        const int      one  = g.constant(1.0, node.shape, node.dtype()); // reused as needed (CSE folds duplicates later)
 
         switch (node.op)
         {
@@ -73,7 +73,7 @@ inline void reverse_ad(KGraph& g, int output, int seed, crd::memory::IAllocator*
         case KOp::Cos: accumulate(g, cot, node.a, g.unary(KOp::Neg, g.binary(KOp::Mul, gi, g.unary(KOp::Sin, node.a)))); break;
         case KOp::Sqrt: // C=sqrt(A): dA=0.5*gi/C
         {
-            const int half = g.constant(0.5, node.shape, node.dtype);
+            const int half = g.constant(0.5, node.shape, node.dtype());
             accumulate(g, cot, node.a, g.binary(KOp::Div, g.binary(KOp::Mul, gi, half), i));
             break;
         }

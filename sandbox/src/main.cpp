@@ -7,6 +7,8 @@
 #include <crd/log/log.hpp>
 #include <crd/memory/allocator.hpp>
 #include <crd/perf/perf.hpp>
+#include <crd/gpu/context.hpp>           // D-008 C2-c2: the ONE device — a VulkanGpuContext rhi-vulkan adopts
+#include <crd/gpu/vulkan_context.hpp>
 #include <crd/perf/ui/ui.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/rhi/vulkan_backend.hpp>
@@ -79,19 +81,32 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    auto instance = crd::rhi::create_vulkan_instance({.enable_validation = !headless});
-    auto device   = instance->create_device({});
-    auto swapchain = device->create_swapchain({
-        .native_window_handle = app.window().native_handle(),
-        .extent               = {1280, 720},
-        .color_format         = crd::rhi::Format::B8G8R8A8Unorm,
-        .present_mode         = crd::rhi::PresentMode::Fifo,
-        .image_count          = 2,
-    });
+    // D-008 C2-c2: ONE device. The gpu-context owns the VkInstance/VkDevice (windowed = surface + swapchain + a graphics
+    // queue, still async-compute-capable); rhi-vulkan ADOPTS it, so the renderer, compute (IComputeContext), and raster
+    // (IRasterContext) all share the single device. `gpu_context` is declared FIRST so it OUTLIVES `device` (it owns the
+    // handles the adopted Device borrows).
+    crd::gpu::GpuContextConfig gpu_cfg;
+    gpu_cfg.backend           = crd::gpu::GpuBackend::Vulkan;
+    gpu_cfg.headless          = false;
+    gpu_cfg.enable_validation = !headless;
+    auto gpu_context          = crd::gpu::create_vulkan_gpu_context(gpu_cfg);
+    auto device = gpu_context != nullptr ? crd::rhi::create_vulkan_device_adopting(*gpu_context) : nullptr;
+
+    std::unique_ptr<crd::rhi::Swapchain> swapchain;
+    if (device != nullptr)
+    {
+        swapchain = device->create_swapchain({
+            .native_window_handle = app.window().native_handle(),
+            .extent               = {1280, 720},
+            .color_format         = crd::rhi::Format::B8G8R8A8Unorm,
+            .present_mode         = crd::rhi::PresentMode::Fifo,
+            .image_count          = 2,
+        });
+    }
 
     if (device == nullptr || swapchain == nullptr)
     {
-        CRD_LOG_ERROR(g_log_sandbox, "RHI bootstrap failed — Vulkan device or swapchain unavailable");
+        CRD_LOG_ERROR(g_log_sandbox, "GPU bootstrap failed — Vulkan context/device or swapchain unavailable");
         crd::log::flush();
         crd::log::shutdown();
         return 1;
@@ -149,7 +164,7 @@ int main(int argc, char** argv)
 
     auto* imgui = [&]() -> crd::imgui::ImGuiLayer*
     {
-        auto layer = std::make_unique<crd::imgui::ImGuiLayer>(app, *instance, *device, *swapchain, imgui_config);
+        auto layer = std::make_unique<crd::imgui::ImGuiLayer>(app, *device, *swapchain, imgui_config);
         auto* ptr  = layer.get();
         app.push_overlay(std::move(layer));
         return ptr;

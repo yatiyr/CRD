@@ -13,8 +13,8 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
+#include <crd/gpu/vulkan_shader_compile.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
-#include <crd/shader/compile.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
@@ -35,7 +35,7 @@ constexpr int kN = 1024;
 void fill(float* v, int n, float base) { for (int i = 0; i < n; ++i) { v[i] = base + 0.013F * static_cast<float>(i) - 0.5F * static_cast<float>(i % 7); } }
 } // namespace
 
-TEST_CASE("v17-b: first CKIR kernel on the GPU — arithmetic bit-matches the CPU oracle", "[kir][vulkan][gpu]")
+TEST_CASE("v17-b: first CKIR kernel on the GPU -- arithmetic bit-matches the CPU oracle", "[kir][vulkan][gpu]")
 {
     crd::memory::TlsfAllocator alloc(64 << 20);
     kir::KirBackendVulkan      vk(&alloc);
@@ -181,14 +181,14 @@ namespace
     const crd::u64 abytes = static_cast<crd::u64>(m) * k * 2U; // fp16
     const crd::u64 bbytes = static_cast<crd::u64>(k) * n * 2U;
     const crd::u64 cbytes = static_cast<crd::u64>(m) * n * sizeof(float);
-    auto           bufA   = ctx.create_buffer(abytes, storage | transfer_dst, g::ComputeMemory::GpuOnly);
-    auto           bufB   = ctx.create_buffer(bbytes, storage | transfer_dst, g::ComputeMemory::GpuOnly);
-    auto           bufC0  = ctx.create_buffer(cbytes, storage | transfer_src, g::ComputeMemory::GpuOnly);
-    auto           bufC1  = ctx.create_buffer(cbytes, storage | transfer_src, g::ComputeMemory::GpuOnly); // ping-pong out
-    auto           stgA   = ctx.create_buffer(abytes, transfer_src, g::ComputeMemory::CpuToGpu);
-    auto           stgB   = ctx.create_buffer(bbytes, transfer_src, g::ComputeMemory::CpuToGpu);
-    auto           stgC   = ctx.create_buffer(cbytes, transfer_dst, g::ComputeMemory::GpuToCpu);
-    if (bufA == nullptr || bufB == nullptr || bufC0 == nullptr || bufC1 == nullptr || stgA == nullptr || stgB == nullptr || stgC == nullptr) { return false; }
+    auto           buf_a   = ctx.create_buffer(abytes, storage | transfer_dst, g::ComputeMemory::GpuOnly);
+    auto           buf_b   = ctx.create_buffer(bbytes, storage | transfer_dst, g::ComputeMemory::GpuOnly);
+    auto           buf_c0  = ctx.create_buffer(cbytes, storage | transfer_src, g::ComputeMemory::GpuOnly);
+    auto           buf_c1  = ctx.create_buffer(cbytes, storage | transfer_src, g::ComputeMemory::GpuOnly); // ping-pong out
+    auto           stg_a   = ctx.create_buffer(abytes, transfer_src, g::ComputeMemory::CpuToGpu);
+    auto           stg_b   = ctx.create_buffer(bbytes, transfer_src, g::ComputeMemory::CpuToGpu);
+    auto           stg_c   = ctx.create_buffer(cbytes, transfer_dst, g::ComputeMemory::GpuToCpu);
+    if (buf_a == nullptr || buf_b == nullptr || buf_c0 == nullptr || buf_c1 == nullptr || stg_a == nullptr || stg_b == nullptr || stg_c == nullptr) { return false; }
 
     auto f2h = [](float f) -> crd::u16 { // fp32 -> IEEE half (round-toward-zero; benchmark-grade)
         crd::u32 x = 0;
@@ -200,10 +200,10 @@ namespace
         if (exp >= 31) { return static_cast<crd::u16>(sign | 0x7C00U); }
         return static_cast<crd::u16>(sign | (static_cast<crd::u32>(exp) << 10) | (man >> 13));
     };
-    { auto* d = static_cast<crd::u16*>(stgA->map()); for (crd::u64 e = 0, ne = static_cast<crd::u64>(m) * k; e < ne; ++e) { d[e] = f2h(a[e]); } stgA->unmap(); }
-    { auto* d = static_cast<crd::u16*>(stgB->map()); for (crd::u64 e = 0, ne = static_cast<crd::u64>(k) * n; e < ne; ++e) { d[e] = f2h(b[e]); } stgB->unmap(); }
+    { auto* d = static_cast<crd::u16*>(stg_a->map()); for (crd::u64 e = 0, ne = static_cast<crd::u64>(m) * k; e < ne; ++e) { d[e] = f2h(a[e]); } stg_a->unmap(); }
+    { auto* d = static_cast<crd::u16*>(stg_b->map()); for (crd::u64 e = 0, ne = static_cast<crd::u64>(k) * n; e < ne; ++e) { d[e] = f2h(b[e]); } stg_b->unmap(); }
 
-    { auto& rec = ctx.begin(); rec.copy(*stgA, *bufA, 0U, 0U, abytes); rec.copy(*stgB, *bufB, 0U, 0U, bbytes); ctx.submit_and_wait(); }
+    { auto& rec = ctx.begin(); rec.copy(*stg_a, *buf_a, 0U, 0U, abytes); rec.copy(*stg_b, *buf_b, 0U, 0U, bbytes); ctx.submit_and_wait(); }
 
     const crd::u32    gx      = n / 128U; // 2D grid: x = column blocks, y = row blocks
     const crd::u32    gy      = m / 128U;
@@ -211,8 +211,8 @@ namespace
     // between them ⇒ they run back-to-back. The coopmat2 GEMM already saturates the GPU, so this measures the TRUE
     // sustained tensor throughput, not the serialized rate polluted by ~0.05 ms per-barrier GPU stalls (nsys busy-rate =
     // ~68 TF; a barrier-between-every-dispatch loop under-reports it to ~57).
-    g::ComputeBuffer* binds0[] = {bufA.get(), bufB.get(), bufC0.get()};
-    g::ComputeBuffer* binds1[] = {bufA.get(), bufB.get(), bufC1.get()};
+    g::ComputeBuffer* binds0[] = {buf_a.get(), buf_b.get(), buf_c0.get()};
+    g::ComputeBuffer* binds1[] = {buf_a.get(), buf_b.get(), buf_c1.get()};
     const auto        span0    = crd::containers::ConstSpan<g::ComputeBuffer*>(binds0, 3);
     const auto        span1    = crd::containers::ConstSpan<g::ComputeBuffer*>(binds1, 3);
 
@@ -225,13 +225,13 @@ namespace
         ms = ctx.last_gpu_ms() / static_cast<double>(reps); // GPU-only device timestamp (excludes CPU record/submit)
     }
 
-    { auto& rec = ctx.begin(); rec.barrier(*bufC0, g::ComputeAccess::ShaderWrite, g::ComputeAccess::TransferSrc); rec.copy(*bufC0, *stgC, 0U, 0U, cbytes); ctx.submit_and_wait(); }
-    { const auto* rd = static_cast<const float*>(stgC->map()); for (crd::u64 e = 0, on = static_cast<crd::u64>(m) * n; e < on; ++e) { c[e] = rd[e]; } stgC->unmap(); }
+    { auto& rec = ctx.begin(); rec.barrier(*buf_c0, g::ComputeAccess::ShaderWrite, g::ComputeAccess::TransferSrc); rec.copy(*buf_c0, *stg_c, 0U, 0U, cbytes); ctx.submit_and_wait(); }
+    { const auto* rd = static_cast<const float*>(stg_c->map()); for (crd::u64 e = 0, on = static_cast<crd::u64>(m) * n; e < on; ++e) { c[e] = rd[e]; } stg_c->unmap(); }
     return true;
 }
 } // namespace
 
-TEST_CASE("v17-i TENSOR: Vulkan coopmat2 GEMM through the UNIFIED compute context — CUDA-parity + correct within fp16 tolerance", "[kir][vulkan][gpu][.bench]")
+TEST_CASE("v17-i TENSOR: Vulkan coopmat2 GEMM through the UNIFIED compute context -- CUDA-parity + correct within fp16 tolerance", "[kir][vulkan][gpu][.bench]")
 {
     // v17-i/ADR-0100: the tensor tier runs through the ONE unified VulkanComputeContext (the same surface geometry uses).
     // This test IS the perf harness (timing lives here, not on the production KirBackendVulkan).
@@ -261,7 +261,7 @@ TEST_CASE("v17-i TENSOR: Vulkan coopmat2 GEMM through the UNIFIED compute contex
 
     kir::GlslKernel kern(&alloc); // emit the coopmat2 kernel with K,N baked as literals ⇒ the driver specializes
     REQUIRE(kir::emit_contract_coopmat2_glsl(kern, static_cast<crd::u32>(nn), static_cast<crd::u32>(nn)));
-    const auto cres = crd::shader::compile_glsl(crd::shader::Stage::Compute, crd::containers::to_view(kern.source), "ckir_tensor", &alloc);
+    const auto cres = crd::gpu::compile_glsl_to_spirv(crd::gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), "ckir_tensor", &alloc);
     if (!cres.ok)
     {
         WARN("shaderc build lacks coopmat2 support; skipping");
@@ -423,8 +423,10 @@ TEST_CASE("v17-breadth: Vulkan floor/ceil/sign/cmpeq/cmple bit-match the CPU ora
     const int uc  = g.unary(kir::KOp::Ceil, x);
     const int us  = g.unary(kir::KOp::Sign, y);
     const int ut  = g.unary(kir::KOp::Trunc, y);
-    const int bce = g.binary(kir::KOp::CmpEq, x, y);
-    const int bcl = g.binary(kir::KOp::CmpLe, x, y);
+    // B0-3: comparisons are BOOL-typed, so folding them into float arithmetic needs an explicit cast. GLSL rejects
+    // `float + bool` outright; HLSL silently promotes it — the IR-level cast is what keeps the two backends agreeing.
+    const int bce = g.cast(g.binary(kir::KOp::CmpEq, x, y), kir::DType::F32);
+    const int bcl = g.cast(g.binary(kir::KOp::CmpLe, x, y), kir::DType::F32);
     const int out = g.binary(kir::KOp::Add, g.binary(kir::KOp::Add, g.binary(kir::KOp::Add, g.binary(kir::KOp::Add, uf, uc), g.binary(kir::KOp::Add, us, bce)), bcl), ut);
 
     float xv[nn];
@@ -567,7 +569,7 @@ TEST_CASE("v17-breadth: Vulkan scan prefix-sum bit-matches the CPU oracle", "[ki
     for (int i = 0; i < rows * cols; ++i) { CHECK(gpu_out[i] == cpu_out[i]); } // exact integer prefix sums => BIT-EXACT
 }
 
-TEST_CASE("v17-perf: Vulkan T2 fast parallel reduce (workgroup tree) — correct + deterministic", "[kir][vulkan][gpu]")
+TEST_CASE("v17-perf: Vulkan T2 fast parallel reduce (workgroup tree) -- correct + deterministic", "[kir][vulkan][gpu]")
 {
     crd::memory::TlsfAllocator alloc(128 << 20);
     kir::KirBackendVulkan      vk(&alloc);
@@ -778,8 +780,8 @@ TEST_CASE("v17-i: Morton authored in CKIR runs on Vulkan, bit-exact vs the refer
 // ── v17-i rung 2: ATOMIC scatter-add (radix histogram) on the GPU ───────────────────────────────────────────────────
 namespace histo_ckir
 {
-constexpr int   hn = 1024; // elements
-constexpr int   hm = 256;  // bins (one radix digit)
+constexpr int   kHistoN = 1024; // elements
+constexpr int   kHistoBins = 256; // bins (one radix digit)
 inline float    asf(crd::i32 v) { float f = 0.0F; std::memcpy(&f, &v, 4); return f; }   // I32 bits → f32 slot (raw upload)
 inline crd::u32 asu(float f) { crd::u32 u = 0; std::memcpy(&u, &f, 4); return u; }       // f32 readback slot → u32 bits
 } // namespace histo_ckir
@@ -792,29 +794,29 @@ TEST_CASE("v17-i: CKIR scatter-add histogram runs on Vulkan (integer atomics, de
     if (!vk.valid()) { WARN("no Vulkan device available; skipping"); return; }
 
     kir::KGraph      g(&alloc);
-    const kir::Shape shn  = kir::make_shape({h::hn});
-    const kir::Shape shm  = kir::make_shape({h::hm});
+    const kir::Shape shn  = kir::make_shape({h::kHistoN});
+    const kir::Shape shm  = kir::make_shape({h::kHistoBins});
     const int        idx  = g.input(shn, kir::DType::I32);
     const int        upd  = g.input(shn, kir::DType::I32);
     const int        hist = g.scatter_add(idx, upd, shm);
 
-    float    idxv[h::hn];
-    float    updv[h::hn];
-    crd::u32 ref[h::hm];
-    for (int i = 0; i < h::hm; ++i) { ref[i] = 0; }
-    for (int i = 0; i < h::hn; ++i)
+    float    idxv[h::kHistoN];
+    float    updv[h::kHistoN];
+    crd::u32 ref[h::kHistoBins];
+    for (int i = 0; i < h::kHistoBins; ++i) { ref[i] = 0; }
+    for (int i = 0; i < h::kHistoN; ++i)
     {
-        const crd::i32 d = static_cast<crd::i32>((i * 7 + 13) % h::hm);
+        const crd::i32 d = static_cast<crd::i32>((i * 7 + 13) % h::kHistoBins);
         idxv[i]          = h::asf(d);
         updv[i]          = h::asf(1);
         ref[d]++;
     }
     const float* inputs[] = {idxv, updv};
-    float        out[h::hm];
+    float        out[h::kHistoBins];
     REQUIRE(vk.run(g, hist, inputs, 2, out));
 
     int mism = 0;
-    for (int i = 0; i < h::hm; ++i) { if (h::asu(out[i]) != ref[i]) { ++mism; } }
+    for (int i = 0; i < h::kHistoBins; ++i) { if (h::asu(out[i]) != ref[i]) { ++mism; } }
     CHECK(mism == 0);
 }
 
@@ -882,8 +884,8 @@ TEST_CASE("v17-e: full radix sort runs on GPU as one multi-kernel pipeline (bit-
         const int e       = g.binary(kir::KOp::Sub, incl, f);
         const int tf      = g.broadcast(g.reduce(kir::KOp::ReduceSum, f, 1U), sh); // total falses, fanned out
         const int idx     = g.iota(sh, 0, kir::DType::F32);
-        const int trueB   = g.binary(kir::KOp::Sub, g.binary(kir::KOp::Add, tf, idx), e);
-        const int pos     = g.select(bitf, trueB, e);
+        const int true_b  = g.binary(kir::KOp::Sub, g.binary(kir::KOp::Add, tf, idx), e);
+        const int pos     = g.select(bitf, true_b, e);
         k                 = g.scatter(k, pos, k); // permute keys to their split positions (stable)
     }
 
@@ -989,7 +991,7 @@ TEST_CASE("v17 A4: CKIR unroll_for (fixed-count loop) runs on Vulkan (bit-exact)
 
     float xv[cn];
     float yv[cn];
-    for (int i = 0; i < cn; ++i) { xv[i] = (0.05F * i) - 3.0F; yv[i] = 0.1F + (0.003F * i); }
+    for (int i = 0; i < cn; ++i) { const float fi = static_cast<float>(i); xv[i] = (0.05F * fi) - 3.0F; yv[i] = 0.1F + (0.003F * fi); }
     const float* inp[] = {xv, yv};
     float        gpu[cn];
     REQUIRE(vk.run(g, r, inp, 2, gpu));
@@ -1016,7 +1018,7 @@ TEST_CASE("v17 A4 tier-2: CKIR dynamic for_loop (native GPU loop, index + diverg
     float xv[cn];
     float yv[cn];
     float cv[cn];
-    for (int i = 0; i < cn; ++i) { xv[i] = (0.05F * i) - 3.0F; yv[i] = 0.1F + (0.003F * i); cv[i] = static_cast<float>(i % 8); }
+    for (int i = 0; i < cn; ++i) { const float fi = static_cast<float>(i); xv[i] = (0.05F * fi) - 3.0F; yv[i] = 0.1F + (0.003F * fi); cv[i] = static_cast<float>(i % 8); }
     const float* inp[] = {xv, yv, cv};
     float        gpu[cn];
     REQUIRE(vk.run(g, r, inp, 3, gpu));
@@ -1042,14 +1044,18 @@ TEST_CASE("v17 A3: CKIR vec3 ops (construct/cross/add/normalize) run on Vulkan v
     constexpr int    vn = 128;
     const kir::Shape sh = kir::make_shape({vn});
     kir::KGraph      g(&alloc);
-    const int        ax = g.input(sh, kir::DType::F32), ay = g.input(sh, kir::DType::F32), az = g.input(sh, kir::DType::F32);
-    const int        bx = g.input(sh, kir::DType::F32), by = g.input(sh, kir::DType::F32), bz = g.input(sh, kir::DType::F32);
+    const int        ax = g.input(sh, kir::DType::F32);
+    const int        ay = g.input(sh, kir::DType::F32);
+    const int        az = g.input(sh, kir::DType::F32);
+    const int        bx = g.input(sh, kir::DType::F32);
+    const int        by = g.input(sh, kir::DType::F32);
+    const int        bz = g.input(sh, kir::DType::F32);
     const int        a  = g.vec3(ax, ay, az);
     const int        b  = g.vec3(bx, by, bz);
     const int        o  = g.normalize(g.binary(kir::KOp::Add, g.cross(a, b), a)); // vec3 out
 
     float fin[6][vn];
-    for (int i = 0; i < vn; ++i) { fin[0][i] = 0.5F + 0.03F * i; fin[1][i] = 1.0F - 0.02F * i; fin[2][i] = 0.2F + 0.01F * i; fin[3][i] = -0.4F + 0.02F * i; fin[4][i] = 0.7F + 0.015F * i; fin[5][i] = 0.9F - 0.01F * i; }
+    for (int i = 0; i < vn; ++i) { const float fi = static_cast<float>(i); fin[0][i] = 0.5F + 0.03F * fi; fin[1][i] = 1.0F - 0.02F * fi; fin[2][i] = 0.2F + 0.01F * fi; fin[3][i] = -0.4F + 0.02F * fi; fin[4][i] = 0.7F + 0.015F * fi; fin[5][i] = 0.9F - 0.01F * fi; }
     const float* inp[] = {fin[0], fin[1], fin[2], fin[3], fin[4], fin[5]};
     float        gpu[vn * 3];
     REQUIRE(vk.run(g, o, inp, 6, gpu));
@@ -1057,11 +1063,12 @@ TEST_CASE("v17 A3: CKIR vec3 ops (construct/cross/add/normalize) run on Vulkan v
     int bad = 0;
     for (int i = 0; i < vn; ++i)
     {
-        const float avx = fin[0][i], avy = fin[1][i], avz = fin[2][i], bvx = fin[3][i], bvy = fin[4][i], bvz = fin[5][i];
-        const float cx = avy * bvz - avz * bvy, cy = avz * bvx - avx * bvz, cz = avx * bvy - avy * bvx;
-        const float sx = cx + avx, sy = cy + avy, sz = cz + avz;
+        const float avx = fin[0][i]; const float avy = fin[1][i]; const float avz = fin[2][i];
+        const float bvx = fin[3][i]; const float bvy = fin[4][i]; const float bvz = fin[5][i];
+        const float cx = avy * bvz - avz * bvy; const float cy = avz * bvx - avx * bvz; const float cz = avx * bvy - avy * bvx;
+        const float sx = cx + avx; const float sy = cy + avy; const float sz = cz + avz;
         const float len = std::sqrt(sx * sx + sy * sy + sz * sz);
-        const float rx = sx / len, ry = sy / len, rz = sz / len;
+        const float rx = sx / len; const float ry = sy / len; const float rz = sz / len;
         if (std::fabs(gpu[i * 3] - rx) > 1e-4F * std::fabs(rx) + 1e-5F) { ++bad; }
         if (std::fabs(gpu[i * 3 + 1] - ry) > 1e-4F * std::fabs(ry) + 1e-5F) { ++bad; }
         if (std::fabs(gpu[i * 3 + 2] - rz) > 1e-4F * std::fabs(rz) + 1e-5F) { ++bad; }
@@ -1080,11 +1087,14 @@ TEST_CASE("v17 A3: CKIR mat4 construct + quaternions/slerp + any/all run on Vulk
 
     { // mat4 construct (MatFromCols4 via the 4th operand) + mat*vec4
         kir::KGraph g(&alloc);
-        const int   c0 = g.input_vec(sh, kir::DType::F32, 4), c1 = g.input_vec(sh, kir::DType::F32, 4), c2 = g.input_vec(sh, kir::DType::F32, 4), c3 = g.input_vec(sh, kir::DType::F32, 4);
+        const int   c0 = g.input_vec(sh, kir::DType::F32, 4);
+        const int   c1 = g.input_vec(sh, kir::DType::F32, 4);
+        const int   c2 = g.input_vec(sh, kir::DType::F32, 4);
+        const int   c3 = g.input_vec(sh, kir::DType::F32, 4);
         const int   v  = g.input_vec(sh, kir::DType::F32, 4);
         const int   mv = g.mat_mul_vec(g.mat4(c0, c1, c2, c3), v);
         float       cd[5][vn * 4];
-        for (int i = 0; i < vn; ++i) { for (int k = 0; k < 4; ++k) { for (int col = 0; col < 5; ++col) { cd[col][i * 4 + k] = 0.5F + 0.1F * col + 0.03F * i + 0.2F * k; } } }
+        for (int i = 0; i < vn; ++i) { for (int k = 0; k < 4; ++k) { for (int col = 0; col < 5; ++col) { cd[col][i * 4 + k] = 0.5F + 0.1F * static_cast<float>(col) + 0.03F * static_cast<float>(i) + 0.2F * static_cast<float>(k); } } }
         const float* inp[] = {cd[0], cd[1], cd[2], cd[3], cd[4]};
         float        gpu[vn * 4];
         REQUIRE(vk.run(g, mv, inp, 5, gpu));
@@ -1092,8 +1102,13 @@ TEST_CASE("v17 A3: CKIR mat4 construct + quaternions/slerp + any/all run on Vulk
     }
     { // quat: rotate(q,v) ≡ quat_to_mat3(q)*v ; and slerp(q,q,0.5) ≡ q ; and any/all
         kir::KGraph g(&alloc);
-        const int   axx = g.input(sh, kir::DType::F32), axy = g.input(sh, kir::DType::F32), axz = g.input(sh, kir::DType::F32), ang = g.input(sh, kir::DType::F32);
-        const int   vx = g.input(sh, kir::DType::F32), vy = g.input(sh, kir::DType::F32), vz = g.input(sh, kir::DType::F32);
+        const int   axx = g.input(sh, kir::DType::F32);
+        const int   axy = g.input(sh, kir::DType::F32);
+        const int   axz = g.input(sh, kir::DType::F32);
+        const int   ang = g.input(sh, kir::DType::F32);
+        const int   vx = g.input(sh, kir::DType::F32);
+        const int   vy = g.input(sh, kir::DType::F32);
+        const int   vz = g.input(sh, kir::DType::F32);
         const int   q  = g.quat_axis_angle(g.normalize(g.vec3(axx, axy, axz)), ang);
         const int   v  = g.vec3(vx, vy, vz);
         const int   qr = g.quat_rotate(q, v);
@@ -1101,7 +1116,7 @@ TEST_CASE("v17 A3: CKIR mat4 construct + quaternions/slerp + any/all run on Vulk
         const int   sl = g.slerp(q, q, g.constant(0.5, sh, kir::DType::F32));
         const int   an = g.vany(v);
         float       in7[7][vn];
-        for (int i = 0; i < vn; ++i) { in7[0][i] = 0.3F + 0.1F * (i % 4); in7[1][i] = 1.0F - 0.02F * i; in7[2][i] = 0.2F + 0.03F * i; in7[3][i] = 0.2F + 0.25F * i; in7[4][i] = 0.5F * i - 2.0F; in7[5][i] = 1.0F + 0.1F * i; in7[6][i] = -0.3F * i + 1.0F; }
+        for (int i = 0; i < vn; ++i) { const float fi = static_cast<float>(i); in7[0][i] = 0.3F + 0.1F * static_cast<float>(i % 4); in7[1][i] = 1.0F - 0.02F * fi; in7[2][i] = 0.2F + 0.03F * fi; in7[3][i] = 0.2F + 0.25F * fi; in7[4][i] = 0.5F * fi - 2.0F; in7[5][i] = 1.0F + 0.1F * fi; in7[6][i] = -0.3F * fi + 1.0F; }
         const float* inp[] = {in7[0], in7[1], in7[2], in7[3], in7[4], in7[5], in7[6]};
         float        gqr[vn * 3];
         float        gmv[vn * 3];
@@ -1130,9 +1145,9 @@ TEST_CASE("v17 A3: CKIR mat3 (MatFromCols + mat*vec + inverse) runs on Vulkan vi
     const int        c1 = g.input_vec(sh, kir::DType::F32, 3);
     const int        c2 = g.input_vec(sh, kir::DType::F32, 3);
     const int        vv = g.input_vec(sh, kir::DType::F32, 3);
-    const int        M  = g.mat3(c0, c1, c2);
-    const int        mv = g.mat_mul_vec(M, vv);              // vec3
-    const int        pv = g.mat_mul_vec(g.mat_mul(M, g.mat_inverse(M)), vv); // (M·M⁻¹)·v ≈ v
+    const int        mat = g.mat3(c0, c1, c2);
+    const int        mv  = g.mat_mul_vec(mat, vv);                               // vec3
+    const int        pv  = g.mat_mul_vec(g.mat_mul(mat, g.mat_inverse(mat)), vv); // (M·M⁻¹)·v ≈ v
 
     float c0d[mn * 3];
     float c1d[mn * 3];
@@ -1141,10 +1156,11 @@ TEST_CASE("v17 A3: CKIR mat3 (MatFromCols + mat*vec + inverse) runs on Vulkan vi
     for (int i = 0; i < mn; ++i)
     {
         // diagonally-dominant columns ⇒ well-conditioned (invertible)
-        c0d[i * 3] = 3.0F + 0.01F * i; c0d[i * 3 + 1] = 0.2F; c0d[i * 3 + 2] = 0.1F;
-        c1d[i * 3] = 0.1F; c1d[i * 3 + 1] = 4.0F - 0.01F * i; c1d[i * 3 + 2] = 0.2F;
-        c2d[i * 3] = 0.2F; c2d[i * 3 + 1] = 0.1F; c2d[i * 3 + 2] = 5.0F + 0.005F * i;
-        vd[i * 3] = 0.5F * i - 2.0F; vd[i * 3 + 1] = 1.0F + 0.1F * i; vd[i * 3 + 2] = -0.3F * i + 1.0F;
+        const float fi = static_cast<float>(i);
+        c0d[i * 3] = 3.0F + 0.01F * fi; c0d[i * 3 + 1] = 0.2F; c0d[i * 3 + 2] = 0.1F;
+        c1d[i * 3] = 0.1F; c1d[i * 3 + 1] = 4.0F - 0.01F * fi; c1d[i * 3 + 2] = 0.2F;
+        c2d[i * 3] = 0.2F; c2d[i * 3 + 1] = 0.1F; c2d[i * 3 + 2] = 5.0F + 0.005F * fi;
+        vd[i * 3] = 0.5F * fi - 2.0F; vd[i * 3 + 1] = 1.0F + 0.1F * fi; vd[i * 3 + 2] = -0.3F * fi + 1.0F;
     }
     const float* inp[] = {c0d, c1d, c2d, vd};
 
@@ -1164,6 +1180,262 @@ TEST_CASE("v17 A3: CKIR mat3 (MatFromCols + mat*vec + inverse) runs on Vulkan vi
         }
     }
     CHECK(bad == 0);
+}
+
+// D-007 B0-2: mat2 has comps == 4 exactly like a vec4, so a comps-keyed emitter would spell it `vec4` and index it
+// `t[k]` instead of `t[col][row]`. Non-square exercises `matCxR` naming + the RxC outer product. Both are new capability.
+TEST_CASE("v17 B0-2: CKIR mat2 (construct/mat*vec/inverse) + non-square 2x3 outer run on Vulkan", "[kir][vulkan][gpu][mat2]")
+{
+    crd::memory::TlsfAllocator alloc(16U << 20U);
+    kir::KirBackendVulkan      vk(&alloc);
+    if (!vk.valid()) { WARN("no Vulkan device available; skipping"); return; }
+
+    constexpr int    mn = 96;
+    const kir::Shape sh = kir::make_shape({mn});
+    kir::KGraph      g(&alloc);
+    const int        c0 = g.input_vec(sh, kir::DType::F32, 2); // 2 vec2 columns + a vec2 vector
+    const int        c1 = g.input_vec(sh, kir::DType::F32, 2);
+    const int        vv = g.input_vec(sh, kir::DType::F32, 2);
+    const int        mat = g.mat2(c0, c1);
+    const int        mv  = g.mat_mul_vec(mat, vv);                                 // vec2
+    const int        pv  = g.mat_mul_vec(g.mat_mul(mat, g.mat_inverse(mat)), vv);  // (M·M⁻¹)·v ≈ v
+
+    float c0d[mn * 2];
+    float c1d[mn * 2];
+    float vd[mn * 2];
+    for (int i = 0; i < mn; ++i)
+    {
+        const float fi = static_cast<float>(i);
+        c0d[i * 2] = 3.0F + 0.01F * fi; c0d[i * 2 + 1] = 0.2F;                // diagonally dominant ⇒ invertible
+        c1d[i * 2] = 0.1F;              c1d[i * 2 + 1] = 4.0F - 0.01F * fi;
+        vd[i * 2]  = 0.5F * fi - 2.0F;  vd[i * 2 + 1]  = 1.0F + 0.1F * fi;
+    }
+    const float* inp[] = {c0d, c1d, vd};
+
+    float gmv[mn * 2];
+    float gpv[mn * 2];
+    REQUIRE(vk.run(g, mv, inp, 3, gmv));
+    REQUIRE(vk.run(g, pv, inp, 3, gpv));
+
+    int bad = 0;
+    for (int i = 0; i < mn; ++i)
+    {
+        for (int r = 0; r < 2; ++r)
+        {
+            const float ref = c0d[i * 2 + r] * vd[i * 2] + c1d[i * 2 + r] * vd[i * 2 + 1]; // column-major M·v
+            if (std::fabs(gmv[i * 2 + r] - ref) > 1e-4F * std::fabs(ref) + 1e-4F) { ++bad; }
+            if (std::fabs(gpv[i * 2 + r] - vd[i * 2 + r]) > 1e-3F * std::fabs(vd[i * 2 + r]) + 1e-3F) { ++bad; }
+        }
+    }
+    CHECK(bad == 0);
+
+    // non-square: vec2 (x) vec3 -> a 2-row x 3-col matrix, written back column-major (6 floats per element)
+    kir::KGraph      g2(&alloc);
+    const int        a2 = g2.input_vec(sh, kir::DType::F32, 2);
+    const int        b3 = g2.input_vec(sh, kir::DType::F32, 3);
+    const int        op = g2.outer_product(a2, b3);
+    REQUIRE(g2.node(op).type.rows == 2);
+    REQUIRE(g2.node(op).type.cols == 3);
+
+    float ad[mn * 2];
+    float bd[mn * 3];
+    for (int i = 0; i < mn; ++i)
+    {
+        const float fi = static_cast<float>(i);
+        ad[i * 2] = 0.5F * fi - 1.0F; ad[i * 2 + 1] = 2.0F - 0.1F * fi;
+        bd[i * 3] = 1.0F + 0.2F * fi; bd[i * 3 + 1] = -0.3F * fi; bd[i * 3 + 2] = 0.75F;
+    }
+    const float* inp2[] = {ad, bd};
+    float        gop[mn * 6];
+    REQUIRE(vk.run(g2, op, inp2, 2, gop));
+
+    int badop = 0;
+    for (int i = 0; i < mn; ++i)
+    {
+        for (int col = 0; col < 3; ++col)
+        {
+            for (int r = 0; r < 2; ++r)
+            {
+                const float ref = ad[i * 2 + r] * bd[i * 3 + col];
+                if (std::fabs(gop[i * 6 + col * 2 + r] - ref) > 1e-4F * std::fabs(ref) + 1e-4F) { ++badop; }
+            }
+        }
+    }
+    CHECK(badop == 0);
+
+    // a mat2 INPUT: comps == 4 collides with vec4, so `input_mat` is the only way to feed one. It must construct as
+    // `mat2(...)` and transpose as a matrix, not be silently read back as a vec4.
+    kir::KGraph g3(&alloc);
+    const int   min2 = g3.input_mat(sh, kir::DType::F32, 2, 2);
+    const int   mt2  = g3.mat_transpose(min2);
+    REQUIRE(g3.node(min2).type.kind == kir::TKind::Mat);
+    REQUIRE(g3.node(min2).comps() == 4);
+
+    float md[mn * 4];
+    for (int i = 0; i < mn; ++i)
+    {
+        const float fi = static_cast<float>(i);
+        md[i * 4] = 1.0F + fi; md[i * 4 + 1] = 2.0F - fi; md[i * 4 + 2] = 0.5F * fi; md[i * 4 + 3] = 3.0F;
+    }
+    const float* inp3[] = {md};
+    float        gmt[mn * 4];
+    REQUIRE(vk.run(g3, mt2, inp3, 1, gmt));
+
+    int badmt = 0;
+    for (int i = 0; i < mn; ++i)
+    {
+        for (int col = 0; col < 2; ++col) { for (int r = 0; r < 2; ++r) { if (gmt[i * 4 + col * 2 + r] != md[i * 4 + r * 2 + col]) { ++badmt; } } } // transpose is exact
+    }
+    CHECK(badmt == 0);
+}
+
+// D-007 B0-3 on the GPU. GLSL has no `<` on vectors: a componentwise compare must emit lessThan() and produce a bvec3,
+// which any()/all() then consume. It also rejects `precise bvec3` and `float + bool` -- all of which a comps-keyed,
+// float-only emitter would have gotten wrong. `ivec3` exercises the int-prefixed type name via Cast.
+TEST_CASE("v17 B0-3: CKIR bvec3 (lessThan + any/all) and ivec3 (via cast) run on Vulkan", "[kir][vulkan][gpu][boolvec]")
+{
+    crd::memory::TlsfAllocator alloc(16U << 20U);
+    kir::KirBackendVulkan      vk(&alloc);
+    if (!vk.valid()) { WARN("no Vulkan device available; skipping"); return; }
+
+    constexpr int    bn = 128;
+    const kir::Shape sh = kir::make_shape({bn});
+    kir::KGraph      g(&alloc);
+    const int        av = g.input_vec(sh, kir::DType::F32, 3);
+    const int        bv = g.input_vec(sh, kir::DType::F32, 3);
+    const int        lt = g.binary(kir::KOp::CmpLt, av, bv); // bvec3
+    const int        an = g.vany(lt);                        // bool -> written as float 0/1
+    const int        al = g.vall(lt);
+    REQUIRE(g.node(lt).type.scalar == kir::DType::Bool);
+    REQUIRE(g.node(lt).type.rows == 3);
+
+    float avd[bn * 3];
+    float bvd[bn * 3];
+    for (int i = 0; i < bn; ++i)
+    {
+        const float fi = static_cast<float>(i);
+        avd[i * 3] = fi - 64.0F;                  avd[i * 3 + 1] = 1.0F; avd[i * 3 + 2] = (i % 2 == 0) ? -1.0F : 5.0F;
+        bvd[i * 3] = 0.0F;                        bvd[i * 3 + 1] = 2.0F; bvd[i * 3 + 2] = 0.0F;
+    }
+    const float* inp[] = {avd, bvd};
+    float        gan[bn];
+    float        gal[bn];
+    REQUIRE(vk.run(g, an, inp, 2, gan));
+    REQUIRE(vk.run(g, al, inp, 2, gal));
+
+    int bad = 0;
+    for (int i = 0; i < bn; ++i)
+    {
+        const bool eany = (avd[i * 3] < bvd[i * 3]) || (avd[i * 3 + 1] < bvd[i * 3 + 1]) || (avd[i * 3 + 2] < bvd[i * 3 + 2]);
+        const bool eall = (avd[i * 3] < bvd[i * 3]) && (avd[i * 3 + 1] < bvd[i * 3 + 1]) && (avd[i * 3 + 2] < bvd[i * 3 + 2]);
+        if (gan[i] != (eany ? 1.0F : 0.0F)) { ++bad; } // bool readback is exact, not tolerance-based
+        if (gal[i] != (eall ? 1.0F : 0.0F)) { ++bad; }
+    }
+    CHECK(bad == 0);
+
+    // ivec3: float vec3 -> ivec3 (truncates) -> componentwise add -> back to vec3
+    kir::KGraph g2(&alloc);
+    const int   fv  = g2.input_vec(sh, kir::DType::F32, 3);
+    const int   ivv = g2.cast(fv, kir::DType::I32);
+    const int   sum = g2.binary(kir::KOp::Add, ivv, ivv);
+    const int   out = g2.cast(sum, kir::DType::F32);
+    REQUIRE(g2.node(ivv).type == kir::KType::vec(kir::DType::I32, 3));
+
+    float fvd[bn * 3];
+    for (int i = 0; i < bn; ++i)
+    {
+        const float fi = static_cast<float>(i);
+        fvd[i * 3] = fi * 0.5F - 10.0F; fvd[i * 3 + 1] = 3.25F; fvd[i * 3 + 2] = -2.75F;
+    }
+    const float* inp2[] = {fvd};
+    float        giv[bn * 3];
+    REQUIRE(vk.run(g2, out, inp2, 1, giv));
+
+    int badi = 0;
+    for (int i = 0; i < bn; ++i)
+    {
+        for (int k = 0; k < 3; ++k)
+        {
+            const float ref = static_cast<float>(2 * static_cast<int>(fvd[i * 3 + k])); // int truncation, then doubled
+            if (giv[i * 3 + k] != ref) { ++badi; }
+        }
+    }
+    CHECK(badi == 0);
+}
+
+// D-007 B0-4 on the GPU. A struct/array value is lowered by SROA — the aggregate is never materialized, a FieldGet
+// resolves to the field's temp — so no GLSL `struct` declaration and no std430 layout appear. This is what Slang/DXC do
+// for value-typed aggregates; buffer-BACKED structs (which do need std430) are the resource-binding slice, B3.
+TEST_CASE("v17 B0-4: a Light struct + a vec3 array round-trip through the SROA lowering on Vulkan", "[kir][vulkan][gpu][aggregate]")
+{
+    crd::memory::TlsfAllocator alloc(16U << 20U);
+    kir::KirBackendVulkan      vk(&alloc);
+    if (!vk.valid()) { WARN("no Vulkan device available; skipping"); return; }
+
+    constexpr int    an = 96;
+    const kir::Shape sh = kir::make_shape({an});
+    kir::KGraph      g(&alloc);
+
+    // struct Light { vec3 pos; float radius; vec3 color; }
+    const kir::KType fields[3] = {kir::KType::vec(kir::DType::F32, 3), kir::KType::make_scalar(kir::DType::F32),
+                                  kir::KType::vec(kir::DType::F32, 3)};
+    const int        light = g.define_struct(fields, 3);
+    REQUIRE(g.struct_flat_comps(light) == 7);
+
+    const int pos = g.input_vec(sh, kir::DType::F32, 3);
+    const int rad = g.input(sh, kir::DType::F32);
+    const int col = g.input_vec(sh, kir::DType::F32, 3);
+    const int fl[3] = {pos, rad, col};
+    const int lite  = g.struct_make(light, fl, 3);
+    // destructure, then recombine: color * radius + pos  (proves each field lands in the right slot)
+    const int f_pos = g.field_get(lite, 0);
+    const int f_rad = g.field_get(lite, 1);
+    const int f_col = g.field_get(lite, 2);
+    const int out   = g.binary(kir::KOp::Add, g.binary(kir::KOp::Mul, f_col, g.splat(f_rad, 3)), f_pos);
+
+    float posd[an * 3];
+    float radd[an];
+    float cold[an * 3];
+    for (int i = 0; i < an; ++i)
+    {
+        const float fi = static_cast<float>(i);
+        posd[i * 3] = fi * 0.5F - 8.0F; posd[i * 3 + 1] = 1.0F - 0.1F * fi; posd[i * 3 + 2] = 0.25F * fi;
+        radd[i]     = 0.5F + 0.03F * fi;
+        cold[i * 3] = 0.1F * fi;        cold[i * 3 + 1] = 2.0F;             cold[i * 3 + 2] = -0.4F * fi;
+    }
+    const float* inp[] = {posd, radd, cold};
+    float        gout[an * 3];
+    REQUIRE(vk.run(g, out, inp, 3, gout));
+
+    int bad = 0;
+    for (int i = 0; i < an; ++i)
+    {
+        for (int k = 0; k < 3; ++k)
+        {
+            const float ref = cold[i * 3 + k] * radd[i] + posd[i * 3 + k];
+            if (std::fabs(gout[i * 3 + k] - ref) > 1e-4F * std::fabs(ref) + 1e-4F) { ++bad; }
+        }
+    }
+    CHECK(bad == 0);
+
+    // a fixed-size array of vec3: pick element 1 back out
+    kir::KGraph g2(&alloc);
+    const int   e0 = g2.input_vec(sh, kir::DType::F32, 3);
+    const int   e1 = g2.input_vec(sh, kir::DType::F32, 3);
+    const int   ev[2] = {e0, e1};
+    const int   arr   = g2.array_make(ev, 2);
+    REQUIRE(g2.node(arr).type.count == 2);
+    REQUIRE(g2.node(arr).comps() == 6);
+    const int   got = g2.array_get(arr, 1); // == e1
+    REQUIRE(g2.node(got).comps() == 3);
+
+    const float* inp2[] = {posd, cold};
+    float        garr[an * 3];
+    REQUIRE(vk.run(g2, got, inp2, 2, garr));
+
+    int bada = 0;
+    for (int i = 0; i < an * 3; ++i) { if (garr[i] != cold[i]) { ++bada; } } // an exact element read, no arithmetic
+    CHECK(bada == 0);
 }
 
 TEST_CASE("v17 Phase A2: CKIR transcendental intrinsics (exp2/log2/rsqrt/tan/atan2/smoothstep/radians) on Vulkan", "[kir][vulkan][gpu][intrinsics]")
@@ -1220,7 +1492,8 @@ TEST_CASE("v17 Phase A2: CKIR transcendental intrinsics (exp2/log2/rsqrt/tan/ata
         {
             const float ra = std::atan2(yv[i], xv[i]);
             const float u  = (yv[i] - (-0.5F)) / (2.5F - (-0.5F));
-            const float t  = u < 0.0F ? 0.0F : (u > 1.0F ? 1.0F : u);
+            const float hi = u > 1.0F ? 1.0F : u;
+            const float t  = u < 0.0F ? 0.0F : hi;
             const float rs = t * t * (3.0F - (2.0F * t));
             if (std::fabs(gat[i] - ra) > (2e-4F * std::fabs(ra)) + 1e-6F) { ++bad; }
             if (std::fabs(gss[i] - rs) > (2e-4F * std::fabs(rs)) + 1e-6F) { ++bad; }

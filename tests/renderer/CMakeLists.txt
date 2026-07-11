@@ -8,6 +8,7 @@ target_link_libraries(crd-renderer-tests PRIVATE
     crd-rhi
     crd-rhi-vulkan
     crd-shader
+    crd-shader-vulkan
     crd-renderer
     Catch2::Catch2WithMain
 )

@@ -211,6 +211,9 @@ private:
     bool m_show_solid     = true;
     bool m_show_wireframe = false;
 
+    // D-008 C2-e: the injected GLSL->SPIR-V compiler. Declared BEFORE m_shader_runtime so the runtime (which borrows it)
+    // is destroyed first (members destruct in reverse declaration order).
+    std::unique_ptr<crd::shader::ISpirvCompiler>      m_spirv_compiler;
     std::unique_ptr<crd::shader::Runtime>             m_shader_runtime;
     crd::shader::VariantHandle                        m_surface_variant{};
     SandboxPipelineResolver                           m_resolver;

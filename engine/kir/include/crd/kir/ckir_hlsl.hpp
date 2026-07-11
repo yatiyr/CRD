@@ -47,7 +47,7 @@ inline bool emit_elementwise_hlsl(const KGraph& g, int output, crd::memory::IAll
         {
             binding_of[static_cast<crd::usize>(i)] = out.n_inputs;
             out.input_iidx[out.n_inputs]           = g.node(i).iidx;
-            in_dtype[out.n_inputs]                 = g.node(i).dtype;
+            in_dtype[out.n_inputs]                 = g.node(i).dtype();
             ++out.n_inputs;
         }
     }
@@ -55,15 +55,17 @@ inline bool emit_elementwise_hlsl(const KGraph& g, int output, crd::memory::IAll
     crd::containers::String& s = out.source;
     s.clear();
     for (int b = 0; b < out.n_inputs; ++b) { s.append("RWStructuredBuffer<"); s.append(ctype(in_dtype[b])); s.append("> in"); app_uint(s, b); s.append(" : register(u"); app_uint(s, b); s.append(");\n"); }
-    s.append("RWStructuredBuffer<"); s.append(ctype(g.node(output).dtype)); s.append("> outb : register(u"); app_uint(s, out.n_inputs); s.append(");\n");
+    s.append("RWStructuredBuffer<"); s.append(buf_ctype(g.node(output).dtype())); s.append("> outb : register(u"); app_uint(s, out.n_inputs); s.append(");\n");
     s.append("cbuffer PC : register(b0) { uint n; };\n");
     s.append("[numthreads(256,1,1)]\nvoid cs_main(uint3 dtid : SV_DispatchThreadID) {\n  uint gid = dtid.x;\n  if (gid >= n) return;\n");
     for (int i = 0; i < n; ++i)
     {
         if (!reach[static_cast<crd::usize>(i)]) { continue; }
         const KNode& nd = g.node(i);
-        const bool ii = dt_is_int(nd.dtype);
-        s.append(ii ? "  int t" : "  precise float t"); app_uint(s, i); s.append(" = ");
+        const bool ii = dt_is_int(nd.dtype()) || dt_is_uint(nd.dtype());
+        if (nd.dtype() == DType::Bool) { s.append("  bool t"); }
+        else { s.append(ii ? "  int t" : "  precise float t"); }
+        app_uint(s, i); s.append(" = ");
         const auto ta = [&](int id) { s.append("t"); app_uint(s, id); };
         switch (nd.op)
         {
@@ -90,12 +92,14 @@ inline bool emit_elementwise_hlsl(const KGraph& g, int output, crd::memory::IAll
         case KOp::Div: ta(nd.a); s.append(" / "); ta(nd.b); break;
         case KOp::Max: s.append("max("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
         case KOp::Min: s.append("min("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
-        case KOp::CmpLt: s.append("(("); ta(nd.a); s.append(" < "); ta(nd.b); s.append(") ? 1.0 : 0.0)"); break;
-        case KOp::CmpEq: s.append("(("); ta(nd.a); s.append(" == "); ta(nd.b); s.append(") ? 1.0 : 0.0)"); break;
-        case KOp::CmpLe: s.append("(("); ta(nd.a); s.append(" <= "); ta(nd.b); s.append(") ? 1.0 : 0.0)"); break;
-        case KOp::CmpGt: s.append("(("); ta(nd.a); s.append(" > "); ta(nd.b); s.append(") ? 1.0 : 0.0)"); break;
-        case KOp::CmpGe: s.append("(("); ta(nd.a); s.append(" >= "); ta(nd.b); s.append(") ? 1.0 : 0.0)"); break;
-        case KOp::CmpNe: s.append("(("); ta(nd.a); s.append(" != "); ta(nd.b); s.append(") ? 1.0 : 0.0)"); break;
+        // B0-3: comparisons are bool-typed. HLSL's relational operators are componentwise on vectors and yield boolN,
+        // so unlike GLSL there is no separate lessThan()/equal() family to call.
+        case KOp::CmpLt: s.append("("); ta(nd.a); s.append(" < "); ta(nd.b); s.append(")"); break;
+        case KOp::CmpEq: s.append("("); ta(nd.a); s.append(" == "); ta(nd.b); s.append(")"); break;
+        case KOp::CmpLe: s.append("("); ta(nd.a); s.append(" <= "); ta(nd.b); s.append(")"); break;
+        case KOp::CmpGt: s.append("("); ta(nd.a); s.append(" > "); ta(nd.b); s.append(")"); break;
+        case KOp::CmpGe: s.append("("); ta(nd.a); s.append(" >= "); ta(nd.b); s.append(")"); break;
+        case KOp::CmpNe: s.append("("); ta(nd.a); s.append(" != "); ta(nd.b); s.append(")"); break;
         case KOp::BitNot: s.append("(~"); ta(nd.a); s.append(")"); break;
         case KOp::BitCount: s.append("countbits("); ta(nd.a); s.append(")"); break;
         case KOp::FindLSB: s.append("firstbitlow("); ta(nd.a); s.append(")"); break;
@@ -131,19 +135,46 @@ inline bool emit_elementwise_hlsl(const KGraph& g, int output, crd::memory::IAll
         case KOp::Cbrt: s.append("(sign("); ta(nd.a); s.append(") * pow(abs("); ta(nd.a); s.append("), 0.3333333333333333))"); break; // no builtin
         case KOp::Mod: s.append("fmod("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break; // C fmod (sign of x)
         case KOp::Fma: s.append("fma("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(")"); break;
-        case KOp::Select: s.append("(("); ta(nd.c); s.append(" != 0.0) ? "); ta(nd.a); s.append(" : "); ta(nd.b); s.append(")"); break;
+        case KOp::Select: s.append("("); if (g.node(nd.c).dtype() == DType::Bool) { ta(nd.c); } else { s.append("("); ta(nd.c); s.append(" != 0.0)"); } s.append(" ? "); ta(nd.a); s.append(" : "); ta(nd.b); s.append(")"); break;
         default: return false;
         }
         s.append(";\n");
     }
-    s.append("  outb[gid] = t"); app_uint(s, output); s.append(";\n}\n");
+    // a bool result is stored as float 0.0/1.0 (RWStructuredBuffer<bool> has no defined layout).
+    s.append("  outb[gid] = ");
+    if (g.node(output).dtype() == DType::Bool) { s.append("float(t"); app_uint(s, output); s.append(")"); }
+    else { s.append("t"); app_uint(s, output); }
+    s.append(";\n}\n");
     return true;
 }
 
-// HLSL type for a component count: 1=float, 2/3/4=floatN, 9=float3x3, 16=float4x4.
-inline const char* htype(int comps) noexcept
+// The bare HLSL matrix spelling: `floatRxC` = R ROWS by C columns. This is the TRANSPOSE of GLSL's `matCxR`
+// (ckir_glsl.hpp) -- the single most dangerous asymmetry in this file. It is also why every matrix construction below
+// is wrapped in `transpose(...)`: HLSL's matrix constructor fills ROW-major, so feeding it our C column-vectors builds
+// the CxR transpose, and one `transpose` puts it back. Verified by the `M * inverse(M) * v == v` GPU test, never by eye.
+inline const char* hmat(int rows, int cols) noexcept
 {
-    switch (comps) { case 2: return "float2"; case 3: return "float3"; case 4: return "float4"; case 9: return "float3x3"; case 16: return "float4x4"; default: return "float"; }
+    switch (rows * 10 + cols)
+    {
+    case 22: return "float2x2"; case 23: return "float2x3"; case 24: return "float2x4";
+    case 32: return "float3x2"; case 33: return "float3x3"; case 34: return "float3x4";
+    case 42: return "float4x2"; case 43: return "float4x3"; case 44: return "float4x4";
+    default: return "float";
+    }
+}
+// HLSL type name for a CKIR value type (a comps==4 value is a float4 OR a float2x2 -- only the type knows which).
+// Vectors carry the component scalar: floatN / intN / uintN / boolN (B0-3).
+inline const char* htype(KType t) noexcept
+{
+    if (t.kind == TKind::Mat) { return hmat(t.rows, t.cols); }
+    if (t.kind == TKind::Vec)
+    {
+        if (t.scalar == DType::Bool) { switch (t.rows) { case 2: return "bool2"; case 3: return "bool3"; case 4: return "bool4"; default: break; } }
+        else if (glsl_detail::dt_is_uint(t.scalar)) { switch (t.rows) { case 2: return "uint2"; case 3: return "uint3"; case 4: return "uint4"; default: break; } }
+        else if (glsl_detail::dt_is_int(t.scalar)) { switch (t.rows) { case 2: return "int2"; case 3: return "int3"; case 4: return "int4"; default: break; } }
+        else { switch (t.rows) { case 2: return "float2"; case 3: return "float3"; case 4: return "float4"; default: break; } }
+    }
+    return glsl_detail::ctype(t.scalar);
 }
 
 // A3: comps-aware VECTOR emitter for HLSL/DX12 (mirror of emit_vec_glsl) — float/float2/3/4 temps, interleaved I/O,
@@ -164,7 +195,8 @@ inline bool emit_vec_hlsl(const KGraph& g, int output, crd::memory::IAllocator* 
         reach[static_cast<crd::usize>(i)] = 1;
         const KNode& nd = g.node(i);
         if (!is_vec_fusable(nd.op)) { return false; }
-        if (nd.op == KOp::MatInverse && nd.comps == 16) { return false; } // mat4 inverse deferred on HLSL (huge cofactor formula)
+        if (nd.op == KOp::MatInverse && nd.type.rows == 4) { return false; } // mat4 inverse deferred on HLSL (huge cofactor formula); 2x2/3x3 have helpers
+        for (int k = 0; k < static_cast<int>(nd.n_ext); ++k) { stk.push_back(g.ext_operand(nd, k)); } // B0-4 variadic operands
         if (nd.a >= 0) { stk.push_back(nd.a); }
         if (nd.b >= 0) { stk.push_back(nd.b); }
         if (nd.c >= 0) { stk.push_back(nd.c); }
@@ -176,31 +208,38 @@ inline bool emit_vec_hlsl(const KGraph& g, int output, crd::memory::IAllocator* 
     for (int i = 0; i < n; ++i)
     {
         if (!reach[static_cast<crd::usize>(i)]) { continue; }
-        if (g.node(i).op == KOp::Input) { binding_of[static_cast<crd::usize>(i)] = out.n_inputs; out.input_iidx[out.n_inputs] = g.node(i).iidx; out.in_comps[out.n_inputs] = g.node(i).comps; ++out.n_inputs; }
+        if (g.node(i).op == KOp::Input) { binding_of[static_cast<crd::usize>(i)] = out.n_inputs; out.input_iidx[out.n_inputs] = g.node(i).iidx; out.in_comps[out.n_inputs] = g.node(i).comps(); ++out.n_inputs; }
     }
-    out.out_comps              = g.node(output).comps;
+    out.out_comps              = g.node(output).comps();
     crd::containers::String& s = out.source;
     s.clear();
     for (int b = 0; b < out.n_inputs; ++b) { s.append("RWStructuredBuffer<float> in"); app_uint(s, static_cast<crd::u32>(b)); s.append(" : register(u"); app_uint(s, static_cast<crd::u32>(b)); s.append(");\n"); }
     s.append("RWStructuredBuffer<float> outb : register(u"); app_uint(s, static_cast<crd::u32>(out.n_inputs)); s.append(");\n");
     s.append("cbuffer PC : register(b0) { uint n; };\n");
     { // quaternion/slerp + matrix helpers (no HLSL builtins for these)
-        bool qm = false, qc = false, qr = false, qa = false, sl = false, qt = false, iv = false, op = false;
-        for (int i = 0; i < n; ++i) { if (!reach[static_cast<crd::usize>(i)]) { continue; } switch (g.node(i).op) { case KOp::QuatMul: qm = true; break; case KOp::QuatConj: qc = true; break; case KOp::QuatRotate: qr = true; break; case KOp::QuatAxisAngle: qa = true; break; case KOp::Slerp: sl = true; break; case KOp::QuatToMat3: qt = true; break; case KOp::MatInverse: iv = true; break; case KOp::OuterProduct: op = true; break; default: break; } }
+        bool qm = false;
+        bool qc = false;
+        bool qr = false;
+        bool qa = false;
+        bool sl = false;
+        bool qt = false;
+        bool iv = false;
+        bool iv2 = false;
+        for (int i = 0; i < n; ++i) { if (!reach[static_cast<crd::usize>(i)]) { continue; } switch (g.node(i).op) { case KOp::QuatMul: qm = true; break; case KOp::QuatConj: qc = true; break; case KOp::QuatRotate: qr = true; break; case KOp::QuatAxisAngle: qa = true; break; case KOp::Slerp: sl = true; break; case KOp::QuatToMat3: qt = true; break; case KOp::MatInverse: if (g.node(i).type.rows == 2) { iv2 = true; } else { iv = true; } break; default: break; } }
         if (qm) { s.append("float4 crd_qmul(float4 a,float4 b){return float4(a.w*b.xyz+b.w*a.xyz+cross(a.xyz,b.xyz),a.w*b.w-dot(a.xyz,b.xyz));}\n"); }
         if (qc) { s.append("float4 crd_qconj(float4 q){return float4(-q.xyz,q.w);}\n"); }
         if (qr) { s.append("float3 crd_qrot(float4 q,float3 v){float3 t=2.0*cross(q.xyz,v);return v+q.w*t+cross(q.xyz,t);}\n"); }
         if (qa) { s.append("float4 crd_qaa(float3 ax,float an){float h=an*0.5;return float4(ax*sin(h),cos(h));}\n"); }
         if (sl) { s.append("float4 crd_slerp(float4 a,float4 b,float t){float d=dot(a,b);float sg=1.0;if(d<0.0){d=-d;sg=-1.0;}if(d>0.9995){return normalize(lerp(a,sg*b,t));}float th=acos(d);float sn=sin(th);return (sin((1.0-t)*th)*a+sin(t*th)*sg*b)/sn;}\n"); }
         if (qt) { s.append("float3x3 crd_qmat(float4 q){float x=q.x,y=q.y,z=q.z,w=q.w;return float3x3(1.0-2.0*(y*y+z*z),2.0*(x*y-w*z),2.0*(x*z+w*y),2.0*(x*y+w*z),1.0-2.0*(x*x+z*z),2.0*(y*z-w*x),2.0*(x*z-w*y),2.0*(y*z+w*x),1.0-2.0*(x*x+y*y));}\n"); } // row-major R[row][col]
-        if (op) { s.append("float3x3 crd_outer(float3 a,float3 b){return float3x3(a.x*b.x,a.x*b.y,a.x*b.z,a.y*b.x,a.y*b.y,a.y*b.z,a.z*b.x,a.z*b.y,a.z*b.z);}\n"); }
+        if (iv2) { s.append("float2x2 crd_inv2(float2x2 m){float a=m._m00,b=m._m01,c=m._m10,d=m._m11;float iv=1.0/(a*d-b*c);return float2x2(d*iv,-b*iv,-c*iv,a*iv);}\n"); }
         if (iv) { s.append("float3x3 crd_inv3(float3x3 m){float a=m._m00,b=m._m01,c=m._m02,d=m._m10,e=m._m11,f=m._m12,g=m._m20,h=m._m21,i=m._m22;float A=e*i-f*h,B=d*i-f*g,C=d*h-e*g;float iv=1.0/(a*A-b*B+c*C);return float3x3(A*iv,(c*h-b*i)*iv,(b*f-c*e)*iv,(f*g-d*i)*iv,(a*i-c*g)*iv,(c*d-a*f)*iv,(d*h-e*g)*iv,(b*g-a*h)*iv,(a*e-b*d)*iv);}\n"); }
     }
     s.append("[numthreads(256,1,1)]\nvoid cs_main(uint3 dtid : SV_DispatchThreadID) {\n  uint gid = dtid.x;\n  if (gid >= n) return;\n");
     // A4 tier-2: body-scoping — mark loop-varying nodes (LoopIndex/LoopAcc + consumers; For = barrier) + their owning For.
     crd::containers::Array<crd::u8> varying(scratch);
     varying.resize(static_cast<crd::usize>(n), 0);
-    for (int i = 0; i < n; ++i) { const KNode& v = g.node(i); if (v.op == KOp::For) { continue; } if (v.op == KOp::LoopIndex || v.op == KOp::LoopAcc) { varying[static_cast<crd::usize>(i)] = 1; } else if ((v.a >= 0 && varying[static_cast<crd::usize>(v.a)]) || (v.b >= 0 && varying[static_cast<crd::usize>(v.b)]) || (v.c >= 0 && varying[static_cast<crd::usize>(v.c)]) || (v.d >= 0 && varying[static_cast<crd::usize>(v.d)])) { varying[static_cast<crd::usize>(i)] = 1; } }
+    for (int i = 0; i < n; ++i) { const KNode& v = g.node(i); if (v.op == KOp::For) { continue; } const bool loop_leaf = v.op == KOp::LoopIndex || v.op == KOp::LoopAcc; const bool from_operand = (v.a >= 0 && varying[static_cast<crd::usize>(v.a)]) || (v.b >= 0 && varying[static_cast<crd::usize>(v.b)]) || (v.c >= 0 && varying[static_cast<crd::usize>(v.c)]) || (v.d >= 0 && varying[static_cast<crd::usize>(v.d)]); if (loop_leaf || from_operand) { varying[static_cast<crd::usize>(i)] = 1; } }
     crd::containers::Array<int> body_of(scratch);
     body_of.resize(static_cast<crd::usize>(n), -1);
     crd::containers::Array<int> rstk(scratch);
@@ -211,13 +250,25 @@ inline bool emit_vec_hlsl(const KGraph& g, int output, crd::memory::IAllocator* 
     const auto emit_expr = [&](int i) -> bool
     {
         const KNode& nd = g.node(i);
-        const int    c  = nd.comps;
-        s.append("  precise "); s.append(htype(c)); s.append(" t"); app_uint(s, static_cast<crd::u32>(i)); s.append(" = ");
+        const int    c  = nd.comps();
+        // B0-4 SROA: the aggregate is never materialized; a FieldGet/ArrayGet resolves to the operand its index names.
+        if (nd.op == KOp::StructMake || nd.op == KOp::ArrayMake) { return true; }
+        if (nd.op == KOp::FieldGet || nd.op == KOp::ArrayGet)
+        {
+            const KNode& agg = g.node(nd.a);
+            if (agg.op != KOp::StructMake && agg.op != KOp::ArrayMake) { return false; } // e.g. a Select of structs needs a real struct type
+            s.append(glsl_detail::is_float_dtype(nd.dtype()) ? "  precise " : "  "); s.append(htype(nd.type));
+            s.append(" t"); app_uint(s, i); s.append(" = "); ta(g.ext_operand(agg, nd.iidx)); s.append(";\n");
+            return true;
+        }
+        s.append(glsl_detail::is_float_dtype(nd.dtype()) ? "  precise " : "  "); s.append(htype(nd.type)); s.append(" t"); app_uint(s, static_cast<crd::u32>(i)); s.append(" = ");
         switch (nd.op)
         {
-        case KOp::Input: { const int bd = binding_of[static_cast<crd::usize>(i)]; if (c == 1) { s.append("in"); app_uint(s, static_cast<crd::u32>(bd)); s.append("[gid]"); } else { if (c > 4) { s.append("transpose("); } s.append(htype(c)); s.append("("); for (int k = 0; k < c; ++k) { if (k) { s.append(", "); } s.append("in"); app_uint(s, static_cast<crd::u32>(bd)); s.append("[gid*"); app_uint(s, static_cast<crd::u32>(c)); s.append("+"); app_uint(s, static_cast<crd::u32>(k)); s.append("]"); } s.append(")"); if (c > 4) { s.append(")"); } } break; } // mat: transpose(floatNxN(flat)) — flat is column-major, HLSL ctor is row-major
+        // mat: transpose(floatCxR(flat)) — our flat is column-major, HLSL's ctor fills row-major, so build the CxR
+        // transpose from the flat scalars and flip it once. Matrix-ness is the TYPE's, not `c > 4` (mat2 has c == 4).
+        case KOp::Input: { const int bd = binding_of[static_cast<crd::usize>(i)]; const bool is_mat = nd.type.kind == TKind::Mat; if (c == 1) { s.append("in"); app_uint(s, static_cast<crd::u32>(bd)); s.append("[gid]"); } else { if (is_mat) { s.append("transpose("); s.append(hmat(nd.type.cols, nd.type.rows)); } else { s.append(htype(nd.type)); } s.append("("); for (int k = 0; k < c; ++k) { if (k) { s.append(", "); } s.append("in"); app_uint(s, static_cast<crd::u32>(bd)); s.append("[gid*"); app_uint(s, static_cast<crd::u32>(c)); s.append("+"); app_uint(s, static_cast<crd::u32>(k)); s.append("]"); } s.append(")"); if (is_mat) { s.append(")"); } } break; }
         case KOp::Const: app_flit(s, nd.cval); break;
-        case KOp::Cast: s.append(htype(c)); s.append("("); ta(nd.a); s.append(")"); break;
+        case KOp::Cast: s.append(htype(nd.type)); s.append("("); ta(nd.a); s.append(")"); break;
         case KOp::Neg: s.append("-"); ta(nd.a); break;
         case KOp::Recip: s.append("(1.0 / "); ta(nd.a); s.append(")"); break;
         case KOp::Abs: s.append("abs("); ta(nd.a); s.append(")"); break;
@@ -240,10 +291,10 @@ inline bool emit_vec_hlsl(const KGraph& g, int output, crd::memory::IAllocator* 
         case KOp::Mix: s.append("lerp("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(")"); break;
         case KOp::Vec2: s.append("float2("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
         case KOp::Vec3: s.append("float3("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(")"); break;
-        case KOp::VecConcat: s.append(htype(c)); s.append("("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
+        case KOp::VecConcat: s.append(htype(nd.type)); s.append("("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
         case KOp::VecComp: ta(nd.a); s.append("."); { const char sw[2] = {xyzw[nd.iidx], '\0'}; s.append(sw); } break;
         case KOp::Swizzle: ta(nd.a); s.append("."); for (int k = 0; k < c; ++k) { const char sw[2] = {xyzw[nd.perm[k]], '\0'}; s.append(sw); } break;
-        case KOp::Splat: s.append(htype(c)); s.append("("); for (int k = 0; k < c; ++k) { if (k) { s.append(", "); } ta(nd.a); } s.append(")"); break;
+        case KOp::Splat: s.append(htype(nd.type)); s.append("("); for (int k = 0; k < c; ++k) { if (k) { s.append(", "); } ta(nd.a); } s.append(")"); break;
         case KOp::Dot: s.append("dot("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
         case KOp::Cross: s.append("cross("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
         case KOp::Normalize: s.append("normalize("); ta(nd.a); s.append(")"); break;
@@ -251,20 +302,32 @@ inline bool emit_vec_hlsl(const KGraph& g, int output, crd::memory::IAllocator* 
         case KOp::Reflect: s.append("reflect("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
         case KOp::Refract: s.append("refract("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(")"); break;
         case KOp::Faceforward: s.append("faceforward("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(")"); break;
-        case KOp::VecAny: s.append("(any("); ta(nd.a); s.append(") ? 1.0 : 0.0)"); break;
-        case KOp::VecAll: s.append("(all("); ta(nd.a); s.append(") ? 1.0 : 0.0)"); break;
+        // any()/all() are bool-returning in HLSL and accept a numeric vector too (nonzero == true), so one form serves both.
+        case KOp::VecAny: s.append("any("); ta(nd.a); s.append(")"); break;
+        case KOp::VecAll: s.append("all("); ta(nd.a); s.append(")"); break;
+        // B0-3: relational operators are componentwise on HLSL vectors and already yield boolN.
+        case KOp::CmpLt: s.append("("); ta(nd.a); s.append(" < "); ta(nd.b); s.append(")"); break;
+        case KOp::CmpLe: s.append("("); ta(nd.a); s.append(" <= "); ta(nd.b); s.append(")"); break;
+        case KOp::CmpGt: s.append("("); ta(nd.a); s.append(" > "); ta(nd.b); s.append(")"); break;
+        case KOp::CmpGe: s.append("("); ta(nd.a); s.append(" >= "); ta(nd.b); s.append(")"); break;
+        case KOp::CmpEq: s.append("("); ta(nd.a); s.append(" == "); ta(nd.b); s.append(")"); break;
+        case KOp::CmpNe: s.append("("); ta(nd.a); s.append(" != "); ta(nd.b); s.append(")"); break;
+        case KOp::Select: s.append("("); if (g.node(nd.c).dtype() == DType::Bool) { ta(nd.c); } else { s.append("("); ta(nd.c); s.append(" != 0.0)"); } s.append(" ? "); ta(nd.a); s.append(" : "); ta(nd.b); s.append(")"); break;
         case KOp::Slerp: s.append("crd_slerp("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(")"); break;
         case KOp::QuatMul: s.append("crd_qmul("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
         case KOp::QuatConj: s.append("crd_qconj("); ta(nd.a); s.append(")"); break;
         case KOp::QuatRotate: s.append("crd_qrot("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
         case KOp::QuatAxisAngle: s.append("crd_qaa("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
-        case KOp::MatFromCols: s.append("transpose("); s.append(htype(c)); s.append("("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); if (c == 16) { s.append(", "); ta(nd.d); } s.append("))"); break;
-        case KOp::MatVecMul: s.append("mul("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
+        // C column-vectors of R rows -> feed them as the ROWS of a CxR matrix, then transpose once -> our RxC.
+        case KOp::MatFromCols: { const int mcols = nd.type.cols; const int operand[4] = {nd.a, nd.b, nd.c, nd.d}; s.append("transpose("); s.append(hmat(mcols, nd.type.rows)); s.append("("); for (int k = 0; k < mcols; ++k) { if (k) { s.append(", "); } ta(operand[k]); } s.append("))"); break; }
+        case KOp::MatVecMul: // HLSL spells both as mul(); the row-major construct at MatFromCols keeps the convention
         case KOp::MatMatMul: s.append("mul("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
         case KOp::MatTranspose: s.append("transpose("); ta(nd.a); s.append(")"); break;
         case KOp::Determinant: s.append("determinant("); ta(nd.a); s.append(")"); break;
-        case KOp::MatInverse: s.append("crd_inv3("); ta(nd.a); s.append(")"); break;
-        case KOp::OuterProduct: s.append("crd_outer("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
+        case KOp::MatInverse: s.append(nd.type.rows == 2 ? "crd_inv2(" : "crd_inv3("); ta(nd.a); s.append(")"); break; // 4x4 is refused upstream by is_vec_fusable
+        // a(R) (x) b(C) -> RxC. HLSL's ctor fills row-major and row r is exactly `a[r] * b`, so this handles any R,C
+        // without a helper (and without the old float3x3-only `crd_outer`, which silently mistyped a 2x3 outer).
+        case KOp::OuterProduct: { const int orows = nd.type.rows; s.append(hmat(orows, nd.type.cols)); s.append("("); for (int r = 0; r < orows; ++r) { if (r) { s.append(", "); } ta(nd.a); s.append("."); const char sw[2] = {xyzw[r], '\0'}; s.append(sw); s.append(" * "); ta(nd.b); } s.append(")"); break; }
         case KOp::QuatToMat3: s.append("crd_qmat("); ta(nd.a); s.append(")"); break;
         default: return false;
         }
@@ -278,24 +341,45 @@ inline bool emit_vec_hlsl(const KGraph& g, int output, crd::memory::IAllocator* 
         const KNode& nd = g.node(i);
         if (nd.op == KOp::For) // A4 tier-2: native per-thread `for`; body-scoped nodes (loop-varying) emit INSIDE the loop
         {
-            s.append("  precise "); s.append(htype(nd.comps)); s.append(" t"); app_uint(s, static_cast<crd::u32>(i)); s.append(" = t"); app_uint(s, static_cast<crd::u32>(nd.b)); s.append(";\n");
+            s.append("  precise "); s.append(htype(nd.type)); s.append(" t"); app_uint(s, static_cast<crd::u32>(i)); s.append(" = t"); app_uint(s, static_cast<crd::u32>(nd.b)); s.append(";\n");
             s.append("  for (int li_"); app_uint(s, static_cast<crd::u32>(i)); s.append(" = 0; li_"); app_uint(s, static_cast<crd::u32>(i)); s.append(" < int(t"); app_uint(s, static_cast<crd::u32>(nd.a)); s.append("); li_"); app_uint(s, static_cast<crd::u32>(i)); s.append("++) {\n");
             for (int bid = 0; bid < i; ++bid)
             {
                 if (body_of[static_cast<crd::usize>(bid)] != i) { continue; }
                 const KNode& bn = g.node(bid);
                 if (bn.op == KOp::LoopIndex) { s.append("  precise float t"); app_uint(s, static_cast<crd::u32>(bid)); s.append(" = float(li_"); app_uint(s, static_cast<crd::u32>(i)); s.append(");\n"); }
-                else if (bn.op == KOp::LoopAcc) { s.append("  precise "); s.append(htype(bn.comps)); s.append(" t"); app_uint(s, static_cast<crd::u32>(bid)); s.append(" = t"); app_uint(s, static_cast<crd::u32>(i)); s.append(";\n"); }
+                else if (bn.op == KOp::LoopAcc) { s.append("  precise "); s.append(htype(bn.type)); s.append(" t"); app_uint(s, static_cast<crd::u32>(bid)); s.append(" = t"); app_uint(s, static_cast<crd::u32>(i)); s.append(";\n"); }
                 else if (!emit_expr(bid)) { return false; }
             }
             s.append("  t"); app_uint(s, static_cast<crd::u32>(i)); s.append(" = t"); app_uint(s, static_cast<crd::u32>(nd.c)); s.append(";\n  }\n");
         }
         else if (!emit_expr(i)) { return false; }
     }
-    const int oc = out.out_comps;
-    if (oc == 1) { s.append("  outb[gid] = t"); app_uint(s, static_cast<crd::u32>(output)); s.append(";\n"); }
-    else if (oc <= 4) { for (int k = 0; k < oc; ++k) { s.append("  outb[gid*"); app_uint(s, static_cast<crd::u32>(oc)); s.append("+"); app_uint(s, static_cast<crd::u32>(k)); s.append("] = t"); app_uint(s, static_cast<crd::u32>(output)); s.append("["); app_uint(s, static_cast<crd::u32>(k)); s.append("];\n"); } }
-    else { const int d = (oc == 16) ? 4 : 3; for (int col = 0; col < d; ++col) { for (int row = 0; row < d; ++row) { s.append("  outb[gid*"); app_uint(s, static_cast<crd::u32>(oc)); s.append("+"); app_uint(s, static_cast<crd::u32>(col * d + row)); s.append("] = t"); app_uint(s, static_cast<crd::u32>(output)); s.append("["); app_uint(s, static_cast<crd::u32>(row)); s.append("]["); app_uint(s, static_cast<crd::u32>(col)); s.append("];\n"); } } }
+    // Write back column-major (flat[col*R + row]). HLSL indexes `t[row][col]`, the transpose of GLSL's `t[col][row]`.
+    // Matrix-ness is the TYPE's: a comps==4 output is a float4 or a float2x2, and `oc` alone cannot tell them apart.
+    const int    oc  = out.out_comps;
+    const KType& oty = g.node(output).type;
+    if (oty.kind == TKind::Mat)
+    {
+        for (int col = 0; col < oty.cols; ++col) { for (int row = 0; row < oty.rows; ++row) { s.append("  outb[gid*"); app_uint(s, oc); s.append("+"); app_uint(s, col * oty.rows + row); s.append("] = t"); app_uint(s, output); s.append("["); app_uint(s, row); s.append("]["); app_uint(s, col); s.append("];\n"); } }
+    }
+    // bool / bool-vector results convert to float 0.0/1.0 on write (the buffer is RWStructuredBuffer<float>).
+    else if (oc == 1)
+    {
+        s.append("  outb[gid] = ");
+        if (oty.scalar == DType::Bool) { s.append("float(t"); app_uint(s, output); s.append(")"); } else { s.append("t"); app_uint(s, output); }
+        s.append(";\n");
+    }
+    else
+    {
+        for (int k = 0; k < oc; ++k)
+        {
+            s.append("  outb[gid*"); app_uint(s, oc); s.append("+"); app_uint(s, k); s.append("] = ");
+            if (oty.scalar == DType::Bool) { s.append("float(t"); app_uint(s, output); s.append("["); app_uint(s, k); s.append("])"); }
+            else { s.append("t"); app_uint(s, output); s.append("["); app_uint(s, k); s.append("]"); }
+            s.append(";\n");
+        }
+    }
     s.append("}\n");
     return true;
 }

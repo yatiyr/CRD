@@ -16,6 +16,8 @@ target_link_libraries(crd-sandbox PRIVATE
     crd-draw
     crd-draw-imgui
     crd-imgui
+    crd-gpu-context          # D-008 C2-c2: the ONE device (VulkanGpuContext) rhi-vulkan adopts
+    crd-gpu-context-vulkan
     crd-log
     crd-math
     crd-memory
@@ -30,6 +32,7 @@ target_link_libraries(crd-sandbox PRIVATE
     crd-rhi-vulkan
     crd-scene
     crd-shader
+    crd-shader-vulkan        # D-008 C2-e: injected GLSL->SPIR-V compiler for the Effect Runtime
     crd-eylem
     crd-eylem-rigid3d
     crd-eylem-viz

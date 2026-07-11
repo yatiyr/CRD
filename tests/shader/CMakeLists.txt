@@ -6,6 +6,7 @@ target_link_libraries(crd-shader-tests PRIVATE
     crd-core
     crd-platform
     crd-shader
+    crd-shader-vulkan   # D-008 C2-e: injected GLSL->SPIR-V compiler for the Effect Runtime
     Catch2::Catch2WithMain
 )
 

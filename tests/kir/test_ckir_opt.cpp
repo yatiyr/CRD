@@ -57,7 +57,7 @@ TEST_CASE("v17-a: CKIR optimize preserves semantics + shrinks (CSE + const-fold 
     CHECK(g.size() == size_after);
 }
 
-TEST_CASE("v17-a: CKIR optimize on a reverse-AD graph — gradient BIT-IDENTICAL, graph shrinks", "[kir][opt]")
+TEST_CASE("v17-a: CKIR optimize on a reverse-AD graph -- gradient BIT-IDENTICAL, graph shrinks", "[kir][opt]")
 {
     crd::memory::TlsfAllocator alloc(64 << 20);
     kir::KGraph                g(&alloc);
@@ -90,6 +90,48 @@ TEST_CASE("v17-a: CKIR optimize on a reverse-AD graph — gradient BIT-IDENTICAL
     CHECK(kir::bit_equal(gx_before, gx_after, 6)); // the optimized gradient is EXACTLY the same
     CHECK(kir::bit_equal(gw_before, gw_after, 6));
     CHECK(size_after < size_before);               // the reverse-AD graph had redundant consts + subexprs
+}
+
+// A mat4's 4th column lives in KNode::d — the operand the DCE walk honours and the CSE key hashes. This drives the
+// RENUMBERING path: dead nodes ahead of the columns force every later id to shift, so an operand left un-remapped
+// becomes a forward/out-of-range reference. A graph without dead nodes never renumbers and therefore cannot catch a
+// missing remap, which is why the whole vec/mat suite sails over it (SANITY #3 — boundary adversaries, not volume).
+TEST_CASE("v17-a: CKIR optimize renumbers the 4th operand (mat4 column) under a DCE id-shift", "[kir][opt]")
+{
+    crd::memory::TlsfAllocator alloc(16 << 20);
+    kir::KGraph                g(&alloc);
+    const kir::Shape           sh = kir::make_shape({2});
+    const int                  x  = g.input(sh, kir::DType::F64);
+
+    (void)g.unary(kir::KOp::Exp, x); // dead nodes AHEAD of the columns: DCE drops them, every later id shifts down
+    (void)g.unary(kir::KOp::Sin, x);
+    (void)g.unary(kir::KOp::Cos, x);
+
+    const int z   = g.constant(0.0, sh, kir::DType::F64);
+    const int c0  = g.vec4(x, z, z, z); // four DISTINCT columns, so CSE cannot merge them
+    const int c1  = g.vec4(z, x, z, z);
+    const int c2  = g.vec4(z, z, x, z);
+    const int c3  = g.vec4(z, z, z, x); // -> the mat4's KNode::d
+    const int m   = g.mat4(c0, c1, c2, c3);
+    const int det = g.determinant(m);    // diag(x,x,x,x) -> x^4
+
+    const f64        xin[2]   = {2.0, 3.0};
+    const f64* const inputs[] = {xin};
+    f64              before[2];
+    kir::eval_cpu(g, inputs, &alloc, det, before);
+    CHECK(before[0] == 16.0); // 2^4 — the graph really is the diagonal mat4 we think it is
+    CHECK(before[1] == 81.0); // 3^4
+
+    int roots[1] = {det};
+    g.optimize(roots, 1);
+
+    // Structural gate FIRST, and REQUIRE not CHECK: a stale operand indexes past the compacted offset table, so
+    // evaluating the graph would read out of bounds rather than fail an assertion.
+    REQUIRE(g.operands_valid());
+
+    f64 after[2];
+    kir::eval_cpu(g, inputs, &alloc, roots[0], after);
+    CHECK(kir::bit_equal(before, after, 2)); // the passes never change the result
 }
 
 TEST_CASE("v17-a: oracle-harness bit/ulp primitives", "[kir][harness]")

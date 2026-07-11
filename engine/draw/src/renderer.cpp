@@ -15,7 +15,6 @@
 #include <crd/rhi/buffer.hpp>
 #include <crd/rhi/device.hpp>
 #include <crd/rhi/pipeline.hpp>
-#include <crd/rhi/shader_module.hpp>
 #include <crd/shader/shader_resource_loader.hpp>
 #include <crd/shader/types.hpp>
 
@@ -142,8 +141,8 @@ void apply_depth_variant(crd::rhi::GraphicsPipelineDesc& desc, crd::u32 variant)
     for (crd::u32 v = 0; v < detail::RendererState::kDepthVariantCount; ++v)
     {
         crd::rhi::GraphicsPipelineDesc desc;
-        desc.vertex_shader        = s.line_vert_module.get();
-        desc.fragment_shader      = s.line_frag_module.get();
+        desc.vertex_program       = s.line_vert_module.get();
+        desc.fragment_program     = s.line_frag_module.get();
         desc.topology             = crd::rhi::PrimitiveTopology::TriangleList;
         desc.color_format         = s.config.color_format;
         desc.depth_format         = s.config.depth_format;
@@ -170,8 +169,8 @@ void apply_depth_variant(crd::rhi::GraphicsPipelineDesc& desc, crd::u32 variant)
     // emits 4 corners via gl_VertexIndex; one draw call covers the whole
     // grid.
     crd::rhi::GraphicsPipelineDesc desc;
-    desc.vertex_shader        = s.grid_vert_module.get();
-    desc.fragment_shader      = s.grid_frag_module.get();
+    desc.vertex_program       = s.grid_vert_module.get();
+    desc.fragment_program     = s.grid_frag_module.get();
     desc.topology             = crd::rhi::PrimitiveTopology::TriangleList;
     desc.color_format         = s.config.color_format;
     desc.depth_format         = s.config.depth_format;
@@ -208,8 +207,8 @@ void apply_depth_variant(crd::rhi::GraphicsPipelineDesc& desc, crd::u32 variant)
     for (crd::u32 v = 0; v < detail::RendererState::kDepthVariantCount; ++v)
     {
         crd::rhi::GraphicsPipelineDesc desc;
-        desc.vertex_shader        = s.tri_vert_module.get();
-        desc.fragment_shader      = s.tri_frag_module.get();
+        desc.vertex_program       = s.tri_vert_module.get();
+        desc.fragment_program     = s.tri_frag_module.get();
         desc.topology             = crd::rhi::PrimitiveTopology::TriangleList;
         desc.color_format         = s.config.color_format;
         desc.depth_format         = s.config.depth_format;
@@ -275,7 +274,7 @@ bool init(crd::resources::ResourceManager& rm,
     // ShaderResourceLoader registered + the draw_shaders.crdr pack mounted.
     auto load_shader = [&](const char* uuid_str, crd::rhi::ShaderStage stage,
                            crd::resources::ResourceHandle<crd::shader::ShaderResource>& handle,
-                           std::unique_ptr<crd::rhi::ShaderModule>&                      module,
+                           std::unique_ptr<crd::gpu::IGpuProgram>&                       module,
                            const char* label) -> bool
     {
         const auto id = crd::resources::ResourceId::parse(uuid_str);
@@ -286,11 +285,11 @@ bool init(crd::resources::ResourceManager& rm,
             return false;
         }
         const auto* res = handle.get();
-        module = device.create_shader_module(
-            {stage, "main", crd::containers::make_span(res->spirv.data(), res->spirv.size())});
+        // D-008 C2-d3: an OPAQUE program (via the adopted gpu-context) instead of a raw-SPIR-V ShaderModule (closes I2).
+        module = device.create_program(stage, crd::containers::make_span(res->spirv.data(), res->spirv.size()));
         if (!module)
         {
-            CRD_LOG_ERROR(g_log_draw, "Failed to create shader module for '{}'", label);
+            CRD_LOG_ERROR(g_log_draw, "Failed to create shader program for '{}'", label);
             return false;
         }
         return true;

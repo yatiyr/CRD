@@ -18,7 +18,8 @@ target_link_libraries(crd-cooker
         crd-log
         crd-platform
         crd-resources
-        crd-shader
+        crd-gpu-context          # ADR-0103: ShaderStage
+        crd-gpu-context-vulkan   # ADR-0103: GLSL→SPIR-V (was crd-shader::compile_glsl)
         crd-math
         crd-scene
         crd-preset

@@ -5,7 +5,8 @@
 // Shipped today (v1a):
 //   - API-agnostic low-level GPU types and descriptors
 //   - abstract interfaces for Instance / Device / Queue / Swapchain /
-//     Buffer / Image / CommandBuffer / ShaderModule / Pipeline
+//     Buffer / Image / CommandBuffer / Pipeline (shaders are opaque
+//     `crd::gpu::IGpuProgram`s minted via `Device::create_program` — D-008)
 //
 // Not shipped today:
 //   - Vulkan backend implementation (crd-rhi-vulkan)
@@ -22,6 +23,5 @@
 #include <crd/rhi/pipeline.hpp>
 #include <crd/rhi/queue.hpp>
 #include <crd/rhi/semaphore.hpp>
-#include <crd/rhi/shader_module.hpp>
 #include <crd/rhi/swapchain.hpp>
 #include <crd/rhi/types.hpp>

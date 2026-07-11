@@ -1,8 +1,10 @@
 #include <crd/platform/filesystem.hpp>
 #include <crd/shader/shader.hpp>
+#include <crd/shader/vulkan_spirv_compiler.hpp> // D-008 C2-e: crd-shader owns no compiler; inject the Vulkan one
 
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <memory>
 #include <string>
 
 namespace fs = crd::platform::fs;
@@ -23,11 +25,20 @@ namespace
     leaf.append(std::to_string(stamp));
     return base / leaf.c_str();
 }
+
+// D-008 C2-e: crd-shader owns no GLSL compiler — the Runtime takes an injected one. The compiler must outlive every
+// Runtime it serves; a process-lifetime static satisfies that (created once, destroyed at exit after all runtimes).
+[[nodiscard]] std::unique_ptr<crd::shader::Runtime> make_runtime()
+{
+    // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables) — stateless wrapper; shared to outlive runtimes.
+    static std::unique_ptr<crd::shader::ISpirvCompiler> s_compiler = crd::shader::create_vulkan_spirv_compiler();
+    return crd::shader::create_runtime(*s_compiler);
+}
 } // namespace
 
 TEST_CASE("Shader runtime creates effects and preserves metadata", "[shader]")
 {
-    auto runtime = crd::shader::create_runtime();
+    auto runtime = make_runtime();
     REQUIRE(runtime != nullptr);
 
     crd::shader::EffectDesc desc;
@@ -52,7 +63,7 @@ TEST_CASE("Shader runtime creates effects and preserves metadata", "[shader]")
 
 TEST_CASE("Shader runtime issues opaque variant handles", "[shader]")
 {
-    auto runtime = crd::shader::create_runtime();
+    auto runtime = make_runtime();
 
     crd::shader::EffectDesc desc;
     desc.name = crd::containers::String("forward");
@@ -84,7 +95,7 @@ TEST_CASE("Shader runtime issues opaque variant handles", "[shader]")
 
 TEST_CASE("Shader runtime reports bad effect handles without crashing", "[shader]")
 {
-    auto runtime = crd::shader::create_runtime();
+    auto runtime = make_runtime();
 
     crd::shader::CompileDiagnostics diagnostics;
     crd::shader::VariantCompileRequest request;
@@ -97,7 +108,7 @@ TEST_CASE("Shader runtime reports bad effect handles without crashing", "[shader
 
 TEST_CASE("Shader runtime reports GLSL compile failures non-fatally", "[shader]")
 {
-    auto runtime = crd::shader::create_runtime();
+    auto runtime = make_runtime();
 
     crd::shader::EffectDesc desc;
     desc.name = crd::containers::String("broken");
@@ -117,7 +128,7 @@ TEST_CASE("Shader runtime reports GLSL compile failures non-fatally", "[shader]"
 
 TEST_CASE("Shader runtime consumes reflection metadata from compiled modules", "[shader]")
 {
-    auto runtime = crd::shader::create_runtime();
+    auto runtime = make_runtime();
 
     crd::shader::EffectDesc desc;
     desc.name = crd::containers::String("reflect");
@@ -157,7 +168,7 @@ TEST_CASE("Shader runtime consumes reflection metadata from compiled modules", "
 
 TEST_CASE("Shader runtime exposes observable reload result", "[shader]")
 {
-    auto runtime = crd::shader::create_runtime();
+    auto runtime = make_runtime();
     const auto handle = runtime->create_effect({crd::containers::String("reloadable")});
 
     crd::shader::ReloadEvent event;
@@ -184,7 +195,7 @@ TEST_CASE("Variant key changes when a structural axis changes", "[shader]")
 
 TEST_CASE("Structural variant key ignores specialization values", "[shader]")
 {
-    auto runtime = crd::shader::create_runtime();
+    auto runtime = make_runtime();
     crd::shader::EffectDesc desc;
     desc.name = crd::containers::String("forward");
     desc.frontend_modules.push_back({source_path("runtime/examples/shaders/triangle.vert"), crd::shader::Stage::Vertex,
@@ -235,7 +246,7 @@ TEST_CASE("Shader runtime records cache keys and hits on repeated compile", "[sh
         root / "triangle.frag",
         "#version 460\nlayout(location=0) out vec4 out_color;\nvoid main(){ out_color=vec4(1.0); }\n"));
 
-    auto runtime = crd::shader::create_runtime();
+    auto runtime = make_runtime();
 
     crd::shader::EffectDesc desc;
     desc.name = crd::containers::String("cache_repeat");
@@ -276,7 +287,7 @@ TEST_CASE("Shader cache keys change when included source changes", "[shader]")
                                 "layout(location=0) out vec3 v_color;\nvoid main(){ "
                                 "gl_Position=vec4(in_position,0.0,1.0); v_color=get_color(); }\n"));
 
-    auto runtime = crd::shader::create_runtime();
+    auto runtime = make_runtime();
     crd::shader::EffectDesc desc;
     desc.name = crd::containers::String("include_case");
     desc.frontend_modules.push_back({crd::containers::String((root / "main.vert").generic()),
@@ -303,7 +314,7 @@ TEST_CASE("Shader cache keys change when included source changes", "[shader]")
 
 TEST_CASE("Failed compile does not populate SPIR-V cache hit", "[shader]")
 {
-    auto runtime = crd::shader::create_runtime();
+    auto runtime = make_runtime();
 
     crd::shader::EffectDesc desc;
     desc.name = crd::containers::String("broken_cache");
@@ -339,7 +350,7 @@ TEST_CASE("Shader runtime hot reload updates live data atomically", "[shader]")
         "#version 460\nlayout(location=0) in vec3 v_color;\nlayout(location=0) out vec4 out_color;\n"
         "void main(){ out_color=vec4(v_color,1.0); }\n"));
 
-    auto runtime = crd::shader::create_runtime();
+    auto runtime = make_runtime();
     crd::shader::EffectDesc desc;
     desc.name = crd::containers::String("reload_case");
     desc.frontend_modules.push_back({crd::containers::String((root / "triangle.vert").generic()),
@@ -385,7 +396,7 @@ TEST_CASE("Failed hot reload preserves last-good state", "[shader]")
         root / "triangle.frag",
         "#version 460\nlayout(location=0) out vec4 out_color;\nvoid main(){ out_color=vec4(1.0); }\n"));
 
-    auto runtime = crd::shader::create_runtime();
+    auto runtime = make_runtime();
     crd::shader::EffectDesc desc;
     desc.name = crd::containers::String("reload_fail_case");
     desc.frontend_modules.push_back({crd::containers::String((root / "triangle.vert").generic()),
@@ -420,7 +431,7 @@ TEST_CASE("Failed hot reload preserves last-good state", "[shader]")
 
 TEST_CASE("Shader runtime describes variant handoff for RHI/pipeline creation", "[shader]")
 {
-    auto runtime = crd::shader::create_runtime();
+    auto runtime = make_runtime();
     crd::shader::EffectDesc desc;
     desc.name = crd::containers::String("handoff_case");
     desc.frontend_modules.push_back({source_path("runtime/examples/shaders/reflect_triangle.vert"),
@@ -452,7 +463,7 @@ TEST_CASE("Shader runtime describes variant handoff for RHI/pipeline creation", 
 
 TEST_CASE("Shader runtime reflects compute workgroup size from local_size layout", "[shader][compute][v0e]")
 {
-    auto runtime = crd::shader::create_runtime();
+    auto runtime = make_runtime();
 
     crd::shader::EffectDesc desc;
     desc.name = crd::containers::String("compute_v0e_reflection");
@@ -486,7 +497,7 @@ TEST_CASE("Shader runtime reflects compute workgroup size from local_size layout
 TEST_CASE("Vertex/Fragment modules report no workgroup size (compute-only field)",
           "[shader][compute][v0e]")
 {
-    auto runtime = crd::shader::create_runtime();
+    auto runtime = make_runtime();
 
     crd::shader::EffectDesc desc;
     desc.name = crd::containers::String("graphics_no_workgroup");
@@ -511,7 +522,7 @@ TEST_CASE("Vertex/Fragment modules report no workgroup size (compute-only field)
 TEST_CASE("Shader runtime reflects specialization constants by constant_id + name + default",
           "[shader][compute][v0e]")
 {
-    auto runtime = crd::shader::create_runtime();
+    auto runtime = make_runtime();
 
     crd::shader::EffectDesc desc;
     desc.name = crd::containers::String("compute_v0e_reflection");
@@ -560,7 +571,7 @@ TEST_CASE("Shader runtime reflects specialization constants by constant_id + nam
 TEST_CASE("Vertex+Fragment modules without spec consts report empty list",
           "[shader][compute][v0e]")
 {
-    auto runtime = crd::shader::create_runtime();
+    auto runtime = make_runtime();
 
     crd::shader::EffectDesc desc;
     desc.name = crd::containers::String("graphics_no_spec_const");
@@ -583,7 +594,7 @@ TEST_CASE("Vertex+Fragment modules without spec consts report empty list",
 TEST_CASE("Compute Effect reload_effect succeeds with last-good preserved on success",
           "[shader][compute][v0e]")
 {
-    auto runtime = crd::shader::create_runtime();
+    auto runtime = make_runtime();
 
     crd::shader::EffectDesc desc;
     desc.name = crd::containers::String("compute_reloadable");

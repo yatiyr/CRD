@@ -1,3 +1,4 @@
+#include <crd/gpu/program.hpp> // D-008 C2-d4: shaders are opaque IGpuProgram (crd::gpu::ShaderStage), minted via create_program
 #include <crd/memory/allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/platform/platform.hpp>
@@ -102,10 +103,8 @@ TEST_CASE("Vulkan command buffer and frame loop can execute a triangle frame", "
     REQUIRE(fs::read_file_binary(shader_dir / "triangle.vert.spv", vs_spv));
     REQUIRE(fs::read_file_binary(shader_dir / "triangle.frag.spv", fs_spv));
 
-    auto vs = device->create_shader_module(
-        {crd::rhi::ShaderStage::Vertex, "main", crd::containers::make_span(vs_spv.data(), vs_spv.size())});
-    auto fs_module = device->create_shader_module(
-        {crd::rhi::ShaderStage::Fragment, "main", crd::containers::make_span(fs_spv.data(), fs_spv.size())});
+    auto vs = device->create_program(crd::rhi::ShaderStage::Vertex, crd::containers::make_span(vs_spv.data(), vs_spv.size()));
+    auto fs_module = device->create_program(crd::rhi::ShaderStage::Fragment, crd::containers::make_span(fs_spv.data(), fs_spv.size()));
     REQUIRE(vs != nullptr);
     REQUIRE(fs_module != nullptr);
 
@@ -258,7 +257,7 @@ TEST_CASE("Vulkan create_compute_pipeline rejects null shader cleanly", "[rhi][v
     REQUIRE(device != nullptr);
 
     crd::rhi::ComputePipelineDesc desc{};
-    desc.compute_shader  = nullptr;
+    desc.compute_program  = nullptr;
     desc.pipeline_layout = nullptr;
     auto pipeline = device->create_compute_pipeline(desc);
 
@@ -281,12 +280,11 @@ TEST_CASE("Vulkan create_compute_pipeline rejects wrong-stage shader cleanly", "
     const auto shader_dir = fs::executable_dir() / "shaders";
     crd::containers::Array<crd::u8> vs_spv;
     REQUIRE(fs::read_file_binary(shader_dir / "triangle.vert.spv", vs_spv));
-    auto vs = device->create_shader_module(
-        {crd::rhi::ShaderStage::Vertex, "main", crd::containers::make_span(vs_spv.data(), vs_spv.size())});
+    auto vs = device->create_program(crd::rhi::ShaderStage::Vertex, crd::containers::make_span(vs_spv.data(), vs_spv.size()));
     REQUIRE(vs != nullptr);
 
     crd::rhi::ComputePipelineDesc desc{};
-    desc.compute_shader = vs.get(); // wrong stage — should reject
+    desc.compute_program = vs.get(); // wrong stage — should reject
     auto pipeline = device->create_compute_pipeline(desc);
 
     REQUIRE(pipeline == nullptr);
@@ -308,17 +306,16 @@ TEST_CASE("Vulkan create_compute_pipeline succeeds with valid compute shader", "
     const auto shader_dir = fs::executable_dir() / "shaders";
     crd::containers::Array<crd::u8> cs_spv;
     REQUIRE(fs::read_file_binary(shader_dir / "compute_v0a.comp.spv", cs_spv));
-    auto cs = device->create_shader_module(
-        {crd::rhi::ShaderStage::Compute, "main", crd::containers::make_span(cs_spv.data(), cs_spv.size())});
+    auto cs = device->create_program(crd::rhi::ShaderStage::Compute, crd::containers::make_span(cs_spv.data(), cs_spv.size()));
     REQUIRE(cs != nullptr);
 
     // Path A: synthesised empty pipeline layout (desc.pipeline_layout == nullptr).
     crd::rhi::ComputePipelineDesc desc{};
-    desc.compute_shader  = cs.get();
+    desc.compute_program  = cs.get();
     desc.pipeline_layout = nullptr;
     auto pipeline = device->create_compute_pipeline(desc);
     REQUIRE(pipeline != nullptr);
-    CHECK(pipeline->desc().compute_shader == cs.get());
+    CHECK(pipeline->desc().compute_program == cs.get());
 
     // Lifecycle: explicit reset triggers destruction of VkPipeline + owned layout
     // (ASan should not flag any UAF / leak — that's the v0a smoke contract).
@@ -344,8 +341,7 @@ TEST_CASE("Vulkan compute pipeline + caller-provided PipelineLayout", "[rhi][vul
     const auto shader_dir = fs::executable_dir() / "shaders";
     crd::containers::Array<crd::u8> cs_spv;
     REQUIRE(fs::read_file_binary(shader_dir / "compute_v0a.comp.spv", cs_spv));
-    auto cs = device->create_shader_module(
-        {crd::rhi::ShaderStage::Compute, "main", crd::containers::make_span(cs_spv.data(), cs_spv.size())});
+    auto cs = device->create_program(crd::rhi::ShaderStage::Compute, crd::containers::make_span(cs_spv.data(), cs_spv.size()));
     REQUIRE(cs != nullptr);
 
     // Build a real layout with one storage-buffer binding at set 0 / binding 0
@@ -367,7 +363,7 @@ TEST_CASE("Vulkan compute pipeline + caller-provided PipelineLayout", "[rhi][vul
     REQUIRE(layout != nullptr);
 
     crd::rhi::ComputePipelineDesc desc{};
-    desc.compute_shader  = cs.get();
+    desc.compute_program  = cs.get();
     desc.pipeline_layout = layout.get();
     auto pipeline = device->create_compute_pipeline(desc);
     REQUIRE(pipeline != nullptr);
@@ -396,12 +392,11 @@ TEST_CASE("Vulkan compute pipeline multi-create/destroy cycle (ASan-clean)", "[r
     constexpr int k_cycles = 8;
     for (int i = 0; i < k_cycles; ++i)
     {
-        auto cs = device->create_shader_module(
-            {crd::rhi::ShaderStage::Compute, "main", crd::containers::make_span(cs_spv.data(), cs_spv.size())});
+        auto cs = device->create_program(crd::rhi::ShaderStage::Compute, crd::containers::make_span(cs_spv.data(), cs_spv.size()));
         REQUIRE(cs != nullptr);
 
         crd::rhi::ComputePipelineDesc desc{};
-        desc.compute_shader = cs.get();
+        desc.compute_program = cs.get();
         auto pipeline = device->create_compute_pipeline(desc);
         REQUIRE(pipeline != nullptr);
     } // RAII destruction each iteration
@@ -467,15 +462,13 @@ TEST_CASE("Vulkan compute dispatch end-to-end (first-light)", "[rhi][vulkan][com
     const auto shader_dir = fs::executable_dir() / "shaders";
     crd::containers::Array<crd::u8> cs_spv;
     REQUIRE(fs::read_file_binary(shader_dir / "compute_v0b_dispatch.comp.spv", cs_spv));
-    auto cs = device->create_shader_module(
-        {crd::rhi::ShaderStage::Compute, "main",
-         crd::containers::make_span(cs_spv.data(), cs_spv.size())});
+    auto cs = device->create_program(crd::rhi::ShaderStage::Compute, crd::containers::make_span(cs_spv.data(), cs_spv.size()));
     REQUIRE(cs != nullptr);
 
     constexpr crd::u32 base_offset = 1000;
     crd::rhi::SpecializationConstantEntry spec_entry{0, 0, sizeof(crd::u32)};
     crd::rhi::ComputePipelineDesc pipe_desc{};
-    pipe_desc.compute_shader = cs.get();
+    pipe_desc.compute_program = cs.get();
     // Layout assembled below.
 
     // --- Descriptor + pipeline layout (set 0 / binding 0 / storage buffer) ---
@@ -597,16 +590,12 @@ TEST_CASE("Vulkan buffer_barrier between two compute passes (first-light)",
     // --- Shader modules (pass 1 = v0b dispatch, pass 2 = v0c doubler) ---
     crd::containers::Array<crd::u8> cs1_spv;
     REQUIRE(fs::read_file_binary(shader_dir / "compute_v0b_dispatch.comp.spv", cs1_spv));
-    auto cs1 = device->create_shader_module(
-        {crd::rhi::ShaderStage::Compute, "main",
-         crd::containers::make_span(cs1_spv.data(), cs1_spv.size())});
+    auto cs1 = device->create_program(crd::rhi::ShaderStage::Compute, crd::containers::make_span(cs1_spv.data(), cs1_spv.size()));
     REQUIRE(cs1 != nullptr);
 
     crd::containers::Array<crd::u8> cs2_spv;
     REQUIRE(fs::read_file_binary(shader_dir / "compute_v0c_doubler.comp.spv", cs2_spv));
-    auto cs2 = device->create_shader_module(
-        {crd::rhi::ShaderStage::Compute, "main",
-         crd::containers::make_span(cs2_spv.data(), cs2_spv.size())});
+    auto cs2 = device->create_program(crd::rhi::ShaderStage::Compute, crd::containers::make_span(cs2_spv.data(), cs2_spv.size()));
     REQUIRE(cs2 != nullptr);
 
     // --- Pass 1 layout: 1 storage buffer (set 0 / binding 0, write) ---
@@ -626,7 +615,7 @@ TEST_CASE("Vulkan buffer_barrier between two compute passes (first-light)",
     constexpr crd::u32 base_offset = 1000;
     crd::rhi::SpecializationConstantEntry p1_spec_entry{0, 0, sizeof(crd::u32)};
     crd::rhi::ComputePipelineDesc p1_pipe_desc{};
-    p1_pipe_desc.compute_shader  = cs1.get();
+    p1_pipe_desc.compute_program  = cs1.get();
     p1_pipe_desc.pipeline_layout = p1_layout.get();
     p1_pipe_desc.specialization_entries =
         crd::containers::ConstSpan<crd::rhi::SpecializationConstantEntry>(&p1_spec_entry, 1);
@@ -653,7 +642,7 @@ TEST_CASE("Vulkan buffer_barrier between two compute passes (first-light)",
     auto p2_layout = device->create_pipeline_layout(p2_layout_desc);
 
     crd::rhi::ComputePipelineDesc p2_pipe_desc{};
-    p2_pipe_desc.compute_shader  = cs2.get();
+    p2_pipe_desc.compute_program  = cs2.get();
     p2_pipe_desc.pipeline_layout = p2_layout.get();
     auto p2_pipeline = device->create_compute_pipeline(p2_pipe_desc);
     REQUIRE(p2_pipeline != nullptr);
@@ -767,16 +756,12 @@ TEST_CASE("Vulkan async-compute cross-queue semaphore first-light", "[rhi][vulka
 
     crd::containers::Array<crd::u8> cs1_spv;
     REQUIRE(fs::read_file_binary(shader_dir / "compute_v0b_dispatch.comp.spv", cs1_spv));
-    auto cs1 = device->create_shader_module(
-        {crd::rhi::ShaderStage::Compute, "main",
-         crd::containers::make_span(cs1_spv.data(), cs1_spv.size())});
+    auto cs1 = device->create_program(crd::rhi::ShaderStage::Compute, crd::containers::make_span(cs1_spv.data(), cs1_spv.size()));
     REQUIRE(cs1 != nullptr);
 
     crd::containers::Array<crd::u8> cs2_spv;
     REQUIRE(fs::read_file_binary(shader_dir / "compute_v0c_doubler.comp.spv", cs2_spv));
-    auto cs2 = device->create_shader_module(
-        {crd::rhi::ShaderStage::Compute, "main",
-         crd::containers::make_span(cs2_spv.data(), cs2_spv.size())});
+    auto cs2 = device->create_program(crd::rhi::ShaderStage::Compute, crd::containers::make_span(cs2_spv.data(), cs2_spv.size()));
     REQUIRE(cs2 != nullptr);
 
     // Pass-1 layout (write to set0/binding0).
@@ -796,7 +781,7 @@ TEST_CASE("Vulkan async-compute cross-queue semaphore first-light", "[rhi][vulka
     constexpr crd::u32 base_offset = 1000;
     crd::rhi::SpecializationConstantEntry p1_spec_entry{0, 0, sizeof(crd::u32)};
     crd::rhi::ComputePipelineDesc p1_pipe_desc{};
-    p1_pipe_desc.compute_shader  = cs1.get();
+    p1_pipe_desc.compute_program  = cs1.get();
     p1_pipe_desc.pipeline_layout = p1_layout.get();
     p1_pipe_desc.specialization_entries =
         crd::containers::ConstSpan<crd::rhi::SpecializationConstantEntry>(&p1_spec_entry, 1);
@@ -822,7 +807,7 @@ TEST_CASE("Vulkan async-compute cross-queue semaphore first-light", "[rhi][vulka
     auto p2_layout = device->create_pipeline_layout(p2_layout_desc);
 
     crd::rhi::ComputePipelineDesc p2_pipe_desc{};
-    p2_pipe_desc.compute_shader  = cs2.get();
+    p2_pipe_desc.compute_program  = cs2.get();
     p2_pipe_desc.pipeline_layout = p2_layout.get();
     auto p2_pipeline = device->create_compute_pipeline(p2_pipe_desc);
 
@@ -979,9 +964,7 @@ TEST_CASE("Vulkan compute dispatch_indirect (D4 indirect path)", "[rhi][vulkan][
     const auto shader_dir = fs::executable_dir() / "shaders";
     crd::containers::Array<crd::u8> cs_spv;
     REQUIRE(fs::read_file_binary(shader_dir / "compute_v0b_dispatch.comp.spv", cs_spv));
-    auto cs = device->create_shader_module(
-        {crd::rhi::ShaderStage::Compute, "main",
-         crd::containers::make_span(cs_spv.data(), cs_spv.size())});
+    auto cs = device->create_program(crd::rhi::ShaderStage::Compute, crd::containers::make_span(cs_spv.data(), cs_spv.size()));
 
     crd::rhi::DescriptorBinding bindings[] = {
         {.binding = 0, .type = crd::rhi::DescriptorType::StorageBuffer,
@@ -999,7 +982,7 @@ TEST_CASE("Vulkan compute dispatch_indirect (D4 indirect path)", "[rhi][vulkan][
     constexpr crd::u32 base_offset = 7;
     crd::rhi::SpecializationConstantEntry spec_entry{0, 0, sizeof(crd::u32)};
     crd::rhi::ComputePipelineDesc pipe_desc{};
-    pipe_desc.compute_shader  = cs.get();
+    pipe_desc.compute_program  = cs.get();
     pipe_desc.pipeline_layout = layout.get();
     pipe_desc.specialization_entries =
         crd::containers::ConstSpan<crd::rhi::SpecializationConstantEntry>(&spec_entry, 1);

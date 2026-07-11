@@ -218,6 +218,17 @@ bool KirBackendWebGpu::run(const KGraph& g, int output, const float* const* inpu
         out_bytes             = numel * sizeof(float);         // scan KEEPS the shape
         groups                = fast ? consts[0] : (consts[0] + 255U) / 256U; // T2: 1 WG/row
     }
+    // B0 fan-out: a graph carrying vec/mat/bool/struct VALUES routes to the type-aware emitter (interleaved I/O:
+    // `comps` floats per element), exactly as the Vulkan/DX12 backends do.
+    else if (graph_uses_vec(g, output, impl.alloc))
+    {
+        if (!emit_vec_wgsl(g, output, impl.alloc, kern) || kern.n_inputs != n_inputs) { return false; }
+        const crd::u64 on = static_cast<crd::u64>(outn.shape.numel());
+        consts[0]         = static_cast<crd::u32>(on);
+        for (int i = 0; i < n_inputs; ++i) { in_bytes[i] = on * static_cast<crd::u64>(kern.in_comps[i]) * sizeof(float); }
+        out_bytes = on * static_cast<crd::u64>(kern.out_comps) * sizeof(float);
+        groups    = (static_cast<crd::u32>(on) + 255U) / 256U;
+    }
     else
     {
         if (!emit_elementwise_wgsl(g, output, impl.alloc, kern) || kern.n_inputs != n_inputs) { return false; }
@@ -269,7 +280,7 @@ bool KirBackendWebGpu::run(const KGraph& g, int output, const float* const* inpu
     entries[n_inputs + 1].size    = sizeof(consts);
     WGPUBindGroupDescriptor bgd{};
     bgd.layout     = bgl;
-    bgd.entryCount = static_cast<size_t>(n_inputs + 2);
+    bgd.entryCount = static_cast<size_t>(n_inputs) + 2U;
     bgd.entries    = entries;
     WGPUBindGroup bg = wgpuDeviceCreateBindGroup(dev, &bgd);
 

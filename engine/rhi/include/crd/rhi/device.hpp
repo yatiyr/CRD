@@ -8,8 +8,9 @@
 #include <crd/rhi/pipeline.hpp>
 #include <crd/rhi/queue.hpp>
 #include <crd/rhi/semaphore.hpp>
-#include <crd/rhi/shader_module.hpp>
 #include <crd/rhi/swapchain.hpp>
+
+#include <crd/gpu/program.hpp> // D-008 C2-d2: Device::create_program returns crd::gpu::IGpuProgram (complete type needed)
 
 #include <memory>
 
@@ -26,7 +27,6 @@ public:
     [[nodiscard]] virtual std::unique_ptr<Swapchain>     create_swapchain(const SwapchainDesc& desc) = 0;
     [[nodiscard]] virtual std::unique_ptr<Buffer>        create_buffer(const BufferDesc& desc) = 0;
     [[nodiscard]] virtual std::unique_ptr<Image>         create_image(const ImageDesc& desc) = 0;
-    [[nodiscard]] virtual std::unique_ptr<ShaderModule>  create_shader_module(const ShaderModuleDesc& desc) = 0;
     [[nodiscard]] virtual std::unique_ptr<Pipeline>      create_graphics_pipeline(const GraphicsPipelineDesc& desc) = 0;
     [[nodiscard]] virtual std::unique_ptr<CommandBuffer> create_command_buffer() = 0;
     // Phase 3.0 v1o1 — fence factory for the non-waiting submit path.
@@ -119,5 +119,17 @@ public:
     //
     // **APPENDED AT END per D135 vtable-stability discipline.**
     [[nodiscard]] virtual bool supports_shader_int64() const noexcept = 0;
+
+    // D-008 C2-d2 (ADR-0103) — mint an OPAQUE GPU program from cooked SPIR-V for
+    // `GraphicsPipelineDesc::vertex_program`/`fragment_program` (closes I2: consumers stop holding raw-SPIR-V
+    // ShaderModules). On an ADOPTED device this delegates to the owning `crd::gpu::IGpuContext`; a device with no
+    // gpu-context (or a mock) returns nullptr — a NON-pure default so mock devices need not implement it.
+    //
+    // **APPENDED AT END per the vtable-stability discipline.**
+    [[nodiscard]] virtual std::unique_ptr<crd::gpu::IGpuProgram>
+    create_program(ShaderStage /*stage*/, crd::containers::ConstSpan<crd::u8> /*spirv*/)
+    {
+        return nullptr;
+    }
 };
 } // namespace crd::rhi

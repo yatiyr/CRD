@@ -11,7 +11,9 @@ target_link_libraries(crd-resources-tests PRIVATE
     crd-resources
     crd-cooker
     crd-jobs
-    crd-shader
+    crd-shader               # reflection: ShaderResource / crd::shader::Stage
+    crd-gpu-context          # ADR-0103: ShaderStage
+    crd-gpu-context-vulkan   # ADR-0103: GLSL→SPIR-V round-trip (was crd-shader::compile_glsl)
     crd-renderer
     Catch2::Catch2WithMain
 )

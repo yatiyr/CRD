@@ -164,10 +164,9 @@ void check_vk_result(VkResult result)
 }
 } // namespace
 
-ImGuiLayer::ImGuiLayer(crd::app::Application& app, crd::rhi::Instance& instance, crd::rhi::Device& device,
-                       crd::rhi::Swapchain& swapchain, const crd::config::Config& config)
-    : Layer("ImGuiLayer"), m_app(app), m_instance(instance), m_device(device), m_swapchain(swapchain),
-      m_settings(load_settings(config))
+ImGuiLayer::ImGuiLayer(crd::app::Application& app, crd::rhi::Device& device, crd::rhi::Swapchain& swapchain,
+                       const crd::config::Config& config)
+    : Layer("ImGuiLayer"), m_app(app), m_device(device), m_swapchain(swapchain), m_settings(load_settings(config))
 {
 }
 
@@ -241,7 +240,7 @@ void ImGuiLayer::on_attach()
     m_descriptor_pool = descriptor_pool;
 
     ImGui_ImplVulkan_InitInfo init_info{};
-    init_info.Instance = crd::rhi::vulkan_instance(m_instance);
+    init_info.Instance = crd::rhi::vulkan_instance(m_device); // C2-c2: VkInstance from the device (no rhi Instance)
     init_info.PhysicalDevice = crd::rhi::vulkan_physical_device(m_device);
     init_info.Device = vk_device;
     init_info.QueueFamily = crd::rhi::vulkan_graphics_queue_family_index(m_device);

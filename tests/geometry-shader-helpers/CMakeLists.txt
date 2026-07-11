@@ -11,9 +11,10 @@ target_link_libraries(crd-geometry-shader-helpers-tests PRIVATE
     crd-geometry-primitives
     crd-geometry-shader-helpers
     crd-rhi
-    crd-rhi-vulkan       # ULP-conformance test dispatches the emitted GLSL on GPU
-    crd-shader           # runtime GLSL → SPIR-V via compile_glsl()
-    crd-test-helpers     # ulp_compare + ValidationCapture
+    crd-rhi-vulkan          # ULP-conformance test dispatches the emitted GLSL on GPU
+    crd-gpu-context         # ADR-0103: ShaderStage
+    crd-gpu-context-vulkan  # ADR-0103: GLSL/HLSL → SPIR-V (was crd-shader::compile_glsl/hlsl)
+    crd-test-helpers        # ulp_compare + ValidationCapture
     Catch2::Catch2WithMain
 )
 

@@ -12,6 +12,7 @@
 #include <crd/containers/array.hpp>
 #include <crd/core/types.hpp>
 #include <crd/draw/renderer.hpp>
+#include <crd/gpu/program.hpp> // D-008 C2-d3: shaders held as opaque IGpuProgram, not raw-SPIR-V ShaderModule
 #include <crd/math/mat.hpp>
 #include <crd/math/vec.hpp>
 #include <crd/resources/resource_handle.hpp>
@@ -25,7 +26,6 @@ class Buffer;
 class Device;
 class Pipeline;
 class PipelineLayout;
-class ShaderModule;
 }
 
 namespace crd::draw::detail
@@ -62,7 +62,7 @@ struct DrawPushConstants
     // d2-grid-specific (next 64 bytes; ignored by line/triangle shaders).
     // The single shared push-constant layout = 128 bytes total = Vulkan minimum.
     crd::math::Vec3f camera_pos;      // 12 -- world-space camera xyz
-    crd::f32         _pad_camera;     //  4 -- padding to vec4 align
+    crd::f32         pad_camera;      //  4 -- padding to vec4 align
     crd::u32         primary_color;   //  4 -- RGBA8 packed
     crd::u32         secondary_color; //  4 -- RGBA8 packed
     crd::f32         plane_y;         //  4 -- world Y of grid plane
@@ -90,12 +90,12 @@ struct RendererState
     crd::resources::ResourceHandle<crd::shader::ShaderResource> grid_vert_handle;
     crd::resources::ResourceHandle<crd::shader::ShaderResource> grid_frag_handle;
 
-    std::unique_ptr<crd::rhi::ShaderModule>     line_vert_module;
-    std::unique_ptr<crd::rhi::ShaderModule>     line_frag_module;
-    std::unique_ptr<crd::rhi::ShaderModule>     tri_vert_module;
-    std::unique_ptr<crd::rhi::ShaderModule>     tri_frag_module;
-    std::unique_ptr<crd::rhi::ShaderModule>     grid_vert_module;
-    std::unique_ptr<crd::rhi::ShaderModule>     grid_frag_module;
+    std::unique_ptr<crd::gpu::IGpuProgram>      line_vert_module;
+    std::unique_ptr<crd::gpu::IGpuProgram>      line_frag_module;
+    std::unique_ptr<crd::gpu::IGpuProgram>      tri_vert_module;
+    std::unique_ptr<crd::gpu::IGpuProgram>      tri_frag_module;
+    std::unique_ptr<crd::gpu::IGpuProgram>      grid_vert_module;
+    std::unique_ptr<crd::gpu::IGpuProgram>      grid_frag_module;
     std::unique_ptr<crd::rhi::PipelineLayout>   pipeline_layout;
     // d2-depth: 6-pipeline matrix indexed by [primitive][depth_variant].
     // primitive:     0 = line, 1 = triangle

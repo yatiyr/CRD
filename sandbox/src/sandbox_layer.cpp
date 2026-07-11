@@ -34,6 +34,7 @@
 #include <crd/scene/transform_propagation.hpp>
 #include <crd/shader/effect.hpp>
 #include <crd/shader/shader_resource_loader.hpp>
+#include <crd/shader/vulkan_spirv_compiler.hpp> // D-008 C2-e: create_vulkan_spirv_compiler (injected GLSL->SPIR-V)
 #include <imgui.h>
 
 #include <algorithm>
@@ -133,14 +134,13 @@ void SandboxPipelineResolver::ensure_compiled(const crd::shader::VariantPipeline
 
     const auto vert_bytes = vert_module->code_bytes();
     {
-        auto vert_mod = m_device->create_shader_module(
-            {crd::rhi::ShaderStage::Vertex, "main",
-             crd::containers::make_span(vert_bytes.data(), vert_bytes.size())});
+        // D-008 C2-d3: an OPAQUE program (via the adopted gpu-context) instead of a raw-SPIR-V ShaderModule (closes I2).
+        auto vert_mod = m_device->create_program(
+            crd::rhi::ShaderStage::Vertex, crd::containers::make_span(vert_bytes.data(), vert_bytes.size()));
         if (vert_mod)
         {
             crd::rhi::GraphicsPipelineDesc desc;
-            desc.vertex_shader        = vert_mod.get();
-            desc.fragment_shader      = nullptr;
+            desc.vertex_program       = vert_mod.get();
             desc.topology             = crd::rhi::PrimitiveTopology::TriangleList;
             desc.viewport_extent      = m_extent;
             desc.color_format         = crd::rhi::Format::Undefined;
@@ -157,17 +157,16 @@ void SandboxPipelineResolver::ensure_compiled(const crd::shader::VariantPipeline
     if (frag_module == nullptr) return;
     const auto frag_bytes = frag_module->code_bytes();
     {
-        auto vert_mod = m_device->create_shader_module(
-            {crd::rhi::ShaderStage::Vertex, "main",
-             crd::containers::make_span(vert_bytes.data(), vert_bytes.size())});
-        auto frag_mod = m_device->create_shader_module(
-            {crd::rhi::ShaderStage::Fragment, "main",
-             crd::containers::make_span(frag_bytes.data(), frag_bytes.size())});
+        // D-008 C2-d3: OPAQUE programs (via the adopted gpu-context) instead of raw-SPIR-V ShaderModules (closes I2).
+        auto vert_mod = m_device->create_program(
+            crd::rhi::ShaderStage::Vertex, crd::containers::make_span(vert_bytes.data(), vert_bytes.size()));
+        auto frag_mod = m_device->create_program(
+            crd::rhi::ShaderStage::Fragment, crd::containers::make_span(frag_bytes.data(), frag_bytes.size()));
         if (vert_mod && frag_mod)
         {
             crd::rhi::GraphicsPipelineDesc desc;
-            desc.vertex_shader        = vert_mod.get();
-            desc.fragment_shader      = frag_mod.get();
+            desc.vertex_program       = vert_mod.get();
+            desc.fragment_program     = frag_mod.get();
             desc.topology             = crd::rhi::PrimitiveTopology::TriangleList;
             desc.viewport_extent      = m_extent;
             desc.color_format         = crd::rhi::Format::B8G8R8A8Unorm;
@@ -193,8 +192,10 @@ SandboxLayer::SandboxLayer(crd::app::Application& app, crd::rhi::Device& device,
     register_procedural_assets();
     try_register_imported_assets();
 
-    // Compile surface shaders via Runtime.
-    m_shader_runtime = crd::shader::create_runtime();
+    // Compile surface shaders via Runtime. D-008 C2-e: crd-shader owns no compiler — inject the Vulkan one (it must
+    // outlive the runtime; m_spirv_compiler is declared before m_shader_runtime for exactly that).
+    m_spirv_compiler = crd::shader::create_vulkan_spirv_compiler();
+    m_shader_runtime = crd::shader::create_runtime(*m_spirv_compiler);
     CRD_ASSERT(m_shader_runtime != nullptr);
 
     const fs::Path source_dir(CRD_SOURCE_DIR);
@@ -741,18 +742,17 @@ void SandboxLayer::build_wireframe_pipeline(const crd::platform::fs::Path& sourc
     if (vert_mod == nullptr || frag_mod == nullptr) return;
     const auto vert_bytes = vert_mod->code_bytes();
     const auto frag_bytes = frag_mod->code_bytes();
-    auto vk_vert = m_device.create_shader_module(
-        {crd::rhi::ShaderStage::Vertex, "main",
-         crd::containers::make_span(vert_bytes.data(), vert_bytes.size())});
-    auto vk_frag = m_device.create_shader_module(
-        {crd::rhi::ShaderStage::Fragment, "main",
-         crd::containers::make_span(frag_bytes.data(), frag_bytes.size())});
+    // D-008 C2-d3: OPAQUE programs (via the adopted gpu-context) instead of raw-SPIR-V ShaderModules (closes I2).
+    auto vk_vert = m_device.create_program(
+        crd::rhi::ShaderStage::Vertex, crd::containers::make_span(vert_bytes.data(), vert_bytes.size()));
+    auto vk_frag = m_device.create_program(
+        crd::rhi::ShaderStage::Fragment, crd::containers::make_span(frag_bytes.data(), frag_bytes.size()));
     if (!vk_vert || !vk_frag) return;
     const crd::rhi::VertexBindingDesc   wf_binding{0, 48, crd::rhi::VertexInputRate::Vertex};
     const crd::rhi::VertexAttributeDesc wf_attr{0, 0, crd::rhi::Format::R32G32B32Sfloat, 0};
     crd::rhi::GraphicsPipelineDesc wf_desc;
-    wf_desc.vertex_shader        = vk_vert.get();
-    wf_desc.fragment_shader      = vk_frag.get();
+    wf_desc.vertex_program       = vk_vert.get();
+    wf_desc.fragment_program     = vk_frag.get();
     wf_desc.topology             = crd::rhi::PrimitiveTopology::TriangleList;
     wf_desc.viewport_extent      = m_swapchain.desc().extent;
     wf_desc.color_format         = crd::rhi::Format::B8G8R8A8Unorm;

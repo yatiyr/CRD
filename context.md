@@ -26,9 +26,182 @@
 > the IR SUBSTRATE = Phase A(✅) + Phase B (material/shading capability incl B9 ray-tracing + NPR/toon) + Phase D (cook).
 > FRONT-ENDS (node editor UI + text DSL = Phase C) DEFERRED to the editor phase; authored via C++ builders.** On exit the IR
 > can EXPRESS everything (ML/AI/FFT/sim/skinning/particles/lighting/PBR+stylized/RT/effects). **ROADMAP: D-007 → hesap →
-> eylem/physics (GPU cloth/deformation/crowds/ragdolls) → rendering → UI → first editor → node editor.** **NEXT: Phase B,
-> entry B0 (type-system completion: int/bool vecs · mat2 · structs · arrays).** Docs: `docs/detours/D-007-*.md`,
-> `docs/decisions/0101-*.md` + **`0102-*.md`**, `docs/sessions/2026-07-09-d007-*.md`. ═══**
+> eylem/physics (GPU cloth/deformation/crowds/ragdolls) → rendering → UI → first editor → node editor.**
+> **▶ PHASE B STARTED — slice B0 (type system) COMPLETE, B0-0…B0-4 (2026-07-10):** **B0-0** fixed a REAL bug — `KGraph::optimize()`
+> never remapped the 4th operand `d`, so any mat4 graph through `optimize()` kept a stale/OOB column (latent; Phase-D cook
+> would have hit it); + `operands_valid()` invariant asserted in the pass. **B0-1 `KType`** — one composed type
+> `{scalar,kind,rows,cols}` (SPIR-V/Slang model) replaces the `(dtype,comps)` pair; a bare comps count can't tell `vec4`
+> from `mat2` and carries no scalar type; full type in the CSE key; ZERO-regression. **B0-2** mat2 + non-square R×C,
+> emitters keyed on the TYPE not comps (+ `input_mat`, HLSL `crd_inv2`, generic R×C outer). **B0-3** bool-typed
+> comparisons + `bvec`/`ivec`/`uvec` + `DType::U32` (appended, never reordered — the cook serializes it). **B0-4**
+> structs + fixed-size arrays: struct registry on KGraph, **VARIADIC operands** (4 slots can't hold N fields; the ext
+> pool is walked by DCE/CSE/renumber/emitters — the B0-0 bug class one field out, so `operands_valid()` guards it and
+> `clone()` hard-asserts), **SROA lowering** (no GPU struct decl, no std430 — buffer-backed structs are B3). Suites:
+> kir **200** · vulkan **33010** · dx12 **30821** · webgpu **30791** · cuda **79944**, every prior assertion intact.
+> **⛔⛔ The tidy gate was reporting `clean` for files it NEVER PARSED** (missing `-I` ⇒ 0 diagnostics; `"file not found"`
+> filtered out) — `backend_vulkan.cpp` passed the DoD gate un-analysed and **178 violations across crd-kir were
+> invisible**. Gate repaired (UNGATED/MISSING = hard fail, globbed includes, PCH-stripped compile DB, prints the file
+> count) and all 178 cleared; all 27 crd-kir files clean. **⭐ GLSL is the TYPE-STRICT backend** — `float + bool` passes
+> DX12, fails Vulkan; fix the IR, never the emitter. **▶ BACKEND FAN-OUT STARTED (user: all backends, mission overrides
+> D-007's "optional")**: **WGSL ✅** type layer on real WebGPU hw (webgpu 30791→**30808**) — `select()` not `?:`, emitted
+> `crd_inv2/3` (no `inverse()`), column-built outer (no `outerProduct()`); `For` refused loudly. **CUDA ✅ by
+> SCALARIZATION** (no native vec arithmetic; `comps` scalar temps; aggregates FREE via emit-time component resolution —
+> even `Select`-of-struct, which GLSL/HLSL SROA must refuse); componentwise ops **bit-exact** (`--fmad=false`);
+> cuda 79944→**80599**. Two more real bugs found: **`KirBackendCpu` (the CPU ORACLE) ignored `comps()`** ⇒ vec graphs
+> heap-overflowed (the oracle was itself un-oracled — GPU vec tests all used analytic refs); **`graph_uses_vec` was an
+> ODR violation** (external linkage in BOTH vulkan+dx12 .cpp) ⇒ hoisted inline.
+> **⛔→✅ THE CPU ORACLE WAS NOT f32-FAITHFUL for the A3 vec/mat corpus — FIXED (user-approved).** Componentwise ops
+> rounded per step; but Dot/VecLen/Normalize/Cross/MatVecMul/MatMatMul/Determinant/MatInverse/OuterProduct/geometric/
+> quats/slerp accumulated in **f64 and rounded only on store**, unlike `Contract`. The oracle was ~1 ULP *more accurate*
+> than any f32 kernel ⇒ **ADR-0098's T1 certified-bit-exact core was unreachable for vec/mat** (which is most of a
+> shader), and it is why every Vulkan/DX12 vec test compares vs ANALYTIC refs, never vs the oracle. Fixed via
+> `eval_detail::rnd` + dtype-threaded `mat_det`/`mat_minor_det`; F64 graphs untouched (round_dtype = identity).
+> **PROOF IT BITES: the CUDA `==` asserts failed with 320 mismatches before, pass after.** ★ **PAYOFF: CUDA vec3/mat3/
+> bvec/struct now gate BIT-EXACT (`==`) vs the oracle** — the strongest gate in the project (scalarized emitter writes
+> the same elementary ops, same order, `--fmad=false`). GLSL/HLSL/WGSL stay ULP-tolerant: their `dot`/`normalize`/
+> `inverse` BUILTINS have implementation-defined order — a named, bounded gap for ADR-0098 §5's float_controls audit. **⚠ B1/B2 are UNBUILDABLE before B3** — CKIR is compute-only (no stage concept;
+> every emitter hardcodes `local_size_x=256`/`numthreads`), and `dFdx`/`discard` are fragment-stage. **B1↔B3 REORDERED
+> (user).** ⚠ **No DX12 raster path exists** (`rhi-vulkan` yes, no `rhi-dx12`) ⇒ B3's DX12 gate = HLSL→DXIL compile; the
+> real draw is Vulkan. **MSL ✅** (native float3/float3x3/bool3; emitted crd_inv2/3 + column-built outer — MSL has
+> neither `inverse()` nor `outerProduct()`; no Metal compiler off macOS ⇒ STRUCTURAL gate incl. `temps_well_formed`
+> (every referenced `tN` declared, no `t-1` — the exact bug GLSL shipped) **and the checker is itself proven to bite**;
+> real run = v17-n GH-Actions Apple silicon). **▶ FAN-OUT COMPLETE on every backend reachable from this host** (kir 234).
+> **▶ B3-CORE STARTED. B3-a ✅ (IR stage model, kir 254):** `KStage{Compute,Vertex,Fragment}` · `KBuiltin` · leaves
+> `StageIn` (location-indexed; ONE op for a vertex attribute AND a fragment interpolant, disambiguated by the entry's
+> stage — as SPIR-V models it) · `Builtin` (type fixed by the builtin) · **`UniformBlock` = STRUCT-typed leaf at
+> (set,binding)**, members via the existing `field_get` (reuses the B0-4 registry; **`set` IS ADR-0102's frequency slot**);
+> `dset` in the CSE key. ⚠ **SCAR:** a stage leaf has NO operands ⇒ const-fold folds it to a constant (a folded
+> `gl_VertexIndex` = every vertex is vertex 0). Guarded; **guard proven to bite** — my first test used a vec4 UBO field
+> and passed with the guard removed, i.e. tested nothing.
+> **▶ B3-a′ ✅ — the stage model is now COMPLETE (kir 400 asserts / 43 cases; `v17` ctest 122/122).** `KStage` = the **14
+> SPIR-V execution models** (compute · vertex · tess-control · tess-eval · geometry(legacy) · fragment · task · mesh ·
+> raygen · intersection · any-hit · closest-hit · miss · callable) + `stage_mask::*` sets + **32 builtins in ONE
+> `builtin_info` table** carrying type AND legal-stage mask together (the old `builtin()` switch had **no `default:` and
+> only 4 cases** — any new builtin silently became an f32 scalar) + **`entry_valid(g, e, &why)`**: a graph carries no
+> stage, so only an ENTRY can reject `gl_FragCoord` in a vertex shader. Without it the table is a comment. *Proven to
+> bite; the same graph is valid as a fragment entry.*
+>
+> **⛔⛔ THE B3 PLAN WAS WRONG — user direction 2026-07-10 → [ADR-0103] + new detour [D-008].** Gating the raster emitters
+> on `crd::shader::compile_glsl` makes **CKIR depend on the module that owns GLSL** — the exact inversion ADR-0101 exists
+> to delete. The plan was faithfully following **`ADR-0099 §6`** ("crd-shader stays the single shared GLSL/HLSL→SPIR-V/
+> DXIL compiler") — **two ACCEPTED ADRs in direct contradiction.** §6 is now **struck through in place** and superseded by
+> **ADR-0103: `crd-gpu-context` owns every GPU program; no module outside a backend names a shading language or a
+> bytecode.** Currency IN = the IR (`KGraph`+`KEntry`), OUT = an opaque `IGpuProgram`; `compute()`/`raster()`/
+> `raytracing()`; each backend owns its language + compiler privately. Three leaks MEASURED: `compile_glsl`/`compile_hlsl`
+> (9 call sites) · `rhi::ShaderModuleDesc::code` = raw SPIR-V in a public header (38 sites/9 files) · two device layers
+> over two `VkDevice`s. **NEXT: D-008 C0** (program seam; delete `crd/shader/compile.hpp`; I1/I2 grep-gate) → C1
+> `IRasterContext` → C2 absorb `rhi-vulkan`'s device → C3 RT → C4 DX12 raster; **then** D-007 B3-c (GLSL VS+FS emitters,
+> first hoisting the ~60-case value switch into a shared statement emitter), B3-d (HLSL), B3-e (the draw), then B1.
+> Close B0 with the multi-config DoD.
+> ⚠ **A green test BINARY is not a green ctest:** `crd-kir-tests.exe` said "All tests passed" while 6 cases could not be
+> *selected* by ctest (em-dash names + Windows Active-Code-Page argv) and the registered guard `crd-no-non-ascii-test-names`
+> was RED. 9 names fixed; guard green. Guards are ctest-registered — run `scripts/run-ctest.bat`, never the binary.
+> **▶ D-008 C0 ✅ — the program seam landed (2026-07-10).** The two SPIR-V compilers moved `crd-shader` →
+> `gpu-context-vulkan` (`crd::gpu::compile_glsl_to_spirv`/`compile_hlsl_to_spirv`); **`crd/shader/compile.hpp` DELETED**;
+> `crd-kir-vulkan` no longer links `crd-shader`; 7 call sites + 4 CMakes migrated. `crd/gpu/program.hpp` = `ShaderStage`
+> (14) + opaque `IGpuProgram`; **`IGpuContext::create_program(cooked SPIR-V) → IGpuProgram`** implemented in Vulkan +
+> **tested end-to-end** (compile → program → valid; malformed rejected). **I1 grep-gate** `crd-no-shader-language-leak`
+> (ctest-registered) green. `test_ckir_glsl` relocated to `tests/gpu-context-vulkan` (keeps crd-kir's link-isolation
+> smoke). Counts EXACT: kir-vulkan **33010** · kir-dx12 **30821** · geometry-bvh-gpu **851016** · rhi_vulkan **4819**;
+> conserved relocation kir 400/43→**390/40**, gpu-context-vulkan 8/1→**24/5**. All tidy-clean. ⚠ **Deeper leak surfaced +
+> tracked:** `crd-shader/src/runtime.cpp` (the Effect/Module RENDERING frontend) STILL compiles GLSL via shaderc —
+> allowlisted in the gate, migrates at **C2** (the rendering convergence). **NEXT: D-008 C1** (`IRasterContext` +
+> `create_program(KGraph,KEntry)`; raster path needs D-007 B3-c) → C2 (absorb rhi-vulkan's device + empty the allowlist).
+> **▶ FRONTIER AUDIT (2026-07-10, web-grounded):** the C-slices + D-007 B-slices were extended to cover the 2024–26 state
+> of the art — **shader objects** (`VK_EXT_shader_object`, kills PSO permutation explosion — a C1 *design* decision) ·
+> **bindless / descriptor buffers** · **dynamic rendering** · VRS/ROV/conservative-raster · **device-generated commands**
+> (`VK_EXT_device_generated_commands`) → **work graphs** (`VK_AMDX_shader_enqueue`, D-008 **C5**) · **SER**
+> (`VK_EXT_ray_tracing_invocation_reorder`) + **opacity micromaps** + **cluster AS / RTX Mega Geometry**
+> (`VK_NV_cluster_acceleration_structure`, D-008 **C3**) · **cooperative vectors / NEURAL shading** (`VK_NV_cooperative_vector`,
+> D-008 **C6** + D-007 **B10** — differentiable-by-construction via v15/v16 autodiff, a moat nobody ships) · subgroup/wave +
+> **work-graph node shaders** (D-007 **B11**). Full extension list + citations + slice mapping in the D-007/D-008 frontier
+> tables. D-008 is now **C0✅ → C6**.
+> **▶ D-008 C1-a ✅ (2026-07-10) — the raster foundation.** `VulkanGpuContext` now creates a GRAPHICS queue (distinct
+> from the dedicated async-compute queue: graphics_family=0, compute_family=2) + enables dynamic rendering &
+> **`VK_EXT_shader_object`** (guarded; shader_object=YES on the 4070 Ti Super) — the ADR-0099 "one device, both concerns"
+> made real. Backend-agnostic **`IRasterContext`/`IRasterTarget`** (shader-object-shaped, no Vulkan in the interface) +
+> Vulkan impl: offscreen RGBA8 target + **dynamic-rendering CLEAR + pixel readback**, green on real GPU (raw Vulkan, NO
+> crd-rhi edge — C2 absorbs rhi, the edge can't point back). kir-vulkan **33010** unchanged; gpu-context-vulkan
+> 24/5→**36/6**; tidy + I1 + ASCII gates green.
+> **▶ D-008 C1-b ✅ (2026-07-10) — the shader-object DRAW.** `IGpuProgram` retains its cooked SPIR-V
+> (`VulkanGpuProgram::vk_spirv()`); `IRasterProgram` = a linked VS+FS as **`VkShaderEXT`** (`vkCreateShadersEXT`,
+> `LINK_STAGE`); `IRasterContext::create_raster_program` + `draw` set all ~18 shader-object dynamic-state fields (NO PSO)
+> + `vkCmdDraw` on dynamic rendering. An **attributeless red triangle over a blue clear renders green on real GPU** —
+> centre pixel RED, corner BLUE — from trivial cooked VS/FS via the relocated compiler (no B3-c). The whole seam proven:
+> GLSL→SPIR-V→IGpuProgram→shader objects→draw→readback. gpu-context-vulkan 36/6→**48/7**; kir-vulkan **33010** unchanged.
+> **▶ D-008 C1-c ✅ (2026-07-10) — the IR on-ramp.** `IGpuContext::create_program(const KGraph&, const KEntry&)` (kir
+> types forward-declared in the base header; only `gpu-context-vulkan` links **crd-kir** — the acyclic ADR-0103 edge).
+> Compute: emit GLSL via crd-kir's `emit_(vec|elementwise)_glsl` → SPIR-V via the relocated compiler → `IGpuProgram`;
+> raster refused (B3-c). Proven: a compute KGraph `(x+y)*exp(x)` → valid program w/ real SPIR-V; a vertex entry → nullptr.
+> gpu-context-vulkan 48/7→**53/8**; kir-vulkan **33010** unchanged; tidy + I1 + ASCII gates green. (Dispatch-through-the-seam
+> = the kir-vulkan convergence, later.)
+> **⛔→ C1-d RECLASSIFIED into C2 (scouting finding):** renderer/draw/sandbox all run on `crd::rhi::Device` — a SEPARATE
+> `VkDevice` from `VulkanGpuContext`'s; handles can't cross devices, so "renderer consumes IRasterContext" is inseparable
+> from C2's device unification. **C1's raster surface is COMPLETE at a/b/c.** User chose **C2 (renderer device
+> absorption)**; decomposed into C2-a…C2-f (each incremental so the working sandbox never breaks).
+> **▶ D-008 C2-a ✅ (2026-07-10):** `VulkanGpuContext` is now RENDER-CAPABLE — `headless=false` enables surface
+> (`VK_KHR_surface`+platform) + `VK_KHR_swapchain` when available; `render_capable()` = surface+swapchain+graphics queue.
+> Guarded + additive (headless/compute byte-for-byte unchanged). gpu-context-vulkan 53/8→**59/9**; kir-vulkan **33010**
+> unchanged.
+> **▶ D-008 C2-b ✅ (2026-07-10) — rhi-vulkan ADOPTS the gpu-context device (ONE VkDevice).**
+> `crd::rhi::create_vulkan_device_adopting(IGpuContext&)` builds a `VulkanDevice` over the context's
+> instance/physical/device/queues (downcast in the .cpp; header stays abstract via forward-decl). `VulkanDevice` gained
+> `owns_device` — an adopted device frees ITS pools/allocations but **never destroys the shared VkDevice**. Edge
+> `rhi-vulkan → gpu-context-vulkan` (PRIVATE, acyclic — build-verified). Proven: adopt → device stands up on the shared
+> VkDevice; destroy it → device still alive (re-adoption succeeds). rhi_vulkan 4819/25→**4823/26**; kir-vulkan **33010**
+> unchanged; **sandbox links** (edge propagates).
+> **▶ D-008 C2-c1 ✅ (2026-07-10) — the adopted device is FEATURE-MATCHED.** Scouting found rhi's own device enables
+> **synchronization2 + fillModeNonSolid** (its render path needs them) that the windowed context lacked. A windowed
+> `VulkanGpuContext` now enables both (guarded — headless/compute byte-for-byte unchanged); `create_vulkan_device_adopting`
+> passes `sync2 = render_capable()`. So the renderer can run on the adopted device unchanged. Tested: windowed context →
+> render_capable → adopt → feature-complete rhi Device. gpu-context-vulkan **59/9**, kir-vulkan **33010**, both unchanged.
+> **⚠ C2-c2 blocker found:** `crd::imgui::ImGuiLayer` takes a `crd::rhi::Instance&` + pulls VkInstance via
+> `crd::rhi::vulkan_instance()` — the adopted path has NO rhi Instance.
+> **▶ D-008 C2-c2 ✅ (2026-07-10) — THE SANDBOX RENDERS ON ONE DEVICE.** (1) Decoupled ImGui: added
+> `crd::rhi::vulkan_instance(Device&)` (VkInstance from `VulkanDevice::instance()`); `ImGuiLayer` dropped its
+> `crd::rhi::Instance&` param, gets the instance from the Device. (2) Swapped the sandbox bring-up:
+> `create_vulkan_instance`+`create_device` → `create_vulkan_gpu_context({headless=false})` + `create_vulkan_device_adopting`
+> (`gpu_context` declared first, outlives `device`). Renderer + swapchain + ImGui + frame graph all on the ONE
+> VulkanGpuContext device. **Sandbox smoke PASS: 436 frames presented over 3.0s @ 145 fps, validation ON, no VUID.**
+> rhi_vulkan **4824/26** · kir-vulkan **33010** unchanged. ⚠ `vulkan_native.hpp` standalone-UNGATED (pre-existing GLFW
+> include); content gated via imgui_layer.cpp + vulkan_backend.cpp (clean). **The two VkDevices the ADR-0099 audit found
+> are now ONE.** **▶ D-008 C2-d1 ✅ (2026-07-10) — the opaque-program pipeline path (I2).** `rhi::GraphicsPipelineDesc` gains
+> `vertex_program`/`fragment_program` (`crd::gpu::IGpuProgram*`, forward-declared — rhi stays abstract), APPENDED at the
+> struct end so positional inits are unaffected. `VulkanGpuProgram::vk_module()` exposes the compiled module;
+> `create_graphics_pipeline` resolves a stage from the program (wins) or the legacy `ShaderModule` (strangler-fig — existing
+> consumers untouched). Proven: a pipeline builds from opaque VS+FS programs; **sandbox still renders** (292 frames);
+> rhi_vulkan **4830/27**, kir-vulkan **33010**. (Direct-tidy of types.hpp surfaced 3 PRE-EXISTING enum-size warnings on
+> flag/format enums — justified NOLINTs added.) **▶ D-008 C2-d2 ✅ (2026-07-11) — the migration facade + first consumer.** `rhi::Device::create_program(ShaderStage,
+> cooked SPIR-V) → IGpuProgram` (NON-pure default nullptr; the ADOPTED `VulkanDevice` delegates to its owning
+> `VulkanGpuContext`, mapping the stage). So any consumer holding a `Device` mints opaque programs — no gpu-context
+> threading. Edge `crd-rhi → crd-gpu-context` (header-only, acyclic). **First consumer: renderer `ForwardRenderPath`** —
+> all 3 `create_shader_module` → `create_program` + `vertex_program`/`fragment_program`. Sandbox renders **529 frames @
+> 176 fps, no VUID**; renderer 192/40 · rhi 152/32 · rhi_vulkan 4830/27 · kir-vulkan 33010 green. **▶ D-008 C2-e ✅ (2026-07-11) — I1 FULLY CLOSED; crd-shader owns NO shading language.** The Effect frontend
+> (`runtime.cpp`) dropped its shaderc loader entirely and now takes an INJECTED `crd::shader::ISpirvCompiler`. New bridge
+> module **`crd-shader-vulkan`** (`create_vulkan_spirv_compiler`) wraps `crd::gpu::compile_glsl_to_spirv` — it links BOTH
+> crd-shader + crd-gpu-context-vulkan so neither depends on the other (gpu-context stays rhi-free). Compiler called with a
+> new `optimize=false` flag so `OpName`s + dead bindings survive for spirv-reflect. Callers (sandbox, test_renderer, the
+> crd-shader test suite) inject the compiler, declared before the runtime they borrow it into. **`crd-no-shader-language-leak`
+> gate GREEN with an EMPTY allowlist.** crd-shader-tests 139/21 · renderer 192/40 · resources 12301/78 · kir-vulkan 33010 ·
+> geometry 910 · sandbox smoke PASS; 10 files tidy-clean; MSVC + clang-cl clean. **NEXT: C2-f** retire rhi's own device
+> creation (the standalone `create_device` path) → then D-007 resumes at B3-c.
+>
+> **Prior: D-008 C2-d4 ✅ — `ShaderModule` RETIRED, I2 FULLY CLOSED.** Deleted `crd/rhi/shader_module.hpp`
+> (`ShaderModule`), `ShaderModuleDesc`, `Device::create_shader_module`, the graphics `*_shader` fields, and
+> `VulkanShaderModule`. **Compute migrated too**: `ComputePipelineDesc.compute_shader`→`compute_program` (opaque
+> `IGpuProgram`). The standalone rhi device mints programs via a new `crd::gpu::make_vulkan_program(VkDevice,…)` factory —
+> the SAME constructor `IGpuContext::create_program` uses (gpu-context-vulkan still OWNS authoring per ADR-0103), so
+> `test_rhi_vulkan` kept its device + queue-selection untouched (no perturbation of the async-compute queue tests). The
+> Vulkan HLSL compiler now normalizes the SPIR-V entry to `main` (`-fspv-entrypoint-name=main`), so every minted program
+> entry-points at `main` and the pipeline needs no source function name (matches the GLSL/IR path). **No raw SPIR-V in any
+> public rhi header** — `crd-no-shader-language-leak` gate GREEN. rhi 152/32 · renderer 192/40 · rhi_vulkan **4830/27**
+> (compute+graphics on the standalone device) · geometry-shader-helpers **910/21** (21 HLSL manifests dispatch with the
+> normalized entry) · kir-vulkan 33010 · sandbox smoke PASS. 14 files tidy-clean; MSVC + clang-cl both build clean (gcc
+> leg env-blocked: WSL dir lacks spirv-reflect source — pre-existing, unrelated). **NEXT: C2-e** empty the I1 allowlist
+> (migrate crd-shader `Effect` frontend / `runtime.cpp` off shaderc — the last hand-written GLSL) → **C2-f** retire rhi's
+> own device creation.
+> Docs: `docs/detours/D-007-*.md` + **`D-008-gpu-context-convergence.md`**, `docs/decisions/0101-*.md` + `0102-*.md` +
+> **`0103-gpu-context-owns-every-gpu-program.md`**, `docs/sessions/2026-07-09-d007-*.md` + **`2026-07-10-d007-b0-type-system.md`**. ═══**
 >
 > **v14 IS DONE.** Same-evening closes on top of the wave below: **v14-m** (NN inference —
 > f32 8/8, q8 vs torch-int8/ort-int8/ggml-from-source ALL WON incl. the last cell via the

@@ -215,8 +215,8 @@ TEST_CASE("v17-breadth: WebGPU floor/ceil/sign/cmpeq/cmple bit-match the CPU ora
     const int uc  = g.unary(kir::KOp::Ceil, x);
     const int us  = g.unary(kir::KOp::Sign, y);
     const int ut  = g.unary(kir::KOp::Trunc, y);
-    const int bce = g.binary(kir::KOp::CmpEq, x, y);
-    const int bcl = g.binary(kir::KOp::CmpLe, x, y);
+    const int bce = g.cast(g.binary(kir::KOp::CmpEq, x, y), kir::DType::F32); // B0-3: bool -> float before arithmetic
+    const int bcl = g.cast(g.binary(kir::KOp::CmpLe, x, y), kir::DType::F32);
     const int out = g.binary(kir::KOp::Add, g.binary(kir::KOp::Add, g.binary(kir::KOp::Add, g.binary(kir::KOp::Add, uf, uc), g.binary(kir::KOp::Add, us, bce)), bcl), ut);
 
     float xv[nn];
@@ -413,4 +413,211 @@ TEST_CASE("v17-perf: WebGPU T2 fast parallel scan matches T1 oracle + determinis
     REQUIRE(cpu.run(g, s2, inputs, 1, co.data())); // T1 fixed-order oracle == exact for integer inputs
     REQUIRE(be.run(g, s2, inputs, 1, g2.data()));
     for (int i = 0; i < rows * nlen; ++i) { CHECK(g1[i] == co[i]); CHECK(g1[i] == g2[i]); } // T2 correct + run-to-run deterministic
+}
+
+// ── B0 fan-out (2026-07-10): the TYPE-AWARE value layer on WebGPU ────────────────────────────────────────────────────
+// Every WGSL divergence from GLSL is exercised here: `select()` in place of the missing `?:`, the emitted crd_inv2 /
+// crd_inv3 (WGSL has no `inverse()`), the column-built outer product (no `outerProduct()`), and `matCxR<f32>`.
+// Floats stay ULP-tolerant (WGSL has no `precise`, so an implementation may fuse FMAs); bool read-back is exact.
+TEST_CASE("v17 B0 fan-out: WGSL vec3/mat3/mat2 value layer runs on WebGPU", "[kir][webgpu][gpu][typelayer]")
+{
+    crd::memory::TlsfAllocator alloc(32U << 20U);
+    kir::KirBackendWebGpu      be(&alloc);
+    if (!be.valid()) { WARN("no WebGPU device available; skipping"); return; }
+    kir::KirBackendCpu cpu(&alloc);
+
+    constexpr int    vn = 128;
+    const kir::Shape sh = kir::make_shape({vn});
+
+    { // vec3: cross + add + normalize, gated against the CPU oracle
+        kir::KGraph g(&alloc);
+        const int   a = g.input_vec(sh, kir::DType::F32, 3);
+        const int   b = g.input_vec(sh, kir::DType::F32, 3);
+        const int   o = g.normalize(g.binary(kir::KOp::Add, g.cross(a, b), a));
+
+        float av[vn * 3];
+        float bv[vn * 3];
+        for (int i = 0; i < vn; ++i)
+        {
+            const float fi = static_cast<float>(i);
+            av[i * 3] = 0.5F + 0.03F * fi;  av[i * 3 + 1] = 1.0F - 0.02F * fi;  av[i * 3 + 2] = 0.2F + 0.01F * fi;
+            bv[i * 3] = -0.4F + 0.02F * fi; bv[i * 3 + 1] = 0.7F + 0.015F * fi; bv[i * 3 + 2] = 0.9F - 0.01F * fi;
+        }
+        const float* inputs[] = {av, bv};
+        float        gpu[vn * 3];
+        float        ref[vn * 3];
+        REQUIRE(be.run(g, o, inputs, 2, gpu));
+        REQUIRE(cpu.run(g, o, inputs, 2, ref));
+        int bad = 0;
+        for (int i = 0; i < vn * 3; ++i) { if (absf(gpu[i] - ref[i]) > 1e-4F * absf(ref[i]) + 1e-5F) { ++bad; } }
+        CHECK(bad == 0);
+    }
+
+    { // mat3 from columns; (M * inverse(M)) * v == v exercises the emitted crd_inv3
+        kir::KGraph g(&alloc);
+        const int   c0  = g.input_vec(sh, kir::DType::F32, 3);
+        const int   c1  = g.input_vec(sh, kir::DType::F32, 3);
+        const int   c2  = g.input_vec(sh, kir::DType::F32, 3);
+        const int   vv  = g.input_vec(sh, kir::DType::F32, 3);
+        const int   mat = g.mat3(c0, c1, c2);
+        const int   pv  = g.mat_mul_vec(g.mat_mul(mat, g.mat_inverse(mat)), vv);
+
+        float c0d[vn * 3];
+        float c1d[vn * 3];
+        float c2d[vn * 3];
+        float vd[vn * 3];
+        for (int i = 0; i < vn; ++i)
+        {
+            const float fi = static_cast<float>(i);
+            c0d[i * 3] = 3.0F + 0.01F * fi; c0d[i * 3 + 1] = 0.2F;             c0d[i * 3 + 2] = 0.1F;
+            c1d[i * 3] = 0.1F;              c1d[i * 3 + 1] = 4.0F - 0.01F * fi; c1d[i * 3 + 2] = 0.2F;
+            c2d[i * 3] = 0.2F;              c2d[i * 3 + 1] = 0.1F;             c2d[i * 3 + 2] = 5.0F + 0.005F * fi;
+            vd[i * 3]  = 0.5F * fi - 2.0F;  vd[i * 3 + 1]  = 1.0F + 0.1F * fi; vd[i * 3 + 2]  = -0.3F * fi + 1.0F;
+        }
+        const float* inputs[] = {c0d, c1d, c2d, vd};
+        float        gpu[vn * 3];
+        REQUIRE(be.run(g, pv, inputs, 4, gpu));
+        int bad = 0;
+        for (int i = 0; i < vn * 3; ++i) { if (absf(gpu[i] - vd[i]) > 1e-3F * absf(vd[i]) + 1e-3F) { ++bad; } }
+        CHECK(bad == 0);
+    }
+
+    { // mat2 (comps == 4, indistinguishable from vec4 without KType) + a non-square 2x3 outer product
+        kir::KGraph g(&alloc);
+        const int   c0  = g.input_vec(sh, kir::DType::F32, 2);
+        const int   c1  = g.input_vec(sh, kir::DType::F32, 2);
+        const int   vv  = g.input_vec(sh, kir::DType::F32, 2);
+        const int   mat = g.mat2(c0, c1);
+        const int   pv  = g.mat_mul_vec(g.mat_mul(mat, g.mat_inverse(mat)), vv); // exercises crd_inv2
+        REQUIRE(g.node(mat).type.kind == kir::TKind::Mat);
+
+        float c0d[vn * 2];
+        float c1d[vn * 2];
+        float vd[vn * 2];
+        for (int i = 0; i < vn; ++i)
+        {
+            const float fi = static_cast<float>(i);
+            c0d[i * 2] = 3.0F + 0.01F * fi; c0d[i * 2 + 1] = 0.2F;
+            c1d[i * 2] = 0.1F;              c1d[i * 2 + 1] = 4.0F - 0.01F * fi;
+            vd[i * 2]  = 0.5F * fi - 2.0F;  vd[i * 2 + 1]  = 1.0F + 0.1F * fi;
+        }
+        const float* inputs[] = {c0d, c1d, vd};
+        float        gpu[vn * 2];
+        REQUIRE(be.run(g, pv, inputs, 3, gpu));
+        int bad = 0;
+        for (int i = 0; i < vn * 2; ++i) { if (absf(gpu[i] - vd[i]) > 1e-3F * absf(vd[i]) + 1e-3F) { ++bad; } }
+        CHECK(bad == 0);
+
+        kir::KGraph g2(&alloc);
+        const int   a2 = g2.input_vec(sh, kir::DType::F32, 2);
+        const int   b3 = g2.input_vec(sh, kir::DType::F32, 3);
+        const int   op = g2.outer_product(a2, b3); // 2 rows x 3 cols
+        REQUIRE(g2.node(op).comps() == 6);
+
+        float ad[vn * 2];
+        float bd[vn * 3];
+        for (int i = 0; i < vn; ++i)
+        {
+            const float fi = static_cast<float>(i);
+            ad[i * 2] = 0.5F * fi - 1.0F; ad[i * 2 + 1] = 2.0F - 0.1F * fi;
+            bd[i * 3] = 1.0F + 0.2F * fi; bd[i * 3 + 1] = -0.3F * fi; bd[i * 3 + 2] = 0.75F;
+        }
+        const float* in2[] = {ad, bd};
+        float        gop[vn * 6];
+        REQUIRE(be.run(g2, op, in2, 2, gop));
+        int bado = 0;
+        for (int i = 0; i < vn; ++i)
+        {
+            for (int col = 0; col < 3; ++col)
+            {
+                for (int r = 0; r < 2; ++r)
+                {
+                    const float ref = ad[i * 2 + r] * bd[i * 3 + col];
+                    if (absf(gop[i * 6 + col * 2 + r] - ref) > 1e-4F * absf(ref) + 1e-4F) { ++bado; }
+                }
+            }
+        }
+        CHECK(bado == 0);
+    }
+}
+
+// bvec + struct SROA on WebGPU. Bool read-back is EXACT (0.0/1.0), so no tolerance is used for it.
+TEST_CASE("v17 B0 fan-out: WGSL bvec3 (any/all) + Light-struct SROA on WebGPU", "[kir][webgpu][gpu][typelayer]")
+{
+    crd::memory::TlsfAllocator alloc(32U << 20U);
+    kir::KirBackendWebGpu      be(&alloc);
+    if (!be.valid()) { WARN("no WebGPU device available; skipping"); return; }
+
+    constexpr int    bn = 128;
+    const kir::Shape sh = kir::make_shape({bn});
+
+    {
+        kir::KGraph g(&alloc);
+        const int   av = g.input_vec(sh, kir::DType::F32, 3);
+        const int   bv = g.input_vec(sh, kir::DType::F32, 3);
+        const int   lt = g.binary(kir::KOp::CmpLt, av, bv); // vec3<bool>
+        const int   an = g.vany(lt);
+        const int   al = g.vall(lt);
+        REQUIRE(g.node(lt).type.scalar == kir::DType::Bool);
+
+        float avd[bn * 3];
+        float bvd[bn * 3];
+        for (int i = 0; i < bn; ++i)
+        {
+            const float fi = static_cast<float>(i);
+            avd[i * 3] = fi - 64.0F; avd[i * 3 + 1] = 1.0F; avd[i * 3 + 2] = (i % 2 == 0) ? -1.0F : 5.0F;
+            bvd[i * 3] = 0.0F;       bvd[i * 3 + 1] = 2.0F; bvd[i * 3 + 2] = 0.0F;
+        }
+        const float* inputs[] = {avd, bvd};
+        float        gan[bn];
+        float        gal[bn];
+        REQUIRE(be.run(g, an, inputs, 2, gan));
+        REQUIRE(be.run(g, al, inputs, 2, gal));
+        int bad = 0;
+        for (int i = 0; i < bn; ++i)
+        {
+            const bool ea = (avd[i * 3] < bvd[i * 3]) || (avd[i * 3 + 1] < bvd[i * 3 + 1]) || (avd[i * 3 + 2] < bvd[i * 3 + 2]);
+            const bool eb = (avd[i * 3] < bvd[i * 3]) && (avd[i * 3 + 1] < bvd[i * 3 + 1]) && (avd[i * 3 + 2] < bvd[i * 3 + 2]);
+            if (gan[i] != (ea ? 1.0F : 0.0F)) { ++bad; }
+            if (gal[i] != (eb ? 1.0F : 0.0F)) { ++bad; }
+        }
+        CHECK(bad == 0);
+    }
+
+    { // struct Light { vec3 pos; float radius; vec3 color; } -> destructure -> color*radius + pos
+        kir::KGraph      g(&alloc);
+        const kir::KType fields[3] = {kir::KType::vec(kir::DType::F32, 3), kir::KType::make_scalar(kir::DType::F32),
+                                      kir::KType::vec(kir::DType::F32, 3)};
+        const int        light   = g.define_struct(fields, 3);
+        const int        pos     = g.input_vec(sh, kir::DType::F32, 3);
+        const int        rad     = g.input(sh, kir::DType::F32);
+        const int        col     = g.input_vec(sh, kir::DType::F32, 3);
+        const int        flds[3] = {pos, rad, col};
+        const int        lite    = g.struct_make(light, flds, 3);
+        const int        out = g.binary(kir::KOp::Add, g.binary(kir::KOp::Mul, g.field_get(lite, 2), g.splat(g.field_get(lite, 1), 3)), g.field_get(lite, 0));
+
+        float posd[bn * 3];
+        float radd[bn];
+        float cold[bn * 3];
+        for (int i = 0; i < bn; ++i)
+        {
+            const float fi = static_cast<float>(i);
+            posd[i * 3] = fi * 0.5F - 8.0F; posd[i * 3 + 1] = 1.0F - 0.1F * fi; posd[i * 3 + 2] = 0.25F * fi;
+            radd[i]     = 0.5F + 0.03F * fi;
+            cold[i * 3] = 0.1F * fi;        cold[i * 3 + 1] = 2.0F;             cold[i * 3 + 2] = -0.4F * fi;
+        }
+        const float* inputs[] = {posd, radd, cold};
+        float        gout[bn * 3];
+        REQUIRE(be.run(g, out, inputs, 3, gout));
+        int bad = 0;
+        for (int i = 0; i < bn; ++i)
+        {
+            for (int k = 0; k < 3; ++k)
+            {
+                const float ref = cold[i * 3 + k] * radd[i] + posd[i * 3 + k];
+                if (absf(gout[i * 3 + k] - ref) > 1e-4F * absf(ref) + 1e-4F) { ++bad; }
+            }
+        }
+        CHECK(bad == 0);
+    }
 }

@@ -5,7 +5,7 @@
 // Mirror of `test_glsl_emit.cpp::"v9e-b ULP conformance"` but for the HLSL
 // emitter. For each of the 21 golden manifests:
 //   1. Emit the HLSL conformance shader via `emit_hlsl_conformance_shader`.
-//   2. Compile via `crd::shader::compile_hlsl` (dxc → SPIR-V).
+//   2. Compile via `crd::gpu::compile_hlsl_to_spirv` (dxc → SPIR-V).
 //   3. Dispatch on Vulkan (same RHI plumbing the GLSL test uses).
 //   4. Mixed-tolerance compare per-pixel against `evaluate<float>(ir, p)`.
 //
@@ -37,10 +37,10 @@
 #include <crd/rhi/fence.hpp>
 #include <crd/rhi/pipeline.hpp>
 #include <crd/rhi/queue.hpp>
-#include <crd/rhi/shader_module.hpp>
+#include <crd/gpu/vulkan_shader_compile.hpp>
+#include <crd/gpu/program.hpp> // D-008 C2-d4: opaque IGpuProgram via create_program
 #include <crd/rhi/vulkan_backend.hpp>
 #include <crd/rhi/vulkan_validation_capture.hpp>
-#include <crd/shader/compile.hpp>
 
 #include <algorithm>
 #include <cstdio>
@@ -184,8 +184,8 @@ TEST_CASE("v9e-c HLSL conformance: dxc compiles every manifest's emitted HLSL",
     {
         const auto probe_ir  = kManifests[0].make(&alloc);
         const auto probe_src = emit_hlsl_conformance_shader(probe_ir, &alloc);
-        const auto probe     = crd::shader::compile_hlsl(
-            crd::shader::Stage::Compute,
+        const auto probe     = crd::gpu::compile_hlsl_to_spirv(
+            crd::gpu::ShaderStage::Compute,
             crd::containers::StringView(probe_src.c_str(), probe_src.size()),
             crd::containers::StringView("probe"),
             &alloc);
@@ -206,8 +206,8 @@ TEST_CASE("v9e-c HLSL conformance: dxc compiles every manifest's emitted HLSL",
         const auto ir       = spec.make(&alloc);
         const auto full_src = emit_hlsl_conformance_shader(ir, &alloc);
 
-        auto result = crd::shader::compile_hlsl(
-            crd::shader::Stage::Compute,
+        auto result = crd::gpu::compile_hlsl_to_spirv(
+            crd::gpu::ShaderStage::Compute,
             crd::containers::StringView(full_src.c_str(), full_src.size()),
             crd::containers::StringView(spec.name),
             &alloc);
@@ -232,8 +232,8 @@ TEST_CASE("v9e-c HLSL ULP conformance: dxc-emitted SPIR-V matches evaluate() on 
     {
         const auto probe_ir  = kManifests[0].make(&alloc);
         const auto probe_src = emit_hlsl_conformance_shader(probe_ir, &alloc);
-        const auto probe     = crd::shader::compile_hlsl(
-            crd::shader::Stage::Compute,
+        const auto probe     = crd::gpu::compile_hlsl_to_spirv(
+            crd::gpu::ShaderStage::Compute,
             crd::containers::StringView(probe_src.c_str(), probe_src.size()),
             crd::containers::StringView("probe"),
             &alloc);
@@ -289,8 +289,8 @@ TEST_CASE("v9e-c HLSL ULP conformance: dxc-emitted SPIR-V matches evaluate() on 
         // Build IR + emit HLSL + compile via dxc to SPIR-V.
         const auto ir        = spec.make(&alloc);
         const auto full_hlsl = emit_hlsl_conformance_shader(ir, &alloc);
-        auto       compiled  = crd::shader::compile_hlsl(
-            crd::shader::Stage::Compute,
+        auto       compiled  = crd::gpu::compile_hlsl_to_spirv(
+            crd::gpu::ShaderStage::Compute,
             crd::containers::StringView(full_hlsl.c_str(), full_hlsl.size()),
             crd::containers::StringView(spec.name),
             &alloc);
@@ -301,9 +301,9 @@ TEST_CASE("v9e-c HLSL ULP conformance: dxc-emitted SPIR-V matches evaluate() on 
         }
         REQUIRE(compiled.ok);
 
-        auto shader = device->create_shader_module(
-            {crd::rhi::ShaderStage::Compute, "cs_main",
-             crd::containers::ConstSpan<crd::u8>(compiled.spirv.data(), compiled.spirv.size())});
+        auto shader = device->create_program(
+            crd::rhi::ShaderStage::Compute,
+            crd::containers::ConstSpan<crd::u8>(compiled.spirv.data(), compiled.spirv.size()));
         REQUIRE(shader != nullptr);
 
         crd::rhi::DescriptorBinding binding{};
@@ -328,7 +328,7 @@ TEST_CASE("v9e-c HLSL ULP conformance: dxc-emitted SPIR-V matches evaluate() on 
         REQUIRE(pipeline_layout != nullptr);
 
         crd::rhi::ComputePipelineDesc cpd{};
-        cpd.compute_shader  = shader.get();
+        cpd.compute_program  = shader.get();
         cpd.pipeline_layout = pipeline_layout.get();
         auto pipeline = device->create_compute_pipeline(cpd);
         REQUIRE(pipeline != nullptr);

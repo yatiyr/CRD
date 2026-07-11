@@ -26,6 +26,8 @@ target_link_libraries(crd-rhi-vulkan-tests PRIVATE
     crd-platform
     crd-rhi
     crd-rhi-vulkan
+    crd-gpu-context          # D-008 C2-b: create a VulkanGpuContext, adopt its device
+    crd-gpu-context-vulkan
     Catch2::Catch2WithMain
 )
 

@@ -34,6 +34,8 @@ target_link_libraries(crd-rhi-vulkan
         crd-perf   # v0d profiler GPU backend (VulkanProfilerBackend implements crd::perf::IProfilerGpuBackend)
     PRIVATE
         crd-memory   # ADR-0085 S6: GpuAllocator suballocates via crd::memory::OffsetAllocator
+        crd-gpu-context          # D-008 C2-b: IGpuContext / GpuBackend for create_vulkan_device_adopting
+        crd-gpu-context-vulkan   # D-008 C2-b: VulkanGpuContext handle extraction (acyclic — gpu-context is foundational)
         Vulkan::Vulkan
         glfw
 )

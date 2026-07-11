@@ -16,6 +16,7 @@
 namespace crd::rhi
 {
 [[nodiscard]] VkInstance vulkan_instance(Instance& instance) noexcept;
+[[nodiscard]] VkInstance vulkan_instance(Device& device) noexcept; // D-008 C2-c2: instance from a device (adopted path)
 [[nodiscard]] VkPhysicalDevice vulkan_physical_device(Device& device) noexcept;
 [[nodiscard]] VkDevice vulkan_device(Device& device) noexcept;
 [[nodiscard]] VkQueue vulkan_graphics_queue(Device& device) noexcept;

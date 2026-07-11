@@ -120,14 +120,14 @@ ForwardRenderPath::get_or_compile_mat_pipelines(const MaterialInstance& mat)
     const crd::shader::ShaderResource* depth_vert_res = depth_pair.vert.get();
     if (depth_vert_res != nullptr && !depth_vert_res->spirv.empty())
     {
-        auto vert_mod = m_device->create_shader_module(
-            {rhi::ShaderStage::Vertex, "main",
-             crd::containers::make_span(depth_vert_res->spirv.data(), depth_vert_res->spirv.size())});
-        if (vert_mod)
+        // D-008 C2-d2: an OPAQUE program (via the adopted gpu-context) instead of a raw-SPIR-V ShaderModule (closes I2).
+        auto vert_prog = m_device->create_program(
+            rhi::ShaderStage::Vertex,
+            crd::containers::make_span(depth_vert_res->spirv.data(), depth_vert_res->spirv.size()));
+        if (vert_prog)
         {
             rhi::GraphicsPipelineDesc desc;
-            desc.vertex_shader        = vert_mod.get();
-            desc.fragment_shader      = nullptr;
+            desc.vertex_program       = vert_prog.get();
             desc.topology             = rhi::PrimitiveTopology::TriangleList;
             desc.viewport_extent      = m_extent;
             desc.color_format         = rhi::Format::Undefined;
@@ -155,17 +155,18 @@ ForwardRenderPath::get_or_compile_mat_pipelines(const MaterialInstance& mat)
     if (color_vert_res != nullptr && !color_vert_res->spirv.empty() &&
         color_frag_res != nullptr && !color_frag_res->spirv.empty())
     {
-        auto vert_mod = m_device->create_shader_module(
-            {rhi::ShaderStage::Vertex, "main",
-             crd::containers::make_span(color_vert_res->spirv.data(), color_vert_res->spirv.size())});
-        auto frag_mod = m_device->create_shader_module(
-            {rhi::ShaderStage::Fragment, "main",
-             crd::containers::make_span(color_frag_res->spirv.data(), color_frag_res->spirv.size())});
-        if (vert_mod && frag_mod)
+        // D-008 C2-d2: OPAQUE programs (via the adopted gpu-context) instead of raw-SPIR-V ShaderModules (closes I2).
+        auto vert_prog = m_device->create_program(
+            rhi::ShaderStage::Vertex,
+            crd::containers::make_span(color_vert_res->spirv.data(), color_vert_res->spirv.size()));
+        auto frag_prog = m_device->create_program(
+            rhi::ShaderStage::Fragment,
+            crd::containers::make_span(color_frag_res->spirv.data(), color_frag_res->spirv.size()));
+        if (vert_prog && frag_prog)
         {
             rhi::GraphicsPipelineDesc desc;
-            desc.vertex_shader        = vert_mod.get();
-            desc.fragment_shader      = frag_mod.get();
+            desc.vertex_program       = vert_prog.get();
+            desc.fragment_program     = frag_prog.get();
             desc.topology             = rhi::PrimitiveTopology::TriangleList;
             desc.viewport_extent      = m_extent;
             desc.color_format         = rhi::Format::B8G8R8A8Unorm;

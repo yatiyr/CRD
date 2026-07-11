@@ -151,10 +151,15 @@ bool KirBackendCuda::run(const KGraph& g, int output, const float* const* inputs
     crd::u64   in_bytes[kMaxIn] = {};
     crd::u64   out_bytes        = 0;
     crd::u32   groups           = 0;
-    crd::u32   d0 = 0, d1 = 0, d2 = 0, d3 = 0; // scalar kernel args (n / M,K,N,batch / nout,redsize)
+    crd::u32   d0 = 0; // scalar kernel args (n / M,K,N,batch / nout,redsize)
+    crd::u32   d1 = 0;
+    crd::u32   d2 = 0;
+    crd::u32   d3 = 0;
     bool       tiled = false;                  // WarpTiled Contract schedule chosen (2D grid, M,N,K arg order)
     bool       fused = false;                  // GEMM+epilogue fusion chosen (extra bias params, epilogue in the store)
-    crd::u32   tgx = 0, tgy = 0, tbx = 0;
+    crd::u32   tgx = 0;
+    crd::u32   tgy = 0;
+    crd::u32   tbx = 0;
 
     // FUSION FIRST: if the output is an elementwise epilogue over a WarpTiled-eligible Contract, compile it to ONE
     // fused kernel (bias+activation in the C write — the structural crush the vendor can't fuse). Else fall through.
@@ -266,6 +271,17 @@ bool KirBackendCuda::run(const KGraph& g, int output, const float* const* inputs
         out_bytes              = numel * sizeof(float);          // scan KEEPS the shape
         groups                 = fast ? d0 : (d0 + 255U) / 256U; // T2: 1 block/row
     }
+    // B0 fan-out: a graph carrying vec/mat/bool/struct VALUES routes to the SCALARIZING emitter (interleaved I/O:
+    // `comps` floats per element). CUDA has no native vector arithmetic, so each value becomes `comps` scalar temps.
+    else if (graph_uses_vec(g, output, impl.alloc))
+    {
+        if (!emit_vec_cuda(g, output, impl.alloc, kern) || kern.n_inputs != n_inputs) { return false; }
+        const crd::u64 on = static_cast<crd::u64>(outn.shape.numel());
+        d0                = static_cast<crd::u32>(on); // n
+        for (int i = 0; i < n_inputs; ++i) { in_bytes[i] = on * static_cast<crd::u64>(kern.in_comps[i]) * sizeof(float); }
+        out_bytes = on * static_cast<crd::u64>(kern.out_comps) * sizeof(float);
+        groups    = (static_cast<crd::u32>(on) + 255U) / 256U;
+    }
     else
     {
         if (!emit_elementwise_cuda(g, output, impl.alloc, kern) || kern.n_inputs != n_inputs) { return false; }
@@ -331,10 +347,8 @@ bool KirBackendCuda::run(const KGraph& g, int output, const float* const* inputs
         {
             params[np++] = &d0;
             if (outn.op == KOp::Contract) { params[np++] = &d1; params[np++] = &d2; params[np++] = &d3; }
-            else if (is_reduce(outn.op)) { params[np++] = &d1; }
-            else if (outn.op == KOp::Gather) { params[np++] = &d1; }
             else if (outn.op == KOp::Scatter) { params[np++] = &d1; params[np++] = &d2; }
-            else if (outn.op == KOp::ScanSum) { params[np++] = &d1; }
+            else if (is_reduce(outn.op) || outn.op == KOp::Gather || outn.op == KOp::ScanSum) { params[np++] = &d1; } // these three take just the row size
         }
     }
     const crd::u32 gx = tiled ? tgx : groups;

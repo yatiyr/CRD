@@ -1,3 +1,4 @@
+#include <crd/gpu/program.hpp> // D-008 C2-d4: opaque IGpuProgram
 #include <crd/rhi/rhi.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -31,16 +32,16 @@ private:
     crd::containers::Array<crd::u8> m_storage{};
 };
 
-class FakeShaderModule final : public crd::rhi::ShaderModule
+// D-008 C2-d4: shaders are opaque `crd::gpu::IGpuProgram`s (ShaderModule retired). The mock returns a trivial program.
+class FakeProgram final : public crd::gpu::IGpuProgram
 {
 public:
-    explicit FakeShaderModule(crd::rhi::ShaderModuleDesc desc) : m_stage(desc.stage), m_entry_point(desc.entry_point) {}
-    [[nodiscard]] crd::rhi::ShaderStage stage() const noexcept override { return m_stage; }
-    [[nodiscard]] crd::containers::StringView entry_point() const noexcept override { return m_entry_point; }
+    explicit FakeProgram(crd::gpu::ShaderStage stage) noexcept : m_stage(stage) {}
+    [[nodiscard]] bool                  valid() const noexcept override { return true; }
+    [[nodiscard]] crd::gpu::ShaderStage stage() const noexcept override { return m_stage; }
 
 private:
-    crd::rhi::ShaderStage m_stage = crd::rhi::ShaderStage::Vertex;
-    crd::containers::String m_entry_point{};
+    crd::gpu::ShaderStage m_stage = crd::gpu::ShaderStage::Vertex;
 };
 
 class FakePipeline final : public crd::rhi::Pipeline
@@ -383,11 +384,14 @@ public:
         return std::make_unique<FakeImage>(desc);
     }
 
-    [[nodiscard]] std::unique_ptr<crd::rhi::ShaderModule>
-    create_shader_module(const crd::rhi::ShaderModuleDesc& desc) override
+    [[nodiscard]] std::unique_ptr<crd::gpu::IGpuProgram>
+    create_program(crd::rhi::ShaderStage stage, crd::containers::ConstSpan<crd::u8> /*spirv*/) override
     {
-        ++create_shader_module_count;
-        return std::make_unique<FakeShaderModule>(desc);
+        ++create_program_count;
+        crd::gpu::ShaderStage s = crd::gpu::ShaderStage::Compute;
+        if (stage == crd::rhi::ShaderStage::Vertex) { s = crd::gpu::ShaderStage::Vertex; }
+        else if (stage == crd::rhi::ShaderStage::Fragment) { s = crd::gpu::ShaderStage::Fragment; }
+        return std::make_unique<FakeProgram>(s);
     }
 
     [[nodiscard]] std::unique_ptr<crd::rhi::Pipeline>
@@ -456,7 +460,7 @@ public:
     int create_swapchain_count = 0;
     int create_buffer_count = 0;
     int create_image_count = 0;
-    int create_shader_module_count = 0;
+    int create_program_count = 0;
     int create_pipeline_count = 0;
     int create_compute_pipeline_count = 0;
     int create_command_buffer_count = 0;
@@ -642,9 +646,9 @@ TEST_CASE("RHI device can express the first-triangle resource flow", "[rhi][devi
 
     crd::u8 shader_code[] = {0x03, 0x02, 0x23, 0x07};
     auto vs =
-        device.create_shader_module({crd::rhi::ShaderStage::Vertex, "main", crd::containers::make_span(shader_code)});
+        device.create_program(crd::rhi::ShaderStage::Vertex, crd::containers::make_span(shader_code));
     auto fs =
-        device.create_shader_module({crd::rhi::ShaderStage::Fragment, "main", crd::containers::make_span(shader_code)});
+        device.create_program(crd::rhi::ShaderStage::Fragment, crd::containers::make_span(shader_code));
     auto vb = device.create_buffer(
         {sizeof(float) * 18U, static_cast<crd::u32>(crd::rhi::BufferUsage::Vertex | crd::rhi::BufferUsage::TransferDst),
          crd::rhi::MemoryUsage::CpuToGpu});
@@ -682,7 +686,7 @@ TEST_CASE("RHI device can express the first-triangle resource flow", "[rhi][devi
     REQUIRE(device.graphics_queue().submit(*command_buffer, *swapchain));
     device.graphics_queue().present(*swapchain);
 
-    REQUIRE(device.create_shader_module_count == 2);
+    REQUIRE(device.create_program_count == 2);
     REQUIRE(device.create_buffer_count == 1);
     REQUIRE(device.create_pipeline_count == 1);
     REQUIRE(device.create_command_buffer_count == 1);
@@ -784,7 +788,7 @@ TEST_CASE("ComputePipelineDesc has narrow, compute-only surface", "[rhi][compute
     // vertex input, no viewport, no raster — none of those have meaning
     // for compute. This test pins the surface against accidental drift.
     crd::rhi::ComputePipelineDesc desc{};
-    REQUIRE(desc.compute_shader == nullptr);
+    REQUIRE(desc.compute_program == nullptr);
     REQUIRE(desc.pipeline_layout == nullptr);
     // Spec-const fields (v0b) are empty by default. The struct stays narrow:
     // no vertex input / no viewport / no raster — those don't apply to compute.
@@ -797,17 +801,16 @@ TEST_CASE("Device::create_compute_pipeline factory contract", "[rhi][compute][v0
     FakeDevice device{};
     REQUIRE(device.create_compute_pipeline_count == 0);
 
-    auto shader = device.create_shader_module(
-        {crd::rhi::ShaderStage::Compute, "main", {}});
+    auto shader = device.create_program(crd::rhi::ShaderStage::Compute, {});
     REQUIRE(shader != nullptr);
 
     crd::rhi::ComputePipelineDesc desc{};
-    desc.compute_shader = shader.get();
+    desc.compute_program = shader.get();
     auto pipeline = device.create_compute_pipeline(desc);
 
     REQUIRE(pipeline != nullptr);
     REQUIRE(device.create_compute_pipeline_count == 1);
-    CHECK(pipeline->desc().compute_shader == shader.get());
+    CHECK(pipeline->desc().compute_program == shader.get());
 }
 
 TEST_CASE("ComputePipeline lifecycle: multi-create then destroy clean", "[rhi][compute][v0a]")
@@ -819,10 +822,9 @@ TEST_CASE("ComputePipeline lifecycle: multi-create then destroy clean", "[rhi][c
     constexpr int k_cycles = 8;
     for (int i = 0; i < k_cycles; ++i)
     {
-        auto shader = device.create_shader_module(
-            {crd::rhi::ShaderStage::Compute, "main", {}});
+        auto shader = device.create_program(crd::rhi::ShaderStage::Compute, {});
         crd::rhi::ComputePipelineDesc desc{};
-        desc.compute_shader = shader.get();
+        desc.compute_program = shader.get();
         auto pipeline = device.create_compute_pipeline(desc);
         REQUIRE(pipeline != nullptr);
     } // RAII: pipeline + shader destroyed each iteration
@@ -854,10 +856,9 @@ TEST_CASE("ComputePipeline + PipelineLayout caller-side composition", "[rhi][com
     auto layout = device.create_pipeline_layout(layout_desc);
     REQUIRE(layout != nullptr);
 
-    auto shader = device.create_shader_module(
-        {crd::rhi::ShaderStage::Compute, "main", {}});
+    auto shader = device.create_program(crd::rhi::ShaderStage::Compute, {});
     crd::rhi::ComputePipelineDesc desc{};
-    desc.compute_shader = shader.get();
+    desc.compute_program = shader.get();
     desc.pipeline_layout = layout.get();
     auto pipeline = device.create_compute_pipeline(desc);
 
@@ -886,10 +887,9 @@ TEST_CASE("bind_compute_pipeline + bind_compute_descriptor_sets dispatch through
     REQUIRE(cmd_raw != nullptr);
 
     auto layout = device.create_pipeline_layout({});
-    auto shader = device.create_shader_module(
-        {crd::rhi::ShaderStage::Compute, "main", {}});
+    auto shader = device.create_program(crd::rhi::ShaderStage::Compute, {});
     crd::rhi::ComputePipelineDesc desc{};
-    desc.compute_shader = shader.get();
+    desc.compute_program = shader.get();
     auto pipeline = device.create_compute_pipeline(desc);
     REQUIRE(pipeline != nullptr);
 
@@ -945,13 +945,12 @@ TEST_CASE("SpecializationConstantEntry mirrors VkSpecializationMapEntry shape (D
 TEST_CASE("ComputePipelineDesc accepts specialization constants (D6 type plumbing)", "[rhi][compute][v0b]")
 {
     FakeDevice device{};
-    auto shader = device.create_shader_module(
-        {crd::rhi::ShaderStage::Compute, "main", {}});
+    auto shader = device.create_program(crd::rhi::ShaderStage::Compute, {});
 
     const crd::u32 spec_value = 1000;
     crd::rhi::SpecializationConstantEntry entry{0, 0, sizeof(crd::u32)};
     crd::rhi::ComputePipelineDesc desc{};
-    desc.compute_shader = shader.get();
+    desc.compute_program = shader.get();
     desc.specialization_entries =
         crd::containers::ConstSpan<crd::rhi::SpecializationConstantEntry>(&entry, 1);
     desc.specialization_data =

@@ -1,10 +1,11 @@
 # crd-kir tests — Phase 3.1.6 v17. Also the LINK-ISOLATION SMOKE (ADR-0098): links ONLY crd-kir (+ base substrate) —
-# a clean link proves the IR + CPU reference drag no GPU API (no vulkan.h symbol) into a consumer.
+# a clean link proves the IR + CPU reference drag no GPU API (no vulkan.h symbol) into a consumer. The GLSL-emitter
+# compile gate moved to tests/gpu-context-vulkan (ADR-0103: the shaderc compiler lives in the Vulkan backend now, which
+# links Vulkan — keeping it here would break this very isolation smoke).
 add_executable(crd-kir-tests
     test_ckir_graph.cpp
     test_ckir_grad.cpp
     test_ckir_opt.cpp
-    test_ckir_glsl.cpp
     test_ckir_backend.cpp
     test_ckir_tile.cpp
     test_ckir_msl.cpp
@@ -16,7 +17,6 @@ target_link_libraries(crd-kir-tests PRIVATE
     crd-containers
     crd-memory
     crd-kir
-    crd-shader   # v17-b: compile the emitted GLSL to SPIR-V (validates the emitter without a GPU)
     Catch2::Catch2WithMain
 )
 

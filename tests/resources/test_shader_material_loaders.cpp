@@ -11,8 +11,8 @@
 #include <crd/resources/loader.hpp>
 #include <crd/resources/resource_handle.hpp>
 #include <crd/resources/resource_id.hpp>
+#include <crd/gpu/vulkan_shader_compile.hpp> // ADR-0103: GLSL→SPIR-V for the round-trip (was crd-shader::compile_glsl)
 #include <crd/resources/resource_manager.hpp>
-#include <crd/shader/compile.hpp>
 #include <crd/shader/shader_resource_loader.hpp>
 
 #include <cstring>
@@ -393,8 +393,8 @@ layout(location = 0) in vec3 inPos;
 void main() { gl_Position = vec4(inPos, 1.0); }
 )glsl";
 
-    crd::shader::CompileResult compiled = crd::shader::compile_glsl(
-        crd::shader::Stage::Vertex,
+    crd::gpu::ShaderCompileResult compiled = crd::gpu::compile_glsl_to_spirv(
+        crd::gpu::ShaderStage::Vertex,
         crd::containers::StringView(kSrc, std::strlen(kSrc)),
         "test_vert",
         &s_alloc);

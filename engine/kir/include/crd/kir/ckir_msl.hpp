@@ -22,6 +22,38 @@ inline void header(crd::containers::String& s)
 {
     s.append("#include <metal_stdlib>\nusing namespace metal;\n");
 }
+
+// MSL spells a matrix `floatCxR` -- COLUMNS first, like GLSL's `matCxR` and WGSL's `matCxR<f32>`, and unlike HLSL's
+// `floatRxC`. `m[col]` yields a column vector, so the flat column-major storage maps straight across.
+inline const char* mmat(int rows, int cols) noexcept
+{
+    switch (cols * 10 + rows)
+    {
+    case 22: return "float2x2"; case 23: return "float2x3"; case 24: return "float2x4";
+    case 32: return "float3x2"; case 33: return "float3x3"; case 34: return "float3x4";
+    case 42: return "float4x2"; case 43: return "float4x3"; case 44: return "float4x4";
+    default: return "float";
+    }
+}
+inline const char* mscalar(DType d) noexcept
+{
+    if (d == DType::Bool) { return "bool"; }
+    if (glsl_detail::dt_is_uint(d)) { return "uint"; }
+    return glsl_detail::dt_is_int(d) ? "int" : "float";
+}
+// MSL type name for a CKIR value type: float/int/uint/bool, floatN/intN/uintN/boolN, floatCxR.
+inline const char* mtype(KType t) noexcept
+{
+    if (t.kind == TKind::Mat) { return mmat(t.rows, t.cols); }
+    if (t.kind == TKind::Vec)
+    {
+        if (t.scalar == DType::Bool) { switch (t.rows) { case 2: return "bool2"; case 3: return "bool3"; case 4: return "bool4"; default: break; } }
+        else if (glsl_detail::dt_is_uint(t.scalar)) { switch (t.rows) { case 2: return "uint2"; case 3: return "uint3"; case 4: return "uint4"; default: break; } }
+        else if (glsl_detail::dt_is_int(t.scalar)) { switch (t.rows) { case 2: return "int2"; case 3: return "int3"; case 4: return "int4"; default: break; } }
+        else { switch (t.rows) { case 2: return "float2"; case 3: return "float3"; case 4: return "float4"; default: break; } }
+    }
+    return mscalar(t.scalar);
+}
 } // namespace msl_detail
 
 // Fused-elementwise MSL kernel (dims: pc.d0 = n).
@@ -77,6 +109,8 @@ inline bool emit_elementwise_msl(const KGraph& g, int output, crd::memory::IAllo
         {
         case KOp::Input: s.append("in"); app_uint(s, binding_of[static_cast<crd::usize>(i)]); s.append("[gid]"); break;
         case KOp::Const: app_flit(s, nd.cval); break;
+        // every temp here is float (bool lowers to 0.0/1.0), so a Cast is an explicit float conversion.
+        case KOp::Cast: s.append("float("); ta(nd.a); s.append(")"); break;
         case KOp::Neg: s.append("-"); ta(nd.a); break;
         case KOp::Recip: s.append("1.0/"); ta(nd.a); break;
         case KOp::Abs: s.append("abs("); ta(nd.a); s.append(")"); break;
@@ -108,6 +142,220 @@ inline bool emit_elementwise_msl(const KGraph& g, int output, crd::memory::IAllo
     s.append("  outb[gid] = t"); app_uint(s, output); s.append(";\n}\n");
     return true;
 }
+
+// ── B0 fan-out: the TYPE-AWARE vec/mat/bool/struct emitter, mirroring `emit_vec_glsl` ────────────────────────────────
+// MSL is a C++14 dialect, so it is the closest of the four to GLSL: native `float3`/`float3x3`/`bool3`, componentwise
+// relational operators yielding `boolN` (like HLSL, unlike GLSL), a real `?:`, and the same COLUMN-first `floatCxR`
+// matrix spelling as GLSL/WGSL. Its gaps: **no `inverse()`** and **no `outerProduct()`** (emitted helpers / column
+// construction), and no per-op `precise` — the Metal backend gets determinism from a compile flag (math-mode SAFE,
+// fast-math OFF), so there is no FMA fusion.
+// NOTE Metal cannot be compiled off macOS: this emitter is gated STRUCTURALLY in `tests/kir/test_ckir_msl.cpp`; the
+// compile + bit-exact run is ADR-0098 §3 v17-n on real Apple silicon (GitHub Actions).
+// NOLINTBEGIN(readability-function-size) -- one branch per KOp; see the same note on `eval_cpu` / `emit_vec_cuda`.
+inline bool emit_vec_msl(const KGraph& g, int output, crd::memory::IAllocator* scratch, GlslKernel& out)
+{
+    using namespace glsl_detail;
+    using msl_detail::mmat;
+    using msl_detail::mtype;
+    const int                       n = g.size();
+    crd::containers::Array<crd::u8> reach(scratch);
+    crd::containers::Array<int>     stk(scratch);
+    reach.resize(static_cast<crd::usize>(n), 0);
+    stk.push_back(output);
+    while (stk.size() > 0)
+    {
+        const int i = stk[stk.size() - 1];
+        stk.resize(stk.size() - 1);
+        if (i < 0 || reach[static_cast<crd::usize>(i)]) { continue; }
+        reach[static_cast<crd::usize>(i)] = 1;
+        const KNode& nd = g.node(i);
+        if (!is_vec_fusable(nd.op)) { return false; }
+        if (nd.op == KOp::For || nd.op == KOp::LoopIndex || nd.op == KOp::LoopAcc) { return false; } // dynamic control flow not mirrored yet — refuse loudly
+        if (nd.op == KOp::MatInverse && nd.type.rows == 4) { return false; }                          // mat4 inverse deferred, as on HLSL/WGSL/CUDA
+        if (nd.a >= 0) { stk.push_back(nd.a); }
+        if (nd.b >= 0) { stk.push_back(nd.b); }
+        if (nd.c >= 0) { stk.push_back(nd.c); }
+        if (nd.d >= 0) { stk.push_back(nd.d); }
+        for (int k = 0; k < static_cast<int>(nd.n_ext); ++k) { stk.push_back(g.ext_operand(nd, k)); }
+    }
+    crd::containers::Array<int> binding_of(scratch);
+    binding_of.resize(static_cast<crd::usize>(n), -1);
+    out.n_inputs = 0;
+    for (int i = 0; i < n; ++i)
+    {
+        if (!reach[static_cast<crd::usize>(i)]) { continue; }
+        if (g.node(i).op == KOp::Input)
+        {
+            binding_of[static_cast<crd::usize>(i)] = out.n_inputs;
+            out.input_iidx[out.n_inputs]           = g.node(i).iidx;
+            out.in_comps[out.n_inputs]             = g.node(i).comps();
+            ++out.n_inputs;
+        }
+    }
+    out.out_comps              = g.node(output).comps();
+    crd::containers::String& s = out.source;
+    s.clear();
+    msl_detail::header(s);
+    s.append("struct PC { uint d0; uint d1; uint d2; uint d3; };\n");
+    { // helpers, emitted once, only when the graph uses them
+        bool qm = false; bool qc = false; bool qr = false; bool qa = false; bool qt = false; bool sl = false;
+        bool iv2 = false; bool iv3 = false;
+        for (int i = 0; i < n; ++i)
+        {
+            if (!reach[static_cast<crd::usize>(i)]) { continue; }
+            switch (g.node(i).op)
+            {
+            case KOp::QuatMul: qm = true; break;
+            case KOp::QuatConj: qc = true; break;
+            case KOp::QuatRotate: qr = true; break;
+            case KOp::QuatAxisAngle: qa = true; break;
+            case KOp::QuatToMat3: qt = true; break;
+            case KOp::Slerp: sl = true; break;
+            case KOp::MatInverse: if (g.node(i).type.rows == 2) { iv2 = true; } else { iv3 = true; } break;
+            default: break;
+            }
+        }
+        if (qm) { s.append("static float4 crd_qmul(float4 a, float4 b) { return float4(a.w*b.xyz + b.w*a.xyz + cross(a.xyz, b.xyz), a.w*b.w - dot(a.xyz, b.xyz)); }\n"); }
+        if (qc) { s.append("static float4 crd_qconj(float4 q) { return float4(-q.xyz, q.w); }\n"); }
+        if (qr) { s.append("static float3 crd_qrot(float4 q, float3 v) { float3 t = 2.0 * cross(q.xyz, v); return v + q.w * t + cross(q.xyz, t); }\n"); }
+        if (qa) { s.append("static float4 crd_qaa(float3 ax, float an) { float h = an * 0.5; return float4(ax * sin(h), cos(h)); }\n"); }
+        if (qt) { s.append("static float3x3 crd_qmat(float4 q) { float x=q.x, y=q.y, z=q.z, w=q.w; return float3x3(1.0-2.0*(y*y+z*z), 2.0*(x*y+w*z), 2.0*(x*z-w*y), 2.0*(x*y-w*z), 1.0-2.0*(x*x+z*z), 2.0*(y*z+w*x), 2.0*(x*z+w*y), 2.0*(y*z-w*x), 1.0-2.0*(x*x+y*y)); }\n"); }
+        if (sl) { s.append("static float4 crd_slerp(float4 a, float4 b, float t) { float d = dot(a,b); float sg = 1.0; if (d < 0.0) { d = -d; sg = -1.0; } if (d > 0.9995) { return normalize(mix(a, sg*b, t)); } float th = acos(d); float sn = sin(th); return (sin((1.0-t)*th)*a + sin(t*th)*sg*b) / sn; }\n"); }
+        // m[col][row]: MSL indexes a matrix by COLUMN first, exactly like GLSL.
+        if (iv2) { s.append("static float2x2 crd_inv2(float2x2 m) { float iv = 1.0 / determinant(m); return float2x2(float2(m[1][1], -m[0][1]) * iv, float2(-m[1][0], m[0][0]) * iv); }\n"); }
+        if (iv3) { s.append("static float3x3 crd_inv3(float3x3 m) { float a=m[0][0], b=m[1][0], c=m[2][0], d=m[0][1], e=m[1][1], f=m[2][1], g0=m[0][2], h=m[1][2], i0=m[2][2]; float A=e*i0-f*h, B=-(d*i0-f*g0), C=d*h-e*g0; float iv = 1.0/(a*A + b*B + c*C); float D=-(b*i0-c*h), E=a*i0-c*g0, F=-(a*h-b*g0); float G=b*f-c*e, H=-(a*f-c*d), I=a*e-b*d; return float3x3(float3(A,B,C)*iv, float3(D,E,F)*iv, float3(G,H,I)*iv); }\n"); }
+    }
+    s.append("kernel void ckir(\n");
+    for (int b = 0; b < out.n_inputs; ++b) { s.append("  device const float* in"); app_uint(s, b); s.append(" [[buffer("); app_uint(s, b); s.append(")]],\n"); }
+    s.append("  device float* outb [[buffer("); app_uint(s, out.n_inputs); s.append(")]],\n");
+    s.append("  constant PC& pc [[buffer("); app_uint(s, out.n_inputs + 1); s.append(")]],\n");
+    s.append("  uint gid [[thread_position_in_grid]]) {\n  if (gid >= pc.d0) return;\n");
+
+    const char xyzw[4] = {'x', 'y', 'z', 'w'};
+    const auto ta      = [&](int id) { s.append("t"); app_uint(s, id); };
+    const auto sw1     = [&](int k) { const char b[2] = {xyzw[k], '\0'}; s.append(b); };
+
+    for (int i = 0; i < n; ++i)
+    {
+        if (!reach[static_cast<crd::usize>(i)]) { continue; }
+        const KNode& nd = g.node(i);
+        const int    c  = nd.comps();
+        // B0-4 SROA: the aggregate is never materialized; FieldGet/ArrayGet resolves to the field's temp.
+        if (nd.op == KOp::StructMake || nd.op == KOp::ArrayMake) { continue; }
+        if (nd.op == KOp::FieldGet || nd.op == KOp::ArrayGet)
+        {
+            const KNode& agg = g.node(nd.a);
+            if (agg.op != KOp::StructMake && agg.op != KOp::ArrayMake) { return false; }
+            s.append("  "); s.append(mtype(nd.type)); s.append(" t"); app_uint(s, i); s.append(" = "); ta(g.ext_operand(agg, nd.iidx)); s.append(";\n");
+            continue;
+        }
+        s.append("  "); s.append(mtype(nd.type)); s.append(" t"); app_uint(s, i); s.append(" = ");
+        switch (nd.op)
+        {
+        case KOp::Input: { const int bd = binding_of[static_cast<crd::usize>(i)]; if (c == 1) { s.append("in"); app_uint(s, bd); s.append("[gid]"); } else { s.append(mtype(nd.type)); s.append("("); for (int k = 0; k < c; ++k) { if (k) { s.append(", "); } s.append("in"); app_uint(s, bd); s.append("[gid*"); app_uint(s, c); s.append("+"); app_uint(s, k); s.append("]"); } s.append(")"); } break; } // MSL matrix ctors take column-major scalars — our flat layout
+        case KOp::Const:
+            if (nd.dtype() == DType::Bool) { s.append(nd.cval != 0.0 ? "true" : "false"); }
+            else if (dt_is_int(nd.dtype()) || dt_is_uint(nd.dtype())) { app_ilit(s, nd.cval); }
+            else { app_flit(s, nd.cval); }
+            break;
+        case KOp::Cast: s.append(mtype(nd.type)); s.append("("); ta(nd.a); s.append(")"); break;
+        case KOp::Neg: s.append("-"); ta(nd.a); break;
+        case KOp::Recip: s.append("(1.0 / "); ta(nd.a); s.append(")"); break;
+        case KOp::Abs: s.append("abs("); ta(nd.a); s.append(")"); break;
+        case KOp::Sqrt: s.append("sqrt("); ta(nd.a); s.append(")"); break;
+        case KOp::Rsqrt: s.append("rsqrt("); ta(nd.a); s.append(")"); break;
+        case KOp::Exp: s.append("exp("); ta(nd.a); s.append(")"); break;
+        case KOp::Log: s.append("log("); ta(nd.a); s.append(")"); break;
+        case KOp::Sin: s.append("sin("); ta(nd.a); s.append(")"); break;
+        case KOp::Cos: s.append("cos("); ta(nd.a); s.append(")"); break;
+        case KOp::Floor: s.append("floor("); ta(nd.a); s.append(")"); break;
+        case KOp::Fract: s.append("fract("); ta(nd.a); s.append(")"); break;
+        case KOp::Add: ta(nd.a); s.append(" + "); ta(nd.b); break;
+        case KOp::Sub: ta(nd.a); s.append(" - "); ta(nd.b); break;
+        case KOp::Mul: ta(nd.a); s.append(" * "); ta(nd.b); break;
+        case KOp::Div: ta(nd.a); s.append(" / "); ta(nd.b); break;
+        case KOp::Min: s.append("min("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
+        case KOp::Max: s.append("max("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
+        case KOp::Pow: s.append("pow("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
+        case KOp::Clamp: s.append("clamp("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(")"); break;
+        case KOp::Mix: s.append("mix("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(")"); break;
+        case KOp::Vec2: s.append("float2("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
+        case KOp::Vec3: s.append("float3("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(")"); break;
+        case KOp::VecConcat: s.append(mtype(nd.type)); s.append("("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
+        case KOp::VecComp: ta(nd.a); s.append("."); sw1(nd.iidx); break;
+        case KOp::Swizzle: ta(nd.a); s.append("."); for (int k = 0; k < c; ++k) { sw1(nd.perm[k]); } break;
+        case KOp::Splat: s.append(mtype(nd.type)); s.append("("); ta(nd.a); s.append(")"); break;
+        case KOp::Dot: s.append("dot("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
+        case KOp::Cross: s.append("cross("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
+        case KOp::Normalize: s.append("normalize("); ta(nd.a); s.append(")"); break;
+        case KOp::VecLen: s.append("length("); ta(nd.a); s.append(")"); break;
+        case KOp::Reflect: s.append("reflect("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
+        case KOp::Refract: s.append("refract("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(")"); break;
+        case KOp::Faceforward: s.append("faceforward("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(")"); break;
+        case KOp::MatVecMul: // MSL spells both as `*` (column-major), like GLSL
+        case KOp::MatMatMul: ta(nd.a); s.append(" * "); ta(nd.b); break;
+        case KOp::MatTranspose: s.append("transpose("); ta(nd.a); s.append(")"); break;
+        case KOp::Determinant: s.append("determinant("); ta(nd.a); s.append(")"); break;
+        case KOp::MatInverse: s.append(nd.type.rows == 2 ? "crd_inv2(" : "crd_inv3("); ta(nd.a); s.append(")"); break;
+        // MSL has no outerProduct(): column k of an RxC outer product is `a * b[k]`.
+        case KOp::OuterProduct: { const int oc = nd.type.cols; s.append(mmat(nd.type.rows, oc)); s.append("("); for (int k = 0; k < oc; ++k) { if (k) { s.append(", "); } ta(nd.a); s.append(" * "); ta(nd.b); s.append("."); sw1(k); } s.append(")"); break; }
+        case KOp::MatFromCols: { const int mcols = nd.type.cols; const int operand[4] = {nd.a, nd.b, nd.c, nd.d}; s.append(mtype(nd.type)); s.append("("); for (int k = 0; k < mcols; ++k) { if (k) { s.append(", "); } ta(operand[k]); } s.append(")"); break; }
+        case KOp::VecAny: if (g.node(nd.a).dtype() == DType::Bool) { s.append("any("); ta(nd.a); s.append(")"); } else { s.append("any("); ta(nd.a); s.append(" != "); s.append(mtype(g.node(nd.a).type)); s.append("(0.0))"); } break;
+        case KOp::VecAll: if (g.node(nd.a).dtype() == DType::Bool) { s.append("all("); ta(nd.a); s.append(")"); } else { s.append("all("); ta(nd.a); s.append(" != "); s.append(mtype(g.node(nd.a).type)); s.append("(0.0))"); } break;
+        // MSL relational operators are componentwise on vectors and already yield boolN (like HLSL, unlike GLSL).
+        case KOp::CmpLt: s.append("("); ta(nd.a); s.append(" < "); ta(nd.b); s.append(")"); break;
+        case KOp::CmpLe: s.append("("); ta(nd.a); s.append(" <= "); ta(nd.b); s.append(")"); break;
+        case KOp::CmpGt: s.append("("); ta(nd.a); s.append(" > "); ta(nd.b); s.append(")"); break;
+        case KOp::CmpGe: s.append("("); ta(nd.a); s.append(" >= "); ta(nd.b); s.append(")"); break;
+        case KOp::CmpEq: s.append("("); ta(nd.a); s.append(" == "); ta(nd.b); s.append(")"); break;
+        case KOp::CmpNe: s.append("("); ta(nd.a); s.append(" != "); ta(nd.b); s.append(")"); break;
+        case KOp::Select: s.append("("); if (g.node(nd.c).dtype() == DType::Bool) { ta(nd.c); } else { s.append("("); ta(nd.c); s.append(" != 0.0)"); } s.append(" ? "); ta(nd.a); s.append(" : "); ta(nd.b); s.append(")"); break;
+        case KOp::Slerp: s.append("crd_slerp("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(")"); break;
+        case KOp::QuatMul: s.append("crd_qmul("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
+        case KOp::QuatConj: s.append("crd_qconj("); ta(nd.a); s.append(")"); break;
+        case KOp::QuatRotate: s.append("crd_qrot("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
+        case KOp::QuatAxisAngle: s.append("crd_qaa("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
+        case KOp::QuatToMat3: s.append("crd_qmat("); ta(nd.a); s.append(")"); break;
+        default: return false;
+        }
+        s.append(";\n");
+    }
+
+    const KType& oty = g.node(output).type;
+    const int    oc  = out.out_comps;
+    if (oty.kind == TKind::Mat)
+    {
+        for (int col = 0; col < oty.cols; ++col)
+        {
+            for (int row = 0; row < oty.rows; ++row)
+            {
+                s.append("  outb[gid*"); app_uint(s, oc); s.append("+"); app_uint(s, col * oty.rows + row); s.append("] = t"); app_uint(s, output); s.append("["); app_uint(s, col); s.append("]["); app_uint(s, row); s.append("];\n");
+            }
+        }
+    }
+    else if (oc == 1)
+    {
+        s.append("  outb[gid] = ");
+        if (oty.scalar == DType::Bool) { s.append("(t"); app_uint(s, output); s.append(" ? 1.0 : 0.0)"); }
+        else if (oty.scalar != DType::F32 && oty.scalar != DType::F64) { s.append("float(t"); app_uint(s, output); s.append(")"); }
+        else { s.append("t"); app_uint(s, output); }
+        s.append(";\n");
+    }
+    else
+    {
+        for (int k = 0; k < oc; ++k)
+        {
+            s.append("  outb[gid*"); app_uint(s, oc); s.append("+"); app_uint(s, k); s.append("] = ");
+            if (oty.scalar == DType::Bool) { s.append("(t"); app_uint(s, output); s.append("["); app_uint(s, k); s.append("] ? 1.0 : 0.0)"); }
+            else if (oty.scalar != DType::F32 && oty.scalar != DType::F64) { s.append("float(t"); app_uint(s, output); s.append("["); app_uint(s, k); s.append("])"); }
+            else { s.append("t"); app_uint(s, output); s.append("["); app_uint(s, k); s.append("]"); }
+            s.append(";\n");
+        }
+    }
+    s.append("}\n");
+    return true;
+}
+// NOLINTEND(readability-function-size)
 
 // Batched-matmul MSL kernel (dims d0=M, d1=K, d2=N, d3=nbatch).
 inline bool emit_contract_msl(const KGraph& g, int output, GlslKernel& out)

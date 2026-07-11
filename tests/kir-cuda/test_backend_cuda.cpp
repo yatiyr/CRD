@@ -236,8 +236,8 @@ TEST_CASE("v17-breadth: CUDA floor/ceil/sign/cmpeq/cmple bit-match the CPU oracl
     const int uc  = g.unary(kir::KOp::Ceil, x);
     const int us  = g.unary(kir::KOp::Sign, y);
     const int ut  = g.unary(kir::KOp::Trunc, y);
-    const int be  = g.binary(kir::KOp::CmpEq, x, y);
-    const int bl  = g.binary(kir::KOp::CmpLe, x, y);
+    const int be  = g.cast(g.binary(kir::KOp::CmpEq, x, y), kir::DType::F32); // B0-3: bool -> float before arithmetic
+    const int bl  = g.cast(g.binary(kir::KOp::CmpLe, x, y), kir::DType::F32);
     const int out = g.binary(kir::KOp::Add, g.binary(kir::KOp::Add, g.binary(kir::KOp::Add, g.binary(kir::KOp::Add, uf, uc), g.binary(kir::KOp::Add, us, be)), bl), ut);
 
     float xv[kN];
@@ -434,4 +434,178 @@ TEST_CASE("v17-perf: CUDA T2 fast parallel scan matches T1 oracle + deterministi
     REQUIRE(cpu.run(g, s2, inputs, 1, co.data())); // T1 fixed-order oracle == exact for integer inputs
     REQUIRE(be.run(g, s2, inputs, 1, g2.data()));
     for (int i = 0; i < rows * nlen; ++i) { CHECK(g1[i] == co[i]); CHECK(g1[i] == g2[i]); } // T2 correct + run-to-run deterministic
+}
+
+// ── B0 fan-out (2026-07-10): the type layer on CUDA, by SCALARIZATION ────────────────────────────────────────────────
+// CUDA has NO native vector arithmetic (`float3` carries no operators) and no matrix type, so a value of `comps`
+// components becomes `comps` scalar temps and every op is emitted componentwise. The backend compiles with
+// `--fmad=false --prec-div=true --prec-sqrt=true`, so no FMA contraction occurs.
+//
+// ★ These assert BIT-EXACTNESS (`==`) against the CPU oracle — the strongest gate any backend has. It is possible
+// because (a) `ckir_eval` now rounds EVERY elementary IEEE op to the node dtype (the 2026-07-10 f32-faithfulness fix;
+// before it, the oracle accumulated vec/mat ops in f64 and was ~1 ULP *more accurate* than any f32 kernel), and
+// (b) the scalarized CUDA emitter writes those same elementary ops, in the same order, with `--fmad=false`.
+// GLSL/HLSL/WGSL cannot yet be gated this way: their `dot()`/`normalize()`/`inverse()` builtins have
+// implementation-defined internal order, so those suites stay ULP-tolerant until ADR-0098 §5's `float_controls` audit.
+TEST_CASE("v17 B0 fan-out: CUDA vec3/mat3 value layer is BIT-EXACT vs the CPU oracle (scalarized)", "[kir][cuda][gpu][typelayer]")
+{
+    crd::memory::TlsfAllocator alloc(32U << 20U);
+    kir::KirBackendCuda        be(&alloc);
+    if (!be.valid()) { WARN("no CUDA device available; skipping"); return; }
+    kir::KirBackendCpu cpu(&alloc);
+
+    constexpr int    vn = 128;
+    const kir::Shape sh = kir::make_shape({vn});
+
+    { // vec3: cross + add + normalize -- normalize divides by the length, exactly as the oracle does
+        kir::KGraph g(&alloc);
+        const int   a = g.input_vec(sh, kir::DType::F32, 3);
+        const int   b = g.input_vec(sh, kir::DType::F32, 3);
+        const int   o = g.normalize(g.binary(kir::KOp::Add, g.cross(a, b), a));
+
+        float av[vn * 3];
+        float bv[vn * 3];
+        for (int i = 0; i < vn; ++i)
+        {
+            const float fi = static_cast<float>(i);
+            av[i * 3] = 0.5F + 0.03F * fi;  av[i * 3 + 1] = 1.0F - 0.02F * fi;  av[i * 3 + 2] = 0.2F + 0.01F * fi;
+            bv[i * 3] = -0.4F + 0.02F * fi; bv[i * 3 + 1] = 0.7F + 0.015F * fi; bv[i * 3 + 2] = 0.9F - 0.01F * fi;
+        }
+        const float* inputs[] = {av, bv};
+        float        gpu[vn * 3];
+        float        ref[vn * 3];
+        REQUIRE(be.run(g, o, inputs, 2, gpu));
+        REQUIRE(cpu.run(g, o, inputs, 2, ref));
+        // cross + add + normalize: sums of products, a sqrt and a divide — every one now rounded per step by the oracle
+        for (int i = 0; i < vn * 3; ++i) { CHECK(gpu[i] == ref[i]); }
+    }
+
+    { // mat3 from columns + mat*vec: an accumulating op, and now bit-exact (oracle rounds each multiply-add)
+        kir::KGraph g(&alloc);
+        const int   c0  = g.input_vec(sh, kir::DType::F32, 3);
+        const int   c1  = g.input_vec(sh, kir::DType::F32, 3);
+        const int   c2  = g.input_vec(sh, kir::DType::F32, 3);
+        const int   vv  = g.input_vec(sh, kir::DType::F32, 3);
+        const int   mv  = g.mat_mul_vec(g.mat3(c0, c1, c2), vv);
+
+        float c0d[vn * 3];
+        float c1d[vn * 3];
+        float c2d[vn * 3];
+        float vd[vn * 3];
+        for (int i = 0; i < vn; ++i)
+        {
+            const float fi = static_cast<float>(i);
+            c0d[i * 3] = 3.0F + 0.01F * fi; c0d[i * 3 + 1] = 0.2F;              c0d[i * 3 + 2] = 0.1F;
+            c1d[i * 3] = 0.1F;              c1d[i * 3 + 1] = 4.0F - 0.01F * fi; c1d[i * 3 + 2] = 0.2F;
+            c2d[i * 3] = 0.2F;              c2d[i * 3 + 1] = 0.1F;              c2d[i * 3 + 2] = 5.0F + 0.005F * fi;
+            vd[i * 3]  = 0.5F * fi - 2.0F;  vd[i * 3 + 1]  = 1.0F + 0.1F * fi;  vd[i * 3 + 2]  = -0.3F * fi + 1.0F;
+        }
+        const float* inputs[] = {c0d, c1d, c2d, vd};
+        float        gpu[vn * 3];
+        float        ref[vn * 3];
+        REQUIRE(be.run(g, mv, inputs, 4, gpu));
+        REQUIRE(cpu.run(g, mv, inputs, 4, ref));
+        for (int i = 0; i < vn * 3; ++i) { CHECK(gpu[i] == ref[i]); } // ascending-order accumulation, rounded per step
+    }
+
+    { // (M * inverse(M)) * v ~= v  -- the emitted cofactor inverse mirrors ckir_eval's minor/sign ordering
+        kir::KGraph g(&alloc);
+        const int   c0  = g.input_vec(sh, kir::DType::F32, 3);
+        const int   c1  = g.input_vec(sh, kir::DType::F32, 3);
+        const int   c2  = g.input_vec(sh, kir::DType::F32, 3);
+        const int   vv  = g.input_vec(sh, kir::DType::F32, 3);
+        const int   mat = g.mat3(c0, c1, c2);
+        const int   pv  = g.mat_mul_vec(g.mat_mul(mat, g.mat_inverse(mat)), vv);
+
+        float c0d[vn * 3];
+        float c1d[vn * 3];
+        float c2d[vn * 3];
+        float vd[vn * 3];
+        for (int i = 0; i < vn; ++i)
+        {
+            const float fi = static_cast<float>(i);
+            c0d[i * 3] = 3.0F + 0.01F * fi; c0d[i * 3 + 1] = 0.2F;              c0d[i * 3 + 2] = 0.1F;
+            c1d[i * 3] = 0.1F;              c1d[i * 3 + 1] = 4.0F - 0.01F * fi; c1d[i * 3 + 2] = 0.2F;
+            c2d[i * 3] = 0.2F;              c2d[i * 3 + 1] = 0.1F;              c2d[i * 3 + 2] = 5.0F + 0.005F * fi;
+            vd[i * 3]  = 0.5F * fi - 2.0F;  vd[i * 3 + 1]  = 1.0F + 0.1F * fi;  vd[i * 3 + 2]  = -0.3F * fi + 1.0F;
+        }
+        const float* inputs[] = {c0d, c1d, c2d, vd};
+        float        gpu[vn * 3];
+        REQUIRE(be.run(g, pv, inputs, 4, gpu));
+        int bad = 0;
+        for (int i = 0; i < vn * 3; ++i) { const float d = gpu[i] - vd[i]; const float ad = d < 0.0F ? -d : d; const float av = vd[i] < 0.0F ? -vd[i] : vd[i]; if (ad > 1e-3F * av + 1e-3F) { ++bad; } }
+        CHECK(bad == 0);
+    }
+}
+
+// bvec + struct SROA on CUDA. Scalarization makes aggregates free: a FieldGet resolves a component index back to its
+// producing scalar at emit time, so nothing is materialized and nothing is copied.
+TEST_CASE("v17 B0 fan-out: CUDA bvec3 (any/all) + Light-struct SROA vs the CPU oracle", "[kir][cuda][gpu][typelayer]")
+{
+    crd::memory::TlsfAllocator alloc(32U << 20U);
+    kir::KirBackendCuda        be(&alloc);
+    if (!be.valid()) { WARN("no CUDA device available; skipping"); return; }
+    kir::KirBackendCpu cpu(&alloc);
+
+    constexpr int    bn = 128;
+    const kir::Shape sh = kir::make_shape({bn});
+
+    {
+        kir::KGraph g(&alloc);
+        const int   av = g.input_vec(sh, kir::DType::F32, 3);
+        const int   bv = g.input_vec(sh, kir::DType::F32, 3);
+        const int   lt = g.binary(kir::KOp::CmpLt, av, bv); // per-component bool temps
+        const int   an = g.vany(lt);
+        const int   al = g.vall(lt);
+        REQUIRE(g.node(lt).type.scalar == kir::DType::Bool);
+
+        float avd[bn * 3];
+        float bvd[bn * 3];
+        for (int i = 0; i < bn; ++i)
+        {
+            const float fi = static_cast<float>(i);
+            avd[i * 3] = fi - 64.0F; avd[i * 3 + 1] = 1.0F; avd[i * 3 + 2] = (i % 2 == 0) ? -1.0F : 5.0F;
+            bvd[i * 3] = 0.0F;       bvd[i * 3 + 1] = 2.0F; bvd[i * 3 + 2] = 0.0F;
+        }
+        const float* inputs[] = {avd, bvd};
+        float        gan[bn];
+        float        gal[bn];
+        float        ran[bn];
+        float        ral[bn];
+        REQUIRE(be.run(g, an, inputs, 2, gan));
+        REQUIRE(be.run(g, al, inputs, 2, gal));
+        REQUIRE(cpu.run(g, an, inputs, 2, ran));
+        REQUIRE(cpu.run(g, al, inputs, 2, ral));
+        for (int i = 0; i < bn; ++i) { CHECK(gan[i] == ran[i]); CHECK(gal[i] == ral[i]); } // bool read-back is exact
+    }
+
+    { // struct Light { vec3 pos; float radius; vec3 color; } -> destructure -> color*radius + pos
+        kir::KGraph      g(&alloc);
+        const kir::KType fields[3] = {kir::KType::vec(kir::DType::F32, 3), kir::KType::make_scalar(kir::DType::F32),
+                                      kir::KType::vec(kir::DType::F32, 3)};
+        const int        light   = g.define_struct(fields, 3);
+        const int        pos     = g.input_vec(sh, kir::DType::F32, 3);
+        const int        rad     = g.input(sh, kir::DType::F32);
+        const int        col     = g.input_vec(sh, kir::DType::F32, 3);
+        const int        flds[3] = {pos, rad, col};
+        const int        lite    = g.struct_make(light, flds, 3);
+        const int        out = g.binary(kir::KOp::Add, g.binary(kir::KOp::Mul, g.field_get(lite, 2), g.splat(g.field_get(lite, 1), 3)), g.field_get(lite, 0));
+
+        float posd[bn * 3];
+        float radd[bn];
+        float cold[bn * 3];
+        for (int i = 0; i < bn; ++i)
+        {
+            const float fi = static_cast<float>(i);
+            posd[i * 3] = fi * 0.5F - 8.0F; posd[i * 3 + 1] = 1.0F - 0.1F * fi; posd[i * 3 + 2] = 0.25F * fi;
+            radd[i]     = 0.5F + 0.03F * fi;
+            cold[i * 3] = 0.1F * fi;        cold[i * 3 + 1] = 2.0F;             cold[i * 3 + 2] = -0.4F * fi;
+        }
+        const float* inputs[] = {posd, radd, cold};
+        float        gout[bn * 3];
+        float        rout[bn * 3];
+        REQUIRE(be.run(g, out, inputs, 3, gout));
+        REQUIRE(cpu.run(g, out, inputs, 3, rout));
+        for (int i = 0; i < bn * 3; ++i) { CHECK(gout[i] == rout[i]); } // bit-exact
+    }
 }

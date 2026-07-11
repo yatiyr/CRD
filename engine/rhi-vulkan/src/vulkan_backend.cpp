@@ -4,6 +4,7 @@
 #include <crd/log/log.hpp>
 #include <crd/memory/allocators/offset_allocator.hpp> // ADR-0085 S6: GPU suballocation kernel
 #include <crd/memory/construct.hpp>
+#include <crd/gpu/vulkan_context.hpp> // D-008 C2-b: adopt a VulkanGpuContext's device
 #include <crd/rhi/gpu_residency.hpp> // ADR-0085 S7: defrag + residency policy seams
 #include <crd/rhi/vulkan_backend.hpp>
 
@@ -1319,34 +1320,6 @@ crd::u64 VulkanAllocator::make_resident(Buffer& buffer)
     return relocate_buffer_pool(vb, MemoryUsage::GpuOnly);
 }
 
-class VulkanShaderModule final : public ShaderModule
-{
-public:
-    VulkanShaderModule(VkDevice device, ShaderModuleDesc desc, VkShaderModule module)
-        : m_device(device), m_stage(desc.stage), m_entry_point(desc.entry_point), m_module(module)
-    {
-    }
-
-    ~VulkanShaderModule() noexcept override
-    {
-        if (m_module != VK_NULL_HANDLE)
-        {
-            vkDestroyShaderModule(m_device, m_module, nullptr);
-            m_module = VK_NULL_HANDLE;
-        }
-    }
-
-    [[nodiscard]] ShaderStage stage() const noexcept override { return m_stage; }
-    [[nodiscard]] crd::containers::StringView entry_point() const noexcept override { return m_entry_point; }
-    [[nodiscard]] VkShaderModule handle() const noexcept { return m_module; }
-
-private:
-    VkDevice m_device = VK_NULL_HANDLE;
-    ShaderStage m_stage = ShaderStage::Vertex;
-    crd::containers::String m_entry_point{};
-    VkShaderModule m_module = VK_NULL_HANDLE;
-};
-
 class VulkanDescriptorSetLayout final : public DescriptorSetLayout
 {
 public:
@@ -2522,12 +2495,13 @@ class VulkanDevice final : public Device
 public:
     VulkanDevice(VkInstance instance, VkPhysicalDevice physical_device, VkDevice device, crd::u32 graphics_family_index,
                  crd::u32 compute_family_index, DeviceDesc desc, bool sync2_enabled,
-                 bool dynamic_rendering_enabled, bool shader_int64_enabled)
+                 bool dynamic_rendering_enabled, bool shader_int64_enabled, bool owns_device = true,
+                 crd::gpu::IGpuContext* gpu_context = nullptr)
         : m_instance(instance), m_physical_device(physical_device), m_device(device),
           m_graphics_family_index(graphics_family_index), m_compute_family_index(compute_family_index),
           m_desc(std::move(desc)), m_sync2_enabled(sync2_enabled),
           m_dynamic_rendering_enabled(dynamic_rendering_enabled),
-          m_shader_int64_enabled(shader_int64_enabled),
+          m_shader_int64_enabled(shader_int64_enabled), m_owns_device(owns_device), m_gpu_context(gpu_context),
           m_allocator(physical_device, device)
     {
         vkGetDeviceQueue(m_device, m_graphics_family_index, 0, &m_graphics_queue_handle);
@@ -2603,7 +2577,9 @@ public:
             // ~VulkanAllocator would otherwise run after vkDestroyDevice (member dtors
             // follow the dtor body) and free memory on a dead device.
             m_allocator.destroy_all();
-            vkDestroyDevice(m_device, nullptr);
+            // D-008 C2-b: an ADOPTED device belongs to the VulkanGpuContext — free OUR resources (pools, allocations)
+            // but never destroy the shared VkDevice/VkInstance; the context outlives this rhi Device.
+            if (m_owns_device) { vkDestroyDevice(m_device, nullptr); }
             m_device = VK_NULL_HANDLE;
         }
         if (m_surface != VK_NULL_HANDLE)
@@ -2614,6 +2590,7 @@ public:
     }
 
     [[nodiscard]] BackendApi api() const noexcept override { return BackendApi::Vulkan; }
+    [[nodiscard]] VkInstance instance() const noexcept { return m_instance; } // D-008 C2-c2: for the adopted path (ImGui)
     [[nodiscard]] VkPhysicalDevice physical_device() const noexcept { return m_physical_device; }
     [[nodiscard]] VkDevice handle() const noexcept { return m_device; }
     [[nodiscard]] VkQueue graphics_queue_handle() const noexcept { return m_graphics_queue_handle; }
@@ -2882,56 +2859,41 @@ public:
         return std::make_unique<VulkanImage>(m_device, desc, image, view, allocation, true, &m_allocator);
     }
 
-    [[nodiscard]] std::unique_ptr<ShaderModule> create_shader_module(const ShaderModuleDesc& desc) override
-    {
-        if (desc.code.empty() || (desc.code.size() % 4U) != 0U)
-        {
-            CRD_LOG_ERROR(detail::g_log_rhi_vulkan,
-                          "Shader module code must be non-empty SPIR-V with 4-byte alignment");
-            return nullptr;
-        }
-
-        VkShaderModuleCreateInfo create_info{};
-        create_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        create_info.codeSize = desc.code.size();
-        create_info.pCode = reinterpret_cast<const crd::u32*>(desc.code.data());
-
-        VkShaderModule module = VK_NULL_HANDLE;
-        if (!vk_ok(vkCreateShaderModule(m_device, &create_info, nullptr, &module), "vkCreateShaderModule"))
-        {
-            return nullptr;
-        }
-
-        return std::make_unique<VulkanShaderModule>(m_device, desc, module);
-    }
-
     [[nodiscard]] std::unique_ptr<Pipeline> create_graphics_pipeline(const GraphicsPipelineDesc& desc) override
     {
-        auto* vertex_shader = dynamic_cast<VulkanShaderModule*>(desc.vertex_shader);
-        if (vertex_shader == nullptr)
+        // D-008 C2-d4: a stage comes ONLY from the opaque `IGpuProgram` (ShaderModule retired — I2 closed). A program's
+        // entry point is always "main" (our emitted/cooked SPIR-V).
+        const auto resolve_module = [](crd::gpu::IGpuProgram* program) -> VkShaderModule {
+            auto* vk_prog = dynamic_cast<crd::gpu::VulkanGpuProgram*>(program);
+            return vk_prog != nullptr ? vk_prog->vk_module() : VK_NULL_HANDLE;
+        };
+
+        const char*    vs_entry  = "main";
+        VkShaderModule vs_module = resolve_module(desc.vertex_program);
+        if (vs_module == VK_NULL_HANDLE)
         {
-            CRD_LOG_ERROR(detail::g_log_rhi_vulkan,
-                          "Graphics pipeline requires a VulkanShaderModule-backed vertex shader");
+            CRD_LOG_ERROR(detail::g_log_rhi_vulkan, "Graphics pipeline requires a vertex_program (opaque IGpuProgram)");
             return nullptr;
         }
 
         // Fragment shader is optional: null means depth-only pipeline (no color output).
-        auto* fragment_shader = dynamic_cast<VulkanShaderModule*>(desc.fragment_shader);
+        const char*    fs_entry  = "main";
+        VkShaderModule fs_module = resolve_module(desc.fragment_program);
 
-        crd::u32 stage_count = 1;
+        crd::u32                        stage_count = 1;
         VkPipelineShaderStageCreateInfo shader_stages[2]{};
-        shader_stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        shader_stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
-        shader_stages[0].module = vertex_shader->handle();
-        shader_stages[0].pName = vertex_shader->entry_point().data();
+        shader_stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        shader_stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+        shader_stages[0].module = vs_module;
+        shader_stages[0].pName  = vs_entry;
 
-        if (fragment_shader != nullptr)
+        if (fs_module != VK_NULL_HANDLE)
         {
-            shader_stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-            shader_stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-            shader_stages[1].module = fragment_shader->handle();
-            shader_stages[1].pName = fragment_shader->entry_point().data();
-            stage_count = 2;
+            shader_stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            shader_stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+            shader_stages[1].module = fs_module;
+            shader_stages[1].pName  = fs_entry;
+            stage_count             = 2;
         }
 
         crd::containers::Array<VkVertexInputBindingDescription> binding_descs;
@@ -3107,17 +3069,18 @@ public:
     // create_graphics_pipeline pattern).
     [[nodiscard]] std::unique_ptr<ComputePipeline> create_compute_pipeline(const ComputePipelineDesc& desc) override
     {
-        auto* compute_shader = dynamic_cast<VulkanShaderModule*>(desc.compute_shader);
-        if (compute_shader == nullptr)
+        // D-008 C2-d4: the compute stage is an opaque `IGpuProgram` (ShaderModule retired — I2 closed).
+        auto* compute_program = dynamic_cast<crd::gpu::VulkanGpuProgram*>(desc.compute_program);
+        if (compute_program == nullptr)
         {
             CRD_LOG_ERROR(detail::g_log_rhi_vulkan,
-                          "Compute pipeline requires a VulkanShaderModule-backed compute shader");
+                          "Compute pipeline requires a Vulkan-backed compute_program (opaque IGpuProgram)");
             return nullptr;
         }
-        if (compute_shader->stage() != ShaderStage::Compute)
+        if (compute_program->stage() != crd::gpu::ShaderStage::Compute)
         {
             CRD_LOG_ERROR(detail::g_log_rhi_vulkan,
-                          "Compute pipeline shader module stage must be Compute");
+                          "Compute pipeline program stage must be Compute");
             return nullptr;
         }
 
@@ -3149,8 +3112,8 @@ public:
         VkPipelineShaderStageCreateInfo stage{};
         stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
         stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
-        stage.module = compute_shader->handle();
-        stage.pName  = compute_shader->entry_point().data();
+        stage.module = compute_program->vk_module();
+        stage.pName  = "main"; // our emitted/cooked SPIR-V always entry-points at "main"
 
         // Phase 3.1.7.6 v0b (ADR-0080 D6) — bake specialization constants
         // at create-time. Mapping entries + data are stack-local for the
@@ -3337,6 +3300,20 @@ public:
         return m_shader_int64_enabled;
     }
 
+    // D-008 C2-d4: mint an opaque IGpuProgram from cooked SPIR-V. An ADOPTED device delegates to its owning
+    // VulkanGpuContext; a STANDALONE device (bare VkDevice, no context) routes to the same `crd::gpu::make_vulkan_program`
+    // factory the context itself uses — so ADR-0103 program authoring stays in gpu-context-vulkan while every rhi device
+    // can mint programs (the currency that let `ShaderModule` retire).
+    [[nodiscard]] std::unique_ptr<crd::gpu::IGpuProgram>
+    create_program(ShaderStage stage, crd::containers::ConstSpan<crd::u8> spirv) override
+    {
+        crd::gpu::ShaderStage gpu_stage = crd::gpu::ShaderStage::Compute;
+        if (stage == ShaderStage::Vertex) { gpu_stage = crd::gpu::ShaderStage::Vertex; }
+        else if (stage == ShaderStage::Fragment) { gpu_stage = crd::gpu::ShaderStage::Fragment; }
+        if (m_gpu_context != nullptr) { return m_gpu_context->create_program(gpu_stage, spirv); }
+        return crd::gpu::make_vulkan_program(m_device, gpu_stage, spirv);
+    }
+
     // Phase 3.1.7 v9a-a-async-compute (2026-05-18). Routes by pointer-
     // identity per D9 contract: `&queue == &graphics_queue()` -> graphics
     // pool; `&queue == &compute_queue()` AND a dedicated compute pool
@@ -3404,6 +3381,8 @@ private:
     bool m_sync2_enabled = false;
     bool m_dynamic_rendering_enabled = false;
     bool m_shader_int64_enabled      = false; // Phase 3.1.7 v9a-60bit-gpu
+    bool m_owns_device               = true;  // D-008 C2-b: false ⇒ ADOPTED (the VulkanGpuContext owns the VkDevice)
+    crd::gpu::IGpuContext* m_gpu_context = nullptr; // D-008 C2-d2: the adopted context — create_program delegates here
     VulkanAllocator m_allocator;
     VkQueue m_graphics_queue_handle = VK_NULL_HANDLE;
     VkQueue m_compute_queue_handle = VK_NULL_HANDLE;
@@ -3793,6 +3772,25 @@ std::unique_ptr<Instance> create_vulkan_instance(const InstanceDesc& desc)
     return std::make_unique<VulkanInstance>(desc);
 }
 
+std::unique_ptr<Device> create_vulkan_device_adopting(crd::gpu::IGpuContext& context)
+{
+    if (context.backend() != crd::gpu::GpuBackend::Vulkan) { return nullptr; }
+    auto& vk = static_cast<crd::gpu::VulkanGpuContext&>(context);
+    if (!vk.graphics_capable() || vk.vk_device() == VK_NULL_HANDLE) { return nullptr; }
+
+    const crd::u32 graphics_family = vk.graphics_family();
+    // The gpu-context's dedicated compute family, or UINT32_MAX when it aliases graphics (VulkanDevice's contract).
+    const crd::u32 compute_family = (vk.compute_family() != graphics_family) ? vk.compute_family() : UINT32_MAX;
+
+    DeviceDesc desc{};
+    // A WINDOWED context (C2-c) matches rhi's own device: dynamic rendering + synchronization2 + fillModeNonSolid. A
+    // headless context leaves sync2 off (rhi's legacy-sync path). owns_device=false ⇒ never destroys the shared device.
+    return std::make_unique<VulkanDevice>(vk.vk_instance(), vk.vk_physical_device(), vk.vk_device(), graphics_family,
+                                          compute_family, desc, /*sync2_enabled*/ vk.render_capable(),
+                                          /*dynamic_rendering_enabled*/ true, vk.shader_int64(), /*owns_device*/ false,
+                                          /*gpu_context*/ &context);
+}
+
 crd::u32 vulkan_resident_block_count(const Device& device) noexcept
 {
     const auto* vk = dynamic_cast<const VulkanDevice*>(&device);
@@ -3897,6 +3895,15 @@ crd::u32 vulkan_swapchain_image_count_impl(Swapchain& swapchain) noexcept
 VkInstance vulkan_instance(Instance& instance) noexcept
 {
     return detail::vulkan_instance_impl(instance);
+}
+
+// D-008 C2-c2: the VkInstance a Device was built over. Lets a consumer (ImGui) get the instance WITHOUT an rhi Instance
+// — essential on the adopted path (the VulkanGpuContext owns the instance; there is no rhi Instance).
+VkInstance vulkan_instance(Device& device) noexcept
+{
+    auto* vk = dynamic_cast<VulkanDevice*>(&device);
+    CRD_ASSERT(vk != nullptr);
+    return vk->instance();
 }
 
 VkPhysicalDevice vulkan_physical_device(Device& device) noexcept

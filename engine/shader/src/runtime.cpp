@@ -1,9 +1,7 @@
-#include <crd/platform/dynamic_library.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/shader/runtime.hpp>
 
 #include <cstring>
-#include <shaderc/shaderc.h>
 #include <spirv_reflect.h>
 #include <unordered_map>
 
@@ -29,20 +27,6 @@ namespace
         hash = fnv1a_mix(hash, static_cast<unsigned char>(data[i]));
     }
     return hash;
-}
-
-[[nodiscard]] shaderc_shader_kind to_shaderc_kind(Stage stage) noexcept
-{
-    switch (stage)
-    {
-        case Stage::Vertex:
-            return shaderc_vertex_shader;
-        case Stage::Fragment:
-            return shaderc_fragment_shader;
-        case Stage::Compute:
-        default:
-            return shaderc_compute_shader;
-    }
 }
 
 [[nodiscard]] crd::rhi::Format to_rhi_format(SpvReflectFormat format) noexcept
@@ -396,157 +380,13 @@ struct CachedSpirv
     crd::containers::Array<crd::u32> words{};
 };
 
-struct ShadercApi
-{
-    using CompilerInitialize = shaderc_compiler_t (*)();
-    using CompilerRelease = void (*)(shaderc_compiler_t);
-    using OptionsInitialize = shaderc_compile_options_t (*)();
-    using OptionsRelease = void (*)(shaderc_compile_options_t);
-    using OptionsSetTargetEnv = void (*)(shaderc_compile_options_t, shaderc_target_env, shaderc_env_version);
-    using OptionsSetTargetSpirv = void (*)(shaderc_compile_options_t, shaderc_spirv_version);
-    using OptionsSetOptimization = void (*)(shaderc_compile_options_t, shaderc_optimization_level);
-    using OptionsSetDebugInfo = void (*)(shaderc_compile_options_t);
-    using CompileIntoSpv = shaderc_compilation_result_t (*)(shaderc_compiler_t, const char*, size_t,
-                                                            shaderc_shader_kind, const char*, const char*,
-                                                            const shaderc_compile_options_t);
-    using ResultRelease = void (*)(shaderc_compilation_result_t);
-    using ResultStatus = shaderc_compilation_status (*)(const shaderc_compilation_result_t);
-    using ResultError = const char* (*)(const shaderc_compilation_result_t);
-    using ResultBytes = const char* (*)(const shaderc_compilation_result_t);
-    using ResultLength = size_t (*)(const shaderc_compilation_result_t);
-
-    CompilerInitialize compiler_initialize = nullptr;
-    CompilerRelease compiler_release = nullptr;
-    OptionsInitialize options_initialize = nullptr;
-    OptionsRelease options_release = nullptr;
-    OptionsSetTargetEnv options_set_target_env = nullptr;
-    OptionsSetTargetSpirv options_set_target_spirv = nullptr;
-    OptionsSetOptimization options_set_optimization = nullptr;
-    OptionsSetDebugInfo options_set_debug_info = nullptr;
-    CompileIntoSpv compile_into_spv = nullptr;
-    ResultRelease result_release = nullptr;
-    ResultStatus result_status = nullptr;
-    ResultError result_error = nullptr;
-    ResultBytes result_bytes = nullptr;
-    ResultLength result_length = nullptr;
-};
-
-// shaderc ships under different SONAMEs depending on where it came from:
-//   - Vulkan SDK (Windows / Linux .tar.gz / macOS):  shaderc_shared.{dll,so,dylib}
-//   - Ubuntu / Debian `libshaderc-dev`:               libshaderc.so / libshaderc.so.1
-//   - Conda / vcpkg / homebrew:                       libshaderc.so or libshaderc_combined.a
-//
-// Probe a small list of candidates per OS so the engine works on both
-// SDK-installed and distro-packaged shaderc without manual symlinks.
-[[nodiscard]] crd::platform::DynamicLibrary try_open_shaderc() noexcept
-{
-    // Quiet per-candidate probe — a SONAME that isn't installed is expected;
-    // the final candidate uses the loud open so a total miss still surfaces.
-#if CRD_OS_WINDOWS
-    char* sdk = nullptr;
-    std::size_t len = 0;
-    const errno_t rc = _dupenv_s(&sdk, &len, "VULKAN_SDK");
-    if (rc == 0 && sdk != nullptr && sdk[0] != '\0')
-    {
-        const fs::Path sdk_path = fs::Path(sdk) / "Bin" / "shaderc_shared.dll";
-        free(sdk);
-        auto lib = crd::platform::DynamicLibrary::open(sdk_path, /*log_on_failure=*/false);
-        if (lib.is_valid())
-        {
-            return lib;
-        }
-    }
-    else
-    {
-        free(sdk);
-    }
-    const fs::Path candidates[] = {fs::Path("shaderc_shared.dll")};
-#elif CRD_OS_LINUX
-    const fs::Path candidates[] = {
-        fs::Path("libshaderc_shared.so"),   // Vulkan SDK convention
-        fs::Path("libshaderc.so.1"),        // Ubuntu / Debian (libshaderc1 package)
-        fs::Path("libshaderc.so"),          // Ubuntu / Debian dev symlink
-    };
-#else
-    const fs::Path candidates[] = {
-        fs::Path("libshaderc_shared.dylib"),
-        fs::Path("libshaderc.dylib"),
-    };
-#endif
-    const std::size_t n = sizeof(candidates) / sizeof(candidates[0]);
-    for (std::size_t i = 0; i < n; ++i)
-    {
-        const bool last = (i + 1 == n);
-        auto lib = crd::platform::DynamicLibrary::open(candidates[i], /*log_on_failure=*/last);
-        if (lib.is_valid())
-        {
-            return lib;
-        }
-    }
-    return crd::platform::DynamicLibrary{};
-}
-
 class LocalRuntime final : public Runtime
 {
 public:
-    LocalRuntime()
-    {
-        m_library = try_open_shaderc();
-        if (!m_library.is_valid())
-        {
-            return;
-        }
-
-        m_api.compiler_initialize = m_library.resolve_as<ShadercApi::CompilerInitialize>("shaderc_compiler_initialize");
-        m_api.compiler_release = m_library.resolve_as<ShadercApi::CompilerRelease>("shaderc_compiler_release");
-        m_api.options_initialize =
-            m_library.resolve_as<ShadercApi::OptionsInitialize>("shaderc_compile_options_initialize");
-        m_api.options_release = m_library.resolve_as<ShadercApi::OptionsRelease>("shaderc_compile_options_release");
-        m_api.options_set_target_env =
-            m_library.resolve_as<ShadercApi::OptionsSetTargetEnv>("shaderc_compile_options_set_target_env");
-        m_api.options_set_target_spirv =
-            m_library.resolve_as<ShadercApi::OptionsSetTargetSpirv>("shaderc_compile_options_set_target_spirv");
-        m_api.options_set_optimization =
-            m_library.resolve_as<ShadercApi::OptionsSetOptimization>("shaderc_compile_options_set_optimization_level");
-        m_api.options_set_debug_info =
-            m_library.resolve_as<ShadercApi::OptionsSetDebugInfo>("shaderc_compile_options_set_generate_debug_info");
-        m_api.compile_into_spv = m_library.resolve_as<ShadercApi::CompileIntoSpv>("shaderc_compile_into_spv");
-        m_api.result_release = m_library.resolve_as<ShadercApi::ResultRelease>("shaderc_result_release");
-        m_api.result_status = m_library.resolve_as<ShadercApi::ResultStatus>("shaderc_result_get_compilation_status");
-        m_api.result_error = m_library.resolve_as<ShadercApi::ResultError>("shaderc_result_get_error_message");
-        m_api.result_bytes = m_library.resolve_as<ShadercApi::ResultBytes>("shaderc_result_get_bytes");
-        m_api.result_length = m_library.resolve_as<ShadercApi::ResultLength>("shaderc_result_get_length");
-
-        if (m_api.compiler_initialize == nullptr || m_api.compiler_release == nullptr ||
-            m_api.options_initialize == nullptr || m_api.options_release == nullptr ||
-            m_api.options_set_target_env == nullptr || m_api.options_set_target_spirv == nullptr ||
-            m_api.options_set_optimization == nullptr || m_api.options_set_debug_info == nullptr ||
-            m_api.compile_into_spv == nullptr || m_api.result_release == nullptr || m_api.result_status == nullptr ||
-            m_api.result_error == nullptr || m_api.result_bytes == nullptr || m_api.result_length == nullptr)
-        {
-            m_library = {};
-            return;
-        }
-
-        m_compiler = m_api.compiler_initialize();
-        m_options = m_api.options_initialize();
-        m_api.options_set_target_env(m_options, shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_3);
-        m_api.options_set_target_spirv(m_options, shaderc_spirv_version_1_6);
-        m_api.options_set_optimization(m_options, shaderc_optimization_level_zero);
-        m_api.options_set_debug_info(m_options);
-    }
-
-    ~LocalRuntime() override
-    {
-        if (m_options != nullptr && m_api.options_release != nullptr)
-        {
-            m_api.options_release(m_options);
-        }
-        if (m_compiler != nullptr && m_api.compiler_release != nullptr)
-        {
-            m_api.compiler_release(m_compiler);
-        }
-    }
+    // D-008 C2-e: the GLSL→SPIR-V compiler is INJECTED (crd-shader owns none). `compiler` is borrowed and must outlive
+    // this runtime (create_runtime's contract). All shaderc machinery moved to crd-gpu-context-vulkan. Not noexcept —
+    // the unordered_map members allocate on construction.
+    explicit LocalRuntime(ISpirvCompiler& compiler) : m_compiler(compiler) {}
 
     [[nodiscard]] EffectHandle create_effect(const EffectDesc& desc) override
     {
@@ -742,12 +582,6 @@ private:
     {
         diagnostics = {};
 
-        if (m_compiler == nullptr || m_options == nullptr)
-        {
-            diagnostics.message = crd::containers::String("shaderc runtime is unavailable");
-            return false;
-        }
-
         const auto effect_it = m_effects.find(request.effect.value);
         if (request.effect.value == 0 || effect_it == m_effects.end())
         {
@@ -853,21 +687,18 @@ private:
                     }
                     else
                     {
-                        const shaderc_compilation_result_t result = m_api.compile_into_spv(
-                            m_compiler, preprocessed.preprocessed_text.c_str(), preprocessed.preprocessed_text.size(),
-                            to_shaderc_kind(compile_request.stage), compile_request.source_path.c_str(),
-                            compile_request.entry_point.c_str(), m_options);
-                        if (m_api.result_status(result) != shaderc_compilation_status_success)
+                        // D-008 C2-e: delegate GLSL→SPIR-V to the injected compiler (the ONLY place a shading language
+                        // reaches a compiler is inside that backend). crd-shader never names shaderc/dxc.
+                        crd::containers::String compile_error;
+                        const crd::containers::StringView glsl(preprocessed.preprocessed_text.data(),
+                                                               preprocessed.preprocessed_text.size());
+                        const crd::containers::StringView diag_name(compile_request.source_path.data(),
+                                                                    compile_request.source_path.size());
+                        if (!m_compiler.compile(compile_request.stage, glsl, diag_name, words, compile_error))
                         {
-                            diagnostics.message = crd::containers::String(m_api.result_error(result));
-                            m_api.result_release(result);
+                            diagnostics.message = std::move(compile_error);
                             return false;
                         }
-                        const char* bytes = m_api.result_bytes(result);
-                        const size_t length = m_api.result_length(result);
-                        words.resize(length / sizeof(crd::u32));
-                        std::memcpy(words.data(), bytes, length);
-                        m_api.result_release(result);
 
                         (void)fs::create_directories(shader_cache_dir());
                         const auto byte_count = words.size() * sizeof(crd::u32);
@@ -936,15 +767,12 @@ private:
     std::unordered_map<crd::u64, crd::containers::String> m_preprocessed_cache{};
     std::unordered_map<crd::u64, CachedSpirv> m_spirv_cache{};
     std::unordered_map<crd::u64, ModuleHandle> m_module_cache{};
-    crd::platform::DynamicLibrary m_library{};
-    ShadercApi m_api{};
-    shaderc_compiler_t m_compiler = nullptr;
-    shaderc_compile_options_t m_options = nullptr;
+    ISpirvCompiler& m_compiler; // D-008 C2-e: injected GLSL→SPIR-V compiler (borrowed; outlives this runtime)
 };
 } // namespace
 
-std::unique_ptr<Runtime> create_runtime()
+std::unique_ptr<Runtime> create_runtime(ISpirvCompiler& compiler)
 {
-    return std::make_unique<LocalRuntime>();
+    return std::make_unique<LocalRuntime>(compiler);
 }
 } // namespace crd::shader

@@ -13,6 +13,7 @@ target_link_libraries(crd-rhi
         crd-core
         crd-memory
         crd-platform
+        crd-gpu-context   # D-008 C2-d2: Device::create_program returns crd::gpu::IGpuProgram (header-only; acyclic)
 )
 
 target_compile_features(crd-rhi PUBLIC cxx_std_20)

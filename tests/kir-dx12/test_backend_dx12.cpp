@@ -216,8 +216,8 @@ TEST_CASE("v17-breadth: DX12 floor/ceil/sign/cmpeq/cmple bit-match the CPU oracl
     const int uc  = g.unary(kir::KOp::Ceil, x);
     const int us  = g.unary(kir::KOp::Sign, y);
     const int ut  = g.unary(kir::KOp::Trunc, y);
-    const int bce = g.binary(kir::KOp::CmpEq, x, y);
-    const int bcl = g.binary(kir::KOp::CmpLe, x, y);
+    const int bce = g.cast(g.binary(kir::KOp::CmpEq, x, y), kir::DType::F32); // B0-3: bool -> float before arithmetic
+    const int bcl = g.cast(g.binary(kir::KOp::CmpLe, x, y), kir::DType::F32);
     const int out = g.binary(kir::KOp::Add, g.binary(kir::KOp::Add, g.binary(kir::KOp::Add, g.binary(kir::KOp::Add, uf, uc), g.binary(kir::KOp::Add, us, bce)), bcl), ut);
 
     float xv[nn];
@@ -502,6 +502,220 @@ TEST_CASE("v17-i: Morton authored in CKIR runs on DX12, bit-exact vs the referen
     CHECK(mism == 0);
 }
 
+// D-007 B0-2 on the 2nd backend. This is where the GLSL/HLSL matrix-spelling asymmetry bites: HLSL writes `floatRxC`,
+// GLSL writes `matCxR`. It also exercises the new `crd_inv2` helper (HLSL has no matrix-inverse builtin) and the generic
+// RxC outer product that replaced the float3x3-only `crd_outer`.
+TEST_CASE("v17 B0-2: CKIR mat2 (construct/mat*vec/inverse) + non-square 2x3 outer run on DX12", "[kir][dx12][gpu][mat2]")
+{
+    crd::memory::TlsfAllocator alloc(16U << 20U);
+    kir::KirBackendDx12        dx(&alloc);
+    if (!dx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+
+    constexpr int    mn = 96;
+    const kir::Shape sh = kir::make_shape({mn});
+    kir::KGraph      g(&alloc);
+    const int        c0 = g.input_vec(sh, kir::DType::F32, 2);
+    const int        c1 = g.input_vec(sh, kir::DType::F32, 2);
+    const int        vv = g.input_vec(sh, kir::DType::F32, 2);
+    const int        mat = g.mat2(c0, c1);
+    const int        mv  = g.mat_mul_vec(mat, vv);
+    const int        pv  = g.mat_mul_vec(g.mat_mul(mat, g.mat_inverse(mat)), vv); // exercises crd_inv2
+
+    float c0d[mn * 2];
+    float c1d[mn * 2];
+    float vd[mn * 2];
+    for (int i = 0; i < mn; ++i)
+    {
+        const float fi = static_cast<float>(i);
+        c0d[i * 2] = 3.0F + 0.01F * fi; c0d[i * 2 + 1] = 0.2F;
+        c1d[i * 2] = 0.1F;              c1d[i * 2 + 1] = 4.0F - 0.01F * fi;
+        vd[i * 2]  = 0.5F * fi - 2.0F;  vd[i * 2 + 1]  = 1.0F + 0.1F * fi;
+    }
+    const float* inp[] = {c0d, c1d, vd};
+
+    float gmv[mn * 2];
+    float gpv[mn * 2];
+    REQUIRE(dx.run(g, mv, inp, 3, gmv));
+    REQUIRE(dx.run(g, pv, inp, 3, gpv));
+
+    int bad = 0;
+    for (int i = 0; i < mn; ++i)
+    {
+        for (int r = 0; r < 2; ++r)
+        {
+            const float ref = c0d[i * 2 + r] * vd[i * 2] + c1d[i * 2 + r] * vd[i * 2 + 1];
+            if (std::fabs(gmv[i * 2 + r] - ref) > 1e-4F * std::fabs(ref) + 1e-4F) { ++bad; }
+            if (std::fabs(gpv[i * 2 + r] - vd[i * 2 + r]) > 1e-3F * std::fabs(vd[i * 2 + r]) + 1e-3F) { ++bad; }
+        }
+    }
+    CHECK(bad == 0);
+
+    kir::KGraph g2(&alloc);
+    const int   a2 = g2.input_vec(sh, kir::DType::F32, 2);
+    const int   b3 = g2.input_vec(sh, kir::DType::F32, 3);
+    const int   op = g2.outer_product(a2, b3); // 2 rows x 3 cols
+
+    float ad[mn * 2];
+    float bd[mn * 3];
+    for (int i = 0; i < mn; ++i)
+    {
+        const float fi = static_cast<float>(i);
+        ad[i * 2] = 0.5F * fi - 1.0F; ad[i * 2 + 1] = 2.0F - 0.1F * fi;
+        bd[i * 3] = 1.0F + 0.2F * fi; bd[i * 3 + 1] = -0.3F * fi; bd[i * 3 + 2] = 0.75F;
+    }
+    const float* inp2[] = {ad, bd};
+    float        gop[mn * 6];
+    REQUIRE(dx.run(g2, op, inp2, 2, gop));
+
+    int badop = 0;
+    for (int i = 0; i < mn; ++i)
+    {
+        for (int col = 0; col < 3; ++col)
+        {
+            for (int r = 0; r < 2; ++r)
+            {
+                const float ref = ad[i * 2 + r] * bd[i * 3 + col];
+                if (std::fabs(gop[i * 6 + col * 2 + r] - ref) > 1e-4F * std::fabs(ref) + 1e-4F) { ++badop; }
+            }
+        }
+    }
+    CHECK(badop == 0);
+}
+
+// D-007 B0-3 on the 2nd backend. HLSL's relational operators are already componentwise (yielding bool3), so unlike
+// GLSL there is no lessThan() family -- the divergence the type-driven emitter has to encode.
+TEST_CASE("v17 B0-3: CKIR bool3 (compare + any/all) and int3 (via cast) run on DX12", "[kir][dx12][gpu][boolvec]")
+{
+    crd::memory::TlsfAllocator alloc(16U << 20U);
+    kir::KirBackendDx12        dx(&alloc);
+    if (!dx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+
+    constexpr int    bn = 128;
+    const kir::Shape sh = kir::make_shape({bn});
+    kir::KGraph      g(&alloc);
+    const int        av = g.input_vec(sh, kir::DType::F32, 3);
+    const int        bv = g.input_vec(sh, kir::DType::F32, 3);
+    const int        lt = g.binary(kir::KOp::CmpLt, av, bv); // bool3
+    const int        an = g.vany(lt);
+    const int        al = g.vall(lt);
+    REQUIRE(g.node(lt).type.scalar == kir::DType::Bool);
+
+    float avd[bn * 3];
+    float bvd[bn * 3];
+    for (int i = 0; i < bn; ++i)
+    {
+        const float fi = static_cast<float>(i);
+        avd[i * 3] = fi - 64.0F; avd[i * 3 + 1] = 1.0F; avd[i * 3 + 2] = (i % 2 == 0) ? -1.0F : 5.0F;
+        bvd[i * 3] = 0.0F;       bvd[i * 3 + 1] = 2.0F; bvd[i * 3 + 2] = 0.0F;
+    }
+    const float* inp[] = {avd, bvd};
+    float        gan[bn];
+    float        gal[bn];
+    REQUIRE(dx.run(g, an, inp, 2, gan));
+    REQUIRE(dx.run(g, al, inp, 2, gal));
+
+    int bad = 0;
+    for (int i = 0; i < bn; ++i)
+    {
+        const bool eany = (avd[i * 3] < bvd[i * 3]) || (avd[i * 3 + 1] < bvd[i * 3 + 1]) || (avd[i * 3 + 2] < bvd[i * 3 + 2]);
+        const bool eall = (avd[i * 3] < bvd[i * 3]) && (avd[i * 3 + 1] < bvd[i * 3 + 1]) && (avd[i * 3 + 2] < bvd[i * 3 + 2]);
+        if (gan[i] != (eany ? 1.0F : 0.0F)) { ++bad; }
+        if (gal[i] != (eall ? 1.0F : 0.0F)) { ++bad; }
+    }
+    CHECK(bad == 0);
+
+    kir::KGraph g2(&alloc);
+    const int   fv  = g2.input_vec(sh, kir::DType::F32, 3);
+    const int   ivv = g2.cast(fv, kir::DType::I32);
+    const int   sum = g2.binary(kir::KOp::Add, ivv, ivv);
+    const int   out = g2.cast(sum, kir::DType::F32);
+
+    float fvd[bn * 3];
+    for (int i = 0; i < bn; ++i)
+    {
+        const float fi = static_cast<float>(i);
+        fvd[i * 3] = fi * 0.5F - 10.0F; fvd[i * 3 + 1] = 3.25F; fvd[i * 3 + 2] = -2.75F;
+    }
+    const float* inp2[] = {fvd};
+    float        giv[bn * 3];
+    REQUIRE(dx.run(g2, out, inp2, 1, giv));
+
+    int badi = 0;
+    for (int i = 0; i < bn; ++i)
+    {
+        for (int k = 0; k < 3; ++k) { const float ref = static_cast<float>(2 * static_cast<int>(fvd[i * 3 + k])); if (giv[i * 3 + k] != ref) { ++badi; } }
+    }
+    CHECK(badi == 0);
+}
+
+// D-007 B0-4 on the 2nd backend: the SROA lowering must be identical, so the same struct destructures the same way.
+TEST_CASE("v17 B0-4: a Light struct + a vec3 array round-trip through the SROA lowering on DX12", "[kir][dx12][gpu][aggregate]")
+{
+    crd::memory::TlsfAllocator alloc(16U << 20U);
+    kir::KirBackendDx12        dx(&alloc);
+    if (!dx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+
+    constexpr int    an = 96;
+    const kir::Shape sh = kir::make_shape({an});
+    kir::KGraph      g(&alloc);
+
+    const kir::KType fields[3] = {kir::KType::vec(kir::DType::F32, 3), kir::KType::make_scalar(kir::DType::F32),
+                                  kir::KType::vec(kir::DType::F32, 3)};
+    const int        light = g.define_struct(fields, 3);
+    REQUIRE(g.struct_flat_comps(light) == 7);
+
+    const int pos = g.input_vec(sh, kir::DType::F32, 3);
+    const int rad = g.input(sh, kir::DType::F32);
+    const int col = g.input_vec(sh, kir::DType::F32, 3);
+    const int fl[3] = {pos, rad, col};
+    const int lite  = g.struct_make(light, fl, 3);
+    const int f_pos = g.field_get(lite, 0);
+    const int f_rad = g.field_get(lite, 1);
+    const int f_col = g.field_get(lite, 2);
+    const int out   = g.binary(kir::KOp::Add, g.binary(kir::KOp::Mul, f_col, g.splat(f_rad, 3)), f_pos);
+
+    float posd[an * 3];
+    float radd[an];
+    float cold[an * 3];
+    for (int i = 0; i < an; ++i)
+    {
+        const float fi = static_cast<float>(i);
+        posd[i * 3] = fi * 0.5F - 8.0F; posd[i * 3 + 1] = 1.0F - 0.1F * fi; posd[i * 3 + 2] = 0.25F * fi;
+        radd[i]     = 0.5F + 0.03F * fi;
+        cold[i * 3] = 0.1F * fi;        cold[i * 3 + 1] = 2.0F;             cold[i * 3 + 2] = -0.4F * fi;
+    }
+    const float* inp[] = {posd, radd, cold};
+    float        gout[an * 3];
+    REQUIRE(dx.run(g, out, inp, 3, gout));
+
+    int bad = 0;
+    for (int i = 0; i < an; ++i)
+    {
+        for (int k = 0; k < 3; ++k)
+        {
+            const float ref = cold[i * 3 + k] * radd[i] + posd[i * 3 + k];
+            if (std::fabs(gout[i * 3 + k] - ref) > 1e-4F * std::fabs(ref) + 1e-4F) { ++bad; }
+        }
+    }
+    CHECK(bad == 0);
+
+    kir::KGraph g2(&alloc);
+    const int   e0 = g2.input_vec(sh, kir::DType::F32, 3);
+    const int   e1 = g2.input_vec(sh, kir::DType::F32, 3);
+    const int   ev[2] = {e0, e1};
+    const int   arr   = g2.array_make(ev, 2);
+    const int   got   = g2.array_get(arr, 1);
+    REQUIRE(g2.node(arr).comps() == 6);
+
+    const float* inp2[] = {posd, cold};
+    float        garr[an * 3];
+    REQUIRE(dx.run(g2, got, inp2, 2, garr));
+
+    int bada = 0;
+    for (int i = 0; i < an * 3; ++i) { if (garr[i] != cold[i]) { ++bada; } }
+    CHECK(bada == 0);
+}
+
 // ── v17 A3: the comps-aware VEC emitter fanned out to DX12 (the vec corpus runs on the 2nd backend too) ──────────────
 TEST_CASE("v17 A3: CKIR vec3 ops (construct/cross/add/normalize) run on DX12 via the comps-aware emitter", "[kir][dx12][gpu][vec]")
 {
@@ -512,14 +726,18 @@ TEST_CASE("v17 A3: CKIR vec3 ops (construct/cross/add/normalize) run on DX12 via
     constexpr int    vn = 128;
     const kir::Shape sh = kir::make_shape({vn});
     kir::KGraph      g(&alloc);
-    const int        ax = g.input(sh, kir::DType::F32), ay = g.input(sh, kir::DType::F32), az = g.input(sh, kir::DType::F32);
-    const int        bx = g.input(sh, kir::DType::F32), by = g.input(sh, kir::DType::F32), bz = g.input(sh, kir::DType::F32);
+    const int        ax = g.input(sh, kir::DType::F32);
+    const int        ay = g.input(sh, kir::DType::F32);
+    const int        az = g.input(sh, kir::DType::F32);
+    const int        bx = g.input(sh, kir::DType::F32);
+    const int        by = g.input(sh, kir::DType::F32);
+    const int        bz = g.input(sh, kir::DType::F32);
     const int        a  = g.vec3(ax, ay, az);
     const int        b  = g.vec3(bx, by, bz);
     const int        o  = g.normalize(g.binary(kir::KOp::Add, g.cross(a, b), a));
 
     float fin[6][vn];
-    for (int i = 0; i < vn; ++i) { fin[0][i] = 0.5F + 0.03F * i; fin[1][i] = 1.0F - 0.02F * i; fin[2][i] = 0.2F + 0.01F * i; fin[3][i] = -0.4F + 0.02F * i; fin[4][i] = 0.7F + 0.015F * i; fin[5][i] = 0.9F - 0.01F * i; }
+    for (int i = 0; i < vn; ++i) { const float fi = static_cast<float>(i); fin[0][i] = 0.5F + 0.03F * fi; fin[1][i] = 1.0F - 0.02F * fi; fin[2][i] = 0.2F + 0.01F * fi; fin[3][i] = -0.4F + 0.02F * fi; fin[4][i] = 0.7F + 0.015F * fi; fin[5][i] = 0.9F - 0.01F * fi; }
     const float* inp[] = {fin[0], fin[1], fin[2], fin[3], fin[4], fin[5]};
     float        gpu[vn * 3];
     REQUIRE(dx.run(g, o, inp, 6, gpu));
@@ -527,9 +745,10 @@ TEST_CASE("v17 A3: CKIR vec3 ops (construct/cross/add/normalize) run on DX12 via
     int bad = 0;
     for (int i = 0; i < vn; ++i)
     {
-        const float avx = fin[0][i], avy = fin[1][i], avz = fin[2][i], bvx = fin[3][i], bvy = fin[4][i], bvz = fin[5][i];
-        const float cx = avy * bvz - avz * bvy, cy = avz * bvx - avx * bvz, cz = avx * bvy - avy * bvx;
-        const float sx = cx + avx, sy = cy + avy, sz = cz + avz;
+        const float avx = fin[0][i]; const float avy = fin[1][i]; const float avz = fin[2][i];
+        const float bvx = fin[3][i]; const float bvy = fin[4][i]; const float bvz = fin[5][i];
+        const float cx = avy * bvz - avz * bvy; const float cy = avz * bvx - avx * bvz; const float cz = avx * bvy - avy * bvx;
+        const float sx = cx + avx; const float sy = cy + avy; const float sz = cz + avz;
         const float len = std::sqrt(sx * sx + sy * sy + sz * sz);
         if (std::fabs(gpu[i * 3] - sx / len) > 1e-4F * std::fabs(sx / len) + 1e-5F) { ++bad; }
         if (std::fabs(gpu[i * 3 + 1] - sy / len) > 1e-4F * std::fabs(sy / len) + 1e-5F) { ++bad; }
@@ -552,7 +771,7 @@ TEST_CASE("v17 A4: CKIR unroll_for (fixed-count loop) runs on DX12 (bit-exact, f
 
     float xv[cn];
     float yv[cn];
-    for (int i = 0; i < cn; ++i) { xv[i] = (0.05F * i) - 3.0F; yv[i] = 0.1F + (0.003F * i); }
+    for (int i = 0; i < cn; ++i) { const float fi = static_cast<float>(i); xv[i] = (0.05F * fi) - 3.0F; yv[i] = 0.1F + (0.003F * fi); }
     const float* inp[] = {xv, yv};
     float        gpu[cn];
     REQUIRE(dx.run(g, r, inp, 2, gpu));
@@ -578,7 +797,7 @@ TEST_CASE("v17 A4 tier-2: CKIR dynamic for_loop (native GPU loop, index + diverg
     float xv[cn];
     float yv[cn];
     float cv[cn];
-    for (int i = 0; i < cn; ++i) { xv[i] = (0.05F * i) - 3.0F; yv[i] = 0.1F + (0.003F * i); cv[i] = static_cast<float>(i % 8); }
+    for (int i = 0; i < cn; ++i) { const float fi = static_cast<float>(i); xv[i] = (0.05F * fi) - 3.0F; yv[i] = 0.1F + (0.003F * fi); cv[i] = static_cast<float>(i % 8); }
     const float* inp[] = {xv, yv, cv};
     float        gpu[cn];
     REQUIRE(dx.run(g, r, inp, 3, gpu));
@@ -603,11 +822,13 @@ TEST_CASE("v17 A3: CKIR mat3 (MatFromCols + mat*vec + inverse) runs on DX12 (HLS
     constexpr int    mn = 96;
     const kir::Shape sh = kir::make_shape({mn});
     kir::KGraph      g(&alloc);
-    const int        c0 = g.input_vec(sh, kir::DType::F32, 3), c1 = g.input_vec(sh, kir::DType::F32, 3), c2 = g.input_vec(sh, kir::DType::F32, 3);
+    const int        c0 = g.input_vec(sh, kir::DType::F32, 3);
+    const int        c1 = g.input_vec(sh, kir::DType::F32, 3);
+    const int        c2 = g.input_vec(sh, kir::DType::F32, 3);
     const int        vv = g.input_vec(sh, kir::DType::F32, 3);
-    const int        M  = g.mat3(c0, c1, c2);
-    const int        mv = g.mat_mul_vec(M, vv);
-    const int        pv = g.mat_mul_vec(g.mat_mul(M, g.mat_inverse(M)), vv); // (M·M⁻¹)·v ≈ v
+    const int        mat = g.mat3(c0, c1, c2);
+    const int        mv  = g.mat_mul_vec(mat, vv);
+    const int        pv  = g.mat_mul_vec(g.mat_mul(mat, g.mat_inverse(mat)), vv); // (M·M⁻¹)·v ≈ v
 
     float c0d[mn * 3];
     float c1d[mn * 3];
@@ -615,10 +836,11 @@ TEST_CASE("v17 A3: CKIR mat3 (MatFromCols + mat*vec + inverse) runs on DX12 (HLS
     float vd[mn * 3];
     for (int i = 0; i < mn; ++i)
     {
-        c0d[i * 3] = 3.0F + 0.01F * i; c0d[i * 3 + 1] = 0.2F; c0d[i * 3 + 2] = 0.1F;
-        c1d[i * 3] = 0.1F; c1d[i * 3 + 1] = 4.0F - 0.01F * i; c1d[i * 3 + 2] = 0.2F;
-        c2d[i * 3] = 0.2F; c2d[i * 3 + 1] = 0.1F; c2d[i * 3 + 2] = 5.0F + 0.005F * i;
-        vd[i * 3] = 0.5F * i - 2.0F; vd[i * 3 + 1] = 1.0F + 0.1F * i; vd[i * 3 + 2] = -0.3F * i + 1.0F;
+        const float fi = static_cast<float>(i);
+        c0d[i * 3] = 3.0F + 0.01F * fi; c0d[i * 3 + 1] = 0.2F; c0d[i * 3 + 2] = 0.1F;
+        c1d[i * 3] = 0.1F; c1d[i * 3 + 1] = 4.0F - 0.01F * fi; c1d[i * 3 + 2] = 0.2F;
+        c2d[i * 3] = 0.2F; c2d[i * 3 + 1] = 0.1F; c2d[i * 3 + 2] = 5.0F + 0.005F * fi;
+        vd[i * 3] = 0.5F * fi - 2.0F; vd[i * 3 + 1] = 1.0F + 0.1F * fi; vd[i * 3 + 2] = -0.3F * fi + 1.0F;
     }
     const float* inp[] = {c0d, c1d, c2d, vd};
     float        gmv[mn * 3];
@@ -642,8 +864,8 @@ TEST_CASE("v17 A3: CKIR mat3 (MatFromCols + mat*vec + inverse) runs on DX12 (HLS
 // ── v17-i rung 2: ATOMIC scatter-add (radix histogram) on DX12 (InterlockedAdd; D3D12 zero-inits the committed output) ─
 namespace histo_ckir
 {
-constexpr int   hn = 1024;
-constexpr int   hm = 256;
+constexpr int   kHistoN = 1024;   // elements
+constexpr int   kHistoBins = 256; // bins (one radix digit)
 inline float    asf(crd::i32 v) { float f = 0.0F; std::memcpy(&f, &v, 4); return f; }
 inline crd::u32 asu(float f) { crd::u32 u = 0; std::memcpy(&u, &f, 4); return u; }
 } // namespace histo_ckir
@@ -656,28 +878,28 @@ TEST_CASE("v17-i: CKIR scatter-add histogram runs on DX12 (integer atomics, dete
     if (!dx.valid()) { WARN("no D3D12 device available; skipping"); return; }
 
     kir::KGraph      g(&alloc);
-    const kir::Shape shn  = kir::make_shape({h::hn});
-    const kir::Shape shm  = kir::make_shape({h::hm});
+    const kir::Shape shn  = kir::make_shape({h::kHistoN});
+    const kir::Shape shm  = kir::make_shape({h::kHistoBins});
     const int        idx  = g.input(shn, kir::DType::I32);
     const int        upd  = g.input(shn, kir::DType::I32);
     const int        hist = g.scatter_add(idx, upd, shm);
 
-    float    idxv[h::hn];
-    float    updv[h::hn];
-    crd::u32 ref[h::hm];
-    for (int i = 0; i < h::hm; ++i) { ref[i] = 0; }
-    for (int i = 0; i < h::hn; ++i)
+    float    idxv[h::kHistoN];
+    float    updv[h::kHistoN];
+    crd::u32 ref[h::kHistoBins];
+    for (int i = 0; i < h::kHistoBins; ++i) { ref[i] = 0; }
+    for (int i = 0; i < h::kHistoN; ++i)
     {
-        const crd::i32 d = static_cast<crd::i32>((i * 7 + 13) % h::hm);
+        const crd::i32 d = static_cast<crd::i32>((i * 7 + 13) % h::kHistoBins);
         idxv[i]          = h::asf(d);
         updv[i]          = h::asf(1);
         ref[d]++;
     }
     const float* inputs[] = {idxv, updv};
-    float        out[h::hm];
+    float        out[h::kHistoBins];
     REQUIRE(dx.run(g, hist, inputs, 2, out));
 
     int mism = 0;
-    for (int i = 0; i < h::hm; ++i) { if (h::asu(out[i]) != ref[i]) { ++mism; } }
+    for (int i = 0; i < h::kHistoBins; ++i) { if (h::asu(out[i]) != ref[i]) { ++mism; } }
     CHECK(mism == 0);
 }

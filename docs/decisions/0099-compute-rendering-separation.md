@@ -1,6 +1,6 @@
 # ADR-0099 — `crd-gpu-context`: a backend-agnostic GPU **context manager**; compute and rendering as independent, composable consumers
 
-- **Status:** Accepted (2026-07-08) — user decision. (Supersedes this ADR's first Proposed draft, which mis-argued "share the device"; the audit below overturned it.) **Refines ADR-0080.**
+- **Status:** Accepted (2026-07-08) — user decision. (Supersedes this ADR's first Proposed draft, which mis-argued "share the device"; the audit below overturned it.) **Refines ADR-0080.** **§6 SUPERSEDED by ADR-0103 (2026-07-10)** — see the strike-through in *Decision*.
 - **Phase:** 3.1.6 v17 (GPU compute) — foundational architecture slice **v17-i**, laid **before** resuming GPU-compute feature work (tensor fan-out, fusion, …).
 - **Tags:** `gpu-context` `rhi` `compute` `rendering` `architecture` `vulkan` `cuda` `metal` `dx12` `webgpu` `hip` `kir` `geometry-bvh-gpu` `separation` `headless` `context-manager` `substrate`
 - **Depends / amends:** ADR-0080 (compute surface *in* the RHI — refined: compute becomes its own interface *over a context*) · ADR-0098 (CKIR — its six backends become context *consumers*).
@@ -22,7 +22,13 @@ v17-h shipped the coopmat2 tensor tier through `kir-vulkan` at **70.9 TF = CUDA-
 3. **Consumers take contexts from the manager.** CKIR backends take a `ComputeDevice` (`kir-vulkan` **stops calling `create_vulkan_instance`** → uniform with its five native siblings). `geometry-bvh-gpu` takes a `ComputeDevice`. The renderer takes a `RenderDevice`. CUDA/HIP contexts are headless.
 4. **Pipeline cache at the compute layer** — compile a kernel once (key = hash of shader source), reuse across dispatches; removes recompile-per-`run()` waste **and the reason the bench-timing exists**.
 5. **No measurement in the production backend** — remove `bench_contract`/`bench_tensor` `reps`/`out_ms`; perf timing moves to a test/tooling harness over the cached `run()` path.
-6. **Shaders — one compute path, two authoring modes.** `crd-shader` stays the single shared GLSL/HLSL→SPIR-V/DXIL compiler for **both** *authored* compute shaders (hand-written `.comp`, hand-tuned — geometry's LBVH, living with their module) and *generated* ones (CKIR emits from the graph). Both compile via `crd-shader` and dispatch via `ComputeDevice`.
+6. ~~**Shaders — one compute path, two authoring modes.** `crd-shader` stays the single shared GLSL/HLSL→SPIR-V/DXIL compiler for **both** *authored* compute shaders (hand-written `.comp`, hand-tuned — geometry's LBVH, living with their module) and *generated* ones (CKIR emits from the graph). Both compile via `crd-shader` and dispatch via `ComputeDevice`.~~
+   > **⛔ SUPERSEDED by [ADR-0103](0103-gpu-context-owns-every-gpu-program.md) (2026-07-10).** This clause made a portable mid-level
+   > module the owner of two backend languages and forced `crd-kir-vulkan` to depend on it — directly contradicting
+   > **ADR-0101** ("backend languages are outputs only; never authored or stored"). Two Accepted ADRs disagreed, and a D-007
+   > plan followed this one. **The rule now:** no module outside a backend names a shading language or a bytecode;
+   > `crd-gpu-context` owns every GPU program via `create_program(KGraph, KEntry) → IGpuProgram`, and each backend owns its
+   > language + compiler privately. `crd-shader` keeps Effect/reflection/runtime and loses `compile.hpp`.
 
 ## Migration plan (v17-i — incremental; each step ships + validates independently; do this BEFORE more GPU-compute features)
 

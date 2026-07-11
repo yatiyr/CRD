@@ -4,7 +4,7 @@
 //
 // The discriminating slice test. For each of the 21 golden manifests:
 //   1. Emit a complete GLSL compute shader via `emit_glsl_conformance_shader`.
-//   2. Compile to SPIR-V via `crd::shader::compile_glsl()` (runtime shaderc).
+//   2. Compile to SPIR-V via `crd::gpu::compile_glsl_to_spirv()` (runtime shaderc).
 //   3. Create a compute pipeline + 64³ output buffer + push constants.
 //   4. Dispatch — GPU samples a 64³ grid, writes SDF values to the buffer.
 //   5. Readback the 262 144 float values.
@@ -41,10 +41,10 @@
 #include <crd/rhi/fence.hpp>
 #include <crd/rhi/pipeline.hpp>
 #include <crd/rhi/queue.hpp>
-#include <crd/rhi/shader_module.hpp>
+#include <crd/gpu/vulkan_shader_compile.hpp>
+#include <crd/gpu/program.hpp> // D-008 C2-d4: opaque IGpuProgram via create_program
 #include <crd/rhi/vulkan_backend.hpp>
 #include <crd/rhi/vulkan_validation_capture.hpp>
-#include <crd/shader/compile.hpp>
 #include <crd/test_helpers/gpu_compare.hpp>
 
 #include <cstdio>
@@ -228,8 +228,8 @@ TEST_CASE("v9e-b GLSL conformance: prelude compiles to SPIR-V (smoke)",
     const auto full_glsl  = emit_glsl_conformance_shader(ir, &alloc);
 
     // Runtime GLSL → SPIR-V compile. CPU-only — doesn't touch the GPU.
-    auto result = crd::shader::compile_glsl(
-        crd::shader::Stage::Compute,
+    auto result = crd::gpu::compile_glsl_to_spirv(
+        crd::gpu::ShaderStage::Compute,
         crd::containers::StringView(full_glsl.c_str(), full_glsl.size()),
         crd::containers::StringView("v9e_b_smoke"),
         &alloc);
@@ -300,8 +300,8 @@ TEST_CASE("v9e-b ULP conformance: GPU output matches evaluate() within tolerance
         // Build IR + emit GLSL + compile to SPIR-V.
         const auto ir        = spec.make(&alloc);
         const auto full_glsl = emit_glsl_conformance_shader(ir, &alloc);
-        auto       compiled  = crd::shader::compile_glsl(
-            crd::shader::Stage::Compute,
+        auto       compiled  = crd::gpu::compile_glsl_to_spirv(
+            crd::gpu::ShaderStage::Compute,
             crd::containers::StringView(full_glsl.c_str(), full_glsl.size()),
             crd::containers::StringView(spec.name),
             &alloc);
@@ -313,9 +313,7 @@ TEST_CASE("v9e-b ULP conformance: GPU output matches evaluate() within tolerance
         REQUIRE(compiled.ok);
 
         // Build compute pipeline.
-        auto shader = device->create_shader_module(
-            {crd::rhi::ShaderStage::Compute, "main",
-             crd::containers::ConstSpan<crd::u8>(compiled.spirv.data(), compiled.spirv.size())});
+        auto shader = device->create_program(crd::rhi::ShaderStage::Compute, crd::containers::ConstSpan<crd::u8>(compiled.spirv.data(), compiled.spirv.size()));
         REQUIRE(shader != nullptr);
 
         crd::rhi::DescriptorBinding binding{};
@@ -340,7 +338,7 @@ TEST_CASE("v9e-b ULP conformance: GPU output matches evaluate() within tolerance
         REQUIRE(pipeline_layout != nullptr);
 
         crd::rhi::ComputePipelineDesc cpd{};
-        cpd.compute_shader  = shader.get();
+        cpd.compute_program  = shader.get();
         cpd.pipeline_layout = pipeline_layout.get();
         auto pipeline = device->create_compute_pipeline(cpd);
         REQUIRE(pipeline != nullptr);

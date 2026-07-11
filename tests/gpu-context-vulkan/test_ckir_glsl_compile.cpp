@@ -1,13 +1,14 @@
 // test_ckir_glsl.cpp — Phase 3.1.6 v17-b: the CKIR GLSL emitter gate. Emits fused-elementwise compute shaders from
-// CKIR subgraphs and PROVES them valid by compiling to SPIR-V through crd-shader (glslang) — no GPU needed, so the
-// codegen is gated independently of the runtime. Also checks the fusion boundary (non-elementwise ⇒ rejected). ADR-0098.
+// CKIR subgraphs and PROVES them valid by compiling to SPIR-V through the Vulkan backend's shaderc (ADR-0103) — no GPU
+// needed, so the codegen is gated independently of the runtime. Also checks the fusion boundary (non-elementwise ⇒
+// rejected). ADR-0098.
 
 #include <crd/kir/ckir.hpp>
 #include <crd/kir/ckir_glsl.hpp>
 
 #include <crd/containers/string_view.hpp>
+#include <crd/gpu/vulkan_shader_compile.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
-#include <crd/shader/compile.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -17,7 +18,7 @@ namespace
 {
 bool compiles(const kir::GlslKernel& k, crd::memory::IAllocator* a)
 {
-    const auto res = crd::shader::compile_glsl(crd::shader::Stage::Compute, crd::containers::to_view(k.source), "ckir_ew", a);
+    const auto res = crd::gpu::compile_glsl_to_spirv(crd::gpu::ShaderStage::Compute, crd::containers::to_view(k.source), "ckir_ew", a);
     INFO(res.error_message.c_str());
     CHECK(res.ok);
     return res.ok && res.spirv.size() > 0;

@@ -3,11 +3,10 @@
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/containers/string_view.hpp>
+#include <crd/gpu/vulkan_shader_compile.hpp> // ADR-0103: GLSL→SPIR-V owned by the Vulkan backend, not crd-shader
 #include <crd/memory/allocators/malloc_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/resources/crdr.hpp>
-#include <crd/shader/compile.hpp>
-#include <crd/shader/types.hpp>
 
 namespace fs = crd::platform::fs;
 
@@ -18,28 +17,28 @@ namespace
 
 constexpr crd::u32 kGlslHandlerVersion = 1U;
 
-[[nodiscard]] crd::shader::Stage stage_from_path(crd::containers::StringView path) noexcept
+[[nodiscard]] crd::gpu::ShaderStage stage_from_path(crd::containers::StringView path) noexcept
 {
     if (path.size() >= 10U && path.substr(path.size() - 10U) == ".frag.glsl")
     {
-        return crd::shader::Stage::Fragment;
+        return crd::gpu::ShaderStage::Fragment;
     }
     if (path.size() >= 10U && path.substr(path.size() - 10U) == ".comp.glsl")
     {
-        return crd::shader::Stage::Compute;
+        return crd::gpu::ShaderStage::Compute;
     }
-    return crd::shader::Stage::Vertex; // .vert.glsl or fallback
+    return crd::gpu::ShaderStage::Vertex; // .vert.glsl or fallback
 }
 
-[[nodiscard]] crd::u32 spirv_chunk_fourcc(crd::shader::Stage stage) noexcept
+[[nodiscard]] crd::u32 spirv_chunk_fourcc(crd::gpu::ShaderStage stage) noexcept
 {
     switch (stage)
     {
-        case crd::shader::Stage::Fragment:
+        case crd::gpu::ShaderStage::Fragment:
             return crd::resources::kFourCC_SPVF;
-        case crd::shader::Stage::Compute:
+        case crd::gpu::ShaderStage::Compute:
             return crd::resources::kFourCC_SPVC;
-        case crd::shader::Stage::Vertex:
+        case crd::gpu::ShaderStage::Vertex:
         default:
             return crd::resources::kFourCC_SPVV;
     }
@@ -55,7 +54,7 @@ CookResult glsl_handler(const CookContext& ctx)
         return result; // ok = false
     }
 
-    const crd::shader::Stage stage = stage_from_path(ctx.source_path);
+    const crd::gpu::ShaderStage stage = stage_from_path(ctx.source_path);
 
     // Extract file name for error messages.
     const auto slash = ctx.source_path.rfind('/');
@@ -64,7 +63,7 @@ CookResult glsl_handler(const CookContext& ctx)
             ? ctx.source_path.substr(slash + 1U)
             : ctx.source_path;
 
-    crd::shader::CompileResult compiled = crd::shader::compile_glsl(
+    crd::gpu::ShaderCompileResult compiled = crd::gpu::compile_glsl_to_spirv(
         stage,
         crd::containers::StringView(source_text.data(), source_text.size()),
         name,

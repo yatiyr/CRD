@@ -7,9 +7,21 @@
 
 #include <memory>
 
+namespace crd::gpu
+{
+class IGpuContext; // D-008 C2-b: rhi can ADOPT a gpu-context device (forward-declared to keep this header abstract)
+} // namespace crd::gpu
+
 namespace crd::rhi
 {
 [[nodiscard]] std::unique_ptr<Instance> create_vulkan_instance(const InstanceDesc& desc = InstanceDesc{});
+
+// D-008 C2-b (ADR-0103): build an rhi Device that ADOPTS a `crd::gpu::VulkanGpuContext`'s VkInstance/VkPhysicalDevice/
+// VkDevice/queues — ONE device shared by the renderer (this Device), compute (`IComputeContext`), and raster
+// (`IRasterContext`). The returned Device uses the shared handles and NEVER destroys them; the context owns them and
+// must OUTLIVE the Device. `context` must be Vulkan + graphics-capable, else nullptr. This is the step that unifies the
+// two VkDevices the ADR-0099 audit found; `rhi-vulkan`'s own device creation retires at C2-f.
+[[nodiscard]] std::unique_ptr<Device> create_vulkan_device_adopting(crd::gpu::IGpuContext& context);
 
 // ADR-0085 S6 diagnostic: count of pooled VkDeviceMemory blocks the device's GPU
 // suballocator holds (dedicated allocations excluded). For tests/tools — a small

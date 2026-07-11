@@ -14,7 +14,7 @@
 
 #include <crd/containers/span.hpp>
 #include <crd/containers/string_view.hpp>
-#include <crd/shader/compile.hpp>
+#include <crd/gpu/vulkan_shader_compile.hpp> // ADR-0103: GLSL→SPIR-V now owned by the Vulkan backend, not crd-shader
 
 namespace crd::kir
 {
@@ -62,7 +62,7 @@ bool dispatch_glsl(crd::gpu::VulkanComputeContext& compute, crd::memory::IAlloca
     for (int i = 0; i < *pcache_count; ++i) { if (pcache[i].hash == h) { pipe = pcache[i].pipe.get(); break; } }
     if (pipe == nullptr)
     {
-        const auto cres = crd::shader::compile_glsl(crd::shader::Stage::Compute, glsl, "ckir", alloc);
+        const auto cres = crd::gpu::compile_glsl_to_spirv(crd::gpu::ShaderStage::Compute, glsl, "ckir", alloc);
         if (!cres.ok) { return false; }
         auto p = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(cres.spirv.data(), cres.spirv.size()), nb, 16U);
         if (p == nullptr || *pcache_count >= 64) { return false; }
@@ -113,29 +113,8 @@ bool dispatch_glsl(crd::gpu::VulkanComputeContext& compute, crd::memory::IAlloca
     return true;
 }
 
-// A3: does the graph reachable from `output` use any vector/matrix value (comps > 1)? → route to the vec emitter.
-[[nodiscard]] bool graph_uses_vec(const KGraph& g, int output, crd::memory::IAllocator* scratch)
-{
-    const int                       n = g.size();
-    crd::containers::Array<crd::u8> reach(scratch);
-    reach.resize(static_cast<crd::usize>(n), 0);
-    crd::containers::Array<int> stk(scratch);
-    stk.push_back(output);
-    while (stk.size() > 0)
-    {
-        const int i = stk[stk.size() - 1];
-        stk.resize(stk.size() - 1);
-        if (reach[static_cast<crd::usize>(i)]) { continue; }
-        reach[static_cast<crd::usize>(i)] = 1;
-        const KNode& nd = g.node(i);
-        if (nd.comps > 1 || nd.op == KOp::For || nd.op == KOp::LoopIndex || nd.op == KOp::LoopAcc) { return true; } // A4 tier-2: For graphs route to the vec emitter
-        if (nd.a >= 0) { stk.push_back(nd.a); }
-        if (nd.b >= 0) { stk.push_back(nd.b); }
-        if (nd.c >= 0) { stk.push_back(nd.c); }
-        if (nd.d >= 0) { stk.push_back(nd.d); }
-    }
-    return false;
-}
+// `graph_uses_vec` now lives (inline) in `ckir_glsl.hpp` — it was duplicated here and in backend_dx12.cpp as an
+// external-linkage symbol, i.e. an ODR violation that only stayed quiet because no program links both backends.
 } // namespace
 
 KirBackendVulkan::KirBackendVulkan(crd::memory::IAllocator* alloc) : m_impl(std::make_unique<Impl>())
@@ -328,7 +307,7 @@ int build_mini(const KGraph& g, int orig, const crd::u8* materialized, int root,
     if (materialized[orig] != 0 && orig != root)
     {
         const KNode& on           = g.node(orig);
-        const int    id           = kg.input(on.shape, on.dtype); // iidx == n_bnd (both count Inputs in creation order)
+        const int    id           = kg.input(on.shape, on.dtype()); // iidx == n_bnd (both count Inputs in creation order)
         boundary_by_iidx[n_bnd++] = orig;
         map[orig]                 = id;
         return id;
@@ -393,7 +372,8 @@ bool KirBackendVulkan::run_graph(const KGraph& g, int output, const float* const
     {
         if (reach[i] == 0 || mat[i] == 0) { continue; }
         const crd::u64      bytes = static_cast<crd::u64>(g.node(i).shape.numel()) * sizeof(float);
-        const ComputeMemory mem   = (i == output) ? ComputeMemory::GpuToCpu : (g.node(i).op == KOp::Input ? ComputeMemory::CpuToGpu : ComputeMemory::GpuOnly);
+        const ComputeMemory feed  = g.node(i).op == KOp::Input ? ComputeMemory::CpuToGpu : ComputeMemory::GpuOnly;
+        const ComputeMemory mem   = (i == output) ? ComputeMemory::GpuToCpu : feed;
         bufs[i]                   = impl.compute->create_buffer(bytes, crd::gpu::compute_usage::storage, mem);
         if (bufs[i] == nullptr) { return false; }
     }
@@ -485,7 +465,7 @@ bool KirBackendVulkan::run_graph(const KGraph& g, int output, const float* const
         else { return false; } // gather/contract — added when a technique needs them
         if (!ok) { return false; }
 
-        const auto cres = crd::shader::compile_glsl(crd::shader::Stage::Compute, crd::containers::to_view(kern.source), "ckir", impl.alloc);
+        const auto cres = crd::gpu::compile_glsl_to_spirv(crd::gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), "ckir", impl.alloc);
         if (!cres.ok) { return false; }
         auto p = impl.compute->create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(cres.spirv.data(), cres.spirv.size()), kern.n_inputs + 1, 16U);
         if (p == nullptr) { return false; }

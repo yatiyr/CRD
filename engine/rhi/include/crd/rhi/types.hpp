@@ -4,6 +4,11 @@
 #include <crd/containers/string.hpp>
 #include <crd/core/types.hpp>
 
+namespace crd::gpu
+{
+class IGpuProgram; // D-008 C2-d: a pipeline may take an opaque program instead of a raw-SPIR-V ShaderModule (closes I2)
+} // namespace crd::gpu
+
 namespace crd::rhi
 {
 enum class BackendApi : crd::u8
@@ -38,6 +43,7 @@ enum class DepthCompareOp : crd::u8
     Always         = 7
 };
 
+// NOLINTNEXTLINE(performance-enum-size) — u16 is a deliberate, stable base for the format taxonomy (desc/ABI layout).
 enum class Format : crd::u16
 {
     Undefined,
@@ -66,6 +72,7 @@ enum class MemoryUsage : crd::u8
     GpuToCpu,
 };
 
+// NOLINTNEXTLINE(performance-enum-size) — flag enum; u32 base matches the combined bit-or mask width (operator|).
 enum class BufferUsage : crd::u32
 {
     None      = 0,
@@ -81,6 +88,7 @@ enum class BufferUsage : crd::u32
     Indirect  = 1U << 6U,
 };
 
+// NOLINTNEXTLINE(performance-enum-size) — flag enum; u32 base matches the combined bit-or mask width (operator|).
 enum class ImageUsage : crd::u32
 {
     None                  = 0,
@@ -400,13 +408,6 @@ struct ImageDesc
     crd::u32 array_layers = 1;
 };
 
-struct ShaderModuleDesc
-{
-    ShaderStage                         stage       = ShaderStage::Vertex;
-    crd::containers::StringView         entry_point = "main";
-    crd::containers::ConstSpan<crd::u8> code{};
-};
-
 struct VertexBindingDesc
 {
     crd::u32        binding      = 0;
@@ -462,17 +463,20 @@ struct SpecializationConstantEntry
 // retained afterwards).
 struct ComputePipelineDesc
 {
-    class ShaderModule*   compute_shader  = nullptr;
-    class PipelineLayout* pipeline_layout = nullptr;
+    // D-008 C2-d4: OPAQUE compute program (no raw-SPIR-V `ShaderModule` — closes I2). Mint via `Device::create_program`.
+    crd::gpu::IGpuProgram* compute_program = nullptr;
+    class PipelineLayout*  pipeline_layout = nullptr;
     crd::containers::ConstSpan<SpecializationConstantEntry> specialization_entries{};
     crd::containers::ConstSpan<crd::u8>                     specialization_data{};
 };
 
 struct GraphicsPipelineDesc
 {
-    class ShaderModule*   vertex_shader   = nullptr;
-    class ShaderModule*   fragment_shader = nullptr;
-    PrimitiveTopology     topology        = PrimitiveTopology::TriangleList;
+    // D-008 C2-d4: OPAQUE program shaders (no raw-SPIR-V in this desc — closes I2). Mint via `Device::create_program`;
+    // a null `fragment_program` means a depth-only pipeline (no color output). `vertex_program` is required.
+    crd::gpu::IGpuProgram* vertex_program   = nullptr;
+    crd::gpu::IGpuProgram* fragment_program = nullptr;
+    PrimitiveTopology      topology         = PrimitiveTopology::TriangleList;
     Extent2D              viewport_extent{1280, 720};
     Format                color_format    = Format::B8G8R8A8Unorm;
     Format                depth_format    = Format::Undefined;

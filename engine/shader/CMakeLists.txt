@@ -1,40 +1,19 @@
+# ADR-0103 / D-008: the compile_glsl/compile_hlsl compilers moved to crd-gpu-context-vulkan (which owns the Vulkan-target
+# compilers). crd-shader keeps Effect / reflection / runtime / material payload / the resource loaders. D-008 C2-e removed
+# the LAST shaderc use (the Effect/Module RENDERING frontend, src/runtime.cpp) — it now takes an INJECTED
+# `crd::shader::ISpirvCompiler` (crd-shader-vulkan wraps `crd::gpu::compile_glsl_to_spirv`). crd-shader names NO shading
+# language or vendor compiler (ADR-0103 I1, `check_no_shader_language_leak`). It still links spirv-reflect — SPIR-V
+# reflection is bytecode inspection, not a language.
 if(WIN32 AND NOT DEFINED ENV{VULKAN_SDK})
     file(GLOB _crd_vulkan_sdk_dirs LIST_DIRECTORIES true "C:/VulkanSDK/*")
     list(SORT _crd_vulkan_sdk_dirs COMPARE NATURAL ORDER ASCENDING)
     list(REVERSE _crd_vulkan_sdk_dirs)
     foreach(_sdk_dir IN LISTS _crd_vulkan_sdk_dirs)
-        if(EXISTS "${_sdk_dir}/Include/shaderc/shaderc.h")
+        if(EXISTS "${_sdk_dir}/Source/SPIRV-Reflect/spirv_reflect.h")
             set(ENV{VULKAN_SDK} "${_sdk_dir}")
             break()
         endif()
     endforeach()
-endif()
-
-find_path(CRD_SHADERC_INCLUDE_DIR shaderc/shaderc.h HINTS "$ENV{VULKAN_SDK}/Include")
-
-if(NOT CRD_SHADERC_INCLUDE_DIR)
-    message(FATAL_ERROR "shaderc not found; required for crd-shader 2.3b")
-endif()
-
-# dxc API header (ships with the Vulkan SDK alongside shaderc on Windows;
-# typically absent from system Vulkan installs on Linux). Header only —
-# dxcompiler is loaded dynamically at runtime, no link-time dependency.
-#
-# **Optional** (v9e-c-dxc-spirv-dispatch follow-up after the 2026-05-19
-# full-sweep failure on Linux): if dxc headers are unavailable at configure
-# time, `compile_hlsl` builds as a graceful-failure stub returning
-# `CompileResult{ok=false, error_message="dxc not available at build time"}`.
-# This matches `compile_hlsl`'s already-documented missing-library
-# fallthrough — Linux configs ship without dxc and HLSL conformance tests
-# soft-skip on those configs.
-find_path(CRD_DXC_INCLUDE_DIR dxc/dxcapi.h HINTS "$ENV{VULKAN_SDK}/Include")
-
-if(CRD_DXC_INCLUDE_DIR)
-    set(CRD_HAS_DXC TRUE)
-    message(STATUS "[crd-shader] dxc headers found at ${CRD_DXC_INCLUDE_DIR}; compile_hlsl enabled")
-else()
-    set(CRD_HAS_DXC FALSE)
-    message(STATUS "[crd-shader] dxc headers NOT found; compile_hlsl returns stub failure (Linux without dxc-dev)")
 endif()
 
 find_path(CRD_SPIRV_REFLECT_INCLUDE_DIR spirv_reflect.h HINTS "$ENV{VULKAN_SDK}/Source/SPIRV-Reflect")
@@ -58,16 +37,8 @@ target_include_directories(crd-shader
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
     PRIVATE
-        "${CRD_SHADERC_INCLUDE_DIR}"
         "${CRD_SPIRV_REFLECT_INCLUDE_DIR}"
 )
-
-if(CRD_HAS_DXC)
-    target_include_directories(crd-shader PRIVATE "${CRD_DXC_INCLUDE_DIR}")
-    target_compile_definitions(crd-shader PRIVATE CRD_HAS_DXC=1)
-else()
-    target_compile_definitions(crd-shader PRIVATE CRD_HAS_DXC=0)
-endif()
 
 target_link_libraries(crd-shader
     PUBLIC
