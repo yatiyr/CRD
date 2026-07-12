@@ -1,3 +1,4 @@
+#include <crd/gpu/vulkan_context.hpp> // D-008 C2-f: create_vulkan_gpu_context (rhi adopts one device)
 #include <crd/log/log.hpp>
 #include <crd/memory/allocator.hpp>
 #include <crd/renderer/gpu_uploader.hpp>
@@ -91,18 +92,19 @@ int main()
     crd::log::init(cfg);
     crd::log::add_sink(std::make_unique<crd::log::ConsoleSink>());
 
-    // Create Vulkan instance (headless — no GLFW surface extensions needed).
-    auto instance = crd::rhi::create_vulkan_instance({.application_name = crd::containers::String("smoke_asset_import"),
-                                                      .enable_validation = false});
-    if (instance == nullptr)
+    // D-008 C2-f: adopt a headless device from a gpu-context (rhi creates no VkDevice). gpu_ctx outlives device.
+    crd::gpu::GpuContextConfig gpu_cfg;
+    gpu_cfg.enable_validation = false;
+    auto gpu_ctx = crd::gpu::create_vulkan_gpu_context(gpu_cfg);
+    if (gpu_ctx == nullptr)
     {
-        CRD_LOG_WARN(g_log_smoke_asset, "No Vulkan instance — skipping GPU upload smoke");
+        CRD_LOG_WARN(g_log_smoke_asset, "No Vulkan context — skipping GPU upload smoke");
         crd::log::flush();
         crd::log::shutdown();
         return 0;
     }
 
-    auto device = instance->create_device({});
+    auto device = crd::rhi::create_vulkan_device_adopting(*gpu_ctx);
     if (device == nullptr)
     {
         CRD_LOG_WARN(g_log_smoke_asset, "No Vulkan device available — skipping GPU upload smoke");

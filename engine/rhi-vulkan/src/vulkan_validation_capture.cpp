@@ -93,18 +93,20 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL capture_callback(
     return VK_FALSE; // Per Vulkan spec: must return VK_FALSE.
 }
 
-ValidationCapture::ValidationCapture(Instance& instance)
-    : m_impl(std::make_unique<Impl>())
+namespace
 {
-    m_impl->instance = vulkan_instance(instance);
-    if (m_impl->instance == VK_NULL_HANDLE)
+// Install the second debug-utils messenger on `vk_instance`, routing to `impl`. Shared by both ctors (D-008 C2-f).
+void install_capture_messenger(ValidationCapture::Impl* impl, VkInstance vk_instance)
+{
+    impl->instance = vk_instance;
+    if (impl->instance == VK_NULL_HANDLE)
         return;
 
     const auto create_fn = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(
-        vkGetInstanceProcAddr(m_impl->instance, "vkCreateDebugUtilsMessengerEXT"));
-    m_impl->destroy_fn = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(
-        vkGetInstanceProcAddr(m_impl->instance, "vkDestroyDebugUtilsMessengerEXT"));
-    if (create_fn == nullptr || m_impl->destroy_fn == nullptr)
+        vkGetInstanceProcAddr(impl->instance, "vkCreateDebugUtilsMessengerEXT"));
+    impl->destroy_fn = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(
+        vkGetInstanceProcAddr(impl->instance, "vkDestroyDebugUtilsMessengerEXT"));
+    if (create_fn == nullptr || impl->destroy_fn == nullptr)
         return; // VK_EXT_debug_utils unavailable; capture stays silent.
 
     VkDebugUtilsMessengerCreateInfoEXT info{};
@@ -116,9 +118,22 @@ ValidationCapture::ValidationCapture(Instance& instance)
                          | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT
                          | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
     info.pfnUserCallback = &capture_callback;
-    info.pUserData       = m_impl.get();
+    info.pUserData       = impl;
 
-    (void)create_fn(m_impl->instance, &info, nullptr, &m_impl->messenger);
+    (void)create_fn(impl->instance, &info, nullptr, &impl->messenger);
+}
+} // namespace
+
+ValidationCapture::ValidationCapture(Instance& instance)
+    : m_impl(std::make_unique<Impl>())
+{
+    install_capture_messenger(m_impl.get(), vulkan_instance(instance));
+}
+
+ValidationCapture::ValidationCapture(Device& device)
+    : m_impl(std::make_unique<Impl>())
+{
+    install_capture_messenger(m_impl.get(), vulkan_instance(device));
 }
 
 ValidationCapture::~ValidationCapture()

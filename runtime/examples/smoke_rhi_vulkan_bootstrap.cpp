@@ -1,3 +1,5 @@
+#include <crd/gpu/program.hpp>       // D-008: opaque IGpuProgram via device->create_program
+#include <crd/gpu/vulkan_context.hpp> // D-008 C2-f: create_vulkan_gpu_context (the ONE VkDevice owner rhi adopts)
 #include <crd/log/log.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/platform/platform.hpp>
@@ -41,8 +43,11 @@ int main()
         CRD_LOG_INFO(g_log_smoke_rhi_vk, "Adapter: {}", adapter.name.c_str());
     }
 
-    crd::rhi::DeviceDesc device_desc;
-    auto device = instance->create_device(device_desc);
+    // D-008 C2-f: rhi creates no VkDevice — adopt one from a windowed gpu-context (gpu_ctx outlives device).
+    crd::gpu::GpuContextConfig gpu_cfg;
+    gpu_cfg.headless = false;
+    auto gpu_ctx = crd::gpu::create_vulkan_gpu_context(gpu_cfg);
+    auto device = crd::rhi::create_vulkan_device_adopting(*gpu_ctx);
     auto swapchain = device->create_swapchain(
         {window.native_handle(), {1280, 720}, crd::rhi::Format::B8G8R8A8Unorm, crd::rhi::PresentMode::Fifo, 2});
 
@@ -57,10 +62,10 @@ int main()
         return 3;
     }
 
-    auto vs = device->create_shader_module(
-        {crd::rhi::ShaderStage::Vertex, "main", crd::containers::make_span(vs_spv.data(), vs_spv.size())});
-    auto fs_module = device->create_shader_module(
-        {crd::rhi::ShaderStage::Fragment, "main", crd::containers::make_span(fs_spv.data(), fs_spv.size())});
+    auto vs = device->create_program(crd::rhi::ShaderStage::Vertex,
+                                     crd::containers::make_span(vs_spv.data(), vs_spv.size()));
+    auto fs_module = device->create_program(crd::rhi::ShaderStage::Fragment,
+                                            crd::containers::make_span(fs_spv.data(), fs_spv.size()));
 
     struct Vertex
     {
@@ -106,6 +111,7 @@ int main()
                                                       crd::containers::make_span(attributes),
                                                       false,
                                                       false});
+    const crd::rhi::DeviceDesc device_desc{}; // D-008 C2-f: no longer drives device creation — just the frame-count config
     crd::containers::Array<std::unique_ptr<crd::rhi::CommandBuffer>> command_buffers;
     for (crd::u32 i = 0; i < device_desc.frames_in_flight; ++i)
     {

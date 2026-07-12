@@ -30,8 +30,8 @@ D3D12_RESOURCE_STATES access_state(ComputeAccess a) noexcept
     {
     case ComputeAccess::TransferSrc: return D3D12_RESOURCE_STATE_COPY_SOURCE;
     case ComputeAccess::TransferDst: return D3D12_RESOURCE_STATE_COPY_DEST;
-    case ComputeAccess::ShaderRead:  return D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-    case ComputeAccess::ShaderWrite: return D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    case ComputeAccess::ShaderRead:
+    case ComputeAccess::ShaderWrite: return D3D12_RESOURCE_STATE_UNORDERED_ACCESS; // UAV covers both for compute
     case ComputeAccess::HostRead:    return D3D12_RESOURCE_STATE_COPY_SOURCE; // readback is a copy to a READBACK buffer
     }
     return D3D12_RESOURCE_STATE_COMMON;
@@ -209,7 +209,9 @@ Dx12ComputeContext::Dx12ComputeContext(crd::memory::IAllocator* alloc) : m_impl(
 
     const HMODULE dxc_dll = LoadLibraryW(L"dxcompiler.dll");
     if (dxc_dll == nullptr) { return; }
-    auto* create = reinterpret_cast<DxcCreateInstanceProc>(reinterpret_cast<void*>(GetProcAddress(dxc_dll, "DxcCreateInstance")));
+    // NOLINTNEXTLINE(clang-diagnostic-cast-function-type-strict) — GetProcAddress returns FARPROC; a direct
+    // reinterpret_cast to the real proc type is the standard Win32 idiom (no void* hop, per bugprone-casting-through-void).
+    auto* create = reinterpret_cast<DxcCreateInstanceProc>(GetProcAddress(dxc_dll, "DxcCreateInstance"));
     if (create == nullptr || FAILED(create(CLSID_DxcCompiler, IID_PPV_ARGS(&impl.dxc)))) { return; }
 
     impl.ok = impl.event != nullptr;

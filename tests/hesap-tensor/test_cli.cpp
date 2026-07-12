@@ -18,7 +18,7 @@ namespace cli = crd::hesap::cli;
 namespace
 {
 
-const bool pull_tensor = (crd::hesap::tensor::register_tensor_cli_anchor(), true);
+const bool kPullTensor = (crd::hesap::tensor::register_tensor_cli_anchor(), true);
 
 const cli::ResultText* as_text(const cli::CommandResult& r)
 {
@@ -40,7 +40,7 @@ bool contains(const crd::containers::String& hay, const char* needle)
 
 TEST_CASE("CLI tensor: all 12 hesap.tensor.* commands are registered", "[tensor][cli]")
 {
-    REQUIRE(pull_tensor);
+    REQUIRE(kPullTensor);
     const char* names[] = {
         "hesap.tensor.einsum.f64",  "hesap.tensor.ew.f64",     "hesap.tensor.reduce.f64",
         "hesap.tensor.permute.f64", "hesap.tensor.batched.f64", "hesap.tensor.hyperopt",
@@ -56,7 +56,7 @@ TEST_CASE("CLI tensor: all 12 hesap.tensor.* commands are registered", "[tensor]
 
 TEST_CASE("CLI tensor: einsum executes and is run-twice bit-identical", "[tensor][cli]")
 {
-    REQUIRE(pull_tensor);
+    REQUIRE(kPullTensor);
     crd::memory::TlsfAllocator alloc(1U << 22);
     const auto* rec = cli::CommandRegistry::global().find("hesap.tensor.einsum.f64");
     REQUIRE(rec != nullptr);
@@ -87,7 +87,7 @@ TEST_CASE("CLI tensor: einsum executes and is run-twice bit-identical", "[tensor
 
 TEST_CASE("CLI tensor: batched cholesky reports zero failed lanes", "[tensor][cli]")
 {
-    REQUIRE(pull_tensor);
+    REQUIRE(kPullTensor);
     crd::memory::TlsfAllocator alloc(1U << 24);
     const auto* rec = cli::CommandRegistry::global().find("hesap.tensor.batched.f64");
     REQUIRE(rec != nullptr);
@@ -103,7 +103,7 @@ TEST_CASE("CLI tensor: batched cholesky reports zero failed lanes", "[tensor][cl
 
 TEST_CASE("CLI tensor: tt builds a train within tolerance", "[tensor][cli]")
 {
-    REQUIRE(pull_tensor);
+    REQUIRE(kPullTensor);
     crd::memory::TlsfAllocator alloc(1U << 24);
     const auto* rec = cli::CommandRegistry::global().find("hesap.tensor.tt.f64");
     REQUIRE(rec != nullptr);
@@ -119,7 +119,7 @@ TEST_CASE("CLI tensor: tt builds a train within tolerance", "[tensor][cli]")
 
 TEST_CASE("CLI tensor: bad einsum spec yields a structured error", "[tensor][cli]")
 {
-    REQUIRE(pull_tensor);
+    REQUIRE(kPullTensor);
     crd::memory::TlsfAllocator alloc(1U << 20);
     const auto* rec = cli::CommandRegistry::global().find("hesap.tensor.einsum.f64");
     REQUIRE(rec != nullptr);

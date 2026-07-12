@@ -5,7 +5,335 @@
 
 ---
 
-## Current focus — Phase 3.1.6 **v17 GPU compute (CKIR)** — on **DETOUR D-007** (universal shader IR)
+## Current focus — Phase 3.1.6 **v17 GPU compute (CKIR)** — on the **GPU-program-system detour** (D-007+D-008 MERGED)
+
+> **▶ THE ONE MASTER DOC: `docs/detours/D-007-gpu-program-system.md`** — a single ordered subslice table (D-007 shader IR +
+> D-008 device convergence, merged 2026-07-11). Foundation + raster DONE: Phase A ✅ · fan-out ✅ · B0 ✅ · B3-a/a′ ✅ ·
+> C0/C1/C2 ✅ (device convergence CLOSED, I1+I2 shut, one VkDevice) · **B3-c/d ✅** (GLSL + HLSL VS+FS emitters) ·
+> **C4 ✅** (DX12 `IRasterContext` + the real DX12 create-program seam + graphics-PSO draw) · **B3-e ✅** (ONE CKIR
+> triangle draws on BOTH Vulkan + DX12 — the IR-authored end-to-end) · **B1-a ✅** (fragment derivatives) · **B1-b ✅**
+> (`discard`/alpha-test) · **B1-c ✅** (interpolation qualifiers flat/noperspective/centroid/sample — all four OBSERVABLY
+> tested on Vulkan + DX12, incl. MSAA render targets for centroid/sample) · **B1-d ✅** (frag-depth write + early-Z flag +
+> conservative depth — NEW depth-buffer infra both backends; observable frag-depth split; early_fragment_tests + DepthGreater/
+> Less compile-validate) · **B1-e ✅** (VARIABLE-RATE SHADING — ALL THREE rate sources: per-draw pipeline + per-primitive
+> shader-output (`gl_PrimitiveShadingRateEXT`/`SV_ShadingRate`) + attachment image; observable 2×2 blockiness on Vulkan +
+> DX12) · **B1-f ✅** (conservative raster overestimate + inner coverage + fragment interlock/ROV + FS storage buffers —
+> observable covers-more/edge-split/deterministic-RMW on BOTH backends, IDENTICAL numbers; 3 Vulkan VUIDs + 1 DX12
+> debug-layer error found-and-fixed). **▶ B1 COMPLETE — the fragment-stage frontier is done.** · **B2 ✅ core (a–d)**
+> (TEXTURE & SAMPLER system — separable texture/sampler IR types; B2-a 2D sampling + upload/bind infra · B2-b full sample-op
+> family Lod/Grad/Cmp-shadow/texelFetch/gather/textureSize · B2-c dims 1D/3D/Cube/2DArray/CubeArray + 2DMS-emitter · B2-d
+> BINDLESS descriptor arrays w/ dynamic per-fragment index; ALL observable + IDENTICAL both backends; 2 CubeArray VUIDs
+> found+fixed (`imageCubeArray`); 2DMS observable + B2-e sampler-feedback documented as DX12-only/render-to-texture
+> boundaries). · **B5 ✅ (a–c)** (OpenPBR SURFACE MATERIALS — `ckir_material.hpp`: B5-a surface contract + deferred G-buffer
+> (NEW MRT device capability, both backends) · B5-b the FULL OpenPBR 1.1 slab (~37 fields: specular/coat/fuzz/transmission/
+> subsurface/thin-film/thin-walled) via an extended 8-attachment G-buffer · B5-c fresh `ShadingModel`{PBR+NPR toon/cel/gooch/
+> outline/hatching} + `AlphaMode`{opaque/masked/translucent/additive} tags + masked-discard; material = surface, lighting-
+> agnostic per ADR-0102 D3; every channel + tag reads back pixel-IDENTICAL both backends). · **B6 ◧** (MaterialX-parity NODE
+> LIBRARY) — **B6-a ✅** the OPERATOR set (`ckir_nodes.hpp`, ~60 nodes: math/logical/conditional/channel/adjustment/
+> compositing/convolution) bit-exact on the CPU oracle + observable both backends (overlay per-channel branch 57,36,14 /
+> 244,227,210 IDENTICAL); **B6-b ✅** SOURCE (noise/shapes/geometric, `ckir_noise.hpp`+`ckir_nodes.hpp`) — NOISE perlin 2D/3D ·
+> cell 2D/3D · fractal 2D · worley 2D/3D (all 4 metrics + both styles), bit-exact vs MaterialX `mx_noise.glsl` on the CPU
+> oracle AND rendering pixel-identical both backends (perlin 139/139 · worley 154/154); SHAPES ramplr/ramptb/checkerboard
+> (CPU-exact) + splitlr/splittb (fragment aastep); GEOMETRIC position/normal/tangent/texcoord (stage_in wrappers). The 32-bit
+> Bob-Jenkins hash runs on the f64/i64 IR (split-rotl + wraparound mask; U32→`uint` logical `>>`); **fixed 2 real emitter
+> bugs the GPU caught** (raster emitters lagged compute on bitwise + trig/round ops; U32 consts needed a `u` suffix) — compute
+> byte-exact HELD (33010/30821). **B6-c ✅** UV transforms (`ckir_nodes.hpp`) — rotate2d · rotate3d (Rodrigues) · place2d
+> (panner/rotator, SRT+TRS) · triplanar_weights+triplanar (blend core; full 3-image projection composes B2 sampling at B8);
+> CPU-oracle bit-exact + place2d observable both backends (98/98, validates Radians/Sin/Cos on raster). **B6-d ✅** NPR
+> (viewdirection · facingratio · gooch_shade) CPU-oracle bit-exact + gooch observable both backends (193,193,181, validates
+> reflect on raster). **▶ B6 COMPLETE (2026-07-12) — the full MaterialX-parity node library (~90 nodes: operators + noise +
+> shapes + geometric + UV + NPR).** Cross-config close: win-debug + clang-cl (both backends) + asan (clean) + shipping GREEN;
+> kir 400/50 · vulkan 395/40 · dx12 324/33; **byte-exact HELD (33010/30821)**; validation-clean inherited (B6 adds NO device
+> features); tidy-clean. Fixed 2 real emitter bugs the GPU caught (raster emitters lagged compute; U32 `u`-suffix). · **B7 ✅
+> COMPLETE (2026-07-12) — the material LOWERING compiler** (`ckir_lower.hpp`): frequency classification (Constant/Uniform/
+> Vertex/Fragment "cheapest correct stage") · `lower`/`lower_entry` wrapping the semantics-preserving optimize (const-fold→
+> DCE→CSE) · `uniform_boundary` (the value-neutral hoist sites; physical VS-varying materialization at B8) · `specialize`
+> (static switch→ShaderOption variant via new `KGraph::pin_const`/`alias` + `fold_static_branches`). ROUND-TRIP BIT-STABLE:
+> CPU-oracle 86/5 + a LOWERED B6 material renders PIXEL-IDENTICAL both backends (overlay 57,36,14/244,227,210). Cross-config
+> close GREEN (win-debug+clang-cl+asan+shipping; kir 486/55 · vulkan 406/41 · dx12 334/34); byte-exact HELD (33010/30821);
+> tidy-clean. **NEXT: B8 — the FRONTIER lighting + shadow system (GOLD STANDARD, scope-expanded by user 2026-07-12; AMENDS
+> ADR-0102 D7 — builds the full raster pipelines NOW, not post-hesap; D7's deferral struck in place).** 13 sub-slices, each
+> bit-exact + both-backends (B5–B7 bar): LIGHTING LIB (`ckir_lighting.hpp`) — a Cook-Torrance GGX+multiscatter core · full
+> OpenPBR lobes (aniso/clearcoat/sheen/thin-film/transmission/subsurface) · punctual+spot · **area lights (LTC)** · **IBL**
+> (split-sum); SHADOWS (gold standard) — bias stack · **PCF→PCSS** + **EVSM/Moment SM** · **stable CASCADED SHADOW MAPS**
+> (Valient snap + SDSM fit + cascade blend) · contact shadows (+VSM ceiling); **skinning** (LBS+dual-quaternion, set 3);
+> RENDERER — the `MaterialTemplate`/`variant_for_pass` cook seam (via B7 `lower_entry`) + **Forward+ (clustered cull) &
+> Deferred** frame-graph paths → a lit/shadowed(CSM+PCSS)/skinned object renders both backends. RT shadows = B9+C3; neural =
+> B10. **Full technique table + references → `docs/detours/D-007-gpu-program-system.md` §"B8 — the frontier lighting + shadow
+> system".** **B8-a ✅ (2026-07-12)** — `ckir_lighting.hpp` Cook-Torrance core (d_ggx·v_smith·f_schlick·fd_burley·Karis-DFG·
+> Kulla-Conty energy-comp·brdf_direct), faithful Filament transcription, CPU-oracle bit-exact + both backends `239,83,58`;
+> cross-config GREEN, byte-exact HELD, no device features. **B8-b ✅ (2026-07-12)** — the FULL OpenPBR lobe stack (aniso
+> `d_ggx_anisotropic`+aniso-V · sheen `d_charlie`+`v_neubelt` · clearcoat `d_ggx`+`v_kelemen` IOR1.5 · subsurface wrap-BTDF ·
+> **thin-film iridescence** `eval_iridescence` Belcour-Barla glTF · **transmission** `transmission_btdf`+`volume_attenuation`
+> Beer+`refraction_ray` Snell glTF), all bit-exact vs Filament/glTF + layered (`235,81,57`) + glass thin-film/transmission
+> (`14,26,13`) observables both backends; caught 2 bit-faithfulness bugs (`a2·b2·b2` LEFT-assoc; φ23 PER-CHANNEL select).
+> ⛔ NO DEFERRALS — the earlier "defer thin-film+transmission" was WRONG (user 2026-07-12) and both were built in full: pure
+> analytic math (only the scene-colour SAMPLE the refraction ray reads is the renderer leaf, B8-l). See
+> [[feedback_decompose_before_deferring_analytic_core_is_buildable]]. **B8-c ✅ (2026-07-12)** — punctual light types
+> (`directional_light` · `point_light` inverse-square smooth-window · `spot_light` cone) + `punctual_radiance` + forward loop,
+> Filament `surface_light_punctual.fs`; `[lights]` bit-exact + a 3-light observable both backends (`255,174,94`); set-1
+> light-array structured-buffer binding is the renderer leaf (B8-k/l). **B8-d ◧ (2026-07-12)** — area lights (Heitz LTC):
+> ✅ COMPLETE (2026-07-12): RECT (`integrate_edge_vec`+`ltc_evaluate_rect` clipless; `52,33,20`) · LINE/TUBE (`Fpo`/`Fwt`+
+> `i_diffuse_line` branchless clip+`i_ltc_line` mat_inverse reweight; `91,121,192`) · DISK/SPHERE (`solve_cubic` Blinn +
+> `ltc_evaluate_disk` ellipse eigendecomp, all branchless-select; `48,29,19`) · the LTC LUT (`ltc_matrix` iso + `ltc_matrix_aniso`
+> reconstruction → SPECULAR `53,48,43` + ANISO `59,52,28` observables). ALL bit-exact CPU-oracle (identity + fitted Minv, full
+> mat_inverse + SolveCubic transcribed vs the oracle) + observables pixel-identical both backends; 4-config CPU GREEN; tidy-clean.
+> The 64×64 ltc_1/ltc_2 fitted tables are a renderer TEXTURE asset (B2 upload), not embedded. ⭐ scar: `binary(Mul,vec3,scalar)`
+> broadcasts on GPU but the same-shape oracle reads OOB → use nodes::detail::bin. **B8-e ✅ (2026-07-12)** — IBL: runtime
+> `sh_irradiance` (Filament L2 SH) + `ibl_diffuse` + `ibl_specular` (Karis split-sum + analytic DFG + energy-comp); generation
+> `importance_sample_ggx` + `dfg_integrand`. `[ibl]` bit-exact (runtime + generation) + an IBL observable both backends
+> (`190,162,160`); 4-config CPU GREEN; tidy-clean. Prefiltered env cubemap + DFG LUT + SH coeffs are renderer assets (B2).
+> **B8-f ✅ (2026-07-12)** — shadow-map foundation + bias stack: `shadow_project` (mat4 light-proj + persp-divide) + `normal_offset_bias`
+> + `slope_scaled_bias` + `receiver_plane_bias` (Isidoro) + `shadow_factor` (→ hardware-PCF `tex_sample_cmp`, B2-b path). `[shadow]`
+> bit-exact + a `draw_shadow` observable both backends (left lit 229 / right shadowed 0); 4-config CPU GREEN; tidy-clean. The
+> PassType::Shadow depth-render is the renderer leaf (B8-k/l). **B8-g ✅ (2026-07-12)** — filtered soft shadows: `pcf_shadow`
+> (8-tap IGN-rotated Poisson) · `pcss_penumbra` · EVSM (`evsm_warp`+`chebyshev_bound`+`evsm_shadow`) · MSM `msm_hamburger`
+> (Peters-Klein 4-moment Hankel/Cholesky). `[softshadow]` bit-exact all 4 + a PCF `draw_shadow` observable both backends
+> (229/0); 4-config CPU GREEN. ⭐ MSM needs ≥3-depth moments (2-point → rank-deficient Hankel → NaN); Mix(vec4,vec4,scalar)
+> factor must be splatted. EVSM/MSM moment-map storage rides B8-k/l (no float-texture upload yet). **B8-h ✅ (2026-07-12)** —
+> cascaded shadow maps, the selection/stabilization math: `csm_split_practical` (log-uniform×uniform λ-blend, Zhang PSSM) ·
+> `csm_select_cascade` (branchless Step-sum cascade index) · `csm_texel_snap` (Valient round-to-texel stabilization) ·
+> `csm_blend_factor` (smooth cross-cascade band). `[csm]` bit-exact + a cascade-selection observable both backends
+> (index/3 · blend · snapped-sweep → 255,255,223); 4-config CPU GREEN; tidy-clean; byte-exact HELD (33010/30821). ⭐ a fresh
+> tidy build peeled one onion-layer — a newly-flagged nested ternary in `vulkan_raster_context.cpp` — fixed in place. SDSM
+> tight-fit + 2DArray atlas storage + per-cascade PCF/PCSS render + cascade-select matrices (set 1) ride B8-k/l (no
+> 2DArray-depth upload yet); the split/select/stabilize/blend math is complete. **B8-i ✅ (2026-07-12)** — screen-space +
+> translucent shadow frontier (the buildable analytic cores): `contact_shadow` (4-tap screen-space windowed march + fade,
+> scalar step per tap) · `fourier_opacity_transmittance` (Fourier Opacity Maps — hair/foliage/smoke fractional transmittance
+> `exp(−τ)`) · `vsm_clipmap_level` + `vsm_page_coord` (Virtual Shadow Map addressing). `[ssshadow]` bit-exact + THREE observables
+> both backends (contact 242,191,140 · FOM 131≈132 1-ULP · VSM 170,207,143); 4-config CPU GREEN; tidy-clean; byte-exact HELD
+> (33010/30821). ⭐ scar avoided: vec4 Step has no per-component raster emitter (create_program→nullptr) → scalar step per tap
+> (idiomatic, the taps are independent samples). RT shadows+SIGMA/ReBLUR ride B9 (GPU ray traversal); MegaLights/ReSTIR
+> many-light rides B14 (reservoir substrate) — infra-sequenced leaves, not deferrals. The real depth-buffer sample (contact) +
+> VSM page-table/feedback allocation are the B8-l renderer leaf. **B8-j ✅ (2026-07-12)** — skinning: `lbs_skin_position` +
+> `lbs_skin_normal` (linear-blend, transformed-position blend = matvec + weighted sum) · `dquat_skin_position` (dual-quaternion,
+> Kavan 2007 — antipodal blend + normalize + rigid transform via cross, volume-preserving). `[skin]` bit-exact (incl. the
+> antipodality sign-flip) + TWO observables both backends (LBS 156,114,51 · DQS 94,170,140); 4-config CPU GREEN; tidy-clean;
+> byte-exact HELD (33010/30821). Bone palette (set-3 structured buffer) + per-vertex indices/weights + compute pre-skin ride
+> B8-l; the blend math is complete. **B8-k ✅ (2026-07-12)** — the material cook seam: new `ckir_cook.hpp` (`crd::kir::cook`)
+> — `PassType`{Shadow·DepthPrepass·GBuffer·Forward} · `MaterialTemplate` (surface-graph callback) · `shade_forward` ·
+> `build_fs_for_pass` (per-pass FS + B7 `lower_entry`) · `specialize_variant` (ShaderOption bake). `[cook]` = structural +
+> lowering round-trip bit-stable + specialize; Forward variant renders lit (230,73,52) both backends + GBuffer variant
+> compiles both. **⭐⭐ Fixed a REAL B8-a bug the bit-exact tests were BLIND to: `energy_compensation` divided by the analytic
+> DFG bias which goes NEGATIVE at roughness ≳0.8 → BLACK rough surfaces; the [brdf]/[ibl] tests passed because oracle==GPU==buggy
+> (bit-exactness = portability, NOT correctness). Floored the bias (PREVENT_DIV0 idiom); roughness→1.0 now renders; refs
+> updated.** 4-config GREEN; tidy-clean; byte-exact HELD (33010/30821). The material VS (attribute transform + skinning +
+> varyings) + physical bindings (params→set-2 · lights→set-1 · bones→set-3 · reflection) ride B8-l. **B8-l ✅ (2026-07-12)** —
+> the render paths (analytic cores), new `ckir_render.hpp` (`crd::kir::render`): **Forward+** `cluster_z_slice`+`cluster_coord`
+> (exponential froxel grid) + `sphere_aabb_sq_dist`+`light_cluster_cull` (light-sphere-vs-cluster test) · **Deferred**
+> `deferred_shade` (decode B5 G-buffer MRT → surface → B8 shade; renders 230,73,52 = IDENTICAL to the forward path) ·
+> **clustered decals** `decal_project` (world→decal-box uv + inside). `[render]` bit-exact + 3 observables both backends
+> (deferred 230,73,52 · cluster 191,76,255 · decal 255,166,0); 4-config GREEN; tidy-clean; byte-exact HELD (33010/30821).
+> ⭐ the vec·scalar broadcast scar hit a 3rd time (deferred normal decode; konst/kf are scalars, Shape≠comps) → GPU 230 vs
+> oracle 33 → fixed with nodes::detail::bin; memory updated. Renderer leaves (B8-m + post-detour): the clustered-cull COMPUTE
+> dispatch (atomic list build → set-1), G-buffer render-to-texture + sampling, decal-cull list, frame-graph orchestration.
+> **B8-m ✅ (2026-07-12) — B8 CLOSED.** ONE master shader composing the WHOLE B8 stack: skinning (B8-j) → surface (B5) → direct
+> Cook-Torrance (B8-a/c) → IBL ambient (B8-e) → real PCF shadow (B8-f/g, comparison sampler). Composed correctly — shadow
+> modulates DIRECT only, IBL ambient SURVIVES in shadow. Both backends via draw_shadow: LIT region oracle-EXACT (118,121,101 ==
+> direct+ambient, pixel-identical VK==DX12), SHADOWED region keeps ambient floor (col27 R=89, darker by 29, non-black). Tidy-clean
+> + shipping-LTO + asan compile GREEN; byte-exact HELD (33010/30821); lighting 154/17 VK · 131/17 DX no regression. Full CSM
+> 2DArray atlas + PCSS + multi-pass frame-graph + compute-feature validation ride B8-k/l + post-detour; the SHADING composition
+> is complete + proven. **▶▶ B8 COMPLETE — the frontier lighting + shadow system (B8-a…m) is IN, bit-exact + both-backends.**
+> **B12 STARTED — B12-a ✅ (2026-07-12):** screen-space AO, new `ckir_screen.hpp` (`crd::kir::screen`): `ssilvb_sector_mask` +
+> `ssilvb_ao` (Visibility-Bitmask AO / SSILVB — u32 sector bitmask + popcount, clamped shifts for GPU-u32==oracle) · `gtao_slice`
+> + `gtao_multibounce` (GTAO ground-truth + albedo re-lighting) · `spec_occlusion` (Frostbite). `[ssao]` bit-exact + an
+> observable composing all four (48,34,27) both backends oracle-exact; 4-config GREEN; tidy-clean; byte-exact HELD (33010/30821).
+> ⭐ wired BitCount/BitNot/FindLSB/FindMSB into BOTH raster emitters (compute had them, fragment lagged → create_program→null);
+> compute golden emissions untouched so canary held. Bent-normal march + depth-buffer horizon search = renderer leaf.
+> **▶▶ B12 COMPLETE (2026-07-12)** — all 5 sub-slices in `ckir_screen.hpp` (`crd::kir::screen`), bit-exact + observable both
+> backends: **a** AO (SSILVB u32 bitmask+popcount · GTAO · spec-occ) · **b** SSR (reflect·Hi-Z hit·edge-fade·confidence) · **c**
+> SSGI (visibility-bitmask indirect diffuse `sm & ~bf`) · **d** volumetrics (phase family HG/Cornette-Shanks/**Draine-Mie** +
+> Beer-Lambert + froxel scatter) · **e** SSS (Burley diffusion + separable Gaussian). `[ssao]`/`[ssr]`/`[ssgi]`/`[volsss]`
+> bit-exact 4-config + 5 observables (48,34,27 · 70,75,55 · 27,19,31 · 12,10,7 · 4,5,4) oracle-exact; tidy-clean; byte-exact
+> HELD (33010/30821); kir 536/78. ⭐ wired BitCount/BitNot/FindLSB/FindMSB into BOTH raster emitters (compute had them, fragment
+> lagged); ⭐ broadcast scar 4th hit (burley rd·⅓). Depth/colour-buffer marches + froxel/temporal reprojection + separable blur
+> = renderer leaf; every integrand/bitmask/phase/profile is proven. RT counterparts ride B9.
+> **NEXT: B13** (# 19, post-processing frontier — TAA/TAAU + ML-upscaler seam + frame-gen · **bloom** (dual-filter pyramid +
+> FFT-convolution glare + lens flare) · exposure→EV100 + **AgX/Tony-McMapface/PBR-Neutral/ACES2** tonemap decoupled from HDR
+> output + 3D-LUT · DoF (complex-phasor bokeh) + motion blur · geometric specular AA · CA/vignette/grain/CAS/RCAS. Each a CKIR
+> compute/full-screen pass, the B8 bar. FFT-bloom's FFT kernel is a B-compute dep.) **⭐ PLAN EXPANDED (user 2026-07-12): added B12 (screen-space
+> lighting — GTAO/AO · Hi-Z SSR · SSGI · volumetric fog+god-rays · screen-space SSS) + B13 (post — TAA · BLOOM/lens for
+> neon/LED/sci-fi glow · auto-exposure+AgX/ACES tonemap+LUT · DoF+motion-blur · CA/vignette/grain/CAS/FSR) AFTER B8, before
+> mesh/RT — the raster visual completion; RT counterparts land with B9.** **⭐⭐ PLAN GREATLY EXPANDED via deep 2026-SOTA research (user 2026-07-12,
+> "fully frontier cutting-edge 2026 state, fill all gaps"): 5 research agents surveyed the frontier + papers → added
+> B14 (GI+denoise: ReSTIR + world-space radiance cache + SVGF/ReBLUR denoiser + own-NRC via CKIR autodiff) · B15 (Hillaire
+> sky + Nubis clouds) · B16 (FFT ocean + caustics) · B17 (OIT: WBOIT/MBOIT/A-buffer) · B18 (hair: Marschner/Chiang/dual-scatter)
+> · B19 (3D Gaussian Splatting) · B-cmp (the hesap-GPU compute primitives — FFT/sort/scan/reduce/GEMM — built DURING the detour).
+> Upgraded B12 (AO→visibility-bitmask SSILVB · SSR→hybrid+radiance-cache · phase-function family) + B13 (ML-upscaler seam+frame-gen
+> · FFT-bloom · AgX/Tony/PBR-Neutral/ACES2 tonemap decoupled from HDR-output · geometric specular AA). Extended B4 (visibility
+> buffer + SW rasterizer, Nanite-class) + B8-i (RT/MegaLights/deep shadows) + B8-l (clustered decals). See D-007 master table.**
+> Locked order: full visual frontier (raster → materials/lighting/B8 → **B12 → B13 → B14 GI → B15 sky/clouds → B16 water → B17 OIT
+> → B18 hair → B19 splatting → B-cmp** → B4 mesh → B9+C3 RT → B10 neural → B11+C5 work-graphs → Phase D cook) → THEN hesap-GPU.
+> **▶ B3-c ✅ COMPLETE (2026-07-11) — GLSL VS+FS emitters behind the seam.** (1) Hoisted the ~60-case value switch out of
+> `emit_vec_glsl` into a shared `emit_value_stmt(g,i,s,leaf)` (+`emit_stmt_prefix`) — the `leaf` supplies the stage-specific
+> RHS (compute `Input`→buffer; raster `StageIn`/`Builtin`→stage input, UBO `FieldGet`→`ubo.member`). **Compute byte-exact:
+> kir-vulkan 33010 unchanged.** (2) New `emit_stage_glsl` VS/FS — prologue (`layout(location)` in/out · `layout(set,binding,std140)`
+> UBO · builtins via `glsl_vsfs_builtin_name`) → main (shared emitter + `For` scaffold) → epilogue (`gl_Position` · colour
+> attachments · `gl_FragDepth`). (3) `create_program(KGraph,KEntry)` routes Vertex/Fragment → `entry_valid` → `emit_stage_glsl`
+> → `compile_glsl_to_spirv(stage)` → wrap. (4) **Gate green — gpu-context-vulkan 66/10:** a KIR VS + FS entry each compile to
+> a valid SPIR-V program through the seam (correct stage, real SPIR-V); a vertex with no clip position is refused. 4 files
+> tidy-clean.
+> **▶ B3-d ✅ COMPLETE (2026-07-11) — HLSL VS+FS mirror.** Extracted the HLSL value switch → shared `emit_value_stmt_hlsl`
+> (+`emit_stmt_prefix_hlsl`) — **compute byte-exact: kir-dx12 30821 unchanged.** New `emit_stage_hlsl` emits STRUCT-based
+> VS/FS I/O: `[[vk::location(N)]]` pins the SPIR-V location, `SV_Position`/`SV_VertexID`/`SV_IsFrontFace` builtins via
+> `hlsl_vsfs_builtin`, `cbuffer register(bN,spaceN)` UBOs, `SV_Target`/`SV_Depth` outputs. **Gate green — gpu-context-vulkan
+> 73/11:** a KIR VS + FS entry each emit HLSL that DXC lowers to valid SPIR-V (with a dxc-absent soft-skip); a vertex with no
+> clip position is refused. The DX12 gpu-context is compute-only, so B3-d gates via `compile_hlsl_to_spirv`; the DX12 raster
+> *program* seam lands with C4. 2 files tidy-clean.
+> **▶ C4 ✅ COMPLETE (2026-07-11) — DX12 `IRasterContext` (the D3D12 mirror of C1).** **C4-a:** `create_dx12_raster_context`
+> — a graphics (DIRECT) queue + committed RGBA8 render targets + a clear-with-readback; the texture→READBACK copy honours the
+> 256-byte `D3D12_TEXTURE_DATA_PITCH_ALIGNMENT` row pitch (100×64 target → 512B padded pitch, exercised). **C4-b:** a new
+> `Dx12GpuContext : IGpuContext` (owns a device for adapter identity) that mints `Dx12GpuProgram`s — cooked DXIL via
+> `make_dx12_program`, OR CKIR→HLSL→DXIL via `emit_stage_hlsl` + a public `compile_hlsl_to_dxil` (dxc, `vs_6_0`/`ps_6_0`,
+> entry `main`, no `-spirv` ⇒ signed DXIL) — **the real DX12 create-program seam C4 promised**; plus a graphics-PSO
+> `create_raster_program` (empty root sig, attributeless, cull-none, RGBA8 RTV) + `DrawInstanced`. DXIL is device-independent
+> bytecode, so the standalone raster context builds the PSO from the program's blob — no shared device needed.
+> **Gate green (real D3D12, MSVC + clang-cl — gpu-context-dx12 3/3):** clear+readback exact across all channels incl. the
+> padded row-pitch · a KIR VS + FS entry each → DXIL program (a no-clip-position vertex refused) · a red triangle over a blue
+> clear reads back centre=red / corner=blue. `[[vk::location]]` in the emitted HLSL is accepted by DXC for DXIL (concern
+> unfounded). 5 files tidy-clean (`dx12_raster_context.hpp/.cpp` · `dx12_context.hpp/.cpp` · `test_dx12_raster.cpp`).
+> **▶ B3-e ✅ COMPLETE (2026-07-11) — the IR-authored draw, ONE graph on BOTH backends.** A SHARED, backend-neutral CKIR
+> triangle (`tests/gpu-shared/ckir_raster_triangle.hpp`) — a vertex entry deriving 3 clip positions from `VertexIndex` via
+> a select-on-index chain (no dynamic array indexing → SROA-safe) + a constant-red fragment entry — is built ONCE and drawn
+> through `create_program(KGraph)` → `create_raster_program` → `draw` → readback on BOTH Vulkan (GLSL→SPIR-V→shader
+> objects) and DX12 (HLSL→DXIL→graphics PSO). Both read centre=red / corner=blue. This is the literal proof that ONE IR
+> lowers to every backend (ADR-0101). **⭐ Surfaced + SOLVED a latent emitter bug:** the shared `emit_value_stmt`
+> (`ckir_glsl.hpp`) / `emit_value_stmt_hlsl` (`ckir_hlsl.hpp`) emitted an INTEGER `Const` with a **float** literal
+> (`int t = 0.0;`) — **type-strict GLSL rejects it, but HLSL coerces, so DX12 passed and only Vulkan failed** (same graph!).
+> Both emitters now emit int literals for int/uint consts (matching the compute switch that already did). Compute
+> byte-exact intact: **kir-vulkan 33010 · kir-dx12 30821 unchanged**; raster suites gpu-context-vulkan **12/83** ·
+> gpu-context-dx12 **5/51**, green on MSVC + clang-cl. 5 files tidy-clean.
+> **▶ B1 STARTED (fragment-stage foundation) — B1-a ✅ COMPLETE (2026-07-11): fragment derivatives.** New fragment-only KOps
+> `DFdx`/`DFdy`/`Fwidth` (+ `dfdx`/`dfdy`/`fwidth` builders) — `is_fragment_only_op` + an `entry_valid` gate refuse them in
+> any non-fragment stage; CPU oracle = 0 (single invocation has no 2×2 quad); GLSL `dFdx`/`dFdy`/`fwidth`, HLSL `ddx`/`ddy`/
+> `fwidth` (raster emitters only — compute `default:` refuses). A shared `build_derivative_fs` (in `ckir_raster_triangle.hpp`)
+> outputs `(dFdx(FragCoord.x), dFdy(FragCoord.x), 0, 1)` — since screen x rises exactly 1/pixel, `dFdx==1`/`dFdy==0` on every
+> pixel and backend. **Gate green (real GPUs, MSVC + clang-cl): centre reads R≈255/G≈0 on Vulkan + DX12; compute byte-exact
+> kir-vulkan 33010 · kir-dx12 30821 unchanged; 6 files tidy-clean.**
+> **▶ B1-b ✅ COMPLETE (2026-07-11): fragment `discard` / alpha-test.** New `KEntry::discard_cond` (a BOOL node; <0 = none);
+> `entry_valid` refuses it outside a fragment stage and requires a bool. Both raster emitters push it as a reachability root
+> and emit `if (t_cond) { discard; }` before the colour writes. Shared `build_discard_fs` paints red but discards where
+> `FragCoord.x < 16`. **Gate green (real GPUs, MSVC + clang-cl): the left half of the covered triangle is discarded (blue
+> clear shows), the right half stays red, on Vulkan + DX12; compute byte-exact kir-vulkan 33010 · kir-dx12 30821 unchanged;
+> 6 files tidy-clean.**
+> **▶ B1-c ✅ COMPLETE (2026-07-11) — interpolation qualifiers, ALL FOUR observable on BOTH backends.** `Interp`
+> {Smooth·Flat·NoPerspective·Centroid·Sample} on `stage_in`/`KStageOutput` (carried in `dset`); `entry_valid` forces an
+> integer interpolant to `flat` on BOTH the VS-out and FS-in sides; GLSL `flat/noperspective/centroid/sample` + HLSL
+> `nointerpolation/noperspective/centroid/sample` emitters. **flat** = int payload=200 readback · **noperspective** =
+> perspective triangle (w={1,4,1}) where screen-linear (≈0.225) diverges from perspective-correct (≈0.069) at centre ·
+> **centroid** + **sample** exercised on NEW **MSAA render targets** (`create_color_target_ms`, appended pure virtual):
+> centroid diverges from centre-sample at edge pixels; a `sample`-qualified step over a full-screen tri antialiases the
+> threshold (32 grey pixels) vs a hard 0/255 for `smooth`. Vulkan: 4× MSAA image + AVERAGE resolve attachment; DX12: MSAA
+> texture + `ResolveSubresource` + a per-sample-count graphics PSO (the count is baked into a D3D12 PSO, so `Dx12RasterProgram`
+> now owns the DXIL and builds/caches a PSO per count). **⭐ Three real bugs found + fixed** (all latent, all masked by NVIDIA
+> leniency until now): (1) the HLSL emitter put `SV_Position` FIRST in `VSOut`, stealing output register 0 so EVERY VS→PS
+> interpolant mismatched the PS input register → `E_INVALIDARG` PSO link on DX12 (would have broken all future
+> material/lighting shaders); fixed by emitting it LAST (verified via DXIL signature dumps). (2) the `sample` qualifier emits
+> the `SampleRateShading` SPIR-V capability but the context never enabled the `sampleRateShading` **device feature** →
+> validation error; (3) `discard` (B1-b) emits `DemoteToHelperInvocation` but `shaderDemoteToHelperInvocation` was not
+> enabled. Both features now enabled for graphics-capable contexts (compute device unchanged). **Gate green (real GPUs,
+> MSVC+clang-cl+ASan+shipping): gpu-context-vulkan 134/18 · gpu-context-dx12 97/11 · Vulkan validation-layer SILENT across
+> all 18 · compute byte-exact kir-vulkan 33010 · kir-dx12 30821 unchanged · C2 device-adoption + rhi-vulkan intact · 8 files
+> tidy-clean.**
+> **▶ B1-d ✅ COMPLETE (2026-07-11) — frag-depth write + early-Z flag + conservative depth.** New `KEntry::early_fragment_tests`
+> (bool) + `DepthMode`{Any·Greater·Less}; `entry_valid` gates both to fragment, forbids `early_fragment_tests` + a `frag_depth`
+> write (contradictory), and requires a `frag_depth` write for a conservative `depth_mode`. Emitters: GLSL
+> `layout(early_fragment_tests) in;` + `layout(depth_greater/less) out float gl_FragDepth;`; HLSL `[earlydepthstencil]` +
+> `SV_Depth`/`SV_DepthGreaterEqual`/`SV_DepthLessEqual`. **NEW depth-buffer infra both backends** (`create_color_depth_target`
+> + `draw_depth(clear_depth, DepthCompare, …)` — append-only virtuals): Vulkan D32 depth image + dynamic depth-test state +
+> dynamic-rendering depth attachment; DX12 D32 depth texture + DSV + a depth-enabled PSO (depth compare BAKED into the PSO,
+> so `Dx12RasterProgram`'s PSO cache now keys on (samples, depth-func)). **Observable frag-depth**: a fullscreen tri at
+> primitive depth 0 + a FS writing `gl_FragDepth = FragCoord.x/32`, depth cleared to 0.5 / LessEqual ⇒ the left half passes
+> (red), the right FAILS (clear) — a split that appears ONLY because the shader wrote depth. **⭐ Fixed a real DXIL rule**:
+> outputting `SV_DepthGreaterEqual`/`LessEqual` while reading `SV_Position` requires the position input to be
+> `noperspective centroid` — the HLSL emitter now adds it for conservative-depth fragment shaders (found via the DXC
+> validation error). early_fragment_tests + conservative depth are compile/validate-level (a behavioural early-Z test needs
+> B1-f storage-buffer side effects). **Gate green (real GPUs, MSVC+clang-cl+ASan+shipping): gpu-context-vulkan 157/21 ·
+> gpu-context-dx12 117/14 · Vulkan validation SILENT on the depth path · compute byte-exact kir 33010/30821 unchanged · 9
+> files tidy-clean.** ⚠ **SCAR:** the `KEntry` layout change + ninja's missed header-mtime (Edit doesn't bump mtime) left the
+> SHIPPING build with a STALE TU reading `KEntry` at old offsets ⇒ null programs / a config-specific failure that LOOKED like
+> an LTCG miscompile; the fix was to DELETE the objects and clean-rebuild (touch didn't suffice).
+> **▶ B1-e ✅ COMPLETE (2026-07-11) — VARIABLE-RATE SHADING, all three rate sources, both backends.** `KEntry::shading_rate`
+> (a VS-output int node; `entry_valid` gates it to a position-writing stage) → GLSL `#extension GL_EXT_fragment_shading_rate`
+> + `gl_PrimitiveShadingRateEXT` / HLSL `uint : SV_ShadingRate` (the per-PRIMITIVE "out"; packed `(Yshift<<2)|Xshift`, 2×2 = 5,
+> identical on both APIs). Device infra: Vulkan enables `VK_KHR_fragment_shading_rate` + pipeline/primitive/attachment
+> features (graphics-capable only) + queries the tile size; DX12 queries `D3D12_OPTIONS6` VariableShadingRateTier +
+> `ID3D12GraphicsCommandList5`. Interface (append-only): `ShadingRate`/`ShadingRateCombiner` enums, `draw_vrs(pipeline_rate,
+> primitive_combiner)`, `create_color_vrs_target(tile_rate)` (a per-tile R8_UINT rate image — Vulkan clears it, DX12
+> uploads it), `supports_vrs()`. ⚠ **Shader-object gotcha:** enabling VRS makes `vkCmdSetFragmentShadingRateKHR` MANDATORY
+> per draw ⇒ `set_draw_state` now sets a 1×1 default; `draw_vrs` overrides. **Observable via 2×2 BLOCKINESS**: a ramp FS
+> (R = FragCoord.x/32) makes each 2×2 block share ONE invocation ⇒ horizontal even-x neighbours become equal (n=512) vs
+> distinct at 1×1 (n=0). All three sources verified on BOTH backends: per-draw (0→512), per-primitive (512), attachment
+> (512). Two bugs found: `gl_PrimitiveShadingRateEXT` is GLSL `int` (authored the rate as I32, not U32); the DX12 tier enum
+> is `D3D12_VARIABLE_SHADING_RATE_TIER`, not `D3D12_SHADING_RATE_TIER`. **Gate green (real GPUs, MSVC+clang-cl+ASan+shipping):
+> gpu-context-vulkan 177/24 · gpu-context-dx12 130/17 · Vulkan validation SILENT on the whole VRS path · compute byte-exact
+> kir 33010/30821 unchanged · 11 files tidy-clean.**
+> **▶ B1-f ✅ COMPLETE (2026-07-11) — conservative raster + inner coverage + fragment interlock/ROV + FS storage buffers, both
+> backends. ▶ B1 CLOSED.** Four new capabilities behind append-only interface additions (`ConservativeMode` enum;
+> `supports_conservative_raster/inner_coverage/fragment_interlock`; `draw_conservative(mode)`; `IStorageBuffer` +
+> `create_storage_buffer`/`draw_storage`). **IR:** `KOp::StorageLoad` (appended at END) + `g.storage_load(idx)`;
+> `KEntry{storage_write_index, storage_write_value, interlock}`; `KBuiltin::InnerCoverage` (appended at END; `entry_valid`
+> gates uint index/value + fragment-only interlock). **Emitters:** GLSL `coherent buffer` SSBO + `GL_ARB_fragment_shader_interlock`
+> `layout(pixel_interlock_ordered) in;` + begin/endInvocationInterlockARB + `gl_FragFullyCoveredNV`; HLSL
+> `RasterizerOrderedStructuredBuffer`/`RWStructuredBuffer` at u0 + `SV_InnerCoverage`. **Device:** Vulkan enables
+> `VK_EXT_conservative_rasterization`+EDS3 (conservative-mode + extra-overestimation-size dyn state) + `VK_EXT_fragment_shader_interlock`
+> (pixel-ordered) + `fragmentStoresAndAtomics`; DX12 queries `D3D12_OPTIONS` ConservativeRasterizationTier + ROVsSupported.
+> **Binding parity:** every raster program carries the FS storage slot (Vulkan set-0 SSBO descriptor / DX12 u0 UAV descriptor
+> table) — unaccessed by non-storage draws; the DX12 root sig went from empty → 1 UAV table. Conservative is a PSO-baked
+> state on DX12 (cache-keyed) vs an EDS3 dynamic state on Vulkan. **Observables (IDENTICAL on both backends):** conservative
+> OVERESTIMATE covers 242→312 red pixels (the edge rim); inner coverage splits interior (220 white, ic=1) from edge rim (92
+> black, ic=0) under overestimate; interlock RMW counter = EXACTLY 2 at the overlap of two triangles, 0 at background —
+> deterministic. ⚠ **Validation caught 4 REAL bugs silent with layers off** (the scar): 3 Vulkan VUIDs — overestimate+shader-objects
+> also needs `vkCmdSetExtraPrimitiveOverestimationSizeEXT` (07632), an FS storage write needs `fragmentStoresAndAtomics`
+> (NonWritable-06340) — and 1 DX12 debug-layer ERROR — an FS reading `SV_InnerCoverage` links ONLY into a conservative PSO,
+> so the program carries a `wants_conservative_raster()` bit (derived from the graph at IR→program time) to prebuild it
+> conservative instead of failing the plain build. Also fixed: `KOp::StorageLoad` had been MID-INSERTED (shifting every
+> later op) → moved to END. **Gate green (real GPUs, MSVC+clang-cl+ASan+shipping): gpu-context-vulkan 201/27 ·
+> gpu-context-dx12 151/20 · both backends validation/debug-layer CLEAN · compute byte-exact kir-vulkan 33010 unchanged ·
+> kir 390 · shader-helpers 910 · 13 files tidy-clean.**
+> **▶ B2 ✅ core (a–d) COMPLETE (2026-07-11) — the TEXTURE & SAMPLER system, both backends.** SEPARABLE texture/sampler IR
+> types (`TKind::Texture`/`Sampler`; `TexDim`{1D/2D/3D/Cube} + arrayed/ms/shadow flags + array-count packed in `KType`) — the
+> portable model HLSL/WGSL/MSL share; new `KOp` (all appended): `Texture`/`Sampler` leaves · `TexSample`/`SampleLod`/`SampleGrad`/
+> `SampleCmp`/`TexelFetch`/`TexGather`/`TexSize`/`SampleIndexed`. **B2-a** 2D sampling foundation — GLSL `texture(sampler2D(t,s),uv)`
+> / HLSL `tex.Sample(s,uv)`; NEW device infra (create+upload a 2D RGBA8 image + default sampler; Vulkan set-0 layout gains
+> sampled-image(1)+sampler(2), DX12 root sig gains SRV(t1)+sampler(s2) + a sampler heap). **B2-b** the sample-op family
+> (explicit LOD/grad · `sampleCmp` shadow via a NEW comparison-sampler + D32/R32F depth-texture path · integer `texelFetch` ·
+> 4-texel `gather` w/ literal channel · `textureSize`). **B2-c** dimensions 1D/3D(volume)/Cube(IBL)/2DArray(CSM)/CubeArray
+> (Vulkan ONE generalized image creator + layered upload; DX12 per-subresource footprint upload + per-kind SRV ViewDimension);
+> **2DMS** emitter wired but observable deferred to a render-to-sampled-MSAA path (MSAA data can't be uploaded). **B2-d**
+> BINDLESS — a `texture(...,N)` descriptor array + `tex_sample_at(index)` with a DYNAMIC per-fragment index; GLSL
+> `texture2D tex[N]`+`nonuniformEXT` / HLSL `Texture2D tex[N]:register(t3)`+`NonUniformResourceIndex`; Vulkan enables
+> descriptor-indexing (set-0 binding 3 = image array[8]), DX12 a t3[8] SRV table (Tier-2). **B2-e** sampler feedback:
+> documented as a DX12-only virtual-texturing capability (Vulkan has NO standard equivalent) that also needs mipped textures
+> + feedback transcode → rides the texture-streaming system. **EVERY observable is pixel-exact AND IDENTICAL on Vulkan vs
+> DX12** (left-red/right-green across all sample ops + dims + bindless; textureSize=16×16; shadow L=white/R=black). ⚠
+> **Validation caught 2 REAL VUIDs** (green ≠ clean): a CubeArray view + its `SampledCubeArray` SPIR-V capability need the
+> `imageCubeArray` device feature (VUID-viewType-01004 / pCode-08740). **Gate green (real GPUs, MSVC+clang-cl+ASan+shipping):
+> gpu-context-vulkan 309/32 · gpu-context-dx12 246/25 · both backends validation/debug-layer CLEAN · compute byte-exact
+> kir-vulkan 33010 unchanged · kir 390 · 11 files tidy-clean.**
+> **▶ B5 ✅ (a–c) COMPLETE (2026-07-12) — OpenPBR SURFACE MATERIALS, both backends.** New `engine/kir/include/crd/kir/
+> ckir_material.hpp` — the MATERIAL-PROFILE layer on core CKIR (ADR-0102 D3: material = surface response, lighting-agnostic;
+> the render path lights it at B8). **B5-a** the surface contract + DEFERRED G-BUFFER: the canonical OpenPBR surface struct
+> (SROA aggregate) + `pack_gbuffer` (surface → 4 RGBA8 MRT: base_color+metallic · encoded_normal+roughness · emissive+
+> occlusion · opacity), and the **NEW MRT device capability** (the resource type ADR-0102 D7 names) — Vulkan dynamic-rendering
+> with N colour attachments + N-attachment blend/write dynamic state (`set_draw_state(...,color_attachments)`); DX12 N RTVs in
+> one heap + PSO `NumRenderTargets=N` (RT-count in the pso_for cache key). New `IGBufferTarget` + `create_gbuffer_target` +
+> `draw_gbuffer` with per-attachment readback. **B5-b** the FULL **OpenPBR 1.1 slab** — a ~37-field append-only struct (base
+> extras · specular weight/color/ior/aniso/rotation · transmission weight/color/depth · subsurface weight/color/radius/aniso ·
+> coat weight/color/roughness/ior/aniso/darkening · fuzz weight/color/roughness · thin-film weight/thickness/ior · geometry
+> thin_walled/tangent/coat_normal · emission_luminance) with spec-correct defaults (`surface_defaults`); an EXTENDED
+> 8-attachment G-buffer (`pack_gbuffer_ext`) carries every layer for the observable (the IORs/anisotropy stay in the struct
+> for B8's BRDF). **B5-c** a fresh `ShadingModel`{Standard·Unlit·Toon·Cel·Gooch·Outline·Hatching} + `AlphaMode`{Opaque·Masked·
+> Translucent·Additive} (none existed) as float-encoded surface tags (packed into gbuf3), + `set_masked` alpha-test discard
+> (reuses the B1-b mechanism). **Observables pixel-IDENTICAL Vulkan vs DX12**: a lighting-agnostic material writes its surface
+> → G-buffer, every core+slab channel reads back exact (base 204/51/25, metallic 127, normal-z 255, spec_w 153, coat_w 102,
+> fuzz_w 204, transmission 64, thin-film 229, subsurface 89, thin_walled 255); the shading-model tag (Gooch=4) reads back
+> exact; a masked opacity ramp (cutoff 0.5) discards the sub-cutoff half. ⚠ reconciled with the shipped renderer `SurfaceData`
+> APPEND-ONLY stability rule (re-added `opacity`, appended the slab layers — never reorder). **Gate green (real GPUs, MSVC+
+> clang-cl+ASan+shipping): gpu-context-vulkan 356/35 · gpu-context-dx12 290/28 · both backends validation/debug-layer CLEAN ·
+> compute byte-exact kir-vulkan 33010 unchanged · tidy-clean (SurfaceField enum CamelCase + u8 base per tidy).** **NEXT = B6**
+> (MaterialX-parity node library — noise/patterns/operators/UV/NPR, bit-exact vs the MaterialX reference; then B7 lowering →
+> B8 renderer integration w/ the GGX/clustered/shadow lighting library, per ADR-0102).
 
 > **═══ RIGHT NOW (2026-07-09): hesap v14–v16 CLOSED (numerical stack + forward/reverse autodiff — detail preserved below).
 > Phase 3.1.6 **v17 GPU compute (CKIR)** is the active phase (the kernel/shader COMPILER — ADR-0098/0099/0100). Currently
@@ -176,7 +504,32 @@
 > `VulkanGpuContext`, mapping the stage). So any consumer holding a `Device` mints opaque programs — no gpu-context
 > threading. Edge `crd-rhi → crd-gpu-context` (header-only, acyclic). **First consumer: renderer `ForwardRenderPath`** —
 > all 3 `create_shader_module` → `create_program` + `vertex_program`/`fragment_program`. Sandbox renders **529 frames @
-> 176 fps, no VUID**; renderer 192/40 · rhi 152/32 · rhi_vulkan 4830/27 · kir-vulkan 33010 green. **▶ D-008 C2-e ✅ (2026-07-11) — I1 FULLY CLOSED; crd-shader owns NO shading language.** The Effect frontend
+> 176 fps, no VUID**; renderer 192/40 · rhi 152/32 · rhi_vulkan 4830/27 · kir-vulkan 33010 green. **▶ D-008 C2-f ✅ (2026-07-11) — DEVICE CONVERGENCE CLOSED; ONE VkDevice everywhere.** Deleted
+> `VulkanInstance::create_device` (the ~150-line VkDevice-creation path) and retired the `Instance::create_device`
+> interface method. **rhi-vulkan creates NO VkDevice** — every `crd::rhi::Device` is adopted from a `VulkanGpuContext`
+> (`create_vulkan_device_adopting`). Migrated all ~26 `test_rhi_vulkan` sites + 2 geometry-shader-helpers to an
+> `AdoptedGpu` helper (headless compute AND windowed swapchain/present, both from a gpu-context); added a
+> `ValidationCapture(Device&)` overload so the VUID gate attaches to the adopted device's VkInstance. `Instance` keeps only
+> `enumerate_adapters`. No test needed `RequireDedicated`, and the gpu-context detects a dedicated compute family exactly
+> like rhi did — so async-queue semantics are preserved. rhi_vulkan **4806/27** (compute, async queues, ValidationCapture,
+> windowed swapchain/triangle — all adopted) · geometry 910 · rhi-mock 151 · kir-vulkan 33010 · renderer 192 · shader 139 ·
+> leak gate green · sandbox smoke PASS; MSVC + clang-cl clean; 8 files tidy-clean. **The full per-slice sweep also surfaced
+> 8 stale `runtime/examples/smoke_*` programs** broken by the ACCUMULATED D-008 API changes (deleted `compile.hpp`, retired
+> `ShaderModule`, `create_runtime(compiler)`, retired `create_device`) — all migrated (adopt device / create_program / inject
+> compiler / compile_glsl_to_spirv) + CMake deps added; full win-debug builds clean, all 8 tidy-clean. Sweep verdict:
+> win-debug/asan/shipping **100% ctests (4763/4763/4676)**. The full win-tidy config (first clean run since the clang-tidy
+> 20.1.8 + MSVC 14.51 bumps) also peeled a tail of PRE-EXISTING toolchain-surfaced tidy debt — cleared: disabled
+> `readability-redundant-casting` (false positive on MSVC's `<xutility>`), fixed dx12 `bugprone-branch-clone` +
+> `bugprone-casting-through-void`, and `readability-identifier-naming` in hesap-tensor + jobs tests (see
+> [ninja -k 0 onion note]). **D-008 CONVERGENCE COMPLETE**
+> (I1+I2 both closed, one device). **▶ SEQUENCING LOCKED (user 2026-07-11): build the FULL visual shader frontier FIRST,
+> THEN hesap-GPU.** Order: **B3-c raster → B1/B2 materials+lighting → B4 mesh → B9+C3 ray tracing → B10 NEURAL →
+> B11+C5 work-graphs → Phase D cook → hesap-GPU** (the last stop). The compute substrate hesap needs is ALREADY proven
+> (GEMM cuBLAS parity, 6 backends), so hesap-GPU is a dependency-light return — but the user chose to complete the whole
+> visual frontier first. **NEXT: D-007 B3-c** (raster VS+FS emitters behind the seam — start HERE, not C3; C3 is the RT
+> device context that pairs with B9 later). See [[project_full_visual_frontier_before_hesap_gpu]].
+>
+> **Prior: D-008 C2-e ✅ — I1 FULLY CLOSED; crd-shader owns NO shading language.** The Effect frontend
 > (`runtime.cpp`) dropped its shaderc loader entirely and now takes an INJECTED `crd::shader::ISpirvCompiler`. New bridge
 > module **`crd-shader-vulkan`** (`create_vulkan_spirv_compiler`) wraps `crd::gpu::compile_glsl_to_spirv` — it links BOTH
 > crd-shader + crd-gpu-context-vulkan so neither depends on the other (gpu-context stays rhi-free). Compiler called with a
@@ -200,7 +553,8 @@
 > leg env-blocked: WSL dir lacks spirv-reflect source — pre-existing, unrelated). **NEXT: C2-e** empty the I1 allowlist
 > (migrate crd-shader `Effect` frontend / `runtime.cpp` off shaderc — the last hand-written GLSL) → **C2-f** retire rhi's
 > own device creation.
-> Docs: `docs/detours/D-007-*.md` + **`D-008-gpu-context-convergence.md`**, `docs/decisions/0101-*.md` + `0102-*.md` +
+> Docs: **`docs/detours/D-007-gpu-program-system.md`** (the MERGED master — D-007 + D-008 in one ordered subslice table;
+> the old `D-007-ckir-*` / `D-008-gpu-context-*` are redirect stubs), `docs/decisions/0101-*.md` + `0102-*.md` +
 > **`0103-gpu-context-owns-every-gpu-program.md`**, `docs/sessions/2026-07-09-d007-*.md` + **`2026-07-10-d007-b0-type-system.md`**. ═══**
 >
 > **v14 IS DONE.** Same-evening closes on top of the wave below: **v14-m** (NN inference —

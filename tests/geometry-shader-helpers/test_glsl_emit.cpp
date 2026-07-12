@@ -43,6 +43,7 @@
 #include <crd/rhi/queue.hpp>
 #include <crd/gpu/vulkan_shader_compile.hpp>
 #include <crd/gpu/program.hpp> // D-008 C2-d4: opaque IGpuProgram via create_program
+#include <crd/gpu/vulkan_context.hpp> // D-008 C2-f: create_vulkan_gpu_context (the ONE VkDevice owner rhi adopts)
 #include <crd/rhi/vulkan_backend.hpp>
 #include <crd/rhi/vulkan_validation_capture.hpp>
 #include <crd/test_helpers/gpu_compare.hpp>
@@ -251,11 +252,15 @@ TEST_CASE("v9e-b ULP conformance: GPU output matches evaluate() within tolerance
     if (headless_requested()) { SUCCEED("headless"); return; }
     crd::memory::TlsfAllocator alloc(64U * 1024U * 1024U);
 
-    auto instance = crd::rhi::create_vulkan_instance({});
-    REQUIRE(instance != nullptr);
-    crd::rhi::ValidationCapture capture(*instance);
-    auto device = instance->create_device({});
+    // D-008 C2-f: adopt a device from a gpu-context (rhi no longer creates a VkDevice). ctx outlives device + capture.
+    crd::gpu::GpuContextConfig gpu_cfg;
+    gpu_cfg.headless          = true;
+    gpu_cfg.enable_validation = true;
+    auto gpu_ctx = crd::gpu::create_vulkan_gpu_context(gpu_cfg);
+    REQUIRE(gpu_ctx != nullptr);
+    auto device = crd::rhi::create_vulkan_device_adopting(*gpu_ctx);
     REQUIRE(device != nullptr);
+    crd::rhi::ValidationCapture capture(*device);
 
     // Sample-grid origin + step: cover the [-0.6, +0.6]³ box where all 21
     // manifests are interesting (sphere radius 0.5, box 0.4, etc.).

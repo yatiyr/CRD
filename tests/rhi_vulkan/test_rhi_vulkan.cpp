@@ -1,4 +1,5 @@
 #include <crd/gpu/program.hpp> // D-008 C2-d4: shaders are opaque IGpuProgram (crd::gpu::ShaderStage), minted via create_program
+#include <crd/gpu/vulkan_context.hpp> // D-008 C2-f: create_vulkan_gpu_context — the ONE VkDevice owner rhi adopts
 #include <crd/memory/allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/platform/platform.hpp>
@@ -18,6 +19,27 @@ namespace
 {
     const char* v = std::getenv("CRD_PLATFORM_HEADLESS");
     return v != nullptr && v[0] == '1';
+}
+
+// D-008 C2-f: rhi-vulkan no longer creates a VkDevice. A rhi Device is ADOPTED from a VulkanGpuContext — the ONE owner of
+// the VkInstance/VkDevice/queues (ADR-0099). This holder keeps the context alive alongside the borrowed device (`ctx`
+// declared first ⇒ destroyed last, after `device`). `make_adopted_gpu(false)` = a windowed/render-capable context (for
+// swapchain/present tests); the default is headless compute.
+struct AdoptedGpu
+{
+    std::unique_ptr<crd::gpu::IGpuContext> ctx;
+    std::unique_ptr<crd::rhi::Device>      device;
+};
+
+[[nodiscard]] AdoptedGpu make_adopted_gpu(bool headless = true)
+{
+    AdoptedGpu adopted;
+    crd::gpu::GpuContextConfig cfg;
+    cfg.headless          = headless;
+    cfg.enable_validation = true; // matches the retired create_vulkan_instance default; ValidationCapture needs it
+    adopted.ctx           = crd::gpu::create_vulkan_gpu_context(cfg);
+    if (adopted.ctx != nullptr) { adopted.device = crd::rhi::create_vulkan_device_adopting(*adopted.ctx); }
+    return adopted;
 }
 } // namespace
 
@@ -54,10 +76,8 @@ TEST_CASE("Vulkan device bootstrap creates a swapchain for an invisible window",
     auto window = crd::platform::Window::create(ctx, window_desc);
     REQUIRE(window.is_valid());
 
-    auto instance = crd::rhi::create_vulkan_instance({});
-    REQUIRE(instance != nullptr);
-
-    auto device = instance->create_device({});
+    auto gpu = make_adopted_gpu(/*headless*/ false);
+    auto& device = gpu.device;
     REQUIRE(device != nullptr);
 
     auto swapchain = device->create_swapchain(
@@ -88,9 +108,8 @@ TEST_CASE("Vulkan command buffer and frame loop can execute a triangle frame", "
     auto window = crd::platform::Window::create(ctx, window_desc);
     REQUIRE(window.is_valid());
 
-    auto instance = crd::rhi::create_vulkan_instance({});
-    REQUIRE(instance != nullptr);
-    auto device = instance->create_device({});
+    auto gpu = make_adopted_gpu(/*headless*/ false);
+    auto& device = gpu.device;
     REQUIRE(device != nullptr);
 
     auto swapchain = device->create_swapchain(
@@ -192,9 +211,8 @@ TEST_CASE("Vulkan Fence: non-blocking submit signals fence on completion",
         return;
     }
 
-    auto instance = crd::rhi::create_vulkan_instance({});
-    REQUIRE(instance != nullptr);
-    auto device = instance->create_device({});
+    auto gpu = make_adopted_gpu();
+    auto& device = gpu.device;
     REQUIRE(device != nullptr);
 
     auto fence = device->create_fence();
@@ -251,9 +269,8 @@ TEST_CASE("Vulkan create_compute_pipeline rejects null shader cleanly", "[rhi][v
         return;
     }
 
-    auto instance = crd::rhi::create_vulkan_instance({});
-    REQUIRE(instance != nullptr);
-    auto device = instance->create_device({});
+    auto gpu = make_adopted_gpu();
+    auto& device = gpu.device;
     REQUIRE(device != nullptr);
 
     crd::rhi::ComputePipelineDesc desc{};
@@ -272,9 +289,8 @@ TEST_CASE("Vulkan create_compute_pipeline rejects wrong-stage shader cleanly", "
         return;
     }
 
-    auto instance = crd::rhi::create_vulkan_instance({});
-    REQUIRE(instance != nullptr);
-    auto device = instance->create_device({});
+    auto gpu = make_adopted_gpu();
+    auto& device = gpu.device;
     REQUIRE(device != nullptr);
 
     const auto shader_dir = fs::executable_dir() / "shaders";
@@ -298,9 +314,8 @@ TEST_CASE("Vulkan create_compute_pipeline succeeds with valid compute shader", "
         return;
     }
 
-    auto instance = crd::rhi::create_vulkan_instance({});
-    REQUIRE(instance != nullptr);
-    auto device = instance->create_device({});
+    auto gpu = make_adopted_gpu();
+    auto& device = gpu.device;
     REQUIRE(device != nullptr);
 
     const auto shader_dir = fs::executable_dir() / "shaders";
@@ -333,9 +348,8 @@ TEST_CASE("Vulkan compute pipeline + caller-provided PipelineLayout", "[rhi][vul
         return;
     }
 
-    auto instance = crd::rhi::create_vulkan_instance({});
-    REQUIRE(instance != nullptr);
-    auto device = instance->create_device({});
+    auto gpu = make_adopted_gpu();
+    auto& device = gpu.device;
     REQUIRE(device != nullptr);
 
     const auto shader_dir = fs::executable_dir() / "shaders";
@@ -379,9 +393,8 @@ TEST_CASE("Vulkan compute pipeline multi-create/destroy cycle (ASan-clean)", "[r
         return;
     }
 
-    auto instance = crd::rhi::create_vulkan_instance({});
-    REQUIRE(instance != nullptr);
-    auto device = instance->create_device({});
+    auto gpu = make_adopted_gpu();
+    auto& device = gpu.device;
     REQUIRE(device != nullptr);
 
     const auto shader_dir = fs::executable_dir() / "shaders";
@@ -416,9 +429,8 @@ TEST_CASE("Vulkan create_buffer with BufferUsage::Storage works (D2 revision)", 
         return;
     }
 
-    auto instance = crd::rhi::create_vulkan_instance({});
-    REQUIRE(instance != nullptr);
-    auto device = instance->create_device({});
+    auto gpu = make_adopted_gpu();
+    auto& device = gpu.device;
     REQUIRE(device != nullptr);
 
     constexpr crd::u64 storage_bytes = 4 * 1024; // 4 KB
@@ -453,9 +465,8 @@ TEST_CASE("Vulkan compute dispatch end-to-end (first-light)", "[rhi][vulkan][com
         return;
     }
 
-    auto instance = crd::rhi::create_vulkan_instance({});
-    REQUIRE(instance != nullptr);
-    auto device = instance->create_device({});
+    auto gpu = make_adopted_gpu();
+    auto& device = gpu.device;
     REQUIRE(device != nullptr);
 
     // --- Shader + spec-const (D6) ---
@@ -580,9 +591,8 @@ TEST_CASE("Vulkan buffer_barrier between two compute passes (first-light)",
         return;
     }
 
-    auto instance = crd::rhi::create_vulkan_instance({});
-    REQUIRE(instance != nullptr);
-    auto device = instance->create_device({});
+    auto gpu = make_adopted_gpu();
+    auto& device = gpu.device;
     REQUIRE(device != nullptr);
 
     const auto shader_dir = fs::executable_dir() / "shaders";
@@ -743,9 +753,8 @@ TEST_CASE("Vulkan async-compute cross-queue semaphore first-light", "[rhi][vulka
         return;
     }
 
-    auto instance = crd::rhi::create_vulkan_instance({});
-    REQUIRE(instance != nullptr);
-    auto device = instance->create_device({}); // FallbackGracefully default
+    auto gpu = make_adopted_gpu();
+    auto& device = gpu.device;
     REQUIRE(device != nullptr);
 
     // Report hardware path for the test log — both paths must pass.
@@ -899,9 +908,8 @@ TEST_CASE("Vulkan compute_queue pointer-identity contract", "[rhi][vulkan][compu
         return;
     }
 
-    auto instance = crd::rhi::create_vulkan_instance({});
-    REQUIRE(instance != nullptr);
-    auto device = instance->create_device({});
+    auto gpu = make_adopted_gpu();
+    auto& device = gpu.device;
     REQUIRE(device != nullptr);
 
     // ADR-0080 D9: if no dedicated compute queue exists, compute_queue()
@@ -925,9 +933,8 @@ TEST_CASE("Vulkan buffer_barrier no-op when from == to", "[rhi][vulkan][compute]
         return;
     }
 
-    auto instance = crd::rhi::create_vulkan_instance({});
-    REQUIRE(instance != nullptr);
-    auto device = instance->create_device({});
+    auto gpu = make_adopted_gpu();
+    auto& device = gpu.device;
     REQUIRE(device != nullptr);
 
     auto buf = device->create_buffer(
@@ -954,9 +961,8 @@ TEST_CASE("Vulkan compute dispatch_indirect (D4 indirect path)", "[rhi][vulkan][
         return;
     }
 
-    auto instance = crd::rhi::create_vulkan_instance({});
-    REQUIRE(instance != nullptr);
-    auto device = instance->create_device({});
+    auto gpu = make_adopted_gpu();
+    auto& device = gpu.device;
     REQUIRE(device != nullptr);
 
     // Same shader / pipeline assembly as the direct dispatch test,
@@ -1098,11 +1104,10 @@ public:
 TEST_CASE("S6 GPU suballocator shares one block across many small allocations", "[rhi][vulkan][gpualloc]")
 {
     if (headless_requested()) { SUCCEED("headless"); return; }
-    auto instance = crd::rhi::create_vulkan_instance({});
-    REQUIRE(instance != nullptr);
-    crd::rhi::ValidationCapture capture(*instance);
-    auto device = instance->create_device({});
+    auto gpu = make_adopted_gpu();
+    auto& device = gpu.device;
     REQUIRE(device != nullptr);
+    crd::rhi::ValidationCapture capture(*device);
 
     constexpr crd::u32                          n = 64;
     std::unique_ptr<crd::rhi::Buffer>           bufs[n];
@@ -1124,11 +1129,10 @@ TEST_CASE("S6 GPU suballocator shares one block across many small allocations", 
 TEST_CASE("S6 GPU suballocations are distinct non-overlapping regions (host round-trip)", "[rhi][vulkan][gpualloc]")
 {
     if (headless_requested()) { SUCCEED("headless"); return; }
-    auto instance = crd::rhi::create_vulkan_instance({});
-    REQUIRE(instance != nullptr);
-    crd::rhi::ValidationCapture capture(*instance);
-    auto device = instance->create_device({});
+    auto gpu = make_adopted_gpu();
+    auto& device = gpu.device;
     REQUIRE(device != nullptr);
+    crd::rhi::ValidationCapture capture(*device);
 
     constexpr crd::u32                n    = 32;
     constexpr crd::u32                k_size = 1024;
@@ -1159,11 +1163,10 @@ TEST_CASE("S6 GPU suballocations are distinct non-overlapping regions (host roun
 TEST_CASE("S6 GPU dedicated allocation path for large resources", "[rhi][vulkan][gpualloc]")
 {
     if (headless_requested()) { SUCCEED("headless"); return; }
-    auto instance = crd::rhi::create_vulkan_instance({});
-    REQUIRE(instance != nullptr);
-    crd::rhi::ValidationCapture capture(*instance);
-    auto device = instance->create_device({});
+    auto gpu = make_adopted_gpu();
+    auto& device = gpu.device;
     REQUIRE(device != nullptr);
+    crd::rhi::ValidationCapture capture(*device);
 
     // 20 MiB > the 16 MiB dedicated threshold -> own VkDeviceMemory, not pooled.
     auto big = device->create_buffer({crd::u64{20} << 20,
@@ -1183,11 +1186,10 @@ TEST_CASE("S6 GPU dedicated allocation path for large resources", "[rhi][vulkan]
 TEST_CASE("S6 GPU buffer + image coexist without bufferImageGranularity errors", "[rhi][vulkan][gpualloc]")
 {
     if (headless_requested()) { SUCCEED("headless"); return; }
-    auto instance = crd::rhi::create_vulkan_instance({});
-    REQUIRE(instance != nullptr);
-    crd::rhi::ValidationCapture capture(*instance);
-    auto device = instance->create_device({});
+    auto gpu = make_adopted_gpu();
+    auto& device = gpu.device;
     REQUIRE(device != nullptr);
+    crd::rhi::ValidationCapture capture(*device);
 
     // A small buffer (linear) immediately followed by a small optimal-tiling image
     // (non-linear). Separate linear/non-linear pools keep them off a shared
@@ -1214,11 +1216,10 @@ TEST_CASE("S6 GPU buffer + image coexist without bufferImageGranularity errors",
 TEST_CASE("S7 buffer defrag relocates and preserves contents", "[rhi][vulkan][gpudefrag]")
 {
     if (headless_requested()) { SUCCEED("headless"); return; }
-    auto instance = crd::rhi::create_vulkan_instance({});
-    REQUIRE(instance != nullptr);
-    crd::rhi::ValidationCapture capture(*instance);
-    auto device = instance->create_device({});
+    auto gpu = make_adopted_gpu();
+    auto& device = gpu.device;
     REQUIRE(device != nullptr);
+    crd::rhi::ValidationCapture capture(*device);
 
     constexpr crd::u32                n    = 16;
     constexpr crd::u32                k_size = 4096;
@@ -1259,11 +1260,10 @@ TEST_CASE("S7 buffer defrag relocates and preserves contents", "[rhi][vulkan][gp
 TEST_CASE("S7 image defrag relocates a populated image with zero validation errors", "[rhi][vulkan][gpudefrag]")
 {
     if (headless_requested()) { SUCCEED("headless"); return; }
-    auto instance = crd::rhi::create_vulkan_instance({});
-    REQUIRE(instance != nullptr);
-    crd::rhi::ValidationCapture capture(*instance);
-    auto device = instance->create_device({});
+    auto gpu = make_adopted_gpu();
+    auto& device = gpu.device;
     REQUIRE(device != nullptr);
+    crd::rhi::ValidationCapture capture(*device);
 
     // TransferSrc|Dst required for vkCmdCopyImage; ColorAttachment for a defined layout.
     auto img = device->create_image({{128, 128},
@@ -1293,11 +1293,10 @@ TEST_CASE("S7 image defrag relocates a populated image with zero validation erro
 TEST_CASE("S7 residency relocation preserves buffer data across device<->host", "[rhi][vulkan][gpuresidency]")
 {
     if (headless_requested()) { SUCCEED("headless"); return; }
-    auto instance = crd::rhi::create_vulkan_instance({});
-    REQUIRE(instance != nullptr);
-    crd::rhi::ValidationCapture capture(*instance);
-    auto device = instance->create_device({});
+    auto gpu = make_adopted_gpu();
+    auto& device = gpu.device;
     REQUIRE(device != nullptr);
+    crd::rhi::ValidationCapture capture(*device);
 
     constexpr crd::u32 k_size = 4096;
     auto               buf   = device->create_buffer(
@@ -1329,11 +1328,10 @@ TEST_CASE("S7 residency relocation preserves buffer data across device<->host", 
 TEST_CASE("S7 residency auto-evicts device-local memory over the budget", "[rhi][vulkan][gpuresidency]")
 {
     if (headless_requested()) { SUCCEED("headless"); return; }
-    auto instance = crd::rhi::create_vulkan_instance({});
-    REQUIRE(instance != nullptr);
-    crd::rhi::ValidationCapture capture(*instance);
-    auto device = instance->create_device({});
+    auto gpu = make_adopted_gpu();
+    auto& device = gpu.device;
     REQUIRE(device != nullptr);
+    crd::rhi::ValidationCapture capture(*device);
 
     EvictFirstPolicy   policy;
     constexpr crd::u32 k_size = 256U * 1024U;
@@ -1360,11 +1358,10 @@ TEST_CASE("S7 residency auto-evicts device-local memory over the budget", "[rhi]
 TEST_CASE("S7 NullDefragPolicy relocates nothing", "[rhi][vulkan][gpudefrag]")
 {
     if (headless_requested()) { SUCCEED("headless"); return; }
-    auto instance = crd::rhi::create_vulkan_instance({});
-    REQUIRE(instance != nullptr);
-    crd::rhi::ValidationCapture capture(*instance);
-    auto device = instance->create_device({});
+    auto gpu = make_adopted_gpu();
+    auto& device = gpu.device;
     REQUIRE(device != nullptr);
+    crd::rhi::ValidationCapture capture(*device);
 
     auto buf = device->create_buffer(
         {4096, crd::rhi::enum_bits(crd::rhi::BufferUsage::Vertex), crd::rhi::MemoryUsage::CpuToGpu});

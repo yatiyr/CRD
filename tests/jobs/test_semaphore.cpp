@@ -49,17 +49,17 @@ TEST_CASE("Semaphore: timed wait returns without a token", "[jobs][semaphore]")
 // a sleeper. Bounded: the test itself is the timeout (CI kills a hang).
 TEST_CASE("Semaphore: no lost wake under sleep/release races", "[jobs][semaphore]")
 {
-    constexpr crd::u32 kConsumers = 4U;
-    constexpr crd::u32 kTokensPerRound = 64U;
-    constexpr crd::u32 kRounds = 50U;
+    constexpr crd::u32 num_consumers = 4U;
+    constexpr crd::u32 tokens_per_round = 64U;
+    constexpr crd::u32 num_rounds = 50U;
 
-    for (crd::u32 round = 0U; round < kRounds; ++round)
+    for (crd::u32 round = 0U; round < num_rounds; ++round)
     {
         Semaphore s;
         std::atomic<crd::u32> consumed{0U};
 
-        std::thread consumers[kConsumers];
-        for (crd::u32 c = 0U; c < kConsumers; ++c)
+        std::thread consumers[num_consumers];
+        for (crd::u32 c = 0U; c < num_consumers; ++c)
         {
             consumers[c] = std::thread(
                 [&s, &consumed]
@@ -68,7 +68,7 @@ TEST_CASE("Semaphore: no lost wake under sleep/release races", "[jobs][semaphore
                     {
                         s.acquire();
                         // A consumption whose previous count reached the work total is a stop signal.
-                        if (consumed.fetch_add(1U, std::memory_order_relaxed) >= kTokensPerRound)
+                        if (consumed.fetch_add(1U, std::memory_order_relaxed) >= tokens_per_round)
                         {
                             return;
                         }
@@ -78,11 +78,11 @@ TEST_CASE("Semaphore: no lost wake under sleep/release races", "[jobs][semaphore
 
         // Post work tokens one at a time so each release races a sleeper's
         // wait-entry, then post one stop token per consumer.
-        for (crd::u32 t = 0U; t < kTokensPerRound; ++t)
+        for (crd::u32 t = 0U; t < tokens_per_round; ++t)
         {
             s.release(1U);
         }
-        for (crd::u32 c = 0U; c < kConsumers; ++c)
+        for (crd::u32 c = 0U; c < num_consumers; ++c)
         {
             s.release(1U);
         }
@@ -91,7 +91,7 @@ TEST_CASE("Semaphore: no lost wake under sleep/release races", "[jobs][semaphore
         {
             th.join(); // a lost wake hangs exactly here
         }
-        CHECK(consumed.load(std::memory_order_relaxed) == kTokensPerRound + kConsumers);
+        CHECK(consumed.load(std::memory_order_relaxed) == tokens_per_round + num_consumers);
     }
 }
 
@@ -101,11 +101,11 @@ TEST_CASE("Semaphore: no lost wake under sleep/release races", "[jobs][semaphore
 // The original defect hung shutdown()'s join() intermittently on exactly this.
 TEST_CASE("Semaphore: jobs init/shutdown cycling does not hang (moat-pattern regression)", "[jobs][semaphore]")
 {
-    constexpr crd::u32 kCycles = 40U;
+    constexpr crd::u32 num_cycles = 40U;
     const crd::u32 counts[] = {1U, 2U, 4U, 8U, 16U};
 
     std::atomic<crd::u64> sink{0U};
-    for (crd::u32 i = 0U; i < kCycles; ++i)
+    for (crd::u32 i = 0U; i < num_cycles; ++i)
     {
         crd::jobs::Config cfg;
         cfg.num_threads = counts[i % 5U];
@@ -126,5 +126,5 @@ TEST_CASE("Semaphore: jobs init/shutdown cycling does not hang (moat-pattern reg
 
         crd::jobs::shutdown(); // the original hang: join() on a worker asleep on an available token
     }
-    CHECK(sink.load(std::memory_order_relaxed) == static_cast<crd::u64>(kCycles) * (64U * 63U / 2U));
+    CHECK(sink.load(std::memory_order_relaxed) == static_cast<crd::u64>(num_cycles) * (64U * 63U / 2U));
 }

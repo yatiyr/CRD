@@ -177,8 +177,468 @@ inline const char* htype(KType t) noexcept
     return glsl_detail::ctype(t.scalar);
 }
 
+// B2: HLSL texture typing. `Texture<dim><, sampled4>` (e.g. `Texture2D<float4>`); `Sampler[Comparison]State`; the sampled
+// element is the scalar widened to 4 (`float4`/`int4`/`uint4`). Mirror of the GLSL prefix/suffix helpers.
+inline const char* hlsl_tex_dim(const KType& t) noexcept
+{
+    switch (t.tex_dim())
+    {
+    case TexDim::Tex1D:   return t.tex_arrayed() ? "Texture1DArray" : "Texture1D";
+    case TexDim::Tex2D:   if (t.tex_ms()) { return "Texture2DMS"; } return t.tex_arrayed() ? "Texture2DArray" : "Texture2D";
+    case TexDim::Tex3D:   return "Texture3D";
+    case TexDim::TexCube: return t.tex_arrayed() ? "TextureCubeArray" : "TextureCube";
+    }
+    return "Texture2D";
+}
+inline const char* hlsl_tex_elem(DType d) noexcept
+{
+    if (glsl_detail::dt_is_uint(d)) { return "uint4"; }
+    if (glsl_detail::dt_is_int(d)) { return "int4"; }
+    return "float4";
+}
+
 // A3: comps-aware VECTOR emitter for HLSL/DX12 (mirror of emit_vec_glsl) — float/float2/3/4 temps, interleaved I/O,
 // HLSL builtins + emitted quaternion helpers. Matrices (comps>4) are deferred (HLSL row-major convention) ⇒ bail cleanly.
+// B3-d: emit the `precise? <htype> tN = ` statement prefix for node `i` (`precise` is float-only). Shared by the HLSL
+// compute + raster statement paths (mirror of `emit_stmt_prefix` in ckir_glsl.hpp).
+inline void emit_stmt_prefix_hlsl(const KGraph& g, int i, crd::containers::String& s)
+{
+    const KNode& nd = g.node(i);
+    s.append(glsl_detail::is_float_dtype(nd.dtype()) ? "  precise " : "  ");
+    s.append(htype(nd.type));
+    s.append(" t");
+    glsl_detail::app_uint(s, static_cast<crd::u32>(i));
+    s.append(" = ");
+}
+
+// B3-d: the SHARED HLSL value-expression statement emitter — one home for the ~60 operation cases so the compute path AND
+// the raster (VS/FS) path never duplicate them (mirror of `emit_value_stmt` in ckir_glsl.hpp). `leaf(g, i, s)` emits the
+// WHOLE statement for a STAGE-SPECIFIC leaf (compute `Input` → a buffer read; raster `StageIn`/`Builtin` → a stage input,
+// UBO `FieldGet` → `ubo.member`) and returns true when it handled node `i`. Returns false on an op it cannot lower.
+template <typename LeafFn>
+inline bool emit_value_stmt_hlsl(const KGraph& g, int i, crd::containers::String& s, const LeafFn& leaf)
+{
+    using namespace glsl_detail;
+    const KNode& nd = g.node(i);
+    const int    c  = nd.comps();
+    const char   xyzw[4] = {'x', 'y', 'z', 'w'};
+    const auto   ta      = [&](int id) { s.append("t"); app_uint(s, static_cast<crd::u32>(id)); };
+    // B2: `tex_S_B.` (from operand a) and `samp_S_B` (from operand b) — HLSL is inherently separable.
+    const auto   tex_dot  = [&]() { const KNode& tx = g.node(nd.a); s.append("tex_"); app_uint(s, static_cast<crd::u32>(tx.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(tx.iidx)); s.append("."); };
+    const auto   samp_ref = [&]() { const KNode& sm = g.node(nd.b); s.append("samp_"); app_uint(s, static_cast<crd::u32>(sm.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(sm.iidx)); };
+
+    if (nd.op == KOp::StructMake || nd.op == KOp::ArrayMake) { return true; } // B0-4 SROA: aggregates materialize nothing
+    if (nd.op == KOp::TexSize) // B2-b: HLSL GetDimensions is a void method with out-params — emit its own statement pair.
+    {
+        const KNode& tx = g.node(nd.a);
+        s.append("  uint2 t"); app_uint(s, static_cast<crd::u32>(i)); s.append("_gd; tex_"); app_uint(s, static_cast<crd::u32>(tx.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(tx.iidx));
+        s.append(".GetDimensions(t"); app_uint(s, static_cast<crd::u32>(i)); s.append("_gd.x, t"); app_uint(s, static_cast<crd::u32>(i)); s.append("_gd.y);\n");
+        s.append("  int2 t"); app_uint(s, static_cast<crd::u32>(i)); s.append(" = int2(t"); app_uint(s, static_cast<crd::u32>(i)); s.append("_gd);\n");
+        return true;
+    }
+    if (nd.op == KOp::FieldGet || nd.op == KOp::ArrayGet)
+    {
+        const KNode& agg = g.node(nd.a);
+        if (agg.op == KOp::StructMake || agg.op == KOp::ArrayMake) { emit_stmt_prefix_hlsl(g, i, s); ta(g.ext_operand(agg, nd.iidx)); s.append(";\n"); return true; }
+        return leaf(g, i, s); // raster UBO member (compute leaf returns false ⇒ matches the old `return false`)
+    }
+    if (leaf(g, i, s)) { return true; } // stage-specific leaf owns the whole statement (Input / StageIn / Builtin)
+
+    emit_stmt_prefix_hlsl(g, i, s);
+    switch (nd.op)
+    {
+    // Emit an integer literal for int/uint constants (parity with GLSL; avoids `int t = 0.0` and truncation surprises).
+    // UNSIGNED gets the `u` suffix so 32-bit masks / hash seeds > INT_MAX (B6-b noise) are valid `uint` literals.
+    case KOp::Const: if (dt_is_int(nd.dtype()) || dt_is_uint(nd.dtype())) { app_ilit(s, nd.cval); if (dt_is_uint(nd.dtype())) { s.append("u"); } } else { app_flit(s, nd.cval); } break;
+    case KOp::Cast: s.append(htype(nd.type)); s.append("("); ta(nd.a); s.append(")"); break;
+    case KOp::Neg: s.append("-"); ta(nd.a); break;
+    case KOp::Recip: s.append("(1.0 / "); ta(nd.a); s.append(")"); break;
+    case KOp::Abs: s.append("abs("); ta(nd.a); s.append(")"); break;
+    case KOp::DFdx: s.append("ddx("); ta(nd.a); s.append(")"); break;    // B1 fragment derivative ∂/∂x
+    case KOp::DFdy: s.append("ddy("); ta(nd.a); s.append(")"); break;    // B1 fragment derivative ∂/∂y
+    case KOp::Fwidth: s.append("fwidth("); ta(nd.a); s.append(")"); break; // B1 |ddx|+|ddy|
+    case KOp::StorageLoad: s.append("sbuf["); ta(nd.a); s.append("]"); break; // B1-f: read the FS storage buffer at index `a`
+    case KOp::TexSample:  tex_dot(); s.append("Sample(");      samp_ref(); s.append(", "); ta(nd.c); s.append(")"); break; // B2 implicit-LOD
+    case KOp::SampleLod:  tex_dot(); s.append("SampleLevel("); samp_ref(); s.append(", "); ta(nd.c); s.append(", "); ta(nd.d); s.append(")"); break; // B2-b
+    case KOp::SampleGrad: tex_dot(); s.append("SampleGrad(");  samp_ref(); s.append(", "); ta(nd.c); s.append(", "); ta(nd.d); s.append(", "); ta(g.ext_operand(nd, 0)); s.append(")"); break; // B2-b
+    case KOp::SampleCmp:  tex_dot(); s.append("SampleCmp(");   samp_ref(); s.append(", "); ta(nd.c); s.append(", "); ta(nd.d); s.append(")"); break; // B2-b shadow → float
+    case KOp::TexelFetch: // B2-b integer fetch (no filtering). A 2DMS texture's Load takes (coord, sampleIndex); others int3(coord, lod).
+        if (g.node(nd.a).type.tex_ms()) { tex_dot(); s.append("Load("); ta(nd.c); s.append(", "); ta(nd.d); s.append(")"); }
+        else { tex_dot(); s.append("Load(int3("); ta(nd.c); s.append(", "); ta(nd.d); s.append("))"); }
+        break;
+    case KOp::SampleIndexed: // B2-d: index a bindless texture ARRAY (NonUniformResourceIndex — the index varies per fragment).
+    {
+        const KNode& tx = g.node(nd.a);
+        s.append("tex_"); app_uint(s, static_cast<crd::u32>(tx.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(tx.iidx));
+        s.append("[NonUniformResourceIndex("); ta(nd.d); s.append(")].Sample("); samp_ref(); s.append(", "); ta(nd.c); s.append(")");
+        break;
+    }
+    case KOp::TexGather: // B2-b: HLSL's channel is baked into the method name (GatherRed/Green/Blue/Alpha); comp is a literal.
+    {
+        const char* g4[4] = {"GatherRed", "GatherGreen", "GatherBlue", "GatherAlpha"};
+        const int   comp  = static_cast<int>(g.node(nd.d).cval) & 3;
+        tex_dot(); s.append(g4[comp]); s.append("("); samp_ref(); s.append(", "); ta(nd.c); s.append(")");
+        break;
+    }
+    case KOp::Sqrt: s.append("sqrt("); ta(nd.a); s.append(")"); break;
+    case KOp::Rsqrt: s.append("rsqrt("); ta(nd.a); s.append(")"); break;
+    case KOp::Exp: s.append("exp("); ta(nd.a); s.append(")"); break;
+    case KOp::Log: s.append("log("); ta(nd.a); s.append(")"); break;
+    case KOp::Sin: s.append("sin("); ta(nd.a); s.append(")"); break;
+    case KOp::Cos: s.append("cos("); ta(nd.a); s.append(")"); break;
+    case KOp::Floor: s.append("floor("); ta(nd.a); s.append(")"); break;
+    case KOp::Fract: s.append("frac("); ta(nd.a); s.append(")"); break;
+    case KOp::Add: ta(nd.a); s.append(" + "); ta(nd.b); break;
+    case KOp::Sub: ta(nd.a); s.append(" - "); ta(nd.b); break;
+    case KOp::Mul: ta(nd.a); s.append(" * "); ta(nd.b); break;
+    case KOp::Div: ta(nd.a); s.append(" / "); ta(nd.b); break;
+    case KOp::Min: s.append("min("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
+    case KOp::Max: s.append("max("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
+    case KOp::Pow: s.append("pow("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
+    case KOp::Clamp: s.append("clamp("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(")"); break;
+    case KOp::Mix: s.append("lerp("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(")"); break;
+    case KOp::Vec2: s.append("float2("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
+    case KOp::Vec3: s.append("float3("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(")"); break;
+    case KOp::VecConcat: s.append(htype(nd.type)); s.append("("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
+    case KOp::VecComp: ta(nd.a); s.append("."); { const char sw[2] = {xyzw[nd.iidx], '\0'}; s.append(sw); } break;
+    case KOp::Swizzle: ta(nd.a); s.append("."); for (int k = 0; k < c; ++k) { const char sw[2] = {xyzw[nd.perm[k]], '\0'}; s.append(sw); } break;
+    case KOp::Splat: s.append(htype(nd.type)); s.append("("); for (int k = 0; k < c; ++k) { if (k) { s.append(", "); } ta(nd.a); } s.append(")"); break;
+    case KOp::Dot: s.append("dot("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
+    case KOp::Cross: s.append("cross("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
+    case KOp::Normalize: s.append("normalize("); ta(nd.a); s.append(")"); break;
+    case KOp::VecLen: s.append("length("); ta(nd.a); s.append(")"); break;
+    case KOp::Reflect: s.append("reflect("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
+    case KOp::Refract: s.append("refract("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(")"); break;
+    case KOp::Faceforward: s.append("faceforward("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(")"); break;
+    case KOp::VecAny: s.append("any("); ta(nd.a); s.append(")"); break;
+    case KOp::VecAll: s.append("all("); ta(nd.a); s.append(")"); break;
+    case KOp::CmpLt: s.append("("); ta(nd.a); s.append(" < "); ta(nd.b); s.append(")"); break;
+    case KOp::CmpLe: s.append("("); ta(nd.a); s.append(" <= "); ta(nd.b); s.append(")"); break;
+    case KOp::CmpGt: s.append("("); ta(nd.a); s.append(" > "); ta(nd.b); s.append(")"); break;
+    case KOp::CmpGe: s.append("("); ta(nd.a); s.append(" >= "); ta(nd.b); s.append(")"); break;
+    case KOp::CmpEq: s.append("("); ta(nd.a); s.append(" == "); ta(nd.b); s.append(")"); break;
+    case KOp::CmpNe: s.append("("); ta(nd.a); s.append(" != "); ta(nd.b); s.append(")"); break;
+    case KOp::Select: s.append("("); if (g.node(nd.c).dtype() == DType::Bool) { ta(nd.c); } else { s.append("("); ta(nd.c); s.append(" != 0.0)"); } s.append(" ? "); ta(nd.a); s.append(" : "); ta(nd.b); s.append(")"); break;
+    case KOp::Slerp: s.append("crd_slerp("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(")"); break;
+    case KOp::QuatMul: s.append("crd_qmul("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
+    case KOp::QuatConj: s.append("crd_qconj("); ta(nd.a); s.append(")"); break;
+    case KOp::QuatRotate: s.append("crd_qrot("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
+    case KOp::QuatAxisAngle: s.append("crd_qaa("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
+    case KOp::MatFromCols: { const int mcols = nd.type.cols; const int operand[4] = {nd.a, nd.b, nd.c, nd.d}; s.append("transpose("); s.append(hmat(mcols, nd.type.rows)); s.append("("); for (int k = 0; k < mcols; ++k) { if (k) { s.append(", "); } ta(operand[k]); } s.append("))"); break; }
+    case KOp::MatVecMul: // HLSL spells both as mul(); the row-major construct at MatFromCols keeps the convention
+    case KOp::MatMatMul: s.append("mul("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
+    case KOp::MatTranspose: s.append("transpose("); ta(nd.a); s.append(")"); break;
+    case KOp::Determinant: s.append("determinant("); ta(nd.a); s.append(")"); break;
+    case KOp::MatInverse: s.append(nd.type.rows == 2 ? "crd_inv2(" : "crd_inv3("); ta(nd.a); s.append(")"); break;
+    case KOp::OuterProduct: { const int orows = nd.type.rows; s.append(hmat(orows, nd.type.cols)); s.append("("); for (int r = 0; r < orows; ++r) { if (r) { s.append(", "); } ta(nd.a); s.append("."); const char sw[2] = {xyzw[r], '\0'}; s.append(sw); s.append(" * "); ta(nd.b); } s.append(")"); break; }
+    case KOp::QuatToMat3: s.append("crd_qmat("); ta(nd.a); s.append(")"); break;
+    // B6: the remaining scalar-math + integer bitwise ops (parity with the GLSL raster emitter + the HLSL compute path).
+    // Materials (B6-a) use trunc/ceil/round/sign/tan/asin/acos/atan2/smoothstep; noise (B6-b) uses the bitwise ops for the
+    // Bob-Jenkins hash (uint → logical >>).
+    case KOp::Tanh: s.append("tanh("); ta(nd.a); s.append(")"); break;
+    case KOp::Trunc: s.append("trunc("); ta(nd.a); s.append(")"); break;
+    case KOp::Ceil: s.append("ceil("); ta(nd.a); s.append(")"); break;
+    case KOp::Round: s.append("round("); ta(nd.a); s.append(")"); break; // HLSL round = ties-to-even, matches the oracle
+    case KOp::Sign: s.append("(("); ta(nd.a); s.append(" > 0.0) ? 1.0 : (("); ta(nd.a); s.append(" < 0.0) ? -1.0 : 0.0))"); break;
+    case KOp::Exp2: s.append("exp2("); ta(nd.a); s.append(")"); break;
+    case KOp::Log2: s.append("log2("); ta(nd.a); s.append(")"); break;
+    case KOp::Tan: s.append("tan("); ta(nd.a); s.append(")"); break;
+    case KOp::Radians: s.append("("); ta(nd.a); s.append(" * 0.017453292519943295)"); break;
+    case KOp::Degrees: s.append("("); ta(nd.a); s.append(" * 57.29577951308232)"); break;
+    case KOp::Asin: s.append("asin("); ta(nd.a); s.append(")"); break;
+    case KOp::Acos: s.append("acos("); ta(nd.a); s.append(")"); break;
+    case KOp::Atan: s.append("atan("); ta(nd.a); s.append(")"); break;
+    case KOp::Sinh: s.append("sinh("); ta(nd.a); s.append(")"); break;
+    case KOp::Cosh: s.append("cosh("); ta(nd.a); s.append(")"); break;
+    case KOp::Cbrt: s.append("(sign("); ta(nd.a); s.append(") * pow(abs("); ta(nd.a); s.append("), 0.3333333333333333))"); break;
+    case KOp::Atan2: s.append("atan2("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
+    case KOp::Mod: s.append("fmod("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break; // C fmod (sign of x)
+    case KOp::Step: s.append("(("); ta(nd.b); s.append(" < "); ta(nd.a); s.append(") ? 0.0 : 1.0)"); break;
+    case KOp::Smoothstep: s.append("smoothstep("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(")"); break;
+    case KOp::Fma: s.append("fma("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(")"); break;
+    case KOp::Shl: ta(nd.a); s.append(" << "); ta(nd.b); break;
+    case KOp::Shr: ta(nd.a); s.append(" >> "); ta(nd.b); break;
+    case KOp::BitAnd: ta(nd.a); s.append(" & "); ta(nd.b); break;
+    case KOp::BitOr: ta(nd.a); s.append(" | "); ta(nd.b); break;
+    case KOp::BitXor: ta(nd.a); s.append(" ^ "); ta(nd.b); break;
+    case KOp::BitNot: s.append("(~"); ta(nd.a); s.append(")"); break; // B12-a: raster emitter lagged compute on these bit ops
+    case KOp::BitCount: s.append("countbits("); ta(nd.a); s.append(")"); break;
+    case KOp::FindLSB: s.append("firstbitlow("); ta(nd.a); s.append(")"); break;
+    case KOp::FindMSB: s.append("firstbithigh("); ta(nd.a); s.append(")"); break;
+    default: return false;
+    }
+    s.append(";\n");
+    return true;
+}
+
+// B3-d: for a VS/FS builtin, the HLSL member type + `SV_` semantic (the input struct carries it). nullptr = unsupported.
+// (The member type is the SV-native one — `SV_VertexID` is `uint`, `SV_Position` is `float4` — the read converts to the
+// KIR builtin type via the temp's declared type.)
+[[nodiscard]] inline bool hlsl_vsfs_builtin(KBuiltin b, const char*& hlsl_type, const char*& sv) noexcept
+{
+    switch (b)
+    {
+    case KBuiltin::VertexIndex:   hlsl_type = "uint";   sv = "SV_VertexID";     return true;
+    case KBuiltin::InstanceIndex: hlsl_type = "uint";   sv = "SV_InstanceID";   return true;
+    case KBuiltin::FragCoord:     hlsl_type = "float4"; sv = "SV_Position";     return true;
+    case KBuiltin::FrontFacing:   hlsl_type = "bool";   sv = "SV_IsFrontFace";  return true;
+    case KBuiltin::InnerCoverage: hlsl_type = "uint";   sv = "SV_InnerCoverage"; return true; // B1-f: bit0 = fully covered
+    default:                      return false;
+    }
+}
+
+// B1-c: the HLSL interpolation modifier (trailing space; goes before the member type). `nointerpolation` = GLSL `flat`.
+[[nodiscard]] inline const char* hlsl_interp(Interp i) noexcept
+{
+    switch (i)
+    {
+    case Interp::Flat:          return "nointerpolation ";
+    case Interp::NoPerspective: return "noperspective ";
+    case Interp::Centroid:      return "centroid ";
+    case Interp::Sample:        return "sample ";
+    default:                    return ""; // linear (default)
+    }
+}
+
+// B1-d: the depth output SEMANTIC for a `frag_depth` write. Conservative depth (Greater/Less) keeps early-Z even while
+// the shader writes depth; plain `Any` writes unconstrained depth (defeats early-Z).
+[[nodiscard]] inline const char* hlsl_depth_semantic(DepthMode m) noexcept
+{
+    switch (m)
+    {
+    case DepthMode::Greater: return "SV_DepthGreaterEqual";
+    case DepthMode::Less:    return "SV_DepthLessEqual";
+    default:                 return "SV_Depth";
+    }
+}
+
+// B3-d: emit a VERTEX or FRAGMENT HLSL shader from a stage `entry` — the DX12 mirror of `emit_stage_glsl`. Reuses
+// `emit_value_stmt_hlsl` for the value ops. HLSL raster I/O is STRUCT-based with `SV_` semantics; `[[vk::location(N)]]`
+// pins the SPIR-V location so it matches the GLSL emitter. The RASTER LEAF resolves stage values: `StageIn`→`i.aL`,
+// `Builtin`→`i.biN`, UBO `FieldGet`→a cbuffer member `uS_B_fN`. An unlowerable builtin/op returns false.
+inline bool emit_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IAllocator* scratch, GlslKernel& out)
+{
+    using namespace glsl_detail;
+    if (entry.stage != KStage::Vertex && entry.stage != KStage::Fragment) { return false; }
+    const bool is_vertex = (entry.stage == KStage::Vertex);
+    if (is_vertex && entry.position < 0) { return false; }
+
+    const int                       n = g.size();
+    crd::containers::Array<crd::u8> reach(scratch);
+    crd::containers::Array<int>     stk(scratch);
+    reach.resize(static_cast<crd::usize>(n), 0);
+    const auto push_root = [&](int r) { if (r >= 0) { stk.push_back(r); } };
+    push_root(entry.position);
+    push_root(entry.frag_depth);
+    push_root(entry.discard_cond); // B1-b: the alpha-test condition must be reachable so its temp is emitted
+    push_root(entry.shading_rate); // B1-e: per-primitive VRS rate node must be reachable
+    push_root(entry.storage_write_index); // B1-f: the storage write's index + value must be reachable
+    push_root(entry.storage_write_value);
+    for (int k = 0; k < entry.n_out; ++k) { push_root(entry.out[k].node); }
+    while (stk.size() > 0)
+    {
+        const int i = stk[stk.size() - 1];
+        stk.resize(stk.size() - 1);
+        if (i < 0 || reach[static_cast<crd::usize>(i)]) { continue; }
+        reach[static_cast<crd::usize>(i)] = 1;
+        const KNode& nd = g.node(i);
+        if (nd.a >= 0) { stk.push_back(nd.a); }
+        if (nd.b >= 0) { stk.push_back(nd.b); }
+        if (nd.c >= 0) { stk.push_back(nd.c); }
+        if (nd.d >= 0) { stk.push_back(nd.d); }
+        for (int e = 0; e < static_cast<int>(nd.n_ext); ++e) { stk.push_back(g.ext_operand(nd, e)); }
+    }
+
+    crd::containers::String& s = out.source;
+    s.clear();
+    // input struct: StageIn (location) + Builtin (SV_) members
+    s.append(is_vertex ? "struct VSIn {\n" : "struct PSIn {\n");
+    for (int i = 0; i < n; ++i)
+    {
+        if (!reach[static_cast<crd::usize>(i)] || g.node(i).op != KOp::StageIn) { continue; }
+        const KNode& nd = g.node(i);
+        s.append("  [[vk::location("); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(")]] ");
+        if (!is_vertex) { s.append(hlsl_interp(static_cast<Interp>(nd.dset))); } // B1-c: interp on FS interpolant inputs
+        s.append(htype(nd.type)); s.append(" a"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(" : TEXCOORD"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(";\n");
+    }
+    for (int i = 0; i < n; ++i)
+    {
+        if (!reach[static_cast<crd::usize>(i)] || g.node(i).op != KOp::Builtin) { continue; }
+        const char* bt = nullptr;
+        const char* sv = nullptr;
+        if (!hlsl_vsfs_builtin(static_cast<KBuiltin>(g.node(i).iidx), bt, sv)) { return false; } // unsupported builtin
+        s.append("  ");
+        // B1-d: DXIL forbids the default `linear noperspective` on the SV_Position input when the shader outputs
+        // conservative depth (SV_DepthGreaterEqual/LessEqual) — it must be `noperspective centroid` (or run per-sample).
+        if (!is_vertex && entry.depth_mode != DepthMode::Any
+            && static_cast<KBuiltin>(g.node(i).iidx) == KBuiltin::FragCoord)
+        {
+            s.append("noperspective centroid ");
+        }
+        s.append(bt); s.append(" bi"); app_uint(s, static_cast<crd::u32>(g.node(i).iidx)); s.append(" : "); s.append(sv); s.append(";\n");
+    }
+    s.append("};\n");
+    // output struct: StageOutputs (VS interpolants / FS colour attachments) + SV_Position (VS) + SV_Depth (FS).
+    // ⚠ SV_Position is emitted LAST in VSOut, NOT first: DXIL matches inter-stage USER varyings by packed register, and a
+    // leading `SV_Position` steals output register 0 — pushing TEXCOORD0 to register 1 while the fragment PSIn packs it at
+    // register 0 (its builtins trail the StageIns), so the graphics PSO fails link with E_INVALIDARG. Declaring the user
+    // varyings first packs them at registers 0..N-1 on BOTH sides. (SPIR-V is immune — it matches by explicit vk::location
+    // and Position is a no-location builtin — so the Vulkan HLSL gate is unaffected by the order.)
+    s.append(is_vertex ? "struct VSOut {\n" : "struct PSOut {\n");
+    for (int k = 0; k < entry.n_out; ++k)
+    {
+        const int nid = entry.out[k].node;
+        if (nid < 0) { continue; }
+        if (is_vertex) { s.append("  [[vk::location("); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append(")]] "); s.append(hlsl_interp(entry.out[k].interp)); s.append(htype(g.node(nid).type)); s.append(" o"); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append(" : TEXCOORD"); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append(";\n"); }
+        else { s.append("  "); s.append(htype(g.node(nid).type)); s.append(" o"); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append(" : SV_Target"); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append(";\n"); }
+    }
+    if (is_vertex) { s.append("  float4 clip : SV_Position;\n"); }
+    if (is_vertex && entry.shading_rate >= 0) { s.append("  uint sr : SV_ShadingRate;\n"); } // B1-e: per-primitive VRS out
+    if (!is_vertex && entry.frag_depth >= 0) // B1-d: conservative depth ⇒ the SV_Depth* semantic that keeps early-Z
+    {
+        s.append("  float o_depth : ");
+        s.append(hlsl_depth_semantic(entry.depth_mode));
+        s.append(";\n");
+    }
+    s.append("};\n");
+    // uniform blocks -> cbuffer (register(bBinding, spaceSet)); members are HLSL globals, named u{S}_{B}_f{N}
+    for (int i = 0; i < n; ++i)
+    {
+        if (!reach[static_cast<crd::usize>(i)] || g.node(i).op != KOp::UniformBlock) { continue; }
+        const KNode& nd  = g.node(i);
+        const int    sid = nd.type.struct_id;
+        s.append("cbuffer U_"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(" : register(b"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(", space"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append(") {\n");
+        const int fc = g.struct_field_count(sid);
+        for (int f = 0; f < fc; ++f) { s.append("  "); s.append(htype(g.struct_field(sid, f))); s.append(" u"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append("_f"); app_uint(s, static_cast<crd::u32>(f)); s.append(";\n"); }
+        s.append("};\n");
+    }
+    bool fs_uses_storage = false; // B1-f: does the FS read/write the storage buffer (a StorageLoad or a storage write)?
+    if (!is_vertex)
+    {
+        if (entry.storage_write_index >= 0) { fs_uses_storage = true; }
+        for (int i = 0; !fs_uses_storage && i < n; ++i)
+        {
+            if (reach[static_cast<crd::usize>(i)] && g.node(i).op == KOp::StorageLoad) { fs_uses_storage = true; }
+        }
+    }
+    if (fs_uses_storage) // B1-f: the FS storage buffer at u0 / set 0-binding 0 (matches draw_storage's root UAV / descriptor).
+    {                    // ROV (RasterizerOrdered) when interlock — DXIL serialises overlapping-pixel access automatically.
+        s.append("[[vk::binding(0, 0)]] ");
+        s.append(entry.interlock ? "RasterizerOrderedStructuredBuffer<uint>" : "RWStructuredBuffer<uint>");
+        s.append(" sbuf : register(u0);\n");
+    }
+    for (int i = 0; i < n; ++i) // B2: separable texture (register(tB, spaceS)) + sampler (register(sB, spaceS)) declarations
+    {
+        if (!reach[static_cast<crd::usize>(i)]) { continue; }
+        const KNode& nd = g.node(i);
+        if (nd.op == KOp::Texture)
+        {
+            s.append("[[vk::binding("); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(", "); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append(")]] ");
+            // A shadow/depth texture is single-channel (`Texture2D<float>`) so `.SampleCmp` is well-typed; colour is float4.
+            s.append(hlsl_tex_dim(nd.type)); s.append("<"); s.append(nd.type.tex_shadow() ? "float" : hlsl_tex_elem(nd.type.scalar)); s.append("> tex_");
+            app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx));
+            if (nd.type.count > 1U) { s.append("["); app_uint(s, static_cast<crd::u32>(nd.type.count)); s.append("]"); } // B2-d: bindless array
+            s.append(" : register(t"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(", space"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append(");\n");
+        }
+        else if (nd.op == KOp::Sampler)
+        {
+            s.append("[[vk::binding("); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(", "); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append(")]] ");
+            s.append(nd.type.tex_shadow() ? "SamplerComparisonState" : "SamplerState"); s.append(" samp_"); // B2-b: comparison sampler
+            app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx));
+            s.append(" : register(s"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(", space"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append(");\n");
+        }
+    }
+    { // quaternion/slerp + matrix helpers (shared with the compute HLSL path)
+        bool qm = false;
+        bool qc = false;
+        bool qr = false;
+        bool qa = false;
+        bool sl = false;
+        bool qt = false;
+        bool iv = false;
+        bool iv2 = false;
+        for (int i = 0; i < n; ++i) { if (!reach[static_cast<crd::usize>(i)]) { continue; } switch (g.node(i).op) { case KOp::QuatMul: qm = true; break; case KOp::QuatConj: qc = true; break; case KOp::QuatRotate: qr = true; break; case KOp::QuatAxisAngle: qa = true; break; case KOp::Slerp: sl = true; break; case KOp::QuatToMat3: qt = true; break; case KOp::MatInverse: if (g.node(i).type.rows == 2) { iv2 = true; } else { iv = true; } break; default: break; } }
+        if (qm) { s.append("float4 crd_qmul(float4 a,float4 b){return float4(a.w*b.xyz+b.w*a.xyz+cross(a.xyz,b.xyz),a.w*b.w-dot(a.xyz,b.xyz));}\n"); }
+        if (qc) { s.append("float4 crd_qconj(float4 q){return float4(-q.xyz,q.w);}\n"); }
+        if (qr) { s.append("float3 crd_qrot(float4 q,float3 v){float3 t=2.0*cross(q.xyz,v);return v+q.w*t+cross(q.xyz,t);}\n"); }
+        if (qa) { s.append("float4 crd_qaa(float3 ax,float an){float h=an*0.5;return float4(ax*sin(h),cos(h));}\n"); }
+        if (sl) { s.append("float4 crd_slerp(float4 a,float4 b,float t){float d=dot(a,b);float sg=1.0;if(d<0.0){d=-d;sg=-1.0;}if(d>0.9995){return normalize(lerp(a,sg*b,t));}float th=acos(d);float sn=sin(th);return (sin((1.0-t)*th)*a+sin(t*th)*sg*b)/sn;}\n"); }
+        if (qt) { s.append("float3x3 crd_qmat(float4 q){float x=q.x,y=q.y,z=q.z,w=q.w;return float3x3(1.0-2.0*(y*y+z*z),2.0*(x*y-w*z),2.0*(x*z+w*y),2.0*(x*y+w*z),1.0-2.0*(x*x+z*z),2.0*(y*z-w*x),2.0*(x*z-w*y),2.0*(y*z+w*x),1.0-2.0*(x*x+y*y));}\n"); }
+        if (iv2) { s.append("float2x2 crd_inv2(float2x2 m){float a=m._m00,b=m._m01,c=m._m10,d=m._m11;float iv=1.0/(a*d-b*c);return float2x2(d*iv,-b*iv,-c*iv,a*iv);}\n"); }
+        if (iv) { s.append("float3x3 crd_inv3(float3x3 m){float a=m._m00,b=m._m01,c=m._m02,d=m._m10,e=m._m11,f=m._m12,g=m._m20,h=m._m21,i=m._m22;float A=e*i-f*h,B=d*i-f*g,C=d*h-e*g;float iv=1.0/(a*A-b*B+c*C);return float3x3(A*iv,(c*h-b*i)*iv,(b*f-c*e)*iv,(f*g-d*i)*iv,(a*i-c*g)*iv,(c*d-a*f)*iv,(d*h-e*g)*iv,(b*g-a*h)*iv,(a*e-b*d)*iv);}\n"); }
+    }
+    if (!is_vertex && entry.early_fragment_tests) { s.append("[earlydepthstencil]\n"); } // B1-d: force early-Z
+    s.append(is_vertex ? "VSOut main(VSIn i) {\n  VSOut o;\n" : "PSOut main(PSIn i) {\n  PSOut o;\n");
+
+    crd::containers::Array<crd::u8> varying(scratch);
+    varying.resize(static_cast<crd::usize>(n), 0);
+    for (int i = 0; i < n; ++i) { const KNode& v = g.node(i); if (v.op == KOp::For) { continue; } const bool loop_leaf = v.op == KOp::LoopIndex || v.op == KOp::LoopAcc; const bool from_operand = (v.a >= 0 && varying[static_cast<crd::usize>(v.a)]) || (v.b >= 0 && varying[static_cast<crd::usize>(v.b)]) || (v.c >= 0 && varying[static_cast<crd::usize>(v.c)]) || (v.d >= 0 && varying[static_cast<crd::usize>(v.d)]); if (loop_leaf || from_operand) { varying[static_cast<crd::usize>(i)] = 1; } }
+    crd::containers::Array<int> body_of(scratch);
+    body_of.resize(static_cast<crd::usize>(n), -1);
+    crd::containers::Array<int> rstk(scratch);
+    for (int fi = 0; fi < n; ++fi) { if (g.node(fi).op != KOp::For) { continue; } rstk.push_back(g.node(fi).c); while (rstk.size() > 0) { const int bid = rstk[rstk.size() - 1]; rstk.resize(rstk.size() - 1); if (bid < 0 || !varying[static_cast<crd::usize>(bid)] || body_of[static_cast<crd::usize>(bid)] != -1) { continue; } body_of[static_cast<crd::usize>(bid)] = fi; const KNode& bn = g.node(bid); rstk.push_back(bn.a); rstk.push_back(bn.b); rstk.push_back(bn.c); rstk.push_back(bn.d); } }
+
+    const auto raster_leaf = [&](const KGraph& gg, int li, crd::containers::String& ss) -> bool
+    {
+        const KNode& lnd = gg.node(li);
+        if (lnd.op == KOp::UniformBlock) { return true; } // the cbuffer materializes nothing; only its FieldGets read members
+        if (lnd.op == KOp::Texture || lnd.op == KOp::Sampler) { return true; } // B2: opaque binding leaves — declared in the prologue
+        if (lnd.op == KOp::StageIn) { emit_stmt_prefix_hlsl(gg, li, ss); ss.append("i.a"); app_uint(ss, static_cast<crd::u32>(lnd.iidx)); ss.append(";\n"); return true; }
+        if (lnd.op == KOp::Builtin)
+        {
+            const char* bt = nullptr;
+            const char* sv = nullptr;
+            if (!hlsl_vsfs_builtin(static_cast<KBuiltin>(lnd.iidx), bt, sv)) { return false; }
+            emit_stmt_prefix_hlsl(gg, li, ss); ss.append("i.bi"); app_uint(ss, static_cast<crd::u32>(lnd.iidx)); ss.append(";\n"); return true;
+        }
+        if (lnd.op == KOp::FieldGet)
+        {
+            const KNode& agg = gg.node(lnd.a);
+            if (agg.op != KOp::UniformBlock) { return false; }
+            emit_stmt_prefix_hlsl(gg, li, ss); ss.append("u"); app_uint(ss, static_cast<crd::u32>(agg.dset)); ss.append("_"); app_uint(ss, static_cast<crd::u32>(agg.iidx)); ss.append("_f"); app_uint(ss, static_cast<crd::u32>(lnd.iidx)); ss.append(";\n");
+            return true;
+        }
+        return false;
+    };
+
+    for (int i = 0; i < n; ++i)
+    {
+        if (!reach[static_cast<crd::usize>(i)] || varying[static_cast<crd::usize>(i)]) { continue; }
+        const KNode& nd = g.node(i);
+        if (nd.op == KOp::For)
+        {
+            s.append("  precise "); s.append(htype(nd.type)); s.append(" t"); app_uint(s, static_cast<crd::u32>(i)); s.append(" = t"); app_uint(s, static_cast<crd::u32>(nd.b)); s.append(";\n");
+            s.append("  for (int li_"); app_uint(s, static_cast<crd::u32>(i)); s.append(" = 0; li_"); app_uint(s, static_cast<crd::u32>(i)); s.append(" < int(t"); app_uint(s, static_cast<crd::u32>(nd.a)); s.append("); li_"); app_uint(s, static_cast<crd::u32>(i)); s.append("++) {\n");
+            for (int bid = 0; bid < i; ++bid)
+            {
+                if (body_of[static_cast<crd::usize>(bid)] != i) { continue; }
+                const KNode& bn = g.node(bid);
+                if (bn.op == KOp::LoopIndex) { s.append("  precise float t"); app_uint(s, static_cast<crd::u32>(bid)); s.append(" = float(li_"); app_uint(s, static_cast<crd::u32>(i)); s.append(");\n"); }
+                else if (bn.op == KOp::LoopAcc) { s.append("  precise "); s.append(htype(bn.type)); s.append(" t"); app_uint(s, static_cast<crd::u32>(bid)); s.append(" = t"); app_uint(s, static_cast<crd::u32>(i)); s.append(";\n"); }
+                else if (!emit_value_stmt_hlsl(g, bid, s, raster_leaf)) { return false; }
+            }
+            s.append("  t"); app_uint(s, static_cast<crd::u32>(i)); s.append(" = t"); app_uint(s, static_cast<crd::u32>(nd.c)); s.append(";\n  }\n");
+        }
+        else if (!emit_value_stmt_hlsl(g, i, s, raster_leaf)) { return false; }
+    }
+
+    if (!is_vertex && entry.storage_write_index >= 0) // B1-f: the storage-buffer write (ROV serialises it when interlock)
+    {
+        s.append("  sbuf[t"); app_uint(s, static_cast<crd::u32>(entry.storage_write_index));
+        s.append("] = t"); app_uint(s, static_cast<crd::u32>(entry.storage_write_value)); s.append(";\n");
+    }
+    if (!is_vertex && entry.discard_cond >= 0) // B1-b: alpha-test / cutout — kill the fragment before writing outputs
+    {
+        s.append("  if (t"); app_uint(s, static_cast<crd::u32>(entry.discard_cond)); s.append(") { discard; }\n");
+    }
+    if (is_vertex) { s.append("  o.clip = t"); app_uint(s, static_cast<crd::u32>(entry.position)); s.append(";\n"); }
+    if (is_vertex && entry.shading_rate >= 0) { s.append("  o.sr = (uint)t"); app_uint(s, static_cast<crd::u32>(entry.shading_rate)); s.append(";\n"); } // B1-e
+    for (int k = 0; k < entry.n_out; ++k) { const int nid = entry.out[k].node; if (nid < 0) { continue; } s.append("  o.o"); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append(" = t"); app_uint(s, static_cast<crd::u32>(nid)); s.append(";\n"); }
+    if (!is_vertex && entry.frag_depth >= 0) { s.append("  o.o_depth = t"); app_uint(s, static_cast<crd::u32>(entry.frag_depth)); s.append(";\n"); }
+    s.append("  return o;\n}\n");
+    return true;
+}
+
 inline bool emit_vec_hlsl(const KGraph& g, int output, crd::memory::IAllocator* scratch, GlslKernel& out)
 {
     using namespace glsl_detail;
@@ -245,95 +705,20 @@ inline bool emit_vec_hlsl(const KGraph& g, int output, crd::memory::IAllocator* 
     crd::containers::Array<int> rstk(scratch);
     for (int fi = 0; fi < n; ++fi) { if (g.node(fi).op != KOp::For) { continue; } rstk.push_back(g.node(fi).c); while (rstk.size() > 0) { const int bid = rstk[rstk.size() - 1]; rstk.resize(rstk.size() - 1); if (bid < 0 || !varying[static_cast<crd::usize>(bid)] || body_of[static_cast<crd::usize>(bid)] != -1) { continue; } body_of[static_cast<crd::usize>(bid)] = fi; const KNode& bn = g.node(bid); rstk.push_back(bn.a); rstk.push_back(bn.b); rstk.push_back(bn.c); rstk.push_back(bn.d); } }
 
-    const char xyzw[4] = {'x', 'y', 'z', 'w'};
-    const auto ta        = [&](int id) { s.append("t"); app_uint(s, static_cast<crd::u32>(id)); };
-    const auto emit_expr = [&](int i) -> bool
+    const auto compute_leaf = [&](const KGraph& gg, int li, crd::containers::String& ss) -> bool
     {
-        const KNode& nd = g.node(i);
-        const int    c  = nd.comps();
-        // B0-4 SROA: the aggregate is never materialized; a FieldGet/ArrayGet resolves to the operand its index names.
-        if (nd.op == KOp::StructMake || nd.op == KOp::ArrayMake) { return true; }
-        if (nd.op == KOp::FieldGet || nd.op == KOp::ArrayGet)
-        {
-            const KNode& agg = g.node(nd.a);
-            if (agg.op != KOp::StructMake && agg.op != KOp::ArrayMake) { return false; } // e.g. a Select of structs needs a real struct type
-            s.append(glsl_detail::is_float_dtype(nd.dtype()) ? "  precise " : "  "); s.append(htype(nd.type));
-            s.append(" t"); app_uint(s, i); s.append(" = "); ta(g.ext_operand(agg, nd.iidx)); s.append(";\n");
-            return true;
-        }
-        s.append(glsl_detail::is_float_dtype(nd.dtype()) ? "  precise " : "  "); s.append(htype(nd.type)); s.append(" t"); app_uint(s, static_cast<crd::u32>(i)); s.append(" = ");
-        switch (nd.op)
-        {
-        // mat: transpose(floatCxR(flat)) — our flat is column-major, HLSL's ctor fills row-major, so build the CxR
-        // transpose from the flat scalars and flip it once. Matrix-ness is the TYPE's, not `c > 4` (mat2 has c == 4).
-        case KOp::Input: { const int bd = binding_of[static_cast<crd::usize>(i)]; const bool is_mat = nd.type.kind == TKind::Mat; if (c == 1) { s.append("in"); app_uint(s, static_cast<crd::u32>(bd)); s.append("[gid]"); } else { if (is_mat) { s.append("transpose("); s.append(hmat(nd.type.cols, nd.type.rows)); } else { s.append(htype(nd.type)); } s.append("("); for (int k = 0; k < c; ++k) { if (k) { s.append(", "); } s.append("in"); app_uint(s, static_cast<crd::u32>(bd)); s.append("[gid*"); app_uint(s, static_cast<crd::u32>(c)); s.append("+"); app_uint(s, static_cast<crd::u32>(k)); s.append("]"); } s.append(")"); if (is_mat) { s.append(")"); } } break; }
-        case KOp::Const: app_flit(s, nd.cval); break;
-        case KOp::Cast: s.append(htype(nd.type)); s.append("("); ta(nd.a); s.append(")"); break;
-        case KOp::Neg: s.append("-"); ta(nd.a); break;
-        case KOp::Recip: s.append("(1.0 / "); ta(nd.a); s.append(")"); break;
-        case KOp::Abs: s.append("abs("); ta(nd.a); s.append(")"); break;
-        case KOp::Sqrt: s.append("sqrt("); ta(nd.a); s.append(")"); break;
-        case KOp::Rsqrt: s.append("rsqrt("); ta(nd.a); s.append(")"); break;
-        case KOp::Exp: s.append("exp("); ta(nd.a); s.append(")"); break;
-        case KOp::Log: s.append("log("); ta(nd.a); s.append(")"); break;
-        case KOp::Sin: s.append("sin("); ta(nd.a); s.append(")"); break;
-        case KOp::Cos: s.append("cos("); ta(nd.a); s.append(")"); break;
-        case KOp::Floor: s.append("floor("); ta(nd.a); s.append(")"); break;
-        case KOp::Fract: s.append("frac("); ta(nd.a); s.append(")"); break;
-        case KOp::Add: ta(nd.a); s.append(" + "); ta(nd.b); break;
-        case KOp::Sub: ta(nd.a); s.append(" - "); ta(nd.b); break;
-        case KOp::Mul: ta(nd.a); s.append(" * "); ta(nd.b); break;
-        case KOp::Div: ta(nd.a); s.append(" / "); ta(nd.b); break;
-        case KOp::Min: s.append("min("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
-        case KOp::Max: s.append("max("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
-        case KOp::Pow: s.append("pow("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
-        case KOp::Clamp: s.append("clamp("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(")"); break;
-        case KOp::Mix: s.append("lerp("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(")"); break;
-        case KOp::Vec2: s.append("float2("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
-        case KOp::Vec3: s.append("float3("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(")"); break;
-        case KOp::VecConcat: s.append(htype(nd.type)); s.append("("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
-        case KOp::VecComp: ta(nd.a); s.append("."); { const char sw[2] = {xyzw[nd.iidx], '\0'}; s.append(sw); } break;
-        case KOp::Swizzle: ta(nd.a); s.append("."); for (int k = 0; k < c; ++k) { const char sw[2] = {xyzw[nd.perm[k]], '\0'}; s.append(sw); } break;
-        case KOp::Splat: s.append(htype(nd.type)); s.append("("); for (int k = 0; k < c; ++k) { if (k) { s.append(", "); } ta(nd.a); } s.append(")"); break;
-        case KOp::Dot: s.append("dot("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
-        case KOp::Cross: s.append("cross("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
-        case KOp::Normalize: s.append("normalize("); ta(nd.a); s.append(")"); break;
-        case KOp::VecLen: s.append("length("); ta(nd.a); s.append(")"); break;
-        case KOp::Reflect: s.append("reflect("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
-        case KOp::Refract: s.append("refract("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(")"); break;
-        case KOp::Faceforward: s.append("faceforward("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(")"); break;
-        // any()/all() are bool-returning in HLSL and accept a numeric vector too (nonzero == true), so one form serves both.
-        case KOp::VecAny: s.append("any("); ta(nd.a); s.append(")"); break;
-        case KOp::VecAll: s.append("all("); ta(nd.a); s.append(")"); break;
-        // B0-3: relational operators are componentwise on HLSL vectors and already yield boolN.
-        case KOp::CmpLt: s.append("("); ta(nd.a); s.append(" < "); ta(nd.b); s.append(")"); break;
-        case KOp::CmpLe: s.append("("); ta(nd.a); s.append(" <= "); ta(nd.b); s.append(")"); break;
-        case KOp::CmpGt: s.append("("); ta(nd.a); s.append(" > "); ta(nd.b); s.append(")"); break;
-        case KOp::CmpGe: s.append("("); ta(nd.a); s.append(" >= "); ta(nd.b); s.append(")"); break;
-        case KOp::CmpEq: s.append("("); ta(nd.a); s.append(" == "); ta(nd.b); s.append(")"); break;
-        case KOp::CmpNe: s.append("("); ta(nd.a); s.append(" != "); ta(nd.b); s.append(")"); break;
-        case KOp::Select: s.append("("); if (g.node(nd.c).dtype() == DType::Bool) { ta(nd.c); } else { s.append("("); ta(nd.c); s.append(" != 0.0)"); } s.append(" ? "); ta(nd.a); s.append(" : "); ta(nd.b); s.append(")"); break;
-        case KOp::Slerp: s.append("crd_slerp("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(")"); break;
-        case KOp::QuatMul: s.append("crd_qmul("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
-        case KOp::QuatConj: s.append("crd_qconj("); ta(nd.a); s.append(")"); break;
-        case KOp::QuatRotate: s.append("crd_qrot("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
-        case KOp::QuatAxisAngle: s.append("crd_qaa("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
-        // C column-vectors of R rows -> feed them as the ROWS of a CxR matrix, then transpose once -> our RxC.
-        case KOp::MatFromCols: { const int mcols = nd.type.cols; const int operand[4] = {nd.a, nd.b, nd.c, nd.d}; s.append("transpose("); s.append(hmat(mcols, nd.type.rows)); s.append("("); for (int k = 0; k < mcols; ++k) { if (k) { s.append(", "); } ta(operand[k]); } s.append("))"); break; }
-        case KOp::MatVecMul: // HLSL spells both as mul(); the row-major construct at MatFromCols keeps the convention
-        case KOp::MatMatMul: s.append("mul("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
-        case KOp::MatTranspose: s.append("transpose("); ta(nd.a); s.append(")"); break;
-        case KOp::Determinant: s.append("determinant("); ta(nd.a); s.append(")"); break;
-        case KOp::MatInverse: s.append(nd.type.rows == 2 ? "crd_inv2(" : "crd_inv3("); ta(nd.a); s.append(")"); break; // 4x4 is refused upstream by is_vec_fusable
-        // a(R) (x) b(C) -> RxC. HLSL's ctor fills row-major and row r is exactly `a[r] * b`, so this handles any R,C
-        // without a helper (and without the old float3x3-only `crd_outer`, which silently mistyped a 2x3 outer).
-        case KOp::OuterProduct: { const int orows = nd.type.rows; s.append(hmat(orows, nd.type.cols)); s.append("("); for (int r = 0; r < orows; ++r) { if (r) { s.append(", "); } ta(nd.a); s.append("."); const char sw[2] = {xyzw[r], '\0'}; s.append(sw); s.append(" * "); ta(nd.b); } s.append(")"); break; }
-        case KOp::QuatToMat3: s.append("crd_qmat("); ta(nd.a); s.append(")"); break;
-        default: return false;
-        }
-        s.append(";\n");
+        const KNode& lnd = gg.node(li);
+        if (lnd.op != KOp::Input) { return false; } // compute leaf: only `Input` reads a storage buffer
+        const int  lc     = lnd.comps();
+        const int  bd     = binding_of[static_cast<crd::usize>(li)];
+        const bool is_mat = lnd.type.kind == TKind::Mat;
+        emit_stmt_prefix_hlsl(gg, li, ss);
+        if (lc == 1) { ss.append("in"); app_uint(ss, static_cast<crd::u32>(bd)); ss.append("[gid]"); }
+        else { if (is_mat) { ss.append("transpose("); ss.append(hmat(lnd.type.cols, lnd.type.rows)); } else { ss.append(htype(lnd.type)); } ss.append("("); for (int k = 0; k < lc; ++k) { if (k) { ss.append(", "); } ss.append("in"); app_uint(ss, static_cast<crd::u32>(bd)); ss.append("[gid*"); app_uint(ss, static_cast<crd::u32>(lc)); ss.append("+"); app_uint(ss, static_cast<crd::u32>(k)); ss.append("]"); } ss.append(")"); if (is_mat) { ss.append(")"); } }
+        ss.append(";\n");
         return true;
     };
+    const auto emit_expr = [&](int i) -> bool { return emit_value_stmt_hlsl(g, i, s, compute_leaf); }; // B3-d: shared emitter
 
     for (int i = 0; i < n; ++i)
     {

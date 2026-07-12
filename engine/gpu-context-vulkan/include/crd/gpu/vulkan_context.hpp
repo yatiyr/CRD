@@ -56,6 +56,24 @@ public:
     // graphics queue exists, so this ONE device can present (ADR-0099). false on a headless/compute context
     // (`GpuContextConfig::headless`). The device unification (C2) makes `rhi-vulkan` adopt a render-capable context.
     [[nodiscard]] virtual bool render_capable() const noexcept = 0;
+
+    // B1-e: VARIABLE-RATE SHADING. `fragment_shading_rate()` reports `VK_KHR_fragment_shading_rate` (pipeline + primitive +
+    // attachment rates) enabled on a graphics-capable device. `vrs_tile_size()` is the attachment shading-rate-image texel
+    // size (each texel of the rate image covers that many framebuffer pixels) — used to size the per-tile VRS image.
+    [[nodiscard]] virtual bool       fragment_shading_rate() const noexcept = 0;
+    [[nodiscard]] virtual VkExtent2D vrs_tile_size() const noexcept         = 0;
+
+    // B1-f: `VK_EXT_conservative_rasterization` + `VK_EXT_extended_dynamic_state3` (the conservative-mode dynamic state)
+    // enabled on a graphics-capable device — the substrate for conservative raster + the inner-coverage input.
+    [[nodiscard]] virtual bool conservative_raster() const noexcept = 0;
+
+    // B1-f: `VK_EXT_fragment_shader_interlock` (pixel-ordered interlock) enabled on a graphics-capable device — the
+    // substrate for rasterizer-ordered fragment-shader storage access (`KEntry::interlock`, `layout(pixel_interlock_ordered)`).
+    [[nodiscard]] virtual bool fragment_shader_interlock() const noexcept = 0;
+
+    // B2-d: non-uniform sampled-image array indexing (descriptor indexing) enabled — the substrate for BINDLESS texture
+    // arrays (`texture(..., N)` + `KOp::SampleIndexed` with a per-fragment index). Graphics-capable devices.
+    [[nodiscard]] virtual bool bindless() const noexcept = 0;
 };
 
 // Create a headless Vulkan compute context per `config` (config.backend must be Vulkan). Returns nullptr on failure

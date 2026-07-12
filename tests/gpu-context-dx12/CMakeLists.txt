@@ -6,16 +6,21 @@ endif()
 
 add_executable(crd-gpu-context-dx12-tests
     test_dx12_compute.cpp
+    test_dx12_raster.cpp
 )
 
 target_link_libraries(crd-gpu-context-dx12-tests PRIVATE
     crd-core
     crd-containers
     crd-memory
+    crd-kir
     crd-gpu-context
     crd-gpu-context-dx12
     Catch2::Catch2WithMain
 )
+
+# B3-e: the shared, backend-neutral CKIR raster triangle (identical graph on Vulkan + DX12).
+target_include_directories(crd-gpu-context-dx12-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../gpu-shared")
 
 crd_enable_default_pch(crd-gpu-context-dx12-tests)
 

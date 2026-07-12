@@ -10,6 +10,10 @@ add_executable(crd-kir-tests
     test_ckir_tile.cpp
     test_ckir_msl.cpp
     test_ckir_bitops.cpp
+    test_ckir_nodes.cpp
+    test_ckir_noise.cpp
+    test_ckir_lower.cpp
+    test_ckir_lighting.cpp
 )
 
 target_link_libraries(crd-kir-tests PRIVATE

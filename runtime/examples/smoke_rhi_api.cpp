@@ -1,3 +1,4 @@
+#include <crd/gpu/program.hpp> // D-008: opaque IGpuProgram (ShaderModule retired)
 #include <crd/log/log.hpp>
 #include <crd/rhi/rhi.hpp>
 
@@ -33,16 +34,16 @@ private:
     crd::containers::Array<crd::u8> m_bytes{};
 };
 
-class SmokeShaderModule final : public crd::rhi::ShaderModule
+// D-008: shaders are opaque crd::gpu::IGpuProgram (ShaderModule retired). The smoke device returns a trivial program.
+class SmokeProgram final : public crd::gpu::IGpuProgram
 {
 public:
-    explicit SmokeShaderModule(crd::rhi::ShaderModuleDesc desc) : m_stage(desc.stage), m_entry(desc.entry_point) {}
-    [[nodiscard]] crd::rhi::ShaderStage stage() const noexcept override { return m_stage; }
-    [[nodiscard]] crd::containers::StringView entry_point() const noexcept override { return m_entry; }
+    explicit SmokeProgram(crd::gpu::ShaderStage stage) noexcept : m_stage(stage) {}
+    [[nodiscard]] bool                  valid() const noexcept override { return true; }
+    [[nodiscard]] crd::gpu::ShaderStage stage() const noexcept override { return m_stage; }
 
 private:
-    crd::rhi::ShaderStage m_stage = crd::rhi::ShaderStage::Vertex;
-    crd::containers::String m_entry{};
+    crd::gpu::ShaderStage m_stage = crd::gpu::ShaderStage::Vertex;
 };
 
 class SmokePipeline final : public crd::rhi::Pipeline
@@ -187,10 +188,13 @@ public:
     {
         return std::make_unique<SmokeImage>(desc);
     }
-    [[nodiscard]] std::unique_ptr<crd::rhi::ShaderModule>
-    create_shader_module(const crd::rhi::ShaderModuleDesc& desc) override
+    [[nodiscard]] std::unique_ptr<crd::gpu::IGpuProgram>
+    create_program(crd::rhi::ShaderStage stage, crd::containers::ConstSpan<crd::u8> /*spirv*/) override
     {
-        return std::make_unique<SmokeShaderModule>(desc);
+        crd::gpu::ShaderStage s = crd::gpu::ShaderStage::Compute;
+        if (stage == crd::rhi::ShaderStage::Vertex) { s = crd::gpu::ShaderStage::Vertex; }
+        else if (stage == crd::rhi::ShaderStage::Fragment) { s = crd::gpu::ShaderStage::Fragment; }
+        return std::make_unique<SmokeProgram>(s);
     }
     [[nodiscard]] std::unique_ptr<crd::rhi::Pipeline>
     create_graphics_pipeline(const crd::rhi::GraphicsPipelineDesc& desc) override
@@ -239,10 +243,8 @@ int main()
     SmokeDevice device;
     crd::u8 shader_code[] = {0x03, 0x02, 0x23, 0x07};
 
-    auto vs =
-        device.create_shader_module({crd::rhi::ShaderStage::Vertex, "main", crd::containers::make_span(shader_code)});
-    auto fs =
-        device.create_shader_module({crd::rhi::ShaderStage::Fragment, "main", crd::containers::make_span(shader_code)});
+    auto vs = device.create_program(crd::rhi::ShaderStage::Vertex, crd::containers::make_span(shader_code));
+    auto fs = device.create_program(crd::rhi::ShaderStage::Fragment, crd::containers::make_span(shader_code));
     auto vb = device.create_buffer(
         {sizeof(float) * 18U, static_cast<crd::u32>(crd::rhi::BufferUsage::Vertex | crd::rhi::BufferUsage::TransferDst),
          crd::rhi::MemoryUsage::CpuToGpu});

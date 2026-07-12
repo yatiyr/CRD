@@ -73,6 +73,7 @@ Checks: >
   -readability-simplify-boolean-expr,
   -readability-use-std-min-max,
   -readability-redundant-typename,
+  -readability-redundant-casting,
 
 # Per CLAUDE.md zero-warnings policy: every clang-tidy warning is a build
 # failure under the `win-tidy` preset. Flipped 2026-05-17 (v8d-2d slice

@@ -1,5 +1,7 @@
 #include <crd/app/app.hpp>
 #include <crd/config/config.hpp>
+#include <crd/gpu/program.hpp>       // D-008: opaque IGpuProgram
+#include <crd/gpu/vulkan_context.hpp> // D-008 C2-f: create_vulkan_gpu_context (rhi adopts one device)
 #include <crd/imgui/imgui.hpp>
 #include <crd/log/log.hpp>
 #include <crd/platform/filesystem.hpp>
@@ -35,11 +37,15 @@ int main()
         return 2;
     }
 
-    auto instance = crd::rhi::create_vulkan_instance({});
-    auto device = instance->create_device({});
-    auto swapchain = device->create_swapchain(
-        {app.window().native_handle(), {1280, 720}, crd::rhi::Format::B8G8R8A8Unorm, crd::rhi::PresentMode::Fifo, 2});
-    if (instance == nullptr || device == nullptr || swapchain == nullptr)
+    // D-008 C2-f: rhi adopts a device from a windowed gpu-context (gpu_ctx outlives device).
+    crd::gpu::GpuContextConfig gpu_cfg;
+    gpu_cfg.headless = false;
+    auto gpu_ctx   = crd::gpu::create_vulkan_gpu_context(gpu_cfg);
+    auto device    = gpu_ctx ? crd::rhi::create_vulkan_device_adopting(*gpu_ctx) : nullptr;
+    auto swapchain = device ? device->create_swapchain(
+        {app.window().native_handle(), {1280, 720}, crd::rhi::Format::B8G8R8A8Unorm, crd::rhi::PresentMode::Fifo, 2})
+                            : nullptr;
+    if (gpu_ctx == nullptr || device == nullptr || swapchain == nullptr)
     {
         CRD_LOG_ERROR(g_log_smoke_imgui, "RHI bootstrap failed");
         return 3;
@@ -55,10 +61,10 @@ int main()
         return 4;
     }
 
-    auto vs = device->create_shader_module(
-        {crd::rhi::ShaderStage::Vertex, "main", crd::containers::make_span(vs_spv.data(), vs_spv.size())});
-    auto fs_module = device->create_shader_module(
-        {crd::rhi::ShaderStage::Fragment, "main", crd::containers::make_span(fs_spv.data(), fs_spv.size())});
+    auto vs = device->create_program(crd::rhi::ShaderStage::Vertex,
+                                     crd::containers::make_span(vs_spv.data(), vs_spv.size()));
+    auto fs_module = device->create_program(crd::rhi::ShaderStage::Fragment,
+                                            crd::containers::make_span(fs_spv.data(), fs_spv.size()));
 
     struct Vertex
     {
@@ -101,7 +107,7 @@ int main()
         command_buffers.push_back(device->create_command_buffer());
     }
 
-    auto imgui_layer = std::make_unique<crd::imgui::ImGuiLayer>(app, *instance, *device, *swapchain, config);
+    auto imgui_layer = std::make_unique<crd::imgui::ImGuiLayer>(app, *device, *swapchain, config);
     auto* imgui = imgui_layer.get();
     app.push_overlay(std::move(imgui_layer));
 

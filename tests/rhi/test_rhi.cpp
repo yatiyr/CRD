@@ -483,11 +483,7 @@ public:
         out.push_back(crd::rhi::AdapterInfo{crd::containers::String("Fake GPU"), crd::rhi::AdapterType::DiscreteGpu,
                                             8ULL * 1024ULL * 1024ULL * 1024ULL, true, true});
     }
-
-    [[nodiscard]] std::unique_ptr<crd::rhi::Device> create_device(const crd::rhi::DeviceDesc& /*desc*/) override
-    {
-        return std::make_unique<FakeDevice>();
-    }
+    // D-008 C2-f: Instance::create_device retired — a Device is adopted from a gpu-context, not minted by the Instance.
 };
 } // namespace
 
@@ -512,17 +508,14 @@ TEST_CASE("ShaderStage is a composable bitmask", "[rhi][types]")
     REQUIRE_FALSE(crd::rhi::has_stage(ShaderStage::Vertex, ShaderStage::Fragment));
 }
 
-TEST_CASE("RHI instance enumerates adapters and creates a device", "[rhi][instance]")
+TEST_CASE("RHI instance enumerates adapters", "[rhi][instance]")
 {
     FakeInstance instance;
     crd::containers::Array<crd::rhi::AdapterInfo> adapters;
     instance.enumerate_adapters(adapters);
     REQUIRE(adapters.size() == 1U);
     REQUIRE(adapters[0].name == "Fake GPU");
-
-    auto device = instance.create_device({});
-    REQUIRE(device != nullptr);
-    REQUIRE(device->api() == crd::rhi::BackendApi::Vulkan);
+    REQUIRE(instance.api() == crd::rhi::BackendApi::Vulkan);
 }
 
 TEST_CASE("DescriptorSetLayout creation from bindings", "[rhi][descriptor]")

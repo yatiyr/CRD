@@ -47,11 +47,11 @@ namespace ht = crd::hesap::tensor;
 using crd::containers::ConstSpan;
 
 // Demo-surface guards: the CLI proves the op families, it does not benchmark them.
-constexpr crd::u64 max_total_elems = 1ULL << 24U; // 16M elements per synthetic tensor
-constexpr crd::u64 max_batched_n = 256U;
-constexpr crd::u64 max_batched_b = 4096U;
-constexpr crd::u64 max_sparse_nnz = 1ULL << 22U;
-constexpr crd::u64 max_cp_rank = 64U;
+constexpr crd::u64 kMaxTotalElems = 1ULL << 24U; // 16M elements per synthetic tensor
+constexpr crd::u64 kMaxBatchedN = 256U;
+constexpr crd::u64 kMaxBatchedB = 4096U;
+constexpr crd::u64 kMaxSparseNnz = 1ULL << 22U;
+constexpr crd::u64 kMaxCpRank = 64U;
 
 // ---- result helpers (the house cli_register shape) ----------------------
 
@@ -180,7 +180,7 @@ bool read_shape(ConstSpan<crd::i64> in, crd::u64* shape, crd::u32& rank, crd::u3
             return false;
         }
         shape[d] = static_cast<crd::u64>(in[d]);
-        if (total > max_total_elems / shape[d])
+        if (total > kMaxTotalElems / shape[d])
         {
             return false;
         }
@@ -328,7 +328,7 @@ CommandResult impl_einsum(const CommandArgs& args)
             shape[d] = idx_size[e.term[t].idx[d]];
             total *= shape[d];
         }
-        if (total > max_total_elems)
+        if (total > kMaxTotalElems)
         {
             return error_result(args.alloc, "tensor.einsum: operand exceeds the CLI element cap");
         }
@@ -668,8 +668,8 @@ CommandResult impl_batched(const CommandArgs& args)
     const auto kind = args.get_string("kind");
     const crd::i64 batch_i = args.get_i64("batch").value_or(0);
     const crd::i64 n_i = args.get_i64("n").value_or(0);
-    if (batch_i < 1 || n_i < 1 || static_cast<crd::u64>(batch_i) > max_batched_b ||
-        static_cast<crd::u64>(n_i) > max_batched_n)
+    if (batch_i < 1 || n_i < 1 || static_cast<crd::u64>(batch_i) > kMaxBatchedB ||
+        static_cast<crd::u64>(n_i) > kMaxBatchedN)
     {
         return error_result(args.alloc, "tensor.batched: need 1 <= batch <= 4096 and 1 <= n <= 256");
     }
@@ -683,8 +683,8 @@ CommandResult impl_batched(const CommandArgs& args)
     {
         const crd::i64 m_i = args.get_i64("m").value_or(n_i);
         const crd::i64 k_i = args.get_i64("k").value_or(n_i);
-        if (m_i < 1 || k_i < 1 || static_cast<crd::u64>(m_i) > max_batched_n ||
-            static_cast<crd::u64>(k_i) > max_batched_n)
+        if (m_i < 1 || k_i < 1 || static_cast<crd::u64>(m_i) > kMaxBatchedN ||
+            static_cast<crd::u64>(k_i) > kMaxBatchedN)
         {
             return error_result(args.alloc, "tensor.batched: need 1 <= m,k <= 256");
         }
@@ -955,12 +955,12 @@ CommandResult impl_sparse(const CommandArgs& args)
         return error_result(args.alloc, "tensor.sparse.mttkrp: shape must be rank 2..8 with positive dims");
     }
     const crd::i64 nnz_i = args.get_i64("nnz").value_or(0);
-    if (nnz_i < 1 || static_cast<crd::u64>(nnz_i) > max_sparse_nnz)
+    if (nnz_i < 1 || static_cast<crd::u64>(nnz_i) > kMaxSparseNnz)
     {
         return error_result(args.alloc, "tensor.sparse.mttkrp: need 1 <= nnz <= 4194304");
     }
     const crd::i64 fr_i = args.get_i64("rank").value_or(8);
-    if (fr_i < 1 || static_cast<crd::u64>(fr_i) > max_cp_rank)
+    if (fr_i < 1 || static_cast<crd::u64>(fr_i) > kMaxCpRank)
     {
         return error_result(args.alloc, "tensor.sparse.mttkrp: need 1 <= rank <= 64");
     }
@@ -1070,7 +1070,7 @@ CommandResult impl_decomp(const CommandArgs& args)
         return error_result(args.alloc, "tensor.decomp: shape must be rank 2..8 with positive dims (capped)");
     }
     const crd::i64 r_i = args.get_i64("rank").value_or(4);
-    if (r_i < 1 || static_cast<crd::u64>(r_i) > max_cp_rank)
+    if (r_i < 1 || static_cast<crd::u64>(r_i) > kMaxCpRank)
     {
         return error_result(args.alloc, "tensor.decomp: need 1 <= rank <= 64");
     }
@@ -1133,7 +1133,7 @@ CommandResult impl_decomp(const CommandArgs& args)
             crd::u64 prod_others = 1;
             for (crd::u32 k = 0; k < rank; ++k)
             {
-                if (k != m && prod_others < max_total_elems)
+                if (k != m && prod_others < kMaxTotalElems)
                 {
                     prod_others *= shape[k];
                 }

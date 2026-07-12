@@ -41,8 +41,20 @@ enum class DType : crd::u8 { F32, F64, F16, BF16, I32, I64, U8, Bool, U32 };
 // (column-major: `cols` columns of `rows` elements). Modelled as ONE composed type, the way SPIR-V (OpTypeVector /
 // OpTypeMatrix) and Slang do, rather than a loose (dtype, component-count) pair — a component count alone cannot tell
 // a vec4 from a mat2, and carries no scalar type, so `ivec3` / `bvec4` / `mat2` are unrepresentable without it.
-// Extended in a later slice: Sampler + Texture kinds (B2).
-enum class TKind : crd::u8 { Scalar, Vec, Mat, Struct };
+// B2: `Texture` + `Sampler` are OPAQUE handle kinds (appended, never reordered — a TKind is cook-serialized). A separable
+// model (texture ≠ sampler, combined only at the sample site) — the portable choice HLSL/WGSL/MSL all use and the one
+// bindless needs. A texture's `scalar` = sampled component type (F32 colour · U32/I32 integer · F32 depth); `rows` = the
+// `TexDim`; `cols` = flag bits (bit0 arrayed · bit1 multisampled · bit2 shadow/depth-compare). A sampler's `cols` bit2 =
+// comparison (shadow) sampler. See `KType::texture`/`::sampler`.
+enum class TKind : crd::u8 { Scalar, Vec, Mat, Struct, Texture, Sampler };
+
+// B2: texture dimensionality (stored in a Texture KType's `rows`). 1D/2D/3D/Cube; arrayed/MS/shadow are the `cols` flags.
+enum class TexDim : crd::u8 { Tex1D = 1, Tex2D = 2, Tex3D = 3, TexCube = 4 };
+
+// B2: the Texture `cols` flag bits.
+inline constexpr crd::u8 kTexArrayed = 1U << 0U;
+inline constexpr crd::u8 kTexMS      = 1U << 1U;
+inline constexpr crd::u8 kTexShadow  = 1U << 2U;
 
 struct KType
 {
@@ -98,6 +110,27 @@ struct KType
         if (n == 16) { return mat(d, 4, 4); }
         return vec(d, n);
     }
+
+    // B2: an OPAQUE texture handle. `sampled` = component type (F32 colour · U32/I32 integer · F32 depth); `dim` in `rows`;
+    // arrayed/ms/shadow packed into `cols`. Not a value form — it names a binding, sampled via `KOp::TexSample`.
+    [[nodiscard]] static constexpr KType texture(DType sampled, TexDim dim, bool arrayed = false, bool ms = false,
+                                                 bool shadow = false) noexcept
+    {
+        const auto flags = static_cast<crd::u8>((arrayed ? kTexArrayed : 0U) | (ms ? kTexMS : 0U) | (shadow ? kTexShadow : 0U));
+        return KType{sampled, TKind::Texture, static_cast<crd::u8>(dim), flags, 1, -1, 0};
+    }
+    // B2: an OPAQUE sampler handle. `shadow` = a comparison sampler (`samplerShadow` / `SamplerComparisonState`).
+    [[nodiscard]] static constexpr KType sampler(bool shadow = false) noexcept
+    {
+        return KType{DType::F32, TKind::Sampler, 0, static_cast<crd::u8>(shadow ? kTexShadow : 0U), 1, -1, 0};
+    }
+
+    [[nodiscard]] constexpr bool is_texture() const noexcept { return kind == TKind::Texture; }
+    [[nodiscard]] constexpr bool is_sampler() const noexcept { return kind == TKind::Sampler; }
+    [[nodiscard]] constexpr TexDim tex_dim() const noexcept { return static_cast<TexDim>(rows); }
+    [[nodiscard]] constexpr bool tex_arrayed() const noexcept { return (cols & kTexArrayed) != 0U; }
+    [[nodiscard]] constexpr bool tex_ms() const noexcept { return (cols & kTexMS) != 0U; }
+    [[nodiscard]] constexpr bool tex_shadow() const noexcept { return (cols & kTexShadow) != 0U; }
 };
 
 enum class KOp : crd::u8
@@ -130,8 +163,21 @@ enum class KOp : crd::u8
     Gather,                                                 // row-gather along axis 0: out[m,...] = data[idx[m],...]
     Scatter,                                                // row-scatter (last-wins): out=base, then out[idx[m],...]=updates[m,...]
     ScatterAdd,                                             // atomic scatter-ADD (histogram): out[M]=0, then out[idx[i]] += updates[i]
-    Cast                                                    // dtype conversion
+    Cast,                                                   // dtype conversion
+    DFdx, DFdy, Fwidth,                                     // B1 fragment derivatives: ∂/∂x · ∂/∂y · |dFdx|+|dFdy| — FRAGMENT-ONLY (2×2 quad)
+    StorageLoad,                                            // B1-f: read element `a` (uint index) of the FS storage buffer (set 0, binding 0)
+    Texture, Sampler, TexSample,                            // B2: opaque texture/sampler binding leaves · sample(a=tex,b=samp,c=uv)
+    SampleLod, SampleGrad, SampleCmp, TexelFetch, TexGather, TexSize, // B2-b: sample family — explicit-LOD/grad · shadow-compare · integer fetch · 4-texel gather · size query
+    SampleIndexed                                           // B2-d: BINDLESS sample — index a texture ARRAY (a=texArray, b=samp, c=uv, d=index)
 };
+
+// B1: fragment derivatives are the only ops that read NEIGHBOURING invocations (the 2×2 pixel quad), so they are legal
+// ONLY in a fragment stage and have no single-invocation meaning (the CPU oracle evaluates them to 0). `entry_valid`
+// rejects them in any other stage; the compute emitters never lower them (their `default:` refuses).
+[[nodiscard]] inline bool is_fragment_only_op(KOp op) noexcept
+{
+    return op == KOp::DFdx || op == KOp::DFdy || op == KOp::Fwidth;
+}
 
 // Comparisons yield a BOOLEAN, not a numeric 0/1 — `bool` for scalar operands, `bvecN` componentwise for vectors, the
 // way GLSL / HLSL / SPIR-V all define them. (Emitting `? 1.0 : 0.0` is a LOWERING choice a backend may still make; it
@@ -295,6 +341,9 @@ enum class KBuiltin : crd::u8
     GeometryIndex,      // int
     ObjectToWorld,      // mat4x3 — 4 columns of 3 rows
     WorldToObject,      // mat4x3
+    // B1-f: appended at END (enum values are cook-serialized — never insert mid-enum).
+    InnerCoverage, // uint — 1 iff the pixel is FULLY inside the primitive (SV_InnerCoverage / gl_FragFullyCoveredNV under
+                   // conservative rasterization)
 };
 
 struct KBuiltinInfo
@@ -337,6 +386,7 @@ struct KBuiltinInfo
     case KBuiltin::PointCoord:  return {KType::vec(DType::F32, 2), stage_mask::kFragment, "PointCoord"};
     case KBuiltin::SampleId:    return {t_int, stage_mask::kFragment, "SampleId"};
     case KBuiltin::Layer:       return {t_int, stage_mask::kFragment, "Layer"};
+    case KBuiltin::InnerCoverage: return {t_uint, stage_mask::kFragment, "InnerCoverage"}; // B1-f
 
     case KBuiltin::LaunchId:            return {t_uvec3, stage_mask::kRayAny, "LaunchId"};
     case KBuiltin::LaunchSize:          return {t_uvec3, stage_mask::kRayAny, "LaunchSize"};
@@ -371,6 +421,38 @@ struct KBuiltinInfo
     return op == KOp::StageIn || op == KOp::Builtin || op == KOp::UniformBlock;
 }
 
+// B1-c: how a VS→FS interpolant is interpolated across the primitive. `Smooth` = perspective-correct (the default);
+// `Flat` = no interpolation (provoking-vertex value) — MANDATORY for integer interpolants (GLSL rejects a smooth int);
+// `NoPerspective` = linear in screen space; `Centroid`/`Sample` = MSAA sampling controls. The VS OUTPUT and its matching
+// FS INPUT must carry the SAME qualifier (like the location must match) — the author's responsibility, as in a real pipeline.
+enum class Interp : crd::u8
+{
+    Smooth = 0,
+    Flat,
+    NoPerspective,
+    Centroid,
+    Sample,
+};
+
+// An integer interpolant CANNOT be smoothly interpolated — it must be `flat`. Enforced in `entry_valid` for both the VS
+// output and the FS input, so an integer varying that forgot `flat` is a loud IR error, not a backend compile failure.
+[[nodiscard]] inline bool requires_flat_interp(KType t) noexcept
+{
+    return t.scalar == DType::I32 || t.scalar == DType::I64 || t.scalar == DType::U32;
+}
+
+// B1-d: CONSERVATIVE DEPTH — a promise about how the fragment shader's `gl_FragDepth`/`SV_Depth` write relates to the
+// interpolated primitive depth, which lets the hardware keep EARLY depth testing even though the shader writes depth.
+// `Any` = the write can move depth anywhere (the default; DEFEATS early-Z). `Greater`/`Less` = the shader only ever makes
+// the depth larger/smaller than the primitive's, so an early GreaterEqual/LessEqual test is still conservatively correct.
+// SPIR-V DepthGreater/DepthLess · GLSL `layout(depth_greater/less)` · HLSL `SV_DepthGreaterEqual`/`SV_DepthLessEqual`.
+enum class DepthMode : crd::u8
+{
+    Any = 0,
+    Greater,
+    Less,
+};
+
 // A stage ENTRY POINT over a graph: which node feeds each output. Position-writing stages must set `position` (the
 // clip-space vec4); fragment entries write colour attachments and may set `frag_depth`. Interpolants (VS out -> FS in)
 // and colour attachments are both location-indexed, so one table serves both.
@@ -378,16 +460,33 @@ constexpr int kMaxStageOutputs = 8;
 
 struct KStageOutput
 {
-    int node     = -1;
-    int location = 0;
+    int    node     = -1;
+    int    location = 0;
+    Interp interp   = Interp::Smooth; // B1-c: VS interpolant interpolation mode (ignored for a fragment colour attachment)
 };
 
 struct KEntry
 {
-    KStage       stage      = KStage::Fragment;
-    int          position   = -1; // clip-space vec4. Required iff `stage_writes_position(stage)`.
-    int          frag_depth = -1; // Fragment: optional explicit depth (defeats early-Z; B1 makes the intent explicit).
-    int          n_out      = 0;
+    KStage       stage        = KStage::Fragment;
+    int          position     = -1; // clip-space vec4. Required iff `stage_writes_position(stage)`.
+    int          frag_depth   = -1; // Fragment: optional explicit depth (defeats early-Z unless `depth_mode` narrows it).
+    int          discard_cond = -1; // Fragment (B1-b): `if (cond) discard;` — alpha-test / cutout. A BOOL node; <0 = none.
+    // B1-d: force the depth/stencil test to run BEFORE the fragment shader (`layout(early_fragment_tests) in;` /
+    // `[earlydepthstencil]`). Contradicts a `frag_depth` write (the early test uses the interpolated depth), so
+    // `entry_valid` refuses the combination.
+    bool         early_fragment_tests = false;
+    DepthMode    depth_mode           = DepthMode::Any; // B1-d: conservative-depth promise for a `frag_depth` write
+    // B1-e: per-PRIMITIVE variable-rate-shading output — a position-writing (vertex) stage may emit a packed shading rate
+    // (`gl_PrimitiveShadingRateEXT` / `SV_ShadingRate`). The packing is `(Yshift << 2) | Xshift` with shift 0=1×,1=2×,2=4×
+    // (so 2×2 = 5) — identical on Vulkan and D3D12. An int/uint node; <0 = no per-primitive rate.
+    int          shading_rate = -1;
+    // B1-f: a fragment STORAGE-buffer write side-effect — `storage[storage_write_index] = storage_write_value` (both uint
+    // nodes; <0 = no write). `interlock` makes the fragment's storage access RASTERIZER-ORDERED (GLSL fragment-shader
+    // interlock / HLSL ROV) — the substrate for OIT / voxelization.
+    int          storage_write_index = -1;
+    int          storage_write_value = -1;
+    bool         interlock           = false;
+    int          n_out        = 0;
     KStageOutput out[kMaxStageOutputs] = {};
 };
 
@@ -477,6 +576,7 @@ struct KNode
     crd::u16 n_ext = 0;              // operand count at that offset
     // B3: `UniformBlock` lives at (dset, iidx=binding). `dset` IS ADR-0102's frequency: 0 frame · 1 pass/lighting ·
     // 2 material · 3 object. `StageIn` uses `iidx` as its location; `Builtin` uses `iidx` as the KBuiltin value.
+    // B1-c: a `StageIn` (fragment interpolant) reuses `dset` to carry its `Interp` qualifier (dset is otherwise unused there).
     crd::u8 dset = 0;
 
     [[nodiscard]] constexpr DType dtype() const noexcept { return type.scalar; }
@@ -529,6 +629,9 @@ struct KNode
     case KOp::BitReverse: { crd::u32 v = static_cast<crd::u32>(static_cast<crd::i64>(x)); crd::u32 r = 0U; for (int b = 0; b < 32; ++b) { r = (r << 1U) | (v & 1U); v >>= 1U; } return static_cast<crd::f64>(r); }
     case KOp::FloatBitsToInt: { const float f = static_cast<float>(x); crd::i32 b = 0; std::memcpy(&b, &f, 4); return static_cast<crd::f64>(b); } // reinterpret f32 bits → i32
     case KOp::IntBitsToFloat: { const crd::i32 b = static_cast<crd::i32>(static_cast<crd::i64>(x)); float f = 0.0F; std::memcpy(&f, &b, 4); return static_cast<crd::f64>(f); } // reinterpret i32 bits → f32
+    // B1 fragment derivatives: the CPU oracle sees ONE invocation with no neighbours, so ∂/∂x = ∂/∂y = 0 (and fwidth = 0).
+    // On the GPU these read the 2×2 quad; they are fragment-only and never appear in a CPU-run compute graph.
+    case KOp::DFdx: case KOp::DFdy: case KOp::Fwidth: return 0.0;
     default: return x;
     }
 }
@@ -755,16 +858,25 @@ public:
         const int set  = binary(KOp::BitAnd, binary(KOp::Shl, ins, off), mask);
         return binary(KOp::BitOr, keep, set);
     }
+    // ── B1 fragment derivatives ─────────────────────────────────────────────────────────────────────────────────────
+    // Screen-space partial derivatives over the 2×2 fragment quad. Same type as the input (scalar or vecN). FRAGMENT-ONLY
+    // (`entry_valid` refuses them elsewhere). Uses: mip/LoD selection, analytic anti-aliasing of procedural patterns,
+    // screen-space normal reconstruction. `fwidth(a) = abs(dFdx(a)) + abs(dFdy(a))`, the standard filter-width estimate.
+    [[nodiscard]] int dfdx(int a) { return unary(KOp::DFdx, a); }
+    [[nodiscard]] int dfdy(int a) { return unary(KOp::DFdy, a); }
+    [[nodiscard]] int fwidth(int a) { return unary(KOp::Fwidth, a); }
+
     // ── B3 raster leaves ────────────────────────────────────────────────────────────────────────────────────────────
     // A location-indexed stage input: a VERTEX ATTRIBUTE in a vertex entry, an INTERPOLANT in a fragment entry. One op
     // for both, disambiguated by the entry's stage — SPIR-V models it the same way (one `Input` storage class).
-    [[nodiscard]] int stage_in(KType t, int location)
+    [[nodiscard]] int stage_in(KType t, int location, Interp interp = Interp::Smooth)
     {
         KNode n;
         n.op    = KOp::StageIn;
         n.type  = t;
         n.shape = make_shape({1}); // a stage value is per-invocation; the tensor Shape carries no meaning here
         n.iidx  = location;
+        n.dset  = static_cast<crd::u8>(interp); // B1-c: the interpolation qualifier (dset is unused for StageIn)
         return push(n);
     }
     // A per-stage builtin INPUT. Its type is fixed by the builtin, so callers cannot get it wrong. LEGALITY (is this
@@ -789,6 +901,127 @@ public:
         n.shape = make_shape({1});
         n.iidx  = binding;
         n.dset  = static_cast<crd::u8>(set);
+        return push(n);
+    }
+
+    // B1-f: read element `index` (a uint) of the fragment-shader storage buffer (set 0, binding 0). The write side is a
+    // KEntry side-effect (`storage_write_*`), and `KEntry::interlock` makes the whole access rasterizer-ordered.
+    [[nodiscard]] int storage_load(int index)
+    {
+        KNode n;
+        n.op   = KOp::StorageLoad;
+        n.type = KType::make_scalar(DType::U32);
+        n.shape = make_shape({1});
+        n.a    = index;
+        return push(n);
+    }
+
+    // B2: an opaque TEXTURE binding at (set, binding). Separable — pair it with a `sampler` at the SAMPLE site (`tex_sample`).
+    // B2-d: `array_count > 1` declares a BINDLESS descriptor ARRAY of that many textures (indexed by `tex_sample_at`).
+    [[nodiscard]] int texture(int set, int binding, DType sampled = DType::F32, TexDim dim = TexDim::Tex2D,
+                              bool arrayed = false, bool ms = false, bool shadow = false, int array_count = 1)
+    {
+        KNode n;
+        n.op    = KOp::Texture;
+        n.type  = KType::texture(sampled, dim, arrayed, ms, shadow);
+        n.type.count = static_cast<crd::u16>(array_count < 1 ? 1 : array_count); // B2-d: descriptor-array length
+        n.shape = make_shape({1});
+        n.iidx  = binding;
+        n.dset  = static_cast<crd::u8>(set);
+        return push(n);
+    }
+    // B2-d: BINDLESS sample — sample element `index` (a dynamic uint) of a texture ARRAY through `samp` at `uv`.
+    [[nodiscard]] int tex_sample_at(int tex, int samp, int uv, int index)
+    {
+        KNode n;
+        n.op    = KOp::SampleIndexed;
+        n.type  = KType::vec(t(tex).type.scalar, 4);
+        n.shape = t(uv).shape;
+        n.a     = tex;
+        n.b     = samp;
+        n.c     = uv;
+        n.d     = index;
+        return push(n);
+    }
+    // B2: an opaque SAMPLER binding at (set, binding). `shadow` ⇒ a comparison sampler (for `sampleCmp`, B2-b).
+    [[nodiscard]] int sampler(int set, int binding, bool shadow = false)
+    {
+        KNode n;
+        n.op    = KOp::Sampler;
+        n.type  = KType::sampler(shadow);
+        n.shape = make_shape({1});
+        n.iidx  = binding;
+        n.dset  = static_cast<crd::u8>(set);
+        return push(n);
+    }
+    // B2: sample `tex` through `samp` at coordinate `uv` — implicit-LOD (uses fragment derivatives ⇒ fragment-stage only).
+    // Returns a vec4 of the texture's sampled component type (GLSL/HLSL always widen a sample to 4 components).
+    [[nodiscard]] int tex_sample(int tex, int samp, int uv)
+    {
+        KNode n;
+        n.op    = KOp::TexSample;
+        n.type  = KType::vec(t(tex).type.scalar, 4);
+        n.shape = t(uv).shape;
+        n.a     = tex;
+        n.b     = samp;
+        n.c     = uv;
+        return push(n);
+    }
+    // B2-b: EXPLICIT-LOD sample — legal in ANY stage (no derivatives). `lod` is a float mip level.
+    [[nodiscard]] int tex_sample_lod(int tex, int samp, int uv, int lod)
+    {
+        KNode n;
+        n.op = KOp::SampleLod; n.type = KType::vec(t(tex).type.scalar, 4); n.shape = t(uv).shape;
+        n.a = tex; n.b = samp; n.c = uv; n.d = lod;
+        return push(n);
+    }
+    // B2-b: EXPLICIT-GRADIENT sample — `ddx`/`ddy` are the UV derivatives that pick the mip (ddy rides the ext pool).
+    [[nodiscard]] int tex_sample_grad(int tex, int samp, int uv, int ddx, int ddy)
+    {
+        KNode n;
+        n.op = KOp::SampleGrad; n.type = KType::vec(t(tex).type.scalar, 4); n.shape = t(uv).shape;
+        n.a = tex; n.b = samp; n.c = uv; n.d = ddx;
+        const int e[1] = {ddy}; n.ext = push_ext(e, 1); n.n_ext = 1U;
+        return push(n);
+    }
+    // B2-b: DEPTH-COMPARE (shadow) sample — `tex` is a depth texture, `samp` a comparison sampler; returns the PCF result
+    // (0..1) of comparing `ref` against the stored depth at `uv`. A scalar float.
+    [[nodiscard]] int tex_sample_cmp(int tex, int samp, int uv, int ref)
+    {
+        KNode n;
+        n.op = KOp::SampleCmp; n.type = KType::make_scalar(DType::F32); n.shape = t(uv).shape;
+        n.a = tex; n.b = samp; n.c = uv; n.d = ref;
+        return push(n);
+    }
+    // B2-b: INTEGER texel fetch — no filtering; `coord` is an integer texel coordinate, `lod` the mip level. `samp` is
+    // referenced only to form GLSL's combined `sampler2D(t,s)` (texelFetch has a sampler-typed argument there); HLSL's
+    // `.Load` ignores it. Any sampler bound to the same set works.
+    [[nodiscard]] int tex_fetch(int tex, int samp, int coord, int lod)
+    {
+        KNode n;
+        n.op = KOp::TexelFetch; n.type = KType::vec(t(tex).type.scalar, 4); n.shape = t(coord).shape;
+        n.a = tex; n.b = samp; n.c = coord; n.d = lod;
+        return push(n);
+    }
+    // B2-b: 4-TEXEL GATHER — the `comp`-th channel (0..3) of the 4 texels around `uv` (bilinear footprint), as a vec4.
+    [[nodiscard]] int tex_gather(int tex, int samp, int uv, int comp)
+    {
+        KNode n;
+        n.op = KOp::TexGather; n.type = KType::vec(t(tex).type.scalar, 4); n.shape = t(uv).shape;
+        n.a = tex; n.b = samp; n.c = uv; n.d = comp;
+        return push(n);
+    }
+    // B2-b: texture SIZE at `lod` — an ivec matching the texture's spatial dims (2D ⇒ ivec2). `samp` forms GLSL's combined
+    // `textureSize(sampler2D(t,s), lod)`; HLSL's `.GetDimensions` ignores it.
+    [[nodiscard]] int tex_size(int tex, int samp, int lod)
+    {
+        const TexDim dim = t(tex).type.tex_dim();
+        int          nc  = 2;
+        if (dim == TexDim::Tex3D) { nc = 3; }
+        else if (dim == TexDim::Tex1D) { nc = 1; }
+        KNode        n;
+        n.op = KOp::TexSize; n.type = KType::vec(DType::I32, nc); n.shape = make_shape({1});
+        n.a = tex; n.b = samp; n.d = lod;
         return push(n);
     }
 
@@ -961,6 +1194,28 @@ public:
         c.ext   = push_ext(src_ext, static_cast<int>(n.n_ext));
         return push(c);
     }
+
+    // B7 SPECIALIZATION primitive: pin a node (a `ShaderOption` selector — a uniform flag / option leaf) to a compile-time
+    // constant, IN PLACE (every consumer now sees the constant). A `Select`/switch reading it then const-folds under
+    // `optimize()` and DCE drops the dead branch → a variant. Type + shape are preserved (an option is scalar); the pinned
+    // node's former operands become unreferenced and DCE reclaims them. Destructive — build/copy the graph per variant.
+    void pin_const(int node, crd::f64 value)
+    {
+        KNode&      n  = m_nodes[static_cast<crd::usize>(node)];
+        const Shape sh = n.shape;
+        const KType ty = n.type;
+        n       = KNode{};
+        n.op    = KOp::Const;
+        n.shape = sh;
+        n.type  = ty;
+        n.cval  = value;
+    }
+
+    // B7 branch-elimination primitive: make node `node` an exact copy of `target` (every consumer now reads target's
+    // computation). Used to collapse a `Select` with a compile-time-constant condition to its chosen branch. `target` is
+    // always an operand of `node` (a/b), hence < `node` in topological order, so the copied operands stay backward
+    // references; CSE then merges the duplicate and DCE reclaims the dead branch.
+    void alias(int node, int target) noexcept { m_nodes[static_cast<crd::usize>(node)] = m_nodes[static_cast<crd::usize>(target)]; }
 
     // const-fold -> DCE (reachability from roots) -> CSE (hash-cons). Updates roots[] to their new ids. Semantics-
     // preserving + idempotent. (Kernel FUSION is a CKIR-Tile pass — v17-b — where kernels exist; not this level.)
@@ -1159,11 +1414,55 @@ private:
         if (g.node(e.frag_depth).type != KType::make_scalar(DType::F32)) { return fail("`frag_depth` must be a float"); }
     }
 
+    if (e.discard_cond >= 0) // B1-b: alpha-test / cutout — a bool the fragment discards on
+    {
+        if (e.stage != KStage::Fragment) { return fail("only a fragment stage can `discard`"); }
+        if (!node_ok(e.discard_cond)) { return fail("`discard_cond` names no node"); }
+        if (g.node(e.discard_cond).type != KType::make_scalar(DType::Bool)) { return fail("`discard_cond` must be a bool"); }
+    }
+
+    if (e.early_fragment_tests) // B1-d: force the depth/stencil test before the fragment shader runs
+    {
+        if (e.stage != KStage::Fragment) { return fail("only a fragment stage can force `early_fragment_tests`"); }
+        // The early test uses the INTERPOLATED depth, so a shader depth write would be meaningless — refuse the combo.
+        if (e.frag_depth >= 0) { return fail("`early_fragment_tests` cannot coexist with a `frag_depth` write"); }
+    }
+    // B1-d: a conservative-depth promise only means something for a shader that actually writes depth.
+    if (e.depth_mode != DepthMode::Any && e.frag_depth < 0)
+    {
+        return fail("a conservative `depth_mode` requires a `frag_depth` write");
+    }
+
+    if (e.shading_rate >= 0) // B1-e: per-primitive variable-rate-shading output (gl_PrimitiveShadingRateEXT / SV_ShadingRate)
+    {
+        if (!stage_writes_position(e.stage)) { return fail("only a position-writing stage can output a `shading_rate`"); }
+        if (!node_ok(e.shading_rate)) { return fail("`shading_rate` names no node"); }
+        const DType sr = g.node(e.shading_rate).type.scalar;
+        if (g.node(e.shading_rate).type.kind != TKind::Scalar || (sr != DType::I32 && sr != DType::U32))
+        {
+            return fail("`shading_rate` must be an int/uint scalar (a packed VRS rate)");
+        }
+    }
+
+    if (e.storage_write_index >= 0 || e.storage_write_value >= 0) // B1-f: a fragment storage-buffer write
+    {
+        if (e.stage != KStage::Fragment) { return fail("only a fragment stage can write the storage buffer"); }
+        if (!node_ok(e.storage_write_index) || !node_ok(e.storage_write_value)) { return fail("`storage_write` names no node"); }
+        if (g.node(e.storage_write_index).type != KType::make_scalar(DType::U32)) { return fail("storage write index must be uint"); }
+        if (g.node(e.storage_write_value).type != KType::make_scalar(DType::U32)) { return fail("storage write value must be uint"); }
+    }
+    if (e.interlock && e.stage != KStage::Fragment) { return fail("only a fragment stage can use `interlock`"); }
+
     if (e.n_out < 0 || e.n_out > kMaxStageOutputs) { return fail("output count out of range"); }
     for (int i = 0; i < e.n_out; ++i)
     {
         if (!node_ok(e.out[i].node)) { return fail("output names no node"); }
         if (e.out[i].location < 0) { return fail("output location is negative"); }
+        // B1-c: an integer VS interpolant cannot be smoothly interpolated — it must be `flat`.
+        if (e.stage == KStage::Vertex && requires_flat_interp(g.node(e.out[i].node).type) && e.out[i].interp != Interp::Flat)
+        {
+            return fail("an integer VS interpolant must be `flat`");
+        }
         for (int j = 0; j < i; ++j)
         {
             if (e.out[j].location == e.out[i].location) { return fail("two outputs share one location"); }
@@ -1174,6 +1473,16 @@ private:
     for (int i = 0; i < n; ++i)
     {
         const KNode& nd = g.node(i);
+        if (is_fragment_only_op(nd.op) && e.stage != KStage::Fragment)
+        {
+            return fail("fragment derivative (dFdx/dFdy/fwidth) is only legal in a fragment stage");
+        }
+        // B2: implicit-LOD sampling picks its mip from screen-space derivatives ⇒ fragment stage only (a VS/CS must use
+        // the explicit-LOD `sampleLod`, B2-b). The texture/sampler binding LEAVES themselves are legal in any raster stage.
+        if (nd.op == KOp::TexSample && e.stage != KStage::Fragment)
+        {
+            return fail("implicit-LOD texture sample is only legal in a fragment stage (use sampleLod elsewhere)");
+        }
         if (nd.op == KOp::Builtin)
         {
             const auto b = static_cast<KBuiltin>(nd.iidx);
@@ -1182,6 +1491,12 @@ private:
         else if (nd.op == KOp::StageIn)
         {
             if (e.stage == KStage::Compute) { return fail("a compute stage has no location-indexed inputs"); }
+            // B1-c: an integer FRAGMENT interpolant must be `flat` (a vertex ATTRIBUTE is not interpolated, so it is exempt).
+            if (e.stage == KStage::Fragment && requires_flat_interp(nd.type)
+                && static_cast<Interp>(nd.dset) != Interp::Flat)
+            {
+                return fail("an integer fragment interpolant must be `flat`");
+            }
             for (int j = 0; j < i; ++j)
             {
                 if (g.node(j).op == KOp::StageIn && g.node(j).iidx == nd.iidx)

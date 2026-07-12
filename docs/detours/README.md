@@ -20,23 +20,15 @@ external request).
 
 ## Active detours
 
-- **D-008 — the gpu-context convergence (ADR-0103).** ACTIVE (opened 2026-07-10). **One surface for every GPU program.**
-  Closes three measured leaks: `crd-shader` owns GLSL+HLSL (9 call sites) · `rhi::ShaderModuleDesc::code` puts raw SPIR-V
-  in a public header (38 sites) · two device layers over two `VkDevice`s. Invariants **I1** (no shading language crosses
-  a module boundary) + **I2** (no bytecode does either) become **grep-gates**. `IGpuContext::create_program(KGraph,
-  KEntry) → IGpuProgram`, `ShaderStage` = all 14 SPIR-V execution models, `compute()`/`raster()`/`raytracing()`.
-  **Supersedes ADR-0099 §6**, which mandated the very coupling ADR-0101 forbids — two Accepted ADRs in direct conflict.
-  **C0 ✅ landed.** Slices C0–C6, extended 2026-07-10 with a web-grounded FRONTIER audit (shader objects · bindless ·
-  dynamic rendering · device-generated commands · work graphs · SER · opacity micromaps · cluster AS · cooperative
-  vectors — see the D-007/D-008 frontier tables). **Blocks D-007 Phase-B from B3-c onward.**
-  See `docs/detours/D-008-gpu-context-convergence.md`.
-
-- **D-007 — CKIR becomes the universal shader IR (ADR-0101).** ACTIVE (opened 2026-07-09), **paused at B3 pending D-008 C0/C1**. Extends CKIR from a
-  compute-kernel IR into the backend-neutral universal shader IR that all shaders (compute + future materials) are
-  authored through. Phase A (full scalar+vec/mat/quat math corpus) SHIPPED on the CPU oracle + Vulkan + DX12; the one
-  remaining core slice is **A4 structured control flow** (if/for/while/switch). Pauses Phase 3.1.6 v17 hesap-gpu compute;
-  resumes there on exit. See `docs/detours/D-007-ckir-universal-shader-ir.md`. (D-003 closed 2026-05-15; D-004 / D-005
-  queued.)
+- **D-007 + D-008 (MERGED 2026-07-11) — the GPU program system: one IR for every shader, one device.** ACTIVE. The two
+  former detours — **D-007** (CKIR becomes the universal shader IR, ADR-0101) and **D-008** (the gpu-context convergence,
+  ADR-0103) — are now ONE master doc with a single ordered subslice table (the two-doc split was confusing: two different
+  "C3"s; interleaved shader/device slices). **Device convergence CLOSED** (C0·C1·C2 ✅ — one `VkDevice`; I1+I2 both
+  grep-gate-closed; full 4-config sweep green). **IR core done** (Phase A ✅ · fan-out ✅ · B0 ✅ · B3-a/a′ stage model ✅).
+  **NEXT = B3-c** (raster GLSL VS+FS emitters), then the full visual frontier (materials/lighting → mesh → ray tracing →
+  neural → work-graphs) + Phase D cook, **then** the main roadmap resumes at Phase 3.1.6 v17 hesap-GPU compute.
+  **→ See the single master: `docs/detours/D-007-gpu-program-system.md`.** (The old `D-007-ckir-*.md` +
+  `D-008-gpu-context-*.md` are redirect stubs.)
 
 <!-- Historical D-003 plan retained for reference; see Closed detours
      for the actual shipped state. Each slice has its own session log

@@ -38,6 +38,7 @@ namespace crd::rhi
 {
 
 class Instance;
+class Device;
 
 enum class ValidationSeverity : crd::u8
 {
@@ -61,6 +62,9 @@ public:
     // (otherwise VK_EXT_debug_utils may not be loaded and capture will
     // silently observe nothing).
     explicit ValidationCapture(Instance& instance);
+    // D-008 C2-f: attach to the VkInstance behind an ADOPTED device (rhi no longer creates its own instance for tests).
+    // The device's gpu-context must have been created with validation enabled (see `create_vulkan_gpu_context`).
+    explicit ValidationCapture(Device& device);
     ~ValidationCapture();
 
     ValidationCapture(const ValidationCapture&)            = delete;

@@ -5,6 +5,7 @@
 #include <crd/renderer/renderer.hpp>
 #include <crd/renderer/swapchain_blit.hpp>
 #include <crd/shader/shader.hpp>
+#include <crd/shader/vulkan_spirv_compiler.hpp> // D-008 C2-e: inject the GLSL->SPIR-V compiler
 
 #include <memory>
 
@@ -177,11 +178,6 @@ int main()
         {
             return nullptr;
         }
-        [[nodiscard]] std::unique_ptr<crd::rhi::ShaderModule>
-        create_shader_module(const crd::rhi::ShaderModuleDesc&) override
-        {
-            return nullptr;
-        }
         [[nodiscard]] std::unique_ptr<crd::rhi::Pipeline>
         create_graphics_pipeline(const crd::rhi::GraphicsPipelineDesc&) override
         {
@@ -221,7 +217,8 @@ int main()
     } fake_device;
 
     // --- Shader setup ---
-    auto runtime = crd::shader::create_runtime();
+    auto compiler = crd::shader::create_vulkan_spirv_compiler(); // must outlive runtime
+    auto runtime  = crd::shader::create_runtime(*compiler);
     crd::shader::EffectDesc desc;
     desc.name = crd::containers::String("renderer_smoke");
     desc.frontend_modules.push_back(

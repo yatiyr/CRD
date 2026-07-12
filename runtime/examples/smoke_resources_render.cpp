@@ -19,7 +19,7 @@
 #include <crd/resources/resource_handle.hpp>
 #include <crd/resources/resource_id.hpp>
 #include <crd/resources/resource_manager.hpp>
-#include <crd/shader/compile.hpp>
+#include <crd/gpu/vulkan_shader_compile.hpp> // D-008: GLSL->SPIR-V lives in the Vulkan backend (was crd::shader::compile_glsl)
 #include <crd/shader/shader_resource_loader.hpp>
 
 #include <cstdio>
@@ -165,8 +165,8 @@ static fs::Path assemble_pack(crd::containers::Array<Artifact>& arts)
 int main()
 {
     // Compile shaders.
-    auto vert_result = crd::shader::compile_glsl(
-        crd::shader::Stage::Vertex,
+    auto vert_result = crd::gpu::compile_glsl_to_spirv(
+        crd::gpu::ShaderStage::Vertex,
         crd::containers::StringView(kVertGlsl, std::strlen(kVertGlsl)),
         "triangle.vert.glsl",
         &g_alloc);
@@ -178,8 +178,8 @@ int main()
         return 1;
     }
 
-    auto frag_result = crd::shader::compile_glsl(
-        crd::shader::Stage::Fragment,
+    auto frag_result = crd::gpu::compile_glsl_to_spirv(
+        crd::gpu::ShaderStage::Fragment,
         crd::containers::StringView(kFragGlsl, std::strlen(kFragGlsl)),
         "triangle.frag.glsl",
         &g_alloc);

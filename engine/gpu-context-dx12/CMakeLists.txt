@@ -27,6 +27,7 @@ target_link_libraries(crd-gpu-context-dx12
     PRIVATE
         crd-core
         crd-memory
+        crd-kir        # ADR-0103 / D-008 C4-b: create_program(KGraph, KEntry) emits HLSL via the crd-kir emitter (acyclic)
 )
 
 target_compile_features(crd-gpu-context-dx12 PUBLIC cxx_std_20)

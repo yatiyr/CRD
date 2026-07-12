@@ -17,6 +17,9 @@ target_link_libraries(crd-gpu-context-vulkan-tests PRIVATE
     Catch2::Catch2WithMain
 )
 
+# B3-e: the shared, backend-neutral CKIR raster triangle (the identical graph the DX12 suite draws).
+target_include_directories(crd-gpu-context-vulkan-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../gpu-shared")
+
 crd_enable_default_pch(crd-gpu-context-vulkan-tests)
 
 catch_discover_tests(crd-gpu-context-vulkan-tests)

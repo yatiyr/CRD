@@ -85,6 +85,11 @@ public:
     [[nodiscard]] crd::u32 graphics_family() const noexcept override { return m_graphics_family; }
     [[nodiscard]] bool     shader_object() const noexcept override { return m_shader_object; }
     [[nodiscard]] bool     render_capable() const noexcept override { return m_windowed; }
+    [[nodiscard]] bool       fragment_shading_rate() const noexcept override { return m_fragment_shading_rate; } // B1-e
+    [[nodiscard]] VkExtent2D vrs_tile_size() const noexcept override { return m_vrs_tile_size; }
+    [[nodiscard]] bool       conservative_raster() const noexcept override { return m_conservative_raster; } // B1-f
+    [[nodiscard]] bool       fragment_shader_interlock() const noexcept override { return m_fragment_interlock; } // B1-f
+    [[nodiscard]] bool       bindless() const noexcept override { return m_bindless; } // B2-d
 
     [[nodiscard]] std::unique_ptr<IGpuProgram>
     create_program(ShaderStage stage, crd::containers::ConstSpan<crd::u8> cooked) override
@@ -94,23 +99,38 @@ public:
         return make_vulkan_program(m_device, stage, cooked);
     }
 
-    // ADR-0103 IR on-ramp: emit GLSL from the graph (via crd-kir's emitter) → SPIR-V (our compiler) → program. COMPUTE
-    // only for now; a raster entry needs the stage emitter (D-007 B3-c) and returns nullptr, loudly.
+    // ADR-0103 IR on-ramp: emit GLSL from the graph (crd-kir's emitter) → SPIR-V (our compiler) → program. COMPUTE and
+    // RASTER (D-007 B3-c: Vertex/Fragment via `emit_stage_glsl`); a stage/op this backend cannot lower returns nullptr, loudly.
     [[nodiscard]] std::unique_ptr<IGpuProgram>
     create_program(const crd::kir::KGraph& graph, const crd::kir::KEntry& entry) override
     {
+        crd::memory::IAllocator* a = crd::memory::default_allocator();
+
+        // B3-c: raster stages behind the SAME seam. `entry_valid` first — e.g. a `FragCoord` in a vertex entry is rejected.
+        if (entry.stage == crd::kir::KStage::Vertex || entry.stage == crd::kir::KStage::Fragment)
+        {
+            if (!crd::kir::entry_valid(graph, entry)) { return nullptr; }
+            crd::kir::GlslKernel kern(a);
+            if (!crd::kir::emit_stage_glsl(graph, entry, a, kern)) { return nullptr; }
+            const ShaderStage stage =
+                (entry.stage == crd::kir::KStage::Vertex) ? ShaderStage::Vertex : ShaderStage::Fragment;
+            const auto spv = compile_glsl_to_spirv(stage, crd::containers::to_view(kern.source), "ckir_stage", a);
+            if (!spv.ok) { return nullptr; }
+            return create_program(stage, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()));
+        }
+
+        // Compute: the fused elementwise / vec-aware kernel path.
         if (entry.stage != crd::kir::KStage::Compute || entry.n_out < 1) { return nullptr; }
         const int output = entry.out[0].node;
         if (output < 0 || output >= graph.size()) { return nullptr; }
 
-        crd::memory::IAllocator* a = crd::memory::default_allocator();
-        crd::kir::GlslKernel     kern(a);
-        const bool ok = crd::kir::graph_uses_vec(graph, output, a) ? crd::kir::emit_vec_glsl(graph, output, a, kern)
-                                                                   : crd::kir::emit_elementwise_glsl(graph, output, a, kern);
+        crd::kir::GlslKernel kern(a);
+        const bool           ok = crd::kir::graph_uses_vec(graph, output, a)
+                                      ? crd::kir::emit_vec_glsl(graph, output, a, kern)
+                                      : crd::kir::emit_elementwise_glsl(graph, output, a, kern);
         if (!ok) { return nullptr; } // a compute class this backend's emitter does not lower yet
 
-        const auto spv =
-            compile_glsl_to_spirv(ShaderStage::Compute, crd::containers::to_view(kern.source), "ckir", a);
+        const auto spv = compile_glsl_to_spirv(ShaderStage::Compute, crd::containers::to_view(kern.source), "ckir", a);
         if (!spv.ok) { return nullptr; }
         return create_program(ShaderStage::Compute,
                               crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()));
@@ -206,17 +226,42 @@ private:
         bool has_cm2       = false;
         bool has_shobj     = false;
         bool has_swapchain = false;
+        bool has_vrs       = false;
+        bool has_conserv   = false;
+        bool has_eds3      = false;
+        bool has_interlock = false;
         for (std::uint32_t i = 0; i < ne; ++i)
         {
             if (std::strcmp(exts[i].extensionName, "VK_KHR_cooperative_matrix") == 0) { has_cm1 = true; }
             if (std::strcmp(exts[i].extensionName, "VK_NV_cooperative_matrix2") == 0) { has_cm2 = true; }
             if (std::strcmp(exts[i].extensionName, VK_EXT_SHADER_OBJECT_EXTENSION_NAME) == 0) { has_shobj = true; }
             if (std::strcmp(exts[i].extensionName, VK_KHR_SWAPCHAIN_EXTENSION_NAME) == 0) { has_swapchain = true; }
+            if (std::strcmp(exts[i].extensionName, VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME) == 0) { has_vrs = true; }
+            if (std::strcmp(exts[i].extensionName, VK_EXT_CONSERVATIVE_RASTERIZATION_EXTENSION_NAME) == 0) { has_conserv = true; }
+            if (std::strcmp(exts[i].extensionName, VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME) == 0) { has_eds3 = true; }
+            if (std::strcmp(exts[i].extensionName, VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME) == 0) { has_interlock = true; }
         }
         m_coopmat2      = has_cm1 && has_cm2;
         m_shader_object = has_shobj && m_graphics_family != UINT32_MAX; // no point on a compute-only adapter
+        m_fragment_shading_rate = has_vrs && m_graphics_family != UINT32_MAX; // B1-e: raster-only feature
+        // B1-f: conservative raster needs its extension AND the extended-dynamic-state-3 conservative-mode setter (the
+        // shader-object model has no static pipeline state). Graphics-capable only.
+        m_conservative_raster = has_conserv && has_eds3 && m_shader_object;
+        // B1-f: pixel-ordered fragment-shader interlock (ROV) — graphics-capable only. The feature is checked below.
+        m_fragment_interlock = has_interlock && m_graphics_family != UINT32_MAX;
         // C2-a: render-capable iff surface (instance) + swapchain (device) + a graphics queue all present.
         m_windowed = surface_ok && has_swapchain && m_graphics_family != UINT32_MAX;
+
+        if (m_fragment_shading_rate) // B1-e: the attachment shading-rate-image texel size (device-reported)
+        {
+            VkPhysicalDeviceFragmentShadingRatePropertiesKHR sr_props{};
+            sr_props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_PROPERTIES_KHR;
+            VkPhysicalDeviceProperties2 props2{};
+            props2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+            props2.pNext = &sr_props;
+            vkGetPhysicalDeviceProperties2(m_physical, &props2);
+            m_vrs_tile_size = sr_props.minFragmentShadingRateAttachmentTexelSize;
+        }
 
         // shaderInt64 — the geometry 60-bit Morton / LBVH paths need u64 in the shader. Enabled if the adapter has it.
         VkPhysicalDeviceFeatures avail_feats{};
@@ -224,6 +269,17 @@ private:
         m_int64 = avail_feats.shaderInt64 == VK_TRUE;
         VkPhysicalDeviceFeatures enabled_feats{};
         enabled_feats.shaderInt64 = avail_feats.shaderInt64;
+        // B1-c: a `sample`-qualified fragment interpolant lowers to SPIR-V that declares the SampleRateShading capability,
+        // which REQUIRES this device feature — without it, creating the shader is a validation error (a lenient driver may
+        // still run it, but a strict one rejects it). A raster-only feature ⇒ enabled only for a graphics-capable context,
+        // leaving a pure-compute device unchanged (the C2 convergence keeps that device minimal).
+        if (m_graphics_family != UINT32_MAX) { enabled_feats.sampleRateShading = avail_feats.sampleRateShading; }
+        // B1-f: a fragment shader that WRITES a storage buffer (the interlock RMW / OIT path) needs this feature — without
+        // it the SPIR-V must mark every fragment-stage storage variable NonWritable (VUID-RuntimeSpirv-NonWritable-06340).
+        if (m_graphics_family != UINT32_MAX) { enabled_feats.fragmentStoresAndAtomics = avail_feats.fragmentStoresAndAtomics; }
+        // B2-c: a CUBE-ARRAY texture (view + the SampledCubeArray SPIR-V capability) needs this feature (VUID-...-viewType-01004
+        // / VUID-...-pCode-08740). Graphics-capable only.
+        if (m_graphics_family != UINT32_MAX) { enabled_feats.imageCubeArray = avail_feats.imageCubeArray; }
         // C2-c: a WINDOWED context matches what rhi-vulkan's own device enables so the renderer runs on the adopted
         // device unchanged — fillModeNonSolid (wireframe) here + synchronization2 in the feature chain below.
         if (m_windowed) { enabled_feats.fillModeNonSolid = avail_feats.fillModeNonSolid; }
@@ -275,19 +331,74 @@ private:
         VkPhysicalDeviceDynamicRenderingFeatures dyn{};
         dyn.sType            = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES;
         dyn.dynamicRendering = VK_TRUE;
+        // B1-b: a fragment `discard` lowers (modern glslang/DXC) to the DemoteToHelperInvocation SPIR-V capability, which
+        // needs this 1.3-core feature — creating such a shader without it is a validation error. Graphics-capable only.
+        VkPhysicalDeviceShaderDemoteToHelperInvocationFeatures demote{};
+        demote.sType                          = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DEMOTE_TO_HELPER_INVOCATION_FEATURES;
+        demote.shaderDemoteToHelperInvocation = VK_TRUE;
         // C2-c: synchronization2 (core 1.3) — enabled for a WINDOWED context to match rhi-vulkan's device (its render
         // path uses sync2 barriers). Left off for headless/compute so that device stays byte-for-byte unchanged.
         VkPhysicalDeviceSynchronization2Features sync2{};
         sync2.sType            = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES;
         sync2.synchronization2 = VK_TRUE;
+        // B1-e: variable-rate shading — the three rate sources (pipeline per-draw · primitive shader-output · attachment
+        // per-tile image). Graphics-capable only.
+        VkPhysicalDeviceFragmentShadingRateFeaturesKHR vrs{};
+        vrs.sType                          = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR;
+        vrs.pipelineFragmentShadingRate    = VK_TRUE;
+        vrs.primitiveFragmentShadingRate   = VK_TRUE;
+        vrs.attachmentFragmentShadingRate  = VK_TRUE;
+        // B1-f: the extended-dynamic-state-3 CONSERVATIVE-RASTERIZATION-MODE dynamic state (shader objects have no static
+        // pipeline state, so the mode is only reachable as dynamic state). Only this one EDS3 feature is enabled.
+        VkPhysicalDeviceExtendedDynamicState3FeaturesEXT eds3{};
+        eds3.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_3_FEATURES_EXT;
+        eds3.extendedDynamicState3ConservativeRasterizationMode     = VK_TRUE;
+        // Overestimate raster with shader objects ALSO requires the extra-primitive-overestimation-size dynamic state to be
+        // set before a draw (VUID-vkCmdDraw-None-07632) — so enable that EDS3 sub-feature too and set it in draw_conservative.
+        eds3.extendedDynamicState3ExtraPrimitiveOverestimationSize = VK_TRUE;
+        // B1-f: pixel-ordered fragment-shader interlock (ROV). Confirm the specific sub-feature is present (the extension
+        // can be exposed with only sample/shading-rate ordering) before enabling; a false bit disables the interlock path.
+        VkPhysicalDeviceFragmentShaderInterlockFeaturesEXT interlock{};
+        interlock.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADER_INTERLOCK_FEATURES_EXT;
+        if (m_fragment_interlock)
+        {
+            VkPhysicalDeviceFeatures2 f2{};
+            f2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            f2.pNext = &interlock;
+            vkGetPhysicalDeviceFeatures2(m_physical, &f2);
+            m_fragment_interlock = interlock.fragmentShaderPixelInterlock == VK_TRUE;
+            interlock.fragmentShaderSampleInterlock      = VK_FALSE; // enable ONLY the pixel-ordered mode we emit
+            interlock.fragmentShaderShadingRateInterlock = VK_FALSE;
+        }
+        // B2-d: BINDLESS — non-uniform sampled-image array indexing (Vulkan 1.2 core descriptor indexing). Query the bit,
+        // enable only what the bindless texture path needs. Graphics-capable only (keeps the compute device minimal).
+        VkPhysicalDeviceDescriptorIndexingFeatures descidx{};
+        descidx.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
+        if (m_graphics_family != UINT32_MAX)
+        {
+            VkPhysicalDeviceFeatures2 f2{};
+            f2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            f2.pNext = &descidx;
+            vkGetPhysicalDeviceFeatures2(m_physical, &f2);
+            m_bindless = descidx.shaderSampledImageArrayNonUniformIndexing == VK_TRUE;
+            VkPhysicalDeviceDescriptorIndexingFeatures keep{};
+            keep.sType                                       = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
+            keep.shaderSampledImageArrayNonUniformIndexing   = descidx.shaderSampledImageArrayNonUniformIndexing;
+            descidx                                          = keep; // enable ONLY the non-uniform sampled-image bit
+        }
 
-        // Build the pNext chain head-first: dyn → [sync2] → [sho] → [coopmat2 → coopmat → vmm → f16 → s16].
+        // Build the pNext chain head-first: dyn → [demote] → [vrs] → [eds3] → [sync2] → [sho] → [coopmat…].
         void* chain = &dyn;
+        if (m_graphics_family != UINT32_MAX) { demote.pNext = chain; chain = &demote; } // raster `discard` support
+        if (m_fragment_shading_rate) { vrs.pNext = chain; chain = &vrs; }
+        if (m_conservative_raster) { eds3.pNext = chain; chain = &eds3; }
+        if (m_fragment_interlock) { interlock.pNext = chain; chain = &interlock; }
+        if (m_bindless) { descidx.pNext = chain; chain = &descidx; }
         if (m_windowed) { sync2.pNext = chain; chain = &sync2; }
         if (m_shader_object) { sho.pNext = chain; chain = &sho; }
         if (m_coopmat2) { cm2.pNext = chain; cmk.pNext = &cm2; chain = &cmk; }
 
-        const char* devexts[4];
+        const char* devexts[8];
         crd::u32    ndevext = 0;
         if (m_coopmat2)
         {
@@ -296,6 +407,13 @@ private:
         }
         if (m_shader_object) { devexts[ndevext++] = VK_EXT_SHADER_OBJECT_EXTENSION_NAME; }
         if (m_windowed) { devexts[ndevext++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME; }
+        if (m_fragment_shading_rate) { devexts[ndevext++] = VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME; }
+        if (m_conservative_raster)
+        {
+            devexts[ndevext++] = VK_EXT_CONSERVATIVE_RASTERIZATION_EXTENSION_NAME;
+            devexts[ndevext++] = VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME;
+        }
+        if (m_fragment_interlock) { devexts[ndevext++] = VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME; }
 
         VkDeviceCreateInfo dci{};
         dci.sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -326,6 +444,11 @@ private:
     bool             m_int64           = false;
     bool             m_shader_object   = false;
     bool             m_windowed        = false;
+    bool             m_fragment_shading_rate = false; // B1-e: VK_KHR_fragment_shading_rate enabled
+    VkExtent2D       m_vrs_tile_size{};               // B1-e: attachment shading-rate-image texel size
+    bool             m_conservative_raster   = false; // B1-f: conservative raster + EDS3 conservative mode enabled
+    bool             m_fragment_interlock    = false; // B1-f: pixel-ordered fragment-shader interlock (ROV) enabled
+    bool             m_bindless              = false; // B2-d: non-uniform sampled-image array indexing enabled
     bool             m_valid           = false;
     char             m_name[256]       = {};
 };

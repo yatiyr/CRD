@@ -1,6 +1,7 @@
 #include <crd/log/log.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/shader/shader.hpp>
+#include <crd/shader/vulkan_spirv_compiler.hpp> // D-008 C2-e: crd-shader owns no compiler; inject the Vulkan one
 
 #include <chrono>
 #include <memory>
@@ -45,7 +46,8 @@ int main()
     (void)fs::write_file_text(vert_path, vert_source);
     (void)fs::write_file_text(frag_path, frag_source);
 
-    auto runtime = crd::shader::create_runtime();
+    auto compiler = crd::shader::create_vulkan_spirv_compiler(); // must outlive runtime (declared before it)
+    auto runtime  = crd::shader::create_runtime(*compiler);
     crd::shader::EffectDesc desc;
     desc.name = crd::containers::String("reflect_effect");
     desc.source_path = crd::containers::String(vert_path.generic());

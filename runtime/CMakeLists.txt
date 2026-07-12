@@ -85,6 +85,7 @@ target_link_libraries(smoke_shader PRIVATE
     crd-log
     crd-platform
     crd-shader
+    crd-shader-vulkan   # D-008 C2-e: injected GLSL->SPIR-V compiler
 )
 target_compile_definitions(smoke_shader PRIVATE CRD_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 crd_enable_default_pch(smoke_shader)
@@ -100,6 +101,7 @@ target_link_libraries(smoke_renderer PRIVATE
     crd-rhi
     crd-rhi-vulkan
     crd-shader
+    crd-shader-vulkan   # D-008 C2-e: injected GLSL->SPIR-V compiler
     crd-renderer
 )
 target_compile_definitions(smoke_renderer PRIVATE CRD_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
@@ -196,6 +198,8 @@ target_link_libraries(smoke_imgui_overlay PRIVATE
     crd-imgui
     crd-rhi
     crd-rhi-vulkan
+    crd-gpu-context          # D-008 C2-f: adopt a device from a gpu-context
+    crd-gpu-context-vulkan
 )
 crd_enable_default_pch(smoke_imgui_overlay)
 
@@ -290,6 +294,8 @@ target_link_libraries(smoke_resources_render PRIVATE
     crd-platform
     crd-resources
     crd-shader
+    crd-gpu-context          # D-008: crd::gpu::ShaderStage
+    crd-gpu-context-vulkan   # D-008: crd::gpu::compile_glsl_to_spirv
     crd-renderer
 )
 crd_enable_default_pch(smoke_resources_render)
@@ -370,6 +376,8 @@ target_link_libraries(smoke_rhi_vulkan_bootstrap PRIVATE
     crd-platform
     crd-rhi
     crd-rhi-vulkan
+    crd-gpu-context          # D-008 C2-f: adopt a device from a gpu-context
+    crd-gpu-context-vulkan
 )
 crd_enable_default_pch(smoke_rhi_vulkan_bootstrap)
 
@@ -383,6 +391,8 @@ target_link_libraries(smoke_asset_import PRIVATE
     crd-memory
     crd-rhi
     crd-rhi-vulkan
+    crd-gpu-context          # D-008 C2-f: adopt a device from a gpu-context
+    crd-gpu-context-vulkan
     crd-renderer
 )
 crd_enable_default_pch(smoke_asset_import)
@@ -397,6 +407,8 @@ target_link_libraries(smoke_depth_prepass PRIVATE
     crd-memory
     crd-rhi
     crd-rhi-vulkan
+    crd-gpu-context          # D-008 C2-f: adopt a device from a gpu-context
+    crd-gpu-context-vulkan
     crd-renderer
 )
 crd_enable_default_pch(smoke_depth_prepass)

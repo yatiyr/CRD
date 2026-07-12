@@ -33,9 +33,11 @@ The lessons are independent — read what's relevant. For a new engineer joining
 8. [08 — Physics scaling realities](08-physics-scaling-realities.md) — *what "millions of particles at very small cost" actually means, and where the LBVH stops being the bottleneck*
 9. [09 — GPU memory ordering gotchas](09-gpu-memory-ordering-gotchas.md) — *atomicAdd is not enough: when you need `coherent` + memoryBarrierBuffer to make cross-invocation writes visible*
 10. [10 — API shape sets the performance floor](10-api-shape-sets-the-perf-floor.md) — *same algorithm + same hardware, 14× faster from one API change; chasing kernel perf when the API forces CPU data movement is a dead end*
+11. [11 — The shader-stage frontier](11-the-shader-stage-frontier.md) — *a lecture on all 14 shader stages (vertex→fragment, tessellation, geometry, mesh/task, ray tracing, compute), where each is used, the cutting-edge technique riding on it, which backends light up, and how the node editor fits — plus the frontier gaps we added to D-007*
 
 ## Index by topic
 
+- **GPU / shader architecture**: [11](11-the-shader-stage-frontier.md) (all 14 stages, the frontier techniques, backends, node-editor plan)
 - **Performance engineering**: [02](02-when-scalar-beats-simd.md), [03](03-measuring-performance-correctly.md), [05](05-cpu-vs-gpu-perf-tiers.md), [10](10-api-shape-sets-the-perf-floor.md)
 - **Architecture**: [01](01-morton-codes-and-lbvh-pipeline.md), [04](04-parallel-stable-merge.md), [06](06-substrate-vs-speculation.md), [07](07-using-radix-and-morton.md), [08](08-physics-scaling-realities.md), [10](10-api-shape-sets-the-perf-floor.md)
 - **Programming patterns**: [04](04-parallel-stable-merge.md) (deterministic merge), [02](02-when-scalar-beats-simd.md) (`_mm_prefetch`), [09](09-gpu-memory-ordering-gotchas.md) (`coherent` + `memoryBarrierBuffer`), [10](10-api-shape-sets-the-perf-floor.md) (GPU-input vs CPU-input dispatch overloads)
