@@ -582,6 +582,133 @@
 > simdgroup_matrix / WGSL subgroup-matrix; (b) BACKWARD pass in CKIR with a fixed-order deterministic dW reduction (no atomics).**
 > Board `docs/bench/2026-07-14-fused-mlp-cublas-gold.md`.
 
+> **Increment 17 ✅: CKIR PORT increment 3 — forward on ALL backends via the FP32-PRECISE tier, bit-exact (2026-07-14).**
+> ⚠ The named tensor primitives are PHANTOM on this toolchain (measured): HLSL WaveMatrix REJECTED by DXC 1.8.2502 (never
+> shipped; DX12 compiles cs_6_0), WGSL subgroup-matrix absent from wgpu-native, MSL simdgroup_matrix has no Metal on Windows.
+> Emitting them = theater. User chose FP32-precise (AskUserQuestion) = the STRONGER moat (bit-exact across ALL backends,
+> which the fp16 tensor tier cannot be). `build_mlp_fwd_fp32` (ckir_mlp.hpp) builds the fused MLP on the CKIR STATEMENT TIER
+> (1 workgroup=1 sample, 1 thread=1 output feature, activations ping-pong in shared = the fusion; ascending precise fold =
+> no FMA); ONE builder → the GENERIC per-backend emitters lower it to all 5. Verified: CPU oracle bit-exact (512 ==);
+> **Vulkan RUN bit-exact; DX12 RUN bit-exact & IDENTICAL to Vulkan** (the {1..16} cross-backend moat on the MLP); CUDA
+> nvcc-compiles; WGSL+MSL emit-validated (no imperative WebGPU ctx / no Metal here). Tests: test_ckir_mlp.cpp (FP32 CPU +
+> all-5-emit + [.emit-cuda-mlp-fp32]), test_vulkan_context.cpp [mlp], test_dx12_compute.cpp [mlp]. crd-kir 1234/127 +
+> gpu-context vulkan/dx12 [mlp] green; tidy-clean. Tensor tier (CRUSH) stays CUDA wmma + Vulkan coopmat2; FP32 tier is the
+> PORTABLE+BIT-EXACT companion.
+
+> **Increment 18 ✅: CKIR PORT increment 4 — the BACKWARD pass with a DETERMINISTIC dW reduction (2026-07-14).** Two
+> statement-tier builders in ckir_mlp.hpp, NO atomics: `build_mlp_bwd_dz` (per-sample activation-gradient chain — 1 wg = 1
+> sample, dz[l] on-chip via ReLU′ `select(a[l+1]>0,g,0)`, da=dz·Wᵀ→next g, writes dz_all) + `build_mlp_bwd_dw` (the
+> DETERMINISTIC weight-gradient reduction: dW[l][k][n] = Σ_r a[l][r][k]·dz[l][r][n] in ASCENDING sample order = fixed order,
+> no atomics). The standalone's fp32-atomicAdd dW was non-deterministic; this is bit-exact AND run-to-run bit-identical.
+> Verified: CPU oracle `mlp_backward_ref` bit-exact (28k ==); **Vulkan dz+dW bit-exact (bad==0) + dW run-to-run BIT-IDENTICAL
+> (det==0)**. Both on the statement tier ⇒ generic emitters lower to all backends. Tests: test_ckir_mlp.cpp (backward CPU) +
+> test_vulkan_context.cpp [mlp]. crd-kir 28883/128 green MSVC + clang-cl; tidy-clean. **NRC-moat-in-CKIR STATUS: forward =
+> tensor crush (CUDA wmma 2.41× + Vulkan coopmat2) + FP32-precise portable/bit-exact (Vulkan+DX12 run, CUDA nvcc, WGSL/MSL
+> emit); backward = FP32-precise portable/bit-exact + deterministic dW (Vulkan run). The full NRC moat is now expressed in
+> CKIR.**
+
+> **B14-c-1 ✅: SVGF edge-stopping À-TROUS denoiser — the first RESUMED-DETOUR frontier slice (2026-07-14).** Resumed D-007
+> at the next in-order ⬜ (#20 B14, real-time GI). B14-a ReSTIR needs ray tracing (B9/C3, later); user chose (AskUserQuestion)
+> the RT-independent **B14-c denoiser**. `engine/kir/include/crd/kir/ckir_svgf.hpp` `build_svgf_atrous` = a STATEMENT-TIER
+> compute pass (gathers its own 5×5 stencil from storage buffers — not a deferred renderer leaf like the B13 resolve passes):
+> increasing-stride à-trous blur with depth/normal/luminance edge-stopping weights, variance-guided. Verified: CPU-oracle
+> INVARIANTS (uniform preserved <1e-5 · noisy variance drops >2× · hard depth edge STOPS the bleed) + **Vulkan AND DX12 ==
+> oracle at maxrel 3.58e-7** (arithmetic bit-exact, exp/pow ULP — the B8 transcendental bar). **⛔ EMITTER GAP FIXED: the
+> compute-kernel value emitter LACKED Exp/Pow (the fragment/material path had them) — the mirror of the "raster lags compute"
+> scar; added to all 5 backends (glsl/hlsl/cuda/msl/wgsl).** Tests: test_ckir_svgf.cpp (3 invariants) + test_vulkan_context.cpp
+> + test_dx12_compute.cpp [svgf]. crd-kir 28886/131 + gpu-context vulkan/dx12 [svgf] green MSVC + clang-cl; tidy-clean.
+
+> **B14-c GOLD-STANDARD SVGF DENOISER ✅ (2026-07-15, user: "full crush and gold standard system and full quality CKIR").**
+> Upgraded to the FAITHFUL Schied 2017 formula, built the temporal half + the full pipeline — the complete SVGF-2017 gold
+> denoiser in CKIR. **B14-c-1 GOLD à-trous**: depth-GRADIENT edge weight (∇z from unit-stride neighbours — edges hold under
+> oblique surfaces, vs a flat |Δz|) + 3×3-GAUSSIAN-blurred variance for the luminance φ (kills firefly survival) + variance
+> filtered as Σ(hw)²Var/(Σhw)² (Schied §4.2). **B14-c-2 TEMPORAL** (`build_svgf_temporal`): reproject-along-motion (nearest) +
+> disocclusion reject (depth/normal/off-screen → α=1 ⇒ reprojected sample discarded, no ghost) + EMA blend α=max(1/hist,α_min)
+> + luminance moments m1,m2 → Var=m2−m1². **B14-c-3 PIPELINE**: temporal → à-trous ×5 (steps 1,2,4,8,16). Verified: à-trous
+> invariants (uniform preserved · noise smoothed · silhouette stops) + temporal (24-frame accumulation halves error · history
+> grows past 8 · disocclusion resets) + FULL PIPELINE crushes noise **≥10×** vs the raw frame end-to-end; **Vulkan à-trous
+> 3.64e-7 + temporal BIT-EXACT 0.0 (no transcendentals), DX12 à-trous 3.64e-7.** crd-kir 28894/133 + vulkan/dx12 [svgf] green
+> MSVC + clang-cl; tidy-clean.
+
+> **B14-c COMPLETE ✅ (2026-07-15): B14-c-4 A-SVGF adaptive-α — the full gold SVGF/A-SVGF denoiser is in CKIR.** Added the
+> A-SVGF temporal-gradient adaptive α to `build_svgf_temporal` (config `asvgf`): where the incoming sample is a real OUTLIER
+> from the history (|Δl| ≫ σ_hist = √Var_hist, not noise), boost α toward 1 ⇒ accumulation RESETS ⇒ no lag/ghosting on fast
+> lighting/motion change; noise (|Δl| < asvgf_lo·σ) does NOT reset. Variance-aware (Schied 2018 spirit), self-contained (reuses
+> the moments the temporal pass already tracks — no separate gradient/stratification buffer). Verified: fixed-α AND adaptive
+> both keep a long history through the noisy stable phase (noise doesn't reset), but on a real step change **adaptive tracks the
+> new value >5× closer** (kills the lag). Vulkan bit-exact (2.98e-8, sqrt-ULP). crd-kir 28897/134 + vulkan/dx12 [svgf] green
+> MSVC + clang-cl; tidy-clean. **B14-c (spatiotemporal denoiser) = DONE: gold à-trous + temporal + pipeline + A-SVGF.** NEXT in
+> B14: [B14-b] world-space radiance cache (DDGI probes — the no-RT-HW GI tier) and/or [B14-a] ReSTIR when ray tracing (B9/C3)
+> lands. Optional B14-c polish: ReBLUR/ReLAX/SIGMA diffuse/specular/shadow separation + firefly clamp.
+
+> **B14-b DDGI (dynamic diffuse GI) COMPLETE ✅ (2026-07-15, "same gold standard approach").** The no-RT-HW GI tier — Majercik
+> 2019 visibility-moment irradiance probes, gold-standard, in CKIR (`engine/kir/include/crd/kir/ckir_ddgi.hpp`, statement-tier
+> compute; RT ray-generation is the deferred B9 leaf, the analytic core is built+verified). **[B14-b-1] octahedral** encode/
+> decode (Cigolle 2014 — whole sphere → [−1,1]², no singularity; round-trip recovers EVERY dir) + **Chebyshev visibility**
+> (depth-moment σ²/(σ²+Δ²) occlusion, no light leak). **[B14-b-2] probe SAMPLE** (`build_ddgi_sample`): 8-probe trilinear ×
+> normal-wrap × Chebyshev × octahedral irradiance-in-normal-dir → leak-free indirect diffuse; verified uniform-field→exact-C +
+> occlusion cuts a leaked probe ≥4×. **[B14-b-3] probe UPDATE** (`build_ddgi_probe_update`): integrate rays (cosine irradiance
+> + cos^sharpness depth moments) + temporal hysteresis; verified aligned-rays accumulate + depth mean → hit distance, back-faces
+> stay dark. Verified CPU (55 asserts) + Vulkan (sample 1.32e-7, update 1.82e-6). crd-kir 28952/139 + vulkan [ddgi] green MSVC +
+> clang-cl; tidy-clean. **✅ POLISHED (2026-07-15): bilinear octahedral sampling (4-tap) + full ARBITRARY probe grid (cell =
+> floor((pos−origin)/spacing) clamped to [0,grid−2], 8 corner probes via flat index; 4×4×4 indexing verified — a bright probe
+> lights only its own cell). CPU 57 asserts + Vulkan re-verified 1.31e-7. B14 GI now has BOTH a denoiser (B14-c) AND an
+> indirect-light source (B14-b).**
+
+> **B14-a ReSTIR ESTIMATOR COMPLETE ✅ (2026-07-15, "maximum gold standard arsenal, no gaps").** The dominant real-time
+> many-light/GI sampler (Bitterli 2020), authored in CKIR (`engine/kir/include/crd/kir/ckir_restir.hpp`, statement-tier
+> compute; the candidate GENERATION — which light, its shaded contribution, the shadow-ray visibility — is the deferred B9 RT
+> leaf, the reservoir/RIS/reuse ESTIMATOR is built+verified, same pattern as SVGF/DDGI). A reservoir = [f(y), p̂(y), W, M].
+> **`build_restir_ris`**: Weighted-Reservoir-Sampling streams M candidates, keeps i w.p. w_i/Σw, W = Σw/(M·p̂(y)), estimate =
+> f(y)·W. **`build_restir_temporal`**: merges the current + reprojected-previous reservoir, each weighted by its own Σw = p̂·W·M,
+> with prev M clamped to m_cap·M_cur (bounds temporal bias). Verified CPU oracle — RIS is **UNBIASED** (pixel-mean of f(y)·W ==
+> the true light integral even under an imperfect p̂=1 constant target) + temporal reuse **DROPS VARIANCE ≥2×** (canonical p̂=f
+> target ⇒ the merged estimate is the running mean over the ACCUMULATED candidate stream, var ~ Var(f)/M_eff; still unbiased; M
+> grows). Vulkan portability: RIS 1.11e-7, temporal 1.19e-7 == oracle (add/mul/div/min/max/cmp/select only ⇒ bit-exact, div the
+> lone IEEE-ULP). crd-kir 28959/142 + vulkan [restir] green MSVC + clang-cl; tidy-clean. **NEXT: B15 — physically-based sky +
+> atmosphere (Hillaire 2020: transmittance LUT + multiple-scattering + sky-view LUT + aerial perspective), gold standard.**
+
+> **B15-a-1 atmosphere TRANSMITTANCE LUT (2026-07-15, "maximum gold standard arsenal").** Started B15 (sky/atmosphere), the
+> next visual-frontier slice. Hillaire 2020 / UE5 Sky-Atmosphere, in CKIR (`engine/kir/include/crd/kir/ckir_atmosphere.hpp`,
+> `crd::kir::atmos`, statement-tier compute — pure analytic scattering integrals, no RT leaf, so the whole thing is buildable +
+> bit-exact-verifiable now). `build_atmos_transmittance`: one thread per LUT texel over the Bruneton (r,mu) parameterisation,
+> ray-marches (40 steps) the extinction integral tau = integral of sigma_e ds with sigma_e = beta_R*exp(-h/H_R) +
+> beta_M_ext*exp(-h/H_M) + beta_O*tent(h) [Rayleigh + Mie + ozone], stores T = exp(-tau) per RGB channel. The Bruneton mu mapping
+> was reformulated CANCELLATION-FREE (H^2-rho^2 = H^2(1-v^2) - never a difference of km-scale squares, whose f32 ulp ~= 4 would
+> wreck the long horizon march). Verified CPU physics: T in (0,1]; the Rayleigh **blue>green>red** extinction ordering
+> (T_red~=0.94, T_blue~=0.76 straight up - why the sky is blue and sunsets red); horizon path far darker; T->1 at altitude.
+> Vulkan **maxabs 6.25e-5** - the correct metric for a [0,1] LUT (a relative metric divides by near-zero horizon T); this is the
+> hardware exp/sqrt-vs-libm floor over a 40-step exp accumulation (all add/sub/mul/div bit-exact), NOT a logic gap.
+
+> **B15-a-2/3 atmosphere MULTISCATTER + SKY-VIEW LUTs (2026-07-15).** Extended `ckir_atmosphere.hpp` with the rest of the core
+> Hillaire pipeline. **`build_atmos_multiscatter`** (B15-a-2) — the isotropic 2nd-order fill light: per texel (μ_sun,alt),
+> integrate single scattering over a Fibonacci sphere of directions (each a short march that bilinear-samples the transmittance
+> LUT for sun-transmittance), form L₂ and the transfer f_ms, then sum the closed-form series Ψ = L₂/(1−f_ms). CPU physics: Ψ≥0
+> and finite, grows toward the ground, bluish (Rayleigh-dominated), brighter with the sun up; Vulkan 1.46e-5. **`build_atmos_
+> skyview`** (B15-a-3, the renderable sky) — march the view ray adding single scattering (Rayleigh + Cornette-Shanks Mie phase,
+> weighted by sun-transmittance from the transmittance LUT) + isotropic multiple scattering (from the multiscatter LUT),
+> attenuated by the view transmittance. CPU physics: a blue zenith, a Mie glow toward the sun, a bright horizon; Vulkan 1.43e-5.
+> Hot shared nodes (r_x, μ_sun_x, the bilinear coords) are `stmt_materialize`d — register reuse on GPU AND it collapses the
+> recursive CPU-oracle's exponential re-walk (the oracle has no memo cache; it re-evaluates every shared subtree). Portability
+> metric is ABSOLUTE (a [0,1]/small-radiance LUT); ~1e-5 = the hardware exp/sqrt-vs-libm floor, all add/sub/mul/div bit-exact.
+> CPU-oracle tests run at reduced LUT resolution (the interpreter is O(texels·steps·nodes); physics + portability are per-texel
+> identical at any size — production uses the full 256×64 / 192×108 defaults). crd-kir 28982/145 + vulkan 840/82 [atmos] green;
+> tidy-clean. **NEXT: B15-a-4 aerial-perspective froxels (a 3D camera-frustum volume: in-scatter + transmittance per cell →
+> composites into B12-d fog); then B15-b volumetric clouds (Nubis, reusing B6 ckir_noise.hpp).**
+
+> **Increment 19 ✅: CKIR PORT increment 5 — DX12 backward + CUDA TENSOR backward (2026-07-14).** (a) The FP32-precise
+> statement-tier backward now runs on DX12 too — bad_dz==0, bad_dw==0, BIT-IDENTICAL to Vulkan + oracle (deterministic dW
+> portable across both runnable statement-tier backends). (b) `emit_fused_mlp_bwd_cuda` (ckir_mlp.hpp) — the CKIR tensor
+> backward recipe (reduce_dw + fused wmma: dz mask + on-chip da wmma chain + dW=aᵀ·dz wmma reduced over batch → fp32 atomic
+> into NGROUP partials); generated `ckir_mlp_bwd_gen.cu` nvcc-compiles + `ckir_mlp_bwd_bench.cu` **reproduces the crush 1.94×
+> vs cuBLAS** (best split-K), dW rel=5e-5. ⚠ fp32-atomic dW = crush tier (per-backend, not bit-exact); FP32 statement-tier
+> backward is the deterministic companion. Vulkan coopmat2 backward NOT built (coopmat2 batch-reduction dW disproportionately
+> hard; Vulkan has the deterministic FP32 backward). Tests: test_ckir_mlp.cpp (backward CPU + [.emit-cuda-mlp-bwd]) +
+> test_dx12_compute.cpp [mlp]. crd-kir 28883/128 green MSVC + clang-cl; tidy-clean. **⭐ THE FULL NRC MOAT IS NOW IN CKIR:
+> forward inference crush (CUDA 2.41× + Vulkan coopmat2) + backward training crush (CUDA 1.94×) + deterministic bit-exact
+> training (Vulkan + DX12). NRC-moat-in-CKIR campaign COMPLETE.** This is the B10 (neural / cooperative-vectors) compute
+> substrate for the detour, built ahead + doubling as the hesap-GPU ML substrate.
+
 
 > **Increment 7 ✅: SUBGROUP-RANK SCATTER + privatized histogram — sort 6.26 → 4.40 ms (2026-07-13).** Replaced the 2-level local
 > sort with a SUBGROUP-BALLOT rank (`build_sort_scatter`): pt rounds (strided), per key MATCH same-digit lanes via radix_bits

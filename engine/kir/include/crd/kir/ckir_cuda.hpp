@@ -184,6 +184,8 @@ inline bool emit_compute_kernel_cuda(const KGraph& g, const KEntry& entry, crd::
         case KOp::Sqrt: fn1("sqrtf"); break;
         case KOp::Sin: fn1("sinf"); break;
         case KOp::Cos: fn1("cosf"); break;
+        case KOp::Exp: fn1("expf"); break;
+        case KOp::Pow: fn2("powf"); break;
         case KOp::Floor: fn1("floorf"); break;
         case KOp::Add: bin(" + "); break;
         case KOp::Sub: bin(" - "); break;

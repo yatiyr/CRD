@@ -675,6 +675,8 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
         case KOp::Sqrt: f1("sqrt"); break;
         case KOp::Sin: f1("sin"); break;
         case KOp::Cos: f1("cos"); break;
+        case KOp::Exp: f1("exp"); break;
+        case KOp::Pow: f2("pow"); break;
         case KOp::Floor: f1("floor"); break;
         case KOp::Add: b2(" + "); break;
         case KOp::Sub: b2(" - "); break;

@@ -9,6 +9,8 @@
 #include <crd/kir/ckir_fft.hpp>    // B-cmp Phase 1: build_fft1d_radix2 (the CKIR FFT authoring layer)
 #include <crd/kir/ckir_reduce.hpp> // B-cmp: build_reduce (the CKIR device-wide reduction)
 #include <crd/kir/ckir_scan.hpp>   // B-cmp: build_scan (the CKIR device-wide prefix sum)
+#include <crd/kir/ckir_mlp.hpp>    // v17 NRC: build_mlp_fwd_fp32 (the portable+bit-exact fused-MLP forward)
+#include <crd/kir/ckir_svgf.hpp>   // B14-c: build_svgf_atrous (the SVGF edge-stopping denoiser)
 #include <crd/kir/ckir_hlsl.hpp> // B-cmp: emit_compute_kernel_hlsl (the DX12 kernel emitter)
 
 #include <crd/math/cmath.hpp>        // Phase-1 FFT: host-side twiddle table
@@ -100,6 +102,230 @@ TEST_CASE("v17-i: D3D12 IComputeContext runs a kernel through the backend-agnost
     }
     rb->unmap();
     CHECK(mism == 0);
+}
+
+TEST_CASE("v17 NRC: CKIR fused-MLP FP32 forward DISPATCHES on DX12 == CPU oracle BIT-EXACT (the portable moat)",
+          "[dx12][compute][gpu][kernel][mlp]")
+{
+    namespace kir = crd::kir;
+    crd::memory::TlsfAllocator alloc(64U << 20U);
+    g::Dx12ComputeContext      ctx(&alloc);
+    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+
+    kir::MlpConfig mcfg;
+    mcfg.batch_tile = 64;
+    mcfg.warps      = 2;
+    kir::KGraph       graph(&alloc);
+    const kir::KEntry e     = kir::build_mlp_fwd_fp32(graph, mcfg);
+    const int         wd    = mcfg.width;
+    const int         batch = 64;
+    const int         n_in  = batch * wd;
+    const int         n_w   = mcfg.layers * wd * wd;
+
+    crd::containers::Array<crd::f64> in64(&alloc);
+    in64.resize(static_cast<crd::usize>(n_in));
+    crd::containers::Array<crd::f64> w64(&alloc);
+    w64.resize(static_cast<crd::usize>(n_w));
+    crd::containers::Array<crd::f64> out64(&alloc);
+    out64.resize(static_cast<crd::usize>(n_in));
+    for (int i = 0; i < n_in; ++i) { in64[static_cast<crd::usize>(i)] = static_cast<crd::f64>(static_cast<float>(0.2F * static_cast<float>((i * 7) % 13 - 6))); }
+    for (int i = 0; i < n_w; ++i) { w64[static_cast<crd::usize>(i)] = static_cast<crd::f64>(static_cast<float>(0.1F * static_cast<float>((i * 5) % 11 - 5))); }
+    kir::KernelBuffer bufs[3] = {{in64.data(), n_in, 0, 0}, {w64.data(), n_w, 0, 1}, {out64.data(), n_in, 0, 2}};
+    kir::eval_cpu_kernel(graph, e, bufs, 3, e.local_size[0], &alloc, static_cast<crd::u32>(batch));
+
+    kir::GlslKernel kern(&alloc);
+    REQUIRE(kir::emit_compute_kernel_hlsl(graph, e, &alloc, kern));
+    auto pipe = ctx.create_pipeline_from_hlsl(crd::containers::to_view(kern.source), 3, 0U);
+    REQUIRE(pipe != nullptr);
+
+    crd::containers::Array<float> in32(&alloc);
+    in32.resize(static_cast<crd::usize>(n_in));
+    crd::containers::Array<float> w32(&alloc);
+    w32.resize(static_cast<crd::usize>(n_w));
+    crd::containers::Array<float> out32(&alloc);
+    out32.resize(static_cast<crd::usize>(n_in));
+    for (int i = 0; i < n_in; ++i) { in32[static_cast<crd::usize>(i)] = static_cast<float>(in64[static_cast<crd::usize>(i)]); }
+    for (int i = 0; i < n_w; ++i) { w32[static_cast<crd::usize>(i)] = static_cast<float>(w64[static_cast<crd::usize>(i)]); }
+    for (int i = 0; i < n_in; ++i) { out32[static_cast<crd::usize>(i)] = -1.0F; }
+    float*    host[3] = {in32.data(), w32.data(), out32.data()};
+    const int lens[3] = {n_in, n_w, n_in};
+    crd::kir_test::dispatch_kernel_1wg(ctx, *pipe, host, lens, 3, static_cast<crd::u32>(batch));
+
+    int bad = 0;
+    for (int i = 0; i < n_in; ++i) { if (out32[static_cast<crd::usize>(i)] != static_cast<float>(out64[static_cast<crd::usize>(i)])) { ++bad; } }
+    CHECK(bad == 0); // FP32 precise, no FMA ⇒ bit-IDENTICAL to Vulkan + the oracle
+}
+
+TEST_CASE("B14-c: CKIR SVGF à-trous denoiser DISPATCHES on DX12 == CPU oracle (ULP-tol, transcendental weights)",
+          "[dx12][compute][gpu][kernel][svgf]")
+{
+    namespace kir = crd::kir;
+    crd::memory::TlsfAllocator alloc(32U << 20U);
+    g::Dx12ComputeContext      ctx(&alloc);
+    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    const auto uz = [](int v) { return static_cast<crd::usize>(v); };
+
+    kir::SvgfConfig   scfg;
+    kir::KGraph       graph(&alloc);
+    const kir::KEntry e  = kir::build_svgf_atrous(graph, scfg);
+    const int         np = scfg.width * scfg.height;
+
+    crd::containers::Array<crd::f64> color(&alloc);
+    crd::containers::Array<crd::f64> gbuf(&alloc);
+    crd::containers::Array<crd::f64> var(&alloc);
+    crd::containers::Array<crd::f64> col_out(&alloc);
+    crd::containers::Array<crd::f64> var_out(&alloc);
+    color.resize(uz(np * 3));
+    gbuf.resize(uz(np * 4));
+    var.resize(uz(np));
+    col_out.resize(uz(np * 3));
+    var_out.resize(uz(np));
+    crd::u32 s = 999U;
+    auto rnd = [&]() { s = s * 1664525U + 1013904223U; return static_cast<double>(s >> 8) / static_cast<double>(1U << 24); };
+    for (int p = 0; p < np; ++p)
+    {
+        for (int c = 0; c < 3; ++c) { color[uz(p * 3 + c)] = 0.4 + 0.3 * (rnd() - 0.5); }
+        var[uz(p)]          = 0.05;
+        gbuf[uz(p * 4 + 0)] = 1.0 + 0.1 * rnd();
+        gbuf[uz(p * 4 + 1)] = 0.0;
+        gbuf[uz(p * 4 + 2)] = 0.0;
+        gbuf[uz(p * 4 + 3)] = 1.0;
+    }
+    kir::KernelBuffer bufs[5] = {{color.data(), np * 3, 0, 0}, {gbuf.data(), np * 4, 0, 1}, {var.data(), np, 0, 2},
+                                 {col_out.data(), np * 3, 0, 3}, {var_out.data(), np, 0, 4}};
+    kir::eval_cpu_kernel(graph, e, bufs, 5, e.local_size[0], &alloc, static_cast<crd::u32>(np / 64));
+
+    kir::GlslKernel kern(&alloc);
+    REQUIRE(kir::emit_compute_kernel_hlsl(graph, e, &alloc, kern));
+    auto pipe = ctx.create_pipeline_from_hlsl(crd::containers::to_view(kern.source), 5, 0U);
+    REQUIRE(pipe != nullptr);
+
+    crd::containers::Array<float> hc(&alloc);
+    crd::containers::Array<float> hg(&alloc);
+    crd::containers::Array<float> hv(&alloc);
+    crd::containers::Array<float> hco(&alloc);
+    crd::containers::Array<float> hvo(&alloc);
+    hc.resize(uz(np * 3));
+    hg.resize(uz(np * 4));
+    hv.resize(uz(np));
+    hco.resize(uz(np * 3));
+    hvo.resize(uz(np));
+    for (int i = 0; i < np * 3; ++i) { hc[uz(i)] = static_cast<float>(color[uz(i)]); }
+    for (int i = 0; i < np * 4; ++i) { hg[uz(i)] = static_cast<float>(gbuf[uz(i)]); }
+    for (int i = 0; i < np; ++i) { hv[uz(i)] = static_cast<float>(var[uz(i)]); }
+    for (int i = 0; i < np * 3; ++i) { hco[uz(i)] = -9.0F; }
+    float*    host[5] = {hc.data(), hg.data(), hv.data(), hco.data(), hvo.data()};
+    const int lens[5] = {np * 3, np * 4, np, np * 3, np};
+    crd::kir_test::dispatch_kernel_1wg(ctx, *pipe, host, lens, 5, static_cast<crd::u32>(np / 64));
+
+    double maxrel = 0.0;
+    for (int i = 0; i < np * 3; ++i)
+    {
+        const double ref = col_out[uz(i)];
+        const double got = static_cast<double>(hco[uz(i)]);
+        const double rel = std::fabs(got - ref) / (std::fabs(ref) + 1e-3);
+        if (rel > maxrel) { maxrel = rel; }
+    }
+    std::printf("[DX12 SVGF a-trous 32x32] maxrel(GPU vs oracle) = %.2e\n", maxrel);
+    CHECK(maxrel < 1e-4);
+}
+
+TEST_CASE("v17 NRC: CKIR fused-MLP BACKWARD (dz chain + DETERMINISTIC dW) DISPATCHES on DX12 == oracle bit-exact",
+          "[dx12][compute][gpu][kernel][mlp]")
+{
+    namespace kir = crd::kir;
+    crd::memory::TlsfAllocator alloc(64U << 20U);
+    g::Dx12ComputeContext      ctx(&alloc);
+    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+
+    kir::MlpConfig mcfg;
+    mcfg.batch_tile = 64;
+    mcfg.warps      = 2;
+    const int wd    = mcfg.width;
+    const int nl    = mcfg.layers;
+    const int batch = 16;
+    const int bw    = batch * wd;
+    const int n_a   = (nl + 1) * bw;
+    const int n_w   = nl * wd * wd;
+    const int n_dz  = nl * bw;
+    const int n_dw  = nl * wd * wd;
+
+    crd::containers::Array<float> a_all(&alloc);
+    a_all.resize(static_cast<crd::usize>(n_a));
+    crd::containers::Array<float> w_f(&alloc);
+    w_f.resize(static_cast<crd::usize>(n_w));
+    for (int i = 0; i < n_w; ++i) { w_f[static_cast<crd::usize>(i)] = 0.1F * static_cast<float>((i * 5) % 11 - 5); }
+    for (int r = 0; r < batch; ++r)
+    {
+        for (int c = 0; c < wd; ++c)
+        {
+            const int ai                       = r * wd + c;
+            a_all[static_cast<crd::usize>(ai)] = 0.2F * static_cast<float>(ai % 13 - 6);
+        }
+        for (int l = 0; l < nl; ++l)
+        {
+            for (int n = 0; n < wd; ++n)
+            {
+                float z = 0.0F;
+                for (int k = 0; k < wd; ++k)
+                {
+                    const int ci = l * bw + r * wd + k;
+                    const int wi = l * wd * wd + k * wd + n;
+                    z += a_all[static_cast<crd::usize>(ci)] * w_f[static_cast<crd::usize>(wi)];
+                }
+                const int oi                       = (l + 1) * bw + r * wd + n;
+                a_all[static_cast<crd::usize>(oi)] = (l + 1 < nl && z < 0.0F) ? 0.0F : z;
+            }
+        }
+    }
+    crd::containers::Array<float> gout(&alloc);
+    gout.resize(static_cast<crd::usize>(bw));
+    for (int i = 0; i < bw; ++i)
+    {
+        const int gi                     = nl * bw + i;
+        gout[static_cast<crd::usize>(i)] = a_all[static_cast<crd::usize>(gi)];
+    }
+    crd::containers::Array<float> ref_dz(&alloc);
+    ref_dz.resize(static_cast<crd::usize>(n_dz));
+    crd::containers::Array<float> ref_dw(&alloc);
+    ref_dw.resize(static_cast<crd::usize>(n_dw));
+    crd::containers::Array<float> gs(&alloc);
+    gs.resize(static_cast<crd::usize>(wd));
+    crd::containers::Array<float> ngs(&alloc);
+    ngs.resize(static_cast<crd::usize>(wd));
+    kir::mlp_backward_ref(mcfg, a_all.data(), w_f.data(), gout.data(), batch, ref_dz.data(), ref_dw.data(), gs.data(), ngs.data());
+
+    kir::KGraph       g_a(&alloc);
+    const kir::KEntry e_a = kir::build_mlp_bwd_dz(g_a, mcfg, batch);
+    kir::GlslKernel   k_a(&alloc);
+    REQUIRE(kir::emit_compute_kernel_hlsl(g_a, e_a, &alloc, k_a));
+    auto pipe_a = ctx.create_pipeline_from_hlsl(crd::containers::to_view(k_a.source), 4, 0U);
+    REQUIRE(pipe_a != nullptr);
+    crd::containers::Array<float> dz(&alloc);
+    dz.resize(static_cast<crd::usize>(n_dz));
+    for (int i = 0; i < n_dz; ++i) { dz[static_cast<crd::usize>(i)] = -7.0F; }
+    float*    host_a[4] = {a_all.data(), w_f.data(), gout.data(), dz.data()};
+    const int lens_a[4] = {n_a, n_w, bw, n_dz};
+    crd::kir_test::dispatch_kernel_1wg(ctx, *pipe_a, host_a, lens_a, 4, static_cast<crd::u32>(batch));
+    int bad_dz = 0;
+    for (int i = 0; i < n_dz; ++i) { if (dz[static_cast<crd::usize>(i)] != ref_dz[static_cast<crd::usize>(i)]) { ++bad_dz; } }
+    CHECK(bad_dz == 0);
+
+    kir::KGraph       g_b(&alloc);
+    const kir::KEntry e_b = kir::build_mlp_bwd_dw(g_b, mcfg, batch);
+    kir::GlslKernel   k_b(&alloc);
+    REQUIRE(kir::emit_compute_kernel_hlsl(g_b, e_b, &alloc, k_b));
+    auto pipe_b = ctx.create_pipeline_from_hlsl(crd::containers::to_view(k_b.source), 3, 0U);
+    REQUIRE(pipe_b != nullptr);
+    crd::containers::Array<float> dw(&alloc);
+    dw.resize(static_cast<crd::usize>(n_dw));
+    for (int i = 0; i < n_dw; ++i) { dw[static_cast<crd::usize>(i)] = -7.0F; }
+    float*    host_b[3] = {a_all.data(), dz.data(), dw.data()};
+    const int lens_b[3] = {n_a, n_dz, n_dw};
+    crd::kir_test::dispatch_kernel_1wg(ctx, *pipe_b, host_b, lens_b, 3, static_cast<crd::u32>(nl * wd));
+    int bad_dw = 0;
+    for (int i = 0; i < n_dw; ++i) { if (dw[static_cast<crd::usize>(i)] != ref_dw[static_cast<crd::usize>(i)]) { ++bad_dw; } }
+    CHECK(bad_dw == 0); // bit-IDENTICAL to Vulkan + the oracle (FP32 precise, deterministic ascending reduction)
 }
 
 TEST_CASE("B-cmp: CKIR compute KERNEL (shared memory + barriers) DISPATCHES on DX12 == CPU oracle bit-exact",

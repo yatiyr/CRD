@@ -111,10 +111,75 @@ proved the true layout is **row-major `w[k·W + n]`** (column-major was 95× wro
 checked self-consistency, not that it matched the emitter. Oracle fixed → it is now the true shared reference
 both backends match.
 
-## Next (remaining CKIR-port increments)
+## ✅ CKIR PORT — increment 3: forward fanned out to ALL backends via the FP32-precise tier (2026-07-14)
 
-- Fan the forward emitter out to DX12/HLSL WaveMatrix, Metal simdgroup_matrix, WebGPU subgroup-matrix.
-- Port the **backward** pass into CKIR (dW reduction + on-chip da chain), with a fixed-order deterministic dW
-  reduction (no atomics) so the training half also holds the `{1..16}` moat.
+The tensor cooperative-matrix primitives the fan-out originally named are **phantom on this toolchain** (measured, not
+assumed): HLSL **WaveMatrix** is rejected by DXC 1.8.2502 (`WaveMatrixLeft` undeclared — never shipped in mainline DXC;
+the DX12 backend also compiles at `cs_6_0`); **WGSL subgroup-matrix** is Dawn-experimental, absent from the `wgpu-native`
+this repo uses; **MSL simdgroup_matrix** is mature on Apple but there is no Metal runtime on Windows. Emitting them would
+be theater. Instead, the forward is delivered on every backend via the **FP32-precise fused tier** — the strongest moat:
+FP32, no FMA, so it is **bit-exact across ALL backends**, which the fp16 tensor tier structurally cannot be.
 
-These two standalone .cu files remain the gold-standard references the port must match.
+`build_mlp_fwd_fp32` (ckir_mlp.hpp) builds the fused MLP on the **CKIR statement tier** (one workgroup = one sample, one
+thread = one output feature, activations ping-pong in shared across all layers — the fusion; ascending `acc = acc + a·w`
+fold, precise ⇒ no FMA). ONE builder → the *generic* per-backend emitters lower it to all five:
+
+| backend | how verified here | result |
+|---|---|---|
+| CPU oracle (`eval_cpu_kernel`) | vs `mlp_forward_ref` | **bit-exact** (512 `==`) |
+| **Vulkan** | emit GLSL → shaderc → dispatch → compare | **bit-exact vs oracle** |
+| **DX12** | emit HLSL → DXC → dispatch → compare | **bit-exact, identical to Vulkan** |
+| **CUDA** | emit → nvcc `-arch=sm_89 -c` | compiles clean |
+| **WGSL** | emit → landmark-validate | well-formed (no imperative WebGPU ctx here) |
+| **MSL** | emit → landmark-validate | well-formed (no Metal on Windows) |
+
+Vulkan == DX12 == oracle **bit-for-bit** — the `{1..16}` cross-backend determinism moat, now on the fused MLP. crd-kir
+1234/127 + gpu-context-vulkan/dx12 `[mlp]` green; all touched files tidy-clean. Tensor tier (the *crush*) stays CUDA
+wmma + Vulkan coopmat2; FP32-precise tier is the *portable+bit-exact* companion.
+
+## ✅ CKIR PORT — increment 4: the BACKWARD pass, DETERMINISTIC dW (2026-07-14)
+
+The training half is now in CKIR, statement-tier, and holds the determinism moat the standalone could not. Two builders
+(ckir_mlp.hpp), no atomics:
+
+- **Kernel A `build_mlp_bwd_dz`** — the per-sample activation-gradient chain. One workgroup = one sample; walk layers
+  backward computing `dz[l]` on-chip (ReLU′ mask via `select(a[l+1]>0, g, 0)`), `da = dz·Wᵀ` → next g; write each `dz[l]`
+  to `dz_all`.
+- **Kernel B `build_mlp_bwd_dw`** — the **deterministic** weight-gradient reduction: `dW[l][k][n] = Σ_r a[l][r][k]·dz[l][r][n]`
+  summed in **ascending sample order** (fixed order, NO atomics). The standalone's fp32-`atomicAdd` dW was non-deterministic;
+  this is bit-exact **and run-to-run bit-identical**.
+
+| check | result |
+|---|---|
+| Kernel A dz vs CPU oracle (`mlp_backward_ref`) | **bit-exact** |
+| Kernel B dW vs CPU oracle | **bit-exact** |
+| **Vulkan** dz + dW vs oracle | **bit-exact** (`bad==0`) |
+| **Vulkan** dW run-to-run | **BIT-IDENTICAL** (`det==0`) |
+
+Both built on the CKIR statement tier ⇒ the generic emitters lower them to every backend (same as the forward FP32 tier).
+Tests: `test_ckir_mlp.cpp` (backward CPU, 28k `==`), `test_vulkan_context.cpp` `[mlp]` (Vulkan run + determinism). crd-kir
+28883/128 green on MSVC + clang-cl; tidy-clean.
+
+## ✅ CKIR PORT — increment 5: DX12 backward + CUDA tensor backward (2026-07-14)
+
+- **Backward on DX12** — the FP32-precise statement-tier backward (both builders) now runs on DX12 too:
+  `bad_dz==0`, `bad_dw==0`, **bit-identical to Vulkan + the oracle**. The deterministic dW reduction is portable across
+  both runnable statement-tier backends.
+- **CUDA tensor backward** — `emit_fused_mlp_bwd_cuda` (ckir_mlp.hpp) emits `reduce_dw` + the fused wmma backward
+  (per-sample dz mask + on-chip da wmma chain + dW = aᵀ·dz wmma reduced over the batch → fp32 atomic into NGROUP
+  partials), the CKIR mirror of the forward tensor recipe. Generated `ckir_mlp_bwd_gen.cu` compiles (nvcc) and, via
+  `ckir_mlp_bwd_bench.cu`, **reproduces the crush: 1.94× vs cuBLAS** (cuBLAS at its best split-K algo), dW correct
+  (`rel=5e-5`). ⚠ fp32-atomic dW ⇒ the *crush* tier (per-backend, not bit-exact); the FP32 statement-tier backward is the
+  bit-exact/deterministic companion.
+- **Vulkan coopmat2 backward** — not built: a coopmat2 batch-reduction dW is disproportionately hard, and Vulkan already
+  has the deterministic FP32 backward. Optional follow-on.
+
+## Status — the full NRC moat in CKIR
+
+| pass | tensor tier (CRUSH) | FP32-precise tier (PORTABLE + BIT-EXACT) |
+|---|---|---|
+| Forward | CUDA wmma **2.41×** · Vulkan coopmat2 | statement-tier: Vulkan+DX12 **run bit-exact**, CUDA nvcc, WGSL/MSL emit |
+| Backward | **CUDA wmma 1.94×** (CKIR) | statement-tier: **Vulkan + DX12 run bit-exact + deterministic dW** |
+
+The full NRC moat — forward inference crush **and** backward training crush **and** deterministic bit-exact training — is
+now authored in CKIR. The two standalone .cu files remain the gold-standard references the tensor path matches.

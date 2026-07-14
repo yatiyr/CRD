@@ -207,6 +207,8 @@ inline bool emit_compute_kernel_wgsl(const KGraph& g, const KEntry& entry, crd::
         case KOp::Sqrt: fn1("sqrt"); break;
         case KOp::Sin: fn1("sin"); break;
         case KOp::Cos: fn1("cos"); break;
+        case KOp::Exp: fn1("exp"); break;
+        case KOp::Pow: fn2("pow"); break;
         case KOp::Floor: fn1("floor"); break;
         case KOp::Add: bin(" + "); break;
         case KOp::Sub: bin(" - "); break;

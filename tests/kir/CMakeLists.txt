@@ -22,6 +22,10 @@ add_executable(crd-kir-tests
     test_ckir_sort.cpp
     test_ckir_subgroup.cpp
     test_ckir_mlp.cpp
+    test_ckir_svgf.cpp
+    test_ckir_ddgi.cpp
+    test_ckir_restir.cpp
+    test_ckir_atmosphere.cpp
 )
 
 target_link_libraries(crd-kir-tests PRIVATE
