@@ -114,6 +114,141 @@ inline bool emit_elementwise_cuda(const KGraph& g, int output, crd::memory::IAll
     return true;
 }
 
+// B-cmp: emit an IMPERATIVE compute KERNEL (shared memory + barriers — `KEntry.is_kernel()`) as CUDA C++ (`.cu`, NVRTC →
+// PTX). Mirror of emit_compute_kernel_glsl. Storage buffers become TYPED raw pointer params (`float*`/`unsigned*`/`int*`,
+// binding order — CUDA has typed pointers, unlike HLSL's raw UAV); shared arrays are `__shared__`; the barrier is
+// `__syncthreads()`; LocalInvocationIndex is `threadIdx.x` (1-D workgroup). CUDA is the ONE backend that can be
+// CPU-oracle bit-exact (`--fmad=false --prec-div=true`) once dispatched on real hardware (ADR-0098 Part C).
+inline bool emit_compute_kernel_cuda(const KGraph& g, const KEntry& entry, crd::memory::IAllocator* scratch, GlslKernel& out)
+{
+    using namespace glsl_detail;
+    if (!entry.is_kernel()) { return false; }
+    const int                n = g.size();
+    crd::containers::String& s = out.source;
+    s.clear();
+    out.n_inputs = 0;
+
+    const auto cty = [](DType d) -> const char* { if (dt_is_uint(d)) { return "unsigned"; } return dt_is_int(d) ? "int" : "float"; };
+    crd::containers::Array<crd::u8> matd(scratch); // Materialized (frozen) nodes emit a `t<node>` reference, not their inline expr
+    matd.resize(static_cast<crd::usize>(n), 0);
+
+    s.append("extern \"C\" __global__ void ckir(");
+    bool first = true;
+    for (int i = 0; i < n; ++i)
+    {
+        const KNode& nd = g.node(i);
+        if (nd.op == KOp::BufferDecl)
+        {
+            if (!first) { s.append(", "); }
+            first = false;
+            if (nd.axes == 3U) { s.append("volatile "); } // COHERENT buffer (lookback/spin cells): defeat load hoisting
+            s.append(cty(nd.dtype())); s.append("* buf"); app_uint(s, nd.iidx);
+        }
+    }
+    s.append(") {\n");
+    for (int i = 0; i < n; ++i) // __shared__ arrays
+    {
+        const KNode& nd = g.node(i);
+        if (nd.op == KOp::SharedDecl)
+        {
+            s.append("  __shared__ "); s.append(cty(nd.dtype())); s.append(" sh"); app_uint(s, i);
+            s.append("["); app_uint(s, nd.iidx + static_cast<int>(nd.axes)); s.append("];\n");
+        }
+    }
+
+    bool       ok = true;
+    const auto ev = [&](auto&& self, int node) -> void {
+        if (matd[static_cast<crd::usize>(node)] != 0U) { s.append("t"); app_uint(s, static_cast<crd::u32>(node)); return; }
+        const KNode& nd  = g.node(node);
+        const auto   bin = [&](const char* o) { s.append("("); self(self, nd.a); s.append(o); self(self, nd.b); s.append(")"); };
+        const auto   fn2 = [&](const char* f) { s.append(f); s.append("("); self(self, nd.a); s.append(", "); self(self, nd.b); s.append(")"); };
+        const auto   fn1 = [&](const char* f) { s.append(f); s.append("("); self(self, nd.a); s.append(")"); };
+        switch (nd.op)
+        {
+        case KOp::Const:
+            if (dt_is_uint(nd.dtype())) { app_uint(s, static_cast<int>(nd.cval)); s.append("u"); }
+            else if (dt_is_int(nd.dtype())) { app_uint(s, static_cast<int>(nd.cval)); }
+            else { app_flit(s, nd.cval); s.append("f"); }
+            break;
+        case KOp::Builtin:
+            if (static_cast<KBuiltin>(nd.iidx) == KBuiltin::LocalInvocationIndex) { s.append("threadIdx.x"); }
+            else if (static_cast<KBuiltin>(nd.iidx) == KBuiltin::WorkgroupIndex) { s.append("blockIdx.x"); }
+            else { ok = false; s.append("0u"); }
+            break;
+        case KOp::KernelLoopVar: s.append("lv"); app_uint(s, nd.a); break;
+        case KOp::BufferLoad: s.append("buf"); app_uint(s, g.node(nd.a).iidx); s.append("["); self(self, nd.b); s.append("]"); break;
+        case KOp::SharedLoad: s.append("sh"); app_uint(s, nd.a); s.append("["); self(self, nd.b); s.append("]"); break;
+        case KOp::Cast: s.append(dt_is_uint(nd.dtype()) ? "(unsigned)(" : dt_is_int(nd.dtype()) ? "(int)(" : "float("); self(self, nd.a); s.append(")"); break; // NOLINT(readability-avoid-nested-conditional-operator) 3-way cast-syntax select
+        case KOp::Neg: s.append("(-"); self(self, nd.a); s.append(")"); break;
+        case KOp::Abs: fn1("fabsf"); break;
+        case KOp::Sqrt: fn1("sqrtf"); break;
+        case KOp::Sin: fn1("sinf"); break;
+        case KOp::Cos: fn1("cosf"); break;
+        case KOp::Floor: fn1("floorf"); break;
+        case KOp::Add: bin(" + "); break;
+        case KOp::Sub: bin(" - "); break;
+        case KOp::Mul: bin(" * "); break;
+        case KOp::Div: bin(" / "); break;
+        case KOp::Min: fn2("fminf"); break;
+        case KOp::Max: fn2("fmaxf"); break;
+        case KOp::Mod: if (dt_is_int(nd.dtype()) || dt_is_uint(nd.dtype())) { bin(" % "); } else { fn2("fmodf"); } break;
+        case KOp::CmpLt: bin(" < "); break;
+        case KOp::CmpLe: bin(" <= "); break;
+        case KOp::CmpGt: bin(" > "); break;
+        case KOp::CmpGe: bin(" >= "); break;
+        case KOp::CmpEq: bin(" == "); break;
+        case KOp::CmpNe: bin(" != "); break;
+        case KOp::BitAnd: bin(" & "); break;
+        case KOp::BitOr: bin(" | "); break;
+        case KOp::BitXor: bin(" ^ "); break;
+        case KOp::Shl: bin(" << "); break;
+        case KOp::Shr: bin(" >> "); break;
+        case KOp::Fma: s.append("fmaf("); self(self, nd.a); s.append(", "); self(self, nd.b); s.append(", "); self(self, nd.c); s.append(")"); break;
+        case KOp::Select: s.append("(("); self(self, nd.c); s.append(") ? "); self(self, nd.a); s.append(" : "); self(self, nd.b); s.append(")"); break; // a=true b=false c=cond
+        case KOp::BitNot: s.append("(~"); self(self, nd.a); s.append(")"); break;
+        case KOp::BitCount: s.append("__popc("); self(self, nd.a); s.append(")"); break;
+        // subgroup (warp) ops — CUDA's NATIVE forms: full-mask sync variants; the 32-lane subgroup is the hardware warp.
+        case KOp::SubgroupBallot: s.append("__ballot_sync(0xffffffffu, ("); self(self, nd.a); s.append(") != 0u)"); break;
+        case KOp::SubgroupBallotExclCount: s.append("__popc(("); self(self, nd.a); s.append(") & ((1u << (threadIdx.x & 31u)) - 1u))"); break;
+        case KOp::SubgroupMatch: s.append("__match_any_sync(0xffffffffu, "); self(self, nd.a); s.append(")"); break; // hardware match
+        default: ok = false; s.append("0"); break;
+        }
+    };
+    const auto emit_body = [&](auto&& self_b, int begin, int count) -> void {
+        int i = begin;
+        while (i < begin + count) // a For/If body lives CONTIGUOUSLY after it → recurse then SKIP past it (never re-emit)
+        {
+            const KStmt& st = g.stmt(i);
+            switch (st.kind)
+            {
+            case KStmtKind::BufferStore: s.append("  buf"); app_uint(s, g.node(st.target).iidx); s.append("["); ev(ev, st.index); s.append("] = "); ev(ev, st.value); s.append(";\n"); ++i; break;
+            case KStmtKind::SharedStore: s.append("  sh"); app_uint(s, st.target); s.append("["); ev(ev, st.index); s.append("] = "); ev(ev, st.value); s.append(";\n"); ++i; break;
+            case KStmtKind::Barrier: if (st.scope == BarrierScope::Buffer) { s.append("  __threadfence();\n"); } s.append("  __syncthreads();\n"); ++i; break;
+            case KStmtKind::Materialize: // FREEZE st.value into a temp NOW (survives a later shared overwrite)
+                if (matd[static_cast<crd::usize>(st.value)] == 0U)
+                {
+                    s.append("  "); s.append(cty(g.node(st.value).dtype())); s.append(" t"); app_uint(s, static_cast<crd::u32>(st.value)); s.append(" = ");
+                    ev(ev, st.value); s.append(";\n");
+                    matd[static_cast<crd::usize>(st.value)] = 1U;
+                }
+                ++i;
+                break;
+            case KStmtKind::For: s.append("  for (unsigned lv"); app_uint(s, i); s.append(" = 0u; lv"); app_uint(s, i); s.append(" < (unsigned)("); ev(ev, st.value); s.append("); ++lv"); app_uint(s, i); s.append(") {\n"); self_b(self_b, st.body_begin, st.body_count); s.append("  }\n"); i = st.body_begin + st.body_count; break;
+            case KStmtKind::If: s.append("  if ("); ev(ev, st.value); s.append(") {\n"); self_b(self_b, st.body_begin, st.body_count); s.append("  }\n"); i = st.body_begin + st.body_count; break;
+            case KStmtKind::SpinUntilNonzero: s.append("  while (buf"); app_uint(s, g.node(st.target).iidx); s.append("["); ev(ev, st.index); s.append("] == 0u) { __nanosleep(64); }\n"); ++i; break; // guarded spin (diagnosable, never deadlocks); volatile re-read, NO per-iter fence
+            case KStmtKind::SharedAtomicAdd: s.append("  atomicAdd(&sh"); app_uint(s, st.target); s.append("["); ev(ev, st.index); s.append("], "); ev(ev, st.value); s.append(");\n"); ++i; break;
+            case KStmtKind::BufferAtomicAdd: s.append("  atomicAdd(&buf"); app_uint(s, g.node(st.target).iidx); s.append("["); ev(ev, st.index); s.append("], "); ev(ev, st.value); s.append(");\n"); ++i; break;
+            case KStmtKind::ForBreakIf: s.append("  if (("); ev(ev, st.value); s.append(") != 0u) break;\n"); ++i; break;
+            case KStmtKind::BufferTicket: s.append("  if (threadIdx.x == 0u) { sh"); app_uint(s, st.value); s.append("[0] = atomicAdd((unsigned*)&buf"); app_uint(s, g.node(st.target).iidx); s.append("["); ev(ev, st.index); s.append("], 1u); }\n"); ++i; break;
+            case KStmtKind::SyncWarp: s.append("  __syncwarp();\n"); ++i; break;
+            }
+        }
+    };
+    emit_body(emit_body, entry.kernel_body_begin, entry.kernel_body_count);
+    s.append("}\n");
+    return ok;
+}
+
 // ── B0 fan-out: the TYPE-AWARE value layer on CUDA, by SCALARIZATION ─────────────────────────────────────────────────
 // CUDA is the odd backend: it has **no native vector arithmetic**. `float3` exists but carries no operators (that is
 // what `helper_math.h` is for), and there is no matrix type at all. So rather than emit a vector runtime into every

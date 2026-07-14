@@ -141,6 +141,135 @@ inline bool emit_elementwise_wgsl(const KGraph& g, int output, crd::memory::IAll
     return true;
 }
 
+// B-cmp: emit an IMPERATIVE compute KERNEL (shared memory + barriers — `KEntry.is_kernel()`) as WGSL (WebGPU). Mirror of
+// emit_compute_kernel_glsl with WGSL's divergences: storage buffers are `@group(0) @binding(N) var<storage, read[_write]>`;
+// shared arrays are `var<workgroup> ... : array<T, len>`; the barrier is `workgroupBarrier()`; LocalInvocationIndex is
+// `@builtin(local_invocation_index)`. ⛔ WGSL has no `?:` — `Select` is `select(false_val, true_val, cond)` (operand order
+// reversed vs the ternary). Kernel comparisons are Bool predicates feeding select/if. Structural-gated; run at Part C.
+inline bool emit_compute_kernel_wgsl(const KGraph& g, const KEntry& entry, crd::memory::IAllocator* scratch, GlslKernel& out)
+{
+    using namespace glsl_detail;
+    if (!entry.is_kernel()) { return false; }
+    const int                n = g.size();
+    crd::containers::String& s = out.source;
+    s.clear();
+    out.n_inputs = 0;
+
+    const auto cty = [](DType d) -> const char* { if (dt_is_uint(d)) { return "u32"; } return dt_is_int(d) ? "i32" : "f32"; };
+
+    for (int i = 0; i < n; ++i) // storage buffers + workgroup arrays (both file-scope in WGSL)
+    {
+        const KNode& nd = g.node(i);
+        if (nd.op == KOp::BufferDecl)
+        {
+            s.append("@group(0) @binding("); app_uint(s, nd.iidx); s.append(") var<storage, ");
+            s.append(nd.axes != 0U ? "read_write" : "read"); s.append("> buf"); app_uint(s, nd.iidx);
+            s.append(" : array<"); s.append(cty(nd.dtype())); s.append(">;\n");
+        }
+        else if (nd.op == KOp::SharedDecl)
+        {
+            s.append("var<workgroup> sh"); app_uint(s, i); s.append(" : array<"); s.append(cty(nd.dtype()));
+            s.append(", "); app_uint(s, nd.iidx + static_cast<int>(nd.axes)); s.append(">;\n");
+        }
+    }
+    s.append("@compute @workgroup_size("); app_uint(s, static_cast<int>(entry.local_size[0]));
+    s.append(", ");                         app_uint(s, static_cast<int>(entry.local_size[1]));
+    s.append(", ");                         app_uint(s, static_cast<int>(entry.local_size[2]));
+    s.append(")\nfn cs_main(@builtin(local_invocation_index) lidx : u32, @builtin(workgroup_id) wgid : vec3<u32>) {\n");
+
+    bool                            ok = true;
+    crd::containers::Array<crd::u8> matd(scratch); // Materialized (frozen) nodes emit `t<node>`, not their inline expr
+    matd.resize(static_cast<crd::usize>(n), 0);
+    const auto ev = [&](auto&& self, int node) -> void {
+        if (matd[static_cast<crd::usize>(node)] != 0U) { s.append("t"); app_uint(s, static_cast<crd::u32>(node)); return; }
+        const KNode& nd  = g.node(node);
+        const auto   bin = [&](const char* o) { s.append("("); self(self, nd.a); s.append(o); self(self, nd.b); s.append(")"); };
+        const auto   fn2 = [&](const char* f) { s.append(f); s.append("("); self(self, nd.a); s.append(", "); self(self, nd.b); s.append(")"); };
+        const auto   fn1 = [&](const char* f) { s.append(f); s.append("("); self(self, nd.a); s.append(")"); };
+        switch (nd.op)
+        {
+        case KOp::Const:
+            if (dt_is_uint(nd.dtype())) { app_uint(s, static_cast<int>(nd.cval)); s.append("u"); }
+            else if (dt_is_int(nd.dtype())) { app_uint(s, static_cast<int>(nd.cval)); s.append("i"); }
+            else { app_flit(s, nd.cval); }
+            break;
+        case KOp::Builtin:
+            if (static_cast<KBuiltin>(nd.iidx) == KBuiltin::LocalInvocationIndex) { s.append("lidx"); }
+            else if (static_cast<KBuiltin>(nd.iidx) == KBuiltin::WorkgroupIndex) { s.append("wgid.x"); }
+            else { ok = false; s.append("0u"); }
+            break;
+        case KOp::KernelLoopVar: s.append("lv"); app_uint(s, nd.a); break;
+        case KOp::BufferLoad: s.append("buf"); app_uint(s, g.node(nd.a).iidx); s.append("["); self(self, nd.b); s.append("]"); break;
+        case KOp::SharedLoad: s.append("sh"); app_uint(s, nd.a); s.append("["); self(self, nd.b); s.append("]"); break;
+        case KOp::Cast: s.append(cty(nd.dtype())); s.append("("); self(self, nd.a); s.append(")"); break;
+        case KOp::Neg: s.append("(-"); self(self, nd.a); s.append(")"); break;
+        case KOp::Abs: fn1("abs"); break;
+        case KOp::Sqrt: fn1("sqrt"); break;
+        case KOp::Sin: fn1("sin"); break;
+        case KOp::Cos: fn1("cos"); break;
+        case KOp::Floor: fn1("floor"); break;
+        case KOp::Add: bin(" + "); break;
+        case KOp::Sub: bin(" - "); break;
+        case KOp::Mul: bin(" * "); break;
+        case KOp::Div: bin(" / "); break;
+        case KOp::Min: fn2("min"); break;
+        case KOp::Max: fn2("max"); break;
+        case KOp::Mod: bin(" % "); break; // WGSL `%` is defined for both integer and float operands
+        case KOp::CmpLt: bin(" < "); break;
+        case KOp::CmpLe: bin(" <= "); break;
+        case KOp::CmpGt: bin(" > "); break;
+        case KOp::CmpGe: bin(" >= "); break;
+        case KOp::CmpEq: bin(" == "); break;
+        case KOp::CmpNe: bin(" != "); break;
+        case KOp::BitAnd: bin(" & "); break;
+        case KOp::BitOr: bin(" | "); break;
+        case KOp::BitXor: bin(" ^ "); break;
+        case KOp::Shl: bin(" << "); break;
+        case KOp::Shr: bin(" >> "); break;
+        case KOp::Fma: s.append("fma("); self(self, nd.a); s.append(", "); self(self, nd.b); s.append(", "); self(self, nd.c); s.append(")"); break;
+        case KOp::Select: // select(false_val, true_val, cond) — operand order reversed vs a ternary; cond must be bool
+            s.append("select("); self(self, nd.b); s.append(", "); self(self, nd.a); s.append(", ");
+            if (g.node(nd.c).dtype() == DType::Bool) { self(self, nd.c); } else { s.append("bool("); self(self, nd.c); s.append(")"); }
+            s.append(")");
+            break;
+        default: ok = false; s.append("0"); break;
+        }
+    };
+    const auto emit_body = [&](auto&& self_b, int begin, int count) -> void {
+        int i = begin;
+        while (i < begin + count) // a For/If body lives CONTIGUOUSLY after it → recurse then SKIP past it (never re-emit)
+        {
+            const KStmt& st = g.stmt(i);
+            switch (st.kind)
+            {
+            case KStmtKind::BufferStore: s.append("  buf"); app_uint(s, g.node(st.target).iidx); s.append("["); ev(ev, st.index); s.append("] = "); ev(ev, st.value); s.append(";\n"); ++i; break;
+            case KStmtKind::SharedStore: s.append("  sh"); app_uint(s, st.target); s.append("["); ev(ev, st.index); s.append("] = "); ev(ev, st.value); s.append(";\n"); ++i; break;
+            case KStmtKind::Barrier: s.append(st.scope == BarrierScope::Buffer ? "  storageBarrier();\n" : "  workgroupBarrier();\n"); ++i; break;
+            case KStmtKind::Materialize: // FREEZE st.value into a temp NOW (survives a later shared overwrite)
+                if (matd[static_cast<crd::usize>(st.value)] == 0U)
+                {
+                    s.append("  let t"); app_uint(s, static_cast<crd::u32>(st.value)); s.append(" : "); s.append(cty(g.node(st.value).dtype())); s.append(" = ");
+                    ev(ev, st.value); s.append(";\n");
+                    matd[static_cast<crd::usize>(st.value)] = 1U;
+                }
+                ++i;
+                break;
+            case KStmtKind::For: s.append("  for (var lv"); app_uint(s, i); s.append(" : u32 = 0u; lv"); app_uint(s, i); s.append(" < u32("); ev(ev, st.value); s.append("); lv"); app_uint(s, i); s.append(" = lv"); app_uint(s, i); s.append(" + 1u) {\n"); self_b(self_b, st.body_begin, st.body_count); s.append("  }\n"); i = st.body_begin + st.body_count; break;
+            case KStmtKind::If: s.append("  if ("); ev(ev, st.value); s.append(") {\n"); self_b(self_b, st.body_begin, st.body_count); s.append("  }\n"); i = st.body_begin + st.body_count; break;
+            case KStmtKind::SpinUntilNonzero: s.append("  loop { if (buf"); app_uint(s, g.node(st.target).iidx); s.append("["); ev(ev, st.index); s.append("] != 0u) { break; } }\n"); ++i; break;
+            case KStmtKind::SharedAtomicAdd: s.append("  atomicAdd(&sh"); app_uint(s, st.target); s.append("["); ev(ev, st.index); s.append("], "); ev(ev, st.value); s.append(");\n"); ++i; break;
+            case KStmtKind::BufferAtomicAdd: s.append("  atomicAdd(&buf"); app_uint(s, g.node(st.target).iidx); s.append("["); ev(ev, st.index); s.append("], "); ev(ev, st.value); s.append(");\n"); ++i; break;
+            case KStmtKind::ForBreakIf: s.append("  if (bool("); ev(ev, st.value); s.append(")) { break; }\n"); ++i; break; // bool() accepts bool AND u32 (type-strict WGSL)
+            case KStmtKind::BufferTicket: s.append("  if (lidx == 0u) { sh"); app_uint(s, st.value); s.append("[0] = atomicAdd(&buf"); app_uint(s, g.node(st.target).iidx); s.append("["); ev(ev, st.index); s.append("], 1u); }\n"); ++i; break;
+            case KStmtKind::SyncWarp: s.append("  workgroupBarrier();\n"); ++i; break; // no subgroup barrier in core WGSL — conservative
+            }
+        }
+    };
+    emit_body(emit_body, entry.kernel_body_begin, entry.kernel_body_count);
+    s.append("}\n");
+    return ok;
+}
+
 // ── B0 fan-out: the TYPE-AWARE vec/mat/bool/struct emitter, mirroring `emit_vec_glsl` ────────────────────────────────
 // WGSL's real divergences from GLSL, each of which a naive mirror gets wrong:
 //   · no `?:` ternary            -> `select(false_val, true_val, cond)`  (note the operand order)

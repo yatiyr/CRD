@@ -58,7 +58,7 @@ TEST_CASE("B7-a: lower::classify assigns the cheapest-correct-stage frequency", 
     CHECK(lo::entry_frequency(fe, freq.data()) == lo::Frequency::Fragment);
 }
 
-TEST_CASE("B7-a: lower::classify — a vertex entry's stage inputs are per-vertex", "[kir][lower][classify]")
+TEST_CASE("B7-a: lower::classify -- a vertex entry's stage inputs are per-vertex", "[kir][lower][classify]")
 {
     crd::memory::TlsfAllocator alloc(8U << 20U);
     kir::KGraph                g(&alloc);

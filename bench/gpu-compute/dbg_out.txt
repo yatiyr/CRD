@@ -1,0 +1,12 @@
+# CKIR ONESWEEP (CUDA backend, __match_any_sync) vs CUB DeviceRadixSort — NVIDIA GeForce RTX 4070 Ti SUPER
+# ONESWEEP-A (2048): sorted=1 permutation=1
+CKIR-ONESWEEP-A        1.69637 ms   9890.1 Mkeys/s
+# ONESWEEP-B (4096): sorted=1 permutation=1
+CKIR-ONESWEEP-B        1.47141 ms   11402.1 Mkeys/s
+# ONESWEEP-C (8192): sorted=1 permutation=1
+CKIR-ONESWEEP-C        1.60213 ms   10471.8 Mkeys/s
+# kprof clear_b    0.01160 ms
+# kprof ghist_b    0.10917 ms
+# kprof gbase      0.00434 ms
+# kprof clr+sb0    0.00204 ms
+CUDA ERROR cub upload: an illegal memory access was encountered

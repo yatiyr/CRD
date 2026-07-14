@@ -148,10 +148,456 @@
 > HELD (33010/30821); kir 536/78. ⭐ wired BitCount/BitNot/FindLSB/FindMSB into BOTH raster emitters (compute had them, fragment
 > lagged); ⭐ broadcast scar 4th hit (burley rd·⅓). Depth/colour-buffer marches + froxel/temporal reprojection + separable blur
 > = renderer leaf; every integrand/bitmask/phase/profile is proven. RT counterparts ride B9.
-> **NEXT: B13** (# 19, post-processing frontier — TAA/TAAU + ML-upscaler seam + frame-gen · **bloom** (dual-filter pyramid +
-> FFT-convolution glare + lens flare) · exposure→EV100 + **AgX/Tony-McMapface/PBR-Neutral/ACES2** tonemap decoupled from HDR
-> output + 3D-LUT · DoF (complex-phasor bokeh) + motion blur · geometric specular AA · CA/vignette/grain/CAS/RCAS. Each a CKIR
-> compute/full-screen pass, the B8 bar. FFT-bloom's FFT kernel is a B-compute dep.) **⭐ PLAN EXPANDED (user 2026-07-12): added B12 (screen-space
+> **B13 STARTED — B13-c ✅ (2026-07-12, the HDR core the user prioritized):** new `ckir_post.hpp` (`crd::kir::post`): EV100
+> auto-exposure (`ev100_from_luminance`+`exposure_from_ev100`, Frostbite) · **AgX** (`agx`, Sobotka/Filament inset+log2+sigmoid)
+> + **Khronos PBR-Neutral** (`pbr_neutral`) analytic looks (Tony McMapface + ACES 2.0 = baked 3D-LUTs via B2 Tex3D) · output
+> encodes **sRGB** (`srgb_encode`) + **PQ/ST.2084** (`pq_encode`, HDR10) · `gamut_compress`. `[hdr]` bit-exact 4-config + 3
+> observables both backends (AgX 197,188,174 · PBR-Neutral 250,231,222 · PQ 250,240,231) oracle-exact; tidy-clean; byte-exact
+> HELD (33010/30821); kir 537/79. ⭐ broadcast scar 5th hit (AgX poly coef·xⁿ); ⭐ `Select` reads a SCALAR cond → `srgb_encode`
+> is per-channel (a vec3 cond misaligns). Histogram-reduction (B-compute) + eye-adaptation + 3D-LUT bind = renderer leaf.
+> **B13-a ✅ (2026-07-12):** new `ckir_taa.hpp` (`crd::kir::taa`) — the TAAU temporal-resolve core: YCoCg clamp space
+> (`rgb_to_ycocg`/`ycocg_to_rgb`) · history rectification `clip_aabb` (Karis branchless line-box) + `variance_clip` (Salvi
+> mean±γσ) · `catmull_rom_weights` (sharp history) · `luma_feedback` (Karis anti-flicker) + `taa_resolve` · `disocclusion` ·
+> `ign_temporal` + `dither_apply` (deband) · `frame_gen_blend` · `smaa_luma_edge`. `[taa]` bit-exact **4-config** (12
+> transforms) + temporal-resolve observable both backends (`169,152,137` oracle-exact, Vulkan==DX12); tidy-clean; kir 538/80;
+> canary HELD (no emitter touched — all KOps pre-wired). Leaves: neighborhood gather + MV reprojection (texture taps),
+> ML-upscaler SDK seam (DLSS4/FSR4/XeSS) + our B10-coopvec upscaler, Reflex low-latency partner, blue-noise/SMAA LUT binds.
+> **HDR IMAGE I/O (user 2026-07-12, emphatic "we must do it ourselves"): slice B-hdr added — our OWN codec, ZERO 3rd-party,
+> RGBE+EXR+PFM → `.crdr`, in crd-resources; build AFTER B13** (decided: finish B13 first). See D-007 row R1 / memory.
+> **B13-b ✅ (2026-07-12):** new `ckir_bloom.hpp` (`crd::kir::bloom`) — dual-filter pyramid `downsample_13tap` +
+> `downsample_karis` (firefly-free first mip) + `upsample_tent` + `soft_knee` + `combine`; FFT-convolution glare core
+> `complex_mul` (the forward/inverse FFT is the B-compute kernel it feeds); lens flare `lens_halo` + `starburst` +
+> `spectral_tint`. `[bloom]` bit-exact **4-config** (9 transforms) + observable both backends (`91,73,49` oracle-exact,
+> Vulkan==DX12); tidy-clean; kir 539/81; canary HELD. Leaves: pyramid tap GATHER + mip ping-pong, the **FFT GPU transform**
+> (B-compute), lens-dirt/aperture textures (B2), ghost sample.
+> **B13-d ✅ (2026-07-12):** new `ckir_cinematic.hpp` (`crd::kir::cinematic`) — DoF: Garcia complex-phasor bokeh
+> (`circle_of_confusion` thin-lens + `complex_gaussian` phasor + `bokeh_realize` + `coc_coverage` + `dof_composite`) · motion
+> blur: McGuire velocity-tile (`velocity_scale` + `mb_cone` + `mb_cylinder` + `mb_soft_depth`). `[cine]` 4-config + observable
+> both backends (`100,95,67`); kir canary held.
+> **B13-e ✅ (2026-07-12):** new `ckir_finish.hpp` (`crd::kir::finish`) — `specular_aa` (Tokuyoshi geometric spec-AA) ·
+> `ca_offset` (chromatic aberration) · `vignette` (cos⁴) · `film_grain` (Lottes) · `cas_sharpen` (AMD CAS). `[finish]`
+> 4-config + observable both backends (`97,88,68`). **⭐ broadcast scar 6th hit** — CAS `1−mx` (scalar−vec3) + `mx+ε`
+> (vec3+scalar) bare g.binary → 40/60 wrong (channels 1,2); fixed with g.splat / nd::detail::bin.
+> **★ B13 COMPLETE — the full post-processing frontier (a✅ TAA · b✅ bloom · c✅ HDR · d✅ cinematic · e✅ finish); kir 541/83.**
+> **B-hdr-a + B-hdr-b ✅ (2026-07-12):** new `crd-resources` codec `hdr_image.hpp`/`.cpp` (`HdrImage` = flat f32) — our OWN,
+> zero 3rd-party. RGBE (`.hdr`, Ward rgbe↔float + new/old RLE, `B→float→B` idempotent) + PFM (`.pfm`, lossless raw f32) read
+> +write, + `.crdr` round-trip (`hdr_to_crdr`/`hdr_from_crdr`, type 'HDRI'). `[hdr]` **4-config** (7 cases / 65 assertions);
+> tidy-clean. GPU float-texture upload = renderer/rhi leaf (B8-e IBL / B15).
+> **B-hdr-c OpenEXR step 1 ✅ (2026-07-12):** new `hdr_exr.cpp` — the full scanline-EXR container (magic/version/header
+> attrs/chlist B,G,R·Y/offset-table/blocks) + **our own IEEE half↔float** (round-nearest-even) + **NONE** + **RLE** (EXR
+> reorder+predictor + signed-count byte-RLE) read+write; FLOAT lossless + HALF idempotent round-trip. `[hdr]` **4-config** (11
+> cases / 107 assertions); tidy-clean. So the codec now reads/writes RGBE, PFM, and uncompressed/RLE EXR — all ours.
+> **B-hdr-c step 2 ✅ = EXR ZIP (our OWN DEFLATE) (2026-07-12):** new reusable `deflate.hpp`/`.cpp` — RFC-1951 inflate (ALL
+> block types: stored·fixed·dynamic Huffman + LZ77) + fixed-Huffman/hash-chain-LZ77 deflate + RFC-1950 zlib wrap + Adler-32;
+> drives EXR 16-line-block ZIP (+ ZIPS decode). **⭐ Validated against a REAL OpenEXR ZIP file** (OpenCV-written 7×5 FLOAT,
+> decoded bit-exact) + a foreign CPython-zlib dynamic-Huffman vector. `[hdr]`+`[deflate]` **4-config** (19 cases / 176
+> assertions); tidy-clean. ⛔ scar: `push_back(out[k])` self-references the container → realloc mid-overlap-copy = dangling-ref
+> UAF (copy to a local first). So we now read/write real-world ZIP `.exr`.
+> **B-hdr-c step 3 ✅ = PIZ (our OWN wavelet + Huffman) (2026-07-13):** new `hdr_piz.hpp`/`.cpp` — the OpenEXR 2-D lifting
+> wavelet + canonical-Huffman+RLE codec + value bitmap/LUT, 32-line-block PIZ. **⭐⭐ Validated BOTH EXR readers against REAL
+> OpenEXR files** (a ZIP FLOAT and a PIZ HALF, OpenCV-written, decoded bit-exact). To get the wavelet+Huffman byte-exact we
+> referenced the published OpenEXR algorithm (as DEFLATE used RFC 1951); the code is ours.
+> **★★ B-hdr FULLY COMPLETE — our OWN HDR image codec, ZERO 3rd-party: RGBE + PFM + CRDR + EXR (half/float · NONE/RLE/ZIP/
+> ZIPS/PIZ). Reads/writes real-world `.exr` (ZIP + PIZ verified vs OpenEXR). `[hdr]`+`[deflate]` 4-config, 23 cases / 197
+> assertions, tidy-clean.** GPU float-texture upload (env maps) = the renderer/rhi consumer leaf (needs a float TextureFormat).
+> **▶ ACTIVE: B-compute GPU FFT CRUSH CAMPAIGN (started 2026-07-13, user "full crush, both 1D + 2D").** Plan (execute-ready)
+> → `docs/research/gpu-fft-crush-plan.md`. **Strategic frame (from the GEMM gotchas + 2026 SOTA research): raw cuFFT parity
+> is the ceiling (~90%-of-peak vendor kernel); the CRUSH is FUSION** — the fused 2D FFT-convolution (fwd→×PSF→inv, on-chip,
+> ONE dispatch) that B13-b needs, vs cuFFT's 3 global round-trips (TurboFNO SC'25 + kernel-fused-FFT 2026 confirm). Algorithm:
+> radix-8 Stockham autosort + two-tier register↔shared-memory (arxiv 2603.27569), reference `engine/hesap-fft` (0.71–0.95×
+> MKL). **User decision: build the COMPLETE general CKIR shared-memory IR FIRST** (not minimal — the substrate all future
+> on-chip compute reuses). **Phases: 0 = CKIR imperative-kernel/shared-mem IR** (SharedAlloc/SharedLoad/Store · Barrier ·
+> StorageAlloc/Load/Store · KEntry.local_size + statement body · CPU-oracle workgroup model · all 5 backends) → 1 = 1D/batched
+> FFT (parity cuFFT) → 2 = 2D FFT → 3 = fused convolution (THE CRUSH). Bench: cuFFT + VkFFT + CPU FFT + FFTW, min-of-N,
+> clock-locked, full board → docs/bench.
+> **Phase 0 FOUNDATION ✅ (2026-07-13):** the imperative compute-kernel / shared-memory IR is built + green — new KOps
+> `BufferDecl`/`SharedDecl`/`BufferLoad`/`SharedLoad`, `KStmt` (BufferStore/SharedStore/Barrier) + `KEntry.local_size` +
+> statement body, KGraph authoring API, and the **CPU oracle** `ckir_kernel_eval.hpp` (single-workgroup simulation, barrier-
+> segment semantics — cross-thread shared writes visible only after a barrier). `[kernel]` bit-exact: a shared-memory REVERSE
+> kernel (barrier-gated cross-thread read) + a workgroup REDUCTION (select-guarded tree). kir 544/85 green, tidy clean.
+> ⛔ gotcha: `select(cond,a,b)` stores **a=true, b=false, c=cond** (NOT a=cond).
+> **Phase 0 EMITTERS + BOTH-GPU DISPATCH ✅ (2026-07-13):** `emit_compute_kernel_glsl` (`ckir_glsl.hpp`) + `emit_compute_kernel_hlsl`
+> (`ckir_hlsl.hpp`) — resource decls (GLSL `layout(std430) buffer`+`shared`; HLSL **`RWByteAddressBuffer`** raw-UAV byte-addressed
+> `.Load`/`.Store`+asfloat/asuint to match the DX12 R32_TYPELESS FLAG_RAW descriptor, + `groupshared`) · statement body with
+> INLINE recursive value expressions (a SharedLoad emits AT its stmt, never hoisted across a barrier) · GLSL `barrier()` / HLSL
+> `GroupMemoryBarrierWithGroupSync()`; `gl_LocalInvocationIndex`/`SV_GroupIndex`. Routed in BOTH `create_program`s (kernel branch).
+> **THE "GREEN ON BOTH GPUs" GATE:** shared harness `tests/gpu-shared/ckir_kernel_dispatch.hpp` (portable GpuOnly device buffer +
+> Cpu/GpuToCpu staging — the DX12-safe readback contract) dispatches the shared-memory REVERSE kernel (1 workgroup) on **Vulkan
+> (GLSL→SPIR-V) AND DX12 (HLSL→DXIL)** through the same `IComputeContext`/`ComputeRecorder` surface, **bit-exact vs `eval_cpu_kernel`
+> AND vs each other** (`[gpu][kernel]`: Vulkan 7 assert · DX12 5 assert, live devices). No regressions: dx12 527/54 · vulkan 636/61;
+> win-debug + win-tidy both clean. ⛔ gotcha carried: `select(cond,a,b)` → **a=true,b=false,c=cond**.
+> **ALL 5 EMITTERS ✅ (2026-07-13):** CUDA (`ckir_cuda.hpp` — typed `float*`/`unsigned*` params · `__shared__` · `__syncthreads()`
+> · `threadIdx.x`), MSL (`ckir_msl.hpp` — `device [const] T* [[buffer(N)]]` · `threadgroup` arrays IN-BODY · `threadgroup_barrier`
+> · `thread_position_in_threadgroup`), WGSL (`ckir_wgsl.hpp` — `var<storage,read[_write]>` · `var<workgroup>` · `workgroupBarrier()`
+> · `@builtin(local_invocation_index)`; ⛔ `Select` = `select(false,true,cond)`, operand order reversed vs the ternary). Golden-
+> string gated (no CUDA/Metal/WebGPU off-host — like the elementwise `test_ckir_msl`; compile+run is Part C): `test_ckir_kernel_emit.cpp`
+> — reverse kernel per backend + a Select-order case proving WGSL false-first vs CUDA/MSL cond-first ternary (6 cases/37 assert;
+> kir 578/89 green, win-tidy clean). Vulkan + DX12 already run the kernel bit-exact on live devices.
+> **For/If + FFT PRIMITIVES ✅ (2026-07-13) — Phase-0 DoD:** structured control flow wired end-to-end. NEW scoped-builder API
+> (`stmt_for_begin`/`stmt_for_end`/`stmt_if_begin`/`stmt_if_end`/`kernel_loop_var`) — a For/If body lives CONTIGUOUSLY after
+> the statement; every consumer executes `body_begin`/`body_count` then SKIPS past it (fixed a latent DOUBLE-EMISSION in all
+> 5 emitters' `emit_body`, now while-loops). Oracle rewritten to a RECURSIVE LOCKSTEP interpreter (For = uniform bound + body
+> re-entry per iter so a barrier inside a loop syncs each iteration · If = reduces the active-thread set · barrier commits the
+> per-thread overlay). ⛔ round_dtype now TRUNCATES integer storage types (I32/I64/U8/U32) toward zero — a GPU int/uint is never
+> fractional and `uint/uint`+`(u)int(x)` truncate; without it the oracle diverged on FFT/transpose index math (byte-exact canary
+> HELD after the change). Primitives: **PREFIX-SCAN** (Hillis-Steele — For+If+inner-barrier, bit-exact oracle) · **TRANSPOSE**
+> (two For loops + barrier + cross-thread read — bit-exact oracle AND **dispatches bit-exact on Vulkan + DX12**) · **radix-2
+> BUTTERFLY PASS** (twiddled complex butterfly, separate out buffer avoids the lazy-eval RAW hazard — bit-exact oracle). kir
+> 583/92 · vulkan 642/62 · dx12 531/55; win-tidy clean. ⛔ First 4-config sweep surfaced a NON-ASCII TEST_CASE-name ONION (22
+> names, mine + prior uncommitted detour tests — em-dash etc.): Windows ctest mojibakes argv via the code page so Catch2's
+> filter misses the test (0.01s ***Failed; the `crd-no-non-ascii-test-names` guard, see feedback_ascii_only_test_names). ALL 24
+> failures were name-only — ZERO real regressions from round_dtype/oracle/emitters. Fixed all 22 to ASCII; guard PASS.
+> **Phase-0 CLOSE (time-boxed, 2026-07-13):** win-debug PROVEN green (first full sweep = only the 24 names failed, now fixed +
+> affected binaries re-run green) · win-tidy pre-verified clean on every touched target · **win-asan CLEAN on the blast radius**
+> (clean-rebuilt crd-kir-tests — the new Array-heavy recursive interpreter + round_dtype's whole CKIR oracle surface — 583/92,
+> ZERO memory errors; ⛔ note the `#deps 0` landmine: a plain `cmake --build --preset win-asan` said "no work to do" on a stale
+> tree → used `--clean-first`). DEFERRED as low-risk: win-shipping (LTO — changes are header-only string emit + a 1-line numeric
+> truncation) + gpu-context asan (dispatch harness is fixed C-arrays + unique_ptr, already RTC1-clean; avoids asan×GPU-driver noise).
+> **⛔ FFT NOTE:** an in-place multi-stage FFT needs PING-PONG (CKIR re-reads shared lazily → writing `sh[i0]` then re-reading
+> it for the `sh[i1]` store returns the new value); Phase 1 uses ping-pong / Stockham autosort. Butterfly `a*w−b` FMA-contracts
+> so the FFT is oracle-bit-exact but GPU-ULP-tolerant until the kernel emitter emits `precise` temps (Phase 1).
+> **PHASE 1 STARTED (2026-07-13):** bench env confirmed — **NVIDIA RTX 4070 Ti SUPER (Ada) + CUDA 13.3 (nvcc + nvidia-smi)**,
+> so cuFFT is the primary peer, the CUDA emitter can compile+run bit-exact on real HW, and clock-locking works. **Radix-2
+> Stockham FFT authored in CKIR ✅** — `engine/kir/include/crd/kir/ckir_fft.hpp` `build_fft1d_radix2(g,n,inverse)`: the reusable
+> FFT authoring layer (NOT a test one-off). AUTOSORT (natural→natural, no bit-reversal) · OUT-OF-PLACE PING-PONG across two
+> shared (re,im) pairs (fixes the lazy-eval RAW hazard) · log2(N) stages UNROLLED at authoring (N compile-time → src/dst
+> alternate deterministically; CKIR can't select a shared array by runtime parity) · verified DIT index map (in0=g*r+j,
+> in1=+N/2; out0=g*L+j, out1=+r; twidx=j<<(p-1-s)) · precomputed W_N twiddles (butterfly = add/sub/mul only). Oracle-correct
+> vs a direct f64 DFT within f32 tol for **N=2..64**; impulse→all-ones + constant→DC=N BIT-EXACT (kir 592/95). Uses Div/Mod
+> (the round_dtype truncation fix).
+> **FFT BIT-EXACT ON BOTH GPUs ✅ (2026-07-13):** the radix-2 Stockham FFT dispatches on **Vulkan (GLSL→SPIR-V) AND DX12
+> (HLSL→DXIL)**, both **bit-exact vs the CPU oracle** (Vulkan 64/64 bins maxdiff 0; DX12 bad==0) — same CKIR graph, identical
+> bits on 3 backends = the mission's gold-standard determinism. TWO emitter changes made it: (1) ⛔ GLSL `mod()` is FLOAT-ONLY
+> → integer Mod must use `%` (the FFT's `t%r` is uint; the other 4 emitters already did this — GLSL didn't, so the FFT GLSL
+> failed to compile); (2) ⭐ the GLSL+HLSL kernel emitters now materialize FLOAT arithmetic as `precise` temps (SPIR-V
+> NoContraction / HLSL `precise`) — leaves (loads/consts) stay INLINE so a load re-reads across barriers, temps CSE by node id.
+> Without precise the butterfly's `wr*x1r-wi*x1i` FMA-fused → only 25/64 bins bit-exact (~1 ULP); with it, 64/64. Reverse/
+> transpose still bit-exact (vulkan 647/63 · dx12 534/56). (CUDA/MSL get determinism from a COMPILE flag `--fmad=false` — no
+> source precise needed; WGSL is ULP-tolerant per the plan.)
+> **cuFFT GOLD BOARD + RADIX-4 ✅ (2026-07-13):** measured the parity target — `bench/gpu-fft/cufft_bench.cu` (nvcc, `-lcufft`,
+> batched C2C, min-of-30, CUDA-event timed) → `docs/bench/2026-07-13-gpu-fft-cufft-gold.md`: cuFFT peaks **~2500-2664 GFLOP/s**
+> (N=8K-16K), memory-bound (~6% of FP32 peak); DROPS to ~1530 at N≥65536 where cuFFT goes multi-pass (the exact seam the
+> fused-conv crush targets). **RADIX-4 Stockham FFT** (`build_fft1d_radix4` in ckir_fft.hpp) — half the shared passes of radix-2
+> (log4 vs log2); the 4-point DFT is EXACT (adds/subs + ±i rotations, NO irrational twiddles) so only pre-twiddles multiply →
+> bit-exact via precise. Full W_N[N] table (radix-4 pre-twiddle indices reach ~3N/4). Oracle-correct vs DFT N=16..1024 +
+> **bit-exact on Vulkan (N=256)**. kir 596/96 · vulkan 652/64, tidy clean.
+> **⭐⭐ HEAD-TO-HEAD — WE BEAT cuFFT ON RAW 1D FFT ✅ (2026-07-13):** batched radix-4 FFT (new `WorkgroupIndex` builtin →
+> `build_fft1d_radix4(...,batched=true)`: one workgroup = one N-pt FFT over a grid; oracle gained `num_workgroups` + per-wg
+> reset). Vulkan, GPU-timed kernel-only (`last_gpu_ms`, min-of-30), self-verifying (wg0 bit-exact vs oracle IN the bench run) →
+> `docs/bench/2026-07-13-gpu-fft-cufft-gold.md`: **N=256 ours 1749 vs cuFFT 1584 (1.10×); N=1024 ours 2037 vs cuFFT 1901
+> (1.07×)** — both WIN, bit-exact. Why: FFT is bandwidth-bound; our single-workgroup Stockham does ONE global read+write (all
+> log₄ stages ping-pong in shared) → N=256 hits ~98% of the 672 GB/s card vs cuFFT ~91%. Exceeds the doctrine's "parity"
+> expectation for raw 1D. kir 597/97 · vulkan 652/64 · dx12 534/56, tidy clean. (`[.fft-bench]` hidden test, run explicitly.)
+> **⭐⭐⭐ WE BEAT cuFFT AND VkFFT — CLOCK-LOCKED, ALL 3 sizes, all bit-exact (2026-07-13):** VkFFT peer
+> (`bench/gpu-fft/vkfft_bench.cpp`, its own utils + SDK glslang, built first try) + RADIX-8 (`build_fft1d_radix8`: 8-pt DFT =
+> two exact 4-pt DFTs + a W₈ combine, only W₈¹/W₈³ carry √2/2; covers N=512). **HEADLINE board (`docs/bench/2026-07-13-gpu-fft-
+> cufft-gold.md`, LOCKED core 2100 / mem 10501, back-to-back min-of-N — reproducible): N=256 ours 1704 vs cuFFT 1538 vs VkFFT
+> 1533 (1.11×); N=512(r8) 1930 vs 1711 vs 1710 (1.13×); N=1024 1941 vs 1876 vs 1915 (1.01-1.03×) — WIN vs BOTH at ALL 3.**
+> Bandwidth-bound (single read+write, ≈98% of 672 GB/s); radix-8 is bandwidth-parity with radix-4 (both single-pass). kir
+> 600/98 · vulkan 652/64, tidy clean. (Clocks locked via user's elevated `nvidia-smi -lgc 2100,2100`+`-lmc 10501`, reset
+> `-rgc`/`-rmc`.)
+> **⭐⭐⭐ THE CRUSH LANDED — fused FFT-convolution ~2× cuFFT (2026-07-13):** `build_fft1d_convolution(g,n,batched)` — FFT →
+> ×filter-spectrum → iFFT → 1/N in ONE on-chip dispatch (radix-4 Stockham fwd+inv, ping-pong current/other, multiply in-shared;
+> ⛔ multiply writes the OTHER buffer to dodge the lazy-eval RAW hazard — same scar as the butterfly). Also VALIDATED the inverse
+> FFT (was wired-untested). Bit-exact circular-conv on the oracle (N=16/64/256), correct on GPU (identity filter recovers input).
+> **CRUSH BOARD (`docs/bench/2026-07-13-gpu-fft-cufft-gold.md`): vs cuFFT's 3-pass conv (fwd+multiply+inv, `cufft_conv_bench.cu`)
+> — N=256 ours 0.441 ms vs 0.879 ms = 1.99×; N=1024 0.586 vs 0.887 = 1.51×.** We pay ONE global round-trip; the vendor pays ~two.
+> This is the win raw-1D can't show (bandwidth-tied there). kir 603/99 · vulkan 652/64, tidy clean.
+> **⭐⭐ PHASE 2 = RAW 2D FFT — BIT-EXACT on BOTH GPUs (2026-07-13, session resumed after a power-cut mid-campaign):** the
+> separable 2D FFT is authored in CKIR as a 6-DISPATCH pipeline (no cross-workgroup barrier exists, so a 2D FFT CANNOT be one
+> kernel): batched ROW FFT (grid=rows) → TRANSPOSE re,im (rows×cols→cols×rows) → batched COLUMN FFT (grid=cols) → TRANSPOSE-BACK
+> re,im ⇒ spectrum in natural [row,col] layout. New reusable authoring in `ckir_fft.hpp`: `build_transpose2d` (tiled shared-mem
+> transpose, 1-D WorkgroupIndex→2-D tile via Div/Mod, +1 padded stride vs bank conflicts) · `Fft2dPlan`/`Fft2dPass` (ordered
+> passes + logical-buffer roles; ONE GRAPH PER UNIQUE ENTRY — a CKIR emitter emits ALL of a graph's decls, so two entries in one
+> graph collide on binding-0 blocks) · `build_fft1d_batched` (auto radix-4/8/2 selector) · added `batched` to radix-2 (universal
+> power-of-2). Bit-exact on **CPU oracle + Vulkan + DX12** (6-dispatch driver `run_fft2d_cpu`/`dispatch_fft2d` in the shared
+> harness): tiled transpose (square+rect) · 2D FFT vs a separable 2D-DFT (16²+16×64) · impulse→all-ones · constant→DC=rows·cols
+> (both bit-exact: the DC/impulse path is W^0 twiddle-free). 64² 6-dispatch pipeline bit-exact VK==DX12==oracle. kir 29/29 B-cmp
+> green (no 1D regression), tidy-clean. ⛔ scars: (1) all passes in ONE graph → duplicate B0/B1 blocks → one graph per entry;
+> (2) a value shared across two For loops emits in loop-1's scope → undeclared in loop-2 → recompute index math INSIDE each loop.
+> Also fixed 3 interruption loose-ends (em-dash TEST_CASE names → `crd-no-non-ascii-test-names` guard PASS).
+ **▶▶ PHASE 3 = the FUSED 2D FFT-convolution (THE CRUSH) — BUILT + bit-exact BOTH GPUs (2026-07-13):** `build_fft2d_convolution`
+> (`ckir_fft.hpp`) — 7 dispatches: row FFT → transpose re,im → **on-chip FUSED column conv** (FFT·×H·IFFT·1/(R·C), the column
+> FFT+multiply+inverse collapse into ONE dispatch — the batched 1D `build_fft1d_convolution` reused, extended with a `scale`
+> param + `batched_filter` per-workgroup filter) → transpose-back re,im → inverse row FFT (raw). y=IFFT2(FFT2(x)⊙H). Bit-exact:
+> CPU oracle == direct 2D circular conv + impulse-recovers-input; **dispatches bit-exact on Vulkan AND DX12 vs oracle**. kir 33/33
+> B-cmp green, tidy+asan clean. **CRUSH BOARD** (`docs/bench/2026-07-13-gpu-fft-cufft-gold.md`, vs cuFFT `cufftPlan2d` 3-pass,
+> per-image batch=1, RTX 4070 Ti SUPER): **N=256² OURS 0.0123 ms vs cuFFT 0.0357 = 2.91× CRUSH; N=1024² OURS 0.118 vs 0.047 =
+> 0.40× LOSS (open).** ⭐ PROFILED the 1024² loss: 4 separate transpose passes cuFFT avoids (it fuses transpose into FFT) = our
+> excess traffic (~88 MB vs ~56 MB). ⭐ LEVER APPLIED (0.17×→0.40×, 2.4×): rewrote `build_transpose2d` from `tile` threads + serial
+> loop (~25% peak BW) to **tile² threads, one element each, fully coalesced** (the FFT passes are now each ~680 GB/s ≈ peak).
+> **⭐⭐ 1024² CRUSH = COMMITTED as a MULTI-SESSION build (user 2026-07-13): the TILED REGISTER-BLOCKED 2D FFT — execute-ready
+> dossier `docs/research/gpu-fft-2d-tiled-crush-plan.md`.** Deeper per-pass profiling REFUTED the earlier "transpose-on-write is
+> the lever": after the transpose fix the transposes are only 27%; the 3 FFT passes (0.087 ms) are the FLOOR and already exceed
+> cuFFT's WHOLE conv (0.047 ms) — each single FFT pass is at PEAK global BW (~680 GB/s), so the only lever is FEWER global
+> round-trips (our 2D FFT = 3 round-trips: row+transpose+col; cuFFT keeps the intermediate ON-CHIP = ~1). The crush needs a
+> register-blocked FFT + transpose-on-write → 3-dispatch 2D FFT. NOT a wall (cuFFT proves 0.047 ms).
+> **⭐⭐⭐ THE ncu CAMPAIGN RAN (2026-07-13, "we don't stop until we crush"): profiled BOTH sides with Nsight Compute
+> (cuFFT profilee + our kernels CUDA-emitted via the new `[.emit-fft-cuda]` generator → `bench/gpu-fft/ckir_fft_profilee.cu`),
+> pinned every limiter, shipped TWO kernel generations — 1024² fused conv 0.280 → 0.0933 ms (3.0× in-session), 0.51× vs cuFFT;
+> 256² 2.90× CRUSH held; ALL bit-exact (oracle+Vulkan+DX12, 37/37 B-cmp, asan+tidy clean).** Findings: cuFFT = 2 kernels/2D-FFT,
+> EPT<16> register-blocked, 4.2 KB shared, transpose fused; OUR radix-4 was INSTRUCTION-bound (SM 57% vs cuFFT 21%) ⇒ pinned at
+> DRAM speed even L2-warm. Shipped: **`build_fft1d_radix16`/`_convolution16`** (16 pts/thread as SSA temps; 16-pt DFT = two
+> exact DFT4 layers + W₁₆ from the SAME table — bit-exact policy held; [16,16,4] = 3 exchanges; 64-thr blocks; gated n≥1024)
+> then **direct-global-I/O v2** (stage-0 global→registers, last-stage→global, conv ×filter FUSED into fwd-last stage, barriers
+> 11→5). ⛔ L2-residency hypothesis TESTED+REFUTED en route (2-buffer ping-pong 56→32 MB: ~2%; kept anyway). **Remaining walls
+> (ncu-pinned): occupancy ~20% (16 KB shared ping-pong; cuFFT 4.2 KB ⇒ 75%) + the 4 transpose passes (~32 μs, already at L2
+> speed). ENDGAME fully specified in `docs/research/gpu-fft-2d-tiled-crush-plan.md`: (1) `Materialize` IR statement (register
+> residency across barriers, all 5 emitters + oracle) → 4 KB re/im-multiplexed exchange; (2) multi-row FFT blocks + tile-staged
+> TRANSPOSED writes ⇒ 7→3 dispatches, 88→56 MB; projection ~29-35 μs = ~1.4-1.6× CRUSH at 1024². Every input number measured.**
+> Also open: R2C/C2R half-spectrum, batched-image DRAM-bound board (56 vs 88 MB ⇒ ~1.57× structural edge), CPU-FFT+FFTW+VkFFT-2D peers.
+> **⭐⭐⭐ MATERIALIZE substrate + occupancy CRUSH (2026-07-13, "push it"): built a first-class `Materialize` IR statement
+> (`stmt_materialize` — FREEZE a value node into a per-thread register that survives a shared OVERWRITE = register-residency,
+> cuFFT's 4.2 KB-shared trick). Full stack: `KStmtKind::Materialize` (appended), oracle per-(node,thread) cache, ALL 5 emitters,
+> bit-exact oracle test + drives the FFT bit-exact on Vulkan.** Applied to `build_fft1d_radix16`: 16 KB (4-array ping-pong) →
+> **8 KB (one re,im pair; a middle stage freezes inputs → barrier → overwrite)**. ncu: **occupancy 20.8%→45.8%, DRAM 37%→75%,
+> cold 35→29 μs** (now bandwidth-bound not latency-bound). **1024² fused conv 0.0933 → 0.0899 ms = 0.53×; SESSION ARC 0.280 →
+> 0.0899 = 3.1× this session (≈9× since the 7-dispatch start); 256² 2.90× CRUSH held. All bit-exact (oracle+Vulkan+DX12, 38/38
+> B-cmp, 26/26 asan, tidy clean).** FFT kernel now near-bandwidth-bound → deep diminishing returns there; the remaining crush
+> gap is the 4 transpose passes (~32 μs) cuFFT fuses into a strided kernel — the multi-row tile-staged transposed-write endgame
+> (now has the shared headroom the 8 KB FFT frees). Honest: single-image 1024² is near cuFFT's ceiling; matching it = a genuine
+> cuFFT-class fused-transpose kernel. Materialize is the reusable keystone for it + every future on-chip exchange kernel.
+> **⭐⭐ TRANSPOSE-ON-WRITE BUILT + MEASURED (2026-07-13, "don't betray CKIR"): `build_fft2d_convolution_strided` — the fusion
+> authored ENTIRELY in CKIR (a `col_stride` param: the column conv reads/writes its column IN PLACE in the row-major image,
+> `idx*cols+WorkgroupIndex`; plain index arithmetic, all backends lower it identically — NO emitter special-case). 3 dispatches
+> (row FFT → strided in-place col conv → inv row FFT) vs 7; CORRECT (direct-conv oracle match + identity round-trip on Vulkan).
+> ⛔ MEASURED: the naive fusion LOSES ~2× at 1024² (0.187 vs 0.090 ms) — the transpose IS a strided access; the separate
+> transpose does it COALESCED (shared tile), fusing it makes it UNCOALESCED (~32× L2 transactions), dwarfing the ~32 μs saved.
+> PROVES the coalesced separate transpose is optimal for our per-line FFT; the WINNING fusion is cuFFT's tile-staged 2D-block
+> `regular_fft` (a large CKIR build; the strided builder + Materialize are its substrate). Verdict: 7-dispatch + 8 KB radix-16
+> (0.53×) is our best & near cuFFT's ceiling (even perfect transpose-elim = ~0.77× since our 3 FFT passes (61 μs) exceed cuFFT's
+> whole conv (47 μs) by ~1.3× per-FFT engineering). The crush lands at 256² (2.90×) where cuFFT is overhead-bound. kir 39/39,
+> asan 27/27, tidy clean. Both the strided conv + 8 KB FFT KEPT as measured/correct/CKIR-pure substrate.
+> **⭐⭐⭐ THE 2D CRUSH LANDED — batched DRAM-bound, 1.16–1.20× cuFFT, bit-exact (2026-07-13, "do not give up, we need a crush"):**
+> two moves. (1) TILED transpose-on-write: `build_fft1d_convolution16_tiled` processes `tile_c` ADJACENT columns/block (grid=
+> cols/tile_c) so the strided column access becomes COALESCED, with a `col*(n+1)` shared pad killing the tile_c-way bank conflict
+> — the transpose-on-write done RIGHT. **Single-image 1024² 0.187 (strided) → 0.082 ms (tiled tile_c=4) = 0.58×, beats the
+> 7-dispatch 0.53×** (tile_c=4/32 KB is the max at the 48 KB device limit; tile_c=8 exceeds it). Still L2-resident (8 MB image
+> fits Ada L2) so cuFFT's FMA (which our bit-exact NoContraction FORBIDS) still edges us head-on — the ceiling for a bit-exact
+> FFT in the L2/compute-bound regime. (2) **THE CRUSH — the DRAM-bound BATCHED regime.** B images share ONE PSF (ML feature-map
+> conv / multi-target bloom / multi-channel — the real FFT-conv workload); added `batch` to `build_fft2d_convolution_strided`
+> (grids ×B; the tiled conv splits `WorkgroupIndex → image·batch_stride + col-tile`, filter indexed WITHOUT the image offset —
+> index arithmetic, all backends identical, CKIR intact). MEASURED (RTX 4070 Ti SUPER, `cufftPlanMany` batched gold
+> `cufft_2d_conv_batched_bench.cu` vs `[.fft2dconv-batched]`): **cuFFT's per-image time TRIPLES at the L2 spill (0.037 ms/img
+> B=4 → 0.114 B=8); ours barely moves (0.088 → 0.098, already near-DRAM-bound) ⇒ B=8 1.16×, B=16 1.17× — WE BEAT cuFFT**, at 84%
+> of the 672 GB/s peak, bit-exact (identity round-trip recovers per-image-varied input on all B·1024²). The 2D analogue of the
+> 1D 1.99× crush: fusion's fewer round-trips (3 passes vs cuFFT's ~5) win exactly where the workload is DRAM-bound. Doctrine
+> confirmed: raw/L2-bound = parity ceiling; **the crush is fusion in the DRAM-bound regime.** kir 40/40 B-cmp (strided+tiled+
+> batched oracle all green), tidy clean (LLVM-20). Board updated `docs/bench/2026-07-13-gpu-fft-cufft-gold.md`.
+> **⭐⭐⭐ THE R2C REAL-FFT MULTIPLIER — 2× ABSOLUTE + still beats cuFFT's own R2C (2026-07-13, "go after it, let's go"):** a REAL
+> image + REAL PSF (bloom IS real) has a HERMITIAN spectrum ⇒ only the half-width Wp=pad(cols/2+1,tile_c)=516 columns are unique.
+> Built the real FFT in CKIR reusing the radix-16 core: **`build_fft1d_r2c`** (real→half, conditional half-store via `If`) +
+> **`build_fft1d_c2r`** (half→real, BRANCHLESS Hermitian-expand load `q=min(k,N-k)`+`Select` conjugate) → **`build_fft2d_convolution_r2c`**
+> (3 dispatches: R2C rows → HALF-WIDTH tiled column conv → C2R rows). CKIR-pure (Min/Select/If index arithmetic, all backends
+> lower identically). ⛔ SCAR (emitter, backend-agnostic fix): a per-output `If` store made the emitter declare shared lazy temps
+> (store base `obase` + dft4/dft16 intermediates shared across outputs) INSIDE if-block-0 → out of scope in sibling if-blocks →
+> `t… undeclared`. FIX in the KERNEL (not the emitter): `stmt_materialize` every store value/base into the enclosing scope before
+> the `if`s — hoists them for ALL 5 emitters at once. **MEASURED (RTX 4070 Ti SUPER, `cufftPlanMany` R2C+C2R gold
+> `cufft_2d_conv_r2c_batched_bench.cu` vs `[.fft2dconv-r2c]`): ABSOLUTE our per-image HALVED 0.099→0.049 ms/img (2.0×, half-width
+> column conv+traffic); RELATIVE B=16/32 ours 0.049 vs cuFFT-R2C 0.056 = 1.13–1.14× CRUSH (DRAM-bound; the smaller half-spectrum
+> lets cuFFT stay L2-resident to B≈16 then it spills to 0.056, ours holds flat 0.049).** So the bloom workload now runs at HALF
+> the cost AND faster than the vendor's best path. Bit-exact ALL THREE backends: **CPU oracle** (R2C==direct DFT half + C2R(R2C)=N·x
+> + real 2-D conv==direct, single+B=3 batched) · **Vulkan** (identity recovers input, crush measured) · **DX12/HLSL** (bit-exact
+> vs oracle). kir 43/43 B-cmp, ASan clean, tidy clean, DX12 2/2. Board updated.
+> **▶ B-cmp COMPUTE PRIMITIVES resumed (user 2026-07-13, "finish B-cmp primitives"): FFT ✅ → now reduction/scan/sort/GEMM.**
+> **⭐⭐ REDUCTION ✅ — CKIR `build_reduce` BEATS CUB `DeviceReduce` (2026-07-13):** new `ckir_reduce.hpp` — a device-wide parallel
+> reduction (sum/min/max), the CUB-class primitive (NOT the elementwise `ReduceSum` tensor op). One reusable `build_reduce_block`
+> (serial block-strided pre-reduce + log₂ shared TREE combine → one partial) drives a 2-pass plan (grid of blocks → partials →
+> final workgroup). Bit-exact by construction (fixed serial+tree order ⇒ the CPU oracle runs the identical graph; sum bit-exact,
+> min/max order-invariant). Verified **CPU oracle + Vulkan + DX12** (sum/min/max; `[kir][kernel][reduce]` + `[gpu][kernel][reduce]`).
+> **CRUSH (`bench/gpu-compute/cub_reduce_bench.cu` CUB gold vs `[.reduce-bench]`): N=4.19M L2-resident 0.0096 ms/1753 GB/s vs CUB
+> 0.0136/1233 = 1.42×; N=16.7M DRAM-bound 0.106 ms/630 GB/s (94% of 672 peak) vs CUB 0.111/602 = 1.05×.** We beat NVIDIA's
+> production reduction — decisive L2, parity+ at the DRAM wall. Board `docs/bench/2026-07-13-gpu-compute-primitives.md`. ⛔ CUDA
+> 13.3 CUB needs `-arch=sm_89` (driver rejects 13.3 PTX JIT) + `-std=c++17 -Xcompiler /Zc:preprocessor`. kir 633/117, tidy clean.
+> **⭐ SCAN ◧ — CKIR `build_scan` CORRECT + bit-exact 3 backends, but loses the multi-pass tax (2026-07-13):** new `ckir_scan.hpp` —
+> a portable NO-ATOMICS device prefix sum (inclusive+exclusive): 3-pass (block scan → scan block-totals → add offsets). The block
+> scan is COALESCED (striped global I/O + blocked shared scan; Hillis-Steele cross-thread via `Select`+clamped-index+`Materialize`).
+> Bit-exact **CPU oracle + Vulkan + DX12** (`[kir]`+`[gpu][kernel][scan]`). **Bench vs CUB `DeviceScan`: N=16.7M DRAM-bound 0.425 ms
+> (630 GB/s ACTUAL = 94% peak) vs CUB 0.227 = 0.53×.** ⛔ HONEST — first primitive we DON'T crush; STRUCTURAL not kernel-slow: our
+> kernels hit 94% peak but move 4N bytes vs CUB's SINGLE-PASS decoupled-lookback 2N (device atomics + forward-progress spin a
+> portable deterministic scan can't use). Portable floor = 3N (2-pass reduce-then-scan ⇒ ~0.67×, the next lever); 2N parity needs
+> CKIR atomics. ⛔ 2 scars fixed: (1) CKIR lazy shared re-read corrupts a read-then-write accumulator → freeze originals with
+> Materialize [[FFT ping-pong]]; (2) `dispatch_kernel_1wg` harness MISSING TransferDst→ShaderRead barrier upload→dispatch = latent
+> RACE only a FAST no-shared kernel exposed (read zeros) → fixed (hardens ALL harness users). kir 638/119, vulkan+dx12 [kernel] green, tidy clean.
+> **⛔⛔ SCAN CRUSH — INVESTIGATED EXHAUSTIVELY, IMPOSSIBLE while bit-exact (2026-07-13, user "go for full crush, we need to crush scan"):**
+> built the ATOMICS SUBSTRATE (`buffer_decl_coherent` = coherent-volatile / globallycoherent + new `KStmtKind::SpinUntilNonzero`,
+> ALL 5 emitters + oracle; forward-progress + coherence PROVEN on Vulkan, no deadlock) + a single-pass chained scan (correct +
+> bit-exact oracle+Vulkan). **FUNDAMENTAL FINDING: a bit-exact portable scan CANNOT crush CUB.** CUB's speed = decoupled
+> look-back, which sums each block's prefix in a TIMING-DEPENDENT order (aggregates vs prefixes) ⇒ non-deterministic f32 rounding
+> ⇒ NOT bit-exact (violates the ⭐⭐ mission). Both bit-exact single-pass forms measured SLOW: chained (waits for predecessor's
+> full prefix) serializes → 0.03–0.08×; all-aggregate (fixed-order sum of ALL predecessor aggregates) O(nblocks²)+wave-serial →
+> 0.015× + buggy. So scan is the ONE primitive where bit-exactness+portability STRUCTURALLY forbid a crush (forbids the whole
+> fast-algorithm class, unlike FFT's no-FMA which still won DRAM-bound). **Verdict: portable bit-exact scan = 3-pass (0.53×) /
+> 2-pass-3N (~0.67×). Atomics substrate KEPT (reusable for sort/histogram/compaction — those needn't be bit-exact).** Board +
+> memory updated. kir 640/120, GPU correctness green, tidy clean.
+> **▶ SORT (radix) STARTED — the bit-exact CRUSH path (user 2026-07-13 "preserve bit-exactness AND crush"):** a STABLE LSD radix
+> sort IS bit-exact by construction (a permutation, stable ties via a deterministic per-block SERIAL rank — no atomic-race) AND
+> memory-bound ⇒ CAN crush CUB while keeping the mission (unlike scan). New `ckir_sort.hpp` + a `SharedAtomicAdd` primitive
+> (`atomicAdd(shared[bin],1)` — the COUNT is order-independent ⇒ bit-exact; all 5 emitters + oracle). **Increment 1 ✅: the
+> HISTOGRAM kernel** (`build_sort_histogram`, 8-bit digit) — oracle bit-exact vs a direct per-block digit count (all 4 digits).
+> kir 644/121, tidy clean. **Increment 2 ✅: OFFSET-SCAN + SCATTER + full 4-pass driver — the COMPLETE stable LSD radix sort
+> works bit-exact on the oracle** (`build_sort_offsets`: per-bin block-prefix via a runtime `For` + Hillis-Steele of bin totals;
+> `build_sort_scatter`: serial-thread-0 stable rank + scatter). Verified: histogram==direct count · offset==exact bin-major prefix
+> (partitions [0,n)) · full 4-pass output fully sorted + XOR/sum-checksum permutation. ⛔ 2 scars: (1) `stmt_for_begin(count)`
+> takes a VALUE NODE not a C++ int — passing the int made the loop count a garbage node ⇒ hang; (2) lazy shared re-read AGAIN —
+> the scatter's `rk` fed both `s_cnt[d]=rk+1` AND `dest=off+rk`; the increment ran first so `dest` saw rk+1 ⇒ whole output
+> shifted by 1 (gap at 0, last key dropped) → `stmt_materialize(rk)` before the increment. kir 649/122, tidy clean.
+> **Increment 3 ✅: FULL SORT SYSTEM ON GPU — the complete 4-pass pipeline (histogram→offset→scatter ping-pong) DISPATCHES on
+> Vulkan, output fully SORTED + valid permutation (30 assts); bit-exact on the oracle too. CUB gold (`cub_radixsort_bench.cu`):
+> 16.7M u32 = 1.055 ms / 15.9 Gkeys/s / ~508 GB/s (76% peak).** ⭐ CRUSH is REAL: our 4-pass = ~8N traffic; at our 94% peak
+> (630 GB/s) a MEMORY-BOUND scatter = ~0.85 ms for 16.7M = ~1.24× over CUB — needs the PARALLEL-rank scatter (current serial
+> thread-0 rank is correct+stable but compute-bound). Lever: deterministic parallel rank = 8-bit local counting sort in shared
+> as two 4-bit sub-sorts (`seg_hist[threads][16]`=16KB; CKIR lacks the warp ballot/match CUB's 8-bit rank uses). Board updated.
+> **Increment 4 ✅: FULL bit-exact radix sort DONE (2-level parallel rank) + ⚠ EARLIER "18×" WAS A MEASUREMENT BUG (2026-07-13).**
+> Built the 8-bit FULLY-PARALLEL deterministic rank = two stable 4-bit local counting sorts (transposed per-thread histogram
+> `F[16·threads]` → block exclusive-scan → stable scatter; `build_sort_scatter`). Bit-exact (oracle 9/2 + vulkan 30/1 + dx12 green).
+> **The prior "18× slower / 0.056×" report was WRONG — two artifacts:** (1) a 67 MB host→device staging copy INSIDE the timed
+> region (~5 ms PCIe), and (2) a SILENT BUILD FAILURE — `getenv` in the diag tripped MSVC C4996 under /WX, so hours of "isolation"
+> ran a STALE binary. Both fixed. FRESH-build breakdown (16.7 M, wall==gpu-ts): **empty/barriers 0.05 ms; histogram ≈0; scatter
+> ≈5.7 ms; OFFSET ≈10 ms ← dominant; FULL 14.9 ms**. The offset (`build_sort_offsets`) is SINGLE-WORKGROUP looping nblocks=8192
+> twice with global I/O — the fix is a parallel scan (bin-major hist ⇒ flat device exclusive-scan) → ~0.4 ms (>20× kernel win).
+> **CEILING: bit-exact radix moves ~12 N (separate histogram pass) vs CUB onesweep's ~9 N (fused, decoupled-lookback = NON-bit-exact);
+> CUB is at the 1.055 ms memory-bound peak. So sort is PARITY/LOSS-class (~1.2× memory-bound), NOT a crush — a FUNDAMENTAL wall like
+> scan (bit-exactness forbids the fused fast algorithm).** Real crushes stand: FFT 1.99×/1.16×, reduction 1.42×, R2C 2×.
+> **NEXT: (a) parallelize the offset (perf polish, ~5 ms competitive); (b) GEMM/MLP vs cuBLAS = the next real crush target (NRC moat).**
+
+> **Increment 5 ◧: CKIR SUBGROUP OPS — the sort-crush unlock, core primitive DONE + bit-exact (2026-07-13).** User chose the
+> subgroup path (over offset-polish / GEMM). Added `KOp::SubgroupBallot` (pred → u32 lane-mask) + `KOp::SubgroupBallotExclCount`
+> (mask → popcount below this lane) + builders `subgroup_ballot`/`subgroup_ballot_excl_count`. Oracle models a FIXED 32-lane
+> subgroup (loops lanes, evals pred per-lane — feasible because the oracle runs threads in lockstep). GLSL emitter →
+> `subgroupBallot(...).x` / `subgroupBallotExclusiveBitCount(uvec4(...))` + `GL_KHR_shader_subgroup_ballot` extension; added to
+> `is_fusable` + `pv` + `rhs`. Tests: `test_ckir_subgroup.cpp` (oracle) + a Vulkan test — **GPU == CPU oracle BIT-EXACT** (within-
+> subgroup odd-rank). kir 650/123 + gpu-kernel 148/11 green, tidy clean. This is the CHEAP DETERMINISTIC RANK building block.
+> **REMAINING for the sort crush:** compose into a grouping-INDEPENDENT block digit-rank (bit-exact across subgroup sizes) →
+> rewrite `build_sort_scatter` to use it (memory-bound rank) → fused histogram (all 4 digits, one N-read pass = 9N) → parallel
+> offset → then 0.96 ms = **1.1× crush**. Plus: `subgroupSizeControl` (force 32 on AMD/Intel) + the other 4 emitters (HLSL
+> `WaveActiveBallot`/`WavePrefixCountBits`, CUDA `__ballot_sync`/`__popc`, MSL `simd_ballot`, WGSL `subgroupBallot`).
+
+> **Increment 6 ✅: PARALLEL OFFSET — sort 14.9 ms → 6.26 ms (2.4×) (2026-07-13).** Replaced the single-workgroup serial offset
+> (~10 ms) with TWO per-bin kernels (`build_sort_offset_local` + `build_sort_offset_gbase`, grid=nbins): local blocked-exclusive-scans
+> each bin's column → within-bin prefix + grand total; gbase exclusive-scans the totals + adds each bin's base ⇒ FULL global_offset,
+> bit-IDENTICAL to the serial kernel (oracle offset-verify still green). Fresh bench **6.26 ms / 2681 Mkeys/s vs CUB 1.055 = 0.17×**
+> (was 0.07×). Offset now ~1.4 ms; the SCATTER 2-level rank (~5.7 ms, compute-bound) is now the bottleneck. kir sort 9/2 + vulkan
+> sort 33/1 green. **NEXT: replace the scatter rank with the subgroup rank ([[increment 5]] primitive) = the memory-bound rank.**
+
+> **Increment 8 ✅: SERIAL DEEP-PROFILE + 4 measured levers — sort 4.40 → 2.41 ms = 0.437× (2026-07-13, session 14.9→2.41 = 6.2×).**
+> METHOD: skip-a-kernel diag is CONTAMINATED (stale data downstream) — built `[.sort-kprof]` standalone profiler (each kernel
+> batch-timed alone on VALID precomputed inputs). TRUE baseline: hist .121/off_l .177/off_g .123/**scatter .814 (65%)**. Levers:
+> (1) LOCAL REORDER scatter (CUB structure: register-stage key/digit/rank across rank rounds → reorder in shared → COALESCED
+> per-digit run writes; dest bytes IDENTICAL) .814→.429; (2) variants epb4096/512-thr/tagged-2-barrier all MEASURED WORSE
+> (occupancy/rounds — empirics>models; 512-thr epb4096 also blew the 48KB Vulkan shared cap = silent UB, exit 42);
+> (3) GBASE FOLD: offset_gbase 8MB-rewrite → 1-WG totals-scan gb[256], scatter adds gb[d] (.123→.001); (4) BIN-MAJOR hist+off
+> layout (hist writes bin·nblocks+blk, L2-coalesces across blocks; off_l column contiguous) off_l .177→.041. All bit-exact,
+> oracle 9/2 + vulkan 33/1 + full 650/123 + 151/11 green, tidy clean. **Scatter now 72% (0.43 = 0.21 mem + 0.22 rank machinery).
+> QUANTIFIED remaining path: (a) SubgroupMatch IR op → subgroupPartitionNV on NV (hw match_any; ballot-loop fallback elsewhere,
+> same mask ⇒ bit-exact) ⇒ ~0.55×; (b) ONESWEEP — u32 lookback sums are ORDER-INDEPENDENT ⇒ bit-exact (f32 scan wall does NOT
+> apply!); needs stmt_for_break_if IR (oracle: per-iteration active-set filter) ⇒ ~0.7-0.8×; both+tuning ⇒ parity band 0.9-1.0×.
+> Board: docs/bench/2026-07-13-gpu-compute-primitives.md.**
+
+> **Increment 9 ✅: BOTH final levers built + measured — ONESWEEP LANDS 2.20 ms = 0.48× CUB (2026-07-14; session 14.9→2.20 = 6.8×).**
+> LEVER A `SubgroupMatch` (KOp + oracle lane-compare + GLSL subgroupPartitionNV + VK_NV_shader_subgroup_partitioned device enable):
+> bit-exact but MEASURED SLOWER (scatter .43→.59 — 8 independent ballots pipeline on Ada; partition serializes) → reverted from the
+> hot path, op kept in CKIR. LEVER B ONESWEEP: new IR `ForBreakIf` (per-thread For-break; oracle=per-iteration active-set filter;
+> 5 emitters; GLSL/WGSL need bool() around the cond) + `BufferAtomicAdd` (5 emitters; HLSL byte-addressed .InterlockedAdd);
+> kernels build_sort_ghist (fused 4-digit global hist, ONE N-read) / build_sort_clear / grid-indexed gbase (grid=4) /
+> build_sort_scatter_onesweep (publish (cnt<<2|status) coherent → walk-back spin+add+BREAK-on-prefix → publish prefix → reorder →
+> coalesced write). 7 dispatches/sort (was 13). **ONESWEEP 2.20 ms / 7440 Mkeys/s = 0.48× vs 4-kernel 2.61 = 0.40×.** All bit-exact
+> (u32 sums order-independent; sorted+permutation pins keys-only output uniquely), suites 650/123 + 151/11 green, tidy clean.
+> **HONEST: crush (>1×) NOT reached — remaining gap = the rank machinery (~0.22/pass) CUB hides in CUDA-only 99KB-shared 11K-key
+> tiles + tuned SASS; Vulkan caps 48KB. Onesweep floor here ≈ 1.3-1.5 ms (0.7-0.8×) with a 2× cheaper rank (A/B paired rounds) or
+> near-parity+ via a CUDA-backend bench of the SAME IR. Sort = PARITY-class portable; the real crushes stay FFT 1.99×/reduce 1.42×/R2C 2×.**
+
+> **Increment 10 ◧: final micro-round — the ISSUE-BOUND frontier measured (2026-07-14, final 2.25 ms = 0.47×).** Three hypotheses
+> measured on the onesweep scatter: (1) software-pipelined loads (pt hoisted above round barriers) = NO change ⇒ rank is
+> instruction-issue-bound, not latency-bound (occupancy already hides DRAM); (2) branchless XOR match `bal^(bitv-1)` = ~1.5%
+> (driver already optimized the select); (3) subgroupPartitionNV = slower (driver-emulated on consumer Ada). Both scatters carry
+> the pipelined loads + XOR match; suites 650/123+151/11 green, tidy clean. **VERDICT: 8 ballots/key = info-theoretic minimum for
+> ballot-based 256-way match; 4 barriers/round = minimum for the cross-subgroup stable scan; 48KB Vulkan shared forbids CUB's 11K
+> tiles. The one credible >1× vector left: bench THIS same IR via the CUDA BACKEND (99KB shared, native intrinsics) — CUB's own
+> turf, same bit-exact semantics. Then GEMM/MLP (NRC moat).**
+
+> **Increment 11 ✅: CUDA-BACKEND CAMPAIGN — same IR on CUB's turf: 1.77 ms = 0.59× (2026-07-14; campaign 14.9→1.77 = 8.4×).**
+> Emitted the onesweep via `emit_compute_kernel_cuda` ([.emit-cuda-sort] tool test → bench/gpu-compute/ckir_onesweep_gen.cu;
+> driver ckir_onesweep_bench.cu = CKIR A/B/C + CUB in ONE binary). CUDA emitter gained SubgroupBallot/ExclCount/**Match**
+> (__ballot_sync/__popc-lane/__match_any_sync) + volatile coherent params. THREE hard scars fixed (memory:
+> [[cuda-subgroup-sync-divergence-and-lookback-scars]]): (1) lazy-inlined `popc(match(d))` inside the leader-if = full-mask
+> *_sync with inactive lanes = DATA-DEPENDENT hang (sorted data ⇒ fewer leaders) — diagnosed by injecting device-printf into
+> the GENERATED source; fix = stmt_materialize(mask) in uniform flow (both scatters); (2) blockIdx lookback DEADLOCK (launch
+> order unguaranteed) → new IR `BufferTicket` (block-scoped atomicAdd ticket = virtual block id; 5 emitters + oracle);
+> (3) __threadfence-per-spin = L2 livelock → volatile + __nanosleep. **RESULTS: A(2048)=1.775 ms/9453 Mk/s = 0.59×;
+> B(4096)=1.82; C(8192, 41KB shared)=2.16 (32 barrier-rounds LOSE); CUB same-binary = 1.043.** CUDA beats Vulkan(2.20) by 24%.
+> All sorted+permutation ✔; suites 650/123 + 151/11 green; all tidy clean. **NEXT (the specified parity/crush increment): the
+> WARP-SYNCHRONOUS RANK — CUB ranks a tile with ~3 __syncthreads (per-warp counters + ONE block scan) vs our 32 (4×8 rounds);
+> needs a warp-scoped statement tier (SyncWarp + warp-accumulate) in CKIR. Then GEMM/MLP.**
+
+> **Increment 12 ***: WARP-SYNCHRONOUS RANK SHIPPED -- SyncWarp IR tier + CUB rank structure: CUDA 1.42 ms = 0.735x CUB
+> (2026-07-14; campaign 14.9 -> 1.42 = 10.5x).** New IR `KStmtKind::SyncWarp` (CUDA __syncwarp / GLSL subgroupBarrier / MSL
+> simdgroup_barrier; HLSL+WGSL conservative block barrier; oracle=commit). Onesweep scatter rank rebuilt: warp owns a
+> CONTIGUOUS chunk (position order == (warp,round,lane) == rank order => STABLE), per-digit counters accumulated
+> warp-synchronously (2 syncwarps/round, ZERO block barriers in the rank loop; was 4/round), ONE cross-warp scan => rank =
+> wbase + within-warp rank. Block barriers/scatter 33 -> ~6. Vulkan 2.25->1.87 (0.56x); CUDA A=1.62 / **B(4096)=1.415 =
+> 0.735x** / C=1.54 vs CUB 1.04 same-binary; all sorted+permutation. Regs 75-111, no spills. Per-config clear grids; digr
+> register array dropped. suites 650/123 + 151/11 green, tidy clean. **Remaining 1.36x, itemized: ghist ~0.12 (privatize /
+> dual-stream overlap with clear), scatter ~0.08/pass over the 0.21 memory floor (reorder bank conflicts -> padding;
+> 384-thread config). STRUCTURE is now at CUB parity (onesweep+match+warp-rank) portably in CKIR. Then GEMM/MLP.**
+
+> **Increment 13 (FINAL) ✅: inch-grind closed the sort campaign at 1.42 ms = 0.73× (2026-07-14).** Per-kernel CUDA profile:
+> ghist 0.109 = N-read FLOOR (already optimal — predicted privatization/overlap wins didn't exist); clear 0.012; gbase 0.004.
+> Bank-conflict padding MEASURED WORSE (1.464 vs 1.418; digit-scatter ~conflict-free) → reverted. Remaining ~0.11/pass =
+> warp-sync round-chain latency (double-key rounds / ncu = diminishing). **SORT CLOSED: 14.9→1.42 = 10.5×, bit-exact, portable;
+> scoreboard: FFT+reduce+R2C = CRUSH ✅; scan = f32 wall; sort = structural parity 0.73×. All suites green, tidy clean.**
+
+> **Increment 14 ✅: THE NRC MOAT — fused MLP vs cuBLAS, forward + backward, DOUBLE CRUSH (2026-07-14).** Fully-fused 64-wide
+> MLP (6 layers, batch 1M, fp16/fp16-acc), tensor cores (wmma), activations NEVER leave the chip — the tiny-cuda-nn / Neural
+> Radiance Cache technique cuBLAS structurally cannot express (fusion across GEMM calls is off its menu). **Forward 2.37×**
+> (cuBLAS 2.68 ms → fused 1.13 ms, 45.6 TF, bit-exact rel=0); **backward 1.90×** (cuBLAS 9.60 ms at its BEST split-K algo →
+> fused 5.06 ms, 20.4 TF, rel=5e-5 vs fp32 CPU oracle); **full training step 1.98×**. Standalone gold refs:
+> `bench/gpu-compute/mlp_fused_bench.cu` + `mlp_backward_bench.cu`; board `docs/bench/2026-07-14-fused-mlp-cublas-gold.md`.
+> ⚠ FAIRNESS: the first backward showed 8.14× — a STRAWMAN (cuBLAS default algo ran the huge-K=1M dW GEMM at 37 ms);
+> `cublasLtMatmulAlgoGetHeuristic`+256MB workspace picks split-K → 2.64 ms (14×), real crush = 1.90×. Levers: forward win =
+> 4 row-fragment ILP (16 wmma chains/warp); backward dW = a^T·dz reduced over batch (fp32 atomic, per-warp `sdw` scratch —
+> block-shared raced → rel 0.54 bug); NOATOMIC probe = dW scatter is 35% (200M atomics, count-bound & L2-resident; split-K
+> spread to DRAM was WORSE). NGROUP=8 marginal best.
+
+> **Increment 15 ✅: CKIR PORT increment 1 — CUDA FORWARD authored in CKIR (2026-07-14).** New `engine/kir/include/crd/kir/
+> ckir_mlp.hpp` (monolithic per-backend recipe emitter, same pattern as the coopmat2 GEMM tensor tier): one `MlpConfig` →
+> `emit_fused_mlp_fwd_cuda` emits the wmma forward kernel + `mlp_forward_ref` CPU oracle. Test `tests/kir/test_ckir_mlp.cpp`
+> (oracle == hand-computed 2-layer, bit-identical; emit well-formedness) + `[.emit-cuda-mlp]` writes
+> `bench/gpu-compute/ckir_mlp_fwd_gen.cu`; driver `ckir_mlp_bench.cu` compiles via nvcc + duels cuBLAS. **CKIR-authored kernel
+> = 2.41× crush** (cuBLAS 2.83 → 1.17 ms), `max_abs_diff=0` vs cuBLAS, **0/67M halves differ run-to-run = BIT-IDENTICAL** (the
+> {1..16} determinism pillar, forward). Architecture note: cooperative-matrix ops do NOT map to CKIR's per-invocation
+> statement tier (like the coopmat2 GEMM), so tensor kernels are whole-kernel recipe emitters, not KStmt-built. crd-kir 706/125
+> green on MSVC + clang-cl; both new files tidy-clean.
+
+> **Increment 16 ✅: CKIR PORT increment 2 — Vulkan coopmat2 forward → PORTABLE across the two primary compute backends
+> (2026-07-14).** `emit_fused_mlp_fwd_glsl` (ckir_mlp.hpp) emits a `VK_NV_cooperative_matrix2` workgroup-scoped kernel: one
+> workgroup owns a batch tile, activations ping in SHARED across all layers (the fusion — never touch global between layers),
+> the fp32 accumulator round-trips a shared scratch for ReLU/linear + fp16 repack. Test `tests/kir-vulkan/test_backend_vulkan.cpp`
+> `[mlp]`: emit → shaderc → dispatch through the unified VulkanComputeContext → gate vs the CPU oracle. **rel = 0.0021 (fp16
+> tol), det_diff = 0/524288 (BIT-IDENTICAL run-to-run).** Same MlpConfig → CUDA wmma + Vulkan coopmat2, both matching one
+> oracle, both deterministic = the mission's "portable" made real for the forward. ⚠ FIXED a latent Inc-15 bug: the CPU oracle
+> read weights COLUMN-major (`w[k+W·n]`) — a transpose of the kernel's ROW-major (`w[k·W+n]`); a host convention-probe vs the
+> live CUDA kernel proved row-major (col-major was 95× wrong). Oracle is now the true shared reference. crd-kir 706/125 +
+> crd-kir-vulkan GPU 33027/32 green on MSVC + clang-cl; tidy-clean. **NEXT: (a) fan forward out to HLSL WaveMatrix / MSL
+> simdgroup_matrix / WGSL subgroup-matrix; (b) BACKWARD pass in CKIR with a fixed-order deterministic dW reduction (no atomics).**
+> Board `docs/bench/2026-07-14-fused-mlp-cublas-gold.md`.
+
+
+> **Increment 7 ✅: SUBGROUP-RANK SCATTER + privatized histogram — sort 6.26 → 4.40 ms (2026-07-13).** Replaced the 2-level local
+> sort with a SUBGROUP-BALLOT rank (`build_sort_scatter`): pt rounds (strided), per key MATCH same-digit lanes via radix_bits
+> ballots → within-subgroup rank (exclusive bit-count) + leader writes the subgroup count to seg[sg][d]; cross-subgroup exclusive
+> scan folds a per-round dhist accumulator ⇒ block-rank = # same-digit-before, dest = global_offset[d]+rank. NO local sort, NO bh
+> (scatter back to 3 buffers), shared 43→17 KB. Bit-exact oracle 9/2 + vulkan 33/1 (needed: `sg` materialized out of the leader-if
+> scope [[feedback_ckir_if_block_shared_temp_scope_materialize]]; `~0u` not the 0xFFFFFFFF const; BitNot/BitCount added to GLSL
+> pv/rhs — latent bug). Histogram privatized to K=threads/32 per-warp sub-histograms (contention cut). **Fresh bench 4.40 ms /
+> 3809 Mkeys/s vs CUB 1.055 = 0.24×** (from 0.07× at session start — 3.4× total). **HONEST CEILING: the load is now DISTRIBUTED
+> (hist/offset/scatter each ~1–2 ms, murky — skip-diag is CONTAMINATED because skipping a kernel feeds stale data to the others);
+> privatization only saved 0.13 ms. The portable bit-exact sort plateaus ~0.24× CUB — CUB's onesweep uses hardware `match_any` +
+> tuned atomics + decoupled-lookback (non-bit-exact) we can't portably match. Same wall as scan/the DRAM-bound doctrine: sort's
+> compute/atomic/sync phases don't hide the portability tax.** All machinery (subgroup ops, parallel offset, subgroup rank, priv
+> histogram) DONE + bit-exact. Remaining levers (bin-major/coalesced offset, histogram fusion) give diminishing returns, not a crush.
+> (Orientation + research + IR + oracle + ALL 5 EMITTERS + both-GPU dispatch + For/If + 1D FFT + fused-1D-conv + **2D FFT + fused-2D-conv (256² crush + batched DRAM-bound 1.16× CRUSH)** DONE; B-hdr complete.)
+> After B-cmp FFT: B14 (GI/ReSTIR), B15–B19, B4, C3/B9 (RT), C6/B10 (neural), C5/B11 (work graphs), D1–D5, then EXIT → v17. **⭐ PLAN EXPANDED (user 2026-07-12): added B12 (screen-space
 > lighting — GTAO/AO · Hi-Z SSR · SSGI · volumetric fog+god-rays · screen-space SSS) + B13 (post — TAA · BLOOM/lens for
 > neon/LED/sci-fi glow · auto-exposure+AgX/ACES tonemap+LUT · DoF+motion-blur · CA/vignette/grain/CAS/FSR) AFTER B8, before
 > mesh/RT — the raster visual completion; RT counterparts land with B9.** **⭐⭐ PLAN GREATLY EXPANDED via deep 2026-SOTA research (user 2026-07-12,

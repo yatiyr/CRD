@@ -119,6 +119,16 @@ public:
             return create_program(stage, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()));
         }
 
+        // B-cmp: an imperative COMPUTE KERNEL (workgroup shared memory + barriers + storage buffers), authored in CKIR.
+        if (entry.stage == crd::kir::KStage::Compute && entry.is_kernel())
+        {
+            crd::kir::GlslKernel kern(a);
+            if (!crd::kir::emit_compute_kernel_glsl(graph, entry, a, kern)) { return nullptr; }
+            const auto spv = compile_glsl_to_spirv(ShaderStage::Compute, crd::containers::to_view(kern.source), "ckir_kernel", a);
+            if (!spv.ok) { return nullptr; }
+            return create_program(ShaderStage::Compute, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()));
+        }
+
         // Compute: the fused elementwise / vec-aware kernel path.
         if (entry.stage != crd::kir::KStage::Compute || entry.n_out < 1) { return nullptr; }
         const int output = entry.out[0].node;
@@ -230,10 +240,12 @@ private:
         bool has_conserv   = false;
         bool has_eds3      = false;
         bool has_interlock = false;
+        bool has_sgpart    = false;
         for (std::uint32_t i = 0; i < ne; ++i)
         {
             if (std::strcmp(exts[i].extensionName, "VK_KHR_cooperative_matrix") == 0) { has_cm1 = true; }
             if (std::strcmp(exts[i].extensionName, "VK_NV_cooperative_matrix2") == 0) { has_cm2 = true; }
+            if (std::strcmp(exts[i].extensionName, "VK_NV_shader_subgroup_partitioned") == 0) { has_sgpart = true; }
             if (std::strcmp(exts[i].extensionName, VK_EXT_SHADER_OBJECT_EXTENSION_NAME) == 0) { has_shobj = true; }
             if (std::strcmp(exts[i].extensionName, VK_KHR_SWAPCHAIN_EXTENSION_NAME) == 0) { has_swapchain = true; }
             if (std::strcmp(exts[i].extensionName, VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME) == 0) { has_vrs = true; }
@@ -398,8 +410,11 @@ private:
         if (m_shader_object) { sho.pNext = chain; chain = &sho; }
         if (m_coopmat2) { cm2.pNext = chain; cmk.pNext = &cm2; chain = &cmk; }
 
-        const char* devexts[8];
+        const char* devexts[9];
         crd::u32    ndevext = 0;
+        // B-cmp: hardware subgroup partition (match_any) — the radix-sort rank's cheap deterministic match. Shader-only
+        // capability (no feature struct); enabling the extension unlocks the SPIR-V GroupNonUniformPartitionedNV cap.
+        if (has_sgpart) { devexts[ndevext++] = "VK_NV_shader_subgroup_partitioned"; }
         if (m_coopmat2)
         {
             devexts[ndevext++] = "VK_KHR_cooperative_matrix";

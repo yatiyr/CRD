@@ -6,6 +6,7 @@
 #include <crd/kir/backend.hpp>
 #include <crd/kir/ckir.hpp>
 #include <crd/kir/ckir_glsl.hpp>
+#include <crd/kir/ckir_mlp.hpp>
 #include <crd/kir/vulkan/backend_vulkan.hpp>
 
 #include <crd/gpu/vulkan_compute_context.hpp>
@@ -292,6 +293,158 @@ TEST_CASE("v17-i TENSOR: Vulkan coopmat2 GEMM through the UNIFIED compute contex
     alloc.deallocate(av);
     alloc.deallocate(bv);
     alloc.deallocate(ov);
+}
+
+namespace
+{
+crd::u16 f2h_mlp(float f) // fp32 -> IEEE half (round-toward-zero; test-grade)
+{
+    crd::u32 x = 0;
+    std::memcpy(&x, &f, 4);
+    const crd::u32 sign = (x >> 16) & 0x8000U;
+    const crd::i32 exp  = static_cast<crd::i32>((x >> 23) & 0xFFU) - 112;
+    const crd::u32 man  = x & 0x7FFFFFU;
+    if (exp <= 0) { return static_cast<crd::u16>(sign); }
+    if (exp >= 31) { return static_cast<crd::u16>(sign | 0x7C00U); }
+    return static_cast<crd::u16>(sign | (static_cast<crd::u32>(exp) << 10) | (man >> 13));
+}
+float h2f_mlp(crd::u16 h) // IEEE half -> fp32
+{
+    const crd::u32 sign = (static_cast<crd::u32>(h) & 0x8000U) << 16;
+    const crd::u32 exp  = (static_cast<crd::u32>(h) >> 10) & 0x1FU;
+    const crd::u32 man  = static_cast<crd::u32>(h) & 0x3FFU;
+    crd::u32       out  = 0;
+    if (exp == 0) { out = sign; } // treat subnormals as 0 (matches the f2h flush)
+    else if (exp == 31) { out = sign | 0x7F800000U | (man << 13); }
+    else { out = sign | ((exp + 112U) << 23) | (man << 13); }
+    float f = 0.0F;
+    std::memcpy(&f, &out, 4);
+    return f;
+}
+} // namespace
+
+// CKIR-AUTHORED fused MLP FORWARD on Vulkan via coopmat2 — the SAME MlpConfig the CUDA port used, now on the second
+// primary compute backend. Emits the coopmat2 GLSL, runs it through the unified compute context, gates the fp16 result
+// against the CPU reference oracle (fp16 tolerance) + a run-to-run determinism replay. This is what makes the crush portable.
+TEST_CASE("v17 MLP: CKIR fused-MLP forward on Vulkan coopmat2 == CPU oracle (fp16 tol) + deterministic", "[kir][vulkan][gpu][mlp]")
+{
+    namespace gpu = crd::gpu;
+    gpu::GpuContextConfig gcfg{};
+    gcfg.backend  = gpu::GpuBackend::Vulkan;
+    gcfg.headless = true;
+    auto ctx      = gpu::create_vulkan_gpu_context(gcfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto* vkctx = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    if (!vkctx->cooperative_matrix2()) { WARN("no VK_NV_cooperative_matrix2 on this adapter; skipping MLP tensor tier"); return; }
+
+    crd::memory::TlsfAllocator alloc(128 << 20);
+    gpu::VulkanComputeContext  compute(*vkctx, &alloc);
+    REQUIRE(compute.valid());
+
+    kir::MlpConfig cfg;
+    cfg.width      = 64;
+    cfg.layers     = 6;
+    cfg.batch_tile = 64; // GLSL tile: 6·64·64 = 24 KB shared (safe under 48 KB)
+    cfg.warps      = 2;
+    REQUIRE(cfg.valid());
+    const int wd    = cfg.width;
+    const int nl    = cfg.layers;
+    const int batch = 8192;
+    const int n_in  = batch * wd;
+    const int n_w   = nl * wd * wd;
+
+    // fp16-quantized inputs (so the oracle sees exactly what the GPU sees; isolates the fp16-accumulation difference).
+    // Bounded small so the 6-layer fp16 chain stays close to the fp32 reference.
+    float* in_f = static_cast<float*>(alloc.allocate(static_cast<crd::usize>(n_in) * sizeof(float)));
+    float* w_f  = static_cast<float*>(alloc.allocate(static_cast<crd::usize>(n_w) * sizeof(float)));
+    for (int i = 0; i < n_in; ++i) { in_f[i] = h2f_mlp(f2h_mlp(0.20F * static_cast<float>((i * 7) % 13 - 6))); }
+    for (int i = 0; i < n_w; ++i) { w_f[i] = h2f_mlp(f2h_mlp(0.10F * static_cast<float>((i * 5) % 11 - 5))); }
+
+    // CPU oracle (fp32 reference)
+    float* out_ref = static_cast<float*>(alloc.allocate(static_cast<crd::usize>(n_in) * sizeof(float)));
+    float* sa      = static_cast<float*>(alloc.allocate(static_cast<crd::usize>(wd) * sizeof(float)));
+    float* sb      = static_cast<float*>(alloc.allocate(static_cast<crd::usize>(wd) * sizeof(float)));
+    kir::mlp_forward_ref(cfg, in_f, w_f, sa, sb, out_ref, batch);
+
+    // emit + compile the coopmat2 GLSL
+    kir::GlslKernel kern(&alloc);
+    REQUIRE(kir::emit_fused_mlp_fwd_glsl(cfg, kern));
+    const auto cres = crd::gpu::compile_glsl_to_spirv(crd::gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), "ckir_mlp", &alloc);
+    if (!cres.ok)
+    {
+        WARN("shaderc build lacks coopmat2 support; skipping");
+        return;
+    }
+
+    using gpu::compute_usage::storage;
+    using gpu::compute_usage::transfer_dst;
+    using gpu::compute_usage::transfer_src;
+    auto pipe = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(cres.spirv.data(), cres.spirv.size()), 3, 0U);
+    REQUIRE(pipe != nullptr);
+
+    const crd::u64 in_bytes  = static_cast<crd::u64>(n_in) * 2U; // fp16
+    const crd::u64 w_bytes   = static_cast<crd::u64>(n_w) * 2U;
+    const crd::u64 out_bytes = static_cast<crd::u64>(n_in) * 2U;
+    auto           buf_in    = compute.create_buffer(in_bytes, storage | transfer_dst, gpu::ComputeMemory::GpuOnly);
+    auto           buf_w     = compute.create_buffer(w_bytes, storage | transfer_dst, gpu::ComputeMemory::GpuOnly);
+    auto           buf_out   = compute.create_buffer(out_bytes, storage | transfer_src, gpu::ComputeMemory::GpuOnly);
+    auto           stg_in    = compute.create_buffer(in_bytes, transfer_src, gpu::ComputeMemory::CpuToGpu);
+    auto           stg_w     = compute.create_buffer(w_bytes, transfer_src, gpu::ComputeMemory::CpuToGpu);
+    auto           stg_out   = compute.create_buffer(out_bytes, transfer_dst, gpu::ComputeMemory::GpuToCpu);
+    REQUIRE(buf_in != nullptr);
+    REQUIRE(buf_w != nullptr);
+    REQUIRE(buf_out != nullptr);
+    REQUIRE(stg_in != nullptr);
+    REQUIRE(stg_w != nullptr);
+    REQUIRE(stg_out != nullptr);
+
+    { auto* d = static_cast<crd::u16*>(stg_in->map()); for (int i = 0; i < n_in; ++i) { d[i] = f2h_mlp(in_f[i]); } stg_in->unmap(); }
+    { auto* d = static_cast<crd::u16*>(stg_w->map()); for (int i = 0; i < n_w; ++i) { d[i] = f2h_mlp(w_f[i]); } stg_w->unmap(); }
+    { auto& rec = compute.begin(); rec.copy(*stg_in, *buf_in, 0U, 0U, in_bytes); rec.copy(*stg_w, *buf_w, 0U, 0U, w_bytes); compute.submit_and_wait(); }
+
+    gpu::ComputeBuffer* binds[] = {buf_in.get(), buf_w.get(), buf_out.get()};
+    const auto          span    = crd::containers::ConstSpan<gpu::ComputeBuffer*>(binds, 3);
+    const crd::u32      groups  = static_cast<crd::u32>(batch / cfg.batch_tile);
+
+    const auto readback = [&](float* dst) {
+        { auto& rec = compute.begin(); rec.dispatch(*pipe, span, nullptr, 0U, groups, 1U, 1U); compute.submit_and_wait(); }
+        { auto& rec = compute.begin(); rec.barrier(*buf_out, gpu::ComputeAccess::ShaderWrite, gpu::ComputeAccess::TransferSrc); rec.copy(*buf_out, *stg_out, 0U, 0U, out_bytes); compute.submit_and_wait(); }
+        const auto* rd = static_cast<const crd::u16*>(stg_out->map());
+        for (int i = 0; i < n_in; ++i) { dst[i] = h2f_mlp(rd[i]); }
+        stg_out->unmap();
+    };
+
+    float* got = static_cast<float*>(alloc.allocate(static_cast<crd::usize>(n_in) * sizeof(float)));
+    float* got2 = static_cast<float*>(alloc.allocate(static_cast<crd::usize>(n_in) * sizeof(float)));
+    readback(got);
+    readback(got2);
+
+    // correctness vs the oracle (fp16 tolerance, normalized by output magnitude)
+    double maxabs = 0.0;
+    double maxmag = 0.0;
+    for (int i = 0; i < n_in; ++i)
+    {
+        const double d = std::fabs(static_cast<double>(got[i]) - static_cast<double>(out_ref[i]));
+        if (d > maxabs) { maxabs = d; }
+        const double m = std::fabs(static_cast<double>(out_ref[i]));
+        if (m > maxmag) { maxmag = m; }
+    }
+    // run-to-run determinism: the fixed coopmat schedule (no atomics) must replay bit-identical
+    int det_diff = 0;
+    for (int i = 0; i < n_in; ++i) { if (got[i] != got2[i]) { ++det_diff; } }
+    std::printf("[Vulkan MLP coopmat2] batch=%d W=%d L=%d  max_abs=%.4f max_mag=%.4f rel=%.4f  det_diff=%d/%d\n",
+                batch, wd, nl, maxabs, maxmag, maxabs / (maxmag + 1e-6), det_diff, n_in);
+    CHECK(maxmag > 1e-3);                       // the network actually produced signal
+    CHECK(maxabs / (maxmag + 1e-6) < 5e-2);     // fp16 tolerance vs fp32 oracle
+    CHECK(det_diff == 0);                       // bit-identical run-to-run (determinism pillar)
+
+    alloc.deallocate(in_f);
+    alloc.deallocate(w_f);
+    alloc.deallocate(out_ref);
+    alloc.deallocate(sa);
+    alloc.deallocate(sb);
+    alloc.deallocate(got);
+    alloc.deallocate(got2);
 }
 
 TEST_CASE("v17-g: Vulkan FUSES GEMM+bias+SiLU into one kernel, correct vs the oracle", "[kir][vulkan][gpu]")

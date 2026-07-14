@@ -13,8 +13,13 @@
 #include <crd/kir/ckir_material.hpp> // B5: the OpenPBR surface struct + G-buffer packing
 #include <crd/kir/ckir_lighting.hpp> // B8: the shared CKIR lighting library (Cook-Torrance BRDF)
 #include <crd/kir/ckir_lower.hpp>    // B7: the material lowering pass (frequency + optimize + specialize)
+#include <crd/kir/ckir_post.hpp>     // B13: the post-processing frontier (HDR exposure/tonemap/output)
 #include <crd/kir/ckir_render.hpp>   // B8-l: the render-path math (clustering / deferred / decals)
 #include <crd/kir/ckir_screen.hpp>   // B12: the screen-space lighting frontier (AO/SSR/SSGI/volumetrics/SSS)
+#include <crd/kir/ckir_taa.hpp>      // B13-a: temporal AA resolve (YCoCg clamp / variance clip / luma-feedback / dither)
+#include <crd/kir/ckir_bloom.hpp>    // B13-b: bloom (Karis 13-tap pyramid / soft-knee / tent / FFT complex-mul / lens flare)
+#include <crd/kir/ckir_cinematic.hpp> // B13-d: cinematic (thin-lens CoC / Garcia complex bokeh / McGuire motion blur)
+#include <crd/kir/ckir_finish.hpp>   // B13-e: finish (Tokuyoshi specular AA / CA / cos⁴ vignette / Lottes grain / AMD CAS)
 #include <crd/kir/ckir_nodes.hpp>    // B6: the MaterialX-parity node library
 #include <crd/kir/ckir_noise.hpp>    // B6-b: the MaterialX SOURCE noise nodes
 
@@ -1465,6 +1470,131 @@ namespace lighting_obs
     const int  ind  = scr::ssgi_bounce(g, rad, smpl, bf, k(0.8), 32.0);                                            // indirect contribution
     return nd::clamp01(g, nd::detail::bin(g, kir::KOp::Mul, ind, k(1.5)));
 }
+// B13-c HDR observable — the AgX filmic pipeline: an HDR scene ramp into the highlights → auto-exposure (EV100) → AgX tonemap.
+// AgX rolls the highlights off (no hard clip to white) → the beautiful filmic gradient. Exercises ev100 + exposure + AgX.
+[[nodiscard]] inline int build_hdr_agx(crd::kir::KGraph& g, int sweep_node)
+{
+    namespace kir = crd::kir;
+    namespace nd  = crd::kir::nodes;
+    namespace pst = crd::kir::post;
+    const auto sh   = kir::make_shape({1});
+    const auto k    = [&](double v) { return g.constant(v, sh, kir::DType::F32); };
+    const int  hdr  = g.vec3(g.binary(kir::KOp::Mul, sweep_node, k(6.0)), g.binary(kir::KOp::Mul, sweep_node, k(4.0)), g.binary(kir::KOp::Mul, sweep_node, k(2.5))); // HDR, into the highlights
+    const int  expo = pst::exposure_from_ev100(g, pst::ev100_from_luminance(g, k(0.5)));                       // auto-exposure multiplier
+    return nd::clamp01(g, pst::agx(g, nd::detail::bin(g, kir::KOp::Mul, hdr, expo)));                          // AgX display-encoded
+}
+// B13-c HDR observable — the Khronos PBR-Neutral pipeline: HDR → gamut-compress → PBR-Neutral tonemap → sRGB output. Preserves
+// saturated hues, compresses only the highlights. Exercises gamut_compress + pbr_neutral + srgb_encode.
+[[nodiscard]] inline int build_hdr_neutral(crd::kir::KGraph& g, int sweep_node)
+{
+    namespace kir = crd::kir;
+    namespace nd  = crd::kir::nodes;
+    namespace pst = crd::kir::post;
+    const auto sh  = kir::make_shape({1});
+    const auto k   = [&](double v) { return g.constant(v, sh, kir::DType::F32); };
+    const int  hdr = g.vec3(g.binary(kir::KOp::Mul, sweep_node, k(3.0)), g.binary(kir::KOp::Mul, sweep_node, k(1.6)), g.binary(kir::KOp::Mul, sweep_node, k(0.9)));
+    return pst::srgb_encode(g, pst::pbr_neutral(g, pst::gamut_compress(g, hdr, k(0.5))));
+}
+// B13-c HDR observable — the PQ (ST.2084) HDR10 output transform, per channel: a normalized display luminance → PQ code value.
+[[nodiscard]] inline int build_hdr_pq(crd::kir::KGraph& g, int sweep_node)
+{
+    namespace kir = crd::kir;
+    namespace nd  = crd::kir::nodes;
+    namespace pst = crd::kir::post;
+    const auto sh   = kir::make_shape({1});
+    const auto k    = [&](double v) { return g.constant(v, sh, kir::DType::F32); };
+    const int  ln   = g.vec3(sweep_node, g.binary(kir::KOp::Mul, sweep_node, k(0.7)), g.binary(kir::KOp::Mul, sweep_node, k(0.5))); // normalized display luminance
+    return nd::clamp01(g, g.vec3(pst::pq_encode(g, g.swizzle(ln, 0)), pst::pq_encode(g, g.swizzle(ln, 1)), pst::pq_encode(g, g.swizzle(ln, 2))));
+}
+// B13-a TAA observable — a compact temporal-resolve pixel: a current + history colour, rectified by variance_clip (→ clip_aabb)
+// against the neighborhood moments, blended by taa_resolve at a luma_feedback-driven alpha, then deband-dithered by the
+// temporal IGN. Exercises variance_clip / clip_aabb / luma_feedback / taa_resolve / ign_temporal / dither_apply on the raster path.
+[[nodiscard]] inline int build_taa(crd::kir::KGraph& g, int sweep_node)
+{
+    namespace kir = crd::kir;
+    namespace nd  = crd::kir::nodes;
+    namespace taa = crd::kir::taa;
+    const auto sh   = kir::make_shape({1});
+    const auto k    = [&](double v) { return g.constant(v, sh, kir::DType::F32); };
+    const auto ax   = [&](double a, double b) { return g.binary(kir::KOp::Add, g.binary(kir::KOp::Mul, sweep_node, k(a)), k(b)); };
+    const int  cur  = g.vec3(ax(0.6, 0.15), ax(0.5, 0.20), ax(0.4, 0.10)); // current sample
+    const int  his  = g.vec3(ax(0.5, 0.25), ax(0.6, 0.10), ax(0.3, 0.30)); // reprojected history
+    const int  m1   = g.vec3(ax(0.55, 0.18), ax(0.55, 0.15), ax(0.35, 0.18)); // neighborhood mean
+    const int  m2   = g.vec3(ax(0.30, 0.22), ax(0.32, 0.18), ax(0.20, 0.20)); // mean of squares
+    const int  clip = taa::variance_clip(g, his, m1, m2, 1.0);
+    const int  luma = g.vec3(k(0.2126), k(0.7152), k(0.0722));
+    const int  a    = taa::luma_feedback(g, g.dot(his, luma), g.dot(cur, luma), 0.1, 0.9);
+    const int  res  = taa::taa_resolve(g, clip, cur, a);
+    const int  noi  = taa::ign_temporal(g, g.vec2(g.binary(kir::KOp::Mul, sweep_node, k(32.0)), g.binary(kir::KOp::Mul, sweep_node, k(18.0))), k(3.0));
+    return nd::clamp01(g, taa::dither_apply(g, res, noi, 255.0));
+}
+// B13-b BLOOM observable — a mini dual-filter pixel: 13 synthesized HDR taps → Karis firefly downsample → soft-knee prefilter,
+// then composited over a scene colour, modulated by an aperture starburst × its spectral tint. Exercises the Karis 13-tap
+// downsample / soft-knee / combine / starburst / spectral_tint on the raster path.
+[[nodiscard]] inline int build_bloom(crd::kir::KGraph& g, int sweep_node)
+{
+    namespace kir = crd::kir;
+    namespace nd  = crd::kir::nodes;
+    namespace blm = crd::kir::bloom;
+    const auto sh  = kir::make_shape({1});
+    const auto k   = [&](double v) { return g.constant(v, sh, kir::DType::F32); };
+    const auto ax  = [&](double a, double b) { return g.binary(kir::KOp::Add, g.binary(kir::KOp::Mul, sweep_node, k(a)), k(b)); };
+    int taps[13];
+    for (int j = 0; j < 13; ++j) { const double f = 1.0 + 0.05 * j; taps[j] = g.vec3(ax(0.8 * f, 0.02 * j), ax(0.5 * f, 0.03 * j), ax(0.3 * f, 0.01 * j)); } // HDR taps (into highlights)
+    const int down  = blm::downsample_karis(g, taps);          // firefly-free downsample
+    const int glow  = blm::soft_knee(g, down, 0.6, 0.4);       // thresholded glow
+    const int scene = g.vec3(ax(0.25, 0.05), ax(0.2, 0.07), ax(0.15, 0.1));
+    const int comp  = blm::combine(g, scene, glow, k(0.6));    // composite
+    const int star  = blm::starburst(g, g.binary(kir::KOp::Mul, sweep_node, k(3.0)), 6.0, 2.0);
+    const int tint  = blm::spectral_tint(g, sweep_node);
+    return nd::clamp01(g, nd::detail::bin(g, kir::KOp::Add, comp, nd::detail::bin(g, kir::KOp::Mul, tint, g.binary(kir::KOp::Mul, star, k(0.15)))));
+}
+// B13-d CINEMATIC observable — a sharp/blurred DoF composite driven by the thin-lens CoC (sweep = depth), modulated by a
+// McGuire motion-blur cone weight over a scaled velocity, plus a Garcia complex-Gaussian bokeh accent. Exercises
+// circle_of_confusion / dof_composite / velocity_scale / mb_cone / complex_gaussian / bokeh_realize (Exp/Cos/Sin/Sqrt/Abs).
+[[nodiscard]] inline int build_cine(crd::kir::KGraph& g, int sweep_node)
+{
+    namespace kir = crd::kir;
+    namespace nd  = crd::kir::nodes;
+    namespace ci  = crd::kir::cinematic;
+    const auto sh  = kir::make_shape({1});
+    const auto k   = [&](double v) { return g.constant(v, sh, kir::DType::F32); };
+    const auto ax  = [&](double a, double b) { return g.binary(kir::KOp::Add, g.binary(kir::KOp::Mul, sweep_node, k(a)), k(b)); };
+    const int  depth = ax(8.0, 1.0);                                                           // depth ∈ [1,9]
+    const int  coc   = ci::circle_of_confusion(g, depth, k(4.0), 0.05, 2.8);
+    const int  sharp = g.vec3(ax(0.6, 0.15), ax(0.5, 0.2), ax(0.4, 0.1));
+    const int  blur  = g.vec3(ax(0.4, 0.25), ax(0.45, 0.15), ax(0.35, 0.2));
+    const int  dof   = ci::dof_composite(g, sharp, blur, coc, 10.0);
+    const int  vel   = ci::velocity_scale(g, g.vec2(ax(6.0, 0.0), ax(3.0, 0.0)), 0.5, 16.0);   // scaled velocity
+    const int  vlen  = g.unary(kir::KOp::Sqrt, g.dot(vel, vel));
+    const int  mb    = ci::mb_cone(g, g.binary(kir::KOp::Mul, sweep_node, k(4.0)), vlen);
+    const int  bk    = ci::complex_gaussian(g, g.binary(kir::KOp::Mul, sweep_node, sweep_node), -4.0, 1.0); // vec2 phasor
+    const int  acc   = ci::bokeh_realize(g, g.swizzle(bk, 0), g.swizzle(bk, 1), 0.7, -0.2);     // real bokeh accent
+    const int  lit   = nd::detail::bin(g, kir::KOp::Mul, dof, g.binary(kir::KOp::Add, k(0.6), g.binary(kir::KOp::Mul, k(0.4), mb)));
+    return nd::clamp01(g, nd::detail::bin(g, kir::KOp::Add, lit, g.binary(kir::KOp::Mul, acc, k(0.1))));
+}
+// B13-e FINISH observable — the finishing chain on a synthesized pixel: CAS-sharpen a 5-tap cross, blend with the film-grained
+// colour, darken by the cos⁴ vignette, and lift by the geometric-specular-AA roughness. Exercises cas_sharpen / film_grain /
+// vignette / specular_aa (Sqrt / Min / Max / Div / dot).
+[[nodiscard]] inline int build_finish(crd::kir::KGraph& g, int sweep_node)
+{
+    namespace kir = crd::kir;
+    namespace nd  = crd::kir::nodes;
+    namespace fin = crd::kir::finish;
+    const auto sh  = kir::make_shape({1});
+    const auto k   = [&](double v) { return g.constant(v, sh, kir::DType::F32); };
+    const auto ax  = [&](double a, double b) { return g.binary(kir::KOp::Add, g.binary(kir::KOp::Mul, sweep_node, k(a)), k(b)); };
+    const int  color = g.vec3(ax(0.6, 0.15), ax(0.5, 0.2), ax(0.4, 0.1));
+    const int  vig   = fin::vignette(g, g.vec2(sweep_node, g.binary(kir::KOp::Mul, sweep_node, k(0.7))), g.vec2(k(0.5), k(0.5)), 1.5);
+    const int  grain = fin::film_grain(g, color, sweep_node, 0.1);
+    int taps[5];
+    for (int t = 0; t < 5; ++t) { const double f = 1.0 + 0.1 * t; taps[t] = g.vec3(ax(0.5 * f, 0.02 * t), ax(0.45 * f, 0.03 * t), ax(0.35 * f, 0.01 * t)); }
+    const int  sharp = fin::cas_sharpen(g, taps[0], taps[1], taps[2], taps[3], taps[4], 0.6);
+    const int  aa    = fin::specular_aa(g, sweep_node, g.vec3(k(0.1), k(0.05), k(0.02)), g.vec3(k(0.03), k(0.08), k(0.01)), 0.5, 0.18);
+    const int  base  = g.ternary(kir::KOp::Mix, grain, sharp, g.splat(k(0.5), 3));       // blend grained + sharpened
+    const int  dark  = nd::detail::bin(g, kir::KOp::Mul, base, vig);                       // vignette darken
+    return nd::clamp01(g, nd::detail::bin(g, kir::KOp::Add, dark, g.splat(g.binary(kir::KOp::Mul, aa, k(0.05)), 3)));
+}
 } // namespace lighting_obs
 
 inline void build_lighting_csm_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe)
@@ -1870,6 +2000,44 @@ inline int build_lighting_ssr_expected(crd::u32 x, int channel)
     if (q > 255) { q = 255; }
     return q;
 }
+
+// B13-c HDR wrappers (3 observables: AgX filmic · Khronos PBR-Neutral · PQ HDR10 output).
+#define CRD_HDR_WRAP(NAME, BUILDER)                                                                                             \
+    inline void build_lighting_##NAME##_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe)                                           \
+    {                                                                                                                          \
+        namespace kir    = crd::kir;                                                                                           \
+        const auto sh    = kir::make_shape({1});                                                                               \
+        const auto k     = [&](double v) { return g.constant(v, sh, kir::DType::F32); };                                       \
+        const int  fc    = g.builtin(kir::KBuiltin::FragCoord);                                                                \
+        const int  sweep = g.binary(kir::KOp::Add, k(0.05), g.binary(kir::KOp::Mul, g.swizzle(fc, 0), k(0.9 / 32.0)));         \
+        const int  col   = lighting_obs::BUILDER(g, sweep);                                                                    \
+        fe.stage  = kir::KStage::Fragment;                                                                                     \
+        fe.n_out  = 1;                                                                                                         \
+        fe.out[0] = {g.vec4(g.swizzle(col, 0), g.swizzle(col, 1), g.swizzle(col, 2), k(1.0)), 0};                             \
+    }                                                                                                                          \
+    inline int build_lighting_##NAME##_expected(crd::u32 x, int channel)                                                       \
+    {                                                                                                                          \
+        namespace kir = crd::kir;                                                                                              \
+        crd::memory::TlsfAllocator alloc(8U << 20U);                                                                           \
+        kir::KGraph                g(&alloc);                                                                                  \
+        const auto                 sh    = kir::make_shape({1});                                                               \
+        const int                  sweep = g.constant(0.05 + (static_cast<double>(x) + 0.5) * (0.9 / 32.0), sh, kir::DType::F32); \
+        const int                  col   = lighting_obs::BUILDER(g, sweep);                                                    \
+        crd::f64 out[3] = {0.0, 0.0, 0.0};                                                                                     \
+        crd::kir::eval_cpu(g, nullptr, &alloc, col, out);                                                                      \
+        int q = static_cast<int>(std::lround(out[channel] * 255.0));                                                          \
+        if (q < 0) { q = 0; }                                                                                                 \
+        if (q > 255) { q = 255; }                                                                                             \
+        return q;                                                                                                             \
+    }
+CRD_HDR_WRAP(hdragx, build_hdr_agx)
+CRD_HDR_WRAP(hdrneutral, build_hdr_neutral)
+CRD_HDR_WRAP(hdrpq, build_hdr_pq)
+CRD_HDR_WRAP(taa, build_taa)     // B13-a temporal-resolve observable (same single-vec3 wrapper shape)
+CRD_HDR_WRAP(bloom, build_bloom) // B13-b bloom observable
+CRD_HDR_WRAP(cine, build_cine)     // B13-d cinematic observable
+CRD_HDR_WRAP(finish, build_finish) // B13-e finishing-chain observable
+#undef CRD_HDR_WRAP
 
 inline void build_lighting_ssgi_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe)
 {

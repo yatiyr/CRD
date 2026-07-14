@@ -168,7 +168,22 @@ enum class KOp : crd::u8
     StorageLoad,                                            // B1-f: read element `a` (uint index) of the FS storage buffer (set 0, binding 0)
     Texture, Sampler, TexSample,                            // B2: opaque texture/sampler binding leaves · sample(a=tex,b=samp,c=uv)
     SampleLod, SampleGrad, SampleCmp, TexelFetch, TexGather, TexSize, // B2-b: sample family — explicit-LOD/grad · shadow-compare · integer fetch · 4-texel gather · size query
-    SampleIndexed                                           // B2-d: BINDLESS sample — index a texture ARRAY (a=texArray, b=samp, c=uv, d=index)
+    SampleIndexed,                                          // B2-d: BINDLESS sample — index a texture ARRAY (a=texArray, b=samp, c=uv, d=index)
+    // ── B-cmp: the imperative COMPUTE-KERNEL layer (workgroup shared memory + barriers + storage buffers) ──────────────────
+    // The substrate for hand-authored on-chip kernels (FFT, scan, sort, stencils, conv) composed IN the IR → all backends,
+    // instead of the hardcoded per-backend emitter special-cases (tiled GEMM / reduce). Resource leaves + indexed reads;
+    // the WRITES + barriers + loops live in the KEntry statement body (KStmt), not the value graph.
+    BufferDecl,                                             // a bound global storage buffer: dtype=elem · dset=set · iidx=binding · axes bit0=writable
+    SharedDecl,                                             // a workgroup-shared array: dtype=elem · iidx=length · axes=pad (bank-conflict padding, +elems per "row" is caller's index math)
+    BufferLoad,                                             // read buffer[idx]: a=BufferDecl node · b=uint index node
+    SharedLoad,                                             // read shared[idx]: a=SharedDecl node · b=uint index node
+    KernelLoopVar,                                          // the induction value of an enclosing kernel `For` statement (a=For-stmt id) — a leaf the body reads
+    // ── B-cmp: SUBGROUP (wave) ops — cross-lane reductions within a fixed-size (32-lane) subgroup. The cheap deterministic rank
+    // for radix sort + warp-scan. Bit-exact requires a FIXED subgroup size across backends (32 — NVIDIA-native; forced via
+    // subgroupSizeControl elsewhere). a = the per-lane predicate/value node.
+    SubgroupBallot,                                         // a (u32, 0/1 predicate) → u32 bitmask of lanes (bit `lane`) whose predicate is nonzero
+    SubgroupBallotExclCount,                                // a (u32 ballot mask) → popcount of set bits STRICTLY BELOW this lane (exclusive within-subgroup rank)
+    SubgroupMatch                                           // a (u32 value) → u32 bitmask of lanes whose value EQUALS this lane's (hardware match_any / partition; deterministic ⇒ bit-exact)
 };
 
 // B1: fragment derivatives are the only ops that read NEIGHBOURING invocations (the 2×2 pixel quad), so they are legal
@@ -344,6 +359,9 @@ enum class KBuiltin : crd::u8
     // B1-f: appended at END (enum values are cook-serialized — never insert mid-enum).
     InnerCoverage, // uint — 1 iff the pixel is FULLY inside the primitive (SV_InnerCoverage / gl_FragFullyCoveredNV under
                    // conservative rasterization)
+    // B-cmp Phase 1: the FLATTENED 1-D workgroup index (gl_WorkGroupID.x / SV_GroupID.x / blockIdx.x) — a scalar uint, so a
+    // BATCHED compute kernel (one workgroup per independent problem, e.g. one FFT per grid slot) offsets its global buffers.
+    WorkgroupIndex, // uint
 };
 
 struct KBuiltinInfo
@@ -368,6 +386,7 @@ struct KBuiltinInfo
     case KBuiltin::WorkgroupId:          return {t_uvec3, stage_mask::kWorkgroup, "WorkgroupId"};
     case KBuiltin::NumWorkgroups:        return {t_uvec3, stage_mask::kWorkgroup, "NumWorkgroups"};
     case KBuiltin::LocalInvocationIndex: return {t_uint, stage_mask::kWorkgroup, "LocalInvocationIndex"};
+    case KBuiltin::WorkgroupIndex:       return {t_uint, stage_mask::kWorkgroup, "WorkgroupIndex"}; // B-cmp: flattened 1-D wg id
 
     case KBuiltin::VertexIndex:   return {t_int, stage_mask::kVertex, "VertexIndex"};
     case KBuiltin::InstanceIndex: return {t_int, stage_mask::kVertex, "InstanceIndex"};
@@ -465,6 +484,58 @@ struct KStageOutput
     Interp interp   = Interp::Smooth; // B1-c: VS interpolant interpolation mode (ignored for a fragment colour attachment)
 };
 
+// ── B-cmp: the imperative compute-kernel STATEMENT model ─────────────────────────────────────────────────────────────────
+// A compute KEntry's kernel is an ordered list of EFFECT statements (writes + barriers + loops/ifs), distinct from the pure
+// value graph (which computes the RHS values + indices). Stored in a flat pool on KGraph; For/If carry a nested [begin,count).
+enum class BarrierScope : crd::u8
+{
+    Workgroup = 0, // control + shared-memory barrier: all invocations sync + shared writes become visible (GLSL barrier()+groupMemoryBarrier)
+    Buffer         // control + BUFFER-memory barrier: storage-buffer writes become visible across the workgroup
+};
+enum class KStmtKind : crd::u8
+{
+    BufferStore, // buffer[index] = value    (target = BufferDecl node)
+    SharedStore, // shared[index] = value    (target = SharedDecl node)
+    Barrier,     // workgroup sync (scope)
+    For,         // for (loop_var = 0; loop_var < count; ++loop_var) { body }  — count = value node; loop_var read via KernelLoopVar(a=this stmt id)
+    If,          // if (cond) { body }       — cond = a Bool value node
+    Materialize, // FREEZE `value` into a per-thread register NOW (`precise float t<value> = <expr>;`) — subsequent reads of
+                 // that node return the frozen snapshot, NOT a fresh re-read. Lets a shared value survive a shared OVERWRITE
+                 // (register-residency / single-buffer time-multiplexed exchange, cuFFT's 4.2 KB-shared trick). `value` = the
+                 // node to freeze; must be a FLOAT value. The oracle caches it per (node, thread); emitters emit one temp.
+    SpinUntilNonzero, // SPIN-WAIT: block until a COHERENT global flag buffer[index] becomes nonzero (`while(buf[idx]==0){...}`).
+                 // The inter-block sync for a SINGLE-PASS scan/chained primitive — one block waits for its predecessor to
+                 // PUBLISH. target = the coherent BufferDecl, index = the element. The oracle runs workgroups SEQUENTIALLY so
+                 // the predecessor already published ⇒ this is a no-op there (verifies nonzero); on the GPU it genuinely spins.
+    SharedAtomicAdd, // ATOMIC ADD to a SHARED array element: `atomicAdd(sh[index], value)` (a histogram bin count, etc.). target =
+                 // SharedDecl, index, value. Bit-exact because the RESULT is a SUM (order-independent) — the oracle accumulates
+                 // every active thread's contribution to the bin; emitters emit the backend atomic. U32 shared only.
+    BufferAtomicAdd, // ATOMIC ADD to a GLOBAL buffer element: `atomicAdd(buf[index], value)` — a device-wide histogram/counter.
+                 // target = BufferDecl, index, value. Bit-exact (SUM is order-independent). U32 buffers only.
+    ForBreakIf,  // per-thread BREAK out of the INNERMOST kernel For when `value` ≠ 0 (`if (cond) break;`) — the decoupled-lookback
+                 // early-exit. MUST be a direct child of its For (not nested under a divergent If inside the loop): the oracle
+                 // removes breaking threads from the loop's active set for the REMAINING iterations.
+    BufferTicket, // BLOCK-scoped atomic ticket: thread 0 does `sh[0] = atomicAdd(&buf[index], 1)` — the block's DYNAMIC position.
+                 // Onesweep's forward-progress guarantee: resident blocks always hold the LOWEST unprocessed ids, so a spinning
+                 // block's predecessor is always resident or retired (blockIdx launch order is NOT guaranteed — using it raw
+                 // DEADLOCKED on Ada). target = coherent BufferDecl, index = counter cell, value = the SharedDecl (slot 0).
+                 // Oracle: executes once per workgroup (sequential ⇒ ticket == WorkgroupIndex).
+    SyncWarp     // WARP-scoped barrier + shared-memory visibility WITHIN the 32-lane subgroup — the warp-synchronous rank's
+                 // ~2-cycle sync (vs a full block Barrier). CUDA `__syncwarp()`, GLSL `subgroupBarrier()`, MSL
+                 // `simdgroup_barrier`; HLSL/WGSL lower to the conservative block barrier (uniform flow required anyway).
+                 // Oracle: commits pending writes (lockstep interpreter ⇒ same semantics as Barrier).
+};
+struct KStmt
+{
+    KStmtKind kind       = KStmtKind::Barrier;
+    crd::i32  target     = -1; // BufferStore/SharedStore: the resource (BufferDecl/SharedDecl) node
+    crd::i32  index      = -1; // BufferStore/SharedStore: the index node
+    crd::i32  value      = -1; // *Store: value node · For: count node · If: cond node
+    BarrierScope scope   = BarrierScope::Workgroup; // Barrier
+    crd::i32  body_begin = -1; // For/If: nested statement range into KGraph's stmt pool
+    crd::i32  body_count = 0;
+};
+
 struct KEntry
 {
     KStage       stage        = KStage::Fragment;
@@ -488,6 +559,13 @@ struct KEntry
     bool         interlock           = false;
     int          n_out        = 0;
     KStageOutput out[kMaxStageOutputs] = {};
+    // ── B-cmp: an imperative COMPUTE kernel. When `kernel_body_count > 0` (Compute stage only), this entry is a hand-authored
+    // workgroup kernel — `local_size` threads per workgroup running the statement body [kernel_body_begin, +count) in the
+    // KGraph stmt pool — NOT the functional map/reduce path. n_out/out are unused for a kernel (its outputs are BufferStores).
+    crd::u32     local_size[3]      = {1, 1, 1};
+    int          kernel_body_begin  = -1;
+    int          kernel_body_count  = 0;
+    [[nodiscard]] bool is_kernel() const noexcept { return kernel_body_count > 0; }
 };
 
 [[nodiscard]] inline bool is_compare(KOp op) noexcept
@@ -588,7 +666,11 @@ struct KNode
 {
     if (dt == DType::F32) { return static_cast<crd::f64>(static_cast<float>(v)); }
     if (dt == DType::Bool) { return v != 0.0 ? 1.0 : 0.0; } // a bool materializes as exactly 0.0 or 1.0 in the oracle
-    return v; // F64 (and, for now, the storage dtypes — exact narrow rounding lands with their backends)
+    // Integer storage types are INTEGRAL and truncate toward zero — a GPU int/uint is never fractional, and `uint/uint`
+    // division + `(u)int(x)` casts truncate. Without this the oracle keeps fractional index arithmetic and diverges from
+    // every backend (found wiring the FFT/transpose index math). Bit-op / add-mul results are already integral ⇒ no-op there.
+    if (dt == DType::I32 || dt == DType::I64 || dt == DType::U8 || dt == DType::U32) { return static_cast<crd::f64>(static_cast<crd::i64>(v)); }
+    return v; // F64 / F16 / BF16 (exact narrow rounding lands with their backends)
 }
 
 [[nodiscard]] inline crd::f64 apply_unary(KOp op, crd::f64 x) noexcept
@@ -684,7 +766,7 @@ class KGraph
 {
 public:
     explicit KGraph(crd::memory::IAllocator* alloc) noexcept
-        : m_nodes(alloc), m_ext(alloc), m_sfields(alloc), m_sbegin(alloc)
+        : m_nodes(alloc), m_ext(alloc), m_sfields(alloc), m_sbegin(alloc), m_stmts(alloc)
     {
     }
 
@@ -744,6 +826,47 @@ public:
     // B0-2: an explicit RxC matrix input, fed as rows*cols column-major values per element. The only way to feed a mat2
     // (comps 4 collides with vec4) or any non-square matrix.
     [[nodiscard]] int input_mat(const Shape& shape, DType dt, int rows, int cols) { KNode n; n.op = KOp::Input; n.type = KType::mat(dt, rows, cols); n.shape = shape; n.iidx = m_ninput++; return push(n); }
+
+    // ── B-cmp: compute-KERNEL authoring — resources, indexed reads, and the effect-statement body ────────────────────────
+    // A bound global storage buffer of `elem` scalars at (set, binding). `writable` ⇒ the kernel BufferStores it.
+    [[nodiscard]] int buffer_decl(DType elem, int set, int binding, bool writable) { KNode n; n.op = KOp::BufferDecl; n.type = KType::make_scalar(elem); n.shape = make_shape({1}); n.dset = static_cast<crd::u8>(set); n.iidx = binding; n.axes = writable ? 1U : 0U; return push(n); }
+    // COHERENT+VOLATILE writable buffer — cross-workgroup visible (device-scope). `axes` bit1 = coherent; the emitters add
+    // `coherent volatile` so a SpinUntilNonzero re-reads global each iteration and a publish is seen by other blocks.
+    [[nodiscard]] int buffer_decl_coherent(DType elem, int set, int binding) { KNode n; n.op = KOp::BufferDecl; n.type = KType::make_scalar(elem); n.shape = make_shape({1}); n.dset = static_cast<crd::u8>(set); n.iidx = binding; n.axes = 3U; return push(n); }
+    // A workgroup-shared array of `length` scalars (+ `pad` extra elems for bank-conflict-free strided access). Compile-time size.
+    [[nodiscard]] int shared_decl(DType elem, int length, int pad = 0) { KNode n; n.op = KOp::SharedDecl; n.type = KType::make_scalar(elem); n.shape = make_shape({1}); n.iidx = length; n.axes = static_cast<crd::u32>(pad); return push(n); }
+    // Indexed reads (per-invocation scalar values fed into the value graph).
+    [[nodiscard]] int buffer_load(int buf, int idx) { KNode n; n.op = KOp::BufferLoad; n.type = KType::make_scalar(t(buf).dtype()); n.shape = make_shape({1}); n.a = buf; n.b = idx; return push(n); }
+    [[nodiscard]] int shared_load(int sh, int idx)  { KNode n; n.op = KOp::SharedLoad; n.type = KType::make_scalar(t(sh).dtype());  n.shape = make_shape({1}); n.a = sh;  n.b = idx; return push(n); }
+    // Effect statements (appended to the kernel body pool in order). Mark the body start, append, then set the entry's range.
+    [[nodiscard]] int kernel_stmt_mark() const noexcept { return static_cast<int>(m_stmts.size()); }
+    void stmt_buffer_store(int buf, int idx, int val) { KStmt s; s.kind = KStmtKind::BufferStore; s.target = buf; s.index = idx; s.value = val; m_stmts.push_back(s); }
+    void stmt_shared_store(int sh, int idx, int val)  { KStmt s; s.kind = KStmtKind::SharedStore; s.target = sh;  s.index = idx; s.value = val; m_stmts.push_back(s); }
+    void stmt_barrier(BarrierScope scope = BarrierScope::Workgroup) { KStmt s; s.kind = KStmtKind::Barrier; s.scope = scope; m_stmts.push_back(s); }
+    // SPIN-WAIT until the coherent flag buffer[idx] becomes nonzero (single-pass inter-block sync). Call from ONE thread inside
+    // an `if (tid==0)` guard, then a workgroup barrier so the whole block sees the published value.
+    void stmt_spin_until_nonzero(int buf, int idx) { KStmt s; s.kind = KStmtKind::SpinUntilNonzero; s.target = buf; s.index = idx; m_stmts.push_back(s); }
+    // ATOMIC ADD to shared[idx] (U32 histogram bin, etc.). Bit-exact: the total is a sum (order-independent).
+    void stmt_shared_atomic_add(int sh, int idx, int val) { KStmt s; s.kind = KStmtKind::SharedAtomicAdd; s.target = sh; s.index = idx; s.value = val; m_stmts.push_back(s); }
+    void stmt_buffer_atomic_add(int buf, int idx, int val) { KStmt s; s.kind = KStmtKind::BufferAtomicAdd; s.target = buf; s.index = idx; s.value = val; m_stmts.push_back(s); }
+    void stmt_for_break_if(int cond) { KStmt s; s.kind = KStmtKind::ForBreakIf; s.value = cond; m_stmts.push_back(s); }
+    void stmt_buffer_ticket(int buf, int idx, int sh) { KStmt s; s.kind = KStmtKind::BufferTicket; s.target = buf; s.index = idx; s.value = sh; m_stmts.push_back(s); }
+    void stmt_sync_warp() { KStmt s; s.kind = KStmtKind::SyncWarp; m_stmts.push_back(s); }
+    void stmt_materialize(int val) { KStmt s; s.kind = KStmtKind::Materialize; s.value = val; m_stmts.push_back(s); } // freeze `val` into a register
+    // ── STRUCTURED control flow (For / If). LAYOUT: the control statement is followed CONTIGUOUSLY by its body in the pool;
+    // the parent range spans BOTH, and every consumer (the CPU oracle + all 5 emitters) executes the body via `body_begin`/
+    // `body_count` then SKIPS past it. Author with the scoped pattern:
+    //   int f = stmt_for_begin(count); int lv = kernel_loop_var(f); <body using lv>; stmt_for_end(f);
+    //   int c = stmt_if_begin(cond);   <body>;                       stmt_if_end(c);
+    // Bodies nest (a For/If inside another's body); every `*_end` must pair with its `*_begin`, innermost first.
+    [[nodiscard]] int stmt_for_begin(int count) { KStmt s; s.kind = KStmtKind::For; s.value = count; s.body_begin = static_cast<crd::i32>(m_stmts.size()) + 1; m_stmts.push_back(s); return static_cast<int>(m_stmts.size()) - 1; }
+    void              stmt_for_end(int for_id)  { KStmt& s = m_stmts[static_cast<crd::usize>(for_id)]; s.body_count = static_cast<crd::i32>(m_stmts.size()) - s.body_begin; }
+    [[nodiscard]] int stmt_if_begin(int cond)   { KStmt s; s.kind = KStmtKind::If;  s.value = cond;  s.body_begin = static_cast<crd::i32>(m_stmts.size()) + 1; m_stmts.push_back(s); return static_cast<int>(m_stmts.size()) - 1; }
+    void              stmt_if_end(int if_id)    { KStmt& s = m_stmts[static_cast<crd::usize>(if_id)]; s.body_count = static_cast<crd::i32>(m_stmts.size()) - s.body_begin; }
+    // The induction value (0..count-1, U32) of the enclosing `For` identified by `for_id` — a value leaf read inside its body.
+    [[nodiscard]] int kernel_loop_var(int for_id) { KNode n; n.op = KOp::KernelLoopVar; n.type = KType::make_scalar(DType::U32); n.shape = make_shape({1}); n.a = for_id; return push(n); }
+    [[nodiscard]] int          stmt_count() const noexcept { return static_cast<int>(m_stmts.size()); }
+    [[nodiscard]] const KStmt& stmt(int i)  const noexcept { return m_stmts[static_cast<crd::usize>(i)]; }
     [[nodiscard]] int constant(crd::f64 v, const Shape& shape, DType dt) { KNode n; n.op = KOp::Const; n.type = KType::make_scalar(dt); n.shape = shape; n.cval = v; return push(n); }
     [[nodiscard]] int iota(const Shape& shape, int axis, DType dt) { KNode n; n.op = KOp::Iota; n.type = KType::make_scalar(dt); n.shape = shape; n.iidx = axis; return push(n); }
 
@@ -751,6 +874,11 @@ public:
     [[nodiscard]] int binary(KOp op, int a, int b) { KNode n; n.op = op; n.type = is_compare(op) ? t(a).type.with_scalar(DType::Bool) : t(a).type; n.shape = t(a).shape; n.a = a; n.b = b; return push(n); }
     [[nodiscard]] int ternary(KOp op, int a, int b, int c) { KNode n; n.op = op; n.type = t(a).type; n.shape = t(a).shape; n.a = a; n.b = b; n.c = c; return push(n); } // Clamp/Mix/Fma
     [[nodiscard]] int select(int cond, int a, int b) { KNode n; n.op = KOp::Select; n.type = t(a).type; n.shape = t(a).shape; n.a = a; n.b = b; n.c = cond; return push(n); }
+    // SUBGROUP (wave) ops — cross-lane within a fixed 32-lane subgroup, both → U32. ballot(pred)=bitmask of nonzero-pred lanes;
+    // ballot_excl_count(mask)=popcount of set bits below this lane. Compose → a cheap deterministic radix rank / warp-scan.
+    [[nodiscard]] int subgroup_ballot(int pred) { KNode n; n.op = KOp::SubgroupBallot; n.type = KType::make_scalar(DType::U32); n.shape = t(pred).shape; n.a = pred; return push(n); }
+    [[nodiscard]] int subgroup_ballot_excl_count(int mask) { KNode n; n.op = KOp::SubgroupBallotExclCount; n.type = KType::make_scalar(DType::U32); n.shape = t(mask).shape; n.a = mask; return push(n); }
+    [[nodiscard]] int subgroup_match(int value) { KNode n; n.op = KOp::SubgroupMatch; n.type = KType::make_scalar(DType::U32); n.shape = t(value).shape; n.a = value; return push(n); }
     // Structured control flow — FIXED-count loop (A4 tier 1): acc = init; for it in [0,count): acc = body(it, acc); return acc.
     // Compile-time UNROLL ⇒ pure dataflow ⇒ runs on EVERY backend through the existing emitters (no IR/eval/emit change).
     // `body(int it, int acc) -> int` returns the next accumulator node. For DYNAMIC/large trip counts, the region-based
@@ -1379,6 +1507,7 @@ private:
     crd::containers::Array<crd::i32> m_ext;     // B0-4: flat variadic-operand pool
     crd::containers::Array<KType>    m_sfields; // struct registry: field types, CSR-packed
     crd::containers::Array<crd::u32> m_sbegin;  // struct registry: first field of struct id
+    crd::containers::Array<KStmt>    m_stmts;   // B-cmp: the imperative compute-kernel statement pool
     int                              m_ninput = 0;
 };
 

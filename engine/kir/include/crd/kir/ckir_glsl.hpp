@@ -82,6 +82,7 @@ inline void app_int_const(crd::containers::String& s, crd::f64 v, DType dt) { ap
     case KOp::CmpGt: case KOp::CmpGe: case KOp::CmpNe:
     case KOp::BitNot: case KOp::BitCount: case KOp::FindLSB: case KOp::FindMSB: case KOp::BitfieldExtract:
     case KOp::BitReverse: case KOp::Ldexp: case KOp::FloatBitsToInt: case KOp::IntBitsToFloat:
+    case KOp::SubgroupBallot: case KOp::SubgroupBallotExclCount: case KOp::SubgroupMatch:
     case KOp::Select: return true;
     default: return false;
     }
@@ -528,6 +529,8 @@ inline bool emit_value_stmt(const KGraph& g, int i, crd::containers::String& s, 
     case KOp::BitCount: s.append("bitCount("); ta(nd.a); s.append(")"); break;
     case KOp::FindLSB: s.append("findLSB("); ta(nd.a); s.append(")"); break;
     case KOp::FindMSB: s.append("findMSB("); ta(nd.a); s.append(")"); break;
+    case KOp::SubgroupBallot: s.append("subgroupBallot("); ta(nd.a); s.append(" != 0u).x"); break;
+    case KOp::SubgroupBallotExclCount: s.append("subgroupBallotExclusiveBitCount(uvec4("); ta(nd.a); s.append(", 0u, 0u, 0u))"); break;
     default: return false;
     }
     s.append(";\n");
@@ -561,6 +564,185 @@ inline bool emit_value_stmt(const KGraph& g, int i, crd::containers::String& s, 
     case Interp::Sample:        return "sample ";
     default:                    return ""; // Smooth (perspective-correct)
     }
+}
+
+// ── B-cmp: emit an imperative COMPUTE KERNEL (shared memory + barriers + storage buffers) to GLSL ─────────────────────────
+// The hand-authored on-chip kernel path (FFT / reduction / transpose / conv), distinct from the functional elementwise
+// emitter. Resource decls (buffers + `shared` arrays) + the KEntry statement body with INLINE value expressions (a SharedLoad
+// must emit at its statement, never hoisted across a barrier). Returns false on an op it can't yet lower (refuses loudly).
+inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::memory::IAllocator* scratch, GlslKernel& out)
+{
+    using namespace glsl_detail;
+    if (!entry.is_kernel()) { return false; }
+    const int                n = g.size();
+    crd::containers::String& s = out.source;
+    s.clear();
+    out.n_inputs = 0;
+    s.append("#version 450\n");
+    s.append("#extension GL_KHR_shader_subgroup_basic : require\n");  // B-cmp: subgroup (wave) ops — the cheap deterministic
+    s.append("#extension GL_KHR_shader_subgroup_ballot : require\n"); // radix rank; bit-exact under a forced 32-lane subgroup
+    s.append("#extension GL_NV_shader_subgroup_partitioned : enable\n"); // hardware match_any (SubgroupMatch); SPIR-V cap emitted only when used
+    s.append("layout(local_size_x = "); app_uint(s, entry.local_size[0]);
+    s.append(", local_size_y = ");      app_uint(s, entry.local_size[1]);
+    s.append(", local_size_z = ");      app_uint(s, entry.local_size[2]); s.append(") in;\n");
+    for (int i = 0; i < n; ++i) // resource decls: storage buffers + workgroup shared arrays
+    {
+        const KNode& nd = g.node(i);
+        if (nd.op == KOp::BufferDecl)
+        {
+            s.append("layout(std430, binding = "); app_uint(s, nd.iidx); s.append(") ");
+            if ((nd.axes & 2U) != 0U) { s.append("coherent volatile "); } // cross-workgroup visible (spin-wait publish/read)
+            s.append(nd.axes != 0U ? "" : "readonly "); s.append("buffer B"); app_uint(s, nd.iidx);
+            s.append(" { "); s.append(buf_ctype(nd.dtype())); s.append(" buf"); app_uint(s, nd.iidx); s.append("[]; };\n");
+        }
+        else if (nd.op == KOp::SharedDecl)
+        {
+            s.append("shared "); s.append(buf_ctype(nd.dtype())); s.append(" sh"); app_uint(s, i);
+            s.append("["); app_uint(s, nd.iidx + static_cast<int>(nd.axes)); s.append("];\n");
+        }
+    }
+    s.append("void main() {\n");
+
+    // DETERMINISM: every FLOAT arithmetic node materializes as a `precise` temp (SPIR-V NoContraction ⇒ no FMA fusion ⇒
+    // bit-matches the CPU oracle's op-by-op rounding — the same lever the elementwise emitter uses). LEAVES (loads/consts/
+    // builtins/loop-var) + cast/select/compare/bitops stay INLINE, so a shared/buffer load RE-READS at each use (correct
+    // across barriers). Temps CSE by node id; every kernel authors FRESH load nodes after a barrier, so a load-derived temp
+    // is never referenced across a barrier (and sibling loops never share an arithmetic node ⇒ no cross-scope temp).
+    bool                            ok = true;
+    crd::containers::Array<crd::u8> temped(scratch);
+    temped.resize(static_cast<crd::usize>(n), 0);
+    const auto is_inline_op = [](KOp op) -> bool {
+        switch (op)
+        {
+        case KOp::Const: case KOp::Builtin: case KOp::KernelLoopVar: case KOp::BufferLoad: case KOp::SharedLoad:
+        case KOp::BufferDecl: case KOp::SharedDecl: case KOp::Cast: case KOp::Select:
+        case KOp::CmpLt: case KOp::CmpLe: case KOp::CmpGt: case KOp::CmpGe: case KOp::CmpEq: case KOp::CmpNe:
+        case KOp::BitAnd: case KOp::BitOr: case KOp::BitXor: case KOp::Shl: case KOp::Shr: return true;
+        default: return false;
+        }
+    };
+    // pv: print a node's VALUE — a temp reference if it was materialized, else its inline expression (children via pv).
+    const auto pv = [&](auto&& self, int node) -> void {
+        if (temped[static_cast<crd::usize>(node)] != 0U) { s.append("t"); app_uint(s, static_cast<crd::u32>(node)); return; }
+        const KNode& nd  = g.node(node);
+        const auto   bin = [&](const char* o) { s.append("("); self(self, nd.a); s.append(o); self(self, nd.b); s.append(")"); };
+        switch (nd.op)
+        {
+        case KOp::Const:
+            if (nd.dtype() == DType::Bool) { s.append(nd.cval != 0.0 ? "true" : "false"); }
+            else if (dt_is_uint(nd.dtype())) { app_uint(s, static_cast<int>(nd.cval)); s.append("u"); }
+            else if (dt_is_int(nd.dtype())) { app_uint(s, static_cast<int>(nd.cval)); }
+            else { app_flit(s, nd.cval); }
+            break;
+        case KOp::Builtin:
+            if (static_cast<KBuiltin>(nd.iidx) == KBuiltin::LocalInvocationIndex) { s.append("gl_LocalInvocationIndex"); }
+            else if (static_cast<KBuiltin>(nd.iidx) == KBuiltin::WorkgroupIndex) { s.append("gl_WorkGroupID.x"); }
+            else { ok = false; s.append("0u"); }
+            break;
+        case KOp::KernelLoopVar: s.append("lv"); app_uint(s, nd.a); break;
+        case KOp::BufferLoad: s.append("buf"); app_uint(s, g.node(nd.a).iidx); s.append("["); self(self, nd.b); s.append("]"); break;
+        case KOp::SharedLoad: s.append("sh"); app_uint(s, nd.a); s.append("["); self(self, nd.b); s.append("]"); break;
+        case KOp::Cast: { const char* ct = "float("; if (dt_is_uint(nd.dtype())) { ct = "uint("; } else if (dt_is_int(nd.dtype())) { ct = "int("; } s.append(ct); self(self, nd.a); s.append(")"); break; }
+        case KOp::CmpLt: bin(" < "); break;
+        case KOp::CmpLe: bin(" <= "); break;
+        case KOp::CmpGt: bin(" > "); break;
+        case KOp::CmpGe: bin(" >= "); break;
+        case KOp::CmpEq: bin(" == "); break;
+        case KOp::CmpNe: bin(" != "); break;
+        case KOp::BitAnd: bin(" & "); break;
+        case KOp::BitOr: bin(" | "); break;
+        case KOp::BitXor: bin(" ^ "); break;
+        case KOp::Shl: bin(" << "); break;
+        case KOp::Shr: bin(" >> "); break;
+        case KOp::Select: s.append("("); self(self, nd.c); s.append(" ? "); self(self, nd.a); s.append(" : "); self(self, nd.b); s.append(")"); break; // a=true b=false c=cond
+        case KOp::BitNot: s.append("(~"); self(self, nd.a); s.append(")"); break;
+        case KOp::BitCount: s.append("bitCount("); self(self, nd.a); s.append(")"); break;
+        case KOp::SubgroupBallot: s.append("subgroupBallot("); self(self, nd.a); s.append(" != 0u).x"); break;
+        case KOp::SubgroupBallotExclCount: s.append("subgroupBallotExclusiveBitCount(uvec4("); self(self, nd.a); s.append(", 0u, 0u, 0u))"); break;
+        case KOp::SubgroupMatch: s.append("subgroupPartitionNV("); self(self, nd.a); s.append(").x"); break;
+        default: ok = false; s.append("0"); break; // an arithmetic node reaches pv only via a temp ref above
+        }
+    };
+    // the RHS of a materialized arithmetic node (children referenced via pv).
+    const auto rhs = [&](const KNode& nd) -> void {
+        const auto b2 = [&](const char* o) { s.append("("); pv(pv, nd.a); s.append(o); pv(pv, nd.b); s.append(")"); };
+        const auto f2 = [&](const char* f) { s.append(f); s.append("("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(")"); };
+        const auto f1 = [&](const char* f) { s.append(f); s.append("("); pv(pv, nd.a); s.append(")"); };
+        switch (nd.op)
+        {
+        case KOp::Neg: s.append("(-"); pv(pv, nd.a); s.append(")"); break;
+        case KOp::Abs: f1("abs"); break;
+        case KOp::Sqrt: f1("sqrt"); break;
+        case KOp::Sin: f1("sin"); break;
+        case KOp::Cos: f1("cos"); break;
+        case KOp::Floor: f1("floor"); break;
+        case KOp::Add: b2(" + "); break;
+        case KOp::Sub: b2(" - "); break;
+        case KOp::Mul: b2(" * "); break;
+        case KOp::Div: b2(" / "); break;
+        case KOp::Min: f2("min"); break;
+        case KOp::Max: f2("max"); break;
+        case KOp::Mod: if (dt_is_int(nd.dtype()) || dt_is_uint(nd.dtype())) { b2(" % "); } else { f2("mod"); } break; // GLSL mod() is float-only
+        case KOp::Fma: s.append("fma("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(", "); pv(pv, nd.c); s.append(")"); break;
+        case KOp::BitNot: s.append("(~"); pv(pv, nd.a); s.append(")"); break;
+        case KOp::BitCount: s.append("bitCount("); pv(pv, nd.a); s.append(")"); break;
+        case KOp::SubgroupBallot: s.append("subgroupBallot("); pv(pv, nd.a); s.append(" != 0u).x"); break;
+        case KOp::SubgroupBallotExclCount: s.append("subgroupBallotExclusiveBitCount(uvec4("); pv(pv, nd.a); s.append(", 0u, 0u, 0u))"); break;
+        case KOp::SubgroupMatch: s.append("subgroupPartitionNV("); pv(pv, nd.a); s.append(").x"); break;
+        default: ok = false; s.append("0"); break;
+        }
+    };
+    // decl: materialize temps for the arithmetic nodes in a subtree (children first, CSE by node id).
+    const auto decl = [&](auto&& self, int node) -> void {
+        const KNode& nd = g.node(node);
+        if (nd.op == KOp::BufferLoad || nd.op == KOp::SharedLoad) { self(self, nd.b); return; } // resource leaf: only the index carries temps
+        if (nd.a >= 0) { self(self, nd.a); }
+        if (nd.b >= 0) { self(self, nd.b); }
+        if (nd.c >= 0) { self(self, nd.c); }
+        if (!is_inline_op(nd.op) && temped[static_cast<crd::usize>(node)] == 0U)
+        {
+            temped[static_cast<crd::usize>(node)] = 1U;
+            s.append(is_float_dtype(nd.dtype()) ? "  precise " : "  ");
+            s.append(buf_ctype(nd.dtype())); s.append(" t"); app_uint(s, static_cast<crd::u32>(node)); s.append(" = ");
+            rhs(nd);
+            s.append(";\n");
+        }
+    };
+    const auto emit_body = [&](auto&& self_b, int begin, int count) -> void {
+        int i = begin;
+        while (i < begin + count) // a For/If body lives CONTIGUOUSLY after it → recurse then SKIP past it (never re-emit)
+        {
+            const KStmt& st = g.stmt(i);
+            switch (st.kind)
+            {
+            case KStmtKind::BufferStore: decl(decl, st.index); decl(decl, st.value); s.append("  buf"); app_uint(s, g.node(st.target).iidx); s.append("["); pv(pv, st.index); s.append("] = "); pv(pv, st.value); s.append(";\n"); ++i; break;
+            case KStmtKind::SharedStore: decl(decl, st.index); decl(decl, st.value); s.append("  sh"); app_uint(s, st.target); s.append("["); pv(pv, st.index); s.append("] = "); pv(pv, st.value); s.append(";\n"); ++i; break;
+            case KStmtKind::Barrier: s.append("  barrier();\n"); s.append(st.scope == BarrierScope::Workgroup ? "  memoryBarrierShared();\n" : "  memoryBarrierBuffer();\n"); ++i; break;
+            case KStmtKind::Materialize: // FREEZE st.value into a temp NOW (survives a later shared overwrite)
+                decl(decl, st.value);
+                if (temped[static_cast<crd::usize>(st.value)] == 0U)
+                {
+                    s.append(is_float_dtype(g.node(st.value).dtype()) ? "  precise " : "  ");
+                    s.append(buf_ctype(g.node(st.value).dtype())); s.append(" t"); app_uint(s, static_cast<crd::u32>(st.value)); s.append(" = ");
+                    pv(pv, st.value); s.append(";\n");
+                    temped[static_cast<crd::usize>(st.value)] = 1U;
+                }
+                ++i;
+                break;
+            case KStmtKind::For: decl(decl, st.value); s.append("  for (uint lv"); app_uint(s, i); s.append(" = 0u; lv"); app_uint(s, i); s.append(" < uint("); pv(pv, st.value); s.append("); ++lv"); app_uint(s, i); s.append(") {\n"); self_b(self_b, st.body_begin, st.body_count); s.append("  }\n"); i = st.body_begin + st.body_count; break;
+            case KStmtKind::If: decl(decl, st.value); s.append("  if ("); pv(pv, st.value); s.append(") {\n"); self_b(self_b, st.body_begin, st.body_count); s.append("  }\n"); i = st.body_begin + st.body_count; break;
+            case KStmtKind::SpinUntilNonzero: decl(decl, st.index); s.append("  while (buf"); app_uint(s, g.node(st.target).iidx); s.append("["); pv(pv, st.index); s.append("] == 0u) { memoryBarrierBuffer(); }\n"); ++i; break;
+            case KStmtKind::SharedAtomicAdd: decl(decl, st.index); decl(decl, st.value); s.append("  atomicAdd(sh"); app_uint(s, st.target); s.append("["); pv(pv, st.index); s.append("], "); pv(pv, st.value); s.append(");\n"); ++i; break;
+            case KStmtKind::BufferAtomicAdd: decl(decl, st.index); decl(decl, st.value); s.append("  atomicAdd(buf"); app_uint(s, g.node(st.target).iidx); s.append("["); pv(pv, st.index); s.append("], "); pv(pv, st.value); s.append(");\n"); ++i; break;
+            case KStmtKind::ForBreakIf: decl(decl, st.value); s.append("  if (bool("); pv(pv, st.value); s.append(")) break;\n"); ++i; break; // bool() accepts bool AND uint (type-strict GLSL)
+            case KStmtKind::BufferTicket: decl(decl, st.index); s.append("  if (gl_LocalInvocationIndex == 0u) { sh"); app_uint(s, st.value); s.append("[0] = atomicAdd(buf"); app_uint(s, g.node(st.target).iidx); s.append("["); pv(pv, st.index); s.append("], 1u); }\n"); ++i; break;
+            case KStmtKind::SyncWarp: s.append("  subgroupBarrier();\n"); ++i; break;
+            }
+        }
+    };
+    emit_body(emit_body, entry.kernel_body_begin, entry.kernel_body_count);
+    s.append("}\n");
+    return ok;
 }
 
 // B3-c: emit a VERTEX or FRAGMENT GLSL shader from a stage `entry` (reached through `create_program(KGraph, KEntry)` — the

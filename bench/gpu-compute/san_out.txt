@@ -1,0 +1,14 @@
+========= COMPUTE-SANITIZER
+# CKIR ONESWEEP (CUDA backend, __match_any_sync) vs CUB DeviceRadixSort — NVIDIA GeForce RTX 4070 Ti SUPER
+# step: clear
+# step: ghist_a
+# step: gbase
+# PROBE: sa3 first (fresh aux)
+# PROBE passed; re-prepping
+# step: sa0
+# sa0 check: perm=1 lowbyte_sorted=1 (bad=0)
+# step: sa1
+# step: sa2
+# step: sa3
+========= Target application returned an error
+========= ERROR SUMMARY: 0 errors

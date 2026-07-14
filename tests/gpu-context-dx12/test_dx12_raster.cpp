@@ -2096,7 +2096,7 @@ TEST_CASE("D-007 B8-l: IR render paths (deferred G-buffer lighting / clustered l
     }
 }
 
-TEST_CASE("D-007 B8-m: THE CULMINATION — skinned + textured + lit + IBL + PCF-shadowed master material on DX12", "[dx12][raster][gpu][ir][lighting]")
+TEST_CASE("D-007 B8-m: THE CULMINATION -- skinned + textured + lit + IBL + PCF-shadowed master material on DX12", "[dx12][raster][gpu][ir][lighting]")
 {
     namespace kir = crd::kir;
     auto        gctx = g::create_dx12_gpu_context();
@@ -2144,7 +2144,7 @@ TEST_CASE("D-007 B8-m: THE CULMINATION — skinned + textured + lit + IBL + PCF-
     CHECK(shd_r > 0);          // ...but the ambient floor SURVIVES in shadow
 }
 
-TEST_CASE("D-007 B12: IR screen-space lighting frontier (AO/SSILVB · SSR · SSGI · volumetrics · SSS) renders on DX12", "[dx12][raster][gpu][ir][lighting]")
+TEST_CASE("D-007 B12: IR screen-space lighting frontier (AO/SSILVB - SSR - SSGI - volumetrics - SSS) renders on DX12", "[dx12][raster][gpu][ir][lighting]")
 {
     namespace kir = crd::kir;
     auto        gctx = g::create_dx12_gpu_context();
@@ -2188,6 +2188,57 @@ TEST_CASE("D-007 B12: IR screen-space lighting frontier (AO/SSILVB · SSR · SSG
         }
         WARN("[" << tc.tag << " dx12] col27 rgb=" << ch(target->read_pixel(27U, dim / 2U), 0) << "," << ch(target->read_pixel(27U, dim / 2U), 1) << "," << ch(target->read_pixel(27U, dim / 2U), 2)
                  << " want=" << tc.ex(27U, 0) << "," << tc.ex(27U, 1) << "," << tc.ex(27U, 2));
+        CHECK(bad == 0);
+    }
+}
+
+TEST_CASE("D-007 B13 post: IR HDR + TAA + bloom + cinematic + finish (specAA/CA/vignette/grain/CAS) render on DX12", "[dx12][raster][gpu][ir][lighting]")
+{
+    namespace kir = crd::kir;
+    auto        gctx = g::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    auto raster = g::create_dx12_raster_context();
+    REQUIRE(raster != nullptr);
+    crd::memory::TlsfAllocator alloc(8U << 20U);
+    constexpr crd::u32         dim = 32U;
+
+    const auto ch  = [](crd::u32 px, int c) { return static_cast<int>((px >> (8 * c)) & 0xFFU); };
+    using fs_fn    = void (*)(kir::KGraph&, kir::KEntry&);
+    using exp_fn   = int (*)(crd::u32, int);
+    struct Obs { fs_fn fs; exp_fn ex; const char* tag; };
+    const Obs cases[] = {{crd::gputest::build_lighting_hdragx_fs, crd::gputest::build_lighting_hdragx_expected, "agx"},
+                         {crd::gputest::build_lighting_hdrneutral_fs, crd::gputest::build_lighting_hdrneutral_expected, "neutral"},
+                         {crd::gputest::build_lighting_hdrpq_fs, crd::gputest::build_lighting_hdrpq_expected, "pq"},
+                         {crd::gputest::build_lighting_taa_fs, crd::gputest::build_lighting_taa_expected, "taa"}, // B13-a temporal resolve
+                         {crd::gputest::build_lighting_bloom_fs, crd::gputest::build_lighting_bloom_expected, "bloom"}, // B13-b bloom
+                         {crd::gputest::build_lighting_cine_fs, crd::gputest::build_lighting_cine_expected, "cine"}, // B13-d cinematic
+                         {crd::gputest::build_lighting_finish_fs, crd::gputest::build_lighting_finish_expected, "finish"}}; // B13-e finish
+    for (const auto& tc : cases)
+    {
+        kir::KGraph vg2(&alloc);
+        kir::KEntry ve2;
+        crd::gputest::build_fullscreen_vs(vg2, ve2);
+        kir::KGraph fg(&alloc);
+        kir::KEntry fe;
+        tc.fs(fg, fe);
+        auto vs = gctx->create_program(vg2, ve2);
+        if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+        auto fs = gctx->create_program(fg, fe);
+        REQUIRE(fs != nullptr);
+        auto program = raster->create_raster_program(*vs, *fs);
+        REQUIRE(program != nullptr);
+        auto target = raster->create_color_target(dim, dim);
+        REQUIRE(target != nullptr);
+        raster->draw(*target, *program, g::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+        int bad = 0;
+        for (crd::u32 x = 2U; x < dim - 2U; x += 5U)
+        {
+            const crd::u32 px = target->read_pixel(x, dim / 2U);
+            for (int c = 0; c < 3; ++c) { const int want = tc.ex(x, c); if (ch(px, c) < want - 4 || ch(px, c) > want + 4) { ++bad; } }
+        }
+        CHECK(ch(target->read_pixel(3U, dim / 2U), 0) != ch(target->read_pixel(29U, dim / 2U), 0));
+        WARN("[hdr-" << tc.tag << " dx12] col27 rgb=" << ch(target->read_pixel(27U, dim / 2U), 0) << "," << ch(target->read_pixel(27U, dim / 2U), 1) << "," << ch(target->read_pixel(27U, dim / 2U), 2)
+                     << " want=" << tc.ex(27U, 0) << "," << tc.ex(27U, 1) << "," << tc.ex(27U, 2));
         CHECK(bad == 0);
     }
 }

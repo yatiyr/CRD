@@ -8,8 +8,13 @@
 #include <crd/kir/ckir_eval.hpp>
 #include <crd/kir/ckir_lighting.hpp>
 #include <crd/kir/ckir_material.hpp>
+#include <crd/kir/ckir_post.hpp>
 #include <crd/kir/ckir_render.hpp>
+#include <crd/kir/ckir_bloom.hpp>
+#include <crd/kir/ckir_cinematic.hpp>
+#include <crd/kir/ckir_finish.hpp>
 #include <crd/kir/ckir_screen.hpp>
+#include <crd/kir/ckir_taa.hpp>
 
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
@@ -21,6 +26,11 @@ namespace ck  = crd::kir::cook;
 namespace mat = crd::kir::material;
 namespace rn  = crd::kir::render;
 namespace scr = crd::kir::screen;
+namespace pst = crd::kir::post;
+namespace taa = crd::kir::taa;
+namespace blm = crd::kir::bloom;
+namespace ci  = crd::kir::cinematic;
+namespace fin = crd::kir::finish;
 
 namespace
 {
@@ -1644,6 +1654,485 @@ double rssr_edge(double ux, double uy, double border)
 }
 double rssr_conf(double rough, double edge, double dist) { return rclamp01(((1.0 - rough) * edge) * crd::math::exp(-2.0 * dist)); }
 } // namespace
+
+namespace
+{
+double rev100(double lum) { return crd::math::log2(lum * (100.0 / 12.5)); }
+double rexposure(double ev) { return 1.0 / (1.2 * crd::math::exp2(ev)); }
+double ragx_contrast(double x)
+{
+    const double x2 = x * x; const double x4 = x2 * x2; const double x6 = x4 * x2;
+    double r = 15.5 * x6;
+    r        = r - 40.14 * (x4 * x);
+    r        = r + 31.96 * x4;
+    r        = r - 6.868 * (x2 * x);
+    r        = r + 0.4298 * x2;
+    r        = r + 0.1191 * x;
+    return r - 0.00232;
+}
+void ragx(const double col[3], double out[3])
+{
+    const double c0[3] = {0.842479062253094, 0.0784335999999992, 0.0792237451477643};
+    const double c1[3] = {0.0423282422610123, 0.878468636469772, 0.0791661274605434};
+    const double c2[3] = {0.0423756549057051, 0.0784336, 0.879142973793104};
+    for (int r = 0; r < 3; ++r)
+    {
+        const double v   = c0[r] * col[0] + c1[r] * col[1] + c2[r] * col[2];
+        const double vp  = v > 1.0e-10 ? v : 1.0e-10;
+        double       lg  = crd::math::log2(vp);
+        const double m0v = lg > -12.47393 ? lg : -12.47393;
+        lg               = m0v < 4.026069 ? m0v : 4.026069;
+        out[r]           = ragx_contrast((lg - (-12.47393)) / (4.026069 - (-12.47393)));
+    }
+}
+double rmin2(double a, double b) { return a < b ? a : b; }
+void rpbr(const double col[3], double out[3])
+{
+    const double x      = rmin2(col[0], rmin2(col[1], col[2]));
+    const double offset = x < 0.08 ? x - 6.25 * (x * x) : 0.04;
+    double       c1[3]; for (int k = 0; k < 3; ++k) { c1[k] = col[k] - offset; }
+    const double peak    = rmax2(c1[0], rmax2(c1[1], c1[2]));
+    const double start_c = 0.8 - 0.04; const double dd = 1.0 - start_c;
+    const double npk     = 1.0 - (dd * dd) / ((peak + dd) - start_c);
+    const double gg      = 1.0 - 1.0 / (0.15 * (peak - npk) + 1.0);
+    for (int k = 0; k < 3; ++k) { const double sc = c1[k] * (npk / peak); const double cmp = sc * (1.0 - gg) + npk * gg; out[k] = peak < start_c ? c1[k] : cmp; }
+}
+double rsrgb(double x) { return x <= 0.0031308 ? 12.92 * x : 1.055 * crd::math::pow(x, 1.0 / 2.4) - 0.055; }
+double rpq(double l)
+{
+    const double lp = crd::math::pow(l, 0.1593017578125);
+    return crd::math::pow((0.8359375 + 18.8515625 * lp) / (1.0 + 18.6875 * lp), 78.84375);
+}
+void rgamut(const double col[3], double amount, double out[3])
+{
+    const double luma = 0.2126 * col[0] + 0.7152 * col[1] + 0.0722 * col[2];
+    const double peak = rmax2(col[0], rmax2(col[1], col[2]));
+    const double over = rclamp01((peak - 1.0) * amount);
+    for (int k = 0; k < 3; ++k) { out[k] = col[k] * (1.0 - over) + luma * over; }
+}
+} // namespace
+
+TEST_CASE("B13-c: HDR exposure + tonemap (AgX / PBR-Neutral) + output encode (sRGB / PQ) + gamut compress bit-exact", "[kir][lighting][hdr]")
+{
+    crd::memory::TlsfAllocator alloc(48U << 20U);
+    kir::KGraph                g(&alloc);
+    const kir::Shape           sh = kir::make_shape({kN});
+
+    const int lum = g.input(sh, kir::DType::F64); const int ev = g.input(sh, kir::DType::F64);
+    const int cr = g.input(sh, kir::DType::F64); const int cg = g.input(sh, kir::DType::F64); const int cb = g.input(sh, kir::DType::F64);
+    const int lv = g.input(sh, kir::DType::F64); const int amt = g.input(sh, kir::DType::F64);
+    double lumv[kN]; double evv[kN]; double crv[kN]; double cgv[kN]; double cbv[kN]; double lvv[kN]; double amtv[kN];
+    for (int i = 0; i < kN; ++i)
+    {
+        lumv[i] = 0.1 + 0.5 * i; evv[i] = -2.0 + 0.3 * i; crv[i] = 0.05 + 0.12 * i; cgv[i] = 0.1 + 0.09 * i; cbv[i] = 0.2 + 0.06 * i; lvv[i] = 0.02 + 0.048 * i; amtv[i] = 0.3 + 0.03 * i;
+    }
+    const double* inp[] = {lumv, evv, crv, cgv, cbv, lvv, amtv};
+
+    int        bad = 0;
+    const auto chk  = [&](int node, auto ref) { double o[kN]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { if (o[i] != ref(i)) { ++bad; } } };
+    const auto chk3 = [&](int node, auto ref) { double o[kN * 3]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { for (int c = 0; c < 3; ++c) { if (o[i * 3 + c] != ref(i, c)) { ++bad; } } } };
+    const int  col = g.vec3(cr, cg, cb);
+
+    chk(pst::ev100_from_luminance(g, lum), [&](int i) { return rev100(lumv[i]); });
+    chk(pst::exposure_from_ev100(g, ev), [&](int i) { return rexposure(evv[i]); });
+    chk3(pst::agx(g, col), [&](int i, int c) { const double cc[3] = {crv[i], cgv[i], cbv[i]}; double o[3]; ragx(cc, o); return o[c]; });
+    chk3(pst::pbr_neutral(g, col), [&](int i, int c) { const double cc[3] = {crv[i], cgv[i], cbv[i]}; double o[3]; rpbr(cc, o); return o[c]; });
+    chk3(pst::srgb_encode(g, col), [&](int i, int c) { const double cc[3] = {crv[i], cgv[i], cbv[i]}; return rsrgb(cc[c]); });
+    chk(pst::pq_encode(g, lv), [&](int i) { return rpq(lvv[i]); });
+    chk3(pst::gamut_compress(g, col, amt), [&](int i, int c) { const double cc[3] = {crv[i], cgv[i], cbv[i]}; double o[3]; rgamut(cc, amtv[i], o); return o[c]; });
+
+    CHECK(bad == 0);
+}
+
+namespace
+{
+// B13-a TAA references — exact op grouping of ckir_taa.hpp against the CPU oracle (Mix = a(1−t)+bt, Step(edge,v)=v<edge?0:1,
+// Fract = x−floor(x), Abs = x<0?−x:x, Clamp = min(max(a,b),c)).
+double rabs(double x) { return x < 0.0 ? -x : x; } // rmix/rstep/rfract already defined above (identical) — reused
+void rycocg(const double rgb[3], double out[3])
+{
+    out[0] = rgb[0] * 0.25 + rgb[1] * 0.5 + rgb[2] * 0.25;         // Y  (dot a0·b0+a1·b1+a2·b2)
+    out[1] = rgb[0] * 0.5 + rgb[1] * 0.0 + rgb[2] * (-0.5);        // Co
+    out[2] = rgb[0] * (-0.25) + rgb[1] * 0.5 + rgb[2] * (-0.25);   // Cg
+}
+void ryc2rgb(const double y[3], double out[3])
+{
+    out[0] = (y[0] + y[1]) - y[2]; // Y+Co−Cg
+    out[1] = y[0] + y[2];          // Y+Cg
+    out[2] = (y[0] - y[1]) - y[2]; // Y−Co−Cg
+}
+void rclip(const double hist[3], const double amin[3], const double amax[3], double out[3])
+{
+    double centre[3]; double extent[3]; double v[3]; double ratio[3];
+    for (int k = 0; k < 3; ++k)
+    {
+        centre[k] = (amax[k] + amin[k]) * 0.5;
+        extent[k] = (amax[k] - amin[k]) * 0.5;
+        v[k]      = hist[k] - centre[k];
+        ratio[k]  = rabs(v[k]) / (extent[k] + 1.0e-7);
+    }
+    const double maxr  = rmax2(ratio[0], rmax2(ratio[1], ratio[2]));
+    const double denom = rmax2(maxr, 1.0);
+    for (int k = 0; k < 3; ++k) { out[k] = centre[k] + v[k] / denom; }
+}
+void rvarclip(const double hist[3], const double m1[3], const double m2[3], double gamma, double out[3])
+{
+    double amin[3]; double amax[3];
+    for (int k = 0; k < 3; ++k)
+    {
+        const double var  = rmax2(m2[k] - m1[k] * m1[k], 0.0);
+        const double gsig = crd::math::sqrt(var) * gamma;
+        amin[k]           = m1[k] - gsig;
+        amax[k]           = m1[k] + gsig;
+    }
+    rclip(hist, amin, amax, out);
+}
+void rcatmull(double t, double out[4])
+{
+    const double t2 = t * t; const double t3 = t2 * t;
+    out[0] = ((-0.5 * t) - (0.5 * t3)) + t2;
+    out[1] = (1.0 - (2.5 * t2)) + (1.5 * t3);
+    out[2] = ((0.5 * t) + (2.0 * t2)) - (1.5 * t3);
+    out[3] = ((-0.5) * t2) + (0.5 * t3);
+}
+double rlumafb(double hl, double cl, double mn, double mx)
+{
+    const double diff = rabs(hl - cl);
+    const double den  = rmax2(rmax2(hl, cl), 1.0e-5);
+    const double fac  = rclamp01(diff / den);
+    return mn + (mx - mn) * fac;
+}
+double rdisoc(double pd, double cd, double thr) { return rclamp01(1.0 - rabs(pd - cd) / thr); }
+double rign(double fragx, double fragy, double frame)
+{
+    const double fx = fragx + 5.588238 * frame;
+    const double d  = fx * 0.06711056 + fragy * 0.00583715;
+    return rfract(52.9829189 * rfract(d));
+}
+} // namespace
+
+TEST_CASE("B13-a: temporal AA resolve (YCoCg / AABB+variance clip / Catmull-Rom / luma-feedback / disocclusion / dither / frame-gen / SMAA) bit-exact", "[kir][lighting][taa]")
+{
+    crd::memory::TlsfAllocator alloc(64U << 20U);
+    kir::KGraph                g(&alloc);
+    const kir::Shape           sh = kir::make_shape({kN});
+
+    const int xr = g.input(sh, kir::DType::F64); const int xg = g.input(sh, kir::DType::F64); const int xb = g.input(sh, kir::DType::F64);
+    const int hr = g.input(sh, kir::DType::F64); const int hg = g.input(sh, kir::DType::F64); const int hb = g.input(sh, kir::DType::F64);
+    const int ma = g.input(sh, kir::DType::F64); const int mb = g.input(sh, kir::DType::F64); const int mc = g.input(sh, kir::DType::F64);
+    const int qa = g.input(sh, kir::DType::F64); const int qb = g.input(sh, kir::DType::F64); const int qc = g.input(sh, kir::DType::F64);
+    const int tt = g.input(sh, kir::DType::F64); const int al = g.input(sh, kir::DType::F64);
+    const int hl = g.input(sh, kir::DType::F64); const int cl = g.input(sh, kir::DType::F64);
+    const int pd = g.input(sh, kir::DType::F64); const int cd = g.input(sh, kir::DType::F64);
+    const int fx = g.input(sh, kir::DType::F64); const int fy = g.input(sh, kir::DType::F64); const int fr = g.input(sh, kir::DType::F64);
+    const int ns = g.input(sh, kir::DType::F64);
+    const int lc = g.input(sh, kir::DType::F64); const int ll = g.input(sh, kir::DType::F64); const int lp = g.input(sh, kir::DType::F64);
+
+    double xrv[kN]; double xgv[kN]; double xbv[kN]; double hrv[kN]; double hgv[kN]; double hbv[kN];
+    double mav[kN]; double mbv[kN]; double mcv[kN]; double qav[kN]; double qbv[kN]; double qcv[kN];
+    double ttv[kN]; double alv[kN]; double hlv[kN]; double clv[kN]; double pdv[kN]; double cdv[kN];
+    double fxv[kN]; double fyv[kN]; double frv[kN]; double nsv[kN]; double lcv[kN]; double llv[kN]; double lpv[kN];
+    for (int i = 0; i < kN; ++i)
+    {
+        xrv[i] = 0.05 + 0.11 * i; xgv[i] = 0.12 + 0.07 * i; xbv[i] = 0.2 + 0.05 * i;
+        hrv[i] = 0.08 + 0.09 * i; hgv[i] = 0.15 + 0.06 * i; hbv[i] = 0.1 + 0.08 * i;
+        mav[i] = 0.2 + 0.04 * i; mbv[i] = 0.25 + 0.03 * i; mcv[i] = 0.18 + 0.05 * i;
+        qav[i] = 0.1 + 0.05 * i; qbv[i] = 0.12 + 0.04 * i; qcv[i] = 0.09 + 0.06 * i;
+        ttv[i] = 0.02 + 0.045 * i; alv[i] = 0.03 + 0.02 * i; hlv[i] = 0.1 + 0.08 * i; clv[i] = 0.2 + 0.05 * i;
+        pdv[i] = 0.3 + 0.02 * i; cdv[i] = 0.31 + 0.019 * i;
+        fxv[i] = 1.0 + 3.0 * i; fyv[i] = 2.0 + 2.5 * i; frv[i] = static_cast<double>(i % 8);
+        nsv[i] = 0.02 + 0.045 * i; lcv[i] = 0.3 + 0.03 * i; llv[i] = 0.28 + 0.031 * i; lpv[i] = 0.34 + 0.028 * i;
+    }
+    const double* inp[] = {xrv, xgv, xbv, hrv, hgv, hbv, mav, mbv, mcv, qav, qbv, qcv, ttv, alv, hlv, clv, pdv, cdv, fxv, fyv, frv, nsv, lcv, llv, lpv};
+
+    int        bad = 0;
+    const auto chk  = [&](int node, auto ref) { double o[kN]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { if (o[i] != ref(i)) { ++bad; } } };
+    const auto chkv = [&](int node, int comps, auto ref) { double o[kN * 4]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { for (int c = 0; c < comps; ++c) { if (o[i * comps + c] != ref(i, c)) { ++bad; } } } };
+
+    const int cur  = g.vec3(xr, xg, xb); const int his = g.vec3(hr, hg, hb);
+    const int mom1 = g.vec3(ma, mb, mc); const int mom2 = g.vec3(qa, qb, qc);
+    const int frag = g.vec2(fx, fy);
+
+    chkv(taa::rgb_to_ycocg(g, cur), 3, [&](int i, int c) { const double rgb[3] = {xrv[i], xgv[i], xbv[i]}; double o[3]; rycocg(rgb, o); return o[c]; });
+    chkv(taa::ycocg_to_rgb(g, cur), 3, [&](int i, int c) { const double y[3] = {xrv[i], xgv[i], xbv[i]}; double o[3]; ryc2rgb(y, o); return o[c]; });
+    chkv(taa::clip_aabb(g, his, mom1, mom2), 3, [&](int i, int c) { const double h[3] = {hrv[i], hgv[i], hbv[i]}; const double lo[3] = {mav[i], mbv[i], mcv[i]}; const double hi[3] = {qav[i], qbv[i], qcv[i]}; double o[3]; rclip(h, lo, hi, o); return o[c]; });
+    chkv(taa::variance_clip(g, his, mom1, mom2, 1.25), 3, [&](int i, int c) { const double h[3] = {hrv[i], hgv[i], hbv[i]}; const double m1[3] = {mav[i], mbv[i], mcv[i]}; const double m2[3] = {qav[i], qbv[i], qcv[i]}; double o[3]; rvarclip(h, m1, m2, 1.25, o); return o[c]; });
+    chkv(taa::catmull_rom_weights(g, tt), 4, [&](int i, int c) { double o[4]; rcatmull(ttv[i], o); return o[c]; });
+    chk(taa::luma_feedback(g, hl, cl, 0.05, 0.85), [&](int i) { return rlumafb(hlv[i], clv[i], 0.05, 0.85); });
+    chkv(taa::taa_resolve(g, his, cur, al), 3, [&](int i, int c) { const double h[3] = {hrv[i], hgv[i], hbv[i]}; const double cu[3] = {xrv[i], xgv[i], xbv[i]}; return rmix(h[c], cu[c], alv[i]); });
+    chk(taa::disocclusion(g, pd, cd, 0.1), [&](int i) { return rdisoc(pdv[i], cdv[i], 0.1); });
+    chk(taa::ign_temporal(g, frag, fr), [&](int i) { return rign(fxv[i], fyv[i], frv[i]); });
+    chkv(taa::dither_apply(g, cur, ns, 255.0), 3, [&](int i, int c) { const double cu[3] = {xrv[i], xgv[i], xbv[i]}; const double amt = (nsv[i] - 0.5) / 255.0; return cu[c] + amt; });
+    chkv(taa::frame_gen_blend(g, his, cur, tt), 3, [&](int i, int c) { const double h[3] = {hrv[i], hgv[i], hbv[i]}; const double cu[3] = {xrv[i], xgv[i], xbv[i]}; return rmix(h[c], cu[c], ttv[i]); });
+    chkv(taa::smaa_luma_edge(g, lc, ll, lp, 0.1), 2, [&](int i, int c) { return c == 0 ? rstep(0.1, rabs(lcv[i] - llv[i])) : rstep(0.1, rabs(lcv[i] - lpv[i])); });
+
+    CHECK(bad == 0);
+}
+
+namespace
+{
+// B13-b BLOOM references — exact op grouping of ckir_bloom.hpp (dot order a0·b0+a1·b1+a2·b2; Smoothstep = rsmooth; Mix/Clamp
+// as the oracle). Taps are constructed from three base channels: tap[j][c] = base_c·(1+0.07j) + (0.03j+0.02c).
+double bl_luma(const double c[3]) { return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; }
+double bl_kw(const double c[3]) { return 1.0 / (1.0 + bl_luma(c)); }
+void bl_q(const double a[3], const double b[3], const double c[3], const double d[3], double o[3])
+{
+    for (int k = 0; k < 3; ++k) { o[k] = ((a[k] + b[k]) + (c[k] + d[k])) * 0.25; }
+}
+void bl_down13(const double t[13][3], double o[3])
+{
+    double inner[3]; double tl[3]; double tr[3]; double bl[3]; double br[3];
+    bl_q(t[9], t[10], t[11], t[12], inner); bl_q(t[0], t[1], t[3], t[4], tl); bl_q(t[1], t[2], t[4], t[5], tr);
+    bl_q(t[3], t[4], t[6], t[7], bl); bl_q(t[4], t[5], t[7], t[8], br);
+    for (int k = 0; k < 3; ++k) { const double outer = ((tl[k] + tr[k]) + (bl[k] + br[k])); o[k] = inner[k] * 0.5 + outer * 0.125; }
+}
+void bl_downk(const double t[13][3], double o[3])
+{
+    double b[5][3];
+    bl_q(t[9], t[10], t[11], t[12], b[0]); bl_q(t[0], t[1], t[3], t[4], b[1]); bl_q(t[1], t[2], t[4], t[5], b[2]);
+    bl_q(t[3], t[4], t[6], t[7], b[3]); bl_q(t[4], t[5], t[7], t[8], b[4]);
+    const double w[5] = {bl_kw(b[0]) * 0.5, bl_kw(b[1]) * 0.125, bl_kw(b[2]) * 0.125, bl_kw(b[3]) * 0.125, bl_kw(b[4]) * 0.125};
+    const double den  = ((w[0] + w[1]) + (w[2] + w[3])) + w[4];
+    for (int k = 0; k < 3; ++k) { const double num = ((b[0][k] * w[0] + b[1][k] * w[1]) + (b[2][k] * w[2] + b[3][k] * w[3])) + b[4][k] * w[4]; o[k] = num / (den + 1.0e-5); }
+}
+void bl_softknee(const double c[3], double thr, double knee, double o[3])
+{
+    const double brr  = rmax2(c[0], rmax2(c[1], c[2]));
+    const double soft = rclamp((brr + knee) - thr, 0.0, 2.0 * knee);
+    const double sq   = (soft * soft) / (4.0 * knee + 1.0e-5);
+    const double con  = rmax2(sq, brr - thr) / rmax2(brr, 1.0e-5);
+    for (int k = 0; k < 3; ++k) { o[k] = c[k] * con; }
+}
+void bl_tent(const double t[9][3], double o[3])
+{
+    for (int k = 0; k < 3; ++k)
+    {
+        const double corners = ((t[0][k] + t[2][k]) + (t[6][k] + t[8][k]));
+        const double edges   = ((t[1][k] * 2.0 + t[3][k] * 2.0) + (t[5][k] * 2.0 + t[7][k] * 2.0));
+        const double centre  = t[4][k] * 4.0;
+        o[k]                 = ((corners + edges) + centre) * (1.0 / 16.0);
+    }
+}
+double bl_halo(double ux, double uy, double cx, double cy, double radius, double thick)
+{
+    const double dx = ux - cx; const double dy = uy - cy;
+    const double r  = crd::math::sqrt(dx * dx + dy * dy);
+    return 1.0 - rsmooth(0.0, thick, rabs(r - radius));
+}
+double bl_star(double ang, double blades, double sharp) { return crd::math::pow(0.5 + 0.5 * crd::math::cos(blades * ang), sharp); }
+void bl_tint(double t, double o[3]) { o[0] = rclamp01(1.0 - t); o[1] = rclamp01(4.0 * (t * (1.0 - t))); o[2] = rclamp01(t); }
+} // namespace
+
+TEST_CASE("B13-b: bloom (Karis 13-tap + firefly downsample / soft-knee / tent upsample / composite / FFT complex-mul / lens halo+starburst) bit-exact", "[kir][lighting][bloom]")
+{
+    crd::memory::TlsfAllocator alloc(64U << 20U);
+    kir::KGraph                g(&alloc);
+    const kir::Shape           sh = kir::make_shape({kN});
+
+    const int br = g.input(sh, kir::DType::F64); const int bg = g.input(sh, kir::DType::F64); const int bb = g.input(sh, kir::DType::F64);
+    const int are = g.input(sh, kir::DType::F64); const int aim = g.input(sh, kir::DType::F64); const int bre = g.input(sh, kir::DType::F64); const int bim = g.input(sh, kir::DType::F64);
+    const int ang = g.input(sh, kir::DType::F64);
+    const int ux = g.input(sh, kir::DType::F64); const int uy = g.input(sh, kir::DType::F64); const int cx = g.input(sh, kir::DType::F64); const int cy = g.input(sh, kir::DType::F64);
+    const int tp = g.input(sh, kir::DType::F64); const int inten = g.input(sh, kir::DType::F64);
+    const int sr = g.input(sh, kir::DType::F64); const int sg = g.input(sh, kir::DType::F64); const int sb = g.input(sh, kir::DType::F64);
+
+    double brv[kN]; double bgv[kN]; double bbv[kN]; double arev[kN]; double aimv[kN]; double brev[kN]; double bimv[kN]; double angv[kN];
+    double uxv[kN]; double uyv[kN]; double cxv[kN]; double cyv[kN]; double tpv[kN]; double intv[kN]; double srv[kN]; double sgv[kN]; double sbv[kN];
+    for (int i = 0; i < kN; ++i)
+    {
+        brv[i] = 0.1 + 0.13 * i; bgv[i] = 0.15 + 0.09 * i; bbv[i] = 0.2 + 0.07 * i;
+        arev[i] = 0.2 + 0.05 * i; aimv[i] = -0.3 + 0.04 * i; brev[i] = 0.1 + 0.06 * i; bimv[i] = 0.25 - 0.02 * i;
+        angv[i] = 0.1 + 0.28 * i; uxv[i] = 0.05 * i; uyv[i] = 0.03 * i; cxv[i] = 0.5; cyv[i] = 0.5;
+        tpv[i] = 0.02 + 0.045 * i; intv[i] = 0.03 + 0.02 * i; srv[i] = 0.3 + 0.02 * i; sgv[i] = 0.25 + 0.03 * i; sbv[i] = 0.2 + 0.025 * i;
+    }
+    const double* inp[] = {brv, bgv, bbv, arev, aimv, brev, bimv, angv, uxv, uyv, cxv, cyv, tpv, intv, srv, sgv, sbv};
+
+    // tap[j] = vec3(base_c·(1+0.07j) + (0.03j+0.02c)); reference reads the same value.
+    const int  bcn[3]   = {br, bg, bb};
+    const auto tap_node = [&](int j) { const auto ch = [&](int c) { return g.binary(kir::KOp::Add, g.binary(kir::KOp::Mul, bcn[c], g.constant(1.0 + 0.07 * j, sh, kir::DType::F64)), g.constant(0.03 * j + 0.02 * c, sh, kir::DType::F64)); }; return g.vec3(ch(0), ch(1), ch(2)); };
+    const auto tap_val  = [&](int i, int j, int c) { const double* bv[3] = {brv, bgv, bbv}; return bv[c][i] * (1.0 + 0.07 * j) + (0.03 * j + 0.02 * c); };
+
+    int taps13[13]; for (int j = 0; j < 13; ++j) { taps13[j] = tap_node(j); }
+    int taps9[9];   for (int j = 0; j < 9; ++j) { taps9[j] = taps13[j]; }
+
+    int        bad = 0;
+    const auto chk  = [&](int node, auto ref) { double o[kN]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { if (o[i] != ref(i)) { ++bad; } } };
+    const auto chkv = [&](int node, int comps, auto ref) { double o[kN * 4]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { for (int c = 0; c < comps; ++c) { if (o[i * comps + c] != ref(i, c)) { ++bad; } } } };
+    const auto fill_t = [&](int i, double t[13][3]) { for (int j = 0; j < 13; ++j) { for (int c = 0; c < 3; ++c) { t[j][c] = tap_val(i, j, c); } } };
+
+    chkv(blm::downsample_13tap(g, taps13), 3, [&](int i, int c) { double t[13][3]; fill_t(i, t); double o[3]; bl_down13(t, o); return o[c]; });
+    chkv(blm::downsample_karis(g, taps13), 3, [&](int i, int c) { double t[13][3]; fill_t(i, t); double o[3]; bl_downk(t, o); return o[c]; });
+    chkv(blm::soft_knee(g, taps13[0], 0.8, 0.5), 3, [&](int i, int c) { double t[13][3]; fill_t(i, t); double o[3]; bl_softknee(t[0], 0.8, 0.5, o); return o[c]; });
+    chkv(blm::upsample_tent(g, taps9), 3, [&](int i, int c) { double t[13][3]; fill_t(i, t); double t9[9][3]; for (int j = 0; j < 9; ++j) { for (int k = 0; k < 3; ++k) { t9[j][k] = t[j][k]; } } double o[3]; bl_tent(t9, o); return o[c]; });
+    chkv(blm::combine(g, g.vec3(sr, sg, sb), taps13[1], inten), 3, [&](int i, int c) { const double sc[3] = {srv[i], sgv[i], sbv[i]}; const double bcol = tap_val(i, 1, c); return rmix(sc[c], bcol, intv[i]); });
+    chkv(blm::complex_mul(g, are, aim, bre, bim), 2, [&](int i, int c) { return c == 0 ? (arev[i] * brev[i] - aimv[i] * bimv[i]) : (arev[i] * bimv[i] + aimv[i] * brev[i]); });
+    chk(blm::lens_halo(g, g.vec2(ux, uy), g.vec2(cx, cy), 0.3, 0.15), [&](int i) { return bl_halo(uxv[i], uyv[i], cxv[i], cyv[i], 0.3, 0.15); });
+    chk(blm::starburst(g, ang, 6.0, 2.5), [&](int i) { return bl_star(angv[i], 6.0, 2.5); });
+    chkv(blm::spectral_tint(g, tp), 3, [&](int i, int c) { double o[3]; bl_tint(tpv[i], o); return o[c]; });
+
+    CHECK(bad == 0);
+}
+
+namespace
+{
+// B13-d CINEMATIC references — exact op grouping of ckir_cinematic.hpp (Exp/Cos/Sin/Sqrt as the oracle, Smoothstep = rsmooth,
+// Mix = a(1−t)+bt, Clamp = min(max(a,b),c)).
+double ci_coc(double depth, double focus, double f, double n) { return (f * f / n) * (depth - focus) / (depth * (focus - f)); }
+void ci_cgauss(double r2, double a, double b, double o[2])
+{
+    const double env = crd::math::exp(a * r2);
+    o[0]             = env * crd::math::cos(b * r2);
+    o[1]             = env * crd::math::sin(b * r2);
+}
+double ci_bokeh(double re, double im, double cre, double cim) { return re * cre - im * cim; }
+double ci_cov(double tap_coc, double dist) { return rclamp01((tap_coc - dist) + 0.5); }
+void ci_dofcomp(const double sh[3], const double bl[3], double coc, double maxc, double o[3])
+{
+    const double t = rclamp01(rabs(coc) / maxc);
+    for (int k = 0; k < 3; ++k) { o[k] = rmix(sh[k], bl[k], t); }
+}
+void ci_velscale(double vx, double vy, double shutter, double maxl, double o[2])
+{
+    const double v0  = vx * shutter; const double v1 = vy * shutter;
+    const double len = crd::math::sqrt(v0 * v0 + v1 * v1) + 1.0e-6;
+    const double s   = rmin2(1.0, maxl / len);
+    o[0]             = v0 * s; o[1] = v1 * s;
+}
+double ci_cone(double dist, double vlen) { return rclamp01(1.0 - dist / (vlen + 1.0e-6)); }
+double ci_cyl(double dist, double vlen) { return 1.0 - rsmooth(0.95 * vlen, 1.05 * vlen, dist); }
+double ci_soft(double za, double zb, double ext) { return rclamp01(1.0 - (za - zb) / ext); }
+} // namespace
+
+TEST_CASE("B13-d: cinematic (thin-lens CoC / Garcia complex-Gaussian phasor / bokeh realize / near-far composite / velocity scale / McGuire cone-cylinder-soft-depth) bit-exact", "[kir][lighting][cine]")
+{
+    crd::memory::TlsfAllocator alloc(48U << 20U);
+    kir::KGraph                g(&alloc);
+    const kir::Shape           sh = kir::make_shape({kN});
+
+    const int dep = g.input(sh, kir::DType::F64); const int foc = g.input(sh, kir::DType::F64);
+    const int r2 = g.input(sh, kir::DType::F64); const int re = g.input(sh, kir::DType::F64); const int im = g.input(sh, kir::DType::F64);
+    const int tapc = g.input(sh, kir::DType::F64); const int dst = g.input(sh, kir::DType::F64);
+    const int shr = g.input(sh, kir::DType::F64); const int shg = g.input(sh, kir::DType::F64); const int shb = g.input(sh, kir::DType::F64);
+    const int blr = g.input(sh, kir::DType::F64); const int blg = g.input(sh, kir::DType::F64); const int blb = g.input(sh, kir::DType::F64);
+    const int coc = g.input(sh, kir::DType::F64);
+    const int vx = g.input(sh, kir::DType::F64); const int vy = g.input(sh, kir::DType::F64);
+    const int mds = g.input(sh, kir::DType::F64); const int mvl = g.input(sh, kir::DType::F64);
+    const int za = g.input(sh, kir::DType::F64); const int zb = g.input(sh, kir::DType::F64);
+
+    double depv[kN]; double focv[kN]; double r2v[kN]; double rev[kN]; double imv[kN]; double tcv[kN]; double dsv[kN];
+    double shrv[kN]; double shgv[kN]; double shbv[kN]; double blrv[kN]; double blgv[kN]; double blbv[kN]; double cocv[kN];
+    double vxv[kN]; double vyv[kN]; double mdsv[kN]; double mvlv[kN]; double zav[kN]; double zbv[kN];
+    for (int i = 0; i < kN; ++i)
+    {
+        depv[i] = 2.0 + 0.5 * i; focv[i] = 4.0 + 0.1 * i; r2v[i] = 0.01 + 0.05 * i; rev[i] = 0.2 + 0.06 * i; imv[i] = -0.3 + 0.04 * i;
+        tcv[i] = 0.5 + 0.4 * i; dsv[i] = 0.2 * i;
+        shrv[i] = 0.2 + 0.03 * i; shgv[i] = 0.15 + 0.04 * i; shbv[i] = 0.1 + 0.035 * i; blrv[i] = 0.3 + 0.02 * i; blgv[i] = 0.25 + 0.03 * i; blbv[i] = 0.2 + 0.025 * i;
+        cocv[i] = -5.0 + 0.6 * i; vxv[i] = -4.0 + 0.5 * i; vyv[i] = 2.0 + 0.3 * i; mdsv[i] = 0.3 * i; mvlv[i] = 1.0 + 0.5 * i; zav[i] = 0.2 + 0.02 * i; zbv[i] = 0.25 + 0.018 * i;
+    }
+    const double* inp[] = {depv, focv, r2v, rev, imv, tcv, dsv, shrv, shgv, shbv, blrv, blgv, blbv, cocv, vxv, vyv, mdsv, mvlv, zav, zbv};
+
+    int        bad = 0;
+    const auto chk  = [&](int node, auto ref) { double o[kN]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { if (o[i] != ref(i)) { ++bad; } } };
+    const auto chkv = [&](int node, int comps, auto ref) { double o[kN * 4]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { for (int c = 0; c < comps; ++c) { if (o[i * comps + c] != ref(i, c)) { ++bad; } } } };
+
+    chk(ci::circle_of_confusion(g, dep, foc, 0.05, 2.8), [&](int i) { return ci_coc(depv[i], focv[i], 0.05, 2.8); });
+    chkv(ci::complex_gaussian(g, r2, -4.0, 1.0), 2, [&](int i, int c) { double o[2]; ci_cgauss(r2v[i], -4.0, 1.0, o); return o[c]; });
+    chk(ci::bokeh_realize(g, re, im, 0.5, -0.3), [&](int i) { return ci_bokeh(rev[i], imv[i], 0.5, -0.3); });
+    chk(ci::coc_coverage(g, tapc, dst), [&](int i) { return ci_cov(tcv[i], dsv[i]); });
+    chkv(ci::dof_composite(g, g.vec3(shr, shg, shb), g.vec3(blr, blg, blb), coc, 10.0), 3, [&](int i, int c) { const double s3[3] = {shrv[i], shgv[i], shbv[i]}; const double b3[3] = {blrv[i], blgv[i], blbv[i]}; double o[3]; ci_dofcomp(s3, b3, cocv[i], 10.0, o); return o[c]; });
+    chkv(ci::velocity_scale(g, g.vec2(vx, vy), 0.5, 16.0), 2, [&](int i, int c) { double o[2]; ci_velscale(vxv[i], vyv[i], 0.5, 16.0, o); return o[c]; });
+    chk(ci::mb_cone(g, mds, mvl), [&](int i) { return ci_cone(mdsv[i], mvlv[i]); });
+    chk(ci::mb_cylinder(g, mds, mvl), [&](int i) { return ci_cyl(mdsv[i], mvlv[i]); });
+    chk(ci::mb_soft_depth(g, za, zb, 0.05), [&](int i) { return ci_soft(zav[i], zbv[i], 0.05); });
+
+    CHECK(bad == 0);
+}
+
+namespace
+{
+// B13-e FINISH references — exact op grouping of ckir_finish.hpp (Sqrt/Min/Max/Div as the oracle; Clamp = min(max(a,b),c)).
+double fi_specaa(double alpha, const double dx[3], const double dy[3], double kappa, double sig2)
+{
+    const double var = kappa * ((dx[0] * dx[0] + dx[1] * dx[1] + dx[2] * dx[2]) + (dy[0] * dy[0] + dy[1] * dy[1] + dy[2] * dy[2]));
+    const double ker = rmin2(2.0 * var, sig2);
+    return rclamp01(crd::math::sqrt(alpha * alpha + ker));
+}
+void fi_ca(double ux, double uy, double cx, double cy, double strength, double o[2])
+{
+    const double dx = ux - cx; const double dy = uy - cy; const double r2 = dx * dx + dy * dy; const double s = strength * r2;
+    o[0] = dx * s; o[1] = dy * s;
+}
+double fi_vig(double ux, double uy, double cx, double cy, double invf2)
+{
+    const double dx = ux - cx; const double dy = uy - cy; const double att = 1.0 / (1.0 + (dx * dx + dy * dy) * invf2);
+    return att * att;
+}
+void fi_grain(const double c[3], double noise, double intensity, double o[3])
+{
+    const double lum  = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+    const double resp = lum * (1.0 - lum);
+    const double amt  = ((noise * 2.0 - 1.0) * intensity) * resp;
+    for (int k = 0; k < 3; ++k) { o[k] = c[k] + amt; }
+}
+void fi_cas(const double c[3], const double u[3], const double d[3], const double l[3], const double r[3], double sharp, double o[3])
+{
+    const double neg = -(0.125 + 0.075 * sharp);
+    for (int k = 0; k < 3; ++k)
+    {
+        const double mn  = rmin2(rmin2(rmin2(u[k], d[k]), rmin2(l[k], r[k])), c[k]);
+        const double mx  = rmax2(rmax2(rmax2(u[k], d[k]), rmax2(l[k], r[k])), c[k]);
+        const double amp = crd::math::sqrt(rclamp01(rmin2(mn, 1.0 - mx) / (mx + 1.0e-5)));
+        const double w   = amp * neg;
+        const double num = c[k] + ((u[k] + d[k]) + (l[k] + r[k])) * w;
+        o[k]             = num / (w * 4.0 + 1.0);
+    }
+}
+} // namespace
+
+TEST_CASE("B13-e: finish (Tokuyoshi geometric specular AA / chromatic aberration / cos4 vignette / Lottes grain / AMD CAS sharpen) bit-exact", "[kir][lighting][finish]")
+{
+    crd::memory::TlsfAllocator alloc(48U << 20U);
+    kir::KGraph                g(&alloc);
+    const kir::Shape           sh = kir::make_shape({kN});
+
+    const int al = g.input(sh, kir::DType::F64);
+    const int dx0 = g.input(sh, kir::DType::F64); const int dx1 = g.input(sh, kir::DType::F64); const int dx2 = g.input(sh, kir::DType::F64);
+    const int dy0 = g.input(sh, kir::DType::F64); const int dy1 = g.input(sh, kir::DType::F64); const int dy2 = g.input(sh, kir::DType::F64);
+    const int ux = g.input(sh, kir::DType::F64); const int uy = g.input(sh, kir::DType::F64); const int cxn = g.input(sh, kir::DType::F64); const int cyn = g.input(sh, kir::DType::F64);
+    const int gr = g.input(sh, kir::DType::F64); const int gg = g.input(sh, kir::DType::F64); const int gb = g.input(sh, kir::DType::F64); const int gn = g.input(sh, kir::DType::F64);
+    const int kr = g.input(sh, kir::DType::F64); const int kg = g.input(sh, kir::DType::F64); const int kb = g.input(sh, kir::DType::F64);
+
+    double alv[kN]; double dx0v[kN]; double dx1v[kN]; double dx2v[kN]; double dy0v[kN]; double dy1v[kN]; double dy2v[kN];
+    double uxv[kN]; double uyv[kN]; double cxv[kN]; double cyv[kN]; double grv[kN]; double ggv[kN]; double gbv[kN]; double gnv[kN];
+    double krv[kN]; double kgv[kN]; double kbv[kN];
+    for (int i = 0; i < kN; ++i)
+    {
+        alv[i] = 0.05 + 0.04 * i; dx0v[i] = 0.01 + 0.02 * i; dx1v[i] = -0.02 + 0.015 * i; dx2v[i] = 0.03 * i;
+        dy0v[i] = -0.01 + 0.018 * i; dy1v[i] = 0.02 + 0.01 * i; dy2v[i] = 0.005 * i;
+        uxv[i] = 0.04 * i; uyv[i] = 0.03 * i; cxv[i] = 0.5; cyv[i] = 0.5;
+        grv[i] = 0.1 + 0.04 * i; ggv[i] = 0.2 + 0.03 * i; gbv[i] = 0.15 + 0.035 * i; gnv[i] = 0.02 + 0.045 * i;
+        krv[i] = 0.3 + 0.02 * i; kgv[i] = 0.25 + 0.025 * i; kbv[i] = 0.2 + 0.03 * i;
+    }
+    const double* inp[] = {alv, dx0v, dx1v, dx2v, dy0v, dy1v, dy2v, uxv, uyv, cxv, cyv, grv, ggv, gbv, gnv, krv, kgv, kbv};
+
+    int        bad = 0;
+    const auto chk  = [&](int node, auto ref) { double o[kN]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { if (o[i] != ref(i)) { ++bad; } } };
+    const auto chkv = [&](int node, int comps, auto ref) { double o[kN * 4]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { for (int c = 0; c < comps; ++c) { if (o[i * comps + c] != ref(i, c)) { ++bad; } } } };
+
+    // CAS taps: tap_t[k] = kbase_k·(1+0.1t) + 0.05t, t = 0..4 (c,u,d,l,r).
+    const int  kbn[3]  = {kr, kg, kb};
+    const auto castap  = [&](int t) { const auto ch = [&](int c) { return g.binary(kir::KOp::Add, g.binary(kir::KOp::Mul, kbn[c], g.constant(1.0 + 0.1 * t, sh, kir::DType::F64)), g.constant(0.05 * t, sh, kir::DType::F64)); }; return g.vec3(ch(0), ch(1), ch(2)); };
+    const auto casval  = [&](int i, int t, int c) { const double* kv[3] = {krv, kgv, kbv}; return kv[c][i] * (1.0 + 0.1 * t) + 0.05 * t; };
+    const auto fillcas = [&](int i, int t, double o[3]) { for (int c = 0; c < 3; ++c) { o[c] = casval(i, t, c); } };
+
+    chk(fin::specular_aa(g, al, g.vec3(dx0, dx1, dx2), g.vec3(dy0, dy1, dy2), 0.5, 0.18), [&](int i) { const double dx[3] = {dx0v[i], dx1v[i], dx2v[i]}; const double dy[3] = {dy0v[i], dy1v[i], dy2v[i]}; return fi_specaa(alv[i], dx, dy, 0.5, 0.18); });
+    chkv(fin::ca_offset(g, g.vec2(ux, uy), g.vec2(cxn, cyn), 0.6), 2, [&](int i, int c) { double o[2]; fi_ca(uxv[i], uyv[i], cxv[i], cyv[i], 0.6, o); return o[c]; });
+    chk(fin::vignette(g, g.vec2(ux, uy), g.vec2(cxn, cyn), 1.5), [&](int i) { return fi_vig(uxv[i], uyv[i], cxv[i], cyv[i], 1.5); });
+    chkv(fin::film_grain(g, g.vec3(gr, gg, gb), gn, 0.08), 3, [&](int i, int c) { const double cc[3] = {grv[i], ggv[i], gbv[i]}; double o[3]; fi_grain(cc, gnv[i], 0.08, o); return o[c]; });
+    chkv(fin::cas_sharpen(g, castap(0), castap(1), castap(2), castap(3), castap(4), 0.7), 3, [&](int i, int c) { double cc[3]; double u[3]; double d[3]; double l[3]; double r[3]; fillcas(i, 0, cc); fillcas(i, 1, u); fillcas(i, 2, d); fillcas(i, 3, l); fillcas(i, 4, r); double o[3]; fi_cas(cc, u, d, l, r, 0.7, o); return o[c]; });
+
+    CHECK(bad == 0);
+}
 
 TEST_CASE("B12-b: screen-space reflections (reflect ray / Hi-Z hit / edge fade / confidence) bit-exact", "[kir][lighting][ssr]")
 {

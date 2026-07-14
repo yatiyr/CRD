@@ -1,0 +1,8 @@
+# CKIR-AUTHORED fused MLP (generated wmma) vs cublasLt — NVIDIA GeForce RTX 4070 Ti SUPER
+# MLP 64 x 6 layers, batch 1048576
+# correctness (CKIR vs cuBLAS): max_abs_diff=0.00000 max_ref_mag=0.28052 rel=0.00000
+# weight-convention probe: conv A (w[k+W*n]) rel=95.9013 | conv B (w[k*W+n]) rel=0.0925 -> TRUE = B (row-major w[k*W+n])
+# determinism (run-to-run): 0/67108864 differing halves (BIT-IDENTICAL)
+cublasLt-MLP         2.89226 ms   17.8 TFLOP/s (fp16)
+CKIR-fused-MLP       1.19473 ms   43.1 TFLOP/s (fp16)
+# RATIO: CKIR-authored fused is 2.42x vs cublasLt

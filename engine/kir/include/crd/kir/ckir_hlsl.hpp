@@ -148,6 +148,193 @@ inline bool emit_elementwise_hlsl(const KGraph& g, int output, crd::memory::IAll
     return true;
 }
 
+// B-cmp: emit an IMPERATIVE compute KERNEL (the shared-memory / barrier IR — `KEntry.is_kernel()`) as HLSL (SM6, dxc →
+// DXIL). The exact DX12 mirror of `emit_compute_kernel_glsl` (ckir_glsl.hpp): `[numthreads]` + `RWStructuredBuffer<T> bufN
+// : register(uN)` (all UAV — binding N → uN, matching create_pipeline_from_hlsl's root signature; `readonly` is a neutral
+// hint dropped here) + `groupshared T shNODE[len+pad]` + the statement body with INLINE recursive value expressions (a
+// SharedLoad emits AT its statement, never hoisted across a barrier — same as GLSL). `SV_GroupIndex` is the flattened local
+// index (= gl_LocalInvocationIndex); `GroupMemoryBarrierWithGroupSync()` is the control+shared barrier. Returns false on an
+// op it can't lower.
+inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IAllocator* scratch, GlslKernel& out)
+{
+    using namespace glsl_detail;
+    if (!entry.is_kernel()) { return false; }
+    const int                n = g.size();
+    crd::containers::String& s = out.source;
+    s.clear();
+    out.n_inputs = 0;
+    for (int i = 0; i < n; ++i) // resource decls: storage buffers (UAV) + groupshared arrays
+    {
+        const KNode& nd = g.node(i);
+        if (nd.op == KOp::BufferDecl)
+        {
+            // RAW UAV: the DX12 compute context binds every storage buffer as a RWByteAddressBuffer (R32_TYPELESS, no
+            // element type baked into the descriptor — see dx12_compute_context.cpp). So loads/stores are byte-addressed
+            // (index * 4) with asfloat/asuint reinterpret. 32-bit element types only (F32/U32/I32); F64 storage → refuse.
+            if ((nd.axes & 2U) != 0U) { s.append("globallycoherent "); } // cross-workgroup visible (spin-wait publish/read)
+            s.append("RWByteAddressBuffer buf"); app_uint(s, nd.iidx);
+            s.append(" : register(u"); app_uint(s, nd.iidx); s.append(");\n");
+        }
+        else if (nd.op == KOp::SharedDecl)
+        {
+            s.append("groupshared "); s.append(buf_ctype(nd.dtype())); s.append(" sh"); app_uint(s, i);
+            s.append("["); app_uint(s, nd.iidx + static_cast<int>(nd.axes)); s.append("];\n");
+        }
+    }
+    s.append("[numthreads("); app_uint(s, static_cast<int>(entry.local_size[0]));
+    s.append(", ");            app_uint(s, static_cast<int>(entry.local_size[1]));
+    s.append(", ");            app_uint(s, static_cast<int>(entry.local_size[2]));
+    s.append(")]\nvoid cs_main(uint lidx : SV_GroupIndex, uint3 wgid3 : SV_GroupID) {\n");
+
+    // DETERMINISM: FLOAT arithmetic materializes as `precise` temps (HLSL `precise` ⇒ no mad-fusion ⇒ bit-matches the CPU
+    // oracle) — the same lever as the GLSL kernel emitter. Leaves (raw-UAV loads / consts / builtins) + cast/select/compare/
+    // bitops stay INLINE so a load re-reads at each use (correct across barriers); temps CSE by node id.
+    bool                            ok = true;
+    crd::containers::Array<crd::u8> temped(scratch);
+    temped.resize(static_cast<crd::usize>(n), 0);
+    const auto is_inline_op = [](KOp op) -> bool {
+        switch (op)
+        {
+        case KOp::Const: case KOp::Builtin: case KOp::KernelLoopVar: case KOp::BufferLoad: case KOp::SharedLoad:
+        case KOp::BufferDecl: case KOp::SharedDecl: case KOp::Cast: case KOp::Select:
+        case KOp::CmpLt: case KOp::CmpLe: case KOp::CmpGt: case KOp::CmpGe: case KOp::CmpEq: case KOp::CmpNe:
+        case KOp::BitAnd: case KOp::BitOr: case KOp::BitXor: case KOp::Shl: case KOp::Shr: return true;
+        default: return false;
+        }
+    };
+    const auto pv = [&](auto&& self, int node) -> void {
+        if (temped[static_cast<crd::usize>(node)] != 0U) { s.append("t"); app_uint(s, static_cast<crd::u32>(node)); return; }
+        const KNode& nd  = g.node(node);
+        const auto   bin = [&](const char* o) { s.append("("); self(self, nd.a); s.append(o); self(self, nd.b); s.append(")"); };
+        switch (nd.op)
+        {
+        case KOp::Const:
+            if (nd.dtype() == DType::Bool) { s.append(nd.cval != 0.0 ? "true" : "false"); }
+            else if (dt_is_uint(nd.dtype())) { app_uint(s, static_cast<int>(nd.cval)); s.append("u"); }
+            else if (dt_is_int(nd.dtype())) { app_uint(s, static_cast<int>(nd.cval)); }
+            else { app_flit(s, nd.cval); }
+            break;
+        case KOp::Builtin:
+            if (static_cast<KBuiltin>(nd.iidx) == KBuiltin::LocalInvocationIndex) { s.append("lidx"); }
+            else if (static_cast<KBuiltin>(nd.iidx) == KBuiltin::WorkgroupIndex) { s.append("wgid3.x"); }
+            else { ok = false; s.append("0u"); }
+            break;
+        case KOp::KernelLoopVar: s.append("lv"); app_uint(s, nd.a); break;
+        case KOp::BufferLoad: { // asfloat/asint(bufN.Load(idx*4)) — RAW byte-addressed UAV (see BufferDecl); uint loads bare
+            const DType bt = g.node(nd.a).dtype();
+            if (bt == DType::F64) { ok = false; s.append("0.0"); break; }
+            const char* pre = !(dt_is_int(bt) || dt_is_uint(bt)) ? "asfloat(" : dt_is_int(bt) ? "asint(" : ""; // NOLINT(readability-avoid-nested-conditional-operator) 3-way reinterpret select
+            s.append(pre);
+            s.append("buf"); app_uint(s, g.node(nd.a).iidx); s.append(".Load(("); self(self, nd.b); s.append(") * 4u)");
+            if (pre[0] != '\0') { s.append(")"); }
+            break;
+        }
+        case KOp::SharedLoad: s.append("sh"); app_uint(s, nd.a); s.append("["); self(self, nd.b); s.append("]"); break;
+        case KOp::Cast: s.append(ctype(nd.dtype())); s.append("("); self(self, nd.a); s.append(")"); break;
+        case KOp::CmpLt: bin(" < "); break;
+        case KOp::CmpLe: bin(" <= "); break;
+        case KOp::CmpGt: bin(" > "); break;
+        case KOp::CmpGe: bin(" >= "); break;
+        case KOp::CmpEq: bin(" == "); break;
+        case KOp::CmpNe: bin(" != "); break;
+        case KOp::BitAnd: bin(" & "); break;
+        case KOp::BitOr: bin(" | "); break;
+        case KOp::BitXor: bin(" ^ "); break;
+        case KOp::Shl: bin(" << "); break;
+        case KOp::Shr: bin(" >> "); break;
+        case KOp::Select: // a=true b=false c=cond; wrap a non-bool cond in `!= 0.0` (mirrors the elementwise HLSL Select)
+            s.append("(");
+            if (g.node(nd.c).dtype() == DType::Bool) { self(self, nd.c); }
+            else { s.append("("); self(self, nd.c); s.append(" != 0.0)"); }
+            s.append(" ? "); self(self, nd.a); s.append(" : "); self(self, nd.b); s.append(")");
+            break;
+        default: ok = false; s.append("0"); break;
+        }
+    };
+    const auto rhs = [&](const KNode& nd) -> void {
+        const auto b2 = [&](const char* o) { s.append("("); pv(pv, nd.a); s.append(o); pv(pv, nd.b); s.append(")"); };
+        const auto f2 = [&](const char* f) { s.append(f); s.append("("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(")"); };
+        const auto f1 = [&](const char* f) { s.append(f); s.append("("); pv(pv, nd.a); s.append(")"); };
+        switch (nd.op)
+        {
+        case KOp::Neg: s.append("(-"); pv(pv, nd.a); s.append(")"); break;
+        case KOp::Abs: f1("abs"); break;
+        case KOp::Sqrt: f1("sqrt"); break;
+        case KOp::Sin: f1("sin"); break;
+        case KOp::Cos: f1("cos"); break;
+        case KOp::Floor: f1("floor"); break;
+        case KOp::Add: b2(" + "); break;
+        case KOp::Sub: b2(" - "); break;
+        case KOp::Mul: b2(" * "); break;
+        case KOp::Div: b2(" / "); break;
+        case KOp::Min: f2("min"); break;
+        case KOp::Max: f2("max"); break;
+        case KOp::Mod: if (dt_is_int(nd.dtype()) || dt_is_uint(nd.dtype())) { b2(" % "); } else { f2("fmod"); } break;
+        case KOp::Fma: s.append("fma("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(", "); pv(pv, nd.c); s.append(")"); break;
+        default: ok = false; s.append("0"); break;
+        }
+    };
+    const auto decl = [&](auto&& self, int node) -> void {
+        const KNode& nd = g.node(node);
+        if (nd.op == KOp::BufferLoad || nd.op == KOp::SharedLoad) { self(self, nd.b); return; } // resource leaf: only the index carries temps
+        if (nd.a >= 0) { self(self, nd.a); }
+        if (nd.b >= 0) { self(self, nd.b); }
+        if (nd.c >= 0) { self(self, nd.c); }
+        if (!is_inline_op(nd.op) && temped[static_cast<crd::usize>(node)] == 0U)
+        {
+            temped[static_cast<crd::usize>(node)] = 1U;
+            s.append(is_float_dtype(nd.dtype()) ? "  precise " : "  ");
+            s.append(ctype(nd.dtype())); s.append(" t"); app_uint(s, static_cast<crd::u32>(node)); s.append(" = ");
+            rhs(nd);
+            s.append(";\n");
+        }
+    };
+    const auto emit_body = [&](auto&& self_b, int begin, int count) -> void {
+        int i = begin;
+        while (i < begin + count) // a For/If body lives CONTIGUOUSLY after it → recurse then SKIP past it (never re-emit)
+        {
+            const KStmt& st = g.stmt(i);
+            switch (st.kind)
+            {
+            case KStmtKind::BufferStore: { // bufN.Store(idx*4, asuint(val)) — RAW byte-addressed UAV; uint stores bare
+                const DType bt = g.node(st.target).dtype();
+                if (bt == DType::F64) { ok = false; ++i; break; }
+                decl(decl, st.index); decl(decl, st.value);
+                s.append("  buf"); app_uint(s, g.node(st.target).iidx); s.append(".Store(("); pv(pv, st.index); s.append(") * 4u, ");
+                if (dt_is_uint(bt)) { pv(pv, st.value); } else { s.append("asuint("); pv(pv, st.value); s.append(")"); }
+                s.append(");\n");
+                ++i;
+                break;
+            }
+            case KStmtKind::SharedStore: decl(decl, st.index); decl(decl, st.value); s.append("  sh"); app_uint(s, st.target); s.append("["); pv(pv, st.index); s.append("] = "); pv(pv, st.value); s.append(";\n"); ++i; break;
+            case KStmtKind::Barrier: s.append(st.scope == BarrierScope::Workgroup ? "  GroupMemoryBarrierWithGroupSync();\n" : "  DeviceMemoryBarrierWithGroupSync();\n"); ++i; break;
+            case KStmtKind::Materialize: // FREEZE st.value into a temp NOW (survives a later shared overwrite)
+                decl(decl, st.value);
+                if (temped[static_cast<crd::usize>(st.value)] == 0U)
+                {
+                    s.append(is_float_dtype(g.node(st.value).dtype()) ? "  precise " : "  ");
+                    s.append(ctype(g.node(st.value).dtype())); s.append(" t"); app_uint(s, static_cast<crd::u32>(st.value)); s.append(" = ");
+                    pv(pv, st.value); s.append(";\n");
+                    temped[static_cast<crd::usize>(st.value)] = 1U;
+                }
+                ++i;
+                break;
+            case KStmtKind::For: decl(decl, st.value); s.append("  for (uint lv"); app_uint(s, i); s.append(" = 0u; lv"); app_uint(s, i); s.append(" < uint("); pv(pv, st.value); s.append("); ++lv"); app_uint(s, i); s.append(") {\n"); self_b(self_b, st.body_begin, st.body_count); s.append("  }\n"); i = st.body_begin + st.body_count; break;
+            case KStmtKind::If: decl(decl, st.value); s.append("  if ("); pv(pv, st.value); s.append(") {\n"); self_b(self_b, st.body_begin, st.body_count); s.append("  }\n"); i = st.body_begin + st.body_count; break;
+            case KStmtKind::SpinUntilNonzero: decl(decl, st.index); s.append("  while (buf"); app_uint(s, g.node(st.target).iidx); s.append(".Load((("); pv(pv, st.index); s.append(")) * 4u) == 0u) { DeviceMemoryBarrier(); }\n"); ++i; break;
+            case KStmtKind::SharedAtomicAdd: decl(decl, st.index); decl(decl, st.value); s.append("  { uint oldv_; InterlockedAdd(sh"); app_uint(s, st.target); s.append("["); pv(pv, st.index); s.append("], "); pv(pv, st.value); s.append(", oldv_); }\n"); ++i; break;
+            case KStmtKind::BufferAtomicAdd: decl(decl, st.index); decl(decl, st.value); s.append("  buf"); app_uint(s, g.node(st.target).iidx); s.append(".InterlockedAdd((("); pv(pv, st.index); s.append(")) * 4u, "); pv(pv, st.value); s.append(");\n"); ++i; break; // RAW byte-addressed UAV
+            case KStmtKind::ForBreakIf: decl(decl, st.value); s.append("  if (("); pv(pv, st.value); s.append(") != 0u) break;\n"); ++i; break;
+            case KStmtKind::BufferTicket: decl(decl, st.index); s.append("  if (lidx == 0u) { uint tick_; buf"); app_uint(s, g.node(st.target).iidx); s.append(".InterlockedAdd((("); pv(pv, st.index); s.append(")) * 4u, 1u, tick_); sh"); app_uint(s, st.value); s.append("[0] = tick_; }\n"); ++i; break;
+            case KStmtKind::SyncWarp: s.append("  GroupMemoryBarrierWithGroupSync();\n"); ++i; break; // no wave barrier in HLSL — conservative
+            }
+        }
+    };
+    emit_body(emit_body, entry.kernel_body_begin, entry.kernel_body_count);
+    s.append("}\n");
+    return ok;
+}
+
 // The bare HLSL matrix spelling: `floatRxC` = R ROWS by C columns. This is the TRANSPOSE of GLSL's `matCxR`
 // (ckir_glsl.hpp) -- the single most dangerous asymmetry in this file. It is also why every matrix construction below
 // is wrapped in `transpose(...)`: HLSL's matrix constructor fills ROW-major, so feeding it our C column-vectors builds

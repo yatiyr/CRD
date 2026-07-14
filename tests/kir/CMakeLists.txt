@@ -14,6 +14,14 @@ add_executable(crd-kir-tests
     test_ckir_noise.cpp
     test_ckir_lower.cpp
     test_ckir_lighting.cpp
+    test_ckir_kernel.cpp
+    test_ckir_kernel_emit.cpp
+    test_ckir_fft.cpp
+    test_ckir_reduce.cpp
+    test_ckir_scan.cpp
+    test_ckir_sort.cpp
+    test_ckir_subgroup.cpp
+    test_ckir_mlp.cpp
 )
 
 target_link_libraries(crd-kir-tests PRIVATE

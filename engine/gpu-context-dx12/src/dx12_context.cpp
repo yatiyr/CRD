@@ -117,7 +117,13 @@ public:
         // IR on-ramp: crd-kir emits the stage HLSL (refuses a vertex with no clip position), dxc lowers it to DXIL. The
         // HLSL text lives only across this call; the DXIL never surfaces beyond the returned opaque program.
         crd::kir::GlslKernel kern(m_alloc);
-        if (!crd::kir::emit_stage_hlsl(graph, entry, m_alloc, kern)) { return nullptr; }
+        if (entry.stage == crd::kir::KStage::Compute && entry.is_kernel())
+        {
+            // B-cmp: an imperative shared-memory/barrier compute kernel (FFT/reduction/transpose) → the DX12 mirror of the
+            // Vulkan kernel path (emit_compute_kernel_hlsl), so create_program(g, e) lowers a kernel on BOTH backends.
+            if (!crd::kir::emit_compute_kernel_hlsl(graph, entry, m_alloc, kern)) { return nullptr; }
+        }
+        else if (!crd::kir::emit_stage_hlsl(graph, entry, m_alloc, kern)) { return nullptr; }
         const auto dxil = compile_hlsl_to_dxil(stage, crd::containers::to_view(kern.source), "ckir_stage", m_alloc);
         if (!dxil.ok) { return nullptr; }
 
