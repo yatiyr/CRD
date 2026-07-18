@@ -22,6 +22,9 @@
 #include <crd/kir/ckir_finish.hpp>   // B13-e: finish (Tokuyoshi specular AA / CA / cos⁴ vignette / Lottes grain / AMD CAS)
 #include <crd/kir/ckir_nodes.hpp>    // B6: the MaterialX-parity node library
 #include <crd/kir/ckir_noise.hpp>    // B6-b: the MaterialX SOURCE noise nodes
+#include <crd/kir/ckir_clouds.hpp>   // B15-b: the Nubis Perlin-Worley cloud density (real clouds for the ocean sky)
+#include <crd/kir/ckir_water.hpp>    // B16-a-4: the water-shading library (water_shade)
+#include <crd/kir/ckir_water_render.hpp> // B16: the PROMOTED displaced-geometry ocean render pass (config + VS + mesh + FS)
 
 #include <crd/memory/allocators/tlsf_allocator.hpp> // B6-b: scratch for the noise expected-value oracle
 
@@ -76,6 +79,40 @@ inline void build_triangle_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe)
     fe.out[0] = {red, 0};
 }
 
+// B4 MESH entry: the SAME triangle as build_triangle_vs, emitted by a MESH shader (the modern amplification path). One
+// workgroup, one meshlet: 3 vertices (thread tid = LocalInvocationIndex writes vertex tid via the corner select) + 1 triangle
+// (thread 0 writes the local index triple (0,1,2)). Pairs with build_triangle_fs (constant red). The literal proof that ONE
+// CKIR mesh entry lowers → GL_EXT_mesh_shader → a mesh shader object → vkCmdDrawMeshTasksEXT → pixels.
+inline void build_triangle_mesh(crd::kir::KGraph& g, crd::kir::KEntry& me)
+{
+    namespace kir = crd::kir;
+    const auto sh   = kir::make_shape({1});
+    const int  tid  = g.cast(g.builtin(kir::KBuiltin::LocalInvocationIndex), kir::DType::I32); // 0..2 = the local vertex
+    const int  k0   = g.constant(0.0, sh, kir::DType::I32);
+    const int  k1   = g.constant(1.0, sh, kir::DType::I32);
+    const int  eq0  = g.binary(kir::KOp::CmpEq, tid, k0);
+    const int  eq1  = g.binary(kir::KOp::CmpEq, tid, k1);
+    const int  x0   = g.constant(0.0, sh, kir::DType::F32);
+    const int  x1   = g.constant(0.8, sh, kir::DType::F32);
+    const int  x2   = g.constant(-0.8, sh, kir::DType::F32);
+    const int  y0   = g.constant(-0.8, sh, kir::DType::F32);
+    const int  y1   = g.constant(0.8, sh, kir::DType::F32);
+    const int  x    = g.select(eq0, x0, g.select(eq1, x1, x2));
+    const int  y    = g.select(eq0, y0, y1);
+    const int  z    = g.constant(0.0, sh, kir::DType::F32);
+    const int  w    = g.constant(1.0, sh, kir::DType::F32);
+    const int  u0   = g.constant(0.0, sh, kir::DType::U32);
+    const int  u1   = g.constant(1.0, sh, kir::DType::U32);
+    const int  u2   = g.constant(2.0, sh, kir::DType::U32);
+
+    me.stage           = kir::KStage::Mesh;
+    me.position        = g.vec4(x, y, z, w); // per-vertex clip position (thread tid → vertex tid)
+    me.mesh_vertices   = 3;
+    me.mesh_primitives = 1;
+    me.mesh_prim       = g.vec3(u0, u1, u2); // primitive 0's three local vertex indices
+    me.n_out           = 0;                  // no interpolants — the fragment paints a constant
+}
+
 // B1-a FRAGMENT entry: output the screen-space derivatives of `FragCoord.x` as a colour. `FragCoord.x` increases by exactly
 // 1 per pixel horizontally, so `dFdx(FragCoord.x) == 1.0` and `dFdy(FragCoord.x) == 0.0` on EVERY covered pixel and EVERY
 // backend — a deterministic, hardware-independent derivative test. Colour = (dFdx, dFdy, 0, 1) ⇒ centre reads R≈1, G≈0.
@@ -96,6 +133,354 @@ inline void build_derivative_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe)
     fe.n_out  = 1;
     fe.out[0] = {col, 0};
 }
+
+// B16-a-4 WATER SURFACE render: a fullscreen water quad whose normal tilts smoothly with FragCoord (a gentle bulge), so the
+// Fresnel + sun glint sweep across the frame — screen centre reflects up (deep water), a bright sun-glint appears where the
+// tilted normal reflects the sun into the eye. Runs `water_shade` on the GPU, Reinhard-tonemapped to [0,1] for the unorm8
+// target. The readback proves it renders (a bluish body + a bright glint); drawn identically on Vulkan + DX12 it proves the
+// fragment shading is portable.
+inline void build_water_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe, crd::u32 dim)
+{
+    namespace kir = crd::kir;
+    namespace nd  = crd::kir::nodes;
+    namespace wt  = crd::kir::water;
+    const auto sh   = kir::make_shape({1});
+    const auto k    = [&](double v) { return g.constant(v, sh, kir::DType::F32); };
+    const auto kc   = [&](double x, double y, double z) { return g.vec3(k(x), k(y), k(z)); };
+    const auto unit = [&](int vv) { return nd::detail::bin(g, kir::KOp::Div, vv, g.unary(kir::KOp::Sqrt, g.dot(vv, vv))); };
+
+    const int fc   = g.builtin(kir::KBuiltin::FragCoord);
+    const int invd = k(1.0 / static_cast<double>(dim));
+    const int tx   = g.binary(kir::KOp::Mul, g.binary(kir::KOp::Sub, g.binary(kir::KOp::Mul, g.swizzle(fc, 0), invd), k(0.5)), k(2.6));
+    const int tz   = g.binary(kir::KOp::Mul, g.binary(kir::KOp::Sub, g.binary(kir::KOp::Mul, g.swizzle(fc, 1), invd), k(0.5)), k(2.6));
+    const int n    = unit(g.vec3(tx, k(1.0), tz));
+    const int v    = unit(kc(0.0, 0.75, 0.66));
+    const int l    = unit(kc(0.35, 0.55, 0.75));
+    const int col  = wt::water_shade(g, n, v, l, kc(5.0, 4.8, 4.2), kc(0.25, 0.45, 0.8), kc(0.08, 0.14, 0.12),
+                                     kc(0.0, 0.06, 0.1), kc(0.45, 0.09, 0.06), k(3.0), k(0.3), k(0.0), kc(0.9, 0.92, 0.95), k(0.08));
+    const int tm   = nd::detail::bin(g, kir::KOp::Div, col, nd::detail::bin(g, kir::KOp::Add, col, kc(1.0, 1.0, 1.0))); // Reinhard → [0,1]
+    fe.stage  = kir::KStage::Fragment;
+    fe.n_out  = 1;
+    fe.out[0] = {g.vec4(g.swizzle(tm, 0), g.swizzle(tm, 1), g.swizzle(tm, 2), k(1.0)), 0};
+}
+
+// B16-a-4 OCEAN FRAME: a full perspective sea to the horizon, shaded with the water library. A camera above the water casts a
+// ray per pixel; below the horizon the ray hits the y=0 plane, a multi-directional sum-of-waves gives the surface normal +
+// crest height, and the pixel is shaded — Fresnel-dielectric split of a sky reflection (sky_color of the reflected ray) + the
+// slope-variance sun glitter vs deep Beer-absorbed water + a green subsurface glow, foam on the sharp crests, then distance
+// fog fading the far water into the horizon haze. Above the horizon the ray shows the sky. Reinhard + sRGB for display. `time`
+// animates the waves. This is a VISUAL frame (written to a BMP), not a bit-exact gate.
+inline void build_ocean_frame_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe, crd::u32 dim, double time)
+{
+    namespace kir = crd::kir;
+    namespace nd  = crd::kir::nodes;
+    namespace wt  = crd::kir::water;
+    const auto sh    = kir::make_shape({1});
+    const auto k     = [&](double v) { return g.constant(v, sh, kir::DType::F32); };
+    const auto kc    = [&](double x, double y, double z) { return g.vec3(k(x), k(y), k(z)); };
+    const auto add   = [&](int a, int b) { return g.binary(kir::KOp::Add, a, b); };
+    const auto sub   = [&](int a, int b) { return g.binary(kir::KOp::Sub, a, b); };
+    const auto mul   = [&](int a, int b) { return g.binary(kir::KOp::Mul, a, b); };
+    const auto b3    = [&](kir::KOp op, int a, int c) { return nd::detail::bin(g, op, a, c); };
+    const auto sat   = [&](int x) { return g.binary(kir::KOp::Max, g.binary(kir::KOp::Min, x, k(1.0)), k(0.0)); };
+    const auto sat3  = [&](int x) { return b3(kir::KOp::Max, b3(kir::KOp::Min, x, kc(1.0, 1.0, 1.0)), kc(0.0, 0.0, 0.0)); };
+    const auto unit3 = [&](int vv) { return b3(kir::KOp::Div, vv, g.unary(kir::KOp::Sqrt, g.dot(vv, vv))); };
+
+    // camera ray: top looks up (sky), bottom looks down (near water); horizon a touch above centre.
+    const int fc   = g.builtin(kir::KBuiltin::FragCoord);
+    const int invd = k(2.0 / static_cast<double>(dim));
+    const int ux   = sub(mul(g.swizzle(fc, 0), invd), k(1.0));
+    const int uy   = sub(k(1.0), mul(g.swizzle(fc, 1), invd)); // flip: FragCoord.y is top-down
+    const int rdir = unit3(g.vec3(mul(ux, k(0.9)), add(k(-0.14), mul(uy, k(0.60))), k(1.0)));
+    const int ry   = g.swizzle(rdir, 1);
+
+    // a LOW, warm, golden-hour sun near the horizon (lever 3).
+    const int ldir  = unit3(kc(0.20, 0.10, 0.97));
+    const int sunc  = kc(7.0, 4.0, 1.8);    // warm sun radiance (HDR)
+    const int horiz = kc(0.55, 0.36, 0.22); // warm hazy horizon (dimmer ⇒ deep water reads dark)
+    const int zen   = kc(0.03, 0.07, 0.18); // deep zenith blue
+
+    // ── SKY with atmospheric in-scattering toward the sun ──
+    const auto sky_of = [&](int dir) {
+        const int ty   = sat(g.swizzle(dir, 1));
+        const int grad = add(b3(kir::KOp::Mul, horiz, sub(k(1.0), ty)), b3(kir::KOp::Mul, zen, ty));
+        const int sd   = g.binary(kir::KOp::Max, g.dot(dir, ldir), k(0.0));
+        const int disk = g.unary(kir::KOp::Exp, mul(sub(sd, k(1.0)), k(700.0)));  // sun disk
+        const int glow = g.unary(kir::KOp::Exp, mul(sub(sd, k(1.0)), k(12.0)));   // tight warm scatter
+        const int haze = g.unary(kir::KOp::Exp, mul(sub(sd, k(1.0)), k(1.6)));    // broad horizon spill
+        return add(grad, b3(kir::KOp::Mul, sunc, add(mul(disk, k(3.0)), add(mul(glow, k(0.6)), mul(haze, k(0.18))))));
+    };
+    const int sky = sky_of(rdir);
+
+    // ── WATER: ray·plane y=0 at eye height 5 ──
+    const int tdist = g.binary(kir::KOp::Div, k(5.0), g.binary(kir::KOp::Max, g.unary(kir::KOp::Neg, ry), k(1e-3)));
+    const int wx    = mul(tdist, g.swizzle(rdir, 0));
+    const int wzr   = mul(tdist, g.swizzle(rdir, 2));
+
+    // a BIG dominant swell + octaves → slope (sx,sz) + crest height hh (lever 2, "big wave").
+    int          sx = k(0.0);
+    int          sz = k(0.0);
+    int          hh = k(0.0);
+    struct Wave { double dx, dz, kk, amp, spd; };
+    const Wave   waves[7] = {{1.0, 0.22, 0.045, 1.5, 0.42}, {0.85, 0.5, 0.10, 0.7, 0.55}, {0.5, 0.9, 0.20, 0.36, 0.72},
+                             {-0.6, 0.8, 0.40, 0.19, 0.95}, {0.9, -0.4, 0.78, 0.10, 1.2}, {0.3, 1.0, 1.5, 0.05, 1.55}, {-0.7, 0.6, 2.7, 0.025, 1.95}};
+    for (const Wave& wv : waves)
+    {
+        const double dl = std::sqrt(wv.dx * wv.dx + wv.dz * wv.dz);
+        const int    ph = add(mul(add(mul(wx, k(wv.kk * wv.dx / dl)), mul(wzr, k(wv.kk * wv.dz / dl))), k(1.0)), k(wv.spd * time));
+        const int    cs = g.unary(kir::KOp::Cos, ph);
+        hh              = add(hh, mul(k(wv.amp), g.unary(kir::KOp::Sin, ph)));
+        sx              = add(sx, mul(k(wv.amp * wv.kk * wv.dx / dl), cs));
+        sz              = add(sz, mul(k(wv.amp * wv.kk * wv.dz / dl), cs));
+    }
+    const int n = unit3(g.vec3(g.unary(kir::KOp::Neg, sx), k(1.0), g.unary(kir::KOp::Neg, sz)));
+    const int v = g.unary(kir::KOp::Neg, rdir);
+
+    // Fresnel-dielectric split: sky reflection + slope-variance sun glitter vs deep water + STRONG subsurface (lever 1 + scatter).
+    const int nov  = g.binary(kir::KOp::Max, g.dot(n, v), k(1e-3));
+    const int fr   = wt::fresnel_water(g, nov);
+    const int rfl  = sub(rdir, b3(kir::KOp::Mul, n, mul(k(2.0), g.dot(rdir, n))));
+    const int skyr = sky_of(unit3(rfl));
+    const int glit = wt::ocean_sun_glitter(g, n, v, ldir, sunc, k(0.015));
+    const int refl = add(skyr, glit);
+
+    const int deep = kc(0.006, 0.10, 0.13); // deep teal (lever 1)
+    const int vdl  = sat(g.dot(v, g.unary(kir::KOp::Neg, ldir)));
+    const int sssf = mul(sat(add(mul(hh, k(0.5)), k(0.5))), mul(mul(vdl, vdl), mul(vdl, vdl))); // backlit high crests glow
+    const int refr = add(deep, b3(kir::KOp::Mul, kc(0.10, 0.55, 0.42), mul(sssf, k(0.6))));     // teal-green scatter
+
+    // FOAM on the sharp crests, lit by sun + sky (foams on the water).
+    const int foam   = sat(mul(sub(hh, k(0.9)), k(1.3)));
+    const int foamc  = b3(kir::KOp::Mul, kc(0.9, 0.94, 0.98), add(mul(sat(g.dot(n, ldir)), k(0.8)), k(0.5)));
+    const int water0 = add(b3(kir::KOp::Mul, refl, fr), b3(kir::KOp::Mul, refr, sub(k(1.0), fr)));
+    const int water1 = add(b3(kir::KOp::Mul, water0, sub(k(1.0), foam)), b3(kir::KOp::Mul, foamc, foam));
+
+    // gentle warm aerial fog to the horizon (lever 1: less haze than before, warm-tinted).
+    const int fog   = sat(sub(k(1.0), g.unary(kir::KOp::Exp, mul(tdist, k(-0.0016)))));
+    const int water = add(b3(kir::KOp::Mul, water1, sub(k(1.0), fog)), b3(kir::KOp::Mul, horiz, fog));
+
+    // sky vs water, EXPOSURE, filmic (Narkowicz ACES) tonemap + sRGB.
+    const int col  = nd::detail::sel(g, g.binary(kir::KOp::CmpLt, ry, k(0.0)), water, sky);
+    const int ce   = b3(kir::KOp::Mul, col, k(0.16)); // exposure — keep water deep, let only sun/glint/sky reach the top
+    const int num  = b3(kir::KOp::Mul, ce, b3(kir::KOp::Add, b3(kir::KOp::Mul, ce, k(2.51)), k(0.03)));
+    const int den  = b3(kir::KOp::Add, b3(kir::KOp::Mul, ce, b3(kir::KOp::Add, b3(kir::KOp::Mul, ce, k(2.43)), k(0.59))), k(0.14));
+    const int aces = sat3(b3(kir::KOp::Div, num, den));
+    const int srgb = b3(kir::KOp::Pow, aces, k(1.0 / 2.2));
+    fe.stage       = kir::KStage::Fragment;
+    fe.n_out       = 1;
+    fe.out[0]      = {g.vec4(g.swizzle(srgb, 0), g.swizzle(srgb, 1), g.swizzle(srgb, 2), k(1.0)), 0};
+}
+
+// B16-a-4 LEVER 4 — the REAL FFT-OCEAN frame. The surface is no longer a handful of procedural sines (which interfere into a
+// visible parallelogram lattice) — it is OUR FFT-ocean field, baked into a texture (R,G = normal.xz · B = height · A = Jacobian
+// foam) and SAMPLED here. A camera above the sea casts a ray per pixel; below the horizon it hits the y=0 plane, then:
+//   (1) EXACT single-step PARALLAX — sample the height at the plane hit, shift the sample point to where the ray truly meets
+//       that height (Δt = h/ray.y). Near crests displace toward the eye → real 3-D wave depth (not a flat normal map).
+//   (2) MULTI-SCALE detail — the same periodic FFT tile is sampled at three world scales (rotated) and the slopes summed, so
+//       the eye never sees the tile repeat AND the spectrum spans metres-to-centimetres of wavelength (kills the lattice).
+//   (3) shade with the water library — Fresnel split of a sky reflection + slope-variance sun glitter vs deep Beer-absorbed
+//       teal + a green subsurface glow on backlit crests, REAL Jacobian foam on the pinched crests, distance fog, ACES+sRGB.
+// `hmax` decodes the height channel ((B−0.5)·2·hmax); `patch` is the FFT tile's world size. The texture is bound by draw_textured
+// (set 0 / binding 1 image + binding 2 sampler). This is a VISUAL frame (→ BMP), driven by the actual FFT simulation.
+inline void build_ocean_frame_fft_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe, crd::u32 dim, double hmaxS, double hmaxC,
+                                     double patchS, double patchC)
+{
+    namespace kir = crd::kir;
+    namespace nd  = crd::kir::nodes;
+    namespace nz  = crd::kir::nodes::noise;
+    namespace wt  = crd::kir::water;
+    const auto sh    = kir::make_shape({1});
+    const auto k     = [&](double v) { return g.constant(v, sh, kir::DType::F32); };
+    const auto kc    = [&](double x, double y, double z) { return g.vec3(k(x), k(y), k(z)); };
+    const auto add   = [&](int a, int b) { return g.binary(kir::KOp::Add, a, b); };
+    const auto sub   = [&](int a, int b) { return g.binary(kir::KOp::Sub, a, b); };
+    const auto mul   = [&](int a, int b) { return g.binary(kir::KOp::Mul, a, b); };
+    const auto b3    = [&](kir::KOp op, int a, int c) { return nd::detail::bin(g, op, a, c); };
+    const auto sat   = [&](int x) { return g.binary(kir::KOp::Max, g.binary(kir::KOp::Min, x, k(1.0)), k(0.0)); };
+    const auto sat3  = [&](int x) { return b3(kir::KOp::Max, b3(kir::KOp::Min, x, kc(1.0, 1.0, 1.0)), kc(0.0, 0.0, 0.0)); };
+    const auto unit3 = [&](int vv) { return b3(kir::KOp::Div, vv, g.unary(kir::KOp::Sqrt, g.dot(vv, vv))); };
+
+    // TWO cascade fields in a bindless array (index 0 = big SWELL, index 1 = fine CHOP), each RGBA8: R,G=normal.xz · B=height · A=foam.
+    const int tex  = g.texture(0, 3, kir::DType::F32, kir::TexDim::Tex2D, false, false, false, /*array_count=*/8);
+    const int samp = g.sampler(0, 2);
+    const int csw  = g.constant(0.0, sh, kir::DType::U32); // swell cascade index
+    const int cch  = g.constant(1.0, sh, kir::DType::U32); // chop cascade index
+
+    // camera ray: top looks up (sky), bottom looks down (near water); horizon a touch above centre.
+    const int fc   = g.builtin(kir::KBuiltin::FragCoord);
+    const int invd = k(2.0 / static_cast<double>(dim));
+    const int ux   = sub(mul(g.swizzle(fc, 0), invd), k(1.0));
+    const int uy   = sub(k(1.0), mul(g.swizzle(fc, 1), invd)); // flip: FragCoord.y is top-down
+    const int rdir = unit3(g.vec3(mul(ux, k(0.9)), add(k(-0.14), mul(uy, k(0.60))), k(1.0)));
+    const int ry   = g.swizzle(rdir, 1);
+    const int rdx  = g.swizzle(rdir, 0);
+    const int rdz  = g.swizzle(rdir, 2);
+
+    // a HIGH, soft daytime sun — bright hazy sky, no harsh disk (AC4 tropical daylight).
+    const int ldir  = unit3(kc(0.25, 0.28, 0.93)); // daytime sun, low enough to sit in the upper frame → rays leak from clouds
+    const int sunc  = kc(2.4, 2.5, 2.4);    // soft near-white sun (broad sheen, not an orange blob)
+    const int hazeh = kc(0.52, 0.67, 0.80); // hazy blue horizon
+    const int zen   = kc(0.13, 0.40, 0.78); // richer blue zenith
+
+    // ── SKY: a bright hazy-blue daytime dome (pale toward the horizon), a soft broad sun sheen, bright white cumulus. ──
+    crd::kir::clouds::CloudConfig ccfg;
+    ccfg.coverage    = 0.66; // fuller cover — thicker, more-defined masses with clear-sky gaps the sun rays leak through
+    ccfg.base_freq   = 2.2;
+    ccfg.detail_freq = 7.0;
+    ccfg.erosion     = 0.42;
+    const auto sky_of = [&](int dir, bool hi) {
+        const int ty   = g.unary(kir::KOp::Sqrt, sat(g.swizzle(dir, 1))); // bias gradient toward the pale horizon
+        const int grad = add(b3(kir::KOp::Mul, hazeh, sub(k(1.0), ty)), b3(kir::KOp::Mul, zen, ty));
+        const int sd   = g.binary(kir::KOp::Max, g.dot(dir, ldir), k(0.0));
+        const int disk = g.unary(kir::KOp::Exp, mul(sub(sd, k(1.0)), k(280.0))); // sun disc — bright enough to LEAK through cloud gaps
+        const int glow = g.unary(kir::KOp::Exp, mul(sub(sd, k(1.0)), k(5.0)));   // broad soft sun haze
+        const int suns = b3(kir::KOp::Mul, sunc, add(mul(disk, k(1.8)), mul(glow, k(0.4))));
+        // bright white cumulus (bounded coords → no horizon aliasing).
+        const int cy    = add(g.swizzle(dir, 1), k(0.5));
+        const int cu    = mul(g.binary(kir::KOp::Div, g.swizzle(dir, 0), cy), k(0.7));
+        const int cw    = mul(g.binary(kir::KOp::Div, g.swizzle(dir, 2), cy), k(0.7));
+        const int hmask = sat(add(mul(g.swizzle(dir, 1), k(2.0)), k(0.12))); // clouds reach lower toward the horizon (background)
+        const int pf    = nz::fractal2(g, cu, cw, 4, 2.0, 0.55);
+        const int pf01  = sat(mul(add(pf, k(1.0)), k(0.5)));
+        const int carv  = sat(mul(sub(pf01, k(1.0 - ccfg.coverage)), k(4.6)));  // THICK, defined cloud masses (partial cover)
+        int       dens  = carv;
+        if (hi) // light erosion only → thick clouds, not thin wisps
+        {
+            const int det = nz::fractal2(g, mul(cu, k(3.3)), mul(cw, k(3.3)), 3, 2.0, 0.5);
+            dens          = sat(sub(carv, mul(sat(mul(add(det, k(1.0)), k(0.5))), k(0.08))));
+        }
+        const int cov    = mul(dens, hmask);
+        // VOLUME shading: a DENSITY-driven self-shadow (thick cloud → darker underside) + a grey base ⇒ defined, three-dimensional
+        // clouds that read DARKER and more VISIBLE against the bright hazy sky (the user's ask), while the thin edges stay sunlit.
+        const int clit   = add(mul(sat(g.swizzle(dir, 1)), k(1.15)), k(0.34)); // sky-height brightness
+        const int cshad  = sub(k(1.0), mul(dens, k(0.58)));                    // thick cores self-shadow → darker undersides
+        const int cloudc = b3(kir::KOp::Mul, kc(0.96, 1.02, 1.14), mul(clit, cshad));
+        const int skyc   = add(grad, suns);
+        return add(b3(kir::KOp::Mul, skyc, sub(k(1.0), cov)), b3(kir::KOp::Mul, cloudc, cov)); // clouds occlude the sky
+    };
+    const int sky = sky_of(rdir, true);
+
+    // ── WATER: the real Tessendorf MULTI-CASCADE — sample the SWELL (index 0, world/patchS: long "tidal" rollers) and the CHOP
+    //    (index 1, world/patchC: fine detail) and SUM their slopes. No single-tile compromise between swell and chop. ──
+    const auto tapc = [&](int idx, int wxv, int wzv, double sc) {
+        const int uv = g.vec2(mul(wxv, k(1.0 / sc)), mul(wzv, k(1.0 / sc)));
+        return g.tex_sample_at(tex, samp, uv, idx); // vec4: R=nx01 G=nz01 B=h01 A=foam
+    };
+    const auto nxof   = [&](int t) { return sub(mul(g.swizzle(t, 0), k(2.0)), k(1.0)); };
+    const auto nzof   = [&](int t) { return sub(mul(g.swizzle(t, 1), k(2.0)), k(1.0)); };
+    const auto dh_s    = [&](int t) { return mul(sub(g.swizzle(t, 2), k(0.5)), k(2.0 * hmaxS)); }; // swell height decode
+    const auto dh_c    = [&](int t) { return mul(sub(g.swizzle(t, 2), k(0.5)), k(2.0 * hmaxC)); }; // chop height decode
+    const auto distfd = [&](int t) { return sat(mul(sub(t, k(30.0)), k(0.005))); };
+    // fog + distance-fade key off the SMOOTH analytic plane distance (monotonic across the screen ⇒ no grazing stripes).
+    const int tplane = g.binary(kir::KOp::Div, k(5.0), g.binary(kir::KOp::Max, g.unary(kir::KOp::Neg, ry), k(0.05)));
+    const int distf  = distfd(tplane);
+    const int wx0    = mul(tplane, rdx);
+    const int wz0    = mul(tplane, rdz);
+    // single-step parallax off the COMBINED (swell + chop) plane-position height → real 3-D relief, stable derivative.
+    const int ryc = g.binary(kir::KOp::Min, ry, k(-0.12));
+    const int h0  = add(dh_s(tapc(csw, wx0, wz0, patchS)), dh_c(tapc(cch, wx0, wz0, patchC)));
+    const int dt  = g.binary(kir::KOp::Div, h0, ryc);
+    const int wx  = add(wx0, mul(dt, rdx));
+    const int wz  = add(wz0, mul(dt, rdz));
+
+    // sample both cascades at the parallaxed position → summed slopes (swell rollers + chop), combined height + foam.
+    const int ts   = tapc(csw, wx, wz, patchS);  // swell
+    const int tc   = tapc(cch, wx, wz, patchC);  // chop
+    const int slx  = add(mul(nxof(ts), k(1.5)), mul(nxof(tc), k(0.22))); // SWELL rollers make the shape; chop is a faint texture,
+    const int slz  = add(mul(nzof(ts), k(1.5)), mul(nzof(tc), k(0.22))); //  NOT amplified into per-pixel noise (the "white noise")
+    const int gslf = mul(k(1.5), sub(k(1.0), mul(distf, k(0.3))));       // gentle slope gain → smooth directional swells
+    const int n    = unit3(g.vec3(mul(slx, gslf), k(1.0), mul(slz, gslf)));
+    const int hh   = add(dh_s(ts), dh_c(tc)); // combined height (swell rollers + chop) for depth/subsurface
+    const int v    = g.unary(kir::KOp::Neg, rdir);
+
+    // Fresnel split: bright-sky reflection + a soft BROAD daytime sheen vs a bright tropical-teal body (greener/shallower up
+    // close, deepening to blue with distance) + a teal subsurface glow.
+    const int nov  = g.binary(kir::KOp::Max, g.dot(n, v), k(1e-3));
+    const int fr   = wt::fresnel_water(g, nov);
+    const int rfl  = sub(rdir, b3(kir::KOp::Mul, n, mul(k(2.0), g.dot(rdir, n))));
+    const int skyr = sky_of(unit3(rfl), false);
+    const int glit = wt::ocean_sun_glitter(g, n, v, ldir, sunc, add(k(0.025), mul(distf, k(0.06)))); // soft broad daytime sheen
+    const int refl = add(b3(kir::KOp::Mul, skyr, k(0.68)), b3(kir::KOp::Mul, glit, k(0.4))); // damp mirror + gentle sheen (soft day)
+
+    // tropical body: bright teal-green shallow water up close, deepening to blue with distance (Beer depth), + a per-wave DEPTH
+    // gradient (troughs darker/richer, crests brighter) for the AC4-style richness.
+    // OCEAN BLUE body (deep blue in the troughs, a touch lighter far), + a TURQUOISE subsurface glow only where the low sun
+    //  BACKLIGHTS a raised crest (the light scatters through the thin water) — blue sea, turquoise where the sun lights it.
+    const int deep0  = add(kc(0.012, 0.055, 0.16), b3(kir::KOp::Mul, kc(0.02, 0.05, 0.07), sub(k(1.0), distf)));
+    const int depthv = add(k(0.75), mul(sat(add(mul(hh, k(0.5)), k(0.5))), k(0.45))); // trough darker, crest brighter
+    const int deep   = b3(kir::KOp::Mul, deep0, depthv);
+    const int vdl    = sat(g.dot(v, g.unary(kir::KOp::Neg, ldir)));
+    const int sssf   = mul(sat(sub(mul(hh, k(1.3)), k(0.15))), mul(vdl, vdl)); // ONLY raised + sun-backlit crests (selective)
+    const int refr0  = add(deep, b3(kir::KOp::Mul, kc(0.0, 0.42, 0.40), mul(sssf, k(1.1)))); // TURQUOISE sun-scatter on lit crests
+    // VORONOI CAUSTICS — the shallow-water light NETWORK. Two octaves of Worley (Voronoi) cells; bright near the cell centres
+    // (light focusing), warped by the wave slope so it dances on the crests, and faded to the near/clear water only. This is the
+    // "voronoi in shallow water" — a real, cheap CKIR Worley caustic added to the subsurface body.
+    const int cx     = add(mul(wx, k(0.32)), mul(slx, k(0.4))); // slope-warp so the network moves with the waves
+    const int cz     = add(mul(wz, k(0.32)), mul(slz, k(0.4)));
+    const int wa     = g.unary(kir::KOp::Sqrt, nz::worley2(g, cx, cz, 1.0, 0, 0));
+    const int wb     = g.unary(kir::KOp::Sqrt, nz::worley2(g, add(mul(cx, k(1.9)), k(3.1)), mul(cz, k(1.9)), 1.0, 0, 0));
+    const int caust  = mul(g.binary(kir::KOp::Pow, sat(sub(k(1.0), wa)), k(3.5)), g.binary(kir::KOp::Pow, sat(sub(k(1.0), wb)), k(3.5)));
+    const int caustf = mul(mul(caust, vdl), sub(k(1.0), distf)); // near/clear + sun-lit water only (subtle)
+    const int refr   = add(refr0, b3(kir::KOp::Mul, kc(0.10, 0.42, 0.40), mul(caustf, k(0.7))));
+
+    // REAL temporal foam (texture A = the accumulated breaking-crest foam: Jacobian J<0 injected, then lingering·decay). It is
+    // ALREADY intermittent and at the wave tips, so we use it directly — no painted streaks — in PURE HDR WHITE (an LDR foam
+    // colour darkens to a washed teal under exposure+ACES). Base cascade only, so it doesn't repeat at the finer sample scales.
+    const int fa     = g.binary(kir::KOp::Max, g.swizzle(ts, 3), g.swizzle(tc, 3)); // foam where EITHER swell or chop crest breaks
+    const int foam   = mul(sat(mul(fa, k(0.75))), sub(k(1.0), mul(distf, k(0.4))));
+    const int foamc  = kc(4.4, 4.5, 4.55); // HDR pure white
+    const int water0 = add(b3(kir::KOp::Mul, refl, fr), b3(kir::KOp::Mul, refr, sub(k(1.0), fr)));
+    const int water1 = add(b3(kir::KOp::Mul, water0, sub(k(1.0), foam)), b3(kir::KOp::Mul, foamc, foam));
+
+    // pale hazy aerial fog: a mild DISTANCE haze + a sharp ANGLE haze in the grazing horizon band (where isotropic mip filtering
+    // can't resolve the extreme foreshortening → aliasing). The angle haze veils that band (a real hazy horizon) without fogging
+    // the mid-field, so wave topology stays visible where it matters.
+    const int fogc  = kc(0.70, 0.78, 0.85);
+    const int fogd  = sat(sub(k(1.0), g.unary(kir::KOp::Exp, mul(tplane, k(-0.004)))));
+    const int fogh  = sat(mul(sub(k(0.12), g.unary(kir::KOp::Neg, ry)), k(14.0)));
+    const int fog   = g.binary(kir::KOp::Max, fogd, fogh);
+    const int water = add(b3(kir::KOp::Mul, water1, sub(k(1.0), fog)), b3(kir::KOp::Mul, fogc, fog));
+
+    // sky vs water, EXPOSURE, filmic (Narkowicz ACES) tonemap + sRGB.
+    const int col  = nd::detail::sel(g, g.binary(kir::KOp::CmpLt, ry, k(0.0)), water, sky);
+    const int ce   = b3(kir::KOp::Mul, col, k(0.42)); // daytime exposure (a touch down for saturated teal + contrast)
+    const int num  = b3(kir::KOp::Mul, ce, b3(kir::KOp::Add, b3(kir::KOp::Mul, ce, k(2.51)), k(0.03)));
+    const int den  = b3(kir::KOp::Add, b3(kir::KOp::Mul, ce, b3(kir::KOp::Add, b3(kir::KOp::Mul, ce, k(2.43)), k(0.59))), k(0.14));
+    const int aces = sat3(b3(kir::KOp::Div, num, den));
+    const int srgb = b3(kir::KOp::Pow, aces, k(1.0 / 2.2));
+    fe.stage       = kir::KStage::Fragment;
+    fe.n_out       = 1;
+    fe.out[0]      = {g.vec4(g.swizzle(srgb, 0), g.swizzle(srgb, 1), g.swizzle(srgb, 2), k(1.0)), 0};
+}
+
+// ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// B16 DISPLACED-GEOMETRY ocean — the GOLD-STANDARD path. The FFT surface is carried by REAL displaced GEOMETRY (a Johanson
+// "projected grid": a screen-space lattice raycast onto the water plane, then vertically displaced by the baked FFT height),
+// not a per-pixel normal-map on a flat plane. That is what makes the difference the fragment path never can: crests genuinely
+// occlude troughs (true silhouettes), the far field carries smooth directional SWELL geometry instead of minification "white
+// noise", and the shading normal comes from the actual surface. The vertex shader has NO derivatives, so it fetches the
+// bindless cascade textures at an EXPLICIT LOD (the new `SampleIndexedLod` op) — distance-ramped so the far chop mips away to
+// smooth rollers. Camera EXACTLY matches build_ocean_frame_fft_fs (eye (0,5,0), rdir = normalize(ux·0.9, −0.14+uy·0.60, 1)),
+// so a geometry pass composites pixel-aligned over the fragment pass's sky. Portable: pure vertex-pull (no mesh/tess ext), so
+// it lowers to GLSL/HLSL today and to WGSL as soon as SampleIndexedLod gains a WGSL emit (WebGPU: a texture_2d_array + LOD).
+//
+// `grid` = cells per side (draws grid·grid·6 vertices — 2 triangles/cell from VertexIndex, no index buffer). The grid spans
+// the WATER band of the screen (uy ∈ [−1, horizon]); above the horizon there is no geometry and the sky pass shows through.
+//
+// 4-CASCADE water (the production standard — Sea of Thieves / gasgiant): FOUR independent FFT spectra at descending world
+// scales, band-limited so each owns a wavelength band. Combining 4 non-harmonic tile sizes pushes the visible tiling period to
+// their LCM (effectively non-repeating). The BIG cascades carry HIGH-amplitude geometry (the rolling swell silhouette); the
+// FINE cascades are LOW-amplitude and live mostly in the per-pixel normal (small detail, no geometry aliasing). Each cascade's
+// baked RGBA8 = [nx, nz, height, fold] where fold = ½·(1−J) is the per-cascade Jacobian folding (J<1 ⇒ crest pinch); the FS
+// SUMS the folds across cascades to get the JOINT Jacobian foam (folding of the combined 4-spectrum surface).
+// PROMOTED to the engine — the reusable ocean render pass now lives in `crd::kir::water` (engine/kir/.../ckir_water_render.hpp).
+// Aliased into `crd::gputest` so the test call sites are unchanged; the definitions are the engine's.
+using crd::kir::water::OceanCascadeRender;
+using crd::kir::water::ocean_projected_vertex;
+using crd::kir::water::build_ocean_displaced_vs;
+using crd::kir::water::build_ocean_displaced_mesh;
+using crd::kir::water::build_ocean_water_geo_fs;
+
 
 // B1-b FRAGMENT entry: a constant-red surface that DISCARDS (alpha-test / cutout) where `FragCoord.x < 16`. On a 32-px
 // target this kills the left half of the covered triangle — those pixels keep the clear colour — while the right half
@@ -1488,7 +1873,6 @@ namespace lighting_obs
 [[nodiscard]] inline int build_hdr_neutral(crd::kir::KGraph& g, int sweep_node)
 {
     namespace kir = crd::kir;
-    namespace nd  = crd::kir::nodes;
     namespace pst = crd::kir::post;
     const auto sh  = kir::make_shape({1});
     const auto k   = [&](double v) { return g.constant(v, sh, kir::DType::F32); };

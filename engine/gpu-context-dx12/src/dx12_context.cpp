@@ -30,6 +30,7 @@ namespace
     {
     case ShaderStage::Vertex: return L"vs_6_0";
     case ShaderStage::Fragment: return L"ps_6_0";
+    case ShaderStage::Mesh: return L"ms_6_5"; // B4: Shader Model 6.5 mesh shader
     case ShaderStage::Compute:
     default: return L"cs_6_0";
     }
@@ -47,6 +48,7 @@ namespace
     {
     case crd::kir::KStage::Vertex: out = ShaderStage::Vertex; return true;
     case crd::kir::KStage::Fragment: out = ShaderStage::Fragment; return true;
+    case crd::kir::KStage::Mesh: out = ShaderStage::Mesh; return true; // B4: DX12 mesh device path
     default: return false;
     }
 }
@@ -117,7 +119,14 @@ public:
         // IR on-ramp: crd-kir emits the stage HLSL (refuses a vertex with no clip position), dxc lowers it to DXIL. The
         // HLSL text lives only across this call; the DXIL never surfaces beyond the returned opaque program.
         crd::kir::GlslKernel kern(m_alloc);
-        if (entry.stage == crd::kir::KStage::Compute && entry.is_kernel())
+        if (entry.stage == crd::kir::KStage::Mesh)
+        {
+            // B4: a mesh KEntry → SM6.5 mesh HLSL (SetMeshOutputCounts + out vertices/indices). emit_stage_hlsl refuses
+            // non-Vertex/Fragment, so the mesh branch must precede it; the device mesh PSO + DispatchMesh live in the raster
+            // context (create_mesh_program/draw_mesh).
+            if (!crd::kir::emit_mesh_hlsl(graph, entry, m_alloc, kern)) { return nullptr; }
+        }
+        else if (entry.stage == crd::kir::KStage::Compute && entry.is_kernel())
         {
             // B-cmp: an imperative shared-memory/barrier compute kernel (FFT/reduction/transpose) → the DX12 mirror of the
             // Vulkan kernel path (emit_compute_kernel_hlsl), so create_program(g, e) lowers a kernel on BOTH backends.

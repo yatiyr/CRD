@@ -30,6 +30,7 @@ struct ShaderObjectApi
     PFN_vkCmdSetAlphaToCoverageEnableEXT set_alpha_to_coverage   = nullptr;
     PFN_vkCmdSetColorBlendEnableEXT    set_color_blend_enable    = nullptr;
     PFN_vkCmdSetColorWriteMaskEXT      set_color_write_mask      = nullptr;
+    PFN_vkCmdDrawMeshTasksEXT          draw_mesh_tasks           = nullptr; // B4: VK_EXT_mesh_shader (optional — null if absent)
 
     [[nodiscard]] bool valid() const noexcept
     {
@@ -57,6 +58,7 @@ struct ShaderObjectApi
         reinterpret_cast<PFN_vkCmdSetColorBlendEnableEXT>(vkGetDeviceProcAddr(d, "vkCmdSetColorBlendEnableEXT"));
     a.set_color_write_mask =
         reinterpret_cast<PFN_vkCmdSetColorWriteMaskEXT>(vkGetDeviceProcAddr(d, "vkCmdSetColorWriteMaskEXT"));
+    a.draw_mesh_tasks = reinterpret_cast<PFN_vkCmdDrawMeshTasksEXT>(vkGetDeviceProcAddr(d, "vkCmdDrawMeshTasksEXT")); // B4
     return a;
 }
 
@@ -231,8 +233,8 @@ class VulkanRasterProgram final : public IRasterProgram
 {
 public:
     VulkanRasterProgram(VkDevice device, const ShaderObjectApi* api, VkPipelineLayout layout, VkShaderEXT vs,
-                        VkShaderEXT fs) noexcept
-        : m_device(device), m_api(api), m_layout(layout), m_vs(vs), m_fs(fs)
+                        VkShaderEXT fs, bool is_mesh = false) noexcept
+        : m_device(device), m_api(api), m_layout(layout), m_vs(vs), m_fs(fs), m_is_mesh(is_mesh)
     {
     }
     ~VulkanRasterProgram() override
@@ -247,16 +249,18 @@ public:
     VulkanRasterProgram& operator=(VulkanRasterProgram&&)      = delete;
 
     [[nodiscard]] bool             valid() const noexcept override { return m_vs != VK_NULL_HANDLE && m_fs != VK_NULL_HANDLE; }
-    [[nodiscard]] VkShaderEXT      vs() const noexcept { return m_vs; }
+    [[nodiscard]] VkShaderEXT      vs() const noexcept { return m_vs; } // B4: the MESH shader object when is_mesh()
     [[nodiscard]] VkShaderEXT      fs() const noexcept { return m_fs; }
+    [[nodiscard]] bool             is_mesh() const noexcept { return m_is_mesh; } // B4: bind with VK_SHADER_STAGE_MESH_BIT_EXT
     [[nodiscard]] VkPipelineLayout layout() const noexcept { return m_layout; } // B1-f: for binding the storage set
 
 private:
-    VkDevice               m_device = VK_NULL_HANDLE;
-    const ShaderObjectApi* m_api    = nullptr;
-    VkPipelineLayout       m_layout = VK_NULL_HANDLE;
-    VkShaderEXT            m_vs     = VK_NULL_HANDLE;
-    VkShaderEXT            m_fs     = VK_NULL_HANDLE;
+    VkDevice               m_device  = VK_NULL_HANDLE;
+    const ShaderObjectApi* m_api     = nullptr;
+    VkPipelineLayout       m_layout  = VK_NULL_HANDLE;
+    VkShaderEXT            m_vs      = VK_NULL_HANDLE;
+    VkShaderEXT            m_fs      = VK_NULL_HANDLE;
+    bool                   m_is_mesh = false;
 };
 
 // B1-f: a fragment-shader STORAGE buffer — a device-local SSBO the FS reads/writes, plus a host-visible readback the CPU
@@ -408,11 +412,17 @@ public:
         // unaccessed): binding 0 = a fragment-stage storage buffer (B1-f) · binding 1 = a sampled image (B2) · binding 2 =
         // a sampler (B2). Separable image+sampler ⇒ the GLSL `sampler2D(tex,samp)` combiner. Plus a small pool.
         // binding 3 (B2-d) = a BINDLESS array of up to kBindlessMax sampled images (draw_bindless writes all of them).
+        // The texture/sampler bindings are VERTEX+FRAGMENT visible so a VS can sample the FFT DISPLACEMENT to move geometry
+        // (the displaced-ocean path) — not just the FS. The storage buffer stays fragment-only (its only user is the FS ROV).
+        // B4: include the MESH stage when the device has mesh shaders, so a mesh shader can sample the bindless cascade
+        // textures (the ocean mesh path displaces from the FFT via SampleIndexedLod). VERTEX+FRAGMENT otherwise (unchanged).
+        const VkShaderStageFlags vs_fs = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT
+                                         | (m_ctx->mesh_shader() ? static_cast<VkShaderStageFlags>(VK_SHADER_STAGE_MESH_BIT_EXT) : 0U);
         VkDescriptorSetLayoutBinding slb[4]{};
         slb[0].binding = 0U; slb[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; slb[0].descriptorCount = 1U;            slb[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-        slb[1].binding = 1U; slb[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;  slb[1].descriptorCount = 1U;            slb[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-        slb[2].binding = 2U; slb[2].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;        slb[2].descriptorCount = 1U;            slb[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-        slb[3].binding = 3U; slb[3].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;  slb[3].descriptorCount = kBindlessMax; slb[3].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        slb[1].binding = 1U; slb[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;  slb[1].descriptorCount = 1U;            slb[1].stageFlags = vs_fs;
+        slb[2].binding = 2U; slb[2].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;        slb[2].descriptorCount = 1U;            slb[2].stageFlags = vs_fs;
+        slb[3].binding = 3U; slb[3].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;  slb[3].descriptorCount = kBindlessMax; slb[3].stageFlags = vs_fs;
         VkDescriptorSetLayoutCreateInfo slci{};
         slci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
         slci.bindingCount = 4U;
@@ -642,6 +652,117 @@ public:
             return nullptr;
         }
         return std::make_unique<VulkanRasterProgram>(m_device, &m_api, layout, shaders[0], shaders[1]);
+    }
+
+    // B4: a MESH+FRAGMENT program (the modern amplification path). `mesh` generates geometry directly (no vertex input); the
+    // fragment stage is unchanged. Returns nullptr if the device has no mesh shaders (the caller falls back to vertex-pull).
+    [[nodiscard]] std::unique_ptr<IRasterProgram> create_mesh_program(IGpuProgram& mesh, IGpuProgram& fragment) override
+    {
+        if (!m_api.valid() || m_api.draw_mesh_tasks == nullptr || mesh.stage() != ShaderStage::Mesh
+            || fragment.stage() != ShaderStage::Fragment)
+        {
+            return nullptr;
+        }
+        const auto& mp = static_cast<VulkanGpuProgram&>(mesh).vk_spirv();
+        const auto& fp = static_cast<VulkanGpuProgram&>(fragment).vk_spirv();
+
+        VkPipelineLayoutCreateInfo lci{};
+        lci.sType          = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        lci.setLayoutCount = 1U;
+        lci.pSetLayouts    = &m_storage_set_layout;
+        VkPipelineLayout layout = VK_NULL_HANDLE;
+        if (vkCreatePipelineLayout(m_device, &lci, nullptr, &layout) != VK_SUCCESS) { return nullptr; }
+
+        VkShaderCreateInfoEXT infos[2]{};
+        infos[0].sType          = VK_STRUCTURE_TYPE_SHADER_CREATE_INFO_EXT;
+        // NO_TASK_SHADER: this mesh shader runs standalone (no task/amplification stage). Without it the driver expects a task
+        // shader to precede the mesh and FAULTS (device-lost) when vkCmdDrawMeshTasksEXT dispatches with no task bound.
+        infos[0].flags          = VK_SHADER_CREATE_LINK_STAGE_BIT_EXT | VK_SHADER_CREATE_NO_TASK_SHADER_BIT_EXT;
+        infos[0].stage          = VK_SHADER_STAGE_MESH_BIT_EXT;
+        infos[0].nextStage      = VK_SHADER_STAGE_FRAGMENT_BIT;
+        infos[0].codeType       = VK_SHADER_CODE_TYPE_SPIRV_EXT;
+        infos[0].codeSize       = mp.size();
+        infos[0].pCode          = mp.data();
+        infos[0].pName          = "main";
+        infos[0].setLayoutCount = 1U;
+        infos[0].pSetLayouts    = &m_storage_set_layout;
+        infos[1].sType          = VK_STRUCTURE_TYPE_SHADER_CREATE_INFO_EXT;
+        infos[1].flags          = VK_SHADER_CREATE_LINK_STAGE_BIT_EXT;
+        infos[1].stage          = VK_SHADER_STAGE_FRAGMENT_BIT;
+        infos[1].nextStage      = 0;
+        infos[1].codeType       = VK_SHADER_CODE_TYPE_SPIRV_EXT;
+        infos[1].codeSize       = fp.size();
+        infos[1].pCode          = fp.data();
+        infos[1].pName          = "main";
+        infos[1].setLayoutCount = 1U;
+        infos[1].pSetLayouts    = &m_storage_set_layout;
+
+        VkShaderEXT shaders[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+        if (m_api.create(m_device, 2U, infos, nullptr, shaders) != VK_SUCCESS)
+        {
+            vkDestroyPipelineLayout(m_device, layout, nullptr);
+            return nullptr;
+        }
+        return std::make_unique<VulkanRasterProgram>(m_device, &m_api, layout, shaders[0], shaders[1], /*is_mesh=*/true);
+    }
+
+    // B4: bind a MESH program and dispatch `group_count` mesh workgroups. Colour-only (the mesh-triangle proof). VERTEX is bound
+    // null (mutually exclusive with MESH); TESS/GEOM/TASK default to null in a fresh command buffer (as the vertex draw relies on).
+    void draw_mesh(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color, crd::u32 group_count) override
+    {
+        auto& t = static_cast<VulkanRasterTarget&>(target);
+        auto& p = static_cast<VulkanRasterProgram&>(program);
+        if (!m_api.valid() || m_api.draw_mesh_tasks == nullptr || !p.valid() || !p.is_mesh()) { return; }
+
+        VkCommandBuffer cmd = begin_cmd();
+        if (cmd == VK_NULL_HANDLE) { return; }
+        const bool ms = t.multisampled();
+        transition(cmd, t.image(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 0,
+                   VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                   VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+        if (ms)
+        {
+            transition(cmd, t.resolve_image(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 0,
+                       VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                       VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+        }
+        VkRenderingAttachmentInfo att = colour_clear_attachment(t.view(), clear_color);
+        if (ms)
+        {
+            att.resolveMode        = VK_RESOLVE_MODE_AVERAGE_BIT;
+            att.resolveImageView   = t.resolve_view();
+            att.resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        }
+        VkRenderingInfo ri{};
+        ri.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        ri.renderArea.extent    = {t.width(), t.height()};
+        ri.layerCount           = 1U;
+        ri.colorAttachmentCount = 1U;
+        ri.pColorAttachments    = &att;
+        vkCmdBeginRendering(cmd, &ri);
+
+        set_draw_state(cmd, t.width(), t.height(), t.samples(), false, VK_COMPARE_OP_ALWAYS, 1U, /*mesh_draw=*/true);
+        // Bind VERTEX=null (mutually exclusive with mesh) + MESH + FRAGMENT. TESS/GEOM/TASK stay unbound (their features are off,
+        // so they must NOT appear in pStages; unbound = null in a fresh command buffer, so the mesh runs standalone).
+        const VkShaderStageFlagBits vnull[1] = {VK_SHADER_STAGE_VERTEX_BIT};
+        const VkShaderEXT           vnob[1]  = {VK_NULL_HANDLE};
+        m_api.bind(cmd, 1U, vnull, vnob);
+        const VkShaderStageFlagBits mstages[2] = {VK_SHADER_STAGE_MESH_BIT_EXT, VK_SHADER_STAGE_FRAGMENT_BIT};
+        const VkShaderEXT           mobjs[2]   = {p.vs(), p.fs()};
+        m_api.bind(cmd, 2U, mstages, mobjs);
+        m_api.draw_mesh_tasks(cmd, group_count, 1U, 1U);
+        vkCmdEndRendering(cmd);
+
+        const VkImage src = t.src_image();
+        transition(cmd, src, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                   VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                   VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+        VkBufferImageCopy region{};
+        region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        region.imageSubresource.layerCount = 1U;
+        region.imageExtent                 = {t.width(), t.height(), 1U};
+        vkCmdCopyImageToBuffer(cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, t.readback(), 1U, &region);
+        end_and_wait(cmd);
     }
 
     void draw(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color, crd::u32 vertex_count) override
@@ -982,6 +1103,101 @@ public:
         return std::make_unique<VulkanTexture>(m_device, img, width, height);
     }
 
+    // B16: a mip-mapped RGBA8 texture — upload level 0, then vkCmdBlitImage down the pyramid (box/linear filter). The default
+    // sampler is LINEAR-mipmap, so minified `KOp::TexSample` filters instead of aliasing (the ocean tile viewed to the horizon).
+    [[nodiscard]] std::unique_ptr<ITexture> create_texture_mipped(crd::u32 width, crd::u32 height, const void* rgba) override
+    {
+        if (width == 0U || height == 0U || rgba == nullptr) { return nullptr; }
+        crd::u32 mips    = 1U;
+        crd::u32 dim_max = width > height ? width : height;
+        while ((dim_max >> mips) > 0U) { ++mips; } // floor(log2(max(w,h))) + 1
+        ImageBundle img{};
+        if (!create_image_bundle(width, height, VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT,
+                                 VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                                 img, mips))
+        {
+            return nullptr;
+        }
+        const VkDeviceSize bytes   = static_cast<VkDeviceSize>(width) * height * 4U;
+        VkBuffer           staging = VK_NULL_HANDLE;
+        VkDeviceMemory     smem    = VK_NULL_HANDLE;
+        void*              mapped  = nullptr;
+        if (!make_buffer(bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, staging, smem, &mapped)
+            || mapped == nullptr)
+        {
+            destroy_image_bundle(m_device, img);
+            if (staging != VK_NULL_HANDLE) { vkDestroyBuffer(m_device, staging, nullptr); }
+            if (smem != VK_NULL_HANDLE) { vkFreeMemory(m_device, smem, nullptr); }
+            return nullptr;
+        }
+        std::memcpy(mapped, rgba, static_cast<size_t>(bytes));
+
+        const auto mbar = [&](VkCommandBuffer c, VkImageLayout from, VkImageLayout to, VkAccessFlags sa, VkAccessFlags da,
+                              VkPipelineStageFlags ss, VkPipelineStageFlags ds, crd::u32 level, crd::u32 count) {
+            VkImageMemoryBarrier b{};
+            b.sType                         = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b.oldLayout                     = from;
+            b.newLayout                     = to;
+            b.srcQueueFamilyIndex           = VK_QUEUE_FAMILY_IGNORED;
+            b.dstQueueFamilyIndex           = VK_QUEUE_FAMILY_IGNORED;
+            b.image                         = img.image;
+            b.subresourceRange.aspectMask   = VK_IMAGE_ASPECT_COLOR_BIT;
+            b.subresourceRange.baseMipLevel = level;
+            b.subresourceRange.levelCount   = count;
+            b.subresourceRange.layerCount   = 1U;
+            b.srcAccessMask                 = sa;
+            b.dstAccessMask                 = da;
+            vkCmdPipelineBarrier(c, ss, ds, 0, 0, nullptr, 0, nullptr, 1U, &b);
+        };
+
+        VkCommandBuffer cmd = begin_cmd();
+        if (cmd != VK_NULL_HANDLE)
+        {
+            mbar(cmd, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
+                 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0U, mips);
+            VkBufferImageCopy region{};
+            region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            region.imageSubresource.layerCount = 1U;
+            region.imageExtent                 = {width, height, 1U};
+            vkCmdCopyBufferToImage(cmd, staging, img.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1U, &region);
+
+            crd::i32 mw = static_cast<crd::i32>(width);
+            crd::i32 mh = static_cast<crd::i32>(height);
+            for (crd::u32 i = 1U; i < mips; ++i) // blit level i-1 → level i (each dimension halved)
+            {
+                mbar(cmd, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
+                     VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, i - 1U, 1U);
+                const crd::i32 nw = mw > 1 ? mw / 2 : 1;
+                const crd::i32 nh = mh > 1 ? mh / 2 : 1;
+                VkImageBlit    blit{};
+                blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                blit.srcSubresource.mipLevel   = i - 1U;
+                blit.srcSubresource.layerCount = 1U;
+                blit.srcOffsets[1]             = {mw, mh, 1};
+                blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                blit.dstSubresource.mipLevel   = i;
+                blit.dstSubresource.layerCount = 1U;
+                blit.dstOffsets[1]             = {nw, nh, 1};
+                vkCmdBlitImage(cmd, img.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, img.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1U, &blit, VK_FILTER_LINEAR);
+                mw = nw;
+                mh = nh;
+            }
+            if (mips > 1U) // levels 0..mips-2 are TRANSFER_SRC, the last level is still TRANSFER_DST → all to SHADER_READ
+            {
+                mbar(cmd, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_TRANSFER_READ_BIT,
+                     VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0U, mips - 1U);
+            }
+            mbar(cmd, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
+                 VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, mips - 1U, 1U);
+            end_and_wait(cmd);
+        }
+        vkDestroyBuffer(m_device, staging, nullptr);
+        vkFreeMemory(m_device, smem, nullptr);
+        return std::make_unique<VulkanTexture>(m_device, img, width, height);
+    }
+
     [[nodiscard]] std::unique_ptr<ITexture> create_texture_dim(TextureKind kind, crd::u32 width, crd::u32 height,
                                                                crd::u32 depth_or_layers, const void* rgba) override
     {
@@ -1172,6 +1388,76 @@ public:
         render_dset(t, p, clear_color, dset, vertex_count);
     }
 
+    // B16: draw_bindless INTO A DEPTH TARGET with a depth test — the depth-occluded displaced ocean grid. Same bindless
+    // descriptor set (cascade textures, now VS+FS visible); depth attachment + test via render_dset_depth.
+    void draw_bindless_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color, float clear_depth,
+                             DepthCompare compare, ITexture* const* textures, crd::u32 count, crd::u32 vertex_count) override
+    {
+        auto& t = static_cast<VulkanRasterTarget&>(target);
+        auto& p = static_cast<VulkanRasterProgram&>(program);
+        if (!m_api.valid() || !p.valid() || m_desc_pool == VK_NULL_HANDLE || count == 0U || textures == nullptr || !t.has_depth())
+        {
+            return;
+        }
+        const crd::u32 n = count < kBindlessMax ? count : kBindlessMax;
+        vkResetDescriptorPool(m_device, m_desc_pool, 0);
+        VkDescriptorSetAllocateInfo dsai{};
+        dsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dsai.descriptorPool     = m_desc_pool;
+        dsai.descriptorSetCount = 1U;
+        dsai.pSetLayouts        = &m_storage_set_layout;
+        VkDescriptorSet dset = VK_NULL_HANDLE;
+        if (vkAllocateDescriptorSets(m_device, &dsai, &dset) != VK_SUCCESS) { return; }
+        VkDescriptorImageInfo imgs[kBindlessMax]{};
+        for (crd::u32 i = 0; i < kBindlessMax; ++i)
+        {
+            auto& tex = static_cast<VulkanTexture&>(*textures[i < n ? i : 0U]);
+            imgs[i]   = {VK_NULL_HANDLE, tex.view(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        }
+        VkDescriptorImageInfo samp_info{m_default_sampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};
+        VkWriteDescriptorSet  wr[2]{};
+        wr[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; wr[0].dstSet = dset; wr[0].dstBinding = 2U; wr[0].descriptorCount = 1U;            wr[0].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;       wr[0].pImageInfo = &samp_info;
+        wr[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; wr[1].dstSet = dset; wr[1].dstBinding = 3U; wr[1].descriptorCount = kBindlessMax; wr[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE; wr[1].pImageInfo = imgs;
+        vkUpdateDescriptorSets(m_device, 2U, wr, 0U, nullptr);
+        render_dset_depth(t, p, clear_color, clear_depth, compare, dset, vertex_count);
+    }
+
+    // B4: like draw_bindless_depth, but the geometry is emitted by a MESH program (create_mesh_program) — `group_count` meshlet
+    // workgroups instead of a vertex count. The bindless cascade textures are bound the same way (the mesh shader samples the
+    // FFT displacement via SampleIndexedLod). The ocean fast path. No-op if the device lacks mesh shaders.
+    void draw_mesh_bindless_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color, float clear_depth,
+                                  DepthCompare compare, ITexture* const* textures, crd::u32 count, crd::u32 group_count) override
+    {
+        auto& t = static_cast<VulkanRasterTarget&>(target);
+        auto& p = static_cast<VulkanRasterProgram&>(program);
+        if (!m_api.valid() || m_api.draw_mesh_tasks == nullptr || !p.valid() || !p.is_mesh() || m_desc_pool == VK_NULL_HANDLE
+            || count == 0U || textures == nullptr || !t.has_depth())
+        {
+            return;
+        }
+        const crd::u32 n = count < kBindlessMax ? count : kBindlessMax;
+        vkResetDescriptorPool(m_device, m_desc_pool, 0);
+        VkDescriptorSetAllocateInfo dsai{};
+        dsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dsai.descriptorPool     = m_desc_pool;
+        dsai.descriptorSetCount = 1U;
+        dsai.pSetLayouts        = &m_storage_set_layout;
+        VkDescriptorSet dset = VK_NULL_HANDLE;
+        if (vkAllocateDescriptorSets(m_device, &dsai, &dset) != VK_SUCCESS) { return; }
+        VkDescriptorImageInfo imgs[kBindlessMax]{};
+        for (crd::u32 i = 0; i < kBindlessMax; ++i)
+        {
+            auto& tex = static_cast<VulkanTexture&>(*textures[i < n ? i : 0U]);
+            imgs[i]   = {VK_NULL_HANDLE, tex.view(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        }
+        VkDescriptorImageInfo samp_info{m_default_sampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};
+        VkWriteDescriptorSet  wr[2]{};
+        wr[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; wr[0].dstSet = dset; wr[0].dstBinding = 2U; wr[0].descriptorCount = 1U;            wr[0].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;       wr[0].pImageInfo = &samp_info;
+        wr[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; wr[1].dstSet = dset; wr[1].dstBinding = 3U; wr[1].descriptorCount = kBindlessMax; wr[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE; wr[1].pImageInfo = imgs;
+        vkUpdateDescriptorSets(m_device, 2U, wr, 0U, nullptr);
+        render_dset_depth(t, p, clear_color, clear_depth, compare, dset, group_count, /*mesh_draw=*/true);
+    }
+
     [[nodiscard]] std::unique_ptr<IGBufferTarget> create_gbuffer_target(crd::u32 width, crd::u32 height,
                                                                         crd::u32 attachments) override
     {
@@ -1289,6 +1575,46 @@ private:
         end_and_wait(cmd);
     }
 
+    // B16: like render_dset but with a DEPTH attachment + depth test — depth-occluded geometry (the displaced ocean grid), with
+    // the material descriptor set bound (cascade textures the VS/FS sample). Target MUST be a create_color_depth_target.
+    void render_dset_depth(VulkanRasterTarget& t, VulkanRasterProgram& p, ClearColor clear_color, float clear_depth,
+                           DepthCompare compare, VkDescriptorSet dset, crd::u32 vertex_count, bool mesh_draw = false)
+    {
+        VkCommandBuffer cmd = begin_cmd();
+        if (cmd == VK_NULL_HANDLE) { return; }
+        transition(cmd, t.image(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 0,
+                   VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                   VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+        transition_depth(cmd, t.depth_image());
+        VkRenderingAttachmentInfo att = colour_clear_attachment(t.view(), clear_color);
+        VkRenderingAttachmentInfo dep{};
+        dep.sType                         = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        dep.imageView                     = t.depth_view();
+        dep.imageLayout                   = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        dep.loadOp                        = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        dep.storeOp                       = VK_ATTACHMENT_STORE_OP_DONT_CARE; // depth is never read back
+        dep.clearValue.depthStencil.depth = clear_depth;
+        VkRenderingInfo ri  = one_colour_rendering(t, att);
+        ri.pDepthAttachment = &dep;
+        vkCmdBeginRendering(cmd, &ri);
+        set_draw_state(cmd, t.width(), t.height(), 1U, true, to_vk_compare(compare), 1U, mesh_draw);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
+        if (mesh_draw) // B4: bind VERTEX=null (mutually exclusive with mesh) + MESH + FS, then dispatch `vertex_count` meshlets
+        {
+            const VkShaderStageFlagBits vnull[1] = {VK_SHADER_STAGE_VERTEX_BIT};
+            const VkShaderEXT           vnob[1]  = {VK_NULL_HANDLE};
+            m_api.bind(cmd, 1U, vnull, vnob);
+            const VkShaderStageFlagBits mstages[2] = {VK_SHADER_STAGE_MESH_BIT_EXT, VK_SHADER_STAGE_FRAGMENT_BIT};
+            const VkShaderEXT           mobjs[2]   = {p.vs(), p.fs()};
+            m_api.bind(cmd, 2U, mstages, mobjs);
+            m_api.draw_mesh_tasks(cmd, vertex_count, 1U, 1U); // vertex_count = meshlet workgroup count here
+        }
+        else { bind_and_draw(cmd, p, vertex_count); }
+        vkCmdEndRendering(cmd);
+        copy_colour_to_readback(cmd, t);
+        end_and_wait(cmd);
+    }
+
     // B2-c: a COLOR-aspect barrier over `layers` array layers (the shared `transition` covers a single layer).
     static void transition_layers(VkCommandBuffer cmd, VkImage image, VkImageLayout from, VkImageLayout to,
                                   VkAccessFlags src_access, VkAccessFlags dst_access, VkPipelineStageFlags src_stage,
@@ -1398,7 +1724,7 @@ private:
     // `sample`-qualified fragment input then forces per-sample shading via its SPIR-V Sample decoration). B1-d: when
     // `depth_test`, the depth test/write is enabled with `depth_op`; otherwise depth is off (the plain colour path).
     void set_draw_state(VkCommandBuffer cmd, crd::u32 w, crd::u32 h, crd::u32 samples, bool depth_test,
-                        VkCompareOp depth_op, crd::u32 color_attachments = 1U) const
+                        VkCompareOp depth_op, crd::u32 color_attachments = 1U, bool mesh_draw = false) const
     {
         VkSampleCountFlagBits sc = VK_SAMPLE_COUNT_1_BIT;
         (void)sample_bit(samples, sc);
@@ -1414,14 +1740,19 @@ private:
         if (depth_test) { vkCmdSetDepthCompareOp(cmd, depth_op); }
         vkCmdSetDepthBiasEnable(cmd, VK_FALSE);
         vkCmdSetStencilTestEnable(cmd, VK_FALSE);
-        vkCmdSetPrimitiveTopology(cmd, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-        vkCmdSetPrimitiveRestartEnable(cmd, VK_FALSE);
+        // B4: the vertex-input / primitive-topology / restart dynamic states are IGNORED when a mesh shader is bound, and setting
+        // them alongside a mesh shader faults some drivers (device-lost). Skip them for a mesh draw.
+        if (!mesh_draw)
+        {
+            vkCmdSetPrimitiveTopology(cmd, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+            vkCmdSetPrimitiveRestartEnable(cmd, VK_FALSE);
+        }
         m_api.set_polygon_mode(cmd, VK_POLYGON_MODE_FILL);
         m_api.set_rasterization_samples(cmd, sc);
         const VkSampleMask mask = 0xFFFFFFFFU;
         m_api.set_sample_mask(cmd, sc, &mask);
         m_api.set_alpha_to_coverage(cmd, VK_FALSE);
-        m_api.set_vertex_input(cmd, 0U, nullptr, 0U, nullptr); // attributeless
+        if (!mesh_draw) { m_api.set_vertex_input(cmd, 0U, nullptr, 0U, nullptr); } // attributeless (N/A for mesh)
         // B5: set blend-off + full write-mask for EVERY colour attachment (1 normally · N for a G-buffer MRT draw).
         const crd::u32              nca_cap = color_attachments > kMaxGBuffer ? kMaxGBuffer : color_attachments;
         const crd::u32              nca     = color_attachments == 0U ? 1U : nca_cap;
@@ -1443,6 +1774,14 @@ private:
         }
         // B1-f: with the EDS3 conservative-mode feature enabled, a shader-object draw MUST set the mode — default to DISABLED.
         if (m_set_conservative != nullptr) { m_set_conservative(cmd, VK_CONSERVATIVE_RASTERIZATION_MODE_DISABLED_EXT); }
+        // B4: once the meshShader feature is enabled, a plain vkCmdDraw REQUIRES the MESH stage explicitly unbound
+        // (VUID-vkCmdDraw-None-08690) so the driver knows this is a vertex draw. A mesh draw binds VERTEX=null + MESH itself.
+        if (!mesh_draw && m_ctx->mesh_shader())
+        {
+            const VkShaderStageFlagBits mnull[1] = {VK_SHADER_STAGE_MESH_BIT_EXT};
+            const VkShaderEXT           mnob[1]  = {VK_NULL_HANDLE};
+            m_api.bind(cmd, 1U, mnull, mnob);
+        }
     }
 
     // Map a sample count (1/2/4/8) to its Vulkan bit; false for an unsupported value.
@@ -1461,7 +1800,8 @@ private:
     // Create an image + its device-local memory + a view, at `samples` sample count, of `format` with `aspect`
     // (colour attachments use kColorFormat/COLOR; the B1-d depth buffer uses D32_SFLOAT/DEPTH).
     [[nodiscard]] bool create_image_bundle(crd::u32 w, crd::u32 h, VkSampleCountFlagBits samples, VkFormat format,
-                                           VkImageAspectFlags aspect, VkImageUsageFlags usage, ImageBundle& out) const
+                                           VkImageAspectFlags aspect, VkImageUsageFlags usage, ImageBundle& out,
+                                           crd::u32 mip_levels = 1U) const
     {
         const VkPhysicalDevice pd = m_ctx->vk_physical_device();
         VkImageCreateInfo      ici{};
@@ -1469,7 +1809,7 @@ private:
         ici.imageType     = VK_IMAGE_TYPE_2D;
         ici.format        = format;
         ici.extent        = {w, h, 1U};
-        ici.mipLevels     = 1U;
+        ici.mipLevels     = mip_levels;
         ici.arrayLayers   = 1U;
         ici.samples       = samples;
         ici.tiling        = VK_IMAGE_TILING_OPTIMAL;

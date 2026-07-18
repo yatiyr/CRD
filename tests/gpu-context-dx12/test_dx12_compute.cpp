@@ -156,7 +156,7 @@ TEST_CASE("v17 NRC: CKIR fused-MLP FP32 forward DISPATCHES on DX12 == CPU oracle
     CHECK(bad == 0); // FP32 precise, no FMA ⇒ bit-IDENTICAL to Vulkan + the oracle
 }
 
-TEST_CASE("B14-c: CKIR SVGF à-trous denoiser DISPATCHES on DX12 == CPU oracle (ULP-tol, transcendental weights)",
+TEST_CASE("B14-c: CKIR SVGF a-trous denoiser DISPATCHES on DX12 == CPU oracle (ULP-tol, transcendental weights)",
           "[dx12][compute][gpu][kernel][svgf]")
 {
     namespace kir = crd::kir;
@@ -525,6 +525,80 @@ TEST_CASE("B-cmp Phase 2: CKIR 2-D FFT (6-dispatch pipeline) DISPATCHES on DX12 
     int badr = 0;
     int badi = 0;
     for (int i = 0; i < rr * cc; ++i)
+    {
+        if (h32[plan.res_re][i] != static_cast<float>(h64[plan.res_re][i])) { ++badr; }
+        if (h32[plan.res_im][i] != static_cast<float>(h64[plan.res_im][i])) { ++badi; }
+    }
+    CHECK(badr == 0);
+    CHECK(badi == 0);
+}
+
+// B16-a-2: the BATCHED strided inverse 2-D FFT (build_fft2d_c2c_batched — 2 dispatches: batched row IFFT -> batched strided+
+// tiled column IFFT) the FFT-ocean rides, on DX12, BIT-FOR-BIT vs the CPU oracle across ALL batch images. DX12/HLSL coerces
+// types (masking emitter bugs Vulkan catches), so running BOTH backends is the portability gate for the new radix-16 path.
+TEST_CASE("B16-a-2: CKIR BATCHED strided inverse 2-D FFT DISPATCHES on DX12 == CPU oracle bit-exact",
+          "[dx12][compute][gpu][kernel][fft][ocean]")
+{
+    namespace kir = crd::kir;
+    crd::memory::TlsfAllocator alloc(96U << 20U);
+    g::Dx12ComputeContext      ctx(&alloc);
+    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+
+    kir::KGraph          g0(&alloc);
+    kir::KGraph          g1(&alloc);
+    kir::KGraph*         graphs[2] = {&g0, &g1};
+    constexpr int        n         = 64; // power of FOUR
+    constexpr int        batch     = 4;
+    constexpr int        tile_c    = 8;
+    constexpr int        rc        = n * n;
+    const kir::Fft2dPlan plan      = kir::build_fft2d_c2c_batched(graphs, n, n, batch, /*inverse=*/true, tile_c);
+
+    int off[16];
+    int total = 0;
+    for (int b = 0; b < plan.nbuffers; ++b) { off[b] = total; total += plan.buffers[b].size; }
+    crd::containers::Array<crd::f64> a64(&alloc);
+    crd::containers::Array<float>    a32(&alloc);
+    a64.resize(static_cast<crd::usize>(total), 0.0);
+    a32.resize(static_cast<crd::usize>(total), 0.0F);
+    crd::f64* h64[16];
+    float*    h32[16];
+    for (int b = 0; b < plan.nbuffers; ++b) { h64[b] = a64.data() + off[b]; h32[b] = a32.data() + off[b]; }
+
+    constexpr crd::f64 two_pi = 6.28318530717958647693;
+    const auto         f32d   = [](crd::f64 v) { return static_cast<crd::f64>(static_cast<float>(v)); };
+    for (int i = 0; i < rc * batch; ++i)
+    {
+        h64[plan.in_re][i] = static_cast<crd::f64>((i * 7 + 3) % 11 - 5);
+        h64[plan.in_im][i] = static_cast<crd::f64>((i * 5 + 1) % 13 - 6);
+    }
+    for (int k = 0; k < n; ++k)
+    {
+        const crd::f64 a       = two_pi * static_cast<crd::f64>(k) / static_cast<crd::f64>(n);
+        h64[plan.tw_col_re][k] = f32d(crd::math::cos(a));
+        h64[plan.tw_col_im][k] = f32d(-crd::math::sin(a));
+        h64[plan.tw_row_re][k] = h64[plan.tw_col_re][k];
+        h64[plan.tw_row_im][k] = h64[plan.tw_col_im][k];
+    }
+    for (int i = 0; i < total; ++i) { a32[static_cast<crd::usize>(i)] = static_cast<float>(a64[static_cast<crd::usize>(i)]); }
+
+    crd::kir_test::run_fft2d_cpu(plan, h64, &alloc);
+
+    std::unique_ptr<crd::gpu::ComputePipeline> pipe_store[8];
+    crd::gpu::ComputePipeline*                 pipes[8] = {};
+    for (int pi = 0; pi < plan.npasses; ++pi)
+    {
+        kir::GlslKernel kern(&alloc);
+        REQUIRE(kir::emit_compute_kernel_hlsl(*plan.passes[pi].graph, plan.passes[pi].entry, &alloc, kern));
+        pipe_store[pi] = ctx.create_pipeline_from_hlsl(crd::containers::to_view(kern.source), plan.passes[pi].nbind, 0U);
+        REQUIRE(pipe_store[pi] != nullptr);
+        pipes[pi] = pipe_store[pi].get();
+    }
+
+    crd::kir_test::dispatch_fft2d(ctx, plan, pipes, h32);
+
+    int badr = 0;
+    int badi = 0;
+    for (int i = 0; i < rc * batch; ++i)
     {
         if (h32[plan.res_re][i] != static_cast<float>(h64[plan.res_re][i])) { ++badr; }
         if (h32[plan.res_im][i] != static_cast<float>(h64[plan.res_im][i])) { ++badi; }

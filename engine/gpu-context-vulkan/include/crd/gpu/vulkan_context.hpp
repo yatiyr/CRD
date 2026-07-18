@@ -71,6 +71,10 @@ public:
     // substrate for rasterizer-ordered fragment-shader storage access (`KEntry::interlock`, `layout(pixel_interlock_ordered)`).
     [[nodiscard]] virtual bool fragment_shader_interlock() const noexcept = 0;
 
+    // B4: `VK_EXT_mesh_shader` + the `meshShader` feature enabled on a graphics-capable device — the substrate for the modern
+    // amplification path (mesh shader objects + `vkCmdDrawMeshTasksEXT`). false ⇒ the caller uses the vertex-pull fallback.
+    [[nodiscard]] virtual bool mesh_shader() const noexcept = 0;
+
     // B2-d: non-uniform sampled-image array indexing (descriptor indexing) enabled — the substrate for BINDLESS texture
     // arrays (`texture(..., N)` + `KOp::SampleIndexed` with a per-fragment index). Graphics-capable devices.
     [[nodiscard]] virtual bool bindless() const noexcept = 0;

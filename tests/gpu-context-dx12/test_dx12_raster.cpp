@@ -220,6 +220,185 @@ TEST_CASE("D-007 B3-e: IR-authored triangle draws on DX12 (CKIR graph -> DXIL ->
     CHECK(((corner >> 16U) & 0xFFU) >= 250U); // B high
 }
 
+// D-007 B4: the DX12 MESH-shader DEVICE path — a CKIR Mesh KEntry lowers to ms_6_5 HLSL -> DXIL, a STREAM PSO (MS+PS) built
+// via ID3D12Device2::CreatePipelineState, and DispatchMesh renders the SAME shared triangle the vertex-pull path draws. This
+// proves the mesh IR fans out to the DX12 DEVICE (pixels), not just DXC-validation. Guarded on the mesh-shader tier (OPTIONS7).
+TEST_CASE("D-007 B4: DX12 MESH-shader DispatchMesh renders a triangle (CKIR mesh entry -> DXIL -> stream PSO -> pixels)",
+          "[dx12][raster][gpu][ir][mesh]")
+{
+    namespace kir = crd::kir;
+
+    auto gctx = g::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    auto raster = g::create_dx12_raster_context();
+    if (raster == nullptr || !raster->valid()) { WARN("no D3D12 raster device; skipping"); return; }
+    crd::memory::TlsfAllocator alloc(4U << 20U);
+
+    // The SAME shared CKIR triangle the B3-e tests draw — but EMITTED BY A MESH SHADER (build_triangle_mesh), not vertex-pulled.
+    kir::KGraph mg(&alloc);
+    kir::KEntry me;
+    crd::gputest::build_triangle_mesh(mg, me);
+    kir::KGraph fg(&alloc);
+    kir::KEntry fe;
+    crd::gputest::build_triangle_fs(fg, fe);
+
+    auto mesh = gctx->create_program(mg, me); // CKIR mesh entry -> ms_6_5 HLSL -> DXIL, behind the seam
+    if (mesh == nullptr) { WARN("dxc/DXIL unavailable; skipping B4 DX12 mesh draw"); return; }
+    auto fs = gctx->create_program(fg, fe);
+    REQUIRE(fs != nullptr);
+    REQUIRE(mesh->stage() == g::ShaderStage::Mesh);
+
+    auto program = raster->create_mesh_program(*mesh, *fs);
+    if (program == nullptr) { WARN("no D3D12 mesh-shader tier (OPTIONS7 MeshShaderTier); skipping the mesh draw"); return; }
+    REQUIRE(program->valid());
+
+    constexpr crd::u32 dim    = 32U;
+    auto               target = raster->create_color_target(dim, dim);
+    REQUIRE(target != nullptr);
+
+    raster->draw_mesh(*target, *program, g::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, 1U); // one meshlet workgroup
+
+    const crd::u32 centre = target->read_pixel(dim / 2U, dim / 2U);
+    const crd::u32 corner = target->read_pixel(0U, 0U);
+    CHECK((centre & 0xFFU) >= 250U);          // R high  => red (inside the MESH-emitted triangle)
+    CHECK(((centre >> 16U) & 0xFFU) <= 5U);   // B low
+    CHECK((corner & 0xFFU) <= 5U);            // R low   => blue clear (outside)
+    CHECK(((corner >> 16U) & 0xFFU) >= 250U); // B high  => blue clear
+}
+
+// D-007 B4: the DX12 OCEAN-MESHLET path — draw_mesh_bindless_depth DISPATCHES the projected-grid ocean as MESHLETS into a
+// colour+DEPTH target, the FFT cascade textures bound BINDLESS so the mesh shader samples the displacement (mirrors the Vulkan
+// ocean-mesh render). Uses SYNTHETIC cascade textures (the point is the DEVICE path, not the FFT bake) and asserts the ocean
+// surface rendered over the black clear. Guarded on the mesh-shader tier (OPTIONS7).
+TEST_CASE("D-007 B4: DX12 ocean meshlets render via draw_mesh_bindless_depth (bindless cascades + depth)",
+          "[dx12][raster][gpu][ir][mesh][ocean]")
+{
+    namespace kir = crd::kir;
+
+    auto gctx = g::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    auto raster = g::create_dx12_raster_context();
+    if (raster == nullptr || !raster->valid()) { WARN("no D3D12 raster device; skipping"); return; }
+    crd::memory::TlsfAllocator alloc(16U << 20U);
+
+    crd::gputest::OceanCascadeRender ocr; // the production 4-cascade config (defaults)
+    const int                        nc = ocr.count;
+
+    // The ocean MESH (projected-grid meshlets) + the water FS — the SAME shared CKIR builders the Vulkan ocean renders.
+    constexpr int mnp = 16; // patches per side (16x7 = 112 lattice cells)
+    constexpr int mkk = 8;  // 8x8 verts/patch -> 98 tris, within the SM6.5 mesh cap of 128
+    kir::KGraph   mmg(&alloc);
+    kir::KEntry   mme;
+    crd::gputest::build_ocean_displaced_mesh(mmg, mme, mnp, mkk, ocr);
+    kir::KGraph mfg(&alloc);
+    kir::KEntry mfe;
+    crd::gputest::build_ocean_water_geo_fs(mfg, mfe, ocr);
+
+    auto mesh = gctx->create_program(mmg, mme); // CKIR ocean mesh -> ms_6_5 HLSL (SampleIndexedLod) -> DXIL
+    if (mesh == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    auto fs = gctx->create_program(mfg, mfe);
+    REQUIRE(fs != nullptr);
+    auto program = raster->create_mesh_program(*mesh, *fs);
+    if (program == nullptr) { WARN("no D3D12 mesh-shader tier (OPTIONS7); skipping"); return; }
+    REQUIRE(program->valid());
+
+    // Synthetic RGBA8 cascade textures [nx, nz, height, foam]: a gentle deterministic ripple (no transcendentals) so the
+    // projected grid displaces visibly. Even if displacement read 0, the grid still renders at the water plane and the FS
+    // shades it — the test proves the DEVICE mesh+bindless+depth path, so any ocean coverage over the clear suffices.
+    constexpr crd::u32 cw = 64U;
+    crd::u8            px[cw * cw * 4U];
+    for (crd::u32 y = 0U; y < cw; ++y)
+    {
+        for (crd::u32 x = 0U; x < cw; ++x)
+        {
+            const crd::u32   ripple = ((x * 8U) & 0xFFU) ^ ((y * 8U) & 0xFFU); // deterministic pattern in [0,255]
+            const crd::usize o      = (static_cast<crd::usize>(y) * cw + x) * 4U;
+            px[o + 0U] = 128U;                                          // nx -> 0
+            px[o + 1U] = 128U;                                          // nz -> 0
+            px[o + 2U] = static_cast<crd::u8>(96U + (ripple >> 2U));    // height field
+            px[o + 3U] = 0U;                                            // foam
+        }
+    }
+    std::unique_ptr<g::ITexture> tex_owned[8];
+    g::ITexture*                 texs[8]{};
+    for (int c = 0; c < nc; ++c)
+    {
+        tex_owned[c] = raster->create_texture(cw, cw, px);
+        REQUIRE(tex_owned[c] != nullptr);
+        texs[c] = tex_owned[c].get();
+    }
+
+    constexpr crd::u32 rdim   = 96U;
+    auto               target = raster->create_color_depth_target(rdim, rdim);
+    REQUIRE(target != nullptr);
+    raster->draw_mesh_bindless_depth(*target, *program, g::ClearColor{0.0F, 0.0F, 0.0F, 0.0F}, 1.0F, g::DepthCompare::Less,
+                                     texs, static_cast<crd::u32>(nc), static_cast<crd::u32>(mnp * mnp));
+
+    // The ocean surface must have rendered over the black clear — count non-black pixels across the frame.
+    crd::u32 lit = 0U;
+    for (crd::u32 y = 0U; y < rdim; ++y)
+    {
+        for (crd::u32 x = 0U; x < rdim; ++x)
+        {
+            if ((target->read_pixel(x, y) & 0x00FFFFFFU) != 0U) { ++lit; }
+        }
+    }
+    WARN("[dx12 ocean mesh] lit pixels = " << lit << " / " << (rdim * rdim));
+    CHECK(lit > (rdim * rdim) / 20U); // >= ~5% of the frame is ocean geometry, not the black clear
+}
+
+// B16-a-4: the WATER SURFACE renders on DX12 too — the SAME shared build_water_fs the Vulkan test draws (`water_shade` behind
+// the create_program seam), proving the fragment shading FANS OUT to both raster backends: a bluish deep-water body + a bright
+// sun glint, identical shape to the Vulkan render.
+TEST_CASE("B16-a-4: water_shade RENDERS on DX12 (bluish body + sun glint)", "[dx12][raster][ir][ocean]")
+{
+    namespace kir = crd::kir;
+
+    auto gctx = g::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    auto raster = g::create_dx12_raster_context();
+    REQUIRE(raster != nullptr);
+    crd::memory::TlsfAllocator alloc(8U << 20U);
+
+    constexpr crd::u32 dim = 64U;
+    kir::KGraph        vg(&alloc);
+    kir::KEntry        ve;
+    crd::gputest::build_fullscreen_vs(vg, ve);
+    kir::KGraph fg(&alloc);
+    kir::KEntry fe;
+    crd::gputest::build_water_fs(fg, fe, dim);
+
+    auto vs = gctx->create_program(vg, ve);
+    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping water DX12 draw"); return; }
+    auto fs = gctx->create_program(fg, fe);
+    REQUIRE(fs != nullptr);
+    auto program = raster->create_raster_program(*vs, *fs);
+    REQUIRE(program != nullptr);
+    REQUIRE(program->valid());
+    auto target = raster->create_color_target(dim, dim);
+    REQUIRE(target != nullptr);
+    raster->draw(*target, *program, g::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+
+    const crd::u32 c  = target->read_pixel(dim / 2U, dim / 2U);
+    const int      cr = static_cast<int>(c & 0xFFU);
+    const int      cg = static_cast<int>((c >> 8U) & 0xFFU);
+    const int      cb = static_cast<int>((c >> 16U) & 0xFFU);
+    int            maxlum = 0;
+    for (crd::u32 y = 0; y < dim; ++y)
+    {
+        for (crd::u32 x = 0; x < dim; ++x)
+        {
+            const crd::u32 p   = target->read_pixel(x, y);
+            const int      lum = static_cast<int>(p & 0xFFU) + static_cast<int>((p >> 8U) & 0xFFU) + static_cast<int>((p >> 16U) & 0xFFU);
+            if (lum > maxlum) { maxlum = lum; }
+        }
+    }
+    WARN("[water-render-dx12] centre RGB=(" << cr << "," << cg << "," << cb << ") maxlum=" << maxlum);
+    CHECK(cb > cr);                      // deep water reads bluish
+    CHECK(cb > 10);                      // and it rendered
+    CHECK(maxlum > (cr + cg + cb) + 90); // a bright sun glint exists (same shape as Vulkan)
+}
+
 TEST_CASE("D-007 B1-a: IR fragment derivatives (dFdx/dFdy of FragCoord.x) draw on DX12", "[dx12][raster][gpu][ir]")
 {
     namespace kir = crd::kir;

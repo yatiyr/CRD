@@ -570,14 +570,31 @@ struct Fft1dPlan
     const int x_re    = g.shared_decl(DType::F32, tile_c * cstride);
     const int x_im    = g.shared_decl(DType::F32, tile_c * cstride);
     const int rawtid  = g.builtin(KBuiltin::LocalInvocationIndex);
+    const int wgix    = g.builtin(KBuiltin::WorkgroupIndex);
     const int tid     = tiled ? g.binary(KOp::Div, rawtid, ku(static_cast<crd::u32>(tile_c))) : rawtid; // FFT thread
     const int col     = tiled ? g.binary(KOp::Mod, rawtid, ku(static_cast<crd::u32>(tile_c))) : -1;     // column in the tile
-    const int gcol    = tiled ? add(mul(g.builtin(KBuiltin::WorkgroupIndex), ku(static_cast<crd::u32>(tile_c))), col) : -1;
+    // tiled column base. BATCHED+STRIDED (batched && col_stride>0): the grid is (cols/tile_c)·B over B contiguous rows×cols
+    // images, so WorkgroupIndex splits into (image, col-tile) and gcol carries the per-image element base (image·rows·cols +
+    // in-image column). Single-image (batched=false): gcol = WorkgroupIndex·tile_c + col (unchanged). Mirrors the batched
+    // strided column-conv's split (build_fft1d_convolution16_tiled) so a plain batched 2-D FFT reuses the coalesced tile.
+    int gcol = -1;
+    if (tiled)
+    {
+        if (batched && col_stride > 0)
+        {
+            const int tpi     = col_stride / tile_c; // tiles per image (= cols/tile_c)
+            const int bstride = n * col_stride;      // rows·cols elements per image
+            const int image   = g.binary(KOp::Div, wgix, ku(static_cast<crd::u32>(tpi)));
+            const int ctile   = g.binary(KOp::Mod, wgix, ku(static_cast<crd::u32>(tpi)));
+            gcol              = add(mul(image, ku(static_cast<crd::u32>(bstride))), add(mul(ctile, ku(static_cast<crd::u32>(tile_c))), col));
+        }
+        else { gcol = add(mul(wgix, ku(static_cast<crd::u32>(tile_c))), col); }
+    }
     int base = -1; // contiguous batched base (one image per workgroup); -1 = unused (tiled/strided compute the offset in boff)
-    if (!tiled && col_stride <= 0 && batched) { base = mul(g.builtin(KBuiltin::WorkgroupIndex), ku(static_cast<crd::u32>(n))); }
+    if (!tiled && col_stride <= 0 && batched) { base = mul(wgix, ku(static_cast<crd::u32>(n))); }
     // global element offset: tiled/strided column of a row-major image, else contiguous batched. filter/col share it.
     const auto boff = [&](int idx) {
-        if (col_stride > 0) { return add(mul(idx, ku(static_cast<crd::u32>(col_stride))), tiled ? gcol : g.builtin(KBuiltin::WorkgroupIndex)); }
+        if (col_stride > 0) { return add(mul(idx, ku(static_cast<crd::u32>(col_stride))), tiled ? gcol : wgix); }
         return batched ? add(base, idx) : idx;
     };
     // shared slot: each column owns the [col*cstride, +n) slice (padded so tile_c columns don't collide on banks).
@@ -1638,6 +1655,74 @@ struct Fft2dPlan
         p.entry          = tr_cr;
         p.num_workgroups = grid_cr;
         p.bind[0] = b_col_im; p.bind[1] = b_res_im; p.nbind = 2;
+    }
+
+    return plan;
+}
+
+// A BATCHED complex-to-complex 2-D FFT of `batch` contiguous rows×cols row-major images, authored as a TWO-dispatch plan in
+// the transpose-on-write STRIDED form (the fewest-round-trips design): batched ROW FFT (contiguous, grid=rows·batch) → batched
+// STRIDED+TILED COLUMN FFT (col_stride=cols, grid=(cols/tile_c)·batch — one block transforms tile_c adjacent columns of ONE
+// image, coalesced). No transpose scratch and no transpose kernel: the column pass reads and writes its column IN PLACE in the
+// row-major image. This is exactly the DRAM-bound batched regime where paying ONE global round-trip per pass (vs the vendor's
+// per-image passes) is the win. `graphs` = TWO caller-owned KGraphs (row FFT, strided column FFT). `rows` and `cols` are
+// powers of two and `rows` is a power of FOUR (the radix-16/4 tiled column). `inverse` conjugates both passes. NO 1/(rows·cols)
+// normalization is applied — the caller folds any scale into its data (the FFT-ocean uses Tessendorf's UNNORMALISED inverse).
+// `tile_c` (default 8) = columns per column-FFT block. Result lands back over `in` (`res_re/res_im` alias `in_re/in_im`).
+[[nodiscard]] inline Fft2dPlan build_fft2d_c2c_batched(KGraph** graphs, int rows, int cols, int batch, bool inverse,
+                                                       int tile_c = 8)
+{
+    Fft2dPlan plan;
+    plan.rows    = rows;
+    plan.cols    = cols;
+    plan.inverse = inverse;
+
+    const int  rc      = rows * cols;
+    const int  rcb     = rc * batch;
+    const auto add_buf = [&](Fft2dBufRole role, int size) -> int {
+        const int id          = plan.nbuffers;
+        plan.buffers[id].role = role;
+        plan.buffers[id].size = size;
+        ++plan.nbuffers;
+        return id;
+    };
+    const int b_in_re  = add_buf(Fft2dBufRole::InRe, rcb);
+    const int b_in_im  = add_buf(Fft2dBufRole::InIm, rcb);
+    const int b_twc_re = add_buf(Fft2dBufRole::TwColRe, cols);
+    const int b_twc_im = add_buf(Fft2dBufRole::TwColIm, cols);
+    const int b_twr_re = add_buf(Fft2dBufRole::TwRowRe, rows);
+    const int b_twr_im = add_buf(Fft2dBufRole::TwRowIm, rows);
+    const int b_x_re   = add_buf(Fft2dBufRole::Scratch, rcb); // row-FFT output (row-major, batch-contiguous)
+    const int b_x_im   = add_buf(Fft2dBufRole::Scratch, rcb);
+    plan.in_re     = b_in_re;
+    plan.in_im     = b_in_im;
+    plan.tw_col_re = b_twc_re;
+    plan.tw_col_im = b_twc_im;
+    plan.tw_row_re = b_twr_re;
+    plan.tw_row_im = b_twr_im;
+    plan.res_re    = b_in_re; // the strided column pass writes the final result back over `in` (free after pass 0)
+    plan.res_im    = b_in_im;
+
+    // pass 0: batched ROW FFT (cols-point, contiguous), grid=rows·batch → x (row-major).
+    const Fft1dPlan rowfft = build_fft1d_batched(*graphs[0], cols, inverse);
+    {
+        Fft2dPass& p     = plan.passes[plan.npasses++];
+        p.graph          = graphs[0];
+        p.entry          = rowfft.entry;
+        p.num_workgroups = static_cast<crd::u32>(rows * batch);
+        p.bind[0] = b_in_re; p.bind[1] = b_in_im; p.bind[2] = b_twc_re; p.bind[3] = b_twc_im; p.bind[4] = b_x_re; p.bind[5] = b_x_im;
+        p.nbind = 6;
+    }
+
+    // pass 1: batched STRIDED+TILED COLUMN FFT (rows-point, col_stride=cols), grid=(cols/tile_c)·batch → res (over `in`).
+    const Fft1dPlan colfft = build_fft1d_radix16(*graphs[1], rows, inverse, /*batched=*/true, tile_c, /*col_stride=*/cols);
+    {
+        Fft2dPass& p     = plan.passes[plan.npasses++];
+        p.graph          = graphs[1];
+        p.entry          = colfft.entry;
+        p.num_workgroups = static_cast<crd::u32>((cols / tile_c) * batch);
+        p.bind[0] = b_x_re; p.bind[1] = b_x_im; p.bind[2] = b_twr_re; p.bind[3] = b_twr_im; p.bind[4] = b_in_re; p.bind[5] = b_in_im;
+        p.nbind = 6;
     }
 
     return plan;

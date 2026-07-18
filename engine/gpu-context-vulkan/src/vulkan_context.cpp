@@ -84,6 +84,7 @@ public:
     [[nodiscard]] VkQueue  graphics_queue() const noexcept override { return m_graphics_queue; }
     [[nodiscard]] crd::u32 graphics_family() const noexcept override { return m_graphics_family; }
     [[nodiscard]] bool     shader_object() const noexcept override { return m_shader_object; }
+    [[nodiscard]] bool     mesh_shader() const noexcept override { return m_mesh_shader; } // B4: VK_EXT_mesh_shader + meshShader
     [[nodiscard]] bool     render_capable() const noexcept override { return m_windowed; }
     [[nodiscard]] bool       fragment_shading_rate() const noexcept override { return m_fragment_shading_rate; } // B1-e
     [[nodiscard]] VkExtent2D vrs_tile_size() const noexcept override { return m_vrs_tile_size; }
@@ -117,6 +118,17 @@ public:
             const auto spv = compile_glsl_to_spirv(stage, crd::containers::to_view(kern.source), "ckir_stage", a);
             if (!spv.ok) { return nullptr; }
             return create_program(stage, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()));
+        }
+
+        // B4: a MESH shader (the modern amplification path) — emit GL_EXT_mesh_shader GLSL → SPIR-V (1.6) → a mesh shader object.
+        if (entry.stage == crd::kir::KStage::Mesh)
+        {
+            if (!crd::kir::entry_valid(graph, entry)) { return nullptr; }
+            crd::kir::GlslKernel kern(a);
+            if (!crd::kir::emit_mesh_glsl(graph, entry, a, kern)) { return nullptr; }
+            const auto spv = compile_glsl_to_spirv(ShaderStage::Mesh, crd::containers::to_view(kern.source), "ckir_mesh", a);
+            if (!spv.ok) { return nullptr; }
+            return create_program(ShaderStage::Mesh, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()));
         }
 
         // B-cmp: an imperative COMPUTE KERNEL (workgroup shared memory + barriers + storage buffers), authored in CKIR.
@@ -241,8 +253,10 @@ private:
         bool has_eds3      = false;
         bool has_interlock = false;
         bool has_sgpart    = false;
+        bool has_mesh      = false;
         for (std::uint32_t i = 0; i < ne; ++i)
         {
+            if (std::strcmp(exts[i].extensionName, VK_EXT_MESH_SHADER_EXTENSION_NAME) == 0) { has_mesh = true; } // B4
             if (std::strcmp(exts[i].extensionName, "VK_KHR_cooperative_matrix") == 0) { has_cm1 = true; }
             if (std::strcmp(exts[i].extensionName, "VK_NV_cooperative_matrix2") == 0) { has_cm2 = true; }
             if (std::strcmp(exts[i].extensionName, "VK_NV_shader_subgroup_partitioned") == 0) { has_sgpart = true; }
@@ -261,6 +275,9 @@ private:
         m_conservative_raster = has_conserv && has_eds3 && m_shader_object;
         // B1-f: pixel-ordered fragment-shader interlock (ROV) — graphics-capable only. The feature is checked below.
         m_fragment_interlock = has_interlock && m_graphics_family != UINT32_MAX;
+        // B4: mesh shaders (the modern amplification path) — needs the extension + a graphics queue + shader objects (our draw
+        // path creates a MESH shader object). The meshShader feature bit is confirmed below before we commit to it.
+        m_mesh_shader = has_mesh && m_shader_object;
         // C2-a: render-capable iff surface (instance) + swapchain (device) + a graphics queue all present.
         m_windowed = surface_ok && has_swapchain && m_graphics_family != UINT32_MAX;
 
@@ -399,7 +416,29 @@ private:
             descidx                                          = keep; // enable ONLY the non-uniform sampled-image bit
         }
 
-        // Build the pNext chain head-first: dyn → [demote] → [vrs] → [eds3] → [sync2] → [sho] → [coopmat…].
+        // B4: mesh shaders — confirm the meshShader bit before committing (the extension can be exposed without it). Enable
+        // ONLY meshShader (not taskShader/multiview yet — our path dispatches mesh workgroups directly, no amplification stage).
+        VkPhysicalDeviceMeshShaderFeaturesEXT mesh{};
+        mesh.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT;
+        if (m_mesh_shader)
+        {
+            VkPhysicalDeviceFeatures2 f2{};
+            f2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            f2.pNext = &mesh;
+            vkGetPhysicalDeviceFeatures2(m_physical, &f2);
+            m_mesh_shader = mesh.meshShader == VK_TRUE;
+            VkPhysicalDeviceMeshShaderFeaturesEXT keep{};
+            keep.sType      = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT;
+            keep.meshShader = mesh.meshShader;
+            mesh            = keep; // enable ONLY the meshShader bit
+        }
+        // B4: glslang emits the SPIR-V `LocalSizeId` execution mode for the mesh workgroup size (SPIR-V 1.6) — that requires
+        // `maintenance4` (VUID-RuntimeSpirv-LocalSizeId-06434). Enabled ONLY with mesh, so the non-mesh device is unchanged.
+        VkPhysicalDeviceMaintenance4Features maint4{};
+        maint4.sType        = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_FEATURES;
+        maint4.maintenance4 = VK_TRUE;
+
+        // Build the pNext chain head-first: dyn → [demote] → [vrs] → [eds3] → [sync2] → [sho] → [mesh] → [coopmat…].
         void* chain = &dyn;
         if (m_graphics_family != UINT32_MAX) { demote.pNext = chain; chain = &demote; } // raster `discard` support
         if (m_fragment_shading_rate) { vrs.pNext = chain; chain = &vrs; }
@@ -408,9 +447,10 @@ private:
         if (m_bindless) { descidx.pNext = chain; chain = &descidx; }
         if (m_windowed) { sync2.pNext = chain; chain = &sync2; }
         if (m_shader_object) { sho.pNext = chain; chain = &sho; }
+        if (m_mesh_shader) { mesh.pNext = chain; chain = &mesh; maint4.pNext = chain; chain = &maint4; }
         if (m_coopmat2) { cm2.pNext = chain; cmk.pNext = &cm2; chain = &cmk; }
 
-        const char* devexts[9];
+        const char* devexts[12];
         crd::u32    ndevext = 0;
         // B-cmp: hardware subgroup partition (match_any) — the radix-sort rank's cheap deterministic match. Shader-only
         // capability (no feature struct); enabling the extension unlocks the SPIR-V GroupNonUniformPartitionedNV cap.
@@ -429,6 +469,7 @@ private:
             devexts[ndevext++] = VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME;
         }
         if (m_fragment_interlock) { devexts[ndevext++] = VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME; }
+        if (m_mesh_shader) { devexts[ndevext++] = VK_EXT_MESH_SHADER_EXTENSION_NAME; } // B4
 
         VkDeviceCreateInfo dci{};
         dci.sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -464,6 +505,7 @@ private:
     bool             m_conservative_raster   = false; // B1-f: conservative raster + EDS3 conservative mode enabled
     bool             m_fragment_interlock    = false; // B1-f: pixel-ordered fragment-shader interlock (ROV) enabled
     bool             m_bindless              = false; // B2-d: non-uniform sampled-image array indexing enabled
+    bool             m_mesh_shader           = false; // B4: VK_EXT_mesh_shader + meshShader feature enabled
     bool             m_valid           = false;
     char             m_name[256]       = {};
 };

@@ -73,6 +73,8 @@ namespace
     {
     case ShaderStage::Vertex: return L"vs_6_0";
     case ShaderStage::Fragment: return L"ps_6_0";
+    case ShaderStage::Mesh: return L"ms_6_5"; // B4: mesh shaders need SM 6.5
+    case ShaderStage::Task: return L"as_6_5"; // B4: amplification (task) shaders
     case ShaderStage::Compute:
     default: return L"cs_6_0";
     }

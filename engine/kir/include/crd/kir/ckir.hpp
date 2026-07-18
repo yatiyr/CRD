@@ -183,7 +183,11 @@ enum class KOp : crd::u8
     // subgroupSizeControl elsewhere). a = the per-lane predicate/value node.
     SubgroupBallot,                                         // a (u32, 0/1 predicate) → u32 bitmask of lanes (bit `lane`) whose predicate is nonzero
     SubgroupBallotExclCount,                                // a (u32 ballot mask) → popcount of set bits STRICTLY BELOW this lane (exclusive within-subgroup rank)
-    SubgroupMatch                                           // a (u32 value) → u32 bitmask of lanes whose value EQUALS this lane's (hardware match_any / partition; deterministic ⇒ bit-exact)
+    SubgroupMatch,                                          // a (u32 value) → u32 bitmask of lanes whose value EQUALS this lane's (hardware match_any / partition; deterministic ⇒ bit-exact)
+    // B16: BINDLESS + EXPLICIT-LOD sample — SampleIndexed with an explicit mip `lod` (in the ext pool). A VERTEX shader has no
+    // derivatives, so displacing a grid from bindless cascade textures needs this combo (SampleIndexed is implicit-LOD, SampleLod
+    // is non-bindless). a=texArray, b=samp, c=uv, d=index, ext[0]=lod. Appended at END for cook/serialization stability.
+    SampleIndexedLod
 };
 
 // B1: fragment derivatives are the only ops that read NEIGHBOURING invocations (the 2×2 pixel quad), so they are legal
@@ -565,7 +569,17 @@ struct KEntry
     crd::u32     local_size[3]      = {1, 1, 1};
     int          kernel_body_begin  = -1;
     int          kernel_body_count  = 0;
+    // ── B4: MESH shader (stage == Mesh). Emits up to `mesh_vertices` vertices + `mesh_primitives` triangles per workgroup;
+    // max(mesh_vertices, mesh_primitives) threads cooperate — thread `tid` writes vertex tid (`position` + `out[]`) when
+    // tid < mesh_vertices, and primitive tid (`mesh_prim` → a uvec3 of LOCAL vertex indices) when tid < mesh_primitives. The
+    // per-vertex `position`/`out[]` graphs read the workgroup builtins (typically a GLOBAL vertex id = WorkgroupIndex·
+    // mesh_vertices + LocalInvocationIndex). Dispatched over a workgroup grid (draw_mesh). Portable core; WGSL falls back to
+    // the vertex-pull path (WebGPU has no mesh shaders). Fields appended at END (KEntry is cook-serialized).
+    crd::u32     mesh_vertices      = 0; // max_vertices (0 ⇒ not a mesh entry)
+    crd::u32     mesh_primitives    = 0; // max_primitives (triangles)
+    int          mesh_prim          = -1; // uvec3 node: primitive `LocalInvocationIndex`'s three LOCAL vertex indices
     [[nodiscard]] bool is_kernel() const noexcept { return kernel_body_count > 0; }
+    [[nodiscard]] bool is_mesh() const noexcept { return stage == KStage::Mesh && mesh_vertices > 0U; }
 };
 
 [[nodiscard]] inline bool is_compare(KOp op) noexcept
@@ -1069,6 +1083,21 @@ public:
         n.b     = samp;
         n.c     = uv;
         n.d     = index;
+        return push(n);
+    }
+    // B16: BINDLESS + EXPLICIT-LOD sample — element `index` of a texture ARRAY through `samp` at `uv`, at an explicit mip `lod`.
+    // Legal in ANY stage (no derivatives) — this is the VERTEX-stage displacement fetch (bindless cascades, explicit LOD).
+    [[nodiscard]] int tex_sample_at_lod(int tex, int samp, int uv, int index, int lod)
+    {
+        KNode n;
+        n.op    = KOp::SampleIndexedLod;
+        n.type  = KType::vec(t(tex).type.scalar, 4);
+        n.shape = t(uv).shape;
+        n.a     = tex;
+        n.b     = samp;
+        n.c     = uv;
+        n.d     = index;
+        const int e[1] = {lod}; n.ext = push_ext(e, 1); n.n_ext = 1U;
         return push(n);
     }
     // B2: an opaque SAMPLER binding at (set, binding). `shadow` ⇒ a comparison sampler (for `sampleCmp`, B2-b).
@@ -1581,6 +1610,16 @@ private:
         if (g.node(e.storage_write_value).type != KType::make_scalar(DType::U32)) { return fail("storage write value must be uint"); }
     }
     if (e.interlock && e.stage != KStage::Fragment) { return fail("only a fragment stage can use `interlock`"); }
+
+    // B4: a MESH entry emits `mesh_primitives` triangles; `mesh_prim` is the uvec3 of LOCAL vertex indices for primitive tid.
+    if (e.stage == KStage::Mesh)
+    {
+        if (e.mesh_vertices == 0U) { return fail("a mesh entry must set mesh_vertices > 0"); }
+        if (e.mesh_primitives == 0U) { return fail("a mesh entry must set mesh_primitives > 0"); }
+        if (!node_ok(e.mesh_prim)) { return fail("a mesh entry must set `mesh_prim` (uvec3 of local vertex indices)"); }
+        if (g.node(e.mesh_prim).type != KType::vec(DType::U32, 3)) { return fail("`mesh_prim` must be a uvec3"); }
+    }
+    else if (e.mesh_prim >= 0 || e.mesh_vertices > 0U) { return fail("`mesh_*` fields are only for a mesh stage"); }
 
     if (e.n_out < 0 || e.n_out > kMaxStageOutputs) { return fail("output count out of range"); }
     for (int i = 0; i < e.n_out; ++i)

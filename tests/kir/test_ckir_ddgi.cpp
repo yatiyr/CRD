@@ -145,7 +145,7 @@ TEST_CASE("DDGI sample: a UNIFORM probe field returns exactly that irradiance (t
     CHECK(maxdev < 1e-4); // the full 8-probe blend of a constant field IS that constant (up to fp weighted-mean rounding)
 }
 
-TEST_CASE("DDGI sample: a FULL GRID indexes the right cell — a bright probe lights only its own cell", "[kir][ddgi]")
+TEST_CASE("DDGI sample: a FULL GRID indexes the right cell -- a bright probe lights only its own cell", "[kir][ddgi]")
 {
     crd::memory::TlsfAllocator alloc(64U << 20U);
     const int                  r = 8;
@@ -300,7 +300,7 @@ TEST_CASE("DDGI probe update: aligned rays ACCUMULATE irradiance + set the depth
     CHECK(min_r < 0.05);                      // back-facing texels never lit (cosine weight 0)
 }
 
-TEST_CASE("DDGI Chebyshev visibility: lit when nearer than the mean, occluded (→0) when far beyond it", "[kir][ddgi]")
+TEST_CASE("DDGI Chebyshev visibility: lit when nearer than the mean, occluded (->0) when far beyond it", "[kir][ddgi]")
 {
     crd::memory::TlsfAllocator alloc(8U << 20U);
     const int                  n = 64;

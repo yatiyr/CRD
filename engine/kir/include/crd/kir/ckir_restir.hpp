@@ -19,10 +19,11 @@ namespace crd::kir::restir
 
 struct RestirConfig
 {
-    int    num_candidates = 32;   // M — light candidates streamed into each pixel's reservoir per frame (the RT leaf)
-    double m_cap          = 20.0; // temporal history clamp: prev M capped to m_cap·M_current (bounds temporal bias/lag)
+    int    num_candidates    = 32;   // M — light candidates streamed into each pixel's reservoir per frame (the RT leaf)
+    double m_cap             = 20.0; // temporal history clamp: prev M capped to m_cap·M_current (bounds temporal bias/lag)
+    int    spatial_neighbors = 4;    // K — reservoirs pulled from screen neighbours in the SPATIAL reuse pass
 
-    [[nodiscard]] bool valid() const noexcept { return num_candidates >= 1; }
+    [[nodiscard]] bool valid() const noexcept { return num_candidates >= 1 && spatial_neighbors >= 1; }
 };
 
 namespace detail
@@ -46,28 +47,42 @@ constexpr double kEps = 1.0e-8;
 
     const int cand_b = g.buffer_decl(DType::F32, 0, 0, false);
     const int out_b  = g.buffer_decl(DType::F32, 0, 1, true);
-    const int p      = add(mul(g.builtin(KBuiltin::WorkgroupIndex), ku(64)), g.builtin(KBuiltin::LocalInvocationIndex));
-    const int f0     = kf(0.0);
+    // A tight RUNTIME LOOP over the M candidates, NOT a compile-time unroll — the unrolled straight-line code carries huge
+    // register pressure and tanks GPU occupancy (measured 1.56× slower than a hand-written loop). The loop-carried reservoir
+    // (Σw, chosen f, chosen p̂) lives in per-thread SHARED slots [tid]; measured at register-loop parity (see [.crush-bench]).
+    const int sw   = g.shared_decl(DType::F32, 64); // Σw per thread
+    const int scf  = g.shared_decl(DType::F32, 64); // chosen f(y)
+    const int scph = g.shared_decl(DType::F32, 64); // chosen p̂(y)
+    const int tid  = g.builtin(KBuiltin::LocalInvocationIndex);
+    const int p    = add(mul(g.builtin(KBuiltin::WorkgroupIndex), ku(64)), tid);
+    const int f0   = kf(0.0);
+    const int eps  = kf(detail::kEps);
 
     const int mark = g.kernel_stmt_mark();
-    int       wsum = f0;
-    int       cf   = f0; // chosen f(y)
-    int       cph  = f0; // chosen p̂(y)
-    for (int i = 0; i < m; ++i)
-    {
-        const int base = mul(add(mul(p, ku(static_cast<crd::u32>(m))), ku(static_cast<crd::u32>(i))), ku(3));
-        const int fi   = g.buffer_load(cand_b, base);
-        const int phi  = g.buffer_load(cand_b, add(base, ku(1)));
-        const int xii  = g.buffer_load(cand_b, add(base, ku(2)));
-        wsum           = add(wsum, phi);
-        const int repl = g.binary(KOp::CmpLt, xii, divv(phi, fmax(wsum, kf(detail::kEps)))); // keep i w.p. w_i/Σw
-        cf             = g.select(repl, fi, cf);
-        cph            = g.select(repl, phi, cph);
-    }
-    const int w   = divv(wsum, mul(kf(static_cast<double>(m)), fmax(cph, kf(detail::kEps)))); // W = Σw/(M·p̂(y))
-    const int op4 = mul(p, ku(4));
-    g.stmt_buffer_store(out_b, op4, cf);
-    g.stmt_buffer_store(out_b, add(op4, ku(1)), cph);
+    g.stmt_materialize(p); // hoist p to the OUTER scope: it indexes candidates INSIDE the loop AND the output store OUTSIDE it,
+                           // and the emitter scopes a first-inside-loop temp to the loop body (would be undefined at the store)
+    g.stmt_shared_store(sw, tid, f0);
+    g.stmt_shared_store(scf, tid, f0);
+    g.stmt_shared_store(scph, tid, f0);
+    const int fr   = g.stmt_for_begin(ku(static_cast<crd::u32>(m)));
+    const int j    = g.kernel_loop_var(fr);
+    const int base = mul(add(mul(p, ku(static_cast<crd::u32>(m))), j), ku(3));
+    const int fi   = g.buffer_load(cand_b, base);
+    const int phi  = g.buffer_load(cand_b, add(base, ku(1)));
+    const int xii  = g.buffer_load(cand_b, add(base, ku(2)));
+    const int wsum = add(g.shared_load(sw, tid), phi);
+    g.stmt_materialize(wsum); // FREEZE Σw before storing it: else the later `repl` re-reads sw AFTER the store ⇒ phi double-counts
+    g.stmt_shared_store(sw, tid, wsum);
+    const int repl = g.binary(KOp::CmpLt, xii, divv(phi, fmax(wsum, eps))); // keep i w.p. w_i/Σw
+    g.stmt_shared_store(scf, tid, g.select(repl, fi, g.shared_load(scf, tid)));
+    g.stmt_shared_store(scph, tid, g.select(repl, phi, g.shared_load(scph, tid)));
+    g.stmt_for_end(fr);
+
+    const int cphf = g.shared_load(scph, tid);
+    const int w    = divv(g.shared_load(sw, tid), mul(kf(static_cast<double>(m)), fmax(cphf, eps))); // W = Σw/(M·p̂(y))
+    const int op4  = mul(p, ku(4));
+    g.stmt_buffer_store(out_b, op4, g.shared_load(scf, tid));
+    g.stmt_buffer_store(out_b, add(op4, ku(1)), cphf);
     g.stmt_buffer_store(out_b, add(op4, ku(2)), w);
     g.stmt_buffer_store(out_b, add(op4, ku(3)), kf(static_cast<double>(m)));
 
@@ -126,6 +141,72 @@ constexpr double kEps = 1.0e-8;
     g.stmt_buffer_store(out_b, add(c4, ku(1)), oph);
     g.stmt_buffer_store(out_b, add(c4, ku(2)), o_w);
     g.stmt_buffer_store(out_b, add(c4, ku(3)), mm);
+
+    KEntry e;
+    e.stage             = KStage::Compute;
+    e.local_size[0]     = 64;
+    e.kernel_body_begin = mark;
+    e.kernel_body_count = g.stmt_count() - mark;
+    return e;
+}
+
+// Build the SPATIAL REUSE pass — merge each pixel's reservoir with K screen-space NEIGHBOUR reservoirs (Bitterli §5, the other
+// half of spatiotemporal reuse). Generalises the two-reservoir temporal merge to K+1: streaming Weighted Reservoir Sampling
+// keeps the center first (weight = its Σw = p̂·W·M), then each neighbour k with probability (its Σw)/(running Σw) — one fresh
+// random per neighbour. The merged W = (Σ all Σw)/(Σ all M · p̂(selected)); the estimator stays UNBIASED and the effective
+// sample count grows across the neighbourhood ⇒ variance drops further. (The neighbour SELECTION + the geometry/normal
+// similarity reject that avoids merging across edges is the renderer/RT leaf — here the indices are supplied.) Buffers:
+// 0 = res_in (F32 N·4), 1 = nbr (F32 N·K — the K neighbour pixel indices, integer-valued), 2 = xi (F32 N·K — the WRS randoms),
+// 3 = out_res (F32 N·4). One thread per pixel.
+[[nodiscard]] inline KEntry build_restir_spatial(KGraph& g, const RestirConfig& cfg)
+{
+    const auto kf   = [&](crd::f64 v) { return g.constant(v, make_shape({1}), DType::F32); };
+    const auto ku   = [&](crd::u32 v) { return g.constant(static_cast<crd::f64>(v), make_shape({1}), DType::U32); };
+    const auto add  = [&](int a, int b) { return g.binary(KOp::Add, a, b); };
+    const auto mul  = [&](int a, int b) { return g.binary(KOp::Mul, a, b); };
+    const auto divv = [&](int a, int b) { return g.binary(KOp::Div, a, b); };
+    const auto fmax = [&](int a, int b) { return g.binary(KOp::Max, a, b); };
+
+    const int kn    = cfg.spatial_neighbors;
+    const int res_b = g.buffer_decl(DType::F32, 0, 0, false);
+    const int nbr_b = g.buffer_decl(DType::F32, 0, 1, false);
+    const int xi_b  = g.buffer_decl(DType::F32, 0, 2, false);
+    const int out_b = g.buffer_decl(DType::F32, 0, 3, true);
+    const int p     = add(mul(g.builtin(KBuiltin::WorkgroupIndex), ku(64)), g.builtin(KBuiltin::LocalInvocationIndex));
+    const int c4    = mul(p, ku(4));
+    const int eps   = kf(detail::kEps);
+    const int pk    = mul(p, ku(static_cast<crd::u32>(kn)));
+
+    const int mark = g.kernel_stmt_mark();
+    const int cf   = g.buffer_load(res_b, c4);
+    const int cph  = g.buffer_load(res_b, add(c4, ku(1)));
+    const int cw   = g.buffer_load(res_b, add(c4, ku(2)));
+    const int cm   = g.buffer_load(res_b, add(c4, ku(3)));
+    int       wsum = mul(mul(cph, cw), cm); // the center reservoir's Σw = p̂·W·M
+    int       mtot = cm;
+    int       of   = cf;  // running selected sample
+    int       oph  = cph;
+    for (int j = 0; j < kn; ++j)
+    {
+        const int ni  = g.cast(g.buffer_load(nbr_b, add(pk, ku(static_cast<crd::u32>(j)))), DType::U32); // neighbour pixel index
+        const int n4  = mul(ni, ku(4));
+        const int nf  = g.buffer_load(res_b, n4);
+        const int nph = g.buffer_load(res_b, add(n4, ku(1)));
+        const int nw  = g.buffer_load(res_b, add(n4, ku(2)));
+        const int nm  = g.buffer_load(res_b, add(n4, ku(3)));
+        const int nsw = mul(mul(nph, nw), nm); // this neighbour's Σw
+        wsum          = add(wsum, nsw);
+        mtot          = add(mtot, nm);
+        const int xi  = g.buffer_load(xi_b, add(pk, ku(static_cast<crd::u32>(j))));
+        const int rep = g.binary(KOp::CmpLt, xi, divv(nsw, fmax(wsum, eps))); // keep this neighbour w.p. its Σw/running Σw
+        of            = g.select(rep, nf, of);
+        oph           = g.select(rep, nph, oph);
+    }
+    const int ow = divv(wsum, mul(mtot, fmax(oph, eps)));
+    g.stmt_buffer_store(out_b, c4, of);
+    g.stmt_buffer_store(out_b, add(c4, ku(1)), oph);
+    g.stmt_buffer_store(out_b, add(c4, ku(2)), ow);
+    g.stmt_buffer_store(out_b, add(c4, ku(3)), mtot);
 
     KEntry e;
     e.stage             = KStage::Compute;

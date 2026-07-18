@@ -32,7 +32,7 @@ void stats(const crd::containers::Array<crd::f64>& res, int n, double& mean, dou
 }
 } // namespace
 
-TEST_CASE("ReSTIR RIS: the estimate is UNBIASED — mean over pixels == the true light integral (imperfect target)", "[kir][restir]")
+TEST_CASE("ReSTIR RIS: the estimate is UNBIASED -- mean over pixels == the true light integral (imperfect target)", "[kir][restir]")
 {
     crd::memory::TlsfAllocator alloc(64U << 20U);
     kir::restir::RestirConfig  cfg;
@@ -155,4 +155,73 @@ TEST_CASE("ReSTIR temporal reuse: merging reservoirs across frames DROPS varianc
     CHECK(std::abs(mean_t - truth) < 0.03); // STILL unbiased after temporal reuse
     CHECK(var_t < var0 * 0.5);              // the merged estimator has ≥2× lower variance (more effective samples)
     CHECK(prev[uz(3)] > cur[uz(3)]);       // the merged reservoir's M grew beyond a single frame's M (bounded by the cap)
+}
+
+TEST_CASE("ReSTIR spatial reuse: merging K neighbour reservoirs DROPS variance further (unbiased, K+1 effective reservoirs)", "[kir][restir]")
+{
+    crd::memory::TlsfAllocator alloc(128U << 20U);
+    kir::restir::RestirConfig  cfg;
+    const int                  m = cfg.num_candidates;
+    const int                  k = cfg.spatial_neighbors;
+    const int                  n = 4096;
+
+    kir::KGraph       gr(&alloc);
+    const kir::KEntry eris = kir::restir::build_restir_ris(gr, cfg);
+    kir::KGraph       gs(&alloc);
+    const kir::KEntry esp = kir::restir::build_restir_spatial(gs, cfg);
+
+    const int lights = 16;
+    double    fj[16];
+    double    truth = 0.0;
+    for (int j = 0; j < lights; ++j) { fj[j] = 0.1 + 0.12 * static_cast<double>(j); truth += fj[j]; }
+    truth /= lights;
+
+    crd::containers::Array<crd::f64> cand(&alloc);
+    crd::containers::Array<crd::f64> res(&alloc);
+    crd::containers::Array<crd::f64> nbr(&alloc);
+    crd::containers::Array<crd::f64> xi(&alloc);
+    crd::containers::Array<crd::f64> out(&alloc);
+    cand.resize(uz(n * m * 3));
+    res.resize(uz(n * 4));
+    nbr.resize(uz(n * k));
+    xi.resize(uz(n * k));
+    out.resize(uz(n * 4));
+    crd::u32 s   = 20260715U;
+    auto     rnd = [&]() { s = s * 1664525U + 1013904223U; return static_cast<double>(s >> 8) / static_cast<double>(1U << 24); };
+    // one frame of RIS with the canonical p̂=f target (so resampling concentrates on high-contribution lights).
+    for (int p = 0; p < n; ++p)
+    {
+        for (int i = 0; i < m; ++i)
+        {
+            const int j        = static_cast<int>(rnd() * lights) % lights;
+            const int base     = (p * m + i) * 3;
+            cand[uz(base + 0)] = fj[j];
+            cand[uz(base + 1)] = fj[j];
+            cand[uz(base + 2)] = rnd();
+        }
+    }
+    kir::KernelBuffer rb[2] = {{cand.data(), n * m * 3, 0, 0}, {res.data(), n * 4, 0, 1}};
+    kir::eval_cpu_kernel(gr, eris, rb, 2, eris.local_size[0], &alloc, static_cast<crd::u32>(n / 64));
+    double mean0 = 0.0;
+    double var0  = 0.0;
+    stats(res, n, mean0, var0);
+
+    // each pixel pulls K random OTHER pixels as spatial neighbours (all pixels share the light set ⇒ every neighbour is valid).
+    for (int p = 0; p < n; ++p)
+    {
+        for (int j = 0; j < k; ++j)
+        {
+            nbr[uz(p * k + j)] = static_cast<double>(static_cast<int>(rnd() * n) % n);
+            xi[uz(p * k + j)]  = rnd();
+        }
+    }
+    kir::KernelBuffer sb[4] = {{res.data(), n * 4, 0, 0}, {nbr.data(), n * k, 0, 1}, {xi.data(), n * k, 0, 2}, {out.data(), n * 4, 0, 3}};
+    kir::eval_cpu_kernel(gs, esp, sb, 4, esp.local_size[0], &alloc, static_cast<crd::u32>(n / 64));
+
+    double mean_s = 0.0;
+    double var_s  = 0.0;
+    stats(out, n, mean_s, var_s);
+    CHECK(std::abs(mean_s - truth) < 0.03); // spatial reuse stays UNBIASED
+    CHECK(var_s < var0 * 0.5);              // K=4 neighbours ⇒ ≥2× lower variance (5 reservoirs' worth of candidates)
+    CHECK(out[uz(3)] > res[uz(3)]);         // the merged M grew beyond one reservoir's M
 }

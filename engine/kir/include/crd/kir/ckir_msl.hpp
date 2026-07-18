@@ -196,8 +196,8 @@ inline bool emit_compute_kernel_msl(const KGraph& g, const KEntry& entry, crd::m
         switch (nd.op)
         {
         case KOp::Const:
-            if (dt_is_uint(nd.dtype())) { app_uint(s, static_cast<int>(nd.cval)); s.append("u"); }
-            else if (dt_is_int(nd.dtype())) { app_uint(s, static_cast<int>(nd.cval)); }
+            // %lld (full 64-bit) via app_int_const — NOT static_cast<int> (MSVC clamps a u32 const > INT_MAX to INT_MIN).
+            if (dt_is_uint(nd.dtype()) || dt_is_int(nd.dtype())) { app_int_const(s, nd.cval, nd.dtype()); }
             else { app_flit(s, nd.cval); }
             break;
         case KOp::Builtin:
@@ -216,6 +216,15 @@ inline bool emit_compute_kernel_msl(const KGraph& g, const KEntry& entry, crd::m
         case KOp::Cos: fn1("cos"); break;
         case KOp::Exp: fn1("exp"); break;
         case KOp::Pow: fn2("pow"); break;
+        case KOp::Log: fn1("log"); break;
+        case KOp::Log2: fn1("log2"); break;
+        case KOp::Tanh: fn1("tanh"); break;
+        case KOp::Atan2: fn2("atan2"); break;
+        case KOp::Atan: fn1("atan"); break;
+        case KOp::Asin: fn1("asin"); break;
+        case KOp::Acos: fn1("acos"); break;
+        case KOp::Sinh: fn1("sinh"); break;
+        case KOp::Cosh: fn1("cosh"); break;
         case KOp::Floor: fn1("floor"); break;
         case KOp::Add: bin(" + "); break;
         case KOp::Sub: bin(" - "); break;
@@ -240,6 +249,33 @@ inline bool emit_compute_kernel_msl(const KGraph& g, const KEntry& entry, crd::m
         default: ok = false; s.append("0"); break;
         }
     };
+    // CSE (matches GLSL/HLSL/CUDA): materialize EVERY non-inline arithmetic node as a `t<node>` temp keyed by node id ⇒ a shared
+    // subtree emits ONCE. Without it the recursive `ev` inline-expands a value referenced M times M-fold, so a DEEP shared value
+    // DAG (the B15-b Perlin-Worley cloud density) explodes EXPONENTIALLY (OOM). LEAVES + cast/select/compare/bitops stay INLINE.
+    const auto is_inline_op = [](KOp op) -> bool {
+        switch (op)
+        {
+        case KOp::Const: case KOp::Builtin: case KOp::KernelLoopVar: case KOp::BufferLoad: case KOp::SharedLoad:
+        case KOp::BufferDecl: case KOp::SharedDecl: case KOp::Cast: case KOp::Select:
+        case KOp::CmpLt: case KOp::CmpLe: case KOp::CmpGt: case KOp::CmpGe: case KOp::CmpEq: case KOp::CmpNe:
+        case KOp::BitAnd: case KOp::BitOr: case KOp::BitXor: case KOp::Shl: case KOp::Shr: return true;
+        default: return false;
+        }
+    };
+    const auto decl = [&](auto&& self, int node) -> void {
+        const KNode& nd = g.node(node);
+        if (nd.op == KOp::BufferLoad || nd.op == KOp::SharedLoad) { self(self, nd.b); return; } // resource leaf: only the index carries temps
+        if (nd.a >= 0) { self(self, nd.a); }
+        if (nd.b >= 0) { self(self, nd.b); }
+        if (nd.c >= 0) { self(self, nd.c); }
+        if (!is_inline_op(nd.op) && matd[static_cast<crd::usize>(node)] == 0U)
+        {
+            s.append("  "); s.append(cty(nd.dtype())); s.append(" t"); app_uint(s, static_cast<crd::u32>(node)); s.append(" = ");
+            ev(ev, node); // matd[node] still 0 ⇒ one-level expr (children already materialized ⇒ temp refs)
+            s.append(";\n");
+            matd[static_cast<crd::usize>(node)] = 1U;
+        }
+    };
     const auto emit_body = [&](auto&& self_b, int begin, int count) -> void {
         int i = begin;
         while (i < begin + count) // a For/If body lives CONTIGUOUSLY after it → recurse then SKIP past it (never re-emit)
@@ -247,10 +283,11 @@ inline bool emit_compute_kernel_msl(const KGraph& g, const KEntry& entry, crd::m
             const KStmt& st = g.stmt(i);
             switch (st.kind)
             {
-            case KStmtKind::BufferStore: s.append("  buf"); app_uint(s, g.node(st.target).iidx); s.append("["); ev(ev, st.index); s.append("] = "); ev(ev, st.value); s.append(";\n"); ++i; break;
-            case KStmtKind::SharedStore: s.append("  sh"); app_uint(s, st.target); s.append("["); ev(ev, st.index); s.append("] = "); ev(ev, st.value); s.append(";\n"); ++i; break;
+            case KStmtKind::BufferStore: decl(decl, st.index); decl(decl, st.value); s.append("  buf"); app_uint(s, g.node(st.target).iidx); s.append("["); ev(ev, st.index); s.append("] = "); ev(ev, st.value); s.append(";\n"); ++i; break;
+            case KStmtKind::SharedStore: decl(decl, st.index); decl(decl, st.value); s.append("  sh"); app_uint(s, st.target); s.append("["); ev(ev, st.index); s.append("] = "); ev(ev, st.value); s.append(";\n"); ++i; break;
             case KStmtKind::Barrier: s.append(st.scope == BarrierScope::Buffer ? "  threadgroup_barrier(mem_flags::mem_device);\n" : "  threadgroup_barrier(mem_flags::mem_threadgroup);\n"); ++i; break;
             case KStmtKind::Materialize: // FREEZE st.value into a temp NOW (survives a later shared overwrite)
+                decl(decl, st.value);
                 if (matd[static_cast<crd::usize>(st.value)] == 0U)
                 {
                     s.append("  "); s.append(cty(g.node(st.value).dtype())); s.append(" t"); app_uint(s, static_cast<crd::u32>(st.value)); s.append(" = ");
@@ -259,13 +296,13 @@ inline bool emit_compute_kernel_msl(const KGraph& g, const KEntry& entry, crd::m
                 }
                 ++i;
                 break;
-            case KStmtKind::For: s.append("  for (uint lv"); app_uint(s, i); s.append(" = 0u; lv"); app_uint(s, i); s.append(" < uint("); ev(ev, st.value); s.append("); ++lv"); app_uint(s, i); s.append(") {\n"); self_b(self_b, st.body_begin, st.body_count); s.append("  }\n"); i = st.body_begin + st.body_count; break;
-            case KStmtKind::If: s.append("  if ("); ev(ev, st.value); s.append(") {\n"); self_b(self_b, st.body_begin, st.body_count); s.append("  }\n"); i = st.body_begin + st.body_count; break;
-            case KStmtKind::SpinUntilNonzero: s.append("  while (buf"); app_uint(s, g.node(st.target).iidx); s.append("["); ev(ev, st.index); s.append("] == 0u) { threadgroup_barrier(mem_flags::mem_device); }\n"); ++i; break;
-            case KStmtKind::SharedAtomicAdd: s.append("  atomic_fetch_add_explicit(&sh"); app_uint(s, st.target); s.append("["); ev(ev, st.index); s.append("], "); ev(ev, st.value); s.append(", memory_order_relaxed);\n"); ++i; break;
-            case KStmtKind::BufferAtomicAdd: s.append("  atomic_fetch_add_explicit((device atomic_uint*)&buf"); app_uint(s, g.node(st.target).iidx); s.append("["); ev(ev, st.index); s.append("], "); ev(ev, st.value); s.append(", memory_order_relaxed);\n"); ++i; break;
-            case KStmtKind::ForBreakIf: s.append("  if (("); ev(ev, st.value); s.append(") != 0u) break;\n"); ++i; break;
-            case KStmtKind::BufferTicket: s.append("  if (lidx == 0u) { sh"); app_uint(s, st.value); s.append("[0] = atomic_fetch_add_explicit((device atomic_uint*)&buf"); app_uint(s, g.node(st.target).iidx); s.append("["); ev(ev, st.index); s.append("], 1u, memory_order_relaxed); }\n"); ++i; break;
+            case KStmtKind::For: decl(decl, st.value); s.append("  for (uint lv"); app_uint(s, i); s.append(" = 0u; lv"); app_uint(s, i); s.append(" < uint("); ev(ev, st.value); s.append("); ++lv"); app_uint(s, i); s.append(") {\n"); self_b(self_b, st.body_begin, st.body_count); s.append("  }\n"); i = st.body_begin + st.body_count; break;
+            case KStmtKind::If: decl(decl, st.value); s.append("  if ("); ev(ev, st.value); s.append(") {\n"); self_b(self_b, st.body_begin, st.body_count); s.append("  }\n"); i = st.body_begin + st.body_count; break;
+            case KStmtKind::SpinUntilNonzero: decl(decl, st.index); s.append("  while (buf"); app_uint(s, g.node(st.target).iidx); s.append("["); ev(ev, st.index); s.append("] == 0u) { threadgroup_barrier(mem_flags::mem_device); }\n"); ++i; break;
+            case KStmtKind::SharedAtomicAdd: decl(decl, st.index); decl(decl, st.value); s.append("  atomic_fetch_add_explicit(&sh"); app_uint(s, st.target); s.append("["); ev(ev, st.index); s.append("], "); ev(ev, st.value); s.append(", memory_order_relaxed);\n"); ++i; break;
+            case KStmtKind::BufferAtomicAdd: decl(decl, st.index); decl(decl, st.value); s.append("  atomic_fetch_add_explicit((device atomic_uint*)&buf"); app_uint(s, g.node(st.target).iidx); s.append("["); ev(ev, st.index); s.append("], "); ev(ev, st.value); s.append(", memory_order_relaxed);\n"); ++i; break;
+            case KStmtKind::ForBreakIf: decl(decl, st.value); s.append("  if (("); ev(ev, st.value); s.append(") != 0u) break;\n"); ++i; break;
+            case KStmtKind::BufferTicket: decl(decl, st.index); s.append("  if (lidx == 0u) { sh"); app_uint(s, st.value); s.append("[0] = atomic_fetch_add_explicit((device atomic_uint*)&buf"); app_uint(s, g.node(st.target).iidx); s.append("["); ev(ev, st.index); s.append("], 1u, memory_order_relaxed); }\n"); ++i; break;
             case KStmtKind::SyncWarp: s.append("  simdgroup_barrier(mem_flags::mem_threadgroup);\n"); ++i; break;
             }
         }

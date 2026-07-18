@@ -30,7 +30,7 @@ struct SvgfConfig
     double sigma_l = 4.0;
     // temporal integration (B14-c-2)
     double alpha_min    = 0.05; // floor on the color/moment blend weight ⇒ history length caps at 1/α_min (~20 frames)
-    double depth_reject = 0.1;  // |Δdepth| disocclusion threshold (reject history when geometry moved too far)
+    double depth_reject = 0.1;  // crd-lint-allow-untagged-physical: dimensionless disocclusion threshold (ratio on the depth metric, not a physical length) — |Δdepth| reject bound
     double normal_reject = 0.9; // n·n' disocclusion threshold (reject on a normal flip)
     // A-SVGF adaptive-α (B14-c-4): when the incoming sample is an OUTLIER from the history (|Δl| ≫ σ_hist ⇒ a real change,
     // not noise), boost α toward 1 ⇒ the accumulation RESETS ⇒ no lag/ghosting on fast lighting/motion change.

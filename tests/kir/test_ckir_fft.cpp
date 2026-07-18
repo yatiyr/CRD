@@ -367,6 +367,35 @@ void conv2d_ref(int rows, int cols, const crd::f64* xr, const crd::f64* xi, cons
     }
 }
 
+// Direct UNNORMALISED inverse 2-D DFT: out[a][b] = sum_{kr,kc} X[kr][kc] * e^{+i 2pi (a*kr/rows + b*kc/cols)}.
+void idft2_ref(int rows, int cols, const crd::f64* xr, const crd::f64* xi, crd::f64* outr, crd::f64* outi)
+{
+    for (int a = 0; a < rows; ++a)
+    {
+        for (int b = 0; b < cols; ++b)
+        {
+            crd::f64 sr = 0.0;
+            crd::f64 si = 0.0;
+            for (int kr = 0; kr < rows; ++kr)
+            {
+                for (int kc = 0; kc < cols; ++kc)
+                {
+                    const crd::f64 ang = kTwoPi * (static_cast<crd::f64>(a) * static_cast<crd::f64>(kr) / static_cast<crd::f64>(rows)
+                                                   + static_cast<crd::f64>(b) * static_cast<crd::f64>(kc) / static_cast<crd::f64>(cols));
+                    const crd::f64 c   = crd::math::cos(ang);
+                    const crd::f64 s   = crd::math::sin(ang);
+                    const crd::f64 vr  = xr[kr * cols + kc];
+                    const crd::f64 vi  = xi[kr * cols + kc];
+                    sr += vr * c - vi * s;
+                    si += vr * s + vi * c;
+                }
+            }
+            outr[a * cols + b] = sr;
+            outi[a * cols + b] = si;
+        }
+    }
+}
+
 // Drive the FUSED 2-D FFT-convolution plan (7 dispatches) over the oracle: y = IFFT2(FFT2(x) ⊙ FFT2(h)). The filter's 2-D
 // spectrum H = FFT2(h) (via dft2_ref) is uploaded in TRANSPOSED layout (filt[v*rows+u] = H[u][v]) as the plan requires.
 void run_fft2d_conv(int rows, int cols, const crd::f64* xr, const crd::f64* xi, const crd::f64* hr, const crd::f64* hi,
@@ -1202,4 +1231,67 @@ TEST_CASE("B-cmp: CKIR R2C BATCHED (B=3) REAL 2-D conv == per-image circular con
     int bad = 0;
     for (int k = 0; k < rcb; ++k) { if (fabs64(buf(plan.res_re)[k] - refr[static_cast<crd::usize>(k)]) > 1e-2 * maxmag) { ++bad; } }
     CHECK(bad == 0);
+}
+
+TEST_CASE("B-cmp: batched STRIDED inverse 2-D FFT (build_fft2d_c2c_batched) == direct inverse DFT, every image", "[kir][kernel][fft][fft2d][batched]")
+{
+    constexpr int rows  = 16; // power of FOUR (radix-16/4 tiled column)
+    constexpr int cols  = 16;
+    constexpr int batch = 3;  // three DIFFERENT complex images share one dispatch set
+    constexpr int tilec = 8;  // columns per column-FFT block; must divide cols
+    constexpr int rc    = rows * cols;
+    const auto    uz    = [](int v) { return static_cast<crd::usize>(v); };
+
+    crd::memory::TlsfAllocator      alloc(128U << 20U);
+    crd::containers::Array<crd::f64> inr(&alloc); crd::containers::Array<crd::f64> ini(&alloc);
+    inr.resize(uz(rc * batch)); ini.resize(uz(rc * batch));
+    for (int i = 0; i < rc * batch; ++i)
+    {
+        inr[uz(i)] = crd::math::cos(0.11 * i) + 0.4 * crd::math::sin(0.03 * i + 1.0);
+        ini[uz(i)] = 0.3 * crd::math::sin(0.07 * i) - 0.2 * crd::math::cos(0.05 * i + 0.5);
+    }
+
+    kir::KGraph  g0(&alloc); kir::KGraph g1(&alloc);
+    kir::KGraph* graphs[2] = {&g0, &g1};
+    const kir::Fft2dPlan plan = kir::build_fft2d_c2c_batched(graphs, rows, cols, batch, /*inverse=*/true, tilec);
+
+    int off[16]; int total = 0;
+    for (int b = 0; b < plan.nbuffers; ++b) { off[b] = total; total += plan.buffers[b].size; }
+    crd::containers::Array<crd::f64> arena(&alloc);
+    arena.resize(uz(total), 0.0);
+    const auto buf = [&](int id) -> crd::f64* { return arena.data() + off[id]; };
+    const auto f32 = [](crd::f64 v) { return static_cast<crd::f64>(static_cast<float>(v)); };
+
+    for (int i = 0; i < rc * batch; ++i) { buf(plan.in_re)[i] = f32(inr[uz(i)]); buf(plan.in_im)[i] = f32(ini[uz(i)]); }
+    for (int k = 0; k < cols; ++k) { const crd::f64 a = kTwoPi * k / cols; buf(plan.tw_col_re)[k] = f32(crd::math::cos(a)); buf(plan.tw_col_im)[k] = f32(-crd::math::sin(a)); }
+    for (int k = 0; k < rows; ++k) { const crd::f64 a = kTwoPi * k / rows; buf(plan.tw_row_re)[k] = f32(crd::math::cos(a)); buf(plan.tw_row_im)[k] = f32(-crd::math::sin(a)); }
+
+    for (int pi = 0; pi < plan.npasses; ++pi)
+    {
+        const kir::Fft2dPass& p = plan.passes[pi];
+        kir::KernelBuffer      kb[8];
+        for (int k = 0; k < p.nbind; ++k) { kb[k] = kir::KernelBuffer{buf(p.bind[k]), plan.buffers[p.bind[k]].size, 0, static_cast<crd::u8>(k)}; }
+        kir::eval_cpu_kernel(*p.graph, p.entry, kb, p.nbind, p.entry.local_size[0], &alloc, p.num_workgroups);
+    }
+
+    crd::containers::Array<crd::f64> xr(&alloc); crd::containers::Array<crd::f64> xi(&alloc);
+    crd::containers::Array<crd::f64> rr(&alloc); crd::containers::Array<crd::f64> ri(&alloc);
+    xr.resize(uz(rc)); xi.resize(uz(rc)); rr.resize(uz(rc)); ri.resize(uz(rc));
+    crd::f64 maxerr = 0.0;
+    for (int im = 0; im < batch; ++im)
+    {
+        for (int i = 0; i < rc; ++i) { xr[uz(i)] = f32(inr[uz(im * rc + i)]); xi[uz(i)] = f32(ini[uz(im * rc + i)]); }
+        idft2_ref(rows, cols, xr.data(), xi.data(), rr.data(), ri.data());
+        for (int i = 0; i < rc; ++i)
+        {
+            const crd::f64 gr    = buf(plan.res_re)[im * rc + i];
+            const crd::f64 gi    = buf(plan.res_im)[im * rc + i];
+            const crd::f64 scale = 1.0 > (fabs64(rr[uz(i)]) + fabs64(ri[uz(i)])) ? 1.0 : (fabs64(rr[uz(i)]) + fabs64(ri[uz(i)]));
+            const crd::f64 er    = fabs64(gr - rr[uz(i)]) / scale;
+            const crd::f64 ei    = fabs64(gi - ri[uz(i)]) / scale;
+            maxerr = maxerr > er ? maxerr : er;
+            maxerr = maxerr > ei ? maxerr : ei;
+        }
+    }
+    CHECK(maxerr < 1e-3);
 }

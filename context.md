@@ -7,6 +7,27 @@
 
 ## Current focus — Phase 3.1.6 **v17 GPU compute (CKIR)** — on the **GPU-program-system detour** (D-007+D-008 MERGED)
 
+> **▶▶ LAST SHIPPED (2026-07-18 — session log `docs/sessions/2026-07-18-b16-close-units-typing.md`):** **B16 CLOSED (DoD green).**
+> The B16/B4 batch (displaced-geometry ocean + mesh-shader fast path + promotion, from 2026-07-15/16) passed its full close-out. The
+> close-out full sweep **peeled a tidy onion** of pre-existing issues prior sessions missed by running test *binaries* instead of full
+> ctest+shipping — all root-caused + fixed (SANITY, no debt): (1) tidy on 36 touched files (mesh-emitter locals, `ocean_grid` globals
+> → `k`-prefix); (2) **12 non-ASCII TEST_CASE names** → ASCII ([[feedback_ascii_only_test_names]]); (3) `std::pow`×3 → `crd::math::pow`
+> (Math Mandate); (4) a win-shipping **`C1001`/`C4789`** traced to the **`#deps 0` landmine** (win-shipping had the English
+> `msvc_deps_prefix` + VS-bundled `CMAKE_COMMAND`, re-armed by a GLOB reconfigure → stale pre-`m_stmts` KGraph obj) — wiped +
+> reconfigured with standalone CMake [[feedback_stale_toolset_path_in_build_dir_wipe_dont_sed]]; (5) the **untagged-physical guard**
+> resolved by a **full gold-standard units typing** of the CKIR sim/GI configs (atmosphere/ocean/ddgi/svgf): every dimensional field
+> → `Length`/`Velocity`/`Acceleration`/`Angle` + a custom `InverseLength` for 1/km extinction coeffs (SI-stored, `value_in` at the IR
+> boundary, **all round-trips bit-exact**); dimensionless tuning knobs stay raw with honest markers on the two heuristic
+> false-positives. **Verified green:** win-debug (full 5061), + focused build+test of the 7 touched targets on shipping/asan/release +
+> tidy build; bit-exact HELD (atmos 1562 · kir 34725 · vk 33023 · dx12 30821). ⚠ transient MSVC LTCG `C1001` cleared on retry (known,
+> BUILDING.md). B16-a-1 remaining scope (SSR/refraction/underwater/caustics) + B4 remaining carry forward.
+>
+> **▶▶ NEXT UP (D-007):** (1) **B4 — DX12 device mesh render** (PSO + `DispatchMesh`): full ready-to-apply design in
+> `docs/sessions/2026-07-18-*` / scratchpad — IR→DXIL mesh on-ramp (`ms_6_5`), `OPTIONS7 MeshShaderTier` gate + `Device2`/`CmdList6`,
+> hand-rolled mesh PSO stream, `create_mesh_program`+`draw_mesh`, then the bindless-depth ocean-meshlet variant + a DX12 mesh test
+> (debug-layer clean). Then B4 remaining: TASK stage · B4-vis visibility buffer · B4-tess · WGSL-portable `texture_2d_array` cascade.
+> (2) Then **B17 OIT → B18 hair → B19 3DGS → RT tier (C3/B9)**. (B16 detail → its session logs + the D-007 master doc.)
+
 > **▶ THE ONE MASTER DOC: `docs/detours/D-007-gpu-program-system.md`** — a single ordered subslice table (D-007 shader IR +
 > D-008 device convergence, merged 2026-07-11). Foundation + raster DONE: Phase A ✅ · fan-out ✅ · B0 ✅ · B3-a/a′ ✅ ·
 > C0/C1/C2 ✅ (device convergence CLOSED, I1+I2 shut, one VkDevice) · **B3-c/d ✅** (GLSL + HLSL VS+FS emitters) ·
@@ -692,9 +713,187 @@
 > recursive CPU-oracle's exponential re-walk (the oracle has no memo cache; it re-evaluates every shared subtree). Portability
 > metric is ABSOLUTE (a [0,1]/small-radiance LUT); ~1e-5 = the hardware exp/sqrt-vs-libm floor, all add/sub/mul/div bit-exact.
 > CPU-oracle tests run at reduced LUT resolution (the interpreter is O(texels·steps·nodes); physics + portability are per-texel
-> identical at any size — production uses the full 256×64 / 192×108 defaults). crd-kir 28982/145 + vulkan 840/82 [atmos] green;
-> tidy-clean. **NEXT: B15-a-4 aerial-perspective froxels (a 3D camera-frustum volume: in-scatter + transmittance per cell →
-> composites into B12-d fog); then B15-b volumetric clouds (Nubis, reusing B6 ckir_noise.hpp).**
+> identical at any size — production uses the full 256×64 / 192×108 defaults). tidy-clean.
+
+> **B15-a-4 aerial-perspective froxels — B15-a COMPLETE (2026-07-15).** `build_atmos_aerial` — a 3D camera-frustum volume: one
+> thread per (x,y) froxel column marches through the depth slices, writing each cell's running (RGB inscatter + mean
+> transmittance) via the same single+multiple-scatter integrand; composites into B12-d fog as `surface·T + inscatter`. CPU
+> physics: transmittance falls with depth, inscatter accumulates, bluish (Rayleigh); Vulkan 1.79e-5. **▶ B15-a is the full
+> Hillaire atmosphere: transmittance + multiscatter + sky-view + aerial, all CKIR, all CPU-physics + Vulkan verified.**
+
+> **B14-a ReSTIR COMPLETE + GI/atmosphere PERFORMANCE board (2026-07-15, user: "finish B14 no gaps, full crushing perf").**
+> (1) **ReSTIR SPATIAL reuse** `build_restir_spatial` — the other half of spatiotemporal reuse: generalises the 2-reservoir
+> temporal merge to K+1 (center + K screen neighbours), streaming WRS with one random per neighbour, merged W = Σ(all Σw)/(Σ all
+> M·p̂). CPU: unbiased + variance ≥2× lower (K=4 ⇒ 5 reservoirs' candidates); Vulkan 1.29e-7. **▶ B14-a ReSTIR = RIS + temporal
+> + spatial, complete.** So B14-a/b/c are all COMPLETE (ReSTIR + DDGI + SVGF); the only remaining B14 item is **B14-d NRC**, the
+> NEURAL tier whose crushing perf tier explicitly rides **B10 coop-vectors** (its FP32 MLP already crushes cuBLAS — the NRC
+> functional core = hash-grid encode + MLP inference/train is a large next slice). (2) **GPU PERF board** (`[.gi-bench]`, Vulkan
+> `last_gpu_ms` min-of-30, RTX 4070 Ti SUPER → `docs/bench/2026-07-15-gi-atmosphere-vulkan.md`): DDGI probe-sample **0.171 ms**
+> /1080p (12.2 Gqueries/s, ~65% peak BW), SVGF à-trous **0.236 ms**/1080p, ReSTIR RIS **0.527 ms**/262 k px, and the ENTIRE
+> Hillaire sky (4 LUTs) **~0.12 ms/frame**. The portable bit-exact IR runs in real time — zero portability tax. crd-kir
+> **30524/147** + vulkan **850/84** green; tidy-clean; bench board banked. **NEXT: B14-d NRC functional core; then B15-b clouds.**
+
+> **HONEST CRUSH — CKIR-emitted vs HAND-WRITTEN GLSL (2026-07-15, user: "honest crush as always, THEN B14-d NRC").**
+> `[.crush-bench]`: same algorithm, same buffers, GPU-timed, OUTPUT bit-matched (honesty gate). First measurement was a LOSS —
+> `build_restir_ris` **1.56× SLOWER** than hand-written (0.486 vs 0.312 ms) but BIT-IDENTICAL output ⇒ the loss is pure code
+> STRUCTURE: the statement-tier builders UNROLLED the M=32 candidate loop (32× straight-line + hoisted index temps → register
+> pressure → occupancy collapse on a memory-bound kernel). **SOLVED**: rewrote to a tight RUNTIME loop (`stmt_for_begin` +
+> per-thread SHARED reservoir accumulators) → **0.318 ms = PARITY** with the hand register loop (1.02×), crushes the old unroll
+> 1.53×, still bit-exact (Vulkan 1.11e-7). Two emitter hazards solved: shared-RMW re-read double-counts Σw (→ `stmt_materialize(Σw)`)
+> and a cross-scope temp `p` (used inside the loop AND at the post-loop output store → undefined ⇒ `stmt_materialize(p)` hoists
+> it). Transmittance (COMPUTE-bound) kept as UNROLL — its shared-loop was 1.47× WORSE; residual 1.23× vs a hand REGISTER loop is
+> the compute-emitter's lack of register-carried loop values (scoped gap; a negligible once/frame LUT). **⭐ RULE: memory/
+> occupancy-bound big loops → runtime SHARED loop, not unroll; compute-bound → unroll.** Boards:
+> `docs/bench/2026-07-15-ckir-vs-handwritten-glsl.md`. crd-kir 30524/147 + vulkan 850/84 green; tidy-clean.
+
+> **▶▶ B14-d NRC FUNCTIONAL CORE COMPLETE → ALL OF B14 DONE (2026-07-15, user: "finish B14-d, close B14").** The neural
+> radiance cache in CKIR (`engine/kir/include/crd/kir/ckir_nrc.hpp`, `crd::kir::nrc`, statement-tier; all Vulkan **bit-exact vs
+> oracle = 0.0**): **B14-d-1 `build_nrc_hashgrid_encode`** — the Instant-NGP MULTIRESOLUTION HASH-GRID encoder (L levels ×
+> trilinear-blended hashed features; verified zero-table→0, trilinear PARTITION-OF-UNITY, determinism); **B14-d-2
+> `build_nrc_infer`** — the cache query (encoded → ReLU hidden → RGB, == a hand-computed forward); **B14-d-3
+> `build_nrc_train_grad`** — the online-step BACKPROP (L2-loss gradient → dW1/dW2, verified == FINITE DIFFERENCES). The
+> coopmat/fused MLP PERF tier rides B10 (the FP32 MLP already crushes cuBLAS). **⛔ EMITTER BUG found + fixed: the statement-tier
+> compute Const emitter mangled a u32 constant > INT_MAX** (MSVC `static_cast<int>(2654435761)` → INT_MIN); the hash was the
+> first statement-tier kernel to use such a seed. Fixed to `app_int_const`/`%lld` across ALL 5 backends (glsl/hlsl/cuda/msl/wgsl);
+> golden byte-exact emissions held (small consts unchanged). **▶▶ B14 is COMPLETE — a/b/c/d: ReSTIR + DDGI + SVGF + NRC, the
+> full real-time GI stack in CKIR.** crd-kir **30531/150** + vulkan **864/86** green; tidy-clean.
+
+> **▶▶ B15-b VOLUMETRIC CLOUDS COMPLETE → B15 DONE (2026-07-15, "finish B15 full frontier, full crush/portability/zero bugs").**
+> Nubis (Schneider) in CKIR (`ckir_clouds.hpp`, both Vulkan bit-exact): **`build_cloud_density`** — the industry-standard
+> **PERLIN-WORLEY** shape (Perlin-FBM DILATED by inverted Worley-FBM = the cauliflower cumulus) × height gradient × coverage carve
+> × high-freq **WORLEY** erosion; **fully procedural + portable**, density∈[0,1], vanishes at slab edges, grows with coverage;
+> Vulkan 1.51e-7 (`optimize=true`) + **`build_cloud_march`** (BAKE density→3D VOLUME, march SAMPLES it trilinearly + BEER-POWDER +
+> light-march-to-sun + Cornette-Shanks phase + multi-octave MS; Vulkan 4.77e-7). **⛔⛔ SIX general CKIR portability wins found+
+> fixed:** (1) recursive CPU oracle had NO memo → deep noise graphs intractable → generation-keyed MEMOIZATION (guarded OFF for
+> subgroup ops) — full kir suite 200s→29s; (2) statement-tier Const emitter mangled u32 const > INT_MAX (`static_cast<int>`→
+> INT_MIN) → `app_int_const`/`%lld` all 5 backends; (3) `BitOr/And/Xor` of BOOL operands (`gradient3`'s `(h==12)|(h==14)`) emitted
+> illegal `bool|bool` → emit `||`/`&&`/`!=`; (4) UNROLLED 27-cell Worley blows shaderc+driver super-linearly → **`worley3_loop`
+> emits a RUNTIME LOOP over the 27 cells** (running-min order-INDEPENDENT ⇒ bit-exact; shared min accumulator) ⇒ gold Perlin-Worley
+> compiles in seconds; (5) the compute-kernel GLSL emitter's statement path is **SCALAR-ONLY** (vec3/dot/swizzle are raster-only) ⇒
+> compute noise must SCALARIZE; (6) a value shared across sibling For-bodies (or a top-level value stranded inside a loop) must be
+> `stmt_materialize`d at top level (else GLSL "undeclared identifier"); (7) a cross-backend emit gate then exposed that the
+> **CUDA/MSL/WGSL** compute emitters INLINE-EXPANDED values (no CSE, unlike GLSL/HLSL's `temped[]`) ⇒ the deep perlin+hash DAG blew
+> up EXPONENTIALLY (128 MB OOM) → gave all three the same node-id `decl`/`matd` materialization pass ⇒ all 5 backends emit the gold
+> cloud density compactly (debt `ckir-offhost-emitter-cse` FIXED same session; existing off-host structural tests unchanged). **▶▶
+> B15 COMPLETE — atmosphere + clouds, gold Perlin-Worley fully procedural, portable across ALL 5 backends.** crd-kir **30554/153** +
+> vulkan **874/88** green; tidy-clean.
+
+> **▶ B16 STARTED — WATER/OCEAN + CAUSTICS, full frontier 2026 (2026-07-15).** Audit first (user "full frontier"): the B8
+> **frontier technique stack** table now carries an explicit STATUS column — EVERY row's shader math is built + bit-exact both
+> backends (VSM/EVSM/MSM/PCSS/LTC/split-sum/Forward+/DQS all present; corrected a mis-audit — VSM *is* built); the only deferrals
+> are device/render-pipeline plumbing (uniform, post-detour) + B2-e sampler-feedback (DX12-only, non-portable). Then **[✅ B16-a-0]
+> transcendental compute substrate** — the ocean spectrum needs `log`/`tanh`/`atan2` (Box-Muller Gaussian · dispersion depth · wave
+> direction); the compute-kernel emitters only had `sqrt/sin/cos/exp/pow/floor` (the full set lived only in the raster emitter). Wired
+> `Log/Log2/Tanh/Atan2/Atan/Asin/Acos/Sinh/Cosh` into ALL 5 compute emitters (oracle's `apply_unary/binary` already had them); a
+> 5-backend emit gate + CPU-oracle test + **Vulkan dispatch = oracle to ULP (4.77e-7)** all green. crd-kir **30569/154**; tidy-clean.
+> **[✅ B16-a-1] ocean SPECTRUM** (`ckir_ocean.hpp` `build_ocean_spectrum`) — Horvath directional spectrum (DigiPro 2015: JONSWAP +
+> Mitsuyasu/Hasselmann spread + swell) + gravity-capillary finite-depth dispersion → h₀(k), pre-packing [h₀(k), conj(h₀(−k))] per
+> texel. CPU-oracle physics test green. **[✅ B16-a-2 (2026-07-15)] time-evolution + batched 2-D IFFT + assemble — the FULL FFT-ocean
+> update, portable + GPU-validated.** New `build_ocean_evolve` (h̃(k,t)=h₀e^{iωt}+conj(h₀(−k))e^{−iωt}, then Tessendorf's packing of
+> 8 real fields — height/displacement Dx,Dz/slope/Jacobian-gradients — into 4 EXACTLY-Hermitian complex spectra for ONE batched
+> IFFT) → `build_fft2d_c2c_batched` (NEW reusable 2-pass transpose-on-write STRIDED batched inverse 2-D FFT; extended
+> `build_fft1d_radix16`'s strided path with the per-image batch offset) → `build_ocean_assemble` (displacement map + shading normal +
+> Jacobian foam coverage). Verified: CPU-oracle end-to-end vs a direct inverse-DFT reference (foam∈[0,1], unit normals); batched IFFT
+> **bit-exact on Vulkan AND DX12** (re/im-bad 0); full pipeline (evolve→IFFT→assemble) **dispatches on Vulkan, maxrel 1.01e-6 vs oracle**.
+> kir 4130-assert ocean+fft2d green; all touched files tidy-clean. **⚠ HONEST BENCH (`docs/bench/2026-07-15-fft-ocean-batched-ifft.md`):
+> the BARE batched IFFT is at the campaign's no-FMA wall — parity/loss in the L2-resident regime (0.35–0.94× cuFFT; 48 MB L2 ⇒ n≤512·B≤16
+> stays resident), edging cuFFT only at the 512²·B=64 DRAM spill (1.03×). A plain IFFT has NO fusion lever ⇒ NOT a crush.**
+> **⭐ [✅ FUSION CRUSH — the SOLVE, built + measured] `build_ocean_evolve_rowfft`** folds the time-evolution INTO the row-IFFT's first
+> global load (computes h̃(k,t) + the field-f packed value inline, then the radix-4 row IFFT) ⇒ the ocean update collapses 4 dispatches →
+> 3, deleting the evolve dispatch + the whole packed-spectrum global round-trip. **Bit-exact vs the un-fused pipeline** (shared
+> `detail::dispersion`/`evolve_pack` helpers + identical radix-4 stages; CPU-oracle bad==0, and on **Vulkan** fused res == un-fused res
+> BIT-EXACT). Measured (`[.ocean-fused-bench]`, last_gpu_ms min-of-30): **N=256 1.13× · N=1024 1.10×** over the un-fused ocean — the
+> fewer-global-round-trips win a cuFFT-based ocean CANNOT match (cuFFT must run a separate evolve kernel writing the spectrum we delete).
+> Board updated: `docs/bench/2026-07-15-fft-ocean-batched-ifft.md`. (⚠ radix-4 fused; a radix-16 fused variant for the largest N + multi-
+> cascade batch>4 ride a-3.)
+> **⭐ [✅ 5-BACKEND EMIT GATE] the ocean kernels (spectrum/evolve/fused-rowfft/assemble) now EMIT on ALL FIVE compute backends**
+> (`test_ckir_kernel_emit.cpp` `[ocean]`: GLSL/HLSL/CUDA/MSL/WGSL, structural markers — tanh/barrier/select) — the "fully CKIR, fanned
+> out everywhere" proof (Vulkan+DX12 already RUN bit-exact/ULP; CUDA/MSL/WGSL golden-string like the rest of the campaign).
+> **▶ B16-a-3 STARTED (2026-07-15): the multi-scale ocean.** `OceanCascadeConfig` (C patches of different L, per-cascade λ) +
+> multi-cascade pipeline: a-2 run per cascade into **ONE batched 4·C-field IFFT** (the DRAM-bound regime the batched/fused crush
+> targets — 3 cascades = batch-12, CPU-verified each cascade vs a direct DFT reference + cascades distinct). `build_ocean_foam_accumulate`
+> — TEMPORAL foam (whitecaps persist ×decay, re-inject at Jacobian pinch: foam(t)=max(foam(t−1)·decay, inject)); CPU-verified.
+> crd-kir 4167-assert green; tidy-clean.
+> **[✅ a-3 GPU-VALIDATED] foam-accumulate BIT-EXACT on Vulkan + the multi-cascade batched IFFT at batch=4C (4/12/16) BIT-EXACT on
+> Vulkan+DX12.** ⚠ this exposed + FIXED a latent RACE in the shared `dispatch_fft2d` harness (missing `TransferDst→ShaderRead`
+> upload barrier → flaky/all-wrong once the grid > device occupancy, batch≥9; kernel was always correct — `[.ocean-ifft-bench]`
+> self-verified at batch 64). Root-fixed, batch 8–16 now bit-exact both backends; SANITY ledger + [[feedback_dispatch_1wg_missing_upload_barrier_race]].
+> **[✅ batch-4C crush bench]** the bare batched IFFT crushes only in the DRAM-bound regime (n=512·batch=64=128 MB ⇒ 1.03× as cuFFT
+> triples across its L2 spill); typical cascade counts (C=3–4) stay L2-resident ⇒ no-FMA wall, so the FUSION (1.10–1.13×) is the
+> regime-independent crush. Board updated.
+> **▶ B16-a-4 STARTED (2026-07-15): water shading.** New `ckir_water.hpp` (`crd::kir::water`) — **[✅ a-4-1 core] `water_shade`**:
+> the frontier water surface BRDF — air-water Schlick Fresnel DIELECTRIC split (sky env + GGX sun glitter on the reflected side vs
+> Beer-Lambert depth-absorbed refraction on the transmitted side) + subsurface backscatter (backlit-wave glow) + foam overlay, reusing
+> the B8 `lighting::d_ggx`/`f_schlick_scalar`. **Bit-exact vs a line-by-line f64 reference** on the CPU oracle (`[water]`; the graph
+> runs F64 to isolate op structure — the B8 methodology). ⭐ ARCHITECTURE NOTE: water shading is FRAGMENT-stage (vec3 dot/swizzle), so
+> it fans out via the **raster** path (GLSL/HLSL/MSL/WGSL — the fragment-capable backends), NOT the 5-compute-backend gate the ocean
+> SIMULATION uses (the compute-kernel emitters are scalar-only + CUDA has no fragment stage). ⛔ debugging scar: `eval_cpu` shape must be
+> `make_shape({kN})` not `{1}` (a `{1}` graph processes one element ⇒ the uninitialised output tail reads garbage, masquerading as a
+> math blow-up). crd-kir green; tidy-clean.
+> **[✅ a-4-2 beauty pieces] `ocean_sun_glitter`** — the SIGNATURE broad sun path: a GGX lobe whose roughness comes from the wave-SLOPE
+> VARIANCE σ² (α=√(2σ²), Beckmann-slope↔GGX) so the highlight is a wide statistical sparkle (far/rough water broadens it), not a plastic
+> point; reuses the B8 microfacet core (d_ggx·v_smith·F·NoL). **`sky_color`** — analytic horizon→zenith gradient + a soft exp sun disk+halo
+> for the reflected ray (until the reflected ray samples the B15 Hillaire sky / SSR). Both **bit-exact vs f64 references** (`[water]` 3 cases).
+> **⭐ [✅ a-4-1 RASTER OBSERVABLE — IT RENDERS] `water_shade` DRAWS on Vulkan AND DX12, PIXEL-IDENTICAL.** Shared `build_water_fs`
+> (`ckir_raster_triangle.hpp`) — a fullscreen water quad, normal tilting with FragCoord so the Fresnel + sun glint sweep, Reinhard-
+> tonemapped — through the create_program seam: **centre RGB (6,29,29) deep teal body + a bright white sun glint (maxlum 645), byte-for-byte
+> the same on both backends** (`[raster][ocean]`). This is the fragment fan-out proof (shading is fragment-stage ⇒ raster backends, per the
+> a-4-1 architecture note) AND the "see it render" milestone — the water is real on real GPUs. tidy-clean.
+> **NEXT (finish a-4): (1)** the world-uv multi-cascade COMBINE (B2 texture sample of the C cascade maps) + fold `ocean_sun_glitter`/`sky_color`
+> into the master shader (displaced/tessellated water mesh consuming the a-3 displacement/normal/foam maps); **(2)** screen-space SSR reflection
+> + underwater god-rays (Arc Blanc JCGT 2025). Then **B16-b caustics**. Deferred to B16-close: full 4-config sweep.
+> **[✅ DISPLACED-GEOMETRY OCEAN, 2026-07-16] — the fragment normal-map showed the FFT's full spectrum as busy "white noise"; the
+> smooth directional swells (gasgiant/AC4 refs) need real displaced GEOMETRY.** New CKIR op **`SampleIndexedLod`** (bindless ARRAY
+> sample at an explicit LOD — the combo CKIR lacked, since a VS has no derivatives; appended at END of `KOp`, cook-stable; builder
+> `tex_sample_at_lod` with lod in the ext pool; GLSL+HLSL emitters + nonuniform gate; MSL/WGSL graceful-defer = same status as the
+> existing bindless SampleIndexed). Then the **Johanson PROJECTED-GRID** water: `build_ocean_displaced_vs` (screen-space lattice from
+> `VertexIndex`, raycast onto the water plane with the EXACT FS camera, SampleIndexedLod-displaced by the swell height with a distance
+> LOD ramp + far-taper for a clean horizon, projected back with the inverse-camera closed form — **no mat4**) + `build_ocean_water_geo_fs`
+> (shades from the interpolated world pos; the high-freq CHOP is a **per-pixel mip-filtered normal map** in the FS — has derivatives ⇒
+> NO aliasing, the "white noise" fix — the AAA split: geometry=swell, FS-normal=chop). Rendered `[.ocean-frame]` → **`ocean_geo_*.bmp`**:
+> real 3-D swell silhouettes, crisp detail, calm directional rollers, teal SSS, intermittent foam, clean hazy horizon — matches/beats the
+> AC4 reference. Composited over the fragment sky by coverage-α (no new context load-op). Built+ran win-release (66 asserts green).
+> **[✅ 4-CASCADE + JOINT-JACOBIAN FOAM, 2026-07-16 — user art-direction]** production 4-spectrum ocean (`OceanCascadeRender`): 4
+> non-harmonic world scales (LCM tiling ⇒ non-repeating); BIG cascades carry high-amplitude rolling-swell GEOMETRY, FINE cascades are
+> low-amplitude per-pixel normal detail. Each bakes `[nx,nz,h,½(1−J)]`; the FS SUMS the per-cascade folds → the JOINT Jacobian foam
+> (folding of the combined surface — first-order exact) ⇒ generous whitecaps across the crests. Teal-green body + stronger sun-glitter
+> path. Widened the projected-grid over-fetch (no corner gaps). Matches reference #2 (a Sea-of-Thieves-class confused sea). 87 asserts
+> green.
+> **[✅ B4 MESH-SHADER CORE — GPU-PROVEN 2026-07-16]** the modern amplification path runs end-to-end in CKIR: a `Mesh` KEntry
+> (`mesh_vertices`/`mesh_primitives`/`mesh_prim`, per-vertex position+out from the workgroup builtins; entry_valid checks) →
+> `emit_mesh_glsl` (GL_EXT_mesh_shader: SetMeshOutputsEXT + guarded gl_MeshVerticesEXT[tid]/gl_PrimitiveTriangleIndicesEXT[tid]) →
+> shaderc `shaderc_mesh_shader` @ SPIR-V 1.4 → device: **VK_EXT_mesh_shader + meshShader + maintenance4** (gated so the non-mesh
+> device is byte-identical), a mesh shader object (**NO_TASK_SHADER flag** — the fix for an else-silent device-lost) via
+> `create_mesh_program`, **vkCmdDrawMeshTasksEXT** via `draw_mesh`. The `[mesh]` triangle proof RENDERS (red-center/blue-corner,
+> pixel-identical to vertex-pull). ⭐ scar: raster Vec2/Vec3 emitter hardcoded `vec3(` → a uvec3 emitted `vec3(...)` (compile fail);
+> fixed to `vtype(nd.type)` (no-op for float ⇒ canary held). Full raster suite 614 asserts green + ocean 87 green (no regression).
+> **[✅ OCEAN MESHLETS RENDER 2026-07-16]** the 4-cascade ocean renders as MESHLETS pixel-identical to vertex-pull:
+> `ocean_projected_vertex` factored as the ONE shared raycast/displace/project; `build_ocean_displaced_mesh` (8×8-vertex patches,
+> 32×32=1024 meshlets, WorkgroupIndex→patch + LocalInvocationIndex→local vert/prim) + `draw_mesh_bindless_depth`. `ocean_mesh_*.bmp`
+> == `ocean_geo_*.bmp`. ⭐ 3 device scars: (1) glslang caps mesh local_size at 128 → 8×8 patch (98 threads); (2) VUID-08690 — with
+> meshShader enabled EVERY vkCmdDraw must bind MESH=null (else device-lost) → set_draw_state does it; (3) **nonuniformEXT on a
+> CONSTANT bindless index returns ZERO in a mesh shader (NVIDIA)** → emitter omits it for constant indices (what made the mesh
+> displacement finally read the FFT). Raster suite 614 green, ocean 102 green.
+> **[✅ B16 VISUAL POLISH 2026-07-16 — user spec]** the ocean now looks awesome (matches ref_ocean_2.png): (1) TEMPORAL foam
+> restored (22-step warmup, foam=max(prev·decay,inject), decay 0.965 — accumulates then fades exponentially, never instant) +
+> TEXTURED in the FS (Worley bubbles + fractal break-up, not flat gray); (2) GENTLE waves + amplitude split (low-freq tall geometry,
+> high-freq normal-map); (3) SEAMLESS horizon (grazing veil → output ALPHA = transparency to the real sky, dissolves the seam);
+> (4) AA SSAA 3×; (5) god rays tuned (visible shafts, no white-out); (6) DARKER defined clouds (coverage 0.66 + density self-shadow).
+> [[project_ocean_visual_gaps_before_b16_close]]. Ocean 105 asserts green. **NEXT: B16-close DoD (tidy + 4-config sweep), then carry
+> on D-007 (B17 OIT → …). Minor remaining: faint horizon line, softer sun, more directional god-ray shafts.**
+> **[✅ HLSL MESH EMITTER 2026-07-16]** `emit_mesh_hlsl` (DX12/SM-6.5: `[outputtopology]`+`[numthreads]`+`SetMeshOutputCounts`+`out
+> vertices`/`out indices`, SV_Position LAST); DXC `ms_6_5`/`as_6_5` wired; the `[hlsl][mesh]` gate compiles the triangle + the real
+> bindless ocean meshlet HLSL → SPIR-V via DXC. **Mesh portability: Vulkan RENDERS · DX12 emit+DXC-validated · WGSL/MSL = vertex-pull
+> fallback** (WebGPU has no mesh; caller guards on `mesh_shader()`). Raster 620 green. **▶ #1 mesh-shader fast path DONE (Vulkan render
+> + DX12 emit).** **NEXT: #2 PROMOTE the ocean out of the harness into a reusable node-editor-drivable CKIR pass (+ the WGSL-portable
+> texture_2d_array form of the bindless-LOD sampling); then B16-close DoD (tidy + 4-config sweep).**
+> **[✅ #2 PROMOTE 2026-07-16]** the displaced-geometry ocean render pass is lifted out of the test harness into the ENGINE —
+> new `engine/kir/include/crd/kir/ckir_water_render.hpp` (`crd::kir::water`): `OceanCascadeRender` config + `ocean_grid` camera +
+> the shared `ocean_projected_vertex` + `build_ocean_displaced_vs` (vertex-pull) + `build_ocean_displaced_mesh` (meshlets) +
+> `build_ocean_water_geo_fs` (surface). The renderer + node editor can now drive it; the tests alias it into `crd::gputest` (call
+> sites unchanged). Ocean 102 green, raster 620 green (identical render). **▶ #1 + #2 + #3 all DONE.** **NEXT: B16 VISUAL POLISH
+> (user-flagged 2026-07-16, must-fix for gold — [[project_ocean_visual_gaps_before_b16_close]]: horizon-seam outline, streaky foam,
+> softer sun, wispy clouds vs ref_ocean_2.png), then B16-close DoD (tidy + 4-config sweep), then carry on D-007 (B17 OIT → …).**
 
 > **Increment 19 ✅: CKIR PORT increment 5 — DX12 backward + CUDA TENSOR backward (2026-07-14).** (a) The FP32-precise
 > statement-tier backward now runs on DX12 too — bad_dz==0, bad_dw==0, BIT-IDENTICAL to Vulkan + oracle (deterministic dW

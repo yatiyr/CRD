@@ -222,6 +222,13 @@ public:
     [[nodiscard]] virtual std::unique_ptr<class ITexture>
     create_texture(crd::u32 width, crd::u32 height, const void* rgba) = 0;
 
+    // Like `create_texture` but with a FULL MIP CHAIN (box-filtered down the pyramid), so minified sampling filters instead of
+    // aliasing — essential for a tiled surface viewed to the horizon (the FFT ocean). The default bilinear/repeat sampler is
+    // LINEAR-mipmap, so implicit-LOD `KOp::TexSample` picks the right level per fragment. Default falls back to the single-level
+    // `create_texture` (backends without mip generation still work — just unfiltered at minification).
+    [[nodiscard]] virtual std::unique_ptr<class ITexture>
+    create_texture_mipped(crd::u32 width, crd::u32 height, const void* rgba) { return create_texture(width, height, rgba); }
+
     // Clear + draw with `texture` bound to the fragment shader's texture slot (Vulkan set 0 / binding 1 sampled image +
     // binding 2 sampler; DX12 t1 SRV + s2 sampler). The program's FS samples it (`KOp::TexSample`) through a default
     // bilinear/repeat sampler. Result host-readable via `read_pixel`.
@@ -254,6 +261,37 @@ public:
     // B2-d: true iff dynamic/non-uniform texture-array indexing (bindless) is usable (Vulkan: the descriptor-indexing
     // feature; DX12: resource-binding tier 2+, effectively always). draw_bindless still runs when false (uniform index only).
     [[nodiscard]] virtual bool supports_bindless() const noexcept = 0;
+
+    // B16: like draw_bindless, but into a `create_color_depth_target` with a DEPTH TEST (clear to `clear_depth`, `compare` op) —
+    // for DEPTH-OCCLUDED displaced geometry: the vertex-displaced ocean grid, where a near wave must hide the trough behind it.
+    // The bound cascade textures are VERTEX+FRAGMENT visible, so the VS samples the FFT DISPLACEMENT to move each grid vertex.
+    // Default (backends without the override) falls back to a depthless draw_bindless.
+    virtual void draw_bindless_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear, float clear_depth,
+                                     DepthCompare compare, ITexture* const* textures, crd::u32 count, crd::u32 vertex_count)
+    {
+        (void)clear_depth;
+        (void)compare;
+        draw_bindless(target, program, clear, textures, count, vertex_count);
+    }
+
+    // B4: create a MESH+FRAGMENT program (the modern amplification path — the mesh shader generates geometry directly, no vertex
+    // input). Default (no mesh-shader support) ⇒ nullptr, so the caller falls back to the vertex-pull path. WebGPU has no mesh
+    // shaders, so this stays backend-optional.
+    [[nodiscard]] virtual std::unique_ptr<IRasterProgram> create_mesh_program(IGpuProgram& /*mesh*/, IGpuProgram& /*fragment*/)
+    {
+        return nullptr;
+    }
+
+    // B4: clear `target` and dispatch `group_count` mesh workgroups (a mesh program from create_mesh_program). Colour-only —
+    // the mesh-shader proof. Default (backends without mesh shaders) ⇒ no-op. Result host-readable via `read_pixel`.
+    virtual void draw_mesh(IRasterTarget& /*target*/, IRasterProgram& /*program*/, ClearColor /*clear*/, crd::u32 /*group_count*/) {}
+
+    // B4: like draw_bindless_depth, but the geometry comes from a MESH program — `group_count` meshlet workgroups instead of a
+    // vertex count. The bindless cascade textures are bound for the mesh shader (it samples the FFT displacement). The ocean
+    // fast path. Default (no mesh shaders) ⇒ no-op; the caller uses draw_bindless_depth (vertex-pull) instead.
+    virtual void draw_mesh_bindless_depth(IRasterTarget& /*target*/, IRasterProgram& /*program*/, ClearColor /*clear*/,
+                                          float /*clear_depth*/, DepthCompare /*compare*/, ITexture* const* /*textures*/,
+                                          crd::u32 /*count*/, crd::u32 /*group_count*/) {}
 
     // --- B5: deferred G-buffer (MRT) — a material writes its OpenPBR surface to N colour attachments -------------------
 

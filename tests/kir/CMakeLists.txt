@@ -26,6 +26,10 @@ add_executable(crd-kir-tests
     test_ckir_ddgi.cpp
     test_ckir_restir.cpp
     test_ckir_atmosphere.cpp
+    test_ckir_nrc.cpp
+    test_ckir_clouds.cpp
+    test_ckir_ocean.cpp
+    test_ckir_water.cpp
 )
 
 target_link_libraries(crd-kir-tests PRIVATE

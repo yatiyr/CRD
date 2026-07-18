@@ -5,6 +5,42 @@ move to a session log entry and remove from here.
 
 ## Active debt
 
+### `b16-b4-ocean-mesh-followons` — B16/B4 open follow-ons after the displaced-ocean + mesh-shader session (filed 2026-07-16)
+
+> Not blockers — the ocean renders (Vulkan) + the mesh path is proven; these finish B16/B4 in gold standard. Session:
+> `docs/sessions/2026-07-16-b16-displaced-ocean-mesh-shaders.md`. Mesh device scars: [[feedback_mesh_shader_device_scars]].
+>
+> 1. **B16-close DoD** (owed before B16 closes) — clang-tidy on the touched headers (`ckir.hpp`, `ckir_glsl.hpp`, `ckir_hlsl.hpp`,
+>    `ckir_water_render.hpp`) + the gpu-context sources, and the **4-config per-slice sweep** (win-debug + clang-cl + asan +
+>    shipping, both backends). This session verified only `win-release` (the ocean render is a `[.ocean-frame]` visual test).
+> 2. **DX12 device mesh render** — `emit_mesh_hlsl` is DXC-validated (compiles to DXIL) but there is NO DX12 device draw yet: needs
+>    a mesh-shader PSO (MS+PS) + `DispatchMesh` + a `create_mesh_program`/`draw_mesh` in the DX12 raster context (mirrors the
+>    Vulkan `VK_EXT_mesh_shader` path). Also the **TASK/amplification** stage, and **B4-vis** (visibility buffer) / **B4-tess**.
+> 3. **WGSL/MSL portability of the cascade sampling** — `SampleIndexedLod` is bindless (descriptor-array); WebGPU has no bindless,
+>    so the portable form is a `texture_2d_array` layer + `textureSampleLevel`. Rework the ocean cascade textures to a layered
+>    array so the vertex-pull ocean lowers to WGSL/MSL too (mesh shaders don't exist on WebGPU — that stays vertex-pull anyway).
+> 4. **Minor ocean visual polish** — a faint residual horizon line, a slightly softer sun, more directional god-ray shafts.
+>    → [[project_ocean_visual_gaps_before_b16_close]].
+
+### ✅ `ckir-offhost-emitter-cse` — FIXED 2026-07-15 (CUDA/MSL/WGSL compute emitters now CSE like GLSL/HLSL). No remaining debt.
+
+> **Was:** the **GLSL/HLSL** compute-kernel emitters materialize every arithmetic node as a temp keyed by node id (`temped[]`), so a
+> shared subtree emits ONCE. The three off-host emitters — `emit_compute_kernel_cuda` / `_msl` / `_wgsl` — instead **inline-expanded**
+> each value recursively (`ev(self, nd.a)`) with **no temp cache**, re-emitting a node's whole subtree once per reference. Shallow
+> kernels (the `build_reverse` gate, FFT/transpose butterflies = one-shallow-expression-per-statement) were fine — which is why it
+> was never caught — but a **DEEP shared value DAG** (the B15-b Perlin-Worley cloud density: a 3-octave Perlin FBM + the
+> Burtle-Jenkins hash in one final-store expression) expanded EXPONENTIALLY: emitting it to CUDA/MSL/WGSL exhausted a 128 MB TLSF
+> arena (`TlsfAllocator: out of memory`).
+>
+> **Fix (this session):** gave all three off-host emitters the same node-id materialization the GLSL/HLSL path uses — an
+> `is_inline_op` predicate + a `decl` pass that emits every non-inline arithmetic node ONCE as a `t<node>` temp (children first),
+> keyed by the existing `matd[]` array, and wired `decl(...)` before each statement's value/index in `emit_body`. Leaves + cast/
+> select/compare/bitops stay inline. Determinism is unaffected (CUDA compiles `--fmad=false`; the temps only dedupe). The five-backend
+> emit gate `tests/kir/test_ckir_kernel_emit.cpp` "Perlin-Worley cloud density emits on ALL backends" now passes; all existing
+> off-host structural `has(...)` checks (reverse/select/FFT) were UNCHANGED (materialization only adds temp-decl lines; the checked
+> substrings are signatures/barriers/inline ops). Full kir 30554/153 green. Mission "portable across ALL backends" now holds for
+> deep kernels at the emit level (real CUDA/Metal/WebGPU compile+run remains ADR-0098 Part C). → this session (2026-07-15 clouds).
+
 ### `dct-gcc-f32-werror-conversion` — pre-existing gcc-f32 `-Werror=conversion` in `dct.hpp` (found 2026-06-15)
 
 `engine/hesap-fft/include/crd/hesap/fft/dct.hpp:244` (and the sibling DCT-III/DST-III direct loops) computes

@@ -100,6 +100,8 @@ struct ShadercApi
     {
     case ShaderStage::Vertex: return shaderc_vertex_shader;
     case ShaderStage::Fragment: return shaderc_fragment_shader;
+    case ShaderStage::Mesh: return shaderc_mesh_shader; // B4: modern amplification path (needs SPIR-V ≥1.4 — we target 1.6)
+    case ShaderStage::Task: return shaderc_task_shader;
     case ShaderStage::Compute:
     default: return shaderc_compute_shader;
     }
@@ -166,7 +168,8 @@ public:
 
         const shaderc_compile_options_t opts = m_api.options_initialize();
         m_api.options_set_target_env(opts, shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_3);
-        m_api.options_set_target_spv(opts, shaderc_spirv_version_1_6);
+        m_api.options_set_target_spv(opts, shaderc_spirv_version_1_6); // mesh included: LocalSizeId is fine with maintenance4,
+                                                                       // and bindless nonuniformEXT (the ocean mesh) needs ≥1.5
         // Run shaderc's spirv-opt PERFORMANCE passes — WITHOUT this shaderc defaults to optimization_level_zero and
         // ships UNOPTIMIZED SPIR-V (redundant loads, no code motion / register coalescing) ⇒ the driver JITs poor SASS.
         // This was the ~30× gap between our GLSL GEMM and the identical CUDA schedule (nsys: SM-issue 1.5%). (v17-h)

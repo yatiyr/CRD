@@ -9,6 +9,7 @@
 
 #include <crd/kir/ckir.hpp>      // C1-c: create_program(KGraph, KEntry) — the IR on-ramp
 #include <crd/kir/ckir_fft.hpp>    // B-cmp Phase 1: build_fft1d_radix2 (the CKIR FFT authoring layer)
+#include <crd/kir/ckir_ocean.hpp>  // B16-a: the FFT-ocean kernels (spectrum/evolve/assemble)
 #include <crd/kir/ckir_reduce.hpp> // B-cmp: build_reduce (the CKIR device-wide reduction)
 #include <crd/kir/ckir_scan.hpp>   // B-cmp: build_scan (the CKIR device-wide prefix sum)
 #include <crd/kir/ckir_sort.hpp>   // B-cmp: build_sort_* (the CKIR stable LSD radix sort)
@@ -17,6 +18,8 @@
 #include <crd/kir/ckir_ddgi.hpp>   // B14-b: build_ddgi_sample (the DDGI probe-sampling GI lookup)
 #include <crd/kir/ckir_restir.hpp> // B14-a: build_restir_ris/temporal (the ReSTIR reservoir/RIS estimator)
 #include <crd/kir/ckir_atmosphere.hpp> // B15-a: build_atmos_transmittance (the Hillaire/Bruneton sky-atmosphere LUTs)
+#include <crd/kir/ckir_nrc.hpp>        // B14-d: build_nrc_hashgrid_encode (the Instant-NGP hash-grid encoder for the NRC)
+#include <crd/kir/ckir_clouds.hpp>     // B15-b: build_cloud_density (the Nubis volumetric-cloud density field)
 #include <crd/kir/ckir_glsl.hpp> // B-cmp: emit_compute_kernel_glsl (the shared-memory compute-kernel emitter)
 #include <crd/kir/ckir_hlsl.hpp> // B3-d: emit_stage_hlsl (the HLSL VS/FS emitter)
 
@@ -32,6 +35,7 @@
 
 #include <chrono>
 #include <cstdio>
+#include <cmath>   // std::lround for the god-ray tone quantisation
 #include <cstdlib> // std::abs(int) for the readback tolerance
 #include <cstring>
 #include <memory>
@@ -268,6 +272,47 @@ TEST_CASE("D-007 B3-d: emit_stage_hlsl VERTEX + FRAGMENT HLSL compiles to SPIR-V
     CHECK_FALSE(kir::emit_stage_hlsl(bg, be, &alloc, bk));
 }
 
+// D-007 B4: emit_mesh_hlsl (the DX12 / Shader-Model-6.5 mesh emitter) produces valid HLSL — DXC lowers it to SPIR-V. Proves the
+// mesh IR lowers to the DX12 backend too (the device-side mesh PSO + DispatchMesh is the DX12 render follow-up; the Vulkan mesh
+// path already renders end-to-end). Covers the triangle AND the real bindless ocean meshlet.
+TEST_CASE("D-007 B4: emit_mesh_hlsl MESH shader compiles to SPIR-V via DXC (the DX12 mirror)",
+          "[gpu-context][vulkan][gpu][program][raster][hlsl][mesh]")
+{
+    namespace kir = crd::kir;
+    crd::memory::TlsfAllocator alloc(8U << 20U);
+    const auto probe = crd::gpu::compile_hlsl_to_spirv(
+        crd::gpu::ShaderStage::Vertex,
+        crd::containers::StringView("float4 main() : SV_Position { return float4(0,0,0,1); }"), "b4_probe", &alloc);
+    if (!probe.ok)
+    {
+        WARN("dxc unavailable; skipping B4 mesh HLSL gate");
+        return;
+    }
+
+    // (1) the mesh TRIANGLE — the SAME graph the Vulkan mesh render draws.
+    kir::KGraph mg(&alloc);
+    kir::KEntry me;
+    crd::gputest::build_triangle_mesh(mg, me);
+    kir::GlslKernel mk(&alloc);
+    REQUIRE(kir::emit_mesh_hlsl(mg, me, &alloc, mk));
+    const auto mspv = crd::gpu::compile_hlsl_to_spirv(crd::gpu::ShaderStage::Mesh, crd::containers::to_view(mk.source), "b4_tri_ms", &alloc);
+    INFO(crd::containers::String(mspv.error_message).c_str());
+    REQUIRE(mspv.ok);
+    CHECK(mspv.spirv.size() >= 4U);
+
+    // (2) the OCEAN meshlet — bindless SampleIndexedLod displacement + a world-position interpolant, the real fast path.
+    crd::gputest::OceanCascadeRender ocr;
+    kir::KGraph og(&alloc);
+    kir::KEntry oe;
+    crd::gputest::build_ocean_displaced_mesh(og, oe, 32, 8, ocr);
+    kir::GlslKernel ok(&alloc);
+    REQUIRE(kir::emit_mesh_hlsl(og, oe, &alloc, ok));
+    const auto ospv = crd::gpu::compile_hlsl_to_spirv(crd::gpu::ShaderStage::Mesh, crd::containers::to_view(ok.source), "b4_ocean_ms", &alloc);
+    INFO(crd::containers::String(ospv.error_message).c_str());
+    REQUIRE(ospv.ok);
+    CHECK(ospv.spirv.size() >= 4U);
+}
+
 TEST_CASE("D-008 C2-a: a windowed context is render-capable; headless is unchanged", "[gpu-context][vulkan][gpu]")
 {
     // Headless (the compute default) stays render-INCAPABLE — the compute path is byte-for-byte unchanged.
@@ -463,6 +508,58 @@ TEST_CASE("D-007 B3-e: IR-authored triangle draws on Vulkan (CKIR graph -> SPIR-
     const crd::u32 centre = target->read_pixel(dim / 2U, dim / 2U);
     const crd::u32 corner = target->read_pixel(0U, 0U);
     CHECK((centre & 0xFFU) >= 250U);          // R high  ⇒ red (inside the IR-authored triangle)
+    CHECK(((centre >> 16U) & 0xFFU) <= 5U);   // B low
+    CHECK((corner & 0xFFU) <= 5U);            // R low   ⇒ blue clear (outside)
+    CHECK(((corner >> 16U) & 0xFFU) >= 250U); // B high
+}
+
+// D-007 B4: the SAME triangle emitted by a MESH shader (the modern amplification path) — CKIR mesh entry → GL_EXT_mesh_shader
+// → a mesh shader object → vkCmdDrawMeshTasksEXT → pixels. Proves the whole mesh pipeline end-to-end. The center must be red
+// (inside the mesh-emitted triangle) and a corner blue (the clear) — identical to the vertex-pull result above.
+TEST_CASE("D-007 B4: IR-authored MESH-shader triangle draws on Vulkan (CKIR mesh entry -> mesh shader object -> pixels)",
+          "[gpu-context][vulkan][gpu][raster][mesh]")
+{
+    namespace kir = crd::kir;
+
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    if (!vk->shader_object()) { WARN("adapter has no VK_EXT_shader_object; skipping"); return; }
+    if (!vk->mesh_shader()) { WARN("adapter has no VK_EXT_mesh_shader; skipping the mesh draw"); return; }
+
+    crd::memory::TlsfAllocator alloc(4U << 20U);
+    auto                       raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+
+    kir::KGraph mg(&alloc);
+    kir::KEntry me;
+    crd::gputest::build_triangle_mesh(mg, me);
+    kir::KGraph fg(&alloc);
+    kir::KEntry fe;
+    crd::gputest::build_triangle_fs(fg, fe);
+
+    auto mesh = ctx->create_program(mg, me); // KIR mesh entry -> GL_EXT_mesh_shader GLSL -> SPIR-V, behind the seam
+    auto fs   = ctx->create_program(fg, fe);
+    REQUIRE(mesh != nullptr);
+    REQUIRE(fs != nullptr);
+    REQUIRE(mesh->stage() == gpu::ShaderStage::Mesh);
+
+    auto program = raster->create_mesh_program(*mesh, *fs);
+    REQUIRE(program != nullptr);
+    REQUIRE(program->valid());
+
+    constexpr crd::u32 dim    = 32U;
+    auto               target = raster->create_color_target(dim, dim);
+    REQUIRE(target != nullptr);
+
+    raster->draw_mesh(*target, *program, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, 1U); // one meshlet workgroup
+
+    const crd::u32 centre = target->read_pixel(dim / 2U, dim / 2U);
+    const crd::u32 corner = target->read_pixel(0U, 0U);
+    CHECK((centre & 0xFFU) >= 250U);          // R high  ⇒ red (inside the MESH-emitted triangle)
     CHECK(((centre >> 16U) & 0xFFU) <= 5U);   // B low
     CHECK((corner & 0xFFU) <= 5U);            // R low   ⇒ blue clear (outside)
     CHECK(((corner >> 16U) & 0xFFU) >= 250U); // B high
@@ -2759,7 +2856,7 @@ TEST_CASE("v17 NRC: CKIR fused-MLP FP32 forward DISPATCHES on Vulkan == CPU orac
     CHECK(bad == 0);
 }
 
-TEST_CASE("B14-c: CKIR SVGF à-trous denoiser DISPATCHES on Vulkan == CPU oracle (ULP-tol, transcendental weights)",
+TEST_CASE("B14-c: CKIR SVGF a-trous denoiser DISPATCHES on Vulkan == CPU oracle (ULP-tol, transcendental weights)",
           "[gpu-context][vulkan][gpu][kernel][svgf]")
 {
     namespace kir = crd::kir;
@@ -3131,6 +3228,72 @@ TEST_CASE("B14-a: CKIR ReSTIR TEMPORAL merge (two-reservoir combine + M clamp) D
     CHECK(maxrel < 1e-4); // add/mul/div/min/max/cmp/select only ⇒ effectively bit-exact
 }
 
+TEST_CASE("B14-a: CKIR ReSTIR SPATIAL reuse (K-neighbour reservoir merge) DISPATCHES on Vulkan == CPU oracle",
+          "[gpu-context][vulkan][gpu][kernel][restir]")
+{
+    namespace kir = crd::kir;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+    const auto uz = [](int v) { return static_cast<crd::usize>(v); };
+
+    crd::memory::TlsfAllocator alloc(32U << 20U);
+    kir::restir::RestirConfig  rcfg;
+    const int                  k = rcfg.spatial_neighbors;
+    const int                  n = 256;
+    kir::KGraph                g(&alloc);
+    const kir::KEntry          e = kir::restir::build_restir_spatial(g, rcfg);
+
+    // N reservoirs [f, p̂, W, M]; each pixel pulls K neighbour reservoir indices + K WRS randoms.
+    crd::containers::Array<crd::f64> res(&alloc);
+    crd::containers::Array<crd::f64> nbr(&alloc);
+    crd::containers::Array<crd::f64> xi(&alloc);
+    crd::containers::Array<crd::f64> out(&alloc);
+    res.resize(uz(n * 4));
+    nbr.resize(uz(n * k));
+    xi.resize(uz(n * k));
+    out.resize(uz(n * 4));
+    crd::u32 s   = 55U;
+    auto     rnd = [&]() { s = s * 1664525U + 1013904223U; return static_cast<double>(s >> 8) / static_cast<double>(1U << 24); };
+    for (int p = 0; p < n; ++p)
+    {
+        res[uz(p * 4 + 0)] = 0.2 + 2.0 * rnd(); res[uz(p * 4 + 1)] = 0.1 + 1.5 * rnd();
+        res[uz(p * 4 + 2)] = 0.3 + rnd();       res[uz(p * 4 + 3)] = 16.0 + 48.0 * rnd();
+        for (int j = 0; j < k; ++j) { nbr[uz(p * k + j)] = static_cast<double>(static_cast<int>(rnd() * n) % n); xi[uz(p * k + j)] = rnd(); }
+    }
+    kir::KernelBuffer bufs[4] = {{res.data(), n * 4, 0, 0}, {nbr.data(), n * k, 0, 1}, {xi.data(), n * k, 0, 2}, {out.data(), n * 4, 0, 3}};
+    kir::eval_cpu_kernel(g, e, bufs, 4, e.local_size[0], &alloc, static_cast<crd::u32>(n / 64));
+
+    kir::GlslKernel kern(&alloc);
+    REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, kern));
+    const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), "ckir_restir_sp", &alloc);
+    REQUIRE(spv.ok);
+    auto pipe = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), 4, 0U);
+    REQUIRE(pipe != nullptr);
+
+    const int lens[4] = {n * 4, n * k, n * k, n * 4};
+    crd::containers::Array<float> hf[4];
+    float*                        host[4];
+    for (int b = 0; b < 4; ++b) { hf[b] = crd::containers::Array<float>(&alloc); hf[b].resize(uz(lens[b])); host[b] = hf[b].data(); }
+    for (int b = 0; b < 3; ++b) { for (int i = 0; i < lens[b]; ++i) { hf[b][uz(i)] = static_cast<float>(bufs[b].data[i]); } }
+    for (int i = 0; i < lens[3]; ++i) { hf[3][uz(i)] = -9.0F; }
+    crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 4, static_cast<crd::u32>(n / 64));
+
+    double maxrel = 0.0;
+    for (int i = 0; i < lens[3]; ++i)
+    {
+        const double ref = out[uz(i)];
+        maxrel           = std::max(maxrel, std::fabs(static_cast<double>(hf[3][uz(i)]) - ref) / (std::fabs(ref) + 1e-3));
+    }
+    std::printf("[Vulkan ReSTIR spatial] maxrel(GPU vs oracle) = %.2e\n", maxrel);
+    CHECK(maxrel < 1e-4); // add/mul/div/max/cmp/select + a cast-to-index only ⇒ effectively bit-exact
+}
+
 TEST_CASE("B15-a: CKIR atmosphere TRANSMITTANCE LUT (Hillaire/Bruneton extinction integral) DISPATCHES on Vulkan == oracle",
           "[gpu-context][vulkan][gpu][kernel][atmos]")
 {
@@ -3328,7 +3491,801 @@ TEST_CASE("B15-a: CKIR atmosphere SKY-VIEW LUT (single+multiple scattering, both
     CHECK(maxabs < 5e-4);
 }
 
-TEST_CASE("B14-c: CKIR SVGF TEMPORAL integration DISPATCHES on Vulkan == CPU oracle (bit-exact — no transcendentals)",
+TEST_CASE("B15-a: CKIR atmosphere AERIAL-PERSPECTIVE froxels (3D volume, both LUTs) DISPATCHES on Vulkan == oracle",
+          "[gpu-context][vulkan][gpu][kernel][atmos]")
+{
+    namespace kir = crd::kir;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+    const auto uz = [](int v) { return static_cast<crd::usize>(v); };
+
+    crd::memory::TlsfAllocator   alloc(128U << 20U);
+    kir::atmos::AtmosphereConfig acfg;
+    acfg.tlut_w = 64;
+    acfg.tlut_h = 16;
+    acfg.mslut_res = 16;
+    const int tw = acfg.tlut_w;
+    const int th = acfg.tlut_h;
+    const int rr = acfg.mslut_res;
+    const int apr = acfg.ap_res;
+    const int aps = acfg.ap_slices;
+    const int tn = tw * th * 3;
+    const int rn = rr * rr * 3;
+    const int an = apr * apr * aps * 4;
+
+    kir::KGraph       gt(&alloc);
+    const kir::KEntry et = kir::atmos::build_atmos_transmittance(gt, acfg);
+    crd::containers::Array<crd::f64> tlut(&alloc);
+    tlut.resize(uz(tn));
+    kir::KernelBuffer tb[1] = {{tlut.data(), tn, 0, 0}};
+    kir::eval_cpu_kernel(gt, et, tb, 1, et.local_size[0], &alloc, static_cast<crd::u32>(tw * th / 64));
+    for (int i = 0; i < tn; ++i) { tlut[uz(i)] = static_cast<double>(static_cast<float>(tlut[uz(i)])); }
+
+    kir::KGraph       gm(&alloc);
+    const kir::KEntry em = kir::atmos::build_atmos_multiscatter(gm, acfg);
+    crd::containers::Array<crd::f64> ms(&alloc);
+    ms.resize(uz(rn));
+    kir::KernelBuffer mb[2] = {{tlut.data(), tn, 0, 0}, {ms.data(), rn, 0, 1}};
+    kir::eval_cpu_kernel(gm, em, mb, 2, em.local_size[0], &alloc, static_cast<crd::u32>(rr * rr / 64));
+    for (int i = 0; i < rn; ++i) { ms[uz(i)] = static_cast<double>(static_cast<float>(ms[uz(i)])); }
+
+    kir::KGraph       ga(&alloc);
+    const kir::KEntry ea = kir::atmos::build_atmos_aerial(ga, acfg);
+    crd::containers::Array<crd::f64> ap(&alloc);
+    ap.resize(uz(an));
+    kir::KernelBuffer ab[3] = {{tlut.data(), tn, 0, 0}, {ms.data(), rn, 0, 1}, {ap.data(), an, 0, 2}};
+    kir::eval_cpu_kernel(ga, ea, ab, 3, ea.local_size[0], &alloc, static_cast<crd::u32>(apr * apr / 64));
+
+    kir::GlslKernel kern(&alloc);
+    REQUIRE(kir::emit_compute_kernel_glsl(ga, ea, &alloc, kern));
+    const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), "ckir_atmos_ap", &alloc);
+    REQUIRE(spv.ok);
+    auto pipe = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), 3, 0U);
+    REQUIRE(pipe != nullptr);
+
+    const int lens[3] = {tn, rn, an};
+    crd::containers::Array<float> h0(&alloc);
+    crd::containers::Array<float> h1(&alloc);
+    crd::containers::Array<float> h2(&alloc);
+    h0.resize(uz(tn));
+    h1.resize(uz(rn));
+    h2.resize(uz(an));
+    for (int i = 0; i < tn; ++i) { h0[uz(i)] = static_cast<float>(tlut[uz(i)]); }
+    for (int i = 0; i < rn; ++i) { h1[uz(i)] = static_cast<float>(ms[uz(i)]); }
+    for (int i = 0; i < an; ++i) { h2[uz(i)] = -9.0F; }
+    float* host[3] = {h0.data(), h1.data(), h2.data()};
+    crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 3, static_cast<crd::u32>(apr * apr / 64));
+
+    double maxabs = 0.0;
+    for (int i = 0; i < an; ++i) { maxabs = std::max(maxabs, std::fabs(static_cast<double>(h2[uz(i)]) - ap[uz(i)])); }
+    std::printf("[Vulkan atmosphere aerial-perspective] maxabs(GPU vs oracle) = %.2e\n", maxabs);
+    CHECK(maxabs < 5e-4);
+}
+
+TEST_CASE("B14-d: CKIR NRC hash-grid ENCODER (Instant-NGP, trilinear hashed features) DISPATCHES on Vulkan == oracle",
+          "[gpu-context][vulkan][gpu][kernel][nrc]")
+{
+    namespace kir = crd::kir;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+    const auto uz = [](int v) { return static_cast<crd::usize>(v); };
+
+    crd::memory::TlsfAllocator alloc(64U << 20U);
+    kir::nrc::NrcConfig        ncfg;
+    const int                  n  = 256;
+    const int                  lf = ncfg.encoded_dim();
+    const int                  ts = ncfg.levels * ncfg.table_size * ncfg.features;
+    kir::KGraph                g(&alloc);
+    const kir::KEntry          e = kir::nrc::build_nrc_hashgrid_encode(g, ncfg);
+
+    crd::containers::Array<crd::f64> pos(&alloc);
+    crd::containers::Array<crd::f64> tab(&alloc);
+    crd::containers::Array<crd::f64> out(&alloc);
+    pos.resize(uz(n * 3));
+    tab.resize(uz(ts));
+    out.resize(uz(n * lf));
+    crd::u32 s   = 7U;
+    auto     rnd = [&]() { s = s * 1664525U + 1013904223U; return static_cast<double>(s >> 8) / static_cast<double>(1U << 24); };
+    for (int i = 0; i < n * 3; ++i) { pos[uz(i)] = rnd(); }
+    for (int i = 0; i < ts; ++i) { tab[uz(i)] = rnd() * 2.0 - 1.0; } // learnable features (signed)
+    kir::KernelBuffer bufs[3] = {{pos.data(), n * 3, 0, 0}, {tab.data(), ts, 0, 1}, {out.data(), n * lf, 0, 2}};
+    kir::eval_cpu_kernel(g, e, bufs, 3, e.local_size[0], &alloc, static_cast<crd::u32>(n / 64));
+
+    kir::GlslKernel kern(&alloc);
+    REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, kern));
+    const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), "ckir_nrc_enc", &alloc);
+    REQUIRE(spv.ok);
+    auto pipe = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), 3, 0U);
+    REQUIRE(pipe != nullptr);
+
+    const int lens[3] = {n * 3, ts, n * lf};
+    crd::containers::Array<float> h0(&alloc);
+    crd::containers::Array<float> h1(&alloc);
+    crd::containers::Array<float> h2(&alloc);
+    h0.resize(uz(n * 3));
+    h1.resize(uz(ts));
+    h2.resize(uz(n * lf));
+    for (int i = 0; i < n * 3; ++i) { h0[uz(i)] = static_cast<float>(pos[uz(i)]); }
+    for (int i = 0; i < ts; ++i) { h1[uz(i)] = static_cast<float>(tab[uz(i)]); }
+    for (int i = 0; i < n * lf; ++i) { h2[uz(i)] = -9.0F; }
+    float* host[3] = {h0.data(), h1.data(), h2.data()};
+    crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 3, static_cast<crd::u32>(n / 64));
+
+    double maxabs = 0.0;
+    for (int i = 0; i < n * lf; ++i) { maxabs = std::max(maxabs, std::fabs(static_cast<double>(h2[uz(i)]) - out[uz(i)])); }
+    std::printf("[Vulkan NRC hash-grid encode] maxabs(GPU vs oracle) = %.2e\n", maxabs);
+    CHECK(maxabs < 1e-6); // integer spatial hash + trilinear blend — no transcendentals ⇒ bit-exact (f32 sum ULP only)
+}
+
+TEST_CASE("B14-d: CKIR NRC MLP inference + TRAINING backprop DISPATCH on Vulkan == CPU oracle (bit-exact)",
+          "[gpu-context][vulkan][gpu][kernel][nrc]")
+{
+    namespace kir = crd::kir;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+    const auto uz = [](int v) { return static_cast<crd::usize>(v); };
+
+    crd::memory::TlsfAllocator alloc(64U << 20U);
+    kir::nrc::NrcConfig        ncfg;
+    const int                  d = ncfg.encoded_dim();
+    const int                  h = ncfg.hidden;
+    const int                  o = ncfg.out_dim;
+    const int                  n = 256;
+    crd::u32 s   = 33U;
+    auto     rnd = [&]() { s = s * 1664525U + 1013904223U; return static_cast<double>(s >> 8) / static_cast<double>(1U << 24) * 2.0 - 1.0; };
+
+    crd::containers::Array<crd::f64> enc(&alloc);
+    crd::containers::Array<crd::f64> w1(&alloc);
+    crd::containers::Array<crd::f64> b1(&alloc);
+    crd::containers::Array<crd::f64> w2(&alloc);
+    crd::containers::Array<crd::f64> b2(&alloc);
+    enc.resize(uz(n * d)); w1.resize(uz(h * d)); b1.resize(uz(h)); w2.resize(uz(o * h)); b2.resize(uz(o));
+    for (int i = 0; i < n * d; ++i) { enc[uz(i)] = rnd(); }
+    for (int i = 0; i < h * d; ++i) { w1[uz(i)] = rnd() * 0.5; }
+    for (int i = 0; i < h; ++i) { b1[uz(i)] = rnd() * 0.2; }
+    for (int i = 0; i < o * h; ++i) { w2[uz(i)] = rnd() * 0.5; }
+    for (int i = 0; i < o; ++i) { b2[uz(i)] = rnd() * 0.1; }
+
+    // ── inference ──
+    {
+        kir::KGraph       g(&alloc);
+        const kir::KEntry e = kir::nrc::build_nrc_infer(g, ncfg);
+        crd::containers::Array<crd::f64> out(&alloc);
+        out.resize(uz(n * o));
+        kir::KernelBuffer bufs[6] = {{enc.data(), n * d, 0, 0}, {w1.data(), h * d, 0, 1}, {b1.data(), h, 0, 2}, {w2.data(), o * h, 0, 3}, {b2.data(), o, 0, 4}, {out.data(), n * o, 0, 5}};
+        kir::eval_cpu_kernel(g, e, bufs, 6, e.local_size[0], &alloc, static_cast<crd::u32>(n / 64));
+        kir::GlslKernel kern(&alloc);
+        REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, kern));
+        const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), "ckir_nrc_infer", &alloc);
+        REQUIRE(spv.ok);
+        auto pipe = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), 6, 0U);
+        REQUIRE(pipe != nullptr);
+        const int lens[6] = {n * d, h * d, h, o * h, o, n * o};
+        crd::containers::Array<float> hb[6];
+        float*                        host[6];
+        for (int k = 0; k < 6; ++k) { hb[k] = crd::containers::Array<float>(&alloc); hb[k].resize(uz(lens[k])); host[k] = hb[k].data(); }
+        for (int k = 0; k < 5; ++k) { for (int i = 0; i < lens[k]; ++i) { hb[k][uz(i)] = static_cast<float>(bufs[k].data[i]); } }
+        for (int i = 0; i < lens[5]; ++i) { hb[5][uz(i)] = -9.0F; }
+        crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 6, static_cast<crd::u32>(n / 64));
+        double mdiff = 0.0;
+        for (int i = 0; i < n * o; ++i) { mdiff = std::max(mdiff, std::fabs(static_cast<double>(hb[5][uz(i)]) - out[uz(i)])); }
+        std::printf("[Vulkan NRC infer] maxabs = %.2e\n", mdiff);
+        CHECK(mdiff < 1e-5);
+    }
+    // ── training backprop ──
+    {
+        kir::KGraph       g(&alloc);
+        const kir::KEntry e = kir::nrc::build_nrc_train_grad(g, ncfg);
+        crd::containers::Array<crd::f64> tgt(&alloc);
+        crd::containers::Array<crd::f64> gw1(&alloc);
+        crd::containers::Array<crd::f64> gw2(&alloc);
+        tgt.resize(uz(n * o)); gw1.resize(uz(n * h * d)); gw2.resize(uz(n * o * h));
+        for (int i = 0; i < n * o; ++i) { tgt[uz(i)] = rnd(); }
+        kir::KernelBuffer bufs[8] = {{enc.data(), n * d, 0, 0}, {w1.data(), h * d, 0, 1}, {b1.data(), h, 0, 2}, {w2.data(), o * h, 0, 3}, {b2.data(), o, 0, 4}, {tgt.data(), n * o, 0, 5}, {gw1.data(), n * h * d, 0, 6}, {gw2.data(), n * o * h, 0, 7}};
+        kir::eval_cpu_kernel(g, e, bufs, 8, e.local_size[0], &alloc, static_cast<crd::u32>(n / 64));
+        kir::GlslKernel kern(&alloc);
+        REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, kern));
+        const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), "ckir_nrc_train", &alloc);
+        REQUIRE(spv.ok);
+        auto pipe = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), 8, 0U);
+        REQUIRE(pipe != nullptr);
+        const int lens[8] = {n * d, h * d, h, o * h, o, n * o, n * h * d, n * o * h};
+        crd::containers::Array<float> hb[8];
+        float*                        host[8];
+        for (int k = 0; k < 8; ++k) { hb[k] = crd::containers::Array<float>(&alloc); hb[k].resize(uz(lens[k])); host[k] = hb[k].data(); }
+        for (int k = 0; k < 6; ++k) { for (int i = 0; i < lens[k]; ++i) { hb[k][uz(i)] = static_cast<float>(bufs[k].data[i]); } }
+        for (int i = 0; i < lens[6]; ++i) { hb[6][uz(i)] = -9.0F; }
+        for (int i = 0; i < lens[7]; ++i) { hb[7][uz(i)] = -9.0F; }
+        crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 8, static_cast<crd::u32>(n / 64));
+        double mdiff = 0.0;
+        for (int i = 0; i < n * h * d; ++i) { mdiff = std::max(mdiff, std::fabs(static_cast<double>(hb[6][uz(i)]) - gw1[uz(i)])); }
+        for (int i = 0; i < n * o * h; ++i) { mdiff = std::max(mdiff, std::fabs(static_cast<double>(hb[7][uz(i)]) - gw2[uz(i)])); }
+        std::printf("[Vulkan NRC train-grad] maxabs = %.2e\n", mdiff);
+        CHECK(mdiff < 1e-5);
+    }
+}
+
+TEST_CASE("B15-b: CKIR cloud DENSITY field (Nubis Perlin-Worley + coverage + erosion) DISPATCHES on Vulkan == oracle",
+          "[gpu-context][vulkan][gpu][kernel][clouds]")
+{
+    namespace kir = crd::kir;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+    const auto uz = [](int v) { return static_cast<crd::usize>(v); };
+
+    crd::memory::TlsfAllocator alloc(64U << 20U);
+    kir::clouds::CloudConfig   ccfg;
+    const int                  n = 256;
+    kir::KGraph                g(&alloc);
+    const kir::KEntry          e = kir::clouds::build_cloud_density(g, ccfg);
+
+    crd::containers::Array<crd::f64> pos(&alloc);
+    crd::containers::Array<crd::f64> out(&alloc);
+    pos.resize(uz(n * 3));
+    out.resize(uz(n));
+    crd::u32 s   = 88U;
+    auto     rnd = [&]() { s = s * 1664525U + 1013904223U; return static_cast<double>(s >> 8) / static_cast<double>(1U << 24); };
+    for (int i = 0; i < n; ++i)
+    {
+        pos[uz(i * 3 + 0)] = rnd() * 6.0;
+        pos[uz(i * 3 + 1)] = rnd() * 6.0;
+        pos[uz(i * 3 + 2)] = ccfg.cloud_base + rnd() * (ccfg.cloud_top - ccfg.cloud_base);
+    }
+    kir::KernelBuffer bufs[2] = {{pos.data(), n * 3, 0, 0}, {out.data(), n, 0, 1}};
+    kir::eval_cpu_kernel(g, e, bufs, 2, e.local_size[0], &alloc, static_cast<crd::u32>(n / 64));
+
+    kir::GlslKernel kern(&alloc);
+    REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, kern));
+    // optimize=TRUE: the Perlin-Worley noise is a compact RUNTIME loop (worley3_loop collapses the 27-cell unroll), so spirv-opt
+    // is fast + the pipeline compiles in seconds — the gold procedural cloud shape runs fully optimized (no baked-texture crutch).
+    const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), "ckir_cloud_density", &alloc, true);
+    REQUIRE(spv.ok);
+    auto pipe = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), 2, 0U);
+    REQUIRE(pipe != nullptr);
+
+    const int lens[2] = {n * 3, n};
+    crd::containers::Array<float> h0(&alloc);
+    crd::containers::Array<float> h1(&alloc);
+    h0.resize(uz(n * 3));
+    h1.resize(uz(n));
+    for (int i = 0; i < n * 3; ++i) { h0[uz(i)] = static_cast<float>(pos[uz(i)]); }
+    for (int i = 0; i < n; ++i) { h1[uz(i)] = -9.0F; }
+    float* host[2] = {h0.data(), h1.data()};
+    crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 2, static_cast<crd::u32>(n / 64));
+
+    double maxabs = 0.0;
+    for (int i = 0; i < n; ++i) { maxabs = std::max(maxabs, std::fabs(static_cast<double>(h1[uz(i)]) - out[uz(i)])); }
+    std::printf("[Vulkan cloud density] maxabs(GPU vs oracle) = %.2e\n", maxabs);
+    CHECK(maxabs < 1e-6); // Perlin/Worley noise = integer hash + lerp, no transcendentals ⇒ bit-exact
+}
+
+TEST_CASE("B15-b: CKIR cloud RAY-MARCH (Beer-Powder + phase + light march over the density volume) DISPATCHES on Vulkan == oracle",
+          "[gpu-context][vulkan][gpu][kernel][clouds]")
+{
+    namespace kir = crd::kir;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+    const auto uz = [](int v) { return static_cast<crd::usize>(v); };
+
+    crd::memory::TlsfAllocator alloc(256U << 20U);
+    kir::clouds::CloudConfig   ccfg;
+    const int                  dim = ccfg.vol_dim;
+    const int                  sw  = ccfg.screen;
+    const int                  nv  = dim * dim * dim;
+    const int                  ns  = sw * sw;
+    const double               ext = 6.0;
+    const double               scl = ext / static_cast<double>(dim - 1);
+    const double               hsc = (ccfg.cloud_top - ccfg.cloud_base) / static_cast<double>(dim - 1);
+
+    // bake the density volume on the CPU oracle, f32-round it (so the oracle + GPU march sample IDENTICAL input).
+    crd::containers::Array<crd::f64> pos(&alloc);
+    pos.resize(uz(nv * 3));
+    for (int zi = 0; zi < dim; ++zi) { for (int yi = 0; yi < dim; ++yi) { for (int xi = 0; xi < dim; ++xi) {
+        const int cell = (zi * dim + yi) * dim + xi;
+        pos[uz(cell * 3 + 0)] = static_cast<double>(xi) * scl;
+        pos[uz(cell * 3 + 1)] = static_cast<double>(yi) * scl;
+        pos[uz(cell * 3 + 2)] = ccfg.cloud_base + static_cast<double>(zi) * hsc;
+    } } }
+    kir::KGraph       gd(&alloc);
+    const kir::KEntry ed = kir::clouds::build_cloud_density(gd, ccfg);
+    crd::containers::Array<crd::f64> vol(&alloc);
+    vol.resize(uz(nv));
+    kir::KernelBuffer db[2] = {{pos.data(), nv * 3, 0, 0}, {vol.data(), nv, 0, 1}};
+    kir::eval_cpu_kernel(gd, ed, db, 2, ed.local_size[0], &alloc, static_cast<crd::u32>(nv / 64));
+    for (int i = 0; i < nv; ++i) { vol[uz(i)] = static_cast<double>(static_cast<float>(vol[uz(i)])); }
+
+    kir::KGraph       gm(&alloc);
+    const kir::KEntry em = kir::clouds::build_cloud_march(gm, ccfg);
+    crd::containers::Array<crd::f64> out(&alloc);
+    out.resize(uz(ns * 4));
+    kir::KernelBuffer mb[2] = {{vol.data(), nv, 0, 0}, {out.data(), ns * 4, 0, 1}};
+    kir::eval_cpu_kernel(gm, em, mb, 2, em.local_size[0], &alloc, static_cast<crd::u32>(ns / 64));
+
+    kir::GlslKernel kern(&alloc);
+    REQUIRE(kir::emit_compute_kernel_glsl(gm, em, &alloc, kern));
+    const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), "ckir_cloud_march", &alloc);
+    REQUIRE(spv.ok);
+    auto pipe = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), 2, 0U);
+    REQUIRE(pipe != nullptr);
+
+    const int lens[2] = {nv, ns * 4};
+    crd::containers::Array<float> h0(&alloc);
+    crd::containers::Array<float> h1(&alloc);
+    h0.resize(uz(nv));
+    h1.resize(uz(ns * 4));
+    for (int i = 0; i < nv; ++i) { h0[uz(i)] = static_cast<float>(vol[uz(i)]); }
+    for (int i = 0; i < ns * 4; ++i) { h1[uz(i)] = -9.0F; }
+    float* host[2] = {h0.data(), h1.data()};
+    crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 2, static_cast<crd::u32>(ns / 64));
+
+    double maxabs = 0.0;
+    for (int i = 0; i < ns * 4; ++i) { maxabs = std::max(maxabs, std::fabs(static_cast<double>(h1[uz(i)]) - out[uz(i)])); }
+    std::printf("[Vulkan cloud march] maxabs(GPU vs oracle) = %.2e\n", maxabs);
+    CHECK(maxabs < 5e-5); // trilinear taps + Beer-Powder + phase; only exp/pow are ULP ⇒ effectively bit-exact
+}
+
+// B16-a-0: the transcendentals the ocean spectrum needs (log/log2/tanh/atan2/atan/asin/acos/sinh/cosh) were only in the raster
+// emitter; now wired into the compute-kernel emitters (all 5). This DISPATCHES a compute kernel using all nine on Vulkan and
+// verifies GPU == CPU oracle to ULP (transcendentals are hardware-vs-libm ULP, not bit-exact — like exp/pow elsewhere).
+TEST_CASE("B16-a-0: compute transcendentals DISPATCH on Vulkan == CPU oracle (ULP)", "[gpu-context][vulkan][gpu][kernel][ocean]")
+{
+    namespace kir = crd::kir;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+    const auto uz = [](int v) { return static_cast<crd::usize>(v); };
+
+    crd::memory::TlsfAllocator alloc(16U << 20U);
+    kir::KGraph                g(&alloc);
+    const int                  n     = 64;
+    const kir::Shape           sh1   = kir::make_shape({1});
+    const int                  inbuf = g.buffer_decl(kir::DType::F32, 0, 0, false);
+    const int                  outb  = g.buffer_decl(kir::DType::F32, 0, 1, true);
+    const int                  mark  = g.kernel_stmt_mark();
+    const auto                 kf    = [&](double v) { return g.constant(v, sh1, kir::DType::F32); };
+    const auto                 un    = [&](kir::KOp op, int a) { return g.unary(op, a); };
+    const auto                 bi    = [&](kir::KOp op, int a, int b) { return g.binary(op, a, b); };
+    const int                  gid   = g.builtin(kir::KBuiltin::LocalInvocationIndex); // one workgroup of 64
+    const int                  x     = g.buffer_load(inbuf, gid);
+    const int                  xh    = bi(kir::KOp::Mul, x, kf(0.5));
+    int                        acc   = un(kir::KOp::Log, bi(kir::KOp::Add, x, kf(1.0)));
+    acc                              = bi(kir::KOp::Add, acc, un(kir::KOp::Log2, bi(kir::KOp::Add, x, kf(2.0))));
+    acc                              = bi(kir::KOp::Add, acc, un(kir::KOp::Tanh, x));
+    acc                              = bi(kir::KOp::Add, acc, bi(kir::KOp::Atan2, x, kf(0.5)));
+    acc                              = bi(kir::KOp::Add, acc, un(kir::KOp::Atan, x));
+    acc                              = bi(kir::KOp::Add, acc, un(kir::KOp::Asin, xh));
+    acc                              = bi(kir::KOp::Add, acc, un(kir::KOp::Acos, xh));
+    acc                              = bi(kir::KOp::Add, acc, un(kir::KOp::Sinh, x));
+    acc                              = bi(kir::KOp::Add, acc, un(kir::KOp::Cosh, x));
+    g.stmt_buffer_store(outb, gid, acc);
+    kir::KEntry e;
+    e.stage             = kir::KStage::Compute;
+    e.local_size[0]     = static_cast<crd::u32>(n);
+    e.kernel_body_begin = mark;
+    e.kernel_body_count = g.stmt_count() - mark;
+
+    crd::containers::Array<crd::f64> in(&alloc);
+    crd::containers::Array<crd::f64> out(&alloc);
+    in.resize(uz(n));
+    out.resize(uz(n));
+    for (int i = 0; i < n; ++i) { in[uz(i)] = 0.2 + 0.01 * static_cast<double>(i); }
+    kir::KernelBuffer bufs[2] = {{in.data(), n, 0, 0}, {out.data(), n, 0, 1}};
+    kir::eval_cpu_kernel(g, e, bufs, 2, e.local_size[0], &alloc, 1U);
+
+    kir::GlslKernel kern(&alloc);
+    REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, kern));
+    const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), "ckir_transc", &alloc);
+    REQUIRE(spv.ok);
+    auto pipe = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), 2, 0U);
+    REQUIRE(pipe != nullptr);
+
+    const int                     lens[2] = {n, n};
+    crd::containers::Array<float>  h0(&alloc);
+    crd::containers::Array<float>  h1(&alloc);
+    float*                        host[2] = {nullptr, nullptr};
+    h0.resize(uz(n));
+    h1.resize(uz(n));
+    host[0] = h0.data();
+    host[1] = h1.data();
+    for (int i = 0; i < n; ++i) { h0[uz(i)] = static_cast<float>(in[uz(i)]); }
+    for (int i = 0; i < n; ++i) { h1[uz(i)] = -9.0F; }
+    crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 2, 1U);
+
+    double maxabs = 0.0;
+    for (int i = 0; i < n; ++i) { maxabs = std::max(maxabs, std::fabs(static_cast<double>(h1[uz(i)]) - out[uz(i)])); }
+    std::printf("[Vulkan transcendentals] maxabs(GPU vs oracle) = %.2e\n", maxabs);
+    CHECK(maxabs < 5e-6); // log/atan2/asin/… are hardware-vs-libm ULP; the whole 9-op sum stays within a few ULP
+}
+
+// The B14 GI + B15 atmosphere kernels' GPU THROUGHPUT on Vulkan — GPU-only time via `last_gpu_ms` (kernel only, upload
+// excluded), min-of-30. These same kernels are verified BIT-EXACT vs the CPU oracle in the tests above; this proves the
+// PORTABLE IR also runs in real time. Hidden ([.gi-bench]) — run explicitly. Board → docs/bench/2026-07-15-gi-atmosphere-vulkan.md.
+TEST_CASE("B14/B15: CKIR GI + atmosphere kernels GPU PERFORMANCE (Vulkan, last_gpu_ms, min-of-30)", "[.gi-bench]")
+{
+    namespace kir = crd::kir;
+    namespace cg  = crd::gpu;
+    using cg::compute_usage::storage;
+    using cg::compute_usage::transfer_dst;
+    using cg::compute_usage::transfer_src;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+    crd::memory::TlsfAllocator alloc(256U << 20U);
+
+    const auto mkbuf = [&](crd::u64 floats) { return compute.create_buffer(floats * sizeof(float), storage | transfer_dst | transfer_src, cg::ComputeMemory::GpuOnly); };
+    const auto fillbuf = [&](cg::ComputeBuffer& dev, crd::u64 floats, float v) {
+        auto  stg = compute.create_buffer(floats * sizeof(float), transfer_src, cg::ComputeMemory::CpuToGpu);
+        auto* pp  = static_cast<float*>(stg->map());
+        for (crd::u64 i = 0; i < floats; ++i) { pp[i] = v; }
+        stg->unmap();
+        auto& rec = compute.begin();
+        rec.copy(*stg, dev, 0U, 0U, floats * sizeof(float));
+        compute.submit_and_wait();
+    };
+    const auto pipe_of = [&](kir::KGraph& g, const kir::KEntry& e, const char* nm, int nb) {
+        kir::GlslKernel kern(&alloc);
+        REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, kern));
+        const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), nm, &alloc);
+        REQUIRE(spv.ok);
+        auto pipe = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nb, 0U);
+        REQUIRE(pipe != nullptr);
+        return pipe;
+    };
+    const auto time_best = [&](cg::ComputePipeline& pipe, cg::ComputeBuffer** binds, int nb, crd::u32 gx) {
+        double best = 1e30;
+        for (int r = 0; r < 30; ++r)
+        {
+            auto& rec = compute.begin();
+            rec.dispatch(pipe, crd::containers::ConstSpan<cg::ComputeBuffer*>(binds, static_cast<crd::usize>(nb)), nullptr, 0U, gx, 1U, 1U);
+            compute.submit_and_wait();
+            const double ms = compute.last_gpu_ms();
+            if (ms > 0.0 && ms < best) { best = ms; }
+        }
+        return best;
+    };
+
+    std::printf("\n=== CKIR GI + atmosphere GPU throughput (Vulkan, kernel-only) ===\n");
+
+    { // B14-b DDGI probe SAMPLE — the shading-time indirect-diffuse lookup, one thread per query.
+        const int nq = 1920 * 1080; // one probe-sample per 1080p pixel
+        const int r  = 8;
+        kir::KGraph           g(&alloc);
+        kir::ddgi::DdgiConfig dc;
+        const kir::KEntry     e    = kir::ddgi::build_ddgi_sample(g, dc);
+        auto                  pipe = pipe_of(g, e, "bench_ddgi_sample", 5);
+        auto pos = mkbuf(static_cast<crd::u64>(nq) * 3);
+        auto nrm = mkbuf(static_cast<crd::u64>(nq) * 3);
+        const crd::u64 irr_n = static_cast<crd::u64>(r) * static_cast<crd::u64>(r) * 24U; // 8 probes · r² · 3
+        const crd::u64 dpt_n = static_cast<crd::u64>(r) * static_cast<crd::u64>(r) * 16U; // 8 probes · r² · 2
+        auto irr = mkbuf(irr_n);
+        auto dpt = mkbuf(dpt_n);
+        auto out = mkbuf(static_cast<crd::u64>(nq) * 3);
+        fillbuf(*pos, static_cast<crd::u64>(nq) * 3, 0.5F);
+        fillbuf(*nrm, static_cast<crd::u64>(nq) * 3, 0.5F);
+        fillbuf(*irr, irr_n, 0.4F);
+        fillbuf(*dpt, dpt_n, 4.0F);
+        cg::ComputeBuffer* b[5] = {pos.get(), nrm.get(), irr.get(), dpt.get(), out.get()};
+        const double       ms   = time_best(*pipe, b, 5, static_cast<crd::u32>(nq / 64));
+        std::printf("[gi-bench] DDGI probe-sample      %9d queries  %7.3f ms  %8.1f Mqueries/s\n", nq, ms, static_cast<double>(nq) / ms / 1e3);
+    }
+
+    { // B14-a ReSTIR RIS — stream M candidates through each pixel's reservoir.
+        const int n = 512 * 512; // 262k pixels (the M·N candidate buffer scales with M)
+        kir::KGraph               g(&alloc);
+        kir::restir::RestirConfig rc;
+        const int                 m    = rc.num_candidates;
+        const kir::KEntry         e    = kir::restir::build_restir_ris(g, rc);
+        auto                      pipe = pipe_of(g, e, "bench_restir_ris", 2);
+        auto cand = mkbuf(static_cast<crd::u64>(n) * m * 3);
+        auto res  = mkbuf(static_cast<crd::u64>(n) * 4);
+        fillbuf(*cand, static_cast<crd::u64>(n) * m * 3, 0.5F);
+        cg::ComputeBuffer* b[2] = {cand.get(), res.get()};
+        const double       ms   = time_best(*pipe, b, 2, static_cast<crd::u32>(n / 64));
+        std::printf("[gi-bench] ReSTIR RIS (M=%2d)       %9d pixels   %7.3f ms  %8.1f Mpixels/s\n", m, n, ms, static_cast<double>(n) / ms / 1e3);
+    }
+
+    { // B14-c SVGF à-trous — one edge-stopping wavelet iteration, one thread per pixel.
+        const int         w = 1920;
+        const int         h = 1080;
+        const int         n = w * h;
+        kir::KGraph       g(&alloc);
+        kir::SvgfConfig   sc;
+        sc.width  = w;
+        sc.height = h;
+        sc.step   = 1;
+        const kir::KEntry e    = kir::build_svgf_atrous(g, sc);
+        auto              pipe = pipe_of(g, e, "bench_svgf_atrous", 5);
+        auto col = mkbuf(static_cast<crd::u64>(n) * 3);
+        auto gbf = mkbuf(static_cast<crd::u64>(n) * 4);
+        auto vin = mkbuf(static_cast<crd::u64>(n));
+        auto cot = mkbuf(static_cast<crd::u64>(n) * 3);
+        auto vot = mkbuf(static_cast<crd::u64>(n));
+        fillbuf(*col, static_cast<crd::u64>(n) * 3, 0.5F);
+        fillbuf(*gbf, static_cast<crd::u64>(n) * 4, 1.0F);
+        fillbuf(*vin, static_cast<crd::u64>(n), 0.1F);
+        cg::ComputeBuffer* b[5] = {col.get(), gbf.get(), vin.get(), cot.get(), vot.get()};
+        const double       ms   = time_best(*pipe, b, 5, static_cast<crd::u32>(n / 64));
+        std::printf("[gi-bench] SVGF a-trous (1 iter)  %9d pixels   %7.3f ms  %8.1f Mpixels/s\n", n, ms, static_cast<double>(n) / ms / 1e3);
+    }
+
+    { // B15-a atmosphere: the full sky LUT chain (transmittance + multiscatter + sky-view + aerial) — cost PER FRAME.
+        kir::atmos::AtmosphereConfig ac;
+        const auto bench_lut = [&](const char* nm, kir::KEntry (*build)(kir::KGraph&, const kir::atmos::AtmosphereConfig&), int nb,
+                                   const int* fsz, crd::u32 gx, int work, const char* unit) {
+            kir::KGraph g(&alloc);
+            const kir::KEntry e = build(g, ac);
+            auto pipe = pipe_of(g, e, nm, nb);
+            crd::containers::Array<std::unique_ptr<cg::ComputeBuffer>> bufs(&alloc);
+            for (int i = 0; i < nb; ++i) { auto bp = mkbuf(static_cast<crd::u64>(fsz[i])); fillbuf(*bp, static_cast<crd::u64>(fsz[i]), 0.5F); bufs.push_back(std::move(bp)); }
+            cg::ComputeBuffer* b[4] = {nullptr, nullptr, nullptr, nullptr};
+            for (int i = 0; i < nb; ++i) { b[i] = bufs[static_cast<crd::usize>(i)].get(); }
+            const double ms = time_best(*pipe, b, nb, gx);
+            std::printf("[gi-bench] atmos %-16s %9d %-8s %7.4f ms\n", nm, work, unit, ms);
+            (void)unit;
+        };
+        const int tw = ac.tlut_w;
+        const int th = ac.tlut_h;
+        const int mr = ac.mslut_res;
+        const int sw = ac.skyview_w;
+        const int sh = ac.skyview_h;
+        const int t_sz[1] = {tw * th * 3};
+        bench_lut("transmittance", &kir::atmos::build_atmos_transmittance, 1, t_sz, static_cast<crd::u32>(tw * th / 64), tw * th, "texels");
+        const int m_sz[2] = {tw * th * 3, mr * mr * 3};
+        bench_lut("multiscatter", &kir::atmos::build_atmos_multiscatter, 2, m_sz, static_cast<crd::u32>(mr * mr / 64), mr * mr, "texels");
+        const int s_sz[3] = {tw * th * 3, mr * mr * 3, sw * sh * 3};
+        bench_lut("sky-view", &kir::atmos::build_atmos_skyview, 3, s_sz, static_cast<crd::u32>(sw * sh / 64), sw * sh, "texels");
+        const int a_sz[3] = {tw * th * 3, mr * mr * 3, ac.ap_res * ac.ap_res * ac.ap_slices * 4};
+        bench_lut("aerial-persp", &kir::atmos::build_atmos_aerial, 3, a_sz, static_cast<crd::u32>(ac.ap_res * ac.ap_res / 64), ac.ap_res * ac.ap_res * ac.ap_slices, "cells");
+    }
+    std::printf("================================================================\n");
+}
+
+// THE HONEST CRUSH — CKIR-emitted GLSL vs HAND-WRITTEN GLSL, same algorithm, same buffers, GPU-timed. Proves the portable IR
+// carries NO performance overhead: the emitter's SSA-of-`precise`-temps compiles to code the driver optimizes as well as a
+// human's hand-written shader. The honesty gate: both kernels' OUTPUTS must match (a fast WRONG hand kernel is meaningless).
+// Hidden ([.crush-bench]). Board → docs/bench/2026-07-15-ckir-vs-handwritten-glsl.md.
+TEST_CASE("B14/B15: CKIR-emitted GLSL vs HAND-WRITTEN GLSL head-to-head (zero-IR-overhead proof, Vulkan)", "[.crush-bench]")
+{
+    namespace kir = crd::kir;
+    namespace cg  = crd::gpu;
+    using cg::compute_usage::storage;
+    using cg::compute_usage::transfer_dst;
+    using cg::compute_usage::transfer_src;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+    crd::memory::TlsfAllocator alloc(256U << 20U);
+
+    const auto mkbuf = [&](crd::u64 floats) { return compute.create_buffer(floats * sizeof(float), storage | transfer_dst | transfer_src, cg::ComputeMemory::GpuOnly); };
+    const auto fillbuf = [&](cg::ComputeBuffer& dev, crd::u64 floats, auto gen) {
+        auto  stg = compute.create_buffer(floats * sizeof(float), transfer_src, cg::ComputeMemory::CpuToGpu);
+        auto* pp  = static_cast<float*>(stg->map());
+        for (crd::u64 i = 0; i < floats; ++i) { pp[i] = gen(i); }
+        stg->unmap();
+        auto& rec = compute.begin();
+        rec.copy(*stg, dev, 0U, 0U, floats * sizeof(float));
+        compute.submit_and_wait();
+    };
+    const auto pipe_src = [&](crd::containers::StringView src, const char* nm, int nb) {
+        const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, src, nm, &alloc);
+        REQUIRE(spv.ok);
+        auto pipe = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nb, 0U);
+        REQUIRE(pipe != nullptr);
+        return pipe;
+    };
+    const auto time_best = [&](cg::ComputePipeline& pipe, cg::ComputeBuffer** binds, int nb, crd::u32 gx) {
+        double best = 1e30;
+        for (int r = 0; r < 30; ++r)
+        {
+            auto& rec = compute.begin();
+            rec.dispatch(pipe, crd::containers::ConstSpan<cg::ComputeBuffer*>(binds, static_cast<crd::usize>(nb)), nullptr, 0U, gx, 1U, 1U);
+            compute.submit_and_wait();
+            const double ms = compute.last_gpu_ms();
+            if (ms > 0.0 && ms < best) { best = ms; }
+        }
+        return best;
+    };
+    const auto maxabs_diff = [&](cg::ComputeBuffer& a, cg::ComputeBuffer& b, crd::u64 floats) {
+        auto ra = compute.create_buffer(floats * sizeof(float), transfer_dst, cg::ComputeMemory::GpuToCpu);
+        auto rb = compute.create_buffer(floats * sizeof(float), transfer_dst, cg::ComputeMemory::GpuToCpu);
+        auto& rec = compute.begin();
+        rec.copy(a, *ra, 0U, 0U, floats * sizeof(float));
+        rec.copy(b, *rb, 0U, 0U, floats * sizeof(float));
+        compute.submit_and_wait();
+        const auto* pa = static_cast<const float*>(ra->map());
+        const auto* pb = static_cast<const float*>(rb->map());
+        double      md = 0.0;
+        for (crd::u64 i = 0; i < floats; ++i) { md = std::max(md, std::fabs(static_cast<double>(pa[i]) - static_cast<double>(pb[i]))); }
+        ra->unmap();
+        rb->unmap();
+        return md;
+    };
+
+    std::printf("\n=== CKIR-emitted GLSL vs hand-written GLSL (Vulkan, kernel-only, min-of-30) ===\n");
+
+    { // ReSTIR RIS — the M=32 weighted-reservoir loop (compute-bound).
+        const int n = 512 * 512;
+        kir::KGraph               g(&alloc);
+        kir::restir::RestirConfig rc;
+        const int                 m = rc.num_candidates;
+        const kir::KEntry         e = kir::restir::build_restir_ris(g, rc);
+        kir::GlslKernel           kern(&alloc);
+        REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, kern));
+        auto pipe_c = pipe_src(crd::containers::to_view(kern.source), "ris_ckir", 2);
+
+        crd::containers::String hand(&alloc);
+        hand.append(R"(#version 450
+layout(local_size_x = 64) in;
+layout(std430, binding = 0) readonly buffer B0 { float buf0[]; };
+layout(std430, binding = 1) buffer B1 { float buf1[]; };
+void main() {
+  uint p = gl_WorkGroupID.x * 64u + gl_LocalInvocationID.x;
+  float wsum = 0.0, cf = 0.0, cph = 0.0;
+  for (int i = 0; i < 32; ++i) {
+    uint base = (p * 32u + uint(i)) * 3u;
+    float fi = buf0[base]; float phi = buf0[base + 1u]; float xii = buf0[base + 2u];
+    wsum += phi;
+    bool repl = xii < phi / max(wsum, 1e-8);
+    cf = repl ? fi : cf; cph = repl ? phi : cph;
+  }
+  float w = wsum / (32.0 * max(cph, 1e-8));
+  uint o = p * 4u;
+  buf1[o] = cf; buf1[o + 1u] = cph; buf1[o + 2u] = w; buf1[o + 3u] = 32.0;
+}
+)");
+        auto pipe_h = pipe_src(crd::containers::to_view(hand), "ris_hand", 2);
+
+        // a SHARED-accumulator loop variant — what CKIR's stmt_for_begin (the only compute-path runtime loop, carrying state
+        // through shared memory) would emit — to see whether a tight shared loop closes the unroll gap or serialises.
+        crd::containers::String hsh(&alloc);
+        hsh.append(R"(#version 450
+layout(local_size_x = 64) in;
+layout(std430, binding = 0) readonly buffer B0 { float buf0[]; };
+layout(std430, binding = 1) buffer B1 { float buf1[]; };
+shared float sw[64]; shared float scf[64]; shared float scph[64];
+void main() {
+  uint p = gl_WorkGroupID.x * 64u + gl_LocalInvocationID.x;
+  uint tid = gl_LocalInvocationIndex;
+  sw[tid] = 0.0; scf[tid] = 0.0; scph[tid] = 0.0;
+  for (int i = 0; i < 32; ++i) {
+    uint base = (p * 32u + uint(i)) * 3u;
+    float phi = buf0[base + 1u];
+    float wsum = sw[tid] + phi; sw[tid] = wsum;
+    bool repl = buf0[base + 2u] < phi / max(wsum, 1e-8);
+    scf[tid] = repl ? buf0[base] : scf[tid];
+    scph[tid] = repl ? phi : scph[tid];
+  }
+  float w = sw[tid] / (32.0 * max(scph[tid], 1e-8));
+  uint o = p * 4u;
+  buf1[o] = scf[tid]; buf1[o + 1u] = scph[tid]; buf1[o + 2u] = w; buf1[o + 3u] = 32.0;
+}
+)");
+        auto pipe_s = pipe_src(crd::containers::to_view(hsh), "ris_shared", 2);
+
+        auto cand  = mkbuf(static_cast<crd::u64>(n) * m * 3);
+        auto out_c = mkbuf(static_cast<crd::u64>(n) * 4);
+        auto out_h = mkbuf(static_cast<crd::u64>(n) * 4);
+        auto out_s = mkbuf(static_cast<crd::u64>(n) * 4);
+        fillbuf(*cand, static_cast<crd::u64>(n) * m * 3, [](crd::u64 i) { return 0.2F + 0.3F * static_cast<float>((i * 2654435761ULL >> 13) & 1023ULL) / 1023.0F; });
+        cg::ComputeBuffer* bc[2] = {cand.get(), out_c.get()};
+        cg::ComputeBuffer* bh[2] = {cand.get(), out_h.get()};
+        cg::ComputeBuffer* bs[2] = {cand.get(), out_s.get()};
+        const double       msc   = time_best(*pipe_c, bc, 2, static_cast<crd::u32>(n / 64));
+        const double       msh   = time_best(*pipe_h, bh, 2, static_cast<crd::u32>(n / 64));
+        const double       mss   = time_best(*pipe_s, bs, 2, static_cast<crd::u32>(n / 64));
+        const double       md    = maxabs_diff(*out_c, *out_h, static_cast<crd::u64>(n) * 4);
+        const double       mds   = maxabs_diff(*out_c, *out_s, static_cast<crd::u64>(n) * 4);
+        CHECK(md < 1e-4);  // HONESTY GATE: the hand kernel computes the SAME thing (else the perf number is meaningless)
+        CHECK(mds < 1e-4); // the shared-loop variant is also the same reservoir
+        std::printf("[crush] ReSTIR RIS (M=32)    CKIR %7.3f ms | hand-reg-loop %7.3f ms | hand-shared-loop %7.3f ms | CKIR/hand %.3f | out-match %.1e/%.1e\n", msc, msh, mss, msc / msh, md, mds);
+    }
+
+    { // atmosphere transmittance — the 40-step exp extinction march (compute-bound), a big LUT for a measurable time.
+        kir::atmos::AtmosphereConfig ac;
+        ac.tlut_w = 2048;
+        ac.tlut_h = 512;
+        const int         w = ac.tlut_w;
+        const int         h = ac.tlut_h;
+        const int         n = w * h;
+        kir::KGraph       g(&alloc);
+        const kir::KEntry e = kir::atmos::build_atmos_transmittance(g, ac);
+        kir::GlslKernel   kern(&alloc);
+        REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, kern));
+        auto pipe_c = pipe_src(crd::containers::to_view(kern.source), "tlut_ckir", 1);
+
+        crd::containers::String hand(&alloc);
+        hand.append(R"(#version 450
+layout(local_size_x = 64) in;
+layout(std430, binding = 0) buffer B0 { float buf0[]; };
+void main() {
+  uint p = gl_WorkGroupID.x * 64u + gl_LocalInvocationID.x;
+  const float rg = 6360.0, rt = 6460.0, h2 = 1282000.0, W = 2048.0, H = 512.0;
+  float hn = sqrt(h2);
+  float fp = float(p);
+  float iyf = floor(fp / W); float ixf = fp - iyf * W;
+  float uu = (ixf + 0.5) / W; float vv = (iyf + 0.5) / H;
+  float v2 = vv * vv;
+  float r = sqrt(h2 * v2 + rg * rg);
+  float d_min = rt - r; float d_max = hn * (1.0 + vv);
+  float d = max(d_min + uu * (d_max - d_min), 1e-4);
+  float mu = max(min((h2 * (1.0 - v2) - d * d) / (2.0 * r * d), 1.0), -1.0);
+  float dt = d / 40.0; float trm = 2.0 * r * mu;
+  float tr = 0.0, tg = 0.0, tb = 0.0;
+  for (int i = 0; i < 40; ++i) {
+    float t = (float(i) + 0.5) * dt;
+    float rtx = sqrt(r * r + trm * t + t * t);
+    float alt = max(rtx - rg, 0.0);
+    float rr = exp(-alt / 8.0); float rm = exp(-alt / 1.2);
+    float ro = max(1.0 - abs(alt - 25.0) / 15.0, 0.0);
+    tr += (0.005802 * rr + 0.004440 * rm + 0.000650 * ro) * dt;
+    tg += (0.013558 * rr + 0.004440 * rm + 0.001881 * ro) * dt;
+    tb += (0.033100 * rr + 0.004440 * rm + 0.000085 * ro) * dt;
+  }
+  uint o = p * 3u;
+  buf0[o] = exp(-tr); buf0[o + 1u] = exp(-tg); buf0[o + 2u] = exp(-tb);
+}
+)");
+        auto pipe_h = pipe_src(crd::containers::to_view(hand), "tlut_hand", 1);
+
+        auto out_c = mkbuf(static_cast<crd::u64>(n) * 3);
+        auto out_h = mkbuf(static_cast<crd::u64>(n) * 3);
+        cg::ComputeBuffer* bc[1] = {out_c.get()};
+        cg::ComputeBuffer* bh[1] = {out_h.get()};
+        const double       msc   = time_best(*pipe_c, bc, 1, static_cast<crd::u32>(n / 64));
+        const double       msh   = time_best(*pipe_h, bh, 1, static_cast<crd::u32>(n / 64));
+        const double       md    = maxabs_diff(*out_c, *out_h, static_cast<crd::u64>(n) * 3);
+        CHECK(md < 1e-4); // HONESTY GATE: same transmittance (FMA-fusion ULP aside), so the ms comparison is real
+        std::printf("[crush] atmos transmittance  CKIR %7.3f ms | hand %7.3f ms | CKIR/hand %.3f | out-match %.1e  (%dx%d LUT)\n", msc, msh, msc / msh, md, w, h);
+    }
+    std::printf("================================================================\n");
+}
+
+TEST_CASE("B14-c: CKIR SVGF TEMPORAL integration DISPATCHES on Vulkan == CPU oracle (bit-exact -- no transcendentals)",
           "[gpu-context][vulkan][gpu][kernel][svgf]")
 {
     namespace kir = crd::kir;
@@ -3855,6 +4812,1166 @@ TEST_CASE("B-cmp Phase 2: CKIR 2-D FFT (6-dispatch pipeline) DISPATCHES on Vulka
     WARN("[fft2d-vk] " << rr << "x" << cc << " bit-exact re-bad " << badr << " im-bad " << badi << " maxdiff " << maxdif);
     CHECK(badr == 0);
     CHECK(badi == 0);
+}
+
+// B16-a-2: the BATCHED strided inverse 2-D FFT (build_fft2d_c2c_batched — 2 dispatches: batched row IFFT -> batched strided+
+// tiled column IFFT) that the FFT-ocean's multi-field transform rides. Runs on Vulkan and is compared BIT-FOR-BIT to the CPU
+// oracle driving the SAME plan across ALL batch images — validating the new radix-16 batched-strided column path on real HW.
+TEST_CASE("B16-a-2: CKIR BATCHED strided inverse 2-D FFT DISPATCHES on Vulkan == CPU oracle bit-exact",
+          "[gpu-context][vulkan][gpu][kernel][fft][ocean]")
+{
+    namespace kir = crd::kir;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+
+    crd::memory::TlsfAllocator alloc(96U << 20U);
+    kir::KGraph                g0(&alloc); // row FFT
+    kir::KGraph                g1(&alloc); // strided column FFT
+    kir::KGraph*               graphs[2] = {&g0, &g1};
+    constexpr int              n         = 64; // power of FOUR
+    constexpr int              batch     = 4;  // the FFT-ocean's 4 packed complex fields
+    constexpr int              tile_c    = 8;
+    constexpr int              rc        = n * n;
+    const kir::Fft2dPlan       plan      = kir::build_fft2d_c2c_batched(graphs, n, n, batch, /*inverse=*/true, tile_c);
+
+    int off[16];
+    int total = 0;
+    for (int b = 0; b < plan.nbuffers; ++b) { off[b] = total; total += plan.buffers[b].size; }
+    crd::containers::Array<crd::f64> a64(&alloc);
+    crd::containers::Array<float>    a32(&alloc);
+    a64.resize(static_cast<crd::usize>(total), 0.0);
+    a32.resize(static_cast<crd::usize>(total), 0.0F);
+    crd::f64* h64[16];
+    float*    h32[16];
+    for (int b = 0; b < plan.nbuffers; ++b) { h64[b] = a64.data() + off[b]; h32[b] = a32.data() + off[b]; }
+
+    constexpr crd::f64 two_pi = 6.28318530717958647693;
+    const auto         f32d   = [](crd::f64 v) { return static_cast<crd::f64>(static_cast<float>(v)); };
+    for (int i = 0; i < rc * batch; ++i)
+    {
+        h64[plan.in_re][i] = static_cast<crd::f64>((i * 7 + 3) % 11 - 5); // integers -> f32-exact inputs
+        h64[plan.in_im][i] = static_cast<crd::f64>((i * 5 + 1) % 13 - 6);
+    }
+    for (int k = 0; k < n; ++k)
+    {
+        const crd::f64 a       = two_pi * static_cast<crd::f64>(k) / static_cast<crd::f64>(n);
+        h64[plan.tw_col_re][k] = f32d(crd::math::cos(a));
+        h64[plan.tw_col_im][k] = f32d(-crd::math::sin(a));
+        h64[plan.tw_row_re][k] = h64[plan.tw_col_re][k];
+        h64[plan.tw_row_im][k] = h64[plan.tw_col_im][k];
+    }
+    for (int i = 0; i < total; ++i) { a32[static_cast<crd::usize>(i)] = static_cast<float>(a64[static_cast<crd::usize>(i)]); }
+
+    crd::kir_test::run_fft2d_cpu(plan, h64, &alloc);
+
+    std::unique_ptr<crd::gpu::ComputePipeline> pipe_store[8];
+    crd::gpu::ComputePipeline*                 pipes[8] = {};
+    for (int pi = 0; pi < plan.npasses; ++pi)
+    {
+        kir::GlslKernel kern(&alloc);
+        REQUIRE(kir::emit_compute_kernel_glsl(*plan.passes[pi].graph, plan.passes[pi].entry, &alloc, kern));
+        const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), "fft2db", &alloc);
+        REQUIRE(spv.ok);
+        pipe_store[pi] = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()),
+                                                            plan.passes[pi].nbind, 0U);
+        REQUIRE(pipe_store[pi] != nullptr);
+        pipes[pi] = pipe_store[pi].get();
+    }
+
+    crd::kir_test::dispatch_fft2d(compute, plan, pipes, h32);
+
+    const auto fa   = [](float x) { return x < 0.0F ? -x : x; };
+    int        badr = 0;
+    int        badi = 0;
+    float      md   = 0.0F;
+    for (int i = 0; i < rc * batch; ++i)
+    {
+        const float er = static_cast<float>(h64[plan.res_re][i]);
+        const float ei = static_cast<float>(h64[plan.res_im][i]);
+        if (h32[plan.res_re][i] != er) { ++badr; }
+        if (h32[plan.res_im][i] != ei) { ++badi; }
+        md = md > fa(h32[plan.res_re][i] - er) ? md : fa(h32[plan.res_re][i] - er);
+        md = md > fa(h32[plan.res_im][i] - ei) ? md : fa(h32[plan.res_im][i] - ei);
+    }
+    WARN("[ocean-ifft-vk] " << n << "x" << n << " x" << batch << " bit-exact re-bad " << badr << " im-bad " << badi << " maxdiff " << md);
+    CHECK(badr == 0);
+    CHECK(badi == 0);
+}
+
+// B16-a-2: the FULL FFT-ocean a-2 pipeline on Vulkan — time-evolution -> batched inverse 2-D FFT -> assemble (displacement/
+// normal/foam) — every stage dispatched + chained on the GPU, then the displacement + normal maps compared to the CPU oracle
+// running the SAME graphs. Seeded from a CPU h0 (a-1 is CPU-verified) to isolate the a-2 kernels. The FFT is bit-exact; the
+// per-texel transcendentals (e^{iωt}, dispersion, the sqrt/div in assemble) are hardware-vs-libm, so the chain matches to ULP.
+TEST_CASE("B16-a-2: FULL FFT-ocean pipeline (evolve->IFFT->assemble) DISPATCHES on Vulkan == CPU oracle (ULP)",
+          "[gpu-context][vulkan][gpu][kernel][ocean]")
+{
+    namespace kir = crd::kir;
+    gpu::GpuContextConfig cfg2;
+    cfg2.backend  = gpu::GpuBackend::Vulkan;
+    cfg2.headless = true;
+    auto ctx      = gpu::create_vulkan_gpu_context(cfg2);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+    const auto uz = [](int v) { return static_cast<crd::usize>(v); };
+
+    crd::memory::TlsfAllocator alloc(192U << 20U);
+    kir::ocean::OceanConfig    oc;
+    oc.n            = 64; // power of four
+    oc.patch_length = crd::units::Length64{250.0};
+    oc.choppiness   = 1.0;
+    oc.foam_bias    = 0.4;
+    oc.foam_scale   = 2.0;
+    const int          n      = oc.n;
+    const int          rc     = n * n;
+    const float        tval   = 2.0F;
+    constexpr crd::f64 two_pi = 6.28318530717958647693;
+    const auto         f32d   = [](crd::f64 v) { return static_cast<crd::f64>(static_cast<float>(v)); };
+
+    kir::KGraph       gspec(&alloc);
+    kir::KGraph       gevo(&alloc);
+    kir::KGraph       gasm(&alloc);
+    kir::KGraph       grow(&alloc);
+    kir::KGraph       gcol(&alloc);
+    const kir::KEntry espec = kir::ocean::build_ocean_spectrum(gspec, oc);
+    const kir::KEntry eevo  = kir::ocean::build_ocean_evolve(gevo, oc);
+    const kir::KEntry easm  = kir::ocean::build_ocean_assemble(gasm, oc);
+    kir::KGraph*         fftg[2] = {&grow, &gcol};
+    const kir::Fft2dPlan plan    = kir::build_fft2d_c2c_batched(fftg, n, n, 4, true, 8);
+
+    // --- shared input: a-1 spectrum on the CPU (a-1 is CPU-verified; both sides use the same f32 h0) ---
+    crd::containers::Array<crd::f64> h0(&alloc);
+    crd::containers::Array<crd::f64> ampd(&alloc);
+    h0.resize(uz(rc * 4));
+    ampd.resize(uz(rc));
+    kir::KernelBuffer sb[2] = {{h0.data(), rc * 4, 0, 0}, {ampd.data(), rc, 0, 1}};
+    kir::eval_cpu_kernel(gspec, espec, sb, 2, espec.local_size[0], &alloc, static_cast<crd::u32>(rc / 64));
+
+    // --- CPU ORACLE: evolve -> IFFT -> assemble in f64 (eval_cpu_kernel rounds each op to f32) ---
+    crd::containers::Array<crd::f64> pard(&alloc);
+    crd::containers::Array<crd::f64> sro(&alloc);
+    crd::containers::Array<crd::f64> sio(&alloc);
+    pard.resize(1U, static_cast<crd::f64>(tval));
+    sro.resize(uz(rc * 4), 0.0);
+    sio.resize(uz(rc * 4), 0.0);
+    kir::KernelBuffer eb[4] = {{h0.data(), rc * 4, 0, 0}, {pard.data(), 1, 0, 1}, {sro.data(), rc * 4, 0, 2}, {sio.data(), rc * 4, 0, 3}};
+    kir::eval_cpu_kernel(gevo, eevo, eb, 4, eevo.local_size[0], &alloc, static_cast<crd::u32>(rc / 64));
+
+    int off[16];
+    int total = 0;
+    for (int b = 0; b < plan.nbuffers; ++b) { off[b] = total; total += plan.buffers[b].size; }
+    crd::containers::Array<crd::f64> arena(&alloc);
+    arena.resize(uz(total), 0.0);
+    crd::f64* h64[16];
+    for (int b = 0; b < plan.nbuffers; ++b) { h64[b] = arena.data() + off[b]; }
+    for (int i = 0; i < rc * 4; ++i) { h64[plan.in_re][i] = sro[uz(i)]; h64[plan.in_im][i] = sio[uz(i)]; }
+    for (int k = 0; k < n; ++k)
+    {
+        const crd::f64 a       = two_pi * static_cast<crd::f64>(k) / static_cast<crd::f64>(n);
+        h64[plan.tw_col_re][k] = f32d(crd::math::cos(a));
+        h64[plan.tw_col_im][k] = f32d(-crd::math::sin(a));
+        h64[plan.tw_row_re][k] = h64[plan.tw_col_re][k];
+        h64[plan.tw_row_im][k] = h64[plan.tw_col_im][k];
+    }
+    crd::kir_test::run_fft2d_cpu(plan, h64, &alloc);
+    crd::containers::Array<crd::f64> dispo(&alloc);
+    crd::containers::Array<crd::f64> normo(&alloc);
+    dispo.resize(uz(rc * 4), 0.0);
+    normo.resize(uz(rc * 4), 0.0);
+    kir::KernelBuffer ao[4] = {{h64[plan.res_re], rc * 4, 0, 0}, {h64[plan.res_im], rc * 4, 0, 1}, {dispo.data(), rc * 4, 0, 2}, {normo.data(), rc * 4, 0, 3}};
+    kir::eval_cpu_kernel(gasm, easm, ao, 4, easm.local_size[0], &alloc, static_cast<crd::u32>(rc / 64));
+
+    // --- GPU: emit + dispatch each stage, chaining host buffers ---
+    const auto make_pipe = [&](kir::KGraph& gg, const kir::KEntry& ee, int nb, const char* nm) {
+        kir::GlslKernel kern(&alloc);
+        REQUIRE(kir::emit_compute_kernel_glsl(gg, ee, &alloc, kern));
+        const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), nm, &alloc);
+        REQUIRE(spv.ok);
+        auto pp = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nb, 0U);
+        REQUIRE(pp != nullptr);
+        return pp;
+    };
+
+    // (1) evolve
+    auto                          pevo = make_pipe(gevo, eevo, 4, "oevo");
+    crd::containers::Array<float> h0f(&alloc);
+    crd::containers::Array<float> parf(&alloc);
+    crd::containers::Array<float> srf(&alloc);
+    crd::containers::Array<float> sif(&alloc);
+    h0f.resize(uz(rc * 4));
+    parf.resize(1U, tval);
+    srf.resize(uz(rc * 4), 0.0F);
+    sif.resize(uz(rc * 4), 0.0F);
+    for (int i = 0; i < rc * 4; ++i) { h0f[uz(i)] = static_cast<float>(h0[uz(i)]); }
+    float*    eh[4] = {h0f.data(), parf.data(), srf.data(), sif.data()};
+    const int el[4] = {rc * 4, 1, rc * 4, rc * 4};
+    crd::kir_test::dispatch_kernel_1wg(compute, *pevo, eh, el, 4, static_cast<crd::u32>(rc / 64));
+
+    // (2) batched IFFT (fill in_re/in_im from the evolve GPU output; twiddles f32)
+    crd::containers::Array<float> a32(&alloc);
+    a32.resize(uz(total), 0.0F);
+    float* h32[16];
+    for (int b = 0; b < plan.nbuffers; ++b) { h32[b] = a32.data() + off[b]; }
+    for (int i = 0; i < rc * 4; ++i) { h32[plan.in_re][i] = srf[uz(i)]; h32[plan.in_im][i] = sif[uz(i)]; }
+    for (int k = 0; k < n; ++k)
+    {
+        const crd::f64 a       = two_pi * static_cast<crd::f64>(k) / static_cast<crd::f64>(n);
+        h32[plan.tw_col_re][k] = static_cast<float>(crd::math::cos(a));
+        h32[plan.tw_col_im][k] = static_cast<float>(-crd::math::sin(a));
+        h32[plan.tw_row_re][k] = h32[plan.tw_col_re][k];
+        h32[plan.tw_row_im][k] = h32[plan.tw_col_im][k];
+    }
+    std::unique_ptr<crd::gpu::ComputePipeline> ifpipe[8];
+    crd::gpu::ComputePipeline*                 ifpipes[8] = {};
+    for (int pi = 0; pi < plan.npasses; ++pi)
+    {
+        ifpipe[pi]  = make_pipe(*plan.passes[pi].graph, plan.passes[pi].entry, plan.passes[pi].nbind, "oifft");
+        ifpipes[pi] = ifpipe[pi].get();
+    }
+    crd::kir_test::dispatch_fft2d(compute, plan, ifpipes, h32);
+
+    // (3) assemble
+    auto                          pasm = make_pipe(gasm, easm, 4, "oasm");
+    crd::containers::Array<float> dgf(&alloc);
+    crd::containers::Array<float> ngf(&alloc);
+    dgf.resize(uz(rc * 4), 0.0F);
+    ngf.resize(uz(rc * 4), 0.0F);
+    float*    ah[4] = {h32[plan.res_re], h32[plan.res_im], dgf.data(), ngf.data()};
+    const int al[4] = {rc * 4, rc * 4, rc * 4, rc * 4};
+    crd::kir_test::dispatch_kernel_1wg(compute, *pasm, ah, al, 4, static_cast<crd::u32>(rc / 64));
+
+    // --- compare displacement + normal maps: GPU vs oracle, ULP (transcendental chain) ---
+    double maxrel = 0.0;
+    for (int i = 0; i < rc * 4; ++i)
+    {
+        const double sd = std::max(1.0, std::fabs(dispo[uz(i)]));
+        const double sn = std::max(1.0, std::fabs(normo[uz(i)]));
+        maxrel          = std::max(maxrel, std::fabs(static_cast<double>(dgf[uz(i)]) - dispo[uz(i)]) / sd);
+        maxrel          = std::max(maxrel, std::fabs(static_cast<double>(ngf[uz(i)]) - normo[uz(i)]) / sn);
+    }
+    std::printf("[Vulkan FFT-ocean pipeline] maxrel(GPU vs oracle) = %.2e\n", maxrel);
+    CHECK(maxrel < 2e-3);
+}
+
+// B16-a-4: the WATER SURFACE actually RENDERS on Vulkan — a fullscreen water quad (normal tilting with FragCoord so the
+// Fresnel + sun glint sweep across the frame) drawn through `water_shade` behind the create_program seam. Readback proves it
+// renders: a bluish deep-water body + a bright sun glint. Drawn from the SHARED build_water_fs, so the DX12 test draws the
+// identical shading (the fragment fan-out proof).
+TEST_CASE("B16-a-4: water_shade RENDERS on Vulkan (bluish body + sun glint)", "[gpu-context][vulkan][gpu][raster][ir][ocean]")
+{
+    namespace kir = crd::kir;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    if (!vk->shader_object()) { WARN("adapter has no VK_EXT_shader_object; skipping the draw"); return; }
+
+    crd::memory::TlsfAllocator alloc(8U << 20U);
+    auto                       raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+
+    constexpr crd::u32 dim = 64U;
+    kir::KGraph        vg(&alloc);
+    kir::KEntry        ve;
+    crd::gputest::build_fullscreen_vs(vg, ve);
+    kir::KGraph fg(&alloc);
+    kir::KEntry fe;
+    crd::gputest::build_water_fs(fg, fe, dim);
+
+    auto vs = ctx->create_program(vg, ve);
+    auto fs = ctx->create_program(fg, fe);
+    REQUIRE(vs != nullptr);
+    REQUIRE(fs != nullptr);
+    auto program = raster->create_raster_program(*vs, *fs);
+    REQUIRE(program != nullptr);
+    REQUIRE(program->valid());
+    auto target = raster->create_color_target(dim, dim);
+    REQUIRE(target != nullptr);
+    raster->draw(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+
+    const crd::u32 c  = target->read_pixel(dim / 2U, dim / 2U);
+    const int      cr = static_cast<int>(c & 0xFFU);
+    const int      cg = static_cast<int>((c >> 8U) & 0xFFU);
+    const int      cb = static_cast<int>((c >> 16U) & 0xFFU);
+    int            maxlum = 0;
+    for (crd::u32 y = 0; y < dim; ++y)
+    {
+        for (crd::u32 x = 0; x < dim; ++x)
+        {
+            const crd::u32 p   = target->read_pixel(x, y);
+            const int      lum = static_cast<int>(p & 0xFFU) + static_cast<int>((p >> 8U) & 0xFFU) + static_cast<int>((p >> 16U) & 0xFFU);
+            if (lum > maxlum) { maxlum = lum; }
+        }
+    }
+    WARN("[water-render-vk] centre RGB=(" << cr << "," << cg << "," << cb << ") maxlum=" << maxlum);
+    CHECK(cb > cr);                    // deep water reads bluish (blue channel dominant)
+    CHECK(cb > 10);                    // and it actually rendered (not black)
+    CHECK(maxlum > (cr + cg + cb) + 90); // a bright sun glint exists somewhere, well above the body
+}
+
+// B16-a-4: RENDER real ocean frames to BMP files you can open. A perspective sea to the horizon (build_ocean_frame_fs) at a
+// few animation times, drawn on Vulkan and written to D:/Dev/cerid/build/ocean_frame_*.bmp. Hidden ([.ocean-frame]) — run it,
+// then open the BMPs. Prints per-frame mean RGB + peak luminance so the render is sanity-checked even without eyes on it.
+TEST_CASE("B16-a-4: RENDER ocean frames to BMP (open them!)", "[.ocean-frame]")
+{
+    namespace kir = crd::kir;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    if (!vk->shader_object()) { WARN("adapter has no VK_EXT_shader_object; skipping"); return; }
+    crd::memory::TlsfAllocator     alloc(384U << 20U);
+    crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+
+    constexpr crd::u32 dim     = 512U;
+    constexpr crd::u32 ss      = 3U;        // SUPERSAMPLE factor — render ss×dim then box-downfilter to dim (reference AA — 3× = 9 samples/px)
+    const crd::u32     rdim    = dim * ss;  // supersampled render resolution
+    const crd::u32     rowsize = (dim * 3U + 3U) & ~3U;
+    const auto         uz      = [](int v) { return static_cast<crd::usize>(v); };
+
+    // LEVER 4: bake OUR FFT-ocean field on the GPU (spectrum→evolve(t)→batched IFFT→assemble — the actual CKIR GPU pipeline the
+    // B16-a-2 test proves bit-exact) into an RGBA8 tile (R,G = normal.xz · B = height · A = Jacobian foam); the raymarch samples it.
+    constexpr int      on         = 256; // FFT tile resolution (power of four)
+    const int          otc        = on * on;
+    constexpr crd::f64 two_pi     = 6.28318530717958647693;
+
+    // ── FOUR cascades (the production 4-spectrum ocean): descending world scales, band-limited so each owns a wavelength band.
+    //    The BIG cascades carry high-amplitude rolling-swell GEOMETRY; the FINE cascades are low-amplitude detail (mostly in the
+    //    per-pixel normal). Four NON-HARMONIC tile sizes push the visible tiling period to their LCM ⇒ effectively non-repeating.
+    //    Foam comes from the SUM of the per-cascade Jacobian folds (the joint folding of the combined 4-spectrum surface). ──
+    constexpr int                    nc = 4;
+    crd::gputest::OceanCascadeRender  ocr; // render params (world scales + geo/normal weights + joint-foam thresholds), shared VS+FS
+    ocr.count      = nc;
+    ocr.patch[0]   = 160.0; // GENTLE VAST sea: big low-freq rollers dominate the geometry, deep-water tiling pushed far out
+    ocr.patch[1]   = 72.0;
+    ocr.patch[2]   = 31.0;
+    ocr.patch[3]   = 13.0;
+    // amplitude split (user): LOW freq = tall geometry, HIGH freq = normal-map texture. Fine cascades barely displace the mesh.
+    ocr.geo_w[0]   = 1.00; ocr.geo_w[1] = 0.42; ocr.geo_w[2] = 0.12; ocr.geo_w[3] = 0.035;
+    ocr.nrm_w[0]   = 0.95; ocr.nrm_w[1] = 1.00; ocr.nrm_w[2] = 0.85; ocr.nrm_w[3] = 0.55; // fine detail lives in the normal
+    ocr.foam_w[0]  = 0.9;  ocr.foam_w[1] = 1.0;  ocr.foam_w[2] = 1.0;  ocr.foam_w[3] = 0.8;
+    ocr.foam_bias  = 0.14; // the baked A is ACCUMULATED temporal foam (0..1 coverage) — threshold to crest whitecaps, clean troughs
+    ocr.foam_scale = 1.8;
+
+    kir::ocean::OceanConfig cfgs[nc];
+    for (int c = 0; c < nc; ++c) { cfgs[c].n = on; }
+    // 0 = big directional SWELL · 1 = mid · 2 = chop · 3 = fine ripple. `small_wave` BAND-LIMITS each cascade's short waves so the
+    // bands don't overlap. GENTLE sea — lower wind (less amplitude) but enough choppiness on 1/2 that crests still pinch → foam.
+    // foam_bias/scale = the assemble kernel's PER-STEP injection coverage; foam_decay = how long a whitecap LINGERS (temporal).
+    // GENTLE geometry (low wind/amplitude) but HIGH choppiness on the mid/fine cascades — choppiness sharpens only the baked
+    // normal + Jacobian (the geometry is vertical-only), so it makes the crests BREAK (foam) without steepening the gentle mesh.
+    cfgs[0].patch_length = crd::units::Length64{520.0}; cfgs[0].wind_speed = crd::units::Velocity64{8.5}; cfgs[0].fetch = crd::units::Length64{300000.0}; cfgs[0].small_wave = crd::units::Length64{9.0};  cfgs[0].swell = 0.72; cfgs[0].choppiness = 0.60;
+    cfgs[1].patch_length = crd::units::Length64{250.0}; cfgs[1].wind_speed = crd::units::Velocity64{7.5}; cfgs[1].fetch = crd::units::Length64{60000.0};  cfgs[1].small_wave = crd::units::Length64{3.2};  cfgs[1].swell = 0.40; cfgs[1].choppiness = 1.30;
+    cfgs[2].patch_length = crd::units::Length64{110.0}; cfgs[2].wind_speed = crd::units::Velocity64{6.5}; cfgs[2].fetch = crd::units::Length64{14000.0};  cfgs[2].small_wave = crd::units::Length64{0.9};  cfgs[2].swell = 0.22; cfgs[2].choppiness = 1.50;
+    cfgs[3].patch_length = crd::units::Length64{46.0};  cfgs[3].wind_speed = crd::units::Velocity64{5.5}; cfgs[3].fetch = crd::units::Length64{3500.0};   cfgs[3].small_wave = crd::units::Length64{0.22}; cfgs[3].swell = 0.12; cfgs[3].choppiness = 1.35;
+    for (int c = 0; c < nc; ++c)
+    {
+        cfgs[c].foam_bias  = 0.70;                // inject foam at pinching crests (J < 0.7) → whitecaps on the crests
+        cfgs[c].foam_scale = 1.6;
+        cfgs[c].foam_decay = 0.965;               // whitecaps linger then fade exponentially (never instant) — the user's model
+    }
+
+    kir::KGraph          grow(&alloc);
+    kir::KGraph          gcol(&alloc);
+    kir::KGraph*         fftg[2] = {&grow, &gcol};
+    const kir::Fft2dPlan plan    = kir::build_fft2d_c2c_batched(fftg, on, on, 4, true, 8);
+
+    const auto make_pipe = [&](kir::KGraph& gg, const kir::KEntry& ee, int nb, const char* nm) {
+        kir::GlslKernel kern(&alloc);
+        REQUIRE(kir::emit_compute_kernel_glsl(gg, ee, &alloc, kern));
+        const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), nm, &alloc);
+        REQUIRE(spv.ok);
+        auto pp = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nb, 0U);
+        REQUIRE(pp != nullptr);
+        return pp;
+    };
+    std::unique_ptr<crd::gpu::ComputePipeline> ifpipe[8];
+    crd::gpu::ComputePipeline*                 ifpipes[8] = {};
+    for (int pi = 0; pi < plan.npasses; ++pi)
+    {
+        ifpipe[pi]  = make_pipe(*plan.passes[pi].graph, plan.passes[pi].entry, plan.passes[pi].nbind, "oifft");
+        ifpipes[pi] = ifpipe[pi].get();
+    }
+
+    // per-cascade evolve + assemble pipelines + the time-independent spectrum h0 (dispatched once now). The spectrum graph is
+    // transient — the compiled pipeline owns its shader — so it lives only inside the loop. h0 for all 4 cascades is packed into
+    // one buffer (cascade c at offset c·otc·4).
+    std::unique_ptr<crd::gpu::ComputePipeline> pevo[nc];
+    std::unique_ptr<crd::gpu::ComputePipeline> pasm[nc];
+    crd::containers::Array<float>              h0all(&alloc);
+    crd::containers::Array<float>              ampsc(&alloc);
+    h0all.resize(uz(nc * otc * 4), 0.0F);
+    ampsc.resize(uz(otc), 0.0F);
+    for (int c = 0; c < nc; ++c)
+    {
+        kir::KGraph       gs(&alloc);
+        kir::KGraph       ge(&alloc);
+        kir::KGraph       ga(&alloc);
+        const kir::KEntry es = kir::ocean::build_ocean_spectrum(gs, cfgs[c]);
+        const kir::KEntry ee = kir::ocean::build_ocean_evolve(ge, cfgs[c]);
+        const kir::KEntry ea = kir::ocean::build_ocean_assemble(ga, cfgs[c]);
+        auto              ps = make_pipe(gs, es, 2, "ospec");
+        pevo[c]              = make_pipe(ge, ee, 4, "oevo");
+        pasm[c]              = make_pipe(ga, ea, 4, "oasm");
+        float*    shp[2] = {h0all.data() + uz(c * otc * 4), ampsc.data()};
+        const int slp[2] = {otc * 4, otc};
+        crd::kir_test::dispatch_kernel_1wg(compute, *ps, shp, slp, 2, static_cast<crd::u32>(otc / 64));
+    }
+
+    // TEMPORAL FOAM accumulation kernel (shared — all cascades share foam_decay): foam(t) = max(foam(t−1)·decay, inject(t)).
+    // When the Jacobian goes positive again (no breaking, inject≈0) the foam DECAYS exponentially (×decay) — never instantly.
+    kir::KGraph       gfoam(&alloc);
+    const kir::KEntry efoam = kir::ocean::build_ocean_foam_accumulate(gfoam, cfgs[0]);
+    auto              pfoam = make_pipe(gfoam, efoam, 3, "ofoam");
+
+    // FFT working arena (f32) — fixed twiddles filled once; evolve fills in_re/in_im per frame.
+    int off[16];
+    int total = 0;
+    for (int b = 0; b < plan.nbuffers; ++b) { off[b] = total; total += plan.buffers[b].size; }
+    crd::containers::Array<float> a32(&alloc);
+    a32.resize(uz(total), 0.0F);
+    float* h32[16];
+    for (int b = 0; b < plan.nbuffers; ++b) { h32[b] = a32.data() + off[b]; }
+    for (int kk = 0; kk < on; ++kk)
+    {
+        const crd::f64 a        = two_pi * static_cast<crd::f64>(kk) / static_cast<crd::f64>(on);
+        h32[plan.tw_col_re][kk] = static_cast<float>(crd::math::cos(a));
+        h32[plan.tw_col_im][kk] = static_cast<float>(-crd::math::sin(a));
+        h32[plan.tw_row_re][kk] = h32[plan.tw_col_re][kk];
+        h32[plan.tw_row_im][kk] = h32[plan.tw_col_im][kk];
+    }
+
+    // Bake cascade `c` at time t → its RGBA8 field [nx, nz, height/(2·hmax), ACCUMULATED foam]. A WARMUP window steps the sim to
+    // time t, and each step accumulates temporal foam foam(s)=max(foam(s−1)·decay, inject) — whitecaps form where the Jacobian
+    // breaks (J<foam_bias), LINGER, then decay exponentially once the crest relaxes (never instant). Returns hmax (height scale).
+    const auto bake_cascade = [&](int c, double t, unsigned char* rgba) -> double {
+        crd::containers::Array<float> parf(&alloc);
+        crd::containers::Array<float> srf(&alloc);
+        crd::containers::Array<float> sif(&alloc);
+        crd::containers::Array<float> dgf(&alloc);
+        crd::containers::Array<float> ngf(&alloc);
+        crd::containers::Array<float> inj(&alloc);
+        crd::containers::Array<float> foam_a(&alloc);
+        crd::containers::Array<float> foam_b(&alloc);
+        parf.resize(1U, 0.0F);
+        srf.resize(uz(otc * 4), 0.0F);
+        sif.resize(uz(otc * 4), 0.0F);
+        dgf.resize(uz(otc * 4), 0.0F);
+        ngf.resize(uz(otc * 4), 0.0F);
+        inj.resize(uz(otc), 0.0F);
+        foam_a.resize(uz(otc), 0.0F);
+        foam_b.resize(uz(otc), 0.0F);
+        constexpr int    warm = 22;  // warmup steps — whitecaps accumulate over the window then linger + decay
+        constexpr double dts  = 0.19;
+        for (int s = 0; s <= warm; ++s)
+        {
+            parf[0]         = static_cast<float>(t - static_cast<double>(warm - s) * dts);
+            float*    eh[4] = {h0all.data() + uz(c * otc * 4), parf.data(), srf.data(), sif.data()};
+            const int el[4] = {otc * 4, 1, otc * 4, otc * 4};
+            crd::kir_test::dispatch_kernel_1wg(compute, *pevo[c], eh, el, 4, static_cast<crd::u32>(otc / 64));
+            for (int i = 0; i < otc * 4; ++i) { h32[plan.in_re][i] = srf[uz(i)]; h32[plan.in_im][i] = sif[uz(i)]; }
+            crd::kir_test::dispatch_fft2d(compute, plan, ifpipes, h32);
+            float*    ah[4] = {h32[plan.res_re], h32[plan.res_im], dgf.data(), ngf.data()};
+            const int al[4] = {otc * 4, otc * 4, otc * 4, otc * 4};
+            crd::kir_test::dispatch_kernel_1wg(compute, *pasm[c], ah, al, 4, static_cast<crd::u32>(otc / 64));
+            for (int i = 0; i < otc; ++i) { inj[uz(i)] = dgf[uz(i * 4 + 3)]; } // this step's Jacobian breaking coverage
+            float*    fh[3] = {foam_a.data(), inj.data(), foam_b.data()};
+            const int fl[3] = {otc, otc, otc};
+            crd::kir_test::dispatch_kernel_1wg(compute, *pfoam, fh, fl, 3, static_cast<crd::u32>(otc / 64));
+            for (int i = 0; i < otc; ++i) { foam_a[uz(i)] = foam_b[uz(i)]; } // ping-pong; foam_a holds the accumulated foam
+        }
+        double hmax = 1e-3;
+        for (int i = 0; i < otc; ++i) { hmax = std::max(hmax, static_cast<double>(std::fabs(dgf[uz(i * 4 + 1)]))); }
+        const auto enc = [](double x) {
+            long vv = std::lround(x * 255.0);
+            if (vv < 0) { vv = 0; }
+            if (vv > 255) { vv = 255; }
+            return static_cast<unsigned char>(vv);
+        };
+        for (int i = 0; i < otc; ++i)
+        {
+            rgba[uz(i * 4 + 0)] = enc(static_cast<double>(ngf[uz(i * 4 + 0)]) * 0.5 + 0.5);          // nx
+            rgba[uz(i * 4 + 1)] = enc(static_cast<double>(ngf[uz(i * 4 + 2)]) * 0.5 + 0.5);          // nz
+            rgba[uz(i * 4 + 2)] = enc(static_cast<double>(dgf[uz(i * 4 + 1)]) / (2.0 * hmax) + 0.5); // height
+            rgba[uz(i * 4 + 3)] = enc(static_cast<double>(foam_a[uz(i)]));                            // ACCUMULATED temporal foam
+        }
+        return hmax;
+    };
+
+    // GOD RAYS + BMP write, shared by the fragment and geometry deliverables. `px` is the display-resolution image (row 0 =
+    // screen top). Marches each pixel toward the sun's screen position, accumulating the bright light it "sees" (crepuscular
+    // shafts), then writes a 24-bit BMP to `path`.
+    const auto finish = [&](const crd::containers::Array<crd::u32>& px, const char* path) {
+        const double lx = 0.25;
+        const double ly = 0.28;
+        const double lz = 0.93;
+        const double sux   = lx / (lz * 0.9);
+        const double suy   = (ly / lz + 0.14) / 0.60;
+        const double sunfx = (sux + 1.0) * static_cast<double>(dim) * 0.5;
+        const double sunfy = (1.0 - suy) * static_cast<double>(dim) * 0.5;
+        crd::containers::Array<crd::u32> out(&alloc);
+        out.resize(static_cast<crd::usize>(dim) * dim);
+        constexpr int gnum = 96;
+        for (crd::u32 y = 0; y < dim; ++y)
+        {
+            for (crd::u32 x = 0; x < dim; ++x)
+            {
+                double       ar    = 0.0;
+                double       ag    = 0.0;
+                double       ab    = 0.0;
+                double       decay = 1.0;
+                const double dxs   = (sunfx - static_cast<double>(x)) / gnum;
+                const double dys   = (sunfy - static_cast<double>(y)) / gnum;
+                double       spx   = static_cast<double>(x);
+                double       spy   = static_cast<double>(y);
+                for (int i = 0; i < gnum; ++i)
+                {
+                    spx += dxs;
+                    spy += dys;
+                    const int ix = static_cast<int>(spx);
+                    const int iy = static_cast<int>(spy);
+                    if (ix < 0 || iy < 0 || ix >= static_cast<int>(dim) || iy >= static_cast<int>(dim)) { continue; }
+                    const crd::u32 sp  = px[static_cast<crd::usize>(iy) * dim + static_cast<crd::u32>(ix)];
+                    const double   rr  = static_cast<double>(sp & 0xFFU) / 255.0;
+                    const double   gg  = static_cast<double>((sp >> 8U) & 0xFFU) / 255.0;
+                    const double   bb  = static_cast<double>((sp >> 16U) & 0xFFU) / 255.0;
+                    const double   lum = 0.3 * rr + 0.5 * gg + 0.2 * bb;
+                    const double   m   = lum > 0.74 ? (lum - 0.74) * 2.8 : 0.0; // only the BRIGHTEST sun/foam casts shafts (no white-out)
+                    const double   w   = decay * m;
+                    ar += rr * w;
+                    ag += gg * w;
+                    ab += bb * w;
+                    decay *= 0.977;
+                }
+                const double   gain = 0.7 / gnum; // visible crepuscular shafts, not a blown-out sky
+                const crd::u32 p    = px[static_cast<crd::usize>(y) * dim + x];
+                const auto     cl   = [](double c) {
+                    long vv = std::lround(c * 255.0);
+                    if (vv < 0) { vv = 0; }
+                    if (vv > 255) { vv = 255; }
+                    return static_cast<crd::u32>(vv);
+                };
+                const crd::u32 rc   = cl(static_cast<double>(p & 0xFFU) / 255.0 + ar * gain);
+                const crd::u32 gc   = cl(static_cast<double>((p >> 8U) & 0xFFU) / 255.0 + ag * gain * 0.75);
+                const crd::u32 bc   = cl(static_cast<double>((p >> 16U) & 0xFFU) / 255.0 + ab * gain * 0.5);
+                out[static_cast<crd::usize>(y) * dim + x] = rc | (gc << 8U) | (bc << 16U) | 0xFF000000U;
+            }
+        }
+
+        crd::containers::Array<unsigned char> bmp(&alloc);
+        bmp.resize(54U + static_cast<crd::usize>(rowsize) * dim, static_cast<unsigned char>(0));
+        const auto p4 = [&](crd::u32 o, crd::u32 vv) {
+            bmp[o]     = static_cast<unsigned char>(vv & 0xFFU);
+            bmp[o + 1] = static_cast<unsigned char>((vv >> 8U) & 0xFFU);
+            bmp[o + 2] = static_cast<unsigned char>((vv >> 16U) & 0xFFU);
+            bmp[o + 3] = static_cast<unsigned char>((vv >> 24U) & 0xFFU);
+        };
+        bmp[0] = 'B';
+        bmp[1] = 'M';
+        p4(2U, 54U + rowsize * dim);
+        p4(10U, 54U);
+        p4(14U, 40U);
+        p4(18U, dim);
+        p4(22U, dim);
+        bmp[26] = 1U;
+        bmp[28] = 24U;
+        p4(34U, rowsize * dim);
+        for (crd::u32 fy = 0; fy < dim; ++fy)
+        {
+            const crd::u32 sy = dim - 1U - fy;
+            for (crd::u32 x = 0; x < dim; ++x)
+            {
+                const crd::u32 pv = out[static_cast<crd::usize>(sy) * dim + x];
+                const crd::u32 o  = 54U + fy * rowsize + x * 3U;
+                bmp[o]     = static_cast<unsigned char>((pv >> 16U) & 0xFFU);
+                bmp[o + 1] = static_cast<unsigned char>((pv >> 8U) & 0xFFU);
+                bmp[o + 2] = static_cast<unsigned char>(pv & 0xFFU);
+            }
+        }
+        FILE* f = nullptr;
+        if (fopen_s(&f, path, "wb") == 0 && f != nullptr)
+        {
+            fwrite(bmp.data(), 1U, bmp.size(), f);
+            fclose(f);
+        }
+    };
+
+    const auto frame = [&](double t, const char* path, const char* path_geo, const char* path_mesh) {
+        // ── (A/B) bake ALL FOUR cascades on the GPU into one packed buffer → 4 mipmapped bindless textures; fill ocr.hmax[c] ──
+        crd::containers::Array<unsigned char> rgball(&alloc);
+        rgball.resize(uz(nc * otc * 4), static_cast<unsigned char>(0));
+        for (int c = 0; c < nc; ++c) { ocr.hmax[c] = bake_cascade(c, t, rgball.data() + uz(c * otc * 4)); }
+        std::unique_ptr<crd::gpu::ITexture> texc[nc];
+        crd::gpu::ITexture*                 texs[8] = {};
+        for (int c = 0; c < nc; ++c)
+        {
+            texc[c] = raster->create_texture_mipped(static_cast<crd::u32>(on), static_cast<crd::u32>(on), rgball.data() + uz(c * otc * 4));
+            REQUIRE(texc[c] != nullptr);
+            texs[c] = texc[c].get();
+        }
+
+        // ── (C) the FRAGMENT deliverable: a fullscreen pass that renders the SKY (its water, sampling cascades 0/1, is overwritten
+        //    by the geometry pass — it only needs to supply the sky above the horizon + the "before" comparison image) ──
+        kir::KGraph vg(&alloc);
+        kir::KEntry ve;
+        crd::gputest::build_fullscreen_vs(vg, ve);
+        kir::KGraph fg(&alloc);
+        kir::KEntry fe;
+        crd::gputest::build_ocean_frame_fft_fs(fg, fe, rdim, ocr.hmax[0], ocr.hmax[1], ocr.patch[0], ocr.patch[1]);
+        auto vs = ctx->create_program(vg, ve);
+        auto fs = ctx->create_program(fg, fe);
+        REQUIRE(vs != nullptr);
+        REQUIRE(fs != nullptr);
+        auto program = raster->create_raster_program(*vs, *fs);
+        REQUIRE(program != nullptr);
+        REQUIRE(program->valid());
+        auto target = raster->create_color_target(rdim, rdim);
+        REQUIRE(target != nullptr);
+        raster->draw_bindless(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, texs, 2U, 3U);
+
+        // read the supersampled frame, then BOX-DOWNFILTER each ss×ss block → one display pixel (reference-quality AA).
+        crd::containers::Array<crd::u32> hires(&alloc);
+        hires.resize(static_cast<crd::usize>(rdim) * rdim);
+        for (crd::u32 y = 0; y < rdim; ++y)
+        {
+            for (crd::u32 x = 0; x < rdim; ++x) { hires[static_cast<crd::usize>(y) * rdim + x] = target->read_pixel(x, y); }
+        }
+        crd::containers::Array<crd::u32> px(&alloc);
+        px.resize(static_cast<crd::usize>(dim) * dim);
+        for (crd::u32 y = 0; y < dim; ++y)
+        {
+            for (crd::u32 x = 0; x < dim; ++x)
+            {
+                crd::u32 ar = 0;
+                crd::u32 ag = 0;
+                crd::u32 ab = 0;
+                for (crd::u32 sy = 0; sy < ss; ++sy)
+                {
+                    for (crd::u32 sx = 0; sx < ss; ++sx)
+                    {
+                        const crd::u32 hp = hires[static_cast<crd::usize>(y * ss + sy) * rdim + (x * ss + sx)];
+                        ar += hp & 0xFFU;
+                        ag += (hp >> 8U) & 0xFFU;
+                        ab += (hp >> 16U) & 0xFFU;
+                    }
+                }
+                const crd::u32 nsub = ss * ss;
+                px[static_cast<crd::usize>(y) * dim + x] = (ar / nsub) | ((ag / nsub) << 8U) | ((ab / nsub) << 16U) | 0xFF000000U;
+            }
+        }
+        double     sr = 0.0;
+        double     sg = 0.0;
+        double     sb = 0.0;
+        crd::u32   mx = 0;
+        for (crd::usize i = 0; i < px.size(); ++i)
+        {
+            const crd::u32 p = px[i];
+            sr += static_cast<double>(p & 0xFFU);
+            sg += static_cast<double>((p >> 8U) & 0xFFU);
+            sb += static_cast<double>((p >> 16U) & 0xFFU);
+            const crd::u32 lum = (p & 0xFFU) + ((p >> 8U) & 0xFFU) + ((p >> 16U) & 0xFFU);
+            if (lum > mx) { mx = lum; }
+        }
+        const double np = static_cast<double>(dim) * dim;
+        WARN("[ocean-frame] t=" << t << " mean RGB=(" << sr / np << "," << sg / np << "," << sb / np << ") maxlum=" << mx << " -> " << path);
+
+        // ── the FRAGMENT deliverable (sky + per-pixel-normal water), kept for side-by-side comparison ──
+        finish(px, path);
+
+        // readback a supersampled DEPTH geometry pass (RGBA — alpha = coverage), box-downfilter, composite over the sky `px`,
+        // and write. Shared by the vertex-pull geometry deliverable AND the mesh-shader deliverable (they render identically).
+        const auto composite_over_sky = [&](gpu::IRasterTarget& gt, const char* out_path) {
+            crd::containers::Array<crd::u32> ghi(&alloc);
+            ghi.resize(static_cast<crd::usize>(rdim) * rdim);
+            for (crd::u32 y = 0; y < rdim; ++y)
+            {
+                for (crd::u32 x = 0; x < rdim; ++x) { ghi[static_cast<crd::usize>(y) * rdim + x] = gt.read_pixel(x, y); }
+            }
+            crd::containers::Array<crd::u32> pxg(&alloc);
+            pxg.resize(static_cast<crd::usize>(dim) * dim);
+            for (crd::u32 y = 0; y < dim; ++y)
+            {
+                for (crd::u32 x = 0; x < dim; ++x)
+                {
+                    crd::u32 gr = 0;
+                    crd::u32 gg = 0;
+                    crd::u32 gb = 0;
+                    crd::u32 ga = 0;
+                    for (crd::u32 sy = 0; sy < ss; ++sy)
+                    {
+                        for (crd::u32 sx = 0; sx < ss; ++sx)
+                        {
+                            const crd::u32 hp = ghi[static_cast<crd::usize>(y * ss + sy) * rdim + (x * ss + sx)];
+                            gr += hp & 0xFFU;
+                            gg += (hp >> 8U) & 0xFFU;
+                            gb += (hp >> 16U) & 0xFFU;
+                            ga += (hp >> 24U) & 0xFFU;
+                        }
+                    }
+                    const crd::u32 nsub = ss * ss;
+                    const crd::u32 sky  = px[static_cast<crd::usize>(y) * dim + x];
+                    const double   cov  = static_cast<double>(ga) / (static_cast<double>(nsub) * 255.0); // coverage 0..1
+                    const auto     mix  = [&](crd::u32 gsum, crd::u32 sky8) {
+                        long vv = std::lround(cov * (static_cast<double>(gsum) / nsub) + (1.0 - cov) * static_cast<double>(sky8));
+                        if (vv < 0) { vv = 0; }
+                        if (vv > 255) { vv = 255; }
+                        return static_cast<crd::u32>(vv);
+                    };
+                    const crd::u32 cr = mix(gr, sky & 0xFFU);
+                    const crd::u32 cg = mix(gg, (sky >> 8U) & 0xFFU);
+                    const crd::u32 cb = mix(gb, (sky >> 16U) & 0xFFU);
+                    pxg[static_cast<crd::usize>(y) * dim + x] = cr | (cg << 8U) | (cb << 16U) | 0xFF000000U;
+                }
+            }
+            finish(pxg, out_path);
+        };
+
+        // ── (D) the DISPLACED-GEOMETRY deliverable — the GOLD-STANDARD path. Render the projected-grid ocean (real FFT-displaced
+        //    geometry via the new SampleIndexedLod vertex fetch) into a DEPTH target, then composite it over the fragment SKY by
+        //    coverage α. The geometry carries the swell silhouettes and the far field, so the "white noise" busy look is gone. ──
+        constexpr int grid_n = 220; // cells/side → grid_n·grid_n·6 vertices (vertex-pull, no index buffer)
+        kir::KGraph gvg(&alloc);
+        kir::KEntry gve;
+        crd::gputest::build_ocean_displaced_vs(gvg, gve, grid_n, ocr);
+        kir::KGraph gfg(&alloc);
+        kir::KEntry gfe;
+        crd::gputest::build_ocean_water_geo_fs(gfg, gfe, ocr);
+        auto gvs = ctx->create_program(gvg, gve);
+        auto gfs = ctx->create_program(gfg, gfe);
+        REQUIRE(gvs != nullptr);
+        REQUIRE(gfs != nullptr);
+        auto gprogram = raster->create_raster_program(*gvs, *gfs);
+        REQUIRE(gprogram != nullptr);
+        REQUIRE(gprogram->valid());
+        auto gtarget = raster->create_color_depth_target(rdim, rdim);
+        REQUIRE(gtarget != nullptr);
+        const crd::u32 vcount = static_cast<crd::u32>(grid_n) * static_cast<crd::u32>(grid_n) * 6U;
+        raster->draw_bindless_depth(*gtarget, *gprogram, gpu::ClearColor{0.0F, 0.0F, 0.0F, 0.0F}, 1.0F, gpu::DepthCompare::Less,
+                                    texs, static_cast<crd::u32>(nc), vcount);
+        composite_over_sky(*gtarget, path_geo);
+
+        // ── (E) the MESH-SHADER deliverable — the SAME projected-grid ocean emitted as MESHLETS (each workgroup a 12×12 patch;
+        //    20×20 = 400 meshlets tile the grid). Reuses ocean_projected_vertex, so it renders pixel-identically to the vertex
+        //    pull path — but as real meshlets (the GPU-driven / cullable geometry substrate). Only when the device has mesh. ──
+        if (vk->mesh_shader() && path_mesh != nullptr)
+        {
+            constexpr int mnp = 32; // patches per side (32×7 = 224 lattice cells, ≈ the 220 vertex-pull grid)
+            constexpr int mkk = 8;  // vertices per patch side: 8²=64 verts, 2·7²=98 tris ⇒ local_size 98 ≤ glslang's 128 mesh cap
+            kir::KGraph   mmg(&alloc);
+            kir::KEntry   mme;
+            crd::gputest::build_ocean_displaced_mesh(mmg, mme, mnp, mkk, ocr);
+            kir::KGraph mfg(&alloc);
+            kir::KEntry mfe;
+            crd::gputest::build_ocean_water_geo_fs(mfg, mfe, ocr);
+            auto mmesh = ctx->create_program(mmg, mme);
+            auto mfs   = ctx->create_program(mfg, mfe);
+            REQUIRE(mmesh != nullptr);
+            REQUIRE(mfs != nullptr);
+            auto mprogram = raster->create_mesh_program(*mmesh, *mfs);
+            REQUIRE(mprogram != nullptr);
+            REQUIRE(mprogram->valid());
+            auto mtarget = raster->create_color_depth_target(rdim, rdim);
+            REQUIRE(mtarget != nullptr);
+            raster->draw_mesh_bindless_depth(*mtarget, *mprogram, gpu::ClearColor{0.0F, 0.0F, 0.0F, 0.0F}, 1.0F,
+                                             gpu::DepthCompare::Less, texs, static_cast<crd::u32>(nc),
+                                             static_cast<crd::u32>(mnp * mnp)); // 400 meshlet workgroups
+            composite_over_sky(*mtarget, path_mesh);
+        }
+    };
+
+    frame(0.0, "D:/Dev/cerid/build/ocean_frame_0.bmp", "D:/Dev/cerid/build/ocean_geo_0.bmp", "D:/Dev/cerid/build/ocean_mesh_0.bmp");
+    frame(2.5, "D:/Dev/cerid/build/ocean_frame_1.bmp", "D:/Dev/cerid/build/ocean_geo_1.bmp", "D:/Dev/cerid/build/ocean_mesh_1.bmp");
+    frame(5.0, "D:/Dev/cerid/build/ocean_frame_2.bmp", "D:/Dev/cerid/build/ocean_geo_2.bmp", "D:/Dev/cerid/build/ocean_mesh_2.bmp");
+    CHECK(true); // visual deliverable — ocean_frame_* = fragment · ocean_geo_* = vertex-pull geometry · ocean_mesh_* = mesh shaders
+}
+
+// B16-a-3: GPU-validate the multi-scale ocean's new surface on Vulkan — (A) the temporal foam-accumulation kernel BIT-EXACT
+// (max/mul, no transcendentals), and (B) the multi-cascade batched inverse 2-D FFT at batch = 4·C (C=3 ⇒ 12 fields) BIT-EXACT
+// vs the CPU oracle — proving the DRAM-bound multi-cascade batch runs correctly on real hardware.
+TEST_CASE("B16-a-3: foam accumulate + multi-cascade batch-12 IFFT DISPATCH on Vulkan == oracle bit-exact",
+          "[gpu-context][vulkan][gpu][kernel][ocean]")
+{
+    namespace kir = crd::kir;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+    const auto uz = [](int v) { return static_cast<crd::usize>(v); };
+
+    crd::memory::TlsfAllocator alloc(96U << 20U);
+    constexpr int              n  = 64;
+    constexpr int              rc = n * n;
+
+    // ── (A) temporal foam accumulation, bit-exact ──
+    {
+        kir::ocean::OceanConfig oc;
+        oc.n           = n;
+        oc.foam_decay  = 0.9;
+        kir::KGraph       g(&alloc);
+        const kir::KEntry e = kir::ocean::build_ocean_foam_accumulate(g, oc);
+
+        crd::containers::Array<crd::f64> prev(&alloc);
+        crd::containers::Array<crd::f64> inj(&alloc);
+        crd::containers::Array<crd::f64> outo(&alloc);
+        prev.resize(uz(rc));
+        inj.resize(uz(rc));
+        outo.resize(uz(rc), 0.0);
+        for (int i = 0; i < rc; ++i) { prev[uz(i)] = 0.01 * static_cast<double>(i % 7); inj[uz(i)] = (i % 5 == 0) ? 0.7 : 0.0; }
+        kir::KernelBuffer ob[3] = {{prev.data(), rc, 0, 0}, {inj.data(), rc, 0, 1}, {outo.data(), rc, 0, 2}};
+        kir::eval_cpu_kernel(g, e, ob, 3, e.local_size[0], &alloc, static_cast<crd::u32>(rc / 64));
+
+        kir::GlslKernel kern(&alloc);
+        REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, kern));
+        const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), "ofoam", &alloc);
+        REQUIRE(spv.ok);
+        auto pipe = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), 3, 0U);
+        REQUIRE(pipe != nullptr);
+        crd::containers::Array<float> hp(&alloc);
+        crd::containers::Array<float> hi(&alloc);
+        crd::containers::Array<float> ho(&alloc);
+        hp.resize(uz(rc));
+        hi.resize(uz(rc));
+        ho.resize(uz(rc), -9.0F);
+        for (int i = 0; i < rc; ++i) { hp[uz(i)] = static_cast<float>(prev[uz(i)]); hi[uz(i)] = static_cast<float>(inj[uz(i)]); }
+        float*    host[3] = {hp.data(), hi.data(), ho.data()};
+        const int lens[3] = {rc, rc, rc};
+        crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 3, static_cast<crd::u32>(rc / 64));
+        int bad = 0;
+        for (int i = 0; i < rc; ++i) { if (ho[uz(i)] != static_cast<float>(outo[uz(i)])) { ++bad; } }
+        CHECK(bad == 0);
+    }
+
+    // ── (B) multi-cascade batched IFFT, batch = 4·C (C=3), bit-exact ──
+    for (int batch : {4, 12, 16}) // a-2 single-cascade (4), a-3 three/four-cascade (12/16) — all bit-exact
+    {
+        kir::KGraph   g0(&alloc);
+        kir::KGraph   g1(&alloc);
+        kir::KGraph*  graphs[2] = {&g0, &g1};
+        const kir::Fft2dPlan plan = kir::build_fft2d_c2c_batched(graphs, n, n, batch, true, 8);
+
+        int off[16];
+        int total = 0;
+        for (int b = 0; b < plan.nbuffers; ++b) { off[b] = total; total += plan.buffers[b].size; }
+        crd::containers::Array<crd::f64> a64(&alloc);
+        crd::containers::Array<float>    a32(&alloc);
+        a64.resize(uz(total), 0.0);
+        a32.resize(uz(total), 0.0F);
+        crd::f64* h64[16];
+        float*    h32[16];
+        for (int b = 0; b < plan.nbuffers; ++b) { h64[b] = a64.data() + off[b]; h32[b] = a32.data() + off[b]; }
+
+        constexpr crd::f64 two_pi = 6.28318530717958647693;
+        const auto         f32d   = [](crd::f64 v) { return static_cast<crd::f64>(static_cast<float>(v)); };
+        for (int i = 0; i < rc * batch; ++i)
+        {
+            h64[plan.in_re][i] = static_cast<crd::f64>((i * 7 + 3) % 11 - 5);
+            h64[plan.in_im][i] = static_cast<crd::f64>((i * 5 + 1) % 13 - 6);
+        }
+        for (int k = 0; k < n; ++k)
+        {
+            const crd::f64 a       = two_pi * static_cast<crd::f64>(k) / static_cast<crd::f64>(n);
+            h64[plan.tw_col_re][k] = f32d(crd::math::cos(a));
+            h64[plan.tw_col_im][k] = f32d(-crd::math::sin(a));
+            h64[plan.tw_row_re][k] = h64[plan.tw_col_re][k];
+            h64[plan.tw_row_im][k] = h64[plan.tw_col_im][k];
+        }
+        for (int i = 0; i < total; ++i) { a32[uz(i)] = static_cast<float>(a64[uz(i)]); }
+        crd::kir_test::run_fft2d_cpu(plan, h64, &alloc);
+
+        std::unique_ptr<crd::gpu::ComputePipeline> pipe_store[8];
+        crd::gpu::ComputePipeline*                 pipes[8] = {};
+        for (int pi = 0; pi < plan.npasses; ++pi)
+        {
+            kir::GlslKernel kern(&alloc);
+            REQUIRE(kir::emit_compute_kernel_glsl(*plan.passes[pi].graph, plan.passes[pi].entry, &alloc, kern));
+            const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), "casc", &alloc);
+            REQUIRE(spv.ok);
+            pipe_store[pi] = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), plan.passes[pi].nbind, 0U);
+            REQUIRE(pipe_store[pi] != nullptr);
+            pipes[pi] = pipe_store[pi].get();
+        }
+        crd::kir_test::dispatch_fft2d(compute, plan, pipes, h32);
+
+        int badr = 0;
+        int badi = 0;
+        for (int i = 0; i < rc * batch; ++i)
+        {
+            if (h32[plan.res_re][i] != static_cast<float>(h64[plan.res_re][i])) { ++badr; }
+            if (h32[plan.res_im][i] != static_cast<float>(h64[plan.res_im][i])) { ++badi; }
+        }
+        WARN("[ocean-cascade-vk] " << n << "x" << n << " batch=" << batch << " re-bad " << badr << " im-bad " << badi);
+        CHECK(badr == 0);
+        CHECK(badi == 0);
+    }
+}
+
+// B16-a-2 CRUSH BENCH: the FFT-ocean's BATCHED inverse 2-D FFT (build_fft2d_c2c_batched — 2-pass transpose-on-write strided)
+// GPU-timed via last_gpu_ms (kernel only, upload/readback excluded — apples-to-apples with cuFFT's cudaEvent), min-of-30.
+// Sweeps (n, batch) to span the L2-resident -> DRAM-bound crossover (48 MB L2 on Ada ⇒ n=512, batch>=32 spills). Self-verifies
+// per point: a DC-only spectrum (V at index 0 of each image) inverse-FFTs to a CONSTANT field V ⇒ a fast wrong kernel fails.
+// Hidden ([.ocean-ifft-bench]); compare per_image_ms to cufft_2d_c2c_batched_bench.exe. Board: docs/bench/2026-07-15-*.
+TEST_CASE("B16-a-2: CKIR batched inverse 2-D FFT (the FFT-ocean transform) GPU benchmark vs cuFFT batched", "[.ocean-ifft-bench]")
+{
+    namespace kir = crd::kir;
+    namespace cg  = crd::gpu;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+    crd::memory::TlsfAllocator alloc(64U << 20U);
+    using cg::compute_usage::storage;
+    using cg::compute_usage::transfer_dst;
+    using cg::compute_usage::transfer_src;
+    constexpr crd::f64 two_pi = 6.28318530717958647693;
+    constexpr int      tile_c = 8;
+
+    const int pts[6][2] = {{256, 4}, {256, 16}, {256, 64}, {512, 4}, {512, 16}, {512, 64}};
+    std::printf("# CKIR batched inverse 2-D FFT (2-pass strided), Vulkan last_gpu_ms min-of-30\n");
+    std::printf("# %-6s %-6s %-14s %-16s\n", "N", "B", "batch_ms", "per_image_ms");
+    for (int pi = 0; pi < 6; ++pi)
+    {
+        const int            n     = pts[pi][0];
+        const int            batch = pts[pi][1];
+        const int            rc    = n * n;
+        const float          vdc   = 3.5F; // DC value ⇒ constant field vdc
+        kir::KGraph          g0(&alloc);
+        kir::KGraph          g1(&alloc);
+        kir::KGraph*         graphs[2] = {&g0, &g1};
+        const kir::Fft2dPlan plan      = kir::build_fft2d_c2c_batched(graphs, n, n, batch, true, tile_c);
+
+        std::unique_ptr<cg::ComputePipeline> pipe_store[8];
+        cg::ComputePipeline*                 pipes[8] = {};
+        bool                                 ok       = true;
+        for (int p = 0; p < plan.npasses; ++p)
+        {
+            kir::GlslKernel kern(&alloc);
+            REQUIRE(kir::emit_compute_kernel_glsl(*plan.passes[p].graph, plan.passes[p].entry, &alloc, kern));
+            const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), "oifftb", &alloc);
+            if (!spv.ok) { ok = false; break; }
+            pipe_store[p] = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), plan.passes[p].nbind, 0U);
+            if (pipe_store[p] == nullptr) { ok = false; break; }
+            pipes[p] = pipe_store[p].get();
+        }
+        if (!ok) { WARN("[ocean-ifft-bench] N=" << n << " B=" << batch << " SKIPPED (compile/pipeline)"); continue; }
+
+        std::unique_ptr<cg::ComputeBuffer> dev[16];
+        for (int b = 0; b < plan.nbuffers; ++b)
+        {
+            const crd::u64 bytes = static_cast<crd::u64>(plan.buffers[b].size) * sizeof(float);
+            dev[b] = compute.create_buffer(bytes, storage | transfer_dst | transfer_src, cg::ComputeMemory::GpuOnly);
+        }
+        auto up = [&](int id, auto fill) {
+            const crd::u64 bytes = static_cast<crd::u64>(plan.buffers[id].size) * sizeof(float);
+            auto           stg   = compute.create_buffer(bytes, transfer_src, cg::ComputeMemory::CpuToGpu);
+            auto*          p     = static_cast<float*>(stg->map());
+            fill(p, plan.buffers[id].size);
+            stg->unmap();
+            auto& rec = compute.begin();
+            rec.copy(*stg, *dev[id], 0U, 0U, bytes);
+            compute.submit_and_wait();
+        };
+        up(plan.in_re, [&](float* p, int c) { for (int i = 0; i < c; ++i) { p[i] = (i % rc == 0) ? vdc : 0.0F; } }); // DC per image
+        up(plan.in_im, [](float* p, int c) { for (int i = 0; i < c; ++i) { p[i] = 0.0F; } });
+        up(plan.tw_col_re, [&](float* p, int c) { for (int k = 0; k < c; ++k) { p[k] = static_cast<float>(crd::math::cos(two_pi * k / n)); } });
+        up(plan.tw_col_im, [&](float* p, int c) { for (int k = 0; k < c; ++k) { p[k] = static_cast<float>(-crd::math::sin(two_pi * k / n)); } });
+        up(plan.tw_row_re, [&](float* p, int c) { for (int k = 0; k < c; ++k) { p[k] = static_cast<float>(crd::math::cos(two_pi * k / n)); } });
+        up(plan.tw_row_im, [&](float* p, int c) { for (int k = 0; k < c; ++k) { p[k] = static_cast<float>(-crd::math::sin(two_pi * k / n)); } });
+
+        auto record = [&]() {
+            auto& rec = compute.begin();
+            for (int p = 0; p < plan.npasses; ++p)
+            {
+                const kir::Fft2dPass& pp       = plan.passes[p];
+                cg::ComputeBuffer*    binds[8] = {};
+                for (int k = 0; k < pp.nbind; ++k) { binds[k] = dev[pp.bind[k]].get(); }
+                rec.dispatch(*pipes[p], crd::containers::ConstSpan<cg::ComputeBuffer*>(binds, static_cast<crd::usize>(pp.nbind)), nullptr, 0U, pp.num_workgroups, 1U, 1U);
+                if (p + 1 < plan.npasses) { for (int b = 0; b < plan.nbuffers; ++b) { rec.barrier(*dev[b], cg::ComputeAccess::ShaderWrite, cg::ComputeAccess::ShaderRead); } }
+            }
+            compute.submit_and_wait();
+        };
+        for (int w = 0; w < 5; ++w) { record(); }
+        double best = 1e30;
+        for (int r = 0; r < 30; ++r) { record(); const double ms = compute.last_gpu_ms(); if (ms > 0.0 && ms < best) { best = ms; } }
+
+        // self-verify: DC-only spectrum ⇒ constant field vdc (unnormalised inverse). Check the first 64 outputs of image 0.
+        auto rb = compute.create_buffer(64U * sizeof(float), transfer_dst, cg::ComputeMemory::GpuToCpu);
+        { auto& rec = compute.begin(); rec.barrier(*dev[plan.res_re], cg::ComputeAccess::ShaderWrite, cg::ComputeAccess::TransferSrc); rec.copy(*dev[plan.res_re], *rb, 0U, 0U, 64U * sizeof(float)); compute.submit_and_wait(); }
+        const auto* o   = static_cast<const float*>(rb->map());
+        int         bad = 0;
+        for (int i = 0; i < 64; ++i) { if (o[i] < vdc - 1e-3F || o[i] > vdc + 1e-3F) { ++bad; } }
+        rb->unmap();
+        std::printf("%-6d %-6d %-14.4f %-16.5f  verify_bad=%d\n", n, batch, best, best / batch, bad);
+        CHECK(best < 1e29);
+        CHECK(bad == 0);
+    }
+}
+
+// B16-a-2 FUSION CRUSH BENCH: the FUSED ocean update (build_ocean_evolve_rowfft -> strided column IFFT = 2 dispatches, evolve
+// folded into the row IFFT's first global load) vs the UN-FUSED (evolve -> row IFFT -> strided column IFFT = 3 dispatches).
+// The fusion eliminates the evolve dispatch AND the whole packed-spectrum global round-trip (evolve writes 8·N² floats the row
+// IFFT reads straight back). This is the fewer-global-round-trips win a cuFFT-based ocean CANNOT match: cuFFT cannot fuse the
+// wave physics into its transform, so it MUST run a separate evolve kernel writing the spectrum (exactly the round-trip we
+// delete). GPU-timed via last_gpu_ms, min-of-30, self-verifying (fused res == un-fused res BIT-EXACT — also proves the fused
+// kernel runs correctly on real hardware). Hidden ([.ocean-fused-bench]). Batch = 4 packed fields (one cascade).
+TEST_CASE("B16-a-2: FUSED ocean update vs un-fused (the fusion crush) GPU benchmark", "[.ocean-fused-bench]")
+{
+    namespace kir = crd::kir;
+    namespace cg  = crd::gpu;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+    crd::memory::TlsfAllocator alloc(256U << 20U);
+    using cg::compute_usage::storage;
+    using cg::compute_usage::transfer_dst;
+    using cg::compute_usage::transfer_src;
+    constexpr crd::f64 two_pi = 6.28318530717958647693;
+    const float        tval   = 1.5F;
+
+    const int ns[2] = {256, 1024};
+    std::printf("# FUSED vs un-fused ocean update, Vulkan last_gpu_ms min-of-30, batch=4 (one cascade)\n");
+    std::printf("# %-6s %-14s %-14s %-10s %-8s\n", "N", "unfused_ms", "fused_ms", "speedup", "verify");
+    for (int nidx = 0; nidx < 2; ++nidx)
+    {
+        const int n      = ns[nidx];
+        const int rc     = n * n;
+        const int tile_c = (n >= 1024) ? 4 : 8; // radix-16 tiled column shared (2*tile_c*(n+1) f32) must fit 48 KB
+        kir::ocean::OceanConfig oc;
+        oc.n            = n;
+        oc.patch_length = crd::units::Length64{250.0};
+
+        kir::KGraph          gevo(&alloc);
+        kir::KGraph          grow(&alloc);
+        kir::KGraph          gcol(&alloc);
+        kir::KGraph          gfus(&alloc);
+        const kir::KEntry    eevo = kir::ocean::build_ocean_evolve(gevo, oc);
+        const kir::Fft1dPlan prow = kir::build_fft1d_radix4(grow, n, true, true);               // row IFFT (radix-4, matches the fused kernel)
+        const kir::Fft1dPlan pcol = kir::build_fft1d_radix16(gcol, n, true, true, tile_c, n);   // strided column IFFT
+        const kir::KEntry    efus = kir::ocean::build_ocean_evolve_rowfft(gfus, oc);            // fused evolve+row IFFT
+
+        const auto make = [&](kir::KGraph& gg, const kir::KEntry& e, int nb, const char* nm) -> std::unique_ptr<cg::ComputePipeline> {
+            kir::GlslKernel kern(&alloc);
+            REQUIRE(kir::emit_compute_kernel_glsl(gg, e, &alloc, kern));
+            const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), nm, &alloc);
+            if (!spv.ok) { return nullptr; }
+            return compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nb, 0U);
+        };
+        auto p_evo = make(gevo, eevo, 4, "oevo");
+        auto p_row = make(grow, prow.entry, 6, "orow");
+        auto p_col = make(gcol, pcol.entry, 6, "ocol");
+        auto p_fus = make(gfus, efus, 6, "ofus");
+        if (p_evo == nullptr || p_row == nullptr || p_col == nullptr || p_fus == nullptr)
+        {
+            WARN("[ocean-fused-bench] N=" << n << " SKIPPED (compile/pipeline — likely shared-mem limit)");
+            continue;
+        }
+
+        // logical buffers: 0 h0, 1 params, 2 tw_re, 3 tw_im, 4 spec_re, 5 spec_im, 6 xr, 7 xi, 8 resu_re, 9 resu_im, 10 resf_re, 11 resf_im
+        const int          sizes[12] = {rc * 4, 1, n, n, rc * 4, rc * 4, rc * 4, rc * 4, rc * 4, rc * 4, rc * 4, rc * 4};
+        std::unique_ptr<cg::ComputeBuffer> dev[12];
+        for (int b = 0; b < 12; ++b)
+        {
+            dev[b] = compute.create_buffer(static_cast<crd::u64>(sizes[b]) * sizeof(float), storage | transfer_dst | transfer_src, cg::ComputeMemory::GpuOnly);
+        }
+        const auto up = [&](int id, auto fill) {
+            auto  stg = compute.create_buffer(static_cast<crd::u64>(sizes[id]) * sizeof(float), transfer_src, cg::ComputeMemory::CpuToGpu);
+            auto* p   = static_cast<float*>(stg->map());
+            fill(p, sizes[id]);
+            stg->unmap();
+            auto& rec = compute.begin();
+            rec.copy(*stg, *dev[id], 0U, 0U, static_cast<crd::u64>(sizes[id]) * sizeof(float));
+            compute.submit_and_wait();
+        };
+        up(0, [](float* p, int c) { for (int i = 0; i < c; ++i) { p[i] = static_cast<float>((i * 13 + 5) % 17 - 8) * 0.01F; } }); // synthetic h0
+        up(1, [&](float* p, int) { p[0] = tval; });
+        up(2, [&](float* p, int c) { for (int k = 0; k < c; ++k) { p[k] = static_cast<float>(crd::math::cos(two_pi * k / n)); } });
+        up(3, [&](float* p, int c) { for (int k = 0; k < c; ++k) { p[k] = static_cast<float>(-crd::math::sin(two_pi * k / n)); } });
+
+        const auto dsp = [&](cg::ComputePipeline& pipe, const int* ids, int nb, crd::u32 grid, cg::ComputeRecorder& rec) {
+            cg::ComputeBuffer* binds[8] = {};
+            for (int k = 0; k < nb; ++k) { binds[k] = dev[ids[k]].get(); }
+            rec.dispatch(pipe, crd::containers::ConstSpan<cg::ComputeBuffer*>(binds, static_cast<crd::usize>(nb)), nullptr, 0U, grid, 1U, 1U);
+            for (int b = 0; b < 12; ++b) { rec.barrier(*dev[b], cg::ComputeAccess::ShaderWrite, cg::ComputeAccess::ShaderRead); }
+        };
+        const int    evo_b[4] = {0, 1, 4, 5};
+        const int    row_b[6] = {4, 5, 2, 3, 6, 7};
+        const int    colu_b[6] = {6, 7, 2, 3, 8, 9};
+        const int    fus_b[6] = {0, 1, 2, 3, 6, 7};
+        const int    colf_b[6] = {6, 7, 2, 3, 10, 11};
+        const crd::u32 grid_map  = static_cast<crd::u32>(rc / 64);
+        const crd::u32 grid_row  = static_cast<crd::u32>(n * 4);
+        const crd::u32 grid_col  = static_cast<crd::u32>((n / tile_c) * 4);
+
+        const auto rec_unfused = [&]() {
+            auto& rec = compute.begin();
+            dsp(*p_evo, evo_b, 4, grid_map, rec);   // evolve -> spec
+            dsp(*p_row, row_b, 6, grid_row, rec);   // row IFFT spec -> x
+            dsp(*p_col, colu_b, 6, grid_col, rec);  // strided column IFFT x -> resu
+            compute.submit_and_wait();
+        };
+        const auto rec_fused = [&]() {
+            auto& rec = compute.begin();
+            dsp(*p_fus, fus_b, 6, grid_row, rec);   // fused evolve+row IFFT h0 -> x
+            dsp(*p_col, colf_b, 6, grid_col, rec);  // strided column IFFT x -> resf
+            compute.submit_and_wait();
+        };
+
+        for (int w = 0; w < 5; ++w) { rec_unfused(); rec_fused(); }
+        double bu = 1e30;
+        double bf = 1e30;
+        for (int r = 0; r < 30; ++r) { rec_unfused(); const double ms = compute.last_gpu_ms(); if (ms > 0.0 && ms < bu) { bu = ms; } }
+        for (int r = 0; r < 30; ++r) { rec_fused(); const double ms = compute.last_gpu_ms(); if (ms > 0.0 && ms < bf) { bf = ms; } }
+
+        // self-verify: fused res == un-fused res, bit-exact (the fusion + FFT are exact; GPU transcendentals are identical on
+        // both paths). Read back the full 4-field result and compare.
+        auto rbu = compute.create_buffer(static_cast<crd::u64>(rc * 4) * sizeof(float), transfer_dst, cg::ComputeMemory::GpuToCpu);
+        auto rbf = compute.create_buffer(static_cast<crd::u64>(rc * 4) * sizeof(float), transfer_dst, cg::ComputeMemory::GpuToCpu);
+        {
+            auto& rec = compute.begin();
+            rec.barrier(*dev[8], cg::ComputeAccess::ShaderWrite, cg::ComputeAccess::TransferSrc);
+            rec.barrier(*dev[10], cg::ComputeAccess::ShaderWrite, cg::ComputeAccess::TransferSrc);
+            rec.copy(*dev[8], *rbu, 0U, 0U, static_cast<crd::u64>(rc * 4) * sizeof(float));
+            rec.copy(*dev[10], *rbf, 0U, 0U, static_cast<crd::u64>(rc * 4) * sizeof(float));
+            compute.submit_and_wait();
+        }
+        const auto* ou  = static_cast<const float*>(rbu->map());
+        const auto* of  = static_cast<const float*>(rbf->map());
+        int         bad = 0;
+        for (int i = 0; i < rc * 4; ++i) { if (ou[i] != of[i]) { ++bad; } }
+        rbu->unmap();
+        rbf->unmap();
+
+        std::printf("%-6d %-14.4f %-14.4f %-10.3f %-8d\n", n, bu, bf, bu / bf, bad);
+        CHECK(bu < 1e29);
+        CHECK(bf < 1e29);
+        CHECK(bad == 0);
+    }
 }
 
 // B-cmp Phase 3: THE CRUSH — the FUSED 2-D FFT-convolution (7 dispatches: row FFT -> transpose -> on-chip fused column conv

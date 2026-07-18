@@ -101,12 +101,27 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
         return kb->data[idx];
     };
 
+    // MEMOIZATION — the deep-graph accelerant. Within ONE top-level eval the tid/loop/buffer/shared state is FIXED, so a node's
+    // value is stable ⇒ cache it, keyed by a generation bumped on each top-level entry (so contexts self-invalidate — no clear).
+    // Collapses the recursive re-walk that makes deep noise / cloud-density graphs intractable. DISABLED when the graph has
+    // subgroup ops (they change `tid` MID-eval ⇒ a value cached under one lane would be wrong for another).
+    bool has_subgroup = false;
+    for (int i = 0; i < nnode; ++i) { const KOp op = g.node(i).op; if (op == KOp::SubgroupBallot || op == KOp::SubgroupMatch || op == KOp::SubgroupBallotExclCount) { has_subgroup = true; break; } }
+    Array<crd::f64> memo(scratch);     memo.resize(static_cast<crd::usize>(nnode), 0.0);
+    Array<crd::i64> memo_gen(scratch); memo_gen.resize(static_cast<crd::usize>(nnode), -1);
+    crd::i64        cur_gen    = 0;
+    int             eval_depth = 0;
+
     // recursive per-thread scalar evaluation of a value node (for the current `tid`).
     auto eval = [&](auto&& self, int node) -> crd::f64 {
+        if (eval_depth == 0 && !has_subgroup) { ++cur_gen; } // top-level entry ⇒ a fresh context (tid/loop/state fixed within it)
+        ++eval_depth;
         if (mat_off[static_cast<crd::usize>(node)] >= 0) // a frozen node returns its per-thread snapshot
         {
+            --eval_depth;
             return mat_pool[static_cast<crd::usize>(mat_off[static_cast<crd::usize>(node)]) + static_cast<crd::usize>(tid)];
         }
+        if (!has_subgroup && memo_gen[static_cast<crd::usize>(node)] == cur_gen) { --eval_depth; return memo[static_cast<crd::usize>(node)]; }
         const KNode& n = g.node(node);
         crd::f64     r = 0.0;
         switch (n.op)
@@ -168,7 +183,10 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
                 else if (n.a >= 0) { r = apply_unary(n.op, self(self, n.a)); }
                 break;
         }
-        return round_dtype(r, n.dtype());
+        const crd::f64 rr = round_dtype(r, n.dtype());
+        if (!has_subgroup) { memo[static_cast<crd::usize>(node)] = rr; memo_gen[static_cast<crd::usize>(node)] = cur_gen; }
+        --eval_depth;
+        return rr;
     };
 
     // commit every pending write (in execution order → deterministic; a well-formed kernel has no cross-thread conflicts).

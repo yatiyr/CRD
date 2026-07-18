@@ -101,6 +101,77 @@ ComPtr<ID3D12PipelineState> build_graphics_pso(ID3D12Device* dev, ID3D12RootSign
     return pso;
 }
 
+// B4: a D3D12 pipeline-state STREAM subobject — {type enum, payload}, pointer-aligned so the next subobject starts aligned.
+// (The backend has no CD3DX12 helpers, so the mesh-PSO stream is hand-rolled.) C4324 (padded-due-to-alignas) is the very
+// layout this needs — the trailing pad is what makes the next subobject pointer-aligned — so it is suppressed by design.
+#pragma warning(push)
+#pragma warning(disable : 4324)
+template <D3D12_PIPELINE_STATE_SUBOBJECT_TYPE Type, typename Payload>
+struct alignas(void*) PsoStreamSub
+{
+    D3D12_PIPELINE_STATE_SUBOBJECT_TYPE type = Type;
+    Payload                             value{};
+};
+#pragma warning(pop)
+
+// B4: build a MESH pipeline state (MS + PS). Unlike a graphics PSO there is no VS/input-layout/IA-topology — a mesh shader
+// GENERATES its topology — so it must be created via the SUBOBJECT-STREAM path (ID3D12Device2::CreatePipelineState), not
+// CreateGraphicsPipelineState. Like the graphics PSO it BAKES SampleDesc + depth + RTV formats, so a program caches one per
+// (samples, depth) key. `dsv == DXGI_FORMAT_UNKNOWN` ⇒ the colour-only path.
+ComPtr<ID3D12PipelineState> build_mesh_pso(ID3D12Device2* dev2, ID3D12RootSignature* root, D3D12_SHADER_BYTECODE ms,
+                                           D3D12_SHADER_BYTECODE ps, UINT samples, DXGI_FORMAT dsv,
+                                           D3D12_COMPARISON_FUNC depth_func, UINT num_rts = 1)
+{
+    if (dev2 == nullptr) { return nullptr; }
+    D3D12_RASTERIZER_DESC rast{};
+    rast.FillMode        = D3D12_FILL_MODE_SOLID;
+    rast.CullMode        = D3D12_CULL_MODE_NONE; // match the graphics path (attributeless / mesh-generated winding moot)
+    rast.DepthClipEnable = TRUE;
+    D3D12_BLEND_DESC blend{};
+    blend.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    D3D12_RT_FORMAT_ARRAY rts{};
+    rts.NumRenderTargets = num_rts;
+    for (UINT i = 0; i < num_rts; ++i) { rts.RTFormats[i] = kColorFormat; }
+    DXGI_SAMPLE_DESC sd{};
+    sd.Count = samples;
+    D3D12_DEPTH_STENCIL_DESC ds{};
+    if (dsv != DXGI_FORMAT_UNKNOWN)
+    {
+        ds.DepthEnable    = TRUE;
+        ds.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+        ds.DepthFunc      = depth_func;
+    }
+
+    struct MeshStream
+    {
+        PsoStreamSub<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_ROOT_SIGNATURE, ID3D12RootSignature*>        root_sig;
+        PsoStreamSub<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_MS, D3D12_SHADER_BYTECODE>                   ms_bc;
+        PsoStreamSub<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PS, D3D12_SHADER_BYTECODE>                   ps_bc;
+        PsoStreamSub<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RASTERIZER, D3D12_RASTERIZER_DESC>           rast;
+        PsoStreamSub<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_BLEND, D3D12_BLEND_DESC>                     blend;
+        PsoStreamSub<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RENDER_TARGET_FORMATS, D3D12_RT_FORMAT_ARRAY> rts;
+        PsoStreamSub<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL_FORMAT, DXGI_FORMAT>           dsv_fmt;
+        PsoStreamSub<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL, D3D12_DEPTH_STENCIL_DESC>     ds;
+        PsoStreamSub<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SAMPLE_DESC, DXGI_SAMPLE_DESC>               sample;
+    } stream;
+    stream.root_sig.value = root;
+    stream.ms_bc.value    = ms;
+    stream.ps_bc.value    = ps;
+    stream.rast.value     = rast;
+    stream.blend.value    = blend;
+    stream.rts.value      = rts;
+    stream.dsv_fmt.value  = dsv;
+    stream.ds.value       = ds;
+    stream.sample.value   = sd;
+
+    D3D12_PIPELINE_STATE_STREAM_DESC sdesc{};
+    sdesc.SizeInBytes                   = sizeof(stream);
+    sdesc.pPipelineStateSubobjectStream = &stream;
+    ComPtr<ID3D12PipelineState> pso;
+    if (FAILED(dev2->CreatePipelineState(&sdesc, IID_PPV_ARGS(&pso)))) { return nullptr; }
+    return pso;
+}
+
 // B1-d: the backend-neutral DepthCompare → D3D12_COMPARISON_FUNC (map explicitly, not by cast).
 [[nodiscard]] D3D12_COMPARISON_FUNC to_d3d12_compare(DepthCompare c) noexcept
 {
@@ -230,11 +301,13 @@ private:
 class Dx12RasterProgram final : public IRasterProgram
 {
 public:
+    // The trailing `device2`/`is_mesh` default off ⇒ the graphics call sites are unchanged. For a MESH program (B4) `vs`/`fs`
+    // carry the MS/PS DXIL and `pso_for` builds a stream PSO via `device2` instead of a graphics PSO.
     Dx12RasterProgram(ID3D12Device* device, ComPtr<ID3D12RootSignature> root, std::unique_ptr<crd::u8[]> vs,
                       crd::usize vs_size, std::unique_ptr<crd::u8[]> fs, crd::usize fs_size,
-                      ComPtr<ID3D12PipelineState> pso1) noexcept
-        : m_device(device), m_root(std::move(root)), m_vs(std::move(vs)), m_vs_size(vs_size), m_fs(std::move(fs)),
-          m_fs_size(fs_size), m_pso1(std::move(pso1))
+                      ComPtr<ID3D12PipelineState> pso1, ID3D12Device2* device2 = nullptr, bool is_mesh = false) noexcept
+        : m_device(device), m_device2(device2), m_is_mesh(is_mesh), m_root(std::move(root)), m_vs(std::move(vs)),
+          m_vs_size(vs_size), m_fs(std::move(fs)), m_fs_size(fs_size), m_pso1(std::move(pso1))
     {
     }
     ~Dx12RasterProgram() override                           = default;
@@ -244,6 +317,7 @@ public:
     Dx12RasterProgram& operator=(Dx12RasterProgram&&)       = delete;
 
     [[nodiscard]] bool                 valid() const noexcept override { return m_pso1 != nullptr; }
+    [[nodiscard]] bool                 is_mesh() const noexcept { return m_is_mesh; } // B4: DispatchMesh vs DrawInstanced
     [[nodiscard]] ID3D12RootSignature* root() const noexcept { return m_root.Get(); }
 
     // The PSO for a target of `samples` samples and depth/conservative config (a graphics PSO bakes ALL of them). The plain
@@ -259,9 +333,12 @@ public:
         for (int i = 0; i < m_cache_n; ++i) { if (m_cache[i].key == key) { return m_cache[i].pso.Get(); } }
         if (m_cache_n >= kPsoCacheCap) { return nullptr; }
         m_cache[m_cache_n].key = key;
-        m_cache[m_cache_n].pso = build_graphics_pso(m_device, m_root.Get(), D3D12_SHADER_BYTECODE{m_vs.get(), m_vs_size},
-                                                    D3D12_SHADER_BYTECODE{m_fs.get(), m_fs_size}, samples, dsv, depth_func,
-                                                    conservative, num_rts);
+        m_cache[m_cache_n].pso =
+            m_is_mesh ? build_mesh_pso(m_device2, m_root.Get(), D3D12_SHADER_BYTECODE{m_vs.get(), m_vs_size},
+                                       D3D12_SHADER_BYTECODE{m_fs.get(), m_fs_size}, samples, dsv, depth_func, num_rts)
+                      : build_graphics_pso(m_device, m_root.Get(), D3D12_SHADER_BYTECODE{m_vs.get(), m_vs_size},
+                                           D3D12_SHADER_BYTECODE{m_fs.get(), m_fs_size}, samples, dsv, depth_func,
+                                           conservative, num_rts);
         return m_cache[m_cache_n++].pso.Get();
     }
 
@@ -272,7 +349,9 @@ private:
         crd::u32                    key = 0;
         ComPtr<ID3D12PipelineState> pso;
     };
-    ID3D12Device*               m_device = nullptr; // the context (which owns the device) outlives its programs
+    ID3D12Device*               m_device  = nullptr; // the context (which owns the device) outlives its programs
+    ID3D12Device2*              m_device2 = nullptr; // B4: mesh stream-PSO device (null for graphics programs)
+    bool                        m_is_mesh = false;   // B4: pso_for builds a mesh PSO instead of a graphics PSO
     ComPtr<ID3D12RootSignature> m_root;
     std::unique_ptr<crd::u8[]>  m_vs; // owned DXIL copies so a PSO can be rebuilt at any (samples, depth) config
     crd::usize                  m_vs_size = 0;
@@ -437,6 +516,18 @@ public:
         {
             m_vrs_tier      = opt6.VariableShadingRateTier; // 0 = none · 1 = per-draw · 2 = + per-primitive + image
             m_vrs_tile_size = opt6.ShadingRateImageTileSize;
+        }
+
+        // B4: mesh shader — the amplification path. Needs ID3D12Device2::CreatePipelineState (the stream PSO for MS+PS) +
+        // ID3D12GraphicsCommandList6::DispatchMesh, gated on D3D12_FEATURE_D3D12_OPTIONS7 MeshShaderTier (both interfaces and
+        // the tier are absent on an old runtime, so the mesh path self-skips like every other optional capability).
+        m_device.As(&m_device2);
+        m_list.As(&m_list6);
+        D3D12_FEATURE_DATA_D3D12_OPTIONS7 opt7{};
+        if (m_device2 != nullptr && m_list6 != nullptr
+            && SUCCEEDED(m_device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS7, &opt7, sizeof(opt7))))
+        {
+            m_mesh_shader = opt7.MeshShaderTier != D3D12_MESH_SHADER_TIER_NOT_SUPPORTED;
         }
 
         // B1-f: conservative-raster tier (1 = overestimate · 3 adds SV_InnerCoverage) + ROV support (rasterizer-ordered
@@ -877,6 +968,194 @@ public:
 
         return std::make_unique<Dx12RasterProgram>(m_device.Get(), std::move(root), std::move(vs_copy), vs.size(),
                                                    std::move(fs_copy), fs.size(), std::move(pso1));
+    }
+
+    // --- B4: the MESH-shader device path (append-only — vtable-stable) ----------------------------------------------------
+    // Assemble a mesh program (MS + FS DXIL) into a stream PSO + root sig. Returns nullptr if the device has no mesh-shader
+    // tier (D3D12_FEATURE_D3D12_OPTIONS7) — the caller guards on that, exactly like every other optional capability.
+    [[nodiscard]] std::unique_ptr<IRasterProgram> create_mesh_program(IGpuProgram& mesh, IGpuProgram& fragment) override
+    {
+        if (!m_ok || !m_mesh_shader || m_device2 == nullptr || mesh.stage() != ShaderStage::Mesh
+            || fragment.stage() != ShaderStage::Fragment)
+        {
+            return nullptr;
+        }
+        const auto ms = static_cast<Dx12GpuProgram&>(mesh).dxil();
+        const auto ps = static_cast<Dx12GpuProgram&>(fragment).dxil();
+
+        // Same 4-table root sig as the graphics path (u0 storage · t1 texture · s2 sampler · t3[N] bindless), but the
+        // texture/sampler/bindless tables are ALL-visible so the MESH stage can sample the FFT cascade textures (the ocean
+        // meshlet path, draw_mesh_bindless_depth); the UAV storage stays pixel-only (only the FS ROV writes it).
+        D3D12_DESCRIPTOR_RANGE uav_range{};
+        uav_range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV; uav_range.NumDescriptors = 1; uav_range.BaseShaderRegister = 0;
+        uav_range.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+        D3D12_DESCRIPTOR_RANGE srv_range{};
+        srv_range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; srv_range.NumDescriptors = 1; srv_range.BaseShaderRegister = 1;
+        srv_range.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+        D3D12_DESCRIPTOR_RANGE samp_range{};
+        samp_range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER; samp_range.NumDescriptors = 1; samp_range.BaseShaderRegister = 2;
+        samp_range.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+        D3D12_DESCRIPTOR_RANGE bindless_range{};
+        bindless_range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; bindless_range.NumDescriptors = kBindlessMax; bindless_range.BaseShaderRegister = 3;
+        bindless_range.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+        D3D12_ROOT_PARAMETER param[4]{};
+        param[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; param[0].DescriptorTable.NumDescriptorRanges = 1; param[0].DescriptorTable.pDescriptorRanges = &uav_range;      param[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+        param[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; param[1].DescriptorTable.NumDescriptorRanges = 1; param[1].DescriptorTable.pDescriptorRanges = &srv_range;      param[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+        param[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; param[2].DescriptorTable.NumDescriptorRanges = 1; param[2].DescriptorTable.pDescriptorRanges = &samp_range;     param[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+        param[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; param[3].DescriptorTable.NumDescriptorRanges = 1; param[3].DescriptorTable.pDescriptorRanges = &bindless_range; param[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+        D3D12_ROOT_SIGNATURE_DESC rsd{};
+        rsd.NumParameters = 4;
+        rsd.pParameters   = param;
+        rsd.Flags         = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+        ComPtr<ID3DBlob> sig;
+        ComPtr<ID3DBlob> err;
+        if (FAILED(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err))) { return nullptr; }
+        ComPtr<ID3D12RootSignature> root;
+        if (FAILED(m_device->CreateRootSignature(0, sig->GetBufferPointer(), sig->GetBufferSize(), IID_PPV_ARGS(&root))))
+        {
+            return nullptr;
+        }
+
+        auto ms_copy = std::make_unique<crd::u8[]>(ms.size());
+        std::memcpy(ms_copy.get(), ms.data(), ms.size());
+        auto ps_copy = std::make_unique<crd::u8[]>(ps.size());
+        std::memcpy(ps_copy.get(), ps.data(), ps.size());
+        ComPtr<ID3D12PipelineState> pso1 =
+            build_mesh_pso(m_device2.Get(), root.Get(), D3D12_SHADER_BYTECODE{ms.data(), ms.size()},
+                           D3D12_SHADER_BYTECODE{ps.data(), ps.size()}, 1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS);
+        if (pso1 == nullptr) { return nullptr; }
+        return std::make_unique<Dx12RasterProgram>(m_device.Get(), std::move(root), std::move(ms_copy), ms.size(),
+                                                   std::move(ps_copy), ps.size(), std::move(pso1), m_device2.Get(),
+                                                   /*is_mesh=*/true);
+    }
+
+    // Clear `target` and DISPATCH `group_count` mesh workgroups (a mesh program). Colour-only (the mesh-triangle proof); the
+    // readback tail is identical to draw() — only the topology-less DispatchMesh replaces IASetPrimitiveTopology+DrawInstanced.
+    void draw_mesh(IRasterTarget& target, IRasterProgram& program, ClearColor clear, crd::u32 group_count) override
+    {
+        if (!m_ok || !m_mesh_shader || m_list6 == nullptr) { return; }
+        auto&      t   = static_cast<Dx12RasterTarget&>(target);
+        auto&      p   = static_cast<Dx12RasterProgram&>(program);
+        const bool ms  = t.multisampled();
+        ID3D12PipelineState* pso = p.pso_for(t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false);
+        if (!p.valid() || !p.is_mesh() || pso == nullptr) { return; }
+
+        m_cmd_alloc->Reset();
+        m_list->Reset(m_cmd_alloc.Get(), nullptr);
+
+        transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
+        m_list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
+        const float rgba[4] = {clear.r, clear.g, clear.b, clear.a};
+        m_list->ClearRenderTargetView(rtv, rgba, 0, nullptr);
+
+        const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t.width()), static_cast<float>(t.height()), 0.0F, 1.0F};
+        const D3D12_RECT     sc{0, 0, static_cast<LONG>(t.width()), static_cast<LONG>(t.height())};
+        m_list->RSSetViewports(1, &vp);
+        m_list->RSSetScissorRects(1, &sc);
+        m_list->SetGraphicsRootSignature(p.root());
+        m_list->SetPipelineState(pso);
+        m_list6->DispatchMesh(group_count, 1, 1); // mesh shaders emit their own topology — no IASetPrimitiveTopology
+
+        if (ms)
+        {
+            transition(t.tex(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_RESOLVE_SOURCE);
+            transition(t.resolve(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RESOLVE_DEST);
+            m_list->ResolveSubresource(t.resolve(), 0, t.tex(), 0, kColorFormat);
+            transition(t.resolve(), D3D12_RESOURCE_STATE_RESOLVE_DEST, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        }
+        else
+        {
+            transition(t.tex(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        }
+
+        D3D12_TEXTURE_COPY_LOCATION dst{};
+        dst.pResource       = t.readback();
+        dst.Type            = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        dst.PlacedFootprint = t.footprint();
+        D3D12_TEXTURE_COPY_LOCATION src{};
+        src.pResource        = t.copy_src();
+        src.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        src.SubresourceIndex = 0;
+        m_list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+
+        if (ms)
+        {
+            transition(t.resolve(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON);
+            transition(t.tex(), D3D12_RESOURCE_STATE_RESOLVE_SOURCE, D3D12_RESOURCE_STATE_COMMON);
+        }
+        else
+        {
+            transition(t.tex(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON);
+        }
+        submit_and_wait();
+    }
+
+    // B4 ocean fast path: DISPATCH `group_count` meshlet workgroups into a colour+DEPTH target with the cascade textures bound
+    // BINDLESS (t3[]) + the sampler (s2) — the mesh shader samples the FFT displacement (its root sig makes them ALL-visible).
+    // Combines the bindless-SRV-heap machinery of draw_bindless with the depth target of draw_depth, then DispatchMesh.
+    void draw_mesh_bindless_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear, float clear_depth,
+                                  DepthCompare compare, ITexture* const* textures, crd::u32 count,
+                                  crd::u32 group_count) override
+    {
+        if (!m_ok || !m_mesh_shader || m_list6 == nullptr || m_uav_heap == nullptr || m_sampler_heap == nullptr
+            || count == 0U || textures == nullptr)
+        {
+            return;
+        }
+        auto& t = static_cast<Dx12RasterTarget&>(target);
+        auto& p = static_cast<Dx12RasterProgram&>(program);
+        if (!t.has_depth()) { return; } // needs a create_color_depth_target
+        ID3D12PipelineState* pso = p.pso_for(1U, kDepthFormat, to_d3d12_compare(compare), false);
+        if (!p.valid() || !p.is_mesh() || pso == nullptr) { return; }
+        const crd::u32 n = count < static_cast<crd::u32>(kBindlessMax) ? count : static_cast<crd::u32>(kBindlessMax);
+
+        // Mint the bindless SRV array into heap slots 2..2+kBindlessMax-1 (0..n-1 = cascades, rest replicate #0).
+        for (UINT i = 0; i < kBindlessMax; ++i)
+        {
+            auto&                           tex = static_cast<Dx12Texture&>(*textures[i < n ? i : 0U]);
+            D3D12_SHADER_RESOURCE_VIEW_DESC srv = tex.srv();
+            D3D12_CPU_DESCRIPTOR_HANDLE     h   = m_uav_heap->GetCPUDescriptorHandleForHeapStart();
+            h.ptr += static_cast<SIZE_T>(2U + i) * m_srv_inc; // bindless array starts at slot 2
+            m_device->CreateShaderResourceView(tex.tex(), &srv, h);
+        }
+        D3D12_GPU_DESCRIPTOR_HANDLE bindless_gpu = m_uav_heap->GetGPUDescriptorHandleForHeapStart();
+        bindless_gpu.ptr += static_cast<UINT64>(2U) * m_srv_inc; // slot 2
+
+        m_cmd_alloc->Reset();
+        m_list->Reset(m_cmd_alloc.Get(), nullptr);
+        transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
+        const D3D12_CPU_DESCRIPTOR_HANDLE dsv = t.dsv();
+        m_list->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
+        const float rgba[4] = {clear.r, clear.g, clear.b, clear.a};
+        m_list->ClearRenderTargetView(rtv, rgba, 0, nullptr);
+        m_list->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, clear_depth, 0, 0, nullptr);
+
+        const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t.width()), static_cast<float>(t.height()), 0.0F, 1.0F};
+        const D3D12_RECT     sc{0, 0, static_cast<LONG>(t.width()), static_cast<LONG>(t.height())};
+        m_list->RSSetViewports(1, &vp);
+        m_list->RSSetScissorRects(1, &sc);
+        m_list->SetGraphicsRootSignature(p.root());
+        ID3D12DescriptorHeap* heaps[] = {m_uav_heap.Get(), m_sampler_heap.Get()};
+        m_list->SetDescriptorHeaps(2, heaps);
+        m_list->SetGraphicsRootDescriptorTable(2, m_sampler_heap->GetGPUDescriptorHandleForHeapStart()); // sampler s2
+        m_list->SetGraphicsRootDescriptorTable(3, bindless_gpu);                                          // bindless t3[]
+        m_list->SetPipelineState(pso);
+        m_list6->DispatchMesh(group_count, 1, 1); // mesh emits its own topology — no IASetPrimitiveTopology
+
+        transition(t.tex(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        D3D12_TEXTURE_COPY_LOCATION dst{};
+        dst.pResource       = t.readback();
+        dst.Type            = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        dst.PlacedFootprint = t.footprint();
+        D3D12_TEXTURE_COPY_LOCATION src{};
+        src.pResource        = t.tex();
+        src.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        src.SubresourceIndex = 0;
+        m_list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+        transition(t.tex(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON);
+        submit_and_wait();
     }
 
     void draw(IRasterTarget& target, IRasterProgram& program, ClearColor clear, crd::u32 vertex_count) override
@@ -1679,10 +1958,13 @@ private:
     }
 
     ComPtr<ID3D12Device>               m_device;
+    ComPtr<ID3D12Device2>              m_device2; // B4: CreatePipelineState (stream PSO) for mesh — null on an old runtime
     ComPtr<ID3D12CommandQueue>         m_queue;
     ComPtr<ID3D12CommandAllocator>     m_cmd_alloc;
     ComPtr<ID3D12GraphicsCommandList>  m_list;
     ComPtr<ID3D12GraphicsCommandList5> m_list5; // B1-e: RSSetShadingRate(Image) — null on an old runtime
+    ComPtr<ID3D12GraphicsCommandList6> m_list6; // B4: DispatchMesh — null on an old runtime
+    bool                               m_mesh_shader = false; // B4: D3D12_FEATURE_D3D12_OPTIONS7 MeshShaderTier supported
     ComPtr<ID3D12Fence>                m_fence;
     HANDLE                             m_event     = nullptr;
     crd::u64                           m_fence_val = 0;

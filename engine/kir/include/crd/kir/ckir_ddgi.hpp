@@ -14,6 +14,7 @@
 // `sqrt` in the normalize (IEEE-correctly-rounded, so effectively exact).
 
 #include <crd/kir/ckir.hpp>
+#include <crd/units/units.hpp> // Length<f64> for the probe-grid world positions/spacing (two-layer typed API, ADR-0078)
 
 namespace crd::kir::ddgi
 {
@@ -138,17 +139,17 @@ struct DdgiConfig
 {
     int    oct_res         = 8;    // R (irradiance + depth maps are R×R)
     int    num_rays        = 64;   // rays traced per probe per frame (the RT leaf produces dir+radiance+dist)
-    double hysteresis      = 0.03; // temporal blend of the new estimate into the probe (small ⇒ stable, slow to react)
-    double depth_sharpness = 50.0; // cosine power for the depth-moment gather (sharper than irradiance ⇒ crisp occlusion)
+    double hysteresis      = 0.03; // temporal blend of the new estimate into the probe (small ⇒ stable, slow to react) — dimensionless
+    double depth_sharpness = 50.0; // crd-lint-allow-untagged-physical: dimensionless cosine power for the depth-moment gather (an exponent, not a physical quantity)
     // the probe GRID (a full field, not just one cell). Probe (px,py,pz) is at origin + (px,py,pz)·spacing; flat index
     // pidx = (pz·grid_y + py)·grid_x + px. The sample clamps the containing cell to [0, grid−2] so its +1 corner exists.
-    int    grid_x  = 2;
-    int    grid_y  = 2;
-    int    grid_z  = 2;
-    double origin_x = 0.0;
-    double origin_y = 0.0;
-    double origin_z = 0.0;
-    double spacing  = 1.0;
+    int                 grid_x  = 2;
+    int                 grid_y  = 2;
+    int                 grid_z  = 2;
+    crd::units::Length64 origin_x{0.0}; // probe-grid origin (world metres)
+    crd::units::Length64 origin_y{0.0};
+    crd::units::Length64 origin_z{0.0};
+    crd::units::Length64 spacing{1.0};  // probe spacing (world metres)
 
     [[nodiscard]] int  probe_count() const noexcept { return grid_x * grid_y * grid_z; }
     [[nodiscard]] bool valid() const noexcept { return oct_res >= 2 && num_rays >= 1 && grid_x >= 2 && grid_y >= 2 && grid_z >= 2; }
@@ -189,10 +190,10 @@ struct DdgiConfig
     const int nz = g.buffer_load(nrm_b, add(p3, ku(2)));
 
     // locate the containing cell in the probe grid; clamp so the +1 corner exists; keep the trilinear fractions.
-    const double si  = 1.0 / cfg.spacing;
-    const int    lx  = mul(sub(px, kf(cfg.origin_x)), kf(si)); // local (probe-index-space) coords
-    const int    ly  = mul(sub(py, kf(cfg.origin_y)), kf(si));
-    const int    lz  = mul(sub(pz, kf(cfg.origin_z)), kf(si));
+    const double si  = 1.0 / cfg.spacing.value; // .value: SI metres — raw at the IR boundary (ADR-0078)
+    const int    lx  = mul(sub(px, kf(cfg.origin_x.value)), kf(si)); // local (probe-index-space) coords
+    const int    ly  = mul(sub(py, kf(cfg.origin_y.value)), kf(si));
+    const int    lz  = mul(sub(pz, kf(cfg.origin_z.value)), kf(si));
     const auto   cell = [&](int lc, int dim) { return fmax(g.binary(KOp::Min, g.unary(KOp::Floor, lc), kf(static_cast<double>(dim - 2))), f0); };
     const int    cxf = cell(lx, cfg.grid_x);
     const int    cyf = cell(ly, cfg.grid_y);
@@ -220,9 +221,9 @@ struct DdgiConfig
         const int tri = mul(mul(wx, wy), wz);
         // probe flat index + world position
         const int pidx  = add(mul(add(mul(add(czu, ku(static_cast<crd::u32>(dzi))), ku(static_cast<crd::u32>(cfg.grid_y))), add(cyu, ku(static_cast<crd::u32>(dyi)))), ku(static_cast<crd::u32>(cfg.grid_x))), add(cxu, ku(static_cast<crd::u32>(dxi))));
-        const int ppx   = add(kf(cfg.origin_x), mul(add(cxf, kf(static_cast<double>(dxi))), kf(cfg.spacing)));
-        const int ppy   = add(kf(cfg.origin_y), mul(add(cyf, kf(static_cast<double>(dyi))), kf(cfg.spacing)));
-        const int ppz   = add(kf(cfg.origin_z), mul(add(czf, kf(static_cast<double>(dzi))), kf(cfg.spacing)));
+        const int ppx   = add(kf(cfg.origin_x.value), mul(add(cxf, kf(static_cast<double>(dxi))), kf(cfg.spacing.value)));
+        const int ppy   = add(kf(cfg.origin_y.value), mul(add(cyf, kf(static_cast<double>(dyi))), kf(cfg.spacing.value)));
+        const int ppz   = add(kf(cfg.origin_z.value), mul(add(czf, kf(static_cast<double>(dzi))), kf(cfg.spacing.value)));
         // direction surface → probe (+ distance), normalized
         const int ex   = sub(ppx, px);
         const int ey   = sub(ppy, py);

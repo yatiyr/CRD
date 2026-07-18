@@ -50,7 +50,7 @@ void flat_gbuf(SvgfRun& r, int np, double d)
 }
 } // namespace
 
-TEST_CASE("SVGF à-trous: a uniform image is PRESERVED (weights normalize away)", "[kir][svgf]")
+TEST_CASE("SVGF a-trous: a uniform image is PRESERVED (weights normalize away)", "[kir][svgf]")
 {
     crd::memory::TlsfAllocator alloc(32U << 20U);
     kir::SvgfConfig            cfg; // 32×32
@@ -82,7 +82,7 @@ TEST_CASE("SVGF à-trous: a uniform image is PRESERVED (weights normalize away)"
     CHECK(maxdev < 1e-5); // Σw·c/Σw == c up to fp rounding of the weighted mean
 }
 
-TEST_CASE("SVGF à-trous: a NOISY flat surface is SMOOTHED (variance drops)", "[kir][svgf]")
+TEST_CASE("SVGF a-trous: a NOISY flat surface is SMOOTHED (variance drops)", "[kir][svgf]")
 {
     crd::memory::TlsfAllocator alloc(32U << 20U);
     kir::SvgfConfig            cfg;
@@ -208,7 +208,7 @@ TEST_CASE("SVGF temporal: multi-frame accumulation REDUCES noise + grows history
     CHECK(std::abs(os[uz(2)] - 1.0) < 1e-6); // history reset to 1
 }
 
-TEST_CASE("A-SVGF: adaptive-α RESETS on a real step change (faster response) but NOT on noise", "[kir][svgf]")
+TEST_CASE("A-SVGF: adaptive-alpha RESETS on a real step change (faster response) but NOT on noise", "[kir][svgf]")
 {
     crd::memory::TlsfAllocator alloc(64U << 20U);
 
@@ -266,7 +266,7 @@ TEST_CASE("A-SVGF: adaptive-α RESETS on a real step change (faster response) bu
     CHECK(lag_adaptive < lag_fixed * 0.2); // on the STEP, A-SVGF resets ⇒ tracks the new value ≫5× closer than fixed-α lags
 }
 
-TEST_CASE("SVGF PIPELINE (temporal accumulate → à-trous ×5): the full gold denoiser crushes noise end-to-end", "[kir][svgf]")
+TEST_CASE("SVGF PIPELINE (temporal accumulate -> a-trous x5): the full gold denoiser crushes noise end-to-end", "[kir][svgf]")
 {
     crd::memory::TlsfAllocator alloc(128U << 20U);
     kir::SvgfConfig            cfg;
@@ -348,7 +348,7 @@ TEST_CASE("SVGF PIPELINE (temporal accumulate → à-trous ×5): the full gold d
     CHECK(final_err < noisy_err * 0.1);     // the FULL pipeline crushes the noise ≥10× vs the raw frame
 }
 
-TEST_CASE("SVGF à-trous: a hard DEPTH EDGE stops the blur (no colour bleed across a silhouette)", "[kir][svgf]")
+TEST_CASE("SVGF a-trous: a hard DEPTH EDGE stops the blur (no colour bleed across a silhouette)", "[kir][svgf]")
 {
     crd::memory::TlsfAllocator alloc(32U << 20U);
     kir::SvgfConfig            cfg;

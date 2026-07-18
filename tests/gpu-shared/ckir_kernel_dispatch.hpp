@@ -192,6 +192,10 @@ inline void dispatch_fft2d(crd::gpu::IComputeContext& ctx, const crd::kir::Fft2d
 
     auto& rec = ctx.begin();
     for (int b = 0; b < nb; ++b) { rec.copy(*up[b], *dev[b], 0U, 0U, static_cast<crd::u64>(plan.buffers[b].size) * sizeof(float)); }
+    // the upload copies (TransferDst) MUST be visible to pass 0's shader reads — without this barrier a large-enough dispatch
+    // (grid > device occupancy) races the still-in-flight upload and reads STALE data (flaky, batch-dependent). Same scar as
+    // dispatch_kernel_1wg. Latent until B16-a-3's batch=4C (>8 images) exposed it; small-batch multi-pass tests never raced.
+    for (int b = 0; b < nb; ++b) { rec.barrier(*dev[b], g::ComputeAccess::TransferDst, g::ComputeAccess::ShaderRead); }
     for (int pi = 0; pi < plan.npasses; ++pi)
     {
         const crd::kir::Fft2dPass& p          = plan.passes[pi];

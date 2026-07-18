@@ -15,31 +15,42 @@
 // are scalar; per-channel R/G/B carried as separate F32 nodes), the same discipline as ckir_ddgi.hpp / ckir_restir.hpp.
 
 #include <crd/kir/ckir.hpp>
+#include <crd/units/units.hpp> // Length / inverse-length (extinction) typed inputs (two-layer typed API, ADR-0078)
 
 namespace crd::kir::atmos
 {
 
+// Two-layer typed physical inputs (ADR-0078). The Hillaire model natively works in KM and 1/km; we STORE the SI base
+// (metres / per-metre) in the typed fields and convert back at the builder boundary. Every value round-trips EXACTLY
+// (×1000 ⇄ ÷1000 verified for the whole Earth-reference set), so the IR constants — and thus bit-exactness — are unchanged.
+using Length64    = crd::units::Length64;
+using InvLength64 = crd::units::Quantity<crd::units::DimInv<crd::units::dim::Length>, crd::f64>; // extinction/scatter (1/length)
+[[nodiscard]] constexpr Length64    km(crd::f64 v) noexcept { return Length64{v * 1000.0}; }         // author: v km  → SI m
+[[nodiscard]] constexpr crd::f64    in_km(Length64 q) noexcept { return q.value / 1000.0; }          // read:   SI m  → km
+[[nodiscard]] constexpr InvLength64 per_km(crd::f64 v) noexcept { return InvLength64{v / 1000.0}; }   // author: v 1/km → SI 1/m
+[[nodiscard]] constexpr crd::f64    in_per_km(InvLength64 q) noexcept { return q.value * 1000.0; }    // read:   SI 1/m → 1/km
+
 // The Earth-reference medium (Hillaire 2020 sample values; RGB scattering/absorption coefficients in 1/km, heights in km).
 struct AtmosphereConfig
 {
-    double ground_radius = 6360.0; // Rg — planet surface radius (km)
-    double top_radius    = 6460.0; // Rt — top of the atmosphere (km); 100 km shell
+    Length64 ground_radius = km(6360.0); // Rg — planet surface radius (km)
+    Length64 top_radius    = km(6460.0); // Rt — top of the atmosphere (km); 100 km shell
 
-    double rayleigh_scatter_r = 0.005802; // β_R (1/km) — Rayleigh scattering == extinction (no absorption), per channel
-    double rayleigh_scatter_g = 0.013558;
-    double rayleigh_scatter_b = 0.033100;
-    double rayleigh_height     = 8.0; // H_R — Rayleigh density scale height (km)
+    InvLength64 rayleigh_scatter_r = per_km(0.005802); // β_R (1/km) — Rayleigh scattering == extinction (no absorption), per channel
+    InvLength64 rayleigh_scatter_g = per_km(0.013558);
+    InvLength64 rayleigh_scatter_b = per_km(0.033100);
+    Length64    rayleigh_height    = km(8.0); // H_R — Rayleigh density scale height (km)
 
-    double mie_scatter    = 0.003996; // β_M scattering (1/km, grey)
-    double mie_extinction = 0.004440; // β_M extinction (scattering + absorption); absorption = ext − scatter
-    double mie_height      = 1.2;     // H_M — Mie density scale height (km)
-    double mie_g           = 0.8;     // Mie asymmetry (Cornette-Shanks)
+    InvLength64 mie_scatter    = per_km(0.003996); // β_M scattering (1/km, grey)
+    InvLength64 mie_extinction = per_km(0.004440); // β_M extinction (scattering + absorption); absorption = ext − scatter
+    Length64    mie_height     = km(1.2);          // H_M — Mie density scale height (km)
+    double      mie_g          = 0.8;              // Mie asymmetry (Cornette-Shanks) — dimensionless
 
-    double ozone_absorb_r = 0.000650; // β_O ozone absorption (1/km, no scattering), per channel
-    double ozone_absorb_g = 0.001881;
-    double ozone_absorb_b = 0.000085;
-    double ozone_center     = 25.0; // ozone tent centre (km)
-    double ozone_half_width = 15.0; // ozone tent half-width (km); density = max(0, 1 − |h − centre|/half_width)
+    InvLength64 ozone_absorb_r = per_km(0.000650); // β_O ozone absorption (1/km, no scattering), per channel
+    InvLength64 ozone_absorb_g = per_km(0.001881);
+    InvLength64 ozone_absorb_b = per_km(0.000085);
+    Length64    ozone_center     = km(25.0); // ozone tent centre (km)
+    Length64    ozone_half_width = km(15.0); // ozone tent half-width (km); density = max(0, 1 − |h − centre|/half_width)
 
     int tlut_w        = 256; // transmittance LUT width  (μ axis)
     int tlut_h        = 64;  // transmittance LUT height (altitude axis)
@@ -53,8 +64,13 @@ struct AtmosphereConfig
     int    skyview_w    = 192; // sky-view LUT width  (azimuth relative to the sun)
     int    skyview_h    = 108; // sky-view LUT height (view zenith)
     int    sky_steps    = 30;  // ray-march samples along the view ray
-    double camera_height = 0.5;   // camera altitude above the ground (km) baked into the sky-view + aerial LUTs
+    Length64 camera_height = km(0.5);   // camera altitude above the ground (km) baked into the sky-view + aerial LUTs
     double sky_sun_cos   = 0.35;  // cos of the sun zenith angle baked into the sky-view LUT (a time-of-day snapshot)
+
+    int    ap_res       = 32;   // aerial-perspective froxel x,y resolution (ap_res × ap_res screen tiles)
+    int    ap_slices    = 16;   // aerial-perspective depth slices (one march sample per slice)
+    Length64 ap_km_max  = km(32.0); // aerial-perspective volume far distance (km)
+    double ap_tan_half_fov = 0.5773502691896257; // tan(30°) — the froxel camera's half-FOV
 
     [[nodiscard]] bool valid() const noexcept { return top_radius > ground_radius && transmittance_steps >= 1; }
 };
@@ -74,8 +90,8 @@ struct AtmosphereConfig
     const auto fmax = [&](int a, int b) { return g.binary(KOp::Max, a, b); };
     const auto fmin = [&](int a, int b) { return g.binary(KOp::Min, a, b); };
 
-    const double rg = cfg.ground_radius;
-    const double rt = cfg.top_radius;
+    const double rg = in_km(cfg.ground_radius);
+    const double rt = in_km(cfg.top_radius);
     const double h2 = rt * rt - rg * rg; // H² (compile-time, no sqrt); H itself is a single graph Sqrt node below
     const int    n  = cfg.transmittance_steps;
     const double w  = static_cast<double>(cfg.tlut_w);
@@ -106,6 +122,11 @@ struct AtmosphereConfig
     const int h2m   = mul(kf(h2), sub(kf(1.0), v2));                    // H²−ρ² = H²(1−v²), cancellation-free
     const int mu    = fmax(fmin(divv(sub(h2m, mul(d, d)), mul(mul(kf(2.0), r), d)), kf(1.0)), kf(-1.0));
 
+    // The march is a compile-time UNROLL here on purpose: transmittance is COMPUTE-bound (two exp + a sqrt per step, low
+    // register pressure), so the unroll's register-resident τ beats a runtime loop's shared-memory accumulators (measured —
+    // the shared-loop variant that crushes the memory-bound ReSTIR reservoir is ~1.5× SLOWER here). The residual ~1.24× vs a
+    // hand-written REGISTER loop is the compute-emitter's lack of register-carried loop values (a scoped engine gap), on a
+    // once-per-frame LUT whose absolute cost is ~0.08 ms — negligible. See docs/bench/2026-07-15-ckir-vs-handwritten-glsl.md.
     const int dt      = divv(d, kf(static_cast<double>(n)));
     const int two_r_mu = mul(mul(kf(2.0), r), mu);
     int       tau_r   = kf(0.0);
@@ -116,12 +137,12 @@ struct AtmosphereConfig
         const int t     = mul(kf(static_cast<double>(i) + 0.5), dt);                      // sample at segment centre
         const int r_t   = g.unary(KOp::Sqrt, add(add(mul(r, r), mul(two_r_mu, t)), mul(t, t))); // radius at the sample
         const int alt   = fmax(sub(r_t, kf(rg)), kf(0.0));                                // altitude above ground
-        const int rho_r = g.unary(KOp::Exp, g.unary(KOp::Neg, divv(alt, kf(cfg.rayleigh_height)))); // Rayleigh density
-        const int rho_m = g.unary(KOp::Exp, g.unary(KOp::Neg, divv(alt, kf(cfg.mie_height))));       // Mie density
-        const int rho_o = fmax(sub(kf(1.0), divv(g.unary(KOp::Abs, sub(alt, kf(cfg.ozone_center))), kf(cfg.ozone_half_width))), kf(0.0));
-        const int se_r  = add(add(mul(kf(cfg.rayleigh_scatter_r), rho_r), mul(kf(cfg.mie_extinction), rho_m)), mul(kf(cfg.ozone_absorb_r), rho_o));
-        const int se_g  = add(add(mul(kf(cfg.rayleigh_scatter_g), rho_r), mul(kf(cfg.mie_extinction), rho_m)), mul(kf(cfg.ozone_absorb_g), rho_o));
-        const int se_b  = add(add(mul(kf(cfg.rayleigh_scatter_b), rho_r), mul(kf(cfg.mie_extinction), rho_m)), mul(kf(cfg.ozone_absorb_b), rho_o));
+        const int rho_r = g.unary(KOp::Exp, g.unary(KOp::Neg, divv(alt, kf(in_km(cfg.rayleigh_height))))); // Rayleigh density
+        const int rho_m = g.unary(KOp::Exp, g.unary(KOp::Neg, divv(alt, kf(in_km(cfg.mie_height)))));       // Mie density
+        const int rho_o = fmax(sub(kf(1.0), divv(g.unary(KOp::Abs, sub(alt, kf(in_km(cfg.ozone_center)))), kf(in_km(cfg.ozone_half_width)))), kf(0.0));
+        const int se_r  = add(add(mul(kf(in_per_km(cfg.rayleigh_scatter_r)), rho_r), mul(kf(in_per_km(cfg.mie_extinction)), rho_m)), mul(kf(in_per_km(cfg.ozone_absorb_r)), rho_o));
+        const int se_g  = add(add(mul(kf(in_per_km(cfg.rayleigh_scatter_g)), rho_r), mul(kf(in_per_km(cfg.mie_extinction)), rho_m)), mul(kf(in_per_km(cfg.ozone_absorb_g)), rho_o));
+        const int se_b  = add(add(mul(kf(in_per_km(cfg.rayleigh_scatter_b)), rho_r), mul(kf(in_per_km(cfg.mie_extinction)), rho_m)), mul(kf(in_per_km(cfg.ozone_absorb_b)), rho_o));
         tau_r           = add(tau_r, mul(se_r, dt));
         tau_g           = add(tau_g, mul(se_g, dt));
         tau_b           = add(tau_b, mul(se_b, dt));
@@ -160,8 +181,8 @@ struct AtmosphereConfig
     const auto sqrt = [&](int a) { return g.unary(KOp::Sqrt, a); };
     const auto expn = [&](int a) { return g.unary(KOp::Exp, neg(a)); };
 
-    const double rg   = cfg.ground_radius;
-    const double rt   = cfg.top_radius;
+    const double rg   = in_km(cfg.ground_radius);
+    const double rt   = in_km(cfg.top_radius);
     const double h2   = rt * rt - rg * rg;
     const int    res  = cfg.mslut_res;
     const int    nd   = cfg.ms_dirs;
@@ -272,16 +293,16 @@ struct AtmosphereConfig
             int       ts_g = 0;
             int       ts_b = 0;
             sample_tlut(r_x, mu_s, ts_r, ts_g, ts_b);                                            // sun transmittance
-            const int rho_r = expn(divv(alt, kf(cfg.rayleigh_height)));
-            const int rho_m = expn(divv(alt, kf(cfg.mie_height)));
-            const int rho_o = fmax(sub(kf(1.0), divv(g.unary(KOp::Abs, sub(alt, kf(cfg.ozone_center))), kf(cfg.ozone_half_width))), kf(0.0));
+            const int rho_r = expn(divv(alt, kf(in_km(cfg.rayleigh_height))));
+            const int rho_m = expn(divv(alt, kf(in_km(cfg.mie_height))));
+            const int rho_o = fmax(sub(kf(1.0), divv(g.unary(KOp::Abs, sub(alt, kf(in_km(cfg.ozone_center)))), kf(in_km(cfg.ozone_half_width)))), kf(0.0));
             // per-channel scattering σ_s (Rayleigh + Mie, no ozone) and extinction σ_e (+ Mie absorption + ozone).
-            const int ss_r = add(mul(kf(cfg.rayleigh_scatter_r), rho_r), mul(kf(cfg.mie_scatter), rho_m));
-            const int ss_g = add(mul(kf(cfg.rayleigh_scatter_g), rho_r), mul(kf(cfg.mie_scatter), rho_m));
-            const int ss_b = add(mul(kf(cfg.rayleigh_scatter_b), rho_r), mul(kf(cfg.mie_scatter), rho_m));
-            const int se_r = add(add(mul(kf(cfg.rayleigh_scatter_r), rho_r), mul(kf(cfg.mie_extinction), rho_m)), mul(kf(cfg.ozone_absorb_r), rho_o));
-            const int se_g = add(add(mul(kf(cfg.rayleigh_scatter_g), rho_r), mul(kf(cfg.mie_extinction), rho_m)), mul(kf(cfg.ozone_absorb_g), rho_o));
-            const int se_b = add(add(mul(kf(cfg.rayleigh_scatter_b), rho_r), mul(kf(cfg.mie_extinction), rho_m)), mul(kf(cfg.ozone_absorb_b), rho_o));
+            const int ss_r = add(mul(kf(in_per_km(cfg.rayleigh_scatter_r)), rho_r), mul(kf(in_per_km(cfg.mie_scatter)), rho_m));
+            const int ss_g = add(mul(kf(in_per_km(cfg.rayleigh_scatter_g)), rho_r), mul(kf(in_per_km(cfg.mie_scatter)), rho_m));
+            const int ss_b = add(mul(kf(in_per_km(cfg.rayleigh_scatter_b)), rho_r), mul(kf(in_per_km(cfg.mie_scatter)), rho_m));
+            const int se_r = add(add(mul(kf(in_per_km(cfg.rayleigh_scatter_r)), rho_r), mul(kf(in_per_km(cfg.mie_extinction)), rho_m)), mul(kf(in_per_km(cfg.ozone_absorb_r)), rho_o));
+            const int se_g = add(add(mul(kf(in_per_km(cfg.rayleigh_scatter_g)), rho_r), mul(kf(in_per_km(cfg.mie_extinction)), rho_m)), mul(kf(in_per_km(cfg.ozone_absorb_g)), rho_o));
+            const int se_b = add(add(mul(kf(in_per_km(cfg.rayleigh_scatter_b)), rho_r), mul(kf(in_per_km(cfg.mie_extinction)), rho_m)), mul(kf(in_per_km(cfg.ozone_absorb_b)), rho_o));
             const int tp_r = expn(tau_r); // transmittance from P to the sample
             const int tp_g = expn(tau_g);
             const int tp_b = expn(tau_b);
@@ -344,8 +365,8 @@ struct AtmosphereConfig
     const auto sqrt = [&](int a) { return g.unary(KOp::Sqrt, a); };
     const auto expn = [&](int a) { return g.unary(KOp::Exp, neg(a)); };
 
-    const double rg   = cfg.ground_radius;
-    const double rt   = cfg.top_radius;
+    const double rg   = in_km(cfg.ground_radius);
+    const double rt   = in_km(cfg.top_radius);
     const double h2   = rt * rt - rg * rg;
     const int    w    = cfg.skyview_w;
     const int    hh   = cfg.skyview_h;
@@ -431,7 +452,7 @@ struct AtmosphereConfig
     const int vz   = cost;
     const int sunx = sqrt(kf(1.0 - musn * musn)); // sin(sun zenith) = sqrt(1−μ_sun²) (μ_sun∈[−1,1] ⇒ arg ≥ 0)
 
-    const int rcam = kf(rg + cfg.camera_height);
+    const int rcam = kf(rg + in_km(cfg.camera_height));
     // cos angle between the view ray and the sun (for the phase functions): dot(V, S), S=(sunx,0,μ_sun).
     const int csv  = add(mul(vx, sunx), mul(vz, kf(musn)));
     const int csv2 = mul(csv, csv);
@@ -472,13 +493,13 @@ struct AtmosphereConfig
         int ms_g = 0;
         int ms_b = 0;
         sample_msl(r_x, mu_s, ms_r, ms_g, ms_b);
-        const int rho_r = expn(divv(alt, kf(cfg.rayleigh_height)));
-        const int rho_m = expn(divv(alt, kf(cfg.mie_height)));
-        const int rho_o = fmax(sub(kf(1.0), divv(g.unary(KOp::Abs, sub(alt, kf(cfg.ozone_center))), kf(cfg.ozone_half_width))), kf(0.0));
-        const int rm_p  = mul(kf(cfg.mie_scatter), rho_m);      // Mie scatter density (grey)
-        const int se_r  = add(add(mul(kf(cfg.rayleigh_scatter_r), rho_r), mul(kf(cfg.mie_extinction), rho_m)), mul(kf(cfg.ozone_absorb_r), rho_o));
-        const int se_g  = add(add(mul(kf(cfg.rayleigh_scatter_g), rho_r), mul(kf(cfg.mie_extinction), rho_m)), mul(kf(cfg.ozone_absorb_g), rho_o));
-        const int se_b  = add(add(mul(kf(cfg.rayleigh_scatter_b), rho_r), mul(kf(cfg.mie_extinction), rho_m)), mul(kf(cfg.ozone_absorb_b), rho_o));
+        const int rho_r = expn(divv(alt, kf(in_km(cfg.rayleigh_height))));
+        const int rho_m = expn(divv(alt, kf(in_km(cfg.mie_height))));
+        const int rho_o = fmax(sub(kf(1.0), divv(g.unary(KOp::Abs, sub(alt, kf(in_km(cfg.ozone_center)))), kf(in_km(cfg.ozone_half_width)))), kf(0.0));
+        const int rm_p  = mul(kf(in_per_km(cfg.mie_scatter)), rho_m);      // Mie scatter density (grey)
+        const int se_r  = add(add(mul(kf(in_per_km(cfg.rayleigh_scatter_r)), rho_r), mul(kf(in_per_km(cfg.mie_extinction)), rho_m)), mul(kf(in_per_km(cfg.ozone_absorb_r)), rho_o));
+        const int se_g  = add(add(mul(kf(in_per_km(cfg.rayleigh_scatter_g)), rho_r), mul(kf(in_per_km(cfg.mie_extinction)), rho_m)), mul(kf(in_per_km(cfg.ozone_absorb_g)), rho_o));
+        const int se_b  = add(add(mul(kf(in_per_km(cfg.rayleigh_scatter_b)), rho_r), mul(kf(in_per_km(cfg.mie_extinction)), rho_m)), mul(kf(in_per_km(cfg.ozone_absorb_b)), rho_o));
         const int tv_r  = expn(tau_r);
         const int tv_g  = expn(tau_g);
         const int tv_b  = expn(tau_b);
@@ -489,9 +510,9 @@ struct AtmosphereConfig
             const int multi  = mul(add(rr_p, rm_p), ms);
             return mul(rrho, add(single, multi));
         };
-        l_r = add(l_r, mul(inscat(cfg.rayleigh_scatter_r, ts_r, ms_r, tv_r), dt));
-        l_g = add(l_g, mul(inscat(cfg.rayleigh_scatter_g, ts_g, ms_g, tv_g), dt));
-        l_b = add(l_b, mul(inscat(cfg.rayleigh_scatter_b, ts_b, ms_b, tv_b), dt));
+        l_r = add(l_r, mul(inscat(in_per_km(cfg.rayleigh_scatter_r), ts_r, ms_r, tv_r), dt));
+        l_g = add(l_g, mul(inscat(in_per_km(cfg.rayleigh_scatter_g), ts_g, ms_g, tv_g), dt));
+        l_b = add(l_b, mul(inscat(in_per_km(cfg.rayleigh_scatter_b), ts_b, ms_b, tv_b), dt));
         tau_r = add(tau_r, mul(se_r, dt));
         tau_g = add(tau_g, mul(se_g, dt));
         tau_b = add(tau_b, mul(se_b, dt));
@@ -500,6 +521,182 @@ struct AtmosphereConfig
     g.stmt_buffer_store(out_b, op3, l_r);
     g.stmt_buffer_store(out_b, add(op3, ku(1)), l_g);
     g.stmt_buffer_store(out_b, add(op3, ku(2)), l_b);
+
+    KEntry e;
+    e.stage             = KStage::Compute;
+    e.local_size[0]     = 64;
+    e.kernel_body_begin = mark;
+    e.kernel_body_count = g.stmt_count() - mark;
+    return e;
+}
+
+// Build the AERIAL-PERSPECTIVE froxel kernel (Hillaire 2020 §5.5) — a 3D volume over the camera frustum: each cell stores the
+// in-scattered atmospheric light + the transmittance from the camera to that depth, so opaque geometry / fog composites the
+// atmosphere as `surface·transmittance + inscatter` (this feeds B12-d fog). ONE thread per (x,y) froxel column marches once
+// through the depth slices (a running inscatter + transmittance), writing each slice's cell as it passes. Camera: at altitude,
+// looking +x (up=+z), the sun in the x–z plane (baked). Buffers: 0 = transmittance LUT (IN), 1 = multiscatter LUT (IN), 2 = out
+// froxel volume (F32 ap_res·ap_res·ap_slices·4 = RGB inscatter + mean transmittance). Dispatch ap_res·ap_res/64 workgroups.
+[[nodiscard]] inline KEntry build_atmos_aerial(KGraph& g, const AtmosphereConfig& cfg)
+{
+    const auto kf   = [&](double v) { return g.constant(v, make_shape({1}), DType::F32); };
+    const auto ku   = [&](crd::u32 v) { return g.constant(static_cast<double>(v), make_shape({1}), DType::U32); };
+    const auto add  = [&](int a, int b) { return g.binary(KOp::Add, a, b); };
+    const auto sub  = [&](int a, int b) { return g.binary(KOp::Sub, a, b); };
+    const auto mul  = [&](int a, int b) { return g.binary(KOp::Mul, a, b); };
+    const auto divv = [&](int a, int b) { return g.binary(KOp::Div, a, b); };
+    const auto fmax = [&](int a, int b) { return g.binary(KOp::Max, a, b); };
+    const auto fmin = [&](int a, int b) { return g.binary(KOp::Min, a, b); };
+    const auto neg  = [&](int a) { return g.unary(KOp::Neg, a); };
+    const auto sqrt = [&](int a) { return g.unary(KOp::Sqrt, a); };
+    const auto expn = [&](int a) { return g.unary(KOp::Exp, neg(a)); };
+
+    const double rg   = in_km(cfg.ground_radius);
+    const double rt   = in_km(cfg.top_radius);
+    const double h2   = rt * rt - rg * rg;
+    const int    res  = cfg.ap_res;
+    const int    nsl  = cfg.ap_slices;
+    const int    tw   = cfg.tlut_w;
+    const int    thh  = cfg.tlut_h;
+    const int    mres = cfg.mslut_res;
+    const double musn = cfg.sky_sun_cos;
+    const double tanh = cfg.ap_tan_half_fov;
+    const double pi   = 3.14159265358979323846;
+    const double kray = 3.0 / (16.0 * pi);
+    const double kmie = 3.0 / (8.0 * pi);
+    const double gmg  = cfg.mie_g;
+
+    const int tlut_b = g.buffer_decl(DType::F32, 0, 0, false);
+    const int msl_b  = g.buffer_decl(DType::F32, 0, 1, false);
+    const int out_b  = g.buffer_decl(DType::F32, 0, 2, true);
+    const int p      = add(mul(g.builtin(KBuiltin::WorkgroupIndex), ku(64)), g.builtin(KBuiltin::LocalInvocationIndex));
+
+    const int mark   = g.kernel_stmt_mark();
+    const int h_node = sqrt(kf(h2));
+
+    const auto bilinear3 = [&](int buf, int wi, int hi, int fx, int fy, int& or_, int& og, int& ob) {
+        const int x0f = g.unary(KOp::Floor, fx);
+        const int y0f = g.unary(KOp::Floor, fy);
+        const int txf = sub(fx, x0f);
+        const int tyf = sub(fy, y0f);
+        const int x0  = g.cast(x0f, DType::U32);
+        const int y0  = g.cast(y0f, DType::U32);
+        const int x1  = g.cast(fmin(add(x0f, kf(1.0)), kf(static_cast<double>(wi - 1))), DType::U32);
+        const int y1  = g.cast(fmin(add(y0f, kf(1.0)), kf(static_cast<double>(hi - 1))), DType::U32);
+        g.stmt_materialize(x0);
+        g.stmt_materialize(y0);
+        g.stmt_materialize(x1);
+        g.stmt_materialize(y1);
+        g.stmt_materialize(txf);
+        g.stmt_materialize(tyf);
+        const auto idx = [&](int xu, int yu, crd::u32 c) { return add(mul(add(mul(yu, ku(static_cast<crd::u32>(wi))), xu), ku(3)), ku(c)); };
+        const auto bl  = [&](crd::u32 c) {
+            const int a00 = g.buffer_load(buf, idx(x0, y0, c));
+            const int a10 = g.buffer_load(buf, idx(x1, y0, c));
+            const int a01 = g.buffer_load(buf, idx(x0, y1, c));
+            const int a11 = g.buffer_load(buf, idx(x1, y1, c));
+            const int a0  = add(a00, mul(txf, sub(a10, a00)));
+            const int a1  = add(a01, mul(txf, sub(a11, a01)));
+            return add(a0, mul(tyf, sub(a1, a0)));
+        };
+        or_ = bl(0);
+        og  = bl(1);
+        ob  = bl(2);
+    };
+    const auto sample_tlut = [&](int rs, int mus, int& tr, int& tg, int& tb) {
+        const int rho   = sqrt(fmax(sub(mul(rs, rs), kf(rg * rg)), kf(0.0)));
+        const int x_r   = fmin(fmax(divv(rho, h_node), kf(0.0)), kf(1.0));
+        const int disc  = fmax(add(mul(mul(rs, rs), sub(mul(mus, mus), kf(1.0))), kf(rt * rt)), kf(0.0));
+        const int dd    = fmax(add(neg(mul(rs, mus)), sqrt(disc)), kf(0.0));
+        const int d_min = sub(kf(rt), rs);
+        const int d_max = add(rho, h_node);
+        const int x_mu  = fmin(fmax(divv(sub(dd, d_min), fmax(sub(d_max, d_min), kf(1e-4))), kf(0.0)), kf(1.0));
+        bilinear3(tlut_b, tw, thh, mul(x_mu, kf(static_cast<double>(tw - 1))), mul(x_r, kf(static_cast<double>(thh - 1))), tr, tg, tb);
+    };
+    const auto sample_msl = [&](int rs, int mus, int& mr, int& mg, int& mb) {
+        const int x_mu = fmin(fmax(mul(add(mus, kf(1.0)), kf(0.5)), kf(0.0)), kf(1.0));
+        const int x_r  = fmin(fmax(divv(sub(rs, kf(rg)), kf(rt - rg)), kf(0.0)), kf(1.0));
+        bilinear3(msl_b, mres, mres, mul(x_mu, kf(static_cast<double>(mres - 1))), mul(x_r, kf(static_cast<double>(mres - 1))), mr, mg, mb);
+    };
+
+    // texel column (ix,iy) → view direction. Camera looks +x (up=+z, right=+y); the sun is in the x–z plane so the ray's
+    // y-component folds out of both the radial profile r(t) and the sun angle (mirror symmetry about the sun plane).
+    const int fp   = g.cast(p, DType::F32);
+    const int iy_f = g.unary(KOp::Floor, divv(fp, kf(static_cast<double>(res))));
+    const int ix_f = sub(fp, mul(iy_f, kf(static_cast<double>(res))));
+    const int ndcx = sub(mul(divv(add(ix_f, kf(0.5)), kf(static_cast<double>(res))), kf(2.0)), kf(1.0));
+    const int ndcy = sub(mul(divv(add(iy_f, kf(0.5)), kf(static_cast<double>(res))), kf(2.0)), kf(1.0));
+    const int nxt  = mul(ndcx, kf(tanh));
+    const int nyt  = mul(ndcy, kf(tanh));
+    const int nrm  = sqrt(add(add(kf(1.0), mul(nxt, nxt)), mul(nyt, nyt)));
+    const int dirx = divv(kf(1.0), nrm);
+    const int dirz = divv(nyt, nrm);
+    const int sunx = sqrt(kf(1.0 - musn * musn));
+    const int csv  = add(mul(dirx, sunx), mul(dirz, kf(musn)));
+    const int csv2 = mul(csv, csv);
+    const int p_r  = mul(kf(kray), add(kf(1.0), csv2));
+    const int cs_b = sub(kf(1.0 + gmg * gmg), mul(kf(2.0 * gmg), csv));
+    const int cs_d = mul(kf(2.0 + gmg * gmg), g.binary(KOp::Pow, cs_b, kf(1.5)));
+    const int p_m  = divv(mul(mul(kf(kmie), kf(1.0 - gmg * gmg)), add(kf(1.0), csv2)), cs_d);
+
+    const int rcam = kf(rg + in_km(cfg.camera_height));
+    const int rdz  = mul(rcam, dirz);
+
+    int l_r = kf(0.0);
+    int l_g = kf(0.0);
+    int l_b = kf(0.0);
+    int tau_r = kf(0.0);
+    int tau_g = kf(0.0);
+    int tau_b = kf(0.0);
+    for (int s = 0; s < nsl; ++s)
+    {
+        const double d0    = in_km(cfg.ap_km_max) * static_cast<double>(s) / static_cast<double>(nsl);
+        const double d1    = in_km(cfg.ap_km_max) * static_cast<double>(s + 1) / static_cast<double>(nsl);
+        const double t_mid = 0.5 * (d0 + d1);
+        const int    r_x   = sqrt(add(add(mul(rcam, rcam), mul(mul(kf(2.0), rdz), kf(t_mid))), kf(t_mid * t_mid)));
+        g.stmt_materialize(r_x);
+        const int xz   = add(rcam, mul(kf(t_mid), dirz));
+        const int alt  = fmax(sub(r_x, kf(rg)), kf(0.0));
+        const int mu_s = divv(add(mul(mul(kf(t_mid), dirx), sunx), mul(xz, kf(musn))), r_x);
+        g.stmt_materialize(mu_s);
+        int ts_r = 0;
+        int ts_g = 0;
+        int ts_b = 0;
+        sample_tlut(r_x, mu_s, ts_r, ts_g, ts_b);
+        int ms_r = 0;
+        int ms_g = 0;
+        int ms_b = 0;
+        sample_msl(r_x, mu_s, ms_r, ms_g, ms_b);
+        const int rho_r = expn(divv(alt, kf(in_km(cfg.rayleigh_height))));
+        const int rho_m = expn(divv(alt, kf(in_km(cfg.mie_height))));
+        const int rho_o = fmax(sub(kf(1.0), divv(g.unary(KOp::Abs, sub(alt, kf(in_km(cfg.ozone_center)))), kf(in_km(cfg.ozone_half_width)))), kf(0.0));
+        const int rm_p  = mul(kf(in_per_km(cfg.mie_scatter)), rho_m);
+        const int se_r  = add(add(mul(kf(in_per_km(cfg.rayleigh_scatter_r)), rho_r), mul(kf(in_per_km(cfg.mie_extinction)), rho_m)), mul(kf(in_per_km(cfg.ozone_absorb_r)), rho_o));
+        const int se_g  = add(add(mul(kf(in_per_km(cfg.rayleigh_scatter_g)), rho_r), mul(kf(in_per_km(cfg.mie_extinction)), rho_m)), mul(kf(in_per_km(cfg.ozone_absorb_g)), rho_o));
+        const int se_b  = add(add(mul(kf(in_per_km(cfg.rayleigh_scatter_b)), rho_r), mul(kf(in_per_km(cfg.mie_extinction)), rho_m)), mul(kf(in_per_km(cfg.ozone_absorb_b)), rho_o));
+        const double dt = d1 - d0;
+        const auto inscat = [&](double br, int ts, int ms) {
+            const int rr_p   = mul(kf(br), rho_r);
+            const int single = mul(mul(add(mul(rr_p, p_r), mul(rm_p, p_m)), ts), kf(cfg.sun_illuminance));
+            const int multi  = mul(add(rr_p, rm_p), ms);
+            return add(single, multi);
+        };
+        const int tv_r = expn(tau_r);
+        const int tv_g = expn(tau_g);
+        const int tv_b = expn(tau_b);
+        l_r   = add(l_r, mul(mul(tv_r, inscat(in_per_km(cfg.rayleigh_scatter_r), ts_r, ms_r)), kf(dt)));
+        l_g   = add(l_g, mul(mul(tv_g, inscat(in_per_km(cfg.rayleigh_scatter_g), ts_g, ms_g)), kf(dt)));
+        l_b   = add(l_b, mul(mul(tv_b, inscat(in_per_km(cfg.rayleigh_scatter_b), ts_b, ms_b)), kf(dt)));
+        tau_r = add(tau_r, mul(se_r, kf(dt)));
+        tau_g = add(tau_g, mul(se_g, kf(dt)));
+        tau_b = add(tau_b, mul(se_b, kf(dt)));
+        // write cell (ix,iy,slice s): RGB inscatter + mean transmittance from the camera to this depth.
+        const int cell = mul(add(mul(add(mul(ku(static_cast<crd::u32>(s)), ku(static_cast<crd::u32>(res))), g.cast(iy_f, DType::U32)), ku(static_cast<crd::u32>(res))), g.cast(ix_f, DType::U32)), ku(4));
+        const int tmean = mul(add(add(expn(tau_r), expn(tau_g)), expn(tau_b)), kf(1.0 / 3.0));
+        g.stmt_buffer_store(out_b, cell, l_r);
+        g.stmt_buffer_store(out_b, add(cell, ku(1)), l_g);
+        g.stmt_buffer_store(out_b, add(cell, ku(2)), l_b);
+        g.stmt_buffer_store(out_b, add(cell, ku(3)), tmean);
+    }
 
     KEntry e;
     e.stage             = KStage::Compute;

@@ -427,8 +427,26 @@ inline bool emit_value_stmt(const KGraph& g, int i, crd::containers::String& s, 
         const KNode& sm = g.node(nd.b);
         s.append("texture("); s.append(glsl_tex_scalar_prefix(tx.type.scalar)); s.append("sampler"); s.append(glsl_tex_dim_suffix(tx.type));
         s.append("(tex_"); app_uint(s, static_cast<crd::u32>(tx.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(tx.iidx));
-        s.append("[nonuniformEXT("); ta(nd.d); s.append(")], samp_"); app_uint(s, static_cast<crd::u32>(sm.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(sm.iidx));
+        // A UNIFORM (compile-time constant) index needs no `nonuniformEXT` — and some drivers reject/return-zero for nonuniform
+        // bindless in a MESH shader. Only a dynamic index gets the qualifier.
+        if (g.node(nd.d).op == KOp::Const) { s.append("["); ta(nd.d); s.append("]"); }
+        else { s.append("[nonuniformEXT("); ta(nd.d); s.append(")]"); }
+        s.append(", samp_"); app_uint(s, static_cast<crd::u32>(sm.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(sm.iidx));
         s.append("), "); ta(nd.c); s.append(")");
+        break;
+    }
+    case KOp::SampleIndexedLod: // B16: bindless ARRAY sample at an EXPLICIT LOD (VS displacement — no derivatives). lod in ext[0].
+    {
+        const KNode& tx = g.node(nd.a);
+        const KNode& sm = g.node(nd.b);
+        s.append("textureLod("); s.append(glsl_tex_scalar_prefix(tx.type.scalar)); s.append("sampler"); s.append(glsl_tex_dim_suffix(tx.type));
+        s.append("(tex_"); app_uint(s, static_cast<crd::u32>(tx.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(tx.iidx));
+        // A UNIFORM (compile-time constant) index needs no `nonuniformEXT` — and some drivers reject/return-zero for nonuniform
+        // bindless in a MESH shader. Only a dynamic index gets the qualifier.
+        if (g.node(nd.d).op == KOp::Const) { s.append("["); ta(nd.d); s.append("]"); }
+        else { s.append("[nonuniformEXT("); ta(nd.d); s.append(")]"); }
+        s.append(", samp_"); app_uint(s, static_cast<crd::u32>(sm.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(sm.iidx));
+        s.append("), "); ta(nd.c); s.append(", "); ta(g.ext_operand(nd, 0)); s.append(")");
         break;
     }
     case KOp::Fwidth: s.append("fwidth("); ta(nd.a); s.append(")"); break; // B1 |dFdx|+|dFdy|
@@ -449,8 +467,8 @@ inline bool emit_value_stmt(const KGraph& g, int i, crd::containers::String& s, 
     case KOp::Pow: s.append("pow("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
     case KOp::Clamp: s.append("clamp("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(")"); break;
     case KOp::Mix: s.append("mix("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(")"); break;
-    case KOp::Vec2: s.append("vec2("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
-    case KOp::Vec3: s.append("vec3("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(")"); break;
+    case KOp::Vec2: s.append(vtype(nd.type)); s.append("("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break; // uvec2/ivec2/vec2 by component type
+    case KOp::Vec3: s.append(vtype(nd.type)); s.append("("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(")"); break;
     case KOp::VecConcat: s.append(vtype(nd.type)); s.append("("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
     case KOp::VecComp: ta(nd.a); s.append("."); { const char sw[2] = {xyzw[nd.iidx], '\0'}; s.append(sw); } break;
     case KOp::Swizzle: ta(nd.a); s.append("."); for (int k = 0; k < c; ++k) { const char sw[2] = {xyzw[nd.perm[k]], '\0'}; s.append(sw); } break;
@@ -549,6 +567,14 @@ inline bool emit_value_stmt(const KGraph& g, int i, crd::containers::String& s, 
     case KBuiltin::FrontFacing:   return "gl_FrontFacing";
     case KBuiltin::PointCoord:    return "gl_PointCoord";
     case KBuiltin::InnerCoverage: return "gl_FragFullyCoveredNV"; // B1-f: a bool (NV underestimation) — read as uint()
+    // B4: workgroup builtins — legal only in a MESH/task/compute stage (entry_valid rejects them in VS/FS), so listing them
+    // here is harmless for the raster path and lets the mesh emitter reuse this leaf.
+    case KBuiltin::LocalInvocationIndex: return "gl_LocalInvocationIndex";
+    case KBuiltin::WorkgroupIndex:       return "gl_WorkGroupID.x";
+    case KBuiltin::LocalInvocationId:    return "gl_LocalInvocationID";
+    case KBuiltin::WorkgroupId:          return "gl_WorkGroupID";
+    case KBuiltin::GlobalInvocationId:   return "gl_GlobalInvocationID";
+    case KBuiltin::NumWorkgroups:        return "gl_NumWorkGroups";
     default:                      return nullptr;
     }
 }
@@ -626,12 +652,16 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
         if (temped[static_cast<crd::usize>(node)] != 0U) { s.append("t"); app_uint(s, static_cast<crd::u32>(node)); return; }
         const KNode& nd  = g.node(node);
         const auto   bin = [&](const char* o) { s.append("("); self(self, nd.a); s.append(o); self(self, nd.b); s.append(")"); };
+        // AND/OR/XOR of BOOL operands (e.g. Perlin gradient3's `(h==12) | (h==14)`) must be LOGICAL in GLSL (`bool | bool` is a
+        // type error); on integer operands they stay bitwise. Pick by the operand dtype.
+        const auto   binbit = [&](const char* opi, const char* opb) { bin(g.node(nd.a).dtype() == DType::Bool ? opb : opi); };
         switch (nd.op)
         {
         case KOp::Const:
             if (nd.dtype() == DType::Bool) { s.append(nd.cval != 0.0 ? "true" : "false"); }
-            else if (dt_is_uint(nd.dtype())) { app_uint(s, static_cast<int>(nd.cval)); s.append("u"); }
-            else if (dt_is_int(nd.dtype())) { app_uint(s, static_cast<int>(nd.cval)); }
+            // app_int_const uses %lld (full 64-bit) + a `u` suffix for uint — a u32 const > INT_MAX (hash seeds like
+            // 2654435761) must NOT go through static_cast<int> (MSVC clamps out-of-range double→int to INT_MIN, mangling it).
+            else if (dt_is_uint(nd.dtype()) || dt_is_int(nd.dtype())) { app_int_const(s, nd.cval, nd.dtype()); }
             else { app_flit(s, nd.cval); }
             break;
         case KOp::Builtin:
@@ -649,9 +679,9 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
         case KOp::CmpGe: bin(" >= "); break;
         case KOp::CmpEq: bin(" == "); break;
         case KOp::CmpNe: bin(" != "); break;
-        case KOp::BitAnd: bin(" & "); break;
-        case KOp::BitOr: bin(" | "); break;
-        case KOp::BitXor: bin(" ^ "); break;
+        case KOp::BitAnd: binbit(" & ", " && "); break;
+        case KOp::BitOr: binbit(" | ", " || "); break;
+        case KOp::BitXor: binbit(" ^ ", " != "); break; // xor of bools = not-equal
         case KOp::Shl: bin(" << "); break;
         case KOp::Shr: bin(" >> "); break;
         case KOp::Select: s.append("("); self(self, nd.c); s.append(" ? "); self(self, nd.a); s.append(" : "); self(self, nd.b); s.append(")"); break; // a=true b=false c=cond
@@ -677,6 +707,15 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
         case KOp::Cos: f1("cos"); break;
         case KOp::Exp: f1("exp"); break;
         case KOp::Pow: f2("pow"); break;
+        case KOp::Log: f1("log"); break;
+        case KOp::Log2: f1("log2"); break;
+        case KOp::Tanh: f1("tanh"); break;
+        case KOp::Atan2: f2("atan"); break; // GLSL 2-arg atan(y, x)
+        case KOp::Atan: f1("atan"); break;
+        case KOp::Asin: f1("asin"); break;
+        case KOp::Acos: f1("acos"); break;
+        case KOp::Sinh: f1("sinh"); break;
+        case KOp::Cosh: f1("cosh"); break;
         case KOp::Floor: f1("floor"); break;
         case KOp::Add: b2(" + "); break;
         case KOp::Sub: b2(" - "); break;
@@ -792,7 +831,7 @@ inline bool emit_stage_glsl(const KGraph& g, const KEntry& entry, crd::memory::I
     if (is_vertex && entry.shading_rate >= 0) { s.append("#extension GL_EXT_fragment_shading_rate : require\n"); } // B1-e
     for (int i = 0; i < n; ++i) // B2-d: a bindless SampleIndexed needs the nonuniform-indexing qualifier
     {
-        if (reach[static_cast<crd::usize>(i)] && g.node(i).op == KOp::SampleIndexed)
+        if (reach[static_cast<crd::usize>(i)] && (g.node(i).op == KOp::SampleIndexed || g.node(i).op == KOp::SampleIndexedLod))
         {
             s.append("#extension GL_EXT_nonuniform_qualifier : require\n");
             break;
@@ -969,6 +1008,159 @@ inline bool emit_stage_glsl(const KGraph& g, const KEntry& entry, crd::memory::I
     for (int k = 0; k < entry.n_out; ++k) { const int nid = entry.out[k].node; if (nid < 0) { continue; } s.append("  o_"); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append(" = t"); app_uint(s, static_cast<crd::u32>(nid)); s.append(";\n"); }
     if (!is_vertex && entry.frag_depth >= 0) { s.append("  gl_FragDepth = t"); app_uint(s, static_cast<crd::u32>(entry.frag_depth)); s.append(";\n"); }
     s.append("}\n");
+    return true;
+}
+
+// B4: MESH-shader emit (GL_EXT_mesh_shader). One workgroup emits up to mesh_vertices verts + mesh_primitives triangles; thread
+// tid writes vertex tid (position + per-vertex out arrays) and primitive tid (mesh_prim → the local triangle indices), each
+// guarded by its count. The per-vertex value graph reads the workgroup builtins (a global vertex id built from WorkgroupIndex +
+// LocalInvocationIndex), so it reuses the raster value machinery + the raster_leaf. No StageIn (a mesh stage has no vertex
+// attribute inputs — it GENERATES geometry).
+inline bool emit_mesh_glsl(const KGraph& g, const KEntry& entry, crd::memory::IAllocator* scratch, GlslKernel& out)
+{
+    using namespace glsl_detail;
+    if (entry.stage != KStage::Mesh || entry.mesh_vertices == 0U || entry.position < 0 || entry.mesh_prim < 0) { return false; }
+    const crd::u32 n_verts    = entry.mesh_vertices;
+    const crd::u32 n_prims    = entry.mesh_primitives;
+    const crd::u32 local_size = n_verts > n_prims ? n_verts : n_prims; // one thread per output slot; write guarded by count
+
+    const int                       n = g.size();
+    crd::containers::Array<crd::u8> reach(scratch);
+    crd::containers::Array<int>     stk(scratch);
+    reach.resize(static_cast<crd::usize>(n), 0);
+    const auto push_root = [&](int r) { if (r >= 0) { stk.push_back(r); } };
+    push_root(entry.position);
+    push_root(entry.mesh_prim);
+    for (int k = 0; k < entry.n_out; ++k) { push_root(entry.out[k].node); }
+    while (stk.size() > 0)
+    {
+        const int i = stk[stk.size() - 1];
+        stk.resize(stk.size() - 1);
+        if (i < 0 || reach[static_cast<crd::usize>(i)]) { continue; }
+        reach[static_cast<crd::usize>(i)] = 1;
+        const KNode& nd = g.node(i);
+        if (nd.a >= 0) { stk.push_back(nd.a); }
+        if (nd.b >= 0) { stk.push_back(nd.b); }
+        if (nd.c >= 0) { stk.push_back(nd.c); }
+        if (nd.d >= 0) { stk.push_back(nd.d); }
+        for (int e = 0; e < static_cast<int>(nd.n_ext); ++e) { stk.push_back(g.ext_operand(nd, e)); }
+    }
+
+    crd::containers::String& s = out.source;
+    s.clear();
+    s.append("#version 460\n#extension GL_EXT_mesh_shader : require\n");
+    for (int i = 0; i < n; ++i)
+    {
+        if (reach[static_cast<crd::usize>(i)] && (g.node(i).op == KOp::SampleIndexed || g.node(i).op == KOp::SampleIndexedLod))
+        {
+            s.append("#extension GL_EXT_nonuniform_qualifier : require\n");
+            break;
+        }
+    }
+    s.append("layout(local_size_x = "); app_uint(s, local_size); s.append(") in;\n");
+    s.append("layout(triangles, max_vertices = "); app_uint(s, n_verts); s.append(", max_primitives = "); app_uint(s, n_prims); s.append(") out;\n");
+    for (int k = 0; k < entry.n_out; ++k) // per-VERTEX output arrays (unsized ⇒ max_vertices)
+    {
+        const int nid = entry.out[k].node;
+        if (nid < 0) { continue; }
+        s.append("layout(location = "); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append(") ");
+        s.append(glsl_interp(entry.out[k].interp));
+        s.append("out "); s.append(vtype(g.node(nid).type)); s.append(" o_"); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append("[];\n");
+    }
+    for (int i = 0; i < n; ++i) // B2: texture + sampler binding leaves (same as the raster prologue)
+    {
+        if (!reach[static_cast<crd::usize>(i)]) { continue; }
+        const KNode& nd = g.node(i);
+        if (nd.op == KOp::Texture)
+        {
+            s.append("layout(set = "); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append(", binding = "); app_uint(s, static_cast<crd::u32>(nd.iidx));
+            s.append(") uniform "); s.append(glsl_tex_scalar_prefix(nd.type.scalar)); s.append("texture"); s.append(glsl_tex_dim_suffix(nd.type));
+            s.append(" tex_"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx));
+            if (nd.type.count > 1U) { s.append("["); app_uint(s, static_cast<crd::u32>(nd.type.count)); s.append("]"); }
+            s.append(";\n");
+        }
+        else if (nd.op == KOp::Sampler)
+        {
+            s.append("layout(set = "); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append(", binding = "); app_uint(s, static_cast<crd::u32>(nd.iidx));
+            s.append(") uniform sampler"); if (nd.type.tex_shadow()) { s.append("Shadow"); }
+            s.append(" samp_"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(";\n");
+        }
+    }
+    for (int i = 0; i < n; ++i) // uniform blocks (same as raster)
+    {
+        if (!reach[static_cast<crd::usize>(i)] || g.node(i).op != KOp::UniformBlock) { continue; }
+        const KNode& nd  = g.node(i);
+        const int    sid = nd.type.struct_id;
+        s.append("layout(set = "); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append(", binding = "); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(", std140) uniform U_"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(" {\n");
+        const int fc = g.struct_field_count(sid);
+        for (int f = 0; f < fc; ++f) { s.append("  "); s.append(vtype(g.struct_field(sid, f))); s.append(" f"); app_uint(s, static_cast<crd::u32>(f)); s.append(";\n"); }
+        s.append("} ubo_"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(";\n");
+    }
+
+    s.append("void main() {\n");
+    s.append("  SetMeshOutputsEXT("); app_uint(s, n_verts); s.append("u, "); app_uint(s, n_prims); s.append("u);\n");
+
+    // A4 tier-2 body-scoping (identical to the raster path): loop-varying nodes emit INSIDE their owning `for`.
+    crd::containers::Array<crd::u8> varying(scratch);
+    varying.resize(static_cast<crd::usize>(n), 0);
+    for (int i = 0; i < n; ++i) { const KNode& v = g.node(i); if (v.op == KOp::For) { continue; } const bool loop_leaf = v.op == KOp::LoopIndex || v.op == KOp::LoopAcc; const bool from_operand = (v.a >= 0 && varying[static_cast<crd::usize>(v.a)]) || (v.b >= 0 && varying[static_cast<crd::usize>(v.b)]) || (v.c >= 0 && varying[static_cast<crd::usize>(v.c)]) || (v.d >= 0 && varying[static_cast<crd::usize>(v.d)]); if (loop_leaf || from_operand) { varying[static_cast<crd::usize>(i)] = 1; } }
+    crd::containers::Array<int> body_of(scratch);
+    body_of.resize(static_cast<crd::usize>(n), -1);
+    crd::containers::Array<int> rstk(scratch);
+    for (int fi = 0; fi < n; ++fi) { if (g.node(fi).op != KOp::For) { continue; } rstk.push_back(g.node(fi).c); while (rstk.size() > 0) { const int bid = rstk[rstk.size() - 1]; rstk.resize(rstk.size() - 1); if (bid < 0 || !varying[static_cast<crd::usize>(bid)] || body_of[static_cast<crd::usize>(bid)] != -1) { continue; } body_of[static_cast<crd::usize>(bid)] = fi; const KNode& bn = g.node(bid); rstk.push_back(bn.a); rstk.push_back(bn.b); rstk.push_back(bn.c); rstk.push_back(bn.d); } }
+
+    const auto raster_leaf = [&](const KGraph& gg, int li, crd::containers::String& ss) -> bool
+    {
+        const KNode& lnd = gg.node(li);
+        if (lnd.op == KOp::UniformBlock) { return true; }
+        if (lnd.op == KOp::Texture || lnd.op == KOp::Sampler) { return true; }
+        if (lnd.op == KOp::Builtin)
+        {
+            const KBuiltin bi = static_cast<KBuiltin>(lnd.iidx);
+            const char*    bn = glsl_vsfs_builtin_name(bi);
+            if (bn == nullptr) { return false; }
+            emit_stmt_prefix(gg, li, ss); ss.append(bn); ss.append(";\n");
+            return true;
+        }
+        if (lnd.op == KOp::FieldGet)
+        {
+            const KNode& agg = gg.node(lnd.a);
+            if (agg.op != KOp::UniformBlock) { return false; }
+            emit_stmt_prefix(gg, li, ss); ss.append("ubo_"); app_uint(ss, static_cast<crd::u32>(agg.dset)); ss.append("_"); app_uint(ss, static_cast<crd::u32>(agg.iidx)); ss.append(".f"); app_uint(ss, static_cast<crd::u32>(lnd.iidx)); ss.append(";\n");
+            return true;
+        }
+        return false;
+    };
+
+    for (int i = 0; i < n; ++i)
+    {
+        if (!reach[static_cast<crd::usize>(i)] || varying[static_cast<crd::usize>(i)]) { continue; }
+        const KNode& nd = g.node(i);
+        if (nd.op == KOp::For)
+        {
+            s.append("  precise "); s.append(vtype(nd.type)); s.append(" t"); app_uint(s, static_cast<crd::u32>(i)); s.append(" = t"); app_uint(s, static_cast<crd::u32>(nd.b)); s.append(";\n");
+            s.append("  for (int li_"); app_uint(s, static_cast<crd::u32>(i)); s.append(" = 0; li_"); app_uint(s, static_cast<crd::u32>(i)); s.append(" < int(t"); app_uint(s, static_cast<crd::u32>(nd.a)); s.append("); li_"); app_uint(s, static_cast<crd::u32>(i)); s.append("++) {\n");
+            for (int bid = 0; bid < i; ++bid)
+            {
+                if (body_of[static_cast<crd::usize>(bid)] != i) { continue; }
+                const KNode& bn = g.node(bid);
+                if (bn.op == KOp::LoopIndex) { s.append("  precise float t"); app_uint(s, static_cast<crd::u32>(bid)); s.append(" = float(li_"); app_uint(s, static_cast<crd::u32>(i)); s.append(");\n"); }
+                else if (bn.op == KOp::LoopAcc) { s.append("  precise "); s.append(vtype(bn.type)); s.append(" t"); app_uint(s, static_cast<crd::u32>(bid)); s.append(" = t"); app_uint(s, static_cast<crd::u32>(i)); s.append(";\n"); }
+                else if (!emit_value_stmt(g, bid, s, raster_leaf)) { return false; }
+            }
+            s.append("  t"); app_uint(s, static_cast<crd::u32>(i)); s.append(" = t"); app_uint(s, static_cast<crd::u32>(nd.c)); s.append(";\n  }\n");
+        }
+        else if (!emit_value_stmt(g, i, s, raster_leaf)) { return false; }
+    }
+
+    // per-vertex writes (guarded by max_vertices), then the per-primitive triangle indices (guarded by max_primitives).
+    s.append("  if (gl_LocalInvocationIndex < "); app_uint(s, n_verts); s.append("u) {\n");
+    s.append("    gl_MeshVerticesEXT[gl_LocalInvocationIndex].gl_Position = t"); app_uint(s, static_cast<crd::u32>(entry.position)); s.append(";\n");
+    for (int k = 0; k < entry.n_out; ++k) { const int nid = entry.out[k].node; if (nid < 0) { continue; } s.append("    o_"); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append("[gl_LocalInvocationIndex] = t"); app_uint(s, static_cast<crd::u32>(nid)); s.append(";\n"); }
+    s.append("  }\n");
+    s.append("  if (gl_LocalInvocationIndex < "); app_uint(s, n_prims); s.append("u) {\n");
+    s.append("    gl_PrimitiveTriangleIndicesEXT[gl_LocalInvocationIndex] = t"); app_uint(s, static_cast<crd::u32>(entry.mesh_prim)); s.append(";\n");
+    s.append("  }\n}\n");
     return true;
 }
 

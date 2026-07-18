@@ -318,7 +318,8 @@ inline constexpr crd::u32 kU32Max = 0xffffffffU;
             const int dist = d::worley_metric(g, diff, metric, 2);
             const int cond = g.binary(KOp::CmpLt, dist, best);
             best           = g.select(cond, dist, best);
-            if (style == 1) { minpos = g.select(cond, diff, minpos); }
+            g.stmt_materialize(best); // flatten the running-min chain (see worley3) — un-nests the ternary for the compute emitter
+            if (style == 1) { minpos = g.select(cond, diff, minpos); g.stmt_materialize(minpos); }
         }
     }
     if (style == 1)
@@ -379,7 +380,12 @@ inline void cell_vec3_from3(KGraph& g, int ix, int iy, int iz, int like, int out
                 const int dist = d::worley_metric(g, diff, metric, 3);
                 const int cond = g.binary(KOp::CmpLt, dist, best);
                 best           = g.select(cond, dist, best);
-                if (style == 1) { minpos = g.select(cond, diff, minpos); }
+                // FLATTEN the 27-deep running-min: freeze `best` into a temp each cell so it emits a SEQUENCE of updates, not a
+                // 27-nested ternary. The nested form makes shaderc's optimizer + the driver blow up SUPER-LINEARLY (a compute
+                // kernel with a few worley3 was un-compilable). Inert in the fragment path (it ignores kernel statements), so B6
+                // material noise + its byte-exact golden emission are untouched; also collapses the CPU-oracle re-walk.
+                g.stmt_materialize(best);
+                if (style == 1) { minpos = g.select(cond, diff, minpos); g.stmt_materialize(minpos); }
             }
         }
     }

@@ -179,3 +179,63 @@ TEST_CASE("B15-a sky-view LUT: a blue zenith, a sun-side glow, and a bright hori
     // (4) the HORIZON is brighter than the ZENITH — the long grazing path scatters far more in-scattered light.
     CHECK(lum(isun, ihor) > lum(isun, izen));
 }
+
+TEST_CASE("B15-a aerial-perspective froxels: transmittance falls with depth, inscatter accumulates, bluish", "[kir][atmos]")
+{
+    crd::memory::TlsfAllocator   alloc(128U << 20U);
+    kir::atmos::AtmosphereConfig cfg;
+    cfg.tlut_w    = 64; // small input LUTs so the recursive CPU oracle stays fast; the froxel physics is resolution-independent.
+    cfg.tlut_h    = 16;
+    cfg.mslut_res = 16;
+    cfg.ap_res    = 8;  // an 8×8×8 froxel volume for the CPU-oracle test (production runs 32×32×16).
+    cfg.ap_slices = 8;
+    const int tw  = cfg.tlut_w;
+    const int th  = cfg.tlut_h;
+    const int res = cfg.mslut_res;
+    const int apr = cfg.ap_res;
+    const int aps = cfg.ap_slices;
+
+    kir::KGraph       gt(&alloc);
+    const kir::KEntry et = kir::atmos::build_atmos_transmittance(gt, cfg);
+    crd::containers::Array<crd::f64> tlut(&alloc);
+    tlut.resize(uz(tw * th * 3));
+    kir::KernelBuffer tb[1] = {{tlut.data(), tw * th * 3, 0, 0}};
+    kir::eval_cpu_kernel(gt, et, tb, 1, et.local_size[0], &alloc, static_cast<crd::u32>(tw * th / 64));
+
+    kir::KGraph       gm(&alloc);
+    const kir::KEntry em = kir::atmos::build_atmos_multiscatter(gm, cfg);
+    crd::containers::Array<crd::f64> ms(&alloc);
+    ms.resize(uz(res * res * 3));
+    kir::KernelBuffer mb[2] = {{tlut.data(), tw * th * 3, 0, 0}, {ms.data(), res * res * 3, 0, 1}};
+    kir::eval_cpu_kernel(gm, em, mb, 2, em.local_size[0], &alloc, static_cast<crd::u32>(res * res / 64));
+
+    kir::KGraph       ga(&alloc);
+    const kir::KEntry ea = kir::atmos::build_atmos_aerial(ga, cfg);
+    crd::containers::Array<crd::f64> ap(&alloc);
+    ap.resize(uz(apr * apr * aps * 4));
+    kir::KernelBuffer ab[3] = {{tlut.data(), tw * th * 3, 0, 0}, {ms.data(), res * res * 3, 0, 1}, {ap.data(), apr * apr * aps * 4, 0, 2}};
+    kir::eval_cpu_kernel(ga, ea, ab, 3, ea.local_size[0], &alloc, static_cast<crd::u32>(apr * apr / 64));
+
+    // cell (ix,iy,slice) → [R,G,B inscatter, mean transmittance]
+    const auto ax = [&](int ix, int iy, int s, int c) { return ap[uz(((s * apr + iy) * apr + ix) * 4 + c)]; };
+    const int  cx = apr / 2; // a central column
+    const int  cy = apr / 2;
+
+    // (1) every cell: inscatter ≥ 0, transmittance ∈ (0,1].
+    for (int i = 0; i < apr * apr * aps; ++i)
+    {
+        CHECK(ap[uz(i * 4 + 0)] >= 0.0);
+        CHECK(ap[uz(i * 4 + 3)] > 0.0);
+        CHECK(ap[uz(i * 4 + 3)] <= 1.0 + 1e-6);
+    }
+
+    // (2) transmittance FALLS with depth (more atmosphere between the camera and the far slices).
+    CHECK(ax(cx, cy, aps - 1, 3) < ax(cx, cy, 0, 3));
+
+    // (3) in-scattered light ACCUMULATES with depth (the running integral grows).
+    const auto ins = [&](int s) { return ax(cx, cy, s, 0) + ax(cx, cy, s, 1) + ax(cx, cy, s, 2); };
+    CHECK(ins(aps - 1) > ins(0));
+
+    // (4) the aerial haze is BLUISH — Rayleigh-dominated in-scatter, blue > red at the far slice.
+    CHECK(ax(cx, cy, aps - 1, 2) > ax(cx, cy, aps - 1, 0));
+}
