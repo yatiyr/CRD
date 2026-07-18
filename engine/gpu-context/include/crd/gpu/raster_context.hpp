@@ -313,6 +313,44 @@ public:
     {
         return nullptr;
     }
+
+    // B4-tess: create a VS→TessControl→TessEval→FRAGMENT program (the PORTABLE displacement path for HW without mesh shaders —
+    // mobile / WebGPU / older). Default (no tessellation support) ⇒ nullptr, so the caller falls back to mesh / vertex-pull.
+    [[nodiscard]] virtual std::unique_ptr<IRasterProgram>
+    create_tess_program(IGpuProgram& /*vertex*/, IGpuProgram& /*tess_control*/, IGpuProgram& /*tess_eval*/,
+                        IGpuProgram& /*fragment*/)
+    {
+        return nullptr;
+    }
+
+    // B4-tess: draw `patch_count` QUAD patches through the tessellator (PATCH_LIST + patch size 4). Default ⇒ no-op.
+    virtual void draw_tess(IRasterTarget& /*target*/, IRasterProgram& /*program*/, ClearColor /*clear*/,
+                           crd::u32 /*patch_count*/) {}
+
+    // B4-vis-4: a R32_UINT VISIBILITY-BUFFER target — the HW-raster half of the Nanite split (HW raster wins on big triangles).
+    // The fragment shader writes a per-pixel primitive id (KBuiltin::PrimitiveId → SV_PrimitiveId / gl_PrimitiveID), which a
+    // deferred pass materializes. `read_pixel` returns the raw u32 id. Default (no uint-target support) ⇒ nullptr.
+    [[nodiscard]] virtual std::unique_ptr<IRasterTarget> create_visbuffer_target(crd::u32 /*width*/, crd::u32 /*height*/)
+    {
+        return nullptr;
+    }
+
+    // B4-vis-4: HW-raster a VS→FS program into a visibility-buffer target, clearing the id to `clear_id`. Default ⇒ no-op.
+    virtual void draw_visbuffer(IRasterTarget& /*target*/, IRasterProgram& /*program*/, crd::u32 /*clear_id*/,
+                                crd::u32 /*vertex_count*/) {}
+
+    // B4: GPU-DRIVEN INDIRECT MESHLET DISPATCH — the mesh-workgroup count comes from `native_args` (the backend-native handle
+    // of a buffer a compute CULL pass wrote as {groupCountX, 1, 1}; `ComputeBuffer::native_handle()`), consumed by
+    // vkCmdDrawMeshTasksIndirectEXT / DX12 ExecuteIndirect(DISPATCH_MESH). The culled meshlets never dispatch and the CPU
+    // never learns the count — the Nanite scale loop. Colour-only. Default (no indirect support) ⇒ no-op.
+    virtual void draw_mesh_indirect(IRasterTarget& /*target*/, IRasterProgram& /*program*/, ClearColor /*clear*/,
+                                    void* /*native_args*/, crd::u64 /*args_offset*/) {}
+
+    // B4: dispatch a MESH program with PER-PRIMITIVE VRS — the mesh's `KEntry::shading_rate` output (a distant/low-detail
+    // meshlet shading itself at a coarser fragment rate — `gl_MeshPrimitivesEXT[].gl_PrimitiveShadingRateEXT` / SV_ShadingRate)
+    // drives the coarse rate via a REPLACE combiner. Colour-only. Default (no VRS support) ⇒ falls back to a full-rate draw.
+    virtual void draw_mesh_vrs(IRasterTarget& /*target*/, IRasterProgram& /*program*/, ClearColor /*clear*/,
+                               crd::u32 /*group_count*/) {}
 };
 
 // B5: an opaque deferred G-buffer (see `create_gbuffer_target`). `read_pixel(attachment, x, y)` is valid after a draw.

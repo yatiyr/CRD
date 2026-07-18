@@ -22,11 +22,13 @@
 #include <crd/kir/ckir_clouds.hpp>     // B15-b: build_cloud_density (the Nubis volumetric-cloud density field)
 #include <crd/kir/ckir_glsl.hpp> // B-cmp: emit_compute_kernel_glsl (the shared-memory compute-kernel emitter)
 #include <crd/kir/ckir_hlsl.hpp> // B3-d: emit_stage_hlsl (the HLSL VS/FS emitter)
+#include <crd/kir/ckir_visbuffer.hpp> // B4-vis: build_sw_raster_visbuffer (the compute software rasterizer)
 
 #include <crd/math/cmath.hpp> // Phase-1 FFT: host-side twiddle table (cos/sin)
 
 #include <ckir_kernel_dispatch.hpp> // B-cmp: the SHARED both-backend kernel dispatch + oracle-compare harness
 #include <ckir_raster_triangle.hpp> // B3-e: the SHARED, backend-neutral CKIR triangle (identical on Vulkan + DX12)
+#include <ckir_visbuffer_test.hpp>  // B4-vis: the SHARED software-rasterizer scene + oracle + mixed-dtype dispatch
 
 #include <crd/containers/span.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
@@ -626,6 +628,287 @@ TEST_CASE("D-007 B4: Vulkan TASK amplification — 1 task workgroup emits N mesh
     CHECK(lit == static_cast<int>(n_tri)); // all N amplified triangles rendered with the payload colour
 }
 
+// D-007 B4: the MULTI-FIELD task→mesh payload — a task passes a 3-uint payload (v0,v1,v2), each read by the mesh via
+// KBuiltin::TaskPayload{,1,2} and coloured into R/G/B. Proves the payload channel carries richer per-meshlet data (bounds /
+// LOD / material), not just one uint — the centre pixel's R,G,B must equal the three payload fields.
+TEST_CASE("D-007 B4: Vulkan TASK multi-field payload — a 3-uint payload flows task->mesh",
+          "[gpu-context][vulkan][gpu][raster][mesh][task]")
+{
+    namespace kir = crd::kir;
+
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    if (!vk->shader_object() || !vk->mesh_shader()) { WARN("no shader_object/mesh_shader; skipping"); return; }
+
+    crd::memory::TlsfAllocator alloc(4U << 20U);
+    auto                       raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+
+    constexpr crd::u32 pay_r = 200U;
+    constexpr crd::u32 pay_g = 120U;
+    constexpr crd::u32 pay_b = 60U;
+    kir::KGraph        tg(&alloc);
+    kir::KEntry        te;
+    crd::gputest::build_task_amplify_rgb(tg, te, 1U, pay_r, pay_g, pay_b);
+    kir::KGraph mg(&alloc);
+    kir::KEntry me;
+    crd::gputest::build_mesh_amplified_rgb(mg, me);
+    kir::KGraph fg(&alloc);
+    kir::KEntry fe;
+    crd::gputest::build_amplify_rgb_fs(fg, fe);
+
+    auto task = ctx->create_program(tg, te);
+    auto mesh = ctx->create_program(mg, me);
+    auto fs   = ctx->create_program(fg, fe);
+    REQUIRE(task != nullptr);
+    REQUIRE(mesh != nullptr);
+    REQUIRE(fs != nullptr);
+    auto program = raster->create_task_mesh_program(*task, *mesh, *fs);
+    REQUIRE(program != nullptr);
+    REQUIRE(program->valid());
+
+    constexpr crd::u32 dim    = 64U;
+    auto               target = raster->create_color_target(dim, dim);
+    REQUIRE(target != nullptr);
+    raster->draw_mesh(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.1F, 1.0F}, 1U);
+
+    const crd::u32 px = target->read_pixel(dim / 2U, dim / 2U); // inside the centred triangle
+    CHECK((px & 0xFFU) > pay_r - 6U);           // R ≈ payload v0
+    CHECK((px & 0xFFU) < pay_r + 6U);
+    CHECK(((px >> 8U) & 0xFFU) > pay_g - 6U);   // G ≈ payload v1
+    CHECK(((px >> 8U) & 0xFFU) < pay_g + 6U);
+    CHECK(((px >> 16U) & 0xFFU) > pay_b - 6U);  // B ≈ payload v2 — all three fields flowed
+    CHECK(((px >> 16U) & 0xFFU) < pay_b + 6U);
+}
+
+// D-007 B4: GPU-DRIVEN INDIRECT MESHLET DISPATCH. A compute CULL pass tests 8 meshlets (5 visible) and writes the survivor
+// count straight into an INDIRECT-dispatch args buffer; vkCmdDrawMeshTasksIndirectEXT then launches EXACTLY that many mesh
+// workgroups — the count decided entirely on the GPU (the CPU never sets it). Proves the Nanite scale loop: only the 5
+// surviving meshlets render their triangle; the 3 culled ones never dispatch.
+TEST_CASE("D-007 B4: Vulkan GPU-driven indirect meshlet dispatch — a compute cull writes the dispatch count",
+          "[gpu-context][vulkan][gpu][raster][mesh][indirect]")
+{
+    namespace kir = crd::kir;
+    namespace vb  = crd::kir::visbuffer;
+    namespace cu  = crd::gpu::compute_usage;
+
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    if (!vk->shader_object() || !vk->mesh_shader()) { WARN("no shader_object/mesh_shader; skipping"); return; }
+    crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+    crd::memory::TlsfAllocator alloc(4U << 20U);
+
+    // 1) the compute CULL: 8 meshlets, keys[i] = (i < 5) ⇒ visible → 5 survivors written into args[0] (groupCountX).
+    constexpr crd::u32       n_meshlets = 8U;
+    constexpr crd::u32       survivors  = 5U;
+    vb::MeshletCullConfig     ccfg;
+    ccfg.n_meshlets       = n_meshlets;
+    ccfg.local_size       = 64U;
+    kir::KGraph            cg(&alloc);
+    const kir::KEntry      ce = vb::build_meshlet_cull(cg, ccfg);
+    kir::GlslKernel        kern(&alloc);
+    REQUIRE(kir::emit_compute_kernel_glsl(cg, ce, &alloc, kern));
+    const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), "cull", &alloc);
+    REQUIRE(spv.ok);
+    auto pipe = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), 2, 0U);
+    REQUIRE(pipe != nullptr);
+
+    auto keys_dev = compute.create_buffer(n_meshlets * 4U, cu::storage | cu::transfer_dst, gpu::ComputeMemory::GpuOnly);
+    auto args_dev = compute.create_buffer(3U * 4U, cu::storage | cu::indirect | cu::transfer_dst | cu::transfer_src,
+                                          gpu::ComputeMemory::GpuOnly); // INDIRECT ⇒ CONCURRENT-shared for the mesh draw
+    auto keys_up  = compute.create_buffer(n_meshlets * 4U, cu::transfer_src, gpu::ComputeMemory::CpuToGpu);
+    auto args_up  = compute.create_buffer(3U * 4U, cu::transfer_src, gpu::ComputeMemory::CpuToGpu);
+    auto args_rb  = compute.create_buffer(3U * 4U, cu::transfer_dst, gpu::ComputeMemory::GpuToCpu);
+    REQUIRE(args_dev != nullptr);
+    auto* kp = static_cast<crd::u32*>(keys_up->map());
+    for (crd::u32 i = 0; i < n_meshlets; ++i) { kp[i] = (i < survivors) ? 1U : 0U; }
+    keys_up->unmap();
+    auto* ap = static_cast<crd::u32*>(args_up->map());
+    ap[0] = 0U;
+    ap[1] = 1U;
+    ap[2] = 1U; // {groupCountX = 0 (accumulated), groupCountY = 1, groupCountZ = 1}
+    args_up->unmap();
+
+    auto&                  rec      = compute.begin();
+    crd::gpu::ComputeBuffer* binds[2] = {keys_dev.get(), args_dev.get()};
+    rec.copy(*keys_up, *keys_dev, 0U, 0U, n_meshlets * 4U);
+    rec.copy(*args_up, *args_dev, 0U, 0U, 3U * 4U);
+    rec.barrier(*keys_dev, crd::gpu::ComputeAccess::TransferDst, crd::gpu::ComputeAccess::ShaderRead);
+    rec.barrier(*args_dev, crd::gpu::ComputeAccess::TransferDst, crd::gpu::ComputeAccess::ShaderRead);
+    rec.dispatch(*pipe, crd::containers::ConstSpan<crd::gpu::ComputeBuffer*>(binds, 2), nullptr, 0U, 1U, 1U, 1U);
+    rec.barrier(*args_dev, crd::gpu::ComputeAccess::ShaderWrite, crd::gpu::ComputeAccess::TransferSrc);
+    rec.copy(*args_dev, *args_rb, 0U, 0U, 3U * 4U);
+    compute.submit_and_wait();
+
+    const auto* arp   = static_cast<const crd::u32*>(args_rb->map());
+    const crd::u32 count = arp[0];
+    args_rb->unmap();
+    CHECK(count == survivors); // the compute cull computed the mesh-dispatch count on the GPU
+
+    // 2) the raster INDIRECT mesh draw reads args_dev (the compute-written count) — GPU-driven, no CPU-set group count.
+    kir::KGraph mg(&alloc);
+    kir::KEntry me;
+    crd::gputest::build_mesh_grid_tri(mg, me);
+    kir::KGraph fg(&alloc);
+    kir::KEntry fe;
+    crd::gputest::build_amplify_fs(fg, fe);
+    auto meshp = ctx->create_program(mg, me);
+    auto fsp   = ctx->create_program(fg, fe);
+    REQUIRE(meshp != nullptr);
+    REQUIRE(fsp != nullptr);
+    auto program = raster->create_mesh_program(*meshp, *fsp);
+    REQUIRE(program != nullptr);
+    REQUIRE(program->valid());
+
+    constexpr crd::u32 dim    = 64U;
+    auto               target = raster->create_color_target(dim, dim);
+    REQUIRE(target != nullptr);
+    raster->draw_mesh_indirect(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.1F, 1.0F}, args_dev->native_handle(), 0U);
+
+    int rendered = 0;
+    int culled   = 0;
+    for (crd::u32 w = 0; w < n_meshlets; ++w) // meshlet w renders at clip x = -0.8 + w*0.2
+    {
+        const double   xc  = -0.8 + static_cast<double>(w) * 0.2;
+        const crd::u32 sx  = static_cast<crd::u32>((xc + 1.0) * 0.5 * static_cast<double>(dim));
+        const bool     red = (target->read_pixel(sx, dim / 2U) & 0xFFU) > 180U;
+        if (w < survivors) { if (red) { ++rendered; } }
+        else if (!red) { ++culled; }
+    }
+    CHECK(rendered == static_cast<int>(survivors));               // all 5 survivors rendered via the indirect count
+    CHECK(culled == static_cast<int>(n_meshlets - survivors));    // the 3 culled meshlets never dispatched
+}
+
+// D-007 B4-tess: the PORTABLE displacement path — VS→TESS-CONTROL→TESS-EVAL→FS. The VS emits a 4-corner quad patch (±0.6),
+// the hull sets 8x8 tess levels, the domain reads TessPatchPosition (the bilerp) + EXPANDS the quad x1.3 (a per-vertex domain
+// transform), the FS paints it red. Proves the tessellator ran end to end: a pixel between the base edge (0.6) and the
+// expanded edge (0.78) is red ONLY because the domain shader displaced the generated vertices.
+TEST_CASE("D-007 B4-tess: Vulkan tessellation — a VS->TCS->TES->FS quad subdivides + displaces",
+          "[gpu-context][vulkan][gpu][raster][tess]")
+{
+    namespace kir = crd::kir;
+
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    if (!vk->shader_object() || !vk->tessellation()) { WARN("no shader_object/tessellation; skipping the tess draw"); return; }
+
+    crd::memory::TlsfAllocator alloc(4U << 20U);
+    auto                       raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+
+    kir::KGraph vg(&alloc);
+    kir::KEntry ve;
+    crd::gputest::build_tess_quad_vs(vg, ve);
+    kir::KGraph cg(&alloc);
+    kir::KEntry ce;
+    crd::gputest::build_tess_hull(cg, ce);
+    kir::KGraph eg(&alloc);
+    kir::KEntry ee;
+    crd::gputest::build_tess_domain(eg, ee);
+    kir::KGraph fg(&alloc);
+    kir::KEntry fe;
+    crd::gputest::build_triangle_fs(fg, fe);
+
+    auto vs  = ctx->create_program(vg, ve);
+    auto tcs = ctx->create_program(cg, ce); // CKIR TessControl entry -> hull GLSL -> SPIR-V
+    auto tes = ctx->create_program(eg, ee); // CKIR TessEval entry    -> domain GLSL -> SPIR-V
+    auto fs  = ctx->create_program(fg, fe);
+    REQUIRE(vs != nullptr);
+    REQUIRE(tcs != nullptr);
+    REQUIRE(tes != nullptr);
+    REQUIRE(fs != nullptr);
+    REQUIRE(tcs->stage() == gpu::ShaderStage::TessControl);
+    REQUIRE(tes->stage() == gpu::ShaderStage::TessEval);
+
+    auto program = raster->create_tess_program(*vs, *tcs, *tes, *fs);
+    REQUIRE(program != nullptr);
+    REQUIRE(program->valid());
+
+    constexpr crd::u32 dim    = 64U;
+    auto               target = raster->create_color_target(dim, dim);
+    REQUIRE(target != nullptr);
+    raster->draw_tess(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.2F, 1.0F}, 1U); // ONE quad patch
+
+    // Screen x for a clip x: sx = (x+1)/2·dim. The base quad edge is 0.6 (sx=51); the domain-expanded edge is 0.78 (sx=57).
+    CHECK((target->read_pixel(dim / 2U, dim / 2U) & 0xFFU) >= 250U); // centre red — the quad renders
+    const crd::u32 sx_expanded = static_cast<crd::u32>((0.72 + 1.0) * 0.5 * static_cast<double>(dim)); // clip x≈0.72 (sx≈55)
+    CHECK((target->read_pixel(sx_expanded, dim / 2U) & 0xFFU) >= 250U); // between base (0.6) + expanded (0.78) — domain ran
+    CHECK((target->read_pixel(63U, dim / 2U) & 0xFFU) < 40U); // clip x≈0.97, beyond the expanded quad — still the blue clear
+}
+
+// D-007 B4-vis-4: the HW-RASTER VISIBILITY BUFFER — the hybrid Nanite path (HW raster wins on big triangles). A fullscreen
+// quad (2 triangles) rasterizes into a R32_UINT target whose fragment shader writes gl_PrimitiveID, so every pixel records
+// which triangle covered it. Proves KBuiltin::PrimitiveId lowers + the uint visibility target renders + read_pixel returns id.
+TEST_CASE("D-007 B4-vis-4: Vulkan HW-raster visibility buffer writes SV_PrimitiveId per pixel",
+          "[gpu-context][vulkan][gpu][raster][visbuffer]")
+{
+    namespace kir = crd::kir;
+
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    if (!vk->shader_object()) { WARN("no shader_object; skipping the visbuffer draw"); return; }
+
+    crd::memory::TlsfAllocator alloc(4U << 20U);
+    auto                       raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+
+    kir::KGraph vg(&alloc);
+    kir::KEntry ve;
+    crd::gputest::build_visbuffer_vs(vg, ve);
+    kir::KGraph fg(&alloc);
+    kir::KEntry fe;
+    crd::gputest::build_visbuffer_fs(fg, fe);
+    auto vs = ctx->create_program(vg, ve);
+    auto fs = ctx->create_program(fg, fe);
+    REQUIRE(vs != nullptr);
+    REQUIRE(fs != nullptr);
+    auto program = raster->create_raster_program(*vs, *fs);
+    REQUIRE(program != nullptr);
+    REQUIRE(program->valid());
+
+    constexpr crd::u32 dim    = 64U;
+    auto               target = raster->create_visbuffer_target(dim, dim);
+    REQUIRE(target != nullptr);
+    raster->draw_visbuffer(*target, *program, 0xFFFFFFFFU, 6U); // clear id = empty; 6 verts = 2 triangles
+
+    int n0     = 0;
+    int n1     = 0;
+    int nempty = 0;
+    for (crd::u32 y = 0; y < dim; ++y)
+    {
+        for (crd::u32 x = 0; x < dim; ++x)
+        {
+            const crd::u32 id = target->read_pixel(x, y);
+            if (id == 0U) { ++n0; }
+            else if (id == 1U) { ++n1; }
+            else if (id == 0xFFFFFFFFU) { ++nempty; }
+        }
+    }
+    CHECK(nempty == 0);                            // the fullscreen quad covers every pixel (no cleared 0xFFFFFFFF survives)
+    CHECK(n0 + n1 == static_cast<int>(dim * dim)); // every pixel is primitive id 0 or 1
+    CHECK(n0 > static_cast<int>(dim * dim) / 4);   // triangle 0 covers a substantial half (its distinct SV_PrimitiveID)
+    CHECK(n1 > static_cast<int>(dim * dim) / 4);   // triangle 1 covers the other half
+}
+
 TEST_CASE("D-007 B1-a: IR fragment derivatives (dFdx/dFdy of FragCoord.x) draw on Vulkan",
           "[gpu-context][vulkan][gpu][raster][ir]")
 {
@@ -1163,6 +1446,43 @@ TEST_CASE("D-007 B1-e: per-primitive VRS out (gl_PrimitiveShadingRateEXT) coarse
     const int n = count_equal_even_pairs(*target, dim);
     WARN("[vrs per-primitive vulkan] n_equal=" << n);
     CHECK(n > static_cast<int>(dim * dim / 4U)); // the primitive-output 2x2 rate made blocks uniform
+}
+
+// D-007 B4: PER-PRIMITIVE VRS from a MESH shader — the mesh's gl_MeshPrimitivesEXT[].gl_PrimitiveShadingRateEXT output (2×2)
+// drives the coarse fragment rate via draw_mesh_vrs (REPLACE combiner). Same ramp FS + coarsening check as the VS case: a 2×2
+// rate makes each 2×2 block share one fragment invocation, so horizontal even-x pairs become EQUAL across the gradient.
+TEST_CASE("D-007 B4: per-primitive VRS from a MESH shader coarsens shading (Vulkan)",
+          "[gpu-context][vulkan][gpu][raster][mesh][vrs]")
+{
+    namespace kir = crd::kir;
+    auto        r = vk_raster_or_skip();
+    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
+    if (!r.vk->fragment_shading_rate() || !r.vk->mesh_shader()) { WARN("no VRS / mesh_shader; skipping"); return; }
+    REQUIRE(r.raster != nullptr);
+    crd::memory::TlsfAllocator alloc(4U << 20U);
+
+    kir::KGraph mg(&alloc);
+    kir::KEntry me;
+    crd::gputest::build_vrs_primitive_mesh(mg, me); // mesh emits gl_MeshPrimitivesEXT[].gl_PrimitiveShadingRateEXT = 2x2
+    kir::KGraph fg(&alloc);
+    kir::KEntry fe;
+    crd::gputest::build_vrs_ramp_fs(fg, fe);
+    auto mesh = r.ctx->create_program(mg, me);
+    auto fs   = r.ctx->create_program(fg, fe);
+    REQUIRE(mesh != nullptr); // the mesh emits the per-primitive rate ⇒ must compile to valid SPIR-V
+    REQUIRE(fs != nullptr);
+    auto program = r.raster->create_mesh_program(*mesh, *fs);
+    REQUIRE(program != nullptr);
+    REQUIRE(program->valid());
+
+    constexpr crd::u32 dim    = 32U;
+    auto               target = r.raster->create_color_target(dim, dim);
+    REQUIRE(target != nullptr);
+    r.raster->draw_mesh_vrs(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 1U);
+
+    const int nmesh = count_equal_even_pairs(*target, dim);
+    WARN("[vrs mesh vulkan] n_equal=" << nmesh);
+    CHECK(nmesh > static_cast<int>(dim * dim / 4U)); // the mesh's per-primitive 2x2 rate coarsened the ramp
 }
 
 TEST_CASE("D-007 B1-e: attachment (image) VRS 2x2 coarsens shading (Vulkan)", "[gpu-context][vulkan][gpu][raster][ir]")
@@ -2851,6 +3171,165 @@ TEST_CASE("B-cmp: CKIR compute KERNEL (shared memory + barriers) DISPATCHES on V
     CHECK(bad == 0);
     CHECK(out32[0] == static_cast<float>(in64[ls - 1])); // spot-check the reversal actually happened
     CHECK(out32[ls - 1] == static_cast<float>(in64[0]));
+}
+
+// B4-vis: the NANITE software rasterizer (atomicMin visibility buffer) DISPATCHES on Vulkan == CPU oracle bit-exact — the
+// SAME kernel + scene + oracle as the DX12 test, so the two backends also agree with each other. One thread per triangle
+// writes a per-pixel (depth<<idBits)|triangleId key by atomicMin; the nearer centre triangle wins the overlap.
+TEST_CASE("B4-vis: CKIR software rasterizer (atomicMin visibility buffer) DISPATCHES on Vulkan == CPU oracle bit-exact",
+          "[gpu-context][vulkan][gpu][kernel][visbuffer]")
+{
+    namespace kir = crd::kir;
+    namespace vb  = crd::kir::visbuffer;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+
+    crd::memory::TlsfAllocator         alloc(8U << 20U);
+    const crd::kir_test::SwRasterScene scene = crd::kir_test::make_sw_raster_scene();
+    kir::KGraph                        g(&alloc);
+    const kir::KEntry                  e = vb::build_sw_raster_visbuffer(g, scene.cfg);
+
+    kir::GlslKernel kern(&alloc);
+    REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, kern));
+    const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source),
+                                                "ckir_visraster", &alloc);
+    REQUIRE(spv.ok);
+    auto pipe = compute.create_pipeline_from_spirv(
+        crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), 3, 0U); // 3 storage bindings, no push
+    REQUIRE(pipe != nullptr);
+
+    crd::containers::Array<crd::u32> vis_cpu(&alloc);
+    crd::containers::Array<crd::u32> vis_gpu(&alloc);
+    crd::kir_test::sw_raster_oracle(g, e, scene, alloc, vis_cpu);
+    crd::kir_test::dispatch_visraster(compute, *pipe, scene, vis_gpu);
+
+    const int npix = static_cast<int>(scene.cfg.width * scene.cfg.height);
+    int       diff = 0;
+    for (int i = 0; i < npix; ++i) { if (vis_gpu[static_cast<crd::usize>(i)] != vis_cpu[static_cast<crd::usize>(i)]) { ++diff; } }
+    CHECK(diff == 0); // BIT-EXACT: GPU visibility keys == CPU oracle (atomicMin order-independent; matches the DX12 result)
+
+    const crd::u32 w  = scene.cfg.width;
+    const crd::u32 ib = scene.cfg.id_bits;
+    const auto     at = [&](crd::u32 x, crd::u32 y) { return vis_gpu[static_cast<crd::usize>(y) * w + x]; };
+    CHECK(vb::vis_id(at(16U, 16U), ib) == 2U); // centre: the NEAR triangle (id 2) wins the depth resolve
+    CHECK(vb::vis_id(at(10U, 18U), ib) == 1U); // upper-left half of the quad → triangle 1
+    CHECK(vb::vis_id(at(20U, 10U), ib) == 0U); // lower-right half of the quad → triangle 0
+    CHECK(at(2U, 2U) == vb::kVisEmptyKey);     // outside the geometry → still the empty key
+}
+
+// B4-vis-2: DEFERRED ATTRIBUTE INTERPOLATION SHADE (DAIS) DISPATCHES on Vulkan. Reads the visibility buffer, reconstructs
+// perspective-correct barycentrics + interpolates a per-vertex attribute once per visible pixel. Visibility is bit-exact
+// (B4-vis-1); the deferred shade's single perspective-normalize divide is ~2.5 ULP on f32 hardware, so the reconstruction
+// matches the oracle to a TIGHT ULP tolerance. The scene's distinct clip-w proves the /w correction ran (centroid ~8, not 14).
+TEST_CASE("B4-vis-2: CKIR deferred attribute shade (DAIS) DISPATCHES on Vulkan == CPU oracle to ULP",
+          "[gpu-context][vulkan][gpu][kernel][visbuffer][dais]")
+{
+    namespace kir = crd::kir;
+    namespace vb  = crd::kir::visbuffer;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+
+    crd::memory::TlsfAllocator       alloc(16U << 20U);
+    const crd::kir_test::DaisScene   scene = crd::kir_test::make_dais_scene();
+    crd::containers::Array<crd::u32> vis(&alloc);
+    crd::kir_test::dais_make_vis(scene, alloc, vis); // CPU rasterize → visibility keys (the shared input)
+
+    kir::KGraph       dg(&alloc);
+    const kir::KEntry de = vb::build_deferred_attr_shade(dg, scene.shade_cfg);
+    kir::GlslKernel   kern(&alloc);
+    REQUIRE(kir::emit_compute_kernel_glsl(dg, de, &alloc, kern));
+    const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source),
+                                                "ckir_dais", &alloc);
+    REQUIRE(spv.ok);
+    auto pipe = compute.create_pipeline_from_spirv(
+        crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), 5, 0U); // 5 storage bindings, no push
+    REQUIRE(pipe != nullptr);
+
+    crd::containers::Array<float> shade_cpu(&alloc);
+    crd::containers::Array<float> shade_gpu(&alloc);
+    crd::kir_test::dais_oracle(dg, de, scene, vis, alloc, shade_cpu);
+    crd::kir_test::dispatch_dais(compute, *pipe, scene, vis, shade_gpu);
+
+    const crd::u32 w    = scene.shade_cfg.width;
+    const int      npix = static_cast<int>(w * scene.shade_cfg.height);
+    const auto     absf = [](float v) { return v < 0.0F ? -v : v; };
+    float          max_rel = 0.0F;
+    int            covered = 0;
+    int            outrange = 0;
+    for (int i = 0; i < npix; ++i)
+    {
+        const float gp  = shade_gpu[static_cast<crd::usize>(i)];
+        const float cp  = shade_cpu[static_cast<crd::usize>(i)];
+        const float acp = absf(cp) > 1.0e-6F ? absf(cp) : 1.0e-6F;
+        const float rel = absf(gp - cp) / acp;
+        if (rel > max_rel) { max_rel = rel; }
+        if (gp != 0.0F)
+        {
+            ++covered;
+            if (gp < 1.9F || gp > 32.1F) { ++outrange; }
+        }
+    }
+    WARN("[DAIS vk] max relative error (GPU vs oracle) = " << max_rel);
+    CHECK(max_rel < 1.0e-6F); // ≈ a few f32 ULP — the perspective-normalize divide's hardware imprecision
+    CHECK(covered > 100);     // the perspective triangle shaded a good fraction of the 32x32
+    CHECK(outrange == 0);     // every covered pixel is a valid convex blend of the {2,8,32} attributes
+    CHECK(shade_gpu[2U * w + 2U] == 0.0F); // outside → the cleared background
+    const float centre = shade_gpu[13U * w + 16U];
+    CHECK(centre > 5.0F);
+    CHECK(centre < 11.0F); // perspective-correct (~8), decisively below the naive average (14)
+}
+
+// B4-vis-3: the HZB two-pass OCCLUSION CULL DISPATCHES on Vulkan == CPU oracle bit-exact. A max-depth mip pyramid (one
+// downsample dispatch per level) + a per-cluster AABB-vs-HZB test — MAX + compare are order-independent ⇒ bit-exact. The
+// GPU-driven culling that makes a Nanite pipeline scale: a cluster behind the near wall is culled; open / in-front survive.
+TEST_CASE("B4-vis-3: CKIR HZB two-pass occlusion cull DISPATCHES on Vulkan == CPU oracle bit-exact",
+          "[gpu-context][vulkan][gpu][kernel][visbuffer][hzb]")
+{
+    namespace kir = crd::kir;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+
+    crd::memory::TlsfAllocator    alloc(16U << 20U);
+    const crd::kir_test::HzbScene scene   = crd::kir_test::make_hzb_scene();
+    bool                          emit_ok = true;
+    const auto make_pipe = [&](const kir::KGraph& gr, const kir::KEntry& en, int nbufs) {
+        kir::GlslKernel kern(&alloc);
+        if (!kir::emit_compute_kernel_glsl(gr, en, &alloc, kern)) { emit_ok = false; }
+        const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source),
+                                                    "ckir_hzb", &alloc);
+        if (!spv.ok) { emit_ok = false; }
+        return compute.create_pipeline_from_spirv(
+            crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nbufs, 0U);
+    };
+    crd::containers::Array<crd::u32> vis_cpu(&alloc);
+    crd::containers::Array<crd::u32> vis_gpu(&alloc);
+    crd::kir_test::hzb_cull_oracle(scene, alloc, vis_cpu);
+    crd::kir_test::hzb_cull_dispatch(compute, make_pipe, scene, alloc, vis_gpu);
+    REQUIRE(emit_ok); // every HZB / cull kernel lowered to SPIR-V
+
+    for (int c = 0; c < crd::kir_test::HzbScene::n_clusters; ++c)
+    {
+        CHECK(vis_gpu[static_cast<crd::usize>(c)] == vis_cpu[static_cast<crd::usize>(c)]);       // BIT-EXACT vs oracle
+        CHECK(vis_gpu[static_cast<crd::usize>(c)] == scene.expected[static_cast<crd::usize>(c)]); // analytic: cull=0, visible=1
+    }
 }
 
 TEST_CASE("v17 NRC: CKIR fused-MLP FP32 forward DISPATCHES on Vulkan == CPU oracle BIT-EXACT (the portable moat)",

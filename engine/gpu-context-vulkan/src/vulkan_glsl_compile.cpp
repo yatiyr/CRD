@@ -102,6 +102,8 @@ struct ShadercApi
     case ShaderStage::Fragment: return shaderc_fragment_shader;
     case ShaderStage::Mesh: return shaderc_mesh_shader; // B4: modern amplification path (needs SPIR-V ≥1.4 — we target 1.6)
     case ShaderStage::Task: return shaderc_task_shader;
+    case ShaderStage::TessControl: return shaderc_tess_control_shader; // B4-tess: hull
+    case ShaderStage::TessEval: return shaderc_tess_evaluation_shader; // B4-tess: domain
     case ShaderStage::Compute:
     default: return shaderc_compute_shader;
     }

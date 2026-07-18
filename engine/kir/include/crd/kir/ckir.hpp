@@ -372,6 +372,12 @@ enum class KBuiltin : crd::u8
     // B4-tess: the interpolated patch position in the TESS-EVAL (domain) stage — the emitter bilinearly interpolates the 4
     // control points by gl_TessCoord.xy, so a TES value graph adds a displacement to it (the portable ocean/heightfield path).
     TessPatchPosition, // vec4 — read in the TessEval stage (bilerp of the quad patch's 4 corners by TessCoord)
+    // B4: the additional task→mesh PAYLOAD fields (v1..v3) — a meshlet amplification pass passes richer per-meshlet data
+    // (cluster bounds / LOD / material id / flags), not just one uint. Distinct builtins ⇒ distinct CSE ⇒ no field-index
+    // aliasing. The payload struct is a FIXED 4 uints so the task's + mesh's `taskPayloadSharedEXT` layouts always match.
+    TaskPayload1, // uint — task→mesh payload field 1
+    TaskPayload2, // uint — task→mesh payload field 2
+    TaskPayload3, // uint — task→mesh payload field 3
 };
 
 struct KBuiltinInfo
@@ -398,6 +404,9 @@ struct KBuiltinInfo
     case KBuiltin::LocalInvocationIndex: return {t_uint, stage_mask::kWorkgroup, "LocalInvocationIndex"};
     case KBuiltin::WorkgroupIndex:       return {t_uint, stage_mask::kWorkgroup, "WorkgroupIndex"}; // B-cmp: flattened 1-D wg id
     case KBuiltin::TaskPayload:          return {t_uint, stage_mask::kMesh, "TaskPayload"};          // B4: task→mesh payload (uint)
+    case KBuiltin::TaskPayload1:         return {t_uint, stage_mask::kMesh, "TaskPayload1"};         // B4: payload field 1
+    case KBuiltin::TaskPayload2:         return {t_uint, stage_mask::kMesh, "TaskPayload2"};         // B4: payload field 2
+    case KBuiltin::TaskPayload3:         return {t_uint, stage_mask::kMesh, "TaskPayload3"};         // B4: payload field 3
     case KBuiltin::TessPatchPosition:    return {KType::vec(DType::F32, 4), stage_mask::kTessEval, "TessPatchPosition"}; // B4-tess
 
     case KBuiltin::VertexIndex:   return {t_int, stage_mask::kVertex, "VertexIndex"};
@@ -532,10 +541,14 @@ enum class KStmtKind : crd::u8
                  // block's predecessor is always resident or retired (blockIdx launch order is NOT guaranteed — using it raw
                  // DEADLOCKED on Ada). target = coherent BufferDecl, index = counter cell, value = the SharedDecl (slot 0).
                  // Oracle: executes once per workgroup (sequential ⇒ ticket == WorkgroupIndex).
-    SyncWarp     // WARP-scoped barrier + shared-memory visibility WITHIN the 32-lane subgroup — the warp-synchronous rank's
+    SyncWarp,    // WARP-scoped barrier + shared-memory visibility WITHIN the 32-lane subgroup — the warp-synchronous rank's
                  // ~2-cycle sync (vs a full block Barrier). CUDA `__syncwarp()`, GLSL `subgroupBarrier()`, MSL
                  // `simdgroup_barrier`; HLSL/WGSL lower to the conservative block barrier (uniform flow required anyway).
                  // Oracle: commits pending writes (lockstep interpreter ⇒ same semantics as Barrier).
+    BufferAtomicMin // ATOMIC MIN on a GLOBAL buffer element: `atomicMin(buf[index], value)` — the B4-vis software-rasterizer
+                 // visibility key (a packed `(depth << idBits) | triangleId` u32; nearest triangle wins, ties broken by lowest
+                 // id). target = BufferDecl, index, value. Bit-exact (MIN is order-independent, like the SUM atomics). U32 only.
+                 // APPENDED at END (KStmtKind participates in cook-serialized kernel stmts — never renumber existing kinds).
 };
 struct KStmt
 {
@@ -591,7 +604,11 @@ struct KEntry
     // uint) into the task→mesh PAYLOAD, which the mesh stage reads via `KBuiltin::TaskPayload`. A task emits no geometry (no
     // position / out / mesh_*). `local_size` sets the task workgroup size. Appended at END (KEntry is cook-serialized).
     int          task_emit    = -1; // u32 node: the mesh-workgroup count the task emits (>= 0 ⇒ this is a task entry)
-    int          task_payload = -1; // u32 node: the payload value the task writes (optional; < 0 = no payload)
+    // B4: the task→mesh PAYLOAD — up to 4 u32 fields (a meshlet pass passes bounds/LOD/material, not just one uint). The mesh
+    // reads field i via KBuiltin::TaskPayload{,1,2,3}. `n_task_payload` = how many fields the task writes (0 = no payload).
+    static constexpr int kMaxTaskPayload = 4;
+    int                  task_payload[kMaxTaskPayload] = {-1, -1, -1, -1}; // u32 nodes, one per field
+    crd::u32             n_task_payload                = 0;                // number of active payload fields (0..4)
     // ── B4-tess TESSELLATION (stage == TessControl / TessEval) — the PORTABLE displacement path (mobile / WebGPU / older HW
     // without mesh shaders). A QUAD patch of `tess_patch_size` control points (4). The TESS-CONTROL (hull) stage passes the
     // control points through and sets the tess levels from `tess_inner` / `tess_outer` (float nodes); the TESS-EVAL (domain)
@@ -888,6 +905,8 @@ public:
     // ATOMIC ADD to shared[idx] (U32 histogram bin, etc.). Bit-exact: the total is a sum (order-independent).
     void stmt_shared_atomic_add(int sh, int idx, int val) { KStmt s; s.kind = KStmtKind::SharedAtomicAdd; s.target = sh; s.index = idx; s.value = val; m_stmts.push_back(s); }
     void stmt_buffer_atomic_add(int buf, int idx, int val) { KStmt s; s.kind = KStmtKind::BufferAtomicAdd; s.target = buf; s.index = idx; s.value = val; m_stmts.push_back(s); }
+    // B4-vis: ATOMIC MIN on a global u32 buffer element (the software-rasterizer visibility key: nearest depth|id wins).
+    void stmt_buffer_atomic_min(int buf, int idx, int val) { KStmt s; s.kind = KStmtKind::BufferAtomicMin; s.target = buf; s.index = idx; s.value = val; m_stmts.push_back(s); }
     void stmt_for_break_if(int cond) { KStmt s; s.kind = KStmtKind::ForBreakIf; s.value = cond; m_stmts.push_back(s); }
     void stmt_buffer_ticket(int buf, int idx, int sh) { KStmt s; s.kind = KStmtKind::BufferTicket; s.target = buf; s.index = idx; s.value = sh; m_stmts.push_back(s); }
     void stmt_sync_warp() { KStmt s; s.kind = KStmtKind::SyncWarp; m_stmts.push_back(s); }
@@ -1652,13 +1671,17 @@ private:
     {
         if (!node_ok(e.task_emit)) { return fail("a task entry must set `task_emit` (u32 mesh-workgroup count)"); }
         if (g.node(e.task_emit).type != KType::make_scalar(DType::U32)) { return fail("`task_emit` must be a uint"); }
-        if (e.task_payload >= 0 && g.node(e.task_payload).type != KType::make_scalar(DType::U32))
+        if (e.n_task_payload > static_cast<crd::u32>(KEntry::kMaxTaskPayload)) { return fail("at most 4 payload fields"); }
+        for (crd::u32 i = 0; i < e.n_task_payload; ++i) // every active payload field must be a written uint node
         {
-            return fail("`task_payload` must be a uint");
+            if (!node_ok(e.task_payload[i]) || g.node(e.task_payload[i]).type != KType::make_scalar(DType::U32))
+            {
+                return fail("each `task_payload` field must be a uint");
+            }
         }
         if (e.position >= 0 || e.n_out > 0) { return fail("a task entry emits no geometry (no position/out)"); }
     }
-    else if (e.task_emit >= 0 || e.task_payload >= 0) { return fail("`task_*` fields are only for a task stage"); }
+    else if (e.task_emit >= 0 || e.n_task_payload > 0U) { return fail("`task_*` fields are only for a task stage"); }
 
     // B4-tess: a TESSELLATION entry. TessControl (hull) sets the tess levels (float `tess_inner`/`tess_outer`) + passes the
     // control points; TessEval (domain) writes the displaced clip `position` (checked by the position path below).

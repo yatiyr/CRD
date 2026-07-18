@@ -85,6 +85,7 @@ public:
     [[nodiscard]] crd::u32 graphics_family() const noexcept override { return m_graphics_family; }
     [[nodiscard]] bool     shader_object() const noexcept override { return m_shader_object; }
     [[nodiscard]] bool     mesh_shader() const noexcept override { return m_mesh_shader; } // B4: VK_EXT_mesh_shader + meshShader
+    [[nodiscard]] bool     tessellation() const noexcept override { return m_tessellation; } // B4-tess: tess + patch-ctrl-points
     [[nodiscard]] bool     render_capable() const noexcept override { return m_windowed; }
     [[nodiscard]] bool       fragment_shading_rate() const noexcept override { return m_fragment_shading_rate; } // B1-e
     [[nodiscard]] VkExtent2D vrs_tile_size() const noexcept override { return m_vrs_tile_size; }
@@ -141,6 +142,21 @@ public:
             const auto spv = compile_glsl_to_spirv(ShaderStage::Task, crd::containers::to_view(kern.source), "ckir_task", a);
             if (!spv.ok) { return nullptr; }
             return create_program(ShaderStage::Task, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()));
+        }
+
+        // B4-tess: TESS-CONTROL (hull) / TESS-EVAL (domain) — the portable displacement path. Emit the tess GLSL → SPIR-V.
+        if (entry.stage == crd::kir::KStage::TessControl || entry.stage == crd::kir::KStage::TessEval)
+        {
+            if (!crd::kir::entry_valid(graph, entry)) { return nullptr; }
+            const bool           is_tcs = entry.stage == crd::kir::KStage::TessControl;
+            crd::kir::GlslKernel kern(a);
+            const bool           ok = is_tcs ? crd::kir::emit_tesc_glsl(graph, entry, a, kern)
+                                             : crd::kir::emit_tese_glsl(graph, entry, a, kern);
+            if (!ok) { return nullptr; }
+            const ShaderStage stage = is_tcs ? ShaderStage::TessControl : ShaderStage::TessEval;
+            const auto        spv   = compile_glsl_to_spirv(stage, crd::containers::to_view(kern.source), "ckir_tess", a);
+            if (!spv.ok) { return nullptr; }
+            return create_program(stage, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()));
         }
 
         // B-cmp: an imperative COMPUTE KERNEL (workgroup shared memory + barriers + storage buffers), authored in CKIR.
@@ -263,6 +279,7 @@ private:
         bool has_vrs       = false;
         bool has_conserv   = false;
         bool has_eds3      = false;
+        bool has_eds2      = false; // B4-tess: patch-control-points dynamic state
         bool has_interlock = false;
         bool has_sgpart    = false;
         bool has_mesh      = false;
@@ -277,6 +294,7 @@ private:
             if (std::strcmp(exts[i].extensionName, VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME) == 0) { has_vrs = true; }
             if (std::strcmp(exts[i].extensionName, VK_EXT_CONSERVATIVE_RASTERIZATION_EXTENSION_NAME) == 0) { has_conserv = true; }
             if (std::strcmp(exts[i].extensionName, VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME) == 0) { has_eds3 = true; }
+            if (std::strcmp(exts[i].extensionName, VK_EXT_EXTENDED_DYNAMIC_STATE_2_EXTENSION_NAME) == 0) { has_eds2 = true; } // B4-tess
             if (std::strcmp(exts[i].extensionName, VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME) == 0) { has_interlock = true; }
         }
         m_coopmat2      = has_cm1 && has_cm2;
@@ -285,6 +303,9 @@ private:
         // B1-f: conservative raster needs its extension AND the extended-dynamic-state-3 conservative-mode setter (the
         // shader-object model has no static pipeline state). Graphics-capable only.
         m_conservative_raster = has_conserv && has_eds3 && m_shader_object;
+        // B4-tess: tessellation via shader objects needs the patch-control-points DYNAMIC state (EDS2) + the tessellationShader
+        // core feature (confirmed below). Graphics + shader-object only. m_tessellation is finalised after the feature query.
+        m_tessellation = has_eds2 && m_shader_object;
         // B1-f: pixel-ordered fragment-shader interlock (ROV) — graphics-capable only. The feature is checked below.
         m_fragment_interlock = has_interlock && m_graphics_family != UINT32_MAX;
         // B4: mesh shaders (the modern amplification path) — needs the extension + a graphics queue + shader objects (our draw
@@ -321,6 +342,9 @@ private:
         // B2-c: a CUBE-ARRAY texture (view + the SampledCubeArray SPIR-V capability) needs this feature (VUID-...-viewType-01004
         // / VUID-...-pCode-08740). Graphics-capable only.
         if (m_graphics_family != UINT32_MAX) { enabled_feats.imageCubeArray = avail_feats.imageCubeArray; }
+        // B4-tess: the tessellation control/eval stages need this core feature (the portable displacement path). Graphics-only.
+        if (m_graphics_family != UINT32_MAX) { enabled_feats.tessellationShader = avail_feats.tessellationShader; }
+        m_tessellation = m_tessellation && avail_feats.tessellationShader == VK_TRUE; // finalise: EDS2 + shader-obj + the feature
         // C2-c: a WINDOWED context matches what rhi-vulkan's own device enables so the renderer runs on the adopted
         // device unchanged — fillModeNonSolid (wireframe) here + synchronization2 in the feature chain below.
         if (m_windowed) { enabled_feats.fillModeNonSolid = avail_feats.fillModeNonSolid; }
@@ -397,6 +421,10 @@ private:
         // Overestimate raster with shader objects ALSO requires the extra-primitive-overestimation-size dynamic state to be
         // set before a draw (VUID-vkCmdDraw-None-07632) — so enable that EDS3 sub-feature too and set it in draw_conservative.
         eds3.extendedDynamicState3ExtraPrimitiveOverestimationSize = VK_TRUE;
+        // B4-tess: the patch-control-points DYNAMIC state (shader objects have no static pipeline, so patch size is dynamic).
+        VkPhysicalDeviceExtendedDynamicState2FeaturesEXT eds2{};
+        eds2.sType                                   = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_2_FEATURES_EXT;
+        eds2.extendedDynamicState2PatchControlPoints = VK_TRUE;
         // B1-f: pixel-ordered fragment-shader interlock (ROV). Confirm the specific sub-feature is present (the extension
         // can be exposed with only sample/shading-rate ordering) before enabling; a false bit disables the interlock path.
         VkPhysicalDeviceFragmentShaderInterlockFeaturesEXT interlock{};
@@ -444,6 +472,17 @@ private:
             keep.meshShader = mesh.meshShader;
             mesh            = keep; // enable ONLY the meshShader bit
         }
+        // B4-tess: confirm the patch-control-points feature (the EDS2 extension can be exposed without this optional bit).
+        if (m_tessellation)
+        {
+            VkPhysicalDeviceExtendedDynamicState2FeaturesEXT probe{};
+            probe.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_2_FEATURES_EXT;
+            VkPhysicalDeviceFeatures2 f2{};
+            f2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            f2.pNext = &probe;
+            vkGetPhysicalDeviceFeatures2(m_physical, &f2);
+            m_tessellation = probe.extendedDynamicState2PatchControlPoints == VK_TRUE;
+        }
         // B4: glslang emits the SPIR-V `LocalSizeId` execution mode for the mesh workgroup size (SPIR-V 1.6) — that requires
         // `maintenance4` (VUID-RuntimeSpirv-LocalSizeId-06434). Enabled ONLY with mesh, so the non-mesh device is unchanged.
         VkPhysicalDeviceMaintenance4Features maint4{};
@@ -455,6 +494,7 @@ private:
         if (m_graphics_family != UINT32_MAX) { demote.pNext = chain; chain = &demote; } // raster `discard` support
         if (m_fragment_shading_rate) { vrs.pNext = chain; chain = &vrs; }
         if (m_conservative_raster) { eds3.pNext = chain; chain = &eds3; }
+        if (m_tessellation) { eds2.pNext = chain; chain = &eds2; } // B4-tess: patch-control-points dynamic state
         if (m_fragment_interlock) { interlock.pNext = chain; chain = &interlock; }
         if (m_bindless) { descidx.pNext = chain; chain = &descidx; }
         if (m_windowed) { sync2.pNext = chain; chain = &sync2; }
@@ -480,6 +520,7 @@ private:
             devexts[ndevext++] = VK_EXT_CONSERVATIVE_RASTERIZATION_EXTENSION_NAME;
             devexts[ndevext++] = VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME;
         }
+        if (m_tessellation) { devexts[ndevext++] = VK_EXT_EXTENDED_DYNAMIC_STATE_2_EXTENSION_NAME; } // B4-tess
         if (m_fragment_interlock) { devexts[ndevext++] = VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME; }
         if (m_mesh_shader) { devexts[ndevext++] = VK_EXT_MESH_SHADER_EXTENSION_NAME; } // B4
 
@@ -518,6 +559,7 @@ private:
     bool             m_fragment_interlock    = false; // B1-f: pixel-ordered fragment-shader interlock (ROV) enabled
     bool             m_bindless              = false; // B2-d: non-uniform sampled-image array indexing enabled
     bool             m_mesh_shader           = false; // B4: VK_EXT_mesh_shader + meshShader feature enabled
+    bool             m_tessellation          = false; // B4-tess: tessellationShader + EDS2 patch-control-points enabled
     bool             m_valid           = false;
     char             m_name[256]       = {};
 };

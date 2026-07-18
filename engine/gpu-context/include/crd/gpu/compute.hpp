@@ -30,6 +30,8 @@ namespace compute_usage
 constexpr crd::u32 storage      = 1U;
 constexpr crd::u32 transfer_src = 2U;
 constexpr crd::u32 transfer_dst = 4U;
+constexpr crd::u32 indirect     = 8U; // B4: an INDIRECT-dispatch args buffer (a compute pass writes the mesh-workgroup count a
+                                      // later vkCmdDrawMeshTasksIndirectEXT / ExecuteIndirect consumes — GPU-driven, no CPU round-trip)
 } // namespace compute_usage
 
 // Access state for a buffer barrier (pass-to-pass hazard).
@@ -55,6 +57,11 @@ public:
 
     [[nodiscard]] virtual void* map() noexcept   = 0;
     virtual void                unmap() noexcept = 0;
+
+    // B4: the backend-native buffer handle (Vulkan `VkBuffer`, DX12 `ID3D12Resource*`) as an opaque `void*`. The escape hatch
+    // that lets an INDIRECT-args buffer written by a compute pass be consumed by the raster context's indirect mesh dispatch
+    // (`IRasterContext::draw_mesh_indirect`) — a GPU-driven loop across the compute/graphics seam. Default nullptr.
+    [[nodiscard]] virtual void* native_handle() const noexcept { return nullptr; }
 };
 
 // Opaque cached compute pipeline (a compiled kernel + N storage-buffer bindings + a push constant).

@@ -196,12 +196,14 @@ inline bool emit_compute_kernel_cuda(const KGraph& g, const KEntry& entry, crd::
         case KOp::Sinh: fn1("sinhf"); break;
         case KOp::Cosh: fn1("coshf"); break;
         case KOp::Floor: fn1("floorf"); break;
+        case KOp::Ceil: fn1("ceilf"); break; // B4-vis: bbox ceil
         case KOp::Add: bin(" + "); break;
         case KOp::Sub: bin(" - "); break;
         case KOp::Mul: bin(" * "); break;
         case KOp::Div: bin(" / "); break;
         case KOp::Min: fn2("fminf"); break;
         case KOp::Max: fn2("fmaxf"); break;
+        case KOp::Clamp: s.append("fminf(fmaxf("); self(self, nd.a); s.append(", "); self(self, nd.b); s.append("), "); self(self, nd.c); s.append(")"); break; // B4-vis: bbox clamp = min(max()) (matches oracle)
         case KOp::Mod: if (dt_is_int(nd.dtype()) || dt_is_uint(nd.dtype())) { bin(" % "); } else { fn2("fmodf"); } break;
         case KOp::CmpLt: bin(" < "); break;
         case KOp::CmpLe: bin(" <= "); break;
@@ -278,6 +280,7 @@ inline bool emit_compute_kernel_cuda(const KGraph& g, const KEntry& entry, crd::
             case KStmtKind::SpinUntilNonzero: decl(decl, st.index); s.append("  while (buf"); app_uint(s, g.node(st.target).iidx); s.append("["); ev(ev, st.index); s.append("] == 0u) { __nanosleep(64); }\n"); ++i; break; // guarded spin (diagnosable, never deadlocks); volatile re-read, NO per-iter fence
             case KStmtKind::SharedAtomicAdd: decl(decl, st.index); decl(decl, st.value); s.append("  atomicAdd(&sh"); app_uint(s, st.target); s.append("["); ev(ev, st.index); s.append("], "); ev(ev, st.value); s.append(");\n"); ++i; break;
             case KStmtKind::BufferAtomicAdd: decl(decl, st.index); decl(decl, st.value); s.append("  atomicAdd(&buf"); app_uint(s, g.node(st.target).iidx); s.append("["); ev(ev, st.index); s.append("], "); ev(ev, st.value); s.append(");\n"); ++i; break;
+            case KStmtKind::BufferAtomicMin: decl(decl, st.index); decl(decl, st.value); s.append("  atomicMin(&buf"); app_uint(s, g.node(st.target).iidx); s.append("["); ev(ev, st.index); s.append("], "); ev(ev, st.value); s.append(");\n"); ++i; break; // B4-vis: visibility key (nearest wins)
             case KStmtKind::ForBreakIf: decl(decl, st.value); s.append("  if (("); ev(ev, st.value); s.append(") != 0u) break;\n"); ++i; break;
             case KStmtKind::BufferTicket: decl(decl, st.index); s.append("  if (threadIdx.x == 0u) { sh"); app_uint(s, st.value); s.append("[0] = atomicAdd((unsigned*)&buf"); app_uint(s, g.node(st.target).iidx); s.append("["); ev(ev, st.index); s.append("], 1u); }\n"); ++i; break;
             case KStmtKind::SyncWarp: s.append("  __syncwarp();\n"); ++i; break;

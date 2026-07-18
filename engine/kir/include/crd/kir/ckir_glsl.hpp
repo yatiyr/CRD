@@ -565,6 +565,7 @@ inline bool emit_value_stmt(const KGraph& g, int i, crd::containers::String& s, 
     case KBuiltin::InstanceIndex: return "gl_InstanceIndex";
     case KBuiltin::FragCoord:     return "gl_FragCoord";
     case KBuiltin::FrontFacing:   return "gl_FrontFacing";
+    case KBuiltin::PrimitiveId:   return "gl_PrimitiveID"; // B4-vis-4: the HW-raster visibility-buffer primitive id (int)
     case KBuiltin::PointCoord:    return "gl_PointCoord";
     case KBuiltin::InnerCoverage: return "gl_FragFullyCoveredNV"; // B1-f: a bool (NV underestimation) — read as uint()
     // B4: workgroup builtins — legal only in a MESH/task/compute stage (entry_valid rejects them in VS/FS), so listing them
@@ -576,6 +577,9 @@ inline bool emit_value_stmt(const KGraph& g, int i, crd::containers::String& s, 
     case KBuiltin::GlobalInvocationId:   return "gl_GlobalInvocationID";
     case KBuiltin::NumWorkgroups:        return "gl_NumWorkGroups";
     case KBuiltin::TaskPayload:          return "mesh_payload.v0"; // B4: the task→mesh payload (mesh stage reads it)
+    case KBuiltin::TaskPayload1:         return "mesh_payload.v1"; // B4: payload field 1
+    case KBuiltin::TaskPayload2:         return "mesh_payload.v2"; // B4: payload field 2
+    case KBuiltin::TaskPayload3:         return "mesh_payload.v3"; // B4: payload field 3
     case KBuiltin::TessCoord:            return "gl_TessCoord";     // B4-tess: the domain coord in the TessEval stage
     case KBuiltin::TessPatchPosition:    return "patch_pos";        // B4-tess: emitter-provided bilerp of the patch corners
     default:                      return nullptr;
@@ -720,12 +724,14 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
         case KOp::Sinh: f1("sinh"); break;
         case KOp::Cosh: f1("cosh"); break;
         case KOp::Floor: f1("floor"); break;
+        case KOp::Ceil: f1("ceil"); break; // B4-vis: bbox ceil (the compute-kernel rhs lacked it — only the elementwise path had it)
         case KOp::Add: b2(" + "); break;
         case KOp::Sub: b2(" - "); break;
         case KOp::Mul: b2(" * "); break;
         case KOp::Div: b2(" / "); break;
         case KOp::Min: f2("min"); break;
         case KOp::Max: f2("max"); break;
+        case KOp::Clamp: s.append("min(max("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append("), "); pv(pv, nd.c); s.append(")"); break; // B4-vis: bbox clamp (matches oracle + HLSL)
         case KOp::Mod: if (dt_is_int(nd.dtype()) || dt_is_uint(nd.dtype())) { b2(" % "); } else { f2("mod"); } break; // GLSL mod() is float-only
         case KOp::Fma: s.append("fma("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(", "); pv(pv, nd.c); s.append(")"); break;
         case KOp::BitNot: s.append("(~"); pv(pv, nd.a); s.append(")"); break;
@@ -778,6 +784,7 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
             case KStmtKind::SpinUntilNonzero: decl(decl, st.index); s.append("  while (buf"); app_uint(s, g.node(st.target).iidx); s.append("["); pv(pv, st.index); s.append("] == 0u) { memoryBarrierBuffer(); }\n"); ++i; break;
             case KStmtKind::SharedAtomicAdd: decl(decl, st.index); decl(decl, st.value); s.append("  atomicAdd(sh"); app_uint(s, st.target); s.append("["); pv(pv, st.index); s.append("], "); pv(pv, st.value); s.append(");\n"); ++i; break;
             case KStmtKind::BufferAtomicAdd: decl(decl, st.index); decl(decl, st.value); s.append("  atomicAdd(buf"); app_uint(s, g.node(st.target).iidx); s.append("["); pv(pv, st.index); s.append("], "); pv(pv, st.value); s.append(");\n"); ++i; break;
+            case KStmtKind::BufferAtomicMin: decl(decl, st.index); decl(decl, st.value); s.append("  atomicMin(buf"); app_uint(s, g.node(st.target).iidx); s.append("["); pv(pv, st.index); s.append("], "); pv(pv, st.value); s.append(");\n"); ++i; break; // B4-vis: visibility key (nearest wins)
             case KStmtKind::ForBreakIf: decl(decl, st.value); s.append("  if (bool("); pv(pv, st.value); s.append(")) break;\n"); ++i; break; // bool() accepts bool AND uint (type-strict GLSL)
             case KStmtKind::BufferTicket: decl(decl, st.index); s.append("  if (gl_LocalInvocationIndex == 0u) { sh"); app_uint(s, st.value); s.append("[0] = atomicAdd(buf"); app_uint(s, g.node(st.target).iidx); s.append("["); pv(pv, st.index); s.append("], 1u); }\n"); ++i; break;
             case KStmtKind::SyncWarp: s.append("  subgroupBarrier();\n"); ++i; break;
@@ -1029,7 +1036,7 @@ inline bool emit_task_glsl(const KGraph& g, const KEntry& entry, crd::memory::IA
     crd::containers::Array<int>     stk(scratch);
     reach.resize(static_cast<crd::usize>(n), 0);
     stk.push_back(entry.task_emit);
-    if (entry.task_payload >= 0) { stk.push_back(entry.task_payload); }
+    for (crd::u32 pf = 0; pf < entry.n_task_payload; ++pf) { stk.push_back(entry.task_payload[pf]); }
     while (stk.size() > 0)
     {
         const int i = stk[stk.size() - 1];
@@ -1059,7 +1066,7 @@ inline bool emit_task_glsl(const KGraph& g, const KEntry& entry, crd::memory::IA
         for (int f = 0; f < fc; ++f) { s.append("  "); s.append(vtype(g.struct_field(sid, f))); s.append(" f"); app_uint(s, static_cast<crd::u32>(f)); s.append(";\n"); }
         s.append("} ubo_"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(";\n");
     }
-    if (entry.task_payload >= 0) { s.append("struct TaskPayload { uint v0; };\ntaskPayloadSharedEXT TaskPayload mesh_payload;\n"); }
+    if (entry.n_task_payload > 0U) { s.append("struct TaskPayload { uint v0; uint v1; uint v2; uint v3; };\ntaskPayloadSharedEXT TaskPayload mesh_payload;\n"); } // B4: FIXED 4-field payload (task + mesh layouts always match)
 
     s.append("void main() {\n");
     const auto task_leaf = [&](const KGraph& gg, int li, crd::containers::String& ss) -> bool
@@ -1089,9 +1096,9 @@ inline bool emit_task_glsl(const KGraph& g, const KEntry& entry, crd::memory::IA
         if (g.node(i).op == KOp::For) { return false; } // a task's amplification count is a scalar expr — no loops
         if (!emit_value_stmt(g, i, s, task_leaf)) { return false; }
     }
-    if (entry.task_payload >= 0)
+    for (crd::u32 pf = 0; pf < entry.n_task_payload; ++pf) // write each active payload field
     {
-        s.append("  mesh_payload.v0 = t"); app_uint(s, static_cast<crd::u32>(entry.task_payload)); s.append(";\n");
+        s.append("  mesh_payload.v"); app_uint(s, pf); s.append(" = t"); app_uint(s, static_cast<crd::u32>(entry.task_payload[pf])); s.append(";\n");
     }
     s.append("  EmitMeshTasksEXT(t"); app_uint(s, static_cast<crd::u32>(entry.task_emit)); s.append(", 1u, 1u);\n}\n");
     return true;
@@ -1117,6 +1124,7 @@ inline bool emit_mesh_glsl(const KGraph& g, const KEntry& entry, crd::memory::IA
     const auto push_root = [&](int r) { if (r >= 0) { stk.push_back(r); } };
     push_root(entry.position);
     push_root(entry.mesh_prim);
+    push_root(entry.shading_rate); // B4: per-primitive VRS rate from the mesh (gl_MeshPrimitivesEXT[].gl_PrimitiveShadingRateEXT)
     for (int k = 0; k < entry.n_out; ++k) { push_root(entry.out[k].node); }
     while (stk.size() > 0)
     {
@@ -1135,6 +1143,7 @@ inline bool emit_mesh_glsl(const KGraph& g, const KEntry& entry, crd::memory::IA
     crd::containers::String& s = out.source;
     s.clear();
     s.append("#version 460\n#extension GL_EXT_mesh_shader : require\n");
+    if (entry.shading_rate >= 0) { s.append("#extension GL_EXT_fragment_shading_rate : require\n"); } // B4: per-primitive VRS
     for (int i = 0; i < n; ++i)
     {
         if (reach[static_cast<crd::usize>(i)] && (g.node(i).op == KOp::SampleIndexed || g.node(i).op == KOp::SampleIndexedLod))
@@ -1182,12 +1191,16 @@ inline bool emit_mesh_glsl(const KGraph& g, const KEntry& entry, crd::memory::IA
         for (int f = 0; f < fc; ++f) { s.append("  "); s.append(vtype(g.struct_field(sid, f))); s.append(" f"); app_uint(s, static_cast<crd::u32>(f)); s.append(";\n"); }
         s.append("} ubo_"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(";\n");
     }
-    for (int i = 0; i < n; ++i) // B4: declare the task→mesh payload iff this mesh reads KBuiltin::TaskPayload (mesh_payload.v0)
+    for (int i = 0; i < n; ++i) // B4: declare the task→mesh payload iff this mesh reads ANY payload field (v0..v3)
     {
-        if (reach[static_cast<crd::usize>(i)] && g.node(i).op == KOp::Builtin
-            && static_cast<KBuiltin>(g.node(i).iidx) == KBuiltin::TaskPayload)
+        const bool is_payload = g.node(i).op == KOp::Builtin
+                                && (static_cast<KBuiltin>(g.node(i).iidx) == KBuiltin::TaskPayload
+                                    || static_cast<KBuiltin>(g.node(i).iidx) == KBuiltin::TaskPayload1
+                                    || static_cast<KBuiltin>(g.node(i).iidx) == KBuiltin::TaskPayload2
+                                    || static_cast<KBuiltin>(g.node(i).iidx) == KBuiltin::TaskPayload3);
+        if (reach[static_cast<crd::usize>(i)] && is_payload)
         {
-            s.append("struct TaskPayload { uint v0; };\ntaskPayloadSharedEXT TaskPayload mesh_payload;\n");
+            s.append("struct TaskPayload { uint v0; uint v1; uint v2; uint v3; };\ntaskPayloadSharedEXT TaskPayload mesh_payload;\n"); // FIXED 4-field (matches the task)
             break;
         }
     }
@@ -1255,6 +1268,7 @@ inline bool emit_mesh_glsl(const KGraph& g, const KEntry& entry, crd::memory::IA
     s.append("  }\n");
     s.append("  if (gl_LocalInvocationIndex < "); app_uint(s, n_prims); s.append("u) {\n");
     s.append("    gl_PrimitiveTriangleIndicesEXT[gl_LocalInvocationIndex] = t"); app_uint(s, static_cast<crd::u32>(entry.mesh_prim)); s.append(";\n");
+    if (entry.shading_rate >= 0) { s.append("    gl_MeshPrimitivesEXT[gl_LocalInvocationIndex].gl_PrimitiveShadingRateEXT = t"); app_uint(s, static_cast<crd::u32>(entry.shading_rate)); s.append(";\n"); } // B4: per-primitive VRS
     s.append("  }\n}\n");
     return true;
 }

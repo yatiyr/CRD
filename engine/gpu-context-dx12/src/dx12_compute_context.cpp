@@ -86,6 +86,9 @@ struct BufferImpl final : ComputeBuffer
         return p;
     }
     void unmap() noexcept override { res->Unmap(0, nullptr); }
+    // B4: the native ID3D12Resource*, so a compute-written INDIRECT-args buffer can drive the raster context's ExecuteIndirect
+    // mesh dispatch (a buffer decays to COMMON after the compute submit, so the raster context can transition it freely).
+    [[nodiscard]] void* native_handle() const noexcept override { return res.Get(); }
 };
 
 // ── pipeline ──────────────────────────────────────────────────────────────────────────────────────────────────────

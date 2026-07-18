@@ -317,6 +317,19 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
                     ++i;
                     break;
                 }
+                case KStmtKind::BufferAtomicMin: // B4-vis: keep the SMALLEST value per cell (MIN ⇒ order-independent, like the SUM
+                {                                // atomics). Buffers hold u32 keys as exact f64 integers (< 2^53), so a numeric min
+                    for (crd::usize a = 0; a < active.size(); ++a) // equals the GPU's UNSIGNED atomicMin bit-for-bit.
+                    {
+                        tid                = active[a];
+                        const int      idx = static_cast<int>(eval(eval, st.index));
+                        const crd::f64 val = eval(eval, st.value);
+                        KernelBuffer*  kb  = buffer_for(st.target);
+                        if (kb != nullptr && idx >= 0 && idx < kb->len && val < kb->data[idx]) { kb->data[idx] = val; }
+                    }
+                    ++i;
+                    break;
+                }
                 case KStmtKind::If:
                 {
                     Array<crd::u32> sub(scratch);

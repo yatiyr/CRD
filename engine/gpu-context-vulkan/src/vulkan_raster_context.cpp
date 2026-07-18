@@ -31,6 +31,8 @@ struct ShaderObjectApi
     PFN_vkCmdSetColorBlendEnableEXT    set_color_blend_enable    = nullptr;
     PFN_vkCmdSetColorWriteMaskEXT      set_color_write_mask      = nullptr;
     PFN_vkCmdDrawMeshTasksEXT          draw_mesh_tasks           = nullptr; // B4: VK_EXT_mesh_shader (optional — null if absent)
+    PFN_vkCmdDrawMeshTasksIndirectEXT  draw_mesh_tasks_indirect  = nullptr; // B4: GPU-driven indirect meshlet dispatch
+    PFN_vkCmdSetPatchControlPointsEXT  set_patch_control_points  = nullptr; // B4-tess: EDS2 patch size (optional — null if absent)
 
     [[nodiscard]] bool valid() const noexcept
     {
@@ -59,6 +61,10 @@ struct ShaderObjectApi
     a.set_color_write_mask =
         reinterpret_cast<PFN_vkCmdSetColorWriteMaskEXT>(vkGetDeviceProcAddr(d, "vkCmdSetColorWriteMaskEXT"));
     a.draw_mesh_tasks = reinterpret_cast<PFN_vkCmdDrawMeshTasksEXT>(vkGetDeviceProcAddr(d, "vkCmdDrawMeshTasksEXT")); // B4
+    a.draw_mesh_tasks_indirect =
+        reinterpret_cast<PFN_vkCmdDrawMeshTasksIndirectEXT>(vkGetDeviceProcAddr(d, "vkCmdDrawMeshTasksIndirectEXT")); // B4
+    a.set_patch_control_points =
+        reinterpret_cast<PFN_vkCmdSetPatchControlPointsEXT>(vkGetDeviceProcAddr(d, "vkCmdSetPatchControlPointsEXT")); // B4-tess
     return a;
 }
 
@@ -233,13 +239,17 @@ class VulkanRasterProgram final : public IRasterProgram
 {
 public:
     VulkanRasterProgram(VkDevice device, const ShaderObjectApi* api, VkPipelineLayout layout, VkShaderEXT vs,
-                        VkShaderEXT fs, bool is_mesh = false, VkShaderEXT task = VK_NULL_HANDLE) noexcept
-        : m_device(device), m_api(api), m_layout(layout), m_vs(vs), m_fs(fs), m_is_mesh(is_mesh), m_task(task)
+                        VkShaderEXT fs, bool is_mesh = false, VkShaderEXT task = VK_NULL_HANDLE,
+                        VkShaderEXT tcs = VK_NULL_HANDLE, VkShaderEXT tes = VK_NULL_HANDLE) noexcept // B4-tess: hull/domain
+        : m_device(device), m_api(api), m_layout(layout), m_vs(vs), m_fs(fs), m_is_mesh(is_mesh), m_task(task), m_tcs(tcs),
+          m_tes(tes)
     {
     }
     ~VulkanRasterProgram() override
     {
         if (m_task != VK_NULL_HANDLE) { m_api->destroy(m_device, m_task, nullptr); } // B4: the amplification (task) shader
+        if (m_tcs != VK_NULL_HANDLE) { m_api->destroy(m_device, m_tcs, nullptr); }   // B4-tess: hull
+        if (m_tes != VK_NULL_HANDLE) { m_api->destroy(m_device, m_tes, nullptr); }   // B4-tess: domain
         if (m_vs != VK_NULL_HANDLE) { m_api->destroy(m_device, m_vs, nullptr); }
         if (m_fs != VK_NULL_HANDLE) { m_api->destroy(m_device, m_fs, nullptr); }
         if (m_layout != VK_NULL_HANDLE) { vkDestroyPipelineLayout(m_device, m_layout, nullptr); }
@@ -255,6 +265,9 @@ public:
     [[nodiscard]] bool             is_mesh() const noexcept { return m_is_mesh; } // B4: bind with VK_SHADER_STAGE_MESH_BIT_EXT
     [[nodiscard]] VkShaderEXT      task() const noexcept { return m_task; }       // B4: the amplification (task) shader object
     [[nodiscard]] bool             has_task() const noexcept { return m_task != VK_NULL_HANDLE; } // B4: task→mesh amplification
+    [[nodiscard]] VkShaderEXT      tcs() const noexcept { return m_tcs; }         // B4-tess: hull (tess control) shader object
+    [[nodiscard]] VkShaderEXT      tes() const noexcept { return m_tes; }         // B4-tess: domain (tess eval) shader object
+    [[nodiscard]] bool             is_tess() const noexcept { return m_tcs != VK_NULL_HANDLE; } // B4-tess: a tessellation program
     [[nodiscard]] VkPipelineLayout layout() const noexcept { return m_layout; } // B1-f: for binding the storage set
 
 private:
@@ -265,6 +278,8 @@ private:
     VkShaderEXT            m_fs      = VK_NULL_HANDLE;
     bool                   m_is_mesh = false;
     VkShaderEXT            m_task    = VK_NULL_HANDLE; // B4: amplification shader (task→mesh); NULL for a plain mesh program
+    VkShaderEXT            m_tcs     = VK_NULL_HANDLE; // B4-tess: tess-control (hull); NULL unless a tessellation program
+    VkShaderEXT            m_tes     = VK_NULL_HANDLE; // B4-tess: tess-eval (domain)
 };
 
 // B1-f: a fragment-shader STORAGE buffer — a device-local SSBO the FS reads/writes, plus a host-visible readback the CPU
@@ -492,6 +507,14 @@ public:
     [[nodiscard]] std::unique_ptr<IRasterTarget> create_color_depth_target(crd::u32 width, crd::u32 height) override
     {
         return make_target(width, height, 1U, true); // B1-d: single-sample colour + D32 depth
+    }
+
+    // B4-vis-4: a R32_UINT VISIBILITY-BUFFER target — the HW-raster path's fragment shader writes a per-pixel primitive id
+    // (SV_PrimitiveId), the hybrid Nanite split for big triangles HW raster beats the compute software rasterizer on. Colour
+    // -only; `read_pixel` returns the raw u32 id. Draw with draw_visbuffer.
+    [[nodiscard]] std::unique_ptr<IRasterTarget> create_visbuffer_target(crd::u32 width, crd::u32 height) override
+    {
+        return make_target(width, height, 1U, false, VK_FORMAT_R32_UINT);
     }
 
     [[nodiscard]] std::unique_ptr<IRasterTarget> create_color_vrs_target(crd::u32 width, crd::u32 height,
@@ -775,6 +798,119 @@ public:
                                                      shaders[0]);
     }
 
+    // B4-tess: a VS→TESS-CONTROL→TESS-EVAL→FRAGMENT program (the PORTABLE displacement path for HW without mesh shaders). The
+    // VS emits patch control points; the hull sets the tess levels + passes them through; the domain interpolates + displaces.
+    // Draw with draw_tess (PATCH_LIST + a dynamic patch size). nullptr if the device lacks tessellation + the patch-CP state.
+    [[nodiscard]] std::unique_ptr<IRasterProgram> create_tess_program(IGpuProgram& vertex, IGpuProgram& tess_control,
+                                                                      IGpuProgram& tess_eval, IGpuProgram& fragment) override
+    {
+        if (!m_api.valid() || !m_ctx->tessellation() || m_api.set_patch_control_points == nullptr
+            || vertex.stage() != ShaderStage::Vertex || tess_control.stage() != ShaderStage::TessControl
+            || tess_eval.stage() != ShaderStage::TessEval || fragment.stage() != ShaderStage::Fragment)
+        {
+            return nullptr;
+        }
+        const auto& vp = static_cast<VulkanGpuProgram&>(vertex).vk_spirv();
+        const auto& cp = static_cast<VulkanGpuProgram&>(tess_control).vk_spirv();
+        const auto& ep = static_cast<VulkanGpuProgram&>(tess_eval).vk_spirv();
+        const auto& fp = static_cast<VulkanGpuProgram&>(fragment).vk_spirv();
+
+        VkPipelineLayoutCreateInfo lci{};
+        lci.sType          = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        lci.setLayoutCount = 1U;
+        lci.pSetLayouts    = &m_storage_set_layout;
+        VkPipelineLayout layout = VK_NULL_HANDLE;
+        if (vkCreatePipelineLayout(m_device, &lci, nullptr, &layout) != VK_SUCCESS) { return nullptr; }
+
+        const VkShaderStageFlagBits st[4]   = {VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT,
+                                               VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT, VK_SHADER_STAGE_FRAGMENT_BIT};
+        const VkShaderStageFlagBits next[4] = {VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT,
+                                               VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT, VK_SHADER_STAGE_FRAGMENT_BIT,
+                                               static_cast<VkShaderStageFlagBits>(0)};
+        const void*  code_ptr[4]  = {vp.data(), cp.data(), ep.data(), fp.data()};
+        const size_t code_size[4] = {vp.size(), cp.size(), ep.size(), fp.size()};
+        VkShaderCreateInfoEXT infos[4]{};
+        for (int i = 0; i < 4; ++i)
+        {
+            infos[i].sType          = VK_STRUCTURE_TYPE_SHADER_CREATE_INFO_EXT;
+            infos[i].flags          = VK_SHADER_CREATE_LINK_STAGE_BIT_EXT;
+            infos[i].stage          = st[i];
+            infos[i].nextStage      = next[i];
+            infos[i].codeType       = VK_SHADER_CODE_TYPE_SPIRV_EXT;
+            infos[i].codeSize       = code_size[i];
+            infos[i].pCode          = code_ptr[i];
+            infos[i].pName          = "main";
+            infos[i].setLayoutCount = 1U;
+            infos[i].pSetLayouts    = &m_storage_set_layout;
+        }
+        VkShaderEXT shaders[4] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
+        if (m_api.create(m_device, 4U, infos, nullptr, shaders) != VK_SUCCESS)
+        {
+            vkDestroyPipelineLayout(m_device, layout, nullptr);
+            return nullptr;
+        }
+        // vs()=VS (shaders[0]); fs()=FS (shaders[3]); tcs=shaders[1]; tes=shaders[2].
+        return std::make_unique<VulkanRasterProgram>(m_device, &m_api, layout, shaders[0], shaders[3], /*is_mesh=*/false,
+                                                     VK_NULL_HANDLE, shaders[1], shaders[2]);
+    }
+
+    // B4-tess: draw `patch_count` QUAD patches through the tessellator (VS→TCS→TES→FS) with PATCH_LIST topology + a dynamic
+    // patch size of 4. The domain shader displaces + writes the clip position. Colour-only; result host-readable via read_pixel.
+    void draw_tess(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color, crd::u32 patch_count) override
+    {
+        auto& t = static_cast<VulkanRasterTarget&>(target);
+        auto& p = static_cast<VulkanRasterProgram&>(program);
+        if (!m_api.valid() || m_api.set_patch_control_points == nullptr || !p.valid() || !p.is_tess()) { return; }
+
+        VkCommandBuffer cmd = begin_cmd();
+        if (cmd == VK_NULL_HANDLE) { return; }
+        const bool ms = t.multisampled();
+        transition(cmd, t.image(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 0,
+                   VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                   VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+        if (ms)
+        {
+            transition(cmd, t.resolve_image(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 0,
+                       VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                       VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+        }
+        VkRenderingAttachmentInfo att = colour_clear_attachment(t.view(), clear_color);
+        if (ms)
+        {
+            att.resolveMode        = VK_RESOLVE_MODE_AVERAGE_BIT;
+            att.resolveImageView   = t.resolve_view();
+            att.resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        }
+        VkRenderingInfo ri{};
+        ri.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        ri.renderArea.extent    = {t.width(), t.height()};
+        ri.layerCount           = 1U;
+        ri.colorAttachmentCount = 1U;
+        ri.pColorAttachments    = &att;
+        vkCmdBeginRendering(cmd, &ri);
+
+        set_draw_state(cmd, t.width(), t.height(), t.samples(), false, VK_COMPARE_OP_ALWAYS);
+        vkCmdSetPrimitiveTopology(cmd, VK_PRIMITIVE_TOPOLOGY_PATCH_LIST); // tessellation consumes patches, not triangles
+        m_api.set_patch_control_points(cmd, 4U);                          // quad patch (matches the layout(quads) domain shader)
+        const VkShaderStageFlagBits stages[4] = {VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT,
+                                                 VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT, VK_SHADER_STAGE_FRAGMENT_BIT};
+        const VkShaderEXT           objs[4]   = {p.vs(), p.tcs(), p.tes(), p.fs()};
+        m_api.bind(cmd, 4U, stages, objs);
+        vkCmdDraw(cmd, patch_count * 4U, 1U, 0U, 0U); // patch_count QUAD patches × 4 control points
+
+        vkCmdEndRendering(cmd);
+        const VkImage src = t.src_image();
+        transition(cmd, src, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                   VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                   VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+        VkBufferImageCopy region{};
+        region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        region.imageSubresource.layerCount = 1U;
+        region.imageExtent                 = {t.width(), t.height(), 1U};
+        vkCmdCopyImageToBuffer(cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, t.readback(), 1U, &region);
+        end_and_wait(cmd);
+    }
+
     // B4: bind a MESH program and dispatch `group_count` mesh workgroups. Colour-only (the mesh-triangle proof). VERTEX is bound
     // null (mutually exclusive with MESH); TESS/GEOM/TASK default to null in a fresh command buffer (as the vertex draw relies on).
     void draw_mesh(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color, crd::u32 group_count) override
@@ -838,6 +974,122 @@ public:
         region.imageSubresource.layerCount = 1U;
         region.imageExtent                 = {t.width(), t.height(), 1U};
         vkCmdCopyImageToBuffer(cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, t.readback(), 1U, &region);
+        end_and_wait(cmd);
+    }
+
+    // B4: DISPATCH a MESH program with PER-PRIMITIVE VRS. Identical to draw_mesh, but sets the VRS combiner to REPLACE so the
+    // mesh's per-primitive `gl_MeshPrimitivesEXT[].gl_PrimitiveShadingRateEXT` output drives the coarse fragment rate (the
+    // pipeline rate stays 1×1). A distant/low-detail meshlet can shade itself at a lower rate — a real perf lever.
+    void draw_mesh_vrs(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color, crd::u32 group_count) override
+    {
+        auto& t = static_cast<VulkanRasterTarget&>(target);
+        auto& p = static_cast<VulkanRasterProgram&>(program);
+        if (!m_api.valid() || m_api.draw_mesh_tasks == nullptr || !p.valid() || !p.is_mesh()) { return; }
+        if (m_set_vrs == nullptr) { draw_mesh(target, program, clear_color, group_count); return; } // no VRS ⇒ full-rate mesh draw
+
+        VkCommandBuffer cmd = begin_cmd();
+        if (cmd == VK_NULL_HANDLE) { return; }
+        transition(cmd, t.image(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 0,
+                   VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                   VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+        VkRenderingAttachmentInfo att = colour_clear_attachment(t.view(), clear_color);
+        VkRenderingInfo           ri{};
+        ri.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        ri.renderArea.extent    = {t.width(), t.height()};
+        ri.layerCount           = 1U;
+        ri.colorAttachmentCount = 1U;
+        ri.pColorAttachments    = &att;
+        vkCmdBeginRendering(cmd, &ri);
+
+        set_draw_state(cmd, t.width(), t.height(), t.samples(), false, VK_COMPARE_OP_ALWAYS, 1U, /*mesh_draw=*/true);
+        const VkExtent2D                         frag1x1 = {1U, 1U}; // pipeline rate 1×1; the primitive rate REPLACES it
+        const VkFragmentShadingRateCombinerOpKHR comb[2] = {VK_FRAGMENT_SHADING_RATE_COMBINER_OP_REPLACE_KHR,
+                                                            VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR};
+        m_set_vrs(cmd, &frag1x1, comb);
+        const VkShaderStageFlagBits vnull[1] = {VK_SHADER_STAGE_VERTEX_BIT};
+        const VkShaderEXT           vnob[1]  = {VK_NULL_HANDLE};
+        m_api.bind(cmd, 1U, vnull, vnob);
+        if (p.has_task())
+        {
+            const VkShaderStageFlagBits tstage[1] = {VK_SHADER_STAGE_TASK_BIT_EXT};
+            const VkShaderEXT           tobj[1]   = {p.task()};
+            m_api.bind(cmd, 1U, tstage, tobj);
+        }
+        const VkShaderStageFlagBits mstages[2] = {VK_SHADER_STAGE_MESH_BIT_EXT, VK_SHADER_STAGE_FRAGMENT_BIT};
+        const VkShaderEXT           mobjs[2]   = {p.vs(), p.fs()};
+        m_api.bind(cmd, 2U, mstages, mobjs);
+        m_api.draw_mesh_tasks(cmd, group_count, 1U, 1U);
+        vkCmdEndRendering(cmd);
+
+        const VkImage vsrc = t.src_image();
+        transition(cmd, vsrc, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                   VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                   VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+        VkBufferImageCopy vregion{};
+        vregion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        vregion.imageSubresource.layerCount = 1U;
+        vregion.imageExtent                 = {t.width(), t.height(), 1U};
+        vkCmdCopyImageToBuffer(cmd, vsrc, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, t.readback(), 1U, &vregion);
+        end_and_wait(cmd);
+    }
+
+    // B4: GPU-DRIVEN INDIRECT MESHLET DISPATCH. Identical to draw_mesh, but the mesh-workgroup count comes from `native_args`
+    // (a `VkBuffer` an earlier compute CULL pass wrote as {groupCountX, 1, 1} — see build_meshlet_cull), consumed by
+    // vkCmdDrawMeshTasksIndirectEXT. The culled meshlets never dispatch and the CPU never learns the count — the Nanite scale
+    // loop. The args buffer is `compute_usage::indirect` (CONCURRENT-shared across the compute/graphics queues); the compute
+    // submit fenced before this raster submit, so its write is visible without an explicit ownership transfer.
+    void draw_mesh_indirect(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color, void* native_args,
+                            crd::u64 args_offset) override
+    {
+        auto& t = static_cast<VulkanRasterTarget&>(target);
+        auto& p = static_cast<VulkanRasterProgram&>(program);
+        if (!m_api.valid() || m_api.draw_mesh_tasks_indirect == nullptr || !p.valid() || !p.is_mesh()
+            || native_args == nullptr)
+        {
+            return;
+        }
+        const VkBuffer args = reinterpret_cast<VkBuffer>(native_args);
+
+        VkCommandBuffer cmd = begin_cmd();
+        if (cmd == VK_NULL_HANDLE) { return; }
+        transition(cmd, t.image(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 0,
+                   VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                   VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+        VkRenderingAttachmentInfo att = colour_clear_attachment(t.view(), clear_color);
+        VkRenderingInfo           ri{};
+        ri.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        ri.renderArea.extent    = {t.width(), t.height()};
+        ri.layerCount           = 1U;
+        ri.colorAttachmentCount = 1U;
+        ri.pColorAttachments    = &att;
+        vkCmdBeginRendering(cmd, &ri);
+
+        set_draw_state(cmd, t.width(), t.height(), t.samples(), false, VK_COMPARE_OP_ALWAYS, 1U, /*mesh_draw=*/true);
+        const VkShaderStageFlagBits vnull[1] = {VK_SHADER_STAGE_VERTEX_BIT};
+        const VkShaderEXT           vnob[1]  = {VK_NULL_HANDLE};
+        m_api.bind(cmd, 1U, vnull, vnob);
+        if (p.has_task())
+        {
+            const VkShaderStageFlagBits tstage[1] = {VK_SHADER_STAGE_TASK_BIT_EXT};
+            const VkShaderEXT           tobj[1]   = {p.task()};
+            m_api.bind(cmd, 1U, tstage, tobj);
+        }
+        const VkShaderStageFlagBits mstages[2] = {VK_SHADER_STAGE_MESH_BIT_EXT, VK_SHADER_STAGE_FRAGMENT_BIT};
+        const VkShaderEXT           mobjs[2]   = {p.vs(), p.fs()};
+        m_api.bind(cmd, 2U, mstages, mobjs);
+        m_api.draw_mesh_tasks_indirect(cmd, args, args_offset, 1U,
+                                       static_cast<crd::u32>(sizeof(VkDrawMeshTasksIndirectCommandEXT))); // ONE indirect command
+        vkCmdEndRendering(cmd);
+
+        const VkImage isrc = t.src_image();
+        transition(cmd, isrc, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                   VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                   VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+        VkBufferImageCopy iregion{};
+        iregion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        iregion.imageSubresource.layerCount = 1U;
+        iregion.imageExtent                 = {t.width(), t.height(), 1U};
+        vkCmdCopyImageToBuffer(cmd, isrc, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, t.readback(), 1U, &iregion);
         end_and_wait(cmd);
     }
 
@@ -908,6 +1160,54 @@ public:
         region.imageExtent                 = {t.width(), t.height(), 1U};
         vkCmdCopyImageToBuffer(cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, t.readback(), 1U, &region);
 
+        end_and_wait(cmd);
+    }
+
+    // B4-vis-4: HW-raster into a R32_UINT VISIBILITY BUFFER (create_visbuffer_target). Identical to draw() but single-sample +
+    // a UINT clear (R32_UINT requires the uint32 clear union). The FS writes SV_PrimitiveId, so each pixel records which
+    // triangle the HW rasterizer covered it with — the hybrid Nanite path for big triangles. read_pixel returns the raw id.
+    void draw_visbuffer(IRasterTarget& target, IRasterProgram& program, crd::u32 clear_id, crd::u32 vertex_count) override
+    {
+        auto& t = static_cast<VulkanRasterTarget&>(target);
+        auto& p = static_cast<VulkanRasterProgram&>(program);
+        if (!m_api.valid() || !p.valid()) { return; }
+        VkCommandBuffer cmd = begin_cmd();
+        if (cmd == VK_NULL_HANDLE) { return; }
+
+        transition(cmd, t.image(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 0,
+                   VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                   VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+        VkRenderingAttachmentInfo att{};
+        att.sType                      = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        att.imageView                  = t.view();
+        att.imageLayout                = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        att.loadOp                     = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        att.storeOp                    = VK_ATTACHMENT_STORE_OP_STORE;
+        att.clearValue.color.uint32[0] = clear_id; // R32_UINT: the empty/background id
+        VkRenderingInfo ri{};
+        ri.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        ri.renderArea.extent    = {t.width(), t.height()};
+        ri.layerCount           = 1U;
+        ri.colorAttachmentCount = 1U;
+        ri.pColorAttachments    = &att;
+        vkCmdBeginRendering(cmd, &ri);
+
+        set_draw_state(cmd, t.width(), t.height(), t.samples(), false, VK_COMPARE_OP_ALWAYS);
+        const VkShaderStageFlagBits stages[2] = {VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT};
+        const VkShaderEXT           objs[2]   = {p.vs(), p.fs()};
+        m_api.bind(cmd, 2U, stages, objs);
+        vkCmdDraw(cmd, vertex_count, 1U, 0U, 0U);
+
+        vkCmdEndRendering(cmd);
+        const VkImage src = t.src_image();
+        transition(cmd, src, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                   VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                   VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+        VkBufferImageCopy vregion{};
+        vregion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        vregion.imageSubresource.layerCount = 1U;
+        vregion.imageExtent                 = {t.width(), t.height(), 1U};
+        vkCmdCopyImageToBuffer(cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, t.readback(), 1U, &vregion);
         end_and_wait(cmd);
     }
 
@@ -1999,7 +2299,7 @@ private:
     // Build a colour target at `samples` sample count (+ a B1-d D32 depth buffer when `with_depth`). samples==1 → a plain
     // single-sample image (read back directly); samples>1 → an MSAA colour image + a single-sample AVERAGE-resolve image.
     [[nodiscard]] std::unique_ptr<IRasterTarget> make_target(crd::u32 width, crd::u32 height, crd::u32 samples,
-                                                             bool with_depth)
+                                                             bool with_depth, VkFormat color_fmt = kColorFormat)
     {
         if (width == 0U || height == 0U) { return nullptr; }
         VkSampleCountFlagBits sc = VK_SAMPLE_COUNT_1_BIT;
@@ -2010,10 +2310,11 @@ private:
 
         const bool ms = samples > 1U;
         // Colour attachment. Single-sample doubles as the readback source (transfer-src); MSAA is attachment-only (resolved).
+        // `color_fmt` is normally RGBA8; the B4-vis-4 visibility buffer passes VK_FORMAT_R32_UINT (read_pixel returns the id).
         ImageBundle color{};
         const VkImageUsageFlags color_usage =
             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | (ms ? 0U : VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
-        if (!create_image_bundle(width, height, sc, kColorFormat, VK_IMAGE_ASPECT_COLOR_BIT, color_usage, color))
+        if (!create_image_bundle(width, height, sc, color_fmt, VK_IMAGE_ASPECT_COLOR_BIT, color_usage, color))
         {
             return nullptr;
         }
@@ -2021,7 +2322,7 @@ private:
         // MSAA: a single-sample resolve image (resolve target + readback source).
         ImageBundle resolve{};
         if (ms
-            && !create_image_bundle(width, height, VK_SAMPLE_COUNT_1_BIT, kColorFormat, VK_IMAGE_ASPECT_COLOR_BIT,
+            && !create_image_bundle(width, height, VK_SAMPLE_COUNT_1_BIT, color_fmt, VK_IMAGE_ASPECT_COLOR_BIT,
                                     VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, resolve))
         {
             destroy_image_bundle(m_device, color);

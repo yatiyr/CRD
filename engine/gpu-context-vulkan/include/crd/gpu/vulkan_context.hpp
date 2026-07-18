@@ -78,6 +78,10 @@ public:
     // B2-d: non-uniform sampled-image array indexing (descriptor indexing) enabled — the substrate for BINDLESS texture
     // arrays (`texture(..., N)` + `KOp::SampleIndexed` with a per-fragment index). Graphics-capable devices.
     [[nodiscard]] virtual bool bindless() const noexcept = 0;
+
+    // B4-tess: `tessellationShader` + the EDS2 patch-control-points dynamic state enabled on a graphics-capable device — the
+    // substrate for the PORTABLE displacement path (VS→TessControl→TessEval→FS + PATCH_LIST). false ⇒ mesh/vertex-pull fallback.
+    [[nodiscard]] virtual bool tessellation() const noexcept = 0;
 };
 
 // Create a headless Vulkan compute context per `config` (config.backend must be Vulkan). Returns nullptr on failure

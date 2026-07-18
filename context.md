@@ -22,11 +22,59 @@
 > tidy build; bit-exact HELD (atmos 1562 · kir 34725 · vk 33023 · dx12 30821). ⚠ transient MSVC LTCG `C1001` cleared on retry (known,
 > BUILDING.md). B16-a-1 remaining scope (SSR/refraction/underwater/caustics) + B4 remaining carry forward.
 >
-> **▶▶ NEXT UP (D-007):** (1) **B4 — DX12 device mesh render** (PSO + `DispatchMesh`): full ready-to-apply design in
-> `docs/sessions/2026-07-18-*` / scratchpad — IR→DXIL mesh on-ramp (`ms_6_5`), `OPTIONS7 MeshShaderTier` gate + `Device2`/`CmdList6`,
-> hand-rolled mesh PSO stream, `create_mesh_program`+`draw_mesh`, then the bindless-depth ocean-meshlet variant + a DX12 mesh test
-> (debug-layer clean). Then B4 remaining: TASK stage · B4-vis visibility buffer · B4-tess · WGSL-portable `texture_2d_array` cascade.
-> (2) Then **B17 OIT → B18 hair → B19 3DGS → RT tier (C3/B9)**. (B16 detail → its session logs + the D-007 master doc.)
+> **▶ B4 PROGRESS (2026-07-18, post-B16):** the B4 sub-slices landed in order — **DX12 device mesh render** ✅ (IR→DXIL `ms_6_5`
+> on-ramp, `OPTIONS7 MeshShaderTier` gate + `Device2`/`CmdList6`, hand-rolled mesh PSO stream, `create_mesh_program`+`draw_mesh`, +
+> the bindless-depth ocean-meshlet variant) · **TASK / amplification** ✅ (both backends: `EmitMeshTasksEXT`/`DispatchMesh` + a
+> task→mesh payload, `create_task_mesh_program`) · **B4-tess** ✅ (both backends: `TessControl`/`TessEval` GLSL **and** HLSL
+> emitters + device render — Vulkan VS+TCS+TES+FS shader objects + EDS2 `PATCH_LIST`/patch-control-points; DX12 HS/DS graphics PSO +
+> `4_CONTROL_POINT_PATCHLIST`; the `[tess]` quad subdivides 8×8 + domain-displaces ×1.3, proven per-vertex on both). Both full raster
+> suites green (vk 642/58 · dx12 555/57).
+>
+> **▶ B4-vis STARTED (2026-07-18): NANITE virtualized geometry.** **[✅ B4-vis-1 COMPUTE SOFTWARE RASTERIZER]** the Karis
+> software rasterizer (the micropoly path HW raster can't do well) runs bit-exact in CKIR: new `BufferAtomicMin` stmt (all 5
+> compute-kernel emitters + oracle; MIN order-independent ⇒ bit-exact) + `Ceil`/`Clamp` completed in the imperative-kernel path
+> of all 5 emitters + `ckir_visbuffer.hpp` `build_sw_raster_visbuffer` (one thread/triangle, edge-function coverage, barycentric
+> depth, packed `(depth<<idBits)|triId` u32 via atomicMin — nearest wins; NO 64-bit atomics; backend-independent depth). The
+> `[visbuffer]` test: 3-triangle scene, **bit-exact GPU==oracle on Vulkan (9) + DX12 (8)** + 5-backend emit gate (12). **[✅
+> B4-vis-2 DEFERRED ATTRIBUTE SHADE (DAIS)]** `build_deferred_attr_shade` — one thread/pixel reads the vis key, fetches the 3
+> verts, reconstructs PERSPECTIVE-CORRECT barycentrics (`Σ(e_i/w_i·a_i)/Σ(e_i/w_i)`, one divide) + interpolates once per visible
+> pixel. Visibility bit-exact; the shade matches the oracle **to ~2 f32 ULP (1.18e-7, identical Vulkan+DX12 — bit-exact with each
+> other; f32 divide is ~2.5 ULP on GPUs, not correctly-rounded, like the ocean spectrum)**; perspective proven (centroid ~8 not
+> 14). No regression (DX12 [compute] 111 · Vulkan [kernel] 311).
+>
+> **[✅ B4-vis-3 HZB TWO-PASS OCCLUSION CULL]** `build_hzb_downsample` (max-depth mip pyramid, one dispatch/level in ONE buffer,
+> barriered) + `build_cluster_cull` (per-cluster AABB-vs-HZB: `visible = near_depth <= max_hzb ? 1 : 0`, conservative). MAX +
+> compare order-independent ⇒ **BIT-EXACT** both backends. `[hzb]` test: 16² near-wall/far split → pyramid → 3 clusters
+> (behind=cull, open=visible, in-front=visible), GPU==oracle==analytic (VK 8 · DX12 7); 5-backend emit gate 12. GPU-driven
+> culling = the Nanite scale lever. No regression (DX12 [visbuffer] 23 · Vulkan 27). **[✅ B4-vis-4 HW-RASTER VBUFFER]** the hybrid
+> split (HW raster for big triangles): `KBuiltin::PrimitiveId` wired into GLSL/HLSL FS emitters + a native **R32_UINT** vis target
+> on both devices (`create_visbuffer_target`/`draw_visbuffer`; DX12 `pso_for` gained an RT-format for the R32_UINT PSO). The
+> `[raster][visbuffer]` test: fullscreen quad → FS writes `gl_PrimitiveID` → R32_UINT; every pixel is primitive 0/1, each ~half —
+> Vulkan 10 · DX12 7. **✅✅ B4-vis COMPLETE** — software rasterizer (bit-exact) + DAIS (to-ULP) + HZB cull (bit-exact) + HW-raster
+> VBuffer (both devices). No regression (DX12 [raster] 562 · Vulkan 652).
+>
+> **[✅ MULTI-FIELD PAYLOAD]** the task→mesh payload now carries up to 4 uint fields (`KBuiltin::TaskPayload{,1,2,3}`, fixed
+> 4-field struct so task+mesh layouts match; `KEntry.task_payload[4]`+`n_task_payload`) — a meshlet passes bounds/LOD/material,
+> not one uint. `[mesh][task]` 3-uint payload→RGB, both backends (vk 12 · dx12 8), single-field back-compat held. No regression
+> (DX12 [raster] 572 · Vulkan 665).
+>
+> **[✅ GPU-DRIVEN COMPUTE-CULL → INDIRECT MESHLET DISPATCH — BOTH BACKENDS]** the Nanite scale loop, no CPU round-trip:
+> `build_meshlet_cull` (compute pass atomicAdds the survivor count into an INDIRECT args buffer `{gx,1,1}`) → `draw_mesh_indirect`
+> (`vkCmdDrawMeshTasksIndirectEXT` / DX12 `ExecuteIndirect`+DISPATCH_MESH command signature) — the mesh-workgroup count decided on
+> the GPU. Plumbing: `compute_usage::indirect` (+ Vulkan CONCURRENT queue-sharing), `ComputeBuffer::native_handle()`. `[indirect]`
+> test: 8 meshlets, 5 visible → cull writes 5 → exactly 5 render, 3 culled never dispatch — VK 14 · DX12 9, device-verified. No
+> regression (VK [kernel] 329 · [raster] 679 · DX12 [compute] 126 · [raster] 581).
+>
+> **[✅ PER-PRIMITIVE VRS FROM THE MESH — BOTH BACKENDS]** the mesh emits a per-primitive shading rate (`shading_rate` →
+> `gl_MeshPrimitivesEXT[].gl_PrimitiveShadingRateEXT` / `out primitives … SV_ShadingRate`); new `draw_mesh_vrs` (REPLACE/OVERRIDE
+> combiner). `[mesh][vrs]`: 2×2 primitive rate → full coarsening (n_equal 512) on VK + DX12. **[⏭ WGSL `texture_2d_array`
+> cascade — scoped to the WebGPU milestone]** WGSL is compute-only here (no raster emitter); the cascade port needs the WGSL
+> raster path = the browser/WASM deployment goal, out of D-007 scope. **✅✅ B4 CLOSED** — every substantive line done (mesh/task/
+> tess, ocean meshlets, full Nanite vis-buffer 1-4, multi-field payload, GPU-driven indirect dispatch, per-primitive VRS);
+> only cluster-AS (→ B9/C3 RT) + the WebGPU WGSL cascade remain, both correctly out of scope.
+>
+> **▶▶ NEXT UP (D-007):** **B17 OIT → B18 hair → B19 3DGS → RT tier (C3/B9)** (on user command). (B16/B4 detail → the session
+> logs + the D-007 master doc.)
 
 > **▶ THE ONE MASTER DOC: `docs/detours/D-007-gpu-program-system.md`** — a single ordered subslice table (D-007 shader IR +
 > D-008 device convergence, merged 2026-07-11). Foundation + raster DONE: Phase A ✅ · fan-out ✅ · B0 ✅ · B3-a/a′ ✅ ·

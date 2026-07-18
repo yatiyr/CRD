@@ -8,9 +8,12 @@
 #include <crd/gpu/dx12_raster_context.hpp>
 
 #include <crd/gpu/dx12_context.hpp> // C4-b: create_dx12_gpu_context, compile_hlsl_to_dxil, Dx12GpuProgram
+#include <crd/gpu/dx12_compute_context.hpp> // B4: the compute cull that writes the indirect-dispatch args
 #include <crd/gpu/raster_context.hpp>
 
 #include <crd/kir/ckir.hpp> // C4-b: KGraph/KEntry/KStage — the create_program(KGraph) seam
+#include <crd/kir/ckir_hlsl.hpp>      // B4: emit_compute_kernel_hlsl (the cull kernel)
+#include <crd/kir/ckir_visbuffer.hpp> // B4: build_meshlet_cull
 #include <crd/containers/string_view.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
@@ -317,6 +320,295 @@ TEST_CASE("D-007 B4: DX12 TASK amplification — 1 task workgroup emits N mesh t
         if ((target->read_pixel(sx, dim / 2U) & 0xFFU) > 180U) { ++lit; } // red ≈ payload(220)
     }
     CHECK(lit == static_cast<int>(n_tri)); // all N amplified triangles rendered with the payload colour
+}
+
+// D-007 B4: the MULTI-FIELD task→mesh payload on DX12 — a task passes a 3-uint payload (v0,v1,v2), each read by the mesh via
+// KBuiltin::TaskPayload{,1,2} and coloured into R/G/B. Proves the DX12 groupshared MeshPayload struct carries all three fields.
+TEST_CASE("D-007 B4: DX12 TASK multi-field payload — a 3-uint payload flows task->mesh",
+          "[dx12][raster][gpu][ir][mesh][task]")
+{
+    namespace kir = crd::kir;
+
+    auto gctx = g::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    auto raster = g::create_dx12_raster_context();
+    if (raster == nullptr || !raster->valid()) { WARN("no D3D12 raster device; skipping"); return; }
+    crd::memory::TlsfAllocator alloc(4U << 20U);
+
+    constexpr crd::u32 pay_r = 200U;
+    constexpr crd::u32 pay_g = 120U;
+    constexpr crd::u32 pay_b = 60U;
+    kir::KGraph        tg(&alloc);
+    kir::KEntry        te;
+    crd::gputest::build_task_amplify_rgb(tg, te, 1U, pay_r, pay_g, pay_b);
+    kir::KGraph mg(&alloc);
+    kir::KEntry me;
+    crd::gputest::build_mesh_amplified_rgb(mg, me);
+    kir::KGraph fg(&alloc);
+    kir::KEntry fe;
+    crd::gputest::build_amplify_rgb_fs(fg, fe);
+
+    auto task = gctx->create_program(tg, te);
+    if (task == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    auto mesh = gctx->create_program(mg, me);
+    auto fs   = gctx->create_program(fg, fe);
+    REQUIRE(mesh != nullptr);
+    REQUIRE(fs != nullptr);
+    auto program = raster->create_task_mesh_program(*task, *mesh, *fs);
+    if (program == nullptr) { WARN("no D3D12 mesh-shader tier (OPTIONS7); skipping"); return; }
+    REQUIRE(program->valid());
+
+    constexpr crd::u32 dim    = 64U;
+    auto               target = raster->create_color_target(dim, dim);
+    REQUIRE(target != nullptr);
+    raster->draw_mesh(*target, *program, g::ClearColor{0.0F, 0.0F, 0.1F, 1.0F}, 1U);
+
+    const crd::u32 px = target->read_pixel(dim / 2U, dim / 2U); // inside the centred triangle
+    CHECK((px & 0xFFU) > pay_r - 6U);          // R ≈ payload v0
+    CHECK((px & 0xFFU) < pay_r + 6U);
+    CHECK(((px >> 8U) & 0xFFU) > pay_g - 6U);  // G ≈ payload v1
+    CHECK(((px >> 8U) & 0xFFU) < pay_g + 6U);
+    CHECK(((px >> 16U) & 0xFFU) > pay_b - 6U); // B ≈ payload v2 — all three fields flowed
+    CHECK(((px >> 16U) & 0xFFU) < pay_b + 6U);
+}
+
+// D-007 B4: GPU-DRIVEN INDIRECT MESHLET DISPATCH on DX12. A compute CULL pass tests 8 meshlets (5 visible) and writes the
+// survivor count into an INDIRECT-dispatch args buffer; ExecuteIndirect with a DISPATCH_MESH command signature then launches
+// EXACTLY that many mesh workgroups — the count decided on the GPU. Only the 5 survivors render; the 3 culled never dispatch.
+TEST_CASE("D-007 B4: DX12 GPU-driven indirect meshlet dispatch — a compute cull writes the dispatch count",
+          "[dx12][raster][gpu][mesh][indirect]")
+{
+    namespace kir = crd::kir;
+    namespace vb  = crd::kir::visbuffer;
+    namespace cu  = crd::gpu::compute_usage;
+
+    auto gctx = g::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    auto raster = g::create_dx12_raster_context();
+    if (raster == nullptr || !raster->valid()) { WARN("no D3D12 raster device; skipping"); return; }
+    crd::memory::TlsfAllocator alloc(4U << 20U);
+    g::Dx12ComputeContext      compute(&alloc);
+    if (!compute.valid()) { WARN("no D3D12 compute device; skipping"); return; }
+
+    // 1) the compute CULL: 8 meshlets, keys[i] = (i < 5) → 5 survivors written into args[0] (ThreadGroupCountX).
+    constexpr crd::u32    n_meshlets = 8U;
+    constexpr crd::u32    survivors  = 5U;
+    vb::MeshletCullConfig ccfg;
+    ccfg.n_meshlets = n_meshlets;
+    ccfg.local_size = 64U;
+    kir::KGraph       cg(&alloc);
+    const kir::KEntry ce = vb::build_meshlet_cull(cg, ccfg);
+    kir::GlslKernel   kern(&alloc);
+    REQUIRE(kir::emit_compute_kernel_hlsl(cg, ce, &alloc, kern));
+    auto pipe = compute.create_pipeline_from_hlsl(crd::containers::to_view(kern.source), 2, 0U);
+    if (pipe == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+
+    auto keys_dev = compute.create_buffer(n_meshlets * 4U, cu::storage | cu::transfer_dst, g::ComputeMemory::GpuOnly);
+    auto args_dev = compute.create_buffer(3U * 4U, cu::storage | cu::indirect | cu::transfer_dst | cu::transfer_src,
+                                          g::ComputeMemory::GpuOnly);
+    auto keys_up  = compute.create_buffer(n_meshlets * 4U, cu::transfer_src, g::ComputeMemory::CpuToGpu);
+    auto args_up  = compute.create_buffer(3U * 4U, cu::transfer_src, g::ComputeMemory::CpuToGpu);
+    auto args_rb  = compute.create_buffer(3U * 4U, cu::transfer_dst, g::ComputeMemory::GpuToCpu);
+    REQUIRE(args_dev != nullptr);
+    auto* kp = static_cast<crd::u32*>(keys_up->map());
+    for (crd::u32 i = 0; i < n_meshlets; ++i) { kp[i] = (i < survivors) ? 1U : 0U; }
+    keys_up->unmap();
+    auto* ap = static_cast<crd::u32*>(args_up->map());
+    ap[0] = 0U;
+    ap[1] = 1U;
+    ap[2] = 1U;
+    args_up->unmap();
+
+    auto&                    rec      = compute.begin();
+    crd::gpu::ComputeBuffer* binds[2] = {keys_dev.get(), args_dev.get()};
+    rec.copy(*keys_up, *keys_dev, 0U, 0U, n_meshlets * 4U);
+    rec.copy(*args_up, *args_dev, 0U, 0U, 3U * 4U);
+    rec.barrier(*keys_dev, g::ComputeAccess::TransferDst, g::ComputeAccess::ShaderRead);
+    rec.barrier(*args_dev, g::ComputeAccess::TransferDst, g::ComputeAccess::ShaderRead);
+    rec.dispatch(*pipe, crd::containers::ConstSpan<crd::gpu::ComputeBuffer*>(binds, 2), nullptr, 0U, 1U, 1U, 1U);
+    rec.barrier(*args_dev, g::ComputeAccess::ShaderWrite, g::ComputeAccess::TransferSrc);
+    rec.copy(*args_dev, *args_rb, 0U, 0U, 3U * 4U);
+    compute.submit_and_wait();
+
+    const auto*    arp   = static_cast<const crd::u32*>(args_rb->map());
+    const crd::u32 count = arp[0];
+    args_rb->unmap();
+    CHECK(count == survivors); // the compute cull computed the mesh-dispatch count on the GPU
+
+    // 2) the raster INDIRECT mesh draw reads args_dev (the compute-written count) via ExecuteIndirect.
+    kir::KGraph mg(&alloc);
+    kir::KEntry me;
+    crd::gputest::build_mesh_grid_tri(mg, me);
+    kir::KGraph fg(&alloc);
+    kir::KEntry fe;
+    crd::gputest::build_amplify_fs(fg, fe);
+    auto meshp = gctx->create_program(mg, me);
+    auto fsp   = gctx->create_program(fg, fe);
+    REQUIRE(meshp != nullptr);
+    REQUIRE(fsp != nullptr);
+    auto program = raster->create_mesh_program(*meshp, *fsp);
+    if (program == nullptr) { WARN("no D3D12 mesh-shader tier (OPTIONS7); skipping"); return; }
+    REQUIRE(program->valid());
+
+    constexpr crd::u32 dim    = 64U;
+    auto               target = raster->create_color_target(dim, dim);
+    REQUIRE(target != nullptr);
+    raster->draw_mesh_indirect(*target, *program, g::ClearColor{0.0F, 0.0F, 0.1F, 1.0F}, args_dev->native_handle(), 0U);
+
+    int rendered = 0;
+    int culled   = 0;
+    for (crd::u32 w = 0; w < n_meshlets; ++w)
+    {
+        const double   xc  = -0.8 + static_cast<double>(w) * 0.2;
+        const crd::u32 sx  = static_cast<crd::u32>((xc + 1.0) * 0.5 * static_cast<double>(dim));
+        const bool     red = (target->read_pixel(sx, dim / 2U) & 0xFFU) > 180U;
+        if (w < survivors) { if (red) { ++rendered; } }
+        else if (!red) { ++culled; }
+    }
+    CHECK(rendered == static_cast<int>(survivors));            // all 5 survivors rendered via the indirect count
+    CHECK(culled == static_cast<int>(n_meshlets - survivors)); // the 3 culled meshlets never dispatched
+}
+
+// D-007 B4: PER-PRIMITIVE VRS from a MESH shader on DX12 — the mesh's SV_ShadingRate output (2×2) drives the coarse fragment
+// rate via draw_mesh_vrs (OVERRIDE combiner). Same ramp FS + coarsening check as Vulkan: a 2×2 rate makes each 2×2 block share
+// one fragment invocation, so horizontal even-x pairs become EQUAL across the gradient.
+TEST_CASE("D-007 B4: per-primitive VRS from a MESH shader coarsens shading (DX12)", "[dx12][raster][gpu][mesh][vrs]")
+{
+    namespace kir = crd::kir;
+
+    auto gctx = g::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    auto raster = g::create_dx12_raster_context();
+    if (raster == nullptr || !raster->valid()) { WARN("no D3D12 raster device; skipping"); return; }
+    if (!raster->supports_vrs()) { WARN("no D3D12 VRS tier 2; skipping"); return; }
+    crd::memory::TlsfAllocator alloc(4U << 20U);
+
+    kir::KGraph mg(&alloc);
+    kir::KEntry me;
+    crd::gputest::build_vrs_primitive_mesh(mg, me); // mesh emits SV_ShadingRate = 2x2
+    kir::KGraph fg(&alloc);
+    kir::KEntry fe;
+    crd::gputest::build_vrs_ramp_fs(fg, fe);
+    auto mesh = gctx->create_program(mg, me);
+    if (mesh == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    auto fs = gctx->create_program(fg, fe);
+    REQUIRE(fs != nullptr);
+    auto program = raster->create_mesh_program(*mesh, *fs);
+    if (program == nullptr) { WARN("no D3D12 mesh-shader tier (OPTIONS7); skipping"); return; }
+    REQUIRE(program->valid());
+
+    constexpr crd::u32 dim    = 32U;
+    auto               target = raster->create_color_target(dim, dim);
+    REQUIRE(target != nullptr);
+    raster->draw_mesh_vrs(*target, *program, g::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 1U);
+
+    const int nmesh = count_equal_even_pairs(*target, dim);
+    WARN("[vrs mesh dx12] n_equal=" << nmesh);
+    CHECK(nmesh > static_cast<int>(dim * dim / 4U)); // the mesh's per-primitive 2x2 rate coarsened the ramp
+}
+
+// D-007 B4-tess: the PORTABLE displacement path on DX12 — VS→HS→DS→PS. The VS emits a 4-corner quad patch (±0.6), the hull
+// sets 8x8 tess factors, the domain reads TessPatchPosition (the emitter's bilerp) + EXPANDS the quad x1.3 (a per-vertex domain
+// transform), the FS paints it red. Tessellation is core D3D12 (no feature gate). Proves the tessellator ran end to end: a pixel
+// between the base edge (0.6) and the expanded edge (0.78) is red ONLY because the domain shader displaced the generated vertices.
+TEST_CASE("D-007 B4-tess: DX12 tessellation — a VS->HS->DS->PS quad subdivides + displaces",
+          "[dx12][raster][gpu][ir][tess]")
+{
+    namespace kir = crd::kir;
+
+    auto gctx = g::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    auto raster = g::create_dx12_raster_context();
+    if (raster == nullptr || !raster->valid()) { WARN("no D3D12 raster device; skipping"); return; }
+    crd::memory::TlsfAllocator alloc(4U << 20U);
+
+    kir::KGraph vg(&alloc);
+    kir::KEntry ve;
+    crd::gputest::build_tess_quad_vs(vg, ve);
+    kir::KGraph cg(&alloc);
+    kir::KEntry ce;
+    crd::gputest::build_tess_hull(cg, ce);
+    kir::KGraph eg(&alloc);
+    kir::KEntry ee;
+    crd::gputest::build_tess_domain(eg, ee);
+    kir::KGraph fg(&alloc);
+    kir::KEntry fe;
+    crd::gputest::build_triangle_fs(fg, fe);
+
+    auto vs = gctx->create_program(vg, ve);
+    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    auto tcs = gctx->create_program(cg, ce); // CKIR TessControl -> hs_6_0 hull HLSL -> DXIL
+    auto tes = gctx->create_program(eg, ee); // CKIR TessEval    -> ds_6_0 domain HLSL -> DXIL
+    auto fs  = gctx->create_program(fg, fe);
+    REQUIRE(tcs != nullptr);
+    REQUIRE(tes != nullptr);
+    REQUIRE(fs != nullptr);
+    REQUIRE(tcs->stage() == g::ShaderStage::TessControl);
+    REQUIRE(tes->stage() == g::ShaderStage::TessEval);
+
+    auto program = raster->create_tess_program(*vs, *tcs, *tes, *fs);
+    REQUIRE(program != nullptr);
+    REQUIRE(program->valid());
+
+    constexpr crd::u32 dim    = 64U;
+    auto               target = raster->create_color_target(dim, dim);
+    REQUIRE(target != nullptr);
+    raster->draw_tess(*target, *program, g::ClearColor{0.0F, 0.0F, 0.2F, 1.0F}, 1U); // ONE quad patch
+
+    // Screen x for a clip x: sx = (x+1)/2·dim. The base quad edge is 0.6 (sx=51); the domain-expanded edge is 0.78 (sx=57).
+    CHECK((target->read_pixel(dim / 2U, dim / 2U) & 0xFFU) >= 250U); // centre red — the quad renders
+    const crd::u32 sx_expanded = static_cast<crd::u32>((0.72 + 1.0) * 0.5 * static_cast<double>(dim)); // clip x≈0.72 (sx≈55)
+    CHECK((target->read_pixel(sx_expanded, dim / 2U) & 0xFFU) >= 250U); // between base (0.6) + expanded (0.78) — domain ran
+    CHECK((target->read_pixel(63U, dim / 2U) & 0xFFU) < 40U); // clip x≈0.97, beyond the expanded quad — still the blue clear
+}
+
+// D-007 B4-vis-4: the HW-RASTER VISIBILITY BUFFER on DX12 — the hybrid Nanite path (HW raster wins on big triangles). A
+// fullscreen quad (2 triangles) rasterizes into a R32_UINT target whose FS writes SV_PrimitiveID, so every pixel records
+// which triangle covered it. Proves KBuiltin::PrimitiveId → DXIL + the R32_UINT PSO/target renders + read_pixel returns the id.
+TEST_CASE("D-007 B4-vis-4: DX12 HW-raster visibility buffer writes SV_PrimitiveId per pixel",
+          "[dx12][raster][gpu][ir][visbuffer]")
+{
+    namespace kir = crd::kir;
+
+    auto gctx = g::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    auto raster = g::create_dx12_raster_context();
+    if (raster == nullptr || !raster->valid()) { WARN("no D3D12 raster device; skipping"); return; }
+    crd::memory::TlsfAllocator alloc(4U << 20U);
+
+    kir::KGraph vg(&alloc);
+    kir::KEntry ve;
+    crd::gputest::build_visbuffer_vs(vg, ve);
+    kir::KGraph fg(&alloc);
+    kir::KEntry fe;
+    crd::gputest::build_visbuffer_fs(fg, fe);
+    auto vs = gctx->create_program(vg, ve); // VS → vs_6_0 DXIL
+    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    auto fs = gctx->create_program(fg, fe); // FS (SV_PrimitiveID → uint SV_Target) → ps_6_0 DXIL
+    REQUIRE(fs != nullptr);
+    auto program = raster->create_raster_program(*vs, *fs);
+    REQUIRE(program != nullptr);
+    REQUIRE(program->valid());
+
+    constexpr crd::u32 dim    = 64U;
+    auto               target = raster->create_visbuffer_target(dim, dim);
+    REQUIRE(target != nullptr);
+    raster->draw_visbuffer(*target, *program, 0xFFFFFFFFU, 6U); // 6 verts = 2 triangles
+
+    int n0 = 0;
+    int n1 = 0;
+    for (crd::u32 y = 0; y < dim; ++y)
+    {
+        for (crd::u32 x = 0; x < dim; ++x)
+        {
+            const crd::u32 id = target->read_pixel(x, y);
+            if (id == 0U) { ++n0; }
+            else if (id == 1U) { ++n1; }
+        }
+    }
+    CHECK(n0 + n1 == static_cast<int>(dim * dim)); // fullscreen coverage → every pixel is primitive id 0 or 1
+    CHECK(n0 > static_cast<int>(dim * dim) / 4);    // triangle 0 covers a substantial half (its distinct SV_PrimitiveID)
+    CHECK(n1 > static_cast<int>(dim * dim) / 4);    // triangle 1 covers the other half (robust to the viewport y-flip)
 }
 
 // D-007 B4: the DX12 OCEAN-MESHLET path — draw_mesh_bindless_depth DISPATCHES the projected-grid ocean as MESHLETS into a

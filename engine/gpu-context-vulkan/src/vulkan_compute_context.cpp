@@ -65,6 +65,8 @@ public:
 
     [[nodiscard]] VkBuffer buffer() const noexcept { return m_buffer; }
     [[nodiscard]] crd::u64 bytes() const noexcept { return m_bytes; }
+    // B4: the native VkBuffer, so a compute-written INDIRECT-args buffer can drive the raster context's indirect mesh dispatch.
+    [[nodiscard]] void* native_handle() const noexcept override { return reinterpret_cast<void*>(m_buffer); }
 
 private:
     VkDevice       m_device;
@@ -109,6 +111,7 @@ struct VulkanComputeContext::Impl final : public ComputeRecorder
     VkPhysicalDevice physical  = VK_NULL_HANDLE;
     VkQueue          queue     = VK_NULL_HANDLE;
     crd::u32         family    = 0;
+    crd::u32         gfx_family = UINT32_MAX; // B4: graphics family — for CONCURRENT sharing of an INDIRECT-args buffer read by a mesh draw
     bool             int64     = false;
     VkCommandPool    cmd_pool  = VK_NULL_HANDLE;
     VkDescriptorPool desc_pool = VK_NULL_HANDLE;
@@ -218,6 +221,7 @@ VulkanComputeContext::VulkanComputeContext(VulkanGpuContext& ctx, crd::memory::I
     impl.physical = ctx.vk_physical_device();
     impl.queue    = ctx.compute_queue();
     impl.family   = ctx.compute_family();
+    impl.gfx_family = ctx.graphics_capable() ? ctx.graphics_family() : UINT32_MAX; // B4: for the indirect-args concurrent buffer
     impl.int64    = ctx.shader_int64();
     if (impl.device == VK_NULL_HANDLE || impl.queue == VK_NULL_HANDLE) { return; }
 
@@ -285,6 +289,8 @@ std::unique_ptr<ComputeBuffer> VulkanComputeContext::create_buffer(crd::u64 byte
     if ((usage & compute_usage::storage) != 0U) { uf |= VK_BUFFER_USAGE_STORAGE_BUFFER_BIT; }
     if ((usage & compute_usage::transfer_src) != 0U) { uf |= VK_BUFFER_USAGE_TRANSFER_SRC_BIT; }
     if ((usage & compute_usage::transfer_dst) != 0U) { uf |= VK_BUFFER_USAGE_TRANSFER_DST_BIT; }
+    const bool indirect = (usage & compute_usage::indirect) != 0U; // B4: also readable by vkCmdDrawMeshTasksIndirectEXT
+    if (indirect) { uf |= VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT; }
     // GpuToCpu readback wants HOST_CACHED — uncached/write-combined reads of a large buffer are ~15× slower on the CPU
     // (a 64 MB LBVH nodes readback: ~200 ms vs ~12 ms). CpuToGpu upload is fine host-coherent (write-combined writes are
     // fast + need no flush). GpuOnly = device-local VRAM.
@@ -301,6 +307,15 @@ std::unique_ptr<ComputeBuffer> VulkanComputeContext::create_buffer(crd::u64 byte
     bci.size        = bytes;
     bci.usage       = uf;
     bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    // B4: an INDIRECT-args buffer is written on the COMPUTE queue then read on the GRAPHICS queue (the mesh draw). When those
+    // are distinct families (a dedicated compute queue), CONCURRENT sharing lets both access it without an ownership transfer.
+    const crd::u32 fams[2] = {impl.family, impl.gfx_family};
+    if (indirect && impl.gfx_family != UINT32_MAX && impl.gfx_family != impl.family)
+    {
+        bci.sharingMode           = VK_SHARING_MODE_CONCURRENT;
+        bci.queueFamilyIndexCount = 2U;
+        bci.pQueueFamilyIndices   = fams;
+    }
     VkBuffer buffer = VK_NULL_HANDLE;
     if (vkCreateBuffer(impl.device, &bci, nullptr, &buffer) != VK_SUCCESS) { return nullptr; }
     VkMemoryRequirements mr{};

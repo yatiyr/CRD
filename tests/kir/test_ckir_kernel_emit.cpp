@@ -13,6 +13,7 @@
 #include <crd/kir/ckir_hlsl.hpp>
 #include <crd/kir/ckir_msl.hpp>
 #include <crd/kir/ckir_ocean.hpp> // B16-a: the FFT-ocean kernels — cross-backend emit gate
+#include <crd/kir/ckir_visbuffer.hpp> // B4-vis: the software-rasterizer kernel — cross-backend emit gate
 #include <crd/kir/ckir_wgsl.hpp>
 
 #include <crd/memory/allocators/tlsf_allocator.hpp>
@@ -257,6 +258,101 @@ TEST_CASE("B-cmp: WGSL compute-kernel emitter -- well-formed shared-memory kerne
     CHECK(has(k, "@compute @workgroup_size(256, 1, 1)"));
     CHECK(has(k, "@builtin(local_invocation_index) lidx : u32"));
     CHECK(has(k, "workgroupBarrier();"));
+}
+
+// B4-vis: the software-rasterizer kernel (edge-function coverage + barycentric depth + atomicMin visibility key) must lower
+// on ALL FIVE backends — Vulkan + DX12 run it bit-exact (tests/gpu-context-*), and CUDA/MSL/WGSL emit structurally here
+// (the wire-ALL-backends rule: a new kernel op like Ceil/Clamp/BufferAtomicMin must be wired into every emitter, not just
+// the two that a device happens to run). Each emitter must PRODUCE source and carry the atomic-min visibility write.
+TEST_CASE("B4-vis: software-rasterizer kernel lowers on all five backends", "[kir][kernel][visbuffer]")
+{
+    crd::memory::TlsfAllocator          alloc(16U << 20U);
+    kir::KGraph                         g(&alloc);
+    crd::kir::visbuffer::SwRasterConfig cfg; // defaults: 64x64, 2 triangles, id_bits 12
+    const kir::KEntry                   e = crd::kir::visbuffer::build_sw_raster_visbuffer(g, cfg);
+
+    kir::GlslKernel gl(&alloc);
+    kir::GlslKernel hl(&alloc);
+    kir::GlslKernel cu(&alloc);
+    kir::GlslKernel ms(&alloc);
+    kir::GlslKernel wg(&alloc);
+    REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, gl));
+    REQUIRE(kir::emit_compute_kernel_hlsl(g, e, &alloc, hl));
+    REQUIRE(kir::emit_compute_kernel_cuda(g, e, &alloc, cu));
+    REQUIRE(kir::emit_compute_kernel_msl(g, e, &alloc, ms));
+    REQUIRE(kir::emit_compute_kernel_wgsl(g, e, &alloc, wg));
+
+    CHECK(has(gl, "atomicMin(buf2["));          // GLSL: the visibility-key atomic-min
+    CHECK(has(hl, "buf2.InterlockedMin("));     // HLSL: RAW-UAV InterlockedMin
+    CHECK(has(cu, "atomicMin(&buf2["));         // CUDA
+    CHECK(has(ms, "atomic_fetch_min_explicit")); // MSL
+    CHECK(has(wg, "atomicMin(&buf2["));         // WGSL
+    CHECK(has(gl, "ceil("));                     // the bbox ceil (Ceil op) must have lowered
+    CHECK(has(gl, "min(max("));                  // the bbox clamp (Clamp op → min(max()))
+}
+
+// B4-vis-2: the deferred attribute-interpolation shade (DAIS) kernel — the deferred half of the visibility pipeline — must
+// also lower on ALL FIVE backends (Vulkan + DX12 run it to-ULP; CUDA/MSL/WGSL emit structurally). Exercises Mod + integer
+// Div (tid%W, tid/W) + CmpNe (the empty-key test) in the imperative-kernel path of every emitter.
+TEST_CASE("B4-vis-2: deferred attribute-shade (DAIS) kernel lowers on all five backends", "[kir][kernel][visbuffer][dais]")
+{
+    crd::memory::TlsfAllocator            alloc(16U << 20U);
+    kir::KGraph                           g(&alloc);
+    crd::kir::visbuffer::DeferredShadeConfig cfg; // defaults: 32x32, id_bits 12
+    const kir::KEntry                     e = crd::kir::visbuffer::build_deferred_attr_shade(g, cfg);
+
+    kir::GlslKernel gl(&alloc);
+    kir::GlslKernel hl(&alloc);
+    kir::GlslKernel cu(&alloc);
+    kir::GlslKernel ms(&alloc);
+    kir::GlslKernel wg(&alloc);
+    REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, gl));
+    REQUIRE(kir::emit_compute_kernel_hlsl(g, e, &alloc, hl));
+    REQUIRE(kir::emit_compute_kernel_cuda(g, e, &alloc, cu));
+    REQUIRE(kir::emit_compute_kernel_msl(g, e, &alloc, ms));
+    REQUIRE(kir::emit_compute_kernel_wgsl(g, e, &alloc, wg));
+    CHECK(has(gl, "buf4["));   // GLSL: the shaded-output store
+    CHECK(has(hl, "buf4."));   // HLSL: RAW-UAV store
+    CHECK(has(cu, "buf4["));   // CUDA
+    CHECK(has(ms, "buf4"));    // MSL
+    CHECK(has(wg, "buf4["));   // WGSL
+}
+
+// B4-vis-3: the HZB downsample (max-depth pyramid) + cluster-cull (AABB-vs-HZB occlusion) kernels must lower on ALL FIVE
+// backends. Vulkan + DX12 run them bit-exact; CUDA/MSL/WGSL emit structurally. Exercises Max + Shr + Select in the imperative
+// kernel path.
+TEST_CASE("B4-vis-3: HZB downsample + cluster-cull kernels lower on all five backends", "[kir][kernel][visbuffer][hzb]")
+{
+    crd::memory::TlsfAllocator     alloc(16U << 20U);
+    crd::kir::visbuffer::HzbConfig cfg; // base 64
+    kir::KGraph                    gd(&alloc);
+    const kir::KEntry              ed = crd::kir::visbuffer::build_hzb_downsample(gd, cfg, 1U);
+    kir::KGraph                    gc(&alloc);
+    const kir::KEntry              ec = crd::kir::visbuffer::build_cluster_cull(gc, cfg, 8U);
+
+    kir::GlslKernel dgl(&alloc);
+    kir::GlslKernel dhl(&alloc);
+    kir::GlslKernel dcu(&alloc);
+    kir::GlslKernel dms(&alloc);
+    kir::GlslKernel dwg(&alloc);
+    REQUIRE(kir::emit_compute_kernel_glsl(gd, ed, &alloc, dgl));
+    REQUIRE(kir::emit_compute_kernel_hlsl(gd, ed, &alloc, dhl));
+    REQUIRE(kir::emit_compute_kernel_cuda(gd, ed, &alloc, dcu));
+    REQUIRE(kir::emit_compute_kernel_msl(gd, ed, &alloc, dms));
+    REQUIRE(kir::emit_compute_kernel_wgsl(gd, ed, &alloc, dwg));
+
+    kir::GlslKernel cgl(&alloc);
+    kir::GlslKernel chl(&alloc);
+    kir::GlslKernel ccu(&alloc);
+    kir::GlslKernel cms(&alloc);
+    kir::GlslKernel cwg(&alloc);
+    REQUIRE(kir::emit_compute_kernel_glsl(gc, ec, &alloc, cgl));
+    REQUIRE(kir::emit_compute_kernel_hlsl(gc, ec, &alloc, chl));
+    REQUIRE(kir::emit_compute_kernel_cuda(gc, ec, &alloc, ccu));
+    REQUIRE(kir::emit_compute_kernel_msl(gc, ec, &alloc, cms));
+    REQUIRE(kir::emit_compute_kernel_wgsl(gc, ec, &alloc, cwg));
+    CHECK(has(dgl, "max("));   // the downsample's 2x2 max
+    CHECK(has(cgl, "buf3["));  // the cull's visibility-flag store
 }
 
 // The one WGSL divergence a naive mirror gets wrong: `Select` has NO ternary — it is `select(false_val, true_val, cond)`,

@@ -274,6 +274,7 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
         case KOp::Sinh: f1("sinh"); break;
         case KOp::Cosh: f1("cosh"); break;
         case KOp::Floor: f1("floor"); break;
+        case KOp::Ceil: f1("ceil"); break; // B4-vis: bbox ceil (the compute-kernel rhs lacked it — the elementwise path had it)
         case KOp::Add: b2(" + "); break;
         case KOp::Sub: b2(" - "); break;
         case KOp::Mul: b2(" * "); break;
@@ -282,6 +283,7 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
         case KOp::Max: f2("max"); break;
         case KOp::Mod: if (dt_is_int(nd.dtype()) || dt_is_uint(nd.dtype())) { b2(" % "); } else { f2("fmod"); } break;
         case KOp::Fma: s.append("fma("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(", "); pv(pv, nd.c); s.append(")"); break;
+        case KOp::Clamp: s.append("min(max("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append("), "); pv(pv, nd.c); s.append(")"); break; // B4-vis: bbox clamp — min(max()) matches the GLSL emitter + oracle bit-for-bit
         default: ok = false; s.append("0"); break;
         }
     };
@@ -335,6 +337,7 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
             case KStmtKind::SpinUntilNonzero: decl(decl, st.index); s.append("  while (buf"); app_uint(s, g.node(st.target).iidx); s.append(".Load((("); pv(pv, st.index); s.append(")) * 4u) == 0u) { DeviceMemoryBarrier(); }\n"); ++i; break;
             case KStmtKind::SharedAtomicAdd: decl(decl, st.index); decl(decl, st.value); s.append("  { uint oldv_; InterlockedAdd(sh"); app_uint(s, st.target); s.append("["); pv(pv, st.index); s.append("], "); pv(pv, st.value); s.append(", oldv_); }\n"); ++i; break;
             case KStmtKind::BufferAtomicAdd: decl(decl, st.index); decl(decl, st.value); s.append("  buf"); app_uint(s, g.node(st.target).iidx); s.append(".InterlockedAdd((("); pv(pv, st.index); s.append(")) * 4u, "); pv(pv, st.value); s.append(");\n"); ++i; break; // RAW byte-addressed UAV
+            case KStmtKind::BufferAtomicMin: decl(decl, st.index); decl(decl, st.value); s.append("  buf"); app_uint(s, g.node(st.target).iidx); s.append(".InterlockedMin((("); pv(pv, st.index); s.append(")) * 4u, "); pv(pv, st.value); s.append(");\n"); ++i; break; // B4-vis: visibility key (RAW UAV, unsigned min)
             case KStmtKind::ForBreakIf: decl(decl, st.value); s.append("  if (("); pv(pv, st.value); s.append(") != 0u) break;\n"); ++i; break;
             case KStmtKind::BufferTicket: decl(decl, st.index); s.append("  if (lidx == 0u) { uint tick_; buf"); app_uint(s, g.node(st.target).iidx); s.append(".InterlockedAdd((("); pv(pv, st.index); s.append(")) * 4u, 1u, tick_); sh"); app_uint(s, st.value); s.append("[0] = tick_; }\n"); ++i; break;
             case KStmtKind::SyncWarp: s.append("  GroupMemoryBarrierWithGroupSync();\n"); ++i; break; // no wave barrier in HLSL — conservative
@@ -587,6 +590,8 @@ inline bool emit_value_stmt_hlsl(const KGraph& g, int i, crd::containers::String
     case KBuiltin::InstanceIndex: hlsl_type = "uint";   sv = "SV_InstanceID";   return true;
     case KBuiltin::FragCoord:     hlsl_type = "float4"; sv = "SV_Position";     return true;
     case KBuiltin::FrontFacing:   hlsl_type = "bool";   sv = "SV_IsFrontFace";  return true;
+    case KBuiltin::PrimitiveId:   hlsl_type = "uint";   sv = "SV_PrimitiveID";  return true; // B4-vis-4: HW-raster vis-buffer id
+
     case KBuiltin::InnerCoverage: hlsl_type = "uint";   sv = "SV_InnerCoverage"; return true; // B1-f: bit0 = fully covered
     default:                      return false;
     }
@@ -844,6 +849,153 @@ inline bool emit_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory::I
     return true;
 }
 
+// B4-tess: TESS-CONTROL (hull) emit for DX12 / HLSL. The DX12 analogue of emit_tesc_glsl: a PATCH-CONSTANT function sets
+// SV_TessFactor[4] (edges) + SV_InsideTessFactor[2] from the tess_outer / tess_inner value graphs, and the main hull function
+// passes each control point through (SV_OutputControlPointID). Quad domain, integer partitioning, CCW winding (matches the GLSL
+// path). The control point carries SV_Position (the VS output that feeds this hull); the domain re-emits its own SV_Position.
+inline bool emit_tesc_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IAllocator* scratch, GlslKernel& out)
+{
+    using namespace glsl_detail;
+    if (entry.stage != KStage::TessControl || entry.tess_patch_size == 0U || entry.tess_inner < 0 || entry.tess_outer < 0)
+    {
+        return false;
+    }
+    const int                       n = g.size();
+    crd::containers::Array<crd::u8> reach(scratch);
+    crd::containers::Array<int>     stk(scratch);
+    reach.resize(static_cast<crd::usize>(n), 0);
+    stk.push_back(entry.tess_inner);
+    stk.push_back(entry.tess_outer);
+    while (stk.size() > 0)
+    {
+        const int i = stk[stk.size() - 1];
+        stk.resize(stk.size() - 1);
+        if (i < 0 || reach[static_cast<crd::usize>(i)]) { continue; }
+        reach[static_cast<crd::usize>(i)] = 1;
+        const KNode& nd = g.node(i);
+        if (nd.a >= 0) { stk.push_back(nd.a); }
+        if (nd.b >= 0) { stk.push_back(nd.b); }
+        if (nd.c >= 0) { stk.push_back(nd.c); }
+        if (nd.d >= 0) { stk.push_back(nd.d); }
+        for (int e = 0; e < static_cast<int>(nd.n_ext); ++e) { stk.push_back(g.ext_operand(nd, e)); }
+    }
+
+    crd::containers::String& s = out.source;
+    s.clear();
+    s.append("struct CP { float4 pos : SV_Position; };\n");
+    s.append("struct HSConst { float edges[4] : SV_TessFactor; float inside[2] : SV_InsideTessFactor; };\n");
+    // Tess-level graphs are constant/uniform-driven; control-point builtins arrive via the input patch, never as leaves here.
+    const auto hull_leaf = [](const KGraph&, int, crd::containers::String&) -> bool { return false; };
+    s.append("HSConst PatchConstFn(InputPatch<CP, "); app_uint(s, entry.tess_patch_size); s.append("> ip) {\n  HSConst o;\n");
+    for (int i = 0; i < n; ++i)
+    {
+        if (!reach[static_cast<crd::usize>(i)]) { continue; }
+        if (g.node(i).op == KOp::For) { return false; }
+        if (!emit_value_stmt_hlsl(g, i, s, hull_leaf)) { return false; }
+    }
+    s.append("  o.edges[0] = t"); app_uint(s, static_cast<crd::u32>(entry.tess_outer)); s.append("; o.edges[1] = t"); app_uint(s, static_cast<crd::u32>(entry.tess_outer));
+    s.append("; o.edges[2] = t"); app_uint(s, static_cast<crd::u32>(entry.tess_outer)); s.append("; o.edges[3] = t"); app_uint(s, static_cast<crd::u32>(entry.tess_outer)); s.append(";\n");
+    s.append("  o.inside[0] = t"); app_uint(s, static_cast<crd::u32>(entry.tess_inner)); s.append("; o.inside[1] = t"); app_uint(s, static_cast<crd::u32>(entry.tess_inner)); s.append(";\n");
+    s.append("  return o;\n}\n");
+    s.append("[domain(\"quad\")]\n[partitioning(\"integer\")]\n[outputtopology(\"triangle_ccw\")]\n");
+    s.append("[outputcontrolpoints("); app_uint(s, entry.tess_patch_size); s.append(")]\n[patchconstantfunc(\"PatchConstFn\")]\n");
+    s.append("CP main(InputPatch<CP, "); app_uint(s, entry.tess_patch_size); s.append("> ip, uint cpid : SV_OutputControlPointID) {\n");
+    s.append("  return ip[cpid];\n}\n");
+    return true;
+}
+
+// B4-tess: TESS-EVAL (domain) emit for DX12 / HLSL. The DX12 analogue of emit_tese_glsl: a quad domain. The emitter provides
+// `patch_pos` = the bilinear interpolation of the 4 control-point positions by SV_DomainLocation (KBuiltin::TessPatchPosition);
+// the value graph adds a displacement (reading TessCoord / cbuffers) and writes the clip position + interpolants. SV_Position
+// is emitted LAST in DSOut (the DXIL register-packing scar — same as VSOut).
+inline bool emit_tese_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IAllocator* scratch, GlslKernel& out)
+{
+    using namespace glsl_detail;
+    if (entry.stage != KStage::TessEval || entry.tess_patch_size == 0U || entry.position < 0) { return false; }
+
+    const int                       n = g.size();
+    crd::containers::Array<crd::u8> reach(scratch);
+    crd::containers::Array<int>     stk(scratch);
+    reach.resize(static_cast<crd::usize>(n), 0);
+    const auto push_root = [&](int r) { if (r >= 0) { stk.push_back(r); } };
+    push_root(entry.position);
+    for (int k = 0; k < entry.n_out; ++k) { push_root(entry.out[k].node); }
+    bool needs_patch = false;
+    while (stk.size() > 0)
+    {
+        const int i = stk[stk.size() - 1];
+        stk.resize(stk.size() - 1);
+        if (i < 0 || reach[static_cast<crd::usize>(i)]) { continue; }
+        reach[static_cast<crd::usize>(i)] = 1;
+        const KNode& nd = g.node(i);
+        if (nd.op == KOp::Builtin && static_cast<KBuiltin>(nd.iidx) == KBuiltin::TessPatchPosition) { needs_patch = true; }
+        if (nd.a >= 0) { stk.push_back(nd.a); }
+        if (nd.b >= 0) { stk.push_back(nd.b); }
+        if (nd.c >= 0) { stk.push_back(nd.c); }
+        if (nd.d >= 0) { stk.push_back(nd.d); }
+        for (int e = 0; e < static_cast<int>(nd.n_ext); ++e) { stk.push_back(g.ext_operand(nd, e)); }
+    }
+
+    crd::containers::String& s = out.source;
+    s.clear();
+    s.append("struct CP { float4 pos : SV_Position; };\n");
+    s.append("struct HSConst { float edges[4] : SV_TessFactor; float inside[2] : SV_InsideTessFactor; };\n");
+    s.append("struct DSOut {\n"); // user interpolants FIRST, SV_Position LAST (DXIL register-packing scar)
+    for (int k = 0; k < entry.n_out; ++k)
+    {
+        const int nid = entry.out[k].node;
+        if (nid < 0) { continue; }
+        s.append("  [[vk::location("); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append(")]] ");
+        s.append(hlsl_interp(entry.out[k].interp)); s.append(htype(g.node(nid).type)); s.append(" o"); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append(" : TEXCOORD"); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append(";\n");
+    }
+    s.append("  float4 clip : SV_Position;\n};\n");
+    for (int i = 0; i < n; ++i) // uniform blocks -> cbuffer (a displacement may read a uniform amplitude / time)
+    {
+        if (!reach[static_cast<crd::usize>(i)] || g.node(i).op != KOp::UniformBlock) { continue; }
+        const KNode& nd  = g.node(i);
+        const int    sid = nd.type.struct_id;
+        s.append("cbuffer U_"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(" : register(b"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(", space"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append(") {\n");
+        const int fc = g.struct_field_count(sid);
+        for (int f = 0; f < fc; ++f) { s.append("  "); s.append(htype(g.struct_field(sid, f))); s.append(" u"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append("_f"); app_uint(s, static_cast<crd::u32>(f)); s.append(";\n"); }
+        s.append("};\n");
+    }
+    const auto dom_leaf = [&](const KGraph& gg, int li, crd::containers::String& ss) -> bool
+    {
+        const KNode& lnd = gg.node(li);
+        if (lnd.op == KOp::Builtin)
+        {
+            const KBuiltin b = static_cast<KBuiltin>(lnd.iidx);
+            if (b == KBuiltin::TessPatchPosition) { emit_stmt_prefix_hlsl(gg, li, ss); ss.append("patch_pos;\n"); return true; }
+            if (b == KBuiltin::TessCoord) { emit_stmt_prefix_hlsl(gg, li, ss); ss.append("float3(dl.x, dl.y, 0.0);\n"); return true; }
+            return false;
+        }
+        if (lnd.op == KOp::FieldGet)
+        {
+            const KNode& agg = gg.node(lnd.a);
+            if (agg.op != KOp::UniformBlock) { return false; }
+            emit_stmt_prefix_hlsl(gg, li, ss); ss.append("u"); app_uint(ss, static_cast<crd::u32>(agg.dset)); ss.append("_"); app_uint(ss, static_cast<crd::u32>(agg.iidx)); ss.append("_f"); app_uint(ss, static_cast<crd::u32>(lnd.iidx)); ss.append(";\n");
+            return true;
+        }
+        return false;
+    };
+    s.append("[domain(\"quad\")]\n");
+    s.append("DSOut main(HSConst pc, float2 dl : SV_DomainLocation, const OutputPatch<CP, "); app_uint(s, entry.tess_patch_size); s.append("> patch) {\n  DSOut o;\n");
+    if (needs_patch)
+    {
+        s.append("  float4 patch_pos = lerp(lerp(patch[0].pos, patch[1].pos, dl.x), lerp(patch[3].pos, patch[2].pos, dl.x), dl.y);\n");
+    }
+    for (int i = 0; i < n; ++i)
+    {
+        if (!reach[static_cast<crd::usize>(i)]) { continue; }
+        if (g.node(i).op == KOp::For) { return false; }
+        if (!emit_value_stmt_hlsl(g, i, s, dom_leaf)) { return false; }
+    }
+    s.append("  o.clip = t"); app_uint(s, static_cast<crd::u32>(entry.position)); s.append(";\n");
+    for (int k = 0; k < entry.n_out; ++k) { const int nid = entry.out[k].node; if (nid < 0) { continue; } s.append("  o.o"); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append(" = t"); app_uint(s, static_cast<crd::u32>(nid)); s.append(";\n"); }
+    s.append("  return o;\n}\n");
+    return true;
+}
+
 // B4: MESH-shader emit for DX12 / HLSL (Shader Model 6.5). The DX12 analogue of emit_mesh_glsl: [outputtopology("triangle")] +
 // [numthreads] + SetMeshOutputCounts, with the vertex/primitive outputs as `out vertices`/`out indices` array PARAMETERS (not
 // gl_MeshVerticesEXT). Thread `tid` (SV_GroupIndex) writes vertex tid + primitive tid, guarded by the counts; `gid` (SV_GroupID)
@@ -863,7 +1015,7 @@ inline bool emit_task_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IA
     crd::containers::Array<int>     stk(scratch);
     reach.resize(static_cast<crd::usize>(n), 0);
     stk.push_back(entry.task_emit);
-    if (entry.task_payload >= 0) { stk.push_back(entry.task_payload); }
+    for (crd::u32 pf = 0; pf < entry.n_task_payload; ++pf) { stk.push_back(entry.task_payload[pf]); }
     while (stk.size() > 0)
     {
         const int i = stk[stk.size() - 1];
@@ -890,7 +1042,7 @@ inline bool emit_task_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IA
         for (int f = 0; f < fc; ++f) { s.append("  "); s.append(htype(g.struct_field(sid, f))); s.append(" u"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append("_f"); app_uint(s, static_cast<crd::u32>(f)); s.append(";\n"); }
         s.append("};\n");
     }
-    s.append("struct MeshPayload { uint v0; };\ngroupshared MeshPayload s_payload;\n");
+    s.append("struct MeshPayload { uint v0; uint v1; uint v2; uint v3; };\ngroupshared MeshPayload s_payload;\n"); // B4: FIXED 4-field payload
     const crd::u32 ls = entry.local_size[0] > 0U ? entry.local_size[0] : 1U;
     s.append("[numthreads("); app_uint(s, ls); s.append(", 1, 1)]\nvoid main(uint tid : SV_GroupIndex, uint3 gid : SV_GroupID) {\n");
 
@@ -923,9 +1075,9 @@ inline bool emit_task_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IA
         if (g.node(i).op == KOp::For) { return false; } // a task's amplification count is a scalar expr — no loops
         if (!emit_value_stmt_hlsl(g, i, s, task_leaf)) { return false; }
     }
-    if (entry.task_payload >= 0)
+    for (crd::u32 pf = 0; pf < entry.n_task_payload; ++pf) // write each active payload field
     {
-        s.append("  s_payload.v0 = t"); app_uint(s, static_cast<crd::u32>(entry.task_payload)); s.append(";\n");
+        s.append("  s_payload.v"); app_uint(s, pf); s.append(" = t"); app_uint(s, static_cast<crd::u32>(entry.task_payload[pf])); s.append(";\n");
     }
     s.append("  DispatchMesh(t"); app_uint(s, static_cast<crd::u32>(entry.task_emit)); s.append(", 1, 1, s_payload);\n}\n");
     return true;
@@ -946,6 +1098,7 @@ inline bool emit_mesh_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IA
     const auto push_root = [&](int r) { if (r >= 0) { stk.push_back(r); } };
     push_root(entry.position);
     push_root(entry.mesh_prim);
+    push_root(entry.shading_rate); // B4: per-primitive VRS rate from the mesh
     for (int k = 0; k < entry.n_out; ++k) { push_root(entry.out[k].node); }
     while (stk.size() > 0)
     {
@@ -973,6 +1126,7 @@ inline bool emit_mesh_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IA
         s.append(" : TEXCOORD"); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append(";\n");
     }
     s.append("  float4 clip : SV_Position;\n};\n");
+    if (entry.shading_rate >= 0) { s.append("struct MPrim { uint sr : SV_ShadingRate; };\n"); } // B4: per-primitive VRS output
     for (int i = 0; i < n; ++i) // uniform blocks → cbuffer (same as raster)
     {
         if (!reach[static_cast<crd::usize>(i)] || g.node(i).op != KOp::UniformBlock) { continue; }
@@ -1004,21 +1158,24 @@ inline bool emit_mesh_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IA
         }
     }
 
-    bool reads_payload = false; // B4: does this mesh read the task→mesh payload (KBuiltin::TaskPayload)?
+    bool reads_payload = false; // B4: does this mesh read ANY task→mesh payload field (v0..v3)?
     for (int i = 0; i < n; ++i)
     {
+        const KBuiltin b = static_cast<KBuiltin>(g.node(i).iidx);
         if (reach[static_cast<crd::usize>(i)] && g.node(i).op == KOp::Builtin
-            && static_cast<KBuiltin>(g.node(i).iidx) == KBuiltin::TaskPayload)
+            && (b == KBuiltin::TaskPayload || b == KBuiltin::TaskPayload1 || b == KBuiltin::TaskPayload2
+                || b == KBuiltin::TaskPayload3))
         {
             reads_payload = true;
             break;
         }
     }
-    if (reads_payload) { s.append("struct MeshPayload { uint v0; };\n"); }
+    if (reads_payload) { s.append("struct MeshPayload { uint v0; uint v1; uint v2; uint v3; };\n"); } // FIXED 4-field (matches the task)
     s.append("[outputtopology(\"triangle\")]\n[numthreads("); app_uint(s, local_size); s.append(", 1, 1)]\n");
     s.append("void main(uint tid : SV_GroupIndex, uint3 gid : SV_GroupID,\n");
     if (reads_payload) { s.append("          in payload MeshPayload mp,\n"); } // B4: the amplification payload input
     s.append("          out vertices VOut verts["); app_uint(s, n_verts); s.append("],\n");
+    if (entry.shading_rate >= 0) { s.append("          out primitives MPrim prims["); app_uint(s, n_prims); s.append("],\n"); } // B4: per-primitive VRS
     s.append("          out indices uint3 tris["); app_uint(s, n_prims); s.append("]) {\n");
     s.append("  SetMeshOutputCounts("); app_uint(s, n_verts); s.append("u, "); app_uint(s, n_prims); s.append("u);\n");
 
@@ -1034,6 +1191,9 @@ inline bool emit_mesh_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IA
             if (bi == KBuiltin::LocalInvocationIndex) { ss.append("tid"); }
             else if (bi == KBuiltin::WorkgroupIndex) { ss.append("gid.x"); }
             else if (bi == KBuiltin::TaskPayload) { ss.append("mp.v0"); } // B4: the task→mesh payload (in payload MeshPayload mp)
+            else if (bi == KBuiltin::TaskPayload1) { ss.append("mp.v1"); }
+            else if (bi == KBuiltin::TaskPayload2) { ss.append("mp.v2"); }
+            else if (bi == KBuiltin::TaskPayload3) { ss.append("mp.v3"); }
             else { return false; }
             ss.append(";\n");
             return true;
@@ -1062,6 +1222,7 @@ inline bool emit_mesh_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IA
     s.append("  }\n");
     s.append("  if (tid < "); app_uint(s, n_prims); s.append("u) {\n");
     s.append("    tris[tid] = t"); app_uint(s, static_cast<crd::u32>(entry.mesh_prim)); s.append(";\n");
+    if (entry.shading_rate >= 0) { s.append("    prims[tid].sr = (uint)t"); app_uint(s, static_cast<crd::u32>(entry.shading_rate)); s.append(";\n"); } // B4: per-primitive VRS
     s.append("  }\n}\n");
     return true;
 }

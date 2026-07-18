@@ -12,9 +12,11 @@
 #include <crd/kir/ckir_mlp.hpp>    // v17 NRC: build_mlp_fwd_fp32 (the portable+bit-exact fused-MLP forward)
 #include <crd/kir/ckir_svgf.hpp>   // B14-c: build_svgf_atrous (the SVGF edge-stopping denoiser)
 #include <crd/kir/ckir_hlsl.hpp> // B-cmp: emit_compute_kernel_hlsl (the DX12 kernel emitter)
+#include <crd/kir/ckir_visbuffer.hpp> // B4-vis: build_sw_raster_visbuffer (the compute software rasterizer)
 
 #include <crd/math/cmath.hpp>        // Phase-1 FFT: host-side twiddle table
 #include <ckir_kernel_dispatch.hpp> // B-cmp: the SHARED both-backend kernel dispatch + oracle-compare harness
+#include <ckir_visbuffer_test.hpp>  // B4-vis: the SHARED software-rasterizer scene + oracle + mixed-dtype dispatch
 
 #include <crd/containers/span.hpp>
 #include <crd/containers/string_view.hpp>
@@ -404,6 +406,144 @@ TEST_CASE("B-cmp: CKIR TRANSPOSE kernel (For loops + barrier + cross-thread) DIS
     for (int i = 0; i < nn; ++i) { if (out32[i] != static_cast<float>(out64[i])) { ++bad; } }
     CHECK(bad == 0);
     CHECK(out32[1] == static_cast<float>(in64[t])); // out[0][1] == in[1][0] — the transpose actually happened
+}
+
+// B4-vis: the NANITE software rasterizer (atomicMin visibility buffer) DISPATCHES on DX12 == CPU oracle bit-exact. One
+// thread per triangle rasterizes into a per-pixel (depth<<idBits)|triangleId u32; the nearer centre triangle wins the
+// overlap. Proves BufferAtomicMin + edge-function coverage + barycentric depth lower to DXIL and agree with the oracle.
+TEST_CASE("B4-vis: CKIR software rasterizer (atomicMin visibility buffer) DISPATCHES on DX12 == CPU oracle bit-exact",
+          "[dx12][compute][gpu][kernel][visbuffer]")
+{
+    namespace kir = crd::kir;
+    namespace vb  = crd::kir::visbuffer;
+    crd::memory::TlsfAllocator alloc(16U << 20U);
+    g::Dx12ComputeContext      ctx(&alloc);
+    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+
+    const crd::kir_test::SwRasterScene scene = crd::kir_test::make_sw_raster_scene();
+    kir::KGraph                        graph(&alloc);
+    const kir::KEntry                  e = vb::build_sw_raster_visbuffer(graph, scene.cfg);
+
+    kir::GlslKernel kern(&alloc);
+    REQUIRE(kir::emit_compute_kernel_hlsl(graph, e, &alloc, kern));
+    auto pipe = ctx.create_pipeline_from_hlsl(crd::containers::to_view(kern.source), 3, 0U); // 3 UAV bindings, no push
+    REQUIRE(pipe != nullptr);
+
+    crd::containers::Array<crd::u32> vis_cpu(&alloc);
+    crd::containers::Array<crd::u32> vis_gpu(&alloc);
+    crd::kir_test::sw_raster_oracle(graph, e, scene, alloc, vis_cpu);
+    crd::kir_test::dispatch_visraster(ctx, *pipe, scene, vis_gpu);
+
+    const int npix = static_cast<int>(scene.cfg.width * scene.cfg.height);
+    int       bad  = 0;
+    for (int i = 0; i < npix; ++i) { if (vis_gpu[static_cast<crd::usize>(i)] != vis_cpu[static_cast<crd::usize>(i)]) { ++bad; } }
+    CHECK(bad == 0); // BIT-EXACT: the GPU visibility keys equal the CPU oracle's (atomicMin is order-independent)
+
+    const crd::u32 w  = scene.cfg.width;
+    const crd::u32 ib = scene.cfg.id_bits;
+    const auto     at = [&](crd::u32 x, crd::u32 y) { return vis_gpu[static_cast<crd::usize>(y) * w + x]; };
+    CHECK(vb::vis_id(at(16U, 16U), ib) == 2U);   // centre: the NEAR triangle (id 2) wins the depth resolve
+    CHECK(vb::vis_id(at(10U, 18U), ib) == 1U);   // upper-left half of the quad → triangle 1
+    CHECK(vb::vis_id(at(20U, 10U), ib) == 0U);   // lower-right half of the quad → triangle 0
+    CHECK(at(2U, 2U) == vb::kVisEmptyKey);       // outside the geometry → still the empty key
+    CHECK(vb::vis_depth(at(16U, 16U), ib) < vb::vis_depth(at(20U, 10U), ib)); // centre nearer than the quad
+}
+
+// B4-vis-2: DEFERRED ATTRIBUTE INTERPOLATION SHADE (DAIS) DISPATCHES on DX12 == CPU oracle bit-exact. Reads the visibility
+// buffer, fetches the triangle's 3 verts, reconstructs PERSPECTIVE-CORRECT barycentrics + interpolates a per-vertex attribute
+// once per visible pixel. The scene's distinct clip-w makes perspective correction non-trivial: at the screen centroid the
+// perspective-correct value (~8) is far below the naive barycentric average (14) — the test proves the /w correction ran.
+TEST_CASE("B4-vis-2: CKIR deferred attribute shade (DAIS) DISPATCHES on DX12 == CPU oracle bit-exact",
+          "[dx12][compute][gpu][kernel][visbuffer][dais]")
+{
+    namespace kir = crd::kir;
+    namespace vb  = crd::kir::visbuffer;
+    crd::memory::TlsfAllocator alloc(16U << 20U);
+    g::Dx12ComputeContext      ctx(&alloc);
+    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+
+    const crd::kir_test::DaisScene   scene = crd::kir_test::make_dais_scene();
+    crd::containers::Array<crd::u32> vis(&alloc);
+    crd::kir_test::dais_make_vis(scene, alloc, vis); // CPU rasterize the perspective triangle → visibility keys
+
+    kir::KGraph       dg(&alloc);
+    const kir::KEntry de = vb::build_deferred_attr_shade(dg, scene.shade_cfg);
+    kir::GlslKernel   kern(&alloc);
+    REQUIRE(kir::emit_compute_kernel_hlsl(dg, de, &alloc, kern));
+    auto pipe = ctx.create_pipeline_from_hlsl(crd::containers::to_view(kern.source), 5, 0U); // 5 UAV bindings, no push
+    REQUIRE(pipe != nullptr);
+
+    crd::containers::Array<float> shade_cpu(&alloc);
+    crd::containers::Array<float> shade_gpu(&alloc);
+    crd::kir_test::dais_oracle(dg, de, scene, vis, alloc, shade_cpu);
+    crd::kir_test::dispatch_dais(ctx, *pipe, scene, vis, shade_gpu);
+
+    const crd::u32 w    = scene.shade_cfg.width;
+    const int      npix = static_cast<int>(w * scene.shade_cfg.height);
+    // The VISIBILITY is bit-exact (B4-vis-1); the deferred SHADE has one data-dependent GPU divide (num/denom) which f32
+    // hardware does not correctly-round (Vulkan/DX12 ~2.5 ULP), so the reconstruction matches the oracle to a TIGHT ULP
+    // tolerance, not bit-for-bit — the same status as the ocean spectrum's transcendentals. All other ops are exact mul/add.
+    const auto absf = [](float v) { return v < 0.0F ? -v : v; };
+    float      max_rel = 0.0F;
+    for (int i = 0; i < npix; ++i)
+    {
+        const float gp  = shade_gpu[static_cast<crd::usize>(i)];
+        const float cp  = shade_cpu[static_cast<crd::usize>(i)];
+        const float acp = absf(cp) > 1.0e-6F ? absf(cp) : 1.0e-6F;
+        const float rel = absf(gp - cp) / acp;
+        if (rel > max_rel) { max_rel = rel; }
+    }
+    WARN("[DAIS dx12] max relative error (GPU vs oracle) = " << max_rel);
+    CHECK(max_rel < 1.0e-6F); // ≈ a few f32 ULP — the single perspective-normalize divide's hardware imprecision
+
+    int covered  = 0;
+    int outrange = 0;
+    for (int i = 0; i < npix; ++i)
+    {
+        const float v = shade_gpu[static_cast<crd::usize>(i)];
+        if (v != 0.0F)
+        {
+            ++covered;
+            if (v < 1.9F || v > 32.1F) { ++outrange; } // a covered pixel is a convex blend of the {2,8,32} attributes
+        }
+    }
+    CHECK(covered > 100);  // the perspective triangle rasterized + shaded a good fraction of the 32x32
+    CHECK(outrange == 0);  // every covered pixel is within [min,max] attribute — a valid partition-of-unity blend
+    CHECK(shade_gpu[2U * w + 2U] == 0.0F); // outside the triangle → the pre-cleared background
+    const float centre = shade_gpu[13U * w + 16U]; // ≈ the screen centroid (equal screen barycentrics)
+    CHECK(centre > 5.0F);
+    CHECK(centre < 11.0F); // perspective-correct (~8), decisively below the naive average (14) — the /w correction is active
+}
+
+// B4-vis-3: the HZB two-pass OCCLUSION CULL DISPATCHES on DX12 == CPU oracle bit-exact. Builds a max-depth mip pyramid (one
+// downsample dispatch per level) then tests cluster AABBs against it. MAX + compare are order-independent ⇒ bit-exact. Proves
+// the GPU-driven culling that makes a Nanite pipeline scale: a cluster behind the near wall is culled; open / in-front stay.
+TEST_CASE("B4-vis-3: CKIR HZB two-pass occlusion cull DISPATCHES on DX12 == CPU oracle bit-exact",
+          "[dx12][compute][gpu][kernel][visbuffer][hzb]")
+{
+    namespace kir = crd::kir;
+    crd::memory::TlsfAllocator alloc(16U << 20U);
+    g::Dx12ComputeContext      ctx(&alloc);
+    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+
+    const crd::kir_test::HzbScene scene = crd::kir_test::make_hzb_scene();
+    bool                          emit_ok = true;
+    const auto make_pipe = [&](const kir::KGraph& gr, const kir::KEntry& en, int nbufs) {
+        kir::GlslKernel kern(&alloc);
+        if (!kir::emit_compute_kernel_hlsl(gr, en, &alloc, kern)) { emit_ok = false; }
+        return ctx.create_pipeline_from_hlsl(crd::containers::to_view(kern.source), nbufs, 0U);
+    };
+    crd::containers::Array<crd::u32> vis_cpu(&alloc);
+    crd::containers::Array<crd::u32> vis_gpu(&alloc);
+    crd::kir_test::hzb_cull_oracle(scene, alloc, vis_cpu);
+    crd::kir_test::hzb_cull_dispatch(ctx, make_pipe, scene, alloc, vis_gpu);
+    REQUIRE(emit_ok); // every HZB / cull kernel lowered to DXIL
+
+    for (int c = 0; c < crd::kir_test::HzbScene::n_clusters; ++c)
+    {
+        CHECK(vis_gpu[static_cast<crd::usize>(c)] == vis_cpu[static_cast<crd::usize>(c)]);       // BIT-EXACT vs oracle
+        CHECK(vis_gpu[static_cast<crd::usize>(c)] == scene.expected[static_cast<crd::usize>(c)]); // analytic: cull=0, visible=1
+    }
 }
 
 TEST_CASE("B-cmp Phase 1: CKIR radix-2 Stockham FFT DISPATCHES on DX12 == CPU oracle bit-exact",

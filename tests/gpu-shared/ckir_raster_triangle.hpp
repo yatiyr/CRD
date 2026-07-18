@@ -122,8 +122,98 @@ inline void build_task_amplify(crd::kir::KGraph& g, crd::kir::KEntry& te, crd::u
     const auto sh      = kir::make_shape({1});
     te.stage           = kir::KStage::Task;
     te.local_size[0]   = 1;
-    te.task_emit       = g.constant(static_cast<double>(n), sh, kir::DType::U32);           // launch n mesh workgroups
-    te.task_payload    = g.constant(static_cast<double>(payload_val), sh, kir::DType::U32); // the payload (mesh reads it)
+    te.task_emit       = g.constant(static_cast<double>(n), sh, kir::DType::U32);              // launch n mesh workgroups
+    te.task_payload[0] = g.constant(static_cast<double>(payload_val), sh, kir::DType::U32);    // one payload field (mesh reads v0)
+    te.n_task_payload  = 1;
+}
+
+// B4: a TASK that passes a 3-FIELD payload (v0,v1,v2 = distinct uints) — the richer meshlet channel (a real amplification pass
+// hands the mesh bounds / LOD / material, not one uint). Pairs with build_mesh_amplified_rgb.
+inline void build_task_amplify_rgb(crd::kir::KGraph& g, crd::kir::KEntry& te, crd::u32 n, crd::u32 r, crd::u32 gr, crd::u32 b)
+{
+    namespace kir      = crd::kir;
+    const auto sh      = kir::make_shape({1});
+    const auto cu      = [&](crd::u32 v) { return g.constant(static_cast<double>(v), sh, kir::DType::U32); };
+    te.stage           = kir::KStage::Task;
+    te.local_size[0]   = 1;
+    te.task_emit       = cu(n);
+    te.task_payload[0] = cu(r);  // field 0 → red
+    te.task_payload[1] = cu(gr); // field 1 → green
+    te.task_payload[2] = cu(b);  // field 2 → blue
+    te.n_task_payload  = 3;
+}
+
+// B4: a MESH that reads the 3-FIELD payload (TaskPayload / TaskPayload1 / TaskPayload2 → v0,v1,v2) and colours ONE triangle by
+// (v0,v1,v2)/255 as an RGB interpolant — the literal proof the multi-field task→mesh channel flows all three fields. Pairs
+// with build_task_amplify_rgb + build_amplify_rgb_fs.
+inline void build_mesh_amplified_rgb(crd::kir::KGraph& g, crd::kir::KEntry& me)
+{
+    namespace kir  = crd::kir;
+    const auto sh  = kir::make_shape({1});
+    const auto f   = [&](double v) { return g.constant(v, sh, kir::DType::F32); };
+    const int  tid = g.cast(g.builtin(kir::KBuiltin::LocalInvocationIndex), kir::DType::I32); // 0..2 = local vertex
+    const int  pr  = g.cast(g.builtin(kir::KBuiltin::TaskPayload), kir::DType::F32);           // payload v0 → red
+    const int  pg  = g.cast(g.builtin(kir::KBuiltin::TaskPayload1), kir::DType::F32);          // payload v1 → green
+    const int  pb  = g.cast(g.builtin(kir::KBuiltin::TaskPayload2), kir::DType::F32);          // payload v2 → blue
+    const int  eq0 = g.binary(kir::KOp::CmpEq, tid, g.constant(0.0, sh, kir::DType::I32));
+    const int  eq1 = g.binary(kir::KOp::CmpEq, tid, g.constant(1.0, sh, kir::DType::I32));
+    const int  x   = g.select(eq0, f(0.0), g.select(eq1, f(0.7), f(-0.7)));  // a big centred triangle
+    const int  y   = g.select(eq0, f(0.7), f(-0.7));
+    const int  inv = f(1.0 / 255.0);
+    const int  u0  = g.constant(0.0, sh, kir::DType::U32);
+    const int  u1  = g.constant(1.0, sh, kir::DType::U32);
+    const int  u2  = g.constant(2.0, sh, kir::DType::U32);
+    me.stage           = kir::KStage::Mesh;
+    me.position        = g.vec4(x, y, f(0.0), f(1.0));
+    me.mesh_vertices   = 3;
+    me.mesh_primitives = 1;
+    me.mesh_prim       = g.vec3(u0, u1, u2);
+    me.n_out           = 3; // three scalar interpolants, one per payload field — proves all three fields flow independently
+    me.out[0]          = {g.binary(kir::KOp::Mul, pr, inv), 0, kir::Interp::Smooth}; // v0/255 → red
+    me.out[1]          = {g.binary(kir::KOp::Mul, pg, inv), 1, kir::Interp::Smooth}; // v1/255 → green
+    me.out[2]          = {g.binary(kir::KOp::Mul, pb, inv), 2, kir::Interp::Smooth}; // v2/255 → blue
+}
+
+// B4: a plain MESH (no task/payload) where workgroup w renders ONE red triangle at x = -0.8 + w*0.2 — so dispatching K mesh
+// workgroups tiles K triangles left→right. Used by the GPU-driven indirect dispatch: the compute cull decides K, and only K
+// triangles appear. Pairs with build_amplify_fs (a scalar interpolant → red). Up to ~8 workgroups fit across the viewport.
+inline void build_mesh_grid_tri(crd::kir::KGraph& g, crd::kir::KEntry& me)
+{
+    namespace kir  = crd::kir;
+    const auto sh  = kir::make_shape({1});
+    const auto f   = [&](double v) { return g.constant(v, sh, kir::DType::F32); };
+    const int  tid = g.cast(g.builtin(kir::KBuiltin::LocalInvocationIndex), kir::DType::I32); // 0..2 = local vertex
+    const int  wg  = g.cast(g.builtin(kir::KBuiltin::WorkgroupIndex), kir::DType::F32);        // 0..K-1 = which meshlet
+    const int  xc  = g.binary(kir::KOp::Add, f(-0.8), g.binary(kir::KOp::Mul, wg, f(0.2)));    // per-workgroup x centre
+    const int  eq0 = g.binary(kir::KOp::CmpEq, tid, g.constant(0.0, sh, kir::DType::I32));
+    const int  eq1 = g.binary(kir::KOp::CmpEq, tid, g.constant(1.0, sh, kir::DType::I32));
+    const int  ox  = g.select(eq0, f(0.0), g.select(eq1, f(0.08), f(-0.08)));
+    const int  oy  = g.select(eq0, f(0.6), f(-0.6));
+    const int  x   = g.binary(kir::KOp::Add, xc, ox);
+    const int  u0  = g.constant(0.0, sh, kir::DType::U32);
+    const int  u1  = g.constant(1.0, sh, kir::DType::U32);
+    const int  u2  = g.constant(2.0, sh, kir::DType::U32);
+    me.stage           = kir::KStage::Mesh;
+    me.position        = g.vec4(x, oy, f(0.0), f(1.0));
+    me.mesh_vertices   = 3;
+    me.mesh_primitives = 1;
+    me.mesh_prim       = g.vec3(u0, u1, u2);
+    me.n_out           = 1;
+    me.out[0]          = {f(1.0), 0, kir::Interp::Smooth}; // constant red intensity → the FS red channel
+}
+
+// B4: FRAGMENT for the multi-field payload proof — colour = (v0,v1,v2)/255 from the three mesh scalar interpolants.
+inline void build_amplify_rgb_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe)
+{
+    namespace kir = crd::kir;
+    const auto sh = kir::make_shape({1});
+    const int  r  = g.stage_in(kir::KType::make_scalar(kir::DType::F32), 0, kir::Interp::Smooth); // v0/255
+    const int  gr = g.stage_in(kir::KType::make_scalar(kir::DType::F32), 1, kir::Interp::Smooth); // v1/255
+    const int  b  = g.stage_in(kir::KType::make_scalar(kir::DType::F32), 2, kir::Interp::Smooth); // v2/255
+    const int  o  = g.constant(1.0, sh, kir::DType::F32);
+    fe.stage      = kir::KStage::Fragment;
+    fe.n_out      = 1;
+    fe.out[0]     = {g.vec4(r, gr, b, o), 0};
 }
 
 // B4 MESH entry driven by a TASK: each MESH workgroup emits ONE triangle at x = -0.7 + WorkgroupIndex·0.45 (so N task-amplified
@@ -169,6 +259,81 @@ inline void build_amplify_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe)
     fe.stage      = kir::KStage::Fragment;
     fe.n_out      = 1;
     fe.out[0]     = {g.vec4(r, z, z, o), 0};
+}
+
+// B4-tess VERTEX: the 4 corners of a quad patch (±0.6 clip), indexed by VertexIndex — the control points a tessellation hull
+// consumes. Drawn as ONE 4-control-point patch (draw_tess, patch_count = 1). Pairs with build_tess_hull + build_tess_domain.
+inline void build_tess_quad_vs(crd::kir::KGraph& g, crd::kir::KEntry& ve)
+{
+    namespace kir  = crd::kir;
+    const auto sh  = kir::make_shape({1});
+    const auto f   = [&](double v) { return g.constant(v, sh, kir::DType::F32); };
+    const int  vid = g.cast(g.builtin(kir::KBuiltin::VertexIndex), kir::DType::I32); // 0..3 = the patch corner
+    const int  e0  = g.binary(kir::KOp::CmpEq, vid, g.constant(0.0, sh, kir::DType::I32));
+    const int  e1  = g.binary(kir::KOp::CmpEq, vid, g.constant(1.0, sh, kir::DType::I32));
+    const int  e2  = g.binary(kir::KOp::CmpEq, vid, g.constant(2.0, sh, kir::DType::I32));
+    const int  x   = g.select(e0, f(-0.6), g.select(e1, f(0.6), g.select(e2, f(0.6), f(-0.6)))); // 0/3 = -x · 1/2 = +x
+    const int  y   = g.select(e0, f(-0.6), g.select(e1, f(-0.6), g.select(e2, f(0.6), f(0.6))));  // 0/1 = -y · 2/3 = +y
+    ve.stage       = kir::KStage::Vertex;
+    ve.position    = g.vec4(x, y, f(0.0), f(1.0));
+    ve.n_out       = 0;
+}
+
+// B4-tess TESS-CONTROL (hull): a 4-control-point quad patch subdivided 8×8 (inner + outer levels = 8). Passthrough control
+// points (the emitter copies them). Pairs with build_tess_quad_vs + build_tess_domain.
+inline void build_tess_hull(crd::kir::KGraph& g, crd::kir::KEntry& te)
+{
+    namespace kir      = crd::kir;
+    const auto sh      = kir::make_shape({1});
+    te.stage           = kir::KStage::TessControl;
+    te.tess_patch_size = 4;
+    te.tess_inner      = g.constant(8.0, sh, kir::DType::F32);
+    te.tess_outer      = g.constant(8.0, sh, kir::DType::F32);
+}
+
+// B4-tess TESS-EVAL (domain): reads TessPatchPosition (the emitter's bilerp of the 4 corners by gl_TessCoord) and EXPANDS the
+// quad ×1.3 — a domain transform that a plain quad can't produce, so a pixel between the base edge (0.6) and the expanded edge
+// (0.78) proves the domain shader ran per generated vertex. Pairs with build_tess_quad_vs + build_tess_hull + build_triangle_fs.
+inline void build_tess_domain(crd::kir::KGraph& g, crd::kir::KEntry& te)
+{
+    namespace kir      = crd::kir;
+    const auto sh      = kir::make_shape({1});
+    const auto f       = [&](double v) { return g.constant(v, sh, kir::DType::F32); };
+    const int  patch   = g.builtin(kir::KBuiltin::TessPatchPosition);   // vec4 bilerp of the patch corners
+    const int  scale   = g.vec4(f(1.3), f(1.3), f(1.0), f(1.0));        // expand xy, keep z/w
+    te.stage           = kir::KStage::TessEval;
+    te.tess_patch_size = 4;
+    te.position        = g.binary(kir::KOp::Mul, patch, scale);
+    te.n_out           = 0;
+}
+
+// B4-vis-4 VERTEX: a FULLSCREEN QUAD (6 vertices → 2 triangles) from VertexIndex — tri 0 (verts 0,1,2) tiles one screen half,
+// tri 1 (verts 3,4,5) the other, so the HW rasterizer covers every pixel and each half carries a distinct gl_PrimitiveID.
+inline void build_visbuffer_vs(crd::kir::KGraph& g, crd::kir::KEntry& ve)
+{
+    namespace kir  = crd::kir;
+    const auto sh  = kir::make_shape({1});
+    const auto f   = [&](double v) { return g.constant(v, sh, kir::DType::F32); };
+    const int  vid = g.cast(g.builtin(kir::KBuiltin::VertexIndex), kir::DType::I32); // 0..5
+    const auto eqi = [&](int v) { return g.binary(kir::KOp::CmpEq, vid, g.constant(static_cast<double>(v), sh, kir::DType::I32)); };
+    // x = +1 for verts {1,2,4}, else -1;  y = +1 for verts {2,4,5}, else -1 — a nested select chain (SROA-safe, no bool ops).
+    const int x = g.select(eqi(1), f(1.0), g.select(eqi(2), f(1.0), g.select(eqi(4), f(1.0), f(-1.0))));
+    const int y = g.select(eqi(2), f(1.0), g.select(eqi(4), f(1.0), g.select(eqi(5), f(1.0), f(-1.0))));
+    ve.stage    = kir::KStage::Vertex;
+    ve.position    = g.vec4(x, y, f(0.5), f(1.0));
+    ve.n_out       = 0;
+}
+
+// B4-vis-4 FRAGMENT: write the VISIBILITY ID = gl_PrimitiveID (KBuiltin::PrimitiveId) as a uint to a R32_UINT target. The HW
+// rasterizer sets the primitive id per covered pixel — the visibility buffer a deferred pass materializes. (A full pipeline
+// packs (instanceId << 16) | primId; instance id would arrive as a flat VS→FS interpolant — here a single instance ⇒ primId.)
+inline void build_visbuffer_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe)
+{
+    namespace kir = crd::kir;
+    const int prim = g.cast(g.builtin(kir::KBuiltin::PrimitiveId), kir::DType::U32); // SV_PrimitiveID / gl_PrimitiveID
+    fe.stage       = kir::KStage::Fragment;
+    fe.n_out       = 1;
+    fe.out[0]      = {prim, 0};
 }
 
 // B1-a FRAGMENT entry: output the screen-space derivatives of `FragCoord.x` as a colour. `FragCoord.x` increases by exactly
@@ -864,6 +1029,31 @@ inline void build_vrs_primitive_vs(crd::kir::KGraph& g, crd::kir::KEntry& ve)
     const auto sh   = kir::make_shape({1});
     // GLSL's gl_PrimitiveShadingRateEXT is `int`, so author the packed rate as I32 (the HLSL emitter casts it to uint).
     ve.shading_rate = g.constant(5.0, sh, kir::DType::I32); // 2×2 = (1<<2)|1
+}
+
+// B4: a MESH shader emitting a fullscreen triangle + a PER-PRIMITIVE 2×2 VRS rate (gl_MeshPrimitivesEXT[].gl_PrimitiveShadingRateEXT
+// / SV_ShadingRate) — the mesh-pipeline analogue of build_vrs_primitive_vs. Drawn with draw_mesh_vrs over build_vrs_ramp_fs; the
+// 2×2 rate coarsens the ramp so each 2×2 block shades once. One workgroup: 3 verts, 1 primitive.
+inline void build_vrs_primitive_mesh(crd::kir::KGraph& g, crd::kir::KEntry& me)
+{
+    namespace kir  = crd::kir;
+    const auto sh  = kir::make_shape({1});
+    const auto f   = [&](double v) { return g.constant(v, sh, kir::DType::F32); };
+    const int  tid = g.cast(g.builtin(kir::KBuiltin::LocalInvocationIndex), kir::DType::I32); // 0..2 = local vertex
+    const int  eq0 = g.binary(kir::KOp::CmpEq, tid, g.constant(0.0, sh, kir::DType::I32));
+    const int  eq1 = g.binary(kir::KOp::CmpEq, tid, g.constant(1.0, sh, kir::DType::I32));
+    const int  x   = g.select(eq0, f(-1.0), g.select(eq1, f(3.0), f(-1.0)));  // fullscreen triangle (covers the viewport)
+    const int  y   = g.select(eq0, f(-1.0), g.select(eq1, f(-1.0), f(3.0)));
+    const int  u0  = g.constant(0.0, sh, kir::DType::U32);
+    const int  u1  = g.constant(1.0, sh, kir::DType::U32);
+    const int  u2  = g.constant(2.0, sh, kir::DType::U32);
+    me.stage           = kir::KStage::Mesh;
+    me.position        = g.vec4(x, y, f(0.0), f(1.0));
+    me.mesh_vertices   = 3;
+    me.mesh_primitives = 1;
+    me.mesh_prim       = g.vec3(u0, u1, u2);
+    me.n_out           = 0;
+    me.shading_rate    = g.constant(5.0, sh, kir::DType::I32); // 2×2 = (1<<2)|1 — the per-primitive rate
 }
 
 // B1-f SMALL TILTED triangle (NDC ±0.35, no interpolants) — the covers-more / inner-coverage substrate. Its non-axis-aligned

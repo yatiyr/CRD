@@ -32,6 +32,8 @@ namespace
     case ShaderStage::Fragment: return L"ps_6_0";
     case ShaderStage::Mesh: return L"ms_6_5"; // B4: Shader Model 6.5 mesh shader
     case ShaderStage::Task: return L"as_6_5"; // B4: SM6.5 amplification shader (DispatchMesh)
+    case ShaderStage::TessControl: return L"hs_6_0"; // B4-tess: hull shader
+    case ShaderStage::TessEval: return L"ds_6_0";    // B4-tess: domain shader
     case ShaderStage::Compute:
     default: return L"cs_6_0";
     }
@@ -51,6 +53,8 @@ namespace
     case crd::kir::KStage::Fragment: out = ShaderStage::Fragment; return true;
     case crd::kir::KStage::Mesh: out = ShaderStage::Mesh; return true; // B4: DX12 mesh device path
     case crd::kir::KStage::Task: out = ShaderStage::Task; return true; // B4: DX12 amplification (task) path
+    case crd::kir::KStage::TessControl: out = ShaderStage::TessControl; return true; // B4-tess: DX12 hull
+    case crd::kir::KStage::TessEval: out = ShaderStage::TessEval; return true;       // B4-tess: DX12 domain
     default: return false;
     }
 }
@@ -133,6 +137,17 @@ public:
             // B4: a task KEntry → SM6.5 amplification HLSL (DispatchMesh + groupshared payload). The task→mesh PSO (AS+MS+PS)
             // lives in the raster context (create_task_mesh_program).
             if (!crd::kir::emit_task_hlsl(graph, entry, m_alloc, kern)) { return nullptr; }
+        }
+        else if (entry.stage == crd::kir::KStage::TessControl)
+        {
+            // B4-tess: a hull KEntry → HLSL hull shader (patch-constant tess factors + passthrough). The VS+HS+DS+PS graphics
+            // PSO + DrawInstanced(PATCH_LIST) live in the raster context (create_tess_program / draw_tess).
+            if (!crd::kir::emit_tesc_hlsl(graph, entry, m_alloc, kern)) { return nullptr; }
+        }
+        else if (entry.stage == crd::kir::KStage::TessEval)
+        {
+            // B4-tess: a domain KEntry → HLSL domain shader (bilerp patch_pos + displacement → SV_Position).
+            if (!crd::kir::emit_tese_hlsl(graph, entry, m_alloc, kern)) { return nullptr; }
         }
         else if (entry.stage == crd::kir::KStage::Compute && entry.is_kernel())
         {
