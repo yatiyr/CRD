@@ -565,6 +565,67 @@ TEST_CASE("D-007 B4: IR-authored MESH-shader triangle draws on Vulkan (CKIR mesh
     CHECK(((corner >> 16U) & 0xFFU) >= 250U); // B high
 }
 
+// D-007 B4: the TASK / AMPLIFICATION path on Vulkan. ONE task workgroup runs EmitMeshTasksEXT(N) to launch N mesh workgroups
+// (GPU-driven amplification) and passes a single-uint PAYLOAD; each mesh workgroup renders one triangle coloured by the payload.
+// Proves both amplification (draw with a TASK-group count of 1 ⇒ N triangles) and the task→mesh payload channel (red == payload).
+TEST_CASE("D-007 B4: Vulkan TASK amplification — 1 task workgroup emits N mesh triangles + payload",
+          "[gpu-context][vulkan][gpu][raster][mesh][task]")
+{
+    namespace kir = crd::kir;
+
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    if (!vk->shader_object() || !vk->mesh_shader()) { WARN("no shader_object/mesh_shader; skipping the task draw"); return; }
+
+    crd::memory::TlsfAllocator alloc(4U << 20U);
+    auto                       raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+
+    constexpr crd::u32 n_tri   = 4U;
+    constexpr crd::u32 payload = 220U;
+    kir::KGraph        tg(&alloc);
+    kir::KEntry        te;
+    crd::gputest::build_task_amplify(tg, te, n_tri, payload);
+    kir::KGraph mg(&alloc);
+    kir::KEntry me;
+    crd::gputest::build_mesh_amplified_tri(mg, me);
+    kir::KGraph fg(&alloc);
+    kir::KEntry fe;
+    crd::gputest::build_amplify_fs(fg, fe);
+
+    auto task = ctx->create_program(tg, te); // CKIR task entry -> GL_EXT_mesh_shader task GLSL -> SPIR-V
+    auto mesh = ctx->create_program(mg, me);
+    auto fs   = ctx->create_program(fg, fe);
+    REQUIRE(task != nullptr);
+    REQUIRE(mesh != nullptr);
+    REQUIRE(fs != nullptr);
+    REQUIRE(task->stage() == gpu::ShaderStage::Task);
+
+    auto program = raster->create_task_mesh_program(*task, *mesh, *fs);
+    REQUIRE(program != nullptr);
+    REQUIRE(program->valid());
+
+    constexpr crd::u32 dim    = 64U;
+    auto               target = raster->create_color_target(dim, dim);
+    REQUIRE(target != nullptr);
+    raster->draw_mesh(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.2F, 1.0F}, 1U); // 1 TASK workgroup ⇒ N mesh triangles
+
+    // The N task-amplified triangles sit at clip x = -0.7 + c·0.45; each is coloured payload/255 (red). All N must be present
+    // (amplification), and the red intensity must be ≈ payload (the task→mesh payload flowed).
+    int lit = 0;
+    for (crd::u32 c = 0; c < n_tri; ++c)
+    {
+        const double   xc = -0.7 + static_cast<double>(c) * 0.45;
+        const crd::u32 sx = static_cast<crd::u32>((xc + 1.0) * 0.5 * static_cast<double>(dim));
+        if ((target->read_pixel(sx, dim / 2U) & 0xFFU) > 180U) { ++lit; } // red ≈ payload(220)
+    }
+    CHECK(lit == static_cast<int>(n_tri)); // all N amplified triangles rendered with the payload colour
+}
+
 TEST_CASE("D-007 B1-a: IR fragment derivatives (dFdx/dFdy of FragCoord.x) draw on Vulkan",
           "[gpu-context][vulkan][gpu][raster][ir]")
 {

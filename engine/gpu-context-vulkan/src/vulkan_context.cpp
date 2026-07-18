@@ -131,6 +131,18 @@ public:
             return create_program(ShaderStage::Mesh, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()));
         }
 
+        // B4: a TASK / AMPLIFICATION shader — emit GL_EXT_mesh_shader task GLSL → SPIR-V → a task shader object. It precedes a
+        // mesh shader (create_task_mesh_program) and drives how many mesh workgroups launch (EmitMeshTasksEXT) + the payload.
+        if (entry.stage == crd::kir::KStage::Task)
+        {
+            if (!crd::kir::entry_valid(graph, entry)) { return nullptr; }
+            crd::kir::GlslKernel kern(a);
+            if (!crd::kir::emit_task_glsl(graph, entry, a, kern)) { return nullptr; }
+            const auto spv = compile_glsl_to_spirv(ShaderStage::Task, crd::containers::to_view(kern.source), "ckir_task", a);
+            if (!spv.ok) { return nullptr; }
+            return create_program(ShaderStage::Task, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()));
+        }
+
         // B-cmp: an imperative COMPUTE KERNEL (workgroup shared memory + barriers + storage buffers), authored in CKIR.
         if (entry.stage == crd::kir::KStage::Compute && entry.is_kernel())
         {

@@ -303,6 +303,16 @@ public:
     // Clear all attachments to `clear`, then draw `program` (a surface material with N colour outputs) into the G-buffer via
     // MRT. Each attachment is host-readable via `IGBufferTarget::read_pixel(attachment, x, y)`. Synchronous.
     virtual void draw_gbuffer(IGBufferTarget& target, IRasterProgram& program, ClearColor clear, crd::u32 vertex_count) = 0;
+
+    // B4: create a TASK→MESH→FRAGMENT program (the amplification path). The task shader runs first, computes how many mesh
+    // workgroups to launch (`EmitMeshTasksEXT` / AS `DispatchMesh`) + a single-uint payload the mesh reads (`KBuiltin::TaskPayload`).
+    // Draw with `draw_mesh` / `draw_mesh_bindless_depth`, passing the TASK-workgroup count as `group_count`. Default (no mesh/task
+    // support) ⇒ nullptr, so the caller falls back to a plain mesh or the vertex-pull path. Appended at END (vtable-stable, D135).
+    [[nodiscard]] virtual std::unique_ptr<IRasterProgram>
+    create_task_mesh_program(IGpuProgram& /*task*/, IGpuProgram& /*mesh*/, IGpuProgram& /*fragment*/)
+    {
+        return nullptr;
+    }
 };
 
 // B5: an opaque deferred G-buffer (see `create_gbuffer_target`). `read_pixel(attachment, x, y)` is valid after a draw.

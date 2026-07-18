@@ -575,6 +575,9 @@ inline bool emit_value_stmt(const KGraph& g, int i, crd::containers::String& s, 
     case KBuiltin::WorkgroupId:          return "gl_WorkGroupID";
     case KBuiltin::GlobalInvocationId:   return "gl_GlobalInvocationID";
     case KBuiltin::NumWorkgroups:        return "gl_NumWorkGroups";
+    case KBuiltin::TaskPayload:          return "mesh_payload.v0"; // B4: the task→mesh payload (mesh stage reads it)
+    case KBuiltin::TessCoord:            return "gl_TessCoord";     // B4-tess: the domain coord in the TessEval stage
+    case KBuiltin::TessPatchPosition:    return "patch_pos";        // B4-tess: emitter-provided bilerp of the patch corners
     default:                      return nullptr;
     }
 }
@@ -1011,6 +1014,89 @@ inline bool emit_stage_glsl(const KGraph& g, const KEntry& entry, crd::memory::I
     return true;
 }
 
+// B4: TASK / AMPLIFICATION emit (GL_EXT_mesh_shader). A task workgroup computes `task_emit` = the MESH-workgroup count to
+// launch (GPU-driven amplification) + an optional single-uint `task_payload`, writes the payload, then `EmitMeshTasksEXT`.
+// The value graphs read the workgroup builtins (WorkgroupId / LocalInvocationIndex / uniforms) via the shared value machinery.
+// No geometry (the mesh emits that). The amplification count is a scalar expression; a loop-bearing task is refused (extend
+// with the mesh emitter's body-scoping if ever needed).
+inline bool emit_task_glsl(const KGraph& g, const KEntry& entry, crd::memory::IAllocator* scratch, GlslKernel& out)
+{
+    using namespace glsl_detail;
+    if (entry.stage != KStage::Task || entry.task_emit < 0) { return false; }
+
+    const int                       n = g.size();
+    crd::containers::Array<crd::u8> reach(scratch);
+    crd::containers::Array<int>     stk(scratch);
+    reach.resize(static_cast<crd::usize>(n), 0);
+    stk.push_back(entry.task_emit);
+    if (entry.task_payload >= 0) { stk.push_back(entry.task_payload); }
+    while (stk.size() > 0)
+    {
+        const int i = stk[stk.size() - 1];
+        stk.resize(stk.size() - 1);
+        if (i < 0 || reach[static_cast<crd::usize>(i)]) { continue; }
+        reach[static_cast<crd::usize>(i)] = 1;
+        const KNode& nd = g.node(i);
+        if (nd.a >= 0) { stk.push_back(nd.a); }
+        if (nd.b >= 0) { stk.push_back(nd.b); }
+        if (nd.c >= 0) { stk.push_back(nd.c); }
+        if (nd.d >= 0) { stk.push_back(nd.d); }
+        for (int e = 0; e < static_cast<int>(nd.n_ext); ++e) { stk.push_back(g.ext_operand(nd, e)); }
+    }
+
+    crd::containers::String& s = out.source;
+    s.clear();
+    s.append("#version 460\n#extension GL_EXT_mesh_shader : require\n");
+    const crd::u32 ls = entry.local_size[0] > 0U ? entry.local_size[0] : 1U;
+    s.append("layout(local_size_x = "); app_uint(s, ls); s.append(") in;\n");
+    for (int i = 0; i < n; ++i) // uniform blocks (a task may read uniforms to compute the count)
+    {
+        if (!reach[static_cast<crd::usize>(i)] || g.node(i).op != KOp::UniformBlock) { continue; }
+        const KNode& nd  = g.node(i);
+        const int    sid = nd.type.struct_id;
+        s.append("layout(set = "); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append(", binding = "); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(", std140) uniform U_"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(" {\n");
+        const int fc = g.struct_field_count(sid);
+        for (int f = 0; f < fc; ++f) { s.append("  "); s.append(vtype(g.struct_field(sid, f))); s.append(" f"); app_uint(s, static_cast<crd::u32>(f)); s.append(";\n"); }
+        s.append("} ubo_"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(";\n");
+    }
+    if (entry.task_payload >= 0) { s.append("struct TaskPayload { uint v0; };\ntaskPayloadSharedEXT TaskPayload mesh_payload;\n"); }
+
+    s.append("void main() {\n");
+    const auto task_leaf = [&](const KGraph& gg, int li, crd::containers::String& ss) -> bool
+    {
+        const KNode& lnd = gg.node(li);
+        if (lnd.op == KOp::UniformBlock) { return true; }
+        if (lnd.op == KOp::Builtin)
+        {
+            const KBuiltin bi = static_cast<KBuiltin>(lnd.iidx);
+            const char*    bn = glsl_vsfs_builtin_name(bi);
+            if (bn == nullptr) { return false; }
+            emit_stmt_prefix(gg, li, ss); ss.append(bn); ss.append(";\n");
+            return true;
+        }
+        if (lnd.op == KOp::FieldGet)
+        {
+            const KNode& agg = gg.node(lnd.a);
+            if (agg.op != KOp::UniformBlock) { return false; }
+            emit_stmt_prefix(gg, li, ss); ss.append("ubo_"); app_uint(ss, static_cast<crd::u32>(agg.dset)); ss.append("_"); app_uint(ss, static_cast<crd::u32>(agg.iidx)); ss.append(".f"); app_uint(ss, static_cast<crd::u32>(lnd.iidx)); ss.append(";\n");
+            return true;
+        }
+        return false;
+    };
+    for (int i = 0; i < n; ++i)
+    {
+        if (!reach[static_cast<crd::usize>(i)]) { continue; }
+        if (g.node(i).op == KOp::For) { return false; } // a task's amplification count is a scalar expr — no loops
+        if (!emit_value_stmt(g, i, s, task_leaf)) { return false; }
+    }
+    if (entry.task_payload >= 0)
+    {
+        s.append("  mesh_payload.v0 = t"); app_uint(s, static_cast<crd::u32>(entry.task_payload)); s.append(";\n");
+    }
+    s.append("  EmitMeshTasksEXT(t"); app_uint(s, static_cast<crd::u32>(entry.task_emit)); s.append(", 1u, 1u);\n}\n");
+    return true;
+}
+
 // B4: MESH-shader emit (GL_EXT_mesh_shader). One workgroup emits up to mesh_vertices verts + mesh_primitives triangles; thread
 // tid writes vertex tid (position + per-vertex out arrays) and primitive tid (mesh_prim → the local triangle indices), each
 // guarded by its count. The per-vertex value graph reads the workgroup builtins (a global vertex id built from WorkgroupIndex +
@@ -1096,6 +1182,15 @@ inline bool emit_mesh_glsl(const KGraph& g, const KEntry& entry, crd::memory::IA
         for (int f = 0; f < fc; ++f) { s.append("  "); s.append(vtype(g.struct_field(sid, f))); s.append(" f"); app_uint(s, static_cast<crd::u32>(f)); s.append(";\n"); }
         s.append("} ubo_"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(";\n");
     }
+    for (int i = 0; i < n; ++i) // B4: declare the task→mesh payload iff this mesh reads KBuiltin::TaskPayload (mesh_payload.v0)
+    {
+        if (reach[static_cast<crd::usize>(i)] && g.node(i).op == KOp::Builtin
+            && static_cast<KBuiltin>(g.node(i).iidx) == KBuiltin::TaskPayload)
+        {
+            s.append("struct TaskPayload { uint v0; };\ntaskPayloadSharedEXT TaskPayload mesh_payload;\n");
+            break;
+        }
+    }
 
     s.append("void main() {\n");
     s.append("  SetMeshOutputsEXT("); app_uint(s, n_verts); s.append("u, "); app_uint(s, n_prims); s.append("u);\n");
@@ -1161,6 +1256,162 @@ inline bool emit_mesh_glsl(const KGraph& g, const KEntry& entry, crd::memory::IA
     s.append("  if (gl_LocalInvocationIndex < "); app_uint(s, n_prims); s.append("u) {\n");
     s.append("    gl_PrimitiveTriangleIndicesEXT[gl_LocalInvocationIndex] = t"); app_uint(s, static_cast<crd::u32>(entry.mesh_prim)); s.append(";\n");
     s.append("  }\n}\n");
+    return true;
+}
+
+// B4-tess: TESS-CONTROL (hull) emit — a passthrough quad-patch hull. Copies each control point (gl_in→gl_out) and sets the
+// inner/outer tess levels from `tess_inner`/`tess_outer` (float value graphs, computed once by invocation 0). The VS output
+// feeds gl_in; the TessEval stage does the domain eval. No StageIn / geometry of its own.
+inline bool emit_tesc_glsl(const KGraph& g, const KEntry& entry, crd::memory::IAllocator* scratch, GlslKernel& out)
+{
+    using namespace glsl_detail;
+    if (entry.stage != KStage::TessControl || entry.tess_patch_size == 0U || entry.tess_inner < 0 || entry.tess_outer < 0)
+    {
+        return false;
+    }
+    const int                       n = g.size();
+    crd::containers::Array<crd::u8> reach(scratch);
+    crd::containers::Array<int>     stk(scratch);
+    reach.resize(static_cast<crd::usize>(n), 0);
+    stk.push_back(entry.tess_inner);
+    stk.push_back(entry.tess_outer);
+    while (stk.size() > 0)
+    {
+        const int i = stk[stk.size() - 1];
+        stk.resize(stk.size() - 1);
+        if (i < 0 || reach[static_cast<crd::usize>(i)]) { continue; }
+        reach[static_cast<crd::usize>(i)] = 1;
+        const KNode& nd = g.node(i);
+        if (nd.a >= 0) { stk.push_back(nd.a); }
+        if (nd.b >= 0) { stk.push_back(nd.b); }
+        if (nd.c >= 0) { stk.push_back(nd.c); }
+        if (nd.d >= 0) { stk.push_back(nd.d); }
+        for (int e = 0; e < static_cast<int>(nd.n_ext); ++e) { stk.push_back(g.ext_operand(nd, e)); }
+    }
+
+    crd::containers::String& s = out.source;
+    s.clear();
+    s.append("#version 460\nlayout(vertices = "); app_uint(s, entry.tess_patch_size); s.append(") out;\n");
+    s.append("void main() {\n");
+    s.append("  gl_out[gl_InvocationID].gl_Position = gl_in[gl_InvocationID].gl_Position;\n"); // passthrough control points
+    const auto leaf = [&](const KGraph& gg, int li, crd::containers::String& ss) -> bool
+    {
+        const KNode& lnd = gg.node(li);
+        if (lnd.op == KOp::Builtin)
+        {
+            const char* bn = glsl_vsfs_builtin_name(static_cast<KBuiltin>(lnd.iidx));
+            if (bn == nullptr) { return false; }
+            emit_stmt_prefix(gg, li, ss); ss.append(bn); ss.append(";\n");
+            return true;
+        }
+        return false;
+    };
+    for (int i = 0; i < n; ++i)
+    {
+        if (!reach[static_cast<crd::usize>(i)]) { continue; }
+        if (g.node(i).op == KOp::For) { return false; }
+        if (!emit_value_stmt(g, i, s, leaf)) { return false; }
+    }
+    s.append("  if (gl_InvocationID == 0) {\n");
+    s.append("    gl_TessLevelInner[0] = t"); app_uint(s, static_cast<crd::u32>(entry.tess_inner)); s.append("; gl_TessLevelInner[1] = t"); app_uint(s, static_cast<crd::u32>(entry.tess_inner)); s.append(";\n");
+    s.append("    gl_TessLevelOuter[0] = t"); app_uint(s, static_cast<crd::u32>(entry.tess_outer)); s.append("; gl_TessLevelOuter[1] = t"); app_uint(s, static_cast<crd::u32>(entry.tess_outer)); s.append(";\n");
+    s.append("    gl_TessLevelOuter[2] = t"); app_uint(s, static_cast<crd::u32>(entry.tess_outer)); s.append("; gl_TessLevelOuter[3] = t"); app_uint(s, static_cast<crd::u32>(entry.tess_outer)); s.append(";\n");
+    s.append("  }\n}\n");
+    return true;
+}
+
+// B4-tess: TESS-EVAL (domain) emit — a quad domain. The emitter provides `patch_pos` = the bilinear interpolation of the 4
+// control-point positions by gl_TessCoord.xy (KBuiltin::TessPatchPosition); the value graph adds a displacement (reading
+// TessCoord + uniforms) and writes the clip `position` + `out[]` interpolants. The portable heightfield / ocean grid path.
+inline bool emit_tese_glsl(const KGraph& g, const KEntry& entry, crd::memory::IAllocator* scratch, GlslKernel& out)
+{
+    using namespace glsl_detail;
+    if (entry.stage != KStage::TessEval || entry.tess_patch_size == 0U || entry.position < 0) { return false; }
+
+    const int                       n = g.size();
+    crd::containers::Array<crd::u8> reach(scratch);
+    crd::containers::Array<int>     stk(scratch);
+    reach.resize(static_cast<crd::usize>(n), 0);
+    const auto push_root = [&](int r) { if (r >= 0) { stk.push_back(r); } };
+    push_root(entry.position);
+    for (int k = 0; k < entry.n_out; ++k) { push_root(entry.out[k].node); }
+    bool needs_patch = false;
+    while (stk.size() > 0)
+    {
+        const int i = stk[stk.size() - 1];
+        stk.resize(stk.size() - 1);
+        if (i < 0 || reach[static_cast<crd::usize>(i)]) { continue; }
+        reach[static_cast<crd::usize>(i)] = 1;
+        const KNode& nd = g.node(i);
+        if (nd.op == KOp::Builtin && static_cast<KBuiltin>(nd.iidx) == KBuiltin::TessPatchPosition) { needs_patch = true; }
+        if (nd.a >= 0) { stk.push_back(nd.a); }
+        if (nd.b >= 0) { stk.push_back(nd.b); }
+        if (nd.c >= 0) { stk.push_back(nd.c); }
+        if (nd.d >= 0) { stk.push_back(nd.d); }
+        for (int e = 0; e < static_cast<int>(nd.n_ext); ++e) { stk.push_back(g.ext_operand(nd, e)); }
+    }
+
+    crd::containers::String& s = out.source;
+    s.clear();
+    s.append("#version 460\nlayout(quads, equal_spacing, ccw) in;\n");
+    for (int k = 0; k < entry.n_out; ++k) // per-vertex interpolants to the FS
+    {
+        const int nid = entry.out[k].node;
+        if (nid < 0) { continue; }
+        s.append("layout(location = "); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append(") ");
+        s.append(glsl_interp(entry.out[k].interp)); s.append("out "); s.append(vtype(g.node(nid).type)); s.append(" o_"); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append(";\n");
+    }
+    for (int i = 0; i < n; ++i) // uniform blocks (a displacement may read a uniform amplitude/time)
+    {
+        if (!reach[static_cast<crd::usize>(i)] || g.node(i).op != KOp::UniformBlock) { continue; }
+        const KNode& nd  = g.node(i);
+        const int    sid = nd.type.struct_id;
+        s.append("layout(set = "); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append(", binding = "); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(", std140) uniform U_"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(" {\n");
+        const int fc = g.struct_field_count(sid);
+        for (int f = 0; f < fc; ++f) { s.append("  "); s.append(vtype(g.struct_field(sid, f))); s.append(" f"); app_uint(s, static_cast<crd::u32>(f)); s.append(";\n"); }
+        s.append("} ubo_"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(";\n");
+    }
+
+    s.append("void main() {\n");
+    if (needs_patch)
+    {
+        s.append("  vec4 patch_pos = mix(mix(gl_in[0].gl_Position, gl_in[1].gl_Position, gl_TessCoord.x), "
+                 "mix(gl_in[3].gl_Position, gl_in[2].gl_Position, gl_TessCoord.x), gl_TessCoord.y);\n");
+    }
+    const auto tese_leaf = [&](const KGraph& gg, int li, crd::containers::String& ss) -> bool
+    {
+        const KNode& lnd = gg.node(li);
+        if (lnd.op == KOp::UniformBlock) { return true; }
+        if (lnd.op == KOp::Builtin)
+        {
+            const char* bn = glsl_vsfs_builtin_name(static_cast<KBuiltin>(lnd.iidx)); // TessCoord / TessPatchPosition handled
+            if (bn == nullptr) { return false; }
+            emit_stmt_prefix(gg, li, ss); ss.append(bn); ss.append(";\n");
+            return true;
+        }
+        if (lnd.op == KOp::FieldGet)
+        {
+            const KNode& agg = gg.node(lnd.a);
+            if (agg.op != KOp::UniformBlock) { return false; }
+            emit_stmt_prefix(gg, li, ss); ss.append("ubo_"); app_uint(ss, static_cast<crd::u32>(agg.dset)); ss.append("_"); app_uint(ss, static_cast<crd::u32>(agg.iidx)); ss.append(".f"); app_uint(ss, static_cast<crd::u32>(lnd.iidx)); ss.append(";\n");
+            return true;
+        }
+        return false;
+    };
+    for (int i = 0; i < n; ++i)
+    {
+        if (!reach[static_cast<crd::usize>(i)]) { continue; }
+        if (g.node(i).op == KOp::For) { return false; }
+        if (!emit_value_stmt(g, i, s, tese_leaf)) { return false; }
+    }
+    s.append("  gl_Position = t"); app_uint(s, static_cast<crd::u32>(entry.position)); s.append(";\n");
+    for (int k = 0; k < entry.n_out; ++k)
+    {
+        const int nid = entry.out[k].node;
+        if (nid < 0) { continue; }
+        s.append("  o_"); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append(" = t"); app_uint(s, static_cast<crd::u32>(nid)); s.append(";\n");
+    }
+    s.append("}\n");
     return true;
 }
 

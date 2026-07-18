@@ -31,6 +31,7 @@ namespace
     case ShaderStage::Vertex: return L"vs_6_0";
     case ShaderStage::Fragment: return L"ps_6_0";
     case ShaderStage::Mesh: return L"ms_6_5"; // B4: Shader Model 6.5 mesh shader
+    case ShaderStage::Task: return L"as_6_5"; // B4: SM6.5 amplification shader (DispatchMesh)
     case ShaderStage::Compute:
     default: return L"cs_6_0";
     }
@@ -49,6 +50,7 @@ namespace
     case crd::kir::KStage::Vertex: out = ShaderStage::Vertex; return true;
     case crd::kir::KStage::Fragment: out = ShaderStage::Fragment; return true;
     case crd::kir::KStage::Mesh: out = ShaderStage::Mesh; return true; // B4: DX12 mesh device path
+    case crd::kir::KStage::Task: out = ShaderStage::Task; return true; // B4: DX12 amplification (task) path
     default: return false;
     }
 }
@@ -125,6 +127,12 @@ public:
             // non-Vertex/Fragment, so the mesh branch must precede it; the device mesh PSO + DispatchMesh live in the raster
             // context (create_mesh_program/draw_mesh).
             if (!crd::kir::emit_mesh_hlsl(graph, entry, m_alloc, kern)) { return nullptr; }
+        }
+        else if (entry.stage == crd::kir::KStage::Task)
+        {
+            // B4: a task KEntry → SM6.5 amplification HLSL (DispatchMesh + groupshared payload). The task→mesh PSO (AS+MS+PS)
+            // lives in the raster context (create_task_mesh_program).
+            if (!crd::kir::emit_task_hlsl(graph, entry, m_alloc, kern)) { return nullptr; }
         }
         else if (entry.stage == crd::kir::KStage::Compute && entry.is_kernel())
         {

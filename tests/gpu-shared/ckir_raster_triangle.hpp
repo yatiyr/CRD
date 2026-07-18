@@ -113,6 +113,64 @@ inline void build_triangle_mesh(crd::kir::KGraph& g, crd::kir::KEntry& me)
     me.n_out           = 0;                  // no interpolants — the fragment paints a constant
 }
 
+// B4 TASK / AMPLIFICATION entry: ONE task workgroup emits `n` MESH workgroups (EmitMeshTasksEXT) + a single-uint payload. The
+// literal proof of GPU-driven amplification: draw with a TASK-group count of 1, and N meshlets appear. Pairs with
+// build_mesh_amplified_tri (which reads the payload) + build_amplify_fs.
+inline void build_task_amplify(crd::kir::KGraph& g, crd::kir::KEntry& te, crd::u32 n, crd::u32 payload_val)
+{
+    namespace kir      = crd::kir;
+    const auto sh      = kir::make_shape({1});
+    te.stage           = kir::KStage::Task;
+    te.local_size[0]   = 1;
+    te.task_emit       = g.constant(static_cast<double>(n), sh, kir::DType::U32);           // launch n mesh workgroups
+    te.task_payload    = g.constant(static_cast<double>(payload_val), sh, kir::DType::U32); // the payload (mesh reads it)
+}
+
+// B4 MESH entry driven by a TASK: each MESH workgroup emits ONE triangle at x = -0.7 + WorkgroupIndex·0.45 (so N task-amplified
+// workgroups tile N triangles across the screen), coloured by the TASK PAYLOAD (payload/255 → red interpolant to the FS) — the
+// literal proof that the task→mesh data channel (KBuiltin::TaskPayload) flows. Pairs with build_task_amplify + build_amplify_fs.
+inline void build_mesh_amplified_tri(crd::kir::KGraph& g, crd::kir::KEntry& me)
+{
+    namespace kir  = crd::kir;
+    const auto sh  = kir::make_shape({1});
+    const auto f   = [&](double v) { return g.constant(v, sh, kir::DType::F32); };
+    const int  tid = g.cast(g.builtin(kir::KBuiltin::LocalInvocationIndex), kir::DType::I32); // 0..2 = local vertex
+    const int  wg  = g.cast(g.builtin(kir::KBuiltin::WorkgroupIndex), kir::DType::F32);        // 0..N-1 = which meshlet
+    const int  pay = g.cast(g.builtin(kir::KBuiltin::TaskPayload), kir::DType::F32);           // the task→mesh payload
+    const int  xc  = g.binary(kir::KOp::Add, f(-0.7), g.binary(kir::KOp::Mul, wg, f(0.45)));   // per-workgroup x centre
+    const int  eq0 = g.binary(kir::KOp::CmpEq, tid, g.constant(0.0, sh, kir::DType::I32));
+    const int  eq1 = g.binary(kir::KOp::CmpEq, tid, g.constant(1.0, sh, kir::DType::I32));
+    const int  ox  = g.select(eq0, f(0.0), g.select(eq1, f(0.16), f(-0.16)));                  // triangle x corners
+    const int  oy  = g.select(eq0, f(0.6), f(-0.6));                                           // apex top, base bottom
+    const int  x   = g.binary(kir::KOp::Add, xc, ox);
+    const int  col = g.binary(kir::KOp::Mul, pay, f(1.0 / 255.0)); // payload/255 → red intensity (the payload proof)
+    const int  u0  = g.constant(0.0, sh, kir::DType::U32);
+    const int  u1  = g.constant(1.0, sh, kir::DType::U32);
+    const int  u2  = g.constant(2.0, sh, kir::DType::U32);
+
+    me.stage           = kir::KStage::Mesh;
+    me.position        = g.vec4(x, oy, f(0.0), f(1.0));
+    me.mesh_vertices   = 3;
+    me.mesh_primitives = 1;
+    me.mesh_prim       = g.vec3(u0, u1, u2);
+    me.n_out           = 1;
+    me.out[0]          = {col, 0, kir::Interp::Smooth}; // payload/255 → the FS red channel
+}
+
+// B4 FRAGMENT for the amplification proof: colour = (payload/255, 0, 0, 1) from the mesh interpolant — so the rendered red
+// intensity IS the payload the task passed. Pairs with build_mesh_amplified_tri.
+inline void build_amplify_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe)
+{
+    namespace kir = crd::kir;
+    const auto sh = kir::make_shape({1});
+    const int  r  = g.stage_in(kir::KType::make_scalar(kir::DType::F32), 0, kir::Interp::Smooth); // payload/255
+    const int  z  = g.constant(0.0, sh, kir::DType::F32);
+    const int  o  = g.constant(1.0, sh, kir::DType::F32);
+    fe.stage      = kir::KStage::Fragment;
+    fe.n_out      = 1;
+    fe.out[0]     = {g.vec4(r, z, z, o), 0};
+}
+
 // B1-a FRAGMENT entry: output the screen-space derivatives of `FragCoord.x` as a colour. `FragCoord.x` increases by exactly
 // 1 per pixel horizontally, so `dFdx(FragCoord.x) == 1.0` and `dFdy(FragCoord.x) == 0.0` on EVERY covered pixel and EVERY
 // backend — a deterministic, hardware-independent derivative test. Colour = (dFdx, dFdy, 0, 1) ⇒ centre reads R≈1, G≈0.

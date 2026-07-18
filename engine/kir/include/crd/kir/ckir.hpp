@@ -366,6 +366,12 @@ enum class KBuiltin : crd::u8
     // B-cmp Phase 1: the FLATTENED 1-D workgroup index (gl_WorkGroupID.x / SV_GroupID.x / blockIdx.x) — a scalar uint, so a
     // BATCHED compute kernel (one workgroup per independent problem, e.g. one FFT per grid slot) offsets its global buffers.
     WorkgroupIndex, // uint
+    // B4 task/amplification: the single-uint PAYLOAD a task shader wrote, read in the MESH stage — the GPU-driven data channel
+    // from a task workgroup to the mesh workgroups it launched (glsl `taskPayloadSharedEXT` / HLSL `in payload`).
+    TaskPayload, // uint — read in the MESH stage (the value the preceding Task entry's `task_payload` node computed)
+    // B4-tess: the interpolated patch position in the TESS-EVAL (domain) stage — the emitter bilinearly interpolates the 4
+    // control points by gl_TessCoord.xy, so a TES value graph adds a displacement to it (the portable ocean/heightfield path).
+    TessPatchPosition, // vec4 — read in the TessEval stage (bilerp of the quad patch's 4 corners by TessCoord)
 };
 
 struct KBuiltinInfo
@@ -391,6 +397,8 @@ struct KBuiltinInfo
     case KBuiltin::NumWorkgroups:        return {t_uvec3, stage_mask::kWorkgroup, "NumWorkgroups"};
     case KBuiltin::LocalInvocationIndex: return {t_uint, stage_mask::kWorkgroup, "LocalInvocationIndex"};
     case KBuiltin::WorkgroupIndex:       return {t_uint, stage_mask::kWorkgroup, "WorkgroupIndex"}; // B-cmp: flattened 1-D wg id
+    case KBuiltin::TaskPayload:          return {t_uint, stage_mask::kMesh, "TaskPayload"};          // B4: task→mesh payload (uint)
+    case KBuiltin::TessPatchPosition:    return {KType::vec(DType::F32, 4), stage_mask::kTessEval, "TessPatchPosition"}; // B4-tess
 
     case KBuiltin::VertexIndex:   return {t_int, stage_mask::kVertex, "VertexIndex"};
     case KBuiltin::InstanceIndex: return {t_int, stage_mask::kVertex, "InstanceIndex"};
@@ -578,8 +586,25 @@ struct KEntry
     crd::u32     mesh_vertices      = 0; // max_vertices (0 ⇒ not a mesh entry)
     crd::u32     mesh_primitives    = 0; // max_primitives (triangles)
     int          mesh_prim          = -1; // uvec3 node: primitive `LocalInvocationIndex`'s three LOCAL vertex indices
+    // ── B4 TASK / AMPLIFICATION (stage == Task). A task workgroup computes `task_emit` = the number of MESH workgroups to
+    // launch (GPU-driven amplification: `EmitMeshTasksEXT` / AS `DispatchMesh`) and optionally writes `task_payload` (a single
+    // uint) into the task→mesh PAYLOAD, which the mesh stage reads via `KBuiltin::TaskPayload`. A task emits no geometry (no
+    // position / out / mesh_*). `local_size` sets the task workgroup size. Appended at END (KEntry is cook-serialized).
+    int          task_emit    = -1; // u32 node: the mesh-workgroup count the task emits (>= 0 ⇒ this is a task entry)
+    int          task_payload = -1; // u32 node: the payload value the task writes (optional; < 0 = no payload)
+    // ── B4-tess TESSELLATION (stage == TessControl / TessEval) — the PORTABLE displacement path (mobile / WebGPU / older HW
+    // without mesh shaders). A QUAD patch of `tess_patch_size` control points (4). The TESS-CONTROL (hull) stage passes the
+    // control points through and sets the tess levels from `tess_inner` / `tess_outer` (float nodes); the TESS-EVAL (domain)
+    // stage reads `KBuiltin::TessPatchPosition` (the emitter's bilerp of the 4 corners by gl_TessCoord) + writes the displaced
+    // clip `position` (+ `out[]` interpolants). Appended at END (KEntry is cook-serialized).
+    crd::u32     tess_patch_size = 0; // control points per patch (4 = quad; 0 ⇒ not a tess entry)
+    int          tess_inner      = -1; // TessControl: inner tess level (float node)
+    int          tess_outer      = -1; // TessControl: outer tess level (float node)
     [[nodiscard]] bool is_kernel() const noexcept { return kernel_body_count > 0; }
     [[nodiscard]] bool is_mesh() const noexcept { return stage == KStage::Mesh && mesh_vertices > 0U; }
+    [[nodiscard]] bool is_task() const noexcept { return stage == KStage::Task && task_emit >= 0; }
+    [[nodiscard]] bool is_tess_control() const noexcept { return stage == KStage::TessControl && tess_patch_size > 0U; }
+    [[nodiscard]] bool is_tess_eval() const noexcept { return stage == KStage::TessEval && tess_patch_size > 0U; }
 };
 
 [[nodiscard]] inline bool is_compare(KOp op) noexcept
@@ -1620,6 +1645,41 @@ private:
         if (g.node(e.mesh_prim).type != KType::vec(DType::U32, 3)) { return fail("`mesh_prim` must be a uvec3"); }
     }
     else if (e.mesh_prim >= 0 || e.mesh_vertices > 0U) { return fail("`mesh_*` fields are only for a mesh stage"); }
+
+    // B4: a TASK / amplification entry computes `task_emit` (the mesh-workgroup count it launches) + an optional single-uint
+    // `task_payload`. It emits NO geometry (no position / out / mesh_*), so it renders nothing itself — it drives the mesh.
+    if (e.stage == KStage::Task)
+    {
+        if (!node_ok(e.task_emit)) { return fail("a task entry must set `task_emit` (u32 mesh-workgroup count)"); }
+        if (g.node(e.task_emit).type != KType::make_scalar(DType::U32)) { return fail("`task_emit` must be a uint"); }
+        if (e.task_payload >= 0 && g.node(e.task_payload).type != KType::make_scalar(DType::U32))
+        {
+            return fail("`task_payload` must be a uint");
+        }
+        if (e.position >= 0 || e.n_out > 0) { return fail("a task entry emits no geometry (no position/out)"); }
+    }
+    else if (e.task_emit >= 0 || e.task_payload >= 0) { return fail("`task_*` fields are only for a task stage"); }
+
+    // B4-tess: a TESSELLATION entry. TessControl (hull) sets the tess levels (float `tess_inner`/`tess_outer`) + passes the
+    // control points; TessEval (domain) writes the displaced clip `position` (checked by the position path below).
+    if (e.stage == KStage::TessControl)
+    {
+        if (e.tess_patch_size == 0U) { return fail("a tess-control entry must set tess_patch_size > 0"); }
+        if (!node_ok(e.tess_inner) || !node_ok(e.tess_outer)) { return fail("a tess-control entry needs tess_inner + tess_outer"); }
+        if (g.node(e.tess_inner).type != KType::make_scalar(DType::F32)
+            || g.node(e.tess_outer).type != KType::make_scalar(DType::F32))
+        {
+            return fail("tess levels must be float");
+        }
+    }
+    else if (e.stage == KStage::TessEval)
+    {
+        if (e.tess_patch_size == 0U) { return fail("a tess-eval entry must set tess_patch_size > 0"); }
+    }
+    else if (e.tess_patch_size > 0U || e.tess_inner >= 0 || e.tess_outer >= 0)
+    {
+        return fail("`tess_*` fields are only for a tessellation stage");
+    }
 
     if (e.n_out < 0 || e.n_out > kMaxStageOutputs) { return fail("output count out of range"); }
     for (int i = 0; i < e.n_out; ++i)

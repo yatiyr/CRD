@@ -120,7 +120,8 @@ struct alignas(void*) PsoStreamSub
 // (samples, depth) key. `dsv == DXGI_FORMAT_UNKNOWN` ⇒ the colour-only path.
 ComPtr<ID3D12PipelineState> build_mesh_pso(ID3D12Device2* dev2, ID3D12RootSignature* root, D3D12_SHADER_BYTECODE ms,
                                            D3D12_SHADER_BYTECODE ps, UINT samples, DXGI_FORMAT dsv,
-                                           D3D12_COMPARISON_FUNC depth_func, UINT num_rts = 1)
+                                           D3D12_COMPARISON_FUNC depth_func, UINT num_rts = 1,
+                                           D3D12_SHADER_BYTECODE as = D3D12_SHADER_BYTECODE{}) // B4: AS = the task shader (empty = none)
 {
     if (dev2 == nullptr) { return nullptr; }
     D3D12_RASTERIZER_DESC rast{};
@@ -145,6 +146,7 @@ ComPtr<ID3D12PipelineState> build_mesh_pso(ID3D12Device2* dev2, ID3D12RootSignat
     struct MeshStream
     {
         PsoStreamSub<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_ROOT_SIGNATURE, ID3D12RootSignature*>        root_sig;
+        PsoStreamSub<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_AS, D3D12_SHADER_BYTECODE>                   as_bc; // B4: amplification (empty = none)
         PsoStreamSub<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_MS, D3D12_SHADER_BYTECODE>                   ms_bc;
         PsoStreamSub<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PS, D3D12_SHADER_BYTECODE>                   ps_bc;
         PsoStreamSub<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RASTERIZER, D3D12_RASTERIZER_DESC>           rast;
@@ -155,6 +157,7 @@ ComPtr<ID3D12PipelineState> build_mesh_pso(ID3D12Device2* dev2, ID3D12RootSignat
         PsoStreamSub<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SAMPLE_DESC, DXGI_SAMPLE_DESC>               sample;
     } stream;
     stream.root_sig.value = root;
+    stream.as_bc.value    = as; // B4: the amplification (task) shader — empty D3D12_SHADER_BYTECODE for a plain mesh
     stream.ms_bc.value    = ms;
     stream.ps_bc.value    = ps;
     stream.rast.value     = rast;
@@ -305,9 +308,11 @@ public:
     // carry the MS/PS DXIL and `pso_for` builds a stream PSO via `device2` instead of a graphics PSO.
     Dx12RasterProgram(ID3D12Device* device, ComPtr<ID3D12RootSignature> root, std::unique_ptr<crd::u8[]> vs,
                       crd::usize vs_size, std::unique_ptr<crd::u8[]> fs, crd::usize fs_size,
-                      ComPtr<ID3D12PipelineState> pso1, ID3D12Device2* device2 = nullptr, bool is_mesh = false) noexcept
+                      ComPtr<ID3D12PipelineState> pso1, ID3D12Device2* device2 = nullptr, bool is_mesh = false,
+                      std::unique_ptr<crd::u8[]> as = nullptr, crd::usize as_size = 0) noexcept // B4: AS (task) DXIL
         : m_device(device), m_device2(device2), m_is_mesh(is_mesh), m_root(std::move(root)), m_vs(std::move(vs)),
-          m_vs_size(vs_size), m_fs(std::move(fs)), m_fs_size(fs_size), m_pso1(std::move(pso1))
+          m_vs_size(vs_size), m_fs(std::move(fs)), m_fs_size(fs_size), m_as(std::move(as)), m_as_size(as_size),
+          m_pso1(std::move(pso1))
     {
     }
     ~Dx12RasterProgram() override                           = default;
@@ -335,7 +340,8 @@ public:
         m_cache[m_cache_n].key = key;
         m_cache[m_cache_n].pso =
             m_is_mesh ? build_mesh_pso(m_device2, m_root.Get(), D3D12_SHADER_BYTECODE{m_vs.get(), m_vs_size},
-                                       D3D12_SHADER_BYTECODE{m_fs.get(), m_fs_size}, samples, dsv, depth_func, num_rts)
+                                       D3D12_SHADER_BYTECODE{m_fs.get(), m_fs_size}, samples, dsv, depth_func, num_rts,
+                                       D3D12_SHADER_BYTECODE{m_as.get(), m_as_size}) // B4: AS (task) when present, else empty
                       : build_graphics_pso(m_device, m_root.Get(), D3D12_SHADER_BYTECODE{m_vs.get(), m_vs_size},
                                            D3D12_SHADER_BYTECODE{m_fs.get(), m_fs_size}, samples, dsv, depth_func,
                                            conservative, num_rts);
@@ -357,6 +363,8 @@ private:
     crd::usize                  m_vs_size = 0;
     std::unique_ptr<crd::u8[]>  m_fs;
     crd::usize                  m_fs_size = 0;
+    std::unique_ptr<crd::u8[]>  m_as; // B4: owned AS (task) DXIL copy — empty for a plain mesh program
+    crd::usize                  m_as_size = 0;
     ComPtr<ID3D12PipelineState> m_pso1;                // plain 1×/no-depth PSO (prebuilt; also gates valid())
     PsoCacheEntry               m_cache[kPsoCacheCap]; // lazily-built PSOs for MSAA / depth configs
     int                         m_cache_n = 0;
@@ -1027,6 +1035,68 @@ public:
         return std::make_unique<Dx12RasterProgram>(m_device.Get(), std::move(root), std::move(ms_copy), ms.size(),
                                                    std::move(ps_copy), ps.size(), std::move(pso1), m_device2.Get(),
                                                    /*is_mesh=*/true);
+    }
+
+    // B4: a TASK→MESH→FRAGMENT program (the amplification path). The AS (task) runs first, DispatchMesh-es the mesh workgroups
+    // + a payload; the mesh reads it. Same 4-table root sig as create_mesh_program; the PSO adds the AS subobject. Draw with
+    // draw_mesh(group_count = TASK workgroups). Returns nullptr if the device has no mesh-shader tier.
+    [[nodiscard]] std::unique_ptr<IRasterProgram>
+    create_task_mesh_program(IGpuProgram& task, IGpuProgram& mesh, IGpuProgram& fragment) override
+    {
+        if (!m_ok || !m_mesh_shader || m_device2 == nullptr || task.stage() != ShaderStage::Task
+            || mesh.stage() != ShaderStage::Mesh || fragment.stage() != ShaderStage::Fragment)
+        {
+            return nullptr;
+        }
+        const auto as = static_cast<Dx12GpuProgram&>(task).dxil();
+        const auto ms = static_cast<Dx12GpuProgram&>(mesh).dxil();
+        const auto ps = static_cast<Dx12GpuProgram&>(fragment).dxil();
+
+        // Identical 4-table root sig as create_mesh_program (u0 storage · t1 tex · s2 sampler · t3[N] bindless, tex tables ALL-visible).
+        D3D12_DESCRIPTOR_RANGE uav_range{};
+        uav_range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV; uav_range.NumDescriptors = 1; uav_range.BaseShaderRegister = 0;
+        uav_range.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+        D3D12_DESCRIPTOR_RANGE srv_range{};
+        srv_range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; srv_range.NumDescriptors = 1; srv_range.BaseShaderRegister = 1;
+        srv_range.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+        D3D12_DESCRIPTOR_RANGE samp_range{};
+        samp_range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER; samp_range.NumDescriptors = 1; samp_range.BaseShaderRegister = 2;
+        samp_range.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+        D3D12_DESCRIPTOR_RANGE bindless_range{};
+        bindless_range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; bindless_range.NumDescriptors = kBindlessMax; bindless_range.BaseShaderRegister = 3;
+        bindless_range.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+        D3D12_ROOT_PARAMETER param[4]{};
+        param[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; param[0].DescriptorTable.NumDescriptorRanges = 1; param[0].DescriptorTable.pDescriptorRanges = &uav_range;      param[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+        param[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; param[1].DescriptorTable.NumDescriptorRanges = 1; param[1].DescriptorTable.pDescriptorRanges = &srv_range;      param[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+        param[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; param[2].DescriptorTable.NumDescriptorRanges = 1; param[2].DescriptorTable.pDescriptorRanges = &samp_range;     param[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+        param[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; param[3].DescriptorTable.NumDescriptorRanges = 1; param[3].DescriptorTable.pDescriptorRanges = &bindless_range; param[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+        D3D12_ROOT_SIGNATURE_DESC rsd{};
+        rsd.NumParameters = 4;
+        rsd.pParameters   = param;
+        rsd.Flags         = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+        ComPtr<ID3DBlob> sig;
+        ComPtr<ID3DBlob> err;
+        if (FAILED(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err))) { return nullptr; }
+        ComPtr<ID3D12RootSignature> root;
+        if (FAILED(m_device->CreateRootSignature(0, sig->GetBufferPointer(), sig->GetBufferSize(), IID_PPV_ARGS(&root))))
+        {
+            return nullptr;
+        }
+
+        auto as_copy = std::make_unique<crd::u8[]>(as.size());
+        std::memcpy(as_copy.get(), as.data(), as.size());
+        auto ms_copy = std::make_unique<crd::u8[]>(ms.size());
+        std::memcpy(ms_copy.get(), ms.data(), ms.size());
+        auto ps_copy = std::make_unique<crd::u8[]>(ps.size());
+        std::memcpy(ps_copy.get(), ps.data(), ps.size());
+        ComPtr<ID3D12PipelineState> pso1 =
+            build_mesh_pso(m_device2.Get(), root.Get(), D3D12_SHADER_BYTECODE{ms.data(), ms.size()},
+                           D3D12_SHADER_BYTECODE{ps.data(), ps.size()}, 1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS,
+                           1U, D3D12_SHADER_BYTECODE{as.data(), as.size()});
+        if (pso1 == nullptr) { return nullptr; }
+        return std::make_unique<Dx12RasterProgram>(m_device.Get(), std::move(root), std::move(ms_copy), ms.size(),
+                                                   std::move(ps_copy), ps.size(), std::move(pso1), m_device2.Get(),
+                                                   /*is_mesh=*/true, std::move(as_copy), as.size());
     }
 
     // Clear `target` and DISPATCH `group_count` mesh workgroups (a mesh program). Colour-only (the mesh-triangle proof); the

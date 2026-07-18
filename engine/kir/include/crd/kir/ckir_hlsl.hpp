@@ -849,6 +849,88 @@ inline bool emit_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory::I
 // gl_MeshVerticesEXT). Thread `tid` (SV_GroupIndex) writes vertex tid + primitive tid, guarded by the counts; `gid` (SV_GroupID)
 // is the meshlet index. Reuses the raster value machinery; the workgroup builtins map to tid / gid.x. No StageIn (mesh generates
 // geometry). SV_Position is emitted LAST in VOut (the DXIL register-packing scar — same as VSOut).
+// B4: TASK / AMPLIFICATION emit (Shader Model 6.5 amplification shader). A task workgroup computes `task_emit` = the mesh-
+// workgroup count + an optional single-uint `task_payload`, writes the groupshared payload, then `DispatchMesh(n,1,1,payload)`.
+// The mesh reads the payload via `in payload MeshPayload mp`. Value graphs read the workgroup builtins (SV_GroupID / SV_GroupIndex
+// / cbuffers). No geometry. Amplification count is a scalar expr; a loop-bearing task is refused (extend if ever needed).
+inline bool emit_task_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IAllocator* scratch, GlslKernel& out)
+{
+    using namespace glsl_detail;
+    if (entry.stage != KStage::Task || entry.task_emit < 0) { return false; }
+
+    const int                       n = g.size();
+    crd::containers::Array<crd::u8> reach(scratch);
+    crd::containers::Array<int>     stk(scratch);
+    reach.resize(static_cast<crd::usize>(n), 0);
+    stk.push_back(entry.task_emit);
+    if (entry.task_payload >= 0) { stk.push_back(entry.task_payload); }
+    while (stk.size() > 0)
+    {
+        const int i = stk[stk.size() - 1];
+        stk.resize(stk.size() - 1);
+        if (i < 0 || reach[static_cast<crd::usize>(i)]) { continue; }
+        reach[static_cast<crd::usize>(i)] = 1;
+        const KNode& nd = g.node(i);
+        if (nd.a >= 0) { stk.push_back(nd.a); }
+        if (nd.b >= 0) { stk.push_back(nd.b); }
+        if (nd.c >= 0) { stk.push_back(nd.c); }
+        if (nd.d >= 0) { stk.push_back(nd.d); }
+        for (int e = 0; e < static_cast<int>(nd.n_ext); ++e) { stk.push_back(g.ext_operand(nd, e)); }
+    }
+
+    crd::containers::String& s = out.source;
+    s.clear();
+    for (int i = 0; i < n; ++i) // uniform blocks → cbuffer (a task may read uniforms to compute the count)
+    {
+        if (!reach[static_cast<crd::usize>(i)] || g.node(i).op != KOp::UniformBlock) { continue; }
+        const KNode& nd  = g.node(i);
+        const int    sid = nd.type.struct_id;
+        s.append("cbuffer U_"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(" : register(b"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(", space"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append(") {\n");
+        const int fc = g.struct_field_count(sid);
+        for (int f = 0; f < fc; ++f) { s.append("  "); s.append(htype(g.struct_field(sid, f))); s.append(" u"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append("_f"); app_uint(s, static_cast<crd::u32>(f)); s.append(";\n"); }
+        s.append("};\n");
+    }
+    s.append("struct MeshPayload { uint v0; };\ngroupshared MeshPayload s_payload;\n");
+    const crd::u32 ls = entry.local_size[0] > 0U ? entry.local_size[0] : 1U;
+    s.append("[numthreads("); app_uint(s, ls); s.append(", 1, 1)]\nvoid main(uint tid : SV_GroupIndex, uint3 gid : SV_GroupID) {\n");
+
+    const auto task_leaf = [&](const KGraph& gg, int li, crd::containers::String& ss) -> bool
+    {
+        const KNode& lnd = gg.node(li);
+        if (lnd.op == KOp::UniformBlock) { return true; }
+        if (lnd.op == KOp::Builtin)
+        {
+            const KBuiltin bi = static_cast<KBuiltin>(lnd.iidx);
+            emit_stmt_prefix_hlsl(gg, li, ss);
+            if (bi == KBuiltin::LocalInvocationIndex) { ss.append("tid"); }
+            else if (bi == KBuiltin::WorkgroupIndex) { ss.append("gid.x"); }
+            else { return false; }
+            ss.append(";\n");
+            return true;
+        }
+        if (lnd.op == KOp::FieldGet)
+        {
+            const KNode& agg = gg.node(lnd.a);
+            if (agg.op != KOp::UniformBlock) { return false; }
+            emit_stmt_prefix_hlsl(gg, li, ss); ss.append("u"); app_uint(ss, static_cast<crd::u32>(agg.dset)); ss.append("_"); app_uint(ss, static_cast<crd::u32>(agg.iidx)); ss.append("_f"); app_uint(ss, static_cast<crd::u32>(lnd.iidx)); ss.append(";\n");
+            return true;
+        }
+        return false;
+    };
+    for (int i = 0; i < n; ++i)
+    {
+        if (!reach[static_cast<crd::usize>(i)]) { continue; }
+        if (g.node(i).op == KOp::For) { return false; } // a task's amplification count is a scalar expr — no loops
+        if (!emit_value_stmt_hlsl(g, i, s, task_leaf)) { return false; }
+    }
+    if (entry.task_payload >= 0)
+    {
+        s.append("  s_payload.v0 = t"); app_uint(s, static_cast<crd::u32>(entry.task_payload)); s.append(";\n");
+    }
+    s.append("  DispatchMesh(t"); app_uint(s, static_cast<crd::u32>(entry.task_emit)); s.append(", 1, 1, s_payload);\n}\n");
+    return true;
+}
+
 inline bool emit_mesh_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IAllocator* scratch, GlslKernel& out)
 {
     using namespace glsl_detail;
@@ -922,8 +1004,20 @@ inline bool emit_mesh_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IA
         }
     }
 
+    bool reads_payload = false; // B4: does this mesh read the task→mesh payload (KBuiltin::TaskPayload)?
+    for (int i = 0; i < n; ++i)
+    {
+        if (reach[static_cast<crd::usize>(i)] && g.node(i).op == KOp::Builtin
+            && static_cast<KBuiltin>(g.node(i).iidx) == KBuiltin::TaskPayload)
+        {
+            reads_payload = true;
+            break;
+        }
+    }
+    if (reads_payload) { s.append("struct MeshPayload { uint v0; };\n"); }
     s.append("[outputtopology(\"triangle\")]\n[numthreads("); app_uint(s, local_size); s.append(", 1, 1)]\n");
     s.append("void main(uint tid : SV_GroupIndex, uint3 gid : SV_GroupID,\n");
+    if (reads_payload) { s.append("          in payload MeshPayload mp,\n"); } // B4: the amplification payload input
     s.append("          out vertices VOut verts["); app_uint(s, n_verts); s.append("],\n");
     s.append("          out indices uint3 tris["); app_uint(s, n_prims); s.append("]) {\n");
     s.append("  SetMeshOutputCounts("); app_uint(s, n_verts); s.append("u, "); app_uint(s, n_prims); s.append("u);\n");
@@ -939,6 +1033,7 @@ inline bool emit_mesh_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IA
             emit_stmt_prefix_hlsl(gg, li, ss);
             if (bi == KBuiltin::LocalInvocationIndex) { ss.append("tid"); }
             else if (bi == KBuiltin::WorkgroupIndex) { ss.append("gid.x"); }
+            else if (bi == KBuiltin::TaskPayload) { ss.append("mp.v0"); } // B4: the task→mesh payload (in payload MeshPayload mp)
             else { return false; }
             ss.append(";\n");
             return true;

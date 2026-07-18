@@ -266,6 +266,59 @@ TEST_CASE("D-007 B4: DX12 MESH-shader DispatchMesh renders a triangle (CKIR mesh
     CHECK(((corner >> 16U) & 0xFFU) >= 250U); // B high  => blue clear
 }
 
+// D-007 B4: the DX12 TASK / AMPLIFICATION path — a CKIR Task entry lowers to as_6_5 amplification HLSL → DXIL, an AS+MS+PS
+// stream PSO, and DispatchMesh from the AS launches N mesh workgroups (GPU-driven amplification) + a payload the mesh reads.
+// ONE task workgroup ⇒ N triangles coloured by the payload. Proves amplification + the task→mesh payload channel on DX12.
+TEST_CASE("D-007 B4: DX12 TASK amplification — 1 task workgroup emits N mesh triangles + payload",
+          "[dx12][raster][gpu][ir][mesh][task]")
+{
+    namespace kir = crd::kir;
+
+    auto gctx = g::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    auto raster = g::create_dx12_raster_context();
+    if (raster == nullptr || !raster->valid()) { WARN("no D3D12 raster device; skipping"); return; }
+    crd::memory::TlsfAllocator alloc(4U << 20U);
+
+    constexpr crd::u32 n_tri   = 4U;
+    constexpr crd::u32 payload = 220U;
+    kir::KGraph        tg(&alloc);
+    kir::KEntry        te;
+    crd::gputest::build_task_amplify(tg, te, n_tri, payload);
+    kir::KGraph mg(&alloc);
+    kir::KEntry me;
+    crd::gputest::build_mesh_amplified_tri(mg, me);
+    kir::KGraph fg(&alloc);
+    kir::KEntry fe;
+    crd::gputest::build_amplify_fs(fg, fe);
+
+    auto task = gctx->create_program(tg, te); // CKIR task -> as_6_5 amplification HLSL -> DXIL
+    if (task == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    auto mesh = gctx->create_program(mg, me);
+    auto fs   = gctx->create_program(fg, fe);
+    REQUIRE(mesh != nullptr);
+    REQUIRE(fs != nullptr);
+    REQUIRE(task->stage() == g::ShaderStage::Task);
+
+    auto program = raster->create_task_mesh_program(*task, *mesh, *fs);
+    if (program == nullptr) { WARN("no D3D12 mesh-shader tier (OPTIONS7); skipping"); return; }
+    REQUIRE(program->valid());
+
+    constexpr crd::u32 dim    = 64U;
+    auto               target = raster->create_color_target(dim, dim);
+    REQUIRE(target != nullptr);
+    raster->draw_mesh(*target, *program, g::ClearColor{0.0F, 0.0F, 0.2F, 1.0F}, 1U); // 1 TASK workgroup ⇒ N mesh triangles
+
+    int lit = 0;
+    for (crd::u32 c = 0; c < n_tri; ++c)
+    {
+        const double   xc = -0.7 + static_cast<double>(c) * 0.45;
+        const crd::u32 sx = static_cast<crd::u32>((xc + 1.0) * 0.5 * static_cast<double>(dim));
+        if ((target->read_pixel(sx, dim / 2U) & 0xFFU) > 180U) { ++lit; } // red ≈ payload(220)
+    }
+    CHECK(lit == static_cast<int>(n_tri)); // all N amplified triangles rendered with the payload colour
+}
+
 // D-007 B4: the DX12 OCEAN-MESHLET path — draw_mesh_bindless_depth DISPATCHES the projected-grid ocean as MESHLETS into a
 // colour+DEPTH target, the FFT cascade textures bound BINDLESS so the mesh shader samples the displacement (mirrors the Vulkan
 // ocean-mesh render). Uses SYNTHETIC cascade textures (the point is the DEVICE path, not the FFT bake) and asserts the ocean

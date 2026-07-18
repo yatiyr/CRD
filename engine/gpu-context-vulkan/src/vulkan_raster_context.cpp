@@ -233,12 +233,13 @@ class VulkanRasterProgram final : public IRasterProgram
 {
 public:
     VulkanRasterProgram(VkDevice device, const ShaderObjectApi* api, VkPipelineLayout layout, VkShaderEXT vs,
-                        VkShaderEXT fs, bool is_mesh = false) noexcept
-        : m_device(device), m_api(api), m_layout(layout), m_vs(vs), m_fs(fs), m_is_mesh(is_mesh)
+                        VkShaderEXT fs, bool is_mesh = false, VkShaderEXT task = VK_NULL_HANDLE) noexcept
+        : m_device(device), m_api(api), m_layout(layout), m_vs(vs), m_fs(fs), m_is_mesh(is_mesh), m_task(task)
     {
     }
     ~VulkanRasterProgram() override
     {
+        if (m_task != VK_NULL_HANDLE) { m_api->destroy(m_device, m_task, nullptr); } // B4: the amplification (task) shader
         if (m_vs != VK_NULL_HANDLE) { m_api->destroy(m_device, m_vs, nullptr); }
         if (m_fs != VK_NULL_HANDLE) { m_api->destroy(m_device, m_fs, nullptr); }
         if (m_layout != VK_NULL_HANDLE) { vkDestroyPipelineLayout(m_device, m_layout, nullptr); }
@@ -252,6 +253,8 @@ public:
     [[nodiscard]] VkShaderEXT      vs() const noexcept { return m_vs; } // B4: the MESH shader object when is_mesh()
     [[nodiscard]] VkShaderEXT      fs() const noexcept { return m_fs; }
     [[nodiscard]] bool             is_mesh() const noexcept { return m_is_mesh; } // B4: bind with VK_SHADER_STAGE_MESH_BIT_EXT
+    [[nodiscard]] VkShaderEXT      task() const noexcept { return m_task; }       // B4: the amplification (task) shader object
+    [[nodiscard]] bool             has_task() const noexcept { return m_task != VK_NULL_HANDLE; } // B4: task→mesh amplification
     [[nodiscard]] VkPipelineLayout layout() const noexcept { return m_layout; } // B1-f: for binding the storage set
 
 private:
@@ -261,6 +264,7 @@ private:
     VkShaderEXT            m_vs      = VK_NULL_HANDLE;
     VkShaderEXT            m_fs      = VK_NULL_HANDLE;
     bool                   m_is_mesh = false;
+    VkShaderEXT            m_task    = VK_NULL_HANDLE; // B4: amplification shader (task→mesh); NULL for a plain mesh program
 };
 
 // B1-f: a fragment-shader STORAGE buffer — a device-local SSBO the FS reads/writes, plus a host-visible readback the CPU
@@ -706,6 +710,71 @@ public:
         return std::make_unique<VulkanRasterProgram>(m_device, &m_api, layout, shaders[0], shaders[1], /*is_mesh=*/true);
     }
 
+    // B4: a TASK→MESH→FRAGMENT program (the AMPLIFICATION path). The task shader runs first, computes how many mesh workgroups
+    // to launch (EmitMeshTasksEXT) + a payload; the mesh reads the payload. Unlike create_mesh_program the mesh MUST NOT carry
+    // NO_TASK_SHADER (a task now precedes it — setting it would device-lost). Draw with draw_mesh(group_count = TASK groups).
+    [[nodiscard]] std::unique_ptr<IRasterProgram>
+    create_task_mesh_program(IGpuProgram& task, IGpuProgram& mesh, IGpuProgram& fragment) override
+    {
+        if (!m_api.valid() || m_api.draw_mesh_tasks == nullptr || !m_ctx->mesh_shader() || task.stage() != ShaderStage::Task
+            || mesh.stage() != ShaderStage::Mesh || fragment.stage() != ShaderStage::Fragment)
+        {
+            return nullptr;
+        }
+        const auto& tp = static_cast<VulkanGpuProgram&>(task).vk_spirv();
+        const auto& mp = static_cast<VulkanGpuProgram&>(mesh).vk_spirv();
+        const auto& fp = static_cast<VulkanGpuProgram&>(fragment).vk_spirv();
+
+        VkPipelineLayoutCreateInfo lci{};
+        lci.sType          = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        lci.setLayoutCount = 1U;
+        lci.pSetLayouts    = &m_storage_set_layout;
+        VkPipelineLayout layout = VK_NULL_HANDLE;
+        if (vkCreatePipelineLayout(m_device, &lci, nullptr, &layout) != VK_SUCCESS) { return nullptr; }
+
+        VkShaderCreateInfoEXT infos[3]{};
+        infos[0].sType          = VK_STRUCTURE_TYPE_SHADER_CREATE_INFO_EXT;
+        infos[0].flags          = VK_SHADER_CREATE_LINK_STAGE_BIT_EXT; // a task precedes the mesh — do NOT set NO_TASK_SHADER
+        infos[0].stage          = VK_SHADER_STAGE_TASK_BIT_EXT;
+        infos[0].nextStage      = VK_SHADER_STAGE_MESH_BIT_EXT;
+        infos[0].codeType       = VK_SHADER_CODE_TYPE_SPIRV_EXT;
+        infos[0].codeSize       = tp.size();
+        infos[0].pCode          = tp.data();
+        infos[0].pName          = "main";
+        infos[0].setLayoutCount = 1U;
+        infos[0].pSetLayouts    = &m_storage_set_layout;
+        infos[1].sType          = VK_STRUCTURE_TYPE_SHADER_CREATE_INFO_EXT;
+        infos[1].flags          = VK_SHADER_CREATE_LINK_STAGE_BIT_EXT; // mesh: task-fed, so NO NO_TASK_SHADER flag
+        infos[1].stage          = VK_SHADER_STAGE_MESH_BIT_EXT;
+        infos[1].nextStage      = VK_SHADER_STAGE_FRAGMENT_BIT;
+        infos[1].codeType       = VK_SHADER_CODE_TYPE_SPIRV_EXT;
+        infos[1].codeSize       = mp.size();
+        infos[1].pCode          = mp.data();
+        infos[1].pName          = "main";
+        infos[1].setLayoutCount = 1U;
+        infos[1].pSetLayouts    = &m_storage_set_layout;
+        infos[2].sType          = VK_STRUCTURE_TYPE_SHADER_CREATE_INFO_EXT;
+        infos[2].flags          = VK_SHADER_CREATE_LINK_STAGE_BIT_EXT;
+        infos[2].stage          = VK_SHADER_STAGE_FRAGMENT_BIT;
+        infos[2].nextStage      = 0;
+        infos[2].codeType       = VK_SHADER_CODE_TYPE_SPIRV_EXT;
+        infos[2].codeSize       = fp.size();
+        infos[2].pCode          = fp.data();
+        infos[2].pName          = "main";
+        infos[2].setLayoutCount = 1U;
+        infos[2].pSetLayouts    = &m_storage_set_layout;
+
+        VkShaderEXT shaders[3] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
+        if (m_api.create(m_device, 3U, infos, nullptr, shaders) != VK_SUCCESS)
+        {
+            vkDestroyPipelineLayout(m_device, layout, nullptr);
+            return nullptr;
+        }
+        // vs() slot = the MESH shader (shaders[1]); fs() = fragment (shaders[2]); task() = shaders[0].
+        return std::make_unique<VulkanRasterProgram>(m_device, &m_api, layout, shaders[1], shaders[2], /*is_mesh=*/true,
+                                                     shaders[0]);
+    }
+
     // B4: bind a MESH program and dispatch `group_count` mesh workgroups. Colour-only (the mesh-triangle proof). VERTEX is bound
     // null (mutually exclusive with MESH); TESS/GEOM/TASK default to null in a fresh command buffer (as the vertex draw relies on).
     void draw_mesh(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color, crd::u32 group_count) override
@@ -747,10 +816,17 @@ public:
         const VkShaderStageFlagBits vnull[1] = {VK_SHADER_STAGE_VERTEX_BIT};
         const VkShaderEXT           vnob[1]  = {VK_NULL_HANDLE};
         m_api.bind(cmd, 1U, vnull, vnob);
+        // B4: bind the TASK (amplification) stage if this is a task→mesh program; else it stays null (mesh has NO_TASK_SHADER).
+        if (p.has_task())
+        {
+            const VkShaderStageFlagBits tstage[1] = {VK_SHADER_STAGE_TASK_BIT_EXT};
+            const VkShaderEXT           tobj[1]   = {p.task()};
+            m_api.bind(cmd, 1U, tstage, tobj);
+        }
         const VkShaderStageFlagBits mstages[2] = {VK_SHADER_STAGE_MESH_BIT_EXT, VK_SHADER_STAGE_FRAGMENT_BIT};
         const VkShaderEXT           mobjs[2]   = {p.vs(), p.fs()};
         m_api.bind(cmd, 2U, mstages, mobjs);
-        m_api.draw_mesh_tasks(cmd, group_count, 1U, 1U);
+        m_api.draw_mesh_tasks(cmd, group_count, 1U, 1U); // group_count = TASK workgroups when has_task() (they amplify)
         vkCmdEndRendering(cmd);
 
         const VkImage src = t.src_image();
@@ -1604,10 +1680,16 @@ private:
             const VkShaderStageFlagBits vnull[1] = {VK_SHADER_STAGE_VERTEX_BIT};
             const VkShaderEXT           vnob[1]  = {VK_NULL_HANDLE};
             m_api.bind(cmd, 1U, vnull, vnob);
+            if (p.has_task()) // B4: bind the amplification stage for a task→mesh program
+            {
+                const VkShaderStageFlagBits tstage[1] = {VK_SHADER_STAGE_TASK_BIT_EXT};
+                const VkShaderEXT           tobj[1]   = {p.task()};
+                m_api.bind(cmd, 1U, tstage, tobj);
+            }
             const VkShaderStageFlagBits mstages[2] = {VK_SHADER_STAGE_MESH_BIT_EXT, VK_SHADER_STAGE_FRAGMENT_BIT};
             const VkShaderEXT           mobjs[2]   = {p.vs(), p.fs()};
             m_api.bind(cmd, 2U, mstages, mobjs);
-            m_api.draw_mesh_tasks(cmd, vertex_count, 1U, 1U); // vertex_count = meshlet workgroup count here
+            m_api.draw_mesh_tasks(cmd, vertex_count, 1U, 1U); // vertex_count = TASK workgroups when has_task() (they amplify)
         }
         else { bind_and_draw(cmd, p, vertex_count); }
         vkCmdEndRendering(cmd);
