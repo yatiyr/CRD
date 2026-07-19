@@ -104,6 +104,12 @@ struct ShadercApi
     case ShaderStage::Task: return shaderc_task_shader;
     case ShaderStage::TessControl: return shaderc_tess_control_shader; // B4-tess: hull
     case ShaderStage::TessEval: return shaderc_tess_evaluation_shader; // B4-tess: domain
+    case ShaderStage::RayGen: return shaderc_raygen_shader;            // FA-2: RT pipeline (needs SPIR-V ≥1.4 — we target 1.6)
+    case ShaderStage::Intersection: return shaderc_intersection_shader;
+    case ShaderStage::AnyHit: return shaderc_anyhit_shader;
+    case ShaderStage::ClosestHit: return shaderc_closesthit_shader;
+    case ShaderStage::Miss: return shaderc_miss_shader;
+    case ShaderStage::Callable: return shaderc_callable_shader;
     case ShaderStage::Compute:
     default: return shaderc_compute_shader;
     }

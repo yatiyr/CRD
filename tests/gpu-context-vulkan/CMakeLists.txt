@@ -5,6 +5,7 @@
 add_executable(crd-gpu-context-vulkan-tests
     test_vulkan_context.cpp
     test_ckir_glsl_compile.cpp
+    test_vulkan_rt.cpp
 )
 
 target_link_libraries(crd-gpu-context-vulkan-tests PRIVATE

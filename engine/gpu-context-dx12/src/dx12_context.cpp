@@ -34,8 +34,14 @@ namespace
     case ShaderStage::Task: return L"as_6_5"; // B4: SM6.5 amplification shader (DispatchMesh)
     case ShaderStage::TessControl: return L"hs_6_0"; // B4-tess: hull shader
     case ShaderStage::TessEval: return L"ds_6_0";    // B4-tess: domain shader
+    case ShaderStage::RayGen:       // FA-2: DXR shaders compile as a LIBRARY — the [shader("...")] attribute names the stage
+    case ShaderStage::Intersection:
+    case ShaderStage::AnyHit:
+    case ShaderStage::ClosestHit:
+    case ShaderStage::Miss:
+    case ShaderStage::Callable: return L"lib_6_3";
     case ShaderStage::Compute:
-    default: return L"cs_6_0";
+    default: return L"cs_6_5"; // SM 6.5: inline RayQuery (DXR 1.1) + wave ops; a superset that still compiles cs_6_0 kernels
     }
 }
 

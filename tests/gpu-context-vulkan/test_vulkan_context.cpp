@@ -29,6 +29,8 @@
 #include <ckir_kernel_dispatch.hpp> // B-cmp: the SHARED both-backend kernel dispatch + oracle-compare harness
 #include <ckir_raster_triangle.hpp> // B3-e: the SHARED, backend-neutral CKIR triangle (identical on Vulkan + DX12)
 #include <ckir_visbuffer_test.hpp>  // B4-vis: the SHARED software-rasterizer scene + oracle + mixed-dtype dispatch
+#include <ckir_oit_test.hpp>        // B17: the SHARED order-independent-transparency shaders + CPU oracle (WBOIT/...)
+#include <ckir_abuffer_test.hpp>    // B17-c: the SHARED exact-reference A-buffer OIT scene + oracle + 2-kernel dispatch
 
 #include <crd/containers/span.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
@@ -513,6 +515,659 @@ TEST_CASE("D-007 B3-e: IR-authored triangle draws on Vulkan (CKIR graph -> SPIR-
     CHECK(((centre >> 16U) & 0xFFU) <= 5U);   // B low
     CHECK((corner & 0xFFU) <= 5U);            // R low   ⇒ blue clear (outside)
     CHECK(((corner >> 16U) & 0xFFU) >= 250U); // B high
+}
+
+// D-007 B17-a: WEIGHTED-BLENDED ORDER-INDEPENDENT TRANSPARENCY (McGuire-Bavoil 2013) on Vulkan. Four translucent full-screen
+// quads accumulate in ONE order-independent pass (RGBA16F additive accum + R16F multiplicative revealage) → a full-screen
+// composite resolves them over an opaque background. The whole frame is uniform (every quad is full-screen), so every texel
+// must equal the CPU oracle (f16-accum + f32-divide model) within a tight LSB tolerance — a real device WBOIT that matches
+// the reference math, the cheap OIT tier. Pairs with the identical DX12 test (one IR, both backends).
+TEST_CASE("D-007 B17-a: IR-authored WBOIT draws on Vulkan (accum/reveal MRT + blend + composite -> pixels)",
+          "[gpu-context][vulkan][gpu][raster][oit]")
+{
+    namespace kir = crd::kir;
+
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    if (!vk->shader_object()) { WARN("adapter has no VK_EXT_shader_object; skipping"); return; }
+
+    crd::memory::TlsfAllocator alloc(8U << 20U);
+    auto                       raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+
+    crd::gputest::WboitScene scene;
+    scene.count         = 4U;
+    scene.background[0]  = 0.10F; scene.background[1] = 0.10F; scene.background[2] = 0.12F;
+    scene.color[0][0] = 0.90F; scene.color[0][1] = 0.15F; scene.color[0][2] = 0.10F; scene.alpha[0] = 0.50F; scene.depth[0] = 0.20F;
+    scene.color[1][0] = 0.15F; scene.color[1][1] = 0.85F; scene.color[1][2] = 0.20F; scene.alpha[1] = 0.40F; scene.depth[1] = 0.55F;
+    scene.color[2][0] = 0.20F; scene.color[2][1] = 0.25F; scene.color[2][2] = 0.90F; scene.alpha[2] = 0.30F; scene.depth[2] = 0.80F;
+    scene.color[3][0] = 0.90F; scene.color[3][1] = 0.85F; scene.color[3][2] = 0.10F; scene.alpha[3] = 0.60F; scene.depth[3] = 0.35F;
+
+    kir::KGraph tvg(&alloc); kir::KEntry tve; crd::gputest::build_wboit_transparent_vs(tvg, tve, scene);
+    kir::KGraph tfg(&alloc); kir::KEntry tfe; crd::gputest::build_wboit_transparent_fs(tfg, tfe);
+    kir::KGraph cvg(&alloc); kir::KEntry cve; crd::gputest::build_wboit_composite_vs(cvg, cve);
+    kir::KGraph cfg2(&alloc); kir::KEntry cfe; crd::gputest::build_wboit_composite_fs(cfg2, cfe);
+
+    auto tvp = ctx->create_program(tvg, tve);
+    auto tfp = ctx->create_program(tfg, tfe);
+    auto cvp = ctx->create_program(cvg, cve);
+    auto cfp = ctx->create_program(cfg2, cfe);
+    REQUIRE(tvp != nullptr); REQUIRE(tfp != nullptr); REQUIRE(cvp != nullptr); REQUIRE(cfp != nullptr);
+
+    auto transparent = raster->create_raster_program(*tvp, *tfp);
+    auto composite   = raster->create_raster_program(*cvp, *cfp);
+    REQUIRE(transparent != nullptr); REQUIRE(transparent->valid());
+    REQUIRE(composite != nullptr);   REQUIRE(composite->valid());
+
+    constexpr crd::u32 dim    = 32U;
+    auto               target = raster->create_color_target(dim, dim);
+    REQUIRE(target != nullptr);
+
+    raster->draw_wboit(*target, *transparent, *composite,
+                       gpu::ClearColor{scene.background[0], scene.background[1], scene.background[2], 1.0F},
+                       scene.count * 6U);
+
+    const crd::u32 expect = crd::gputest::wboit_oracle_pixel(scene);
+    if (target->read_pixel(dim / 2U, dim / 2U) == 0U && expect != 0U)
+    {
+        WARN("draw_wboit produced no output (per-attachment blend equations unavailable?); skipping");
+        return;
+    }
+    crd::u32 worst = 0U;
+    for (crd::u32 y = 0U; y < dim; ++y)
+    {
+        for (crd::u32 x = 0U; x < dim; ++x)
+        {
+            const crd::u32 d = crd::gputest::rgba8_max_channel_diff(target->read_pixel(x, y), expect);
+            if (d > worst) { worst = d; }
+        }
+    }
+    INFO("WBOIT worst per-channel LSB diff vs oracle = " << worst << " (expect 0x" << std::hex << expect << ")");
+    CHECK(worst <= 2U);              // f16 accum + f32 divide + blend rounding
+    CHECK((expect & 0xFFU) > 0x30U); // sanity: red channel is substantial (transparency actually composited, not just the clear)
+}
+
+// D-007 B17-c: the EXACT-REFERENCE A-buffer OIT on Vulkan — deferred per-fragment store + a per-pixel depth SORT + the exact
+// front-to-back `over` composite, authored as two portable CKIR compute kernels. The composite is pure f32 mul/add/sub on a
+// deterministic (sorted) order, so the device output is BIT-EXACT vs `eval_cpu_kernel` (and DX12 == Vulkan). This exact
+// image is the GROUND TRUTH the approximate WBOIT/MBOIT tiers are measured against.
+TEST_CASE("D-007 B17-c: exact-reference A-buffer OIT on Vulkan (deferred store + per-pixel sort + composite, bit-exact)",
+          "[gpu-context][vulkan][gpu][oit][compute]")
+{
+    namespace kir = crd::kir;
+
+    gpu::GpuContextConfig cfg2;
+    cfg2.backend  = gpu::GpuBackend::Vulkan;
+    cfg2.headless = true;
+    auto ctx      = gpu::create_vulkan_gpu_context(cfg2);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+
+    crd::memory::TlsfAllocator   alloc(16U << 20U);
+    crd::kir::oit::AbufferConfig acfg;
+    acfg.width      = 32U;
+    acfg.height     = 32U;
+    acfg.layers     = 4U;
+    acfg.local_size = 64U;
+    const auto scene = crd::gputest::make_oit_scene();
+    acfg.bg[0]       = scene.background[0];
+    acfg.bg[1]       = scene.background[1];
+    acfg.bg[2]       = scene.background[2];
+
+    bool       emit_ok   = true;
+    const auto make_pipe = [&](const kir::KGraph& gr, const kir::KEntry& en, int nbufs) {
+        kir::GlslKernel kern(&alloc);
+        if (!kir::emit_compute_kernel_glsl(gr, en, &alloc, kern)) { emit_ok = false; }
+        const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source),
+                                                    "ckir_abuffer", &alloc);
+        if (!spv.ok) { emit_ok = false; }
+        return compute.create_pipeline_from_spirv(
+            crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nbufs, 0U);
+    };
+
+    crd::containers::Array<crd::f64> cpu(&alloc);
+    crd::containers::Array<float>    gpu_out(&alloc);
+    crd::kir_test::abuffer_oracle(acfg, scene, alloc, cpu);
+    crd::kir_test::abuffer_dispatch(compute, make_pipe, acfg, scene, alloc, gpu_out);
+    REQUIRE(emit_ok);
+    REQUIRE(gpu_out.size() == cpu.size());
+
+    double worst = 0.0;
+    for (crd::usize i = 0; i < gpu_out.size(); ++i)
+    {
+        const double d = std::fabs(static_cast<double>(gpu_out[i]) - cpu[i]);
+        if (d > worst) { worst = d; }
+    }
+    INFO("A-buffer exact-composite worst |GPU - oracle| = " << worst);
+    CHECK(worst == 0.0); // pure f32 mul/add/sub on a deterministic sorted order ⇒ BIT-EXACT
+    CHECK(std::fabs(cpu[0] - static_cast<double>(scene.background[0])) > 0.05); // transparency actually composited
+}
+
+// D-007 B17-b: MOMENT-BASED OIT (Münstermann 2018 — the hero glass/foliage quality tier) on Vulkan. Per-pixel 4-power-moment
+// reconstruction of each fragment's transmittance via the SAME Peters-Klein Hamburger solve as moment shadow maps
+// (transcribed scalar in `oit::msm_hamburger_scalar`), from the shared deferred fragment store. Division + ln/exp ⇒ a to-ULP
+// tier — GPU matches `eval_cpu_kernel` to a few ULP (both backends). Because 4 power moments represent up to 2 depth masses
+// EXACTLY, MBOIT is BIT-EXACT at 2-layer depth complexity (glass front+back, thin foliage) — capturing the exact depth
+// ordering the crude single-weight WBOIT tier cannot (30 LSB off the same scene). Higher depth complexity scales with the
+// moment count (6/8-moment extension) — the standard MBOIT scaling.
+TEST_CASE("D-007 B17-b: moment-based OIT (MBOIT) on Vulkan (4-power-moment reconstruction — exact depth ordering, beats WBOIT)",
+          "[gpu-context][vulkan][gpu][oit][compute]")
+{
+    namespace kir = crd::kir;
+
+    gpu::GpuContextConfig cfg2;
+    cfg2.backend  = gpu::GpuBackend::Vulkan;
+    cfg2.headless = true;
+    auto ctx      = gpu::create_vulkan_gpu_context(cfg2);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+
+    crd::memory::TlsfAllocator   alloc(32U << 20U);
+    crd::kir::oit::AbufferConfig acfg;
+    acfg.width      = 32U;
+    acfg.height     = 32U;
+    acfg.layers     = 2U; // 4 power moments represent 2 depth masses EXACTLY — the regime MBOIT resolves precisely (glass)
+    acfg.local_size = 64U;
+    crd::gputest::WboitScene scene{};
+    scene.count = 2U;
+    scene.background[0] = 0.05F; scene.background[1] = 0.06F; scene.background[2] = 0.08F;
+    scene.color[0][0] = 0.90F; scene.color[0][1] = 0.15F; scene.color[0][2] = 0.10F; scene.alpha[0] = 0.50F; scene.depth[0] = 0.25F;
+    scene.color[1][0] = 0.10F; scene.color[1][1] = 0.20F; scene.color[1][2] = 0.90F; scene.alpha[1] = 0.50F; scene.depth[1] = 0.70F;
+    acfg.bg[0]       = scene.background[0];
+    acfg.bg[1]       = scene.background[1];
+    acfg.bg[2]       = scene.background[2];
+
+    bool       emit_ok   = true;
+    const auto make_pipe = [&](const kir::KGraph& gr, const kir::KEntry& en, int nbufs) {
+        kir::GlslKernel kern(&alloc);
+        if (!kir::emit_compute_kernel_glsl(gr, en, &alloc, kern)) { emit_ok = false; }
+        const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source),
+                                                    "ckir_mboit", &alloc);
+        if (!spv.ok) { emit_ok = false; }
+        return compute.create_pipeline_from_spirv(
+            crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nbufs, 0U);
+    };
+
+    crd::containers::Array<crd::f64> mb_cpu(&alloc);
+    crd::containers::Array<crd::f64> exact_cpu(&alloc);
+    crd::containers::Array<float>    mb_gpu(&alloc);
+    crd::kir_test::mboit_oracle(acfg, scene, alloc, mb_cpu);
+    crd::kir_test::mboit_dispatch(compute, make_pipe, acfg, scene, alloc, mb_gpu);
+    crd::kir_test::abuffer_oracle(acfg, scene, alloc, exact_cpu); // the exact ground truth
+    REQUIRE(emit_ok);
+    REQUIRE(mb_gpu.size() == mb_cpu.size());
+
+    double worst_ulp = 0.0;
+    for (crd::usize i = 0; i < mb_gpu.size(); ++i)
+    {
+        const double d = std::fabs(static_cast<double>(mb_gpu[i]) - mb_cpu[i]);
+        if (d > worst_ulp) { worst_ulp = d; }
+    }
+    INFO("MBOIT GPU vs oracle worst |Δ| = " << worst_ulp);
+    CHECK(worst_ulp < 1.0e-5); // to-ULP (division + ln/exp), like DAIS/ocean
+
+    // Quality: MBOIT vs exact, and WBOIT vs exact, on the SAME dense scene (RGBA8 LSB). The hero tier wins at high complexity.
+    const auto q = [](double v) {
+        double c = v;
+        if (c < 0.0) { c = 0.0; }
+        else if (c > 1.0) { c = 1.0; }
+        return static_cast<int>(std::lround(c * 255.0));
+    };
+    int        mboit_err = 0;
+    for (int ch = 0; ch < 3; ++ch)
+    {
+        const int d = std::abs(q(mb_cpu[static_cast<crd::usize>(ch)]) - q(exact_cpu[static_cast<crd::usize>(ch)]));
+        if (d > mboit_err) { mboit_err = d; }
+    }
+    const crd::u32 wboit_err = crd::gputest::rgba8_max_channel_diff(crd::gputest::wboit_oracle_pixel(scene),
+                                                                    crd::gputest::oit_exact_composite_rgba8(scene));
+    INFO("2-layer: MBOIT vs exact = " << mboit_err << " LSB · WBOIT vs exact = " << wboit_err << " LSB");
+    CHECK(mboit_err <= 1);                               // 4 power moments resolve 2 depth masses EXACTLY (± the ln/exp ULP)
+    CHECK(static_cast<crd::u32>(mboit_err) < wboit_err); // ...capturing depth ordering WBOIT's crude single weight cannot
+}
+
+// D-007 B17-b (extension): 6-POWER-MOMENT MBOIT on Vulkan — the hero tier LIFTED to 3-mass depth complexity via the larger
+// 4×4 Hankel Cholesky + a cubic root-solve + Gauss-Radau form factor (`oit::msm_hamburger6_scalar`). 6 moments resolve 3
+// depth masses EXACTLY ⇒ MBOIT is bit-exact at 3-layer complexity, where WBOIT's single weight cannot order the layers.
+TEST_CASE("D-007 B17-b: 6-moment MBOIT on Vulkan (larger Cholesky + cubic — exact at 3 masses, beats WBOIT)",
+          "[gpu-context][vulkan][gpu][oit][compute]")
+{
+    namespace kir = crd::kir;
+
+    gpu::GpuContextConfig cfg2;
+    cfg2.backend  = gpu::GpuBackend::Vulkan;
+    cfg2.headless = true;
+    auto ctx      = gpu::create_vulkan_gpu_context(cfg2);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+
+    crd::memory::TlsfAllocator   alloc(32U << 20U);
+    crd::kir::oit::AbufferConfig acfg;
+    acfg.width      = 32U;
+    acfg.height     = 32U;
+    acfg.layers     = 3U; // 6 power moments resolve 3 depth masses EXACTLY
+    acfg.local_size = 64U;
+    crd::gputest::WboitScene scene{};
+    scene.count = 3U;
+    scene.background[0] = 0.05F; scene.background[1] = 0.06F; scene.background[2] = 0.08F;
+    scene.color[0][0] = 0.92F; scene.color[0][1] = 0.10F; scene.color[0][2] = 0.10F; scene.alpha[0] = 0.60F; scene.depth[0] = 0.20F;
+    scene.color[1][0] = 0.10F; scene.color[1][1] = 0.90F; scene.color[1][2] = 0.12F; scene.alpha[1] = 0.50F; scene.depth[1] = 0.50F;
+    scene.color[2][0] = 0.10F; scene.color[2][1] = 0.12F; scene.color[2][2] = 0.92F; scene.alpha[2] = 0.70F; scene.depth[2] = 0.80F;
+    acfg.bg[0] = scene.background[0];
+    acfg.bg[1] = scene.background[1];
+    acfg.bg[2] = scene.background[2];
+
+    bool       emit_ok   = true;
+    const auto make_pipe = [&](const kir::KGraph& gr, const kir::KEntry& en, int nbufs) {
+        kir::GlslKernel kern(&alloc);
+        if (!kir::emit_compute_kernel_glsl(gr, en, &alloc, kern)) { emit_ok = false; }
+        const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source),
+                                                    "ckir_mboit6", &alloc);
+        if (!spv.ok) { emit_ok = false; }
+        return compute.create_pipeline_from_spirv(
+            crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nbufs, 0U);
+    };
+
+    crd::containers::Array<crd::f64> mb_cpu(&alloc);
+    crd::containers::Array<crd::f64> exact_cpu(&alloc);
+    crd::containers::Array<float>    mb_gpu(&alloc);
+    crd::kir_test::mboit6_oracle(acfg, scene, alloc, mb_cpu);
+    crd::kir_test::mboit6_dispatch(compute, make_pipe, acfg, scene, alloc, mb_gpu);
+    crd::kir_test::abuffer_oracle(acfg, scene, alloc, exact_cpu);
+    REQUIRE(emit_ok);
+    REQUIRE(mb_gpu.size() == mb_cpu.size());
+
+    double worst_ulp = 0.0;
+    for (crd::usize i = 0; i < mb_gpu.size(); ++i)
+    {
+        const double d = std::fabs(static_cast<double>(mb_gpu[i]) - mb_cpu[i]);
+        if (d > worst_ulp) { worst_ulp = d; }
+    }
+    INFO("MBOIT6 GPU vs oracle worst |Δ| = " << worst_ulp);
+    CHECK(worst_ulp < 5.0e-3); // to-ULP: the cubic root-solve amplifies the GPU/CPU transcendental ULP (~1 LSB in 8-bit)
+
+    const auto q = [](double v) {
+        double c = v;
+        if (c < 0.0) { c = 0.0; }
+        else if (c > 1.0) { c = 1.0; }
+        return static_cast<int>(std::lround(c * 255.0));
+    };
+    int        mboit_err = 0;
+    for (int ch = 0; ch < 3; ++ch)
+    {
+        const int d = std::abs(q(mb_cpu[static_cast<crd::usize>(ch)]) - q(exact_cpu[static_cast<crd::usize>(ch)]));
+        if (d > mboit_err) { mboit_err = d; }
+    }
+    const crd::u32 wboit_err = crd::gputest::rgba8_max_channel_diff(crd::gputest::wboit_oracle_pixel(scene),
+                                                                    crd::gputest::oit_exact_composite_rgba8(scene));
+    INFO("3-layer: MBOIT6 vs exact = " << mboit_err << " LSB · WBOIT vs exact = " << wboit_err << " LSB");
+    CHECK(mboit_err <= 3);                                     // 6 power moments resolve 3 depth masses ~EXACTLY (1 LSB)
+    CHECK(static_cast<crd::u32>(mboit_err) + 8U < wboit_err);  // ...DECISIVELY beating WBOIT at 3-layer depth complexity
+}
+
+// D-007 B17-c (scalable): the ATOMIC LINKED-LIST A-buffer on Vulkan — the DEPLOYABLE fragment capture (Carpenter 1984, GPU
+// form) enabled by NEW value-returning atomics in CKIR (`atomicAdd(counter,1)` node allocator + `atomicExchange(head,slot)`
+// list push). Fragments race into per-pixel linked lists (order nondeterministic); the resolve WALKS + SORTS ⇒ the composite
+// is deterministic and must match the static-slot EXACT reference BIT-FOR-BIT — proving the dynamic capture loses no fragments.
+TEST_CASE("D-007 B17-c: scalable atomic linked-list A-buffer on Vulkan (value-returning atomics == exact reference)",
+          "[gpu-context][vulkan][gpu][oit][compute][atomic]")
+{
+    namespace kir = crd::kir;
+
+    gpu::GpuContextConfig cfg2;
+    cfg2.backend  = gpu::GpuBackend::Vulkan;
+    cfg2.headless = true;
+    auto ctx      = gpu::create_vulkan_gpu_context(cfg2);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+
+    crd::memory::TlsfAllocator   alloc(16U << 20U);
+    crd::kir::oit::AbufferConfig acfg;
+    acfg.width      = 32U;
+    acfg.height     = 32U;
+    acfg.layers     = 4U;
+    acfg.local_size = 64U;
+    const auto scene = crd::gputest::make_oit_scene();
+    acfg.bg[0]       = scene.background[0];
+    acfg.bg[1]       = scene.background[1];
+    acfg.bg[2]       = scene.background[2];
+
+    bool       emit_ok   = true;
+    const auto make_pipe = [&](const kir::KGraph& gr, const kir::KEntry& en, int nbufs) {
+        kir::GlslKernel kern(&alloc);
+        if (!kir::emit_compute_kernel_glsl(gr, en, &alloc, kern)) { emit_ok = false; }
+        const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source),
+                                                    "ckir_abuffer_atomic", &alloc);
+        if (!spv.ok) { emit_ok = false; }
+        return compute.create_pipeline_from_spirv(
+            crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nbufs, 0U);
+    };
+
+    crd::containers::Array<crd::f64> exact_cpu(&alloc);
+    crd::containers::Array<float>    gpu_out(&alloc);
+    crd::kir_test::abuffer_atomic_dispatch(compute, make_pipe, acfg, scene, alloc, gpu_out);
+    crd::kir_test::abuffer_oracle(acfg, scene, alloc, exact_cpu); // the static-slot exact reference
+    REQUIRE(emit_ok);
+    REQUIRE(gpu_out.size() == exact_cpu.size());
+
+    double worst = 0.0;
+    for (crd::usize i = 0; i < gpu_out.size(); ++i)
+    {
+        const double d = std::fabs(static_cast<double>(gpu_out[i]) - exact_cpu[i]);
+        if (d > worst) { worst = d; }
+    }
+    INFO("atomic A-buffer vs static-slot exact reference: worst |Δ| = " << worst);
+    CHECK(worst == 0.0); // dynamic atomic capture + sort == the exact composite, bit-for-bit
+    CHECK(std::fabs(exact_cpu[0] - static_cast<double>(scene.background[0])) > 0.05); // transparency actually composited
+}
+
+// D-007 B17-c (scalable): STOCHASTIC TRANSPARENCY on Vulkan (Enderton 2010) — the cheap UNBOUNDED-depth tier (no list, no
+// sort, no moment budget). S sub-samples per pixel, each keeping the nearest fragment a DETERMINISTIC hash stochastically
+// covers; the mean is an UNBIASED estimate of the exact `over`. Two claims proven: (1) the deterministic integer hash makes
+// the "random" result BIT-EXACT vs the CPU oracle (portable/reproducible ⇒ TAA history is consistent across backends); and
+// (2) E[stochastic] == the exact A-buffer, so averaging converges to the exact composite (the pixel-averaged estimate is
+// sub-LSB, and per-pixel noise shrinks with S — the noise TAA resolves over frames).
+TEST_CASE("D-007 B17-c: stochastic transparency on Vulkan (deterministic-hash coverage; unbiased == exact A-buffer)",
+          "[gpu-context][vulkan][gpu][oit][compute][stochastic]")
+{
+    namespace kir = crd::kir;
+
+    gpu::GpuContextConfig cfg2;
+    cfg2.backend  = gpu::GpuBackend::Vulkan;
+    cfg2.headless = true;
+    auto ctx      = gpu::create_vulkan_gpu_context(cfg2);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+
+    crd::memory::TlsfAllocator   alloc(64U << 20U);
+    crd::kir::oit::AbufferConfig acfg;
+    acfg.width      = 32U;
+    acfg.height     = 32U;
+    acfg.layers     = 4U;
+    acfg.local_size = 64U;
+    const auto scene = crd::gputest::make_oit_scene();
+    acfg.bg[0]       = scene.background[0];
+    acfg.bg[1]       = scene.background[1];
+    acfg.bg[2]       = scene.background[2];
+
+    bool       emit_ok   = true;
+    const auto make_pipe = [&](const kir::KGraph& gr, const kir::KEntry& en, int nbufs) {
+        kir::GlslKernel kern(&alloc);
+        if (!kir::emit_compute_kernel_glsl(gr, en, &alloc, kern)) { emit_ok = false; }
+        const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source),
+                                                    "ckir_stochastic", &alloc);
+        if (!spv.ok) { emit_ok = false; }
+        return compute.create_pipeline_from_spirv(
+            crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nbufs, 0U);
+    };
+
+    // (1) BIT-EXACT: the GPU stochastic result == the CPU oracle to the last bit (deterministic hash + per-op f32 rounding).
+    acfg.samples = 32U;
+    crd::containers::Array<crd::f64> st_cpu(&alloc);
+    crd::containers::Array<crd::f64> exact_cpu(&alloc);
+    crd::containers::Array<float>    st_gpu(&alloc);
+    crd::kir_test::stochastic_oracle(acfg, scene, alloc, st_cpu);
+    crd::kir_test::stochastic_dispatch(compute, make_pipe, acfg, scene, alloc, st_gpu);
+    REQUIRE(emit_ok);
+    REQUIRE(st_gpu.size() == st_cpu.size());
+    double worst = 0.0;
+    for (crd::usize i = 0; i < st_gpu.size(); ++i)
+    {
+        const double d = std::fabs(static_cast<double>(st_gpu[i]) - st_cpu[i]);
+        if (d > worst) { worst = d; }
+    }
+    INFO("stochastic GPU vs oracle worst |Δ| = " << worst);
+    CHECK(worst == 0.0); // a DETERMINISTIC "random" tier ⇒ bit-identical across backends (portable TAA history)
+
+    // (2) UNBIASED + CONVERGENT: E[stochastic] == the exact A-buffer. Metric per S: `bias` = |mean-over-pixels − exact| (the
+    // W*H*S-sample estimate of the composite → ~0 as unbiasedness demands) and `rms` = per-pixel RMS error (the Monte-Carlo
+    // NOISE, ~σ/√S — the noise TAA resolves over frames). Measured on the (bit-identical) oracle, so it equally certifies the
+    // GPU result. S=256 reuses the already-computed `st_cpu`; only S=16 needs a fresh (cheaper) oracle run.
+    crd::kir_test::abuffer_oracle(acfg, scene, alloc, exact_cpu); // the exact `over` reference
+    const crd::u32 wh = acfg.width * acfg.height;
+    const auto     measure = [&](const crd::containers::Array<crd::f64>& s_cpu, double& bias, double& rms) {
+        double mean[3] = {0.0, 0.0, 0.0};
+        double sse     = 0.0;
+        for (crd::u32 p = 0; p < wh; ++p)
+        {
+            for (int ch = 0; ch < 3; ++ch)
+            {
+                const double v = s_cpu[static_cast<crd::usize>(p) * 3U + static_cast<crd::usize>(ch)];
+                const double d = v - exact_cpu[static_cast<crd::usize>(ch)];
+                mean[ch] += v;
+                sse += d * d;
+            }
+        }
+        bias = 0.0;
+        for (int ch = 0; ch < 3; ++ch)
+        {
+            const double b = std::fabs(mean[ch] / static_cast<double>(wh) - exact_cpu[static_cast<crd::usize>(ch)]);
+            if (b > bias) { bias = b; }
+        }
+        rms = std::sqrt(sse / static_cast<double>(wh * 3U));
+    };
+    double bias_hi = 0.0;
+    double rms_hi  = 0.0;
+    double bias_lo = 0.0;
+    double rms_lo  = 0.0;
+    measure(st_cpu, bias_hi, rms_hi); // S=32 (reuse the bit-exact run's oracle)
+    crd::kir::oit::AbufferConfig c_lo = acfg;
+    c_lo.samples                      = 8U; // 4× fewer samples ⇒ theory predicts √4 = 2× MORE noise
+    crd::containers::Array<crd::f64> s_lo(&alloc);
+    crd::kir_test::stochastic_oracle(c_lo, scene, alloc, s_lo);
+    measure(s_lo, bias_lo, rms_lo);
+    INFO("stochastic: bias(S=8)=" << bias_lo << " rms(S=8)=" << rms_lo << " | bias(S=32)=" << bias_hi
+                                  << " rms(S=32)=" << rms_hi);
+    CHECK(bias_hi < 0.02);          // UNBIASED: the W*H*32-sample pixel-average lands within ~0.02 of the exact composite
+    CHECK(rms_hi < rms_lo);         // CONVERGENCE: per-pixel Monte-Carlo noise shrinks with more samples (TAA frames)
+    CHECK(rms_hi < 0.65 * rms_lo);  // ...by ~√(32/8) = 2× the theory predicts (threshold 0.65 leaves room for MC variance)
+    CHECK(std::fabs(exact_cpu[0] - static_cast<double>(scene.background[0])) > 0.05); // transparency actually composited
+}
+
+// D-007 B17-c: OIT tier GPU PERF BOARD — kernel-only cost per tier on a HIGH-OVERDRAW scene (512x512 px, 8 translucent
+// layers), GPU-timed via `last_gpu_ms` (brackets only the recorded compute dispatches; upload/readback excluded, like the
+// FFT/GI benches), min-of-30. Complements the accuracy board. Hidden ([.oit-bench]) — run explicitly. Prints a table to
+// transcribe into docs/bench. The shared deferred STORE is timed once (the fragment-capture cost the moment/A-buffer resolves
+// share); each resolve is then timed reading the prefilled store. The atomic tier clears its head buffer (untimed) each run.
+TEST_CASE("D-007 B17-c: OIT tier GPU PERFORMANCE (Vulkan, last_gpu_ms, min-of-30, 8-layer high-overdraw)", "[.oit-bench]")
+{
+    namespace kir = crd::kir;
+    namespace cg  = crd::gpu;
+    using cg::compute_usage::storage;
+    using cg::compute_usage::transfer_dst;
+    using cg::compute_usage::transfer_src;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+    crd::memory::TlsfAllocator alloc(256U << 20U);
+
+    crd::kir::oit::AbufferConfig acfg;
+    acfg.width      = 1024U; // high overdraw via resolution (1M pixels); layers=4 keeps the UNROLLED sort-network emit
+    acfg.height     = 1024U; // tractable (8-layer's 28 compare-exchanges explode the inline-select expansion — a separate
+    acfg.layers     = 4U;    // emitter axis; the tier COMPARISON is valid at 4-layer depth × 1M pixels = 4M fragments)
+    acfg.local_size = 64U;
+    acfg.samples    = 32U;
+    crd::gputest::WboitScene scene{};
+    scene.count         = 4U;
+    scene.background[0] = 0.10F;
+    scene.background[1] = 0.10F;
+    scene.background[2] = 0.12F;
+    for (crd::u32 q = 0; q < 8U; ++q)
+    {
+        const float f     = static_cast<float>(q);
+        scene.color[q][0] = 0.12F + 0.10F * f;
+        scene.color[q][1] = 0.90F - 0.08F * f;
+        scene.color[q][2] = 0.20F + 0.09F * f;
+        scene.alpha[q]    = 0.30F + 0.03F * f;
+        scene.depth[q]    = 0.08F + 0.11F * f; // distinct ascending depths (a strict order for the sort/z-test)
+    }
+    acfg.bg[0] = scene.background[0];
+    acfg.bg[1] = scene.background[1];
+    acfg.bg[2] = scene.background[2];
+
+    const crd::u32 wh    = acfg.width * acfg.height;
+    const crd::u32 total = wh * acfg.layers;
+
+    const auto pipe_of = [&](kir::KGraph& g, const kir::KEntry& e, const char* nm, int nb) {
+        kir::GlslKernel kern(&alloc);
+        REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, kern));
+        const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), nm, &alloc);
+        REQUIRE(spv.ok);
+        auto p = compute.create_pipeline_from_spirv(
+            crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nb, 0U);
+        REQUIRE(p != nullptr);
+        return p;
+    };
+    kir::KGraph g_store(&alloc);
+    kir::KGraph g_ares(&alloc);
+    kir::KGraph g_m4(&alloc);
+    kir::KGraph g_m6(&alloc);
+    kir::KGraph g_ab(&alloc);
+    kir::KGraph g_ar(&alloc);
+    kir::KGraph g_st(&alloc);
+    const auto  e_store = kir::oit::build_abuffer_store(g_store, acfg);
+    const auto  e_ares  = kir::oit::build_abuffer_resolve(g_ares, acfg);
+    const auto  e_m4    = kir::oit::build_mboit_resolve(g_m4, acfg);
+    const auto  e_m6    = kir::oit::build_mboit6_resolve(g_m6, acfg);
+    const auto  e_ab    = kir::oit::build_abuffer_atomic_build(g_ab, acfg);
+    const auto  e_ar    = kir::oit::build_abuffer_atomic_resolve(g_ar, acfg);
+    const auto  e_st    = kir::oit::build_stochastic_resolve(g_st, acfg);
+    auto        p_store = pipe_of(g_store, e_store, "bench_store", 6);
+    auto        p_ares  = pipe_of(g_ares, e_ares, "bench_ares", 6);
+    auto        p_m4    = pipe_of(g_m4, e_m4, "bench_m4", 6);
+    auto        p_m6    = pipe_of(g_m6, e_m6, "bench_m6", 6);
+    auto        p_ab    = pipe_of(g_ab, e_ab, "bench_abuild", 5);
+    auto        p_ar    = pipe_of(g_ar, e_ar, "bench_aresolve", 4);
+    auto        p_st    = pipe_of(g_st, e_st, "bench_stoch", 2);
+
+    const auto mkf = [&](crd::u64 floats) {
+        return compute.create_buffer(floats * sizeof(float), storage | transfer_dst | transfer_src, cg::ComputeMemory::GpuOnly);
+    };
+    auto sc       = mkf(static_cast<crd::u64>(acfg.layers) * 5U);
+    auto nr       = mkf(total);
+    auto ng       = mkf(total);
+    auto nb       = mkf(total);
+    auto na       = mkf(total);
+    auto nd       = mkf(total);
+    auto out      = mkf(static_cast<crd::u64>(wh) * 3U);
+    auto counter  = mkf(1);
+    auto head     = mkf(wh);
+    auto nnext    = mkf(total);
+    auto nodedata = mkf(static_cast<crd::u64>(total) * 5U);
+
+    { // upload the scene once
+        auto  up = compute.create_buffer(static_cast<crd::u64>(acfg.layers) * 5U * sizeof(float), transfer_src, cg::ComputeMemory::CpuToGpu);
+        auto* sp = static_cast<float*>(up->map());
+        for (crd::u32 q = 0; q < acfg.layers; ++q)
+        {
+            sp[q * 5U + 0U] = scene.color[q][0]; sp[q * 5U + 1U] = scene.color[q][1]; sp[q * 5U + 2U] = scene.color[q][2];
+            sp[q * 5U + 3U] = scene.alpha[q];    sp[q * 5U + 4U] = scene.depth[q];
+        }
+        up->unmap();
+        auto& rec = compute.begin();
+        rec.copy(*up, *sc, 0U, 0U, static_cast<crd::u64>(acfg.layers) * 5U * sizeof(float));
+        compute.submit_and_wait();
+    }
+    // reusable resets for the atomic tier: `clr_head` = wh words all EMPTY (head buffer), `clr_cnt` = 1 word 0 (counter)
+    auto  clr_head = compute.create_buffer(static_cast<crd::u64>(wh) * sizeof(crd::u32), transfer_src, cg::ComputeMemory::CpuToGpu);
+    auto* hp       = static_cast<crd::u32*>(clr_head->map());
+    for (crd::u32 i = 0; i < wh; ++i) { hp[i] = crd::kir::oit::kAbufferEmpty; }
+    clr_head->unmap();
+    auto  clr_cnt = compute.create_buffer(sizeof(crd::u32), transfer_src, cg::ComputeMemory::CpuToGpu);
+    *static_cast<crd::u32*>(clr_cnt->map()) = 0U;
+    clr_cnt->unmap();
+
+    const crd::u32 g_store_wg = (total + acfg.local_size - 1U) / acfg.local_size;
+    const crd::u32 g_pix_wg   = (wh + acfg.local_size - 1U) / acfg.local_size;
+
+    { // prefill the shared deferred store ONCE (untimed) so the resolve-only tiers read a valid fragment store
+        cg::ComputeBuffer* b[6] = {sc.get(), nr.get(), ng.get(), nb.get(), na.get(), nd.get()};
+        auto&              rec  = compute.begin();
+        rec.dispatch(*p_store, crd::containers::ConstSpan<cg::ComputeBuffer*>(b, 6), nullptr, 0U, g_store_wg, 1U, 1U);
+        compute.submit_and_wait();
+    }
+
+    const auto time_one = [&](cg::ComputePipeline& pipe, cg::ComputeBuffer** binds, int nb2, crd::u32 gx) {
+        double best = 1.0e30;
+        for (int r = 0; r < 30; ++r)
+        {
+            auto& rec = compute.begin();
+            rec.dispatch(pipe, crd::containers::ConstSpan<cg::ComputeBuffer*>(binds, static_cast<crd::usize>(nb2)), nullptr, 0U, gx, 1U, 1U);
+            compute.submit_and_wait();
+            const double ms = compute.last_gpu_ms();
+            if (ms > 0.0 && ms < best) { best = ms; }
+        }
+        return best;
+    };
+
+    cg::ComputeBuffer* res_bind[6] = {nr.get(), ng.get(), nb.get(), na.get(), nd.get(), out.get()};
+    cg::ComputeBuffer* store_bind[6] = {sc.get(), nr.get(), ng.get(), nb.get(), na.get(), nd.get()};
+    cg::ComputeBuffer* stoch_bind[2] = {sc.get(), out.get()};
+
+    const double t_store = time_one(*p_store, store_bind, 6, g_store_wg);
+    const double t_ares  = time_one(*p_ares, res_bind, 6, g_pix_wg);
+    const double t_m4    = time_one(*p_m4, res_bind, 6, g_pix_wg);
+    const double t_m6    = time_one(*p_m6, res_bind, 6, g_pix_wg);
+    const double t_st    = time_one(*p_st, stoch_bind, 2, g_pix_wg);
+
+    // atomic tier: reset counter+head each run (untimed), then time build + resolve together
+    double t_atomic = 1.0e30;
+    for (int r = 0; r < 30; ++r)
+    {
+        {
+            auto& rec = compute.begin();
+            rec.copy(*clr_cnt, *counter, 0U, 0U, sizeof(crd::u32)); // counter ← 0
+            rec.copy(*clr_head, *head, 0U, 0U, static_cast<crd::u64>(wh) * sizeof(crd::u32)); // head ← EMPTY
+            compute.submit_and_wait();
+        }
+        auto&              rec = compute.begin();
+        cg::ComputeBuffer* bb[5] = {sc.get(), counter.get(), head.get(), nnext.get(), nodedata.get()};
+        rec.dispatch(*p_ab, crd::containers::ConstSpan<cg::ComputeBuffer*>(bb, 5), nullptr, 0U, g_store_wg, 1U, 1U);
+        rec.barrier(*head, cg::ComputeAccess::ShaderWrite, cg::ComputeAccess::ShaderRead);
+        rec.barrier(*nnext, cg::ComputeAccess::ShaderWrite, cg::ComputeAccess::ShaderRead);
+        rec.barrier(*nodedata, cg::ComputeAccess::ShaderWrite, cg::ComputeAccess::ShaderRead);
+        cg::ComputeBuffer* rb[4] = {head.get(), nnext.get(), nodedata.get(), out.get()};
+        rec.dispatch(*p_ar, crd::containers::ConstSpan<cg::ComputeBuffer*>(rb, 4), nullptr, 0U, g_pix_wg, 1U, 1U);
+        compute.submit_and_wait();
+        const double ms = compute.last_gpu_ms();
+        if (ms > 0.0 && ms < t_atomic) { t_atomic = ms; }
+    }
+
+    std::printf("\n=== OIT tier GPU perf board (Vulkan, kernel-only last_gpu_ms, min-of-30) ===\n");
+    std::printf("scene: %ux%u px, %u translucent layers (%u fragments total), samples=%u\n", acfg.width, acfg.height,
+                acfg.layers, total, acfg.samples);
+    std::printf("  %-26s %8.4f ms   (shared deferred fragment capture)\n", "STORE (shared)", t_store);
+    std::printf("  %-26s %8.4f ms   store+resolve = %.4f ms\n", "A-buffer resolve (sort)", t_ares, t_store + t_ares);
+    std::printf("  %-26s %8.4f ms   store+resolve = %.4f ms\n", "MBOIT-4 resolve", t_m4, t_store + t_m4);
+    std::printf("  %-26s %8.4f ms   store+resolve = %.4f ms\n", "MBOIT-6 resolve", t_m6, t_store + t_m6);
+    std::printf("  %-26s %8.4f ms   (build+resolve, head-clear untimed)\n", "A-buffer atomic (list)", t_atomic);
+    std::printf("  %-26s %8.4f ms   (S=%u; per-frame TAA cost @S=1 ~ %.4f ms)\n", "Stochastic", t_st, acfg.samples,
+                t_st / static_cast<double>(acfg.samples));
+    std::printf("============================================================================\n");
+
+    CHECK(t_store < 1.0e29);
+    CHECK(t_ares < 1.0e29);
+    CHECK(t_atomic < 1.0e29);
+    CHECK(t_st < 1.0e29);
 }
 
 // D-007 B4: the SAME triangle emitted by a MESH shader (the modern amplification path) — CKIR mesh entry → GL_EXT_mesh_shader

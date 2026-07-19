@@ -611,14 +611,17 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
     crd::containers::String& s = out.source;
     s.clear();
     out.n_inputs = 0;
-    s.append("#version 450\n");
+    bool uses_rayquery = false; // B9/RT-1: inline ray query needs GLSL 4.60 + GL_EXT_ray_query when an AccelStructDecl is present
+    for (int i = 0; i < n; ++i) { if (g.node(i).op == KOp::AccelStructDecl) { uses_rayquery = true; break; } }
+    s.append(uses_rayquery ? "#version 460\n" : "#version 450\n"); // GL_EXT_ray_query's rayQueryEXT type requires #version 460
     s.append("#extension GL_KHR_shader_subgroup_basic : require\n");  // B-cmp: subgroup (wave) ops — the cheap deterministic
     s.append("#extension GL_KHR_shader_subgroup_ballot : require\n"); // radix rank; bit-exact under a forced 32-lane subgroup
     s.append("#extension GL_NV_shader_subgroup_partitioned : enable\n"); // hardware match_any (SubgroupMatch); SPIR-V cap emitted only when used
+    if (uses_rayquery) { s.append("#extension GL_EXT_ray_query : require\n"); }
     s.append("layout(local_size_x = "); app_uint(s, entry.local_size[0]);
     s.append(", local_size_y = ");      app_uint(s, entry.local_size[1]);
     s.append(", local_size_z = ");      app_uint(s, entry.local_size[2]); s.append(") in;\n");
-    for (int i = 0; i < n; ++i) // resource decls: storage buffers + workgroup shared arrays
+    for (int i = 0; i < n; ++i) // resource decls: storage buffers + workgroup shared arrays + acceleration structures
     {
         const KNode& nd = g.node(i);
         if (nd.op == KOp::BufferDecl)
@@ -632,6 +635,10 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
         {
             s.append("shared "); s.append(buf_ctype(nd.dtype())); s.append(" sh"); app_uint(s, i);
             s.append("["); app_uint(s, nd.iidx + static_cast<int>(nd.axes)); s.append("];\n");
+        }
+        else if (nd.op == KOp::AccelStructDecl) // B9/RT-1: opaque TLAS bound at (set 0, binding)
+        {
+            s.append("layout(set = 0, binding = "); app_uint(s, nd.iidx); s.append(") uniform accelerationStructureEXT as"); app_uint(s, nd.iidx); s.append(";\n");
         }
     }
     s.append("void main() {\n");
@@ -785,6 +792,47 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
             case KStmtKind::SharedAtomicAdd: decl(decl, st.index); decl(decl, st.value); s.append("  atomicAdd(sh"); app_uint(s, st.target); s.append("["); pv(pv, st.index); s.append("], "); pv(pv, st.value); s.append(");\n"); ++i; break;
             case KStmtKind::BufferAtomicAdd: decl(decl, st.index); decl(decl, st.value); s.append("  atomicAdd(buf"); app_uint(s, g.node(st.target).iidx); s.append("["); pv(pv, st.index); s.append("], "); pv(pv, st.value); s.append(");\n"); ++i; break;
             case KStmtKind::BufferAtomicMin: decl(decl, st.index); decl(decl, st.value); s.append("  atomicMin(buf"); app_uint(s, g.node(st.target).iidx); s.append("["); pv(pv, st.index); s.append("], "); pv(pv, st.value); s.append(");\n"); ++i; break; // B4-vis: visibility key (nearest wins)
+            case KStmtKind::BufferAtomicAddFetch: decl(decl, st.index); decl(decl, st.value); s.append("  "); s.append(buf_ctype(g.node(st.result).dtype())); s.append(" t"); app_uint(s, static_cast<crd::u32>(st.result)); s.append(" = atomicAdd(buf"); app_uint(s, g.node(st.target).iidx); s.append("["); pv(pv, st.index); s.append("], "); pv(pv, st.value); s.append(");\n"); temped[static_cast<crd::usize>(st.result)] = 1U; ++i; break; // B17: value-returning node allocator
+            case KStmtKind::BufferAtomicExchange: decl(decl, st.index); decl(decl, st.value); s.append("  "); s.append(buf_ctype(g.node(st.result).dtype())); s.append(" t"); app_uint(s, static_cast<crd::u32>(st.result)); s.append(" = atomicExchange(buf"); app_uint(s, g.node(st.target).iidx); s.append("["); pv(pv, st.index); s.append("], "); pv(pv, st.value); s.append(");\n"); temped[static_cast<crd::usize>(st.result)] = 1U; ++i; break; // B17: linked-list head push
+            case KStmtKind::TraceRayClosest: // B9/RT-1: inline ray query — closest-hit distance `t` (or tmax on miss)
+            {
+                for (int k = 0; k < 8; ++k) { decl(decl, g.stmt_ext_operand(st, k)); } // materialize ox..dz, tmin, tmax
+                const auto op = [&](int k) { pv(pv, g.stmt_ext_operand(st, k)); };
+                const crd::u32 bnd = g.node(st.target).iidx;
+                const crd::u32 res = static_cast<crd::u32>(st.result);
+                s.append("  rayQueryEXT rq"); app_uint(s, res); s.append(";\n");
+                s.append("  rayQueryInitializeEXT(rq"); app_uint(s, res); s.append(", as"); app_uint(s, bnd);
+                s.append(", gl_RayFlagsNoneEXT, 0xFFu, vec3("); op(0); s.append(", "); op(1); s.append(", "); op(2); s.append("), ");
+                op(6); s.append(", vec3("); op(3); s.append(", "); op(4); s.append(", "); op(5); s.append("), "); op(7); s.append(");\n");
+                s.append("  while (rayQueryProceedEXT(rq"); app_uint(s, res); s.append(")) {}\n");
+                s.append("  float t"); app_uint(s, res); s.append(" = (rayQueryGetIntersectionTypeEXT(rq"); app_uint(s, res);
+                s.append(", true) == gl_RayQueryCommittedIntersectionTriangleEXT) ? rayQueryGetIntersectionTEXT(rq"); app_uint(s, res);
+                s.append(", true) : "); op(7); s.append(";\n");
+                temped[static_cast<crd::usize>(st.result)] = 1U;
+                ++i;
+                break;
+            }
+            case KStmtKind::TraceRayHit: // B9/RT-2: inline ray query — closest-hit distance `t` + PRIMITIVE INDEX (for shading)
+            {
+                for (int k = 0; k < 8; ++k) { decl(decl, g.stmt_ext_operand(st, k)); }
+                const auto op = [&](int k) { pv(pv, g.stmt_ext_operand(st, k)); };
+                const crd::u32 bnd  = g.node(st.target).iidx;
+                const crd::u32 res  = static_cast<crd::u32>(st.result);
+                const crd::u32 prim = static_cast<crd::u32>(g.stmt_ext_operand(st, 8));
+                s.append("  rayQueryEXT rq"); app_uint(s, res); s.append(";\n");
+                s.append("  rayQueryInitializeEXT(rq"); app_uint(s, res); s.append(", as"); app_uint(s, bnd);
+                s.append(", gl_RayFlagsNoneEXT, 0xFFu, vec3("); op(0); s.append(", "); op(1); s.append(", "); op(2); s.append("), ");
+                op(6); s.append(", vec3("); op(3); s.append(", "); op(4); s.append(", "); op(5); s.append("), "); op(7); s.append(");\n");
+                s.append("  while (rayQueryProceedEXT(rq"); app_uint(s, res); s.append(")) {}\n");
+                s.append("  bool hit"); app_uint(s, res); s.append(" = (rayQueryGetIntersectionTypeEXT(rq"); app_uint(s, res);
+                s.append(", true) == gl_RayQueryCommittedIntersectionTriangleEXT);\n");
+                s.append("  float t"); app_uint(s, res); s.append(" = hit"); app_uint(s, res); s.append(" ? rayQueryGetIntersectionTEXT(rq"); app_uint(s, res); s.append(", true) : "); op(7); s.append(";\n");
+                s.append("  uint t"); app_uint(s, prim); s.append(" = hit"); app_uint(s, res); s.append(" ? uint(rayQueryGetIntersectionPrimitiveIndexEXT(rq"); app_uint(s, res); s.append(", true)) : 0xFFFFFFFFu;\n");
+                temped[static_cast<crd::usize>(st.result)] = 1U;
+                temped[static_cast<crd::usize>(g.stmt_ext_operand(st, 8))] = 1U;
+                ++i;
+                break;
+            }
             case KStmtKind::ForBreakIf: decl(decl, st.value); s.append("  if (bool("); pv(pv, st.value); s.append(")) break;\n"); ++i; break; // bool() accepts bool AND uint (type-strict GLSL)
             case KStmtKind::BufferTicket: decl(decl, st.index); s.append("  if (gl_LocalInvocationIndex == 0u) { sh"); app_uint(s, st.value); s.append("[0] = atomicAdd(buf"); app_uint(s, g.node(st.target).iidx); s.append("["); pv(pv, st.index); s.append("], 1u); }\n"); ++i; break;
             case KStmtKind::SyncWarp: s.append("  subgroupBarrier();\n"); ++i; break;
@@ -794,6 +842,126 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
     emit_body(emit_body, entry.kernel_body_begin, entry.kernel_body_count);
     s.append("}\n");
     return ok;
+}
+
+// FA-2 (portable RT PIPELINE): emit a raygen / closest-hit / miss GLSL shader (GL_EXT_ray_tracing) from a KEntry whose body is the
+// statement pool [kernel_body_begin, +count). The RAYGEN traces via `traceRayEXT` (or, when `ser` is set AND the body requests a
+// reorder, the SER hitObject flow: hitObjectTraceRayNV → reorderThreadNV → hitObjectExecuteShaderNV) and stores the payload; the
+// CLOSEST-HIT / MISS stages write the shared payload. `ser` is the caller's capability answer — the reorder HINT is portable and
+// simply drops on a target without SER (perf only). The same three KEntries lower to DXR HLSL via emit_rt_stage_hlsl.
+inline bool emit_rt_stage_glsl(const KGraph& g, const KEntry& entry, crd::memory::IAllocator* /*scratch*/, GlslKernel& out, bool ser)
+{
+    using namespace glsl_detail;
+    const KStage st = entry.stage;
+    if (st != KStage::RayGen && st != KStage::ClosestHit && st != KStage::Miss && st != KStage::AnyHit) { return false; }
+    const int                n = g.size();
+    crd::containers::String& s = out.source;
+    s.clear();
+
+    int payload_n = 1;
+    for (int i = 0; i < n; ++i) { if (g.node(i).op == KOp::RayPayloadDecl) { payload_n = g.node(i).iidx > 0 ? g.node(i).iidx : 1; } }
+    const int b0 = entry.kernel_body_begin;
+    const int bn = entry.kernel_body_count;
+    bool      has_reorder = false;
+    for (int i = 0; i < bn; ++i) { if (g.stmt(b0 + i).kind == KStmtKind::ReorderThread) { has_reorder = true; } }
+    const bool use_ser = ser && has_reorder && st == KStage::RayGen;
+
+    s.append("#version 460\n#extension GL_EXT_ray_tracing : require\n");
+    if (use_ser) { s.append("#extension GL_NV_shader_invocation_reorder : require\n"); }
+    s.append("struct RtPayload { ");
+    for (int c = 0; c < payload_n; ++c) { s.append("float m"); app_uint(s, c); s.append("; "); }
+    s.append("};\n");
+    for (int i = 0; i < n; ++i) // resource decls: AS + storage buffers
+    {
+        const KNode& nd = g.node(i);
+        if (nd.op == KOp::AccelStructDecl) { s.append("layout(set = 0, binding = "); app_uint(s, nd.iidx); s.append(") uniform accelerationStructureEXT as"); app_uint(s, nd.iidx); s.append(";\n"); }
+        else if (nd.op == KOp::BufferDecl) { s.append("layout(std430, binding = "); app_uint(s, nd.iidx); s.append(") buffer B"); app_uint(s, nd.iidx); s.append(" { "); s.append(buf_ctype(nd.dtype())); s.append(" buf"); app_uint(s, nd.iidx); s.append("[]; };\n"); }
+    }
+    if (st == KStage::RayGen) { s.append("layout(location = 0) rayPayloadEXT RtPayload pl;\n"); }
+    else { s.append("layout(location = 0) rayPayloadInEXT RtPayload pl;\n"); if (st != KStage::Miss) { s.append("hitAttributeEXT vec2 hattr;\n"); } }
+    s.append("void main() {\n");
+
+    // compact recursive value printer for the op subset RT-pipeline shaders use (everything inlined — the bodies are small).
+    const char* xyzw = "xyzw";
+    const auto  pv = [&](auto&& self, int node) -> void {
+        const KNode& nd = g.node(node);
+        const auto   bin = [&](const char* o) { s.append("("); self(self, nd.a); s.append(o); self(self, nd.b); s.append(")"); };
+        switch (nd.op)
+        {
+        case KOp::Const:
+            if (nd.dtype() == DType::Bool) { s.append(nd.cval != 0.0 ? "true" : "false"); }
+            else if (nd.dtype() == DType::U32) { char b[32]; std::snprintf(b, sizeof(b), "%uu", static_cast<unsigned>(static_cast<crd::i64>(nd.cval))); s.append(b); }
+            else if (nd.dtype() == DType::I32) { char b[32]; std::snprintf(b, sizeof(b), "%d", static_cast<int>(static_cast<crd::i64>(nd.cval))); s.append(b); }
+            else { char b[40]; std::snprintf(b, sizeof(b), "%.9g", nd.cval); s.append(b); if (std::strchr(b, '.') == nullptr && std::strchr(b, 'e') == nullptr && std::strchr(b, 'n') == nullptr) { s.append(".0"); } }
+            break;
+        case KOp::Builtin:
+            switch (static_cast<KBuiltin>(nd.iidx))
+            {
+            case KBuiltin::LaunchId: s.append("gl_LaunchIDEXT"); break;
+            case KBuiltin::LaunchSize: s.append("gl_LaunchSizeEXT"); break;
+            case KBuiltin::HitT: s.append("gl_HitTEXT"); break;
+            case KBuiltin::PrimitiveId: s.append("gl_PrimitiveID"); break;
+            case KBuiltin::InstanceId: s.append("gl_InstanceID"); break;
+            case KBuiltin::InstanceCustomIndex: s.append("gl_InstanceCustomIndexEXT"); break;
+            case KBuiltin::HitBary: s.append("hattr"); break; // P4: the barycentric hitAttribute (vec2 u,v)
+            default: s.append("0u"); break;
+            }
+            break;
+        case KOp::VecComp: self(self, nd.a); s.append("."); { const char sw[2] = {xyzw[nd.iidx], '\0'}; s.append(sw); } break;
+        case KOp::PayloadLoad: s.append("pl.m"); app_uint(s, nd.iidx); break;
+        case KOp::BufferLoad: s.append("buf"); app_uint(s, g.node(nd.a).iidx); s.append("["); self(self, nd.b); s.append("]"); break;
+        case KOp::Cast: s.append(ctype(nd.dtype())); s.append("("); self(self, nd.a); s.append(")"); break;
+        case KOp::Neg: s.append("(-"); self(self, nd.a); s.append(")"); break;
+        case KOp::Add: bin(" + "); break;
+        case KOp::Sub: bin(" - "); break;
+        case KOp::Mul: bin(" * "); break;
+        case KOp::Div: bin(" / "); break;
+        case KOp::CmpLt: bin(" < "); break;
+        case KOp::CmpLe: bin(" <= "); break;
+        case KOp::CmpGt: bin(" > "); break;
+        case KOp::CmpGe: bin(" >= "); break;
+        case KOp::CmpEq: bin(" == "); break;
+        case KOp::CmpNe: bin(" != "); break;
+        case KOp::Max: s.append("max("); self(self, nd.a); s.append(", "); self(self, nd.b); s.append(")"); break;
+        case KOp::Min: s.append("min("); self(self, nd.a); s.append(", "); self(self, nd.b); s.append(")"); break;
+        default: s.append("0.0"); break;
+        }
+    };
+    const auto vv = [&](int node) { pv(pv, node); };
+
+    for (int i = 0; i < bn; ++i) // emit the body statements
+    {
+        const KStmt& stm = g.stmt(b0 + i);
+        switch (stm.kind)
+        {
+        case KStmtKind::TraceRayPipeline:
+        {
+            const auto ex = [&](int k) { return g.stmt_ext_operand(stm, k); };
+            s.append("  ");
+            if (use_ser)
+            {
+                s.append("hitObjectNV hobj; hitObjectTraceRayNV(hobj, as"); app_uint(s, g.node(stm.target).iidx);
+                s.append(", gl_RayFlagsNoneEXT, 0xFFu, 0u, 0u, 0u, vec3("); vv(ex(0)); s.append(", "); vv(ex(1)); s.append(", "); vv(ex(2)); s.append("), "); vv(ex(6));
+                s.append(", vec3("); vv(ex(3)); s.append(", "); vv(ex(4)); s.append(", "); vv(ex(5)); s.append("), "); vv(ex(7)); s.append(", 0);\n");
+                s.append("  reorderThreadNV(hobj);\n  hitObjectExecuteShaderNV(hobj, 0);\n");
+            }
+            else
+            {
+                s.append("traceRayEXT(as"); app_uint(s, g.node(stm.target).iidx);
+                s.append(", gl_RayFlagsNoneEXT, 0xFFu, 0u, 0u, 0u, vec3("); vv(ex(0)); s.append(", "); vv(ex(1)); s.append(", "); vv(ex(2)); s.append("), "); vv(ex(6));
+                s.append(", vec3("); vv(ex(3)); s.append(", "); vv(ex(4)); s.append(", "); vv(ex(5)); s.append("), "); vv(ex(7)); s.append(", 0);\n");
+            }
+            break;
+        }
+        case KStmtKind::PayloadStore: s.append("  pl.m"); app_uint(s, stm.index); s.append(" = "); vv(stm.value); s.append(";\n"); break;
+        case KStmtKind::BufferStore: s.append("  buf"); app_uint(s, g.node(stm.target).iidx); s.append("["); vv(stm.index); s.append("] = "); vv(stm.value); s.append(";\n"); break;
+        case KStmtKind::IgnoreHitIf: s.append("  if ("); vv(stm.value); s.append(") { ignoreIntersectionEXT; }\n"); break; // P4 any-hit alpha
+        case KStmtKind::ReorderThread: break; // absorbed into the trace when use_ser; a no-op otherwise (perf hint)
+        default: break;
+        }
+    }
+    s.append("}\n");
+    return true;
 }
 
 // B3-c: emit a VERTEX or FRAGMENT GLSL shader from a stage `entry` (reached through `create_program(KGraph, KEntry)` — the

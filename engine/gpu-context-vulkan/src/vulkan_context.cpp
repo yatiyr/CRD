@@ -85,6 +85,11 @@ public:
     [[nodiscard]] crd::u32 graphics_family() const noexcept override { return m_graphics_family; }
     [[nodiscard]] bool     shader_object() const noexcept override { return m_shader_object; }
     [[nodiscard]] bool     mesh_shader() const noexcept override { return m_mesh_shader; } // B4: VK_EXT_mesh_shader + meshShader
+    [[nodiscard]] bool     ray_query() const noexcept override { return m_ray_query; } // B9/RT: VK_KHR_ray_query + acceleration_structure
+    [[nodiscard]] bool     opacity_micromap() const noexcept override { return m_opacity_micromap; } // FA-1
+    [[nodiscard]] bool     rt_pipeline() const noexcept override { return m_rt_pipeline; }           // FA-2
+    [[nodiscard]] bool     invocation_reorder() const noexcept override { return m_invocation_reorder; } // FA-2 SER
+    [[nodiscard]] bool     cluster_as() const noexcept override { return m_cluster_as; }             // FA-3
     [[nodiscard]] bool     tessellation() const noexcept override { return m_tessellation; } // B4-tess: tess + patch-ctrl-points
     [[nodiscard]] bool     render_capable() const noexcept override { return m_windowed; }
     [[nodiscard]] bool       fragment_shading_rate() const noexcept override { return m_fragment_shading_rate; } // B1-e
@@ -283,8 +288,19 @@ private:
         bool has_interlock = false;
         bool has_sgpart    = false;
         bool has_mesh      = false;
+        bool has_accel     = false; // B9/RT: VK_KHR_acceleration_structure (BLAS/TLAS)
+        bool has_rayquery  = false; // B9/RT: VK_KHR_ray_query (inline ray tracing in compute)
+        bool has_defhost   = false; // B9/RT: VK_KHR_deferred_host_operations (an acceleration_structure prerequisite)
+        bool has_omm       = false; // FA-1: VK_EXT_opacity_micromap (alpha-tested geometry resolved in traversal)
+        bool has_rtpipe    = false; // FA-2: VK_KHR_ray_tracing_pipeline (raygen/hit/miss + SBT)
+        bool has_ser       = false; // FA-2: VK_NV_ray_tracing_invocation_reorder (shader execution reordering)
+        bool has_cluster   = false; // FA-3: VK_NV_cluster_acceleration_structure (mega-geometry cluster BLAS)
         for (std::uint32_t i = 0; i < ne; ++i)
         {
+            if (std::strcmp(exts[i].extensionName, "VK_EXT_opacity_micromap") == 0) { has_omm = true; }
+            if (std::strcmp(exts[i].extensionName, "VK_KHR_ray_tracing_pipeline") == 0) { has_rtpipe = true; }
+            if (std::strcmp(exts[i].extensionName, "VK_NV_ray_tracing_invocation_reorder") == 0) { has_ser = true; }
+            if (std::strcmp(exts[i].extensionName, "VK_NV_cluster_acceleration_structure") == 0) { has_cluster = true; }
             if (std::strcmp(exts[i].extensionName, VK_EXT_MESH_SHADER_EXTENSION_NAME) == 0) { has_mesh = true; } // B4
             if (std::strcmp(exts[i].extensionName, "VK_KHR_cooperative_matrix") == 0) { has_cm1 = true; }
             if (std::strcmp(exts[i].extensionName, "VK_NV_cooperative_matrix2") == 0) { has_cm2 = true; }
@@ -296,6 +312,9 @@ private:
             if (std::strcmp(exts[i].extensionName, VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME) == 0) { has_eds3 = true; }
             if (std::strcmp(exts[i].extensionName, VK_EXT_EXTENDED_DYNAMIC_STATE_2_EXTENSION_NAME) == 0) { has_eds2 = true; } // B4-tess
             if (std::strcmp(exts[i].extensionName, VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME) == 0) { has_interlock = true; }
+            if (std::strcmp(exts[i].extensionName, VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME) == 0) { has_accel = true; }
+            if (std::strcmp(exts[i].extensionName, VK_KHR_RAY_QUERY_EXTENSION_NAME) == 0) { has_rayquery = true; }
+            if (std::strcmp(exts[i].extensionName, VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME) == 0) { has_defhost = true; }
         }
         m_coopmat2      = has_cm1 && has_cm2;
         m_shader_object = has_shobj && m_graphics_family != UINT32_MAX; // no point on a compute-only adapter
@@ -311,6 +330,16 @@ private:
         // B4: mesh shaders (the modern amplification path) — needs the extension + a graphics queue + shader objects (our draw
         // path creates a MESH shader object). The meshShader feature bit is confirmed below before we commit to it.
         m_mesh_shader = has_mesh && m_shader_object;
+        // B9/RT: inline ray query needs the acceleration-structure + ray-query + deferred-host-ops extensions (+ buffer device
+        // address, enabled below). Confirmed against the feature bits before we commit. A COMPUTE capability (works on a
+        // compute-only adapter — the inline query rides the compute dispatch, no graphics queue / RT pipeline required).
+        m_ray_query = has_accel && has_rayquery && has_defhost;
+        // FA-1/2/3: the vendor RT frontier — opacity micromaps, the RT pipeline, SER (invocation reorder), cluster-AS. All ride
+        // on the AS infrastructure (need m_ray_query) and are confirmed against their feature bits below.
+        m_opacity_micromap  = m_ray_query && has_omm;
+        m_rt_pipeline       = m_ray_query && has_rtpipe;
+        m_invocation_reorder = m_ray_query && has_rtpipe && has_ser;
+        m_cluster_as        = m_ray_query && has_cluster;
         // C2-a: render-capable iff surface (instance) + swapchain (device) + a graphics queue all present.
         m_windowed = surface_ok && has_swapchain && m_graphics_family != UINT32_MAX;
 
@@ -489,7 +518,54 @@ private:
         maint4.sType        = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_FEATURES;
         maint4.maintenance4 = VK_TRUE;
 
-        // Build the pNext chain head-first: dyn → [demote] → [vrs] → [eds3] → [sync2] → [sho] → [mesh] → [coopmat…].
+        // B9/RT: acceleration-structure + ray-query + buffer-device-address. Confirm the bits (an extension can be exposed
+        // without them), then keep ONLY those bits so a non-RT device is unchanged.
+        VkPhysicalDeviceAccelerationStructureFeaturesKHR accel_feat{};
+        accel_feat.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
+        VkPhysicalDeviceRayQueryFeaturesKHR rq_feat{};
+        rq_feat.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
+        VkPhysicalDeviceBufferDeviceAddressFeatures bda_feat{};
+        bda_feat.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES;
+        if (m_ray_query)
+        {
+            accel_feat.pNext = &rq_feat;
+            rq_feat.pNext    = &bda_feat;
+            VkPhysicalDeviceFeatures2 f2{};
+            f2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            f2.pNext = &accel_feat;
+            vkGetPhysicalDeviceFeatures2(m_physical, &f2);
+            m_ray_query = accel_feat.accelerationStructure == VK_TRUE && rq_feat.rayQuery == VK_TRUE && bda_feat.bufferDeviceAddress == VK_TRUE;
+            VkPhysicalDeviceAccelerationStructureFeaturesKHR ak{}; ak.sType = accel_feat.sType; ak.accelerationStructure = accel_feat.accelerationStructure; accel_feat = ak;
+            VkPhysicalDeviceRayQueryFeaturesKHR rk{}; rk.sType = rq_feat.sType; rk.rayQuery = rq_feat.rayQuery; rq_feat = rk;
+            VkPhysicalDeviceBufferDeviceAddressFeatures bk{}; bk.sType = bda_feat.sType; bk.bufferDeviceAddress = bda_feat.bufferDeviceAddress; bda_feat = bk;
+        }
+
+        // FA-1/2/3: vendor RT frontier feature bits (opacity micromap · RT pipeline · SER invocation-reorder · cluster-AS). Live
+        // to vkCreateDevice (referenced by the chain). Confirm each bit, then keep ONLY it (so the struct is clean for creation).
+        VkPhysicalDeviceOpacityMicromapFeaturesEXT omm_feat{}; omm_feat.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_OPACITY_MICROMAP_FEATURES_EXT;
+        VkPhysicalDeviceRayTracingPipelineFeaturesKHR rtp_feat{}; rtp_feat.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR;
+        VkPhysicalDeviceRayTracingInvocationReorderFeaturesNV ser_feat{}; ser_feat.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_INVOCATION_REORDER_FEATURES_NV;
+        VkPhysicalDeviceClusterAccelerationStructureFeaturesNV clu_feat{}; clu_feat.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CLUSTER_ACCELERATION_STRUCTURE_FEATURES_NV;
+        if (m_opacity_micromap || m_rt_pipeline || m_invocation_reorder || m_cluster_as)
+        {
+            void* pf = nullptr;
+            if (m_opacity_micromap) { omm_feat.pNext = pf; pf = &omm_feat; }
+            if (m_rt_pipeline) { rtp_feat.pNext = pf; pf = &rtp_feat; }
+            if (m_invocation_reorder) { ser_feat.pNext = pf; pf = &ser_feat; }
+            if (m_cluster_as) { clu_feat.pNext = pf; pf = &clu_feat; }
+            VkPhysicalDeviceFeatures2 f2{}; f2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2; f2.pNext = pf;
+            vkGetPhysicalDeviceFeatures2(m_physical, &f2);
+            m_opacity_micromap   = m_opacity_micromap && omm_feat.micromap == VK_TRUE;
+            m_rt_pipeline        = m_rt_pipeline && rtp_feat.rayTracingPipeline == VK_TRUE;
+            m_invocation_reorder = m_invocation_reorder && ser_feat.rayTracingInvocationReorder == VK_TRUE;
+            m_cluster_as         = m_cluster_as && clu_feat.clusterAccelerationStructure == VK_TRUE;
+            { VkPhysicalDeviceOpacityMicromapFeaturesEXT z{}; z.sType = omm_feat.sType; z.micromap = omm_feat.micromap; omm_feat = z; }
+            { VkPhysicalDeviceRayTracingPipelineFeaturesKHR z{}; z.sType = rtp_feat.sType; z.rayTracingPipeline = rtp_feat.rayTracingPipeline; rtp_feat = z; }
+            { VkPhysicalDeviceRayTracingInvocationReorderFeaturesNV z{}; z.sType = ser_feat.sType; z.rayTracingInvocationReorder = ser_feat.rayTracingInvocationReorder; ser_feat = z; }
+            { VkPhysicalDeviceClusterAccelerationStructureFeaturesNV z{}; z.sType = clu_feat.sType; z.clusterAccelerationStructure = clu_feat.clusterAccelerationStructure; clu_feat = z; }
+        }
+
+        // Build the pNext chain head-first: dyn → [demote] → [vrs] → [eds3] → [sync2] → [sho] → [mesh] → [coopmat…] → [RT].
         void* chain = &dyn;
         if (m_graphics_family != UINT32_MAX) { demote.pNext = chain; chain = &demote; } // raster `discard` support
         if (m_fragment_shading_rate) { vrs.pNext = chain; chain = &vrs; }
@@ -501,8 +577,13 @@ private:
         if (m_shader_object) { sho.pNext = chain; chain = &sho; }
         if (m_mesh_shader) { mesh.pNext = chain; chain = &mesh; maint4.pNext = chain; chain = &maint4; }
         if (m_coopmat2) { cm2.pNext = chain; cmk.pNext = &cm2; chain = &cmk; }
+        if (m_ray_query) { accel_feat.pNext = chain; chain = &accel_feat; rq_feat.pNext = chain; chain = &rq_feat; bda_feat.pNext = chain; chain = &bda_feat; }
+        if (m_opacity_micromap) { omm_feat.pNext = chain; chain = &omm_feat; }
+        if (m_rt_pipeline) { rtp_feat.pNext = chain; chain = &rtp_feat; }
+        if (m_invocation_reorder) { ser_feat.pNext = chain; chain = &ser_feat; }
+        if (m_cluster_as) { clu_feat.pNext = chain; chain = &clu_feat; }
 
-        const char* devexts[12];
+        const char* devexts[28];
         crd::u32    ndevext = 0;
         // B-cmp: hardware subgroup partition (match_any) — the radix-sort rank's cheap deterministic match. Shader-only
         // capability (no feature struct); enabling the extension unlocks the SPIR-V GroupNonUniformPartitionedNV cap.
@@ -523,6 +604,16 @@ private:
         if (m_tessellation) { devexts[ndevext++] = VK_EXT_EXTENDED_DYNAMIC_STATE_2_EXTENSION_NAME; } // B4-tess
         if (m_fragment_interlock) { devexts[ndevext++] = VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME; }
         if (m_mesh_shader) { devexts[ndevext++] = VK_EXT_MESH_SHADER_EXTENSION_NAME; } // B4
+        if (m_ray_query) // B9/RT: inline ray query — the AS + ray-query + deferred-host-ops trio
+        {
+            devexts[ndevext++] = VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME;
+            devexts[ndevext++] = VK_KHR_RAY_QUERY_EXTENSION_NAME;
+            devexts[ndevext++] = VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME;
+        }
+        if (m_opacity_micromap) { devexts[ndevext++] = "VK_EXT_opacity_micromap"; }                      // FA-1
+        if (m_rt_pipeline) { devexts[ndevext++] = "VK_KHR_ray_tracing_pipeline"; }                        // FA-2
+        if (m_invocation_reorder) { devexts[ndevext++] = "VK_NV_ray_tracing_invocation_reorder"; }        // FA-2 SER
+        if (m_cluster_as) { devexts[ndevext++] = "VK_NV_cluster_acceleration_structure"; }                // FA-3
 
         VkDeviceCreateInfo dci{};
         dci.sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -559,6 +650,11 @@ private:
     bool             m_fragment_interlock    = false; // B1-f: pixel-ordered fragment-shader interlock (ROV) enabled
     bool             m_bindless              = false; // B2-d: non-uniform sampled-image array indexing enabled
     bool             m_mesh_shader           = false; // B4: VK_EXT_mesh_shader + meshShader feature enabled
+    bool             m_ray_query             = false; // B9/RT: VK_KHR_ray_query + acceleration_structure + BDA enabled
+    bool             m_opacity_micromap      = false; // FA-1: VK_EXT_opacity_micromap
+    bool             m_rt_pipeline           = false; // FA-2: VK_KHR_ray_tracing_pipeline
+    bool             m_invocation_reorder    = false; // FA-2: VK_NV_ray_tracing_invocation_reorder (SER)
+    bool             m_cluster_as            = false; // FA-3: VK_NV_cluster_acceleration_structure
     bool             m_tessellation          = false; // B4-tess: tessellationShader + EDS2 patch-control-points enabled
     bool             m_valid           = false;
     char             m_name[256]       = {};

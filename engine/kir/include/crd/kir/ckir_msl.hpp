@@ -304,6 +304,16 @@ inline bool emit_compute_kernel_msl(const KGraph& g, const KEntry& entry, crd::m
             case KStmtKind::SharedAtomicAdd: decl(decl, st.index); decl(decl, st.value); s.append("  atomic_fetch_add_explicit(&sh"); app_uint(s, st.target); s.append("["); ev(ev, st.index); s.append("], "); ev(ev, st.value); s.append(", memory_order_relaxed);\n"); ++i; break;
             case KStmtKind::BufferAtomicAdd: decl(decl, st.index); decl(decl, st.value); s.append("  atomic_fetch_add_explicit((device atomic_uint*)&buf"); app_uint(s, g.node(st.target).iidx); s.append("["); ev(ev, st.index); s.append("], "); ev(ev, st.value); s.append(", memory_order_relaxed);\n"); ++i; break;
             case KStmtKind::BufferAtomicMin: decl(decl, st.index); decl(decl, st.value); s.append("  atomic_fetch_min_explicit((device atomic_uint*)&buf"); app_uint(s, g.node(st.target).iidx); s.append("["); ev(ev, st.index); s.append("], "); ev(ev, st.value); s.append(", memory_order_relaxed);\n"); ++i; break; // B4-vis: visibility key (nearest wins)
+            case KStmtKind::BufferAtomicAddFetch: // value-returning: atomic_fetch_add_explicit RETURNS the old value
+                decl(decl, st.index); decl(decl, st.value);
+                s.append("  "); s.append(cty(g.node(st.result).dtype())); s.append(" t"); app_uint(s, static_cast<crd::u32>(st.result));
+                s.append(" = atomic_fetch_add_explicit((device atomic_uint*)&buf"); app_uint(s, g.node(st.target).iidx); s.append("["); ev(ev, st.index); s.append("], "); ev(ev, st.value); s.append(", memory_order_relaxed);\n");
+                matd[static_cast<crd::usize>(st.result)] = 1U; ++i; break;
+            case KStmtKind::BufferAtomicExchange: // value-returning: atomic_exchange_explicit RETURNS the old value
+                decl(decl, st.index); decl(decl, st.value);
+                s.append("  "); s.append(cty(g.node(st.result).dtype())); s.append(" t"); app_uint(s, static_cast<crd::u32>(st.result));
+                s.append(" = atomic_exchange_explicit((device atomic_uint*)&buf"); app_uint(s, g.node(st.target).iidx); s.append("["); ev(ev, st.index); s.append("], "); ev(ev, st.value); s.append(", memory_order_relaxed);\n");
+                matd[static_cast<crd::usize>(st.result)] = 1U; ++i; break;
             case KStmtKind::ForBreakIf: decl(decl, st.value); s.append("  if (("); ev(ev, st.value); s.append(") != 0u) break;\n"); ++i; break;
             case KStmtKind::BufferTicket: decl(decl, st.index); s.append("  if (lidx == 0u) { sh"); app_uint(s, st.value); s.append("[0] = atomic_fetch_add_explicit((device atomic_uint*)&buf"); app_uint(s, g.node(st.target).iidx); s.append("["); ev(ev, st.index); s.append("], 1u, memory_order_relaxed); }\n"); ++i; break;
             case KStmtKind::SyncWarp: s.append("  simdgroup_barrier(mem_flags::mem_threadgroup);\n"); ++i; break;

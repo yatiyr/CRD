@@ -303,6 +303,16 @@ inline bool emit_compute_kernel_wgsl(const KGraph& g, const KEntry& entry, crd::
             case KStmtKind::SharedAtomicAdd: decl(decl, st.index); decl(decl, st.value); s.append("  atomicAdd(&sh"); app_uint(s, st.target); s.append("["); ev(ev, st.index); s.append("], "); ev(ev, st.value); s.append(");\n"); ++i; break;
             case KStmtKind::BufferAtomicAdd: decl(decl, st.index); decl(decl, st.value); s.append("  atomicAdd(&buf"); app_uint(s, g.node(st.target).iidx); s.append("["); ev(ev, st.index); s.append("], "); ev(ev, st.value); s.append(");\n"); ++i; break;
             case KStmtKind::BufferAtomicMin: decl(decl, st.index); decl(decl, st.value); s.append("  atomicMin(&buf"); app_uint(s, g.node(st.target).iidx); s.append("["); ev(ev, st.index); s.append("], "); ev(ev, st.value); s.append(");\n"); ++i; break; // B4-vis: visibility key (nearest wins)
+            case KStmtKind::BufferAtomicAddFetch: // value-returning: WGSL atomicAdd RETURNS the old value
+                decl(decl, st.index); decl(decl, st.value);
+                s.append("  let t"); app_uint(s, static_cast<crd::u32>(st.result)); s.append(" : "); s.append(cty(g.node(st.result).dtype()));
+                s.append(" = atomicAdd(&buf"); app_uint(s, g.node(st.target).iidx); s.append("["); ev(ev, st.index); s.append("], "); ev(ev, st.value); s.append(");\n");
+                matd[static_cast<crd::usize>(st.result)] = 1U; ++i; break;
+            case KStmtKind::BufferAtomicExchange: // value-returning: WGSL atomicExchange RETURNS the old value
+                decl(decl, st.index); decl(decl, st.value);
+                s.append("  let t"); app_uint(s, static_cast<crd::u32>(st.result)); s.append(" : "); s.append(cty(g.node(st.result).dtype()));
+                s.append(" = atomicExchange(&buf"); app_uint(s, g.node(st.target).iidx); s.append("["); ev(ev, st.index); s.append("], "); ev(ev, st.value); s.append(");\n");
+                matd[static_cast<crd::usize>(st.result)] = 1U; ++i; break;
             case KStmtKind::ForBreakIf: decl(decl, st.value); s.append("  if (bool("); ev(ev, st.value); s.append(")) { break; }\n"); ++i; break; // bool() accepts bool AND u32 (type-strict WGSL)
             case KStmtKind::BufferTicket: decl(decl, st.index); s.append("  if (lidx == 0u) { sh"); app_uint(s, st.value); s.append("[0] = atomicAdd(&buf"); app_uint(s, g.node(st.target).iidx); s.append("["); ev(ev, st.index); s.append("], 1u); }\n"); ++i; break;
             case KStmtKind::SyncWarp: s.append("  workgroupBarrier();\n"); ++i; break; // no subgroup barrier in core WGSL — conservative

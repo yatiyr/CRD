@@ -179,7 +179,7 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
             default:
                 if (n.c >= 0 && n.b >= 0 && n.a >= 0 && !is_compare(n.op) && n.op != KOp::Select)
                 { r = apply_ternary(n.op, self(self, n.a), self(self, n.b), self(self, n.c)); }
-                else if (n.b >= 0) { r = apply_binary(n.op, self(self, n.a), self(self, n.b)); }
+                else if (n.b >= 0) { r = apply_binary_typed(n.op, self(self, n.a), self(self, n.b), n.dtype()); }
                 else if (n.a >= 0) { r = apply_unary(n.op, self(self, n.a)); }
                 break;
         }
@@ -326,6 +326,91 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
                         const crd::f64 val = eval(eval, st.value);
                         KernelBuffer*  kb  = buffer_for(st.target);
                         if (kb != nullptr && idx >= 0 && idx < kb->len && val < kb->data[idx]) { kb->data[idx] = val; }
+                    }
+                    ++i;
+                    break;
+                }
+                case KStmtKind::BufferAtomicAddFetch:
+                case KStmtKind::BufferAtomicExchange:
+                {                                 // VALUE-RETURNING atomics are ORDER-DEPENDENT (the returned OLD value depends on
+                    const int node = st.result;   // execution order); the oracle runs active threads SEQUENTIALLY (a valid order, not
+                    if (mat_off[static_cast<crd::usize>(node)] < 0) // the GPU's) ⇒ validate the DETERMINISTIC downstream (sorted resolve).
+                    {
+                        mat_off[static_cast<crd::usize>(node)] = static_cast<crd::i32>(mat_pool.size());
+                        for (crd::u32 t = 0; t < local_size; ++t) { mat_pool.push_back(0.0); }
+                    }
+                    const crd::usize off = static_cast<crd::usize>(mat_off[static_cast<crd::usize>(node)]);
+                    const bool       add = st.kind == KStmtKind::BufferAtomicAddFetch;
+                    for (crd::usize a = 0; a < active.size(); ++a)
+                    {
+                        tid                = active[a];
+                        const int      idx = static_cast<int>(eval(eval, st.index));
+                        const crd::f64 val = eval(eval, st.value);
+                        KernelBuffer*  kb  = buffer_for(st.target);
+                        crd::f64       old = 0.0;
+                        if (kb != nullptr && idx >= 0 && idx < kb->len) { old = kb->data[idx]; kb->data[idx] = add ? old + val : val; }
+                        mat_pool[off + static_cast<crd::usize>(active[a])] = old;
+                    }
+                    ++i;
+                    break;
+                }
+                case KStmtKind::TraceRayClosest:
+                case KStmtKind::TraceRayHit:
+                {                               // INLINE RAY QUERY oracle — the ground truth: brute-force watertight ray-triangle
+                    const int  node    = st.result; // (Möller-Trumbore) over the AS's geometry, materialize the closest-hit t
+                    const bool is_hit  = st.kind == KStmtKind::TraceRayHit; // ...and (TraceRayHit) the triangle index.
+                    const int  pnode   = is_hit ? g.stmt_ext_operand(st, 8) : -1;
+                    if (mat_off[static_cast<crd::usize>(node)] < 0)
+                    {
+                        mat_off[static_cast<crd::usize>(node)] = static_cast<crd::i32>(mat_pool.size());
+                        for (crd::u32 t = 0; t < local_size; ++t) { mat_pool.push_back(0.0); }
+                    }
+                    if (is_hit && mat_off[static_cast<crd::usize>(pnode)] < 0)
+                    {
+                        mat_off[static_cast<crd::usize>(pnode)] = static_cast<crd::i32>(mat_pool.size());
+                        for (crd::u32 t = 0; t < local_size; ++t) { mat_pool.push_back(0.0); }
+                    }
+                    const crd::usize    off  = static_cast<crd::usize>(mat_off[static_cast<crd::usize>(node)]);
+                    const KernelBuffer* geo  = buffer_for(st.target); // the AS binding holds the triangle geometry in the oracle
+                    // layout: data[0] = triangle count; then per triangle 9 floats (v0.xyz, v1.xyz, v2.xyz).
+                    const int ntri = (geo != nullptr && geo->len > 0) ? static_cast<int>(geo->data[0]) : 0;
+                    for (crd::usize a = 0; a < active.size(); ++a)
+                    {
+                        tid                  = active[a];
+                        const crd::f64 ox    = eval(eval, g.stmt_ext_operand(st, 0));
+                        const crd::f64 oy    = eval(eval, g.stmt_ext_operand(st, 1));
+                        const crd::f64 oz    = eval(eval, g.stmt_ext_operand(st, 2));
+                        const crd::f64 dx    = eval(eval, g.stmt_ext_operand(st, 3));
+                        const crd::f64 dy    = eval(eval, g.stmt_ext_operand(st, 4));
+                        const crd::f64 dz    = eval(eval, g.stmt_ext_operand(st, 5));
+                        const crd::f64 tmin  = eval(eval, g.stmt_ext_operand(st, 6));
+                        const crd::f64 tmax  = eval(eval, g.stmt_ext_operand(st, 7));
+                        crd::f64       best  = tmax;
+                        int            best_tri = -1; // 0xFFFFFFFF sentinel on miss
+                        for (int tr = 0; tr < ntri; ++tr)
+                        {
+                            const int      b   = 1 + tr * 9;
+                            const crd::f64 e1x = geo->data[b + 3] - geo->data[b + 0], e1y = geo->data[b + 4] - geo->data[b + 1], e1z = geo->data[b + 5] - geo->data[b + 2];
+                            const crd::f64 e2x = geo->data[b + 6] - geo->data[b + 0], e2y = geo->data[b + 7] - geo->data[b + 1], e2z = geo->data[b + 8] - geo->data[b + 2];
+                            const crd::f64 px = dy * e2z - dz * e2y, py = dz * e2x - dx * e2z, pz = dx * e2y - dy * e2x; // dir × e2
+                            const crd::f64 det = e1x * px + e1y * py + e1z * pz;
+                            if (det > -1.0e-12 && det < 1.0e-12) { continue; } // ray parallel to the triangle
+                            const crd::f64 inv = 1.0 / det;
+                            const crd::f64 tvx = ox - geo->data[b + 0], tvy = oy - geo->data[b + 1], tvz = oz - geo->data[b + 2];
+                            const crd::f64 u   = (tvx * px + tvy * py + tvz * pz) * inv;
+                            if (u < 0.0 || u > 1.0) { continue; }
+                            const crd::f64 qx = tvy * e1z - tvz * e1y, qy = tvz * e1x - tvx * e1z, qz = tvx * e1y - tvy * e1x; // tvec × e1
+                            const crd::f64 v  = (dx * qx + dy * qy + dz * qz) * inv;
+                            if (v < 0.0 || u + v > 1.0) { continue; }
+                            const crd::f64 t = (e2x * qx + e2y * qy + e2z * qz) * inv;
+                            if (t > tmin && t < best) { best = t; best_tri = tr; }
+                        }
+                        mat_pool[off + static_cast<crd::usize>(active[a])] = best;
+                        if (is_hit)
+                        {
+                            const crd::f64 prim = best_tri >= 0 ? static_cast<crd::f64>(best_tri) : 4294967295.0; // 0xFFFFFFFF on miss
+                            mat_pool[static_cast<crd::usize>(mat_off[static_cast<crd::usize>(pnode)]) + static_cast<crd::usize>(active[a])] = prim;
+                        }
                     }
                     ++i;
                     break;

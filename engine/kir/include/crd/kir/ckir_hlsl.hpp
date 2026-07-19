@@ -180,6 +180,11 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
             s.append("groupshared "); s.append(buf_ctype(nd.dtype())); s.append(" sh"); app_uint(s, i);
             s.append("["); app_uint(s, nd.iidx + static_cast<int>(nd.axes)); s.append("];\n");
         }
+        else if (nd.op == KOp::AccelStructDecl) // B9/RT-1: inline DXR — the TLAS as an SRV (RayQuery<> needs Shader Model 6.5+)
+        {
+            s.append("RaytracingAccelerationStructure as"); app_uint(s, nd.iidx);
+            s.append(" : register(t"); app_uint(s, nd.iidx); s.append(");\n");
+        }
     }
     s.append("[numthreads("); app_uint(s, static_cast<int>(entry.local_size[0]));
     s.append(", ");            app_uint(s, static_cast<int>(entry.local_size[1]));
@@ -338,6 +343,56 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
             case KStmtKind::SharedAtomicAdd: decl(decl, st.index); decl(decl, st.value); s.append("  { uint oldv_; InterlockedAdd(sh"); app_uint(s, st.target); s.append("["); pv(pv, st.index); s.append("], "); pv(pv, st.value); s.append(", oldv_); }\n"); ++i; break;
             case KStmtKind::BufferAtomicAdd: decl(decl, st.index); decl(decl, st.value); s.append("  buf"); app_uint(s, g.node(st.target).iidx); s.append(".InterlockedAdd((("); pv(pv, st.index); s.append(")) * 4u, "); pv(pv, st.value); s.append(");\n"); ++i; break; // RAW byte-addressed UAV
             case KStmtKind::BufferAtomicMin: decl(decl, st.index); decl(decl, st.value); s.append("  buf"); app_uint(s, g.node(st.target).iidx); s.append(".InterlockedMin((("); pv(pv, st.index); s.append(")) * 4u, "); pv(pv, st.value); s.append(");\n"); ++i; break; // B4-vis: visibility key (RAW UAV, unsigned min)
+            case KStmtKind::BufferAtomicAddFetch: // value-returning: declare a temp, capture the OLD value via the out-param
+                decl(decl, st.index); decl(decl, st.value);
+                s.append("  "); s.append(ctype(g.node(st.result).dtype())); s.append(" t"); app_uint(s, static_cast<crd::u32>(st.result));
+                s.append("; buf"); app_uint(s, g.node(st.target).iidx); s.append(".InterlockedAdd((("); pv(pv, st.index); s.append(")) * 4u, ");
+                pv(pv, st.value); s.append(", t"); app_uint(s, static_cast<crd::u32>(st.result)); s.append(");\n");
+                temped[static_cast<crd::usize>(st.result)] = 1U; ++i; break;
+            case KStmtKind::BufferAtomicExchange: // value-returning: RWByteAddressBuffer.InterlockedExchange(off, val, orig)
+                decl(decl, st.index); decl(decl, st.value);
+                s.append("  "); s.append(ctype(g.node(st.result).dtype())); s.append(" t"); app_uint(s, static_cast<crd::u32>(st.result));
+                s.append("; buf"); app_uint(s, g.node(st.target).iidx); s.append(".InterlockedExchange((("); pv(pv, st.index); s.append(")) * 4u, ");
+                pv(pv, st.value); s.append(", t"); app_uint(s, static_cast<crd::u32>(st.result)); s.append(");\n");
+                temped[static_cast<crd::usize>(st.result)] = 1U; ++i; break;
+            case KStmtKind::TraceRayClosest: // B9/RT-1: inline DXR ray query — closest-hit distance `t` (or tmax on miss)
+            {
+                for (int k = 0; k < 8; ++k) { decl(decl, g.stmt_ext_operand(st, k)); }
+                const auto op = [&](int k) { pv(pv, g.stmt_ext_operand(st, k)); };
+                const crd::u32 bnd = g.node(st.target).iidx;
+                const crd::u32 res = static_cast<crd::u32>(st.result);
+                s.append("  RayQuery<RAY_FLAG_FORCE_OPAQUE> rq"); app_uint(s, res); s.append(";\n");
+                s.append("  RayDesc rd"); app_uint(s, res); s.append("; rd"); app_uint(s, res); s.append(".Origin = float3("); op(0); s.append(", "); op(1); s.append(", "); op(2); s.append(");");
+                s.append(" rd"); app_uint(s, res); s.append(".TMin = "); op(6); s.append("; rd"); app_uint(s, res); s.append(".Direction = float3("); op(3); s.append(", "); op(4); s.append(", "); op(5); s.append(");");
+                s.append(" rd"); app_uint(s, res); s.append(".TMax = "); op(7); s.append(";\n");
+                s.append("  rq"); app_uint(s, res); s.append(".TraceRayInline(as"); app_uint(s, bnd); s.append(", RAY_FLAG_FORCE_OPAQUE, 0xFF, rd"); app_uint(s, res); s.append(");\n");
+                s.append("  rq"); app_uint(s, res); s.append(".Proceed();\n");
+                s.append("  float t"); app_uint(s, res); s.append(" = (rq"); app_uint(s, res); s.append(".CommittedStatus() == COMMITTED_TRIANGLE_HIT) ? rq"); app_uint(s, res); s.append(".CommittedRayT() : "); op(7); s.append(";\n");
+                temped[static_cast<crd::usize>(st.result)] = 1U;
+                ++i;
+                break;
+            }
+            case KStmtKind::TraceRayHit: // B9/RT-2: inline DXR ray query — closest-hit distance `t` + PRIMITIVE INDEX
+            {
+                for (int k = 0; k < 8; ++k) { decl(decl, g.stmt_ext_operand(st, k)); }
+                const auto op = [&](int k) { pv(pv, g.stmt_ext_operand(st, k)); };
+                const crd::u32 bnd  = g.node(st.target).iidx;
+                const crd::u32 res  = static_cast<crd::u32>(st.result);
+                const crd::u32 prim = static_cast<crd::u32>(g.stmt_ext_operand(st, 8));
+                s.append("  RayQuery<RAY_FLAG_FORCE_OPAQUE> rq"); app_uint(s, res); s.append(";\n");
+                s.append("  RayDesc rd"); app_uint(s, res); s.append("; rd"); app_uint(s, res); s.append(".Origin = float3("); op(0); s.append(", "); op(1); s.append(", "); op(2); s.append(");");
+                s.append(" rd"); app_uint(s, res); s.append(".TMin = "); op(6); s.append("; rd"); app_uint(s, res); s.append(".Direction = float3("); op(3); s.append(", "); op(4); s.append(", "); op(5); s.append(");");
+                s.append(" rd"); app_uint(s, res); s.append(".TMax = "); op(7); s.append(";\n");
+                s.append("  rq"); app_uint(s, res); s.append(".TraceRayInline(as"); app_uint(s, bnd); s.append(", RAY_FLAG_FORCE_OPAQUE, 0xFF, rd"); app_uint(s, res); s.append(");\n");
+                s.append("  rq"); app_uint(s, res); s.append(".Proceed();\n");
+                s.append("  bool hit"); app_uint(s, res); s.append(" = (rq"); app_uint(s, res); s.append(".CommittedStatus() == COMMITTED_TRIANGLE_HIT);\n");
+                s.append("  float t"); app_uint(s, res); s.append(" = hit"); app_uint(s, res); s.append(" ? rq"); app_uint(s, res); s.append(".CommittedRayT() : "); op(7); s.append(";\n");
+                s.append("  uint t"); app_uint(s, prim); s.append(" = hit"); app_uint(s, res); s.append(" ? rq"); app_uint(s, res); s.append(".CommittedPrimitiveIndex() : 0xFFFFFFFFu;\n");
+                temped[static_cast<crd::usize>(st.result)] = 1U;
+                temped[static_cast<crd::usize>(g.stmt_ext_operand(st, 8))] = 1U;
+                ++i;
+                break;
+            }
             case KStmtKind::ForBreakIf: decl(decl, st.value); s.append("  if (("); pv(pv, st.value); s.append(") != 0u) break;\n"); ++i; break;
             case KStmtKind::BufferTicket: decl(decl, st.index); s.append("  if (lidx == 0u) { uint tick_; buf"); app_uint(s, g.node(st.target).iidx); s.append(".InterlockedAdd((("); pv(pv, st.index); s.append(")) * 4u, 1u, tick_); sh"); app_uint(s, st.value); s.append("[0] = tick_; }\n"); ++i; break;
             case KStmtKind::SyncWarp: s.append("  GroupMemoryBarrierWithGroupSync();\n"); ++i; break; // no wave barrier in HLSL — conservative
@@ -376,6 +431,107 @@ inline const char* htype(KType t) noexcept
         else { switch (t.rows) { case 2: return "float2"; case 3: return "float3"; case 4: return "float4"; default: break; } }
     }
     return glsl_detail::ctype(t.scalar);
+}
+
+// FA-2 (portable RT PIPELINE → DXR HLSL): emit a raygen / closest-hit / miss HLSL shader from a KEntry — the DX12 twin of
+// emit_rt_stage_glsl. Raygen: DispatchRaysIndex().x → read a ray → `TraceRay(as0, RAY_FLAG_NONE, …, ray, pl)` → store the payload;
+// closest-hit: `pl.m0 = RayTCurrent()`; miss: `pl.m0 = 1e30`. The SER reorder HINT is dropped here (a DX12 no-op fallback — DX12
+// SER isn't wired, so the reorder is perf-only and safely omitted). RWByteAddressBuffer UAVs (RAW, byte-addressed) like the
+// compute path; the AS is a `RaytracingAccelerationStructure : register(t0)`. `ser` is accepted for signature parity (ignored).
+inline bool emit_rt_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IAllocator* /*scratch*/, GlslKernel& out, bool /*ser*/)
+{
+    using glsl_detail::app_uint;
+    const KStage st = entry.stage;
+    if (st != KStage::RayGen && st != KStage::ClosestHit && st != KStage::Miss && st != KStage::AnyHit) { return false; }
+    const int                n = g.size();
+    crd::containers::String& s = out.source;
+    s.clear();
+
+    int payload_n = 1;
+    for (int i = 0; i < n; ++i) { if (g.node(i).op == KOp::RayPayloadDecl) { payload_n = g.node(i).iidx > 0 ? g.node(i).iidx : 1; } }
+    s.append("struct RtPayload { ");
+    for (int c = 0; c < payload_n; ++c) { s.append("float m"); app_uint(s, c); s.append("; "); }
+    s.append("};\n");
+    for (int i = 0; i < n; ++i)
+    {
+        const KNode& nd = g.node(i);
+        if (nd.op == KOp::AccelStructDecl) { s.append("RaytracingAccelerationStructure as"); app_uint(s, nd.iidx); s.append(" : register(t"); app_uint(s, nd.iidx); s.append(");\n"); }
+        else if (nd.op == KOp::BufferDecl) { s.append("RWByteAddressBuffer buf"); app_uint(s, nd.iidx); s.append(" : register(u"); app_uint(s, nd.iidx); s.append(");\n"); }
+    }
+    const int  b0 = entry.kernel_body_begin;
+    const int  bn = entry.kernel_body_count;
+    const char* xyzw = "xyzw";
+    const auto  pv = [&](auto&& self, int node) -> void {
+        const KNode& nd = g.node(node);
+        const auto   bin = [&](const char* o) { s.append("("); self(self, nd.a); s.append(o); self(self, nd.b); s.append(")"); };
+        switch (nd.op)
+        {
+        case KOp::Const:
+            if (nd.dtype() == DType::U32) { char b[32]; std::snprintf(b, sizeof(b), "%uu", static_cast<unsigned>(static_cast<crd::i64>(nd.cval))); s.append(b); }
+            else if (nd.dtype() == DType::I32) { char b[32]; std::snprintf(b, sizeof(b), "%d", static_cast<int>(static_cast<crd::i64>(nd.cval))); s.append(b); }
+            else { char b[40]; std::snprintf(b, sizeof(b), "%.9g", nd.cval); s.append(b); if (std::strchr(b, '.') == nullptr && std::strchr(b, 'e') == nullptr && std::strchr(b, 'n') == nullptr) { s.append(".0"); } }
+            break;
+        case KOp::Builtin:
+            switch (static_cast<KBuiltin>(nd.iidx))
+            {
+            case KBuiltin::LaunchId: s.append("DispatchRaysIndex()"); break;
+            case KBuiltin::LaunchSize: s.append("DispatchRaysDimensions()"); break;
+            case KBuiltin::HitT: s.append("RayTCurrent()"); break;
+            case KBuiltin::PrimitiveId: s.append("PrimitiveIndex()"); break;
+            case KBuiltin::InstanceId: s.append("InstanceID()"); break;
+            case KBuiltin::InstanceCustomIndex: s.append("InstanceID()"); break;
+            case KBuiltin::HitBary: s.append("attr.barycentrics"); break; // P4: DXR triangle barycentrics (float2)
+            default: s.append("0u"); break;
+            }
+            break;
+        case KOp::VecComp: self(self, nd.a); s.append("."); { const char sw[2] = {xyzw[nd.iidx], '\0'}; s.append(sw); } break;
+        case KOp::PayloadLoad: s.append("pl.m"); app_uint(s, nd.iidx); break;
+        case KOp::BufferLoad: s.append("asfloat(buf"); app_uint(s, g.node(nd.a).iidx); s.append(".Load(("); self(self, nd.b); s.append(") * 4u))"); break;
+        case KOp::Cast: s.append(nd.dtype() == DType::F32 ? "float(" : (nd.dtype() == DType::U32 ? "uint(" : "int(")); self(self, nd.a); s.append(")"); break;
+        case KOp::Neg: s.append("(-"); self(self, nd.a); s.append(")"); break;
+        case KOp::Add: bin(" + "); break;
+        case KOp::Sub: bin(" - "); break;
+        case KOp::Mul: bin(" * "); break;
+        case KOp::Div: bin(" / "); break;
+        case KOp::CmpLt: bin(" < "); break;
+        case KOp::CmpLe: bin(" <= "); break;
+        case KOp::CmpGt: bin(" > "); break;
+        case KOp::CmpGe: bin(" >= "); break;
+        case KOp::CmpEq: bin(" == "); break;
+        case KOp::CmpNe: bin(" != "); break;
+        case KOp::Max: s.append("max("); self(self, nd.a); s.append(", "); self(self, nd.b); s.append(")"); break;
+        case KOp::Min: s.append("min("); self(self, nd.a); s.append(", "); self(self, nd.b); s.append(")"); break;
+        default: s.append("0.0"); break;
+        }
+    };
+    const auto vv = [&](int node) { pv(pv, node); };
+
+    if (st == KStage::RayGen) { s.append("[shader(\"raygeneration\")]\nvoid main() {\n  RtPayload pl;\n"); }
+    else if (st == KStage::ClosestHit) { s.append("[shader(\"closesthit\")]\nvoid main(inout RtPayload pl, in BuiltInTriangleIntersectionAttributes attr) {\n"); }
+    else { s.append("[shader(\"miss\")]\nvoid main(inout RtPayload pl) {\n"); }
+
+    for (int i = 0; i < bn; ++i)
+    {
+        const KStmt& stm = g.stmt(b0 + i);
+        switch (stm.kind)
+        {
+        case KStmtKind::TraceRayPipeline:
+        {
+            const auto ex = [&](int k) { return g.stmt_ext_operand(stm, k); };
+            s.append("  RayDesc ray; ray.Origin = float3("); vv(ex(0)); s.append(", "); vv(ex(1)); s.append(", "); vv(ex(2)); s.append("); ray.TMin = "); vv(ex(6));
+            s.append("; ray.Direction = float3("); vv(ex(3)); s.append(", "); vv(ex(4)); s.append(", "); vv(ex(5)); s.append("); ray.TMax = "); vv(ex(7)); s.append(";\n");
+            s.append("  TraceRay(as"); app_uint(s, g.node(stm.target).iidx); s.append(", RAY_FLAG_NONE, 0xFFu, 0u, 0u, 0u, ray, pl);\n");
+            break;
+        }
+        case KStmtKind::PayloadStore: s.append("  pl.m"); app_uint(s, stm.index); s.append(" = "); vv(stm.value); s.append(";\n"); break;
+        case KStmtKind::BufferStore: s.append("  buf"); app_uint(s, g.node(stm.target).iidx); s.append(".Store(("); vv(stm.index); s.append(") * 4u, asuint("); vv(stm.value); s.append("));\n"); break;
+        case KStmtKind::IgnoreHitIf: s.append("  if ("); vv(stm.value); s.append(") { IgnoreHit(); }\n"); break; // P4 any-hit alpha
+        case KStmtKind::ReorderThread: break; // DX12 SER not wired ⇒ the reorder hint drops (perf-only no-op)
+        default: break;
+        }
+    }
+    s.append("}\n");
+    return true;
 }
 
 // B2: HLSL texture typing. `Texture<dim><, sampled4>` (e.g. `Texture2D<float4>`); `Sampler[Comparison]State`; the sampled

@@ -74,6 +74,11 @@ public:
     // B4: `VK_EXT_mesh_shader` + the `meshShader` feature enabled on a graphics-capable device — the substrate for the modern
     // amplification path (mesh shader objects + `vkCmdDrawMeshTasksEXT`). false ⇒ the caller uses the vertex-pull fallback.
     [[nodiscard]] virtual bool mesh_shader() const noexcept = 0;
+    [[nodiscard]] virtual bool ray_query() const noexcept   = 0; // B9/RT: inline ray query (VK_KHR_ray_query + acceleration_structure)
+    [[nodiscard]] virtual bool opacity_micromap() const noexcept   = 0; // FA-1: VK_EXT_opacity_micromap (alpha-tested geometry)
+    [[nodiscard]] virtual bool rt_pipeline() const noexcept        = 0; // FA-2: VK_KHR_ray_tracing_pipeline (raygen/hit/miss + SBT)
+    [[nodiscard]] virtual bool invocation_reorder() const noexcept = 0; // FA-2: VK_NV_ray_tracing_invocation_reorder (SER)
+    [[nodiscard]] virtual bool cluster_as() const noexcept         = 0; // FA-3: VK_NV_cluster_acceleration_structure
 
     // B2-d: non-uniform sampled-image array indexing (descriptor indexing) enabled — the substrate for BINDLESS texture
     // arrays (`texture(..., N)` + `KOp::SampleIndexed` with a per-fragment index). Graphics-capable devices.

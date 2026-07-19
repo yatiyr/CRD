@@ -7,7 +7,174 @@
 
 ## Current focus — Phase 3.1.6 **v17 GPU compute (CKIR)** — on the **GPU-program-system detour** (D-007+D-008 MERGED)
 
-> **▶▶ LAST SHIPPED (2026-07-18 — session log `docs/sessions/2026-07-18-b16-close-units-typing.md`):** **B16 CLOSED (DoD green).**
+> **▶▶ ACTIVE (2026-07-19, cont.): RAY-TRACING DETOUR — C3 `IRayTracingContext` + B9 CKIR RT, built TOGETHER (user-directed,
+> a deliberate re-sequence ahead of B18/B19).** Frontier + engine research DONE (see the RT research; the C3↔B9 pairing + full
+> scaffolding — 14-stage KStage incl. RT, RT builtins, per-stage create_program dispatch — already exist per D-007 rows 28/29).
+> Gold scope = the planned C3/B9 rows + 2026 frontier (inline rayQuery · RT pipeline+SBT · SER · OMM · cluster-AS/mega-geometry ·
+> LSS hair · RT-native ReSTIR/path-tracing). Decomposition: **[✅ RT-1 inline rayQuery core — DONE, GPU-verified]** → RT-2 full
+> RT pipeline (raygen/hit/miss+SBT) → RT-3 frontier accel (OMM/SER/cluster/LSS) → RT-4 RT-GI (ReSTIR PT + path-traced reference).
+> **[✅ RT-1 COMPLETE 2026-07-19]:** CKIR IR (`AccelStructDecl`/`RayHitResult`/`TraceRayClosest` + `trace_ray_closest` builder +
+> a per-KStmt ext-operand list) · CPU oracle (brute-force watertight ray-triangle, the reference) · GLSL `GL_EXT_ray_query` +
+> HLSL inline `RayQuery<>` emit (both COMPILE — the fix was `#version 460` + `cs_6_5`, no shaderc swap) · Vulkan RT DEVICE
+> (`VK_KHR_acceleration_structure`+`ray_query`+`deferred_host_operations`+BDA enabled; `ray_query()` accessor) · a proper
+> `VulkanRayTracingContext` (device-address buffers, BLAS+TLAS build, AS-descriptor-bound compute dispatch — fixed a realloc-UAF,
+> an AS-handle leak, the core-vs-KHR proc name). **GPU rays == CPU reference EXACTLY** (t=[2,miss,miss,1]); `[rt]` 21/2, no
+> regression ([oit] 42/6, [glsl] 26/5). **[✅ RT-2 — RT HARD SHADOWS 2026-07-19]:** generalized `trace_dispatch` (AS@0 +
+> arbitrary storage bindings, upload/readback — the reusable inline-RT dispatch) + `engine/kir/.../ckir_rt.hpp` (the CKIR RT
+> kernel library: `build_ray_trace_kernel` + `build_rt_shadow_kernel`). Per-point shadow ray P+t·(L−P) → visibility; GPU ==
+> CPU ray-triangle oracle EXACTLY (0/64 mismatches, 56 lit / 8 shadowed under a floating occluder) — the first real RT effect
+> and the direct B14 ReSTIR/GI visibility leaf. **[✅ RTAO 2026-07-19]:** `build_rtao_kernel` (ckir_rt.hpp) — per point, a
+> runtime `For` over `samples` cosine-weighted hemisphere rays (Duff branchless tangent frame + triple32-hash sampling +
+> `trace_ray_closest` per iteration + occlusion RMW): the **batch-of-rays-per-pixel LOOP pattern the path tracer needs**. GPU
+> AO == CPU oracle **EXACTLY** (worst |Δ|=0, deterministic sampling; darkest 0.53 under the quad → ~1.0 open — the physically-
+> correct ~50% for a 45°-subtended occluder). **[✅ RT REFLECTIONS 2026-07-19]:** NEW rich-hit IR `trace_ray_hit` (returns
+> t + PRIMITIVE INDEX — `KStmtKind::TraceRayHit`, ext[8]=primId RayHitResult U32; wired GLSL `rayQueryGetIntersectionPrimitiveIndexEXT`
+> + HLSL `CommittedPrimitiveIndex` + oracle best_tri). `build_rt_reflection_kernel`: reflect view about N → `trace_ray_hit` →
+> SHADE the hit (fetch its flat normal by primId, Lambert) or sample a sky gradient on miss — the reflected-ray→hit→fetch→shade
+> chain a path-tracing bounce needs. GPU colour == CPU oracle to 1 f32 ULP (worst 5.96e-8; 16 ceiling-reflecting / 48 sky).
+> **[✅ RT-3 PATH-TRACING MEGAKERNEL 2026-07-19]:** `build_pathtrace_kernel` (ckir_rt.hpp) — the full light-transport integrator:
+> runtime sample `For` loop (radiance RMW into out) with the diffuse bounce chain UNROLLED in C++ (CKIR `For` carries no registers,
+> so origin/dir/throughput/radiance thread as SSA node ids). Per bounce: `trace_ray_hit` → miss=CmpEq(prim,0xFFFFFFFF) →
+> radiance += select(miss, throughput·sky, 0) → fetch hit flat-normal + point → throughput = select(miss, 0, throughput·albedo)
+> → resample cosine-weighted hemisphere (Duff-2017 branchless tangent frame; cosθ/π cancels pdf ⇒ ×=albedo). Deterministic
+> triple32 sampling ⇒ GPU==CPU path-tracer oracle to transcendental ULP (worst 1.19e-7, mean 1.86e-8), with a low half-covering
+> ceiling driving real multi-bounce GI spatial variation (radiance lum range 0.62→0.73 @ albedo 0.4). **[✅ RT-4 NEE + MIS
+> AREA-LIGHT PATH TRACER 2026-07-19]:** `build_pathtrace_nee_kernel` (ckir_rt.hpp) — direct lighting done RIGHT: NEXT-EVENT
+> ESTIMATION (sample the area light + shadow-ray it at EVERY path vertex) combined with the BSDF-sampled hit via MULTIPLE
+> IMPORTANCE SAMPLING (Veach power heuristic β=2). Rectangular area light sampled analytically AND present in the AS (last tris)
+> so BSDF rays hit it; separate triple32 NEE/BSDF streams. Emits 3 strategies (`PtStrategy` Mis/Nee/Bsdf) so the classic Veach
+> UNBIASEDNESS check is testable — CPU: mean radiance MIS 0.6379 == NEE 0.6276 (Δ1.6%) == BSDF 0.6396 (Δ0.3%), all three converge
+> ⇒ MIS weights correct. GPU: MIS==oracle worst 0.043 (grazing shadow-ray flips at the penumbra edge — the honest non-bit-exact
+> RT contract), mean 0.0015, REAL soft shadow from an occluder. Both-backend emit+compile gate GREEN (GLSL + HLSL) ⇒ DX12/DXR
+> mirror unblocked. ⚠ SCAR: CKIR `select` can lower to arithmetic (mix) ⇒ masking does NOT guard NaN — clamp `hit.t` finite (1e5)
+> for miss point-reconstruction + guard every division denom with max(·,ε). ⚠ CPU oracle ~1ms/sample-iter (interpreted) ⇒ do
+> convergence validation on GPU / keep CPU spp low + lean on low-variance MIS≈NEE for weight correctness. **[✅ RT-5 ReSTIR DI
+> RIS RESERVOIR 2026-07-19]:** `build_restir_di_kernel` (ckir_rt.hpp) — RESAMPLED IMPORTANCE SAMPLING with a per-pixel reservoir
+> (Bitterli 2020): stream M candidate light samples into a WEIGHTED-RESERVOIR-SAMPLING reservoir (target p̂=f·Le·G), keep the one
+> survivor, pay ONE visibility ray (visibility reuse), estimate L=f·Le·G(y)·V·W with W=Σwᵢ/(M·p̂(y)) — provably unbiased. The
+> reservoir is threaded as SSA through the UNROLLED candidate loop (WRS replace = mask-blend, all-finite); `frames` averaged in an
+> outer runtime `For`. CPU: ReSTIR-DI 0.5881 == pure-NEE-direct 0.5877 (0.07% — unbiased). GPU: ==oracle ULP-EXACT (worst
+> 1.19e-7, deterministic WRS ⇒ NO grazing flips) + real soft shadow. Both-backend emit gate GREEN. This is the spatial-less core
+> (RIS+WRS+visibility reuse). **[✅ RT-5b/c ReSTIR SPATIOTEMPORAL 2026-07-19]:** the full Bitterli 2020 pipeline — 3 passes
+> (`build_restir_temporal_kernel` → `build_restir_spatial_kernel` → `build_restir_shade_kernel`, ckir_rt.hpp) over a PERSISTENT
+> 6-float/pixel reservoir [Qxyz,W,M], ping-ponged across frames on the GPU (in-out `trace_dispatch` bindings host-orchestrate the
+> reservoir). TEMPORAL: merge the prev-frame reservoir at the same pixel (M-capped) — unbiased (0.1%) + **5.8× variance reduction**
+> (warm rms 0.030 vs single-pass 0.175 on a visible light). SPATIAL: merge k neighbours (trig disk gather, u32 Mod/Div pixel
+> coords) re-weighting each under this pixel's p̂, with the UNBIASED normalisation W=Σwᵢ/(Z·p̂(y)), Z=ΣMᵢ over domains actually
+> containing y (2nd neighbour pass recomputes validity) — unbiased spatiotemporal to 0.08% + soft shadow, beats single-pass across
+> the shadow edge (floored by the hard-penumbra 1-spp visibility variance the denoiser resolves). ⚠ SCAR: feeding the POST-spatial
+> reservoir back as temporal history DARKENS 12% (compounding bias only GRIS/pairwise-MIS fix) → feed back the PRE-spatial reservoir;
+> per-pixel rms conflates variance+bias, test bias via SPATIAL MEAN. Both-backend emit gate GREEN (Mod/Div/Cast wired in HLSL).
+> `[rt]` now **375/13** ([glsl] 56/8, kir [rt] 9/3), no regression ([oit] 42/6). **[✅ C3b DX12 DXR MIRROR 2026-07-19]:**
+> `Dx12RayTracingContext` (dx12_ray_tracing_context.hpp/.cpp) — the DX12 twin of the Vulkan RT context: ID3D12Device5 DXR
+> BLAS/TLAS build (tier-1.1 gate) + inline-RayQuery compute dispatch. Root sig = ROOT SRV at t0 (the TLAS, bound by GPU VA) +
+> a UAV descriptor table u1..u{maxBinding} (slot binding-1 ↔ register u{binding}) — matches the HLSL the emitter produces
+> (`RaytracingAccelerationStructure as0:register(t0)` + `RWByteAddressBuffer bufN:register(uN)`). DEFAULT/UPLOAD/READBACK staging
+> + explicit barriers (mirrors the DX12 compute context). Bumped `compile_hlsl_to_dxil` compute → **cs_6_5** (inline RayQuery;
+> superset — full DX12 suite still 765/87). SAME CKIR kernels → HLSL → DXIL: RT-1 core EXACT, path tracer ULP-exact (1.19e-7),
+> NEE/MIS worst **0.0433693 — byte-identical to Vulkan** (deterministic sampling ⇒ same grazing-flip points) ⇒ **VK≈DX12
+> ESTABLISHED** (both agree with the shared CPU oracle within RT-traversal geometric tolerance). **[✅ RT-6 MULTI-INSTANCE TLAS
+> 2026-07-19]:** `build_scene_instanced` on BOTH backends — one BLAS, N instances with per-instance row-major 3×4 world transforms
+> (+ instanceCustomIndex/InstanceID); the hardware applies each transform in traversal. GPU == CPU oracle (world-space copies):
+> t=[2,2,2,∞] identical on Vulkan + DX12 — the PORTABLE both-backend SCALE capability. NOTE: the literal SER (NVIDIA reorder) /
+> OMM (opacity micromap) / cluster (RTX mega-geometry) are VENDOR-LOCKED hardware extensions (perf/niche, patchy cross-vendor
+> support), out of the portable both-backend contract — deferred as HW-specific follow-ons. **[✅ RT-7 MANY-LIGHTS NEE
+> 2026-07-19]:** `build_manylight_nee_kernel` (ckir_rt.hpp) — the integrator-breadth capability RIS/ReSTIR exist for: the N area
+> lights live in a RUNTIME BUFFER (15f each: p0/eu/ev/nl/Le), each sample picks a light UNIFORMLY (⌊u·N⌋, Floor+Cast) and
+> shadow-rays it, with pdf=(1/N)(1/areaₗ) ⇒ ×N·areaₗ weight + in-kernel |eu×ev| area. UNBIASED: GPU N-light kernel mean ==
+> Σ per-light direct (0.16%); CPU eval smoke + both-backend emit gate (Floor/Cast wired in HLSL). The substrate a light-BVH /
+> power sampling / multi-light ReSTIR resamples over. `[rt]` now VK **407/15** ([glsl] 62/9, kir [rt] 12/4) + DX12 31/4.
+> **ALL FOUR requested RT frontier directions COMPLETE** (ReSTIR spatiotemporal · DX12 mirror · multi-instance TLAS · many-lights).
+> **[✅ INTEGRATOR BREADTH 2026-07-19 — user directive: NO follow-ons, implement EVERYTHING incl. vendor extensions]:**
+> **IB-1** `build_pathtrace_full_kernel` = full production path tracer (many-lights NEE+MIS + EMISSIVE hits primId→light + RUSSIAN
+> ROULETTE unbiased ÷p + GI); GPU==oracle ULP, RR-on == RR-off exactly. ⛔ SCAR: `cf(node_id)` builds a constant = the node-id
+> number (~80× bug), GPU==oracle BLIND to it → sanity-check magnitudes. **IB-2** ReSTIR GI (Ouyang 2021): 12-float reservoir
+> [xs,ns,Lo,W,M], temporal + SPATIAL with JACOBIAN reconnection J=(cosθ_s^new·d_old²)/(cosθ_s^old·d_new²); unbiased (temporal 0.7%,
+> spatiotemporal 1.1%) + variance win. **IB-3** light POWER sampling — CDF over luminance(Le)·area; unbiased + lower variance. All
+> both-backend emit-gated. `[rt]` VK **1185/21** ([glsl] 86/11). **⭐ Adapter = RTX 4070 Ti SUPER — reports OMM / SER
+> (VK_EXT/NV_ray_tracing_invocation_reorder) / VK_KHR_ray_tracing_pipeline / VK_NV_cluster_acceleration_structure → all
+> RUN-verifiable here.** **[✅ FA-1 OPACITY MICROMAPS 2026-07-19 — RUN on the RTX 4070]:** all 4 vendor RT extensions ENABLED in
+> vulkan_context.cpp (OMM · RT-pipeline · SER invocation-reorder · cluster-AS — detect + feature-probe + chain + devexts[28] +
+> accessors). `build_scene_omm` (vulkan_ray_tracing_context.cpp): builds a VkMicromapEXT (2-state, per-tri VkMicromapTriangleEXT +
+> usage counts + VK_BUFFER_USAGE_MICROMAP_*), attaches it to the BLAS triangle geometry (VkAccelerationStructureTrianglesOpacityMicromapEXT
+> in pNext, per-tri OMM index buffer: tri0→0, rest→FULLY_OPAQUE), geometry NOT opaque. ⛔ the inline-rayQuery emit forced
+> `gl_RayFlagsOpaqueEXT` which BYPASSES the OMM → changed to `gl_RayFlagsNoneEXT` (opaque scenes still auto-commit — [rt] 1185/21
+> unchanged). RESULT: half-transparent OMM front triangle over a back triangle → 16 rays hit opaque micro-tris (t≈1), 18 PASS
+> THROUGH transparent micro-tris to the back (t≈2) — alpha resolved in traversal, no any-hit. **[✅ FA-2 RT PIPELINE + SER
+> 2026-07-19 — RUN on the RTX 4070]:** shaderc RT stages wired (raygen/closesthit/miss/anyhit/intersection/callable →
+> shaderc_*_shader); `trace_rays_pipeline` (vulkan_ray_tracing_context.cpp) — VkRayTracingPipelineKHR (3 stages → 3 groups:
+> general raygen/miss + triangles-hit), a base-aligned 3-region shader binding table from vkGetRayTracingShaderGroupHandlesKHR,
+> `vkCmdTraceRaysKHR(w,h,1)`. The raygen uses SHADER EXECUTION REORDERING (GL_NV_shader_invocation_reorder: hitObjectNV +
+> reorderThreadNV + hitObjectExecuteShaderNV) when `invocation_reorder()`. Result == oracle (t=[2,∞,∞,1]) WITH SER active — the
+> perf reorder doesn't change results. **[✅ PORTABLE VENDOR RT P1–P5 2026-07-19 — user architecture: "in CKIR + warn when
+> unsupported"; 3-layer split + any-hit alpha fallback]:** the vendor features are made PORTABLE + capability-gated. **P1**
+> `RtCapabilities` query (rt_capabilities.hpp: RtFeature InlineQuery/RtPipeline/ShaderReorder/OpacityMicromap/ClusterAS) on both RT
+> contexts. **P2** the RT PIPELINE authored IN CKIR — new IR (RayPayloadDecl/PayloadLoad/PayloadStore/TraceRayPipeline/ReorderThread/
+> IgnoreHitIf + HitBary builtin) + `build_rt_pipeline_{raygen,closesthit,miss,anyhit_alpha}` + `emit_rt_stage_{glsl,hlsl}` (rgen/rchit/
+> rmiss/rahit → GLSL GL_EXT_ray_tracing AND DXR HLSL lib_6_3). GLSL runtime-verified (t=[2,∞,∞,1] with SER), HLSL dxc-compile-gated.
+> **P3** SER is a portable REORDER HINT: emit honors it (hitObjectNV flow) when the target has SER, DROPS it otherwise (plain
+> traceRay / no-op) — perf-only, correct everywhere. **P4** portable `build_scene_alpha`: HW OMM if supported, else a NON-OPAQUE
+> scene + the CKIR ANY-HIT ALPHA shader (`if(u+v<cutoff) ignoreIntersectionEXT`) — correct alpha-tested geometry without HW OMM
+> (verified: 28 hit / 36 pass-through), + fell_back flag. **P5** portable `build_scene_scalable`: clusters if supported, else
+> transparent standard BLAS (identical hits). ⛔ SCARS: `cf(node)` trap avoided; the SER hint / RT-pipeline stages couple (SER
+> only exists in the pipeline). `[rt]` VK **1260/28**, DX12 **784/89**, kir 12/4 — no regression. **★★ VENDOR RT FEATURES NOW LIVE
+> IN CKIR + GRACEFULLY DEGRADE WITH A DIAGNOSTIC — the portability mission applied to the frontier.**
+> **[✅ FA-3 CLUSTER-AS 2026-07-19 — RUN on the RTX 4070]:** `build_scene_clusters`
+> (VK_NV_cluster_acceleration_structure / RTX Mega-Geometry) — the triangle → a CLAS via a GPU-DRIVEN INDIRECT build
+> (`vkCmdBuildClusterAccelerationStructureIndirectNV`, opType BUILD_TRIANGLE_CLUSTER, implicit destinations, per-cluster
+> `VkClusterAccelerationStructureBuildTriangleClusterInfoNV` with 32-bit indices) → a cluster BLAS (opType BUILD_CLUSTERS_BOTTOM_LEVEL,
+> the CLAS address GPU-chained via the pass-1 dst-addresses buffer as pass-2's clusterReferences, AS-build barrier between) →
+> readback the BLAS address → a standard TLAS instance referencing it. Traverses like a normal BLAS ⇒ t=[2,∞,∞,1] == oracle. ⛔
+> SCARS (from validation): cluster srcInfos/count need `ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT`, dst-arrays/implicit-data
+> need `ACCELERATION_STRUCTURE_STORAGE_BIT`; the AS-build barrier access mask must be ACCELERATION_STRUCTURE_{WRITE,READ} only; and
+> the cluster geometry must be marked `GEOMETRY_OPAQUE_BIT_NV` or (under RayFlagsNone) the simple trace never commits → all-miss.
+> **★★ ALL THREE VENDOR RT FRONTIER FEATURES RUN + VERIFIED on the RTX 4070 (OMM · RT-pipeline+SER · cluster-AS) — the complete
+> gold-standard cutting-edge RT system is DONE, no follow-ons.** `[rt]` VK **1212/24**. Correctness = GPU-RT vs CPU
+> `geometry-bvh` watertight reference within tolerance + VK≈DX12 (RT traversal is NOT bit-exact). Unblocks the B14 ReSTIR RT
+> visibility leaf. **B18 hair PAUSED at B18-a (BCSDF core landed + energy-verified, feeds the RT path tracer):** `ckir_hair.hpp`
+> = Chiang R/TT/TRT/TRRT (Bessel-I0 Mp, trimmed-logistic Np, Fresnel/Beer Ap, cuticle tilt, melanin/RGB→σₐ), **white-furnace
+> albedo = 1.00009 (energy-conserving to 0.02%)**, shape-polymorphic (scalar→monochrome elementwise / vec3→colour raster),
+> both-backend GLSL+HLSL emit+compile gate green, Math-Mandate clean. Remaining hair (B18-a data dispatch, B18-b fur+Huang, c/d/e)
+> resumes on top of RT (LSS strands + path-traced dual-scattering reference).
+>
+> **▶▶ LAST SHIPPED (2026-07-19 — session log `docs/sessions/2026-07-19-b17-oit.md`; accuracy board `docs/bench/2026-07-19-oit-tier-scoreboard.md`):** **B4 CLOSED (user-committed); B17 OIT — ALL THREE tiers landed + device-verified BOTH backends.**
+> **[✅ B17-b MBOIT]** (Münstermann 2018, hero glass/foliage tier): absorbance-weighted 4-power-moment generation + the
+> Peters-Klein Hamburger reconstruction (`oit::msm_hamburger_scalar`, a scalar transcription of the moment-shadow `msm_hamburger`
+> since the compute emitter is scalar-only) → per-fragment transmittance → composite, over the SHARED deferred store. Lowers
+> to-ULP (both backends); 4 moments resolve 2 depth masses **EXACTLY** ⇒ bit-exact at 2-layer (glass), beating WBOIT (30 LSB).
+> **▶ LIFTED to high depth complexity (6-POWER-MOMENT extension, `oit::msm_hamburger6_scalar`):** the Hamburger solve
+> generalized to a 4×4 Hankel Cholesky + a CUBIC root-solve + a Gauss-Radau form factor → resolves **3 masses**, **~1 LSB from
+> exact at 3-layer complexity where WBOIT is 18 LSB off — an 18× win**, both backends. Exact-capacity = ⌊moments/2⌋ masses.
+> **MBOIT BEATS WBOIT at every depth complexity within its moment budget — no recorded loss.** No regression (VK 715 · DX12 735). Tidy-clean.
+> **B17 ORDER-INDEPENDENT TRANSPARENCY** — all three tiers built + device-verified on **both backends** (one CKIR IR → GLSL+HLSL):
+> **[✅ B17-a WBOIT]** (McGuire-Bavoil 2013 — the cheap single-pass tier): a NEW gpu-context capability — **render-to-texture float
+> MRT + per-attachment blend equations** (Vulkan `vkCmdSetColorBlendEquationEXT` dynamic state; DX12 `IndependentBlendEnable` static
+> PSOs) — accum (RGBA16F, additive) + revealage (R16F, multiplicative) accumulate in ONE order-independent pass, a full-screen
+> composite resolves over the background (`draw_wboit`, both backends). CKIR shaders (`ckir_oit_test.hpp`) + f16-aware CPU oracle;
+> observable RGBA8 matches to **≤2 LSB** (f16 accum + f32 divide ⇒ to-ULP tier) VK==DX12. **[✅ B17-c A-BUFFER exact reference]**
+> (Carpenter 1984): two portable CKIR **compute** kernels (`ckir_oit.hpp`) — deferred per-fragment store (static slot = fragment id
+> for the fixed-coverage reference scene) + a per-pixel depth **sort network** + the exact front-to-back `over` composite. Pure f32
+> mul/add/sub on a deterministic order ⇒ **BIT-EXACT** vs `eval_cpu_kernel` and VK==DX12 (worst |Δ|=0). The GROUND TRUTH the
+> approximate tiers score against. **[✅ QUALITY SCOREBOARD]** WBOIT 14 LSB off exact (4-layer) · MBOIT bit-exact at 2-layer where
+> WBOIT is 30 LSB off — the accuracy board `docs/bench/2026-07-19-oit-tier-scoreboard.md`. B17 all three tiers CLOSED both
+> backends (VK 715 · DX12 735; OIT VK 29 · DX12 26). Tidy-clean (win-tidy). **⚠ PRACTICAL CEILING MAPPED (both explored + removed):**
+> **8-moment power = compile WALL** (quartic reconstruction too big — driver re-unrolls, MEASURED hang); **trig moments = quality
+> WALL** (Fourier/Fejér compile fast but too blurry — 80 LSB, LOSE to WBOIT's 14); **per-pixel-hoisted runtime-loop = the
+> architecture WORKS (diagnostic: trivial body runs instantly) but the 8-moment quartic body is too complex for the shader
+> compiler EVEN EMITTED ONCE** — the wall is reconstruction complexity, not unrolling. **6-moment (3 masses) is the DEFINITIVE
+> ceiling; the EXACT A-buffer (shipped, bit-exact) is the tool for arbitrary complexity. B17 DONE — WBOIT beaten across the
+> board.** **[✅ B17-c SCALABLE — the three carry-forwards ALL SHIPPED (2026-07-19, both backends; perf board
+> `docs/bench/2026-07-19-oit-tier-perf.md`):** (1) **atomic linked-list A-buffer** — NEW **value-returning atomics** in CKIR
+> (`atomic_add_fetch`/`atomic_exchange`, `AtomicResult` impure leaf, all 5 emitters); race-built lists, sort-resolved, match the
+> static exact reference **BIT-FOR-BIT** (worst |Δ|=0) VK==DX12; gold interleaved node-pool (≤8-binding cap). (2) **stochastic
+> transparency** (Enderton 2010) — S deterministic-hash sub-samples, mean = UNBIASED `over` (converges ~1/√S; TAA=1/frame);
+> triple32 hash GPU==oracle **bit-exact** both backends — REQUIRED making the **oracle's u32 arithmetic wrap mod-2^32**
+> (`apply_binary_typed`; it did integer ops in f64 with no wrap → a portability hole; full kir suite green 34759). (3) **GPU perf
+> board** (`[.oit-bench]`): static store-based tiers cheapest (~0.28 ms) & **MBOIT accuracy is FREE** (memory-bound); atomic list
+> ~10× (unbounded-depth price); stochastic cheapest unbounded tier per-frame (~0.061 ms @ S=1). Tidy-clean 3 targets; OIT VK 42 ·
+> DX12 35; full VK 84c · DX12 746a. **B17 = 5 tiers, both backends, accuracy + perf boards, NO loss.** Next: **B18 hair/fur.**
+>
+> **▶▶ (2026-07-18 — session log `docs/sessions/2026-07-18-b16-close-units-typing.md`):** **B16 CLOSED (DoD green).**
 > The B16/B4 batch (displaced-geometry ocean + mesh-shader fast path + promotion, from 2026-07-15/16) passed its full close-out. The
 > close-out full sweep **peeled a tidy onion** of pre-existing issues prior sessions missed by running test *binaries* instead of full
 > ctest+shipping — all root-caused + fixed (SANITY, no debt): (1) tidy on 36 touched files (mesh-emitter locals, `ocean_grid` globals

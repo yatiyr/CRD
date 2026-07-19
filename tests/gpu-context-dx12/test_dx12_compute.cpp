@@ -17,6 +17,7 @@
 #include <crd/math/cmath.hpp>        // Phase-1 FFT: host-side twiddle table
 #include <ckir_kernel_dispatch.hpp> // B-cmp: the SHARED both-backend kernel dispatch + oracle-compare harness
 #include <ckir_visbuffer_test.hpp>  // B4-vis: the SHARED software-rasterizer scene + oracle + mixed-dtype dispatch
+#include <ckir_abuffer_test.hpp>    // B17-c: the SHARED exact-reference A-buffer OIT scene + oracle + 2-kernel dispatch
 
 #include <crd/containers/span.hpp>
 #include <crd/containers/string_view.hpp>
@@ -544,6 +545,304 @@ TEST_CASE("B4-vis-3: CKIR HZB two-pass occlusion cull DISPATCHES on DX12 == CPU 
         CHECK(vis_gpu[static_cast<crd::usize>(c)] == vis_cpu[static_cast<crd::usize>(c)]);       // BIT-EXACT vs oracle
         CHECK(vis_gpu[static_cast<crd::usize>(c)] == scene.expected[static_cast<crd::usize>(c)]); // analytic: cull=0, visible=1
     }
+}
+
+// D-007 B17-c: the EXACT-REFERENCE A-buffer OIT on DX12 — the SAME two CKIR compute kernels (deferred store + per-pixel sort
+// + exact front-to-back composite) the Vulkan test runs. Pure f32 mul/add/sub on a deterministic sorted order ⇒ device output
+// BIT-EXACT vs `eval_cpu_kernel` AND DX12 == Vulkan. The ground truth the approximate WBOIT/MBOIT tiers are measured against.
+TEST_CASE("D-007 B17-c: exact-reference A-buffer OIT on DX12 (deferred store + per-pixel sort + composite, bit-exact)",
+          "[dx12][compute][gpu][oit][kernel]")
+{
+    namespace kir = crd::kir;
+    crd::memory::TlsfAllocator alloc(16U << 20U);
+    g::Dx12ComputeContext      ctx(&alloc);
+    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+
+    crd::kir::oit::AbufferConfig acfg;
+    acfg.width      = 32U;
+    acfg.height     = 32U;
+    acfg.layers     = 4U;
+    acfg.local_size = 64U;
+    const auto scene = crd::gputest::make_oit_scene();
+    acfg.bg[0]       = scene.background[0];
+    acfg.bg[1]       = scene.background[1];
+    acfg.bg[2]       = scene.background[2];
+
+    bool       emit_ok   = true;
+    const auto make_pipe = [&](const kir::KGraph& gr, const kir::KEntry& en, int nbufs) {
+        kir::GlslKernel kern(&alloc);
+        if (!kir::emit_compute_kernel_hlsl(gr, en, &alloc, kern)) { emit_ok = false; }
+        return ctx.create_pipeline_from_hlsl(crd::containers::to_view(kern.source), nbufs, 0U);
+    };
+
+    crd::containers::Array<crd::f64> cpu(&alloc);
+    crd::containers::Array<float>    gpu_out(&alloc);
+    crd::kir_test::abuffer_oracle(acfg, scene, alloc, cpu);
+    crd::kir_test::abuffer_dispatch(ctx, make_pipe, acfg, scene, alloc, gpu_out);
+    REQUIRE(emit_ok);
+    REQUIRE(gpu_out.size() == cpu.size());
+
+    double worst = 0.0;
+    for (crd::usize i = 0; i < gpu_out.size(); ++i)
+    {
+        const double d = std::fabs(static_cast<double>(gpu_out[i]) - cpu[i]);
+        if (d > worst) { worst = d; }
+    }
+    INFO("A-buffer exact-composite worst |GPU - oracle| = " << worst);
+    CHECK(worst == 0.0); // deterministic sorted order + pure f32 mul/add/sub ⇒ BIT-EXACT
+    CHECK(std::fabs(cpu[0] - static_cast<double>(scene.background[0])) > 0.05); // transparency actually composited
+}
+
+// D-007 B17-c (scalable): the ATOMIC LINKED-LIST A-buffer on DX12 — the deployable fragment capture enabled by NEW value-
+// returning atomics in CKIR, lowered to HLSL `RWByteAddressBuffer.InterlockedAdd(off, 1, orig)` (node allocator) +
+// `.InterlockedExchange(off, slot, orig)` (list push, out-param original — HLSL's form of a value-returning atomic). Fragments
+// race into per-pixel lists; the resolve walks + sorts ⇒ the composite must match the static-slot EXACT reference BIT-FOR-BIT.
+TEST_CASE("D-007 B17-c: scalable atomic linked-list A-buffer on DX12 (value-returning atomics == exact reference)",
+          "[dx12][compute][gpu][oit][atomic]")
+{
+    namespace kir = crd::kir;
+    crd::memory::TlsfAllocator alloc(16U << 20U);
+    g::Dx12ComputeContext      ctx(&alloc);
+    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+
+    crd::kir::oit::AbufferConfig acfg;
+    acfg.width      = 32U;
+    acfg.height     = 32U;
+    acfg.layers     = 4U;
+    acfg.local_size = 64U;
+    const auto scene = crd::gputest::make_oit_scene();
+    acfg.bg[0]       = scene.background[0];
+    acfg.bg[1]       = scene.background[1];
+    acfg.bg[2]       = scene.background[2];
+
+    bool       emit_ok   = true;
+    const auto make_pipe = [&](const kir::KGraph& gr, const kir::KEntry& en, int nbufs) {
+        kir::GlslKernel kern(&alloc);
+        if (!kir::emit_compute_kernel_hlsl(gr, en, &alloc, kern)) { emit_ok = false; }
+        return ctx.create_pipeline_from_hlsl(crd::containers::to_view(kern.source), nbufs, 0U);
+    };
+
+    crd::containers::Array<crd::f64> exact_cpu(&alloc);
+    crd::containers::Array<float>    gpu_out(&alloc);
+    crd::kir_test::abuffer_atomic_dispatch(ctx, make_pipe, acfg, scene, alloc, gpu_out);
+    crd::kir_test::abuffer_oracle(acfg, scene, alloc, exact_cpu); // the static-slot exact reference
+    REQUIRE(emit_ok);
+    REQUIRE(gpu_out.size() == exact_cpu.size());
+
+    double worst = 0.0;
+    for (crd::usize i = 0; i < gpu_out.size(); ++i)
+    {
+        const double d = std::fabs(static_cast<double>(gpu_out[i]) - exact_cpu[i]);
+        if (d > worst) { worst = d; }
+    }
+    INFO("atomic A-buffer vs static-slot exact reference: worst |Delta| = " << worst);
+    CHECK(worst == 0.0); // dynamic atomic capture + sort == the exact composite, bit-for-bit (DX12 == Vulkan)
+    CHECK(std::fabs(exact_cpu[0] - static_cast<double>(scene.background[0])) > 0.05); // transparency actually composited
+}
+
+// D-007 B17-c (scalable): STOCHASTIC TRANSPARENCY on DX12 (Enderton 2010) — the SAME single CKIR kernel Vulkan runs. A
+// deterministic integer hash (u32 avalanche, lowered to HLSL) drives the screen-door coverage; the u32 arithmetic wraps
+// mod 2^32 identically on GPU and in the CPU oracle (the oracle's integer path was made 32-bit-exact for this), so the
+// "random" result is BIT-EXACT DX12 == oracle == Vulkan — a portable, reproducible stochastic tier (consistent TAA history).
+TEST_CASE("D-007 B17-c: stochastic transparency on DX12 (deterministic-hash coverage; unbiased == exact A-buffer)",
+          "[dx12][compute][gpu][oit][stochastic]")
+{
+    namespace kir = crd::kir;
+    crd::memory::TlsfAllocator alloc(64U << 20U);
+    g::Dx12ComputeContext      ctx(&alloc);
+    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+
+    crd::kir::oit::AbufferConfig acfg;
+    acfg.width      = 32U;
+    acfg.height     = 32U;
+    acfg.layers     = 4U;
+    acfg.local_size = 64U;
+    acfg.samples    = 32U;
+    const auto scene = crd::gputest::make_oit_scene();
+    acfg.bg[0]       = scene.background[0];
+    acfg.bg[1]       = scene.background[1];
+    acfg.bg[2]       = scene.background[2];
+
+    bool       emit_ok   = true;
+    const auto make_pipe = [&](const kir::KGraph& gr, const kir::KEntry& en, int nbufs) {
+        kir::GlslKernel kern(&alloc);
+        if (!kir::emit_compute_kernel_hlsl(gr, en, &alloc, kern)) { emit_ok = false; }
+        return ctx.create_pipeline_from_hlsl(crd::containers::to_view(kern.source), nbufs, 0U);
+    };
+
+    crd::containers::Array<crd::f64> st_cpu(&alloc);
+    crd::containers::Array<float>    st_gpu(&alloc);
+    crd::kir_test::stochastic_oracle(acfg, scene, alloc, st_cpu);
+    crd::kir_test::stochastic_dispatch(ctx, make_pipe, acfg, scene, alloc, st_gpu);
+    REQUIRE(emit_ok);
+    REQUIRE(st_gpu.size() == st_cpu.size());
+    double worst = 0.0;
+    for (crd::usize i = 0; i < st_gpu.size(); ++i)
+    {
+        const double d = std::fabs(static_cast<double>(st_gpu[i]) - st_cpu[i]);
+        if (d > worst) { worst = d; }
+    }
+    INFO("stochastic GPU vs oracle worst |Delta| = " << worst);
+    CHECK(worst == 0.0); // deterministic hash + 32-bit-exact oracle ⇒ bit-identical DX12 == oracle == Vulkan
+
+    // UNBIASED: the W*H*32-sample pixel-average lands on the exact `over` composite (measured on the bit-identical oracle).
+    crd::containers::Array<crd::f64> exact_cpu(&alloc);
+    crd::kir_test::abuffer_oracle(acfg, scene, alloc, exact_cpu);
+    const crd::u32 wh      = acfg.width * acfg.height;
+    double         mean[3] = {0.0, 0.0, 0.0};
+    for (crd::u32 p = 0; p < wh; ++p)
+    {
+        for (int ch = 0; ch < 3; ++ch)
+        { mean[ch] += st_cpu[static_cast<crd::usize>(p) * 3U + static_cast<crd::usize>(ch)]; }
+    }
+    double bias = 0.0;
+    for (int ch = 0; ch < 3; ++ch)
+    {
+        const double b = std::fabs(mean[ch] / static_cast<double>(wh) - exact_cpu[static_cast<crd::usize>(ch)]);
+        if (b > bias) { bias = b; }
+    }
+    INFO("stochastic bias(S=32) vs exact = " << bias);
+    CHECK(bias < 0.02);                                                                // unbiased estimator of the exact over
+    CHECK(std::fabs(exact_cpu[0] - static_cast<double>(scene.background[0])) > 0.05); // transparency actually composited
+}
+
+// D-007 B17-b: MOMENT-BASED OIT (MBOIT, Münstermann 2018) on DX12 — the SAME CKIR compute kernels the Vulkan test runs
+// (absorbance-weighted 4-power-moment generation + the Peters-Klein Hamburger reconstruction, from the shared deferred store).
+// 4 power moments resolve 2 depth masses EXACTLY ⇒ MBOIT is bit-exact at 2-layer complexity, beating WBOIT; DX12 == Vulkan.
+TEST_CASE("D-007 B17-b: moment-based OIT (MBOIT) on DX12 (4-power-moment reconstruction — exact depth ordering, beats WBOIT)",
+          "[dx12][compute][gpu][oit][kernel]")
+{
+    namespace kir = crd::kir;
+    crd::memory::TlsfAllocator alloc(32U << 20U);
+    g::Dx12ComputeContext      ctx(&alloc);
+    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+
+    crd::kir::oit::AbufferConfig acfg;
+    acfg.width      = 32U;
+    acfg.height     = 32U;
+    acfg.layers     = 2U;
+    acfg.local_size = 64U;
+    crd::gputest::WboitScene scene{};
+    scene.count = 2U;
+    scene.background[0] = 0.05F; scene.background[1] = 0.06F; scene.background[2] = 0.08F;
+    scene.color[0][0] = 0.90F; scene.color[0][1] = 0.15F; scene.color[0][2] = 0.10F; scene.alpha[0] = 0.50F; scene.depth[0] = 0.25F;
+    scene.color[1][0] = 0.10F; scene.color[1][1] = 0.20F; scene.color[1][2] = 0.90F; scene.alpha[1] = 0.50F; scene.depth[1] = 0.70F;
+    acfg.bg[0] = scene.background[0];
+    acfg.bg[1] = scene.background[1];
+    acfg.bg[2] = scene.background[2];
+
+    bool       emit_ok   = true;
+    const auto make_pipe = [&](const kir::KGraph& gr, const kir::KEntry& en, int nbufs) {
+        kir::GlslKernel kern(&alloc);
+        if (!kir::emit_compute_kernel_hlsl(gr, en, &alloc, kern)) { emit_ok = false; }
+        return ctx.create_pipeline_from_hlsl(crd::containers::to_view(kern.source), nbufs, 0U);
+    };
+
+    crd::containers::Array<crd::f64> mb_cpu(&alloc);
+    crd::containers::Array<crd::f64> exact_cpu(&alloc);
+    crd::containers::Array<float>    mb_gpu(&alloc);
+    crd::kir_test::mboit_oracle(acfg, scene, alloc, mb_cpu);
+    crd::kir_test::mboit_dispatch(ctx, make_pipe, acfg, scene, alloc, mb_gpu);
+    crd::kir_test::abuffer_oracle(acfg, scene, alloc, exact_cpu);
+    REQUIRE(emit_ok);
+    REQUIRE(mb_gpu.size() == mb_cpu.size());
+
+    double worst_ulp = 0.0;
+    for (crd::usize i = 0; i < mb_gpu.size(); ++i)
+    {
+        const double d = std::fabs(static_cast<double>(mb_gpu[i]) - mb_cpu[i]);
+        if (d > worst_ulp) { worst_ulp = d; }
+    }
+    INFO("MBOIT GPU vs oracle worst |Δ| = " << worst_ulp);
+    CHECK(worst_ulp < 1.0e-5);
+
+    const auto q = [](double v) {
+        double c = v;
+        if (c < 0.0) { c = 0.0; }
+        else if (c > 1.0) { c = 1.0; }
+        return static_cast<int>(std::lround(c * 255.0));
+    };
+    int        mboit_err = 0;
+    for (int ch = 0; ch < 3; ++ch)
+    {
+        const int d = std::abs(q(mb_cpu[static_cast<crd::usize>(ch)]) - q(exact_cpu[static_cast<crd::usize>(ch)]));
+        if (d > mboit_err) { mboit_err = d; }
+    }
+    const crd::u32 wboit_err = crd::gputest::rgba8_max_channel_diff(crd::gputest::wboit_oracle_pixel(scene),
+                                                                    crd::gputest::oit_exact_composite_rgba8(scene));
+    INFO("2-layer: MBOIT vs exact = " << mboit_err << " LSB · WBOIT vs exact = " << wboit_err << " LSB");
+    CHECK(mboit_err <= 1);
+    CHECK(static_cast<crd::u32>(mboit_err) < wboit_err);
+}
+
+// D-007 B17-b (extension): 6-POWER-MOMENT MBOIT on DX12 — the hero tier lifted to 3-mass depth complexity (larger 4x4 Hankel
+// Cholesky + cubic root-solve + Gauss-Radau form factor). Same CKIR kernel as Vulkan; 6 moments resolve 3 depth masses, so
+// MBOIT lands ~1 LSB from exact and DECISIVELY beats WBOIT (18 LSB) at 3 layers. DX12 == Vulkan.
+TEST_CASE("D-007 B17-b: 6-moment MBOIT on DX12 (larger Cholesky + cubic — 3 masses, beats WBOIT)",
+          "[dx12][compute][gpu][oit][kernel]")
+{
+    namespace kir = crd::kir;
+    crd::memory::TlsfAllocator alloc(32U << 20U);
+    g::Dx12ComputeContext      ctx(&alloc);
+    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+
+    crd::kir::oit::AbufferConfig acfg;
+    acfg.width      = 32U;
+    acfg.height     = 32U;
+    acfg.layers     = 3U;
+    acfg.local_size = 64U;
+    crd::gputest::WboitScene scene{};
+    scene.count = 3U;
+    scene.background[0] = 0.05F; scene.background[1] = 0.06F; scene.background[2] = 0.08F;
+    scene.color[0][0] = 0.92F; scene.color[0][1] = 0.10F; scene.color[0][2] = 0.10F; scene.alpha[0] = 0.60F; scene.depth[0] = 0.20F;
+    scene.color[1][0] = 0.10F; scene.color[1][1] = 0.90F; scene.color[1][2] = 0.12F; scene.alpha[1] = 0.50F; scene.depth[1] = 0.50F;
+    scene.color[2][0] = 0.10F; scene.color[2][1] = 0.12F; scene.color[2][2] = 0.92F; scene.alpha[2] = 0.70F; scene.depth[2] = 0.80F;
+    acfg.bg[0] = scene.background[0];
+    acfg.bg[1] = scene.background[1];
+    acfg.bg[2] = scene.background[2];
+
+    bool       emit_ok   = true;
+    const auto make_pipe = [&](const kir::KGraph& gr, const kir::KEntry& en, int nbufs) {
+        kir::GlslKernel kern(&alloc);
+        if (!kir::emit_compute_kernel_hlsl(gr, en, &alloc, kern)) { emit_ok = false; }
+        return ctx.create_pipeline_from_hlsl(crd::containers::to_view(kern.source), nbufs, 0U);
+    };
+
+    crd::containers::Array<crd::f64> mb_cpu(&alloc);
+    crd::containers::Array<crd::f64> exact_cpu(&alloc);
+    crd::containers::Array<float>    mb_gpu(&alloc);
+    crd::kir_test::mboit6_oracle(acfg, scene, alloc, mb_cpu);
+    crd::kir_test::mboit6_dispatch(ctx, make_pipe, acfg, scene, alloc, mb_gpu);
+    crd::kir_test::abuffer_oracle(acfg, scene, alloc, exact_cpu);
+    REQUIRE(emit_ok);
+    REQUIRE(mb_gpu.size() == mb_cpu.size());
+
+    double worst_ulp = 0.0;
+    for (crd::usize i = 0; i < mb_gpu.size(); ++i)
+    {
+        const double d = std::fabs(static_cast<double>(mb_gpu[i]) - mb_cpu[i]);
+        if (d > worst_ulp) { worst_ulp = d; }
+    }
+    INFO("MBOIT6 GPU vs oracle worst |Δ| = " << worst_ulp);
+    CHECK(worst_ulp < 5.0e-3);
+
+    const auto q = [](double v) {
+        double c = v;
+        if (c < 0.0) { c = 0.0; }
+        else if (c > 1.0) { c = 1.0; }
+        return static_cast<int>(std::lround(c * 255.0));
+    };
+    int        mboit_err = 0;
+    for (int ch = 0; ch < 3; ++ch)
+    {
+        const int d = std::abs(q(mb_cpu[static_cast<crd::usize>(ch)]) - q(exact_cpu[static_cast<crd::usize>(ch)]));
+        if (d > mboit_err) { mboit_err = d; }
+    }
+    const crd::u32 wboit_err = crd::gputest::rgba8_max_channel_diff(crd::gputest::wboit_oracle_pixel(scene),
+                                                                    crd::gputest::oit_exact_composite_rgba8(scene));
+    INFO("3-layer: MBOIT6 vs exact = " << mboit_err << " LSB · WBOIT vs exact = " << wboit_err << " LSB");
+    CHECK(mboit_err <= 3);
+    CHECK(static_cast<crd::u32>(mboit_err) + 8U < wboit_err);
 }
 
 TEST_CASE("B-cmp Phase 1: CKIR radix-2 Stockham FFT DISPATCHES on DX12 == CPU oracle bit-exact",

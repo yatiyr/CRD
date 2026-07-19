@@ -76,7 +76,7 @@ namespace
     case ShaderStage::Mesh: return L"ms_6_5"; // B4: mesh shaders need SM 6.5
     case ShaderStage::Task: return L"as_6_5"; // B4: amplification (task) shaders
     case ShaderStage::Compute:
-    default: return L"cs_6_0";
+    default: return L"cs_6_5"; // 6.5 = a backward-compatible superset of 6.0 that also enables inline ray tracing (RayQuery<>)
     }
 }
 

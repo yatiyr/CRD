@@ -30,6 +30,7 @@ struct ShaderObjectApi
     PFN_vkCmdSetAlphaToCoverageEnableEXT set_alpha_to_coverage   = nullptr;
     PFN_vkCmdSetColorBlendEnableEXT    set_color_blend_enable    = nullptr;
     PFN_vkCmdSetColorWriteMaskEXT      set_color_write_mask      = nullptr;
+    PFN_vkCmdSetColorBlendEquationEXT  set_color_blend_equation  = nullptr; // B17-a: per-attachment blend eq (WBOIT accum/reveal)
     PFN_vkCmdDrawMeshTasksEXT          draw_mesh_tasks           = nullptr; // B4: VK_EXT_mesh_shader (optional — null if absent)
     PFN_vkCmdDrawMeshTasksIndirectEXT  draw_mesh_tasks_indirect  = nullptr; // B4: GPU-driven indirect meshlet dispatch
     PFN_vkCmdSetPatchControlPointsEXT  set_patch_control_points  = nullptr; // B4-tess: EDS2 patch size (optional — null if absent)
@@ -60,6 +61,8 @@ struct ShaderObjectApi
         reinterpret_cast<PFN_vkCmdSetColorBlendEnableEXT>(vkGetDeviceProcAddr(d, "vkCmdSetColorBlendEnableEXT"));
     a.set_color_write_mask =
         reinterpret_cast<PFN_vkCmdSetColorWriteMaskEXT>(vkGetDeviceProcAddr(d, "vkCmdSetColorWriteMaskEXT"));
+    a.set_color_blend_equation = // B17-a: WBOIT needs per-attachment blend equations (additive accum + multiplicative reveal)
+        reinterpret_cast<PFN_vkCmdSetColorBlendEquationEXT>(vkGetDeviceProcAddr(d, "vkCmdSetColorBlendEquationEXT"));
     a.draw_mesh_tasks = reinterpret_cast<PFN_vkCmdDrawMeshTasksEXT>(vkGetDeviceProcAddr(d, "vkCmdDrawMeshTasksEXT")); // B4
     a.draw_mesh_tasks_indirect =
         reinterpret_cast<PFN_vkCmdDrawMeshTasksIndirectEXT>(vkGetDeviceProcAddr(d, "vkCmdDrawMeshTasksIndirectEXT")); // B4
@@ -1902,6 +1905,123 @@ public:
             vkCmdCopyImageToBuffer(cmd, t.image(i), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, t.readback(i), 1U, &region);
         }
         end_and_wait(cmd);
+    }
+
+    // B17-a: WEIGHTED-BLENDED OIT (McGuire-Bavoil 2013). Two internal float targets (accum RGBA16F blended ADDITIVELY,
+    // reveal R16F blended MULTIPLICATIVELY) accumulate ALL transparent fragments in ONE order-independent pass; a full-screen
+    // composite then resolves them over a `background`-cleared target. Contract: see raster_context.hpp. No-op where the
+    // per-attachment blend-equation dynamic state is unavailable.
+    void draw_wboit(IRasterTarget& target, IRasterProgram& transparent, IRasterProgram& composite, ClearColor background,
+                    crd::u32 vertex_count) override
+    {
+        auto& t  = static_cast<VulkanRasterTarget&>(target);
+        auto& tp = static_cast<VulkanRasterProgram&>(transparent);
+        auto& cp = static_cast<VulkanRasterProgram&>(composite);
+        if (!m_api.valid() || !tp.valid() || !cp.valid() || m_desc_pool == VK_NULL_HANDLE
+            || m_api.set_color_blend_equation == nullptr)
+        {
+            return; // per-attachment blend equations unavailable ⇒ graceful no-op
+        }
+        const crd::u32          w      = t.width();
+        const crd::u32          h      = t.height();
+        const VkImageUsageFlags rt_use = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        ImageBundle             accum{};
+        ImageBundle             reveal{};
+        if (!create_image_bundle(w, h, VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_ASPECT_COLOR_BIT,
+                                 rt_use, accum)
+            || !create_image_bundle(w, h, VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R16_SFLOAT, VK_IMAGE_ASPECT_COLOR_BIT, rt_use,
+                                    reveal))
+        {
+            destroy_image_bundle(m_device, accum);
+            destroy_image_bundle(m_device, reveal);
+            return;
+        }
+        VkCommandBuffer cmd = begin_cmd();
+        if (cmd == VK_NULL_HANDLE)
+        {
+            destroy_image_bundle(m_device, accum);
+            destroy_image_bundle(m_device, reveal);
+            return;
+        }
+
+        // ---- Pass 1: accumulate (MRT: accum additively, reveal multiplicatively) — draw order irrelevant ------------
+        transition(cmd, accum.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 0,
+                   VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                   VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+        transition(cmd, reveal.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 0,
+                   VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                   VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+        VkRenderingAttachmentInfo att[2]{};
+        att[0] = colour_clear_attachment(accum.view, ClearColor{0.0F, 0.0F, 0.0F, 0.0F});
+        att[1] = colour_clear_attachment(reveal.view, ClearColor{1.0F, 0.0F, 0.0F, 0.0F}); // revealage starts at full 1
+        VkRenderingInfo ri{};
+        ri.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        ri.renderArea.extent    = {w, h};
+        ri.layerCount           = 1U;
+        ri.colorAttachmentCount = 2U;
+        ri.pColorAttachments    = att;
+        vkCmdBeginRendering(cmd, &ri);
+        set_draw_state(cmd, w, h, 1U, false, VK_COMPARE_OP_ALWAYS, 2U);
+        const VkBool32 en[2] = {VK_TRUE, VK_TRUE}; // set_draw_state left blend disabled — enable + set both equations
+        m_api.set_color_blend_enable(cmd, 0U, 2U, en);
+        VkColorBlendEquationEXT eq[2]{};
+        eq[0] = {VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_ADD, // accum += weighted premultiplied colour
+                 VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_ADD};
+        eq[1] = {VK_BLEND_FACTOR_ZERO, VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR, VK_BLEND_OP_ADD, // reveal *= (1 - coverage)
+                 VK_BLEND_FACTOR_ZERO, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA, VK_BLEND_OP_ADD};
+        m_api.set_color_blend_equation(cmd, 0U, 2U, eq);
+        bind_and_draw(cmd, tp, vertex_count);
+        vkCmdEndRendering(cmd);
+
+        transition(cmd, accum.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                   VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
+                   VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+        transition(cmd, reveal.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                   VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
+                   VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+
+        // ---- Pass 2: composite `rgb·(1-reveal) + background·reveal` into the RGBA8 target --------------------------
+        vkResetDescriptorPool(m_device, m_desc_pool, 0);
+        VkDescriptorSetAllocateInfo dsai{};
+        dsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dsai.descriptorPool     = m_desc_pool;
+        dsai.descriptorSetCount = 1U;
+        dsai.pSetLayouts        = &m_storage_set_layout;
+        VkDescriptorSet dset = VK_NULL_HANDLE;
+        if (vkAllocateDescriptorSets(m_device, &dsai, &dset) == VK_SUCCESS)
+        {
+            VkDescriptorImageInfo imgs[kBindlessMax]{};
+            for (crd::u32 i = 0; i < kBindlessMax; ++i) // bindless[0]=accum, [1]=reveal; rest replicate accum (all valid)
+            {
+                imgs[i] = {VK_NULL_HANDLE, i == 1U ? reveal.view : accum.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+            }
+            VkDescriptorImageInfo samp_info{m_default_sampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};
+            VkWriteDescriptorSet  wr[2]{};
+            wr[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; wr[0].dstSet = dset; wr[0].dstBinding = 2U; wr[0].descriptorCount = 1U;            wr[0].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;       wr[0].pImageInfo = &samp_info;
+            wr[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; wr[1].dstSet = dset; wr[1].dstBinding = 3U; wr[1].descriptorCount = kBindlessMax; wr[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE; wr[1].pImageInfo = imgs;
+            vkUpdateDescriptorSets(m_device, 2U, wr, 0U, nullptr);
+
+            transition(cmd, t.image(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 0,
+                       VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                       VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+            VkRenderingAttachmentInfo catt = colour_clear_attachment(t.view(), background);
+            VkRenderingInfo           cri  = one_colour_rendering(t, catt);
+            vkCmdBeginRendering(cmd, &cri);
+            set_draw_state(cmd, w, h, 1U, false, VK_COMPARE_OP_ALWAYS, 1U);
+            const VkBool32 cen[1] = {VK_TRUE};
+            m_api.set_color_blend_enable(cmd, 0U, 1U, cen);
+            VkColorBlendEquationEXT ceq[1]{};
+            ceq[0] = {VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA, VK_BLEND_FACTOR_SRC_ALPHA, VK_BLEND_OP_ADD,
+                      VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA, VK_BLEND_FACTOR_SRC_ALPHA, VK_BLEND_OP_ADD};
+            m_api.set_color_blend_equation(cmd, 0U, 1U, ceq);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, cp.layout(), 0U, 1U, &dset, 0U, nullptr);
+            bind_and_draw(cmd, cp, 3U); // full-screen triangle
+            vkCmdEndRendering(cmd);
+            copy_colour_to_readback(cmd, t);
+        }
+        end_and_wait(cmd);
+        destroy_image_bundle(m_device, accum);
+        destroy_image_bundle(m_device, reveal);
     }
 
 private:

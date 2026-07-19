@@ -187,7 +187,25 @@ enum class KOp : crd::u8
     // B16: BINDLESS + EXPLICIT-LOD sample — SampleIndexed with an explicit mip `lod` (in the ext pool). A VERTEX shader has no
     // derivatives, so displacing a grid from bindless cascade textures needs this combo (SampleIndexed is implicit-LOD, SampleLod
     // is non-bindless). a=texArray, b=samp, c=uv, d=index, ext[0]=lod. Appended at END for cook/serialization stability.
-    SampleIndexedLod
+    SampleIndexedLod,
+    // B17: the VALUE a value-returning atomic produces (the OLD element, before the op) — a placeholder LEAF that the
+    // `BufferAtomicAddFetch` / `BufferAtomicExchange` statement MATERIALIZES into a temp exactly once (impure: never inlined,
+    // never CSE-merged — each atomic executes once). Downstream reads it via that temp. dtype = the buffer's element type
+    // (u32). The scalable A-buffer's node allocator (`atomicAdd(counter,1)`) + linked-list push (`atomicExchange(head,slot)`).
+    AtomicResult,
+    // B9/RT-1: HARDWARE RAY TRACING — inline ray query (VK_KHR_ray_query / DXR-1.1 inline). `AccelStructDecl` is an opaque
+    // acceleration-structure (TLAS) resource leaf bound at (dset=set, iidx=binding) — the peer of BufferDecl for the RT world.
+    // `RayHitResult` is the closest-hit distance `t` a `TraceRayClosest` statement MATERIALIZES into a temp (impure, once —
+    // exactly like AtomicResult): downstream reads it as `t<result>`; `hit = t < tmax`. dtype F32. Both APPENDED at END
+    // (cook/serialization stability). The FULL RT-pipeline stages (raygen/closest-hit/miss + SBT) + primId/barycentric/normal
+    // hit attributes land in RT-2; RT-1 is the inline visibility/AO/shadow leaf (also the B14 ReSTIR ray-visibility leaf).
+    AccelStructDecl,
+    RayHitResult,
+    // FA-2 (portable RT pipeline): the ray PAYLOAD carried across raygen ↔ closest-hit/miss. `RayPayloadDecl` declares an N-float
+    // payload struct (iidx = component count) — `rayPayloadEXT`/`rayPayloadInEXT` in GLSL, an `inout` struct param in DXR HLSL.
+    // `PayloadLoad` reads component `iidx` of the payload node `a`. Written by `PayloadStore`. Appended at END (cook-stable).
+    RayPayloadDecl,
+    PayloadLoad
 };
 
 // B1: fragment derivatives are the only ops that read NEIGHBOURING invocations (the 2×2 pixel quad), so they are legal
@@ -366,6 +384,9 @@ enum class KBuiltin : crd::u8
     // B-cmp Phase 1: the FLATTENED 1-D workgroup index (gl_WorkGroupID.x / SV_GroupID.x / blockIdx.x) — a scalar uint, so a
     // BATCHED compute kernel (one workgroup per independent problem, e.g. one FFT per grid slot) offsets its global buffers.
     WorkgroupIndex, // uint
+    // P4 (any-hit alpha): the hit's triangle BARYCENTRICS (vec2 u,v; w=1-u-v) — `hitAttributeEXT vec2` in GLSL /
+    // `BuiltInTriangleIntersectionAttributes.barycentrics` in DXR HLSL. Read via VecComp to alpha-test a sub-triangle region.
+    HitBary,
     // B4 task/amplification: the single-uint PAYLOAD a task shader wrote, read in the MESH stage — the GPU-driven data channel
     // from a task workgroup to the mesh workgroups it launched (glsl `taskPayloadSharedEXT` / HLSL `in payload`).
     TaskPayload, // uint — read in the MESH stage (the value the preceding Task entry's `task_payload` node computed)
@@ -545,10 +566,32 @@ enum class KStmtKind : crd::u8
                  // ~2-cycle sync (vs a full block Barrier). CUDA `__syncwarp()`, GLSL `subgroupBarrier()`, MSL
                  // `simdgroup_barrier`; HLSL/WGSL lower to the conservative block barrier (uniform flow required anyway).
                  // Oracle: commits pending writes (lockstep interpreter ⇒ same semantics as Barrier).
-    BufferAtomicMin // ATOMIC MIN on a GLOBAL buffer element: `atomicMin(buf[index], value)` — the B4-vis software-rasterizer
+    BufferAtomicMin, // ATOMIC MIN on a GLOBAL buffer element: `atomicMin(buf[index], value)` — the B4-vis software-rasterizer
                  // visibility key (a packed `(depth << idBits) | triangleId` u32; nearest triangle wins, ties broken by lowest
                  // id). target = BufferDecl, index, value. Bit-exact (MIN is order-independent, like the SUM atomics). U32 only.
                  // APPENDED at END (KStmtKind participates in cook-serialized kernel stmts — never renumber existing kinds).
+    BufferAtomicAddFetch, // VALUE-RETURNING atomic add: `t<result> = atomicAdd(buf[index], value)` — materializes the OLD
+                 // element into the `result` (AtomicResult) node's temp. target = BufferDecl, index, value, result = the node.
+                 // NOT order-independent (the returned slot depends on execution order) ⇒ validate the DETERMINISTIC downstream
+                 // (the sorted A-buffer resolve), not this directly. U32. The linked-list node allocator.
+    BufferAtomicExchange, // VALUE-RETURNING atomic exchange: `t<result> = atomicExchange(buf[index], value)` — swaps `value`
+                 // into the element, materializes the OLD value into `result`. The linked-list head-pointer push. Same fields.
+    TraceRayClosest, // B9/RT-1: INLINE RAY QUERY — cast a ray at the bound TLAS and materialize the CLOSEST-HIT distance `t`
+                 // (or `tmax` on miss) into `result` (a RayHitResult node). target = AccelStructDecl node · result = the F32
+                 // RayHitResult · ext[0..7] = the ray scalars (ox,oy,oz,dx,dy,dz,tmin,tmax). Emits a `rayQueryEXT` block
+                 // (GL_EXT_ray_query) / inline `RayQuery<>` (HLSL). Deterministic given ray+geometry ⇒ the CPU oracle
+                 // brute-forces watertight ray-triangle over the AS's geometry buffer; validate GPU≈oracle within a geometric
+                 // tolerance (RT traversal is NOT bit-exact across vendors). APPENDED at END (cook-stable).
+    TraceRayHit,  // B9/RT-2 (reflections/shading): same trace, but ALSO materialize the hit's PRIMITIVE INDEX (which triangle)
+                 // so the shader can fetch + shade the hit. Same fields as TraceRayClosest PLUS ext[8] = the primId RayHitResult
+                 // node (dtype U32; = 0xFFFFFFFF on miss). Emits `rayQueryGetIntersectionPrimitiveIndexEXT` alongside the t.
+    // FA-2 (portable RT PIPELINE — raygen stage): traceRayEXT/TraceRay that INVOKES the hit/miss shaders and fills a payload.
+    // target = AccelStructDecl · value = the RayPayloadDecl node · ext[0..7] = ox,oy,oz,dx,dy,dz,tmin,tmax. Appended at END.
+    TraceRayPipeline,
+    PayloadStore,   // payload component write (hit/miss shaders): target = RayPayloadDecl node · index = component · value = value node
+    ReorderThread,  // FA-2 SER: reorderThreadNV / MaybeReorderThread — a no-op where unsupported (perf only). No operands.
+    IgnoreHitIf     // P4 (any-hit ALPHA test): `if (cond) ignoreIntersectionEXT()` / `if (cond) IgnoreHit()` — the portable
+                    // OMM fallback (alpha-tested geometry in a shader). value = the BOOL condition node.
 };
 struct KStmt
 {
@@ -559,6 +602,9 @@ struct KStmt
     BarrierScope scope   = BarrierScope::Workgroup; // Barrier
     crd::i32  body_begin = -1; // For/If: nested statement range into KGraph's stmt pool
     crd::i32  body_count = 0;
+    crd::i32  result     = -1; // B17: BufferAtomicAddFetch/BufferAtomicExchange — the AtomicResult node materialized with the OLD value
+    crd::i32  ext        = -1; // B9/RT: offset into the graph's ext pool for a statement's VARIADIC scalar operands (TraceRayClosest = ox,oy,oz,dx,dy,dz,tmin,tmax)
+    crd::u16  n_ext      = 0;  // ...count of them
 };
 
 struct KEntry
@@ -804,6 +850,31 @@ struct KNode
     default: return 0.0;
     }
 }
+// Dtype-aware binary: Add/Sub/Mul/Shl on a 32-bit INTEGER type must WRAP mod 2^32 exactly as the GPU does — the f64 path in
+// `apply_binary` silently loses bits once a product exceeds 2^53 (a full 32×32-bit hash multiply is ~2^64) and never wraps, so
+// integer PRNG/hash kernels diverge from every backend. Compute those in real u32 (two's-complement, wrapping) and reinterpret
+// for a signed result. Shr/And/Or/Xor and every float op are already exact for in-range integers ⇒ fall through to `apply_binary`.
+[[nodiscard]] inline crd::f64 apply_binary_typed(KOp op, crd::f64 x, crd::f64 y, DType dt) noexcept
+{
+    const bool wrap32 = (dt == DType::U32 || dt == DType::I32) &&
+                        (op == KOp::Add || op == KOp::Sub || op == KOp::Mul || op == KOp::Shl);
+    if (wrap32)
+    {
+        const crd::u32 a = static_cast<crd::u32>(static_cast<crd::i64>(x));
+        const crd::u32 b = static_cast<crd::u32>(static_cast<crd::i64>(y));
+        crd::u32       z = 0U;
+        switch (op)
+        {
+        case KOp::Add: z = a + b; break;                 // unsigned ⇒ two's-complement wrap mod 2^32 (matches GPU int + uint)
+        case KOp::Sub: z = a - b; break;
+        case KOp::Mul: z = a * b; break;
+        case KOp::Shl: z = a << (b & 31U); break;
+        default: break;
+        }
+        return dt == DType::U32 ? static_cast<crd::f64>(z) : static_cast<crd::f64>(static_cast<crd::i32>(z));
+    }
+    return apply_binary(op, x, y);
+}
 // Ternary shader intrinsics (a/b/c operands). Explicit formulas ⇒ the emitters match bit-for-bit (with NoContraction).
 [[nodiscard]] inline crd::f64 apply_ternary(KOp op, crd::f64 a, crd::f64 b, crd::f64 c) noexcept
 {
@@ -907,6 +978,62 @@ public:
     void stmt_buffer_atomic_add(int buf, int idx, int val) { KStmt s; s.kind = KStmtKind::BufferAtomicAdd; s.target = buf; s.index = idx; s.value = val; m_stmts.push_back(s); }
     // B4-vis: ATOMIC MIN on a global u32 buffer element (the software-rasterizer visibility key: nearest depth|id wins).
     void stmt_buffer_atomic_min(int buf, int idx, int val) { KStmt s; s.kind = KStmtKind::BufferAtomicMin; s.target = buf; s.index = idx; s.value = val; m_stmts.push_back(s); }
+    // B17: value-returning atomics — return the AtomicResult node holding the OLD element (materialized once). The scalable
+    // A-buffer's `atomicAdd(counter,1)` node allocator + `atomicExchange(head[pixel], slot)` linked-list push.
+    [[nodiscard]] int atomic_add_fetch(int buf, int idx, int val) { KNode n; n.op = KOp::AtomicResult; n.type = KType::make_scalar(t(buf).dtype()); n.shape = make_shape({1}); const int res = push(n); KStmt s; s.kind = KStmtKind::BufferAtomicAddFetch; s.target = buf; s.index = idx; s.value = val; s.result = res; m_stmts.push_back(s); return res; }
+    [[nodiscard]] int atomic_exchange(int buf, int idx, int val)  { KNode n; n.op = KOp::AtomicResult; n.type = KType::make_scalar(t(buf).dtype()); n.shape = make_shape({1}); const int res = push(n); KStmt s; s.kind = KStmtKind::BufferAtomicExchange; s.target = buf; s.index = idx; s.value = val; s.result = res; m_stmts.push_back(s); return res; }
+    // B9/RT-1: an opaque acceleration-structure (TLAS) resource leaf bound at (set, binding) — the RT peer of buffer_decl.
+    [[nodiscard]] int accel_struct_decl(int set, int binding) { KNode n; n.op = KOp::AccelStructDecl; n.type = KType::make_scalar(DType::U32); n.shape = make_shape({1}); n.dset = static_cast<crd::u8>(set); n.iidx = binding; return push(n); }
+    // B9/RT-1: INLINE RAY QUERY — cast a ray at `as` and return the CLOSEST-HIT distance `t` (or `tmax` on miss) as an F32
+    // node; `hit = t < tmax`. The ray is 8 SCALAR nodes (origin ox/oy/oz, dir dx/dy/dz, tmin, tmax) — the compute-kernel
+    // emitter is scalar-only, so origin/dir arrive component-wise and the emit builds the `vec3`s inline. Stored in the
+    // statement's ext-operand list. `as` = an AccelStructDecl node.
+    [[nodiscard]] int trace_ray_closest(int as, int ox, int oy, int oz, int dx, int dy, int dz, int tmin, int tmax)
+    {
+        KNode     n; n.op = KOp::RayHitResult; n.type = KType::make_scalar(DType::F32); n.shape = make_shape({1});
+        const int res       = push(n);
+        const int ops[8]    = {ox, oy, oz, dx, dy, dz, tmin, tmax};
+        KStmt     s; s.kind = KStmtKind::TraceRayClosest; s.target = as; s.result = res;
+        s.ext   = push_ext(ops, 8);
+        s.n_ext = 8U;
+        m_stmts.push_back(s);
+        return res;
+    }
+    struct RtHit { int t = -1; int prim = -1; }; // closest-hit distance + the triangle index (0xFFFFFFFF on miss)
+    // B9/RT-2: like trace_ray_closest, but ALSO returns the hit's PRIMITIVE INDEX (which triangle) for shading the hit.
+    [[nodiscard]] RtHit trace_ray_hit(int as, int ox, int oy, int oz, int dx, int dy, int dz, int tmin, int tmax)
+    {
+        KNode     nt; nt.op = KOp::RayHitResult; nt.type = KType::make_scalar(DType::F32); nt.shape = make_shape({1});
+        const int rt = push(nt);
+        KNode     np; np.op = KOp::RayHitResult; np.type = KType::make_scalar(DType::U32); np.shape = make_shape({1});
+        const int rp       = push(np);
+        const int ops[9]   = {ox, oy, oz, dx, dy, dz, tmin, tmax, rp};
+        KStmt     s; s.kind = KStmtKind::TraceRayHit; s.target = as; s.result = rt;
+        s.ext   = push_ext(ops, 9);
+        s.n_ext = 9U;
+        m_stmts.push_back(s);
+        return {rt, rp};
+    }
+    // FA-2 (portable RT PIPELINE): declare an N-float ray PAYLOAD carried across raygen ↔ closest-hit/miss.
+    [[nodiscard]] int ray_payload_decl(int n_components) { KNode nd; nd.op = KOp::RayPayloadDecl; nd.type = KType::make_scalar(DType::F32); nd.shape = make_shape({1}); nd.iidx = n_components; return push(nd); }
+    // read component `comp` of the payload (F32).
+    [[nodiscard]] int payload_load(int payload, int comp) { KNode nd; nd.op = KOp::PayloadLoad; nd.type = KType::make_scalar(DType::F32); nd.shape = make_shape({1}); nd.a = payload; nd.iidx = comp; return push(nd); }
+    // write a payload component (closest-hit / miss shaders).
+    void stmt_payload_store(int payload, int comp, int value) { KStmt s; s.kind = KStmtKind::PayloadStore; s.target = payload; s.index = comp; s.value = value; m_stmts.push_back(s); }
+    // trace a ray through the FULL pipeline (invokes the hit/miss shaders, fills `payload`). `as` = AccelStructDecl, 8 ray scalars.
+    void stmt_trace_ray_pipeline(int as, int payload, int ox, int oy, int oz, int dx, int dy, int dz, int tmin, int tmax)
+    {
+        const int ops[8] = {ox, oy, oz, dx, dy, dz, tmin, tmax};
+        KStmt     s; s.kind = KStmtKind::TraceRayPipeline; s.target = as; s.value = payload;
+        s.ext = push_ext(ops, 8); s.n_ext = 8U;
+        m_stmts.push_back(s);
+    }
+    // FA-2 SER: a shader-execution-reorder hint (perf only). Emits reorderThreadNV where supported, nothing where not.
+    void stmt_reorder_thread() { KStmt s; s.kind = KStmtKind::ReorderThread; m_stmts.push_back(s); }
+    // P4 (any-hit ALPHA test): ignore this candidate intersection when `cond` (a BOOL node) is true — the portable OMM fallback.
+    void stmt_ignore_hit_if(int cond) { KStmt s; s.kind = KStmtKind::IgnoreHitIf; s.value = cond; m_stmts.push_back(s); }
+    // Read the k-th variadic scalar operand of a statement (RT ray components) from the ext pool.
+    [[nodiscard]] int stmt_ext_operand(const KStmt& s, int k) const { return m_ext[static_cast<crd::usize>(s.ext) + static_cast<crd::usize>(k)]; }
     void stmt_for_break_if(int cond) { KStmt s; s.kind = KStmtKind::ForBreakIf; s.value = cond; m_stmts.push_back(s); }
     void stmt_buffer_ticket(int buf, int idx, int sh) { KStmt s; s.kind = KStmtKind::BufferTicket; s.target = buf; s.index = idx; s.value = sh; m_stmts.push_back(s); }
     void stmt_sync_warp() { KStmt s; s.kind = KStmtKind::SyncWarp; m_stmts.push_back(s); }
@@ -1449,7 +1576,7 @@ public:
             // movement (Reshape/Permute/Broadcast) + ReduceMax of a uniform fill are all identity on the value
             else if (g.op == KOp::Reshape || g.op == KOp::Permute || g.op == KOp::Broadcast || g.op == KOp::ReduceMax) { r = av; }
             else if (g.op == KOp::ReduceSum) { crd::i64 c = 1; const Shape& sa = m_nodes[static_cast<crd::usize>(g.a)].shape; for (int k = 0; k < sa.rank; ++k) { if ((g.axes >> k) & 1U) { c *= sa.dims[k]; } } r = av * static_cast<crd::f64>(c); }
-            else if (g.b >= 0) { r = apply_binary(g.op, av, bv); }
+            else if (g.b >= 0) { r = apply_binary_typed(g.op, av, bv, g.dtype()); }
             else { r = apply_unary(g.op, av); }
             const Shape sh = g.shape;
             const KType ty = g.type;

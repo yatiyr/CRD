@@ -7,6 +7,7 @@ endif()
 add_executable(crd-gpu-context-dx12-tests
     test_dx12_compute.cpp
     test_dx12_raster.cpp
+    test_dx12_rt.cpp
 )
 
 target_link_libraries(crd-gpu-context-dx12-tests PRIVATE

@@ -351,6 +351,20 @@ public:
     // drives the coarse rate via a REPLACE combiner. Colour-only. Default (no VRS support) ⇒ falls back to a full-rate draw.
     virtual void draw_mesh_vrs(IRasterTarget& /*target*/, IRasterProgram& /*program*/, ClearColor /*clear*/,
                                crd::u32 /*group_count*/) {}
+
+    // --- B17-a: WEIGHTED-BLENDED ORDER-INDEPENDENT TRANSPARENCY (WBOIT, McGuire-Bavoil 2013) -----------------------------
+    //
+    // The cheap single-pass OIT tier: transparency composited WITHOUT a depth sort. Two internal FLOAT render targets are
+    // created per call: an ACCUMULATION buffer (RGBA16F) and a REVEALAGE buffer (R16F). `transparent` is a VS+FS program
+    // whose FS emits TWO colour attachments — location 0 = the weighted premultiplied colour `vec4(rgb*a*w, a*w)` (blended
+    // ADDITIVELY: `Σ`), location 1 = the coverage `a` (blended MULTIPLICATIVELY into revealage: `Π(1-a)`), where `w` is the
+    // depth weight. `vertex_count` transparent-triangle vertices are accumulated in ONE pass, ANY draw order (the OIT
+    // property). Then `composite` (a full-screen VS+FS, `vertex_count`=3) samples accum at bindless index 0 and revealage at
+    // index 1 and resolves `rgb = accum.rgb/max(accum.a, eps)`, output `(rgb, revealage)`, blended over a `background`-cleared
+    // `target` with `(ONE_MINUS_SRC_ALPHA, SRC_ALPHA)` ⇒ `rgb·(1-reveal) + background·reveal`. `target` (RGBA8) is
+    // host-readable after. Default (no float-target / blend-equation support) ⇒ no-op. Appended at END (vtable-stable).
+    virtual void draw_wboit(IRasterTarget& /*target*/, IRasterProgram& /*transparent*/, IRasterProgram& /*composite*/,
+                            ClearColor /*background*/, crd::u32 /*vertex_count*/) {}
 };
 
 // B5: an opaque deferred G-buffer (see `create_gbuffer_target`). `read_pixel(attachment, x, y)` is valid after a draw.

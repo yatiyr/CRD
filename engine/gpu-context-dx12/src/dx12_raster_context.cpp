@@ -108,6 +108,70 @@ ComPtr<ID3D12PipelineState> build_graphics_pso(ID3D12Device* dev, ID3D12RootSign
     return pso;
 }
 
+// B17-a: the WBOIT ACCUMULATION PSO — two render targets with INDEPENDENT blend: RT0 (RGBA16F accum) additive `Σ`
+// (ONE,ONE,ADD); RT1 (R16F revealage) multiplicative `Π(1-a)` (ZERO, INV_SRC_COLOR, ADD). No depth. The transparent VS+PS
+// (whose FS emits BOTH attachments) draw ANY order — the accumulation is commutative.
+inline ComPtr<ID3D12PipelineState> build_wboit_accum_pso(ID3D12Device* dev, ID3D12RootSignature* root,
+                                                         D3D12_SHADER_BYTECODE vs, D3D12_SHADER_BYTECODE ps)
+{
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC pd{};
+    pd.pRootSignature                    = root;
+    pd.VS                                = vs;
+    pd.PS                                = ps;
+    pd.BlendState.IndependentBlendEnable = TRUE; // per-RT blend equations
+    auto& b0                             = pd.BlendState.RenderTarget[0];
+    b0.BlendEnable                       = TRUE;
+    b0.SrcBlend = D3D12_BLEND_ONE;  b0.DestBlend = D3D12_BLEND_ONE;  b0.BlendOp = D3D12_BLEND_OP_ADD;
+    b0.SrcBlendAlpha = D3D12_BLEND_ONE; b0.DestBlendAlpha = D3D12_BLEND_ONE; b0.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+    b0.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    auto& b1                 = pd.BlendState.RenderTarget[1];
+    b1.BlendEnable           = TRUE;
+    b1.SrcBlend = D3D12_BLEND_ZERO; b1.DestBlend = D3D12_BLEND_INV_SRC_COLOR; b1.BlendOp = D3D12_BLEND_OP_ADD;
+    b1.SrcBlendAlpha = D3D12_BLEND_ZERO; b1.DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA; b1.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+    b1.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    pd.SampleMask                      = 0xFFFFFFFFU;
+    pd.RasterizerState.FillMode        = D3D12_FILL_MODE_SOLID;
+    pd.RasterizerState.CullMode        = D3D12_CULL_MODE_NONE;
+    pd.RasterizerState.DepthClipEnable = TRUE;
+    pd.PrimitiveTopologyType           = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    pd.NumRenderTargets                = 2;
+    pd.RTVFormats[0]                   = DXGI_FORMAT_R16G16B16A16_FLOAT; // accum
+    pd.RTVFormats[1]                   = DXGI_FORMAT_R16_FLOAT;          // revealage
+    pd.SampleDesc.Count                = 1;
+    pd.DSVFormat                       = DXGI_FORMAT_UNKNOWN;
+    ComPtr<ID3D12PipelineState> pso;
+    if (FAILED(dev->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(&pso)))) { return nullptr; }
+    return pso;
+}
+
+// B17-a: the WBOIT COMPOSITE PSO — one RGBA8 target, `avg·(1-reveal) + background·reveal` via `(INV_SRC_ALPHA, SRC_ALPHA)`
+// (the composite FS outputs `vec4(avg, reveal)`, and the target is pre-cleared to `background`).
+inline ComPtr<ID3D12PipelineState> build_wboit_composite_pso(ID3D12Device* dev, ID3D12RootSignature* root,
+                                                             D3D12_SHADER_BYTECODE vs, D3D12_SHADER_BYTECODE ps)
+{
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC pd{};
+    pd.pRootSignature = root;
+    pd.VS             = vs;
+    pd.PS             = ps;
+    auto& b0          = pd.BlendState.RenderTarget[0];
+    b0.BlendEnable    = TRUE;
+    b0.SrcBlend = D3D12_BLEND_INV_SRC_ALPHA; b0.DestBlend = D3D12_BLEND_SRC_ALPHA; b0.BlendOp = D3D12_BLEND_OP_ADD;
+    b0.SrcBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA; b0.DestBlendAlpha = D3D12_BLEND_SRC_ALPHA; b0.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+    b0.RenderTargetWriteMask           = D3D12_COLOR_WRITE_ENABLE_ALL;
+    pd.SampleMask                      = 0xFFFFFFFFU;
+    pd.RasterizerState.FillMode        = D3D12_FILL_MODE_SOLID;
+    pd.RasterizerState.CullMode        = D3D12_CULL_MODE_NONE;
+    pd.RasterizerState.DepthClipEnable = TRUE;
+    pd.PrimitiveTopologyType           = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    pd.NumRenderTargets                = 1;
+    pd.RTVFormats[0]                   = kColorFormat;
+    pd.SampleDesc.Count                = 1;
+    pd.DSVFormat                       = DXGI_FORMAT_UNKNOWN;
+    ComPtr<ID3D12PipelineState> pso;
+    if (FAILED(dev->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(&pso)))) { return nullptr; }
+    return pso;
+}
+
 // B4: a D3D12 pipeline-state STREAM subobject — {type enum, payload}, pointer-aligned so the next subobject starts aligned.
 // (The backend has no CD3DX12 helpers, so the mesh-PSO stream is hand-rolled.) C4324 (padded-due-to-alignas) is the very
 // layout this needs — the trailing pad is what makes the next subobject pointer-aligned — so it is suppressed by design.
@@ -335,6 +399,11 @@ public:
     [[nodiscard]] bool                 is_mesh() const noexcept { return m_is_mesh; } // B4: DispatchMesh vs DrawInstanced
     [[nodiscard]] bool                 is_tess() const noexcept { return m_is_tess; } // B4-tess: PATCH-list DrawInstanced
     [[nodiscard]] ID3D12RootSignature* root() const noexcept { return m_root.Get(); }
+    // B17-a: raw VS/PS bytecode + device — draw_wboit builds bespoke blend PSOs (per-RT additive/multiplicative) the cached
+    // pso_for cannot express (it always bakes blend-off).
+    [[nodiscard]] D3D12_SHADER_BYTECODE vs_bytecode() const noexcept { return {m_vs.get(), m_vs_size}; }
+    [[nodiscard]] D3D12_SHADER_BYTECODE ps_bytecode() const noexcept { return {m_fs.get(), m_fs_size}; }
+    [[nodiscard]] ID3D12Device*         device() const noexcept { return m_device; }
 
     // The PSO for a target of `samples` samples and depth/conservative config (a graphics PSO bakes ALL of them). The plain
     // 1×/no-depth/non-conservative PSO is prebuilt (also gates valid()); every other combo is built + cached lazily in a
@@ -2288,6 +2357,137 @@ public:
             m_list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
             transition(t.tex(i), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON);
         }
+        submit_and_wait();
+    }
+
+    // B17-a: WEIGHTED-BLENDED OIT (McGuire-Bavoil 2013) — see raster_context.hpp. Two internal float targets (accum RGBA16F
+    // additive · revealage R16F multiplicative) accumulate ALL transparent fragments in one order-independent pass; a
+    // full-screen composite resolves `avg = accum.rgb/max(accum.a, eps)` over a `background`-cleared RGBA8 target.
+    void draw_wboit(IRasterTarget& target, IRasterProgram& transparent, IRasterProgram& composite, ClearColor background,
+                    crd::u32 vertex_count) override
+    {
+        if (!m_ok || m_uav_heap == nullptr || m_sampler_heap == nullptr) { return; }
+        auto& t  = static_cast<Dx12RasterTarget&>(target);
+        auto& tp = static_cast<Dx12RasterProgram&>(transparent);
+        auto& cp = static_cast<Dx12RasterProgram&>(composite);
+        if (!tp.valid() || !cp.valid()) { return; }
+        const crd::u32 w = t.width();
+        const crd::u32 h = t.height();
+
+        ComPtr<ID3D12PipelineState> accum_pso =
+            build_wboit_accum_pso(tp.device(), tp.root(), tp.vs_bytecode(), tp.ps_bytecode());
+        ComPtr<ID3D12PipelineState> comp_pso =
+            build_wboit_composite_pso(cp.device(), cp.root(), cp.vs_bytecode(), cp.ps_bytecode());
+        if (accum_pso == nullptr || comp_pso == nullptr) { return; }
+
+        // The two internal float targets (render target + shader resource).
+        D3D12_HEAP_PROPERTIES hp{};
+        hp.Type       = D3D12_HEAP_TYPE_DEFAULT;
+        const auto rt = [&](DXGI_FORMAT fmt) -> ComPtr<ID3D12Resource> {
+            D3D12_RESOURCE_DESC rd{};
+            rd.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+            rd.Width            = w;
+            rd.Height           = h;
+            rd.DepthOrArraySize = 1;
+            rd.MipLevels        = 1;
+            rd.Format           = fmt;
+            rd.SampleDesc.Count = 1;
+            rd.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+            rd.Flags            = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+            ComPtr<ID3D12Resource> r;
+            if (FAILED(m_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COMMON,
+                                                         nullptr, IID_PPV_ARGS(&r))))
+            {
+                return nullptr;
+            }
+            return r;
+        };
+        ComPtr<ID3D12Resource> accum  = rt(DXGI_FORMAT_R16G16B16A16_FLOAT);
+        ComPtr<ID3D12Resource> reveal = rt(DXGI_FORMAT_R16_FLOAT);
+        if (accum == nullptr || reveal == nullptr) { return; }
+
+        D3D12_DESCRIPTOR_HEAP_DESC rhd{};
+        rhd.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+        rhd.NumDescriptors = 2;
+        ComPtr<ID3D12DescriptorHeap> rtv_heap;
+        if (FAILED(m_device->CreateDescriptorHeap(&rhd, IID_PPV_ARGS(&rtv_heap)))) { return; }
+        const UINT                  rtv_inc = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+        D3D12_CPU_DESCRIPTOR_HANDLE rtv0    = rtv_heap->GetCPUDescriptorHandleForHeapStart();
+        D3D12_CPU_DESCRIPTOR_HANDLE rtv1    = rtv0;
+        rtv1.ptr += rtv_inc;
+        m_device->CreateRenderTargetView(accum.Get(), nullptr, rtv0);
+        m_device->CreateRenderTargetView(reveal.Get(), nullptr, rtv1);
+
+        m_cmd_alloc->Reset();
+        m_list->Reset(m_cmd_alloc.Get(), nullptr);
+
+        // ---- Pass 1: accumulate (accum additively, revealage multiplicatively) ---------------------------------------
+        transition(accum.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        transition(reveal.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        m_list->OMSetRenderTargets(2, &rtv0, TRUE, nullptr); // the 2 RTVs are contiguous in one heap
+        const float accum_clear[4]  = {0.0F, 0.0F, 0.0F, 0.0F};
+        const float reveal_clear[4] = {1.0F, 1.0F, 1.0F, 1.0F}; // revealage starts at full 1
+        m_list->ClearRenderTargetView(rtv0, accum_clear, 0, nullptr);
+        m_list->ClearRenderTargetView(rtv1, reveal_clear, 0, nullptr);
+        const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(w), static_cast<float>(h), 0.0F, 1.0F};
+        const D3D12_RECT     sc{0, 0, static_cast<LONG>(w), static_cast<LONG>(h)};
+        m_list->RSSetViewports(1, &vp);
+        m_list->RSSetScissorRects(1, &sc);
+        m_list->SetGraphicsRootSignature(tp.root());
+        m_list->SetPipelineState(accum_pso.Get());
+        m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        m_list->DrawInstanced(vertex_count, 1, 0, 0);
+
+        // ---- Pass 2: composite over the `background`-cleared target ---------------------------------------------------
+        transition(accum.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        transition(reveal.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        D3D12_SHADER_RESOURCE_VIEW_DESC srv_a{};
+        srv_a.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srv_a.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srv_a.Format                  = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        srv_a.Texture2D.MipLevels     = 1;
+        D3D12_SHADER_RESOURCE_VIEW_DESC srv_r = srv_a;
+        srv_r.Format                          = DXGI_FORMAT_R16_FLOAT;
+        for (UINT i = 0; i < kBindlessMax; ++i) // bindless[0]=accum (slot 2), [1]=revealage (slot 3); rest replicate accum
+        {
+            D3D12_CPU_DESCRIPTOR_HANDLE hh = m_uav_heap->GetCPUDescriptorHandleForHeapStart();
+            hh.ptr += static_cast<SIZE_T>(2U + i) * m_srv_inc;
+            if (i == 1U) { m_device->CreateShaderResourceView(reveal.Get(), &srv_r, hh); }
+            else { m_device->CreateShaderResourceView(accum.Get(), &srv_a, hh); }
+        }
+        D3D12_GPU_DESCRIPTOR_HANDLE bindless_gpu = m_uav_heap->GetGPUDescriptorHandleForHeapStart();
+        bindless_gpu.ptr += static_cast<UINT64>(2U) * m_srv_inc;
+
+        transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        const D3D12_CPU_DESCRIPTOR_HANDLE trtv = t.rtv();
+        m_list->OMSetRenderTargets(1, &trtv, FALSE, nullptr);
+        const float bg[4] = {background.r, background.g, background.b, background.a};
+        m_list->ClearRenderTargetView(trtv, bg, 0, nullptr);
+        m_list->RSSetViewports(1, &vp);
+        m_list->RSSetScissorRects(1, &sc);
+        m_list->SetGraphicsRootSignature(cp.root());
+        ID3D12DescriptorHeap* heaps[] = {m_uav_heap.Get(), m_sampler_heap.Get()};
+        m_list->SetDescriptorHeaps(2, heaps);
+        m_list->SetGraphicsRootDescriptorTable(2, m_sampler_heap->GetGPUDescriptorHandleForHeapStart()); // sampler s2
+        m_list->SetGraphicsRootDescriptorTable(3, bindless_gpu);                                          // bindless t3[]
+        m_list->SetPipelineState(comp_pso.Get());
+        m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        m_list->DrawInstanced(3, 1, 0, 0); // full-screen triangle
+
+        // ---- Readback ------------------------------------------------------------------------------------------------
+        transition(t.tex(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        D3D12_TEXTURE_COPY_LOCATION dst{};
+        dst.pResource       = t.readback();
+        dst.Type            = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        dst.PlacedFootprint = t.footprint();
+        D3D12_TEXTURE_COPY_LOCATION src{};
+        src.pResource        = t.tex();
+        src.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        src.SubresourceIndex = 0;
+        m_list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+        transition(t.tex(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON);
+        transition(accum.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON);
+        transition(reveal.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON);
         submit_and_wait();
     }
 

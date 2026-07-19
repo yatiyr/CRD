@@ -18,6 +18,7 @@
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
 #include <ckir_raster_triangle.hpp> // B3-e: the SHARED, backend-neutral CKIR triangle (identical on Vulkan + DX12)
+#include <ckir_oit_test.hpp>        // B17: the SHARED order-independent-transparency shaders + CPU oracle (WBOIT/...)
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -221,6 +222,83 @@ TEST_CASE("D-007 B3-e: IR-authored triangle draws on DX12 (CKIR graph -> DXIL ->
     CHECK(((centre >> 16U) & 0xFFU) <= 5U);   // B low
     CHECK((corner & 0xFFU) <= 5U);            // R low   => blue clear (outside)
     CHECK(((corner >> 16U) & 0xFFU) >= 250U); // B high
+}
+
+// D-007 B17-a: WEIGHTED-BLENDED OIT (McGuire-Bavoil 2013) on DX12 — the SAME shared CKIR shaders + CPU oracle the Vulkan
+// B17-a test drives. Four translucent full-screen quads accumulate in one order-independent pass (RGBA16F additive accum +
+// R16F multiplicative revealage, INDEPENDENT per-RT blend PSO) → a composite PSO resolves them over an opaque background.
+// Uniform frame ⇒ every texel matches the oracle within a tight LSB tolerance; DX12 == Vulkan (one IR, both backends).
+TEST_CASE("D-007 B17-a: IR-authored WBOIT draws on DX12 (accum/reveal MRT + blend PSO + composite -> pixels)",
+          "[dx12][raster][gpu][oit]")
+{
+    namespace kir = crd::kir;
+
+    auto gctx = g::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    auto raster = g::create_dx12_raster_context();
+    if (raster == nullptr || !raster->valid()) { WARN("no D3D12 raster device; skipping"); return; }
+    crd::memory::TlsfAllocator alloc(8U << 20U);
+
+    crd::gputest::WboitScene scene;
+    scene.count          = 4U;
+    scene.background[0]  = 0.10F; scene.background[1] = 0.10F; scene.background[2] = 0.12F;
+    scene.color[0][0] = 0.90F; scene.color[0][1] = 0.15F; scene.color[0][2] = 0.10F; scene.alpha[0] = 0.50F; scene.depth[0] = 0.20F;
+    scene.color[1][0] = 0.15F; scene.color[1][1] = 0.85F; scene.color[1][2] = 0.20F; scene.alpha[1] = 0.40F; scene.depth[1] = 0.55F;
+    scene.color[2][0] = 0.20F; scene.color[2][1] = 0.25F; scene.color[2][2] = 0.90F; scene.alpha[2] = 0.30F; scene.depth[2] = 0.80F;
+    scene.color[3][0] = 0.90F; scene.color[3][1] = 0.85F; scene.color[3][2] = 0.10F; scene.alpha[3] = 0.60F; scene.depth[3] = 0.35F;
+
+    kir::KGraph tvg(&alloc); kir::KEntry tve; crd::gputest::build_wboit_transparent_vs(tvg, tve, scene);
+    kir::KGraph tfg(&alloc); kir::KEntry tfe; crd::gputest::build_wboit_transparent_fs(tfg, tfe);
+    kir::KGraph cvg(&alloc); kir::KEntry cve; crd::gputest::build_wboit_composite_vs(cvg, cve);
+    kir::KGraph cfg(&alloc); kir::KEntry cfe; crd::gputest::build_wboit_composite_fs(cfg, cfe);
+
+    auto tvp = gctx->create_program(tvg, tve);
+    if (tvp == nullptr) { WARN("dxc/DXIL unavailable; skipping B17-a DX12 WBOIT"); return; }
+    auto tfp = gctx->create_program(tfg, tfe);
+    auto cvp = gctx->create_program(cvg, cve);
+    auto cfp = gctx->create_program(cfg, cfe);
+    REQUIRE(tfp != nullptr); REQUIRE(cvp != nullptr); REQUIRE(cfp != nullptr);
+
+    auto transparent = raster->create_raster_program(*tvp, *tfp);
+    auto composite   = raster->create_raster_program(*cvp, *cfp);
+    REQUIRE(transparent != nullptr); REQUIRE(transparent->valid());
+    REQUIRE(composite != nullptr);   REQUIRE(composite->valid());
+
+    constexpr crd::u32 dim    = 32U;
+    auto               target = raster->create_color_target(dim, dim);
+    REQUIRE(target != nullptr);
+
+    raster->draw_wboit(*target, *transparent, *composite,
+                       g::ClearColor{scene.background[0], scene.background[1], scene.background[2], 1.0F},
+                       scene.count * 6U);
+
+    const crd::u32 expect = crd::gputest::wboit_oracle_pixel(scene);
+    crd::u32       worst  = 0U;
+    for (crd::u32 y = 0U; y < dim; ++y)
+    {
+        for (crd::u32 x = 0U; x < dim; ++x)
+        {
+            const crd::u32 d = crd::gputest::rgba8_max_channel_diff(target->read_pixel(x, y), expect);
+            if (d > worst) { worst = d; }
+        }
+    }
+    INFO("WBOIT worst per-channel LSB diff vs oracle = " << worst << " (expect 0x" << std::hex << expect << ")");
+    CHECK(worst <= 2U);
+    CHECK((expect & 0xFFU) > 0x30U); // sanity: red channel substantial (transparency actually composited)
+}
+
+// D-007 B17 OIT QUALITY SCOREBOARD (pure CPU): the approximate WBOIT tier vs the EXACT A-buffer reference on the shared
+// scene. WBOIT is a single-pass depth-weighted approximation — it stays in the neighbourhood of the exact sorted composite
+// but is measurably off, which is precisely why the exact A-buffer (B17-c) reference tier exists to score against.
+TEST_CASE("D-007 B17: OIT quality scoreboard -- WBOIT approximates the exact A-buffer reference", "[oit][scoreboard]")
+{
+    const auto     scene = crd::gputest::make_oit_scene();
+    const crd::u32 wboit = crd::gputest::wboit_oracle_pixel(scene);
+    const crd::u32 exact = crd::gputest::oit_exact_composite_rgba8(scene);
+    const crd::u32 err   = crd::gputest::rgba8_max_channel_diff(wboit, exact);
+    INFO("WBOIT=0x" << std::hex << wboit << " exact=0x" << exact << std::dec << " maxLSBerr=" << err);
+    CHECK(err > 4U);   // WBOIT is a genuine approximation (measurably off, ~14 LSB) -- the reason the exact tier exists
+    CHECK(err <= 24U); // ...but stays in the right neighbourhood of the exact reference (bounded depth-weighted error)
 }
 
 // D-007 B4: the DX12 MESH-shader DEVICE path — a CKIR Mesh KEntry lowers to ms_6_5 HLSL -> DXIL, a STREAM PSO (MS+PS) built

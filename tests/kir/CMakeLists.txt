@@ -30,6 +30,8 @@ add_executable(crd-kir-tests
     test_ckir_clouds.cpp
     test_ckir_ocean.cpp
     test_ckir_water.cpp
+    test_ckir_hair.cpp
+    test_ckir_rt.cpp
 )
 
 target_link_libraries(crd-kir-tests PRIVATE

@@ -281,6 +281,16 @@ inline bool emit_compute_kernel_cuda(const KGraph& g, const KEntry& entry, crd::
             case KStmtKind::SharedAtomicAdd: decl(decl, st.index); decl(decl, st.value); s.append("  atomicAdd(&sh"); app_uint(s, st.target); s.append("["); ev(ev, st.index); s.append("], "); ev(ev, st.value); s.append(");\n"); ++i; break;
             case KStmtKind::BufferAtomicAdd: decl(decl, st.index); decl(decl, st.value); s.append("  atomicAdd(&buf"); app_uint(s, g.node(st.target).iidx); s.append("["); ev(ev, st.index); s.append("], "); ev(ev, st.value); s.append(");\n"); ++i; break;
             case KStmtKind::BufferAtomicMin: decl(decl, st.index); decl(decl, st.value); s.append("  atomicMin(&buf"); app_uint(s, g.node(st.target).iidx); s.append("["); ev(ev, st.index); s.append("], "); ev(ev, st.value); s.append(");\n"); ++i; break; // B4-vis: visibility key (nearest wins)
+            case KStmtKind::BufferAtomicAddFetch: // value-returning: CUDA atomicAdd RETURNS the old value natively
+                decl(decl, st.index); decl(decl, st.value);
+                s.append("  "); s.append(cty(g.node(st.result).dtype())); s.append(" t"); app_uint(s, static_cast<crd::u32>(st.result));
+                s.append(" = atomicAdd(&buf"); app_uint(s, g.node(st.target).iidx); s.append("["); ev(ev, st.index); s.append("], "); ev(ev, st.value); s.append(");\n");
+                matd[static_cast<crd::usize>(st.result)] = 1U; ++i; break;
+            case KStmtKind::BufferAtomicExchange: // value-returning: CUDA atomicExch RETURNS the old value natively
+                decl(decl, st.index); decl(decl, st.value);
+                s.append("  "); s.append(cty(g.node(st.result).dtype())); s.append(" t"); app_uint(s, static_cast<crd::u32>(st.result));
+                s.append(" = atomicExch(&buf"); app_uint(s, g.node(st.target).iidx); s.append("["); ev(ev, st.index); s.append("], "); ev(ev, st.value); s.append(");\n");
+                matd[static_cast<crd::usize>(st.result)] = 1U; ++i; break;
             case KStmtKind::ForBreakIf: decl(decl, st.value); s.append("  if (("); ev(ev, st.value); s.append(") != 0u) break;\n"); ++i; break;
             case KStmtKind::BufferTicket: decl(decl, st.index); s.append("  if (threadIdx.x == 0u) { sh"); app_uint(s, st.value); s.append("[0] = atomicAdd((unsigned*)&buf"); app_uint(s, g.node(st.target).iidx); s.append("["); ev(ev, st.index); s.append("], 1u); }\n"); ++i; break;
             case KStmtKind::SyncWarp: s.append("  __syncwarp();\n"); ++i; break;
