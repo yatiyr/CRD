@@ -202,7 +202,36 @@
 > TONEMAPPED space or σ_c=0.9 is swamped by HDR radiance and the filter silently no-ops in the highlights.
 > ⚠ Harness note: the beauty frame evaluates the filter formula directly, NOT via `eval_cpu_kernel` — the tree-walking oracle
 > is ~11 ms/pixel and 640×520×121 taps is ~1 h. The shipped CKIR kernel is the gated artefact (CPU gates + both GPU gates).
-> **⬜ NEXT: B18-d remainder** stochastic LOD + the Δ=−log(ρ) depth fix; then **B18-f** RT strand tier (LSS) → closes C3/B9.
+> **[✅ B18-e CLOSED — 2026-07-20]:** the filter, sub-pixel coverage and 2x supersampling are done and
+> gated. The REAL multiple-scattering tier is NOT. Diagnosis chain, in order, because each step invalidated the previous
+> round of tuning:
+>   1. **Deferred hair keeps ONE strand per pixel while ~148 overlap** (measured: px/world 249 x 746 px strand length x
+>      172,800 strands / 869k covered px). Hard-sampling that IS line art — the "hand-drawn pen strokes" complaint. Four
+>      rounds of tuning strand count / radius / resolution / filter width / roughness were all downstream of it. Fixed with
+>      2x2 supersampling (resolve in LINEAR light; averaging display-encoded values darkens every edge).
+>   2. **The Lipp filter at sigma_par=4 is calibrated for 1 spp WITH GAPS.** At density it is a directional smear — the
+>      "oil painting" look. Dropped to 1.35 / radius 3, which is all anti-aliasing needs.
+>   3. **Multiple scattering was a WRAP-DIFFUSE PLACEHOLDER, never the B18-c tier.** This is the one the user sensed as
+>      "translucency broken": the BCSDF is verified (furnace, 20k-quadrature, GPU==oracle 1e-6), but the term that makes
+>      hair a translucent VOLUME was a fudge with a hand-tuned gain.
+> **The real tier is now WIRED AND CORRECT** (3 per-channel moment LUTs + build_dual_scatter_kernel per shaded pixel) behind
+> `sc.dual_scatter`, now ON. **THE BUG THAT COST A ROUND:** Psi^G carries a directional spread S_f (Gaussian in
+> theta_d+theta_i, width n*beta_f^2); applying it as a scalar multiplier on the direct lobe zeroed everything off the
+> specular cone ⇒ black frame. T_f is the scalar attenuation, S_f is the spread of the SCATTERED component only.
+> Measured fibre counts: key n=0.29, **rim n=9.73** (the dominant light, sits behind the groom, collapses first), fill 0.39.
+> **FIX (read from Zinke §4, not the kernel signature):** Psi^G = T_f·S_f, and S_f is a DISTRIBUTION over incoming
+> directions — the paper states it becomes delta(w_d − w_i) at n=0 — so Psi^G must be INTEGRATED against f_s, never used
+> as a scalar. Only T_f = d_f·a_f^n multiplies the direct lobe (computed host-side from the moment LUT with the kernel's
+> own nearest-bin mapping); f_back is pointwise and correct to add. T_f REPLACES the DOM transmittance (using both
+> double-counts the occlusion). **VERIFIED PHYSICALLY:** platinum went from DARKEST (mean 0.144) to BRIGHTEST at the
+> LOWEST exposure (0.255 @ 0.72, vs black 0.246 @ 1.70) — light hair scattering more than dark is Zinke's central claim
+> and it now falls out of the model rather than a hand-tuned gain.
+> **Engine defects fixed this round:** `6144U << 20U` silently truncates to 2 GiB (the shift is evaluated in unsigned int
+> before it ever reaches the usize parameter); `TlsfAllocator` had a DOCUMENTED 4 GB ceiling (kFlIndexMax = 32) with
+> nothing enforcing it — a larger pool indexes past `m_free_lists` and corrupts memory, surfacing as a SIGSEGV nowhere
+> near the construction site, and a failed backing allocation was dereferenced blind by `init_pool`. Both now assert, and
+> `TlsfAllocator::max_pool_size()` makes the limit checkable rather than folklore.
+> **⬜ NEXT: (1) B18-e dual-scatter combination; (2) B18-d** stochastic LOD + Δ=−log(ρ); **(3) B18-f** RT strand tier (LSS) → closes C3/B9.
 > **[✅ FA-3 CLUSTER-AS 2026-07-19 — RUN on the RTX 4070]:** `build_scene_clusters`
 > (VK_NV_cluster_acceleration_structure / RTX Mega-Geometry) — the triangle → a CLAS via a GPU-DRIVEN INDIRECT build
 > (`vkCmdBuildClusterAccelerationStructureIndirectNV`, opType BUILD_TRIANGLE_CLUSTER, implicit destinations, per-cluster

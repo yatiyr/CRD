@@ -147,6 +147,13 @@ struct SceneConfig
     // Inter-fibre multiple scattering gain. Light hair owes most of its brightness to light bouncing BETWEEN fibres,
     // not to the single-fibre lobes, so too small a value reads as a dark waxy shell with a lit rim.
     double ms_gain = 0.045;
+    // TRUE MULTIPLE SCATTERING. When set, the B18-c Zinke dual-scattering tier replaces the wrap-diffuse placeholder:
+    // a per-channel moment LUT plus the two-term evaluation, combined the way the paper specifies. This is the term that
+    // makes hair look like a VOLUME rather than a pile of lit wires, and it is the whole reason light hair reads light.
+    bool   dual_scatter = false;
+    double ds_fibre_scale = 1.0;  // calibration: the DOM deposits an AUTHORED per-fragment alpha, which is not the same
+    double ds_max_fibres  = 12.0; // thing as a true per-fibre opacity, so n needs scaling into Zinke working range
+    int    ds_bins      = 64;   // LUT bins over theta_d (one kernel lane each - keep a multiple of 64)
     bool   verbose  = true;
 
     // ── WHERE THE KERNELS RUN. Every CKIR kernel in this renderer goes through this hook. Left null it uses the CPU
@@ -229,25 +236,121 @@ inline void write_bmp(const char* path, int w, int h, const crd::containers::Arr
     std::fclose(f);
 }
 
+// ── B18-e COMPOSITING FILTER ────────────────────────────────────────────────────────────────────────────────────────
+// Runs in TONEMAPPED space on purpose: the paper's sigma_c = 0.9 presumes display-range values, and in linear HDR every
+// colour difference would swamp it, so the filter would silently no-op exactly where hair is brightest.
+// ⚠ HARNESS NOTE: this evaluates the filter formula directly rather than through eval_cpu_kernel. The shipped CKIR kernel
+//   `build_hair_filter_kernel` is the gated artefact (5 CPU gates + Vulkan and DX12 dispatch gates); the CPU oracle runs
+//   at ~11 ms/pixel, so a full frame through it is roughly an hour. On GPU these taps are sub-millisecond.
+[[nodiscard]] inline double apply_composite_filter(crd::memory::IAllocator& alloc, const SceneConfig& sc, int rw, int rh,
+                                                   const V3d& rgt, const V3d& up,
+                                                   const crd::containers::Array<double>& zbuf,
+                                                   const crd::containers::Array<double>& gtan,
+                                                   crd::containers::Array<double>& img)
+{
+    using crd::containers::Array;
+    const auto       uz   = [](int v) { return static_cast<crd::usize>(v); };
+    const crd::usize npix = uz(rw) * uz(rh);
+    kir::hairgeom::HairFilterConfig fcfg;
+    fcfg.width        = rw;
+    fcfg.height       = rh;
+    fcfg.depth_reject = 0.06; // WORLD units here (zbuf stores view distance, not normalised depth)
+    fcfg.sigma_par    = sc.filter_sigma_par;
+    fcfg.sigma_perp   = sc.filter_sigma_perp;
+    fcfg.sigma_color  = sc.filter_sigma_color;
+    fcfg.radius       = sc.filter_radius;
+
+    Array<double> fcol(&alloc);
+    Array<double> ftan(&alloc);
+    Array<double> fdep(&alloc);
+    fcol.resize(npix * 3U, 0.0);
+    ftan.resize(npix * 2U, 0.0);
+    fdep.resize(npix, 0.0);
+    for (crd::usize p = 0; p < npix; ++p)
+    {
+        for (int c = 0; c < 3; ++c) { fcol[p * 3U + uz(c)] = img[p * 3U + uz(c)]; }
+        const bool hashair = zbuf[p] < 1.0e29;
+        fdep[p]            = hashair ? zbuf[p] : 1.0e3;
+        const V3d    tw    = {gtan[p * 3U + 0U], gtan[p * 3U + 1U], gtan[p * 3U + 2U]};
+        double       tsx   = dot(tw, rgt);
+        double       tsy   = dot(tw, up);
+        const double tl    = crd::math::sqrt(tsx * tsx + tsy * tsy);
+        if (!hashair || tl < 1.0e-9) { tsx = 1.0; tsy = 0.0; }
+        else { tsx /= tl; tsy /= tl; }
+        ftan[p * 2U + 0U] = tsx;
+        ftan[p * 2U + 1U] = tsy;
+    }
+    const int    frad = fcfg.radius;
+    const double isp  = 1.0 / (fcfg.sigma_par * fcfg.sigma_par);
+    const double isq  = 1.0 / (fcfg.sigma_perp * fcfg.sigma_perp);
+    const double isc  = 1.0 / (fcfg.sigma_color * fcfg.sigma_color);
+    double       moved = 0.0;
+    for (int y = 0; y < rh; ++y)
+    {
+        for (int x = 0; x < rw; ++x)
+        {
+            const crd::usize p = uz(y) * uz(rw) + uz(x);
+            // Background pixels all carry the same far depth, so the guard lets them gather ONLY each other - and the
+            // sky is a smooth gradient, so a normalised symmetric kernel returns what was already there. Skipping is
+            // equivalent, not an approximation, and it is ~5x of the filter's cost at this coverage.
+            if (fdep[p] > 9.0e2) { continue; }
+            const double tsx_p = ftan[p * 2U + 0U];
+            const double     tsy_p = ftan[p * 2U + 1U];
+            double           acc[3] = {0.0, 0.0, 0.0};
+            double           wsum   = 0.0;
+            for (int dy = -frad; dy <= frad; ++dy)
+            {
+                for (int dx = -frad; dx <= frad; ++dx)
+                {
+                    const int qx = x + dx;
+                    const int qy = y + dy;
+                    if (qx < 0 || qx >= rw || qy < 0 || qy >= rh) { continue; }
+                    const crd::usize q = uz(qy) * uz(rw) + uz(qx);
+                    if (crd::math::abs(fdep[q] - fdep[p]) >= fcfg.depth_reject) { continue; }
+                    const double dpar  = static_cast<double>(dx) * tsx_p + static_cast<double>(dy) * tsy_p;
+                    const double dperp = static_cast<double>(dx) * (-tsy_p) + static_cast<double>(dy) * tsx_p;
+                    double       cd2   = 0.0;
+                    for (int c = 0; c < 3; ++c)
+                    {
+                        const double d = fcol[q * 3U + uz(c)] - fcol[p * 3U + uz(c)];
+                        cd2 += d * d;
+                    }
+                    const double w = crd::math::exp(-(dpar * dpar * isp + dperp * dperp * isq)) * crd::math::exp(-cd2 * isc);
+                    for (int c = 0; c < 3; ++c) { acc[c] += w * fcol[q * 3U + uz(c)]; }
+                    wsum += w;
+                }
+            }
+            const double nw = wsum > 1.0e-8 ? wsum : 1.0e-8;
+            for (int c = 0; c < 3; ++c)
+            {
+                const double nv = acc[c] / nw;
+                moved += crd::math::abs(nv - img[p * 3U + uz(c)]);
+                img[p * 3U + uz(c)] = nv;
+            }
+        }
+    }
+    return moved / static_cast<double>(npix * 3U);
+}
+
 // Render one groom. `img` receives width*height*3 tonemapped RGB in [0,1].
 inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const HairLook& look,
                     crd::containers::Array<double>& img)
 {
     using crd::containers::Array;
     const int    ss  = sc.supersample > 1 ? sc.supersample : 1;
-    const int    kW  = sc.width * ss;
-    const int    kH  = sc.height * ss;
-    const int    kPts = sc.points;
-    const int    kLMap = sc.lmap;
-    const int    kLFrag = sc.lfrag;
+    const int    rw  = sc.width * ss;
+    const int    rh  = sc.height * ss;
+    const int    npts = sc.points;
+    const int    lmap = sc.lmap;
+    const int    lfrag = sc.lfrag;
     const auto   uz  = [](int v) { return static_cast<crd::usize>(v); };
-    const crd::usize npix = uz(kW) * uz(kH);
+    const crd::usize npix = uz(rw) * uz(rh);
     Stats        st;
 
     // ── 1. GROOM ────────────────────────────────────────────────────────────────────────────────────────────────────
     kir::hairgeom::StrandGenConfig gcfg;
     gcfg.layers = sc.layers;
-    gcfg.points = kPts;
+    gcfg.points = npts;
     gcfg.taper  = look.taper;
 
     const int strand_count = sc.bundles * sc.per_bundle;
@@ -255,10 +358,10 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
     Array<double> tng(&alloc);
     Array<double> wpar(&alloc);
     Array<double> pos_x(&alloc);
-    pos.resize(uz(strand_count) * uz(kPts) * 6U, 0.0); // the kernel writes [pos.xyz, tan.xyz] interleaved
-    pos_x.resize(uz(strand_count) * uz(kPts) * 3U, 0.0);
-    tng.resize(uz(strand_count) * uz(kPts) * 3U, 0.0);
-    wpar.resize(uz(strand_count) * uz(kPts), 0.0);
+    pos.resize(uz(strand_count) * uz(npts) * 6U, 0.0); // the kernel writes [pos.xyz, tan.xyz] interleaved
+    pos_x.resize(uz(strand_count) * uz(npts) * 3U, 0.0);
+    tng.resize(uz(strand_count) * uz(npts) * 3U, 0.0);
+    wpar.resize(uz(strand_count) * uz(npts), 0.0);
 
     crd::u32   rs  = 1234567U;
     const auto rnd = [&]() {
@@ -335,24 +438,24 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
         const kir::KEntry e     = kir::hairgeom::build_strand_gen_kernel(g, gs);
         kir::KernelBuffer bb[3] = {{lay.data(), sc.bundles * sc.layers * 4 * 3, 0, 0},
                                    {spar.data(), strand_count * 6, 0, 1},
-                                   {pos.data(), strand_count * kPts * 6, 0, 2}}; // interleaved [pos.xyz, tan.xyz]
+                                   {pos.data(), strand_count * npts * 6, 0, 2}}; // interleaved [pos.xyz, tan.xyz]
         const crd::u32    grp   = (static_cast<crd::u32>(strand_count) + e.local_size[0] - 1U) / e.local_size[0];
         run_kernel(sc, g, e, bb, 3, grp, alloc);
     }
     // de-interleave into the flat position/tangent arrays the rasterizer walks
     for (int si = 0; si < strand_count; ++si)
     {
-        for (int j = 0; j < kPts; ++j)
+        for (int j = 0; j < npts; ++j)
         {
-            const crd::usize so = (uz(si) * uz(kPts) + uz(j)) * 6U;
-            const crd::usize go = (uz(si) * uz(kPts) + uz(j)) * 3U;
+            const crd::usize so = (uz(si) * uz(npts) + uz(j)) * 6U;
+            const crd::usize go = (uz(si) * uz(npts) + uz(j)) * 3U;
             for (int c = 0; c < 3; ++c) { tng[go + uz(c)] = pos[so + 3U + uz(c)]; }
             for (int c = 0; c < 3; ++c) { pos_x[go + uz(c)] = pos[so + uz(c)]; }
-            wpar[uz(si) * uz(kPts) + uz(j)] = static_cast<double>(j) / static_cast<double>(kPts - 1);
+            wpar[uz(si) * uz(npts) + uz(j)] = static_cast<double>(j) / static_cast<double>(npts - 1);
         }
     }
     for (crd::usize i = 0; i < pos_x.size(); ++i) { pos[i] = pos_x[i]; }
-    pos.resize(uz(strand_count) * uz(kPts) * 3U, 0.0);
+    pos.resize(uz(strand_count) * uz(npts) * 3U, 0.0);
 
 
     // ── 2. RASTERIZE ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -381,13 +484,13 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
         if (depth < 1.0e-3) { return false; }
         sx = (dot(d, rgt) / depth) * flen;
         sy = (dot(d, up) / depth) * flen;
-        sx = (sx * 0.5 + 0.5) * kW;
-        sy = (0.5 - sy * 0.5) * kH;
+        sx = (sx * 0.5 + 0.5) * rw;
+        sy = (0.5 - sy * 0.5) * rh;
         return true;
     };
     const auto ray_of = [&](int ix, int iy) {
-        const double ndx = ((static_cast<double>(ix) + 0.5) / kW * 2.0 - 1.0) / flen;
-        const double ndy = (1.0 - (static_cast<double>(iy) + 0.5) / kH * 2.0) / flen;
+        const double ndx = ((static_cast<double>(ix) + 0.5) / rw * 2.0 - 1.0) / flen;
+        const double ndy = (1.0 - (static_cast<double>(iy) + 0.5) / rh * 2.0) / flen;
         return norm(fwd + rgt * ndx + up * ndy);
     };
 
@@ -401,9 +504,9 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
         const V3d    hc{0.0, 0.0, -0.06};
         const V3d    hr{0.96, 1.02, 1.14}; // an ellipsoid: a sphere reads as a ball, never as a skull
         const V3d    skin{0.76, 0.57, 0.46};
-        for (int iy = 0; iy < kH; ++iy)
+        for (int iy = 0; iy < rh; ++iy)
         {
-            for (int ix = 0; ix < kW; ++ix)
+            for (int ix = 0; ix < rw; ++ix)
             {
                 const V3d rd = ray_of(ix, iy);
                 // ray-ellipsoid = ray-sphere in the scaled frame
@@ -419,7 +522,7 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
                 const V3d wp = eye + rd * t;
                 const V3d n  = norm(V3d{(wp.x - hc.x) / (hr.x * hr.x), (wp.y - hc.y) / (hr.y * hr.y),
                                        (wp.z - hc.z) / (hr.z * hr.z)});
-                const crd::usize p = uz(iy) * uz(kW) + uz(ix);
+                const crd::usize p = uz(iy) * uz(rw) + uz(ix);
                 zhead[p]           = dot(wp - eye, fwd);
                 // wrap-diffuse skin: cheap subsurface stand-in so the scalp is not a hard-terminator plastic ball
                 const auto lam = [&](V3d ld) { return crd::math::max(0.0, (dot(n, ld) + 0.35) / 1.35); };
@@ -435,9 +538,9 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
 
     for (int si = 0; si < strand_count; ++si)
     {
-        for (int j = 0; j + 1 < kPts; ++j)
+        for (int j = 0; j + 1 < npts; ++j)
         {
-            const crd::usize o0 = (uz(si) * uz(kPts) + uz(j)) * 3U;
+            const crd::usize o0 = (uz(si) * uz(npts) + uz(j)) * 3U;
             const crd::usize o1 = o0 + 3U;
             const V3d        p0{pos[o0], pos[o0 + 1U], pos[o0 + 2U]};
             const V3d        p1{pos[o1], pos[o1 + 1U], pos[o1 + 2U]};
@@ -464,7 +567,7 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
                 const int    by = static_cast<int>(crd::math::floor(fy));
                 const double tx = fx - static_cast<double>(bx);
                 const double ty = fy - static_cast<double>(by);
-                const double aw = sc.hair_radius * flen * static_cast<double>(kW) / dz;
+                const double aw = sc.hair_radius * flen * static_cast<double>(rw) / dz;
                 const double ac = aw < 1.0 ? aw : 1.0;
                 for (int qy = 0; qy < 2; ++qy)
                 {
@@ -472,10 +575,10 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
                     {
                         const int ix = bx + qx;
                         const int iy = by + qy;
-                        if (ix < 0 || ix >= kW || iy < 0 || iy >= kH) { continue; }
+                        if (ix < 0 || ix >= rw || iy < 0 || iy >= rh) { continue; }
                         const double bw = (qx == 0 ? 1.0 - tx : tx) * (qy == 0 ? 1.0 - ty : ty);
                         if (bw < 1.0e-4) { continue; }
-                        const crd::usize pi = uz(iy) * uz(kW) + uz(ix);
+                        const crd::usize pi = uz(iy) * uz(rw) + uz(ix);
                         if (dz >= zhead[pi]) { continue; } // occluded by the scalp — contributes neither colour nor alpha
                         // Coverage accrues from EVERY fragment, including ones the depth test discards: an occluded
                         // strand still blocks light through this pixel. 1-prod(1-a) is order-independent.
@@ -483,7 +586,7 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
                         if (dz >= zbuf[pi]) { continue; }
                         zbuf[pi] = dz;
                         gid[pi]  = si;
-                        gw[pi]   = wpar[uz(si) * uz(kPts) + uz(j)] + (1.0 / kPts) * a;
+                        gw[pi]   = wpar[uz(si) * uz(npts) + uz(j)] + (1.0 / npts) * a;
                         for (int c = 0; c < 3; ++c) { gtan[pi * 3U + uz(c)] = tng[o0 + uz(c)]; }
                     }
                 }
@@ -507,7 +610,7 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
     };
     kir::hairms::DomConfig domc;
     domc.layers       = sc.dom_layers;
-    domc.frags_per_px = kLFrag;
+    domc.frags_per_px = lfrag;
     domc.span         = 2.6;
     const int dom_stride = 1 + domc.layers;
 
@@ -521,12 +624,15 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
         lm.lz = norm(ldir * -1.0);
         lm.lx = norm(cross(lm.lz, crd::math::abs(lm.lz.z) < 0.9 ? V3d{0, 0, 1} : V3d{1, 0, 0}));
         lm.ly = cross(lm.lz, lm.lx);
-        double minx = 1e30, maxx = -1e30, miny = 1e30, maxy = -1e30;
+        double minx = 1e30;
+        double maxx = -1e30;
+        double miny = 1e30;
+        double maxy = -1e30;
         for (int s = 0; s < strand_count; ++s)
         {
-            for (int j = 0; j < kPts; ++j)
+            for (int j = 0; j < npts; ++j)
             {
-                const crd::usize o = (uz(s) * uz(kPts) + uz(j)) * 3U;
+                const crd::usize o = (uz(s) * uz(npts) + uz(j)) * 3U;
                 const V3d        p{pos[o], pos[o + 1U], pos[o + 2U]};
                 const double     ux = dot(p, lm.lx);
                 const double     uy = dot(p, lm.ly);
@@ -540,30 +646,30 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
         minx -= pad; miny -= pad; maxx += pad; maxy += pad;
         lm.minx = minx;
         lm.miny = miny;
-        lm.inv  = static_cast<double>(kLMap) / crd::math::max(maxx - minx, maxy - miny);
+        lm.inv  = static_cast<double>(lmap) / crd::math::max(maxx - minx, maxy - miny);
 
         Array<double> frag(&alloc);
         Array<int>    used(&alloc);
-        frag.resize(uz(kLMap) * uz(kLMap) * uz(kLFrag) * 2U, 0.0);
-        used.resize(uz(kLMap) * uz(kLMap), 0);
-        for (crd::usize c = 0; c < uz(kLMap) * uz(kLMap); ++c)
+        frag.resize(uz(lmap) * uz(lmap) * uz(lfrag) * 2U, 0.0);
+        used.resize(uz(lmap) * uz(lmap), 0);
+        for (crd::usize c = 0; c < uz(lmap) * uz(lmap); ++c)
         {
-            for (int k = 0; k < kLFrag; ++k)
+            for (int k = 0; k < lfrag; ++k)
             {
-                frag[(c * uz(kLFrag) + uz(k)) * 2U + 0U] = 1.0e30; // empty slots must lose the z0 reduction...
-                frag[(c * uz(kLFrag) + uz(k)) * 2U + 1U] = 0.0;    // ...and contribute no opacity
+                frag[(c * uz(lfrag) + uz(k)) * 2U + 0U] = 1.0e30; // empty slots must lose the z0 reduction...
+                frag[(c * uz(lfrag) + uz(k)) * 2U + 1U] = 0.0;    // ...and contribute no opacity
             }
         }
         // ⚠ Splat SEGMENTS, not vertices. Depositing only the sampled points leaves the light map a dotted line while the
         //   camera sees a continuous one; pixels landing in the holes come back unshadowed and the frame speckles.
         const auto deposit = [&](int cx, int cy, double dz) {
-            if (cx < 0 || cx >= kLMap || cy < 0 || cy >= kLMap) { return; }
-            const crd::usize c = uz(cy) * uz(kLMap) + uz(cx);
+            if (cx < 0 || cx >= lmap || cy < 0 || cy >= lmap) { return; }
+            const crd::usize c = uz(cy) * uz(lmap) + uz(cx);
             int              n = used[c];
-            if (n < kLFrag)
+            if (n < lfrag)
             {
-                frag[(c * uz(kLFrag) + uz(n)) * 2U + 0U] = dz;
-                frag[(c * uz(kLFrag) + uz(n)) * 2U + 1U] = sc.dom_alpha;
+                frag[(c * uz(lfrag) + uz(n)) * 2U + 0U] = dz;
+                frag[(c * uz(lfrag) + uz(n)) * 2U + 1U] = sc.dom_alpha;
                 used[c] = n + 1;
                 return;
             }
@@ -571,18 +677,18 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
             //   uncorrelated with depth, so neighbouring cells disagree arbitrarily → hard blocks at cell resolution.
             int    worst = 0;
             double wd    = -1e30;
-            for (int k = 0; k < kLFrag; ++k)
+            for (int k = 0; k < lfrag; ++k)
             {
-                const double d = frag[(c * uz(kLFrag) + uz(k)) * 2U + 0U];
+                const double d = frag[(c * uz(lfrag) + uz(k)) * 2U + 0U];
                 if (d > wd) { wd = d; worst = k; }
             }
-            if (dz < wd) { frag[(c * uz(kLFrag) + uz(worst)) * 2U + 0U] = dz; }
+            if (dz < wd) { frag[(c * uz(lfrag) + uz(worst)) * 2U + 0U] = dz; }
         };
         for (int s = 0; s < strand_count; ++s)
         {
-            for (int j = 0; j + 1 < kPts; ++j)
+            for (int j = 0; j + 1 < npts; ++j)
             {
-                const crd::usize oa = (uz(s) * uz(kPts) + uz(j)) * 3U;
+                const crd::usize oa = (uz(s) * uz(npts) + uz(j)) * 3U;
                 const V3d        pa{pos[oa], pos[oa + 1U], pos[oa + 2U]};
                 const V3d        pb{pos[oa + 3U], pos[oa + 4U], pos[oa + 5U]};
                 const double     ax = (dot(pa, lm.lx) - minx) * lm.inv;
@@ -601,21 +707,22 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
         }
         if (sc.verbose)
         {
-            int filled = 0, sat = 0;
-            for (crd::usize c = 0; c < uz(kLMap) * uz(kLMap); ++c)
+            int filled = 0;
+            int sat    = 0;
+            for (crd::usize c = 0; c < uz(lmap) * uz(lmap); ++c)
             {
                 if (used[c] > 0) { ++filled; }
-                if (used[c] >= kLFrag) { ++sat; }
+                if (used[c] >= lfrag) { ++sat; }
             }
-            std::printf("  [DOM] cells=%d occupied=%d saturated=%d (%.1f%%)\n", kLMap * kLMap, filled, sat,
+            std::printf("  [DOM] cells=%d occupied=%d saturated=%d (%.1f%%)\n", lmap * lmap, filled, sat,
                         filled > 0 ? 100.0 * static_cast<double>(sat) / static_cast<double>(filled) : 0.0);
         }
-        lm.dom.resize(uz(kLMap) * uz(kLMap) * uz(dom_stride), 0.0);
+        lm.dom.resize(uz(lmap) * uz(lmap) * uz(dom_stride), 0.0);
         kir::KGraph       gd(&alloc);
         const kir::KEntry ed    = kir::hairms::build_dom_build_kernel(gd, domc);
-        kir::KernelBuffer db[2] = {{frag.data(), kLMap * kLMap * kLFrag * 2, 0, 0},
-                                   {lm.dom.data(), kLMap * kLMap * dom_stride, 0, 1}};
-        run_kernel(sc, gd, ed, db, 2, static_cast<crd::u32>((kLMap * kLMap + 63) / 64), alloc);
+        kir::KernelBuffer db[2] = {{frag.data(), lmap * lmap * lfrag * 2, 0, 0},
+                                   {lm.dom.data(), lmap * lmap * dom_stride, 0, 1}};
+        run_kernel(sc, gd, ed, db, 2, static_cast<crd::u32>((lmap * lmap + 63) / 64), alloc);
     };
 
     // ── 3. SHADE ────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -623,12 +730,49 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
     shade.resize(uz(nc) * 3U, 0.0);
     const V3d base_sigma = melanin_sigma(look.eumelanin, look.pheomelanin);
 
+    // ── B18-c MOMENT LUTs. Dual scattering's average forward/backward attenuation (a_f, a_b) and spreads depend on the
+    //    fibre's ABSORPTION, which is per channel - so light hair scatters far more than dark, which is the entire reason
+    //    the model exists. That means THREE LUTs, one per colour channel, exactly as a production renderer does.
+    Array<double> ds_lut(&alloc);
+    if (sc.dual_scatter)
+    {
+        ds_lut.resize(uz(sc.ds_bins) * 3U * uz(kir::hairms::kLutStride), 0.0);
+        for (int c = 0; c < 3; ++c)
+        {
+            kir::hairms::HairScatterLutConfig lc;
+            lc.n_theta_d = sc.ds_bins;
+            lc.n_h       = 2;
+            lc.n_theta_o = 12;
+            lc.n_phi_o   = 24;
+            lc.eta       = 1.55;
+            lc.sigma_a   = base_sigma.z;
+            if (c == 0) { lc.sigma_a = base_sigma.x; }
+            else if (c == 1) { lc.sigma_a = base_sigma.y; }
+            lc.beta_m    = look.beta_m;
+            lc.beta_n    = look.beta_n;
+            lc.alpha_deg = look.alpha;
+            Array<double> one(&alloc);
+            one.resize(uz(sc.ds_bins) * uz(kir::hairms::kLutStride), 0.0);
+            kir::KGraph       gl(&alloc);
+            const kir::KEntry elut   = kir::hairms::build_hair_scatter_lut_kernel(gl, lc);
+            kir::KernelBuffer lb[1]  = {{one.data(), sc.ds_bins * kir::hairms::kLutStride, 0, 0}};
+            run_kernel(sc, gl, elut, lb, 1, static_cast<crd::u32>((sc.ds_bins + 63) / 64), alloc);
+            for (int k = 0; k < sc.ds_bins * kir::hairms::kLutStride; ++k)
+            {
+                ds_lut[uz(c) * uz(sc.ds_bins) * uz(kir::hairms::kLutStride) + uz(k)] = one[uz(k)];
+            }
+        }
+    }
+
     for (int pass = 0; pass < 3; ++pass)
     {
-        const V3d    ldir  = (pass == 0) ? sc.key_dir : (pass == 1) ? sc.rim_dir : sc.fill_dir;
-        const V3d    lcol  = (pass == 0) ? sc.key_col : (pass == 1) ? sc.rim_col : sc.fill_col;
-        const double inten = (pass == 0) ? sc.key_int : (pass == 1) ? sc.rim_int : sc.fill_int;
-        LightMap&    lm    = (pass == 0) ? lm_key : (pass == 1) ? lm_rim : lm_fil;
+        V3d       ldir  = sc.fill_dir;
+        V3d       lcol  = sc.fill_col;
+        double    inten = sc.fill_int;
+        LightMap* lmp   = &lm_fil;
+        if (pass == 0) { ldir = sc.key_dir; lcol = sc.key_col; inten = sc.key_int; lmp = &lm_key; }
+        else if (pass == 1) { ldir = sc.rim_dir; lcol = sc.rim_col; inten = sc.rim_int; lmp = &lm_rim; }
+        LightMap& lm = *lmp;
         build_lightmap(ldir, lm);
 
         // ⭐ THE SHIPPED KERNEL, not a second implementation. Shading runs `build_hair_bcsdf_kernel` — the exact graph the
@@ -650,8 +794,8 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
         {
             const crd::usize p    = uz(pix[uz(i)]);
             const V3d        tanw = norm(V3d{gtan[p * 3U], gtan[p * 3U + 1U], gtan[p * 3U + 2U]});
-            const int        ix   = static_cast<int>(p) % kW;
-            const int        iy   = static_cast<int>(p) / kW;
+            const int        ix   = static_cast<int>(p) % rw;
+            const int        iy   = static_cast<int>(p) / rw;
             const V3d        vdir = ray_of(ix, iy) * -1.0; // toward the camera
             const V3d        b1   = norm(cross(tanw, crd::math::abs(tanw.z) < 0.9 ? V3d{0, 0, 1} : V3d{1, 0, 0}));
             const V3d        b2   = cross(tanw, b1);
@@ -694,7 +838,10 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
         // ── SELF-SHADOW via the B18-c DOM lookup kernel, 4-tap bilinear PCF (a single nearest-cell tap makes transmittance
         //    jump at cell borders — classic unfiltered shadow-map blockiness, which projects to multi-pixel blocks).
         const int     nq = ((nc * 4 + 63) / 64) * 64;
-        Array<double> qry(&alloc), qout(&alloc), fracx(&alloc), fracy(&alloc);
+        Array<double> qry(&alloc);
+        Array<double> qout(&alloc);
+        Array<double> fracx(&alloc);
+        Array<double> fracy(&alloc);
         qry.resize(uz(nq) * 2U, 0.0);
         qout.resize(uz(nq) * 2U, 0.0);
         fracx.resize(nc, 0.0);
@@ -702,7 +849,7 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
         for (int i = 0; i < nc; ++i)
         {
             const crd::usize p   = uz(pix[uz(i)]);
-            const V3d        wp  = eye + ray_of(static_cast<int>(p) % kW, static_cast<int>(p) / kW) * zbuf[p];
+            const V3d        wp  = eye + ray_of(static_cast<int>(p) % rw, static_cast<int>(p) / rw) * zbuf[p];
             const double     gx  = (dot(wp, lm.lx) - lm.minx) * lm.inv - 0.5;
             const double     gy  = (dot(wp, lm.ly) - lm.miny) * lm.inv - 0.5;
             const int        bx  = static_cast<int>(gx < 0.0 ? gx - 1.0 : gx);
@@ -715,21 +862,115 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
                 int tx = bx + (k & 1);
                 int ty = by + (k >> 1);
                 if (tx < 0) { tx = 0; }
-                if (tx >= kLMap) { tx = kLMap - 1; }
+                if (tx >= lmap) { tx = lmap - 1; }
                 if (ty < 0) { ty = 0; }
-                if (ty >= kLMap) { ty = kLMap - 1; }
+                if (ty >= lmap) { ty = lmap - 1; }
                 const crd::usize qi = (uz(i) * 4U + uz(k)) * 2U;
-                qry[qi + 0U] = static_cast<double>(ty * kLMap + tx);
+                qry[qi + 0U] = static_cast<double>(ty * lmap + tx);
                 qry[qi + 1U] = ld;
             }
         }
         {
             kir::KGraph       gq(&alloc);
             const kir::KEntry eq    = kir::hairms::build_dom_lookup_kernel(gq, domc);
-            kir::KernelBuffer qb[3] = {{lm.dom.data(), kLMap * kLMap * dom_stride, 0, 0},
+            kir::KernelBuffer qb[3] = {{lm.dom.data(), lmap * lmap * dom_stride, 0, 0},
                                        {qry.data(), nq * 2, 0, 1},
                                        {qout.data(), nq * 2, 0, 2}};
             run_kernel(sc, gq, eq, qb, 3, static_cast<crd::u32>(nq / 64), alloc);
+        }
+
+        // ── B18-c DUAL SCATTERING, evaluated per shaded pixel per channel ───────────────────────────────────────────
+        Array<double> dsout(&alloc);
+        Array<double> tf_arr(&alloc); // T_f per pixel per channel (Zinke Eq 5) — hoisted so the combine below can read it
+        if (sc.dual_scatter)
+        {
+            double        dbg_nmax = 0.0;
+            double        dbg_nsum = 0.0;
+            int           dbg_ncnt = 0;
+            const int     dsl = ((nc * 3 + 63) / 64) * 64;
+            tf_arr.resize(uz(nc) * 3U, 0.0);
+            Array<double> dsin(&alloc);
+            dsin.resize(uz(dsl) * 6U, 0.0);
+            dsout.resize(uz(dsl) * 2U, 0.0);
+            for (int i = 0; i < nc; ++i)
+            {
+                const crd::usize p    = uz(pix[uz(i)]);
+                const V3d        tanw = norm(V3d{gtan[p * 3U], gtan[p * 3U + 1U], gtan[p * 3U + 2U]});
+                const V3d        b1   = norm(cross(tanw, crd::math::abs(tanw.z) < 0.9 ? V3d{0, 0, 1} : V3d{1, 0, 0}));
+                const V3d        b2   = cross(tanw, b1);
+                const double     sti  = crd::math::max(-0.999, crd::math::min(0.999, dot(ldir, tanw)));
+                const V3d        vd   = ray_of(static_cast<int>(p) % rw, static_cast<int>(p) / rw) * -1.0;
+                const double     sto  = crd::math::max(-0.999, crd::math::min(0.999, dot(vd, tanw)));
+                const double     thi  = crd::math::asin(sti);
+                const double     tho  = crd::math::asin(sto);
+                double           dphi = crd::math::atan2(dot(ldir, b2), dot(ldir, b1))
+                                      - crd::math::atan2(dot(vd, b2), dot(vd, b1));
+                while (dphi > 3.14159265358979323846) { dphi -= 2.0 * 3.14159265358979323846; }
+                while (dphi < -3.14159265358979323846) { dphi += 2.0 * 3.14159265358979323846; }
+                // n = fibres crossed on the shadow path. The deep-opacity map's accumulated opacity IS that count scaled by
+                // the per-fragment alpha we deposited, which is exactly what Zinke's Eq 5/8 consume.
+                const double opac = qout[(uz(i) * 4U + 0U) * 2U + 1U];
+                double       nstr = crd::math::max(0.0, opac / crd::math::max(1.0e-6, sc.dom_alpha));
+                nstr = crd::math::min(nstr, sc.ds_max_fibres) * sc.ds_fibre_scale;
+                if (nstr > dbg_nmax) { dbg_nmax = nstr; }
+                dbg_nsum += nstr;
+                ++dbg_ncnt;
+                const double thd = 0.5 * (thi - tho); // theta_d, the Marschner difference angle
+                // ⭐ T_f COMPUTED HOST-SIDE, and this is the crux of the whole tier. Psi^G = T_f * S_f (Eq 4), but S_f is a
+                //    DISTRIBUTION over incoming directions — at n = 0 the paper states outright that it "becomes a delta
+                //    function delta(w_d - w_i)". So Psi^G must be INTEGRATED against f_s over w_i; evaluating it at the
+                //    single light direction and using it as a scalar multiplier evaluates a delta at its own centre,
+                //    which zeroes everything off the specular cone and renders the groom black. Only T_f is a scalar, and
+                //    only T_f belongs on the direct lobe. Same nearest-bin mapping the kernel uses, so they agree.
+                const double fbin = (thd + 0.5 * 3.14159265358979323846) / 3.14159265358979323846
+                                    * static_cast<double>(sc.ds_bins);
+                int          lbin = static_cast<int>(fbin);
+                if (lbin < 0) { lbin = 0; }
+                if (lbin > sc.ds_bins - 1) { lbin = sc.ds_bins - 1; }
+                for (int c = 0; c < 3; ++c)
+                {
+                    const crd::usize o = (uz(i) * 3U + uz(c)) * 6U;
+                    dsin[o + 0U] = thd;
+                    dsin[o + 1U] = thi;
+                    dsin[o + 2U] = tho;
+                    dsin[o + 3U] = dphi; // the kernel's own half-cone selectors pick forward vs backward
+                    dsin[o + 4U] = dphi;
+                    dsin[o + 5U] = nstr;
+                    double af = ds_lut[uz(c) * uz(sc.ds_bins) * uz(kir::hairms::kLutStride)
+                                       + uz(lbin) * uz(kir::hairms::kLutStride) + 0U];
+                    if (af < 1.0e-5) { af = 1.0e-5; }
+                    if (af > 0.999) { af = 0.999; }
+                    tf_arr[uz(i) * 3U + uz(c)] = 0.7 * crd::math::pow(af, nstr); // d_f = 0.7 (Zinke, all figures)
+                }
+            }
+            std::printf("  [dual-scatter] fibre count n: mean %.2f max %.2f\n",
+                        dbg_ncnt > 0 ? dbg_nsum / static_cast<double>(dbg_ncnt) : 0.0, dbg_nmax);
+            // one dispatch per channel, each against that channel's moment LUT
+            const int     stride = sc.ds_bins * kir::hairms::kLutStride;
+            Array<double> chan_in(&alloc);
+            Array<double> chan_out(&alloc);
+            const int     cl = ((nc + 63) / 64) * 64;
+            chan_in.resize(uz(cl) * 6U, 0.0);
+            chan_out.resize(uz(cl) * 2U, 0.0);
+            for (int c = 0; c < 3; ++c)
+            {
+                for (int i = 0; i < nc; ++i)
+                {
+                    for (int k = 0; k < 6; ++k) { chan_in[uz(i) * 6U + uz(k)] = dsin[(uz(i) * 3U + uz(c)) * 6U + uz(k)]; }
+                }
+                kir::KGraph                    gs(&alloc);
+                kir::hairms::DualScatterConfig dcfg;
+                const kir::KEntry              es = kir::hairms::build_dual_scatter_kernel(gs, dcfg, sc.ds_bins);
+                kir::KernelBuffer              sb[3] = {{ds_lut.data() + static_cast<crd::isize>(c * stride), stride, 0, 0},
+                                                        {chan_in.data(), cl * 6, 0, 1},
+                                                        {chan_out.data(), cl * 2, 0, 2}};
+                run_kernel(sc, gs, es, sb, 3, static_cast<crd::u32>(cl / 64), alloc);
+                for (int i = 0; i < nc; ++i)
+                {
+                    dsout[(uz(i) * 3U + uz(c)) * 2U + 0U] = chan_out[uz(i) * 2U + 0U];
+                    dsout[(uz(i) * 3U + uz(c)) * 2U + 1U] = chan_out[uz(i) * 2U + 1U];
+                }
+            }
         }
 
         for (int i = 0; i < nc; ++i)
@@ -744,9 +985,6 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
             const double     t01  = qout[(uz(i) * 4U + 2U) * 2U];
             const double     t11  = qout[(uz(i) * 4U + 3U) * 2U];
             const double     occ  = (t00 * (1.0 - fx2) + t10 * fx2) * (1.0 - fy2) + (t01 * (1.0 - fx2) + t11 * fx2) * fy2;
-            // MULTIPLE-SCATTERING FILL: light hair owes most of its brightness to light bouncing BETWEEN fibres, not to
-            // the single-fibre lobes. A wrap-diffuse term tinted by the fibre's own transmission stands in for the B18-c
-            // dual-scattering tier, and is scaled by the pigment so black hair does not glow.
             const double wrap = 0.5 + 0.5 * ct;
             // The inter-fibre bounce is TINTED by how far light gets through the pigment, and that tint must be strong:
             // a weak exponent makes every groom trend to cream regardless of melanin, which is the classic "wax" look.
@@ -754,24 +992,40 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
                                     crd::math::exp(-base_sigma.z * 3.2)};
             for (int c = 0; c < 3; ++c)
             {
-                const double lc = (c == 0) ? lcol.x : (c == 1) ? lcol.y : lcol.z;
+                double lc = lcol.z;
+                if (c == 0) { lc = lcol.x; }
+                else if (c == 1) { lc = lcol.y; }
                 double       vv = fo[uz(i) * 3U + uz(c)];
                 if (!(vv == vv) || vv < 0.0) { vv = 0.0; } // NaN/negative guard at grazing configurations
-                const double direct = vv * ct * lc * inten * occ;
-                const double ms     = sc.ms_gain * tint[c] * lc * wrap * inten * occ;
-                shade[uz(i) * 3U + uz(c)] += direct + ms;
+                if (sc.dual_scatter)
+                {
+                    // T_f attenuates the direct lobe; f_back is the LOCAL backscattering BCSDF (Eq 10-15), which IS a
+                    // pointwise BCSDF-like quantity and so is correct to evaluate and add here. d_b = 0.7 as in the paper.
+                    // T_f already carries the shadow-path attenuation, so it REPLACES the raw DOM transmittance — using
+                    // both would double-count the same occlusion.
+                    const double t_f = tf_arr[uz(i) * 3U + uz(c)];
+                    double       fbk = dsout[(uz(i) * 3U + uz(c)) * 2U + 1U];
+                    if (!(fbk == fbk) || fbk < 0.0) { fbk = 0.0; }
+                    shade[uz(i) * 3U + uz(c)] += t_f * (vv + 0.7 * fbk) * ct * lc * inten;
+                }
+                else
+                {
+                    const double direct = vv * ct * lc * inten * occ;
+                    const double ms     = sc.ms_gain * tint[c] * lc * wrap * inten * occ;
+                    shade[uz(i) * 3U + uz(c)] += direct + ms;
+                }
             }
         }
     }
 
     // ── 4. COMPOSITE ────────────────────────────────────────────────────────────────────────────────────────────────
     img.resize(npix * 3U, 0.0);
-    for (int y = 0; y < kH; ++y)
+    for (int y = 0; y < rh; ++y)
     {
-        for (int x = 0; x < kW; ++x)
+        for (int x = 0; x < rw; ++x)
         {
-            const double     t = static_cast<double>(y) / kH;
-            const crd::usize o = (uz(y) * uz(kW) + uz(x)) * 3U;
+            const double     t = static_cast<double>(y) / rh;
+            const crd::usize o = (uz(y) * uz(rw) + uz(x)) * 3U;
             img[o + 0U] = 0.021 + 0.028 * (1.0 - t);
             img[o + 1U] = 0.024 + 0.034 * (1.0 - t);
             img[o + 2U] = 0.036 + 0.052 * (1.0 - t);
@@ -812,91 +1066,7 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
     }
     st.mean /= static_cast<double>(npix * 3U);
 
-    // ── 5. B18-e COMPOSITING FILTER ─────────────────────────────────────────────────────────────────────────────────
-    // ⚠ Runs in TONEMAPPED space on purpose: the paper's sigma_c = 0.9 presumes display-range values, and in linear HDR
-    //   every colour difference would swamp it — the filter would silently no-op exactly where hair is brightest.
-    // ⚠ HARNESS NOTE: this evaluates the filter formula directly rather than through eval_cpu_kernel. The shipped CKIR
-    //   kernel `build_hair_filter_kernel` is the gated artefact (5 CPU gates + Vulkan and DX12 dispatch gates); the CPU
-    //   oracle is ~11 ms/pixel, so a full frame through it is roughly an hour. On GPU these taps are sub-millisecond.
-    {
-        kir::hairgeom::HairFilterConfig fcfg;
-        fcfg.width        = kW;
-        fcfg.height       = kH;
-        fcfg.depth_reject = 0.06; // WORLD units here (zbuf stores view distance, not normalised depth)
-        fcfg.sigma_par    = sc.filter_sigma_par;
-        fcfg.sigma_perp   = sc.filter_sigma_perp;
-        fcfg.sigma_color  = sc.filter_sigma_color;
-        fcfg.radius       = sc.filter_radius;
-
-        Array<double> fcol(&alloc), ftan(&alloc), fdep(&alloc);
-        fcol.resize(npix * 3U, 0.0);
-        ftan.resize(npix * 2U, 0.0);
-        fdep.resize(npix, 0.0);
-        for (crd::usize p = 0; p < npix; ++p)
-        {
-            for (int c = 0; c < 3; ++c) { fcol[p * 3U + uz(c)] = img[p * 3U + uz(c)]; }
-            const bool hashair = zbuf[p] < 1.0e29;
-            fdep[p]            = hashair ? zbuf[p] : 1.0e3;
-            const V3d    tw    = {gtan[p * 3U + 0U], gtan[p * 3U + 1U], gtan[p * 3U + 2U]};
-            double       tsx   = dot(tw, rgt);
-            double       tsy   = dot(tw, up);
-            const double tl    = crd::math::sqrt(tsx * tsx + tsy * tsy);
-            if (!hashair || tl < 1.0e-9) { tsx = 1.0; tsy = 0.0; }
-            else { tsx /= tl; tsy /= tl; }
-            ftan[p * 2U + 0U] = tsx;
-            ftan[p * 2U + 1U] = tsy;
-        }
-        const int    frad = fcfg.radius;
-        const double isp  = 1.0 / (fcfg.sigma_par * fcfg.sigma_par);
-        const double isq  = 1.0 / (fcfg.sigma_perp * fcfg.sigma_perp);
-        const double isc  = 1.0 / (fcfg.sigma_color * fcfg.sigma_color);
-        double       moved = 0.0;
-        for (int y = 0; y < kH; ++y)
-        {
-            for (int x = 0; x < kW; ++x)
-            {
-                const crd::usize p = uz(y) * uz(kW) + uz(x);
-                // Background pixels all carry the same far depth, so the guard lets them gather ONLY each other - and the
-                // sky is a smooth gradient, so a normalised symmetric kernel returns what was already there. Skipping is
-                // equivalent, not an approximation, and it is ~5x of the filter's cost at this coverage.
-                if (fdep[p] > 9.0e2) { continue; }
-                const double tsx_p = ftan[p * 2U + 0U];
-                const double     tsy_p = ftan[p * 2U + 1U];
-                double           acc[3] = {0.0, 0.0, 0.0};
-                double           wsum   = 0.0;
-                for (int dy = -frad; dy <= frad; ++dy)
-                {
-                    for (int dx = -frad; dx <= frad; ++dx)
-                    {
-                        const int qx = x + dx;
-                        const int qy = y + dy;
-                        if (qx < 0 || qx >= kW || qy < 0 || qy >= kH) { continue; }
-                        const crd::usize q = uz(qy) * uz(kW) + uz(qx);
-                        if (crd::math::abs(fdep[q] - fdep[p]) >= fcfg.depth_reject) { continue; }
-                        const double dpar  = static_cast<double>(dx) * tsx_p + static_cast<double>(dy) * tsy_p;
-                        const double dperp = static_cast<double>(dx) * (-tsy_p) + static_cast<double>(dy) * tsx_p;
-                        double       cd2   = 0.0;
-                        for (int c = 0; c < 3; ++c)
-                        {
-                            const double d = fcol[q * 3U + uz(c)] - fcol[p * 3U + uz(c)];
-                            cd2 += d * d;
-                        }
-                        const double w = crd::math::exp(-(dpar * dpar * isp + dperp * dperp * isq)) * crd::math::exp(-cd2 * isc);
-                        for (int c = 0; c < 3; ++c) { acc[c] += w * fcol[q * 3U + uz(c)]; }
-                        wsum += w;
-                    }
-                }
-                const double nw = wsum > 1.0e-8 ? wsum : 1.0e-8;
-                for (int c = 0; c < 3; ++c)
-                {
-                    const double nv = acc[c] / nw;
-                    moved += crd::math::abs(nv - img[p * 3U + uz(c)]);
-                    img[p * 3U + uz(c)] = nv;
-                }
-            }
-        }
-        st.filter_delta = moved / static_cast<double>(npix * 3U);
-    }
+    st.filter_delta = apply_composite_filter(alloc, sc, rw, rh, rgt, up, zbuf, gtan, img);
 
     // ── 6. RESOLVE. Average in LINEAR light (undo the gamma, average, re-apply): averaging display-encoded values
     //    darkens every edge, which on a groom made almost entirely of edges reads as a dirty silhouette.
@@ -914,7 +1084,7 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
                 {
                     for (int sx = 0; sx < ss; ++sx)
                     {
-                        const crd::usize sp = uz(y * ss + sy) * uz(kW) + uz(x * ss + sx);
+                        const crd::usize sp = uz(y * ss + sy) * uz(rw) + uz(x * ss + sx);
                         for (int c = 0; c < 3; ++c) { acc[c] += crd::math::pow(img[sp * 3U + uz(c)], 2.2); }
                     }
                 }

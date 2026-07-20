@@ -848,6 +848,13 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
             case KStmtKind::ForBreakIf: decl(decl, st.value); s.append("  if (bool("); pv(pv, st.value); s.append(")) break;\n"); ++i; break; // bool() accepts bool AND uint (type-strict GLSL)
             case KStmtKind::BufferTicket: decl(decl, st.index); s.append("  if (gl_LocalInvocationIndex == 0u) { sh"); app_uint(s, st.value); s.append("[0] = atomicAdd(buf"); app_uint(s, g.node(st.target).iidx); s.append("["); pv(pv, st.index); s.append("], 1u); }\n"); ++i; break;
             case KStmtKind::SyncWarp: s.append("  subgroupBarrier();\n"); ++i; break;
+            // ⛔ RT-PIPELINE statements have no meaning in a COMPUTE kernel — but this switch has no `default`, and only
+            //    its cases advance `i`. An unhandled kind therefore spins forever rather than failing, the same latent
+            //    hang that existed in the CPU oracle's statement switch. Consume them and report failure instead.
+            case KStmtKind::TraceRayPipeline:
+            case KStmtKind::PayloadStore:
+            case KStmtKind::ReorderThread:
+            case KStmtKind::IgnoreHitIf: ok = false; ++i; break;
             }
         }
     };
@@ -968,7 +975,7 @@ inline bool emit_rt_stage_glsl(const KGraph& g, const KEntry& entry, crd::memory
         case KStmtKind::PayloadStore: s.append("  pl.m"); app_uint(s, stm.index); s.append(" = "); vv(stm.value); s.append(";\n"); break;
         case KStmtKind::BufferStore: s.append("  buf"); app_uint(s, g.node(stm.target).iidx); s.append("["); vv(stm.index); s.append("] = "); vv(stm.value); s.append(";\n"); break;
         case KStmtKind::IgnoreHitIf: s.append("  if ("); vv(stm.value); s.append(") { ignoreIntersectionEXT; }\n"); break; // P4 any-hit alpha
-        case KStmtKind::ReorderThread: break; // absorbed into the trace when use_ser; a no-op otherwise (perf hint)
+        // ReorderThread is absorbed into the trace when use_ser, and is a perf-only no-op otherwise — same as default.
         default: break;
         }
     }

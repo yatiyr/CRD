@@ -406,6 +406,12 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
             case KStmtKind::ForBreakIf: decl(decl, st.value); s.append("  if (("); pv(pv, st.value); s.append(") != 0u) break;\n"); ++i; break;
             case KStmtKind::BufferTicket: decl(decl, st.index); s.append("  if (lidx == 0u) { uint tick_; buf"); app_uint(s, g.node(st.target).iidx); s.append(".InterlockedAdd((("); pv(pv, st.index); s.append(")) * 4u, 1u, tick_); sh"); app_uint(s, st.value); s.append("[0] = tick_; }\n"); ++i; break;
             case KStmtKind::SyncWarp: s.append("  GroupMemoryBarrierWithGroupSync();\n"); ++i; break; // no wave barrier in HLSL — conservative
+            // ⛔ Same gap as the GLSL compute emitter and the CPU oracle: no `default`, and only the cases advance `i`,
+            //    so an RT-pipeline statement reaching a COMPUTE kernel spins forever instead of failing. Consume + fail.
+            case KStmtKind::TraceRayPipeline:
+            case KStmtKind::PayloadStore:
+            case KStmtKind::ReorderThread:
+            case KStmtKind::IgnoreHitIf: ok = false; ++i; break;
             }
         }
     };
@@ -488,7 +494,7 @@ inline bool emit_rt_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory
             case KBuiltin::LaunchSize: s.append("DispatchRaysDimensions()"); break;
             case KBuiltin::HitT: s.append("RayTCurrent()"); break;
             case KBuiltin::PrimitiveId: s.append("PrimitiveIndex()"); break;
-            case KBuiltin::InstanceId: s.append("InstanceID()"); break;
+            case KBuiltin::InstanceId:          // DXR exposes ONE instance id; both CKIR builtins map onto it
             case KBuiltin::InstanceCustomIndex: s.append("InstanceID()"); break;
             case KBuiltin::HitBary: s.append("attr.barycentrics"); break; // P4: DXR triangle barycentrics (float2)
             default: s.append("0u"); break;
@@ -497,7 +503,16 @@ inline bool emit_rt_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory
         case KOp::VecComp: self(self, nd.a); s.append("."); { const char sw[2] = {xyzw[nd.iidx], '\0'}; s.append(sw); } break;
         case KOp::PayloadLoad: s.append("pl.m"); app_uint(s, nd.iidx); break;
         case KOp::BufferLoad: s.append("asfloat(buf"); app_uint(s, g.node(nd.a).iidx); s.append(".Load(("); self(self, nd.b); s.append(") * 4u))"); break;
-        case KOp::Cast: s.append(nd.dtype() == DType::F32 ? "float(" : (nd.dtype() == DType::U32 ? "uint(" : "int(")); self(self, nd.a); s.append(")"); break;
+        case KOp::Cast:
+        {
+            const char* ctor = "int(";
+            if (nd.dtype() == DType::F32) { ctor = "float("; }
+            else if (nd.dtype() == DType::U32) { ctor = "uint("; }
+            s.append(ctor);
+            self(self, nd.a);
+            s.append(")");
+            break;
+        }
         case KOp::Neg: s.append("(-"); self(self, nd.a); s.append(")"); break;
         case KOp::Add: bin(" + "); break;
         case KOp::Sub: bin(" - "); break;
@@ -536,7 +551,7 @@ inline bool emit_rt_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory
         case KStmtKind::PayloadStore: s.append("  pl.m"); app_uint(s, stm.index); s.append(" = "); vv(stm.value); s.append(";\n"); break;
         case KStmtKind::BufferStore: s.append("  buf"); app_uint(s, g.node(stm.target).iidx); s.append(".Store(("); vv(stm.index); s.append(") * 4u, asuint("); vv(stm.value); s.append("));\n"); break;
         case KStmtKind::IgnoreHitIf: s.append("  if ("); vv(stm.value); s.append(") { IgnoreHit(); }\n"); break; // P4 any-hit alpha
-        case KStmtKind::ReorderThread: break; // DX12 SER not wired ⇒ the reorder hint drops (perf-only no-op)
+        // ReorderThread: DX12 SER is not wired, so the reorder hint drops — a perf-only no-op, same as default.
         default: break;
         }
     }

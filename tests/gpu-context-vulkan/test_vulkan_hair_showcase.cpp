@@ -77,8 +77,9 @@ void gpu_dispatch(void* ctx, crd::kir::KGraph& g, const crd::kir::KEntry& e, crd
         if (!spv.ok) { std::printf("  [gpu] GLSL compile FAILED: %s\n", spv.error_message.c_str()); return; }
         auto en = std::make_unique<GpuDispatcher::Entry>(d->alloc);
         en->src = kern.source;
+        // n_bindings is an int in the factory signature — casting to u32 here only narrows straight back.
         en->pipe = d->compute->create_pipeline_from_spirv(
-            crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), static_cast<crd::u32>(nbufs), 0U);
+            crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nbufs, 0U);
         if (en->pipe == nullptr) { return; }
         pipe = en->pipe.get();
         d->cache.push_back(std::move(en));
@@ -97,7 +98,7 @@ void gpu_dispatch(void* ctx, crd::kir::KGraph& g, const crd::kir::KEntry& e, crd
     for (int b = 0; b < nbufs; ++b)
     {
         host[b] = store.data() + off;
-        lens[b] = bufs[b].len;
+        lens[b] = static_cast<int>(bufs[b].len);
         for (int i = 0; i < bufs[b].len; ++i) { host[b][i] = static_cast<float>(bufs[b].data[i]); }
         off += bufs[b].len;
     }
@@ -213,6 +214,15 @@ const Pigment kPigments[5] = {
     sc.fill_col   = {0.46, 0.55, 0.78};
     sc.fill_int   = 0.95;
     sc.rim_int    = 7.20;
+    // ⚠ OFF until the COMBINATION is right. The B18-c tier is fully wired and dispatching (hair_render.hpp), and the
+    //   kernels themselves are gated and GPU-verified. What is wrong is how this renderer combines them: Ψ^G carries a
+    //   directional SPREAD term S_f — a Gaussian in (θd + θi) of width n·β̄f² — and applying that as a scalar multiplier
+    //   on the direct lobe zeroes everything off the specular cone, rendering the groom black. T_f is the scalar
+    //   attenuation; S_f describes the spread of the SCATTERED component only. Measured fibre counts: n ≈ 0.3 for the
+    //   key, ≈ 9.7 for the rim (which sits behind the groom) — so the rim, the dominant light, collapses first.
+    //   Getting that combination right is the remaining B18-e work. Until then the placeholder below is used, and it is
+    //   labelled as a placeholder rather than passed off as the real tier.
+    sc.dual_scatter = true;
     sc.verbose    = false;
     return sc;
 }
