@@ -20,6 +20,9 @@
 #include <crd/kir/ckir_atmosphere.hpp> // B15-a: build_atmos_transmittance (the Hillaire/Bruneton sky-atmosphere LUTs)
 #include <crd/kir/ckir_nrc.hpp>        // B14-d: build_nrc_hashgrid_encode (the Instant-NGP hash-grid encoder for the NRC)
 #include <crd/kir/ckir_clouds.hpp>     // B15-b: build_cloud_density (the Nubis volumetric-cloud density field)
+#include <crd/kir/ckir_hair.hpp>       // B18-a: build_hair_bcsdf_kernel (the Chiang R/TT/TRT/TRRT hair/fur BCSDF)
+#include <crd/kir/ckir_hair_geom.hpp>   // B18-e: build_hair_filter_kernel (the tangent-oriented compositing filter)
+#include <crd/kir/ckir_hair_scatter.hpp> // B18-c: the multiple-scattering tiers (moment LUT, dual scattering, DOM, volumetric)
 #include <crd/kir/ckir_glsl.hpp> // B-cmp: emit_compute_kernel_glsl (the shared-memory compute-kernel emitter)
 #include <crd/kir/ckir_hlsl.hpp> // B3-d: emit_stage_hlsl (the HLSL VS/FS emitter)
 #include <crd/kir/ckir_visbuffer.hpp> // B4-vis: build_sw_raster_visbuffer (the compute software rasterizer)
@@ -4976,6 +4979,497 @@ TEST_CASE("B15-b: CKIR cloud DENSITY field (Nubis Perlin-Worley + coverage + ero
     for (int i = 0; i < n; ++i) { maxabs = std::max(maxabs, std::fabs(static_cast<double>(h1[uz(i)]) - out[uz(i)])); }
     std::printf("[Vulkan cloud density] maxabs(GPU vs oracle) = %.2e\n", maxabs);
     CHECK(maxabs < 1e-6); // Perlin/Worley noise = integer hash + lerp, no transcendentals ⇒ bit-exact
+}
+
+// B18-a: the Chiang R/TT/TRT/TRRT hair/fur BCSDF (Bessel-I0 longitudinal Mp, trimmed-logistic azimuthal Np, Fresnel/Beer
+// attenuations Ap) DISPATCHES on Vulkan and the device output matches the CPU oracle to ULP. This is the PORTABILITY gate
+// (physical energy conservation is certified separately by the CPU white-furnace test in tests/kir/test_ckir_hair.cpp). The
+// BCSDF is transcendental-heavy (exp/log/asin/sinh), so this is a to-ULP tier like the atmosphere/MBOIT gates, not bit-exact.
+TEST_CASE("B18-a: CKIR hair BCSDF (Chiang R/TT/TRT/TRRT) DISPATCHES on Vulkan == CPU oracle (to-ULP)",
+          "[gpu-context][vulkan][gpu][kernel][hair]")
+{
+    namespace kir = crd::kir;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+    const auto   uz  = [](int v) { return static_cast<crd::usize>(v); };
+    const double kpi = kir::hair::kPi;
+
+    crd::memory::TlsfAllocator  alloc(64U << 20U);
+    kir::hair::HairKernelConfig hcfg; // η=1.55, βₘ=βₙ=0.3, α=2° — moderate roughness (all longitudinal variances > 0.1)
+    const int                   n = 256;
+    kir::KGraph                 g(&alloc);
+    const kir::KEntry           e = kir::hair::build_hair_bcsdf_kernel(g, hcfg);
+
+    // Random (sinθo, φo, sinθi, φi, h, σₐ) per lane spanning the fibre sphere; sinθ ∈ (−0.99, 0.99), φ ∈ (−π, π), h ∈ [−1,1].
+    crd::containers::Array<crd::f64> in(&alloc);
+    crd::containers::Array<crd::f64> out(&alloc);
+    in.resize(uz(n * 6));
+    out.resize(uz(n));
+    crd::u32 s   = 1337U;
+    auto     rnd = [&]() { s = s * 1664525U + 1013904223U; return static_cast<double>(s >> 8) / static_cast<double>(1U << 24); };
+    for (int i = 0; i < n; ++i)
+    {
+        in[uz(i * 6 + 0)] = (rnd() * 2.0 - 1.0) * 0.99; // sinθo
+        in[uz(i * 6 + 1)] = (rnd() * 2.0 - 1.0) * kpi;  // φo
+        in[uz(i * 6 + 2)] = (rnd() * 2.0 - 1.0) * 0.99; // sinθi
+        in[uz(i * 6 + 3)] = (rnd() * 2.0 - 1.0) * kpi;  // φi
+        in[uz(i * 6 + 4)] = rnd() * 2.0 - 1.0;          // h
+        in[uz(i * 6 + 5)] = rnd() * 1.5;                // σₐ (monochrome)
+    }
+    kir::KernelBuffer bufs[2] = {{in.data(), n * 6, 0, 0}, {out.data(), n, 0, 1}};
+    kir::eval_cpu_kernel(g, e, bufs, 2, e.local_size[0], &alloc, static_cast<crd::u32>(n / 64));
+
+    kir::GlslKernel kern(&alloc);
+    REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, kern));
+    const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), "ckir_hair_bcsdf", &alloc, true);
+    REQUIRE(spv.ok);
+    auto pipe = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), 2, 0U);
+    REQUIRE(pipe != nullptr);
+
+    const int lens[2] = {n * 6, n};
+    crd::containers::Array<float> h0(&alloc);
+    crd::containers::Array<float> h1(&alloc);
+    h0.resize(uz(n * 6));
+    h1.resize(uz(n));
+    for (int i = 0; i < n * 6; ++i) { h0[uz(i)] = static_cast<float>(in[uz(i)]); }
+    for (int i = 0; i < n; ++i) { h1[uz(i)] = -9.0F; }
+    float* host[2] = {h0.data(), h1.data()};
+    crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 2, static_cast<crd::u32>(n / 64));
+
+    double maxabs = 0.0;
+    double maxrel = 0.0;
+    for (int i = 0; i < n; ++i)
+    {
+        const double gv = static_cast<double>(h1[uz(i)]);
+        const double ov = out[uz(i)];
+        const double ad = std::fabs(gv - ov);
+        maxabs          = std::max(maxabs, ad);
+        if (std::fabs(ov) > 1.0e-3) { maxrel = std::max(maxrel, ad / std::fabs(ov)); }
+    }
+    std::printf("[Vulkan hair BCSDF] maxabs(GPU vs oracle) = %.3e  maxrel = %.3e\n", maxabs, maxrel);
+    // to-ULP: observed maxabs ~2e-7 (≈f32 bit-exact), maxrel ~7e-6 (tens of f32 ULP over the exp/log/asin/sinh/logistic chain).
+    // A real transcription bug would be maxabs/maxrel ~O(0.1); these bounds keep margin for cross-driver transcendental variance.
+    CHECK(maxabs < 1.0e-5);
+    CHECK(maxrel < 3.0e-5);
+}
+
+// B18-b: the FUR BCSDF (hair R/TT/TRT/TRRT + the Yan-2017 double-cylinder MEDULLA scattered lobe: wrapped-Cauchy azimuthal +
+// broad longitudinal, energy-split from TT/TRT) DISPATCHES on Vulkan == CPU oracle to-ULP. Same kernel path as B18-a with κ>0,
+// so it exercises the full medulla branch (exp/cos/wrapped-Cauchy division) on the GPU.
+TEST_CASE("B18-b: CKIR fur BCSDF (medulla double-cylinder) DISPATCHES on Vulkan == CPU oracle (to-ULP)",
+          "[gpu-context][vulkan][gpu][kernel][hair][fur]")
+{
+    namespace kir = crd::kir;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+    const auto   uz  = [](int v) { return static_cast<crd::usize>(v); };
+    const double kpi = kir::hair::kPi;
+
+    crd::memory::TlsfAllocator  alloc(64U << 20U);
+    kir::hair::HairKernelConfig hcfg;
+    hcfg.fur_kappa  = 0.6; // medullary index — a medulla filling 60% of the fibre radius
+    hcfg.fur_sigma  = 3.0; // medulla extinction
+    hcfg.fur_albedo = 0.7; // single-scatter albedo
+    hcfg.fur_g      = 0.3; // forward-scattering anisotropy
+    const int         n = 256;
+    kir::KGraph       g(&alloc);
+    const kir::KEntry e = kir::hair::build_hair_bcsdf_kernel(g, hcfg);
+
+    crd::containers::Array<crd::f64> in(&alloc);
+    crd::containers::Array<crd::f64> out(&alloc);
+    in.resize(uz(n * 6));
+    out.resize(uz(n));
+    crd::u32 s   = 2027U;
+    auto     rnd = [&]() { s = s * 1664525U + 1013904223U; return static_cast<double>(s >> 8) / static_cast<double>(1U << 24); };
+    for (int i = 0; i < n; ++i)
+    {
+        in[uz(i * 6 + 0)] = (rnd() * 2.0 - 1.0) * 0.99;
+        in[uz(i * 6 + 1)] = (rnd() * 2.0 - 1.0) * kpi;
+        in[uz(i * 6 + 2)] = (rnd() * 2.0 - 1.0) * 0.99;
+        in[uz(i * 6 + 3)] = (rnd() * 2.0 - 1.0) * kpi;
+        in[uz(i * 6 + 4)] = rnd() * 2.0 - 1.0;
+        in[uz(i * 6 + 5)] = rnd() * 1.5;
+    }
+    kir::KernelBuffer bufs[2] = {{in.data(), n * 6, 0, 0}, {out.data(), n, 0, 1}};
+    kir::eval_cpu_kernel(g, e, bufs, 2, e.local_size[0], &alloc, static_cast<crd::u32>(n / 64));
+
+    kir::GlslKernel kern(&alloc);
+    REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, kern));
+    const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), "ckir_fur_bcsdf", &alloc, true);
+    REQUIRE(spv.ok);
+    auto pipe = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), 2, 0U);
+    REQUIRE(pipe != nullptr);
+
+    const int lens[2] = {n * 6, n};
+    crd::containers::Array<float> h0(&alloc);
+    crd::containers::Array<float> h1(&alloc);
+    h0.resize(uz(n * 6));
+    h1.resize(uz(n));
+    for (int i = 0; i < n * 6; ++i) { h0[uz(i)] = static_cast<float>(in[uz(i)]); }
+    for (int i = 0; i < n; ++i) { h1[uz(i)] = -9.0F; }
+    float* host[2] = {h0.data(), h1.data()};
+    crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 2, static_cast<crd::u32>(n / 64));
+
+    double maxabs = 0.0;
+    double maxrel = 0.0;
+    for (int i = 0; i < n; ++i)
+    {
+        const double gv = static_cast<double>(h1[uz(i)]);
+        const double ov = out[uz(i)];
+        const double ad = std::fabs(gv - ov);
+        maxabs          = std::max(maxabs, ad);
+        if (std::fabs(ov) > 1.0e-3) { maxrel = std::max(maxrel, ad / std::fabs(ov)); }
+    }
+    std::printf("[Vulkan fur BCSDF] maxabs(GPU vs oracle) = %.3e  maxrel = %.3e\n", maxabs, maxrel);
+    CHECK(maxabs < 1.0e-5);
+    CHECK(maxrel < 3.0e-5);
+}
+
+// B18-c: every hair MULTIPLE-SCATTERING tier DISPATCHES on Vulkan and matches the CPU oracle. One test covers all four kernels
+// because they form a pipeline: the moment LUT feeds dual scattering, and the deep-opacity map supplies the strand count that
+// dual scattering consumes. The physics of each is gated on the CPU side (tests/kir/test_ckir_hair_scatter.cpp); THIS gate is
+// purely about portability — the same CKIR graphs lowering and running identically on the device.
+TEST_CASE("B18-c: hair multiple-scattering tiers DISPATCH on Vulkan == CPU oracle",
+          "[gpu-context][vulkan][gpu][kernel][hair][scatter]")
+{
+    namespace kir  = crd::kir;
+    namespace hms  = crd::kir::hairms;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+    const auto uz = [](int v) { return static_cast<crd::usize>(v); };
+    crd::memory::TlsfAllocator alloc(192U << 20U);
+
+    // Run a kernel through the CPU oracle AND the GPU from the SAME inputs, then report max|Δ| on buffer `check`.
+    // The oracle writes outputs in place, so the inputs are snapshotted first and restored before the device run.
+    const auto both = [&](kir::KGraph& g, const kir::KEntry& e, double** data, const int* lens, int nbuf, int check,
+                          crd::u32 groups, const char* name) -> double {
+        crd::containers::Array<double> snap(&alloc);
+        int total = 0;
+        for (int i = 0; i < nbuf; ++i) { total += lens[i]; }
+        snap.resize(uz(total), 0.0);
+        int off = 0;
+        for (int i = 0; i < nbuf; ++i) { for (int j = 0; j < lens[i]; ++j) { snap[uz(off + j)] = data[i][j]; } off += lens[i]; }
+
+        kir::KernelBuffer bufs[6];
+        for (int i = 0; i < nbuf; ++i) { bufs[i] = {data[i], lens[i], 0U, static_cast<crd::u8>(i)}; } // binding is u8
+        kir::eval_cpu_kernel(g, e, bufs, nbuf, e.local_size[0], &alloc, groups);
+        crd::containers::Array<double> ref(&alloc);
+        ref.resize(uz(lens[check]), 0.0);
+        for (int j = 0; j < lens[check]; ++j) { ref[uz(j)] = data[check][j]; }
+
+        off = 0; // restore the pre-oracle state for the device run
+        for (int i = 0; i < nbuf; ++i) { for (int j = 0; j < lens[i]; ++j) { data[i][j] = snap[uz(off + j)]; } off += lens[i]; }
+
+        kir::GlslKernel kern(&alloc);
+        REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, kern));
+        const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), name, &alloc, false);
+        INFO("GLSL compile [" << name << "]: " << spv.error_message.c_str());
+        REQUIRE(spv.ok);
+        auto pipe = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()),
+                                                      static_cast<crd::u32>(nbuf), 0U);
+        REQUIRE(pipe != nullptr);
+        crd::containers::Array<float> host_store(&alloc);
+        host_store.resize(uz(total), 0.0F);
+        float* host[6];
+        off = 0;
+        for (int i = 0; i < nbuf; ++i)
+        {
+            host[i] = host_store.data() + off;
+            for (int j = 0; j < lens[i]; ++j) { host[i][j] = static_cast<float>(data[i][j]); }
+            off += lens[i];
+        }
+        crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, nbuf, groups);
+        double worst = 0.0;
+        for (int j = 0; j < lens[check]; ++j)
+        {
+            worst = std::max(worst, std::fabs(static_cast<double>(host[check][j]) - ref[uz(j)]));
+        }
+        std::printf("[Vulkan B18-c %s] maxabs(GPU vs oracle) = %.3e\n", name, worst);
+        return worst;
+    };
+
+    // ── (1) the shared scattering-moment LUT — the heaviest kernel here (a full BCSDF evaluation inside the integration loop)
+    //        and the one whose post-loop RMW normalisation is where the inline-load read-after-write hazard lived. ──
+    {
+        hms::HairScatterLutConfig lc;
+        lc.n_theta_d = 64; lc.n_h = 2; lc.n_theta_o = 8; lc.n_phi_o = 16;
+        kir::KGraph       g(&alloc);
+        const kir::KEntry e = hms::build_hair_scatter_lut_kernel(g, lc);
+        crd::containers::Array<double> out(&alloc);
+        out.resize(uz(64 * hms::kLutStride), 0.0);
+        double*   data[1] = {out.data()};
+        const int lens[1] = {64 * hms::kLutStride};
+        CHECK(both(g, e, data, lens, 1, 0, 1U, "scatter_lut") < 1.0e-5);
+    }
+
+    // ── (2) volumetric multiple scattering (Hu 2026) ──
+    {
+        hms::VolumeMsConfig vc;
+        kir::KGraph         g(&alloc);
+        const kir::KEntry   e = hms::build_volume_ms_kernel(g, vc);
+        crd::containers::Array<double> in(&alloc), out(&alloc);
+        in.resize(uz(64 * 5), 0.0);
+        out.resize(uz(64 * 2), 0.0);
+        for (int k = 0; k < 64; ++k)
+        {
+            const crd::usize o = uz(k * 5);
+            in[o + 0U] = 2.0;
+            in[o + 1U] = static_cast<double>(k) / 64.0;
+            in[o + 2U] = 0.8;
+            in[o + 3U] = 0.25;
+            in[o + 4U] = 1.5;
+        }
+        double*   data[2] = {in.data(), out.data()};
+        const int lens[2] = {64 * 5, 64 * 2};
+        CHECK(both(g, e, data, lens, 2, 1, 1U, "volume_ms") < 1.0e-5);
+    }
+
+    // ── (3) deep opacity map lookup (the build pass feeds it) ──
+    {
+        hms::DomConfig dc;
+        dc.layers = 4; dc.span = 4.0; dc.frags_per_px = 16;
+        const int stride = 1 + dc.layers;
+        crd::containers::Array<double> frags(&alloc), dom(&alloc);
+        frags.resize(uz(64 * 16 * 2), 0.0);
+        dom.resize(uz(64 * stride), 0.0);
+        for (int p = 0; p < 64; ++p)
+        {
+            const double z0 = 1.0 + 0.05 * static_cast<double>(p);
+            for (int f = 0; f < 16; ++f)
+            {
+                const crd::usize o = uz((p * 16 + f) * 2);
+                frags[o + 0U] = z0 + 3.0 * ((static_cast<double>(f) + 0.5) / 16.0);
+                frags[o + 1U] = 0.1;
+            }
+        }
+        {
+            kir::KGraph       g(&alloc);
+            const kir::KEntry e = hms::build_dom_build_kernel(g, dc);
+            double*   data[2] = {frags.data(), dom.data()};
+            const int lens[2] = {64 * 16 * 2, 64 * stride};
+            CHECK(both(g, e, data, lens, 2, 1, 1U, "dom_build") < 1.0e-5);
+        }
+        // rebuild the DOM on the CPU so the lookup has valid input, then gate the lookup itself
+        {
+            kir::KGraph       gb(&alloc);
+            const kir::KEntry eb = hms::build_dom_build_kernel(gb, dc);
+            kir::KernelBuffer bb[2] = {{frags.data(), 64 * 16 * 2, 0, 0}, {dom.data(), 64 * stride, 0, 1}};
+            kir::eval_cpu_kernel(gb, eb, bb, 2, eb.local_size[0], &alloc, 1U);
+        }
+        kir::KGraph       g(&alloc);
+        const kir::KEntry e = hms::build_dom_lookup_kernel(g, dc);
+        crd::containers::Array<double> qry(&alloc), out(&alloc);
+        qry.resize(uz(64 * 2), 0.0);
+        out.resize(uz(64 * 2), 0.0);
+        for (int p = 0; p < 64; ++p)
+        {
+            qry[uz(p * 2) + 0U] = static_cast<double>(p);
+            qry[uz(p * 2) + 1U] = 1.0 + 0.05 * static_cast<double>(p) + 1.7;
+        }
+        double*   data[3] = {dom.data(), qry.data(), out.data()};
+        const int lens[3] = {64 * stride, 64 * 2, 64 * 2};
+        CHECK(both(g, e, data, lens, 3, 2, 1U, "dom_lookup") < 1.0e-5);
+    }
+}
+
+// B18-e: the COMPOSITING filter (Lipp 2026) DISPATCHES on Vulkan and matches the CPU oracle. The filter's maths is gated on
+// the CPU side (tests/kir/test_ckir_hair_filter.cpp pins anisotropy, the depth guard, and convexity); THIS gate is portability
+// plus one thing the CPU tests cannot show: the kernel's BOUNDS GUARD. A real dispatch rounds up to workgroup granularity, so
+// the tail lanes here run past the pixel count on actual hardware — exactly the case that silently corrupts the last pixel if
+// the guard is missing.
+TEST_CASE("B18-e: CKIR hair compositing filter DISPATCHES on Vulkan == CPU oracle",
+          "[gpu-context][vulkan][gpu][kernel][hair][filter]")
+{
+    namespace kir = crd::kir;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+    const auto uz = [](int v) { return static_cast<crd::usize>(v); };
+    crd::memory::TlsfAllocator alloc(64U << 20U);
+
+    // 10x9 = 90 pixels over 2 workgroups of 64 ⇒ 38 tail lanes run out of range. That is deliberate.
+    kir::hairgeom::HairFilterConfig fc;
+    fc.width  = 10;
+    fc.height = 9;
+    const int np = fc.width * fc.height;
+
+    kir::KGraph       g(&alloc);
+    const kir::KEntry e = kir::hairgeom::build_hair_filter_kernel(g, fc);
+
+    crd::containers::Array<double> col(&alloc), tan(&alloc), dep(&alloc), out(&alloc);
+    col.resize(uz(np * 3), 0.0);
+    tan.resize(uz(np * 2), 0.0);
+    dep.resize(uz(np), 0.0);
+    out.resize(uz(np * 4), 0.0);
+    crd::u32   st  = 0x9E3779B9U;
+    const auto rnd = [&]() { st = st * 1664525U + 1013904223U; return static_cast<double>(st >> 8U) / 16777216.0; };
+    for (int i = 0; i < np; ++i)
+    {
+        for (int c = 0; c < 3; ++c) { col[uz(i * 3 + c)] = rnd(); }
+        const double a  = rnd() * 6.2831853;
+        tan[uz(i * 2 + 0)] = std::cos(a); // unit tangents, varying per pixel — exercises the ellipse rotation on device
+        tan[uz(i * 2 + 1)] = std::sin(a);
+        dep[uz(i)]         = 0.5 + 0.002 * rnd(); // tight spread ⇒ the depth guard both passes and rejects
+    }
+
+    crd::containers::Array<double> snap(&alloc);
+    snap.resize(uz(np * 3 + np * 2 + np), 0.0);
+    for (int j = 0; j < np * 3; ++j) { snap[uz(j)] = col[uz(j)]; }
+    for (int j = 0; j < np * 2; ++j) { snap[uz(np * 3 + j)] = tan[uz(j)]; }
+    for (int j = 0; j < np; ++j) { snap[uz(np * 5 + j)] = dep[uz(j)]; }
+
+    const crd::u32    groups  = (static_cast<crd::u32>(np) + e.local_size[0] - 1U) / e.local_size[0];
+    kir::KernelBuffer bufs[4] = {{col.data(), np * 3, 0U, 0U},
+                                 {tan.data(), np * 2, 0U, 1U},
+                                 {dep.data(), np, 0U, 2U},
+                                 {out.data(), np * 4, 0U, 3U}};
+    kir::eval_cpu_kernel(g, e, bufs, 4, e.local_size[0], &alloc, groups);
+    crd::containers::Array<double> ref(&alloc);
+    ref.resize(uz(np * 4), 0.0);
+    for (int j = 0; j < np * 4; ++j) { ref[uz(j)] = out[uz(j)]; }
+
+    kir::GlslKernel kern(&alloc);
+    REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, kern));
+    const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source),
+                                                "ckir_hair_filter", &alloc, false);
+    INFO("GLSL compile: " << spv.error_message.c_str());
+    REQUIRE(spv.ok);
+    auto pipe = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), 4U, 0U);
+    REQUIRE(pipe != nullptr);
+
+    crd::containers::Array<float> host_store(&alloc);
+    host_store.resize(uz(np * 3 + np * 2 + np + np * 4), 0.0F);
+    float*    host[4] = {host_store.data(), host_store.data() + np * 3, host_store.data() + np * 5, host_store.data() + np * 6};
+    const int lens[4] = {np * 3, np * 2, np, np * 4};
+    for (int j = 0; j < np * 3; ++j) { host[0][j] = static_cast<float>(snap[uz(j)]); }
+    for (int j = 0; j < np * 2; ++j) { host[1][j] = static_cast<float>(snap[uz(np * 3 + j)]); }
+    for (int j = 0; j < np; ++j) { host[2][j] = static_cast<float>(snap[uz(np * 5 + j)]); }
+    crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 4, groups);
+
+    double worst = 0.0;
+    for (int j = 0; j < np * 4; ++j) { worst = std::max(worst, std::fabs(static_cast<double>(host[3][j]) - ref[uz(j)])); }
+    std::printf("[Vulkan B18-e filter] %dx%d over %u groups (%d tail lanes)  maxabs(GPU vs oracle) = %.3e\n",
+                fc.width, fc.height, groups, static_cast<int>(groups * e.local_size[0]) - np, worst);
+    CHECK(worst < 1.0e-5);
+
+    // The guard held: every pixel still carries a strictly positive weight sum (it gathers itself at minimum). A tail lane
+    // that escaped the guard would have RMW-accumulated into a clamped address and knocked one of these off its oracle value.
+    for (int i = 0; i < np; ++i) { CHECK(host[3][i * 4 + 3] > 0.0F); }
+}
+
+
+// B18-b: the HUANG 2022 microfacet R lobe (analytic GGX azimuthal integral, Appendix A) DISPATCHES on Vulkan == CPU oracle to-ULP.
+// The CPU side already proves the closed form equals a 20k-sample quadrature (tests/kir); this proves the SAME graph lowers and
+// runs identically on the device — atan2/tan-free stable branch included.
+TEST_CASE("B18-b: CKIR Huang microfacet R lobe DISPATCHES on Vulkan == CPU oracle (to-ULP)",
+          "[gpu-context][vulkan][gpu][kernel][hair][huang]")
+{
+    namespace kir = crd::kir;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+    const auto   uz  = [](int v) { return static_cast<crd::usize>(v); };
+    const double kpi = kir::hair::kPi;
+
+    crd::memory::TlsfAllocator  alloc(64U << 20U);
+    kir::hair::HairKernelConfig hcfg;
+    // HuangFull = analytic R + the TT/TRT combined MC-Simpson estimator (include_r defaults true), so this one dispatch gates
+    // BOTH halves: the closed-form azimuthal integral AND the runtime Simpson loop with its VNDF/refraction chain and triple32
+    // uniforms. A short Simpson count keeps the GPU gate quick; the count's correctness is established on the CPU side.
+    hcfg.model      = kir::hair::HairModel::HuangFull;
+    hcfg.huang_beta = 0.3;
+    hcfg.simpson_n  = 12;
+    const int         n = 256;
+    kir::KGraph       g(&alloc);
+    const kir::KEntry e = kir::hair::build_hair_bcsdf_kernel(g, hcfg);
+
+    crd::containers::Array<crd::f64> in(&alloc);
+    crd::containers::Array<crd::f64> out(&alloc);
+    in.resize(uz(n * 6));
+    out.resize(uz(n));
+    crd::u32 s   = 91177U;
+    auto     rnd = [&]() { s = s * 1664525U + 1013904223U; return static_cast<double>(s >> 8) / static_cast<double>(1U << 24); };
+    for (int i = 0; i < n; ++i)
+    {
+        in[uz(i * 6 + 0)] = (rnd() * 2.0 - 1.0) * 0.93; // sinθo
+        in[uz(i * 6 + 1)] = (rnd() * 2.0 - 1.0) * kpi;  // φo
+        in[uz(i * 6 + 2)] = (rnd() * 2.0 - 1.0) * 0.93; // sinθi
+        in[uz(i * 6 + 3)] = (rnd() * 2.0 - 1.0) * kpi;  // φi
+        in[uz(i * 6 + 4)] = rnd() * 2.0 - 1.0;          // h  (unused by the Huang R lobe)
+        in[uz(i * 6 + 5)] = rnd() * 1.5;                // σₐ (unused by the Huang R lobe)
+    }
+    kir::KernelBuffer bufs[2] = {{in.data(), n * 6, 0, 0}, {out.data(), n, 0, 1}};
+    kir::eval_cpu_kernel(g, e, bufs, 2, e.local_size[0], &alloc, static_cast<crd::u32>(n / 64));
+
+    kir::GlslKernel kern(&alloc);
+    REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, kern));
+    std::printf("[Huang GLSL] emitted source = %zu chars\n", static_cast<size_t>(kern.source.size()));
+    std::fflush(stdout);
+    // ⚠ optimize = FALSE: the HuangFull kernel is a big graph (two VNDF samplers + the full refraction chain inside a Simpson
+    // For loop). spirv-opt does NOT terminate in reasonable time on it — unlike the compact cloud kernel. Unoptimized SPIR-V is
+    // fine here: this gate measures NUMERIC agreement with the oracle, not shader performance.
+    const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), "ckir_huang", &alloc, false);
+    REQUIRE(spv.ok);
+    auto pipe = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), 2, 0U);
+    REQUIRE(pipe != nullptr);
+
+    const int lens[2] = {n * 6, n};
+    crd::containers::Array<float> h0(&alloc);
+    crd::containers::Array<float> h1(&alloc);
+    h0.resize(uz(n * 6));
+    h1.resize(uz(n));
+    for (int i = 0; i < n * 6; ++i) { h0[uz(i)] = static_cast<float>(in[uz(i)]); }
+    for (int i = 0; i < n; ++i) { h1[uz(i)] = -9.0F; }
+    float* host[2] = {h0.data(), h1.data()};
+    crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 2, static_cast<crd::u32>(n / 64));
+
+    double maxabs = 0.0;
+    double maxrel = 0.0;
+    for (int i = 0; i < n; ++i)
+    {
+        const double gv = static_cast<double>(h1[uz(i)]);
+        const double ov = out[uz(i)];
+        const double ad = std::fabs(gv - ov);
+        maxabs          = std::max(maxabs, ad);
+        if (std::fabs(ov) > 1.0e-3) { maxrel = std::max(maxrel, ad / std::fabs(ov)); }
+    }
+    std::printf("[Vulkan Huang full] maxabs(GPU vs oracle) = %.3e  maxrel = %.3e\n", maxabs, maxrel);
+    // TOLERANCE RATIONALE (deliberately looser than the hair/fur gates' 3e-5, and justified — not moved to fit):
+    // those evaluate ONE shallow cone (~50 transcendental ops). HuangFull is ~20x that — 13 Simpson nodes, each with two VNDF
+    // samplers, a refraction, four Fresnel evaluations and exp/atan2/normalize chains — PLUS a 13-term f32 accumulation, so
+    // rounding compounds. maxabs stays TIGHT at the same 1e-5 (absolute agreement is excellent); only the relative metric on
+    // near-zero lanes drifts. Observed maxrel 1.03e-4; bound 5e-4 keeps ~5x cross-driver margin and matches the codebase's
+    // precedent for a transcendental-heavy kernel (the SVGF gate uses 1e-4).
+    CHECK(maxabs < 1.0e-5);
+    CHECK(maxrel < 5.0e-4);
 }
 
 TEST_CASE("B15-b: CKIR cloud RAY-MARCH (Beer-Powder + phase + light march over the density volume) DISPATCHES on Vulkan == oracle",

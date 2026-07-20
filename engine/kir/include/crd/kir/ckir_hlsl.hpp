@@ -197,6 +197,11 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
     bool                            ok = true;
     crd::containers::Array<crd::u8> temped(scratch);
     temped.resize(static_cast<crd::usize>(n), 0);
+    // ⛔ DAG MEMO for `decl` (identical fix to the GLSL emitter): `decl` descends into every child while `temped` gates only the
+    // temp EMISSION, so a node with k parents had its whole subtree re-walked k times ⇒ exponential traversal on deep diamond
+    // DAGs (B18-b Huang hung the emitter outright). Memoizing is behaviour-identical and makes emission linear.
+    crd::containers::Array<crd::u8> declseen(scratch);
+    declseen.resize(static_cast<crd::usize>(n), 0);
     const auto is_inline_op = [](KOp op) -> bool {
         switch (op)
         {
@@ -280,6 +285,9 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
         case KOp::Cosh: f1("cosh"); break;
         case KOp::Floor: f1("floor"); break;
         case KOp::Ceil: f1("ceil"); break; // B4-vis: bbox ceil (the compute-kernel rhs lacked it — the elementwise path had it)
+        case KOp::Round: f1("round"); break; // B18-a: HLSL round = ties-to-even, matches oracle nearbyint (Np Δφ wrap)
+        case KOp::Radians: s.append("("); pv(pv, nd.a); s.append(" * 0.017453292519943295)"); break; // B18-a: π/180 exact (cuticle tilt)
+        case KOp::Degrees: s.append("("); pv(pv, nd.a); s.append(" * 57.29577951308232)"); break; // 180/π (sibling of Radians)
         case KOp::Add: b2(" + "); break;
         case KOp::Sub: b2(" - "); break;
         case KOp::Mul: b2(" * "); break;
@@ -293,6 +301,8 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
         }
     };
     const auto decl = [&](auto&& self, int node) -> void {
+        if (declseen[static_cast<crd::usize>(node)] != 0U) { return; } // DAG memo — see declseen above
+        declseen[static_cast<crd::usize>(node)] = 1U;
         const KNode& nd = g.node(node);
         if (nd.op == KOp::BufferLoad || nd.op == KOp::SharedLoad) { self(self, nd.b); return; } // resource leaf: only the index carries temps
         if (nd.a >= 0) { self(self, nd.a); }

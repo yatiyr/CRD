@@ -390,16 +390,26 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
                         for (int tr = 0; tr < ntri; ++tr)
                         {
                             const int      b   = 1 + tr * 9;
-                            const crd::f64 e1x = geo->data[b + 3] - geo->data[b + 0], e1y = geo->data[b + 4] - geo->data[b + 1], e1z = geo->data[b + 5] - geo->data[b + 2];
-                            const crd::f64 e2x = geo->data[b + 6] - geo->data[b + 0], e2y = geo->data[b + 7] - geo->data[b + 1], e2z = geo->data[b + 8] - geo->data[b + 2];
-                            const crd::f64 px = dy * e2z - dz * e2y, py = dz * e2x - dx * e2z, pz = dx * e2y - dy * e2x; // dir × e2
+                            const crd::f64 e1x = geo->data[b + 3] - geo->data[b + 0];
+                            const crd::f64 e1y = geo->data[b + 4] - geo->data[b + 1];
+                            const crd::f64 e1z = geo->data[b + 5] - geo->data[b + 2];
+                            const crd::f64 e2x = geo->data[b + 6] - geo->data[b + 0];
+                            const crd::f64 e2y = geo->data[b + 7] - geo->data[b + 1];
+                            const crd::f64 e2z = geo->data[b + 8] - geo->data[b + 2];
+                            const crd::f64 px = dy * e2z - dz * e2y; // dir x e2
+                            const crd::f64 py = dz * e2x - dx * e2z;
+                            const crd::f64 pz = dx * e2y - dy * e2x;
                             const crd::f64 det = e1x * px + e1y * py + e1z * pz;
                             if (det > -1.0e-12 && det < 1.0e-12) { continue; } // ray parallel to the triangle
                             const crd::f64 inv = 1.0 / det;
-                            const crd::f64 tvx = ox - geo->data[b + 0], tvy = oy - geo->data[b + 1], tvz = oz - geo->data[b + 2];
+                            const crd::f64 tvx = ox - geo->data[b + 0];
+                            const crd::f64 tvy = oy - geo->data[b + 1];
+                            const crd::f64 tvz = oz - geo->data[b + 2];
                             const crd::f64 u   = (tvx * px + tvy * py + tvz * pz) * inv;
                             if (u < 0.0 || u > 1.0) { continue; }
-                            const crd::f64 qx = tvy * e1z - tvz * e1y, qy = tvz * e1x - tvx * e1z, qz = tvx * e1y - tvy * e1x; // tvec × e1
+                            const crd::f64 qx = tvy * e1z - tvz * e1y; // tvec x e1
+                            const crd::f64 qy = tvz * e1x - tvx * e1z;
+                            const crd::f64 qz = tvx * e1y - tvy * e1x;
                             const crd::f64 v  = (dx * qx + dy * qy + dz * qz) * inv;
                             if (v < 0.0 || u + v > 1.0) { continue; }
                             const crd::f64 t = (e2x * qx + e2y * qy + e2z * qz) * inv;
@@ -423,6 +433,14 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
                     i = st.body_begin + st.body_count;
                     break;
                 }
+                // ⛔ These four had NO case, and this switch has no `default` — so an unhandled kind fell through WITHOUT
+                //    advancing `i`, meaning the oracle would spin forever rather than fail loudly. They are all RT-PIPELINE
+                //    statements (raygen/hit/miss stages), which this compute-kernel oracle does not simulate: their gate is
+                //    the GPU RT tests, not eval_cpu_kernel. Skipping is correct; hanging was not.
+                case KStmtKind::TraceRayPipeline:
+                case KStmtKind::PayloadStore:
+                case KStmtKind::ReorderThread:
+                case KStmtKind::IgnoreHitIf: ++i; break;
             }
         }
     };

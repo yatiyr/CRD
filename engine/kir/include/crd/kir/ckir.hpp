@@ -465,6 +465,10 @@ struct KBuiltinInfo
     case KBuiltin::GeometryIndex:       return {t_int, stage_mask::kRayHit, "GeometryIndex"};
     case KBuiltin::ObjectToWorld:       return {KType::mat(DType::F32, 3, 4), stage_mask::kRayHit, "ObjectToWorld"};
     case KBuiltin::WorldToObject:       return {KType::mat(DType::F32, 3, 4), stage_mask::kRayHit, "WorldToObject"};
+    // ⛔ HitBary had NO case here, so builtin_info() fell off the end of the switch and returned an indeterminate KType — the
+    //    emitters happened to special-case the name (GLSL `hattr`, HLSL `attr.barycentrics`) so nothing visibly broke, but any
+    //    consumer that asked for its TYPE read garbage. It is the triangle barycentric hit attribute: vec2 (u,v), hit stages.
+    case KBuiltin::HitBary:             return {KType::vec(DType::F32, 2), stage_mask::kAnyHit | stage_mask::kClosestHit, "HitBary"};
     }
     return {KType::make_scalar(DType::F32), 0U, "?"};
 }

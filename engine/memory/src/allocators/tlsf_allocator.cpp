@@ -147,6 +147,10 @@ inline void mapping_search(usize size, u32& fl, u32& sl) noexcept
 
 // ---- Construction ---------------------------------------------------------
 
+// The pool ceiling implied by kFlIndexMax = 32: a block larger than 2^32 maps to a first-level index outside
+// m_free_lists, so the pool must stay within it. Documented in the header; now also checked in the constructor.
+usize TlsfAllocator::max_pool_size() noexcept { return usize{1} << 32U; }
+
 usize TlsfAllocator::min_pool_size() noexcept
 {
     // Three block headers (start sentinel, free block, end sentinel) + minimum
@@ -160,8 +164,14 @@ TlsfAllocator::TlsfAllocator(usize capacity, IAllocator* parent, const char* nam
 {
     m_name = name;
     CRD_ASSERT(capacity >= min_pool_size());
+    // ⛔ The 4 GB ceiling (kFlIndexMax = 32) was DOCUMENTED in the header but never enforced: a larger pool computes a
+    //    first-level index past m_free_lists[kFlIndexCount] and corrupts memory, surfacing as a SIGSEGV nowhere near the
+    //    construction site. Assert it, so an over-large request fails where it is made.
+    CRD_ASSERT(capacity <= max_pool_size());
     // NOLINTNEXTLINE(readability-suspicious-call-argument) — (size, alignment) is correct.
     void* buffer = m_parent->allocate(capacity, kAlignSize);
+    // ...and a failed backing allocation used to be dereferenced blind by init_pool.
+    CRD_ASSERT(buffer != nullptr);
     init_pool(buffer, capacity);
 }
 

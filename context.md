@@ -119,6 +119,90 @@
 > transparent standard BLAS (identical hits). ⛔ SCARS: `cf(node)` trap avoided; the SER hint / RT-pipeline stages couple (SER
 > only exists in the pipeline). `[rt]` VK **1260/28**, DX12 **784/89**, kir 12/4 — no regression. **★★ VENDOR RT FEATURES NOW LIVE
 > IN CKIR + GRACEFULLY DEGRADE WITH A DIAGNOSTIC — the portability mission applied to the frontier.**
+> **[▶ B18 HAIR/FUR — RESUMED 2026-07-19, research-grounded]:** 10-paper frontier study → `docs/research/2026-07-19-hair-fur-frontier-collection.md`
+> (+ `2026-07-19-huang-microfacet-hair.md`); PDFs in `docs/research/papers/hair_fur/` (read via pymupdf page-images — poppler absent).
+> **[✅ B18-a CHIANG BCSDF]:** `ckir_hair.hpp` — the full Chiang 2016 near-field R/TT/TRT/TRRT (Bessel-I0 Mp, trimmed-logistic Np,
+> Fresnel+Beer Ap, melanin/artist-RGB σₐ; Eq 6/7/8/9 verified against the paper). CPU **white-furnace** energy gate (σₐ=0 ⇒ albedo≈1,
+> achromatic, f≥0) + absorption monotonicity. **NEW `build_hair_bcsdf_kernel`** ⇒ GPU==oracle **to-ULP on BOTH backends** (VK maxabs
+> 2.4e-7 / DX12 1.8e-6). ⛔ SCAR: the GLSL **and** HLSL COMPUTE emitters both lacked `Round`+`Radians` (elementwise path had them) ⇒
+> `emit_compute_kernel_*` returned FALSE — wired Round(roundEven/round, ties-to-even = oracle nearbyint) + Radians + Degrees in both.
+> **[✅ B18-b FUR MEDULLA]:** Yan 2017 double-cylinder — but its TT^s/TRT^s are PRECOMPUTED Monte-Carlo tables (600MB→150KB), an
+> offline-film shape that cannot be a portable bit-exact shader ⇒ implemented an **analytic closed form** preserving Yan's exact
+> structure (Eq 4 unscattered+scattered): medulla chord d=2κ·cosγm/cosθt, interaction S=1−exp(−σ_m·d) gated on |h|<κ, and an
+> **ENERGY-CONSERVING SPLIT** of the through-medulla TT/TRT into (1−S) unscattered · S·α_m scattered · S(1−α_m) absorbed — never
+> additive. Scattered lobe = broad normalized Mp × **wrapped-Cauchy** azimuthal phase (the exactly-normalizable circular analog of
+> Henyey-Greenstein — no elliptic integrals). Host-guarded: κ=0 emits ZERO extra nodes ⇒ B18-a graph byte-identical. Gates: furnace
+> (α_m=1 ⇒ albedo≈1 — redistribution only), absorption monotone, κ=0 ≡ hair to 1e-12; GPU==oracle VK 1.3e-6 / DX12 1.3e-6.
+> **[✅ B18-b HUANG MICROFACET R LOBE]:** Huang 2022 (EGSR, CGF 41(4)) — the NON-separable microfacet BCSDF; implemented its headline
+> **analytic GGX azimuthal integral** (Appendix A Eq 41–44, α=0) for S_R = R/(8cosθo cosθi)·∫D dφm over the visible arc
+> [max(Δφ,0)−π/2, min(Δφ,0)+π/2], frame rotated to φo=0 (kills all angle-wrap hazards). ⚠ `atan(tan u/s)` emitted as
+> **atan2(sin u, s·cos u)** — identical on (−π/2,π/2) but tan OVERFLOWS f32 near ±π/2. Gate: closed form == an INDEPENDENT 20k-sample
+> host quadrature of the same NDF to **5.3e-10** (the quadrature's own error floor) across β=0.08/0.3/0.6; GPU==oracle **byte-identical
+> VK==DX12** (both maxabs 2.831e-07). `HairModel{Chiang,HuangR}` selects per material. kir [hair] 338/4, VK 24/4, DX12 12/3.
+> **[✅ B18-b HUANG TT/TRT — B18-b now CLOSED]:** the non-separable lobes (Eq 23/24 via Eq 31/32) as a combined **MC-Simpson**
+> estimator: a PINNED 1-D composite-Simpson quadrature over φm1, each node carrying ONE stochastic internal path (VNDF-sample ωh1
+> → refract to ωt; TRT also samples ωh2 → reflects to ωtr), with the FINAL micronormal *determined* by the exit direction
+> (ωh2=normalize(−ωt+ωo/η), ωh3=normalize(ωtr+ωo/η)) — a connect-to-outgoing step, structurally NEE. Determinism via triple32 on
+> (lane,node) ⇒ a stochastic estimator that is still bit-reproducible GPU-vs-oracle. Absorption uses Huang's CORRECTED 2cosγt
+> chord (Marschner's 2+2cos2γt drops a √). ⛔⛔ SCAR: total albedo came out **1.10 — GENERATING energy**. Diagnosed by PHYSICS,
+> not code-reading (the transcription was correct): per-lobe furnace isolated it to TRT (0.2545 vs ~0.07); the η→1 limit proved
+> normalization exact (TT=0.9965) and the TRT path structure exact (TRT=9e-10); an energy BUDGET showed TRT exceeded the 0.154
+> available to it. Root cause = the VNDF helper orients the micronormal to the VIEW, but Huang's `ωtr=2|ωt·ωh2|ωh2−ωt` assumes
+> RAY-facing ⇒ reflected into the wrong hemisphere. One-line re-orient ⇒ **R 0.085 + TT 0.761 + TRT 0.049 = 0.895** (≤1, the
+> remainder being un-modelled TRRT⁺). `HairModel{Chiang,HuangR,HuangFull}` + per-lobe toggles select per material.
+> **⛔⛔ ENGINE BUG FOUND + FIXED (affects ALL large kernels):** `emit_compute_kernel_{glsl,hlsl}` **HUNG** — `decl()` recursed into
+> every child while `temped[]` gated only the temp EMISSION, never the DESCENT, so a node with k parents had its whole subtree
+> re-walked k times ⇒ **exponential** traversal on deep diamond DAGs (Huang's stacked normalize/cross/VNDF chains). Added a
+> `declseen` visit memo to BOTH emitters — behaviour-identical (a re-visit emits nothing), now linear. Emitted source: 35,896
+> chars, i.e. the blowup was ALL traversal. Diagnosis lesson: a size-printf+fflush after the emit call settled in ONE probe what
+> two wrong hypotheses (spirv-opt, select-inlining) had not. **Gates:** kir [hair] **350/5**; GPU==oracle both backends
+> (VK 4.116e-06 / DX12 4.120e-06 maxabs — agreeing to 3 s.f. on a stochastic VNDF+Simpson kernel); full emitter regression
+> **VK 433/49 · DX12 161/24** — nothing broken.
+> **[✅ B18-c MULTIPLE SCATTERING + SELF-SHADOW — ALL THREE TIERS, both backends]:** new `ckir_hair_scatter.hpp`. The structural
+> insight the 10-paper study bought us: **every scattering tier is an INTEGRAL OF THE SINGLE-FIBRE BCSDF**, so ONE precomputed
+> LUT over our own model feeds all of them and any fibre-model improvement propagates for free.
+> **(0) SHARED MOMENT LUT** `build_hair_scatter_lut_kernel` — integrates our BCSDF over the outgoing sphere (h-averaged) into
+> [ā_f, ā_b, β̄f², Δ̄_b, σ̄_b²] per θd; this is simultaneously Zinke Eq 6/8/12/15 AND Hu's Albedo = ā_f+ā_b. Gate: ā_f+ā_b ==
+> an INDEPENDENTLY WRITTEN furnace integral to **1.3e-7** (the f32 floor — two separate integrations of the same quantity).
+> ⛔ SCAR: forward/backward were INVERTED — our own `hair_np` centring (Φ(p)=2pγt−2γo+pπ) proves R peaks at φo≈φi (backward)
+> and TT at φo≈φi±π (forward), so Zinke's "forward" is the FAR half-cone; the `ā_f > ā_b` assertion is what caught it.
+> **(1) ZINKE 2008 DUAL SCATTERING** — Ψ^G = T_f·S_f with T_f = d_f·ā_f^n and σ̄f² = n·β̄f² (locally-similar cluster ⇒ the Eq-5
+> product collapses to a pow), plus the closed-form Ā_1/Ā_3 backscatter series. Gated on monotone depth attenuation, lobe
+> broadening, and the headline effect: light hair 0.045 vs dark 4.7e-14 at n=4.
+> **(2) DEEP OPACITY MAPS (Yuksel 08)** — per-pixel z0 → CONFORMING layer boundaries, cumulative layer opacity, piecewise-linear
+> lookup. Gates: T=1 exactly in front, monotone darkening, opacity conserved (1.60 == 16×0.1), and ⭐ CONFORMANCE — 64 pixels
+> whose z0 spans 3.2 agree to <1e-6 at equal RELATIVE depth (the property fixed-plane opacity maps lose; proves we built DOM).
+> **(3) HU 2026 VOLUMETRIC MS — the GOLD tier** (TOG 45(4), July 2026; ~8.5× cheaper than PT and fixes dual scattering's curly-
+> hair failure): anisotropic σ_t(ω)=σ_t^⊥·sinθ, **phase function = our NORMALIZED BCSDF** (the paper is explicit that microflake/
+> SGGX cannot be used — their particles are opaque, hair transmits), and the octave series L_i=σ_s(γ·Albedo)ⁱP'_i·exp(−aⁱτ),
+> P'_i=lerp(P,P_iso,1−cⁱ). Gates: σ_t parallel≈0 / perpendicular==σ_t^⊥ exactly, **octave-0 ≡ single scattering to 1e-5** (proving
+> the series EXTENDS the sampled estimate, not a fudge), monotone brightening, γ=0 collapse, light-hair MS gain > dark. Plus a
+> deterministic voxelizer (locally-coherent hemisphere-flip direction averaging + in-grid padding mask).
+> ⛔⛔ TWO MORE ENGINE SCARS FIXED: (a) CKIR **buffer loads are INLINE** (re-read at use) ⇒ a post-loop RMW normalisation re-read
+> slot 3 AFTER storing to it, collapsing σ̄_b² to exactly 0 and silently killing the whole backscatter lobe — materialize raw
+> loads before any store; (b) the block-scope trap GENERALISED — it is not only `If` bodies: **sibling `For` loops bite
+> identically** (`fbase` first used in loop 1 ⇒ temp declared there ⇒ "undeclared identifier" in loop 2). Rule: materialize every
+> index base at top level before the first loop.
+> **Gates:** kir [hair]+[scatter] **547/10**; GPU==oracle BOTH backends with VK and DX12 agreeing to every printed digit —
+> scatter_lut 2.384e-06 · volume_ms 1.192e-07 · dom_build **0.000e+00 (bit-identical)** · dom_lookup 2.980e-08.
+> **[✅ B18-d CORE + ✅ B18-e COMPOSITING — 2026-07-20]:** `ckir_hair_geom.hpp` — strand generation (bilinear layer interp +
+> Catmull-Rom + helical styling) and the 64-bit atomicMin G-buffer (24b depth | 16b octahedral tangent | 18b uvw | 6b AO,
+> round-trip gated), plus the B18-e **Lipp 2026 tangent-oriented elliptical bilateral filter** `build_hair_filter_kernel`:
+> w_PQ = exp(−d∥²/σ∥² − d⊥²/σ⊥²)·exp(−‖ΔC‖²/σ_c²), wide ALONG the strand (bridges 1-spp gaps) and narrow ACROSS it
+> (neighbouring strands stay distinct), with a HARD depth cut so nothing blends over a silhouette.
+> **Gates (tests/kir/test_ckir_hair_filter.cpp, 5 cases):** partition-of-unity at F32 precision incl. clipped borders ·
+> anisotropy ratio EXACT to exp(k²(1/σ⊥²−1/σ∥²)) for k=1..3 and the ellipse rotates with the tangent · zero cross-silhouette
+> leak with the colour term neutralised (the depth guard alone must hold) · gap-fill >0.25× a hit while green from a strand
+> 2 px away at the SAME depth bleeds <0.05× · convexity (no overshoot ⇒ no ringing halos).
+> **GPU:** DISPATCH-verified both backends, **VK == DX12 == oracle at 1.431e-06**, deliberately dispatched 10×9=90 px over
+> 2 groups of 64 so **38 tail lanes** exercise the kernel's `tid < N` bounds guard.
+> **Beauty frame** (`build/hair_beauty.png`): added true sub-pixel coverage — bilinear 2×2 splat + order-independent
+> 1−∏(1−a) — 18.7% of covered pixels partial. ⚠ Two lessons: opacity alone CANNOT antialias (snapping to `int(px)` quantises
+> strands onto the lattice; the staircase only died with the bilinear splat), and the bilateral colour term must run in
+> TONEMAPPED space or σ_c=0.9 is swamped by HDR radiance and the filter silently no-ops in the highlights.
+> ⚠ Harness note: the beauty frame evaluates the filter formula directly, NOT via `eval_cpu_kernel` — the tree-walking oracle
+> is ~11 ms/pixel and 640×520×121 taps is ~1 h. The shipped CKIR kernel is the gated artefact (CPU gates + both GPU gates).
+> **⬜ NEXT: B18-d remainder** stochastic LOD + the Δ=−log(ρ) depth fix; then **B18-f** RT strand tier (LSS) → closes C3/B9.
 > **[✅ FA-3 CLUSTER-AS 2026-07-19 — RUN on the RTX 4070]:** `build_scene_clusters`
 > (VK_NV_cluster_acceleration_structure / RTX Mega-Geometry) — the triangle → a CLAS via a GPU-DRIVEN INDIRECT build
 > (`vkCmdBuildClusterAccelerationStructureIndirectNV`, opType BUILD_TRIANGLE_CLUSTER, implicit destinations, per-cluster

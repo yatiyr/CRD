@@ -100,6 +100,8 @@ public:
     // The smallest pool size the allocator can be constructed with. A pool
     // smaller than this would have no usable free block.
     [[nodiscard]] static usize min_pool_size() noexcept;
+    // Largest pool this allocator can index (kFlIndexMax = 32 ⇒ 4 GB). Asserted by the owning constructor.
+    [[nodiscard]] static usize max_pool_size() noexcept;
 
 private:
     void init_pool(void* buffer, usize capacity) noexcept;

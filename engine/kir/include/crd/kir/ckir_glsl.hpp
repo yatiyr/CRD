@@ -651,6 +651,13 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
     bool                            ok = true;
     crd::containers::Array<crd::u8> temped(scratch);
     temped.resize(static_cast<crd::usize>(n), 0);
+    // ⛔ DAG MEMO for `decl` below. `decl` recurses into every child, and `temped` gates only the temp EMISSION — not the
+    // descent. So a node referenced by k parents had its WHOLE subtree re-walked k times ⇒ traversal cost exponential in DAG
+    // depth. Shallow kernels never noticed; a deep diamond-shaped one (B18-b Huang: stacked normalize()/cross() chains) made
+    // emit_compute_kernel_glsl hang outright. Memoizing the visit is behaviour-IDENTICAL (a re-visit emits nothing, since
+    // temped[] is already 1 and the children are already declared) and makes emission linear in graph size.
+    crd::containers::Array<crd::u8> declseen(scratch);
+    declseen.resize(static_cast<crd::usize>(n), 0);
     const auto is_inline_op = [](KOp op) -> bool {
         switch (op)
         {
@@ -732,6 +739,9 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
         case KOp::Cosh: f1("cosh"); break;
         case KOp::Floor: f1("floor"); break;
         case KOp::Ceil: f1("ceil"); break; // B4-vis: bbox ceil (the compute-kernel rhs lacked it — only the elementwise path had it)
+        case KOp::Round: s.append("roundEven("); pv(pv, nd.a); s.append(")"); break; // B18-a: ties-to-even, matches oracle nearbyint (Np Δφ wrap)
+        case KOp::Radians: s.append("("); pv(pv, nd.a); s.append(" * 0.017453292519943295)"); break; // B18-a: π/180 exact (cuticle-scale tilt)
+        case KOp::Degrees: s.append("("); pv(pv, nd.a); s.append(" * 57.29577951308232)"); break; // 180/π (sibling of Radians, parity with elementwise)
         case KOp::Add: b2(" + "); break;
         case KOp::Sub: b2(" - "); break;
         case KOp::Mul: b2(" * "); break;
@@ -751,6 +761,8 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
     };
     // decl: materialize temps for the arithmetic nodes in a subtree (children first, CSE by node id).
     const auto decl = [&](auto&& self, int node) -> void {
+        if (declseen[static_cast<crd::usize>(node)] != 0U) { return; } // DAG memo — see declseen above
+        declseen[static_cast<crd::usize>(node)] = 1U;
         const KNode& nd = g.node(node);
         if (nd.op == KOp::BufferLoad || nd.op == KOp::SharedLoad) { self(self, nd.b); return; } // resource leaf: only the index carries temps
         if (nd.a >= 0) { self(self, nd.a); }
