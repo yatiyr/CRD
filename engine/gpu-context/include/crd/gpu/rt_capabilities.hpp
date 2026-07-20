@@ -20,6 +20,11 @@ enum class RtFeature : crd::u32
     ShaderReorder   = 1U << 2U, // SER (VK_NV/EXT_ray_tracing_invocation_reorder / DXR SER) — PERF only, results identical
     OpacityMicromap = 1U << 3U, // OMM alpha-tested geometry resolved in traversal (VK_EXT_opacity_micromap / DXR OMM)
     ClusterAS       = 1U << 4U, // cluster / mega-geometry acceleration structures (VK_NV_cluster_acceleration_structure)
+    // B18-f: LINEAR SWEPT SPHERES — the native hair-strand primitive (a sphere swept along a segment = a round cone).
+    // Blackwell-class silicon only, and DXR has NO equivalent primitive at all, so on most hardware the portable path
+    // (procedural AABBs + the analytic intersector in ckir_lss.hpp) is not a degraded fallback — it IS the strand tier.
+    // The flag exists so a consumer can take the native primitive where it is genuinely present.
+    LinearSweptSpheres = 1U << 5U,
 };
 
 // A queryable set of the RtFeatures an RT context's adapter has enabled.
@@ -53,6 +58,7 @@ enum class RtFallback : crd::u32
     case RtFeature::ShaderReorder: return "shader execution reordering (SER)";
     case RtFeature::OpacityMicromap: return "opacity micromaps (OMM)";
     case RtFeature::ClusterAS: return "cluster acceleration structures";
+    case RtFeature::LinearSweptSpheres: return "linear swept spheres (LSS curve primitive)";
     }
     return "?";
 }

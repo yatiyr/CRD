@@ -12,6 +12,7 @@
 #include <crd/kir/ckir_mlp.hpp>    // v17 NRC: build_mlp_fwd_fp32 (the portable+bit-exact fused-MLP forward)
 #include <crd/kir/ckir_svgf.hpp>   // B14-c: build_svgf_atrous (the SVGF edge-stopping denoiser)
 #include <crd/kir/ckir_hair.hpp>   // B18-a: build_hair_bcsdf_kernel (the Chiang R/TT/TRT/TRRT hair/fur BCSDF)
+#include <crd/kir/ckir_lss.hpp> // B18-f: the analytic linear-swept-sphere strand intersector
 #include <crd/kir/ckir_hair_geom.hpp> // B18-e: build_hair_filter_kernel (tangent-oriented compositing filter)
 #include <crd/kir/ckir_hair_scatter.hpp> // B18-c: multiple-scattering tiers (moment LUT, dual scattering, DOM, volumetric MS)
 #include <crd/kir/ckir_hlsl.hpp> // B-cmp: emit_compute_kernel_hlsl (the DX12 kernel emitter)
@@ -401,7 +402,7 @@ TEST_CASE("B18-c: hair multiple-scattering tiers DISPATCH on DX12 == CPU oracle"
 
         kir::GlslKernel kern(&alloc);
         REQUIRE(kir::emit_compute_kernel_hlsl(gg, e, &alloc, kern));
-        auto pipe = ctx.create_pipeline_from_hlsl(crd::containers::to_view(kern.source), static_cast<crd::u32>(nbuf), 0U);
+        auto pipe = ctx.create_pipeline_from_hlsl(crd::containers::to_view(kern.source), nbuf, 0U);
         REQUIRE(pipe != nullptr);
         crd::containers::Array<float> host_store(&alloc);
         host_store.resize(uz(total), 0.0F);
@@ -440,7 +441,8 @@ TEST_CASE("B18-c: hair multiple-scattering tiers DISPATCH on DX12 == CPU oracle"
         hms::VolumeMsConfig vc;
         kir::KGraph         gg(&alloc);
         const kir::KEntry   e = hms::build_volume_ms_kernel(gg, vc);
-        crd::containers::Array<double> in(&alloc), out(&alloc);
+        crd::containers::Array<double> in(&alloc);
+        crd::containers::Array<double> out(&alloc);
         in.resize(uz(64 * 5), 0.0);
         out.resize(uz(64 * 2), 0.0);
         for (int k = 0; k < 64; ++k)
@@ -457,7 +459,8 @@ TEST_CASE("B18-c: hair multiple-scattering tiers DISPATCH on DX12 == CPU oracle"
         hms::DomConfig dc;
         dc.layers = 4; dc.span = 4.0; dc.frags_per_px = 16;
         const int stride = 1 + dc.layers;
-        crd::containers::Array<double> frags(&alloc), dom(&alloc);
+        crd::containers::Array<double> frags(&alloc);
+        crd::containers::Array<double> dom(&alloc);
         frags.resize(uz(64 * 16 * 2), 0.0);
         dom.resize(uz(64 * stride), 0.0);
         for (int p = 0; p < 64; ++p)
@@ -476,6 +479,101 @@ TEST_CASE("B18-c: hair multiple-scattering tiers DISPATCH on DX12 == CPU oracle"
         const int lens[2] = {64 * 16 * 2, 64 * stride};
         CHECK(both(gg, e, data, lens, 2, 1, 1U, "dom_build") < 1.0e-5);
     }
+}
+
+// B18-f: the LINEAR SWEPT SPHERE strand intersector DISPATCHES on DX12 == CPU oracle — the DX12 mirror. DXR has no LSS
+// primitive at all, so the analytic intersector is the only strand path here regardless of hardware generation.
+TEST_CASE("B18-f: CKIR linear-swept-sphere intersector DISPATCHES on DX12 == CPU oracle",
+          "[dx12][compute][gpu][kernel][hair][lss]")
+{
+    namespace kir = crd::kir;
+    crd::memory::TlsfAllocator alloc0(1U << 20U);
+    g::Dx12ComputeContext      ctx(&alloc0);
+    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    const auto uz = [](int v) { return static_cast<crd::usize>(v); };
+    crd::memory::TlsfAllocator alloc(64U << 20U);
+
+    const int nray = 128;
+    const int nseg = 8;
+    kir::lss::LssTraceConfig lc;
+    lc.segments = nseg;
+
+    kir::KGraph       g(&alloc);
+    const kir::KEntry e = kir::lss::build_lss_trace_kernel(g, lc);
+
+    crd::containers::Array<double> rays(&alloc);
+    crd::containers::Array<double> segs(&alloc);
+    crd::containers::Array<double> out(&alloc);
+    rays.resize(uz(nray * 6), 0.0);
+    segs.resize(uz(nseg * 8), 0.0);
+    out.resize(uz(nray * 2), 0.0);
+    crd::u32   st  = 0x1551F00DU;
+    const auto rnd = [&]() { st = st * 1664525U + 1013904223U; return static_cast<double>(st >> 8U) / 16777216.0; };
+    for (int s = 0; s < nseg; ++s)
+    {
+        const crd::usize o = uz(s * 8);
+        for (int k = 0; k < 3; ++k) { segs[o + uz(k)] = rnd() * 2.0 - 1.0; }
+        segs[o + 3U] = 0.05 + rnd() * 0.25;
+        for (int k = 0; k < 3; ++k) { segs[o + 4U + uz(k)] = rnd() * 2.0 - 1.0; }
+        segs[o + 7U] = 0.05 + rnd() * 0.25;
+    }
+    for (int r = 0; r < nray; ++r)
+    {
+        const crd::usize o = uz(r * 6);
+        rays[o + 0U] = rnd() * 4.0 - 2.0;
+        rays[o + 1U] = -3.0;
+        rays[o + 2U] = rnd() * 4.0 - 2.0;
+        rays[o + 3U] = rnd() * 0.4 - 0.2;
+        rays[o + 4U] = 1.0;
+        rays[o + 5U] = rnd() * 0.4 - 0.2;
+    }
+    crd::containers::Array<double> snap(&alloc);
+    snap.resize(uz(nray * 6 + nseg * 8), 0.0);
+    for (int j = 0; j < nray * 6; ++j) { snap[uz(j)] = rays[uz(j)]; }
+    for (int j = 0; j < nseg * 8; ++j) { snap[uz(nray * 6 + j)] = segs[uz(j)]; }
+
+    kir::KernelBuffer bufs[3] = {{rays.data(), nray * 6, 0U, 0U},
+                                 {segs.data(), nseg * 8, 0U, 1U},
+                                 {out.data(), nray * 2, 0U, 2U}};
+    kir::eval_cpu_kernel(g, e, bufs, 3, e.local_size[0], &alloc, static_cast<crd::u32>(nray / 64));
+    crd::containers::Array<double> ref(&alloc);
+    ref.resize(uz(nray * 2), 0.0);
+    for (int j = 0; j < nray * 2; ++j) { ref[uz(j)] = out[uz(j)]; }
+
+    kir::GlslKernel kern(&alloc);
+    REQUIRE(kir::emit_compute_kernel_hlsl(g, e, &alloc, kern));
+    auto pipe = ctx.create_pipeline_from_hlsl(crd::containers::to_view(kern.source), 3, 0U);
+    REQUIRE(pipe != nullptr);
+    crd::containers::Array<float> host_store(&alloc);
+    host_store.resize(uz(nray * 6 + nseg * 8 + nray * 2), 0.0F);
+    float*    host[3] = {host_store.data(), host_store.data() + nray * 6, host_store.data() + nray * 6 + nseg * 8};
+    const int lens[3] = {nray * 6, nseg * 8, nray * 2};
+    for (int j = 0; j < nray * 6; ++j) { host[0][j] = static_cast<float>(snap[uz(j)]); }
+    for (int j = 0; j < nseg * 8; ++j) { host[1][j] = static_cast<float>(snap[uz(nray * 6 + j)]); }
+    crd::kir_test::dispatch_kernel_1wg(ctx, *pipe, host, lens, 3, static_cast<crd::u32>(nray / 64));
+
+    // Compare only where the CPU reference actually HIT. A miss is sentinel-valued (1e30), and comparing sentinels in
+    // F32 is meaningless — what matters is that both agree on WHICH rays hit, and on the distance where they did.
+    int    hits = 0;
+    int    disagree = 0;
+    double worst = 0.0;
+    for (int r = 0; r < nray; ++r)
+    {
+        const bool cpu_hit = ref[uz(r * 2)] < 1.0e29;
+        const bool gpu_hit = static_cast<double>(host[2][r * 2]) < 1.0e29;
+        if (cpu_hit != gpu_hit) { ++disagree; continue; }
+        if (!cpu_hit) { continue; }
+        ++hits;
+        // t and u are compared together on purpose: a `u` that disagrees while `t` matches means the two sides picked
+        // DIFFERENT surfaces at the same distance, which is a shading defect even though the depth buffer would agree.
+        worst = std::max(worst, std::fabs(static_cast<double>(host[2][r * 2]) - ref[uz(r * 2)]));
+        worst = std::max(worst, std::fabs(static_cast<double>(host[2][r * 2 + 1]) - ref[uz(r * 2 + 1)]));
+    }
+    std::printf("[DX12 B18-f LSS] %d rays, %d hits  maxabs(GPU vs oracle) = %.3e  hit/miss disagreements = %d\n",
+                nray, hits, worst, disagree);
+    CHECK(hits > 16);      // the scene must actually be hit, or the comparison proves nothing
+    CHECK(disagree == 0);  // both must agree on WHICH rays hit — a boundary disagreement is a hole in the groom
+    CHECK(worst < 1.0e-4);
 }
 
 // B18-d: the strand LOD pre-pass DISPATCHES on DX12 == CPU oracle — the DX12 mirror of the Vulkan LOD gate. Worth
@@ -572,7 +670,10 @@ TEST_CASE("B18-e: CKIR hair compositing filter DISPATCHES on DX12 == CPU oracle"
     kir::KGraph       gg(&alloc);
     const kir::KEntry e = kir::hairgeom::build_hair_filter_kernel(gg, fc);
 
-    crd::containers::Array<double> col(&alloc), tan(&alloc), dep(&alloc), out(&alloc);
+    crd::containers::Array<double> col(&alloc);
+    crd::containers::Array<double> tan(&alloc);
+    crd::containers::Array<double> dep(&alloc);
+    crd::containers::Array<double> out(&alloc);
     col.resize(uz(np * 3), 0.0);
     tan.resize(uz(np * 2), 0.0);
     dep.resize(uz(np), 0.0);

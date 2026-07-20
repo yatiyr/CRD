@@ -284,3 +284,147 @@ TEST_CASE("D-007 P2 DX12: CKIR RT pipeline stages lower to valid DXR HLSL", "[gp
     CHECK(cms.ok);            // miss
     CHECK(crg.dxil.size() > 0);
 }
+
+// D-007 B18-f DX12: PROCEDURAL CURVE traversal — the same CKIR TraceRayCurves statement the Vulkan gate runs, lowered to
+// HLSL and executed against a DXR procedural-AABB BLAS. This is the load-bearing PORTABILITY claim of the strand tier:
+// Vulkan can lean on VK_NV_ray_tracing_linear_swept_spheres where the adapter has it, but DXR has NO swept-sphere
+// primitive at any tier, so the analytic intersector in CKIR is the ONLY thing making a strand tier exist here. If the
+// two backends disagree, the intersector is not portable and the tier is a Vulkan feature wearing a portable name.
+//
+// Geometry, rays, seed and tolerance are IDENTICAL to the Vulkan gate on purpose — both are held against the same CPU
+// oracle, so agreement here plus agreement there establishes VK == DX12 without a direct device-to-device comparison.
+TEST_CASE("D-007 B18-f DX12: CKIR TraceRayCurves on DXR procedural AABBs == CPU oracle", "[gpu-context][dx12][gpu][rt]")
+{
+    gpu::Dx12RayTracingContext rt;
+    if (!rt.valid()) { WARN("no D3D12 DXR-1.1 device available; skipping"); return; }
+
+    crd::memory::TlsfAllocator alloc(64U << 20U);
+    const auto                 uz = [](int v) { return static_cast<crd::usize>(v); };
+
+    // ── a small groom: strands of tapering segments, spread so most rays hit something ──
+    constexpr int kStr = 6;
+    constexpr int kSeg = 6;
+    constexpr int nseg = kStr * kSeg;
+    constexpr int nray = 256;
+    crd::containers::Array<float>  segf(&alloc);
+    crd::containers::Array<double> segd(&alloc);
+    segf.resize(uz(nseg * 8), 0.0F);
+    segd.resize(uz(nseg * 8), 0.0);
+    for (int s = 0; s < kStr; ++s)
+    {
+        const float x = -1.0F + 0.4F * static_cast<float>(s);
+        for (int j = 0; j < kSeg; ++j)
+        {
+            const float t0 = static_cast<float>(j) / static_cast<float>(kSeg);
+            const float t1 = static_cast<float>(j + 1) / static_cast<float>(kSeg);
+            float*      q  = segf.data() + uz((s * kSeg + j) * 8);
+            q[0] = x; q[1] = -0.5F + 2.0F * t0; q[2] = 0.15F * static_cast<float>(s % 3);
+            q[3] = 0.09F * (1.0F - t0) + 0.02F;
+            q[4] = x; q[5] = -0.5F + 2.0F * t1; q[6] = 0.15F * static_cast<float>(s % 3);
+            q[7] = 0.09F * (1.0F - t1) + 0.02F;
+        }
+    }
+    for (int i = 0; i < nseg * 8; ++i) { segd[uz(i)] = static_cast<double>(segf[uz(i)]); }
+
+    crd::containers::Array<float>  rayf(&alloc);
+    crd::containers::Array<double> rayd(&alloc);
+    rayf.resize(uz(nray * 6), 0.0F);
+    rayd.resize(uz(nray * 6), 0.0);
+    crd::u32   st  = 0x18F00D01U; // the SAME seed as the Vulkan gate — identical rays, identical oracle
+    const auto rnd = [&]() { st = st * 1664525U + 1013904223U; return static_cast<double>(st >> 8U) / 16777216.0; };
+    for (int i = 0; i < nray; ++i)
+    {
+        float* r = rayf.data() + uz(i * 6);
+        r[0] = static_cast<float>(rnd() * 3.0 - 1.5);
+        r[1] = static_cast<float>(rnd() * 2.4 - 0.6);
+        r[2] = -3.0F;
+        r[3] = static_cast<float>(rnd() * 0.2 - 0.1);
+        r[4] = static_cast<float>(rnd() * 0.2 - 0.1);
+        r[5] = 1.0F;
+    }
+    for (int i = 0; i < nray * 6; ++i) { rayd[uz(i)] = static_cast<double>(rayf[uz(i)]); }
+
+    // ── the kernel: one TraceRayCurves per lane ──
+    // ⚠ DX12 buffer bindings live at u1.. (u0 unused, TLAS is the root SRV t0), so the segment/ray/out bindings are
+    //   1/2/3 exactly as on Vulkan — the SAME KGraph shape, which is the point.
+    kir::KGraph      g(&alloc);
+    const kir::Shape shu = kir::make_shape({1});
+    const auto       cu  = [&](crd::u32 v) { return g.constant(static_cast<double>(v), shu, kir::DType::U32); };
+    const auto       ks  = [&](double v) { return g.constant(v, shu, kir::DType::F32); };
+    const int as    = g.accel_struct_decl(0, 0);
+    const int seg_b = g.buffer_decl(kir::DType::F32, 0, 1, false);
+    const int ray_b = g.buffer_decl(kir::DType::F32, 0, 2, false);
+    const int out_b = g.buffer_decl(kir::DType::F32, 0, 3, true);
+    const int tid   = g.binary(kir::KOp::Add, g.binary(kir::KOp::Mul, g.builtin(kir::KBuiltin::WorkgroupIndex), cu(64)),
+                             g.builtin(kir::KBuiltin::LocalInvocationIndex));
+    const int  mark = g.kernel_stmt_mark();
+    const int  rb   = g.binary(kir::KOp::Mul, tid, cu(6));
+    const auto rl   = [&](int k) {
+        const int v = g.buffer_load(ray_b, g.binary(kir::KOp::Add, rb, cu(static_cast<crd::u32>(k))));
+        g.stmt_materialize(v);
+        return v;
+    };
+    const auto hit = g.trace_ray_curves(as, seg_b, rl(0), rl(1), rl(2), rl(3), rl(4), rl(5), ks(1.0e-4), ks(50.0));
+    const int  ob  = g.binary(kir::KOp::Mul, tid, cu(2));
+    g.stmt_buffer_store(out_b, ob, hit.t);
+    g.stmt_buffer_store(out_b, g.binary(kir::KOp::Add, ob, cu(1)), hit.u);
+    kir::KEntry e;
+    e.stage             = kir::KStage::Compute;
+    e.local_size[0]     = 64;
+    e.kernel_body_begin = mark;
+    e.kernel_body_count = g.stmt_count() - mark;
+
+    // ── CPU oracle first ──
+    crd::containers::Array<double> ref(&alloc);
+    crd::containers::Array<double> as_stub(&alloc);
+    ref.resize(uz(nray * 2), 0.0);
+    as_stub.resize(1U, 0.0);
+    kir::KernelBuffer ob_[4] = {{as_stub.data(), 1, 0, 0},
+                                {segd.data(), nseg * 8, 0, 1},
+                                {rayd.data(), nray * 6, 0, 2},
+                                {ref.data(), nray * 2, 0, 3}};
+    kir::eval_cpu_kernel(g, e, ob_, 4, e.local_size[0], &alloc, static_cast<crd::u32>(nray / 64));
+
+    // ── then the device ──
+    const auto dxil = dxil_of(g, e, &alloc);
+    auto       scene = rt.build_scene_curves(segf.data(), static_cast<crd::u32>(nseg));
+    REQUIRE(scene != nullptr);
+
+    crd::containers::Array<float> outf(&alloc);
+    outf.resize(uz(nray * 2), 0.0F);
+    B bind[3] = {{segf.data(), nullptr, static_cast<crd::u64>(nseg) * 8U * sizeof(float), 1U},
+                 {rayf.data(), nullptr, static_cast<crd::u64>(nray) * 6U * sizeof(float), 2U},
+                 {nullptr, outf.data(), static_cast<crd::u64>(nray) * 2U * sizeof(float), 3U}};
+    REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(dxil.data(), dxil.size()),
+                              crd::containers::ConstSpan<B>(bind, 3), static_cast<crd::u32>(nray / 64)));
+
+    constexpr double kTmax = 50.0; // a MISS returns tmax, so classify against it, not a fixed sentinel
+    int    hits = 0;
+    int    disagree = 0;
+    int    cpu_only = 0; // oracle hit, device missed  => AABB too small / commit rejected
+    int    gpu_only = 0; // device hit, oracle missed  => false positive in the intersector
+    double worst = 0.0;
+    for (int i = 0; i < nray; ++i)
+    {
+        const bool ch = ref[uz(i * 2)] < kTmax - 0.5;
+        const bool gh = static_cast<double>(outf[uz(i * 2)]) < kTmax - 0.5;
+        if (ch != gh)
+        {
+            ++disagree;
+            if (ch) { ++cpu_only; } else { ++gpu_only; }
+            continue;
+        }
+        if (!ch) { continue; }
+        ++hits;
+        const double dt = crd::math::abs(static_cast<double>(outf[uz(i * 2)]) - ref[uz(i * 2)]);
+        const double du = crd::math::abs(static_cast<double>(outf[uz(i * 2 + 1)]) - ref[uz(i * 2 + 1)]);
+        if (dt > worst) { worst = dt; }
+        if (du > worst) { worst = du; }
+    }
+    INFO("DX12 curve traversal: " << nray << " rays over " << nseg << " segments, " << hits << " hits, maxabs = " << worst
+                                  << ", disagreements = " << disagree << " (oracle-only " << cpu_only << ", device-only "
+                                  << gpu_only << ")");
+    CHECK(hits > 32);     // the groom must actually be hit, or the comparison proves nothing
+    CHECK(disagree == 0); // hardware traversal must find exactly the hits the brute-force oracle finds
+    CHECK(worst < 1.0e-3);
+}

@@ -603,6 +603,9 @@ inline bool emit_value_stmt(const KGraph& g, int i, crd::containers::String& s, 
 // The hand-authored on-chip kernel path (FFT / reduction / transpose / conv), distinct from the functional elementwise
 // emitter. Resource decls (buffers + `shared` arrays) + the KEntry statement body with INLINE value expressions (a SharedLoad
 // must emit at its statement, never hoisted across a barrier). Returns false on an op it can't yet lower (refuses loudly).
+// NOLINTBEGIN(readability-function-size) -- one branch per KStmtKind/KOp, each a few lines of textual emission.
+// Splitting it would only scatter a flat dispatch across helpers that share the whole local emitter state
+// (`s`, `temped`, `decl`, `pv`), which is how the two dialects drift apart. Same rationale as ckir_cuda.hpp.
 inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::memory::IAllocator* scratch, GlslKernel& out)
 {
     using namespace glsl_detail;
@@ -831,6 +834,88 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
             case KStmtKind::BufferAtomicMin: decl(decl, st.index); decl(decl, st.value); s.append("  atomicMin(buf"); app_uint(s, g.node(st.target).iidx); s.append("["); pv(pv, st.index); s.append("], "); pv(pv, st.value); s.append(");\n"); ++i; break; // B4-vis: visibility key (nearest wins)
             case KStmtKind::BufferAtomicAddFetch: decl(decl, st.index); decl(decl, st.value); s.append("  "); s.append(buf_ctype(g.node(st.result).dtype())); s.append(" t"); app_uint(s, static_cast<crd::u32>(st.result)); s.append(" = atomicAdd(buf"); app_uint(s, g.node(st.target).iidx); s.append("["); pv(pv, st.index); s.append("], "); pv(pv, st.value); s.append(");\n"); temped[static_cast<crd::usize>(st.result)] = 1U; ++i; break; // B17: value-returning node allocator
             case KStmtKind::BufferAtomicExchange: decl(decl, st.index); decl(decl, st.value); s.append("  "); s.append(buf_ctype(g.node(st.result).dtype())); s.append(" t"); app_uint(s, static_cast<crd::u32>(st.result)); s.append(" = atomicExchange(buf"); app_uint(s, g.node(st.target).iidx); s.append("["); pv(pv, st.index); s.append("], "); pv(pv, st.value); s.append(");\n"); temped[static_cast<crd::usize>(st.result)] = 1U; ++i; break; // B17: linked-list head push
+            case KStmtKind::TraceRayCurves: // B18-f: procedural curve BLAS — the shader intersects each candidate AABB's
+            {                               // linear swept sphere and COMMITS it; hardware cannot resolve this itself.
+                for (int k = 0; k < 8; ++k) { decl(decl, g.stmt_ext_operand(st, k)); }
+                const auto op = [&](int k) { pv(pv, g.stmt_ext_operand(st, k)); };
+                const crd::u32 bnd  = g.node(st.target).iidx;
+                const crd::u32 sbuf = g.node(g.stmt_ext_operand(st, 8)).iidx;
+                const crd::u32 res  = static_cast<crd::u32>(st.result);
+                const crd::u32 ures = static_cast<crd::u32>(g.stmt_ext_operand(st, 9));
+                const crd::u32 pres = static_cast<crd::u32>(g.stmt_ext_operand(st, 10));
+
+                s.append("  rayQueryEXT rq"); app_uint(s, res); s.append(";\n");
+                s.append("  rayQueryInitializeEXT(rq"); app_uint(s, res); s.append(", as"); app_uint(s, bnd);
+                s.append(", gl_RayFlagsNoneEXT, 0xFFu, vec3("); op(0); s.append(", "); op(1); s.append(", "); op(2); s.append("), ");
+                op(6); s.append(", vec3("); op(3); s.append(", "); op(4); s.append(", "); op(5); s.append("), "); op(7); s.append(");\n");
+                s.append("  float cu"); app_uint(s, res); s.append(" = 0.0;\n");
+                s.append("  while (rayQueryProceedEXT(rq"); app_uint(s, res); s.append(")) {\n");
+                s.append("    if (rayQueryGetIntersectionTypeEXT(rq"); app_uint(s, res);
+                s.append(", false) != gl_RayQueryCandidateIntersectionAABBEXT) { continue; }\n");
+                s.append("    uint sgi = uint(rayQueryGetIntersectionPrimitiveIndexEXT(rq"); app_uint(s, res); s.append(", false)) * 8u;\n");
+                s.append("    vec3 pa = vec3(buf"); app_uint(s, sbuf); s.append("[sgi], buf"); app_uint(s, sbuf);
+                s.append("[sgi+1u], buf"); app_uint(s, sbuf); s.append("[sgi+2u]);\n");
+                s.append("    float ra = buf"); app_uint(s, sbuf); s.append("[sgi+3u];\n");
+                s.append("    vec3 pb = vec3(buf"); app_uint(s, sbuf); s.append("[sgi+4u], buf"); app_uint(s, sbuf);
+                s.append("[sgi+5u], buf"); app_uint(s, sbuf); s.append("[sgi+6u]);\n");
+                s.append("    float rb = buf"); app_uint(s, sbuf); s.append("[sgi+7u];\n");
+                s.append("    vec3 ro = vec3("); op(0); s.append(", "); op(1); s.append(", "); op(2); s.append(");\n");
+                s.append("    vec3 rdr = vec3("); op(3); s.append(", "); op(4); s.append(", "); op(5); s.append(");\n");
+                s.append("    float rl = max(length(rdr), 1e-20); float rinv = 1.0/rl; vec3 rd = rdr*rinv;\n");
+                // ⛔⛔ RE-ORIGIN THE RAY AT THE SEGMENT BEFORE SOLVING. The round-cone quadratic subtracts quantities of
+                //    order |ro-pa|^2 to recover a term of order |ba|^2*ra^2. With the camera ~1 unit from a 68 micron
+                //    fibre those differ by EIGHT orders of magnitude, so in f32 the radius information sits below the
+                //    cancellation noise of the very terms carrying it, and the solve commits hits that are not on the
+                //    surface at all (measured: ~6x the fibre radius off-axis). Sliding the origin down the ray to the
+                //    segment makes every term local-scale. One dot product, and the solve is restored.
+                //    THIS IS WHY IT APPEARED ONLY AT REALISTIC THICKNESS: at a fat 0.75mm radius the same term sat
+                //    right at the edge of f32 and mostly survived, so fat strands looked fine.
+                s.append("    float tsh = dot(pa - ro, rd); vec3 roL = ro + rd*tsh;\n");
+                s.append("    vec3 ba = pb - pa; vec3 oa = roL - pa; vec3 ob = roL - pb; float rr = ra - rb;\n");
+                s.append("    float m0 = dot(ba,ba), m1 = dot(ba,oa), m2 = dot(ba,rd);\n");
+                s.append("    float m3 = dot(rd,oa), m5 = dot(oa,oa), m6 = dot(ob,rd), m7 = dot(ob,ob);\n");
+                s.append("    float d2 = m0 - rr*rr;\n");
+                s.append("    float tminu = "); op(6); s.append(" * rl;\n");
+                // ⛔ Seed the candidate search from the CURRENTLY COMMITTED t, not the ray's original tmax:
+                //    rayQueryGenerateIntersectionEXT requires tHit inside the ray's CURRENT range, which traversal
+                //    narrows on every commit. Scaled by rl because the search below runs in unit-direction units.
+                s.append("    float ct"); app_uint(s, res); s.append(" = (rayQueryGetIntersectionTypeEXT(rq"); app_uint(s, res);
+                s.append(", true) != gl_RayQueryCommittedIntersectionNoneEXT) ? rayQueryGetIntersectionTEXT(rq"); app_uint(s, res);
+                s.append(", true) : "); op(7); s.append(";\n");
+                s.append("    float bt = ct"); app_uint(s, res); s.append(" * rl; float bu = 0.0; bool got = false;\n");
+                s.append("    float k2 = d2 - m2*m2;\n");
+                s.append("    float k1 = d2*m3 - m1*m2 + m2*rr*ra;\n");
+                s.append("    float k0 = d2*m5 - m1*m1 + m1*rr*ra*2.0 - m0*ra*ra;\n");
+                s.append("    float hh = k1*k1 - k0*k2;\n");
+                s.append("    if (hh > 0.0 && abs(k2) > 1e-20) { float tc = (-sqrt(hh) - k1)/k2;\n");
+                s.append("      float yc = m1 - ra*rr + tc*m2;\n");
+                // every candidate t is measured from the SHIFTED origin, so add tsh back before comparing or committing
+                s.append("      float tcT = tc + tsh;\n");
+                s.append("      if (tcT > tminu && tcT < bt && yc > 0.0 && yc < d2) { bt = tcT; bu = yc/max(d2,1e-20); got = true; } }\n");
+                s.append("    float h1 = m3*m3 - m5 + ra*ra; float h2 = m6*m6 - m7 + rb*rb;\n");
+                s.append("    if (h1 > 0.0) { float t1 = -m3 - sqrt(h1);\n");
+                s.append("      float t1T = t1 + tsh; if (t1T > tminu && t1T < bt) { bt = t1T; bu = 0.0; got = true; } }\n");
+                s.append("    if (h2 > 0.0) { float t2 = -m6 - sqrt(h2);\n");
+                s.append("      float t2T = t2 + tsh; if (t2T > tminu && t2T < bt) { bt = t2T; bu = 1.0; got = true; } }\n");
+                s.append("    if (got) { cu"); app_uint(s, res); s.append(" = bu; rayQueryGenerateIntersectionEXT(rq"); app_uint(s, res); s.append(", bt*rinv); }\n");
+                s.append("  }\n");
+                s.append("  bool hit"); app_uint(s, res); s.append(" = (rayQueryGetIntersectionTypeEXT(rq"); app_uint(s, res);
+                s.append(", true) == gl_RayQueryCommittedIntersectionGeneratedEXT);\n");
+                s.append("  float t"); app_uint(s, res); s.append(" = hit"); app_uint(s, res);
+                s.append(" ? rayQueryGetIntersectionTEXT(rq"); app_uint(s, res); s.append(", true) : "); op(7); s.append(";\n");
+                s.append("  float t"); app_uint(s, ures); s.append(" = hit"); app_uint(s, res); s.append(" ? cu"); app_uint(s, res); s.append(" : 0.0;\n");
+                // WHICH segment won: read back from the committed intersection rather than tracking it through the
+                // candidate loop, so it cannot drift out of step with the t the hardware actually kept.
+                s.append("  uint t"); app_uint(s, pres); s.append(" = hit"); app_uint(s, res);
+                s.append(" ? uint(rayQueryGetIntersectionPrimitiveIndexEXT(rq"); app_uint(s, res);
+                s.append(", true)) : 0xFFFFFFFFu;\n");
+
+                temped[static_cast<crd::usize>(st.result)] = 1U;
+                temped[static_cast<crd::usize>(g.stmt_ext_operand(st, 9))] = 1U;
+                temped[static_cast<crd::usize>(g.stmt_ext_operand(st, 10))] = 1U;
+                ++i;
+                break;
+            }
             case KStmtKind::TraceRayClosest: // B9/RT-1: inline ray query — closest-hit distance `t` (or tmax on miss)
             {
                 for (int k = 0; k < 8; ++k) { decl(decl, g.stmt_ext_operand(st, k)); } // materialize ox..dz, tmin, tmax
@@ -887,6 +972,7 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
     s.append("}\n");
     return ok;
 }
+// NOLINTEND(readability-function-size)
 
 // FA-2 (portable RT PIPELINE): emit a raygen / closest-hit / miss GLSL shader (GL_EXT_ray_tracing) from a KEntry whose body is the
 // statement pool [kernel_body_begin, +count). The RAYGEN traces via `traceRayEXT` (or, when `ser` is set AND the body requests a

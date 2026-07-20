@@ -69,6 +69,19 @@ public:
     [[nodiscard]] std::unique_ptr<RtScene>
     build_scene_clusters(const float* vertices, crd::u32 ntris);
 
+    // B18-f: build a scene of HAIR STRANDS as PROCEDURAL geometry. Each segment becomes one AABB in the BLAS; the shader
+    // intersects the linear-swept sphere (round cone) analytically inside the ray-query candidate loop — see ckir_lss.hpp.
+    //
+    // ⭐ WHY PROCEDURAL AND NOT TRIANGLES. A 170K-strand groom at 30 segments is 5M segments. Tessellated tubes at 8-24
+    //   triangles each is 40M+ triangles: a multi-gigabyte AS, minutes of build time, and a silhouette that is STILL
+    //   faceted under a close camera. One AABB per segment is ~24 bytes and the swept surface stays exact at any zoom.
+    //
+    // `segments` is 8 floats per segment: [ax, ay, az, ra, bx, by, bz, rb] — endpoints and their radii, so a strand can
+    // taper. The caller ALSO binds the same segment array as a storage buffer for the intersector to read; this call only
+    // builds the traversal structure. Returns nullptr if the RT context is invalid or nseg == 0.
+    [[nodiscard]] std::unique_ptr<RtScene>
+    build_scene_curves(const float* segments, crd::u32 nseg);
+
     // P5 (graceful degradation): build a "scalable" scene — cluster-AS (mega-geometry) when the adapter supports it, ELSE a
     // transparent fallback to a standard BLAS (identical traversal + result; clusters are a memory-layout optimisation). Sets
     // `*fell_back` to true when it degraded, so the caller can log the info. The portable cluster-topology entry.

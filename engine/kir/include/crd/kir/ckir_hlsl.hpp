@@ -155,6 +155,9 @@ inline bool emit_elementwise_hlsl(const KGraph& g, int output, crd::memory::IAll
 // SharedLoad emits AT its statement, never hoisted across a barrier — same as GLSL). `SV_GroupIndex` is the flattened local
 // index (= gl_LocalInvocationIndex); `GroupMemoryBarrierWithGroupSync()` is the control+shared barrier. Returns false on an
 // op it can't lower.
+// NOLINTBEGIN(readability-function-size) -- one branch per KStmtKind/KOp, each a few lines of textual emission.
+// Splitting it would only scatter a flat dispatch across helpers that share the whole local emitter state
+// (`s`, `temped`, `decl`, `pv`), which is how the two dialects drift apart. Same rationale as ckir_cuda.hpp.
 inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IAllocator* scratch, GlslKernel& out)
 {
     using namespace glsl_detail;
@@ -387,6 +390,81 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
                 s.append("; buf"); app_uint(s, g.node(st.target).iidx); s.append(".InterlockedExchange((("); pv(pv, st.index); s.append(")) * 4u, ");
                 pv(pv, st.value); s.append(", t"); app_uint(s, static_cast<crd::u32>(st.result)); s.append(");\n");
                 temped[static_cast<crd::usize>(st.result)] = 1U; ++i; break;
+            case KStmtKind::TraceRayCurves: // B18-f: procedural curve BLAS — the shader intersects each candidate AABB's
+            {                               // linear swept sphere and COMMITS it; hardware cannot resolve this itself.
+                for (int k = 0; k < 8; ++k) { decl(decl, g.stmt_ext_operand(st, k)); }
+                const auto op = [&](int k) { pv(pv, g.stmt_ext_operand(st, k)); };
+                const crd::u32 bnd  = g.node(st.target).iidx;
+                const crd::u32 sbuf = g.node(g.stmt_ext_operand(st, 8)).iidx;
+                const crd::u32 res  = static_cast<crd::u32>(st.result);
+                const crd::u32 ures = static_cast<crd::u32>(g.stmt_ext_operand(st, 9));
+                const crd::u32 pres = static_cast<crd::u32>(g.stmt_ext_operand(st, 10));
+
+                s.append("  RayQuery<RAY_FLAG_NONE> rq"); app_uint(s, res); s.append(";\n");
+                s.append("  RayDesc rdsc"); app_uint(s, res); s.append(";\n");
+                s.append("  rdsc"); app_uint(s, res); s.append(".Origin = float3("); op(0); s.append(", "); op(1); s.append(", "); op(2); s.append(");\n");
+                s.append("  rdsc"); app_uint(s, res); s.append(".Direction = float3("); op(3); s.append(", "); op(4); s.append(", "); op(5); s.append(");\n");
+                s.append("  rdsc"); app_uint(s, res); s.append(".TMin = "); op(6); s.append("; rdsc"); app_uint(s, res); s.append(".TMax = "); op(7); s.append(";\n");
+                s.append("  rq"); app_uint(s, res); s.append(".TraceRayInline(as"); app_uint(s, bnd); s.append(", RAY_FLAG_NONE, 0xFFu, rdsc"); app_uint(s, res); s.append(");\n");
+                s.append("  float cu"); app_uint(s, res); s.append(" = 0.0;\n");
+                s.append("  while (rq"); app_uint(s, res); s.append(".Proceed()) {\n");
+                s.append("    if (rq"); app_uint(s, res); s.append(".CandidateType() != CANDIDATE_PROCEDURAL_PRIMITIVE) { continue; }\n");
+                s.append("    uint sgi = rq"); app_uint(s, res); s.append(".CandidatePrimitiveIndex() * 8u;\n");
+                s.append("    float3 pa = float3(asfloat(buf"); app_uint(s, sbuf); s.append(".Load(sgi*4u)), asfloat(buf"); app_uint(s, sbuf);
+                s.append(".Load((sgi+1u)*4u)), asfloat(buf"); app_uint(s, sbuf); s.append(".Load((sgi+2u)*4u)));\n");
+                s.append("    float ra = asfloat(buf"); app_uint(s, sbuf); s.append(".Load((sgi+3u)*4u));\n");
+                s.append("    float3 pb = float3(asfloat(buf"); app_uint(s, sbuf); s.append(".Load((sgi+4u)*4u)), asfloat(buf"); app_uint(s, sbuf);
+                s.append(".Load((sgi+5u)*4u)), asfloat(buf"); app_uint(s, sbuf); s.append(".Load((sgi+6u)*4u)));\n");
+                s.append("    float rb = asfloat(buf"); app_uint(s, sbuf); s.append(".Load((sgi+7u)*4u));\n");
+                s.append("    float3 ro = float3("); op(0); s.append(", "); op(1); s.append(", "); op(2); s.append(");\n");
+                s.append("    float3 rdr = float3("); op(3); s.append(", "); op(4); s.append(", "); op(5); s.append(");\n");
+                s.append("    float rl = max(length(rdr), 1e-20); float rinv = 1.0/rl; float3 rd = rdr*rinv;\n");
+                // ⛔⛔ RE-ORIGIN AT THE SEGMENT — see the note in ckir_glsl.hpp. The quadratic recovers a term of order
+                //    |ba|^2*ra^2 by subtracting quantities of order |ro-pa|^2; at realistic fibre thickness those are
+                //    eight orders of magnitude apart and f32 loses the radius entirely.
+                s.append("    float tsh = dot(pa - ro, rd); float3 roL = ro + rd*tsh;\n");
+                s.append("    float3 ba = pb - pa; float3 oa = roL - pa; float3 ob = roL - pb; float rr = ra - rb;\n");
+                s.append("    float m0 = dot(ba,ba), m1 = dot(ba,oa), m2 = dot(ba,rd);\n");
+                s.append("    float m3 = dot(rd,oa), m5 = dot(oa,oa), m6 = dot(ob,rd), m7 = dot(ob,ob);\n");
+                s.append("    float d2 = m0 - rr*rr;\n");
+                s.append("    float tminu = "); op(6); s.append(" * rl;\n");
+                // ⛔ Seed the candidate search from the CURRENTLY COMMITTED t, not the ray's original TMax:
+                //    CommitProceduralPrimitiveHit requires tHit inside the ray's CURRENT range, which traversal narrows
+                //    on every commit. Scaled by rl because the search below runs in unit-direction units.
+                s.append("    float ct"); app_uint(s, res); s.append(" = (rq"); app_uint(s, res);
+                s.append(".CommittedStatus() != COMMITTED_NOTHING) ? rq"); app_uint(s, res);
+                s.append(".CommittedRayT() : "); op(7); s.append(";\n");
+                s.append("    float bt = ct"); app_uint(s, res); s.append(" * rl; float bu = 0.0; bool got = false;\n");
+                s.append("    float k2 = d2 - m2*m2;\n");
+                s.append("    float k1 = d2*m3 - m1*m2 + m2*rr*ra;\n");
+                s.append("    float k0 = d2*m5 - m1*m1 + m1*rr*ra*2.0 - m0*ra*ra;\n");
+                s.append("    float hh = k1*k1 - k0*k2;\n");
+                s.append("    if (hh > 0.0 && abs(k2) > 1e-20) { float tc = (-sqrt(hh) - k1)/k2;\n");
+                s.append("      float yc = m1 - ra*rr + tc*m2;\n");
+                // candidates are measured from the SHIFTED origin — add tsh back before comparing or committing
+                s.append("      float tcT = tc + tsh;\n");
+                s.append("      if (tcT > tminu && tcT < bt && yc > 0.0 && yc < d2) { bt = tcT; bu = yc/max(d2,1e-20); got = true; } }\n");
+                s.append("    float h1 = m3*m3 - m5 + ra*ra; float h2 = m6*m6 - m7 + rb*rb;\n");
+                s.append("    if (h1 > 0.0) { float t1 = -m3 - sqrt(h1);\n");
+                s.append("      float t1T = t1 + tsh; if (t1T > tminu && t1T < bt) { bt = t1T; bu = 0.0; got = true; } }\n");
+                s.append("    if (h2 > 0.0) { float t2 = -m6 - sqrt(h2);\n");
+                s.append("      float t2T = t2 + tsh; if (t2T > tminu && t2T < bt) { bt = t2T; bu = 1.0; got = true; } }\n");
+                s.append("    if (got) { cu"); app_uint(s, res); s.append(" = bu; rq"); app_uint(s, res); s.append(".CommitProceduralPrimitiveHit( bt*rinv); }\n");
+                s.append("  }\n");
+                s.append("  bool hit"); app_uint(s, res); s.append(" = (rq"); app_uint(s, res); s.append(".CommittedStatus() == COMMITTED_PROCEDURAL_PRIMITIVE_HIT);\n");
+                s.append("  float t"); app_uint(s, res); s.append(" = hit"); app_uint(s, res); s.append(" ? rq"); app_uint(s, res); s.append(".CommittedRayT() : "); op(7); s.append(";\n");
+                s.append("  float t"); app_uint(s, ures); s.append(" = hit"); app_uint(s, res); s.append(" ? cu"); app_uint(s, res); s.append(" : 0.0;\n");
+                // WHICH segment won: read back from the committed intersection rather than tracking it through the
+                // candidate loop, so it cannot drift out of step with the t the hardware actually kept.
+                s.append("  uint t"); app_uint(s, pres); s.append(" = hit"); app_uint(s, res); s.append(" ? rq"); app_uint(s, res);
+                s.append(".CommittedPrimitiveIndex() : 0xFFFFFFFFu;\n");
+
+                temped[static_cast<crd::usize>(st.result)] = 1U;
+                temped[static_cast<crd::usize>(g.stmt_ext_operand(st, 9))] = 1U;
+                temped[static_cast<crd::usize>(g.stmt_ext_operand(st, 10))] = 1U;
+                ++i;
+                break;
+            }
             case KStmtKind::TraceRayClosest: // B9/RT-1: inline DXR ray query — closest-hit distance `t` (or tmax on miss)
             {
                 for (int k = 0; k < 8; ++k) { decl(decl, g.stmt_ext_operand(st, k)); }
@@ -441,6 +519,7 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
     s.append("}\n");
     return ok;
 }
+// NOLINTEND(readability-function-size)
 
 // The bare HLSL matrix spelling: `floatRxC` = R ROWS by C columns. This is the TRANSPOSE of GLSL's `matCxR`
 // (ckir_glsl.hpp) -- the single most dangerous asymmetry in this file. It is also why every matrix construction below

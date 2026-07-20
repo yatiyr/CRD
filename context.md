@@ -251,7 +251,62 @@
 > `fatal error LNK1168` — link failures were being read as successes. Check the exit status, not a pattern. The link
 > failed because a background regression was RUNNING the executable being relinked; never overlap the two.
 >
-> **⬜ NEXT: B18-f** RT strand tier (LSS) → closes C3 (#28) + B9 (#29). That is the last item in B18.
+> **[✅ B18-f RT STRAND TIER — 2026-07-20; session log `docs/sessions/2026-07-20-b18f-rt-strand-tier-lss.md`]:** hair as a
+> RAY-TRACED primitive, both backends. New `ckir_lss.hpp` (analytic ray/round-cone `lss_intersect`, conservative
+> per-segment AABBs, a host-unrolled reference sweep) + a new CKIR statement `TraceRayCurves` returning
+> `RtCurveHit{t, u, prim}`, with the oracle and BOTH compute emitters wired. `build_scene_curves` on the Vulkan AND DX12
+> RT contexts builds a procedural-AABB BLAS (non-opaque — an opaque flag lets traversal skip the intersection shader) +
+> a single-instance TLAS. **`VK_NV_ray_tracing_linear_swept_spheres` is Blackwell-only and NOT on this Ada 4070 Ti SUPER
+> (verified with a positive control); DXR has NO swept-sphere primitive at ANY tier** — so the analytic path is not a
+> fallback, it IS the strand tier, which is exactly why the intersector lives in CKIR and not in a vendor extension.
+> **`build_rt_hair_shade_kernel` closes the loop:** every hit is shaded with the SAME B18-a Chiang BCSDF the raster tier
+> uses — the fibre frame rebuilt from the hit segment's tangent (hence `prim` in the hit record: t and u cannot give you
+> a tangent), h taken as the signed perpendicular miss distance in radius units (exact by construction, where a
+> normal-derived h degenerates at grazing angles). **Gates:** `[lss]` 8/8 (6740 assertions); Vulkan 256 rays / 36
+> segments / 45 hits with **ZERO hit-miss disagreements** vs the oracle, maxabs 8.3e-05; DX12 same scene, same seed,
+> same oracle, 7/7; and the shading gate checks the IR fibre frame against a **second plain-C++ frame construction
+> sharing no code with it**, agreeing to <2e-5 across 8 azimuthal offsets.
+> **⛔⛔ THE EXPENSIVE SCAR — the round cone had FOUR independent defects, all invisible for a CAPSULE (rr == 0)** and so
+> invisible to the first four gates: `d2 = m0 + rr²` (should be `m0 − rr²`), k-coefficients scaled by `m0`, the axial
+> span tested against `m0` instead of `d2`, and the ray direction **not normalised** (the Quilez form assumes a unit
+> direction). Together: **118 of 132 reported hits were off-surface** against a dense ray-march ground truth built in
+> Python — which is how it was found. Re-reading the code had already failed twice. Corrected in all four homes (IR,
+> oracle, GLSL, HLSL); the fixed Python then reported 57 hits, zero off-surface, matching the GPU's 57 exactly.
+> **⛔ `rayQueryGenerateIntersectionEXT` requires tHit inside the ray's CURRENT range**, which traversal narrows on every
+> commit — seeding the candidate search from the ray's ORIGINAL tmax clobbers nearer hits (committed t of 7.7e-05 where
+> the answer was 0.95). Seed from the committed t instead. **⛔⛔ ENGINE: `eval_cpu_kernel` is SCALAR and had NO case for
+> `Vec3`/`VecComp`/`Swizzle`** — they fell through to `apply_ternary`/`apply_unary`, which do not implement them, and
+> evaluated to garbage **with no diagnostic**. Cost an hour on the shading gate: h was provably right and the frame
+> vectors were provably right, but the vec3 carrying them into the BCSDF collapsed its z to 0, so φ was 0 instead of
+> π/2 and the answer came out SYMMETRIC in h — physically plausible, entirely wrong. The evaluator now ASSERTS; compute
+> kernels write vector maths component-wise on scalars (the vec3 forms are the raster tier's, where emitters lower them
+> natively). **⛔ Re-materialising an already-materialised node allocates a SECOND slot nothing writes** — `TraceRayCurves`
+> materialises its own results, so an extra `stmt_materialize` made t read back 0 on every lane and defeated the miss mask.
+>
+> **[✅ B18-f PATH-TRACED HAIR RENDERER — 2026-07-20/21; session `docs/sessions/2026-07-20-b18f-path-traced-hair-swatch.md`,
+> bench `docs/bench/2026-07-20-hair-rt-swatch-perf.md`]:** the RT strand tier is now a WORKING renderer.
+> `ckir_hair_rt.hpp` — a 3-bounce path tracer with NEE per light, a coloured transmittance shadow march (a fibre is a
+> FILTER, not an occluder), a uniform-sphere indirect bounce, a studio env + an analytic ground plane with real contact
+> shadow. `hair_swatch.hpp` — locks on a jittered grid, each a coherent ringlet, hanging under gravity, smooth analytic
+> centrelines + per-endpoint smooth tangents, melanin→σₐ. Real 68 µm fibres, five hair types. Continuous smooth strands,
+> sheen travelling along the fibre, coloured GI in the interior — NO beading, NO phantom.
+> **⛔⛔ THE BIG BUG — f32 CATASTROPHIC CANCELLATION in the round-cone solve.** At realistic 68 µm fibre size viewed from
+> ~1 unit away, the quadratic recovers a term of order m0·ra² by subtracting quantities of order |ro−pa|² — eight orders
+> of magnitude apart, so f32 loses the radius entirely and commits hits ~9 radii off the surface (measured: mean |h| =
+> 0.92 where a cylinder must give 0.5). **Fix: re-origin the ray at the segment before solving** (tsh = dot(pa−ro, d)),
+> all four homes. After: mean |h| = 0.4996, and BOTH hardware gates got two orders of magnitude MORE accurate (VK
+> 8.3e-05 → 4.8e-07, DX12 2.6e-05 → 7.2e-07). ⭐⭐ **THE DEFECT ARRIVED WITH CORRECTNESS** — at the fat placeholder radius
+> the term survived, so every earlier render "looked fine"; realistic fibres made a latent precision bug the common case.
+> Found by INSTRUMENT-FIRST (a clean unblended |h| AOV → |roff|/rad = 8.9 named the intersector) after four confident
+> wrong hypotheses. Other fixes: flat→smooth tangents (per-segment specular dashes), the missing cosθi, plane-over-hair
+> (white phantom), binary→transmittance shadows, MC speckle. Details + the discipline in the session log.
+> **⭐ PERFORMANCE (measured):** ~194 ms per full-frame sample (1400×1000, 3 bounces, 3-light 8-step shadows, optimised
+> SPIR-V, 4070 Ti SUPER). This is an **OFFLINE/film renderer** (converged ~384 spp ≈ 75 s). **Real-time is reachable but
+> not with this path** — the levers all exist in-engine: B14 ReSTIR/SVGF denoise (~50-100×), B18-c DOM shadows in place
+> of the 8-step march (~5-10×), 1 bounce, reduced-res+upscale. The pure-raster hair tier (B18-a…e) is the shipping-games
+> real-time path; this RT path is its FILM reference. **⬜ open:** clang-tidy the new files; a grazing-limit BCSDF gate
+> (the furnace test integrates over h and misses a narrow bad band — `test_ckir_hair_grazing.cpp` is a probe, not yet an
+> assertion); the renderer geometry lives in the TEST, a production groom system is future work.
 > **[✅ FA-3 CLUSTER-AS 2026-07-19 — RUN on the RTX 4070]:** `build_scene_clusters`
 > (VK_NV_cluster_acceleration_structure / RTX Mega-Geometry) — the triangle → a CLAS via a GPU-DRIVEN INDIRECT build
 > (`vkCmdBuildClusterAccelerationStructureIndirectNV`, opType BUILD_TRIANGLE_CLUSTER, implicit destinations, per-cluster

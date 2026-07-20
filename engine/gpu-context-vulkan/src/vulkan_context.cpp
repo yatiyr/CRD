@@ -90,6 +90,7 @@ public:
     [[nodiscard]] bool     rt_pipeline() const noexcept override { return m_rt_pipeline; }           // FA-2
     [[nodiscard]] bool     invocation_reorder() const noexcept override { return m_invocation_reorder; } // FA-2 SER
     [[nodiscard]] bool     cluster_as() const noexcept override { return m_cluster_as; }             // FA-3
+    [[nodiscard]] bool     linear_swept_spheres() const noexcept override { return m_lss; }          // B18-f
     [[nodiscard]] bool     tessellation() const noexcept override { return m_tessellation; } // B4-tess: tess + patch-ctrl-points
     [[nodiscard]] bool     render_capable() const noexcept override { return m_windowed; }
     [[nodiscard]] bool       fragment_shading_rate() const noexcept override { return m_fragment_shading_rate; } // B1-e
@@ -295,12 +296,14 @@ private:
         bool has_rtpipe    = false; // FA-2: VK_KHR_ray_tracing_pipeline (raygen/hit/miss + SBT)
         bool has_ser       = false; // FA-2: VK_NV_ray_tracing_invocation_reorder (shader execution reordering)
         bool has_cluster   = false; // FA-3: VK_NV_cluster_acceleration_structure (mega-geometry cluster BLAS)
+        bool has_lss       = false; // B18-f: VK_NV_ray_tracing_linear_swept_spheres (native curve/strand primitive)
         for (std::uint32_t i = 0; i < ne; ++i)
         {
             if (std::strcmp(exts[i].extensionName, "VK_EXT_opacity_micromap") == 0) { has_omm = true; }
             if (std::strcmp(exts[i].extensionName, "VK_KHR_ray_tracing_pipeline") == 0) { has_rtpipe = true; }
             if (std::strcmp(exts[i].extensionName, "VK_NV_ray_tracing_invocation_reorder") == 0) { has_ser = true; }
             if (std::strcmp(exts[i].extensionName, "VK_NV_cluster_acceleration_structure") == 0) { has_cluster = true; }
+            if (std::strcmp(exts[i].extensionName, VK_NV_RAY_TRACING_LINEAR_SWEPT_SPHERES_EXTENSION_NAME) == 0) { has_lss = true; }
             if (std::strcmp(exts[i].extensionName, VK_EXT_MESH_SHADER_EXTENSION_NAME) == 0) { has_mesh = true; } // B4
             if (std::strcmp(exts[i].extensionName, "VK_KHR_cooperative_matrix") == 0) { has_cm1 = true; }
             if (std::strcmp(exts[i].extensionName, "VK_NV_cooperative_matrix2") == 0) { has_cm2 = true; }
@@ -340,6 +343,7 @@ private:
         m_rt_pipeline       = m_ray_query && has_rtpipe;
         m_invocation_reorder = m_ray_query && has_rtpipe && has_ser;
         m_cluster_as        = m_ray_query && has_cluster;
+        m_lss               = m_ray_query && has_lss;
         // C2-a: render-capable iff surface (instance) + swapchain (device) + a graphics queue all present.
         m_windowed = surface_ok && has_swapchain && m_graphics_family != UINT32_MAX;
 
@@ -546,23 +550,28 @@ private:
         VkPhysicalDeviceRayTracingPipelineFeaturesKHR rtp_feat{}; rtp_feat.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR;
         VkPhysicalDeviceRayTracingInvocationReorderFeaturesNV ser_feat{}; ser_feat.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_INVOCATION_REORDER_FEATURES_NV;
         VkPhysicalDeviceClusterAccelerationStructureFeaturesNV clu_feat{}; clu_feat.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CLUSTER_ACCELERATION_STRUCTURE_FEATURES_NV;
-        if (m_opacity_micromap || m_rt_pipeline || m_invocation_reorder || m_cluster_as)
+        VkPhysicalDeviceRayTracingLinearSweptSpheresFeaturesNV lss_feat{}; lss_feat.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_LINEAR_SWEPT_SPHERES_FEATURES_NV;
+        if (m_opacity_micromap || m_rt_pipeline || m_invocation_reorder || m_cluster_as || m_lss)
         {
             void* pf = nullptr;
             if (m_opacity_micromap) { omm_feat.pNext = pf; pf = &omm_feat; }
             if (m_rt_pipeline) { rtp_feat.pNext = pf; pf = &rtp_feat; }
             if (m_invocation_reorder) { ser_feat.pNext = pf; pf = &ser_feat; }
             if (m_cluster_as) { clu_feat.pNext = pf; pf = &clu_feat; }
+            if (m_lss) { lss_feat.pNext = pf; pf = &lss_feat; }
             VkPhysicalDeviceFeatures2 f2{}; f2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2; f2.pNext = pf;
             vkGetPhysicalDeviceFeatures2(m_physical, &f2);
             m_opacity_micromap   = m_opacity_micromap && omm_feat.micromap == VK_TRUE;
             m_rt_pipeline        = m_rt_pipeline && rtp_feat.rayTracingPipeline == VK_TRUE;
             m_invocation_reorder = m_invocation_reorder && ser_feat.rayTracingInvocationReorder == VK_TRUE;
             m_cluster_as         = m_cluster_as && clu_feat.clusterAccelerationStructure == VK_TRUE;
+            // the extension can be PRESENT while the feature bit is false — trust the bit, not the string
+            m_lss                = m_lss && lss_feat.linearSweptSpheres == VK_TRUE;
             { VkPhysicalDeviceOpacityMicromapFeaturesEXT z{}; z.sType = omm_feat.sType; z.micromap = omm_feat.micromap; omm_feat = z; }
             { VkPhysicalDeviceRayTracingPipelineFeaturesKHR z{}; z.sType = rtp_feat.sType; z.rayTracingPipeline = rtp_feat.rayTracingPipeline; rtp_feat = z; }
             { VkPhysicalDeviceRayTracingInvocationReorderFeaturesNV z{}; z.sType = ser_feat.sType; z.rayTracingInvocationReorder = ser_feat.rayTracingInvocationReorder; ser_feat = z; }
             { VkPhysicalDeviceClusterAccelerationStructureFeaturesNV z{}; z.sType = clu_feat.sType; z.clusterAccelerationStructure = clu_feat.clusterAccelerationStructure; clu_feat = z; }
+            { VkPhysicalDeviceRayTracingLinearSweptSpheresFeaturesNV z{}; z.sType = lss_feat.sType; z.spheres = lss_feat.spheres; z.linearSweptSpheres = lss_feat.linearSweptSpheres; lss_feat = z; }
         }
 
         // Build the pNext chain head-first: dyn → [demote] → [vrs] → [eds3] → [sync2] → [sho] → [mesh] → [coopmat…] → [RT].
@@ -582,6 +591,7 @@ private:
         if (m_rt_pipeline) { rtp_feat.pNext = chain; chain = &rtp_feat; }
         if (m_invocation_reorder) { ser_feat.pNext = chain; chain = &ser_feat; }
         if (m_cluster_as) { clu_feat.pNext = chain; chain = &clu_feat; }
+        if (m_lss) { lss_feat.pNext = chain; chain = &lss_feat; }
 
         const char* devexts[28];
         crd::u32    ndevext = 0;
@@ -614,6 +624,7 @@ private:
         if (m_rt_pipeline) { devexts[ndevext++] = "VK_KHR_ray_tracing_pipeline"; }                        // FA-2
         if (m_invocation_reorder) { devexts[ndevext++] = "VK_NV_ray_tracing_invocation_reorder"; }        // FA-2 SER
         if (m_cluster_as) { devexts[ndevext++] = "VK_NV_cluster_acceleration_structure"; }                // FA-3
+        if (m_lss) { devexts[ndevext++] = VK_NV_RAY_TRACING_LINEAR_SWEPT_SPHERES_EXTENSION_NAME; }        // B18-f
 
         VkDeviceCreateInfo dci{};
         dci.sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -655,6 +666,7 @@ private:
     bool             m_rt_pipeline           = false; // FA-2: VK_KHR_ray_tracing_pipeline
     bool             m_invocation_reorder    = false; // FA-2: VK_NV_ray_tracing_invocation_reorder (SER)
     bool             m_cluster_as            = false; // FA-3: VK_NV_cluster_acceleration_structure
+    bool             m_lss                   = false; // B18-f: VK_NV_ray_tracing_linear_swept_spheres
     bool             m_tessellation          = false; // B4-tess: tessellationShader + EDS2 patch-control-points enabled
     bool             m_valid           = false;
     char             m_name[256]       = {};

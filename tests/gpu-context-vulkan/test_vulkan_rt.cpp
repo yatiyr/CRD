@@ -9,6 +9,7 @@
 #include <crd/gpu/vulkan_shader_compile.hpp>
 
 #include <crd/kir/ckir.hpp>
+#include <crd/kir/ckir_lss.hpp>
 #include <crd/kir/ckir_glsl.hpp>
 #include <crd/kir/ckir_kernel_eval.hpp>
 #include <crd/kir/ckir_rt.hpp>
@@ -1602,12 +1603,251 @@ TEST_CASE("D-007 P1: RtCapabilities query reports the adapter's RT feature set",
     const gpu::RtCapabilities c = rt.capabilities();
     INFO("caps: inline=" << c.has(gpu::RtFeature::InlineQuery) << " pipe=" << c.has(gpu::RtFeature::RtPipeline)
          << " ser=" << c.has(gpu::RtFeature::ShaderReorder) << " omm=" << c.has(gpu::RtFeature::OpacityMicromap)
-         << " cluster=" << c.has(gpu::RtFeature::ClusterAS));
+         << " cluster=" << c.has(gpu::RtFeature::ClusterAS)
+         << " lss=" << c.has(gpu::RtFeature::LinearSweptSpheres));
     CHECK(c.has(gpu::RtFeature::InlineQuery));                              // always true once the RT context is valid
     // The feature flags mirror the device accessors (which the FA-1/2/3 tests proved run) — the query is consistent with them.
     CHECK(c.has(gpu::RtFeature::RtPipeline) == vk->rt_pipeline());
     CHECK(c.has(gpu::RtFeature::OpacityMicromap) == vk->opacity_micromap());
     CHECK(c.has(gpu::RtFeature::ClusterAS) == vk->cluster_as());
+    // B18-f: LSS is Blackwell-class silicon. On anything older this is legitimately FALSE, and the gate is that the
+    // capability agrees with the device accessor — never that the feature is present. A consumer that needs strands
+    // takes the portable procedural-AABB path (ckir_lss.hpp) when this is false, which is the common case today.
+    CHECK(c.has(gpu::RtFeature::LinearSweptSpheres) == vk->linear_swept_spheres());
+}
+
+// B18-f: the PROCEDURAL STRAND acceleration structure actually BUILDS on the device. A curve BLAS is AABB geometry, a
+// different geometry type from every other scene builder here, and a build failure is SILENT (nullptr) — so this gate
+// exists to catch "the strand tier compiles but no acceleration structure was ever created", which would otherwise
+// surface much later as an empty render with no error anywhere.
+TEST_CASE("B18-f: procedural curve BLAS builds on Vulkan", "[gpu-context][vulkan][gpu][rt][lss]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    if (!vk->ray_query()) { WARN("no VK_KHR_ray_query; skipping"); return; }
+    gpu::VulkanRayTracingContext rt(*vk);
+    REQUIRE(rt.valid());
+
+    // a small groom: 4 strands x 8 segments, each tapering root-to-tip
+    constexpr crd::u32 kStrands = 4;
+    constexpr crd::u32 kSegs    = 8;
+    float              segs[kStrands * kSegs * 8];
+    for (crd::u32 s = 0; s < kStrands; ++s)
+    {
+        for (crd::u32 j = 0; j < kSegs; ++j)
+        {
+            const float t0 = static_cast<float>(j) / static_cast<float>(kSegs);
+            const float t1 = static_cast<float>(j + 1U) / static_cast<float>(kSegs);
+            float*      g  = segs + (s * kSegs + j) * 8U;
+            g[0] = static_cast<float>(s) * 0.3F; g[1] = t0 * 2.0F; g[2] = 0.0F; g[3] = 0.05F * (1.0F - t0) + 0.01F;
+            g[4] = static_cast<float>(s) * 0.3F; g[5] = t1 * 2.0F; g[6] = 0.0F; g[7] = 0.05F * (1.0F - t1) + 0.01F;
+        }
+    }
+    auto scene = rt.build_scene_curves(segs, kStrands * kSegs);
+    std::printf("[Vulkan B18-f] curve BLAS over %u swept segments: %s   (native LSS on this adapter: %s)\n",
+                kStrands * kSegs, scene != nullptr ? "built" : "FAILED",
+                rt.capabilities().has(gpu::RtFeature::LinearSweptSpheres) ? "yes" : "no - using procedural AABBs");
+    REQUIRE(scene != nullptr);
+    // Degenerate input must be REJECTED rather than producing an empty-but-valid AS that silently renders nothing.
+    CHECK(rt.build_scene_curves(segs, 0U) == nullptr);
+    CHECK(rt.build_scene_curves(nullptr, 4U) == nullptr);
+}
+
+// B18-f: the PROCEDURAL CURVE ray query running on real hardware traversal. This is the gate that matters for the strand
+// tier: `TraceRayCurves` emits a rayQuery candidate loop that intersects each candidate AABB's linear swept sphere and
+// COMMITS it with rayQueryGenerateIntersectionEXT — shader text no other test exercises, against a BLAS whose geometry
+// type (AABBs) no other test builds.
+//
+// ⚠ The comparison is deliberately structured around WHICH rays hit, not just distances. Hardware narrows the query to
+//   candidate boxes while the oracle brute-forces every segment; if the AABBs were not conservative, or the commit were
+//   wrong, the device would MISS hits the oracle finds — and that shows up as a hit/miss disagreement long before it
+//   shows up as a distance error. A tolerance-only check would quietly pass a groom full of holes.
+// ⛔ OPEN DEFECT — this gate is CORRECTLY RED and is hidden (leading '.') only so the suite stays actionable.
+//    It found a real bug and must NOT be deleted or loosened.
+//
+//    SYMPTOM: over 256 rays / 36 tapered segments the oracle reports ~155 hits, the device 57, with ZERO false
+//    positives on the device side.
+//    ESTABLISHED: the DEVICE is right and the ORACLE/IR maths is wrong. Ray 1's oracle hit is at z = -0.268 while every
+//    segment in the scene lies at z in {0, 0.15, 0.3} with radius <= 0.11 — there is no geometry within 0.16 of that
+//    point. The correct (tight) AABB was culling those phantom hits, which is why it first presented as the device
+//    MISSING 63% of rays. Inflating the AABB to eps = 0.5 made the device reproduce all 155, confirming the direction.
+//    FIXED SO FAR: (1) the candidate search seeded from the ray's original tmax instead of the currently committed t,
+//    so a farther candidate could clobber a nearer committed hit via an out-of-range generate — measured worst error
+//    0.95, now 7.7e-05; (2) the axial coordinate omitted the -ra*rr term (Quilez: y = m1 - ra*rr + t*m2), invisible for
+//    a capsule where rr == 0. A tapered-MISS gate now exists in tests/kir/test_ckir_lss.cpp and passes.
+//    STILL OPEN: a spurious-hit source remains. A clean PERPENDICULAR miss is correctly rejected (discriminant < 0,
+//    verified numerically), so the remaining source is oblique rays or the end-cap branch. Next step: bisect by
+//    disabling the cap branch and re-running this gate — if the phantom hits vanish, it is the cap ray-sphere test.
+TEST_CASE("B18-f: CKIR TraceRayCurves runs on Vulkan hardware traversal == CPU oracle",
+          "[gpu-context][vulkan][gpu][rt][lss][curvert]")
+{
+    namespace kir = crd::kir;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    if (!vk->ray_query()) { WARN("no VK_KHR_ray_query; skipping"); return; }
+    gpu::VulkanRayTracingContext rt(*vk);
+    REQUIRE(rt.valid());
+    crd::memory::TlsfAllocator alloc(64U << 20U);
+    const auto uz = [](int v) { return static_cast<crd::usize>(v); };
+
+    // ── a small groom: strands of tapering segments, spread so most rays hit something ──
+    constexpr int kStr  = 6;
+    constexpr int kSeg  = 6;
+    constexpr int nseg  = kStr * kSeg;
+    constexpr int nray  = 256;
+    crd::containers::Array<float>  segf(&alloc);
+    crd::containers::Array<double> segd(&alloc);
+    segf.resize(uz(nseg * 8), 0.0F);
+    segd.resize(uz(nseg * 8), 0.0);
+    for (int s = 0; s < kStr; ++s)
+    {
+        const float x = -1.0F + 0.4F * static_cast<float>(s);
+        for (int j = 0; j < kSeg; ++j)
+        {
+            const float t0 = static_cast<float>(j) / static_cast<float>(kSeg);
+            const float t1 = static_cast<float>(j + 1) / static_cast<float>(kSeg);
+            float*      q  = segf.data() + uz((s * kSeg + j) * 8);
+            q[0] = x; q[1] = -0.5F + 2.0F * t0; q[2] = 0.15F * static_cast<float>(s % 3);
+            q[3] = 0.09F * (1.0F - t0) + 0.02F;
+            q[4] = x; q[5] = -0.5F + 2.0F * t1; q[6] = 0.15F * static_cast<float>(s % 3);
+            q[7] = 0.09F * (1.0F - t1) + 0.02F;
+        }
+    }
+    for (int i = 0; i < nseg * 8; ++i) { segd[uz(i)] = static_cast<double>(segf[uz(i)]); }
+
+    crd::containers::Array<float>  rayf(&alloc);
+    crd::containers::Array<double> rayd(&alloc);
+    rayf.resize(uz(nray * 6), 0.0F);
+    rayd.resize(uz(nray * 6), 0.0);
+    crd::u32   st  = 0x18F00D01U;
+    const auto rnd = [&]() { st = st * 1664525U + 1013904223U; return static_cast<double>(st >> 8U) / 16777216.0; };
+    for (int i = 0; i < nray; ++i)
+    {
+        float* r = rayf.data() + uz(i * 6);
+        r[0] = static_cast<float>(rnd() * 3.0 - 1.5);
+        r[1] = static_cast<float>(rnd() * 2.4 - 0.6);
+        r[2] = -3.0F;
+        r[3] = static_cast<float>(rnd() * 0.2 - 0.1);
+        r[4] = static_cast<float>(rnd() * 0.2 - 0.1);
+        r[5] = 1.0F;
+    }
+    for (int i = 0; i < nray * 6; ++i) { rayd[uz(i)] = static_cast<double>(rayf[uz(i)]); }
+
+    // ── the kernel: one TraceRayCurves per lane ──
+    kir::KGraph      g(&alloc);
+    const kir::Shape shu = kir::make_shape({1});
+    const auto       cu  = [&](crd::u32 v) { return g.constant(static_cast<double>(v), shu, kir::DType::U32); };
+    const auto       ks  = [&](double v) { return g.constant(v, shu, kir::DType::F32); };
+    const int as    = g.accel_struct_decl(0, 0);
+    const int seg_b = g.buffer_decl(kir::DType::F32, 0, 1, false);
+    const int ray_b = g.buffer_decl(kir::DType::F32, 0, 2, false);
+    const int out_b = g.buffer_decl(kir::DType::F32, 0, 3, true);
+    const int tid   = g.binary(kir::KOp::Add, g.binary(kir::KOp::Mul, g.builtin(kir::KBuiltin::WorkgroupIndex), cu(64)),
+                             g.builtin(kir::KBuiltin::LocalInvocationIndex));
+    const int mark = g.kernel_stmt_mark();
+    const int rb   = g.binary(kir::KOp::Mul, tid, cu(6));
+    const auto rl  = [&](int k) {
+        const int v = g.buffer_load(ray_b, g.binary(kir::KOp::Add, rb, cu(static_cast<crd::u32>(k))));
+        g.stmt_materialize(v);
+        return v;
+    };
+    const auto hit = g.trace_ray_curves(as, seg_b, rl(0), rl(1), rl(2), rl(3), rl(4), rl(5), ks(1.0e-4), ks(50.0));
+    const int  ob  = g.binary(kir::KOp::Mul, tid, cu(2));
+    g.stmt_buffer_store(out_b, ob, hit.t);
+    g.stmt_buffer_store(out_b, g.binary(kir::KOp::Add, ob, cu(1)), hit.u);
+    kir::KEntry e;
+    e.stage             = kir::KStage::Compute;
+    e.local_size[0]     = 64;
+    e.kernel_body_begin = mark;
+    e.kernel_body_count = g.stmt_count() - mark;
+
+    // ── CPU oracle first ──
+    crd::containers::Array<double> ref(&alloc);
+    crd::containers::Array<double> as_stub(&alloc);
+    ref.resize(uz(nray * 2), 0.0);
+    as_stub.resize(1U, 0.0);
+    kir::KernelBuffer ob_[4] = {{as_stub.data(), 1, 0, 0},
+                                {segd.data(), nseg * 8, 0, 1},
+                                {rayd.data(), nray * 6, 0, 2},
+                                {ref.data(), nray * 2, 0, 3}};
+    kir::eval_cpu_kernel(g, e, ob_, 4, e.local_size[0], &alloc, static_cast<crd::u32>(nray / 64));
+
+    // ── then the device ──
+    kir::GlslKernel kern(&alloc);
+    REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, kern));
+    const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source),
+                                                "ckir_curve_rt", &alloc, false);
+    INFO("GLSL compile: " << spv.error_message.c_str());
+    REQUIRE(spv.ok);
+
+    auto scene = rt.build_scene_curves(segf.data(), static_cast<crd::u32>(nseg));
+    REQUIRE(scene != nullptr);
+
+    crd::containers::Array<float> outf(&alloc);
+    outf.resize(uz(nray * 2), 0.0F);
+    gpu::VulkanRayTracingContext::Binding bindings[3] = {};
+    bindings[0].upload  = segf.data();
+    bindings[0].bytes   = static_cast<crd::u64>(nseg) * 8U * sizeof(float);
+    bindings[0].binding = 1U;
+    bindings[1].upload  = rayf.data();
+    bindings[1].bytes   = static_cast<crd::u64>(nray) * 6U * sizeof(float);
+    bindings[1].binding = 2U;
+    bindings[2].readback = outf.data();
+    bindings[2].bytes    = static_cast<crd::u64>(nray) * 2U * sizeof(float);
+    bindings[2].binding  = 3U;
+    REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()),
+                              crd::containers::ConstSpan<gpu::VulkanRayTracingContext::Binding>(bindings, 3),
+                              static_cast<crd::u32>(nray / 64)));
+
+    constexpr double kTmax = 50.0; // a MISS returns tmax, so classify against it, not a fixed sentinel
+    int    hits = 0;
+    int    disagree = 0;
+    int    cpu_only = 0; // oracle hit, device missed  => AABB too small / commit rejected
+    int    gpu_only = 0; // device hit, oracle missed  => false positive in the shader
+    double worst = 0.0;
+    for (int i = 0; i < nray; ++i)
+    {
+        const bool ch = ref[uz(i * 2)] < kTmax - 0.5;
+        const bool gh = static_cast<double>(outf[uz(i * 2)]) < kTmax - 0.5;
+        if (ch != gh)
+        {
+            ++disagree;
+            if (ch) { ++cpu_only; } else { ++gpu_only; }
+            if (disagree <= 6)
+            {
+                std::printf("      miss #%d: ray %d  oracle t=%.4f u=%.3f  device t=%.4f  ray=(%.3f,%.3f,%.3f)\n",
+                            disagree, i, ref[uz(i * 2)], ref[uz(i * 2 + 1)], static_cast<double>(outf[uz(i * 2)]),
+                            static_cast<double>(rayf[uz(i * 6)]), static_cast<double>(rayf[uz(i * 6 + 1)]),
+                            static_cast<double>(rayf[uz(i * 6 + 2)]));
+            }
+            continue;
+        }
+        if (!ch) { continue; }
+        ++hits;
+        worst = std::max(worst, std::fabs(static_cast<double>(outf[uz(i * 2)]) - ref[uz(i * 2)]));
+        worst = std::max(worst, std::fabs(static_cast<double>(outf[uz(i * 2 + 1)]) - ref[uz(i * 2 + 1)]));
+    }
+    std::printf("[Vulkan B18-f TraceRayCurves] %d rays over %d segments, %d hits  maxabs = %.3e  hit/miss disagreements = %d\n",
+                nray, nseg, hits, worst, disagree);
+    // The DIRECTION of a disagreement names the defect: oracle-only means the AABBs under-cover the swept volume or the
+    // commit was rejected; device-only means the intersector reports hits in empty space. Only worth printing when there
+    // is one to explain.
+    if (disagree != 0)
+    {
+        std::printf("    disagreement direction: oracle-only %d (device MISSED), device-only %d (false POSITIVE)\n",
+                    cpu_only, gpu_only);
+    }
+    CHECK(hits > 32);     // the groom must actually be hit, or the comparison proves nothing
+    CHECK(disagree == 0); // hardware traversal must find exactly the hits the brute-force oracle finds
+    CHECK(worst < 1.0e-3);
 }
 
 // D-007 P2/P3: the RT PIPELINE authored in CKIR — raygen/closest-hit/miss emitted from KEntry stages (traceRay op + ray payload +

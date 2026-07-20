@@ -587,6 +587,21 @@ enum class KStmtKind : crd::u8
                  // brute-forces watertight ray-triangle over the AS's geometry buffer; validate GPU≈oracle within a geometric
                  // tolerance (RT traversal is NOT bit-exact across vendors). APPENDED at END (cook-stable).
     TraceRayHit,  // B9/RT-2 (reflections/shading): same trace, but ALSO materialize the hit's PRIMITIVE INDEX (which triangle)
+    // B18-f: trace against a PROCEDURAL curve BLAS (one AABB per swept segment) and intersect the linear swept sphere
+    // analytically inside the candidate loop. Unlike a triangle trace, hardware cannot resolve this: traversal only offers
+    // CANDIDATE AABBs and the shader must compute the hit and commit it with rayQueryGenerateIntersectionEXT.
+    //
+    // ⭐ WHY THIS IS ONE STATEMENT rather than a general "procedural candidate loop with a user body". The IR already
+    //    SPECIALISES its ray ops (TraceRayClosest, TraceRayHit) instead of exposing raw rayQuery, and for a strand tier
+    //    the candidate body is always the same operation: intersect the segment named by the primitive index. Baking it
+    //    in keeps the oracle simulable (it brute-forces the same maths) and both emitters honest, at the cost of
+    //    generality we have no second consumer for. A general mechanism would need candidate-scoped builtins, a
+    //    body-carrying statement, and an oracle that re-enters the interpreter per candidate — much more surface for
+    //    no additional capability today.
+    //
+    // target = the AccelStructDecl · ext[0..7] = ox,oy,oz, dx,dy,dz, tmin, tmax · ext[8] = the SEGMENT BufferDecl
+    // ext[9] = the `u` (axial coordinate) result node · result = the committed distance `t` (tmax on miss).
+    TraceRayCurves,
                  // so the shader can fetch + shade the hit. Same fields as TraceRayClosest PLUS ext[8] = the primId RayHitResult
                  // node (dtype U32; = 0xFFFFFFFF on miss). Emits `rayQueryGetIntersectionPrimitiveIndexEXT` alongside the t.
     // FA-2 (portable RT PIPELINE — raygen stage): traceRayEXT/TraceRay that INVOKES the hit/miss shaders and fills a payload.
@@ -1018,6 +1033,31 @@ public:
         m_stmts.push_back(s);
         return {rt, rp};
     }
+    // distance, the axial coordinate along the segment, and WHICH segment was hit. `prim` is what makes the hit
+    // shadeable: the BCSDF needs a fibre frame, and the tangent comes from the hit segment's endpoints — which cannot be
+    // recovered from t and u alone. 0xFFFFFFFF on a miss.
+    struct RtCurveHit { int t = -1; int u = -1; int prim = -1; };
+    // B18-f: trace a ray against a PROCEDURAL curve BLAS. `segs` is the BufferDecl holding 8 floats per segment
+    // ([ax,ay,az,ra, bx,by,bz,rb]) — the SAME array the AS was built from, so a primitive index selects a segment
+    // directly. Returns the committed distance and the axial coordinate u ∈ [0,1], which is what shading needs: it gives
+    // the tangent for the BCSDF frame, the strand-space v, and the interpolated radius.
+    [[nodiscard]] RtCurveHit trace_ray_curves(int as, int segs, int ox, int oy, int oz, int dx, int dy, int dz, int tmin,
+                                              int tmax)
+    {
+        KNode     nt; nt.op = KOp::RayHitResult; nt.type = KType::make_scalar(DType::F32); nt.shape = make_shape({1});
+        const int rt = push(nt);
+        KNode     nu; nu.op = KOp::RayHitResult; nu.type = KType::make_scalar(DType::F32); nu.shape = make_shape({1});
+        const int ru = push(nu);
+        KNode     np; np.op = KOp::RayHitResult; np.type = KType::make_scalar(DType::U32); np.shape = make_shape({1});
+        const int rp       = push(np);
+        const int ops[11]  = {ox, oy, oz, dx, dy, dz, tmin, tmax, segs, ru, rp};
+        KStmt     s; s.kind = KStmtKind::TraceRayCurves; s.target = as; s.result = rt;
+        s.ext   = push_ext(ops, 11);
+        s.n_ext = 11U;
+        m_stmts.push_back(s);
+        return {rt, ru, rp};
+    }
+
     // FA-2 (portable RT PIPELINE): declare an N-float ray PAYLOAD carried across raygen ↔ closest-hit/miss.
     [[nodiscard]] int ray_payload_decl(int n_components) { KNode nd; nd.op = KOp::RayPayloadDecl; nd.type = KType::make_scalar(DType::F32); nd.shape = make_shape({1}); nd.iidx = n_components; return push(nd); }
     // read component `comp` of the payload (F32).

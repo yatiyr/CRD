@@ -1,0 +1,271 @@
+    // ── THE PATH ─────────────────────────────────────────────────────────────────────────────────────────────────
+    // NEXT-EVENT ESTIMATION for the sharp direct lighting, plus an INDIRECT bounce for everything else. The split is
+    // the whole reason this converges: the BCSDF's R lobe is only a couple of degrees wide, so sampling it blindly
+    // would almost never find a light — NEE handles that exactly. The indirect ray does not need that precision, so it
+    // samples the sphere UNIFORMLY and pays for it in the weight (f·cosθ·4π). Unbiased, trivial to evaluate, and its
+    // variance is the kind extra samples actually fix.
+    //
+    // ⭐ THIS IS WHAT MAKES HAIR LOOK LIKE HAIR. Direct lighting alone renders a groom as a silhouette: inside the mass
+    //   every point is shadowed from every lamp, so the interior goes black (dark hair) or flat (pale hair). In reality
+    //   most of the light inside hair has bounced between fibres several times, and because each bounce is filtered by
+    //   σₐ that light is deeply SATURATED — the warm glow inside blonde hair is light that has passed through a dozen
+    //   fibres. The throughput here carries exactly that: it is multiplied by the fibre's own coloured response at
+    //   every bounce, so pale hair keeps bouncing and dark hair dies after one, which is precisely the difference
+    //   between the two in life.
+    constexpr double kFar = 1.0e4;
+    constexpr double kTau = 6.28318530717958647692;
+
+    V3  po = ro;
+    V3  pd = rd;
+    int thr[3] = {ks(1.0), ks(1.0), ks(1.0)};
+    int radc[3] = {ks(0.0), ks(0.0), ks(0.0)};
+    int alive   = -1; // built on the first bounce; a miss retires the path by zeroing the throughput
+
+    for (int bounce = 0; bounce < cfg.bounces; ++bounce)
+    {
+        const int    nshadow = bounce == 0 ? cfg.shadow_steps : cfg.shadow_steps_indirect;
+        const crd::u32 bseed = static_cast<crd::u32>(bounce) * 0x9E3779B1U + 0x7F4A7C15U;
+
+        const auto hit = g.trace_ray_curves(as, seg_b, po.x, po.y, po.z, pd.x, pd.y, pd.z, ks(cfg.ray_tmin), ks(kFar));
+        const int  miss = g.binary(KOp::CmpGe, hit.t, ks(kFar - 1.0));
+
+        // ── the ENVIRONMENT the escaped ray gathers. Without one, indirect rays leave and collect nothing, and GI
+        //    contributes exactly zero — a studio has walls and a bright ceiling, and hair picks that up everywhere its
+        //    own lamps do not reach.
+        {
+            const int up = hd::mul(g, hd::add(g, pd.y, ks(1.0)), ks(0.5));
+            for (int c = 0; c < 3; ++c)
+            {
+                const int e = hd::add(g, ks(cfg.env_lo[c]), hd::mul(g, ks(cfg.env_hi[c] - cfg.env_lo[c]), up));
+                radc[c] = hd::add(g, radc[c], g.select(miss, hd::mul(g, thr[c], e), ks(0.0)));
+            }
+        }
+
+        // the hit segment (index clamped on a miss — an out-of-range load is silent corruption on the device)
+        const int prim_c = g.binary(KOp::Min, hit.prim, cu(static_cast<crd::u32>(cfg.segments > 0 ? cfg.segments - 1 : 0)));
+        const int sidx8  = g.select(miss, cu(0), umul(prim_c, cu(8U)));
+        const auto sl = [&](int k) {
+            const int v = g.buffer_load(seg_b, uadd(sidx8, cu(static_cast<crd::u32>(k))));
+            g.stmt_materialize(v);
+            return v;
+        };
+        const V3  pa{sl(0), sl(1), sl(2)};
+        const int ra = sl(3);
+        const V3  pb{sl(4), sl(5), sl(6)};
+        const int rb = sl(7);
+
+        // ⛔⛔ THE TANGENT MUST BE INTERPOLATED, NOT TAKEN FROM THE SEGMENT. normalize(pb - pa) is FLAT shading: the
+        //     tangent steps at every segment boundary, and because the R lobe is razor-sharp in θ (β_m ≈ 0.22) each
+        //     step BREAKS the specular — the highlight comes out chopped into bright dashes one segment long instead
+        //     of travelling down the fibre. Same problem and same fix as vertex normals on a mesh.
+        const int tb_i = umul(g.select(miss, cu(0), prim_c), cu(6U));
+        const auto tl  = [&](int k) {
+            const int v = g.buffer_load(tan_b, uadd(tb_i, cu(static_cast<crd::u32>(k))));
+            g.stmt_materialize(v);
+            return v;
+        };
+        const V3 t0{tl(0), tl(1), tl(2)};
+        const V3 t1{tl(3), tl(4), tl(5)};
+        const V3 traw{hd::add(g, t0.x, hd::mul(g, hd::sub(g, t1.x, t0.x), hit.u)),
+                      hd::add(g, t0.y, hd::mul(g, hd::sub(g, t1.y, t0.y), hit.u)),
+                      hd::add(g, t0.z, hd::mul(g, hd::sub(g, t1.z, t0.z), hit.u))};
+        const int tlen = mx(hd::safe_sqrt(g, dot3(g, traw, traw)), ks(1.0e-20));
+        const int tinv = hd::dv(g, ks(1.0), tlen);
+        const V3  tang{hd::mul(g, traw.x, tinv), hd::mul(g, traw.y, tinv), hd::mul(g, traw.z, tinv)};
+        const int rad  = mx(hd::add(g, ra, hd::mul(g, hd::sub(g, rb, ra), hit.u)), ks(1.0e-20));
+
+        const V3 hp{hd::add(g, po.x, hd::mul(g, hit.t, pd.x)), hd::add(g, po.y, hd::mul(g, hit.t, pd.y)),
+                    hd::add(g, po.z, hd::mul(g, hit.t, pd.z))};
+        const V3 wo{g.unary(KOp::Neg, pd.x), g.unary(KOp::Neg, pd.y), g.unary(KOp::Neg, pd.z)};
+
+        // h = signed perpendicular miss distance / radius, along normalize(T × ωo) — exact by construction, where an
+        // h recovered from the surface normal degenerates at grazing angles.
+        const V3  cr0{hd::sub(g, hd::mul(g, tang.y, wo.z), hd::mul(g, tang.z, wo.y)),
+                     hd::sub(g, hd::mul(g, tang.z, wo.x), hd::mul(g, tang.x, wo.z)),
+                     hd::sub(g, hd::mul(g, tang.x, wo.y), hd::mul(g, tang.y, wo.x))};
+        const int cl  = mx(hd::safe_sqrt(g, dot3(g, cr0, cr0)), ks(1.0e-20));
+        const int ci  = hd::dv(g, ks(1.0), cl);
+        const V3  bn{hd::mul(g, cr0.x, ci), hd::mul(g, cr0.y, ci), hd::mul(g, cr0.z, ci)};
+        const V3  oa = sub3(g, po, pa);
+        const int hh = mx(g.binary(KOp::Min, hd::dv(g, dot3(g, oa, bn), rad), ks(1.0)), ks(-1.0));
+
+        // fibre frame: x = T, y = ωo's axis-perpendicular part (so φo ≡ 0), z = T × y
+        const int wot = dot3(g, wo, tang);
+        const V3  wop{hd::sub(g, wo.x, hd::mul(g, tang.x, wot)), hd::sub(g, wo.y, hd::mul(g, tang.y, wot)),
+                     hd::sub(g, wo.z, hd::mul(g, tang.z, wot))};
+        const int pl  = mx(hd::safe_sqrt(g, dot3(g, wop, wop)), ks(1.0e-20));
+        const int pi_ = hd::dv(g, ks(1.0), pl);
+        const V3  fy{hd::mul(g, wop.x, pi_), hd::mul(g, wop.y, pi_), hd::mul(g, wop.z, pi_)};
+        const V3  fz{hd::sub(g, hd::mul(g, tang.y, fy.z), hd::mul(g, tang.z, fy.y)),
+                    hd::sub(g, hd::mul(g, tang.z, fy.x), hd::mul(g, tang.x, fy.z)),
+                    hd::sub(g, hd::mul(g, tang.x, fy.y), hd::mul(g, tang.y, fy.x))};
+
+        // the shadow/continuation origin, pushed off the surface ALONG THE NORMAL. A tmin cannot do this job:
+        // consecutive segments share an endpoint and their cap spheres overlap, so a ray leaving the surface can
+        // re-enter the strand it just left — and one leaving nearly ALONG the fibre grazes its neighbours for an
+        // unbounded distance, which no epsilon covers.
+        const V3  seg_d = sub3(g, pb, pa);
+        const V3  ax{hd::add(g, pa.x, hd::mul(g, seg_d.x, hit.u)), hd::add(g, pa.y, hd::mul(g, seg_d.y, hit.u)),
+                    hd::add(g, pa.z, hd::mul(g, seg_d.z, hit.u))};
+        const V3  dv_ = sub3(g, hp, ax);
+        const int dvt = dot3(g, dv_, tang);
+        const V3  nrw{hd::sub(g, dv_.x, hd::mul(g, tang.x, dvt)), hd::sub(g, dv_.y, hd::mul(g, tang.y, dvt)),
+                     hd::sub(g, dv_.z, hd::mul(g, tang.z, dvt))};
+        const int nl  = mx(hd::safe_sqrt(g, dot3(g, nrw, nrw)), ks(1.0e-20));
+        const int ni  = hd::dv(g, ks(1.0), nl);
+        const V3  nrm{hd::mul(g, nrw.x, ni), hd::mul(g, nrw.y, ni), hd::mul(g, nrw.z, ni)};
+        const int off = hd::mul(g, rad, ks(cfg.shadow_normal_offset));
+        const V3  sorg{hd::add(g, hp.x, hd::mul(g, nrm.x, off)), hd::add(g, hp.y, hd::mul(g, nrm.y, off)),
+                       hd::add(g, hp.z, hd::mul(g, nrm.z, off))};
+
+        // ── NEXT-EVENT ESTIMATION ────────────────────────────────────────────────────────────────────────────────
+        for (int L = 0; L < cfg.nlights; ++L)
+        {
+            const int lu1 = hash01(g.binary(KOp::BitXor, umul(tid, cu(0x27D4EB2FU + static_cast<crd::u32>(L) * 0x1000193U)),
+                                            uadd(sbase, cu(0x165667B1U + bseed))));
+            const int lu2 = hash01(g.binary(KOp::BitXor, umul(tid, cu(0x9E3779B1U + static_cast<crd::u32>(L) * 0x85EBCA6BU)),
+                                            uadd(sbase, cu(0x27220A95U + bseed))));
+            const int lrr = hd::mul(g, ks(cfg.light_radius[L]), hd::safe_sqrt(g, lu1));
+            const int lph = hd::mul(g, ks(kTau), lu2);
+            const int loc = hd::mul(g, lrr, g.unary(KOp::Cos, lph));
+            const int los = hd::mul(g, lrr, g.unary(KOp::Sin, lph));
+            const V3  lraw{hd::add(g, hd::add(g, ks(cfg.light_dir[L][0]), hd::mul(g, ks(cfg.light_t[L][0]), loc)), hd::mul(g, ks(cfg.light_b[L][0]), los)),
+                           hd::add(g, hd::add(g, ks(cfg.light_dir[L][1]), hd::mul(g, ks(cfg.light_t[L][1]), loc)), hd::mul(g, ks(cfg.light_b[L][1]), los)),
+                           hd::add(g, hd::add(g, ks(cfg.light_dir[L][2]), hd::mul(g, ks(cfg.light_t[L][2]), loc)), hd::mul(g, ks(cfg.light_b[L][2]), los))};
+            const int ll  = mx(hd::safe_sqrt(g, dot3(g, lraw, lraw)), ks(1.0e-20));
+            const int li  = hd::dv(g, ks(1.0), ll);
+            const V3  wi{hd::mul(g, lraw.x, li), hd::mul(g, lraw.y, li), hd::mul(g, lraw.z, li)};
+
+            // march the shadow ray THROUGH fibres, accumulating per-channel transmittance. A binary shadow is wrong
+            // for hair: a fibre is a filter, not an occluder, and because σₐ is spectral the surviving light is
+            // COLOURED — which is why the light deep inside blonde hair comes out gold.
+            int trc[3] = {ks(1.0), ks(1.0), ks(1.0)};
+            V3  so = sorg;
+            for (int step = 0; step < nshadow; ++step)
+            {
+                const auto sh  = g.trace_ray_curves(as, seg_b, so.x, so.y, so.z, wi.x, wi.y, wi.z, ks(cfg.shadow_tmin), ks(kFar));
+                const int  occ = g.binary(KOp::CmpLt, sh.t, ks(kFar - 1.0));
+                for (int c = 0; c < 3; ++c)
+                {
+                    const double tfib = crd::math::exp(-cfg.sigma_a[c] * cfg.fibre_depth);
+                    trc[c] = hd::mul(g, trc[c], g.select(occ, ks(tfib), ks(1.0)));
+                }
+                if (step + 1 < nshadow)
+                {
+                    const int adv = g.select(occ, hd::add(g, sh.t, ks(cfg.shadow_tmin)), ks(0.0));
+                    so = V3{hd::add(g, so.x, hd::mul(g, wi.x, adv)), hd::add(g, so.y, hd::mul(g, wi.y, adv)),
+                            hd::add(g, so.z, hd::mul(g, wi.z, adv))};
+                }
+            }
+
+            const int sin_ti = dot3(g, wi, tang);
+            const int cos_ti = hd::safe_sqrt(g, hd::sub(g, ks(1.0), hd::sq(g, sin_ti)));
+            const int phi_i  = g.binary(KOp::Atan2, dot3(g, wi, fz), dot3(g, wi, fy));
+            for (int c = 0; c < 3; ++c)
+            {
+                const int f = hair::hair_bcsdf_eval_angles(g, wot, pl, ks(0.0), sin_ti, cos_ti, phi_i, hh, ks(cfg.eta),
+                                                           ks(cfg.sigma_a[c]), ks(cfg.beta_m), ks(cfg.beta_n),
+                                                           ks(cfg.alpha_deg));
+                // L_o = ∫ f·L_i·cosθi dω — the cosine is part of the fibre's measure, not decoration.
+                const int d = hd::mul(g, hd::mul(g, hd::mul(g, f, cos_ti), ks(cfg.light_col[L][c])), trc[c]);
+                radc[c] = hd::add(g, radc[c], g.select(miss, ks(0.0), hd::mul(g, thr[c], d)));
+            }
+        }
+
+        // ── THE INDIRECT BOUNCE ──────────────────────────────────────────────────────────────────────────────────
+        if (bounce + 1 < cfg.bounces)
+        {
+            const int bu1 = hash01(g.binary(KOp::BitXor, umul(tid, cu(0x45D9F3BU)), uadd(sbase, cu(0x51ED2701U + bseed))));
+            const int bu2 = hash01(g.binary(KOp::BitXor, umul(tid, cu(0x119DE1F3U)), uadd(sbase, cu(0x9E3779B9U + bseed))));
+            // uniform on the sphere: z = 1 − 2u₁, and the weight below carries the 4π that makes it unbiased.
+            const int bz  = hd::sub(g, ks(1.0), hd::mul(g, ks(2.0), bu1));
+            const int brr = hd::safe_sqrt(g, hd::sub(g, ks(1.0), hd::sq(g, bz)));
+            const int bph = hd::mul(g, ks(kTau), bu2);
+            const V3  nd{hd::mul(g, brr, g.unary(KOp::Cos, bph)), hd::mul(g, brr, g.unary(KOp::Sin, bph)), bz};
+
+            const int nsin = dot3(g, nd, tang);
+            const int ncos = hd::safe_sqrt(g, hd::sub(g, ks(1.0), hd::sq(g, nsin)));
+            const int nphi = g.binary(KOp::Atan2, dot3(g, nd, fz), dot3(g, nd, fy));
+            for (int c = 0; c < 3; ++c)
+            {
+                const int f = hair::hair_bcsdf_eval_angles(g, wot, pl, ks(0.0), nsin, ncos, nphi, hh, ks(cfg.eta),
+                                                           ks(cfg.sigma_a[c]), ks(cfg.beta_m), ks(cfg.beta_n),
+                                                           ks(cfg.alpha_deg));
+                // weight = f·cosθ / pdf, pdf = 1/4π. A miss retires the path by zeroing the throughput — the
+                // branchless equivalent of breaking out of the loop.
+                const int wgt = hd::mul(g, hd::mul(g, f, ncos), ks(2.0 * kTau));
+                thr[c] = g.select(miss, ks(0.0), hd::mul(g, thr[c], g.binary(KOp::Min, wgt, ks(cfg.throughput_clamp))));
+                g.stmt_materialize(thr[c]);
+            }
+            const int eoff = hd::mul(g, rad, ks(cfg.shadow_normal_offset));
+            po = V3{hd::add(g, hp.x, hd::mul(g, nd.x, eoff)), hd::add(g, hp.y, hd::mul(g, nd.y, eoff)),
+                    hd::add(g, hp.z, hd::mul(g, nd.z, eoff))};
+            pd = nd;
+            g.stmt_materialize(po.x); g.stmt_materialize(po.y); g.stmt_materialize(po.z);
+            g.stmt_materialize(pd.x); g.stmt_materialize(pd.y); g.stmt_materialize(pd.z);
+        }
+        for (int c = 0; c < 3; ++c) { g.stmt_materialize(radc[c]); }
+        (void)alive;
+    }
+
+    // ── THE GROUND PLANE (y = plane_y), analytic ──────────────────────────────────────────────────────────────────
+    // Not in the acceleration structure: one ray-plane solve is cheaper and exact, and the BLAS holds curves only. It
+    // earns its place by receiving the groom's CONTACT SHADOW — a swatch floating against a flat backdrop has no sense
+    // of scale or of how much light the mass is actually stopping. The shadow ray runs against the same fibres, so it
+    // is real occlusion rather than a projected blob.
+    int planec[3] = {ks(0.0), ks(0.0), ks(0.0)};
+    if (cfg.ground)
+    {
+        const int dy   = g.select(g.binary(KOp::CmpLt, g.unary(KOp::Abs, rd.y), ks(1.0e-6)), ks(-1.0e-6), rd.y);
+        const int pt   = hd::dv(g, hd::sub(g, ks(cfg.plane_y), ro.y), dy);
+        const int phit = g.binary(KOp::BitAnd, g.binary(KOp::CmpGt, pt, ks(1.0e-3)),
+                                  g.binary(KOp::CmpLt, pt, ks(kFar - 1.0)));
+        const V3  pp{hd::add(g, ro.x, hd::mul(g, pt, rd.x)), ks(cfg.plane_y + 1.0e-4),
+                    hd::add(g, ro.z, hd::mul(g, pt, rd.z))};
+        int acc[3] = {ks(0.0), ks(0.0), ks(0.0)};
+        for (int L = 0; L < cfg.nlights; ++L)
+        {
+            const V3  wl{ks(cfg.light_dir[L][0]), ks(cfg.light_dir[L][1]), ks(cfg.light_dir[L][2])};
+            const int ndl = g.binary(KOp::Max, wl.y, ks(0.0));
+            int       ptr[3] = {ks(1.0), ks(1.0), ks(1.0)};
+            V3        so = pp;
+            for (int step = 0; step < cfg.ground_shadow_steps; ++step)
+            {
+                const auto sh  = g.trace_ray_curves(as, seg_b, so.x, so.y, so.z, wl.x, wl.y, wl.z, ks(cfg.shadow_tmin), ks(kFar));
+                const int  occ = g.binary(KOp::CmpLt, sh.t, ks(kFar - 1.0));
+                for (int c = 0; c < 3; ++c)
+                {
+                    const double tfib = crd::math::exp(-cfg.sigma_a[c] * cfg.fibre_depth);
+                    ptr[c] = hd::mul(g, ptr[c], g.select(occ, ks(tfib), ks(1.0)));
+                }
+                if (step + 1 < cfg.ground_shadow_steps)
+                {
+                    const int adv = g.select(occ, hd::add(g, sh.t, ks(cfg.shadow_tmin)), ks(0.0));
+                    so = V3{hd::add(g, so.x, hd::mul(g, wl.x, adv)), hd::add(g, so.y, hd::mul(g, wl.y, adv)),
+                            hd::add(g, so.z, hd::mul(g, wl.z, adv))};
+                }
+            }
+            for (int c = 0; c < 3; ++c)
+            {
+                acc[c] = hd::add(g, acc[c], hd::mul(g, hd::mul(g, hd::mul(g, ndl, ks(cfg.light_col[L][c])), ptr[c]),
+                                                    ks(cfg.ground_albedo[c] * 0.3183098861837907)));
+            }
+        }
+        // the plane also picks up the sky it can see
+        for (int c = 0; c < 3; ++c)
+        {
+            acc[c] = hd::add(g, acc[c], ks(cfg.ground_albedo[c] * cfg.env_hi[c] * 0.5));
+            planec[c] = g.select(phit, acc[c], ks(0.0));
+        }
+    }
+
+    // The path already added the environment on its own miss; the plane replaces that where the PRIMARY ray missed
+    // the hair and struck the ground instead.
+    {
+        const int pmiss = g.binary(KOp::CmpGt, planec[1], ks(0.0));
+        for (int c = 0; c < 3; ++c) { radc[c] = g.select(pmiss, hd::add(g, radc[c], planec[c]), radc[c]); }
+    }
+
+    g.stmt_buffer_store(out_b, uadd(b3, cu(0U)), hd::add(g, g.buffer_load(out_b, uadd(b3, cu(0U))), hd::mul(g, radc[0], ks(cfg.exposure))));
+    g.stmt_buffer_store(out_b, uadd(b3, cu(1U)), hd::add(g, g.buffer_load(out_b, uadd(b3, cu(1U))), hd::mul(g, radc[1], ks(cfg.exposure))));
+    g.stmt_buffer_store(out_b, uadd(b3, cu(2U)), hd::add(g, g.buffer_load(out_b, uadd(b3, cu(2U))), hd::mul(g, radc[2], ks(cfg.exposure))));

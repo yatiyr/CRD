@@ -41,6 +41,7 @@ Then, as your task needs, pull the relevant ADR(s), system overview(s), and rese
 | Phase plans | `docs/phases/` | One file per phase, detailed slices | ROADMAP status table | living (active) / append-only (closed) |
 | Session logs | `docs/sessions/` | One per work session (`YYYY-MM-DD-slug.md`) | — | append-only |
 | Research dossiers | `docs/research/` | Deep research per topic | — | append-only |
+| **Recipes** | `docs/recipes/` | **Educative build-recipes — teach a studied technique end to end (parameters first, then physics, assembly, traps). Written whenever we study + build something (AGENTS.md rule).** | — | append-only |
 | Open debt | `docs/debt.md` | Cleanups not yet done; pruned to a session log when closed | self | living |
 | Detours | `docs/detours/README.md` | Side-mission queue | self | living |
 | Protocols | `docs/protocols/` | Process protocols (e.g. per-slice verification) | — | reference |

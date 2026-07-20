@@ -79,6 +79,7 @@ public:
     [[nodiscard]] virtual bool rt_pipeline() const noexcept        = 0; // FA-2: VK_KHR_ray_tracing_pipeline (raygen/hit/miss + SBT)
     [[nodiscard]] virtual bool invocation_reorder() const noexcept = 0; // FA-2: VK_NV_ray_tracing_invocation_reorder (SER)
     [[nodiscard]] virtual bool cluster_as() const noexcept         = 0; // FA-3: VK_NV_cluster_acceleration_structure
+    [[nodiscard]] virtual bool linear_swept_spheres() const noexcept = 0; // B18-f: VK_NV_ray_tracing_linear_swept_spheres
 
     // B2-d: non-uniform sampled-image array indexing (descriptor indexing) enabled — the substrate for BINDLESS texture
     // arrays (`texture(..., N)` + `KOp::SampleIndexed` with a per-fragment index). Graphics-capable devices.

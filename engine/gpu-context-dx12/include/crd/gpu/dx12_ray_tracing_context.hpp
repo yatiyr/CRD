@@ -47,6 +47,23 @@ public:
     [[nodiscard]] std::unique_ptr<Dx12RtScene>
     build_scene_instanced(const float* vertices, crd::u32 ntris, const float* transforms, crd::u32 ninst);
 
+    // B18-f: build a scene of HAIR STRANDS as PROCEDURAL geometry — the DXR twin of
+    // VulkanRayTracingContext::build_scene_curves. Each segment becomes one AABB in the BLAS; the shader intersects the
+    // linear-swept sphere (round cone) analytically inside the ray-query candidate loop — see ckir_lss.hpp.
+    //
+    // ⭐ WHY PROCEDURAL AND NOT TRIANGLES. A 170K-strand groom at 30 segments is 5M segments. Tessellated tubes at 8-24
+    //   triangles each is 40M+ triangles: a multi-gigabyte AS, minutes of build time, and a silhouette that is STILL
+    //   faceted under a close camera. One AABB per segment is ~24 bytes and the swept surface stays exact at any zoom.
+    //
+    // ⛔ DXR HAS NO NATIVE SWEPT-SPHERE PRIMITIVE AT ANY TIER — there is no equivalent of
+    //   VK_NV_ray_tracing_linear_swept_spheres. The procedural path is therefore not a fallback here, it IS the DX12
+    //   strand tier, which is exactly why the intersector lives in CKIR and not in a vendor extension.
+    //
+    // `segments` is 8 floats per segment: [ax, ay, az, ra, bx, by, bz, rb] — endpoints and their radii, so a strand can
+    // taper. The caller ALSO binds the same segment array as a UAV for the intersector to read; this call only builds
+    // the traversal structure. Returns nullptr if the RT context is invalid or nseg == 0.
+    [[nodiscard]] std::unique_ptr<Dx12RtScene> build_scene_curves(const float* segments, crd::u32 nseg);
+
     // One storage-buffer binding for an inline-RT dispatch. `binding` is the UAV register slot uN (the TLAS is implicit as the
     // root SRV t0). `upload`/`readback` mirror the Vulkan Binding; `bytes` sizes the device buffer.
     struct Binding

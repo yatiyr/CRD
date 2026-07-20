@@ -1,0 +1,144 @@
+#pragma once
+
+// ckir_hair_rt.hpp — D-007 B18-f: the PATH-TRACED HAIR SWATCH — hardware curve traversal driving the B18-a BCSDF at
+// film sampling rates. This is the renderer the RT strand tier exists for.
+//
+// ⭐ WHY THIS EXISTS, AND WHY THE RASTER PATH CANNOT DO IT. A groom puts ~148 strands over every pixel. A deferred
+//    rasteriser resolves ONE of them per pixel (or 4 under 2x2 supersampling), so neighbouring pixels commit to
+//    DIFFERENT winners out of the same 148 candidates. The result is not noise, it is streaking: 3-6 px ribbons that
+//    read as impasto brush strokes. No amount of filtering fixes it, because the information was discarded at
+//    visibility. Film shoots hundreds of rays per pixel and lets each one hit a real fibre; the pixel then holds the
+//    AVERAGE of the fibre mass, which is what hair actually looks like. That is the whole difference, and it is only
+//    available once strands are a traceable primitive — which is what B18-f landed.
+//
+// WHAT THIS DOES PER SAMPLE:
+//   · a jittered camera ray → TraceRayCurves against the procedural swept-sphere BLAS;
+//   · the fibre frame rebuilt from the hit SEGMENT (tangent) and h from the signed perpendicular miss distance;
+//   · the full Chiang BCSDF evaluated PER COLOUR CHANNEL (σₐ is spectral — that is where hair colour comes from,
+//     not from a tint), for each light;
+//   · a STOCHASTIC SHADOW RAY per light, jittered over the light's angular radius, traced against the same fibres.
+//     Averaged over samples this is a true soft self-shadow through actual geometry — no deep-opacity-map proxy, and
+//     it is the cue that makes a groom read as a VOLUME rather than a decal.
+//
+// The sample loop is INSIDE the kernel and accumulates through an out-buffer RMW (the pattern ckir_rt.hpp's path
+// tracer uses). Callers split the total sample count across several dispatches with different `seed` values and sum
+// the passes host-side — a single dispatch large enough for a converged frame would trip the Windows GPU watchdog.
+
+#include <crd/kir/ckir.hpp>
+#include <crd/kir/ckir_hair.hpp>
+#include <crd/kir/ckir_lss.hpp>
+#include <crd/kir/ckir_rt.hpp>
+
+#include <crd/math/cmath.hpp>
+
+namespace crd::kir::hairrt
+{
+
+struct RtHairSwatchConfig
+{
+    int width  = 1280;
+    int height = 960;
+    int spp    = 16; // samples PER DISPATCH — total = spp × passes, summed host-side
+
+    // camera basis, precomputed host-side (the kernel only jitters within the pixel)
+    double cam_pos[3]  = {0.0, 0.5, 2.6};
+    double cam_fwd[3]  = {0.0, 0.0, -1.0};
+    double cam_right[3] = {1.0, 0.0, 0.0};
+    double cam_up[3]   = {0.0, 1.0, 0.0};
+    double tan_half_fov = 0.36397; // tan(20°)
+
+    // three lights: direction TO the light (unit), colour, and the frame used to jitter within the source's disc
+    double light_dir[3][3]   = {{-0.45, 0.55, 0.70}, {0.30, 0.25, -0.92}, {0.75, -0.20, 0.35}};
+    double light_col[3][3]   = {{1.00, 0.94, 0.86}, {1.10, 0.86, 0.62}, {0.22, 0.26, 0.34}};
+    double light_t[3][3]     = {{1.0, 0.0, 0.0}, {1.0, 0.0, 0.0}, {1.0, 0.0, 0.0}};
+    double light_b[3][3]     = {{0.0, 1.0, 0.0}, {0.0, 1.0, 0.0}, {0.0, 1.0, 0.0}};
+    double light_radius[3]   = {0.09, 0.05, 0.30}; // angular radius — larger = softer shadow
+    int    nlights           = 3;
+
+    // fibre optics. σₐ is PER CHANNEL: hair colour is absorption, so the BCSDF runs three times.
+    double sigma_a[3] = {0.06, 0.16, 0.42};
+    double eta        = 1.55;
+    double beta_m     = 0.24;
+    double beta_n     = 0.28;
+    double alpha_deg  = 2.8;
+
+    double bg[3]      = {0.020, 0.024, 0.032};
+    double exposure   = 1.0;
+    double shadow_tmin = 0.006; // must clear the fibre the ray started on (a few strand radii)
+    // How many fibres a shadow ray steps THROUGH before giving up. Past this depth the residual light is negligible
+    // for dark hair; the remaining error is a slight over-darkening in the deepest interior of pale hair.
+    int    shadow_steps = 8;
+    double shadow_normal_offset = 4.0; // in fibre radii — must clear the strand's own overlapping end caps
+    // the GROUND: a gray plane the swatch stands on, so the groom has a contact shadow and a sense of scale
+    bool   ground              = true;
+    double plane_y             = 0.0;
+    double ground_albedo[3]    = {0.34, 0.34, 0.35};
+    int    ground_shadow_steps = 5;
+    double fibre_depth  = 2.0; // optical path of one crossing, in sigma_a units (about a diameter)
+    int    segments    = 1;     // for the miss-index clamp
+    int    local_size  = 64;
+};
+
+// Buffers: b0 AS · b1 segments (F32, 8/seg) · b2 seed (F32, 1 — the pass index) · b3 out (F32, 3/pixel, SUMMED)
+[[nodiscard]] inline KEntry build_rt_hair_swatch_kernel(KGraph& g, const RtHairSwatchConfig& cfg)
+{
+    using namespace crd::kir::lss::detail;
+    namespace hd = crd::kir::hair::detail;
+
+    const Shape shu = make_shape({1});
+    const auto  cu  = [&](crd::u32 v) { return g.constant(static_cast<double>(v), shu, DType::U32); };
+    const auto  ks  = [&](double v) { return g.constant(v, shu, DType::F32); };
+    const auto  mx  = [&](int a, int b) { return g.binary(KOp::Max, a, b); };
+    const auto  uadd = [&](int a, int b) { return g.binary(KOp::Add, a, b); };
+    const auto  umul = [&](int a, int b) { return g.binary(KOp::Mul, a, b); };
+
+    const int as    = g.accel_struct_decl(0, 0);
+    const int seg_b = g.buffer_decl(DType::F32, 0, 1, false);
+    const int sed_b = g.buffer_decl(DType::F32, 0, 2, false);
+    const int tan_b = g.buffer_decl(DType::F32, 0, 4, false); // 6 floats/segment: the endpoint tangents
+    const int out_b = g.buffer_decl(DType::F32, 0, 3, true);
+
+    const int mark = g.kernel_stmt_mark();
+    const int tid  = uadd(umul(g.builtin(KBuiltin::WorkgroupIndex), cu(static_cast<crd::u32>(cfg.local_size))),
+                         g.builtin(KBuiltin::LocalInvocationIndex));
+    const int seed = g.buffer_load(sed_b, cu(0));
+    g.stmt_materialize(seed);
+
+    const int w    = cu(static_cast<crd::u32>(cfg.width));
+    const int px   = g.binary(KOp::Mod, tid, w);
+    const int py   = g.binary(KOp::Div, tid, w);
+    const int pxf  = g.cast(px, DType::F32);
+    const int pyf  = g.cast(py, DType::F32);
+    const int b3   = umul(tid, cu(3U));
+
+    // the same integer hash ckir_rt.hpp uses for its path samples — one decorrelated stream per use site
+    const auto hash01 = [&](int x) { return crd::kir::rt::detail::rt_hash01(g, x); };
+
+    g.stmt_buffer_store(out_b, uadd(b3, cu(0U)), ks(0.0));
+    g.stmt_buffer_store(out_b, uadd(b3, cu(1U)), ks(0.0));
+    g.stmt_buffer_store(out_b, uadd(b3, cu(2U)), ks(0.0));
+
+    const int floop = g.stmt_for_begin(cu(static_cast<crd::u32>(cfg.spp)));
+    const int sidx  = g.kernel_loop_var(floop);
+    const int sbase = uadd(umul(g.cast(seed, DType::U32), cu(0x9E3779B9U)), umul(sidx, cu(0x85157AF5U)));
+
+    // ── the jittered camera ray ────────────────────────────────────────────────────────────────────────────────────
+    const int jx = hash01(g.binary(KOp::BitXor, umul(tid, cu(0x632BE5ABU)), sbase));
+    const int jy = hash01(g.binary(KOp::BitXor, umul(tid, cu(0xC2B2AE35U)), uadd(sbase, cu(0x9E3779B9U))));
+    const double aspect = static_cast<double>(cfg.width) / static_cast<double>(cfg.height);
+    const int ndx = hd::mul(g, hd::sub(g, hd::dv(g, hd::add(g, pxf, jx), ks(0.5 * cfg.width)), ks(1.0)),
+                            ks(aspect * cfg.tan_half_fov));
+    const int ndy = hd::mul(g, hd::sub(g, ks(1.0), hd::dv(g, hd::add(g, pyf, jy), ks(0.5 * cfg.height))),
+                            ks(cfg.tan_half_fov));
+    const auto axis3 = [&](const double v[3], int s) {
+        return V3{hd::mul(g, ks(v[0]), s), hd::mul(g, ks(v[1]), s), hd::mul(g, ks(v[2]), s)};
+    };
+    const V3 rr = axis3(cfg.cam_right, ndx);
+    const V3 uu = axis3(cfg.cam_up, ndy);
+    const V3 rd_raw{hd::add(g, hd::add(g, ks(cfg.cam_fwd[0]), rr.x), uu.x),
+                    hd::add(g, hd::add(g, ks(cfg.cam_fwd[1]), rr.y), uu.y),
+                    hd::add(g, hd::add(g, ks(cfg.cam_fwd[2]), rr.z), uu.z)};
+    const int rdl  = mx(hd::safe_sqrt(g, dot3(g, rd_raw, rd_raw)), ks(1.0e-20));
+    const int rdi  = hd::dv(g, ks(1.0), rdl);
+    const V3  rd{hd::mul(g, rd_raw.x, rdi), hd::mul(g, rd_raw.y, rdi), hd::mul(g, rd_raw.z, rdi)};
+    const V3  ro{ks(cfg.cam_pos[0]), ks(cfg.cam_pos[1]), ks(cfg.cam_pos[2])};

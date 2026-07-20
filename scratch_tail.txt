@@ -1,0 +1,11 @@
+    g.stmt_for_end(floop);
+
+    KEntry e;
+    e.stage             = KStage::Compute;
+    e.local_size[0]     = static_cast<crd::u32>(cfg.local_size);
+    e.kernel_body_begin = mark;
+    e.kernel_body_count = g.stmt_count() - mark;
+    return e;
+}
+
+} // namespace crd::kir::hairrt

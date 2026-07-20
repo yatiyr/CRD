@@ -17,6 +17,8 @@
 #include <crd/kir/ckir.hpp>
 
 #include <crd/containers/array.hpp>
+#include <crd/core/assert.hpp>
+#include <crd/math/cmath.hpp>
 
 namespace crd::kir
 {
@@ -176,6 +178,23 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
                 r = static_cast<crd::f64>(cnt);
                 break;
             }
+            // ⛔ THIS EVALUATOR IS SCALAR. One f64 per node per lane — there is nowhere to put a second or third
+            //    component. A vector-valued node reaching the fallback below would be handed to apply_ternary /
+            //    apply_unary, which do not implement these ops, and would evaluate to GARBAGE with no diagnostic: the
+            //    kernel runs, produces plausible numbers, and is wrong. Refuse instead.
+            //    Vector maths in a COMPUTE kernel is written component-wise on scalar nodes (see ckir_lss.hpp's V3);
+            //    the vec3 forms are for the RASTER tier, where the emitters lower them to native vector types.
+            case KOp::Vec2:
+            case KOp::Vec3:
+            case KOp::VecComp:
+            case KOp::VecConcat:
+            case KOp::Swizzle:
+            case KOp::Splat:
+            case KOp::Dot:
+            case KOp::Cross:
+                CRD_ASSERT_MSG(false, "eval_cpu_kernel is scalar: vector-valued CKIR nodes (Vec*/Swizzle/Dot/Cross) "
+                                      "cannot be evaluated in the statement tier - write component-wise scalars");
+                break;
             default:
                 if (n.c >= 0 && n.b >= 0 && n.a >= 0 && !is_compare(n.op) && n.op != KOp::Select)
                 { r = apply_ternary(n.op, self(self, n.a), self(self, n.b), self(self, n.c)); }
@@ -350,6 +369,132 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
                         crd::f64       old = 0.0;
                         if (kb != nullptr && idx >= 0 && idx < kb->len) { old = kb->data[idx]; kb->data[idx] = add ? old + val : val; }
                         mat_pool[off + static_cast<crd::usize>(active[a])] = old;
+                    }
+                    ++i;
+                    break;
+                }
+                case KStmtKind::TraceRayCurves:
+                {   // B18-f: PROCEDURAL curve traversal oracle. Computed in FLOAT, not double: the intersection is OUR
+                    // shader code rather than vendor traversal, so it must be comparable TIGHTLY — and per the
+                    // project oracle doctrine an oracle more accurate than the device cannot certify it.
+                    // (Measured before this change: an f64 oracle differed from the f32 IR path by 19 ulp.)
+                    // PROCEDURAL curve traversal oracle — brute-force ray vs LINEAR SWEPT SPHERE over every
+                    // segment. On the device the BLAS narrows this to candidate AABBs and the shader runs the same
+                    // maths per candidate; the answer must agree, which is exactly what the GPU gate compares.
+                    const int node  = st.result;
+                    const int unode = g.stmt_ext_operand(st, 9);
+                    const int pnode = g.stmt_ext_operand(st, 10);
+                    if (mat_off[static_cast<crd::usize>(node)] < 0)
+                    {
+                        mat_off[static_cast<crd::usize>(node)] = static_cast<crd::i32>(mat_pool.size());
+                        for (crd::u32 t = 0; t < local_size; ++t) { mat_pool.push_back(0.0); }
+                    }
+                    if (mat_off[static_cast<crd::usize>(unode)] < 0)
+                    {
+                        mat_off[static_cast<crd::usize>(unode)] = static_cast<crd::i32>(mat_pool.size());
+                        for (crd::u32 t = 0; t < local_size; ++t) { mat_pool.push_back(0.0); }
+                    }
+                    if (mat_off[static_cast<crd::usize>(pnode)] < 0)
+                    {
+                        mat_off[static_cast<crd::usize>(pnode)] = static_cast<crd::i32>(mat_pool.size());
+                        for (crd::u32 t = 0; t < local_size; ++t) { mat_pool.push_back(0.0); }
+                    }
+                    const crd::usize    toff = static_cast<crd::usize>(mat_off[static_cast<crd::usize>(node)]);
+                    const crd::usize    uoff = static_cast<crd::usize>(mat_off[static_cast<crd::usize>(unode)]);
+                    const crd::usize    poff = static_cast<crd::usize>(mat_off[static_cast<crd::usize>(pnode)]);
+                    const KernelBuffer* segs = buffer_for(g.stmt_ext_operand(st, 8)); // 8 floats per segment
+                    const int nseg = (segs != nullptr) ? segs->len / 8 : 0;
+                    for (crd::usize a = 0; a < active.size(); ++a)
+                    {
+                        tid                = active[a];
+                        const float    ox  = (float)eval(eval, g.stmt_ext_operand(st, 0));
+                        const float    oy  = (float)eval(eval, g.stmt_ext_operand(st, 1));
+                        const float    oz  = (float)eval(eval, g.stmt_ext_operand(st, 2));
+                        const float    dx  = (float)eval(eval, g.stmt_ext_operand(st, 3));
+                        const float    dy  = (float)eval(eval, g.stmt_ext_operand(st, 4));
+                        const float    dz  = (float)eval(eval, g.stmt_ext_operand(st, 5));
+                        const float    tmn = (float)eval(eval, g.stmt_ext_operand(st, 6));
+                        const float    tmx = (float)eval(eval, g.stmt_ext_operand(st, 7));
+                        // ⛔ Quilez round-cone, with the direction NORMALISED — the reference form assumes a unit
+                        //    direction, and the earlier version did not normalise, used d2 = m0 + rr*rr instead of
+                        //    m0 - rr*rr, scaled the k-coefficients by m0, and tested the axial span against m0 instead
+                        //    of d2. Four defects, all invisible for a capsule (rr == 0), together producing hits in
+                        //    empty space: 118 of 132 reported hits were off-surface against a ray-march ground truth.
+                        const float rl   = crd::math::sqrt(dx * dx + dy * dy + dz * dz);
+                        const float rinv = rl > 1.0e-20F ? 1.0F / rl : 0.0F;
+                        const float ux  = dx * rinv;
+                        const float uy  = dy * rinv;
+                        const float uz2 = dz * rinv;
+                        const float tminu = tmn * rl;
+                        float       best  = tmx * rl; // work in unit-direction units, convert back at the end
+                        float       bu    = 0.0F;
+                        crd::u32    bp    = 0xFFFFFFFFU; // winning segment; 0xFFFFFFFF on a miss, as both emitters do
+                        for (int sgi = 0; sgi < nseg; ++sgi)
+                        {
+                            const crd::f64* q  = segs->data + static_cast<crd::isize>(sgi) * 8;
+                            const float bax = (float)q[4] - (float)q[0];
+                            const float bay = (float)q[5] - (float)q[1];
+                            const float baz = (float)q[6] - (float)q[2];
+                            // RE-ORIGIN AT THE SEGMENT before forming the k-coefficients. The oracle runs in FLOAT
+                            // precisely so it models the shader's numerics; without this it loses the radius term to
+                            // cancellation at realistic fibre thickness exactly as the shader did.
+                            const float tsh = ((float)q[0] - ox) * ux + ((float)q[1] - oy) * uy + ((float)q[2] - oz) * uz2;
+                            const float lox = ox + ux * tsh;
+                            const float loy = oy + uy * tsh;
+                            const float loz = oz + uz2 * tsh;
+                            const float oax = lox - (float)q[0];
+                            const float oay = loy - (float)q[1];
+                            const float oaz = loz - (float)q[2];
+                            const float obx = lox - (float)q[4];
+                            const float oby = loy - (float)q[5];
+                            const float obz = loz - (float)q[6];
+                            const float ra = (float)q[3];
+                            const float rb = (float)q[7];
+                            const float rr = ra - rb;
+                            const float m0 = bax * bax + bay * bay + baz * baz;
+                            const float m1 = bax * oax + bay * oay + baz * oaz;
+                            const float m2 = bax * ux + bay * uy + baz * uz2;
+                            const float m3 = ux * oax + uy * oay + uz2 * oaz;
+                            const float m5 = oax * oax + oay * oay + oaz * oaz;
+                            const float m6 = obx * ux + oby * uy + obz * uz2;
+                            const float m7 = obx * obx + oby * oby + obz * obz;
+                            const float d2 = m0 - rr * rr;
+                            // conical side
+                            const float k2 = d2 - m2 * m2;
+                            const float k1 = d2 * m3 - m1 * m2 + m2 * rr * ra;
+                            const float k0 = d2 * m5 - m1 * m1 + m1 * rr * ra * 2.0F - m0 * ra * ra;
+                            const float hh = k1 * k1 - k0 * k2;
+                            if (hh > 0.0F && (k2 < 0.0F ? -k2 : k2) > 1.0e-20F)
+                            {
+                                const float tcl = (-crd::math::sqrt(hh) - k1) / k2; // local to the shifted origin
+                                const float tc  = tcl + tsh;                        // ...back to the true parameter
+                                const float yc  = m1 - ra * rr + tcl * m2;          // y pairs with m1/m2, so LOCAL t
+                                if (tc > tminu && tc < best && yc > 0.0F && yc < d2)
+                                {
+                                    best = tc;
+                                    bu   = yc / (d2 > 1.0e-20F ? d2 : 1.0e-20F);
+                                    bp   = static_cast<crd::u32>(sgi);
+                                }
+                            }
+                            // the two end caps: without them a ray grazing a segment end misses entirely, which shows
+                            // up as pinholes exactly at the joints between segments.
+                            const float h1 = m3 * m3 - m5 + ra * ra;
+                            const float h2 = m6 * m6 - m7 + rb * rb;
+                            if (h1 > 0.0F)
+                            {
+                                const float t1 = -m3 - crd::math::sqrt(h1) + tsh;
+                                if (t1 > tminu && t1 < best) { best = t1; bu = 0.0F; bp = static_cast<crd::u32>(sgi); }
+                            }
+                            if (h2 > 0.0F)
+                            {
+                                const float t2 = -m6 - crd::math::sqrt(h2) + tsh;
+                                if (t2 > tminu && t2 < best) { best = t2; bu = 1.0F; bp = static_cast<crd::u32>(sgi); }
+                            }
+                        }
+                        best = best * rinv; // back to RAY units
+                        mat_pool[toff + static_cast<crd::usize>(active[a])] = static_cast<crd::f64>(best);
+                        mat_pool[uoff + static_cast<crd::usize>(active[a])] = static_cast<crd::f64>(bu);
+                        mat_pool[poff + static_cast<crd::usize>(active[a])] = static_cast<crd::f64>(bp);
                     }
                     ++i;
                     break;

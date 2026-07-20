@@ -121,6 +121,9 @@ RtCapabilities Dx12RayTracingContext::capabilities() const noexcept
 {
     RtCapabilities c;
     c.set(RtFeature::InlineQuery, m_impl->ok); // inline ray query is the only RT path wired on DX12 today
+    // B18-f: DXR has NO linear-swept-sphere primitive in any tier — this is not a driver or hardware gap but an API
+    // one, so it is permanently false here and the portable analytic strand path is the only option on DX12.
+    c.set(RtFeature::LinearSweptSpheres, false);
     return c;
 }
 
@@ -219,6 +222,112 @@ std::unique_ptr<Dx12RtScene> Dx12RayTracingContext::build_scene_instanced(const 
     scene->tlas_va = scene->tlas->GetGPUVirtualAddress();
 
     impl.submit_and_wait(); // vbuf / ibuf / scratch stay alive on this frame through the blocking wait
+    return scene;
+}
+
+std::unique_ptr<Dx12RtScene> Dx12RayTracingContext::build_scene_curves(const float* segments, crd::u32 nseg)
+{
+    auto& impl = *m_impl;
+    if (!impl.ok || nseg == 0 || segments == nullptr) { return nullptr; }
+    auto scene = std::make_unique<SceneImpl>();
+
+    // ── AABB buffer: the CONSERVATIVE bound of each swept segment ──
+    // Conservative or nothing: traversal only offers the shader primitives whose box the ray actually entered, so a box
+    // that clips the swept volume silently DROPS hits — and a dropped hit inside a groom reads as a hole, not an error.
+    // Computed here on the host to keep the build self-contained; build_lss_aabb_kernel is the GPU-side equivalent.
+    ComPtr<ID3D12Resource> abuf = make_buffer(impl.device.Get(), static_cast<UINT64>(nseg) * sizeof(D3D12_RAYTRACING_AABB),
+                                              D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_GENERIC_READ);
+    if (abuf == nullptr) { return nullptr; }
+    void* ap = nullptr;
+    abuf->Map(0, nullptr, &ap);
+    auto* boxes = static_cast<D3D12_RAYTRACING_AABB*>(ap);
+    for (crd::u32 i = 0; i < nseg; ++i)
+    {
+        const float* sg  = segments + static_cast<crd::usize>(i) * 8U;
+        const float  eps = 1.0e-5F; // a tangential ray must not be lost to floating-point right at the boundary
+        const float  ax = sg[0];
+        const float  ay = sg[1];
+        const float  az = sg[2];
+        const float  ra = sg[3];
+        const float  bx = sg[4];
+        const float  by = sg[5];
+        const float  bz = sg[6];
+        const float  rb = sg[7];
+        D3D12_RAYTRACING_AABB bb{};
+        bb.MinX = (ax - ra < bx - rb ? ax - ra : bx - rb) - eps;
+        bb.MinY = (ay - ra < by - rb ? ay - ra : by - rb) - eps;
+        bb.MinZ = (az - ra < bz - rb ? az - ra : bz - rb) - eps;
+        bb.MaxX = (ax + ra > bx + rb ? ax + ra : bx + rb) + eps;
+        bb.MaxY = (ay + ra > by + rb ? ay + ra : by + rb) + eps;
+        bb.MaxZ = (az + ra > bz + rb ? az + ra : bz + rb) + eps;
+        boxes[i] = bb;
+    }
+    abuf->Unmap(0, nullptr);
+
+    // ── BLAS over the AABBs ──
+    // NOT marked OPAQUE: procedural geometry needs the intersection shader to run per candidate and COMMIT the hit,
+    // which is precisely what an opaque flag would let traversal skip.
+    D3D12_RAYTRACING_GEOMETRY_DESC geom{};
+    geom.Type                  = D3D12_RAYTRACING_GEOMETRY_TYPE_PROCEDURAL_PRIMITIVE_AABBS;
+    geom.Flags                 = D3D12_RAYTRACING_GEOMETRY_FLAG_NONE;
+    geom.AABBs.AABBCount       = nseg;
+    geom.AABBs.AABBs.StartAddress  = abuf->GetGPUVirtualAddress();
+    geom.AABBs.AABBs.StrideInBytes = sizeof(D3D12_RAYTRACING_AABB);
+
+    D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS binputs{};
+    binputs.Type           = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
+    binputs.Flags          = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
+    binputs.NumDescs       = 1;
+    binputs.DescsLayout    = D3D12_ELEMENTS_LAYOUT_ARRAY;
+    binputs.pGeometryDescs = &geom;
+    D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO bpre{};
+    impl.device->GetRaytracingAccelerationStructurePrebuildInfo(&binputs, &bpre);
+    ComPtr<ID3D12Resource> bscratch = make_buffer(impl.device.Get(), bpre.ScratchDataSizeInBytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    scene->blas = make_buffer(impl.device.Get(), bpre.ResultDataMaxSizeInBytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
+    if (bscratch == nullptr || scene->blas == nullptr) { return nullptr; }
+    D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC bbuild{};
+    bbuild.Inputs                           = binputs;
+    bbuild.ScratchAccelerationStructureData = bscratch->GetGPUVirtualAddress();
+    bbuild.DestAccelerationStructureData    = scene->blas->GetGPUVirtualAddress();
+    impl.list->BuildRaytracingAccelerationStructure(&bbuild, 0, nullptr);
+    D3D12_RESOURCE_BARRIER uav{};
+    uav.Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    uav.UAV.pResource = scene->blas.Get();
+    impl.list->ResourceBarrier(1, &uav); // TLAS build reads the finished BLAS
+
+    // ── single-instance TLAS (identity transform) ──
+    ComPtr<ID3D12Resource> ibuf = make_buffer(impl.device.Get(), sizeof(D3D12_RAYTRACING_INSTANCE_DESC), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_GENERIC_READ);
+    if (ibuf == nullptr) { return nullptr; }
+    void* ip = nullptr;
+    ibuf->Map(0, nullptr, &ip);
+    D3D12_RAYTRACING_INSTANCE_DESC inst{};
+    inst.Transform[0][0]       = 1.0F;
+    inst.Transform[1][1]       = 1.0F;
+    inst.Transform[2][2]       = 1.0F;
+    inst.InstanceMask          = 0xFFU;
+    inst.AccelerationStructure = scene->blas->GetGPUVirtualAddress();
+    *static_cast<D3D12_RAYTRACING_INSTANCE_DESC*>(ip) = inst;
+    ibuf->Unmap(0, nullptr);
+
+    D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS tinputs{};
+    tinputs.Type          = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL;
+    tinputs.Flags         = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
+    tinputs.NumDescs      = 1;
+    tinputs.DescsLayout   = D3D12_ELEMENTS_LAYOUT_ARRAY;
+    tinputs.InstanceDescs = ibuf->GetGPUVirtualAddress();
+    D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO tpre{};
+    impl.device->GetRaytracingAccelerationStructurePrebuildInfo(&tinputs, &tpre);
+    ComPtr<ID3D12Resource> tscratch = make_buffer(impl.device.Get(), tpre.ScratchDataSizeInBytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    scene->tlas = make_buffer(impl.device.Get(), tpre.ResultDataMaxSizeInBytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
+    if (tscratch == nullptr || scene->tlas == nullptr) { return nullptr; }
+    D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC tbuild{};
+    tbuild.Inputs                           = tinputs;
+    tbuild.ScratchAccelerationStructureData = tscratch->GetGPUVirtualAddress();
+    tbuild.DestAccelerationStructureData    = scene->tlas->GetGPUVirtualAddress();
+    impl.list->BuildRaytracingAccelerationStructure(&tbuild, 0, nullptr);
+    scene->tlas_va = scene->tlas->GetGPUVirtualAddress();
+
+    impl.submit_and_wait(); // abuf / ibuf / scratch stay alive on this frame through the blocking wait
     return scene;
 }
 
