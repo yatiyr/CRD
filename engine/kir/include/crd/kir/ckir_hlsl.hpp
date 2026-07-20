@@ -276,6 +276,28 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
         case KOp::Pow: f2("pow"); break;
         case KOp::Log: f1("log"); break;
         case KOp::Log2: f1("log2"); break;
+        case KOp::Exp2: f1("exp2"); break; // mirror of the GLSL compute emitter — wire both or the backends diverge
+        // ── COMPUTE-EMITTER COMPLETENESS (2026-07-20) — the DX12 mirror. Same enumeration, same 20 ops, plus BitCount and
+        //    BitNot which were present in GLSL but not here. DFdx/DFdy/Fwidth stay absent on purpose.
+        case KOp::Rsqrt: f1("rsqrt"); break;
+        case KOp::Tan: f1("tan"); break;
+        case KOp::Trunc: f1("trunc"); break;
+        case KOp::Ldexp: f2("ldexp"); break;
+        case KOp::Smoothstep: s.append("smoothstep("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(", "); pv(pv, nd.c); s.append(")"); break;
+        case KOp::Recip: s.append("(1.0/"); pv(pv, nd.a); s.append(")"); break;
+        case KOp::Sign: s.append("(("); pv(pv, nd.a); s.append(" > 0.0) ? 1.0 : (("); pv(pv, nd.a); s.append(" < 0.0) ? -1.0 : 0.0))"); break;
+        case KOp::Fract: s.append("("); pv(pv, nd.a); s.append(" - floor("); pv(pv, nd.a); s.append("))"); break;
+        case KOp::Step: s.append("(("); pv(pv, nd.b); s.append(" < "); pv(pv, nd.a); s.append(") ? 0.0 : 1.0)"); break; // step(edge=a, x=b)
+        case KOp::Mix: s.append("("); pv(pv, nd.a); s.append(" * (1.0 - "); pv(pv, nd.c); s.append(") + "); pv(pv, nd.b); s.append(" * "); pv(pv, nd.c); s.append(")"); break;
+        case KOp::Cbrt: s.append("(sign("); pv(pv, nd.a); s.append(") * pow(abs("); pv(pv, nd.a); s.append("), 0.3333333333333333))"); break;
+        case KOp::BitCount: f1("countbits"); break;
+        case KOp::BitNot: s.append("(~"); pv(pv, nd.a); s.append(")"); break;
+        case KOp::BitReverse: f1("reversebits"); break;
+        case KOp::FindLSB: f1("firstbitlow"); break;
+        case KOp::FindMSB: f1("firstbithigh"); break;
+        case KOp::FloatBitsToInt: f1("asint"); break;
+        case KOp::IntBitsToFloat: f1("asfloat"); break;
+        case KOp::BitfieldExtract: s.append("(("); pv(pv, nd.a); s.append(" >> "); pv(pv, nd.b); s.append(") & ((1u << "); pv(pv, nd.c); s.append(") - 1u))"); break;
         case KOp::Tanh: f1("tanh"); break;
         case KOp::Atan2: f2("atan2"); break;
         case KOp::Atan: f1("atan"); break;

@@ -99,3 +99,10 @@ out/
 .tmp-*.log
 __pycache__/
 CLAUDE.md
+
+# Research PAPERS are reference material, not source. They are large (GitHub hard-rejects any blob >100 MB, and a
+# 218 MB PDF once made the whole repo unpushable), they never diff usefully, and they live permanently in history
+# after a single commit. Keep them OUT of git and store them alongside the repo instead; docs/research/*.md cites
+# them by title so the knowledge stays version-controlled while the bytes do not.
+docs/research/papers/
+*.pdf

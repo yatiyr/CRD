@@ -5290,6 +5290,94 @@ TEST_CASE("B18-c: hair multiple-scattering tiers DISPATCH on Vulkan == CPU oracl
     }
 }
 
+// B18-d: the strand LOD pre-pass (Lipp 2026 Eq 1-5, 8) DISPATCHES on Vulkan == CPU oracle. The maths is gated on the CPU
+// side (tests/kir/test_ckir_hair_lod.cpp); THIS gate is portability plus the integer-ish ops the emitters must get right —
+// Ceil, Floor, Log2 and Exp2 all appear here, and the power-of-two-plus-one snap in Eq 5 is exactly the kind of thing a
+// backend can round differently. A one-ULP disagreement there changes the control-point count and thus the geometry.
+TEST_CASE("B18-d: CKIR strand LOD pre-pass DISPATCHES on Vulkan == CPU oracle",
+          "[gpu-context][vulkan][gpu][kernel][hair][lod]")
+{
+    namespace kir = crd::kir;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+    const auto uz = [](int v) { return static_cast<crd::usize>(v); };
+    crd::memory::TlsfAllocator alloc(32U << 20U);
+
+    kir::hairgeom::StrandLodConfig lc;
+    lc.strands_per_bundle = 128;
+    const int nb          = 128; // 2 workgroups
+
+    kir::KGraph       g(&alloc);
+    const kir::KEntry e = kir::hairgeom::build_strand_lod_kernel(g, lc);
+
+    crd::containers::Array<double> in(&alloc);
+    crd::containers::Array<double> out(&alloc);
+    in.resize(uz(nb * 5), 0.0);
+    out.resize(uz(nb * 4), 0.0);
+    crd::u32   st  = 0xB18D0000U;
+    const auto rnd = [&]() { st = st * 1664525U + 1013904223U; return static_cast<double>(st >> 8U) / 16777216.0; };
+    for (int b = 0; b < nb; ++b)
+    {
+        const crd::usize o = uz(b * 5);
+        in[o + 0U] = 0.0;
+        in[o + 1U] = 0.0;
+        in[o + 2U] = rnd() * 200.0; // screen AABB extent, spanning far-field through full-detail
+        in[o + 3U] = rnd() * 200.0;
+        in[o + 4U] = rnd();         // per-bundle delta ~ U[0,1)
+    }
+    crd::containers::Array<double> snap(&alloc);
+    snap.resize(uz(nb * 5), 0.0);
+    for (int j = 0; j < nb * 5; ++j) { snap[uz(j)] = in[uz(j)]; }
+
+    kir::KernelBuffer bufs[2] = {{in.data(), nb * 5, 0U, 0U}, {out.data(), nb * 4, 0U, 1U}};
+    kir::eval_cpu_kernel(g, e, bufs, 2, e.local_size[0], &alloc, static_cast<crd::u32>(nb / 64));
+    crd::containers::Array<double> ref(&alloc);
+    ref.resize(uz(nb * 4), 0.0);
+    for (int j = 0; j < nb * 4; ++j) { ref[uz(j)] = out[uz(j)]; }
+
+    kir::GlslKernel kern(&alloc);
+    REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, kern));
+    const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source),
+                                                "ckir_hair_lod", &alloc, false);
+    INFO("GLSL compile: " << spv.error_message.c_str());
+    REQUIRE(spv.ok);
+    auto pipe = compute.create_pipeline_from_spirv(
+        crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), 2, 0U);
+    REQUIRE(pipe != nullptr);
+
+    crd::containers::Array<float> host_store(&alloc);
+    host_store.resize(uz(nb * 9), 0.0F);
+    float*    host[2] = {host_store.data(), host_store.data() + nb * 5};
+    const int lens[2] = {nb * 5, nb * 4};
+    for (int j = 0; j < nb * 5; ++j) { host[0][j] = static_cast<float>(snap[uz(j)]); }
+    crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 2, static_cast<crd::u32>(nb / 64));
+
+    double worst = 0.0;
+    int    cp_mismatch = 0;
+    for (int b = 0; b < nb; ++b)
+    {
+        for (int k = 0; k < 4; ++k)
+        {
+            const double d = static_cast<double>(host[1][b * 4 + k]) - ref[uz(b * 4 + k)];
+            worst = std::max(worst, std::fabs(d));
+        }
+        // ⭐ N_LOD and the control-point count are DISCRETE. They must agree EXACTLY, not to a tolerance — a half-strand
+        //   disagreement is meaningless, but an off-by-one changes how much geometry the backend actually draws.
+        if (static_cast<double>(host[1][b * 4 + 0]) != ref[uz(b * 4 + 0)]) { ++cp_mismatch; }
+        if (static_cast<double>(host[1][b * 4 + 1]) != ref[uz(b * 4 + 1)]) { ++cp_mismatch; }
+    }
+    std::printf("[Vulkan B18-d LOD] %d bundles  maxabs(GPU vs oracle) = %.3e  discrete mismatches = %d\n", nb, worst,
+                cp_mismatch);
+    CHECK(worst < 1.0e-5);
+    CHECK(cp_mismatch == 0);
+}
+
 // B18-e: the COMPOSITING filter (Lipp 2026) DISPATCHES on Vulkan and matches the CPU oracle. The filter's maths is gated on
 // the CPU side (tests/kir/test_ckir_hair_filter.cpp pins anisotropy, the depth guard, and convexity); THIS gate is portability
 // plus one thing the CPU tests cannot show: the kernel's BOUNDS GUARD. A real dispatch rounds up to workgroup granularity, so

@@ -231,7 +231,27 @@
 > nothing enforcing it — a larger pool indexes past `m_free_lists` and corrupts memory, surfacing as a SIGSEGV nowhere
 > near the construction site, and a failed backing allocation was dereferenced blind by `init_pool`. Both now assert, and
 > `TlsfAllocator::max_pool_size()` makes the limit checkable rather than folklore.
-> **⬜ NEXT: (1) B18-e dual-scatter combination; (2) B18-d** stochastic LOD + Δ=−log(ρ); **(3) B18-f** RT strand tier (LSS) → closes C3/B9.
+>
+> **[✅ B18-d CLOSED — 2026-07-20]:** `build_strand_lod_kernel` — Lipp §3.2 read from the paper: Eq 2 screen-AABB LOD
+> selector, Eq 1 stochastic `N_LOD = clamp(⌈L·(N+δ)⌉,1,N)` with a PER-BUNDLE δ, Eq 4/5 √L-scaled control points snapped
+> to 2^k+1, Eq 8 `Δ = −log(β)` correcting the stale shadow/DOM depth that culling leaves behind. 4 CPU gates + Vulkan and
+> DX12 dispatch gates, **both 2.384e-07 with ZERO discrete mismatches** on N_LOD and the control-point count — those are
+> integers, so exact equality is asserted, because an off-by-one changes how much geometry a backend actually draws.
+> ⚠ One gate initially asserted `E[N_LOD] == L·N` and failed (7.39 vs 6.74). Checked analytically BEFORE touching the
+> kernel: the dither enters as `ceil(L·(N+δ))`, so its amplitude is L, not 1 — Eq 1 is biased by construction and the
+> paper never claims otherwise (δ "smooths LOD transitions" = STAGGERING). Predicted E = 7.385, measured 7.3906: the
+> kernel was right and the gate was wrong. It now measures POPPING directly — sweep L across a quantisation boundary,
+> dithered vs an undithered control; undithered the groom-wide mean jumps a full strand at once (that jump IS the pop).
+> **⛔ ENGINE:** `KOp::Exp2` was missing from BOTH compute emitters while `Log2` was present ⇒ the kernel would not emit
+> at all. THIRD occurrence of the compute-emitter-lag scar, and the 2026-07-15 note had claimed "parity, future kernels
+> won't hit this wall". Prose cannot establish parity — so the op set is now ENUMERATED against the oracle, ~20 further
+> missing ops wired into both emitters, and a **completeness gate** (`test_ckir_emitter_completeness.cpp`) builds a
+> one-op kernel per arithmetic KOp so occurrence #4 fails the moment an op is added rather than inside a later slice.
+> ⚠ TOOLING SCAR: build checks were being filtered with `grep -E "error C|Linking"`, which does NOT match
+> `fatal error LNK1168` — link failures were being read as successes. Check the exit status, not a pattern. The link
+> failed because a background regression was RUNNING the executable being relinked; never overlap the two.
+>
+> **⬜ NEXT: B18-f** RT strand tier (LSS) → closes C3 (#28) + B9 (#29). That is the last item in B18.
 > **[✅ FA-3 CLUSTER-AS 2026-07-19 — RUN on the RTX 4070]:** `build_scene_clusters`
 > (VK_NV_cluster_acceleration_structure / RTX Mega-Geometry) — the triangle → a CLAS via a GPU-DRIVEN INDIRECT build
 > (`vkCmdBuildClusterAccelerationStructureIndirectNV`, opType BUILD_TRIANGLE_CLUSTER, implicit destinations, per-cluster

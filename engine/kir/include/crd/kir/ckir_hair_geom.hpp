@@ -511,4 +511,98 @@ struct HairFilterConfig
     return e;
 }
 
+// ══════════ B18-d — LEVEL OF DETAIL (Lipp et al. 2026 §3.2) ══════════
+// Far-field grooms do not need every strand, but naive culling POPS and — worse — silently corrupts the shadow term.
+// This kernel is the paper's LOD pre-pass: ONE THREAD PER BUNDLE, producing everything the rasterizer needs.
+//
+//   Eq 2  L      = clamp(‖AABB_max − AABB_min‖ / R_y · λ, 0, 1)          screen-footprint LOD selector
+//   Eq 1  N_LOD  = clamp(⌈L·(N + δ)⌉, 1, N)                              δ ~ U[0,1) PER BUNDLE
+//   Eq 4  C_raw  = max(⌊√L · C_max⌋, C_layers)                           √L, not L, to preserve curvature mid-range
+//   Eq 5  C      = min(2^⌊log2(C_raw−1)⌋ + 1, C_max)                     snapped to 2^k+1 for smooth vertex LOD
+//   Eq 8  Δ      = −log(β),  β = N_remaining / N_total                   the depth-comparison artifact fix
+//
+// ⭐ WHY δ IS PER BUNDLE AND WHY Δ EXISTS — the two non-obvious parts:
+//   · δ staggers the strand-count transition across bundles so neighbouring tufts never step together. Without it every
+//     bundle crosses its LOD threshold at the same instant and the whole groom visibly pops.
+//   · Removing strands leaves previously-computed shadow / deep-opacity maps STALE. If the front-most strand is culled,
+//     an inner strand becomes visible but still tests against the old depth — so it samples the high-opacity interior and
+//     goes unnaturally dark (the paper's Fig 4, "Naive"). Beer-Lambert says keeping fraction β scales the effective depth
+//     (Eq 6/7: V' = exp(−σ·(β·d))), so inverting the exponential gives an ADDITIVE depth shift of exactly −log(β).
+//     Δ = 0 when nothing is culled, and grows smoothly as β → 0.
+struct StrandLodConfig
+{
+    int    strands_per_bundle = 128;   // N — the full strand count per bundle
+    int    max_points         = 127;   // C_max (the paper's cap)
+    int    layer_points       = 5;     // C_layers — a HARD lower bound: never fewer control points than bundle layers
+    double lambda             = 8.0;   // LOD sensitivity; tuned per hairstyle / strand count
+    double screen_height      = 1080.0; // R_y — the AABB is normalised by the vertical resolution
+};
+
+// Buffers: b0 in (F32, 5/bundle = [aabb_min_x, aabb_min_y, aabb_max_x, aabb_max_y, delta])
+//          b1 out (F32, 4/bundle = [N_LOD, C, Delta, beta])
+[[nodiscard]] inline KEntry build_strand_lod_kernel(KGraph& g, const StrandLodConfig& cfg)
+{
+    using namespace detail;
+    const Shape shu = make_shape({1});
+    const auto  cu  = [&](crd::u32 v) { return g.constant(static_cast<double>(v), shu, DType::U32); };
+    const auto  ks  = [&](double v) { return g.constant(v, shu, DType::F32); };
+
+    const int in_b  = g.buffer_decl(DType::F32, 0, 0, false);
+    const int out_b = g.buffer_decl(DType::F32, 0, 1, true);
+    const int tid   = g.binary(KOp::Add, g.binary(KOp::Mul, g.builtin(KBuiltin::WorkgroupIndex), cu(64)),
+                             g.builtin(KBuiltin::LocalInvocationIndex));
+
+    const int mark = g.kernel_stmt_mark();
+    const int ib   = g.binary(KOp::Mul, tid, cu(5));
+    const auto ld  = [&](int k) {
+        const int v = g.buffer_load(in_b, g.binary(KOp::Add, ib, cu(static_cast<crd::u32>(k))));
+        g.stmt_materialize(v);
+        return v;
+    };
+    const int mnx = ld(0);
+    const int mny = ld(1);
+    const int mxx = ld(2);
+    const int mxy = ld(3);
+    const int dlt = ld(4);
+
+    // ── Eq 2: the LOD selector from the bundle's screen-space AABB diagonal ──
+    const int ext = safe_sqrt(g, add(g, sq(g, sub(g, mxx, mnx)), sq(g, sub(g, mxy, mny))));
+    int       lod = mul(g, dv(g, ext, ks(cfg.screen_height)), ks(cfg.lambda));
+    lod           = g.binary(KOp::Min, g.binary(KOp::Max, lod, ks(0.0)), ks(1.0));
+    g.stmt_materialize(lod);
+
+    // ── Eq 1: stochastic strand count. The ceil is what makes the per-bundle δ act as a dither: E[N_LOD] tracks L·N
+    //          continuously instead of stepping, which is precisely what removes the pop. ──
+    const double nf   = static_cast<double>(cfg.strands_per_bundle);
+    int          nlod = g.unary(KOp::Ceil, mul(g, lod, add(g, ks(nf), dlt)));
+    nlod              = g.binary(KOp::Min, g.binary(KOp::Max, nlod, ks(1.0)), ks(nf));
+    g.stmt_materialize(nlod);
+
+    // ── Eq 4/5: control-point count, √L-scaled then snapped to a power of two plus one ──
+    const int craw = g.binary(KOp::Max, g.unary(KOp::Floor, mul(g, safe_sqrt(g, lod), ks(static_cast<double>(cfg.max_points)))),
+                              ks(static_cast<double>(cfg.layer_points)));
+    g.stmt_materialize(craw);
+    // guard log2 of a non-positive argument: Eq 5 is stated for C_raw >= 3, and C_layers already floors us there.
+    const int cm1  = g.binary(KOp::Max, sub(g, craw, ks(1.0)), ks(1.0));
+    const int cpow = add(g, g.unary(KOp::Exp2, g.unary(KOp::Floor, g.unary(KOp::Log2, cm1))), ks(1.0));
+    const int cpts = g.binary(KOp::Min, cpow, ks(static_cast<double>(cfg.max_points)));
+
+    // ── Eq 8: the depth-comparison fix. β = N_LOD / N, Δ = −log(β) ⇒ exactly 0 when nothing was culled. ──
+    const int beta = dv(g, nlod, ks(nf));
+    const int dlta = g.unary(KOp::Neg, g.unary(KOp::Log, g.binary(KOp::Max, beta, ks(1.0e-6))));
+
+    const int ob = g.binary(KOp::Mul, tid, cu(4));
+    g.stmt_buffer_store(out_b, ob, nlod);
+    g.stmt_buffer_store(out_b, g.binary(KOp::Add, ob, cu(1)), cpts);
+    g.stmt_buffer_store(out_b, g.binary(KOp::Add, ob, cu(2)), dlta);
+    g.stmt_buffer_store(out_b, g.binary(KOp::Add, ob, cu(3)), beta);
+
+    KEntry e;
+    e.stage             = KStage::Compute;
+    e.local_size[0]     = 64;
+    e.kernel_body_begin = mark;
+    e.kernel_body_count = g.stmt_count() - mark;
+    return e;
+}
+
 } // namespace crd::kir::hairgeom

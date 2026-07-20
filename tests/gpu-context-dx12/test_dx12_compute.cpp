@@ -478,6 +478,80 @@ TEST_CASE("B18-c: hair multiple-scattering tiers DISPATCH on DX12 == CPU oracle"
     }
 }
 
+// B18-d: the strand LOD pre-pass DISPATCHES on DX12 == CPU oracle — the DX12 mirror of the Vulkan LOD gate. Worth
+// mirroring specifically because Eq 5 snaps a control-point count via Floor(Log2(x)) then Exp2: a one-ULP difference
+// between backends changes the count by a factor of two, i.e. how much geometry actually gets drawn.
+TEST_CASE("B18-d: CKIR strand LOD pre-pass DISPATCHES on DX12 == CPU oracle", "[dx12][compute][gpu][kernel][hair][lod]")
+{
+    namespace kir = crd::kir;
+    crd::memory::TlsfAllocator alloc(32U << 20U);
+    g::Dx12ComputeContext      ctx(&alloc);
+    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    const auto uz = [](int v) { return static_cast<crd::usize>(v); };
+
+    kir::hairgeom::StrandLodConfig lc;
+    lc.strands_per_bundle = 128;
+    const int nb          = 128;
+
+    kir::KGraph       gg(&alloc);
+    const kir::KEntry e = kir::hairgeom::build_strand_lod_kernel(gg, lc);
+
+    crd::containers::Array<double> in(&alloc);
+    crd::containers::Array<double> out(&alloc);
+    in.resize(uz(nb * 5), 0.0);
+    out.resize(uz(nb * 4), 0.0);
+    crd::u32   st  = 0xB18D0000U;
+    const auto rnd = [&]() { st = st * 1664525U + 1013904223U; return static_cast<double>(st >> 8U) / 16777216.0; };
+    for (int b = 0; b < nb; ++b)
+    {
+        const crd::usize o = uz(b * 5);
+        in[o + 0U] = 0.0;
+        in[o + 1U] = 0.0;
+        in[o + 2U] = rnd() * 200.0;
+        in[o + 3U] = rnd() * 200.0;
+        in[o + 4U] = rnd();
+    }
+    crd::containers::Array<double> snap(&alloc);
+    snap.resize(uz(nb * 5), 0.0);
+    for (int j = 0; j < nb * 5; ++j) { snap[uz(j)] = in[uz(j)]; }
+
+    kir::KernelBuffer bufs[2] = {{in.data(), nb * 5, 0U, 0U}, {out.data(), nb * 4, 0U, 1U}};
+    kir::eval_cpu_kernel(gg, e, bufs, 2, e.local_size[0], &alloc, static_cast<crd::u32>(nb / 64));
+    crd::containers::Array<double> ref(&alloc);
+    ref.resize(uz(nb * 4), 0.0);
+    for (int j = 0; j < nb * 4; ++j) { ref[uz(j)] = out[uz(j)]; }
+
+    kir::GlslKernel kern(&alloc);
+    REQUIRE(kir::emit_compute_kernel_hlsl(gg, e, &alloc, kern));
+    auto pipe = ctx.create_pipeline_from_hlsl(crd::containers::to_view(kern.source), 2U, 0U);
+    REQUIRE(pipe != nullptr);
+
+    crd::containers::Array<float> host_store(&alloc);
+    host_store.resize(uz(nb * 9), 0.0F);
+    float*    host[2] = {host_store.data(), host_store.data() + nb * 5};
+    const int lens[2] = {nb * 5, nb * 4};
+    for (int j = 0; j < nb * 5; ++j) { host[0][j] = static_cast<float>(snap[uz(j)]); }
+    crd::kir_test::dispatch_kernel_1wg(ctx, *pipe, host, lens, 2, static_cast<crd::u32>(nb / 64));
+
+    double worst = 0.0;
+    int    cp_mismatch = 0;
+    for (int b = 0; b < nb; ++b)
+    {
+        for (int k = 0; k < 4; ++k)
+        {
+            const double d = static_cast<double>(host[1][b * 4 + k]) - ref[uz(b * 4 + k)];
+            const double a = d < 0.0 ? -d : d;
+            if (a > worst) { worst = a; }
+        }
+        if (static_cast<double>(host[1][b * 4 + 0]) != ref[uz(b * 4 + 0)]) { ++cp_mismatch; }
+        if (static_cast<double>(host[1][b * 4 + 1]) != ref[uz(b * 4 + 1)]) { ++cp_mismatch; }
+    }
+    std::printf("[DX12 B18-d LOD] %d bundles  maxabs(GPU vs oracle) = %.3e  discrete mismatches = %d\n", nb, worst,
+                cp_mismatch);
+    CHECK(worst < 1.0e-5);
+    CHECK(cp_mismatch == 0);
+}
+
 // B18-e: the COMPOSITING filter (Lipp 2026) DISPATCHES on DX12 == CPU oracle — the DX12 mirror of the Vulkan filter gate.
 // Same purpose: portability, plus the tail-lane BOUNDS GUARD that only a real rounded-up dispatch exercises. Worth mirroring
 // specifically because HLSL COERCES types where GLSL rejects them, so a shape bug here can pass on one backend and fail on the

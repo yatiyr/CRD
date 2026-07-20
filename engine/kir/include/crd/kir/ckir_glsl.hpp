@@ -730,6 +730,31 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
         case KOp::Pow: f2("pow"); break;
         case KOp::Log: f1("log"); break;
         case KOp::Log2: f1("log2"); break;
+        // ⛔ Exp2 was MISSING here while Log2 was present, so any compute kernel using it failed to emit at all
+        //    (emit returns false) rather than miscompiling — the same COMPUTE-EMITTER-LAGS scar as Exp/Pow/Round.
+        //    When adding a KOp, wire EVERY emitter, not just the one the current test happens to exercise.
+        case KOp::Exp2: f1("exp2"); break;
+        // ── COMPUTE-EMITTER COMPLETENESS (2026-07-20). Enumerating the oracle's KOp set against this switch turned up 20
+        //    ops it could evaluate but this emitter could not lower, every one a latent `emit == false`. Spellings copied
+        //    from the raster value emitter in this same file so the two paths cannot disagree. DFdx/DFdy/Fwidth are
+        //    deliberately absent: screen-space derivatives do not exist in a compute kernel and MUST keep failing.
+        case KOp::Rsqrt: f1("inversesqrt"); break;
+        case KOp::Tan: f1("tan"); break;
+        case KOp::Trunc: f1("trunc"); break;
+        case KOp::Ldexp: f2("ldexp"); break;
+        case KOp::Smoothstep: s.append("smoothstep("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(", "); pv(pv, nd.c); s.append(")"); break;
+        case KOp::Recip: s.append("(1.0/"); pv(pv, nd.a); s.append(")"); break;
+        case KOp::Sign: s.append("(("); pv(pv, nd.a); s.append(" > 0.0) ? 1.0 : (("); pv(pv, nd.a); s.append(" < 0.0) ? -1.0 : 0.0))"); break;
+        case KOp::Fract: s.append("("); pv(pv, nd.a); s.append(" - floor("); pv(pv, nd.a); s.append("))"); break;
+        case KOp::Step: s.append("(("); pv(pv, nd.b); s.append(" < "); pv(pv, nd.a); s.append(") ? 0.0 : 1.0)"); break; // step(edge=a, x=b)
+        case KOp::Mix: s.append("("); pv(pv, nd.a); s.append(" * (1.0 - "); pv(pv, nd.c); s.append(") + "); pv(pv, nd.b); s.append(" * "); pv(pv, nd.c); s.append(")"); break;
+        case KOp::Cbrt: s.append("(sign("); pv(pv, nd.a); s.append(") * pow(abs("); pv(pv, nd.a); s.append("), 0.3333333333333333))"); break; // no builtin
+        case KOp::BitReverse: f1("bitfieldReverse"); break;
+        case KOp::FindLSB: f1("findLSB"); break;
+        case KOp::FindMSB: f1("findMSB"); break;
+        case KOp::FloatBitsToInt: f1("floatBitsToInt"); break;
+        case KOp::IntBitsToFloat: f1("intBitsToFloat"); break;
+        case KOp::BitfieldExtract: s.append("bitfieldExtract("); pv(pv, nd.a); s.append(", int("); pv(pv, nd.b); s.append("), int("); pv(pv, nd.c); s.append("))"); break;
         case KOp::Tanh: f1("tanh"); break;
         case KOp::Atan2: f2("atan"); break; // GLSL 2-arg atan(y, x)
         case KOp::Atan: f1("atan"); break;
