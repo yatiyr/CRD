@@ -232,11 +232,11 @@ struct RtHairSwatchConfig
             g.stmt_materialize(v);
             return v;
         };
-        const V3 t0{tl(0), tl(1), tl(2)};
-        const V3 t1{tl(3), tl(4), tl(5)};
-        const V3 traw{hd::add(g, t0.x, hd::mul(g, hd::sub(g, t1.x, t0.x), hit.u)),
-                      hd::add(g, t0.y, hd::mul(g, hd::sub(g, t1.y, t0.y), hit.u)),
-                      hd::add(g, t0.z, hd::mul(g, hd::sub(g, t1.z, t0.z), hit.u))};
+        const V3 tan_a{tl(0), tl(1), tl(2)};
+        const V3 tan_b_e{tl(3), tl(4), tl(5)};
+        const V3 traw{hd::add(g, tan_a.x, hd::mul(g, hd::sub(g, tan_b_e.x, tan_a.x), hit.u)),
+                      hd::add(g, tan_a.y, hd::mul(g, hd::sub(g, tan_b_e.y, tan_a.y), hit.u)),
+                      hd::add(g, tan_a.z, hd::mul(g, hd::sub(g, tan_b_e.z, tan_a.z), hit.u))};
         const int tlen = mx(hd::safe_sqrt(g, dot3(g, traw, traw)), ks(1.0e-20));
         const int tinv = hd::dv(g, ks(1.0), tlen);
         const V3  tang{hd::mul(g, traw.x, tinv), hd::mul(g, traw.y, tinv), hd::mul(g, traw.z, tinv)};
@@ -246,14 +246,6 @@ struct RtHairSwatchConfig
                     hd::add(g, po.z, hd::mul(g, hit.t, pd.z))};
         const V3 wo{g.unary(KOp::Neg, pd.x), g.unary(KOp::Neg, pd.y), g.unary(KOp::Neg, pd.z)};
 
-        // h = signed perpendicular miss distance / radius, along normalize(T × ωo) — exact by construction, where an
-        // h recovered from the surface normal degenerates at grazing angles.
-        const V3  cr0{hd::sub(g, hd::mul(g, tang.y, wo.z), hd::mul(g, tang.z, wo.y)),
-                     hd::sub(g, hd::mul(g, tang.z, wo.x), hd::mul(g, tang.x, wo.z)),
-                     hd::sub(g, hd::mul(g, tang.x, wo.y), hd::mul(g, tang.y, wo.x))};
-        const int cl  = mx(hd::safe_sqrt(g, dot3(g, cr0, cr0)), ks(1.0e-20));
-        const int ci  = hd::dv(g, ks(1.0), cl);
-        const V3  bn{hd::mul(g, cr0.x, ci), hd::mul(g, cr0.y, ci), hd::mul(g, cr0.z, ci)};
         // ⛔⛔ h MUST BE DECOMPOSED IN THE FRAME THE INTERSECTION ACTUALLY USED. h is the ray's perpendicular offset
         //     from the fibre axis in radius units, and it is what γo = asin(h) — the axis the whole BCSDF turns on —
         //     is built from. The radial offset of a hit is radial with respect to the SEGMENT's axis, because that is

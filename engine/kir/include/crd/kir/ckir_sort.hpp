@@ -211,7 +211,8 @@ namespace crd::kir
 // block's keys are locally REORDERED in shared (sorted by digit) so the global write phase emits per-digit RUNS (coalesced) --
 // the CUB structure. dest bytes identical to a direct scatter (p - lbase[d] == rank). in = keys(0), out = sorted(1),
 // off = within-bin block prefix(2), gb = per-bin global base(3). `nbins == threads`, `elems` a multiple of `threads`.
-[[nodiscard]] inline KEntry build_sort_scatter(KGraph& g, int elems, int threads, int radix_bits, int shift, int nblocks)
+[[nodiscard]] inline KEntry build_sort_scatter(KGraph& g, int elems, int threads, int radix_bits, int shift, int nblocks,
+                                               bool carry_val = false)
 {
     const int   nbins   = 1 << radix_bits;
     const int   pt      = elems / threads;
@@ -226,7 +227,15 @@ namespace crd::kir
     const int out_buf = g.buffer_decl(DType::U32, 0, 1, true);
     const int off_buf = g.buffer_decl(DType::U32, 0, 2, false);
     const int gb_buf  = g.buffer_decl(DType::U32, 0, 3, false);
+    // ── B19-a3: OPTIONAL PAYLOAD (key-value sort). A per-key value (bindings 4/5) rides the SAME permutation the keys
+    //    are scattered by — the ballot/rank/offset logic is computed from keys only and is untouched, so the sort stays
+    //    bit-exact; the value is just staged in a parallel shared array and written at the same destination. This makes
+    //    the radix sort a general KEY-VALUE sort, which 3DGS (sort splats by depth, carry the index) and any indexed
+    //    sort needs. `carry_val == false` ⇒ identical graph to before (existing callers unaffected). ──
+    const int val_in  = carry_val ? g.buffer_decl(DType::U32, 0, 4, false) : -1;
+    const int val_out = carry_val ? g.buffer_decl(DType::U32, 0, 5, true) : -1;
     const int s_keys  = g.shared_decl(DType::U32, elems);
+    const int s_vals  = carry_val ? g.shared_decl(DType::U32, elems) : -1;
     const int seg     = g.shared_decl(DType::U32, sgs * nbins); // per-subgroup per-digit count -> exclusive base (in place)
     const int dhist   = g.shared_decl(DType::U32, nbins);       // cross-round per-digit accumulator
     const int tid     = g.builtin(KBuiltin::LocalInvocationIndex);
@@ -243,10 +252,13 @@ namespace crd::kir
     int keyr[64];  // per-round materialized key / digit / block-rank (register-staged for the reorder)
     int digr[64];
     int rnkr[64];
+    int valr[64];  // the payload staged the same way, when carry_val
     for (int r = 0; r < pt; ++r) // SOFTWARE PIPELINE: pt independent DRAM loads in flight BEFORE the round barriers trap them
     {
-        keyr[r] = g.buffer_load(in_buf, add(base, add(tid, ku(static_cast<crd::u32>(r * threads)))));
+        const int idx = add(base, add(tid, ku(static_cast<crd::u32>(r * threads))));
+        keyr[r] = g.buffer_load(in_buf, idx);
         g.stmt_materialize(keyr[r]);
+        if (carry_val) { valr[r] = g.buffer_load(val_in, idx); g.stmt_materialize(valr[r]); }
     }
     g.stmt_barrier();
 
@@ -318,7 +330,13 @@ namespace crd::kir
     g.stmt_barrier();
 
     // LOCAL REORDER: every key is register-staged => s_keys becomes the block's keys sorted by digit (stable).
-    for (int r = 0; r < pt; ++r) { g.stmt_shared_store(s_keys, add(g.shared_load(seg, digr[r]), rnkr[r]), keyr[r]); }
+    for (int r = 0; r < pt; ++r)
+    {
+        const int loc = add(g.shared_load(seg, digr[r]), rnkr[r]);
+        g.stmt_materialize(loc);
+        g.stmt_shared_store(s_keys, loc, keyr[r]);
+        if (carry_val) { g.stmt_shared_store(s_vals, loc, valr[r]); } // the value rides the same local slot as its key
+    }
     g.stmt_barrier();
 
     // COALESCED write: consecutive threads take consecutive locally-sorted positions => destinations are runs per digit.
@@ -330,7 +348,9 @@ namespace crd::kir
         const int d2   = g.binary(KOp::BitAnd, g.binary(KOp::Shr, key2, ku(static_cast<crd::u32>(shift))), ku(static_cast<crd::u32>(nbins - 1)));
         const int offv = g.buffer_load(off_buf, add(mul(d2, ku(static_cast<crd::u32>(nblocks))), wid));
         const int dest = add(add(g.buffer_load(gb_buf, d2), offv), g.binary(KOp::Sub, p2, g.shared_load(seg, d2)));
+        g.stmt_materialize(dest);
         g.stmt_buffer_store(out_buf, dest, key2);
+        if (carry_val) { g.stmt_buffer_store(val_out, dest, g.shared_load(s_vals, p2)); } // value follows its key
     }
 
     KEntry e;

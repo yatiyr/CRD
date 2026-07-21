@@ -8,6 +8,7 @@ add_executable(crd-gpu-context-vulkan-tests
     test_vulkan_rt.cpp
     test_vulkan_hair_showcase.cpp
     test_vulkan_hair_swatch_rt.cpp
+    test_vulkan_gsplat.cpp
 )
 
 target_link_libraries(crd-gpu-context-vulkan-tests PRIVATE

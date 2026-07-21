@@ -307,6 +307,76 @@
 > real-time path; this RT path is its FILM reference. **⬜ open:** clang-tidy the new files; a grazing-limit BCSDF gate
 > (the furnace test integrates over h and misses a narrow bad band — `test_ckir_hair_grazing.cpp` is a probe, not yet an
 > assertion); the renderer geometry lives in the TEST, a production groom system is future work.
+> **[▶ B19 3D GAUSSIAN SPLATTING — RESEARCH DONE 2026-07-21; dossier `docs/research/2026-07-21-3dgs-frontier.md`]:**
+> the next frontier row (radiance fields as a first-class primitive). ⭐ KEY FINDING: **B19 rides on FOUR prior
+> investments** — the forward splat render is a SORT + OIT-COMPOSITE problem (our GPU radix/onesweep + B17 A-buffer),
+> training differentiates the rasteriser (v15/v16 autodiff), and the ray-traced variant (3DGRT) wraps Gaussians in
+> procedural-AABB proxies (the B18-f LSS pattern via C3/B9). Frontier mapped along every axis with a mandatory winner:
+> AA = Mip-Splatting + StopThePop; geometry = 2DGS/GOF (the bridge to B1 materials); compression = Self-Organizing
+> Gaussians 20-40× (payload = our own HDR codec); ray-traced/relight = 3DGRT + Relightable 3DGS; training =
+> 3DGS-MCMC/Taming 3DGS. **Decomposition:** B19-a forward splat core → B19-b Mip AA + StopThePop → B19-c 2DGS surfels
+> + mesh extract → B19-d compression → B19-e ray-traced + relightable → B19-f differentiable training + LoD.
+> **[✅ B19-a DONE 2026-07-21]:** the CKIR forward splat rasteriser renders a Gaussian scene. `ckir_gsplat.hpp` —
+> two kernels: `build_gsplat_project_kernel` (the EWA splat: 3D anisotropic Gaussian → view-space covariance via the
+> combined view·quat rotation, 2D covariance Σ′ = J·Σ_c·Jᵀ, conic = Σ′⁻¹, radius = ⌈3√λmax⌉, screen mean, SH deg-0
+> colour, near-cull) and `build_gsplat_render_kernel` (per-pixel front-to-back `over` composite over depth-sorted
+> splats, with the radius-bound cull). **Gates:** projection pinned to CLOSED-FORM geometry (on-axis mean/depth/conic/
+> radius + behind-camera cull) + render composites near-red-over-far-blue correctly = 22 assertions; and a **GPU
+> showcase renders a 3200-Gaussian rainbow sphere on Vulkan** (`build/gsplat_sphere.bmp`, centre lum 0.399 vs clean
+> corner 0.035) — same kernels lower to GLSL and run. Depth sort is HOST-side for now (B19-a2 wires the GPU radix
+> sort — the "sort" half of 3DGS; the composite half is B17's A-buffer). ⛔ compute tier is SCALAR so the covariance
+> maths is component-wise; the radius cull is essential or the infinite Gaussian tail washes the whole frame.
+> **[✅ B19-a2 TILE-BINNED RENDER 2026-07-21]:** the perf structure — each pixel composites ONLY its screen tile's
+> splats, not the whole scene. `build_gsplat_tiled_render_kernel` (per pixel → its 16×16 tile → composite the tile's
+> fixed-capacity bucket, front-to-back). **⛔ the CKIR `For` bound must be UNIFORM**, but a tile's list length varies —
+> so the bucket has a fixed cap and the loop runs `cap` times masked by `(i < count[tile])`. **Gate:** the tiled
+> render == the brute-force B19-a render PIXELWISE (oracle 2e-6; **GPU bit-exact, worst diff 0.00e+00** over 1024
+> tiles) — tiling changes visibility structure, not the result. Buckets built HOST-side for now (B19-a3 = GPU
+> count+scan+scatter). **⛔ THE GPU SORT GAP:** the existing radix sort is KEY-ONLY 32-bit; carrying a
+> (tile,depth)→gaussian payload needs a 64-bit/payload sort extension (a B-cmp enhancement) — that + the GPU binning
+> is B19-a3.
+> **[✅ B19-b MIP-SPLATTING 2026-07-21 — the frontier ALIAS-FREE axis, Yu et al. CVPR 2024]:** the naïve 3DGS adds a
+> fixed 0.3 to the 2D covariance diagonal but does NOT rescale opacity, so a splat's total energy (∝ opacity·√detΣ′)
+> CHANGES as it shrinks below a pixel = aliasing. Mip fixes it (in `build_gsplat_project_kernel`, `cfg.mip`): a **3D
+> SMOOTHING FILTER** (add the depth-scaled pixel footprint to the 3D covariance diagonal — frequency cap) + an
+> **energy-preserving 2D MIP FILTER** (add the pixel footprint to the 2D diagonal AND rescale opacity by
+> √(detΣ′/detΣ′_mip) so total energy is preserved EXACTLY). **Gate — the gold-standard invariant, measured:** shrink
+> an isotropic splat 20× → true energy should fall 400× (√det ∝ s²). **MIP ratio = 400.0 (exact); naïve = 182.4
+> (floored); the sub-pixel splat is 2.2× too bright under naïve (0.495 vs 0.225).** 26 assertions. mip defaults OFF
+> so B19-a behaviour is unchanged.
+> **[✅ B19-a3 ON-DEVICE DEPTH SORT 2026-07-21 — the sort half of 3DGS now runs on the GPU]:** closed **THE GPU SORT
+> GAP** above. Extended the CKIR radix sort (`ckir_sort.hpp`, `build_sort_scatter(..., bool carry_val)`) into a
+> **KEY-VALUE (payload) sort**: the value rides the exact permutation the keys are scattered by (ballot/rank/offset
+> computed from keys ONLY, so the sort stays bit-exact); `carry_val=false` emits the identical graph ⇒ every existing
+> caller (incl. the Vulkan radix-sort gate, 33 assertions, still green) is untouched. New gsplat kernels wire the
+> pipeline: `build_gsplat_depthkey_kernel` (per splat → 24-bit quantised depth key over [dmin,dmax] + index payload;
+> invalid ⇒ key 0xFFFFFFFF sorts last) and `build_gsplat_gather_kernel` (`sorted[i] = proj[order[i]]`). **Full pipeline
+> = project → depthkey → 4-pass KV radix sort → gather, with NO host depth-sort crutch.** **Gates:** (CPU oracle)
+> distinct-depth splats sort bit-exactly vs a host stable sort; (**real Vulkan**, `test_vulkan_gsplat.cpp`, 43
+> assertions) the same pipeline runs end-to-end on the GPU and the gathered projected buffer == the host sort
+> splat-for-splat, order is a valid permutation (XOR), depths ascending. KV payload sort also gated standalone in
+> `test_ckir_sort.cpp` (n=16384, 4-pass ping-pong of keys AND values).
+> **[✅ B19-a4 FULL GPU TILE BINNING 2026-07-21 — the last host crutch removed; the real Kerbl block rasteriser]:** the
+> tile bin now runs entirely on-device. Five new CKIR kernels in `ckir_gsplat.hpp`: `build_gsplat_tilecount_kernel`
+> (per splat → covered-tile count, half-open clamped rect) → **reuse `ckir_scan.build_scan`** (exclusive prefix-sum →
+> per-splat instance offset + total T) → `build_gsplat_scatter_instances_kernel` (GRID-DRIVEN, N·max_cover threads, no
+> CKIR `For`; emits key=tileID, val=splat-index; the `If`-guarded write) → **reuse the KV radix sort** BY TILE (stable ⇒
+> since the input is already depth-sorted, within-tile depth order is preserved with NO depth bits in the key) →
+> `build_gsplat_tile_ranges_kernel` (boundary-detect per-tile [start,end); nested `If`) → `build_gsplat_block_render_kernel`.
+> **The block render is the real 3DGS topology: ONE WORKGROUP PER TILE, one thread per pixel, looping the tile's
+> [start,end) — a VARIABLE `For` bound that is workgroup-uniform (every thread shares the tile), the exact CKIR `For`
+> constraint** — so there is NO fixed bucket cap (B19-a2's `cap` is gone). **Gates:** (CPU oracle) the whole
+> tilecount→scan→scatter→sort→ranges→block pipeline == the brute-force all-splats-per-pixel render **pixelwise, worst
+> 0.000e+00** + per-instance range-partition checks (241 assertions incl. the 8th gsplat case); (**real Vulkan**,
+> `test_vulkan_gsplat.cpp` `[bin]`, 38 assertions) the full bin + block render dispatched on the GPU (project/depth-sort
+> host-scaffold; a3 gates the on-device sort) == the GPU brute render **bit-exact (worst 0.000e+00)**, T=290 over 16 tiles.
+> ⛔ scar: the ranges kernel's `If` bodies needed `stmt_materialize` on the shared u32 store-index but must NEVER
+> materialize the Bool guards (a bool has no temp type) — only the real-backend SPIR-V emit caught it, the CPU oracle
+> passed the same graph. **⬜ NEXT: B19-c** 2DGS surfels + mesh (the bridge to B1 materials) or **StopThePop** per-pixel
+> resort (view consistency) or **cross-backend** (wire all of B19 to DX12/HLSL — the whole line is Vulkan-only so far).
+> **[✅ B18-f FULLY CLOSED 2026-07-21]:** path-traced hair renderer + real-time levers + recipes (`docs/recipes/` —
+> new folder + AGENTS.md standing rule: study something → write a recipe). Tidy-clean at the gate, all touched gates
+> green. Perf board `docs/bench/2026-07-20-hair-rt-swatch-perf.md` (194 ms/sample offline; 29 ms/frame real-time).
 > **[✅ FA-3 CLUSTER-AS 2026-07-19 — RUN on the RTX 4070]:** `build_scene_clusters`
 > (VK_NV_cluster_acceleration_structure / RTX Mega-Geometry) — the triangle → a CLAS via a GPU-DRIVEN INDIRECT build
 > (`vkCmdBuildClusterAccelerationStructureIndirectNV`, opType BUILD_TRIANGLE_CLUSTER, implicit destinations, per-cluster

@@ -136,3 +136,79 @@ TEST_CASE("B-cmp: CKIR full 4-pass LSD radix sort == sorted (oracle)", "[kir][ke
     CHECK(ix == sx);
     CHECK(is == ss);
 }
+
+// B19-a3: the KEY-VALUE radix sort — a per-key payload rides the same permutation as its key. The keystone that 3DGS
+// needs (sort splats by depth, carry the gaussian index) and any indexed sort. Same 4-pass driver, `carry_val` on.
+TEST_CASE("B-cmp: CKIR key-VALUE radix sort carries the payload bit-exactly", "[kir][kernel][sort]")
+{
+    constexpr int n          = 16384;
+    constexpr int threads    = 256;
+    constexpr int radix_bits = 8;
+    constexpr int nbins      = 1 << radix_bits;
+    constexpr int epb        = 1024;
+    constexpr int nblocks    = n / epb;
+    crd::memory::TlsfAllocator alloc(160U << 20U);
+
+    crd::containers::Array<crd::f64> ka(&alloc); crd::containers::Array<crd::f64> kb(&alloc);
+    crd::containers::Array<crd::f64> va(&alloc); crd::containers::Array<crd::f64> vb(&alloc);
+    crd::containers::Array<crd::f64> bh(&alloc); crd::containers::Array<crd::f64> go(&alloc);
+    crd::containers::Array<crd::f64> tot(&alloc); crd::containers::Array<crd::f64> gb(&alloc);
+    ka.resize(n); kb.resize(n, 0.0); va.resize(n); vb.resize(n, 0.0);
+    bh.resize(static_cast<crd::usize>(nblocks) * static_cast<crd::usize>(nbins), 0.0);
+    go.resize(static_cast<crd::usize>(nblocks) * static_cast<crd::usize>(nbins), 0.0);
+    tot.resize(static_cast<crd::usize>(nbins), 0.0);
+    gb.resize(static_cast<crd::usize>(nbins), 0.0);
+    constexpr int scan_threads = nblocks < threads ? nblocks : threads;
+    crd::containers::Array<crd::u32> key0(&alloc);
+    key0.resize(n);
+    for (int i = 0; i < n; ++i)
+    {
+        const crd::u32 k = static_cast<crd::u32>((i * 2246822519U) ^ (static_cast<crd::u32>(i) << 11U));
+        ka[static_cast<crd::usize>(i)] = static_cast<crd::f64>(k);
+        key0[static_cast<crd::usize>(i)] = k;
+        va[static_cast<crd::usize>(i)] = static_cast<crd::f64>(static_cast<crd::u32>(i)); // payload = original index
+    }
+
+    crd::f64* ck = ka.data(); crd::f64* ok = kb.data();
+    crd::f64* cv = va.data(); crd::f64* ov = vb.data();
+    for (int pass = 0; pass < 4; ++pass)
+    {
+        const int shift = pass * 8;
+        kir::KGraph gh(&alloc); kir::KGraph gof1(&alloc); kir::KGraph gof2(&alloc); kir::KGraph gs(&alloc);
+        const kir::KEntry eh  = kir::build_sort_histogram(gh, epb, threads, radix_bits, shift, nblocks);
+        const kir::KEntry eo1 = kir::build_sort_offset_local(gof1, nblocks, radix_bits, scan_threads);
+        const kir::KEntry eo2 = kir::build_sort_gbase(gof2, radix_bits);
+        const kir::KEntry es  = kir::build_sort_scatter(gs, epb, threads, radix_bits, shift, nblocks, /*carry_val=*/true);
+
+        kir::KernelBuffer h[2] = {{ck, n, 0, 0}, {bh.data(), nblocks * nbins, 0, 1}};
+        kir::eval_cpu_kernel(gh, eh, h, 2, eh.local_size[0], &alloc, static_cast<crd::u32>(nblocks));
+        kir::KernelBuffer o1[3] = {{bh.data(), nblocks * nbins, 0, 0}, {go.data(), nblocks * nbins, 0, 1}, {tot.data(), nbins, 0, 2}};
+        kir::eval_cpu_kernel(gof1, eo1, o1, 3, eo1.local_size[0], &alloc, static_cast<crd::u32>(nbins));
+        kir::KernelBuffer o2[2] = {{tot.data(), nbins, 0, 0}, {gb.data(), nbins, 0, 1}};
+        kir::eval_cpu_kernel(gof2, eo2, o2, 2, eo2.local_size[0], &alloc, 1U);
+        kir::KernelBuffer s[6] = {{ck, n, 0, 0}, {ok, n, 0, 1}, {go.data(), nblocks * nbins, 0, 2}, {gb.data(), nbins, 0, 3},
+                                  {cv, n, 0, 4}, {ov, n, 0, 5}};
+        kir::eval_cpu_kernel(gs, es, s, 6, es.local_size[0], &alloc, static_cast<crd::u32>(nblocks));
+
+        crd::f64* tk = ck; ck = ok; ok = tk;
+        crd::f64* tv = cv; cv = ov; ov = tv;
+    }
+
+    // keys ascending, AND the payload followed: the value at position i is the ORIGINAL index of the key now there.
+    int badk = 0; int badv = 0;
+    for (int i = 0; i < n; ++i)
+    {
+        if (i > 0 && static_cast<crd::u32>(ck[static_cast<crd::usize>(i - 1)]) > static_cast<crd::u32>(ck[static_cast<crd::usize>(i)])) { ++badk; }
+        const crd::u32 idx = static_cast<crd::u32>(cv[static_cast<crd::usize>(i)]);
+        if (idx >= static_cast<crd::u32>(n) || key0[static_cast<crd::usize>(idx)] != static_cast<crd::u32>(ck[static_cast<crd::usize>(i)])) { ++badv; }
+    }
+    CHECK(badk == 0); // keys sorted
+    CHECK(badv == 0); // every payload points back to the original key now at its position
+    // the payload set is a permutation of 0..n-1 (XOR + sum checksum invariant).
+    crd::u32 vx = 0U; crd::u32 vs = 0U;
+    for (int i = 0; i < n; ++i) { vx ^= static_cast<crd::u32>(cv[static_cast<crd::usize>(i)]); vs += static_cast<crd::u32>(cv[static_cast<crd::usize>(i)]); }
+    crd::u32 rx = 0U; crd::u32 rs = 0U;
+    for (int i = 0; i < n; ++i) { rx ^= static_cast<crd::u32>(i); rs += static_cast<crd::u32>(i); }
+    CHECK(vx == rx);
+    CHECK(vs == rs);
+}

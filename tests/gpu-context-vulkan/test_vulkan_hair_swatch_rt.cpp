@@ -78,9 +78,11 @@ void write_bmp(crd::memory::IAllocator& alloc, const char* path, int w, int h,
         {
             for (int c = 0; c < 3; ++c)
             {
-                const double v = rgb[uz((y * w + x) * 3 + c)];
-                const double q = v < 0.0 ? 0.0 : (v > 1.0 ? 1.0 : v);
-                row[uz(x * 3 + (2 - c))] = static_cast<unsigned char>(q * 255.0 + 0.5);
+                const double v   = rgb[uz((y * w + x) * 3 + c)];
+                double       clp = v;
+                if (clp < 0.0) { clp = 0.0; }
+                if (clp > 1.0) { clp = 1.0; }
+                row[uz(x * 3 + (2 - c))] = static_cast<unsigned char>(crd::math::lround(clp * 255.0));
             }
         }
         std::fwrite(row.data(), 1, uz(rowsz), f);

@@ -32,6 +32,7 @@ add_executable(crd-kir-tests
     test_ckir_water.cpp
     test_ckir_hair.cpp
     test_ckir_hair_grazing.cpp
+    test_ckir_gsplat.cpp
     test_ckir_hair_scatter.cpp
     test_ckir_hair_geom.cpp
     test_ckir_hair_filter.cpp
